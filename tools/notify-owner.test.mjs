@@ -63,3 +63,26 @@ test('ローカルmapのdiscordIdは正本のowner設定を継承する', t => {
  assert.equal(resolveOwner({ home, label: 'nishi-PC' }), 'nishi@orgiast.jp');
  assert.equal(resolveOwnerDiscordId('nishi@orgiast.jp', { home, directory: [] }), '987');
 });
+
+test('別人に紐づくローカルIDを拒否し、本人のIDならmessage id付きで配達する', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-identity-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude', 'orgiast-discord-user-id.txt'), '555');
+  const options = { home, label: 'test-PC', pcMap: { 'test-PC': { account: 'owner@example.com' } }, directory: [{ id: '555', emails: ['other@example.com'] }], toast: () => false, notify: () => assert.fail('must not send') };
+  assert.equal(resolveOwnerDiscordId('owner@example.com', options), '');
+  assert.equal((await notifyOwner('owner@example.com', '結果', options)).delivered, 'none');
+  assert.match(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'owner-discord-setup.json'))).reason, /belongs-to-other/);
+  options.directory[0].emails = ['owner@example.com'];
+  options.notify = async (_, { userId }) => { assert.equal(userId, '555'); return { delivered: 'dm', messageId: 'receipt' }; };
+  assert.equal((await notifyOwner('owner@example.com', '結果', options)).delivered, 'dm');
+  assert.equal(fs.existsSync(path.join(home, '.claude', 'owner-discord-setup.json')), false);
+});
+
+test('message idなしのDM結果は配達成功にしない', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-receipt-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = await notifyOwner('owner@example.com', '結果', { home, pcMap: {}, gitEmail: '', userId: '555', notify: async () => ({ delivered: 'dm' }) });
+  assert.equal(result.delivered, 'none');
+  assert.equal(result.reason, 'discord-message-id-missing');
+});

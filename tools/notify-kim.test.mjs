@@ -14,9 +14,10 @@ test('token と userId で DM チャンネルを開いて投稿する', async ()
   const calls = [];
   const result = await notifyKim('hello', { home: home(), token: 'token', userId: 'user', fetchImpl: async (url, init) => {
     calls.push({ url, init });
-    return calls.length === 1 ? response({ json: { id: 'dm-channel' } }) : response();
+    return calls.length === 1 ? response({ json: { id: 'dm-channel' } }) : response({ json: { id: 'message-receipt' } });
   } });
   assert.equal(result.delivered, 'dm');
+  assert.equal(result.messageId, 'message-receipt');
   assert.match(calls[0].url, /users\/@me\/channels$/);
   assert.deepEqual(JSON.parse(calls[0].init.body), { recipient_id: 'user' });
   assert.match(calls[1].url, /channels\/dm-channel\/messages$/);

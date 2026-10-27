@@ -1198,10 +1198,23 @@ test('出力400字以上で進捗のあった policy 拒否つき試行は打ち
   assert.equal(at(399), true);
 });
 
+test('拒否が3回未満の停滞は打ち切り条件を満たさないので起票せず、chain の実測 policyDenials/outChars を優先する（2026-10-26 09:04 gemini 600秒 out0 拒否1回の偽陽性）', () => {
+  const at = (chain) => {
+    const dir = home();
+    write(dir, 'executor-usage.jsonl', row({ t: '2026-10-26T09:04:57.085Z', provider: 'fallback', chain: [{ backend: 'gemini-cli', secs: 600, out: 0, budgetSecs: 600, outcome: 'timeout', ...chain }] }));
+    return collectFindings({ home: dir, now: new Date('2026-10-27T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted');
+  };
+  const one = 'Error executing tool run_shell_command: Tool execution denied by policy.';
+  assert.equal(at({ stderrTail: one }), false, 'tail に拒否1回だけなら未発火の証拠にならない');
+  assert.equal(at({ stderrTail: one, policyDenials: 5 }), true, '実測の拒否回数が3以上なら起票');
+  assert.equal(at({ stderrTail: one, policyDenials: 5, outChars: 400 }), false, '実測出力400字以上は進捗あり');
+  assert.equal(at({ stderrTail: one, policyDenials: 5, outChars: 10, out: 900 }), true, 'out はトークン概算なので outChars があればそちらで判定');
+});
+
 test('policy 停滞の起票境界は #1059 のマージ時刻で、その前後で判定が分かれる', () => {
   const at = (t) => {
     const dir = home();
-    write(dir, 'executor-usage.jsonl', row({ t, provider: 'fallback', chain: [{ backend: 'gemini-cli', secs: 601, out: 0, budgetSecs: 600, stderrTail: 'Tool execution denied by policy. Tool execution denied by policy.', outcome: 'timeout' }] }));
+    write(dir, 'executor-usage.jsonl', row({ t, provider: 'fallback', chain: [{ backend: 'gemini-cli', secs: 601, out: 0, budgetSecs: 600, stderrTail: 'Tool execution denied by policy. Tool execution denied by policy. Tool execution denied by policy.', outcome: 'timeout' }] }));
     return collectFindings({ home: dir, now: new Date('2026-10-24T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted');
   };
   assert.equal(at('2026-10-23T20:03:23Z'), false, 'マージ1秒前は対象外');

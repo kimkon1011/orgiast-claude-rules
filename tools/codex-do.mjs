@@ -1354,6 +1354,9 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
           timedOut: result.timedOut === true,
           spawnFailed,
           out: Math.ceil((result.outputChars || 0) / 4),
+          // stderrTail は末尾200字のため拒否回数が欠ける。打ち切り判定と同じ実測値（全 stderr の拒否回数・出力文字数）を残す。
+          policyDenials: countPolicyDenials(result.stderr),
+          outChars: result.outputChars || 0,
           secs: Number(((Date.now() - attemptStarted) / 1000).toFixed(3)),
           // この試行に実際に与えた予算。delegation-health の timeout 判定が
           // 「900 秒固定」ではなく与えた予算で判定できるようにする（2026-10-22）。

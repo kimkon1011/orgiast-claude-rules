@@ -303,6 +303,8 @@ export const POLICY_STALL_SINCE = '2026-10-23T20:03:24Z';
 export const POLICY_STALL_MIN_ABORTABLE_SECS = 300;
 // codex-do の POLICY_STALL_MIN_OUTPUT_CHARS と同値。出力がこれ以上出た試行は進捗ありで打ち切り対象外（偽陽性防止）。
 export const POLICY_STALL_MAX_ABORTABLE_OUT = 400;
+// codex-do の POLICY_STALL_MIN_DENIALS と同値。拒否がこれ未満の停滞は打ち切り条件を満たさず、未発火の証拠にならない。
+export const POLICY_STALL_MIN_DENIALS = 3;
 export const POLICY_DENIAL_RE = /tool execution denied by policy/gi;
 
 export function countPolicyDenial(text) {
@@ -320,7 +322,9 @@ export function policyStallAttempts(rows) {
     const list = chain ?? [null];
     for (const attempt of list) {
       const stderr = String(attempt?.stderrTail ?? (chain ? '' : row.stderrTail) ?? '');
-      const denials = countPolicyDenial(stderr);
+      // chain に全 stderr の実測回数(policyDenials)があればそれを優先し、旧行は切り詰め済み tail の下限値を使う。
+      const recorded = Number(attempt?.policyDenials);
+      const denials = Math.max(countPolicyDenial(stderr), Number.isFinite(recorded) ? recorded : 0);
       if (!denials) continue;
       const secs = Number(attempt?.secs ?? row.secs);
       const out = Number(attempt?.out ?? row.out);
@@ -331,6 +335,7 @@ export function policyStallAttempts(rows) {
         outcome: attempt?.outcome ?? (row.timedOut === true || row.status === 'timeout' ? 'timeout' : 'ok'),
         secs: Number.isFinite(secs) ? secs : 0,
         out: Number.isFinite(out) ? out : 0,
+        outChars: Number.isFinite(Number(attempt?.outChars)) && attempt?.outChars != null ? Number(attempt.outChars) : null,
         budgetSecs: Number(attempt?.budgetSecs ?? row.timeoutSecs) || null,
         denials,
       });
@@ -384,7 +389,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   // 台帳を毎晩ここで走査し、打ち切られずに時間を消費した停滞だけを起票する（Claude の手動再計測を不要にする）。
   const policyStalls = policyStallAttempts(readJsonl(path.join(claudeDir, 'executor-usage.jsonl')))
     .filter((a) => a.t >= POLICY_STALL_SINCE);
-  const unabortedStalls = policyStalls.filter((a) => a.outcome !== 'blocked' && a.secs >= POLICY_STALL_MIN_ABORTABLE_SECS && a.out < POLICY_STALL_MAX_ABORTABLE_OUT);
+  const unabortedStalls = policyStalls.filter((a) => a.outcome !== 'blocked' && a.secs >= POLICY_STALL_MIN_ABORTABLE_SECS && (a.outChars ?? a.out) < POLICY_STALL_MAX_ABORTABLE_OUT && a.denials >= POLICY_STALL_MIN_DENIALS);
   if (unabortedStalls.length) {
     findings.push({
       id: 'policy_stall_not_aborted',

@@ -264,9 +264,10 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
   const noAutocheck = [...source.matchAll(/\[NO-AUTOCHECK-OK:[ \t]*([^\]\r\n]*)\]/g)]
     .some(([, reason]) => reason.trim().length > 0);
   // チャットで答えるだけの返信待ち（reply-only）は会話に戻ってくるので台帳は要らない。それ以外の人待ちは載せる。
-  if (!permanentFix && !NO_ACTION_PATTERN.test(footer.nextAction) && classifyHandoff(source) !== 'reply-only'
+  const userHandoff = /\[手渡し判定\]|お願いする操作|^手間監査:/m.test(body);
+  if (!permanentFix && (userHandoff || !NO_ACTION_PATTERN.test(footer.nextAction)) && classifyHandoff(source) !== 'reply-only'
     && !hasOpenSessionCheck(input) && !noAutocheck) {
-    return { decision: 'block', code: 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', reason: '人待ちの自動進行は台帳の定期チェックに載せる: node tools/auto-progress.mjs --add-check --session <id> --check "<exit0=達成/1=未達のコマンド>" --deadline +7d --label "<名前>" --next-claude "<次の手>"。自動進行が「なし」でも同じセッションの open 行が必要です。自動確認できない場合だけ [NO-AUTOCHECK-OK: <理由>] を記載してください。' };
+    return { decision: 'block', code: 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', reason: (userHandoff ? 'user 本人への手渡し（[手渡し判定]／お願いする操作）も人待ちです。' : '') + '人待ちの自動進行は台帳の定期チェックに載せる: node tools/auto-progress.mjs --add-check --session <id> --check "<exit0=達成/1=未達のコマンド>" --deadline +7d --label "<名前>" --next-claude "<次の手>"。自動進行が「なし」でも同じセッションの open 行が必要です。自動確認できない場合だけ [NO-AUTOCHECK-OK: <理由>] を記載してください。' };
   }
   if (!permanentFix && hasAutopilot && process.env.CLAUDE_HEADLESS !== '1'
     && !/subagents/i.test(input.transcript_path || '') && !wakeup.autoProgress && !wakeup.background) {

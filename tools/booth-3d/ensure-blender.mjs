@@ -23,7 +23,7 @@ export function pickLatestZip(html) {
 }
 
 export function blenderVersion(exe) {
-  const r = spawnSync(exe, ['--version'], { encoding: 'utf8', timeout: 60000 });
+  const r = spawnSync(exe, ['--version'], { encoding: 'utf8', timeout: 60000, windowsHide: true });
   if (r.status !== 0) return null;
   return String(r.stdout).split(/\r?\n/)[0].trim() || null;
 }
@@ -54,7 +54,7 @@ export async function ensureBlender({ env = process.env, home = homedir(), log =
   log(`取得中: ${RELEASE_INDEX}${zipName}`);
   await download(RELEASE_INDEX + zipName, zipPath);
   // Windows 10 以降の tar(bsdtar) は zip を展開できる。
-  const x = spawnSync('tar', ['-xf', zipPath, '-C', work], { encoding: 'utf8' });
+  const x = spawnSync('tar', ['-xf', zipPath, '-C', work], { encoding: 'utf8', windowsHide: true });
   if (x.status !== 0) throw new Error(`zip 展開に失敗: ${x.stderr || x.stdout}`);
   const extracted = readdirSync(work, { withFileTypes: true }).find((e) => e.isDirectory() && e.name.startsWith('blender-'));
   if (!extracted) throw new Error('展開結果に blender-* フォルダがありません');

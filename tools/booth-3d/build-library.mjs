@@ -43,7 +43,7 @@ export function checkNaming(library, sources) {
 }
 
 function runBlender(exe, args) {
-  const r = spawnSync(exe, args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+  const r = spawnSync(exe, args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, windowsHide: true });
   const lines = `${r.stdout ?? ''}`.split(/\r?\n/).filter((l) => /^(SRC |LIBRARY_DONE|THUMBS_DONE|Error|Traceback|\s+File |\w*Error)/.test(l));
   for (const l of lines) console.log(l);
   if (r.status !== 0) throw new Error(`Blender が失敗 (exit ${r.status}): ${(r.stderr || '').slice(-500)}\n${`${r.stdout ?? ''}`.slice(-800)}`);

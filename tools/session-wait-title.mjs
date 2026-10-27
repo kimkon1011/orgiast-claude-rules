@@ -1,19 +1,25 @@
 #!/usr/bin/env node
 // Stop hook: 応答末尾の「このセッション: まだ閉じない（…YYYY-MM-DD HH:MM まで待つ）」の期限を、
-// セッション一覧のタイトルの頭に【26/11/02/20:11まで】の形で付ける（2026-10-27 nishi 指示・全PC全アカウント）。
+// セッション一覧のタイトルの頭に【11/02/20:11まで】の形（年なし）で付ける（2026-10-27 nishi 指示・全PC全アカウント）。
 // 一覧を見ただけで、どのタブをいつまで開けておくかが分かるようにする。
 // 閉じてよい定型文になったら頭の期限を外す。フッターが無い応答では何もしない。fail-open・出力なし。
+// --all: 既存の全セッション（直近 RECENT_DAYS 日）にも同じ規則を当てる。SessionStart から1時間に1回だけ走る。
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { footerValues, openDeadline } from './next-action-gate.mjs';
 
 const MAX_BYTES = 256 * 1024 * 1024;
-const PREFIX = /^【\d{2}\/\d{2}\/\d{2}\/\d{2}:\d{2}まで】\s*/;
+const RECENT_DAYS = 30;
+const SWEEP_COOLDOWN_MS = 60 * 60 * 1000;
+// 旧形式【26/11/02/20:11まで】（年あり）も外して新形式へ付け替える。
+const PREFIX = /^【(?:\d{2}\/)?\d{2}\/\d{2}\/\d{2}:\d{2}まで】\s*/;
 
 export function waitPrefix(date) {
   const p = n => String(n).padStart(2, '0');
-  return `【${p(date.getFullYear() % 100)}/${p(date.getMonth() + 1)}/${p(date.getDate())}/${p(date.getHours())}:${p(date.getMinutes())}まで】`;
+  return `【${p(date.getMonth() + 1)}/${p(date.getDate())}/${p(date.getHours())}:${p(date.getMinutes())}まで】`;
 }
 
 // transcript から現在のタイトル（custom-title が最優先、無ければ ai-title）を最後の行の値で拾う。
@@ -74,8 +80,39 @@ export function apply(input, { readFile = fs.readFileSync, appendFile = fs.appen
   return title;
 }
 
+// 全プロジェクトの transcript に apply を当てる。subagent・古いもの・巨大なものは飛ばす。
+export function sweepAll({ base = path.join(os.homedir(), '.claude'), now = Date.now(), force = false } = {}) {
+  const stateFile = path.join(base, 'session-wait-title-state.json');
+  try { if (!force && now - JSON.parse(fs.readFileSync(stateFile, 'utf8')).at < SWEEP_COOLDOWN_MS) return { skipped: 'cooldown' }; } catch {}
+  try { fs.writeFileSync(stateFile, JSON.stringify({ at: now })); } catch {}
+  const result = { scanned: 0, titled: [] };
+  const projects = path.join(base, 'projects');
+  let dirs = [];
+  try { dirs = fs.readdirSync(projects, { withFileTypes: true }).filter(d => d.isDirectory()); } catch { return result; }
+  for (const dir of dirs) {
+    let names = [];
+    try { names = fs.readdirSync(path.join(projects, dir.name)); } catch { continue; }
+    for (const name of names) {
+      if (!name.endsWith('.jsonl')) continue;
+      const file = path.join(projects, dir.name, name);
+      try {
+        if (now - fs.statSync(file).mtimeMs > RECENT_DAYS * 86400_000) continue;
+        result.scanned += 1;
+        const title = apply({ transcript_path: file, session_id: name.slice(0, -'.jsonl'.length) });
+        if (title) result.titled.push({ session: name.slice(0, 8), title });
+      } catch { /* 1件の失敗で止めない */ }
+    }
+  }
+  return result;
+}
+
 async function main() {
   try {
+    if (process.argv.includes('--all')) {
+      const result = sweepAll({ force: process.argv.includes('--force') });
+      if (process.argv.includes('--verbose')) console.log(JSON.stringify(result, null, 2));
+      return;
+    }
     const raw = await readStdinWithTimeout();
     if (!raw.trim()) return;
     apply(JSON.parse(raw));

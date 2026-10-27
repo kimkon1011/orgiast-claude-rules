@@ -3,7 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { judgeNextAction, SESSION_PHRASES } from '../tools/next-action-gate.mjs';
+import { judgeNextAction, SESSION_PHRASES } from './next-action-gate.mjs';
 
 const report = (body, autopilot = 'なし') => `${body}\n次に kim がすること: なし\nこの後の自動進行: ${autopilot}\nこのセッション: ${SESSION_PHRASES.delete}`;
 const handoff = '[手渡し判定]\nDiscord の転送操作をお願いします。';

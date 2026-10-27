@@ -218,7 +218,7 @@ export function formatDigest(rows, now = Date.now(), label = '', {
     const lines = [header];
     // 1. あなたの判断待ち
     for (const row of waiting.slice(0, wL)) {
-      const what = cleanText(row.label || row.promise || '約束した作業', row);
+      const what = cleanText(row.label || row.promise || '約束した作業', row) + (row.autoRegistered ? '（自動登録）' : '');
       const night = nightWaitingKeys.has(waitingNotificationKey(row)) ? '夜間に出た判断待ち: ' : 'あなたの判断待ち: ';
       lines.push(itemLine(`・${night}${projectOf(row)}`, what, ` — ${actionOf(row)}`));
     }
@@ -227,7 +227,7 @@ export function formatDigest(rows, now = Date.now(), label = '', {
     }
     // 2. 完了（各1行・80字以内）
     for (const row of done.slice(0, dL)) {
-      const what = cleanText(row.label || row.promise || '約束した作業', row);
+      const what = cleanText(row.label || row.promise || '約束した作業', row) + (row.autoRegistered ? '（自動登録）' : '');
       lines.push(itemLine(`・完了: ${projectOf(row)}`, what));
     }
     if (done.length > dL) {
@@ -235,7 +235,7 @@ export function formatDigest(rows, now = Date.now(), label = '', {
     }
     // 3. 止まっている（再開したかどうか）
     for (const row of stalled.slice(0, sL)) {
-      const what = cleanText(row.label || row.promise || '約束した作業', row);
+      const what = cleanText(row.label || row.promise || '約束した作業', row) + (row.autoRegistered ? '（自動登録）' : '');
       const resumed = row.status === 'resumed' || Boolean(row.resumedAt);
       const resumeText = resumed ? '自動再開しました' : '自動再開していません';
       lines.push(itemLine(`・止まっている: ${projectOf(row)}`, what, ` — ${resumeText}`));
@@ -245,7 +245,7 @@ export function formatDigest(rows, now = Date.now(), label = '', {
     }
     // 4. 進行中（最大5件を名前で出す・並びは最終判定が新しい順）
     for (const row of inProgressSorted.slice(0, pL)) {
-      const what = cleanText(row.label || row.promise || '約束した作業', row);
+      const what = cleanText(row.label || row.promise || '約束した作業', row) + (row.autoRegistered ? '（自動登録）' : '');
       lines.push(itemLine(`・進行中: ${projectOf(row)}`, what));
     }
     const totalProg = Math.max(inProgress, inProgressSorted.length);

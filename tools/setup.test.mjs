@@ -323,6 +323,18 @@ test('inbox verifier accepts nightly runtime with old bootstrap main and still r
   assert.equal(run(['--verify', '--home', home, '--manifest', mf]).status, 1);
 });
 
+test('autoregister manifest entry requires the hook file in the nightly runtime', t => {
+  const home = temp('setup-autoreg-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const entry = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8')).items.find(x => x.id === 'hook:auto-progress-autoregister');
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([entry])));
+  assert.equal(run(['--verify', '--home', home, '--manifest', mf]).status, 1);
+  write(path.join(home, '.claude/nightly-repo/tools/auto-progress-autoregister.mjs'), fs.readFileSync(path.join(toolsDir, 'auto-progress-autoregister.mjs')));
+  const result = run(['--verify', '--home', home, '--manifest', mf]);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
 test('verify-before-done manifest validates synchronous wrapped Stop registration', t => {
   const home = temp('setup-verify-done-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

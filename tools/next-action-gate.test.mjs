@@ -178,7 +178,24 @@ test('ツールで作業したターンは短文でもフッター必須（No re
   const result = judgeNextAction('No response requested.', worked);
   assert.equal(result.decision, 'block');
   assert.equal(result.code, 'NEXT-ACTION-FOOTER');
-  assert.equal(judgeNextAction('', worked).decision, 'pass');
+  // 本文が空でも作業済みなら block（2026-10-26: !source が OR で入り素通りしていた）。
+  assert.equal(judgeNextAction('', worked).decision, 'block');
+});
+
+test('tool_use なしの短文「了解です」は pass', () => {
+  const idle = JSON.stringify({ type: 'user', message: { role: 'user', content: '了解？' } });
+  assert.equal(judgeNextAction('了解です', idle).reason, 'short-response');
+});
+
+test('task-notification を挟んだ後の空ターンも作業済みとして block', () => {
+  const raw = [
+    JSON.stringify({ type: 'user', message: { role: 'user', content: '原因を調べて' } }),
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: { command: 'sleep 1', run_in_background: true } }] } }),
+    JSON.stringify({ type: 'user', message: { role: 'user', content: '<task-notification>done</task-notification>' } }),
+  ].join('\n');
+  const result = judgeNextAction('', raw);
+  assert.equal(result.decision, 'block');
+  assert.equal(result.code, 'NEXT-ACTION-FOOTER');
 });
 
 test('末尾が疑問符の質問応答はpass', () => {

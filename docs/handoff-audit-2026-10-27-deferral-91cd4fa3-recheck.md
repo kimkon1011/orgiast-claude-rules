@@ -224,3 +224,9 @@ branch quota-sweep/20261027-0021-claude-mvpxxar1、HEAD 547252b、Node v24.22.1�
 C2: 観測窓 [2026-10-26T11:26:28.622Z, 2026-10-27T00:59:36Z)。3台帳可読・不正JSON 0。窓内行 runner 121 / audit 192 / nightly 55。scan hits は runner の W=4（全て 91cd4fa3、11:26:28〜11:27:05）、audit 0、nightly 0。他セッションの同型は 0。同セッションの再発4件は実在し、無再発とは主張しない。限界: audit 台帳は violations.quote のみ走査し excerpt は対象外（同文は runner 側で捕捉済み）。セッション全文の網羅性は未証明。
 C3: 同セッションは 11:29:47 に検証完了と報告しており、Codex 待機は同セッション内で完了。token 発行は本人操作待ちで承認外。
 C5: 'tools/**/*.test.mjs' の全体実行は timeout 590s で EXIT=124 未完走（緑ではない）。ソース・テスト変更なし。
+
+## quota-sweep-claude 試行5 / C5 分割ゲート観測（2026-10-27 / HEAD dc0642e / Node v24.22.1）
+
+foreground 上限600s とヘッドレスの run_in_background 禁止のため、`node --test --test-shard=N/3 'tools/**/*.test.mjs'`（env -u CLAUDE_HEADLESS -u ORGIAST_HEADLESS_JOB）を3回に分けて実行した。合計 tests 7074（試行2の収集数と一致）。shard1 fail 0（EXIT=0）、shard2 fail 0（EXIT=0）、shard3 fail 3（EXIT=1）。失敗は fleet-chase-context / hook-budget-check / keyserve-alert.e2e で、いずれも scan・nightly を import しない子プロセス/タイミング依存。3ファイルを単独実行すると 25/25 pass（EXIT=0）。試行2の失敗3件とは別の組で、並行負荷で変動する flaky と判断。ただし単一ゲートの exit 0 ではないため C5 は未達のまま（緑とは扱わない）。ログは .loop/quota-sweep-claude-007-*.log（ローカル状態・コミット対象外）。
+
+限界: C2 のセッション全文網羅、C3 の token 発行（本人操作待ち・承認外）は未解消。コード変更なし。

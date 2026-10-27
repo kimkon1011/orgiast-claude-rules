@@ -6,7 +6,7 @@ import test, { after } from 'node:test';
 import vm from 'node:vm';
 import { main as registerTasks } from './register-auto-progress-task.mjs';
 import { isNoopPromise, extractPromise, extractNextKim, applyPromise, buildRecord, record, readLedger, writeLedger, ledgerFile, rowKey, originLine } from './auto-progress-ledger.mjs';
-import { run as watch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS, formatDoneMessage, readableReason, formatDoneBacklogMessages } from './auto-progress-watch.mjs';
+import { run as watch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, forgiveNoExecutorResumes, main as watchMain, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS, formatDoneMessage, readableReason, formatDoneBacklogMessages } from './auto-progress-watch.mjs';
 import { run as digest, selectRows, formatDigest, isUnattendedRow, WINDOW_MS, MAX_ITEMS, needsDm, verdictOf, cleanText, isHumanActionRequired, waitingNotificationKey } from './auto-progress-digest.mjs';
 import { runRegisterPs1 } from './lib/run-register-ps1.mjs';
 
@@ -1407,4 +1407,94 @@ test('digest: toast配達を受領ログに残し、未達時はsentにしない
     assert.equal(log.sent, delivered === 'toast');
     if (delivered === 'toast') assert.equal(log.receipts[0].channel, 'toast');
   }
+});
+
+
+test('resumeSession: 実行者なしは延期し、本物の失敗は詳細を残す', async () => {
+  const home = tmp();
+  const invoke = result => resumeSession({ sessionId: 'deferred', cwd: home, promise: 'p' }, {
+    home, io: { executable: 'mock', runChild: async () => result },
+  });
+  const skipped = await invoke({ status: 'failure', skippedNoExecutor: true, executorUsed: 'codex-do', exitCode: 3,
+    stderr: '[codex-do] x\n[cheap-code] deepseek はクールダウン中です\n' });
+  assert.equal(skipped.outcome, 'deferred');
+  assert.equal(skipped.deferred, true);
+  assert.match(skipped.reason, /deepseek/);
+  assert.match(skipped.reason, /codex-do exit 3/);
+  assert.doesNotMatch(skipped.reason, /\n/);
+  for (const flag of ['launchFailed', 'deferred']) {
+    const result = await invoke({ status: 'failure', [flag]: true, executorUsed: 'claude', exitCode: null, stderr: 'spawn ENOENT' });
+    assert.equal(result.outcome, 'deferred');
+    assert.equal(result.deferred, true);
+  }
+  const failed = await invoke({ status: 'failure', executorUsed: 'cheap-code:glm', exitCode: 1, stderr: 'boom' });
+  assert.equal(failed.outcome, 'error');
+  assert.match(failed.reason, /exit 1/);
+  assert.match(failed.reason, /boom/);
+  const timeout = await invoke({ status: 'timeout', executorUsed: 'claude', exitCode: null, stderr: '' });
+  assert.equal(timeout.outcome, 'error');
+  assert.match(timeout.reason, /^timeout/);
+  for (const flag of [true, false]) {
+    const result = await invoke({ status: 'failure', skippedNoExecutor: flag, executorUsed: 'mock', exitCode: 3, stderr: '  x   '.repeat(400) });
+    assert.ok(result.reason.length <= (flag ? 240 : 300));
+    assert.doesNotMatch(result.reason, /  /);
+  }
+});
+
+test('watch: 延期は回数と日時を復元し、巡回内の後続起動とinboxを抑止する', async () => {
+  const home = tmp(), now = Date.parse('2026-10-27T03:00:00Z');
+  seed(home, ['a', 'b'].map(sessionId => ({ sessionId, status: 'open', resumeCount: 0, resumedAt: '',
+    ts: new Date(now - 3 * H).toISOString(), promise: '作業を進める', cwd: home, reportedKey: 'stalled:false:0' })));
+  let calls = 0;
+  const io = noEvidenceIo({ resume: async () => { calls++; return { outcome: 'deferred', deferred: true, reason: '実行者なし: x' }; },
+    postSheet: () => assert.fail('unchanged reportKey must not resend'),
+    appendInbox: () => assert.fail('deferred must not append inbox') });
+  const summary = await watch({ home, now, io });
+  assert.equal(calls, 1);
+  const rows = readLedger(ledgerFile(home));
+  assert.equal(rows[0].resumeCount, 0);
+  assert.equal(rows[0].status, 'open');
+  assert.equal(rows[0].resumedAt, '');
+  assert.match(rows[0].resumeOutcome, /^deferred:.*x/);
+  assert.equal(rows[0].resumeDeferredAt, new Date(now).toISOString());
+  assert.equal(rows[1].resumeCount, 0);
+  assert.equal(summary.resumed, 0);
+  assert.equal(summary.resumeDeferred, 2);
+  assert.equal(summary.resumeDeferredReason, '実行者なし: x');
+  for (const row of rows) assert.equal(fs.existsSync(path.join(home, '.claude', 'auto-progress-inbox', `${row.sessionId}.jsonl`)), false);
+  await watch({ home, now: now + H, io });
+  assert.equal(calls, 2);
+});
+
+test('forgiveNoExecutorResumes: 空振りだけを取消し、dry-runと再実行は台帳を変えない', async () => {
+  const home = tmp();
+  seed(home, [{ sessionId: 'forgive', status: 'stalled', resumeCount: 8 }]);
+  const inbox = path.join(home, '.claude', 'auto-progress-inbox', 'forgive.jsonl');
+  fs.mkdirSync(path.dirname(inbox), { recursive: true });
+  fs.writeFileSync(inbox, [...Array.from({ length: 5 }, () => ({ state: 'error', evidence: 'failure' })),
+    { state: 'done', evidence: 'failure' }].map(row => JSON.stringify(row)).join('\n') + '\n');
+  const before = fs.readFileSync(ledgerFile(home), 'utf8');
+  assert.deepEqual(forgiveNoExecutorResumes({ home, dryRun: true }), { rows: 1, restored: 5 });
+  assert.equal(fs.readFileSync(ledgerFile(home), 'utf8'), before);
+  const previousHome = process.env.ORGIAST_HOME, log = console.log, output = [];
+  try {
+    process.env.ORGIAST_HOME = home;
+    console.log = line => output.push(line);
+    assert.equal(await watchMain(['--forgive-no-executor', '--dry-run']), 0);
+    assert.deepEqual(output, ['{"rows":1,"restored":5}']);
+  } finally {
+    console.log = log;
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+  }
+  assert.equal(fs.readFileSync(ledgerFile(home), 'utf8'), before);
+  assert.deepEqual(forgiveNoExecutorResumes({ home }), { rows: 1, restored: 5 });
+  const row = readLedger(ledgerFile(home))[0];
+  assert.equal(row.resumeCount, 3);
+  assert.equal(row.forgivenNoExecutor, 5);
+  assert.equal(row.status, 'stalled');
+  assert.match(row.resumeOutcome, /^forgiven:/);
+  const after = fs.readFileSync(ledgerFile(home), 'utf8');
+  assert.deepEqual(forgiveNoExecutorResumes({ home }), { rows: 0, restored: 0 });
+  assert.equal(fs.readFileSync(ledgerFile(home), 'utf8'), after);
 });

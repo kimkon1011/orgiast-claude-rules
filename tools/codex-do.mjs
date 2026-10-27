@@ -621,7 +621,7 @@ function isHttpStatusCodeLine(line, code) {
 export function isBackendExhausted(output, stderr) {
   const merged = `${output || ''}\n${stderr || ''}`;
   const lower = merged.toLowerCase();
-  const patterns = ['rate limit', 'rate-limited', 'quota', 'insufficient', 'request too large'];
+  const patterns = ['rate limit', 'rate-limited', 'quota', 'insufficient', 'request too large', 'クールダウン中', 'cooldown'];
   if (patterns.some((p) => lower.includes(p))) return true;
   return merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '429') || isHttpStatusCodeLine(line, '413'));
 }
@@ -1355,7 +1355,8 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
         }
         const spawnFailed = originalStatus === null;
         const cliMissing = isBackendCliMissing(result.output, `${result.stderr || ''}\n${result.error?.message || ''}`);
-        const exhausted = isBackendExhausted(result.output, result.stderr);
+        const exhausted = isBackendExhausted(result.output, result.stderr)
+          || (backend.kind === 'cheap-code' && result.status === 3);
         const decision = shouldAdvanceToNextBackend({ timedOut: result.timedOut === true, status: result.status, exhausted, cliMissing, aborted: result.aborted === 'policy_stall' });
         const outcome = decision.outcome;
 

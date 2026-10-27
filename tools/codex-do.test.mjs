@@ -1020,9 +1020,15 @@ test('isBackendExhausted は上限系メッセージで true を返す', () => {
   assert.equal(isBackendExhausted('', 'insufficient_quota'), true);
 });
 
+test('isBackendExhausted はクールダウンによる起動省略で true を返す', () => {
+  assert.equal(isBackendExhausted('', '[cheap-code] deepseek はクールダウン中です(2026-10-28T04:00:33.800Zまで)。起動を省略しました。'), true);
+  assert.equal(isBackendExhausted('', 'provider glm is in cooldown until ...'), true);
+});
+
 test('isBackendExhausted は通常の成功出力で false を返す', () => {
   assert.equal(isBackendExhausted('Qwen Code CLI has successfully edited files.', ''), false);
   assert.equal(isBackendExhausted('', 'All tests passed'), false);
+  assert.equal(isBackendExhausted('', 'normal failure'), false);
 });
 
 test('isBackendExhausted は 429/413 がファイル行番号(コロン隣接)なら誤検出しない', () => {

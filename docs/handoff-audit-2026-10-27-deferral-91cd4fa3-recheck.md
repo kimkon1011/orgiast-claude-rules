@@ -325,3 +325,6 @@ repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、branch=quota-sweep/20
 契約の単一コマンド `node --test tools/` は Node 24 でディレクトリ指定をファイル扱いし tests=1/fail=1 で収集しない（試行2のログ）。CI 同形の glob `node --test 'tools/**/*.test.mjs'` の単一実行は約574〜590sで前景上限600sに余裕がなく、試行4観測で timeout 590s・EXIT=124。background 実行はヘッドレス hook が拒否。
 代替として glob を 3 shard で前景実行した結果は shard1 2234/pass 2233/fail 0/skip 1、shard2 2734/2728/0/6、shard3（並行度1）2106/2105/0/1、すべて EXIT=0。合計 7074 件で収集は全数、fail 0。shard3 の flaky は並行度既定で3件・2で1件・1で0件と並行負荷依存。閾値緩和・skip・テスト変更はなし。
 結論: 分割全緑は成立するが、契約文言どおりの単一ゲート1回 exit 0 は取得不能。C5 は厳密には未達として残し、緑とは扱わない。ソース変更なし（再発は同セッション4件が実在、C3 の token 発行は本人操作待ちで承認外）。
+
+## Claude 累積試行2（2026-10-27 / HEAD 776c727）C5 再検証の途中経過
+現 HEAD で glob を 3 分割し前景実行。shard2 は tests 2273 / pass 2270 / fail 0 / skip 2・EXIT=0。shard3（並行度1）は 580s timeout で EXIT=124 の未完走、shard1 は未実行。以前の 013-shard2 ログは集計なしの中断残骸でゲート証拠にしない。テスト総数の増加で3分割では前景上限に収まらないため、C5 は未達のまま。次は 5 分割で実行する。ソース・テストの変更なし。

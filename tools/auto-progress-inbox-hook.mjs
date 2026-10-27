@@ -10,7 +10,23 @@ export function appendInbox(home, sessionId, item) {
   const file = inboxFile(home, sessionId); fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.appendFileSync(file, `${JSON.stringify({ ...item, shown: false })}\n`); return file;
 }
-export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.homedir() } = {}) {
+export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.homedir(), now = new Date() } = {}) {
+  const notice = consumeOwnerSetupNotice(input, { home, now });
+  const result = consumeProgressInbox(input, { home });
+  if (!notice) return result;
+  return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: [notice, result?.hookSpecificOutput.additionalContext].filter(Boolean).join('\n') } };
+}
+export function consumeOwnerSetupNotice(input, { home, now = new Date() }) {
+  if (input?.hook_event_name !== 'SessionStart') return '';
+  const file = path.join(home, '.claude', 'owner-discord-setup.json');
+  try {
+    const pending = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!pending.owner || pending.shownOn === now.toLocaleDateString('en-CA')) return '';
+    fs.writeFileSync(file, JSON.stringify({ ...pending, shownOn: now.toLocaleDateString('en-CA') }));
+    return '【必須】応答の冒頭で user に「進捗通知の宛先 Discord ID が未設定または別人です。自分の Discord ユーザー名を教えてください」と1行で伝える。';
+  } catch { return ''; }
+}
+function consumeProgressInbox(input, { home }) {
   const sessionId = input?.session_id || input?.sessionId; if (!sessionId) return null;
   const file = inboxFile(home, sessionId); let rows;
   try { rows = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse); } catch { return null; }

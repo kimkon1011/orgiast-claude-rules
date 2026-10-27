@@ -1,0 +1,6 @@
+{
+  "state": "blocked",
+  "evidence": "C5全体ゲートを1回実行し失敗後停止(exit 130)。ai-news-inject診断はspawnSync /usr/bin/node EPERM。対象4ファイルはexit 0。C1は未特定として確定、digest2件/gskは範囲外。FINAL不成立。指定JSON保存先は許可範囲外のためrepo内に保存。詳細: .loop/resume-673b44fd/report.md",
+  "artifact": "C:\\Users\\user\\.claude\\quota-sweep-repo\\.loop\\resume-673b44fd\\report.md",
+  "nextKim": ""
+}

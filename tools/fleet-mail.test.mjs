@@ -934,13 +934,16 @@ test('acquireLock stops refreshing the heartbeat after the hard cap so a hung po
   assert.equal(mtime(), frozen);
   release();
 });
-test('--poll hard deadline stops a poll stuck in an await, releases the lock and records where it stuck', async t => {
+test('--poll hard deadline stops a poll stuck in an await, releases the lock and records where it stuck', { timeout: 5000 }, async t => {
   const f = fixture(t);
   const { POLL_HARD_DEADLINE_EXIT } = await import('./fleet-mail.mjs');
   const errors = [];
-  const exited = new Promise(resolve => {
+  // The production deadline is unref'ed; a pending request Promise alone cannot keep this test alive.
+  const keepAlive = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(keepAlive));
+  const exited = new Promise((resolve, reject) => {
     main(['--poll', '--no-exec'], { ...f.deps, stderr: e => errors.push(e), pollHardDeadlineMs: 50, exit: resolve,
-      request: kind => kind === 'mail-poll' ? new Promise(() => {}) : Promise.resolve({ ok: true }) });
+      request: kind => kind === 'mail-poll' ? new Promise(() => {}) : Promise.resolve({ ok: true }) }).catch(reject);
   });
   assert.equal(await exited, POLL_HARD_DEADLINE_EXIT);
   assert.ok(errors.some(e => /poll 上限\d+分超過で打ち切り=1/.test(e)));

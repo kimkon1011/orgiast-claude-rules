@@ -219,3 +219,8 @@ branch quota-sweep/20261027-0021-claude-mvpxxar1、HEAD 547252b、Node v24.22.1�
 - 回帰: 陽性3・陰性3・監査引用1を scan テストへ追加。scan+nightly 58/58 pass。
 - C5: CI 同形 glob で tests 7074 / pass 7063 / fail 3 / skipped 8、終了1。失敗3は gmail-guard 配布テスト2件（spawn が status=null）と Windows cmd 日本語パス1件で scan 非依存の環境要因。指定どおりの `node --test tools/` は Node 24 で未収集のまま。緑ではない。
 - 未達: C2網羅性、C3原作業照合（wt-gate成果物・control-group-check）、C4スケジューラ稼働、C5ゲート。FINAL ではない。
+
+## 追記 試行4（2026-10-27T10:10+0900）
+C2: 観測窓 [2026-10-26T11:26:28.622Z, 2026-10-27T00:59:36Z)。3台帳可読・不正JSON 0。窓内行 runner 121 / audit 192 / nightly 55。scan hits は runner の W=4（全て 91cd4fa3、11:26:28〜11:27:05）、audit 0、nightly 0。他セッションの同型は 0。同セッションの再発4件は実在し、無再発とは主張しない。限界: audit 台帳は violations.quote のみ走査し excerpt は対象外（同文は runner 側で捕捉済み）。セッション全文の網羅性は未証明。
+C3: 同セッションは 11:29:47 に検証完了と報告しており、Codex 待機は同セッション内で完了。token 発行は本人操作待ちで承認外。
+C5: 'tools/**/*.test.mjs' の全体実行は timeout 590s で EXIT=124 未完走（緑ではない）。ソース・テスト変更なし。

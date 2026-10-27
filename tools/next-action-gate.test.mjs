@@ -576,3 +576,31 @@ test('人待ちは自動進行なしでも同一sessionのopen台帳行を要求
     }
   });
 });
+
+test('check 無しの open 約束行は待機中の起床証拠にしない', () => {
+  withOpenCheck((input, file) => {
+    for (const state of ['open', 'pending']) {
+      assert.equal(judgeNextAction(promiseText.replace(SESSION_PHRASES.open, SESSION_PHRASES[state]), '', input).decision, 'pass');
+    }
+    for (const check of [undefined, '', '   ']) {
+      fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status: 'open', check }) + '\n');
+      for (const state of ['open', 'pending']) {
+        const text = promiseText.replace(SESSION_PHRASES.open, SESSION_PHRASES[state]);
+        assert.equal(judgeNextAction(text, '', input).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+        assert.equal(judgeNextAction(text.replace('私が毎時進捗を確認して変化時に報告します', 'なし'), '', input).decision, 'pass');
+      }
+    }
+  });
+});
+
+test('当ターンの ScheduleWakeup と Monitor は起床証拠になる', () => {
+  for (const name of ['ScheduleWakeup', 'Monitor']) {
+    const transcript = use(name, {});
+    for (const state of ['open', 'pending']) {
+      assert.equal(judgeNextAction(promiseText.replace(SESSION_PHRASES.open, SESSION_PHRASES[state]), transcript).decision, 'pass');
+    }
+    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '次の依頼')}`).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+    assert.equal(judgeNextAction(promiseText, row('assistant', [{ type: 'tool_use', name }], { isSidechain: true })).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+  }
+  assert.equal(judgeNextAction(promiseText, use('ScheduleWakeup', { stop: true })).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+});

@@ -7,7 +7,7 @@ import vm from 'node:vm';
 import { main as registerTasks } from './register-auto-progress-task.mjs';
 import { isNoopPromise, extractPromise, extractNextKim, applyPromise, buildRecord, record, readLedger, writeLedger, ledgerFile, rowKey, originLine } from './auto-progress-ledger.mjs';
 import { run as watch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, forgiveNoExecutorResumes, main as watchMain, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS, formatDoneMessage, readableReason, formatDoneBacklogMessages } from './auto-progress-watch.mjs';
-import { run as digest, selectRows, formatDigest, isUnattendedRow, WINDOW_MS, MAX_ITEMS, needsDm, verdictOf, cleanText, isHumanActionRequired, waitingNotificationKey } from './auto-progress-digest.mjs';
+import { run as digest, selectRows, formatDigest, digestGroupKey, isUnattendedRow, WINDOW_MS, MAX_ITEMS, needsDm, verdictOf, cleanText, isHumanActionRequired, waitingNotificationKey } from './auto-progress-digest.mjs';
 import { runRegisterPs1 } from './lib/run-register-ps1.mjs';
 
 const tempHomes = [];
@@ -1497,4 +1497,55 @@ test('forgiveNoExecutorResumes: 空振りだけを取消し、dry-runと再実�
   const after = fs.readFileSync(ledgerFile(home), 'utf8');
   assert.deepEqual(forgiveNoExecutorResumes({ home }), { rows: 0, restored: 0 });
   assert.equal(fs.readFileSync(ledgerFile(home), 'utf8'), after);
+});
+
+const digestDedupeCwd = 'C:\\Users\\user\\.claude\\quota-sweep-repo';
+const digestPushActions = [
+  'push と main 向け PR 作成の許可を出す。',
+  '5428832 の push と PR 作成を許可するかどうかを決める（これだけ）。',
+  'ブランチ `quota-sweep/20261026-0333-claude-mvopceel` の push と main 向け PR 作成の許可を出す。',
+  'push/PR の許可を出す（出すまで C5 は進まない）。',
+  'push と main 向け PR 作成の許可を出す。',
+];
+
+test('digest: 同じループの許可待ち5行と停止3行を各1件に畳む', () => {
+  const now = Date.parse('2026-10-27T00:00:00Z');
+  const waiting = digestPushActions.map((nextKim, i) => ({ cwd: digestDedupeCwd, sessionId: `w${i}`, ts: new Date(now - i * 1000).toISOString(), status: 'waiting_user', nextKim, promise: '許可が出たら作業ブランチだけを push して PR を作成し、URL を state に記録する。'.repeat(3) }));
+  const stalled = [
+    'push/PR の許可が出たイテレーションで、5428832 を作業ブランチへ push し、PR を作成する。',
+    '次回のループは同じ観測を繰り返します。push/PR の禁止が解除されれば、5428832 を送る。',
+    'push/PR 禁止が解けた次回のループで 5428832 を push し、main 向け PR を作成する。',
+  ].map((promise, i) => ({ cwd: digestDedupeCwd, sessionId: `s${i}`, ts: new Date(now - i * 1000).toISOString(), status: 'resumed', promise }));
+  const text = formatDigest([...waiting, ...stalled, { cwd: 'D:\\Claude\\event-shop', sessionId: 'other', status: 'waiting_user', nextKim: '見積の承認', promise: '見積作成', ts: new Date(now).toISOString() }], now);
+  assert.match(text, /あなたの判断待ち 2件/);
+  assert.match(text, /止まっている 1件/);
+  assert.equal(text.split('（同じ内容 ×5）').length - 1, 1);
+  assert.equal(text.split('（同じ内容 ×3）').length - 1, 1);
+  assert.equal(text.split('\n').filter(line => line.startsWith('・あなたの判断待ち: ［quota-sweep-repo］')).length, 1);
+  for (const line of text.split('\n').filter(line => line.startsWith('・'))) assert.ok(line.length <= 80, line);
+});
+
+test('digest: cwd が空の同文行とタグがない別文言は畳まない', () => {
+  const rows = ['見積の承認', '見積の承認'].map((nextKim, i) => ({ sessionId: `w${i}`, promise: '見積', nextKim }));
+  assert.match(formatDigest(rows), /あなたの判断待ち 2件/);
+  assert.match(formatDigest(rows.map((row, i) => ({ ...row, cwd: digestDedupeCwd, nextKim: i ? '入稿の確認' : '見積の承認' }))), /あなたの判断待ち 2件/);
+});
+
+test('digestGroupKey: 許可事項と正規化した cwd で比較し別の許可は分ける', () => {
+  const key = digestGroupKey({ cwd: digestDedupeCwd, nextKim: digestPushActions[0] }, 'waiting');
+  for (const nextKim of digestPushActions) assert.equal(digestGroupKey({ cwd: digestDedupeCwd, nextKim }, 'waiting'), key);
+  assert.equal(digestGroupKey({ cwd: '/mnt/c/Users/user/.claude/quota-sweep-repo/', nextKim: digestPushActions[0] }, 'waiting'), key);
+  assert.notEqual(digestGroupKey({ cwd: digestDedupeCwd, nextKim: 'C2 の curl 読み取りを許可するかどうか' }, 'waiting'), key);
+});
+
+test('digest: 最新の代表行で本文・72時間・夜間を判定し古い判断待ちもグループ数で数える', () => {
+  const now = Date.parse('2026-10-27T00:00:00Z');
+  const old = { cwd: digestDedupeCwd, sessionId: 'old', promise: '古い説明', nextKim: digestPushActions[0], ts: new Date(now - 100 * H).toISOString() };
+  const recent = { ...old, sessionId: 'new', promise: '最新の説明', ts: new Date(now - H).toISOString() };
+  const text = formatDigest([], now, 'PC', { waitingRows: [recent, old], nightWaitingKeys: new Set([waitingNotificationKey(old)]) });
+  assert.match(text, /あなたの判断待ち 1件/);
+  assert.match(text, /最新の説明/);
+  assert.doesNotMatch(text, /夜間に出た|3日以上前/);
+  assert.match(formatDigest([], now, 'PC', { waitingRows: [old, { ...old, sessionId: 'old2' }] }), /3日以上前の判断待ち 1件/);
+  assert.match(formatDigest([], now, 'PC', { waitingRows: [old, recent], nightWaitingKeys: new Set([waitingNotificationKey(recent)]) }), /夜間に出た判断待ち/);
 });

@@ -154,6 +154,37 @@ export function actionOf(row) {
   return cleanText(row.resumeOutcome || row.reason || '対応をお願いします', row);
 }
 
+// 同じ作業場所と許可事項だけをまとめ、識別子や言い回しの違いを吸収する。
+export function digestGroupKey(row, kind) {
+  const cwd = String(row.cwd || '').replaceAll('\\', '/').replace(/^\/mnt\/([a-z])\//i, '$1:/').replace(/\/+$/, '').toLowerCase();
+  if (!cwd) return rowKey(row);
+  const text = String(kind === 'waiting' ? actionOf(row) : row.promise || '').toLowerCase()
+    .replace(/`[^`]*`/g, '').replace(/\b[0-9a-f]{7,}\b/g, '')
+    .replace(/\b(?!push\/pr\b)[a-z0-9_.-]+\/[a-z0-9_./-]+/g, '');
+  const tags = [
+    ['push', /push/], ['pr', /\bpr\b|pull request|プルリク/], ['merge', /merge|マージ/],
+    ['curl', /curl/], ['token', /token|トークン/], ['write', /書き込み/],
+    ['delete', /削除/], ['exec', /実行/],
+  ].filter(([, pattern]) => pattern.test(text)).map(([tag]) => tag).sort();
+  return `${cwd}|${tags.length ? tags.join(',') : text.replace(/[\p{N}\p{P}\p{S}\s]/gu, '')}`;
+}
+
+function digestGroups(rows, kind) {
+  const groups = new Map();
+  for (const row of rows) {
+    // 作業場所がない行は、同一キーでも独立した項目として残す。
+    const key = row.cwd ? digestGroupKey(row, kind) : Symbol();
+    const group = groups.get(key);
+    if (!group) groups.set(key, { row, count: 1 });
+    else {
+      group.count++;
+      if ((rowTsOf(row) ?? -Infinity) > (rowTsOf(group.row) ?? -Infinity)) group.row = row;
+    }
+  }
+  return [...groups.values()];
+}
+const groupTail = count => count > 1 ? `（同じ内容 ×${count}）` : '';
+
 export function formatDigest(rows, now = Date.now(), label = '', {
   allRows = rows,
   waitingRows,
@@ -170,7 +201,7 @@ export function formatDigest(rows, now = Date.now(), label = '', {
 
   const waitingAll = waitingRows ? [...waitingRows] : [];
   const done = doneRows ? [...doneRows] : [];
-  const stalled = stalledRows ? [...stalledRows] : [];
+  let stalled = stalledRows ? [...stalledRows] : [];
   let inProgressList = inProgressRows ? [...inProgressRows] : [];
   let inProgress = typeof inProgressCount === 'number' ? inProgressCount : inProgressList.length;
 
@@ -192,9 +223,10 @@ export function formatDigest(rows, now = Date.now(), label = '', {
   }
 
   // 判断待ちは、既に閉じた行と72時間より古い行を個別表示から外す。古い分は末尾に件数だけ残す。
-  const openWaiting = waitingAll.filter(row => !isClosedRow(row));
-  const waiting = openWaiting.filter(row => !isStaleWaiting(row, now));
-  const staleWaiting = openWaiting.filter(row => isStaleWaiting(row, now));
+  const openWaiting = digestGroups(waitingAll.filter(row => !isClosedRow(row)), 'waiting');
+  stalled = digestGroups(stalled, 'stalled');
+  const waiting = openWaiting.filter(({ row }) => !isStaleWaiting(row, now));
+  const staleWaiting = openWaiting.filter(({ row }) => isStaleWaiting(row, now));
 
   // 進行中は最終判定が新しい順
   const checkedTime = (r) => {
@@ -217,10 +249,13 @@ export function formatDigest(rows, now = Date.now(), label = '', {
   const render = (wL, dL, sL, pL) => {
     const lines = [header];
     // 1. あなたの判断待ち
-    for (const row of waiting.slice(0, wL)) {
+    for (const { row, count } of waiting.slice(0, wL)) {
       const what = cleanText(row.label || row.promise || '約束した作業', row);
       const night = nightWaitingKeys.has(waitingNotificationKey(row)) ? '夜間に出た判断待ち: ' : 'あなたの判断待ち: ';
-      lines.push(itemLine(`・${night}${projectOf(row)}`, what, ` — ${actionOf(row)}`));
+      const head = `・${night}${projectOf(row)}`;
+      const suffix = groupTail(count);
+      const action = count > 1 ? brief(actionOf(row), Math.max(0, MAX_ITEM_CHARS - head.length - suffix.length - 12)) : actionOf(row);
+      lines.push(itemLine(head, what, ` — ${action}${suffix}`));
     }
     if (waiting.length > wL) {
       lines.push(`・あなたの判断待ち: ほか ${waiting.length - wL}件`);
@@ -234,11 +269,11 @@ export function formatDigest(rows, now = Date.now(), label = '', {
       lines.push(`・完了: ほか ${done.length - dL}件`);
     }
     // 3. 止まっている（再開したかどうか）
-    for (const row of stalled.slice(0, sL)) {
+    for (const { row, count } of stalled.slice(0, sL)) {
       const what = cleanText(row.label || row.promise || '約束した作業', row);
       const resumed = row.status === 'resumed' || Boolean(row.resumedAt);
       const resumeText = resumed ? '自動再開しました' : '自動再開していません';
-      lines.push(itemLine(`・止まっている: ${projectOf(row)}`, what, ` — ${resumeText}`));
+      lines.push(itemLine(`・止まっている: ${projectOf(row)}`, what, ` — ${resumeText}${groupTail(count)}`));
     }
     if (stalled.length > sL) {
       lines.push(`・止まっている: ほか ${stalled.length - sL}件`);

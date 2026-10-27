@@ -26,7 +26,8 @@ test('owner directory reads queries cache and refuses ambiguous email matches', 
 
 test('owner空の旧行はローカル持ち主を解決して通知する', async () => {
   let call;
-  await notifyOwner('', '自動進行', { label: 'kim-PC', pcMap: { 'kim-PC': { account: 'kim@orgiast.jp' } }, directory: [{ id: KIM_DISCORD_USER_ID, emails: ['kim@orgiast.jp'] }], notify: async (text, options) => { call = { text, options }; return { delivered: 'dm' }; } });
+  const result = await notifyOwner('', '自動進行', { label: 'kim-PC', pcMap: { 'kim-PC': { account: 'kim@orgiast.jp' } }, directory: [{ id: KIM_DISCORD_USER_ID, emails: ['kim@orgiast.jp'] }], notify: async (text, options) => { call = { text, options }; return { delivered: 'dm', messageId: 'receipt' }; } });
+  assert.equal(result.delivered, 'dm');
   assert.equal(call.text, '自動進行');
   assert.equal(call.options.userId, KIM_DISCORD_USER_ID);
 });
@@ -86,3 +87,21 @@ test('message idなしのDM結果は配達成功にしない', async t => {
   assert.equal(result.delivered, 'none');
   assert.equal(result.reason, 'discord-message-id-missing');
 });
+
+for (const [label, sent] of [
+  ['jsonなし', { ok: true }],
+  ['JSON解析失敗', { ok: true, json: async () => { throw new SyntaxError('invalid JSON'); } }],
+]) {
+  test(`DM送信応答が${label}なら実際の通知経路でも未配達にする`, async t => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-response-'));
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    let calls = 0;
+    const result = await notifyOwner('owner@example.com', '結果', {
+      home, pcMap: {}, gitEmail: '', userId: '555', token: 'test-token', plainJa: false,
+      fetchImpl: async () => ++calls === 1 ? { ok: true, json: async () => ({ id: 'dm-channel' }) } : sent,
+    });
+    assert.equal(calls, 2);
+    assert.equal(result.delivered, 'none');
+    assert.equal(result.reason, 'discord-message-id-missing');
+  });
+}

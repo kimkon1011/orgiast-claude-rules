@@ -24,6 +24,22 @@ test('token と userId で DM チャンネルを開いて投稿する', async ()
   assert.deepEqual(JSON.parse(calls[1].init.body), { content: 'hello' });
 });
 
+for (const [label, sent] of [
+  ['json がない', { ok: true }],
+  ['JSON 解析が失敗する', { ok: true, json: async () => { throw new SyntaxError('invalid JSON'); } }],
+  ['JSON が null', response({ json: null })],
+]) {
+  test(`DM の送信応答に ${label}場合は例外にせず messageId なしで返す`, async () => {
+    let calls = 0;
+    const result = await notifyKim('hello', {
+      home: home(), token: 'token', userId: 'user', plainJa: false,
+      fetchImpl: async () => ++calls === 1 ? response({ json: { id: 'dm-channel' } }) : sent,
+    });
+    assert.deepEqual(result, { delivered: 'dm' });
+    assert.equal(calls, 2);
+  });
+}
+
 test('DM 失敗時は webhook へフォールバックする', async () => {
   const dir = home(); fs.mkdirSync(path.join(dir, '.claude')); fs.writeFileSync(path.join(dir, '.claude', 'orgiast-discord-webhook.txt'), 'https://example.test/webhook');
   const calls = []; const original = console.error; console.error = () => {};

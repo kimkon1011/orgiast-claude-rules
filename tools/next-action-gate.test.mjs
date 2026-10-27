@@ -69,13 +69,13 @@ const openActionReport = (action, prefix = '') => `${prefix}${body}\n次に kim 
 
 test('マージ依頼とリンクの確認依頼はNEXT-ACTION-OPENでblock', () => {
   for (const action of ['PR #893 をマージする', '上のリンクを開いて内容を確認する']) {
-    assert.equal(judgeNextAction(openActionReport(action)).code, 'NEXT-ACTION-OPEN', action);
+    assert.equal(judgeNextAction(openActionReport(action, '【kim 確認用・全文】\n確認対象のリンクです。\n')).code, 'NEXT-ACTION-OPEN', action);
   }
 });
 
 test('なしと人にしかできない操作はNEXT-ACTION-OPENでblockしない', () => {
   for (const action of ['なし', '請求書の支払いを銀行で行う', 'OAuth の同意画面を開いて許可する']) {
-    assert.notEqual(judgeNextAction(openActionReport(action)).code, 'NEXT-ACTION-OPEN', action);
+    assert.notEqual(judgeNextAction(openActionReport(action, '【kim 確認用・全文】\n確認対象のリンクです。\n')).code, 'NEXT-ACTION-OPEN', action);
   }
 });
 
@@ -120,12 +120,12 @@ test('具体的なcommitのmainマージ判断をkimに渡す文はblock', () =>
 });
 
 test('PR番号だけのマージ判断確認はblockしない', () => {
-  const text = `${body}\n恒久策: 一回限り: Vercel Preview の目視確認が必要\n次に kim がすること: PR #14 を確認（マージ判断のみ）。Vercel Previewでの動作確認も可能です\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
+  const text = `${body}\n恒久策: 一回限り: Vercel Preview の目視確認が必要\n【kim 確認用・全文】\nPR #14 の Vercel Preview の動作からマージ可否を判断してください。\n次に kim がすること: PR #14 を確認（マージ判断のみ）。Vercel Previewでの動作確認も可能です\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
   withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
 });
 
 test('印刷所への電話は正当な人専用タスクとしてpass', () => {
-  const text = `${body}\n恒久策: 一回限り: 今回の納期は本人から印刷所への電話確認が必要\n次に kim がすること: 印刷所へ電話して納期を確認する\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
+  const text = `${body}\n恒久策: 一回限り: 今回の納期は本人から印刷所への電話確認が必要\n【kim 確認用・全文】\n印刷所への質問: 今回の納期を教えてください。\n次に kim がすること: 印刷所へ電話して納期を確認する\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
   withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
 });
 
@@ -575,4 +575,53 @@ test('人待ちは自動進行なしでも同一sessionのopen台帳行を要求
       assert.equal(judgeNextAction(text.replace('西さんがトークンを保存する', action), '', input).decision, 'pass');
     }
   });
+});
+
+// 他の判定も満たした応答で、新しい判定の到達性を検証する。
+const inlineReport = (action, content = '') => `${body}\n恒久策: 一回限り: 今回の判断は本人の意思が必要\n${content}次に kim がすること: ${action}\nこの後の自動進行: なし\nこのセッション: ${SESSION_PHRASES.delete}`;
+const inlineContent = '【kim 確認用・全文】\nA案: 今回の提案を採用する。B案: 保留する。\n';
+
+test('指定された遡り語は括弧内やなしで始まる値でも拒否する', () => {
+  for (const word of ['前の応答', '前々回', '前回の応答', '上の応答', '先ほどの', 'さっきの', '末尾の返信文', '前に出した', '既に提示', '上記の文面', '上記の返信', '前述', '以前の応答', '過去の応答', '遡って', 'スクロール']) {
+    for (const action of [`${word}を参照`, `なし（nishi: ${word}の返信文に「OK」）`]) {
+      const result = judgeNextAction(inlineReport(action, inlineContent));
+      assert.equal(result.decision, 'block', action);
+      assert.equal(result.code, 'NEXT-ACTION-BACKREF', action);
+    }
+  }
+});
+
+test('指定された承認語は直前の全文ブロックが必要', () => {
+  for (const word of ['OK', '承認', '確認', '了承', '選んで', '選択', 'どちら', '可否', '返事', '返信文', '文面']) {
+    const result = judgeNextAction(inlineReport(`A案について${word}`));
+    assert.equal(result.decision, 'block', word);
+    assert.equal(result.code, 'NEXT-ACTION-APPROVAL-INLINE', word);
+  }
+  assert.equal(judgeNextAction(inlineReport('なし（nishi: OK）')).code, 'NEXT-ACTION-APPROVAL-INLINE');
+});
+
+test('直前の全文ブロックを使った判断となし単独は通る', () => {
+  withOpenCheck(input => assert.equal(judgeNextAction(inlineReport('A案かB案を選んでください', inlineContent), '', input).decision, 'pass'));
+  assert.equal(judgeNextAction(inlineReport('なし')).decision, 'pass');
+});
+
+test('全文見出しはフッター直前40行以内だけ有効で改行形式を問わない', () => {
+  for (const newline of ['\n', '\r\n']) {
+    const at40 = inlineReport('A案かB案を選んでください', '【kim 確認用・全文】\n' + '対象の全文\n'.repeat(39)).replaceAll('\n', newline);
+    withOpenCheck(input => assert.equal(judgeNextAction(at40, '', input).decision, 'pass'));
+    assert.equal(judgeNextAction(at40.replace('【kim 確認用・全文】', `【kim 確認用・全文】${newline}追加行`)).code, 'NEXT-ACTION-APPROVAL-INLINE');
+  }
+  assert.equal(judgeNextAction(inlineReport('なし（確認）')).code, 'NEXT-ACTION-APPROVAL-INLINE');
+});
+
+test('理由付き例外は本文のどこでも有効で空や短い理由は無効', () => {
+  const action = '前の応答のA案かB案を選んでください';
+  const overrides = '[NEXT-ACTION-BACKREF-OK: 本人の指定があるため]\n[NEXT-ACTION-APPROVAL-INLINE-OK: 本人の指定があるため]\n';
+  for (const text of [overrides + inlineReport(action), inlineReport(action, overrides)]) {
+    withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
+  }
+  for (const reason of ['', '    ', '短い']) {
+    assert.equal(judgeNextAction(inlineReport('前の応答を参照', `[NEXT-ACTION-BACKREF-OK: ${reason}]\n`)).code, 'NEXT-ACTION-BACKREF');
+    assert.equal(judgeNextAction(inlineReport('A案を選んで', `[NEXT-ACTION-APPROVAL-INLINE-OK: ${reason}]\n`)).code, 'NEXT-ACTION-APPROVAL-INLINE');
+  }
 });

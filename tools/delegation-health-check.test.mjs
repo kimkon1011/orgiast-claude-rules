@@ -1046,6 +1046,24 @@ test('cooldown が切れた後の skipped(exit 3) や cooldown の無い provide
   assert.equal(outage.evidence[0], '3件すべて失敗');
 });
 
+const CODEX_DO_SKIPPED = (min, code) => ({ t: `2026-09-09T10:${min}:10.000Z`, provider: 'skipped', category: 'unrouted', model: 'none', status: 'no-cheap-executor', reason: `codex-do exit ${code}` });
+const CODEX_OK = (min) => ({ t: `2026-09-09T10:${min}:10.000Z`, provider: 'codex', model: 'codex-cli/default', in: 100, out: 120, status: 'ok', launched: true, exitCode: 0 });
+
+test('codex が後で成功している skipped(codex-do exit N) は全滅の high にも cooldown の low にもしない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [CODEX_DO_SKIPPED(10, 3), CODEX_DO_SKIPPED(11, 1), CODEX_DO_SKIPPED(12, 124), CODEX_OK(20)].map(row).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.provider === 'skipped'), false);
+});
+
+test('codex の成功より後の skipped(codex-do exit N) が3件以上なら high の未修理全滅のまま', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [CODEX_OK(10), CODEX_DO_SKIPPED(20, 3), CODEX_DO_SKIPPED(21, 1), CODEX_DO_SKIPPED(22, 124)].map(row).join(''));
+  const outage = collectFindings({ home: dir, now: NOW }).find((f) => f.id === 'lane_outage_unrepaired');
+  assert.equal(outage.provider, 'skipped');
+  assert.equal(outage.evidence[0], '3件すべて失敗');
+});
+
 test('status が数値 402 の旧形式行(http_ 接頭辞なし)も残高切れとして扱い high にしない', () => {
   const dir = home();
   const rows = [0, 1, 2].map((i) => ({ t: `2026-09-09T10:2${i}:10.987Z`, provider: 'deepseek', model: 'deepseek-flash', in: 3932, out: 22, secs: 3.1, ok: false, status: 402 }));

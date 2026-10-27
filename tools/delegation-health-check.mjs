@@ -515,13 +515,18 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
       const until = Number(cooldown[name]?.until);
       return Number.isFinite(until) && Date.parse(row.t) <= until;
     };
-    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !skippedByCooldown(row) && !isEmptyDiffEscalationRow(row) && !isQuotaSweepBenignRow(row));
+    // 'codex-do exit N' の skipped 行は wrapper(auto-session)が残す記録で、実体の失敗は codex 行側で
+    // 判定済み。その後に codex が成功しているなら修復済みで、疑似 provider 'skipped' の全滅証拠にしない
+    // (2026-10-28 実測: 15時台に codex が ok 8件でも、朝の exit 1/3/124 の21件が high になっていた)。
+    const skippedRepairedByCodex = (row) => row.provider === 'skipped' && /^codex-do exit /.test(String(row.reason || ''))
+      && codexSuccessTimes.some((time) => time > Date.parse(row.t));
+    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !skippedByCooldown(row) && !skippedRepairedByCodex(row) && !isEmptyDiffEscalationRow(row) && !isQuotaSweepBenignRow(row));
     // 24h 窓が cooldown だけで埋まる＝上限中で一度も試行していない。レーンは止まっているが
     // 原因は上限側で、コードの欠陥ではない。low の可視化だけ残す(high にすると上限が明けるまで
     // 毎晩同じ偽の修理タスクが積まれる。黙って消すと止まっている事実自体が見えなくなる)。
     if (!attempts.length) {
       // quota-sweep の正常停止は cooldown ではないので、cooldown の low 表示も付けない。
-      if (rows.every(isQuotaSweepBenignRow)) continue;
+      if (rows.every((row) => isQuotaSweepBenignRow(row) || skippedRepairedByCodex(row))) continue;
       // 窓が「代替は応答したが1行も変えなかった」行だけで埋まった場合も、レーン障害ではない。
       // 止まっている事実は low で可視化し、修理タスク(high)にはしない。
       if (emptyDiffRows.length === rows.length && rows.length >= 3) {

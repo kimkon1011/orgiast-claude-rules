@@ -13,8 +13,8 @@ const FOOTER_PATTERN = /(?:^|\n)次に kim がすること:[ \t]*([^\r\n]*)\r?\n
 const MULTIPLE_ACTIONS_PATTERN = /[、,，・]/;
 const BACKREF_PATTERN = /前の応答|前々回|前回の応答|上の応答|先ほどの|さっきの|末尾の返信文|前に出した|既に提示|上記の文面|上記の返信|前述|以前の応答|過去の応答|遡って|スクロール/;
 const APPROVAL_PATTERN = /OK|承認|確認|了承|選んで|選択|どちら|可否|返事|返信文|文面/;
-const BACKREF_REASON = '[NEXT-ACTION-BACKREF] 「次に kim がすること」が前の応答を参照しています。kim はこの行だけを見て判断します。確認してほしい文面・選択肢・URL は、3行フッターの直前に「【kim 確認用・全文】」ブロックとして省略せず再掲し、この行は「上の【kim 確認用・全文】を読んで OK か修正点を一言」のようにその応答内で閉じてください（nishi 2026-10-27 厳命・全PC）。例外は [NEXT-ACTION-BACKREF-OK: <理由>]。';
-const APPROVAL_INLINE_REASON = '[NEXT-ACTION-APPROVAL-INLINE] kim に確認・承認を求めていますが、対象の全文がこの応答にありません。3行フッターの直前に「【kim 確認用・全文】」見出しを置き、文面・選択肢・URL を省略せず全文載せてください（承認待ちが続く間は毎回の応答で再掲する。要約・参照・リンク置換は不可）。例外は [NEXT-ACTION-APPROVAL-INLINE-OK: <理由>]。';
+const BACKREF_REASON = '[NEXT-ACTION-BACKREF] 「次に kim がすること」が前の応答を参照しています。kim はこの行だけを見て判断します。確認してほしい文面・選択肢・URL は、3行フッターの直前に「【kim 確認用の全文】」ブロックとして省略せず再掲し、この行は「上の【kim 確認用の全文】を読んで 返事を一言」のようにその応答内で閉じてください（nishi 2026-10-27 厳命・全PC）。例外は [NEXT-ACTION-BACKREF-OK: <理由>]。';
+const APPROVAL_INLINE_REASON = '[NEXT-ACTION-APPROVAL-INLINE] kim に確認・承認を求めていますが、対象の全文がこの応答にありません。3行フッターの直前に「【kim 確認用の全文】」見出しを置き、文面・選択肢・URL を省略せず全文載せてください（承認待ちが続く間は毎回の応答で再掲する。要約・参照・リンク置換は不可）。例外は [NEXT-ACTION-APPROVAL-INLINE-OK: <理由>]。';
 const OPEN_ACTION_PATTERN = /マージ|merge|\bPR\b|#\d+|https?:\/\/|\]\(|開く|開いて|ひらいて|確認(?:する|して|を)|見る|見て|目を通|レビュー|チェック(?:する|して)|読む|読んで|反映を確か/i;
 const HUMAN_ONLY_PATTERN = /支払|入金|決済|課金|OAuth|同意|ログインして許可|アカウント(?:を)?作成|物理|現地|署名|押印|電話(?:する|して)|口頭|選んで|選ぶ|決めて|決める|判断/;
 const OPEN_ACTION_REASON = '[NEXT-ACTION-OPEN] 「次に kim がすること」に、開いて見る・確認する・マージする・レビューするなど、Claude や自動処理で済む項目が入っています。開く手間そのものが user の負担です（2026-10-26 cr 指摘）。(1) 状態は自分で照会する（例: gh pr view <N> --json state,mergedAt）。済んでいれば書かない (2) 未了なら自分で実行するか（gh pr merge <N> --squash --auto 等）「この後の自動進行」に回す (3) この行は「なし」にする。書いてよいのは人にしかできない操作（支払い・OAuth 同意・アカウント作成・物理作業・本文で選択肢を示した判断）だけ。例外は [NEXT-ACTION-OPEN-OK: <理由>]。';
@@ -236,7 +236,7 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
   // 末尾の実際のフッターより前だけを調べ、見出しが直前40行以内にあることを求める。
   const footerStart = source.match(FOOTER_PATTERN).index;
   const precedingLines = source.slice(0, footerStart).split(/\r?\n/).slice(-40);
-  const hasInlineApproval = precedingLines.some(line => line.trim() === '【kim 確認用・全文】');
+  const hasInlineApproval = precedingLines.some(line => line.trim() === '【kim 確認用の全文】');
   if (footer.nextAction !== 'なし' && APPROVAL_PATTERN.test(footer.nextAction)
     && !hasInlineApproval && !approvalInlineOverride) {
     return { decision: 'block', code: 'NEXT-ACTION-APPROVAL-INLINE', reason: APPROVAL_INLINE_REASON };

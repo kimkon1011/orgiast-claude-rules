@@ -1259,3 +1259,63 @@ test('buildPrompt は fleet-mail の [判断依頼] へ返信も判断もしな�
   const prompt = buildPrompt('実装する', {}, '/repo', '/tmp/run.summary.md', 60);
   assert.match(prompt, /\[判断依頼\][^\n]*返信も判断も行わない/);
 });
+
+test('runChild は冷却中・失敗時の codex-do と保留・最終フォールバックを扱う', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-lane-'));
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  const configDir = path.join(home, '.claude');
+  const toolsDir = path.join(home, 'tools');
+  fs.mkdirSync(configDir);
+  fs.mkdirSync(toolsDir);
+  const traceFile = path.join(home, 'trace.jsonl');
+  const trace = `fs.appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ lane: process.env.ORGIAST_HEADLESS_JOB, args: process.argv.slice(2), stdin, prompt: process.argv.includes('--prompt-file') ? fs.readFileSync(process.argv[process.argv.indexOf('--prompt-file') + 1], 'utf8') : '' }) + '\\n');`;
+  const script = (code) => `import fs from 'node:fs'; let stdin = ''; for await (const chunk of process.stdin) stdin += chunk; ${trace} ${code}`;
+  try {
+    const scenarios = [
+      { name: '両方冷却中は cheap-code を起動しない', cooling: true, code: 0, lanes: ['codex-do'], status: 'success' },
+      { name: 'cheap-code と alternate 失敗後は1回だけ codex-do', alternate: true, code: 0, lanes: ['cheap-code:deepseek', 'cheap-code:glm', 'codex-do'], status: 'success' },
+      { name: '75 は Claude 有効でも保留する', cooling: true, code: 75, claude: true, lanes: ['codex-do'], status: 'failure', deferred: true },
+      { name: 'codex-do 失敗後は skipped', code: 1, lanes: ['cheap-code:deepseek', 'codex-do'], status: 'failure', skipped: true },
+      { name: 'codex-do 失敗後は Claude', cooling: true, code: 1, claude: true, lanes: ['codex-do', 'fallback-claude'], status: 'success' },
+      { name: '無効化時は従来どおり skipped', cooling: true, disabled: true, code: 0, lanes: ['cheap-code:deepseek'], status: 'failure', skipped: true },
+      { name: 'model 指定は Claude 固定', cooling: true, model: true, code: 0, lanes: ['fallback-claude'], status: 'success' },
+      { name: 'codex-do timeout は切替しない', cooling: true, timeout: true, claude: true, code: 0, lanes: ['codex-do'], status: 'timeout' },
+      { name: 'codex-do ファイル欠落は skipped', cooling: true, missing: true, lanes: [], status: 'failure', skipped: true },
+    ];
+    // Claude スタブは shebang 起動なので Windows では spawn できない。Claude レーンへ実際に落ちる
+    // シナリオだけ Windows では飛ばす(CI の Linux で検証する)。
+    const needsClaudeStub = (scenario) => scenario.lanes.includes('fallback-claude');
+    for (const scenario of scenarios) await t.test(scenario.name, { skip: process.platform === 'win32' && needsClaudeStub(scenario) ? 'shebang スタブは Windows で起動不可' : false }, async () => {
+      fs.writeFileSync(traceFile, '');
+      fs.writeFileSync(path.join(configDir, 'auto-session.env'), `ORGIAST_AUTO_SESSION_EXECUTOR=cheap-code\nORGIAST_AUTO_SESSION_PROVIDER=deepseek\nORGIAST_AUTO_SESSION_CODEX_LANE=${scenario.disabled ? 'off' : 'on'}\nORGIAST_AUTO_SESSION_CLAUDE_FALLBACK=${scenario.claude ? 'on' : 'off'}\n`);
+      fs.writeFileSync(path.join(configDir, 'provider-cooldown.json'), JSON.stringify(scenario.cooling ? { deepseek: { until: Date.now() + 60000 }, glm: { until: Date.now() + 60000 } } : {}));
+      fs.writeFileSync(path.join(configDir, 'zai.env'), scenario.alternate ? 'ZAI_API_KEY=test' : '');
+      fs.writeFileSync(path.join(toolsDir, 'cheap-code.mjs'), script('process.exitCode = 1;'));
+      const codexFile = path.join(toolsDir, 'codex-do.mjs');
+      fs.writeFileSync(codexFile, script(scenario.timeout ? 'setInterval(() => {}, 1000);' : `process.exitCode = ${scenario.code ?? 1};`));
+      if (scenario.missing) fs.rmSync(codexFile);
+      // Claude のスタブは stdin を消費して成功させる。
+      const claudeFile = path.join(home, 'claude-stub');
+      fs.writeFileSync(claudeFile, `#!${process.execPath}\n(async () => { const fs = require('node:fs'); let stdin = ''; for await (const chunk of process.stdin) stdin += chunk; ${trace} })();\n`, { mode: 0o755 });
+      const result = await runChild(claudeFile, 'lane test', home, home, scenario.timeout ? 1500 : 5000, { executorRoot: home, ...(scenario.model ? { model: 'sonnet' } : {}) });
+      const rows = fs.readFileSync(traceFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+      assert.deepEqual(rows.map((row) => row.lane.replace('auto-session:', '')), scenario.lanes);
+      assert.equal(result.status, scenario.status);
+      assert.equal(result.deferred === true, scenario.deferred === true);
+      assert.equal(result.skippedNoExecutor, scenario.skipped === true);
+      assert.equal(result.executorUsed, scenario.lanes.at(-1) === 'fallback-claude' ? 'claude' : scenario.lanes.at(-1) ?? 'codex-do');
+      assert.equal(result.fallbackToClaude, !!scenario.claude && !scenario.deferred && !scenario.timeout);
+      for (const row of rows.filter((row) => row.lane.endsWith(':codex-do'))) {
+        assert.equal(row.stdin, '');
+        assert.equal(row.prompt, '[headless:auto-session]\nlane test');
+        assert.deepEqual(row.args.slice(-4), ['--cwd', home, '--origin', 'unattended']);
+        assert.equal(fs.existsSync(row.args[row.args.indexOf('--prompt-file') + 1]), false);
+      }
+    });
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

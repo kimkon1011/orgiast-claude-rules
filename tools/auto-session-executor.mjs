@@ -34,6 +34,21 @@ export function claudeFallbackEnabled(env = process.env, home = env.ORGIAST_HOME
   return /^(?:1|true|on)$/i.test(String({ ...env, ...fileEnv }.ORGIAST_AUTO_SESSION_CLAUDE_FALLBACK || '').trim());
 }
 
+export function codexDoLaneEnabled(env = process.env, home = env.ORGIAST_HOME || os.homedir()) {
+  let fileEnv = {};
+  try { fileEnv = parseAutoSessionEnvText(fs.readFileSync(path.join(home, '.claude', 'auto-session.env'), 'utf8')); } catch {}
+  return !/^(?:0|false|off)$/i.test(String({ ...env, ...fileEnv }.ORGIAST_AUTO_SESSION_CODEX_LANE ?? '').trim());
+}
+
+export function cheapProvidersAllCooling(provider, home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now()) {
+  const alternate = provider === 'glm' ? 'deepseek' : provider === 'deepseek' ? 'glm' : null;
+  if (!alternate) return false;
+  try {
+    const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'provider-cooldown.json'), 'utf8'));
+    return Number(state?.[provider]?.until) > now && Number(state?.[alternate]?.until) > now;
+  } catch { return false; }
+}
+
 export function alternateCheapProvider(provider, home = process.env.ORGIAST_HOME || os.homedir()) {
   const alternate = provider === 'glm' ? 'deepseek' : provider === 'deepseek' ? 'glm' : null;
   if (!alternate) return null;
@@ -124,6 +139,12 @@ export function buildCheapCodeArgs({ repoRoot, provider, promptFile, cwd }) {
   const cheapCode = path.join(repoRoot, 'tools', 'cheap-code.mjs');
   if (!fs.existsSync(cheapCode)) throw new Error(`cheap-code.mjs が見つかりません: ${cheapCode}`);
   return [cheapCode, '--provider', provider, '--prompt-file', promptFile, '--cwd', cwd];
+}
+
+export function buildCodexDoArgs({ repoRoot, promptFile, cwd }) {
+  const codexDo = path.join(repoRoot, 'tools', 'codex-do.mjs');
+  if (!fs.existsSync(codexDo)) throw new Error(`codex-do.mjs が見つかりません: ${codexDo}`);
+  return [codexDo, '--prompt-file', promptFile, '--cwd', cwd, '--origin', 'unattended'];
 }
 
 // cheap-code が失敗した時の最終手段: claude -p(headless) 。無人の残TODO消化に Opus は過剰なので Sonnet。

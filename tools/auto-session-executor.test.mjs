@@ -7,6 +7,9 @@ import {
   EXECUTOR_SYNC_TTL_MS,
   autoSessionExecutor,
   buildCheapCodeArgs,
+  buildCodexDoArgs,
+  codexDoLaneEnabled,
+  cheapProvidersAllCooling,
   buildClaudeHeadlessArgs,
   claudeFallbackEnabled,
   alternateCheapProvider,
@@ -218,4 +221,46 @@ test('recordFallbackToClaude は appendImpl 差し替えができ、失敗して
   const blocker = path.join(home, 'blocker.txt');
   fs.writeFileSync(blocker, 'x', 'utf8');
   assert.doesNotThrow(() => recordFallbackToClaude({ home: path.join(blocker, 'sub'), reason: 'x' }));
+});
+
+test('buildCodexDoArgs は prompt-file/cwd/origin を順に渡し、欠落を拒否する', () => {
+  const repoRoot = makeHome();
+  try {
+    const options = { repoRoot, promptFile: '/tmp/prompt file.md', cwd: '/tmp/work dir' };
+    assert.throws(() => buildCodexDoArgs(options), /codex-do\.mjs が見つかりません/);
+    fs.mkdirSync(path.join(repoRoot, 'tools'));
+    fs.writeFileSync(path.join(repoRoot, 'tools', 'codex-do.mjs'), '');
+    assert.deepEqual(buildCodexDoArgs(options), [path.join(repoRoot, 'tools', 'codex-do.mjs'), '--prompt-file', options.promptFile, '--cwd', options.cwd, '--origin', 'unattended']);
+  } finally { fs.rmSync(repoRoot, { recursive: true, force: true }); }
+});
+
+test('codexDoLaneEnabled は既定有効でファイル指定を env より優先する', () => {
+  const home = makeHome();
+  try {
+    const env = { ORGIAST_HOME: home };
+    assert.equal(codexDoLaneEnabled(env), true);
+    for (const value of ['0', 'false', 'OFF', ' off ']) {
+      assert.equal(codexDoLaneEnabled({ ...env, ORGIAST_AUTO_SESSION_CODEX_LANE: value }), false);
+    }
+    writeAutoSessionEnv(home, 'ORGIAST_AUTO_SESSION_CODEX_LANE=on\n');
+    assert.equal(codexDoLaneEnabled({ ...env, ORGIAST_AUTO_SESSION_CODEX_LANE: '0' }), true);
+    writeAutoSessionEnv(home, 'ORGIAST_AUTO_SESSION_CODEX_LANE=false\n');
+    assert.equal(codexDoLaneEnabled({ ...env, ORGIAST_AUTO_SESSION_CODEX_LANE: '1' }), false);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('cheapProvidersAllCooling は両方の until が未来の場合だけ true を返す', () => {
+  const home = makeHome();
+  const file = path.join(home, '.claude', 'provider-cooldown.json');
+  try {
+    assert.equal(cheapProvidersAllCooling('glm', home, 1000), false);
+    fs.writeFileSync(file, JSON.stringify({ glm: { until: 1001 }, deepseek: { until: 2000 } }));
+    for (const provider of ['glm', 'deepseek']) assert.equal(cheapProvidersAllCooling(provider, home, 1000), true);
+    assert.equal(cheapProvidersAllCooling('other', home, 1000), false);
+    assert.equal(cheapProvidersAllCooling('glm', home, 1001), false);
+    fs.writeFileSync(file, JSON.stringify({ glm: { until: 2000 } }));
+    assert.equal(cheapProvidersAllCooling('glm', home, 1000), false);
+    fs.writeFileSync(file, 'broken');
+    assert.equal(cheapProvidersAllCooling('glm', home, 1000), false);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

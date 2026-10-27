@@ -7,7 +7,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { DEFAULT_REPO_MAP, parseRepoMap } from './feedback-to-issues.mjs';
 import { ledgerRows, runTaskLedger } from './task-ledger.mjs';
-import { alternateCheapProvider, autoSessionExecutor, buildClaudeHeadlessArgs, buildCheapCodeArgs, claudeFallbackEnabled, prepareExecutorRoot, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
+import { alternateCheapProvider, autoSessionExecutor, buildClaudeHeadlessArgs, buildCheapCodeArgs, buildCodexDoArgs, cheapProvidersAllCooling, codexDoLaneEnabled, claudeFallbackEnabled, prepareExecutorRoot, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
 import { findClaudeInVersionedDir, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
 import { sweepFile as sweepRescueTodoFile } from './rescue-todo-sweep.mjs';
 
@@ -743,18 +743,32 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
       : configuredChoice;
     let cheapProvider = choice.provider;
     let alternateTried = false;
+    let codexTried = false;
+    let activeLane = choice.executor === 'cheap-code' ? 'cheap-code' : 'claude';
+    const codexLane = codexDoLaneEnabled();
     const promptFile = path.join(os.tmpdir(), `orgiast-auto-session-${process.pid}-${Date.now()}.txt`);
     if (choice.executor === 'cheap-code') fs.writeFileSync(promptFile, `[headless:auto-session]\n${prompt}`, 'utf8');
-    const launch = (fallback = false) => {
-      const cheap = choice.executor === 'cheap-code' && !fallback;
+    const launch = (fallback = false, codex = false) => {
+      const cheap = choice.executor === 'cheap-code' && !fallback && !codex;
+      activeLane = codex ? 'codex-do' : cheap ? 'cheap-code' : 'claude';
+      if (codex) codexTried = true;
       let child;
-      try { child = spawn(cheap ? process.execPath : executable, cheap
+      try { child = spawn(cheap || codex ? process.execPath : executable, codex
+        ? buildCodexDoArgs({ repoRoot: executorRoot, promptFile, cwd: historyCwd })
+        : cheap
         ? buildCheapCodeArgs({ repoRoot: executorRoot, provider: cheapProvider, promptFile, cwd: historyCwd })
         : buildClaudeHeadlessArgs({ repoCwd, historyCwd, resumeSessionId: runOptions.resumeSessionId, ...(runOptions.model ? { model: runOptions.model } : {}) }), { detached: process.platform !== 'win32', cwd: historyCwd,
         // cheap-code 側でも浄化するが、claude フォールバック(監督セッション)はここで
         // デスクトップ由来の CLAUDECODE / CLAUDE_CODE_* / MCP_* を外しておく。
-        env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
-      catch (error) { finish(null, '', String(error?.message ?? error), true, fallback); return; }
+        env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: codex ? 'auto-session:codex-do' : cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
+      catch (error) {
+        if (codex) {
+          const reason = `codex-do launch failed: ${error?.message ?? error}`;
+          if (claudeFallbackEnabled()) { recordFallbackToClaude({ reason }); launch(true); return; }
+          recordSkippedNoExecutor({ reason, provider: cheapProvider });
+        }
+        finish(null, '', String(error?.message ?? error), true, fallback, false, codex); return;
+      }
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -763,7 +777,7 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
     child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
     child.on('error', (error) => { launchFailed = true; stderr += error.message; });
     child.stdin.on('error', () => {});
-    if (cheap) child.stdin.end(); else child.stdin.end(`[headless:auto-session]\n${prompt}`, 'utf8');
+    if (cheap || codex) child.stdin.end(); else child.stdin.end(`[headless:auto-session]\n${prompt}`, 'utf8');
     const timer = setTimeout(() => {
       timedOut = true;
       if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
@@ -771,10 +785,11 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
     }, Math.max(1, timeoutMs - (Date.now() - startedAt.getTime())));
     child.on('close', (code) => {
       clearTimeout(timer);
-      if (cheap && !timedOut && code !== 0) {
-        const reason = `cheap-code/${cheapProvider} exit ${code}`;
-        const alternate = alternateTried ? null : alternateCheapProvider(cheapProvider);
+      if ((cheap || codex) && !timedOut && code !== 0 && !(codex && code === 75)) {
+        const reason = `${codex ? 'codex-do' : `cheap-code/${cheapProvider}`} exit ${code}`;
+        const alternate = !cheap || alternateTried ? null : alternateCheapProvider(cheapProvider);
         if (alternate) { alternateTried = true; cheapProvider = alternate; launch(false); return; }
+        if (cheap && codexLane && !codexTried) { launch(false, true); return; }
         if (claudeFallbackEnabled()) { recordFallbackToClaude({ reason }); launch(true); return; }
         recordSkippedNoExecutor({ reason, provider: cheapProvider });
         finish(code, stdout, stderr, launchFailed, false, false, true);
@@ -783,10 +798,12 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
       finish(timedOut ? null : code, stdout, stderr, launchFailed, fallback, timedOut);
     });
     };
-    const finish = (code, stdout, stderr, launchFailed, fallback, timedOut = false, skippedNoExecutor = false) => { try { fs.rmSync(promptFile, { force: true }); } catch {} resolve({ startedAt: startedAt.toISOString(), endedAt: new Date().toISOString(), exitCode: code, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure', launchFailed, fallbackToClaude: Boolean(fallback), skippedNoExecutor, executorUsed: fallback || choice.executor !== 'cheap-code' ? 'claude' : `cheap-code:${cheapProvider}`, stdout, stderr }); };
+    const finish = (code, stdout, stderr, launchFailed, fallback, timedOut = false, skippedNoExecutor = false) => { try { fs.rmSync(promptFile, { force: true }); } catch {} resolve({ startedAt: startedAt.toISOString(), endedAt: new Date().toISOString(), exitCode: code, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure', launchFailed, fallbackToClaude: Boolean(fallback), skippedNoExecutor, executorUsed: activeLane === 'cheap-code' ? `cheap-code:${cheapProvider}` : activeLane, ...(activeLane === 'codex-do' && code === 75 && !timedOut ? { deferred: true } : {}), stdout, stderr }); };
     // 既存の呼び出し契約: executable 自体が不正なら cheap-code の選択状態にかかわらず起動失敗として返す。
     if (String(executable).includes('\0')) { finish(null, '', 'The argument contains null bytes', true, false); return; }
-    launch(false);
+    // 2026-10-27 実測: deepseek 402 + glm 上限で2日連続 success 0。
+    // 両方冷却中なら無駄な起動を省き、codex-do 内蔵の代替経路へ進む。
+    launch(false, choice.executor === 'cheap-code' && codexLane && cheapProvidersAllCooling(cheapProvider));
   });
 }
 

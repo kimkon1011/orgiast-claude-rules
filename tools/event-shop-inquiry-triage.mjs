@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { pathToFileURL } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const DAY = 86400000;
 const dateKey = value => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo' }).format(new Date(value));
@@ -112,4 +112,4 @@ export async function main({ env = process.env, args = process.argv.slice(2), no
   }
   return 0;
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
+if (isEntry(import.meta.url)) await main();

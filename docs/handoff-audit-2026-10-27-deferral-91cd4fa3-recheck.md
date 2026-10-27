@@ -209,3 +209,13 @@ repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、branch=quota-sweep/20
 state attempts=8、budget.ticks=8を確認。累積上限8/8のため新規試行を予約せず、監査・テスト・ソース修正なし。stop_reason=budget。未達はC2網羅性、C3有効性・漏れ候補対処、C5指定ゲート。C1/C4は過去時点限定。今回変更は停止記録のみ。別ループ・背景子プロセス・子agent・push/PR/mergeなし。
 
 受け渡し要約: status=ITERATING、attempts=8/8、budget.ticks=8。repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、revision=85a04a81e8fb09067b152e47d7325dfa8d34fee6（今回確認）、branchは直前記録quota-sweep/20261026-2306-codex-mvpv8wa0。開始git status終了0、対象docs変更1件のみ。owner=Codex、run=bfc24185-checkpoint-20261026T231538Z、API session ID不明、取消要求なし。並行writer不在は未証明。証跡=.loop/quota-sweep-codex-evidence.md、docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md。次は累積上限の明示変更とgit管理領域の書込可能な環境が必要。Asia/Tokyo=UTC+09:00。
+
+## Claude 実行 試行2回目（quota-sweep-claude / 2026-10-27）
+
+branch quota-sweep/20261027-0021-claude-mvpxxar1、HEAD 547252b、Node v24.22.1。開始時 state=0/budget.ticks=1 の不一致は大きい値を消費済みとし、今回を累積2として予約。
+
+- C3 漏れ候補を実測で確認: 「検証は Codex に任せています。結果が出たらここに報告します。」は待機語を含まず detect() が [] を返していた（元原文と同型の先送り）。
+- 局所修正: tools/permanent-fix-deferral-scan.mjs の ARRIVAL_WAIT に結果到着後の報告約束（結果/完了/終了が出たら・戻ったら…報告/お知らせ/共有/連絡）を追加。除外パターンは広げていない。
+- 回帰: 陽性3・陰性3・監査引用1を scan テストへ追加。scan+nightly 58/58 pass。
+- C5: CI 同形 glob で tests 7074 / pass 7063 / fail 3 / skipped 8、終了1。失敗3は gmail-guard 配布テスト2件（spawn が status=null）と Windows cmd 日本語パス1件で scan 非依存の環境要因。指定どおりの `node --test tools/` は Node 24 で未収集のまま。緑ではない。
+- 未達: C2網羅性、C3原作業照合（wt-gate成果物・control-group-check）、C4スケジューラ稼働、C5ゲート。FINAL ではない。

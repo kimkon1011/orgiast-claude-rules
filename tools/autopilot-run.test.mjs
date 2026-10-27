@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runOnce, invokeClaude, buildPrompt, resolveSupervisorAuth } from './autopilot-run.mjs';
+import { runOnce, invokeClaude, buildPrompt, resolveSupervisorAuth, sampleCpuBusy } from './autopilot-run.mjs';
 import { runAutopilot, acquireLock } from './autopilot-tick.mjs';
 
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-run-test-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  return { home, askJevImpl: async () => ({ ok: false, reason: 'test_offline' }), platform: 'linux', dir: path.join(home, 'state'), token: '', userId: '', now: new Date('2026-09-21T01:00:00Z'), fetchImpl: async () => { throw new Error('unexpected network'); } };
+  return { home, askJevImpl: async () => ({ ok: false, reason: 'test_offline' }), platform: 'linux', dir: path.join(home, 'state'), token: '', userId: '', now: new Date('2026-09-21T01:00:00Z'), fetchImpl: async () => { throw new Error('unexpected network'); }, cpuBusyImpl: async () => 0 };
 }
 
 test('runner does not invoke Claude when unstarted, paused, stopped, or done', async (t) => {
@@ -384,4 +384,101 @@ test('Jev RETRY は次の監督プロンプトへ渡し、runner 失敗は既存
   } });
   assert.equal(result.status, 'paused');
   assert.equal((await runAutopilot('status', {}, opts)).state.pausedReason, 'runner_error');
+});
+
+test('cpuBusyImpl が 0.99 を返すとき invokeImpl が呼ばれず、run.log に host_busy が残り、state の status・totalIterations・consecutiveRunnerErrors が変わらない', async (t) => {
+  const opts = fixture(t);
+  await runAutopilot('start', { objective: 'test host busy' }, opts);
+  const before = (await runAutopilot('status', {}, opts)).state;
+  let invoked = false;
+  const result = await runOnce({
+    ...opts,
+    cpuBusyImpl: async () => 0.99,
+    invokeImpl: async () => { invoked = true; return { exitCode: 0 }; },
+  });
+  assert.equal(invoked, false);
+  assert.equal(result.skipped, 'host_busy');
+  assert.equal(result.cpuBusy, 0.99);
+
+  const log = fs.readFileSync(path.join(opts.dir, 'run.log'), 'utf8');
+  assert.match(log, /"skipped":"host_busy"/);
+  assert.match(log, /"cpuBusy":0\.99/);
+
+  const after = (await runAutopilot('status', {}, opts)).state;
+  assert.equal(after.status, before.status);
+  assert.equal(after.totalIterations, before.totalIterations);
+  assert.equal(after.consecutiveRunnerErrors, before.consecutiveRunnerErrors);
+});
+
+test('cpuBusyImpl が 0.30 を返すとき従来どおり invokeImpl が1回呼ばれ、渡された prompt に pre-latest.json のパスと「pre を再実行しない」が入り、そのファイルが実在して verdict が "run"', async (t) => {
+  const opts = fixture(t);
+  await runAutopilot('start', { objective: 'test busy normal' }, opts);
+  let invocations = 0;
+  let capturedPrompt = '';
+  const result = await runOnce({
+    ...opts,
+    cpuBusyImpl: async () => 0.30,
+    invokeImpl: async (inv) => {
+      invocations++;
+      capturedPrompt = inv.prompt;
+      await runAutopilot('post', { summary: 'done tick', progress: 20 }, opts);
+      return { exitCode: 0, stdout: 'ok' };
+    },
+  });
+  assert.equal(invocations, 1);
+  assert.match(capturedPrompt, /pre-latest\.json/);
+  assert.match(capturedPrompt, /pre を再実行しない/);
+
+  const preFile = path.join(opts.dir, 'pre-latest.json');
+  assert.ok(fs.existsSync(preFile));
+  const preJson = JSON.parse(fs.readFileSync(preFile, 'utf8'));
+  assert.equal(preJson.verdict, 'run');
+});
+
+test('buildPrompt() を引数なしで呼んだ出力が変更前と同じ（pre-latest の文言を含まない）', () => {
+  const prompt = buildPrompt();
+  assert.doesNotMatch(prompt, /pre-latest/);
+  assert.doesNotMatch(prompt, /pre を再実行しない/);
+  assert.match(prompt, /<実行コンテキスト>/);
+  assert.match(prompt, /pre が error なら実装せず終了する。\nfleet-mail の受信メールに/);
+});
+
+test('sampleCpuBusy に偽の cpusImpl（2回目で idle だけ増えるもの／user だけ増えるもの）を渡すと 0 付近 / 1 付近を返す', async () => {
+  let idleCalls = 0;
+  const idleCpus = () => {
+    idleCalls++;
+    return idleCalls === 1
+      ? [{ times: { user: 100, idle: 100 } }]
+      : [{ times: { user: 100, idle: 300 } }];
+  };
+  const idleRate = await sampleCpuBusy({ cpusImpl: idleCpus, sleep: async () => {} });
+  assert.ok(idleRate >= 0 && idleRate <= 0.05, `expected near 0, got ${idleRate}`);
+
+  let userCalls = 0;
+  const userCpus = () => {
+    userCalls++;
+    return userCalls === 1
+      ? [{ times: { user: 100, idle: 100 } }]
+      : [{ times: { user: 300, idle: 100 } }];
+  };
+  const userRate = await sampleCpuBusy({ cpusImpl: userCpus, sleep: async () => {} });
+  assert.ok(userRate >= 0.95 && userRate <= 1, `expected near 1, got ${userRate}`);
+});
+
+test('AUTOPILOT_SKIP_BUSY_CHECK=1 で高負荷チェックを無効化できる', async (t) => {
+  const opts = fixture(t);
+  await runAutopilot('start', { objective: 'test skip busy env' }, opts);
+  let invoked = false;
+  const result = await runOnce({
+    ...opts,
+    env: { ...process.env, AUTOPILOT_SKIP_BUSY_CHECK: '1' },
+    cpuBusyImpl: async () => 0.99,
+    invokeImpl: async () => {
+      invoked = true;
+      await runAutopilot('post', { summary: 'done', progress: 50 }, opts);
+      return { exitCode: 0 };
+    },
+  });
+  assert.equal(invoked, true);
+  assert.notEqual(result.skipped, 'host_busy');
 });

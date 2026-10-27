@@ -29,16 +29,23 @@ const DEFERRAL_REASON = '[NEXT-ACTION-DEFERRAL] 「次に kim がすること」
 export const SESSION_PHRASES = {
   closed: '/session-close は終わっているので、このセッションを閉じてよい',
   delete: '/session-close は不要なので、このセッションを閉じてよい',
-  pending: '/session-close をして（まだ閉じない）',
+  // pending も「まだ閉じない」なので、同じく待つ期限を必ず書く（2026-10-27 nishi 指示）。
+  pending: '/session-close をして（まだ閉じない・YYYY-MM-DD HH:MM まで待つ）',
   // まだ閉じない場合は、何日の何時まで待つかを必ず書く（2026-10-27 nishi 指示・全PC全アカウント）。
   // 期限が無いと、user はいつまでタブを開けておけばよいか分からず「進捗どう？」と聞き直すことになる。
   open: 'まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）',
 };
-const OPEN_PATTERN = /^まだ閉じない（作業中・(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}) まで待つ）$/;
+const DEADLINE = '(\\d{4})-(\\d{2})-(\\d{2}) (\\d{2}):(\\d{2})';
+const WAIT_PATTERNS = {
+  open: new RegExp(`^まだ閉じない（作業中・${DEADLINE} まで待つ）$`),
+  pending: new RegExp(`^/session-close をして（まだ閉じない・${DEADLINE} まで待つ）$`),
+};
+const WAIT_STATES = new Set(Object.keys(WAIT_PATTERNS));
 
-// 「まだ閉じない」行の待つ期限（PC のローカル時刻）。書式違い・存在しない日時は null。
+// 「まだ閉じない」行（open / pending）の待つ期限（PC のローカル時刻）。書式違い・存在しない日時は null。
 export function openDeadline(value) {
-  const m = String(value || '').match(OPEN_PATTERN);
+  const text = String(value || '');
+  const m = Object.values(WAIT_PATTERNS).map(pattern => text.match(pattern)).find(Boolean);
   if (!m) return null;
   const [y, mo, d, h, mi] = m.slice(1).map(Number);
   const date = new Date(y, mo - 1, d, h, mi);
@@ -46,13 +53,13 @@ export function openDeadline(value) {
   return date;
 }
 
-export function openPhrase(date) {
+export function openPhrase(date, state = 'open') {
   const p = n => String(n).padStart(2, '0');
-  return `まだ閉じない（作業中・${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())} まで待つ）`;
+  return SESSION_PHRASES[state].replace('YYYY-MM-DD HH:MM', `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}`);
 }
 const SESSION_PHRASE_LIST = Object.values(SESSION_PHRASES).map(phrase => `「${phrase}」`).join('');
 const CLOSABLE_STATES = new Set(['closed', 'delete']);
-const SESSION_STATES = Object.entries(SESSION_PHRASES).map(([state, phrase]) => [state, { test: state === 'open' ? value => openDeadline(value) !== null : value => value === phrase }]);
+const SESSION_STATES = Object.entries(SESSION_PHRASES).map(([state, phrase]) => [state, { test: WAIT_STATES.has(state) ? value => WAIT_PATTERNS[state].test(value) && openDeadline(value) !== null : value => value === phrase }]);
 
 export function enabled() {
   return process.env.ORGIAST_NEXT_ACTION_GATE !== '0';
@@ -216,13 +223,14 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
     return { decision: 'block', code: 'SESSION-EMPTY', reason: `「このセッション:」の値が空です。${SESSION_PHRASE_LIST}のいずれかを一字一句そのまま書いてください。` };
   }
   const sessionState = SESSION_STATES.find(([, pattern]) => pattern.test(footer.session))?.[0];
-  if (!sessionState && footer.session.startsWith('まだ閉じない（作業中')) {
-    return { decision: 'block', code: 'SESSION-OPEN-NO-DEADLINE', reason: `「まだ閉じない」のときは、何日の何時まで待つかを入れてください。書式: 「${SESSION_PHRASES.open}」（例: 「${openPhrase(new Date(Date.now() + 4 * 3600 * 1000))}」）。期限は、待っている相手の作業や自動チェックの期限に合わせる。` };
+  if (!sessionState && (footer.session.startsWith('まだ閉じない（作業中') || footer.session.startsWith('/session-close をして（まだ閉じない'))) {
+    const state = footer.session.startsWith('/session-close') ? 'pending' : 'open';
+    return { decision: 'block', code: 'SESSION-OPEN-NO-DEADLINE', reason: `「まだ閉じない」のときは、何日の何時まで待つかを入れてください。書式: 「${SESSION_PHRASES[state]}」（例: 「${openPhrase(new Date(Date.now() + 4 * 3600 * 1000), state)}」）。期限は、待っている相手の作業や自動チェックの期限に合わせる。` };
   }
   if (!sessionState) {
     return { decision: 'block', code: 'SESSION-INVALID', reason: `「このセッション:」は定型文${SESSION_PHRASE_LIST}のいずれかを一字一句そのまま書いてください（理由は「この後の自動進行」に書く）。` };
   }
-  if (sessionState === 'open' && openDeadline(footer.session).getTime() < (input.now ?? Date.now())) {
+  if (WAIT_STATES.has(sessionState) && openDeadline(footer.session).getTime() < (input.now ?? Date.now())) {
     return { decision: 'block', code: 'SESSION-OPEN-DEADLINE-PAST', reason: '「まだ閉じない」の待つ期限が既に過ぎています。待ち続けるなら新しい期限を書き、待つのをやめるなら /session-close を提案してください。' };
   }
   const body = source.slice(0, source.lastIndexOf('次に kim がすること:'));

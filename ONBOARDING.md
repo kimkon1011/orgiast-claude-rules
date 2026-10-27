@@ -443,7 +443,7 @@ nishi 指摘:「**『閉じてよい』というのは Close 処理をこれか�
 - Stop hook の `next-action-gate` が要求する「このセッション:」行は次の定型4文のどれか（2026-10-01 kim 指示。`/session-close` の状態とタブを閉じてよいかを1文に両方書く）。
   - `/session-close は終わっているので、このセッションを閉じてよい`: Claude が /session-close 済み。タブを✕してよい
   - `/session-close は不要なので、このセッションを閉じてよい`: 引き継ぎ不要。タブを✕してよい
-  - `/session-close をして（まだ閉じない）`: 作業は終わったが /session-close 未実行。/session-close をする
+  - `/session-close をして（まだ閉じない・YYYY-MM-DD HH:MM まで待つ）`: 作業は終わったが /session-close 未実行。/session-close をする。こちらも「まだ閉じない」なので何日の何時まで待つかを必ず入れる
   - `まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）`: 作業継続中。何日の何時まで待つかを必ず入れる（例: `まだ閉じない（作業中・2026-11-02 23:59 まで待つ）`）。期限は待っている相手の作業や自動チェックの期限に合わせ、過ぎたら新しい期限に書き換えるか /session-close を提案する（2026-10-27 nishi 指示・next-action-gate が SESSION-OPEN-NO-DEADLINE / SESSION-OPEN-DEADLINE-PAST で機械検査）
   これらは**セッションの状態を表す語**であって、user が次に押すものではない。
   **ゲートを満たしても user が迷えば説明として失敗**。分類の直後に上の3行を必ず書く。

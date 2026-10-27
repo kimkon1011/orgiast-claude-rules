@@ -6,7 +6,7 @@ import path from 'node:path';
 import { judgeNextAction, reportsCloseSteps, SESSION_PHRASES as PHRASES, openDeadline, openPhrase } from './next-action-gate.mjs';
 
 // open は期限入りのテンプレートなので、テストでは遠い未来の期限を入れた実例で検証する。
-const SESSION_PHRASES = { ...PHRASES, open: 'まだ閉じない（作業中・2099-12-31 23:59 まで待つ）' };
+const SESSION_PHRASES = { ...PHRASES, open: 'まだ閉じない（作業中・2099-12-31 23:59 まで待つ）', pending: '/session-close をして（まだ閉じない・2099-12-31 23:59 まで待つ）' };
 
 // 自動セッション（CLAUDE_HEADLESS=1）の中でテストを走らせても、このファイルは通常セッションの
 // 判定を検証する。ヘッドレスでは起床手段の検査をskipする仕様なので、環境変数を外しておかないと
@@ -514,6 +514,14 @@ test('まだ閉じない: 期限入りは pass、過ぎた期限は block', () =
   const now = new Date(2026, 9, 27, 12, 0).getTime();
   assert.equal(judgeNextAction(deadlineBase + 'まだ閉じない（作業中・2026-10-27 16:00 まで待つ）', '', { now }).decision, 'pass');
   assert.equal(judgeNextAction(deadlineBase + 'まだ閉じない（作業中・2026-10-27 11:59 まで待つ）', '', { now }).code, 'SESSION-OPEN-DEADLINE-PAST');
+});
+
+test('/session-close をして（まだ閉じない）も期限が必須・過ぎた期限は block', () => {
+  const now = new Date(2026, 9, 27, 12, 0).getTime();
+  assert.equal(judgeNextAction(deadlineBase + '/session-close をして（まだ閉じない）', '', { now }).code, 'SESSION-OPEN-NO-DEADLINE');
+  assert.equal(judgeNextAction(deadlineBase + '/session-close をして（まだ閉じない・2026-10-27 16:00 まで待つ）', '', { now }).decision, 'pass');
+  assert.equal(judgeNextAction(deadlineBase + '/session-close をして（まだ閉じない・2026-10-27 11:59 まで待つ）', '', { now }).code, 'SESSION-OPEN-DEADLINE-PAST');
+  assert.equal(openPhrase(new Date(2026, 10, 2, 9, 5), 'pending'), '/session-close をして（まだ閉じない・2026-11-02 09:05 まで待つ）');
 });
 
 test('openPhrase と openDeadline は往復できる', () => {

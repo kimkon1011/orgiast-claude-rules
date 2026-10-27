@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { notifyKim, KIM_DISCORD_USER_ID } from './notify-kim.mjs';
@@ -45,27 +46,43 @@ export function resolveOwnerDiscordId(owner, { home = os.homedir(), directory, .
   return id === KIM_DISCORD_USER_ID && wanted !== 'kim@orgiast.jp' ? '' : id;
 }
 
-// Encoded PowerShell keeps notification text out of executable script syntax.
+// Base64 keeps notification text out of executable script syntax.
 export function sendOwnerToast(text, { platform = process.platform, exec = execFileSync } = {}) {
   if (platform !== 'win32') return false;
   const payload = Buffer.from(String(text), 'utf8').toString('base64');
   const script = `$ErrorActionPreference='Stop'
 $t=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${payload}'))
+$lines=$t -split '\\r?\\n',2
+$title=$lines[0]
+if ([String]::IsNullOrWhiteSpace($title)) { $title='依頼の進捗' }
+if ($title.Length -gt 60) { $title=$title.Substring(0,60) }
+$body=''
+if ($lines.Count -gt 1) { $body=$lines[1] }
+if ($body.Length -gt 300) { $body=$body.Substring(0,299)+'…' }
 try {
   [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime] > $null
   [Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime] > $null
   $xml=New-Object Windows.Data.Xml.Dom.XmlDocument
-  $xml.LoadXml('<toast><visual><binding template="ToastGeneric"><text>依頼の進捗</text><text>'+[Security.SecurityElement]::Escape($t)+'</text></binding></visual></toast>')
+  $xml.LoadXml('<toast scenario="reminder"><visual><binding template="ToastGeneric"><text>'+[Security.SecurityElement]::Escape($title)+'</text><text>'+[Security.SecurityElement]::Escape($body)+'</text></binding></visual><actions><action content="閉じる" arguments="dismiss" activationType="system"/></actions></toast>')
   $toast=[Windows.UI.Notifications.ToastNotification]::new($xml)
   [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Orgiast').Show($toast)
 } catch {
   & msg.exe $env:USERNAME /TIME:60 $t
   if ($LASTEXITCODE -ne 0) { exit 1 }
 }`;
+  let tempDir;
   try {
-    exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, timeout: 15000, stdio: 'ignore' });
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-toast-'));
+    const scriptFile = path.join(tempDir, 'toast.ps1');
+    // Windows PowerShell 5.1 needs a BOM to read Japanese as UTF-8.
+    fs.writeFileSync(scriptFile, '\ufeff' + script, { encoding: 'utf8', mode: 0o600 });
+    exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptFile], { windowsHide: true, timeout: 15000, stdio: 'ignore' });
     return true;
-  } catch { return false; }
+  } catch { return false; } finally {
+    if (tempDir) {
+      try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch { /* cleanup must not mask delivery status */ }
+    }
+  }
 }
 
 export async function notifyOwner(owner, text, options = {}) {
@@ -82,9 +99,26 @@ export async function notifyOwner(owner, text, options = {}) {
   }
   // Local desktop fallback is only appropriate for this PC's owner.
   let sent = false;
+  let deduped = false;
   const localOwner = resolveOwner({ ...options, home });
   if (owner && owner.toLowerCase() === localOwner.toLowerCase()) {
-    try { sent = Boolean(await (options.toast ?? sendOwnerToast)(redactSecrets(text))); } catch { /* logged below */ }
+    const toastText = redactSecrets(text);
+    const hash = createHash('sha256').update(String(toastText)).digest('hex');
+    const lastFile = path.join(home, '.claude', 'logs', 'owner-toast-last.json');
+    const last = readJson(lastFile);
+    const now = Date.now();
+    if (last.hash === hash && now >= last.at && now - last.at < 6 * 60 * 60 * 1000) {
+      sent = true;
+      deduped = true;
+    } else {
+      try { sent = Boolean(await (options.toast ?? sendOwnerToast)(toastText, options)); } catch { /* logged below */ }
+      if (sent) {
+        try {
+          fs.mkdirSync(path.dirname(lastFile), { recursive: true });
+          fs.writeFileSync(lastFile, JSON.stringify({ hash, at: now }), { mode: 0o600 });
+        } catch { /* unwritable home must not break the caller */ }
+      }
+    }
   }
   const channel = sent ? 'toast' : 'none';
   const file = path.join(home, '.claude', 'logs', 'owner-notify-fallback.jsonl');
@@ -92,5 +126,5 @@ export async function notifyOwner(owner, text, options = {}) {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.appendFileSync(file, JSON.stringify({ at: new Date().toISOString(), owner: redactSecrets(owner), channel, reason, text: redactSecrets(text) }) + '\n', { mode: 0o600 });
   } catch { /* unwritable home must not break the caller */ }
-  return { delivered: sent ? 'toast' : 'none', channel, reason };
+  return { delivered: sent ? 'toast' : 'none', channel, reason, ...(deduped ? { deduped: true } : {}) };
 }

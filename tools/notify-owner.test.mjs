@@ -1,9 +1,10 @@
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveOwner, resolveOwnerDiscordId, notifyOwner } from './notify-owner.mjs';
+import { resolveOwner, resolveOwnerDiscordId, notifyOwner, sendOwnerToast } from './notify-owner.mjs';
 import { KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 
 test('owner 解決は fleet account を使う', () => {
@@ -52,7 +53,61 @@ test('nishi のローカルkim IDを拒否しtoastとログへ送る', async t =
  options.notify = async () => { throw new Error('DM failed'); };
  assert.equal((await notifyOwner('nishi@orgiast.jp', '進捗', options)).channel, 'toast');
  options.toast = () => false;
- assert.equal((await notifyOwner('nishi@orgiast.jp', '進捗', options)).channel, 'none');
+ assert.equal((await notifyOwner('nishi@orgiast.jp', '別の進捗', options)).channel, 'none');
+});
+
+test('toast PowerShell uses reminder, dismiss action and escaped bounded title/body', () => {
+ let script;
+ let scriptFile;
+ const text = '確認<&>\n' + '長'.repeat(350);
+ assert.equal(sendOwnerToast(text, { platform: 'win32', exec: (file, args) => {
+   assert.equal(file, 'powershell.exe');
+   assert.ok(args.includes('-File'));
+   assert.ok(!args.includes('-EncodedCommand'));
+   scriptFile = args[args.indexOf('-File') + 1];
+   script = fs.readFileSync(scriptFile, 'utf8');
+   assert.ok(script.startsWith('\ufeff'));
+ } }), true);
+ assert.equal(fs.existsSync(scriptFile), false);
+ assert.ok(script.includes('<toast scenario="reminder">'));
+ assert.ok(script.includes('<actions><action content="閉じる" arguments="dismiss" activationType="system"/></actions>'));
+ assert.ok(script.includes("-split '\\r?\\n',2"));
+ assert.ok(script.includes("$title='依頼の進捗'"));
+ assert.ok(script.includes('$title.Substring(0,60)'));
+ assert.ok(script.includes("$body.Substring(0,299)+'…'"));
+ assert.ok(script.includes('[Security.SecurityElement]::Escape($title)'));
+ assert.ok(script.includes('[Security.SecurityElement]::Escape($body)'));
+ assert.ok(script.includes(Buffer.from(text, 'utf8').toString('base64')));
+});
+
+test('同一toastは6時間抑止し、期限経過・本文変更では再表示する', async t => {
+ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-dedupe-'));
+ t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+ let calls = 0;
+ const options = { home, label: 'nishi-PC', pcMap: { 'nishi-PC': { account: 'nishi@orgiast.jp' } }, directory: [], platform: 'win32', exec: () => { calls++; } };
+ assert.equal((await notifyOwner('nishi@orgiast.jp', '進捗', options)).delivered, 'toast');
+ const file = path.join(home, '.claude', 'logs', 'owner-toast-last.json');
+ const last = JSON.parse(fs.readFileSync(file, 'utf8'));
+ const result = await notifyOwner('nishi@orgiast.jp', '進捗', options);
+ assert.equal(result.delivered, 'toast');
+ assert.equal(result.deduped, true);
+ assert.equal(calls, 1);
+ assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), last);
+ fs.writeFileSync(file, JSON.stringify({ ...last, at: Date.now() - 6 * 60 * 60 * 1000 }));
+ assert.equal((await notifyOwner('nishi@orgiast.jp', '進捗', options)).deduped, undefined);
+ assert.equal(calls, 2);
+ await notifyOwner('nishi@orgiast.jp', '新しい進捗', options);
+ assert.equal(calls, 3);
+});
+
+test('toast失敗は記録して抑止せず次回再試行する', async t => {
+ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-retry-'));
+ t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+ let calls = 0;
+ const options = { home, label: 'nishi-PC', pcMap: { 'nishi-PC': { account: 'nishi@orgiast.jp' } }, directory: [], platform: 'win32', exec: () => { calls++; throw new Error('failed'); } };
+ for (let i = 0; i < 2; i++) assert.equal((await notifyOwner('nishi@orgiast.jp', '進捗', options)).delivered, 'none');
+ assert.equal(calls, 2);
+ assert.equal(fs.existsSync(path.join(home, '.claude', 'logs', 'owner-toast-last.json')), false);
 });
 
 test('ローカルmapのdiscordIdは正本のowner設定を継承する', t => {
@@ -62,4 +117,29 @@ test('ローカルmapのdiscordIdは正本のowner設定を継承する', t => {
  fs.writeFileSync(path.join(home, '.claude', 'fleet-pc-map.json'), JSON.stringify({ 'nishi-PC': { discordId: '987' } }));
  assert.equal(resolveOwner({ home, label: 'nishi-PC' }), 'nishi@orgiast.jp');
  assert.equal(resolveOwnerDiscordId('nishi@orgiast.jp', { home, directory: [] }), '987');
+});
+
+
+test('toast temporary script is removed after execution failure', () => {
+ let scriptFile;
+ assert.equal(sendOwnerToast('failure', { platform: 'win32', exec: (_file, args) => {
+   scriptFile = args[args.indexOf('-File') + 1];
+   assert.ok(fs.existsSync(scriptFile));
+   throw new Error('spawn failed');
+ } }), false);
+ assert.equal(fs.existsSync(path.dirname(scriptFile)), false);
+});
+
+test('generated toast script parses in real Windows PowerShell without Show', { skip: process.platform !== 'win32' }, () => {
+ const text = "日本語<&>\n'quoted' ` $(); " + '長'.repeat(20000);
+ assert.equal(sendOwnerToast(text, { exec: (file, args) => {
+   const scriptFile = args[args.indexOf('-File') + 1];
+   const parser = path.join(path.dirname(scriptFile), 'parse.ps1');
+   fs.writeFileSync(parser, '\ufeff' + `$ErrorActionPreference='Stop'
+$source=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'toast.ps1'))
+$null=[ScriptBlock]::Create($source)
+`, 'utf8');
+   // Only compile the generated source; never invoke its script block.
+   execFileSync(file, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', parser], { windowsHide: true, timeout: 15000, stdio: 'pipe' });
+ } }), true);
 });

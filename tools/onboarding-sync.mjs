@@ -294,6 +294,29 @@ export async function updateRepositoryFiles(targetRepo, options = {}) {
   let oldDistribution = new Set();
   let untrackedOutput = new Set();
   const historyBlobCache = new Map();
+  const matchesMainHistory = (rel, current) => {
+    // HEAD との差ではなく main の過去版との一致で、zip が以前書いた配布物かを判定する。
+    // git の失敗や浅い履歴では一致扱いにせず、安全側で人の作業として保護する。
+    try {
+      const commits = String(git(
+        ['-C', targetRepo, 'rev-list', '-n', '50', 'origin/main', '--', rel],
+        { encoding: 'utf8', timeout: 60000 },
+      )).trim().split(/\s+/).filter(Boolean);
+      const content = fs.readFileSync(current);
+      const localShas = new Set([gitBlobSha(content)]);
+      if (!content.includes(0)) localShas.add(gitBlobSha(Buffer.from(content.toString('binary').replaceAll('\r\n', '\n'), 'binary')));
+      for (const commit of commits) {
+        const key = `${commit}\0${rel}`;
+        let blob = historyBlobCache.get(key);
+        if (blob === undefined) {
+          blob = String(git(['-C', targetRepo, 'rev-parse', `${commit}:${rel}`], { encoding: 'utf8', timeout: 60000 })).trim();
+          historyBlobCache.set(key, blob);
+        }
+        if (localShas.has(blob)) return true;
+      }
+    } catch {}
+    return false;
+  };
   if (hasGit) {
     try {
       // pull 失敗時だけ作業中ファイルを列挙し、zip がローカル作業を消さないよう個別に除外する。
@@ -306,30 +329,11 @@ export async function updateRepositoryFiles(targetRepo, options = {}) {
       for (const rel of changed) {
         const current = path.join(targetRepo, ...rel.split('/'));
         if (previous?.files?.[rel] && fs.existsSync(current) && sha256File(current) === previous.files[rel]) selfOutput.add(rel);
-        else if (untracked.has(rel) || !fs.existsSync(current)) excluded.add(rel);
+        else if (!fs.existsSync(current)) excluded.add(rel);
         else {
-          // HEAD との差ではなく main の過去版との一致で、zip が以前書いた配布物かを判定する。
-          // git の失敗や浅い履歴では一致扱いにせず、安全側で人の作業として保護する。
-          let matchesHistory = false;
-          try {
-            const commits = String(git(
-              ['-C', targetRepo, 'rev-list', '-n', '50', 'origin/main', '--', rel],
-              { encoding: 'utf8', timeout: 60000 },
-            )).trim().split(/\s+/).filter(Boolean);
-            const content = fs.readFileSync(current);
-            const localShas = new Set([gitBlobSha(content)]);
-            if (!content.includes(0)) localShas.add(gitBlobSha(Buffer.from(content.toString('binary').replaceAll('\r\n', '\n'), 'binary')));
-            for (const commit of commits) {
-              const key = `${commit}\0${rel}`;
-              let blob = historyBlobCache.get(key);
-              if (blob === undefined) {
-                blob = String(git(['-C', targetRepo, 'rev-parse', `${commit}:${rel}`], { encoding: 'utf8', timeout: 60000 })).trim();
-                historyBlobCache.set(key, blob);
-              }
-              if (localShas.has(blob)) { matchesHistory = true; break; }
-            }
-          } catch {}
-          if (matchesHistory) oldDistribution.add(rel);
+          // 未追跡でも main 過去版と一致すれば git から復元可能で、人の独自作業ではない。
+          // 保護すると hashes に載らず永久凍結するため、追跡済みと同じ履歴照合で更新する。
+          if (matchesMainHistory(rel, current)) oldDistribution.add(rel);
           else excluded.add(rel);
         }
       }

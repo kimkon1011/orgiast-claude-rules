@@ -441,6 +441,14 @@ test('人待ちの自動進行はbackgroundだけではblockし台帳チェッ�
   }
 });
 
+test('チャットで答えるだけの返信待ちは台帳チェックを要求しない', () => {
+  const replyOnly = `恒久策: 一回限り: この判断だけは kim に確認する
+次に kim がすること: A案とB案のどちらを選ぶか教えてください
+この後の自動進行: なし
+このセッション: ${SESSION_PHRASES.open}`;
+  assert.notEqual(judgeNextAction(replyOnly, '').code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
+});
+
 test('人待ちは登録コマンドの痕跡だけではpassしない', () => {
   for (const transcript of [addCheckBash, addCheckPs, `${addCheckBash}\n${row('user', '進捗どう？')}`]) {
     assert.equal(judgeNextAction(humanWaitText, transcript).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');

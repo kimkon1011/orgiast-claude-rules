@@ -62,7 +62,7 @@ for (const reason of [undefined, 'closed', 'approved', 'abandoned', 'empty']) {
 test('closed ledger is overridden when the last footer says the session is still open', async (t) => {
   const { base, transcript } = fixture(t);
   const footer = (value) => JSON.stringify({ type: 'assistant', uuid: 'match', message: { content: [{ type: 'text', text: `本文\nこのセッション: ${value}` }] } }) + '\n';
-  fs.writeFileSync(transcript, footer('まだ閉じない（作業中）'));
+  fs.writeFileSync(transcript, footer('まだ閉じない（作業中・2099-12-31 23:59 まで待つ）'));
   let mocked = mock();
   assert.equal((await purgeRemote({ base, now, fetchImpl: mocked.fetchImpl })).archived, 0);
   fs.rmSync(path.join(base, 'purge-remote-sessions-state.json'));

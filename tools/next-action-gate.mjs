@@ -30,11 +30,29 @@ export const SESSION_PHRASES = {
   closed: '/session-close は終わっているので、このセッションを閉じてよい',
   delete: '/session-close は不要なので、このセッションを閉じてよい',
   pending: '/session-close をして（まだ閉じない）',
-  open: 'まだ閉じない（作業中）',
+  // まだ閉じない場合は、何日の何時まで待つかを必ず書く（2026-10-27 nishi 指示・全PC全アカウント）。
+  // 期限が無いと、user はいつまでタブを開けておけばよいか分からず「進捗どう？」と聞き直すことになる。
+  open: 'まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）',
 };
+const OPEN_PATTERN = /^まだ閉じない（作業中・(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}) まで待つ）$/;
+
+// 「まだ閉じない」行の待つ期限（PC のローカル時刻）。書式違い・存在しない日時は null。
+export function openDeadline(value) {
+  const m = String(value || '').match(OPEN_PATTERN);
+  if (!m) return null;
+  const [y, mo, d, h, mi] = m.slice(1).map(Number);
+  const date = new Date(y, mo - 1, d, h, mi);
+  if (date.getFullYear() !== y || date.getMonth() !== mo - 1 || date.getDate() !== d || h > 23 || mi > 59) return null;
+  return date;
+}
+
+export function openPhrase(date) {
+  const p = n => String(n).padStart(2, '0');
+  return `まだ閉じない（作業中・${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())} まで待つ）`;
+}
 const SESSION_PHRASE_LIST = Object.values(SESSION_PHRASES).map(phrase => `「${phrase}」`).join('');
 const CLOSABLE_STATES = new Set(['closed', 'delete']);
-const SESSION_STATES = Object.entries(SESSION_PHRASES).map(([state, phrase]) => [state, { test: value => value === phrase }]);
+const SESSION_STATES = Object.entries(SESSION_PHRASES).map(([state, phrase]) => [state, { test: state === 'open' ? value => openDeadline(value) !== null : value => value === phrase }]);
 
 export function enabled() {
   return process.env.ORGIAST_NEXT_ACTION_GATE !== '0';
@@ -198,8 +216,14 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
     return { decision: 'block', code: 'SESSION-EMPTY', reason: `「このセッション:」の値が空です。${SESSION_PHRASE_LIST}のいずれかを一字一句そのまま書いてください。` };
   }
   const sessionState = SESSION_STATES.find(([, pattern]) => pattern.test(footer.session))?.[0];
+  if (!sessionState && footer.session.startsWith('まだ閉じない（作業中')) {
+    return { decision: 'block', code: 'SESSION-OPEN-NO-DEADLINE', reason: `「まだ閉じない」のときは、何日の何時まで待つかを入れてください。書式: 「${SESSION_PHRASES.open}」（例: 「${openPhrase(new Date(Date.now() + 4 * 3600 * 1000))}」）。期限は、待っている相手の作業や自動チェックの期限に合わせる。` };
+  }
   if (!sessionState) {
     return { decision: 'block', code: 'SESSION-INVALID', reason: `「このセッション:」は定型文${SESSION_PHRASE_LIST}のいずれかを一字一句そのまま書いてください（理由は「この後の自動進行」に書く）。` };
+  }
+  if (sessionState === 'open' && openDeadline(footer.session).getTime() < (input.now ?? Date.now())) {
+    return { decision: 'block', code: 'SESSION-OPEN-DEADLINE-PAST', reason: '「まだ閉じない」の待つ期限が既に過ぎています。待ち続けるなら新しい期限を書き、待つのをやめるなら /session-close を提案してください。' };
   }
   const body = source.slice(0, source.lastIndexOf('次に kim がすること:'));
   const isComplete = COMPLETE_PATTERN.test(footer.autopilot);
@@ -211,7 +235,7 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
     return { decision: 'block', code: 'AUTOPILOT-CONTRADICTION', reason: '本文に待ち状態があるのに「この後の自動進行: なし（完了）」となっており矛盾しています。次に誰がいつ動き、結果がどう届くかを書いてください。' };
   }
   if (CLOSABLE_STATES.has(sessionState) && BACKGROUND_PATTERN.test(body)) {
-    return { decision: 'block', code: 'SESSION-BACKGROUND-CONTRADICTION', reason: `本文ではバックグラウンド処理が進行中なのに、このセッションを閉じてよいと書かれており矛盾しています。ジョブが宙に浮かないよう「${SESSION_PHRASES.open}」としてください。` };
+    return { decision: 'block', code: 'SESSION-BACKGROUND-CONTRADICTION', reason: `本文ではバックグラウンド処理が進行中なのに、このセッションを閉じてよいと書かれており矛盾しています。ジョブが宙に浮かないよう「${SESSION_PHRASES.open}」（期限を入れる）としてください。` };
   }
   if (sessionState === 'closed' && !hasSessionCloseEvidence(source, transcriptRaw)) {
     return { decision: 'block', code: 'SESSION-CLOSE-NO-EVIDENCE', reason: `「このセッション: ${SESSION_PHRASES.closed}」とありますが、本文または会話に /session-close を実行した形跡がありません。/session-close を実行するか、「${SESSION_PHRASES.pending}」にしてください。` };

@@ -123,7 +123,7 @@ test('stop_hook_activeでも書き直しを再評価する', () => {
 
 test('次の行があればピギーバック・ヒントを重ねない', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-hint-'));
-  const output = JSON.parse(invoke(home, 'hint', `${request}\n次に kim がすること: Merge をクリック\nこの後の自動進行: kim のマージ後に Codex が確認してチャットで通知\nこのセッション: まだ閉じない（作業中）`).stdout);
+  const output = JSON.parse(invoke(home, 'hint', `${request}\n次に kim がすること: Merge をクリック\nこの後の自動進行: kim のマージ後に Codex が確認してチャットで通知\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ）`).stdout);
   assert.doesNotMatch(output.reason, /ピギーバック・ヒント/);
 });
 
@@ -478,7 +478,7 @@ test('完了待ちと将来作業をStopで差し戻し、完了報告なら通�
 test('自動進行の起床手段をtranscript_pathから検査しsubagentsは免除する', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-wakeup-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const text = '確認を続けます。\n次に kim がすること: なし\nこの後の自動進行: 私が毎時進捗を確認して変化時に報告します\nこのセッション: まだ閉じない（作業中）';
+  const text = '確認を続けます。\n次に kim がすること: なし\nこの後の自動進行: 私が毎時進捗を確認して変化時に報告します\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ）';
   for (const [name, raw, subagent, blocked] of [
     ['missing', '', false, true],
     ['cron', JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'CronCreate', input: { cron: '17 * * * *' } }] } }), false, true],

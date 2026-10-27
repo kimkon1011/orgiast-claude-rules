@@ -3,7 +3,10 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { judgeNextAction, reportsCloseSteps, SESSION_PHRASES } from './next-action-gate.mjs';
+import { judgeNextAction, reportsCloseSteps, SESSION_PHRASES as PHRASES, openDeadline, openPhrase } from './next-action-gate.mjs';
+
+// open は期限入りのテンプレートなので、テストでは遠い未来の期限を入れた実例で検証する。
+const SESSION_PHRASES = { ...PHRASES, open: 'まだ閉じない（作業中・2099-12-31 23:59 まで待つ）' };
 
 // 自動セッション（CLAUDE_HEADLESS=1）の中でテストを走らせても、このファイルは通常セッションの
 // 判定を検証する。ヘッドレスでは起床手段の検査をskipする仕様なので、環境変数を外しておかないと
@@ -41,7 +44,7 @@ test('3行が本文途中にあればblock', () => {
 });
 
 test('kimの作業が2件ならblock', () => {
-  const result = judgeNextAction(`${body}\n次に kim がすること: 承認、送信\nこの後の自動進行: Codex が確認後すぐ結果をチャットで通知します\nこのセッション: まだ閉じない（作業中）`);
+  const result = judgeNextAction(`${body}\n次に kim がすること: 承認、送信\nこの後の自動進行: Codex が確認後すぐ結果をチャットで通知します\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ）`);
   assert.equal(result.decision, 'block');
   assert.equal(result.code, 'NEXT-ACTION-MULTIPLE');
 });
@@ -149,7 +152,7 @@ test('待ち語が無く、もう削除してよいならpass', () => {
 });
 
 test('待ち語があり、起床手段があればまだ閉じないでpass', () => {
-  const text = `${body} 結果待ちです。\n次に kim がすること: なし\nこの後の自動進行: 処理完了時に Codex がチャットで通知します\nこのセッション: まだ閉じない（作業中）`;
+  const text = `${body} 結果待ちです。\n次に kim がすること: なし\nこの後の自動進行: 処理完了時に Codex がチャットで通知します\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ）`;
   assert.equal(judgeNextAction(text, row('assistant', [{ type: 'tool_use', name: 'Agent', input: { run_in_background: true } }])).decision, 'pass');
 });
 
@@ -317,7 +320,7 @@ test('短文でもフッターが定型どおりなら pass する', () => {
 test('フッター欠落の block 理由に定型4文を載せる', () => {
   const r = judgeNextAction('あ'.repeat(250));
   assert.equal(r.code, 'NEXT-ACTION-FOOTER');
-  for (const phrase of Object.values(SESSION_PHRASES)) assert.ok(r.reason.includes(phrase));
+  for (const phrase of Object.values(PHRASES)) assert.ok(r.reason.includes(phrase));
 });
 
 const warehouseAction = '3448 ハンマーをアンカーセットに入れる';
@@ -497,4 +500,25 @@ test('subagentsとheadlessでは起床手段の検査をskipする', () => {
     if (previous === undefined) delete process.env.CLAUDE_HEADLESS;
     else process.env.CLAUDE_HEADLESS = previous;
   }
+});
+
+const deadlineBase = '/session-close を実行しました。\n作業を続けています。\n次に kim がすること: なし\nこの後の自動進行: なし\nこのセッション: ';
+
+test('まだ閉じない: 期限なしの旧表記は SESSION-OPEN-NO-DEADLINE で block', () => {
+  for (const state of ['まだ閉じない（作業中）', 'まだ閉じない（作業中・明日まで）', 'まだ閉じない（作業中・2026-13-01 10:00 まで待つ）']) {
+    assert.equal(judgeNextAction(deadlineBase + state).code, 'SESSION-OPEN-NO-DEADLINE', state);
+  }
+});
+
+test('まだ閉じない: 期限入りは pass、過ぎた期限は block', () => {
+  const now = new Date(2026, 9, 27, 12, 0).getTime();
+  assert.equal(judgeNextAction(deadlineBase + 'まだ閉じない（作業中・2026-10-27 16:00 まで待つ）', '', { now }).decision, 'pass');
+  assert.equal(judgeNextAction(deadlineBase + 'まだ閉じない（作業中・2026-10-27 11:59 まで待つ）', '', { now }).code, 'SESSION-OPEN-DEADLINE-PAST');
+});
+
+test('openPhrase と openDeadline は往復できる', () => {
+  const d = new Date(2026, 10, 2, 9, 5);
+  assert.equal(openPhrase(d), 'まだ閉じない（作業中・2026-11-02 09:05 まで待つ）');
+  assert.equal(openDeadline(openPhrase(d)).getTime(), d.getTime());
+  assert.equal(openDeadline('まだ閉じない（作業中・2026-02-30 09:00 まで待つ）'), null);
 });

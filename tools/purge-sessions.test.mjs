@@ -233,7 +233,7 @@ test('new session footer wording: closed/delete approved, pending/open not', t =
   f.session('new-closed', [msg('user', 't'), msg('assistant', 'このセッション: /session-close は終わっているので、このセッションを閉じてよい')], 0);
   f.session('new-delete', [msg('user', 't'), msg('assistant', 'このセッション: /session-close は不要なので、このセッションを閉じてよい')], 0);
   f.session('new-pending', [msg('user', 't'), msg('assistant', 'このセッション: /session-close をして（まだ閉じない）')], 0);
-  f.session('new-open', [msg('user', 't'), msg('assistant', 'このセッション: まだ閉じない（作業中）')], 0);
+  f.session('new-open', [msg('user', 't'), msg('assistant', 'このセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ）')], 0);
   f.session('bare', [msg('user', 't'), msg('assistant', 'このセッション: 閉じてよい')], 0);
   const dry = f.run('--dry-run');
   assert.deepEqual(dry.sessions.map(x => x.reason).sort(), ['approved', 'approved']);

@@ -3,29 +3,35 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
+import { retryAfterMs, sharedClaudeUsage } from './lib/claude-usage-cache.mjs';
 
-export async function fetchClaudePlanUsage({ home = process.env.ORGIAST_HOME || os.homedir(), fetchImpl = fetch } = {}) {
+export async function fetchClaudePlanUsage({ home = process.env.ORGIAST_HOME || os.homedir(), fetchImpl = fetch, now = Date.now, cacheTtlMs = 15_000 } = {}) {
   let credentials;
   try { credentials = JSON.parse(fs.readFileSync(path.join(home, '.claude', '.credentials.json'), 'utf8')); }
   catch (error) { return { available: false, reason: `credentials: ${error.code || error.name}` }; }
   const token = credentials?.claudeAiOauth?.accessToken;
   if (!token) return { available: false, reason: 'accessToken 未設定' };
-  try {
-    const response = await fetchImpl('https://api.anthropic.com/api/oauth/usage', { headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', 'Content-Type': 'application/json' } });
-    if (!response.ok) return { available: false, reason: `HTTP ${response.status}` };
-    const json = await response.json(), five = json?.five_hour, seven = json?.seven_day;
-    if (!five || !seven || !Number.isFinite(Number(five.utilization)) || !Number.isFinite(Number(seven.utilization))) return { available: false, reason: 'usage response の形式が未対応' };
-    const scoped = Array.isArray(json?.limits) ? json.limits
-      .filter((limit) => limit?.kind === 'weekly_scoped' || limit?.scope != null)
-      .map((limit) => ({
-        label: limit.scope?.model?.display_name || limit.scope?.model?.id || limit.scope?.surface || limit.kind,
-        percent: Number(limit.percent),
-        resetsAt: limit.resets_at || null,
-        isActive: Boolean(limit.is_active),
-        kind: limit.kind,
-      })) : [];
-    return { available: true, fiveHour: { utilization: Number(five.utilization), resetsAt: five.resets_at || null }, sevenDay: { utilization: Number(seven.utilization), resetsAt: seven.resets_at || null }, scoped };
-  } catch (error) { return { available: false, reason: `network: ${error.name || 'error'}` }; }
+  return sharedClaudeUsage({ home, token, now, ttlMs: cacheTtlMs, load: async () => {
+    try {
+      const response = await fetchImpl('https://api.anthropic.com/api/oauth/usage', { signal: AbortSignal.timeout(30_000), headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', 'Content-Type': 'application/json' } });
+      if (!response.ok) {
+        const delay = response.status === 429 ? retryAfterMs(response.headers?.get?.('retry-after'), now()) : 0;
+        return { available: false, reason: `HTTP ${response.status}`, ...(delay > 0 ? { retryAfterMs: delay } : {}) };
+      }
+      const json = await response.json(), five = json?.five_hour, seven = json?.seven_day;
+      if (!five || !seven || !Number.isFinite(Number(five.utilization)) || !Number.isFinite(Number(seven.utilization))) return { available: false, reason: 'usage response の形式が未対応' };
+      const scoped = Array.isArray(json?.limits) ? json.limits
+        .filter((limit) => limit?.kind === 'weekly_scoped' || limit?.scope != null)
+        .map((limit) => ({
+          label: limit.scope?.model?.display_name || limit.scope?.model?.id || limit.scope?.surface || limit.kind,
+          percent: Number(limit.percent),
+          resetsAt: limit.resets_at || null,
+          isActive: Boolean(limit.is_active),
+          kind: limit.kind,
+        })) : [];
+      return { available: true, fiveHour: { utilization: Number(five.utilization), resetsAt: five.resets_at || null }, sevenDay: { utilization: Number(seven.utilization), resetsAt: seven.resets_at || null }, scoped };
+    } catch (error) { return { available: false, reason: `network: ${error.name || 'error'}` }; }
+  } });
 }
 
 export function formatClaudePlanUsage(result) {

@@ -1,0 +1,6 @@
+{
+  "state": "blocked",
+  "evidence": "宣言したpush/PRは既に到達済み。PR #1133のmainコミット21a20fbと5428832のpatch-id一致、origin/main包含終了0。元発言後claude9行増加、reasonのHTTP429は0件。詳細: /mnt/c/Users/user/.claude/quota-sweep-repo/docs/auto-progress-resume-ce46753c-2026-10-28.md。指定先C:/Users/user/.claude/auto-progress-resume-ce46753c.jsonは書込み許可範囲外のため配置のみ未完。監督側でこのJSONを指定先へコピーする必要がある。オンラインPR状態と新たなテストは未確認。",
+  "artifact": "/mnt/c/Users/user/.claude/quota-sweep-repo/docs/auto-progress-resume-ce46753c-2026-10-28.md",
+  "nextKim": ""
+}

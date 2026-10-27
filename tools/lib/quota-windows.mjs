@@ -53,7 +53,7 @@ export function readCodexWindows({ home, wslHome, now = Date.now() } = {}) {
 export const CLAUDE_WINDOW_CACHE_FILE = 'quota-claude-window-cache.json';
 const TRANSIENT_USAGE_ERROR = /^(?:network:|HTTP (?:408|429|5\d{2})\b)/i;
 export async function readClaudeWindows({ home, fetchImpl, now = Date.now, cacheMaxAgeMs = 10 * MINUTE } = {}) {
-  const result = await fetchClaudePlanUsage({ home, fetchImpl: fetchImpl ?? ((url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(15_000) })) });
+  const result = await fetchClaudePlanUsage({ home, now, fetchImpl: fetchImpl ?? ((url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(15_000) })) });
   const cacheFile = home ? path.join(home, '.claude', CLAUDE_WINDOW_CACHE_FILE) : null;
   if (!result.available) {
     if (cacheFile && TRANSIENT_USAGE_ERROR.test(String(result.reason ?? '').trim())) {
@@ -64,7 +64,7 @@ export async function readClaudeWindows({ home, fetchImpl, now = Date.now, cache
         if (usable) return Object.assign(cached.windows.map(x => ({ provider: 'claude', window: x.window, usedPercent: x.usedPercent, resetsAt: x.resetsAt, stale: true, observedAt: cached.observedAt })), { reason: null, fromCache: result.reason });
       } catch { /* キャッシュ無し・破損は従来どおり失敗扱い */ }
     }
-    return Object.assign([], { reason: result.reason });
+    return Object.assign([], { reason: result.reason, ...(result.retryAfterMs ? { retryAfterMs: result.retryAfterMs } : {}) });
   }
   const windows = [['5h', result.fiveHour], ['7d', result.sevenDay]].map(([window, value]) => ({ provider: 'claude', window, usedPercent: value.utilization, resetsAt: Date.parse(value.resetsAt) }));
   if (cacheFile && windows.every(x => Number.isFinite(x.resetsAt))) {

@@ -148,7 +148,7 @@ export function claudeWindowReader({ home, fetchImpl, now = Date.now, ttlMs = 15
     const at = now();
     if (cache && at - cachedAt < ttlMs) return cache;
     if (at < blockedUntil) return Object.assign([], { reason: 'HTTP 429', retryAfterMs: blockedUntil - at });
-    const claude = await read({ home, fetchImpl: wrapped });
+    const claude = await read({ home, fetchImpl: wrapped, now });
     if (claude.length) { cache = claude; cachedAt = at; }
     else if (blockedUntil > now()) claude.retryAfterMs = blockedUntil - now();
     return claude;

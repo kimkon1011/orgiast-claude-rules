@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { appendOwnerInbox } from './auto-progress-inbox-hook.mjs';
 import { notifyKim, KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
@@ -86,7 +87,7 @@ try {
 }
 
 export async function notifyOwner(owner, text, options = {}) {
-  const home = options.home ?? os.homedir();
+  const home = options.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   owner = String(owner || resolveOwner(options)).trim();
   const userId = options.userId ?? resolveOwnerDiscordId(owner, options);
   let reason = 'owner Discord recipient unresolved or mismatched';
@@ -97,6 +98,10 @@ export async function notifyOwner(owner, text, options = {}) {
       reason = 'Discord DM delivery failed';
     } catch { reason = 'Discord DM delivery failed'; }
   }
+  // Only this PC's owner opens sessions here, so other owners' notices must not land in this inbox.
+  try {
+    if (owner && owner.toLowerCase() === resolveOwner({ ...options, home }).toLowerCase()) appendOwnerInbox(home, { source: 'notify-owner', text: redactSecrets(text) });
+  } catch { /* inbox failure must not break delivery */ }
   // Local desktop fallback is only appropriate for this PC's owner.
   let sent = false;
   let deduped = false;

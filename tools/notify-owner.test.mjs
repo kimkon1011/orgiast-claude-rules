@@ -25,9 +25,11 @@ test('owner directory reads queries cache and refuses ambiguous email matches', 
   assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', { directory }), '');
 });
 
-test('owner空の旧行はローカル持ち主を解決して通知する', async () => {
+test('owner空の旧行はローカル持ち主を解決して通知する', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-empty-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   let call;
-  await notifyOwner('', '自動進行', { label: 'kim-PC', pcMap: { 'kim-PC': { account: 'kim@orgiast.jp' } }, directory: [{ id: KIM_DISCORD_USER_ID, emails: ['kim@orgiast.jp'] }], notify: async (text, options) => { call = { text, options }; return { delivered: 'dm' }; } });
+  await notifyOwner('', '自動進行', { home, label: 'kim-PC', pcMap: { 'kim-PC': { account: 'kim@orgiast.jp' } }, directory: [{ id: KIM_DISCORD_USER_ID, emails: ['kim@orgiast.jp'] }], notify: async (text, options) => { call = { text, options }; return { delivered: 'dm' }; } });
   assert.equal(call.text, '自動進行');
   assert.equal(call.options.userId, KIM_DISCORD_USER_ID);
 });
@@ -142,4 +144,36 @@ $null=[ScriptBlock]::Create($source)
    // Only compile the generated source; never invoke its script block.
    execFileSync(file, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', parser], { windowsHide: true, timeout: 15000, stdio: 'pipe' });
  } }), true);
+});
+
+test('toast・none は伏字本文をowner inboxに保存しDM成功では保存しない', async t => {
+ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-inbox-delivery-'));
+ t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+ const options = { home, label: 'nishi-PC', pcMap: { 'nishi-PC': { account: 'nishi@orgiast.jp' } }, directory: [], toast: () => true };
+ const file = path.join(home, '.claude', 'auto-progress-inbox', '_owner.jsonl');
+ const rows = () => fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+ assert.equal((await notifyOwner('nishi@orgiast.jp', '進捗', options)).channel, 'toast');
+ assert.equal(rows().length, 1);
+ await notifyOwner('nishi@orgiast.jp', '進捗', options);
+ assert.equal(rows().length, 1);
+ assert.equal(rows()[0].source, 'notify-owner');
+ assert.equal(rows()[0].shown, false);
+ options.toast = () => false;
+ assert.equal((await notifyOwner('nishi@orgiast.jp', '別の進捗', options)).channel, 'none');
+ assert.equal(rows().length, 2);
+ await notifyOwner('nishi@orgiast.jp', 'token=example-secret', options);
+ assert.equal(rows()[2].text, 'token=***REDACTED***');
+ await notifyOwner('nishi@orgiast.jp', 'DM成功', { ...options, userId: '42', notify: async () => ({ delivered: 'dm' }) });
+ assert.equal(rows().length, 3);
+ await notifyOwner('kim@orgiast.jp', '他の持ち主宛', options);
+ assert.equal(rows().length, 3);
+});
+
+test('owner inbox 書き込み失敗でも呼び出し元を壊さない', async t => {
+ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-inbox-failure-'));
+ t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+ fs.mkdirSync(path.join(home, '.claude'));
+ fs.writeFileSync(path.join(home, '.claude', 'auto-progress-inbox'), 'blocked');
+ const result = await notifyOwner('nishi@orgiast.jp', '結果', { home, userId: '', pcMap: {}, gitEmail: '', toast: () => false });
+ assert.equal(result.channel, 'none');
 });

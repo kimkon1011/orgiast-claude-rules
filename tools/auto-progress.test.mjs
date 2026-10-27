@@ -1394,3 +1394,17 @@ test('watch: 時間切れでも無人openとcheck行を48時間で期限切れ�
   assert.equal(calls, 1);
   assert.ok(readLedger(ledgerFile(home))[0].doneNotifiedAt);
  });
+
+
+test('digest: toast配達を受領ログに残し、未達時はsentにしない', async () => {
+  const at = Date.parse('2026-10-23T09:00:00+09:00');
+  for (const delivered of ['toast', 'none']) {
+    const home = tmp();
+    const row = { sessionId: 'toast-receipt', owner: 'nishi@orgiast.jp', status: 'waiting_user', promise: '本人同意', nextKim: '同意ボタンを押す', ts: new Date(at - H).toISOString() };
+    const result = await digest({ home, now: at, slot: '朝', io: { localOwner: row.owner, readLedger: () => [row], notifyOwner: async () => ({ delivered, channel: delivered }) } });
+    assert.equal(result.sent, delivered === 'toast');
+    const log = JSON.parse(fs.readFileSync(path.join(home, '.claude/logs/auto-progress-digest.sent.jsonl'), 'utf8').trim());
+    assert.equal(log.sent, delivered === 'toast');
+    if (delivered === 'toast') assert.equal(log.receipts[0].channel, 'toast');
+  }
+});

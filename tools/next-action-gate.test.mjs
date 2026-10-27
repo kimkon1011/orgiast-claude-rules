@@ -18,6 +18,22 @@ const body = '調査と実装と検証が完了しました。'.repeat(15);
 const twoLineFooter = '次に kim がすること: なし\nこの後の自動進行: なし（完了）';
 const footer = `${twoLineFooter}\nこのセッション: /session-close は不要なので、このセッションを閉じてよい`;
 
+// Existing human-action tests also supply the now-required persistent registration.
+function withOpenCheck(run) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'human-wait-check-'));
+  const previous = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  fs.mkdirSync(path.join(home, '.claude'));
+  const file = path.join(home, '.claude', 'auto-progress-ledger.jsonl');
+  fs.writeFileSync(file, JSON.stringify({ sessionId: 'registered', status: 'open', check: 'node check.mjs' }) + '\n');
+  try { return run({ session_id: 'registered' }, file); }
+  finally {
+    if (previous === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previous;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
 test('3行が末尾に揃っていればpass', () => {
   assert.equal(judgeNextAction(`${body}\n${footer}`).decision, 'pass');
 });
@@ -105,12 +121,12 @@ test('具体的なcommitのmainマージ判断をkimに渡す文はblock', () =>
 
 test('PR番号だけのマージ判断確認はblockしない', () => {
   const text = `${body}\n恒久策: 一回限り: Vercel Preview の目視確認が必要\n次に kim がすること: PR #14 を確認（マージ判断のみ）。Vercel Previewでの動作確認も可能です\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
-  assert.equal(judgeNextAction(text).decision, 'pass');
+  withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
 });
 
 test('印刷所への電話は正当な人専用タスクとしてpass', () => {
   const text = `${body}\n恒久策: 一回限り: 今回の納期は本人から印刷所への電話確認が必要\n次に kim がすること: 印刷所へ電話して納期を確認する\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
-  assert.equal(judgeNextAction(text).decision, 'pass');
+  withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
 });
 
 test('次に kim がすることが「なし」なら先送り判定せずpass', () => {
@@ -119,7 +135,7 @@ test('次に kim がすることが「なし」なら先送り判定せずpass',
 
 test('本文に着地語がない修正版PDFの物理操作はpass', () => {
   const text = `${body}\n恒久策: 一回限り: 本人手元の原本への初回同封が必要\n次に kim がすること: 修正版のPDFを印刷して同封する\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
-  assert.equal(judgeNextAction(text).decision, 'pass');
+  withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
 });
 
 test('待ち状態と完了表記が矛盾すればblock', () => {
@@ -354,7 +370,7 @@ test('倉庫作業を依頼してkimの次の作業から外せばpass', () => {
 
 test('具体物の実装と初回だけの理由をそれぞれ認める', () => {
   for (const fix of [implementedFix, '恒久策: 一回限り: OAuth 初回同意は本人のブラウザ操作が必須', '恒久策: PR #895 で自動化を実装した', '恒久策: 澤田さんへ定期回収を依頼送信した', '恒久策: memory.md に運用ルールを追加済み', '恒久策: 倉庫運用.md にルールを追加したので今後は自動で担当へ依頼する', '恒久策: ツール名: Scheduler を設定した']) {
-    assert.equal(judgeNextAction(permanentReport('本人同意ボタンを押す', fix)).decision, 'pass', fix);
+    withOpenCheck(input => assert.equal(judgeNextAction(permanentReport('本人同意ボタンを押す', fix), '', input).decision, 'pass', fix));
   }
 });
 
@@ -370,7 +386,7 @@ test('例外には空白を除く10文字以上の理由が必要で倉庫検査
     assert.equal(judgeNextAction(permanentReport('本人同意ボタンを押す', `[PERMANENT-FIX-OK: ${reason}]`)).code, 'PERMANENT-FIX-REQUIRED');
   }
   const override = '[PERMANENT-FIX-OK: 本人の明示的な同意操作だけは代行できないため]';
-  assert.equal(judgeNextAction(permanentReport('本人同意ボタンを押す', override)).decision, 'pass');
+  withOpenCheck(input => assert.equal(judgeNextAction(permanentReport('本人同意ボタンを押す', override), '', input).decision, 'pass'));
   assert.equal(judgeNextAction(permanentReport(warehouseAction, override)).code, 'WAREHOUSE-DISPATCH-REQUIRED');
 });
 
@@ -384,7 +400,7 @@ test('本文の例示や引用は恒久策・例外・手渡しと解釈しな�
 test('今ターンのBash・Discord送信tool_useを認める', () => {
   const text = permanentReport(warehouseAction, implementedFix);
   for (const transcript of [dispatch, ...['send_dm', 'send_message'].map(name => row('assistant', [{ type: 'tool_use', name: `mcp__claude_ai_Discord__${name}`, input: { recipient: '澤田武', content: '同梱をお願いします' } }]))]) {
-    assert.equal(judgeNextAction(text, `${row('user', '倉庫作業を手配して')}\n${transcript}\n${row('user', [{ type: 'tool_result', tool_use_id: 'dm', content: 'delivered' }])}`).decision, 'pass');
+    withOpenCheck(input => assert.equal(judgeNextAction(text, `${row('user', '倉庫作業を手配して')}\n${transcript}\n${row('user', [{ type: 'tool_result', tool_use_id: 'dm', content: 'delivered' }])}`, input).decision, 'pass'));
   }
 });
 
@@ -425,9 +441,9 @@ test('人待ちの自動進行はbackgroundだけではblockし台帳チェッ�
   }
 });
 
-test('人待ちの自動進行はこのターンまたは過去ターンの台帳チェック登録でpass', () => {
+test('人待ちは登録コマンドの痕跡だけではpassしない', () => {
   for (const transcript of [addCheckBash, addCheckPs, `${addCheckBash}\n${row('user', '進捗どう？')}`]) {
-    assert.equal(judgeNextAction(humanWaitText, transcript).decision, 'pass');
+    assert.equal(judgeNextAction(humanWaitText, transcript).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
   }
 });
 
@@ -529,4 +545,26 @@ test('openPhrase と openDeadline は往復できる', () => {
   assert.equal(openPhrase(d), 'まだ閉じない（作業中・2026-11-02 09:05 まで待つ）');
   assert.equal(openDeadline(openPhrase(d)).getTime(), d.getTime());
   assert.equal(openDeadline('まだ閉じない（作業中・2026-02-30 09:00 まで待つ）'), null);
+});
+
+
+test('人待ちは自動進行なしでも同一sessionのopen台帳行を要求する', () => {
+  const text = humanWaitText.replace('私が保存を定期確認して結果を報告します', 'なし');
+  withOpenCheck((input, file) => {
+    assert.equal(judgeNextAction(text, '', input).decision, 'pass');
+    assert.equal(judgeNextAction(text, '', { session_id: 'other' }).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
+    for (const status of ['done', 'superseded', 'waiting_user', 'stalled', 'resumed']) {
+      fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status, check: 'node check.mjs' }));
+      assert.equal(judgeNextAction(text, '', input).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', status);
+    }
+    fs.rmSync(file);
+    assert.equal(judgeNextAction(text, '', input).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
+    assert.equal(judgeNextAction('[NO-AUTOCHECK-OK: 本人の電話の結果は自動取得できない]\n' + text, '', input).decision, 'pass');
+    for (const reason of ['', '   ']) {
+      assert.equal(judgeNextAction(`[NO-AUTOCHECK-OK: ${reason}]\n${text}`, '', input).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
+    }
+    for (const action of ['なし', 'なし（完了）', '無し', 'ありません', '不要']) {
+      assert.equal(judgeNextAction(text.replace('西さんがトークンを保存する', action), '', input).decision, 'pass');
+    }
+  });
 });

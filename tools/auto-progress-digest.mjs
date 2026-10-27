@@ -452,7 +452,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       result = io.notify ? await io.notify(message, { home, webhookFallback: false, owner }) : await (io.notifyOwner ?? notifyOwner)(owner, message, { home });
     } catch (cause) { result = { reason: cause?.message || String(cause) }; }
     if (!['dm', 'toast'].includes(result?.delivered)) { error = result?.reason || 'DM not delivered'; break; }
-    receipts.push({ owner, recipientId: result.recipientId, httpStatus: result.httpStatus, messageId: result.messageId, channelId: result.channelId });
+    receipts.push({ owner, channel: result.channel ?? (result.delivered === 'toast' ? 'toast' : 'discord'), recipientId: result.recipientId, httpStatus: result.httpStatus, messageId: result.messageId, channelId: result.channelId });
     if (slotKey) sentSlotOwners.add(`${slotKey}|${owner}`);
     for (const row of rows) {
       const key = rowKey(row);

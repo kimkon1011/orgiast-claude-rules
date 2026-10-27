@@ -30,21 +30,38 @@ export function resolveOwner({ home = os.homedir(), label = resolveFleetLabel(ho
   try { return String(gitEmail ?? execFileSync('git', ['config', '--global', 'user.email'], { encoding: 'utf8', windowsHide: true })).trim(); } catch { return ''; }
 }
 
+function directoryRows(home, directory) {
+  const data = directory ?? readJson(path.join(home, '.claude', 'orgiast-discord-members.json'));
+  return Array.isArray(data) ? data : Object.values(data?.queries || data || {}).flatMap(v => Array.isArray(v?.members) ? v.members : []);
+}
+
+function recipientMatchesOwner(owner, id, { home = os.homedir(), directory, pcMap } = {}) {
+  const wanted = String(owner || '').trim().toLowerCase();
+  if (!wanted || !id) return false;
+  if (String(id) === KIM_DISCORD_USER_ID && wanted !== 'kim@orgiast.jp') return false;
+  const memberMismatch = directoryRows(home, directory).some(row => String(row.id) === String(id)
+    && (row.emails || []).some(email => String(email).trim() && String(email).trim().toLowerCase() !== wanted));
+  const mapMismatch = Object.values(pcMap ?? ownerPcMap(home)).some(row => row && typeof row === 'object'
+    && String(row.discordId || '') === String(id) && (row.account || row.owner)
+    && String(row.account || row.owner).trim().toLowerCase() !== wanted);
+  return !memberMismatch && !mapMismatch;
+}
+
 export function resolveOwnerDiscordId(owner, { home = os.homedir(), directory, ...options } = {}) {
   const wanted = String(owner || '').trim().toLowerCase();
-  const data = directory ?? readJson(path.join(home, '.claude', 'orgiast-discord-members.json'));
-  const rows = Array.isArray(data) ? data : Object.values(data?.queries || data || {}).flatMap(v => Array.isArray(v?.members) ? v.members : []);
+  const rows = directoryRows(home, directory);
+  const safeId = id => recipientMatchesOwner(owner, id, { home, directory, pcMap: options.pcMap }) ? id : '';
   const matches = [...new Set(rows.filter(row => wanted && (row.emails || []).some(email => String(email).toLowerCase() === wanted)).map(row => row.id).filter(Boolean).map(String))];
-  if (matches.length === 1) return matches[0];
+  if (matches.length === 1) return safeId(matches[0]);
   if (matches.length > 1) return '';
   const maps = options.pcMap ? [options.pcMap] : [ownerPcMap(home)];
   for (const map of maps) {
     const ids = [...new Set(Object.values(map).filter(row => row && typeof row === 'object' && String(row.account || row.owner || '').toLowerCase() === wanted).map(row => row.discordId).filter(Boolean).map(String))];
-    if (ids.length) return ids.length === 1 ? ids[0] : '';
+    if (ids.length) return ids.length === 1 ? safeId(ids[0]) : '';
   }
   const localOwner = resolveOwner({ home, ...options }).toLowerCase();
   const id = wanted && wanted === localOwner ? readText(path.join(home, '.claude', 'orgiast-discord-user-id.txt')) : '';
-  return id === KIM_DISCORD_USER_ID && wanted !== 'kim@orgiast.jp' ? '' : id;
+  return safeId(id);
 }
 
 // Base64 keeps notification text out of executable script syntax.
@@ -91,7 +108,7 @@ export async function notifyOwner(owner, text, options = {}) {
   owner = String(owner || resolveOwner(options)).trim();
   const userId = options.userId ?? resolveOwnerDiscordId(owner, options);
   let reason = 'owner Discord recipient unresolved or mismatched';
-  if (owner && userId && !(String(userId) === KIM_DISCORD_USER_ID && owner.toLowerCase() !== 'kim@orgiast.jp')) {
+  if (recipientMatchesOwner(owner, userId, options)) {
     try {
       const result = await (options.notify ?? notifyKim)(text, { ...options, userId, webhookFallback: false });
       if (result?.delivered === 'dm') return { ...result, channel: 'discord' };

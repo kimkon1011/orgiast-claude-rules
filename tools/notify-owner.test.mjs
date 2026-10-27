@@ -177,3 +177,50 @@ test('owner inbox 書き込み失敗でも呼び出し元を壊さない', async
  const result = await notifyOwner('nishi@orgiast.jp', '結果', { home, userId: '', pcMap: {}, gitEmail: '', toast: () => false });
  assert.equal(result.channel, 'none');
 });
+
+function localOptions(t) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "owner-safe-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, ".claude"));
+  return { home, label: "nishi-PC", pcMap: { "nishi-PC": { account: "nishi@orgiast.jp" } }, directory: [] };
+}
+
+test('既知の他人のIDはファイル・map・明示指定の全経路で拒否する', async t => {
+  const options = localOptions(t);
+  options.directory = { queries: { other: { members: [{ id: '123', emails: ['other@orgiast.jp'] }] } } };
+  fs.writeFileSync(path.join(options.home, '.claude', 'orgiast-discord-user-id.txt'), '123');
+  assert.equal(resolveOwnerDiscordId('nishi@orgiast.jp', options), '');
+  options.pcMap['nishi-PC'].discordId = '123';
+  assert.equal(resolveOwnerDiscordId('nishi@orgiast.jp', options), '');
+  const result = await notifyOwner('nishi@orgiast.jp', '進捗', { ...options, userId: '123', notify: () => assert.fail('wrong recipient'), toast: () => true });
+  assert.equal(result.delivered, 'toast');
+});
+
+test('同じIDが別メールにも紐づく曖昧な台帳は拒否する', t => {
+  const options = localOptions(t);
+  options.directory = [{ id: '123', emails: ['nishi@orgiast.jp'] }, { id: '123', emails: ['other@orgiast.jp'] }];
+  assert.equal(resolveOwnerDiscordId('nishi@orgiast.jp', options), '');
+});
+
+test('一致する持ち主へDMできたときtoastを出さない', async t => {
+  const options = localOptions(t);
+  options.directory = [{ id: '123', emails: ['nishi@orgiast.jp'] }];
+  const result = await notifyOwner('nishi@orgiast.jp', '進捗', { ...options, notify: async (_, opts) => {
+    assert.equal(opts.userId, '123');
+    assert.equal(opts.webhookFallback, false);
+    return { delivered: 'dm', messageId: 'receipt' };
+  }, toast: () => assert.fail('already delivered') });
+  assert.equal(result.channel, 'discord');
+});
+
+test('別PCの持ち主宛はローカルtoastで配達済みにしない', async t => {
+  const result = await notifyOwner('other@orgiast.jp', '結果', { ...localOptions(t), toast: () => assert.fail('not local owner') });
+  assert.equal(result.delivered, 'none');
+});
+
+test('メンバー台帳が空でも別ownerのPC設定に紐づくIDは拒否する', async t => {
+  const options = localOptions(t);
+  options.pcMap['other-PC'] = { account: 'other@orgiast.jp', discordId: '456' };
+  const result = await notifyOwner('nishi@orgiast.jp', '進捗', { ...options, userId: '456', notify: () => assert.fail('wrong PC owner'), toast: () => true });
+  assert.equal(result.channel, 'toast');
+});

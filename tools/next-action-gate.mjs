@@ -150,6 +150,14 @@ export function reportsCloseSteps(text) {
   return numbered('1') && numbered('2') && numbered('3');
 }
 
+function hasOpenSessionCheck(input) {
+  if (!input.session_id) return false;
+  try {
+    return latestOpenPromises(readLedger(ledgerFile()))
+      .some(row => row.sessionId === input.session_id && row.status === 'open');
+  } catch { return false; }
+}
+
 // auto-progress --add-check survives user turns (the ledger carries the check forward); background evidence belongs only to this turn.
 function hasSessionWakeup(raw, input = {}) {
   let autoProgress = false;
@@ -252,9 +260,10 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
     return { decision: 'block', code: 'NEXT-ACTION-DEFERRAL', reason: DEFERRAL_REASON };
   }
   const wakeup = hasSessionWakeup(transcriptRaw, input);
-  if (hasAutopilot && footer.nextAction !== 'なし' && !wakeup.autoProgress
-    && process.env.CLAUDE_HEADLESS !== '1' && !/subagents/i.test(input.transcript_path || '')) {
-    return { decision: 'block', code: 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', reason: '人待ちの自動進行は台帳の定期チェックに載せる: node tools/auto-progress.mjs --add-check --session <id> --check "<exit0=達成/1=未達のコマンド>" --deadline +7d --label "<名前>"' };
+  const noAutocheck = [...source.matchAll(/\[NO-AUTOCHECK-OK:[ \t]*([^\]\r\n]*)\]/g)]
+    .some(([, reason]) => reason.trim().length > 0);
+  if (!permanentFix && !NO_ACTION_PATTERN.test(footer.nextAction) && !hasOpenSessionCheck(input) && !noAutocheck) {
+    return { decision: 'block', code: 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', reason: '人待ちの自動進行は台帳の定期チェックに載せる: node tools/auto-progress.mjs --add-check --session <id> --check "<exit0=達成/1=未達のコマンド>" --deadline +7d --label "<名前>" --next-claude "<次の手>"。自動進行が「なし」でも同じセッションの open 行が必要です。自動確認できない場合だけ [NO-AUTOCHECK-OK: <理由>] を記載してください。' };
   }
   if (!permanentFix && hasAutopilot && process.env.CLAUDE_HEADLESS !== '1'
     && !/subagents/i.test(input.transcript_path || '') && !wakeup.autoProgress && !wakeup.background) {

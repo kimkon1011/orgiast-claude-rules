@@ -145,13 +145,13 @@
   },
   {
     "pattern": "Codex等の他AIレーン待機が期限切れ→Claude本体で続行",
-    "route": "codex-do.mjs",
+    "route": "待機期限が切れたら user に判断を返さず、同じ指示書ファイルで codex-do.mjs を前景・単発（--timeout 付き）で1回だけ再実行し、それも exit 非0なら Claude 本体で当ターン内に実装を完了する。続行した事実と理由（期限切れ・exit コード・cooldown の有無）を完了報告に書き、『実行中』『待機中』のまま handoff しない",
     "confidence": "high",
     "source": "handoff-audit-nightly:5088cc02c86ec878e5d78ad866b46a06b7f016253e6c2180a91df31dabac38ea"
   },
   {
     "pattern": "本番反映をuserの返信待ちにする",
-    "route": "vercel env",
+    "route": "本番反映は Claude 側で完結させ、user の返信を待たない。環境変数は認証済み Vercel CLI（PATH に無ければ npx キャッシュの vercel）で vercel env add → vercel env pull で値を読み戻し、反映は vercel deploy --prod または main マージで行い、本番 URL を curl で実叩きして 200 と内容を確認してから報告する。user に残してよいのはキー発行・支払い等 rule 3 の正当な手渡しだけ",
     "confidence": "high",
     "source": "handoff-audit-nightly:5088cc02c86ec878e5d78ad866b46a06b7f016253e6c2180a91df31dabac38ea"
   },

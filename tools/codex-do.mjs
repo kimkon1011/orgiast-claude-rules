@@ -743,6 +743,15 @@ export function buildUsageRow({
   };
 }
 
+// 再確認で Codex 自体が正常終了した時だけ古い封鎖を解除する。
+export function clearCooldownAfterRecheck({ home, recheck, result, quotaMatched, log = console.error }) {
+  if (!recheck || result?.status !== 0 || result.timedOut || result.launched === false || quotaMatched
+    || isUsageLimitText(`${result.output || ''}\n${result.stderr || ''}`)) return false;
+  fs.rmSync(claudeFile(home, 'codex-cooldown.json'), { force: true });
+  log('[codex-do] cooldown を期限前の生存確認で解除');
+  return true;
+}
+
 if (isEntry(import.meta.url)) {
 
 const args = process.argv.slice(2);
@@ -921,8 +930,10 @@ if (useCodex && !forceNative && !process.env.NODE_TEST_CONTEXT && process.env.CO
     syncWslCodexAuth({ clearCooldown: () => fs.rmSync(claudeFile(home, 'codex-cooldown.json'), { force: true }), log: m => console.error(m) });
   } catch (e) { console.error(`[codex-do] WSL の Codex ログイン照合に失敗（続行）: ${e.message}`); }
 }
+let cooldownRecheck = false;
 if (useCodex) {
   const gate = decideCodexGate({ home, origin });
+  cooldownRecheck = gate.recheck === true;
   if (gate.deferred && ['codex_cooldown', 'unattended_budget'].includes(gate.reason) && !noFallback && resolveFallbackBackends(home).length > 0) {
     cooldownSkipCodex = true;
     skipCodexReason = gate.reason;
@@ -1245,6 +1256,7 @@ let astraRetreated = false;
 while (true) {
   result = await executeCodex();
   quotaCheck = detectQuotaLimit(result?.output, result?.stderr, result?.status, prompt);
+  if (clearCooldownAfterRecheck({ home, recheck: cooldownRecheck, result, quotaMatched: quotaCheck.matched })) cooldownRecheck = false;
   if (quotaCheck.matched && selectedLane.slug === ASTRA && !astraRetreated) {
     const resetUntil = parseCodexResetUntil(`${result.output || ''}\n${result.stderr || ''}`);
     try { writeCodexCooldown(resetUntil, 'codex-astra', 'usage_limit'); } catch {}

@@ -1606,6 +1606,7 @@ test('A: 上限メッセージの stderr で codex-cooldown.json が書かれ、
 test('A: cooldown 中でも代替バックエンドがあれば deferred にせず codex を起動しないままフォールバックへ回る', (t) => {
   const home = tmpHome(t, 'codex-cooldown-fallback');
   fs.writeFileSync(path.join(home, '.claude', 'codex-cooldown.json'), JSON.stringify({ until: Date.now() + 4 * 86400000, reason: 'usage_limit', t: Date.now() }));
+  fs.writeFileSync(path.join(home, '.claude', 'codex-cooldown-recheck.json'), JSON.stringify({ at: Date.now() }));
   // モックは1件だけ。codex が起動されればこの1件を codex が消費してフォールバックが失敗する。
   const mock = JSON.stringify([{ status: 0, output: 'Qwen Code CLI has successfully completed.', stderr: '' }]);
   const result = run(['--force-native', '--cwd', home, '--kind', 'implement', '指示内容'], {
@@ -1913,5 +1914,58 @@ test('ポリシー停滞の打ち切りは出力400字以上・拒否3回未満�
     const { result } = runFakeGemini(c.body, c.env, 8);
     assert.doesNotMatch(result.stderr, /ポリシー拒否が続き/, c.name);
     assert.match(result.stderr, /秒で応答を終えなかった/, c.name);
+  }
+});
+
+test('期限前の生存確認は Codex の正常終了時だけ cooldown を解除する', async () => {
+  const { clearCooldownAfterRecheck } = await import('./codex-do.mjs');
+  const home = workDir();
+  const file = path.join(home, '.claude', 'codex-cooldown.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const saved = JSON.stringify({ until: Date.now() + 3 * 86400000 });
+  fs.writeFileSync(file, saved);
+  const logs = [];
+  const base = { home, recheck: true, result: { status: 0, output: 'PONG', stderr: '', launched: true }, quotaMatched: false, log: message => logs.push(message) };
+  for (const override of [
+    { recheck: false },
+    { result: { status: 1 } },
+    { result: { status: null } },
+    { result: { status: 0, timedOut: true } },
+    { result: { status: 0, launched: false } },
+    { quotaMatched: true },
+    { result: { status: 0, output: "You've hit your usage limit" } },
+    { result: { status: 0, stderr: 'You’ve hit your usage limit' } },
+  ]) {
+    assert.equal(clearCooldownAfterRecheck({ ...base, ...override }), false);
+    assert.equal(fs.readFileSync(file, 'utf8'), saved);
+    assert.deepEqual(logs, []);
+  }
+  assert.equal(clearCooldownAfterRecheck(base), true);
+  assert.equal(fs.existsSync(file), false);
+  assert.deepEqual(logs, ['[codex-do] cooldown を期限前の生存確認で解除']);
+});
+
+
+test('長期 cooldown の再確認成功で CLI が解除し、再度上限なら更新する', (t) => {
+  for (const limited of [false, true]) {
+    const home = tmpHome(t, 'codex-recheck-cli');
+    const file = path.join(home, '.claude', 'codex-cooldown.json');
+    fs.writeFileSync(file, JSON.stringify({ until: Date.now() + 3 * 86400000 }));
+    const result = run(['--force-native', '--cwd', home, '--model', 'sol', '--no-fallback', 'Reply PONG'], {
+      home, env: { CODEX_DO_MOCK_RESULTS: JSON.stringify([limited
+        ? { status: 1, output: 'partial', stderr: "ERROR: You've hit your usage limit. Please try again later." }
+        : { status: 0, output: 'PONG' }]) },
+    });
+    assert.match(result.stdout, /executor=codex/);
+    assert.ok(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-cooldown-recheck.json'), 'utf8')).at > 0);
+    if (limited) {
+      assert.equal(fs.existsSync(file), true);
+      assert.ok(JSON.parse(fs.readFileSync(file, 'utf8')).until < Date.now() + 6 * 3600000);
+      assert.doesNotMatch(result.stderr, /cooldown を期限前の生存確認で解除/);
+    } else {
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(fs.existsSync(file), false);
+      assert.match(result.stderr, /\[codex-do\] cooldown を期限前の生存確認で解除/);
+    }
   }
 });

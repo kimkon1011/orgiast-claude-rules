@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { filterWindowsForCurrentAuth, isTransientWindowReadError, claudeWindowReader, commandRunner, queueRepeatedFailure, queueRepeatedDeferral, writeWorktreePointer, prepareTree, preserveDirtyTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer } from './quota-sweep.mjs';
+import { normalizeLandedChecks, filterWindowsForCurrentAuth, isTransientWindowReadError, claudeWindowReader, commandRunner, queueRepeatedFailure, queueRepeatedDeferral, writeWorktreePointer, prepareTree, preserveDirtyTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer } from './quota-sweep.mjs';
 import { runBounded, killTree } from './lib/quota-sweep-process.mjs';
 import { interactiveCodex, wslPath } from './lib/quota-sweep-host.mjs';
 import { decideSweep, resetKey, sameReset } from './lib/quota-windows.mjs';
@@ -643,3 +643,31 @@ test('claudeWindowReader: 成功した読み取りだけ TTL 内で再利用し�
   assert.equal((await reader()).length, 0);
   assert.equal(calls, 3, '失敗結果は再利用しない');
 });
+
+test('landed check normalization is global, idempotent and preserves other bases', () => {
+  const text = '`git merge-base --is-ancestor eee266e origin/main`\n git\tmerge-base --is-ancestor f94ee7a origin/main && echo ok\ngit merge-base --is-ancestor abc origin/main-other';
+  const normalized = normalizeLandedChecks(text);
+  assert.equal(normalized, '`node tools/commit-landed.mjs eee266e`\n node tools/commit-landed.mjs f94ee7a && echo ok\ngit merge-base --is-ancestor abc origin/main-other');
+  assert.equal(normalizeLandedChecks(normalized), normalized);
+  assert.match(contractPrompt('claude', 'slug', 'goal'), /node tools\/commit-landed\.mjs <sha>/);
+});
+for (const existing of [false, true]) {
+  test(`runSweep normalizes ${existing ? 'existing' : 'generated'} contract before iteration`, async t => {
+    let calls = 0;
+    const ctx = context(t, async () => {
+      calls++;
+      if (!existing && calls === 1) {
+        fs.writeFileSync(file, original);
+        return { code: 0, stdout: '' };
+      }
+      assert.equal(fs.readFileSync(file, 'utf8'), 'C4: `node tools/commit-landed.mjs eee266e`');
+      return { code: 0, stdout: JSON.stringify({ result: 'FINAL' }) };
+    });
+    const file = path.join(ctx.tree, '.loop/quota-sweep-claude.md');
+    const original = 'C4: `git merge-base --is-ancestor eee266e origin/main`';
+    if (existing) { fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, original); }
+    await runSweep(decision, ctx);
+    assert.equal(calls, existing ? 1 : 2);
+    assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'final');
+  });
+}

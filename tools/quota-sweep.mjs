@@ -34,8 +34,16 @@ export function selectGoal({ goals = '', handoff = '' } = {}) {
 export function tickPrompt(slug) {
   return `[headless:quota-sweep]\nFollow .loop/${slug}.md for exactly one iteration; update .loop/${slug}-state.md; commit with \`git commit -F <msg> -- <paths>\`; report FINAL only when every criterion is proved, otherwise ITERATING.\n日本語で証跡と残件を記録。FINAL は独立した行で返す。別ループやバックグラウンド子プロセスは禁止。push/PR/merge は行わない。.loop/ はローカル状態なのでコミット対象から除外する。`;
 }
+export function normalizeLandedChecks(text) {
+  return text.replace(/\bgit[ \t]+merge-base[ \t]+--is-ancestor[ \t]+([^\s`;&|]+)[ \t]+origin\/main(?![\w/.-])/g, 'node tools/commit-landed.mjs $1');
+}
+function normalizeLandedContract(file) {
+  if (!fs.existsSync(file)) return;
+  const text = read(file), normalized = normalizeLandedChecks(text);
+  if (text !== normalized) fs.writeFileSync(file, normalized);
+}
 export function contractPrompt(provider, slug, goal) {
-  return `[headless:quota-sweep]\n${provider === 'claude' ? '/makeloop' : '$makeloop:makeloop'} ${goal}\n質問せず保守的な前提を明記して進める。runtime=manual（1メッセージ1イテレーション）、kind=closed、累積上限 ${MAX_TICKS} イテレーション、検証ゲート node --test tools/、slug=${slug}、ループを開始しない、日本語。.loop/${slug}.md と状態・INDEX を保存する。`;
+  return `[headless:quota-sweep]\n${provider === 'claude' ? '/makeloop' : '$makeloop:makeloop'} ${goal}\n質問せず保守的な前提を明記して進める。runtime=manual（1メッセージ1イテレーション）、kind=closed、累積上限 ${MAX_TICKS} イテレーション、検証ゲート node --test tools/、slug=${slug}、ループを開始しない、日本語。.loop/${slug}.md と状態・INDEX を保存する。commit の取込判定は \`node tools/commit-landed.mjs <sha>\` を使う（squash マージのため is-ancestor は偽になる）。`;
 }
 export function canRunWindow(state, decision) {
   const prior = state.lastRun?.[decision.provider]?.[decision.resetsAt];
@@ -423,15 +431,17 @@ export async function runSweep(decision, context) {
     }
     budget.ticks = Math.max(budget.ticks, record.ticks); record.ticks = budget.ticks; save();
     budget.resetsAt = decision.resetsAt; atomic(budgetFile, budget);
+    normalizeLandedContract(contract);
     if (budget.ticks >= MAX_TICKS || budget.final) { outcome = 'no-goal'; return; }
     if (!fs.existsSync(contract)) {
       stop = await check(); if (stop) { outcome = stop; return; }
       const generated = await launch(contractPrompt(provider, slug, selection.goal), 15 * 60_000);
+      normalizeLandedContract(contract);
       if ((generated.stopReason && generated.stopReason !== 'deadline') || now() >= decision.deadline) { outcome = generated.stopReason || 'deadline'; return; }
       if (!fs.existsSync(contract)) {
         const template = read(new URL('./quota-sweep-contract.tmpl.md', import.meta.url));
         const values = { GOAL: selection.goal, SLUG: slug, GATE: 'node --test tools/', MAX_ITERATIONS: String(MAX_TICKS), DATE: new Date(now()).toISOString() };
-        fs.writeFileSync(contract, template.replace(/{{(GOAL|SLUG|GATE|MAX_ITERATIONS|DATE)}}/g, (_, k) => values[k]));
+        fs.writeFileSync(contract, normalizeLandedChecks(template.replace(/{{(GOAL|SLUG|GATE|MAX_ITERATIONS|DATE)}}/g, (_, k) => values[k])));
         log(`${provider}: built-in contract fallback`);
       }
     }

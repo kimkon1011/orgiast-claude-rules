@@ -52,7 +52,10 @@ test('既存PowerShell hookへExecutionPolicy Bypassを補いcost-loopをmjsへ�
   const mailGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('mail-draft-account-gate.mjs')));
   assert.equal(mailGroups.length, 1);
   const consistencyGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('mail-consistency-gate.mjs')));
+  const outboundClaimGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('outbound-claim-evidence-gate.mjs')));
   assert.equal(consistencyGroups.length, 1);
+  assert.equal(outboundClaimGroups.length, 1);
+  assert.equal(outboundClaimGroups[0].matcher, 'Bash|PowerShell');
   assert.equal(consistencyGroups[0].matcher, 'Bash|PowerShell');
   for (const action of ['create_draft', 'update_draft', 'send_message', 'reply', 'forward']) {
     for (const connector of ['Gmail', 'Gmail_2']) assert.match(`mcp__claude_ai_${connector}__${action}`, new RegExp(mailGroups[0].matcher));

@@ -104,6 +104,8 @@ test('project manifest has unique known item types and severities', () => {
   assert.equal(new Set(ids).size, ids.length);
   assert(parsed.items.every((entry) => ['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task'].includes(entry.type)));
   assert(parsed.items.every((entry) => ['required', 'optional', 'manual'].includes(entry.severity)));
+  const outbound = parsed.items.find(entry => entry.id === 'settings:outbound-claim-evidence-gate');
+  assert.deepEqual(outbound.spec, { path: '.claude/settings.json', hookEvent: 'PreToolUse', hookScript: 'outbound-claim-evidence-gate.mjs', hookArgs: '', async: false, timeout: 10 });
 });
 
 test('converge実経路がhook登録・旧通知削除・allow反映を行い再実行で不変', (t) => {

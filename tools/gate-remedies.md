@@ -258,6 +258,10 @@ LINE の全員配信が本当に必要なら、kim が同じセッションで�
 
 生の Gmail API 送信は使わず、`node tools/gmail-draft.mjs --send <draftId> --json` で送る。この経路はスレッド全体の合意と下書きを自動照合する。block は下書きを直して解消する。やむを得ない場合のみ `--ack-consistency "<理由>"` を付け、理由を完了報告に記載する。
 
+## outbound-claim-evidence-gate
+
+LINE push/reply/multicast、Gmail 下書き送信、Discord DM/API 投稿の本文に「入力いたしました」「予約しました」「送付済み」など外部操作の完了主張がある場合、送信前の読み戻し証拠がなければ止める。現在ターンの assistant テキストへ `[CLAIM-EVIDENCE: TimeRex 入力 => calendar:<eventId>]` のように書く。読み戻し元は `gmail:<messageId>`、`calendar:<eventId>`、`url:<URL>`、`shot:<path>`、`api:<request-id>` のいずれか。予約・入力は確認メールかカレンダー、送付・送信は送信済みフォルダを実際に読む。引用など完了主張ではない文だけ、10文字以上の理由を付けた `[OUTBOUND-CLAIM-OK: 返信文の引用で主張ではない]` で例外にできる。
+
 ## merge-handoff-gate
 
 PR のマージを人に頼む文（本文の「次に kim がすること」・依頼文、Discord DM、fleet-mail）は、同じターンに PR の状態照会（`gh pr view <N> --json state,mergedAt,mergedBy` 等）と自分でのマージ試行（`gh pr merge <N> --squash --auto` か `gh pr edit <N> --add-label automerge`）の記録がある時だけ通す。MERGED なら依頼を消し、自動マージされるなら「この後の自動進行」に書く。両方試して失敗した時だけ、その出力を添えて依頼する。人の承認が本当に要る時は `[MERGE-HANDOFF-OK: <理由>]`。

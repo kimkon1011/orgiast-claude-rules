@@ -271,6 +271,8 @@ bound scriptのscriptId不明時はDrive MCPで`mimeType='application/vnd.google
 
 **人が読む配信（Discord/メール/LINE/Slack）は「届いた実物」を見るまで完了と言わない（絶対ルール・2026-08-11 実害）**: API が 200 / job が ✓ でも中身が壊れていることがある。①**送信側コードに送信前ガードを必ず実装**（文字化け=日本語0文字かつU+0080-00FF多数 / 空本文 / `XX`等プレースホルダ残り → 送らず例外で落とす。読めない投稿を全社チャンネルに流すより job を落として気付ける方が良い）②**Claudeは投稿後に実チャンネルを読み返す**（MCPで取得した本文が化けていても「ツール側の表示問題」と断定禁止。実クライアント/実ブラウザのスクショか別経路の再取得で必ず突き合わせる）。Pythonで JSON 文字列を復元するとき `decode("unicode_escape")` は bytes を latin-1 扱いしてUTF-8日本語を全壊させるので**禁止**（`json.loads('"..."', strict=False)` を使う）。詳細・実例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/verify-before-done.md`
 
+🔴 社外へ送る本文の完了主張（入力しました・予約しました等）は、送信前に読み戻し、`[CLAIM-EVIDENCE: 主張 => 読み戻し元]` を書く。outbound-claim-evidence-gate が止める（2026-10-27 TimeRex 実害）。
+
 **cron の生存は「手動実行が通ること」で判定しない（絶対ルール・2026-08-11 実害）**: GitHub Actions は `gh run list --event=schedule --limit 15 --json createdAt,conclusion` の**直近成功日時**で見る。`workflow_dispatch` は権限も分岐も別経路になりがちで、schedule だけ死んでいても手動は通り続ける（実際に週次配信が3週間止まったのに気付けなかった）。`gh run list`/Actions APIを叩くjobには `permissions: {actions: read}` が必須（無いと403で全滅）。定期配信を持つリポは push/PR で回る最小 CI（回帰テスト）も併設し、配信当日ではなくpush時点で壊れを止める。
 
 **外に出ている状態は、変更の有無を問わずブラウザで実表示を読み戻してから語る（2026-08-26 指示）**。調査・分析・報告も対象とし、価格・料金合計・在庫・最低条件・手数料・税・割引・写真・規約・通知の見え方まで確認する。API/DB/シート/成功ログだけで実表示を断定しない。「値が取れていない」と「値が空」を区別する。

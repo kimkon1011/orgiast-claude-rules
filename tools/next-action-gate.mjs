@@ -3,7 +3,7 @@ export const GATE_CONTRACT = {"name": "next-action-gate", "remedies": [{"kind": 
 import { isEntry } from './is-entry.mjs';
 import { readTranscriptContext } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
-import { currentTurnEntries, blocks } from './state-claim-evidence.mjs';
+import { currentTurnEntries, blocks, messageText } from './state-claim-evidence.mjs';
 import { isLandingDeferral } from './permanent-fix-deferral-scan.mjs';
 import { ledgerFile, readLedger, latestOpenPromises } from './auto-progress-ledger.mjs';
 
@@ -162,6 +162,24 @@ function hasSessionWakeup(raw, input = {}) {
   return { autoProgress, background };
 }
 
+// 直近の human prompt 以降の全エントリ。task-notification・hook 由来の user エントリはターン境界にしない
+// （background 通知の後の空ターンで tool_use が 0 件に見え、作業済みなのに素通りした 2026-10-26 実害）。
+const SYSTEM_USER_PATTERN = /^\s*(?:<task-notification>|<system-reminder>|Stop hook feedback|\[Subagent hand-back\])/;
+export function workedTurnEntries(raw) {
+  let entries = [];
+  for (const line of String(raw || '').split(/\r?\n/)) {
+    let entry; try { entry = JSON.parse(line); } catch { continue; }
+    if (!entry || entry.isSidechain === true) continue;
+    const content = entry.message?.content;
+    if (entry.type === 'user' && entry.message?.role === 'user' && !entry.isMeta
+      && !(Array.isArray(content) && content.some(b => b?.type === 'tool_result'))
+      && !(entry.origin?.kind && entry.origin.kind !== 'human')
+      && !SYSTEM_USER_PATTERN.test(messageText(entry))) entries = [];
+    entries.push(entry);
+  }
+  return entries;
+}
+
 export function judgeNextAction(text, transcriptRaw = '', input = {}) {
   const source = String(text || '').trimEnd();
   if (!enabled()) return { decision: 'pass', reason: 'disabled' };
@@ -173,8 +191,8 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
   // フッターを書いた短文も定型文を検査する（短文素通しで『閉じてOKです』が通った 2026-10-09 実害）。
   // 短文素通しは雑談・相槌だけ。ツールで作業したターンは短文・空文でもフッター必須
   // （作業後に「No response requested.」だけで終わり、自動進行が台帳に載らず kim が進捗を聞く羽目になった 2026-10-23 実害）。
-  const worked = blocks(currentTurnEntries(transcriptRaw), 'tool_use').length > 0;
-  if (!footer && (!worked || !source) && source.length < MIN_ENFORCED_LENGTH) return permanentFix || { decision: 'pass', reason: 'short-response' };
+  const worked = blocks(workedTurnEntries(transcriptRaw), 'tool_use').length > 0;
+  if (!footer && !worked && source.length < MIN_ENFORCED_LENGTH) return permanentFix || { decision: 'pass', reason: 'short-response' };
   if (!footer) {
     return {
       decision: 'block',

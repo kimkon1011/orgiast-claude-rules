@@ -238,6 +238,8 @@ export const PRE_POLL_BUDGET_MS = 90_000;
 export const POLL_SOFT_DEADLINE_MS = 8 * 60_000;
 export const LOCK_HARD_CAP_MS = 20 * 60_000;
 export const SLOW_MAIL_PHASE_MS = 5_000;
+export const POLL_HARD_DEADLINE_MS = 15 * 60_000;
+export const POLL_HARD_DEADLINE_EXIT = 75;
 export function validId(id) {
   if (!/^mail-[A-Za-z0-9-]{1,180}$/.test(String(id ?? ''))) throw new Error('invalid mail id');
   return id;
@@ -866,6 +868,7 @@ export async function pollOnce(deps = {}) {
     const request = deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch, sleepImpl: deps.sleep });
     release = dryRun ? () => {} : acquireLock(path.join(dir, 'fleet-mail.lock'), { now });
     if (!release) { outcome = 'locked'; err('fleet-mail: 別の受信処理が実行中'); return { skipped: 'locked' }; }
+    deps.onLock?.(release, () => ({ startedAt, phases: { ...phases }, stuckIn: activePhase?.name ?? null }));
     const fileOf = id => inboxPath(home, id);
     const log = (name, value) => fs.appendFileSync(path.join(dir, `fleet-mail-${name}.jsonl`), `${JSON.stringify({ at: new Date(now()).toISOString(), ...value })}\n`, { mode: 0o600 });
     const state = (id, action, extra = {}) => syncMailState({ home, id, action, request, now, from: label, stderr: err, ...extra });
@@ -1439,7 +1442,24 @@ async function runMain(argv, deps) {
     out(`返信は相手の受信タスクが拾うまで届きません。届いたかは --sent-status ${id} で確認`);
     return 0;
   }
-  await pollOnce({ ...deps, executePrompts: options['--no-exec'] ? false : deps.executePrompts, dryRun: !!options['--dry-run'], json: !!options['--json'] });
+  // 2026-10-27 kim-PC: 通信も CPU も無いまま await で固まった poll が80分ロックを握った。工程間の予算では止まらないため、
+  // 定期実行の --poll だけはプロセスごと打ち切る（ロックは owns() 確認つきで外し、次の2分枠で受信できるようにする）。
+  const exit = deps.exit ?? (code => process.exit(code));
+  let releaseOnStop = null, snapshot = null;
+  const hardStop = options['--dry-run'] ? null : setTimeout(() => {
+    err(`fleet-mail: poll 上限${Math.round(POLL_HARD_DEADLINE_MS / 60000)}分超過で打ち切り=1`);
+    try {
+      const s = snapshot?.();
+      if (s) fs.appendFileSync(path.join(dir, 'fleet-mail-poll-timing.jsonl'), `${JSON.stringify({ at: new Date(now()).toISOString(), totalMs: now() - s.startedAt, phases: s.phases, stuckIn: s.stuckIn, outcome: 'hard-deadline' })}\n`, { mode: 0o600 });
+    } catch { /* 打ち切りを優先する */ }
+    try { releaseOnStop?.(); } catch { /* 次回の stale 回収に任せる */ }
+    exit(POLL_HARD_DEADLINE_EXIT);
+  }, deps.pollHardDeadlineMs ?? POLL_HARD_DEADLINE_MS);
+  hardStop?.unref();
+  try {
+    await pollOnce({ ...deps, executePrompts: options['--no-exec'] ? false : deps.executePrompts, dryRun: !!options['--dry-run'], json: !!options['--json'],
+      onLock: (release, snap) => { releaseOnStop = release; snapshot = snap; } });
+  } finally { if (hardStop) clearTimeout(hardStop); }
   return 0;
 }
 if (isEntry(import.meta.url)) {

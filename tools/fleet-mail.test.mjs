@@ -934,3 +934,18 @@ test('acquireLock stops refreshing the heartbeat after the hard cap so a hung po
   assert.equal(mtime(), frozen);
   release();
 });
+test('--poll hard deadline stops a poll stuck in an await, releases the lock and records where it stuck', async t => {
+  const f = fixture(t);
+  const { POLL_HARD_DEADLINE_EXIT } = await import('./fleet-mail.mjs');
+  const errors = [];
+  const exited = new Promise(resolve => {
+    main(['--poll', '--no-exec'], { ...f.deps, stderr: e => errors.push(e), pollHardDeadlineMs: 50, exit: resolve,
+      request: kind => kind === 'mail-poll' ? new Promise(() => {}) : Promise.resolve({ ok: true }) });
+  });
+  assert.equal(await exited, POLL_HARD_DEADLINE_EXIT);
+  assert.ok(errors.some(e => /poll 上限\d+分超過で打ち切り=1/.test(e)));
+  assert.equal(fs.existsSync(path.join(f.dir, 'fleet-mail.lock')), false);
+  const line = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-poll-timing.jsonl'), 'utf8').trim().split('\n').at(-1));
+  assert.equal(line.outcome, 'hard-deadline');
+  assert.equal(line.stuckIn, 'mail-poll');
+});

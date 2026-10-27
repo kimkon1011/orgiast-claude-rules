@@ -307,3 +307,9 @@ repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、branch=quota-sweep/20
 証跡=.loop/quota-sweep-codex-evidence.md、docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md。次は累積上限の明示変更と書込可能なgit管理領域が必要。
 
 終了記録 2026-10-27T04:46:10.652211+00:00 UTC: 指定 `git commit -F /tmp/quota-sweep-current-msg -- docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md` は終了128。実gitdirのindex.lock作成がRead-only file systemのためコミット未作成。.loop/除外、迂回なし。stop_reason=budget、追加阻害=scope-boundary。owner退出時解放。C-HANDOFF: 保存後読戻しで要約・証跡・budgetの一致を照合。
+
+## quota-sweep-claude 累積試行2 / C2・C3・C4 再観測（2026-10-27T05:22:53Z 終端 / HEAD 6a545a7 / Node v24.22.1）
+- C2: 窓 (2026-10-26T11:26:28.622Z, 2026-10-27T05:22:53.218Z)。home=C:\Users\user。runner 1569行・監査台帳 1610行・夜間台帳 230行、不正JSON 0。W は runner 3件（同セッション 91cd4fa3 のみ、11:26〜11:27 の block/pass/block）。監査台帳 4件のうち 3件が同セッション、1件（2026-10-27T00:55:48Z / session 54dc84fd）は quota-sweep-claude ループ自身の報告 excerpt が再現文例を引用したもので verdict=pass・violations=[]。別セッションの再発ではなく引用として分類（P/W 台帳の violations.quote ではない）。夜間台帳 W=0。
+- C3: 原文と同型の「検証は Codex に任せています。結果が出たらここに報告します。」は以前 detect()=[] の検出漏れだったが、46274e0（#1175 経由で HEAD に含まれる）で ARRIVAL_WAIT を拡張済み。現 HEAD で原文・同型とも W 検出、「検証が完了し結果を確認して報告します」（完了文）は [] を確認。除外は広げていない。
+- C4: 検出経路（nightly→scan）は上記 2026-10-26 記録のコード照合から変更なし。スケジューラの稼働・直近実行の実物は今回も未確認＝未達のまま。
+- C5: 単一 `node --test tools/` の1回 exit 0 は未取得（前景上限600sのため。分割 3 shard の全緑 7074 件は試行5〜7で記録）。厳密には未達。

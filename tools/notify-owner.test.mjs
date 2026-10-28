@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -10,11 +11,19 @@ import { KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 test('owner 解決は fleet account を使う', () => {
   assert.equal(resolveOwner({ label: 'cr-PC', pcMap: { 'cr-PC': { account: 'cr@orgiast.jp' } }, gitEmail: 'other@example.com' }), 'cr@orgiast.jp');
 });
+test('HP ラベルは fleet-pc-map の account で cr@orgiast.jp に解決される（未通知13件の原因データ）', () => {
+  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const pcMap = JSON.parse(fs.readFileSync(path.join(repo, 'fleet-pc-map.json'), 'utf8'));
+  assert.equal(pcMap.HP.account, 'cr@orgiast.jp');
+  assert.equal(resolveOwner({ label: 'HP', pcMap }), 'cr@orgiast.jp');
+});
+
 test('owner Discord ID をメールで解決する', () => {
   assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', { directory: { x: { members: [{ id: '42', emails: ['cr@orgiast.jp'] }] } } }), '42');
 });
 test('DM 解決不能時は未達にして他人へ送らない', async () => {
-  const result = await notifyOwner('cr@orgiast.jp', '結果', { home: fs.mkdtempSync(path.join(os.tmpdir(), 'notify-owner-')), directory: {}, notify: async () => { assert.fail('must not send'); } });
+  // pcMap を空にして「このPCの持ち主ではない」を明示する（実機の fleet-pc-map の HP→cr@ に依存させない）
+  const result = await notifyOwner('cr@orgiast.jp', '結果', { home: fs.mkdtempSync(path.join(os.tmpdir(), 'notify-owner-')), directory: {}, pcMap: {}, gitEmail: '', notify: async () => { assert.fail('must not send'); } });
   assert.equal(result.delivered, 'none');
 });
 

@@ -1398,14 +1398,14 @@ test('watch: 時間切れでも無人openとcheck行を48時間で期限切れ�
 
 test('digest: toast配達を受領ログに残し、未達時はsentにしない', async () => {
   const at = Date.parse('2026-10-23T09:00:00+09:00');
-  for (const delivered of ['toast', 'none']) {
+  for (const delivered of ['toast', 'inbox', 'none']) {
     const home = tmp();
     const row = { sessionId: 'toast-receipt', owner: 'nishi@orgiast.jp', status: 'waiting_user', promise: '本人同意', nextKim: '同意ボタンを押す', ts: new Date(at - H).toISOString() };
     const result = await digest({ home, now: at, slot: '朝', io: { localOwner: row.owner, readLedger: () => [row], notifyOwner: async () => ({ delivered, channel: delivered }) } });
-    assert.equal(result.sent, delivered === 'toast');
+    assert.equal(result.sent, delivered !== 'none');
     const log = JSON.parse(fs.readFileSync(path.join(home, '.claude/logs/auto-progress-digest.sent.jsonl'), 'utf8').trim());
-    assert.equal(log.sent, delivered === 'toast');
-    if (delivered === 'toast') assert.equal(log.receipts[0].channel, 'toast');
+    assert.equal(log.sent, delivered !== 'none');
+    if (delivered !== 'none') assert.equal(log.receipts[0].channel, delivered);
   }
 });
 
@@ -1548,4 +1548,18 @@ test('digest: 最新の代表行で本文・72時間・夜間を判定し古い�
   assert.doesNotMatch(text, /夜間に出た|3日以上前/);
   assert.match(formatDigest([], now, 'PC', { waitingRows: [old, { ...old, sessionId: 'old2' }] }), /3日以上前の判断待ち 1件/);
   assert.match(formatDigest([], now, 'PC', { waitingRows: [old, recent], nightWaitingKeys: new Set([waitingNotificationKey(recent)]) }), /夜間に出た判断待ち/);
+});
+
+test('watch: inbox delivery records actual channel and stops retrying completion', async () => {
+  const home = tmp(), now = Date.parse('2026-10-26T03:00:00Z');
+  seed(home, [{ sessionId: 'inbox-done', status: 'done', promise: '依頼を完了', ts: new Date(now).toISOString(), doneAt: new Date(now).toISOString() }]);
+  let calls = 0;
+  const io = noEvidenceIo({ notifyOwner: async () => { calls++; return { delivered: 'inbox', channel: 'inbox', ok: true, toastExitCode: 1 }; } });
+  await watch({ home, now, io });
+  await watch({ home, now, io });
+  assert.equal(calls, 1);
+  assert.ok(readLedger(ledgerFile(home))[0].doneNotifiedAt);
+  const log = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'logs', 'auto-progress-done-dm.sent.jsonl'), 'utf8').trim());
+  assert.equal(log.channel, 'inbox');
+  assert.equal(log.toastExitCode, 1);
 });

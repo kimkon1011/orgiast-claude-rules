@@ -217,3 +217,13 @@ for (const { code, allowMet, accepted } of [
     }
   });
 }
+
+test('check completion accepts durable inbox delivery and does not retry', async () => {
+ const home = tmp(); register(home);
+ let calls = 0;
+ const io = { ...baseIo, executeCheck: () => ({ code: 0, text: '完了' }), notifyOwner: async () => { calls++; return { delivered: 'inbox', channel: 'inbox', ok: true }; } };
+ await watch({ home, now, io });
+ await watch({ home, now, io });
+ assert.equal(calls, 1);
+ assert.equal(readLedger(ledgerFile(home))[0].checkNotifiedResult, 'done');
+});

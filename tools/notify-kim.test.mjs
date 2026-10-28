@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { main, notifyKim } from './notify-kim.mjs';
+import { main, notifyKim, deliverKim } from './notify-kim.mjs';
 import { parseHandoff, todoExclusionReason } from './auto-session.mjs';
 import { planRotation } from './next-session-rotate.mjs';
 
 function home() { return fs.mkdtempSync(path.join(os.tmpdir(), 'notify-kim-')); }
-function response({ ok = true, status = 200, json = {} } = {}) { return { ok, status, json: async () => json }; }
+function response({ ok = true, status = 200, json = { id: 'message' } } = {}) { return { ok, status, json: async () => json }; }
 
 test('token と userId で DM チャンネルを開いて投稿する', async () => {
   const calls = [];
@@ -17,6 +17,8 @@ test('token と userId で DM チャンネルを開いて投稿する', async ()
     return calls.length === 1 ? response({ json: { id: 'dm-channel' } }) : response();
   } });
   assert.equal(result.delivered, 'dm');
+  assert.equal(result.messageId, 'message');
+  assert.equal(result.channelId, 'dm-channel');
   assert.match(calls[0].url, /users\/@me\/channels$/);
   assert.deepEqual(JSON.parse(calls[0].init.body), { recipient_id: 'user' });
   assert.match(calls[1].url, /channels\/dm-channel\/messages$/);
@@ -294,4 +296,11 @@ test('notify-kim CLIはblockedでexit 3、明示例外なら送信する', async
     }), 0);
     assert.equal(calls.length, 2);
   } finally { console.error = originalError; }
+});
+
+test('HTTP success without message id is not a delivered DM', async () => {
+ let calls = 0;
+ const result = await deliverKim('進捗', { userId: 'test-recipient', token: 'test-token', plainJa: false, webhookFallback: false, fetchImpl: async () => ++calls === 1 ? response({ json: { id: 'channel' } }) : response({ json: {} }) });
+ assert.equal(result.delivered, 'none');
+ assert.match(result.reason, /メッセージID/);
 });

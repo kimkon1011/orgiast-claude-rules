@@ -222,7 +222,9 @@ export async function deliverKim(text, {
         method: 'POST', headers, body: JSON.stringify({ content }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
       });
       if (!sent.ok) throw new Error(`DM送信が HTTP ${sent.status}`);
-      return { delivered: 'dm' };
+      const messageId = (await sent.json()).id;
+      if (typeof messageId !== 'string' || !messageId.trim()) throw new Error('DMメッセージIDを取得できません');
+      return { delivered: 'dm', messageId, channelId, recipientId: resolvedUserId, httpStatus: sent.status };
     } catch (error) {
       dmReason = redactSecrets(error?.message ?? error);
     }

@@ -96,12 +96,17 @@ test('file cap rotates the cursor so retained sessions cannot starve later files
 });
 test('hook returns while stdin is open, launches one shot and honors cooldown', async t => {
   const f = fixture(t); f.session('empty', []);
+  // このテストはローカル退避の起動を検証する。補助処理はクールダウン中にして競合を避ける。
+  for (const name of ['purge-remote-sessions', 'sync-remote-titles', 'sync-remote-archives', 'mobile-standby-status']) {
+    f.put(`${name}-state.json`, JSON.stringify({ at: Date.now(), since: Date.now() }));
+  }
   const start = Date.now();
   const child = spawn(process.execPath, [script, '--hook'], { env: f.env, stdio: ['pipe','pipe','pipe'] });
   await new Promise((resolve, reject) => { child.on('error', reject); child.on('exit', code => code === 0 ? resolve() : reject(new Error(`exit ${code}`))); });
   assert.ok(Date.now() - start < 3000);
   const state = path.join(f.base, 'purge-sessions-state.json');
-  for (let i=0; i<100 && !fs.existsSync(state); i++) await new Promise(r=>setTimeout(r,20));
+  // hook 自体の3秒上限とは分け、子の走査予算4.5秒と起動時間を待つ。
+  for (let i=0; i<500 && !fs.existsSync(state); i++) await new Promise(r=>setTimeout(r,20));
   assert.ok(fs.existsSync(state));
   assert.ok(fs.existsSync(path.join(f.base, 'projects-archive/project/empty.jsonl')));
   const before = fs.readFileSync(state,'utf8');
@@ -237,4 +242,32 @@ test('new session footer wording: closed/delete approved, pending/open not', t =
   f.session('bare', [msg('user', 't'), msg('assistant', 'このセッション: 閉じてよい')], 0);
   const dry = f.run('--dry-run');
   assert.deepEqual(dry.sessions.map(x => x.reason).sort(), ['approved', 'approved']);
+});
+
+test('remote archives retain audit mapping, respect live/VSCode/recent/resumed guards and restore into kept', t => {
+  const f = fixture(t);
+  const ids = ['free-remote', 'live-remote', 'tab-remote', 'fresh-remote', 'resumed-remote', 'kept-remote'];
+  for (const id of ids) f.session(id, [msg('user', 'work', id === 'resumed-remote' ? 0 : 20 * minute)], id === 'fresh-remote' ? 0 : 46_000);
+  const fresh = path.join(f.base, 'projects/project/fresh-remote.jsonl');
+  fs.utimesSync(fresh, new Date(), new Date());
+  const rows = ids.map(sessionId => ({ sessionId, projectId: 'project', bridgeSessionId: `cse_${sessionId}`, archivedAt: new Date(now - 10 * minute).toISOString(), title: sessionId }));
+  f.put('remote-archived-sessions.json', JSON.stringify({ ids: rows, kept: ['kept-remote'] }));
+  f.put('current-sessions/live-remote.json', JSON.stringify({ sessionId: 'live-remote', at: new Date(now).toISOString() }));
+  const db = path.join(f.home, 'vscode-user', 'globalStorage', 'state.vscdb');
+  fs.mkdirSync(path.dirname(db), { recursive: true }); fs.writeFileSync(db, 'tab-remote');
+  assert.deepEqual(f.run('--dry-run').sessions.map(x => x.sessionId), ['free-remote']);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.base, 'remote-archived-sessions.json'))).ids.length, 6);
+  const r = f.run();
+  assert.equal(r.sessions.length, 1); assert.equal(r.sessions[0].reason, 'remote-archived');
+  assert.ok(fs.existsSync(path.join(f.base, 'projects-archive/project/free-remote.jsonl')));
+  const audit = JSON.parse(fs.readFileSync(path.join(f.base, 'archived-sessions.jsonl'), 'utf8').trim());
+  assert.equal(audit.bridgeSessionId, 'cse_free-remote'); assert.equal(audit.reason, 'remote-archived');
+  const ledger = () => JSON.parse(fs.readFileSync(path.join(f.base, 'remote-archived-sessions.json')));
+  assert.equal(ledger().ids.some(x => x.sessionId === 'free-remote'), false);
+  f.run('--restore', 'free-remote');
+  assert.ok(ledger().kept.includes('free-remote'));
+  // live 保護が切れた後も kept により古い同期帳簿から再退避されない。
+  fs.unlinkSync(path.join(f.base, 'current-sessions/free-remote.json'));
+  f.put('remote-archived-sessions.json', JSON.stringify({ ...ledger(), ids: [...ledger().ids, rows[0]] }));
+  assert.equal(f.run('--dry-run').sessions.some(x => x.sessionId === 'free-remote'), false);
 });

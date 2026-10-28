@@ -62,3 +62,6 @@ UUID がない・取得に失敗した場合は保持する。
 
 手動確認は `node tools/purge-remote-sessions.mjs --dry-run`。誤ってアーカイブしたものは
 `POST /v1/code/sessions/{id}/unarchive` で戻せる（記録は `~/.claude/archived-remote-sessions.jsonl`）。
+
+`--hook` は `tools/sync-remote-archives.mjs` を5分ごとに起動し、導入後のサーバー側アーカイブを PC の退避帳簿へ同期する。再開済み・復元済みの会話は除外し、既存の live / VSCode 参照 / 直近更新の保護を通して退避する。
+試算は `node tools/sync-remote-archives.mjs --dry-run --since <ISO>`。`purge-sessions.mjs --restore <id>` で復元すると `kept` に入り再同期を防ぐ。サーバー側の手動アーカイブと致命的エラー由来の archived は区別できない。

@@ -389,6 +389,12 @@
       "reason": "purge-sessions.mjs --hook（SessionStart/Stop）が起動する。ユーザー設定は組織 UUID の読み取りのみ"
     },
     {
+      "path": "tools/sync-remote-archives.mjs",
+      "scope": "fleet",
+      "step": "settings:purge-sessions-SessionStart",
+      "reason": "purge-sessions.mjs --hook が5分間隔で起動し、導入後のサーバー側アーカイブを PC の退避帳簿へ同期する"
+    },
+    {
       "path": "tools/sync-remote-titles.mjs",
       "scope": "fleet",
       "step": "settings:purge-sessions-SessionStart",

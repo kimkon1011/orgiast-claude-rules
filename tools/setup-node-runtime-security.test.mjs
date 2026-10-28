@@ -282,6 +282,7 @@ test('setup integration emits exactly one runtime result, skips verify and custo
   await fs.mkdir(path.join(root, 'lib'));
   await fs.copyFile(new URL('./setup.mjs', import.meta.url), path.join(root, 'setup.mjs'));
   await fs.copyFile(new URL('./setup-task-hidden-actions.mjs', import.meta.url), path.join(root, 'setup-task-hidden-actions.mjs'));
+  await fs.copyFile(new URL('./lib/background-spawn.mjs', import.meta.url), path.join(root, 'lib', 'background-spawn.mjs'));
   const files = {
     'setup-manifest.json': '{"version":1,"items":[]}',
     'lib/playbook-distribution.mjs': 'export const distributePlaybooks = () => 0;',

@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { fileURLToPath } from 'node:url';
 import { fleetHubNeedsConfiguration } from './register-fleet-mail.mjs';
 import { convergeAllowRules } from './allow-rules.mjs';
@@ -233,6 +234,22 @@ if (manifest) {
   if (converge && !valueAfter('--manifest')) {
     const { description, ...outcome } = inspectTaskHiddenActions({ converge });
     results.push({ item: { id: 'task-hidden-actions', severity: 'optional', description }, ...outcome });
+  }
+  // 日次マーカーはラッパーで確認し、失敗は optional として他の収束を止めない。
+  if (converge && !valueAfter('--manifest') && process.platform === 'win32') {
+    const item = { id: 'security-audit', severity: 'optional', description: '日次読み取り専用セキュリティ点検・kim-PCへ回収' };
+    try {
+      await new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, [path.join(scriptDir, 'security-audit-readonly.mjs'), '--send'], {
+          ...backgroundSpawnOptions(), stdio: 'ignore',
+        });
+        child.once('error', reject);
+        child.once('spawn', () => { child.unref(); resolve(); });
+      });
+      results.push({ item, status: 'OK', checked: true, repaired: false, reason: '背景で実行（結果は ~/.claude/security-audit/<date>/ と kim-PC への note）' });
+    } catch {
+      results.push({ item, status: 'NG', checked: true, repaired: false, reason: 'security-audit の背景起動に失敗' });
+    }
   }
   emit(results);
   // fleet ビーコン: converge の結果を GAS へ送る。fail-open（exit code に一切影響させない）。

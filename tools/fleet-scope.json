@@ -1,6 +1,10 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/security-audit-readonly.ps1", "scope": "fleet", "step": "security-audit", "reason": "全PCの読み取り専用セキュリティ点検"},
+    {"path": "tools/security-audit-readonly.mjs", "scope": "fleet", "step": "security-audit", "reason": "全PCの読み取り専用セキュリティ点検"},
+    {"path": "tools/security-audit-report.mjs", "scope": "kim-only", "step": null, "reason": "kim-PC の集計"},
+    {"path": "tools/security-audit-readonly.test.mjs", "scope": "fleet", "step": "security-audit", "reason": "全PCの読み取り専用セキュリティ点検"},
     {"path": "tools/register-task-hide-guard.ps1", "scope": "fleet", "step": "task:task-hide-guard", "reason": "全PCの非表示タスク実行・窓出現記録を converge で登録する"},
     {"path": "tools/register-task-hide-guard.mjs", "scope": "fleet", "step": "task:task-hide-guard", "reason": "全PCの非表示タスク実行・窓出現記録を converge で登録する"},
     {"path": "tools/task-hide-guard.ps1", "scope": "fleet", "step": "task:task-hide-guard", "reason": "全PCの非表示タスク実行・窓出現記録を converge で登録する"},

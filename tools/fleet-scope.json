@@ -845,6 +845,12 @@
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
     },
     {
+      "path": "tools/lib/kim-operated.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
       "path": "tools/lib/kim-dm-policy.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",

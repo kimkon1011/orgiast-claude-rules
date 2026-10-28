@@ -127,11 +127,30 @@ const projectOf = row => { const name = String(row.cwd || '').split(/[\\/]+/).fi
 // 1行が長すぎると1通1800字に収まらないので、項目の本文だけを切る（見出し・件数は残す）。
 const brief = (text, max) => { const s = String(text || ''); return s.length > max ? `${s.slice(0, max - 1)}…` : s; };
 
-// 判断待ちのうち、記録から72時間を超えたものは個別に並べず、末尾に件数だけ出す。
-export const WAITING_STALE_MS = 72 * 3600 * 1000;
-// 各区分の上限（判断待ち・完了・止まっている・進行中）。1800字に収まる限り最大5件まで個別表示する。
-export const CATEGORY_LIMITS = Object.freeze({ waiting: 5, done: 5, stalled: 5, inProgress: 5 });
 export const MAX_ITEM_CHARS = 80;
+// 1通の上限。超える時は件数を削らず run() 側で改行境界のまま複数DMに分割する（全件の名前を届けるため）。
+export const MESSAGE_MAX = 1800;
+// 分割DMの続きマーカー（（進捗DM 続き 12/12）等）が付いても上限を超えないように、分割は余裕を見て行う。
+export const PART_MARKER_MAX = 24;
+export const PART_CHUNK_MAX = MESSAGE_MAX - PART_MARKER_MAX;
+
+// 改行境界で分割し、各断片を max 字以内に収める。行自体が max を超える時だけ強制分割する。
+export function chunkMessage(text, max = PART_CHUNK_MAX) {
+  const parts = [];
+  let current = '';
+  for (let line of String(text || '').split('\n')) {
+    while (line.length > max) {
+      if (current) { parts.push(current); current = ''; }
+      parts.push(line.slice(0, max));
+      line = line.slice(max);
+    }
+    const candidate = current ? `${current}\n${line}` : line;
+    if (current && candidate.length > max) { parts.push(current); current = line; }
+    else current = candidate;
+  }
+  if (current) parts.push(current);
+  return parts.filter(Boolean);
+}
 // 80字を超える行は、末尾の「きみがすること」を残して説明側を縮める（行動が切れて伝わらないのを防ぐ）。
 const itemLine = (head, what, tail = '') => {
   const full = `${head}${what}${tail}`;
@@ -143,7 +162,6 @@ const itemLine = (head, what, tail = '') => {
 
 const rowTsOf = (row) => { const t = Date.parse(row?.ts || ''); return Number.isFinite(t) ? t : null; };
 export const isClosedRow = row => row?.status === 'done' || row?.status === 'superseded';
-export const isStaleWaiting = (row, now = Date.now()) => { const t = rowTsOf(row); return t !== null && now - t > WAITING_STALE_MS; };
 
 export function actionOf(row) {
   const kim = kimAction(row);
@@ -222,11 +240,9 @@ export function formatDigest(rows, now = Date.now(), label = '', {
     inProgress = inProgressList.length;
   }
 
-  // 判断待ちは、既に閉じた行と72時間より古い行を個別表示から外す。古い分は末尾に件数だけ残す。
-  const openWaiting = digestGroups(waitingAll.filter(row => !isClosedRow(row)), 'waiting');
+  // 判断待ちは既に閉じた行だけ外し、古い行も含めて全件を名前つきで出す（件数だけにしない）。
+  const waiting = digestGroups(waitingAll.filter(row => !isClosedRow(row)), 'waiting');
   stalled = digestGroups(stalled, 'stalled');
-  const waiting = openWaiting.filter(({ row }) => !isStaleWaiting(row, now));
-  const staleWaiting = openWaiting.filter(({ row }) => isStaleWaiting(row, now));
 
   // 進行中は最終判定が新しい順
   const checkedTime = (r) => {
@@ -241,15 +257,11 @@ export function formatDigest(rows, now = Date.now(), label = '', {
   if (unattended > 0) footerParts.push(`無人処理: ${unattended}件`);
   const footer = footerParts.join(' ／ ');
 
-  let wLimit = Math.min(waiting.length, CATEGORY_LIMITS.waiting);
-  let dLimit = Math.min(done.length, CATEGORY_LIMITS.done);
-  let sLimit = Math.min(stalled.length, CATEGORY_LIMITS.stalled);
-  let pLimit = Math.min(inProgressSorted.length, CATEGORY_LIMITS.inProgress);
-
-  const render = (wL, dL, sL, pL) => {
+  // 全件を名前つきで並べる。1通1800字に収まらない時は分割指示（chunkMessage）を run() 側で行う。
+  const render = () => {
     const lines = [header];
-    // 1. あなたの判断待ち
-    for (const { row, count } of waiting.slice(0, wL)) {
+    // 1. あなたの判断待ち（古さに関係なく全件）
+    for (const { row, count } of waiting) {
       const what = cleanText(row.label || row.promise || '約束した作業', row);
       const night = nightWaitingKeys.has(waitingNotificationKey(row)) ? '夜間に出た判断待ち: ' : 'あなたの判断待ち: ';
       const head = `・${night}${projectOf(row)}`;
@@ -257,64 +269,33 @@ export function formatDigest(rows, now = Date.now(), label = '', {
       const action = count > 1 ? brief(actionOf(row), Math.max(0, MAX_ITEM_CHARS - head.length - suffix.length - 12)) : actionOf(row);
       lines.push(itemLine(head, what, ` — ${action}${suffix}`));
     }
-    if (waiting.length > wL) {
-      lines.push(`・あなたの判断待ち: ほか ${waiting.length - wL}件`);
-    }
     // 2. 完了（各1行・80字以内）
-    for (const row of done.slice(0, dL)) {
+    for (const row of done) {
       const what = cleanText(row.label || row.promise || '約束した作業', row);
       lines.push(itemLine(`・完了: ${projectOf(row)}`, what));
     }
-    if (done.length > dL) {
-      lines.push(`・完了: ほか ${done.length - dL}件`);
-    }
     // 3. 止まっている（再開したかどうか）
-    for (const { row, count } of stalled.slice(0, sL)) {
+    for (const { row, count } of stalled) {
       const what = cleanText(row.label || row.promise || '約束した作業', row);
       const resumed = row.status === 'resumed' || Boolean(row.resumedAt);
       const resumeText = resumed ? '自動再開しました' : '自動再開していません';
       lines.push(itemLine(`・止まっている: ${projectOf(row)}`, what, ` — ${resumeText}${groupTail(count)}`));
     }
-    if (stalled.length > sL) {
-      lines.push(`・止まっている: ほか ${stalled.length - sL}件`);
-    }
-    // 4. 進行中（最大5件を名前で出す・並びは最終判定が新しい順）
-    for (const row of inProgressSorted.slice(0, pL)) {
+    // 4. 進行中（並びは最終判定が新しい順）
+    for (const row of inProgressSorted) {
       const what = cleanText(row.label || row.promise || '約束した作業', row);
       lines.push(itemLine(`・進行中: ${projectOf(row)}`, what));
     }
     const totalProg = Math.max(inProgress, inProgressSorted.length);
-    if (inProgressSorted.length > 0 && totalProg > pL) {
-      lines.push(`・進行中: ほか ${totalProg - pL}件`);
-    } else if (inProgressSorted.length === 0 && inProgress > 0) {
+    if (inProgressSorted.length === 0 && inProgress > 0) {
       lines.push(`・進行中: ${inProgress}件`);
     }
 
     if (footer) lines.push(footer);
-    if (staleWaiting.length) {
-      lines.push(`・3日以上前の判断待ち ${staleWaiting.length}件（必要なら次のセッションで整理します）`);
-    }
     return lines.join('\n');
   };
 
-  // 1通1800字に収める。字数が足りない時だけ一番多い区分から1件ずつ削り、均等に減らす。
-  const tooLong = (text) => text.length > 1800;
-  let guard = 200;
-  while (tooLong(render(wLimit, dLimit, sLimit, pLimit)) && guard-- > 0) {
-    const candidates = [
-      { key: 'w', limit: wLimit },
-      { key: 'd', limit: dLimit },
-      { key: 's', limit: sLimit },
-      { key: 'p', limit: pLimit },
-    ].sort((a, b) => b.limit - a.limit);
-    const target = candidates.find(c => c.limit > 1) || candidates.find(c => c.limit > 0);
-    if (!target) break;
-    if (target.key === 'w') wLimit--;
-    else if (target.key === 'd') dLimit--;
-    else if (target.key === 's') sLimit--;
-    else pLimit--;
-  }
-  return render(wLimit, dLimit, sLimit, pLimit);
+  return render();
 }
 
 // 枠と日付キーは日本時間で決める。PCやCIのタイムゾーンに左右させると、
@@ -481,15 +462,25 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
 
   let error = '';
   const receipts = [];
+  const sentTexts = [];
+  let totalParts = 0;
   for (const { owner, rows, message } of deliveries) {
-    let result;
-    try {
-      result = io.notify ? await io.notify(message, { home, webhookFallback: false, owner }) : await (io.notifyOwner ?? notifyOwner)(owner, message, { home });
-    } catch (cause) { result = { reason: cause?.message || String(cause) }; }
-    result ??= {};
-    const delivered = ['dm', 'toast', 'inbox'].includes(result.delivered);
-    receipts.push({ owner, ok: delivered, attempts: result.attempts, toastExitCode: result.toastExitCode, channel: result.channel ?? (result.delivered === 'dm' ? 'discord' : result.delivered || 'none'), recipientId: result.recipientId, httpStatus: result.httpStatus, messageId: result.messageId, channelId: result.channelId });
-    if (!delivered) { error = result.reason || 'DM not delivered'; break; }
+    // 1800字を超える本文は全件を載せたまま改行境界で分割し、続きマーカー付きの複数DMで届ける。
+    const parts = chunkMessage(message);
+    totalParts += Math.max(parts.length, 1);
+    const numbered = parts.length > 1 ? parts.map((part, i) => i === 0 ? part : `（進捗DM 続き ${i + 1}/${parts.length}）\n${part}`) : parts;
+    for (const part of numbered) {
+      let result;
+      try {
+        result = io.notify ? await io.notify(part, { home, webhookFallback: false, owner }) : await (io.notifyOwner ?? notifyOwner)(owner, part, { home });
+      } catch (cause) { result = { reason: cause?.message || String(cause) }; }
+      result ??= {};
+      const delivered = ['dm', 'toast', 'inbox'].includes(result.delivered);
+      receipts.push({ owner, ok: delivered, attempts: result.attempts, toastExitCode: result.toastExitCode, channel: result.channel ?? (result.delivered === 'dm' ? 'discord' : result.delivered || 'none'), recipientId: result.recipientId, httpStatus: result.httpStatus, messageId: result.messageId, channelId: result.channelId });
+      sentTexts.push(part);
+      if (!delivered) { error = result.reason || 'DM not delivered'; break; }
+    }
+    if (error) break;
     if (slotKey) sentSlotOwners.add(`${slotKey}|${owner}`);
     for (const row of rows) {
       const key = rowKey(row);
@@ -521,7 +512,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
 
   if (error) {
     appendLog(home, { at: now, label, slot: slotKey || 'urgent', sent: false, count, error, receipts }, io);
-    appendSentLog(home, { at: now, label, slot: slotKey || 'urgent', sent: false, count, parts: messages.length, receipts, text: redactSecrets(text) }, io);
+    appendSentLog(home, { at: now, label, slot: slotKey || 'urgent', sent: false, count, parts: totalParts, receipts, text: redactSecrets(sentTexts.join('\n') || text) }, io);
     return { sent: false, count, error };
   }
 
@@ -548,9 +539,9 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     sentKeys: nextSentKeys,
   };
   (io.writeState ?? writeState)(home, next);
-  appendLog(home, { at: now, label, slot: slotKey || 'urgent', sent: true, count, parts: messages.length, receipts }, io);
-  appendSentLog(home, { at: now, label, slot: slotKey || 'urgent', sent: true, count, parts: messages.length, receipts, text: redactSecrets(text) }, io);
-  return { sent: true, count, parts: messages.length };
+  appendLog(home, { at: now, label, slot: slotKey || 'urgent', sent: true, count, parts: totalParts, receipts }, io);
+  appendSentLog(home, { at: now, label, slot: slotKey || 'urgent', sent: true, count, parts: totalParts, receipts, text: redactSecrets(sentTexts.join('\n')) }, io);
+  return { sent: true, count, parts: totalParts };
 }
 
 if (isEntry(import.meta.url)) {

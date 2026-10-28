@@ -150,7 +150,7 @@ test('a dead login still resumes when the deepseek key can carry the child', asy
   fs.mkdirSync(path.dirname(creds), { recursive: true });
   fs.writeFileSync(creds, JSON.stringify({ claudeAiOauth: { accessToken: '', refreshToken: '' } }));
   fs.utimesSync(creds, new Date('2026-09-21T00:00:00Z'), new Date('2026-09-21T00:00:00Z'));
-  fs.writeFileSync(path.join(f.opts.home, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY="sk-test"\n');
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'openrouter.env'), 'OPENROUTER_API_KEY="sk-test"\n');
   await f.call('start', { objective: 'test' });
   for (let i = 0; i < 3; i += 1) await f.call('pause', { reason: 'runner_error', detail: 'OAuth session expired' });
   // Right after the pause nothing relaunches: a broken key must not spawn the child every tick.
@@ -173,7 +173,7 @@ test('without a deepseek key a dead login keeps the 3-strike pause', async (t) =
 test('the deepseek fallback does not wipe an unanswered question', async (t) => {
   const f = fixture(t);
   fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(f.opts.home, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY=sk-test\n');
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'openrouter.env'), 'OPENROUTER_API_KEY=sk-test\n');
   await f.call('start', { objective: 'test' });
   for (let i = 0; i < 3; i += 1) await f.call('pause', { reason: 'runner_error', detail: 'OAuth session expired' });
   await f.call('pause', { reason: 'runner_error', question: 'このまま進めますか？' });

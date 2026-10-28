@@ -18,7 +18,7 @@ import { recommendations } from './eval-harness.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 import { loadFablePolicy } from './fable-policy.mjs';
-import { COST_PER_MILLION } from './llm-fallback.mjs';
+import { COST_PER_MILLION, executorCostUsd } from './llm-fallback.mjs';
 import { calculateDelegation, calculateLinesDelegation, collectBashProfile, collectClaudeActivityDays, collectClaudeCostStats, collectClaudeStats, collectCodexUsage, collectGitActivity, collectProviderHealth, estimateSpecAuthoringTokens, formatBlockSource } from './usage-stats.mjs';
 import { collectUserReworkStats } from './lib/user-rework-stats.mjs';
 export { codexSessionDirs, collectCodexUsage } from './usage-stats.mjs';
@@ -90,7 +90,7 @@ let execOut = 0, execUSD = 0, execByProv = {}, ledgerRows = [];
 {
   const led = path.join(HOME, '.claude', 'executor-usage.jsonl');
   let lines = []; try { lines = fs.readFileSync(led, 'utf-8').split('\n'); } catch { }
-  for (const ln of lines) { if (!ln.trim()) continue; let r; try { r = JSON.parse(ln); } catch { continue; } ledgerRows.push(r); if (new Date(r.t).getTime() < since) continue; const [pi, po] = EXECUTOR_PRICING[r.provider] || [1, 3]; execUSD += r.provider === 'gemini' ? (typeof r.usd === 'number' && Number.isFinite(r.usd) ? r.usd : 0) : ((r.in || 0) * pi + (r.out || 0) * po) / 1e6; execOut += (r.out || 0); execByProv[r.provider] = (execByProv[r.provider] || 0) + 1; }
+  for (const ln of lines) { if (!ln.trim()) continue; let r; try { r = JSON.parse(ln); } catch { continue; } ledgerRows.push(r); if (new Date(r.t).getTime() < since) continue; const [pi, po] = EXECUTOR_PRICING[r.provider] || [1, 3]; execUSD += r.provider === 'gemini' ? (typeof r.usd === 'number' && Number.isFinite(r.usd) ? r.usd : 0) : (executorCostUsd(r) ?? ((r.in || 0) * pi + (r.out || 0) * po) / 1e6); execOut += (r.out || 0); execByProv[r.provider] = (execByProv[r.provider] || 0) + 1; }
 }
 // ---- 4) 作業量プロキシ(gitコミット) ----
 let work = 0, workKind = 'commits';

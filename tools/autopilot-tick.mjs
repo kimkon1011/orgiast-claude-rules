@@ -157,7 +157,7 @@ function credentialsRefreshedSince(state, paths) {
   try { return fs.statSync(path.join(paths.home, '.claude', '.credentials.json')).mtimeMs > since; } catch { return false; }
 }
 // A dead OAuth login no longer has to stop the run: autopilot-run.mjs passes the
-// ~/.claude/deepseek.env key to the child when the Claude credentials are empty.
+// ~/.claude/openrouter.env key to the child when the Claude credentials are empty.
 // Nothing lifted the 3-strike pause for that lane, so a PC whose login is never renewed
 // stayed paused forever although the child would now start (2026-10-20 実測: 全tickが
 // skipped:runner_error のまま、credentials は 2026-10-17T04:27Z で不変).
@@ -165,8 +165,8 @@ function credentialsRefreshedSince(state, paths) {
 const FALLBACK_RESUME_COOLDOWN_MS = 30 * 60_000;
 function fallbackKeyAvailable(paths) {
   try {
-    const env = fs.readFileSync(path.join(paths.home, '.claude', 'deepseek.env'), 'utf8');
-    return /^\s*DEEPSEEK_API_KEY\s*=\s*["']?[^\s"']+/m.test(env);
+    const env = fs.readFileSync(path.join(paths.home, '.claude', 'openrouter.env'), 'utf8');
+    return /^\s*OPENROUTER_API_KEY\s*=\s*["']?[^\s"']+/m.test(env);
   } catch { return false; }
 }
 function fallbackResumeReady(state, paths, now) {

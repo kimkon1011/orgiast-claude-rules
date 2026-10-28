@@ -1097,7 +1097,7 @@ export function readLedgerCounts(filePath, now) {
 export function localProviderEnv(homeDir) {
   const providers = [
     { name: 'groq', envKey: 'GROQ_API_KEY', envFile: 'groq.env' },
-    { name: 'deepseek', envKey: 'DEEPSEEK_API_KEY', envFile: 'deepseek.env' },
+    { name: 'deepseek', envKey: 'OPENROUTER_API_KEY', envFile: 'openrouter.env' },
     { name: 'gemini', envKey: 'GEMINI_API_KEY', envFile: 'gemini.env' },
     { name: 'openrouter', envKey: 'OPENROUTER_API_KEY', envFile: 'openrouter.env' },
     { name: 'grok', envKey: 'XAI_API_KEY', envFile: 'xai.env' }

@@ -45,19 +45,19 @@ export function cheapProvidersAllCooling(provider, home = process.env.ORGIAST_HO
   if (!alternate) return false;
   try {
     const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'provider-cooldown.json'), 'utf8'));
-    return Number(state?.[provider]?.until) > now && Number(state?.[alternate]?.until) > now;
+    return Number(state?.[provider === 'deepseek' ? 'openrouter' : provider]?.until) > now && Number(state?.[alternate === 'deepseek' ? 'openrouter' : alternate]?.until) > now;
   } catch { return false; }
 }
 
 export function alternateCheapProvider(provider, home = process.env.ORGIAST_HOME || os.homedir()) {
   const alternate = provider === 'glm' ? 'deepseek' : provider === 'deepseek' ? 'glm' : null;
   if (!alternate) return null;
-  const keyFile = path.join(home, '.claude', alternate === 'glm' ? 'zai.env' : 'deepseek.env');
-  const keyName = alternate === 'glm' ? 'ZAI_API_KEY' : 'DEEPSEEK_API_KEY';
+  const keyFile = path.join(home, '.claude', alternate === 'glm' ? 'zai.env' : 'openrouter.env');
+  const keyName = alternate === 'glm' ? 'ZAI_API_KEY' : 'OPENROUTER_API_KEY';
   try {
     if (!parseAutoSessionEnvText(fs.readFileSync(keyFile, 'utf8'))[keyName]) return null;
     const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'provider-cooldown.json'), 'utf8'));
-    if (Number(state?.[alternate]?.until) > Date.now()) return null;
+    if (Number(state?.[alternate === 'deepseek' ? 'openrouter' : alternate]?.until) > Date.now()) return null;
   } catch (error) {
     if (error?.code !== 'ENOENT' && error instanceof SyntaxError) return null;
     try { if (!parseAutoSessionEnvText(fs.readFileSync(keyFile, 'utf8'))[keyName]) return null; } catch { return null; }

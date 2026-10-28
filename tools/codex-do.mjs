@@ -3,6 +3,7 @@
 // 通常実装は Sol、長時間・高難度・auto の失敗時は Astra（既定 effort high）。
 // --lane sol|astra|auto / --model astra|sol|<slug> / --effort で指定する。
 // 先頭40行の <!-- lane: astra --> でも指定可。Astra 上限時は Sol へ退避する。
+import { GATEWAY_MODELS, OPENROUTER_BASE } from './provider-routing.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -369,7 +370,7 @@ export function shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut
 // 併用すると run_shell_command ごと消え、代替実行者が「編集はできるがテストも git も一切
 // 実行できない」状態になる(未検証の編集だけ残して 80 呼び出しで停止。2026-10-10 実害)。
 // Codex クールダウン中の代替は実装レーンなので、シェルは塞がない。
-export function buildQwenArgs({ model = 'deepseek-flash', timeoutSecs = 1800, maxToolCalls = 80, marker = 'Follow-the-instructions-provided-on-stdin.' } = {}) {
+export function buildQwenArgs({ model = GATEWAY_MODELS.deepseek, timeoutSecs = 1800, maxToolCalls = 80, marker = 'Follow-the-instructions-provided-on-stdin.' } = {}) {
   return [
     '--auth-type', 'openai',
     '-m', model,
@@ -444,7 +445,7 @@ export function chainBackendBudgetSecs(timeoutSeconds, elapsedSecs, env = proces
   return Math.min(fallbackBackendTimeoutSecs(timeoutSeconds, env), remaining);
 }
 
-export function buildQwenEnv(baseEnv, apiKey, { model = 'deepseek-flash', baseUrl = 'https://api.deepseek.com/v1' } = {}) {
+export function buildQwenEnv(baseEnv, apiKey, { model = GATEWAY_MODELS.deepseek, baseUrl = OPENROUTER_BASE } = {}) {
   const env = { ...baseEnv };
   env.OPENAI_API_KEY = apiKey;
   env.OPENAI_BASE_URL = baseUrl;
@@ -479,7 +480,7 @@ export function loadEnvKey(homeDir, fileName, varName) {
 }
 
 export function loadDeepseekKey(homeDir) {
-  return loadEnvKey(homeDir, 'deepseek.env', 'DEEPSEEK_API_KEY');
+  return loadEnvKey(homeDir, 'openrouter.env', 'OPENROUTER_API_KEY');
 }
 
 export function loadGeminiKey(homeDir) {
@@ -534,18 +535,18 @@ function cheapCodeBackend(name, homeDir) {
   // 仕様C2b: 定額レーン glm が usage_limit でクールダウン中のときは、同じ位置を deepseek へ自動差し替えする。
   // provider-limit-history.jsonl で until が未来の provider は候補から外す(glm は deepseek へ差し替え、deepseek は除外)。
   const historyFile = path.join(homeDir, '.claude', 'provider-limit-history.jsonl');
-  const limitedByHistory = providerLimitedUntil(historyFile, provider) > 0;
+  const limitedByHistory = providerLimitedUntil(historyFile, provider === 'deepseek' ? 'openrouter' : provider) > 0;
   if (provider === 'deepseek' && limitedByHistory) return null;
   if (provider === 'glm' && (limitedByHistory || providerCooldownMs('glm', Date.now(), cooldownFile) > 0)) {
-    if (!loadEnvKey(homeDir, 'deepseek.env', 'DEEPSEEK_API_KEY')) return null;
-    if (providerLimitedUntil(historyFile, 'deepseek') > 0) return null;
+    if (!loadDeepseekKey(homeDir)) return null;
+    if (providerLimitedUntil(historyFile, 'openrouter') > 0) return null;
     console.error('[codex-do] cheap-code:glm は usage_limit クールダウン中のため cheap-code:deepseek へフォールバックします');
-    return { kind: 'cheap-code', name: 'cheap-code:deepseek', provider: 'deepseek', model: 'deepseek-flash' };
+    return { kind: 'cheap-code', name: 'cheap-code:deepseek', provider: 'deepseek', model: GATEWAY_MODELS.deepseek };
   }
-  const keyFile = provider === 'glm' ? 'zai.env' : 'deepseek.env';
-  const keyEnv = provider === 'glm' ? 'ZAI_API_KEY' : 'DEEPSEEK_API_KEY';
+  const keyFile = provider === 'glm' ? 'zai.env' : 'openrouter.env';
+  const keyEnv = provider === 'glm' ? 'ZAI_API_KEY' : 'OPENROUTER_API_KEY';
   if (!loadEnvKey(homeDir, keyFile, keyEnv)) return null;
-  return { kind: 'cheap-code', name, provider, model: provider === 'glm' ? 'glm-5.3' : 'deepseek-flash' };
+  return { kind: 'cheap-code', name, provider, model: provider === 'glm' ? 'glm-5.3' : GATEWAY_MODELS.deepseek };
 }
 
 export function findExecutable(name, { env = process.env, platform = process.platform, existsImpl = fs.existsSync } = {}) {
@@ -578,7 +579,7 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   if (deepseekKey && !qwenAvailable) console.error('[codex-do] deepseek の CLI(qwen) が見つからないため候補から外します');
   if (openrouterKey && !qwenAvailable) console.error('[codex-do] openrouter-free の CLI(qwen) が見つからないため候補から外します');
   const gemini = geminiKey && geminiAvailable && { kind: 'gemini', name: 'gemini-cli', model: process.env.CODEX_DO_GEMINI_MODEL || 'gemini-3.7-flash', apiKey: geminiKey };
-  const deepseek = deepseekKey && qwenAvailable && { kind: 'qwen', name: 'deepseek', model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com/v1', apiKey: deepseekKey };
+  const deepseek = deepseekKey && qwenAvailable && { kind: 'qwen', name: 'deepseek', model: GATEWAY_MODELS.deepseek, baseUrl: OPENROUTER_BASE, apiKey: deepseekKey };
   const openrouter = openrouterKey && qwenAvailable && { kind: 'qwen', name: 'openrouter-free', model: process.env.CODEX_DO_FREE_MODEL || 'cohere/north-mini-code:free', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
   const byName = {
     'gemini-cli': () => gemini,
@@ -1315,7 +1316,7 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
     const resolvedBackends = resolveFallbackBackends(home);
     const backends = skipCoolingBackends(resolvedBackends, coolingBackendNames(home));
     if (backends.length === 0) {
-      console.error('GEMINI_API_KEY、DEEPSEEK_API_KEY、OPENROUTER_API_KEY が無いためフォールバックを実行できません');
+      console.error('GEMINI_API_KEY、OPENROUTER_API_KEY、ZAI_API_KEY が無いためフォールバックを実行できません');
       result.status = 1;
     } else {
       const chainStarted = Date.now();

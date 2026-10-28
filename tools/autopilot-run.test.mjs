@@ -330,7 +330,7 @@ test('進捗報告: 12:00 枠・21:00 枠でそれぞれ 1 回だけ送る。同
   assert.equal(sent.length, 2);
 });
 
-test('resolveSupervisorAuth: OAuth が死んでいる時だけ deepseek.env の鍵へ切り替える', () => {
+test('resolveSupervisorAuth: OAuth が死んでいる時だけ openrouter.env の鍵へ切り替える', () => {
   const files = (map) => (file) => {
     const name = path.basename(String(file));
     if (!(name in map)) throw new Error('ENOENT');
@@ -348,12 +348,12 @@ test('resolveSupervisorAuth: OAuth が死んでいる時だけ deepseek.env の�
   assert.equal(oauthLane.model, null);
   assert.equal(oauthLane.env, oauthEnv);
 
-  const dead = files({ '.credentials.json': creds(''), 'deepseek.env': 'DEEPSEEK_API_KEY="sk-test"\n' });
+  const dead = files({ '.credentials.json': creds(''), 'openrouter.env': 'OPENROUTER_API_KEY="sk-test"\n' });
   const fallback = resolveSupervisorAuth({ home: 'H', env: { PATH: 'p' }, readFile: dead });
   assert.equal(fallback.lane, 'deepseek');
-  assert.equal(fallback.model, 'deepseek-flash');
+  assert.equal(fallback.model, 'deepseek/deepseek-v4-flash');
   assert.equal(fallback.env.ANTHROPIC_AUTH_TOKEN, 'sk-test');
-  assert.equal(fallback.env.ANTHROPIC_BASE_URL, 'https://api.deepseek.com/anthropic');
+  assert.equal(fallback.env.ANTHROPIC_BASE_URL, 'https://openrouter.ai/api');
   assert.equal(fallback.env.PATH, 'p');
 
   const noKey = resolveSupervisorAuth({ home: 'H', env: {}, readFile: files({ '.credentials.json': creds('') }) });

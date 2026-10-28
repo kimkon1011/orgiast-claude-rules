@@ -35,11 +35,11 @@ test('alternateCheapProvider はキーと cooldown を確認して反対側だ�
   const home = makeHome();
   try {
     assert.equal(alternateCheapProvider('glm', home), null);
-    fs.writeFileSync(path.join(home, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY=ds\n');
+    fs.writeFileSync(path.join(home, '.claude', 'openrouter.env'), 'OPENROUTER_API_KEY=ds\n');
     fs.writeFileSync(path.join(home, '.claude', 'zai.env'), 'ZAI_API_KEY=zai\n');
     assert.equal(alternateCheapProvider('glm', home), 'deepseek');
     assert.equal(alternateCheapProvider('deepseek', home), 'glm');
-    fs.writeFileSync(path.join(home, '.claude', 'provider-cooldown.json'), JSON.stringify({ deepseek: { until: Date.now() + 60000 } }));
+    fs.writeFileSync(path.join(home, '.claude', 'provider-cooldown.json'), JSON.stringify({ openrouter: { until: Date.now() + 60000 } }));
     assert.equal(alternateCheapProvider('glm', home), null);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
@@ -266,7 +266,7 @@ test('cheapProvidersAllCooling は両方の until が未来の場合だけ true 
   const file = path.join(home, '.claude', 'provider-cooldown.json');
   try {
     assert.equal(cheapProvidersAllCooling('glm', home, 1000), false);
-    fs.writeFileSync(file, JSON.stringify({ glm: { until: 1001 }, deepseek: { until: 2000 } }));
+    fs.writeFileSync(file, JSON.stringify({ glm: { until: 1001 }, openrouter: { until: 2000 } }));
     for (const provider of ['glm', 'deepseek']) assert.equal(cheapProvidersAllCooling(provider, home, 1000), true);
     assert.equal(cheapProvidersAllCooling('other', home, 1000), false);
     assert.equal(cheapProvidersAllCooling('glm', home, 1001), false);

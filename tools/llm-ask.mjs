@@ -1,4 +1,5 @@
 // 複数プロバイダのLLMを1本で叩く統合CLIヘルパー。
+import { gatewayConfig, gatewayParams, usageCostFields } from './provider-routing.mjs';
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
 import { readEnvValue } from './env-kv.mjs';
 import { allowedForCategory, callWithFallback, FALLBACK_CHAIN, preferredForCategory } from './llm-fallback.mjs';
@@ -15,9 +16,9 @@ const PROVIDERS = {
   // Genspark Pro の前払いクレジット枠。OpenAI 互換の LLM proxy で claude-opus-5 等36モデルが1キーで叩ける。
   genspark: { base: 'https://www.genspark.ai/api/llm_proxy/v1/chat/completions', keyEnv: 'GSK_PROXY_KEY', keyFile: 'genspark-proxy.env', model: 'gpt-5.6-luna' },
   gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', keyEnv: 'GEMINI_API_KEY', keyFile: 'gemini.env', model: 'gemini-3.7-flash' },
-  deepseek: { base: 'https://api.deepseek.com/chat/completions', keyEnv: 'DEEPSEEK_API_KEY', keyFile: 'deepseek.env', model: 'deepseek-flash' },
+  deepseek: gatewayConfig('deepseek'),
   grok: { base: 'https://api.x.ai/v1/chat/completions', keyEnv: 'XAI_API_KEY', keyFile: 'xai.env', model: 'grok-3' },
-  kimi: { base: 'https://api.moonshot.ai/v1/chat/completions', keyEnv: 'MOONSHOT_API_KEY', keyFile: 'kimi-api.env', model: 'kimi-k3', special: 'kimi' },
+  kimi: gatewayConfig('kimi'),
   mistral: { base: 'https://api.mistral.ai/v1/chat/completions', keyEnv: 'MISTRAL_API_KEY', keyFile: 'mistral.env', model: 'mistral-large-latest' },
 };
 
@@ -95,7 +96,7 @@ function appendAttempt(info, usage = {}) {
   }
   // 失敗理由も残す。reason が無いと delegation-health 側で「残高切れ」と「ただの rate limit」を
   // 区別できず、直せない全滅として毎日起票される（2026-10-22 実測: kimi の 2337 行が reason 欠落）。
-  const rec = { t: new Date().toISOString(), provider: info.candidate.provider, model: info.candidate.model, in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover, ...(info.status !== 'ok' && info.reason ? { reason: String(info.reason).slice(0, 400) } : {}) };
+  const rec = { t: new Date().toISOString(), provider: info.candidate.provider, model: info.candidate.model, ...usageCostFields(usage), in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover, ...(info.status !== 'ok' && info.reason ? { reason: String(info.reason).slice(0, 400) } : {}) };
   try { fs.mkdirSync(path.dirname(ledger), { recursive: true }); fs.appendFileSync(ledger, JSON.stringify(rec) + '\n'); } catch {}
 }
 
@@ -111,7 +112,7 @@ try {
       const P = PROVIDERS[candidate.provider]; const key = loadKey(candidate.provider);
       if (!P || !key) return null;
       const payload = { model: candidate.model || P.model, messages, max_tokens: maxTok, stream: false };
-      if (candidate.provider === 'deepseek' && payload.model === 'deepseek-flash') payload.thinking = { type: 'disabled' };
+      Object.assign(payload, gatewayParams(payload.model));
       if (P.special === 'kimi') Object.assign(payload, { reasoning_effort: 'none', temperature: 0.6 });
       return { url: P.base, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(P.extraHeaders || {}) }, body: JSON.stringify(payload) } };
     },

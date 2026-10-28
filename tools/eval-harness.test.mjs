@@ -15,7 +15,7 @@ function runHarness(t, { cooldown = {}, tasks, config, overlay, responses = [], 
   const tools = path.join(home, 'tools'), evalDir = path.join(home, '.claude', 'eval');
   fs.mkdirSync(path.join(tools, 'lib'), { recursive: true });
   fs.mkdirSync(evalDir, { recursive: true });
-  for (const file of ['eval-harness.mjs', 'eval-exec-checks.mjs', 'is-entry.mjs', 'routing-table.mjs', 'llm-fallback.mjs', 'rate-budget.mjs', 'lib/provider-daily-cooldown.mjs', 'lib/eval-config.mjs']) {
+  for (const file of ['eval-harness.mjs', 'eval-exec-checks.mjs', 'is-entry.mjs', 'routing-table.mjs', 'llm-fallback.mjs', 'provider-routing.mjs', 'rate-budget.mjs', 'lib/provider-daily-cooldown.mjs', 'lib/eval-config.mjs']) {
     fs.copyFileSync(new URL(file, import.meta.url), path.join(tools, file));
   }
   const seed = tasks || [{ id: 'one', category: 'classification', prompt: 'test', expect: { type: 'contains', value: 'ok' } }];
@@ -62,7 +62,7 @@ test('judge はクールダウン中の候補をスキップし次の候補へ�
   });
   assert.equal(result.calls.length, 2);
   assert.ok(result.calls.every((url) => /openrouter/.test(url)));
-  assert.match(result.stderr, /JUDGE切替 groq → openrouter \(日次上限\)/);
+  assert.match(result.stderr, /JUDGE切替 groq → deepseek \(日次上限\)/);
   assert.equal(result.results[0].pass, 1);
   assert.equal(result.results[0].errors, 0);
   assert.doesNotMatch(result.stderr, /ERROR judge/);
@@ -276,4 +276,14 @@ test('CLI でも未設定モデルの単価をカタログから補い、取得�
   const unknown = runHarness(t, opts);
   assert.equal(unknown.results[0].costUsd, null);
   assert.match(unknown.stdout, /単価不明/);
+});
+
+test('DeepSeek evaluation ignores native cooldown and obeys OpenRouter cooldown', t => {
+  const config = [{ provider: 'deepseek', model: 'deepseek-flash' }];
+  const args = ['--provider', 'deepseek'];
+  const live = runHarness(t, { config, args, cooldown: { deepseek: activeCooldown() }, responses: [success] });
+  assert.equal(live.calls.length, 1);
+  assert.match(live.calls[0], /openrouter\.ai/);
+  const blocked = runHarness(t, { config, args, cooldown: { openrouter: activeCooldown() } });
+  assert.equal(blocked.calls.length, 0);
 });

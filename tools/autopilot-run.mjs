@@ -55,7 +55,7 @@ export function buildWatchPrompt(watch, repo = REPO) {
 // OAuth ログインが切れると、スケジューラ起動の autopilot は毎周
 // "OAuth session expired and could not be refreshed" で exit 1 し、runner_error のまま paused で固まる
 // (2026-10-17 実測: accessToken/refreshToken が長さ0、run.log が 04:32Z 以降 skipped だけ)。
-// 同じ PC のデスクトップ側セッションは ~/.claude/deepseek.env の鍵で動いているので、
+// 同じ PC のデスクトップ側セッションは ~/.claude/openrouter.env の鍵で動いているので、
 // 資格情報が空のときだけその鍵を子へ渡し、監督モデルもそのレーンのモデルへ切り替える。
 // 鍵が無ければ従来どおり（何も変えずに OAuth 経路へ渡す）＝挙動を悪化させない。
 export function resolveSupervisorAuth({ home = process.env.ORGIAST_HOME || os.homedir(), env = process.env, readFile = fs.readFileSync } = {}) {
@@ -65,13 +65,13 @@ export function resolveSupervisorAuth({ home = process.env.ORGIAST_HOME || os.ho
   if (String(oauthToken).trim()) return { lane: 'oauth', model: null, env };
   let key = '';
   try {
-    for (const line of String(readFile(path.join(home, '.claude', 'deepseek.env'), 'utf8')).split(/\r?\n/)) {
-      const match = line.match(/^\s*DEEPSEEK_API_KEY\s*=\s*(.+?)\s*$/);
+    for (const line of String(readFile(path.join(home, '.claude', 'openrouter.env'), 'utf8')).split(/\r?\n/)) {
+      const match = line.match(/^\s*OPENROUTER_API_KEY\s*=\s*(.+?)\s*$/);
       if (match) { key = match[1].replace(/^["']|["']$/g, ''); break; }
     }
   } catch {}
   if (!key) return { lane: 'none', model: null, env };
-  return { lane: 'deepseek', model: 'deepseek-flash', env: { ...env, ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic', ANTHROPIC_AUTH_TOKEN: key, CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000' } };
+  return { lane: 'deepseek', model: 'deepseek/deepseek-v4-flash', env: { ...env, ANTHROPIC_BASE_URL: 'https://openrouter.ai/api', ANTHROPIC_AUTH_TOKEN: key, ANTHROPIC_API_KEY: '', CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000' } };
 }
 export function invokeClaude({ executable, args, prompt, cwd, timeoutMs, env = process.env, onProgress = () => {} }) {
   return new Promise((resolve) => {

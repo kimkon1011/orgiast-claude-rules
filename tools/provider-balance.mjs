@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readEnvValue } from './env-kv.mjs';
-import { COST_PER_MILLION } from './llm-fallback.mjs';
+import { executorCostUsd } from './llm-fallback.mjs';
 import { summarizeGeminiMonth } from './cost-work-loop.mjs';
 import { isEntry } from './is-entry.mjs';
 import { notifyKim } from './notify-kim.mjs';
@@ -57,10 +57,9 @@ export function summarizeLedger(rows, provider, now = new Date()) {
   const sums = new Map();
   for (const row of rows) {
     if (String(row?.provider).toLowerCase() !== provider) continue;
-    const rate = COST_PER_MILLION[provider];
     const day = dayKey(row.t);
-    if (!rate || !day) continue;
-    const cost = ((Number(row.in) || 0) * rate[0] + (Number(row.out) || 0) * rate[1]) / 1e6;
+    if (!day) continue;
+    const cost = executorCostUsd(row) ?? 0;
     sums.set(day, (sums.get(day) || 0) + cost);
   }
   const today = dayKey(now);
@@ -72,6 +71,7 @@ function readRows(file) {
   try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } }); } catch { return []; }
 }
 export function classifyBalance(row) {
+  if (['kimi', 'deepseek'].includes(row.provider)) return 'via_openrouter';
   if (Number.isFinite(row.balanceUsd) && row.balanceUsd < 1 && row.autoTopUp === true) return 'autotopup_broken';
   if (row.todaySpendUsd >= 1 && row.todaySpendUsd > 2 * row.avg7dSpendUsd) return 'anomaly';
   if (Number.isFinite(row.credits)) return row.credits < CREDIT_LOW_THRESHOLD ? 'low' : 'ok';
@@ -80,7 +80,9 @@ export function classifyBalance(row) {
   return 'ok';
 }
 export function formatBalanceLine(rows) {
-  const item = (r) => r.status === 'autotopup_broken'
+  const item = (r) => ['kimi', 'deepseek'].includes(r.provider)
+    ? `${r.provider} OpenRouter経由のため監視対象外（native残高は参考表示: ${balanceLabel(r)}）`
+    : r.status === 'autotopup_broken'
     ? `${r.provider} $${r.balanceUsd.toFixed(2)}(オートチャージ故障・${r.account || '契約アカウント'} で確認)`
     : r.provider === 'groq' && r.billing === 'free'
     ? `${r.provider} 無料枠(有料化不可)`
@@ -101,6 +103,7 @@ export async function collectProviderBalances({ home = process.env.ORGIAST_HOME 
     const row = { provider, balanceUsd: remote.balanceUsd, autoTopUp: billing[provider]?.autoTopUp ?? 'unknown', ...summarizeLedger(ledger, provider, now) };
     if (remote.credits !== null) row.credits = remote.credits;
     if (remote.reason) row.reason = remote.reason;
+    if (['kimi', 'deepseek'].includes(provider)) row.reason = `OpenRouter経由のため監視対象外（native残高は参考表示）${remote.reason ? '; ' + remote.reason : ''}`;
     row.status = classifyBalance(row); results.push(row);
   }
   for (const provider of ['xai', 'groq']) {
@@ -163,6 +166,7 @@ export async function alertProviderBalances(rows, {
     const today = alertDay(now);
     const lines = [];
     for (const row of rows) {
+      if (['kimi', 'deepseek'].includes(row.provider)) continue;
       if (row.status === 'autotopup_broken') {
         if (!(now.getTime() - Date.parse(notified[row.provider]) < DAY)) {
           lines.push(`オートチャージ故障: ${row.provider} ${balanceLabel(row)}。${row.account || '契約アカウント'} で ${CHARGE_URLS[row.provider] || '請求画面'} を開き、自動補充の支払い方法・上限・失敗履歴を確認してください。`);

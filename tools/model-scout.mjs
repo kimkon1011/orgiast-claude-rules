@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { readConfig, userHome } from './lib/eval-config.mjs';
 import { notifyKim } from './notify-kim.mjs';
+import { routeCandidate } from './provider-routing.mjs';
 import { COST_PER_MILLION } from './llm-fallback.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -72,7 +73,8 @@ export function selectFrontierCandidates(changes, { max = frontierLimit() } = {}
 export function selectCandidates(changes, models, routing, { includeQuality = false } = {}) {
   const warnings = [], baselines = [];
   if (!routing?.categories || !Object.keys(routing.categories).length) warnings.push('tools/routing-table.json が未生成、またはカテゴリが空のため比較不能。');
-  for (const [category, route] of Object.entries(routing?.categories || {})) {
+  for (const [category, originalRoute] of Object.entries(routing?.categories || {})) {
+    const route = routeCandidate(originalRoute);
     const matches = models.filter((m) => m.id === route.model || m.id === `${route.provider}/${route.model}` || m.id.split('/').slice(1).join('/') === route.model);
     const current = matches.length === 1 ? matches[0] : null;
     const price = route.provider === 'openrouter' ? current && [current.pricing.prompt * 1e6, current.pricing.completion * 1e6] : COST_PER_MILLION[route.provider];

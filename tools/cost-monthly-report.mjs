@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { COST_PER_MILLION } from './llm-fallback.mjs';
+import { executorCostUsd } from './llm-fallback.mjs';
 import { summarizeGeminiMonth } from './cost-work-loop.mjs';
 import { collectClaudeStats } from './usage-stats.mjs';
 
@@ -49,8 +49,7 @@ export function previousMonthBudget({ home, now = new Date(), configFile = DEFAU
   let variableUsd = 0;
   for (const row of rows) {
     if (row.provider === 'gemini') continue;
-    const price = COST_PER_MILLION[row.provider];
-    if (price) variableUsd += ((Number(row.in) || 0) * price[0] + (Number(row.out) || 0) * price[1]) / 1e6;
+    variableUsd += executorCostUsd(row) ?? 0;
   }
   const gemini = summarizeGeminiMonth(rows, { now: bounds.end, usdJpy });
   const config = readJson(configFile, { fixed: [] });

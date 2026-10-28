@@ -9,6 +9,7 @@
  * GH_TOKEN falls back to ~/.gh-device/token.txt; SEISAKU_MAIL_REPO overrides repo.
  */
 import { spawnSync as nativeSpawnSync } from 'node:child_process';
+import { isEntry } from './is-entry.mjs';
 import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -132,6 +133,6 @@ export function createCli({ spawnSync = nativeSpawnSync, env = process.env, home
   };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (isEntry(import.meta.url)) {
   process.exitCode = await createCli()(process.argv.slice(2));
 }

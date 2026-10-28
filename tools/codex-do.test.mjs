@@ -178,12 +178,37 @@ test('chainBackendBudgetSecs は連鎖の残り予算を超えない（全体枠
   assert.equal(chainBackendBudgetSecs(1800, 1500, { CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: '900' }), 300);
 });
 
-test('backendSpecificTimeoutSecs は gemini-cli だけに既定600秒と正の上書きを適用する', () => {
+test('backendSpecificTimeoutSecs は gemini-cli と cheap-code:deepseek に既定600秒と正の上書きを適用する', () => {
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}), 600);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '450' }), 450);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: 'garbage' }), 600);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '0' }), 600);
-  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}), null);
+  // 2026-10-28 実測: cheap-code:deepseek が 0 出力のまま既定 900 秒を使い切ったため、
+  // gemini-cli と同じ 600 秒で頭打ちにする（成功 run の max 301 秒の 2 倍）。
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}), 600);
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: '450' }), 450);
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: 'garbage' }), 600);
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: '0' }), 600);
+  // qwen 直結の deepseek は同じ upstream なので同一扱い
+  assert.equal(backendSpecificTimeoutSecs('deepseek', {}), 600);
+  // 対象外のバックエンドは「バックエンド固有の頭打ちなし」＝null のまま
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:glm', {}), null);
+  assert.equal(backendSpecificTimeoutSecs('qwen', {}), null);
+  assert.equal(backendSpecificTimeoutSecs('openrouter-free', {}), null);
+});
+
+// 実測シナリオ（2026-10-28）: 連鎖で gemini-cli 600秒 → cheap-code:deepseek 900秒 と2本タイムアウトし
+// 1501秒を捨てた。deepseek にも600秒の頭打ちを入れると、同じ停滞でも最悪 600+600=1200 秒に収まる。
+test('実測シナリオ: cheap-code:deepseek の連鎖が既定900秒でなく600秒で頭打ちになる', () => {
+  const chainBudget = () => chainBackendBudgetSecs(1800, 0, {});
+  const geminiTimeout = Math.min(chainBudget(), backendSpecificTimeoutSecs('gemini-cli', {}));
+  const deepseekTimeout = Math.min(chainBudget(), backendSpecificTimeoutSecs('cheap-code:deepseek', {}));
+  assert.equal(geminiTimeout, 600);
+  assert.equal(deepseekTimeout, 600);
+  // 従来（deepseek が null → 既定900秒）と比べて頭打ちが短くなっていることを示す
+  assert.ok(backendSpecificTimeoutSecs('cheap-code:deepseek', {}) < fallbackBackendTimeoutSecs(1800, {}));
+  // 環境変数で 450 秒へ短縮もできる（0 出力停滞は待たずに切る運用例）
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: '450' }), 450);
 });
 
 test('countPolicyDenials は大文字小文字を区別せず拒否回数を数える', () => {

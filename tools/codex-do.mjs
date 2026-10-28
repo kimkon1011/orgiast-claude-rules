@@ -412,12 +412,24 @@ export function fallbackBackendTimeoutSecs(timeoutSeconds, env = process.env) {
   return Math.max(60, Math.min(timeoutSeconds, wanted));
 }
 
-// gemini-cli だけ既定 600 秒。実測: 成功 37 件の max 559 秒 / timeout 13 件の min 638 秒。
-// 900 秒まで待っても成功した例は無く、待つほど捨てる秒数だけ増える。
+// gemini-cli と cheap-code:deepseek だけ既定 600 秒。実測（executor-usage.jsonl）:
+//   gemini-cli: 成功 37 件の max 559 秒 / timeout 13 件の min 638 秒。
+//   cheap-code:deepseek: 成功・生産的 run の max 301 秒（2026-10-20〜28 実測）なのに、
+//     0 出力のまま既定 900 秒を使い切ったタイムアウトが 2026-10-28 に発生
+//     （delegation-health:fallback_chain_timeout / 捨てた秒数 合計1501秒のうち900秒）。
+//     出力皆無の停滞は 900 秒待っても成果が出ず、待つほど捨てる秒数だけ増える。
+//     成功 run の 2 倍の余裕 600 秒で頭打ちにしても、成功 run は切らない。
 export function backendSpecificTimeoutSecs(backendName, env = process.env) {
-  if (backendName !== 'gemini-cli') return null;
-  const raw = Number(env.CODEX_DO_GEMINI_TIMEOUT_SECS);
-  return Number.isFinite(raw) && raw > 0 ? raw : 600;
+  if (backendName === 'gemini-cli') {
+    const raw = Number(env.CODEX_DO_GEMINI_TIMEOUT_SECS);
+    return Number.isFinite(raw) && raw > 0 ? raw : 600;
+  }
+  // cheap-code:deepseek と qwen 直結の deepseek は同じ upstream（OpenRouter の deepseek model）なので同一扱い。
+  if (backendName === 'cheap-code:deepseek' || backendName === 'deepseek') {
+    const raw = Number(env.CODEX_DO_DEEPSEEK_TIMEOUT_SECS);
+    return Number.isFinite(raw) && raw > 0 ? raw : 600;
+  }
+  return null;
 }
 
 // タイムアウト時にプロセス木ごと殺す。Windows で shell:true のとき直接の子は cmd.exe なので、

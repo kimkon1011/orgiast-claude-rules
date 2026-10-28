@@ -1098,6 +1098,19 @@ test('codex-fallback: cheap-code:glm が usage_limit クールダウン中なら
   assert.equal(backends[0].name, 'cheap-code:deepseek');
 });
 
+test('codex-fallback: glm 差し替えで deepseek と重複しても連鎖に同名 backend は1回だけ入る（timeout 済みの再投入で時間を捨てない）', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-dedupe-'));
+  const claude = path.join(home, '.claude'); fs.mkdirSync(claude, { recursive: true });
+  fs.writeFileSync(path.join(claude, 'zai.env'), 'ZAI_API_KEY=zai-test\n', 'utf8');
+  fs.writeFileSync(path.join(claude, 'openrouter.env'), 'OPENROUTER_API_KEY=ds-test\n', 'utf8');
+  fs.writeFileSync(path.join(claude, 'provider-cooldown.json'), JSON.stringify({ glm: { until: Date.now() + 5 * 60 * 60 * 1000, reason: 'usage_limit', at: new Date().toISOString() } }));
+  const options = { executableAvailable: () => true };
+  // 既定順（gemini-cli → cheap-code:deepseek → cheap-code:glm→deepseek）
+  assert.deepEqual(resolveFallbackBackends(home, options).map((b) => b.name), ['cheap-code:deepseek']);
+  fs.writeFileSync(path.join(claude, 'codex-fallback-order.json'), JSON.stringify(['cheap-code:deepseek', 'cheap-code:glm']));
+  assert.deepEqual(resolveFallbackBackends(home, options).map((b) => b.name), ['cheap-code:deepseek']);
+});
+
 test('codex-fallback: クールダウン無しなら glm を維持する', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-normal-'));
   const claude = path.join(home, '.claude'); fs.mkdirSync(claude, { recursive: true });

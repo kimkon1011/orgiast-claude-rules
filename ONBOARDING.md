@@ -113,8 +113,8 @@ Stop の `user-burden-gate` が依頼のある最終応答を監査する。本�
 - できていない・未検証の行には「原因（事実と推測を分ける）→ 次の一手（実行者・手順）」を併記し、Claude が実行できる分は報告前に着手する。
 - 事例: 複合機スキャン→Drive 自動アップで FAX フォルダを「対象に含めた」と報告し、テストは別フォルダだけで合格とした。初期調査で FAX の「直近30日 0件・最終 2024/3」を取得していたのに報告せず、複合機入替で FAX 保存設定が消えていたことを user の問い合わせで初めて発見した。
 
-**🔴 nishi@・cr@・seisaku-team@・Genba（genbateam.toho）の席も kim 本人が見ている。user=kim として扱い、kim が別PCにいる前提の手渡し・判断依頼の転送をせず、その場で直接聞く（2026-10-28 kim）。**
-対象アカウントの正本は `tools/lib/kim-operated.mjs`。この席では kim-PC の memory（毎晩 `~/.claude/shared-memory/` へ配布、kim の役割・プロフィールの user 型を含む）を kim 本人の好み・厳命としてそのまま適用する。「kim-PC に確認します」「kim さんに伝えてください」は書かない。対話セッションの質問は kim-PC へ自動転送しない（`fleet-question-relay`）。fleet-mail で kim-PC に送るのは、kim-PC の Discord・ローカルファイルなど kim-PC でしか触れない資源を使う作業依頼だけにする。社員本人が使う席（例: 東邦2階HP）は従来どおり別人として扱う。根拠（2026-10-28 kim）: kim-PC で話した内容が他アカウントに反映されず、同じ話を繰り返していた。
+**🔴 nishi@・cr@・seisaku-team@・Genba の席も user=kim。別PC前提で kim-PC に回さず直接聞く。**
+2026-10-28 kim。対象アカウントの正本は `tools/lib/kim-operated.mjs`。この席では kim-PC の memory（毎晩 `~/.claude/shared-memory/` へ配布、kim の役割・プロフィールの user 型を含む）を kim 本人の好み・厳命としてそのまま適用する。「kim-PC に確認します」「kim さんに伝えてください」は書かない。対話セッションの質問は kim-PC へ自動転送しない（`fleet-question-relay`）。fleet-mail で kim-PC に送るのは、kim-PC の Discord・ローカルファイルなど kim-PC でしか触れない資源を使う作業依頼だけにする。社員本人が使う席（例: 東邦2階HP）は従来どおり別人として扱う。根拠（2026-10-28 kim）: kim-PC で話した内容が他アカウントに反映されず、同じ話を繰り返していた。
 
 **🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛DM=要対応・警告/督促・定期報告のみ。PRマージ/他PC依頼=fleet-mail。内部Gmail下書き禁止。**
 送れなければチャットに完成形を表示。

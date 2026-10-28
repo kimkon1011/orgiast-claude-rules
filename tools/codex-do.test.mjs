@@ -522,7 +522,9 @@ test('枠切れ発生時にフォールバックが成功した場合は 0 で�
   assert.match(result.stderr, /Falling back to an agentic CLI/);
 });
 
-test('第1フォールバックがタイムアウトしたら第2バックエンドへ進み成功する', () => {
+test('第1フォールバック(cheap-code:deepseek)がタイムアウトしたら次のバックエンドへ進み成功する', () => {
+  // 2026-10-29 の既定順入れ替え（deepseek → glm → gemini）後は、deepseek がタイムアウトすると
+  // 次は gemini-cli が試される（ZAI キー無しの環境では cheap-code:glm は候補から外れる）。
   const mockResults = [
     { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: '' },
     { status: 124, output: '', stderr: '', timedOut: true },
@@ -538,7 +540,7 @@ test('第1フォールバックがタイムアウトしたら第2バックエン
     }
   });
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
+  assert.match(result.stdout, /executor=fallback:gemini-cli/);
   assert.match(result.stderr, /タイムアウトしたため次のバックエンドへ/);
 });
 
@@ -551,7 +553,14 @@ test('フォールバック先の CLI が無い(コマンドが見つからな�
     { status: 1, output: '', stderr: "'gemini' は、内部コマンドまたは外部コマンド、 操作可能なプログラムまたはバッチ ファイルとして認識されていません。" },
     { status: 0, output: 'DeepSeek edited the files.', stderr: '' }
   ];
+  // 2026-10-29 以降の既定順は deepseek 先頭だが、この再発防止テストは「先頭バックエンドの CLI 不在」
+  // の実障害（gemini の CLI が無く cmd.exe が「コマンドが見つからない」で exit 1）を固定するため、
+  // codex-fallback-order.json で gemini を先頭に固定して再現する。
+  const home = workDir();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'codex-fallback-order.json'), JSON.stringify(['gemini-cli', 'cheap-code:deepseek']), 'utf8');
   const result = run(['--force-native', '--cwd', workDir(), '指示内容'], {
+    home,
     env: {
       ...geminiOnPathEnv(),
       CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
@@ -881,9 +890,13 @@ function withEnvKeysCleared(fn) {
   }
 }
 
-test('resolveFallbackBackends は既定で gemini-cli → cheap-code:deepseek → cheap-code:glm の順に置く（kind:qwen は既定に出さない）', () => {
-  // 2026-09-21: deepseek/openrouter-free(kind:'qwen') は実在しない `qwen` バイナリを spawn するため
-  // 既定順から外した。既定は外部バイナリ不要の cheap-code 経路に統一する（[[project-tetsuko-growth-loop]]）。
+test('resolveFallbackBackends は既定で cheap-code:deepseek → cheap-code:glm → gemini-cli の順に置く（gemini-cli は最終手段）', () => {
+  // 2026-10-29 実測: gemini-cli を先頭にした根拠（2026-09-03 の 5/5 品質実測）は、gemini CLI 側の
+  // sandbox 不調（run_shell_command のポリシー拒否・workspace 解決失敗で無音停滞）により
+  // 10-23〜10-28 のフォールバックで 15/15 が最大600秒を廃棄してタイムアウトし成立しなくなった
+  // （delegation-health:fallback_chain_timeout 2026-10-27 起票）。同時期に cheap-code:deepseek は
+  // 141〜482 秒で成功したため、既定は「成功が速く確実な cheap-code → 最終手段の gemini-cli」にする。
+  // kind:qwen(実在しない qwen バイナリ依存)は既定に出さない（2026-09-21・[[project-tetsuko-growth-loop]]）。
   withEnvKeysCleared(() => {
     const dir = makeHomeWithEnv({
       'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n',
@@ -891,17 +904,19 @@ test('resolveFallbackBackends は既定で gemini-cli → cheap-code:deepseek �
       'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n'
     });
     const backends = resolveFallbackBackends(dir, { executableAvailable: () => true });
-    assert.deepEqual(backends.map(({ name }) => name), ['gemini-cli', 'cheap-code:deepseek', 'cheap-code:glm']);
-    assert.deepEqual(backends.map(({ kind }) => kind), ['gemini', 'cheap-code', 'cheap-code']);
+    assert.deepEqual(backends.map(({ name }) => name), ['cheap-code:deepseek', 'cheap-code:glm', 'gemini-cli']);
+    assert.deepEqual(backends.map(({ kind }) => kind), ['cheap-code', 'cheap-code', 'gemini']);
     assert.ok(!backends.some((b) => b.kind === 'qwen'), '既定の並びに kind:qwen(実在しないqwenバイナリ依存)を含めない');
-    assert.equal(backends[0].model, 'gemini-3.7-flash');
-    assert.equal(backends[0].apiKey, 'sk-gemini-1');
-    assert.equal(backends[1].provider, 'deepseek');
-    assert.equal(backends[2].provider, 'glm');
+    assert.equal(backends[0].provider, 'deepseek');
+    assert.equal(backends[1].provider, 'glm');
+    assert.equal(backends[2].model, 'gemini-3.7-flash');
+    assert.equal(backends[2].apiKey, 'sk-gemini-1');
   });
 });
 
-test('resolveFallbackBackends は prefer-free でも cheap-code:deepseek → cheap-code:glm → gemini-cli の順に保つ', () => {
+test('resolveFallbackBackends は CODEX_DO_PREFER_FREE=1 を設定しても既定と同じ順を保つ（後方互換）', () => {
+  // 2026-10-29 から CODEX_DO_PREFER_FREE の読取を廃止した（既定が cheapest 順になったため同一）。
+  // 環境変数を設定しても順序は変わらないことを後方互換として固定する。
   withEnvKeysCleared(() => {
     const prev = process.env.CODEX_DO_PREFER_FREE;
     process.env.CODEX_DO_PREFER_FREE = '1';
@@ -933,7 +948,8 @@ test('resolveFallbackBackends はキーが一部だけなら存在する分だ�
       'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n',
       'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n'
     }), { executableAvailable: () => true });
-    assert.deepEqual(geminiAndOR.map(({ name }) => name), ['gemini-cli', 'cheap-code:deepseek']);
+    // 2026-10-29: 既定順の入れ替え（cheap-code 先頭・gemini-cli 最終手段）に追随。
+    assert.deepEqual(geminiAndOR.map(({ name }) => name), ['cheap-code:deepseek', 'gemini-cli']);
   });
 });
 
@@ -1913,8 +1929,14 @@ function runFakeGemini(body, extraEnv = {}, timeoutSecs = 60) {
     { real: true },
     { status: 0, output: 'DeepSeek edited the files.', stderr: '' }
   ];
+  // 2026-10-29: 既定のフォールバック順が「cheap-code 先頭」に変わったため、このテストが検証したい
+  // 「gemini のポリシー停滞打ち切り」を gemini が最初に試される順序で再現する。
+  const home = workDir();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'codex-fallback-order.json'), JSON.stringify(['gemini-cli', 'cheap-code:deepseek']), 'utf8');
   const started = Date.now();
   const result = run(['--force-native', '--cwd', workDir(), '--timeout', String(timeoutSecs), '指示内容'], {
+    home,
     env: {
       ...fakeGeminiEnv(body),
       CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),

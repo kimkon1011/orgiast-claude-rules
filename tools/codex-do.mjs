@@ -518,9 +518,9 @@ export function loadGeminiKey(homeDir) {
 }
 
 // 2026-09-03 実測: Gemini Flash 5/5、DeepSeek 5/5、OpenRouter free 1/5。
-// 同品質なら正規の承認モードを持つ Gemini を第1候補にする（2026-10-12: auto_edit は
-// 非対話でシェル不可のため yolo へ変更。順位の根拠は下の実測値を参照）。
-// 費用ゼロを優先するときだけ CODEX_DO_PREFER_FREE=1 で free を先頭へ移す。
+// 順位の根拠は resolveFallbackBackends のコメント（2026-10-29 更新）を参照。
+// 2026-10-29 から既定が「cheap-code → gemini-cli(最終手段)」になったため、
+// CODEX_DO_PREFER_FREE の読取は廃止した（後方互換: 環境変数を設定しても順序は変わらない）。
 export function codexFallbackOrderFile(homeDir) {
   return path.join(homeDir, '.claude', 'codex-fallback-order.json');
 }
@@ -584,7 +584,6 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   const geminiKey = loadGeminiKey(homeDir);
   const openrouterKey = loadEnvKey(homeDir, 'openrouter.env', 'OPENROUTER_API_KEY');
   const deepseekKey = loadDeepseekKey(homeDir);
-  const preferFree = process.env.CODEX_DO_PREFER_FREE === '1';
   const geminiAvailable = !geminiKey || executableAvailable('gemini');
   const qwenAvailable = !(deepseekKey || openrouterKey) || executableAvailable('qwen');
   if (geminiKey && !geminiAvailable) console.error('[codex-do] gemini-cli の CLI(gemini) が見つからないため候補から外します');
@@ -611,7 +610,14 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   }
   const ccDeepseek = cheapCodeBackend('cheap-code:deepseek', homeDir);
   const ccGlm = cheapCodeBackend('cheap-code:glm', homeDir);
-  const ordered = preferFree ? [ccDeepseek, ccGlm, gemini] : [gemini, ccDeepseek, ccGlm];
+  // 2026-10-29 実測: gemini-cli を既定の先頭にした根拠（2026-09-03 の「Gemini Flash 5/5」品質実測）は、
+  // gemini CLI 側の sandbox 不調（run_shell_command のポリシー拒否・workspace 解決失敗で無音停滞）により
+  // 10-23〜10-28 のフォールバックで 15/15 が最大600秒を廃棄してタイムアウトした。同時期に
+  // cheap-code:deepseek は 141〜482 秒で成功しており、品質も 2026-09-03 実測で同率(5/5 対 5/5)。
+  // cost-improve-loop の writeCodexFallbackOrder も gemini-cli を最後に置くため、既定を
+  // 「成功が速く確実な cheap-code → 最終手段の gemini-cli」に揃える
+  // （delegation-health:fallback_chain_timeout 2026-10-27 起票の対処）。
+  const ordered = [ccDeepseek, ccGlm, gemini];
   return ordered.filter(Boolean);
 }
 

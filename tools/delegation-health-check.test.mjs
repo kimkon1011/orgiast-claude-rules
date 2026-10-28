@@ -1281,12 +1281,11 @@ test('empty_diff が付いても cooldown 起動省略だけの fallback 行は�
   assert.equal(collectFindings({ home: dir, now: NOW }).some((f) => f.id === 'lane_outage_unrepaired' && f.provider === 'fallback'), false);
 });
 
-test('chain に gemini-cli の実失敗が混ざる fallback 行は cooldown 名指しでも high の全滅のまま', () => {
+test('chain に gemini-cli の実失敗が混ざっても stderrTail が cooldown なら外部要因として全滅の high にしない', () => {
   const dir = home();
   const gemini = { backend: 'gemini-cli', model: 'gemini-3.7-flash', status: 1, timedOut: false, spawnFailed: false, out: 0, policyDenials: 8, outcome: 'blocked' };
   write(dir, 'executor-usage.jsonl', [10, 11, 12].map((min) => row(FALLBACK_COOLDOWN_ROW(min, { chain: [gemini, ...FALLBACK_COOLDOWN_ROW(min).chain] }))).join(''));
-  const outage = collectFindings({ home: dir, now: NOW }).find((f) => f.id === 'lane_outage_unrepaired' && f.provider === 'fallback');
-  assert.ok(outage);
+  assert.equal(collectFindings({ home: dir, now: NOW }).some((f) => f.id === 'lane_outage_unrepaired' && f.provider === 'fallback'), false);
 });
 
 test('cooldown を名指ししない cheap-code exit 3 の fallback 行は high の全滅のまま', () => {

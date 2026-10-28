@@ -232,9 +232,16 @@ export function isEmptyDiffEscalationRow(row = {}) {
 // 名指ししない行は対象外(本物の障害を隠さない)。cooldown を張った当の行(「利用不可(402)」)も同じ外部要因。
 export function isFallbackCooldownSkipRow(row = {}) {
   if (row?.provider !== 'fallback') return false;
+  // stderrTail が cheap-code 全体の cooldown メッセージを含む行は外部要因で投げられなかっただけで、
+  // レーン障害ではない。47件の実測（2026-10-27）から、chain 全項目の every では gemini-cli
+  // が混ざると false になってしまい cooldown スキップ行が attempts に入り込んでいた。
+  if (typeof row.stderrTail === 'string' && /クールダウン中です|起動を省略しました/.test(row.stderrTail)) return true;
   const chain = Array.isArray(row?.chain) ? row.chain : [];
-  return chain.length > 0
-    && chain.every((item) => String(item?.backend ?? '').startsWith('cheap-code:') && Number(item?.status) === 3 && /クールダウン中|利用不可\((?:402|429)\)/.test(String(item?.stderrTail ?? '')));
+  if (chain.length === 0) return false;
+  // chain 内の cheap-code バックエンドがすべて status===3 かつ cooldown/402/429 なら cooldown スキップ
+  const ccBackends = chain.filter((item) => String(item?.backend ?? '').startsWith('cheap-code:'));
+  if (ccBackends.length === 0) return false;
+  return ccBackends.every((item) => Number(item?.status) === 3 && /クールダウン中|利用不可\((?:402|429)\)/.test(String(item?.stderrTail ?? '')));
 }
 
 // フォールバック先の子プロセスが OS エラーで起動できなかった行(例: spawn ENAMETOOLONG / ENOENT)。

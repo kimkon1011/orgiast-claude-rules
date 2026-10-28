@@ -519,19 +519,19 @@ test('先行ゲートが全て降格された場合は第2段の監査で手渡�
     '',
     '恒久策: 一回限り: この判断だけは kim に確認する。',
     '',
-    '次に kim がすること: A案とB案のどちらを選ぶか教えてください。',
+    '次に kim がすること: 見積を据え置くか値引きするか教えてください。',
     'この後の自動進行: なし',
     'このセッション: /session-close は不要なので、このセッションを閉じてよい',
   ].join('\n');
   const asks = [];
   const ask = async ({ provider }) => {
     asks.push(provider);
-    return { text: JSON.stringify({ verdict: 'block', violations: [{ rule: 3, quote: 'A案とB案のどちらを選ぶか教えてください', fix: '推奨案を自分で決めて当ターン内に実行する' }], learned: [] }) };
+    return { text: JSON.stringify({ verdict: 'block', violations: [{ rule: 3, quote: '見積を据え置くか値引きするか教えてください', fix: '推奨案を自分で決めて当ターン内に実行する' }], learned: [] }) };
   };
   const result = await run(
     { session_id: 'second-stage', assistant_text: text },
     { assistantText: text, humanText: '', raw: '' },
-    { mode: 'block', ask, home },
+    { mode: 'block', ask, home, policyOptions: { notify: async () => ({ delivered: 'suppressed' }) } },
   );
   assert.equal(asks.length, 1, '第2段の監査が1回だけ走る');
   assert.equal(result.record.verdict, 'block');

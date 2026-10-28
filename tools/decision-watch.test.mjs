@@ -19,7 +19,7 @@ function fixture(t, messages = [message('100'), message('101', '本文【判断�
     if (options.method === 'POST') {
       if (url.endsWith('/users/@me/channels')) return { ok: true, json: async () => ({ id: '999' }) };
       sent.push(JSON.parse(options.body).content);
-      return { ok: true };
+      return { ok: true, status: 200, json: async () => ({ id: String(1000 + sent.length), channel_id: '999' }) };
     }
     return { ok: true, json: async () => url.includes('/messages?') ? messages : { guild_id: '888' } };
   } };

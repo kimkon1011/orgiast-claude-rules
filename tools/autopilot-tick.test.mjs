@@ -29,7 +29,7 @@ function discord(t, overrides = {}) {
     if (url.endsWith('/users/@me/channels')) return { ok: true, json: async () => ({ id: 'dm' }) };
     const parsed = new URL(url), channel = parsed.pathname.split('/')[4];
     if (unavailable.has(channel)) return { ok: false, status: 503 };
-    if (init.method === 'POST') { sent.push(JSON.parse(init.body).content); return { ok: true }; }
+    if (init.method === 'POST') { sent.push(JSON.parse(init.body).content); return { ok: true, status: 200, json: async () => ({ id: snow(sent.length), channel_id: channel }) }; }
     const after = BigInt(parsed.searchParams.get('after'));
     return { ok: true, json: async () => channels[channel].filter((m) => BigInt(m.id) > after).sort((a, b) => BigInt(a.id) < BigInt(b.id) ? -1 : 1).slice(0, 100).reverse() };
   };

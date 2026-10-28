@@ -534,12 +534,19 @@ function cheapCodeBackend(name, homeDir) {
   const cooldownFile = path.join(homeDir, '.claude', 'provider-cooldown.json');
   // 仕様C2b: 定額レーン glm が usage_limit でクールダウン中のときは、同じ位置を deepseek へ自動差し替えする。
   // provider-limit-history.jsonl で until が未来の provider は候補から外す(glm は deepseek へ差し替え、deepseek は除外)。
+  // 🔴 deepseek は provider-cooldown.json の billing provider(openrouter)の cooldown も見る。
+  //    HTTP 402 残高切れが provider-cooldown.json に openrouter キーで書かれるのに、
+  //    history.jsonl だけ見ていると恒久課金切れの deepseek が毎回フォールバック候補に戻る
+  //    (2026-10-29 実測: delegation-health lane_outage_unrepaired が毎日再起票)。
   const historyFile = path.join(homeDir, '.claude', 'provider-limit-history.jsonl');
-  const limitedByHistory = providerLimitedUntil(historyFile, provider === 'deepseek' ? 'openrouter' : provider) > 0;
-  if (provider === 'deepseek' && limitedByHistory) return null;
+  const billingName = provider === 'deepseek' ? 'openrouter' : provider;
+  const limitedByHistory = providerLimitedUntil(historyFile, billingName) > 0;
+  const inCooldown = provider === 'deepseek' && providerCooldownMs(billingName, Date.now(), cooldownFile) > 0;
+  if (provider === 'deepseek' && (limitedByHistory || inCooldown)) return null;
   if (provider === 'glm' && (limitedByHistory || providerCooldownMs('glm', Date.now(), cooldownFile) > 0)) {
     if (!loadDeepseekKey(homeDir)) return null;
     if (providerLimitedUntil(historyFile, 'openrouter') > 0) return null;
+    if (providerCooldownMs('openrouter', Date.now(), cooldownFile) > 0) return null;
     console.error('[codex-do] cheap-code:glm は usage_limit クールダウン中のため cheap-code:deepseek へフォールバックします');
     return { kind: 'cheap-code', name: 'cheap-code:deepseek', provider: 'deepseek', model: GATEWAY_MODELS.deepseek };
   }

@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { executorExitStatus } from './executor-status.mjs';
@@ -639,9 +640,99 @@ export const POLICY_STALL_MIN_ELAPSED_SECS = 300;
 export const POLICY_STALL_MIN_OUTPUT_CHARS = 400;
 export const POLICY_STALL_MIN_DENIALS = 3;
 export const POLICY_DENIAL_PATTERN = /tool execution denied by policy/gi;
+export const POLICY_DENIAL_CACHE_MAX_AGE_MS = 3600_000; // 1時間
+export const POLICY_DENIAL_DECAY_COUNT = 2; // 2回未満の denial はクリーンアップ対象
+export const POLICY_DENIALS_STORE = 'policy-denials.json';
 
 export function countPolicyDenials(text) {
   return typeof text === 'string' ? (text.match(POLICY_DENIAL_PATTERN) || []).length : 0;
+}
+
+// SHA256 でコマンド文字列から denial 台帳のキーを派生する。
+// 「JWT ベースの省略制御」のトークン相当: このハッシュが denial 状態の一意な識別子になる。
+export function policyDenialKey(command) {
+  if (!command || typeof command !== 'string') return null;
+  try {
+    return crypto.createHash('sha256').update(command, 'utf8').digest('hex');
+  } catch {
+    // crypto が使えない環境（古い node）では簡易ハッシュで代替
+    let hash = 0;
+    for (let i = 0; i < command.length; i++) { const c = command.charCodeAt(i); hash = ((hash << 5) - hash) + c; hash = hash & hash; }
+    return `sha1-${Math.abs(hash).toString(16)}`;
+  }
+}
+
+// 永続 denial 台帳を読み込む。存在しなければ空オブジェクトを返す。
+export function loadPolicyDenials({ home = process.env.ORGIAST_HOME || os.homedir() } = {}) {
+  const file = path.join(home, '.claude', POLICY_DENIALS_STORE);
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')) || {}; } catch (e) { if (e.code === 'ENOENT') return {}; throw e; }
+}
+
+// 永続 denial 台帳を書き込む（アトミック更新）。
+export function savePolicyDenials(store, { home = process.env.ORGIAST_HOME || os.homedir() } = {}) {
+  const file = path.join(home, '.claude', POLICY_DENIALS_STORE);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = file + '.' + process.pid + '.tmp';
+  const body = JSON.stringify(store, null, 2) + '\n';
+  fs.writeFileSync(tmp, body, 'utf8');
+  try { fs.renameSync(tmp, file); } catch (e) {
+    if (!['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) throw e;
+    try { fs.writeFileSync(file, body, 'utf8'); } catch { /* 諦める。記録なしでも実行は続ける */ }
+    try { fs.unlinkSync(tmp); } catch {}
+  }
+}
+
+// 特定コマンドが直近に policy denial に遭ったかを確認する。
+// 返り値: { denied: boolean, record: object|null }
+export function hasRecentPolicyDenial(command, { home, now = new Date() } = {}) {
+  const key = policyDenialKey(command);
+  if (!key) return { denied: false, record: null };
+  const store = loadPolicyDenials({ home });
+  const entry = store[key];
+  if (!entry) return { denied: false, record: null };
+  const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const lastSeenMs = Date.parse(entry.lastSeen);
+  if (!Number.isFinite(lastSeenMs) || nowMs - lastSeenMs > POLICY_DENIAL_CACHE_MAX_AGE_MS) return { denied: false, record: entry }; // 期限切れ
+  return { denied: entry.count >= POLICY_STALL_MIN_DENIALS, record: entry };
+}
+
+// コマンドの denial を永続台帳に記録する。既存エントリとマージ（回数加算・最終時刻更新）。
+export function recordPolicyDenial(command, count, backend, { home, now = new Date() } = {}) {
+  const key = policyDenialKey(command);
+  if (!key) return;
+  const store = loadPolicyDenials({ home });
+  const iso = now instanceof Date ? now.toISOString() : new Date(now).toISOString();
+  const existing = store[key];
+  if (existing) {
+    existing.count = (existing.count || 0) + count;
+    existing.lastSeen = iso;
+    existing.lastBackend = backend || existing.lastBackend;
+  } else {
+    store[key] = {
+      command: command.slice(0, 200), // 200字で切り詰め
+      count,
+      firstSeen: iso,
+      lastSeen: iso,
+      lastBackend: backend || 'unknown'
+    };
+  }
+  savePolicyDenials(store, { home });
+}
+
+// 古い denial 記録を削除する（1時間以上前で回数が閾値未満）。
+export function prunePolicyDenials({ home, now = new Date() } = {}) {
+  const store = loadPolicyDenials({ home });
+  const cutoff = (now instanceof Date ? now : new Date(now)).getTime() - POLICY_DENIAL_CACHE_MAX_AGE_MS;
+  let changed = false;
+  for (const [key, entry] of Object.entries(store)) {
+    const lastSeenMs = Date.parse(entry.lastSeen);
+    if (Number.isFinite(lastSeenMs) && lastSeenMs < cutoff && (entry.count || 0) < POLICY_DENIAL_DECAY_COUNT) {
+      delete store[key];
+      changed = true;
+    }
+  }
+  if (changed) savePolicyDenials(store, { home });
+  return { entries: Object.keys(store).length, pruned: changed };
 }
 
 // 実時間待ちのテストを避けるため、閾値秒と再評価間隔は環境変数で注入できる（正の数だけ採用）。
@@ -951,6 +1042,8 @@ const treeBefore = treeSnapshot();
 // (2026-10-19 実測: fallback の直近3件中2件が kind:verify の空diff)。kind を優先する。
 const wantedEdit = wantsEdit(taskKind, instruction, review);
 const started = Date.now();
+// 古い denial 記録（1時間以上前かつ2回未満）を除去して台帳を肥大させない。
+try { prunePolicyDenials({ home }); } catch { /* 起動を阻害しない */ }
 let mockIndex = 0;
 
 
@@ -1009,6 +1102,9 @@ function execute(command, commandArgs, options = {}) {
           minElapsedSecs: policyStallMinElapsedSecs(process.env)
         })) return;
       abortedPolicyStall = true;
+      // 同一コマンドを次 tick で再実行させないため、拒否を永続台帳へ記録する。
+      // これが無いと worktree 削除のような強制終了経路が denial を消し、同じループを繰り返す。
+      try { recordPolicyDenial(command, countPolicyDenials(stderr), options.backendLabel || 'unknown', { home }); } catch (e) { /* 記録失敗でも停止は止めない */ }
       console.error(`
 [codex-do] ${command} はポリシー拒否が続き、出力 ${outputChars} 文字のまま停滞したため停止します`);
       killProcessTree(child);
@@ -1300,6 +1396,14 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
     if (quotaCheck.matched) console.error(`[codex-do] Codex usage limit detected: ${quotaCheck.pattern} at index ${quotaCheck.index}. Context: "${quotaCheck.snippet}"`);
     console.error(`[codex-do] Falling back to an agentic CLI...`);
 
+    // 同一指示の直近 denial が記録されている場合、フォールバック全体を省略して再ループを防ぐ。
+    // （policyDenials 記録が無いと次 tick で同じコマンドを再実行し、worktree 削除のような事故を繰り返す）
+    const priorDenial = hasRecentPolicyDenial(prompt, { home });
+    if (priorDenial.denied) {
+      const rec = priorDenial.record || {};
+      console.error(`[codex-do] この指示は直近 ${rec.count} 回ポリシー拒否されているためフォールバックを省略します（次 tick での再実行防止。${rec.lastSeen || '?'} 時点）`);
+      result = { status: 1, outputChars: 0, output: '', stderr: 'policy denied (recorded)', timedOut: false, aborted: 'policy_stall_skip' };
+    }
     const resolvedBackends = resolveFallbackBackends(home);
     const backends = skipCoolingBackends(resolvedBackends, coolingBackendNames(home));
     if (backends.length === 0) {
@@ -1326,7 +1430,8 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
               env: buildGeminiEnv(process.env, backend.apiKey),
               shell: process.platform === 'win32',
               timeoutSecs: backendTimeout,
-              abortPolicyStall: true
+              abortPolicyStall: true,
+              backendLabel: backend.name
             })
           : backend.kind === 'cheap-code'
             ? await executeCheapCode(backend, backendTimeout)

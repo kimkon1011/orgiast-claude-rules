@@ -7,7 +7,7 @@ import vm from 'node:vm';
 import { main as registerTasks } from './register-auto-progress-task.mjs';
 import { isNoopPromise, extractPromise, extractNextKim, applyPromise, buildRecord, record, readLedger, writeLedger, ledgerFile, rowKey, originLine } from './auto-progress-ledger.mjs';
 import { run as watch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, forgiveNoExecutorResumes, main as watchMain, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS, formatDoneMessage, readableReason, formatDoneBacklogMessages } from './auto-progress-watch.mjs';
-import { run as digest, selectRows, formatDigest, digestGroupKey, isUnattendedRow, WINDOW_MS, MAX_ITEMS, needsDm, verdictOf, cleanText, isHumanActionRequired, waitingNotificationKey } from './auto-progress-digest.mjs';
+import { run as digest, selectRows, formatDigest, digestGroupKey, isUnattendedRow, WINDOW_MS, MAX_ITEMS, needsDm, verdictOf, cleanText, isHumanActionRequired, waitingNotificationKey, chunkMessage } from './auto-progress-digest.mjs';
 import { runRegisterPs1 } from './lib/run-register-ps1.mjs';
 
 const tempHomes = [];
@@ -425,7 +425,7 @@ test('watch: nextKimが空/なしを優先して古い順に最大4件を再開'
   assert.deepEqual(resumed, ['direct-old', 'direct-mid', 'direct-new', 'waiting-old']);
 });
 
-test('digest: 大量の完了も一通に集約し上位以外を次回へ分割しない', async () => {
+test('digest: 大量の完了も全件を名前で出し、次回へ回さない', async () => {
   const now = Date.now(), home = tmp();
   const rows = Array.from({ length: MAX_ITEMS + 2 }, (_, i) => ({ sessionId: `s${i}`, status: 'done', promise: `作業${i}`, ts: new Date(now - WINDOW_MS).toISOString(), doneAt: new Date(now - H).toISOString() }));
   const messages = [];
@@ -433,10 +433,13 @@ test('digest: 大量の完了も一通に集約し上位以外を次回へ分割
   const first = await digest({ home, slot: '朝', now, io });
   assert.equal(first.count, MAX_ITEMS + 2);
   assert.match(messages[0], /完了 12/);
-  assert.ok(messages[0].split('\n').length <= 10);
+  // 12件全件が名前つきで載る（件数だけや「ほか N 件」にしない）
+  for (let i = 0; i < MAX_ITEMS + 2; i++) {
+    assert.match(messages.join('\n'), new RegExp(`・完了: 作業${i}`));
+  }
   assert.equal((await digest({ home, slot: '朝', now: now + WINDOW_MS, io })).count, 0);
   assert.deepEqual(await digest({ home, slot: '朝', now: now + WINDOW_MS * 2, io }), { sent: false, count: 0 });
-  assert.ok(messages.every(message => message.length <= 2000));
+  assert.ok(messages.every(message => message.length <= 1800));
 });
 
 test('schedule: watchは毎時・実行上限55分とし既存PCも更新する', () => {
@@ -583,7 +586,7 @@ test('digest: 長文でも件の途中で切らず、成功した宛先を失敗
   assert.deepEqual(calls, ['a', 'b', 'b']);
 });
 
-test('digest: 長文も一通10行以内に集約し再送しない', async () => {
+test('digest: 長文でも全件を名前で出し、1800字を超えたら分割して届ける', async () => {
   const home = tmp(), now = Date.parse('2026-10-15T09:00:00+09:00'), messages = [];
   const rows = Array.from({ length: MAX_ITEMS, needsDm, verdictOf }, (_, i) => ({ sessionId: `long-${i}`, status: 'stalled', ts: new Date(now - H).toISOString(), promise: '確認'.repeat(100), reason: '理由'.repeat(100), nextKim: '選択'.repeat(100) }));
   const io = { readLedger: () => rows, notify: async text => { messages.push(text); return { delivered: 'dm' }; } };
@@ -591,11 +594,12 @@ test('digest: 長文も一通10行以内に集約し再送しない', async () =
   assert.equal(first.count, MAX_ITEMS);
   const second = await digest({ home, now, slot: '朝', io });
   assert.equal(second.sent, false);
-  for (const message of messages) {
-    assert.ok(message.length <= 1800);
-    assert.ok(message.split('\n').length <= 10);
-    assert.ok(message.includes('あなたの判断待ち:'));
-  }
+  const body = messages.join('\n');
+  // 全件が名前つきで載り、どの断片も1800字以内
+  // （nextKim が具体的操作の行は「あなたの判断待ち」区分に出る）
+  assert.equal(body.split('\n').filter(line => line.startsWith('・あなたの判断待ち:')).length, MAX_ITEMS);
+  assert.ok(messages.every(message => message.length <= 1800), `message length was ${messages.map(m => m.length)}`);
+  assert.ok(body.includes('あなたの判断待ち:'));
 });
 
 test('digest: 予定の日付と固有名詞を壊さず、対応不要もなしにまとめる', () => {
@@ -854,7 +858,7 @@ test('digest: 朝枠の定時報告（朝枠・変化0件・進行中1件→sent
   assert.equal(eveningSent, 0);
 });
 
-test('digest(要件5): 61件相当でも1通・1800字以内・「ほか N 件」にまとめる', () => {
+test('digest(要件5): 61件相当でも全件を名前で出し、1800字を超える断片は分割する', () => {
   // 61件の行を作成
   const doneRows = Array.from({ length: 40 }, (_, i) => ({
     sessionId: `done-${i}`, status: 'done', promise: `機能${i}の実装と検証完了`,
@@ -881,16 +885,19 @@ test('digest(要件5): 61件相当でも1通・1800字以内・「ほか N 件�
   // あなたの判断待ちが最上段
   const lines = text.split('\n');
   assert.match(lines[1], /^・あなたの判断待ち:/);
-  // 「ほか N 件」が含まれる
-  assert.match(text, /・あなたの判断待ち: ほか \d+件/);
-  assert.match(text, /・完了: ほか \d+件/);
-  assert.match(text, /・止まっている: ほか \d+件/);
-  // 1800字以内
-  assert.ok(text.length <= 1800, `text length was ${text.length}`);
+  // 「ほか N 件」に丸めず、全件の名前が載る
+  assert.doesNotMatch(text, /ほか \d+件/);
+  assert.equal(lines.filter(line => line.startsWith('・あなたの判断待ち:')).length, 11);
+  assert.equal(lines.filter(line => line.startsWith('・完了:')).length, 40);
+  assert.equal(lines.filter(line => line.startsWith('・止まっている:')).length, 10);
+  assert.match(text, /・あなたの判断待ち: 顧客10への見積もり/);
+  assert.match(text, /・完了: 機能39の実装と検証完了/);
+  // 各断片1800字以内（全件を載せるため必要なら分割を許容）
+  for (const part of chunkMessage(text)) assert.ok(part.length <= 1800, `part length was ${part.length}`);
 });
 
 // ---- 進捗DMの中身（2026-10-23 追加修正） ------------------------------------
-test('digest: 72時間より古い判断待ちは個別に出さず、末尾の集計1行にまとめる', () => {
+test('digest: 72時間より古い判断待ちも件数だけにせず全件を名前で出す', () => {
   const now = Date.parse('2026-10-23T19:16:00+09:00');
   const fresh = [
     { sessionId: 'f1', status: 'waiting_user', promise: '見積の承認', nextKim: '金額を承認', ts: new Date(now - 2 * H).toISOString() },
@@ -903,12 +910,14 @@ test('digest: 72時間より古い判断待ちは個別に出さず、末尾の�
   const closed = { sessionId: 'closed', status: 'superseded', promise: '更新済みの判断待ち', nextKim: '更新済みの操作', ts: new Date(now - H).toISOString() };
   const all = [...fresh, ...stale, closed];
   const text = formatDigest([], now, '作業用011', { allRows: all, waitingRows: all, doneRows: [], stalledRows: [] });
-  assert.match(text, /あなたの判断待ち 2件/);
+  assert.match(text, /あなたの判断待ち 22件/);
   assert.match(text, /・あなたの判断待ち: 見積の承認/);
   assert.match(text, /・あなたの判断待ち: 入稿データ確認/);
-  // 72時間より古い分・閉じた分は個別に出さない
-  assert.doesNotMatch(text, /古い判断待ち|古い作業|更新済みの判断待ち/);
-  assert.equal(text.split('\n').at(-1), '・3日以上前の判断待ち 20件（必要なら次のセッションで整理します）');
+  // 72時間より古い20件も名前つきで全件載る（2026-10-23 の「件数だけ」不具合の合格条件）
+  assert.match(text, /・あなたの判断待ち: 古い判断待ち0/);
+  assert.match(text, /・あなたの判断待ち: 古い判断待ち19/);
+  // 閉じた行は出さない
+  assert.doesNotMatch(text, /更新済みの判断待ち|3日以上前/);
 });
 
 test('digest: バッククォートの中身を残し、文に穴を開けない', () => {
@@ -926,7 +935,7 @@ test('digest: バッククォートの中身を残し、文に穴を開けない
   assert.doesNotMatch(command, /`/);
 });
 
-test('digest: 判断待ちが22件でも完了・止まっているの行が必ず出る（1800字・最大5件）', () => {
+test('digest: 判断待ち22件も全件を名前で出し、完了・止まっているの行も必ず出る', () => {
   const now = Date.parse('2026-10-23T19:16:00+09:00');
   const waitingRows = Array.from({ length: 22 }, (_, i) => ({
     sessionId: `w${i}`, status: 'waiting_user', promise: `判断${i}${'長い説明'.repeat(30)}`, nextKim: `操作${i}${'確認事項'.repeat(30)}`,
@@ -941,19 +950,18 @@ test('digest: 判断待ちが22件でも完了・止まっているの行が必�
   assert.match(text, /・あなたの判断待ち: 判断0/);
   assert.match(text, /・完了: 完了作業0/);
   assert.match(text, /・止まっている: 停滞0/);
-  assert.match(text, /・あなたの判断待ち: ほか \d+件/);
-  assert.doesNotMatch(text, /・完了: ほか/); // 完了は2件なので全件出す
-  // 止まっているは5件＝上限内なので全件を名前で出す（「ほか」は付けない）
+  // 22件全件・2件の完了・5件の停滞が名前つきで載り、「ほか N 件」は使わない
+  assert.match(text, /・あなたの判断待ち: 判断21/);
+  assert.doesNotMatch(text, /ほか \d+件/);
   assert.match(text, /・止まっている: 停滞4 — 自動再開していません/);
-  assert.doesNotMatch(text, /・止まっている: ほか/);
   const lines = text.split('\n');
-  assert.ok(text.length <= 1800, `text length was ${text.length}`);
+  for (const part of chunkMessage(text)) assert.ok(part.length <= 1800, `part length was ${part.length}`);
   for (const line of lines.filter(l => l.startsWith('・'))) {
     assert.ok(line.length <= 80, `line too long (${line.length}): ${line}`);
   }
 });
 
-test('digest: 各区分は1800字に収まる限り最大5件を名前で出し、超過分だけ「ほか N 件」', () => {
+test('digest: 各区分とも上限なしで全件を名前で出す', () => {
   const now = Date.parse('2026-10-23T19:16:00+09:00');
   const make = (prefix, n, extra) => Array.from({ length: n }, (_, i) => ({
     sessionId: `${prefix}${i}`, promise: `${prefix}作業${i}`, ts: new Date(now - i * 60000).toISOString(), ...extra,
@@ -966,12 +974,11 @@ test('digest: 各区分は1800字に収まる限り最大5件を名前で出し�
 
   for (const [label, prefix] of [['あなたの判断待ち', '判断'], ['完了', '完了'], ['止まっている', '停滞'], ['進行中', '進行']]) {
     const items = text.split('\n').filter(line => line.startsWith(`・${label}:`) && !line.includes('ほか'));
-    assert.equal(items.length, 5, `${label} は5件`);
-    for (let i = 0; i < 5; i++) assert.match(text, new RegExp(`・${label}: (?:［[^］]*］)?${prefix}作業${i}`));
-    assert.doesNotMatch(text, new RegExp(`・${label}: .*${prefix}作業5`));
-    assert.match(text, new RegExp(`・${label}: ほか 3件`));
+    assert.equal(items.length, 8, `${label} は8件全件`);
+    for (let i = 0; i < 8; i++) assert.match(text, new RegExp(`・${label}: (?:［[^］]*］)?${prefix}作業${i}`));
+    assert.doesNotMatch(text, new RegExp(`・${label}: ほか`));
   }
-  assert.ok(text.length <= 1800, `text length was ${text.length}`);
+  for (const part of chunkMessage(text)) assert.ok(part.length <= 1800, `part length was ${part.length}`);
 });
 
 test('digest: 進行中も件数だけでなく名前で出す（最終判定が新しい順）', () => {
@@ -1546,7 +1553,12 @@ test('digest: 最新の代表行で本文・72時間・夜間を判定し古い�
   assert.match(text, /あなたの判断待ち 1件/);
   assert.match(text, /最新の説明/);
   assert.doesNotMatch(text, /夜間に出た|3日以上前/);
-  assert.match(formatDigest([], now, 'PC', { waitingRows: [old, { ...old, sessionId: 'old2' }] }), /3日以上前の判断待ち 1件/);
+  // 72時間より古い判断待ちも件数だけにせず名前で出る（グループ1件として「×2」付き）
+  const staleText = formatDigest([], now, 'PC', { waitingRows: [old, { ...old, sessionId: 'old2' }] });
+  assert.match(staleText, /あなたの判断待ち 1件/);
+  assert.match(staleText, /古い説明/);
+  assert.match(staleText, /同じ内容 ×2/);
+  assert.doesNotMatch(staleText, /3日以上前/);
   assert.match(formatDigest([], now, 'PC', { waitingRows: [old, recent], nightWaitingKeys: new Set([waitingNotificationKey(recent)]) }), /夜間に出た判断待ち/);
 });
 

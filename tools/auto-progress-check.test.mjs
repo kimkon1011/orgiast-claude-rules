@@ -159,15 +159,19 @@ test('watch budget prioritizes checks and leaves room before hourly trigger', as
     transcriptEvidence: () => assert.fail('legacy must stop with insufficient time') } });
   assert.equal(checks, 1);
 });
-test('digest: hundreds of rows across three categories stay within one DM and 1800 chars', async () => {
+test('digest: hundreds of rows across three categories are all delivered in 1800-char chunks', async () => {
   const home = tmp(), messages = [];
   const rows = Array.from({ length: 200 }, (_, i) => ({ sessionId: `s${i}`, promise: '長い約束'.repeat(100), status: i % 3 === 0 ? 'done' : i % 3 === 1 ? 'waiting_user' : 'open',
     ts: new Date(now - 1000).toISOString(), doneAt: new Date(now).toISOString(), nextKim: i % 3 === 1 ? '判断してください'.repeat(100) : 'なし' }));
   const io = { readLedger: () => rows, notify: async text => { messages.push(text); return { delivered: 'dm' }; } };
-  // 変化分（完了67件・判断待ち67件）だけを数え、枠は1通まで。
+  // 変化分（完了67件・判断待ち67件）を数え、件数を削らず複数DMに分割して全件届ける。
   const result = await digest({ home, now, slot: '朝', io });
-  assert.equal(result.parts, 1); assert.equal(result.count, 134);
-  assert.ok(messages[0].length < 1800);
+  assert.equal(result.count, 134);
+  assert.ok(result.parts >= 2, `parts was ${result.parts}`);
+  const body = messages.join('\n');
+  assert.equal(body.split('\n').filter(line => line.startsWith('・完了:')).length, 67);
+  assert.equal(body.split('\n').filter(line => line.startsWith('・あなたの判断待ち:')).length, 67);
+  assert.ok(messages.every(message => message.length <= 1800), `lengths: ${messages.map(m => m.length)}`);
   assert.equal((await digest({ home, now: now + 3600000, slot: '朝', io })).sent, false);
 });
 

@@ -203,6 +203,16 @@ test('shouldAbortPolicyStall は長時間・低出力・拒否3回が揃った�
   assert.equal(shouldAbortPolicyStall({ elapsedSecs: 900, outputChars: NaN, stderr: denied3 }), false);
 });
 
+// 2026-10-28 実測: gemini が 1120 字・拒否4回の後に無音で 600 秒空転（出力字数 400 超で従来判定が不発）。
+test('shouldAbortPolicyStall は拒否3回以上かつ stdout が無音で続いたとき、出力が400字超でも中断する', () => {
+  const denied4 = 'tool execution denied by policy\n'.repeat(4);
+  assert.equal(shouldAbortPolicyStall({ elapsedSecs: 400, outputChars: 1120, stderr: denied4, idleSecs: 350 }), true);
+  assert.equal(shouldAbortPolicyStall({ elapsedSecs: 400, outputChars: 1120, stderr: denied4, idleSecs: 100 }), false);
+  assert.equal(shouldAbortPolicyStall({ elapsedSecs: 400, outputChars: 1120, stderr: denied4 }), false);
+  assert.equal(shouldAbortPolicyStall({ elapsedSecs: 250, outputChars: 1120, stderr: denied4, idleSecs: 250 }), false);
+  assert.equal(shouldAbortPolicyStall({ elapsedSecs: 400, outputChars: 1120, stderr: 'tool execution denied by policy\n'.repeat(2), idleSecs: 350 }), false);
+});
+
 // 実測（2026-10-12〜10-14 の executor-usage.jsonl）: fallback 行が毎回 secs≈600.05 で
 // cheap-code:deepseek を打ち切っていた（chain の1本目が必ず600秒）。同時期の成功runは
 // 507/517/524/576 秒に分布＝600 の直下で切られていた。--timeout 900 のセッションが最も多く

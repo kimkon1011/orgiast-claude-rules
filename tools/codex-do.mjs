@@ -650,18 +650,24 @@ const positiveEnv = (value, fallback) => Number.isFinite(Number(value)) && Numbe
 export const policyStallMinElapsedSecs = (env = {}) => positiveEnv(env.CODEX_DO_POLICY_STALL_MIN_ELAPSED_SECS, POLICY_STALL_MIN_ELAPSED_SECS);
 export const policyStallCheckMs = (env = {}) => positiveEnv(env.CODEX_DO_POLICY_STALL_CHECK_MS, 5000);
 
+// 拒否後に少量(400字超)だけ出して無音になる停滞(2026-10-28 実測: gemini が 1120 字・拒否4回の後 600 秒空転)は
+// 出力字数だけでは拾えないため、stdout が無音のまま続いた秒数(idleSecs)でも判定する。
+export const POLICY_STALL_IDLE_SECS = 300;
+
 export function shouldAbortPolicyStall({
   elapsedSecs,
   outputChars,
   stderr,
+  idleSecs,
   minElapsedSecs = POLICY_STALL_MIN_ELAPSED_SECS,
   minOutputChars = POLICY_STALL_MIN_OUTPUT_CHARS,
-  minDenials = POLICY_STALL_MIN_DENIALS
+  minDenials = POLICY_STALL_MIN_DENIALS,
+  minIdleSecs = POLICY_STALL_IDLE_SECS
 } = {}) {
   if (![elapsedSecs, outputChars, minElapsedSecs, minOutputChars, minDenials].every(Number.isFinite)) return false;
-  return elapsedSecs >= minElapsedSecs
-    && outputChars < minOutputChars
-    && countPolicyDenials(stderr) >= minDenials;
+  if (elapsedSecs < minElapsedSecs || countPolicyDenials(stderr) < minDenials) return false;
+  if (outputChars < minOutputChars) return true;
+  return Number.isFinite(idleSecs) && Number.isFinite(minIdleSecs) && idleSecs >= minIdleSecs;
 }
 
 export function shouldAdvanceToNextBackend({ timedOut, status, exhausted, cliMissing, aborted } = {}) {
@@ -993,6 +999,7 @@ function execute(command, commandArgs, options = {}) {
   return new Promise((resolve) => {
     let outputChars = 0, output = '', stderr = '', timedOut = false, abortedPolicyStall = false;
     const callStarted = Date.now();
+    let lastOutputAt = callStarted;
     const callTimeoutSeconds = Number.isFinite(options.timeoutSecs) && options.timeoutSecs > 0
       ? options.timeoutSecs
       : timeoutSeconds;
@@ -1018,7 +1025,9 @@ function execute(command, commandArgs, options = {}) {
           elapsedSecs: (Date.now() - callStarted) / 1000,
           outputChars,
           stderr,
-          minElapsedSecs: policyStallMinElapsedSecs(process.env)
+          idleSecs: (Date.now() - lastOutputAt) / 1000,
+          minElapsedSecs: policyStallMinElapsedSecs(process.env),
+          minIdleSecs: positiveEnv(process.env.CODEX_DO_POLICY_STALL_IDLE_SECS, POLICY_STALL_IDLE_SECS)
         })) return;
       abortedPolicyStall = true;
       console.error(`
@@ -1027,7 +1036,7 @@ function execute(command, commandArgs, options = {}) {
     };
     const stallTimer = setInterval(checkPolicyStall, policyStallCheckMs(process.env));
     stallTimer.unref?.();
-    child.stdout.on('data', (chunk) => { outputChars += chunk.length; output += chunk.toString(); process.stdout.write(chunk); });
+    child.stdout.on('data', (chunk) => { outputChars += chunk.length; lastOutputAt = Date.now(); output += chunk.toString(); process.stdout.write(chunk); });
     child.stderr.on('data', (chunk) => {
       stderr += chunk.toString();
       process.stderr.write(chunk);

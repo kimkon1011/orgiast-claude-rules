@@ -639,7 +639,9 @@ export function isBackendCliMissing(output, stderr) {
 export const POLICY_STALL_MIN_ELAPSED_SECS = 300;
 export const POLICY_STALL_MIN_OUTPUT_CHARS = 400;
 export const POLICY_STALL_MIN_DENIALS = 3;
-export const POLICY_DENIAL_PATTERN = /tool execution denied by policy/gi;
+// gemini-cli は許可ワークスペース外のパス・ignore パターンの読み取り拒否を別文言で出し、それも
+// 『tool execution denied by policy』と同じ停滞を生む（2026-10-27/28 実測: 3件が拒否文言0回扱いで 600 秒 timeout）。
+export const POLICY_DENIAL_PATTERN = /tool execution denied by policy|resolves outside the allowed workspace directories|ignored by configured ignore patterns/gi;
 
 export function countPolicyDenials(text) {
   return typeof text === 'string' ? (text.match(POLICY_DENIAL_PATTERN) || []).length : 0;

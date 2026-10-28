@@ -192,6 +192,16 @@ test('countPolicyDenials は大文字小文字を区別せず拒否回数を数�
   assert.equal(countPolicyDenials('TOOL EXECUTION DENIED BY POLICY'), 1);
 });
 
+// 実測（2026-10-27T14:11Z / 10-28T03:11Z / 10-28T10:12Z）: gemini-cli が 600 秒 out0 で timeout したが、
+// stderr は別文言の読み取り拒否で policyDenials=0 のため停滞打ち切りが働かなかった。
+test('countPolicyDenials は gemini-cli のワークスペース外・ignore 拒否も数え、停滞打ち切りに繋がる', () => {
+  const outside = 'Path "C:\\x\\a.json" resolves outside the allowed workspace directories: C:\\repo or the project temp directory: C:\\t\n';
+  const ignored = 'File path is ignored by configured ignore patterns.\n';
+  assert.equal(countPolicyDenials(outside + ignored + outside), 3);
+  assert.equal(shouldAbortPolicyStall({ elapsedSecs: 600, outputChars: 0, stderr: outside + ignored + outside }), true);
+  assert.equal(shouldAbortPolicyStall({ elapsedSecs: 600, outputChars: 1726, stderr: outside + ignored + outside }), false, '出力が出ている run は切らない');
+});
+
 test('shouldAbortPolicyStall は長時間・低出力・拒否3回が揃ったときだけ中断する', () => {
   const denied3 = 'tool execution denied by policy\n'.repeat(3);
   assert.equal(shouldAbortPolicyStall({ elapsedSecs: 900, outputChars: 164, stderr: denied3 }), true);

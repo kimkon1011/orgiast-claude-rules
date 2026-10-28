@@ -281,7 +281,7 @@ try {
                 $publishSummary = [regex]::Match(($publishOutput -join "`n"), 'memory-publish: files=(\d+) deploy=(yes|skip)')
                 if ($publishSummary.Success) { Write-NightlyLog 'memory-publish' ('ok:files=' + $publishSummary.Groups[1].Value + ' deploy=' + $publishSummary.Groups[2].Value) }
                 else { Write-NightlyLog 'memory-publish' 'error:結果サマリーなし' }
-            } else { Write-NightlyLog 'memory-publish' ('error:' + (Format-NightlyDetail $publishOutput)) }
+            } else { Write-NightlyLog 'memory-publish' ('error:' + (Format-NightlyDetail @($publishOutput | Where-Object { "$_" -notmatch '^除外' }))) }
         } catch { Write-NightlyLog 'memory-publish' ('error:' + $_.Exception.Message) }
         finally { $ErrorActionPreference = $oldPreference }
     } else { Write-NightlyLog 'memory-publish' 'error:ファイルなし' }

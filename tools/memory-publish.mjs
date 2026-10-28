@@ -53,27 +53,43 @@ export async function publishMemories(options = {}) {
   const destination = path.join(repo, 'api', '_memory-bundle.generated.js');
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   if (!fs.existsSync(destination) || fs.readFileSync(destination, 'utf8') !== content) fs.writeFileSync(destination, content);
+  // 夜間の Vercel デプロイ/取得は一時的なタイムアウトで落ちる（2026-10 に4夜 ETIMEDOUT）。1回の失敗で丸1日配布を止めない。
+  const attempts = Math.max(1, options.attempts ?? 3);
+  const retry = async (label, step) => {
+    for (let attempt = 1; ; attempt++) {
+      try { return await step(); } catch (error) {
+        if (attempt >= attempts) throw error;
+        emit(`${label} 再試行 ${attempt}/${attempts - 1}: ${String(error.message || error).split(/\r?\n/)[0]}`);
+        await new Promise(resolve => setTimeout(resolve, options.retryDelayMs ?? 30000));
+      }
+    }
+  };
   let deploymentUrl = state?.deploymentUrl || '';
   if (options.deploy && !unchanged) {
     const command = vercelCommand(options);
-    const deployed = (options.spawnSyncImpl || spawnSync)(command.file, [...command.args, 'deploy', '--prod', '--yes'], {
-      cwd: repo, shell: false, encoding: 'utf8', windowsHide: true, timeout: 300000, maxBuffer: 10 * 1024 * 1024,
+    deploymentUrl = await retry('deploy', () => {
+      const deployed = (options.spawnSyncImpl || spawnSync)(command.file, [...command.args, 'deploy', '--prod', '--yes'], {
+        cwd: repo, shell: false, encoding: 'utf8', windowsHide: true, timeout: 300000, maxBuffer: 10 * 1024 * 1024,
+      });
+      if (deployed.error || deployed.status !== 0) throw new Error(`NG:vercel deploy failed (${deployed.error?.code || deployed.status})`);
+      // vercel CLI は非TTYだと末尾に JSON を出すことがあるので、出力中の最後の https URL を採る。
+      const found = (String(deployed.stdout || '').match(/https:\/\/[^\s"']+/g) || []).at(-1) || '';
+      if (!/^https:\/\/[^\s]+$/.test(found)) throw new Error('NG:deployment URL missing');
+      return found;
     });
-    if (deployed.error || deployed.status !== 0) throw new Error(`NG:vercel deploy failed (${deployed.error?.code || deployed.status})`);
-    // vercel CLI は非TTYだと末尾に JSON を出すことがあるので、出力中の最後の https URL を採る。
-    deploymentUrl = (String(deployed.stdout || '').match(/https:\/\/[^\s"']+/g) || []).at(-1) || '';
-    if (!/^https:\/\/[^\s]+$/.test(deploymentUrl)) throw new Error('NG:deployment URL missing');
     result.deploy = 'yes';
   } else if (options.deploy && unchanged) emit('unchanged: deploy skip');
   if (options.verify) {
     const url = new URL(options.memoryUrl || env.ORGIAST_MEMORY_URL || 'https://orgiast-memoryserve.vercel.app/api/memory');
     url.search = 'manifest=1';
-    const response = await (options.fetchImpl || fetch)(url.toString(), {
-      headers: keyserveAuthHeaders(keyserveSecret(home, env), options.nowMs ?? Date.now(), source.pc), signal: AbortSignal.timeout(10000),
+    await retry('verify', async () => {
+      const response = await (options.fetchImpl || fetch)(url.toString(), {
+        headers: keyserveAuthHeaders(keyserveSecret(home, env), options.nowMs ?? Date.now(), source.pc), signal: AbortSignal.timeout(30000),
+      });
+      if (!response.ok) throw new Error(`NG:verify HTTP ${response.status}`);
+      const manifest = await response.json();
+      if (manifest.version !== 2 || manifest.generatedAt !== bundle.generatedAt) throw new Error('NG:verify generatedAt mismatch');
     });
-    if (!response.ok) throw new Error(`NG:verify HTTP ${response.status}`);
-    const manifest = await response.json();
-    if (manifest.version !== 2 || manifest.generatedAt !== bundle.generatedAt) throw new Error('NG:verify generatedAt mismatch');
     emit('verify: ok');
   }
   // A failed verification must not mark a deployment as successfully published.

@@ -75,7 +75,7 @@ test('対象外ファイルと同居しても正常なfeedbackは引き続きexp
 
 test('伏字にできる webhook URL と40桁hexは伏字で配り、伏字にできない秘密だけ除外して理由を1行出す', () => {
   const f = fixture(); const output = [];
-  fs.writeFileSync(path.join(f.memoryDir, 'feedback_webhook.md'), memory('伏字で共有', 'feedback', 'https://discord.com/api/webhooks/123/token-value と ' + 'a'.repeat(40)));
+  fs.writeFileSync(path.join(f.memoryDir, 'feedback_webhook.md'), memory('伏字で共有', 'feedback', 'https://discord.com/api/webhooks/123/token-value と ' + 'a'.repeat(40) + '\n検出対象の例: "discord.com/api/webhooks/"'));
   fs.writeFileSync(path.join(f.memoryDir, 'feedback_key.md'), memory('危険', 'feedback', '-----BEGIN RSA PRIVATE KEY-----'));
   const result = exportMemories(exportOptions(f, { emit: (line) => output.push(line) }));
   assert.equal(result.exported, 1); assert.equal(result.excluded, 1);

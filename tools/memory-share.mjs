@@ -13,7 +13,7 @@ import { isKimOperated } from './lib/kim-operated.mjs';
 const DEFAULT_MEMORY_URL = 'https://orgiast-memoryserve.vercel.app/api/memory';
 // 伏字化した後の本文に対して判定する。伏字で消せない秘密が残るファイルだけを丸ごと除外する。
 const SECRET_PATTERNS = [
-  ['Discord webhook URL', /discord\.com\/api\/webhooks\/(?!\*\*\*REDACTED\*\*\*)/i],
+  ['Discord webhook URL', /discord\.com\/api\/webhooks\/\d/i],
   ['OpenAI API key', /sk-[A-Za-z0-9]{20,}/],
   ['Groq API key', /gsk_[A-Za-z0-9]{20,}/],
   ['GitHub token', /ghp_[A-Za-z0-9]{20,}/],

@@ -11,6 +11,18 @@ import { classifyHandoff } from './lib/handoff-kind.mjs';
 export const MIN_ENFORCED_LENGTH = 200;
 const FOOTER_PATTERN = /(?:^|\n)次に kim がすること:[ \t]*([^\r\n]*)\r?\n(?:[ \t]*\r?\n)?この後の自動進行:[ \t]*([^\r\n]*)\r?\n(?:[ \t]*\r?\n)?このセッション:[ \t]*([^\r\n]*)$/;
 const MULTIPLE_ACTIONS_PATTERN = /[、,，・]/;
+const ACTION_LABEL_PATTERN = /[①-⑳]|[A-ZＡ-Ｚa-z0-9０-９一二三]案|案[A-ZＡ-Ｚ0-9０-９]|選択肢\s*[0-9０-９]+|(?:番号|記号)で(?:選|答|返)/gu;
+const LABEL_ONLY_REASON = '[NEXT-ACTION-LABEL-ONLY] 「次に kim がすること」にラベル（①・B案・案A など）だけが書かれています。kim はそのラベルの中身を探しに遡る羽目になります（kim 2026-10-28）。(1) kim の過去の決定がある・支払いや同意が要らない・取り消せる判断なら、聞かずに Claude が決めて進め、結果を報告する。この行は「なし」にする (2) どうしても聞くなら、ラベルではなく中身をこの1行に書く（例:「1Password を月 $24.95 で契約するかを はい/いいえ で答える」）。例外は [NEXT-ACTION-LABEL-OK: <理由>]。';
+
+function hasUnexplainedLabel(action) {
+  for (const match of action.matchAll(ACTION_LABEL_PATTERN)) {
+    const suffix = action.slice(match.index + match[0].length);
+    const explanation = suffix.match(/^(?:（([^（）\r\n]*)）|\(([^()\r\n]*)\))/u);
+    if (!explanation || [...(explanation[1] ?? explanation[2]).trim()].length < 8) return true;
+  }
+  return false;
+}
+
 const BACKREF_PATTERN = /前の応答|前々回|前回の応答|上の応答|先ほどの|さっきの|末尾の返信文|前に出した|既に提示|上記の文面|上記の返信|前述|以前の応答|過去の応答|遡って|スクロール/;
 const APPROVAL_PATTERN = /OK|承認|確認|了承|選んで|選択|どちら|可否|返事|返信文|文面/;
 const BACKREF_REASON = '[NEXT-ACTION-BACKREF] 「次に kim がすること」が前の応答を参照しています。kim はこの行だけを見て判断します。確認してほしい文面・選択肢・URL は、3行フッターの直前に「【kim 確認用の全文】」ブロックとして省略せず再掲し、この行は「上の【kim 確認用の全文】を読んで 返事を一言」のようにその応答内で閉じてください（nishi 2026-10-27 厳命・全PC）。例外は [NEXT-ACTION-BACKREF-OK: <理由>]。';
@@ -224,6 +236,11 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
   }
   if (!footer.nextAction) {
     return { decision: 'block', code: 'NEXT-ACTION-EMPTY', reason: '「次に kim がすること:」の値が空です。なし、または具体的な1件を書いてください。' };
+  }
+  const labelOverride = [...source.matchAll(/\[NEXT-ACTION-LABEL-OK:[ \t]*([^\]\r\n]*)\]/g)]
+    .some(([, reason]) => [...reason.trim()].length >= 5);
+  if (hasUnexplainedLabel(footer.nextAction) && !labelOverride) {
+    return { decision: 'block', code: 'NEXT-ACTION-LABEL-ONLY', reason: LABEL_ONLY_REASON };
   }
   if (footer.nextAction !== 'なし' && MULTIPLE_ACTIONS_PATTERN.test(footer.nextAction)) {
     return { decision: 'block', code: 'NEXT-ACTION-MULTIPLE', reason: 'kim への手渡しが2件以上あります。§1.1 最上位原則に従い、まず自分で潰して1件以下にしてください。' };

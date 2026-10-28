@@ -443,7 +443,7 @@ test('人待ちの自動進行はbackgroundだけではblockし台帳チェッ�
 
 test('チャットで答えるだけの返信待ちは台帳チェックを要求しない', () => {
   const replyOnly = `恒久策: 一回限り: この判断だけは kim に確認する
-次に kim がすること: A案とB案のどちらを選ぶか教えてください
+次に kim がすること: 今回の提案を採用するか保留するか教えてください
 この後の自動進行: なし
 このセッション: ${SESSION_PHRASES.open}`;
   assert.notEqual(judgeNextAction(replyOnly, '').code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
@@ -593,7 +593,7 @@ test('指定された遡り語は括弧内やなしで始まる値でも拒否�
 
 test('指定された承認語は直前の全文ブロックが必要', () => {
   for (const word of ['OK', '承認', '確認', '了承', '選んで', '選択', 'どちら', '可否', '返事', '返信文', '文面']) {
-    const result = judgeNextAction(inlineReport(`A案について${word}`));
+    const result = judgeNextAction(inlineReport(`今回の提案について${word}`));
     assert.equal(result.decision, 'block', word);
     assert.equal(result.code, 'NEXT-ACTION-APPROVAL-INLINE', word);
   }
@@ -601,13 +601,13 @@ test('指定された承認語は直前の全文ブロックが必要', () => {
 });
 
 test('直前の全文ブロックを使った判断となし単独は通る', () => {
-  withOpenCheck(input => assert.equal(judgeNextAction(inlineReport('A案かB案を選んでください', inlineContent), '', input).decision, 'pass'));
+  withOpenCheck(input => assert.equal(judgeNextAction(inlineReport('今回の提案を採用するか保留するか選んでください', inlineContent), '', input).decision, 'pass'));
   assert.equal(judgeNextAction(inlineReport('なし')).decision, 'pass');
 });
 
 test('全文見出しはフッター直前40行以内だけ有効で改行形式を問わない', () => {
   for (const newline of ['\n', '\r\n']) {
-    const at40 = inlineReport('A案かB案を選んでください', '【kim 確認用の全文】\n' + '対象の全文\n'.repeat(39)).replaceAll('\n', newline);
+    const at40 = inlineReport('今回の提案を採用するか保留するか選んでください', '【kim 確認用の全文】\n' + '対象の全文\n'.repeat(39)).replaceAll('\n', newline);
     withOpenCheck(input => assert.equal(judgeNextAction(at40, '', input).decision, 'pass'));
     assert.equal(judgeNextAction(at40.replace('【kim 確認用の全文】', `【kim 確認用の全文】${newline}追加行`)).code, 'NEXT-ACTION-APPROVAL-INLINE');
   }
@@ -615,14 +615,14 @@ test('全文見出しはフッター直前40行以内だけ有効で改行形式
 });
 
 test('理由付き例外は本文のどこでも有効で空や短い理由は無効', () => {
-  const action = '前の応答のA案かB案を選んでください';
+  const action = '前の応答の今回の提案を採用するか保留するか選んでください';
   const overrides = '[NEXT-ACTION-BACKREF-OK: 本人の指定があるため]\n[NEXT-ACTION-APPROVAL-INLINE-OK: 本人の指定があるため]\n';
   for (const text of [overrides + inlineReport(action), inlineReport(action, overrides)]) {
     withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
   }
   for (const reason of ['', '    ', '短い']) {
     assert.equal(judgeNextAction(inlineReport('前の応答を参照', `[NEXT-ACTION-BACKREF-OK: ${reason}]\n`)).code, 'NEXT-ACTION-BACKREF');
-    assert.equal(judgeNextAction(inlineReport('A案を選んで', `[NEXT-ACTION-APPROVAL-INLINE-OK: ${reason}]\n`)).code, 'NEXT-ACTION-APPROVAL-INLINE');
+    assert.equal(judgeNextAction(inlineReport('今回の提案を選んで', `[NEXT-ACTION-APPROVAL-INLINE-OK: ${reason}]\n`)).code, 'NEXT-ACTION-APPROVAL-INLINE');
   }
 });
 
@@ -652,4 +652,33 @@ test('当ターンの ScheduleWakeup と Monitor は起床証拠になる', () =
     assert.equal(judgeNextAction(promiseText, row('assistant', [{ type: 'tool_use', name }], { isSidechain: true })).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
   }
   assert.equal(judgeNextAction(promiseText, use('ScheduleWakeup', { stop: true })).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+});
+
+test('ラベルだけの次の一手は全文ブロックがあっても block', () => {
+  for (const action of ['①②③ から番号で選ぶ', '①B案のまま', 'B案', 'Ａ案', 'a案', '1案', '１案', '一案', '案A', '案Ａ', '案1', '案１', '選択肢 2', '選択肢２', '番号で答える', '記号で返す', 'B案（短い説明）', 'B案（1234567）', 'B案（        ）', 'B案（12345678)', 'B案（12345678）かA案', '①②③、どれか選ぶ']) {
+    const result = judgeNextAction(inlineReport(action, inlineContent));
+    assert.equal(result.code, 'NEXT-ACTION-LABEL-ONLY', action);
+    assert.match(result.reason, /NEXT-ACTION-LABEL-OK/);
+  }
+});
+
+test('ラベル直後に8文字以上の内容を併記すれば通る', () => {
+  for (const action of ['B案（Google パスワードマネージャーで管理）', 'B案(Google パスワードマネージャーで管理)', '①（12345678）', 'B案（12345678）かA案（abcdefgh）']) {
+    withOpenCheck(input => assert.equal(judgeNextAction(inlineReport(action, inlineContent), '', input).decision, 'pass', action));
+  }
+});
+
+test('ラベルの理由付き例外は新判定だけを解除する', () => {
+  const override = '[NEXT-ACTION-LABEL-OK: 本人が番号での回答を指定した]\n';
+  for (const source of [override + inlineReport('B案', inlineContent), inlineReport('①②③ から番号で選ぶ', override + inlineContent)]) {
+    withOpenCheck(input => assert.equal(judgeNextAction(source, '', input).decision, 'pass'));
+  }
+  for (const reason of ['', '   ', '短い']) {
+    assert.equal(judgeNextAction(inlineReport('B案', `[NEXT-ACTION-LABEL-OK: ${reason}]\n`)).code, 'NEXT-ACTION-LABEL-ONLY');
+  }
+  assert.equal(judgeNextAction(inlineReport('B案、支払い', override)).code, 'NEXT-ACTION-MULTIPLE');
+});
+
+test('なしや本文・引用だけのラベルは block しない', () => {
+  assert.equal(judgeNextAction(inlineReport('なし', '> ①②③ から番号で選ぶ\nB案は過去の失敗例です。\n')).decision, 'pass');
 });

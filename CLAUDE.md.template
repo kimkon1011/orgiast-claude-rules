@@ -61,6 +61,8 @@ kim が読む Doc は `tools/gdoc-publish.mjs --authuser <開く人のメール>
 
 **🔴 承認待ちの文面・選択肢は毎回「【kim 確認用の全文】」として3行フッター直前に全文再掲。「次に kim がすること」はその行とブロックだけで判断・操作が終わる形にし、前の応答への遡り参照は禁止（nishi 2026-10-27 厳命・全PC全アカウント。NEXT-ACTION-BACKREF / NEXT-ACTION-APPROVAL-INLINE）。**
 
+**🔴 Claude が決められる判断（過去の決定あり・支払い/同意不要・取り消せる）は聞かずに進めて報告。ラベル（B案・①）だけで指さず中身を書く。**
+
 ## 副作用・影響は報告で終わらせず、その場で直す（kim 2026-10-17 厳命・全PC全アカウント・絶対） — ONBOARDING §1.1 参照
 
 ## 事故は型で直す（全PC・全アカウント。詳細は ONBOARDING §1.22 と protocols/INCIDENT-TYPES.md）

@@ -731,6 +731,12 @@
       "reason": "fleet-mail の Growi 追記処理が使う実行時 import 依存。top-level 依存は Node 組み込みと配布済み is-entry.mjs のみ"
     },
     {
+      "path": "tools/lib/seisaku-gmail-token.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "drive-auth が読む制作チーム Gmail トークンリレーの実行時 import 依存"
+    },
+    {
       "path": "tools/lib/drive-auth.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",

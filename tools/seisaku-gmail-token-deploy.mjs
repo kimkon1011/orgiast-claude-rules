@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 import { RELAY_USER, relayStatePath } from './lib/seisaku-gmail-token.mjs';
 
 export async function deploy({ dryRun = false, statePath = relayStatePath(), authPath = join(homedir(), '.clasprc.json'), fetchImpl = globalThis.fetch } = {}) {
@@ -41,6 +41,6 @@ export async function deploy({ dryRun = false, statePath = relayStatePath(), aut
   save();
   return { scriptId: state.scriptId, deploymentId: state.deploymentId, webAppUrl: state.webAppUrl, authorizationUrl: `https://script.google.com/home/projects/${state.scriptId}/edit` };
 }
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isEntry(import.meta.url)) {
   deploy({ dryRun: process.argv.includes('--dry-run') }).then(result => console.log(JSON.stringify(result, null, 2))).catch(() => { console.error('seisaku-gmail-token: デプロイ失敗。clasp seisaku の認証・Apps Script API・状態ファイルを確認してください'); process.exitCode = 1; });
 }

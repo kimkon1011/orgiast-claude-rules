@@ -1289,7 +1289,8 @@ test('runChild は冷却中・失敗時の codex-do と保留・最終フォー�
     for (const scenario of scenarios) await t.test(scenario.name, { skip: process.platform === 'win32' && needsClaudeStub(scenario) ? 'shebang スタブは Windows で起動不可' : false }, async () => {
       fs.writeFileSync(traceFile, '');
       fs.writeFileSync(path.join(configDir, 'auto-session.env'), `ORGIAST_AUTO_SESSION_EXECUTOR=cheap-code\nORGIAST_AUTO_SESSION_PROVIDER=deepseek\nORGIAST_AUTO_SESSION_CODEX_LANE=${scenario.disabled ? 'off' : 'on'}\nORGIAST_AUTO_SESSION_CLAUDE_FALLBACK=${scenario.claude ? 'on' : 'off'}\n`);
-      fs.writeFileSync(path.join(configDir, 'provider-cooldown.json'), JSON.stringify(scenario.cooling ? { deepseek: { until: Date.now() + 60000 }, glm: { until: Date.now() + 60000 } } : {}));
+      // DeepSeek の推論先は OpenRouter なので、冷却状態も OpenRouter に記録される。
+      fs.writeFileSync(path.join(configDir, 'provider-cooldown.json'), JSON.stringify(scenario.cooling ? { openrouter: { until: Date.now() + 60000 }, glm: { until: Date.now() + 60000 } } : {}));
       fs.writeFileSync(path.join(configDir, 'zai.env'), scenario.alternate ? 'ZAI_API_KEY=test' : '');
       fs.writeFileSync(path.join(toolsDir, 'cheap-code.mjs'), script('process.exitCode = 1;'));
       const codexFile = path.join(toolsDir, 'codex-do.mjs');

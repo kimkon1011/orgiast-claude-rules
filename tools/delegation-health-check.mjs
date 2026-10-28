@@ -509,7 +509,19 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     // exit 3 の実体は cheap-code が cooldown/残高切れで起動を省いた記録で、その cooldown が行の時刻に
     // 有効だったなら、投げていない行であって全滅の証拠ではない(2026-10-25 実測: deepseek HTTP402 の
     // 24h cooldown 中に積まれた32件が lane_outage_unrepaired になった)。cooldown が切れた後の行は対象外。
+    // codex-do の fallback 行も同じ記録を残す: chain の全段が cheap-code の「クールダウン中です(<ISO>まで)。
+    // 起動を省略しました。」で、その時刻が行より後なら投げていない行(2026-10-28 実測: deepseek http_402 の
+    // cooldown 中に積まれた33件が exit 3 / empty_diff として lane_outage_unrepaired になった)。
+    const fallbackSkippedByCooldown = (row) => {
+      if (row.provider !== 'fallback') return false;
+      const chain = Array.isArray(row.chain) ? row.chain : [];
+      return chain.length > 0 && chain.every((item) => {
+        const until = Date.parse(/クールダウン中です\(([^)]+?)まで\)。起動を省略/.exec(String(item?.stderrTail || ''))?.[1]);
+        return Number.isFinite(until) && Date.parse(row.t) <= until;
+      });
+    };
     const skippedByCooldown = (row) => {
+      if (fallbackSkippedByCooldown(row)) return true;
       if (row.provider !== 'skipped' || row.status !== 'no-cheap-executor') return false;
       const name = /^cheap-code\/([\w-]+) exit 3$/.exec(String(row.reason || ''))?.[1];
       const until = Number(cooldown[name]?.until);

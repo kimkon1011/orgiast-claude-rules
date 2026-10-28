@@ -1046,6 +1046,28 @@ test('cooldown が切れた後の skipped(exit 3) や cooldown の無い provide
   assert.equal(outage.evidence[0], '3件すべて失敗');
 });
 
+const FALLBACK_COOLDOWN_ROW = (i, until, extra = {}) => ({
+  t: `2026-09-09T10:2${i}:10.000Z`, provider: 'fallback', model: 'cheap-code:deepseek/deepseek-flash', in: 3900, out: 0, status: 'error', launched: true, exitCode: 3, ...extra,
+  stderrTail: `[cheap-code] deepseek はクールダウン中です(${until}まで)。起動を省略しました。`,
+  chain: [{ backend: 'cheap-code:deepseek', status: 3, outcome: 'failed', stderrTail: `[cheap-code] deepseek はクールダウン中です(${until}まで)。起動を省略しました。` }],
+});
+
+test('cooldown 中の起動省略だけの fallback 行(exit 3 / empty_diff)は全滅の high にしない', () => {
+  const dir = home();
+  const until = new Date(NOW.getTime() + 3_600_000).toISOString();
+  write(dir, 'executor-usage.jsonl', [0, 1, 2, 3].map((i) => FALLBACK_COOLDOWN_ROW(i, until, i === 3 ? { exitCode: 1, reason: 'empty_diff' } : {})).map(row).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.id === 'lane_outage_unrepaired'), false);
+  assert.equal(findings.find((f) => f.id === 'provider_cooldown_skipped').provider, 'fallback');
+});
+
+test('cooldown が行より前に切れていた fallback 行は high の未修理全滅のまま', () => {
+  const dir = home();
+  const until = '2026-09-09T09:00:00.000Z';
+  write(dir, 'executor-usage.jsonl', [0, 1, 2].map((i) => FALLBACK_COOLDOWN_ROW(i, until)).map(row).join(''));
+  assert.equal(collectFindings({ home: dir, now: NOW }).find((f) => f.id === 'lane_outage_unrepaired').provider, 'fallback');
+});
+
 const CODEX_DO_SKIPPED = (min, code) => ({ t: `2026-09-09T10:${min}:10.000Z`, provider: 'skipped', category: 'unrouted', model: 'none', status: 'no-cheap-executor', reason: `codex-do exit ${code}` });
 const CODEX_OK = (min) => ({ t: `2026-09-09T10:${min}:10.000Z`, provider: 'codex', model: 'codex-cli/default', in: 100, out: 120, status: 'ok', launched: true, exitCode: 0 });
 

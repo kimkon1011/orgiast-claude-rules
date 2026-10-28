@@ -1098,6 +1098,21 @@ test('codex-fallback: cheap-code:glm が usage_limit クールダウン中なら
   assert.equal(backends[0].name, 'cheap-code:deepseek');
 });
 
+test('codex-fallback: cheap-code:deepseek が provider-cooldown 中（http_402）なら候補から外す', () => {
+  // deepseek は HTTP 402 Insufficient Balance の恒久課金切れ状態。provider-cooldown.json に
+  // billing provider(openrouter) の cooldown があるときは cheap-code:deepseek を候補に入れない。
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-deepseek-cooldown-'));
+  const claude = path.join(home, '.claude'); fs.mkdirSync(claude, { recursive: true });
+  fs.writeFileSync(path.join(claude, 'openrouter.env'), 'OPENROUTER_API_KEY=ds-test\n', 'utf8');
+  fs.writeFileSync(path.join(claude, 'gemini.env'), 'GEMINI_API_KEY=sk-gemini-1\n', 'utf8');
+  fs.writeFileSync(path.join(claude, 'provider-cooldown.json'), JSON.stringify({ openrouter: { until: Date.now() + 24 * 60 * 60 * 1000, reason: 'http_402', at: new Date().toISOString() } }));
+  const backends = resolveFallbackBackends(home, { executableAvailable: () => true });
+  // openrouter が cooldown 中なので cheap-code:deepseek は除外される
+  assert.equal(backends.some((b) => b.name === 'cheap-code:deepseek'), false, 'deepseek should be excluded when openrouter is in cooldown');
+  // gemini-cli はキーがあるので残る
+  assert.equal(backends.some((b) => b.name === 'gemini-cli'), true, 'gemini-cli should survive');
+});
+
 test('codex-fallback: クールダウン無しなら glm を維持する', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-normal-'));
   const claude = path.join(home, '.claude'); fs.mkdirSync(claude, { recursive: true });

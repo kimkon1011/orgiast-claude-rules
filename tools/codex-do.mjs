@@ -612,7 +612,7 @@ export function resolveFallbackBackends(homeDir, options = {}) {
       if (backend) backends.push(backend);
       else console.error(`[codex-do] codex-fallback-order.json の ${name} はキー未設定か未知の名前のためスキップ`);
     }
-    if (backends.length) return backends;
+    if (backends.length) return uniqueBackendsByName(backends);
     console.error('[codex-do] codex-fallback-order.json に使えるバックエンドが無いため従来順へ戻します');
   }
   const ccDeepseek = cheapCodeBackend('cheap-code:deepseek', homeDir);
@@ -625,7 +625,12 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   // 「成功が速く確実な cheap-code → 最終手段の gemini-cli」に揃える
   // （delegation-health:fallback_chain_timeout 2026-10-27 起票の対処）。
   const ordered = [ccDeepseek, ccGlm, gemini];
-  return ordered.filter(Boolean);
+  return uniqueBackendsByName(ordered.filter(Boolean));
+}
+
+// cheap-code:glm が cooldown で cheap-code:deepseek へ差し替わると同名が連鎖に2回入り、timeout した backend を再投入して時間を捨てる。
+function uniqueBackendsByName(backends) {
+  return backends.filter((backend, index) => backends.findIndex((other) => other.name === backend.name) === index);
 }
 
 export function resolveQwenBackends(homeDir, options = {}) {

@@ -1,0 +1,6 @@
+{
+  "state": "blocked",
+  "evidence": "C1は契約許容の未特定として整理。digest2件・gsk-login-keeperは範囲外。C5は未達: 試行7のFINAL記録は重点4ファイルのみで全体ゲートの証拠なし。今回の最小spawnSyncもEPERMで実行不能。累積8/8。指定のC:\\Users\\user\\.claude\\auto-progress-resume-673b44fd.jsonは書込許可範囲外のためこのrepo内に保存。",
+  "artifact": "/mnt/c/Users/user/.claude/quota-sweep-repo/.loop/resume-673b44fd-a8/attempt.json",
+  "nextKim": ""
+}

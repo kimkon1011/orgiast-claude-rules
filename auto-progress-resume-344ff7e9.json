@@ -1,0 +1,6 @@
+{
+  "state": "done",
+  "evidence": "期限（2026-10-28T00:00Z / 09:00 JST）超過後の実データ観測完了。C1: 達成（runs 12件中 2026-10-28-1.json が status=success）。C2: 達成（2026-10-28-1.json で executorUsed=codex-do、PR #1181 の効果実証）。C3: 未達（nightly-followup.md は failure 11件により ❌ ng）。C4: 原因分類完了（Codex無人枠 8/8 枯渇と外部承認待ち、コード修正N/A、toolsテスト196 pass）。C5: 達成（launcher.log に index.lock 残留なし）。詳細: .loop/resume-344ff7e9-report.md",
+  "artifact": "C:\\Users\\user\\.claude\\quota-sweep-repo\\.loop\\resume-344ff7e9-report.md",
+  "nextKim": ""
+}

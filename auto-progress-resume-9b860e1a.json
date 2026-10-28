@@ -1,0 +1,6 @@
+{
+  "state": "blocked",
+  "evidence": "C4: PR #1129 (87eb4d8) への squash 取込の既存 patch-id 一致証拠と両コミット実在を確認。C5: digest 2件・gsk-login-keeper 5件を対象外として分離確定。詳細は .loop/resume-9b860e1a/report.md。今回 commit-landed は spawnSync git EPERM (exit 2)。指定保存先は writable_roots 外のため保存不可。許可範囲内に結果を保存。全体テスト成功は認定していない。",
+  "artifact": "/mnt/c/Users/user/.claude/quota-sweep-repo/.loop/resume-9b860e1a/report.md",
+  "nextKim": ""
+}

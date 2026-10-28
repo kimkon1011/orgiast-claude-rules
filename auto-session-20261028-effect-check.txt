@@ -1,0 +1,16 @@
+確認日時: 2026-10-28 00:31 JST
+判定: 保留（期限前・当夜の結果未生成）。PR #1181 の効果確認は未完了。
+
+実測:
+- auto-session/runs/2026-10-28-manifest.json は startedAt=2026-10-27T15:30:10.146Z、selectedCount=12。この効果確認自身が先頭の選択TODO。
+- 2026-10-28-<番号>.json は確認時点で存在しない。status=success / executorUsed=codex-do はまだ検証できない。
+- 2026-10-28-1.summary.md は存在するが0バイト。
+- nightly-followup.md は2026-10-27 08:00の報告。auto-session ng（success 0 / failure 9）は前日分であり、10月28日の失敗を示さない。
+- command -v gh は出力なし。
+
+待つ対象: 2026-10-28未明のauto-session結果JSONと当日分nightly-followup。
+期限: 2026-10-28 09:00 JST。
+期限時の扱い: successが0なら当日runsのstderrを確認し、exit 75の保留（retryAt前は再試行しない）、gemini-cli失敗、launcher reset/index.lock競合を区別する。
+検証は次回の自動セッションで行う。長時間ポーリングは実施しない。
+
+制約: 本セッションの書き込み許可はquota-sweep-repoと/tmpのみ。実対象auto-session-repo、指定runsサマリ、next-session.mdは読み取り可能だが書き込み許可範囲外。権限回避や許可の再要求は行わず、この代替記録を保存した。既存TODOは未完了のまま維持。実装変更・PR作成・外部送信なし。

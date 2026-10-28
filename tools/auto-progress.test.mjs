@@ -116,8 +116,8 @@ test('parseVerdict と決定論フォールバック', () => {
   assert.equal(parseVerdict('よく分かりません'), null);
   const now = Date.now();
   assert.equal(deterministicVerdict({ any: false }, now).verdict, 'stalled');
-  assert.equal(deterministicVerdict({ any: true, lastEvidenceAt: now - H / 2 }, now).verdict, 'in_progress');
-  assert.equal(deterministicVerdict({ any: true, lastEvidenceAt: now - FALLBACK_STALL_MS }, now).verdict, 'stalled');
+  assert.equal(deterministicVerdict({ any: true, transcript: { lastAt: now - H / 2 } }, now).verdict, 'in_progress');
+  assert.equal(deterministicVerdict({ any: true, transcript: { lastAt: now - FALLBACK_STALL_MS } }, now).verdict, 'stalled');
 });
 
 test('judge: LLM 全滅(null/例外)なら決定論へ。証拠なしは LLM を呼ばない', () => {

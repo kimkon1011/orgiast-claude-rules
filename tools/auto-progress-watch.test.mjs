@@ -3,7 +3,26 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { formatDoneLine, formatDoneMessage, formatDoneBacklogMessages } from './auto-progress-watch.mjs';
+import { formatDoneLine, formatDoneMessage, formatDoneBacklogMessages, gatherEvidence, deterministicVerdict, judge, evidenceSummary } from './auto-progress-watch.mjs';
+
+test('共有ファイルが新しくてもセッションの会話・実行が25時間前ならstalled', () => {
+  const now = Date.parse('2026-10-28T10:00:00Z');
+  const old = now - 25 * 3600000;
+  const row = { promise: '次のメッセージで仕上げる', ts: new Date(old - 3600000).toISOString() };
+  const evidence = gatherEvidence(row, '/unused', {
+    transcriptEvidence: () => ({ count: 1, lastAt: old, snippets: [] }),
+    recentFiles: () => ({ lastAt: now, names: ['shared.md'] }),
+    autoSessionRuns: () => ({ lastAt: old, names: ['session.json'] }),
+  });
+  assert.equal(evidence.lastEvidenceAt, old);
+  assert.equal(deterministicVerdict(evidence, now).verdict, 'stalled');
+  assert.equal(deterministicVerdict({ ...evidence, lastEvidenceAt: now }, now).verdict, 'stalled');
+  assert.equal(judge(row, evidence, now, { askLlm: () => null }).verdict, 'stalled');
+  assert.match(evidenceSummary(row, evidence, now), /shared\.md/);
+  for (const source of ['transcript', 'runs']) {
+    assert.equal(deterministicVerdict({ ...evidence, [source]: { ...evidence[source], lastAt: now } }, now).verdict, 'in_progress');
+  }
+});
 
 test('完了通知はresumeの結果を使い、予告文を出さない', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'done-notice-'));

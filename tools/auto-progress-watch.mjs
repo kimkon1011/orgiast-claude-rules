@@ -91,7 +91,8 @@ export function gatherEvidence(row, home, io = {}) {
   const transcript = (io.transcriptEvidence ?? transcriptEvidence)(row.transcriptPath, since);
   const files = (io.recentFiles ?? recentFiles)(row.cwd, since, { paths: transcript.touchedPaths || [] });
   const runs = (io.autoSessionRuns ?? autoSessionRuns)(home, row, since);
-  const lastEvidenceAt = Math.max(transcript.lastAt, files.lastAt, runs.lastAt);
+  // ファイルは共有されるため、更新時刻をこの約束の進捗時刻には使わない。
+  const lastEvidenceAt = Math.max(transcript.lastAt, runs.lastAt);
   return { transcript, files, runs, lastEvidenceAt, any: transcript.count > 0 || files.names.length > 0 || runs.names.length > 0 };
 }
 
@@ -117,7 +118,8 @@ export function parseVerdict(output) {
 
 export function deterministicVerdict(evidence, now) {
   if (!evidence.any) return { verdict: 'stalled', reason: '証拠なし（約束後の会話・ファイル更新・実行ログが無い）', source: 'deterministic' };
-  if (now - evidence.lastEvidenceAt < FALLBACK_STALL_MS) return { verdict: 'in_progress', reason: '判定AIが使えず様子見', source: 'deterministic' };
+  const lastSessionActivityAt = Math.max(evidence.transcript?.lastAt || 0, evidence.runs?.lastAt || 0);
+  if (now - lastSessionActivityAt < FALLBACK_STALL_MS) return { verdict: 'in_progress', reason: '判定AIが使えず様子見', source: 'deterministic' };
   return { verdict: 'stalled', reason: '最後の動きから24時間以上経過', source: 'deterministic' };
 }
 

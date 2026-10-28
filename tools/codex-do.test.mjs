@@ -179,10 +179,10 @@ test('chainBackendBudgetSecs は連鎖の残り予算を超えない（全体枠
 });
 
 test('backendSpecificTimeoutSecs は gemini-cli だけに既定600秒と正の上書きを適用する', () => {
-  assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}), 600);
+  assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}), 300);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '450' }), 450);
-  assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: 'garbage' }), 600);
-  assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '0' }), 600);
+  assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: 'garbage' }), 300);
+  assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '0' }), 300);
   assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}), null);
 });
 
@@ -202,11 +202,11 @@ test('countPolicyDenials は gemini-cli のワークスペース外・ignore 拒
   assert.equal(shouldAbortPolicyStall({ elapsedSecs: 600, outputChars: 1726, stderr: outside + ignored + outside }), false, '出力が出ている run は切らない');
 });
 
-test('shouldAbortPolicyStall は長時間・低出力・拒否3回が揃ったときだけ中断する', () => {
+test('shouldAbortPolicyStall は60秒以上・低出力・拒否3回が揃ったときだけ中断する', () => {
   const denied3 = 'tool execution denied by policy\n'.repeat(3);
   assert.equal(shouldAbortPolicyStall({ elapsedSecs: 900, outputChars: 164, stderr: denied3 }), true);
   assert.equal(shouldAbortPolicyStall({ elapsedSecs: 452, outputChars: 4048, stderr: denied3 }), false);
-  assert.equal(shouldAbortPolicyStall({ elapsedSecs: 299, outputChars: 164, stderr: denied3 }), false);
+  assert.equal(shouldAbortPolicyStall({ elapsedSecs: 59, outputChars: 164, stderr: denied3 }), false);
   assert.equal(shouldAbortPolicyStall({ elapsedSecs: 900, outputChars: 400, stderr: denied3 }), false);
   assert.equal(shouldAbortPolicyStall({ elapsedSecs: 900, outputChars: 164, stderr: denied3.replace(/[^\n]+\n$/, '') }), false);
   assert.equal(shouldAbortPolicyStall({ elapsedSecs: '900', outputChars: 164, stderr: denied3 }), false);

@@ -317,7 +317,7 @@ export const POLICY_STALL_MIN_ABORTABLE_SECS = 300;
 export const POLICY_STALL_MAX_ABORTABLE_OUT = 400;
 // codex-do の POLICY_STALL_MIN_DENIALS と同値。拒否がこれ未満の停滞は打ち切り条件を満たさず、未発火の証拠にならない。
 export const POLICY_STALL_MIN_DENIALS = 3;
-export const POLICY_DENIAL_RE = /tool execution denied by policy/gi;
+export const POLICY_DENIAL_RE = /tool execution denied by policy|blocked by policy|shell command confirmation required|resolves outside the allowed workspace directories|ignored by configured ignore patterns/gi;
 
 export function countPolicyDenial(text) {
   return typeof text === 'string' ? (String(text).match(POLICY_DENIAL_RE) || []).length : 0;

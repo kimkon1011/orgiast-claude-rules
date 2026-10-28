@@ -417,7 +417,7 @@ export function fallbackBackendTimeoutSecs(timeoutSeconds, env = process.env) {
 export function backendSpecificTimeoutSecs(backendName, env = process.env) {
   if (backendName !== 'gemini-cli') return null;
   const raw = Number(env.CODEX_DO_GEMINI_TIMEOUT_SECS);
-  return Number.isFinite(raw) && raw > 0 ? raw : 600;
+  return Number.isFinite(raw) && raw > 0 ? raw : 300;
 }
 
 // タイムアウト時にプロセス木ごと殺す。Windows で shell:true のとき直接の子は cmd.exe なので、
@@ -567,6 +567,13 @@ export function findExecutable(name, { env = process.env, platform = process.pla
   return null;
 }
 
+// verify やシェル実行を要求するタスクでは gemini-cli を候補から外す（
+// run_shell_command が policy 拒否される環境では有意な時間を消費するだけのため）。
+const SHELL_REQUIRED_HINT = /\bnpm\b|\bgit\b|\bnode\b|\btest\b|\bbuild\b|\bdeploy\b|\brun\b|\bdocker\b|シェル|コマンド|実行|テスト|検証|動作確認|実機確認/i;
+export function requiresShell(taskKind, instruction = '') {
+  return taskKind === 'verify' || SHELL_REQUIRED_HINT.test(String(instruction || ''));
+}
+
 export function resolveFallbackBackends(homeDir, options = {}) {
   const executableAvailable = options.executableAvailable || ((cmd) => Boolean(findExecutable(cmd, options)));
   const geminiKey = loadGeminiKey(homeDir);
@@ -600,7 +607,19 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   const ccDeepseek = cheapCodeBackend('cheap-code:deepseek', homeDir);
   const ccGlm = cheapCodeBackend('cheap-code:glm', homeDir);
   const ordered = preferFree ? [ccDeepseek, ccGlm, gemini] : [gemini, ccDeepseek, ccGlm];
-  return uniqueBackendsByName(ordered.filter(Boolean));
+  const allBackends = uniqueBackendsByName(ordered.filter(Boolean));
+  const envOverride = process.env.CODEX_DO_ALLOW_SHELL_BACKENDS;
+  if (envOverride !== '*') {
+    const shellRequired = requiresShell(options.taskKind, options.instruction);
+    if (shellRequired) {
+      const filtered = allBackends.filter(b => b.name !== 'gemini-cli');
+      if (filtered.length < allBackends.length) {
+        console.error('[codex-do] shell 実行が必要なタスクのため gemini-cli をフォールバック候補から除外します（CODEX_DO_ALLOW_SHELL_BACKENDS=* で全許可）');
+      }
+      return filtered;
+    }
+  }
+  return allBackends;
 }
 
 // cheap-code:glm が cooldown で cheap-code:deepseek へ差し替わると同名が連鎖に2回入り、timeout した backend を再投入して時間を捨てる。
@@ -641,12 +660,12 @@ export function isBackendCliMissing(output, stderr) {
   return false;
 }
 
-export const POLICY_STALL_MIN_ELAPSED_SECS = 300;
+export const POLICY_STALL_MIN_ELAPSED_SECS = 60;
 export const POLICY_STALL_MIN_OUTPUT_CHARS = 400;
 export const POLICY_STALL_MIN_DENIALS = 3;
 // gemini-cli は許可ワークスペース外のパス・ignore パターンの読み取り拒否を別文言で出し、それも
 // 『tool execution denied by policy』と同じ停滞を生む（2026-10-27/28 実測: 3件が拒否文言0回扱いで 600 秒 timeout）。
-export const POLICY_DENIAL_PATTERN = /tool execution denied by policy|resolves outside the allowed workspace directories|ignored by configured ignore patterns/gi;
+export const POLICY_DENIAL_PATTERN = /tool execution denied by policy|blocked by policy|shell command confirmation required|resolves outside the allowed workspace directories|ignored by configured ignore patterns/gi;
 
 export function countPolicyDenials(text) {
   return typeof text === 'string' ? (text.match(POLICY_DENIAL_PATTERN) || []).length : 0;
@@ -1320,7 +1339,7 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
     if (quotaCheck.matched) console.error(`[codex-do] Codex usage limit detected: ${quotaCheck.pattern} at index ${quotaCheck.index}. Context: "${quotaCheck.snippet}"`);
     console.error(`[codex-do] Falling back to an agentic CLI...`);
 
-    const resolvedBackends = resolveFallbackBackends(home);
+    const resolvedBackends = resolveFallbackBackends(home, { taskKind, instruction });
     const backends = skipCoolingBackends(resolvedBackends, coolingBackendNames(home));
     if (backends.length === 0) {
       console.error('GEMINI_API_KEY、OPENROUTER_API_KEY、ZAI_API_KEY が無いためフォールバックを実行できません');

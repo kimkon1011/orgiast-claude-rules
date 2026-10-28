@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
+import { isEntry } from './is-entry.mjs';
 
 export const ITEMS = ['SMBv1', 'RDP', 'WinRM', 'sshd', 'FW無効', 'Defender', 'BitLocker', 'Update', 'Tailscale Funnel', '平文鍵', '.env件数', '0.0.0.0待受', '無人ジョブ詰まり'];
 const short = value => String(value).replace(/[\r\n]/g, ' ').slice(0, 120);
@@ -117,6 +118,6 @@ export function main(args = process.argv.slice(2)) {
     console.log(body);
   }
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isEntry(import.meta.url)) {
   try { main(); } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

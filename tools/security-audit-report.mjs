@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ITEMS, summarizeAudit, auditDate } from './security-audit-readonly.mjs';
+import { isEntry } from './is-entry.mjs';
 
 export function buildMatrix(results, expectedLabels = []) {
   const latest = new Map();
@@ -85,6 +86,6 @@ function main(args) {
   if (out) { fs.mkdirSync(path.dirname(path.resolve(out)),{recursive:true}); fs.writeFileSync(out,markdown); }
   console.log(markdown);
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isEntry(import.meta.url)) {
   try { main(process.argv.slice(2)); } catch (error) { console.error(error.message); process.exitCode=1; }
 }

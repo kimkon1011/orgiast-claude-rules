@@ -138,3 +138,16 @@ DWD のスコープが委任済みであれば `drafts.create` は当該ユー�
 - 既存の読み取り経路: `tools/gmail-search.mjs`、`docs/gmail-correction-email-necessity.md`
 - 内部宛ルール: `tools/internal-recipient-gmail-guard.mjs`、`docs/internal-staff-chat-display-verification.md`
 - 記録: `tools/handoff-audit-knowledge.json`
+
+## SA 鍵の無い PC
+
+SA 鍵は配布せず、seisaku-team@orgiast.jp が所有・実行するトークン中継 GAS を利用する。初回は以下を順に行う。
+
+1. `clasp -u seisaku login` を実行し、seisaku-team@orgiast.jp の Chrome で許可する。
+2. `node tools/seisaku-gmail-token-deploy.mjs` を実行する（`--dry-run` は通信・保存なし）。
+3. 出力された Web App URL を seisaku-team@orgiast.jp で開いて権限を承認する。承認画面へ進めない場合は出力の `authorizationUrl`（スクリプト編集画面）を同じアカウントで開き、`doGet` を実行して権限を承認する。
+4. `node tools/gmail-draft.mjs --check` で確認する。
+
+設定は `~/.claude/seisaku-gmail-token.json` に保存する。secret を含むため共有・ログ出力・リポジトリへの追加はしない。再デプロイは同じコマンドで既存 deployment を更新し、URL と secret を維持する。Apps Script API を clasp の認証プロジェクトで利用可能にしておく必要がある。
+
+既定の鍵が存在せず、`GOOGLE_SA_KEY` が未設定で、代理先が seisaku-team@orgiast.jp、要求が Gmail スコープのみ、かつ状態ファイルがある場合に限り自動使用する。Drive や他ユーザーは従来の認証経路を使う。トークンはプロセス内で期限までキャッシュする。既存の宛先・送信前整合性検査は引き続き適用される。

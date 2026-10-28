@@ -320,11 +320,72 @@ export function queueRepeatedDeferral(home, state, row) {
   if (after !== before) writeHandoff(file, after);
 }
 
-function createPullRequest({ run, tree, branch, log }) {
+async function createPullRequestViaApi({ run, tree, branch, log, spawnImpl = spawnSync, fetchImpl = fetch }) {
+  // Fallback when gh CLI is not available: use git credential fill + GitHub REST API.
+  const fill = spawnImpl('git', ['credential', 'fill'], { cwd: tree, encoding: 'utf8', windowsHide: true, timeout: 15_000, input: 'protocol=https\nhost=github.com\n\n' });
+  if (fill.error || fill.status !== 0) throw new Error(`credential fill failed: ${fill.error?.message || `exit ${fill.status}`}`);
+  const token = String(fill.stdout || '').match(/password=(.+)/)?.[1];
+  if (!token) throw new Error('No password in credential fill output');
+
+  const remoteUrl = run('git', ['remote', 'get-url', 'origin'], tree);
+  const match = remoteUrl.match(/github\.com[/:](.+?)\/(.+?)\.git$/);
+  if (!match) throw new Error(`Cannot parse remote URL: ${remoteUrl}`);
+  const [, owner, repoName] = match;
+
+  // First, check if PR already exists.
+  const listUrl = `https://api.github.com/repos/${owner}/${repoName}/pulls?head=${encodeURIComponent(branch)}&state=all`;
+  const listRes = await fetchImpl(listUrl, { headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/vnd.github.v3+json' }, signal: AbortSignal.timeout(15_000) });
+  if (listRes.ok) {
+    const existing = await listRes.json();
+    if (existing.length > 0 && existing[0].html_url) {
+      log(`quota-sweep: found existing PR via API: ${existing[0].html_url}`);
+      return existing[0].html_url;
+    }
+  }
+
+  const title = `quota-sweep: ${branch.replace(/^quota-sweep\//, '')}`;
+  const createRes = await fetchImpl(`https://api.github.com/repos/${owner}/${repoName}/pulls`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Accept': 'application/vnd.github.v3+json' },
+    body: JSON.stringify({ title, head: branch, base: 'main' }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!createRes.ok) {
+    const body = await createRes.text();
+    throw new Error(`GitHub API PR create failed: ${createRes.status} ${body.slice(0, 500)}`);
+  }
+  const pr = await createRes.json();
+  const prUrl = pr.html_url;
+
+  // Best-effort automerge label.
+  try {
+    await fetchImpl(`https://api.github.com/repos/${owner}/${repoName}/issues/${pr.number}/labels`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Accept': 'application/vnd.github.v3+json' },
+      body: JSON.stringify({ labels: ['automerge'] }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (labelError) {
+    log(`quota-sweep: automerge label via API failed: ${labelError.message}`);
+  }
+  return prUrl;
+}
+
+export async function createPullRequest({ run, tree, branch, log, spawnImpl, fetchImpl }) {
   const args = ['pr', 'create', '--base', 'main', '--head', branch, '--fill'];
   try {
     return run('gh', [...args, '--label', 'automerge'], tree);
   } catch (error) {
+    // gh not installed: fall back to GitHub REST API via credential fill.
+    if (/ENOENT/.test(error.message)) {
+      log(`quota-sweep: gh not found; falling back to GitHub API: ${error.message}`);
+      try {
+        return await createPullRequestViaApi({ run, tree, branch, log, spawnImpl, fetchImpl });
+      } catch (apiError) {
+        log(`quota-sweep: GitHub API fallback also failed: ${apiError.message}`);
+        throw apiError;
+      }
+    }
     const prUrl = run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'], tree);
     if (prUrl) {
       log(`quota-sweep: automerge label failed; PR created without label: ${error.message}`);
@@ -487,8 +548,12 @@ export async function runSweep(decision, context) {
         if (run('git', ['branch', '--show-current'], tree) !== branch) throw new Error('Worktree branch changed externally; no push attempted');
         if (Number(run('git', ['rev-list', '--count', `${record.base}..HEAD`], tree)) > 0) {
           run('git', ['push', '-u', 'origin', branch], tree);
-          prUrl = run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'], tree);
-          if (!prUrl) prUrl = createPullRequest({ run, tree, branch, log });
+          try {
+            prUrl = run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'], tree);
+          } catch (ghError) {
+            if (!/ENOENT/.test(ghError.message)) throw ghError;
+          }
+          if (!prUrl) prUrl = await createPullRequest({ run, tree, branch, log, spawnImpl, fetchImpl: context.fetchImpl });
         }
       } catch (error) { log(`PR delivery failed: ${error.message}`); record.deliveryError = error.message; reason = [reason, `PR delivery: ${error.message}`].filter(Boolean).join('; '); failureKey = error.failureKey || 'pr-delivery'; outcome = 'failed'; }
     }

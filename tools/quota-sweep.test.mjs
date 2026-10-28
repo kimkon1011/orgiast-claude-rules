@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { normalizeLandedChecks, filterWindowsForCurrentAuth, isTransientWindowReadError, claudeWindowReader, commandRunner, queueRepeatedFailure, queueRepeatedDeferral, writeWorktreePointer, prepareTree, preserveDirtyTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer } from './quota-sweep.mjs';
+import { normalizeLandedChecks, filterWindowsForCurrentAuth, isTransientWindowReadError, claudeWindowReader, commandRunner, queueRepeatedFailure, queueRepeatedDeferral, writeWorktreePointer, prepareTree, preserveDirtyTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer, createPullRequest } from './quota-sweep.mjs';
 import { runBounded, killTree } from './lib/quota-sweep-process.mjs';
 import { interactiveCodex, wslPath } from './lib/quota-sweep-host.mjs';
 import { decideSweep, resetKey, sameReset } from './lib/quota-windows.mjs';
@@ -622,6 +622,69 @@ test('persistent EPERM on opening pointer recovers through replacement', t => {
     writeFile: (target, ...args) => { if (target === file) throw Object.assign(new Error('locked open'), { code: 'EPERM' }); return fs.writeFileSync(target, ...args); }, chmod: () => {}
   });
   assert.equal(fs.readFileSync(file, 'utf8'), 'gitdir: ../relative\n');
+});
+test('gh 不在時に createPullRequestViaApi が credential fill + GitHub REST API にフォールバックする', async t => {
+  const home = temp(t), tree = path.join(home, 'tree');
+  fs.mkdirSync(tree, { recursive: true });
+  const logs = [], commands = [];
+  const run = (exe, args) => {
+    if (exe === 'gh') throw Object.assign(new Error('spawnSync gh ENOENT'), { code: 'ENOENT' });
+    commands.push([exe, ...args]);
+    if (exe === 'git' && args[1] === 'get-url') return 'https://github.com/example/repo.git';
+    return '';
+  };
+  let fetchCalls = 0;
+  const fetchImpl = async (url, init) => {
+    fetchCalls++;
+    if (url.includes('pulls?head=')) {
+      return { ok: true, json: async () => [] };
+    }
+    if (init?.method === 'POST' && url.includes('/pulls')) {
+      return { ok: true, json: async () => ({ html_url: 'https://github.com/example/repo/pull/api-1', number: 1 }) };
+    }
+    if (url.includes('/labels')) {
+      return { ok: true };
+    }
+    return { ok: false, status: 404, text: async () => 'not found' };
+  };
+  const spawnImpl = (exe, args, opts) => {
+    if (exe === 'git' && args[0] === 'credential') {
+      return { status: 0, stdout: 'protocol=https\nhost=github.com\npassword=gho_test_token_12345\n' };
+    }
+    return { error: Object.assign(new Error('spawnSync gh ENOENT'), { code: 'ENOENT' }) };
+  };
+  const result = await createPullRequest({ run, tree, branch: 'quota-sweep/test-branch', log: msg => logs.push(msg), spawnImpl, fetchImpl });
+  assert.equal(result, 'https://github.com/example/repo/pull/api-1');
+  assert.ok(commands.some(c => c[1] === 'remote' && c[2] === 'get-url'), 'remote URL query called');
+  assert.equal(fetchCalls, 3, 'PR list + create + label');
+  assert.ok(logs.some(msg => /gh not found/.test(msg)), 'fallback log');
+});
+test('createPullRequestViaApi は credential fill 失敗時にエラーを throw する', async t => {
+  const run = (exe) => { if (exe === 'gh') throw Object.assign(new Error('spawnSync gh ENOENT'), { code: 'ENOENT' }); return ''; };
+  const spawnImpl = () => ({ error: Object.assign(new Error('spawnSync git ENOENT'), { code: 'ENOENT' }), status: null });
+  await assert.rejects(() => createPullRequest({ run, tree: '/tmp', branch: 'test', log: () => {}, spawnImpl, fetchImpl: async () => ({ ok: false }) }), /credential fill failed/);
+});
+test('createPullRequestViaApi は既存 PR を検出して再利用する', async t => {
+  const home = temp(t), tree = path.join(home, 'tree');
+  fs.mkdirSync(tree, { recursive: true });
+  const logs = [], commands = [];
+  const run = (exe, args) => {
+    if (exe === 'gh') throw Object.assign(new Error('spawnSync gh ENOENT'), { code: 'ENOENT' });
+    commands.push([exe, ...args]);
+    if (exe === 'git' && args[1] === 'get-url') return 'https://github.com/example/repo.git';
+    return '';
+  };
+  const fetchImpl = async (url) => {
+    if (url.includes('pulls?head=')) {
+      return { ok: true, json: async () => [{ html_url: 'https://github.com/example/repo/pull/existing-42' }] };
+    }
+    return { ok: false, status: 404, text: async () => 'unexpected' };
+  };
+  const spawnImpl = () => ({ status: 0, stdout: 'password=gho_test_token_abc\n' });
+  const result = await createPullRequest({ run, tree, branch: 'quota-sweep/existing', log: msg => logs.push(msg), spawnImpl, fetchImpl });
+  assert.equal(result, 'https://github.com/example/repo/pull/existing-42');
+  assert.ok(logs.some(msg => /existing PR/.test(msg)));
+  assert.equal(commands.filter(c => c[1] === 'remote').length, 1);
 });
 test('relative pointer is not rewritten', t => {
   const home = temp(t), tree = path.join(home, '.claude/quota-sweep-repo'); fs.mkdirSync(tree, { recursive: true });

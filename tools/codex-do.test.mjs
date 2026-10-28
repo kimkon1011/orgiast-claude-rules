@@ -1969,6 +1969,19 @@ const DENY = 'Error executing tool run_shell_command: Tool execution denied by p
 const silentAfter = (stderrText, stdoutText = '') =>
   `process.stdout.write(${JSON.stringify(stdoutText)}); process.stderr.write(${JSON.stringify(stderrText)}); setInterval(() => {}, 1000);`;
 
+// 2026-10-28 実測: 予算600秒の gemini-cli 試行が 1044 秒。親が終わった後に孫が pipe を握り続けると
+// taskkill /T の木から外れ 'close' が来ず、timeout が実効しなかった。猶予後は close を待たず打ち切る。
+test('timeout 後に孫プロセスが pipe を握り続けても猶予後に打ち切り次のバックエンドへ進む', () => {
+  const { result, elapsedSecs } = runFakeGemini(
+    // 孫の cwd は作業ディレクトリ外にする（Windows で孫が cwd を握ると after の rmSync が EPERM になる）
+    `import { spawn } from 'node:child_process';\nimport os from 'node:os';\nspawn(process.execPath, ['-e', 'setTimeout(()=>{},15000)'], { stdio: 'inherit', detached: true, cwd: os.tmpdir() }).unref();\nprocess.exit(0);`,
+    { CODEX_DO_GEMINI_TIMEOUT_SECS: '2', CODEX_DO_TIMEOUT_KILL_GRACE_MS: '1000' }
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
+  assert.ok(elapsedSecs < 10, `孫が pipe を握ると timeout が実効せず ${elapsedSecs} 秒かかった`);
+});
+
 test('gemini が拒否3回の後に無音で停滞しても周期判定で打ち切り次のバックエンドへ進む', () => {
   const { result, elapsedSecs } = runFakeGemini(silentAfter(DENY.repeat(3)));
   assert.equal(result.status, 0, result.stderr);

@@ -960,7 +960,7 @@ test('digest: 判断待ち22件も全件を名前で出し、完了・止まっ�
   }
 });
 
-test('digest: 各区分は1800字に収まる限り最大5件を名前で出し、超過分だけ「ほか N 件」', () => {
+test('digest: 各区分とも上限なしで全件を名前で出す', () => {
   const now = Date.parse('2026-10-23T19:16:00+09:00');
   const make = (prefix, n, extra) => Array.from({ length: n }, (_, i) => ({
     sessionId: `${prefix}${i}`, promise: `${prefix}作業${i}`, ts: new Date(now - i * 60000).toISOString(), ...extra,
@@ -973,12 +973,11 @@ test('digest: 各区分は1800字に収まる限り最大5件を名前で出し�
 
   for (const [label, prefix] of [['あなたの判断待ち', '判断'], ['完了', '完了'], ['止まっている', '停滞'], ['進行中', '進行']]) {
     const items = text.split('\n').filter(line => line.startsWith(`・${label}:`) && !line.includes('ほか'));
-    assert.equal(items.length, 5, `${label} は5件`);
-    for (let i = 0; i < 5; i++) assert.match(text, new RegExp(`・${label}: (?:［[^］]*］)?${prefix}作業${i}`));
-    assert.doesNotMatch(text, new RegExp(`・${label}: .*${prefix}作業5`));
-    assert.match(text, new RegExp(`・${label}: ほか 3件`));
+    assert.equal(items.length, 8, `${label} は8件全件`);
+    for (let i = 0; i < 8; i++) assert.match(text, new RegExp(`・${label}: (?:［[^］]*］)?${prefix}作業${i}`));
+    assert.doesNotMatch(text, new RegExp(`・${label}: ほか`));
   }
-  assert.ok(text.length <= 1800, `text length was ${text.length}`);
+  for (const part of chunkMessage(text)) assert.ok(part.length <= 1800, `part length was ${part.length}`);
 });
 
 test('digest: 進行中も件数だけでなく名前で出す（最終判定が新しい順）', () => {
@@ -1553,7 +1552,12 @@ test('digest: 最新の代表行で本文・72時間・夜間を判定し古い�
   assert.match(text, /あなたの判断待ち 1件/);
   assert.match(text, /最新の説明/);
   assert.doesNotMatch(text, /夜間に出た|3日以上前/);
-  assert.match(formatDigest([], now, 'PC', { waitingRows: [old, { ...old, sessionId: 'old2' }] }), /3日以上前の判断待ち 1件/);
+  // 72時間より古い判断待ちも件数だけにせず名前で出る（グループ1件として「×2」付き）
+  const staleText = formatDigest([], now, 'PC', { waitingRows: [old, { ...old, sessionId: 'old2' }] });
+  assert.match(staleText, /あなたの判断待ち 1件/);
+  assert.match(staleText, /古い説明/);
+  assert.match(staleText, /同じ内容 ×2/);
+  assert.doesNotMatch(staleText, /3日以上前/);
   assert.match(formatDigest([], now, 'PC', { waitingRows: [old, recent], nightWaitingKeys: new Set([waitingNotificationKey(recent)]) }), /夜間に出た判断待ち/);
 });
 

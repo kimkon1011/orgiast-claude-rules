@@ -225,6 +225,18 @@ export function isEmptyDiffEscalationRow(row = {}) {
   return chain.some((item) => item?.outcome === 'ok');
 }
 
+// fallback の chain が cheap-code の「起動を省略しました(exit 3)」だけで終わった行。cheap-code が
+// cooldown/残高切れで子を起動しなかった記録で、バックエンドは一度も試されていない。全滅の分母に
+// 入れると deepseek 残高切れの間じゅう fallback が high の未修理になる(2026-10-28 実測: 33件すべてこれ)。
+// gemini-cli など cheap-code 以外の実失敗が chain に1つでも混ざる行、stderrTail が cooldown を
+// 名指ししない行は対象外(本物の障害を隠さない)。cooldown を張った当の行(「利用不可(402)」)も同じ外部要因。
+export function isFallbackCooldownSkipRow(row = {}) {
+  if (row?.provider !== 'fallback') return false;
+  const chain = Array.isArray(row?.chain) ? row.chain : [];
+  return chain.length > 0
+    && chain.every((item) => String(item?.backend ?? '').startsWith('cheap-code:') && Number(item?.status) === 3 && /クールダウン中|利用不可\((?:402|429)\)/.test(String(item?.stderrTail ?? '')));
+}
+
 // フォールバック先の子プロセスが OS エラーで起動できなかった行(例: spawn ENAMETOOLONG / ENOENT)。
 // 1件で発火させる: 低成果(2件閾値)では単発の故障が翌朝 healthy と判定されてしまった (2026-09-21)。
 const SPAWN_FAILED = /syscall: 'spawn'|\bspawn E[A-Z]+\b|code: 'E[A-Z]{4,}'/;
@@ -525,7 +537,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     // glm/deepseek クールダウンで codex-do exit 1 が12件)。stderrTail の無い旧行は従来どおり数える。
     const skippedExternalCause = (row) => row.provider === 'skipped' && row.status === 'no-cheap-executor'
       && /unattended_budget|無人枠|クールダウン中|上限[/]エラーで使えない|usage_limit|Insufficient Balance|HTTP ?(402|429)/.test(String(row.stderrTail || ''));
-    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !skippedByCooldown(row) && !skippedExternalCause(row) && !skippedRepairedByCodex(row) && !isEmptyDiffEscalationRow(row) && !isQuotaSweepBenignRow(row));
+    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !skippedByCooldown(row) && !skippedExternalCause(row) && !skippedRepairedByCodex(row) && !isEmptyDiffEscalationRow(row) && !isFallbackCooldownSkipRow(row) && !isQuotaSweepBenignRow(row));
     // 24h 窓が cooldown だけで埋まる＝上限中で一度も試行していない。レーンは止まっているが
     // 原因は上限側で、コードの欠陥ではない。low の可視化だけ残す(high にすると上限が明けるまで
     // 毎晩同じ偽の修理タスクが積まれる。黙って消すと止まっている事実自体が見えなくなる)。

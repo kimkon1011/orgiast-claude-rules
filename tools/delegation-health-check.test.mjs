@@ -1263,3 +1263,42 @@ test('stderrTail が外部要因を示さない skipped(codex-do exit N) は hig
   const outage = collectFindings({ home: dir, now: NOW }).find((f) => f.id === 'lane_outage_unrepaired');
   assert.equal(outage.provider, 'skipped');
 });
+
+const COOLDOWN_TAIL = '[cheap-code] deepseek はクールダウン中です(2026-10-28T05:00:20.838Zまで)。起動を省略しました。';
+const FALLBACK_COOLDOWN_ROW = (min, overrides = {}) => ({ t: `2026-09-09T10:${min}:10.000Z`, provider: 'fallback', model: 'cheap-code:deepseek/deepseek-flash', status: 'error', out: 0, stderrTail: COOLDOWN_TAIL,
+  chain: [{ backend: 'cheap-code:deepseek', model: 'deepseek-flash', status: 3, timedOut: false, spawnFailed: false, out: 0, outcome: 'failed', stderrTail: COOLDOWN_TAIL }], ...overrides });
+
+test('chain が cheap-code の cooldown 起動省略(exit 3)だけの fallback 行は全滅の high にしない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [10, 11, 12, 13].map((min) => row(FALLBACK_COOLDOWN_ROW(min))).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.id === 'lane_outage_unrepaired' && f.provider === 'fallback'), false);
+});
+
+test('empty_diff が付いても cooldown 起動省略だけの fallback 行は全滅の high にしない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [10, 11, 12].map((min) => row(FALLBACK_COOLDOWN_ROW(min, { reason: 'empty_diff' }))).join(''));
+  assert.equal(collectFindings({ home: dir, now: NOW }).some((f) => f.id === 'lane_outage_unrepaired' && f.provider === 'fallback'), false);
+});
+
+test('chain に gemini-cli の実失敗が混ざる fallback 行は cooldown 名指しでも high の全滅のまま', () => {
+  const dir = home();
+  const gemini = { backend: 'gemini-cli', model: 'gemini-3.7-flash', status: 1, timedOut: false, spawnFailed: false, out: 0, policyDenials: 8, outcome: 'blocked' };
+  write(dir, 'executor-usage.jsonl', [10, 11, 12].map((min) => row(FALLBACK_COOLDOWN_ROW(min, { chain: [gemini, ...FALLBACK_COOLDOWN_ROW(min).chain] }))).join(''));
+  const outage = collectFindings({ home: dir, now: NOW }).find((f) => f.id === 'lane_outage_unrepaired' && f.provider === 'fallback');
+  assert.ok(outage);
+});
+
+test('cooldown を名指ししない cheap-code exit 3 の fallback 行は high の全滅のまま', () => {
+  const dir = home();
+  const tail = 'Error: spawn wsl ENOENT';
+  write(dir, 'executor-usage.jsonl', [10, 11, 12].map((min) => row(FALLBACK_COOLDOWN_ROW(min, { stderrTail: tail, chain: [{ ...FALLBACK_COOLDOWN_ROW(min).chain[0], stderrTail: tail }] }))).join(''));
+  assert.ok(collectFindings({ home: dir, now: NOW }).find((f) => f.id === 'lane_outage_unrepaired' && f.provider === 'fallback'));
+});
+
+test('cheap-code が HTTP 402 で cooldown を張った fallback 行も外部要因として全滅の high にしない', () => {
+  const dir = home();
+  const tail402 = '[cheap-code] deepseek は利用不可(402)。provider-cooldown.json に 2026-10-29T05:00:24.892Z まで記録しました。';
+  write(dir, 'executor-usage.jsonl', [10, 11, 12].map((min) => row(FALLBACK_COOLDOWN_ROW(min, { chain: [{ ...FALLBACK_COOLDOWN_ROW(min).chain[0], stderrTail: tail402 }, ...FALLBACK_COOLDOWN_ROW(min).chain] }))).join(''));
+  assert.equal(collectFindings({ home: dir, now: NOW }).some((f) => f.id === 'lane_outage_unrepaired' && f.provider === 'fallback'), false);
+});

@@ -55,6 +55,18 @@ test('recordSkippedNoExecutor は no-cheap-executor の行を追記する', () =
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
+test('recordSkippedNoExecutor は stderr の末尾200字を stderrTail に残し、空なら付けない', () => {
+  const home = makeHome();
+  try {
+    recordSkippedNoExecutor({ home, provider: 'glm', reason: 'codex-do exit 1', stderr: `${'x'.repeat(300)}無人枠 8/8` });
+    recordSkippedNoExecutor({ home, provider: 'glm', reason: 'codex-do exit 1', stderr: '  ' });
+    const [withTail, without] = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(withTail.stderrTail.length, 200);
+    assert.ok(withTail.stderrTail.endsWith('無人枠 8/8'));
+    assert.equal('stderrTail' in without, false);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
 function makeHome() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-ase-test-'));
   fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });

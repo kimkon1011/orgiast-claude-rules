@@ -520,7 +520,12 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     // (2026-10-28 実測: 15時台に codex が ok 8件でも、朝の exit 1/3/124 の21件が high になっていた)。
     const skippedRepairedByCodex = (row) => row.provider === 'skipped' && /^codex-do exit /.test(String(row.reason || ''))
       && codexSuccessTimes.some((time) => time > Date.parse(row.t));
-    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !skippedByCooldown(row) && !skippedRepairedByCodex(row) && !isEmptyDiffEscalationRow(row) && !isQuotaSweepBenignRow(row));
+    // wrapper が残した stderrTail が上限・残高・無人枠・クールダウンを名指ししている skipped 行は、
+    // 外部要因で投げられなかった記録であってコード欠陥の全滅証拠ではない(2026-10-28 実測: 無人枠 8/8 +
+    // glm/deepseek クールダウンで codex-do exit 1 が12件)。stderrTail の無い旧行は従来どおり数える。
+    const skippedExternalCause = (row) => row.provider === 'skipped' && row.status === 'no-cheap-executor'
+      && /unattended_budget|無人枠|クールダウン中|上限[/]エラーで使えない|usage_limit|Insufficient Balance|HTTP ?(402|429)/.test(String(row.stderrTail || ''));
+    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !skippedByCooldown(row) && !skippedExternalCause(row) && !skippedRepairedByCodex(row) && !isEmptyDiffEscalationRow(row) && !isQuotaSweepBenignRow(row));
     // 24h 窓が cooldown だけで埋まる＝上限中で一度も試行していない。レーンは止まっているが
     // 原因は上限側で、コードの欠陥ではない。low の可視化だけ残す(high にすると上限が明けるまで
     // 毎晩同じ偽の修理タスクが積まれる。黙って消すと止まっている事実自体が見えなくなる)。

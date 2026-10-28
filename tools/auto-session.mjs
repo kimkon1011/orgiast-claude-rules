@@ -791,7 +791,7 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
         if (alternate) { alternateTried = true; cheapProvider = alternate; launch(false); return; }
         if (cheap && codexLane && !codexTried) { launch(false, true); return; }
         if (claudeFallbackEnabled()) { recordFallbackToClaude({ reason }); launch(true); return; }
-        recordSkippedNoExecutor({ reason, provider: cheapProvider });
+        recordSkippedNoExecutor({ reason, provider: cheapProvider, stderr });
         finish(code, stdout, stderr, launchFailed, false, false, true);
         return;
       }

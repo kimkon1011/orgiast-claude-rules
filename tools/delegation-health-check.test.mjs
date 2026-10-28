@@ -1245,3 +1245,21 @@ test('新名 Flash も過去ログと同様に低成果バックエンドとし�
     chain: [{ backend: 'cheap-code:deepseek', model: 'deepseek-flash', secs: 1000, out: 5, outcome: 'ok' }] }]);
   assert.equal(counts.get('deepseek-flash'), 1);
 });
+
+const CODEX_DO_SKIPPED_WITH_TAIL = (min, code, stderrTail) => ({ ...CODEX_DO_SKIPPED(min, code), stderrTail });
+
+test('stderrTail が無人枠・クールダウンを名指しする skipped(codex-do exit N) は全滅の high にしない', () => {
+  const dir = home();
+  const tail = '[codex-do] backend=cheap-code:deepseek が上限/エラーで使えないため次へ';
+  write(dir, 'executor-usage.jsonl', [10, 11, 12].map((min) => row(CODEX_DO_SKIPPED_WITH_TAIL(min, 1, tail))).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.id === 'lane_outage_unrepaired'), false);
+});
+
+test('stderrTail が外部要因を示さない skipped(codex-do exit N) は high の未修理全滅のまま', () => {
+  const dir = home();
+  const tail = 'Error: spawn wsl ENOENT';
+  write(dir, 'executor-usage.jsonl', [10, 11, 12].map((min) => row(CODEX_DO_SKIPPED_WITH_TAIL(min, 3, tail))).join(''));
+  const outage = collectFindings({ home: dir, now: NOW }).find((f) => f.id === 'lane_outage_unrepaired');
+  assert.equal(outage.provider, 'skipped');
+});

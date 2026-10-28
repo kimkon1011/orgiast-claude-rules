@@ -373,7 +373,7 @@ export async function runHeadlessNextSession({ env, hostname, home, cwd, prompt,
           resolve({ ...retried, firstExecutor: `cheap-code:${choice.provider}`, fallbackToClaude: true });
           return;
         }
-        recordSkippedNoExecutor({ home, reason, provider: cheapProvider });
+        recordSkippedNoExecutor({ home, reason, provider: cheapProvider, stderr });
         resolve({ executor: `cheap-code:${cheapProvider}`, exitCode: code, status: 'failure', stdout, stderr, fallbackToClaude: false, skippedNoExecutor: true });
         return;
       }

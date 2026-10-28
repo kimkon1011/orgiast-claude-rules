@@ -192,9 +192,11 @@ export function recordFallbackToClaude({ home = process.env.ORGIAST_HOME || os.h
   } catch {}
 }
 
-export function recordSkippedNoExecutor({ home = process.env.ORGIAST_HOME || os.homedir(), reason, provider, appendImpl = null, now = new Date() } = {}) {
+export function recordSkippedNoExecutor({ home = process.env.ORGIAST_HOME || os.homedir(), reason, provider, stderr = '', appendImpl = null, now = new Date() } = {}) {
   try {
-    const row = `${JSON.stringify({ t: now.toISOString(), provider: 'skipped', category: 'unrouted', model: 'none', status: 'no-cheap-executor', reason: String(reason || provider || 'unknown') })}\n`;
+    // 原因（上限・残高・無人枠）が台帳に残らないと delegation-health が外部要因の停止を全滅と誤診する。末尾200字だけ残す。
+    const tail = String(stderr || '').trim().slice(-200);
+    const row = `${JSON.stringify({ t: now.toISOString(), provider: 'skipped', category: 'unrouted', model: 'none', status: 'no-cheap-executor', reason: String(reason || provider || 'unknown'), ...(tail ? { stderrTail: tail } : {}) })}\n`;
     const file = path.join(home, '.claude', 'executor-usage.jsonl');
     if (appendImpl) appendImpl(file, row, 'utf8');
     else { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.appendFileSync(file, row, 'utf8'); }

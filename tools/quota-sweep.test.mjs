@@ -513,6 +513,23 @@ test('fetch and push get a longer timeout and exactly one retry', () => {
   let calls = 0;
   assert.equal(commandRunner(() => ++calls === 1 ? { status: 1 } : { status: 0, stdout: 'ok' })('git', ['fetch']), 'ok');
 });
+test('index.lock 競合で失敗した git コマンドは1回だけ再試行し、lock は削除しない', () => {
+  const lockStderr = "fatal: Unable to create 'C:/repo/.git/worktrees/sweep/index.lock': File exists.\n\nAnother git process seems to be running in this repository, or the lock file may be stale\n";
+  let calls = 0;
+  const run = commandRunner(() => ++calls === 1 ? { status: 128, stderr: lockStderr } : { status: 0, stdout: 'ok' });
+  assert.equal(run('git', ['checkout', '--detach', 'origin/main'], '/tmp'), 'ok');
+  assert.equal(calls, 2);
+  // 競合が解消しない場合は従来どおり失敗として終わる（失敗検知・handoff 起票を壊さない）
+  calls = 0;
+  const run2 = commandRunner(() => { calls++; return { status: 128, stderr: lockStderr }; });
+  assert.throws(() => run2('git', ['checkout', '--detach', 'origin/main'], '/tmp'), /git checkout:.*index\.lock/s);
+  assert.equal(calls, 2);
+  // 通常の git 失敗（lock 競合でない）は再試行しない
+  calls = 0;
+  const run3 = commandRunner(() => { calls++; return { status: 128, stderr: 'fatal: not a git repository\n' }; });
+  assert.throws(() => run3('git', ['status'], '/tmp'), /git status:/);
+  assert.equal(calls, 1);
+});
 test('filtering current windows keeps provider read reasons', () => {
   const all = Object.assign([{ provider: 'claude', window: '5h', usedPercent: 0, resetsAt: null }, { provider: 'codex', observedAt: 2, window: 'primary' }], { reasons: { claude: 'HTTP 401', codex: null } });
   const filtered = filterWindowsForCurrentAuth(all, { codexAuthChangedAt: 1 });

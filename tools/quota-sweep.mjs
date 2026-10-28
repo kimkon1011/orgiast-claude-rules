@@ -183,8 +183,12 @@ export function commandRunner(spawnImpl = spawnSync, log = () => {}) {
       if (!r.error && r.status === 0) return String(r.stdout || '').trim();
       const error = new Error(`${exe} ${args[0]}: ${r.error?.message || String(r.stderr || '').slice(-1000)} (exit ${r.status}, timeout ${timeout}ms)`);
       error.failureKey = `${exe}-${args[0]}-${r.error?.code || r.status}`;
-      if (!network || attempt === 1) throw error;
-      log(`${error.message}; retry 1/1`);
+      // 共用 worktree の index.lock 競合（launcher の reset shared repo 等と並走）は数秒で
+      // 解消しうる。2026-10-27 に git-checkout-128 が2連続して handoff を起票した実績があるため、
+      // network と同様に1回だけ再試行する。lock ファイル自体は削除しない（稼働中の git を壊さない）。
+      const lockContention = /Unable to create '[^']*index\.lock': File exists\.|Another git process seems to be running/.test(String(r.stderr || '') + ' ' + String(r.error?.message || ''));
+      if ((!network && !lockContention) || attempt === 1) throw error;
+      log(`${error.message}; retry 1/1${lockContention ? ' (lock contention)' : ''}`);
     }
   };
 }

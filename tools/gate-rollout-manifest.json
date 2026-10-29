@@ -216,6 +216,12 @@
       "denyAfter": "2026-10-24T00:00:00Z",
       "pilotDeny": true
     },
+    "answer-canonical-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-29T00:00:00Z",
+      "denyAfter": "2026-11-05T00:00:00Z",
+      "pilotDeny": true
+    },
     "deferral-wait-gate": {
       "rollout": "deny",
       "distributedAt": "2026-10-20T00:00:00Z",

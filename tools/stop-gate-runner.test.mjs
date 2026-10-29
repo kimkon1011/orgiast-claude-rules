@@ -537,3 +537,21 @@ test('先行ゲートが全て降格された場合は第2段の監査で手渡�
   assert.equal(result.record.verdict, 'block');
   assert.deepEqual(result.record.blockedBy, ['handoff-audit-gate']);
 });
+
+test('単発回答をStopで差し戻し、正本化を記録すれば通す', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-canonical-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const text = '回答案: マニュアルに記載がありません。';
+  const result = invoke(home, 'canonical', text);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.decision, 'block');
+  assert.match(output.reason, /answer-canonical-gate[\s\S]*\[ANSWER-CANONICAL\]/);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(record.blockedBy.includes('answer-canonical-gate'));
+  assert.ok(record.reasonCodes.includes('ANSWER-CANONICAL'));
+  // 正本化を書けば answer-canonical-gate は外れる（同じ文面に反応する他gateの判定はこのテストの対象外）。
+  const repaired = invoke(home, 'canonical', `${text}\n正本化: 社内FAQ`);
+  assert.equal(repaired.status, 0, repaired.stderr);
+  assert.doesNotMatch(repaired.stdout, /answer-canonical-gate|\[ANSWER-CANONICAL\]/);
+});

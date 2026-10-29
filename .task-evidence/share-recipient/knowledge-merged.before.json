@@ -1,0 +1,27 @@
+{
+  "description": "knowledge-inbox の統合済み台帳。/rules-sync (merge) が処理した投稿をここに記録する（Drive MCP に delete が無いため台帳方式）",
+  "lastMergedAt": "2026-10-01",
+  "lastMergedBy": "kim@orgiast.jp",
+  "manifestVersionAfterMerge": 7,
+  "processed": [
+    { "fileId": "1kVt3QLmztx6o6kOF3G1Gqrt9aKmSiwhV", "title": "20260706-kim-handoff-full-value-oneclick-copy.md", "mergedAt": "2026-10-01", "status": "already-present", "target": "ONBOARDING §1.5.2.1" },
+    { "fileId": "1HsENzYRaYLYuiQqkXbP6M7D_Pg5bUEky", "title": "20260713-nishi-cost-freetier-newaccount.md", "mergedAt": "2026-10-01", "status": "merged", "target": "ONBOARDING §1.17.1" },
+    { "fileId": "1_H5Uzbtnc0U1tzsaoIONsv1a7PKO7un1", "title": "20260826-seisaku-team-browser-verify-live-state.md", "mergedAt": "2026-10-01", "status": "merged", "target": "ONBOARDING §1.4" },
+    { "fileId": "1umjnJOjA0fYg5SAEH7MsGW6sNVQuoik0", "title": "20260827-kim-codex-prompt-via-file-not-argv.md", "mergedAt": "2026-10-01", "status": "already-present", "target": "ONBOARDING §1.17" },
+    { "fileId": "1y71EUrW7jvpngqZR-cZuxSA8AGOK-sT9", "title": "20260828-nishi-account-context-in-handoffs.md", "mergedAt": "2026-10-01", "status": "merged", "target": "ONBOARDING §1.5.1" },
+    { "fileId": "1LYNgWOifNK5YKUeJkHCC4eDHO1SL-4Vq", "title": "20260901-nishi-contact-text-inline-no-gmail-draft.md", "mergedAt": "2026-10-01", "status": "already-present", "target": "ONBOARDING §1.1" },
+    { "fileId": "18soKpvn4KTB2z-u6pPQnPZfDB2-KUR9k", "title": "20260901-nishi-unwired-gates-invisible.md", "mergedAt": "2026-10-01", "status": "merged", "target": "ONBOARDING §1.7" },
+    { "fileId": "18XLo5MlihQw3SBxQYEk9WGXV7elk5FHt", "title": "20260902-seisaku-team-drive-mcp-large-result-to-file.md", "mergedAt": "2026-10-01", "status": "merged", "target": "ONBOARDING §1.17.1" },
+    { "fileId": "1eMOAO9TggBrP8HiqM9TQz58DVv-GbxIr", "title": "20260902-seisaku-team-gas-run-null-becomes-undefined.md", "mergedAt": "2026-10-01", "status": "merged", "target": "rules/gas.md" },
+    { "fileId": "1tc8Fips64V-BK3t4Dnr1_JrCEJo58LHP", "title": "20260902-seisaku-team-hyphenated-id-global-reference.md", "mergedAt": "2026-10-01", "status": "merged", "target": "rules/gas.md" },
+    { "fileId": "1m6mdCgxQEvU3pLMo8JuSlJZC-DwoJwqZ", "title": "20260910-seisaku-cmd-batch-ascii-only.md", "mergedAt": "2026-10-01", "status": "merged", "target": "ONBOARDING §1.7" },
+    { "fileId": "1X3gOmZ2-6XLN7lp4PbKMsd7hIY-Tw5-5", "title": "20260915-nishi-no-sonnet-fallback-without-approval.md", "mergedAt": "2026-10-01", "status": "merged", "target": "ONBOARDING §1.18 / §1.18.1 + 実行レーン hook" },
+    { "fileId": "1v_NAWG3bxegrcxugxz-cNrHGWm7SHtR7", "title": "20260922-kim-autopilot-loop-skill.md", "mergedAt": "2026-10-01", "status": "merged", "target": "ONBOARDING §1.15 (skills/autopilot は既設)" },
+    { "fileId": "1u3--fi3PmlfDf1Fun6gQUwJ_-9fJzy2o", "title": "20260922-kim-case-deliverables-into-jisshikeikaku-sheet.md", "mergedAt": "2026-10-01", "status": "merged", "target": "ONBOARDING §2.9" },
+    { "fileId": "15YrA-63-yFefN6OntgxZ1cNKKcBR3Ycv", "title": "20260923-nishi-gh-unauth-not-a-handoff-reason.md", "mergedAt": "2026-10-01", "status": "already-present", "target": "ONBOARDING §1.15" },
+    { "fileId": "1_Vg3rVZsJkv7WSkHYjCgpcVAX_FVbar1", "title": "20260925-nishi-canonical-branch-pr-automerge.md", "mergedAt": "2026-10-01", "status": "merged", "target": "ONBOARDING §1.21" },
+    { "fileId": "160SIOhIgKUr_e6pNlBRjsJLDcXeBKvko", "title": "20260930-nishi-command-needs-paste-location.md", "mergedAt": "2026-10-01", "status": "merged", "target": "ONBOARDING §1.5.1" },
+    { "fileId": "158RXr3lh8YvHIXf2ZCIPJMxi7WdJAEUd", "title": "20260930-nishi-open-url-with-account.md", "mergedAt": "2026-10-01", "status": "merged", "target": "ONBOARDING §1.5" },
+    { "fileId": "1UHYwtyg0CVGCAjCG8Oeho5ktI-mptYM-", "title": "20260930-nishi-single-consolidated-handoff.md", "mergedAt": "2026-10-01", "status": "merged", "target": "ONBOARDING §1.5.1" }
+  ]
+}

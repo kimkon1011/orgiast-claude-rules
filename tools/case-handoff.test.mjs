@@ -79,3 +79,15 @@ test('setup converge installs all four hooks with matching verification and repa
   const second = run(); assert.equal(second.status, 0, second.stdout + second.stderr);
   assert.equal(JSON.parse(second.stdout).items.every(i => i.status === 'OK'), true, second.stdout);
 });
+
+test('debounced Stop sends a complete multi-batch burst then defers new speech for ten minutes', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'case-burst-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const file = path.join(home, 'session.jsonl');
+  fs.writeFileSync(file, row('one', 'user', '長'.repeat(40000)) + '\n' + row('two', 'assistant', '文'.repeat(40000)) + '\n');
+  const c = client({ home, ...identity, fetchImpl: async (_url, init) => Response.json({ batchId: JSON.parse(init.body).batchId, stateReady: true }) });
+  c.bind(identity.sessionId, ['261021KGS'], file); c.stage(identity.sessionId);
+  assert.deepEqual(await c.drain({ dueOnly: true }), { sent: 2, remaining: 0 });
+  fs.appendFileSync(file, row('three', 'user', '追加') + '\n'); c.stage(identity.sessionId);
+  assert.deepEqual(await c.drain({ dueOnly: true }), { sent: 0, remaining: 1 });
+  assert.deepEqual(await c.drain(), { sent: 1, remaining: 0 });
+});

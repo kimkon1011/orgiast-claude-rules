@@ -19,7 +19,7 @@ export function detectCases(prompt, catalog = []) {
   for (const item of catalog) if (CASE_ID.test(item.id) && item.name?.length >= 2 && String(prompt).includes(item.name)) ids.push(item.id);
   return [...new Set(ids)];
 }
-const safe = value => /^[A-Za-z0-9@._-]{1,160}$/.test(value);
+const safe = value => /^[A-Za-z0-9@._-]{1,160}$/.test(value) && !['__proto__', 'constructor', 'prototype', '.', '..'].includes(value);
 export function validateIdentity({ sessionId, account, pc }) {
   if (![sessionId, account, pc].every(v => typeof v === 'string' && safe(v))) throw Error('invalid session/account/PC');
 }

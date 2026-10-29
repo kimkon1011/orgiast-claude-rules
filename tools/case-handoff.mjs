@@ -93,6 +93,7 @@ export function client(options = {}) {
     let sent = 0;
     try {
       const deadline = Date.now() + 240000;
+      const eligibleSessions = new Set();
       while (Date.now() < deadline) {
         const files = fs.readdirSync(dir).filter(n => n.endsWith('.json'));
         if (!files.length) break;
@@ -100,7 +101,8 @@ export function client(options = {}) {
         for (const name of files) {
           const file = path.join(dir, name), batch = readJson(file);
           const current = readJson(bindingFile(batch.sessionId));
-          if (dueOnly && !fs.existsSync(path.join(base, 'case-last-error.txt')) && Date.now() - (current?.lastSentAt || 0) < 600000) continue;
+          if (dueOnly && !eligibleSessions.has(batch.sessionId) && !fs.existsSync(path.join(base, 'case-last-error.txt')) && Date.now() - (current?.lastSentAt || 0) < 600000) continue;
+          eligibleSessions.add(batch.sessionId);
           const result = await request({}, batch);
           if (result.batchId !== batch.batchId || result.stateReady !== true) throw Error('保存／STATE更新の読み戻し確認に失敗');
           const bindingPath = bindingFile(batch.sessionId), binding = readJson(bindingPath);

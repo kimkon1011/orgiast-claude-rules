@@ -33,7 +33,7 @@ export function selectContext(ledger, { home, sessionId = '', now = Date.now() }
   let result = header;
   const expectation = expectations.find(i => i.diagnosis || i.status === 'done') || expectations[0];
   if (expectation) {
-    const routes = (expectation.repairs || []).flatMap(r => r.routes.map(route => `${route.payload.to}:prompt=${route.result?.status || '不明'}${route.result?.failReason ? `(${route.result.failReason})` : ''}`)).join(' / ');
+    const routes = [...(expectation.repairs || []), ...(expectation.pendingRepair ? [expectation.pendingRepair] : [])].flatMap(r => r.routes.map(route => `${route.payload.to}:prompt=${route.result?.status || '不明'}${route.result?.failReason ? `(${route.result.failReason})` : ''}`)).join(' / ');
     result += redactSecrets(`受信待ち ${expectation.key}: ${expectation.status} / 原因=${expectation.diagnosis?.cause || '期限待ち'} / 修復=${expectation.repairs.length}/2 / ${expectation.humanReason || expectation.diagnosis?.detail || expectation.until} / 試した経路と結果: ${routes || 'なし'}${expectation.evidence ? ` / 受信証拠=${expectation.evidence.mailId}` : ''}`).slice(0, 500) + '\n';
   }
   if (candidates.length) result += redactSecrets(`登録候補（${ledger.registrationCandidates.at}時点・自己申告、作業用番号は未確定）: ${candidates.slice(0, 3).map(c => `${c.label} ${c.account}`).join(' / ')}${candidates.length > 3 ? ` ほか${candidates.length - 3}件` : ''}`).slice(0, 220) + '\n';

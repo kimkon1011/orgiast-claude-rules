@@ -150,3 +150,11 @@ test('older GAS without advertised trace capability is never probed with an unkn
   await checkExpectations(f.ledger, f.ctx);
   assert.match(f.item.diagnosis.errors.join(' '), /サーバ未対応/);
 });
+
+
+test('configuration/hook failures count as unconverged; poll repair does not change consent', async t => {
+  const f = fixture(t); f.health.beacons[0].failing = ['settings:outbound-claim-evidence-gate'];
+  await checkExpectations(f.ledger, f.ctx, { repair: true });
+  assert.equal(f.item.diagnosis.cause, '配布未収束'); assert.match(f.sent[0].body, /setup\.mjs --converge/);
+  assert.match(f.sent[0].body, /オプトイン変更/);
+});

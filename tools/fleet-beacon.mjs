@@ -48,17 +48,6 @@ export function sanitizeReason(value) {
   const text = redactSecrets(String(value ?? '')).replace(ABSOLUTE_PATH, '[path]').replace(/\s+/g, ' ').trim();
   return text.slice(0, REASON_LIMIT);
 }
-function domainOf(email) {
-  const match = String(email ?? '').match(/@([^\s@]+)$/);
-  return match ? match[1] : '';
-}
-// account はドメインのみ。メールのローカル部・パスは絶対に入れない。
-export function beaconAccount({ label, pcMap, identity }) {
-  const entry = pcMap && typeof pcMap === 'object' ? pcMap[label] : null;
-  const fromMap = domainOf(entry?.account);
-  if (fromMap) return fromMap;
-  return domainOf(identity?.gitEmail);
-}
 // mobile-standby ステップの reason に「待機数/目標」を追記する。待機数が取れなければ「待機数不明」。
 export function mobileStandbySuffix(home, now = Date.now()) {
   let waiting = null;

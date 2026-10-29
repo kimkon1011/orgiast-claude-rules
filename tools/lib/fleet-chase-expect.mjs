@@ -36,7 +36,7 @@ export function registerExpectation(ledger, options, now) {
 }
 export function matchesExpectation(item, mail, pcMap, now) {
   const at = millis(mail.createdAt || mail.receivedAt || mail.at);
-  return !!mail.id && ['note', 'prompt'].includes(mail.kind || mail.messageKind)
+  return !!mail.id && typeof mail.from === 'string' && !!mail.from.trim() && ['note', 'prompt'].includes(mail.kind || mail.messageKind)
     && at >= millis(item.createdAt) - 5 * 60000 && at <= now
     && String(mail.why || '').includes(item.title)
     && !same(mail.from, 'kim-PC', pcMap)
@@ -57,7 +57,7 @@ export function classifyExpectation(item, { health, trace, pcMap = {}, now }) {
   let cause = 'その他', detail = '一致する報告の受信を確認できない';
   const wrong = mails.filter(m => !same(m.to, 'kim-PC', pcMap) && m.to !== 'all');
   const failed = mails.filter(m => m.status === 'failed' || m.failReason);
-  const unconverged = targets.filter(r => r.failing.some(s => /converg|sync|deploy|install|fleet-mail|fleet-poll|task:/i.test(s)));
+  const unconverged = targets.filter(r => r.failing.some(s => /converg|sync|deploy|install|fleet-mail|fleet-poll|task:|settings:|hook:|skill:|repo:/i.test(s)));
   // Actual mail evidence takes precedence over a stale/missing beacon.
   let repairTargets = [];
   if (wrong.length) { cause = '宛先誤り'; detail = `送信先: ${[...new Set(wrong.map(m => m.to))].join(', ')}`; }
@@ -73,7 +73,7 @@ export function classifyExpectation(item, { health, trace, pcMap = {}, now }) {
 function repairBody(item, cause) {
   const action = cause === '未着手'
     ? 'fleet-mail の poll と定期タスクを点検し、既存の許可範囲内で復旧してください。Windows は tools/fleet-fix-now.ps1 -NoOptin -NoLogin 相当の自己修復を使用してください。'
-    : cause === '配布未収束' ? '配布の失敗ステップを点検し、既存の converge 経路で最新 main への収束を促してください。'
+    : cause === '配布未収束' ? '配布の失敗ステップを点検し、既存の配布経路で最新 main を取得し、node tools/setup.mjs --converge で収束を促してください。'
       : 'fleet-mail の送信失敗理由を点検し、送信経路を復旧して報告を再送してください。';
   return `${action}\n受信待ちキー: ${item.key}\n報告の why: ${item.title}\n背景: ${item.reason}\n対象の作業記録がある場合だけ実際の点検結果を node tools/fleet-mail.mjs --send --to kim-PC --kind note --why <上記の報告why> --body-file <結果ファイル> で送ってください。作業記録がなければその旨を修復依頼への返信で知らせてください。資格情報の送信・オプトイン変更・kimへのDiscord DMは禁止。`;
 }

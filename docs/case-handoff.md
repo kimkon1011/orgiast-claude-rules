@@ -22,4 +22,4 @@ UserPromptSubmit / SessionStart は案件一覧の1日キャッシュを使い�
 
 既存の `setup --converge` が4イベントのhookを登録・検査・修復し、onboarding-syncが2つのskillを配布する。会話の本文はhookから注入しない。
 
-2026-10-29、kim-PCの実セッションをローカルAPI実装→本番keyserve認証→本番Drive→実AIで往復。user本文2件→Drive2件、STATE 727 bytes、cold resume 843 bytes。49案件の名前キャッシュを実読。再送による重複なし。テスト用Driveフォルダの削除404とregistry削除を確認。本番APIの配備後に同じ往復検証を再実行する。
+2026-10-29、kim-PCの実セッションをローカルAPI実装→本番keyserve認証→本番Drive→実AIで往復。user本文2件→Drive2件、STATE 727 bytes、cold resume 843 bytes。49案件の名前キャッシュを実読。再送による重複なし。テスト用Driveフォルダの削除404とregistry削除を確認。本番配備後にも同じセッションで往復し、user本文2件一致、STATE808 bytes、cold resume924 bytes、再送重複なし、テスト削除済みを確認。既存memory配信1,000件の世代・件数も維持。サーバPR #1 はマージ済み。

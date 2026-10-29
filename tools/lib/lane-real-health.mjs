@@ -62,7 +62,9 @@ export function applyRealLaneHealth(health, home, now = Date.now()) {
     if (s) state.real24h = s;
     const errorQuota = quotaFailure(state.error);
     const errorUntil = quotaReset(state.error);
-    const ledgerQuota = s?.quotaCalls && (!s.until || s.until > now) && s.lastQuotaAt > s.lastOkAt;
+    // A direct probe success after the last 429 proves the quota window is over.
+    const probeOkAt = millis(state.lastProbeOkAt) || 0;
+    const ledgerQuota = s?.quotaCalls && (!s.until || s.until > now) && s.lastQuotaAt > Math.max(s.lastOkAt || 0, probeOkAt);
     // Only this lane's error, ledger or active cooldown may supply a reset.
     const stateUntil = millis(state.until);
     const cooldownQuota = !state.alive && quotaFailure(state.reason)

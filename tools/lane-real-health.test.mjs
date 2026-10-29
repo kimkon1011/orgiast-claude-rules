@@ -209,3 +209,10 @@ test('expired ledger and error resets do not create quota_wait', t => {
   assert.equal(h.lanes.deepseek.alive, true);
   assert.equal(h.lanes.deepseek.until, undefined);
 });
+test('direct probe success after an untimed 429 clears ledger-only quota_wait', t => {
+  const home = fixture(t, [{ status: 'ok', t: new Date(now - 900_000).toISOString() }, { status: '429', reason: 'HTTP 429', t: new Date(now - 600_000).toISOString() }]);
+  const stale = { lanes: { deepseek: { alive: true, reason: 'probe_ok', lastProbeOkAt: new Date(now - 700_000).toISOString() } } };
+  applyRealLaneHealth(stale, home, now); assert.equal(stale.lanes.deepseek.reason, 'quota_wait');
+  const fresh = { lanes: { deepseek: { alive: true, reason: 'probe_ok', lastProbeOkAt: new Date(now - 1000).toISOString() } } };
+  applyRealLaneHealth(fresh, home, now); assert.equal(fresh.lanes.deepseek.alive, true); assert.equal(fresh.lanes.deepseek.reason, 'probe_ok');
+});

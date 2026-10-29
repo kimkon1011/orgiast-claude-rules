@@ -19,7 +19,7 @@ const PROVIDERS = {
   deepseek: gatewayConfig('deepseek'),
   grok: { base: 'https://api.x.ai/v1/chat/completions', keyEnv: 'XAI_API_KEY', keyFile: 'xai.env', model: 'grok-3' },
   kimi: gatewayConfig('kimi'),
-  mistral: { base: 'https://api.mistral.ai/v1/chat/completions', keyEnv: 'MISTRAL_API_KEY', keyFile: 'mistral.env', model: 'mistral-large-latest' },
+  mistral: gatewayConfig('mistral'),
 };
 
 const args = process.argv.slice(2);

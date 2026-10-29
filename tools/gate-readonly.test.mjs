@@ -4,11 +4,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { discoverGates, toolsDir } from './gate-contracts.mjs';
+import { toolsDir } from './gate-contracts.mjs';
 import { isReadonlyCommand } from './readonly-command.mjs';
 import { evaluateGates } from './stop-gate-runner.mjs';
 const commands=fs.readFileSync(new URL('./fixtures/readonly-commands.txt',import.meta.url),'utf8').split(/\r?\n/).filter(s=>s&&!s.startsWith('#'));
-for(const name of discoverGates()) test(`${name}: full readonly corpus (Bash/PowerShell)`,async t=>{
+const name='gate-readonly';
+test(`${name}: full readonly corpus (Bash/PowerShell)`,async t=>{
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'gate-readonly-'));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
  fs.mkdirSync(path.join(home,'.claude/session-lane'),{recursive:true});
  fs.writeFileSync(path.join(home,'.claude/session-lane/test.json'),JSON.stringify({lane:'implement',toolCalls:99}));

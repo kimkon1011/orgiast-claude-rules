@@ -272,6 +272,12 @@ PR のマージを人に頼む文（本文の「次に kim がすること」・
 
 2026-10-25 cr 指摘: kim に「マージして」と頼んだ PR は、開くとほぼ全て既にマージ済みだった（cr568 は 2026-10-23 から push 権限があり、cr-PC の自動セッションが 10〜15分でマージ。kimkon1011 の PR は auto-merge.yml）。既存 Stop runner から呼ぶので Stop hook の追加登録は不要。`ORGIAST_MERGE_HANDOFF_GATE=0` で無効化できる。
 
+## gate-readonly
+
+PreToolUse で検出した Bash/PowerShell のコマンドが `readonly-command.mjs` の `isReadonlyCommand()` に合致した場合、読み取り専用コマンドとして自動許可する。これにより `git status`・`gh pr view`・`vercel ls` 等の読み取り専用コマンドが毎回の権限確認を経ずに実行可能になる。合致しないコマンドは通常の権限確認に委ねる（ブロックしない）。
+
+復旧: 本ゲートが誤ったコマンドを許可している場合、`readonly-command.mjs` のパターンを見直す。このゲートは deny ではなく allow 専用であり、誤許可を発見したらパターンを狭める方向で修正する。
+
 ## message-locator-gate
 
 メッセージ・通知を人に案内する文（「Discord に送りました」「メールが届いています」「DM を開いて」など）は、次の目印がそろっている時だけ通す。毎日1000件以上のメッセージを受け取る人が、一発で見つけられるようにするため（2026-10-26 kim 指摘: 「Discord の DM で今日19時ごろの通知を開き」では、どのアカウントの誰からの何か分からず見つけられなかった）。①アプリと開くアカウント（例: Discord の cr@ ログイン、Gmail の seisaku-team@） ②送信者（Bot 名・人の名前・メールアドレス） ③場所（DM の相手名・チャンネル名・ラベル） ④日時（日付と時:分） ⑤先頭行か件名を原文のまま＋そのメッセージへの直接リンク（Discord は `https://discord.com/channels/<guild|@me>/<channel>/<message>`、Gmail は authuser 付きのスレッド URL）。できれば中身の要点も本文に書き、開かなくても判断できるようにする。目印が本当に不要な一般論だけ `[MSG-LOCATOR-OK: <理由>]`。既存 Stop runner から呼ぶので Stop hook の追加登録は不要。

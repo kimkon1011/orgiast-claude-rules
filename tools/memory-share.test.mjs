@@ -250,3 +250,68 @@ test('invalid paths, hashes and mixed generations leave installed files and stat
     assert.equal(fs.readFileSync(path.join(f.dir, 'a.md'), 'utf8'), 'a');
   }
 });
+
+test('knowledge-lock: missing key keeps offline install unchanged', async t => {
+  const f = receiver(t);
+  const fromDir = path.join(f.home, 'bundle');
+  fs.mkdirSync(fromDir); fs.writeFileSync(path.join(fromDir, 'a.md'), 'a');
+  const result = await installSharedMemories({ ...f.options, fromDir,
+    knowledgeDeps: { toolsDir: f.home, fetch: () => assert.fail('verification without key') } });
+  assert.equal(result.installed, 1);
+});
+test('knowledge-lock: signed cached contract verdict gates install without touching existing files', async t => {
+  const { canonicalVerdict } = await import('./knowledge-lock.mjs');
+  const pair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  for (const mode of ['contracted', 'outside', 'unknown', 'invalid']) {
+    const f = receiver(t);
+    fs.writeFileSync(path.join(f.home, 'knowledge-lock-pubkey.pem'), pair.publicKey.export({ type: 'spki', format: 'pem' }));
+    fs.mkdirSync(f.dir, { recursive: true });
+    fs.writeFileSync(path.join(f.dir, 'keep.md'), 'unchanged');
+    fs.writeFileSync(path.join(f.dir, '.state.json'), '{}');
+    const fromDir = path.join(f.home, 'bundle');
+    fs.mkdirSync(fromDir); fs.writeFileSync(path.join(fromDir, 'a.md'), 'new');
+    const now = Math.floor(Date.now() / 1000);
+    const verdict = { email: 'test@example.test', orgUuid: 'org', contracted: mode === 'contracted',
+      reason: mode === 'unknown' ? 'profile_unavailable' : 'test', pcId: 'receiver', iat: now, exp: now + 3600 };
+    const sig = crypto.sign('sha256', Buffer.from(canonicalVerdict(verdict)), {
+      key: pair.privateKey, padding: crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength: 32 }).toString('base64url');
+    fs.mkdirSync(path.join(f.home, '.claude/state'));
+    fs.writeFileSync(path.join(f.home, '.claude/state/knowledge-verdict.json'), JSON.stringify({ verdict, sig: mode === 'invalid' ? 'bad' : sig }));
+    const errors = [];
+    const result = await installSharedMemories({ ...f.options, fromDir,
+      stderr: text => errors.push(text), knowledgeDeps: { toolsDir: f.home, fetch: () => { throw Error('offline'); } } });
+    if (mode === 'contracted') assert.equal(result.installed, 1);
+    else {
+      assert.equal(fs.readFileSync(path.join(f.dir, 'keep.md'), 'utf8'), 'unchanged');
+      assert.ok(result.reason);
+      assert.equal(fs.existsSync(path.join(f.dir, 'a.md')), false);
+      assert.equal(fs.readFileSync(path.join(f.dir, '.state.json'), 'utf8'), '{}');
+      assert.equal(errors.length, 1); assert.equal(errors[0].trim().split('\n').length, 1);
+    }
+  }
+});
+
+test('knowledge-lock: cache miss verifies server signature before installing and reuses cache', async t => {
+  const { canonicalVerdict } = await import('./knowledge-lock.mjs');
+  const f = receiver(t);
+  const pair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  fs.mkdirSync(path.join(f.home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(f.home, '.claude/.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'test' } }));
+  fs.writeFileSync(path.join(f.home, 'knowledge-lock-pubkey.pem'), pair.publicKey.export({ type: 'spki', format: 'pem' }));
+  const now = Math.floor(Date.now() / 1000);
+  const verdict = { email: 'test@example.test', orgUuid: 'org', contracted: true, reason: 'active_email',
+    pcId: 'receiver', iat: now, exp: now + 3600 };
+  const sig = crypto.sign('sha256', Buffer.from(canonicalVerdict(verdict)), {
+    key: pair.privateKey, padding: crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength: 32 }).toString('base64url');
+  const fromDir = path.join(f.home, 'bundle');
+  fs.mkdirSync(fromDir); fs.writeFileSync(path.join(fromDir, 'a.md'), 'a');
+  let calls = 0;
+  const options = { ...f.options, fromDir, env: { ...f.options.env, ORGIAST_KEYSERVE_SECRET: 'test' },
+    knowledgeDeps: { toolsDir: f.home, fetch: async (_url, opts) => {
+      calls++; assert.equal(JSON.parse(opts.body).action, 'verify-account');
+      return { ok: true, json: async () => ({ verdict, sig }) };
+    } } };
+  assert.equal((await installSharedMemories(options)).installed, 1);
+  await installSharedMemories(options);
+  assert.equal(calls, 1);
+});

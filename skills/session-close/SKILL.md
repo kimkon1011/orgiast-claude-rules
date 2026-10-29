@@ -205,3 +205,6 @@ user には `/session-close` と `/clear` の違いも、タブを閉じる操�
 - セッションファイル・Drive のファイルは絶対に削除しない（過去版が必要 / kim 厳命）。
 - memory 書き込み前に必ず既存を検索し、重複を防ぐ。
 - コスト実績を見たい時は `node ~/orgiast-claude-rules/tools/cost-work-loop.mjs`。
+
+公開鍵配布後は next-session.md.lock が併置される。
+平文が無い場合は `node tools/knowledge-lock.mjs open ~/.claude/next-session.md.lock` で読む（契約アカウントは自動、契約外は kim 承認）。

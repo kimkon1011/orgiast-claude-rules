@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readHandoff, handoffLockEnabled } from './lib/handoff-store.mjs';
 import fs from 'node:fs';
 import { rotate, MAX_BYTES } from './next-session-rotate.mjs';
 import os from 'node:os';
@@ -1099,7 +1100,11 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     catch (error) { console.error(`[rescue-todo-sweep] ${error?.message ?? error}`); }
   }
   // フォーム報告は next-session.md と独立した入力源なので、片方が無くてももう片方を止めない。
-  const parsed = fs.existsSync(nextFile) ? parseHandoff(fs.readFileSync(nextFile, 'utf8')) : { block: '', todos: [], todoBlocks: [], sections: {} };
+  const handoffText = await readHandoff(nextFile, { ...io.knowledgeDeps, home }).catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  const parsed = handoffText === null ? { block: '', todos: [], todoBlocks: [], sections: {} } : parseHandoff(handoffText);
   const feedbackIssues = await listIssues();
   let taskLedgerItems = [];
   try {
@@ -1211,7 +1216,9 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       if (!timing.run) break;
       // バッチ中に先行の子が完了させた TODO は起動しない（子セッション1本の無駄）。
       let currentHandoff = '';
-      try { currentHandoff = fs.readFileSync(nextFile, 'utf8'); } catch {}
+      try { currentHandoff = await readHandoff(nextFile, { ...io.knowledgeDeps, home }); } catch (error) {
+        if (error.code !== 'ENOENT' && handoffLockEnabled(io.knowledgeDeps)) throw error;
+      }
       if (isTodoAlreadyDone(currentHandoff, todo)) {
         completedChildren += 1;
         const now = new Date().toISOString();

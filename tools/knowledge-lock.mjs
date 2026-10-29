@@ -142,6 +142,31 @@ export function migrateTargets(home, root) {
   return targets.sort();
 }
 
+export async function openKnowledge(file, deps = {}) {
+  let text = '', approval;
+  const code = await main(['open', file], { ...deps, stdout: v => { text += v; },
+    stderr: () => {}, onApproval: v => { approval = v; } });
+  if (code === 3) throw Object.assign(new Error('kim の承認が必要です'), {
+    code: 'approval_required', request: approval.request, approveUrl: approval.approveUrl });
+  if (code !== 0) throw Object.assign(new Error('引き継ぎの開封に失敗しました'), { code: 'knowledge_open_failed' });
+  return text;
+}
+
+export async function verifyAccount(deps = {}) {
+  const ctx = context(deps);
+  const pem = fs.readFileSync(path.join(ctx.toolsDir, 'knowledge-lock-pubkey.pem'), 'utf8');
+  const pcId = requireKeyservePcId(ctx.home, ctx.env);
+  try {
+    const cached = readJson(path.join(ctx.home, '.claude/state/knowledge-verdict.json'));
+    if (verifyVerdict(cached.verdict, cached.sig, pem, pcId, ctx.now())) return cached.verdict;
+  } catch { /* Invalid cache requires server verification. */ }
+  let output = '';
+  const code = await main(['verify-account', '--json'], { ...deps,
+    stdout: v => { output += v; }, stderr: () => {} });
+  if (![0, 4].includes(code)) throw new Error('アカウント判定不能');
+  return JSON.parse(output).verdict;
+}
+
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const ctx = context(deps);
   let command = argv[0];
@@ -261,6 +286,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
         ...(options.request ? { request: options.request, grant: options.grant } : {}) });
       if (result.status === 'approval_required') {
         if (typeof result.request !== 'string' || typeof result.approveUrl !== 'string') fail('承認レスポンスが不正です');
+        deps.onApproval?.(result);
         ctx.stderr(`契約外アカウントのため kim の承認が必要。${result.dmSent ? 'kim のスマホに承認リンクを送りました。' : `リンク: ${result.approveUrl}`}\n承認後に表示される8文字コードで再実行: node tools/knowledge-lock.mjs open ${JSON.stringify(file)} --request ${result.request} --grant <コード>\n`);
         return 3;
       }

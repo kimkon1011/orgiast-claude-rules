@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readHandoff, handoffLockEnabled } from './lib/handoff-store.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -576,9 +577,6 @@ export async function launchNextSession(argv = [], io = {}) {
     const claudeConfigPath = path.join(home, '.claude.json');
     const handoffPath = path.join(claudeDir, 'next-session.md');
     const currentPath = path.join(claudeDir, 'current-session.json');
-    const readText = async (file) => {
-      try { return await readFile(file, 'utf8'); } catch { return ''; }
-    };
     const readJson = async (file, fallback) => {
       try { return JSON.parse(await readFile(file, 'utf8')); } catch { return fallback; }
     };
@@ -673,7 +671,10 @@ export async function launchNextSession(argv = [], io = {}) {
       return 0;
     }
 
-    const handoffText = await readText(handoffPath);
+    const handoffText = await readHandoff(handoffPath, { ...io.knowledgeDeps, home, env, readFile }).catch(error => {
+      if (error.code === 'ENOENT' || !handoffLockEnabled(io.knowledgeDeps)) return '';
+      throw error;
+    });
     const handoffCwd = parseHandoffCwd(handoffText);
     const handoffModel = parseHandoffModel(handoffText);
     const current = await readJson(currentPath, {});

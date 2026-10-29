@@ -72,3 +72,6 @@ description: 新しいセッションを前セッションの引き継ぎから�
 - 引き継ぎファイルを読まずに「続きから」を始めない。文脈は履歴ではなく `next-session.md` と memory が担保している。
 - 目的以外の依頼が来たら、着手前に「別セッションに分けましょう」と提案する。
 - `next-session.md` は上書きでなく**採用した目的を消して残りを残す**形で更新する（他の残TODO を失わない）。
+
+公開鍵配布後は next-session.md.lock が併置される。
+平文が無い場合は `node tools/knowledge-lock.mjs open ~/.claude/next-session.md.lock` で読む（契約アカウントは自動、契約外は kim 承認）。

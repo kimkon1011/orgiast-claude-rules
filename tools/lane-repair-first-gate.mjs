@@ -16,6 +16,15 @@ export function repairCommand(command) {
   const tokens = [];
   let rest = String(command || '').trim();
   if (!rest || /[`$\r\n]/.test(rest)) return false;
+  let base = repo;
+  while (true) {
+    const prefix = rest.match(/^cd(?:\s+[\/|-][a-zA-Z]+)*\s+(?:"([^"\n]*)"|'([^'\n]*)'|([^\s"';&|<>]+))\s*(?:&&|;)\s*/i);
+    if (!prefix) break;
+    const dir = prefix[1] ?? prefix[2] ?? prefix[3];
+    if (/[(){}\[\]<>|;&]/.test(dir)) return false;
+    base = path.resolve(base, dir);
+    rest = rest.slice(prefix[0].length).trim();
+  }
   while (rest) {
     const match = rest.match(/^(?:"([^"\n]*)"|'([^'\n]*)'|([^\s"';&|<>]+))(?:\s+|$)/);
     if (!match || match[3] && /[(){}\[\]]/.test(match[3])) return false;
@@ -25,7 +34,7 @@ export function repairCommand(command) {
   const [cmd, ...args] = tokens;
   if (/^(?:node|node.exe)$/.test(cmd)) {
     const allowed = ['lane-doctor.mjs', 'lane-repair-log.mjs', 'llm-ask.mjs', 'codex-do.mjs', 'env-kv.mjs', 'keyserve-status.mjs'];
-    return allowed.some(file => path.resolve(args[0] || '') === path.join(repo, 'tools', file));
+    return allowed.some(file => path.resolve(base, args[0] || '') === path.join(repo, 'tools', file));
   }
   if (/^(?:git|git.exe)$/.test(cmd)) return /^(?:status|log|diff|show|rev-parse|ls-files)$/.test(args[0]) && !args.some(a => /^(?:--(?:out|ext|text)|--no-index|--config|-c)/.test(a));
   if (/^gh(?:.exe)?$/.test(cmd)) return /^(?:pr|issue|run|auth)$/.test(args[0]) && /^(?:view|list|status|diff|checks)$/.test(args[1]);

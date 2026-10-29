@@ -84,3 +84,24 @@ test('stale writer lock is recovered, active writer lock prevents duplicate reco
   await recordRepair({ home, lane: 'deepseek', tried: 'check', result: 'unfixable' });
   assert.equal(repairRows(home).length, 1); assert.ok(!fs.existsSync(lock));
 });
+
+test('cd prefix permits one diagnostic invocation and preserves chain blocking', t => {
+  const { home } = fixture(t);
+  const repo = fileURLToPath(new URL('../', import.meta.url));
+  for (const separator of ['&&', ';']) {
+    const command = `cd "${repo}" ${separator} node tools/lane-repair-log.mjs --lane glm --tried checked --result unfixable`;
+    assert.equal(evaluateRepairFirst(input('Bash', command), { home, now }).decision, 'pass');
+    assert.equal(repairCommand(`${command} && rm -rf X`), false);
+  }
+  assert.equal(repairCommand('node tools/lane-repair-log.mjs --lane glm && rm -rf X'), false);
+  assert.equal(repairCommand('cd /tmp && node tools/lane-repair-log.mjs'), false);
+  // 実機で通らなかったケース: cd 前置 + repo パスの複合コマンドが gate を通過
+  assert.equal(repairCommand(`cd "${repo}" && node tools/lane-repair-log.mjs --lane deepseek --tried checked --result unfixable`), true);
+  assert.equal(repairCommand(`cd "${repo}" && node tools/lane-doctor.mjs --probe`), true);
+  assert.equal(repairCommand(`cd "${repo}"; node tools/lane-doctor.mjs --probe`), true);
+  // cd 前置だが && の後ろが許可外（cd で全部 block）
+  assert.equal(repairCommand(`cd "${repo}" && node tools/lane-doctor.mjs --probe && npm install`), false);
+  assert.equal(repairCommand(`cd "${repo}" && node tools/lane-doctor.mjs --probe && rm -rf /`), false);
+  // cd 前置の dir に特殊文字
+  assert.equal(repairCommand('cd some;path && node tools/lane-doctor.mjs'), false);
+});

@@ -12,7 +12,7 @@ import { providerResetUntil } from './codex-cooldown.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { redactAll } from './lib/redact.mjs';
 import { catalog } from './provider-catalog.mjs';
-import { applyRealLaneHealth, billingFailure } from './lib/lane-real-health.mjs';
+import { applyRealLaneHealth, billingFailure, quotaFailure } from './lib/lane-real-health.mjs';
 
 export const PROVIDERS = ['codex', 'gemini', 'deepseek', 'glm', 'groq', 'openrouter'];
 export const laneHome = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
@@ -213,8 +213,8 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       if (routing.demote?.[p] !== undefined) { delete routing.demote[p]; routingChanged = true; health.repairs.push({ provider: p, action: 'demote_removed', detail: '実測成功' }); }
       if (cooldown[p]) { delete cooldown[p]; cooldownChanged = true; health.repairs.push({ provider: p, action: 'cooldown_removed', detail: '実測成功' }); }
     } else {
-      const payment = billingFailure(text);
-      const limited = /HTTP\s*429\b|usage limit|RESOURCE_EXHAUSTED|rate.limit/i.test(text);
+      const limited = quotaFailure(text);
+      const payment = billingFailure(text) && !limited;
       // codex-do が利用枠クールダウンで保留(exit 75)した場合は WSL 問題ではなく枠切れ。クールダウン自体は既存のまま触らない。
       const deferred = /codex_cooldown/.test(text);
       health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: payment ? 'billing' : (limited || deferred) ? 'cooldown' : /HTTP\s*401|unauthorized|login required|token.*expired/i.test(text) ? (p === 'codex' ? 'dead:oauth_consent' : 'auth_invalid') : /Read-only file system|EROFS/i.test(text) ? 'execution_unavailable:read_only' : 'probe_failed', probedAt: stamp, ...(result.authOk ? { authOk: true } : {}) };

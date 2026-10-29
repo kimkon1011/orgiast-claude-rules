@@ -6,7 +6,7 @@ import { quotaFailure } from './lane-real-health.mjs';
 export const REPAIR_TTL = 6 * 3600_000;
 export function repairable(state) {
   return state?.alive === false && !/^(?:billing|quota_wait|cooldown|demoted|missing_key|cli_missing)$/.test(state.reason || '')
-    && !quotaFailure(state.reason)
+    && !quotaFailure(`${state.reason} ${state.error || ''}`)
     && /real_fail_rate|probe_failed|auth|oauth|login|spawn|ENOENT|launch|execution_unavailable|wsl|native|physical_operation/i.test(state.reason || '');
 }
 export function faultId(lane, state) {

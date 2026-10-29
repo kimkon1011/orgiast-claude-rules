@@ -370,3 +370,26 @@ for (const [name, change, expected] of [
     assert.equal(JSON.parse(result.stdout).items[0].status, expected);
   });
 }
+
+test('rule compliance missing task reaches manifest registrar on converge', async t => {
+  const home = temp('setup-rule-task-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const entry = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8')).items.find(x => x.id === 'task:rule-compliance');
+  assert.deepEqual(entry.repair, ['register-rule-compliance-task.mjs']);
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([entry])));
+  const fixture = path.join(home, 'tasks.json');
+  write(fixture, '{}');
+  const result = run(['--converge', '--json', '--home', home, '--manifest', mf], { ORGIAST_SETUP_TASK_INFO_FIXTURE: fixture });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).items[0].repaired, true);
+  const { main } = await import('./register-rule-compliance-task.mjs');
+  let called = false;
+  main({ platform: 'win32', spawnImpl(command, args) {
+    called = true;
+    assert.equal(command, 'powershell.exe');
+    assert.ok(args.at(-1).endsWith('register-rule-compliance-task.ps1'));
+    return { status: 0, stdout: '' };
+  } });
+  assert.equal(called, true);
+});

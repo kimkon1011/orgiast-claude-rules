@@ -104,3 +104,91 @@ test('diagnosed billing cooldown skips explicit llm-ask candidate in existing fa
   assert.deepEqual(attempted, ['openrouter']);
   assert.equal(result.candidate.provider, 'openrouter');
 });
+
+test('real glm exhausted limit and cooldown rows are quota, never repair blockers', async t => {
+  const { evaluateRepairFirst } = await import('./lane-repair-first-gate.mjs');
+  const error = 'HTTP429 {"error":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-10-29 19:53:29"}';
+  const home = fixture(t, [...Array.from({ length: 70 }, () => ({ provider: 'glm', status: 'cooldown' })), ...Array.from({ length: 39 }, () => ({ provider: 'glm', status: 'error', stderr: error }))]);
+  const health = { lanes: { glm: { alive: false, reason: 'probe_failed', error } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.glm.reason, 'quota_wait');
+  assert.equal(health.lanes.glm.real24h.failures, 0);
+  assert.equal(health.lanes.glm.until, Date.parse('2026-10-29 19:53:29'));
+  fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify(health));
+  assert.equal(evaluateRepairFirst({ tool_name: 'Edit' }, { home, now }).decision, 'pass');
+});
+test('groq 429 with billing prose is quota without reset; 402 is billing', t => {
+  for (const [error, reason] of [['HTTP429 billing rate limit', 'quota_wait'], ['HTTP 402 insufficient balance', 'billing']]) {
+    const home = fixture(t, [{ provider: 'groq', status: 'error', stderr: error }]);
+    const health = { lanes: { groq: { alive: false, reason: 'billing', error } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.groq.reason, reason);
+    assert.equal(health.lanes.groq.real24h.failures, 0);
+  }
+});
+test('three server errors out of five still block implementation', async t => {
+  const { evaluateRepairFirst } = await import('./lane-repair-first-gate.mjs');
+  const home = fixture(t, [{ status: '500' }, { status: '502' }, { status: '503' }, { status: 'ok' }, { status: 'ok' }]);
+  const health = { lanes: { deepseek: { alive: true } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.deepseek.reason, 'real_fail_rate');
+  fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify(health));
+  assert.equal(evaluateRepairFirst({ tool_name: 'Edit' }, { home, now }).decision, 'block');
+});
+test('legacy bare billing cached from 429 is corrected from ledger evidence', t => {
+  const home = fixture(t, [{ provider: 'groq', status: '429' }]);
+  const health = { lanes: { groq: { alive: false, reason: 'billing' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.groq.reason, 'quota_wait');
+});
+test('glm real error with limit exhausted text is quota_wait not real_fail_rate', t => {
+  const error = 'HTTP429 {"error":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-10-29 19:53:29"}';
+  const home = fixture(t, [
+    ...Array.from({ length: 70 }, () => ({ provider: 'glm', status: 'cooldown' })),
+    ...Array.from({ length: 39 }, () => ({ provider: 'glm', status: 'error', stderr: error })),
+  ]);
+  const stats = realLaneStats(home, now);
+  assert.equal(stats.glm.quotaCalls, 109);
+  assert.equal(stats.glm.failures, 0);
+  assert.equal(stats.glm.failRate, 0);
+  const health = { lanes: { glm: { alive: false, reason: 'probe_failed', error } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.glm.reason, 'quota_wait');
+  assert.equal(health.lanes.glm.until, Date.parse('2026-10-29 19:53:29'));
+});
+test('groq 429 with billing-like prose is quota_wait, not billing', t => {
+  for (const [error, expected] of [
+    ['HTTP429 billing rate limit', 'quota_wait'],
+    ['HTTP 429 Insufficient credits for this request', 'quota_wait'],
+    ['429 rate limit exceeded', 'quota_wait'],
+    ['HTTP 402 insufficient balance', 'billing'],
+    ['HTTP 402 Your credits are depleted', 'billing'],
+  ]) {
+    const home = fixture(t, [{ provider: 'groq', status: 'error', stderr: error }]);
+    const stats = realLaneStats(home, now);
+    const isBilling = expected === 'billing';
+    assert.equal(stats.groq.billingCalls, isBilling ? 1 : 0, `billingCalls for "${error}"`);
+    assert.equal(stats.groq.quotaCalls, isBilling ? 0 : 1, `quotaCalls for "${error}"`);
+    assert.equal(stats.groq.failures, 0);
+    // Simulate old cached billing reason with error text: applyRealLaneHealth must reclassify.
+    const health = { lanes: { groq: { alive: false, reason: 'billing', error, real24h: stats.groq } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.groq.reason, expected, `reason for "${error}"`);
+  }
+});
+test('five server errors out of five still produce real_fail_rate', t => {
+  const home = fixture(t, Array.from({ length: 5 }, (_, i) => ({ status: ['500', '502', '503', '500', '500'][i] })));
+  const health = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.deepseek.reason, 'real_fail_rate');
+  assert.equal(health.lanes.deepseek.alive, false);
+  assert.ok(health.lanes.deepseek.error.includes('HTTP 500'));
+});
+test('billing penalty with 429 text in same detail is ONLY quota before billing', t => {
+  // The row text contains both 429-like billing prose. quotaFailure matches first.
+  const home = fixture(t, [{ provider: 'groq', status: 'error', stderr: 'HTTP 429 monthly limit exceeded' }]);
+  const stats = realLaneStats(home, now);
+  assert.equal(stats.groq.billingCalls, 0);
+  assert.equal(stats.groq.quotaCalls, 1);
+  assert.equal(stats.groq.failures, 0);
+});

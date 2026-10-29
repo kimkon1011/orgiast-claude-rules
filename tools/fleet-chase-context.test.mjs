@@ -69,7 +69,7 @@ test('non-kim is silent before stdin and missing/corrupt ledger fails open', asy
 test('decisions never instruct headless to answer, secrets are masked, malicious session cannot escape marker dir', async t => {
   const f = fixture(t); f.add('decision', 3, 'inbound', { category: CATEGORY.decision }); f.save();
   await f.run('SessionStart', NOW, '../../escape');
-  assert.match(f.outputs[0].hookSpecificOutput.additionalContext, /ヘッドレスは代行禁止/);
+  assert.match(f.outputs[0].hookSpecificOutput.additionalContext, /kim本人がセッションで判断（kim-inbox で回収）。ヘッドレスは代行禁止/);
   assert.ok(!fs.existsSync(path.join(f.home, '.claude/escape.json')));
   const item = makeItem({ id: 'mail-sensitive', from: 'token=private', to: 'kim-PC', why: 'api_key=secret',
     body: 'https://discord.com/api/webhooks/123/private', createdAt: iso(NOW) }, 'inbound', NOW);

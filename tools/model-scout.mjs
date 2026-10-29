@@ -240,7 +240,7 @@ export async function runScout({ home = process.env.ORGIAST_HOME || userHome(), 
       // 提案済みだけの場合、submitProposal の1行DMに集約する。
       if (!proposed || waiting.length) {
         const sent = await notify(dm, { home, webhookFallback: false });
-        if (sent?.delivered !== 'dm') throw new Error('notification failed');
+        if (!['dm', 'session-inbox'].includes(sent?.delivered)) throw new Error('notification failed');
       }
       // 通知失敗時は差分を消費せず、次回もう一度通知する。
       const snapshot = { ...previous?.models, ...Object.fromEntries(models.map((m) => [m.id, { pricing: m.pricing }])) };

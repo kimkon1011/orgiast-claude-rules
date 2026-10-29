@@ -120,7 +120,7 @@ export async function submitProposal(input, { home = proposalHome(), dryRun = fa
     }
     if (!p.notifiedAt && sendNotification) {
       const result = await notify(redactSecrets(dm), { home, webhookFallback: false });
-      if (result?.delivered !== 'dm') throw new Error('notification failed');
+      if (!['dm', 'session-inbox'].includes(result?.delivered)) throw new Error('notification failed');
       p.notifiedAt = now.toISOString();
     }
     save(path.join(dir, `${p.id}.json`), p);

@@ -1,5 +1,7 @@
 # User-global preferences (kim@orgiast.jp)
 
+**🔴 kim への報告は Discord 禁止（kim 2026-10-27 厳命・全PC全アカウント）。kim 宛は kim-inbox（~/.claude/kim-inbox、`node tools/kim-inbox.mjs`）に積みセッションで回収。ask は返答を --answer で記録するまで毎プロンプト再提示、info は伝えたら --seen。セッションを閉じても台帳に残り次セッションで再提示（クローズは止めない）。Discord MCP の直接送信はゲートが拒否。例外は config/kim-discord-allowlist.json に kim が登録したカテゴリのみ。詳細 docs/kim-inbox.md**
+
 ユーザーグローバルの恒久ルール集。全プロジェクトでロード。手続き系の詳細は rules/ と skills/ に分離済み（2026-07-03 再編、旧版: backups/CLAUDE.md.bak-20260703）。
 
 ---

@@ -3,30 +3,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 import { notifyKim, KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
-import { resolveFleetLabel } from './lib/fleet-label.mjs';
+// 所有者解決は lib/fleet-owner.mjs（kim-inbox と共用。ここに置くと import が循環する）。
+import { ownerPcMap, resolveOwner } from './lib/fleet-owner.mjs';
+export { resolveOwner };
 
-const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const readJson = (file, fallback = {}) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } };
 const readText = file => { try { return fs.readFileSync(file, 'utf8').trim(); } catch { return ''; } };
-
-function ownerPcMap(home) {
-  const map = readJson(path.join(repo, 'fleet-pc-map.json'));
-  for (const [label, row] of Object.entries(readJson(path.join(home, '.claude', 'fleet-pc-map.json')))) {
-    map[label] = row && typeof row === 'object' ? { ...map[label], ...row } : row;
-  }
-  return map;
-}
-
-export function resolveOwner({ home = os.homedir(), label = resolveFleetLabel(home), pcMap, gitEmail } = {}) {
-  const map = pcMap ?? ownerPcMap(home);
-  const aliases = Object.entries(map).find(([, value]) => value && typeof value === 'object' && [value.hostname, value.sheetName, value.remoteName, ...(value.aliases || [])].includes(label));
-  const configured = map[label] || aliases?.[1];
-  if (configured?.account) return configured.account;
-  try { return String(gitEmail ?? execFileSync('git', ['config', '--global', 'user.email'], { encoding: 'utf8', windowsHide: true })).trim(); } catch { return ''; }
-}
 
 export function resolveOwnerDiscordId(owner, { home = os.homedir(), directory, ...options } = {}) {
   const wanted = String(owner || '').trim().toLowerCase();
@@ -69,13 +53,14 @@ try {
 }
 
 export async function notifyOwner(owner, text, options = {}) {
-  const home = options.home ?? os.homedir();
+  const home = options.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   owner = String(owner || resolveOwner(options)).trim();
-  const userId = options.userId ?? resolveOwnerDiscordId(owner, options);
+  const userId = options.userId ?? (owner.toLowerCase() === 'kim@orgiast.jp' ? KIM_DISCORD_USER_ID : resolveOwnerDiscordId(owner, options));
   let reason = 'owner Discord recipient unresolved or mismatched';
   if (owner && userId && !(String(userId) === KIM_DISCORD_USER_ID && owner.toLowerCase() !== 'kim@orgiast.jp')) {
     try {
-      const result = await (options.notify ?? notifyKim)(text, { ...options, userId, webhookFallback: false });
+      const result = await (options.notify ?? notifyKim)(text, { ...options, home, userId, webhookFallback: false });
+      if (result?.delivered === 'session-inbox') return { ...result, channel: 'session-inbox' };
       if (result?.delivered === 'dm') return { ...result, channel: 'discord' };
       reason = 'Discord DM delivery failed';
     } catch { reason = 'Discord DM delivery failed'; }

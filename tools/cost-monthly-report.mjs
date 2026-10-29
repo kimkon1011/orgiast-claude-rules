@@ -156,7 +156,7 @@ export async function main(argv = process.argv.slice(2)) {
     const { notifyKim } = await import('./notify-kim.mjs');
     try {
       const result = await notifyKim(text, { home, webhookFallback: false });
-      if (result?.delivered === 'dm') { await markMonthlyReportSent({ home, now, claudeDir }); console.log('kim へ DM 送信OK'); }
+      if (['dm', 'session-inbox'].includes(result?.delivered)) { await markMonthlyReportSent({ home, now, claudeDir }); console.log('kim へ DM 送信OK'); }
       else throw new Error(result?.reason || 'DM に配信されませんでした');
     } catch (error) {
       console.error(`月次レポートDM送信失敗: ${String(error?.message ?? error)}`);

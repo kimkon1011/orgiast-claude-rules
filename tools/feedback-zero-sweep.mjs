@@ -208,7 +208,7 @@ export function sweepExitCode(result) {
   if(!result.dryRun) {
     const {delivered,reason}=result.notification;
     // A clean empty sweep intentionally skips notification (none without a reason).
-    if(delivered!=='dm' && (result.remaining>0 || delivered!=='none' || reason)) return 1;
+    if(!['dm', 'session-inbox'].includes(delivered) && (result.remaining>0 || delivered!=='none' || reason)) return 1;
   }
   return 0;
 }

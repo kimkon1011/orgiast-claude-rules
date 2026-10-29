@@ -529,12 +529,24 @@ test('install/verify: 配布する ~/.claude/*.env を両方の総合チェッ�
   ]) for (const name of [...distributed].sort()) if (!source.includes(name)) missing.push(`${name} -> ${checker}`);
   assert(missing.length === 0, `総合チェックに未掲載: ${missing.join(', ')}`);
 });
+test('notify-kim: Discord 設定不要で台帳へ保存し JSON を返す', () => {
+  const home = makeTempHome('orgiast-inbox-');
+  try {
+    fs.mkdirSync(path.join(home, '.claude'));
+    fs.writeFileSync(path.join(home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+    const r = run('notify-kim.mjs', undefined, ['--kind', 'ask', '判断してください'], { ORGIAST_HOME: home, NOTIFY_PLAIN_JA: '0' });
+    assert(r.status === 0, r.stderr);
+    const result = JSON.parse(r.stdout);
+    assert(result.delivered === 'session-inbox', '台帳へ振り分けていない');
+    const item = JSON.parse(fs.readFileSync(path.join(home, '.claude/kim-inbox', `${result.id}.json`), 'utf8'));
+    assert(item.kind === 'ask' && item.status === 'open', '未回収の依頼が保存されていない');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
 test('外部送受信ツール: 設定不足をstderr 1行以上で観測可能にしてexit 0', () => {
   // 第3要素 quietStdout: stdout が「呼び出し側が解釈する経路」のツールだけ true。
   // cost-work-loop は指示書本文を stdout に出すのが正常動作なので、そこを空だと要求すると
   // 本番側を黙らせる誤修正を誘発する(実際に一度そうなった)。観測点は stderr に統一する。
   const targets = [
-    ['notify-kim.mjs', [], true],
     ['fleet-sheet-report.mjs', ['--dry-run'], true],
     ['interaction-rollout.mjs', [], true],
     ['fleet-triage-report.mjs', [], true],

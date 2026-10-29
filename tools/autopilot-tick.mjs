@@ -690,7 +690,7 @@ async function execute(command, args, ctx) {
     // evidence that the DM arrived (2026-10-17 実測)。呼び出し側が run.log に
     // delivered を残せるよう、結果を戻り値と state の両方に載せる。
     const delivery = await sendNotice(text, { ...ctx, periodicDigest: true });
-    if (delivery.delivered === 'dm' || delivery.channels.toast.status === 'submitted' || delivery.channels.file.status === 'written') {
+    if (['dm', 'session-inbox'].includes(delivery.delivered) || delivery.channels.toast.status === 'submitted' || delivery.channels.file.status === 'written') {
       // 送信済みの報告を、後片付けの失敗で「失敗した周」にしない。
       try { await acknowledgeWaiting(waiting.completedIds, { home: ctx.home, now }); }
       catch (error) {

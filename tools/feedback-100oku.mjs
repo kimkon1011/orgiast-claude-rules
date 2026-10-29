@@ -240,7 +240,7 @@ export async function runMain({ args = process.argv.slice(2), home = process.env
   else {
     try {
       const result = await notifyImpl(report, { home, fetchImpl });
-      sent = result?.delivered === 'dm' || result?.delivered === 'webhook';
+      sent = ['dm', 'session-inbox'].includes(result?.delivered) || result?.delivered === 'webhook';
       if (!sent) io.stderr(`feedback-100oku: Discord 送信失敗: ${oneLine(result?.reason || '送信されませんでした')}`);
       if (options.json) io.stdout(JSON.stringify({ ok: true, sent, report, health: health.results }));
     } catch (error) { io.stderr(`feedback-100oku: Discord 送信失敗: ${oneLine(error?.message || error)}`); }

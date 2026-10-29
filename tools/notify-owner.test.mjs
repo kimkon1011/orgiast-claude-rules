@@ -63,3 +63,11 @@ test('ローカルmapのdiscordIdは正本のowner設定を継承する', t => {
  assert.equal(resolveOwner({ home, label: 'nishi-PC' }), 'nishi@orgiast.jp');
  assert.equal(resolveOwnerDiscordId('nishi@orgiast.jp', { home, directory: [] }), '987');
 });
+
+test('kim 所有者は台帳配達を成功とし toast に重複通知しない', async () => {
+  let calls = 0;
+  const result = await notifyOwner('kim@orgiast.jp', '報告', { notify: async (_text, options) => {
+    calls++; assert.equal(options.userId, KIM_DISCORD_USER_ID); return { delivered: 'session-inbox', id: '項目' };
+  }, toast: () => assert.fail('二重通知禁止') });
+  assert.equal(calls, 1); assert.equal(result.channel, 'session-inbox');
+});

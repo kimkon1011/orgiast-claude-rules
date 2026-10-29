@@ -198,11 +198,13 @@ export async function alertProviderBalances(rows, {
       log(text ? `[dry-run] Discord DM（送信なし）\n${text}` : '[dry-run] 通知対象なし');
       return { delivered: 'dry-run', lines };
     }
+    let delivered = 'none';
     if (lines.length) {
       // 切り詰めで残高注意を失わない。現在の全プロバイダをまとめても2,000文字未満。
       if (text.length > 2000) throw new Error('DM too long');
       const result = await notify(text, { home, webhookFallback: false });
-      if (result?.delivered !== 'dm') throw new Error('DM not delivered');
+      if (!['dm', 'session-inbox'].includes(result?.delivered)) throw new Error('DM not delivered');
+      delivered = result.delivered;
     }
     if (notifiedChanged) {
       temporary = `${notifiedFile}.${process.pid}.tmp`;
@@ -213,8 +215,8 @@ export async function alertProviderBalances(rows, {
     temporary = `${file}.${process.pid}.tmp`;
     fs.writeFileSync(temporary, JSON.stringify(state, null, 2) + '\n');
     fs.renameSync(temporary, file);
-    if (lines.length) log(`provider-balance: Discord DM 配信成功 (${lines.length}行)`);
-    return { delivered: lines.length ? 'dm' : 'none', lines };
+    if (lines.length) log(`provider-balance: 通知を配達 (${delivered}, ${lines.length}行)`);
+    return { delivered, lines };
   } catch (error) {
     // 例外本文は秘密値を含む可能性があるためログに出さない。日次処理は継続。
     warn(`provider-balance: 残高DM未完了（${error?.code === 'EEXIST' ? '別の実行が処理中' : '状態保存または通知に失敗'}）。次回再試行します`);

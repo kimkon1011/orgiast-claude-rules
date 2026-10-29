@@ -36,6 +36,9 @@ try {
   ({ HOOK_MATCHER: SHARE_BEFORE_SEND_MATCHER } = await import('./share-before-send-gate.mjs'));
 } catch { /* 同期途中でも既存登録を維持 */ }
 
+let KIM_DISCORD_REPORT_MATCHER = 'mcp__claude_ai_Discord[^|]*__(send_dm|send_message|reply_message)|Bash|PowerShell';
+try { ({ HOOK_MATCHER: KIM_DISCORD_REPORT_MATCHER } = await import('./kim-discord-report-gate.mjs')); } catch { /* 未同期でも全PC登録を継続 */ }
+
 let RECIPIENT_DOMAIN_MATCHER = HOOK_MATCHER;
 try {
   ({ HOOK_MATCHER: RECIPIENT_DOMAIN_MATCHER } = await import('./recipient-domain-gate.mjs'));
@@ -334,6 +337,7 @@ try {
   added += syncMatcherFor(settings.hooks.PreToolUse, 'fleet-question-relay.mjs', 'AskUserQuestion');
   // 過去に受領済みのクレデンシャルをuserへ再質問する前に復元経路を注入する。
   for (const event of ['SessionStart', 'UserPromptSubmit']) {
+    if (add(settings.hooks[event], 'kim-inbox.mjs', { hooks: [{ type: 'command', command: command('kim-inbox.mjs', ' --context'), timeout: 5 }] })) added += 1;
     if (add(settings.hooks[event], 'fleet-inbox-context.mjs', { hooks: [{ type: 'command', command: command('fleet-inbox-context.mjs'), timeout: 5 }] })) added += 1;
     if (add(settings.hooks[event], 'auto-progress-inbox-hook.mjs', { hooks: [{ type: 'command', command: command('auto-progress-inbox-hook.mjs'), timeout: 5 }] })) added += 1;
     if (resolveFleetLabel(home) === 'kim-PC') {
@@ -351,6 +355,8 @@ try {
   added += syncMatcherFor(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', HOOK_MATCHER);
   if (add(settings.hooks.PreToolUse, 'mail-draft-account-gate.mjs', { matcher: 'mcp__claude_ai_Gmail.*__(create_draft|update_draft|send_message|reply|forward)', hooks: [{ type: 'command', command: command('mail-draft-account-gate.mjs'), timeout: 5 }] })) added += 1;
   added += syncMatcherFor(settings.hooks.PreToolUse, 'mail-draft-account-gate.mjs', 'mcp__claude_ai_Gmail.*__(create_draft|update_draft|send_message|reply|forward)');
+  if (add(settings.hooks.PreToolUse, 'kim-discord-report-gate.mjs', { matcher: KIM_DISCORD_REPORT_MATCHER, hooks: [{ type: 'command', command: command('kim-discord-report-gate.mjs'), timeout: 5 }] })) added += 1;
+  added += syncMatcherFor(settings.hooks.PreToolUse, 'kim-discord-report-gate.mjs', KIM_DISCORD_REPORT_MATCHER);
   if (add(settings.hooks.PreToolUse, 'share-before-send-gate.mjs', { matcher: SHARE_BEFORE_SEND_MATCHER, hooks: [{ type: 'command', command: command('share-before-send-gate.mjs'), timeout: 5 }] })) added += 1;
   added += syncMatcherFor(settings.hooks.PreToolUse, 'share-before-send-gate.mjs', SHARE_BEFORE_SEND_MATCHER);
   if (add(settings.hooks.PreToolUse, 'recipient-domain-gate.mjs', { matcher: RECIPIENT_DOMAIN_MATCHER, hooks: [{ type: 'command', command: command('recipient-domain-gate.mjs'), timeout: 30 }] })) added += 1;

@@ -78,7 +78,7 @@ export async function runGeminiBudgetGuard({ home = geminiHome(), now = new Date
   }
   if (status.level !== 'ok') {
     const result = await notifyImpl(`Gemini 月次予算警告\n${formatGeminiBudgetStatus(status, { now })}\n月末ペース（計測分）: ¥${Math.round(status.paceEomJpy).toLocaleString('ja-JP')}`, { home, webhookFallback: false });
-    if (result?.delivered !== 'dm') throw new Error(`Gemini予算警告DM未送信: ${result?.reason || '配信失敗'}`);
+    if (!['dm', 'session-inbox'].includes(result?.delivered)) throw new Error(`Gemini予算警告DM未送信: ${result?.reason || '配信失敗'}`);
   }
   return status;
 }

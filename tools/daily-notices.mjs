@@ -49,7 +49,7 @@ export async function runDailyNotices({ home = process.env.ORGIAST_HOME || os.ho
     };
     for (; sent < chunks.length;) {
       const result = await notify(chunks[sent], { home, webhookFallback: false });
-      if (result?.delivered !== 'dm') throw new Error('日次通知のDiscord DM送信に失敗');
+      if (!['dm', 'session-inbox'].includes(result?.delivered)) throw new Error('日次通知のDiscord DM送信に失敗');
       sent++;
       save(sent === chunks.length);
     }

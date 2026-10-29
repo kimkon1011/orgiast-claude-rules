@@ -23,6 +23,11 @@ test('new rollout entries must declare the seven day window; legacy inventory is
     const row = manifest.gates[name];
     assert.ok(row, `${name}: missing rollout entry`);
     assert.ok(['warn','deny'].includes(row.rollout));
+    if (name === 'kim-discord-report-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-27 kim 厳命: kim 宛 Discord 報告を全PCで停止');
+      continue; // kim の明示指示で初受信のPCにも即時適用。
+    }
     if (name === 'exec-tree-edit-guard') {
       assert.equal(row.rollout, 'deny');
       assert.equal(row.immediatePolicy, '2026-10-26 user 指示: 実行ツリーの直接編集を即時拒否');

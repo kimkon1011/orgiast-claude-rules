@@ -18,6 +18,15 @@ test('setup converge timeout covers Node updates on new and existing PCs, idempo
   const hooks = settings.hooks.SessionStart.flatMap((group) => group.hooks).filter((hook) => hook.command.includes('setup.mjs'));
   assert.equal(hooks.length, 1);
   assert.equal(hooks[0].timeout, 1200);
+  for (const event of ['SessionStart', 'UserPromptSubmit']) {
+    const inbox = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('kim-inbox.mjs'));
+    assert.equal(inbox.length, 1); assert.match(inbox[0].command, /--context/);
+    assert.equal(inbox[0].timeout, 5); assert.notEqual(inbox[0].async, true);
+  }
+  const report = settings.hooks.PreToolUse.filter(g => g.hooks.some(h => h.command.includes('kim-discord-report-gate.mjs')));
+  assert.equal(report.length, 1);
+  assert.match('mcp__claude_ai_Discord__send_dm', new RegExp(report[0].matcher));
+
   hooks[0].timeout = 60;
   fs.writeFileSync(settingsFile, JSON.stringify(settings));
   run();

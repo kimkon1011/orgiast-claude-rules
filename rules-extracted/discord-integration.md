@@ -1,5 +1,7 @@
 # Discord Application 命名・共有 MCP コネクタ 詳細
 
+**🔴 kim への報告は Discord 禁止（kim 2026-10-27 厳命・全PC全アカウント）。kim 宛は kim-inbox（~/.claude/kim-inbox、`node tools/kim-inbox.mjs`）に積みセッションで回収。ask は返答を --answer で記録するまで毎プロンプト再提示、info は伝えたら --seen。セッションを閉じても台帳に残り次セッションで再提示（クローズは止めない）。Discord MCP の直接送信はゲートが拒否。例外は config/kim-discord-allowlist.json に kim が登録したカテゴリのみ。非 kim 席からは fleet-mail で kim-PC へ転送される。詳細 docs/kim-inbox.md**
+
 ONBOARDING.compressed.md §2.5 / §2.6 の詳細。
 
 ## 2.5 Discord Application 名の禁止語

@@ -1,3 +1,4 @@
+// Discord 経路は許可リスト外は全停止。この分類はマージ依頼を fleet-mail へ回すためだけに残す。
 const WARNING_OR_REMINDER = /⚠️|警告|リマインド|督促|期限|障害|停止中|滞留/iu;
 const MERGE_REQUEST = /please\s+merge\b/iu;
 const JAPANESE_REQUEST = /(?:マージ.{0,20}(?:お願い|してください|して下さい|して欲しい|してほしい|依頼)|(?:お願い|依頼).{0,20}マージ)/u;

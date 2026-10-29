@@ -127,7 +127,7 @@ test('(f) 指定されたスコープ: vscode-next-session は fleet/mobile-stan
   assert.ok(convergeStepIds().has('mobile-standby'), 'setup.mjs に mobile-standby ステップが無い');
 });
 
-for (const entrypoint of ['tools/fleet-question-relay.mjs', 'tools/lib/fleet-mail-discord.mjs', 'tools/fleet-inbox-context.mjs', 'tools/fleet-mail-watchdog.mjs']) {
+for (const entrypoint of ['tools/kim-inbox.mjs', 'tools/kim-discord-report-gate.mjs', 'tools/fleet-question-relay.mjs', 'tools/lib/fleet-mail-discord.mjs', 'tools/fleet-inbox-context.mjs', 'tools/fleet-mail-watchdog.mjs']) {
   test(`D8 fleet scope covers the complete import graph of ${entrypoint}`, () => {
     const scope = new Map(readScope().entries.map(entry => [entry.path, entry]));
     const visited = new Set();

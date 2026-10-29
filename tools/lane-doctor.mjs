@@ -57,7 +57,7 @@ function executable(name) {
   }));
 }
 const REPAIR_STEPS = ['node tools/lane-doctor.mjs --probe で停止原因を確認し、その場で修復する'];
-const KEYSERVE_STEPS = ['1) node tools/keyserve-status.mjs で確認', '2) ~/.claude/enroll.env があれば node tools/onboarding-sync.mjs --force', '3) 無ければ kim-PC へ enroll トークン発行を自動依頼済み（下記通知）→ 返信の1行コマンドを Claude が実行', '4) node tools/lane-doctor.mjs --probe で復旧確認'];
+const KEYSERVE_STEPS = ['1) node tools/keyserve-status.mjs で確認', '2) ~/.claude/enroll.env があれば node tools/onboarding-sync.mjs --force', '3) 無ければ依頼して待たず、当ターンで ListAgents → 同アカウントの他PCセッション（primary 保有）へ SendMessage し node tools/keyserve-enroll.mjs --pc <このPC> --ttl-hours 2 --json を即実行させ、返った1行コマンドを Claude が実行する（kim への通知は並行の保険）', '4) node tools/lane-doctor.mjs --probe で復旧確認。復旧するまで通常タスクに戻らない'];
 function keyserveEnrolled(home, env = process.env) {
   const secret = env.ORGIAST_KEYSERVE_SECRET || readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET');
   return Boolean(secret && !isEnrollToken(secret));

@@ -76,6 +76,18 @@ try {
   } catch {}
 }
 
+# Existing controller PCs also register the inbound expectation patrol without reinstalling.
+try {
+  $fleetChaseInstaller = Join-Path $repo 'tools\register-fleet-chase.mjs'
+  if ($repo -and (Test-Path -LiteralPath $fleetChaseInstaller)) {
+    if ($Dry) { DrySkip 'register-fleet-chase.mjs --ensure (kim-PC only)' }
+    else {
+      & $(if (($fleetChaseNode = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $fleetChaseNode } else { "$env:ProgramFiles\nodejs\node.exe" }) $fleetChaseInstaller '--ensure'
+      if ($LASTEXITCODE -ne 0) { throw "fleet-chase registration exit $LASTEXITCODE" }
+    }
+  }
+} catch { Write-Warning ("fleet-chase self-repair failed: " + $_.Exception.Message) }
+
 # Refresh auto-progress tasks daily so existing PCs receive schedule changes too.
 try {
   $autoProgressInstaller = Join-Path $repo 'tools\register-auto-progress-task.ps1'

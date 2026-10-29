@@ -34,7 +34,7 @@ export function buildFleetStatus({ pcMap, beacons = [], serverPolls = {}, now = 
     const beacon = byLabel.get(label) || null;
     const beaconAt = beacon ? parseTime(beacon.reportedAt) : null;
     const beaconAgeMs = beaconAt === null ? null : now - beaconAt;
-    const serverAt = parseTime(serverPolls?.[label]);
+    const serverAt = parseTime(serverPolls?.[label] || beacon?.serverPollAt);
     const clientAt = beacon ? parseTime(beacon.pollAt) : null;
     let pollAt = null;
     let pollSource = '';
@@ -45,6 +45,13 @@ export function buildFleetStatus({ pcMap, beacons = [], serverPolls = {}, now = 
     return {
       label,
       account: beacon ? String(beacon.account || '') : '',
+      hostname: String(beacon?.hostname || ''),
+      reporterLabel: String(beacon?.reporterLabel || ''),
+      registrationCandidate: !!beacon?.account?.includes('@') && !fleetLabels(pcMap).some(key => {
+        const entry = pcMap[key];
+        const names = [key, entry.hostname, ...(entry.aliases || [])].filter(Boolean).map(s => String(s).toLowerCase());
+        return [label, beacon?.hostname, beacon?.reporterLabel].filter(Boolean).some(s => names.includes(String(s).toLowerCase()));
+      }),
       beaconAt: beaconAt === null ? '' : new Date(beaconAt).toISOString(),
       beaconAgeMs,
       hasBeacon: Boolean(beacon),
@@ -61,6 +68,9 @@ function jst(ms) {
   const pad = (n) => String(n).padStart(2, '0');
   return `${pad(date.getUTCMonth() + 1)}/${pad(date.getUTCDate())} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
 }
+export function registrationCandidates(options) {
+  return buildFleetStatus(options).filter(row => row.registrationCandidate);
+}
 export function formatAge(ms) {
   if (ms === null || !Number.isFinite(ms)) return '不明';
   if (ms < 60 * 60 * 1000) return `${Math.max(0, Math.round(ms / 60000))}m`;
@@ -73,7 +83,7 @@ export function formatFleetTable(rows, now = Date.now()) {
     const beacon = row.hasBeacon ? `${jst(Date.parse(row.beaconAt))} (${formatAge(row.beaconAgeMs)})` : 'ビーコン無し';
     const failing = row.failing.length ? row.failing.join(',') : '-';
     const poll = row.pollAt ? `${jst(Date.parse(row.pollAt))} (${formatAge(row.pollAgeMs)}) [${row.pollSource}]` : '不明';
-    return `${warn}${row.label} / ${row.account || '-'} / ビーコン: ${beacon} / 失敗: ${failing} / poll: ${poll}`;
+    return `${warn}${row.label}${row.registrationCandidate ? ' [登録候補・アカウントは自己申告]' : ''} / ${row.account || '-'} / ビーコン: ${beacon} / 失敗: ${failing} / poll: ${poll}`;
   });
   return lines.join('\n');
 }

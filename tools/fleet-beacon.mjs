@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
-import { machineIdentity, reportExtras } from './machine-identity.mjs';
+import { machineIdentity, reportExtras, getClaudeAccountEmail } from './machine-identity.mjs';
 import { redactSecrets } from './fleet-agent.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 
@@ -74,7 +74,7 @@ export function mobileStandbySuffix(home, now = Date.now()) {
   } catch { /* 既定 3 */ }
   return `${waiting === null ? '待機数不明' : waiting}/${target}`;
 }
-export function buildBeacon({ home, label, results = [], now = Date.now(), pcMap, identity } = {}) {
+export function buildBeacon({ home = process.env.ORGIAST_HOME || os.homedir(), label, results = [], now = Date.now(), pcMap, identity } = {}) {
   const resolvedLabel = label || resolveFleetLabel(home, identity ?? machineIdentity());
   const steps = results.map((result) => {
     const id = String(result?.item?.id ?? result?.id ?? '');
@@ -92,7 +92,9 @@ export function buildBeacon({ home, label, results = [], now = Date.now(), pcMap
   const pollAt = String(readJson(path.join(home, '.claude', '.fleet-mail-last-poll.json'), {})?.at || '');
   return {
     label: resolvedLabel,
-    account: beaconAccount({ label: resolvedLabel, pcMap, identity: identity ?? machineIdentity() }),
+    account: getClaudeAccountEmail(home) || '',
+    reporterLabel: String(envFile(path.join(home, '.claude', 'cost-reporter.env')).REPORTER_LABEL || '').slice(0, 128),
+    hostname: String(identity?.hostname || os.hostname()).slice(0, 128),
     reportedAt: new Date(now).toISOString(),
     steps,
     failing,
@@ -142,13 +144,14 @@ export async function fetchBeacons({ home, fetchImpl = fetch, timeoutMs = 15000 
         : String(beacon?.failing ?? '').split(',').map((id) => id.trim()).filter(Boolean);
       const dialogCount = steps.find(s => s.id === 'stuck-dialog-watch')?.reason?.match(/stuckDialogs24h=(\d+)/)?.[1];
       return {
+        reporterLabel: String(beacon?.reporterLabel || ''), hostname: String(beacon?.hostname || ''),
         label: String(beacon?.label ?? ''), account: String(beacon?.account ?? ''), reportedAt: String(beacon?.reportedAt ?? ''),
         stuckDialogs24h: dialogCount === undefined ? null : Number(dialogCount),
         steps, failing, pollAt: String(beacon?.pollAt ?? ''), serverPollAt: String(beacon?.serverPollAt ?? '')
       };
     });
     const serverPolls = result.serverPolls && typeof result.serverPolls === 'object' && !Array.isArray(result.serverPolls) ? result.serverPolls : {};
-    return { ok: true, beacons, serverPolls };
+    return { ok: true, beacons, serverPolls, capabilities: Array.isArray(result.capabilities) ? result.capabilities : [] };
   } catch (error) {
     return { ...empty, reason: sanitizeReason(error?.message || error) };
   }

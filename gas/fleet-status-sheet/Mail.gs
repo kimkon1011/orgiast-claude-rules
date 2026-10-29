@@ -399,3 +399,21 @@ function setupFleetMailTriggers() {
     return { handler: trigger.getHandlerFunction(), eventType: String(trigger.getEventType()), source: String(trigger.getTriggerSource()) };
   });
 }
+
+// Authenticated metadata-only investigation. Does not poll, deliver, expire, or prune mail.
+function traceFleetMail(payload) {
+  const matchWhy = fleetMailRequired(payload.matchWhy, 'matchWhy', 1000);
+  const since = Date.parse(payload.since);
+  if (!Number.isFinite(since)) throw new Error('invalid_since');
+  return _fleetMailLocked_(function(sheet, rows) {
+    const matched = rows.filter(function(mail) {
+      return Date.parse(mail.createdAt) >= since && mail.why.indexOf(matchWhy) >= 0;
+    }).sort(function(a, b) { return Date.parse(b.createdAt) - Date.parse(a.createdAt); });
+    const fields = ['id', 'from', 'to', 'kind', 'why', 'createdAt', 'status', 'deliveredAt', 'seenAt', 'failedAt', 'failReason'];
+    return { ok: true, total: matched.length, truncated: matched.length > 100, mails: matched.slice(0, 100).map(function(mail) {
+      const result = {};
+      fields.forEach(function(key) { result[key] = mail[key] || ''; });
+      return result;
+    }) };
+  });
+}

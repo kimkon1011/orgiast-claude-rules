@@ -993,7 +993,14 @@ export async function pollOnce(deps = {}) {
           return terminal(raw) && !terminal(existing) ? { ...existing, ...raw, body: redactSecrets(raw.body), resultBody: redactSecrets(raw.resultBody) } : existing;
         }, { home });
         if (!saved) { undurable++; continue; }
-        if (created) { fresh.add(raw.id); log('received', { count: 1 }); if (legacyTo) legacy++; }
+        if (created) {
+          fresh.add(raw.id); if (legacyTo) legacy++;
+          // Durable receipt metadata survives inbox processing/archival; never log body or credentials.
+          log('received', { count: 1,
+            id: saved.id, from: saved.from, to: saved.to, kind: saved.kind, why: saved.why,
+            createdAt: saved.createdAt, receivedAt: saved.receivedAt
+          });
+        }
         joinReply(home, saved);
         received.push(raw.id);
         batch.successfulIds = [...new Set([...(batch.successfulIds || []), raw.id])];

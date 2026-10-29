@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runOnce, invokeClaude, buildPrompt, resolveSupervisorAuth, sampleCpuBusy } from './autopilot-run.mjs';
+import { runOnce, invokeClaude, buildPrompt, resolveSupervisorAuth, sampleCpuBusy, supervisorModel } from './autopilot-run.mjs';
 import { runAutopilot, acquireLock } from './autopilot-tick.mjs';
 
 function fixture(t) {
@@ -76,6 +76,18 @@ test('objective.md "model" pins the supervisor model per PC; fable pin is ignore
     assert.equal(seen, model);
     assert.equal(result.model, model);
   }
+});
+
+test('a new /autopilot start keeps the per-PC model pin', async (t) => {
+  const opts = fixture(t);
+  await runAutopilot('start', { objective: 'first' }, opts);
+  const file = path.join(opts.dir, 'objective.md');
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/("objective":\s*"first")/, '$1, "model": "claude-opus-5-5"'));
+  await runAutopilot('stop', {}, opts);
+  await runAutopilot('start', { objective: 'second' }, opts);
+  const text = fs.readFileSync(file, 'utf8');
+  assert.match(text, /"objective": "second"/);
+  assert.equal(supervisorModel(file, { planIncluded: true }), 'claude-opus-5-5');
 });
 
 test('repeated missing posts are counted and trip the noop watchdog', async (t) => {

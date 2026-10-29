@@ -16,9 +16,9 @@ export function loadCatalog(repoRoot = defaultRepo) {
 }
 
 export function extractWiringProviders(source) {
-  // PROVIDERS のトップレベル終端だけを使い、内側のオブジェクトや後続の定数を除外する。
+  // PROVIDERS のトップレベル終端だけを使い、内側のオブジェクトや後続の定数を除外する。OpenRouter 経由の gatewayConfig() 定義も配線済みとして数える。
   const block = source.match(/^const PROVIDERS = \{\r?\n([\s\S]*?)^\};/m);
-  return block ? [...block[1].matchAll(/^\s{2}([a-z][a-z0-9]*):\s*\{/gm)].map((match) => match[1]) : [];
+  return block ? [...block[1].matchAll(/^\s{2}([a-z][a-z0-9]*):\s*(?:\{|gatewayConfig\()/gm)].map((match) => match[1]) : [];
 }
 
 export function collectKeyInventory(home) {

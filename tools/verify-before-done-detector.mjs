@@ -22,6 +22,35 @@ function script(command) {
   while (/^-(?:NoProfile|NonInteractive|File)$/i.test(t[i] || '')) i++;
   return t[i] && !t[i].startsWith('-') ? normalize(t[i]) : '';
 }
+// Split only shell command boundaries outside quotes. Do not interpret shell code.
+function commands(command) {
+  const parts = [];
+  let start = 0, quote = '', escaped = false;
+  // Substitutions and heredocs need shell execution semantics we cannot prove.
+  if (/\$\(|`|<</.test(command)) return [];
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (escaped) { escaped = false; continue; }
+    if (c === '\\' && quote !== "'") { escaped = true; continue; }
+    if (quote) { if (c === quote) quote = ''; continue; }
+    if (c === '"' || c === "'") { quote = c; continue; }
+    if (c === ';' || c === '\n' || command.slice(i, i + 2) === '&&' || command.slice(i, i + 2) === '||') {
+      parts.push(command.slice(start, i).trim());
+      if (c === '&' || c === '|') i++;
+      start = i + 1;
+    }
+  }
+  if (quote) return [];
+  parts.push(command.slice(start).trim());
+  return parts.filter(Boolean);
+}
+const failureSignal = output => /(?:^|[\n\r])\s*(?:Error:|TypeError:|ReferenceError:|SyntaxError:|fatal:|FAIL\b|not ok\b)|\b(?:command not found|MODULE_NOT_FOUND|ERR_MODULE_NOT_FOUND)|"(?:exit_code|exitCode)"\s*:\s*-?[1-9]|(?:Exit code:?|Process exited with code|exit=)\s*-?[1-9]/i.test(output);
+function exceptions(text) {
+  return [...text.matchAll(/\[NO-TEST-OK:\s*([^\]]*)\]/g)].map(m => m[1].trim()).filter(reason =>
+    [...reason].length >= 20 &&
+    !/時間がない|時間不足|後で|あとで|後ほど|後回し|次回|未実施|先送り|later|no time/i.test(reason) &&
+    (paths(reason).length || /コメント|文書|ドキュメント|設定のみ|動作差分|実行不要|副作用|送信|課金|削除|本番|権限|comment|documentation|side.effect/i.test(reason)));
+}
 // Worktrees may already be deleted: compare repository identity without stat().
 const repoPath = value => {
   const file = normalize(value).replace(/^[ab]\//, '');
@@ -54,8 +83,7 @@ function realUser(e) {
 
 export function evaluateVerification(entries, assistantText, { cwd = process.cwd(), readFile = file => fs.readFileSync(file, 'utf8') } = {}) {
   if (!/(完了|できました|直しました|修正しました|実装しました|反映しました|デプロイ|deployed|completed|fixed|push(しました|済)|バグ.*修正|動くように)/i.test(assistantText)) return null;
-  const exception = assistantText.match(/\[NO-TEST-OK:\s*([^\]]*)\]/)?.[1]?.trim();
-  if (exception && !/時間がない|時間不足|後で|あとで|後ほど|後回し|次回|未実施|先送り|later|no time/i.test(exception)) return null;
+  const exemptions = exceptions(assistantText);
   let start = 0;
   entries.forEach((e, i) => { if (realUser(e)) start = i + 1; });
   const turn = entries.slice(start).filter(e => !e.isSidechain);
@@ -71,7 +99,7 @@ export function evaluateVerification(entries, assistantText, { cwd = process.cwd
     for (const b of Array.isArray(e.message?.content) ? e.message.content : []) {
       if (b.type !== 'tool_use') continue;
       const result = results.get(b.id);
-      const output = body(result?.content) + body(result?.metadata);
+      const output = (Array.isArray(result?.content) ? result.content.map(block => block.text || '').join('\n') : body(result?.content)) + '\n' + body(result?.metadata);
       const ok = !!result && !result.is_error && !/"exit_code"\s*:\s*[1-9]|"exitCode"\s*:\s*[1-9]|Exit code:?\s*[1-9]|Process exited with code [1-9]/i.test(output);
       const input = b.input || {}, command = String(input.command || '');
       calls.push({ name: b.name, input, command, index, ok, output });
@@ -96,31 +124,42 @@ export function evaluateVerification(entries, assistantText, { cwd = process.cwd
   if (!changed) return null;
   const executed = new Map();
   for (const call of calls) {
-    if (call.name !== 'Bash' || !call.ok || /--test\b|--dry[-_]?run\b/.test(call.command)) continue;
-    const invoked = script(call.command);
-    if (!invoked) continue;
-    // Per file: a run counts only after that file's own last change (a later unrelated merge must not void it).
-    const after = file => call.index > files.get(file) || (call.index === files.get(file) && /codex-do\.mjs$/.test(invoked));
-    let imports = [];
-    if (/scratchpad/.test(invoked)) {
-      try {
-        const source = readFile(resolveScript(cwd, invoked));
-        // Dependency injection and test doubles cannot establish live execution.
-        if (/fetchImpl|sendImpl|mock|stub|fake|(?:fetch|send\w*)\s*[:=]|vi\.|sinon\./i.test(source)) continue;
-        imports = [...source.matchAll(/(?:from\s*|import\s*\()(['"])([^'"]+)\1/g)].map(m => normalize(path.resolve(path.dirname(resolveScript(cwd, invoked)), m[2])));
-        imports.push(...childScripts(source));
-      } catch { continue; }
+    if (call.name !== 'Bash' || !call.ok || failureSignal(call.output)) continue;
+    for (const command of commands(call.command)) {
+      if (/--test\b|--dry[-_]?run\b|(?<!\|)\|(?!\|)/.test(command)) continue;
+      const invoked = script(command);
+      if (!invoked) continue;
+      // Per file: a run counts only after that file's own last change (a later unrelated merge must not void it).
+      const after = file => {
+        const lastChange = Math.max(...[...files].filter(([target]) => sameFile(target, file)).map(([, index]) => index));
+        return call.index > lastChange || (call.index === lastChange && /codex-do\.mjs$/.test(invoked));
+      };
+      let imports = [];
+      if (/scratchpad/.test(invoked)) {
+        try {
+          const source = readFile(resolveScript(cwd, invoked));
+          // Dependency injection and test doubles cannot establish live execution.
+          if (/fetchImpl|sendImpl|mock|stub|fake|(?:fetch|send\w*)\s*[:=]|vi\.|sinon\./i.test(source)) continue;
+          imports = [...source.matchAll(/(?:from\s*|import\s*\()(['"])([^'"]+)\1/g)].map(m => normalize(path.resolve(path.dirname(resolveScript(cwd, invoked)), m[2])));
+          imports.push(...childScripts(source));
+        } catch { continue; }
+      }
+      for (const file of files.keys()) if (after(file) && ((!excluded(invoked) && sameFile(invoked, file)) || imports.some(p => sameFile(p, file)))) executed.set(file, call.index);
     }
-    for (const file of files.keys()) if (after(file) && ((!excluded(invoked) && sameFile(invoked, file)) || imports.some(p => sameFile(p, file)))) executed.set(file, call.index);
   }
-  const missing = [...files.keys()].filter(f => !executed.has(f));
+  const exempt = file => exemptions.some(reason => {
+    const targets = paths(reason);
+    return !targets.length || targets.some(target => sameFile(target, file) || (!target.includes('/') && path.posix.basename(normalize(file)) === target));
+  });
+  if (exemptions.length && (files.size ? [...files.keys()].every(exempt) : exemptions.some(reason => !paths(reason).length))) return null;
+  const missing = [...files.keys()].filter(f => !executed.has(f) && !exempt(f));
   const lastExecution = Math.max(...executed.values());
   const readback = executed.size > 0 && (/\[TESTED-LIVE:\s*[^\]\s][^\]]*\]/.test(assistantText) || calls.some(c => c.ok && c.index > lastExecution && (
     /(?:discord|gmail|sheets|webhook|deploy).*?(?:read|get|list|fetch|history)/i.test(c.name) ||
     (c.name === 'Bash' && /^(?:curl|gh|node)\b/.test(c.command) && /read[-_]?back|\bcurl\b.*https:\/\/[^\s]*(?:discord|gmail|googleapis)|\bgh\s+api\b/i.test(c.command) && !/--test|scratchpad|--dry-run|\s-X\s*(?:POST|PUT|DELETE|PATCH)/i.test(c.command))
   )));
   if (executed.size && !missing.length && (!sensitive || readback)) return null;
-  return `[VERIFY-BEFORE-DONE] 完了報告の実行証拠が不足しています。\n未実行: ${missing.length ? missing.join(', ') : executed.size ? 'なし' : '変更対象不明（PR files / 委譲結果からパスを記録）'}\n実送信・外部反映の読み戻し: ${sensitive ? readback ? 'あり' : 'なし（本番送信後のAPI取得、または具体的な [TESTED-LIVE: 結果] が必要）' : '対象外'}\n変更対象を配置場所から実行し、結果を検証してから報告してください。単体テスト・mock・[TESTED]だけでは通りません。実行不要の場合のみ [NO-TEST-OK: 先送りでない具体的理由] を記載してください。`;
+  return `[VERIFY-BEFORE-DONE] 完了報告の実行証拠が不足しています。\n未実行: ${missing.length ? missing.join(', ') : executed.size ? 'なし' : '変更対象不明（PR files / 委譲結果からパスを記録）'}\n実送信・外部反映の読み戻し: ${sensitive ? readback ? 'あり' : 'なし（本番送信後のAPI取得、または具体的な [TESTED-LIVE: 結果] が必要）' : '対象外'}\n変更対象を配置場所から実行し、結果を検証してから報告してください。単体テスト・mock・[TESTED]だけでは通りません。実行不要の場合のみ [NO-TEST-OK: 対象ファイル名または実行不要の具体的理由（20文字以上、先送り不可）] を記載してください。`;
 }
 
 if (isEntry(import.meta.url)) {

@@ -108,6 +108,23 @@ test('project manifest has unique known item types and severities', () => {
   assert.deepEqual(outbound.spec, { path: '.claude/settings.json', hookEvent: 'PreToolUse', hookScript: 'outbound-claim-evidence-gate.mjs', hookRunner: 'gate-hook-runner.mjs', hookArgs: '', async: false, timeout: 15 });
 });
 
+test('hook 検証は既知のリポ tools のどのパスでも通る', (t) => {
+  const home = temp('setup-known-tools-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const spec = { path: '.claude/settings.json', hookEvent: 'PreToolUse', hookScript: 'sample-gate.mjs', hookRunner: 'gate-hook-runner.mjs', hookArgs: '', async: false, timeout: 15 };
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([item('known-hook', 'json-valid', spec)])));
+  for (const toolsPath of [
+    path.join(home, 'orgiast-claude-rules', 'tools'),
+    path.join(home, '.claude', 'nightly-repo', 'tools'),
+    path.join(home, 'Downloads', 'orgiast-claude-rules', 'tools'),
+  ]) {
+    const command = `node "${path.join(toolsPath, spec.hookRunner)}" "${path.join(toolsPath, spec.hookScript)}"`;
+    write(path.join(home, spec.path), JSON.stringify({ hooks: { PreToolUse: [{ hooks: [{ type: 'command', command, timeout: 15 }] }] } }));
+    assert.equal(run(['--verify', '--home', home, '--manifest', mf]).status, 0);
+  }
+});
+
 test('converge実経路がhook登録・旧通知削除・allow反映を行い再実行で不変', (t) => {
   const home = temp('setup-classifier-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

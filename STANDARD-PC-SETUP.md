@@ -1,6 +1,6 @@
 # Claude Code 標準設定書（全アカウント・全PC共通）
 
-版 v2.0／最終更新 2026-09-29／正本: この md（GitHub kimkon1011/orgiast-claude-rules の STANDARD-PC-SETUP.md）。Google Doc はこの md から自動生成（直接編集しない。編集は md → `node tools/gdoc-update.mjs --id 1p9_YkCIXDRbGrFsRDbtNxHVmZ7AglDOqBlamn2Ij4NA --file STANDARD-PC-SETUP.md`）。
+版 v2.1／最終更新 2026-10-29／正本: この md（GitHub kimkon1011/orgiast-claude-rules の STANDARD-PC-SETUP.md）。Google Doc はこの md から自動生成（直接編集しない。編集は md → `node tools/gdoc-update.mjs --id 1p9_YkCIXDRbGrFsRDbtNxHVmZ7AglDOqBlamn2Ij4NA --file STANDARD-PC-SETUP.md`）。
 
 この文書は今後、設定が増えるたびにこの1本を更新していく運用です。新しい設定を追加するときは、このページの該当章に追記し、末尾「根拠」に出典を1行足してください。別の文書を新設しないでください。
 
@@ -37,8 +37,10 @@ https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/STANDARD-
 （git/Node.js/Claude Code/Codex CLIをまとめて自動導入・更新するインストーラ）。PowerShellで次を実行する。
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'install-orgiast.ps1'; Invoke-WebRequest -UseBasicParsing ('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/install-orgiast.ps1?cb='+[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -OutFile $p; & $p -NoOllama"
+$p = Join-Path $env:TEMP 'install-orgiast.ps1'; Invoke-WebRequest -UseBasicParsing ('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/install-orgiast.ps1?cb='+[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p -NoOllama -NoReboot -NonInteractive
 ```
+
+Claude Code からは自動再起動しない。ログインは手順6でまとめて行う。
 
 ### 手順2 導入確認
 
@@ -50,7 +52,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP '
 
 ### 手順4 `setup --converge` を実行する
 
-（共通の許可ルール・hookをあるべき状態へ収束させる）: `node "$HOME/orgiast-claude-rules/tools/setup.mjs" --converge`。「許可ルール・hookをN件反映しました」の趣旨の結果が出ることを確認する。
+（共通の許可ルール・hookをあるべき状態へ収束させる）: `~/.claude/settings.json` の SessionStart にある `setup.mjs --converge` のパスで実行する。登録が無ければ `node "$HOME/orgiast-claude-rules/tools/setup.mjs" --converge`。「許可ルール・hookをN件反映しました」の趣旨の結果が出ることを確認する。
 
 ### 手順5 4.3の3点チェックを行う
 
@@ -60,13 +62,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP '
 - `<ホームフォルダ>\.claude\settings.json` の `SessionStart` に `onboarding-sync.mjs` が登録されている
 いずれか欠けていたら手順1をもう一度実行する。
 
-### 手順6 各サービスへのログインは、ここで必ず止まって本人に案内する
+### 手順6 ログイン4件を1つの見える画面で行う
 
-（パスワード・トークンはチャットで絶対に聞かない）。
-- GitHub: `gh auth login` を実行し、表示された認証用URLをブラウザで開いて承認してもらう。完了の見え方: `gh auth status` が「Logged in to github.com」。
-- Google（clasp用）: `npx clasp login` を実行し、表示された認証用URLをブラウザで開いて会社のGoogleアカウントでログインしてもらう。完了の見え方: ターミナルに「You are logged in as ...」。
-- Vercel: `npx vercel login` を実行し、表示されたURL・確認コードでブラウザ承認してもらう。完了の見え方: ターミナルに「Success!」。
-- どの認証も、画面が開かない・エラーが出る場合は無理に繰り返さず、その場でエラーを提示して止まる。
+（パスワード・トークンはチャットで絶対に聞かない）。`node <repo>/tools/make-desktop-launcher.mjs --name "オージャスト ログイン4件" --ps-file <repo>/tools/login-services.ps1` でデスクトップに置き、Claude 自身が `Start-Process` で起動する。利用者にコマンドを貼らせない。
+
+起動前にツールと同じ案内（全て `seisaku-team@orgiast.jp`）を示す。GitHub は「Y/n → Enter」、コード表示後 Enter、ブラウザで Ctrl+V → Continue → Authorize GitHub CLI。Google (clasp) は自動で開いた Google 画面を承認。Vercel は表示URLと確認コードを承認。Codex は ChatGPT の会社アカウントを承認。localhost の Windows Defender 警告は「キャンセル」でよい（PC内通信のみ）。残った AI Studio ・ localhost エラーのタブは閉じてよい。
+
+Claude は5秒ごとに `gh auth status` / `~/.clasprc.json` / `npx -y vercel whoami` / `~/.codex/auth.json` の tokens を判定し、4件すべて完了するまで待つ。
+
+**診断メモ**: インストーラが「見つかりません」を連発したら、`orgiast-claude-rules\orgiast-claude-rules-main` の二重入れ子を疑う。Codex レーン修復の hook が先に走る場合は、手順1〜6で Codex を導入・ログインした後に解消する。
 
 ### 手順7 許可ルール15行（下記5.3）は、Claude Code自身が /permissions を編集しない
 
@@ -114,8 +118,10 @@ NGがあれば、どの手順に戻ればよいかを添えて報告する。
 PowerShell（推奨・Windows）：Windowsキー→「powershell」と入力→Enter→青い画面が開く→右クリックで貼り付け→Enter。所要1分。
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'install-orgiast.ps1'; Invoke-WebRequest -UseBasicParsing ('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/install-orgiast.ps1?cb='+[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -OutFile $p; & $p -NoOllama"
+powershell -NoProfile -ExecutionPolicy Bypass -Command '$p=Join-Path $env:TEMP ''install-orgiast.ps1''; Invoke-WebRequest -UseBasicParsing (''https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/install-orgiast.ps1?cb=''+[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -OutFile $p; & $p -NoOllama'
 ```
+
+この1行は Windows PowerShell 5.1 / pwsh のどちらから貼っても、外側のシェルが `$p` を先に展開しない。
 
 これでリポジトリ取得・hook登録・初回取込までが自動で完了する。未コミットの作業がある開発機で実行しても、変更は消えず退避される（pullのみ）。
 
@@ -251,6 +257,7 @@ PowerShell(Get-ScheduledTask -TaskName *)
 - winget導入コマンド・自動導入の実体：tools/install-orgiast.ps1・tools/bootstrap.ps1。
 - gh／clasp／vercelの位置づけ：rules-extracted/project-launch-playbook.md（ghのwinget導入コマンド）、および実機settings.jsonのpermissions.allowにnpx clasp *・npx vercel *系が多数登録されていること（個別インストールでなくnpx経由が実運用）。
 - VS Code拡張の前提：既存Doc「Claude Code 許可設定の追加手順」の手順文中の記述、および tools/RESTORE-claude-backup.md のVS Code拡張導入手順。
+- 2026-10-29 user-PC 実測：pwsh の `$p` 先行展開、自動再起動、Gemini 非対話入力、zip 二重入れ子、hook 誤NG、4サービス認証の迷いを再現し、v2.1 で是正。
 
 ## 未確認事項
 

@@ -23,6 +23,11 @@ test('new rollout entries must declare the seven day window; legacy inventory is
     const row = manifest.gates[name];
     assert.ok(row, `${name}: missing rollout entry`);
     assert.ok(['warn','deny'].includes(row.rollout));
+    if (name === 'lane-repair-first-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-29 user 指示: 全PC・全アカウントで故障レーン修復を最優先');
+      continue; // Explicit repair-first policy applies immediately on every PC.
+    }
     if (name === 'exec-tree-edit-guard') {
       assert.equal(row.rollout, 'deny');
       assert.equal(row.immediatePolicy, '2026-10-26 user 指示: 実行ツリーの直接編集を即時拒否');

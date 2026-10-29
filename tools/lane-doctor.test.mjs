@@ -47,10 +47,10 @@ test('probe repairs healthy demotes, classifies payment and rate limits, caches 
     if(p==='codex' && !options.dryRun) codexTasks++;
     return p==='gemini' ? {code:1,text:'HTTP 402 prepayment credits are depleted'} : p==='glm' ? {code:1,text:'HTTP 429 retry in 10 minutes'} : {code:0,text:'PONG'};
   };
-  const notify = async text => { notifications++; assert.match(text,/kim@orgiast.jp/); assert.match(text,/Setup auto-reload/); return {delivered:'dm'}; };
+  const notify = async text => { notifications++; assert.match(text,/残高不足\(402\)/); return {delivered:'dm'}; };
   const result = await laneDoctorProbe({platform: 'linux',home:h,now,probe,notify});
-  assert.equal(result.lanes.gemini.reason,'dead:payment_required'); assert.equal(result.lanes.codex.alive,true);
-  assert.deepEqual(read(h,'routing-overrides.json').demote,{}); assert.equal(result.lanes.glm.until,now+600000);
+  assert.equal(result.lanes.gemini.reason,'billing'); assert.equal(result.lanes.codex.alive,true);
+  assert.ok(read(h,'routing-overrides.json').demote.gemini); assert.equal(result.lanes.glm.until,now+600000);
   await laneDoctorProbe({platform: 'linux',home:h,now:now+60000,probe,notify}); assert.equal(codexTasks,1); assert.equal(notifications,1);
   await laneDoctorProbe({platform: 'linux',home:h,now:now+86400001,probe,notify}); assert.equal(codexTasks,2); assert.equal(notifications,2);
 });
@@ -79,14 +79,14 @@ test('notify-time annotation adds the catalog account and splits a URL glued to 
   assert.match(out,/開くアカウント: \*\*seisaku-team@orgiast\.jp\*\*/);
   assert.equal(annotateAccounts('停止しました'),'停止しました');
 });
-test('payment stop of a service without auto top-up is substituted, not handed to kim',async t=>{
+test('billing is substituted and notified even without auto top-up',async t=>{
   const h=fixture(t);const sent=[];
   const probe=async p=>p==='deepseek'?{code:1,text:'HTTP 402 Insufficient Balance'}:{code:0,text:'PONG'};
   const r=await laneDoctorProbe({home:h,now,probe,notify:async text=>{sent.push(text);return {delivered:'dm'};},listWsl:async()=>'Ubuntu'});
-  assert.equal(r.lanes.deepseek.reason,'dead:payment_required');
+  assert.equal(r.lanes.deepseek.reason,'billing');
   assert.ok(!r.deadNeedsUser.some(x=>x.provider==='deepseek'));
   assert.deepEqual(r.substituted,[{provider:'deepseek',via:'openrouter'}]);
-  assert.ok(!sent.some(text=>/deepseek/i.test(text)));
+  assert.equal(sent.filter(text=>/deepseek/i.test(text)).length,1);
 });
 test('a fresh failed Codex probe is re-measured instead of being reused',async t=>{
   const h=fixture(t);
@@ -141,7 +141,8 @@ test('newer limits block without erasing probe history across quick runs', async
   for (const minutes of [31, 32]) {
     const result = laneDoctorQuick({ home: h, now: now + minutes * 60000 });
     assert.equal(result.lanes.codex.alive, false);
-    assert.equal(result.lanes.codex.reason, 'usage_limit_no_fallback');
+    assert.equal(result.lanes.codex.reason, 'quota_wait');
+    assert.equal(result.lanes.codex.until, now + 86400000);
     assert.equal(result.lanes.codex.lastProbeOkAt, stamp);
     assert.equal(result.lanes.codex.probedAt, stamp);
   }

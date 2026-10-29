@@ -23,3 +23,9 @@ test('Stop ゲートが要求する node コマンドは lane guard の常時許
   assert.ok(commands.includes('node tools/auto-progress.mjs'));
   for (const command of commands) assert.equal(isAlwaysAllowed(command), true, command);
 });
+
+test('repair-first の解除コマンドは既存 lane guard でも常時許可される', () => {
+  const commands = requiredCommands('lane-repair-first-gate.mjs');
+  assert.ok(commands.includes('node tools/lane-repair-log.mjs'));
+  for (const command of commands) assert.equal(isAlwaysAllowed(command), true, command);
+});

@@ -1,6 +1,9 @@
 {
   "version": 1,
   "items": [
+    {"id":"task:rule-compliance","type":"scheduled-task","severity":"required","spec":{"name":"ClaudeRuleComplianceAudit","requireActionTarget":true},"description":"全PC: 日次ルール監査と --apply（03:50）","repair":["register-rule-compliance-task.mjs"]},
+    {"id":"state:rule-enforcement","type":"json-valid","severity":"required","spec":{"path":".claude/rule-enforcement.json","requiredPath":"repair-failed-lane-first.mode"},"description":"検証済みルールの強制状態を生成","repair":["rule-compliance-loop.mjs","--days","7","--apply"]},
+    {"id":"settings:lane-repair-first","type":"json-valid","severity":"required","spec":{"path":".claude/settings.json","hookEvent":"PreToolUse","hookScript":"lane-repair-first-gate.mjs","async":false,"hookArgs":"","hookRunner":"gate-hook-runner.mjs","timeout":15},"description":"全PC: 故障レーンの修復を実装より優先","repair":["register-hooks.mjs","--hooks-only"]},
     { "id": "task:task-hide-guard", "type": "scheduled-task", "severity": "optional", "spec": { "name": "Claude-TaskHideGuard", "migrationMarker": ".claude/.task-hide-guard-v1" }, "description": "全PC: 定期タスクを非表示起動へ修復(ログオン時・30分ごと)", "repair": ["register-task-hide-guard.mjs"] },
     { "id": "task:window-spawn-watch", "type": "scheduled-task", "severity": "optional", "spec": { "name": "OrgiastWindowSpawnWatch", "migrationMarker": ".claude/.task-hide-guard-v1" }, "description": "全PC: 可視コンソール窓の出現を記録(ログオン時・常駐)", "repair": ["register-task-hide-guard.mjs"] },
     { "id": "task:aihaijin-digest", "type": "scheduled-task", "severity": "optional", "spec": { "name": "OrgiastAihaijinDigest", "ifPresent": ".claude/messenger-profile" }, "description": "kim-PC: AI廃人部の週次取り込み(日曜03:20、Messengerプロファイル設定済PCのみ)", "repair": ["register-aihaijin-digest.mjs"] },

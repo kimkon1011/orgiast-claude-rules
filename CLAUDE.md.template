@@ -78,6 +78,8 @@ kim が読む Doc は `tools/gdoc-publish.mjs --authuser <開く人のメール>
 
 ## 他AIは「積極的に使う」のが既定（kim 2026-10-09 厳命・全PC全アカウント）
 
+**他AIが使えなくなったら、その場で直す（全PC・全アカウント・無人も同じ）**。失敗の原因を調べ、修復を試し、成功を実測する。`lane-repair-first-gate` が未修復での本体編集・通常作業を block する。`node tools/lane-doctor.mjs --probe` で健全化するか、`node tools/lane-repair-log.mjs --lane <名> --tried "<試した手段>" --result fixed|unfixable` で記録（6時間有効）。応答にも `[LANE-REPAIR]` を明記する。reset が判明した429/usage_limitは quota_wait とし、代替の安いレーンへ回す。Codex の probe 失敗は直接 WSL 実行の終了コードでも切り分ける（ONBOARDING §1.18）。
+
 Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM などの他AIは**使うのが既定**。Claude だけで済ませる方が例外で、例外には理由の明記が要る。
 - 残高切れ → 「入金する（オートチャージ ON）」が既定。キー失効・403 → 「再発行する」が既定。429 → 別の他AIへ自動切替。**「外す／やめる／縮小」を kim への選択肢に並べない。**
 - 他AIの障害は Claude で代替せず、別の他AIで吸収し、復旧したら戻す。Claude（監督）へ逆流させるのが最も高くつく。

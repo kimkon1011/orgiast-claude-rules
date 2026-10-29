@@ -1052,6 +1052,7 @@ Astra クールダウン中は Sol を使う。明示の `--model astra`（ま�
 - WindowsでCodexが書けないPCは、Claude がその場でWSL経路を復旧する: `wsl --install -d Ubuntu --no-launch` → `wsl -d Ubuntu -u root -- bash -lc "<NodeSource で node 22>; npm i -g @openai/codex"` → `%USERPROFILE%\.codex\auth.json` を WSL の `/root/.codex/` へコピー → `codex login status` → codex-do で1ファイル作成を実測（2026-10-09 nishi-PC 実測: WSL 本体が入っていれば管理者権限・再起動とも不要）。
 
 **他AIレーンが落ちたら、その場で直す。代替や Claude 本体へ逃げて放置しない（2026-10-09 nishi 厳命）**。user のコストパフォーマンスが最優先で、Claude 本体はいちばん高い経路。
+- **全PC・全アカウント・無人セッションで強制**: `lane-repair-first-gate` が修復可能な故障を検知すると本体の編集・通常作業を block する。最初に `node tools/lane-doctor.mjs --probe`。健全化するか、修復を試して `node tools/lane-repair-log.mjs --lane <名> --tried "<試した手段>" --result fixed|unfixable` に記録して解除（6時間有効）。同一故障の修復不可が3回続いたら1回 notify-kim に通知する。reset の分かる429/usage_limitは `quota_wait` として修復対象から外し、SessionStart に示す代替の安いレーンへ回す。実呼び出し24hで5件以上・非quota失敗率50%以上なら probe 成功でも故障。Codex probe_failed は直接 WSL 実行の終了コードでも切り分ける。
 - 失敗出力から原因を特定し、Claude が実行できる修理（環境導入・認証の引き継ぎ・設定修正）をそのターン中に試す。修理後は1回実行して成功を実測する。
 - 応答に `[LANE-REPAIR] <レーン>: 修復済み <内容>` か `[LANE-REPAIR] <レーン>: 修復不可 試行: <試した手段>` を書く。Stop hook の `lane-abandonment-gate` が、失敗シグナルのあるターンでこの行が無いと block する（`[LANE-FALLBACK]` 1行だけでは通らない）。
 - `delegation-health-check` は環境故障（WSL 不在・spawn 失敗・未認証）と「3件以上すべて失敗したレーン」（`lane_outage_unrepaired`）を high＋修理タスクで出す。朝に出ていたら、その日の作業より先に直す。

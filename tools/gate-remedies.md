@@ -284,3 +284,8 @@ PR のマージを人に頼む文（本文の「次に kim がすること」・
 ## message-locator-gate
 
 メッセージ・通知を人に案内する文（「Discord に送りました」「メールが届いています」「DM を開いて」など）は、次の目印がそろっている時だけ通す。毎日1000件以上のメッセージを受け取る人が、一発で見つけられるようにするため（2026-10-26 kim 指摘: 「Discord の DM で今日19時ごろの通知を開き」では、どのアカウントの誰からの何か分からず見つけられなかった）。①アプリと開くアカウント（例: Discord の cr@ ログイン、Gmail の seisaku-team@） ②送信者（Bot 名・人の名前・メールアドレス） ③場所（DM の相手名・チャンネル名・ラベル） ④日時（日付と時:分） ⑤先頭行か件名を原文のまま＋そのメッセージへの直接リンク（Discord は `https://discord.com/channels/<guild|@me>/<channel>/<message>`、Gmail は authuser 付きのスレッド URL）。できれば中身の要点も本文に書き、開かなくても判断できるようにする。目印が本当に不要な一般論だけ `[MSG-LOCATOR-OK: <理由>]`。既存 Stop runner から呼ぶので Stop hook の追加登録は不要。
+
+## lane-repair-first-gate
+
+全PC・全アカウントで修復可能なレーン故障を最初に直す。`node tools/lane-doctor.mjs --probe` で診断する。Codex の probe_failed は直接 `wsl -d Ubuntu -u root -- codex exec --skip-git-repo-check "ping"` の終了コードでも切り分け、probe 経路だけの故障をレーン停止と断定しない。
+修復を試し、成功を実測したら `node tools/lane-repair-log.mjs --lane <名> --tried "<試した手段と実測>" --result fixed`。直せなければ同コマンドの `--result unfixable` で6時間だけ解除する。同一故障で3回連続修復不可なら notify-kim に1回通知する。429/usage_limit で reset が判明している quota_wait は修復対象外で、SessionStart に出る代替の安いレーンへ回す。gate 自体の例外は gate-errors.jsonl に記録して fail-open。

@@ -153,6 +153,36 @@
         "measuredOn": "2026-09-24",
         "note": "reported-symptom-gate.fixtures.json"
       }
+    },
+    {
+      "id": "repair-failed-lane-first",
+      "short": "rlf",
+      "source": "ONBOARDING §1.18 / CLAUDE.md 他AI修復ルール",
+      "summary": "故障レーンの修復を通常作業・代替への移行より優先する",
+      "detect": {
+        "scope": "session_tool_history",
+        "detector": "lane-failure-before-unlogged-implementation"
+      },
+      "gate": "lane-repair-first-gate.mjs",
+      "ledger": "~/.claude/lane-repair-log.jsonl",
+      "thresholds": {
+        "violationsToBlock": 3,
+        "daysObserved": 2
+      },
+      "enforcement": "block",
+      "validation": {
+        "fixtureCount": 28,
+        "precision": 1,
+        "minPrecision": 0.9,
+        "status": "validated",
+        "measuredOn": "2026-10-29",
+        "truePositives": 16,
+        "falsePositives": 0,
+        "trueNegatives": 12,
+        "falseNegatives": 0,
+        "recall": 1,
+        "note": "node --test tools/lane-repair-detector.test.mjs; synthetic transcript fixtures, actual execution; source quotes, quota, failed/expired/wrong-lane records included"
+      }
     }
   ]
 }

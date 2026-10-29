@@ -4,9 +4,9 @@
 
 ## 保存と復旧
 
-UserPromptSubmit / SessionStart は案件一覧の1日キャッシュを使い、再開案内と直近30分の別席警告だけを表示する。Stop は未送信分をディスクへ先にキューし、送信成功から10分の間隔で送る。SessionEnd と `flush <sessionId>` は間隔を待たず送る。SessionEnd の短い終了猶予を超える通信は、親の終了後も生存する非表示の単発workerに渡す。workerは同時起動をローカルロックで防ぎ、1回の処理を時間制限する。
+UserPromptSubmit / SessionStart は案件一覧の1日キャッシュを使い、再開案内と直近30分の別席警告だけを表示する。Stop は未送信分をディスクへ先にキューし、送信成功から10分の間隔で送る。SessionEnd と `flush <sessionId>` は間隔を待たず送る。SessionEnd の短い終了猶予を超える通信は、親の終了後も生存する非表示の単発workerに渡す。workerは同時起動をローカルロックで防ぎ、1回の処理を時間制限する。キュー作成とcursor更新は同じbindingロックを使う。1件の失敗でも他案件を処理し、失敗したキューはそのまま保持する。
 
-全文は user / assistant のテキスト。ツールは名前・主要引数（4KBまで）・結果の先頭500文字。添付のバイナリは複製せず、既知のパスとDrive IDを残す。秘密情報除去は memory-share と共通のlib。送信失敗・要約失敗はキューを消さず、次回のhook／`retry` で同じ sessionId・最終uuidを再送する。壊れたJSONLや消失したチェックポイントは無言で飛ばさない。
+全文は user / assistant のテキスト。ツールは名前・主要引数（4KBまで）・結果の先頭500文字。添付のバイナリは複製せず、既知のパスとDrive IDを残す。秘密情報除去は memory-share と共通のlib。送信失敗・要約失敗はキューを消さず、次回のhook／`retry` で保存したバッチを変更せず再送する。v2 の batchId は案件・sessionId・開始cursor・最終uuid・本文hashから決定する。本文を持たない境界レコードの改行は本文hashに含めない。壊れたJSONLや消失したチェックポイントは無言で飛ばさない。
 
 保存先は Drive ハブ `claude-common-rules` の `case-sessions/<案件ID>/`。SA/DWDは memoryserve のサーバにのみ設定し、クライアントは既存のkeyserve HMAC認証を使う。APIは `GET /api/case-log`（catalog/resume/transcripts/transcript）、`POST`（touch/append）。要約には既存 llm-ask の gemini / deepseek を使用し、それ以外のAIへフォールバックしない。
 
@@ -23,3 +23,11 @@ UserPromptSubmit / SessionStart は案件一覧の1日キャッシュを使い�
 既存の `setup --converge` が4イベントのhookを登録・検査・修復し、onboarding-syncが2つのskillを配布する。会話の本文はhookから注入しない。
 
 2026-10-29、kim-PCの実セッションをローカルAPI実装→本番keyserve認証→本番Drive→実AIで往復。user本文2件→Drive2件、STATE 727 bytes、cold resume 843 bytes。49案件の名前キャッシュを実読。再送による重複なし。テスト用Driveフォルダの削除404とregistry削除を確認。本番配備後にも同じセッションで往復し、user本文2件一致、STATE808 bytes、cold resume924 bytes、再送重複なし、テスト削除済みを確認。既存memory配信1,000件の世代・件数も維持。サーバPR #1 はマージ済み。
+
+## HTTP 409 の診断と旧キューの再送
+
+応答の `code` は `batch_changed` / `drive_busy` / `drive_contention` / `state_not_ready`。クライアントは既知のcodeだけ表示し、サーバの本文・資格情報・任意のerror文字列は表示しない。Driveの競合2種は指数バックオフ＋ジッタで最大3回再試行する。Drive側もETag不一致と条件付き更新412を待機付きで再試行する。`state_not_ready` はresume時だけの応答で、STATEがない初回appendは通常どおり保存・要約する。
+
+旧v1の同一batchIdでhashが違う場合、サーバは保存済み断片のhashを検証し、外側の改行だけを除いた全文が一致するときだけ既存保存として受理する。本文の変更は引き続き `batch_changed`。v2から過去v1履歴を再送しても既存の断片と要約を再利用する。バッチ境界が変わる再送・新旧workerの並行送信も、保存済みpayloadのhash検証と発言UUID・全文の一致で重複を除き、新しい発言だけ保存・要約する。入力hashを受領記録に残すため、差分が空の再送も確認できる。サーバのv2対応を先に本番配備してからクライアントを配布する。新規・既存PCとも既存のrepo同期とhook登録経路で同じ修正が適用され、追加タスクの登録は不要。
+
+2026-10-29の実測: 260430EIGは保存済み172,506 bytesとキュー172,504 bytesの差が先頭の改行2個だけで、伏字は同一。同じbridge-sessionレコードが327回あり、UUIDなし行の内容hashをcursorにしたためfindIndexが先頭の同一行へ戻っていた。新cursorは内容hash＋出現番号で一意にし、旧cursorは最初の一致から安全に再送する。開始位置を含まない旧batchIdと空レコードの改行化が409を発生させ、drainの即時中断がC0039も滞留させていた。C0039は案件一覧Sheetの「案件一覧」タブの「医療法人阡周会様／病院の外壁イルミネーション装飾・施工依頼 / 近畿（大阪）」とセッション内容が一致し、個別送信は成功。キューの案件変更・破棄は不要。

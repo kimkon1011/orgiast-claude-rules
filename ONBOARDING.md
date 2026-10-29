@@ -1035,7 +1035,7 @@ Astra クールダウン中は Sol を使う。明示の `--model astra`（ま�
 
 監督は実働抑制・用途別委譲、検証責任・1セッション1目的を厳守。
 
-**安価AIレーン（Codex・Gemini・DeepSeek 等）が停止していたら、全PC・全アカウント・全プロジェクトで通常タスクより先にその場で修復する。放置して Claude 本体を使い続けない。** SessionStart の 🛑 行に従い、人にしかできない操作は依頼送信まで済ませる。2026-10-29 user-PC では6レーンが `missing_key` のまま通知ゼロで Claude 使用が継続したため、kim が絶対ルールとして厳命した。
+**安価AIレーン（Codex・Gemini・DeepSeek 等）が停止していたら、全PC・全アカウント・全プロジェクトで通常タスクより先にその場で修復する。放置して Claude 本体を使い続けない。** SessionStart の 🛑 行に従う。誰かへ依頼して返事を待つのは「放置」であり解決ではない。同アカウントの他PCセッション（ListAgents → SendMessage で primary 保有PCに keyserve-enroll を即実行させる）・CLI・API など、その場で取れる経路を当ターンで全部試し、復旧まで終える（kim 再指摘 2026-10-29）。2026-10-29 user-PC では6レーンが `missing_key` のまま通知ゼロで Claude 使用が継続したため、kim が絶対ルールとして厳命した。
 
 **1.18 監督(Opus)は最小限だけ動き、実働はCodex/Sonnet/Geminiに委譲する**
 

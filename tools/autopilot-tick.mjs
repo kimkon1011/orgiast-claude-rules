@@ -442,6 +442,8 @@ async function execute(command, args, ctx) {
       if (args[flag] !== undefined) objective[key] = Number(args[flag]);
     }
     validateObjective(objective);
+    // PC ごとの監督モデル固定（autopilot-run の supervisorModel）は目的を変えても引き継ぐ。
+    try { const prev = readObjective(paths.objective).model; if (typeof prev === 'string') objective.model = prev; } catch {}
     if (state && ['done', 'stopped'].includes(state.status)) rememberObjective(state, readObjective(paths.objective), now);
     // Keep the previous objective's history, but don't charge it to a new run.
     if (state) {

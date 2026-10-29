@@ -63,6 +63,19 @@ description: 案件についての質問・相談・提案・見積・企画・�
 3. マップが見つからない・向きが読めないときは「背面の見え方: 未確認」と書き、マップの入手を最初の作業にする。
 4. 制作アプリはデザイナー依頼の生成時に同じ警告を確認シート（カテゴリ「デザイン/背面の見え方」）へ必ず積む。
 
+## 必須手順: 社内イベント百貨店（event-shop.jp）の問合せへの返信下書き
+
+下書きを書く前と、seisaku-team@ に入れる前に、必ず次の 2 コマンドを実行する（2026-10-27 スリーエー様の実害: kim の返信案を読まず、汎用「ゲームスライド 11,000円〜」をイントロドン 110,000円の価格と取り違えた）。
+
+```
+node tools/event-shop-reply-context.mjs collect --email <顧客メール>
+node tools/event-shop-reply-context.mjs check --draft <本文.txt> --context <collect が出した reply-context.md>
+```
+
+- 材料の優先順位: **社内の返信案・指示**（kim・担当者が Bot DM／#案件問い合わせに出したもの）＞ 商品ごとの price_min ＞ それ以外は使わない。料金ページのカテゴリ要約（「〜円〜」）を個別商品の価格にしない。
+- `check` が NG を出した下書きは seisaku-team@ に入れない。直してから再実行する。
+- 送信したら同じスレッドの古い下書きを `node tools/seisaku-mail.mjs delete-draft --id <draftId>` で消し、`drafts` で残っていないことを確かめる。
+
 ## 報告の型
 
 ```

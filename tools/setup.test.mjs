@@ -105,7 +105,37 @@ test('project manifest has unique known item types and severities', () => {
   assert(parsed.items.every((entry) => ['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task'].includes(entry.type)));
   assert(parsed.items.every((entry) => ['required', 'optional', 'manual'].includes(entry.severity)));
   const outbound = parsed.items.find(entry => entry.id === 'settings:outbound-claim-evidence-gate');
-  assert.deepEqual(outbound.spec, { path: '.claude/settings.json', hookEvent: 'PreToolUse', hookScript: 'outbound-claim-evidence-gate.mjs', hookArgs: '', async: false, timeout: 10 });
+  assert.deepEqual(outbound.spec, { path: '.claude/settings.json', hookEvent: 'PreToolUse', hookScript: 'outbound-claim-evidence-gate.mjs', hookRunner: 'gate-hook-runner.mjs', hookArgs: '', async: false, timeout: 15 });
+});
+
+test('registered outbound evidence gate passes required verification and rejects broken registrations', (t) => {
+  const home = temp('setup-outbound-registration-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const mf = path.join(home, 'manifest.json');
+  const entry = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8'))
+    .items.find(entry => entry.id === 'settings:outbound-claim-evidence-gate');
+  write(mf, JSON.stringify(manifest([entry])));
+  const args = ['--json', '--home', home, '--manifest', mf];
+  const converged = run(['--converge', ...args]);
+  assert.equal(converged.status, 0, converged.stdout + converged.stderr);
+  assert.equal(JSON.parse(converged.stdout).items[0].status, 'OK');
+  assert.equal(run(['--verify', ...args]).status, 0);
+  const settingsFile = path.join(home, '.claude/settings.json');
+  const original = fs.readFileSync(settingsFile, 'utf8');
+  for (const damage of ['missing', 'direct', 'timeout', 'async', 'script']) {
+    const settings = JSON.parse(original);
+    const group = settings.hooks.PreToolUse.find(group => group.hooks.some(h => h.command.includes('outbound-claim-evidence-gate.mjs')));
+    const hook = group.hooks.find(h => h.command.includes('outbound-claim-evidence-gate.mjs'));
+    if (damage === 'missing') group.hooks = [];
+    if (damage === 'direct') hook.command = `node "${path.join(toolsDir, entry.spec.hookScript)}"`;
+    if (damage === 'timeout') hook.timeout = 10;
+    if (damage === 'async') hook.async = true;
+    if (damage === 'script') hook.command = hook.command.replace('outbound-claim-evidence-gate.mjs', 'other-gate.mjs');
+    write(settingsFile, JSON.stringify(settings));
+    const result = run(['--verify', ...args]);
+    assert.equal(result.status, 1, damage + ': ' + result.stdout + result.stderr);
+    assert.equal(JSON.parse(result.stdout).items[0].status, 'NG', damage);
+  }
 });
 
 test('converge実経路がhook登録・旧通知削除・allow反映を行い再実行で不変', (t) => {

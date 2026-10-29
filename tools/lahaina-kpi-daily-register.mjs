@@ -8,8 +8,8 @@ import { isEntry } from './is-entry.mjs';
 
 export function taskCommand({node=process.execPath,script=fileURLToPath(new URL('./lahaina-kpi-daily.mjs',import.meta.url)),home=os.homedir()}={}) {
   const dir=path.join(home,'.claude','lahaina-kpi'); const log=path.join(dir,'run.log');
-  const ps=`& '${node.replaceAll("'","''")}' '${script.replaceAll("'","''")}' *>> '${log.replaceAll("'","''")}'`;
-  return {dir,log,task:`powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command "${ps}"`};
+  // ログ追記は daily 本体が行う。/tr は 261 文字制限があるため node を直接起動する。
+  return {dir,log,task:`"${node}" "${script}"`,node,script};
 }
 export function register() {
   if(process.platform!=='win32') throw new Error('Windows only');

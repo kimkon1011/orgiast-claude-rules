@@ -21,8 +21,9 @@ export function isoLocal(date = new Date()) {
 }
 export function parseJalanDetails(html = '') {
   const prices = [...html.matchAll(/([0-9]{1,3}(?:,[0-9]{3})+)円/g)].map(m => Number(m[1].replaceAll(',',''))).filter(Number.isFinite);
-  const planMarkers = html.match(/(?:planCassette|planName|プラン名|宿泊プラン)/gi) || [];
-  return { minPrice: prices.length ? Math.min(...prices) : '', planCount: planMarkers.length };
+  const markerCounts = ['planCassette','planName'].map(marker => (html.match(new RegExp(marker,'gi'))||[]).length);
+  const fallback = (html.match(/宿泊プラン/gi)||[]).length;
+  return { minPrice: prices.length ? Math.min(...prices) : '', planCount: Math.max(...markerCounts, fallback ? 1 : 0) };
 }
 export function parseOfficial(html = '') {
   const hrefs = [...html.matchAll(/href\s*=\s*["']([^"']+)["']/gi)].map(m => m[1]);
@@ -91,8 +92,10 @@ async function getGsc(date) {
       const t=await token(subject,GSC_SCOPE); const sites=await jsonApi('https://searchconsole.googleapis.com/webmasters/v3/sites',t);
       const entries=sites.siteEntry||[]; const hit=entries.find(s=>['https://lahaina.jp/','sc-domain:lahaina.jp'].includes(s.siteUrl));
       if (!hit) { audit.push(`${subject}: sites=${entries.length}, lahaina一致=0`); continue; }
-      const result=await jsonApi(`https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(hit.siteUrl)}/searchAnalytics/query`,t,{method:'POST',body:JSON.stringify({startDate:date,endDate:date,dimensions:['query'],rowLimit:100})});
-      const rows=result.rows||[]; return {clicks:rows.reduce((n,r)=>n+(r.clicks||0),0),impressions:rows.reduce((n,r)=>n+(r.impressions||0),0),queries:rows.slice(0,3).map(r=>`${r.keys[0]}:${r.clicks}/${r.impressions}`),site:hit.siteUrl,subject,audit};
+      const endpoint=`https://searchconsole.googleapis.com/webmasters/v3/sites/${encodeURIComponent(hit.siteUrl)}/searchAnalytics/query`;
+      const totals=await jsonApi(endpoint,t,{method:'POST',body:JSON.stringify({startDate:date,endDate:date,rowLimit:1})});
+      const result=await jsonApi(endpoint,t,{method:'POST',body:JSON.stringify({startDate:date,endDate:date,dimensions:['query'],rowLimit:3})});
+      const rows=result.rows||[], total=totals.rows?.[0]||{}; return {clicks:total.clicks||0,impressions:total.impressions||0,queries:rows.map(r=>`${r.keys[0]}:${r.clicks}/${r.impressions}`),site:hit.siteUrl,subject,audit};
     } catch(e) { audit.push(`${subject}: ${e.message}`); }
   }
   return {clicks:'',impressions:'',queries:[],site:'',subject:'',audit,error:'GSC権限なし'};
@@ -137,7 +140,9 @@ export async function collect({now=new Date(),dryRun=false}={}) {
 async function main() {
   const a=process.argv.slice(2); if(a.includes('--help')||a.includes('-h')) { console.log('Usage: node tools/lahaina-kpi-daily.mjs [--dry-run] [--json]\nDaily Lahaina exposure, web, Instagram, GA4 and Search Console KPI collection.'); return; }
   const result=await collect({dryRun:a.includes('--dry-run')});
+  const logDir=path.join(os.homedir(),'.claude','lahaina-kpi'); fs.mkdirSync(logDir,{recursive:true});
+  fs.appendFileSync(path.join(logDir,'run.log'),`${new Date().toISOString()} date=${result.date} exposure=${result.exposureScore} write=${result.write.mode} verified=${result.write.verified} errors=${result.errors.length}\n`);
   if(a.includes('--json')) console.log(JSON.stringify(result,null,2));
   else console.log(`lahaina-kpi ${result.date} exposure=${result.exposureScore} write=${result.write.mode} verified=${result.write.verified} errors=${result.errors.length} file=${result.localFile}`);
 }
-if(isEntry(import.meta.url)) main().catch(e=>{console.error(`lahaina-kpi failed: ${e.message}`);process.exitCode=1;});
+if(isEntry(import.meta.url)) main().catch(e=>{const line=`${new Date().toISOString()} failed=${e.message}\n`; try { const d=path.join(os.homedir(),'.claude','lahaina-kpi'); fs.mkdirSync(d,{recursive:true}); fs.appendFileSync(path.join(d,'run.log'),line); } catch {} console.error(`lahaina-kpi failed: ${e.message}`);process.exitCode=1;});

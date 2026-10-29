@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { filterWindowsForCurrentAuth, isTransientWindowReadError, claudeWindowReader, commandRunner, queueRepeatedFailure, queueRepeatedDeferral, writeWorktreePointer, prepareTree, preserveDirtyTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer } from './quota-sweep.mjs';
+import { normalizeLandedChecks, filterWindowsForCurrentAuth, isTransientWindowReadError, claudeWindowReader, commandRunner, queueRepeatedFailure, queueRepeatedDeferral, writeWorktreePointer, prepareTree, preserveDirtyTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer, createPullRequest } from './quota-sweep.mjs';
 import { runBounded, killTree } from './lib/quota-sweep-process.mjs';
 import { interactiveCodex, wslPath } from './lib/quota-sweep-host.mjs';
 import { decideSweep, resetKey, sameReset } from './lib/quota-windows.mjs';
@@ -41,6 +41,21 @@ test('interactive transcript detection distinguishes headless, age and first pro
   write('[headless:quota-sweep]\ngoal'); assert.equal(interactiveClaude({ home, now }), false);
   write('help'); assert.equal(interactiveClaude({ home, now }), true);
   assert.equal(interactiveClaude({ home, now: now + 11 * minute }), false);
+});
+test('SDK の単発実行（entrypoint=sdk-cli）は対話利用として数えない', t => {
+  const home = temp(t), dir = path.join(home, '.claude/projects/repo'); fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'probe.jsonl');
+  const write = rows => { fs.writeFileSync(file, rows.map(r => JSON.stringify(r)).join('\n') + '\n'); fs.utimesSync(file, now / 1000, now / 1000); };
+  // 2026-10-24T16:11Z の failed(interactive-active) の再現: cwd=C:\WINDOWS\system32 で
+  // "OK とだけ返してください" を1回だけ実行した sdk-cli の記録。対話セッションではない。
+  write([
+    { type: 'attachment', entrypoint: 'sdk-cli', cwd: 'C:\\WINDOWS\\system32' },
+    { type: 'user', message: { content: [{ type: 'text', text: 'OK とだけ返してください' }] } },
+  ]);
+  assert.equal(interactiveClaude({ home, now }), false);
+  // cli の対話セッションは従来どおり検出する
+  write([{ type: 'attachment', entrypoint: 'cli' }, { type: 'user', message: { content: [{ type: 'text', text: 'help' }] } }]);
+  assert.equal(interactiveClaude({ home, now }), true);
 });
 test('Codex TUI vs exec and host path conversion', () => {
   assert.equal(interactiveCodex('/usr/bin/node /usr/bin/codex --model model'), true);
@@ -297,15 +312,27 @@ test('一時障害の判定は 429/5xx/network だけで、認証・形式不一
   for (const reason of ['HTTP 429', 'HTTP 503', 'HTTP 408', 'network: TimeoutError']) assert.equal(isTransientWindowReadError(reason), true);
   for (const reason of ['HTTP 401', 'HTTP 403', 'accessToken 未設定', 'credentials: ENOENT', 'usage response の形式が未対応', '', undefined]) assert.equal(isTransientWindowReadError(reason), false);
 });
-test('new reset archives old state and starts again, same-window retry keeps cumulative budget', async t => {
+test('new reset preserves completed contract and cumulative budget', async t => {
   let calls = 0; const ctx = context(t, async () => { calls++; return { code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }; });
   await runSweep(decision, ctx);
   const firstCalls = calls;
   const nextDecision = { ...decision, resetsAt: decision.resetsAt + minute, deadline: decision.deadline + minute };
   ctx.windows = async () => windows.map(w => w.window === '5h' ? { ...w, resetsAt: nextDecision.resetsAt } : w);
   await runSweep(nextDecision, ctx);
-  assert.equal(calls, firstCalls + 1); // contract reused; one new tick
-  assert.equal(ctx.state.lastRun.claude[nextDecision.resetsAt].outcome, 'final');
+  assert.equal(calls, firstCalls); // replenished quota cannot restart a completed goal
+  assert.equal(ctx.state.lastRun.claude[nextDecision.resetsAt].outcome, 'no-goal');
+  assert.ok(!fs.readdirSync(path.join(ctx.tree, '.loop')).some(n => n.startsWith('archive-')));
+});
+test('a different goal archives the prior contract and gets a new attempt budget', async t => {
+  let calls = 0; const ctx = context(t, async () => { calls++; return { code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }; });
+  await runSweep(decision, ctx);
+  const firstCalls = calls;
+  fs.writeFileSync(path.join(ctx.home, '.claude/quota-sweep-goals.md'), '- [ ] a different repair goal\n');
+  const next = { ...decision, resetsAt: decision.resetsAt + minute, deadline: decision.deadline + minute };
+  ctx.windows = async () => windows.map(w => w.window === '5h' ? { ...w, resetsAt: next.resetsAt } : w);
+  await runSweep(next, ctx);
+  assert.equal(calls, firstCalls + 2); // new contract generation and one tick
+  assert.equal(ctx.state.lastRun.claude[next.resetsAt].outcome, 'final');
   assert.ok(fs.readdirSync(path.join(ctx.tree, '.loop')).some(n => n.startsWith('archive-')));
 });
 test('eight ticks is hard cap and a retry cannot reset it', async t => {
@@ -315,6 +342,10 @@ test('eight ticks is hard cap and a retry cannot reset it', async t => {
   assert.equal(calls, MAX_TICKS + 1); // generation + ticks
   await runSweep(decision, ctx);
   assert.equal(calls, MAX_TICKS + 1);
+  const next = { ...decision, resetsAt: decision.resetsAt + minute, deadline: decision.deadline + minute };
+  ctx.windows = async () => windows.map(w => w.window === '5h' ? { ...w, resetsAt: next.resetsAt } : w);
+  await runSweep(next, ctx);
+  assert.equal(calls, MAX_TICKS + 1); // the next quota window also cannot reset the cap
 });
 test('PR only for new commits; notification failure is nonfatal', async t => {
   const commands = []; const ctx = context(t, async () => ({ code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }));
@@ -498,6 +529,23 @@ test('fetch and push get a longer timeout and exactly one retry', () => {
   let calls = 0;
   assert.equal(commandRunner(() => ++calls === 1 ? { status: 1 } : { status: 0, stdout: 'ok' })('git', ['fetch']), 'ok');
 });
+test('index.lock 競合で失敗した git コマンドは1回だけ再試行し、lock は削除しない', () => {
+  const lockStderr = "fatal: Unable to create 'C:/repo/.git/worktrees/sweep/index.lock': File exists.\n\nAnother git process seems to be running in this repository, or the lock file may be stale\n";
+  let calls = 0;
+  const run = commandRunner(() => ++calls === 1 ? { status: 128, stderr: lockStderr } : { status: 0, stdout: 'ok' });
+  assert.equal(run('git', ['checkout', '--detach', 'origin/main'], '/tmp'), 'ok');
+  assert.equal(calls, 2);
+  // 競合が解消しない場合は従来どおり失敗として終わる（失敗検知・handoff 起票を壊さない）
+  calls = 0;
+  const run2 = commandRunner(() => { calls++; return { status: 128, stderr: lockStderr }; });
+  assert.throws(() => run2('git', ['checkout', '--detach', 'origin/main'], '/tmp'), /git checkout:.*index\.lock/s);
+  assert.equal(calls, 2);
+  // 通常の git 失敗（lock 競合でない）は再試行しない
+  calls = 0;
+  const run3 = commandRunner(() => { calls++; return { status: 128, stderr: 'fatal: not a git repository\n' }; });
+  assert.throws(() => run3('git', ['status'], '/tmp'), /git status:/);
+  assert.equal(calls, 1);
+});
 test('filtering current windows keeps provider read reasons', () => {
   const all = Object.assign([{ provider: 'claude', window: '5h', usedPercent: 0, resetsAt: null }, { provider: 'codex', observedAt: 2, window: 'primary' }], { reasons: { claude: 'HTTP 401', codex: null } });
   const filtered = filterWindowsForCurrentAuth(all, { codexAuthChangedAt: 1 });
@@ -608,6 +656,69 @@ test('persistent EPERM on opening pointer recovers through replacement', t => {
   });
   assert.equal(fs.readFileSync(file, 'utf8'), 'gitdir: ../relative\n');
 });
+test('gh 不在時に createPullRequestViaApi が credential fill + GitHub REST API にフォールバックする', async t => {
+  const home = temp(t), tree = path.join(home, 'tree');
+  fs.mkdirSync(tree, { recursive: true });
+  const logs = [], commands = [];
+  const run = (exe, args) => {
+    if (exe === 'gh') throw Object.assign(new Error('spawnSync gh ENOENT'), { code: 'ENOENT' });
+    commands.push([exe, ...args]);
+    if (exe === 'git' && args[1] === 'get-url') return 'https://github.com/example/repo.git';
+    return '';
+  };
+  let fetchCalls = 0;
+  const fetchImpl = async (url, init) => {
+    fetchCalls++;
+    if (url.includes('pulls?head=')) {
+      return { ok: true, json: async () => [] };
+    }
+    if (init?.method === 'POST' && url.includes('/pulls')) {
+      return { ok: true, json: async () => ({ html_url: 'https://github.com/example/repo/pull/api-1', number: 1 }) };
+    }
+    if (url.includes('/labels')) {
+      return { ok: true };
+    }
+    return { ok: false, status: 404, text: async () => 'not found' };
+  };
+  const spawnImpl = (exe, args, opts) => {
+    if (exe === 'git' && args[0] === 'credential') {
+      return { status: 0, stdout: 'protocol=https\nhost=github.com\npassword=gho_test_token_12345\n' };
+    }
+    return { error: Object.assign(new Error('spawnSync gh ENOENT'), { code: 'ENOENT' }) };
+  };
+  const result = await createPullRequest({ run, tree, branch: 'quota-sweep/test-branch', log: msg => logs.push(msg), spawnImpl, fetchImpl });
+  assert.equal(result, 'https://github.com/example/repo/pull/api-1');
+  assert.ok(commands.some(c => c[1] === 'remote' && c[2] === 'get-url'), 'remote URL query called');
+  assert.equal(fetchCalls, 3, 'PR list + create + label');
+  assert.ok(logs.some(msg => /gh not found/.test(msg)), 'fallback log');
+});
+test('createPullRequestViaApi は credential fill 失敗時にエラーを throw する', async t => {
+  const run = (exe) => { if (exe === 'gh') throw Object.assign(new Error('spawnSync gh ENOENT'), { code: 'ENOENT' }); return ''; };
+  const spawnImpl = () => ({ error: Object.assign(new Error('spawnSync git ENOENT'), { code: 'ENOENT' }), status: null });
+  await assert.rejects(() => createPullRequest({ run, tree: '/tmp', branch: 'test', log: () => {}, spawnImpl, fetchImpl: async () => ({ ok: false }) }), /credential fill failed/);
+});
+test('createPullRequestViaApi は既存 PR を検出して再利用する', async t => {
+  const home = temp(t), tree = path.join(home, 'tree');
+  fs.mkdirSync(tree, { recursive: true });
+  const logs = [], commands = [];
+  const run = (exe, args) => {
+    if (exe === 'gh') throw Object.assign(new Error('spawnSync gh ENOENT'), { code: 'ENOENT' });
+    commands.push([exe, ...args]);
+    if (exe === 'git' && args[1] === 'get-url') return 'https://github.com/example/repo.git';
+    return '';
+  };
+  const fetchImpl = async (url) => {
+    if (url.includes('pulls?head=')) {
+      return { ok: true, json: async () => [{ html_url: 'https://github.com/example/repo/pull/existing-42' }] };
+    }
+    return { ok: false, status: 404, text: async () => 'unexpected' };
+  };
+  const spawnImpl = () => ({ status: 0, stdout: 'password=gho_test_token_abc\n' });
+  const result = await createPullRequest({ run, tree, branch: 'quota-sweep/existing', log: msg => logs.push(msg), spawnImpl, fetchImpl });
+  assert.equal(result, 'https://github.com/example/repo/pull/existing-42');
+  assert.ok(logs.some(msg => /existing PR/.test(msg)));
+  assert.equal(commands.filter(c => c[1] === 'remote').length, 1);
+});
 test('relative pointer is not rewritten', t => {
   const home = temp(t), tree = path.join(home, '.claude/quota-sweep-repo'); fs.mkdirSync(tree, { recursive: true });
   prepareTree({ home, provider: 'claude', run: (_exe, args) => args[0] === 'status' ? '' : 'base', io: {
@@ -643,3 +754,31 @@ test('claudeWindowReader: 成功した読み取りだけ TTL 内で再利用し�
   assert.equal((await reader()).length, 0);
   assert.equal(calls, 3, '失敗結果は再利用しない');
 });
+
+test('landed check normalization is global, idempotent and preserves other bases', () => {
+  const text = '`git merge-base --is-ancestor eee266e origin/main`\n git\tmerge-base --is-ancestor f94ee7a origin/main && echo ok\ngit merge-base --is-ancestor abc origin/main-other';
+  const normalized = normalizeLandedChecks(text);
+  assert.equal(normalized, '`node tools/commit-landed.mjs eee266e`\n node tools/commit-landed.mjs f94ee7a && echo ok\ngit merge-base --is-ancestor abc origin/main-other');
+  assert.equal(normalizeLandedChecks(normalized), normalized);
+  assert.match(contractPrompt('claude', 'slug', 'goal'), /node tools\/commit-landed\.mjs <sha>/);
+});
+for (const existing of [false, true]) {
+  test(`runSweep normalizes ${existing ? 'existing' : 'generated'} contract before iteration`, async t => {
+    let calls = 0;
+    const ctx = context(t, async () => {
+      calls++;
+      if (!existing && calls === 1) {
+        fs.writeFileSync(file, original);
+        return { code: 0, stdout: '' };
+      }
+      assert.equal(fs.readFileSync(file, 'utf8'), 'C4: `node tools/commit-landed.mjs eee266e`');
+      return { code: 0, stdout: JSON.stringify({ result: 'FINAL' }) };
+    });
+    const file = path.join(ctx.tree, '.loop/quota-sweep-claude.md');
+    const original = 'C4: `git merge-base --is-ancestor eee266e origin/main`';
+    if (existing) { fs.mkdirSync(path.dirname(file)); fs.writeFileSync(file, original); }
+    await runSweep(decision, ctx);
+    assert.equal(calls, existing ? 1 : 2);
+    assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'final');
+  });
+}

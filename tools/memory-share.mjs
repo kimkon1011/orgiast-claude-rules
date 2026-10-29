@@ -8,14 +8,16 @@ import { machineIdentity } from './machine-identity.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { keyserveAuthHeaders, requireKeyservePcId, keyserveSecret } from './keyserve-auth.mjs';
+import { isKimOperated } from './lib/kim-operated.mjs';
 
 const DEFAULT_MEMORY_URL = 'https://orgiast-memoryserve.vercel.app/api/memory';
+// 伏字化した後の本文に対して判定する。伏字で消せない秘密が残るファイルだけを丸ごと除外する。
 const SECRET_PATTERNS = [
-  ['Discord webhook URL', /discord\.com\/api\/webhooks\//i],
+  ['Discord webhook URL', /discord\.com\/api\/webhooks\/\d/i],
   ['OpenAI API key', /sk-[A-Za-z0-9]{20,}/],
   ['Groq API key', /gsk_[A-Za-z0-9]{20,}/],
   ['GitHub token', /ghp_[A-Za-z0-9]{20,}/],
-  ['Slack bot token', /xoxb-/],
+  ['Slack bot token', /xoxb-(?!\*\*\*REDACTED\*\*\*)/],
   ['Google API key', /AIza[A-Za-z0-9_-]{20,}/],
   ['private key', /-----BEGIN .*PRIVATE KEY-----/],
   ['40文字以上のhex', /[A-Fa-f0-9]{40,}/],
@@ -26,6 +28,9 @@ const CUSTOMER_PATTERNS = [
   ['法人名', /株式会社|有限会社|合同会社/],
 ];
 const EXCLUDED_FILE = 'EXCLUDED.md';
+// user 型は kim 本人が操作する席にだけ入れる。受信側は本文を読まずに名前で判別する。
+const isUserMemory = name => /^user_[^/]*\.md$/.test(String(name));
+const redactForShare = text => redactSecrets(text).replace(/[A-Fa-f0-9]{40,}/g, '***REDACTED***');
 
 function isNonMemoryFile(name) {
   return name.startsWith('.') || name.includes('-bak-') || name.includes('.bak') || name.endsWith('~');
@@ -119,19 +124,21 @@ export function exportMemories(options = {}) {
       const original = fs.readFileSync(file, 'utf8');
       const frontmatter = parseMemoryFrontmatter(original);
       const type = frontmatter['metadata.type'] || frontmatter.type;
-      if (channel === 'public' ? type !== 'feedback' : (type === 'user' || (!['feedback', 'project', 'reference'].includes(type) && name !== 'MEMORY.md' && !name.startsWith('index/')))) continue;
+      const allowed = channel === 'public' ? type === 'feedback'
+        : type === 'user' ? isUserMemory(name) : (['feedback', 'project', 'reference'].includes(type) || name === 'MEMORY.md' || name.startsWith('index/'));
+      if (!allowed) continue;
       if (channel === 'private' && [frontmatter.share, frontmatter['metadata.share']].some(value => /^false(?:\s+#.*)?$/i.test(value || ''))) {
         exclusions.push({ name, category: 'opt-out' });
         emit(`除外(共有拒否): ${name} — share: false`);
         continue;
       }
-      const secret = SECRET_PATTERNS.find(([, pattern]) => pattern.test(original));
+      const redacted = redactForShare(original);
+      const secret = SECRET_PATTERNS.find(([, pattern]) => pattern.test(redacted));
       if (secret) {
         exclusions.push({ name, category: 'secret' });
         emit(`除外(資格情報): ${name} — 秘密パターン ${secret[0]} に一致`);
         continue;
       }
-      const redacted = redactSecrets(original);
       const customer = channel === 'public' && CUSTOMER_PATTERNS.find(([, pattern]) => pattern.test(redacted));
       if (customer) {
         exclusions.push({ name, category: 'customer' });
@@ -219,9 +226,12 @@ function localFiles(dir, prefix = '') {
     return entry.isDirectory() ? localFiles(path.join(dir, entry.name), name + '/') : [name];
   });
 }
-function annotation(manifest) {
+function annotation(manifest, kimOperated) {
+  const who = kimOperated
+    ? 'このPCの Claude アカウントも kim 本人が操作している（tools/lib/kim-operated.mjs）。本文中の『ユーザー』『kim』はこのPCの user と同一人物なので、kim の好み・厳命・判断基準はそのまま適用する（既定ブラウザ等このPC固有の環境だけは実測で確かめる）。kim はこの画面を見ている前提で進め、「kim-PC に確認」「kim に伝えて」など kim が別PCにいる前提の手渡しや判断依頼の転送をせず、この場で直接聞く。'
+    : '本文中の『ユーザー』『kim』は発信元の人物を指す。このPCの user は別人なので、人物固有の既定（既定ブラウザ・個人アカウント等）はそのまま適用せず、運用ノウハウ・手順・失敗の型として使う。';
   return `<!-- orgiast-shared-memory -->
-この索引は ${manifest.source.account}（${manifest.source.pc}）の Claude Code memory の自動コピー（${manifest.generatedAt}）。本文中の『ユーザー』『kim』は発信元の人物を指す。このPCの user は別人なので、人物固有の既定（既定ブラウザ・個人アカウント等）はそのまま適用せず、運用ノウハウ・手順・失敗の型として使う。このディレクトリは毎日上書きされるので編集しない。このPCで得た知見は通常の auto-memory に書き、全社化したいものは /share-knowledge で投稿する。
+この索引は ${manifest.source.account}（${manifest.source.pc}）の Claude Code memory の自動コピー（${manifest.generatedAt}）。${who}このディレクトリは毎日上書きされるので編集しない。このPCで得た知見は通常の auto-memory に書き、全社化したいものは /share-knowledge で投稿する。
 <!-- orgiast-shared-memory -->
 
 `;
@@ -252,6 +262,8 @@ export async function installSharedMemories(options = {}) {
         files: Object.entries(offline).map(([name, content]) => ({ name, sha256: sha256(content), bytes: Buffer.byteLength(content), part: 0 })) };
     } else manifest = await request('manifest=1');
     if (manifest?.version !== 2 || typeof manifest.generatedAt !== 'string' || !manifest.source || !Array.isArray(manifest.files) || !Number.isInteger(manifest.parts) || manifest.parts < 0) throw new Error('invalid v2 manifest');
+    const kimOperated = options.kimOperated ?? isKimOperated(home);
+    if (!kimOperated) manifest.files = manifest.files.filter(file => !isUserMemory(file?.name));
     const names = new Set();
     for (const file of manifest.files) {
       if (!validMemoryName(file.name) || names.has(file.name) || !/^[a-f0-9]{64}$/.test(file.sha256) || !Number.isInteger(file.bytes) || file.bytes < 0 || !Number.isInteger(file.part) || file.part < 0 || file.part >= manifest.parts) throw new Error('invalid manifest file');
@@ -270,7 +282,7 @@ export async function installSharedMemories(options = {}) {
     }
     const statePath = path.join(dir, '.state.json');
     const previous = safeReadJson(statePath);
-    const changed = manifest.files.filter(file => previous?.files?.[file.name] !== file.sha256 || !fs.existsSync(path.join(dir, file.name)) || (file.name === 'MEMORY.md' && (previous.generatedAt !== manifest.generatedAt || JSON.stringify(previous.source) !== JSON.stringify(manifest.source))));
+    const changed = manifest.files.filter(file => previous?.files?.[file.name] !== file.sha256 || !fs.existsSync(path.join(dir, file.name)) || (file.name === 'MEMORY.md' && (previous.generatedAt !== manifest.generatedAt || JSON.stringify(previous.source) !== JSON.stringify(manifest.source) || previous.kimOperated !== kimOperated)));
     const incoming = new Map();
     // Validate every downloaded part before changing any installed file or pruning.
     for (const part of new Set(changed.map(file => file.part))) {
@@ -279,7 +291,7 @@ export async function installSharedMemories(options = {}) {
       for (const file of changed.filter(file => file.part === part)) {
         const content = payload.files[file.name];
         if (typeof content !== 'string' || sha256(content) !== file.sha256 || Buffer.byteLength(content) !== file.bytes) throw new Error('part integrity mismatch');
-        incoming.set(file.name, file.name === 'MEMORY.md' ? annotation(manifest) + content : content);
+        incoming.set(file.name, file.name === 'MEMORY.md' ? annotation(manifest, kimOperated) + content : content);
       }
     }
     for (const [name, content] of incoming) {
@@ -299,7 +311,7 @@ export async function installSharedMemories(options = {}) {
     }
     if (!options.dryRun) {
       fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(statePath, JSON.stringify({ generatedAt: manifest.generatedAt, source: manifest.source, files: Object.fromEntries(manifest.files.map(file => [file.name, file.sha256])) }, null, 2) + '\n');
+      fs.writeFileSync(statePath, JSON.stringify({ generatedAt: manifest.generatedAt, source: manifest.source, kimOperated, files: Object.fromEntries(manifest.files.map(file => [file.name, file.sha256])) }, null, 2) + '\n');
     }
   } catch (error) { emit(`memory-share install 取得失敗: ${oneLine(error)}`); result.error = oneLine(error); }
   return result;

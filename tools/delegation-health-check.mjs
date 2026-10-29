@@ -225,6 +225,25 @@ export function isEmptyDiffEscalationRow(row = {}) {
   return chain.some((item) => item?.outcome === 'ok');
 }
 
+// fallback の chain が cheap-code の「起動を省略しました(exit 3)」だけで終わった行。cheap-code が
+// cooldown/残高切れで子を起動しなかった記録で、バックエンドは一度も試されていない。全滅の分母に
+// 入れると deepseek 残高切れの間じゅう fallback が high の未修理になる(2026-10-28 実測: 33件すべてこれ)。
+// gemini-cli など cheap-code 以外の実失敗が chain に1つでも混ざる行、stderrTail が cooldown を
+// 名指ししない行は対象外(本物の障害を隠さない)。cooldown を張った当の行(「利用不可(402)」)も同じ外部要因。
+export function isFallbackCooldownSkipRow(row = {}) {
+  if (row?.provider !== 'fallback') return false;
+  // stderrTail が cheap-code 全体の cooldown メッセージを含む行は外部要因で投げられなかっただけで、
+  // レーン障害ではない。47件の実測（2026-10-27）から、chain 全項目の every では gemini-cli
+  // が混ざると false になってしまい cooldown スキップ行が attempts に入り込んでいた。
+  if (typeof row.stderrTail === 'string' && /クールダウン中です|起動を省略しました/.test(row.stderrTail)) return true;
+  const chain = Array.isArray(row?.chain) ? row.chain : [];
+  if (chain.length === 0) return false;
+  // chain 内の cheap-code バックエンドがすべて status===3 かつ cooldown/402/429 なら cooldown スキップ
+  const ccBackends = chain.filter((item) => String(item?.backend ?? '').startsWith('cheap-code:'));
+  if (ccBackends.length === 0) return false;
+  return ccBackends.every((item) => Number(item?.status) === 3 && /クールダウン中|利用不可\((?:402|429)\)/.test(String(item?.stderrTail ?? '')));
+}
+
 // フォールバック先の子プロセスが OS エラーで起動できなかった行(例: spawn ENAMETOOLONG / ENOENT)。
 // 1件で発火させる: 低成果(2件閾値)では単発の故障が翌朝 healthy と判定されてしまった (2026-09-21)。
 const SPAWN_FAILED = /syscall: 'spawn'|\bspawn E[A-Z]+\b|code: 'E[A-Z]{4,}'/;
@@ -303,6 +322,8 @@ export const POLICY_STALL_SINCE = '2026-10-23T20:03:24Z';
 export const POLICY_STALL_MIN_ABORTABLE_SECS = 300;
 // codex-do の POLICY_STALL_MIN_OUTPUT_CHARS と同値。出力がこれ以上出た試行は進捗ありで打ち切り対象外（偽陽性防止）。
 export const POLICY_STALL_MAX_ABORTABLE_OUT = 400;
+// codex-do の POLICY_STALL_MIN_DENIALS と同値。拒否がこれ未満の停滞は打ち切り条件を満たさず、未発火の証拠にならない。
+export const POLICY_STALL_MIN_DENIALS = 3;
 export const POLICY_DENIAL_RE = /tool execution denied by policy/gi;
 
 export function countPolicyDenial(text) {
@@ -320,7 +341,9 @@ export function policyStallAttempts(rows) {
     const list = chain ?? [null];
     for (const attempt of list) {
       const stderr = String(attempt?.stderrTail ?? (chain ? '' : row.stderrTail) ?? '');
-      const denials = countPolicyDenial(stderr);
+      // chain に全 stderr の実測回数(policyDenials)があればそれを優先し、旧行は切り詰め済み tail の下限値を使う。
+      const recorded = Number(attempt?.policyDenials);
+      const denials = Math.max(countPolicyDenial(stderr), Number.isFinite(recorded) ? recorded : 0);
       if (!denials) continue;
       const secs = Number(attempt?.secs ?? row.secs);
       const out = Number(attempt?.out ?? row.out);
@@ -331,6 +354,7 @@ export function policyStallAttempts(rows) {
         outcome: attempt?.outcome ?? (row.timedOut === true || row.status === 'timeout' ? 'timeout' : 'ok'),
         secs: Number.isFinite(secs) ? secs : 0,
         out: Number.isFinite(out) ? out : 0,
+        outChars: Number.isFinite(Number(attempt?.outChars)) && attempt?.outChars != null ? Number(attempt.outChars) : null,
         budgetSecs: Number(attempt?.budgetSecs ?? row.timeoutSecs) || null,
         denials,
       });
@@ -384,7 +408,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   // 台帳を毎晩ここで走査し、打ち切られずに時間を消費した停滞だけを起票する（Claude の手動再計測を不要にする）。
   const policyStalls = policyStallAttempts(readJsonl(path.join(claudeDir, 'executor-usage.jsonl')))
     .filter((a) => a.t >= POLICY_STALL_SINCE);
-  const unabortedStalls = policyStalls.filter((a) => a.outcome !== 'blocked' && a.secs >= POLICY_STALL_MIN_ABORTABLE_SECS && a.out < POLICY_STALL_MAX_ABORTABLE_OUT);
+  const unabortedStalls = policyStalls.filter((a) => a.outcome !== 'blocked' && a.secs >= POLICY_STALL_MIN_ABORTABLE_SECS && (a.outChars ?? a.out) < POLICY_STALL_MAX_ABORTABLE_OUT && a.denials >= POLICY_STALL_MIN_DENIALS);
   if (unabortedStalls.length) {
     findings.push({
       id: 'policy_stall_not_aborted',
@@ -510,13 +534,23 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
       const until = Number(cooldown[name]?.until);
       return Number.isFinite(until) && Date.parse(row.t) <= until;
     };
-    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !skippedByCooldown(row) && !isEmptyDiffEscalationRow(row) && !isQuotaSweepBenignRow(row));
+    // 'codex-do exit N' の skipped 行は wrapper(auto-session)が残す記録で、実体の失敗は codex 行側で
+    // 判定済み。その後に codex が成功しているなら修復済みで、疑似 provider 'skipped' の全滅証拠にしない
+    // (2026-10-28 実測: 15時台に codex が ok 8件でも、朝の exit 1/3/124 の21件が high になっていた)。
+    const skippedRepairedByCodex = (row) => row.provider === 'skipped' && /^codex-do exit /.test(String(row.reason || ''))
+      && codexSuccessTimes.some((time) => time > Date.parse(row.t));
+    // wrapper が残した stderrTail が上限・残高・無人枠・クールダウンを名指ししている skipped 行は、
+    // 外部要因で投げられなかった記録であってコード欠陥の全滅証拠ではない(2026-10-28 実測: 無人枠 8/8 +
+    // glm/deepseek クールダウンで codex-do exit 1 が12件)。stderrTail の無い旧行は従来どおり数える。
+    const skippedExternalCause = (row) => row.provider === 'skipped' && row.status === 'no-cheap-executor'
+      && /unattended_budget|無人枠|クールダウン中|上限[/]エラーで使えない|usage_limit|Insufficient Balance|HTTP ?(402|429)/.test(String(row.stderrTail || ''));
+    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !skippedByCooldown(row) && !skippedExternalCause(row) && !skippedRepairedByCodex(row) && !isEmptyDiffEscalationRow(row) && !isFallbackCooldownSkipRow(row) && !isQuotaSweepBenignRow(row));
     // 24h 窓が cooldown だけで埋まる＝上限中で一度も試行していない。レーンは止まっているが
     // 原因は上限側で、コードの欠陥ではない。low の可視化だけ残す(high にすると上限が明けるまで
     // 毎晩同じ偽の修理タスクが積まれる。黙って消すと止まっている事実自体が見えなくなる)。
     if (!attempts.length) {
       // quota-sweep の正常停止は cooldown ではないので、cooldown の low 表示も付けない。
-      if (rows.every(isQuotaSweepBenignRow)) continue;
+      if (rows.every((row) => isQuotaSweepBenignRow(row) || skippedRepairedByCodex(row))) continue;
       // 窓が「代替は応答したが1行も変えなかった」行だけで埋まった場合も、レーン障害ではない。
       // 止まっている事実は low で可視化し、修理タスク(high)にはしない。
       if (emptyDiffRows.length === rows.length && rows.length >= 3) {

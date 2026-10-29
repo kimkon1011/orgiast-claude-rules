@@ -23,6 +23,7 @@ export function isUsageLimitText(text) {
 }
 
 export const CODEX_GATE_MAX_COOLDOWN_MS = 5 * 60 * 60 * 1000;
+export const CODEX_RECHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 // codex-cooldown.json は decideCodexGate が「Codex を起動しない」判断にだけ使う。
 // 遠い until をそのまま書くと、枠が回復しても再試行されず、レーンが無音で死ぬ
@@ -105,12 +106,22 @@ export function nextLocalMidnight(now = Date.now()) {
 // Codex を起動してよいか。deferred なら { deferred:true, reason, retryAt }。
 export function decideCodexGate({ home, origin = 'interactive', now = Date.now() }) {
   const cooldownUntil = readCodexCooldownUntil(claudeFile(home, 'codex-cooldown.json'), now);
-  if (cooldownUntil) return { deferred: true, reason: 'codex_cooldown', retryAt: cooldownUntil };
+  const recheckFile = claudeFile(home, 'codex-cooldown-recheck.json');
+  const lastRecheck = Number(readJson(recheckFile, null)?.at);
+  const recheck = cooldownUntil - now > CODEX_GATE_MAX_COOLDOWN_MS
+    && (!Number.isFinite(lastRecheck) || now - lastRecheck >= CODEX_RECHECK_INTERVAL_MS);
+  if (cooldownUntil && !recheck) return { deferred: true, reason: 'codex_cooldown', retryAt: cooldownUntil };
   if (origin === 'unattended') {
     const budget = loadBudget(claudeFile(home, 'executor-budget.json'));
     const limit = Number(budget.codex.unattendedPerDay);
     const used = countUnattendedToday(claudeFile(home, 'executor-usage.jsonl'), 'codex', now);
     if (Number.isFinite(limit) && used >= limit) return { deferred: true, reason: 'unattended_budget', retryAt: nextLocalMidnight(now), used, limit };
+  }
+  if (recheck) {
+    // 無人予算で止まった呼び出しは、生存確認を消費しない。
+    fs.mkdirSync(path.dirname(recheckFile), { recursive: true });
+    fs.writeFileSync(recheckFile, `${JSON.stringify({ at: now })}\n`, 'utf8');
+    return { deferred: false, recheck: true };
   }
   return { deferred: false };
 }

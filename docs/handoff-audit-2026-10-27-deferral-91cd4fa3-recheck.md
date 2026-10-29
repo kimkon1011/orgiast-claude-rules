@@ -209,3 +209,122 @@ repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、branch=quota-sweep/20
 state attempts=8、budget.ticks=8を確認。累積上限8/8のため新規試行を予約せず、監査・テスト・ソース修正なし。stop_reason=budget。未達はC2網羅性、C3有効性・漏れ候補対処、C5指定ゲート。C1/C4は過去時点限定。今回変更は停止記録のみ。別ループ・背景子プロセス・子agent・push/PR/mergeなし。
 
 受け渡し要約: status=ITERATING、attempts=8/8、budget.ticks=8。repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、revision=85a04a81e8fb09067b152e47d7325dfa8d34fee6（今回確認）、branchは直前記録quota-sweep/20261026-2306-codex-mvpv8wa0。開始git status終了0、対象docs変更1件のみ。owner=Codex、run=bfc24185-checkpoint-20261026T231538Z、API session ID不明、取消要求なし。並行writer不在は未証明。証跡=.loop/quota-sweep-codex-evidence.md、docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md。次は累積上限の明示変更とgit管理領域の書込可能な環境が必要。Asia/Tokyo=UTC+09:00。
+
+## Claude 実行 試行2回目（quota-sweep-claude / 2026-10-27）
+
+branch quota-sweep/20261027-0021-claude-mvpxxar1、HEAD 547252b、Node v24.22.1。開始時 state=0/budget.ticks=1 の不一致は大きい値を消費済みとし、今回を累積2として予約。
+
+- C3 漏れ候補を実測で確認: 「検証は Codex に任せています。結果が出たらここに報告します。」は待機語を含まず detect() が [] を返していた（元原文と同型の先送り）。
+- 局所修正: tools/permanent-fix-deferral-scan.mjs の ARRIVAL_WAIT に結果到着後の報告約束（結果/完了/終了が出たら・戻ったら…報告/お知らせ/共有/連絡）を追加。除外パターンは広げていない。
+- 回帰: 陽性3・陰性3・監査引用1を scan テストへ追加。scan+nightly 58/58 pass。
+- C5: CI 同形 glob で tests 7074 / pass 7063 / fail 3 / skipped 8、終了1。失敗3は gmail-guard 配布テスト2件（spawn が status=null）と Windows cmd 日本語パス1件で scan 非依存の環境要因。指定どおりの `node --test tools/` は Node 24 で未収集のまま。緑ではない。
+- 未達: C2網羅性、C3原作業照合（wt-gate成果物・control-group-check）、C4スケジューラ稼働、C5ゲート。FINAL ではない。
+
+## 追記 試行4（2026-10-27T10:10+0900）
+C2: 観測窓 [2026-10-26T11:26:28.622Z, 2026-10-27T00:59:36Z)。3台帳可読・不正JSON 0。窓内行 runner 121 / audit 192 / nightly 55。scan hits は runner の W=4（全て 91cd4fa3、11:26:28〜11:27:05）、audit 0、nightly 0。他セッションの同型は 0。同セッションの再発4件は実在し、無再発とは主張しない。限界: audit 台帳は violations.quote のみ走査し excerpt は対象外（同文は runner 側で捕捉済み）。セッション全文の網羅性は未証明。
+C3: 同セッションは 11:29:47 に検証完了と報告しており、Codex 待機は同セッション内で完了。token 発行は本人操作待ちで承認外。
+C5: 'tools/**/*.test.mjs' の全体実行は timeout 590s で EXIT=124 未完走（緑ではない）。ソース・テスト変更なし。
+
+## quota-sweep-claude 試行5 / C5 分割ゲート観測（2026-10-27 / HEAD dc0642e / Node v24.22.1）
+
+foreground 上限600s とヘッドレスの run_in_background 禁止のため、`node --test --test-shard=N/3 'tools/**/*.test.mjs'`（env -u CLAUDE_HEADLESS -u ORGIAST_HEADLESS_JOB）を3回に分けて実行した。合計 tests 7074（試行2の収集数と一致）。shard1 fail 0（EXIT=0）、shard2 fail 0（EXIT=0）、shard3 fail 3（EXIT=1）。失敗は fleet-chase-context / hook-budget-check / keyserve-alert.e2e で、いずれも scan・nightly を import しない子プロセス/タイミング依存。3ファイルを単独実行すると 25/25 pass（EXIT=0）。試行2の失敗3件とは別の組で、並行負荷で変動する flaky と判断。ただし単一ゲートの exit 0 ではないため C5 は未達のまま（緑とは扱わない）。ログは .loop/quota-sweep-claude-007-*.log（ローカル状態・コミット対象外）。
+
+限界: C2 のセッション全文網羅、C3 の token 発行（本人操作待ち・承認外）は未解消。コード変更なし。
+
+
+## 停止チェックポイント bfc24185-checkpoint-20261027T043755Z / 2026-10-27T04:37:55.177130+00:00 UTC
+
+同一goal/versionのarchive-quota-sweep-codex-1793075801182でattempts=8/8・budget.ticks=8、および既存008を確認。開始state=0/budget=1は巻戻しとして累積8/8へ精算、resetsAt保持。原因・外部更新者不明、並行writer不在未証明。新規第9試行・監査・テスト・実装修正なし。stop_reason=budget。
+未達=C2網羅性、C3恒久対処の有効性・原作業照合、C4現在の稼働、C5指定ゲート。既存証拠は過去時点限定、他ループの報告を今回の合格証明に代用しない。C6停止追記、C-HANDOFF保存後読戻し対象。
+repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、revision=1ae8e9c673fe8450489b41cee60ade4ea28d907b。branchは回収待ち、未コミット全体は開始status回収不能で不明。owner=Codex、API session ID不明、取消要求なし。今回変更は状態・budget精算・証跡・監査docsの停止記録のみ。別ループ・背景子プロセス・子agent・送信・push/PR/mergeなし。次は累積上限の明示変更と書込可能なgit管理領域が必要。Asia/Tokyo=UTC+09:00。
+
+終了記録: 2026-10-27T04:38:06.011184+00:00 UTC。branch=quota-sweep/20261027-0436-codex-mvq71ana（今回確認）。指定 git commit -F /tmp/quota-sweep-current-msg -- docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md は終了128。実gitdirのindex.lock作成がRead-only file systemのためコミット未作成。.loop/除外、迂回なし。stop_reason=budget、追加阻害=scope-boundary。owner退出時解放。status=ITERATING、attempts=8/8、budget.ticks=8。未コミット全体は不明、今回docs追記あり。C-HANDOFF: 以下の保存後読戻しで状態・未達・証跡・終了結果を照合。
+
+
+## 停止チェックポイント bfc24185-checkpoint-20261027T043917Z / 2026-10-27T04:39:17.370483+00:00 UTC
+
+開始state attempts=8/8、budget.ticks=2。契約version=bfc2418509a26c29-v1の大きい値採用規則に従いbudgetを8へ精算、goal・resetsAt保持。低下原因・外部更新者不明、並行writer不在未証明。累積上限により第9試行を予約せず、新規監査・テスト・実装修正なし。stop_reason=budget。未達=C2網羅性、C3恒久対処の有効性・原作業照合、C4現在の稼働、C5指定ゲート。既存の他レーン報告は今回の合格証拠に代用しない。
+
+repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、branch=quota-sweep/20261027-0436-codex-mvq71ana。開始git status終了0、変更はdocs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.mdのみ。owner=Codex、API session ID不明、取消要求なし。今回変更は停止記録とbudget精算。別ループ・バックグラウンド子プロセス・子agent・送信・push/PR/mergeなし。次は累積上限の明示変更とgit管理領域の書込可能な環境が必要。時刻UTC、Asia/Tokyo=UTC+09:00。証跡=.loop/quota-sweep-codex-evidence.md、docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md。
+
+終了記録 2026-10-27T04:39:34.900080+00:00 UTC: revision=1ae8e9c673fe8450489b41cee60ade4ea28d907b（今回確認）。`git commit -F /tmp/quota-sweep-current-msg -- docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md` は終了128、実gitdirのindex.lock作成がRead-only file system。コミット未作成、.loop/は対象除外、迂回なし。stop_reason=budget、追加阻害=scope-boundary。status=ITERATING、attempts=8/8、budget.ticks=8。owner退出時解放。C-HANDOFFは下記保存後の読戻しで要約・証跡・budgetの一致を照合。
+
+
+## 停止チェックポイント bfc24185-checkpoint-20261027T044029Z / 2026-10-27T04:40:29.448142+00:00 UTC
+
+契約version=bfc2418509a26c29-v1。開始state attempts=8/8、budget.ticks=3。大きい値を採用してbudgetを8へ精算、goal・resetsAt保持。低下原因・外部更新者不明、並行writer不在未証明。累積上限8のため第9試行は開始せず、新規監査・テスト・ソース修正なし。stop_reason=budget。未達=C2網羅性、C3恒久対処・原作業照合、C4現在の稼働、C5指定ゲート。既存証拠を今回の合格証明に代用しない。
+
+repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、branch=quota-sweep/20261027-0436-codex-mvq71ana、revision=1ae8e9c673fe8450489b41cee60ade4ea28d907b（今回確認）。開始git status終了0、変更はdocs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.mdのみ。owner=Codex、API session ID不明、取消要求なし。今回変更は停止記録とbudget精算。別ループ・バックグラウンド子プロセス・子agent・送信・push/PR/mergeなし。次は累積上限の明示変更とgit管理領域の書込可能な環境が必要。Asia/Tokyo=UTC+09:00。証跡=.loop/quota-sweep-codex-evidence.md、docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md。
+
+終了記録 2026-10-27T04:40:38.971941+00:00 UTC: 指定 git commit -F /tmp/quota-sweep-current-msg -- docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md は終了128。実gitdirのindex.lock作成がRead-only file systemのためコミット未作成。.loop/除外、迂回なし。stop_reason=budget、追加阻害=scope-boundary。owner退出時解放。
+
+
+## 停止チェックポイント bfc24185-checkpoint-20261027T044128Z / 2026-10-27T04:41:28.489933+00:00 UTC
+
+契約version=bfc2418509a26c29-v1。開始state attempts=8/8、budget.ticks=4。大きい値採用規則でbudgetを8へ精算、goal・resetsAt保持。低下原因・外部更新者不明、並行writer不在未証明。累積上限により第9試行を開始せず、監査・テスト・ソース修正なし。stop_reason=budget。
+未達=C2網羅性、C3恒久対処・原作業照合、C4現在の稼働、C5指定ゲート。過去や他レーンの証拠を現在の合格証明に代用しない。
+repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、branch=quota-sweep/20261027-0436-codex-mvq71ana、revision=1ae8e9c673fe8450489b41cee60ade4ea28d907b。開始git status終了0、変更は対象監査docsのみ。owner=Codex、API session ID不明、取消要求なし。今回変更=停止記録・budget精算。別ループ・背景子プロセス・子agent・送信・push/PR/mergeなし。次は累積上限の明示変更とgit管理領域の書込可能な環境が必要。Asia/Tokyo=UTC+09:00。
+証跡=.loop/quota-sweep-codex-evidence.md、docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md。コミット結果は終了記録に追記。
+
+終了記録 2026-10-27T04:41:36.520220+00:00 UTC: 指定 `git commit -F /tmp/quota-sweep-current-msg -- docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md` は終了128。実gitdirのindex.lock作成がRead-only file system。コミット未作成、.loop/除外、迂回なし。stop_reason=budget、追加阻害=scope-boundary。owner退出時解放。C-HANDOFF: 保存後に要約・末尾・budgetを読み戻し照合。
+
+
+## 停止チェックポイント bfc24185-checkpoint-20261027T044229Z / 2026-10-27T04:42:29.468796+00:00 UTC
+
+契約version=bfc2418509a26c29-v1。開始state attempts=8/8、budget.ticks=5。大きい値採用規則でbudgetを8へ精算しgoal・resetsAt保持。低下原因・外部更新者不明、並行writer不在未証明。累積上限8により第9試行は開始せず、監査・テスト・ソース修正なし。stop_reason=budget。
+未達=C2網羅性、C3恒久対処・原作業照合、C4現在の稼働、C5指定ゲート。既存証拠を現在の合格証明に代用しない。
+repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、branch=quota-sweep/20261027-0436-codex-mvq71ana、revision=1ae8e9c673fe8450489b41cee60ade4ea28d907b（今回確認）。開始git status終了0、変更は対象監査docsのみ。owner=Codex、API session ID不明、取消要求なし。今回変更=停止記録・budget精算。別ループ・背景子プロセス・子agent・送信・push/PR/mergeなし。次は累積上限の明示変更とgit管理領域の書込可能な環境が必要。Asia/Tokyo=UTC+09:00。
+証跡=.loop/quota-sweep-codex-evidence.md、docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md。コミット結果は終了記録へ追記。
+
+終了記録 2026-10-27T04:42:39.210221+00:00 UTC: 指定 `git commit -F /tmp/quota-sweep-current-msg -- docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md` は終了128。実gitdirのindex.lock作成がRead-only file system。コミット未作成、.loop/除外、迂回なし。stop_reason=budget、追加阻害=scope-boundary。owner退出時解放。C-HANDOFF: 保存後に要約・末尾・budgetを読み戻し照合。
+
+
+## 停止チェックポイント bfc24185-checkpoint-20261027T044331Z / 2026-10-27T04:43:31.968597+00:00 UTC
+
+契約version=bfc2418509a26c29-v1。開始state attempts=8/8、budget.ticks=6。大きい値採用規則でbudgetを8へ精算、goal・resetsAt保持。低下原因・外部更新者不明、並行writer不在未証明。累積上限8のため第9試行は開始せず、監査・テスト・ソース修正なし。stop_reason=budget。
+未達=C2網羅性、C3恒久対処・原作業照合、C4現在の稼働、C5指定ゲート。既存証拠を現在の合格証明に代用しない。
+repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、branch=quota-sweep/20261027-0436-codex-mvq71ana、revision=1ae8e9c673fe8450489b41cee60ade4ea28d907b（今回確認）。開始git status終了0、変更は対象監査docsのみ。owner=Codex、API session ID不明、取消要求なし。今回変更=停止記録・budget精算。別ループ・背景子プロセス・子agent・送信・push/PR/mergeなし。次は累積上限の明示変更とgit管理領域の書込可能な環境が必要。Asia/Tokyo=UTC+09:00。
+証跡=.loop/quota-sweep-codex-evidence.md、docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md。コミット結果は終了記録へ追記。
+
+終了記録 2026-10-27T04:43:39.948259+00:00 UTC: 指定 `git commit -F /tmp/quota-sweep-current-msg -- docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md` は終了128。実gitdirのindex.lock作成がRead-only file system。コミット未作成、.loop/除外、迂回なし。stop_reason=budget、追加阻害=scope-boundary。owner退出時解放。C-HANDOFF: 保存後に要約・末尾・budgetを読み戻し照合。
+
+
+## 停止チェックポイント bfc24185-checkpoint-20261027T044446Z / 2026-10-27T04:44:46.356464+00:00 UTC
+
+契約version=bfc2418509a26c29-v1。開始state attempts=8/8、budget.ticks=7。大きい値採用規則でbudgetを8へ精算しgoal・resetsAt保持。低下原因・外部更新者不明、並行writer不在未証明。累積上限により第9試行を開始せず、新規監査・テスト・実装修正なし。stop_reason=budget。
+未達=C2網羅性、C3恒久対処・原作業照合、C4現在の稼働、C5指定ゲート。過去証拠を現在の合格証明に代用しない。
+repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、branch=quota-sweep/20261027-0436-codex-mvq71ana。revision・開始差分は今回取得結果を終了記録へ反映。owner=Codex、API session ID不明、取消要求なし。別ループ・背景子プロセス・子agent・送信・push/PR/mergeなし。次は累積上限の明示変更と書込可能なgit管理領域が必要。Asia/Tokyo=UTC+09:00。
+証跡=.loop/quota-sweep-codex-evidence.md、docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md。
+
+終了記録 2026-10-27T04:44:56.263900+00:00 UTC: revision=1ae8e9c673fe8450489b41cee60ade4ea28d907b（今回取得）。指定 `git commit -F /tmp/quota-sweep-current-msg -- docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md` は終了128。実gitdirのindex.lock作成がRead-only file systemで失敗、コミット未作成。.loop/除外、迂回なし。stop_reason=budget、追加阻害=scope-boundary。owner退出時解放。C-HANDOFFは保存後読戻しで照合。
+
+
+## 停止チェックポイント bfc24185-checkpoint-20261027T044601Z / 2026-10-27T04:46:01.824741+00:00 UTC
+
+契約version=bfc2418509a26c29-v1。開始state attempts=8/8、budget.ticks=8で一致。上限消費済みのため新規試行・監査・テスト・実装修正なし。stop_reason=budget。並行writer不在は未証明、他状態は変更しない。
+未達=C2網羅性、C3恒久対処・原作業照合、C4現在の稼働、C5指定ゲート。過去証拠を今回の合格証明に代用しない。
+repo/worktree=/mnt/c/Users/user/.claude/quota-sweep-repo、branch=quota-sweep/20261027-0436-codex-mvq71ana、revision=1ae8e9c673fe8450489b41cee60ade4ea28d907b（今回確認）。開始git status終了0、変更は対象監査docsのみ。owner=Codex、API session ID不明、取消要求なし。今回変更=停止記録のみ。別ループ・背景子プロセス・子agent・送信・push/PR/mergeなし。Asia/Tokyo=UTC+09:00。
+証跡=.loop/quota-sweep-codex-evidence.md、docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md。次は累積上限の明示変更と書込可能なgit管理領域が必要。
+
+終了記録 2026-10-27T04:46:10.652211+00:00 UTC: 指定 `git commit -F /tmp/quota-sweep-current-msg -- docs/handoff-audit-2026-10-27-deferral-91cd4fa3-recheck.md` は終了128。実gitdirのindex.lock作成がRead-only file systemのためコミット未作成。.loop/除外、迂回なし。stop_reason=budget、追加阻害=scope-boundary。owner退出時解放。C-HANDOFF: 保存後読戻しで要約・証跡・budgetの一致を照合。
+
+## quota-sweep-claude 累積試行2 / C2・C3・C4 再観測（2026-10-27T05:22:53Z 終端 / HEAD 6a545a7 / Node v24.22.1）
+- C2: 窓 (2026-10-26T11:26:28.622Z, 2026-10-27T05:22:53.218Z)。home=C:\Users\user。runner 1569行・監査台帳 1610行・夜間台帳 230行、不正JSON 0。W は runner 3件（同セッション 91cd4fa3 のみ、11:26〜11:27 の block/pass/block）。監査台帳 4件のうち 3件が同セッション、1件（2026-10-27T00:55:48Z / session 54dc84fd）は quota-sweep-claude ループ自身の報告 excerpt が再現文例を引用したもので verdict=pass・violations=[]。別セッションの再発ではなく引用として分類（P/W 台帳の violations.quote ではない）。夜間台帳 W=0。
+- C3: 原文と同型の「検証は Codex に任せています。結果が出たらここに報告します。」は以前 detect()=[] の検出漏れだったが、46274e0（#1175 経由で HEAD に含まれる）で ARRIVAL_WAIT を拡張済み。現 HEAD で原文・同型とも W 検出、「検証が完了し結果を確認して報告します」（完了文）は [] を確認。除外は広げていない。
+- C4: 検出経路（nightly→scan）は上記 2026-10-26 記録のコード照合から変更なし。スケジューラの稼働・直近実行の実物は今回も未確認＝未達のまま。
+- C5: 単一 `node --test tools/` の1回 exit 0 は未取得（前景上限600sのため。分割 3 shard の全緑 7074 件は試行5〜7で記録）。厳密には未達。
+
+## 累積試行3（C4 夜間経路の稼働実物）
+- スケジューラ: OrgiastNightlyBatch（Ready、LastRun 2026-10-27 03:00 JST、結果 0）。実行は tools/nightly-batch.ps1 で、L122 が handoff-audit-nightly.mjs を呼び、非0なら error をログに残す。
+- 実行記録: logs/nightly-batch-2026-10-24〜27 の4日分すべてで `handoff-audit-nightly / ok`（10-27 は 03:06:33）。nightly 台帳に 2026-10-26T18:06Z の 55 行が追記されている。
+- 限界: 同回の 91cd4fa3 の1行は provider timeout で verdict=audit-unavailable（LLM 監査の欠損であり、scan 経路の検出漏れとは別）。「ok」はプロセス終了を示すだけで、全セッションの監査成功を保証しない。
+- C5 は引き続き、単一コマンドの完走が前景上限で取得できず未達（分割全緑は試行5〜7）。
+
+## Claude 累積試行4（2026-10-27 / HEAD 7edb67d / Node v24.22.1）C5 の扱い確定
+
+契約の単一コマンド `node --test tools/` は Node 24 でディレクトリ指定をファイル扱いし tests=1/fail=1 で収集しない（試行2のログ）。CI 同形の glob `node --test 'tools/**/*.test.mjs'` の単一実行は約574〜590sで前景上限600sに余裕がなく、試行4観測で timeout 590s・EXIT=124。background 実行はヘッドレス hook が拒否。
+代替として glob を 3 shard で前景実行した結果は shard1 2234/pass 2233/fail 0/skip 1、shard2 2734/2728/0/6、shard3（並行度1）2106/2105/0/1、すべて EXIT=0。合計 7074 件で収集は全数、fail 0。shard3 の flaky は並行度既定で3件・2で1件・1で0件と並行負荷依存。閾値緩和・skip・テスト変更はなし。
+結論: 分割全緑は成立するが、契約文言どおりの単一ゲート1回 exit 0 は取得不能。C5 は厳密には未達として残し、緑とは扱わない。ソース変更なし（再発は同セッション4件が実在、C3 の token 発行は本人操作待ちで承認外）。
+
+## Claude 累積試行2（2026-10-27 / HEAD 776c727）C5 再検証の途中経過
+現 HEAD で glob を 3 分割し前景実行。shard2 は tests 2273 / pass 2270 / fail 0 / skip 2・EXIT=0。shard3（並行度1）は 580s timeout で EXIT=124 の未完走、shard1 は未実行。以前の 013-shard2 ログは集計なしの中断残骸でゲート証拠にしない。テスト総数の増加で3分割では前景上限に収まらないため、C5 は未達のまま。次は 5 分割で実行する。ソース・テストの変更なし。

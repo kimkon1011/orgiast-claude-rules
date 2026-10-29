@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://orgiast.jp/schemas/booth-spec.schema.json",
+  "title": "Booth 3D specification",
+  "type": "object",
+  "required": ["case_id", "title", "booth", "items", "views"],
+  "properties": {
+    "case_id": { "type": "string", "minLength": 1 },
+    "title": { "type": "string", "minLength": 1 },
+    "booth": {
+      "type": "object", "required": ["w_mm", "d_mm", "height_limit_mm", "open_sides", "walls"],
+      "properties": {
+        "w_mm": { "type": "number", "exclusiveMinimum": 0 }, "d_mm": { "type": "number", "exclusiveMinimum": 0 },
+        "height_limit_mm": { "type": "number", "exclusiveMinimum": 0 },
+        "open_sides": { "type": "array", "items": { "enum": ["front", "back", "left", "right"] }, "uniqueItems": true },
+        "walls": { "type": "array", "items": { "enum": ["front", "back", "left", "right"] }, "uniqueItems": true }
+      }, "additionalProperties": false
+    },
+    "items": { "type": "array", "items": { "$ref": "#/$defs/item" } },
+    "views": { "type": "array", "items": { "enum": ["persp_front_left", "persp_front_right", "top", "front", "side_left", "side_right", "back"] }, "uniqueItems": true }
+  },
+  "$defs": { "item": {
+    "type": "object", "required": ["pos_mm"],
+    "properties": {
+      "asset_id": { "type": "string" }, "param": { "enum": ["ledup", "floor_panel", "system_panel"] },
+      "w_mm": { "type": "number", "exclusiveMinimum": 0 }, "d_mm": { "type": "number", "exclusiveMinimum": 0 }, "h_mm": { "type": "number", "exclusiveMinimum": 0 }, "t_mm": { "type": "number", "exclusiveMinimum": 0 },
+      "pos_mm": { "type": "array", "prefixItems": [{"type":"number"},{"type":"number"},{"type":"number"}], "minItems": 3, "maxItems": 3 },
+      "rot_deg": { "type": "number" }, "pitch_deg": { "type": "number" }, "count": { "type": "integer", "minimum": 1 }
+    }, "oneOf": [{"required":["asset_id"]},{"required":["param"]}], "additionalProperties": false
+  }},
+  "additionalProperties": false
+}

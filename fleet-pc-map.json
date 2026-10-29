@@ -30,7 +30,8 @@
   "HP": {
     "sheetName": "東邦2階HP",
     "person": "木下真弓",
-    "_evidence": "ラベル名がシートD列『東邦2階HP』と一致。8/17申告と同日にラベル初登場。2026-08-18 を最後に停止（webhook削除と同時期）"
+    "account": "cr@orgiast.jp",
+    "_evidence": "ラベル名がシートD列『東邦2階HP』と一致。8/17申告と同日にラベル初登場。2026-08-18 を最後に停止（webhook削除と同時期）。account は 2026-10-29 追加: 本PCの ~/.claude.json oauthAccount emailAddress=cr@orgiast.jp・memory codex-on-this-pc「このPC(cr@orgiast.jp / リモートデスクトップ)」より。これが無いと resolveOwner が空になり notify-owner の !owner で完了通知が全て破棄される（2026-10-18〜10-23 の未通知13件の原因）"
   },
   "nishi-PC": {
     "remoteName": "作業用019",

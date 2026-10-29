@@ -122,6 +122,10 @@ Agent/Task の model を sonnet/haiku に明示。実装は node tools/codex-do.
 NEXT-ACTION-OPEN は PR・リンク・ファイルの状態を Claude が照会し、済みなら消し、未了なら自分で実行するか「この後の自動進行」へ移す。
 人にしかできない例外は `[NEXT-ACTION-OPEN-OK: <5文字以上の理由>]` を本文に書く。
 
+NEXT-ACTION-BACKREF は前の応答への参照を消し、確認対象を「【kim 確認用の全文】」ブロックとして3行フッター直前に全文再掲する。例外は `[NEXT-ACTION-BACKREF-OK: <5文字以上の理由>]`。
+NEXT-ACTION-APPROVAL-INLINE はフッター直前40行以内に「【kim 確認用の全文】」見出しを置き、文面・選択肢・URL を毎回省略せず全文載せる。例外は `[NEXT-ACTION-APPROVAL-INLINE-OK: <5文字以上の理由>]`。
+通る形（実測 2026-10-27）: 本文 →「【kim 確認用の全文】」見出し＋全文 →「恒久策: 一回限り: <理由>」→ `次に kim がすること: 上の全文でよいか返事を一言`。マーカー名に「・」を入れない（MULTIPLE 判定に当たる）、行に「読んで／確認して／開いて」を書かない（OPEN 判定に当たる）、「送信する」等の実行語を書かない（PERMANENT-FIX 判定に当たる）。
+
 ## pr-handoff-gate
 
 gh auth status で認証を確認し、既存credential helperまたは gh auth login を使用してPRを作成。URLと状態を本文へ書く。
@@ -141,6 +145,8 @@ run_in_background を外し前景実行、ScheduleWakeup を使わず timeout �
 ## pretooluse-lane-guard
 
 GUI operator・承認済み送信スクリプトは回数制限の対象外（Codex に委譲できない PC 操作を送信途中で止めないため）。
+ゲートが本体に要求するコマンドは `gateRequired` でツール回数に関係なく常時許可する。
+ゲートとガードが衝突したら回避せず、両者の契約テストを追加・修正して直す。
 
 node tools/lane-doctor.mjs --probe で状態更新し、node tools/codex-do.mjs --prompt-file <指示> --cwd <対象>。
 
@@ -228,6 +234,15 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 
 既存 Stop runner から呼ぶため Stop hook 設定 の追加登録は不要。`ORGIAST_SIDE_EFFECT_LEFT_GATE=0` で無効化できる。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
 
+## answer-canonical-gate
+
+人の質問への回答をその場限りの文面で終えず、答えを正本（社内マニュアル・FAQ・応募者向け案内ページ・テンプレート・memory・コード）に追記し、次から相手や担当者が自分で引ける形にする。追記後は `正本化: <追記先の名前とリンク>` を1行書く。
+正本に答えが無い（規定が未決）なら、決める項目を user に1回で聞き、決まり次第そこへ書く。個別事情で汎用性が無い回答だけ `[CANON-OK] <理由>` を付ける（空の理由は不可）。引用行・コードブロック内の文面やマーカーは判定対象外。
+
+事例: 2026-10-29 山元さんの「身分証の提出目的・保管方法が分かるページはあるか」という質問に、専用ページは無いと説明して直接回答用の文面だけを渡した。回答を正本へ追記し、返信にはそのリンクを載せる。
+
+既存 Stop runner から呼ぶため Stop hook 設定の追加登録は不要。`ORGIAST_ANSWER_CANONICAL_GATE=0` で無効化できる。pilot PC は即時 block、他PCは既存 rollout の7日間の観察期間に従う。
+
 ## deferral-wait-gate
 
 作業や委譲の完了を待つ旨と、その完了後に行う作業を残したままターンを閉じず、当ターン内に完了まで進める。待機が不要なら、そのまま次の作業へ進めて結果まで報告する。
@@ -256,6 +271,10 @@ LINE の全員配信が本当に必要なら、kim が同じセッションで�
 
 生の Gmail API 送信は使わず、`node tools/gmail-draft.mjs --send <draftId> --json` で送る。この経路はスレッド全体の合意と下書きを自動照合する。block は下書きを直して解消する。やむを得ない場合のみ `--ack-consistency "<理由>"` を付け、理由を完了報告に記載する。
 
+## outbound-claim-evidence-gate
+
+LINE push/reply/multicast、Gmail 下書き送信、Discord DM/API 投稿の本文に「入力いたしました」「予約しました」「送付済み」など外部操作の完了主張がある場合、送信前の読み戻し証拠がなければ止める。現在ターンの assistant テキストへ `[CLAIM-EVIDENCE: TimeRex 入力 => calendar:<eventId>]` のように書く。読み戻し元は `gmail:<messageId>`、`calendar:<eventId>`、`url:<URL>`、`shot:<path>`、`api:<request-id>` のいずれか。予約・入力は確認メールかカレンダー、送付・送信は送信済みフォルダを実際に読む。引用など完了主張ではない文だけ、10文字以上の理由を付けた `[OUTBOUND-CLAIM-OK: 返信文の引用で主張ではない]` で例外にできる。
+
 ## merge-handoff-gate
 
 PR のマージを人に頼む文（本文の「次に kim がすること」・依頼文、Discord DM、fleet-mail）は、同じターンに PR の状態照会（`gh pr view <N> --json state,mergedAt,mergedBy` 等）と自分でのマージ試行（`gh pr merge <N> --squash --auto` か `gh pr edit <N> --add-label automerge`）の記録がある時だけ通す。MERGED なら依頼を消し、自動マージされるなら「この後の自動進行」に書く。両方試して失敗した時だけ、その出力を添えて依頼する。人の承認が本当に要る時は `[MERGE-HANDOFF-OK: <理由>]`。
@@ -265,3 +284,8 @@ PR のマージを人に頼む文（本文の「次に kim がすること」・
 ## message-locator-gate
 
 メッセージ・通知を人に案内する文（「Discord に送りました」「メールが届いています」「DM を開いて」など）は、次の目印がそろっている時だけ通す。毎日1000件以上のメッセージを受け取る人が、一発で見つけられるようにするため（2026-10-26 kim 指摘: 「Discord の DM で今日19時ごろの通知を開き」では、どのアカウントの誰からの何か分からず見つけられなかった）。①アプリと開くアカウント（例: Discord の cr@ ログイン、Gmail の seisaku-team@） ②送信者（Bot 名・人の名前・メールアドレス） ③場所（DM の相手名・チャンネル名・ラベル） ④日時（日付と時:分） ⑤先頭行か件名を原文のまま＋そのメッセージへの直接リンク（Discord は `https://discord.com/channels/<guild|@me>/<channel>/<message>`、Gmail は authuser 付きのスレッド URL）。できれば中身の要点も本文に書き、開かなくても判断できるようにする。目印が本当に不要な一般論だけ `[MSG-LOCATOR-OK: <理由>]`。既存 Stop runner から呼ぶので Stop hook の追加登録は不要。
+
+## lane-repair-first-gate
+
+全PC・全アカウントで修復可能なレーン故障を最初に直す。`node tools/lane-doctor.mjs --probe` で診断する。Codex の probe_failed は直接 `wsl -d Ubuntu -u root -- codex exec --skip-git-repo-check "ping"` の終了コードでも切り分け、probe 経路だけの故障をレーン停止と断定しない。
+修復を試し、成功を実測したら `node tools/lane-repair-log.mjs --lane <名> --tried "<試した手段と実測>" --result fixed`。直せなければ同コマンドの `--result unfixable` で6時間だけ解除する。同一故障で3回連続修復不可なら notify-kim に1回通知する。429/usage_limit で reset が判明している quota_wait は修復対象外で、SessionStart に出る代替の安いレーンへ回す。gate 自体の例外は gate-errors.jsonl に記録して fail-open。

@@ -1,3 +1,4 @@
+import { tryRelayToken } from './seisaku-gmail-token.mjs';
 import { createSign } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -16,7 +17,11 @@ export async function getDriveToken({
   impersonate = process.env.GOOGLE_IMPERSONATE ?? 'kim@orgiast.jp',
   scope = DRIVE_SCOPE,
   signal,
+  fetchImpl = globalThis.fetch,
+  statePath,
 } = {}) {
+  const relay = await tryRelayToken({ keyPath, impersonate, scope, signal, fetchImpl, statePath });
+  if (relay !== null) return relay;
   const key = JSON.parse(readFileSync(keyPath, 'utf8'));
   const now = Math.floor(Date.now() / 1000);
   const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
@@ -31,7 +36,7 @@ export async function getDriveToken({
   const signer = createSign('RSA-SHA256');
   signer.update(`${header}.${claims}`);
   const jwt = `${header}.${claims}.${signer.sign(key.private_key, 'base64url')}`;
-  const res = await fetch('https://oauth2.googleapis.com/token', {
+  const res = await fetchImpl('https://oauth2.googleapis.com/token', {
     method: 'POST',
     signal,
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

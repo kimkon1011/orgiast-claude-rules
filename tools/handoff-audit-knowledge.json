@@ -145,13 +145,13 @@
   },
   {
     "pattern": "Codex等の他AIレーン待機が期限切れ→Claude本体で続行",
-    "route": "codex-do.mjs",
+    "route": "待機期限が切れたら user に判断を返さず、同じ指示書ファイルで codex-do.mjs を前景・単発（--timeout 付き）で1回だけ再実行し、それも exit 非0なら Claude 本体で当ターン内に実装を完了する。続行した事実と理由（期限切れ・exit コード・cooldown の有無）を完了報告に書き、『実行中』『待機中』のまま handoff しない",
     "confidence": "high",
     "source": "handoff-audit-nightly:5088cc02c86ec878e5d78ad866b46a06b7f016253e6c2180a91df31dabac38ea"
   },
   {
     "pattern": "本番反映をuserの返信待ちにする",
-    "route": "vercel env",
+    "route": "本番反映は Claude 側で完結させ、user の返信を待たない。環境変数は認証済み Vercel CLI（PATH に無ければ npx キャッシュの vercel）で vercel env add → vercel env pull で値を読み戻し、反映は vercel deploy --prod または main マージで行い、本番 URL を curl で実叩きして 200 と内容を確認してから報告する。user に残してよいのはキー発行・支払い等 rule 3 の正当な手渡しだけ",
     "confidence": "high",
     "source": "handoff-audit-nightly:5088cc02c86ec878e5d78ad866b46a06b7f016253e6c2180a91df31dabac38ea"
   },
@@ -190,5 +190,11 @@
     "route": "PR は作成時に `gh pr create --label automerge` で出す（ラベル無しの PR は auto-merge.yml が eligible=false と判定し、永久に着地しない）。作成後は同じセッションで `gh pr view <N> --json state,mergedAt` を叩き、MERGED になるまで追う。自分の PC でラベルを付けられない場合は、fleet-mail で write 権限のある PC へ automerge ラベルの付与を依頼し、MERGED を read-back するまで完了にしない。実証: 2026-10-26 #1141/#1133 は依頼から 16〜43 分で MERGED（a74a6bf0）。rescue/auto-session-20261025-030203 では route が道具名だけの `gh pr create` だったため手順文に置換した。",
     "confidence": "high",
     "source": "handoff-audit-nightly:3de88bab689d3bd74aff43895daa8a61d59e192040a3af1efff71ca78d2876cb / 2026-10-26 rescue e7c10a2 レビューで route を手順化"
+  },
+  {
+    "pattern": "Gmail 下書きの削除・検証結果報告",
+    "route": "Gmail MCP は本環境に無い（mcpServers=gemini-cli のみ）が、下書きの削除は DWD 経路で Claude 側が完結する。削除は `node tools/gmail-draft.mjs --delete <draftId> [--user <addr>] [--json]`（DWD で seisaku-team@orgiast.jp を impersonate・scope=gmail.compose、SA 鍵は GOOGLE_SA_KEY または既定パス aujust-sales-automation/.gcp/sheets-sa.json）。削除は `DELETE /gmail/v1/users/me/drafts/{id}` で、応答は 204=削除成功 / 404=既に無い（ツールが `{deleted:true}` / `{deleted:false,errorKind:'not_found'}` を返す）。検証結果の報告はこの実応答を読み戻して行い、kim に下書き削除の画面操作・目視確認を依頼しない。Gmail 下書きの削除が不要な用件ではそもそも手渡ししない。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:4f579eb3fc37b478cef737816a253d53bce15d7739e071d3aa51d4e76f799c40 / 2026-10-29 tool-name-route レビューで route を手順化（route が道具名だけの `Gmail MCP` だったため手順文に置換）"
   }
 ]

@@ -1,4 +1,12 @@
 {
-  "version": "1.0.1",
-  "requiredFeatures": ["image-attach", "kind-toggle", "title-optional-body-required", "notify-on-submit", "dm-submitter-on-done", "zero-backlog-registered"]
+  "version": "1.1.0",
+  "requiredFeatures": [
+    "image-attach",
+    "kind-toggle",
+    "title-optional-body-required",
+    "notify-on-submit",
+    "dm-submitter-on-done",
+    "zero-backlog-registered",
+    "submitter-history-link"
+  ]
 }

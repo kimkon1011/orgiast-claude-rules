@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { judgeNextAction, reportsCloseSteps, SESSION_PHRASES } from './next-action-gate.mjs';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { judgeNextAction, reportsCloseSteps, SESSION_PHRASES as PHRASES, openDeadline, openPhrase } from './next-action-gate.mjs';
+
+// open は期限入りのテンプレートなので、テストでは遠い未来の期限を入れた実例で検証する。
+const SESSION_PHRASES = { ...PHRASES, open: 'まだ閉じない（作業中・2099-12-31 23:59 まで待つ）', pending: '/session-close をして（まだ閉じない・2099-12-31 23:59 まで待つ）' };
 
 // 自動セッション（CLAUDE_HEADLESS=1）の中でテストを走らせても、このファイルは通常セッションの
 // 判定を検証する。ヘッドレスでは起床手段の検査をskipする仕様なので、環境変数を外しておかないと
@@ -11,6 +17,22 @@ delete process.env.CLAUDE_HEADLESS;
 const body = '調査と実装と検証が完了しました。'.repeat(15);
 const twoLineFooter = '次に kim がすること: なし\nこの後の自動進行: なし（完了）';
 const footer = `${twoLineFooter}\nこのセッション: /session-close は不要なので、このセッションを閉じてよい`;
+
+// Existing human-action tests also supply the now-required persistent registration.
+function withOpenCheck(run) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'human-wait-check-'));
+  const previous = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  fs.mkdirSync(path.join(home, '.claude'));
+  const file = path.join(home, '.claude', 'auto-progress-ledger.jsonl');
+  fs.writeFileSync(file, JSON.stringify({ sessionId: 'registered', status: 'open', check: 'node check.mjs' }) + '\n');
+  try { return run({ session_id: 'registered' }, file); }
+  finally {
+    if (previous === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previous;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
 
 test('3行が末尾に揃っていればpass', () => {
   assert.equal(judgeNextAction(`${body}\n${footer}`).decision, 'pass');
@@ -38,7 +60,7 @@ test('3行が本文途中にあればblock', () => {
 });
 
 test('kimの作業が2件ならblock', () => {
-  const result = judgeNextAction(`${body}\n次に kim がすること: 承認、送信\nこの後の自動進行: Codex が確認後すぐ結果をチャットで通知します\nこのセッション: まだ閉じない（作業中）`);
+  const result = judgeNextAction(`${body}\n次に kim がすること: 承認、送信\nこの後の自動進行: Codex が確認後すぐ結果をチャットで通知します\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ）`);
   assert.equal(result.decision, 'block');
   assert.equal(result.code, 'NEXT-ACTION-MULTIPLE');
 });
@@ -47,13 +69,13 @@ const openActionReport = (action, prefix = '') => `${prefix}${body}\n次に kim 
 
 test('マージ依頼とリンクの確認依頼はNEXT-ACTION-OPENでblock', () => {
   for (const action of ['PR #893 をマージする', '上のリンクを開いて内容を確認する']) {
-    assert.equal(judgeNextAction(openActionReport(action)).code, 'NEXT-ACTION-OPEN', action);
+    assert.equal(judgeNextAction(openActionReport(action, '【kim 確認用の全文】\n確認対象のリンクです。\n')).code, 'NEXT-ACTION-OPEN', action);
   }
 });
 
 test('なしと人にしかできない操作はNEXT-ACTION-OPENでblockしない', () => {
   for (const action of ['なし', '請求書の支払いを銀行で行う', 'OAuth の同意画面を開いて許可する']) {
-    assert.notEqual(judgeNextAction(openActionReport(action)).code, 'NEXT-ACTION-OPEN', action);
+    assert.notEqual(judgeNextAction(openActionReport(action, '【kim 確認用の全文】\n確認対象のリンクです。\n')).code, 'NEXT-ACTION-OPEN', action);
   }
 });
 
@@ -98,13 +120,13 @@ test('具体的なcommitのmainマージ判断をkimに渡す文はblock', () =>
 });
 
 test('PR番号だけのマージ判断確認はblockしない', () => {
-  const text = `${body}\n恒久策: 一回限り: Vercel Preview の目視確認が必要\n次に kim がすること: PR #14 を確認（マージ判断のみ）。Vercel Previewでの動作確認も可能です\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
-  assert.equal(judgeNextAction(text).decision, 'pass');
+  const text = `${body}\n恒久策: 一回限り: Vercel Preview の目視確認が必要\n【kim 確認用の全文】\nPR #14 の Vercel Preview の動作からマージ可否を判断してください。\n次に kim がすること: PR #14 を確認（マージ判断のみ）。Vercel Previewでの動作確認も可能です\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
+  withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
 });
 
 test('印刷所への電話は正当な人専用タスクとしてpass', () => {
-  const text = `${body}\n恒久策: 一回限り: 今回の納期は本人から印刷所への電話確認が必要\n次に kim がすること: 印刷所へ電話して納期を確認する\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
-  assert.equal(judgeNextAction(text).decision, 'pass');
+  const text = `${body}\n恒久策: 一回限り: 今回の納期は本人から印刷所への電話確認が必要\n【kim 確認用の全文】\n印刷所への質問: 今回の納期を教えてください。\n次に kim がすること: 印刷所へ電話して納期を確認する\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
+  withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
 });
 
 test('次に kim がすることが「なし」なら先送り判定せずpass', () => {
@@ -113,7 +135,7 @@ test('次に kim がすることが「なし」なら先送り判定せずpass',
 
 test('本文に着地語がない修正版PDFの物理操作はpass', () => {
   const text = `${body}\n恒久策: 一回限り: 本人手元の原本への初回同封が必要\n次に kim がすること: 修正版のPDFを印刷して同封する\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.delete}`;
-  assert.equal(judgeNextAction(text).decision, 'pass');
+  withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
 });
 
 test('待ち状態と完了表記が矛盾すればblock', () => {
@@ -146,7 +168,7 @@ test('待ち語が無く、もう削除してよいならpass', () => {
 });
 
 test('待ち語があり、起床手段があればまだ閉じないでpass', () => {
-  const text = `${body} 結果待ちです。\n次に kim がすること: なし\nこの後の自動進行: 処理完了時に Codex がチャットで通知します\nこのセッション: まだ閉じない（作業中）`;
+  const text = `${body} 結果待ちです。\n次に kim がすること: なし\nこの後の自動進行: 処理完了時に Codex がチャットで通知します\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ）`;
   assert.equal(judgeNextAction(text, row('assistant', [{ type: 'tool_use', name: 'Agent', input: { run_in_background: true } }])).decision, 'pass');
 });
 
@@ -314,7 +336,7 @@ test('短文でもフッターが定型どおりなら pass する', () => {
 test('フッター欠落の block 理由に定型4文を載せる', () => {
   const r = judgeNextAction('あ'.repeat(250));
   assert.equal(r.code, 'NEXT-ACTION-FOOTER');
-  for (const phrase of Object.values(SESSION_PHRASES)) assert.ok(r.reason.includes(phrase));
+  for (const phrase of Object.values(PHRASES)) assert.ok(r.reason.includes(phrase));
 });
 
 const warehouseAction = '3448 ハンマーをアンカーセットに入れる';
@@ -348,7 +370,7 @@ test('倉庫作業を依頼してkimの次の作業から外せばpass', () => {
 
 test('具体物の実装と初回だけの理由をそれぞれ認める', () => {
   for (const fix of [implementedFix, '恒久策: 一回限り: OAuth 初回同意は本人のブラウザ操作が必須', '恒久策: PR #895 で自動化を実装した', '恒久策: 澤田さんへ定期回収を依頼送信した', '恒久策: memory.md に運用ルールを追加済み', '恒久策: 倉庫運用.md にルールを追加したので今後は自動で担当へ依頼する', '恒久策: ツール名: Scheduler を設定した']) {
-    assert.equal(judgeNextAction(permanentReport('本人同意ボタンを押す', fix)).decision, 'pass', fix);
+    withOpenCheck(input => assert.equal(judgeNextAction(permanentReport('本人同意ボタンを押す', fix), '', input).decision, 'pass', fix));
   }
 });
 
@@ -364,7 +386,7 @@ test('例外には空白を除く10文字以上の理由が必要で倉庫検査
     assert.equal(judgeNextAction(permanentReport('本人同意ボタンを押す', `[PERMANENT-FIX-OK: ${reason}]`)).code, 'PERMANENT-FIX-REQUIRED');
   }
   const override = '[PERMANENT-FIX-OK: 本人の明示的な同意操作だけは代行できないため]';
-  assert.equal(judgeNextAction(permanentReport('本人同意ボタンを押す', override)).decision, 'pass');
+  withOpenCheck(input => assert.equal(judgeNextAction(permanentReport('本人同意ボタンを押す', override), '', input).decision, 'pass'));
   assert.equal(judgeNextAction(permanentReport(warehouseAction, override)).code, 'WAREHOUSE-DISPATCH-REQUIRED');
 });
 
@@ -378,7 +400,7 @@ test('本文の例示や引用は恒久策・例外・手渡しと解釈しな�
 test('今ターンのBash・Discord送信tool_useを認める', () => {
   const text = permanentReport(warehouseAction, implementedFix);
   for (const transcript of [dispatch, ...['send_dm', 'send_message'].map(name => row('assistant', [{ type: 'tool_use', name: `mcp__claude_ai_Discord__${name}`, input: { recipient: '澤田武', content: '同梱をお願いします' } }]))]) {
-    assert.equal(judgeNextAction(text, `${row('user', '倉庫作業を手配して')}\n${transcript}\n${row('user', [{ type: 'tool_result', tool_use_id: 'dm', content: 'delivered' }])}`).decision, 'pass');
+    withOpenCheck(input => assert.equal(judgeNextAction(text, `${row('user', '倉庫作業を手配して')}\n${transcript}\n${row('user', [{ type: 'tool_result', tool_use_id: 'dm', content: 'delivered' }])}`, input).decision, 'pass'));
   }
 });
 
@@ -399,7 +421,7 @@ test('短文・質問でも明示した次の作業には恒久策が必要', ()
 });
 
 const promiseText = `確認を続けます。\n次に kim がすること: なし\nこの後の自動進行: 私が毎時進捗を確認して変化時に報告します\nこのセッション: ${SESSION_PHRASES.open}`;
-const use = (name, input = {}) => row('assistant', [{ type: 'tool_use', name, input }]);
+const use = (name, input = {}) => row('assistant', [{ type: 'tool_use', id: 'wake-call', name, input }]);
 const cron = use('CronCreate', { cron: '17 * * * *', recurring: true });
 const addCheckCmd = 'node tools/auto-progress.mjs --add-check --session test --check "cmd" --deadline +24h --label "test" --next-claude "retry"';
 const addCheckBash = use('Bash', { command: addCheckCmd });
@@ -419,9 +441,17 @@ test('人待ちの自動進行はbackgroundだけではblockし台帳チェッ�
   }
 });
 
-test('人待ちの自動進行はこのターンまたは過去ターンの台帳チェック登録でpass', () => {
+test('チャットで答えるだけの返信待ちは台帳チェックを要求しない', () => {
+  const replyOnly = `恒久策: 一回限り: この判断だけは kim に確認する
+次に kim がすること: 今回の提案を採用するか保留するか教えてください
+この後の自動進行: なし
+このセッション: ${SESSION_PHRASES.open}`;
+  assert.notEqual(judgeNextAction(replyOnly, '').code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
+});
+
+test('人待ちは登録コマンドの痕跡だけではpassしない', () => {
   for (const transcript of [addCheckBash, addCheckPs, `${addCheckBash}\n${row('user', '進捗どう？')}`]) {
-    assert.equal(judgeNextAction(humanWaitText, transcript).decision, 'pass');
+    assert.equal(judgeNextAction(humanWaitText, transcript).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
   }
 });
 
@@ -447,16 +477,32 @@ test('auto-progress --add-check 実行があればpass、登録は次ターン�
   assert.equal(judgeNextAction(promiseText, row('user', '新たな依頼')).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
 });
 
+test('会話に実行痕跡がなくても同じ session_id の open 台帳行があれば起床手段とみなす', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'next-action-ledger-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const previous = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  t.after(() => previous === undefined ? delete process.env.ORGIAST_HOME : process.env.ORGIAST_HOME = previous);
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'auto-progress-ledger.jsonl'), `${JSON.stringify({ ts: new Date().toISOString(), sessionId: 'ledger-session', status: 'open', check: 'node x' })}\n`);
+  for (const text of [promiseText, humanWaitText]) {
+    const result = judgeNextAction(text, '', { session_id: 'ledger-session' });
+    assert.equal(result.decision, 'pass', JSON.stringify(result));
+    assert.notEqual(result.code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
+    assert.notEqual(result.code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+  }
+});
+
 test('空・なし・なしで始まる値には起床手段は不要', () => {
   for (const value of ['', 'なし', 'なし（完了）', 'なし。作業完了']) {
     assert.equal(judgeNextAction(promiseText.replace('私が毎時進捗を確認して変化時に報告します', value)).decision, 'pass', value);
   }
 });
 
-test('現在ターンのAgentと明示的なバックグラウンドシェルはpass', () => {
+test('Agent・PowerShellは当ターン、background Bashは次ターンもpass', () => {
   for (const transcript of [use('Agent'), use('Agent', { run_in_background: true }), use('Bash', { run_in_background: true }), use('PowerShell', { run_in_background: true })]) {
     assert.equal(judgeNextAction(promiseText, transcript).decision, 'pass');
-    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '新たな依頼')}`).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '新たな依頼')}`).decision, transcript.includes('Bash') ? 'pass' : 'block');
     assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', [{ type: 'tool_result', content: 'started' }])}`).decision, 'pass');
     assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '<task-notification>終了</task-notification>', { isMeta: true })}`).decision, 'pass');
   }
@@ -478,4 +524,161 @@ test('subagentsとheadlessでは起床手段の検査をskipする', () => {
     if (previous === undefined) delete process.env.CLAUDE_HEADLESS;
     else process.env.CLAUDE_HEADLESS = previous;
   }
+});
+
+const deadlineBase = '/session-close を実行しました。\n作業を続けています。\n次に kim がすること: なし\nこの後の自動進行: なし\nこのセッション: ';
+
+test('まだ閉じない: 期限なしの旧表記は SESSION-OPEN-NO-DEADLINE で block', () => {
+  for (const state of ['まだ閉じない（作業中）', 'まだ閉じない（作業中・明日まで）', 'まだ閉じない（作業中・2026-13-01 10:00 まで待つ）']) {
+    assert.equal(judgeNextAction(deadlineBase + state).code, 'SESSION-OPEN-NO-DEADLINE', state);
+  }
+});
+
+test('まだ閉じない: 期限入りは pass、過ぎた期限は block', () => {
+  const now = new Date(2026, 9, 27, 12, 0).getTime();
+  assert.equal(judgeNextAction(deadlineBase + 'まだ閉じない（作業中・2026-10-27 16:00 まで待つ）', '', { now }).decision, 'pass');
+  assert.equal(judgeNextAction(deadlineBase + 'まだ閉じない（作業中・2026-10-27 11:59 まで待つ）', '', { now }).code, 'SESSION-OPEN-DEADLINE-PAST');
+});
+
+test('/session-close をして（まだ閉じない）も期限が必須・過ぎた期限は block', () => {
+  const now = new Date(2026, 9, 27, 12, 0).getTime();
+  assert.equal(judgeNextAction(deadlineBase + '/session-close をして（まだ閉じない）', '', { now }).code, 'SESSION-OPEN-NO-DEADLINE');
+  assert.equal(judgeNextAction(deadlineBase + '/session-close をして（まだ閉じない・2026-10-27 16:00 まで待つ）', '', { now }).decision, 'pass');
+  assert.equal(judgeNextAction(deadlineBase + '/session-close をして（まだ閉じない・2026-10-27 11:59 まで待つ）', '', { now }).code, 'SESSION-OPEN-DEADLINE-PAST');
+  assert.equal(openPhrase(new Date(2026, 10, 2, 9, 5), 'pending'), '/session-close をして（まだ閉じない・2026-11-02 09:05 まで待つ）');
+});
+
+test('openPhrase と openDeadline は往復できる', () => {
+  const d = new Date(2026, 10, 2, 9, 5);
+  assert.equal(openPhrase(d), 'まだ閉じない（作業中・2026-11-02 09:05 まで待つ）');
+  assert.equal(openDeadline(openPhrase(d)).getTime(), d.getTime());
+  assert.equal(openDeadline('まだ閉じない（作業中・2026-02-30 09:00 まで待つ）'), null);
+});
+
+
+test('人待ちは自動進行なしでも同一sessionのopen台帳行を要求する', () => {
+  const text = humanWaitText.replace('私が保存を定期確認して結果を報告します', 'なし');
+  withOpenCheck((input, file) => {
+    assert.equal(judgeNextAction(text, '', input).decision, 'pass');
+    assert.equal(judgeNextAction(text, '', { session_id: 'other' }).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
+    for (const status of ['done', 'superseded', 'waiting_user', 'stalled', 'resumed']) {
+      fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status, check: 'node check.mjs' }));
+      assert.equal(judgeNextAction(text, '', input).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', status);
+    }
+    fs.rmSync(file);
+    assert.equal(judgeNextAction(text, '', input).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
+    assert.equal(judgeNextAction('[NO-AUTOCHECK-OK: 本人の電話の結果は自動取得できない]\n' + text, '', input).decision, 'pass');
+    for (const reason of ['', '   ']) {
+      assert.equal(judgeNextAction(`[NO-AUTOCHECK-OK: ${reason}]\n${text}`, '', input).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
+    }
+    for (const action of ['なし', 'なし（完了）', '無し', 'ありません', '不要']) {
+      assert.equal(judgeNextAction(text.replace('西さんがトークンを保存する', action), '', input).decision, 'pass');
+    }
+  });
+});
+
+// 他の判定も満たした応答で、新しい判定の到達性を検証する。
+const inlineReport = (action, content = '') => `${body}\n恒久策: 一回限り: 今回の判断は本人の意思が必要\n${content}次に kim がすること: ${action}\nこの後の自動進行: なし\nこのセッション: ${SESSION_PHRASES.delete}`;
+const inlineContent = '【kim 確認用の全文】\nA案: 今回の提案を採用する。B案: 保留する。\n';
+
+test('指定された遡り語は括弧内やなしで始まる値でも拒否する', () => {
+  for (const word of ['前の応答', '前々回', '前回の応答', '上の応答', '先ほどの', 'さっきの', '末尾の返信文', '前に出した', '既に提示', '上記の文面', '上記の返信', '前述', '以前の応答', '過去の応答', '遡って', 'スクロール']) {
+    for (const action of [`${word}を参照`, `なし（nishi: ${word}の返信文に「OK」）`]) {
+      const result = judgeNextAction(inlineReport(action, inlineContent));
+      assert.equal(result.decision, 'block', action);
+      assert.equal(result.code, 'NEXT-ACTION-BACKREF', action);
+    }
+  }
+});
+
+test('指定された承認語は直前の全文ブロックが必要', () => {
+  for (const word of ['OK', '承認', '確認', '了承', '選んで', '選択', 'どちら', '可否', '返事', '返信文', '文面']) {
+    const result = judgeNextAction(inlineReport(`今回の提案について${word}`));
+    assert.equal(result.decision, 'block', word);
+    assert.equal(result.code, 'NEXT-ACTION-APPROVAL-INLINE', word);
+  }
+  assert.equal(judgeNextAction(inlineReport('なし（nishi: OK）')).code, 'NEXT-ACTION-APPROVAL-INLINE');
+});
+
+test('直前の全文ブロックを使った判断となし単独は通る', () => {
+  withOpenCheck(input => assert.equal(judgeNextAction(inlineReport('今回の提案を採用するか保留するか選んでください', inlineContent), '', input).decision, 'pass'));
+  assert.equal(judgeNextAction(inlineReport('なし')).decision, 'pass');
+});
+
+test('全文見出しはフッター直前40行以内だけ有効で改行形式を問わない', () => {
+  for (const newline of ['\n', '\r\n']) {
+    const at40 = inlineReport('今回の提案を採用するか保留するか選んでください', '【kim 確認用の全文】\n' + '対象の全文\n'.repeat(39)).replaceAll('\n', newline);
+    withOpenCheck(input => assert.equal(judgeNextAction(at40, '', input).decision, 'pass'));
+    assert.equal(judgeNextAction(at40.replace('【kim 確認用の全文】', `【kim 確認用の全文】${newline}追加行`)).code, 'NEXT-ACTION-APPROVAL-INLINE');
+  }
+  assert.equal(judgeNextAction(inlineReport('なし（確認）')).code, 'NEXT-ACTION-APPROVAL-INLINE');
+});
+
+test('理由付き例外は本文のどこでも有効で空や短い理由は無効', () => {
+  const action = '前の応答の今回の提案を採用するか保留するか選んでください';
+  const overrides = '[NEXT-ACTION-BACKREF-OK: 本人の指定があるため]\n[NEXT-ACTION-APPROVAL-INLINE-OK: 本人の指定があるため]\n';
+  for (const text of [overrides + inlineReport(action), inlineReport(action, overrides)]) {
+    withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
+  }
+  for (const reason of ['', '    ', '短い']) {
+    assert.equal(judgeNextAction(inlineReport('前の応答を参照', `[NEXT-ACTION-BACKREF-OK: ${reason}]\n`)).code, 'NEXT-ACTION-BACKREF');
+    assert.equal(judgeNextAction(inlineReport('今回の提案を選んで', `[NEXT-ACTION-APPROVAL-INLINE-OK: ${reason}]\n`)).code, 'NEXT-ACTION-APPROVAL-INLINE');
+  }
+});
+
+test('check 無しの open 約束行は待機中の起床証拠にしない', () => {
+  withOpenCheck((input, file) => {
+    for (const state of ['open', 'pending']) {
+      assert.equal(judgeNextAction(promiseText.replace(SESSION_PHRASES.open, SESSION_PHRASES[state]), '', input).decision, 'pass');
+    }
+    for (const check of [undefined, '', '   ']) {
+      fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status: 'open', check }) + '\n');
+      for (const state of ['open', 'pending']) {
+        const text = promiseText.replace(SESSION_PHRASES.open, SESSION_PHRASES[state]);
+        assert.equal(judgeNextAction(text, '', input).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+        assert.equal(judgeNextAction(text.replace('私が毎時進捗を確認して変化時に報告します', 'なし'), '', input).decision, 'pass');
+      }
+    }
+  });
+});
+
+test('ScheduleWakeup と Monitor の登録は次ターンも起床証拠になる', () => {
+  for (const name of ['ScheduleWakeup', 'Monitor']) {
+    const transcript = name === 'Monitor' ? use(name) : row('assistant', [{ type: 'tool_use', id: 'wake-call', name, input: { delaySeconds: 3600 } }], { timestamp: new Date().toISOString() });
+    for (const state of ['open', 'pending']) {
+      assert.equal(judgeNextAction(promiseText.replace(SESSION_PHRASES.open, SESSION_PHRASES[state]), transcript).decision, 'pass');
+    }
+    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '次の依頼')}`).decision, 'pass');
+    assert.equal(judgeNextAction(promiseText, row('assistant', [{ type: 'tool_use', name }], { isSidechain: true })).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+  }
+  assert.equal(judgeNextAction(promiseText, use('ScheduleWakeup', { stop: true })).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+});
+
+test('ラベルだけの次の一手は全文ブロックがあっても block', () => {
+  for (const action of ['①②③ から番号で選ぶ', '①B案のまま', 'B案', 'Ａ案', 'a案', '1案', '１案', '一案', '案A', '案Ａ', '案1', '案１', '選択肢 2', '選択肢２', '番号で答える', '記号で返す', 'B案（短い説明）', 'B案（1234567）', 'B案（        ）', 'B案（12345678)', 'B案（12345678）かA案', '①②③、どれか選ぶ']) {
+    const result = judgeNextAction(inlineReport(action, inlineContent));
+    assert.equal(result.code, 'NEXT-ACTION-LABEL-ONLY', action);
+    assert.match(result.reason, /NEXT-ACTION-LABEL-OK/);
+  }
+});
+
+test('ラベル直後に8文字以上の内容を併記すれば通る', () => {
+  for (const action of ['B案（Google パスワードマネージャーで管理）', 'B案(Google パスワードマネージャーで管理)', '①（12345678）', 'B案（12345678）かA案（abcdefgh）']) {
+    withOpenCheck(input => assert.equal(judgeNextAction(inlineReport(action, inlineContent), '', input).decision, 'pass', action));
+  }
+});
+
+test('ラベルの理由付き例外は新判定だけを解除する', () => {
+  const override = '[NEXT-ACTION-LABEL-OK: 本人が番号での回答を指定した]\n';
+  for (const source of [override + inlineReport('B案', inlineContent), inlineReport('①②③ から番号で選ぶ', override + inlineContent)]) {
+    withOpenCheck(input => assert.equal(judgeNextAction(source, '', input).decision, 'pass'));
+  }
+  for (const reason of ['', '   ', '短い']) {
+    assert.equal(judgeNextAction(inlineReport('B案', `[NEXT-ACTION-LABEL-OK: ${reason}]\n`)).code, 'NEXT-ACTION-LABEL-ONLY');
+  }
+  assert.equal(judgeNextAction(inlineReport('B案、支払い', override)).code, 'NEXT-ACTION-MULTIPLE');
+});
+
+test('なしや本文・引用だけのラベルは block しない', () => {
+  assert.equal(judgeNextAction(inlineReport('なし', '> ①②③ から番号で選ぶ\nB案は過去の失敗例です。\n')).decision, 'pass');
 });

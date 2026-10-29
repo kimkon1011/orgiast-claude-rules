@@ -1046,6 +1046,24 @@ test('cooldown が切れた後の skipped(exit 3) や cooldown の無い provide
   assert.equal(outage.evidence[0], '3件すべて失敗');
 });
 
+const CODEX_DO_SKIPPED = (min, code) => ({ t: `2026-09-09T10:${min}:10.000Z`, provider: 'skipped', category: 'unrouted', model: 'none', status: 'no-cheap-executor', reason: `codex-do exit ${code}` });
+const CODEX_OK = (min) => ({ t: `2026-09-09T10:${min}:10.000Z`, provider: 'codex', model: 'codex-cli/default', in: 100, out: 120, status: 'ok', launched: true, exitCode: 0 });
+
+test('codex が後で成功している skipped(codex-do exit N) は全滅の high にも cooldown の low にもしない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [CODEX_DO_SKIPPED(10, 3), CODEX_DO_SKIPPED(11, 1), CODEX_DO_SKIPPED(12, 124), CODEX_OK(20)].map(row).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.provider === 'skipped'), false);
+});
+
+test('codex の成功より後の skipped(codex-do exit N) が3件以上なら high の未修理全滅のまま', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [CODEX_OK(10), CODEX_DO_SKIPPED(20, 3), CODEX_DO_SKIPPED(21, 1), CODEX_DO_SKIPPED(22, 124)].map(row).join(''));
+  const outage = collectFindings({ home: dir, now: NOW }).find((f) => f.id === 'lane_outage_unrepaired');
+  assert.equal(outage.provider, 'skipped');
+  assert.equal(outage.evidence[0], '3件すべて失敗');
+});
+
 test('status が数値 402 の旧形式行(http_ 接頭辞なし)も残高切れとして扱い high にしない', () => {
   const dir = home();
   const rows = [0, 1, 2].map((i) => ({ t: `2026-09-09T10:2${i}:10.987Z`, provider: 'deepseek', model: 'deepseek-flash', in: 3932, out: 22, secs: 3.1, ok: false, status: 402 }));
@@ -1198,10 +1216,23 @@ test('出力400字以上で進捗のあった policy 拒否つき試行は打ち
   assert.equal(at(399), true);
 });
 
+test('拒否が3回未満の停滞は打ち切り条件を満たさないので起票せず、chain の実測 policyDenials/outChars を優先する（2026-10-26 09:04 gemini 600秒 out0 拒否1回の偽陽性）', () => {
+  const at = (chain) => {
+    const dir = home();
+    write(dir, 'executor-usage.jsonl', row({ t: '2026-10-26T09:04:57.085Z', provider: 'fallback', chain: [{ backend: 'gemini-cli', secs: 600, out: 0, budgetSecs: 600, outcome: 'timeout', ...chain }] }));
+    return collectFindings({ home: dir, now: new Date('2026-10-27T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted');
+  };
+  const one = 'Error executing tool run_shell_command: Tool execution denied by policy.';
+  assert.equal(at({ stderrTail: one }), false, 'tail に拒否1回だけなら未発火の証拠にならない');
+  assert.equal(at({ stderrTail: one, policyDenials: 5 }), true, '実測の拒否回数が3以上なら起票');
+  assert.equal(at({ stderrTail: one, policyDenials: 5, outChars: 400 }), false, '実測出力400字以上は進捗あり');
+  assert.equal(at({ stderrTail: one, policyDenials: 5, outChars: 10, out: 900 }), true, 'out はトークン概算なので outChars があればそちらで判定');
+});
+
 test('policy 停滞の起票境界は #1059 のマージ時刻で、その前後で判定が分かれる', () => {
   const at = (t) => {
     const dir = home();
-    write(dir, 'executor-usage.jsonl', row({ t, provider: 'fallback', chain: [{ backend: 'gemini-cli', secs: 601, out: 0, budgetSecs: 600, stderrTail: 'Tool execution denied by policy. Tool execution denied by policy.', outcome: 'timeout' }] }));
+    write(dir, 'executor-usage.jsonl', row({ t, provider: 'fallback', chain: [{ backend: 'gemini-cli', secs: 601, out: 0, budgetSecs: 600, stderrTail: 'Tool execution denied by policy. Tool execution denied by policy. Tool execution denied by policy.', outcome: 'timeout' }] }));
     return collectFindings({ home: dir, now: new Date('2026-10-24T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted');
   };
   assert.equal(at('2026-10-23T20:03:23Z'), false, 'マージ1秒前は対象外');
@@ -1213,4 +1244,60 @@ test('新名 Flash も過去ログと同様に低成果バックエンドとし�
   const counts = lowYieldBackends([{ provider: 'fallback', model: 'cheap-code:deepseek/deepseek-flash',
     chain: [{ backend: 'cheap-code:deepseek', model: 'deepseek-flash', secs: 1000, out: 5, outcome: 'ok' }] }]);
   assert.equal(counts.get('deepseek-flash'), 1);
+});
+
+const CODEX_DO_SKIPPED_WITH_TAIL = (min, code, stderrTail) => ({ ...CODEX_DO_SKIPPED(min, code), stderrTail });
+
+test('stderrTail が無人枠・クールダウンを名指しする skipped(codex-do exit N) は全滅の high にしない', () => {
+  const dir = home();
+  const tail = '[codex-do] backend=cheap-code:deepseek が上限/エラーで使えないため次へ';
+  write(dir, 'executor-usage.jsonl', [10, 11, 12].map((min) => row(CODEX_DO_SKIPPED_WITH_TAIL(min, 1, tail))).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.id === 'lane_outage_unrepaired'), false);
+});
+
+test('stderrTail が外部要因を示さない skipped(codex-do exit N) は high の未修理全滅のまま', () => {
+  const dir = home();
+  const tail = 'Error: spawn wsl ENOENT';
+  write(dir, 'executor-usage.jsonl', [10, 11, 12].map((min) => row(CODEX_DO_SKIPPED_WITH_TAIL(min, 3, tail))).join(''));
+  const outage = collectFindings({ home: dir, now: NOW }).find((f) => f.id === 'lane_outage_unrepaired');
+  assert.equal(outage.provider, 'skipped');
+});
+
+const COOLDOWN_TAIL = '[cheap-code] deepseek はクールダウン中です(2026-10-28T05:00:20.838Zまで)。起動を省略しました。';
+const FALLBACK_COOLDOWN_ROW = (min, overrides = {}) => ({ t: `2026-09-09T10:${min}:10.000Z`, provider: 'fallback', model: 'cheap-code:deepseek/deepseek-flash', status: 'error', out: 0, stderrTail: COOLDOWN_TAIL,
+  chain: [{ backend: 'cheap-code:deepseek', model: 'deepseek-flash', status: 3, timedOut: false, spawnFailed: false, out: 0, outcome: 'failed', stderrTail: COOLDOWN_TAIL }], ...overrides });
+
+test('chain が cheap-code の cooldown 起動省略(exit 3)だけの fallback 行は全滅の high にしない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [10, 11, 12, 13].map((min) => row(FALLBACK_COOLDOWN_ROW(min))).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.id === 'lane_outage_unrepaired' && f.provider === 'fallback'), false);
+});
+
+test('empty_diff が付いても cooldown 起動省略だけの fallback 行は全滅の high にしない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [10, 11, 12].map((min) => row(FALLBACK_COOLDOWN_ROW(min, { reason: 'empty_diff' }))).join(''));
+  assert.equal(collectFindings({ home: dir, now: NOW }).some((f) => f.id === 'lane_outage_unrepaired' && f.provider === 'fallback'), false);
+});
+
+test('chain に gemini-cli の実失敗が混ざっても stderrTail が cooldown なら外部要因として全滅の high にしない', () => {
+  const dir = home();
+  const gemini = { backend: 'gemini-cli', model: 'gemini-3.7-flash', status: 1, timedOut: false, spawnFailed: false, out: 0, policyDenials: 8, outcome: 'blocked' };
+  write(dir, 'executor-usage.jsonl', [10, 11, 12].map((min) => row(FALLBACK_COOLDOWN_ROW(min, { chain: [gemini, ...FALLBACK_COOLDOWN_ROW(min).chain] }))).join(''));
+  assert.equal(collectFindings({ home: dir, now: NOW }).some((f) => f.id === 'lane_outage_unrepaired' && f.provider === 'fallback'), false);
+});
+
+test('cooldown を名指ししない cheap-code exit 3 の fallback 行は high の全滅のまま', () => {
+  const dir = home();
+  const tail = 'Error: spawn wsl ENOENT';
+  write(dir, 'executor-usage.jsonl', [10, 11, 12].map((min) => row(FALLBACK_COOLDOWN_ROW(min, { stderrTail: tail, chain: [{ ...FALLBACK_COOLDOWN_ROW(min).chain[0], stderrTail: tail }] }))).join(''));
+  assert.ok(collectFindings({ home: dir, now: NOW }).find((f) => f.id === 'lane_outage_unrepaired' && f.provider === 'fallback'));
+});
+
+test('cheap-code が HTTP 402 で cooldown を張った fallback 行も外部要因として全滅の high にしない', () => {
+  const dir = home();
+  const tail402 = '[cheap-code] deepseek は利用不可(402)。provider-cooldown.json に 2026-10-29T05:00:24.892Z まで記録しました。';
+  write(dir, 'executor-usage.jsonl', [10, 11, 12].map((min) => row(FALLBACK_COOLDOWN_ROW(min, { chain: [{ ...FALLBACK_COOLDOWN_ROW(min).chain[0], stderrTail: tail402 }, ...FALLBACK_COOLDOWN_ROW(min).chain] }))).join(''));
+  assert.equal(collectFindings({ home: dir, now: NOW }).some((f) => f.id === 'lane_outage_unrepaired' && f.provider === 'fallback'), false);
 });

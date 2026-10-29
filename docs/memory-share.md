@@ -2,7 +2,9 @@
 
 kim-PC 夜間 → memory-publish → vercel deploy → orgiast-memoryserve の `/api/memory` → 各PC onboarding-sync → `~/.claude/shared-memory/` → CLAUDE.md の `@` 参照。
 
-feedback / project / reference と索引を配布する。user、秘密値を含むファイル、`share: false` は除外。受信先は編集禁止。知見の戻しは `/share-knowledge`。
+feedback / project / reference と索引、`user_` で始まる user 型を配布する。秘密値は伏字にし、伏字で消せない秘密（秘密鍵など）が残るファイルと `share: false` だけ除外する。user 型は kim 本人が操作する席（`tools/lib/kim-operated.mjs`）にだけ入り、その席の索引冒頭には「user=kim」と注記する。他の席は従来どおり「user は別人」と注記する。受信先は編集禁止。知見の戻しは `/share-knowledge`。
+
+夜間 publish は deploy と verify をそれぞれ最大3回（30秒間隔）再試行する（2026-10 に Vercel の ETIMEDOUT で4夜配布が止まった）。
 
 検証コマンド（リポジトリ直下）:
 

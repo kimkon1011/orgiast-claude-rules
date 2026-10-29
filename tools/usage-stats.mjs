@@ -261,7 +261,10 @@ export function collectLedger({ home = process.env.ORGIAST_HOME || os.homedir(),
 }
 export function codexSessionDirs(home = process.env.ORGIAST_HOME || os.homedir()) {
   if (process.env.CODEX_SESSIONS_DIRS !== undefined) return process.env.CODEX_SESSIONS_DIRS.split(path.delimiter).filter(Boolean);
+  if (process.env.CODEX_HOME) return [path.join(process.env.CODEX_HOME, 'sessions')];
   const dirs = [path.join(home, '.codex', 'sessions')];
+  // Native WSL runs commonly use root, even when reporting uses USERPROFILE.
+  if (process.platform === 'linux' && /^\/mnt\/[a-z]\/Users\//i.test(home)) dirs.push(path.join(os.homedir(), '.codex', 'sessions'));
   const addUsers = (root) => {
     let users = []; try { users = fs.readdirSync(root, { withFileTypes: true }); } catch { return; }
     for (const user of users) if (user.isDirectory()) dirs.push(path.join(root, user.name, '.codex', 'sessions'));
@@ -270,7 +273,12 @@ export function codexSessionDirs(home = process.env.ORGIAST_HOME || os.homedir()
   if (process.platform === 'win32') {
     let distros = [];
     try { if (wslInstalled()) distros = execSync('wsl.exe -l -q', { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }).toString('utf16le').split(/\r?\n/).map((s) => s.trim()).filter(Boolean); } catch {}
-    for (const distro of distros) { addUsers(`//wsl.localhost/${distro}/home`); addUsers(`//wsl$/${distro}/home`); }
+    for (const distro of distros) {
+      // Use one UNC alias per distro so the same session is never counted twice.
+      const root = `//wsl.localhost/${distro}`;
+      dirs.push(`${root}/root/.codex/sessions`);
+      addUsers(`${root}/home`);
+    }
   }
   if (process.platform === 'linux') addUsers('/home');
   return [...new Set(dirs)];

@@ -67,7 +67,7 @@ test('transcript は明示 DeepSeek と prefer-provider より優先して次候
     return new Response(JSON.stringify({ choices: [{ message: { content: '議事録' } }] }));
   };`);
   for (const extra of [[], ['--prefer-provider']]) {
-    const { stdout, stderr } = await execute(process.execPath, ['--import', pathToFileURL(mock).href, fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', 'deepseek', '--category', 'transcript', '--no-persist', ...extra, '要約'], { env: { ...process.env, ORGIAST_HOME: dir, DEEPSEEK_API_KEY: 'test-only', GROQ_API_KEY: 'test-only' } });
+    const { stdout, stderr } = await execute(process.execPath, ['--import', pathToFileURL(mock).href, fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', 'deepseek', '--category', 'transcript', '--no-persist', ...extra, '要約'], { env: { ...process.env, ORGIAST_HOME: dir, OPENROUTER_API_KEY: 'test-only', GROQ_API_KEY: 'test-only' } });
     assert.equal(stdout.trim(), '議事録');
     assert.match(stderr, /話者・発言.*DeepSeek.*除外/);
     assert.deepEqual(stderr.split('\n').filter(x => x.startsWith('FETCH ')), ['FETCH api.groq.com']);
@@ -80,9 +80,10 @@ test('DeepSeek Flash は推論なしで送信し、Proの推論設定には触�
   const mock = path.join(dir, 'mock.mjs');
   fs.writeFileSync(mock, `globalThis.fetch = async (url, init) => new Response(JSON.stringify({ choices: [{ message: { content: init.body } }] }));`);
   for (const model of ['deepseek-flash', 'deepseek-v4-pro']) {
-    const { stdout } = await execute(process.execPath, ['--import', pathToFileURL(mock).href, fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', 'deepseek', '--model', model, '--no-fallback', '--no-persist', '確認'], { env: { ...process.env, ORGIAST_HOME: dir, DEEPSEEK_API_KEY: 'test-only' } });
+    const { stdout } = await execute(process.execPath, ['--import', pathToFileURL(mock).href, fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', 'deepseek', '--model', model, '--no-fallback', '--no-persist', '確認'], { env: { ...process.env, ORGIAST_HOME: dir, OPENROUTER_API_KEY: 'test-only' } });
     const body = JSON.parse(stdout);
-    assert.equal(body.model, model);
-    assert.deepEqual(body.thinking, model === 'deepseek-flash' ? { type: 'disabled' } : undefined);
+    assert.equal(body.model, model === 'deepseek-flash' ? 'deepseek/deepseek-v4-flash' : 'deepseek/deepseek-v4-pro');
+    assert.deepEqual(body.reasoning, model === 'deepseek-flash' ? { enabled: false } : undefined);
+    assert.equal(body.thinking, undefined);
   }
 });

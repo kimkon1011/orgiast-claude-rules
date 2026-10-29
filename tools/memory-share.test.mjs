@@ -73,13 +73,36 @@ test('対象外ファイルと同居しても正常なfeedbackは引き続きexp
   assert.equal(fs.existsSync(path.join(f.repoRoot, 'memory-shared', 'feedback_copy.bak.md')), false);
 });
 
-test('Discord webhook URL はexportせず理由を1行出す', () => {
+test('伏字にできる webhook URL と40桁hexは伏字で配り、伏字にできない秘密だけ除外して理由を1行出す', () => {
   const f = fixture(); const output = [];
-  fs.writeFileSync(path.join(f.memoryDir, 'feedback_webhook.md'), memory('危険', 'feedback', 'https://discord.com/api/webhooks/123/token-value'));
+  fs.writeFileSync(path.join(f.memoryDir, 'feedback_webhook.md'), memory('伏字で共有', 'feedback', 'https://discord.com/api/webhooks/123/token-value と ' + 'a'.repeat(40) + '\n検出対象の例: "discord.com/api/webhooks/"'));
+  fs.writeFileSync(path.join(f.memoryDir, 'feedback_key.md'), memory('危険', 'feedback', '-----BEGIN RSA PRIVATE KEY-----'));
   const result = exportMemories(exportOptions(f, { emit: (line) => output.push(line) }));
-  assert.equal(result.exported, 0); assert.equal(result.excluded, 1);
-  assert.equal(output.filter((line) => line.startsWith('除外(資格情報):')).length, 1);
-  assert.match(output[0], /feedback_webhook\.md.*秘密パターン Discord webhook URL に一致/);
+  assert.equal(result.exported, 1); assert.equal(result.excluded, 1);
+  const shared = fs.readFileSync(path.join(f.repoRoot, 'memory-shared', 'feedback_webhook.md'), 'utf8');
+  assert.doesNotMatch(shared, /token-value|a{40}/);
+  assert.match(shared, /webhooks\/\*\*\*REDACTED\*\*\*/);
+  assert.deepEqual(output.filter((line) => line.startsWith('除外(資格情報):')), ['除外(資格情報): feedback_key.md — 秘密パターン private key に一致']);
+});
+test('private は user_ で始まる user 型だけを配り、受信側は kim 本人の席にだけ入れて注記を切り替える', async t => {
+  const f = fixture();
+  fs.writeFileSync(path.join(f.memoryDir, 'user_role.md'), memory('kim の役割', 'user'));
+  fs.writeFileSync(path.join(f.memoryDir, 'profile.md'), memory('名前規約外', 'user'));
+  const exported = exportMemories(exportOptions(f, { channel: 'private', includeContents: true, dryRun: true }));
+  assert.ok(exported.contents['user_role.md']); assert.equal(exported.contents['profile.md'], undefined);
+  const files = { 'MEMORY.md': '# index', 'user_role.md': exported.contents['user_role.md'] };
+  for (const kimOperated of [true, false]) {
+    const r = receiver(t); const a = remote(files);
+    await installSharedMemories({ ...r.options, kimOperated, fetchImpl: a.fetchImpl });
+    assert.equal(fs.existsSync(path.join(r.dir, 'user_role.md')), kimOperated);
+    const index = fs.readFileSync(path.join(r.dir, 'MEMORY.md'), 'utf8');
+    assert.match(index, kimOperated ? /kim 本人が操作/ : /このPCの user は別人/);
+    if (!kimOperated) assert.equal(a.calls.includes('?part=1'), false);
+    a.calls.length = 0;
+    await installSharedMemories({ ...r.options, kimOperated: !kimOperated, fetchImpl: a.fetchImpl });
+    assert.match(fs.readFileSync(path.join(r.dir, 'MEMORY.md'), 'utf8'), !kimOperated ? /kim 本人が操作/ : /このPCの user は別人/);
+    assert.equal(fs.existsSync(path.join(r.dir, 'user_role.md')), !kimOperated);
+  }
 });
 
 test('privateは法人名と案件IDを除外せずpublicだけ除外する', () => {

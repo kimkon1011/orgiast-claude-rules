@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { resumedAfter } from './sync-remote-archives.mjs';
 import { SESSION_PHRASES } from './next-action-gate.mjs';
 
 const root = () => path.join(os.homedir(), '.claude');
@@ -207,6 +208,16 @@ export function dropClosed(base, removed) {
   if (!Array.isArray(latest.ids) || !latest.ids.some(id => removed.has(id))) return;
   write(file, { ...latest, ids: latest.ids.filter(id => !removed.has(id)) });
 }
+export function dropRemoteArchived(base, removed, keep = false) {
+  const file = path.join(base, 'remote-archived-sessions.json');
+  // 移動直前までの同期結果を読み直し、復元した会話は再同期からも保護する。
+  const latest = json(file, { ids: [], kept: [] });
+  if (!keep && !(latest.ids ?? []).some(row => removed.has(row.sessionId))) return;
+  const at = new Date().toISOString();
+  write(file, { ...latest, ids: (latest.ids ?? []).filter(row => !removed.has(row.sessionId)),
+    kept: [...new Set([...(latest.kept ?? []), ...(keep ? removed : [])])],
+    keptAt: { ...(latest.keptAt ?? {}), ...(keep ? Object.fromEntries([...removed].map(id => [id, at])) : {}) } });
+}
 function movePair(from, to, id) {
   fs.mkdirSync(to, { recursive: true });
   const source = path.join(from, `${id}.jsonl`), dest = path.join(to, `${id}.jsonl`);
@@ -231,6 +242,7 @@ export function purge({ dryRun = false, restore, after = '' } = {}) {
       const projectId = hits[0].name;
       movePair(path.join(base, 'projects-archive', projectId), path.join(base, 'projects', projectId), restore);
       dropClosed(base, new Set([restore]));
+      dropRemoteArchived(base, new Set([restore]), true);
       // A restored transcript must not immediately qualify again at the next hook.
       fs.mkdirSync(path.join(base, 'current-sessions'), { recursive: true });
       write(path.join(base, 'current-sessions', `${restore}.json`), { sessionId: restore, at: new Date(now).toISOString() });
@@ -240,6 +252,8 @@ export function purge({ dryRun = false, restore, after = '' } = {}) {
     const state = json(stateFile);
     if (!dryRun && now - state.at < 5 * MINUTE) return { ...result, skipped: 'cooldown' };
     const closed = new Set(json(path.join(base, 'closed-sessions.json')).ids || []);
+    const remoteLedger = json(path.join(base, 'remote-archived-sessions.json'));
+    const remote = new Map((remoteLedger.ids ?? []).filter(row => !(remoteLedger.kept ?? []).includes(row.sessionId)).map(row => [row.sessionId, row]));
     const live = liveIds(base, now);
     let vscodeRefs;
     // Enumerate incrementally: collecting every project first can consume the entire
@@ -272,15 +286,22 @@ export function purge({ dryRun = false, restore, after = '' } = {}) {
       if (refs.buffers.some(b => b.includes(sessionId))) { result.protected++; continue; }
       const from = path.join(base, 'projects', projectId), file = path.join(from, filename);
       try {
-        const stat = fs.statSync(file), data = inspect(file, stat, deadline, now, closed.has(sessionId) && now - stat.mtimeMs >= 45_000);
+        const stat = fs.statSync(file);
+        const remoteRow = remote.get(sessionId);
+        // 同期後、保護解除待ちの間に再開した会話も退避しない。
+        const remoteReady = remoteRow?.projectId === projectId && Number.isFinite(Date.parse(remoteRow.archivedAt))
+          && now - stat.mtimeMs >= 45_000 && !resumedAfter(file, Date.parse(remoteRow.archivedAt));
+        const data = inspect(file, stat, deadline, now, (closed.has(sessionId) || remoteReady) && now - stat.mtimeMs >= 45_000);
         if (!data) continue;
         const age = now - stat.mtimeMs, activityAge = now - data.lastAt;
         const reason = closed.has(sessionId) && age >= 45_000 ? 'closed'
+          : remoteReady ? 'remote-archived'
           : data.empty && age >= 90_000 ? 'empty'
           : data.approved && activityAge >= 10 * MINUTE ? 'approved'
           : activityAge >= 72 * 60 * MINUTE ? 'abandoned' : null;
         if (!reason) continue;
         const row = { sessionId, projectId, reason, title: data.title, at: new Date(now).toISOString(),
+          ...(reason === 'remote-archived' ? { bridgeSessionId: remoteRow.bridgeSessionId } : {}),
           ...(reason === 'abandoned' ? { nextKim: data.nextKim || '', automatic: data.automatic || '' } : {}) };
         if (!dryRun) {
           const fresh = fs.statSync(file);
@@ -290,6 +311,7 @@ export function purge({ dryRun = false, restore, after = '' } = {}) {
           try { fs.appendFileSync(path.join(base, 'archived-sessions.jsonl'), `${JSON.stringify(row)}\n`); }
           catch (error) { movePair(to, from, sessionId); throw error; }
           dropClosed(base, new Set([sessionId]));
+          dropRemoteArchived(base, new Set([sessionId]));
         }
         result.sessions.push(row);
       } catch (error) {
@@ -303,6 +325,14 @@ export function purge({ dryRun = false, restore, after = '' } = {}) {
     if (!dryRun) write(stateFile, { at: now, cursor: result.nextCursor });
     return result;
   } finally { release(); }
+}
+function launchRemoteRestore() {
+  if (Date.now() - (json(path.join(root(), 'restore-remote-sessions-state.json')).at ?? 0) < 15 * MINUTE) return;
+  const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'restore-remote-sessions.mjs');
+  if (!fs.existsSync(script)) return;
+  const child = spawn(process.execPath, [script], { detached: true, windowsHide: true, stdio: 'ignore' });
+  child.on('error', () => {});
+  child.unref();
 }
 function launchRemotePurge() {
   // purge-remote-sessions.mjs has its own 6h cooldown; this check only avoids spawning a process.
@@ -332,10 +362,21 @@ function launchRemoteTitleSync() {
   child.on('error', () => {});
   child.unref();
 }
+// サーバー側の退避を帳簿へ同期し、次の purge で既存の保護を通して移動する。
+function launchRemoteArchiveSync() {
+  if (Date.now() - (json(path.join(root(), 'sync-remote-archives-state.json')).at ?? 0) < 5 * MINUTE) return;
+  const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'sync-remote-archives.mjs');
+  if (!fs.existsSync(script)) return;
+  const child = spawn(process.execPath, [script], { detached: true, windowsHide: true, stdio: 'ignore' });
+  child.on('error', () => {});
+  child.unref();
+}
 export function launchPurge() {
   // 明示的に閉じたセッションだけをアーカイブする。
   launchRemotePurge();
+  launchRemoteRestore();
   launchRemoteTitleSync();
+  launchRemoteArchiveSync();
   launchMobileStandbyStatus();
   if (Date.now() - json(path.join(root(), 'purge-sessions-state.json')).at < 5 * MINUTE) return;
   const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], { detached: true, windowsHide: true, stdio: 'ignore' });

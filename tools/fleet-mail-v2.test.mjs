@@ -999,6 +999,15 @@ for (const outcome of ['success', 'failure', 'timeout']) test(`G5 ${outcome} cle
   assert.equal(await relayQuestions({ home: f.home, hub: sender, label: receiver, request: f.deps.request, now: () => now + RELAY_WAIT_MS }), 1);
   assert.ok(readQuestion(f.home, q.sessionId).relayedAt);
 });
+test('G5b kim 本人の席の対話質問は kim-PC へ転送せず、kim-PC 起動の無人実行の質問だけ返す', async t => {
+  const f = fixture(t);
+  const interactive = questionFixture(f, { sessionId: 'kim-seat', question: 'どちら？', questionHash: 'a', askedAt: iso(0), relayedAt: null, drivenByHub: false });
+  const opts = { home: f.home, hub: sender, label: receiver, request: f.deps.request, now: () => now + RELAY_WAIT_MS, kimOperated: true };
+  assert.equal(await relayQuestions(opts), 0);
+  assert.equal(readQuestion(f.home, interactive.sessionId).relayedAt, null);
+  questionFixture(f, { sessionId: 'hub-run', question: '無人?', questionHash: 'b', askedAt: iso(0), relayedAt: null, drivenByHub: true });
+  assert.equal(await relayQuestions(opts), 1);
+});
 test('G6 poll detaches and releases lock within the hook deadline without waiting for the runner timeout', async t => {
   const f = fixture(t), m = hubPrompt(f); let unrefed = false;
   f.deps.spawnImpl = (...args) => { f.spawns.push(args); return { on() {}, unref() { unrefed = true; } }; };

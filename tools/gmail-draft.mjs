@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { tryRelayToken } from './lib/seisaku-gmail-token.mjs';
 /**
  * gmail-draft.mjs — 共有アカウントの外部宛 Gmail 下書きを作る常設経路。
  * なぜ要るか: アドホックなコードや手作業をなくし、内部宛はチャット表示に戻す。
@@ -164,6 +165,7 @@ export function classifyTokenError(json) {
 }
 
 function safeFailure(error) {
+  if (error?.errorKind === 'seisaku_relay') return { errorKind: 'seisaku_relay', error: error.message };
   const errorKind = error?.errorKind === 'configuration_error' ? 'configuration_error'
     : error?.errorKind === 'too_large' ? 'too_large'
     : error?.tokenError ? classifyTokenError(error.detail)
@@ -189,7 +191,9 @@ function readKey(keyPath) {
   } catch { throw configError(); }
 }
 
-async function mintDwdToken({ user, keyPath = DEFAULT_KEY, scope, fetchImpl = globalThis.fetch }) {
+export async function mintDwdToken({ user, keyPath = DEFAULT_KEY, scope, fetchImpl = globalThis.fetch, statePath }) {
+  const relay = await tryRelayToken({ keyPath, impersonate: user, scope, fetchImpl, statePath });
+  if (relay !== null) return relay;
   const key = readKey(keyPath);
   const now = Math.floor(Date.now() / 1000);
   const unsigned = `${b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))}.${b64url(JSON.stringify({

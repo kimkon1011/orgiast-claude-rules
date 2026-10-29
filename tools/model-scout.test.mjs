@@ -272,8 +272,15 @@ test('高価なフロンティアを保存し、eval後に再提案。後から�
 
 test('品質軸は現行の文脈長不明でも単価とカテゴリ品質を比較できる', () => {
   const wonder = model('meta/muse-wonder', 1, 4e-6, 20e-6);
-  const routing = { categories: { summarize: { provider: 'deepseek', model: 'not-in-catalog', rate: 0.8 } } };
+  const routing = { categories: { summarize: { provider: 'groq', model: 'not-in-catalog', rate: 0.8 } } };
   assert.equal(selectCandidates([wonder], [], routing).candidates.length, 0);
   const result = selectCandidates([wonder], [], routing, { includeQuality: true });
   assert.equal(result.candidates[0].replacements[0].category, 'summarize');
+});
+
+test('native DeepSeek route is compared using the matching OpenRouter catalog price', () => {
+  const current = model('deepseek/deepseek-v4-flash', 1000, 0.1e-6, 0.2e-6);
+  const candidate = model('meta/new', 2000, 0.2e-6, 0.3e-6);
+  const routing = { categories: { summarize: { provider: 'deepseek', model: 'deepseek-flash' } } };
+  assert.equal(selectCandidates([candidate], [current], routing).candidates.length, 0, 'higher gateway cost must not look cheaper than native legacy pricing');
 });

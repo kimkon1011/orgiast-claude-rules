@@ -46,7 +46,7 @@ function worktreeIsClean(dir, spawn) {
 
 // main 専用 worktree を用意する。作成済みなら main に同期する。
 // 別ブランチかつ未コミット変更がある場合は、その変更を壊さないよう触らずに失敗を返す。
-export function ensureMainWorktree(repoDir, worktreePath, spawn = spawnSync, expectedBranch = 'main') {
+export function ensureMainWorktree(repoDir, worktreePath, spawn = spawnSync, expectedBranch = 'main', { home = resolveHome() } = {}) {
   const steps = [];
   if (!fs.existsSync(path.join(worktreePath, '.git'))) {
     try { fs.mkdirSync(path.dirname(worktreePath), { recursive: true }); } catch {}
@@ -59,6 +59,45 @@ export function ensureMainWorktree(repoDir, worktreePath, spawn = spawnSync, exp
     return add.ok ? { ok: true, steps, created: true } : { ok: false, steps, reason: 'worktree_add_failed' };
   }
 
+  let rebasing = false;
+  for (const state of ['rebase-merge', 'rebase-apply']) {
+    const probe = runGit(['rev-parse', '--git-path', state], worktreePath, spawn);
+    steps.push({ step: `worktree-${state}`, ...probe });
+    if (!probe.ok) return { ok: false, steps, reason: 'worktree_rebase_check_failed' };
+    const gitPath = probe.stdout?.trim();
+    if (gitPath && fs.existsSync(path.resolve(worktreePath, gitPath))) rebasing = true;
+  }
+  if (rebasing) {
+    // Complete both copies before any destructive git command. Partial backups are retained.
+    let backupDir;
+    try {
+      backupDir = newPendingDir(home);
+      for (const file of ['data/growth-loop-log.md', 'TETSUKO_DAILY_BRIEFING.md']) {
+        const source = path.join(worktreePath, file);
+        let content;
+        try { content = fs.readFileSync(source); }
+        catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+        const target = path.join(backupDir, file);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, content);
+        if (!fs.readFileSync(target).equals(content)) throw new Error('backup verification failed');
+      }
+    } catch (error) {
+      return { ok: false, steps, reason: 'worktree_backup_failed', error: error.message };
+    }
+    for (const [step, args] of [
+      ['abort', ['rebase', '--abort']],
+      ['fetch', ['fetch', 'origin', expectedBranch]],
+      ['checkout', ['checkout', expectedBranch]],
+      ['reset', ['reset', '--hard', `origin/${expectedBranch}`]],
+    ]) {
+      const result = runGit(args, worktreePath, spawn);
+      steps.push({ step: `worktree-${step}`, ...result });
+      if (!result.ok) return { ok: false, steps, backupDir, reason: `worktree_${step}_failed` };
+    }
+    return { ok: true, steps, repaired: true, backupDir };
+  }
+
   const branchResult = runGit(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath, spawn);
   steps.push({ step: 'worktree-branch', ...branchResult });
   if (!branchResult.ok) return { ok: false, steps, reason: 'worktree_branch_check_failed' };
@@ -67,15 +106,17 @@ export function ensureMainWorktree(repoDir, worktreePath, spawn = spawnSync, exp
   if (branch === expectedBranch) {
     const pull = runGit(['pull', '--ff-only'], worktreePath, spawn);
     steps.push({ step: 'worktree-pull', ...pull });
-    return { ok: true, steps };
+    return pull.ok ? { ok: true, steps } : { ok: false, steps, reason: 'worktree_pull_failed' };
   }
   if (!worktreeIsClean(worktreePath, spawn)) {
     return { ok: false, steps, reason: 'worktree_dirty_wrong_branch', branch };
   }
   const fetch = runGit(['fetch', 'origin', expectedBranch], worktreePath, spawn);
   steps.push({ step: 'worktree-fetch', ...fetch });
+  if (!fetch.ok) return { ok: false, steps, reason: 'worktree_fetch_failed' };
   const checkout = runGit(['checkout', '-f', expectedBranch], worktreePath, spawn);
   steps.push({ step: 'worktree-checkout', ...checkout });
+  if (!checkout.ok) return { ok: false, steps, reason: 'worktree_checkout_failed' };
   const reset = runGit(['reset', '--hard', `origin/${expectedBranch}`], worktreePath, spawn);
   steps.push({ step: 'worktree-reset', ...reset });
   return checkout.ok && reset.ok
@@ -390,23 +431,63 @@ export function commitAndPush(tetsukoDir, cycleNumber, spawn = spawnSync, { expe
 
   const pull = runGit(['pull', '--ff-only'], tetsukoDir, spawn);
   steps.push({ step: 'pull', ...pull });
+  if (!pull.ok) return { ok: false, steps, reason: 'pull_failed' };
   const add = runGit(['add', 'data/growth-loop-log.md', 'TETSUKO_DAILY_BRIEFING.md'], tetsukoDir, spawn);
   steps.push({ step: 'add', ...add });
-  if (!add.ok) return { ok: false, steps };
+  if (!add.ok) return { ok: false, steps, reason: 'add_failed' };
   const commit = runGit(['commit', '-m', `TETSUKO成長ループ サイクル#${cycleNumber}: 施策ログ追記 + 日次ブリーフィング更新`], tetsukoDir, spawn);
   steps.push({ step: 'commit', ...commit });
-  if (!commit.ok) return { ok: false, steps };
+  if (!commit.ok) return { ok: false, steps, reason: 'commit_failed' };
   let push = runGit(['push'], tetsukoDir, spawn);
   steps.push({ step: 'push', ...push });
   if (!push.ok) {
     const retryPull = runGit(['pull', '--rebase'], tetsukoDir, spawn);
     steps.push({ step: 'push-retry-pull', ...retryPull });
+    if (!retryPull.ok) {
+      const abort = runGit(['rebase', '--abort'], tetsukoDir, spawn);
+      steps.push({ step: 'push-retry-abort', ...abort });
+      return { ok: false, steps, reason: abort.ok ? 'rebase_failed' : 'rebase_abort_failed' };
+    }
     if (retryPull.ok) {
       push = runGit(['push'], tetsukoDir, spawn);
       steps.push({ step: 'push-retry', ...push });
     }
   }
-  return { ok: push.ok, steps };
+  return { ok: push.ok, steps, reason: push.ok ? null : 'push_failed' };
+}
+
+// Pending records remain until push succeeds. A marker in the tracked log makes replay
+// idempotent after a failed push or a crash between writing and acknowledging a record.
+function newPendingDir(home) {
+  const root = path.join(home, '.claude', 'tetsuko-growth', 'pending');
+  fs.mkdirSync(root, { recursive: true });
+  return fs.mkdtempSync(path.join(root, `${new Date().toISOString().replace(/[:.]/g, '-')}-`));
+}
+
+function replayPending(home, logFile, briefingFile) {
+  const root = path.join(home, '.claude', 'tetsuko-growth', 'pending');
+  let names;
+  try { names = fs.readdirSync(root).sort(); }
+  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  const records = [];
+  for (const name of names) {
+    const file = path.join(root, name, 'cycle.json');
+    let record;
+    try { record = JSON.parse(fs.readFileSync(file, 'utf8')); }
+    catch (error) { if (error.code === 'ENOENT' || error.code === 'ENOTDIR') continue; throw error; }
+    const marker = `<!-- growth-pending:${name} -->`;
+    const current = fs.readFileSync(logFile, 'utf8');
+    if (!current.includes(marker)) {
+      const number = nextCycleNumber(current);
+      const body = record.body.replace(/サイクル#\d+/g, `サイクル#${number}`)
+        .replace(/累計提案サイクル数:\s*\d+/g, `累計提案サイクル数: ${number}`);
+      // Briefing first: a failed log append must leave the record replayable.
+      atomicWrite(briefingFile, record.briefing.replace(/サイクル#\d+/g, `サイクル#${number}`));
+      atomicAppend(logFile, `\n${body}\n${marker}\n`);
+    }
+    records.push(file);
+  }
+  return records;
 }
 
 // ---- メイン処理 ----
@@ -418,25 +499,21 @@ export async function runCycle({
   spawn = spawnSync,
   skipGit = false,
 } = {}) {
-  // 出力は main に載る必要があるため、main 専用 worktree を用意してから書き込む。
-  // 用意できない場合のみ共有ツリーへフォールバック(commitAndPush 側のブランチガードで守られる)。
   const mainWorktreePath = resolveMainWorktreePath(home);
   const worktreeResult = skipGit
-    ? { ok: false, skipped: true, steps: [] }
-    : ensureMainWorktree(tetsukoDir, mainWorktreePath, spawn);
-  const workDir = worktreeResult.ok ? mainWorktreePath : tetsukoDir;
-  if (!worktreeResult.ok && !worktreeResult.skipped) {
-    console.error(`tetsuko-growth-loop: main worktree を用意できませんでした(${worktreeResult.reason})。共有ツリーで続行します。`);
-  }
-  const logFile = path.join(workDir, 'data', 'growth-loop-log.md');
-  const briefingFile = path.join(workDir, 'TETSUKO_DAILY_BRIEFING.md');
-
+    ? { ok: false, skipped: true, steps: [], reason: 'git_skipped' }
+    : ensureMainWorktree(tetsukoDir, mainWorktreePath, spawn, 'main', { home });
+  const workDir = worktreeResult.ok ? mainWorktreePath : null;
+  // Shared checkout is read-only even when preparation fails.
+  const readDir = workDir || tetsukoDir;
+  const logFile = workDir ? path.join(workDir, 'data', 'growth-loop-log.md') : null;
+  const briefingFile = workDir ? path.join(workDir, 'TETSUKO_DAILY_BRIEFING.md') : null;
+  const pendingRecords = workDir ? replayPending(home, logFile, briefingFile) : [];
   let logText = '';
-  try { logText = fs.readFileSync(logFile, 'utf8'); } catch (error) {
-    throw new Error(`ログファイルを読めません: ${logFile} (${error.message})`);
-  }
+  try { logText = fs.readFileSync(path.join(readDir, 'data', 'growth-loop-log.md'), 'utf8'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
   let previousBriefing = '';
-  try { previousBriefing = fs.readFileSync(briefingFile, 'utf8'); } catch {}
+  try { previousBriefing = fs.readFileSync(path.join(readDir, 'TETSUKO_DAILY_BRIEFING.md'), 'utf8'); } catch {}
 
   const cycleNumber = nextCycleNumber(logText);
   const pastTags = extractPastTags(logText);
@@ -445,7 +522,7 @@ export async function runCycle({
   const date = localDate(now);
 
   const providersTried = [];
-  const codeItems = category.key === 'amazon' ? [] : buildCodeCheckItems(category, workDir);
+  const codeItems = category.key === 'amazon' ? [] : buildCodeCheckItems(category, readDir);
   const codeContextText = codeItems.map((item, i) => `${i + 1}. ${item.label}: ${item.evidenceNote}`).join('\n');
 
   const itemsNeededFromLlm = Math.max(1, 3 - codeItems.length);
@@ -453,14 +530,14 @@ export async function runCycle({
   // 4. 外部調査(gemini) → 下書き(deepseek)。llm-ask.mjs 自体が全provider連鎖でfallbackする。
   let researchResult = { ok: false, reason: '未実行' };
   try {
-    researchResult = callLlmAsk({ provider: 'gemini', prompt: buildResearchPrompt(category.label, pastTags), maxTokens: 500 });
+    researchResult = callLlmAsk({ spawn, provider: 'gemini', prompt: buildResearchPrompt(category.label, pastTags), maxTokens: 500 });
   } catch (error) { researchResult = { ok: false, reason: error?.message || String(error) }; }
   if (researchResult.ok) providersTried.push(researchResult.providerUsed);
 
   let draftResult = { ok: false, reason: '未実行' };
   try {
     draftResult = callLlmAsk({
-      provider: 'deepseek',
+      spawn, provider: 'deepseek',
       prompt: buildDraftPrompt({
         categoryLabel: category.label,
         itemCount: itemsNeededFromLlm,
@@ -494,6 +571,8 @@ export async function runCycle({
   });
 
   const allItemTexts = [...codeItemTexts, ...llmItemTexts];
+  const itemCount = allItemTexts.length;
+  const generated = itemCount > 0;
   if (allItemTexts.length === 0) {
     allItemTexts.push([
       '1. **【生成失敗】今回は施策提案を生成できなかった**',
@@ -523,14 +602,28 @@ export async function runCycle({
     '',
   ].join('\n');
 
-  atomicAppend(logFile, `\n${cycleBody}`);
   const briefingText = buildBriefing({ previousBriefing, date, cycleNumber, itemBlocks: allItemTexts });
-  atomicWrite(briefingFile, briefingText);
-
-  let gitResult = { ok: true, steps: [], skipped: true };
-  if (!skipGit) {
-    try { gitResult = commitAndPush(workDir, cycleNumber, spawn); }
-    catch (error) { gitResult = { ok: false, steps: [], error: error?.message || String(error) }; }
+  // Persist generation before attempting worktree writes, so an I/O failure is retryable.
+  let pendingDir = null;
+  let saved = false;
+  let gitResult = { ok: false, steps: [], reason: worktreeResult.reason, skipped: skipGit };
+  try {
+    pendingDir = newPendingDir(home);
+    const pendingFile = path.join(pendingDir, 'cycle.json');
+    atomicWrite(pendingFile, JSON.stringify({ body: cycleBody, briefing: briefingText }));
+    saved = true;
+    if (workDir) {
+      replayPending(home, logFile, briefingFile);
+      gitResult = commitAndPush(workDir, cycleNumber, spawn);
+      if (gitResult.ok) {
+        for (const file of [...pendingRecords, pendingFile]) {
+          // A cleanup failure does not undo a successful push; markers prevent duplicates.
+          try { fs.unlinkSync(file); } catch (error) { console.error(`pending cleanup: ${error.message}`); }
+        }
+      }
+    }
+  } catch (error) {
+    gitResult = { ok: false, steps: gitResult.steps, reason: 'save_or_git_failed', error: error.message };
   }
 
   return {
@@ -540,7 +633,13 @@ export async function runCycle({
     researchResult,
     draftResult,
     providersTried: [...new Set(providersTried.filter(Boolean))],
-    itemCount: allItemTexts.length,
+    itemCount,
+    generated,
+    saved,
+    pushed: gitResult.ok,
+    workDir,
+    gitReason: gitResult.reason || null,
+    pendingDir,
     codeItemCount: codeItems.length,
     llmItemCount: llmItemTexts.length,
     honestyNote,
@@ -557,13 +656,20 @@ export function writeRunLog(home, cycleNumber, resultOrError, extra = {}) {
   const historyFile = path.join(home, '.claude', 'tetsuko-growth', 'history.jsonl');
   const startedAt = extra.startedAt || new Date().toISOString();
   const finishedAt = new Date().toISOString();
-  const ok = !(resultOrError instanceof Error);
+  const failed = resultOrError instanceof Error;
+  const generated = !failed && resultOrError.generated === true;
+  const saved = !failed && resultOrError.saved === true;
+  const pushed = !failed && resultOrError.pushed === true;
+  const ok = generated && pushed;
   const logLines = [
     `[${finishedAt}] tetsuko-growth-loop 実行`,
     `cycle: ${cycleNumber ?? '不明'}`,
     `ok: ${ok}`,
-    ok ? `providersTried: ${JSON.stringify(resultOrError.providersTried)}` : `error: ${resultOrError.stack || resultOrError.message || String(resultOrError)}`,
-    ok ? `gitResult.ok: ${resultOrError.gitResult?.ok}` : '',
+    !failed ? `providersTried: ${JSON.stringify(resultOrError.providersTried)}` : `error: ${resultOrError.stack || resultOrError.message || String(resultOrError)}`,
+    !failed ? `gitResult.ok: ${resultOrError.gitResult?.ok}` : '',
+    `generated: ${generated}; saved: ${saved}; pushed: ${pushed}`,
+    `gitReason: ${resultOrError.gitReason || 'none'}`,
+    !ok ? '失敗: 生成または main への push が完了していません。' : '',
   ].filter(Boolean);
   const runFile = path.join(runsDir, `${finishedAt.replace(/[:.]/g, '-')}.log`);
   try { atomicWrite(runFile, `${logLines.join('\n')}\n`); } catch {}
@@ -573,15 +679,29 @@ export function writeRunLog(home, cycleNumber, resultOrError, extra = {}) {
     startedAt,
     cycle: cycleNumber ?? null,
     ok,
-    providers: ok ? resultOrError.providersTried : [],
-    gitOk: ok ? Boolean(resultOrError.gitResult?.ok) : null,
-    error: ok ? null : (resultOrError.message || String(resultOrError)),
+    generated, saved, pushed,
+    workDir: resultOrError.workDir ?? null,
+    gitReason: resultOrError.gitReason ?? (failed ? 'exception' : null),
+    providers: !failed ? resultOrError.providersTried : [],
+    gitOk: !failed ? Boolean(resultOrError.gitResult?.ok) : null,
+    error: !failed ? null : (resultOrError.message || String(resultOrError)),
   };
   try {
     fs.mkdirSync(path.dirname(historyFile), { recursive: true });
     fs.appendFileSync(historyFile, `${JSON.stringify(historyRow)}\n`, 'utf8');
   } catch {}
   return { runFile, historyFile };
+}
+
+export async function notifyFailure(home, result, spawn = spawnSync) {
+  const message = `TETSUKO成長ループ失敗\n原因: ${result.gitReason || (result.generated ? 'push未完了' : '施策生成0件')}\n対処: 保存済みpendingは次回に再取り込みします。実行結果はrunsログに記録します。`;
+  const notifier = path.join(__dirname, 'notify-kim.mjs');
+  if (!fs.existsSync(notifier)) return '通知手段なし。runsログを参照';
+  const sent = spawn(process.execPath, [notifier, message], {
+    encoding: 'utf8', timeout: 60_000, windowsHide: true,
+    env: { ...process.env, ORGIAST_HOME: home },
+  });
+  return JSON.stringify({ status: sent.status, error: sent.error?.message, stderr: sent.stderr });
 }
 
 async function main() {
@@ -593,11 +713,18 @@ async function main() {
     result = await runCycle({ tetsukoDir, home });
   } catch (error) {
     console.error(`tetsuko-growth-loop: 失敗しました: ${error?.stack || error}`);
-    try { writeRunLog(home, null, error, { startedAt }); } catch {}
+    const { runFile } = writeRunLog(home, null, error, { startedAt });
+    try { atomicAppend(runFile, `通知: ${await notifyFailure(home, { gitReason: error.message })}\n`); }
+    catch (noticeError) { console.error(`通知失敗: ${noticeError.message}`); }
     process.exitCode = 1;
     return;
   }
-  writeRunLog(home, result.cycleNumber, result, { startedAt });
+  const { runFile } = writeRunLog(home, result.cycleNumber, result, { startedAt });
+  if (!(result.generated && result.pushed)) {
+    process.exitCode = 1;
+    try { atomicAppend(runFile, `通知: ${await notifyFailure(home, result)}\n`); }
+    catch (error) { console.error(`通知失敗: ${error.message}`); }
+  }
   console.log(`tetsuko-growth-loop: サイクル#${result.cycleNumber} を追記しました(${result.codeItemCount}件コード確認 + ${result.llmItemCount}件LLM下書き)`);
   if (!result.gitResult.ok && !result.gitResult.skipped) {
     console.error(`tetsuko-growth-loop: git commit/push に失敗しました(処理は続行済み): ${JSON.stringify(result.gitResult.steps?.at(-1) || result.gitResult.error)}`);

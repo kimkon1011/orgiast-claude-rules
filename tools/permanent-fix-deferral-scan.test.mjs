@@ -310,3 +310,37 @@ test('監査参照を知らない素の待機文・引用外の待機文は引�
 test('裸の待機文（c1e05b23 の原文）をWとして検出する', () => {
   assert.deepEqual(detect('Codex の完了を待っています。').map(found => found.pattern), ['W']);
 });
+// 91cd4fa3 の再監査: 待機語を使わず「結果が出たら報告します」と約束する言い換えが素通りした。
+test('結果到着後の報告約束（待機語なしの言い換え）をWとして検出する', () => {
+  for (const text of [
+    '検証は Codex に任せています。結果が出たらここに報告します。',
+    '実行は別レーンに渡しました。完了が出たらお知らせします。',
+    '実行結果が戻ったら連絡します。'
+  ]) assert.deepEqual(detect(text).map(found => found.pattern), ['W'], text);
+});
+test('完了済み報告・結果到着の約束でない文はWと誤検出しない', () => {
+  for (const text of [
+    'Codex の検証は終わり、全件パスしました。PR を作成済みです。',
+    'テスト結果が出たのでログに記録しました。次の作業はありません。',
+    '結果が出たらログに残す設計にしました（実装済み）。'
+  ]) assert.deepEqual(detect(text), [], text);
+});
+test('監査引用された「結果が出たら報告します」は再検出しない', () => {
+  const quote = '[handoff-audit:bfc2418509a26c29] 恒久修正の先送り文を検出（W）「検証は Codex に任せています。結果が出たらここに報告します。」';
+  assert.deepEqual(detect(quote), [], quote);
+});
+// 91cd4fa3 の再監査（累積試行5）: 「まだ実行中」「終わり次第報告」「届いたら報告」の言い換えも W で拾う。
+test('まだ実行中・終わり次第の報告約束・届いたら報告の言い換えをWとして検出する', () => {
+  for (const text of [
+    'テストは Codex が走らせていて、まだ実行中です。',
+    'Codex の検証が終わり次第、結果をお伝えします。',
+    '結果が届いたら確認して報告します。'
+  ]) assert.deepEqual(detect(text).map(found => found.pattern), ['W'], text);
+});
+test('完了報告・検出器の説明文は言い換え拡張でWと誤検出しない', () => {
+  for (const text of [
+    '検証は完了し、全件 pass を確認しました。',
+    '「まだ実行中です」という文言を検出器の陽性例として追加しました。',
+    '作業は終わり次第ではなく、今ターンで完了しました。'
+  ]) assert.deepEqual(detect(text).map(found => found.pattern), [], text);
+});

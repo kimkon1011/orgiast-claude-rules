@@ -9,11 +9,12 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
-const USAGE = '使い方: node tools/booth-perse-gen.mjs --brief <brief.txt> --plans <plans.json> --out <dir> [--ref <image> ...]';
+const USAGE = '使い方: node tools/booth-perse-gen.mjs --brief <brief.txt> --plans <plans.json> --out <dir> [--ref <image> ...] [--max-height <m>（会場の装飾高さ上限・既定3.6）]';
 const MODEL = 'openai/gpt-5.4-image-2';
+const DEFAULT_MAX_HEIGHT = 3.6;
 
 export function parseArgs(argv) {
-  const opts = { refs: [] };
+  const opts = { refs: [], maxHeight: DEFAULT_MAX_HEIGHT };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     const v = argv[i + 1];
@@ -21,10 +22,21 @@ export function parseArgs(argv) {
     else if (a === '--plans') { opts.plans = v; i += 1; }
     else if (a === '--out') { opts.out = v; i += 1; }
     else if (a === '--ref') { opts.refs.push(v); i += 1; }
+    else if (a === '--max-height') { opts.maxHeight = Number(v); i += 1; }
     else throw new Error(`unknown option: ${a}\n${USAGE}`);
   }
   for (const k of ['brief', 'plans', 'out']) if (!opts[k]) throw new Error(`--${k} is required\n${USAGE}`);
+  if (!(opts.maxHeight > 0)) throw new Error(`--max-height は数値（m）で指定する\n${USAGE}`);
   return opts;
+}
+
+// 高さと明るさは提案の柱なので、ブリーフに書き忘れても全案へ必ず足す（kim 2026-10-27・サポリス案が2.7mで低かった）。
+export function heightLightClause(maxHeight = DEFAULT_MAX_HEIGHT) {
+  return `MANDATORY HEIGHT & LIGHT (applies to this plan, overrides any lower height above): the booth's overall height is ${maxHeight} m, the maximum allowed decoration height - use a truss frame (or tall structure) reaching ${maxHeight} m with a sign on top so the booth is clearly taller than neighbouring 2.7 m booths and visible from far down the aisle. The booth must also look BRIGHT - noticeably brighter than the neighbouring booths (spotlights and/or backlit light boxes), graphics evenly lit, no dark corners.`;
+}
+
+export function buildPrompt(common, plan, maxHeight = DEFAULT_MAX_HEIGHT) {
+  return `${common}\n${plan.add}\n${heightLightClause(maxHeight)}\n`;
 }
 
 export function loadKey(home = homedir()) {
@@ -63,7 +75,7 @@ async function main() {
   const results = await Promise.all(plans.map(async (p) => {
     const out = path.join(opts.out, `perse-${p.id}.png`);
     try {
-      const r = await generate({ key, text: `${common}\n${p.add}\n`, refs: opts.refs, out });
+      const r = await generate({ key, text: buildPrompt(common, p, opts.maxHeight), refs: opts.refs, out });
       return { id: p.id, label: p.label, out, ok: true, ...r };
     } catch (e) {
       return { id: p.id, label: p.label, out, ok: false, error: String(e.message || e) };

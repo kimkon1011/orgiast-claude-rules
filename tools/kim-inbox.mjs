@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { resolveOwner } from './lib/fleet-owner.mjs';
+import { isKimOperated } from './lib/kim-operated.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -16,9 +17,11 @@ const directory = home => path.join(home, '.claude/kim-inbox');
 const clean = value => redactSecrets(String(value ?? '')).slice(0, 4000);
 const validId = id => /^ki-\d{14}-[a-f0-9]{4}$/.test(id);
 export const CONTEXT_LIMIT = 1800;
+// kim 本人が座る席（kim-PC、所有者が kim のPC、kim が操作する nishi@/cr@/seisaku-team@ 等の
+// アカウント = lib/kim-operated.mjs）では、kim-PC へ転送せずその場のセッションで回収する（2026-10-28 kim）。
 export function isKimSeat(home) {
   const label = resolveFleetLabel(home, { hostname: os.hostname() });
-  return label === 'kim-PC' || resolveOwner({ home, label }).toLowerCase() === 'kim@orgiast.jp';
+  return label === 'kim-PC' || isKimOperated(home) || resolveOwner({ home, label }).toLowerCase() === 'kim@orgiast.jp';
 }
 function save(home, item) {
   const file = path.join(directory(home), `${item.id}.json`);

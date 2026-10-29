@@ -15,6 +15,7 @@
     {"path": "tools/register-line-share-health.ps1", "scope": "kim-only", "step": null, "reason": "kim-PC の LINE 共有受信サーバーを監視・再起動する専用タスク"},
     {"path": "tools/lib/scheduled-task.mjs", "scope": "fleet", "step": "settings:lane-health-SessionStart", "reason": "全PC無人ジョブ監査のタスク取得・修復依存"},
     {"path": "tools/unattended-job-audit.mjs", "scope": "fleet", "step": "settings:lane-health-SessionStart", "reason": "全PCの無人ジョブ自動監査"},
+    {"path": "tools/lane-doctor.mjs", "scope": "fleet", "step": "settings:lane-repair-first", "reason": "全PCの安いAIレーン実績判定（lane-repair-first-gate の判定元）"},
     {"path": "tools/unattended-jobs.json", "scope": "fleet", "step": "settings:lane-health-SessionStart", "reason": "全PCの無人ジョブ自動監査"},
     {
       "path": "tools/register-schedule-sync-task.ps1",
@@ -395,6 +396,24 @@
       "reason": "purge-sessions.mjs --hook（SessionStart/Stop）が起動する。ユーザー設定は組織 UUID の読み取りのみ"
     },
     {
+      "path": "tools/restore-remote-sessions.mjs",
+      "scope": "fleet",
+      "step": "settings:purge-sessions-SessionStart",
+      "reason": "purge-sessions.mjs --hook が15分間隔で起動し、PC 終了由来の自動アーカイブだけをスマホ一覧へ戻す"
+    },
+    {
+      "path": "tools/lib/host-exit-archive.mjs",
+      "scope": "fleet",
+      "step": "settings:purge-sessions-SessionStart",
+      "reason": "restore-remote-sessions と sync-remote-archives が共有する PC 終了由来の自動アーカイブ判定"
+    },
+    {
+      "path": "tools/sync-remote-archives.mjs",
+      "scope": "fleet",
+      "step": "settings:purge-sessions-SessionStart",
+      "reason": "purge-sessions.mjs --hook が5分間隔で起動し、導入後のサーバー側アーカイブを PC の退避帳簿へ同期する"
+    },
+    {
       "path": "tools/sync-remote-titles.mjs",
       "scope": "fleet",
       "step": "settings:purge-sessions-SessionStart",
@@ -737,6 +756,12 @@
       "reason": "fleet-mail の Growi 追記処理が使う実行時 import 依存。top-level 依存は Node 組み込みと配布済み is-entry.mjs のみ"
     },
     {
+      "path": "tools/lib/seisaku-gmail-token.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "drive-auth が読む制作チーム Gmail トークンリレーの実行時 import 依存"
+    },
+    {
       "path": "tools/lib/drive-auth.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",
@@ -846,6 +871,12 @@
     },
     {
       "path": "tools/lib/hook-stdin.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/lib/kim-operated.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"

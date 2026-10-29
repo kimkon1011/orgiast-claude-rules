@@ -130,11 +130,11 @@ test('3候補が連続失敗した場合は候補自身の理由で3ホップを
     onFailover: ({ from, to, reason }) => failovers.push({ from: from.provider, to: to.provider, reason }),
   });
 
-  assert.equal(result.candidate.provider, 'deepseek');
+  assert.equal(result.candidate.provider, 'openrouter');
   assert.deepEqual(failovers, [
     { from: 'groq', to: 'openrouter', reason: 'HTTP401: groq failure' },
     { from: 'openrouter', to: 'gemini', reason: 'HTTP402: openrouter failure' },
-    { from: 'gemini', to: 'deepseek', reason: 'HTTP403: gemini failure' },
+    { from: 'gemini', to: 'openrouter', reason: 'HTTP403: gemini failure' },
   ]);
 });
 
@@ -163,65 +163,29 @@ test('402 はプロバイダを24時間クールダウンに記録する', async
   assert.deepEqual(state.groq, { until: timestamp + 24 * 60 * 60 * 1000, reason: 'http_402', at: timestamp });
 });
 
-test('DeepSeek直叩き402はOpenRouterの同モデルへ直ちに回す', async (t) => {
-  const files = temporaryFiles(t), attempted = []; let calls = 0;
-  const result = await callWithFallback({ start: { provider: 'deepseek', model: 'deepseek-flash' }, chain: [], ...files,
-    payloadFor(candidate) { attempted.push(candidate); return requestFor(); },
-    fetchImpl: async () => ++calls === 1 ? new Response('Insufficient Balance', { status: 402 }) : new Response('{}') });
-  assert.deepEqual(attempted.map((x) => `${x.provider}:${x.model}`), ['deepseek:deepseek-flash', 'openrouter:deepseek/deepseek-v4-flash']);
-  assert.equal(result.candidate.provider, 'openrouter');
-});
-
-test('Kimi直APIの429後は通常チェーンより先にOpenRouterのKimiを呼ぶ', async (t) => {
-  const attempted = [], fetched = [];
-  const result = await callWithFallback({
-    start: { provider: 'kimi', model: 'kimi-k3' }, ...temporaryFiles(t),
-    payloadFor(candidate) {
-      attempted.push(candidate);
-      return { url: candidate.provider, init: {} };
-    },
-    fetchImpl: async (provider) => {
-      fetched.push(provider);
-      return provider === 'kimi' ? new Response('insufficient balance', { status: 429 }) : new Response('2');
-    },
-    sleepImpl: async () => {},
-  });
-  assert.deepEqual(attempted, [
-    { provider: 'kimi', model: 'kimi-k3' },
-    { provider: 'openrouter', model: 'moonshotai/kimi-k3' },
-  ]);
-  // "insufficient balance" は恒久課金切れなので同一候補をリトライせず、直ちに OpenRouter へ回す
-  // （残高切れの口座を叩き続けない。2026-10-24 に本枝の恒久課金切れ判定と整合させた）。
-  assert.deepEqual(fetched, ['kimi', 'openrouter']);
-  assert.deepEqual(result.candidate, attempted[1]);
-});
-
-for (const provider of ['kimi', 'deepseek']) {
-  test(`${provider}のgatewayモデルはrouting-overridesを優先する`, async (t) => {
+for (const [provider, model, mapped] of [['kimi', 'kimi-k3', 'moonshotai/kimi-k3'], ['deepseek', 'deepseek-flash', 'deepseek/deepseek-v4-flash']]) {
+  test(`${provider}: no-fallback and stale native cooldown still use OpenRouter first`, async t => {
     const files = temporaryFiles(t), attempted = [];
-    const model = `${provider}/custom-model`;
-    fs.writeFileSync(path.join(path.dirname(files.cooldownFile), 'routing-overrides.json'),
-      JSON.stringify({ gatewayBeforeDirect: { [provider]: model } }));
-    const result = await callWithFallback({
-      start: { provider, model: 'direct-model' }, ...files,
-      payloadFor(candidate) { attempted.push(candidate); return { url: candidate.provider, init: {} }; },
-      fetchImpl: async (name) => name === provider ? new Response('payment', { status: 402 }) : new Response('2'),
-    });
-    assert.deepEqual(attempted, [{ provider, model: 'direct-model' }, { provider: 'openrouter', model }]);
-    assert.deepEqual(result.candidate, attempted[1]);
+    fs.writeFileSync(files.cooldownFile, JSON.stringify({ [provider]: { until: Date.now() + 86400000, reason: 'http_402' } }));
+    fs.writeFileSync(path.join(path.dirname(files.cooldownFile), 'routing-overrides.json'), JSON.stringify({ gatewayBeforeDirect: { [provider]: 'old/model' } }));
+    for (const chain of [[], FALLBACK_CHAIN]) {
+      const result = await callWithFallback({ start: { provider, model }, chain, allowGatewayFallback: false, ...files,
+        payloadFor(candidate) { attempted.push(candidate); return requestFor(); }, fetchImpl: async () => new Response('{}') });
+      assert.deepEqual(result.candidate, { provider: 'openrouter', model: mapped });
+      assert.equal(result.failover, false);
+    }
+    assert.equal(attempted.length, 2);
+    assert.ok(attempted.every(c => c.provider === 'openrouter' && c.model === mapped));
   });
 }
-
-test('Kimiのno-fallbackはgateway overrideがあっても直APIのみ呼ぶ', async (t) => {
-  const files = temporaryFiles(t), attempted = [];
-  fs.writeFileSync(path.join(path.dirname(files.cooldownFile), 'routing-overrides.json'),
-    JSON.stringify({ gatewayBeforeDirect: { kimi: 'moonshotai/custom-model' } }));
-  await assert.rejects(callWithFallback({
-    start: { provider: 'kimi', model: 'kimi-k3' }, chain: [], allowGatewayFallback: false, ...files,
-    payloadFor(candidate) { attempted.push(candidate.provider); return requestFor(); },
-    fetchImpl: async () => new Response('payment', { status: 402 }),
-  }));
-  assert.deepEqual(attempted, ['kimi']);
+test('fallback retains distinct OpenRouter models and deduplicates aliases', async t => {
+  const attempted = [];
+  const result = await callWithFallback({ start: second,
+    chain: [{ provider: 'deepseek', model: 'deepseek-flash' }, { provider: 'openrouter', model: 'deepseek/deepseek-v4-flash' }, { provider: 'kimi', model: 'kimi-k3' }],
+    ...temporaryFiles(t), payloadFor(candidate) { attempted.push(candidate); return requestFor(); },
+    fetchImpl: async () => attempted.length < 3 ? new Response('not found', { status: 404 }) : new Response('{}') });
+  assert.deepEqual(attempted.map(c => c.model), ['model-b', 'deepseek/deepseek-v4-flash', 'moonshotai/kimi-k3']);
+  assert.equal(result.failover, true);
 });
 
 test('クールダウン中のプロバイダは payloadFor を呼ばずにスキップする', async (t) => {
@@ -506,10 +470,10 @@ test('legacy 14-hour cooldown expires from original at and persists correction',
     } });
   assert.deepEqual(providers, ['groq']);
 });
-test('no-fallback probe cannot report a DeepSeek gateway success as direct provider health',async t=>{
+test('no-fallback probe records OpenRouter as the actual provider',async t=>{
   const calls=[];
   await assert.rejects(callWithFallback({start:{provider:'deepseek',model:'deepseek-flash'},chain:[],allowGatewayFallback:false,...temporaryFiles(t),payloadFor(candidate){calls.push(candidate.provider);return requestFor();},fetchImpl:async()=>new Response('payment required',{status:402}),sleepImpl:async()=>{}}));
-  assert.deepEqual(calls,['deepseek']);
+  assert.deepEqual(calls,['openrouter']);
 });
 
 for (const hang of ['headers', 'body']) {

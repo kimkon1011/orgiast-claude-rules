@@ -1,10 +1,22 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { resolve, join } from "node:path";
 
 const args = process.argv.slice(2); const at = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : ""; };
 const base = (at("--url") || "").replace(/\/$/, ""); const target = resolve(at("--target") || process.cwd()); const keep = args.includes("--keep");
 if (!base) { console.error("❌ --url https://<app>.vercel.app を指定してください"); process.exit(1); }
+function widgetSources(dir) {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    if (entry.isSymbolicLink() || entry.name.startsWith(".") || ["node_modules", "dist", "build", "out"].includes(entry.name)) return [];
+    const file = join(dir, entry.name);
+    return entry.isDirectory() ? widgetSources(file) : entry.name === "FeedbackWidget.tsx" ? [readFileSync(file, "utf8")] : [];
+  });
+}
+const markup = widgetSources(target).join("\n").replace(/\/\*[\s\S]*?\*\//g, "");
+if (!/<a\b[^>]*\bdata-feedback-history-link(?:\s|=|>)/.test(markup)) {
+  console.error("❌ フォームに送信内容を見るリンクがありません"); process.exit(1);
+}
 const env = { ...process.env };
 for (const name of [".env", ".env.local"]) { const file = join(target, name); if (!existsSync(file)) continue; for (const line of readFileSync(file, "utf8").split(/\r?\n/)) { const match = line.match(/^\s*([A-Za-z_][\w]*)\s*=\s*(.*)\s*$/); if (match) env[match[1]] = match[2].replace(/^(['"])(.*)\1$/, "$2"); } }
 const envLocalFile = join(target, ".env.local");

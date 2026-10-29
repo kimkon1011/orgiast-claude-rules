@@ -22,9 +22,10 @@ description: '/autopilot start "<目的>" で自律ループ開始。/autopilot 
 3. `run` なら recentLog と objective から **次の1施策だけ** を選ぶ。前回の続きを優先し、同じことを2周続けない。実装・調査は必ず `tools/codex-do.mjs` に委譲する。指示を UTF-8 BOM なしのファイルに書き、目的・完了条件・対象 cwd・直近成果・今回の1施策・検証方法を含める。
 
    `node "<repo>/tools/codex-do.mjs" --prompt-file "<指示ファイル>" --cwd "<対象ディレクトリ>" --timeout 1200`
+   ヘッドレスでは <実行コンテキスト> の期限から逆算した値を使う。
 
    監督モデルが Fable / Opus のどちらでも自分で実装しない。Codex の結果を Claude 側でテスト実行と read-back により検証し、目的の完了条件に基づいて進捗 0〜100 を判定する。失敗・委譲不能も必ず post まで記録する。
-4. `node "<repo>/tools/autopilot-tick.mjs" post --summary "<何をしたか1〜2行>" --progress <0-100> --next-delay <秒> [--noop] [--codex]` を実行する。Codex を利用したら `--codex`。進捗が前周と同じ・後退・施策が実行できなかった周は必ず `--noop`。単にコマンドが成功したことを進捗として数えない。
+4. `node "<repo>/tools/autopilot-tick.mjs" post --summary "<何をしたか1〜2行>" --progress <0-100> --next-delay <秒> [--noop] [--codex] [--artifact "<この周に作成・更新したファイルのパス,...>"]` を実行する。Codex を利用したら `--codex`。進捗が前周と同じ・後退・施策が実行できなかった周は必ず `--noop`。単にコマンドが成功したことを進捗として数えない。目的が『維持』型で progress が頭打ちの周は、この周に作成・更新した成果物（コミットしたファイル・作成したドラフト等）を `--artifact` に渡す。実在し前回 post より後に更新されたファイルがあれば進捗ありと数える。コマンドが成功しただけの周や、成果物を作れなかった周は従来どおり `--noop`。
 
    **progress 100 は、目的が意図した「実際の結果」を確認できた時だけ**にする（例: 実際に返信が1件出た、実際に相手に届いた、実際にデータが更新された）。テスト・CI・デプロイの成功だけでは 100 にしない。実際の結果がまだ起きていないなら `--progress 100 --unverified "<まだ確かめられていないこと>"` を付ける（`--evidence "<実際に起きた結果を確認した内容>"` は 100 の必須項目。どちらも無い 100 は `evidence_required` で拒否される）。`--unverified` を付けた目的は「見張り」に回り、毎日1回結果を確認して `watch` で報告する。
 5. post の status が paused / stopped / done なら、手順2と同様に handoff と停止を行う。running なら ScheduleWakeup の `prompt` は `/autopilot tick` 固定、`noop` は post が返した値、delay は post の `nextDelaySec` とする。通常 1200〜1800秒、Codex 待ちなど外部待ちは短くしてよいが、noop 周は必ず1800秒以上。

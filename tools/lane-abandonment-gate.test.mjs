@@ -112,3 +112,12 @@ for (const prefix of ['✔ ', '✖ ', 'ok 1 - ', 'not ok 2 - ', 'ℹ ', '# Subte
     assert.match(failureSignal(`${text}\nYou've hit your usage limit`, 'node tools/codex-do.mjs'), /usage limit/);
   });
 }
+
+test('repair rule block applies abandonment gate to Sonnet in unattended sessions', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-promoted-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude/rule-enforcement.json'), JSON.stringify({ 'repair-failed-lane-first': { mode: 'block' } }));
+  const ctx = { transcriptRaw: transcript([...failure, use('Edit', { file_path: 'src/app.mjs' })], 'claude-sonnet-5'), assistantText: '完了', sessionId: 'headless' };
+  assert.equal(evaluateLaneAbandonment(ctx, { home }).decision, 'block');
+});

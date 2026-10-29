@@ -51,11 +51,25 @@ export function buildTimeline(messages) {
     return { date, from, text, attachments, line: `[${date}][${from}] ${text}${attachments.length ? `\n添付: ${attachments.join(', ')}` : ''}` };
   });
 }
+export function extractNumericAmounts(text) {
+  const set = new Set();
+  for (const match of String(text).matchAll(/([0-9][0-9,]*(?:\.[0-9]+)?)\s*(万)?/gu)) {
+    const raw = match[1].replace(/,/gu, '');
+    const num = Number(raw) * (match[2] === '万' ? 10000 : 1);
+    if (!Number.isNaN(num)) set.add(String(num));
+  }
+  return set;
+}
+
 export function deterministicFindings({ body, timeline, extras = [], now = new Date() }) {
   const source = `${timeline.map(x => x.text).join('\n')}\n${extras.join('\n')}`;
+  const sourceAmounts = extractNumericAmounts(source);
   const findings = [];
   const amounts = [...new Set(body.match(/¥?[0-9][0-9,]{3,}円?/gu) ?? [])];
-  for (const amount of amounts) if (!source.includes(amount) && !source.includes(amount.replace(/[¥円,]/gu, ''))) findings.push({ severity: 'warn', category: '金額', thread_fact: 'スレッド・補助資料に同額なし', thread_ref: null, draft_claim: amount, suggestion: '金額の出所と税区分を確認してください（出所不明の金額）。' });
+  for (const amount of amounts) {
+    const num = Number(amount.replace(/[¥円,]/gu, ''));
+    if (!sourceAmounts.has(String(num))) findings.push({ severity: 'warn', category: '金額', thread_fact: 'スレッド・補助資料に同額なし', thread_ref: null, draft_claim: amount, suggestion: '金額の出所と税区分を確認してください（出所不明の金額）。' });
+  }
   if (/(?:見積|請求|金額|ご請求)/u.test(body)) {
     const exclusion = /(?:不要|なし|納品のみ|キャンセル|取りやめ)/u;
     const target = /(?:スタッフ|人件費|設営|撤去|運搬|オプション)/u;

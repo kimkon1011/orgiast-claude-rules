@@ -123,7 +123,7 @@ test('stop_hook_activeでも書き直しを再評価する', () => {
 
 test('次の行があればピギーバック・ヒントを重ねない', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-hint-'));
-  const output = JSON.parse(invoke(home, 'hint', `${request}\n次に kim がすること: Merge をクリック\nこの後の自動進行: kim のマージ後に Codex が確認してチャットで通知\nこのセッション: まだ閉じない（作業中）`).stdout);
+  const output = JSON.parse(invoke(home, 'hint', `${request}\n次に kim がすること: Merge をクリック\nこの後の自動進行: kim のマージ後に Codex が確認してチャットで通知\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ）`).stdout);
   assert.doesNotMatch(output.reason, /ピギーバック・ヒント/);
 });
 
@@ -478,7 +478,7 @@ test('完了待ちと将来作業をStopで差し戻し、完了報告なら通�
 test('自動進行の起床手段をtranscript_pathから検査しsubagentsは免除する', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-wakeup-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const text = '確認を続けます。\n次に kim がすること: なし\nこの後の自動進行: 私が毎時進捗を確認して変化時に報告します\nこのセッション: まだ閉じない（作業中）';
+  const text = '確認を続けます。\n次に kim がすること: なし\nこの後の自動進行: 私が毎時進捗を確認して変化時に報告します\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ）';
   for (const [name, raw, subagent, blocked] of [
     ['missing', '', false, true],
     ['cron', JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'CronCreate', input: { cron: '17 * * * *' } }] } }), false, true],
@@ -514,23 +514,44 @@ test('先行ゲートが全て降格された場合は第2段の監査で手渡�
   const text = [
     '本文です。結果をまとめました。',
     '',
+    '【kim 確認用の全文】',
+    'A案: 見積を据え置く。B案: 値引きする。',
+    '',
     '恒久策: 一回限り: この判断だけは kim に確認する。',
     '',
-    '次に kim がすること: A案とB案のどちらを選ぶか教えてください。',
+    '次に kim がすること: 見積を据え置くか値引きするか教えてください。',
     'この後の自動進行: なし',
     'このセッション: /session-close は不要なので、このセッションを閉じてよい',
   ].join('\n');
   const asks = [];
   const ask = async ({ provider }) => {
     asks.push(provider);
-    return { text: JSON.stringify({ verdict: 'block', violations: [{ rule: 3, quote: 'A案とB案のどちらを選ぶか教えてください', fix: '推奨案を自分で決めて当ターン内に実行する' }], learned: [] }) };
+    return { text: JSON.stringify({ verdict: 'block', violations: [{ rule: 3, quote: '見積を据え置くか値引きするか教えてください', fix: '推奨案を自分で決めて当ターン内に実行する' }], learned: [] }) };
   };
   const result = await run(
     { session_id: 'second-stage', assistant_text: text },
     { assistantText: text, humanText: '', raw: '' },
-    { mode: 'block', ask, home },
+    { mode: 'block', ask, home, policyOptions: { notify: async () => ({ delivered: 'suppressed' }) } },
   );
   assert.equal(asks.length, 1, '第2段の監査が1回だけ走る');
   assert.equal(result.record.verdict, 'block');
   assert.deepEqual(result.record.blockedBy, ['handoff-audit-gate']);
+});
+
+test('単発回答をStopで差し戻し、正本化を記録すれば通す', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-canonical-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const text = '回答案: マニュアルに記載がありません。';
+  const result = invoke(home, 'canonical', text);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.decision, 'block');
+  assert.match(output.reason, /answer-canonical-gate[\s\S]*\[ANSWER-CANONICAL\]/);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(record.blockedBy.includes('answer-canonical-gate'));
+  assert.ok(record.reasonCodes.includes('ANSWER-CANONICAL'));
+  // 正本化を書けば answer-canonical-gate は外れる（同じ文面に反応する他gateの判定はこのテストの対象外）。
+  const repaired = invoke(home, 'canonical', `${text}\n正本化: 社内FAQ`);
+  assert.equal(repaired.status, 0, repaired.stderr);
+  assert.doesNotMatch(repaired.stdout, /answer-canonical-gate|\[ANSWER-CANONICAL\]/);
 });

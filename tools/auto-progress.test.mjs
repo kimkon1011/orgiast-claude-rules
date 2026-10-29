@@ -6,8 +6,8 @@ import test, { after } from 'node:test';
 import vm from 'node:vm';
 import { main as registerTasks } from './register-auto-progress-task.mjs';
 import { isNoopPromise, extractPromise, extractNextKim, applyPromise, buildRecord, record, readLedger, writeLedger, ledgerFile, rowKey, originLine } from './auto-progress-ledger.mjs';
-import { run as watch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS, formatDoneMessage, readableReason, formatDoneBacklogMessages } from './auto-progress-watch.mjs';
-import { run as digest, selectRows, formatDigest, isUnattendedRow, WINDOW_MS, MAX_ITEMS, needsDm, verdictOf, cleanText, isHumanActionRequired, waitingNotificationKey } from './auto-progress-digest.mjs';
+import { run as watch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, forgiveNoExecutorResumes, main as watchMain, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS, formatDoneMessage, readableReason, formatDoneBacklogMessages } from './auto-progress-watch.mjs';
+import { run as digest, selectRows, formatDigest, digestGroupKey, isUnattendedRow, WINDOW_MS, MAX_ITEMS, needsDm, verdictOf, cleanText, isHumanActionRequired, waitingNotificationKey, chunkMessage } from './auto-progress-digest.mjs';
 import { runRegisterPs1 } from './lib/run-register-ps1.mjs';
 
 const tempHomes = [];
@@ -116,8 +116,8 @@ test('parseVerdict と決定論フォールバック', () => {
   assert.equal(parseVerdict('よく分かりません'), null);
   const now = Date.now();
   assert.equal(deterministicVerdict({ any: false }, now).verdict, 'stalled');
-  assert.equal(deterministicVerdict({ any: true, lastEvidenceAt: now - H / 2 }, now).verdict, 'in_progress');
-  assert.equal(deterministicVerdict({ any: true, lastEvidenceAt: now - FALLBACK_STALL_MS }, now).verdict, 'stalled');
+  assert.equal(deterministicVerdict({ any: true, transcript: { lastAt: now - H / 2 } }, now).verdict, 'in_progress');
+  assert.equal(deterministicVerdict({ any: true, transcript: { lastAt: now - FALLBACK_STALL_MS } }, now).verdict, 'stalled');
 });
 
 test('judge: LLM 全滅(null/例外)なら決定論へ。証拠なしは LLM を呼ばない', () => {
@@ -425,7 +425,7 @@ test('watch: nextKimが空/なしを優先して古い順に最大4件を再開'
   assert.deepEqual(resumed, ['direct-old', 'direct-mid', 'direct-new', 'waiting-old']);
 });
 
-test('digest: 大量の完了も一通に集約し上位以外を次回へ分割しない', async () => {
+test('digest: 大量の完了も全件を名前で出し、次回へ回さない', async () => {
   const now = Date.now(), home = tmp();
   const rows = Array.from({ length: MAX_ITEMS + 2 }, (_, i) => ({ sessionId: `s${i}`, status: 'done', promise: `作業${i}`, ts: new Date(now - WINDOW_MS).toISOString(), doneAt: new Date(now - H).toISOString() }));
   const messages = [];
@@ -433,10 +433,13 @@ test('digest: 大量の完了も一通に集約し上位以外を次回へ分割
   const first = await digest({ home, slot: '朝', now, io });
   assert.equal(first.count, MAX_ITEMS + 2);
   assert.match(messages[0], /完了 12/);
-  assert.ok(messages[0].split('\n').length <= 10);
+  // 12件全件が名前つきで載る（件数だけや「ほか N 件」にしない）
+  for (let i = 0; i < MAX_ITEMS + 2; i++) {
+    assert.match(messages.join('\n'), new RegExp(`・完了: 作業${i}`));
+  }
   assert.equal((await digest({ home, slot: '朝', now: now + WINDOW_MS, io })).count, 0);
   assert.deepEqual(await digest({ home, slot: '朝', now: now + WINDOW_MS * 2, io }), { sent: false, count: 0 });
-  assert.ok(messages.every(message => message.length <= 2000));
+  assert.ok(messages.every(message => message.length <= 1800));
 });
 
 test('schedule: watchは毎時・実行上限55分とし既存PCも更新する', () => {
@@ -583,7 +586,7 @@ test('digest: 長文でも件の途中で切らず、成功した宛先を失敗
   assert.deepEqual(calls, ['a', 'b', 'b']);
 });
 
-test('digest: 長文も一通10行以内に集約し再送しない', async () => {
+test('digest: 長文でも全件を名前で出し、1800字を超えたら分割して届ける', async () => {
   const home = tmp(), now = Date.parse('2026-10-15T09:00:00+09:00'), messages = [];
   const rows = Array.from({ length: MAX_ITEMS, needsDm, verdictOf }, (_, i) => ({ sessionId: `long-${i}`, status: 'stalled', ts: new Date(now - H).toISOString(), promise: '確認'.repeat(100), reason: '理由'.repeat(100), nextKim: '選択'.repeat(100) }));
   const io = { readLedger: () => rows, notify: async text => { messages.push(text); return { delivered: 'dm' }; } };
@@ -591,11 +594,12 @@ test('digest: 長文も一通10行以内に集約し再送しない', async () =
   assert.equal(first.count, MAX_ITEMS);
   const second = await digest({ home, now, slot: '朝', io });
   assert.equal(second.sent, false);
-  for (const message of messages) {
-    assert.ok(message.length <= 1800);
-    assert.ok(message.split('\n').length <= 10);
-    assert.ok(message.includes('あなたの判断待ち:'));
-  }
+  const body = messages.join('\n');
+  // 全件が名前つきで載り、どの断片も1800字以内
+  // （nextKim が具体的操作の行は「あなたの判断待ち」区分に出る）
+  assert.equal(body.split('\n').filter(line => line.startsWith('・あなたの判断待ち:')).length, MAX_ITEMS);
+  assert.ok(messages.every(message => message.length <= 1800), `message length was ${messages.map(m => m.length)}`);
+  assert.ok(body.includes('あなたの判断待ち:'));
 });
 
 test('digest: 予定の日付と固有名詞を壊さず、対応不要もなしにまとめる', () => {
@@ -854,7 +858,7 @@ test('digest: 朝枠の定時報告（朝枠・変化0件・進行中1件→sent
   assert.equal(eveningSent, 0);
 });
 
-test('digest(要件5): 61件相当でも1通・1800字以内・「ほか N 件」にまとめる', () => {
+test('digest(要件5): 61件相当でも全件を名前で出し、1800字を超える断片は分割する', () => {
   // 61件の行を作成
   const doneRows = Array.from({ length: 40 }, (_, i) => ({
     sessionId: `done-${i}`, status: 'done', promise: `機能${i}の実装と検証完了`,
@@ -881,16 +885,19 @@ test('digest(要件5): 61件相当でも1通・1800字以内・「ほか N 件�
   // あなたの判断待ちが最上段
   const lines = text.split('\n');
   assert.match(lines[1], /^・あなたの判断待ち:/);
-  // 「ほか N 件」が含まれる
-  assert.match(text, /・あなたの判断待ち: ほか \d+件/);
-  assert.match(text, /・完了: ほか \d+件/);
-  assert.match(text, /・止まっている: ほか \d+件/);
-  // 1800字以内
-  assert.ok(text.length <= 1800, `text length was ${text.length}`);
+  // 「ほか N 件」に丸めず、全件の名前が載る
+  assert.doesNotMatch(text, /ほか \d+件/);
+  assert.equal(lines.filter(line => line.startsWith('・あなたの判断待ち:')).length, 11);
+  assert.equal(lines.filter(line => line.startsWith('・完了:')).length, 40);
+  assert.equal(lines.filter(line => line.startsWith('・止まっている:')).length, 10);
+  assert.match(text, /・あなたの判断待ち: 顧客10への見積もり/);
+  assert.match(text, /・完了: 機能39の実装と検証完了/);
+  // 各断片1800字以内（全件を載せるため必要なら分割を許容）
+  for (const part of chunkMessage(text)) assert.ok(part.length <= 1800, `part length was ${part.length}`);
 });
 
 // ---- 進捗DMの中身（2026-10-23 追加修正） ------------------------------------
-test('digest: 72時間より古い判断待ちは個別に出さず、末尾の集計1行にまとめる', () => {
+test('digest: 72時間より古い判断待ちも件数だけにせず全件を名前で出す', () => {
   const now = Date.parse('2026-10-23T19:16:00+09:00');
   const fresh = [
     { sessionId: 'f1', status: 'waiting_user', promise: '見積の承認', nextKim: '金額を承認', ts: new Date(now - 2 * H).toISOString() },
@@ -903,12 +910,14 @@ test('digest: 72時間より古い判断待ちは個別に出さず、末尾の�
   const closed = { sessionId: 'closed', status: 'superseded', promise: '更新済みの判断待ち', nextKim: '更新済みの操作', ts: new Date(now - H).toISOString() };
   const all = [...fresh, ...stale, closed];
   const text = formatDigest([], now, '作業用011', { allRows: all, waitingRows: all, doneRows: [], stalledRows: [] });
-  assert.match(text, /あなたの判断待ち 2件/);
+  assert.match(text, /あなたの判断待ち 22件/);
   assert.match(text, /・あなたの判断待ち: 見積の承認/);
   assert.match(text, /・あなたの判断待ち: 入稿データ確認/);
-  // 72時間より古い分・閉じた分は個別に出さない
-  assert.doesNotMatch(text, /古い判断待ち|古い作業|更新済みの判断待ち/);
-  assert.equal(text.split('\n').at(-1), '・3日以上前の判断待ち 20件（必要なら次のセッションで整理します）');
+  // 72時間より古い20件も名前つきで全件載る（2026-10-23 の「件数だけ」不具合の合格条件）
+  assert.match(text, /・あなたの判断待ち: 古い判断待ち0/);
+  assert.match(text, /・あなたの判断待ち: 古い判断待ち19/);
+  // 閉じた行は出さない
+  assert.doesNotMatch(text, /更新済みの判断待ち|3日以上前/);
 });
 
 test('digest: バッククォートの中身を残し、文に穴を開けない', () => {
@@ -926,7 +935,7 @@ test('digest: バッククォートの中身を残し、文に穴を開けない
   assert.doesNotMatch(command, /`/);
 });
 
-test('digest: 判断待ちが22件でも完了・止まっているの行が必ず出る（1800字・最大5件）', () => {
+test('digest: 判断待ち22件も全件を名前で出し、完了・止まっているの行も必ず出る', () => {
   const now = Date.parse('2026-10-23T19:16:00+09:00');
   const waitingRows = Array.from({ length: 22 }, (_, i) => ({
     sessionId: `w${i}`, status: 'waiting_user', promise: `判断${i}${'長い説明'.repeat(30)}`, nextKim: `操作${i}${'確認事項'.repeat(30)}`,
@@ -941,19 +950,18 @@ test('digest: 判断待ちが22件でも完了・止まっているの行が必�
   assert.match(text, /・あなたの判断待ち: 判断0/);
   assert.match(text, /・完了: 完了作業0/);
   assert.match(text, /・止まっている: 停滞0/);
-  assert.match(text, /・あなたの判断待ち: ほか \d+件/);
-  assert.doesNotMatch(text, /・完了: ほか/); // 完了は2件なので全件出す
-  // 止まっているは5件＝上限内なので全件を名前で出す（「ほか」は付けない）
+  // 22件全件・2件の完了・5件の停滞が名前つきで載り、「ほか N 件」は使わない
+  assert.match(text, /・あなたの判断待ち: 判断21/);
+  assert.doesNotMatch(text, /ほか \d+件/);
   assert.match(text, /・止まっている: 停滞4 — 自動再開していません/);
-  assert.doesNotMatch(text, /・止まっている: ほか/);
   const lines = text.split('\n');
-  assert.ok(text.length <= 1800, `text length was ${text.length}`);
+  for (const part of chunkMessage(text)) assert.ok(part.length <= 1800, `part length was ${part.length}`);
   for (const line of lines.filter(l => l.startsWith('・'))) {
     assert.ok(line.length <= 80, `line too long (${line.length}): ${line}`);
   }
 });
 
-test('digest: 各区分は1800字に収まる限り最大5件を名前で出し、超過分だけ「ほか N 件」', () => {
+test('digest: 各区分とも上限なしで全件を名前で出す', () => {
   const now = Date.parse('2026-10-23T19:16:00+09:00');
   const make = (prefix, n, extra) => Array.from({ length: n }, (_, i) => ({
     sessionId: `${prefix}${i}`, promise: `${prefix}作業${i}`, ts: new Date(now - i * 60000).toISOString(), ...extra,
@@ -966,12 +974,11 @@ test('digest: 各区分は1800字に収まる限り最大5件を名前で出し�
 
   for (const [label, prefix] of [['あなたの判断待ち', '判断'], ['完了', '完了'], ['止まっている', '停滞'], ['進行中', '進行']]) {
     const items = text.split('\n').filter(line => line.startsWith(`・${label}:`) && !line.includes('ほか'));
-    assert.equal(items.length, 5, `${label} は5件`);
-    for (let i = 0; i < 5; i++) assert.match(text, new RegExp(`・${label}: (?:［[^］]*］)?${prefix}作業${i}`));
-    assert.doesNotMatch(text, new RegExp(`・${label}: .*${prefix}作業5`));
-    assert.match(text, new RegExp(`・${label}: ほか 3件`));
+    assert.equal(items.length, 8, `${label} は8件全件`);
+    for (let i = 0; i < 8; i++) assert.match(text, new RegExp(`・${label}: (?:［[^］]*］)?${prefix}作業${i}`));
+    assert.doesNotMatch(text, new RegExp(`・${label}: ほか`));
   }
-  assert.ok(text.length <= 1800, `text length was ${text.length}`);
+  for (const part of chunkMessage(text)) assert.ok(part.length <= 1800, `part length was ${part.length}`);
 });
 
 test('digest: 進行中も件数だけでなく名前で出す（最終判定が新しい順）', () => {
@@ -1065,7 +1072,7 @@ test('watch: 判断待ち通知に出どころ行が付き、owner 空なら自P
 });
 
 test('watch: 自動進行完了時に結果の中身つきDMを1通送り、2回目は送らない（doneNotifiedAtで重複防止）', async () => {
-  // (a) resume が done を返すと notifyOwner が1回呼ばれ、本文に「結果:」と成果物パスが含まれる
+  // (a) resume が done を返すと notifyOwner が1回呼ばれ、本文に完了結果と成果物パスが含まれる
   // (b) 2回目の巡回では送られない（doneNotifiedAt）
   const home = tmp();
   const now = Date.parse('2026-10-23T03:00:00Z');
@@ -1101,8 +1108,8 @@ test('watch: 自動進行完了時に結果の中身つきDMを1通送り、2回
   assert.equal(notices.length, 1);
   const msg = notices[0].text;
   assert.match(msg, /✅ 自動進行が完了しました/);
-  assert.match(msg, /約束: テストの自動完了/);
-  assert.match(msg, /結果: テスト実行に成功し、全件パスしました。\n詳細はログを確認。/);
+  assert.match(msg, /✅ 完了:/);
+  assert.match(msg, /— テスト実行に成功し、全件パスしました。 詳細はログを確認。/);
   assert.match(msg, /成果物: reports\/summary\.md/);
   assert.match(msg, /kim がすること: なし/);
 
@@ -1203,8 +1210,8 @@ test('watch: judge 経由の done でも通知され、成果物は「なし」�
   assert.equal(notices.length, 1);
   const msg = notices[0].text;
   assert.match(msg, /✅ 自動進行が完了しました/);
-  assert.match(msg, /約束: 判定完了テスト/);
-  assert.match(msg, /結果: 全て完了している/);
+  assert.match(msg, /✅ 完了:/);
+  assert.match(msg, /— 全て完了している/);
   assert.match(msg, /成果物: なし/);
   assert.match(msg, /kim がすること: なし/);
 
@@ -1270,7 +1277,7 @@ test('watch: 完了DMの送信に失敗した行は次の巡回で再送し、�
   assert.equal(second.errors.length, 0);
   assert.equal(notices.length, 1);
   assert.match(notices[0].text, /✅ 自動進行が完了しました/);
-  assert.match(notices[0].text, /結果: 完了しました/);
+  assert.match(notices[0].text, /— 完了しました/);
   assert.match(notices[0].text, /成果物: out\/result\.md/);
   rows = readLedger(ledgerFile(home));
   assert.equal(rows[0].doneNotifiedAt, new Date(now + H).toISOString());
@@ -1293,7 +1300,8 @@ test('watch: 経路外の未通知doneを拾い、古い完了は一覧化し、
   assert.deepEqual(result.doneNotifications, { recent: 1, backlog: 20 });
   assert.equal(notices.filter(text => text.includes('✅ 自動進行が完了しました')).length, 1);
   const backlog = notices.filter(text => text.includes('未通知だった自動進行の完了一覧'));
-  assert.equal(backlog.length, 1);
+  assert.ok(backlog.length >= 1 && backlog.length <= 3);
+  assert.equal(backlog.join("\n").match(/✅ 完了:/g).length, 20);
   assert.ok(backlog[0].length <= 1800);
   assert.match(backlog[0], /過去作業0/);
   const rows = readLedger(ledgerFile(home));
@@ -1393,3 +1401,177 @@ test('watch: 時間切れでも無人openとcheck行を48時間で期限切れ�
   assert.equal(calls, 1);
   assert.ok(readLedger(ledgerFile(home))[0].doneNotifiedAt);
  });
+
+
+test('digest: toast配達を受領ログに残し、未達時はsentにしない', async () => {
+  const at = Date.parse('2026-10-23T09:00:00+09:00');
+  for (const delivered of ['toast', 'inbox', 'none']) {
+    const home = tmp();
+    const row = { sessionId: 'toast-receipt', owner: 'nishi@orgiast.jp', status: 'waiting_user', promise: '本人同意', nextKim: '同意ボタンを押す', ts: new Date(at - H).toISOString() };
+    const result = await digest({ home, now: at, slot: '朝', io: { localOwner: row.owner, readLedger: () => [row], notifyOwner: async () => ({ delivered, channel: delivered }) } });
+    assert.equal(result.sent, delivered !== 'none');
+    const log = JSON.parse(fs.readFileSync(path.join(home, '.claude/logs/auto-progress-digest.sent.jsonl'), 'utf8').trim());
+    assert.equal(log.sent, delivered !== 'none');
+    if (delivered !== 'none') assert.equal(log.receipts[0].channel, delivered);
+  }
+});
+
+
+test('resumeSession: 実行者なしは延期し、本物の失敗は詳細を残す', async () => {
+  const home = tmp();
+  const invoke = result => resumeSession({ sessionId: 'deferred', cwd: home, promise: 'p' }, {
+    home, io: { executable: 'mock', runChild: async () => result },
+  });
+  const skipped = await invoke({ status: 'failure', skippedNoExecutor: true, executorUsed: 'codex-do', exitCode: 3,
+    stderr: '[codex-do] x\n[cheap-code] deepseek はクールダウン中です\n' });
+  assert.equal(skipped.outcome, 'deferred');
+  assert.equal(skipped.deferred, true);
+  assert.match(skipped.reason, /deepseek/);
+  assert.match(skipped.reason, /codex-do exit 3/);
+  assert.doesNotMatch(skipped.reason, /\n/);
+  for (const flag of ['launchFailed', 'deferred']) {
+    const result = await invoke({ status: 'failure', [flag]: true, executorUsed: 'claude', exitCode: null, stderr: 'spawn ENOENT' });
+    assert.equal(result.outcome, 'deferred');
+    assert.equal(result.deferred, true);
+  }
+  const failed = await invoke({ status: 'failure', executorUsed: 'cheap-code:glm', exitCode: 1, stderr: 'boom' });
+  assert.equal(failed.outcome, 'error');
+  assert.match(failed.reason, /exit 1/);
+  assert.match(failed.reason, /boom/);
+  const timeout = await invoke({ status: 'timeout', executorUsed: 'claude', exitCode: null, stderr: '' });
+  assert.equal(timeout.outcome, 'error');
+  assert.match(timeout.reason, /^timeout/);
+  for (const flag of [true, false]) {
+    const result = await invoke({ status: 'failure', skippedNoExecutor: flag, executorUsed: 'mock', exitCode: 3, stderr: '  x   '.repeat(400) });
+    assert.ok(result.reason.length <= (flag ? 240 : 300));
+    assert.doesNotMatch(result.reason, /  /);
+  }
+});
+
+test('watch: 延期は回数と日時を復元し、巡回内の後続起動とinboxを抑止する', async () => {
+  const home = tmp(), now = Date.parse('2026-10-27T03:00:00Z');
+  seed(home, ['a', 'b'].map(sessionId => ({ sessionId, status: 'open', resumeCount: 0, resumedAt: '',
+    ts: new Date(now - 3 * H).toISOString(), promise: '作業を進める', cwd: home, reportedKey: 'stalled:false:0' })));
+  let calls = 0;
+  const io = noEvidenceIo({ resume: async () => { calls++; return { outcome: 'deferred', deferred: true, reason: '実行者なし: x' }; },
+    postSheet: () => assert.fail('unchanged reportKey must not resend'),
+    appendInbox: () => assert.fail('deferred must not append inbox') });
+  const summary = await watch({ home, now, io });
+  assert.equal(calls, 1);
+  const rows = readLedger(ledgerFile(home));
+  assert.equal(rows[0].resumeCount, 0);
+  assert.equal(rows[0].status, 'open');
+  assert.equal(rows[0].resumedAt, '');
+  assert.match(rows[0].resumeOutcome, /^deferred:.*x/);
+  assert.equal(rows[0].resumeDeferredAt, new Date(now).toISOString());
+  assert.equal(rows[1].resumeCount, 0);
+  assert.equal(summary.resumed, 0);
+  assert.equal(summary.resumeDeferred, 2);
+  assert.equal(summary.resumeDeferredReason, '実行者なし: x');
+  for (const row of rows) assert.equal(fs.existsSync(path.join(home, '.claude', 'auto-progress-inbox', `${row.sessionId}.jsonl`)), false);
+  await watch({ home, now: now + H, io });
+  assert.equal(calls, 2);
+});
+
+test('forgiveNoExecutorResumes: 空振りだけを取消し、dry-runと再実行は台帳を変えない', async () => {
+  const home = tmp();
+  seed(home, [{ sessionId: 'forgive', status: 'stalled', resumeCount: 8 }]);
+  const inbox = path.join(home, '.claude', 'auto-progress-inbox', 'forgive.jsonl');
+  fs.mkdirSync(path.dirname(inbox), { recursive: true });
+  fs.writeFileSync(inbox, [...Array.from({ length: 5 }, () => ({ state: 'error', evidence: 'failure' })),
+    { state: 'done', evidence: 'failure' }].map(row => JSON.stringify(row)).join('\n') + '\n');
+  const before = fs.readFileSync(ledgerFile(home), 'utf8');
+  assert.deepEqual(forgiveNoExecutorResumes({ home, dryRun: true }), { rows: 1, restored: 5 });
+  assert.equal(fs.readFileSync(ledgerFile(home), 'utf8'), before);
+  const previousHome = process.env.ORGIAST_HOME, log = console.log, output = [];
+  try {
+    process.env.ORGIAST_HOME = home;
+    console.log = line => output.push(line);
+    assert.equal(await watchMain(['--forgive-no-executor', '--dry-run']), 0);
+    assert.deepEqual(output, ['{"rows":1,"restored":5}']);
+  } finally {
+    console.log = log;
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+  }
+  assert.equal(fs.readFileSync(ledgerFile(home), 'utf8'), before);
+  assert.deepEqual(forgiveNoExecutorResumes({ home }), { rows: 1, restored: 5 });
+  const row = readLedger(ledgerFile(home))[0];
+  assert.equal(row.resumeCount, 3);
+  assert.equal(row.forgivenNoExecutor, 5);
+  assert.equal(row.status, 'stalled');
+  assert.match(row.resumeOutcome, /^forgiven:/);
+  const after = fs.readFileSync(ledgerFile(home), 'utf8');
+  assert.deepEqual(forgiveNoExecutorResumes({ home }), { rows: 0, restored: 0 });
+  assert.equal(fs.readFileSync(ledgerFile(home), 'utf8'), after);
+});
+
+const digestDedupeCwd = 'C:\\Users\\user\\.claude\\quota-sweep-repo';
+const digestPushActions = [
+  'push と main 向け PR 作成の許可を出す。',
+  '5428832 の push と PR 作成を許可するかどうかを決める（これだけ）。',
+  'ブランチ `quota-sweep/20261026-0333-claude-mvopceel` の push と main 向け PR 作成の許可を出す。',
+  'push/PR の許可を出す（出すまで C5 は進まない）。',
+  'push と main 向け PR 作成の許可を出す。',
+];
+
+test('digest: 同じループの許可待ち5行と停止3行を各1件に畳む', () => {
+  const now = Date.parse('2026-10-27T00:00:00Z');
+  const waiting = digestPushActions.map((nextKim, i) => ({ cwd: digestDedupeCwd, sessionId: `w${i}`, ts: new Date(now - i * 1000).toISOString(), status: 'waiting_user', nextKim, promise: '許可が出たら作業ブランチだけを push して PR を作成し、URL を state に記録する。'.repeat(3) }));
+  const stalled = [
+    'push/PR の許可が出たイテレーションで、5428832 を作業ブランチへ push し、PR を作成する。',
+    '次回のループは同じ観測を繰り返します。push/PR の禁止が解除されれば、5428832 を送る。',
+    'push/PR 禁止が解けた次回のループで 5428832 を push し、main 向け PR を作成する。',
+  ].map((promise, i) => ({ cwd: digestDedupeCwd, sessionId: `s${i}`, ts: new Date(now - i * 1000).toISOString(), status: 'resumed', promise }));
+  const text = formatDigest([...waiting, ...stalled, { cwd: 'D:\\Claude\\event-shop', sessionId: 'other', status: 'waiting_user', nextKim: '見積の承認', promise: '見積作成', ts: new Date(now).toISOString() }], now);
+  assert.match(text, /あなたの判断待ち 2件/);
+  assert.match(text, /止まっている 1件/);
+  assert.equal(text.split('（同じ内容 ×5）').length - 1, 1);
+  assert.equal(text.split('（同じ内容 ×3）').length - 1, 1);
+  assert.equal(text.split('\n').filter(line => line.startsWith('・あなたの判断待ち: ［quota-sweep-repo］')).length, 1);
+  for (const line of text.split('\n').filter(line => line.startsWith('・'))) assert.ok(line.length <= 80, line);
+});
+
+test('digest: cwd が空の同文行とタグがない別文言は畳まない', () => {
+  const rows = ['見積の承認', '見積の承認'].map((nextKim, i) => ({ sessionId: `w${i}`, promise: '見積', nextKim }));
+  assert.match(formatDigest(rows), /あなたの判断待ち 2件/);
+  assert.match(formatDigest(rows.map((row, i) => ({ ...row, cwd: digestDedupeCwd, nextKim: i ? '入稿の確認' : '見積の承認' }))), /あなたの判断待ち 2件/);
+});
+
+test('digestGroupKey: 許可事項と正規化した cwd で比較し別の許可は分ける', () => {
+  const key = digestGroupKey({ cwd: digestDedupeCwd, nextKim: digestPushActions[0] }, 'waiting');
+  for (const nextKim of digestPushActions) assert.equal(digestGroupKey({ cwd: digestDedupeCwd, nextKim }, 'waiting'), key);
+  assert.equal(digestGroupKey({ cwd: '/mnt/c/Users/user/.claude/quota-sweep-repo/', nextKim: digestPushActions[0] }, 'waiting'), key);
+  assert.notEqual(digestGroupKey({ cwd: digestDedupeCwd, nextKim: 'C2 の curl 読み取りを許可するかどうか' }, 'waiting'), key);
+});
+
+test('digest: 最新の代表行で本文・72時間・夜間を判定し古い判断待ちもグループ数で数える', () => {
+  const now = Date.parse('2026-10-27T00:00:00Z');
+  const old = { cwd: digestDedupeCwd, sessionId: 'old', promise: '古い説明', nextKim: digestPushActions[0], ts: new Date(now - 100 * H).toISOString() };
+  const recent = { ...old, sessionId: 'new', promise: '最新の説明', ts: new Date(now - H).toISOString() };
+  const text = formatDigest([], now, 'PC', { waitingRows: [recent, old], nightWaitingKeys: new Set([waitingNotificationKey(old)]) });
+  assert.match(text, /あなたの判断待ち 1件/);
+  assert.match(text, /最新の説明/);
+  assert.doesNotMatch(text, /夜間に出た|3日以上前/);
+  // 72時間より古い判断待ちも件数だけにせず名前で出る（グループ1件として「×2」付き）
+  const staleText = formatDigest([], now, 'PC', { waitingRows: [old, { ...old, sessionId: 'old2' }] });
+  assert.match(staleText, /あなたの判断待ち 1件/);
+  assert.match(staleText, /古い説明/);
+  assert.match(staleText, /同じ内容 ×2/);
+  assert.doesNotMatch(staleText, /3日以上前/);
+  assert.match(formatDigest([], now, 'PC', { waitingRows: [old, recent], nightWaitingKeys: new Set([waitingNotificationKey(recent)]) }), /夜間に出た判断待ち/);
+});
+
+test('watch: inbox delivery records actual channel and stops retrying completion', async () => {
+  const home = tmp(), now = Date.parse('2026-10-26T03:00:00Z');
+  seed(home, [{ sessionId: 'inbox-done', status: 'done', promise: '依頼を完了', ts: new Date(now).toISOString(), doneAt: new Date(now).toISOString() }]);
+  let calls = 0;
+  const io = noEvidenceIo({ notifyOwner: async () => { calls++; return { delivered: 'inbox', channel: 'inbox', ok: true, toastExitCode: 1 }; } });
+  await watch({ home, now, io });
+  await watch({ home, now, io });
+  assert.equal(calls, 1);
+  assert.ok(readLedger(ledgerFile(home))[0].doneNotifiedAt);
+  const log = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'logs', 'auto-progress-done-dm.sent.jsonl'), 'utf8').trim());
+  assert.equal(log.channel, 'inbox');
+  assert.equal(log.toastExitCode, 1);
+});

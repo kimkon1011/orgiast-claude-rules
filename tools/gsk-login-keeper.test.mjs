@@ -14,7 +14,10 @@ async function fixture(t, source, extraArgs = []) {
   await fsp.writeFile(cli, source);
   const logs = [];
   const keeper = await startKeeper({
-    args: ['--port', '0', '--cli', cli, '--url-timeout-ms', '500', ...extraArgs],
+    // 500ms は冷えた spawn で URL 取得前に子を kill し flaky になる（実測: 単独実行時に
+    // hasUrl:false / サーバー未クローズによるハング）。タイムアウト意味論のテストは
+    // 下の test('タイムアウト時は…') が --url-timeout-ms 100 を明示上書きして検証する。
+    args: ['--port', '0', '--cli', cli, '--url-timeout-ms', '5000', ...extraArgs],
     env: { ...process.env, HOME: home, USERPROFILE: home, ORGIAST_HOME: home, STUB_HOME: home },
     log: (line) => logs.push(line),
     errorLog: (line) => logs.push(line),

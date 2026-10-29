@@ -11,6 +11,16 @@
       "createdBy": "uers",
       "createdAt": "2026-10-26T22:28:53.071Z",
       "expiresAt": "2026-10-28T22:28:53.071Z"
+    },
+    {
+      "id": "run-20261028-222104-7487",
+      "kind": "run",
+      "targets": "古川龍慶のノートブックコンピュータ",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-10-28T22:21:04.968Z",
+      "expiresAt": "2026-10-30T22:21:04.968Z"
     }
   ]
 }

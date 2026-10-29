@@ -7,6 +7,9 @@ import {
   EXECUTOR_SYNC_TTL_MS,
   autoSessionExecutor,
   buildCheapCodeArgs,
+  buildCodexDoArgs,
+  codexDoLaneEnabled,
+  cheapProvidersAllCooling,
   buildClaudeHeadlessArgs,
   claudeFallbackEnabled,
   alternateCheapProvider,
@@ -32,11 +35,11 @@ test('alternateCheapProvider はキーと cooldown を確認して反対側だ�
   const home = makeHome();
   try {
     assert.equal(alternateCheapProvider('glm', home), null);
-    fs.writeFileSync(path.join(home, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY=ds\n');
+    fs.writeFileSync(path.join(home, '.claude', 'openrouter.env'), 'OPENROUTER_API_KEY=ds\n');
     fs.writeFileSync(path.join(home, '.claude', 'zai.env'), 'ZAI_API_KEY=zai\n');
     assert.equal(alternateCheapProvider('glm', home), 'deepseek');
     assert.equal(alternateCheapProvider('deepseek', home), 'glm');
-    fs.writeFileSync(path.join(home, '.claude', 'provider-cooldown.json'), JSON.stringify({ deepseek: { until: Date.now() + 60000 } }));
+    fs.writeFileSync(path.join(home, '.claude', 'provider-cooldown.json'), JSON.stringify({ openrouter: { until: Date.now() + 60000 } }));
     assert.equal(alternateCheapProvider('glm', home), null);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
@@ -49,6 +52,18 @@ test('recordSkippedNoExecutor は no-cheap-executor の行を追記する', () =
     assert.equal(row.category, 'unrouted');
     assert.deepEqual({ provider: row.provider, model: row.model, status: row.status }, { provider: 'skipped', model: 'none', status: 'no-cheap-executor' });
     assert.equal(row.reason, 'cheap-code/glm exit 1');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('recordSkippedNoExecutor は stderr の末尾200字を stderrTail に残し、空なら付けない', () => {
+  const home = makeHome();
+  try {
+    recordSkippedNoExecutor({ home, provider: 'glm', reason: 'codex-do exit 1', stderr: `${'x'.repeat(300)}無人枠 8/8` });
+    recordSkippedNoExecutor({ home, provider: 'glm', reason: 'codex-do exit 1', stderr: '  ' });
+    const [withTail, without] = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(withTail.stderrTail.length, 200);
+    assert.ok(withTail.stderrTail.endsWith('無人枠 8/8'));
+    assert.equal('stderrTail' in without, false);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -218,4 +233,46 @@ test('recordFallbackToClaude は appendImpl 差し替えができ、失敗して
   const blocker = path.join(home, 'blocker.txt');
   fs.writeFileSync(blocker, 'x', 'utf8');
   assert.doesNotThrow(() => recordFallbackToClaude({ home: path.join(blocker, 'sub'), reason: 'x' }));
+});
+
+test('buildCodexDoArgs は prompt-file/cwd/origin を順に渡し、欠落を拒否する', () => {
+  const repoRoot = makeHome();
+  try {
+    const options = { repoRoot, promptFile: '/tmp/prompt file.md', cwd: '/tmp/work dir' };
+    assert.throws(() => buildCodexDoArgs(options), /codex-do\.mjs が見つかりません/);
+    fs.mkdirSync(path.join(repoRoot, 'tools'));
+    fs.writeFileSync(path.join(repoRoot, 'tools', 'codex-do.mjs'), '');
+    assert.deepEqual(buildCodexDoArgs(options), [path.join(repoRoot, 'tools', 'codex-do.mjs'), '--prompt-file', options.promptFile, '--cwd', options.cwd, '--origin', 'unattended']);
+  } finally { fs.rmSync(repoRoot, { recursive: true, force: true }); }
+});
+
+test('codexDoLaneEnabled は既定有効でファイル指定を env より優先する', () => {
+  const home = makeHome();
+  try {
+    const env = { ORGIAST_HOME: home };
+    assert.equal(codexDoLaneEnabled(env), true);
+    for (const value of ['0', 'false', 'OFF', ' off ']) {
+      assert.equal(codexDoLaneEnabled({ ...env, ORGIAST_AUTO_SESSION_CODEX_LANE: value }), false);
+    }
+    writeAutoSessionEnv(home, 'ORGIAST_AUTO_SESSION_CODEX_LANE=on\n');
+    assert.equal(codexDoLaneEnabled({ ...env, ORGIAST_AUTO_SESSION_CODEX_LANE: '0' }), true);
+    writeAutoSessionEnv(home, 'ORGIAST_AUTO_SESSION_CODEX_LANE=false\n');
+    assert.equal(codexDoLaneEnabled({ ...env, ORGIAST_AUTO_SESSION_CODEX_LANE: '1' }), false);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('cheapProvidersAllCooling は両方の until が未来の場合だけ true を返す', () => {
+  const home = makeHome();
+  const file = path.join(home, '.claude', 'provider-cooldown.json');
+  try {
+    assert.equal(cheapProvidersAllCooling('glm', home, 1000), false);
+    fs.writeFileSync(file, JSON.stringify({ glm: { until: 1001 }, openrouter: { until: 2000 } }));
+    for (const provider of ['glm', 'deepseek']) assert.equal(cheapProvidersAllCooling(provider, home, 1000), true);
+    assert.equal(cheapProvidersAllCooling('other', home, 1000), false);
+    assert.equal(cheapProvidersAllCooling('glm', home, 1001), false);
+    fs.writeFileSync(file, JSON.stringify({ glm: { until: 2000 } }));
+    assert.equal(cheapProvidersAllCooling('glm', home, 1000), false);
+    fs.writeFileSync(file, 'broken');
+    assert.equal(cheapProvidersAllCooling('glm', home, 1000), false);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

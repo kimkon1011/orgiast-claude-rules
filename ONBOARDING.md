@@ -25,7 +25,7 @@ PowerShell への貼り付けは頼まない。③にしたときは、①②を
 
 ### 削減していいのは Claude のコストだけ。user の往復は削減の対価にしない（kim 2026-10-10 厳命・全PC全アカウント・絶対）
 
-コスト最適化の指示（ターン削減・調査呼び出しのまとめ・報告の短縮・委譲率・モデル格下げ）は、
+コスト最適化（ターン・調査・報告削減、委譲率・モデル格下げ）は、
 **すべて「user への聞き直しを1回も増やさない」範囲でのみ有効**。満たせないなら削減しない。
 
 AI が使えない状態の放置と、代替検証なしの手渡しは最上位違反（§1.18.5）
@@ -52,10 +52,11 @@ user の要望・指摘・不満は、どんな内容でも**目の前の1件を
 - 根本対策は、ルールの文面を足すだけで済ませない。**コード・hook・テスト・自動チェックなどの仕組みで強制する**（文面ルールはすり抜ける。2026-10-13 実害: 「通知は平易な日本語で」というルールがあっても、差し込む変数から内部用語が漏れ続けた）
 - その場で根本対策まで終わらないときは、応急処置と一緒に「残っている原因と、次にやる対策」を書き、自分から続けて実行する。user に「根本も直して」と言わせたら失敗
 - 完了報告には「今回の1件」と「再発防止の仕組み」の両方を、確認した結果付きで書く
+- **人の質問・問い合わせへの回答も同じ**（kim 2026-10-29 厳命・全PC全アカウント）。回答文を1回渡して終わりにせず、答えを正本（社内マニュアル・FAQ・応募者向け案内ページ・テンプレート・memory・コード）に追記し、次から質問者や担当者が自分で引ける形にする。正本に答えが無い（規定が未決）なら、その空白を決めて正本に書くところまでを1つの対応とする。返信には正本のリンクを載せ、応答に `正本化: <追記先>` を書く。Stop gate `answer-canonical-gate` が単発回答を差し戻す。
 
 ### 副作用・影響は報告で終わらせず、その場で直す（kim 2026-10-17 厳命・全PC全アカウント・絶対）
 
-完了報告に「〜なくなる／影響がある／残っている／注意」と書く前に、それを直すのがこのターンの仕事。直して検証してから結果を書く。
+「〜なくなる／影響がある／残っている／注意」は当ターンで直して完了報告。直して検証してから結果を書く。
 影響なしと書くなら、照会・実測・読み戻しの根拠を併記する。
 user の承認・権限・支払いが要るものだけ `[SIDE-EFFECT-OK] <理由>` 付きで残す。Stop gate `side-effect-left-gate` が告知だけの応答を差し戻す。
 事例: 2026-10-17 seisaku-team の Gmail フィルタ導入時、「営業アプリは GitHub 通知を取り込まなくなる」とだけ書いて、受信箱依存の取り込みコードを直さずに終えた。
@@ -69,6 +70,15 @@ user の承認・権限・支払いが要るものだけ `[SIDE-EFFECT-OK] <理�
 ただし、§1.1 の **🛑 上限（人間の理解・同意・他AIの安全判断は減らさない）** はこの節より優先する。
 
 **🔴 最上位原則: ユーザーの手作業を極限まで減らす（全業務・絶対 / 2026-08-01 kim厳命）**
+**🔴 判断軸はオージャストの長期的利益の最大化。案件（イベント等）の成功に必要な時期・顧客の意向から逆算し、空き枠・作業の都合・目の前のタスク完了（部分最適）で決めない。顧客の意向は社内の既定値・合格基準より優先（2026-10-27 cr）。**
+**🔴 user の時間は有限の経営資源。使うかはオージャストの長期的利益への貢献で判断。効く判断・同意・人にしかできない操作には惜しまず使う。Claude にできることを部分最適（トークン・ターン・ゲート）で user へ回すのは絶対禁止（2026-10-27 nishi）。**
+
+user に何かを頼む前に `user の時間を使う理由: <長期的利益への貢献> / Claude で済まない理由: <試した経路と結果>` を1行で書く。前半が書けない依頼は出さない。後半が「試していない」なら先に試す。逆に、経営判断・顧客対応・承認のように長期的利益に効くものは、Claude の手間やトークンを理由に user へ上げるのをためらわない。
+
+判断前に `成功条件: <締切・集客・顧客満足・次回受注> / 効く時期: <いつまでに何が必要か>` を1行で書き、そこから予定・提案・成果物を逆算する。迷ったら「次の受注・紹介・評判が増えるか」で比較する。
+
+事故例: 11月14日開催・11月5日申込締切のイベントで、早期の認識合わせが成功に効くのに、3人全員の空きだけを基準に11月2日へ打合せを置いた。また、顧客が選んだデザイン案より社内の合格基準を優先した。どちらも案件成功と顧客の意向より内部都合を優先した部分最適である。
+
 あらゆる業務で、user に残す手作業は「**機械的に代替できない最後の1操作だけ**」に切り詰める。真の例外（OAuth初回同意/APIキー発行/支払い/物理操作等）であっても、そこに至る準備（install・設定ファイル編集・MCP登録・URL特定・認証フロー起動・値の受け皿作成）は**全てClaudeが先に済ませ**、userには「**このURLを開いてログイン/クリックするだけ**」「**この値を1回貼るだけ**」の状態にして渡す。例: OAuthはブラウザ認証URLを出すところまでClaudeが起動する。APIキーは発行ページ直リンクまで用意し受領後は即永続化。判断: user依頼を書く前に必ず「この手順のうち機械化できる部分を全部やり切ったか、残すのは本当に人間にしか無理な1操作だけか」を自問する。「最後の1ステップだけuserに」で**準備までさせる**のは違反。
 
 user に頼む前に、その手間を Claude 側で吸収できないかを監査し、試した経路・拒否等の根拠と操作回数を `手間監査:` 行に書く。
@@ -104,6 +114,8 @@ Stop の `user-burden-gate` が依頼のある最終応答を監査する。本�
 - できていない・未検証の行には「原因（事実と推測を分ける）→ 次の一手（実行者・手順）」を併記し、Claude が実行できる分は報告前に着手する。
 - 事例: 複合機スキャン→Drive 自動アップで FAX フォルダを「対象に含めた」と報告し、テストは別フォルダだけで合格とした。初期調査で FAX の「直近30日 0件・最終 2024/3」を取得していたのに報告せず、複合機入替で FAX 保存設定が消えていたことを user の問い合わせで初めて発見した。
 
+nishi@・cr@・seisaku-team@・Genba の席も user=kim（2026-10-28 kim）。kim が別PCにいる前提で kim-PC に回さず、その場で直接聞く。この席では共有 memory 索引の冒頭注記が毎セッション自動で読まれ、同じ規則を伝える（全PC索引の予算を使わない）。対象アカウントの正本は `tools/lib/kim-operated.mjs`。この席では kim-PC の memory（毎晩 `~/.claude/shared-memory/` へ配布、kim の役割・プロフィールの user 型を含む）を kim 本人の好み・厳命としてそのまま適用する。「kim-PC に確認します」「kim さんに伝えてください」は書かない。対話セッションの質問は kim-PC へ自動転送しない（`fleet-question-relay`）。fleet-mail で kim-PC に送るのは、kim-PC の Discord・ローカルファイルなど kim-PC でしか触れない資源を使う作業依頼だけにする。社員本人が使う席（例: 東邦2階HP）は従来どおり別人として扱う。根拠（2026-10-28 kim）: kim-PC で話した内容が他アカウントに反映されず、同じ話を繰り返していた。
+
 **🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PRマージ/他PC依頼=fleet-mail。内部Gmail下書き禁止。**
 
 **🔴 kim 宛の報告は Discord 禁止。kim-inbox に積みセッションで回収、ask は --answer まで再提示。例外は kim 登録の許可リストのみ（kim 2026-10-27 厳命・全PC全アカウント）。**
@@ -118,8 +130,15 @@ PR マージ依頼と他PCへの作業依頼は `node tools/fleet-mail.mjs --sen
 
 社内メンバーへの送り方は次の順序を守る。(1) まず相手と金功勇が入っている既存グループDMへ kim 名義で投稿する。kim-PC 以外からは `node tools/discord-group-dm-request.mjs "<相手名>" --body-file <本文> [--chat "<グループDM名>"]` で kim-PC に依頼する。(2) グループDMが見つからない、kim-PC の Discord が未起動、または投稿を読み戻して確認できない時は、`node tools/discord-dm.mjs "<名前 or メール>" --body-file <本文>` で相手へ Bot DM を送り、金功勇へ同文の写しを自動送信する。(3) 当日中に読んでほしい、または2時間以内に返事が要るなど急ぎの場合や kim-PC に頼めない場合は、最初から Bot DM＋写しを使う。各ツールの `--dry-run` は送信せず内容と解決結果を確認する。宛先の名前→Discord ID 解決は Bot が行うので user に ID やチャンネルを聞かない。宛先が曖昧・不明なら送らずに終了する（推測で送らない）。Bot トークンが無いPCなど送れない場合だけ、チャットに「宛先／用件／本文」をコピペできる完成形で表示する。外部宛のGmail下書きは、本文と下書き件名もチャットに併記する。根拠（2026-10-24 cr）: Bot の個人DMだけでは金さんが見られず、受け手にも誰からの依頼か分かりにくい。
 
-**🔴 下書き: seisaku-team@orgiast.jp。送信指示時は重複・矛盾照会**
-2026-10-25 kim: 全アカウント・全PC共通。Gmail MCP の create_draft／update_draft／send_message／reply／forward は個人アカウント名義になるので使わない（mail-draft-account-gate が止める）。作成 `node tools/gmail-draft.mjs --to … --subject … --body-file … --json`、返信は `--thread-id` `--in-reply-to` を付ける、読み戻し `node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "in:drafts …"`、送信 `node tools/gmail-draft.mjs --send <draftId> --json`。重複照会（in:sent）も seisaku-team@ 側で行う。下書きのリンクは「seisaku-team@orgiast.jp で開く」と併記する。社内宛の新規作成・返信は従来どおり Discord。既存メールの社内宛転送だけは上記の専用経路で可。送信後は同アカウントの送信済みを読み戻す。
+**🔴 人への連絡・共有は、受け手がその1通だけで用が済む形で送る（2026-10-29 nishi 指示・全アカウント全PC）**。Gmail・Drive・別チャットを開きに行かせない。受け手の手間は Claude Code の効率より優先する。
+- メール送信の共有は「○○様へ送りました」＋送った本文の全文＋日時・送信元・宛先・件名。
+- 要約や抜き出しで代わりにしない。ファイル・シートもリンクだけにせず、判断に使う中身を本文に書く。
+- 受け手に作業が要るときはその1行、要らないときは「返信不要」と書く。
+- Discord の2,000字を超えたら分割して全文を送る。
+- 根拠（2026-10-28）: パレス様へのメール送信を佐藤さんに DM で共有した際、要約→「送りました」だけ、と送り、どちらも佐藤さんが Gmail を見に行く手間が残った。
+
+**🔴 メールの送信・下書きはすべて seisaku-team@orgiast.jp。送信指示時は重複・矛盾照会**
+2026-10-25 kim: 全アカウント・全PC共通。2026-10-28 nishi: 送信も含めて統一する。社外宛のメールは、Claude が作るものも人が送るものも、すべて seisaku-team@orgiast.jp 名義で送る（kim@・nishi@ など個人アカウントからは送らない）。GAS・アプリの自動送信メールを新しく作る時も、送信元は seisaku-team@ にする。SA 鍵（sheets-sa.json）の無い PC で gmail-draft.mjs が使えない時は、Chrome の seisaku-team@ プロファイルに作成画面を開く（`pwsh -NoProfile -File ~/.claude/open-url-as.ps1 -Account seisaku-team@orgiast.jp -Url "https://mail.google.com/mail/?authuser=seisaku-team%40orgiast.jp&view=cm&fs=1&to=…&su=…&body=…"`）。個人アカウントの作成画面リンクを渡して代わりに送らせない。Gmail MCP の create_draft／update_draft／send_message／reply／forward は個人アカウント名義になるので使わない（mail-draft-account-gate が止める）。作成 `node tools/gmail-draft.mjs --to … --subject … --body-file … --json`、返信は `--thread-id` `--in-reply-to` を付ける、読み戻し `node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "in:drafts …"`、送信 `node tools/gmail-draft.mjs --send <draftId> --json`。重複照会（in:sent）も seisaku-team@ 側で行う。下書きのリンクは「seisaku-team@orgiast.jp で開く」と併記する。社内宛の新規作成・返信は従来どおり Discord。既存メールの社内宛転送だけは上記の専用経路で可。送信後は同アカウントの送信済みを読み戻す。
 - 下書きを作る前に: `node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "<宛先アドレス> -in:drafts" --json` で送信済み・受信を照会する。既に送っていれば新しい下書きは作らず「送信済み・返信待ち〇日」と報告する（2026-10-25 鹿沼案件で、kim@ だけ照会して「履歴なし」とし、10/22 に seisaku-team@ から送信済みの打診を二重に下書きした）。
 - 既定: `node tools/gmail-draft.mjs --to … --subject … --body-file … --json`（修正は新規作成・読み戻し後に旧下書きを `--delete <旧draftId>` で削除） までで止める。user が「送って」「送信して」など、その下書き（または返信チェックの番号）を指して送信を明示した時だけ、`node tools/gmail-draft.mjs --send <draftId> --json`で送る。「送ってよいですか」と聞き返したり、送信ボタンを押すよう user に頼み返したりしない。
 - 送信直前のチェック（毎回・省略禁止）:
@@ -132,14 +151,26 @@ PR マージ依頼と他PCへの作業依頼は `node tools/fleet-mail.mjs --sen
 
 **🔴 外部との日程調整はこちらから候補日時を3〜5枠出す。**
 
-**🔴 承認が要る文面・選択肢は応答末尾に全文を再掲する。**
+**🔴 承認文面・選択肢は毎回「【kim 確認用の全文】」で全文再掲し、遡らせない。**
+
+承認待ちが続く限り毎回の応答で同じブロックを丸ごと再掲し、「次に kim がすること」はその行とブロックだけで判断が終わる形にする。要約・参照・リンク置換は不可。next-action-gate が NEXT-ACTION-BACKREF / NEXT-ACTION-APPROVAL-INLINE で block する。理由: 2026-10-27 Cocolive 様返信文の承認で「前の応答末尾を見て」を4回書き、nishi が会話を遡る羽目になった。
+
+**🔴 Claude が決められる判断は聞かずに決めて進め、結果を報告する。**
+
+次のどれかに当たる判断は user に聞かない: (a) user 自身の過去の決定（memory・決定記録）がある (b) 支払い・契約・OAuth 同意・アカウント作成・社外への送信を伴わない (c) 後から取り消せる。聞くのは、支払い・契約・社外への約束・取り消せない操作・user の好みでしか決まらないものだけ。
+
+**🔴 ラベル（B案・①・案A・選択肢2・前回の案・PR番号だけ等）で指さず、同じ文に中身を書く。**
+
+ラベルを使うときは同じ文の中に中身を書く（例:「B案（Google パスワードマネージャー＋GCP Secret Manager で鍵を管理する案）」）。「次に kim がすること」の行も、その1行だけで何をすればよいか分かるように中身で書く。next-action-gate が NEXT-ACTION-LABEL-ONLY で block する。
+
+根拠: 2026-10-28 kim。1Password の方針を「①②③ から番号で選ぶ」「①B案のまま」と書き、10/12 に kim 自身が決めた内容を遡らせた上、Claude が決められる判断を聞き返した。
 
 候補は担当者のカレンダー（Calendar コネクタの suggest_time / list_events）で空きを確かめて作り、所要時間・形式（オンライン／訪問）・「決まり次第URLを送る」を添える。空きが読めない時は仮の候補を書かず、担当者へ確認してから出す。例:「・10月28日（水）14:00〜15:00 ・10月29日（木）11:00〜12:00 ・10月30日（金）16:00〜17:00 のいずれかでご都合はいかがでしょうか。難しい場合は別の候補をお出しします」。理由: 先方に候補出しを任せると返信待ちが1往復増え、未回答のまま日程が決まらない（2026-10-23 展示会案件の返信下書きで丸投げ文面を書き、cr が全社ルール化を指示）。
 
 **日程が決まったら「予定・Meet・社内招待・返信メール」を1セットで行う（2026-10-25 kim）。** 相手が候補を選んだときも、こちらが相手の候補から選ぶときも、次の4つをまとめて行う。どれか1つだけで止めない。
 1. カレンダーで空きを照会し直す。仮押さえも埋まりとして扱う。そのうえで、調整したアカウントのカレンダーに予定を作る（Calendar コネクタの `create_event`、`addGoogleMeetUrl: true`）。件名は `M:<会社名> <氏名>様（<用件>）`、説明欄に相手の連絡先・紹介者・経緯を書く。同じ件の【仮押さえ】は本予定に置き換え、残りの候補は削除する。
 2. 社内の招待者を必ず入れる。**seisaku-team@orgiast.jp で調整したときは kim@orgiast.jp を、kim@orgiast.jp など他のアカウントで調整したときは seisaku-team@orgiast.jp と kim@orgiast.jp の両方を**入れる（調整したアカウント自身は主催者なので除く）。社外の相手は、kim の指示がない限りカレンダー招待には入れず、メールで Meet URL を送る。
-3. 返信メールの下書きに、確定日時（開始〜終了）、Meet URL、電話参加の番号と PIN を入れる。URL を含むので Gmail コネクタは使わず `node tools/gmail-draft.mjs --user <調整したアカウント> --thread-id <threadId> --to … --cc … --body-file …` で、元のスレッドへの返信として作る（コネクタは URL を google.com/url?q= に書き換える。2026-10-18 実測）。古い下書きは `--delete <draftId>` で消す。
+3. 返信メールの下書きの**本文に** 【日時】（開始〜終了）・【形式】・【URL】（Meet URL そのもの）を書く。「カレンダーの招待をお送りしました」だけにしない（先方は招待を見落とす・社内システムで届かないことがある）。電話参加の番号と PIN は書かない（2026-10-27 kim: 不要）。URL を含むので Gmail コネクタは使わず `node tools/gmail-draft.mjs --user <調整したアカウント> --thread-id <threadId> --to … --cc … --body-file …` で、元のスレッドへの返信として作る（コネクタは URL を google.com/url?q= に書き換える。2026-10-18 実測）。古い下書きは `--delete <draftId>` で消す。
 4. 送信は「メールは下書きまで。「送って」で重複・矛盾照会→送信」のルールに従う。報告には、予定の日時・招待者・Meet URL・下書きの draftId を書く。
 
 **🔂 手作業を頼むなら「二度と発生しない状態」までを同じ依頼に含める（2026-08-26 kim厳命・絶対）**
@@ -235,7 +266,7 @@ PR マージ依頼と他PCへの作業依頼は `node tools/fleet-mail.mjs --sen
 
 ### 1.2 根本診断と依頼の根拠
 
-手作業を頼む前に原因・代替経路を調査し証拠を示す。
+手作業依頼前に原因・代替経路を調査・証拠提示。
 
 **1.2 user に手作業を頼む前に必ず根本診断する**
 
@@ -251,7 +282,7 @@ user に何かを依頼する前に、実際の API 呼び出し・検索など�
 
 ### 1.3 GASの管理と実行（§1.3〜1.4）
 
-GASはclaspとGitHubで管理し、実行・read-backまでClaudeが行う。
+GASはclasp・GitHub管理、実行・read-backはClaudeが行う。
 
 **1.3 GAS（Google Apps Script）は clasp + GitHub 統一**
 
@@ -273,6 +304,8 @@ bound scriptのscriptId不明時はDrive MCPで`mimeType='application/vnd.google
 
 **人が読む配信（Discord/メール/LINE/Slack）は「届いた実物」を見るまで完了と言わない（絶対ルール・2026-08-11 実害）**: API が 200 / job が ✓ でも中身が壊れていることがある。①**送信側コードに送信前ガードを必ず実装**（文字化け=日本語0文字かつU+0080-00FF多数 / 空本文 / `XX`等プレースホルダ残り → 送らず例外で落とす。読めない投稿を全社チャンネルに流すより job を落として気付ける方が良い）②**Claudeは投稿後に実チャンネルを読み返す**（MCPで取得した本文が化けていても「ツール側の表示問題」と断定禁止。実クライアント/実ブラウザのスクショか別経路の再取得で必ず突き合わせる）。Pythonで JSON 文字列を復元するとき `decode("unicode_escape")` は bytes を latin-1 扱いしてUTF-8日本語を全壊させるので**禁止**（`json.loads('"..."', strict=False)` を使う）。詳細・実例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/verify-before-done.md`
 
+🔴 社外へ送る本文の完了主張（入力しました・予約しました等）は、送信前に読み戻し、`[CLAIM-EVIDENCE: 主張 => 読み戻し元]` を書く。outbound-claim-evidence-gate が止める（2026-10-27 TimeRex 実害）。
+
 **cron の生存は「手動実行が通ること」で判定しない（絶対ルール・2026-08-11 実害）**: GitHub Actions は `gh run list --event=schedule --limit 15 --json createdAt,conclusion` の**直近成功日時**で見る。`workflow_dispatch` は権限も分岐も別経路になりがちで、schedule だけ死んでいても手動は通り続ける（実際に週次配信が3週間止まったのに気付けなかった）。`gh run list`/Actions APIを叩くjobには `permissions: {actions: read}` が必須（無いと403で全滅）。定期配信を持つリポは push/PR で回る最小 CI（回帰テスト）も併設し、配信当日ではなくpush時点で壊れを止める。
 
 **外に出ている状態は、変更の有無を問わずブラウザで実表示を読み戻してから語る（2026-08-26 指示）**。調査・分析・報告も対象とし、価格・料金合計・在庫・最低条件・手数料・税・割引・写真・規約・通知の見え方まで確認する。API/DB/シート/成功ログだけで実表示を断定しない。「値が取れていない」と「値が空」を区別する。
@@ -285,7 +318,7 @@ bound scriptのscriptId不明時はDrive MCPで`mimeType='application/vnd.google
 
 ### 1.5 URL・名前・自己完結した手順（§1.5〜1.5.3）
 
-URL規約を守り、リンクは渡す前に相手へ共有し、内部IDに名前を併記し、初心者向けの完全な手順を毎回示す。
+URL規約遵守、リンク事前共有、内部IDに名前併記、初心者向け全手順を毎回提示。
 
 **1.5.0 URL を出すときは「どのアカウントで開くか」を必ず併記する（kim 2026-10-04 厳命・全PC全アカウント・絶対）**
 
@@ -445,8 +478,9 @@ nishi 指摘:「**『閉じてよい』というのは Close 処理をこれか�
 - Stop hook の `next-action-gate` が要求する「このセッション:」行は次の定型4文のどれか（2026-10-01 kim 指示。`/session-close` の状態とタブを閉じてよいかを1文に両方書く）。
   - `/session-close は終わっているので、このセッションを閉じてよい`: Claude が /session-close 済み。タブを✕してよい
   - `/session-close は不要なので、このセッションを閉じてよい`: 引き継ぎ不要。タブを✕してよい
-  - `/session-close をして（まだ閉じない）`: 作業は終わったが /session-close 未実行。/session-close をする
-  - `まだ閉じない（作業中）`: 作業継続中
+  - `/session-close をして（まだ閉じない・YYYY-MM-DD HH:MM まで待つ）`: 作業は終わったが /session-close 未実行。/session-close をする。こちらも「まだ閉じない」なので何日の何時まで待つかを必ず入れる
+  - `まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）`: 作業継続中。何日の何時まで待つかを必ず入れる（例: `まだ閉じない（作業中・2026-11-02 23:59 まで待つ）`）。期限は待っている相手の作業や自動チェックの期限に合わせ、過ぎたら新しい期限に書き換えるか /session-close を提案する（2026-10-27 nishi 指示・next-action-gate が SESSION-OPEN-NO-DEADLINE / SESSION-OPEN-DEADLINE-PAST で機械検査）
+  - 待つ期限は Stop hook `tools/session-wait-title.mjs` がセッション一覧のタイトルの頭に `【11/02/20:11まで】` の形（年なし）で自動で付け、閉じてよい定型文になったら外す。既存の全セッションにも SessionStart の `--all`（1時間に1回）で当てる（2026-10-27 nishi 指示・全PC全アカウント）
   これらは**セッションの状態を表す語**であって、user が次に押すものではない。
   **ゲートを満たしても user が迷えば説明として失敗**。分類の直後に上の3行を必ず書く。
 - 判定: **user が次の1アクションで迷ったら、その説明は失敗**とみなす。
@@ -510,7 +544,7 @@ kim が過去ログを掘る必要が生じ、その場で恒久ルール化の�
 
 ### 1.6 設定とhook（§1.6〜1.7）
 
-設定の追加は許可済みで、hookはUTF-8と実行環境の定石に従う。
+設定追加は許可済み、hookはUTF-8・実行環境の定石を守る。
 
 **1.6 Claude 設定ファイルは無断編集してよい**
 
@@ -536,7 +570,7 @@ PowerShell hookのstdinは`Read-StdinUtf8`ヘルパーでUTF-8として読む（
 
 ### 1.8〜1.10 プロジェクト立ち上げ
 
-作成・設定・CLI導入は自動化し、人にしかできない操作の準備を済ませる。新規アプリの基盤は Cloudflare に寄せ、秘密は Binding で渡す（§1.10.1）。
+作成・設定・CLI導入は自動化、人にしかできない操作は準備済みに。新規アプリの基盤は Cloudflare に寄せ、秘密は Binding で渡す（§1.10.1）。
 
 **1.8〜1.10 プロジェクト立ち上げの自動化可否・標準シーケンス・CLI導入**
 
@@ -572,7 +606,7 @@ CLI未インストールは「手作業で…」と言わず自分で`winget`/`s
 
 ### 1.11 DWDとアカウント所有権（§1.11〜1.12）
 
-Google APIはDWDを優先し、着手時に各サービスの所有アカウントを宣言する。
+Google APIはDWD優先、着手時にサービス別所有アカウントを宣言。
 
 **1.11 Google API は DWD で OAuth Web Client を完全回避**
 
@@ -599,7 +633,7 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 ### 1.13 トークン効率
 
-出力を簡潔にし、入力キャッシュと用途別委譲でトークンを節約する。
+簡潔出力・入力キャッシュ・用途別委譲でトークン節約。
 
 **1.13 トークン効率（出力・入力キャッシュ・サブエージェント）**
 
@@ -654,7 +688,7 @@ deny/warnはPC・ゲート・復旧手段の到達状況だけを既存通知経
 
 ### 1.15 自律進行・セッション引継ぎ
 
-完了報告で止まらず、目的単位で区切り次セッションへの引継ぎを自動化する。
+完了報告後も進行、目的ごとに区切り次セッションへ自動引継ぎ。
 
 kim 宛の自動通知は「何が起きたか／次に自動でやること／kim がすること」の 3 点を必ず含む（`tools/lib/kim-notice.mjs`）。
 全件羅列・内部 ID のみの通知は禁止。
@@ -944,7 +978,7 @@ Fableは `fable-policy.json` の `planIncluded: true` のアカウントで、�
 
 ### 1.17 Codexへの実装委譲
 
-実装はCodex、設計・指示・レビュー・検証はClaudeが担い、追加費用ゼロの経路を先に検討する。
+Codex実装、Claude設計・指示・レビュー・検証、追加費用ゼロを優先検討。
 
 **1.17 コーディングは Codex を主に使う（Claude Code は指揮官）**
 
@@ -995,7 +1029,7 @@ Astra クールダウン中は Sol を使う。明示の `--model astra`（ま�
 
 ### 1.18 監督と実行レーン
 
-監督の直接実働を抑え、用途別レーンへ委譲し、検証責任と1セッション1目的を維持する。
+監督は実働抑制・用途別委譲、検証責任・1セッション1目的を厳守。
 
 **1.18 監督(Opus)は最小限だけ動き、実働はCodex/Sonnet/Geminiに委譲する**
 
@@ -1020,6 +1054,7 @@ Astra クールダウン中は Sol を使う。明示の `--model astra`（ま�
 - WindowsでCodexが書けないPCは、Claude がその場でWSL経路を復旧する: `wsl --install -d Ubuntu --no-launch` → `wsl -d Ubuntu -u root -- bash -lc "<NodeSource で node 22>; npm i -g @openai/codex"` → `%USERPROFILE%\.codex\auth.json` を WSL の `/root/.codex/` へコピー → `codex login status` → codex-do で1ファイル作成を実測（2026-10-09 nishi-PC 実測: WSL 本体が入っていれば管理者権限・再起動とも不要）。
 
 **他AIレーンが落ちたら、その場で直す。代替や Claude 本体へ逃げて放置しない（2026-10-09 nishi 厳命）**。user のコストパフォーマンスが最優先で、Claude 本体はいちばん高い経路。
+- **全PC・全アカウント・無人セッションで強制**: `lane-repair-first-gate` が修復可能な故障を検知すると本体の編集・通常作業を block する。最初に `node tools/lane-doctor.mjs --probe`。健全化するか、修復を試して `node tools/lane-repair-log.mjs --lane <名> --tried "<試した手段>" --result fixed|unfixable` に記録して解除（6時間有効）。同一故障の修復不可が3回続いたら1回 notify-kim に通知する。reset の分かる429/usage_limitは `quota_wait` として修復対象から外し、SessionStart に示す代替の安いレーンへ回す。実呼び出し24hで5件以上・非quota失敗率50%以上なら probe 成功でも故障。Codex probe_failed は直接 WSL 実行の終了コードでも切り分ける。
 - 失敗出力から原因を特定し、Claude が実行できる修理（環境導入・認証の引き継ぎ・設定修正）をそのターン中に試す。修理後は1回実行して成功を実測する。
 - 応答に `[LANE-REPAIR] <レーン>: 修復済み <内容>` か `[LANE-REPAIR] <レーン>: 修復不可 試行: <試した手段>` を書く。Stop hook の `lane-abandonment-gate` が、失敗シグナルのあるターンでこの行が無いと block する（`[LANE-FALLBACK]` 1行だけでは通らない）。
 - `delegation-health-check` は環境故障（WSL 不在・spawn 失敗・未認証）と「3件以上すべて失敗したレーン」（`lane_outage_unrepaired`）を high＋修理タスクで出す。朝に出ていたら、その日の作業より先に直す。
@@ -1048,7 +1083,7 @@ Fable/Opus本体の直接ツール実行は1ターン4回で警告、8回で停�
 
 ### 1.18.2 Grok Bot = 「ブラウザ実操作が要るから Claude では消せなかった手作業」の消し先（2026-09-17 導入）
 
-Claude Code / Codex / 安いLLM はすべて **API があるものしか触れない**。だから「管理画面で承認ボタンを押す」「API の無い SaaS にログインして手続きする」類の作業は §1.1 の最上位原則（user の手作業を極限まで減らす）に反したまま user に残っていた。**この残りを Grok Bot が引き取る。**
+Claude Code・Codex・安いLLMは**APIがあるものしか触れない**。だから「管理画面で承認ボタンを押す」「API の無い SaaS にログインして手続きする」類の作業は §1.1 の最上位原則（user の手作業を極限まで減らす）に反したまま user に残っていた。**この残りを Grok Bot が引き取る。**
 
 - **正体**: xAI の自律エージェント。アカウントごとに永続クラウドPC（Linux microVM／ブラウザ＋ファイルシステム＋ターミナル）が割り当てられ、**ローカルPCの電源が落ちていても24/7でクラウド側が動く**。API の無いサービスも人間と同じようにログインして操作する。実演1回で「スキル」として学習し、定期実行の「ルーティン」にできる。2FA・CAPTCHA・重要操作（送信／課金／本番反映）では停止して人に承認を求める。
 - **契約**: **Cursor Pro $20/月**（全有料 individual プランに Grok Bot access が含まれる。Pro+ $60 / Ultra $200 は枠が増えるだけ）。SuperGrok / SuperGrok Plus / Heavy のリンクでも可。**Cursor Teams $40/席は不要** — SSO・集中請求・Bugbot が要らないなら倍額の価値はなく、個人 Pro を kim のカードで複数件登録すれば集中請求も代替できる。
@@ -1088,7 +1123,7 @@ Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM などの�
 
 ### 1.19 マキモノと画像デザイン／見せる資料はハイブリッド企画書モデル
 
-完成済み指示書を探してから着手する（画像デザインと見せる資料は下の 1.19.1／1.19.2）。
+完成済み指示書を探し着手（画像・資料: §1.19.1／1.19.2）。
 
 **1.19 マキモノ（AI指示書マーケット）を必ず経由する**
 
@@ -1106,7 +1141,7 @@ Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM などの�
 
 ### 1.19.1 「ChatGPTでデザインして」と言われたら Claude が上書きしない
 
-見た目のデザインを「ChatGPTで作って」と依頼されたら、**実際にOpenAIの画像生成に作らせ、その見た目に忠実に実装する**。Claude Codeが自分のCSSの好みで再解釈・簡略化するのは禁止（配色・レイアウト・アイコン・画像は生成結果に追従し、Claudeはテキスト・構成・データ配線に徹する）。
+「ChatGPTで作って」のデザインは**OpenAI画像生成で作り忠実に実装**。Claude Codeが自分のCSSの好みで再解釈・簡略化するのは禁止（配色・レイアウト・アイコン・画像は生成結果に追従し、Claudeはテキスト・構成・データ配線に徹する）。
 
 - **Codex CLIで代用しない**。ChatGPTアカウントでログインしていてもCodexは**コード専用で画像を作れない**。画像は `gpt-image-1`（`/v1/images/generations`、または `/v1/responses` の `image_generation` tool）を直接叩く。chatgpt.comと同じ「スクショを見せて反復修正」は `/v1/responses` + `previous_response_id` で再現する
 - **複数枚が要る時は1枚のコンタクトシートを生成して切り出す**。1枚ずつ個別生成すると照明・色味がバラバラになり「同じブランドの写真」に見えない。「3列×2行、全パネル同一トンマナ」で1枚生成→`sharp`でcrop/composite
@@ -1118,7 +1153,7 @@ Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM などの�
 
 ### 1.19.2 見せる資料はハイブリッド企画書モデルで作る（Claude組版 × Gemini写真ビジュアル × Genspark配置参照）（kim 2026-09-19 決定・全PC）
 
-見せる資料はハイブリッド企画書モデル（Claude組版×Gemini写真×Genspark参照）。Claude単独版は写真で3回、Genspark単独版は数字・テキストで差し戻し、ハイブリッド v4 で承認された。実測（写真 / 余白 / 文字量）は Claude単独 3 / 3 / 2、Genspark単独 5 / 4 / 4（文字NG）、ハイブリッド v4 は全項目4〜5。
+Claude組版×Gemini写真×Genspark配置参照。Claude単独版は写真で3回、Genspark単独版は数字・テキストで差し戻し、ハイブリッド v4 で承認された。実測（写真 / 余白 / 文字量）は Claude単独 3 / 3 / 2、Genspark単独 5 / 4 / 4（文字NG）、ハイブリッド v4 は全項目4〜5。
 
 | 担当 | 役割 | やらないこと |
 |---|---|---|
@@ -1136,7 +1171,7 @@ Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM などの�
 
 ### 1.20 auto mode classifier と共存する Bash 規約
 
-Bashは1呼び出し1コマンドとし、専用ツールとallow済みの経路を使う。
+Bashは1呼出1コマンド、専用ツール・allow済み経路を使う。
 
 - bypass 移行後も Bash 規約は維持する（allow 不一致で止まらなくなっても、連結・パイプは Codex hang と読みにくさの原因）。
 
@@ -1150,7 +1185,7 @@ Bashは1呼び出し1コマンドとし、専用ツールとallow済みの経路
 
 ### 1.21 司令塔プロトコルの差分運用
 
-実行役への指示は`protocols/HANDOFF.md`、前提が変わり得る判断は`protocols/DECISION-TEMPLATE.md`を使う。
+実行指示: `protocols/HANDOFF.md`、前提可変の判断: `protocols/DECISION-TEMPLATE.md`。
 同じ学びはmemory frontmatterの`metadata.count`で数え、3回または重大事故1回でPROMOTEする。
 仕組み化は提案で止めず、実装・試験・有効化後に`PROMOTED`と昇格先を記録する。
 バッチ・移行・一括処理は`TOTAL INPUT = SUCCESS + FAILED + EXCLUDED + UNRECOGNIZED`を照合する。
@@ -1202,7 +1237,7 @@ Stop ゲートは差し戻し後の書き直しも検査する（素通り禁止
 
 ### 2.1 データ・文書・外部ツール（§2.1〜2.7）
 
-データを捏造せず、辞書・仕様を実装と一致させ、各外部ツールの操作規約を守る。
+捏造禁止、辞書・仕様は実装と一致、外部ツール別の操作規約遵守。
 
 - 備品管理表（全体）『備品在庫管理表』の K列（現在在庫数）は関数列。K には何も書かない（在庫数は E列）。K を跨ぐ範囲は分けて書く。bihin-kcol-gate が止める（2026-10-23 古川さん依頼）。
 
@@ -1255,7 +1290,7 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 ### 2.8 AI費用・夜間処理・無人運転
 
-用途別に費用を最適化し、遅延可能な処理は夜間化し、無人処理には試行上限と監視を設ける。
+用途別費用最適化、遅延可能処理は夜間へ、無人処理は試行上限・監視必須。
 
 **2.8 API（LLM）コスト最適化**
 
@@ -1325,7 +1360,7 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 ### 2.9 Drive・共通知識・社内アプリ・イベント（§2.9〜2.12）
 
-Drive・知識の正本管理を守り、社内アプリに投稿窓口と通知（`tools/feedback-kit/`）、システムを使うイベント案件にアナログ代替を必須とする。
+Drive・知識は正本管理、社内アプリは投稿窓口・通知（`tools/feedback-kit/`）、システム利用イベントはアナログ代替必須。
 
 **ユーザー・他人に渡す成果物（PDF/画像/文書/表/ZIP 等）はすべて Google Drive にアップし、リンクを貼って渡す。** ローカルパス（Desktop 等）や SendUserFile・チャット添付だけで渡したら未完了（スマホ併用で開けず、他人にも渡せないため）。
 **置き場:** 案件に属するデータは**その案件の制作フォルダ**（Drive で `制作フォルダ`・案件コード `C0040` 等・顧客名で検索して特定する）。案件外のものは「作業ファイル」直下。
@@ -1355,7 +1390,7 @@ Claude新規作成は標準フォルダ「作業ファイル」直下（既存�
 
 **社員が使う自社 Web アプリは、アプリ内から不具合・要望を投稿できる窓口を必ず持たせる**（社員→kim→開発者 の手動橋渡しを廃止するため）。新規アプリを作る時・既存アプリを触る時に未搭載なら、その場で導入する。実装は都度書かず**標準パッケージ `tools/feedback-kit/`** を使う。kit は GAS / Next.js の両方を1コマンドで導入する入口で、内部で `tools/feedback-kit/gas/`（GAS）と `tools/feedback-kit/widget/`（Next.js）を呼ぶ（ドロップイン・npm依存ゼロ・Tailwind非依存のinline style・Supabase無しでもDiscord通知のみで動く3モード）。
 
-**必須6機能（`tools/feedback-kit/kit.json` の `requiredFeatures`。1つでも欠けたら未導入扱い）**:
+**必須7機能（`tools/feedback-kit/kit.json` の `requiredFeatures`。1つでも欠けたら未導入扱い）**:
 
 | 機能 | 内容 |
 |---|---|
@@ -1365,6 +1400,7 @@ Claude新規作成は標準フォルダ「作業ファイル」直下（既存�
 | `notify-on-submit` | 投稿時に kim と開発者（`FEEDBACK_OWNER_DISCORD_ID`）へ DM |
 | `dm-submitter-on-done` | 対応完了時に投稿者本人へ DM |
 | `zero-backlog-registered` | 滞留ゼロ巡回（`tools/feedback-zero-registry.json`）に登録済み |
+| `submitter-history-link` | フォームと送信完了表示に「送信した内容・対応状況を見る」リンク（`data-feedback-history-link`）。送信者が自分の投稿と状態を後から確認できる（Next.js は `/feedback/mine`、GAS は記録シートか `FEEDBACK_HISTORY_URL`）。「送った内容はどこで見られる？」という問い合わせを起こさないため（2026-10-27 辻さん質問・nishi 指示） |
 
 1行導入（正本リポジトリ orgiast-claude-rules、または `tools/` が自動配布された各PCの共通ルールフォルダで実行。kit は `tools/feedback-kit/` 一式で動くため単体ファイルの取得では動かない）:
 
@@ -1372,7 +1408,7 @@ Claude新規作成は標準フォルダ「作業ファイル」直下（既存�
 node tools/feedback-kit/install.mjs --app <対象アプリのパス> --name "<アプリ名>"
 ```
 
-既存アプリの更新は `node tools/feedback-kit/install.mjs --app <対象アプリのパス> --upgrade`（旧フォームは `.feedback-kit-backup/` へ退避してから置換）。導入後は `node tools/feedback-kit/verify.mjs --app <対象アプリのパス>` が必須6機能の欠落を JSON で返す（欠落があれば exit 1）。実投稿+read-back検証は `node tools/feedback-kit/widget/verify.mjs --url <本番URL>`（Next.js）まで通してから完了とする（§1.4）。開発側の対応キューは `node scripts/list-feedback.mjs`。**任意staffの自由記述が本番コードを無人で駆動しない**（実装はkimトリガ or レビューゲート付き）。仕様・手移植手順（Pages Router/Remix等）: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/feedback-kit/widget/INSTALL.md`
+既存アプリの更新は `node tools/feedback-kit/install.mjs --app <対象アプリのパス> --upgrade`（旧フォームは `.feedback-kit-backup/` へ退避してから置換）。導入後は `node tools/feedback-kit/verify.mjs --app <対象アプリのパス>` が必須7機能の欠落を JSON で返す（欠落があれば exit 1）。実投稿+read-back検証は `node tools/feedback-kit/widget/verify.mjs --url <本番URL>`（Next.js）まで通してから完了とする（§1.4）。開発側の対応キューは `node scripts/list-feedback.mjs`。**任意staffの自由記述が本番コードを無人で駆動しない**（実装はkimトリガ or レビューゲート付き）。仕様・手移植手順（Pages Router/Remix等）: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/feedback-kit/widget/INSTALL.md`
 
 **GAS（Apps Script / スプレッドシート業務アプリ）は `tools/feedback-kit/gas/` を使う**。方式Aは `FeedbackRelay.js` / `FeedbackForm.html` と `doGet` への追加、方式Bは社員が開く HTML に共通フォームへのリンクを1本置く方式。機微データを持つアプリは INSTALL.md の方式Bを使い、公開範囲やスコープを変更しない。共通フォーム URL は public リポには書かず、非公開 keyserve から `~/.claude/feedback-relay.env` の `FEEDBACK_SHARED_FORM_URL` へ配布する。新規PCはインストール時、既存PCは SessionStart の `onboarding-sync.mjs` で取得・キー単位マージされる。即時取得: 正本リポジトリで `node tools/onboarding-sync.mjs --keys-only --force`。ゲートを再実行すれば、その場で貼れる方式Bリンク（フォルダ名をアプリ名としてエンコード済み）が表示される。手順・検証: `tools/feedback-kit/gas/INSTALL.md`。
 
@@ -1406,6 +1442,14 @@ node tools/feedback-kit/install.mjs --app <対象アプリのパス> --name "<�
 
 **事故（2026-10-20）**: 上海ラクトコンサルティング様 JINS様決起会（261020RA）で、当日運営中に案件で使ったシステム（抽選・クイズ進行）が遅延し、運営に支障が出た。「システムが動かなくなったらどうするか」は事前に何度も話題になっていたが、具体的な代替（紙・台本・切替判断）が準備されていなかった。話し合っただけで準備物と練習に落とさなかったことが原因のため、**チェック項目・成果物（タブ）・リハでの切替実施**まで必須にした。
 
+**2.13 締切と数量には必ず20%以上のバッファを組む**（kim 2026-10-27 厳命・全PC全アカウント・全業務）本当の締切・本当に必要な数量に対して、依頼・発注・手配・スケジュールはすべて **20%以上のバッファ** を組む。何かあったときにリカバリし、認識違いがあったときに修正してもらう時間と余裕を残すため。外注・社内依頼・発注・印刷・人員・機材・資料・自分の作業予定まで、例外なく全業務に適用する。
+
+- **締切**: 今日から本当の締切までの日数の20%以上（端数は切り上げ、迷ったら多め）を前倒しした日を、相手への締切にする。例: 先方への提出が 11/10 で今日が 10/27（14日）なら、外注への最終締切は 4日前の 11/6。
+- **数量**: 本当に必要な数 × 1.2 以上（端数切り上げ）で発注・手配する。
+- バッファを入れた日が相手の休日に当たるなら、さらに前の稼働日にする（相手の稼働日を先に確認する）。
+- 相手に伝えるのはバッファ込みの締切・数量。本当の締切・必要数は社内の管理表（案件管理表・実施計画書）に併記する。
+- スケジュールや依頼文を出すときは「本当の締切 / バッファ込み締切」を Claude が自分で計算して入れる。user に計算させない。
+
 ---
 
 
@@ -1415,7 +1459,7 @@ node tools/feedback-kit/install.mjs --app <対象アプリのパス> --name "<�
 
 ### 3.0 自動取込・巡回・自己更新（§3.0〜3.0.5）
 
-各PCは自動取込・自己更新・コスト点検を行い、setup --convergeでallowルールが入る。
+各PCで自動取込・自己更新・コスト点検、setup --convergeでallow追加。
 
 **3.0 自動取り込み / 3.0.1 完全自動巡回 / 3.0.2 日次コスト自己申告 / 3.0.3 対話ループ**
 

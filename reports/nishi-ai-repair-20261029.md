@@ -42,7 +42,7 @@
 
 **修正内容:** WSL root、Windows homeからのWSL native home、`CODEX_HOME/sessions` を探索対象へ追加。WSLの二重UNC別名を同時走査しない。モデル別表示は実測モデル一覧から生成。
 
-**実測結果:** `CODEX_HOME=/root/.codex node --input-type=module -e 'import {collectCodexUsage} from "./tools/usage-stats.mjs"; console.log(JSON.stringify(collectCodexUsage({home:"/tmp/nishi-measured",includePatchLines:true})))'` → `outputTokens:1155279, sessions:321, added:3207, deleted:146`。生成指示書は `out 1,155,279 tok / 321セッション`、`28.0% (Codex ±3,353行 / Claude手打ち ±8,639行)`。台帳の呼び出し回数とセッションログ件数は異なる母集団なので同一視しない。新モデル表示は実ファイル生成のテストでも `gpt-6.1-sol 1セッション/1.2k tok` を確認。
+**実測結果:** `CODEX_HOME=/root/.codex node --input-type=module -e 'import {collectCodexUsage} from "./tools/usage-stats.mjs"; console.log(JSON.stringify(collectCodexUsage({home:"/tmp/nishi-measured",includePatchLines:true})))'` → `outputTokens:1155279, sessions:321, added:3207, deleted:146`。生成指示書は `out 1,155,279 tok / 321セッション`、`28.0% (Codex ±3,353行 / Claude手打ち ±8,639行)`。台帳の呼び出し回数とセッションログ件数は異なる母集団なので同一視しない。最終コードの再生成も exit 0。作業中の追記により `out 1,161,753 tok / 321セッション`、モデル内訳 `gpt-6.1-sol 321セッション/1161.8k tok` を実ファイルで確認。新モデル表示の回帰テストも成功。
 
 **PR URL:** 未作成（共通の認証制約）。
 

@@ -117,3 +117,57 @@ C1旧証拠保持。C2全セッションの再発分類、C3現在GAS配備/認�
 stop_reason=budget（8/8消費、scope-boundaryも未解消）。この契約で新規試行は開始しない。残件の実施には正規Git書込環境、全必須収集方式と契約の整合、および累積上限を維持した次の方針判断が必要。未完了をFINALとしない。
 
 試行008のコミット未成立。git add終了128（index.lock: Read-only file system）。指定git commit -F /tmp/quota-sweep-008-commit.txt -- docs/handoff-audit-a951f0622fc4be2e-recheck.mdは終了1（未追跡pathspec）。008-commit.jsonに一次結果を保存。.loopは対象外。HEAD不変。
+
+## 2026-10-29 状態不整合の復旧（1メッセージのみ）
+
+2026-10-29T03:23:03.995911+00:00、HEAD `7768c58cf2557aa626b613e791dc0fb13d39f735`、branch `quota-sweep/20261029-0321-codex-mvsz8edp`。開始時state=0、budget=1を読み暫定2として予約したが、既存文書の同一契約a951f0622fc4be2e-v1には既に試行008までの累積消費が記録されていた。減算禁止・上限8を優先しbudget/stateを8へ復旧。暫定予約番号は既存試行002と重複するため、新規試行の証拠として扱わない。新規スキャン・テスト・実装修正は行わず、結果照合と報告のみで停止した。
+
+今回の生証拠は `.loop/quota-sweep-codex-a951f0622fc4be2e/reconcile-20261029.json`。以前のC1確認済み等は過去時点の記録であり、今回再検証した主張ではない。C2全実セッション分類、C3現在GAS配備・認証、C4必須全テスト収集/成功、C5独立レビューが未達。契約本文の `node --test tools/` とINDEXのglob表記に差があるが、今回これを読み替えて合格にはしない。
+
+stop_reason=budget。開始時の追跡済み差分なし（git status --short --untracked-files=no終了0）。他作業・別ループを変更せず、外部送信・kim DM・権限変更・配備・push/PR/merge・新規エージェント・バックグラウンド子プロセスなし。上限をリセットせず、残件と実行環境について明示的な次方針が得られるまで新規試行を開始しない。
+
+今回の指定コミットは終了128。git addおよび `git commit -F /tmp/quota-sweep-reconcile-20261029.txt -- docs/handoff-audit-a951f0622fc4be2e-recheck.md` とも共有Git領域のindex.lock作成がRead-only file systemで失敗した。証拠はreconcile-20261029-commit.json。コミット未成立、.loopは対象外。
+
+## 2026-10-29T03:24:54.144546+00:00 上限到達後の結果照合
+
+同一契約のstate累積8/8に対しbudget ticks=2を確認。大きい値8へ復旧し、追加消費・新規試行は行わない。HEAD 7768c58cf2557aa626b613e791dc0fb13d39f735、branch quota-sweep/20261029-0321-codex-mvsz8edp。開始差分は本監査文書のみ。C1は過去記録、C2全セッション分類、C3現在GAS配備/認証、C4全必須テスト収集/成功、C5独立レビューは未達。新規スキャン・テスト・実装修正は実施せず、再発0件とは判定しない。stop_reason=budget。別ループ・バックグラウンド子プロセス・新規エージェント・外部送信・kim DM・権限変更・配備・push/PR/mergeなし。
+
+指定コミット結果: 終了128。コミット未成立。一次stderr: fatal: Unable to create '/mnt/c/Users/user/.claude/nightly-repo/.git/worktrees/quota-sweep-repo/index.lock': Read-only file system `.loop/` は対象外。証拠: `.loop/quota-sweep-codex-a951f0622fc4be2e/reconcile-current.json`。
+
+## 2026-10-29T03:26:22.882721+00:00 上限到達の再照合
+
+state=8/8、budget=3の不一致を大きい値8へ復旧。新規試行は予約せず、調査・実装・テストは行っていない。開始差分は本監査文書のみ。C1は過去証拠のみ、C2全実セッション分類、C3現在GAS配備/認証、C4必須全テスト収集/成功、C5独立レビューは未達。stop_reason=budget。前景の探索findはSIGINT終了130で停止済み。別ループ・バックグラウンド子プロセス・新規エージェント・外部送信・権限変更・配備・push/PR/mergeなし。コミット結果は `.loop/quota-sweep-codex-a951f0622fc4be2e/reconcile-budget3.json` に保存する。.loopはコミット対象外。
+
+指定コミット終了128。コミット未成立。fatal: Unable to create '/mnt/c/Users/user/.claude/nightly-repo/.git/worktrees/quota-sweep-repo/index.lock': Read-only file system
+
+## 2026-10-29T03:27:43.275254+00:00 上限到達後の照合
+
+state=8/8、budget=4の不一致を8へ復旧。追加試行なし。新規スキャン・実装修正・テストなし。C1は過去記録のみ、C2全実セッション分類、C3現在GAS配備/認証、C4必須全テスト収集/成功、C5独立レビューは未達。stop_reason=budget。開始差分は本監査文書のみ。他作業を保持し、別ループ・バックグラウンド子プロセス・新規エージェント・送信・権限変更・配備・push/PR/mergeなし。指定コミットの一次結果: `.loop/quota-sweep-codex-a951f0622fc4be2e/reconcile-budget4.json`。.loopは対象外。
+
+指定コミット終了128。コミット未成立。fatal: Unable to create '/mnt/c/Users/user/.claude/nightly-repo/.git/worktrees/quota-sweep-repo/index.lock': Read-only file system
+
+## 2026-10-29T03:28:45.278991+00:00 上限到達後の照合
+
+state=8/8、budget=5の不一致を大きい値8へ復旧。新規試行・スキャン・実装・テストなし。C1は過去証拠のみ、C2全実セッション分類、C3現在GAS配備/認証、C4必須全テスト収集/成功、C5独立レビューは未達。stop_reason=budget。別ループ・バックグラウンド子プロセス・新規エージェント・外部送信・権限変更・配備・push/PR/mergeなし。指定コミットの一次結果は `.loop/quota-sweep-codex-a951f0622fc4be2e/reconcile-budget5.json` に保存。.loopはコミット対象外。
+
+指定コミット終了128、未成立。fatal: Unable to create '/mnt/c/Users/user/.claude/nightly-repo/.git/worktrees/quota-sweep-repo/index.lock': Read-only file system
+
+## 2026-10-29T03:30:19.371454+00:00 上限到達後の結果照合
+
+state=8/8、budget=6の不一致を大きい値8へ復旧。追加試行なし。新規スキャン・実装・テストなし。C1は過去記録のみ。C2全実セッション分類、C3現在GAS配備/認証、C4必須全テスト収集/成功、C5独立レビューは未達。stop_reason=budget。別ループ・バックグラウンド子プロセス・新規エージェント・外部送信・権限変更・配備・push/PR/mergeなし。指定コミットの証跡: `.loop/quota-sweep-codex-a951f0622fc4be2e/reconcile-budget6.json`。.loopは対象外。
+
+指定コミット終了128、未成立。fatal: Unable to create '/mnt/c/Users/user/.claude/nightly-repo/.git/worktrees/quota-sweep-repo/index.lock': Read-only file system
+
+
+## 2026-10-29T03:31:35.957145+00:00 上限到達後の結果照合
+
+state=8/8、budget=7の不一致を大きい値8へ復旧。追加試行なし。新規スキャン・実装・テストなし。C1は過去記録のみ。C2全実セッション分類、C3現在GAS配備/認証、C4必須全テスト収集/成功、C5独立レビューは未達。stop_reason=budget。他作業を保持。探索findはSIGINT終了130で停止済み。別ループ・バックグラウンド子プロセス・新規エージェント・外部送信・権限変更・配備・push/PR/mergeなし。指定コミット証跡: `.loop/quota-sweep-codex-a951f0622fc4be2e/reconcile-budget7.json`。.loopは対象外。
+
+指定コミット終了128、未成立。fatal: Unable to create '/mnt/c/Users/user/.claude/nightly-repo/.git/worktrees/quota-sweep-repo/index.lock': Read-only file system
+
+
+## 2026-10-29T03:32:44.934003+00:00 累積上限の確認
+
+state=8/8、budget=8で一致。新規試行・スキャン・実装・テストは行わず、結果照合のみで停止。C1は過去記録のみ。C2全実セッション分類、C3現在GAS実配備・認証、C4必須全テスト収集・成功、C5独立レビューが未達。stop_reason=budget。他作業を保持。別ループ・バックグラウンド子プロセス・新規エージェント・外部送信・権限変更・配備・push/PR/mergeなし。指定コミット証跡: `.loop/quota-sweep-codex-a951f0622fc4be2e/reconcile-budget8.json`。`.loop/`はコミット対象外。
+
+指定コミット終了128、未成立。一次stderr: fatal: Unable to create '/mnt/c/Users/user/.claude/nightly-repo/.git/worktrees/quota-sweep-repo/index.lock': Read-only file system

@@ -39,6 +39,18 @@ export async function sampleCpuBusy({ sampleMs = 5000, cpusImpl = os.cpus, sleep
   const busy = (dTotal - dIdle) / dTotal;
   return Math.max(0, Math.min(1, busy));
 }
+// 監督モデルは既定で planIncluded に従う（true なら Fable）。PC ごとに変えたいときは
+// objective.md の JSON に "model": "claude-opus-5-5" のように書く（2026-10-29 nishi:
+// 「オートパイロットをオーパスに変えて」。共有リポジトリの既定を変えると他 PC まで変わるため）。
+// claude- 以外や、planIncluded=false での Fable 指定は無視して既定に戻す。
+export function supervisorModel(objectiveFile, policy) {
+  const fallback = fableAllowedForSupervisor(policy) ? 'claude-fable-5-1' : 'claude-opus-5';
+  let pinned = '';
+  try { pinned = JSON.parse(fs.readFileSync(objectiveFile, 'utf8').match(/```json\s*\n([\s\S]*?)\n```/)[1]).model; } catch {}
+  if (typeof pinned !== 'string' || !/^claude-[a-z0-9-]+$/.test(pinned)) return fallback;
+  if (/fable/.test(pinned) && !fableAllowedForSupervisor(policy)) return fallback;
+  return pinned;
+}
 export function buildWatchPrompt(watch, repo = REPO) {
   return `autopilot の「見張り」を1件だけ確かめる。実装・修正・外部への送信はしない（読む・数える・ログを見るだけ）。
 
@@ -135,7 +147,7 @@ export async function runOnce(options = {}) {
       if (watch) {
         // 完了・停止中でも見張りは確かめる。そうしないと「完了」のまま誰も結果を見ない。
         const policy = options.policy || loadFablePolicy();
-        const model = auth.model || (fableAllowedForSupervisor(policy) ? 'claude-fable-5-1' : 'claude-opus-5');
+        const model = auth.model || supervisorModel(paths.objective, policy);
         const repo = options.repo || REPO;
         const executable = options.executable || (await resolveClaudeExecutableFromDisk()).executable;
         const checked = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'], prompt: buildWatchPrompt(watch, repo), cwd: repo,
@@ -170,7 +182,7 @@ export async function runOnce(options = {}) {
     }
     const before = await runAutopilot('status', {}, options);
     const policy = options.policy || loadFablePolicy();
-    const model = auth.model || (fableAllowedForSupervisor(policy) ? 'claude-fable-5-1' : 'claude-opus-5');
+    const model = auth.model || supervisorModel(paths.objective, policy);
     const repo = options.repo || REPO;
     const executable = options.executable || (await resolveClaudeExecutableFromDisk()).executable;
     const timeoutMs = options.timeoutMs ?? 40 * 60_000;

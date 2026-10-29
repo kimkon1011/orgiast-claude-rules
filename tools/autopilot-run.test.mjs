@@ -57,6 +57,27 @@ test('models follow planIncluded; prompt comes from skill and headless uses one 
   }
 });
 
+test('objective.md "model" pins the supervisor model per PC; fable pin is ignored when plan excludes it', async (t) => {
+  for (const [pin, policy, model] of [
+    ['claude-opus-5-5', { planIncluded: true }, 'claude-opus-5-5'],
+    ['claude-fable-5-1', { planIncluded: false }, 'claude-opus-5'],
+    ['gpt-5; rm -rf /', { planIncluded: true }, 'claude-fable-5-1'],
+  ]) {
+    const opts = fixture(t);
+    await runAutopilot('start', { objective: 'test' }, opts);
+    const file = path.join(opts.dir, 'objective.md');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/("objective":\s*"test")/, `$1, "model": ${JSON.stringify(pin)}`));
+    let seen = '';
+    const result = await runOnce({ ...opts, policy, executable: 'fake-claude', invokeImpl: async (invocation) => {
+      seen = invocation.args[2];
+      await runAutopilot('post', { summary: 'work verified', progress: 10, codex: true }, opts);
+      return { exitCode: 0, stdout: '' };
+    } });
+    assert.equal(seen, model);
+    assert.equal(result.model, model);
+  }
+});
+
 test('repeated missing posts are counted and trip the noop watchdog', async (t) => {
   const opts = fixture(t);
   await runAutopilot('start', { objective: 'test', 'max-noop': 2 }, opts);

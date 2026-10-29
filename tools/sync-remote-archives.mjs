@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
+import { hostExitArchive } from './lib/host-exit-archive.mjs';
 
 const COOLDOWN = 5 * 60_000;
 const TAIL = 512 * 1024;
@@ -53,7 +54,7 @@ export function resumedAfter(file, archivedAt) {
 export async function syncRemoteArchives({ base = path.join(os.homedir(), '.claude'), now = Date.now(), fetchImpl = fetch, dryRun = false, since } = {}) {
   if (since !== undefined && (!dryRun || !Number.isFinite(Date.parse(since)))) throw new Error('--since requires --dry-run and an ISO date');
   const deadline = Date.now() + 60_000;
-  const result = { listed: 0, candidates: 0, queued: 0, skippedResumed: 0, skippedKept: 0, eventsFetched: 0, failed: 0 };
+  const result = { listed: 0, candidates: 0, queued: 0, skippedHostExit: 0, skippedResumed: 0, skippedKept: 0, eventsFetched: 0, failed: 0 };
   if (dryRun) result.sessions = [];
   const stateFile = path.join(base, 'sync-remote-archives-state.json');
   const state = json(stateFile);
@@ -104,6 +105,8 @@ export async function syncRemoteArchives({ base = path.join(os.homedir(), '.clau
         const event = (events.data ?? []).find(e => e.payload?.request?.subtype === 'end_session' && e.payload.request.reason === 'archived');
         const archivedAt = Date.parse(event?.created_at);
         if (!(archivedAt >= baseline)) continue;
+        // PC 側終了で本体が自動アーカイブしたものは restore-remote-sessions が戻すので、ローカルも退避しない。
+        if (hostExitArchive(events.data ?? [])) { result.skippedHostExit++; continue; }
         if (Date.now() >= deadline) return { ...result, limited: true };
         if (resumedAfter(local.file, archivedAt)) { result.skippedResumed++; continue; }
         // 書き込み直前に読み直し、復元済み ID や他の同期が追加した項目を保持する。

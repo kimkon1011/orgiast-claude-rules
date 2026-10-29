@@ -23,11 +23,11 @@ function fixture(t) {
   const state = () => put('sync-remote-archives-state.json', { at: now - 600_000, since: now - 300_000 });
   const read = name => JSON.parse(fs.readFileSync(path.join(base, name), 'utf8'));
   const calls = [];
-  const server = (sessions, archived = iso(-120_000)) => async (url, options) => {
+  const server = (sessions, archived = iso(-120_000), extraEvents = []) => async (url, options) => {
     calls.push(url);
     assert.equal(options.headers['anthropic-beta'], 'ccr-byoc-2025-07-29');
     assert.ok(options.signal instanceof AbortSignal);
-    return reply({ data: url.includes('/events?') ? [{ created_at: archived, payload: { request: { subtype: 'end_session', reason: 'archived' } } }] : sessions });
+    return reply({ data: url.includes('/events?') ? [{ created_at: archived, payload: { request: { subtype: 'end_session', reason: 'archived' } } }, ...extraEvents] : sessions });
   };
   const remote = (id, status = 'archived', updated_at = iso(-60_000)) => ({ id: `cse_${id}`, title: `会話 ${id}`, status, updated_at });
   return { base, put, session, state, read, server, remote, calls };
@@ -42,6 +42,35 @@ test('archives after since are queued once; baseline survives cooldown and subse
   assert.equal((await syncRemoteArchives({ ...options, now: now + 600_000 })).queued, 0);
   assert.equal(f.read('sync-remote-archives-state.json').since, now - 300_000);
 });
+
+for (const [label, extraEvents, expected] of [
+  ['host_exit immediately before archive', [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: iso(-121_000) }], 0],
+  ['no host_exit', [], 1],
+  ['host_exit ten minutes before archive', [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: iso(-720_000) }], 1],
+  ['older automatic archive before latest manual archive', [
+    { created_at: iso(-720_000), payload: { request: { subtype: 'end_session', reason: 'archived' } } },
+    { event_type: 'system', payload: { reason: 'host_exit' }, created_at: iso(-721_000) },
+  ], 1],
+]) {
+  for (const dryRun of [false, true]) {
+    test(`archive sync ${dryRun ? 'dry-run' : 'write'}: ${label}`, async t => {
+      const f = fixture(t); f.state();
+      const file = f.session('a');
+      const before = fs.readFileSync(file, 'utf8');
+      const result = await syncRemoteArchives({ base: f.base, now, dryRun,
+        fetchImpl: f.server([f.remote('a')], iso(-120_000), extraEvents) });
+      assert.equal(result.candidates, 1);
+      assert.equal(result.eventsFetched, 1);
+      assert.equal(result.failed, 0);
+      assert.equal(result.queued, expected);
+      assert.equal(result.skippedHostExit, 1 - expected);
+      assert.equal(fs.existsSync(path.join(f.base, 'remote-archived-sessions.json')), !dryRun && expected === 1);
+      assert.equal(fs.readFileSync(file, 'utf8'), before);
+      if (dryRun) assert.equal(result.sessions.length, expected);
+      else if (expected) assert.equal(f.read('remote-archived-sessions.json').ids[0].sessionId, 'a');
+    });
+  }
+}
 
 test('first invocation fixes since=now and permanently excludes older archives', async t => {
   const f = fixture(t); f.session('a');

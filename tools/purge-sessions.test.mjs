@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync, spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dropClosed } from './purge-sessions.mjs';
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const script = path.join(dir, 'purge-sessions.mjs');
@@ -97,7 +97,7 @@ test('file cap rotates the cursor so retained sessions cannot starve later files
 test('hook returns while stdin is open, launches one shot and honors cooldown', async t => {
   const f = fixture(t); f.session('empty', []);
   // このテストはローカル退避の起動を検証する。補助処理はクールダウン中にして競合を避ける。
-  for (const name of ['purge-remote-sessions', 'sync-remote-titles', 'sync-remote-archives', 'mobile-standby-status']) {
+  for (const name of ['purge-remote-sessions', 'restore-remote-sessions', 'sync-remote-titles', 'sync-remote-archives', 'mobile-standby-status']) {
     f.put(`${name}-state.json`, JSON.stringify({ at: Date.now(), since: Date.now() }));
   }
   const start = Date.now();
@@ -113,6 +113,54 @@ test('hook returns while stdin is open, launches one shot and honors cooldown', 
   const hook = spawnSync(process.execPath, [script, '--hook'], {env:f.env,encoding:'utf8'});
   assert.equal(hook.status, 0); assert.equal(hook.stdout, '');
   assert.equal(fs.readFileSync(state,'utf8'), before);
+});
+test('hook launches remote restore after parent exit and skips spawning during cooldown', async t => {
+  const f = fixture(t);
+  for (const name of ['purge-sessions', 'purge-remote-sessions', 'sync-remote-titles', 'sync-remote-archives', 'mobile-standby-status']) {
+    f.put(`${name}-state.json`, JSON.stringify({ at: Date.now(), since: Date.now() }));
+  }
+  f.put('.credentials.json', JSON.stringify({ claudeAiOauth: { accessToken: 'test' } }));
+  f.put('../.claude.json', JSON.stringify({ oauthAccount: { organizationUuid: 'test' } }));
+  const marker = path.join(f.base, 'restore-fetch.json');
+  const parentExited = path.join(f.base, 'hook-exited');
+  const spawns = path.join(f.base, 'restore-spawns.txt');
+  const preload = f.put('restore-fetch-stub.mjs', `
+    import fs from 'node:fs';
+    import childProcess from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    const original = childProcess.spawn;
+    childProcess.spawn = (...args) => {
+      if (args[1]?.some(arg => arg.endsWith('restore-remote-sessions.mjs'))) {
+        fs.appendFileSync(${JSON.stringify(spawns)}, 'spawn\\n');
+      }
+      return original(...args);
+    };
+    syncBuiltinESMExports();
+    globalThis.fetch = async url => {
+      for (let i = 0; i < 500 && !fs.existsSync(${JSON.stringify(parentExited)}); i++) {
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      if (!fs.existsSync(${JSON.stringify(parentExited)})) throw new Error('hook did not exit');
+      fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ url }));
+      return { ok: true, json: async () => ({ data: [] }) };
+    };
+  `);
+  const env = { ...f.env, NODE_OPTIONS: `--import ${JSON.stringify(pathToFileURL(preload).href)}` };
+  // preload の読み込みを含む統合テスト。hook 自体の3秒上限は上の専用テストで検証する。
+  const runHook = () => spawnSync(process.execPath, [script, '--hook'], { env, encoding: 'utf8', timeout: 10_000 });
+  const first = runHook();
+  assert.equal(first.status, 0, first.stderr);
+  fs.writeFileSync(parentExited, 'exited');
+  for (let i = 0; i < 500 && !fs.existsSync(marker); i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(fs.existsSync(marker), 'detached restore child must run after hook exits');
+  assert.match(JSON.parse(fs.readFileSync(marker)).url, /\/v1\/code\/sessions\?limit=100$/);
+  const state = path.join(f.base, 'restore-remote-sessions-state.json');
+  const before = fs.readFileSync(state, 'utf8');
+  assert.ok(JSON.parse(before).at >= Date.now() - 15_000);
+  const second = runHook();
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(fs.readFileSync(state, 'utf8'), before);
+  assert.equal(fs.readFileSync(spawns, 'utf8'), 'spawn\n');
 });
 test('setup converge repairs both events on existing PCs and remains idempotent', t => {
   const f=fixture(t);

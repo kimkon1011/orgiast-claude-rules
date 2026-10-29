@@ -326,6 +326,14 @@ export function purge({ dryRun = false, restore, after = '' } = {}) {
     return result;
   } finally { release(); }
 }
+function launchRemoteRestore() {
+  if (Date.now() - (json(path.join(root(), 'restore-remote-sessions-state.json')).at ?? 0) < 15 * MINUTE) return;
+  const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'restore-remote-sessions.mjs');
+  if (!fs.existsSync(script)) return;
+  const child = spawn(process.execPath, [script], { detached: true, windowsHide: true, stdio: 'ignore' });
+  child.on('error', () => {});
+  child.unref();
+}
 function launchRemotePurge() {
   // purge-remote-sessions.mjs has its own 6h cooldown; this check only avoids spawning a process.
   if (Date.now() - (json(path.join(root(), 'purge-remote-sessions-state.json')).at ?? 0) < 6 * 60 * MINUTE) return;
@@ -366,6 +374,7 @@ function launchRemoteArchiveSync() {
 export function launchPurge() {
   // 明示的に閉じたセッションだけをアーカイブする。
   launchRemotePurge();
+  launchRemoteRestore();
   launchRemoteTitleSync();
   launchRemoteArchiveSync();
   launchMobileStandbyStatus();

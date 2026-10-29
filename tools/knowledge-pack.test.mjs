@@ -162,3 +162,18 @@ test('all missing sources are logged in dry-run but cannot replace the published
   const f = fixture(t);
   await assert.rejects(runKnowledgePack({ home: f.home, sourceHome: path.join(f.home, 'missing'), outDir: f.outDir, emit: () => {}, apiFn: () => { throw Error('must not access Drive'); } }), /ソースが0件/);
 });
+
+
+test('receiver authenticates through the existing approved Drive scope, without requesting an unapproved readonly scope', async t => {
+  const f = fixture(t); const drive = fakeDrive();
+  const generated = generateKnowledge({ ...f, emit: () => {} });
+  await publishKnowledge({ ...generated, ...drive });
+  let authenticated = false;
+  await installKnowledge({ home: f.home, source: false, ...drive, token: undefined, getToken: async options => {
+    assert.equal(options.scope, undefined);
+    assert.ok(options.signal instanceof AbortSignal);
+    authenticated = true;
+    return drive.token;
+  } });
+  assert.equal(authenticated, true);
+});

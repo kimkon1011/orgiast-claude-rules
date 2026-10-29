@@ -219,12 +219,14 @@ function writeContents(contents, dir) {
   }
   return updated;
 }
-export async function installKnowledge({ home = homeDefault(), source = isKnowledgeSource(home), token, apiFn = boundedDriveApi, emit = console.log, outDir = path.join(home, '.claude', 'knowledge-pack') } = {}) {
+export async function installKnowledge({ home = homeDefault(), source = isKnowledgeSource(home), token, getToken = getDriveToken, apiFn = boundedDriveApi, emit = console.log, outDir = path.join(home, '.claude', 'knowledge-pack') } = {}) {
   if (source) {
     const { contents } = generateKnowledge({ roots: sourcePaths(home), outDir, emit });
     return { source: true, updated: writeContents(contents, installDir(home)) };
   }
-  token ??= await getDriveToken({ scope: 'https://www.googleapis.com/auth/drive.readonly', signal: AbortSignal.timeout(30000) });
+  // DWD authorizes exact scopes: reuse the approved Drive scope from hub sync.
+  // drive.readonly is not authorized for the existing SA (live verification).
+  token ??= await getToken({ signal: AbortSignal.timeout(30000) });
   const folderId = await folder(token, apiFn);
   const file = await find(token, 'manifest.json', folderId, apiFn);
   if (!file) throw new Error('knowledge manifest missing');

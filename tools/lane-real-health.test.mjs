@@ -15,7 +15,7 @@ function fixture(t, rows) {
 }
 test('24h failures override successful probe, preserve ranking and routing', t => {
   const home = fixture(t, [...Array.from({ length: 4 }, () => ({ status: '500', reason: 'HTTP 500' })), { status: 'ok' }]);
-  fs.writeFileSync(path.join(home, '.claude/deepseek.env'), 'DEEPSEEK_API_KEY=test-only');
+  fs.writeFileSync(path.join(home, '.claude/openrouter.env'), 'OPENROUTER_API_KEY=test-only');
   fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify({ lanes: { deepseek: { alive: true, reason: 'probe_ok', probedAt: new Date(now - 2000).toISOString() } } }));
   const health = laneDoctorQuick({ home, now });
   assert.equal(health.lanes.deepseek.reason, 'real_fail_rate');
@@ -49,7 +49,7 @@ test('known quota reset is quota_wait; later success invalidates ledger-only quo
 });
 test('probe cannot mask real failure rate; quota probe becomes quota_wait', async t => {
   const home = fixture(t, Array.from({ length: 5 }, () => ({ status: '503' })));
-  fs.writeFileSync(path.join(home, '.claude/deepseek.env'), 'DEEPSEEK_API_KEY=test-only');
+  fs.writeFileSync(path.join(home, '.claude/openrouter.env'), 'OPENROUTER_API_KEY=test-only');
   let h = await laneDoctorProbe({ home, now, probe: async () => ({ code: 0, text: 'PONG' }), notify: async () => ({ delivered: 'test' }) });
   assert.equal(h.lanes.deepseek.reason, 'real_fail_rate');
   fs.writeFileSync(path.join(home, '.claude/executor-usage.jsonl'), '');

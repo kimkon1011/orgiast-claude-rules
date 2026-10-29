@@ -31,7 +31,7 @@ export function realLaneStats(home, now = Date.now()) {
       continue;
     }
     s.failures++;
-    const http = detail.match(/(?:HTTP[ _:]*)?\b([45]\d\d)\b/i)?.[1];
+    const http = detail.match(/(?:HTTP[ _:]*|(?:^|\s))([45]\d\d)\b/i)?.[1];
     const reason = redactAll(http ? `HTTP ${http}` : String(row.reason || row.stderr || row.stderrTail || row.spawnError || row.status).split(/\r?\n/)[0]).slice(0, 180);
     s.reasons[reason] = (s.reasons[reason] || 0) + 1;
   }

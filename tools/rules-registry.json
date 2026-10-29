@@ -171,11 +171,17 @@
       },
       "enforcement": "block",
       "validation": {
-        "fixtureCount": 0,
-        "precision": null,
+        "fixtureCount": 24,
+        "precision": 1,
         "minPrecision": 0.9,
-        "status": "unvalidated",
-        "note": "tools/lane-repair-detector.test.mjs で正例・負例を実測して更新する"
+        "status": "validated",
+        "measuredOn": "2026-10-29",
+        "truePositives": 14,
+        "falsePositives": 0,
+        "trueNegatives": 10,
+        "falseNegatives": 0,
+        "recall": 1,
+        "note": "node --test tools/lane-repair-detector.test.mjs; synthetic transcript fixtures, actual execution; source quotes, quota, failed/expired/wrong-lane records included"
       }
     }
   ]

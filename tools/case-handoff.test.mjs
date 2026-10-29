@@ -54,6 +54,21 @@ test('empty internal records do not change content; v2 distinguishes cursor and 
   assert.equal(a.batchId, nextBatch(raw, '', identity, '261021KGS').batchId);
 });
 
+test('identical UUID-less bridge records have distinct stable checkpoints instead of rolling the cursor back', () => {
+  const bridge = JSON.stringify({ type: 'bridge-session', bridgeId: 'same' });
+  const raw = bridge + '\n' + transcript + bridge + '\n';
+  const records = transcriptRecords(raw);
+  assert.notEqual(records[0].uuid, records.at(-1).uuid);
+  const batch = nextBatch(raw, '', identity, '261021KGS');
+  assert.equal(nextBatch(raw, batch.lastUuid, identity, '261021KGS'), null);
+  const extended = raw + row('new', 'user', '追加発言') + '\n' + bridge + '\n';
+  const next = nextBatch(extended, batch.lastUuid, identity, '261021KGS');
+  assert.equal(next.userCount, 1); assert.ok(!next.markdown.includes('案件261021KGSを続けて'));
+  assert.equal(nextBatch(extended, next.lastUuid, identity, '261021KGS'), null);
+  const legacy = nextBatch(raw, `line-${hash(bridge)}`, identity, '261021KGS');
+  assert.equal(legacy.userCount, 2); assert.equal(legacy.lastUuid, batch.lastUuid);
+});
+
 test('known 409 codes are shown safely and only Drive conflicts use bounded jittered retries', async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'case-codes-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   for (const code of ['batch_changed', 'drive_busy', 'drive_contention', 'state_not_ready', 'secret-upstream-text']) {

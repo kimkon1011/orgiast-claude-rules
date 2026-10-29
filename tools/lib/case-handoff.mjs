@@ -41,12 +41,17 @@ function artifactRefs(value, key = '', found = []) {
 export function transcriptRecords(raw) {
   const lines = raw.split('\n');
   if (lines.at(-1)?.trim()) { try { JSON.parse(lines.at(-1)); } catch { lines.pop(); } }
-  const records = [];
+  const records = [], occurrences = new Map();
   for (let i = 0; i < lines.length; i++) {
     if (!lines[i].trim()) continue;
     let row; try { row = JSON.parse(lines[i]); } catch { throw Error(`transcript JSONL invalid at line ${i + 1}`); }
-    const uuid = row.uuid || `line-${hash(lines[i])}`;
-    if (!['user', 'assistant'].includes(row.type)) { records.push({ uuid, markdown: '' }); continue; }
+    const legacyUuid = row.uuid ? undefined : `line-${hash(lines[i])}`;
+    const occurrence = legacyUuid ? (occurrences.get(legacyUuid) || 0) + 1 : 0;
+    if (legacyUuid) occurrences.set(legacyUuid, occurrence);
+    // Identical bridge/progress records recur in an append-only JSONL file.
+    // A content hash alone points findIndex back to their first occurrence.
+    const uuid = row.uuid || `${legacyUuid}-${occurrence}`;
+    if (!['user', 'assistant'].includes(row.type)) { records.push({ uuid, legacyUuid, markdown: '' }); continue; }
     const blocks = typeof row.message?.content === 'string' ? [{ type: 'text', text: row.message.content }]
       : row.message?.content || (typeof row.content === 'string' ? [{ type: 'text', text: row.content }] : row.content) || [];
     const parts = [];
@@ -61,7 +66,7 @@ export function transcriptRecords(raw) {
     const refs = artifactRefs(row.attachment || row.attachments || {});
     if (refs.length) parts.push(`Files / Drive IDs:\n${redactForShare(refs.join('\n'))}`);
     const role = blocks.some(b => b.type === 'text') ? row.type : 'tool';
-    records.push({ uuid, role, timestamp: row.timestamp || '', markdown: parts.length ? `<!-- event:${uuid} -->\n## ${role} | ${row.timestamp || 'unknown'} | ${uuid}\n\n${parts.join('\n\n')}\n` : '' });
+    records.push({ uuid, legacyUuid, role, timestamp: row.timestamp || '', markdown: parts.length ? `<!-- event:${uuid} -->\n## ${role} | ${row.timestamp || 'unknown'} | ${uuid}\n\n${parts.join('\n\n')}\n` : '' });
   }
   return records;
 }
@@ -69,7 +74,10 @@ export function nextBatch(raw, cursor, identity, caseId, maxBytes = 180000) {
   validateIdentity(identity);
   if (!CASE_ID.test(caseId)) throw Error('invalid case ID');
   const records = transcriptRecords(raw);
-  const at = cursor ? records.findIndex(row => row.uuid === cursor) : -1;
+  let at = cursor ? records.findIndex(row => row.uuid === cursor) : -1;
+  // An ambiguous pre-v2 checkpoint is replayed from its earliest occurrence:
+  // the server deduplicates events, so migration cannot skip unsaved speech.
+  if (cursor && at < 0) at = records.findIndex(row => row.legacyUuid === cursor);
   if (cursor && at < 0) throw Error('送信済み uuid が transcript にありません。元ログを保全して復旧してください');
   const selected = []; let size = 0;
   for (const row of records.slice(at + 1)) {

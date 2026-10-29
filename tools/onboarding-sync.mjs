@@ -14,6 +14,7 @@ import { buildKeyserveAlert, shouldAlert } from './keyserve-alert.mjs';
 import { keyserveAuthHeaders, requireKeyservePcId, isEnrollToken } from './keyserve-auth.mjs';
 import { installSharedMemories } from './memory-share.mjs';
 import { installKnowledge } from './knowledge-pack.mjs';
+import { resolveConvergenceRepo } from './fleet-convergence.mjs';
 import { gitBlobSha } from './version-drift.mjs';
 
 const args = process.argv.slice(2);
@@ -822,9 +823,10 @@ finally {
   }
   if (!dryRun && !keysOnly) {
     try {
-      const report = path.join(repoPath, 'tools/fleet-convergence-report.mjs');
+      const syncRepo = resolveConvergenceRepo({ home, repo: repoPath });
+      const report = path.join(syncRepo || repoPath, 'tools/fleet-convergence-report.mjs');
       if (fs.existsSync(report)) execFileSync(process.execPath, [report], { windowsHide: true, timeout: 90000,
-        stdio: 'pipe', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repoPath } });
+        stdio: 'pipe', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: syncRepo || '' } });
     } catch { log('convergence report failed (transport or receipt unavailable)'); }
   }
 } }

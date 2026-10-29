@@ -13,6 +13,7 @@ import { isEntry } from './is-entry.mjs';
 import { buildKeyserveAlert, shouldAlert } from './keyserve-alert.mjs';
 import { keyserveAuthHeaders, requireKeyservePcId, isEnrollToken } from './keyserve-auth.mjs';
 import { installSharedMemories } from './memory-share.mjs';
+import { installKnowledge } from './knowledge-pack.mjs';
 import { gitBlobSha } from './version-drift.mjs';
 
 const args = process.argv.slice(2);
@@ -713,7 +714,7 @@ export function makeIndex(body) {
   return original;
 }
 export function build(current, body, label) {
-  const block = `${beginPrefix} (自動同期 ${label}) -->\n${body}\n- 全社共有の知見（kim-PC の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る\n${endMarker}`;
+  const block = `${beginPrefix} (自動同期 ${label}) -->\n${body}\n- 全社共有の知見（kim-PC の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る\n- 制作・営業・見積・案件の着手前: ~/.claude/knowledge/production-sales/00_INDEX.md を読み、必要な節だけ Grep。全文を丸読みしない。\n${endMarker}`;
   if (current === null) return { updated: block, action: '新規作成' };
   // 行全体が開始マーカー形式そのものである場合だけ対象にする(部分一致は自己言及文書に誤爆する)。
   // ラベル部分の形式は縛らない: 日付形式を固定すると、別形式で導入されたPCで置換に失敗し
@@ -732,8 +733,31 @@ export function build(current, body, label) {
   return { updated: `${current.replace(/[\r\n]+$/, '')}\n\n${block}`, action: 'マーカーなし/不完全のため末尾へ追記' };
 }
 
+// Separate daily guard: a failed download is retried next session, not hidden by repo state.
+export async function syncKnowledge({ targetHome = home, forced = force, preview = dryRun,
+  receiver = args.includes('--knowledge-receiver'), now = new Date(), install = installKnowledge,
+  emit = console.log } = {}) {
+  if (preview) { emit('[dry-run] knowledge-pack: no download/write'); return; }
+  const stateFile = path.join(targetHome, '.claude', '.knowledge-sync-state.json');
+  let previous;
+  try { previous = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+  if (!forced && previous?.last && now - new Date(previous.last) < 24 * 60 * 60 * 1000) return;
+  try {
+    const result = await install({ home: targetHome, ...(receiver ? { source: false } : {}), emit });
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+    fs.writeFileSync(stateFile, JSON.stringify({ last: now.toISOString() }) + '\n');
+    return result;
+  } catch (e) {
+    const message = `[onboarding-sync] knowledge-pack failed: ${oneLine(e)}`;
+    emit(message); log(message);
+    // Session hooks remain usable; the standalone verification route fails visibly.
+    if (args.includes('--knowledge-only')) throw e;
+  }
+}
+
 async function main() { try {
   const now = new Date();
+  if (args.includes('--knowledge-only')) { await syncKnowledge({ now }); return; }
   const plan = executionPlan(args);
   if (keysOnly) {
     await provisionKeys(now, { quiet: true });
@@ -752,6 +776,7 @@ async function main() { try {
   }
   if (plan.syncRepository) await syncRepository(now);
   if (plan.provisionKeys) await provisionKeys(now);
+  await syncKnowledge({ now });
   const oldState = state();
   // 間引きは「分」で持つ。20時間だと、片方のPCがルールへ書いた結論がもう片方へ最大20時間届かず、
   // その間 repo 側(tools/rules/skills)の更新ログだけ出るので**同期は成功したように見える**
@@ -788,7 +813,7 @@ async function main() { try {
     console.log(`[onboarding-sync] updated CLAUDE.md (hash ${hash.slice(0, 8)} / from ${source})`);
     log(`updated (hash ${hash.slice(0, 8)} / from ${source})`);
   }
-} catch (e) { log(`unexpected error: ${e.message}`); }
+} catch (e) { log(`unexpected error: ${e.message}`); if (args.includes('--knowledge-only')) { console.error(e.message); process.exitCode = 1; } }
 finally {
   // hook 登録（setup --converge）は CLAUDE.md を書き終えてから。早期 return した場合も必ず実行する。
   if (deferredHookRegistration) {

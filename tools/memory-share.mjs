@@ -5,13 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { machineIdentity } from './machine-identity.mjs';
-import { SECRET_PATTERNS, redactMemoryForShare as redactForShare } from './lib/share-secrets.mjs';
+import { redactForShare, findSharedSecret, parseMemoryFrontmatter } from './lib/share-content.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { keyserveAuthHeaders, requireKeyservePcId, keyserveSecret } from './keyserve-auth.mjs';
 import { isKimOperated } from './lib/kim-operated.mjs';
 
 const DEFAULT_MEMORY_URL = 'https://orgiast-memoryserve.vercel.app/api/memory';
-// 伏字化した後の本文に対して判定する。伏字で消せない秘密が残るファイルだけを丸ごと除外する。
 const CUSTOMER_PATTERNS = [
   ['案件ID', /C0\d{3,}/],
   ['法人名', /株式会社|有限会社|合同会社/],
@@ -43,22 +42,7 @@ function sha256(buffer) { return crypto.createHash('sha256').update(buffer).dige
 function sameFile(file, bytes) { try { return fs.readFileSync(file).equals(bytes); } catch { return false; } }
 function safeReadJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); } catch { return null; } }
 
-export function parseMemoryFrontmatter(text) {
-  const match = /^(?:\uFEFF)?---\s*\r?\n([\s\S]*?)\r?\n---(?:\s*\r?\n|$)/.exec(String(text));
-  if (!match) return {};
-  let inMetadata = false;
-  const result = {};
-  for (const line of match[1].split(/\r?\n/)) {
-    const metadata = /^metadata\s*:\s*(?:#.*)?$/.exec(line);
-    if (metadata) { inMetadata = true; continue; }
-    const nested = /^\s+([A-Za-z][\w-]*)\s*:\s*(.*?)\s*$/.exec(line);
-    if (inMetadata && nested) { result[`metadata.${nested[1]}`] = nested[2].replace(/^(['"])(.*)\1$/, '$2'); continue; }
-    if (/^\S/.test(line)) inMetadata = false;
-    const top = /^([A-Za-z][\w-]*)\s*:\s*(.*?)\s*$/.exec(line);
-    if (top) result[top[1]] = top[2].replace(/^(['"])(.*)\1$/, '$2');
-  }
-  return result;
-}
+export { parseMemoryFrontmatter } from './lib/share-content.mjs';
 
 function memoryFiles(home, emit, channel) {
   const root = path.join(home, '.claude', 'projects');
@@ -121,7 +105,7 @@ export function exportMemories(options = {}) {
         continue;
       }
       const redacted = redactForShare(original);
-      const secret = SECRET_PATTERNS.find(([, pattern]) => pattern.test(redacted));
+      const secret = findSharedSecret(redacted);
       if (secret) {
         exclusions.push({ name, category: 'secret' });
         emit(`除外(資格情報): ${name} — 秘密パターン ${secret[0]} に一致`);

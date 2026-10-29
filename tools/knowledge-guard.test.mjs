@@ -195,3 +195,30 @@ test('verify-account の通信は4秒で中断し、安全側へ判定する', a
   assert.equal(result.allow, false);
   assert.ok(Date.now() - start < 5400);
 });
+
+test('stdin不正/タイムアウト: 公開鍵とrawの保護キーワードが揃う場合のみ拒否', async t => {
+  const { runRawHook } = await import('./knowledge-guard.mjs');
+  const f = fixture(t);
+  for (const raw of ['', '{', '{"tool_input":{"command":"echo hello', 'null']) {
+    assert.equal((await runRawHook(raw, f.deps)).allow, true);
+  }
+  for (const raw of ['{"command":"cat HANDOVER.md', '{"command":"cat C:\\\\Users\\\\kim\\\\.claude\\\\projects\\\\a', 'cat x.jsonl']) {
+    assert.equal((await runRawHook(raw, f.deps)).allow, false);
+  }
+  assert.match(f.output, /アカウントを確認できないため/);
+  f.output = '';
+  fs.unlinkSync(path.join(f.home, 'knowledge-lock-pubkey.pem'));
+  assert.equal((await runRawHook('cat HANDOVER.md', f.deps)).allow, true);
+  assert.equal(f.output, '');
+});
+test('account-unavailable/hook-errorは契約外と断定しない', async t => {
+  const f = fixture(t);
+  const decision = await f.hook();
+  assert.equal(decision.reason, 'account-unavailable');
+  assert.match(f.output, /アカウントを確認できないため/); assert.doesNotMatch(f.output, /契約外/);
+  f.output = '';
+  fs.unlinkSync(path.join(f.home, 'knowledge-lock-pubkey.pem'));
+  fs.mkdirSync(path.join(f.home, 'knowledge-lock-pubkey.pem'));
+  assert.equal((await f.hook()).reason, 'hook-error');
+  assert.match(f.output, /アカウントを確認できないため/); assert.doesNotMatch(f.output, /契約外/);
+});

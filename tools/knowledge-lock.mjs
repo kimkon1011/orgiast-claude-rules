@@ -79,7 +79,7 @@ function argumentsFor(argv) {
 }
 
 // 子プロセスの出力は秘密を含みうるので、そのまま表示しない。
-async function vercelEnv(ctx, args, input = '') {
+export async function vercelEnv(ctx, args, input = '') {
   return new Promise((resolve, reject) => {
     const child = ctx.spawn(ctx.platform === 'win32' ? 'vercel.cmd' : 'vercel', ['env', ...args], {
       cwd: ctx.serverDir, shell: ctx.platform === 'win32', stdio: ['pipe', 'pipe', 'pipe'],
@@ -97,7 +97,7 @@ async function vercelEnv(ctx, args, input = '') {
   });
 }
 
-async function putEnv(ctx, name, value, replace = true) {
+export async function putEnv(ctx, name, value, replace = true) {
   for (const target of ['production', 'preview']) {
     if (replace) await vercelEnv(ctx, ['rm', name, target, '-y']);
     await vercelEnv(ctx, ['add', name, target, '--sensitive'], value);

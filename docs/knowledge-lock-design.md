@@ -1,5 +1,7 @@
 # knowledge-lock 設計書: Claude 蓄積ノウハウの持ち出し防止・引き継ぎ書の鍵付き化・退職者監視
 
+運用・有効化・復旧のコマンドは [knowledge-lock 運用手順書](knowledge-lock-runbook.md) を参照。
+
 - 依頼: kim（2026-10-28）。設計: Opus 監督（2026-10-29 夜間）。実装: Codex。
 - 関連リポ: `orgiast-claude-rules`（クライアント・台帳・監視）、`orgiast-keyserve`（Vercel・サーバ側の鍵と承認）
 

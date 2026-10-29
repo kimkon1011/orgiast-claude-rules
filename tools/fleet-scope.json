@@ -1,6 +1,10 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/offboarding-watch.mjs", "scope": "kim-only", "step": "task:offboarding-watch", "reason": "kim-PC限定の退職者監視・PC失効と定期登録"},
+    {"path": "tools/register-offboarding-watch.mjs", "scope": "kim-only", "step": "task:offboarding-watch", "reason": "kim-PC限定の退職者監視・PC失効と定期登録"},
+    {"path": "tools/register-offboarding-watch.ps1", "scope": "kim-only", "step": "task:offboarding-watch", "reason": "kim-PC限定の退職者監視・PC失効と定期登録"},
+
     {"path": "tools/knowledge-lock.mjs", "scope": "fleet", "step": "settings:knowledge-guard-PreToolUse", "reason": "契約判定・蓄積保護と封印を全PCへconverge配布"},
     {"path": "tools/lib/knowledge-envelope.mjs", "scope": "fleet", "step": "settings:knowledge-guard-PreToolUse", "reason": "契約判定・蓄積保護と封印を全PCへconverge配布"},
     {"path": "tools/claude-account-ledger.json", "scope": "fleet", "step": "settings:knowledge-guard-PreToolUse", "reason": "契約判定・蓄積保護と封印を全PCへconverge配布"},

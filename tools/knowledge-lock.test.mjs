@@ -8,7 +8,6 @@ import { createRequire } from 'node:module';
 import { EventEmitter } from 'node:events';
 import { main, canonicalVerdict, parseCredentialBlob } from './knowledge-lock.mjs';
 import { sealText, parseSealed, isSealed, openWithDataKey } from './lib/knowledge-envelope.mjs';
-import { loadLedger } from './claude-account-ledger.mjs';
 
 const pair = crypto.generateKeyPairSync('rsa', { modulusLength: 3072,
   publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });
@@ -22,7 +21,11 @@ function fixture(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, '.claude'));
   fs.writeFileSync(path.join(root, '.claude/.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'oauth-secret-test' } }));
-  fs.writeFileSync(path.join(root, 'claude-account-ledger.json'), JSON.stringify(loadLedger()));
+  fs.writeFileSync(path.join(root, 'claude-account-ledger.json'), JSON.stringify({ version: 1, contractedOrgUuids: ['test-org'], members: [
+    { email: 'kim@orgiast.jp', status: 'active', claudeEmails: ['Alias@Example.com', 'retired@example.com'], note: 'テスト専用' },
+    { email: 'retired@example.com', status: 'retired' },
+    { email: 'pending@example.com', status: 'pending' },
+  ], unresolvedSeats: ['未確定のテスト席'] }));
   fs.writeFileSync(path.join(root, 'knowledge-lock-pubkey.pem'), pair.publicKey);
   fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'kim@orgiast.jp' } }));
   const f = { root, stdout: '', stderr: '', calls: [] };
@@ -200,7 +203,10 @@ test('ledger-sync は差分計画、apply は全投影を stdin に渡す', asyn
   assert.equal(await f.run(['ledger-sync', '--apply']), 0); assert.equal(f.calls.length, 4);
   const calls = f.calls.filter(c => c.args[1] === 'add');
   assert.equal(calls[0].args[2], 'KNOWLEDGE_LEDGER_JSON');
-  assert.equal(JSON.parse(calls[0].input).activeEmails.length, 4);
+  assert.deepEqual(JSON.parse(calls[0].input), {
+    contractedOrgUuids: ['test-org'], activeEmails: ['alias@example.com', 'kim@orgiast.jp'],
+    retiredEmails: ['retired@example.com'],
+  });
   assert.equal(calls[0].input, calls[1].input);
   f.stdout = '';
   assert.equal(await f.run(['ledger-sync']), 0); assert.match(f.stdout, /追加=\[\] 削除=\[\]/);

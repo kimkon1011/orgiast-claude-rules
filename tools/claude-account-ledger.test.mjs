@@ -8,8 +8,36 @@ import { loadLedger, serverProjection, isContractedLocal, membersByPc } from './
 test('正本は証拠のある Claude 席と組織を含む', () => {
   const ledger = loadLedger();
   assert.equal(ledger.version, 1);
-  assert.deepEqual(serverProjection(ledger).activeEmails, ['cr@orgiast.jp', 'kim@orgiast.jp', 'nishi@orgiast.jp', 'seisaku-team@orgiast.jp']);
-  assert.deepEqual(ledger.contractedOrgUuids, ['07b2296b-cf32-43b5-993e-be47884b3fda']);
+  for (const email of ['cr@orgiast.jp', 'kim@orgiast.jp', 'nishi@orgiast.jp', 'seisaku-team@orgiast.jp', 'm.kanau@orgiast.jp', 'genbateam.toho@gmail.com']) {
+    assert.ok(ledger.members.some(member => member.email === email), `必須の席: ${email}`);
+  }
+  assert.ok(ledger.contractedOrgUuids.includes('07b2296b-cf32-43b5-993e-be47884b3fda'));
+  for (const uuid of ledger.contractedOrgUuids) assert.match(uuid, /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i);
+  for (const member of ledger.members) {
+    for (const key of ['name', 'email', 'claudeEmails', 'discordId', 'pcs', 'status', 'retiredOn']) {
+      assert.ok(Object.hasOwn(member, key), `${member.email}: ${key}`);
+    }
+    assert.equal(typeof member.name, 'string');
+    assert.ok(member.name.trim());
+    assert.match(member.email, /^[^\s@]+@[^\s@]+\.[^\s@]+$/);
+    assert.ok(['active', 'retired', 'pending'].includes(member.status));
+    assert.ok(Array.isArray(member.claudeEmails));
+    for (const email of member.claudeEmails) assert.match(email, /^[^\s@]+@[^\s@]+\.[^\s@]+$/);
+    assert.ok(Array.isArray(member.pcs));
+    for (const pc of member.pcs) assert.ok(typeof pc === 'string' && pc.trim());
+    assert.ok(member.discordId === null || /^\d+$/.test(member.discordId));
+    assert.ok(member.retiredOn === null || /^\d{4}-\d{2}-\d{2}$/.test(member.retiredOn));
+  }
+  const active = new Set(), retired = new Set();
+  for (const member of ledger.members) {
+    const target = member.status === 'active' ? active : member.status === 'retired' ? retired : null;
+    for (const email of [member.email, ...member.claudeEmails]) target?.add(email.trim().toLowerCase());
+  }
+  for (const email of retired) active.delete(email);
+  assert.deepEqual(serverProjection(ledger), {
+    contractedOrgUuids: [...new Set(ledger.contractedOrgUuids)].sort(),
+    activeEmails: [...active].sort(), retiredEmails: [...retired].sort(),
+  });
   assert.equal(membersByPc(ledger)['nishi-PC'][0].email, 'nishi@orgiast.jp');
 });
 
@@ -30,8 +58,9 @@ test('loadLedger は一時ファイルを読み、壊れた形式は拒否', t =
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'ledger.json');
-  fs.writeFileSync(file, JSON.stringify(loadLedger()));
-  assert.equal(loadLedger(file).version, 1);
+  const extended = { version: 1, contractedOrgUuids: ['org'], members: [{ email: 'test@example.com', status: 'active', note: '追記' }], unresolvedSeats: ['未確定'] };
+  fs.writeFileSync(file, JSON.stringify(extended));
+  assert.deepEqual(loadLedger(file), extended);
   fs.writeFileSync(file, '{"version":2}');
   assert.throws(() => loadLedger(file));
 });

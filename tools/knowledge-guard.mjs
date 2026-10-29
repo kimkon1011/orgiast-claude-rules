@@ -62,7 +62,9 @@ function context(deps) {
   return { ...deps, home: deps.home || os.homedir(), toolsDir: deps.toolsDir || toolsDir,
     env: deps.env || process.env, now: deps.now || Date.now, spawn: deps.spawn || spawn };
 }
-const denial = email => `このアカウント(${email})はオージャスト契約外のため、Claude の蓄積（memory・会話ログ・引き継ぎ書）は読めません。必要なら kim の承認経路: node tools/knowledge-lock.mjs open <封印ファイル>`;
+const denial = (email, reason) => ['account-unavailable', 'hook-error'].includes(reason)
+  ? `アカウントを確認できないため（keyserve 不通など）、Claude の蓄積の読み出しを保留しています。接続・ログイン状態を確認してください。`
+  : `このアカウント(${email})はオージャスト契約外のため、Claude の蓄積（memory・会話ログ・引き継ぎ書）は読めません。必要なら kim の承認経路: node tools/knowledge-lock.mjs open <封印ファイル>`;
 export async function accountDecision(deps = {}) {
   const ctx = context(deps);
   const pubFile = path.join(ctx.toolsDir, 'knowledge-lock-pubkey.pem');
@@ -110,7 +112,7 @@ export async function runHook(event, deps = {}) {
     try { log(ctx, decision, event.tool_name, target); } catch {}
   }
   if (!decision.allow) (deps.stdout || (text => process.stdout.write(text)))(JSON.stringify({ hookSpecificOutput: {
-    hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: denial(decision.email),
+    hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: denial(decision.email, decision.reason),
   } }) + '\n');
   return decision;
 }
@@ -141,11 +143,25 @@ export async function sessionStart(deps = {}) {
     } finally { fs.closeSync(fd); fs.unlinkSync(lock); }
   } catch { /* SessionStart must never pollute context, including notification failures. */ }
 }
+export async function runRawHook(raw, deps = {}) {
+  try {
+    const event = JSON.parse(raw);
+    if (!event || typeof event !== 'object') throw new Error('invalid event');
+    return await runHook(event, deps);
+  } catch {
+    const ctx = context(deps);
+    if (!fs.existsSync(path.join(ctx.toolsDir, 'knowledge-lock-pubkey.pem'))
+        || !protectedTarget({ tool_name: 'Bash', tool_input: { command: String(raw).replaceAll('\\\\', '\\') } }, ctx.home)) {
+      return { allow: true, reason: 'unprotected-input' };
+    }
+    (deps.stdout || (text => process.stdout.write(text)))(JSON.stringify({ hookSpecificOutput: {
+      hookEventName: 'PreToolUse', permissionDecision: 'deny',
+      permissionDecisionReason: denial('', 'hook-error'),
+    } }) + '\n');
+    return { allow: false, reason: 'hook-error' };
+  }
+}
 if (isEntry(import.meta.url)) {
   if (process.argv.includes('--session-start')) await sessionStart();
-  else {
-    const raw = await readStdinWithTimeout(500);
-    try { await runHook(JSON.parse(raw)); }
-    catch { process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'knowledge-guard: 入力を検証できません' } }) + '\n'); }
-  }
+  else await runRawHook(await readStdinWithTimeout(500));
 }

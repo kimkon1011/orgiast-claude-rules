@@ -6,6 +6,9 @@
     {"name":"kim","email":"kim@orgiast.jp","claudeEmails":[],"discordId":null,"pcs":[],"status":"active","retiredOn":null},
     {"name":"seisaku-team","email":"seisaku-team@orgiast.jp","claudeEmails":[],"discordId":null,"pcs":[],"status":"active","retiredOn":null},
     {"name":"nishi","email":"nishi@orgiast.jp","claudeEmails":[],"discordId":null,"pcs":["kimko-PC","nishi-PC"],"status":"active","retiredOn":null},
-    {"name":"cr","email":"cr@orgiast.jp","claudeEmails":[],"discordId":null,"pcs":["HP","作業用011","w018-PC"],"status":"active","retiredOn":null}
-  ]
+    {"name":"cr","email":"cr@orgiast.jp","claudeEmails":[],"discordId":null,"pcs":["HP","作業用011","w018-PC"],"status":"active","retiredOn":null},
+    {"name":"百瀬かなう","email":"m.kanau@orgiast.jp","claudeEmails":[],"discordId":"1382566741464449124","pcs":[],"status":"active","retiredOn":null,"note":"2026-10〜12月末 休職（退職ではない）。Team 席あり（Admin API で developer として実測 2026-10-29）"},
+    {"name":"東邦鋼業 Genba","email":"genbateam.toho@gmail.com","claudeEmails":[],"discordId":null,"pcs":[],"status":"active","retiredOn":null,"note":"グループ会社の Team 席（claude.ai usage 画面の席一覧に記載）。tetsuko-unified を Claude Code で開発"}
+  ],
+  "unresolvedSeats": ["Furukawa Miho（Team 席。Claude の email 未確定: furukawa@orgiast.jp か miho.furukawa0430@gmail.com）"]
 }

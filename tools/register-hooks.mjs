@@ -337,6 +337,21 @@ try {
     added += setTimeoutFor(settings.hooks[event], 'fleet-question-relay.mjs', 5);
   }
   added += syncMatcherFor(settings.hooks.PreToolUse, 'fleet-question-relay.mjs', 'AskUserQuestion');
+  const knowledgeMatcher = 'Read|Grep|Glob|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit';
+  for (const event of ['PreToolUse', 'SessionStart']) {
+    const cmd = command('knowledge-guard.mjs') + (event === 'SessionStart' ? ' --session-start' : '');
+    added += migrate(settings.hooks[event], 'knowledge-guard.mjs', 'knowledge-guard.mjs', cmd);
+    if (add(settings.hooks[event], 'knowledge-guard.mjs', { ...(event === 'PreToolUse' ? { matcher: knowledgeMatcher } : {}), hooks: [{ type: 'command', command: cmd, timeout: 6 }] })) added += 1;
+    added += setTimeoutFor(settings.hooks[event], 'knowledge-guard.mjs', 6);
+    for (const group of settings.hooks[event]) for (const hook of group.hooks || []) {
+      if (String(hook.command || '').includes('knowledge-guard.mjs') && hook.async === true) {
+        delete hook.async;
+        added++;
+      }
+    }
+  }
+  added += syncMatcherFor(settings.hooks.PreToolUse, 'knowledge-guard.mjs', knowledgeMatcher);
+
   // 過去に受領済みのクレデンシャルをuserへ再質問する前に復元経路を注入する。
   for (const event of ['SessionStart', 'UserPromptSubmit']) {
     if (add(settings.hooks[event], 'fleet-inbox-context.mjs', { hooks: [{ type: 'command', command: command('fleet-inbox-context.mjs'), timeout: 5 }] })) added += 1;

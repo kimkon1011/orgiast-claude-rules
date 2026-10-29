@@ -25,12 +25,12 @@ export function canonicalVerdict(v) {
     reason: v.reason, pcId: v.pcId, iat: v.iat, exp: v.exp });
 }
 
-export function verifyVerdict(verdict, sig, publicKeyPem, pcId, now = Date.now()) {
+export function verifyVerdict(verdict, sig, publicKeyPem, pcId, now = Date.now(), { allowExpired = false } = {}) {
   try {
     if (!verdict || typeof verdict.email !== 'string' || typeof verdict.orgUuid !== 'string'
         || typeof verdict.contracted !== 'boolean' || typeof verdict.reason !== 'string'
         || verdict.pcId !== pcId || !Number.isSafeInteger(verdict.iat) || !Number.isSafeInteger(verdict.exp)
-        || verdict.iat > Math.floor(now / 1000) + 60 || verdict.exp <= Math.floor(now / 1000)
+        || verdict.iat > Math.floor(now / 1000) + 60 || (!allowExpired && verdict.exp <= Math.floor(now / 1000))
         || verdict.exp <= verdict.iat) return false;
     return crypto.verify('sha256', Buffer.from(canonicalVerdict(verdict)), {
       key: publicKeyPem, padding: crypto.constants.RSA_PKCS1_PSS_PADDING, saltLength: 32,
@@ -55,17 +55,18 @@ export function parseCredentialBlob(blob) {
 function argumentsFor(argv) {
   const [command, ...rest] = argv;
   const allowed = {
+    migrate: ['plan', 'apply', 'root', 'delete-plaintext', 'kim-approved'],
     seal: ['out'], open: ['out', 'request', 'grant'], 'verify-account': ['json'], status: [],
     keygen: ['kid', 'apply', 'rotate'], 'passkey-link': [], 'passkey-install': ['blob', 'apply'], 'ledger-sync': ['apply'],
   };
-  if (!Object.hasOwn(allowed, command)) fail('使い方: knowledge-lock seal|open|verify-account|status|keygen|passkey-link|passkey-install|ledger-sync');
+  if (!Object.hasOwn(allowed, command)) fail('使い方: knowledge-lock seal|open|verify-account|migrate|status|keygen|passkey-link|passkey-install|ledger-sync');
   const options = {};
   const files = [];
   for (let i = 0; i < rest.length; i++) {
     if (!rest[i].startsWith('--')) { files.push(rest[i]); continue; }
     const key = rest[i].slice(2);
     if (!allowed[command].includes(key) || Object.hasOwn(options, key)) fail('オプションが不正です');
-    if (['json', 'apply', 'rotate'].includes(key)) options[key] = true;
+    if (['json', 'apply', 'rotate', 'plan', 'delete-plaintext', 'kim-approved'].includes(key)) options[key] = true;
     else {
       const value = rest[++i];
       if (!value || value.startsWith('--')) fail('オプションの値がありません');
@@ -110,10 +111,35 @@ function context(deps) {
     home: deps.home || os.homedir(), env: deps.env || process.env, platform, toolsDir: dir,
     fetch: deps.fetch || globalThis.fetch, spawn: deps.spawn || nodeSpawn,
     stdout: deps.stdout || (text => process.stdout.write(text)), stderr: deps.stderr || (text => process.stderr.write(text)),
-    now: deps.now || Date.now,
+    now: deps.now || Date.now, timeoutMs: deps.timeoutMs || 30000,
     serverDir: deps.serverDir || (platform === 'win32' ? 'C:\\Users\\uers\\Downloads\\orgiast-keyserve'
       : fs.existsSync('/mnt/c/Users/uers/Downloads/orgiast-keyserve') ? '/mnt/c/Users/uers/Downloads/orgiast-keyserve' : path.resolve(dir, '../../orgiast-keyserve')),
   };
+}
+
+// symlink は移行対象にしない。Downloads は直下の git リポだけ探索する。
+export function migrateTargets(home, root) {
+  const targets = [];
+  const entries = dir => fs.existsSync(dir) ? fs.readdirSync(dir, { withFileTypes: true }) : [];
+  const walk = dir => {
+    for (const entry of entries(dir)) {
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(file);
+      else if (entry.isFile() && /\.md$/i.test(entry.name)) targets.push(file);
+    }
+  };
+  const claude = path.join(home, '.claude');
+  for (const entry of entries(claude)) {
+    if (entry.isFile() && /^next-session.*\.md$/i.test(entry.name)) targets.push(path.join(claude, entry.name));
+    if (entry.isDirectory() && /^handoff/i.test(entry.name)) walk(path.join(claude, entry.name));
+  }
+  for (const entry of entries(root)) {
+    if (!entry.isDirectory()) continue;
+    const repo = path.join(root, entry.name);
+    if (!fs.existsSync(path.join(repo, '.git'))) continue;
+    for (const child of entries(repo)) if (child.isFile() && /^HANDOVER\.md$/i.test(child.name)) targets.push(path.join(repo, child.name));
+  }
+  return targets.sort();
 }
 
 export async function main(argv = process.argv.slice(2), deps = {}) {
@@ -139,7 +165,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     const response = await ctx.fetch(url.href, {
       method: 'POST', headers: { 'Content-Type': 'application/json', ...keyserveAuthHeaders(secret, ctx.now(), pc()) },
       body: JSON.stringify({ action, ...(claudeToken ? { claudeToken } : {}), ...fields }),
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(ctx.timeoutMs),
     });
     const result = await response.json();
     if (!response.ok && !(action === 'unwrap' && result.status === 'approval_required')) fail('keyserve が要求を拒否しました');
@@ -149,6 +175,67 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     const parsed = argumentsFor(argv);
     command = parsed.command;
     const { options, file } = parsed;
+    if (command === 'migrate') {
+      const stateFile = path.join(ctx.home, '.claude/state/knowledge-migrate.json');
+      const hash = value => crypto.createHash('sha256').update(value).digest('hex');
+      if (options['delete-plaintext'] || options['kim-approved']) {
+        if (!options['delete-plaintext'] || !options['kim-approved'] || options.plan || options.apply) {
+          ctx.stderr('削除には --delete-plaintext と --kim-approved の両方だけを指定してください\n');
+          return 2;
+        }
+        const records = readJson(stateFile);
+        for (const record of records) {
+          if (record.roundTrip !== 'ok' || !fs.existsSync(record.path)) continue;
+          // 往復検証後に変更された平文・封印は削除しない。
+          if (!fs.lstatSync(record.path).isFile() || hash(fs.readFileSync(record.path)) !== record.sha256
+              || !fs.existsSync(`${record.path}.lock`) || hash(fs.readFileSync(`${record.path}.lock`)) !== record.sealedSha256) continue;
+          fs.unlinkSync(record.path);
+          record.deleted = true;
+          saveJson(stateFile, records);
+          out(JSON.stringify({ path: record.path, deleted: true }));
+        }
+        return 0;
+      }
+      if (!!options.plan === !!options.apply) {
+        ctx.stderr('migrate は --plan または --apply を1つ指定してください\n');
+        return 2;
+      }
+      const targets = migrateTargets(ctx.home, options.root || (ctx.platform === 'win32'
+        ? 'C:\\Users\\uers\\Downloads' : '/mnt/c/Users/uers/Downloads'));
+      if (options.plan) {
+        out('path\tbytes\tsealedExists');
+        for (const file of targets) out(`${file}\t${fs.statSync(file).size}\t${fs.existsSync(`${file}.lock`)}`);
+        return 0;
+      }
+      const records = [];
+      for (const file of targets) {
+        const record = { path: file, sealed: false, roundTrip: 'failed' };
+        try {
+          const bytes = fs.readFileSync(file);
+          const sealed = sealText(bytes.toString('utf8'), { name: path.basename(file), publicKeyPem: publicKey(), kid: kid(), now: ctx.now() });
+          fs.writeFileSync(`${file}.lock`, sealed, { mode: 0o600 });
+          record.sealed = true;
+          const envelope = parseSealed(sealed);
+          const result = await request('unwrap', { kid: envelope.kid, wrappedKey: envelope.wrappedKey, name: envelope.name, sha256: envelope.sha256 });
+          if (result.status === 'approval_required') record.roundTrip = 'skipped(kim承認待ち)';
+          else if (result.status === 'ok') {
+            const key = decodeBase64url(result.dataKey, 32);
+            try {
+              if (hash(openWithDataKey(envelope, key)) === hash(bytes)) {
+                record.roundTrip = 'ok';
+                record.sha256 = hash(bytes);
+                record.sealedSha256 = hash(sealed);
+              }
+            } finally { key.fill(0); }
+          }
+        } catch { /* 秘密を含みうる例外本文は保存しない */ }
+        records.push(record);
+        saveJson(stateFile, records);
+        out(JSON.stringify(record));
+      }
+      if (!targets.length) saveJson(stateFile, records);
+      return records.some(r => r.roundTrip !== 'ok') ? 2 : 0;
+    }
     if (command === 'status') {
       out(fs.existsSync(pubFile) ? `公開鍵: 設定済み / kid: ${kid()}` : '公開鍵未設定');
       if (fs.existsSync(verdictFile)) {

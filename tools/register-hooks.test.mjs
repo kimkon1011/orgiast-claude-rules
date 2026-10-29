@@ -1,9 +1,26 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+// Each case launches the real installer repeatedly. Snapshot its inputs once:
+// WSL/Windows mounts otherwise reread the same module tree in every subprocess,
+// taking minutes even though no hook or network request is executed.
+const sourceRepo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const originalCwd = process.cwd();
+const fixtureRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-source-'));
+after(() => {
+  process.chdir(originalCwd);
+  fs.rmSync(fixtureRepo, { recursive: true, force: true });
+});
+fs.cpSync(path.join(sourceRepo, 'tools'), path.join(fixtureRepo, 'tools'), {
+  recursive: true,
+  filter: source => !/\.test\.[cm]?js$/.test(source),
+});
+process.chdir(fixtureRepo);
 
 test('setup converge timeout covers Node updates on new and existing PCs, idempotently', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-node-runtime-'));
@@ -482,4 +499,46 @@ test('全OSの旧e2e/verify ps1登録を同期Stop mjsへ収束し再実行で�
     assert.notEqual(current[0].async, true);
   }
   run(); assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), settings);
+});
+
+test('knowledge-guard converges matcher, session mode and six-second timeout idempotently', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-knowledge-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const repo = path.resolve('.'), file = path.join(home, '.claude/settings.json');
+  const run = () => execFileSync(process.execPath, [path.join(repo, 'tools/register-hooks.mjs'), '--hooks-only'], {
+    env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo }, stdio: 'pipe',
+  });
+  run();
+  const settings = JSON.parse(fs.readFileSync(file));
+  for (const event of ['PreToolUse', 'SessionStart']) {
+    const groups = settings.hooks[event].filter(g => g.hooks.some(h => h.command.includes('knowledge-guard.mjs')));
+    assert.equal(groups.length, 1);
+    const hook = groups[0].hooks.find(h => h.command.includes('knowledge-guard.mjs'));
+    assert.equal(hook.timeout, 6);
+    assert.equal(hook.command.includes('--session-start'), event === 'SessionStart');
+    if (event === 'PreToolUse') {
+      assert.equal(groups[0].matcher, 'Read|Grep|Glob|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit');
+      groups[0].matcher = 'Read';
+    }
+    hook.timeout = 1;
+    hook.async = true;
+  }
+  fs.writeFileSync(file, JSON.stringify(settings));
+  run();
+  const repaired = JSON.parse(fs.readFileSync(file));
+  for (const event of ['PreToolUse', 'SessionStart']) {
+    const hook = repaired.hooks[event].flatMap(g => g.hooks).find(h => h.command.includes('knowledge-guard.mjs'));
+    assert.equal(hook.async, undefined);
+    assert.ok(!hook.command.includes('gate-hook-runner.mjs'), 'account rejection must not be downgraded by rollout');
+  }
+  for (const event of ['PreToolUse', 'SessionStart']) assert.equal(repaired.hooks[event].flatMap(g => g.hooks).find(h => h.command.includes('knowledge-guard.mjs')).timeout, 6);
+  assert.equal(repaired.hooks.PreToolUse.find(g => g.hooks.some(h => h.command.includes('knowledge-guard.mjs'))).matcher, 'Read|Grep|Glob|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit');
+  run();
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)), repaired);
+  const manifest = JSON.parse(fs.readFileSync(path.join(repo, 'tools/setup-manifest.json')));
+  const manifestFile = path.join(home, 'knowledge-setup.json');
+  fs.writeFileSync(manifestFile, JSON.stringify({ version: 1, items: manifest.items.filter(item => item.id.startsWith('settings:knowledge-guard-')) }));
+  const checked = JSON.parse(execFileSync(process.execPath, [path.join(repo, 'tools/setup.mjs'), '--home', home, '--manifest', manifestFile, '--json'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } }));
+  assert.equal(checked.items.length, 2);
+  assert.ok(checked.items.every(item => item.status === 'OK'), JSON.stringify(checked));
 });

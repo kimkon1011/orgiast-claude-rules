@@ -1,6 +1,11 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/knowledge-lock.mjs", "scope": "fleet", "step": "settings:knowledge-guard-PreToolUse", "reason": "契約判定・蓄積保護と封印を全PCへconverge配布"},
+    {"path": "tools/lib/knowledge-envelope.mjs", "scope": "fleet", "step": "settings:knowledge-guard-PreToolUse", "reason": "契約判定・蓄積保護と封印を全PCへconverge配布"},
+    {"path": "tools/claude-account-ledger.json", "scope": "fleet", "step": "settings:knowledge-guard-PreToolUse", "reason": "契約判定・蓄積保護と封印を全PCへconverge配布"},
+    {"path": "tools/claude-account-ledger.mjs", "scope": "fleet", "step": "settings:knowledge-guard-PreToolUse", "reason": "契約判定・蓄積保護と封印を全PCへconverge配布"},
+    {"path": "tools/knowledge-guard.mjs", "scope": "fleet", "step": "settings:knowledge-guard-PreToolUse", "reason": "契約判定・蓄積保護と封印を全PCへconverge配布"},
     {"path": "tools/register-task-hide-guard.ps1", "scope": "fleet", "step": "task:task-hide-guard", "reason": "全PCの非表示タスク実行・窓出現記録を converge で登録する"},
     {"path": "tools/register-task-hide-guard.mjs", "scope": "fleet", "step": "task:task-hide-guard", "reason": "全PCの非表示タスク実行・窓出現記録を converge で登録する"},
     {"path": "tools/task-hide-guard.ps1", "scope": "fleet", "step": "task:task-hide-guard", "reason": "全PCの非表示タスク実行・窓出現記録を converge で登録する"},

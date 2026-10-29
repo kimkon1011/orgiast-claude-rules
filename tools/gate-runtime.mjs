@@ -14,6 +14,11 @@ function readRollout() { try { return JSON.parse(fs.readFileSync(path.join(tools
 const hostName = () => process.env.ORGIAST_HOSTNAME || os.hostname();
 export function rolloutMode(name, { manifest = readRollout(), home = homeDir(), hostname = hostName(), now = Date.now() } = {}) {
   const entry = manifest?.gates?.[name];
+  if (name === 'lane-repair-first-gate' && entry?.rollout === 'deny'
+    && entry.immediatePolicy === '2026-10-29 user 指示: 全PC・全アカウントで故障レーン修復を最優先') return 'deny';
+  if (name === 'lane-abandonment-gate') {
+    try { if (JSON.parse(fs.readFileSync(path.join(home, '.claude/rule-enforcement.json'), 'utf8'))['repair-failed-lane-first']?.mode === 'block') return 'deny'; } catch {}
+  }
   // データ破損防止の明示ポリシー: 初受信・非pilot PCも即時deny。
   if (name === 'recipient-domain-gate' && entry?.rollout === 'deny'
     && entry.immediatePolicy === '2026-10-23 名刺OCR誤読による不存在ドメイン送信防止') return 'deny';

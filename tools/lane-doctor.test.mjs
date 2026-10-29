@@ -141,7 +141,8 @@ test('newer limits block without erasing probe history across quick runs', async
   for (const minutes of [31, 32]) {
     const result = laneDoctorQuick({ home: h, now: now + minutes * 60000 });
     assert.equal(result.lanes.codex.alive, false);
-    assert.equal(result.lanes.codex.reason, 'usage_limit_no_fallback');
+    assert.equal(result.lanes.codex.reason, 'quota_wait');
+    assert.equal(result.lanes.codex.until, now + 86400000);
     assert.equal(result.lanes.codex.lastProbeOkAt, stamp);
     assert.equal(result.lanes.codex.probedAt, stamp);
   }

@@ -5,11 +5,13 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { sessionSummary } from './stall-scan.mjs';
 import { laneHome } from './lane-doctor.mjs';
 import { laneDoctorQuick, summarize } from './lane-doctor.mjs';
+import { repairContext } from './lib/lane-repair-state.mjs';
 export function sessionLaneHealth(options) {
   const home = options?.home || laneHome();
   const context = auditContext(home);
   (options?.auditLaunch || launchAudit)({ ...options, home, intervalHours: 6 });
-  return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: [context, summarize(laneDoctorQuick(options)), sessionSummary(options?.home || laneHome(), options?.now)].filter(Boolean).join(" / ") } };
+  const health = laneDoctorQuick(options);
+  return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: [context, summarize(health), repairContext(health, home, options?.now), sessionSummary(home, options?.now)].filter(Boolean).join(" / ") } };
 }
 export async function main() {
   await readStdinWithTimeout();

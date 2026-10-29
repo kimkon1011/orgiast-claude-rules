@@ -94,3 +94,9 @@ for (const tool_name of ['Bash', 'PowerShell']) {
     }
   });
 }
+
+test('repair log remains callable after lane guard limit in unattended session', t => {
+  const h = setup('implement', 'claude-sonnet-5', { toolCalls: 100 });
+  t.after(() => fs.rmSync(h, { recursive: true, force: true }));
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: 'node tools/lane-repair-log.mjs --lane deepseek --tried check --result unfixable' } }), null);
+});

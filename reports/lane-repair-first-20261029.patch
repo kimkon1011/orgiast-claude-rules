@@ -1,0 +1,1148 @@
+From 54400b64361929fe812d2ce8acaba50e9fb13578 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Thu, 29 Oct 2026 17:00:25 +0900
+Subject: [PATCH] feat: repair failed AI lanes before continuing work
+
+---
+ CLAUDE.md.template                      |   2 +
+ ONBOARDING.md                           |   1 +
+ reports/lane-repair-first-20261029.md   | 125 ++++++++++++++++++++++++
+ tools/gate-contract.test.mjs            |   5 +
+ tools/gate-guard-contract.test.mjs      |   6 ++
+ tools/gate-remedies.md                  |   5 +
+ tools/gate-rollout-manifest.json        |   1 +
+ tools/gate-runtime.mjs                  |   5 +
+ tools/lane-abandonment-gate.mjs         |   4 +-
+ tools/lane-abandonment-gate.test.mjs    |   9 ++
+ tools/lane-doctor.mjs                   |   3 +
+ tools/lane-doctor.test.mjs              |   3 +-
+ tools/lane-real-health.test.mjs         |  58 +++++++++++
+ tools/lane-repair-convergence.test.mjs  |  65 ++++++++++++
+ tools/lane-repair-detector.test.mjs     |  66 +++++++++++++
+ tools/lane-repair-first-gate.mjs        |  66 +++++++++++++
+ tools/lane-repair-first-gate.test.mjs   |  86 ++++++++++++++++
+ tools/lane-repair-log.mjs               |  51 ++++++++++
+ tools/lib/lane-real-health.mjs          |  59 +++++++++++
+ tools/lib/lane-repair-detector.mjs      |  74 ++++++++++++++
+ tools/lib/lane-repair-state.mjs         |  35 +++++++
+ tools/pretooluse-lane-guard.mjs         |   2 +-
+ tools/pretooluse-lane-guard.test.mjs    |   6 ++
+ tools/register-hooks.mjs                |   1 +
+ tools/register-rule-compliance-task.mjs |   7 ++
+ tools/rule-compliance-loop.mjs          |   5 +-
+ tools/rule-compliance-loop.test.mjs     |   2 +-
+ tools/rule-detectors.mjs                |   3 +-
+ tools/rules-registry.json               |  30 ++++++
+ tools/sessionstart-lane-health.mjs      |   4 +-
+ tools/setup-manifest.json               |   3 +
+ 31 files changed, 784 insertions(+), 8 deletions(-)
+ create mode 100644 reports/lane-repair-first-20261029.md
+ create mode 100644 tools/lane-real-health.test.mjs
+ create mode 100644 tools/lane-repair-convergence.test.mjs
+ create mode 100644 tools/lane-repair-detector.test.mjs
+ create mode 100644 tools/lane-repair-first-gate.mjs
+ create mode 100644 tools/lane-repair-first-gate.test.mjs
+ create mode 100644 tools/lane-repair-log.mjs
+ create mode 100644 tools/lib/lane-real-health.mjs
+ create mode 100644 tools/lib/lane-repair-detector.mjs
+ create mode 100644 tools/lib/lane-repair-state.mjs
+ create mode 100644 tools/register-rule-compliance-task.mjs
+
+diff --git a/CLAUDE.md.template b/CLAUDE.md.template
+index bc43169..941959c 100644
+--- a/CLAUDE.md.template
++++ b/CLAUDE.md.template
+@@ -78,6 +78,8 @@ kim が読む Doc は `tools/gdoc-publish.mjs --authuser <開く人のメール>
+ 
+ ## 他AIは「積極的に使う」のが既定（kim 2026-10-09 厳命・全PC全アカウント）
+ 
++**他AIが使えなくなったら、その場で直す（全PC・全アカウント・無人も同じ）**。失敗の原因を調べ、修復を試し、成功を実測する。`lane-repair-first-gate` が未修復での本体編集・通常作業を block する。`node tools/lane-doctor.mjs --probe` で健全化するか、`node tools/lane-repair-log.mjs --lane <名> --tried "<試した手段>" --result fixed|unfixable` で記録（6時間有効）。応答にも `[LANE-REPAIR]` を明記する。reset が判明した429/usage_limitは quota_wait とし、代替の安いレーンへ回す。Codex の probe 失敗は直接 WSL 実行の終了コードでも切り分ける（ONBOARDING §1.18）。
++
+ Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM などの他AIは**使うのが既定**。Claude だけで済ませる方が例外で、例外には理由の明記が要る。
+ - 残高切れ → 「入金する（オートチャージ ON）」が既定。キー失効・403 → 「再発行する」が既定。429 → 別の他AIへ自動切替。**「外す／やめる／縮小」を kim への選択肢に並べない。**
+ - 他AIの障害は Claude で代替せず、別の他AIで吸収し、復旧したら戻す。Claude（監督）へ逆流させるのが最も高くつく。
+diff --git a/ONBOARDING.md b/ONBOARDING.md
+index 191b18c..b80ddd0 100644
+--- a/ONBOARDING.md
++++ b/ONBOARDING.md
+@@ -1051,6 +1051,7 @@ Astra クールダウン中は Sol を使う。明示の `--model astra`（ま
+ - WindowsでCodexが書けないPCは、Claude がその場でWSL経路を復旧する: `wsl --install -d Ubuntu --no-launch` → `wsl -d Ubuntu -u root -- bash -lc "<NodeSource で node 22>; npm i -g @openai/codex"` → `%USERPROFILE%\.codex\auth.json` を WSL の `/root/.codex/` へコピー → `codex login status` → codex-do で1ファイル作成を実測（2026-10-09 nishi-PC 実測: WSL 本体が入っていれば管理者権限・再起動とも不要）。
+ 
+ **他AIレーンが落ちたら、その場で直す。代替や Claude 本体へ逃げて放置しない（2026-10-09 nishi 厳命）**。user のコストパフォーマンスが最優先で、Claude 本体はいちばん高い経路。
++- **全PC・全アカウント・無人セッションで強制**: `lane-repair-first-gate` が修復可能な故障を検知すると本体の編集・通常作業を block する。最初に `node tools/lane-doctor.mjs --probe`。健全化するか、修復を試して `node tools/lane-repair-log.mjs --lane <名> --tried "<試した手段>" --result fixed|unfixable` に記録して解除（6時間有効）。同一故障の修復不可が3回続いたら1回 notify-kim に通知する。reset の分かる429/usage_limitは `quota_wait` として修復対象から外し、SessionStart に示す代替の安いレーンへ回す。実呼び出し24hで5件以上・非quota失敗率50%以上なら probe 成功でも故障。Codex probe_failed は直接 WSL 実行の終了コードでも切り分ける。
+ - 失敗出力から原因を特定し、Claude が実行できる修理（環境導入・認証の引き継ぎ・設定修正）をそのターン中に試す。修理後は1回実行して成功を実測する。
+ - 応答に `[LANE-REPAIR] <レーン>: 修復済み <内容>` か `[LANE-REPAIR] <レーン>: 修復不可 試行: <試した手段>` を書く。Stop hook の `lane-abandonment-gate` が、失敗シグナルのあるターンでこの行が無いと block する（`[LANE-FALLBACK]` 1行だけでは通らない）。
+ - `delegation-health-check` は環境故障（WSL 不在・spawn 失敗・未認証）と「3件以上すべて失敗したレーン」（`lane_outage_unrepaired`）を high＋修理タスクで出す。朝に出ていたら、その日の作業より先に直す。
+diff --git a/reports/lane-repair-first-20261029.md b/reports/lane-repair-first-20261029.md
+new file mode 100644
+index 0000000..134c891
+--- /dev/null
++++ b/reports/lane-repair-first-20261029.md
+@@ -0,0 +1,125 @@
++# レーン故障の修復優先: 実装・検証記録（2026-10-29）
++
++## 作業場所と先行差分
++
++正本の `.git` はこのセッションから読み取り専用で、開始時の `git fetch` が `cannot open .git/FETCH_HEAD: Read-only file system`。さらに外部処理が作業ツリーを繰り返し復元したため、退避された `rescue/auto-session-20261029-164003` から変更を回収した。
++
++独立 clone `/tmp/lane-repair-pr` で `git fetch && git checkout main && git pull` を実行し、最新 main `e9f6ce9`（PR #1273、quota-sweep停止・cost-directive日次更新・Codex計測）から `feat/lane-repair-first-20261029` を作成。元の基準 `830d4bb` から今回変更するファイルに先行作業との差分がないこと、パッチが `git apply --check` で適用できることを確認した。先行した DeepSeek の OpenRouter 経路を維持した。
++
++## 1. 実呼び出しによるレーン判定
++
++変更ファイル: `tools/lane-doctor.mjs`、`tools/lib/lane-real-health.mjs`、`tools/lane-real-health.test.mjs`、`tools/lane-doctor.test.mjs`。
++
++cost-work-loop と同じ `executor-usage.jsonl` の24時間窓を集計し、5件以上・非quota失敗率50%以上で probe より優先して `real_fail_rate` にする。失敗理由はHTTPステータス、またはstderr先頭を集計。429/usage_limit と既知の再開時刻は `quota_wait` に分離する。不正・未来・期限外の行、未ルーティング行は除外する。probe再実行でも実績の故障判定を消さない。
++
++実測コマンド（本物のデータ）:
++
++```sh
++ORGIAST_HOME=/mnt/c/Users/user node tools/lane-doctor.mjs --json
++```
++
++```json
++{"ts":"2026-10-29T07:47:45.849Z","deepseek":{"alive":false,"reason":"real_fail_rate","calls":27,"failures":27,"failRate":1,"error":"HTTP 402 (23); cooldown (4)"},"errors":["lane-health.json: EROFS"]}
++```
++
++残課題: 判定は実測できたが、このセッションは本物の `~/.claude/lane-health.json` に書き込めない。DeepSeekの実績は過去24時間の集計であり、現在のAPI経路の復旧可否を新たな実呼び出しで検証した結果ではない。
++
++## 2. 修復を先に行うPreToolUseと修復台帳
++
++変更ファイル: `tools/lane-repair-first-gate.mjs`、`tools/lane-repair-log.mjs`、`tools/lib/lane-repair-state.mjs`、`tools/sessionstart-lane-health.mjs`、`tools/pretooluse-lane-guard.mjs`、`tools/gate-runtime.mjs`、`tools/gate-rollout-manifest.json`、`tools/gate-remedies.md`。テストは `lane-repair-first-gate.test.mjs`、`gate-guard-contract.test.mjs`、`pretooluse-lane-guard.test.mjs`、`gate-contract.test.mjs`。
++
++新gateはGATE_CONTRACTと既存runnerを使い、全PCで即時denyする明示ポリシーを登録。無人・モデル・permission_modeに依存せず判定する。修復可能な故障があり、同一故障の記録が6時間以内になければEdit/Write/MultiEdit/NotebookEditと通常shellをexit 2で止める。参照ツールと信頼する診断・修復コマンドを許可し、コマンド連結・リダイレクト・別パスの同名スクリプトを許可しない。既存lane guardでも修復記録コマンドを呼べるようにした。
++
++修復記録は `lane-repair-log.jsonl` に追記し、同一故障の修復不可が3回連続するとnotify-kimで1回通知する。排他・クラッシュ後の古いlock回復・秘密のマスクを実装。gate例外は `gate-errors.jsonl` に記録しfail-open。Codex probeの誤警報は直接WSL実行の終了コードで切り分ける手順を表示する。
++
++実測: `/tmp/lane-repair-work/smoke-home-yB7QhM` を ORGIAST_HOME に指定し、故障レーンを用意して同じEdit入力をCLIへ送信。
++
++```text
++node tools/lane-repair-first-gate.mjs
++  before: exit 2 / [LANE-REPAIR-FIRST] 修復を最優先: deepseek: real_fail_rate HTTP 500 (8)
++node tools/lane-repair-log.mjs --lane deepseek --tried "API疎通とキー設定を確認。HTTP 500 が継続" --result unfixable
++  exit 0 / result: unfixable
++node tools/lane-repair-first-gate.mjs
++  after: exit 0 / stderrなし
++```
++
++残課題: 実機settingsへの登録は項目4。通知の3回連続・1回抑制はモックで実行確認し、実在の相手へテスト通知は送っていない。
++
++## 3. 監査・自動昇格・日次タスク
++
++変更ファイル: `tools/rules-registry.json`、`tools/rule-detectors.mjs`、`tools/lib/lane-repair-detector.mjs`、`tools/rule-compliance-loop.mjs`、`tools/register-rule-compliance-task.mjs`、`tools/lane-abandonment-gate.mjs`。テストは `lane-repair-detector.test.mjs`、`rule-compliance-loop.test.mjs`、`lane-abandonment-gate.test.mjs`、`lane-repair-convergence.test.mjs`。
++
++実際のtool_result・lane-healthの観測後、修復記録のない本体実装、または有効なLANE-REPAIRなしの代替を検出する。引用、テスト出力、quota、失敗した記録コマンド、別レーン・別故障・期限切れ・未来の修復記録を区別する。判定はセッション単位で重複計上しない。
++
++精度実測:
++
++```sh
++node --test tools/lane-repair-detector.test.mjs
++```
++
++```json
++{"fixtureCount":28,"truePositives":16,"falsePositives":0,"trueNegatives":12,"falseNegatives":0,"precision":1,"recall":1}
++```
++
++これは人工の正例・負例トランスクリプトの実行結果。実データの人手ラベル精度を示す値ではない。registryのvalidationにこの実測値を記載した。
++
++```sh
++ORGIAST_HOME=/mnt/c/Users/user node tools/rule-compliance-loop.mjs --days 7 --json
++```
++
++```json
++{"rows":56238,"rule":"repair-failed-lane-first","applicable":5,"violation":5,"bypass":0,"mode":"block","precision":1}
++```
++
++既存 `register-rule-compliance-task.ps1` は毎日03:50に `run-rule-compliance-loop.mjs` を実行し、そのラッパーは既に `runAudit({apply:true,dryRun:false})` を呼ぶ。新Node登録ラッパーをsetup-manifestへ追加し、未登録ならconvergeで登録する。enforcementが欠けている場合は `rule-compliance-loop.mjs --days 7 --apply` で初期生成する。block昇格時にはlane-abandonment-gateがenforcementを読み、Sonnet等にもblock判定を適用し、runner側のwarnへの降格を防ぐ。
++
++テスト用HOMEでは `runAndPersist({home})` とconvergeを実行し、実ファイル `rule-enforcement.json` の生成・read-back、新ルールのmode/precision、既存ルール保持を確認した。
++
++本物のHOMEでも `--days 7 --apply` を試したが、`EROFS: read-only file system, open '/mnt/c/Users/user/.claude/rule-enforcement.json'`。残課題は本物のenforcement生成とWindows実機での日次タスク登録。WindowsのPowerShell呼出し・Daily・実行ユーザーの指定は登録コードとモックで確認した。
++
++## 4. 全PCへの配布経路
++
++変更ファイル: `CLAUDE.md.template`、`ONBOARDING.md` §1.18、`tools/register-hooks.mjs`、`tools/setup-manifest.json`、`tools/lane-repair-convergence.test.mjs`。
++
++正式ルールに修復優先・解除コマンド・6時間の期限・quota_wait・Codex直接確認を記載した。既存のonboarding-sync → setup --converge → register-hooks / fleet-convergenceの経路へ載せた。SessionStartは既存の同期hookを拡張する。新PreToolUseはrunner経由・同期・timeout 15秒・NotebookEditを含むmatcherで登録し、二重登録しない。
++
++実測コマンド:
++
++```sh
++node tools/setup.mjs --converge --home /mnt/c/Users/user --manifest /tmp/lane-repair-work/setup-manifest.json --json
++```
++
++今回の項目だけを既存manifestから取り出して実行。`task:rule-compliance / state:rule-enforcement / settings:lane-repair-first` はNG。registrarの実測は `clean な main / detached HEAD の同期 checkout がありません`。本物のsettingsを読み戻した結果、新gateは0件、既存SessionStartは1件、enforcementは未生成だった。
++
++テスト用HOMEのconvergeでは state:rule-enforcement / settings:lane-repair-first / settings:lane-health-SessionStart の3項目がOK。日次タスクのWindows登録はモック検証であり、実タスクを登録したとは扱わない。settingsを読み戻してrunner経由・同期・15秒・matcher・再登録しても1件だけであることを確認した。
++
++残課題: 本物のHOMEはこのセッションの書込許可範囲外。正本へのpush/PRとマージ後、各PCで通常のconvergeが完了するまでは、全PC・全アカウントで適用済みとは報告できない。
++
++## 検証と成果物
++
++- 追加テスト4ファイル: 48 pass / 0 fail / 0 skip。
++- 関連16ファイル: 305 tests / 304 pass / 0 fail / 既存Windows専用1件はLinuxで対象外。追加したSonnet昇格テストも実行確認。
++- `node tools/selftest-guards.mjs`: 68 PASS、ALL PASS。
++- `git diff --check` と新規実装の `node --check`: 通過。
++- `control-group-check.mjs` で lane-repair-first-gate / lane-abandonment-gate / pretooluse-lane-guard の3件すべて killed（原本を無効化せず、一時コピーの変異をテストが検出）。
++- 広域の既存 `gate-readonly.test.mjs` を含む追加実行は長時間化したため中断。テスト本体の削除・skip追加・gate解除はしていない。
++- 実行ログ: `/tmp/lane-repair-work/`。
++
++## push・PR・automergeの状態
++
++認証がある実行環境での完了が必要。Windows版 `gh.exe --version` は `WSL UtilBindVsockAnyPort: socket failed 1` で実行不能。LinuxにはGH_TOKEN/GITHUB_TOKENがなく、非対話の `git credential fill` はexit 128（`could not read Username for https://github.com`）。Windowsの標準GitHub CLI設定にはユーザー名のみがあり、平文OAuth tokenはなかった。
++
++実装・検証済みのブランチとPR本文をローカルに保全した。GitHubへpushしてPRを作成しautomergeラベルを付けたことは未確認・未完である。
++
++実際のpush試行:
++
++```sh
++GIT_TERMINAL_PROMPT=0 git push --set-upstream origin feat/lane-repair-first-20261029
++```
++
++```text
++exit 128
++fatal: could not read Username for 'https://github.com': terminal prompts disabled
++```
++
++PR URL: 未作成。automergeラベル: 未付与。PR本文は `/tmp/lane-repair-work/pr-body.md` に準備済み。
+diff --git a/tools/gate-contract.test.mjs b/tools/gate-contract.test.mjs
+index cf2664f..4d94275 100644
+--- a/tools/gate-contract.test.mjs
++++ b/tools/gate-contract.test.mjs
+@@ -23,6 +23,11 @@ test('new rollout entries must declare the seven day window; legacy inventory is
+     const row = manifest.gates[name];
+     assert.ok(row, `${name}: missing rollout entry`);
+     assert.ok(['warn','deny'].includes(row.rollout));
++    if (name === 'lane-repair-first-gate') {
++      assert.equal(row.rollout, 'deny');
++      assert.equal(row.immediatePolicy, '2026-10-29 user 指示: 全PC・全アカウントで故障レーン修復を最優先');
++      continue; // Explicit repair-first policy applies immediately on every PC.
++    }
+     if (name === 'exec-tree-edit-guard') {
+       assert.equal(row.rollout, 'deny');
+       assert.equal(row.immediatePolicy, '2026-10-26 user 指示: 実行ツリーの直接編集を即時拒否');
+diff --git a/tools/gate-guard-contract.test.mjs b/tools/gate-guard-contract.test.mjs
+index 05632ed..8c12915 100644
+--- a/tools/gate-guard-contract.test.mjs
++++ b/tools/gate-guard-contract.test.mjs
+@@ -23,3 +23,9 @@ test('Stop ゲートが要求する node コマンドは lane guard の常時許
+   assert.ok(commands.includes('node tools/auto-progress.mjs'));
+   for (const command of commands) assert.equal(isAlwaysAllowed(command), true, command);
+ });
++
++test('repair-first の解除コマンドは既存 lane guard でも常時許可される', () => {
++  const commands = requiredCommands('lane-repair-first-gate.mjs');
++  assert.ok(commands.includes('node tools/lane-repair-log.mjs'));
++  for (const command of commands) assert.equal(isAlwaysAllowed(command), true, command);
++});
+diff --git a/tools/gate-remedies.md b/tools/gate-remedies.md
+index 878fc96..df407dd 100644
+--- a/tools/gate-remedies.md
++++ b/tools/gate-remedies.md
+@@ -275,3 +275,8 @@ PR のマージを人に頼む文（本文の「次に kim がすること」・
+ ## message-locator-gate
+ 
+ メッセージ・通知を人に案内する文（「Discord に送りました」「メールが届いています」「DM を開いて」など）は、次の目印がそろっている時だけ通す。毎日1000件以上のメッセージを受け取る人が、一発で見つけられるようにするため（2026-10-26 kim 指摘: 「Discord の DM で今日19時ごろの通知を開き」では、どのアカウントの誰からの何か分からず見つけられなかった）。①アプリと開くアカウント（例: Discord の cr@ ログイン、Gmail の seisaku-team@） ②送信者（Bot 名・人の名前・メールアドレス） ③場所（DM の相手名・チャンネル名・ラベル） ④日時（日付と時:分） ⑤先頭行か件名を原文のまま＋そのメッセージへの直接リンク（Discord は `https://discord.com/channels/<guild|@me>/<channel>/<message>`、Gmail は authuser 付きのスレッド URL）。できれば中身の要点も本文に書き、開かなくても判断できるようにする。目印が本当に不要な一般論だけ `[MSG-LOCATOR-OK: <理由>]`。既存 Stop runner から呼ぶので Stop hook の追加登録は不要。
++
++## lane-repair-first-gate
++
++全PC・全アカウントで修復可能なレーン故障を最初に直す。`node tools/lane-doctor.mjs --probe` で診断する。Codex の probe_failed は直接 `wsl -d Ubuntu -u root -- codex exec --skip-git-repo-check "ping"` の終了コードでも切り分け、probe 経路だけの故障をレーン停止と断定しない。
++修復を試し、成功を実測したら `node tools/lane-repair-log.mjs --lane <名> --tried "<試した手段と実測>" --result fixed`。直せなければ同コマンドの `--result unfixable` で6時間だけ解除する。同一故障で3回連続修復不可なら notify-kim に1回通知する。429/usage_limit で reset が判明している quota_wait は修復対象外で、SessionStart に出る代替の安いレーンへ回す。gate 自体の例外は gate-errors.jsonl に記録して fail-open。
+diff --git a/tools/gate-rollout-manifest.json b/tools/gate-rollout-manifest.json
+index 9cf9ff2..4106176 100644
+--- a/tools/gate-rollout-manifest.json
++++ b/tools/gate-rollout-manifest.json
+@@ -5,6 +5,7 @@
+     "DESKTOP-2D0R4LI"
+   ],
+   "gates": {
++    "lane-repair-first-gate": { "rollout": "deny", "immediatePolicy": "2026-10-29 user 指示: 全PC・全アカウントで故障レーン修復を最優先" },
+     "exec-tree-edit-guard": { "rollout": "deny", "immediatePolicy": "2026-10-26 user 指示: 実行ツリーの直接編集を即時拒否" },
+     "mail-consistency-gate": { "rollout": "deny", "immediatePolicy": "2026-10-26 博展見積: 合意済み『設営スタッフ不要』が見積に反映されないまま請求へ進みかけた", "distributedAt": "2026-10-26T00:00:00Z", "denyAfter": "2026-11-02T00:00:00Z" },
+     "mail-draft-account-gate": { "rollout": "deny", "immediatePolicy": "2026-10-25 kim 指示: 全PCのメール下書きは seisaku-team@orgiast.jp に統一" },
+diff --git a/tools/gate-runtime.mjs b/tools/gate-runtime.mjs
+index 7fe7761..28718fc 100644
+--- a/tools/gate-runtime.mjs
++++ b/tools/gate-runtime.mjs
+@@ -14,6 +14,11 @@ function readRollout() { try { return JSON.parse(fs.readFileSync(path.join(tools
+ const hostName = () => process.env.ORGIAST_HOSTNAME || os.hostname();
+ export function rolloutMode(name, { manifest = readRollout(), home = homeDir(), hostname = hostName(), now = Date.now() } = {}) {
+   const entry = manifest?.gates?.[name];
++  if (name === 'lane-repair-first-gate' && entry?.rollout === 'deny'
++    && entry.immediatePolicy === '2026-10-29 user 指示: 全PC・全アカウントで故障レーン修復を最優先') return 'deny';
++  if (name === 'lane-abandonment-gate') {
++    try { if (JSON.parse(fs.readFileSync(path.join(home, '.claude/rule-enforcement.json'), 'utf8'))['repair-failed-lane-first']?.mode === 'block') return 'deny'; } catch {}
++  }
+   // データ破損防止の明示ポリシー: 初受信・非pilot PCも即時deny。
+   if (name === 'recipient-domain-gate' && entry?.rollout === 'deny'
+     && entry.immediatePolicy === '2026-10-23 名刺OCR誤読による不存在ドメイン送信防止') return 'deny';
+diff --git a/tools/lane-abandonment-gate.mjs b/tools/lane-abandonment-gate.mjs
+index 4249b8c..86ee1bd 100644
+--- a/tools/lane-abandonment-gate.mjs
++++ b/tools/lane-abandonment-gate.mjs
+@@ -102,7 +102,9 @@ export function evaluateLaneAbandonment(ctx, { home = laneHome() } = {}) {
+     if ((/^(?:Edit|Write|MultiEdit)$/.test(event.name) && !doc) || (event.name === 'Agent' && /opus|fable/i.test(event.input?.model || '')) || shellCalls >= 3) abandoned = true;
+   }
+   const exemption = exemptions(ctx, events, failedAt, { requireRepair: true });
+-  const modelEligible = /fable|opus/i.test(currentModel(ctx));
++  const enforcement = readJson(path.join(home, '.claude/rule-enforcement.json'));
++  const promoted = enforcement['repair-failed-lane-first']?.mode === 'block';
++  const modelEligible = promoted || /fable|opus/i.test(currentModel(ctx));
+   const eligible = modelEligible && failedAt >= 0;
+   const unrepaired = eligible && exemption !== 'lane-ok' && !repairReported(ctx.assistantText);
+   const abandon = eligible && abandoned && !exemption;
+diff --git a/tools/lane-abandonment-gate.test.mjs b/tools/lane-abandonment-gate.test.mjs
+index 72752a3..b941b54 100644
+--- a/tools/lane-abandonment-gate.test.mjs
++++ b/tools/lane-abandonment-gate.test.mjs
+@@ -112,3 +112,12 @@ for (const prefix of ['✔ ', '✖ ', 'ok 1 - ', 'not ok 2 - ', 'ℹ ', '# Subte
+     assert.match(failureSignal(`${text}\nYou've hit your usage limit`, 'node tools/codex-do.mjs'), /usage limit/);
+   });
+ }
++
++test('repair rule block applies abandonment gate to Sonnet in unattended sessions', t => {
++  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-promoted-'));
++  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
++  fs.mkdirSync(path.join(home, '.claude'));
++  fs.writeFileSync(path.join(home, '.claude/rule-enforcement.json'), JSON.stringify({ 'repair-failed-lane-first': { mode: 'block' } }));
++  const ctx = { transcriptRaw: transcript([...failure, use('Edit', { file_path: 'src/app.mjs' })], 'claude-sonnet-5'), assistantText: '完了', sessionId: 'headless' };
++  assert.equal(evaluateLaneAbandonment(ctx, { home }).decision, 'block');
++});
+diff --git a/tools/lane-doctor.mjs b/tools/lane-doctor.mjs
+index 8a98a56..e87d8d3 100644
+--- a/tools/lane-doctor.mjs
++++ b/tools/lane-doctor.mjs
+@@ -12,6 +12,7 @@ import { providerResetUntil } from './codex-cooldown.mjs';
+ import { notifyKim } from './notify-kim.mjs';
+ import { redactAll } from './lib/redact.mjs';
+ import { catalog } from './provider-catalog.mjs';
++import { applyRealLaneHealth } from './lib/lane-real-health.mjs';
+ 
+ export const PROVIDERS = ['codex', 'gemini', 'deepseek', 'glm', 'groq', 'openrouter'];
+ export const laneHome = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
+@@ -110,6 +111,7 @@ export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = tr
+       ? { alive: true, reason: 'probe_expired' } : { ...previous };
+     health.lanes[p] = { ...state, ...evidence };
+   }
++  applyRealLaneHealth(health, home, now);
+   // API key の生存と CLI の有無は別条件。CLI が無い場合は実装候補にしない。
+   health.lanes['gemini-cli'] = { ...health.lanes.gemini, alive: health.lanes.gemini.alive && executable('gemini'), reason: executable('gemini') ? health.lanes.gemini.reason : 'cli_missing' };
+   orders(health);
+@@ -228,6 +230,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
+   if (routingChanged && !persist(path.join(dir, 'routing-overrides.json'), routing, health)) health.repairs = health.repairs.filter(r => r.action !== 'demote_removed' || r.detail !== '実測成功');
+   if (cooldownChanged && !persist(path.join(dir, 'provider-cooldown.json'), cooldown, health)) health.repairs = health.repairs.filter(r => r.action !== 'cooldown_removed' || r.detail !== '実測成功');
+   health.probedAt = new Date(now).toISOString();
++  applyRealLaneHealth(health, home, now);
+   health.lanes['gemini-cli'] = { ...health.lanes.gemini, alive: health.lanes.gemini.alive && executable('gemini') };
+   orders(health);
+   health.notifications = [];
+diff --git a/tools/lane-doctor.test.mjs b/tools/lane-doctor.test.mjs
+index dd52633..22cc15a 100644
+--- a/tools/lane-doctor.test.mjs
++++ b/tools/lane-doctor.test.mjs
+@@ -141,7 +141,8 @@ test('newer limits block without erasing probe history across quick runs', async
+   for (const minutes of [31, 32]) {
+     const result = laneDoctorQuick({ home: h, now: now + minutes * 60000 });
+     assert.equal(result.lanes.codex.alive, false);
+-    assert.equal(result.lanes.codex.reason, 'usage_limit_no_fallback');
++    assert.equal(result.lanes.codex.reason, 'quota_wait');
++    assert.equal(result.lanes.codex.until, now + 86400000);
+     assert.equal(result.lanes.codex.lastProbeOkAt, stamp);
+     assert.equal(result.lanes.codex.probedAt, stamp);
+   }
+diff --git a/tools/lane-real-health.test.mjs b/tools/lane-real-health.test.mjs
+new file mode 100644
+index 0000000..82d18fd
+--- /dev/null
++++ b/tools/lane-real-health.test.mjs
+@@ -0,0 +1,58 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import path from 'node:path';
++import os from 'node:os';
++import { realLaneStats, applyRealLaneHealth } from './lib/lane-real-health.mjs';
++import { laneDoctorQuick, laneDoctorProbe } from './lane-doctor.mjs';
++const now = Date.parse('2026-10-29T12:00:00Z');
++function fixture(t, rows) {
++  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-real-'));
++  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
++  fs.mkdirSync(path.join(home, '.claude'));
++  fs.writeFileSync(path.join(home, '.claude/executor-usage.jsonl'), rows.map(r => JSON.stringify({ t: new Date(now - 1000).toISOString(), provider: 'deepseek', ...r })).join('\n') + '\n{partial');
++  return home;
++}
++test('24h failures override successful probe, preserve ranking and routing', t => {
++  const home = fixture(t, [...Array.from({ length: 4 }, () => ({ status: '500', reason: 'HTTP 500' })), { status: 'ok' }]);
++  fs.writeFileSync(path.join(home, '.claude/openrouter.env'), 'OPENROUTER_API_KEY=test-only');
++  fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify({ lanes: { deepseek: { alive: true, reason: 'probe_ok', probedAt: new Date(now - 2000).toISOString() } } }));
++  const health = laneDoctorQuick({ home, now });
++  assert.equal(health.lanes.deepseek.reason, 'real_fail_rate');
++  assert.equal(health.lanes.deepseek.alive, false);
++  assert.equal(health.lanes.deepseek.error, 'HTTP 500 (4)');
++  assert.ok(!health.askOrder.includes('deepseek'));
++  assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.claude/lane-health.json'))).lanes.deepseek.reason, 'real_fail_rate');
++});
++test('inclusive threshold excludes quota failures from numerator', t => {
++  const home = fixture(t, [{ status: '500' }, { status: '401' }, { status: '429' }, { status: 'error', reason: 'usage_limit' }, { status: 'ok' }]);
++  const s = realLaneStats(home, now).deepseek;
++  assert.equal(s.calls, 5); assert.equal(s.failures, 2); assert.equal(s.failRate, .4);
++  const h = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
++  applyRealLaneHealth(h, home, now); assert.equal(h.lanes.deepseek.alive, true);
++  fs.appendFileSync(path.join(home, '.claude/executor-usage.jsonl'), '\n' + JSON.stringify({ t: new Date(now).toISOString(), provider: 'deepseek', status: 'error', stderr: 'spawn sdk ENOENT' }));
++  applyRealLaneHealth(h, home, now); assert.equal(h.lanes.deepseek.reason, 'real_fail_rate');
++  assert.match(h.lanes.deepseek.error, /spawn sdk ENOENT/);
++});
++test('old, future, invalid and unrouted records cannot reach five-call threshold', t => {
++  const home = fixture(t, [...Array.from({ length: 4 }, () => ({ status: '500' })), { status: '500', t: new Date(now - 86400_001).toISOString() }, { status: '500', t: new Date(now + 1).toISOString() }, { status: '500', t: 'invalid' }, { status: 'no-cheap-executor' }]);
++  const h = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
++  applyRealLaneHealth(h, home, now); assert.equal(h.lanes.deepseek.alive, true); assert.equal(h.lanes.deepseek.real24h.calls, 4);
++});
++test('known quota reset is quota_wait; later success invalidates ledger-only quota', t => {
++  const home = fixture(t, [{ status: '429', retryAt: now + 3600_000 }]);
++  const h = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
++  applyRealLaneHealth(h, home, now); assert.equal(h.lanes.deepseek.reason, 'quota_wait'); assert.equal(h.lanes.deepseek.until, now + 3600_000);
++  fs.appendFileSync(path.join(home, '.claude/executor-usage.jsonl'), '\n' + JSON.stringify({ t: new Date(now).toISOString(), provider: 'deepseek', status: 'ok' }));
++  const fresh = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
++  applyRealLaneHealth(fresh, home, now); assert.equal(fresh.lanes.deepseek.alive, true);
++});
++test('probe cannot mask real failure rate; quota probe becomes quota_wait', async t => {
++  const home = fixture(t, Array.from({ length: 5 }, () => ({ status: '503' })));
++  fs.writeFileSync(path.join(home, '.claude/openrouter.env'), 'OPENROUTER_API_KEY=test-only');
++  let h = await laneDoctorProbe({ home, now, probe: async () => ({ code: 0, text: 'PONG' }), notify: async () => ({ delivered: 'test' }) });
++  assert.equal(h.lanes.deepseek.reason, 'real_fail_rate');
++  fs.writeFileSync(path.join(home, '.claude/executor-usage.jsonl'), '');
++  h = await laneDoctorProbe({ home, now, probe: async () => ({ code: 1, text: 'HTTP 429 usage limit' }), notify: async () => ({ delivered: 'test' }) });
++  assert.equal(h.lanes.deepseek.reason, 'quota_wait');
++});
+diff --git a/tools/lane-repair-convergence.test.mjs b/tools/lane-repair-convergence.test.mjs
+new file mode 100644
+index 0000000..aaa8511
+--- /dev/null
++++ b/tools/lane-repair-convergence.test.mjs
+@@ -0,0 +1,65 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++import { spawnSync } from 'node:child_process';
++import { main as registerTask } from './register-rule-compliance-task.mjs';
++import { runAndPersist } from './run-rule-compliance-loop.mjs';
++import { sessionLaneHealth } from './sessionstart-lane-health.mjs';
++const repo = fileURLToPath(new URL('../', import.meta.url));
++const manifest = JSON.parse(fs.readFileSync(new URL('./setup-manifest.json', import.meta.url)));
++function homeFor(t) {
++  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-converge-'));
++  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
++  fs.mkdirSync(path.join(home, '.claude'));
++  return home;
++}
++test('Windows registrar uses existing per-user daily --apply wrapper', () => {
++  let called;
++  assert.equal(registerTask({ platform: 'win32', spawnImpl: (cmd, args, options) => { called = { cmd, args, options }; return { status: 0, stdout: 'registered' }; } }), 0);
++  assert.equal(called.cmd, 'powershell.exe');
++  assert.ok(called.args.at(-1).endsWith('register-rule-compliance-task.ps1'));
++  const ps = fs.readFileSync(new URL('./register-rule-compliance-task.ps1', import.meta.url), 'utf8');
++  assert.match(ps, /New-ScheduledTaskTrigger -Daily/);
++  assert.match(ps, /run-rule-compliance-loop\.mjs/);
++  assert.match(ps, /-UserId/);
++});
++test('daily wrapper creates enforcement with validated new rule and preserves existing rules', t => {
++  const home = homeFor(t);
++  const result = runAndPersist({ home });
++  const state = JSON.parse(fs.readFileSync(path.join(home, '.claude/rule-enforcement.json')));
++  assert.equal(state['repair-failed-lane-first'].mode, 'warn');
++  assert.equal(state['repair-failed-lane-first'].precision, 1);
++  assert.ok(state['handoff-quality-only']);
++  assert.ok(result.report.includes('repair-failed-lane-first'));
++});
++test('converge wires synchronous gate through runner; repeated registration is idempotent', t => {
++  const home = homeFor(t);
++  const selected = manifest.items.filter(i => ['settings:lane-repair-first', 'settings:lane-health-SessionStart', 'state:rule-enforcement'].includes(i.id));
++  const file = path.join(home, 'manifest.json');
++  fs.writeFileSync(file, JSON.stringify({ version: 1, items: selected }));
++  const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo };
++  const result = spawnSync(process.execPath, [path.join(repo, 'tools/setup.mjs'), '--converge', '--manifest', file, '--home', home, '--json'], { env, encoding: 'utf8', timeout: 60000 });
++  assert.equal(result.status, 0, result.stderr || result.stdout);
++  const checks = JSON.parse(result.stdout);
++  for (const id of selected.map(x => x.id)) assert.equal(checks.items.find(x => x.id === id)?.status, 'OK', id);
++  const registered = JSON.parse(fs.readFileSync(path.join(home, '.claude/settings.json')));
++  const gate = registered.hooks.PreToolUse.filter(group => group.hooks.some(h => h.command.includes('lane-repair-first-gate.mjs')));
++  assert.equal(gate.length, 1);
++  assert.match(gate[0].matcher, /NotebookEdit/);
++  assert.match(gate[0].hooks[0].command, /gate-hook-runner.mjs/);
++  assert.notEqual(gate[0].hooks[0].async, true);
++  const again = spawnSync(process.execPath, [path.join(repo, 'tools/register-hooks.mjs'), '--hooks-only'], { env, encoding: 'utf8', timeout: 30000 });
++  assert.equal(again.status, 0, again.stderr);
++  const repeated = JSON.parse(fs.readFileSync(path.join(home, '.claude/settings.json')));
++  assert.equal(repeated.hooks.PreToolUse.filter(g => g.hooks.some(h => h.command.includes('lane-repair-first-gate.mjs'))).length, 1);
++});
++test('SessionStart states repair-first and quota alternatives', t => {
++  const home = homeFor(t), now = Date.now();
++  fs.writeFileSync(path.join(home, '.claude/openrouter.env'), 'OPENROUTER_API_KEY=fixture-only');
++  fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify({ lanes: { deepseek: { alive: false, reason: 'auth_invalid', probedAt: new Date(now).toISOString() } } }));
++  const output = sessionLaneHealth({ home, now, auditLaunch: () => false });
++  assert.match(output.hookSpecificOutput.additionalContext, /本セッションの最初の作業はレーン修復:.*deepseek/);
++});
+diff --git a/tools/lane-repair-detector.test.mjs b/tools/lane-repair-detector.test.mjs
+new file mode 100644
+index 0000000..0697909
+--- /dev/null
++++ b/tools/lane-repair-detector.test.mjs
+@@ -0,0 +1,66 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { detectLaneRepair } from './lib/lane-repair-detector.mjs';
++import { detectSessions } from './rule-detectors.mjs';
++import { faultId } from './lib/lane-repair-state.mjs';
++const at = '2026-10-29T00:00:00Z';
++const use = (id, name, input) => ({ type: 'tool_use', id, name, input });
++const tool = (id, command) => use(id, 'Bash', { command });
++const result = (id, content, is_error = false) => ({ type: 'tool_result', tool_use_id: id, content, is_error });
++const prose = text => ({ type: 'text', text });
++const edit = use('edit', 'Edit', { file_path: 'src/app.mjs' });
++const write = use('write', 'Write', { file_path: 'src/app.mjs' });
++const fail = (output = 'HTTP 500 internal error', command = 'node tools/llm-ask.mjs --provider deepseek ping') => [tool('ask', command), result('ask', output)];
++const state = { alive: false, reason: 'real_fail_rate', error: 'HTTP 500 (9)' };
++const health = JSON.stringify({ lanes: { deepseek: state } });
++const log = { ts: at, lane: 'deepseek', tried: 'key and direct API checked', result: 'unfixable', faultId: faultId('deepseek', state) };
++const logged = (row = log) => [tool('repair', 'node tools/lane-repair-log.mjs --lane deepseek --tried check --result unfixable'), result('repair', JSON.stringify(row))];
++const session = blocks => ({ sessionId: 'fixture', events: blocks.map((block, i) => ({ ts: new Date(Date.parse(at) + 1000 * i).toISOString(), event: { type: block.type === 'tool_result' ? 'user' : 'assistant', message: { role: block.type === 'tool_result' ? 'user' : 'assistant', content: [block] } } })) });
++const samples = [
++  ['500 then Edit', true, [...fail(), edit]],
++  ['401 then Write', true, [...fail('HTTP 401 unauthorized'), write]],
++  ['codex spawn failure', true, [...fail('spawn codex ENOENT', 'node tools/codex-do.mjs task'), edit]],
++  ['codex nonzero exit', true, [...fail('exit code: 1', 'node tools/codex-do.mjs task'), edit]],
++  ['observed health then Edit', true, [use('health', 'Read', { file_path: '/x/lane-health.json' }), result('health', health), edit]],
++  ['doctor health then Write', true, [tool('health', 'node tools/lane-doctor.mjs --json'), result('health', health), write]],
++  ['fallback call without marker', true, [...fail(), tool('other', 'node tools/llm-ask.mjs --provider groq ping')]],
++  ['fallback prose without marker', true, [...fail(), prose('代替のレーンへ回します。')]],
++  ['failed logging command', true, [...fail(), tool('repair', 'node tools/lane-repair-log.mjs --lane deepseek'), result('repair', 'failed', true), edit]],
++  ['wrong lane record', true, [...fail(), ...logged({ ...log, lane: 'groq' }), edit]],
++  ['expired record', true, [...fail(), ...logged({ ...log, ts: '2026-10-28T00:00:00Z' }), edit]],
++  ['wrong fault record', true, [use('health', 'Read', { file_path: '/x/lane-health.json' }), result('health', health), ...logged({ ...log, faultId: 'wrong' }), edit]],
++  ['healthy call then Edit', false, [tool('ask', 'node tools/llm-ask.mjs --provider deepseek ping'), result('ask', 'OK'), edit]],
++  ['quota then Edit', false, [...fail('HTTP 429 usage_limit resets tomorrow'), edit]],
++  ['source quoting failure', false, [use('read', 'Read', { file_path: 'test.mjs' }), result('read', 'HTTP 500'), edit]],
++  ['test output', false, [tool('test', 'node --test'), result('test', 'ok 1 - HTTP 500 error'), edit]],
++  ['repair logged before Edit', false, [...fail(), ...logged(), edit]],
++  ['fixed logged before Write', false, [...fail(), ...logged({ ...log, result: 'fixed' }), write]],
++  ['repair marker permits alternative', false, [...fail(), prose('[LANE-REPAIR] deepseek: 修復不可 試行: checked key; 代替へ回します。')]],
++  ['doctor says healthy', false, [...fail(), tool('health', 'node tools/lane-doctor.mjs --json'), result('health', JSON.stringify({ lanes: { deepseek: { alive: true, reason: 'probe_ok' } } })), edit]],
++  ['Bash reading source cannot introduce failure', false, [tool('source', 'cat tools/llm-ask.mjs'), result('source', 'HTTP 500'), edit]],
++  ['pretty numbered health', true, [use('health', 'Read', { file_path: '/x/lane-health.json' }), result('health', JSON.stringify({ lanes: { deepseek: state } }, null, 2).split('\n').map((line, i) => `${i + 1}→${line}`).join('\n')), edit]],
++  ['repair marker before alternative tool', false, [...fail(), prose('[LANE-REPAIR] deepseek: 修復不可 試行: key checked'), tool('other', 'node tools/llm-ask.mjs --provider groq ping')]],
++  ['marker never replaces record for implementation', true, [...fail(), prose('[LANE-REPAIR] deepseek: 修復不可 試行: key checked'), edit]],
++  ['no continuation', false, fail()],
++  ['log without tried', true, [...fail(), ...logged({ ...log, tried: '' }), edit]],
++  ['future repair', true, [...fail(), ...logged({ ...log, ts: '2026-10-30T00:00:00Z' }), edit]],
++  ['read-only diagnosis', false, [...fail(), use('read', 'Read', { file_path: 'tools/llm-ask.mjs' })]],
++];
++let tp = 0, fp = 0, tn = 0, fn = 0;
++for (const [name, expected, blocks] of samples) {
++  const actual = detectLaneRepair(session(blocks)).observations.length > 0;
++  if (expected && actual) tp++; else if (!expected && actual) fp++; else if (!expected && !actual) tn++; else fn++;
++  test(name, () => assert.equal(actual, expected));
++}
++test('measured precision, recall and registry integration', () => {
++  const precision = tp / (tp + fp);
++  console.log(JSON.stringify({ fixtureCount: samples.length, truePositives: tp, falsePositives: fp, trueNegatives: tn, falseNegatives: fn, precision, recall: tp / (tp + fn) }));
++  assert.ok(precision >= .9); assert.equal(fn, 0);
++  const registry = { rules: [{ id: 'repair-failed-lane-first' }] };
++  // No unrelated detectors fire in this transcript.
++  const detected = detectSessions([session([...fail(), edit])], registry, {});
++  assert.equal(detected['repair-failed-lane-first'].violation, 1);
++});
++test('persisted repair ledger grants same fault exemption within six hours', () => {
++  assert.equal(detectLaneRepair(session([use('health', 'Read', { file_path: '/x/lane-health.json' }), result('health', health), edit]), [log]).observations.length, 0);
++});
+diff --git a/tools/lane-repair-first-gate.mjs b/tools/lane-repair-first-gate.mjs
+new file mode 100644
+index 0000000..950b572
+--- /dev/null
++++ b/tools/lane-repair-first-gate.mjs
+@@ -0,0 +1,66 @@
++#!/usr/bin/env node
++export const GATE_CONTRACT = {"name":"lane-repair-first-gate","remedies":[{"kind":"repo-file","ref":"tools/gate-remedies.md","section":"lane-repair-first-gate"},{"kind":"command","ref":"node tools/lane-doctor.mjs --probe"},{"kind":"command","ref":"node tools/lane-repair-log.mjs --lane <名> --tried \"<試した手段>\" --result unfixable"}]};
++import fs from 'node:fs';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++import { laneHome, readJson } from './lane-doctor.mjs';
++import { pendingRepairs } from './lib/lane-repair-state.mjs';
++import { redactAll } from './lib/redact.mjs';
++import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
++import { isEntry } from './is-entry.mjs';
++
++const repo = fileURLToPath(new URL('../', import.meta.url));
++// Tokenize a single invocation, retaining quoted arguments. No shell expansion,
++// pipelines, redirection or command chaining may inherit a diagnostic exemption.
++export function repairCommand(command) {
++  const tokens = [];
++  let rest = String(command || '').trim();
++  if (!rest || /[`$\r\n]/.test(rest)) return false;
++  while (rest) {
++    const match = rest.match(/^(?:"([^"\n]*)"|'([^'\n]*)'|([^\s"';&|<>]+))(?:\s+|$)/);
++    if (!match || match[3] && /[(){}\[\]]/.test(match[3])) return false;
++    tokens.push(match[1] ?? match[2] ?? match[3]);
++    rest = rest.slice(match[0].length);
++  }
++  const [cmd, ...args] = tokens;
++  if (/^(?:node|node.exe)$/.test(cmd)) {
++    const allowed = ['lane-doctor.mjs', 'lane-repair-log.mjs', 'llm-ask.mjs', 'codex-do.mjs', 'env-kv.mjs', 'keyserve-status.mjs'];
++    return allowed.some(file => path.resolve(args[0] || '') === path.join(repo, 'tools', file));
++  }
++  if (/^(?:git|git.exe)$/.test(cmd)) return /^(?:status|log|diff|show|rev-parse|ls-files)$/.test(args[0]) && !args.some(a => /^(?:--(?:out|ext|text)|--no-index|--config|-c)/.test(a));
++  if (/^gh(?:.exe)?$/.test(cmd)) return /^(?:pr|issue|run|auth)$/.test(args[0]) && /^(?:view|list|status|diff|checks)$/.test(args[1]);
++  if (/^wsl(?:.exe)?$/.test(cmd)) {
++    const invocation = args.indexOf('--');
++    if (invocation >= 0) {
++      const child = args.slice(invocation + 1);
++      return child[0] === 'codex' && (child[1] === 'exec' || child[1] === 'login' || child[1] === '--version')
++        || child.join(' ') === 'npm install -g @openai/codex';
++    }
++    if (/^--install (?:-d|--distribution) Ubuntu --no-launch$/.test(args.join(' '))) return true;
++    return args.length > 0 && args.every(a => ['-l', '--list', '-q', '--quiet', '--status', '--version', '--verbose', '-v'].includes(a));
++  }
++  if (/^(?:keyserve|env-kv)$/.test(cmd)) return /^(?:status|list|get|help)$/.test(args[0]);
++  return false;
++}
++export function evaluateRepairFirst(input, { home = laneHome(), now = Date.now() } = {}) {
++  const name = input.tool_name || '';
++  if (!/^(?:Edit|Write|MultiEdit|NotebookEdit|Bash|PowerShell)$/.test(name)) return { decision: 'pass' };
++  if (/^(?:Bash|PowerShell)$/.test(name) && repairCommand(input.tool_input?.command || input.tool_input?.script)) return { decision: 'pass' };
++  const pending = pendingRepairs(readJson(path.join(home, '.claude/lane-health.json')), home, now);
++  if (!pending.length) return { decision: 'pass' };
++  return { decision: 'block', reason: `[LANE-REPAIR-FIRST] 修復を最優先: ${pending.map(s => `${s.lane}: ${s.reason} ${s.error || ''}`).join('; ')}。先に node tools/lane-doctor.mjs --probe。Codex probe_failed は直接 wsl codex exec の終了コードで切り分ける。修復手段を試し、node tools/lane-repair-log.mjs --lane <名> --tried "<試した手段>" --result fixed|unfixable に記録（6時間有効）。` };
++}
++export async function main() {
++  const home = laneHome();
++  try {
++    const result = evaluateRepairFirst(JSON.parse(await readStdinWithTimeout()), { home });
++    if (result.decision === 'block') { console.error(result.reason); process.exitCode = 2; }
++  } catch (e) {
++    try {
++      const file = path.join(home, '.claude/gate-errors.jsonl');
++      fs.mkdirSync(path.dirname(file), { recursive: true });
++      fs.appendFileSync(file, JSON.stringify({ ts: new Date().toISOString(), gate: GATE_CONTRACT.name, verdict: 'fail-open', error: redactAll(e.message).slice(0, 400) }) + '\n', { mode: 0o600 });
++    } catch { /* Gate crashes must not prevent diagnosis. */ }
++  }
++}
++if (isEntry(import.meta.url)) await main();
+diff --git a/tools/lane-repair-first-gate.test.mjs b/tools/lane-repair-first-gate.test.mjs
+new file mode 100644
+index 0000000..5ef535f
+--- /dev/null
++++ b/tools/lane-repair-first-gate.test.mjs
+@@ -0,0 +1,86 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import path from 'node:path';
++import os from 'node:os';
++import { spawnSync } from 'node:child_process';
++import { fileURLToPath } from 'node:url';
++import { evaluateRepairFirst, repairCommand } from './lane-repair-first-gate.mjs';
++import { recordRepair } from './lane-repair-log.mjs';
++import { repairContext, REPAIR_TTL, repairRows } from './lib/lane-repair-state.mjs';
++import { runHook } from './gate-hook-runner.mjs';
++import { rolloutMode } from './gate-runtime.mjs';
++const now = Date.now(), fault = { alive: false, reason: 'real_fail_rate', error: 'HTTP 500 (9)' };
++const script = fileURLToPath(new URL('./lane-repair-first-gate.mjs', import.meta.url));
++function fixture(t, state = fault) {
++  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'repair-gate-'));
++  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
++  fs.mkdirSync(path.join(home, '.claude'));
++  const health = { lanes: { deepseek: state, groq: { alive: true, reason: 'probe_ok' } } };
++  fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify(health));
++  return { home, health };
++}
++const input = (tool_name, command) => ({ tool_name, tool_input: { command }, permission_mode: 'bypassPermissions' });
++test('unattended sessions block edits and nonrepair shell; reads pass', t => {
++  const { home } = fixture(t);
++  for (const name of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash', 'PowerShell']) assert.equal(evaluateRepairFirst(input(name, 'npm test'), { home, now }).decision, 'block', name);
++  for (const name of ['Read', 'Grep', 'Glob']) assert.equal(evaluateRepairFirst(input(name), { home, now }).decision, 'pass');
++});
++test('log unlocks same fault for six hours; future, expired and unrelated records cannot', async t => {
++  const { home } = fixture(t);
++  await recordRepair({ home, lane: 'deepseek', tried: 'key and direct API checked: HTTP 500', result: 'unfixable', now });
++  assert.equal(evaluateRepairFirst(input('Edit'), { home, now }).decision, 'pass');
++  assert.equal(evaluateRepairFirst(input('Edit'), { home, now: now + REPAIR_TTL }).decision, 'block');
++  assert.equal(evaluateRepairFirst(input('Edit'), { home, now: now - 1 }).decision, 'block');
++  fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify({ lanes: { deepseek: { ...fault, error: 'HTTP 401 (9)' } } }));
++  assert.equal(evaluateRepairFirst(input('Edit'), { home, now }).decision, 'block');
++  fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify({ lanes: { deepseek: { alive: true, reason: 'probe_ok' } } }));
++  assert.equal(evaluateRepairFirst(input('Edit'), { home, now }).decision, 'pass');
++});
++test('quota_wait never blocks and context names cheap alternatives', t => {
++  const { home, health } = fixture(t, { alive: false, reason: 'quota_wait', until: now + 1000 });
++  assert.equal(evaluateRepairFirst(input('Edit'), { home, now }).decision, 'pass');
++  assert.match(repairContext(health, home, now), /代替の安いレーン: groq/);
++});
++test('diagnostic invocations pass; compound and disguised writes block', () => {
++  for (const cmd of ['node tools/lane-doctor.mjs --probe', 'node tools/lane-repair-log.mjs --lane deepseek --tried "key checked; HTTP 500" --result unfixable', 'node tools/env-kv.mjs --help', 'git status --short', 'gh pr view 123', 'wsl -d Ubuntu -u root -- codex exec --skip-git-repo-check "ping"', 'wsl -l -q', 'wsl --install -d Ubuntu --no-launch', 'wsl -d Ubuntu -u root -- npm install -g @openai/codex', 'wsl -d Ubuntu -u root -- codex login status']) assert.equal(repairCommand(cmd), true, cmd);
++  for (const cmd of ['node tools/lane-doctor.mjs; touch x', 'node tools/lane-doctor.mjs && npm install', 'echo lane-doctor.mjs', 'node /tmp/lane-doctor.mjs', 'node tools/lane-doctor.mjs > x', 'git push', 'git diff --output=x', 'wsl -- bash -c "touch x"', 'gh pr create', 'node -e "writeFiles()"', 'node tools/lane-doctor.mjs $(touch x)', 'node tools/lane-doctor.mjs @(Remove-Item x)', 'git log --out=x', 'git diff --textconv']) assert.equal(repairCommand(cmd), false, cmd);
++});
++test('notify once at three consecutive unfixable attempts; fixed resets episode', async t => {
++  const { home } = fixture(t); let notifications = 0;
++  const notify = async () => { notifications++; return { delivered: 'test' }; };
++  for (let i = 0; i < 5; i++) await recordRepair({ home, lane: 'deepseek', tried: `attempt ${i}`, result: 'unfixable', now: now + i, notify });
++  assert.equal(notifications, 1);
++  await recordRepair({ home, lane: 'deepseek', tried: 'recovered', result: 'fixed', now: now + 6, notify });
++  for (let i = 0; i < 3; i++) await recordRepair({ home, lane: 'deepseek', tried: 'again', result: 'unfixable', now: now + 7 + i, notify });
++  assert.equal(notifications, 2); assert.ok(repairRows(home).some(r => r.notified));
++});
++test('CLI exits 2 on Edit; crash fails open with error ledger', t => {
++  const { home } = fixture(t);
++  const run = raw => spawnSync(process.execPath, [script], { encoding: 'utf8', input: raw, env: { ...process.env, ORGIAST_HOME: home } });
++  let r = run(JSON.stringify(input('Edit'))); assert.equal(r.status, 2); assert.match(r.stderr, /LANE-REPAIR-FIRST/);
++  r = run('{bad'); assert.equal(r.status, 0);
++  assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.claude/gate-errors.jsonl'))).verdict, 'fail-open');
++});
++test('runner retains deny on nonpilot PCs; audit block promotes abandonment', async t => {
++  const { home } = fixture(t);
++  const r = await runHook(script, JSON.stringify(input('Edit')), { env: { ...process.env, ORGIAST_HOME: home }, policyOptions: { home, hostname: 'new-PC', notify: async () => ({ delivered: 'test' }) } });
++  assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, 'deny');
++  fs.writeFileSync(path.join(home, '.claude/rule-enforcement.json'), JSON.stringify({ 'repair-failed-lane-first': { mode: 'block' } }));
++  assert.equal(rolloutMode('lane-abandonment-gate', { home, manifest: { gates: { 'lane-abandonment-gate': { rollout: 'warn' } } } }), 'deny');
++});
++test('invalid repair records fail without exemption', async t => {
++  const { home } = fixture(t);
++  await assert.rejects(recordRepair({ home, lane: 'deepseek', tried: '', result: 'unfixable' }));
++  await assert.rejects(recordRepair({ home, lane: 'unknown', tried: 'check', result: 'fixed' }));
++  assert.equal(evaluateRepairFirst(input('Edit'), { home, now }).decision, 'block');
++});
++
++test('stale writer lock is recovered, active writer lock prevents duplicate records', async t => {
++  const { home } = fixture(t), lock = path.join(home, '.claude/lane-repair-log.lock');
++  fs.writeFileSync(lock, '');
++  await assert.rejects(recordRepair({ home, lane: 'deepseek', tried: 'check', result: 'unfixable' }), { code: 'EEXIST' });
++  const old = new Date(Date.now() - 120000); fs.utimesSync(lock, old, old);
++  await recordRepair({ home, lane: 'deepseek', tried: 'check', result: 'unfixable' });
++  assert.equal(repairRows(home).length, 1); assert.ok(!fs.existsSync(lock));
++});
+diff --git a/tools/lane-repair-log.mjs b/tools/lane-repair-log.mjs
+new file mode 100644
+index 0000000..ca5ac5d
+--- /dev/null
++++ b/tools/lane-repair-log.mjs
+@@ -0,0 +1,51 @@
++#!/usr/bin/env node
++import fs from 'node:fs';
++import path from 'node:path';
++import os from 'node:os';
++import { laneHome, readJson } from './lane-doctor.mjs';
++import { faultId, repairRows } from './lib/lane-repair-state.mjs';
++import { redactAll } from './lib/redact.mjs';
++import { notifyKim } from './notify-kim.mjs';
++import { isEntry } from './is-entry.mjs';
++
++export async function recordRepair({ lane, tried, result, home = laneHome(), now = Date.now(), notify = notifyKim } = {}) {
++  const health = readJson(path.join(home, '.claude/lane-health.json'));
++  if (!health.lanes?.[lane] || lane === 'gemini-cli') throw new Error('--lane must name a lane in lane-health.json');
++  if (!tried?.trim() || !['fixed', 'unfixable'].includes(result)) throw new Error('--tried and --result fixed|unfixable are required');
++  const dir = path.join(home, '.claude');
++  fs.mkdirSync(dir, { recursive: true });
++  const lock = path.join(dir, 'lane-repair-log.lock');
++  // Serialize the third-failure notification. Recover a crashed writer's stale
++  // lock, while active writers remain protected (notification deadline: 5s).
++  let fd;
++  try { fd = fs.openSync(lock, 'wx', 0o600); } catch (e) {
++    if (e.code !== 'EEXIST' || Date.now() - fs.statSync(lock).mtimeMs < 60_000) throw e;
++    fs.unlinkSync(lock);
++    fd = fs.openSync(lock, 'wx', 0o600);
++  }
++  try {
++    const rows = repairRows(home), id = faultId(lane, health.lanes[lane]);
++    const row = { ts: new Date(now).toISOString(), lane, faultId: id, tried: redactAll(tried.trim()).slice(0, 1500), result };
++    fs.appendFileSync(path.join(dir, 'lane-repair-log.jsonl'), JSON.stringify(row) + '\n', { mode: 0o600 });
++    const consecutive = [];
++    for (const r of [...rows, row].filter(r => r.lane === lane).reverse()) {
++      if (r.result !== 'unfixable' || r.faultId !== id) break;
++      consecutive.push(r);
++    }
++    if (consecutive.length >= 3 && !consecutive.some(r => r.notified)) {
++      const delivery = await notify(`[LANE-REPAIR] ${os.hostname()} の ${lane}: 同一故障(${health.lanes[lane].reason})の修復不可が${consecutive.length}回連続。試行: ${row.tried}。原因の調査と修復が必要です。`, { home, signal: AbortSignal.timeout(5000) });
++      row.notification = delivery?.delivered || 'none';
++      if (delivery?.delivered && !['none', 'unknown', 'suppressed'].includes(delivery.delivered)) {
++        fs.appendFileSync(path.join(dir, 'lane-repair-log.jsonl'), JSON.stringify({ ...row, notified: true }) + '\n');
++      }
++    }
++    return row;
++  } finally { fs.closeSync(fd); fs.unlinkSync(lock); }
++}
++if (isEntry(import.meta.url)) {
++  try {
++    const args = process.argv.slice(2), value = flag => args[args.indexOf(flag) + 1];
++    for (const flag of ['--lane', '--tried', '--result']) if (!args.includes(flag)) throw new Error(`${flag} is required`);
++    console.log(JSON.stringify(await recordRepair({ lane: value('--lane'), tried: value('--tried'), result: value('--result') })));
++  } catch (e) { console.error(redactAll(e.message)); process.exitCode = 1; }
++}
+diff --git a/tools/lib/lane-real-health.mjs b/tools/lib/lane-real-health.mjs
+new file mode 100644
+index 0000000..6481c49
+--- /dev/null
++++ b/tools/lib/lane-real-health.mjs
+@@ -0,0 +1,59 @@
++import fs from 'node:fs';
++import path from 'node:path';
++import { normalizeExecutorStatus } from '../executor-status.mjs';
++import { redactAll } from './redact.mjs';
++
++export const quotaFailure = text => /\b429\b|usage[_ ]limit|rate[_ .-]?limit|RESOURCE_EXHAUSTED|codex_cooldown/i.test(String(text));
++const millis = value => typeof value === 'number' ? value : Date.parse(value);
++
++// cost-work-loop/collectProviderHealth use this same ledger. Read the full 24h
++// window: a fixed byte tail loses failures on busy providers.
++export function realLaneStats(home, now = Date.now()) {
++  const providers = {};
++  let raw;
++  try { raw = fs.readFileSync(path.join(home, '.claude/executor-usage.jsonl'), 'utf8'); }
++  catch (e) { if (e.code === 'ENOENT') return providers; throw e; }
++  for (const line of raw.split(/\r?\n/)) {
++    let row; try { row = JSON.parse(line); } catch { continue; }
++    const at = millis(row.t || row.ts);
++    if (!Number.isFinite(at) || at < now - 86400_000 || at > now) continue;
++    const status = normalizeExecutorStatus(row);
++    if (status === 'unrouted' || !row.provider) continue;
++    const s = providers[row.provider] ||= { calls: 0, failures: 0, quotaCalls: 0, failRate: 0, reasons: {}, until: null, lastOkAt: 0, lastQuotaAt: 0 };
++    s.calls++;
++    if (status === 'ok') { s.lastOkAt = Math.max(s.lastOkAt, at); continue; }
++    const detail = [row.status, row.httpStatus, row.http_status, row.reason, row.stderr, row.stderrTail, row.spawnError].filter(Boolean).join(' ');
++    if (quotaFailure(detail)) {
++      s.quotaCalls++;
++      s.lastQuotaAt = Math.max(s.lastQuotaAt, at);
++      const until = millis(row.retryAt ?? row.until ?? row.resetAt);
++      if (until > now && (!s.until || until > s.until)) s.until = until;
++      continue;
++    }
++    s.failures++;
++    const http = detail.match(/(?:HTTP[ _:]*|(?:^|\s))([45]\d\d)\b/i)?.[1];
++    const reason = redactAll(http ? `HTTP ${http}` : String(row.reason || row.stderr || row.stderrTail || row.spawnError || row.status).split(/\r?\n/)[0]).slice(0, 180);
++    s.reasons[reason] = (s.reasons[reason] || 0) + 1;
++  }
++  for (const s of Object.values(providers)) s.failRate = s.calls ? s.failures / s.calls : 0;
++  return providers;
++}
++
++export function applyRealLaneHealth(health, home, now = Date.now()) {
++  const stats = realLaneStats(home, now);
++  for (const [lane, state] of Object.entries(health.lanes)) {
++    const s = stats[lane];
++    if (s) state.real24h = s;
++    if (s?.calls >= 5 && s.failRate >= .5) {
++      state.alive = false;
++      state.reason = 'real_fail_rate';
++      state.error = Object.entries(s.reasons).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([r, n]) => `${r} (${n})`).join('; ');
++    } else if ((!state.alive && quotaFailure(`${state.reason} ${state.error || ''}`) && millis(state.until) > now)
++      || (s?.quotaCalls && s.until > now && s.lastQuotaAt >= s.lastOkAt)) {
++      state.alive = false;
++      state.reason = 'quota_wait';
++      state.until ||= s?.until;
++    }
++  }
++  return health;
++}
+diff --git a/tools/lib/lane-repair-detector.mjs b/tools/lib/lane-repair-detector.mjs
+new file mode 100644
+index 0000000..83cb663
+--- /dev/null
++++ b/tools/lib/lane-repair-detector.mjs
+@@ -0,0 +1,74 @@
++import path from 'node:path';
++import { repairable, faultId, REPAIR_TTL } from './lane-repair-state.mjs';
++import { quotaFailure } from './lane-real-health.mjs';
++import { redactAll } from './redact.mjs';
++
++const contentText = c => typeof c === 'string' ? c : Array.isArray(c) ? c.map(contentText).join('\n') : c?.text || '';
++const jsonObjects = text => {
++  const plain = String(text).replace(/^\s*\d+(?:→|\t|\|) ?/gm, '');
++  try { return [JSON.parse(plain)]; } catch {}
++  return plain.split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
++};
++const invokes = (command, script) => new RegExp(`(?:^|&&\\s*)\\s*node(?:\\.exe)?\\s+["']?[^\\s"']*${script}\\.mjs(?:[\\s"']|$)`).test(command);
++const laneFor = command => command.match(/--(?:provider|lane)(?:=|\s+)["']?([\w-]+)/)?.[1] || (/codex-do\.mjs/.test(command) ? 'codex' : 'unknown');
++
++// Only real tool results can introduce failures or acknowledge repair records.
++// User prose, test descriptions, source code and failed logging commands cannot.
++export function detectLaneRepair(session, repairLog = []) {
++  const uses = new Map(), pending = new Map(), observations = [];
++  let hadFailure = false, repairMarker = false;
++  const observed = (lane, wrapped, state) => { hadFailure = true; repairMarker = false; pending.set(lane, { wrapped, state }); };
++  for (const wrapped of session.events) {
++    const event = wrapped.event || wrapped;
++    const role = event.message?.role || event.type;
++    const blocks = Array.isArray(event.message?.content) ? event.message.content : [];
++    if (role === 'assistant' && /^\[LANE-REPAIR\]\s+[^:\n]+:\s*(?:修復済み\s+\S|修復不可\s+試行:\s*\S)/m.test(contentText(blocks))) repairMarker = true;
++    for (const block of blocks) {
++      if (block.type === 'tool_result') {
++        const use = uses.get(block.tool_use_id);
++        if (!use) continue;
++        const command = String(use.input?.command || use.input?.script || '');
++        const output = contentText(block.content);
++        if (/^(?:Bash|PowerShell)$/.test(use.name) && invokes(command, 'lane-repair-log') && !block.is_error) {
++          for (const row of jsonObjects(output)) {
++            if (row.lane && row.tried?.trim() && ['fixed', 'unfixable'].includes(row.result)) {
++              repairLog = [...repairLog, row];
++            }
++          }
++        }
++        if ((use.name === 'Read' && /(?:^|[\\/])lane-health\.json$/.test(use.input?.file_path || ''))
++          || /^(?:Bash|PowerShell)$/.test(use.name) && (invokes(command, 'lane-doctor') || /^(?:cat|Get-Content)\s+[^\n]*lane-health\.json/.test(command))) {
++          for (const health of jsonObjects(output)) for (const [lane, state] of Object.entries(health.lanes || {})) {
++            if (lane !== 'gemini-cli' && repairable(state)) observed(lane, wrapped, state);
++            else if (state.alive) pending.delete(lane);
++          }
++        }
++        if (/^(?:Bash|PowerShell)$/.test(use.name) && (invokes(command, 'codex-do') || invokes(command, 'llm-ask'))) {
++          const lines = output.split(/\r?\n/).filter(s => !/^(?:# Subtest:|(?:not )?ok\s+\d+\s+-)/.test(s.trim()));
++          const failure = lines.find(s => /HTTP\s*[45]\d\d|spawn\s+\S+\s+ENOENT|認証失敗|unauthorized|login required|全候補が失敗|exit code\s*[:=]?\s*[1-9]|WSL ディストリが見つかりません/i.test(s));
++          if (failure && !quotaFailure(failure)) observed(laneFor(command), wrapped);
++        }
++      }
++      if (block.type !== 'tool_use' || role !== 'assistant') continue;
++      uses.set(block.id, block);
++      const at = Date.parse(wrapped.ts || event.timestamp);
++      for (const [lane, fault] of pending) {
++        if (repairLog.some(r => r.lane === lane && r.tried?.trim() && ['fixed', 'unfixable'].includes(r.result)
++          && Date.parse(r.ts) <= at && at - Date.parse(r.ts) < REPAIR_TTL
++          && (!fault.state || r.faultId === faultId(lane, fault.state)))) pending.delete(lane);
++      }
++      if (!pending.size) continue;
++      const command = String(block.input?.command || block.input?.script || '');
++      const impl = /^(?:Edit|Write|MultiEdit|NotebookEdit)$/.test(block.name);
++      const fallback = /^(?:Bash|PowerShell)$/.test(block.name) && (invokes(command, 'codex-do') || invokes(command, 'llm-ask'))
++        && !pending.has(laneFor(command)) && !repairMarker;
++      if (impl || fallback) observations.push({ violation: true, ts: wrapped.ts, excerpt: redactAll(`${[...pending.keys()].join(', ')} 未修復: ${block.name} ${impl ? path.basename(block.input?.file_path || block.input?.notebook_path || '') : command}`).slice(0, 200) });
++    }
++    // A prose fallback without a repair marker is also observable abandonment.
++    if (role === 'assistant' && pending.size) {
++      const text = contentText(event.message?.content);
++      if (!repairMarker && /(?:代替|別のレーン|別レーン|fallback)[^。\n]{0,30}(?:回す|回し|切り替|切替|へ)|\[LANE-FALLBACK\]/i.test(text)) observations.push({ violation: true, ts: wrapped.ts, excerpt: redactAll(text).slice(0, 200) });
++    }
++  }
++  return { applicable: hadFailure, observations };
++}
+diff --git a/tools/lib/lane-repair-state.mjs b/tools/lib/lane-repair-state.mjs
+new file mode 100644
+index 0000000..1321c8e
+--- /dev/null
++++ b/tools/lib/lane-repair-state.mjs
+@@ -0,0 +1,35 @@
++import fs from 'node:fs';
++import path from 'node:path';
++import { createHash } from 'node:crypto';
++import { quotaFailure } from './lane-real-health.mjs';
++
++export const REPAIR_TTL = 6 * 3600_000;
++export function repairable(state) {
++  return state?.alive === false && !/^(?:quota_wait|cooldown|demoted|missing_key|cli_missing)$/.test(state.reason || '')
++    && !quotaFailure(state.reason)
++    && /real_fail_rate|probe_failed|auth|oauth|login|spawn|ENOENT|launch|execution_unavailable|wsl|native|physical_operation/i.test(state.reason || '');
++}
++export function faultId(lane, state) {
++  const error = String(state?.error || '').replace(/\(\d+\)/g, '').replace(/\d{4}-\d\d-\d\dT\S+/g, '').trim();
++  return createHash('sha256').update(`${lane}\0${state?.reason}\0${error}`).digest('hex').slice(0, 24);
++}
++export function repairRows(home) {
++  let raw;
++  try { raw = fs.readFileSync(path.join(home, '.claude/lane-repair-log.jsonl'), 'utf8'); }
++  catch (e) { if (e.code === 'ENOENT') return []; throw e; }
++  return raw.split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
++}
++export function pendingRepairs(health, home, now = Date.now()) {
++  const rows = repairRows(home);
++  return Object.entries(health?.lanes || {}).filter(([lane, state]) => lane !== 'gemini-cli' && repairable(state)
++    && !rows.some(r => r.lane === lane && r.faultId === faultId(lane, state) && r.tried?.trim()
++      && ['fixed', 'unfixable'].includes(r.result) && Date.parse(r.ts) <= now && Date.parse(r.ts) > now - REPAIR_TTL))
++    .map(([lane, state]) => ({ lane, ...state }));
++}
++export function repairContext(health, home, now) {
++  const pending = pendingRepairs(health, home, now);
++  const quota = Object.entries(health.lanes).filter(([, s]) => s.reason === 'quota_wait').map(([p]) => p);
++  const alternatives = Object.entries(health.lanes).filter(([p, s]) => p !== 'gemini-cli' && s.alive).map(([p]) => p);
++  return [pending.length ? `本セッションの最初の作業はレーン修復: ${pending.map(s => `${s.lane}(${s.reason})`).join(', ')}。node tools/lane-doctor.mjs --probe。Codex の probe 失敗は直接 wsl codex exec の終了コードでも切り分ける。試行後 node tools/lane-repair-log.mjs --lane <名> --tried "<試した手段>" --result fixed|unfixable（6時間有効）。` : '',
++    quota.length ? `quota_wait: ${quota.join(', ')}。代替の安いレーン: ${alternatives.join(', ') || 'なし（lane-doctor --probe で確認）'}` : ''].filter(Boolean).join(' / ');
++}
+diff --git a/tools/pretooluse-lane-guard.mjs b/tools/pretooluse-lane-guard.mjs
+index 2a50b20..e0d0ab4 100644
+--- a/tools/pretooluse-lane-guard.mjs
++++ b/tools/pretooluse-lane-guard.mjs
+@@ -15,7 +15,7 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+ 
+ 
+ const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+-export const delegated = /pr-merge\.mjs|lane-doctor\.mjs|codex-do\.mjs|autopilot-tick\.mjs|llm-ask\.mjs|batch-(?:enqueue|run)\.mjs|(?:^|\s)gemini\s|(?:^|\s)codex\s|wsl[^\r\n]*\bcodex\b|claude\s+-p|node[^\r\n]*usage-stats\.mjs/i;
++export const delegated = /pr-merge\.mjs|lane-doctor\.mjs|lane-repair-log\.mjs|codex-do\.mjs|autopilot-tick\.mjs|llm-ask\.mjs|batch-(?:enqueue|run)\.mjs|(?:^|\s)gemini\s|(?:^|\s)codex\s|wsl[^\r\n]*\bcodex\b|claude\s+-p|node[^\r\n]*usage-stats\.mjs/i;
+ export const operator = /line-pc-act\.ps1|line-send\.ps1|make-desktop-launcher\.mjs|notify-kim\.mjs|discord-dm\.mjs|fleet-mail\.mjs/i;
+ export const gateRequired = /(?:^|[\\/])auto-progress\.mjs(?:\s|$)/i;
+ export function isGateRequiredCommand(command) {
+diff --git a/tools/pretooluse-lane-guard.test.mjs b/tools/pretooluse-lane-guard.test.mjs
+index 59ae051..fdeba0a 100644
+--- a/tools/pretooluse-lane-guard.test.mjs
++++ b/tools/pretooluse-lane-guard.test.mjs
+@@ -94,3 +94,9 @@ for (const tool_name of ['Bash', 'PowerShell']) {
+     }
+   });
+ }
++
++test('repair log remains callable after lane guard limit in unattended session', t => {
++  const h = setup('implement', 'claude-sonnet-5', { toolCalls: 100 });
++  t.after(() => fs.rmSync(h, { recursive: true, force: true }));
++  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: 'node tools/lane-repair-log.mjs --lane deepseek --tried check --result unfixable' } }), null);
++});
+diff --git a/tools/register-hooks.mjs b/tools/register-hooks.mjs
+index 585fefc..930fcbc 100644
+--- a/tools/register-hooks.mjs
++++ b/tools/register-hooks.mjs
+@@ -350,6 +350,7 @@ try {
+   if (add(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.mjs', { matcher: 'Write|Edit|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-delegation-warn.mjs') }] })) added += 1;
+   if (add(settings.hooks.PreToolUse, 'pretooluse-bash-delegation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-bash-delegation.mjs'), timeout: 5 }] })) added += 1;
+   if (add(settings.hooks.PreToolUse, 'pretooluse-lane-guard.mjs', { matcher: 'Bash|PowerShell|Edit|Write|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-lane-guard.mjs'), timeout: 5 }] })) added += 1;
++  if (add(settings.hooks.PreToolUse, 'lane-repair-first-gate.mjs', { matcher: 'Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit', hooks: [{ type: 'command', command: command('lane-repair-first-gate.mjs'), timeout: 5 }] })) added += 1;
+   if (add(settings.hooks.PreToolUse, 'pretooluse-codex-invocation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-codex-invocation.mjs'), timeout: 5 }] })) added += 1;
+   if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
+   if (add(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', { matcher: HOOK_MATCHER, hooks: [{ type: 'command', command: command('internal-recipient-gmail-guard.mjs'), timeout: 5 }] })) added += 1;
+diff --git a/tools/register-rule-compliance-task.mjs b/tools/register-rule-compliance-task.mjs
+new file mode 100644
+index 0000000..28c5073
+--- /dev/null
++++ b/tools/register-rule-compliance-task.mjs
+@@ -0,0 +1,7 @@
++#!/usr/bin/env node
++import { runRegisterPs1 } from './lib/run-register-ps1.mjs';
++import { isEntry } from './is-entry.mjs';
++export function main(options = {}) { return runRegisterPs1('register-rule-compliance-task.ps1', options); }
++if (isEntry(import.meta.url)) {
++  try { process.exitCode = main(); } catch (e) { console.error(e.message); process.exitCode = 1; }
++}
+diff --git a/tools/rule-compliance-loop.mjs b/tools/rule-compliance-loop.mjs
+index 24f5247..4f74e4f 100644
+--- a/tools/rule-compliance-loop.mjs
++++ b/tools/rule-compliance-loop.mjs
+@@ -1,3 +1,4 @@
++import { repairRows } from './lib/lane-repair-state.mjs';
+ import fs from 'node:fs'; import path from 'node:path'; import os from 'node:os'; import { fileURLToPath } from 'node:url';
+ import { detectSessions } from './rule-detectors.mjs';
+ import { isEntry } from './is-entry.mjs';
+@@ -6,13 +7,13 @@ const defaultHome=()=>process.env.ORGIAST_HOME||process.env.USERPROFILE||process
+ function projectTranscripts(dir){const out=[];let ds=[];try{ds=fs.readdirSync(dir,{withFileTypes:true});}catch{return out;}for(const d of ds){if(!d.isDirectory())continue;let xs=[];try{xs=fs.readdirSync(path.join(dir,d.name),{withFileTypes:true});}catch{continue;}for(const f of xs)if(f.isFile()&&f.name.endsWith('.jsonl'))out.push(path.join(dir,d.name,f.name));}return out;}
+ function readEvents(file,since){const out=[];let lines=[];try{lines=fs.readFileSync(file,'utf8').split(/\r?\n/);}catch{return out;}for(const raw of lines){try{const event=JSON.parse(raw);const t=Date.parse(event.timestamp||event.ts||event.message?.timestamp||'');if(!Number.isFinite(t)||t>=since)out.push({event,raw,ts:Number.isFinite(t)?new Date(t).toISOString():new Date(fs.statSync(file).mtimeMs).toISOString()});}catch{}}return out;}
+ function readJson(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch{return fallback;}} function readJsonl(file){try{return fs.readFileSync(file,'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse);}catch{return[];}}
+-export function auditSessions(sessions,registry,catalog,ledger=[]){return detectSessions(sessions,registry,catalog,ledger);}
++export function auditSessions(sessions,registry,catalog,ledger=[],repairLog=[]){return detectSessions(sessions,registry,catalog,ledger,repairLog);}
+ export function decideRuleEnforcement(rule,result,previous={}){if(rule.detect?.mode==='delegated')return{mode:'off',reason:`担当: ${rule.owner}`};const v=rule.validation||{},precision=Number(v.precision);if(v.status!=='validated'||!Number.isFinite(precision)||precision<Number(v.minPrecision??.9))return{mode:'off',reason:`検出器未検証（精度 ${Number.isFinite(precision)?(precision*100).toFixed(1)+'%':'未計測'}）`,since:previous.since||new Date().toISOString()};if(result.bypass>0)return{mode:'block',reason:`gateすり抜け${result.bypass}件を検出したため即時昇格`,since:new Date().toISOString()};const dates=new Set(result.examples.map(x=>x.ts.slice(0,10)));if(result.violation>=rule.thresholds.violationsToBlock&&dates.size>=rule.thresholds.daysObserved)return{mode:'block',reason:`${dates.size}日で違反${result.violation}件、改善なし`,since:previous.since||new Date().toISOString()};return{mode:'warn',reason:previous.mode==='block'?'違反が閾値未満へ改善したため降格':'観察中',since:previous.since||new Date().toISOString()};}
+ export function makeReport(registry,results,enforcement,days,{ledgerAvailable=true,skipInfo={available:false,records:[]},bypassedCount=0}={}){const lines=[`# ルール遵守レポート（直近${days}日）`,'','| ルール | 該当 | 違反 | 違反率 | すり抜け | 強制 |','|---|---:|---:|---:|---:|---|'];for(const rule of registry.rules){if(rule.detect?.mode==='delegated'){lines.push(`| ${rule.id} | — | — | — | — | 担当: ${rule.owner} |`);continue;}const r=results[rule.id],rate=r.applicable?`${(r.violation/r.applicable*100).toFixed(1)}%`:'—';lines.push(`| ${rule.id} | ${r.applicable} | ${r.violation}（うち ledger 記録なし ${r.unmeasured||0}件=計測不能） | ${rate} | ${ledgerAvailable?r.bypass:'計測不能'} | ${enforcement[rule.id]?.mode||'off'} |`);if(enforcement[rule.id]?.mode==='off')lines.push(`| ↳ | | | | | ⚠️ ${enforcement[rule.id].reason} |`);const e=r.examples.at(-1);if(e)lines.push('',`- ${rule.id} 直近: ${e.sessionId} — ${e.excerpt.replace(/\s+/g,' ')}`);}lines.push('',ledgerAvailable?`すり抜け: ${Object.values(results).reduce((n,x)=>n+x.bypass,0)}件（ledger の passed 記録との応答一致のみ）`:'すり抜け: 計測不能（ledger 未生成）');lines.push(`ブロック後の再判定で品質未達のまま通った応答: ${bypassedCount}件（ゲートは無限ループ防止で通すため、ここが実質のすり抜け）`);if(!skipInfo.available)lines.push('gate判定スキップ: 記録なし');else{const records=skipInfo.records||[],unreadable=records.filter(record=>record?.reasonCode==='unreadable'),legacy=records.filter(record=>!record?.reasonCode),investigable=records.filter(record=>record?.reasonCode&&record.reasonCode!=='unreadable'),latest=investigable.at(-1);lines.push(`gate判定スキップ: ${records.length}件 — 判定対象なし（transcript未生成・既知/対応不要）${unreadable.length}件 / 旧記録 ${legacy.length}件 / 要調査 ${investigable.length}件${latest?`（直近: ${latest.reason}）`:''}`);}return lines.join('\n')+'\n';}
+ export function enforcementDocument(registry,enforcement){return Object.fromEntries(registry.rules.map(rule=>{const v=rule.validation||{},precision=Number(v.precision),valid=v.status==='validated'&&Number.isFinite(precision)&&precision>=Number(v.minPrecision??.9);const selected=valid?enforcement[rule.id]:{mode:'off',reason:`検出器未検証（精度 ${Number.isFinite(precision)?(precision*100).toFixed(1)+'%':'未計測'}）`,since:enforcement[rule.id]?.since||new Date().toISOString()};return[rule.id,{mode:selected?.mode||'off',reason:selected?.reason||'判定なし',since:selected?.since||new Date().toISOString(),precision:Number.isFinite(precision)?precision:null}];}));}
+ export function validateEnforcement(document,registry){const ids=new Set(registry.rules.map(x=>x.id)),modes=new Set(['off','warn','block']);for(const[id,value]of Object.entries(document)){if(!ids.has(id))throw new Error(`未登録の rule id: ${id}`);if(!modes.has(value?.mode))throw new Error(`不正な mode: ${id}=${value?.mode}`);}for(const id of ids)if(!(id in document))throw new Error(`rule id が欠落: ${id}`);return true;}
+ export function writeEnforcement(file,document,registry){validateEnforcement(document,registry);fs.mkdirSync(path.dirname(file),{recursive:true});let backup=null;if(fs.existsSync(file)){backup=`${file}.bak.${new Date().toISOString().replace(/[:.]/g,'-')}`;fs.copyFileSync(file,backup);}fs.writeFileSync(file,JSON.stringify(document,null,2)+'\n');validateEnforcement(JSON.parse(fs.readFileSync(file,'utf8')),registry);return backup;}
+-export function runAudit({home=defaultHome(),days=7,apply=false,dryRun=true}={}){const registry=readJson(path.join(here,'rules-registry.json'),{rules:[]}),catalog=readJson(path.join(here,'automation-routes.json'),{}),since=Date.now()-days*864e5;const files=projectTranscripts(path.join(home,'.claude','projects')).filter(f=>{try{return fs.statSync(f).mtimeMs>=since;}catch{return false;}});const sessions=files.map(file=>({sessionId:path.basename(file,'.jsonl'),events:readEvents(file,since)}));const ledgerFile=path.join(home,'.claude','handoff-ledger.jsonl'),runnerFile=path.join(home,'.claude','stop-gate-runner-ledger.jsonl'),oldLedger=fs.existsSync(ledgerFile)?readJsonl(ledgerFile):[],runnerLedger=fs.existsSync(runnerFile)?readJsonl(runnerFile):[],runnerHandoff=runnerLedger.filter(x=>x.blockedBy?.includes('handoff-quality-gate')).map(x=>({...x,verdict:x.verdict==='retry-cap'?'passed':x.verdict==='block'?'blocked':x.verdict})),ledger=[...oldLedger,...runnerHandoff],ledgerAvailable=ledger.length>0,bypassedCount=oldLedger.filter(x=>x.verdict==='bypassed'&&Date.parse(x.ts)>=since).length+runnerLedger.filter(x=>x.verdict==='retry-cap'&&Date.parse(x.ts)>=since).length;const skipFile=path.join(home,'.claude','handoff-gate-skips.jsonl'),skipAvailable=fs.existsSync(skipFile),skips=skipAvailable?readJsonl(skipFile).filter(x=>Date.parse(x.ts)>=since):[];const results=auditSessions(sessions,registry,catalog,ledger),old=readJson(path.join(home,'.claude','rule-enforcement.json'),{}),enforcement={};for(const rule of registry.rules)enforcement[rule.id]=decideRuleEnforcement(rule,results[rule.id],old[rule.id]);const document=enforcementDocument(registry,enforcement),report=makeReport(registry,results,enforcement,days,{ledgerAvailable,skipInfo:{available:skipAvailable,records:skips},bypassedCount});let backup=null;if(apply&&!dryRun)backup=writeEnforcement(path.join(home,'.claude','rule-enforcement.json'),document,registry);return{rows:sessions.reduce((n,s)=>n+s.events.length,0),results,enforcement,document,backup,report};}
++export function runAudit({home=defaultHome(),days=7,apply=false,dryRun=true}={}){const registry=readJson(path.join(here,'rules-registry.json'),{rules:[]}),catalog=readJson(path.join(here,'automation-routes.json'),{}),since=Date.now()-days*864e5;const files=projectTranscripts(path.join(home,'.claude','projects')).filter(f=>{try{return fs.statSync(f).mtimeMs>=since;}catch{return false;}});const sessions=files.map(file=>({sessionId:path.basename(file,'.jsonl'),events:readEvents(file,since)}));const ledgerFile=path.join(home,'.claude','handoff-ledger.jsonl'),runnerFile=path.join(home,'.claude','stop-gate-runner-ledger.jsonl'),oldLedger=fs.existsSync(ledgerFile)?readJsonl(ledgerFile):[],runnerLedger=fs.existsSync(runnerFile)?readJsonl(runnerFile):[],runnerHandoff=runnerLedger.filter(x=>x.blockedBy?.includes('handoff-quality-gate')).map(x=>({...x,verdict:x.verdict==='retry-cap'?'passed':x.verdict==='block'?'blocked':x.verdict})),ledger=[...oldLedger,...runnerHandoff],ledgerAvailable=ledger.length>0,bypassedCount=oldLedger.filter(x=>x.verdict==='bypassed'&&Date.parse(x.ts)>=since).length+runnerLedger.filter(x=>x.verdict==='retry-cap'&&Date.parse(x.ts)>=since).length;const skipFile=path.join(home,'.claude','handoff-gate-skips.jsonl'),skipAvailable=fs.existsSync(skipFile),skips=skipAvailable?readJsonl(skipFile).filter(x=>Date.parse(x.ts)>=since):[];const results=auditSessions(sessions,registry,catalog,ledger,repairRows(home)),old=readJson(path.join(home,'.claude','rule-enforcement.json'),{}),enforcement={};for(const rule of registry.rules)enforcement[rule.id]=decideRuleEnforcement(rule,results[rule.id],old[rule.id]);const document=enforcementDocument(registry,enforcement),report=makeReport(registry,results,enforcement,days,{ledgerAvailable,skipInfo:{available:skipAvailable,records:skips},bypassedCount});let backup=null;if(apply&&!dryRun)backup=writeEnforcement(path.join(home,'.claude','rule-enforcement.json'),document,registry);return{rows:sessions.reduce((n,s)=>n+s.events.length,0),results,enforcement,document,backup,report};}
+ if (isEntry(import.meta.url)) {
+   const args = process.argv.slice(2);
+   const index = args.indexOf('--days');
+diff --git a/tools/rule-compliance-loop.test.mjs b/tools/rule-compliance-loop.test.mjs
+index e6531ea..4ed3543 100644
+--- a/tools/rule-compliance-loop.test.mjs
++++ b/tools/rule-compliance-loop.test.mjs
+@@ -4,7 +4,7 @@ const registry=JSON.parse(fs.readFileSync(new URL('./rules-registry.json',import
+ test('6 未検証ならすり抜けがあってもoff',()=>assert.equal(decideRuleEnforcement({...registry.rules[0],validation:{status:'unvalidated',precision:null,minPrecision:.9}},{bypass:1,violation:1,examples:[]}).mode,'off'));
+ test('6b 検証済みならすり抜け1件で即block',()=>assert.equal(decideRuleEnforcement({...registry.rules[0],validation:{status:'validated',precision:.95,minPrecision:.9}},{bypass:1,violation:1,examples:[]}).mode,'block'));
+ test('6c ledgerなしは計測不能',()=>{const results=Object.fromEntries(registry.rules.map(r=>[r.id,{applicable:0,violation:0,bypass:0,examples:[]}]));const enforcement=Object.fromEntries(registry.rules.map(r=>[r.id,{mode:'off',reason:'検出器未検証（精度 未計測）'}]));assert.match(makeReport(registry,results,enforcement,7,{ledgerAvailable:false}),/すり抜け: 計測不能（ledger 未生成）/);});
+-test('8 登録簿の必須フィールド',()=>{ assert.equal(registry.rules.length,7); assert.ok(registry.rules.some(r => r.id === 'reported-symptom-evidence')); for(const r of registry.rules){assert.ok(r.detect);if(r.detect.mode==='delegated'){assert.ok(r.owner);assert.equal(r.enforcement,'off');continue;}assert.ok(r.gate);assert.ok(r.thresholds);assert.ok(r.validation);} });
++test('8 登録簿の必須フィールド',()=>{ assert.equal(registry.rules.length,8); assert.ok(registry.rules.some(r => r.id === 'reported-symptom-evidence')); for(const r of registry.rules){assert.ok(r.detect);if(r.detect.mode==='delegated'){assert.ok(r.owner);assert.equal(r.enforcement,'off');continue;}assert.ok(r.gate);assert.ok(r.thresholds);assert.ok(r.validation);} });
+ test('9 自動化経路の全カテゴリが空でない',()=>{for(const routes of Object.values(catalog)) assert.ok(Array.isArray(routes)&&routes.length>0);});
+ test('10 ledger passed と一致しない違反は計測不能で、すり抜けにしない',async()=>{const {auditSessions}=await import('./rule-compliance-loop.mjs');const text='Supabase Dashboardを開いて SQL を実行してください。';const sessions=[{sessionId:'s1',events:[{event:{type:'assistant',message:{content:[{type:'text',text}]}},ts:'2026-08-28T00:00:00.000Z'}]}];const ledger=[{sessionId:'s1',verdict:'passed',excerpt:'別の応答'}];const r=auditSessions(sessions,registry,catalog,ledger)['handoff-quality-only'];assert.equal(r.violation,1);assert.equal(r.bypass,0);assert.equal(r.unmeasured,1);});
+ test('11 ledger passed と応答が一致した違反だけをすり抜けに数える',async()=>{const {auditSessions}=await import('./rule-compliance-loop.mjs');const text='Supabase Dashboardを開いて SQL を実行してください。';const sessions=[{sessionId:'s1',events:[{event:{type:'assistant',message:{content:[{type:'text',text}]}},ts:'2026-08-28T00:00:00.000Z'}]}];const r=auditSessions(sessions,registry,catalog,[{sessionId:'s1',verdict:'passed',excerpt:text}])['handoff-quality-only'];assert.equal(r.bypass,1);assert.equal(r.unmeasured,0);});
+diff --git a/tools/rule-detectors.mjs b/tools/rule-detectors.mjs
+index 276fa9e..6a2f116 100644
+--- a/tools/rule-detectors.mjs
++++ b/tools/rule-detectors.mjs
+@@ -1,3 +1,4 @@
++import { detectLaneRepair } from './lib/lane-repair-detector.mjs';
+ import { evaluateHandoff, hasHandoff } from './handoff-quality-gate.mjs';
+ export const WRITE_THRESHOLD=2000;
+ export function textOf(event){const c=event?.message?.content;if(typeof c==='string')return c;if(Array.isArray(c))return c.filter(x=>x?.type==='text').map(x=>x.text||'').join('\n');return'';}
+@@ -11,5 +12,5 @@ const fableSubagent=e=>toolUses(e).some(t=>/fable/i.test(String(t.input?.model||
+ function idViolation(text){const re=/\bC\d{4,}\b/g;let applicable=false,m;while((m=re.exec(text))){applicable=true;const around=text.slice(Math.max(0,m.index-40),Math.min(text.length,m.index+m[0].length+40)).replace(m[0],' ');if(!/[ぁ-んァ-ヶ一-龠々]{2,}|\b[A-Z][A-Z0-9]*(?:\s+[A-Z][A-Z0-9]*)*\b/.test(around))return{applicable:true,violation:true};}return{applicable,violation:false};}
+ function add(r,session,event,text,ledgerVerdict=null){r.violation++;r.examples.push({sessionId:session.sessionId,ts:event?.ts||new Date(0).toISOString(),excerpt:text.slice(0,200),gatePassed:ledgerVerdict==='passed'});if(ledgerVerdict==='passed')r.bypass++;else if(ledgerVerdict===null)r.unmeasured++;}
+ function matchingLedgerVerdict(ledger,sessionId,text){const excerpt=text.slice(0,200);const records=ledger.filter(x=>x.sessionId===sessionId&&typeof x.excerpt==='string'&&x.excerpt&&(excerpt.startsWith(x.excerpt)||x.excerpt.startsWith(excerpt)));if(records.some(x=>x.verdict==='passed'))return'passed';if(records.length)return records.at(-1).verdict||'recorded';return null;}
+-export function detectSessions(sessions,registry,catalog,ledger=[]){const results=Object.fromEntries(registry.rules.map(r=>[r.id,{applicable:0,violation:0,bypass:0,unmeasured:0,examples:[]} ]));for(const session of sessions){let verified=false,writeBytes=0,hasDelegation=false,last=null;for(const wrapped of session.events){last=wrapped;const e=wrapped.event||wrapped,text=textOf(e),tools=toolUses(e);if(tools.some(verifyTool))verified=true;writeBytes+=tools.reduce((n,t)=>n+editSize(t),0);if(tools.some(delegated))hasDelegation=true;if(e.type!=='assistant')continue;if(hasHandoff(text)){const r=results['handoff-quality-only'];r.applicable++;if(evaluateHandoff(text,{catalog}).decision==='block')add(r,session,wrapped,text,matchingLedgerVerdict(ledger,session.sessionId,text));}const id=idViolation(text);if(id.applicable){const r=results['id-with-name'];r.applicable++;if(id.violation)add(r,session,wrapped,text,'recorded');}if(isCompletion(text)){const r=results['verify-before-done'];r.applicable++;if(!verified)add(r,session,wrapped,text,'recorded');verified=false;}if(fableSubagent(e)){const r=results['no-fable5'];r.applicable++;add(r,session,wrapped,text||wrapped.raw||'','recorded');}}if(writeBytes>WRITE_THRESHOLD){const r=results['delegate-implementation'];r.applicable++;if(!hasDelegation)add(r,session,last||{},`Write/Edit input ${writeBytes} bytes without codex-do.mjs`,'recorded');}}return results;}
++export function detectSessions(sessions,registry,catalog,ledger=[],repairLog=[]){const results=Object.fromEntries(registry.rules.map(r=>[r.id,{applicable:0,violation:0,bypass:0,unmeasured:0,examples:[]} ]));for(const session of sessions){const repairResult=results['repair-failed-lane-first'];if(repairResult){const detected=detectLaneRepair(session,repairLog);if(detected.applicable)repairResult.applicable++;for(const hit of detected.observations.slice(0,1))add(repairResult,session,{ts:hit.ts},hit.excerpt,'recorded');}let verified=false,writeBytes=0,hasDelegation=false,last=null;for(const wrapped of session.events){last=wrapped;const e=wrapped.event||wrapped,text=textOf(e),tools=toolUses(e);if(tools.some(verifyTool))verified=true;writeBytes+=tools.reduce((n,t)=>n+editSize(t),0);if(tools.some(delegated))hasDelegation=true;if(e.type!=='assistant')continue;if(hasHandoff(text)){const r=results['handoff-quality-only'];r.applicable++;if(evaluateHandoff(text,{catalog}).decision==='block')add(r,session,wrapped,text,matchingLedgerVerdict(ledger,session.sessionId,text));}const id=idViolation(text);if(id.applicable){const r=results['id-with-name'];r.applicable++;if(id.violation)add(r,session,wrapped,text,'recorded');}if(isCompletion(text)){const r=results['verify-before-done'];r.applicable++;if(!verified)add(r,session,wrapped,text,'recorded');verified=false;}if(fableSubagent(e)){const r=results['no-fable5'];r.applicable++;add(r,session,wrapped,text||wrapped.raw||'','recorded');}}if(writeBytes>WRITE_THRESHOLD){const r=results['delegate-implementation'];r.applicable++;if(!hasDelegation)add(r,session,last||{},`Write/Edit input ${writeBytes} bytes without codex-do.mjs`,'recorded');}}return results;}
+ export function fixtureSession(sample,index=0){const events=[];for(const line of String(sample.text).split(/\r?\n/)){try{const event=JSON.parse(line);events.push({event,raw:line,ts:event.timestamp||new Date(0).toISOString()});}catch{}}if(!events.length)events.push({event:{type:'assistant',message:{content:[{type:'text',text:sample.text}]}},raw:sample.text,ts:new Date(0).toISOString()});return{sessionId:`fixture-${index}`,events};}
+diff --git a/tools/rules-registry.json b/tools/rules-registry.json
+index b8b5197..9252c4d 100644
+--- a/tools/rules-registry.json
++++ b/tools/rules-registry.json
+@@ -153,6 +153,36 @@
+         "measuredOn": "2026-09-24",
+         "note": "reported-symptom-gate.fixtures.json"
+       }
++    },
++    {
++      "id": "repair-failed-lane-first",
++      "short": "rlf",
++      "source": "ONBOARDING §1.18 / CLAUDE.md 他AI修復ルール",
++      "summary": "故障レーンの修復を通常作業・代替への移行より優先する",
++      "detect": {
++        "scope": "session_tool_history",
++        "detector": "lane-failure-before-unlogged-implementation"
++      },
++      "gate": "lane-repair-first-gate.mjs",
++      "ledger": "~/.claude/lane-repair-log.jsonl",
++      "thresholds": {
++        "violationsToBlock": 3,
++        "daysObserved": 2
++      },
++      "enforcement": "block",
++      "validation": {
++        "fixtureCount": 28,
++        "precision": 1,
++        "minPrecision": 0.9,
++        "status": "validated",
++        "measuredOn": "2026-10-29",
++        "truePositives": 16,
++        "falsePositives": 0,
++        "trueNegatives": 12,
++        "falseNegatives": 0,
++        "recall": 1,
++        "note": "node --test tools/lane-repair-detector.test.mjs; synthetic transcript fixtures, actual execution; source quotes, quota, failed/expired/wrong-lane records included"
++      }
+     }
+   ]
+ }
+diff --git a/tools/sessionstart-lane-health.mjs b/tools/sessionstart-lane-health.mjs
+index 4112d78..7209fc5 100644
+--- a/tools/sessionstart-lane-health.mjs
++++ b/tools/sessionstart-lane-health.mjs
+@@ -5,11 +5,13 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+ import { sessionSummary } from './stall-scan.mjs';
+ import { laneHome } from './lane-doctor.mjs';
+ import { laneDoctorQuick, summarize } from './lane-doctor.mjs';
++import { repairContext } from './lib/lane-repair-state.mjs';
+ export function sessionLaneHealth(options) {
+   const home = options?.home || laneHome();
+   const context = auditContext(home);
+   (options?.auditLaunch || launchAudit)({ ...options, home, intervalHours: 6 });
+-  return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: [context, summarize(laneDoctorQuick(options)), sessionSummary(options?.home || laneHome(), options?.now)].filter(Boolean).join(" / ") } };
++  const health = laneDoctorQuick(options);
++  return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: [context, summarize(health), repairContext(health, home, options?.now), sessionSummary(home, options?.now)].filter(Boolean).join(" / ") } };
+ }
+ export async function main() {
+   await readStdinWithTimeout();
+diff --git a/tools/setup-manifest.json b/tools/setup-manifest.json
+index 9600720..b53d5cc 100644
+--- a/tools/setup-manifest.json
++++ b/tools/setup-manifest.json
+@@ -1,6 +1,9 @@
+ {
+   "version": 1,
+   "items": [
++    {"id":"task:rule-compliance","type":"scheduled-task","severity":"required","spec":{"name":"ClaudeRuleComplianceAudit","requireActionTarget":true},"description":"全PC: 日次ルール監査と --apply（03:50）","repair":["register-rule-compliance-task.mjs"]},
++    {"id":"state:rule-enforcement","type":"json-valid","severity":"required","spec":{"path":".claude/rule-enforcement.json","requiredPath":"repair-failed-lane-first.mode"},"description":"検証済みルールの強制状態を生成","repair":["rule-compliance-loop.mjs","--days","7","--apply"]},
++    {"id":"settings:lane-repair-first","type":"json-valid","severity":"required","spec":{"path":".claude/settings.json","hookEvent":"PreToolUse","hookScript":"lane-repair-first-gate.mjs","async":false,"hookArgs":"","hookRunner":"gate-hook-runner.mjs","timeout":15},"description":"全PC: 故障レーンの修復を実装より優先","repair":["register-hooks.mjs","--hooks-only"]},
+     { "id": "task:task-hide-guard", "type": "scheduled-task", "severity": "optional", "spec": { "name": "Claude-TaskHideGuard", "migrationMarker": ".claude/.task-hide-guard-v1" }, "description": "全PC: 定期タスクを非表示起動へ修復(ログオン時・30分ごと)", "repair": ["register-task-hide-guard.mjs"] },
+     { "id": "task:window-spawn-watch", "type": "scheduled-task", "severity": "optional", "spec": { "name": "OrgiastWindowSpawnWatch", "migrationMarker": ".claude/.task-hide-guard-v1" }, "description": "全PC: 可視コンソール窓の出現を記録(ログオン時・常駐)", "repair": ["register-task-hide-guard.mjs"] },
+     { "id": "task:aihaijin-digest", "type": "scheduled-task", "severity": "optional", "spec": { "name": "OrgiastAihaijinDigest", "ifPresent": ".claude/messenger-profile" }, "description": "kim-PC: AI廃人部の週次取り込み(日曜03:20、Messengerプロファイル設定済PCのみ)", "repair": ["register-aihaijin-digest.mjs"] },
+-- 
+2.53.0
+

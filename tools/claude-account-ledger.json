@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "note": "組織 UUID は 2026-10-29 に /api/oauth/profile で実測した「オージャスト」（organization_type=claude_team）。members は fleet-pc-map.json の account と tools/fable-policy.json の evidence に基づく。name は席の所有者を特定できないため email のローカル部。pcs は fleet の確定済みトップレベルキーのみ（未確認別名・codexAccount は使わない）。kim と seisaku-team の Claude 席への PC 紐付けは未確定。",
+  "contractedOrgUuids": ["07b2296b-cf32-43b5-993e-be47884b3fda"],
+  "members": [
+    {"name":"kim","email":"kim@orgiast.jp","claudeEmails":[],"discordId":null,"pcs":[],"status":"active","retiredOn":null},
+    {"name":"seisaku-team","email":"seisaku-team@orgiast.jp","claudeEmails":[],"discordId":null,"pcs":[],"status":"active","retiredOn":null},
+    {"name":"nishi","email":"nishi@orgiast.jp","claudeEmails":[],"discordId":null,"pcs":["kimko-PC","nishi-PC"],"status":"active","retiredOn":null},
+    {"name":"cr","email":"cr@orgiast.jp","claudeEmails":[],"discordId":null,"pcs":["HP","作業用011","w018-PC"],"status":"active","retiredOn":null}
+  ]
+}

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { runStaleTaskHealth } from './stale-task-health.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import fs from 'node:fs';
 import { runAudit } from './unattended-job-audit.mjs';
@@ -312,6 +313,7 @@ export async function runNightlyHealth({
   baselinePath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'nightly-health-baseline.json'),
   scheduledTaskInfo = getScheduledTaskInfo,
   streakWatch = runAutoSessionStreakWatch,
+  staleTaskHealth = runStaleTaskHealth,
   streakNotifyImpl,
   gasDrift = checkGasMasterDrift,
   convergenceWatch = runConvergenceWatch,
@@ -326,6 +328,8 @@ export async function runNightlyHealth({
   const newOffsets = { ...oldOffsets };
   const anomalies = [];
   const dedicatedStreakAnomalies = new Set();
+  try { anomalies.push(...(await staleTaskHealth({ home, now, platform, dryRun: dryRun || prime })).anomalies); }
+  catch (error) { anomalies.push({ type: 'stale_task_error', label: '定期タスク参照先', message: error.message }); }
   try {
     const audit = await unattendedAudit({ home, now: now.getTime(), platform, dryRun: dryRun || prime });
     for (const finding of audit.unresolved || []) {

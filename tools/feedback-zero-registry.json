@@ -105,6 +105,17 @@
         "repo": "FEEDBACK_F3898056D69F_REPO",
         "appDir": "FEEDBACK_F3898056D69F_APP_DIR"
       }
+    },
+    {
+      "appName": "orgiast-gdoc-editor-gas",
+      "kind": "gas",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "FEEDBACK_0864FD00F42E_REPO",
+        "appDir": "FEEDBACK_0864FD00F42E_APP_DIR"
+      }
     }
   ]
 }

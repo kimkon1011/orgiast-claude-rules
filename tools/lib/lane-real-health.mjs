@@ -36,12 +36,9 @@ export function realLaneStats(home, now = Date.now()) {
     // cooldown 状態の行は常に quota 扱い（実機: glm が 70 件の cooldown 行を持ち real_fail_rate と誤判定）。
     if (row.status === 'cooldown' || quotaFailure(detail)) {
       s.quotaCalls++;
-      if (row.status === 'cooldown') s.lastQuotaAt = Math.max(s.lastQuotaAt, at);
-      else {
-        s.lastQuotaAt = Math.max(s.lastQuotaAt, at);
-        const until = millis(row.retryAt ?? row.until ?? row.resetAt) || quotaReset(detail);
-        if (until > now && (!s.until || until > s.until)) s.until = until;
-      }
+      s.lastQuotaAt = Math.max(s.lastQuotaAt, at);
+      const until = millis(row.retryAt ?? row.until ?? row.resetAt) || quotaReset(detail);
+      if (Number.isFinite(until) && (!s.until || until > s.until)) s.until = until;
       continue;
     }
     if (billingFailure(detail)) {
@@ -63,27 +60,33 @@ export function applyRealLaneHealth(health, home, now = Date.now()) {
   for (const [lane, state] of Object.entries(health.lanes)) {
     const s = stats[lane];
     if (s) state.real24h = s;
-    // Reclassify legacy/persisted billing or real_fail_rate that is actually quota
-    if ((state.reason === 'billing' || state.reason === 'real_fail_rate')
-      && (quotaFailure(state.error) || quotaFailure(state.reason) || (s?.quotaCalls && !s.billingCalls && !s.failures))) {
-      state.reason = 'quota_wait';
-      state.until ||= s?.until || quotaReset(state.error) || null;
-    }
-    if ((!state.alive && quotaFailure(`${state.reason} ${state.error || ''}`))
-      || (s?.quotaCalls && (!s.until || s.until > now) && s.lastQuotaAt > s.lastOkAt)) {
-      state.alive = false;
-      state.reason = 'quota_wait';
-      state.until ||= s?.until || quotaReset(state.error) || null;
-    } else if (s?.calls >= 5 && s.failRate >= .5) {
+    const errorQuota = quotaFailure(state.error);
+    const errorUntil = quotaReset(state.error);
+    const ledgerQuota = s?.quotaCalls && (!s.until || s.until > now) && s.lastQuotaAt > s.lastOkAt;
+    // Only this lane's error, ledger or active cooldown may supply a reset.
+    const stateUntil = millis(state.until);
+    const cooldownQuota = !state.alive && quotaFailure(state.reason)
+      && Number.isFinite(stateUntil) && stateUntil > now;
+    const quota = ledgerQuota || (errorQuota && (!Number.isFinite(errorUntil) || errorUntil > now)) || cooldownQuota;
+    const until = Math.max(ledgerQuota ? s.until || 0 : 0,
+      errorQuota && errorUntil > now ? errorUntil : 0, cooldownQuota ? stateUntil : 0) || null;
+    if (s?.calls >= 5 && s.failRate >= .5) {
       state.alive = false;
       state.reason = 'real_fail_rate';
+      delete state.until;
       state.error = Object.entries(s.reasons).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([r, n]) => `${r} (${n})`).join('; ');
-    // A gateway probe does not prove the original wallet was replenished.
-    // Only a later successful real call supersedes ledger billing evidence.
-    } else if ((s?.billingCalls && s.lastBillingAt >= s.lastOkAt && !quotaFailure(`${state.reason} ${state.error || ''}`))
-      || (!state.alive && billingFailure(`${state.reason} ${state.error || ''}`) && !quotaFailure(`${state.reason} ${state.error || ''}`))) {
+    // A later real success supersedes wallet evidence; gateway probes do not.
+    } else if ((s?.billingCalls > (s?.quotaCalls || 0) && s.lastBillingAt >= s.lastOkAt)
+      || (!quota && !state.alive && billingFailure(`${state.reason} ${state.error || ''}`))) {
       state.alive = false;
       state.reason = 'billing';
+      delete state.until;
+    } else if (quota) {
+      state.alive = false;
+      state.reason = 'quota_wait';
+      state.until = until;
+    } else if (state.until && stateUntil <= now) {
+      delete state.until;
     }
   }
   return health;

@@ -75,7 +75,7 @@ export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = tr
   const old = readJson(path.join(dir, 'lane-health.json'));
   const health = { ts: new Date(now).toISOString(), probedAt: old.probedAt || null, lanes: {}, implementOrder: [], askOrder: [], repairs: (old.repairs || []).filter(r => typeof r === 'string' && old.lanes?.codex?.alive), deadNeedsUser: [], errors: [], ignored: [] };
   const cooldown = readJson(path.join(dir, 'provider-cooldown.json')), routing = readJson(path.join(dir, 'routing-overrides.json'));
-  const limits = [...history(home, 'provider-limit-history.jsonl'), ...history(home, 'codex-limit-history.jsonl').map(x => ({ ...x, provider: 'codex' }))].filter(x => {
+  const limits = [...history(home, 'provider-limit-history.jsonl'), ...history(home, 'codex-limit-history.jsonl').filter(x => !x.provider || x.provider === 'codex').map(x => ({ ...x, provider: 'codex' }))].filter(x => {
     if (time(x.until) > now + MAX_HISTORY_RESET_MS) {
       health.ignored.push({ provider: x.provider, reason: 'until_beyond_7d', until: x.until });
       return false;
@@ -96,14 +96,20 @@ export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = tr
   const keys = { gemini: loadGeminiKey(home), deepseek: loadDeepseekKey(home), glm: loadEnvKey(home, 'zai.env', 'ZAI_API_KEY'), groq: loadEnvKey(home, 'groq.env', 'GROQ_API_KEY'), openrouter: loadEnvKey(home, 'openrouter.env', 'OPENROUTER_API_KEY') };
   for (const p of PROVIDERS) {
     const configured = p === 'codex' ? codexAuthStatus(home).login : !!keys[p];
-    const previous = old.lanes?.[p] || {}, evidence = probeHistory(previous);
+    const previous = { ...(old.lanes?.[p] || {}) }, evidence = probeHistory(previous);
+    // A cached quota label/until alone is not provider-local evidence.
+    if (/quota_wait|cooldown|usage_limit/.test(previous.reason || '') && !quotaFailure(previous.error)) {
+      previous.alive = configured;
+      previous.reason = configured ? 'configured:unprobed' : 'missing_key';
+      delete previous.until;
+    }
     const recent = limits.filter(x => x.provider === p && time(x.until) > now && !(time(evidence.lastProbeOkAt) >= time(x.t ?? x.ts ?? x.at))).at(-1);
     const blocked = cooldown[p] || recent;
     let state = { alive: configured, reason: configured ? 'configured:unprobed' : p === 'codex' ? 'dead:oauth_consent' : 'missing_key' };
-    if (old.lanes?.[p]?.reason === 'billing' || old.lanes?.[p]?.reason === 'dead:payment_required' || (old.lanes?.[p]?.reason === 'dead:physical_operation' && old.lanes?.[p]?.error)) state = { ...old.lanes[p] };
+    if (old.lanes?.[p]?.reason === 'billing' || old.lanes?.[p]?.reason === 'dead:payment_required' || (old.lanes?.[p]?.reason === 'dead:physical_operation' && old.lanes?.[p]?.error)) state = { ...previous };
     else if (blocked && time(blocked.until) > now) state = { alive: false, reason: blocked.reason || 'cooldown', until: blocked.until };
     else if (routing.demote?.[p]) state = { alive: false, reason: 'demoted', until: routing.demote[p]?.until ?? routing.demote[p] };
-    else if (configured && freshProbe(old.lanes?.[p]?.probedAt, now) && !(old.lanes[p].until && time(old.lanes[p].until) <= now)) state = { ...old.lanes[p] };
+    else if (configured && freshProbe(old.lanes?.[p]?.probedAt, now) && !(old.lanes[p].until && time(old.lanes[p].until) <= now)) state = { ...previous };
     else if (configured && evidence.lastProbeOkAt && !/^(?:auth_ok:)?probe_ok(?::stale)?$|^native_ok$/.test(evidence.probeReason || '')) state = { alive: false, reason: 'probe_failed:stale' };
     else if (configured && evidence.lastProbeOkAt) state = { alive: true, reason: 'probe_ok:stale' };
     else if (configured && evidence.probedAt) state = previous.until && time(previous.until) <= now

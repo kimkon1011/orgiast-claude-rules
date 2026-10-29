@@ -205,3 +205,15 @@ test('ネイティブ修復失敗は操作を1件通知し24h抑止',async t=>{
   const r=await laneDoctorProbe(opts);assert.equal(r.deadNeedsUser.filter(x=>x.provider==='codex').length,1);assert.match(r.deadNeedsUser.find(x=>x.provider==='codex').fix,/wsl.exe --install --no-distribution/);
   await laneDoctorProbe({platform: 'linux',...opts,now:now+60000});assert.equal(calls,1);
 });
+test('glm cooldown and explicitly tagged legacy history cannot block healthy Codex', t => {
+  const h = fixture(t), until = now + 3600000;
+  write(h, 'provider-cooldown.json', { glm: { until, reason: 'usage_limit' } });
+  fs.writeFileSync(path.join(h, '.claude/codex-limit-history.jsonl'), JSON.stringify({ provider: 'glm', t: now - 1000, until, reason: 'usage_limit' }) + '\n');
+  write(h, 'lane-health.json', { lanes: { codex: { alive: false, reason: 'quota_wait', until, probedAt: new Date(now - 1000).toISOString(), probeReason: 'auth_ok:probe_ok' } } });
+  fs.writeFileSync(path.join(h, '.claude/executor-usage.jsonl'), JSON.stringify({ provider: 'codex', t: now - 500, status: 'ok' }) + '\n');
+  const r = laneDoctorQuick({ home: h, now, save: false });
+  assert.equal(r.lanes.codex.alive, true);
+  assert.notEqual(r.lanes.codex.reason, 'quota_wait');
+  assert.equal(r.lanes.codex.until, undefined);
+  assert.equal(r.lanes.glm.reason, 'quota_wait');
+});

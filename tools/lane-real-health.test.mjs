@@ -107,13 +107,13 @@ test('diagnosed billing cooldown skips explicit llm-ask candidate in existing fa
 
 test('real glm exhausted limit and cooldown rows are quota, never repair blockers', async t => {
   const { evaluateRepairFirst } = await import('./lane-repair-first-gate.mjs');
-  const error = 'HTTP429 {"error":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-10-29 19:53:29"}';
+  const error = 'HTTP429 {"error":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-10-29T19:53:29Z"}';
   const home = fixture(t, [...Array.from({ length: 70 }, () => ({ provider: 'glm', status: 'cooldown' })), ...Array.from({ length: 39 }, () => ({ provider: 'glm', status: 'error', stderr: error }))]);
   const health = { lanes: { glm: { alive: false, reason: 'probe_failed', error } } };
   applyRealLaneHealth(health, home, now);
   assert.equal(health.lanes.glm.reason, 'quota_wait');
   assert.equal(health.lanes.glm.real24h.failures, 0);
-  assert.equal(health.lanes.glm.until, Date.parse('2026-10-29 19:53:29'));
+  assert.equal(health.lanes.glm.until, Date.parse('2026-10-29T19:53:29Z'));
   fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify(health));
   assert.equal(evaluateRepairFirst({ tool_name: 'Edit' }, { home, now }).decision, 'pass');
 });
@@ -142,7 +142,7 @@ test('legacy bare billing cached from 429 is corrected from ledger evidence', t 
   assert.equal(health.lanes.groq.reason, 'quota_wait');
 });
 test('glm real error with limit exhausted text is quota_wait not real_fail_rate', t => {
-  const error = 'HTTP429 {"error":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-10-29 19:53:29"}';
+  const error = 'HTTP429 {"error":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-10-29T19:53:29Z"}';
   const home = fixture(t, [
     ...Array.from({ length: 70 }, () => ({ provider: 'glm', status: 'cooldown' })),
     ...Array.from({ length: 39 }, () => ({ provider: 'glm', status: 'error', stderr: error })),
@@ -154,7 +154,7 @@ test('glm real error with limit exhausted text is quota_wait not real_fail_rate'
   const health = { lanes: { glm: { alive: false, reason: 'probe_failed', error } } };
   applyRealLaneHealth(health, home, now);
   assert.equal(health.lanes.glm.reason, 'quota_wait');
-  assert.equal(health.lanes.glm.until, Date.parse('2026-10-29 19:53:29'));
+  assert.equal(health.lanes.glm.until, Date.parse('2026-10-29T19:53:29Z'));
 });
 test('groq 429 with billing-like prose is quota_wait, not billing', t => {
   for (const [error, expected] of [
@@ -191,4 +191,21 @@ test('billing penalty with 429 text in same detail is ONLY quota before billing'
   assert.equal(stats.groq.billingCalls, 0);
   assert.equal(stats.groq.quotaCalls, 1);
   assert.equal(stats.groq.failures, 0);
+});
+test('billing majority outranks quota, while repairable failure rate outranks both', t => {
+  const home = fixture(t, [...Array.from({ length: 14 }, () => ({ status: '402' })), { status: '429', until: now + 10000 }]);
+  const h = { lanes: { deepseek: { alive: false, reason: 'quota_wait', until: now + 10000 } } };
+  applyRealLaneHealth(h, home, now);
+  assert.equal(h.lanes.deepseek.reason, 'billing');
+  assert.equal(h.lanes.deepseek.until, undefined);
+  fs.appendFileSync(path.join(home, '.claude/executor-usage.jsonl'), '\n' + Array.from({ length: 16 }, () => JSON.stringify({ provider: 'deepseek', t: now, status: '500' })).join('\n'));
+  applyRealLaneHealth(h, home, now);
+  assert.equal(h.lanes.deepseek.reason, 'real_fail_rate');
+});
+test('expired ledger and error resets do not create quota_wait', t => {
+  const home = fixture(t, [{ status: '429', until: now - 1 }]);
+  const h = { lanes: { deepseek: { alive: true, reason: 'probe_ok', until: now - 1 } } };
+  applyRealLaneHealth(h, home, now);
+  assert.equal(h.lanes.deepseek.alive, true);
+  assert.equal(h.lanes.deepseek.until, undefined);
 });

@@ -37,6 +37,8 @@ const samples = [
   ['fixed logged before Write', false, [...fail(), ...logged({ ...log, result: 'fixed' }), write]],
   ['repair marker permits alternative', false, [...fail(), prose('[LANE-REPAIR] deepseek: 修復不可 試行: checked key; 代替へ回します。')]],
   ['doctor says healthy', false, [...fail(), tool('health', 'node tools/lane-doctor.mjs --json'), result('health', JSON.stringify({ lanes: { deepseek: { alive: true, reason: 'probe_ok' } } })), edit]],
+  ['Bash reading source cannot introduce failure', false, [tool('source', 'cat tools/llm-ask.mjs'), result('source', 'HTTP 500'), edit]],
+  ['pretty numbered health', true, [use('health', 'Read', { file_path: '/x/lane-health.json' }), result('health', JSON.stringify({ lanes: { deepseek: state } }, null, 2).split('\n').map((line, i) => `${i + 1}→${line}`).join('\n')), edit]],
   ['no continuation', false, fail()],
   ['log without tried', true, [...fail(), ...logged({ ...log, tried: '' }), edit]],
   ['future repair', true, [...fail(), ...logged({ ...log, ts: '2026-10-30T00:00:00Z' }), edit]],

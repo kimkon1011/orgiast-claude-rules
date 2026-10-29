@@ -92,11 +92,15 @@ if (-not (Have git)) { Warn "git が無いので導入します"; try { winget i
 if (Have git) { OK "git あり" } else { Warn "git が入りませんでした。会社担当(kim)に連絡してください" }
 if (-not (Have node)) { Warn "Node.js が無いので導入します"; try { winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-package-agreements --accept-source-agreements | Out-Null } catch {} ; $env:Path += ';C:\Program Files\nodejs' }
 if (Have node) { OK ("Node.js あり (" + (node -v) + ")") } else { Warn "Node.js が入りませんでした。会社担当(kim)に連絡してください" }
-if (-not (Have gh)) { Warn "GitHub CLI が無いので導入します"; try { winget install --id GitHub.cli -e --source winget --accept-package-agreements --accept-source-agreements | Out-Null } catch {} }
-try {
-  $installerPaths = @([Environment]::GetEnvironmentVariable('Path','Machine'), [Environment]::GetEnvironmentVariable('Path','User'), 'C:\Program Files\GitHub CLI') | Where-Object { $_ }
-  $env:Path = ($installerPaths -join ';')
-} catch {}
+function Update-InstallerPath {
+  try {
+    $installerPaths = @([Environment]::GetEnvironmentVariable('Path','Machine'), [Environment]::GetEnvironmentVariable('Path','User'), 'C:\Program Files\GitHub CLI') | Where-Object { $_ }
+    $env:Path = ($installerPaths -join ';')
+  } catch {}
+}
+# 導入済みの gh を見落とさないよう、判定前に PATH を読み直す。
+Update-InstallerPath
+if (-not (Have gh)) { Warn "GitHub CLI が無いので導入します"; try { winget install --id GitHub.cli -e --source winget --accept-package-agreements --accept-source-agreements | Out-Null } catch {}; Update-InstallerPath }
 if (Have gh) { OK "GitHub CLI あり" } else { Warn "GitHub CLI が入りませんでした。最後の総合チェックで確認してください" }
 
 # --- リポ取得(ZIP優先: git の pack ロック/Defender 干渉を回避) ---

@@ -4,6 +4,8 @@ $OutputEncoding = [Console]::OutputEncoding = New-Object System.Text.UTF8Encodin
 function Say($m, $c = 'White') { Write-Host $m -ForegroundColor $c }
 function Title($m) { Say "`n■ $m" 'Cyan' }
 function Have($name) { $null -ne (Get-Command $name -ErrorAction SilentlyContinue) }
+# 導入直後でも gh/codex を見つけられるよう PATH を読み直す。
+$env:Path = (@([Environment]::GetEnvironmentVariable('Path','Machine'), [Environment]::GetEnvironmentVariable('Path','User'), 'C:\Program Files\GitHub CLI', (Join-Path $env:APPDATA 'npm')) | Where-Object { $_ }) -join ';'
 
 $account = 'seisaku-team@orgiast.jp'
 $homeDir = $env:USERPROFILE

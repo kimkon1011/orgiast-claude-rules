@@ -90,6 +90,41 @@ try {
 
 export const RECIPIENT_NOTICE = 'Discord の宛先が未設定です。Claude のチャットに『Discordユーザー名: xxx』と送れば設定されます';
 
+export const OWNER_RECIPIENT_TICKET_MS = 24 * 3600 * 1000;
+export const OWNER_RECIPIENT_TICKET_TEXT = '進捗通知の Discord 宛先が解決できず、トーストに落ちています。fleet-pc-map.json の該当PCに discordId を追加してください';
+
+// 宛先解決不能で toast に落ちた owner を、next-session.md（SessionStart で表示される受け口）へ
+// 24時間に1回だけ起票する。fallback ログに残るだけで誰にも警告されない状態をなくすのが目的（2026-10-28 実害）。
+export function queueOwnerRecipientTicket(home, owner, now = Date.now()) {
+  const key = String(owner || '').trim().toLowerCase() || '(unknown)';
+  const stateFile = path.join(home, '.claude', 'logs', 'owner-recipient-ticket.json');
+  const claim = `${stateFile}.${now}.lock`;
+  let raised = false, claimed = false;
+  try {
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+    fs.writeFileSync(claim, String(now), { flag: 'wx', mode: 0o600 }); // 同時起動の二重起票を排他する
+    claimed = true;
+    let state = {};
+    try { state = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch { /* 初回は無い */ }
+    if (now - (Date.parse(state?.[key] || 0) || 0) >= OWNER_RECIPIENT_TICKET_MS) {
+      const file = path.join(home, '.claude', 'next-session.md');
+      const marker = `<!-- owner-recipient-ticket:${key}:${new Date(now).toISOString().slice(0, 10)} -->`;
+      let text = '';
+      try { text = fs.readFileSync(file, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (!text.includes(marker)) {
+        const item = `- [ ] [notify-owner] ${OWNER_RECIPIENT_TICKET_TEXT}（owner: ${owner || '不明'}） ${marker}\n`;
+        text = /^## 残TODO\s*$/m.test(text) ? text.replace(/(^## 残TODO\s*$)/m, `$1\n${item}`) : `${text}\n## 残TODO\n${item}`;
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, text);
+      }
+      fs.writeFileSync(stateFile, JSON.stringify({ ...state, [key]: new Date(now).toISOString() }), { mode: 0o600 });
+      raised = true;
+    }
+  } catch { /* 起票の失敗で進捗配達自体を止めない */ }
+  finally { if (claimed) { try { fs.unlinkSync(claim); } catch {} } }
+  return raised;
+}
+
 async function prependInbox(home, text, at) {
   const file = path.join(home, '.claude', 'owner-inbox.md');
   const lock = `${file}.lock`;
@@ -178,6 +213,8 @@ export async function notifyOwner(owner, text, options = {}) {
       }
     } catch { /* keep progress delivery independent of setup notice */ }
     finally { if (claimed) { try { fs.unlinkSync(claim); } catch {} } }
+    // toast に落ちたままの owner を次セッションの TODO として見える化する（24時間に1回）。
+    queueOwnerRecipientTicket(home, owner, now.getTime());
   }
   const channel = sent ? 'toast' : inboxOk ? 'inbox' : 'none';
   const progressToast = attempts.find(a => a.purpose === 'progress');

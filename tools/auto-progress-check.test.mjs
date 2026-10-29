@@ -99,7 +99,7 @@ test('check errors do not mark done; repeated errors notify once', async () => {
 });
 test('executeCheck honors exit contract, first line and bounded execution', () => {
   const command = `"${process.execPath}" -e "console.log('first');console.log('second');process.exit(1)"`;
-  assert.deepEqual(executeCheck({ check: command }, { home: tmp() }), { code: 1, text: 'first' });
+  assert.deepEqual(executeCheck({ check: command }, { home: tmp() }), { code: 1, text: 'first', fullText: 'first\nsecond' });
   const result = executeCheck({ check: 'anything' }, { home: tmp(), shellPath: null, spawnImpl: (_, options) => {
     assert.equal(options.timeout, CHECK_TIMEOUT_MS); assert.equal(options.windowsHide, true);
     return { status: null, error: new Error('timeout'), stdout: '' };
@@ -196,7 +196,7 @@ test('executeCheck invokes explicit Bash without shell and preserves execution o
     assert.equal(opts.timeout, CHECK_TIMEOUT_MS); assert.equal(opts.maxBuffer, 64 * 1024);
     assert.equal(opts.windowsHide, true); assert.equal(opts.encoding, 'utf8'); assert.equal(opts.env.ORGIAST_HOME, home);
     return { status: 1, stdout: '' };
-  } }), { code: 1, text: '未達' });
+  } }), { code: 1, text: '未達', fullText: '' });
 });
 test('executeCheck with null shell retains the shell:true invocation', () => {
   executeCheck({ check: 'check command' }, { shellPath: null, spawnImpl: (...args) => {

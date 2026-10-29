@@ -1,6 +1,9 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/knowledge-pack.mjs", "scope": "fleet", "step": "hook:onboarding-sync", "reason": "制作・営業ナレッジの公開・全PC受信"},
+    {"path": "tools/lib/share-content.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "memory-share と knowledge-pack 共通の資格情報除去・frontmatter 読込"},
+    {"path": "tools/lib/drive-files.mjs", "scope": "fleet", "step": "hook:onboarding-sync", "reason": "knowledge-pack が使う Drive バイナリ取得・in-place 更新"},
     {"path": "tools/register-task-hide-guard.ps1", "scope": "fleet", "step": "task:task-hide-guard", "reason": "全PCの非表示タスク実行・窓出現記録を converge で登録する"},
     {"path": "tools/register-task-hide-guard.mjs", "scope": "fleet", "step": "task:task-hide-guard", "reason": "全PCの非表示タスク実行・窓出現記録を converge で登録する"},
     {"path": "tools/task-hide-guard.ps1", "scope": "fleet", "step": "task:task-hide-guard", "reason": "全PCの非表示タスク実行・窓出現記録を converge で登録する"},

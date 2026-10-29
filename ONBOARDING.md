@@ -1358,6 +1358,12 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 ### 2.9 Drive・共通知識・社内アプリ・イベント（§2.9〜2.12）
 
+#### 制作・営業ナレッジ（全アカウント・全PC）
+
+制作・営業・見積・案件の依頼では、着手前に `~/.claude/knowledge/production-sales/00_INDEX.md` を読み、必要な節だけ Grep で引く。全文を丸読みしない。
+Drive ハブ `claude-common-rules` 配下の `production-sales-knowledge` が毎晩更新され、onboarding-sync または `/rules-sync` の pull で取り込まれる。生成物は直接編集せず、元のソースを直す。ルールの正本は本書の該当節。欠落・取得失敗時は同期ログを確認し、Drive から取り込む。
+
+
 Drive・知識は正本管理、社内アプリは投稿窓口・通知（`tools/feedback-kit/`）、システム利用イベントはアナログ代替必須。
 
 **ユーザー・他人に渡す成果物（PDF/画像/文書/表/ZIP 等）はすべて Google Drive にアップし、リンクを貼って渡す。** ローカルパス（Desktop 等）や SendUserFile・チャット添付だけで渡したら未完了（スマホ併用で開けず、他人にも渡せないため）。

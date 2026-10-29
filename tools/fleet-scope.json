@@ -9,6 +9,7 @@
     {"path": "tools/register-line-share-health.ps1", "scope": "kim-only", "step": null, "reason": "kim-PC の LINE 共有受信サーバーを監視・再起動する専用タスク"},
     {"path": "tools/lib/scheduled-task.mjs", "scope": "fleet", "step": "settings:lane-health-SessionStart", "reason": "全PC無人ジョブ監査のタスク取得・修復依存"},
     {"path": "tools/unattended-job-audit.mjs", "scope": "fleet", "step": "settings:lane-health-SessionStart", "reason": "全PCの無人ジョブ自動監査"},
+    {"path": "tools/lane-doctor.mjs", "scope": "fleet", "step": "settings:lane-repair-first", "reason": "全PCの安いAIレーン実績判定（lane-repair-first-gate の判定元）"},
     {"path": "tools/unattended-jobs.json", "scope": "fleet", "step": "settings:lane-health-SessionStart", "reason": "全PCの無人ジョブ自動監査"},
     {
       "path": "tools/register-schedule-sync-task.ps1",

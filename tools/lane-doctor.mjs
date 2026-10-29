@@ -135,7 +135,7 @@ export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = tr
   applyRealLaneHealth(health, home, now);
   // API key の生存と CLI の有無は別条件。CLI が無い場合は実装候補にしない。
   health.lanes['gemini-cli'] = { ...health.lanes.gemini, alive: health.lanes.gemini.alive && executable('gemini'), reason: executable('gemini') ? health.lanes.gemini.reason : 'cli_missing' };
-  orders(health);
+  orders(health, home);
   if (save) { demoteBilling(health, home, now); persist(path.join(dir, 'lane-health.json'), health, health); }
   return health;
 }
@@ -258,7 +258,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
   health.probedAt = new Date(now).toISOString();
   applyRealLaneHealth(health, home, now);
   health.lanes['gemini-cli'] = { ...health.lanes.gemini, alive: health.lanes.gemini.alive && executable('gemini') };
-  orders(health);
+  orders(health, home);
   demoteBilling(health, home, now);
   await notifyLaneStops(health, { home, now, notify, budgetMs, started });
   persist(path.join(dir, 'lane-health.json'), health, health);

@@ -30,6 +30,7 @@ export function buildFleetStatus({ pcMap, beacons = [], serverPolls = {}, now = 
   for (const beacon of Array.isArray(beacons) ? beacons : []) if (beacon?.label) byLabel.set(String(beacon.label), beacon);
   const labels = fleetLabels(pcMap);
   for (const label of byLabel.keys()) if (!labels.includes(label)) labels.push(label);
+  for (const [label, at] of Object.entries(serverPolls || {})) if (label && parseTime(at) !== null && !labels.includes(label)) labels.push(label);
   return labels.map((label) => {
     const beacon = byLabel.get(label) || null;
     const beaconAt = beacon ? parseTime(beacon.reportedAt) : null;

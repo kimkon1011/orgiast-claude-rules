@@ -28,7 +28,7 @@ function fixture(t) {
   const body = path.join(home, 'body.txt'); fs.writeFileSync(body, 'nonempty test body');
   const calls = [], output = [], errors = [], spawns = [];
   const deps = { home, pcMap, spawnImpl: (...args) => { spawns.push(args); return { on() {}, unref() {} }; }, identity: { hostname: pcMap[receiver].hostname }, now: () => now, stdout: s => output.push(s), stderr: s => errors.push(s),
-    fetchBeacons: async () => ({ ok: false, beacons: [] }), dailySelfHeal: () => {}, dailyLaneHealth: () => {}, autoRunFixNow: () => {}, dailyRuleCompliance: () => {},
+    fetchBeacons: async () => ({ ok: false, beacons: [], reason: 'unconfigured' }), dailySelfHeal: () => {}, dailyLaneHealth: () => {}, autoRunFixNow: () => {}, dailyRuleCompliance: () => {},
     request: async (kind, payload) => { calls.push({ kind, payload: structuredClone(payload) }); return kind === 'mail-poll' ? { ok: true, messages: [] } : kind === 'mail-ack' && payload.ids ? { ok: true, results: payload.ids.map(id => ({ id, ok: true, mail: { id } })) } : { ok: true, mail: payload }; } };
   const save = m => fs.writeFileSync(path.join(inbox, `${m.id}.json`), JSON.stringify(m));
   const read = id => JSON.parse(fs.readFileSync(path.join(inbox, `${id}.json`), 'utf8'));
@@ -1175,9 +1175,9 @@ for (const error of ['busy', 'fleet-mail read-back mismatch']) {
       return { ok: true, json: async () => ({ ok: false, error }) };
     };
     assert.equal(await main(sendArgs(f), f.deps), 1);
-    // GAS の busy はシートを書く前に返るので createClient が 3 試行まで再送する（1s/2s）。他の拒否は再送しない。
-    assert.equal(f.calls.length, error === 'busy' ? 3 : 1);
-    assert.deepEqual(sleeps, error === 'busy' ? [1000, 2000] : []);
+    // GAS の busy は書込み前の拒否。送信は既存の command lock 定数で短く再試行し、他の拒否は再送しない。
+    assert.equal(f.calls.length, error === 'busy' ? COMMAND_LOCK_RETRIES + 1 : 1);
+    assert.deepEqual(sleeps, error === 'busy' ? Array(COMMAND_LOCK_RETRIES).fill(COMMAND_LOCK_DELAY_MS) : []);
     if (error === 'busy') assert.match(f.errors.at(-1), /送信されていない/);
     else assert.ok(f.errors.at(-1).includes(`--sent-status ${f.calls[0].id}`));
   });

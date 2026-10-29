@@ -756,6 +756,12 @@
       "reason": "fleet-mail v2 の提示・通知・初回移行を全PCへ配布"
     },
     {
+      "path": "tools/fleet-mail-targets.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail の宛先照合・再試行・ローカルキャッシュを新規・既存PCへ配布する実行時 import 依存"
+    },
+    {
       "path": "tools/growi-manual.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",

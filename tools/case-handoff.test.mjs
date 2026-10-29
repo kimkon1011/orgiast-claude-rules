@@ -91,3 +91,19 @@ test('debounced Stop sends a complete multi-batch burst then defers new speech f
   assert.deepEqual(await c.drain({ dueOnly: true }), { sent: 0, remaining: 1 });
   assert.deepEqual(await c.drain(), { sent: 1, remaining: 0 });
 });
+
+test('adding a case while the worker awaits acknowledgment retains both bindings and the cursor', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'case-binding-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const file = path.join(home, 'session.jsonl'); fs.writeFileSync(file, transcript);
+  const c = client({ home, ...identity, fetchImpl: async (_url, init) => {
+    c.bind(identity.sessionId, ['261029AB'], file);
+    return Response.json({ batchId: JSON.parse(init.body).batchId, stateReady: true });
+  } });
+  c.bind(identity.sessionId, ['261021KGS'], file); c.stage(identity.sessionId); await c.drain();
+  const binding = JSON.parse(fs.readFileSync(c.bindingFile(identity.sessionId)));
+  assert.deepEqual(binding.cases, ['261021KGS', '261029AB']);
+  assert.equal(binding.cursors['261021KGS'], 'u2'); assert.equal(binding.cursors['261029AB'], 'u2');
+  fs.writeFileSync(`${c.bindingFile(identity.sessionId)}.lock`, String(process.pid));
+  assert.throws(() => c.bind(identity.sessionId, ['261030AB'], file), /使用中/);
+  assert.ok(!JSON.parse(fs.readFileSync(c.bindingFile(identity.sessionId))).cases.includes('261030AB'));
+});

@@ -20,6 +20,24 @@ export function atomic(file, value) {
   fs.writeFileSync(tmp, typeof value === 'string' ? value : JSON.stringify(value), { mode: 0o600 });
   fs.renameSync(tmp, file);
 }
+function updateBinding(file, fn) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const lock = `${file}.lock`, until = Date.now() + 2000;
+  for (;;) {
+    try { fs.writeFileSync(lock, String(process.pid), { flag: 'wx', mode: 0o600 }); break; }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      let owner; try { owner = Number(fs.readFileSync(lock, 'utf8')); } catch (e) { if (e.code === 'ENOENT') continue; throw e; }
+      if (Number.isSafeInteger(owner) && owner > 0) {
+        try { process.kill(owner, 0); } catch (e) { if (e.code === 'ESRCH') { fs.rmSync(lock, { force: true }); continue; } }
+      }
+      if (Date.now() >= until) throw Error('案件の紐付け更新が使用中です。キューを保持して再試行してください');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+  try { const next = fn(readJson(file)); atomic(file, next); return next; }
+  finally { fs.rmSync(lock, { force: true }); }
+}
 export function client(options = {}) {
   const home = options.home || process.env.ORGIAST_HOME || os.homedir();
   const base = path.join(home, '.claude');
@@ -49,10 +67,11 @@ export function client(options = {}) {
   }
   function bind(sessionId, ids, transcriptPath) {
     const file = bindingFile(sessionId);
-    const old = readJson(file, { sessionId, account, pc, cases: [], cursors: {} });
     for (const id of ids) if (!CASE_ID.test(id)) throw Error('invalid case ID');
-    const binding = { ...old, cases: [...new Set([...old.cases, ...ids])], ...(transcriptPath ? { transcriptPath } : {}) };
-    atomic(file, binding); return binding;
+    return updateBinding(file, saved => {
+      const old = saved || { sessionId, account, pc, cases: [], cursors: {} };
+      return { ...old, cases: [...new Set([...old.cases, ...ids])], ...(transcriptPath ? { transcriptPath } : {}) };
+    });
   }
   function findTranscript(sessionId) {
     const walk = dir => {
@@ -99,15 +118,18 @@ export function client(options = {}) {
         if (!files.length) break;
         let progressed = false;
         for (const name of files) {
+          if (Date.now() >= deadline) break;
           const file = path.join(dir, name), batch = readJson(file);
           const current = readJson(bindingFile(batch.sessionId));
           if (dueOnly && !eligibleSessions.has(batch.sessionId) && !fs.existsSync(path.join(base, 'case-last-error.txt')) && Date.now() - (current?.lastSentAt || 0) < 600000) continue;
           eligibleSessions.add(batch.sessionId);
           const result = await request({}, batch);
           if (result.batchId !== batch.batchId || result.stateReady !== true) throw Error('保存／STATE更新の読み戻し確認に失敗');
-          const bindingPath = bindingFile(batch.sessionId), binding = readJson(bindingPath);
-          binding.cursors[batch.caseId] = batch.lastUuid; binding.lastSentAt = Date.now();
-          atomic(bindingPath, binding); fs.unlinkSync(file); sent++; progressed = true;
+          updateBinding(bindingFile(batch.sessionId), binding => {
+            if (!binding) throw Error('案件の紐付けが消失しました。キューを保持します');
+            binding.cursors[batch.caseId] = batch.lastUuid; binding.lastSentAt = Date.now(); return binding;
+          });
+          fs.unlinkSync(file); sent++; progressed = true;
           stage(batch.sessionId);
         }
         if (!progressed) break;

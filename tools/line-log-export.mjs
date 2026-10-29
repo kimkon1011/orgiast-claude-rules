@@ -38,14 +38,26 @@ function loadSupabaseCreds() {
   throw new Error('Supabase 認証情報が見つかりません（試行: ' + candidates.join(', ') + '）');
 }
 
-// ── Supabase REST API ──────────────────────────────
-async function supabaseQuery(creds, query, signal) {
-  const res = await fetch(`${creds.url.replace(/\/$/, '')}${query}`, {
-    headers: { apikey: creds.key, Authorization: `Bearer ${creds.key}` },
-    signal,
-  });
-  if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text().catch(() => '')}`);
-  return res.json();
+// ── Supabase REST API（ページネーション対応） ──────
+async function supabaseQueryAll(creds, baseQuery, { signal, fetchImpl = globalThis.fetch } = {}) {
+  const base = creds.url.replace(/\/$/, '');
+  const PAGE = 1000;
+  const all = [];
+  let offset = 0;
+  for (;;) {
+    const query = `${baseQuery}&limit=${PAGE}&offset=${offset}`;
+    const res = await fetchImpl(base + query, {
+      headers: { apikey: creds.key, Authorization: `Bearer ${creds.key}` },
+      signal,
+    });
+    if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text().catch(() => '')}`);
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length === 0) break;
+    all.push(...data);
+    if (data.length < PAGE) break;
+    offset += PAGE;
+  }
+  return all;
 }
 
 // ── 伏せ字 ──────────────────────────────────────────
@@ -143,16 +155,16 @@ export async function runLineLogExport({
     if (lastRow[0]) cursor = lastRow[0];
   }
 
-  // 4) Supabase から channel_messages を取得
+  // 4) Supabase から channel_messages を取得（ページネーション）
   const since = cursor || SINCE;
   log(`取得範囲: ${since} 以降`);
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 60_000);
+  const timer = setTimeout(() => controller.abort(), 120_000);
   let messages;
   try {
-    const query = `/rest/v1/channel_messages?select=id,received_at,direction,sender_identifier,subject,body,external_thread_id,attachments&channel=eq.line&received_at=gte.${since}&order=received_at.asc`;
-    messages = await supabaseQuery(creds, query, controller.signal);
+    const baseQuery = `/rest/v1/channel_messages?select=id,received_at,direction,sender_identifier,subject,body,external_thread_id,attachments&channel=eq.line&received_at=gte.${since}&order=received_at.asc`;
+    messages = await supabaseQueryAll(creds, baseQuery, { signal: controller.signal, fetchImpl });
   } finally {
     clearTimeout(timer);
   }

@@ -100,16 +100,16 @@ export function client(options = {}) {
     const file = bindingFile(sessionId), queued = [];
     if (!readJson(file)?.cases?.length) return queued;
     updateBinding(file, binding => {
-    const transcriptPath = binding.transcriptPath || findTranscript(sessionId);
-    if (!transcriptPath) throw Error('紐付いたセッションの transcript が見つかりません');
-    const raw = fs.readFileSync(transcriptPath, 'utf8');
-    for (const caseId of binding.cases) {
-      const queueFile = path.join(base, 'case-queue', `${caseId}-${sessionId}.json`);
-      if (fs.existsSync(queueFile)) { queued.push(queueFile); continue; }
-      const batch = nextBatch(raw, binding.cursors[caseId], { sessionId, account: binding.account, pc: binding.pc }, caseId);
-      if (batch) { atomic(queueFile, batch); queued.push(queueFile); }
-    }
-    return binding;
+      const transcriptPath = binding.transcriptPath || findTranscript(sessionId);
+      if (!transcriptPath) throw Error('紐付いたセッションの transcript が見つかりません');
+      const raw = fs.readFileSync(transcriptPath, 'utf8');
+      for (const caseId of binding.cases) {
+        const queueFile = path.join(base, 'case-queue', `${caseId}-${sessionId}.json`);
+        if (fs.existsSync(queueFile)) { queued.push(queueFile); continue; }
+        const batch = nextBatch(raw, binding.cursors[caseId], { sessionId, account: binding.account, pc: binding.pc }, caseId);
+        if (batch) { atomic(queueFile, batch); queued.push(queueFile); }
+      }
+      return binding;
     });
     return queued;
   }
@@ -136,18 +136,18 @@ export function client(options = {}) {
           if (Date.now() >= deadline) break;
           if (failed.has(name)) continue;
           try {
-          const file = path.join(dir, name), batch = readJson(file);
-          const current = readJson(bindingFile(batch.sessionId));
-          if (dueOnly && !eligibleSessions.has(batch.sessionId) && !fs.existsSync(path.join(base, 'case-last-error.txt')) && Date.now() - (current?.lastSentAt || 0) < 600000) continue;
-          eligibleSessions.add(batch.sessionId);
-          const result = await request({}, batch);
-          if (result.batchId !== batch.batchId || result.stateReady !== true) throw Error('保存／STATE更新の読み戻し確認に失敗');
-          updateBinding(bindingFile(batch.sessionId), binding => {
-            if (!binding) throw Error('案件の紐付けが消失しました。キューを保持します');
-            binding.cursors[batch.caseId] = batch.lastUuid; binding.lastSentAt = Date.now(); return binding;
-          });
-          fs.unlinkSync(file); sent++; progressed = true;
-          stage(batch.sessionId);
+            const file = path.join(dir, name), batch = readJson(file);
+            const current = readJson(bindingFile(batch.sessionId));
+            if (dueOnly && !eligibleSessions.has(batch.sessionId) && !fs.existsSync(path.join(base, 'case-last-error.txt')) && Date.now() - (current?.lastSentAt || 0) < 600000) continue;
+            eligibleSessions.add(batch.sessionId);
+            const result = await request({}, batch);
+            if (result.batchId !== batch.batchId || result.stateReady !== true) throw Error('保存／STATE更新の読み戻し確認に失敗');
+            updateBinding(bindingFile(batch.sessionId), binding => {
+              if (!binding) throw Error('案件の紐付けが消失しました。キューを保持します');
+              binding.cursors[batch.caseId] = batch.lastUuid; binding.lastSentAt = Date.now(); return binding;
+            });
+            fs.unlinkSync(file); sent++; progressed = true;
+            stage(batch.sessionId);
           } catch (error) { failed.add(name); errors.push(error); }
         }
         if (!progressed) break;

@@ -2014,6 +2014,47 @@ test('timeout 後に孫プロセスが pipe を握り続けても猶予後に打
   assert.ok(elapsedSecs < 10, `孫が pipe を握ると timeout が実効せず ${elapsedSecs} 秒かかった`);
 });
 
+// delegation-health:timeout_waste_exceeds_cap の実測行（2026-10-26）:
+// provider=codex / model=codex-cli/gpt-5.6-sol / timeoutSecs=1800 / secs=7885.471。
+// fallbackBackendTimeoutSecs はフォールバック専用で主経路には効かず、Windows native Codex の
+// 子孫が pipe を握ると taskkill 後も close が来なかった。共通 execute の強制確定を主経路でも固定する。
+test('native Codex 主経路も子孫が pipe を保持したままなら timeout 猶予後に強制確定する', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-primary-timeout-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const binDir = workDir();
+  const fakeCodex = path.join(binDir, 'fake-codex.mjs');
+  fs.writeFileSync(fakeCodex,
+    `import { spawn } from 'node:child_process';\nimport os from 'node:os';\nspawn(process.execPath, ['-e', 'setTimeout(()=>{},15000)'], { stdio: 'inherit', detached: true, cwd: os.tmpdir() }).unref();\nprocess.exit(0);\n`,
+    'utf8');
+
+  const env = {
+    CODEX_DO_TIMEOUT_KILL_GRACE_MS: '1000',
+    CODEX_DO_NATIVE_PROBE: 'present',
+  };
+  if (process.platform === 'win32') {
+    const codexJs = path.join(binDir, 'npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+    fs.mkdirSync(path.dirname(codexJs), { recursive: true });
+    fs.copyFileSync(fakeCodex, codexJs);
+    env.APPDATA = binDir;
+  } else {
+    const shim = path.join(binDir, 'codex');
+    fs.writeFileSync(shim, `#!/bin/sh\nexec node "${fakeCodex}" "$@"\n`, { mode: 0o755 });
+    env.PATH = `${binDir}${path.delimiter}${process.env.PATH || ''}`;
+  }
+
+  const started = Date.now();
+  const result = run(['--force-native', '--no-fallback', '--cwd', home, '--model', 'sol', '--timeout', '2', '説明して'], { home, env });
+  const elapsedSecs = (Date.now() - started) / 1000;
+  assert.equal(result.status, 124, result.stderr);
+  assert.ok(elapsedSecs < 10, `native Codex 主経路が予算を超えて ${elapsedSecs} 秒かかった`);
+  const rows = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split(/\r?\n/).map(JSON.parse);
+  assert.equal(rows[0].provider, 'codex');
+  assert.equal(rows[0].model, 'codex-cli/gpt-5.6-sol');
+  assert.equal(rows[0].timeoutSecs, 2);
+  assert.equal(rows[0].timedOut, true);
+  assert.ok(rows[0].secs < 10, `台帳にも上限超過 ${rows[0].secs} 秒が記録された`);
+});
+
 test('gemini が拒否3回の後に無音で停滞しても周期判定で打ち切り次のバックエンドへ進む', () => {
   const { result, elapsedSecs } = runFakeGemini(silentAfter(DENY.repeat(3)));
   assert.equal(result.status, 0, result.stderr);

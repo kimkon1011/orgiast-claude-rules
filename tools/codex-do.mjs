@@ -1051,8 +1051,10 @@ function execute(command, commandArgs, options = {}) {
       timedOut = true;
       console.error(`\n⏱ ${command} が ${callTimeoutSeconds} 秒で応答を終えなかったので停止しました。--timeout で延長できます`);
       killProcessTree(child);
-      // 親が先に終わって孫が pipe を握ったままだと taskkill /T の木から外れ 'close' が来ない
-      // (2026-10-28 実測: 予算600秒の gemini-cli 試行が 1044 秒)。猶予後は close を待たず打ち切る。
+      // 親が先に終わって孫が pipe を握ったままだと taskkill /T の木から外れ 'close' が来ない。
+      // フォールバックだけでなく Windows native Codex 主経路でも発生する
+      // (2026-10-26 実測: 予算1800秒の codex-cli/gpt-5.6-sol が 7885秒、
+      //  2026-10-28 実測: 予算600秒の gemini-cli が 1044秒)。猶予後は close を待たず打ち切る。
       forceTimer = setTimeout(() => {
         for (const stream of [child.stdin, child.stdout, child.stderr]) { try { stream?.destroy(); } catch { /* 既に閉じている */ } }
         settle({ status: 124, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null });

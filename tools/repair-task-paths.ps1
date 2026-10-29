@@ -145,19 +145,43 @@ foreach ($snapshot in $snapshots) {
     $execute = [string]$actions[$index].Execute
     $arguments = [string]$actions[$index].Arguments
     $workingDirectory = [string]$actions[$index].WorkingDirectory
-    $newWorkingDirectory = $workingDirectory
-    $pinned = $false
+    # Pin only executable script references, never the working directory.
+    $pinned = ($execute + ' ' + $arguments) -match '(?i)(?:^|[\\/\s"''])auto-session-(?:launcher|verify)\.mjs(?=[\s"'']|$)'
+    $bootstrap = $arguments -match '(?i)(?:^|[\\/\s"''])nightly-bootstrap\.ps1(?=[\s"'']|$)'
     $repairRoots = @($staleRoots | Where-Object { -not (Test-PinnedRoot $_) })
     $newExecute = Replace-Roots $execute $repairRoots $synced
     $newArguments = Replace-Roots $arguments $repairRoots $synced
-    $newWorkingDirectory = Replace-Roots $workingDirectory $repairRoots $synced
-    foreach ($stale in $staleRoots) {
-      if (Test-PinnedRoot $stale) {
-        if (($execute + ' ' + $arguments + ' ' + $workingDirectory) -match (Root-Pattern $stale)) { $pinned = $true }
-        continue
+    $newWorkingDirectory = $workingDirectory
+    $warning = $false
+    $staleWd = $workingDirectory -ne (Replace-Roots $workingDirectory $repairRoots $synced)
+    $expandedWd = [Environment]::ExpandEnvironmentVariables($workingDirectory)
+    $invalidWd = $expandedWd -and -not [IO.Directory]::Exists($expandedWd)
+    if ($expandedWd -and (Split-Path -Leaf $expandedWd.TrimEnd('\')) -like 'auto-session-tree*') {
+      # Require a checkout at this root; git in an enclosing repo is insufficient.
+      $validGit = $false
+      if (Test-Path -LiteralPath (Join-Path $expandedWd '.git')) {
+        $ErrorActionPreference = 'Continue'
+        $null = & git -C $expandedWd rev-parse --show-toplevel 2>$null
+        $validGit = $LASTEXITCODE -eq 0
+        $ErrorActionPreference = 'Stop'
+      }
+      $invalidWd = -not $validGit
+    }
+    if ($pinned) {
+      $newExecute = $execute
+      $newArguments = $arguments
+      # register-auto-session{,-verify}.ps1 uses the synced repo as its cwd,
+      # even when the launcher/verifier lives in the fixed auto-session-repo.
+      if ($staleWd) { $newWorkingDirectory = $synced }
+    } elseif ($staleWd -or $invalidWd) {
+      if ($bootstrap) { $newWorkingDirectory = $synced }
+      else {
+        $warning = $true
+        $newExecute = $execute
+        $newArguments = $arguments
       }
     }
-    if (-not $pinned -and $newExecute -eq $execute -and $newArguments -eq $arguments -and $newWorkingDirectory -eq $workingDirectory) { continue }
+    if (-not $pinned -and -not $warning -and $newExecute -eq $execute -and $newArguments -eq $arguments -and $newWorkingDirectory -eq $workingDirectory) { continue }
 
     $missing = @(Get-MissingTargets $newWorkingDirectory $synced) + @(Get-MissingTargets $newExecute $synced) + @(Get-MissingTargets $newArguments $synced)
     $missing = @($missing | Select-Object -Unique)
@@ -170,14 +194,14 @@ foreach ($snapshot in $snapshots) {
       NewArguments = $newArguments
       OldWorkingDirectory = $workingDirectory
       NewWorkingDirectory = $newWorkingDirectory
+      Pinned       = $pinned
       Status       = 'planned'
       Missing      = $missing
     }
-    if ($pinned) {
+    if ($warning) {
+      $entry.Status = 'warning:working-directory'
+    } elseif ($pinned -and $newWorkingDirectory -eq $workingDirectory) {
       $entry.Status = 'pinned:auto-session'
-      $entry.NewExecute = $execute
-      $entry.NewArguments = $arguments
-      $entry.NewWorkingDirectory = $workingDirectory
     } elseif ($missing.Count -gt 0) {
       $entry.Status = 'skipped-missing'
       $errors += ((J '\u540c\u671f\u5148\u306b\u30b9\u30af\u30ea\u30d7\u30c8\u304c\u3042\u308a\u307e\u305b\u3093') + ": $($snapshot.TaskName) / " + ($missing -join ', '))
@@ -189,6 +213,8 @@ foreach ($snapshot in $snapshots) {
 foreach ($entry in $plan) {
   if ($entry.Status -eq 'pinned:auto-session') {
     Write-Host ("pinned:auto-session:$($entry.TaskName) / $($entry.Index)")
+  } elseif ($entry.Status -eq 'warning:working-directory') {
+    Write-Warning ("working-directory: $($entry.TaskName) / $($entry.OldWorkingDirectory); non-bootstrap action unchanged")
   } elseif ($entry.Status -eq 'skipped-missing') {
     Write-Host (((J '\u30b9\u30ad\u30c3\u30d7') + ':{0} / {1}') -f $entry.TaskName, $entry.Index)
   } else {
@@ -219,21 +245,16 @@ if ($Apply -and -not $InputJson) {
     Write-Host ((J '\u4fee\u6b63') + ":$taskName")
   }
 
-  # Read the tasks back. The rewrite only counts if no stale root survives it.
-  foreach ($snapshot in @(Get-TaskSnapshots $null)) {
-    foreach ($action in @($snapshot.Actions)) {
-      foreach ($stale in $staleRoots) {
-        if (Test-PinnedRoot $stale) { continue }
-        $joined = [string]$action.Execute + ' ' + [string]$action.Arguments + ' ' + [string]$action.WorkingDirectory
-        if ($joined -ne (Replace-Roots $joined @($stale) $synced)) {
-          $errors += ((J '\u691c\u8a3c\u5931\u6557') + ": $($snapshot.TaskName) -> $stale")
-        }
-      }
+  # Verify only actions we changed; warnings and pinned script paths are intentional.
+  foreach ($entry in $applicable) {
+    $actual = @( (Get-ScheduledTask -TaskName $entry.TaskName -ErrorAction Stop).Actions )[$entry.Index]
+    if ([string]$actual.Execute -ne $entry.NewExecute -or [string]$actual.Arguments -ne $entry.NewArguments -or [string]$actual.WorkingDirectory -ne $entry.NewWorkingDirectory) {
+      $errors += "verification failed: $($entry.TaskName) / $($entry.Index)"
     }
   }
 }
 
-Write-Host ("summary: detected=$(@($plan | Where-Object { $_.Status -ne 'pinned:auto-session' }).Count) repaired=$(@($plan | Where-Object { $_.Status -eq 'repaired' }).Count) stale=$(@($plan | Where-Object { $_.Status -in @('planned', 'skipped-missing') }).Count) pinned=$(@($plan | Where-Object { $_.Status -eq 'pinned:auto-session' }).Count)")
+Write-Host ("summary: detected=$(@($plan | Where-Object { $_.Status -ne 'pinned:auto-session' }).Count) repaired=$(@($plan | Where-Object { $_.Status -eq 'repaired' }).Count) stale=$(@($plan | Where-Object { $_.Status -in @('planned', 'skipped-missing', 'warning:working-directory') }).Count) pinned=$(@($plan | Where-Object { $_.Pinned }).Count)")
 
 if ($OutJson) {
   # Set-Content -Encoding UTF8 emits a BOM on PowerShell 5.1 and JSON parsers choke on it.

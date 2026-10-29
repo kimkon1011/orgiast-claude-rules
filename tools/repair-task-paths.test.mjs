@@ -126,7 +126,7 @@ test('actions already pointing at the synced repo produce no changes', { skip: !
 test('real git worktree origin is discovered without root injection', { skip: !hasPowerShell }, () => {
   const { result, plan, synced } = runPlan('worktree', {
     inject: false,
-    presentTools: ['worker.mjs'],
+    presentTools: ['worker.mjs', 'nightly-bootstrap.ps1'],
     setup: (stale, dir) => {
       const worktree = join(dir, 'messenger-watch-wt');
       const launcher = join(dir, 'windows-worktree.ps1');
@@ -142,7 +142,7 @@ test('real git worktree origin is discovered without root injection', { skip: !h
       execFileSync(powershell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', toWindowsPath(launcher)]);
       return worktree;
     },
-    actions: stale => [{ Execute: 'node.exe', Arguments: `"${stale}\\tools\\worker.mjs"`, WorkingDirectory: stale }],
+    actions: stale => [{ Execute: 'node.exe', Arguments: `"${stale}\\tools\\nightly-bootstrap.ps1" -Target tools\\worker.mjs`, WorkingDirectory: stale }],
   });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(plan.length, 1);
@@ -169,11 +169,54 @@ test('root prefix sibling is not rewritten', { skip: !hasPowerShell }, () => {
   assert.equal(plan.length, 0);
 });
 
-test('missing working directory prevents rewriting the entire action', { skip: !hasPowerShell }, () => {
+test('missing working directory without bootstrap warns and preserves the entire action', { skip: !hasPowerShell }, () => {
   const { result, plan } = runPlan('missing-working-directory', {
     presentTools: ['worker.mjs'],
     actions: stale => [{ Execute: 'node.exe', Arguments: `"${stale}\\tools\\worker.mjs"`, WorkingDirectory: `${stale}\\absent` }],
   });
-  assert.equal(result.status, 1);
-  assert.equal(plan[0].Status, 'skipped-missing');
+  assert.equal(result.status, 0);
+  assert.equal(plan[0].Status, 'warning:working-directory');
+  assert.equal(plan[0].NewArguments, plan[0].OldArguments);
+  assert.equal(plan[0].NewWorkingDirectory, plan[0].OldWorkingDirectory);
+});
+
+for (const exists of [true, false]) {
+  test(`bootstrap fallback working directory is repaired (exists=${exists})`, { skip: !hasPowerShell }, () => {
+    const { result, plan, synced } = runPlan(`fallback-${exists}`, {
+      inject: false,
+      setup: (_stale, dir) => {
+        const fallback = join(dir, 'auto-session-tree-fallback-20260910-003004');
+        if (exists) mkdirSync(fallback);
+        return fallback;
+      },
+      actions: stale => [{ Execute: 'powershell.exe', Arguments: '-File "C:\\bootstrap\\nightly-bootstrap.ps1" -Target tools\\fleet-agent.mjs', WorkingDirectory: stale }],
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(plan[0].Status, 'planned');
+    assert.equal(plan[0].Pinned, false);
+    assert.equal(plan[0].NewWorkingDirectory, synced);
+    assert.equal(plan[0].NewArguments, plan[0].OldArguments);
+  });
+}
+
+for (const scriptName of ['auto-session-launcher.mjs', 'auto-session-verify.mjs']) {
+  test(`${scriptName} is pinned independently of its root; stale cwd follows registration`, { skip: !hasPowerShell }, () => {
+    const { result, plan, synced } = runPlan(scriptName, {
+      actions: stale => [{ Execute: 'node.exe', Arguments: `"C:\\fixed\\${scriptName}"`, WorkingDirectory: stale }],
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(plan[0].Pinned, true);
+    assert.equal(plan[0].Status, 'planned');
+    assert.equal(plan[0].NewWorkingDirectory, synced);
+    assert.equal(plan[0].NewArguments, plan[0].OldArguments);
+  });
+}
+
+test('non-script suffix is not pinned', { skip: !hasPowerShell }, () => {
+  const { result, plan } = runPlan('suffix', {
+    actions: stale => [{ Execute: 'node.exe', Arguments: 'auto-session-launcher.mjs.bak', WorkingDirectory: stale }],
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(plan[0].Pinned, false);
+  assert.equal(plan[0].Status, 'warning:working-directory');
 });

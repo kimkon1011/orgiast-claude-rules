@@ -296,6 +296,21 @@ test('認証失敗とモデル認証不整合は codex_empty_output でなく名
 // の語順で出る。旧パターンに一致せず no_output に埋もれ、codex_empty_output が毎晩起票された。
 const TOKEN_REVOKED_STDERR = 'ting... 2/5 ERROR: Reconnecting... 3/5 ERROR: Reconnecting... 4/5 ERROR: Reconnecting... 5/5 ERROR: workspace routing discovery unauthorized (401) ERROR: workspace routing discovery unauthorized (401)';
 
+// 2026-10-29T18:01Z 実測: stderrTail は末尾200字の切り詰めなので "Missing bearer or basic authentication"
+// の先頭が欠け、"arer or basic authentication in header, url: ..." だけが残った。旧パターンは
+// "missing bearer" を要求していたため一致せず、no_output(1件) として codex_empty_output が起票された。
+const TRUNCATED_MISSING_BEARER_STDERR = 'arer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: a52416a4be0796be-KIX, request id: req_624ce167b37544b3a0b1a1401f88809b';
+
+test('先頭が切り詰められた Missing bearer 401 行も auth_failed に分類し codex_empty_output に出さない', () => {
+  const ledgerRow = { status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 14.295, stderrTail: TRUNCATED_MISSING_BEARER_STDERR };
+  assert.equal(emptyOutputReason(ledgerRow), 'auth_failed');
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, ...ledgerRow }));
+  const ids = collectFindings({ home: dir, now: NOW, codexUsedPercent: null }).map((item) => item.id);
+  assert.ok(ids.includes('codex_auth_failed'), JSON.stringify(ids));
+  assert.ok(!ids.includes('codex_empty_output'), JSON.stringify(ids));
+});
+
 test('token_revoked 401 の出力ゼロは auth_failed に分類し codex_empty_output に出さない', () => {
   const dir = home();
   write(dir, 'executor-usage.jsonl', [0, 1, 2].map((i) => row({

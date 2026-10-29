@@ -253,7 +253,10 @@ const SPAWN_FAILED = /syscall: 'spawn'|\bspawn E[A-Z]+\b|code: 'E[A-Z]{4,}'/;
 // token_revoked のとき codex は "workspace routing discovery unauthorized (401)" の語順で 401 を出す。
 // 旧パターン /401 unauthorized/ は語順が逆で一致せず、実測8件(2026-10-12〜10-14)が no_output に
 // 埋もれて codex_empty_output が毎晩起票された（2026-10-16 診断。修復=Windows の auth.json を WSL へコピー）。
-const CODEX_AUTH_FAILED = /401 unauthorized|unauthorized \(401\)|missing bearer or basic authentication/i;
+// stderrTail は末尾200字の切り詰め(codex-do.mjs の slice(-200))なので "Missing bearer" の先頭が欠け、
+// "arer or basic authentication in header" だけが残ることがある。実測 2026-10-29T18:01Z の1件が
+// no_output に落ちて codex_empty_output が起票された。先頭欠落を許容する "or basic authentication in header" も一致させる。
+const CODEX_AUTH_FAILED = /401 unauthorized|unauthorized \(401\)|missing bearer or basic authentication|or basic authentication in header/i;
 
 // ChatGPT アカウント認証なのに sol/astra を選ぶと 400 で即死する。codex-do 側のレーン選択の
 // 問題なので、直せる欠陥として起票する（2026-09-22 診断: 09-20 の11件中7件）。

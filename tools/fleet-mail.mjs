@@ -455,6 +455,7 @@ function validateMailResponse(kind, payload, result) {
   checked(result);
   const valid = kind === 'mail-poll' ? Array.isArray(result?.messages)
     : kind === 'mail-alerts' ? Array.isArray(result?.alerts)
+    : kind === 'mail-trace' ? Array.isArray(result?.mails)
     : kind === 'mail-ack' && payload.ids ? Array.isArray(result?.results)
     : result && Object.hasOwn(result, 'mail');
   if (!valid) throw Object.assign(new Error('fleet-mail: GAS mail handlers are not deployed'), { code: 'UNSUPPORTED_ACTION' });

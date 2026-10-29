@@ -6,6 +6,7 @@ import path from 'node:path';
 import { registerExpectation, checkExpectations, classifyExpectation } from './lib/fleet-chase-expect.mjs';
 import { HOUR, iso, loadLedger, saveJson, ledgerPath, parseArgs, runChase, control } from './fleet-chase.mjs';
 import { selectContext } from './fleet-chase-context.mjs';
+import { createClient } from './fleet-mail.mjs';
 import { digest } from './lib/fleet-chase-actions.mjs';
 import { buildBeacon, fetchBeacons } from './fleet-beacon.mjs';
 import { buildFleetStatus, formatFleetTable } from './fleet-status.mjs';
@@ -157,4 +158,19 @@ test('configuration/hook failures count as unconverged; poll repair does not cha
   await checkExpectations(f.ledger, f.ctx, { repair: true });
   assert.equal(f.item.diagnosis.cause, '配布未収束'); assert.match(f.sent[0].body, /setup\.mjs --converge/);
   assert.match(f.sent[0].body, /オプトイン変更/);
+});
+
+
+test('real mail client accepts trace metadata and rejects legacy upsert responses', async t => {
+  const f = fixture(t);
+  const calls = [];
+  f.ctx.request = createClient({ url: 'https://example.invalid', token: 'test-token', fetchImpl: async (_url, options) => {
+    const payload = JSON.parse(options.body); calls.push(payload.kind);
+    assert.equal(payload.kind, 'mail-trace');
+    return { ok: true, json: async () => ({ ok: true, mails: [], total: 0, truncated: false }) };
+  } });
+  await checkExpectations(f.ledger, f.ctx);
+  assert.deepEqual(calls, ['mail-trace']); assert.deepEqual(f.item.diagnosis.errors, []);
+  const old = createClient({ url: 'https://example.invalid', token: 'test-token', fetchImpl: async () => ({ ok: true, json: async () => ({ ok: true, action: 'updated', row: 1 }) }) });
+  await assert.rejects(old('mail-trace', { matchWhy: 'report' }), /not deployed/);
 });

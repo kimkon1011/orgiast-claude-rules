@@ -1,0 +1,360 @@
+From 58e5bf0a1621e8d003eb6f603e738b609d7ced42 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Thu, 29 Oct 2026 16:23:01 +0900
+Subject: [PATCH 1/2] fix: stop repeated quota sweep failures and restore daily
+ Codex cost metrics
+
+---
+ tools/cost-improve-loop.mjs    | 16 ++++++++-
+ tools/cost-work-loop.mjs       |  2 +-
+ tools/cost-work-loop.test.mjs  |  6 +++-
+ tools/nishi-ai-repair.test.mjs | 64 ++++++++++++++++++++++++++++++++++
+ tools/quota-sweep.mjs          | 59 +++++++++++++++++++++++++++++--
+ tools/usage-stats.mjs          | 10 +++++-
+ 6 files changed, 150 insertions(+), 7 deletions(-)
+ create mode 100644 tools/nishi-ai-repair.test.mjs
+
+diff --git a/tools/cost-improve-loop.mjs b/tools/cost-improve-loop.mjs
+index 861a80a..4743a6b 100644
+--- a/tools/cost-improve-loop.mjs
++++ b/tools/cost-improve-loop.mjs
+@@ -1726,8 +1726,22 @@ async function mainFetch(argv) {
+   return await fetchFleetKPIs({ sheetUrl: fleetEnv.FLEET_SHEET_URL, token: fleetEnv.FLEET_SHEET_TOKEN });
+ }
+ 
++export function refreshCostDirective({ home, spawn = defaultSpawnSync } = {}) {
++  const result = spawn(process.execPath, [path.join(import.meta.dirname, 'cost-work-loop.mjs')], {
++    cwd: path.resolve(import.meta.dirname, '..'), env: { ...process.env, ORGIAST_HOME: home },
++    encoding: 'utf8', windowsHide: true, timeout: 300_000,
++  });
++  if (result.error || result.status !== 0) throw new Error(`cost-directive refresh failed: ${result.error?.message || `exit ${result.status}`} ${String(result.stderr || '').slice(-1000)}`);
++  return `cost-directive refreshed: ${path.join(home, '.claude', 'cost-directive.md')} (exit 0)`;
++}
++
+ if (isEntry(import.meta.url)) {
+-  main().catch((err) => {
++  Promise.resolve().then(() => {
++    // Run before fleet/network/notification work: a successful daily task must
++    // also refresh the local directive. Dry runs keep their read-only contract.
++    if (!process.argv.includes('--dry-run')) console.error(refreshCostDirective({ home: path.dirname(getClaudeDir(process.argv.slice(2))) }));
++    return main();
++  }).catch((err) => {
+     console.error(err);
+     process.exitCode = 1;
+   });
+diff --git a/tools/cost-work-loop.mjs b/tools/cost-work-loop.mjs
+index 65f546b..ad1f797 100644
+--- a/tools/cost-work-loop.mjs
++++ b/tools/cost-work-loop.mjs
+@@ -235,7 +235,7 @@ ${burdenLines}
+ - 安いAI実行者: **台帳計測分 $${execUSD.toFixed(2)}**（従量課金）— ${execLine}
+ ${formatGeminiBudgetStatus(geminiBudgetStatus, { unmeasuredCalls: geminiMonth.unmeasuredCalls })}
+ - Codex(定額枠・実装の主経路): **out ${codexOut.toLocaleString('ja-JP')} tok** / ${codexSessions}セッション ※従量課金なし
+-- Codex 内訳: astra ${codexUsage.byModel['gpt-6-astra']?.sessions || 0}セッション/${((codexUsage.byModel['gpt-6-astra']?.outputTokens || 0) / 1000).toFixed(1)}k tok ／ sol ${codexUsage.byModel['gpt-5.6-sol']?.sessions || 0}セッション/${((codexUsage.byModel['gpt-5.6-sol']?.outputTokens || 0) / 1000).toFixed(1)}k tok ／ astra 上限到達(24h) ${astraLimit24h}回
++- Codex 内訳: ${Object.entries(codexUsage.byModel).map(([model, usage]) => `${model} ${usage.sessions}セッション/${(usage.outputTokens / 1000).toFixed(1)}k tok`).join(' ／ ') || '計測なし'} ／ astra 上限到達(24h) ${astraLimit24h}回
+ - 作業量(${workKind}): ${work} / **作業あたり 出力 ${(outPerWork / 1000).toFixed(0)}k tok**
+ - 委譲率(Claude以外へ): **${(nonClaudeDelegRatio * 100).toFixed(1)}%**
+ - Claude内の格下げ(節約): **${(delegation.claudeDowngradeRatio * 100).toFixed(1)}%** (Sonnet/Haiku)
+diff --git a/tools/cost-work-loop.test.mjs b/tools/cost-work-loop.test.mjs
+index c04288f..99550dd 100644
+--- a/tools/cost-work-loop.test.mjs
++++ b/tools/cost-work-loop.test.mjs
+@@ -17,13 +17,17 @@ test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
+ 
+ test('委譲ヘルスをプロバイダ健全性の直前へ挿入する', () => {
+   fs.writeFileSync(path.join(isolatedHome, '.claude', 'executor-usage.jsonl'), JSON.stringify({ t: new Date().toISOString(), provider: 'skipped', status: 'no-cheap-executor' }) + '\n');
+-  const run = spawnSync(process.execPath, [path.join(import.meta.dirname, 'cost-work-loop.mjs')], { cwd: isolatedHome, env: { ...process.env, ORGIAST_HOME: isolatedHome, COST_WORK_REPOS: isolatedHome }, encoding: 'utf8', timeout: 120_000 });
++  const codexDir = path.join(isolatedHome, '.codex', 'sessions');
++  fs.mkdirSync(codexDir, { recursive: true });
++  fs.writeFileSync(path.join(codexDir, 'run.jsonl'), JSON.stringify({ timestamp: new Date().toISOString(), model: 'gpt-6.1-sol', payload: { info: { total_token_usage: { output_tokens: 1200 } } } }));
++  const run = spawnSync(process.execPath, [path.join(import.meta.dirname, 'cost-work-loop.mjs')], { cwd: isolatedHome, env: { ...process.env, ORGIAST_HOME: isolatedHome, COST_WORK_REPOS: isolatedHome, CODEX_SESSIONS_DIRS: codexDir }, encoding: 'utf8', timeout: 120_000 });
+   assert.equal(run.status, 0, run.stderr);
+   const directive = fs.readFileSync(path.join(isolatedHome, '.claude', 'cost-directive.md'), 'utf8');
+   assert.match(directive, /^<!-- COST-DIRECTIVE-START -->\n## 👤 user の手間/);
+   assert.ok(directive.indexOf('user 手戻り') < directive.indexOf('## 📊 Claude Code'));
+   assert.match(directive, /目的あたりの user 往復/);
+   assert.match(directive, /未ルーティング: 1件/);
++  assert.match(directive, /gpt-6\.1-sol 1セッション\/1\.2k tok/);
+   assert.doesNotMatch(directive, /skipped:.*fail/);
+   assert.ok(directive.indexOf('## 🩺 委譲ヘルス') < directive.indexOf('### プロバイダ健全性'));
+ });
+diff --git a/tools/nishi-ai-repair.test.mjs b/tools/nishi-ai-repair.test.mjs
+new file mode 100644
+index 0000000..529da6b
+--- /dev/null
++++ b/tools/nishi-ai-repair.test.mjs
+@@ -0,0 +1,64 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import fs from 'node:fs';
++import os from 'node:os';
++import path from 'node:path';
++import { main, sweepFailureStop, enforceFailureStops } from './quota-sweep.mjs';
++import { collectCodexUsage, codexSessionDirs } from './usage-stats.mjs';
++import { refreshCostDirective } from './cost-improve-loop.mjs';
++
++const failed = (provider, i, outcome = 'failed') => ({ provider, ts: new Date(1000 + i).toISOString(), stopOutcome: outcome, reason: `cause-${i}` });
++function home(t) {
++  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-repair-'));
++  fs.mkdirSync(path.join(dir, '.claude'));
++  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
++  return dir;
++}
++test('failure stop spans windows and changing causes; deferral is not recovery', () => {
++  const rows = [failed('claude', 1), failed('codex', 2), failed('claude', 3, 'deferred'), failed('claude', 4, 'exhausted'), failed('claude', 5, 'deadline')];
++  assert.equal(sweepFailureStop(rows, 'claude').failures, 3);
++  assert.equal(sweepFailureStop(rows, 'codex'), null);
++  assert.equal(sweepFailureStop([...rows, failed('claude', 6, 'final')], 'claude'), null);
++  assert.equal(sweepFailureStop(rows, 'claude', { since: 1004 }), null);
++});
++test('existing ledger stops before window API/model launch and notifies once across invocations', async t => {
++  const dir = home(t);
++  fs.writeFileSync(path.join(dir, '.claude', 'quota-sweep.jsonl'), [1, 2, 3].map(i => JSON.stringify(failed('claude', i))).join('\n'));
++  let notifications = 0;
++  const io = { platform: 'win32', notify: async () => { notifications++; throw new Error('offline'); }, readWindows: () => { throw new Error('must not query'); }, print: () => {} };
++  for (let i = 0; i < 2; i++) {
++    const result = await main(['--home', dir, '--provider', 'claude'], io);
++    assert.equal(result.skipped, true);
++  }
++  assert.equal(notifications, 1);
++  const state = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'quota-sweep-state.json')));
++  assert.equal(state.failureStops.claude.notificationError, 'offline');
++  const result = await main(['--home', dir, '--resume', 'claude'], io);
++  assert.equal(result.resumed, 'claude');
++  const resumed = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'quota-sweep-state.json')));
++  assert.deepEqual(await enforceFailureStops({ home: dir, state: resumed, providers: ['claude'], save() {} }), ['claude']);
++});
++test('CODEX_HOME sessions supply cumulative usage and patch lines when reporting home differs', t => {
++  const dir = home(t), codexHome = path.join(dir, 'wsl-root-codex');
++  fs.mkdirSync(path.join(codexHome, 'sessions'), { recursive: true });
++  const old = process.env.CODEX_HOME, oldDirs = process.env.CODEX_SESSIONS_DIRS;
++  process.env.CODEX_HOME = codexHome; delete process.env.CODEX_SESSIONS_DIRS;
++  t.after(() => { if (old === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = old; if (oldDirs !== undefined) process.env.CODEX_SESSIONS_DIRS = oldDirs; });
++  const rows = [
++    { timestamp: new Date().toISOString(), payload: { info: { total_token_usage: { output_tokens: 12 } } } },
++    { name: 'apply_patch', input: '*** Begin Patch\n*** Update File: a\n-old\n+new\n+extra\n*** End Patch' },
++    { timestamp: new Date().toISOString(), payload: { info: { total_token_usage: { output_tokens: 19 } } } },
++  ];
++  fs.writeFileSync(path.join(codexHome, 'sessions', 'run.jsonl'), rows.map(r => JSON.stringify(r)).join('\n'));
++  assert.ok(codexSessionDirs(dir).includes(path.join(codexHome, 'sessions')));
++  const usage = collectCodexUsage({ home: dir, includePatchLines: true });
++  assert.equal(usage.sessions, 1); assert.equal(usage.outputTokens, 19);
++  assert.equal(usage.added, 2); assert.equal(usage.deleted, 1);
++});
++test('daily refresh propagates failure and uses selected home before reporting success', () => {
++  assert.throws(() => refreshCostDirective({ home: '/tmp/example', spawn: () => ({ status: 1, stderr: 'disk full' }) }), /exit 1.*disk full/);
++  assert.match(refreshCostDirective({ home: '/tmp/example', spawn: (_exe, args, options) => {
++    assert.match(args[0], /cost-work-loop.mjs$/); assert.equal(options.env.ORGIAST_HOME, '/tmp/example');
++    assert.equal(options.timeout, 300000); return { status: 0 };
++  } }), /exit 0/);
++});
+diff --git a/tools/quota-sweep.mjs b/tools/quota-sweep.mjs
+index ae6c64f..ecba4c3 100644
+--- a/tools/quota-sweep.mjs
++++ b/tools/quota-sweep.mjs
+@@ -45,6 +45,47 @@ function normalizeLandedContract(file) {
+ export function contractPrompt(provider, slug, goal) {
+   return `[headless:quota-sweep]\n${provider === 'claude' ? '/makeloop' : '$makeloop:makeloop'} ${goal}\n質問せず保守的な前提を明記して進める。runtime=manual（1メッセージ1イテレーション）、kind=closed、累積上限 ${MAX_TICKS} イテレーション、検証ゲート node --test tools/、slug=${slug}、ループを開始しない、日本語。.loop/${slug}.md と状態・INDEX を保存する。commit の取込判定は \`node tools/commit-landed.mjs <sha>\` を使う（squash マージのため is-ancestor は偽になる）。`;
+ }
++// A reset window is a budget boundary, not evidence that a broken job recovered.
++// Rebuild from the ledger so an upgrade also stops existing failure loops.
++export function sweepFailureStop(rows, provider, { since = 0, threshold = 3 } = {}) {
++  let failures = 0, last = null;
++  for (const row of rows) {
++    if (row.provider !== provider || Date.parse(row.ts) <= since) continue;
++    const outcome = row.stopOutcome || row.outcome;
++    if (['final', 'no-goal'].includes(outcome)) { failures = 0; last = null; }
++    else if (['failed', 'exhausted', 'deadline', 'ceiling'].includes(outcome)) { failures++; last = row; }
++    // Deferrals neither spend a job attempt nor prove recovery.
++  }
++  return failures >= threshold ? { failures, reason: last?.reason || last?.failureKey || last?.outcome, lastAt: last?.ts } : null;
++}
++
++export async function enforceFailureStops({ home, state, providers, save, notify = notifyKim, log = () => {}, now = Date.now }) {
++  const rows = read(path.join(home, '.claude', 'quota-sweep.jsonl')).split(/\r?\n/).flatMap(line => {
++    try { return [JSON.parse(line)]; } catch { return []; }
++  });
++  state.failureStops ??= {};
++  for (const provider of providers) {
++    let stop = state.failureStops[provider];
++    if (!stop) {
++      const failure = sweepFailureStop(rows, provider, { since: state.failureResumedAt?.[provider] || 0 });
++      if (!failure) continue;
++      stop = state.failureStops[provider] = { ...failure, stoppedAt: new Date(now()).toISOString() };
++      save();
++    }
++    if (!stop.notificationAttemptedAt) {
++      // Persist before delivery, including failure: scheduled invocations must
++      // never spam notifications or spend model tokens while awaiting repair.
++      stop.notificationAttemptedAt = new Date(now()).toISOString(); save();
++      try {
++        const result = await notify(`quota-sweep ${provider}: ${stop.failures}回連続未完了で停止。理由: ${stop.reason}。修復後に --resume ${provider} を明示実行してください。`, { home });
++        stop.notificationResult = result ?? null;
++      } catch (error) { stop.notificationError = error.message; log(`failure-stop notification failed: ${error.message}`); }
++      save();
++    }
++  }
++  return providers.filter(provider => !state.failureStops[provider]);
++}
++
+ export function canRunWindow(state, decision) {
+   const prior = state.lastRun?.[decision.provider]?.[decision.resetsAt];
+   return !prior || (!terminal.has(prior.stopOutcome || prior.outcome) && (prior.attempts || 1) < 2);
+@@ -117,9 +158,10 @@ export function parseArgs(argv) {
+   for (let i = 0; i < argv.length; i++) {
+     const arg = argv[i];
+     if (['--dry-run', '--json', '--status'].includes(arg)) o[arg.slice(2)] = true;
+-    else if (['--provider', '--lead-min', '--min-remaining', '--home'].includes(arg)) {
++    else if (['--provider', '--lead-min', '--min-remaining', '--home', '--resume'].includes(arg)) {
+       const value = argv[++i]; if (!value || value.startsWith('--')) throw new Error(`Missing ${arg}`);
+       if (arg === '--provider') o.provider = value;
++      if (arg === '--resume') { if (!['claude', 'codex'].includes(value)) throw new Error('Invalid resume provider'); o.resume = value; }
+       if (arg === '--home') o.home = path.resolve(value);
+       if (arg === '--lead-min') o.leadMinutes = Number(value);
+       if (arg === '--min-remaining') o.minRemainingPercent = Number(value);
+@@ -580,8 +622,9 @@ export async function runSweep(decision, context) {
+     if (failureKey) usageRow.failureKey = failureKey;
+     fs.appendFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), JSON.stringify(usageRow) + '\n');
+     log(`${provider}: ${outcome}, ticks=${record.ticks}, reason=${reason || '完了'}`);
++    await enforceFailureStops({ home, state, providers: [provider], save, notify, log, now });
+     const oneLine = value => String(value).replace(/[\r\n]+/g, ' ').slice(0, 250);
+-    try { if (outcome !== 'no-goal') await notify([`${provider}/${decision.window}`, `${usedBefore}% → ${usedAfter ?? '?'}%`, `tick: ${record.ticks}`, oneLine(selection.goal), prUrl || '変更なし', outcome === 'partial' ? '成果あり・未完了' : outcome, reason ? `理由: ${oneLine(reason)}` : '検証完了'].join('\n'), { home }); }
++    try { if (outcome !== 'no-goal' && !state.failureStops?.[provider]) await notify([`${provider}/${decision.window}`, `${usedBefore}% → ${usedAfter ?? '?'}%`, `tick: ${record.ticks}`, oneLine(selection.goal), prUrl || '変更なし', outcome === 'partial' ? '成果あり・未完了' : outcome, reason ? `理由: ${oneLine(reason)}` : '検証完了'].join('\n'), { home }); }
+     catch (error) { log(`DM failed: ${error.message}`); }
+   }
+ }
+@@ -620,6 +663,16 @@ export async function main(argv = process.argv.slice(2), io = {}) {
+   if (!release) { log('skip: lock held'); return emit({ skipped: true, reason: 'lock held' }); }
+   try {
+     const state = json(stateFile, { lastRun: {} });
++    if (options.resume) {
++      delete state.failureStops?.[options.resume];
++      state.failureResumedAt ??= {};
++      state.failureResumedAt[options.resume] = now();
++      atomic(stateFile, state);
++      return emit({ resumed: options.resume, reason: 'Failure stop acknowledged; next scheduled run will observe eligibility' });
++    }
++    const providers = options.provider === 'all' ? ['claude', 'codex'] : [options.provider];
++    const allowed = await enforceFailureStops({ home, state, providers, save: () => atomic(stateFile, state), notify: io.notify ?? notifyKim, log, now });
++    if (!allowed.length) return emit({ skipped: true, reason: 'quota-sweep failure stop; repair and explicitly --resume <provider>', stops: state.failureStops });
+     const wsl = Object.hasOwn(io, 'wsl') ? io.wsl : argv.includes('--home') ? null : discoverWsl({ spawnImpl });
+     if (wsl?.home && !wslHomes.includes(wsl.home)) wslHomes.push(wsl.home);
+     const active = io.active ?? (async provider => {
+@@ -637,7 +690,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
+     }
+     const currentWindows = async () => filterWindowsForCurrentAuth(await windows(), state);
+     const observed = await currentWindows();
+-    const decisions = decideSweep({ windows: observed, now: now(), ...options }).filter(d => (options.provider === 'all' || options.provider === d.provider) && canRunWindow(state, d));
++    const decisions = decideSweep({ windows: observed, now: now(), ...options }).filter(d => allowed.includes(d.provider) && canRunWindow(state, d));
+     if (!decisions.length) {
+       // 読み取り自体が失敗していた場合、これまでは「窓が無い」とだけ出て原因が残らなかった。
+       const readIssues = Object.entries(observed.reasons ?? {}).filter(([, r]) => r).map(([p, r]) => `${p}: ${r}`);
+diff --git a/tools/usage-stats.mjs b/tools/usage-stats.mjs
+index 2b6668a..263b98d 100644
+--- a/tools/usage-stats.mjs
++++ b/tools/usage-stats.mjs
+@@ -262,6 +262,9 @@ export function collectLedger({ home = process.env.ORGIAST_HOME || os.homedir(),
+ export function codexSessionDirs(home = process.env.ORGIAST_HOME || os.homedir()) {
+   if (process.env.CODEX_SESSIONS_DIRS !== undefined) return process.env.CODEX_SESSIONS_DIRS.split(path.delimiter).filter(Boolean);
+   const dirs = [path.join(home, '.codex', 'sessions')];
++  // Native WSL runs commonly use root, even when reporting uses USERPROFILE.
++  if (process.env.CODEX_HOME) dirs.push(path.join(process.env.CODEX_HOME, 'sessions'));
++  if (process.platform === 'linux' && /^\/mnt\/[a-z]\/Users\//i.test(home)) dirs.push(path.join(os.homedir(), '.codex', 'sessions'));
+   const addUsers = (root) => {
+     let users = []; try { users = fs.readdirSync(root, { withFileTypes: true }); } catch { return; }
+     for (const user of users) if (user.isDirectory()) dirs.push(path.join(root, user.name, '.codex', 'sessions'));
+@@ -270,7 +273,12 @@ export function codexSessionDirs(home = process.env.ORGIAST_HOME || os.homedir()
+   if (process.platform === 'win32') {
+     let distros = [];
+     try { if (wslInstalled()) distros = execSync('wsl.exe -l -q', { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }).toString('utf16le').split(/\r?\n/).map((s) => s.trim()).filter(Boolean); } catch {}
+-    for (const distro of distros) { addUsers(`//wsl.localhost/${distro}/home`); addUsers(`//wsl$/${distro}/home`); }
++    for (const distro of distros) {
++      // Use one UNC alias per distro so the same session is never counted twice.
++      const root = `//wsl.localhost/${distro}`;
++      dirs.push(`${root}/root/.codex/sessions`);
++      addUsers(`${root}/home`);
++    }
+   }
+   if (process.platform === 'linux') addUsers('/home');
+   return [...new Set(dirs)];
+-- 
+2.53.0
+
+
+From bd895e5d4608179f21463c0a08174ffd925073aa Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Thu, 29 Oct 2026 16:24:47 +0900
+Subject: [PATCH 2/2] fix: preserve cumulative sweep budgets across quota
+ resets
+
+---
+ tools/quota-sweep.mjs      |  5 +++--
+ tools/quota-sweep.test.mjs | 22 +++++++++++++++++++---
+ 2 files changed, 22 insertions(+), 5 deletions(-)
+
+diff --git a/tools/quota-sweep.mjs b/tools/quota-sweep.mjs
+index ecba4c3..5e5ad03 100644
+--- a/tools/quota-sweep.mjs
++++ b/tools/quota-sweep.mjs
+@@ -538,9 +538,10 @@ export async function runSweep(decision, context) {
+     const loopDir = path.join(tree, '.loop'); fs.mkdirSync(loopDir, { recursive: true });
+     const contract = path.join(loopDir, `${slug}.md`), budgetFile = path.join(loopDir, `${slug}-budget.json`);
+     let budget = json(budgetFile, { goal: selection.goal, ticks: 0 });
+-    if (budget.goal !== selection.goal || (budget.resetsAt && budget.resetsAt !== decision.resetsAt)) {
++    // A quota reset replenishes tokens, not the contract's cumulative attempt budget.
++    if (budget.goal !== selection.goal) {
+       const archive = path.join(loopDir, `archive-${slug}-${now()}`); fs.mkdirSync(archive);
+-      for (const name of [...(budget.goal !== selection.goal ? [`${slug}.md`] : []), `${slug}-state.md`, `${slug}-budget.json`]) if (fs.existsSync(path.join(loopDir, name))) fs.renameSync(path.join(loopDir, name), path.join(archive, name));
++      for (const name of [`${slug}.md`, `${slug}-state.md`, `${slug}-budget.json`]) if (fs.existsSync(path.join(loopDir, name))) fs.renameSync(path.join(loopDir, name), path.join(archive, name));
+       budget = { goal: selection.goal, ticks: 0 };
+     }
+     budget.ticks = Math.max(budget.ticks, record.ticks); record.ticks = budget.ticks; save();
+diff --git a/tools/quota-sweep.test.mjs b/tools/quota-sweep.test.mjs
+index 07560ce..48f7ee7 100644
+--- a/tools/quota-sweep.test.mjs
++++ b/tools/quota-sweep.test.mjs
+@@ -312,15 +312,27 @@ test('一時障害の判定は 429/5xx/network だけで、認証・形式不一
+   for (const reason of ['HTTP 429', 'HTTP 503', 'HTTP 408', 'network: TimeoutError']) assert.equal(isTransientWindowReadError(reason), true);
+   for (const reason of ['HTTP 401', 'HTTP 403', 'accessToken 未設定', 'credentials: ENOENT', 'usage response の形式が未対応', '', undefined]) assert.equal(isTransientWindowReadError(reason), false);
+ });
+-test('new reset archives old state and starts again, same-window retry keeps cumulative budget', async t => {
++test('new reset preserves completed contract and cumulative budget', async t => {
+   let calls = 0; const ctx = context(t, async () => { calls++; return { code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }; });
+   await runSweep(decision, ctx);
+   const firstCalls = calls;
+   const nextDecision = { ...decision, resetsAt: decision.resetsAt + minute, deadline: decision.deadline + minute };
+   ctx.windows = async () => windows.map(w => w.window === '5h' ? { ...w, resetsAt: nextDecision.resetsAt } : w);
+   await runSweep(nextDecision, ctx);
+-  assert.equal(calls, firstCalls + 1); // contract reused; one new tick
+-  assert.equal(ctx.state.lastRun.claude[nextDecision.resetsAt].outcome, 'final');
++  assert.equal(calls, firstCalls); // replenished quota cannot restart a completed goal
++  assert.equal(ctx.state.lastRun.claude[nextDecision.resetsAt].outcome, 'no-goal');
++  assert.ok(!fs.readdirSync(path.join(ctx.tree, '.loop')).some(n => n.startsWith('archive-')));
++});
++test('a different goal archives the prior contract and gets a new attempt budget', async t => {
++  let calls = 0; const ctx = context(t, async () => { calls++; return { code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }; });
++  await runSweep(decision, ctx);
++  const firstCalls = calls;
++  fs.writeFileSync(path.join(ctx.home, '.claude/quota-sweep-goals.md'), '- [ ] a different repair goal\n');
++  const next = { ...decision, resetsAt: decision.resetsAt + minute, deadline: decision.deadline + minute };
++  ctx.windows = async () => windows.map(w => w.window === '5h' ? { ...w, resetsAt: next.resetsAt } : w);
++  await runSweep(next, ctx);
++  assert.equal(calls, firstCalls + 2); // new contract generation and one tick
++  assert.equal(ctx.state.lastRun.claude[next.resetsAt].outcome, 'final');
+   assert.ok(fs.readdirSync(path.join(ctx.tree, '.loop')).some(n => n.startsWith('archive-')));
+ });
+ test('eight ticks is hard cap and a retry cannot reset it', async t => {
+@@ -330,6 +342,10 @@ test('eight ticks is hard cap and a retry cannot reset it', async t => {
+   assert.equal(calls, MAX_TICKS + 1); // generation + ticks
+   await runSweep(decision, ctx);
+   assert.equal(calls, MAX_TICKS + 1);
++  const next = { ...decision, resetsAt: decision.resetsAt + minute, deadline: decision.deadline + minute };
++  ctx.windows = async () => windows.map(w => w.window === '5h' ? { ...w, resetsAt: next.resetsAt } : w);
++  await runSweep(next, ctx);
++  assert.equal(calls, MAX_TICKS + 1); // the next quota window also cannot reset the cap
+ });
+ test('PR only for new commits; notification failure is nonfatal', async t => {
+   const commands = []; const ctx = context(t, async () => ({ code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }));
+-- 
+2.53.0
+

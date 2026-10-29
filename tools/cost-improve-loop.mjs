@@ -1726,8 +1726,22 @@ async function mainFetch(argv) {
   return await fetchFleetKPIs({ sheetUrl: fleetEnv.FLEET_SHEET_URL, token: fleetEnv.FLEET_SHEET_TOKEN });
 }
 
+export function refreshCostDirective({ home, spawn = defaultSpawnSync } = {}) {
+  const result = spawn(process.execPath, [path.join(import.meta.dirname, 'cost-work-loop.mjs')], {
+    cwd: path.resolve(import.meta.dirname, '..'), env: { ...process.env, ORGIAST_HOME: home },
+    encoding: 'utf8', windowsHide: true, timeout: 300_000,
+  });
+  if (result.error || result.status !== 0) throw new Error(`cost-directive refresh failed: ${result.error?.message || `exit ${result.status}`} ${String(result.stderr || '').slice(-1000)}`);
+  return `cost-directive refreshed: ${path.join(home, '.claude', 'cost-directive.md')} (exit 0)`;
+}
+
 if (isEntry(import.meta.url)) {
-  main().catch((err) => {
+  Promise.resolve().then(() => {
+    // Run before fleet/network/notification work: a successful daily task must
+    // also refresh the local directive. Dry runs keep their read-only contract.
+    if (!process.argv.includes('--dry-run')) console.error(refreshCostDirective({ home: path.dirname(getClaudeDir(process.argv.slice(2))) }));
+    return main();
+  }).catch((err) => {
     console.error(err);
     process.exitCode = 1;
   });

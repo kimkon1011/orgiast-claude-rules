@@ -235,7 +235,7 @@ ${burdenLines}
 - 安いAI実行者: **台帳計測分 $${execUSD.toFixed(2)}**（従量課金）— ${execLine}
 ${formatGeminiBudgetStatus(geminiBudgetStatus, { unmeasuredCalls: geminiMonth.unmeasuredCalls })}
 - Codex(定額枠・実装の主経路): **out ${codexOut.toLocaleString('ja-JP')} tok** / ${codexSessions}セッション ※従量課金なし
-- Codex 内訳: astra ${codexUsage.byModel['gpt-6-astra']?.sessions || 0}セッション/${((codexUsage.byModel['gpt-6-astra']?.outputTokens || 0) / 1000).toFixed(1)}k tok ／ sol ${codexUsage.byModel['gpt-5.6-sol']?.sessions || 0}セッション/${((codexUsage.byModel['gpt-5.6-sol']?.outputTokens || 0) / 1000).toFixed(1)}k tok ／ astra 上限到達(24h) ${astraLimit24h}回
+- Codex 内訳: ${Object.entries(codexUsage.byModel).map(([model, usage]) => `${model} ${usage.sessions}セッション/${(usage.outputTokens / 1000).toFixed(1)}k tok`).join(' ／ ') || '計測なし'} ／ astra 上限到達(24h) ${astraLimit24h}回
 - 作業量(${workKind}): ${work} / **作業あたり 出力 ${(outPerWork / 1000).toFixed(0)}k tok**
 - 委譲率(Claude以外へ): **${(nonClaudeDelegRatio * 100).toFixed(1)}%**
 - Claude内の格下げ(節約): **${(delegation.claudeDowngradeRatio * 100).toFixed(1)}%** (Sonnet/Haiku)

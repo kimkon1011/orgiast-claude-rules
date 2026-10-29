@@ -45,6 +45,47 @@ function normalizeLandedContract(file) {
 export function contractPrompt(provider, slug, goal) {
   return `[headless:quota-sweep]\n${provider === 'claude' ? '/makeloop' : '$makeloop:makeloop'} ${goal}\n質問せず保守的な前提を明記して進める。runtime=manual（1メッセージ1イテレーション）、kind=closed、累積上限 ${MAX_TICKS} イテレーション、検証ゲート node --test tools/、slug=${slug}、ループを開始しない、日本語。.loop/${slug}.md と状態・INDEX を保存する。commit の取込判定は \`node tools/commit-landed.mjs <sha>\` を使う（squash マージのため is-ancestor は偽になる）。`;
 }
+// A reset window is a budget boundary, not evidence that a broken job recovered.
+// Rebuild from the ledger so an upgrade also stops existing failure loops.
+export function sweepFailureStop(rows, provider, { since = 0, threshold = 3 } = {}) {
+  let failures = 0, last = null;
+  for (const row of rows) {
+    if (row.provider !== provider || Date.parse(row.ts) <= since) continue;
+    const outcome = row.stopOutcome || row.outcome;
+    if (['final', 'no-goal'].includes(outcome)) { failures = 0; last = null; }
+    else if (['failed', 'exhausted', 'deadline', 'ceiling'].includes(outcome)) { failures++; last = row; }
+    // Deferrals neither spend a job attempt nor prove recovery.
+  }
+  return failures >= threshold ? { failures, reason: last?.reason || last?.failureKey || last?.outcome, lastAt: last?.ts } : null;
+}
+
+export async function enforceFailureStops({ home, state, providers, save, notify = notifyKim, log = () => {}, now = Date.now }) {
+  const rows = read(path.join(home, '.claude', 'quota-sweep.jsonl')).split(/\r?\n/).flatMap(line => {
+    try { return [JSON.parse(line)]; } catch { return []; }
+  });
+  state.failureStops ??= {};
+  for (const provider of providers) {
+    let stop = state.failureStops[provider];
+    if (!stop) {
+      const failure = sweepFailureStop(rows, provider, { since: state.failureResumedAt?.[provider] || 0 });
+      if (!failure) continue;
+      stop = state.failureStops[provider] = { ...failure, stoppedAt: new Date(now()).toISOString() };
+      save();
+    }
+    if (!stop.notificationAttemptedAt) {
+      // Persist before delivery, including failure: scheduled invocations must
+      // never spam notifications or spend model tokens while awaiting repair.
+      stop.notificationAttemptedAt = new Date(now()).toISOString(); save();
+      try {
+        const result = await notify(`quota-sweep ${provider}: ${stop.failures}回連続未完了で停止。理由: ${stop.reason}。修復後に --resume ${provider} を明示実行してください。`, { home });
+        stop.notificationResult = result ?? null;
+      } catch (error) { stop.notificationError = error.message; log(`failure-stop notification failed: ${error.message}`); }
+      save();
+    }
+  }
+  return providers.filter(provider => !state.failureStops[provider]);
+}
+
 export function canRunWindow(state, decision) {
   const prior = state.lastRun?.[decision.provider]?.[decision.resetsAt];
   return !prior || (!terminal.has(prior.stopOutcome || prior.outcome) && (prior.attempts || 1) < 2);
@@ -117,9 +158,10 @@ export function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (['--dry-run', '--json', '--status'].includes(arg)) o[arg.slice(2)] = true;
-    else if (['--provider', '--lead-min', '--min-remaining', '--home'].includes(arg)) {
+    else if (['--provider', '--lead-min', '--min-remaining', '--home', '--resume'].includes(arg)) {
       const value = argv[++i]; if (!value || value.startsWith('--')) throw new Error(`Missing ${arg}`);
       if (arg === '--provider') o.provider = value;
+      if (arg === '--resume') { if (!['claude', 'codex'].includes(value)) throw new Error('Invalid resume provider'); o.resume = value; }
       if (arg === '--home') o.home = path.resolve(value);
       if (arg === '--lead-min') o.leadMinutes = Number(value);
       if (arg === '--min-remaining') o.minRemainingPercent = Number(value);
@@ -496,9 +538,10 @@ export async function runSweep(decision, context) {
     const loopDir = path.join(tree, '.loop'); fs.mkdirSync(loopDir, { recursive: true });
     const contract = path.join(loopDir, `${slug}.md`), budgetFile = path.join(loopDir, `${slug}-budget.json`);
     let budget = json(budgetFile, { goal: selection.goal, ticks: 0 });
-    if (budget.goal !== selection.goal || (budget.resetsAt && budget.resetsAt !== decision.resetsAt)) {
+    // A quota reset replenishes tokens, not the contract's cumulative attempt budget.
+    if (budget.goal !== selection.goal) {
       const archive = path.join(loopDir, `archive-${slug}-${now()}`); fs.mkdirSync(archive);
-      for (const name of [...(budget.goal !== selection.goal ? [`${slug}.md`] : []), `${slug}-state.md`, `${slug}-budget.json`]) if (fs.existsSync(path.join(loopDir, name))) fs.renameSync(path.join(loopDir, name), path.join(archive, name));
+      for (const name of [`${slug}.md`, `${slug}-state.md`, `${slug}-budget.json`]) if (fs.existsSync(path.join(loopDir, name))) fs.renameSync(path.join(loopDir, name), path.join(archive, name));
       budget = { goal: selection.goal, ticks: 0 };
     }
     budget.ticks = Math.max(budget.ticks, record.ticks); record.ticks = budget.ticks; save();
@@ -580,8 +623,9 @@ export async function runSweep(decision, context) {
     if (failureKey) usageRow.failureKey = failureKey;
     fs.appendFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), JSON.stringify(usageRow) + '\n');
     log(`${provider}: ${outcome}, ticks=${record.ticks}, reason=${reason || '完了'}`);
+    await enforceFailureStops({ home, state, providers: [provider], save, notify, log, now });
     const oneLine = value => String(value).replace(/[\r\n]+/g, ' ').slice(0, 250);
-    try { if (outcome !== 'no-goal') await notify([`${provider}/${decision.window}`, `${usedBefore}% → ${usedAfter ?? '?'}%`, `tick: ${record.ticks}`, oneLine(selection.goal), prUrl || '変更なし', outcome === 'partial' ? '成果あり・未完了' : outcome, reason ? `理由: ${oneLine(reason)}` : '検証完了'].join('\n'), { home }); }
+    try { if (outcome !== 'no-goal' && !state.failureStops?.[provider]) await notify([`${provider}/${decision.window}`, `${usedBefore}% → ${usedAfter ?? '?'}%`, `tick: ${record.ticks}`, oneLine(selection.goal), prUrl || '変更なし', outcome === 'partial' ? '成果あり・未完了' : outcome, reason ? `理由: ${oneLine(reason)}` : '検証完了'].join('\n'), { home }); }
     catch (error) { log(`DM failed: ${error.message}`); }
   }
 }
@@ -620,6 +664,16 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   if (!release) { log('skip: lock held'); return emit({ skipped: true, reason: 'lock held' }); }
   try {
     const state = json(stateFile, { lastRun: {} });
+    if (options.resume) {
+      delete state.failureStops?.[options.resume];
+      state.failureResumedAt ??= {};
+      state.failureResumedAt[options.resume] = now();
+      atomic(stateFile, state);
+      return emit({ resumed: options.resume, reason: 'Failure stop acknowledged; next scheduled run will observe eligibility' });
+    }
+    const providers = options.provider === 'all' ? ['claude', 'codex'] : [options.provider];
+    const allowed = await enforceFailureStops({ home, state, providers, save: () => atomic(stateFile, state), notify: io.notify ?? notifyKim, log, now });
+    if (!allowed.length) return emit({ skipped: true, reason: 'quota-sweep failure stop; repair and explicitly --resume <provider>', stops: state.failureStops });
     const wsl = Object.hasOwn(io, 'wsl') ? io.wsl : argv.includes('--home') ? null : discoverWsl({ spawnImpl });
     if (wsl?.home && !wslHomes.includes(wsl.home)) wslHomes.push(wsl.home);
     const active = io.active ?? (async provider => {
@@ -637,7 +691,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     }
     const currentWindows = async () => filterWindowsForCurrentAuth(await windows(), state);
     const observed = await currentWindows();
-    const decisions = decideSweep({ windows: observed, now: now(), ...options }).filter(d => (options.provider === 'all' || options.provider === d.provider) && canRunWindow(state, d));
+    const decisions = decideSweep({ windows: observed, now: now(), ...options }).filter(d => allowed.includes(d.provider) && canRunWindow(state, d));
     if (!decisions.length) {
       // 読み取り自体が失敗していた場合、これまでは「窓が無い」とだけ出て原因が残らなかった。
       const readIssues = Object.entries(observed.reasons ?? {}).filter(([, r]) => r).map(([p, r]) => `${p}: ${r}`);

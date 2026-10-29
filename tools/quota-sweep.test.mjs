@@ -312,15 +312,27 @@ test('一時障害の判定は 429/5xx/network だけで、認証・形式不一
   for (const reason of ['HTTP 429', 'HTTP 503', 'HTTP 408', 'network: TimeoutError']) assert.equal(isTransientWindowReadError(reason), true);
   for (const reason of ['HTTP 401', 'HTTP 403', 'accessToken 未設定', 'credentials: ENOENT', 'usage response の形式が未対応', '', undefined]) assert.equal(isTransientWindowReadError(reason), false);
 });
-test('new reset archives old state and starts again, same-window retry keeps cumulative budget', async t => {
+test('new reset preserves completed contract and cumulative budget', async t => {
   let calls = 0; const ctx = context(t, async () => { calls++; return { code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }; });
   await runSweep(decision, ctx);
   const firstCalls = calls;
   const nextDecision = { ...decision, resetsAt: decision.resetsAt + minute, deadline: decision.deadline + minute };
   ctx.windows = async () => windows.map(w => w.window === '5h' ? { ...w, resetsAt: nextDecision.resetsAt } : w);
   await runSweep(nextDecision, ctx);
-  assert.equal(calls, firstCalls + 1); // contract reused; one new tick
-  assert.equal(ctx.state.lastRun.claude[nextDecision.resetsAt].outcome, 'final');
+  assert.equal(calls, firstCalls); // replenished quota cannot restart a completed goal
+  assert.equal(ctx.state.lastRun.claude[nextDecision.resetsAt].outcome, 'no-goal');
+  assert.ok(!fs.readdirSync(path.join(ctx.tree, '.loop')).some(n => n.startsWith('archive-')));
+});
+test('a different goal archives the prior contract and gets a new attempt budget', async t => {
+  let calls = 0; const ctx = context(t, async () => { calls++; return { code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }; });
+  await runSweep(decision, ctx);
+  const firstCalls = calls;
+  fs.writeFileSync(path.join(ctx.home, '.claude/quota-sweep-goals.md'), '- [ ] a different repair goal\n');
+  const next = { ...decision, resetsAt: decision.resetsAt + minute, deadline: decision.deadline + minute };
+  ctx.windows = async () => windows.map(w => w.window === '5h' ? { ...w, resetsAt: next.resetsAt } : w);
+  await runSweep(next, ctx);
+  assert.equal(calls, firstCalls + 2); // new contract generation and one tick
+  assert.equal(ctx.state.lastRun.claude[next.resetsAt].outcome, 'final');
   assert.ok(fs.readdirSync(path.join(ctx.tree, '.loop')).some(n => n.startsWith('archive-')));
 });
 test('eight ticks is hard cap and a retry cannot reset it', async t => {
@@ -330,6 +342,10 @@ test('eight ticks is hard cap and a retry cannot reset it', async t => {
   assert.equal(calls, MAX_TICKS + 1); // generation + ticks
   await runSweep(decision, ctx);
   assert.equal(calls, MAX_TICKS + 1);
+  const next = { ...decision, resetsAt: decision.resetsAt + minute, deadline: decision.deadline + minute };
+  ctx.windows = async () => windows.map(w => w.window === '5h' ? { ...w, resetsAt: next.resetsAt } : w);
+  await runSweep(next, ctx);
+  assert.equal(calls, MAX_TICKS + 1); // the next quota window also cannot reset the cap
 });
 test('PR only for new commits; notification failure is nonfatal', async t => {
   const commands = []; const ctx = context(t, async () => ({ code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }));

@@ -194,10 +194,16 @@ export function isInsideGitRepo(cwd, io = {}) {
   }
 }
 
-export function wslCodexArgs({ distro, cwd, codexArgs, inGitRepo }) {
+export function wslCodexArgs({ distro, cwd, codexArgs, inGitRepo, timeoutSecs = null }) {
   const args = [...codexArgs];
   if (inGitRepo === false) args.splice(-1, 0, '--skip-git-repo-check');
-  return ['-d', distro, '--cd', cwd, '--', 'codex', ...args];
+  // taskkill /T は Windows 側の wsl.exe までしか保証せず、WSL 内の codex が stdout/stderr を
+  // 保持したまま残ることがある。Linux 側にも同じ締切を置き、TERM 後10秒でプロセスグループを
+  // KILLする。これにより Windows 側の close イベントも上限付近で必ず返る。
+  const command = Number.isFinite(timeoutSecs) && timeoutSecs > 0
+    ? ['timeout', '--signal=TERM', '--kill-after=10s', `${timeoutSecs}s`, 'codex']
+    : ['codex'];
+  return ['-d', distro, '--cd', cwd, '--', ...command, ...args];
 }
 
 export function needsWorktreeRepair(gitFileContent) {
@@ -409,6 +415,12 @@ export function fallbackBackendTimeoutSecs(timeoutSeconds, env = process.env) {
   const raw = Number(env.CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS);
   const wanted = Number.isFinite(raw) && raw > 0 ? raw : 900;
   return Math.max(60, Math.min(timeoutSeconds, wanted));
+}
+
+// Codex 主経路の1試行にもフォールバックと同じ900秒上限を適用する。全体 --timeout は
+// sol→astra 等を含む実行全体の予算として残し、1プロセスが全枠を占有するのを防ぐ。
+export function codexAttemptTimeoutSecs(timeoutSeconds, env = process.env) {
+  return fallbackBackendTimeoutSecs(timeoutSeconds, env);
 }
 
 // gemini-cli だけ既定 600 秒。実測: 成功 37 件の max 559 秒 / timeout 13 件の min 638 秒。
@@ -1012,7 +1024,7 @@ function execute(command, commandArgs, options = {}) {
       checkPolicyStall();
     });
     child.on('error', (error) => { clearTimeout(timer); clearInterval(stallTimer); resolve({ status: null, error, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }); });
-    child.on('close', (status) => { clearTimeout(timer); clearInterval(stallTimer); resolve({ status: timedOut ? 124 : status, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }); });
+    child.on('close', (status) => { clearTimeout(timer); clearInterval(stallTimer); const reachedDeadline = timedOut || status === 124; resolve({ status: reachedDeadline ? 124 : status, outputChars, output, stderr, timedOut: reachedDeadline, aborted: abortedPolicyStall ? 'policy_stall' : null }); });
     // 指示は stdin で渡し、必ず閉じる。閉じないと codex が
     // "Reading additional input from stdin..." のまま永久に待つ。
     child.stdin.end(prompt);
@@ -1048,7 +1060,7 @@ function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
     const row = buildUsageRow({
       result, model: modelName, seconds, provider, attempts, chain,
-      timeoutSecs: timeoutSeconds, lane: selectedLane.reason, escalated,
+      timeoutSecs: provider === 'codex' ? codexAttemptTimeoutSecs(timeoutSeconds) : timeoutSeconds, lane: selectedLane.reason, escalated,
       promptChars: prompt.length, origin, kind: taskKind, cwd,
       reason: ledgerReason
     });
@@ -1139,7 +1151,8 @@ async function launchCodex(codexArgs) {
         if (error?.code !== 'ENOENT') console.error(`⚠️ worktree の gitdir 確認に失敗しました（処理は続行します）: ${error?.message ?? error}`);
       }
       recordLaneMode('wsl', review ? 'read-only' : 'workspace-write');
-      result = await execute('wsl', wslCodexArgs({ distro, cwd, codexArgs, inGitRepo: isInsideGitRepo(cwd) }));
+      const attemptTimeout = codexAttemptTimeoutSecs(timeoutSeconds);
+      result = await execute('wsl', wslCodexArgs({ distro, cwd, codexArgs, inGitRepo: isInsideGitRepo(cwd), timeoutSecs: attemptTimeout }), { timeoutSecs: attemptTimeout });
     }
     else {
       if (finalStep !== 'native') console.error(`🚨 ${failureReason}`);
@@ -1161,7 +1174,7 @@ async function launchCodex(codexArgs) {
       const native = resolveNativeCodex();
       const nativeArgs = applyNativeSandbox(codexArgs, { review });
       if (!isInsideGitRepo(cwd)) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
-      result = await execute(native.command, [...native.prefixArgs, ...nativeArgs], { cwd });
+      result = await execute(native.command, [...native.prefixArgs, ...nativeArgs], { cwd, timeoutSecs: codexAttemptTimeoutSecs(timeoutSeconds) });
     }
   } else {
     if (process.platform === 'win32') console.error('⚠️ --force-native によりネイティブ Windows codex で実行します');
@@ -1169,7 +1182,7 @@ async function launchCodex(codexArgs) {
     const native = resolveNativeCodex();
     const nativeArgs = process.platform === 'win32' ? applyNativeSandbox(codexArgs, { review }) : [...codexArgs];
     if (!isInsideGitRepo(cwd)) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
-    result = await execute(native.command, [...native.prefixArgs, ...nativeArgs], { cwd });
+    result = await execute(native.command, [...native.prefixArgs, ...nativeArgs], { cwd, timeoutSecs: codexAttemptTimeoutSecs(timeoutSeconds) });
   }
 
   return result;

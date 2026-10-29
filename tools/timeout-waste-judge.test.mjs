@@ -86,6 +86,15 @@ test('主経路は記録された --timeout を予算に使う', () => {
   assert.equal(report.events[0].attempts[0].budgetSecs, 1800);
 });
 
+test('codex 主経路の新しい900秒試行予算ならタイムアウト記録も上限内になる', () => {
+  const report = judgeTimeoutRows([
+    { t: '2026-10-29T00:00:00Z', provider: 'codex', model: 'codex-cli/gpt-5.6-sol', timedOut: true, status: 'timeout', secs: 900.4, timeoutSecs: 900 },
+  ], { since: SINCE });
+  assert.equal(report.verdict, 'waste-within-cap');
+  assert.equal(report.overCapRows, 0);
+  assert.equal(report.events[0].attempts[0].budgetSecs, 900);
+});
+
 test('主経路でも与えた予算を超えたら上限超過としてバックエンドを残す', () => {
   const report = judgeTimeoutRows([
     { t: '2026-10-21T00:00:00Z', provider: 'codex', model: 'codex-cli/gpt-5.6-sol', timedOut: true, secs: 1900, timeoutSecs: 1800 },

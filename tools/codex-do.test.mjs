@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, codexAttemptTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -157,6 +157,11 @@ test('fallbackBackendTimeoutSecs は全体枠・既定値・環境変数・下�
   assert.equal(fallbackBackendTimeoutSecs(1800, { CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: '900' }), 900);
   assert.equal(fallbackBackendTimeoutSecs(1800, { CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: 'garbage' }), 900);
   assert.equal(fallbackBackendTimeoutSecs(10, {}), 60);
+});
+
+test('codex 主経路の1試行も全体1800秒の中で900秒に制限する', () => {
+  assert.equal(codexAttemptTimeoutSecs(1800, {}), 900);
+  assert.equal(codexAttemptTimeoutSecs(600, {}), 600);
 });
 
 test('chainBackendBudgetSecs は連鎖の残り予算を超えない（全体枠を使い切ったら0で打ち切る）', () => {
@@ -1387,6 +1392,12 @@ test('wslCodexArgs: 非リポジトリだけ stdin マーカー直前に skip �
     ['-d', 'Ubuntu', '--cd', cwd, '--', 'codex', 'exec', '-m', SOL, '-c', 'plugins={"makeloop@makeloop"={enabled=false}}', '-s', 'workspace-write', '--skip-git-repo-check', '-']);
   assert.deepEqual(wslCodexArgs({ distro: 'Ubuntu', cwd, codexArgs, inGitRepo: true }),
     ['-d', 'Ubuntu', '--cd', cwd, '--', 'codex', ...codexArgs]);
+});
+
+test('wslCodexArgs: 主経路はWSL内でもプロセスグループを上限で終了する', () => {
+  const args = wslCodexArgs({ distro: 'Ubuntu', cwd: '/work/task', codexArgs: ['exec', '-'], inGitRepo: true, timeoutSecs: 900 });
+  assert.deepEqual(args.slice(0, 11), ['-d', 'Ubuntu', '--cd', '/work/task', '--', 'timeout', '--signal=TERM', '--kill-after=10s', '900s', 'codex', 'exec']);
+  assert.equal(args.at(-1), '-');
 });
 
 test('CLI validates routing options and dry-run reports model/effort', () => {

@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { isEntry } from './is-entry.mjs';
 
 export const PROD_RULES = [
   'Bash(clasp push*)', 'Bash(clasp deploy*)', 'Bash(clasp version*)', 'Bash(npx clasp push*)', 'Bash(npx clasp deploy*)',
@@ -43,6 +44,6 @@ function main(argv) {
   return missing.length ? 1 : 0;
 }
 
-if (import.meta.url === `file:///${process.argv[1].replace(/\\/g, '/')}` || process.argv[1]?.endsWith('add-permission-rules.mjs')) {
+if (isEntry(import.meta.url)) {
   process.exitCode = main(process.argv.slice(2));
 }

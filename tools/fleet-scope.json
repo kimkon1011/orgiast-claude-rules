@@ -678,6 +678,12 @@
       "reason": "repo の project SessionStart から register-hooks（classifier-settings と同じ hook 登録）を呼ぶ入口。全PCで動く"
     },
     {
+      "path": "tools/add-permission-rules.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "converge では配らない。STANDARD-PC-SETUP.md 手順7で、各PCの Claude がリポジトリのコピーから1回だけ手動実行する（install-orgiast.ps1 と同じ扱い）"
+    },
+    {
       "path": "tools/settings-quality-guard.mjs",
       "scope": "kim-only",
       "step": null,

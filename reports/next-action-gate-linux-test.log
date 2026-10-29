@@ -1,0 +1,610 @@
+TAP version 13
+# Subtest: 本文の手渡し判定は nextAction=なしでも台帳なしなら block
+ok 1 - 本文の手渡し判定は nextAction=なしでも台帳なしなら block
+  ---
+  duration_ms: 15.34325
+  type: 'test'
+  ...
+# Subtest: 本人手渡しでも理由付き NO-AUTOCHECK-OK なら pass
+ok 2 - 本人手渡しでも理由付き NO-AUTOCHECK-OK なら pass
+  ---
+  duration_ms: 5.541718
+  type: 'test'
+  ...
+# Subtest: 手渡しマーカーのない nextAction=なしは従来どおり pass
+ok 3 - 手渡しマーカーのない nextAction=なしは従来どおり pass
+  ---
+  duration_ms: 2.674409
+  type: 'test'
+  ...
+# Subtest: お願いする操作と行頭の手間監査も本人手渡しとして扱う
+ok 4 - お願いする操作と行頭の手間監査も本人手渡しとして扱う
+  ---
+  duration_ms: 2.84621
+  type: 'test'
+  ...
+# Subtest: 本人手渡しには同一 session の open 台帳行だけを認める
+ok 5 - 本人手渡しには同一 session の open 台帳行だけを認める
+  ---
+  duration_ms: 8.721029
+  type: 'test'
+  ...
+# Subtest: 本人手渡しマーカーがあってもチャット返信だけなら pass
+ok 6 - 本人手渡しマーカーがあってもチャット返信だけなら pass
+  ---
+  duration_ms: 1.919307
+  type: 'test'
+  ...
+# Subtest: 手渡しマーカーは footer より前だけを検査する
+ok 7 - 手渡しマーカーは footer より前だけを検査する
+  ---
+  duration_ms: 1.726306
+  type: 'test'
+  ...
+# Subtest: 前ターンの将来起床を通常ターン・通知ターンでも認識する
+ok 8 - 前ターンの将来起床を通常ターン・通知ターンでも認識する
+  ---
+  duration_ms: 16.316554
+  type: 'test'
+  ...
+# Subtest: 未登録・期限切れ・最新呼出しが停止・失敗・不明なら差し戻す
+ok 9 - 未登録・期限切れ・最新呼出しが停止・失敗・不明なら差し戻す
+  ---
+  duration_ms: 5.218718
+  type: 'test'
+  ...
+# Subtest: 実際のscheduledForはdelaySecondsより優先する
+ok 10 - 実際のscheduledForはdelaySecondsより優先する
+  ---
+  duration_ms: 2.423508
+  type: 'test'
+  ...
+# Subtest: Monitor: 前ターンのタスクをIDで追跡し、終了後は差し戻す
+ok 11 - Monitor: 前ターンのタスクをIDで追跡し、終了後は差し戻す
+  ---
+  duration_ms: 2.736209
+  type: 'test'
+  ...
+# Subtest: Bash: 前ターンのタスクをIDで追跡し、終了後は差し戻す
+ok 12 - Bash: 前ターンのタスクをIDで追跡し、終了後は差し戻す
+  ---
+  duration_ms: 2.404408
+  type: 'test'
+  ...
+# Subtest: sidechainとAPI blobを起床登録に数えない
+ok 13 - sidechainとAPI blobを起床登録に数えない
+  ---
+  duration_ms: 0.766203
+  type: 'test'
+  ...
+# Subtest: 複数タスクの片方だけが停止しても残った起床手段は有効
+ok 14 - 複数タスクの片方だけが停止しても残った起床手段は有効
+  ---
+  duration_ms: 1.439305
+  type: 'test'
+  ...
+# Subtest: 3行が末尾に揃っていればpass
+ok 15 - 3行が末尾に揃っていればpass
+  ---
+  duration_ms: 11.460137
+  type: 'test'
+  ...
+# Subtest: 3行の各行間に空行1つまで許容する
+ok 16 - 3行の各行間に空行1つまで許容する
+  ---
+  duration_ms: 2.098307
+  type: 'test'
+  ...
+# Subtest: 前バージョンで正解だった2行だけならblock
+ok 17 - 前バージョンで正解だった2行だけならblock
+  ---
+  duration_ms: 0.893103
+  type: 'test'
+  ...
+# Subtest: 1行目だけならblock
+ok 18 - 1行目だけならblock
+  ---
+  duration_ms: 0.611702
+  type: 'test'
+  ...
+# Subtest: 3行とも無ければblock
+ok 19 - 3行とも無ければblock
+  ---
+  duration_ms: 0.888803
+  type: 'test'
+  ...
+# Subtest: 3行が本文途中にあればblock
+ok 20 - 3行が本文途中にあればblock
+  ---
+  duration_ms: 0.580802
+  type: 'test'
+  ...
+# Subtest: kimの作業が2件ならblock
+ok 21 - kimの作業が2件ならblock
+  ---
+  duration_ms: 1.511705
+  type: 'test'
+  ...
+# Subtest: マージ依頼とリンクの確認依頼はNEXT-ACTION-OPENでblock
+ok 22 - マージ依頼とリンクの確認依頼はNEXT-ACTION-OPENでblock
+  ---
+  duration_ms: 2.279408
+  type: 'test'
+  ...
+# Subtest: なしと人にしかできない操作はNEXT-ACTION-OPENでblockしない
+ok 23 - なしと人にしかできない操作はNEXT-ACTION-OPENでblockしない
+  ---
+  duration_ms: 3.331411
+  type: 'test'
+  ...
+# Subtest: 5文字以上の例外マーカーが本文にあればNEXT-ACTION-OPENでblockしない
+ok 24 - 5文字以上の例外マーカーが本文にあればNEXT-ACTION-OPENでblockしない
+  ---
+  duration_ms: 2.010706
+  type: 'test'
+  ...
+# Subtest: 唯一の恒久策を kim に渡す実文はblock
+ok 25 - 唯一の恒久策を kim に渡す実文はblock
+  ---
+  duration_ms: 1.110304
+  type: 'test'
+  ...
+# Subtest: 恒久策として gh auth login を求める実文はblock
+ok 26 - 恒久策として gh auth login を求める実文はblock
+  ---
+  duration_ms: 0.638003
+  type: 'test'
+  ...
+# Subtest: 2026-10-15 e738f943 の原文（GCM 登録依頼＋着地の先送り）はblock
+ok 27 - 2026-10-15 e738f943 の原文（GCM 登録依頼＋着地の先送り）はblock
+  ---
+  duration_ms: 1.737206
+  type: 'test'
+  ...
+# Subtest: 本文の着地語と nextAction の修正語が揃う実文はblock
+ok 28 - 本文の着地語と nextAction の修正語が揃う実文はblock
+  ---
+  duration_ms: 0.765103
+  type: 'test'
+  ...
+# Subtest: 具体的なcommitのmainマージ判断をkimに渡す文はblock
+ok 29 - 具体的なcommitのmainマージ判断をkimに渡す文はblock
+  ---
+  duration_ms: 0.646602
+  type: 'test'
+  ...
+# Subtest: PR番号だけのマージ判断確認はblockしない
+ok 30 - PR番号だけのマージ判断確認はblockしない
+  ---
+  duration_ms: 6.430322
+  type: 'test'
+  ...
+# Subtest: 印刷所への電話は正当な人専用タスクとしてpass
+ok 31 - 印刷所への電話は正当な人専用タスクとしてpass
+  ---
+  duration_ms: 2.641409
+  type: 'test'
+  ...
+# Subtest: 次に kim がすることが「なし」なら先送り判定せずpass
+ok 32 - 次に kim がすることが「なし」なら先送り判定せずpass
+  ---
+  duration_ms: 0.734903
+  type: 'test'
+  ...
+# Subtest: 本文に着地語がない修正版PDFの物理操作はpass
+ok 33 - 本文に着地語がない修正版PDFの物理操作はpass
+  ---
+  duration_ms: 2.404608
+  type: 'test'
+  ...
+# Subtest: 待ち状態と完了表記が矛盾すればblock
+ok 34 - 待ち状態と完了表記が矛盾すればblock
+  ---
+  duration_ms: 0.562102
+  type: 'test'
+  ...
+# Subtest: このセッションの値が定型文のどれでもなければblock
+ok 35 - このセッションの値が定型文のどれでもなければblock
+  ---
+  duration_ms: 0.579802
+  type: 'test'
+  ...
+# Subtest: このセッションの値が空ならblock
+ok 36 - このセッションの値が空ならblock
+  ---
+  duration_ms: 0.614102
+  type: 'test'
+  ...
+# Subtest: バックグラウンド実行中なのに閉じてよいならblock
+ok 37 - バックグラウンド実行中なのに閉じてよいならblock
+  ---
+  duration_ms: 0.650402
+  type: 'test'
+  ...
+# Subtest: 待ち語が無く、もう削除してよいならpass
+ok 38 - 待ち語が無く、もう削除してよいならpass
+  ---
+  duration_ms: 0.626602
+  type: 'test'
+  ...
+# Subtest: 待ち語があり、起床手段があればまだ閉じないでpass
+ok 39 - 待ち語があり、起床手段があればまだ閉じないでpass
+  ---
+  duration_ms: 1.136304
+  type: 'test'
+  ...
+# Subtest: session-close実行証拠なしで閉じてよいならblock
+ok 40 - session-close実行証拠なしで閉じてよいならblock
+  ---
+  duration_ms: 1.471405
+  type: 'test'
+  ...
+# Subtest: 会話にsession-close実行証拠があれば閉じてよいがpass
+ok 41 - 会話にsession-close実行証拠があれば閉じてよいがpass
+  ---
+  duration_ms: 1.067004
+  type: 'test'
+  ...
+# Subtest: 200文字未満の短い応答はpass
+ok 42 - 200文字未満の短い応答はpass
+  ---
+  duration_ms: 0.438902
+  type: 'test'
+  ...
+# Subtest: ツールで作業したターンは短文でもフッター必須（No response requested. で終わった 2026-10-23 実害）
+ok 43 - ツールで作業したターンは短文でもフッター必須（No response requested. で終わった 2026-10-23 実害）
+  ---
+  duration_ms: 1.022303
+  type: 'test'
+  ...
+# Subtest: 末尾が疑問符の質問応答はpass
+ok 44 - 末尾が疑問符の質問応答はpass
+  ---
+  duration_ms: 0.392901
+  type: 'test'
+  ...
+# Subtest: 環境変数で無効化できる
+ok 45 - 環境変数で無効化できる
+  ---
+  duration_ms: 0.545502
+  type: 'test'
+  ...
+# Subtest: 本文でsession-close完了を明記すればpass
+ok 46 - 本文でsession-close完了を明記すればpass
+  ---
+  duration_ms: 3.099511
+  type: 'test'
+  ...
+# Subtest: session-close予定・未実行・失敗は実行証拠にならない
+ok 47 - session-close予定・未実行・失敗は実行証拠にならない
+  ---
+  duration_ms: 1.684405
+  type: 'test'
+  ...
+# Subtest: 会話中の本文でsession-close完了を報告していればpass
+ok 48 - 会話中の本文でsession-close完了を報告していればpass
+  ---
+  duration_ms: 0.746602
+  type: 'test'
+  ...
+# Subtest: 会話の例示・ツール引数・別セッション・末尾自己申告は証拠にしない
+ok 49 - 会話の例示・ツール引数・別セッション・末尾自己申告は証拠にしない
+  ---
+  duration_ms: 1.634206
+  type: 'test'
+  ...
+# Subtest: Skillの成功したsession-close呼び出しを会話から検出する
+ok 50 - Skillの成功したsession-close呼び出しを会話から検出する
+  ---
+  duration_ms: 3.09011
+  type: 'test'
+  ...
+# Subtest: 定型文以外（旧表記・表記ゆれ・理由の付け足し）はblock
+ok 51 - 定型文以外（旧表記・表記ゆれ・理由の付け足し）はblock
+  ---
+  duration_ms: 2.003206
+  type: 'test'
+  ...
+# Subtest: 定型文はそれぞれpass
+ok 52 - 定型文はそれぞれpass
+  ---
+  duration_ms: 1.344705
+  type: 'test'
+  ...
+# Subtest: pendingはバックグラウンド語があってもpass
+ok 53 - pendingはバックグラウンド語があってもpass
+  ---
+  duration_ms: 0.828803
+  type: 'test'
+  ...
+# Subtest: 3行の順序違い・2つ以上の空行・行間の説明をblock
+ok 54 - 3行の順序違い・2つ以上の空行・行間の説明をblock
+  ---
+  duration_ms: 0.929603
+  type: 'test'
+  ...
+# Subtest: 指定された各バックグラウンド語と閉じる・削除の矛盾をblock
+ok 55 - 指定された各バックグラウンド語と閉じる・削除の矛盾をblock
+  ---
+  duration_ms: 1.486605
+  type: 'test'
+  ...
+# Subtest: 200文字の境界と半角疑問符の除外を維持する
+ok 56 - 200文字の境界と半角疑問符の除外を維持する
+  ---
+  duration_ms: 0.514301
+  type: 'test'
+  ...
+# Subtest: §7.1の閉じ際3行はフッター無しでもpass
+ok 57 - §7.1の閉じ際3行はフッター無しでもpass
+  ---
+  duration_ms: 0.789002
+  type: 'test'
+  ...
+# Subtest: §7.1の3要素が欠けた長文は従来どおりblock
+ok 58 - §7.1の3要素が欠けた長文は従来どおりblock
+  ---
+  duration_ms: 0.481002
+  type: 'test'
+  ...
+# Subtest: §7.1の3語に言及しただけ（番号付き3行が無い）長文は閉じ際とみなさない
+ok 59 - §7.1の3語に言及しただけ（番号付き3行が無い）長文は閉じ際とみなさない
+  ---
+  duration_ms: 0.578302
+  type: 'test'
+  ...
+# Subtest: 短文でもフッターがあれば定型外の「このセッション」を block する
+ok 60 - 短文でもフッターがあれば定型外の「このセッション」を block する
+  ---
+  duration_ms: 0.690202
+  type: 'test'
+  ...
+# Subtest: 短文でもフッターが定型どおりなら pass する
+ok 61 - 短文でもフッターが定型どおりなら pass する
+  ---
+  duration_ms: 0.727103
+  type: 'test'
+  ...
+# Subtest: フッター欠落の block 理由に定型4文を載せる
+ok 62 - フッター欠落の block 理由に定型4文を載せる
+  ---
+  duration_ms: 0.527302
+  type: 'test'
+  ...
+# Subtest: ハンマー同梱の手渡しに恒久策行がなければblock
+ok 63 - ハンマー同梱の手渡しに恒久策行がなければblock
+  ---
+  duration_ms: 1.239704
+  type: 'test'
+  ...
+# Subtest: 恒久策は具体物と完了した対応が必要
+ok 64 - 恒久策は具体物と完了した対応が必要
+  ---
+  duration_ms: 8.361927
+  type: 'test'
+  ...
+# Subtest: 恒久策があっても倉庫依頼の実行痕跡がなければblock
+ok 65 - 恒久策があっても倉庫依頼の実行痕跡がなければblock
+  ---
+  duration_ms: 1.057704
+  type: 'test'
+  ...
+# Subtest: 倉庫作業を依頼してkimの次の作業から外せばpass
+ok 66 - 倉庫作業を依頼してkimの次の作業から外せばpass
+  ---
+  duration_ms: 0.722103
+  type: 'test'
+  ...
+# Subtest: 具体物の実装と初回だけの理由をそれぞれ認める
+ok 67 - 具体物の実装と初回だけの理由をそれぞれ認める
+  ---
+  duration_ms: 12.468141
+  type: 'test'
+  ...
+# Subtest: なし系と括弧付きの報告待ちは恒久策不要
+ok 68 - なし系と括弧付きの報告待ちは恒久策不要
+  ---
+  duration_ms: 2.380007
+  type: 'test'
+  ...
+# Subtest: 例外には空白を除く10文字以上の理由が必要で倉庫検査は免除しない
+ok 69 - 例外には空白を除く10文字以上の理由が必要で倉庫検査は免除しない
+  ---
+  duration_ms: 3.24091
+  type: 'test'
+  ...
+# Subtest: 本文の例示や引用は恒久策・例外・手渡しと解釈しない
+ok 70 - 本文の例示や引用は恒久策・例外・手渡しと解釈しない
+  ---
+  duration_ms: 1.654905
+  type: 'test'
+  ...
+# Subtest: 今ターンのBash・Discord送信tool_useを認める
+ok 71 - 今ターンのBash・Discord送信tool_useを認める
+  ---
+  duration_ms: 7.697625
+  type: 'test'
+  ...
+# Subtest: 過去ターン・別会話・本文や検索での言及・dry-runは依頼送信でない
+ok 72 - 過去ターン・別会話・本文や検索での言及・dry-runは依頼送信でない
+  ---
+  duration_ms: 2.772009
+  type: 'test'
+  ...
+# Subtest: 短文・質問でも明示した次の作業には恒久策が必要
+ok 73 - 短文・質問でも明示した次の作業には恒久策が必要
+  ---
+  duration_ms: 0.426601
+  type: 'test'
+  ...
+# Subtest: 人待ちの自動進行はbackgroundだけではblockし台帳チェックを要求する
+ok 74 - 人待ちの自動進行はbackgroundだけではblockし台帳チェックを要求する
+  ---
+  duration_ms: 1.458204
+  type: 'test'
+  ...
+# Subtest: チャットで答えるだけの返信待ちは台帳チェックを要求しない
+ok 75 - チャットで答えるだけの返信待ちは台帳チェックを要求しない
+  ---
+  duration_ms: 0.649102
+  type: 'test'
+  ...
+# Subtest: 人待ちは登録コマンドの痕跡だけではpassしない
+ok 76 - 人待ちは登録コマンドの痕跡だけではpassしない
+  ---
+  duration_ms: 1.253404
+  type: 'test'
+  ...
+# Subtest: 人待ちがなければbackground Bashだけで自動進行を認める
+ok 77 - 人待ちがなければbackground Bashだけで自動進行を認める
+  ---
+  duration_ms: 0.533902
+  type: 'test'
+  ...
+# Subtest: 自動進行の約束だけではblock、CronCreateだけもblock、ブロック文にauto-progress.mjs --add-checkを含む
+ok 78 - 自動進行の約束だけではblock、CronCreateだけもblock、ブロック文にauto-progress.mjs --add-checkを含む
+  ---
+  duration_ms: 1.025004
+  type: 'test'
+  ...
+# Subtest: auto-progress --add-check 実行があればpass、登録は次ターン以降も有効（台帳が check を引き継ぐ）
+ok 79 - auto-progress --add-check 実行があればpass、登録は次ターン以降も有効（台帳が check を引き継ぐ）
+  ---
+  duration_ms: 1.293504
+  type: 'test'
+  ...
+# Subtest: 会話に実行痕跡がなくても同じ session_id の open 台帳行があれば起床手段とみなす
+ok 80 - 会話に実行痕跡がなくても同じ session_id の open 台帳行があれば起床手段とみなす
+  ---
+  duration_ms: 5.118317
+  type: 'test'
+  ...
+# Subtest: 空・なし・なしで始まる値には起床手段は不要
+ok 81 - 空・なし・なしで始まる値には起床手段は不要
+  ---
+  duration_ms: 1.694105
+  type: 'test'
+  ...
+# Subtest: Agent・PowerShellは当ターン、background Bashは次ターンもpass
+ok 82 - Agent・PowerShellは当ターン、background Bashは次ターンもpass
+  ---
+  duration_ms: 3.918513
+  type: 'test'
+  ...
+# Subtest: 前景実行・文章中の言及・sidechain・不正JSONは証拠にならない
+ok 83 - 前景実行・文章中の言及・sidechain・不正JSONは証拠にならない
+  ---
+  duration_ms: 1.916406
+  type: 'test'
+  ...
+# Subtest: subagentsとheadlessでは起床手段の検査をskipする
+ok 84 - subagentsとheadlessでは起床手段の検査をskipする
+  ---
+  duration_ms: 0.947403
+  type: 'test'
+  ...
+# Subtest: まだ閉じない: 期限なしの旧表記は SESSION-OPEN-NO-DEADLINE で block
+ok 85 - まだ閉じない: 期限なしの旧表記は SESSION-OPEN-NO-DEADLINE で block
+  ---
+  duration_ms: 1.060003
+  type: 'test'
+  ...
+# Subtest: まだ閉じない: 期限入りは pass、過ぎた期限は block
+ok 86 - まだ閉じない: 期限入りは pass、過ぎた期限は block
+  ---
+  duration_ms: 0.818803
+  type: 'test'
+  ...
+# Subtest: /session-close をして（まだ閉じない）も期限が必須・過ぎた期限は block
+ok 87 - /session-close をして（まだ閉じない）も期限が必須・過ぎた期限は block
+  ---
+  duration_ms: 0.938903
+  type: 'test'
+  ...
+# Subtest: openPhrase と openDeadline は往復できる
+ok 88 - openPhrase と openDeadline は往復できる
+  ---
+  duration_ms: 0.404701
+  type: 'test'
+  ...
+# Subtest: 人待ちは自動進行なしでも同一sessionのopen台帳行を要求する
+ok 89 - 人待ちは自動進行なしでも同一sessionのopen台帳行を要求する
+  ---
+  duration_ms: 9.857732
+  type: 'test'
+  ...
+# Subtest: 指定された遡り語は括弧内やなしで始まる値でも拒否する
+ok 90 - 指定された遡り語は括弧内やなしで始まる値でも拒否する
+  ---
+  duration_ms: 3.940313
+  type: 'test'
+  ...
+# Subtest: 指定された承認語は直前の全文ブロックが必要
+ok 91 - 指定された承認語は直前の全文ブロックが必要
+  ---
+  duration_ms: 2.97011
+  type: 'test'
+  ...
+# Subtest: 直前の全文ブロックを使った判断となし単独は通る
+ok 92 - 直前の全文ブロックを使った判断となし単独は通る
+  ---
+  duration_ms: 2.283807
+  type: 'test'
+  ...
+# Subtest: 全文見出しはフッター直前40行以内だけ有効で改行形式を問わない
+ok 93 - 全文見出しはフッター直前40行以内だけ有効で改行形式を問わない
+  ---
+  duration_ms: 3.833812
+  type: 'test'
+  ...
+# Subtest: 理由付き例外は本文のどこでも有効で空や短い理由は無効
+ok 94 - 理由付き例外は本文のどこでも有効で空や短い理由は無効
+  ---
+  duration_ms: 4.042313
+  type: 'test'
+  ...
+# Subtest: check 無しの open 約束行は待機中の起床証拠にしない
+ok 95 - check 無しの open 約束行は待機中の起床証拠にしない
+  ---
+  duration_ms: 6.905923
+  type: 'test'
+  ...
+# Subtest: ScheduleWakeup と Monitor の登録は次ターンも起床証拠になる
+ok 96 - ScheduleWakeup と Monitor の登録は次ターンも起床証拠になる
+  ---
+  duration_ms: 2.254008
+  type: 'test'
+  ...
+# Subtest: ラベルだけの次の一手は全文ブロックがあっても block
+ok 97 - ラベルだけの次の一手は全文ブロックがあっても block
+  ---
+  duration_ms: 3.721612
+  type: 'test'
+  ...
+# Subtest: ラベル直後に8文字以上の内容を併記すれば通る
+ok 98 - ラベル直後に8文字以上の内容を併記すれば通る
+  ---
+  duration_ms: 5.491218
+  type: 'test'
+  ...
+# Subtest: ラベルの理由付き例外は新判定だけを解除する
+ok 99 - ラベルの理由付き例外は新判定だけを解除する
+  ---
+  duration_ms: 3.477312
+  type: 'test'
+  ...
+# Subtest: なしや本文・引用だけのラベルは block しない
+ok 100 - なしや本文・引用だけのラベルは block しない
+  ---
+  duration_ms: 0.525402
+  type: 'test'
+  ...
+1..100
+# tests 100
+# suites 0
+# pass 100
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1244.498005

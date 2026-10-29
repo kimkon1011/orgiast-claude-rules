@@ -1,0 +1,205 @@
+diff --git a/tools/next-action-gate-wakeup.test.mjs b/tools/next-action-gate-wakeup.test.mjs
+new file mode 100644
+index 0000000..7e592c5
+--- /dev/null
++++ b/tools/next-action-gate-wakeup.test.mjs
+@@ -0,0 +1,55 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { judgeNextAction } from './next-action-gate.mjs';
++
++delete process.env.CLAUDE_HEADLESS;
++const now = Date.parse('2026-10-29T07:30:00Z');
++const report = '作業を継続します。\n次に kim がすること: なし\nこの後の自動進行: 私が処理の結果を報告します\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ）';
++const row = (type, content, extra = {}) => JSON.stringify({ type, message: { role: type, content }, ...extra });
++const call = (name, input, id = 'call') => row('assistant', [{ type: 'tool_use', name, input, id }], { timestamp: new Date(now).toISOString() });
++const result = (data, extra = {}) => row('user', [{ type: 'tool_result', tool_use_id: 'call', content: 'started', ...extra }], { toolUseResult: data });
++const next = row('user', '続けて');
++const notification = (status, id = 'task-1') => row('user', `<task-notification><task-id>${id}</task-id><status>${status}</status></task-notification>`);
++const judge = (...rows) => judgeNextAction(report, rows.join('\n'), { now });
++const blocked = (...rows) => assert.equal(judge(...rows).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
++
++test('前ターンの将来起床を通常ターン・通知ターンでも認識する', () => {
++  for (const turn of [next, notification('completed', 'other')]) {
++    assert.equal(judge(call('ScheduleWakeup', { delaySeconds: 600 }), result({ scheduledFor: now + 600000 }), turn).decision, 'pass');
++  }
++});
++test('未登録・期限切れ・最新呼出しが停止・失敗・不明なら差し戻す', () => {
++  blocked(next);
++  blocked(call('ScheduleWakeup', { delaySeconds: 0 }), next);
++  blocked(call('ScheduleWakeup', { delaySeconds: 600 }), call('ScheduleWakeup', { stop: true }, 'stop'), next);
++  blocked(call('ScheduleWakeup', { delaySeconds: 600 }), result({}, { is_error: true }), next);
++  blocked(call('ScheduleWakeup', { delaySeconds: 600 }), call('ScheduleWakeup', {}, 'new'), next);
++  blocked(call('ScheduleWakeup', { stop: true }), result({ scheduledFor: now + 600000 }), next);
++});
++test('実際のscheduledForはdelaySecondsより優先する', () => {
++  blocked(call('ScheduleWakeup', { delaySeconds: 600 }), result({ scheduledFor: now - 1 }), next);
++  assert.equal(judge(call('ScheduleWakeup', {}), result({ scheduledFor: now + 1 }), next).decision, 'pass');
++});
++for (const name of ['Monitor', 'Bash']) test(`${name}: 前ターンのタスクをIDで追跡し、終了後は差し戻す`, () => {
++  const start = call(name, { run_in_background: true });
++  const started = result({ taskId: 'task-1' });
++  assert.equal(judge(start, started, next).decision, 'pass');
++  assert.equal(judge(start, started, notification('completed', 'other')).decision, 'pass');
++  assert.equal(judge(start, started, notification('running')).decision, 'pass');
++  for (const status of ['completed', 'stopped', 'failed']) blocked(start, started, notification(status));
++  blocked(start, started, call('TaskStop', { task_id: 'task-1' }, 'stop'), next);
++  blocked(start, result({}, { is_error: true }), next);
++});
++test('sidechainとAPI blobを起床登録に数えない', () => {
++  for (const extra of [{ isSidechain: true }, { type: 'api-request-blob' }]) {
++    blocked(row('assistant', [{ type: 'tool_use', name: 'Monitor', id: 'fake' }], extra), next);
++  }
++});
++test('複数タスクの片方だけが停止しても残った起床手段は有効', () => {
++  const first = call('Bash', { run_in_background: true });
++  const second = call('Monitor', {}, 'second');
++  const secondResult = row('user', [{ type: 'tool_result', tool_use_id: 'second', content: 'started' }], { toolUseResult: { taskId: 'task-2' } });
++  const rows = [first, result({ backgroundTaskId: 'task-1' }), second, secondResult, notification('completed')];
++  assert.equal(judge(...rows, next).decision, 'pass');
++  blocked(...rows, call('TaskStop', { task_id: 'task-2' }, 'stop'), next);
++});
+diff --git a/tools/next-action-gate.mjs b/tools/next-action-gate.mjs
+index 7c76140..37614d0 100755
+--- a/tools/next-action-gate.mjs
++++ b/tools/next-action-gate.mjs
+@@ -1,5 +1,6 @@
+ #!/usr/bin/env node
+ export const GATE_CONTRACT = {"name": "next-action-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "next-action-gate"}]};
++import { sessionWakeupEvidence } from './session-wakeup-evidence.mjs';
+ import { isEntry } from './is-entry.mjs';
+ import { readTranscriptContext } from './lib/assistant-text.mjs';
+ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+@@ -175,7 +176,7 @@ function hasOpenSessionCheck(input) {
+   } catch { return false; }
+ }
+ 
+-// auto-progress --add-check survives user turns (the ledger carries the check forward); background evidence belongs only to this turn.
++// Persistent registrations survive user turns until expiration or task termination.
+ function hasSessionWakeup(raw, input = {}) {
+   let autoProgress = false;
+   let background = false;
+@@ -200,7 +201,7 @@ function hasSessionWakeup(raw, input = {}) {
+       }
+       // Completion detection is deliberately conservative: any current-turn call counts.
+       if ((tool.name === 'Agent' && tool.input?.run_in_background !== false)
+-        || (/^(?:Bash|PowerShell)$/.test(tool.name || '') && tool.input?.run_in_background === true)) background = true;
++        || (tool.name === 'PowerShell' && tool.input?.run_in_background === true)) background = true;
+     }
+   }
+   if (!autoProgress && input.session_id) {
+@@ -209,9 +210,8 @@ function hasSessionWakeup(raw, input = {}) {
+         .some(row => row.sessionId === input.session_id && row.status === 'open' && typeof row.check === 'string' && row.check.trim());
+     } catch { /* A missing or unreadable ledger is not wakeup evidence. */ }
+   }
+-  const scheduled = blocks(currentTurnEntries(raw), 'tool_use').some(tool =>
+-    (tool.name === 'ScheduleWakeup' && tool.input?.stop !== true) || tool.name === 'Monitor');
+-  return { autoProgress, background, scheduled };
++  const persistent = sessionWakeupEvidence(raw, input.now ?? Date.now());
++  return { autoProgress, background: background || persistent.background, scheduled: persistent.scheduled };
+ }
+ 
+ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
+diff --git a/tools/next-action-gate.test.mjs b/tools/next-action-gate.test.mjs
+index eb4ecfa..8465e86 100755
+--- a/tools/next-action-gate.test.mjs
++++ b/tools/next-action-gate.test.mjs
+@@ -421,7 +421,7 @@ test('短文・質問でも明示した次の作業には恒久策が必要', ()
+ });
+ 
+ const promiseText = `確認を続けます。\n次に kim がすること: なし\nこの後の自動進行: 私が毎時進捗を確認して変化時に報告します\nこのセッション: ${SESSION_PHRASES.open}`;
+-const use = (name, input = {}) => row('assistant', [{ type: 'tool_use', name, input }]);
++const use = (name, input = {}) => row('assistant', [{ type: 'tool_use', id: 'wake-call', name, input }]);
+ const cron = use('CronCreate', { cron: '17 * * * *', recurring: true });
+ const addCheckCmd = 'node tools/auto-progress.mjs --add-check --session test --check "cmd" --deadline +24h --label "test" --next-claude "retry"';
+ const addCheckBash = use('Bash', { command: addCheckCmd });
+@@ -499,10 +499,10 @@ test('空・なし・なしで始まる値には起床手段は不要', () => {
+   }
+ });
+ 
+-test('現在ターンのAgentと明示的なバックグラウンドシェルはpass', () => {
++test('Agent・PowerShellは当ターン、background Bashは次ターンもpass', () => {
+   for (const transcript of [use('Agent'), use('Agent', { run_in_background: true }), use('Bash', { run_in_background: true }), use('PowerShell', { run_in_background: true })]) {
+     assert.equal(judgeNextAction(promiseText, transcript).decision, 'pass');
+-    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '新たな依頼')}`).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
++    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '新たな依頼')}`).decision, transcript.includes('Bash') ? 'pass' : 'block');
+     assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', [{ type: 'tool_result', content: 'started' }])}`).decision, 'pass');
+     assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '<task-notification>終了</task-notification>', { isMeta: true })}`).decision, 'pass');
+   }
+@@ -642,13 +642,13 @@ test('check 無しの open 約束行は待機中の起床証拠にしない', ()
+   });
+ });
+ 
+-test('当ターンの ScheduleWakeup と Monitor は起床証拠になる', () => {
++test('ScheduleWakeup と Monitor の登録は次ターンも起床証拠になる', () => {
+   for (const name of ['ScheduleWakeup', 'Monitor']) {
+-    const transcript = use(name, {});
++    const transcript = name === 'Monitor' ? use(name) : row('assistant', [{ type: 'tool_use', id: 'wake-call', name, input: { delaySeconds: 3600 } }], { timestamp: new Date().toISOString() });
+     for (const state of ['open', 'pending']) {
+       assert.equal(judgeNextAction(promiseText.replace(SESSION_PHRASES.open, SESSION_PHRASES[state]), transcript).decision, 'pass');
+     }
+-    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '次の依頼')}`).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
++    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '次の依頼')}`).decision, 'pass');
+     assert.equal(judgeNextAction(promiseText, row('assistant', [{ type: 'tool_use', name }], { isSidechain: true })).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+   }
+   assert.equal(judgeNextAction(promiseText, use('ScheduleWakeup', { stop: true })).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+diff --git a/tools/session-wakeup-evidence.mjs b/tools/session-wakeup-evidence.mjs
+new file mode 100644
+index 0000000..b5e5061
+--- /dev/null
++++ b/tools/session-wakeup-evidence.mjs
+@@ -0,0 +1,54 @@
++// Replay only real conversation rows; API request blobs and sidechains are not calls.
++export function sessionWakeupEvidence(raw, now = Date.now()) {
++  const calls = new Map();
++  const tasks = new Map();
++  let wakeup;
++  for (const line of String(raw || '').split(/\r?\n/)) {
++    let entry;
++    try { entry = JSON.parse(line); } catch { continue; }
++    if (!entry || entry.isSidechain || !['assistant', 'user'].includes(entry.type)) continue;
++    const content = entry.message?.content;
++    const parts = Array.isArray(content) ? content : [];
++    if (entry.type === 'assistant') for (const tool of parts) {
++      if (tool?.type !== 'tool_use') continue;
++      if (tool.name === 'TaskStop') tasks.delete(tool.input?.task_id);
++      if (tool.name === 'ScheduleWakeup') {
++        wakeup = { id: tool.id, at: NaN };
++        const delay = tool.input?.delaySeconds;
++        if (tool.input?.stop !== true && Number.isFinite(delay) && entry.timestamp) {
++          wakeup.at = Date.parse(entry.timestamp) + delay * 1000;
++        }
++      }
++      if (tool.name === 'Monitor' || (tool.name === 'Bash' && tool.input?.run_in_background === true)) {
++        if (tool.id) tasks.set(tool.id, tool.id);
++      }
++      if (tool.id) calls.set(tool.id, tool);
++    }
++    if (entry.type !== 'user') continue;
++    for (const result of parts) {
++      if (result?.type !== 'tool_result') continue;
++      const tool = calls.get(result.tool_use_id);
++      if (!tool) continue;
++      if (result.is_error) {
++        tasks.delete(tool.id);
++        if (wakeup?.id === tool.id) wakeup.at = NaN;
++        continue;
++      }
++      const data = entry.toolUseResult;
++      if (wakeup?.id === tool.id && tool.input?.stop !== true && Number.isFinite(data?.scheduledFor)) wakeup.at = data.scheduledFor;
++      const taskId = data?.taskId || data?.task_id || data?.backgroundTaskId
++        || String(result.content || '').match(/(?:task[_ ]?id|background(?: task)? id)[:= ]+([\w-]+)/i)?.[1];
++      if (tasks.has(tool.id) && taskId) {
++        tasks.delete(tool.id);
++        tasks.set(taskId, tool.id);
++      }
++    }
++    const text = typeof content === 'string' ? content : parts.filter(b => b?.type === 'text').map(b => b.text || '').join('\n');
++    for (const notification of text.matchAll(/<task-notification>[\s\S]*?<\/task-notification>/g)) {
++      const id = notification[0].match(/<task-id>([^<]+)<\/task-id>/)?.[1];
++      const status = notification[0].match(/<status>([^<]+)<\/status>/)?.[1];
++      if (id && /^(completed|stopped|failed)$/.test(status)) tasks.delete(id);
++    }
++  }
++  return { scheduled: Number.isFinite(wakeup?.at) && wakeup.at > now, background: tasks.size > 0 };
++}

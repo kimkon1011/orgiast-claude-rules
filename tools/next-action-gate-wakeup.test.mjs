@@ -45,3 +45,11 @@ test('sidechainとAPI blobを起床登録に数えない', () => {
     blocked(row('assistant', [{ type: 'tool_use', name: 'Monitor', id: 'fake' }], extra), next);
   }
 });
+test('複数タスクの片方だけが停止しても残った起床手段は有効', () => {
+  const first = call('Bash', { run_in_background: true });
+  const second = call('Monitor', {}, 'second');
+  const secondResult = row('user', [{ type: 'tool_result', tool_use_id: 'second', content: 'started' }], { toolUseResult: { taskId: 'task-2' } });
+  const rows = [first, result({ backgroundTaskId: 'task-1' }), second, secondResult, notification('completed')];
+  assert.equal(judge(...rows, next).decision, 'pass');
+  blocked(...rows, call('TaskStop', { task_id: 'task-2' }, 'stop'), next);
+});

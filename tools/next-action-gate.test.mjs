@@ -499,7 +499,7 @@ test('空・なし・なしで始まる値には起床手段は不要', () => {
   }
 });
 
-test('現在ターンのAgentと明示的なバックグラウンドシェルはpass', () => {
+test('Agent・PowerShellは当ターン、background Bashは次ターンもpass', () => {
   for (const transcript of [use('Agent'), use('Agent', { run_in_background: true }), use('Bash', { run_in_background: true }), use('PowerShell', { run_in_background: true })]) {
     assert.equal(judgeNextAction(promiseText, transcript).decision, 'pass');
     assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '新たな依頼')}`).decision, transcript.includes('Bash') ? 'pass' : 'block');
@@ -642,7 +642,7 @@ test('check 無しの open 約束行は待機中の起床証拠にしない', ()
   });
 });
 
-test('当ターンの ScheduleWakeup と Monitor は起床証拠になる', () => {
+test('ScheduleWakeup と Monitor の登録は次ターンも起床証拠になる', () => {
   for (const name of ['ScheduleWakeup', 'Monitor']) {
     const transcript = name === 'Monitor' ? use(name) : row('assistant', [{ type: 'tool_use', id: 'wake-call', name, input: { delaySeconds: 3600 } }], { timestamp: new Date().toISOString() });
     for (const state of ['open', 'pending']) {

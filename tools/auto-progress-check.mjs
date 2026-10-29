@@ -9,6 +9,7 @@ import { resolveFleetLabel } from './lib/fleet-label.mjs';
 export const CHECK_TIMEOUT_MS = 30000;
 export const MAX_CHECK_TIMEOUT_MS = 300000;
 export const UNMET_INTERVAL_MS = 6 * 3600000;
+export const CHECK_TEXT_FULL_LIMIT = 2000; // 通知本文用の全文上限（Discord 上限内に収めるための頭打ち）
 // GitHub ログ取得のようにネットワーク待ちが支配的な check は行ごとに延ばせる。
 // 行の値が不正・過大なときは既定（30秒）と上限（300秒）へ丸める。check 自体を無制限にはしない。
 export function resolveCheckTimeout(row) {
@@ -37,7 +38,15 @@ export function executeCheck(row, { home, spawnImpl = spawnSync, shellPath = res
   const failure = result.error?.code === 'ETIMEDOUT'
     ? `check が ${options.timeout / 1000} 秒の上限を超えました（遅い check は --add-check --timeout <秒> で延長・最大 ${MAX_CHECK_TIMEOUT_MS / 1000} 秒）`
     : oneLine(result.error?.message || result.stderr) || code;
-  return { code, text: oneLine(result.stdout) || (code === 0 ? '達成を確認' : code === 1 ? '未達' : `check エラー: ${failure}`) };
+  // 1行目だけの checkText は互換フィールドとして残し、全文は fullText で返す（2026-10-28 実害: 返信2行目が落ちた）。
+  const detail = code === 0 || code === 1 ? '' : String(result.stderr || '').trim() || `check エラー: ${failure}`;
+  const fullText = (String(result.stdout || '').trim() || detail).slice(0, CHECK_TEXT_FULL_LIMIT);
+  return { code, text: oneLine(result.stdout) || (code === 0 ? '達成を確認' : code === 1 ? '未達' : `check エラー: ${failure}`), fullText };
+}
+
+// fullText の無い結果（旧実装のスタブ・旧台帳行）は1行目 text で代用する。
+export function fullCheckText(result, limit = CHECK_TEXT_FULL_LIMIT) {
+  return String(result?.fullText ?? result?.text ?? '').trim().slice(0, limit);
 }
 export function queueCheckFollowup(home, row, result) {
   const file = path.join(home, '.claude', 'next-session.md');
@@ -50,10 +59,10 @@ export function queueCheckFollowup(home, row, result) {
 }
 export async function checkPromise(row, { home, now, patch, io = {} }) {
   const result = row.status === 'done' && row.checkResult === 'done'
-    ? { code: 0, text: row.checkText } : await (io.executeCheck ?? executeCheck)(row, { home });
+    ? { code: 0, text: row.checkText, fullText: row.checkTextFull || row.checkText } : await (io.executeCheck ?? executeCheck)(row, { home });
   const state = result.code === 0 ? 'done' : result.code === 1 ? 'unmet' : 'error';
   const overdue = now >= Date.parse(row.deadlineAt);
-  const changes = { checkResult: state, checkText: oneLine(result.text), lastCheckedAt: new Date(now).toISOString(),
+  const changes = { checkResult: state, checkText: oneLine(result.text), checkTextFull: fullCheckText(result), lastCheckedAt: new Date(now).toISOString(),
     verdict: state === 'done' ? 'done' : state === 'error' ? 'check_error' : overdue ? 'unmet' : 'in_progress',
     ...(state === 'done' ? { status: 'done', doneAt: row.doneAt || new Date(now).toISOString() } : {}) };
   patch(rowKey(row), changes);
@@ -75,7 +84,8 @@ export async function checkPromise(row, { home, now, patch, io = {} }) {
   // State, not volatile stdout/count/timestamps, determines duplicate delivery.
   if (row.checkNotifiedResult === state) return state;
   const next = oneLine(row.nextClaude || 'check の実行ログと対象の受け口を調査し、原因を修正して再確認する');
-  const message = `${state === 'done' ? '完了' : state === 'unmet' ? '未達（期限超過）' : '確認エラー'}: ${oneLine(row.label || row.promise, 80)}\n${changes.checkText}${state === 'done' ? '' : `\nClaude の次の手: ${next}（next-session.md に起票）`}`;
+  // 通知本文には全文を載せる（1行目で切ると返信の要点が落ちる。全体を Discord 上限内に収める）。
+  const message = `${state === 'done' ? '完了' : state === 'unmet' ? '未達（期限超過）' : '確認エラー'}: ${oneLine(row.label || row.promise, 80)}\n${changes.checkTextFull || changes.checkText}${state === 'done' ? '' : `\nClaude の次の手: ${next}（next-session.md に起票）`}`.slice(0, 1900);
   const owner = row.owner || resolveOwner({ home });
   const origin = originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: owner, home });
   const delivery = await (io.notifyOwner ?? notifyOwner)(owner, `${origin}\n${message}`, { home });

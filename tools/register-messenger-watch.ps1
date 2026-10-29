@@ -2,7 +2,7 @@
 # 実行対象(messenger-watch.mjs)は作業ツリーではなく nightly-bootstrap が origin/main へ同期した
 # チェックアウト(~/.claude/nightly-repo)から実行する(2026-09-10・nightly-batch と同様の分離)。
 # 読み取り専用の監視。夜間(23:00〜7:00)は動かさない。
-param([switch]$Unregister)
+param([switch]$Unregister, [switch]$UpdateActionOnly)
 $ErrorActionPreference = 'Stop'
 $taskName = 'OrgiastMessengerWatch'
 
@@ -28,6 +28,14 @@ Copy-Item -LiteralPath $bootstrapSource -Destination $bootstrap -Force
 
 . (Join-Path $PSScriptRoot 'ensure-run-hidden.ps1')
 $action = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $bootstrap, '-Target', $target) -WorkingDirectory $repo
+# Existing installations can migrate without replacing their schedule or principal.
+if ($UpdateActionOnly) {
+  $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+  Set-ScheduledTask -TaskName $existing.TaskName -TaskPath $existing.TaskPath -Action $action | Out-Null
+  Write-Host "OK: task $taskName action updated; schedule and settings preserved"
+  Get-ScheduledTask -TaskName $taskName | Select-Object -ExpandProperty Actions
+  exit 0
+}
 # 7:00 から 16 時間(=23:00 まで) 30 分ごと。0〜5 分のランダム遅延でアクセスを分散する。
 $trigger = New-ScheduledTaskTrigger -Daily -At '07:00'
 $repetition = New-ScheduledTaskTrigger -Once -At '07:00' -RepetitionInterval (New-TimeSpan -Minutes 30) -RepetitionDuration (New-TimeSpan -Hours 16) -RandomDelay (New-TimeSpan -Minutes 5)

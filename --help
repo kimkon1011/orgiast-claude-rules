@@ -1,0 +1,7826 @@
+{
+ "today": "2026-10-29",
+ "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/1BuWvGVE1BKDcUAmOufgrDG1briC_eP-DZM9jN3qBtu4/edit",
+ "feedbackFormUrl": "https://script.google.com/macros/s/AKfycbzzOD2hA2hNKK8SccyRGf0tFivf_WS_VjWzOS5RgVnM3VD63jpu0xcprAOxUcDmuxlC/exec?form=feedback&app=%E3%82%AB%E3%83%97%E3%82%BB%E3%83%AB%E5%82%98%20%E5%9C%A8%E5%BA%AB%E7%AE%A1%E7%90%86",
+ "dataWarnings": {
+  "count": 0,
+  "summary": []
+ },
+ "intakeErrors": [],
+ "scheduleImport": {
+  "未判定会場": [
+   {
+    "行番号": 505,
+    "学会名": "第199回 日本呼吸器内視鏡学会関東支部会",
+    "会場名": "京王プラザホテル"
+   }
+  ],
+  "来場者数未入力": [],
+  "キャンセル削除": [],
+  "キャンセル保留": [],
+  "手動数量保持": [],
+  "最終取込日時": "2026-10-29 09:39:00",
+  "エラー": "",
+  "最終エラー日時": "",
+  "出展数エラー": ""
+ },
+ "settings": {
+  "warehouses": [
+   {
+    "id": "W1",
+    "name": "千葉倉庫",
+    "active": true,
+    "order": 1
+   },
+   {
+    "id": "W2",
+    "name": "大阪倉庫",
+    "active": true,
+    "order": 2
+   }
+  ],
+  "colors": [
+   {
+    "id": "C_RED",
+    "name": "赤",
+    "hex": "#E53935",
+    "minimum": 550,
+    "ratio": 0.30000000000000004,
+    "source": "手動設定",
+    "order": 1
+   },
+   {
+    "id": "C_BLUE",
+    "name": "青",
+    "hex": "#1E88E5",
+    "minimum": 600,
+    "ratio": 0.35000000000000003,
+    "source": "手動設定",
+    "order": 2
+   },
+   {
+    "id": "C_PINK",
+    "name": "ピンク",
+    "hex": "#EC407A",
+    "minimum": 400,
+    "ratio": 0.20000000000000004,
+    "source": "手動設定",
+    "order": 3
+   },
+   {
+    "id": "C_YELLOW",
+    "name": "黄",
+    "hex": "#FDD835",
+    "minimum": 350,
+    "ratio": 0.15000000000000002,
+    "source": "手動設定",
+    "order": 4
+   }
+  ],
+  "general": {
+   "ノベルティ切上げ単位": 50,
+   "ノベルティ上限数": 400,
+   "カプセル傘按分率": 0.7,
+   "使用予定入力_スプレッドシートID": "",
+   "学会予定表_スプレッドシートID": "14PRutr-R0gYxFI-_L9bm7uwSedHeXFjcXokfB1cu7MM",
+   "学会予定表_gid": "929813297",
+   "学会予定表_データ開始行": 4,
+   "学会予定表_取込開始日": "2026-10-01",
+   "学会予定表_取込対象の実施状況": "確定",
+   "学会予定表_1回の取込上限": 50,
+   "箱の既定入数": 50,
+   "倉庫別警告割合": 0.3,
+   "最小発注数": 1000,
+   "発注ロット単位": 500,
+   "安全在庫月数": 1,
+   "リードタイム日数": 35,
+   "棚卸推奨間隔月": 6,
+   "実減少率": 0.54,
+   "実減少率_自動更新": 1,
+   "実減少率_学習月数": 12
+  },
+  "prefectures": [
+   {
+    "name": "北海道",
+    "rate": 0.15
+   },
+   {
+    "name": "青森",
+    "rate": 0.1
+   },
+   {
+    "name": "岩手",
+    "rate": 0.1
+   },
+   {
+    "name": "宮城",
+    "rate": 0.1
+   },
+   {
+    "name": "秋田",
+    "rate": 0.1
+   },
+   {
+    "name": "山形",
+    "rate": 0.1
+   },
+   {
+    "name": "福島",
+    "rate": 0.1
+   },
+   {
+    "name": "茨城",
+    "rate": 0.1
+   },
+   {
+    "name": "栃木",
+    "rate": 0.1
+   },
+   {
+    "name": "群馬",
+    "rate": 0.1
+   },
+   {
+    "name": "埼玉",
+    "rate": 0.12
+   },
+   {
+    "name": "千葉",
+    "rate": 0.1
+   },
+   {
+    "name": "東京",
+    "rate": 0.12
+   },
+   {
+    "name": "神奈川",
+    "rate": 0.12
+   },
+   {
+    "name": "新潟",
+    "rate": 0.1
+   },
+   {
+    "name": "富山",
+    "rate": 0.1
+   },
+   {
+    "name": "石川",
+    "rate": 0.1
+   },
+   {
+    "name": "福井",
+    "rate": 0.1
+   },
+   {
+    "name": "山梨",
+    "rate": 0.1
+   },
+   {
+    "name": "長野",
+    "rate": 0.1
+   },
+   {
+    "name": "岐阜",
+    "rate": 0.1
+   },
+   {
+    "name": "静岡",
+    "rate": 0.1
+   },
+   {
+    "name": "愛知",
+    "rate": 0.1
+   },
+   {
+    "name": "三重",
+    "rate": 0.1
+   },
+   {
+    "name": "滋賀",
+    "rate": 0.1
+   },
+   {
+    "name": "京都",
+    "rate": 0.12
+   },
+   {
+    "name": "大阪",
+    "rate": 0.12
+   },
+   {
+    "name": "兵庫",
+    "rate": 0.12
+   },
+   {
+    "name": "奈良",
+    "rate": 0.1
+   },
+   {
+    "name": "和歌山",
+    "rate": 0.1
+   },
+   {
+    "name": "鳥取",
+    "rate": 0.1
+   },
+   {
+    "name": "島根",
+    "rate": 0.1
+   },
+   {
+    "name": "岡山",
+    "rate": 0.1
+   },
+   {
+    "name": "広島",
+    "rate": 0.1
+   },
+   {
+    "name": "山口",
+    "rate": 0.1
+   },
+   {
+    "name": "徳島",
+    "rate": 0.1
+   },
+   {
+    "name": "香川",
+    "rate": 0.1
+   },
+   {
+    "name": "愛媛",
+    "rate": 0.1
+   },
+   {
+    "name": "高知",
+    "rate": 0.1
+   },
+   {
+    "name": "福岡",
+    "rate": 0.1
+   },
+   {
+    "name": "佐賀",
+    "rate": 0.1
+   },
+   {
+    "name": "長崎",
+    "rate": 0.1
+   },
+   {
+    "name": "熊本",
+    "rate": 0.1
+   },
+   {
+    "name": "大分",
+    "rate": 0.1
+   },
+   {
+    "name": "宮崎",
+    "rate": 0.1
+   },
+   {
+    "name": "鹿児島",
+    "rate": 0.1
+   },
+   {
+    "name": "沖縄",
+    "rate": 0.15
+   }
+  ],
+  "noveltyParams": {
+   "unit": 50,
+   "cap": 400,
+   "share": 0.7
+  }
+ },
+ "dashboard": {
+  "cards": [
+   {
+    "id": "C_RED",
+    "name": "赤",
+    "hex": "#E53935",
+    "stock": 542.9166825548141,
+    "minimum": 550,
+    "status": "危険",
+    "remainingMonths": 0,
+    "warehouses": [
+     {
+      "id": "W1",
+      "name": "千葉倉庫",
+      "qty": 318.9254528122021,
+      "pending": 650,
+      "warning": false
+     },
+     {
+      "id": "W2",
+      "name": "大阪倉庫",
+      "qty": 223.991229742612,
+      "pending": 0,
+      "warning": false
+     }
+    ],
+    "source": "手動設定",
+    "ratio": 0.3,
+    "pending": 650,
+    "pendingMonths": [
+     "2026-11"
+    ],
+    "orderBy": null,
+    "orderByOverdue": false,
+    "daysLeft": null,
+    "breachDate": null,
+    "coveredDip": {
+     "breachYm": "2026-10",
+     "recoverYm": "2026-11",
+     "expectedDate": "2026-11-13"
+    }
+   },
+   {
+    "id": "C_BLUE",
+    "name": "青",
+    "hex": "#1E88E5",
+    "stock": 654.7361296472832,
+    "minimum": 600,
+    "status": "注意",
+    "remainingMonths": 0.4244421906693716,
+    "warehouses": [
+     {
+      "id": "W1",
+      "name": "千葉倉庫",
+      "qty": 185.07969494756912,
+      "pending": 350,
+      "warning": false
+     },
+     {
+      "id": "W2",
+      "name": "大阪倉庫",
+      "qty": 469.656434699714,
+      "pending": 0,
+      "warning": false
+     }
+    ],
+    "source": "手動設定",
+    "ratio": 0.35,
+    "pending": 350,
+    "pendingMonths": [
+     "2026-11"
+    ],
+    "orderBy": "2026-11-10",
+    "orderByOverdue": false,
+    "daysLeft": 12,
+    "breachDate": "2026-12-15",
+    "coveredDip": {
+     "breachYm": "2026-10",
+     "recoverYm": "2026-11",
+     "expectedDate": "2026-11-13"
+    }
+   },
+   {
+    "id": "C_PINK",
+    "name": "ピンク",
+    "hex": "#EC407A",
+    "stock": 875.277788369876,
+    "minimum": 400,
+    "status": "適正",
+    "remainingMonths": 6.449559133998427,
+    "warehouses": [
+     {
+      "id": "W1",
+      "name": "千葉倉庫",
+      "qty": 342.61696854146805,
+      "pending": 0,
+      "warning": false
+     },
+     {
+      "id": "W2",
+      "name": "大阪倉庫",
+      "qty": 532.660819828408,
+      "pending": 0,
+      "warning": false
+     }
+    ],
+    "source": "手動設定",
+    "ratio": 0.19999999999999998,
+    "pending": 0,
+    "pendingMonths": [],
+    "orderBy": null,
+    "orderByOverdue": false,
+    "daysLeft": null,
+    "breachDate": null,
+    "coveredDip": null
+   },
+   {
+    "id": "C_YELLOW",
+    "name": "黄",
+    "hex": "#FDD835",
+    "stock": 671.458341277407,
+    "minimum": 350,
+    "status": "適正",
+    "remainingMonths": 5.8162885843992775,
+    "warehouses": [
+     {
+      "id": "W1",
+      "name": "千葉倉庫",
+      "qty": 284.46272640610107,
+      "pending": 0,
+      "warning": false
+     },
+     {
+      "id": "W2",
+      "name": "大阪倉庫",
+      "qty": 386.99561487130603,
+      "pending": 0,
+      "warning": false
+     }
+    ],
+    "source": "手動設定",
+    "ratio": 0.15,
+    "pending": 0,
+    "pendingMonths": [],
+    "orderBy": null,
+    "orderByOverdue": false,
+    "daysLeft": null,
+    "breachDate": null,
+    "coveredDip": null
+   }
+  ],
+  "orders": [
+   {
+    "colorId": "C_RED",
+    "colorName": "赤",
+    "qty": 200,
+    "pending": 650,
+    "pendingMonths": [
+     "2026-11"
+    ],
+    "byWarehouse": {
+     "W1": 50,
+     "W2": 150
+    },
+    "reason": "最小発注数に合わせた追加分",
+    "orderBy": null,
+    "orderByOverdue": false,
+    "daysLeft": null,
+    "breachDate": null,
+    "coveredDip": {
+     "breachYm": "2026-10",
+     "recoverYm": "2026-11",
+     "expectedDate": "2026-11-13"
+    }
+   },
+   {
+    "colorId": "C_BLUE",
+    "colorName": "青",
+    "qty": 650,
+    "pending": 350,
+    "pendingMonths": [
+     "2026-11"
+    ],
+    "byWarehouse": {
+     "W1": 450,
+     "W2": 200
+    },
+    "reason": "2026-12に最低在庫数を下回る見込み",
+    "orderBy": "2026-11-10",
+    "orderByOverdue": false,
+    "daysLeft": 12,
+    "breachDate": "2026-12-15",
+    "coveredDip": {
+     "breachYm": "2026-10",
+     "recoverYm": "2026-11",
+     "expectedDate": "2026-11-13"
+    }
+   },
+   {
+    "colorId": "C_PINK",
+    "colorName": "ピンク",
+    "qty": 100,
+    "pending": 0,
+    "pendingMonths": [],
+    "byWarehouse": {
+     "W1": 100,
+     "W2": 0
+    },
+    "reason": "最小発注数に合わせた追加分",
+    "orderBy": null,
+    "orderByOverdue": false,
+    "daysLeft": null,
+    "breachDate": null,
+    "coveredDip": null
+   },
+   {
+    "colorId": "C_YELLOW",
+    "colorName": "黄",
+    "qty": 50,
+    "pending": 0,
+    "pendingMonths": [],
+    "byWarehouse": {
+     "W1": 50,
+     "W2": 0
+    },
+    "reason": "最小発注数に合わせた追加分",
+    "orderBy": null,
+    "orderByOverdue": false,
+    "daysLeft": null,
+    "breachDate": null,
+    "coveredDip": null
+   }
+  ],
+  "orderPlan": {
+   "total": 1000,
+   "minimumOrder": 1000,
+   "lot": 500,
+   "box": 50,
+   "sumNeed": 217.30695900857955,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "colorName": "赤",
+     "need": 0,
+     "qty": 200
+    },
+    {
+     "colorId": "C_BLUE",
+     "colorName": "青",
+     "need": 217.30695900857955,
+     "qty": 650
+    },
+    {
+     "colorId": "C_PINK",
+     "colorName": "ピンク",
+     "need": 0,
+     "qty": 100
+    },
+    {
+     "colorId": "C_YELLOW",
+     "colorName": "黄",
+     "need": 0,
+     "qty": 50
+    }
+   ]
+  },
+  "months": [
+   "2026-10",
+   "2026-11",
+   "2026-12",
+   "2027-01"
+  ],
+  "series": {
+   "C_RED": [
+    471.3925643469971,
+    913.3224022878932,
+    770.2741658722592,
+    750.7675881792183
+   ],
+   "C_BLUE": [
+    571.2913250714967,
+    678.5428026692089,
+    511.6531935176359,
+    488.8955195424214
+   ],
+   "C_PINK": [
+    827.595042897998,
+    688.8816015252621,
+    593.5161105815062,
+    580.5117254528121
+   ],
+   "C_YELLOW": [
+    635.6962821734986,
+    531.6612011439466,
+    460.1370829361297,
+    450.3837940896092
+   ]
+  },
+  "warehouseSeries": {
+   "C_RED": {
+    "W1": [
+     247.4013346043851,
+     806.3706387035271,
+     715.3399428026692,
+     702.3355576739751
+    ],
+    "W2": [
+     223.991229742612,
+     106.95176358436606,
+     54.93422306959008,
+     48.432030505243084
+    ]
+   },
+   "C_BLUE": {
+    "W1": [
+     101.63489037178266,
+     345.43241182078174,
+     239.22993326978082,
+     224.05815061963781
+    ],
+    "W2": [
+     469.656434699714,
+     333.1103908484271,
+     272.42326024785507,
+     264.8373689227836
+    ]
+   },
+   "C_PINK": {
+    "W1": [
+     294.9342230695901,
+     234.24709246901813,
+     173.55996186844618,
+     164.8903717826502
+    ],
+    "W2": [
+     532.660819828408,
+     454.634509056244,
+     419.95614871306,
+     415.62135367016197
+    ]
+   },
+   "C_YELLOW": {
+    "W1": [
+     248.70066730219258,
+     203.1853193517636,
+     157.66997140133464,
+     151.16777883698765
+    ],
+    "W2": [
+     386.99561487130603,
+     328.47588179218303,
+     302.46711153479504,
+     299.21601525262156
+    ]
+   }
+  },
+  "leadDays": 35,
+  "nextOrder": {
+   "orderBy": "2026-11-10",
+   "overdue": false,
+   "daysLeft": 12,
+   "colorNames": [
+    "青"
+   ],
+   "coveredColors": [
+    {
+     "name": "赤",
+     "breachYm": "2026-10",
+     "expectedDate": "2026-11-13"
+    }
+   ],
+   "horizonEnd": "2027-01"
+  },
+  "warehouseWarnings": [],
+  "noStocktake": false,
+  "stocktakeReminder": false,
+  "hasNegative": false,
+  "latestStocktakeDate": "2026-10-09",
+  "stock": {
+   "W1": {
+    "C_RED": 318.9254528122021,
+    "C_BLUE": 185.07969494756912,
+    "C_PINK": 342.61696854146805,
+    "C_YELLOW": 284.46272640610107
+   },
+   "W2": {
+    "C_RED": 223.991229742612,
+    "C_BLUE": 469.656434699714,
+    "C_PINK": 532.660819828408,
+    "C_YELLOW": 386.99561487130603
+   }
+  },
+  "pending": {
+   "byColor": {
+    "C_RED": 650,
+    "C_BLUE": 350
+   },
+   "byWarehouseColor": {
+    "W1": {
+     "C_RED": 650,
+     "C_BLUE": 350
+    }
+   },
+   "byMonthColor": {
+    "2026-11": {
+     "C_RED": 650,
+     "C_BLUE": 350
+    }
+   },
+   "byMonthWarehouseColor": {
+    "2026-11": {
+     "W1": {
+      "C_RED": 650,
+      "C_BLUE": 350
+     }
+    }
+   },
+   "items": [
+    {
+     "expectedDate": "2026-11-13",
+     "warehouseId": "W1",
+     "colorId": "C_RED",
+     "qty": 650
+    },
+    {
+     "expectedDate": "2026-11-13",
+     "warehouseId": "W1",
+     "colorId": "C_BLUE",
+     "qty": 350
+    }
+   ],
+   "overdue": []
+  },
+  "overdueCount": 0,
+  "actualRate": {
+   "rate": 0.619256434699714,
+   "source": "実績入力済みの使用予定 58件 から算出（2026-01〜2026-09）",
+   "pairs": [
+    {
+     "ym": "2026-01",
+     "planned": 50,
+     "actual": 14,
+     "ratio": 0.28
+    },
+    {
+     "ym": "2026-02",
+     "planned": 735,
+     "actual": 585,
+     "ratio": 0.7959183673469388
+    },
+    {
+     "ym": "2026-03",
+     "planned": 1160,
+     "actual": 817,
+     "ratio": 0.7043103448275863
+    },
+    {
+     "ym": "2026-04",
+     "planned": 490,
+     "actual": 295,
+     "ratio": 0.6020408163265306
+    },
+    {
+     "ym": "2026-05",
+     "planned": 220,
+     "actual": 149,
+     "ratio": 0.6772727272727272
+    },
+    {
+     "ym": "2026-06",
+     "planned": 980,
+     "actual": 497,
+     "ratio": 0.5071428571428571
+    },
+    {
+     "ym": "2026-07",
+     "planned": 910,
+     "actual": 534,
+     "ratio": 0.5868131868131868
+    },
+    {
+     "ym": "2026-08",
+     "planned": 490,
+     "actual": 165,
+     "ratio": 0.336734693877551
+    },
+    {
+     "ym": "2026-09",
+     "planned": 210,
+     "actual": 192,
+     "ratio": 0.9142857142857143
+    }
+   ],
+   "usedMonths": 9
+  },
+  "missingActuals": {
+   "pending": {
+    "count": 14,
+    "planned": 1330,
+    "provisional": 823.6110581506197,
+    "items": [
+     {
+      "id": "F1788257518568001",
+      "eventName": "第13回 日本糖尿病医療学学会",
+      "useDate": "2026-10-10",
+      "qty": 70,
+      "provisional": 43.347950428979985,
+      "dueDate": "2026-11-10"
+     },
+     {
+      "id": "F1788257524414001",
+      "eventName": "第35回 日本婦人科がん検診学会総会学術講演会",
+      "useDate": "2026-10-10",
+      "qty": 35,
+      "provisional": 21.673975214489992,
+      "dueDate": "2026-11-10"
+     },
+     {
+      "id": "F1788257531877001",
+      "eventName": "第33回 小児集中治療ワークショップ",
+      "useDate": "2026-10-11",
+      "qty": 35,
+      "provisional": 21.673975214489992,
+      "dueDate": "2026-11-10"
+     },
+     {
+      "id": "F1788257537072001",
+      "eventName": "第67回 日本脈管学会学術総会",
+      "useDate": "2026-10-15",
+      "qty": 140,
+      "provisional": 86.69590085795997,
+      "dueDate": "2026-11-10"
+     },
+     {
+      "id": "F1788257543566001",
+      "eventName": "第41回 日本整形外科学会基礎学術集会",
+      "useDate": "2026-10-15",
+      "qty": 140,
+      "provisional": 86.69590085795997,
+      "dueDate": "2026-11-10"
+     },
+     {
+      "id": "F1788257550212001",
+      "eventName": "第30回 日本神経感染症学会総会学術大会",
+      "useDate": "2026-10-16",
+      "qty": 35,
+      "provisional": 21.673975214489992,
+      "dueDate": "2026-11-10"
+     },
+     {
+      "id": "F1788257557694001",
+      "eventName": "第30回 日本外科病理学会学術集会",
+      "useDate": "2026-10-16",
+      "qty": 35,
+      "provisional": 21.673975214489992,
+      "dueDate": "2026-11-10"
+     },
+     {
+      "id": "F1788257564050001",
+      "eventName": "第64回 日本小腸学会学術集会",
+      "useDate": "2026-10-17",
+      "qty": 35,
+      "provisional": 21.673975214489992,
+      "dueDate": "2026-11-10"
+     },
+     {
+      "id": "F1788257569574001",
+      "eventName": "第69回 日本甲状腺学会学術集会",
+      "useDate": "2026-10-22",
+      "qty": 70,
+      "provisional": 43.347950428979985,
+      "dueDate": "2026-11-10"
+     },
+     {
+      "id": "F1788257574147001",
+      "eventName": "第64回 日本癌治療学会学術集会",
+      "useDate": "2026-10-22",
+      "qty": 280,
+      "provisional": 173.39180171591994,
+      "dueDate": "2026-11-10"
+     },
+     {
+      "id": "F1788257578405001",
+      "eventName": "第30回 日本心不全学会学術集会",
+      "useDate": "2026-10-23",
+      "qty": 245,
+      "provisional": 151.71782650142993,
+      "dueDate": "2026-11-10"
+     },
+     {
+      "id": "F1788257583415001",
+      "eventName": "第36回 日本耳科学会総会学術講演会",
+      "useDate": "2026-10-28",
+      "qty": 70,
+      "provisional": 43.347950428979985,
+      "dueDate": "2026-12-10"
+     },
+     {
+      "id": "F1788257589009001",
+      "eventName": "第44回 日本頭蓋顎顔面外科学会学術集会",
+      "useDate": "2026-10-29",
+      "qty": 70,
+      "provisional": 43.347950428979985,
+      "dueDate": "2026-12-10"
+     },
+     {
+      "id": "F1792992542466001",
+      "eventName": "第36回 日本耳科学会総会学術講演会",
+      "useDate": "2026-10-29",
+      "qty": 70,
+      "provisional": 43.347950428979985,
+      "dueDate": "2026-12-10"
+     }
+    ]
+   },
+   "overdue": {
+    "count": 0,
+    "planned": 0,
+    "provisional": 0,
+    "items": []
+   }
+  },
+  "yearGrowth": {
+   "rate": 1.170731707317073,
+   "recentTotal": 96,
+   "previousTotal": 82,
+   "recentFrom": "2025-10",
+   "recentTo": "2026-09",
+   "previousFrom": "2024-10",
+   "previousTo": "2025-09"
+  },
+  "forecastFloor": [
+   {
+    "ym": "2026-11",
+    "base": 693.5672068636798,
+    "lastYear": null,
+    "growth": 1.170731707317073,
+    "floor": null,
+    "extra": 0,
+    "applied": false
+   },
+   {
+    "ym": "2026-12",
+    "base": 476.8274547187798,
+    "lastYear": null,
+    "growth": 1.170731707317073,
+    "floor": null,
+    "extra": 0,
+    "applied": false
+   },
+   {
+    "ym": "2027-01",
+    "base": 65.02192564346997,
+    "lastYear": 14,
+    "growth": 1.170731707317073,
+    "floor": 16.390243902439025,
+    "extra": 0,
+    "applied": false
+   }
+  ]
+ },
+ "eventOutlook": [
+  {
+   "forecastId": "F1788257589009001",
+   "useDate": "2026-10-29",
+   "eventName": "第44回 日本頭蓋顎顔面外科学会学術集会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 332,
+     "carry": 21,
+     "after": 319,
+     "companyAfter": 556,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 200,
+     "carry": 25,
+     "after": 185,
+     "companyAfter": 670,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 351,
+     "carry": 14,
+     "after": 343,
+     "companyAfter": 884,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 291,
+     "carry": 11,
+     "after": 284,
+     "companyAfter": 678,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-09-24",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1792992542466001",
+   "useDate": "2026-10-29",
+   "eventName": "第36回 日本耳科学会総会学術講演会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 237,
+     "carry": 21,
+     "after": 224,
+     "companyAfter": 556,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 485,
+     "carry": 25,
+     "after": 470,
+     "companyAfter": 670,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 541,
+     "carry": 14,
+     "after": 533,
+     "companyAfter": 884,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 393,
+     "carry": 11,
+     "after": 387,
+     "companyAfter": 678,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-09-24",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1788257595961001",
+   "useDate": "2026-10-30",
+   "eventName": "第44回 日本大腸検査学会総会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 319,
+     "carry": 11,
+     "after": 312,
+     "companyAfter": 536,
+     "minimum": 550,
+     "status": "low"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 185,
+     "carry": 12,
+     "after": 177,
+     "companyAfter": 647,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 343,
+     "carry": 7,
+     "after": 338,
+     "companyAfter": 871,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 284,
+     "carry": 5,
+     "after": 281,
+     "companyAfter": 668,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2026-09-25",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1788257606011001",
+   "useDate": "2026-10-30",
+   "eventName": "第53回/第23回 日本肩関節学会学術集会/日本肩の運動機能研究会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 140,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 319,
+     "carry": 42,
+     "after": 293,
+     "companyAfter": 517,
+     "minimum": 550,
+     "status": "low"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 185,
+     "carry": 49,
+     "after": 155,
+     "companyAfter": 624,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 343,
+     "carry": 28,
+     "after": 325,
+     "companyAfter": 858,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 284,
+     "carry": 21,
+     "after": 271,
+     "companyAfter": 658,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2026-09-25",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1788257613814001",
+   "useDate": "2026-10-30",
+   "eventName": "第128回/第122回 日本消化器病学会九州支部例会/日本消化器内視鏡学会九州支部例会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 319,
+     "carry": 21,
+     "after": 306,
+     "companyAfter": 530,
+     "minimum": 550,
+     "status": "low"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 185,
+     "carry": 25,
+     "after": 170,
+     "companyAfter": 640,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 343,
+     "carry": 14,
+     "after": 334,
+     "companyAfter": 867,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 284,
+     "carry": 11,
+     "after": 278,
+     "companyAfter": 665,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2026-09-25",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1788257620734001",
+   "useDate": "2026-10-31",
+   "eventName": "第49回 日本死の臨床研究会年次大会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 105,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 273,
+     "carry": 32,
+     "after": 254,
+     "companyAfter": 478,
+     "minimum": 550,
+     "status": "low"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 132,
+     "carry": 37,
+     "after": 109,
+     "companyAfter": 579,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 312,
+     "carry": 21,
+     "after": 299,
+     "companyAfter": 832,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 262,
+     "carry": 16,
+     "after": 252,
+     "companyAfter": 639,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2026-09-26",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1789873255588001",
+   "useDate": "2026-10-31",
+   "eventName": "第50回 関東腹腔鏡下胃切除研究会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 273,
+     "carry": 11,
+     "after": 267,
+     "companyAfter": 491,
+     "minimum": 550,
+     "status": "low"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 132,
+     "carry": 12,
+     "after": 124,
+     "companyAfter": 594,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 312,
+     "carry": 7,
+     "after": 308,
+     "companyAfter": 841,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 262,
+     "carry": 5,
+     "after": 258,
+     "companyAfter": 645,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2026-09-26",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1788257626853001",
+   "useDate": "2026-11-12",
+   "eventName": "第61回 日本脊髄障害医学会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 247,
+     "carry": 21,
+     "after": 234,
+     "companyAfter": 458,
+     "minimum": 550,
+     "status": "low"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 102,
+     "carry": 25,
+     "after": 86,
+     "companyAfter": 556,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 295,
+     "carry": 14,
+     "after": 286,
+     "companyAfter": 819,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 249,
+     "carry": 11,
+     "after": 242,
+     "companyAfter": 629,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2026-10-08",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1790177692732001",
+   "useDate": "2026-11-12",
+   "eventName": "第46回 日本臨床麻酔学会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 175,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 224,
+     "carry": 53,
+     "after": 191,
+     "companyAfter": 439,
+     "minimum": 550,
+     "status": "low"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 470,
+     "carry": 61,
+     "after": 432,
+     "companyAfter": 533,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 533,
+     "carry": 35,
+     "after": 511,
+     "companyAfter": 806,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 387,
+     "carry": 26,
+     "after": 371,
+     "companyAfter": 619,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2026-10-08",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1788257634106001",
+   "useDate": "2026-11-14",
+   "eventName": "第72回 肝癌症例研究会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 884,
+     "carry": 11,
+     "after": 878,
+     "companyAfter": 1069,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 436,
+     "carry": 12,
+     "after": 429,
+     "companyAfter": 861,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 286,
+     "carry": 7,
+     "after": 282,
+     "companyAfter": 793,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 242,
+     "carry": 5,
+     "after": 239,
+     "companyAfter": 610,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-10-10",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1788257641404001",
+   "useDate": "2026-11-14",
+   "eventName": "第41回 日本救命医療学会総会学術集会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 884,
+     "carry": 11,
+     "after": 878,
+     "companyAfter": 1069,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 436,
+     "carry": 12,
+     "after": 429,
+     "companyAfter": 861,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 286,
+     "carry": 7,
+     "after": 282,
+     "companyAfter": 793,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 242,
+     "carry": 5,
+     "after": 239,
+     "companyAfter": 610,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-10-10",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1791166875445001",
+   "useDate": "2026-11-14",
+   "eventName": "2026 東京HOCMフォーラム",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 191,
+     "carry": 11,
+     "after": 185,
+     "companyAfter": 1069,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 432,
+     "carry": 12,
+     "after": 424,
+     "companyAfter": 861,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 511,
+     "carry": 7,
+     "after": 507,
+     "companyAfter": 793,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 371,
+     "carry": 5,
+     "after": 367,
+     "companyAfter": 610,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-10-10",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1788257649576001",
+   "useDate": "2026-11-15",
+   "eventName": "第33回 肺塞栓症研究会学術集会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 871,
+     "carry": 11,
+     "after": 865,
+     "companyAfter": 1050,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 421,
+     "carry": 12,
+     "after": 414,
+     "companyAfter": 838,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 278,
+     "carry": 7,
+     "after": 273,
+     "companyAfter": 780,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 236,
+     "carry": 5,
+     "after": 232,
+     "companyAfter": 600,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-10-11",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1788257655602001",
+   "useDate": "2026-11-19",
+   "eventName": "第40回 日本泌尿器内視鏡・ロボティクス学会総会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 175,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 865,
+     "carry": 53,
+     "after": 832,
+     "companyAfter": 1017,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 414,
+     "carry": 61,
+     "after": 376,
+     "companyAfter": 800,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 273,
+     "carry": 35,
+     "after": 252,
+     "companyAfter": 758,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 232,
+     "carry": 26,
+     "after": 216,
+     "companyAfter": 584,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-10-15",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1791514193971001",
+   "useDate": "2026-11-20",
+   "eventName": "第41回 日本糖尿病合併症学会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 185,
+     "carry": 21,
+     "after": 172,
+     "companyAfter": 1004,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 424,
+     "carry": 25,
+     "after": 409,
+     "companyAfter": 785,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 507,
+     "carry": 14,
+     "after": 498,
+     "companyAfter": 750,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 367,
+     "carry": 11,
+     "after": 361,
+     "companyAfter": 577,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-10-16",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1788257661999001",
+   "useDate": "2026-11-21",
+   "eventName": "第19回 日本早産学会学術集会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 172,
+     "carry": 11,
+     "after": 165,
+     "companyAfter": 998,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 409,
+     "carry": 12,
+     "after": 401,
+     "companyAfter": 777,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 498,
+     "carry": 7,
+     "after": 494,
+     "companyAfter": 745,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 361,
+     "carry": 5,
+     "after": 358,
+     "companyAfter": 574,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-10-17",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1788257668841001",
+   "useDate": "2026-11-26",
+   "eventName": "第88回 日本臨床外科学会学術集会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 280,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 165,
+     "carry": 84,
+     "after": 113,
+     "companyAfter": 946,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 401,
+     "carry": 98,
+     "after": 341,
+     "companyAfter": 716,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 494,
+     "carry": 56,
+     "after": 459,
+     "companyAfter": 711,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 358,
+     "carry": 42,
+     "after": 332,
+     "companyAfter": 548,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-10-22",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1788950095226001",
+   "useDate": "2026-11-26",
+   "eventName": "第53回 日本マイクロサージャリー学会学術集会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 832,
+     "carry": 21,
+     "after": 819,
+     "companyAfter": 985,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 376,
+     "carry": 25,
+     "after": 361,
+     "companyAfter": 762,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 252,
+     "carry": 14,
+     "after": 243,
+     "companyAfter": 737,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 216,
+     "carry": 11,
+     "after": 210,
+     "companyAfter": 567,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-10-22",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1788257676022001",
+   "useDate": "2026-11-27",
+   "eventName": "第30回 日本小児心電学会学術集会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 113,
+     "carry": 11,
+     "after": 107,
+     "companyAfter": 926,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 341,
+     "carry": 12,
+     "after": 333,
+     "companyAfter": 694,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 459,
+     "carry": 7,
+     "after": 455,
+     "companyAfter": 698,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 332,
+     "carry": 5,
+     "after": 328,
+     "companyAfter": 538,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-10-23",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1788257682110001",
+   "useDate": "2026-11-27",
+   "eventName": "第16回 日本低侵襲内視鏡脊髄神経外科学会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 819,
+     "carry": 11,
+     "after": 813,
+     "companyAfter": 926,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 361,
+     "carry": 12,
+     "after": 353,
+     "companyAfter": 694,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 243,
+     "carry": 7,
+     "after": 239,
+     "companyAfter": 698,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 210,
+     "carry": 5,
+     "after": 206,
+     "companyAfter": 538,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-10-23",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1788257689007001",
+   "useDate": "2026-11-29",
+   "eventName": "第42回 日本臨床皮膚科医会近畿ブロック総会学術大会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 813,
+     "carry": 11,
+     "after": 806,
+     "companyAfter": 913,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 353,
+     "carry": 12,
+     "after": 345,
+     "companyAfter": 679,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 239,
+     "carry": 7,
+     "after": 234,
+     "companyAfter": 689,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 206,
+     "carry": 5,
+     "after": 203,
+     "companyAfter": 532,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-10-25",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1788257695810001",
+   "useDate": "2026-12-02",
+   "eventName": "第37回 日本消化器癌発生学会総会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 806,
+     "carry": 11,
+     "after": 800,
+     "companyAfter": 907,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 345,
+     "carry": 12,
+     "after": 338,
+     "companyAfter": 671,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 234,
+     "carry": 7,
+     "after": 230,
+     "companyAfter": 685,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 203,
+     "carry": 5,
+     "after": 200,
+     "companyAfter": 528,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-10-28",
+   "orderInTime": false
+  },
+  {
+   "forecastId": "F1788257702539001",
+   "useDate": "2026-12-03",
+   "eventName": "第85回 日本めまい平衡医学会総会学術講演会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 800,
+     "carry": 21,
+     "after": 787,
+     "companyAfter": 894,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 338,
+     "carry": 25,
+     "after": 323,
+     "companyAfter": 656,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 230,
+     "carry": 14,
+     "after": 221,
+     "companyAfter": 676,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 200,
+     "carry": 11,
+     "after": 193,
+     "companyAfter": 522,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-10-29",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257709406001",
+   "useDate": "2026-12-03",
+   "eventName": "2026/第48回/第19回/第30回/第31回 JAPAN PAIN WEEK/日本疼痛学会/日本運動器疼痛学会/日本ペインリハビリテーション学会学術大会/日本口腔顔面痛学会総会学術大会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 800,
+     "carry": 21,
+     "after": 787,
+     "companyAfter": 894,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 338,
+     "carry": 25,
+     "after": 323,
+     "companyAfter": 656,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 230,
+     "carry": 14,
+     "after": 221,
+     "companyAfter": 676,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 200,
+     "carry": 11,
+     "after": 193,
+     "companyAfter": 522,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-10-29",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257720228001",
+   "useDate": "2026-12-04",
+   "eventName": "第54回/第5回 日本頭痛学会総会/日本脳脊髄液漏出症学会学術集会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 140,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 107,
+     "carry": 42,
+     "after": 81,
+     "companyAfter": 855,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 333,
+     "carry": 49,
+     "after": 303,
+     "companyAfter": 610,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 455,
+     "carry": 28,
+     "after": 437,
+     "companyAfter": 650,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 328,
+     "carry": 21,
+     "after": 315,
+     "companyAfter": 502,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-10-30",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257732409001",
+   "useDate": "2026-12-04",
+   "eventName": "第29回 日本救急医学会中部地方会総会・学術集会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 107,
+     "carry": 21,
+     "after": 94,
+     "companyAfter": 868,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 333,
+     "carry": 25,
+     "after": 318,
+     "companyAfter": 625,
+     "minimum": 600,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 455,
+     "carry": 14,
+     "after": 446,
+     "companyAfter": 659,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 328,
+     "carry": 11,
+     "after": 322,
+     "companyAfter": 509,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "ok",
+   "orderBy": "2026-10-30",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257741417001",
+   "useDate": "2026-12-05",
+   "eventName": "第22回 日本乳癌学会関東地方会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 774,
+     "carry": 21,
+     "after": 761,
+     "companyAfter": 829,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 308,
+     "carry": 25,
+     "after": 292,
+     "companyAfter": 580,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 213,
+     "carry": 14,
+     "after": 204,
+     "companyAfter": 633,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 187,
+     "carry": 11,
+     "after": 180,
+     "companyAfter": 489,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2026-10-31",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257748337001",
+   "useDate": "2026-12-06",
+   "eventName": "第21回 日本病院前救急診療医学会総会学術集会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 68,
+     "carry": 11,
+     "after": 61,
+     "companyAfter": 822,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 288,
+     "carry": 12,
+     "after": 280,
+     "companyAfter": 572,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 429,
+     "carry": 7,
+     "after": 424,
+     "companyAfter": 628,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 309,
+     "carry": 5,
+     "after": 306,
+     "companyAfter": 486,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2026-11-01",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257756717001",
+   "useDate": "2026-12-10",
+   "eventName": "第46回 日本肝臓学会東部会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 175,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 761,
+     "carry": 53,
+     "after": 728,
+     "companyAfter": 790,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 292,
+     "carry": 61,
+     "after": 254,
+     "companyAfter": 534,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 204,
+     "carry": 35,
+     "after": 182,
+     "companyAfter": 607,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 180,
+     "carry": 26,
+     "after": 164,
+     "companyAfter": 470,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2026-11-05",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257762402001",
+   "useDate": "2026-12-12",
+   "eventName": "第41回 前立腺シンポジウム",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 728,
+     "carry": 11,
+     "after": 722,
+     "companyAfter": 783,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 254,
+     "carry": 12,
+     "after": 247,
+     "companyAfter": 527,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 182,
+     "carry": 7,
+     "after": 178,
+     "companyAfter": 602,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 164,
+     "carry": 5,
+     "after": 161,
+     "companyAfter": 467,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2026-11-07",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1790561590662001",
+   "useDate": "2026-12-12",
+   "eventName": "第882回 日本臨床外科学会東京支部会外科集談会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 728,
+     "carry": 11,
+     "after": 722,
+     "companyAfter": 783,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 254,
+     "carry": 12,
+     "after": 247,
+     "companyAfter": 527,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 182,
+     "carry": 7,
+     "after": 178,
+     "companyAfter": 602,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 164,
+     "carry": 5,
+     "after": 161,
+     "companyAfter": 467,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2026-11-07",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257768066001",
+   "useDate": "2026-12-19",
+   "eventName": "第30回 日本心血管内分泌代謝学会学術総会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 61,
+     "carry": 11,
+     "after": 55,
+     "companyAfter": 770,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 280,
+     "carry": 12,
+     "after": 272,
+     "companyAfter": 512,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 424,
+     "carry": 7,
+     "after": 420,
+     "companyAfter": 594,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 306,
+     "carry": 5,
+     "after": 302,
+     "companyAfter": 460,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2026-11-14",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1792404896756001",
+   "useDate": "2027-01-15",
+   "eventName": "第37回 JCIC学術集会 日本先天性心疾患インターベンション学会学術集会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 715,
+     "carry": 21,
+     "after": 702,
+     "companyAfter": 757,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 239,
+     "carry": 25,
+     "after": 224,
+     "companyAfter": 496,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 174,
+     "carry": 14,
+     "after": 165,
+     "companyAfter": 585,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 158,
+     "carry": 11,
+     "after": 151,
+     "companyAfter": 454,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2026-12-11",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257776331001",
+   "useDate": "2027-01-30",
+   "eventName": "第22回 日本医学シミュレーション学会学術集会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 55,
+     "carry": 11,
+     "after": 48,
+     "companyAfter": 751,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 272,
+     "carry": 12,
+     "after": 265,
+     "companyAfter": 489,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 420,
+     "carry": 7,
+     "after": 416,
+     "companyAfter": 581,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 302,
+     "carry": 5,
+     "after": 299,
+     "companyAfter": 450,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2026-12-26",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257784003001",
+   "useDate": "2027-02-12",
+   "eventName": "2027 GIWeek(日本消化管学会総会学術集会/IGICS/日本潰瘍学会/日本カプセル内視鏡学会学術集会/日本消化管学会教育講演会/日本消化管学会市民公開講座)",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 210,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 48,
+     "carry": 63,
+     "after": 9,
+     "companyAfter": 712,
+     "minimum": 550,
+     "status": "short"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 265,
+     "carry": 74,
+     "after": 219,
+     "companyAfter": 443,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 416,
+     "carry": 42,
+     "after": 390,
+     "companyAfter": 555,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 299,
+     "carry": 32,
+     "after": 280,
+     "companyAfter": 431,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "buy",
+   "orderBy": "2027-01-08",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1789309915541001",
+   "useDate": "2027-02-19",
+   "eventName": "第37回 日本間脳下垂体腫瘍学会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 9,
+     "carry": 11,
+     "after": 3,
+     "companyAfter": 705,
+     "minimum": 550,
+     "status": "short"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 219,
+     "carry": 12,
+     "after": 212,
+     "companyAfter": 436,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 390,
+     "carry": 7,
+     "after": 385,
+     "companyAfter": 550,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 280,
+     "carry": 5,
+     "after": 276,
+     "companyAfter": 428,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "buy",
+   "orderBy": "2027-01-15",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1792996209935001",
+   "useDate": "2027-02-20",
+   "eventName": "第28回 日本GI性別不合学会研究大会総会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 3,
+     "carry": 21,
+     "after": -10,
+     "companyAfter": 692,
+     "minimum": 550,
+     "status": "short"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 212,
+     "carry": 25,
+     "after": 197,
+     "companyAfter": 421,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 385,
+     "carry": 14,
+     "after": 377,
+     "companyAfter": 541,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 276,
+     "carry": 11,
+     "after": 270,
+     "companyAfter": 421,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "buy",
+   "orderBy": "2027-01-16",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257790108001",
+   "useDate": "2027-02-26",
+   "eventName": "第63回/第63回/第62回 九州外科学会/九州小児外科学会/九州内分泌外科学会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": -10,
+     "carry": 11,
+     "after": -17,
+     "companyAfter": 686,
+     "minimum": 550,
+     "status": "short"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 197,
+     "carry": 12,
+     "after": 189,
+     "companyAfter": 413,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 377,
+     "carry": 7,
+     "after": 372,
+     "companyAfter": 537,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 270,
+     "carry": 5,
+     "after": 267,
+     "companyAfter": 418,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "buy",
+   "orderBy": "2027-01-22",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1791166879940001",
+   "useDate": "2027-03-04",
+   "eventName": "第10回 日本サルコーマ治療研究学会学術集会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": -17,
+     "carry": 11,
+     "after": -23,
+     "companyAfter": 679,
+     "minimum": 550,
+     "status": "short"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 189,
+     "carry": 12,
+     "after": 181,
+     "companyAfter": 405,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 372,
+     "carry": 7,
+     "after": 368,
+     "companyAfter": 533,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 267,
+     "carry": 5,
+     "after": 263,
+     "companyAfter": 415,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "buy",
+   "orderBy": "2027-01-28",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257796003001",
+   "useDate": "2027-03-05",
+   "eventName": "第54回 日本膵膵島移植学会学術集会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 702,
+     "carry": 11,
+     "after": 696,
+     "companyAfter": 673,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 224,
+     "carry": 12,
+     "after": 216,
+     "companyAfter": 398,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 165,
+     "carry": 7,
+     "after": 161,
+     "companyAfter": 528,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 151,
+     "carry": 5,
+     "after": 148,
+     "companyAfter": 411,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2027-01-29",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257804301001",
+   "useDate": "2027-03-05",
+   "eventName": "第32回 /第39回/第37回 日本形成外科手術手技学会/日本喉頭科学会総会学術講演会/日本気管食道科学会認定気管食道科専門医大会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": -23,
+     "carry": 11,
+     "after": -30,
+     "companyAfter": 673,
+     "minimum": 550,
+     "status": "short"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 181,
+     "carry": 12,
+     "after": 174,
+     "companyAfter": 398,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 368,
+     "carry": 7,
+     "after": 364,
+     "companyAfter": 528,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 263,
+     "carry": 5,
+     "after": 260,
+     "companyAfter": 411,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "buy",
+   "orderBy": "2027-01-29",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1792404900544001",
+   "useDate": "2027-03-06",
+   "eventName": "第133回 近畿救急医学研究会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": -30,
+     "carry": 21,
+     "after": -43,
+     "companyAfter": 653,
+     "minimum": 550,
+     "status": "short"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 174,
+     "carry": 25,
+     "after": 159,
+     "companyAfter": 375,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 364,
+     "carry": 14,
+     "after": 355,
+     "companyAfter": 515,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 260,
+     "carry": 11,
+     "after": 254,
+     "companyAfter": 402,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "buy",
+   "orderBy": "2027-01-30",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1793096887216001",
+   "useDate": "2027-03-06",
+   "eventName": "第210回 近畿外科学会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": -30,
+     "carry": 21,
+     "after": -43,
+     "companyAfter": 653,
+     "minimum": 550,
+     "status": "short"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 174,
+     "carry": 25,
+     "after": 159,
+     "companyAfter": 375,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 364,
+     "carry": 14,
+     "after": 355,
+     "companyAfter": 515,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 260,
+     "carry": 11,
+     "after": 254,
+     "companyAfter": 402,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "buy",
+   "orderBy": "2027-01-30",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257810626001",
+   "useDate": "2027-03-11",
+   "eventName": "第36回 日本頭頸部外科学会総会ならびに学術講演会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 140,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 696,
+     "carry": 42,
+     "after": 670,
+     "companyAfter": 614,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 216,
+     "carry": 49,
+     "after": 186,
+     "companyAfter": 330,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 161,
+     "carry": 28,
+     "after": 143,
+     "companyAfter": 489,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 148,
+     "carry": 21,
+     "after": 135,
+     "companyAfter": 382,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2027-02-04",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257820003001",
+   "useDate": "2027-03-12",
+   "eventName": "第67回 関東整形災害外科学会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 670,
+     "carry": 11,
+     "after": 663,
+     "companyAfter": 608,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 186,
+     "carry": 12,
+     "after": 179,
+     "companyAfter": 322,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 143,
+     "carry": 7,
+     "after": 139,
+     "companyAfter": 485,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 135,
+     "carry": 5,
+     "after": 132,
+     "companyAfter": 379,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2027-02-05",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1790819596088001",
+   "useDate": "2027-03-12",
+   "eventName": "第56回 日本慢性疼痛学会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": -56,
+     "carry": 21,
+     "after": -69,
+     "companyAfter": 601,
+     "minimum": 550,
+     "status": "short"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 143,
+     "carry": 25,
+     "after": 128,
+     "companyAfter": 314,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 346,
+     "carry": 14,
+     "after": 338,
+     "companyAfter": 481,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 247,
+     "carry": 11,
+     "after": 241,
+     "companyAfter": 376,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "buy",
+   "orderBy": "2027-02-05",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1791332395131001",
+   "useDate": "2027-03-12",
+   "eventName": "第39回 日本肘関節学会学術集会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 105,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 670,
+     "carry": 32,
+     "after": 650,
+     "companyAfter": 595,
+     "minimum": 550,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 186,
+     "carry": 37,
+     "after": 163,
+     "companyAfter": 307,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 143,
+     "carry": 21,
+     "after": 130,
+     "companyAfter": 476,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 135,
+     "carry": 16,
+     "after": 125,
+     "companyAfter": 372,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2027-02-05",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257827205001",
+   "useDate": "2027-03-13",
+   "eventName": "第17回 日本がん生殖医療学会学術集会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": -69,
+     "carry": 11,
+     "after": -75,
+     "companyAfter": 569,
+     "minimum": 550,
+     "status": "short"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 128,
+     "carry": 12,
+     "after": 121,
+     "companyAfter": 276,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 338,
+     "carry": 7,
+     "after": 333,
+     "companyAfter": 459,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 241,
+     "carry": 5,
+     "after": 237,
+     "companyAfter": 359,
+     "minimum": 350,
+     "status": "ok"
+    }
+   ],
+   "verdict": "buy",
+   "orderBy": "2027-02-06",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257836003001",
+   "useDate": "2027-03-25",
+   "eventName": "第99回 日本胃癌学会総会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 140,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": -75,
+     "carry": 42,
+     "after": -101,
+     "companyAfter": 543,
+     "minimum": 550,
+     "status": "short"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 121,
+     "carry": 49,
+     "after": 90,
+     "companyAfter": 246,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 333,
+     "carry": 28,
+     "after": 316,
+     "companyAfter": 442,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 237,
+     "carry": 21,
+     "after": 224,
+     "companyAfter": 346,
+     "minimum": 350,
+     "status": "low"
+    }
+   ],
+   "verdict": "buy",
+   "orderBy": "2027-02-18",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257907519001",
+   "useDate": "2027-03-26",
+   "eventName": "第28回 日本正常圧水頭症学会学術集会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": -101,
+     "carry": 11,
+     "after": -108,
+     "companyAfter": 536,
+     "minimum": 550,
+     "status": "short"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 90,
+     "carry": 12,
+     "after": 83,
+     "companyAfter": 239,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 316,
+     "carry": 7,
+     "after": 312,
+     "companyAfter": 437,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 224,
+     "carry": 5,
+     "after": 221,
+     "companyAfter": 343,
+     "minimum": 350,
+     "status": "low"
+    }
+   ],
+   "verdict": "buy",
+   "orderBy": "2027-02-19",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257912994001",
+   "useDate": "2027-03-27",
+   "eventName": "第20回 日本骨盤臓器脱手術学会学術集会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 644,
+     "carry": 11,
+     "after": 637,
+     "companyAfter": 530,
+     "minimum": 550,
+     "status": "low"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 156,
+     "carry": 12,
+     "after": 148,
+     "companyAfter": 231,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 126,
+     "carry": 7,
+     "after": 122,
+     "companyAfter": 433,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 122,
+     "carry": 5,
+     "after": 119,
+     "companyAfter": 340,
+     "minimum": 350,
+     "status": "low"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2027-02-20",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257916682001",
+   "useDate": "2027-04-23",
+   "eventName": "第40回 日本老年脳神経外科学会/日本脳神経看護学会東海地方部会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": -108,
+     "carry": 11,
+     "after": -114,
+     "companyAfter": 523,
+     "minimum": 550,
+     "status": "short"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 83,
+     "carry": 12,
+     "after": 75,
+     "companyAfter": 223,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 312,
+     "carry": 7,
+     "after": 307,
+     "companyAfter": 429,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 221,
+     "carry": 5,
+     "after": 218,
+     "companyAfter": 337,
+     "minimum": 350,
+     "status": "low"
+    }
+   ],
+   "verdict": "buy",
+   "orderBy": "2027-03-19",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1791166885497001",
+   "useDate": "2027-05-20",
+   "eventName": "第53回 日本熱傷学会総会・学術集会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 637,
+     "carry": 21,
+     "after": 624,
+     "companyAfter": 510,
+     "minimum": 550,
+     "status": "low"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 148,
+     "carry": 25,
+     "after": 133,
+     "companyAfter": 208,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 122,
+     "carry": 14,
+     "after": 113,
+     "companyAfter": 420,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 119,
+     "carry": 11,
+     "after": 112,
+     "companyAfter": 330,
+     "minimum": 350,
+     "status": "low"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2027-04-15",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1791166889838001",
+   "useDate": "2027-05-26",
+   "eventName": "第52回 日本外科系連合学会学術集会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 624,
+     "carry": 21,
+     "after": 611,
+     "companyAfter": 497,
+     "minimum": 550,
+     "status": "low"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 133,
+     "carry": 25,
+     "after": 118,
+     "companyAfter": 193,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 113,
+     "carry": 14,
+     "after": 104,
+     "companyAfter": 411,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 112,
+     "carry": 11,
+     "after": 106,
+     "companyAfter": 324,
+     "minimum": 350,
+     "status": "low"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2027-04-21",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257920618001",
+   "useDate": "2027-06-09",
+   "eventName": "第111次 日本法医学会学術全国集会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": -114,
+     "carry": 21,
+     "after": -127,
+     "companyAfter": 484,
+     "minimum": 550,
+     "status": "short"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 75,
+     "carry": 25,
+     "after": 60,
+     "companyAfter": 178,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 307,
+     "carry": 14,
+     "after": 299,
+     "companyAfter": 403,
+     "minimum": 400,
+     "status": "ok"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 218,
+     "carry": 11,
+     "after": 211,
+     "companyAfter": 317,
+     "minimum": 350,
+     "status": "low"
+    }
+   ],
+   "verdict": "buy",
+   "orderBy": "2027-05-05",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257924241001",
+   "useDate": "2027-06-10",
+   "eventName": "第37回 特定非営利活動法人日本顎変形症学会総会学術大会",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": 611,
+     "carry": 21,
+     "after": 598,
+     "companyAfter": 471,
+     "minimum": 550,
+     "status": "low"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 118,
+     "carry": 25,
+     "after": 103,
+     "companyAfter": 163,
+     "minimum": 600,
+     "status": "low"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 104,
+     "carry": 14,
+     "after": 96,
+     "companyAfter": 394,
+     "minimum": 400,
+     "status": "low"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 106,
+     "carry": 11,
+     "after": 99,
+     "companyAfter": 311,
+     "minimum": 350,
+     "status": "low"
+    }
+   ],
+   "verdict": "watch",
+   "orderBy": "2027-05-06",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257929112001",
+   "useDate": "2027-06-11",
+   "eventName": "第27回 日本抗加齢医学会総会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 280,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": -127,
+     "carry": 84,
+     "after": -179,
+     "companyAfter": 419,
+     "minimum": 550,
+     "status": "short"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": 60,
+     "carry": 98,
+     "after": -1,
+     "companyAfter": 102,
+     "minimum": 600,
+     "status": "short"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 299,
+     "carry": 56,
+     "after": 264,
+     "companyAfter": 359,
+     "minimum": 400,
+     "status": "low"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 211,
+     "carry": 42,
+     "after": 185,
+     "companyAfter": 285,
+     "minimum": 350,
+     "status": "low"
+    }
+   ],
+   "verdict": "buy",
+   "orderBy": "2027-05-07",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257934071001",
+   "useDate": "2027-06-12",
+   "eventName": "第14回 日本眼形成再建外科学会学術集会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 35,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": -179,
+     "carry": 11,
+     "after": -186,
+     "companyAfter": 413,
+     "minimum": 550,
+     "status": "short"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": -1,
+     "carry": 12,
+     "after": -8,
+     "companyAfter": 94,
+     "minimum": 600,
+     "status": "short"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 264,
+     "carry": 7,
+     "after": 260,
+     "companyAfter": 355,
+     "minimum": 400,
+     "status": "low"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 185,
+     "carry": 5,
+     "after": 182,
+     "companyAfter": 281,
+     "minimum": 350,
+     "status": "low"
+    }
+   ],
+   "verdict": "buy",
+   "orderBy": "2027-05-08",
+   "orderInTime": true
+  },
+  {
+   "forecastId": "F1788257937544001",
+   "useDate": "2027-06-17",
+   "eventName": "第70回 関西胸部外科学会学術集会",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "qty": 70,
+   "colors": [
+    {
+     "colorId": "C_RED",
+     "name": "赤",
+     "hex": "#E53935",
+     "before": -186,
+     "carry": 21,
+     "after": -199,
+     "companyAfter": 400,
+     "minimum": 550,
+     "status": "short"
+    },
+    {
+     "colorId": "C_BLUE",
+     "name": "青",
+     "hex": "#1E88E5",
+     "before": -8,
+     "carry": 25,
+     "after": -23,
+     "companyAfter": 79,
+     "minimum": 600,
+     "status": "short"
+    },
+    {
+     "colorId": "C_PINK",
+     "name": "ピンク",
+     "hex": "#EC407A",
+     "before": 260,
+     "carry": 14,
+     "after": 251,
+     "companyAfter": 346,
+     "minimum": 400,
+     "status": "low"
+    },
+    {
+     "colorId": "C_YELLOW",
+     "name": "黄",
+     "hex": "#FDD835",
+     "before": 182,
+     "carry": 11,
+     "after": 176,
+     "companyAfter": 275,
+     "minimum": 350,
+     "status": "low"
+    }
+   ],
+   "verdict": "buy",
+   "orderBy": "2027-05-13",
+   "orderInTime": true
+  }
+ ],
+ "actualRate": {
+  "rate": 0.619256434699714,
+  "source": "実績入力済みの使用予定 58件 から算出（2026-01〜2026-09）",
+  "pairs": [
+   {
+    "ym": "2026-01",
+    "planned": 50,
+    "actual": 14,
+    "ratio": 0.28
+   },
+   {
+    "ym": "2026-02",
+    "planned": 735,
+    "actual": 585,
+    "ratio": 0.7959183673469388
+   },
+   {
+    "ym": "2026-03",
+    "planned": 1160,
+    "actual": 817,
+    "ratio": 0.7043103448275863
+   },
+   {
+    "ym": "2026-04",
+    "planned": 490,
+    "actual": 295,
+    "ratio": 0.6020408163265306
+   },
+   {
+    "ym": "2026-05",
+    "planned": 220,
+    "actual": 149,
+    "ratio": 0.6772727272727272
+   },
+   {
+    "ym": "2026-06",
+    "planned": 980,
+    "actual": 497,
+    "ratio": 0.5071428571428571
+   },
+   {
+    "ym": "2026-07",
+    "planned": 910,
+    "actual": 534,
+    "ratio": 0.5868131868131868
+   },
+   {
+    "ym": "2026-08",
+    "planned": 490,
+    "actual": 165,
+    "ratio": 0.336734693877551
+   },
+   {
+    "ym": "2026-09",
+    "planned": 210,
+    "actual": 192,
+    "ratio": 0.9142857142857143
+   }
+  ],
+  "usedMonths": 9
+ },
+ "receipts": [
+  [
+   "P1791179752203006",
+   "2026-09-28",
+   "W1",
+   "C_PINK",
+   100,
+   "倉庫間移動: T1791179752203 大阪倉庫→千葉倉庫 9/28着 番号なし9箱（黄2・赤5・ピンク2）",
+   "2026-10-05 14:55:52"
+  ],
+  [
+   "P1791179752203005",
+   "2026-09-28",
+   "W2",
+   "C_PINK",
+   -100,
+   "倉庫間移動: T1791179752203 大阪倉庫→千葉倉庫 9/28着 番号なし9箱（黄2・赤5・ピンク2）",
+   "2026-10-05 14:55:52"
+  ],
+  [
+   "P1791179752203004",
+   "2026-09-28",
+   "W1",
+   "C_RED",
+   250,
+   "倉庫間移動: T1791179752203 大阪倉庫→千葉倉庫 9/28着 番号なし9箱（黄2・赤5・ピンク2）",
+   "2026-10-05 14:55:52"
+  ],
+  [
+   "P1791179752203003",
+   "2026-09-28",
+   "W2",
+   "C_RED",
+   -250,
+   "倉庫間移動: T1791179752203 大阪倉庫→千葉倉庫 9/28着 番号なし9箱（黄2・赤5・ピンク2）",
+   "2026-10-05 14:55:52"
+  ],
+  [
+   "P1791179752203002",
+   "2026-09-28",
+   "W1",
+   "C_YELLOW",
+   100,
+   "倉庫間移動: T1791179752203 大阪倉庫→千葉倉庫 9/28着 番号なし9箱（黄2・赤5・ピンク2）",
+   "2026-10-05 14:55:52"
+  ],
+  [
+   "P1791179752203001",
+   "2026-09-28",
+   "W2",
+   "C_YELLOW",
+   -100,
+   "倉庫間移動: T1791179752203 大阪倉庫→千葉倉庫 9/28着 番号なし9箱（黄2・赤5・ピンク2）",
+   "2026-10-05 14:55:52"
+  ],
+  [
+   "P1791179747757002",
+   "2026-10-02",
+   "W1",
+   "C_PINK",
+   50,
+   "倉庫間移動: T1791179747757 大阪倉庫→千葉倉庫 10/2着 番号なし1箱（ピンク1）",
+   "2026-10-05 14:55:47"
+  ],
+  [
+   "P1791179747757001",
+   "2026-10-02",
+   "W2",
+   "C_PINK",
+   -50,
+   "倉庫間移動: T1791179747757 大阪倉庫→千葉倉庫 10/2着 番号なし1箱（ピンク1）",
+   "2026-10-05 14:55:47"
+  ],
+  [
+   "P1791172648122003",
+   "2026-10-03",
+   "W1",
+   "C_PINK",
+   150,
+   "発注ID: O1788229988824001",
+   "2026-10-05 12:57:28"
+  ],
+  [
+   "P1791172648122002",
+   "2026-10-03",
+   "W1",
+   "C_BLUE",
+   600,
+   "発注ID: O1788229988824001",
+   "2026-10-05 12:57:28"
+  ],
+  [
+   "P1791172648122001",
+   "2026-10-03",
+   "W1",
+   "C_RED",
+   250,
+   "発注ID: O1788229988824001",
+   "2026-10-05 12:57:28"
+  ]
+ ],
+ "forecasts": [
+  {
+   "id": "F1788234166222001",
+   "useDate": "2026-01-31",
+   "ym": "2026-01",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "The 8th. Asia Pacific Osteotomy Symposium",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 50,
+   "actual": 14,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234200519001",
+   "useDate": "2026-02-13",
+   "ym": "2026-02",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第27回日本正常圧水頭症学会学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 50,
+   "actual": 33,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234227786001",
+   "useDate": "2026-02-14",
+   "ym": "2026-02",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第78回済生会学会 令和7年度済生会総会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 250,
+   "actual": 230,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234255721001",
+   "useDate": "2026-02-19",
+   "ym": "2026-02",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第38回日本軟骨代謝学会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 20,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234281456001",
+   "useDate": "2026-02-19",
+   "ym": "2026-02",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第53回日本膵・膵島移植学会学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 50,
+   "actual": 49,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234303648001",
+   "useDate": "2026-02-20",
+   "ym": "2026-02",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第16回日本がん・生殖医療学会学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 100,
+   "actual": 99,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234437193001",
+   "useDate": "2026-02-21",
+   "ym": "2026-02",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第36回日本気管食道科学会認定気管食道科専門医大会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 40,
+   "actual": 8,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234466502001",
+   "useDate": "2026-02-22",
+   "ym": "2026-02",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第131回近畿救急医学研究会（日本救急医学会近畿地方会）",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 100,
+   "actual": 101,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "群馬倉庫"
+  },
+  {
+   "id": "F1788234492009001",
+   "useDate": "2026-02-26",
+   "ym": "2026-02",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第55回日本慢性疼痛学会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 40,
+   "actual": 29,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234515150001",
+   "useDate": "2026-02-27",
+   "ym": "2026-02",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第209回近畿外科学会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 70,
+   "actual": 16,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234576255001",
+   "useDate": "2026-03-04",
+   "ym": "2026-03",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第98回日本胃癌学会総会/APGCC 2026",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 250,
+   "actual": 52,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "群馬倉庫"
+  },
+  {
+   "id": "F1788234600967001",
+   "useDate": "2026-03-05",
+   "ym": "2026-03",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第19回日本骨盤臓器脱手術学会学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 29,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234626152001",
+   "useDate": "2026-03-05",
+   "ym": "2026-03",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第22回日本胎児治療学会学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 70,
+   "actual": 19,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234708906001",
+   "useDate": "2026-03-06",
+   "ym": "2026-03",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第31回日本形成外科手術手技学会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 40,
+   "actual": 13,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234733146001",
+   "useDate": "2026-03-11",
+   "ym": "2026-03",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "STROKE2026/第51回日本脳卒中学会学術集会/第55回日本脳卒中の外科学会学術集会/第42回SAH/スパズムシンポジウム",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 280,
+   "actual": 182,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234759742001",
+   "useDate": "2026-03-14",
+   "ym": "2026-03",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第204回日本肺癌学会関東支部学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 50,
+   "actual": 19,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "群馬倉庫"
+  },
+  {
+   "id": "F1788234782751001",
+   "useDate": "2026-03-18",
+   "ym": "2026-03",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第31回日本災害医学会総会学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 350,
+   "actual": 434,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "群馬倉庫"
+  },
+  {
+   "id": "F1788234807212001",
+   "useDate": "2026-03-21",
+   "ym": "2026-03",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第9回日本臨床肛門病学会学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 50,
+   "actual": 28,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "群馬倉庫"
+  },
+  {
+   "id": "F1788234835769001",
+   "useDate": "2026-03-27",
+   "ym": "2026-03",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第9回日本リンパ浮腫学会総会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 41,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234865547001",
+   "useDate": "2026-04-01",
+   "ym": "2026-04",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "アジア太平洋肝臓学会（APASL）Oncology 2026 東京",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 72,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234901053001",
+   "useDate": "2026-04-02",
+   "ym": "2026-04",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第146回中部日本整形外科災害外科学会学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 105,
+   "actual": 62,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234921191001",
+   "useDate": "2026-04-10",
+   "ym": "2026-04",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第37回日本臨床モニター学会総会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 11,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234943940001",
+   "useDate": "2026-04-11",
+   "ym": "2026-04",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第67回中国四国小児がん・小児外科研究会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 8,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234968095001",
+   "useDate": "2026-04-15",
+   "ym": "2026-04",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第115回日本病理学会総会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 280,
+   "actual": 142,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788234990056001",
+   "useDate": "2026-05-07",
+   "ym": "2026-05",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "日本心血管インターベンション治療学会第54回CVIT東海北陸地方会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 77,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788235053335001",
+   "useDate": "2026-05-15",
+   "ym": "2026-05",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "高血圧フォーラム2026",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 100,
+   "actual": 14,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788235070712001",
+   "useDate": "2026-05-15",
+   "ym": "2026-05",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第49回関東腹腔鏡下胃切除研究会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 50,
+   "actual": 5,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788235087841001",
+   "useDate": "2026-05-20",
+   "ym": "2026-05",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第69回関西胸部外科学会学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 53,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788235132187001",
+   "useDate": "2026-06-12",
+   "ym": "2026-06",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第31回日本AdvancedHeart&VascularSurgery/OPCAB学会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 21,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788235149814001",
+   "useDate": "2026-06-12",
+   "ym": "2026-06",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第122回日本消化器内視鏡学会関東支部例会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 105,
+   "actual": 40,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788235171058001",
+   "useDate": "2026-06-17",
+   "ym": "2026-06",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第62回日本肝臓学会総会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 280,
+   "actual": 77,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788235189187001",
+   "useDate": "2026-06-17",
+   "ym": "2026-06",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第49回日本顔面神経学会/第35回日本聴神経腫瘍研究会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 70,
+   "actual": 22,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788235210191001",
+   "useDate": "2026-06-17",
+   "ym": "2026-06",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第41回日本脊髄外科学会/The 17th Annual Meeting of Asia Spine",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 70,
+   "actual": 47,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788235232756001",
+   "useDate": "2026-06-24",
+   "ym": "2026-06",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第80回日本食道学会学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 105,
+   "actual": 56,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788235249957001",
+   "useDate": "2026-06-25",
+   "ym": "2026-06",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第26回日本抗加齢医学会総会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 280,
+   "actual": 208,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788235276502001",
+   "useDate": "2026-06-26",
+   "ym": "2026-06",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第10回日本脳神経外科認知症学会学術総会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 26,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788235326744001",
+   "useDate": "2026-07-02",
+   "ym": "2026-07",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第38回日本小切開・鏡視外科学会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 11,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788236027695001",
+   "useDate": "2026-07-02",
+   "ym": "2026-07",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第32回日本ヘリコバクター学会学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 105,
+   "actual": 63,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788236057315001",
+   "useDate": "2026-07-03",
+   "ym": "2026-07",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第10回日本低侵襲心臓手術学会学術集会/JAPAN MICS SUMMIT 2026",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 70,
+   "actual": 25,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788236075198001",
+   "useDate": "2026-07-03",
+   "ym": "2026-07",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第132回近畿救急医学研究会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 70,
+   "actual": 45,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788236097509001",
+   "useDate": "2026-07-03",
+   "ym": "2026-07",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第58回日本動脈硬化学会総会学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 105,
+   "actual": 26,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788236130418001",
+   "useDate": "2026-07-09",
+   "ym": "2026-07",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第60回日本ペインクリニック学会学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 175,
+   "actual": 139,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788236156540001",
+   "useDate": "2026-07-15",
+   "ym": "2026-07",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第30回日本冠動脈外科学会学術大会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 70,
+   "actual": 15,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788236177171001",
+   "useDate": "2026-07-17",
+   "ym": "2026-07",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第880回外科集談会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 7,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788236197920001",
+   "useDate": "2026-07-18",
+   "ym": "2026-07",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第39回日本臨床整形外科学会学術集会 くにうみ学会・兵庫",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 105,
+   "actual": 98,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788236263554001",
+   "useDate": "2026-07-23",
+   "ym": "2026-07",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第57回日本膵臓学会大会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 105,
+   "actual": 45,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788236284745001",
+   "useDate": "2026-07-24",
+   "ym": "2026-07",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第80回日本交通医学会総会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 60,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788236647897001",
+   "useDate": "2026-08-06",
+   "ym": "2026-08",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第53回日本膵切研究会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 15,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "おかしの家"
+  },
+  {
+   "id": "F1788236665679001",
+   "useDate": "2026-08-07",
+   "ym": "2026-08",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第24回日本組織移植学会総会・学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 11,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788236682594001",
+   "useDate": "2026-08-20",
+   "ym": "2026-08",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第33回日本小児整形外科学会研修会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 12,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788236701003001",
+   "useDate": "2026-08-20",
+   "ym": "2026-08",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "Reduced Port Surgery Forum 2026 in KAWAGOE",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 7,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788236722662001",
+   "useDate": "2026-08-26",
+   "ym": "2026-08",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "日本スポーツ整形外科学会2026",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 280,
+   "actual": 87,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788236742451001",
+   "useDate": "2026-08-27",
+   "ym": "2026-08",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第48回日本母体胎児医学会学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 23,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788236771667001",
+   "useDate": "2026-08-28",
+   "ym": "2026-08",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第20回肝癌治療ナビゲーション研究会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 10,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788237015150001",
+   "useDate": "2026-09-02",
+   "ym": "2026-09",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第39回日本口腔咽頭科学会総会ならびに学術講演会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 70,
+   "actual": 38,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788237052572001",
+   "useDate": "2026-09-04",
+   "ym": "2026-09",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第100回日本糖尿病学会中部地方会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 70,
+   "actual": 125,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788241559937001",
+   "useDate": "2026-09-11",
+   "ym": "2026-09",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第44回福岡救急医学会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 21,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788241677946001",
+   "useDate": "2026-09-17",
+   "ym": "2026-09",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第53回日本マススクリーニング学会学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 35,
+   "actual": 8,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788241697211001",
+   "useDate": "2026-09-25",
+   "ym": "2026-09",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第27回日本内分泌学会関東甲信越支部学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788241715374001",
+   "useDate": "2026-09-26",
+   "ym": "2026-09",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第7回日本ペインクリニック学会関西支部学術集会",
+   "prefecture": "",
+   "attendees": null,
+   "qty": 150,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": ""
+  },
+  {
+   "id": "F1788257493002001",
+   "useDate": "2026-10-02",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第23回 日本胎児治療学会学術集会",
+   "prefecture": "大阪",
+   "attendees": 200,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788733372998001",
+   "useDate": "2026-10-03",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "2026 BCVR/ISHR",
+   "prefecture": "福島",
+   "attendees": 300,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257504930001",
+   "useDate": "2026-10-08",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第65回 日本鼻科学会総会学術講演会",
+   "prefecture": "広島",
+   "attendees": 1000,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257512109001",
+   "useDate": "2026-10-08",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第14回 日本乳房オンコプラスティックサージャリー学会総会",
+   "prefecture": "東京",
+   "attendees": 1000,
+   "qty": 105,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257518568001",
+   "useDate": "2026-10-10",
+   "ym": "2026-10",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第13回 日本糖尿病医療学学会",
+   "prefecture": "京都",
+   "attendees": 550,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257524414001",
+   "useDate": "2026-10-10",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第35回 日本婦人科がん検診学会総会学術講演会",
+   "prefecture": "愛媛",
+   "attendees": 320,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257531877001",
+   "useDate": "2026-10-11",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第33回 小児集中治療ワークショップ",
+   "prefecture": "東京",
+   "attendees": 400,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257537072001",
+   "useDate": "2026-10-15",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第67回 日本脈管学会学術総会",
+   "prefecture": "兵庫",
+   "attendees": 1400,
+   "qty": 140,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257543566001",
+   "useDate": "2026-10-15",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第41回 日本整形外科学会基礎学術集会",
+   "prefecture": "岐阜",
+   "attendees": 2000,
+   "qty": 140,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257550212001",
+   "useDate": "2026-10-16",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第30回 日本神経感染症学会総会学術大会",
+   "prefecture": "岐阜",
+   "attendees": 450,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257557694001",
+   "useDate": "2026-10-16",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第30回 日本外科病理学会学術集会",
+   "prefecture": "東京",
+   "attendees": 135,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257564050001",
+   "useDate": "2026-10-17",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第64回 日本小腸学会学術集会",
+   "prefecture": "東京",
+   "attendees": 200,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257569574001",
+   "useDate": "2026-10-22",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第69回 日本甲状腺学会学術集会",
+   "prefecture": "宮城",
+   "attendees": 1000,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257574147001",
+   "useDate": "2026-10-22",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第64回 日本癌治療学会学術集会",
+   "prefecture": "兵庫",
+   "attendees": 7000,
+   "qty": 280,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257578405001",
+   "useDate": "2026-10-23",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第30回 日本心不全学会学術集会",
+   "prefecture": "富山",
+   "attendees": 3500,
+   "qty": 245,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257583415001",
+   "useDate": "2026-10-28",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第36回 日本耳科学会総会学術講演会",
+   "prefecture": "奈良",
+   "attendees": 900,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257589009001",
+   "useDate": "2026-10-29",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第44回 日本頭蓋顎顔面外科学会学術集会",
+   "prefecture": "長野",
+   "attendees": 650,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1792992542466001",
+   "useDate": "2026-10-29",
+   "ym": "2026-10",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第36回 日本耳科学会総会学術講演会",
+   "prefecture": "奈良",
+   "attendees": 900,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257595961001",
+   "useDate": "2026-10-30",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第44回 日本大腸検査学会総会",
+   "prefecture": "東京",
+   "attendees": 300,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257606011001",
+   "useDate": "2026-10-30",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第53回/第23回 日本肩関節学会学術集会/日本肩の運動機能研究会",
+   "prefecture": "熊本",
+   "attendees": 1600,
+   "qty": 140,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257613814001",
+   "useDate": "2026-10-30",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第128回/第122回 日本消化器病学会九州支部例会/日本消化器内視鏡学会九州支部例会",
+   "prefecture": "宮崎",
+   "attendees": 1000,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257620734001",
+   "useDate": "2026-10-31",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第49回 日本死の臨床研究会年次大会",
+   "prefecture": "山梨",
+   "attendees": 1400,
+   "qty": 105,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1789873255588001",
+   "useDate": "2026-10-31",
+   "ym": "2026-10",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第50回 関東腹腔鏡下胃切除研究会",
+   "prefecture": "東京",
+   "attendees": 300,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257626853001",
+   "useDate": "2026-11-12",
+   "ym": "2026-11",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第61回 日本脊髄障害医学会",
+   "prefecture": "兵庫",
+   "attendees": 500,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1790177692732001",
+   "useDate": "2026-11-12",
+   "ym": "2026-11",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第46回 日本臨床麻酔学会",
+   "prefecture": "和歌山",
+   "attendees": 2300,
+   "qty": 175,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257634106001",
+   "useDate": "2026-11-14",
+   "ym": "2026-11",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第72回 肝癌症例研究会",
+   "prefecture": "東京",
+   "attendees": 100,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257641404001",
+   "useDate": "2026-11-14",
+   "ym": "2026-11",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第41回 日本救命医療学会総会学術集会",
+   "prefecture": "山梨",
+   "attendees": 120,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1791166875445001",
+   "useDate": "2026-11-14",
+   "ym": "2026-11",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "2026 東京HOCMフォーラム",
+   "prefecture": "東京",
+   "attendees": 150,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257649576001",
+   "useDate": "2026-11-15",
+   "ym": "2026-11",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第33回 肺塞栓症研究会学術集会",
+   "prefecture": "東京",
+   "attendees": 150,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257655602001",
+   "useDate": "2026-11-19",
+   "ym": "2026-11",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第40回 日本泌尿器内視鏡・ロボティクス学会総会",
+   "prefecture": "兵庫",
+   "attendees": 2000,
+   "qty": 175,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1791514193971001",
+   "useDate": "2026-11-20",
+   "ym": "2026-11",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第41回 日本糖尿病合併症学会",
+   "prefecture": "鹿児島",
+   "attendees": 1000,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257661999001",
+   "useDate": "2026-11-21",
+   "ym": "2026-11",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第19回 日本早産学会学術集会",
+   "prefecture": "福岡",
+   "attendees": 300,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257668841001",
+   "useDate": "2026-11-26",
+   "ym": "2026-11",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第88回 日本臨床外科学会学術集会",
+   "prefecture": "宮崎",
+   "attendees": 6000,
+   "qty": 280,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788950095226001",
+   "useDate": "2026-11-26",
+   "ym": "2026-11",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第53回 日本マイクロサージャリー学会学術集会",
+   "prefecture": "京都",
+   "attendees": 800,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257676022001",
+   "useDate": "2026-11-27",
+   "ym": "2026-11",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第30回 日本小児心電学会学術集会",
+   "prefecture": "千葉",
+   "attendees": 250,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257682110001",
+   "useDate": "2026-11-27",
+   "ym": "2026-11",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第16回 日本低侵襲内視鏡脊髄神経外科学会",
+   "prefecture": "広島",
+   "attendees": 150,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257689007001",
+   "useDate": "2026-11-29",
+   "ym": "2026-11",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第42回 日本臨床皮膚科医会近畿ブロック総会学術大会",
+   "prefecture": "兵庫",
+   "attendees": 130,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257695810001",
+   "useDate": "2026-12-02",
+   "ym": "2026-12",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第37回 日本消化器癌発生学会総会",
+   "prefecture": "京都",
+   "attendees": 250,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257702539001",
+   "useDate": "2026-12-03",
+   "ym": "2026-12",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第85回 日本めまい平衡医学会総会学術講演会",
+   "prefecture": "東京",
+   "attendees": 800,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257709406001",
+   "useDate": "2026-12-03",
+   "ym": "2026-12",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "2026/第48回/第19回/第30回/第31回 JAPAN PAIN WEEK/日本疼痛学会/日本運動器疼痛学会/日本ペインリハビリテーション学会学術大会/日本口腔顔面痛学会総会学術大会",
+   "prefecture": "東京",
+   "attendees": 700,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257720228001",
+   "useDate": "2026-12-04",
+   "ym": "2026-12",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第54回/第5回 日本頭痛学会総会/日本脳脊髄液漏出症学会学術集会",
+   "prefecture": "熊本",
+   "attendees": 1800,
+   "qty": 140,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257732409001",
+   "useDate": "2026-12-04",
+   "ym": "2026-12",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第29回 日本救急医学会中部地方会総会・学術集会",
+   "prefecture": "愛知",
+   "attendees": 600,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257741417001",
+   "useDate": "2026-12-05",
+   "ym": "2026-12",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第22回 日本乳癌学会関東地方会",
+   "prefecture": "神奈川",
+   "attendees": 500,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257748337001",
+   "useDate": "2026-12-06",
+   "ym": "2026-12",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第21回 日本病院前救急診療医学会総会学術集会",
+   "prefecture": "鳥取",
+   "attendees": 300,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257756717001",
+   "useDate": "2026-12-10",
+   "ym": "2026-12",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第46回 日本肝臓学会東部会",
+   "prefecture": "神奈川",
+   "attendees": 1800,
+   "qty": 175,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257762402001",
+   "useDate": "2026-12-12",
+   "ym": "2026-12",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第41回 前立腺シンポジウム",
+   "prefecture": "東京",
+   "attendees": 330,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1790561590662001",
+   "useDate": "2026-12-12",
+   "ym": "2026-12",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第882回 日本臨床外科学会東京支部会外科集談会",
+   "prefecture": "東京",
+   "attendees": 200,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257768066001",
+   "useDate": "2026-12-19",
+   "ym": "2026-12",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第30回 日本心血管内分泌代謝学会学術総会",
+   "prefecture": "沖縄",
+   "attendees": 290,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1792404896756001",
+   "useDate": "2027-01-15",
+   "ym": "2027-01",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第37回 JCIC学術集会 日本先天性心疾患インターベンション学会学術集会",
+   "prefecture": "北海道",
+   "attendees": 600,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257776331001",
+   "useDate": "2027-01-30",
+   "ym": "2027-01",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第22回 日本医学シミュレーション学会学術集会",
+   "prefecture": "愛知",
+   "attendees": 180,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257784003001",
+   "useDate": "2027-02-12",
+   "ym": "2027-02",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "2027 GIWeek(日本消化管学会総会学術集会/IGICS/日本潰瘍学会/日本カプセル内視鏡学会学術集会/日本消化管学会教育講演会/日本消化管学会市民公開講座)",
+   "prefecture": "大阪",
+   "attendees": 2500,
+   "qty": 210,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1789309915541001",
+   "useDate": "2027-02-19",
+   "ym": "2027-02",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第37回 日本間脳下垂体腫瘍学会",
+   "prefecture": "奈良",
+   "attendees": 500,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1792996209935001",
+   "useDate": "2027-02-20",
+   "ym": "2027-02",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第28回 日本GI性別不合学会研究大会総会",
+   "prefecture": "岡山",
+   "attendees": 600,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257790108001",
+   "useDate": "2027-02-26",
+   "ym": "2027-02",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第63回/第63回/第62回 九州外科学会/九州小児外科学会/九州内分泌外科学会",
+   "prefecture": "長崎",
+   "attendees": 450,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1791166879940001",
+   "useDate": "2027-03-04",
+   "ym": "2027-03",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第10回 日本サルコーマ治療研究学会学術集会",
+   "prefecture": "岐阜",
+   "attendees": 400,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257796003001",
+   "useDate": "2027-03-05",
+   "ym": "2027-03",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第54回 日本膵膵島移植学会学術集会",
+   "prefecture": "茨城",
+   "attendees": 250,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257804301001",
+   "useDate": "2027-03-05",
+   "ym": "2027-03",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第32回 /第39回/第37回 日本形成外科手術手技学会/日本喉頭科学会総会学術講演会/日本気管食道科学会認定気管食道科専門医大会",
+   "prefecture": "岐阜",
+   "attendees": 400,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1792404900544001",
+   "useDate": "2027-03-06",
+   "ym": "2027-03",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第133回 近畿救急医学研究会",
+   "prefecture": "兵庫",
+   "attendees": 700,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1793096887216001",
+   "useDate": "2027-03-06",
+   "ym": "2027-03",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第210回 近畿外科学会",
+   "prefecture": "京都",
+   "attendees": 500,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257810626001",
+   "useDate": "2027-03-11",
+   "ym": "2027-03",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第36回 日本頭頸部外科学会総会ならびに学術講演会",
+   "prefecture": "北海道",
+   "attendees": 1100,
+   "qty": 140,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257820003001",
+   "useDate": "2027-03-12",
+   "ym": "2027-03",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第67回 関東整形災害外科学会",
+   "prefecture": "東京",
+   "attendees": 400,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1790819596088001",
+   "useDate": "2027-03-12",
+   "ym": "2027-03",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第56回 日本慢性疼痛学会",
+   "prefecture": "兵庫",
+   "attendees": 550,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1791332395131001",
+   "useDate": "2027-03-12",
+   "ym": "2027-03",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第39回 日本肘関節学会学術集会",
+   "prefecture": "東京",
+   "attendees": 1000,
+   "qty": 105,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257827205001",
+   "useDate": "2027-03-13",
+   "ym": "2027-03",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第17回 日本がん生殖医療学会学術集会",
+   "prefecture": "宮崎",
+   "attendees": 500,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257836003001",
+   "useDate": "2027-03-25",
+   "ym": "2027-03",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第99回 日本胃癌学会総会",
+   "prefecture": "鳥取",
+   "attendees": 2000,
+   "qty": 140,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257907519001",
+   "useDate": "2027-03-26",
+   "ym": "2027-03",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第28回 日本正常圧水頭症学会学術集会",
+   "prefecture": "鹿児島",
+   "attendees": 300,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257912994001",
+   "useDate": "2027-03-27",
+   "ym": "2027-03",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第20回 日本骨盤臓器脱手術学会学術集会",
+   "prefecture": "千葉",
+   "attendees": 270,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257916682001",
+   "useDate": "2027-04-23",
+   "ym": "2027-04",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第40回 日本老年脳神経外科学会/日本脳神経看護学会東海地方部会",
+   "prefecture": "三重",
+   "attendees": 220,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1791166885497001",
+   "useDate": "2027-05-20",
+   "ym": "2027-05",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第53回 日本熱傷学会総会・学術集会",
+   "prefecture": "東京",
+   "attendees": 500,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1791166889838001",
+   "useDate": "2027-05-26",
+   "ym": "2027-05",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第52回 日本外科系連合学会学術集会",
+   "prefecture": "東京",
+   "attendees": 800,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257920618001",
+   "useDate": "2027-06-09",
+   "ym": "2027-06",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第111次 日本法医学会学術全国集会",
+   "prefecture": "富山",
+   "attendees": 700,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257924241001",
+   "useDate": "2027-06-10",
+   "ym": "2027-06",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "eventName": "第37回 特定非営利活動法人日本顎変形症学会総会学術大会",
+   "prefecture": "山梨",
+   "attendees": 1000,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257929112001",
+   "useDate": "2027-06-11",
+   "ym": "2027-06",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第27回 日本抗加齢医学会総会",
+   "prefecture": "大阪",
+   "attendees": 6000,
+   "qty": 280,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257934071001",
+   "useDate": "2027-06-12",
+   "ym": "2027-06",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第14回 日本眼形成再建外科学会学術集会",
+   "prefecture": "福岡",
+   "attendees": 300,
+   "qty": 35,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  },
+  {
+   "id": "F1788257937544001",
+   "useDate": "2027-06-17",
+   "ym": "2027-06",
+   "warehouseId": "W2",
+   "warehouseName": "大阪倉庫",
+   "eventName": "第70回 関西胸部外科学会学術集会",
+   "prefecture": "兵庫",
+   "attendees": 500,
+   "qty": 70,
+   "actual": null,
+   "colorMode": "total",
+   "colorQty": {
+    "C_RED": 0,
+    "C_BLUE": 0,
+    "C_PINK": 0,
+    "C_YELLOW": 0
+   },
+   "memo": "自動取込"
+  }
+ ],
+ "forecastMonthly": [
+  {
+   "ym": "2026-01",
+   "planned": 50,
+   "actual": 14,
+   "ratio": 0.28
+  },
+  {
+   "ym": "2026-02",
+   "planned": 735,
+   "actual": 585,
+   "ratio": 0.7959183673469388
+  },
+  {
+   "ym": "2026-03",
+   "planned": 1160,
+   "actual": 817,
+   "ratio": 0.7043103448275863
+  },
+  {
+   "ym": "2026-04",
+   "planned": 490,
+   "actual": 295,
+   "ratio": 0.6020408163265306
+  },
+  {
+   "ym": "2026-05",
+   "planned": 220,
+   "actual": 149,
+   "ratio": 0.6772727272727272
+  },
+  {
+   "ym": "2026-06",
+   "planned": 980,
+   "actual": 497,
+   "ratio": 0.5071428571428571
+  },
+  {
+   "ym": "2026-07",
+   "planned": 910,
+   "actual": 534,
+   "ratio": 0.5868131868131868
+  },
+  {
+   "ym": "2026-08",
+   "planned": 490,
+   "actual": 165,
+   "ratio": 0.336734693877551
+  },
+  {
+   "ym": "2026-09",
+   "planned": 430,
+   "actual": 192,
+   "ratio": 0.44651162790697674
+  },
+  {
+   "ym": "2026-10",
+   "planned": 1960,
+   "actual": null,
+   "ratio": null
+  },
+  {
+   "ym": "2026-11",
+   "planned": 1120,
+   "actual": null,
+   "ratio": null
+  },
+  {
+   "ym": "2026-12",
+   "planned": 770,
+   "actual": null,
+   "ratio": null
+  },
+  {
+   "ym": "2027-01",
+   "planned": 105,
+   "actual": null,
+   "ratio": null
+  },
+  {
+   "ym": "2027-02",
+   "planned": 350,
+   "actual": null,
+   "ratio": null
+  },
+  {
+   "ym": "2027-03",
+   "planned": 840,
+   "actual": null,
+   "ratio": null
+  },
+  {
+   "ym": "2027-04",
+   "planned": 35,
+   "actual": null,
+   "ratio": null
+  },
+  {
+   "ym": "2027-05",
+   "planned": 140,
+   "actual": null,
+   "ratio": null
+  },
+  {
+   "ym": "2027-06",
+   "planned": 525,
+   "actual": null,
+   "ratio": null
+  }
+ ],
+ "stocktakes": [
+  {
+   "id": "S20261009161649",
+   "date": "2026-10-09",
+   "time": "16:16",
+   "memo": " [箱カウント:{\"W1|C_RED\":40,\"W1|C_BLUE\":43,\"W1|C_PINK\":40,\"W1|C_YELLOW\":45}]",
+   "isBoxCount": true,
+   "total": 3568,
+   "details": [
+    {
+     "warehouseId": "W1",
+     "colorId": "C_RED",
+     "qty": 540
+    },
+    {
+     "warehouseId": "W1",
+     "colorId": "C_BLUE",
+     "qty": 443
+    },
+    {
+     "warehouseId": "W1",
+     "colorId": "C_PINK",
+     "qty": 490
+    },
+    {
+     "warehouseId": "W1",
+     "colorId": "C_YELLOW",
+     "qty": 395
+    },
+    {
+     "warehouseId": "W2",
+     "colorId": "C_RED",
+     "qty": 250
+    },
+    {
+     "warehouseId": "W2",
+     "colorId": "C_BLUE",
+     "qty": 500
+    },
+    {
+     "warehouseId": "W2",
+     "colorId": "C_PINK",
+     "qty": 550
+    },
+    {
+     "warehouseId": "W2",
+     "colorId": "C_YELLOW",
+     "qty": 400
+    }
+   ]
+  },
+  {
+   "id": "S20260903142853",
+   "date": "2026-09-03",
+   "time": "14:28",
+   "memo": "訂正: 大阪倉庫は未カウントのため2026-09-01の初期在庫値に戻す（千葉は09-03実測） [箱カウント:{\"W1|C_RED\":311,\"W1|C_BLUE\":55,\"W1|C_PINK\":318,\"W1|C_YELLOW\":425,\"W2|C_RED\":500,\"W2|C_BLUE\":500,\"W2|C_PINK\":700,\"W2|C_YELLOW\":500}]",
+   "isBoxCount": true,
+   "total": 3309,
+   "details": [
+    {
+     "warehouseId": "W1",
+     "colorId": "C_RED",
+     "qty": 311
+    },
+    {
+     "warehouseId": "W1",
+     "colorId": "C_BLUE",
+     "qty": 55
+    },
+    {
+     "warehouseId": "W1",
+     "colorId": "C_PINK",
+     "qty": 318
+    },
+    {
+     "warehouseId": "W1",
+     "colorId": "C_YELLOW",
+     "qty": 425
+    },
+    {
+     "warehouseId": "W2",
+     "colorId": "C_RED",
+     "qty": 500
+    },
+    {
+     "warehouseId": "W2",
+     "colorId": "C_BLUE",
+     "qty": 500
+    },
+    {
+     "warehouseId": "W2",
+     "colorId": "C_PINK",
+     "qty": 700
+    },
+    {
+     "warehouseId": "W2",
+     "colorId": "C_YELLOW",
+     "qty": 500
+    }
+   ]
+  },
+  {
+   "id": "S20260901113225",
+   "date": "2026-09-01",
+   "time": "11:32",
+   "memo": "初期在庫",
+   "isBoxCount": false,
+   "total": 3250,
+   "details": [
+    {
+     "warehouseId": "W1",
+     "colorId": "C_RED",
+     "qty": 250
+    },
+    {
+     "warehouseId": "W1",
+     "colorId": "C_BLUE",
+     "qty": 50
+    },
+    {
+     "warehouseId": "W1",
+     "colorId": "C_PINK",
+     "qty": 350
+    },
+    {
+     "warehouseId": "W1",
+     "colorId": "C_YELLOW",
+     "qty": 400
+    },
+    {
+     "warehouseId": "W2",
+     "colorId": "C_RED",
+     "qty": 500
+    },
+    {
+     "warehouseId": "W2",
+     "colorId": "C_BLUE",
+     "qty": 500
+    },
+    {
+     "warehouseId": "W2",
+     "colorId": "C_PINK",
+     "qty": 700
+    },
+    {
+     "warehouseId": "W2",
+     "colorId": "C_YELLOW",
+     "qty": 500
+    }
+   ]
+  }
+ ],
+ "pendingOrders": [
+  {
+   "id": "O1791547550252001",
+   "orderDate": "2026-10-09",
+   "expectedDate": "2026-11-13",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "status": "未入荷",
+   "receiveDate": "",
+   "memo": "",
+   "total": 1000,
+   "rows": [
+    {
+     "colorId": "C_RED",
+     "qty": 650
+    },
+    {
+     "colorId": "C_BLUE",
+     "qty": 350
+    }
+   ],
+   "overdue": false
+  }
+ ],
+ "purchaseOrders": [
+  {
+   "id": "O1791547550252001",
+   "orderDate": "2026-10-09",
+   "expectedDate": "2026-11-13",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "status": "未入荷",
+   "receiveDate": "",
+   "memo": "",
+   "total": 1000,
+   "rows": [
+    {
+     "colorId": "C_RED",
+     "qty": 650
+    },
+    {
+     "colorId": "C_BLUE",
+     "qty": 350
+    }
+   ],
+   "overdue": false
+  },
+  {
+   "id": "O1788229988824001",
+   "orderDate": "2026-09-01",
+   "expectedDate": "2026-09-15",
+   "warehouseId": "W1",
+   "warehouseName": "千葉倉庫",
+   "status": "入荷済",
+   "receiveDate": "2026-10-03",
+   "memo": "初期投入（発注済・未入荷）",
+   "total": 1000,
+   "rows": [
+    {
+     "colorId": "C_RED",
+     "qty": 250
+    },
+    {
+     "colorId": "C_BLUE",
+     "qty": 600
+    },
+    {
+     "colorId": "C_PINK",
+     "qty": 150
+    }
+   ],
+   "overdue": false
+  }
+ ],
+ "ratios": {
+  "C_RED": 0.3,
+  "C_BLUE": 0.35,
+  "C_PINK": 0.19999999999999998,
+  "C_YELLOW": 0.15
+ },
+ "boxes": {
+  "items": [
+   {
+    "boxNumber": "W1-赤-001",
+    "colorId": "C_RED",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-赤-002",
+    "colorId": "C_RED",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-赤-003",
+    "colorId": "C_RED",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-赤-004",
+    "colorId": "C_RED",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-赤-005",
+    "colorId": "C_RED",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-青-001",
+    "colorId": "C_BLUE",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "2026-10-06",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-青-002",
+    "colorId": "C_BLUE",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "2026-10-06",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-青-003",
+    "colorId": "C_BLUE",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "2026-10-06",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-青-004",
+    "colorId": "C_BLUE",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "2026-10-08",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-青-005",
+    "colorId": "C_BLUE",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "2026-10-12",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-青-006",
+    "colorId": "C_BLUE",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "2026-10-14",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-青-007",
+    "colorId": "C_BLUE",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "2026-10-14",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-青-008",
+    "colorId": "C_BLUE",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "2026-10-19",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-青-009",
+    "colorId": "C_BLUE",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "2026-10-19",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-青-010",
+    "colorId": "C_BLUE",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "2026-10-26",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-青-011",
+    "colorId": "C_BLUE",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-青-012",
+    "colorId": "C_BLUE",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-ピンク-001",
+    "colorId": "C_PINK",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-ピンク-002",
+    "colorId": "C_PINK",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "",
+    "memo": ""
+   },
+   {
+    "boxNumber": "W1-ピンク-003",
+    "colorId": "C_PINK",
+    "warehouseId": "W1",
+    "unitQty": 50,
+    "receivedDate": "2026-10-03",
+    "orderId": "O1788229988824001",
+    "openedDate": "",
+    "memo": ""
+   }
+  ],
+  "pairs": [
+   {
+    "warehouseId": "W1",
+    "colorId": "C_RED",
+    "unopenedCount": 5,
+    "unopenedQty": 250,
+    "nextBoxNumber": "W1-赤-001"
+   },
+   {
+    "warehouseId": "W1",
+    "colorId": "C_BLUE",
+    "unopenedCount": 2,
+    "unopenedQty": 100,
+    "nextBoxNumber": "W1-青-011"
+   },
+   {
+    "warehouseId": "W1",
+    "colorId": "C_PINK",
+    "unopenedCount": 3,
+    "unopenedQty": 150,
+    "nextBoxNumber": "W1-ピンク-001"
+   },
+   {
+    "warehouseId": "W1",
+    "colorId": "C_YELLOW",
+    "unopenedCount": 0,
+    "unopenedQty": 0,
+    "nextBoxNumber": ""
+   },
+   {
+    "warehouseId": "W2",
+    "colorId": "C_RED",
+    "unopenedCount": 0,
+    "unopenedQty": 0,
+    "nextBoxNumber": ""
+   },
+   {
+    "warehouseId": "W2",
+    "colorId": "C_BLUE",
+    "unopenedCount": 0,
+    "unopenedQty": 0,
+    "nextBoxNumber": ""
+   },
+   {
+    "warehouseId": "W2",
+    "colorId": "C_PINK",
+    "unopenedCount": 0,
+    "unopenedQty": 0,
+    "nextBoxNumber": ""
+   },
+   {
+    "warehouseId": "W2",
+    "colorId": "C_YELLOW",
+    "unopenedCount": 0,
+    "unopenedQty": 0,
+    "nextBoxNumber": ""
+   }
+  ],
+  "warnings": [
+   {
+    "type": "noUnopened",
+    "warehouseId": "W1",
+    "colorId": "C_YELLOW",
+    "message": "千葉倉庫 / 黄 の未開封箱が0箱です。"
+   },
+   {
+    "type": "noUnopened",
+    "warehouseId": "W2",
+    "colorId": "C_RED",
+    "message": "大阪倉庫 / 赤 の未開封箱が0箱です。"
+   },
+   {
+    "type": "noUnopened",
+    "warehouseId": "W2",
+    "colorId": "C_BLUE",
+    "message": "大阪倉庫 / 青 の未開封箱が0箱です。"
+   },
+   {
+    "type": "noUnopened",
+    "warehouseId": "W2",
+    "colorId": "C_PINK",
+    "message": "大阪倉庫 / ピンク の未開封箱が0箱です。"
+   },
+   {
+    "type": "noUnopened",
+    "warehouseId": "W2",
+    "colorId": "C_YELLOW",
+    "message": "大阪倉庫 / 黄 の未開封箱が0箱です。"
+   }
+  ],
+  "defaultUnitQty": 50,
+  "lastCountDate": "2026-10-09"
+ }
+}

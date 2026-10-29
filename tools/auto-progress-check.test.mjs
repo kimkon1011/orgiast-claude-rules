@@ -231,3 +231,71 @@ test('check completion accepts durable inbox delivery and does not retry', async
  assert.equal(calls, 1);
  assert.equal(readLedger(ledgerFile(home))[0].checkNotifiedResult, 'done');
 });
+
+test('check 達成＋nextClaude ありは resume を1回だけ起動し、成果 JSON を owner へ報告する', async () => {
+  const home = tmp();
+  addCheck({ home, now, session: 'resume-once', check: 'node check.mjs', label: '平尾さん返信', deadline: '+24h', nextClaude: '返信を読み Drive 保存・memory 追記・業者依頼文案' });
+  const resumes = [], messages = [];
+  const io = { ...baseIo,
+    executeCheck: () => ({ code: 0, text: '1、５月２１日に指導をうけた、', fullText: '1、５月２１日に指導をうけた、\n点検はしていない' }),
+    resume: async (row, opts) => { resumes.push({ row, opts }); return { outcome: 'progressed', state: 'progressed', reason: '返信を Drive に保存し memory に追記した', artifact: 'drive/folder/返信.md', nextKim: '' }; },
+    notifyOwner: async (_, text) => { messages.push(text); return { delivered: 'dm' }; } };
+  const first = await watch({ home, now, io });
+  await watch({ home, now, io }); // 2周目は再実行しない（二重起動防止）
+  assert.equal(resumes.length, 1);
+  assert.equal(first.resumed, 1);
+  assert.match(resumes[0].opts.lead, /check が達成した。check の出力全文: 1、５月２１日に指導をうけた、\n点検はしていない/);
+  assert.match(resumes[0].opts.lead, /次の手: 返信を読み Drive 保存・memory 追記・業者依頼文案。実行して結果を報告せよ/);
+  const row = readLedger(ledgerFile(home)).at(-1);
+  assert.equal(row.checkResumeState, 'progressed');
+  assert.equal(row.checkResumeNotifiedState, 'progressed');
+  assert.match(row.checkResumeOutcome, /^progressed: /);
+  assert.equal(row.resumeCount, 1);
+  assert.equal(messages.length, 2); // check 完了通知 + 再開成果通知
+  assert.match(messages[0], /点検はしていない/);
+  assert.match(messages[1], /check が達成したため、次の手をセッション再開で実行しました: progressed/);
+  assert.match(messages[1], /"outcome":"progressed"/);
+  assert.match(messages[1], /返信を Drive に保存し memory に追記した/);
+  assert.match(messages[1], /成果物: drive\/folder\/返信\.md/);
+  const inbox = readLedger(path.join(home, '.claude', 'auto-progress-inbox', 'resume-once.jsonl'));
+  assert.equal(inbox.at(-1).state, 'progressed');
+});
+
+test('複数行の check 出力は checkTextFull に全文で保存され、完了通知本文にも全文が載る', async () => {
+  const home = tmp();
+  addCheck({ home, now, session: 'full-text', check: 'node check.mjs', label: '返信確認', deadline: '+24h' });
+  const messages = [];
+  const io = { ...baseIo, executeCheck: () => ({ code: 0, text: '1行目だけ', fullText: '1、５月２１日に指導をうけた、\n点検はしていない' }), notifyOwner: async (_, text) => { messages.push(text); return { delivered: 'dm' }; } };
+  await watch({ home, now, io });
+  const row = readLedger(ledgerFile(home)).at(-1);
+  assert.equal(row.checkText, '1行目だけ'); // 既存の1行フィールドは互換で残す
+  assert.equal(row.checkTextFull, '1、５月２１日に指導をうけた、\n点検はしていない');
+  assert.match(messages[0], /完了: 返信確認\n1、５月２１日に指導をうけた、\n点検はしていない$/);
+});
+
+test('check 達成後の再開は実行者不在を延期し、次の巡回で再試行する', async () => {
+  const home = tmp();
+  addCheck({ home, now, session: 'defer-retry', check: 'node check.mjs', label: '返信確認', deadline: '+24h', nextClaude: '返信を読んで処理する' });
+  const resumes = [], messages = [];
+  const io = { ...baseIo, executeCheck: () => ({ code: 0, text: '達成', fullText: '達成' }),
+    resume: async () => { resumes.push(1); return resumes.length === 1
+      ? { outcome: 'deferred', deferred: true, reason: '実行者なし: codex-do exit 3' }
+      : { outcome: 'progressed', state: 'progressed', reason: '処理した', nextKim: '' }; },
+    notifyOwner: async (_, text) => { messages.push(text); return { delivered: 'dm' }; } };
+  await watch({ home, now, io });
+  let row = readLedger(ledgerFile(home)).at(-1);
+  assert.equal(resumes.length, 1);
+  assert.equal(row.checkResumeState, ''); // 延期は確定させない
+  assert.equal(row.resumeCount, 0); // 回数も戻す
+  assert.match(row.checkResumeOutcome, /^deferred: 実行者なし: codex-do exit 3/);
+  assert.ok(row.checkResumeDeferredAt);
+  assert.equal(messages.length, 1); // 成果はまだ無いので完了通知のみ
+  await watch({ home, now: now + 3600000, io });
+  row = readLedger(ledgerFile(home)).at(-1);
+  assert.equal(resumes.length, 2);
+  assert.equal(row.checkResumeState, 'progressed');
+  assert.equal(row.checkResumeNotifiedState, 'progressed');
+  assert.equal(messages.length, 2);
+  await watch({ home, now: now + 7200000, io });
+  assert.equal(resumes.length, 2); // 確定後は再実行しない
+});

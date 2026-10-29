@@ -66,6 +66,7 @@ export async function checkPromise(row, { home, now, patch, io = {} }) {
     verdict: state === 'done' ? 'done' : state === 'error' ? 'check_error' : overdue ? 'unmet' : 'in_progress',
     ...(state === 'done' ? { status: 'done', doneAt: row.doneAt || new Date(now).toISOString() } : {}) };
   patch(rowKey(row), changes);
+  Object.assign(row, changes); // 同じ周の呼び出し側（check達成後の再開など）が結果をすぐ使えるようにする
   if (state === 'unmet' && !overdue) {
     const lastNotified = Date.parse(row.lastUnmetNotifiedAt || row.ts) || 0;
     if (now - lastNotified < UNMET_INTERVAL_MS) return state;

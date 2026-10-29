@@ -596,8 +596,35 @@ async function execute(command, args, ctx) {
     const unverified = String(args.unverified ?? '').trim();
     if (args.tests === 'failed' && progress >= 100) return { error: 'tests_failed' };
     if (progress >= 100 && !evidence && !unverified) return { error: 'evidence_required' };
-    const noop = Boolean(args.noop) || progress <= (currentLog().at(-1)?.progress ?? 0);
+    const previousRow = currentLog().at(-1);
+    const baselineIso = previousRow?.ts ?? state.startedAt;
+    const baselineMs = baselineIso ? Date.parse(baselineIso) : 0;
+    const rawArtifacts = typeof args.artifact === 'string'
+      ? args.artifact.split(',').map((p) => p.trim()).filter(Boolean)
+      : Array.isArray(args.artifact)
+        ? args.artifact.map((p) => String(p).trim()).filter(Boolean)
+        : [];
+    const freshArtifacts = [];
+    const staleArtifacts = [];
+    const seen = new Set();
+    for (const raw of rawArtifacts) {
+      const resolved = path.resolve(raw);
+      if (seen.has(resolved)) continue;
+      seen.add(resolved);
+      try {
+        const st = fs.statSync(resolved);
+        if (st.mtimeMs > baselineMs) {
+          freshArtifacts.push(resolved);
+        } else {
+          staleArtifacts.push(resolved);
+        }
+      } catch {
+        staleArtifacts.push(resolved);
+      }
+    }
+    const noop = Boolean(args.noop) || (progress <= (previousRow?.progress ?? 0) && freshArtifacts.length === 0);
     const row = { ts: now.toISOString(), host: ctx.hostname, iteration: state.totalIterations + 1, summary: args.summary.trim(), progress, noop, codexUsed: Boolean(args.codex), nextDelaySec: noop ? Math.max(1800, nextDelaySec) : nextDelaySec };
+    if (freshArtifacts.length > 0) row.artifacts = freshArtifacts;
     if (args['tokens-out'] !== undefined) row.tokensOut = Number(args['tokens-out']);
     fs.appendFileSync(paths.log, `${JSON.stringify(row)}\n`, 'utf8');
     log.push(row);
@@ -609,7 +636,7 @@ async function execute(command, args, ctx) {
         state.watches.push({ id: nextWatchId(state), objective: objective.objective, unverified, evidence, since: now.toISOString(), lastCheckAt: null, checks: 0, ng: 0 });
       }
       save(); await notify(null, true, { evidence, unverified });
-      return { ok: true, watchdog: null, status: 'done', noop, nextDelaySec: row.nextDelaySec, watch: unverified ? state.watches.at(-1).id : null };
+      return { ok: true, watchdog: null, status: 'done', noop, nextDelaySec: row.nextDelaySec, watch: unverified ? state.watches.at(-1).id : null, artifacts: freshArtifacts, staleArtifacts };
     }
     const fired = await watchdog();
     state.jevDecision = null;
@@ -619,7 +646,7 @@ async function execute(command, args, ctx) {
       if (action === 'ESCALATE') { state.status = 'paused'; state.pausedReason = 'jev_escalate'; }
     }
     save();
-    return { ok: true, watchdog: fired, status: state.status, noop, nextDelaySec: row.nextDelaySec, jevDecision: state.jevDecision };
+    return { ok: true, watchdog: fired, status: state.status, noop, nextDelaySec: row.nextDelaySec, jevDecision: state.jevDecision, artifacts: freshArtifacts, staleArtifacts };
   }
   if (command === 'watch') {
     const id = String(args.id ?? '').trim();
@@ -781,7 +808,7 @@ export async function runAutopilot(command, args = {}, options = {}) {
 
 export async function main(argv = process.argv.slice(2)) {
   try {
-    const options = Object.fromEntries(['objective', 'done', 'max-iter-per-day', 'max-hours-per-day', 'max-noop', 'max-total-iter', 'summary', 'progress', 'tests', 'tokens-out', 'next-delay', 'reason', 'question', 'question-deadline', 'evidence', 'unverified', 'id', 'result', 'note', 'detail'].map((key) => [key, { type: 'string' }]));
+    const options = Object.fromEntries(['objective', 'done', 'max-iter-per-day', 'max-hours-per-day', 'max-noop', 'max-total-iter', 'summary', 'progress', 'tests', 'tokens-out', 'next-delay', 'reason', 'question', 'question-deadline', 'evidence', 'unverified', 'id', 'result', 'note', 'detail', 'artifact'].map((key) => [key, { type: 'string' }]));
     for (const key of ['noop', 'codex', 'pretty', 'dry-run']) options[key] = { type: 'boolean' };
     const { values, positionals } = parseArgs({ args: argv, options, allowPositionals: true });
     const result = await runAutopilot(positionals[0], values);

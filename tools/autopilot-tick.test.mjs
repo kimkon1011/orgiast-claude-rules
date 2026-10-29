@@ -945,3 +945,58 @@ test('決定論的な完了・テスト失敗・noop・上限では Jev を呼�
   assert.equal((await done.call('post', { summary: 'done', progress: 100, evidence: 'verified' })).status, 'done');
   assert.equal(calls, 0);
 });
+
+test('post with --artifact counts fresh file as progress, resets consecutiveNoop, and records artifacts', async (t) => {
+  const f = fixture(t);
+  await f.call('start', { objective: 'maintain 95% SLA', 'max-noop': 3 });
+  await f.call('post', { summary: 'first iter', progress: 99 });
+
+  const noopPost = await f.call('post', { summary: 'no artifact', progress: 99 });
+  assert.equal(noopPost.noop, true);
+  assert.equal((await f.call('status')).state.consecutiveNoop, 1);
+
+  const freshPath = path.join(f.opts.home, 'fresh-artifact.txt');
+  fs.writeFileSync(freshPath, 'new content');
+  const freshTime = new Date(NOW.getTime() + 10_000);
+  fs.utimesSync(freshPath, freshTime, freshTime);
+
+  const relativeFresh = path.relative(process.cwd(), freshPath);
+  const freshPost = await f.call('post', { summary: 'maintained with artifact', progress: 99, artifact: relativeFresh });
+  assert.equal(freshPost.noop, false);
+  assert.deepEqual(freshPost.artifacts, [path.resolve(freshPath)]);
+  assert.deepEqual(freshPost.staleArtifacts, []);
+  assert.equal((await f.call('status')).state.consecutiveNoop, 0);
+
+  const logLines = fs.readFileSync(f.paths.log, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(logLines.at(-1).artifacts, [path.resolve(freshPath)]);
+});
+
+test('post with stale or missing artifact is noop, records staleArtifacts, and explicit noop overrides fresh artifact', async (t) => {
+  const f = fixture(t);
+  await f.call('start', { objective: 'maintain SLA' });
+  await f.call('post', { summary: 'first iter', progress: 99 });
+
+  const stalePath = path.join(f.opts.home, 'stale-artifact.txt');
+  fs.writeFileSync(stalePath, 'old content');
+  const staleTime = new Date(NOW.getTime() - 10_000);
+  fs.utimesSync(stalePath, staleTime, staleTime);
+  const missingPath = path.join(f.opts.home, 'missing-artifact.txt');
+
+  const stalePost = await f.call('post', { summary: 'stale artifacts', progress: 99, artifact: `${stalePath}, ${missingPath}` });
+  assert.equal(stalePost.noop, true);
+  assert.deepEqual(stalePost.artifacts, []);
+  assert.deepEqual(stalePost.staleArtifacts, [path.resolve(stalePath), path.resolve(missingPath)]);
+
+  const logLines = fs.readFileSync(f.paths.log, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(logLines.at(-1).artifacts, undefined);
+
+  const freshPath = path.join(f.opts.home, 'fresh-again.txt');
+  fs.writeFileSync(freshPath, 'fresh');
+  const freshTime = new Date(NOW.getTime() + 10_000);
+  fs.utimesSync(freshPath, freshTime, freshTime);
+
+  const explicitNoop = await f.call('post', { summary: 'explicit noop', progress: 99, artifact: freshPath, noop: true });
+  assert.equal(explicitNoop.noop, true);
+  assert.deepEqual(explicitNoop.artifacts, [path.resolve(freshPath)]);
+  assert.deepEqual(explicitNoop.staleArtifacts, []);
+});

@@ -421,7 +421,7 @@ test('短文・質問でも明示した次の作業には恒久策が必要', ()
 });
 
 const promiseText = `確認を続けます。\n次に kim がすること: なし\nこの後の自動進行: 私が毎時進捗を確認して変化時に報告します\nこのセッション: ${SESSION_PHRASES.open}`;
-const use = (name, input = {}) => row('assistant', [{ type: 'tool_use', name, input }]);
+const use = (name, input = {}) => row('assistant', [{ type: 'tool_use', id: 'wake-call', name, input }]);
 const cron = use('CronCreate', { cron: '17 * * * *', recurring: true });
 const addCheckCmd = 'node tools/auto-progress.mjs --add-check --session test --check "cmd" --deadline +24h --label "test" --next-claude "retry"';
 const addCheckBash = use('Bash', { command: addCheckCmd });
@@ -499,10 +499,10 @@ test('空・なし・なしで始まる値には起床手段は不要', () => {
   }
 });
 
-test('現在ターンのAgentと明示的なバックグラウンドシェルはpass', () => {
+test('Agent・PowerShellは当ターン、background Bashは次ターンもpass', () => {
   for (const transcript of [use('Agent'), use('Agent', { run_in_background: true }), use('Bash', { run_in_background: true }), use('PowerShell', { run_in_background: true })]) {
     assert.equal(judgeNextAction(promiseText, transcript).decision, 'pass');
-    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '新たな依頼')}`).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '新たな依頼')}`).decision, transcript.includes('Bash') ? 'pass' : 'block');
     assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', [{ type: 'tool_result', content: 'started' }])}`).decision, 'pass');
     assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '<task-notification>終了</task-notification>', { isMeta: true })}`).decision, 'pass');
   }
@@ -642,13 +642,13 @@ test('check 無しの open 約束行は待機中の起床証拠にしない', ()
   });
 });
 
-test('当ターンの ScheduleWakeup と Monitor は起床証拠になる', () => {
+test('ScheduleWakeup と Monitor の登録は次ターンも起床証拠になる', () => {
   for (const name of ['ScheduleWakeup', 'Monitor']) {
-    const transcript = use(name, {});
+    const transcript = name === 'Monitor' ? use(name) : row('assistant', [{ type: 'tool_use', id: 'wake-call', name, input: { delaySeconds: 3600 } }], { timestamp: new Date().toISOString() });
     for (const state of ['open', 'pending']) {
       assert.equal(judgeNextAction(promiseText.replace(SESSION_PHRASES.open, SESSION_PHRASES[state]), transcript).decision, 'pass');
     }
-    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '次の依頼')}`).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '次の依頼')}`).decision, 'pass');
     assert.equal(judgeNextAction(promiseText, row('assistant', [{ type: 'tool_use', name }], { isSidechain: true })).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
   }
   assert.equal(judgeNextAction(promiseText, use('ScheduleWakeup', { stop: true })).code, 'AUTOPILOT-NO-SESSION-WAKEUP');

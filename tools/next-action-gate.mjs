@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 export const GATE_CONTRACT = {"name": "next-action-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "next-action-gate"}]};
+import { sessionWakeupEvidence } from './session-wakeup-evidence.mjs';
 import { isEntry } from './is-entry.mjs';
 import { readTranscriptContext } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
@@ -175,7 +176,7 @@ function hasOpenSessionCheck(input) {
   } catch { return false; }
 }
 
-// auto-progress --add-check survives user turns (the ledger carries the check forward); background evidence belongs only to this turn.
+// Persistent registrations survive user turns until expiration or task termination.
 function hasSessionWakeup(raw, input = {}) {
   let autoProgress = false;
   let background = false;
@@ -200,7 +201,7 @@ function hasSessionWakeup(raw, input = {}) {
       }
       // Completion detection is deliberately conservative: any current-turn call counts.
       if ((tool.name === 'Agent' && tool.input?.run_in_background !== false)
-        || (/^(?:Bash|PowerShell)$/.test(tool.name || '') && tool.input?.run_in_background === true)) background = true;
+        || (tool.name === 'PowerShell' && tool.input?.run_in_background === true)) background = true;
     }
   }
   if (!autoProgress && input.session_id) {
@@ -209,9 +210,8 @@ function hasSessionWakeup(raw, input = {}) {
         .some(row => row.sessionId === input.session_id && row.status === 'open' && typeof row.check === 'string' && row.check.trim());
     } catch { /* A missing or unreadable ledger is not wakeup evidence. */ }
   }
-  const scheduled = blocks(currentTurnEntries(raw), 'tool_use').some(tool =>
-    (tool.name === 'ScheduleWakeup' && tool.input?.stop !== true) || tool.name === 'Monitor');
-  return { autoProgress, background, scheduled };
+  const persistent = sessionWakeupEvidence(raw, input.now ?? Date.now());
+  return { autoProgress, background: background || persistent.background, scheduled: persistent.scheduled };
 }
 
 export function judgeNextAction(text, transcriptRaw = '', input = {}) {

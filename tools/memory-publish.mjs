@@ -14,6 +14,20 @@ function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8'))
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const serialize = bundle => '// 自動生成。編集しない。コミットしない。\nmodule.exports = ' + JSON.stringify(bundle, null, 2) + ';\n';
 
+export function syncServerBeforeDeploy(repo, run = spawnSync) {
+  // The trusted nightly checkout must follow merged server code, otherwise a
+  // memory-only deploy can silently remove newly added API routes.
+  if (!fs.existsSync(path.join(repo, '.git'))) return;
+  const git = args => {
+    const result = run('git', args, { cwd: repo, shell: false, encoding: 'utf8', windowsHide: true, timeout: 60000 });
+    if (result.error || result.status !== 0) throw new Error('NG:memoryserve main の同期に失敗（配備は中止）');
+    return String(result.stdout || '').trim();
+  };
+  if (git(['branch', '--show-current']) !== 'main' || git(['status', '--porcelain', '--untracked-files=no'])) throw new Error('NG:memoryserve checkout が clean main ではありません（配備は中止）');
+  git(['fetch', 'origin', 'main']);
+  git(['merge', '--ff-only', 'origin/main']);
+}
+
 export function vercelCommand(options = {}) {
   if ((options.platform || process.platform) !== 'win32') return { file: 'vercel', args: [] };
   const run = options.spawnSyncImpl || spawnSync;
@@ -46,6 +60,7 @@ export async function publishMemories(options = {}) {
   if (!unchanged) { bundle.generatedAt = (options.now || new Date()).toISOString(); content = serialize(bundle); }
   const result = { exported: exported.exported, files: Object.keys(files).length, bytes: Buffer.byteLength(content), deploy: 'skip', removedLegacyDirectory: false, removedLegacyPath: false };
   if (dryRun) { emit(`dry-run: memory bundle: files=${result.files} bytes=${result.bytes}`); return result; }
+  if (options.deploy && !unchanged) syncServerBeforeDeploy(repo, options.spawnSyncImpl || spawnSync);
   for (const [name, field] of [['memory-bundle', 'removedLegacyDirectory'], ['memory-bundle.generated.js', 'removedLegacyPath']]) {
     const legacy = path.join(repo, name);
     if (fs.existsSync(legacy)) { fs.rmSync(legacy, { recursive: true }); result[field] = true; emit(`旧 ${name}${field === 'removedLegacyDirectory' ? '/ ディレクトリを削除' : ' を削除'}: ${legacy}`); }

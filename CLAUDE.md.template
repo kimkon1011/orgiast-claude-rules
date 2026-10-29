@@ -85,3 +85,5 @@ Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM などの�
 - 他AIの障害は Claude で代替せず、別の他AIで吸収し、復旧したら戻す。Claude（監督）へ逆流させるのが最も高くつく。
 - 作業の割り振りは他AIレーン名を**先に・具体的に**書く（例: 要約=Gemini、下書き=Kimi、実装=Codex、Claude=verify のみ）。「必要なら他AIも使う」のような弱い表現は禁止。
 - **Claude だけで実装しない・従量課金で Claude Code を動かさない（kim 2026-10-17 厳命・絶対）**: 実装コードの直接書き込み・大きなインラインプログラム・実装サブエージェントは hook がモデルを問わず deny する。解除は user がプロンプトに `[CLAUDE-IMPL-OK]` と書いた60分だけ（override ファイル・クールダウン自動解除は廃止）。APIキー／Console ログインの Claude Code は `api-billing-guard` が全ツールを止める。AI の従量課金は全アカウントの Gmail 領収書を毎日集計して kim に DM する（ONBOARDING §2.8.5）。
+
+案件の引き継ぎ: kim 操作アカウントの案件作業は case-sessions に自動保存。別席では `/case-resume <案件ID/案件名>`（初回6KB以内）、明示紐付けは `/case <案件ID>`。全文は必要箇所だけ同期して Grep。閉じる前に case-handoff.mjs flush で STATE 更新を確認。

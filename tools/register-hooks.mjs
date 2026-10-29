@@ -222,11 +222,14 @@ try {
   let policyRepaired = 0;
   let costLoopMigrated = 0;
   if (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks)) settings.hooks = {};
-  for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'Notification']) if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
+  for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd', 'Notification']) if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
   added += removeDailySessionHooks(settings);
   const command = (name, extra = '') => `node "${path.join(repo, 'tools', name)}"${extra}`;
   // 2026-09-06: 9本を別プロセスで動かすと304 Stop中198回が再Stopになったため、
   // ファイル名で旧登録を拾い、PCごとに異なるrepoパスのrunner 1本へ収束させる。
+  for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd']) {
+    if (add(settings.hooks[event], 'case-handoff.mjs', { hooks: [{ type: 'command', command: command('case-handoff.mjs', ' hook'), timeout: 60 }] })) added += 1;
+  }
   const oldStopGates = [
     'handoff-quality-gate.mjs', 'stop-gate.mjs', 'manual-request-fullsteps-gate.mjs',
     'handoff-investigation-gate.mjs', 'handoff-info-guard.mjs', 'negative-claim-gate.mjs',

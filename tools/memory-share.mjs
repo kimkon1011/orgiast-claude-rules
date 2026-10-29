@@ -5,24 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { machineIdentity } from './machine-identity.mjs';
-import { redactSecrets } from './redact-secrets.mjs';
+import { SECRET_PATTERNS, redactMemoryForShare as redactForShare } from './lib/share-secrets.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { keyserveAuthHeaders, requireKeyservePcId, keyserveSecret } from './keyserve-auth.mjs';
 import { isKimOperated } from './lib/kim-operated.mjs';
 
 const DEFAULT_MEMORY_URL = 'https://orgiast-memoryserve.vercel.app/api/memory';
 // 伏字化した後の本文に対して判定する。伏字で消せない秘密が残るファイルだけを丸ごと除外する。
-const SECRET_PATTERNS = [
-  ['Discord webhook URL', /discord\.com\/api\/webhooks\/\d/i],
-  ['OpenAI API key', /sk-[A-Za-z0-9]{20,}/],
-  ['Groq API key', /gsk_[A-Za-z0-9]{20,}/],
-  ['GitHub token', /ghp_[A-Za-z0-9]{20,}/],
-  ['Slack bot token', /xoxb-(?!\*\*\*REDACTED\*\*\*)/],
-  ['Google API key', /AIza[A-Za-z0-9_-]{20,}/],
-  ['private key', /-----BEGIN .*PRIVATE KEY-----/],
-  ['40文字以上のhex', /[A-Fa-f0-9]{40,}/],
-  ['ORGIAST_SHARED_SECRET', /ORGIAST_SHARED_SECRET\s*=\s*\S/],
-];
 const CUSTOMER_PATTERNS = [
   ['案件ID', /C0\d{3,}/],
   ['法人名', /株式会社|有限会社|合同会社/],
@@ -30,7 +19,6 @@ const CUSTOMER_PATTERNS = [
 const EXCLUDED_FILE = 'EXCLUDED.md';
 // user 型は kim 本人が操作する席にだけ入れる。受信側は本文を読まずに名前で判別する。
 const isUserMemory = name => /^user_[^/]*\.md$/.test(String(name));
-const redactForShare = text => redactSecrets(text).replace(/[A-Fa-f0-9]{40,}/g, '***REDACTED***');
 
 function isNonMemoryFile(name) {
   return name.startsWith('.') || name.includes('-bak-') || name.includes('.bak') || name.endsWith('~');

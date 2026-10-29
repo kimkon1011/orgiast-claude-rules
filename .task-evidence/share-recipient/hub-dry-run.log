@@ -1,0 +1,25 @@
+[dry-run] update: hub/ONBOARDING.md
+[dry-run] unchanged: rules/ai-ops-playbook.md
+[dry-run] unchanged: rules/gas.md
+[dry-run] unchanged: rules/nextjs.md
+[dry-run] unchanged: skills/autopilot.md
+[dry-run] unchanged: skills/case-consult-sources.md
+[dry-run] unchanged: skills/deploy-verify.md
+[dry-run] unchanged: skills/design-deck.md
+[dry-run] unchanged: skills/fleet-mail.md
+[dry-run] unchanged: skills/gas-project-setup.md
+[dry-run] unchanged: skills/growi-fetch.md
+[dry-run] unchanged: skills/makimono-search.md
+[dry-run] unchanged: skills/meishi.md
+[dry-run] unchanged: skills/meishi-order.md
+[dry-run] create: skills/rebooth-customer-interview.md
+[dry-run] unchanged: skills/requirements-freeze.md
+[dry-run] unchanged: skills/rules-sync.md
+[dry-run] unchanged: skills/session.md
+[dry-run] unchanged: skills/session-close.md
+[dry-run] unchanged: skills/session-start.md
+[dry-run] unchanged: skills/session-triage.md
+[dry-run] unchanged: skills/share-knowledge.md
+[dry-run] unchanged: skills/used-shopping.md
+[dry-run] manifest.json: would update version 30->31
+hub-push: uploaded=0 unchanged=21 created=0 version=30->30

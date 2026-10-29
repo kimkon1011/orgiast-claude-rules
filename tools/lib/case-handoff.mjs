@@ -8,6 +8,11 @@ export const STATE_LIMIT = 4096;
 export const RESUME_LIMIT = 6144;
 export const HEADINGS = ['目的', '顧客の意向', '決定事項', '未完了・次の一手', '関連ファイル・ID', '最終更新', '作業中の席'];
 export const hash = value => crypto.createHash('sha256').update(value).digest('hex');
+// Boundary-only empty records advance the cursor without changing the payload.
+export const canonicalMarkdown = value => value.replace(/^\n+|\n+$/g, '');
+export const batchIdentity = body => hash(JSON.stringify([
+  body.caseId, body.sessionId, body.previousUuid || '', body.lastUuid, hash(body.markdown),
+]));
 export const bytes = value => Buffer.byteLength(value, 'utf8');
 export function clip(value, limit) {
   let result = '', size = 0;
@@ -75,10 +80,10 @@ export function nextBatch(raw, cursor, identity, caseId, maxBytes = 180000) {
   if (!selected.length) return null;
   const lastUuid = selected.at(-1).uuid;
   const timestamp = selected.find(r => r.timestamp)?.timestamp || new Date().toISOString();
-  return { version: 1, caseId, ...identity, previousUuid: cursor || '', lastUuid,
-    batchId: hash(`${identity.sessionId}\n${lastUuid}`), timestamp,
-    markdown: selected.map(r => r.markdown).join('\n'),
+  const batch = { version: 2, caseId, ...identity, previousUuid: cursor || '', lastUuid, timestamp,
+    markdown: canonicalMarkdown(selected.map(r => r.markdown).join('\n')),
     userCount: selected.filter(r => r.role === 'user').length };
+  return { ...batch, batchId: batchIdentity(batch) };
 }
 // The renderer bounds every section independently so late headings never vanish.
 export function renderState(model, source, seats = []) {

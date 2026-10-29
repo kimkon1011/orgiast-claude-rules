@@ -4,6 +4,7 @@
     {"path": "tools/kim-discord-report-gate.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/kim-inbox.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/lib/kim-discord-allowlist.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
+    {"path": "tools/lib/fleet-owner.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox / notify-owner が使う PC 所有者解決（notify-owner から切り出し）"},
     {"path": "tools/notify-owner.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "config/kim-discord-allowlist.json", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
 

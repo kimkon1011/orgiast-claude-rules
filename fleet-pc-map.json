@@ -16,6 +16,7 @@
     "sheetName": "作業用004民泊用",
     "remoteName": "作業用004民泊用",
     "account": "nishi@orgiast.jp",
+    "discordId": "1543817340058083368",
     "hostname": "DESKTOP-PPD5V8I",
     "deviceId": "3BF4B9EF-B428-450D-9AC2-C59AF0D1C9B3",
     "_correction": "2026-10-09 kim のスクリーンショット2枚で確定: Chrome リモートデスクトップ『作業用004 民泊』の接続先のデバイス名＝DESKTOP-PPD5V8I（デバイスID 上記）。『作業用011』の接続先のデバイス名は『作業用011』（HP EliteDesk 800 G3 SFF、デバイスID B79CA602-6163-4252-B2A0-2A96C61F6767）で別のPC。よって kimko-PC の実体は作業用004民泊用で、シート行『作業用011(=DESKTOP-PPD5V8I)』の紐付けは誤り。sheetName と aliases は fleet-liveness がシート行の統合に使うため、シート側の表記を直すまで残す。アカウント nishi@ は kim 回答(2026-10-08)",
@@ -36,6 +37,7 @@
   "nishi-PC": {
     "remoteName": "作業用019",
     "account": "nishi@orgiast.jp",
+    "discordId": "1543817340058083368",
     "_evidenceRemoteName": "kim のスクリーンショット(2026-10-09): Chrome リモートデスクトップ『作業用019/nishi』の接続先の設定→詳細情報でデバイス名 DESKTOP-04U31RG（Precision T3610、デバイスID 9D75ACC5-EB0D-48FB-B27E-D60113A9417B）。nishi-PC 自己申告の hostname=DESKTOP-04U31RG(2026-10-08 fleet-mail 返信)と一致。アカウント nishi@ は kim 回答(2026-10-08)",
     "hostname": "DESKTOP-04U31RG",
     "aliases": [

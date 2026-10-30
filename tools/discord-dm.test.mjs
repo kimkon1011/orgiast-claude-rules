@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeIndex } from './onboarding-sync.mjs';
-import { main, sendDiscordDm } from './discord-dm.mjs';
+import { main, REPLY_TO_KIM_FOOTER, sendDiscordDm } from './discord-dm.mjs';
+
+const withFooter = text => `${text}\n\n${REPLY_TO_KIM_FOOTER}`;
 
 const recipient = { id: '123456789', label: '百瀬' };
 const resolve = async () => recipient;
@@ -13,7 +15,7 @@ const response = ({ ok = true, status = 200, json = {} } = {}) => ({ ok, status,
 test('DMチャンネル作成から本文投稿まで2回だけ呼ぶ', async () => {
   const calls = [];
   const result = await sendDiscordDm('百瀬', 'hello', {
-    token: 'test-token', resolve, plainJaImpl: async (text) => text,
+    token: 'test-token', resolve, noCopyKim: true, plainJaImpl: async (text) => text,
     fetchImpl: async (url, init) => {
       calls.push({ url, init });
       return calls.length === 1 ? response({ json: { id: 'dm-channel' } }) : response();
@@ -24,29 +26,57 @@ test('DMチャンネル作成から本文投稿まで2回だけ呼ぶ', async ()
   assert.match(calls[0].url, /users\/@me\/channels$/);
   assert.deepEqual(JSON.parse(calls[0].init.body), { recipient_id: recipient.id });
   assert.match(calls[1].url, /channels\/dm-channel\/messages$/);
-  assert.deepEqual(JSON.parse(calls[1].init.body), { content: 'hello' });
+  assert.deepEqual(JSON.parse(calls[1].init.body), { content: withFooter('hello') });
 });
 
-test('本文は書き換えず、そのまま送る（LLM平易化を通さない）', async () => {
+test('kim 以外への代筆は返答先の一文を末尾に1回だけ付ける', async () => {
   const bodies = [];
-  await sendDiscordDm('百瀬', 'dry-run 検証: 上記の件、ご確認ください', {
-    token: 'test-token', resolve,
+  const send = text => sendDiscordDm('百瀬', text, {
+    token: 'test-token', resolve, noCopyKim: true,
+    fetchImpl: async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return bodies.length % 2 === 1 ? response({ json: { id: 'dm' } }) : response();
+    },
+  });
+  await send('本文\n');
+  await send(`本文\n\n${REPLY_TO_KIM_FOOTER}`);
+  assert.equal(bodies[1].content, withFooter('本文'));
+  assert.equal(bodies[3].content, withFooter('本文'));
+});
+
+test('金功勇本人宛てには返答先の一文を付けない', async () => {
+  const bodies = [];
+  const kim = { id: 'kim-id', label: '金功勇' };
+  await sendDiscordDm('金功勇', '本文', {
+    token: 'test-token', resolve: async () => kim, kimActionRequired: true,
     fetchImpl: async (_url, init) => {
       bodies.push(JSON.parse(init.body));
       return bodies.length === 1 ? response({ json: { id: 'dm' } }) : response();
     },
   });
-  assert.equal(bodies[1].content, 'dry-run 検証: 上記の件、ご確認ください');
+  assert.equal(bodies[1].content, '本文');
+});
+
+test('本文は書き換えず、そのまま送る（LLM平易化を通さない）', async () => {
+  const bodies = [];
+  await sendDiscordDm('百瀬', 'dry-run 検証: 上記の件、ご確認ください', {
+    token: 'test-token', resolve, noCopyKim: true,
+    fetchImpl: async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return bodies.length === 1 ? response({ json: { id: 'dm' } }) : response();
+    },
+  });
+  assert.equal(bodies[1].content, withFooter('dry-run 検証: 上記の件、ご確認ください'));
 });
 
 test('dry-runはfetchゼロで解決結果と本文を返す', async () => {
   let fetches = 0;
   const result = await sendDiscordDm('百瀬', 'preview', {
-    dryRun: true, resolve, plainJaImpl: async (text) => text,
+    dryRun: true, resolve, noCopyKim: true, plainJaImpl: async (text) => text,
     fetchImpl: async () => { fetches += 1; throw new Error('unexpected fetch'); },
   });
   assert.equal(fetches, 0);
-  assert.deepEqual(result, { dryRun: true, recipient, content: 'preview', copyToKim: 'skipped' });
+  assert.deepEqual(result, { dryRun: true, recipient, content: withFooter('preview'), copyToKim: 'skipped' });
 });
 
 test('相手への送信後に金功勇へ写しを送る', async () => {
@@ -62,7 +92,7 @@ test('相手への送信後に金功勇へ写しを送る', async () => {
   });
   assert.equal(calls.length, 4);
   assert.deepEqual(calls[2].body, { recipient_id: kim.id });
-  assert.equal(calls[3].body.content, '【写し】百瀬さんへ送った内容\n\n連絡本文');
+  assert.equal(calls[3].body.content, `【写し】百瀬さんへ送った内容\n\n${withFooter('連絡本文')}`);
   assert.equal(result.copyToKim.delivered, true);
 });
 

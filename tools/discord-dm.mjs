@@ -9,6 +9,13 @@ import { redactSecrets } from './webhook-health.mjs';
 
 const API = 'https://discord.com/api/v10';
 const USER_AGENT = 'orgiast-discord-dm/1.0';
+// Bot 宛ての返信は kim の目に入らないため、kim 以外への代筆には毎回返答先を明記する（kim 2026-10-30）。
+export const REPLY_TO_KIM_FOOTER = 'このメッセージへの返答は、Bot ではなく金に直接お願いします。';
+
+export function withReplyToKimFooter(body) {
+  const text = String(body ?? '').trimEnd();
+  return text.includes(REPLY_TO_KIM_FOOTER) ? text : `${text}\n\n${REPLY_TO_KIM_FOOTER}`;
+}
 
 function safeContent(value) {
   return clipDiscordContent(redactSecrets(value)
@@ -38,7 +45,6 @@ export async function sendDiscordDm(target, body, options = {}) {
   // kim 宛のシステム通知と違い、社内メンバーへの連絡は本文そのものが成果物。
   // notify-kim の toPlainJa（LLM 平易化）は通さない（実測: 「dry-run 検証」が
   // 「本番前のテスト確認」に書き換わり意味が変わる）。秘匿値の除去と長さ調整だけ行う。
-  const content = safeContent(String(body ?? ''));
   let kimRecipient = null;
   let copyToKim = 'skipped';
   if (!options.noCopyKim) {
@@ -59,6 +65,8 @@ export async function sendDiscordDm(target, body, options = {}) {
       return { delivered: 'blocked', category: policy.category, reason: policy.reason };
     }
   }
+  const finalBody = isKim ? String(body ?? '') : withReplyToKimFooter(body);
+  const content = safeContent(finalBody);
   if (options.dryRun) {
     if (kimRecipient && !isKim) copyToKim = { dryRun: true, recipient: kimRecipient };
     return { dryRun: true, recipient, content, copyToKim };
@@ -92,7 +100,7 @@ export async function sendDiscordDm(target, body, options = {}) {
   if (kimRecipient && !isKim) {
     const displayName = recipient.displayName ?? recipient.label ?? recipient.username ?? target;
     try {
-      const copyChannelId = await deliver(kimRecipient, safeContent(`【写し】${displayName}さんへ送った内容\n\n${body ?? ''}`));
+      const copyChannelId = await deliver(kimRecipient, safeContent(`【写し】${displayName}さんへ送った内容\n\n${finalBody}`));
       copyToKim = { delivered: true, recipient: kimRecipient, channelId: copyChannelId };
     } catch (error) {
       copyToKim = { delivered: false, error: error.message };

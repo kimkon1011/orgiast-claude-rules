@@ -169,6 +169,19 @@ try {
             } else {
                 & $git.Source -C $repo fetch origin main
                 if ($LASTEXITCODE -ne 0) { throw "git fetch終了コード=$LASTEXITCODE" }
+                # 異常終了した git の残骸だけを除去し、10分以内のロックは実行中として残す。
+                try {
+                    $indexLock = Join-Path $gitDir 'index.lock'
+                    if (Test-Path -LiteralPath $indexLock -PathType Leaf) {
+                        $indexLockInfo = Get-Item -LiteralPath $indexLock -ErrorAction Stop
+                        if ($indexLockInfo.LastWriteTime -lt (Get-Date).AddMinutes(-10)) {
+                            Remove-Item -LiteralPath $indexLock -Force -ErrorAction Stop
+                            Write-NightlyLog 'リポ同期' ("warn:古い index.lock を削除 " + $indexLockInfo.CreationTime.ToString('o'))
+                        }
+                    }
+                } catch {
+                    Write-NightlyLog 'リポ同期' ("warn:index.lock の削除失敗 " + $_.Exception.Message)
+                }
                 if (Test-NightlyTreeClean $repo) {
                     & $git.Source -C $repo checkout --detach origin/main
                     if ($LASTEXITCODE -ne 0) { throw "git checkout終了コード=$LASTEXITCODE" }

@@ -1,7 +1,7 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 const script = resolve('tools/nightly-bootstrap.ps1');
@@ -509,6 +509,40 @@ test('mutex timeout logs a warning and continues with the existing target', { sk
   assert.equal(contender.status, 0, contender.stderr);
   await holder;
   assert.match(allLogText(fix), /warn:他のタスクが同期中のためタイムアウト。既存版で続行/);
+});
+
+test('stale index.lock cleanup runs after fetch and before checkout with a strict ten-minute threshold', () => {
+  const source = readFileSync(script, 'utf8');
+  const fetch = source.indexOf('& $git.Source -C $repo fetch origin main');
+  const cleanup = source.indexOf("$indexLock = Join-Path $gitDir 'index.lock'", fetch);
+  const checkout = source.indexOf('& $git.Source -C $repo checkout --detach origin/main', fetch);
+  assert.ok(fetch >= 0 && cleanup > fetch && checkout > cleanup);
+  const block = source.slice(cleanup, checkout);
+  assert.match(block, /Test-Path -LiteralPath \$indexLock -PathType Leaf/);
+  assert.match(block, /if \(\$indexLockInfo.LastWriteTime -lt \(Get-Date\).AddMinutes\(-10\)\) \{\s*Remove-Item -LiteralPath \$indexLock -Force -ErrorAction Stop/);
+  assert.match(block, /catch \{\s*Write-NightlyLog 'リポ同期' \("warn:index.lock の削除失敗 "/);
+});
+
+for (const ageMinutes of [11, 9]) test(`index.lock cleanup respects LastWriteTime: age=${ageMinutes} minutes`, { skip: !hasPowerShell }, () => {
+  const fix = fixture(`index-lock-${ageMinutes}`);
+  mkdirSync(join(fix.repo, '.git'), { recursive: true });
+  const lock = join(fix.repo, '.git', 'index.lock');
+  writeFileSync(lock, 'git lock');
+  const modified = new Date(Date.now() - ageMinutes * 60_000);
+  utimesSync(lock, modified, modified);
+  const target = join(fix.dir, 'target.ps1');
+  writeFileSync(target, 'exit 0\r\n', 'utf8');
+  const sha = '1111111111111111111111111111111111111111';
+
+  const result = runBootstrap(fix, target, [], { PATH: gitShimPath(fix, sha, sha) });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(lock), ageMinutes <= 10);
+  if (ageMinutes > 10) assert.match(logText(fix), /warn:古い index.lock を削除 \d{4}-/);
+  else {
+    assert.equal(readFileSync(lock, 'utf8'), 'git lock');
+    assert.doesNotMatch(logText(fix), /古い index.lock を削除/);
+  }
 });
 
 test('logs ok:origin/main only when HEAD matches origin/main', { skip: !hasPowerShell }, () => {

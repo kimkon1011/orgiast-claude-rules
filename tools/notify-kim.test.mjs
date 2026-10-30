@@ -188,6 +188,15 @@ test('起票済みマーカーを含む本文を再通知しても二重起票�
   assert.equal(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8').match(/1\. \[ \]/g).length, 1);
 });
 
+test('修復TODOを目標文に引用した quota-sweep 報告は新キーで再起票しない', async () => {
+  const dir = home(), s = sender(dir);
+  const goal = '[ ] 通知の原因調査・修復: codex が停止しています（dead:oauth_consent）。 1. **kim@orgiast.jp** で開く: https://chatgpt.com/';
+  const result = await notifyKim(['claude/5h', '47% → 48%', 'tick: 8', goal, '変更なし', 'exhausted', '理由: 利用枠または累積試行上限に到達'].join('\n'), s.options);
+  assert.equal(result.delivered, 'dm');
+  assert.equal(fs.existsSync(path.join(dir, '.claude/next-session.md')), false);
+  assert.match(s.messages[0], /新規起票なし/);
+});
+
 test('従来どおり失敗通知は起票する（完了報告ガードで塞がない）', async () => {
   const dir = home(), s = sender(dir);
   await notifyKim('quota-sweep claude が直近 4 件すべて失敗している', s.options);

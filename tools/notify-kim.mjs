@@ -128,8 +128,11 @@ export async function notifyKim(text, options = {}) {
     if (state.sentAt != null && now >= state.sentAt && now - state.sentAt < 86_400_000) return { delivered: 'suppressed', reason: 'same-source-cause-24h' };
     let suffix = '';
     let body = raw;
-    const needsTask = !judgment && (handoff || !/^原因[:：][ \t]*\S.+$/m.test(bodyText) || !/^対処[:：][ \t]*\S.+$/m.test(bodyText));
-    if (judgment || needsTask) {
+    // 起票済みの修復TODOを引用した通知（quota-sweep の目標報告等）を再起票すると、TODO を包んだ TODO が新キーで増殖する（2026-10-29 b575a7d3）。
+    const nested = !judgment && /通知の原因調査・修復[:：]/.test(bodyText);
+    const needsTask = !judgment && !nested && (handoff || !/^原因[:：][ \t]*\S.+$/m.test(bodyText) || !/^対処[:：][ \t]*\S.+$/m.test(bodyText));
+    if (nested) suffix = '\n対処: 引用元の修復TODOで追跡中（新規起票なし）';
+    else if (judgment || needsTask) {
       const file = path.join(home, '.claude', 'next-session.md');
       const marker = `<!-- notify-kim:${key} -->`;
       let todo = '';

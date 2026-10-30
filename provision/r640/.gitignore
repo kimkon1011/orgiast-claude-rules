@@ -1,0 +1,9 @@
+# Per-host inputs and generated credentials/media must never enter Git.
+site.json
+employees.csv
+keyserve.env
+*.age
+*.iso
+*.iso.json
+__pycache__/
+.r640-iso-*/

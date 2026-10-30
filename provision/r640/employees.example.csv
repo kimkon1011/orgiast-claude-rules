@@ -1,0 +1,3 @@
+username,display_name,email,role
+sample01,サンプル社員一,sample01@example.invalid,employee
+sample02,サンプル社員二,sample02@example.invalid,manager

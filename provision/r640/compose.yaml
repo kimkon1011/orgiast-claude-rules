@@ -1,0 +1,49 @@
+name: orgiast-r640
+services:
+  db:
+    image: postgres:${POSTGRES_VERSION:?pin required}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: guacamole
+      POSTGRES_USER: guacamole
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    volumes: [postgres:/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U guacamole -d guacamole']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks: [desktop]
+  guacd:
+    image: guacamole/guacd:${GUACAMOLE_VERSION:?pin required}
+    restart: unless-stopped
+    extra_hosts: ['host.docker.internal:host-gateway']
+    networks: [desktop]
+  web:
+    image: guacamole/guacamole:${GUACAMOLE_VERSION:?pin required}
+    restart: unless-stopped
+    depends_on:
+      db: {condition: service_healthy}
+      guacd: {condition: service_started}
+    environment:
+      GUACD_HOSTNAME: guacd
+      POSTGRESQL_ENABLED: 'true'
+      POSTGRESQL_HOSTNAME: db
+      POSTGRESQL_DATABASE: guacamole
+      POSTGRESQL_USERNAME: guacamole
+      POSTGRESQL_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRESQL_DEFAULT_MAX_CONNECTIONS_PER_USER: '1'
+      REMOTE_IP_VALVE_ENABLED: 'true'
+    secrets: [db_password]
+    ports: ['127.0.0.1:8080:8080']
+    networks: [desktop]
+secrets:
+  db_password:
+    file: /run/orgiast-r640/db-password
+volumes:
+  postgres:
+networks:
+  desktop:
+    ipam:
+      config: [{subnet: 172.30.64.0/24}]

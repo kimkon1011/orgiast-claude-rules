@@ -1,0 +1,8 @@
+{
+  "idracUrl": "https://idrac.example.invalid",
+  "idracUsername": "root",
+  "idracPassword": "REPLACE_IN_KEYSERVE_ONLY",
+  "databasePassword": "REPLACE_IN_KEYSERVE_ONLY",
+  "resticPassword": "REPLACE_IN_KEYSERVE_ONLY",
+  "notificationWebhook": "https://example.invalid/REPLACE_IN_KEYSERVE_ONLY"
+}

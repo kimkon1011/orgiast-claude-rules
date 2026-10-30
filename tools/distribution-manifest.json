@@ -4,6 +4,7 @@
   "dirs": ["tools", "rules-extracted", "skills", "packages", "protocols", "rules", "docs", "decisions", "config", "scripts"],
   "files": ["fleet-pc-map.json", "fleet-command.json", "fleet-directives.json", "manifest.json", "ONBOARDING.md", "CLAUDE.md.template"],
   "notDistributed": {
+    "provision": { "reason": "R640 サーバーの専用構築資材。社員PCへの配布対象外で、初回ISOに明示的に組み込む" },
     "gas": { "reason": "GAS ソース。clasp で kim-PC から push する作業用で配布先PCは実行時に読まない", "runtimeRefOk": true, "docRefOk": true },
     "apps": { "reason": "社内アプリのソース。配布先PCの実行時参照なし" },
     "analysis": { "reason": "分析メモ。実行時参照なし" },

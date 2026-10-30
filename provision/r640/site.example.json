@@ -1,0 +1,17 @@
+{
+  "hostname": "r640.example.invalid",
+  "managementCidr": "192.0.2.0/25",
+  "lanCidr": "192.0.2.0/24",
+  "memoryGiB": 128,
+  "maxSessions": 20,
+  "ageRecipient": "REPLACE_WITH_AGE_PUBLIC_RECIPIENT",
+  "adminSshKey": "REPLACE_WITH_ADMIN_SSH_PUBLIC_KEY",
+  "storageMode": "mdadm",
+  "diskSerials": ["REPLACE_SSD_SERIAL_A", "REPLACE_SSD_SERIAL_B"],
+  "minimumDiskGiB": 240,
+  "backupRepository": "REPLACE_WITH_RESTIC_REPOSITORY",
+  "backupMount": "",
+  "staticAddress": "",
+  "gateway": "",
+  "dns": []
+}

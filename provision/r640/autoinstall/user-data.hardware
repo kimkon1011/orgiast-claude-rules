@@ -1,0 +1,40 @@
+#cloud-config
+autoinstall:
+  version: 1
+  refresh-installer: {update: false}
+  locale: ja_JP.UTF-8
+  keyboard: {layout: jp}
+  timezone: Asia/Tokyo
+  identity:
+    hostname: r640
+    username: r640admin
+    password: '!'
+  ssh:
+    install-server: true
+    allow-pw: false
+    authorized-keys: []
+  network:
+    version: 2
+    renderer: networkd
+    ethernets:
+      uplink:
+        match: {driver: igb}
+        dhcp4: true
+  early-commands:
+    - [python3, /cdrom/orgiast/bin/prepare-installer.py, /autoinstall.yaml, /cdrom/orgiast/site.json]
+  storage:
+    swap: {size: 0}
+    config:
+      - {id: disk-a, type: disk, match: {serial: REPLACE_VERIFIED_VIRTUAL_DISK}, ptable: gpt, wipe: superblock-recursive, grub_device: true}
+      - {id: esp-a, type: partition, device: disk-a, size: 1G, flag: boot, grub_device: true}
+      - {id: root-a, type: partition, device: disk-a, size: -1}
+      - {id: root-fs, type: format, volume: root-a, fstype: ext4}
+      - {id: esp-a-fs, type: format, volume: esp-a, fstype: fat32}
+      - {id: root-mount, type: mount, device: root-fs, path: /}
+      - {id: esp-a-mount, type: mount, device: esp-a-fs, path: /boot/efi}
+  packages: [nodejs, npm, ca-certificates, python3-yaml, rsync, mdadm]
+  late-commands:
+    - [bash, /cdrom/orgiast/bin/install-target.sh]
+  user-data:
+    disable_root: true
+    ssh_pwauth: false

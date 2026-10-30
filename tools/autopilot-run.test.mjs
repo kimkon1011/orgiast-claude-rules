@@ -155,7 +155,7 @@ test('runner failures pause and send one short runner_error DM', async (t) => {
 test('existing runner entry replenishes before launching Claude without explicit start', async (t) => {
   const opts = fixture(t), sent = [];
   fs.mkdirSync(path.join(opts.home, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(opts.home, '.claude', 'next-actions.md'), '## 推奨アクション\n1. テスト修正');
+  fs.writeFileSync(path.join(opts.home, '.claude', 'business-goals.md'), '## 売上・利益レバー（上から優先。1セッション=1件）\n1. テスト修正');
   const result = await runOnce({ ...opts, askImpl: async () => 'Yes', notifyImpl: async text => { sent.push(text); }, invokeImpl: async () => {
     assert.equal((await runAutopilot('status', {}, opts)).objective.objective, 'テスト修正');
     await runAutopilot('post', { summary: 'work', progress: 10 }, opts);

@@ -402,7 +402,7 @@ test('crash after appending log does not lose a charged iteration or allow bypas
 
 function candidates(f, body) {
   fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(f.opts.home, '.claude', 'next-actions.md'), body);
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'business-goals.md'), body);
 }
 
 test('done pre replenishes in priority order, skips human work and previous objective, sends once', async (t) => {
@@ -463,7 +463,7 @@ test('refill with only the current objective in history still picks the first el
 test('never-started pre starts a candidate with mocked classifier and notifier', async (t) => {
   const sent = [];
   const f = fixture(t, { askImpl: async () => 'Yes', notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; } });
-  candidates(f, '## 推奨アクション\n- 自動テスト修正\n');
+  candidates(f, '## 売上・利益レバー（上から優先。1セッション=1件）\n- 自動テスト修正\n');
   assert.equal((await f.call('pre')).verdict, 'run');
   assert.equal((await f.call('status')).objective.objective, '自動テスト修正');
   assert.equal(sent.length, 1);

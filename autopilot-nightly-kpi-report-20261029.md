@@ -84,3 +84,33 @@ bootstrapに実行ID（PID＋開始時刻）・Target・段階開始終了（mut
 
 ## 作業記録
 独立クローンのローカルコピー完了前にfetchを開始したため、cloneのref初期化が競合してexit 134となった。fetchで得たorigin/mainからブランチ作成に成功し、以後はこの独立クローンだけで作業した。
+
+## ログ改良（10/29 後半）
+
+着手: 2026-10-29 / Codex / fix/nightly-kpi-timeout-20261029。対象はリポ側bootstrapの診断ログと既存テスト。
+
+### 変更箇所
+- [tools/nightly-bootstrap.ps1:98](tools/nightly-bootstrap.ps1#L98): 開始ログにPowerShellのPIDと未加工のTargetを追加。
+- [tools/nightly-bootstrap.ps1:134](tools/nightly-bootstrap.ps1#L134): WaitOne前後のStopwatch計測。145行で取得成功、149行で既存タイムアウト警告にPIDと待ち秒を記録。
+- [tools/nightly-bootstrap.ps1:348](tools/nightly-bootstrap.ps1#L348)、356行: PowerShell/Node対象起動直前のログとStopwatch。365行: 既存終了ログに同じPIDと所要秒（小数3桁、秒単位）を追加。
+- [tools/nightly-bootstrap.ps1:57](tools/nightly-bootstrap.ps1#L57): Stop-NightlyのログにPIDを追加。heartbeatへ渡すResult、終了コード、同期・排他制御の条件は変更していない。
+- [tools/nightly-bootstrap.test.mjs:403](tools/nightly-bootstrap.test.mjs#L403): 実行ログのTargetとPIDの一致・待ち秒・所要秒・終了コード7維持を検査。既存の対象不在・mutexタイムアウト検査にもPID/待ち秒の確認を追加。WSLのPowerShell実行パスは指定のWindows表記に統一。
+
+### 次回ログの読み方と限界
+開始行の `target=` からnightly-kpi.mjsを見つけ、開始日時と `pid=` をキーに `排他制御` → `対象開始` → `対象実行`（またはStop-Nightlyのerror）を追う。PIDはbootstrapのPowerShellのPIDであり子プロセスのPIDではない。通常ログだけでなく同日PID別フォールバックログも確認する。
+
+`待ち=` はmutex取得待ちの秒数、`所要=` は対象起動から戻るまでの秒数。取得/タイムアウト行から対象開始行までの時間差は同期・自己更新・対象確認・開始heartbeat等を含む合計であり、個別内訳には分離できない。対象実行行は終了heartbeatより前なので、bootstrap全体の完了証明ではない。強制終了時は終了行が残らない可能性があり、最後の段階は絞れても正確な強制終了時刻をこのログだけで確定しない。
+
+本PRは未マージで設置版は未変更。ログ採取が可能になるのはmainへの反映と設置版の自己更新後の起動からであり、10/29 07:05の実行に必ず適用されるとは断定できない。
+
+### 検証・反映状態
+- 環境: WSL Node v24.19.0、Windows PowerShell 5.1.26100.9711。
+- `node --test tools/nightly-bootstrap.test.mjs tools/nightly-bootstrap-git-fallback.test.mjs`: pass=29 / fail=0 / skipped=0。
+- 指定の `node --test tools/`: pass=0 / fail=1 / skipped=0。Node 24がtoolsをモジュールとして読み込もうとしてMODULE_NOT_FOUND。テストケースの失敗ではなく起動失敗のため、CIと同じ `node --test` で全件探索して補完。
+- `git add -- tools/nightly-bootstrap.ps1 tools/nightly-bootstrap.test.mjs autopilot-nightly-kpi-report-20261029.md`: exit 128、`.git/index.lock: Read-only file system`。今回の変更は未コミット・未push。共有ツリーのindex/HEAD、設置版、スケジュールタスクは変更していない。
+- `node tools/selftest-guards.mjs`: pass=68 / fail=0（末尾ALL PASS）。
+- `node --test --test-name-pattern='リポジトリ直下' tools/distribution-coverage.test.mjs`: pass=0 / fail=1。前半コミットに含まれる本報告書 `autopilot-nightly-kpi-report-20261029.md` が配布マニフェスト未分類。全件実行で見つかった失敗を単独再実行でも確認。今回のログ追加の範囲外のためマニフェストは変更していない。
+- `git diff --check -- tools/nightly-bootstrap.ps1 tools/nightly-bootstrap.test.mjs autopilot-nightly-kpi-report-20261029.md`: exit 0。
+- `node --test`: tests=7488 / pass=7464 / fail=2 / skipped=20 / todo=2 / cancelled=0、372.042秒、exit 1。失敗は上記配布分類と `tools/import-cycle.test.mjs:75` の `scandir tools/.audit-test-Nu0qgg` ENOENT。後者は走査中の一時ディレクトリ消失で、循環importの検出ではない。
+- `node --test tools/import-cycle.test.mjs` の単独再実行: pass=2 / fail=0 / skipped=0。全件実行の失敗結果はこの再実行結果で置き換えない。
+- 検証ログ抜粋: [evidence/kpi-timeout-20261029/log-improvement-tests.txt](evidence/kpi-timeout-20261029/log-improvement-tests.txt)。PR本文は既存本文を保存し、「ログ改良を追加」節にローカル変更・未pushと検証結果を追記。

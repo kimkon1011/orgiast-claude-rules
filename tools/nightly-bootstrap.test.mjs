@@ -8,7 +8,7 @@ const script = resolve('tools/nightly-bootstrap.ps1');
 const hiddenRunner = resolve('tools/run-hidden.vbs');
 const powershell = process.platform === 'win32'
   ? 'powershell.exe'
-  : '/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe';
+  : '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe';
 let root;
 let launcherSequence = 0;
 
@@ -385,7 +385,7 @@ test('missing target exits 1 and writes readable Japanese log', { skip: !hasPowe
   const result = runBootstrap(fix, join(fix.dir, 'missing.ps1'), [], { ORGIAST_NIGHTLY_NO_GIT_FALLBACK: '1' });
   assert.equal(result.status, 1, result.stderr);
   const log = logText(fix);
-  assert.match(log, /対象が見つからない/);
+  assert.match(log, /対象確認 \/ error:対象が見つからない .* pid=\d+/);
   assert.match(log, /gitが見つからない/);
   assert.doesNotMatch(log, /�/);
 });
@@ -408,7 +408,13 @@ test('propagates PowerShell target exit code 7', { skip: !hasPowerShell }, () =>
   writeFileSync(target, 'exit 7\r\n', 'utf8');
   const result = runBootstrap(fix, target);
   assert.equal(result.status, 7, result.stderr);
-  assert.match(logText(fix), /ok:exit-seven\.ps1 終了コード=7/);
+  const log = logText(fix);
+  const start = log.match(/nightly-bootstrap \/ ok:開始 pid=(\d+) target=([^\r\n]+)/);
+  assert.ok(start, log);
+  assert.equal(start[2], toWindowsPath(target));
+  assert.match(log, new RegExp(`排他制御 / ok:取得 pid=${start[1]} 待ち=\\d+\\.\\d{3}`));
+  assert.match(log, new RegExp(`対象開始 / ok:exit-seven\\.ps1 pid=${start[1]}`));
+  assert.match(log, new RegExp(`対象実行 / ok:exit-seven\\.ps1 終了コード=7 pid=${start[1]} 所要=\\d+\\.\\d{3}`));
 });
 
 test('forwards all target arguments and discards leading separator', { skip: !hasPowerShell }, () => {
@@ -508,7 +514,7 @@ test('mutex timeout logs a warning and continues with the existing target', { sk
   });
   assert.equal(contender.status, 0, contender.stderr);
   await holder;
-  assert.match(allLogText(fix), /warn:他のタスクが同期中のためタイムアウト。既存版で続行/);
+  assert.match(allLogText(fix), /warn:他のタスクが同期中のためタイムアウト。既存版で続行 pid=\d+ 待ち=\d+\.\d{3}/);
 });
 
 test('logs ok:origin/main only when HEAD matches origin/main', { skip: !hasPowerShell }, () => {

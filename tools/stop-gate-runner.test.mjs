@@ -437,7 +437,7 @@ test('MacroDroidの検索不足を先に示し形式は1セクションにまと
   const transcript_path = path.join(home, 't.jsonl'); fs.writeFileSync(transcript_path, JSON.stringify({ type: 'user', message: { content: 'MacroDroid を使いたい' } }));
   const result = invoke(home, 'manual', 'MacroDroid を開いてください。', { transcript_path });
   const output = JSON.parse(result.stdout);
-  assert.match(output.reason, /^前のメッセージを繰り返さない[^\n]+\n\n### past-log-search-gate/);
+  assert.match(output.reason, /^前のメッセージの経緯・ログ・説明は繰り返さない[^\n]+\n\n### past-log-search-gate/);
   assert.equal((output.reason.match(/### 手渡しの形式/g) || []).length, 1);
   assert.match(output.reason, /- manual-request-fullsteps-gate:/); assert.match(output.reason, /- user-burden-gate:/);
   const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
@@ -561,6 +561,6 @@ test('差し戻し理由の先頭で前文を繰り返さないよう指示す�
   try {
     const result = invoke(home, 'retry-instruction', `${'本文です。'.repeat(50)}`);
     const output = JSON.parse(result.stdout);
-    assert.match(output.reason, /^前のメッセージを繰り返さない。指摘された不足分だけを書き、user がすべきことは最後のメッセージの末尾にまとめる。/);
+    assert.match(output.reason, /^前のメッセージの経緯・ログ・説明は繰り返さない。指摘分を直したうえで、この書き直しが kim の読む最後のメッセージになる前提で書く: 末尾3行の直前に【最終まとめ】を置き、①報告（結論・結果・検証）②kim に確認してほしいこと（文面・選択肢・URL は全文）③kim がやること をすべて載せ、前のメッセージを参照させない（「上記」「前述」禁止）。/);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

@@ -12,6 +12,7 @@
     {"path": "tools/task-hide-guard.ps1", "scope": "fleet", "step": "task:task-hide-guard", "reason": "全PCの非表示タスク実行・窓出現記録を converge で登録する"},
     {"path": "tools/window-spawn-watch.ps1", "scope": "fleet", "step": "task:window-spawn-watch", "reason": "全PCの非表示タスク実行・窓出現記録を converge で登録する"},
     {"path": "tools/response-language-gate.mjs", "scope": "fleet", "step": "settings:language", "reason": "全PCの言語設定と user 入力に基づいて応答言語を検査する Stop gate"},
+    {"path": "tools/mail-draft-account-gate.mjs", "scope": "fleet", "step": "settings:mail-draft-account-gate", "reason": "全PCの Gmail MCP 書き込みを検査。OAuth ログインが seisaku-team@ の席だけ許可"},
     {"path": "tools/register-line-share-health.ps1", "scope": "kim-only", "step": null, "reason": "kim-PC の LINE 共有受信サーバーを監視・再起動する専用タスク"},
     {"path": "tools/lib/scheduled-task.mjs", "scope": "fleet", "step": "settings:lane-health-SessionStart", "reason": "全PC無人ジョブ監査のタスク取得・修復依存"},
     {"path": "tools/unattended-job-audit.mjs", "scope": "fleet", "step": "settings:lane-health-SessionStart", "reason": "全PCの無人ジョブ自動監査"},

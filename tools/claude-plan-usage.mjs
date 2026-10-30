@@ -4,6 +4,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
+export function parseRetryAfter(headerValue, now = Date.now()) {
+  if (!headerValue) return null;
+  const seconds = Number(headerValue);
+  if (Number.isFinite(seconds) && seconds > 0) return Math.ceil(seconds);
+  const dateMs = Date.parse(headerValue);
+  if (Number.isFinite(dateMs) && dateMs > now) {
+    return Math.ceil((dateMs - now) / 1000);
+  }
+  return null;
+}
+
 export async function fetchClaudePlanUsage({ home = process.env.ORGIAST_HOME || os.homedir(), fetchImpl = fetch } = {}) {
   let credentials;
   try { credentials = JSON.parse(fs.readFileSync(path.join(home, '.claude', '.credentials.json'), 'utf8')); }
@@ -12,7 +23,11 @@ export async function fetchClaudePlanUsage({ home = process.env.ORGIAST_HOME || 
   if (!token) return { available: false, reason: 'accessToken 未設定' };
   try {
     const response = await fetchImpl('https://api.anthropic.com/api/oauth/usage', { headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', 'Content-Type': 'application/json' } });
-    if (!response.ok) return { available: false, reason: `HTTP ${response.status}` };
+    if (!response.ok) {
+      const retryHeader = response.headers?.get?.('retry-after');
+      const retryAfterSeconds = parseRetryAfter(retryHeader);
+      return { available: false, reason: `HTTP ${response.status}`, ...(retryAfterSeconds != null ? { retryAfterSeconds } : {}) };
+    }
     const json = await response.json(), five = json?.five_hour, seven = json?.seven_day;
     if (!five || !seven || !Number.isFinite(Number(five.utilization)) || !Number.isFinite(Number(seven.utilization))) return { available: false, reason: 'usage response の形式が未対応' };
     const scoped = Array.isArray(json?.limits) ? json.limits

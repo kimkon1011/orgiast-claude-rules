@@ -77,10 +77,10 @@ export async function readClaudeWindows({ home, fetchImpl, now = Date.now, cache
         const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8')), at = now();
         const usable = Number.isFinite(cached?.observedAt) && at - cached.observedAt >= 0 && at - cached.observedAt <= cacheMaxAgeMs
           && Array.isArray(cached.windows) && cached.windows.length === 2 && cached.windows.every(x => Number.isFinite(x.usedPercent) && Number.isFinite(x.resetsAt) && x.resetsAt > at);
-        if (usable) return Object.assign(cached.windows.map(x => ({ provider: 'claude', window: x.window, usedPercent: x.usedPercent, resetsAt: x.resetsAt, stale: true, observedAt: cached.observedAt })), { reason: null, fromCache: result.reason });
+        if (usable) return Object.assign(cached.windows.map(x => ({ provider: 'claude', window: x.window, usedPercent: x.usedPercent, resetsAt: x.resetsAt, stale: true, observedAt: cached.observedAt })), { reason: null, fromCache: result.reason, ...(result.retryAfterSeconds != null ? { retryAfterSeconds: result.retryAfterSeconds } : {}) });
       } catch { /* キャッシュ無し・破損は従来どおり失敗扱い */ }
     }
-    return Object.assign([], { reason: result.reason });
+    return Object.assign([], { reason: result.reason, ...(result.retryAfterSeconds != null ? { retryAfterSeconds: result.retryAfterSeconds } : {}) });
   }
   const windows = [['5h', result.fiveHour], ['7d', result.sevenDay]].map(([window, value]) => ({ provider: 'claude', window, usedPercent: value.utilization, resetsAt: Date.parse(value.resetsAt) }));
   if (cacheFile && windows.every(x => Number.isFinite(x.resetsAt))) {

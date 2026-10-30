@@ -195,6 +195,12 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/cloud-inventory.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
       "path": "tools/fleet-sheet-report.mjs",
       "scope": "kim-only",
       "step": null,

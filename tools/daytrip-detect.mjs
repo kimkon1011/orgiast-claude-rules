@@ -89,14 +89,22 @@ export function groupEvents(events, range) {
   }
   return days;
 }
+export function estimateTrip(date, events, roadKm) {
+  const dayStart = Date.parse(date + 'T00:00:00+09:00'), dayEnd = dayStart + DAY;
+  const start = Math.max(dayStart, Math.min(...events.map(e => e.start)));
+  const end = Math.min(dayEnd, Math.max(...events.map(e => e.end)));
+  const travelHours = roadKm === null ? null : roadKm < 100 ? roadKm / 40 : roadKm <= 700 ? roadKm / 200 + 0.5 : 2.5;
+  const departure = travelHours === null ? null : Math.max(dayStart, start - travelHours * HOUR);
+  const arrival = travelHours === null ? null : Math.min(dayEnd, end + travelHours * HOUR);
+  return { hours: travelHours === null ? null : (arrival - departure) / HOUR, departure, arrival };
+}
+const displayHours = hours => (Math.round(hours * 2) / 2).toFixed(1);
 export function candidateForDay(date, events, distances) {
   const known = distances.filter(d => Number.isFinite(d?.km));
   const straightKm = known.length ? Math.max(...known.map(d => d.km)) : null;
   const roadKm = straightKm === null ? null : straightKm * 1.3;
   const unknown = known.length !== distances.length;
-  const start = Math.min(...events.map(e => e.start)), end = Math.max(...events.map(e => e.end));
-  const travelHours = roadKm === null ? null : roadKm / 40;
-  const hours = travelHours === null ? null : (end-start)/HOUR + 2*travelHours;
+  const { hours, departure, arrival } = estimateTrip(date, events, roadKm);
   const borderline = straightKm !== null && straightKm >= 35 && straightKm <= 50;
   if (!unknown && !borderline && !(roadKm >= 50 && hours >= 4)) return null;
   const notes = [];
@@ -108,7 +116,7 @@ export function candidateForDay(date, events, distances) {
   if (distances.some(d => d?.approximate)) notes.push('市区町村の代表点から推定');
   if (date < EFFECTIVE) notes.push('規程施行前・検証用（自動追記対象外）');
   return { date, titles: unique(events.map(e => e.title)), locations: unique(events.map(e => e.location)), attendees: unique(events.flatMap(e => e.attendees)), straightKm, roadKm,
-    hours, departure: travelHours === null ? null : start - travelHours*HOUR, arrival: travelHours === null ? null : end + travelHours*HOUR, notes };
+    hours, departure, arrival, notes };
 }
 export async function detect(events, range, geocode, workplace = WORKPLACE) {
   const candidates = [];
@@ -177,8 +185,8 @@ export function unasked(candidates, rows) {
   return candidates.filter(c => !dates.has(c.date));
 }
 export function candidateLine(c) {
-  const distance = c.roadKm === null ? '距離不明' : `道路約${c.roadKm.toFixed(1)}km（直線${c.straightKm.toFixed(1)}km）`;
-  return `${c.number}. ${c.date}｜${c.titles.join('／')}｜${c.locations.join('／')}｜片道${distance}｜外出${c.hours === null ? '不明' : `約${c.hours.toFixed(1)}時間`}｜日当5,000円${c.notes.length ? '｜' + c.notes.join('・') : ''}`;
+  const distance = c.roadKm === null ? '距離不明' : `道路約${Math.round(c.roadKm)}km（直線${Math.round(c.straightKm)}km）`;
+  return `${c.number}. ${c.date}｜${c.titles.join('／')}｜${c.locations.join('／')}｜片道${distance}｜外出${c.hours === null ? '不明' : `約${displayHours(c.hours)}時間`}｜日当5,000円${c.notes.length ? '｜' + c.notes.join('・') : ''}`;
 }
 export function batchBody(items, id) {
   return `【日帰り出張確認 ${id}】\n${items.map(candidateLine).join('\n')}\n宿泊なし・片道50km以上・外出4時間以上の出張ですか。会食・接待のみは対象外。未来分は事前確認（翌日以降に追記）。\n「はい ${items[0].number}」「いいえ ${items.at(-1).number}」のように番号で返信（複数はカンマ区切り）。番号は再利用しません。\n距離: © OpenStreetMap contributors（概算）`;
@@ -205,8 +213,8 @@ export function parseReply(content) {
   return result;
 }
 export function reportRow(c) {
-  return [c.date, '金功勇', '代表', '日帰り', c.locations.join('／'), c.locations.join('／'), c.roadKm === null ? '距離不明' : Math.round(c.roadKm*10)/10,
-    c.titles.join('／'), c.attendees.join('／'), c.departure === null ? '不明(推定)' : jstTime(c.departure)+'(推定)', c.arrival === null ? '不明(推定)' : jstTime(c.arrival)+'(推定)', c.hours === null ? '不明(推定)' : c.hours.toFixed(1)+'時間(推定)', '', '', 5000, ''];
+  return [c.date, '金功勇', '代表', '日帰り', c.locations.join('／'), c.locations.join('／'), c.roadKm === null ? '距離不明' : Math.round(c.roadKm),
+    c.titles.join('／'), c.attendees.join('／'), c.departure === null ? '不明(推定)' : jstTime(c.departure)+'(推定)', c.arrival === null ? '不明(推定)' : jstTime(c.arrival)+'(推定)', c.hours === null ? '不明(推定)' : displayHours(c.hours)+'時間(推定)', '', '', 5000, ''];
 }
 export function receiptBody(row, id) { return `【日帰り出張記録 ${id}】\n1件を報告書に追加しました。\n${HEADERS.map((h,i) => `${h}: ${row[i] === '' ? '（空欄）' : row[i]}`).join('\n')}`; }
 export function createSheetClient(token, fetchImpl = fetch) {
@@ -376,8 +384,19 @@ export async function main(args = process.argv.slice(2)) {
   try {
     const options = parseArgs(args);
     if (options.selfTest) {
-      const result = await execAsync(process.execPath, [fileURLToPath(new URL('./daytrip-detect.fixtures.mjs', import.meta.url))], { encoding: 'utf8', timeout: 30000, windowsHide: true });
-      process.stdout.write(result.stdout); return 0;
+      // Relay output on failures too, so the last successful case remains visible.
+      let result;
+      try {
+        result = await execAsync(process.execPath, [fileURLToPath(new URL('./daytrip-detect.fixtures.mjs', import.meta.url))], { encoding: 'utf8', timeout: 30000, windowsHide: true });
+      } catch (e) {
+        if (e.stdout) process.stdout.write(e.stdout);
+        if (e.stderr) process.stderr.write(e.stderr);
+        throw e;
+      }
+      process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      if (!result.stdout.includes('daytrip-detect self-test: PASS')) throw new Error('self-test did not report PASS');
+      return 0;
     }
     console.log(JSON.stringify(await run(options), null, 2)); return 0;
   } catch (e) { console.error(`daytrip-detect: ${e.message}`); return 1; }

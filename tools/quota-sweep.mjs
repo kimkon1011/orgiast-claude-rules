@@ -17,10 +17,11 @@ import { runBounded } from './lib/quota-sweep-process.mjs';
 
 export const DEFAULT_GOAL = 'このリポで node --test tools/*.test.mjs を実行し、失敗しているテスト・壊れた import・node --check で落ちるファイルを直す。全部緑なら docs/ 内のリンク切れ（相対パスの実在）を直す。受け入れ基準: node --test tools/*.test.mjs が緑、変更は git commit -F msg -- <paths> で小さくコミット';
 export const MAX_TICKS = 8;
-const terminal = new Set(['exhausted', 'final', 'ceiling', 'deadline', 'no-goal']);
-const read = file => { try { return fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return ''; throw e; } };
-const json = (file, fallback = {}) => { const text = read(file); return text ? JSON.parse(text) : fallback; };
-const atomic = (file, value) => { const tmp = `${file}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n'); fs.renameSync(tmp, file); };
+export const TERMINAL_OUTCOMES = new Set(['exhausted', 'final', 'ceiling', 'deadline', 'no-goal']);
+const terminal = TERMINAL_OUTCOMES;
+export const read = file => { try { return fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return ''; throw e; } };
+export const json = (file, fallback = {}) => { const text = read(file); return text ? JSON.parse(text) : fallback; };
+export const atomic = (file, value) => { const tmp = `${file}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n'); fs.renameSync(tmp, file); };
 
 export function selectGoal({ goals = '', handoff = '' } = {}) {
   const actionable = value => value && !/^(?:なし|無し|none|完了|済|done)(?:\s*[（(][^）)]*[）)])?\s*[。.]?$/i.test(value.trim()) && !/^\s*(?:\[x\]|~~)/i.test(value);
@@ -37,7 +38,7 @@ export function tickPrompt(slug) {
 export function normalizeLandedChecks(text) {
   return text.replace(/\bgit[ \t]+merge-base[ \t]+--is-ancestor[ \t]+([^\s`;&|]+)[ \t]+origin\/main(?![\w/.-])/g, 'node tools/commit-landed.mjs $1');
 }
-function normalizeLandedContract(file) {
+export function normalizeLandedContract(file) {
   if (!fs.existsSync(file)) return;
   const text = read(file), normalized = normalizeLandedChecks(text);
   if (text !== normalized) fs.writeFileSync(file, normalized);
@@ -204,7 +205,7 @@ export function claudeWindowReader({ home, fetchImpl, now = Date.now, ttlMs = 15
   };
 }
 
-const RETRY_AFTER_CAP_MS = 10 * 60_000;
+export const RETRY_AFTER_CAP_MS = 10 * 60_000;
 
 // oauth/usage の一時障害だけを再試行対象にする。429(レート制限)・408・5xx・ネットワーク断は
 // 数十秒で回復しうるが、401/403（トークン失効）や形式不一致は読み直しても直らない。
@@ -214,7 +215,7 @@ export function isTransientWindowReadError(reason) {
   return /^(?:network:|HTTP (?:408|429|5\d{2})\b)/i.test(String(reason ?? '').trim());
 }
 
-const defaultSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+export const defaultSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 export function commandRunner(spawnImpl = spawnSync, log = () => {}) {
   return (exe, args, cwd) => {
@@ -235,8 +236,8 @@ export function commandRunner(spawnImpl = spawnSync, log = () => {}) {
   };
 }
 
-const pointerFile = tree => path.join(tree, '.git');
-const accessDenied = error => error && (error.code === 'EPERM' || error.code === 'EACCES');
+export const pointerFile = tree => path.join(tree, '.git');
+export const accessDenied = error => error && (error.code === 'EPERM' || error.code === 'EACCES');
 
 // 2026-10-21 実測: worktree の `.git` がウイルス対策/索引サービスに掴まれると fs の open が
 // EPERM になり、prepareTree が毎回ここで落ちて quota-sweep:codex が12時間ぶん6連続 failed
@@ -366,7 +367,7 @@ export function queueRepeatedDeferral(home, state, row) {
   if (after !== before) writeHandoff(file, after);
 }
 
-async function createPullRequestViaApi({ run, tree, branch, log, spawnImpl = spawnSync, fetchImpl = fetch }) {
+export async function createPullRequestViaApi({ run, tree, branch, log, spawnImpl = spawnSync, fetchImpl = fetch }) {
   // Fallback when gh CLI is not available: use git credential fill + GitHub REST API.
   const fill = spawnImpl('git', ['credential', 'fill'], { cwd: tree, encoding: 'utf8', windowsHide: true, timeout: 15_000, input: 'protocol=https\nhost=github.com\n\n' });
   if (fill.error || fill.status !== 0) throw new Error(`credential fill failed: ${fill.error?.message || `exit ${fill.status}`}`);

@@ -14,7 +14,7 @@ function setup(t) {
 }
 test('offline acceptance fixtures', async () => runSelfTest(() => {}));
 test('inclusive JST date range and invalid args', () => {
-  assert.deepEqual(dateRange({ now: Date.parse('2026-11-02T15:01:00Z') }), { from: '2026-10-27', to: '2026-11-10', timeMin: '2026-10-26T15:00:00.000Z', timeMax: '2026-11-10T15:00:00.000Z' });
+  assert.deepEqual(dateRange({ now: Date.parse('2026-11-02T15:01:00Z') }), { from: '2026-10-27', to: '2026-11-09', timeMin: '2026-10-26T15:00:00.000Z', timeMax: '2026-11-09T15:00:00.000Z' });
   for (const from of ['2026-02-30','xxx','2026-13-01']) assert.throws(() => dateRange({ from }));
   assert.throws(() => dateRange({ from: '2026-12-01', to: '2026-11-01' }));
 });

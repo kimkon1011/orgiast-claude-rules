@@ -45,7 +45,7 @@ function lock(dir) {
   return () => fs.unlinkSync(file);
 }
 export function dateRange({ from, to, now = Date.now() } = {}) {
-  from ||= jstDate(now - 7 * DAY); to ||= jstDate(now + 7 * DAY);
+  from ||= jstDate(now - 7 * DAY); to ||= jstDate(now + 6 * DAY);
   for (const date of [from, to]) if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || jstDate(Date.parse(date + 'T00:00:00+09:00')) !== date) throw new Error('from/to must be valid YYYY-MM-DD');
   if (from > to) throw new Error('from must not exceed to');
   return { from, to, timeMin: new Date(from + 'T00:00:00+09:00').toISOString(), timeMax: new Date(Date.parse(to + 'T00:00:00+09:00') + DAY).toISOString() };

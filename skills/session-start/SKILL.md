@@ -35,18 +35,21 @@ description: 新しいセッションを前セッションの引き継ぎから�
 
 ## 2. 目的を1件に確定する
 
-- 引き継ぎに目的が書いてあればそれを採用し、着手前に1行で宣言する（`**[本セッションの目的]** …`）。
+- 候補を集める前に `~/.claude/business-goals.md` を必ず読む。「売上・利益レバー（上から優先）」の未完了レバー1件を候補の **1番目**にする（手順0・1.5の優先事項はそのまま）。候補源は次の順:
+  1. `~/.claude/business-goals.md` の最優先の未完了レバー
+  2. `~/.claude/next-session.md` の目的・残TODO
+  3. `~/.claude/session-handoffs.md`（放置セッションの再開一覧。`/session-triage` が生成）
+  4. 直近の memory の「未決」「次アクション」記述
+  5. `~/.claude/promotion-queue.md` のPROMOTE待ち
+- 基盤・ツール系の残TODOは、売上・利益レバーを止めているブロッカー、または期限付きの効果確認だけを候補に出す。
 - **候補を kim に見せる前に、着手済みを機械で落とす**（重複着手の防止・トークン増ゼロ）:
   候補を1行1件でスクラッチパッドのファイルに書き、
   `node ~/orgiast-claude-rules/tools/session-claims.mjs --filter --self <このセッションのid> --candidates <そのファイル>`
-  を通す。**stdout に残った候補だけ**を AskUserQuestion に出す。落ちた分は stderr に理由が出るが、kim には見せない。
+  を通す。**stdout に残った候補だけ**を対象にする。落ちた分は stderr に理由が出るが、kim には見せない。
   （このツールは他セッションの `**[本セッションの目的]**` 宣言を transcript から拾って突合する。
    着手印は自動で付くので、手で書く運用にしない）
-- 未定・複数ある場合は AskUserQuestion で**1件だけ**選ばせる。候補は次から集める:
-  - `~/.claude/next-session.md` の残TODO
-  - `~/.claude/session-handoffs.md`（放置セッションの再開一覧。`/session-triage` が生成）
-  - 直近の memory の「未決」「次アクション」記述
-  - `~/.claude/promotion-queue.md`のPROMOTE待ち
+- フィルタ後の候補が **1件だけなら AskUserQuestion を省略**し、`**[本セッションの目的]** …。違えば言ってください` と着手宣言して進める。**複数の時だけ** AskUserQuestion で1件を選ばせ、選ばれた目的を宣言する。
+- 候補が残らなければ着手済み項目を復活させず、未着手のレバー・候補源を確認する。
 - 選ばれなかった候補は `next-session.md` に残す（消さない）。
 
 ## 3. 完了条件を先に決める

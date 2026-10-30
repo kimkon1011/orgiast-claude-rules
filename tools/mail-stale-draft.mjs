@@ -16,7 +16,15 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getDriveToken, defaultDriveKeyPath } from './lib/drive-auth.mjs';
+import { relayStatePath } from './lib/seisaku-gmail-token.mjs';
 import { isEntry } from './is-entry.mjs';
+
+export function hasAnyCredential({ env = process.env, exists = fs.existsSync, home = os.homedir() } = {}) {
+  return Boolean(env.GOOGLE_SA_KEY)
+    || exists(defaultDriveKeyPath())
+    || exists(path.join(home, '.claude', 'keys', 'aujust-sheets-reader.json'))
+    || exists(relayStatePath());
+}
 
 export function resolveKeyPath({ env = process.env, exists = fs.existsSync, home = os.homedir() } = {}) {
   const candidates = [
@@ -299,6 +307,10 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
     else if (a === '--user' && argv[i + 1]) users.push(argv[++i]);
     else if (a === '--deadline-min' && argv[i + 1]) deadlineMin = Number(argv[++i]);
     else { (deps.stdout ?? console.log)('使い方: node tools/mail-stale-draft.mjs [--user addr]... [--apply] [--notify] [--json] [--deadline-min N]'); return 64; }
+  }
+  if (!(deps.hasCredential ?? hasAnyCredential)()) {
+    (deps.stdout ?? console.log)('■ Gmail の認証情報(鍵・リレー)が無いPCのためスキップ（何もしない）');
+    return 0;
   }
   const deadlineMs = deadlineMin * 60 * 1000;
   const results = [];

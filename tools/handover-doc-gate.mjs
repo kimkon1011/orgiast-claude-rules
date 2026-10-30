@@ -81,7 +81,8 @@ export function selftest() {
     check('deny: --cwd option', judge({ command: `clasp push --cwd "${withoutDoc}"`, cwd: withDoc }, { env: {} }).deny, true);
     check('allow: with HANDOVER.md', judge({ command: 'wrangler deploy', cwd: withDoc }, { env: {} }).deny, false);
     check('allow: non-deploy command', judge({ command: 'npm run build', cwd: withoutDoc }, { env: {} }).deny, false);
-    check('allow: no project root', judge({ command: 'vercel --prod', cwd: base }, { env: {} }).deny, false);
+    // temp の祖先に迷子の .clasp.json 等があると root 判定が出るため、祖先が空の環境でだけ検証する
+    if (!findProjectRoot(base)) check('allow: no project root', judge({ command: 'vercel --prod', cwd: base }, { env: {} }).deny, false);
     check('allow: SKIP=1', judge({ command: 'wrangler deploy', cwd: withoutDoc }, { env: { HANDOVER_GATE_SKIP: '1' } }).deny, false);
   } finally {
     fs.rmSync(base, { recursive: true, force: true });

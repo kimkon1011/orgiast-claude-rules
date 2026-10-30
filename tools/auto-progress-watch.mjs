@@ -142,15 +142,17 @@ export function judge(row, evidence, now, io = {}) {
 
 // ---- 再開 ----------------------------------------------------------------
 // stalled-session-resume.mjs と同じ方式: claude を --resume で呼び、成果 JSON を書かせる。
-export async function resumeSession(row, { timeoutMs = 20 * 60000, home = os.homedir(), io = {} } = {}) {
+// lead を渡すと冒頭指示を差し替える（check 達成後の nextClaude 実行など）。
+export async function resumeSession(row, { timeoutMs = 20 * 60000, home = os.homedir(), io = {}, lead = '' } = {}) {
   const { runChild, resolveClaudeExe } = await import('./auto-session.mjs');
   const resultFile = path.join(home, '.claude', `auto-progress-resume-${String(row.sessionId).slice(0, 8)}.json`);
   fs.rmSync(resultFile, { force: true }); // Never reuse a report from an earlier attempt.
   const apiErrorResume = row.source === 'api-error-unanswered';
-  const promptLead = apiErrorResume
+  const promptLead = lead || (apiErrorResume
     ? `API エラーで返答できなかった user の依頼に、最初から通常どおり応えてください。依頼: ${row.requestText || row.promise.replace(/^API エラー（.*?）で返答できなかった依頼:\s*/, '')}`
-    : `以前このセッションで宣言した「この後の自動進行」が止まっています。宣言: 「${row.promise}」。`;
-  const prompt = `${promptLead}\n元の会話は ${row.transcriptPath} にあります。${apiErrorResume ? '依頼を完了まで進めてください。' : '宣言の最終成果まで進めてください。'}user の判断・承認が必要な地点では、判断材料を揃えて止まり needs_user を返してください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"成果物パスと検証結果、または進めない理由","artifact":"成果物パス（任意）","nextKim":"本人だけができる具体的な判断・操作。返信待ちや自動調査なら空文字"}`;
+    : `以前このセッションで宣言した「この後の自動進行」が止まっています。宣言: 「${row.promise}」。`);
+  const goal = lead ? '' : apiErrorResume ? '依頼を完了まで進めてください。' : '宣言の最終成果まで進めてください。';
+  const prompt = `${promptLead}\n元の会話は ${row.transcriptPath} にあります。${goal}user の判断・承認が必要な地点では、判断材料を揃えて止まり needs_user を返してください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"成果物パスと検証結果、または進めない理由","artifact":"成果物パス（任意）","nextKim":"本人だけができる具体的な判断・操作。返信待ちや自動調査なら空文字"}`;
   const rateLimited = apiErrorResume && /rate.?limit|usage.?credits?|429/i.test([row.error, row.apiError, row.apiErrorStatus].join(' '));
   const runOptions = { resumeSessionId: row.sessionId, ...(rateLimited ? { model: process.env.AUTO_PROGRESS_RESUME_MODEL || 'opus' } : {}) };
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, row.cwd, row.cwd, timeoutMs, runOptions);
@@ -455,8 +457,86 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   };
   const needsKim = row => !['', 'なし'].includes(String(row.nextKim ?? '').trim());
   candidates.sort((a, b) => Number(needsKim(a)) - Number(needsKim(b)) || Date.parse(a.ts) - Date.parse(b.ts));
+  // ---- check 達成後の nextClaude 実行（2026-10-28 実害の修正） ----------------
+  // resume レーンは check 付き行を対象外のため、checkPromise が done を返したここで
+  // resumeSession と同じ方式・同じ制約（回数上限・間隔・実行者不在・夜間・無人・時間予算）で再開する。
+  let executorUnavailable = false;
+  const reportCheckResume = async (row, state, reason, artifact, nextKim) => {
+    const outcome = JSON.stringify({ outcome: state, reason: readableReason(reason, row).slice(0, 300), nextKim: readableReason(nextKim, row).slice(0, 200) });
+    const message = [
+      originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf(row), home }),
+      `🔁 check が達成したため、次の手をセッション再開で実行しました: ${state}`,
+      `次の手: ${String(row.nextClaude || '').slice(0, 200)}`,
+      `成果: ${outcome}`,
+      ...(artifact ? [`成果物: ${String(artifact).slice(0, 200)}`] : []),
+      `kim がすること: ${nextKim ? readableReason(nextKim, row).slice(0, 200) : 'なし'}`,
+    ].join('\n').slice(0, 1900);
+    try {
+      const delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(row), message, { home });
+      if (!['dm', 'toast', 'inbox'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
+      return true;
+    } catch (error) {
+      summary.errors.push(`check-resume-notify: ${String(error?.message ?? error).slice(0, 120)}`);
+      return false;
+    }
+  };
+  const resumeAfterCheck = async (row) => {
+    const nextClaude = String(row.nextClaude ?? '').trim();
+    if (!nextClaude) return;
+    const settled = row.checkResumeState && row.checkResumeState !== 'attempting' ? row.checkResumeState : '';
+    if (settled) { // 確定済みは再実行しない。成果通知だけ届いていなければ再送する。
+      if (row.checkResumeNotifiedState === settled) return;
+      if (await reportCheckResume(row, settled, row.checkResumeOutcome || '', row.checkResumeArtifact || '', row.checkResumeNextKim || '')) patch(rowKey(row), { checkResumeNotifiedState: settled });
+      return;
+    }
+    const defer = (reason) => {
+      patch(rowKey(row), { checkResumeOutcome: `deferred: ${reason}`.slice(0, 300), checkResumeDeferredAt: new Date(now).toISOString() });
+      summary.resumeDeferred += 1;
+    };
+    if (isUnattendedRow(row, home)) { patch(rowKey(row), { checkResumeState: 'skipped-unattended', checkResumeOutcome: '無人行は自動再開しない' }); return; }
+    if ((row.resumeCount ?? 0) >= MAX_RESUMES) {
+      patch(rowKey(row), { checkResumeState: 'exhausted', checkResumeOutcome: `上限到達: 自動再開${MAX_RESUMES}回を使い切りました` });
+      if (await reportCheckResume(row, 'exhausted', `自動再開の累計上限(${MAX_RESUMES}回)に達しました`, '', 'check 達成後の次の手を手動で進める')) patch(rowKey(row), { checkResumeNotifiedState: 'exhausted' });
+      return;
+    }
+    if (isQuietHours(now)) { defer('深夜帯(21:00-08:00)はセッション再開を控える'); return; }
+    if (summary.resumed >= MAX_RESUMES_PER_RUN) { defer(`今回の巡回の再開上限(${MAX_RESUMES_PER_RUN}件)に達した`); return; }
+    if (now - (Date.parse(row.resumedAt || 0) || 0) < RESUME_INTERVAL_MS) return; // 直前起動の二重起動防止
+    if (executorUnavailable) { defer('実行者なし（同巡回内の前回起動が失敗）'); return; }
+    if (!row.cwd || !(io.cwdExists ?? fs.existsSync)(row.cwd)) { defer(`セッションの cwd が存在しない: ${row.cwd || '(空)'}`); return; }
+    if (clock() + 22 * 60000 >= stopAt) { defer('巡回の時間予算が足りない'); return; }
+    // Persist the attempt before launching: crashes must not allow another same-interval resume.
+    patch(rowKey(row), { checkResumeState: 'attempting', resumedAt: new Date(now).toISOString(), resumeCount: (row.resumeCount ?? 0) + 1, resumeOutcome: 'attempting' });
+    const lead = `check が達成した。check の出力全文: ${String(row.checkTextFull || row.checkText || '').trim()}\n次の手: ${nextClaude}。実行して結果を報告せよ`;
+    let outcome;
+    try { outcome = await (io.resume ?? resumeSession)(row, { home, lead }); }
+    catch (error) { outcome = { outcome: 'error', reason: String(error?.message ?? error).slice(0, 200) }; }
+    if (outcome.deferred) {
+      // 延期は回数・日時を戻し、次の巡回で再試行できるようにする（stalled レーンと同じ）。
+      patch(rowKey(row), { checkResumeState: '', resumedAt: row.resumedAt ?? '', resumeCount: row.resumeCount ?? 0,
+        checkResumeOutcome: `deferred: ${outcome.reason}`.slice(0, 300), checkResumeDeferredAt: new Date(now).toISOString(),
+        lastCheckedAt: new Date(now).toISOString() });
+      executorUnavailable = true;
+      summary.resumeDeferred += 1;
+      summary.resumeDeferredReason ??= outcome.reason;
+      return;
+    }
+    const state = outcome.state || outcome.outcome;
+    patch(rowKey(row), { checkResumeState: state, checkResumeOutcome: `${state}: ${outcome.reason}`.slice(0, 500),
+      checkResumeArtifact: String(outcome.artifact || '').slice(0, 300), checkResumeNextKim: String(outcome.nextKim ?? '').slice(0, 300),
+      resumedAt: new Date(now).toISOString(), resumeCount: (row.resumeCount ?? 0) + 1, lastCheckedAt: new Date(now).toISOString() });
+    (io.appendInbox ?? appendInbox)(home, row.sessionId, { at: new Date(now).toISOString(), state, evidence: outcome.reason, artifact: outcome.artifact || '' });
+    summary.resumed += 1;
+    if (await reportCheckResume(row, state, outcome.reason, outcome.artifact || '', outcome.nextKim || '')) patch(rowKey(row), { checkResumeNotifiedState: state });
+  };
+  // check が達成しても nextClaude が未実行の行は、完了通知の有無にかかわらず再開対象に拾う。
+  // 古い行（EXPIRE_MS 超）は対象外: 起点を lastCheckedAt（=check 達成時刻）で判断する。
+  const pendingCheckResumes = rows.filter(row => row.check && row.checkResult === 'done' && String(row.nextClaude ?? '').trim()
+    && !['superseded', 'expired', 'stalled'].includes(row.status)
+    && (!row.checkResumeState || row.checkResumeState === 'attempting' || row.checkResumeNotifiedState !== row.checkResumeState)
+    && now - (Date.parse(row.lastCheckedAt || row.ts || 0) || 0) <= EXPIRE_MS);
   // Checks run first, before the potentially lengthy legacy resume lane.
-  const executable = [...candidates.filter(row => row.check), ...pendingChecks];
+  const executable = [...new Set([...candidates.filter(row => row.check), ...pendingChecks, ...pendingCheckResumes])];
   executable.sort((a, b) => (Date.parse(a.lastCheckedAt) || 0) - (Date.parse(b.lastCheckedAt) || 0));
   for (const row of executable) {
     if (clock() + 60000 >= stopAt) break;
@@ -464,7 +544,10 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     summary.checked++;
     try {
       const state = await checkPromise(row, { home, now, patch, io });
-      if (state === 'done') summary.done++;
+      if (state === 'done') {
+        summary.done++;
+        await resumeAfterCheck(row);
+      }
       else if (state === 'unmet') summary.inProgress++;
     } catch (error) { summary.errors.push(`check: ${String(error?.message ?? error).slice(0, 120)}`); }
   }
@@ -485,7 +568,6 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       logDoneDm(home, group.rows[0], delivery, group.text, now, io);
     }
   }
-  let executorUnavailable = false;
   for (const row of candidates.filter(row => !row.check)) {
     // Reserve time for a 20-minute resume plus classification and reporting.
     if (clock() + 22 * 60000 >= stopAt) break;

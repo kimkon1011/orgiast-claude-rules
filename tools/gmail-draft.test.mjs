@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   GMAIL_COMPOSE_SCOPE, DEFAULT_USER, buildRawMessage, buildForwardRaw, guardRecipients,
-  renderChatDisplay, classifyTokenError, probeScopes, createDraft, deleteDraft, runCli,
+  renderChatDisplay, classifyTokenError, probeScopes, mintDwdToken, createDraft, deleteDraft, runCli,
 } from './gmail-draft.mjs';
 
 const ledger = { domains: ['orgiast.jp', 'toho-kogyo.com'], addresses: ['staff@gmail.com'] };
@@ -239,7 +239,10 @@ test('SA キー欠落・JSON 破損は設定エラー（例外の秘密を漏ら
     for (const content of [null, '{ "private_key": "SECRET', '{}']) {
       const keyPath = path.join(dir, 'key.json');
       if (content !== null) fs.writeFileSync(keyPath, content);
-      const results = await probeScopes({ keyPath, scopes: [GMAIL_COMPOSE_SCOPE] });
+      // relay 状態ファイルを持つ PC では key 欠落時に tryRelayToken が実GASへ届いてしまうため、
+      // 存在しない statePath で relay を無効化して SA キー欠落経路だけを検証する
+      const results = await probeScopes({ keyPath, scopes: [GMAIL_COMPOSE_SCOPE],
+        mintToken: options => mintDwdToken({ ...options, statePath: path.join(dir, 'no-relay-state.json') }) });
       assert.equal(results[0].errorKind, 'configuration_error');
       assert.equal(JSON.stringify(results).includes('SECRET'), false);
     }

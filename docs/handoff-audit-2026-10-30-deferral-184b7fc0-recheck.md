@@ -53,3 +53,12 @@
 - 崩落ファイルの単独再実行（2026-10-31・同一PC）: gate-recommended-paths 5/5、human-login-guard 2/2、wsl-present 3/3、url-account-gate 59/59 — すべて pass。現在の spawn 能力は健全。
 - 判定: 全件 pass ではないためゲート合格とはしない（FINAL 条件不成立）。失敗は全てプロセス起動失敗クラスで、コード回帰を示す失敗はこの実行には無い。単発フル実行という形式がこの環境では通らない、というところまでが実測。
 - 残件: ゲート合格の判定方法（バッチ分割実行／別マシン実行／現状記録で環境制約としてクローズ）は判断待ち。
+
+## 8. 全体ゲート 4回目（v3・直列・出力ファイル保存・2026-10-30T16:04:43Z 起動）— 2026-10-31 記録
+
+- §7 の c1 ラン（15:07:39Z）とは別に `run-gate-v3.sh` による同コマンドの再実行（出力 `.loop/gate-out-v3.txt`）が 16:49:33Z に `EXIT:1` で完了していた。この結果は §7・state のいずれにも未記録だったため本節で記録する。
+- 集計行: `ℹ pass 7304` / `ℹ fail 1` / `ℹ cancelled 0` / `ℹ skipped 10` / `ℹ duration_ms 2688472.0875`（約44.8分）。462 ファイルが完走し、c1 ランで観測したプロセス起動失敗（281 ファイル墜落・0xC0000142）は再発していない。
+- 唯一の失敗: `tools/gmail-draft.test.mjs:236`「SA キー欠落・JSON 破損は設定エラー（例外の秘密を漏らさない）」— `expected 'configuration_error', actual undefined`。単独再実行でも再現（38 tests / 37 pass / fail 1）し flaky ではない。b7958a10 faillist #1 と同一失敗。
+- 真因: PR #1228（7948d9a）で `mintDwdToken` に seisaku relay フォールバック（`tryRelayToken`）が入ったが、このテストは relay を隔離していなかった。key ファイル不在＋実状態ファイル `~/.claude/seisaku-gmail-token.json` が存在する PC＋user が `seisaku-team@orgiast.jp` のとき、relay が実 GAS からトークンを取得して成功し probe が `ok:true` になる（テストが実 GAS を叩く副次害もあった）。JSON 破損・空 JSON のケースは keyPath が存在するため relay が null を返し、従来通り `configuration_error` で pass。
+- 修正（テストのみ・コード変更なし）: テストから `mintToken` ラッパーで存在しない `statePath` を注入し relay を無効化して SA キー欠落経路のみを検証。修正後 `node --test tools/gmail-draft.test.mjs`: **38 pass / 0 fail / EXIT=0**（2026-10-31 03:28 JST 実測）。
+- 判定: v3 時点の全体ゲートは fail 1 で不通。ただし失敗は本イテレーションで除去済みで、ゲート形式（直列・出力保存）自体は c1 ランの環境劣化問題を回避して全件完走できることを v3 が実証した。全件 green の証明には修正後の全体再実行（v4・約45分）が残るため FINAL は保留。

@@ -1264,6 +1264,31 @@ test('stderrTail が外部要因を示さない skipped(codex-do exit N) は hig
   assert.equal(outage.provider, 'skipped');
 });
 
+test('stderrTail が空でも前後2hに cheap-code の cooldown/残高切れが co-occur する skipped(codex-do exit N) は high の未修理全滅にしない', () => {
+  const dir = home();
+  // 2026-10-28 実測の再現: deepseek HTTP402 の 24h cooldown 中に codex-do exit 3 の skipped が
+  // 積まれ、stderrTail が空だった。各 skipped 行の前後2hには deepseek cooldown / kimi http_429 が在った。
+  const skips = [19, 20, 22, 23].map((min) => CODEX_DO_SKIPPED(min, 3));
+  const outages = [
+    ...['18', '19'].map((min) => ({ t: `2026-09-09T10:${min}:10.000Z`, provider: 'deepseek', status: 'cooldown' })),
+    ...['20', '21'].map((min) => ({ t: `2026-09-09T10:${min}:30.000Z`, provider: 'kimi', status: 'http_429', reason: 'HTTP429: suspended' })),
+    { t: '2026-09-09T10:22:40.000Z', provider: 'deepseek', status: 'cooldown' },
+    { t: '2026-09-09T10:23:50.000Z', provider: 'fallback', status: 'error', stderrTail: '[cheap-code] deepseek はクールダウン中です(2026-09-09T11:00:00Zまで)。起動を省略しました。' },
+  ];
+  write(dir, 'executor-usage.jsonl', skips.concat(outages).map(row).join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.id === 'lane_outage_unrepaired' && f.provider === 'skipped'), false);
+});
+
+test('cheap-code の co-occur が無ければ stderrTail 空の skipped(codex-do exit N) は高いまま', () => {
+  const dir = home();
+  // 前後2hに残高切れ/cooldown 行の無い窓。codex-do exit 3 が3件なら未修理全滅の high。
+  write(dir, 'executor-usage.jsonl', [10, 15, 20].map((min) => row(CODEX_DO_SKIPPED(min, 3))).join(''));
+  const outage = collectFindings({ home: dir, now: NOW }).find((f) => f.id === 'lane_outage_unrepaired');
+  assert.equal(outage.provider, 'skipped');
+  assert.equal(outage.evidence[0], '3件すべて失敗');
+});
+
 const COOLDOWN_TAIL = '[cheap-code] deepseek はクールダウン中です(2026-10-28T05:00:20.838Zまで)。起動を省略しました。';
 const FALLBACK_COOLDOWN_ROW = (min, overrides = {}) => ({ t: `2026-09-09T10:${min}:10.000Z`, provider: 'fallback', model: 'cheap-code:deepseek/deepseek-flash', status: 'error', out: 0, stderrTail: COOLDOWN_TAIL,
   chain: [{ backend: 'cheap-code:deepseek', model: 'deepseek-flash', status: 3, timedOut: false, spawnFailed: false, out: 0, outcome: 'failed', stderrTail: COOLDOWN_TAIL }], ...overrides });

@@ -205,3 +205,32 @@ test('ネイティブ修復失敗は操作を1件通知し24h抑止',async t=>{
   const r=await laneDoctorProbe(opts);assert.equal(r.deadNeedsUser.filter(x=>x.provider==='codex').length,1);assert.match(r.deadNeedsUser.find(x=>x.provider==='codex').fix,/wsl.exe --install --no-distribution/);
   await laneDoctorProbe({platform: 'linux',...opts,now:now+60000});assert.equal(calls,1);
 });
+test('glm cooldown and explicitly tagged legacy history cannot block healthy Codex', t => {
+  const h = fixture(t), until = now + 3600000;
+  write(h, 'provider-cooldown.json', { glm: { until, reason: 'usage_limit' } });
+  fs.writeFileSync(path.join(h, '.claude/codex-limit-history.jsonl'), JSON.stringify({ provider: 'glm', t: now - 1000, until, reason: 'usage_limit' }) + '\n');
+  write(h, 'lane-health.json', { lanes: { codex: { alive: false, reason: 'quota_wait', until, probedAt: new Date(now - 1000).toISOString(), probeReason: 'auth_ok:probe_ok' } } });
+  fs.writeFileSync(path.join(h, '.claude/executor-usage.jsonl'), JSON.stringify({ provider: 'codex', t: now - 500, status: 'ok' }) + '\n');
+  const r = laneDoctorQuick({ home: h, now, save: false });
+  assert.equal(r.lanes.codex.alive, true);
+  assert.notEqual(r.lanes.codex.reason, 'quota_wait');
+  assert.equal(r.lanes.codex.until, undefined);
+  assert.equal(r.lanes.glm.reason, 'quota_wait');
+});
+test('all missing-key lanes require immediate repair and keyserve enrollment notification', t => {
+  const h = fixture(t);
+  for (const file of ['gemini.env','deepseek.env','zai.env','groq.env','openrouter.env']) fs.unlinkSync(path.join(h, '.claude', file));
+  const r = laneDoctorQuick({ home: h, now, save: false });
+  assert.equal(r.repairFirst.required, true);
+  assert.ok(r.repairFirst.reasons.some(reason => reason.startsWith('missing_key:')));
+  assert.ok(r.repairFirst.reasons.includes('keyserve_unenrolled'));
+  assert.match(summarize(r), /\n🛑 安価AIレーン停止/);
+  assert.deepEqual(r.deadNeedsUser.filter(item => item.provider === 'keyserve').map(item => item.reason), ['keyserve_unenrolled']);
+});
+test('all live lanes do not require repair or add a stop line', t => {
+  const h = fixture(t), stamp = new Date(now).toISOString();
+  write(h, 'lane-health.json', { lanes: Object.fromEntries(['codex','gemini','deepseek','glm','groq','openrouter'].map(provider => [provider, { alive: true, reason: 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp, probeReason: 'probe_ok' }])) });
+  const r = laneDoctorQuick({ home: h, now, save: false });
+  assert.equal(r.repairFirst.required, false);
+  assert.doesNotMatch(summarize(r), /🛑/);
+});

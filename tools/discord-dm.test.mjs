@@ -10,7 +10,9 @@ fs.writeFileSync(path.join(home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=k
 test.after(() => fs.rmSync(home, { recursive: true, force: true }));
 import { fileURLToPath } from 'node:url';
 import { makeIndex } from './onboarding-sync.mjs';
-import { main, sendDiscordDm } from './discord-dm.mjs';
+import { main, REPLY_TO_KIM_FOOTER, sendDiscordDm } from './discord-dm.mjs';
+
+const withFooter = text => `${text}\n\n${REPLY_TO_KIM_FOOTER}`;
 
 const recipient = { id: '123456789', label: '百瀬' };
 const resolve = async () => recipient;
@@ -30,19 +32,34 @@ test('DMチャンネル作成から本文投稿まで2回だけ呼ぶ', async ()
   assert.match(calls[0].url, /users\/@me\/channels$/);
   assert.deepEqual(JSON.parse(calls[0].init.body), { recipient_id: recipient.id });
   assert.match(calls[1].url, /channels\/dm-channel\/messages$/);
-  assert.deepEqual(JSON.parse(calls[1].init.body), { content: 'hello' });
+  assert.deepEqual(JSON.parse(calls[1].init.body), { content: withFooter('hello') });
+});
+
+test('kim 以外への代筆は返答先の一文を末尾に1回だけ付ける', async () => {
+  const bodies = [];
+  const send = text => sendDiscordDm('百瀬', text, {
+    token: 'test-token', resolve, noCopyKim: true,
+    fetchImpl: async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return bodies.length % 2 === 1 ? response({ json: { id: 'dm' } }) : response();
+    },
+  });
+  await send('本文\n');
+  await send(`本文\n\n${REPLY_TO_KIM_FOOTER}`);
+  assert.equal(bodies[1].content, withFooter('本文'));
+  assert.equal(bodies[3].content, withFooter('本文'));
 });
 
 test('本文は書き換えず、そのまま送る（LLM平易化を通さない）', async () => {
   const bodies = [];
   await sendDiscordDm('百瀬', 'dry-run 検証: 上記の件、ご確認ください', {
-    home, token: 'test-token', resolve,
+    token: 'test-token', resolve, noCopyKim: true,
     fetchImpl: async (_url, init) => {
       bodies.push(JSON.parse(init.body));
       return bodies.length === 1 ? response({ json: { id: 'dm' } }) : response();
     },
   });
-  assert.equal(bodies[1].content, 'dry-run 検証: 上記の件、ご確認ください');
+  assert.equal(bodies[1].content, withFooter('dry-run 検証: 上記の件、ご確認ください'));
 });
 
 test('dry-runはfetchゼロで解決結果と本文を返す', async () => {
@@ -52,7 +69,7 @@ test('dry-runはfetchゼロで解決結果と本文を返す', async () => {
     fetchImpl: async () => { fetches += 1; throw new Error('unexpected fetch'); },
   });
   assert.equal(fetches, 0);
-  assert.deepEqual(result, { dryRun: true, recipient, content: 'preview', copyToKim: 'in-session' });
+  assert.deepEqual(result, { dryRun: true, recipient, content: withFooter('preview'), copyToKim: 'in-session' });
 });
 
 test('kim 席の写しは会話で回収し Discord に送らない', async () => {

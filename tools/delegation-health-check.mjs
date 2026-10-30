@@ -544,7 +544,26 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     // glm/deepseek クールダウンで codex-do exit 1 が12件)。stderrTail の無い旧行は従来どおり数える。
     const skippedExternalCause = (row) => row.provider === 'skipped' && row.status === 'no-cheap-executor'
       && /unattended_budget|無人枠|クールダウン中|上限[/]エラーで使えない|usage_limit|Insufficient Balance|HTTP ?(402|429)/.test(String(row.stderrTail || ''));
-    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !skippedByCooldown(row) && !skippedExternalCause(row) && !skippedRepairedByCodex(row) && !isEmptyDiffEscalationRow(row) && !isFallbackCooldownSkipRow(row) && !isQuotaSweepBenignRow(row));
+    // stderrTail が空の旧 skipped(codex-do exit N)でも、同じ24h窓に cheap-code バックエンドの
+    // cooldown/http_402/http_429(残高切れ・上限)が co-occur していれば、外部要因で投げられなかった
+    // 記録であって疑似 provider 'skipped' の欠陥ではない(2026-10-28 実測: deepseek HTTP402 の 24h
+    // cooldown 中、10-27T19:01→10-28T04:02 に codex-do exit 3 が9件。stderrTail が空のため従来は
+    // high になったが、各 skipped 行の前後2h には必ず deepseek cooldown / kimi http_429 が在った)。
+    const skippedDuringCheapOutage = (row) => {
+      if (row.provider !== 'skipped' || row.status !== 'no-cheap-executor') return false;
+      if (!/^codex-do exit /.test(String(row.reason || ''))) return false;
+      const rowTime = Date.parse(row.t);
+      if (!Number.isFinite(rowTime)) return false;
+      return usageRows.some((other) => {
+        if (other === row || other.provider === 'skipped') return false;
+        if (!['deepseek', 'glm', 'kimi', 'qwen', 'groq', 'openrouter', 'gemini-cli', 'cheap-code', 'fallback'].includes(other.provider)) return false;
+        const otherTime = Date.parse(other.t || '');
+        if (!Number.isFinite(otherTime) || Math.abs(otherTime - rowTime) > 2 * 3600_000) return false;
+        return isCooldownSkippedRow(other) || isQuotaLimitedRow(other) || isBillingSuspendedRow(other)
+          || /クールダウン中|起動を省略しました/.test(String(other.stderrTail || ''));
+      });
+    };
+    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !skippedByCooldown(row) && !skippedExternalCause(row) && !skippedRepairedByCodex(row) && !skippedDuringCheapOutage(row) && !isEmptyDiffEscalationRow(row) && !isFallbackCooldownSkipRow(row) && !isQuotaSweepBenignRow(row));
     // 24h 窓が cooldown だけで埋まる＝上限中で一度も試行していない。レーンは止まっているが
     // 原因は上限側で、コードの欠陥ではない。low の可視化だけ残す(high にすると上限が明けるまで
     // 毎晩同じ偽の修理タスクが積まれる。黙って消すと止まっている事実自体が見えなくなる)。

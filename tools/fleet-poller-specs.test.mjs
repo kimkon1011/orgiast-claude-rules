@@ -102,3 +102,12 @@ test('両pollerは日次でClaude上限を--force送信する', () => {
   const daily = pollerSource.slice(pollerSource.indexOf('if (dueDaily && repo)'), pollerSource.indexOf('// B)'));
   assert.match(daily, /if \(!dry\) \{\s+runFleetSheetReport\(\);\s+run\(process.execPath, \[path.join\(repo, 'tools', 'plan-usage-report\.mjs'\), '--force'\]\);\s+\}/);
 });
+
+
+test('existing controller gets fleet-chase through daily PS1; fresh install uses converge manifest', () => {
+  assert.match(pollerPs1Source, /register-fleet-chase\.mjs/);
+  assert.match(pollerPs1Source, /if \(\$Dry\) \{ DrySkip 'register-fleet-chase/);
+  assert.match(pollerPs1Source, /\$fleetChaseInstaller '--ensure'/);
+  const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'setup-manifest.json'), 'utf8'));
+  assert.match(JSON.stringify(manifest), /task:fleet-chase.*register-fleet-chase\.mjs/);
+});

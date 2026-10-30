@@ -83,6 +83,22 @@ test('deadline kills process tree, never spawns after deadline', async () => {
   let args; killTree(123, { platform: 'win32', spawnImpl: (exe, argv) => { assert.equal(exe, 'taskkill'); args = argv; return { status: 0 }; } });
   assert.deepEqual(args, ['/PID', '123', '/T', '/F']);
 });
+// 2026-10-26T20:17Z 実測: 期限到達時に watchdog と親のタイマーが同時に taskkill し、後勝ち側は
+// 「プロセスが見つかりません」exit 128 になる（子は既に終了済み = 正常な二重 kill）。
+// 128 は POSIX 分岐の ESRCH と同様に無視し、stderr / ledger の reason を汚さないこと。
+// 0 ・ 128 以外（例: 1 = アクセス拒否）は子が残るため従来どおり投げること。
+test('killTree tolerates taskkill 128 (process already exited)', () => {
+  killTree(123, { platform: 'win32', spawnImpl: () => ({ status: 128 }) }); // must not throw
+  assert.throws(() => killTree(123, { platform: 'win32', spawnImpl: () => ({ status: 1 }) }), /taskkill failed: 1/);
+  assert.throws(() => killTree(123, { platform: 'win32', spawnImpl: () => ({ error: new Error('ENOENT') }) }), /ENOENT/);
+});
+test('killTree tolerates taskkill ETIMEDOUT (kill timed out)', () => {
+  // ETIMEDOUT from spawnSync means taskkill didn't finish within the 10s timeout.
+  // This is normal at deadline (race: watchdog and parent both try to kill).
+  killTree(123, { platform: 'win32', spawnImpl: () => ({ status: null, error: Object.assign(new Error('spawnSync taskkill ETIMEDOUT'), { code: 'ETIMEDOUT' }) }) }); // must not throw
+  // Other error codes should still throw
+  assert.throws(() => killTree(123, { platform: 'win32', spawnImpl: () => ({ status: null, error: Object.assign(new Error('spawnSync taskkill ENOENT'), { code: 'ENOENT' }) }) }), /ENOENT/);
+});
 test('FINAL only from final structured message, never quoted tool text', () => {
   assert.equal(parseOutput(JSON.stringify({ result: 'ITERATING: FINAL is not proven' })).final, false);
   assert.equal(parseOutput(JSON.stringify({ result: 'FINAL\nall evidence recorded', usage: { input_tokens: 4, output_tokens: 5 } })).final, true);

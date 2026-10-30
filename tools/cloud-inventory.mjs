@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { isEntry } from "./is-entry.mjs";
+import { fileURLToPath } from "node:url";
+import { loadDeepseekKey, loadEnvKey, loadGeminiKey } from "./codex-do.mjs";
+
+const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 const text = (value) => String(value ?? "").trim();
 export function parseGhAuthStatus(value) {
@@ -110,6 +114,70 @@ export function safeEnvironmentNames(env) {
   return Object.keys(env || {}).filter(
     (name) => !/KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL/i.test(name),
   );
+}
+
+function readJson(file, fallback = {}) {
+  try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { return fallback; }
+}
+
+function keySuffix(key) {
+  return key ? String(key).slice(-4) : "";
+}
+
+function jwtEmail(token) {
+  try {
+    const payload = String(token).split(".")[1];
+    if (!payload) return "";
+    return text(JSON.parse(Buffer.from(payload, "base64url").toString("utf8")).email);
+  } catch { return ""; }
+}
+
+export function collectAiLaneLogins({
+  home = os.homedir(),
+  readLaneHealth = () => readJson(path.join(home, ".claude", "lane-health.json"), null),
+} = {}) {
+  const owners = readJson(path.join(repoRoot, "config", "ai-key-owners.json"));
+  const health = readLaneHealth();
+  const definitions = [
+    ["gemini", "Gemini", loadGeminiKey(home), fs.existsSync(path.join(home, ".claude", "gemini.env")) ? "gemini.env" : ".gemini/.env"],
+    ["deepseek", "DeepSeek", loadDeepseekKey(home), "openrouter.env"],
+    ["glm", "GLM", loadEnvKey(home, "zai.env", "ZAI_API_KEY"), "zai.env"],
+    ["groq", "Groq", loadEnvKey(home, "groq.env", "GROQ_API_KEY"), "groq.env"],
+    ["openrouter", "OpenRouter", loadEnvKey(home, "openrouter.env", "OPENROUTER_API_KEY"), "openrouter.env"],
+    ["mistral", "Mistral", loadEnvKey(home, "mistral.env", "MISTRAL_API_KEY"), "mistral.env"],
+    ["grok", "Grok", loadEnvKey(home, "xai.env", "XAI_API_KEY"), "xai.env"],
+    ["kimi", "Kimi", loadEnvKey(home, "kimi-api.env", "MOONSHOT_API_KEY"), "kimi-api.env"],
+  ];
+  const rows = definitions.map(([provider, display, key, source]) => {
+    const suffix = keySuffix(key);
+    const lane = health?.lanes?.[provider];
+    return {
+      service: `安いAI: ${display}`,
+      account: key ? owners?.[provider]?.[suffix] || `所有者未登録(鍵 …${suffix})` : "",
+      scope: key ? `鍵 …${suffix}` : "",
+      source: key ? source : "",
+      status: !key ? "キー無し" : !lane ? "判定不能" : lane.alive ? "稼働" : `停止(${text(lane.reason) || "理由不明"})`,
+      version: "",
+    };
+  });
+
+  const codexAuth = readJson(path.join(home, ".codex", "auth.json"), null);
+  const idToken = codexAuth?.tokens?.id_token || codexAuth?.id_token || "";
+  rows.push({
+    service: "安いAI: Codex",
+    account: !codexAuth ? "未ログイン" : jwtEmail(idToken) || "ログイン済み(アカウント不明)",
+    scope: "", source: "auth.json", status: !codexAuth ? "未ログイン" : "ログイン済み", version: "",
+  });
+  const claude = readJson(path.join(home, ".claude.json"), null);
+  rows.push({
+    service: "Claude Code",
+    account: text(claude?.oauthAccount?.emailAddress),
+    scope: text(claude?.oauthAccount?.organizationName),
+    source: ".claude.json",
+    status: claude?.oauthAccount ? "ログイン済み" : "未ログイン",
+    version: "",
+  });
+  return rows;
 }
 
 // Windows の `vercel` / `npm` などは .cmd シムなので spawnSync から直接起動できず
@@ -340,6 +408,7 @@ export async function collectCloudInventory({
         version: versionOf(command, run),
       });
     }
+  rows.push(...collectAiLaneLogins({ home }));
   return rows;
 }
 

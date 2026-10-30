@@ -547,3 +547,51 @@ test('create-page は引数が不正なら usage で exit 2（ネットワーク
   const noFile = run(cache, ['create-page', '--path', '/ok/path']);
   assert.equal(noFile.status, 2);
 });
+
+function shiftedPart(part, total, pages) {
+  return `﻿【社内マニュアル - Part ${part}/${total}】\r\n更新日時: 2026/10/29 04:18:33\r\n文字数: 456 文字\r\n================================================================================\r\n\r\n${pages.map(([title, pagePath, body]) => `### ページタイトル: ${title}\r\n--- 内部パス: ${pagePath} ---\r\n\r\n---------- マニュアル本文 ----------\r\n${body}`).join(`\r\n${delimiter}\r\n\r\n`)}`;
+}
+
+test('get は索引より新しい版の本文でも内部パスで正しいページを引き、移動先 Part も探す', (t) => {
+  const cache = temporaryCache(t);
+  indexFixtures(cache);
+  fs.writeFileSync(path.join(cache, 'part01.txt'), shiftedPart(1, 2, [['新規ページ', '/00:新規/先頭', '先頭に増えた長い本文'.repeat(20)], ['採用 手順A', '/13:人事部/採用/A', '新版の本文A'], ['経理処理', '/14:経理部/処理', '新版の本文C']]));
+  fs.writeFileSync(path.join(cache, 'part02.txt'), shiftedPart(2, 2, [['採用 手順B', '/13:人事部/採用/B', '移動した本文B']]));
+  const a = run(cache, ['get', 'p0001']);
+  assert.equal(a.status, 0);
+  assert.match(a.stdout, /新版の本文A/);
+  assert.doesNotMatch(a.stdout, /先頭に増えた|本文C/);
+  const b = run(cache, ['get', 'p0002']);
+  assert.equal(b.status, 0);
+  assert.match(b.stdout, /移動した本文B/);
+});
+
+test('get は本文に見つからないページを別ページの本文で埋めず exit 4 で止める', (t) => {
+  const cache = temporaryCache(t);
+  indexFixtures(cache);
+  fs.writeFileSync(path.join(cache, 'part01.txt'), shiftedPart(1, 2, [['無関係', '/99:別/ページ', 'Reブースの営業文'.repeat(30)]]));
+  fs.rmSync(path.join(cache, 'part02.txt'));
+  const result = run(cache, ['get', 'p0003']);
+  assert.equal(result.status, 4);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /索引が本文と合っていません: \/14:経理部\/処理/);
+  assert.match(result.stderr, /install-index/);
+});
+
+test('ingest は索引と版が違う Part を警告する', (t) => {
+  const cache = temporaryCache(t);
+  indexFixtures(cache);
+  const input = temporaryCache(t);
+  const file = path.join(input, 'part1.txt');
+  fs.writeFileSync(file, shiftedPart(1, 2, [['採用 手順A', '/13:人事部/採用/A', '新版']]));
+  const result = run(cache, ['ingest', file]);
+  assert.equal(result.status, 0);
+  assert.match(result.stderr, /警告: Part 1 の本文（2026\/10\/29 04:18:33）が索引（2026\/08\/26 02:27:43）と別の版です/);
+});
+
+test('Drive 書き出しでパス行と本文マーカーの間の空行が2行でも分割できる', () => {
+  const text = sample().replaceAll('---\r\n\r\n---------- マニュアル本文', '---\r\n\r\n\r\n---------- マニュアル本文');
+  const parsed = parsePart(text, 1);
+  assert.equal(parsed.pages.length, 3);
+  assert.equal(Buffer.from(parsed.normalized).subarray(parsed.pages[2].byteStart, parsed.pages[2].byteEnd).toString(), '末尾本文C');
+});

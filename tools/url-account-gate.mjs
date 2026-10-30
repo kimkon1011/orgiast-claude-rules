@@ -1,5 +1,7 @@
 export const GATE_CONTRACT = {"name": "url-account-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "url-account-gate"}]};
-import { latestAssistantText } from './lib/assistant-text.mjs';
+import fs from 'node:fs';
+import { currentTurnAssistantText } from './lib/assistant-text.mjs';
+import { withStopRetryInstruction } from './lib/stop-retry-message.mjs';
 import { catalog, providerForHost } from './provider-catalog.mjs';
 import { isEntry } from './is-entry.mjs';
 
@@ -116,11 +118,11 @@ function main() {
     try {
       const data = JSON.parse(input);
       if (data.stop_hook_active) return;
-      const text = latestAssistantText(data.transcript_path);
+      const text = currentTurnAssistantText(fs.readFileSync(data.transcript_path, 'utf8'));
       if (!text) return;
       const result = judge(text);
       if (result.triggered && result.missing.length) {
-        console.error(formatReason(result.missing));
+        console.error(withStopRetryInstruction(formatReason(result.missing)));
         process.exitCode = 2;
       }
     } catch { /* Match existing gates: unexpected input fails open. */ }

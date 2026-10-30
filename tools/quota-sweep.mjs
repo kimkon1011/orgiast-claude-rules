@@ -15,7 +15,7 @@ import { discoverWsl, passiveWslHomes, wslPath, interactiveCodex, nativeCommand 
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { runBounded } from './lib/quota-sweep-process.mjs';
 
-export const DEFAULT_GOAL = 'このリポで node --test tools/ を実行し、失敗しているテスト・壊れた import・node --check で落ちるファイルを直す。全部緑なら docs/ 内のリンク切れ（相対パスの実在）を直す。受け入れ基準: node --test tools/ が緑、変更は git commit -F msg -- <paths> で小さくコミット';
+export const DEFAULT_GOAL = 'このリポで node --test tools/*.test.mjs を実行し、失敗しているテスト・壊れた import・node --check で落ちるファイルを直す。全部緑なら docs/ 内のリンク切れ（相対パスの実在）を直す。受け入れ基準: node --test tools/*.test.mjs が緑、変更は git commit -F msg -- <paths> で小さくコミット';
 export const MAX_TICKS = 8;
 const terminal = new Set(['exhausted', 'final', 'ceiling', 'deadline', 'no-goal']);
 const read = file => { try { return fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return ''; throw e; } };
@@ -43,7 +43,7 @@ function normalizeLandedContract(file) {
   if (text !== normalized) fs.writeFileSync(file, normalized);
 }
 export function contractPrompt(provider, slug, goal) {
-  return `[headless:quota-sweep]\n${provider === 'claude' ? '/makeloop' : '$makeloop:makeloop'} ${goal}\n質問せず保守的な前提を明記して進める。runtime=manual（1メッセージ1イテレーション）、kind=closed、累積上限 ${MAX_TICKS} イテレーション、検証ゲート node --test tools/、slug=${slug}、ループを開始しない、日本語。.loop/${slug}.md と状態・INDEX を保存する。commit の取込判定は \`node tools/commit-landed.mjs <sha>\` を使う（squash マージのため is-ancestor は偽になる）。`;
+  return `[headless:quota-sweep]\n${provider === 'claude' ? '/makeloop' : '$makeloop:makeloop'} ${goal}\n質問せず保守的な前提を明記して進める。runtime=manual（1メッセージ1イテレーション）、kind=closed、累積上限 ${MAX_TICKS} イテレーション、検証ゲート node --test tools/*.test.mjs、slug=${slug}、ループを開始しない、日本語。.loop/${slug}.md と状態・INDEX を保存する。commit の取込判定は \`node tools/commit-landed.mjs <sha>\` を使う（squash マージのため is-ancestor は偽になる）。`;
 }
 // A reset window is a budget boundary, not evidence that a broken job recovered.
 // Rebuild from the ledger so an upgrade also stops existing failure loops.
@@ -555,7 +555,7 @@ export async function runSweep(decision, context) {
       if ((generated.stopReason && generated.stopReason !== 'deadline') || now() >= decision.deadline) { outcome = generated.stopReason || 'deadline'; return; }
       if (!fs.existsSync(contract)) {
         const template = read(new URL('./quota-sweep-contract.tmpl.md', import.meta.url));
-        const values = { GOAL: selection.goal, SLUG: slug, GATE: 'node --test tools/', MAX_ITERATIONS: String(MAX_TICKS), DATE: new Date(now()).toISOString() };
+        const values = { GOAL: selection.goal, SLUG: slug, GATE: 'node --test tools/*.test.mjs', MAX_ITERATIONS: String(MAX_TICKS), DATE: new Date(now()).toISOString() };
         fs.writeFileSync(contract, normalizeLandedChecks(template.replace(/{{(GOAL|SLUG|GATE|MAX_ITERATIONS|DATE)}}/g, (_, k) => values[k])));
         log(`${provider}: built-in contract fallback`);
       }

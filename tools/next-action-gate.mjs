@@ -214,10 +214,11 @@ function hasSessionWakeup(raw, input = {}) {
   return { autoProgress, background: background || persistent.background, scheduled: persistent.scheduled };
 }
 
-export function judgeNextAction(text, transcriptRaw = '', input = {}) {
+function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {}) {
   const source = String(text || '').trimEnd();
+  const turnSource = String(options.turnText || source).trimEnd();
   if (!enabled()) return { decision: 'pass', reason: 'disabled' };
-  const permanentFix = permanentFixViolation(source, transcriptRaw);
+  const permanentFix = permanentFixViolation(turnSource, transcriptRaw);
   if (/[?？]$/.test(source)) return permanentFix || { decision: 'pass', reason: 'question' };
   if (reportsCloseSteps(source)) return permanentFix || { decision: 'pass', reason: 'close-steps' };
 
@@ -237,7 +238,7 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
   if (!footer.nextAction) {
     return { decision: 'block', code: 'NEXT-ACTION-EMPTY', reason: '「次に kim がすること:」の値が空です。なし、または具体的な1件を書いてください。' };
   }
-  const labelOverride = [...source.matchAll(/\[NEXT-ACTION-LABEL-OK:[ \t]*([^\]\r\n]*)\]/g)]
+  const labelOverride = [...turnSource.matchAll(/\[NEXT-ACTION-LABEL-OK:[ \t]*([^\]\r\n]*)\]/g)]
     .some(([, reason]) => [...reason.trim()].length >= 5);
   if (hasUnexplainedLabel(footer.nextAction) && !labelOverride) {
     return { decision: 'block', code: 'NEXT-ACTION-LABEL-ONLY', reason: LABEL_ONLY_REASON };
@@ -245,22 +246,23 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
   if (footer.nextAction !== 'なし' && MULTIPLE_ACTIONS_PATTERN.test(footer.nextAction)) {
     return { decision: 'block', code: 'NEXT-ACTION-MULTIPLE', reason: 'kim への手渡しが2件以上あります。§1.1 最上位原則に従い、まず自分で潰して1件以下にしてください。' };
   }
-  const backrefOverride = [...source.matchAll(/\[NEXT-ACTION-BACKREF-OK:[ \t]*([^\]\r\n]*)\]/g)]
+  const backrefOverride = [...turnSource.matchAll(/\[NEXT-ACTION-BACKREF-OK:[ \t]*([^\]\r\n]*)\]/g)]
     .some(([, reason]) => [...reason.trim()].length >= 5);
   if (BACKREF_PATTERN.test(footer.nextAction) && !backrefOverride) {
     return { decision: 'block', code: 'NEXT-ACTION-BACKREF', reason: BACKREF_REASON };
   }
-  const approvalInlineOverride = [...source.matchAll(/\[NEXT-ACTION-APPROVAL-INLINE-OK:[ \t]*([^\]\r\n]*)\]/g)]
+  const approvalInlineOverride = [...turnSource.matchAll(/\[NEXT-ACTION-APPROVAL-INLINE-OK:[ \t]*([^\]\r\n]*)\]/g)]
     .some(([, reason]) => [...reason.trim()].length >= 5);
   // 末尾の実際のフッターより前だけを調べ、見出しが直前40行以内にあることを求める。
-  const footerStart = source.match(FOOTER_PATTERN).index;
-  const precedingLines = source.slice(0, footerStart).split(/\r?\n/).slice(-40);
+  const footerLabel = turnSource.lastIndexOf('次に kim がすること:');
+  const footerStart = Math.max(0, turnSource.lastIndexOf('\n', footerLabel));
+  const precedingLines = turnSource.slice(0, footerStart).split(/\r?\n/).slice(-40);
   const hasInlineApproval = precedingLines.some(line => line.trim() === '【kim 確認用の全文】');
   if (footer.nextAction !== 'なし' && APPROVAL_PATTERN.test(footer.nextAction)
     && !hasInlineApproval && !approvalInlineOverride) {
     return { decision: 'block', code: 'NEXT-ACTION-APPROVAL-INLINE', reason: APPROVAL_INLINE_REASON };
   }
-  const openActionOverride = [...source.matchAll(/\[NEXT-ACTION-OPEN-OK:[ \t]*([^\]\r\n]*)\]/g)]
+  const openActionOverride = [...turnSource.matchAll(/\[NEXT-ACTION-OPEN-OK:[ \t]*([^\]\r\n]*)\]/g)]
     .some(([, reason]) => [...reason.trim()].length >= 5);
   if (footer.nextAction !== 'なし' && OPEN_ACTION_PATTERN.test(footer.nextAction)
     && !HUMAN_ONLY_PATTERN.test(footer.nextAction) && !openActionOverride) {
@@ -299,7 +301,7 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
     return { decision: 'block', code: 'NEXT-ACTION-DEFERRAL', reason: DEFERRAL_REASON };
   }
   const wakeup = hasSessionWakeup(transcriptRaw, input);
-  const noAutocheck = [...source.matchAll(/\[NO-AUTOCHECK-OK:[ \t]*([^\]\r\n]*)\]/g)]
+  const noAutocheck = [...turnSource.matchAll(/\[NO-AUTOCHECK-OK:[ \t]*([^\]\r\n]*)\]/g)]
     .some(([, reason]) => reason.trim().length > 0);
   // チャットで答えるだけの返信待ち（reply-only）は会話に戻ってくるので台帳は要らない。それ以外の人待ちは載せる。
   const userHandoff = /\[手渡し判定\]|お願いする操作|^手間監査:/m.test(body);
@@ -312,6 +314,34 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
     return { decision: 'block', code: 'AUTOPILOT-NO-SESSION-WAKEUP', reason: '「この後の自動進行」が残っていますが、このセッションを定期的に起こす仕組みがありません。/loop で自走するか、Monitor か ScheduleWakeup を実際に呼ぶか、node tools/auto-progress.mjs --add-check … で定期チェックを登録してから終えてください。『次ターンで』『次回起きたら』は起床手段にならない。自動進行が無いなら「この後の自動進行: なし」と書いてください。' };
   }
   return permanentFix || { decision: 'pass', reason: 'valid-footer' };
+}
+
+// Report independent footer defects together. The single evaluator remains the source of truth
+// for ordered/stateful checks; this supplement prevents label/back-reference/approval/open-action
+// defects from being revealed one Stop retry at a time.
+export function judgeNextAction(text, transcriptRaw = '', input = {}, options = {}) {
+  const primary = judgeNextActionSingle(text, transcriptRaw, input, options);
+  if (primary.decision !== 'block') return primary;
+  const source = String(text || '').trimEnd();
+  const turnSource = String(options.turnText || source).trimEnd();
+  const footer = footerValues(source);
+  if (!footer) return primary;
+  const issues = new Map([[primary.code, primary.reason]]);
+  const add = (code, reason) => issues.set(code, reason);
+  const permanent = permanentFixViolation(turnSource, transcriptRaw);
+  if (permanent) add(permanent.code, permanent.reason);
+  const override = (name, minimum = 5) => [...turnSource.matchAll(new RegExp(`\\[${name}:[ \\t]*([^\\]\\r\\n]*)\\]`, 'g'))]
+    .some(([, reason]) => [...reason.trim()].length >= minimum);
+  if (hasUnexplainedLabel(footer.nextAction) && !override('NEXT-ACTION-LABEL-OK')) add('NEXT-ACTION-LABEL-ONLY', LABEL_ONLY_REASON);
+  if (footer.nextAction !== 'なし' && MULTIPLE_ACTIONS_PATTERN.test(footer.nextAction)) add('NEXT-ACTION-MULTIPLE', 'kim への手渡しが2件以上あります。§1.1 最上位原則に従い、まず自分で潰して1件以下にしてください。');
+  if (BACKREF_PATTERN.test(footer.nextAction) && !override('NEXT-ACTION-BACKREF-OK')) add('NEXT-ACTION-BACKREF', BACKREF_REASON);
+  const footerLabel = turnSource.lastIndexOf('次に kim がすること:');
+  const footerStart = Math.max(0, turnSource.lastIndexOf('\n', footerLabel));
+  const hasInlineApproval = turnSource.slice(0, footerStart).split(/\r?\n/).slice(-40).some(line => line.trim() === '【kim 確認用の全文】');
+  if (footer.nextAction !== 'なし' && APPROVAL_PATTERN.test(footer.nextAction) && !hasInlineApproval && !override('NEXT-ACTION-APPROVAL-INLINE-OK')) add('NEXT-ACTION-APPROVAL-INLINE', APPROVAL_INLINE_REASON);
+  if (footer.nextAction !== 'なし' && OPEN_ACTION_PATTERN.test(footer.nextAction) && !HUMAN_ONLY_PATTERN.test(footer.nextAction) && !override('NEXT-ACTION-OPEN-OK')) add('NEXT-ACTION-OPEN', OPEN_ACTION_REASON);
+  if (issues.size === 1) return primary;
+  return { ...primary, reason: [...issues].map(([code, reason]) => String(reason).startsWith(`[${code}]`) ? reason : `[${code}] ${reason}`).join('\n') };
 }
 
 async function main() {

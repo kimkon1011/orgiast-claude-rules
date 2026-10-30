@@ -11,6 +11,13 @@ import { redactSecrets } from './webhook-health.mjs';
 
 const API = 'https://discord.com/api/v10';
 const USER_AGENT = 'orgiast-discord-dm/1.0';
+// Bot 宛ての返信は kim の目に入らないため、kim 以外への代筆には毎回返答先を明記する（kim 2026-10-30）。
+export const REPLY_TO_KIM_FOOTER = 'このメッセージへの返答は、Bot ではなく金に直接お願いします。';
+
+export function withReplyToKimFooter(body) {
+  const text = String(body ?? '').trimEnd();
+  return text.includes(REPLY_TO_KIM_FOOTER) ? text : `${text}\n\n${REPLY_TO_KIM_FOOTER}`;
+}
 
 function safeContent(value) {
   return clipDiscordContent(redactSecrets(value)
@@ -40,7 +47,6 @@ export async function sendDiscordDm(target, body, options = {}) {
   // kim 宛のシステム通知と違い、社内メンバーへの連絡は本文そのものが成果物。
   // notify-kim の toPlainJa（LLM 平易化）は通さない（実測: 「dry-run 検証」が
   // 「本番前のテスト確認」に書き換わり意味が変わる）。秘匿値の除去と長さ調整だけ行う。
-  const content = safeContent(String(body ?? ''));
   let copyToKim = 'skipped';
   const recipientName = recipient.displayName ?? recipient.label ?? recipient.username ?? '';
   const isKim = String(recipient.id) === KIM_DISCORD_USER_ID || ['金功勇', 'kim'].includes(recipientName.toLowerCase());
@@ -53,6 +59,8 @@ export async function sendDiscordDm(target, body, options = {}) {
   }
   const inbox = isKim && !discordAllowed(body, { home, allowlist: options.allowlist }).allowed;
   if (!options.noCopyKim && !isKim) copyToKim = isKimSeat(home) ? 'in-session' : 'session-inbox';
+  const finalBody = isKim ? String(body ?? '') : withReplyToKimFooter(body);
+  const content = safeContent(finalBody);
   if (options.dryRun) return { dryRun: true, recipient, content, copyToKim, ...(inbox ? { delivered: 'session-inbox' } : {}) };
   if (inbox) {
     const item = await addItem(home, { kind: options.kimActionRequired ? 'ask' : 'info', text: body, source: 'discord-dm' });

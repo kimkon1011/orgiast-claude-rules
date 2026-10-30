@@ -5,6 +5,7 @@ import {
   staleFindings,
   externalRecipients,
   resolveKeyPath,
+  hasAnyCredential,
   runCli,
   scanMailbox,
   staleFindingsForDraft,
@@ -13,6 +14,7 @@ import {
   sentTo,
 } from './mail-stale-draft.mjs';
 import { defaultDriveKeyPath } from './lib/drive-auth.mjs';
+import { relayStatePath } from './lib/seisaku-gmail-token.mjs';
 import { checkConsistency } from './mail-consistency-check.mjs';
 
 test('下書き保存より後に同じ宛先へ送信があれば block・category「古い下書き」・thread_fact に後の件名を含む', () => {
@@ -148,11 +150,41 @@ test('resolveKeyPath の順序（env 優先、無ければ ~/.claude/keys）', (
   assert.equal(resolvedNoneWithEnv, path.resolve('/nonexistent/key.json'));
 });
 
+test('hasAnyCredential は環境変数・既定鍵・代替鍵・リレーのいずれかで true', () => {
+  const home = path.resolve('/mock/home');
+  assert.equal(hasAnyCredential({ env: {}, exists: () => false, home }), false);
+  assert.equal(hasAnyCredential({ env: { GOOGLE_SA_KEY: '/missing/key.json' }, exists: () => false, home }), true);
+  for (const credential of [defaultDriveKeyPath(), path.join(home, '.claude', 'keys', 'aujust-sheets-reader.json'), relayStatePath()]) {
+    assert.equal(hasAnyCredential({ env: {}, exists: p => p === credential, home }), true);
+  }
+});
+
+test('runCli は認証情報が無ければスキップし scanMailbox を呼ばず終了コード 0', async () => {
+  let scanned = false;
+  const code = await runCli(['--user', 'test@example.com'], {
+    hasCredential: () => false,
+    stdout: () => {},
+    scanMailbox: async () => { scanned = true; },
+  });
+  assert.equal(code, 0);
+  assert.equal(scanned, false);
+});
+
+test('runCli は認証情報があって全ユーザーの API が失敗すれば終了コード 3', async () => {
+  const code = await runCli([], {
+    hasCredential: () => true,
+    stdout: () => {},
+    scanMailbox: async () => { throw new Error('API failed'); },
+  });
+  assert.equal(code, 3);
+});
+
 test('runCli(["--apply","--notify"], deps) は newlyLabeled の下書きだけ通知し、古い下書きがあれば終了コード 2、新規0件なら notify を呼ばない', async () => {
   let notifiedText = null;
   const notifyMock = text => { notifiedText = text; };
 
   const depsWithNew = {
+    hasCredential: () => true,
     scanMailbox: async () => ({
       user: 'seisaku-team@orgiast.jp',
       scanned: 5,
@@ -180,6 +212,7 @@ test('runCli(["--apply","--notify"], deps) は newlyLabeled の下書きだけ�
 
   notifiedText = null;
   const depsAlreadyLabeled = {
+    hasCredential: () => true,
     scanMailbox: async () => ({
       user: 'seisaku-team@orgiast.jp',
       scanned: 5,
@@ -205,6 +238,7 @@ test('runCli(["--apply","--notify"], deps) は newlyLabeled の下書きだけ�
 
   notifiedText = null;
   const depsNoStale = {
+    hasCredential: () => true,
     scanMailbox: async () => ({
       user: 'seisaku-team@orgiast.jp',
       scanned: 3,
@@ -383,6 +417,7 @@ test('新規ラベル20件なら通知本文に15件分と「ほか 5 件」が�
     findings: [{ severity: 'block', category: '古い下書き', thread_fact: '後続あり' }],
   }));
   await runCli(['--apply', '--notify'], {
+    hasCredential: () => true,
     scanMailbox: async () => ({ user: 'seisaku-team@orgiast.jp', scanned: 20, stale }),
     notify: t => { notifiedText = t; },
     stdout: () => {},

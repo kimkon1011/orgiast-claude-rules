@@ -9,9 +9,18 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
-const USAGE = '使い方: node tools/booth-perse-gen.mjs --brief <brief.txt> --plans <plans.json> --out <dir> [--ref <image> ...] [--max-height <m>（会場の装飾高さ上限・既定3.6）]';
+const USAGE = '使い方: node tools/booth-perse-gen.mjs --brief <brief.txt> --plans <plans.json> --out <dir> [--ref <image> ...] [--blender-out <dir>] [--max-height <m>（会場の装飾高さ上限・既定3.6）]';
 const MODEL = 'openai/gpt-5.4-image-2';
 const DEFAULT_MAX_HEIGHT = 3.6;
+const BLENDER_PERSP_FILES = ['persp_front_left.png', 'persp_front_right.png'];
+
+function findBlenderRefs(dir) {
+  // 段階 2 の Blender 出力ディレクトリからパース画像を参照画像として自動追加
+  try {
+    const exists = (f) => { try { return (readFileSync(f).length > 0 && true); } catch { return false; } };
+    return BLENDER_PERSP_FILES.filter((f) => exists(path.join(dir, f))).map((f) => path.join(dir, f));
+  } catch { return []; }
+}
 
 export function parseArgs(argv) {
   const opts = { refs: [], maxHeight: DEFAULT_MAX_HEIGHT };
@@ -22,6 +31,7 @@ export function parseArgs(argv) {
     else if (a === '--plans') { opts.plans = v; i += 1; }
     else if (a === '--out') { opts.out = v; i += 1; }
     else if (a === '--ref') { opts.refs.push(v); i += 1; }
+    else if (a === '--blender-out') { opts.blenderOut = v; i += 1; }
     else if (a === '--max-height') { opts.maxHeight = Number(v); i += 1; }
     else throw new Error(`unknown option: ${a}\n${USAGE}`);
   }
@@ -67,6 +77,15 @@ async function generate({ key, text, refs, out }) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
+  if (opts.blenderOut) {
+    const blenderRefs = findBlenderRefs(opts.blenderOut);
+    if (blenderRefs.length > 0) {
+      opts.refs.push(...blenderRefs);
+      console.error(`[blender-out] ${blenderRefs.length} 件のパース画像を参照画像として追加: ${blenderRefs.join(', ')}`);
+    } else {
+      console.error('[blender-out] 段階2のパース画像が見つかりませんでした（--blender-out は無視して続行）');
+    }
+  }
   const plans = JSON.parse(readFileSync(opts.plans, 'utf8'));
   if (!Array.isArray(plans) || plans.length !== 3) throw new Error('プラン定義は3件（梅・竹・松に当たる3案）にする');
   const common = readFileSync(opts.brief, 'utf8');

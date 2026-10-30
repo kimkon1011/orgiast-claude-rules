@@ -1,14 +1,14 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 const script = resolve('tools/nightly-bootstrap.ps1');
 const hiddenRunner = resolve('tools/run-hidden.vbs');
 const powershell = process.platform === 'win32'
   ? 'powershell.exe'
-  : '/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe';
+  : '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe';
 let root;
 let launcherSequence = 0;
 
@@ -385,7 +385,7 @@ test('missing target exits 1 and writes readable Japanese log', { skip: !hasPowe
   const result = runBootstrap(fix, join(fix.dir, 'missing.ps1'), [], { ORGIAST_NIGHTLY_NO_GIT_FALLBACK: '1' });
   assert.equal(result.status, 1, result.stderr);
   const log = logText(fix);
-  assert.match(log, /対象が見つからない/);
+  assert.match(log, /対象確認 \/ error:対象が見つからない .* pid=\d+/);
   assert.match(log, /gitが見つからない/);
   assert.doesNotMatch(log, /�/);
 });
@@ -408,7 +408,13 @@ test('propagates PowerShell target exit code 7', { skip: !hasPowerShell }, () =>
   writeFileSync(target, 'exit 7\r\n', 'utf8');
   const result = runBootstrap(fix, target);
   assert.equal(result.status, 7, result.stderr);
-  assert.match(logText(fix), /ok:exit-seven\.ps1 終了コード=7/);
+  const log = logText(fix);
+  const start = log.match(/nightly-bootstrap \/ ok:開始 pid=(\d+) target=([^\r\n]+)/);
+  assert.ok(start, log);
+  assert.equal(start[2], toWindowsPath(target));
+  assert.match(log, new RegExp(`排他制御 / ok:取得 pid=${start[1]} 待ち=\\d+\\.\\d{3}`));
+  assert.match(log, new RegExp(`対象開始 / ok:exit-seven\\.ps1 pid=${start[1]}`));
+  assert.match(log, new RegExp(`対象実行 / ok:exit-seven\\.ps1 終了コード=7 pid=${start[1]} 所要=\\d+\\.\\d{3}`));
 });
 
 test('forwards all target arguments and discards leading separator', { skip: !hasPowerShell }, () => {
@@ -508,7 +514,41 @@ test('mutex timeout logs a warning and continues with the existing target', { sk
   });
   assert.equal(contender.status, 0, contender.stderr);
   await holder;
-  assert.match(allLogText(fix), /warn:他のタスクが同期中のためタイムアウト。既存版で続行/);
+  assert.match(allLogText(fix), /warn:他のタスクが同期中のためタイムアウト。既存版で続行 pid=\d+ 待ち=\d+\.\d{3}/);
+});
+
+test('stale index.lock cleanup runs after fetch and before checkout with a strict ten-minute threshold', () => {
+  const source = readFileSync(script, 'utf8');
+  const fetch = source.indexOf('& $git.Source -C $repo fetch origin main');
+  const cleanup = source.indexOf("$indexLock = Join-Path $gitDir 'index.lock'", fetch);
+  const checkout = source.indexOf('& $git.Source -C $repo checkout --detach origin/main', fetch);
+  assert.ok(fetch >= 0 && cleanup > fetch && checkout > cleanup);
+  const block = source.slice(cleanup, checkout);
+  assert.match(block, /Test-Path -LiteralPath \$indexLock -PathType Leaf/);
+  assert.match(block, /if \(\$indexLockInfo.LastWriteTime -lt \(Get-Date\).AddMinutes\(-10\)\) \{\s*Remove-Item -LiteralPath \$indexLock -Force -ErrorAction Stop/);
+  assert.match(block, /catch \{\s*Write-NightlyLog 'リポ同期' \("warn:index.lock の削除失敗 "/);
+});
+
+for (const ageMinutes of [11, 9]) test(`index.lock cleanup respects LastWriteTime: age=${ageMinutes} minutes`, { skip: !hasPowerShell }, () => {
+  const fix = fixture(`index-lock-${ageMinutes}`);
+  mkdirSync(join(fix.repo, '.git'), { recursive: true });
+  const lock = join(fix.repo, '.git', 'index.lock');
+  writeFileSync(lock, 'git lock');
+  const modified = new Date(Date.now() - ageMinutes * 60_000);
+  utimesSync(lock, modified, modified);
+  const target = join(fix.dir, 'target.ps1');
+  writeFileSync(target, 'exit 0\r\n', 'utf8');
+  const sha = '1111111111111111111111111111111111111111';
+
+  const result = runBootstrap(fix, target, [], { PATH: gitShimPath(fix, sha, sha) });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(lock), ageMinutes <= 10);
+  if (ageMinutes > 10) assert.match(logText(fix), /warn:古い index.lock を削除 \d{4}-/);
+  else {
+    assert.equal(readFileSync(lock, 'utf8'), 'git lock');
+    assert.doesNotMatch(logText(fix), /古い index.lock を削除/);
+  }
 });
 
 test('logs ok:origin/main only when HEAD matches origin/main', { skip: !hasPowerShell }, () => {

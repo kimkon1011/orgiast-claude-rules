@@ -155,7 +155,7 @@ export async function chase(ledger, ctx) {
   return plans;
 }
 export function digestText(ledger, { home, now }) {
-  const items = Object.values(ledger.items);
+  const items = Object.values(ledger.items).filter(i => i.kind !== 'expect-inbound');
   const pending = items.filter(active).sort(oldest);
   const inbound = pending.filter(i => i.kind === 'inbound').length;
   const blocked = pending.filter(i => i.status === 'blocked').length;
@@ -189,6 +189,7 @@ export async function digest(ledger, ctx) {
   const date = new Date(ctx.now + 9 * HOUR);
   const day = date.toISOString().slice(0, 10);
   if (date.getUTCHours() < 9 || ledger.digestDay === day) return { skipped: true };
+  if (!Object.values(ledger.items).some(i => i.kind !== 'expect-inbound')) return { skipped: true };
   const text = digestText(ledger, ctx);
   if (ctx.dryRun) return { text, planned: true };
   const result = await ctx.notify(text);

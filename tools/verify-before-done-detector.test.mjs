@@ -21,7 +21,7 @@ test('事故: 委譲→merge→mock scratchpad→直しましたをblock', () =>
 });
 test('本番実行と成功したAPI読み戻しでpass', () => assert.equal(check([...incident(), ...live()], '直しました'), null));
 test('理由付き例外のみpass、空・先送り・自己申告はblock', () => {
-  assert.equal(check(incident(), '直しました [NO-TEST-OK: コメントのみの変更で動作差分なし]'), null);
+  assert.equal(check(incident(), '直しました [NO-TEST-OK: コメントのみの変更であり実行時の動作差分が存在しないため]'), null);
   for (const tag of ['[NO-TEST-OK: ]','[NO-TEST-OK: 時間がない]','[NO-TEST-OK: 後で確認]','[TESTED]']) assert.ok(check(incident(), '直しました ' + tag));
 });
 test('node --test、echo、別配置、失敗した実行は証拠にならない', () => {
@@ -123,4 +123,54 @@ test('deleted worktree edits verified through nightly-repo codex and scratchpad 
   assert.equal(run.stderr, '');
   assert.equal(run.stdout, '', 'successful Stop gate produces no block output');
   console.log(`deployment replay: exit=${run.status}, stdout=${JSON.stringify(run.stdout)}, stderr=${JSON.stringify(run.stderr)}`);
+});
+
+for (const separator of [';', '&&', '||', '\n']) {
+  test(`連結 ${JSON.stringify(separator)} の3ファイルをすべて実行証拠に数える`, () => {
+    const rows = ['a', 'b', 'c'].flatMap(n => edit(`tools/${n}.mjs`));
+    assert.equal(check([...rows, ...bash(['a', 'b', 'c'].map(n => `node /production/tools/${n}.mjs --check`).join(separator))], '完了'), null);
+  });
+}
+test('連結コマンドの失敗・隠された失敗シグナルは証拠にしない', () => {
+  for (const output of ['Error: broken', 'ok\nFAIL a', 'Exit code: 1', '{"exit_code":-1}', 'node: command not found']) {
+    assert.ok(check([...edit('tools/a.mjs'), ...bash('node tools/a.mjs; echo ok', output)], '完了'), output);
+  }
+  assert.ok(check([...edit('tools/a.mjs'), ...bash('node tools/a.mjs; node tools/b.mjs', 'failed', true)], '完了'));
+  assert.ok(check([...edit('tools/a.mjs'), ...call('Bash', {command: 'node tools/a.mjs; echo ok'}, [{type:'text', text:'Error: broken'}])], '完了'));
+});
+test('dry-run/testの除外をサブコマンド単位で適用する', () => {
+  const rows = [...edit('tools/a.mjs'), ...edit('tools/b.mjs'), ...edit('tools/c.mjs'),
+    ...bash('node tools/a.mjs --dry-run; node tools/b.mjs --test; node tools/c.mjs --status')];
+  assert.match(check(rows, '完了'), /未実行: tools\/a.mjs, tools\/b.mjs\n/);
+});
+test('引用符内の区切り・echo・evalのコードを実行証拠にしない', () => {
+  for (const cmd of ['echo "ok; node tools/a.mjs"', "echo 'ok && node tools/a.mjs'", 'node -e "0; node tools/a.mjs"']) {
+    assert.ok(check([...edit('tools/a.mjs'), ...bash(cmd)], '完了'));
+  }
+  assert.equal(check([...edit('tools/a.mjs'), ...bash('node "tools/a.mjs" --label "a;b && c"')], '完了'), null);
+});
+test('NO-TEST-OKは20文字以上の具体理由を要求し、ファイル指定を限定する', () => {
+  const rows = [...edit('tools/a.mjs'), ...edit('tools/b.mjs')];
+  assert.equal(check(rows, '完了 [NO-TEST-OK: コメントのみの変更であり実行時の動作差分が存在しないため]'), null);
+  assert.match(check(rows, '完了 [NO-TEST-OK: tools/a.mjs はコメントのみの変更であり動作差分がないため]'), /未実行: tools\/b.mjs\n/);
+  assert.equal(check([...rows, ...bash('node tools/b.mjs')], '完了 [NO-TEST-OK: a.mjs はコメントのみの変更であり動作差分がないため]'), null);
+  for (const reason of ['不要', '不要'.repeat(20), 'tools/a.mjs は後で確認するので本番での実行を先送りする']) {
+    assert.ok(check(rows, `完了 [NO-TEST-OK: ${reason}]`));
+  }
+});
+test('通知・Stop差し戻しを越えて最終変更後の実行証拠を保持する', () => {
+  const rows = [human('修正して'), ...edit('tools/a.mjs'), ...bash('node /production/tools/a.mjs'),
+    human('<task-notification>完了通知</task-notification>'), human('Stop hook feedback: 再確認'),
+    {type:'user', isMeta:true, message:{content:'自動通知'}}];
+  assert.equal(check(rows, '完了'), null);
+  assert.ok(check([...rows, ...edit('tools/a.mjs')], '完了'));
+});
+test('別クローン表記の同じファイルを再変更しても古い実行では通さない', () => {
+  const rows = [...edit('/clone/tools/a.mjs'), ...bash('node /production/tools/a.mjs'), ...edit('/other/tools/a.mjs')];
+  assert.ok(check(rows, '完了'));
+  assert.equal(check([...rows, ...bash('node /production/tools/a.mjs')], '完了'), null);
+});
+test('別サブコマンドのpipeは単独nodeの証拠を消さず、非ゼロexit出力は除外する', () => {
+  assert.equal(check([...edit('tools/a.mjs'), ...bash('node tools/a.mjs; echo ok | tail -1')], '完了'), null);
+  assert.ok(check([...edit('tools/a.mjs'), ...bash('node tools/a.mjs; echo "exit=$?"', 'exit=1')], '完了'));
 });

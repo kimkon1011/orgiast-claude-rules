@@ -295,7 +295,7 @@ export function recommendedActions(text) {
     const heading = line.match(/^(#{1,6})\s+(.*)/);
     if (heading) {
       if (depth && heading[1].length <= depth) break;
-      if (!depth && heading[2].includes('推奨アクション')) depth = heading[1].length;
+      if (!depth && (heading[2].includes('推奨アクション') || heading[2].includes('レバー'))) depth = heading[1].length;
       continue;
     }
     if (!depth) continue;
@@ -316,11 +316,11 @@ async function askCandidate(candidate, ctx) {
 }
 async function nextObjective(state, objective, ctx) {
   // Every objective already closed in history (done/stopped/failed_check) must stay closed,
-  // not just the most recent one, or a completed objective gets re-selected from next-actions.
+  // not just the most recent one, or a completed objective gets re-selected from business-goals.
   const closed = new Set((state?.objectiveHistory || [])
     .filter((entry) => ['done', 'stopped', 'failed_check'].includes(entry.status))
     .map((entry) => entry.objective));
-  for (const candidate of recommendedActions(readText(path.join(ctx.home, '.claude', 'next-actions.md')))) {
+  for (const candidate of recommendedActions(readText(path.join(ctx.home, '.claude', 'business-goals.md')))) {
     if (closed.has(candidate.objective) || candidate.objective === objective?.objective) continue;
     try {
       if (/^yes[.!]?$/i.test(String(await ctx.askImpl(candidate, ctx)).trim())) return candidate;
@@ -442,6 +442,8 @@ async function execute(command, args, ctx) {
       if (args[flag] !== undefined) objective[key] = Number(args[flag]);
     }
     validateObjective(objective);
+    // PC ごとの監督モデル固定（autopilot-run の supervisorModel）は目的を変えても引き継ぐ。
+    try { const prev = readObjective(paths.objective).model; if (typeof prev === 'string') objective.model = prev; } catch {}
     if (state && ['done', 'stopped'].includes(state.status)) rememberObjective(state, readObjective(paths.objective), now);
     // Keep the previous objective's history, but don't charge it to a new run.
     if (state) {

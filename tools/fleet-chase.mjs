@@ -18,10 +18,11 @@ export * from './lib/fleet-chase-ledger.mjs';
 export { chase, digest, digestText, resendBody } from './lib/fleet-chase-actions.mjs';
 export { work, workHeader } from './lib/fleet-chase-work.mjs';
 
+import { registerExpectation, checkExpectations } from './lib/fleet-chase-expect.mjs';
 export const ownRepo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export function parseArgs(argv) {
   const flags = new Set(['--ingest', '--check', '--chase', '--digest', '--work', '--status', '--compliance', '--json', '--dry-run']);
-  const values = new Set(['--cancel', '--defer', '--until', '--reason', '--revive']);
+  const values = new Set(['--cancel', '--defer', '--until', '--reason', '--revive', '--expect', '--match-why', '--from']);
   const options = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -30,25 +31,28 @@ export function parseArgs(argv) {
     else if (values.has(arg) && argv[i + 1] && !argv[i + 1].startsWith('--')) options[arg] = argv[++i];
     else throw new Error(`invalid option ${arg}`);
   }
-  const controls = ['cancel', 'defer', 'revive'].filter(k => options[`--${k}`]);
+  const controls = ['cancel', 'defer', 'revive', 'expect'].filter(k => options[`--${k}`]);
   if (controls.length > 1) throw new Error('one control operation at a time');
   if (controls.length && ['ingest', 'check', 'chase', 'work', 'digest'].some(k => options[`--${k}`])) throw new Error('control and automation cannot be combined');
-  if (options['--until'] && !options['--defer'] || options['--reason'] && !controls.length) throw new Error('orphan control option');
+  if (options['--until'] && !options['--defer'] && !options['--expect'] || options['--reason'] && !controls.length) throw new Error('orphan control option');
+  if ((options['--match-why'] || options['--from']) && !options['--expect']) throw new Error('orphan expectation option');
+  if (options['--expect'] && (!options['--match-why'] || !options['--until'] || !options['--reason'])) throw new Error('--expect requires --match-why, --until, --reason');
   return options;
 }
 export function counts(ledger) {
   const items = Object.values(ledger.items);
   return { outbound: items.filter(i => i.kind === 'outbound').length, inbound: items.filter(i => i.kind === 'inbound').length,
+    expect: items.filter(i => i.kind === 'expect-inbound').length,
     rollout: items.filter(i => i.kind === 'rollout').length,
     stale: items.filter(i => i.status === 'stale').length, pending: items.filter(active).length };
 }
 export function statusTable(ledger, now, plans = []) {
   const summary = counts(ledger);
-  const lines = [`取り込み: outbound=${summary.outbound} inbound=${summary.inbound} rollout=${summary.rollout} stale=${summary.stale} 未完了=${summary.pending}`,
+  const lines = [`取り込み: outbound=${summary.outbound} inbound=${summary.inbound} rollout=${summary.rollout} 受信待ち=${summary.expect} stale=${summary.stale} 未完了=${summary.pending}`,
     rolloutSummary(ledger),
     'kind / level / 経過日数 / 相手 / why / 次アクション時刻 / 状態 (itemId)'];
   for (const item of Object.values(ledger.items).sort(oldest)) {
-    lines.push(`${item.kind} / L${item.level} / ${Math.floor((now - millis(item.createdAt)) / DAY)}日 / ${item.target} / ${item.title.slice(0, 60)} / ${item.nextActionAt || '-'} / ${item.status} (${item.id})`);
+    lines.push(`${item.kind} / L${item.level} / ${Math.floor((now - millis(item.createdAt)) / DAY)}日 / ${item.target} / ${item.title.slice(0, 60)} / ${item.nextActionAt || '-'} / ${item.status} (${item.id})${item.diagnosis ? ` 原因=${item.diagnosis.cause} 修復=${item.repairs.length}/2 ${item.humanReason || ''}` : ''}`);
   }
   if (plans.length) {
     lines.push('エスカレーション予定: action / 相手 / 時刻 / itemId');
@@ -62,19 +66,20 @@ export async function runChase(options = {}, deps = {}) {
   const now = (deps.now ?? Date.now)();
   const dryRun = !!options['--dry-run'];
   const repo = deps.repo ?? ownRepo;
-  const release = dryRun || (options['--status'] || options['--compliance']) && !Object.keys(options).some(k => ['--cancel', '--defer', '--revive', '--ingest', '--check', '--chase', '--work', '--digest'].includes(k))
+  const release = dryRun || (options['--status'] || options['--compliance']) && !Object.keys(options).some(k => ['--expect', '--cancel', '--defer', '--revive', '--ingest', '--check', '--chase', '--work', '--digest'].includes(k))
     ? () => {} : acquireLock(path.join(home, '.claude', 'fleet-chase', '.lock'));
   if (!release) return { skipped: 'locked' };
   try {
     const ledger = loadLedger(home);
     const persist = () => { if (!dryRun) saveJson(ledgerPath(home), ledger); };
-    const operation = ['cancel', 'defer', 'revive'].find(k => options[`--${k}`]);
+    const operation = ['cancel', 'defer', 'revive', 'expect'].find(k => options[`--${k}`]);
     if (operation) {
       const env = deps.env ?? process.env;
       if (operation === 'cancel' && (env.CLAUDE_HEADLESS === '1' || env.ORGIAST_HEADLESS_JOB)) {
         throw new Error('取り下げはkimの明示操作のみ。ヘッドレスでは実行できません');
       }
-      control(ledger, operation, options[`--${operation}`], { now, reason: options['--reason'], until: options['--until'] });
+      if (operation === 'expect') registerExpectation(ledger, options, now);
+      else control(ledger, operation, options[`--${operation}`], { now, reason: options['--reason'], until: options['--until'] });
       persist();
       return { ledger, counts: counts(ledger), plans: [], now };
     }
@@ -116,7 +121,8 @@ export async function runChase(options = {}, deps = {}) {
       reconcileRollout(ledger, rollout, ctx);
       persist();
     }
-    const plans = should('chase') ? await chase(ledger, ctx) : [];
+    const expectPlans = should('check') || should('chase') ? await checkExpectations(ledger, ctx, { repair: should('chase') }) : [];
+    const plans = [...expectPlans, ...(should('chase') ? await chase(ledger, ctx) : [])];
     const workResult = should('work') ? await work(ledger, ctx) : null;
     let digestResult;
     if (should('digest')) {

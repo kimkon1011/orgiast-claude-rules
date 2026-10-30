@@ -3,16 +3,6 @@
   "_note": "kim/監督Claude が指示を1件書き、各PCの fleet-agent が15分以内に拾って結果を Discord へ返す。kind は status / prompt / enable-auto-session の3つだけ。prompt と enable-auto-session はそのPCの人がオプトイン済みの場合のみ実行される。空配列にすると全PCで何も起きない。 PC間メッセージは fleet-mail.mjs（双方向）を使う。",
   "directives": [
     {
-      "id": "run-20261026-222853-5695",
-      "kind": "run",
-      "targets": "古川龍慶のノートブックコンピュータ",
-      "why": "stale_report 自動復旧",
-      "task": "fleet-sheet-report",
-      "createdBy": "uers",
-      "createdAt": "2026-10-26T22:28:53.071Z",
-      "expiresAt": "2026-10-28T22:28:53.071Z"
-    },
-    {
       "id": "run-20261028-222104-7487",
       "kind": "run",
       "targets": "古川龍慶のノートブックコンピュータ",
@@ -21,6 +11,16 @@
       "createdBy": "uers",
       "createdAt": "2026-10-28T22:21:04.968Z",
       "expiresAt": "2026-10-30T22:21:04.968Z"
+    },
+    {
+      "id": "run-20261030-094923-9994",
+      "kind": "run",
+      "targets": "all",
+      "why": "2026-10-30 kim指示: 最後のメッセージに【最終まとめ】を載せる新ルール(ONBOARDING §1.1, PR #1342)を全PC全アカウントのCLAUDE.mdへ即時反映するため onboarding-sync を実行",
+      "task": "cost-self-heal",
+      "createdBy": "uers",
+      "createdAt": "2026-10-30T09:49:23.881Z",
+      "expiresAt": "2026-10-31T09:49:23.881Z"
     }
   ]
 }

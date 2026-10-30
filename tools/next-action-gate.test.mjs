@@ -682,3 +682,17 @@ test('ラベルの理由付き例外は新判定だけを解除する', () => {
 test('なしや本文・引用だけのラベルは block しない', () => {
   assert.equal(judgeNextAction(inlineReport('なし', '> ①②③ から番号で選ぶ\nB案は過去の失敗例です。\n')).decision, 'pass');
 });
+
+test('同じターンの前メッセージに承認全文と恒久策があれば再掲せず不足フッターだけで通る', () => {
+  const previous = `${body}\n恒久策: 一回限り: 今回の判断は本人の意思が必要\n[NO-AUTOCHECK-OK: チャットへの一言返信だけで完了するため]\n【kim 確認用の全文】\nこの内容で送ってよいですか。`;
+  const retry = `次に kim がすること: この内容を承認する\nこの後の自動進行: なし\nこのセッション: ${SESSION_PHRASES.delete}`;
+  assert.equal(judgeNextAction(retry, '', {}, { turnText: `${previous}\n\n${retry}` }).decision, 'pass');
+});
+
+test('独立したnext-action違反を1回の差し戻しへまとめる', () => {
+  const result = judgeNextAction(inlineReport('B案、上の提案を確認してください'));
+  assert.equal(result.decision, 'block');
+  for (const code of ['NEXT-ACTION-LABEL-ONLY', 'NEXT-ACTION-MULTIPLE', 'NEXT-ACTION-APPROVAL-INLINE', 'NEXT-ACTION-OPEN']) {
+    assert.match(result.reason, new RegExp(`\\[${code}\\]`));
+  }
+});

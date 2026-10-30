@@ -1,18 +1,26 @@
 {
   "version": 1,
   "entries": [
-    {"path": "tools/kim-discord-report-gate.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
+{"path": "tools/kim-discord-report-gate.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/kim-inbox.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/lib/kim-discord-allowlist.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/lib/fleet-owner.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox / notify-owner が使う PC 所有者解決（notify-owner から切り出し）"},
     {"path": "tools/notify-owner.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "config/kim-discord-allowlist.json", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
-
+    {"path": "tools/register-daytrip-detect-task.ps1", "scope": "kim-only", "step": "task:daytrip-detect", "reason": "kim個人の出張候補。LINE受信ホストだけで登録"},
+    {"path": "tools/register-daytrip-detect-task.mjs", "scope": "kim-only", "step": "task:daytrip-detect", "reason": "convergeからkim-PC用PowerShell登録をEnsureで呼ぶ"},
+    {"path": "tools/lib/share-secrets.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "memory-share と案件会話保存で共通の秘密情報除去"},
+    {"path": "tools/case-handoff.mjs", "scope": "fleet", "step": "settings:case-handoff-sessionstart", "reason": "案件履歴の保存・再開。kim操作アカウントのみ実行"},
+    {"path": "tools/lib/case-handoff.mjs", "scope": "fleet", "step": "settings:case-handoff-sessionstart", "reason": "案件履歴の保存・再開。kim操作アカウントのみ実行"},
+    {"path": "tools/knowledge-pack.mjs", "scope": "fleet", "step": "hook:onboarding-sync", "reason": "制作・営業ナレッジの公開・全PC受信"},
+    {"path": "tools/lib/share-content.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "memory-share と knowledge-pack 共通の資格情報除去・frontmatter 読込"},
+    {"path": "tools/lib/drive-files.mjs", "scope": "fleet", "step": "hook:onboarding-sync", "reason": "knowledge-pack が使う Drive バイナリ取得・in-place 更新"},
     {"path": "tools/register-task-hide-guard.ps1", "scope": "fleet", "step": "task:task-hide-guard", "reason": "全PCの非表示タスク実行・窓出現記録を converge で登録する"},
     {"path": "tools/register-task-hide-guard.mjs", "scope": "fleet", "step": "task:task-hide-guard", "reason": "全PCの非表示タスク実行・窓出現記録を converge で登録する"},
     {"path": "tools/task-hide-guard.ps1", "scope": "fleet", "step": "task:task-hide-guard", "reason": "全PCの非表示タスク実行・窓出現記録を converge で登録する"},
     {"path": "tools/window-spawn-watch.ps1", "scope": "fleet", "step": "task:window-spawn-watch", "reason": "全PCの非表示タスク実行・窓出現記録を converge で登録する"},
     {"path": "tools/response-language-gate.mjs", "scope": "fleet", "step": "settings:language", "reason": "全PCの言語設定と user 入力に基づいて応答言語を検査する Stop gate"},
+    {"path": "tools/mail-draft-account-gate.mjs", "scope": "fleet", "step": "settings:mail-draft-account-gate", "reason": "全PCの Gmail MCP 書き込みを検査。OAuth ログインが seisaku-team@ の席だけ許可"},
     {"path": "tools/register-line-share-health.ps1", "scope": "kim-only", "step": null, "reason": "kim-PC の LINE 共有受信サーバーを監視・再起動する専用タスク"},
     {"path": "tools/lib/scheduled-task.mjs", "scope": "fleet", "step": "settings:lane-health-SessionStart", "reason": "全PC無人ジョブ監査のタスク取得・修復依存"},
     {"path": "tools/unattended-job-audit.mjs", "scope": "fleet", "step": "settings:lane-health-SessionStart", "reason": "全PCの無人ジョブ自動監査"},
@@ -188,6 +196,12 @@
     },
     {
       "path": "tools/fleet-poller.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "tools/cloud-inventory.mjs",
       "scope": "kim-only",
       "step": null,
       "reason": "要確認"
@@ -679,6 +693,12 @@
       "reason": "repo の project SessionStart から register-hooks（classifier-settings と同じ hook 登録）を呼ぶ入口。全PCで動く"
     },
     {
+      "path": "tools/add-permission-rules.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "converge では配らない。STANDARD-PC-SETUP.md 手順7で、各PCの Claude がリポジトリのコピーから1回だけ手動実行する（install-orgiast.ps1 と同じ扱い）"
+    },
+    {
       "path": "tools/settings-quality-guard.mjs",
       "scope": "kim-only",
       "step": null,
@@ -749,6 +769,12 @@
       "scope": "fleet",
       "step": "task:fleet-mail",
       "reason": "fleet-mail v2 の提示・通知・初回移行を全PCへ配布"
+    },
+    {
+      "path": "tools/fleet-mail-targets.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-mail の宛先照合・再試行・ローカルキャッシュを新規・既存PCへ配布する実行時 import 依存"
     },
     {
       "path": "tools/growi-manual.mjs",
@@ -941,6 +967,12 @@
       "scope": "fleet",
       "step": "task:fleet-mail",
       "reason": "url-account-gate の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/lib/stop-retry-message.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "Stop系ゲートの再試行共通文言（実行時 import 依存）"
     },
     {
       "path": "tools/pending-decisions.mjs",

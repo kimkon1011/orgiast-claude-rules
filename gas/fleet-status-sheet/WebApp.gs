@@ -97,6 +97,7 @@ function doPost(e) {
     'mail-poll': pollFleetMail,
     'mail-reply': replyFleetMail,
     'mail-get': getFleetMail,
+    'mail-trace': traceFleetMail,
     'mail-sent-status': getFleetMail,
     'mail-alerts': getFleetMailAlerts,
     'mail-seen': seenFleetMail,

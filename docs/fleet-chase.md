@@ -86,3 +86,25 @@ convergenceの表示名は「PCラベル（OSユーザー username）」とし�
 `--compliance` はPC×ルールの違反率・報告日時・未報告PCの最終pollを表示する（読み取り専用）。
 `--dry-run --compliance` はHOMEに何も書かない。未到着のself報告も「—」で表示する。
 digest/statusに遵守の件数、digestに上位3件、contextに最大1件（kim-PC自身優先）を追加する。
+
+
+## 届くはずの報告を待つ
+
+```sh
+node tools/fleet-chase.mjs --expect selfcheck-008 --match-why "作業用008 引継ぎ自己点検" --from any --until +3h --reason "kim が作業用008(seisaku-team@)に自己点検を貼った。結果の受信待ち"
+node tools/fleet-chase.mjs --status
+```
+
+`expect-<key>` を同じ台帳へ登録する。同名キーの上書きは禁止。`--until` と `--defer --until` は `+30m`、`+2h`、`+3d` または ISO 時刻。受信待ちの期限だけは過去の ISO 時刻も指定できる（調査の実測用）。取り下げは既存の `--cancel expect-<key> --reason ...`。
+
+`--check` / `--chase` と既存30分巡回が inbox と `fleet-mail-received.jsonl` のメタデータを照合する。why は部分一致、from は指定ラベル・台帳上の同一実機の別名、any は任意の送信元。kim-PC 自身の修復依頼は対象外。登録5分前以降に作成された報告を受信して初めて done とし、古い同名報告やサーバにあるだけの未配達報告では完了しない。
+
+期限後はビーコン（最終poll・失敗ステップ）と認証付き `mail-trace`（本文なし、送信先を限定せず宛先誤りも検出）を照会する。any のビーコン調査対象は未登録PC全体。既知のhostname/aliasは登録済みとして扱う。結果は未着手・送信失敗・配布未収束・宛先誤り・その他。照会失敗は停止の証拠として扱わず、情報不足を残す。
+
+`--chase` は最初の3分類へ kind=prompt で既存の許可範囲内の復旧・converge・報告再送を依頼する。オプトインやログインは変更しない。1時間の受信猶予を挟んで最大2回。通信結果不明時は保存した同じメールIDで再試行（各経路2回まで）。同じ巡回の受信待ち修復は宛先ごとに3通まで。poll停止PCはこのpromptも直ちには受け取れないため、送信受付を復旧成功とは扱わない。2回後も未着ならblockedの債務として、人の操作が要る理由と試した経路・サーバ応答を保存する。遅れて届いた報告はblockedでも回収できる。
+
+調査・修復・完了証拠はSessionStart/UserPromptSubmitへ1件表示（完了は24時間）。受信待ち項目は従来のDiscordダイジェストから除外し、kimへDMしない。hookはローカル台帳だけを読む。
+
+ビーコンは `.claude.json` の `oauthAccount.emailAddress`、`cost-reporter.env` の `REPORTER_LABEL`、hostname を明示的に抽出する。資格情報のオブジェクトは送らない。アカウントは自己申告の表示用で、契約・権限の検証根拠には使わない。fleet-statusと巡回が保存するSessionStart文脈に未登録PCの登録候補を表示し、作業用番号を推測しない。GASは既存7列を保持して末尾へ2列を補う。
+
+新規PCは既存setup manifestの `task:fleet-chase`、既存PCは日次 `fleet-poller.ps1` の `register-fleet-chase.mjs --ensure` を通る（登録はkim-PCのみ）。ビーコンは既存converge時の送信経路で新項目を取得する。GASのBeacon.gs / Mail.gs / WebApp.gsはこのリポジトリで管理し、マージ後に既存deployment IDへ更新する。

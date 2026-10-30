@@ -86,12 +86,22 @@ Say @"
 Say "上記の内容で自動セットアップを始めます(入力は不要)。途中でブラウザが開いたら会社共有アカウント(seisaku-team@orgiast.jp)を選んでください。" 'Gray'
 
 # --- 前提ツール(git/node)を用意 ---
-Step "必要なツールの確認 (git / Node.js)"
+Step "必要なツールの確認 (git / Node.js / GitHub CLI)"
 function Have($c){ $null -ne (Get-Command $c -ErrorAction SilentlyContinue) }
 if (-not (Have git)) { Warn "git が無いので導入します"; try { winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements | Out-Null } catch {} ; $env:Path += ';C:\Program Files\Git\cmd' }
 if (Have git) { OK "git あり" } else { Warn "git が入りませんでした。会社担当(kim)に連絡してください" }
 if (-not (Have node)) { Warn "Node.js が無いので導入します"; try { winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-package-agreements --accept-source-agreements | Out-Null } catch {} ; $env:Path += ';C:\Program Files\nodejs' }
 if (Have node) { OK ("Node.js あり (" + (node -v) + ")") } else { Warn "Node.js が入りませんでした。会社担当(kim)に連絡してください" }
+function Update-InstallerPath {
+  try {
+    $installerPaths = @([Environment]::GetEnvironmentVariable('Path','Machine'), [Environment]::GetEnvironmentVariable('Path','User'), 'C:\Program Files\GitHub CLI') | Where-Object { $_ }
+    $env:Path = ($installerPaths -join ';')
+  } catch {}
+}
+# 導入済みの gh を見落とさないよう、判定前に PATH を読み直す。
+Update-InstallerPath
+if (-not (Have gh)) { Warn "GitHub CLI が無いので導入します"; try { winget install --id GitHub.cli -e --source winget --accept-package-agreements --accept-source-agreements | Out-Null } catch {}; Update-InstallerPath }
+if (Have gh) { OK "GitHub CLI あり" } else { Warn "GitHub CLI が入りませんでした。最後の総合チェックで確認してください" }
 
 # --- リポ取得(ZIP優先: git の pack ロック/Defender 干渉を回避) ---
 Step "共通ルール一式のダウンロード"
@@ -159,6 +169,17 @@ function Update-DirtyRepoFromZip($repo) {
     Remove-Item $ext -Recurse -Force -ErrorAction SilentlyContinue
   }
 }
+# 前回の削除失敗でできた二重入れ子を先に戻す。robocopy 0〜7 は成功。
+function Copy-OrgiastTree($source, $destination) {
+  if (-not (Test-Path $destination)) { New-Item -ItemType Directory -Force -Path $destination | Out-Null }
+  & robocopy $source $destination /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+  if ($LASTEXITCODE -gt 7) { throw "robocopy 失敗 (exit $LASTEXITCODE)" }
+}
+$nestedRepo = Join-Path $REPO 'orgiast-claude-rules-main'
+if (Test-Path $nestedRepo) {
+  try { Copy-OrgiastTree $nestedRepo $REPO; Remove-Item $nestedRepo -Recurse -Force -ErrorAction SilentlyContinue; OK "二重入れ子のリポを修復" }
+  catch { Warn ("二重入れ子の修復に失敗: " + $_.Exception.Message) }
+}
 if ((Have git) -and (Test-Path (Join-Path $REPO '.git'))) {
   try {
     $repoStatus = @(git -C $REPO status --porcelain 2>$null)
@@ -185,8 +206,9 @@ if (-not $gotRepo -and -not $preserveRepo) { try {
   $src = Join-Path $ext 'orgiast-claude-rules-main'
   if (Test-Path $src) {
     if (Test-Path $REPO) { Remove-Item $REPO -Recurse -Force -ErrorAction SilentlyContinue }
-    Move-Item $src $REPO -Force
-    if (Test-Path (Join-Path $REPO 'tools')) { $gotRepo = $true; OK "ダウンロード完了(zip)" }
+    # 削除後に常駐タスクがフォルダを残しても、子フォルダに Move しない。
+    Copy-OrgiastTree $src $REPO
+    if (Test-Path (Join-Path $REPO 'tools\onboarding-sync.mjs')) { $gotRepo = $true; OK "ダウンロード完了(zip)" }
   }
   Remove-Item $zip -Force -ErrorAction SilentlyContinue
   Remove-Item $ext -Recurse -Force -ErrorAction SilentlyContinue
@@ -201,7 +223,7 @@ if (-not $gotRepo -and -not $preserveRepo) {
     catch { Warn ("git clone 失敗 (試行 " + $i + "/3)"); if (Test-Path $REPO) { Remove-Item $REPO -Recurse -Force -ErrorAction SilentlyContinue } }
   }
 }
-if (-not $gotRepo) { Warn "共通ルールの取得に失敗。ネット接続を確認して、青い画面を閉じてもう一度コマンドを貼り付けてください(それでも駄目なら kim に連絡)" }
+if (-not $gotRepo -or -not (Test-Path (Join-Path $REPO 'tools\onboarding-sync.mjs'))) { Warn "共通ルールの取得に失敗。tools\onboarding-sync.mjs が無いため、ネット接続を確認してもう一度実行してください"; $gotRepo = $false }
 
 # 新PCと既存PCの復帰の両方で、鍵を先に取得してから従来の導入を続ける。
 if ($Enroll) {
@@ -498,6 +520,14 @@ try {
   }
 } catch { Warn ("schedule-sync registration failed: " + $_.Exception.Message) }
 
+try {
+  $daytripInstaller = Join-Path $REPO 'tools\register-daytrip-detect-task.ps1'
+  if (Test-Path -LiteralPath $daytripInstaller) {
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $daytripInstaller -Ensure
+    if ($LASTEXITCODE -ne 0) { throw "register-daytrip-detect-task.ps1 exit $LASTEXITCODE" }
+  }
+} catch { Warn ("daytrip-detect registration failed: " + $_.Exception.Message) }
+
 # --- フリート管制エージェントの定時起動(15分ごと) ---
 Step "フリート管制エージェントを登録 (15分ごと)"
 try {
@@ -636,14 +666,15 @@ if (-not $geminiKey -and $embedKey) {
   OK "Gemini APIキー(会社共有)を設定しました(鍵作成の操作は不要)"
 }
 if ($geminiKey) { OK "Gemini APIキーは設定済み(スキップ)" }
-elseif ($NonInteractive) {
-  Warn "Gemini APIキー入力は CI のためスキップ"
+elseif ($NonInteractive -or [Console]::IsInputRedirected -or -not [Environment]::UserInteractive) {
+  Warn "Gemini APIキーは非対話実行のためスキップ"
 }
 else {
   Say "  これから APIキー作成ページをブラウザで開きます。会社のGoogle(orgiast.jp)でログインしてください。" 'Gray'
   Say "  ページで『APIキーを作成 / Create API key』を押し、出てきた文字(AIza... か AQ...)をコピー。" 'Gray'
   try { Start-Process 'https://aistudio.google.com/apikey' } catch { Say "  手動で開いてください: https://aistudio.google.com/apikey" 'Yellow' }
-  $geminiKey = (Read-Host "  コピーしたAPIキーをここに貼り付けて Enter (今やらない場合は空Enterでスキップ)").Trim()
+  try { $geminiInput = Read-Host "  コピーしたAPIキーをここに貼り付けて Enter (今やらない場合は空Enterでスキップ)" } catch { $geminiInput = '' }
+  $geminiKey = if ($null -eq $geminiInput) { '' } else { $geminiInput.Trim() }
   if ($geminiKey) {
     New-Item -ItemType Directory -Force -Path (Split-Path $gEnv) | Out-Null
     "GEMINI_API_KEY=$geminiKey`r`nGEMINI_CLI_TRUST_WORKSPACE=true" | Set-Content $gEnv -Encoding UTF8

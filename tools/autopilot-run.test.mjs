@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runOnce, invokeClaude, buildPrompt, resolveSupervisorAuth, sampleCpuBusy } from './autopilot-run.mjs';
+import { runOnce, invokeClaude, buildPrompt, resolveSupervisorAuth, sampleCpuBusy, supervisorModel } from './autopilot-run.mjs';
 import { runAutopilot, acquireLock } from './autopilot-tick.mjs';
 
 function fixture(t) {
@@ -56,6 +56,39 @@ test('models follow planIncluded; prompt comes from skill and headless uses one 
     assert.match(log, /tail test/);
     assert.match(log, /"exitCode":0/);
   }
+});
+
+test('objective.md "model" pins the supervisor model per PC; fable pin is ignored when plan excludes it', async (t) => {
+  for (const [pin, policy, model] of [
+    ['claude-opus-5-5', { planIncluded: true }, 'claude-opus-5-5'],
+    ['claude-fable-5-1', { planIncluded: false }, 'claude-opus-5'],
+    ['gpt-5; rm -rf /', { planIncluded: true }, 'claude-fable-5-1'],
+  ]) {
+    const opts = fixture(t);
+    await runAutopilot('start', { objective: 'test' }, opts);
+    const file = path.join(opts.dir, 'objective.md');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/("objective":\s*"test")/, `$1, "model": ${JSON.stringify(pin)}`));
+    let seen = '';
+    const result = await runOnce({ ...opts, policy, executable: 'fake-claude', invokeImpl: async (invocation) => {
+      seen = invocation.args[2];
+      await runAutopilot('post', { summary: 'work verified', progress: 10, codex: true }, opts);
+      return { exitCode: 0, stdout: '' };
+    } });
+    assert.equal(seen, model);
+    assert.equal(result.model, model);
+  }
+});
+
+test('a new /autopilot start keeps the per-PC model pin', async (t) => {
+  const opts = fixture(t);
+  await runAutopilot('start', { objective: 'first' }, opts);
+  const file = path.join(opts.dir, 'objective.md');
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/("objective":\s*"first")/, '$1, "model": "claude-opus-5-5"'));
+  await runAutopilot('stop', {}, opts);
+  await runAutopilot('start', { objective: 'second' }, opts);
+  const text = fs.readFileSync(file, 'utf8');
+  assert.match(text, /"objective": "second"/);
+  assert.equal(supervisorModel(file, { planIncluded: true }), 'claude-opus-5-5');
 });
 
 test('repeated missing posts are counted and trip the noop watchdog', async (t) => {
@@ -123,7 +156,7 @@ test('runner failures pause and send one short runner_error DM', async (t) => {
 test('existing runner entry replenishes before launching Claude without explicit start', async (t) => {
   const opts = fixture(t), sent = [];
   fs.mkdirSync(path.join(opts.home, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(opts.home, '.claude', 'next-actions.md'), '## 推奨アクション\n1. テスト修正');
+  fs.writeFileSync(path.join(opts.home, '.claude', 'business-goals.md'), '## 売上・利益レバー（上から優先。1セッション=1件）\n1. テスト修正');
   const result = await runOnce({ ...opts, askImpl: async () => 'Yes', notifyImpl: async text => { sent.push(text); }, invokeImpl: async () => {
     assert.equal((await runAutopilot('status', {}, opts)).objective.objective, 'テスト修正');
     await runAutopilot('post', { summary: 'work', progress: 10 }, opts);

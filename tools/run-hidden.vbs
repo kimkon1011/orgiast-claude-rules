@@ -14,12 +14,37 @@
 ' (rotated at ~1 MB) so the output is still inspectable after the window is gone.
 ' The child's exit code is returned, so LastTaskResult stays meaningful.
 '
+' 2026-10-26..29: a hung descendant kept an inherited handle on the log, so
+' cmd's ">>" failed and the job never started (task rc=1 nightly). We now
+' test-append first and fall back to <name>.locked-<yyyymmdd-hhnnss>.log.
+'
 ' ASCII only on purpose: Windows script hosts on JP locale mis-decode non-BOM
 ' UTF-8, and this file is executed by wscript, not PowerShell.
 
 Option Explicit
 
 Dim args, i, inner, exePath, baseName, logDir, logPath, shell, fso, rc, full
+Dim lockedLog, ts
+
+' True when path can be opened for appending right now (nobody holds a handle
+' that denies it). Creates the file when missing, same as cmd's ">>" would.
+Function CanAppendTo(fs, path)
+  Dim t
+  On Error Resume Next
+  Set t = fs.OpenTextFile(path, 8, True) ' 8 = ForAppending, True = create
+  CanAppendTo = (Err.Number = 0)
+  On Error Goto 0
+  If CanAppendTo Then t.Close
+End Function
+
+' yyyymmdd-hhnnss from Now, built from plain digits so it is locale-proof.
+Function Timestamp()
+  Dim n
+  n = Now
+  Timestamp = Right("0000" & Year(n), 4) & Right("00" & Month(n), 2) & _
+      Right("00" & Day(n), 2) & "-" & Right("00" & Hour(n), 2) & _
+      Right("00" & Minute(n), 2) & Right("00" & Second(n), 2)
+End Function
 
 Set args = WScript.Arguments
 If args.Count < 1 Then
@@ -61,6 +86,20 @@ If fso.FileExists(logPath) Then
   End If
 End If
 On Error Goto 0
+
+' If a leftover child still holds a handle on the log, cmd's ">>" would fail
+' and the job would never start. Switch to a sibling log and say why in it.
+If Not CanAppendTo(fso, logPath) Then
+  lockedLog = logDir & "\" & baseName & ".locked-" & Timestamp() & ".log"
+  On Error Resume Next
+  Set ts = fso.OpenTextFile(lockedLog, 8, True)
+  If Err.Number = 0 Then
+    ts.WriteLine "run-hidden: primary log locked: " & logPath
+    ts.Close
+  End If
+  On Error Goto 0
+  logPath = lockedLog
+End If
 
 inner = ""
 For i = 0 To args.Count - 1

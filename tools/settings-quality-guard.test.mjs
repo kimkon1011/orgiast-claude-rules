@@ -82,6 +82,21 @@ test('restoreEffortLevel は high を変更しない', (t) => {
   assert.deepEqual(restoreEffortLevel(file, { now: 0, backupDir: path.join(root, 'backups') }), { changed: false });
 });
 
+for (const value of [undefined, null]) {
+  test(`restoreEffortLevel は sessionstart で ${String(value)} を退避して medium にする`, (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'quality-guard-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const file = path.join(root, 'settings.json');
+    const settings = { other: true };
+    if (value === null) settings.effortLevel = null;
+    fs.writeFileSync(file, JSON.stringify(settings));
+    const result = restoreEffortLevel(file, { now: 0, backupDir: path.join(root, 'backups'), includeUnset: true });
+    assert.deepEqual(result, { changed: true, from: '未設定' });
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).effortLevel, 'medium');
+    assert.equal(fs.readdirSync(path.join(root, 'backups')).length, 1);
+  });
+}
+
 for (const [label, model, allow, expected] of [
   ['fable', 'FaBlE-5', '', 'opus'], ['1m', 'opus[1m]', '', 'opus'],
   ['unset', undefined, '', 'opus'], ['opus', 'opus', '', 'opus'],
@@ -108,3 +123,19 @@ for (const [label, model, allow, expected] of [
     assert.equal(again.stdout, '');
   });
 }
+
+test('sessionstart は effortLevel 未設定も medium にしてバックアップする', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'effort-sessionstart-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const claudeDir = path.join(home, '.claude');
+  fs.mkdirSync(claudeDir);
+  const file = path.join(claudeDir, 'settings.json');
+  fs.writeFileSync(file, JSON.stringify({ model: 'opus', other: true }));
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./settings-quality-guard.mjs', import.meta.url)), '--mode', 'sessionstart'], {
+    encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).effortLevel, 'medium');
+  assert.match(result.stdout, /effortLevel.*未設定.*medium/);
+  assert.equal(fs.readdirSync(path.join(claudeDir, 'backups')).length, 1);
+});

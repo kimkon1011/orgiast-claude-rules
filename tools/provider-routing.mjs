@@ -1,11 +1,13 @@
-// Kimi / DeepSeek inference always uses the auto-recharged OpenRouter wallet.
+// Kimi / DeepSeek / Mistral inference always uses the auto-recharged OpenRouter wallet.
 export const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 export const OPENROUTER_ANTHROPIC_BASE = 'https://openrouter.ai/api';
-export const GATEWAY_MODELS = Object.freeze({ kimi: 'moonshotai/kimi-k3', deepseek: 'deepseek/deepseek-v4-flash' });
+export const GATEWAY_MODELS = Object.freeze({ kimi: 'moonshotai/kimi-k3', deepseek: 'deepseek/deepseek-v4-flash', mistral: 'mistralai/mistral-medium-3.1' });
 export function gatewayModel(provider, model) {
   if (!GATEWAY_MODELS[provider]) return model;
   if (!model) return GATEWAY_MODELS[provider];
   if (model.includes('/')) return model;
+  // 直 API 用の mistral-*-latest は OpenRouter に無い。直キーは毎分0枠（2026-10-29 実測）なので既定へ寄せる。
+  if (provider === 'mistral') return GATEWAY_MODELS.mistral;
   const aliases = { 'deepseek-flash': 'deepseek-v4-flash', 'deepseek-chat': 'deepseek-v4-flash', 'deepseek-reasoner': 'deepseek-v4-flash', 'deepseek-pro': 'deepseek-v4-pro', 'kimi-latest': 'kimi-k3', 'kimi-k2-turbo-preview': 'kimi-k2-0905', 'kimi-k2-0711-preview': 'kimi-k2', 'kimi-k2-0905-preview': 'kimi-k2-0905' };
   return `${provider === 'kimi' ? 'moonshotai' : 'deepseek'}/${aliases[model] || model}`;
 }

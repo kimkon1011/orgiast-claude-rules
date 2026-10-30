@@ -14,7 +14,7 @@
     "pretooluse-line-broadcast-guard": { "rollout": "deny", "immediatePolicy": "2026-10-23 kim 指示: LINE broadcast による宛先違い誤送信の再発防止" },
     "share-before-send-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-10-17T00:00:00Z", "denyAfter": "2026-10-24T00:00:00Z" },
     "message-locator-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-10-26T00:00:00Z", "denyAfter": "2026-11-02T00:00:00Z" },
-    "gmail-connector-url-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-10-18T00:00:00Z", "denyAfter": "2026-10-25T00:00:00Z" },
+    "gmail-connector-url-gate": { "rollout": "deny", "pilotDeny": true, "immediatePolicy": "2026-10-30 user-PC で社外宛返信の URL が google.com/url?q= に書き換わった実害", "distributedAt": "2026-10-18T00:00:00Z", "denyAfter": "2026-10-25T00:00:00Z" },
     "api-billing-guard": { "rollout": "deny", "immediatePolicy": "2026-10-17 kim 厳命: 従量課金停止", "distributedAt": "2026-10-17T00:00:00Z" },
     "askuser-selfcheck-gate": {
       "rollout": "deny",

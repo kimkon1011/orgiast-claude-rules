@@ -26,6 +26,8 @@ export function rolloutMode(name, { manifest = readRollout(), home = homeDir(), 
     && entry.immediatePolicy === '2026-10-23 古川さん依頼: 備品管理表K列のデータ破損防止') return 'deny';
   if (name === 'mail-draft-account-gate' && entry?.rollout === 'deny'
     && entry.immediatePolicy === '2026-10-25 kim 指示: 全PCのメール下書きは seisaku-team@orgiast.jp に統一') return 'deny';
+  if (name === 'gmail-connector-url-gate' && entry?.rollout === 'deny'
+    && entry.immediatePolicy === '2026-10-30 user-PC で社外宛返信の URL が google.com/url?q= に書き換わった実害') return 'deny';
   if (name === 'response-language-gate' && entry?.rollout === 'deny'
     && entry.immediatePolicy === '2026-10-26 cr 指示: Stop hook の書き直しで英語へ逸脱した実害') return 'deny';
   if (entry?.legacy === true && entry.rollout === 'deny') return 'deny';

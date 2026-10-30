@@ -90,6 +90,8 @@ claude.ai の Gmail コネクタは、本文や件名の `http://` / `https://` 
 
 - URL を含むメールは `node tools/gmail-draft.mjs --to … --subject … --body-file …` で Gmail API へ直接保存する。
 - SA 鍵がない PC では、aujust リポジトリの GitHub Actions と DWD を使う（memory: `project-cr-pc-gmail-read-via-gha-secret`）。
+- 上の経路が使えず急ぐ場合は、URL を `8sp.jp/food` のようにスキーム（https://）なしで書けば書き換えられず、受信側でリンクになる。
+- 2026-10-30 から全PCで初回から deny（観察期間なし）。user-PC で社外宛返信の URL が転送 URL に書き換わった実害による。
 - override は、転送 URL への書き換えが起きないことを生 MIME の読み戻しまで含めて確認でき、利用者がそのリスクを明示的に受け入れた場合だけ使う。`~/.claude/gmail-connector-url-gate-override` の1行目に短い有効期限の ISO 8601 時刻を書く。
 
 ## live-artifact-read-gate

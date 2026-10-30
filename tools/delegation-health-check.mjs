@@ -259,6 +259,11 @@ const CODEX_AUTH_FAILED = /401 unauthorized|unauthorized \(401\)|missing bearer 
 // 問題なので、直せる欠陥として起票する（2026-09-22 診断: 09-20 の11件中7件）。
 const CODEX_MODEL_AUTH_MISMATCH = /is not supported when using codex with a chatgpt account/i;
 
+// 選択モデルが、インストール済み Codex CLI より新しいクライアントを要求して即死した状態。
+// 2026-10-27 実測: gpt-6-astra が 400 でこの文言を返し、status:'error'/exitCode:1/out:0 のため
+// catch-all の no_output に落ちて codex_empty_output と誤診された。無音終了ではなく更新不足である。
+const CODEX_CLI_OUTDATED = /model requires a newer version of Codex\. Please upgrade to the latest (?:app or )?CLI/i;
+
 // Codex の利用上限到達。コードの欠陥ではなく上限到達による停止。
 // アポストロフィは U+2019(’) と U+0027(') の両方に一致させる。
 // 台帳の stderrTail は codex-do.mjs が末尾200字へ切り詰める(slice(-200))ため、上限メッセージの
@@ -297,6 +302,7 @@ export function emptyOutputReason(row) {
   if (/Not inside a trusted directory/.test(String(row?.stderrTail || ''))) return 'untrusted_cwd';
   if (CODEX_AUTH_FAILED.test(String(row?.stderrTail || ''))) return 'auth_failed';
   if (CODEX_MODEL_AUTH_MISMATCH.test(String(row?.stderrTail || ''))) return 'model_auth_mismatch';
+  if (CODEX_CLI_OUTDATED.test(String(row?.stderrTail || ''))) return 'cli_outdated';
   if (CODEX_USAGE_LIMIT.test(String(row?.stderrTail || ''))) return 'usage_limit';
   if (CODEX_MODEL_CAPACITY.test(String(row?.stderrTail || ''))) return 'model_capacity';
   if (INFRA_TRANSIENT.test(String(row?.stderrTail || ''))) return 'infra_transient';
@@ -474,10 +480,11 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     const lastFailureTime = Math.max(...failures.map((row) => Date.parse(row.t)));
     return codexSuccessTimes.some((time) => time > lastFailureTime);
   };
-  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed', 'usage_limit', 'model_capacity'].includes(item.reason));
+  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'cli_outdated', 'preflight_blocked', 'spawn_failed', 'usage_limit', 'model_capacity'].includes(item.reason));
   const launchFailed = empty.filter((item) => item.reason === 'launch_failed');
   const authFailed = empty.filter((item) => item.reason === 'auth_failed');
   const modelAuthMismatch = empty.filter((item) => item.reason === 'model_auth_mismatch');
+  const cliOutdated = empty.filter((item) => item.reason === 'cli_outdated');
   const usageLimit = empty.filter((item) => item.reason === 'usage_limit');
   const laneAbsent = launchFailed.filter((item) => WSL_LANE_ABSENT.test(String(item.stderrTail || '')));
   const fixableLaunchFailed = launchFailed.filter((item) => !WSL_LANE_ABSENT.test(String(item.stderrTail || '')));
@@ -495,6 +502,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   if (spawnFailedRows.length && !repairedAfter(spawnFailedRows)) findings.push({ id: 'codex_spawn_failed', severity: 'high', title: 'Codex の子プロセスが spawn に失敗（起動できていない）', evidence: [`${spawnFailedRows.length}件`, ...reasonTop(spawnFailedRows)], fixTask: 'where codex／WSL 内 command -v codex で実体を確認し、無ければ npm i -g @openai/codex で入れ直す' });
   // 直せる欠陥なので fixTask を付ける（medium）。
   if (modelAuthMismatch.length) findings.push({ id: 'codex_model_auth_mismatch', severity: 'medium', title: 'Codex が ChatGPT アカウントで sol/astra を選んで失敗', evidence: [`${modelAuthMismatch.length}件`, ...reasonTop(modelAuthMismatch)], fixTask: 'codex-do のレーン選択が ChatGPT アカウント認証を検出できず sol/astra を選んでいる。detectChatGptAuth と decideCodexLane の判定を照合し、再現テストを追加して修正' });
+  if (cliOutdated.length) findings.push({ id: 'codex_cli_outdated', severity: 'medium', title: 'Codex CLI が選択モデルの要求版より古い', evidence: [`${cliOutdated.length}件`, ...reasonTop(cliOutdated)], fixTask: 'Codex CLI を最新版へ更新し、codex-do の同モデル起動を再確認する' });
   // 2026-10-19 実測: Windows はログイン済みなのに、WSL 側 401 の履歴だけで毎晩 high 起票されていた。
   // codex-do は起動時に Windows の auth.json を WSL へ同期するため、失敗後の再ログインも修復として扱う。
   if (authFailed.length && !repairedAfter(authFailed) && !authRestoredAfter(home, authFailed)) findings.push({ id: 'codex_auth_failed', severity: 'high', title: 'Codex CLI が未認証（WSL 側の再ログインが必要）', evidence: [`${authFailed.length}件`, 'WSL の ~/.codex/auth.json を確認し codex login を実行'], fixTask: 'Windows の %USERPROFILE%\\.codex\\auth.json を WSL の ~/.codex/ にコピーし codex login status。Windows 側も未ログインのときだけ人の codex login が要る' });

@@ -265,7 +265,7 @@ LINE の全員配信が本当に必要なら、kim が同じセッションで�
 
 ## mail-draft-account-gate
 
-メールは seisaku-team@orgiast.jp の下書きに作る: `node tools/gmail-draft.mjs --to <宛先> --subject "<件名>" --body-file <本文ファイル> --json` → 読み戻し `node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "in:drafts subject:<件名>" --json` → user が「送って」と言ったら重複・矛盾照会後 `node tools/gmail-draft.mjs --send <draftId> --json`。緊急退避のみ `ORGIAST_MAIL_ACCOUNT_GATE=off`。
+メールは seisaku-team@orgiast.jp の下書きに作る: `node tools/gmail-draft.mjs --to <宛先> --subject "<件名>" --body-file <本文ファイル> --json` → 読み戻し `node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "in:drafts subject:<件名>" --json` → user が「送って」と言ったら重複・矛盾照会後 `node tools/gmail-draft.mjs --send <draftId> --json`。Claude Code に seisaku-team@orgiast.jp でログインしている席（`~/.claude.json` の oauthAccount）は Gmail MCP も共有アカウント名義なので通す。緊急退避のみ `ORGIAST_MAIL_ACCOUNT_GATE=off`。
 
 ## mail-consistency-gate
 

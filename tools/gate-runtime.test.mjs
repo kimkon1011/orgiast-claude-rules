@@ -134,7 +134,7 @@ test('mail account policy denies immediately on a new non-pilot PC', t => {
 test('registered mail gate retains deny through the common runner', async t => {
   const home = temp(t);
   const result = await runHook(path.join(toolsDir, 'mail-draft-account-gate.mjs'), JSON.stringify({ tool_name: 'mcp__claude_ai_Gmail_2__send_message', tool_input: { draftId: 'd' } }), {
-    env: { ...process.env, ORGIAST_MAIL_ACCOUNT_GATE: '' },
+    env: { ...process.env, ORGIAST_MAIL_ACCOUNT_GATE: '', ORGIAST_CLAUDE_ACCOUNT_EMAIL: 'kim@orgiast.jp' },
     policyOptions: { home, hostname: 'new-pc', notify: async () => ({ delivered: 'mock' }) },
   });
   assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision, 'deny');

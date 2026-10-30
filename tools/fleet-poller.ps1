@@ -31,6 +31,17 @@ try {
   }
 } catch { Write-Warning ("schedule-sync self-repair failed: " + $_.Exception.Message) }
 
+try {
+  $daytripInstaller = Join-Path $repo 'tools\register-daytrip-detect-task.ps1'
+  if ($repo -and (Test-Path -LiteralPath $daytripInstaller)) {
+    if ($Dry) { DrySkip 'register-daytrip-detect-task.ps1 -Ensure (LINE receiver host only)' }
+    else {
+      & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $daytripInstaller -Ensure
+      if ($LASTEXITCODE -ne 0) { throw "register-daytrip-detect-task.ps1 exit $LASTEXITCODE" }
+    }
+  }
+} catch { Write-Warning ("daytrip-detect self-repair failed: " + $_.Exception.Message) }
+
 # 自己修復: 対話セッションのGUI監視を既存PCにも導入する。
 try {
   $dialogInstaller = Join-Path $repo 'tools\register-stuck-dialog-task.mjs'

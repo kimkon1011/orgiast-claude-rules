@@ -1,6 +1,7 @@
 {
   "version": 1,
   "items": [
+    { "id": "task:daytrip-detect", "type": "scheduled-task", "severity": "optional", "spec": { "name": "OrgiastDaytripDetect", "requireActionTarget": true, "ifPresent": "Downloads/claude-mobile/app/api/line-ingest/route.ts" }, "description": "kim-PC: 日帰り出張候補確認と返信取込（毎日20:00）", "repair": ["register-daytrip-detect-task.mjs"] },
     {"id":"task:rule-compliance","type":"scheduled-task","severity":"required","spec":{"name":"ClaudeRuleComplianceAudit","requireActionTarget":true},"description":"全PC: 日次ルール監査と --apply（03:50）","repair":["register-rule-compliance-task.mjs"]},
     {"id":"state:rule-enforcement","type":"json-valid","severity":"required","spec":{"path":".claude/rule-enforcement.json","requiredPath":"repair-failed-lane-first.mode"},"description":"検証済みルールの強制状態を生成","repair":["rule-compliance-loop.mjs","--days","7","--apply"]},
     {"id":"settings:lane-repair-first","type":"json-valid","severity":"required","spec":{"path":".claude/settings.json","hookEvent":"PreToolUse","hookScript":"lane-repair-first-gate.mjs","async":false,"hookArgs":"","hookRunner":"gate-hook-runner.mjs","timeout":15},"description":"全PC: 故障レーンの修復を実装より優先","repair":["register-hooks.mjs","--hooks-only"]},

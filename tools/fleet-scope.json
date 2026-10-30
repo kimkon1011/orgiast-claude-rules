@@ -1,6 +1,8 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/register-daytrip-detect-task.ps1", "scope": "kim-only", "step": "task:daytrip-detect", "reason": "kim個人の出張候補。LINE受信ホストだけで登録"},
+    {"path": "tools/register-daytrip-detect-task.mjs", "scope": "kim-only", "step": "task:daytrip-detect", "reason": "convergeからkim-PC用PowerShell登録をEnsureで呼ぶ"},
     {"path": "tools/lib/share-secrets.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "memory-share と案件会話保存で共通の秘密情報除去"},
     {"path": "tools/case-handoff.mjs", "scope": "fleet", "step": "settings:case-handoff-sessionstart", "reason": "案件履歴の保存・再開。kim操作アカウントのみ実行"},
     {"path": "tools/lib/case-handoff.mjs", "scope": "fleet", "step": "settings:case-handoff-sessionstart", "reason": "案件履歴の保存・再開。kim操作アカウントのみ実行"},

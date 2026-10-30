@@ -83,6 +83,38 @@ const MACHINE_USER_PREFIXES = [
   'Stop hook feedback:',
 ];
 
+function entryText(entry) {
+  const content = entry?.message?.content;
+  return Array.isArray(content)
+    ? content.filter(block => block?.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n')
+    : typeof content === 'string' ? content : '';
+}
+
+function isRealHumanEntry(entry) {
+  if (entry?.isSidechain === true || entry?.isMeta === true || (entry?.type !== 'user' && entry?.message?.role !== 'user')) return false;
+  const content = entry?.message?.content;
+  if (Array.isArray(content) && content.some(block => block?.type === 'tool_result')) return false;
+  const text = entryText(entry).trimStart();
+  return !!text && !MACHINE_USER_PREFIXES.some(prefix => text.startsWith(prefix));
+}
+
+// Stop hook feedback is encoded as a user entry, but it does not start a new conversational
+// turn. Keep every assistant text since the last real user request so a retry can add only the
+// missing lines instead of repeating the preceding response.
+export function currentTurnAssistantTexts(raw) {
+  const entries = String(raw || '').split(/\r?\n/).flatMap(line => {
+    try { return [JSON.parse(line)]; } catch { return []; }
+  });
+  let start = 0;
+  entries.forEach((entry, index) => { if (isRealHumanEntry(entry)) start = index + 1; });
+  return entries.slice(start).filter(entry => entry?.isSidechain !== true && (entry?.type === 'assistant' || entry?.message?.role === 'assistant'))
+    .map(entryText).filter(text => text.trim());
+}
+
+export function currentTurnAssistantText(raw) {
+  return currentTurnAssistantTexts(raw).join('\n\n');
+}
+
 export function readLastHumanText(transcriptPath, options = {}) {
   if (!transcriptPath) return { text: '', reason: 'no-path', scannedLines: 0 };
   const maxLines = options.maxLines ?? DEFAULT_MAX_LINES;

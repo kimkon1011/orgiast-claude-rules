@@ -955,6 +955,12 @@
       "reason": "url-account-gate の実行時 import 依存（再帰検査対象）"
     },
     {
+      "path": "tools/lib/stop-retry-message.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "Stop系ゲートの再試行共通文言（実行時 import 依存）"
+    },
+    {
       "path": "tools/pending-decisions.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",

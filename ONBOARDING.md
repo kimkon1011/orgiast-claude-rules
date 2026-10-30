@@ -14,6 +14,8 @@ Claude Code は「作業者の手間を最小化する自動実行エージェ�
 
 応答は常に日本語（コード・識別子は原文可）。Stop hook の差し戻しで書き直すときも日本語を保つ。response-language-gate が英語応答を差し戻し、setup --converge が全PCの settings.json に language: japanese を入れる（2026-10-26 cr 指示: 書き直し時に英語へ逸脱した実害）
 
+Stop hook で差し戻されたら前文を繰り返さず不足分だけ書く。user がすべきことは最後のメッセージにまとめる（2026-10-30 user 指示・全PC）。
+
 user の操作はゼロが原則。①Claude 自身が実行 → ②別経路で自動化（MCP・CLI・既存の定期ジョブ・fleet の自己修復など）→ ③それでも安全装置の拒否などで Claude が実行できないものだけ、`tools/make-desktop-launcher.mjs` でデスクトップのダブルクリック用ファイルにしてパスだけを示す。
 PowerShell への貼り付けは頼まない。③にしたときは、①②を試した経路名・結果（拒否・classifier 等）の証拠を `手間監査:` の行に書く（全PC・全アカウント共通、kim 決定 2026-09-26）。
 

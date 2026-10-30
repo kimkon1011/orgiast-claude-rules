@@ -91,7 +91,7 @@ test('real wrapper retries SessionStart key client once, preserves env keys, and
  const file=path.join(home,'key-required.mjs');
  fs.writeFileSync(file,`export const GATE_CONTRACT = ${JSON.stringify(contract)};\nimport fs from 'node:fs';\nconst body=fs.readFileSync(process.env.ORGIAST_HOME+'/.claude/example.env','utf8');\nif(!body.includes('KEY=')) console.log(JSON.stringify({hookSpecificOutput:{hookEventName:'PreToolUse',permissionDecision:'deny',permissionDecisionReason:'key missing'}}));\n`);
  const result=await new Promise((resolve,reject)=>{
-  const child=spawn(process.execPath,[path.join(toolsDir,'gate-hook-runner.mjs'),file],{env:{...process.env,ORGIAST_HOME:home,ORGIAST_KEYSERVE_URL:`http://127.0.0.1:${server.address().port}`,ORGIAST_KEYSERVE_SECRET:'test-secret'},stdio:['pipe','pipe','pipe']});
+  const child=spawn(process.execPath,[path.join(toolsDir,'gate-hook-runner.mjs'),file],{env:{...process.env,ORGIAST_HOME:home,ORGIAST_KEYSERVE_URL:`http://127.0.0.1:${server.address().port}`,ORGIAST_KEYSERVE_SECRET:'test-secret',ORGIAST_KEYSERVE_PC:'test-pc'},stdio:['pipe','pipe','pipe']});
   let out='',err='';child.stdout.on('data',c=>out+=c);child.stderr.on('data',c=>err+=c);child.on('error',reject);child.on('close',status=>resolve({status,out,err}));child.stdin.end(JSON.stringify({hook_event_name:'PreToolUse',tool_name:'Bash'}));
  });
  assert.equal(result.status,0,result.err);assert.equal(requests,1);assert.equal(result.out,'');assert.doesNotMatch(result.err,/mock-value|test-secret/);

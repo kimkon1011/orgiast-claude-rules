@@ -7,7 +7,7 @@ import { isEntry } from './is-entry.mjs';
 import { machineIdentity } from './machine-identity.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { readEnvValue } from './env-kv.mjs';
-import { keyserveAuthHeaders, requireKeyservePcId, keyserveSecret } from './keyserve-auth.mjs';
+import { keyserveAuthHeaders, keyservePcId, keyserveSecret } from './keyserve-auth.mjs';
 import { isKimOperated } from './lib/kim-operated.mjs';
 
 const DEFAULT_MEMORY_URL = 'https://orgiast-memoryserve.vercel.app/api/memory';
@@ -247,7 +247,7 @@ export async function installSharedMemories(options = {}) {
       const url = new URL(options.memoryUrl || env.ORGIAST_MEMORY_URL || DEFAULT_MEMORY_URL);
       url.search = query;
       const response = await (options.fetchImpl || fetch)(url.toString(), {
-        headers: keyserveAuthHeaders(keyserveSecret(home, env), options.nowMs ?? Date.now(), requireKeyservePcId(home, env)),
+        headers: keyserveAuthHeaders(keyserveSecret(home, env), options.nowMs ?? Date.now(), keyservePcId(home, env)),
         signal: AbortSignal.timeout(options.timeoutMs || 10000),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}${response.status === 401 ? ' (~/.claude/keyserve.env 未受領またはローテーションの可能性)' : ''}`);

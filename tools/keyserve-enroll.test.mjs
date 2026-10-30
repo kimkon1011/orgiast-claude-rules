@@ -12,7 +12,7 @@ function fixture(t, primary = true) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'keyserve-enroll-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   fs.mkdirSync(path.join(home, '.claude'));
-  if (primary) fs.writeFileSync(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET=primary-test\n');
+  if (primary) fs.writeFileSync(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET=primary-test\nORGIAST_KEYSERVE_PC=test-PC\n');
   const output = [], errors = [];
   return { home, output, errors, stdout: (s) => output.push(s), stderr: (s) => errors.push(s) };
 }
@@ -110,6 +110,10 @@ test('dry-run works without credentials', async (t) => {
 
 test('unresolved issuing PC reports the identity error before fetch', async t => {
   const f = fixture(t);
+  // Remove the PC ID so the identity error triggers even when keyserve.env has it.
+  const envPath = path.join(f.home, '.claude', 'keyserve.env');
+  const current = fs.readFileSync(envPath, 'utf8');
+  fs.writeFileSync(envPath, current.replace(/^ORGIAST_KEYSERVE_PC=.+/gm, '').trim());
   t.mock.method(os, 'hostname', () => '作業用011');
   const saved = process.env.ORGIAST_KEYSERVE_PC;
   delete process.env.ORGIAST_KEYSERVE_PC;

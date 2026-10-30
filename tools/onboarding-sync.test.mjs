@@ -76,6 +76,7 @@ test('HTTP 500 is alerted even after a recent successful key sync', async (t) =>
   const result = await runAsync(f, [], {
     ORGIAST_KEYSERVE_SECRET: 'test-only-secret',
     ORGIAST_KEYSERVE_URL: `http://127.0.0.1:${port}/keys`,
+    ORGIAST_KEYSERVE_PC: 'test-pc',
   });
   assert.equal(result.status, 0);
   assert.match(result.stdout, /keyserve .*HTTP status: 500/);
@@ -120,6 +121,7 @@ test('--keys-only keyserve failure is silent and never stops the session', () =>
       ORGIAST_HOME: f.home,
       ORGIAST_KEYSERVE_SECRET: 'test-only-secret',
       ORGIAST_KEYSERVE_URL: 'http://127.0.0.1:9/unreachable',
+      ORGIAST_KEYSERVE_PC: 'test-pc',
       ORGIAST_REPO: path.join(f.home, 'absent'),
     },
   });

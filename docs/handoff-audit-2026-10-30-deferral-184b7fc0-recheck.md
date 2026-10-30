@@ -43,3 +43,13 @@
 - 出力末尾に `tools/url-account-gate.test.mjs:135` の失敗を確認。原因は `spawnSync node ETIMEDOUT`（全体並列実行時の負荷によるタイムアウト）。
 - 同テストを単独で再実行: 59 tests / 59 pass / 0 fail。
 - 判定: 全体ゲートの集計は未取得で、ゲート合格とは断定しない。次回は出力をファイルへ保存し、`--test-concurrency=1` で実行して集計行を残す。
+
+## 7. 全体ゲート `node --test tools/*.test.mjs`（3回目イテレーション・出力ファイル保存＋直列実行）
+
+- 実行コマンド: `env -u CLAUDE_HEADLESS -u ORGIAST_HEADLESS_JOB node --test --test-concurrency=1 --test-reporter=spec "tools/*.test.mjs"`（2026-10-30T15:07:39Z 起動）。全出力は `.loop/quota-sweep-claude-6a7d795a-gate-full-c1.log`（ローカル・git対象外）。起動ラッパーの `EXIT:` 行はセッション断絶で欠落したが、集計行と duration から run 完了は確認済み。
+- 集計行: `ℹ tests 3422` / `ℹ pass 3124` / `ℹ fail 294` / `ℹ cancelled 0` / `ℹ skipped 4` / `ℹ duration_ms 1050289.827`（約17.5分）。
+- 失敗294の内訳: ① 281ファイルがテストファイル単位で起動約25ms・`:1:1` の `'test failed'`（子プロセスが起動直後に死亡、コードの内容と無関係）② 13件は gate-readonly 等の readonly コーパステストが子プロセス終了コード `3221225794`（0xC0000142 = DLL初期化失敗）で assert 不成立。
+- 崩壊の伝播: ログ行3743（`gate-recommended-paths.test.mjs`）以降、残り全ファイルが同一の約25ms墜落。直前は readonly コーパステスト（node を大量 spawn する）が同じ 0xC0000142 で失敗し始めている。単一実行での大量プロセス spawn による環境劣化と特定。
+- 崩落ファイルの単独再実行（2026-10-31・同一PC）: gate-recommended-paths 5/5、human-login-guard 2/2、wsl-present 3/3、url-account-gate 59/59 — すべて pass。現在の spawn 能力は健全。
+- 判定: 全件 pass ではないためゲート合格とはしない（FINAL 条件不成立）。失敗は全てプロセス起動失敗クラスで、コード回帰を示す失敗はこの実行には無い。単発フル実行という形式がこの環境では通らない、というところまでが実測。
+- 残件: ゲート合格の判定方法（バッチ分割実行／別マシン実行／現状記録で環境制約としてクローズ）は判断待ち。

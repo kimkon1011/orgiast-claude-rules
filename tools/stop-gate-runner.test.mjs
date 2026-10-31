@@ -43,7 +43,7 @@ test('同一ターンは既存上限の3回目からpass_after_capを台帳に�
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   assert.equal(JSON.parse(invoke(home, 'cap', request).stdout).decision, 'block');
   assert.equal(JSON.parse(invoke(home, 'cap', request).stdout).decision, 'block');
-  assert.match(JSON.parse(invoke(home, 'cap', request).stdout).systemMessage, /次の応答で必ず訂正.*残存コード/);
+  assert.match(JSON.parse(invoke(home, 'cap', request).stdout).systemMessage, /次の応答で直して.*残存コード/);
   const records = fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split(/\r?\n/).map(JSON.parse);
   assert.deepEqual(records.map(({ verdict }) => verdict), ['block', 'block', 'pass_after_cap']);
   assert.deepEqual(records.map(({ sameTextRetries }) => sameTextRetries), [1, 2, 3]);
@@ -63,7 +63,7 @@ for (const [name, texts, counts] of [
       const result = invoke(home, 'reset', text);
       assert.equal(result.status, 0, result.stderr);
       const output = JSON.parse(result.stdout);
-      if (counts.at(-1) === 3 && index === texts.length - 1) assert.match(output.systemMessage, /次の応答で必ず訂正/);
+      if (counts.at(-1) === 3 && index === texts.length - 1) assert.match(output.systemMessage, /次の応答で直して/);
       else assert.equal(output.decision, 'block');
     }
     const records = fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);

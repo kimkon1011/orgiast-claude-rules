@@ -99,9 +99,9 @@ test('billing is substituted and notified even without auto top-up',async t=>{
   assert.equal(r.lanes.deepseek.reason,'billing');
   assert.ok(!r.deadNeedsUser.some(x=>x.provider==='deepseek'));
   assert.deepEqual(r.substituted,[{provider:'deepseek',via:'openrouter'}]);
-  assert.ok(!sent.some(text=>/deepseek/i.test(text)));
+  assert.equal(sent.filter(text=>/deepseek/i.test(text)).length,1);
   assert.equal(r.lanes.deepseek.via,'openrouter');
-  assert.match(summarize(r),/deepseek ✅(OpenRouter経由)/);
+  assert.match(summarize(r),/deepseek ✅\(OpenRouter経由\)/);
 });
 test('a fresh failed Codex probe is re-measured instead of being reused',async t=>{
   const h=fixture(t);

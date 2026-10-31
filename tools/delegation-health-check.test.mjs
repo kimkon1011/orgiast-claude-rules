@@ -1156,37 +1156,37 @@ test('低成果の chain 行だけでは fallback_low_yield を起票しない',
   assert.equal(findings.filter((f) => f.id === 'fallback_low_yield').length, 0);
 });
 
-test('#773 以降の timeout が上限を超えたら夜間に high で検出する', () => {
+test('孫プロセス対策(#1260)以降の timeout が上限を超えたら夜間に high で検出する', () => {
   const dir = home();
   write(dir, 'executor-usage.jsonl', row({
-    t: '2026-10-18T10:08:59Z', provider: 'fallback', status: 'timeout', secs: 1800,
+    t: '2026-10-29T10:08:59Z', provider: 'fallback', status: 'timeout', secs: 1800,
     chain: [{ backend: 'gemini-cli', outcome: 'timeout', secs: 1500 }, { backend: 'cheap-code:deepseek', outcome: 'ok', secs: 300 }],
   }));
-  const findings = collectFindings({ home: dir, now: new Date('2026-10-19T12:00:00Z'), codexUsedPercent: null });
+  const findings = collectFindings({ home: dir, now: new Date('2026-10-30T12:00:00Z'), codexUsedPercent: null });
   const finding = findings.find((f) => f.id === 'timeout_waste_exceeds_cap');
   assert.equal(finding?.severity, 'high');
   assert.deepEqual(finding.evidence, ['1件', '最大試行 1500秒', '上限 900秒', '超過: gemini-cli フォールバック 1500秒/予算900秒']);
 });
 
-test('#773 以降の timeout が上限内なら timeout_waste_exceeds_cap を出さない', () => {
+test('孫プロセス対策(#1260)以降の timeout が上限内なら timeout_waste_exceeds_cap を出さない', () => {
   const dir = home();
   write(dir, 'executor-usage.jsonl', row({
-    t: '2026-10-19T17:34:53Z', provider: 'codex', status: 'timeout', secs: 600.502, exitCode: 124,
+    t: '2026-10-29T17:34:53Z', provider: 'codex', status: 'timeout', secs: 600.502, exitCode: 124,
   }));
-  const findings = collectFindings({ home: dir, now: new Date('2026-10-19T20:00:00Z'), codexUsedPercent: null });
+  const findings = collectFindings({ home: dir, now: new Date('2026-10-30T20:00:00Z'), codexUsedPercent: null });
   assert.equal(findings.find((f) => f.id === 'timeout_waste_exceeds_cap'), undefined);
 });
 
 test('timeoutWasteSummary は上限内でも配備後の timeout を report に残す（再発時の効果判定用）', () => {
   const summary = timeoutWasteSummary([
-    { t: '2026-10-18T10:08:59Z', provider: 'fallback', status: 'timeout', secs: 1800, chain: [{ backend: 'gemini-cli', outcome: 'timeout', secs: 900 }, { backend: 'cheap-code:deepseek', outcome: 'timeout', secs: 899 }] },
-    { t: '2026-10-19T17:34:53Z', provider: 'codex', status: 'timeout', secs: 600.502, exitCode: 124 },
+    { t: '2026-10-29T10:08:59Z', provider: 'fallback', status: 'timeout', secs: 1800, chain: [{ backend: 'gemini-cli', outcome: 'timeout', secs: 900 }, { backend: 'cheap-code:deepseek', outcome: 'timeout', secs: 899 }] },
+    { t: '2026-10-29T17:34:53Z', provider: 'codex', status: 'timeout', secs: 600.502, exitCode: 124 },
   ]);
   assert.equal(summary.verdict, 'waste-within-cap');
   assert.equal(summary.postDeployTimeoutRows, 2);
   assert.equal(summary.overCapRows, 0);
   assert.equal(summary.maxAttemptSecs, 900);
-  assert.equal(summary.lastPostDeployTimeoutAt, '2026-10-19T17:34:53.000Z');
+  assert.equal(summary.lastPostDeployTimeoutAt, '2026-10-29T17:34:53.000Z');
 });
 
 test('policyStallAttempts は chain 試行ごとに拒否痕跡を抽出し outcome を引き継ぐ', () => {

@@ -106,7 +106,7 @@ export async function chase(ledger, ctx) {
           attempt(item, 'owner-dm-attempt', person, now);
           persist();
           const response = await sendDm(person, redactSecrets(`${item.target} の電源と Claude Code 起動をお願いします（kim-PC からの依頼 ${item.title.slice(0, 200)} が届いていません）`));
-          if (response?.delivered !== true && response?.delivered !== 'dm') throw new Error('owner DM failed');
+          if (response?.delivered !== true && !['dm', 'session-inbox'].includes(response?.delivered)) throw new Error('owner DM failed');
           attempt(item, 'owner-dm', person, now);
           item.nextActionAt = iso(now + POLICY.ownerDm);
           persist();
@@ -193,7 +193,7 @@ export async function digest(ledger, ctx) {
   const text = digestText(ledger, ctx);
   if (ctx.dryRun) return { text, planned: true };
   const result = await ctx.notify(text);
-  if (result?.delivered === 'dm') {
+  if (['dm', 'session-inbox'].includes(result?.delivered)) {
     ledger.digestDay = day;
     ctx.persist?.();
   }

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { discordAllowed } from './lib/kim-discord-allowlist.mjs';
 // Server-side sweep owns SLA detection; this is its Discord/DM fallback.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -64,13 +65,13 @@ ${lane.table}`);
       try {
         const message = formatAlert(entry);
         let channel = false, dm = false;
-        try { if (token) { await (deps.postChannel ?? postToChannel)(token, CHANNEL, message, deps.fetch); channel = true; } }
+        try { if (token && discordAllowed(message, { home, allowlist: deps.allowlist }).allowed) { await (deps.postChannel ?? postToChannel)(token, CHANNEL, message, deps.fetch); channel = true; } }
         catch { err('fleet-mail-watchdog: チャンネル通知失敗=1'); }
         try {
           const result = await (deps.notifyKim ?? notifyKim)(message, { home, token, userId: KIM_USER_ID, fetchImpl: deps.fetch, webhookFallback: false });
-          dm = result?.delivered === 'dm';
+          dm = ['dm', 'session-inbox'].includes(result?.delivered);
         } catch { err('fleet-mail-watchdog: DM通知失敗=1'); }
-        // Only actual Discord delivery counts; notifyKim's {delivered:'none'} is not success.
+        // セッション台帳への記録も配達成功。none は成功にしない。
         if (channel || dm) {
           const ack = await request('mail-alerts', { notifiedIds: [entry.id] });
           if (ack?.ok === false) throw new Error('fleet-mail-watchdog: 通知確認失敗=1');

@@ -97,9 +97,9 @@ test('real wrapper retries SessionStart key client once, preserves env keys, and
  assert.equal(result.status,0,result.err);assert.equal(requests,1);assert.equal(result.out,'');assert.doesNotMatch(result.err,/mock-value|test-secret/);
  assert.match(fs.readFileSync(path.join(home,'.claude/example.env'),'utf8'),/LOCAL_ONLY=keep\nKEY=mock-value/);
 });
-test('fleet notification uses the already distributed cost webhook without a DM token',async t=>{
+test('許可カテゴリだけは配布済み cost webhook へ送れる',async t=>{
  const {notifyKim}=await import('./notify-kim.mjs');const home=temp(t);fs.mkdirSync(path.join(home,'.claude'),{recursive:true});fs.writeFileSync(path.join(home,'.claude/cost-reporter.env'),'DISCORD_COST_WEBHOOK=https://example.invalid/mock-only\n');
- let sent=0;const result=await notifyKim('gate status',{home,userId:'',token:'',fleetFallback:true,fetchImpl:async(url,options)=>{sent++;assert.equal(url,'https://example.invalid/mock-only');assert.equal(JSON.parse(options.body).content,'gate status');return {ok:true};}});
+ let sent=0;const result=await notifyKim('gate status',{home,userId:'',token:'',allowlist:[{category:'test',pattern:'.'}],fleetFallback:true,fetchImpl:async(url,options)=>{sent++;assert.equal(url,'https://example.invalid/mock-only');assert.equal(JSON.parse(options.body).content,'gate status');return {ok:true};}});
  assert.equal(sent,1);assert.equal(result.delivered,'webhook');
 });
 test('Stop aggregate applies warning policy to each child and keeps its reason visible',async t=>{
@@ -109,11 +109,15 @@ test('Stop aggregate applies warning policy to each child and keeps its reason v
  const result=await run({session_id:'warn-stop',assistant_text:text},{assistantText:text,humanText:'',raw:''},{mode:'off',policyOptions:{home,manifest:{gates:Object.fromEntries(discoverGates().map(n=>[n,{rollout:'warn'}]))},notify:async line=>{notifications.push(line);return {delivered:'dm'};}}});
  assert.notEqual(result.decision,'block');assert.match(result.systemMessage,/pr-handoff-gate/);assert.ok(notifications.some(line=>line.includes('name=pr-handoff-gate verdict=warn')));
 });
-test('member report reaches central webhook rather than the member Discord ID',async t=>{
+test('他メンバーPCのgate報告も Discord に送らず台帳に残す',async t=>{
  const {notifyKim}=await import('./notify-kim.mjs');const home=temp(t);fs.mkdirSync(path.join(home,'.claude'),{recursive:true});
  for(const [file,value] of Object.entries({'orgiast-discord-user-id.txt':'member-id','orgiast-discord-bot-token.txt':'mock-bot-token','orgiast-discord-webhook.txt':'https://example.invalid/member','cost-reporter.env':'DISCORD_COST_WEBHOOK=https://example.invalid/central\n'}))fs.writeFileSync(path.join(home,'.claude',file),value);
+ fs.writeFileSync(path.join(home,'.claude/fleet-pc-map.json'),JSON.stringify({'test-member':{account:'test@example.test'}}));
+ fs.appendFileSync(path.join(home,'.claude/cost-reporter.env'),'REPORTER_LABEL=test-member\n');
  const targets=[];const result=await reportGate(contract,'warn',[],{home,notify:(line,options)=>notifyKim(line,{...options,fetchImpl:async url=>{targets.push(url);return {ok:true};}})});
- assert.equal(result.delivered,'webhook');assert.deepEqual(targets,['https://example.invalid/central']);
+ assert.equal(result.delivered,'session-inbox');assert.deepEqual(targets,[]);
+ const item=JSON.parse(fs.readFileSync(path.join(home,'.claude/kim-inbox',`${result.id}.json`),'utf8'));
+ assert.equal(item.source,'gate-report');assert.equal(item.status,'open');assert.ok(item.forwardError);
 });
 
 test('pilotDenyはpilotだけ即denyとし他PCは観測期間を守る', t => {
@@ -143,4 +147,11 @@ test('registered mail gate retains deny through the common runner', async t => {
     policyOptions: { home, hostname: 'new-pc', notify: async () => ({ delivered: 'mock' }) },
   });
   assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('kim 宛 Discord 停止は初受信の非 pilot PC でも即時拒否する', async t => {
+  const home = temp(t);
+  assert.equal(rolloutMode('kim-discord-report-gate', { home, hostname: '作業用011' }), 'deny');
+  const output = await runHook(path.join(toolsDir, 'kim-discord-report-gate.mjs'), JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'mcp__claude_ai_Discord__send_dm', tool_input: { user_id: '715210673642012733', content: '報告' } }), { env: { ...process.env, ORGIAST_HOME: home }, policyOptions: { home, hostname: '作業用011' } });
+  assert.equal(JSON.parse(output.stdout).hookSpecificOutput.permissionDecision, 'deny');
 });

@@ -475,7 +475,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         result = io.notify ? await io.notify(part, { home, webhookFallback: false, owner }) : await (io.notifyOwner ?? notifyOwner)(owner, part, { home });
       } catch (cause) { result = { reason: cause?.message || String(cause) }; }
       result ??= {};
-      const delivered = ['dm', 'toast', 'inbox'].includes(result.delivered);
+      const delivered = ['dm', 'session-inbox', 'toast', 'inbox'].includes(result.delivered);
       receipts.push({ owner, ok: delivered, attempts: result.attempts, toastExitCode: result.toastExitCode, channel: result.channel ?? (result.delivered === 'dm' ? 'discord' : result.delivered || 'none'), recipientId: result.recipientId, httpStatus: result.httpStatus, messageId: result.messageId, channelId: result.channelId });
       sentTexts.push(part);
       if (!delivered) { error = result.reason || 'DM not delivered'; break; }

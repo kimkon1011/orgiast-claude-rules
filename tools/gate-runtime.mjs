@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { repoDir, toolsDir, readContract } from './gate-contracts.mjs';
 import { readEnvValue } from './env-kv.mjs';
-import { notifyKim } from './notify-kim.mjs';
+import { notifyKim, KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 
 const DAY = 86400000;
 const homeDir = () => process.env.ORGIAST_HOME || os.homedir();
@@ -14,6 +14,9 @@ function readRollout() { try { return JSON.parse(fs.readFileSync(path.join(tools
 const hostName = () => process.env.ORGIAST_HOSTNAME || os.hostname();
 export function rolloutMode(name, { manifest = readRollout(), home = homeDir(), hostname = hostName(), now = Date.now() } = {}) {
   const entry = manifest?.gates?.[name];
+  // kim の明示指示により、報告停止は初受信のPCにも即時適用する。
+  if (name === 'kim-discord-report-gate' && entry?.rollout === 'deny'
+    && entry.immediatePolicy === '2026-10-27 kim 厳命: kim 宛 Discord 報告を全PCで停止') return 'deny';
   if (name === 'lane-repair-first-gate' && entry?.rollout === 'deny'
     && entry.immediatePolicy === '2026-10-29 user 指示: 全PC・全アカウントで故障レーン修復を最優先') return 'deny';
   if (name === 'lane-abandonment-gate') {
@@ -74,7 +77,7 @@ export async function reportGate(contract, verdict, statuses, { home = homeDir()
   try { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(file, JSON.stringify({ name, verdict, statuses, delivery: 'pending' }), { flag: 'wx', mode: 0o600 }); }
   catch { return { delivered: 'suppressed' }; }
   let result;
-  try { result = await notify(line, { home, userId: '', signal: AbortSignal.timeout(2000), fleetFallback: true }); }
+  try { result = await notify(line, { home, userId: KIM_DISCORD_USER_ID, plainJa: false, source: 'gate-report', signal: AbortSignal.timeout(2000), fleetFallback: true }); }
   catch { result = { delivered: 'none' }; }
   try { fs.writeFileSync(file, JSON.stringify({ name, verdict, statuses, delivery: result.delivered }), { mode: 0o600 }); } catch {}
   if (result.delivered === 'none') process.stderr.write(`[gate-report] ${name}: 通報未達（ローカル記録済み）。node tools/keyserve-status.mjs --json\n`);

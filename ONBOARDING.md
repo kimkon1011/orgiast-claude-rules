@@ -118,7 +118,9 @@ Stop の `user-burden-gate` が依頼のある最終応答を監査する。本�
 
 nishi@・cr@・seisaku-team@・Genba の席も user=kim（2026-10-28 kim）。kim が別PCにいる前提で kim-PC に回さず、その場で直接聞く。この席では共有 memory 索引の冒頭注記が毎セッション自動で読まれ、同じ規則を伝える（全PC索引の予算を使わない）。対象アカウントの正本は `tools/lib/kim-operated.mjs`。この席では kim-PC の memory（毎晩 `~/.claude/shared-memory/` へ配布、kim の役割・プロフィールの user 型を含む）を kim 本人の好み・厳命としてそのまま適用する。「kim-PC に確認します」「kim さんに伝えてください」は書かない。対話セッションの質問は kim-PC へ自動転送しない（`fleet-question-relay`）。fleet-mail で kim-PC に送るのは、kim-PC の Discord・ローカルファイルなど kim-PC でしか触れない資源を使う作業依頼だけにする。社員本人が使う席（例: 東邦2階HP）は従来どおり別人として扱う。根拠（2026-10-28 kim）: kim-PC で話した内容が他アカウントに反映されず、同じ話を繰り返していた。
 
-**🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛DM=要対応・警告/督促・定期報告のみ。PRマージ/他PC依頼=fleet-mail。内部Gmail下書き禁止。**
+**🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PRマージ/他PC依頼=fleet-mail。内部Gmail下書き禁止。**
+
+**🔴 kim 宛の報告は Discord 禁止。kim-inbox に積みセッションで回収、ask は --answer まで再提示。例外は kim 登録の許可リストのみ（kim 2026-10-27 厳命・全PC全アカウント）。**
 送れなければチャットに完成形を表示。
 kim の代わりに社員・外注へ Discord で送るときは Bot 代筆（`tools/discord-dm.mjs`、kim へ写し自動）で送る。冒頭に「金です（Claude が代筆しています）。」と元メッセージの日時・先頭行、末尾に毎回「このメッセージへの返答は、Bot ではなく金に直接お願いします。」を入れる。kim のユーザートークンで本人として書く方式（セルフボット）は規約違反・アカウント停止の危険があるため使わない（kim 2026-10-30 厳命・全アカウント全PC）。
 対象は、支払い・権限付与・OAuth 同意・物理操作・判断など kim 本人の対応が不可欠なもの、期限・障害・未対応の警告や督促、kim が定期的に依頼した日次・週次・月次レポートに限る。

@@ -8,6 +8,8 @@ import { isEntry } from './is-entry.mjs';
 import { toPlainJa } from './lib/plain-ja.mjs';
 import { classifyKimDm } from './lib/kim-dm-policy.mjs';
 import { redactSecrets } from './webhook-health.mjs';
+import { addItem } from './kim-inbox.mjs';
+import { discordAllowed } from './lib/kim-discord-allowlist.mjs';
 import { annotateAccounts } from './url-account-gate.mjs';
 
 const API = 'https://discord.com/api/v10';
@@ -81,6 +83,7 @@ export async function notifyKim(text, options = {}) {
       return { delivered: 'blocked', category: policy.category, reason: policy.reason };
     }
   }
+  options = { ...options, kind: options.kimActionRequired === true || options.kind === 'ask' ? 'ask' : 'info' };
   const raw = redactSecrets(String(text ?? ''));
   const bodyText = stripOwnerAddress(raw);
   if (STATUS_REPORT.test(bodyText) || ALREADY_FILED.test(bodyText) || isSuccessfulResumeReport(bodyText) || AUTO_RESUME_NOTICE.test(bodyText)) return deliverKim(raw, options);
@@ -90,6 +93,7 @@ export async function notifyKim(text, options = {}) {
   const benignQuotaReport = benignQuotaSweepReport(bodyText);
   const failure = !judgment && !benignQuotaReport && (FAILURE.test(bodyText) || (RESUME_REPORT.test(bodyText) && RESUME_ERROR.test(bodyText)));
   const handoff = !judgment && !benignQuotaReport && !humanEvidence && HANDOFF.test(bodyText);
+  if (judgment || handoff) options.kind = 'ask';
   if (!judgment && !failure && !handoff) return deliverKim(raw, options);
   const home = options.home || process.env.ORGIAST_HOME || os.homedir();
   const now = options.now ?? Date.now();
@@ -146,7 +150,7 @@ export async function notifyKim(text, options = {}) {
       }
       if (judgment) suffix = `\n自動起票: ${file}（判断待ち ${key}）`;
       else {
-        if (handoff) body = raw.split('\n').filter(line => !HANDOFF.test(line) && !/^\s*[123][.．]\s/.test(line)).join('\n');
+        if (handoff && options.kind !== 'ask') body = raw.split('\n').filter(line => !HANDOFF.test(line) && !/^\s*[123][.．]\s/.test(line)).join('\n');
         suffix = `\n原因: ${bodyText.match(/^原因[:：][ \t]*(.+)$/m)?.[1]?.slice(0, 240) || '未確定（実ログの調査を起票）'}\n対処: 原因調査と修復を自動起票しました。\n自動起票: ${file}（通知修復 ${key}）`;
       }
     } else {
@@ -154,7 +158,7 @@ export async function notifyKim(text, options = {}) {
       suffix = '\n' + ['原因', '対処'].map(label => raw.split('\n').find(line => line.startsWith(label + ':') || line.startsWith(label + '：')).slice(0, 400)).join('\n');
     }
     const result = await deliverKim(body, { ...options, suffix, allowHumanRequest: humanEvidence });
-    if (result.delivered === 'dm' || result.delivered === 'webhook') {
+    if (['dm', 'session-inbox'].includes(result.delivered) || result.delivered === 'webhook') {
       const temp = `${stateFile}.${process.pid}.tmp`;
       fs.writeFileSync(temp, JSON.stringify({ sentAt: now })); fs.renameSync(temp, stateFile);
     }
@@ -195,6 +199,7 @@ export async function deliverKim(text, {
   plainJaImpl = toPlainJa,
   suffix = '',
   allowHumanRequest = false,
+  kind = 'info', source = '', allowlist, repoRoot,
 } = {}) {
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
     || readTrimmed(path.join(home, '.claude', 'orgiast-discord-user-id.txt'))
@@ -204,7 +209,11 @@ export async function deliverKim(text, {
   // 失敗しても送信は止めない(plainJaImpl は例外を投げない契約)。
   // 平易化の書き換えでアカウント表記が落ちることがあるため、書き換え後の本文で補う。
   const translated = annotateAccounts(plainJa ? await plainJaImpl(String(text ?? '')) : text);
-  const body = suffix && !allowHumanRequest ? String(translated).split('\n').filter(line => !HANDOFF.test(line)).join('\n') : translated;
+  const body = suffix && !allowHumanRequest && kind !== 'ask' ? String(translated).split('\n').filter(line => !HANDOFF.test(line)).join('\n') : translated;
+  if ((userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID) && !discordAllowed(String(body) + suffix, { home, allowlist, repoRoot }).allowed) {
+    const item = await addItem(home, { kind, text: String(body) + suffix, source, signal });
+    return { delivered: 'session-inbox', id: item.id, kind: item.kind };
+  }
   const content = suffix ? String(body).slice(0, Math.max(0, MAX_CONTENT - suffix.length)) + suffix : clipDiscordContent(body);
   let dmReason = '';
 
@@ -256,8 +265,14 @@ export async function deliverKim(text, {
 
 export async function main(args = process.argv.slice(2), options = {}) {
   const kimActionRequired = args.includes('--kim-action-required');
-  const text = args.filter(arg => arg !== '--kim-action-required').join(' ');
-  const result = await notifyKim(text, { ...options, kimActionRequired });
+  const words = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--kind' || args[i] === '--source') options = { ...options, [args[i].slice(2)]: args[++i] };
+    else if (args[i] !== '--kim-action-required') words.push(args[i]);
+  }
+  if (options.kind && !['ask', 'info'].includes(options.kind)) throw new Error('kind は ask または info');
+  const result = await notifyKim(words.join(' '), { ...options, kimActionRequired });
+  console.log(JSON.stringify(result));
   return result.delivered === 'blocked' ? 3 : 0;
 }
 

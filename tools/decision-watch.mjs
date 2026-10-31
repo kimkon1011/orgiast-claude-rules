@@ -96,14 +96,14 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       const inboxFile = path.join(dir, 'fleet-inbox', `${id}.json`);
       if (!fs.existsSync(inboxFile)) writeJson(inboxFile, {
         id, from: 'discord:#claude-code', to: 'kim-PC', kind: 'note', body,
-        why: 'Discord の判断依頼。返信は本文のDiscordリンク先で行う。',
+        why: 'Discord で届いた判断依頼。kim の返答はセッションで回収し kim-inbox に記録する。',
         createdAt: message.timestamp, status: 'delivered',
       });
       let result;
       try {
-        result = await (deps.notify ?? notifyKim)(body, { home, token, fetchImpl, webhookFallback: false });
+        result = await (deps.notify ?? notifyKim)(body, { home, token, fetchImpl, webhookFallback: false, kind: 'ask', source: 'decision-watch' });
       } catch { result = { delivered: 'none' }; }
-      if (result?.delivered === 'dm') {
+      if (['dm', 'session-inbox'].includes(result?.delivered)) {
         state.seen[message.id] = new Date(now()).toISOString();
         delete state.failures[message.id];
       } else {

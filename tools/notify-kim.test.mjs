@@ -45,12 +45,12 @@ test('token がなければ最初から webhook へ送る', async () => {
   } finally { console.error = original; }
 });
 
-test('通知先がなくても例外にせず stderr 1行で none を返す', async () => {
-  const lines = []; const original = console.error; console.error = (line) => lines.push(line);
-  try {
-    const result = await notifyKim('hello', { home: home(), token: '', userId: '' });
-    assert.equal(result.delivered, 'none'); assert.equal(lines.length, 1);
-  } finally { console.error = original; }
+test('宛先IDが空でも kim 宛報告は台帳に保存する', async () => {
+  const dir = home(); fs.mkdirSync(path.join(dir, '.claude'));
+  fs.writeFileSync(path.join(dir, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+  const result = await notifyKim('hello', { home: dir, token: '', userId: '', plainJa: false, fetchImpl: async () => assert.fail('Discord 禁止') });
+  assert.equal(result.delivered, 'session-inbox');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.claude/kim-inbox', `${result.id}.json`))).text, 'hello');
 });
 
 test('2000文字を超える本文を省略表示付きで切る', async () => {
@@ -79,7 +79,7 @@ test('NOTIFY_PLAIN_JA=0 相当（plainJa:false）では本文をそのまま送�
 
 function sender(dir, extra = {}) {
   const messages = [];
-  return { messages, options: { home: dir, token: 'token', plainJa: false, ...extra, fetchImpl: async (url, init) => {
+  return { messages, options: { allowlist: [{ category: 'test', pattern: '.' }], home: dir, token: 'token', plainJa: false, ...extra, fetchImpl: async (url, init) => {
     if (url.endsWith('/messages')) messages.push(JSON.parse(init.body).content);
     return response({ json: { id: 'dm' } });
   } } };

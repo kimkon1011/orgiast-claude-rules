@@ -204,7 +204,7 @@ export async function runOnce(options = {}) {
       home, token, userId: read(path.join(home, '.claude', 'orgiast-discord-user-id.txt')).trim() || '715210673642012733',
       fetchImpl: options.fetchImpl ?? fetch, plainJa: false, webhookFallback: false,
     });
-    if (sent?.delivered !== 'dm') throw new Error('kim health notification failed');
+    if (!['dm', 'session-inbox'].includes(sent?.delivered)) throw new Error('kim health notification failed');
   };
   const errorText = e => String(e.message || e).replaceAll(token || '\0', '[redacted]').slice(0, 1000);
   try {

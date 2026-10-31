@@ -3,12 +3,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseEnvText } from '../env-kv.mjs';
-import { machineIdentity } from '../machine-identity.mjs';
+import os from 'node:os';
 
 function envFile(file) {
   try { return parseEnvText(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return {}; throw e; }
 }
 
-export function resolveFleetLabel(home, identity = machineIdentity()) {
+export function resolveFleetLabel(home, identity = { hostname: os.hostname() }) {
   return envFile(path.join(home, '.claude', 'cost-reporter.env')).REPORTER_LABEL || identity.hostname;
 }

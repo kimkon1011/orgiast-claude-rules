@@ -1654,7 +1654,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   if (!dryRun && !noNotify && !io.noNotify) {
     try {
       const notifyResult = await (io.notifyKim ?? notifyKim)(reportText, { home, webhookFallback: false });
-      if (!notifyResult || notifyResult.delivered !== 'dm') {
+      if (!notifyResult || !['dm', 'session-inbox'].includes(notifyResult.delivered)) {
         throw new Error(notifyResult?.reason || 'kim の DM に配信されませんでした');
       }
       delete finalState.lastNotifyError;
@@ -1684,7 +1684,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       if (await (io.shouldSendMonthlyReport || shouldSendMonthlyReport)({ home, now, claudeDir })) {
         const reportText = buildMonthlyReport({ home, now });
         const monthlyResult = await (io.notifyKim ?? notifyKim)(reportText, { home, webhookFallback: false });
-        if (monthlyResult?.delivered === 'dm') await (io.markMonthlyReportSent || markMonthlyReportSent)({ home, now, claudeDir });
+        if (['dm', 'session-inbox'].includes(monthlyResult?.delivered)) await (io.markMonthlyReportSent || markMonthlyReportSent)({ home, now, claudeDir });
         console.log('月次レポートを kim へ DM 送信しました');
       }
     } catch (error) {

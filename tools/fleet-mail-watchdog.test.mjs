@@ -10,7 +10,7 @@ function fixture(t, alerts = [{ id: 'mail-one', to: 'kim-PC', from: 'PC', kind: 
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-watch-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   fs.mkdirSync(path.join(home, '.claude')); fs.writeFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.invalid\nFLEET_SHEET_TOKEN=test\n');
   const calls = [], posts = [], dms = [], outputs = [];
-  const deps = { home, token: 'test', stdout: x => outputs.push(x), stderr() {}, request: async (kind, payload) => { calls.push({ kind, payload }); return { ok: true, alerts: payload.notifiedIds ? [] : alerts }; }, postChannel: async (...args) => posts.push(args), notifyKim: async (...args) => { dms.push(args); return { delivered: 'dm' }; } };
+  const deps = { allowlist: [{ category: 'test', pattern: '.' }], home, token: 'test', stdout: x => outputs.push(x), stderr() {}, request: async (kind, payload) => { calls.push({ kind, payload }); return { ok: true, alerts: payload.notifiedIds ? [] : alerts }; }, postChannel: async (...args) => posts.push(args), notifyKim: async (...args) => { dms.push(args); return { delivered: 'dm' }; } };
   return { home, calls, posts, dms, outputs, deps };
 }
 test('watchdog reads alerts and confirms only after channel/DM delivery', async t => {
@@ -53,7 +53,7 @@ test('shared Discord transport disables mentions and masks content', async () =>
 });
 test('arrival uses one line, recipient, category, clipped reason and id', async t => {
   const f = fixture(t); const calls = [];
-  assert.equal(await notifyArrival({ id: 'mail-one', why: '[作業依頼] '+ 'あ'.repeat(100) }, { home: f.home, label: 'receiver', token: 'test', fetchImpl: async (...args) => { calls.push(args); return { ok: true }; } }), true);
+  assert.equal(await notifyArrival({ id: 'mail-one', why: '[作業依頼] '+ 'あ'.repeat(100) }, { allowlist: [{ category: 'fleet-arrival', pattern: '.' }], home: f.home, label: 'receiver', token: 'test', fetchImpl: async (...args) => { calls.push(args); return { ok: true }; } }), true);
   const content = JSON.parse(calls[0][1].body).content;
   assert.match(content, /^receiver 宛 \[作業依頼\] 到着:/); assert.ok(content.endsWith(' / mail-one [fleet-arrival]')); assert.ok(content.split('到着: ')[1].split(' / ')[0].length <= 60); assert.doesNotMatch(content, /\n/);
 });
@@ -107,7 +107,7 @@ test('D6 arrival forwards the bounded abort signal to both Discord transports', 
   fs.writeFileSync(path.join(f.home, '.claude', 'orgiast-discord-webhook.txt'), 'https://example.invalid/webhook');
   for (const token of ['test', '']) {
     const controller = new AbortController(), calls = [];
-    await notifyArrival({ id: 'mail-signal' }, { home: f.home, token, signal: controller.signal, fetchImpl: async (...args) => { calls.push(args); return { ok: true }; } });
+    await notifyArrival({ id: 'mail-signal' }, { allowlist: [{ category: 'fleet-arrival', pattern: '.' }], home: f.home, token, signal: controller.signal, fetchImpl: async (...args) => { calls.push(args); return { ok: true }; } });
     assert.equal(calls[0][1].signal, controller.signal);
     controller.abort(); assert.equal(calls[0][1].signal.aborted, true);
   }
@@ -126,4 +126,12 @@ test('lane-health notes are marked seen once; other and already-seen mail are le
 test('dry run never marks lane-health notes seen', async t => {
   const f = fixture(t); let called = 0; await main(['--dry-run'], { ...f.deps, markLaneHealthSeen: async () => { called++; } }); assert.equal(called, 0);
   await main([], { ...f.deps, markLaneHealthSeen: async () => { called++; } }); assert.equal(called, 1);
+});
+
+test('空の許可リストでは到着投稿せず台帳への配達を成功とする', async t => {
+  const f = fixture(t), errors = [];
+  assert.equal(await notifyArrival({ id: 'mail-test' }, { home: f.home, token: 'test', stderr: s => errors.push(s), fetchImpl: async () => assert.fail('投稿禁止') }), false);
+  assert.deepEqual(errors, ['fleet-mail: 到着通知は kim-inbox 方針で停止']);
+  await main([], { ...f.deps, allowlist: [], notifyKim: async () => ({ delivered: 'session-inbox' }) });
+  assert.equal(f.posts.length, 0); assert.equal(f.calls.length, 2);
 });

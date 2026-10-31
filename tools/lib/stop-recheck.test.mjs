@@ -13,7 +13,7 @@ test('同一応答は複数hookでも1 block、書き直し2回後はpass_after_
   assert.equal(registerStopViolation({ input, assistantText: 'two', blockedBy: ['a'], reasonCodes: ['A'], home }).verdict, 'block');
   const capped = registerStopViolation({ input, assistantText: 'three', blockedBy: ['a'], reasonCodes: ['A'], home });
   assert.equal(capped.verdict, 'pass_after_cap');
-  assert.match(capped.additionalContext, /次の応答で必ず訂正/);
+  assert.match(capped.additionalContext, /次の応答で直して/);
 });
 
 test('日次集計は旧skippedとpass_after_capを数える', () => {

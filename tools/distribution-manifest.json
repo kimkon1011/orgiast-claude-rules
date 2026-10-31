@@ -9,6 +9,7 @@
     "gas": { "reason": "GAS ソース。clasp で kim-PC から push する作業用で配布先PCは実行時に読まない", "runtimeRefOk": true, "docRefOk": true },
     "apps": { "reason": "社内アプリのソース。配布先PCの実行時参照なし" },
     "analysis": { "reason": "分析メモ。実行時参照なし" },
+    "data": { "reason": "codex 可用性プローブ履歴等のデータ。実行時参照なし" },
     "evidence": { "reason": "証跡置き場。実行時参照なし" },
     "reports": { "reason": "レポート置き場。実行時参照なし" },
     "package.json": { "reason": "repo 自体の依存宣言。tools の参照は対象アプリ側の package.json" },

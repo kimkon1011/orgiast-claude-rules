@@ -1,0 +1,13 @@
+[
+  {
+    "t": "2026-10-30T12:37:00.000Z",
+    "action": "probe",
+    "lane": "native",
+    "sandbox": "danger-full-access",
+    "result": "ok",
+    "wslDistro": false,
+    "nativeAvailable": true,
+    "writeProbe": "ok",
+    "detail": "Native codex v0.162.1 with danger-full-access write probe succeeded. File /tmp/codex-native-probe-20261030.txt created with expected content. WSL absent (no distros). lane-mode.json shows native mode verified 2026-10-29T14:36:01.888Z. Recent 15/15 codex entries in executor-usage.jsonl all status=ok. Codex lane is operational."
+  }
+]

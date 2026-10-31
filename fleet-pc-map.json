@@ -82,6 +82,16 @@
       "_evidence": "kim 申告 2026-10-13: このMacは cr@orgiast.jp の Claude Code を使用、使用者は増田裕子さん。機種・OS・シリアルは kim のスクリーンショット（デバイス情報画面、Macを探す=オフ）。hostname・REPORTER_LABEL は未報告のため宛先解決には使わない。フリートシートの『MacBook-Air』『macBook』行のどちらかの可能性があるが未照合"
     }
   },
+  "作業用008": {
+    "remoteName": "作業用008",
+    "hostname": "DESKTOP-BDOAK99",
+    "account": "seisaku-team@orgiast.jp",
+    "aliases": [
+      "DESKTOP-BDOAK99"
+    ],
+    "_evidence": "2026-10-29 自己申告（fleet-mail chase 返信）: ログイン seisaku-team@orgiast.jp, hostname=DESKTOP-BDOAK99, 作業用番号=作業用008。ビーコンでも account=seisaku-team@orgiast.jp 確認。鹿沼案件(261121KNM)の引き継ぎも作業用008として受領確認済み。kim-PC 側で fleet-pc-map.json 登録待ちだったものを本セッション再開時に登録",
+    "codexAccount": "seisaku-team@orgiast.jp"
+  },
   "w018-PC": {
     "remoteName": "作業用018",
     "hostname": "DESKTOP-N429M3V",

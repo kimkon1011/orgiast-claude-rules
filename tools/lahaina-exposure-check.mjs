@@ -90,7 +90,7 @@ export function judgeAirbnb(html) {
 
 // ---- 取得 -------------------------------------------------------------------
 
-async function get(url, timeoutSec) {
+export async function fetchPage(url, timeoutSec = 20) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutSec * 1000);
   try {
@@ -166,7 +166,7 @@ export async function measure({ dateStr, timeoutSec = 20 } = {}) {
   ];
 
   for (const p of probes) {
-    const html = await get(p.url, timeoutSec);
+    const html = await fetchPage(p.url, timeoutSec);
     let r;
     try {
       r = p.judge(html);

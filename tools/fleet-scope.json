@@ -561,6 +561,12 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/lahaina-kpi-daily-register.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
       "path": "tools/register-sga-autopilot.ps1",
       "scope": "kim-only",
       "step": null,

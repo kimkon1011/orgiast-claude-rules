@@ -1131,7 +1131,7 @@ Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM などの�
 
 #### 1.18.5 AIレーン放置禁止と手渡し前の代替検証
 
-1. 落ちたレーンは**同じセッション内で修復**。対象: codex/gemini/deepseek/groq/openrouter/xai/genspark/kimi/glm。既知の修復: WSL ディストリ不在 → Windows ネイティブ codex（danger-full-access）に自動切替／残高切れ → オートチャージ設定の確認と通知／OAuth 失効 → ログイン URL の提示。「既知」「自動で振り替わる」「別の AI で代用」と書いて済ませるのは **違反**。
+1. 落ちたレーンは**同じセッション内で修復**。対象: codex/gemini/deepseek/groq/openrouter/xai/genspark/kimi/glm。既知の修復: WSL ディストリ不在 → Windows ネイティブ codex（danger-full-access）に自動切替／残高切れ → オートチャージ設定の確認と通知／OAuth 失効 → ログイン URL の提示。「既知」「自動で振り替わる」「別の AI で代用」と書いて済ませるのは **違反**。SessionStart が停止レーンの再確認を自動起動し（30分に1回）、応答で停止を報告して [LANE-REPAIR] が無いものは lane-abandonment-gate が止める。
 2. lane-doctor の表示で、最後の probe が失敗したレーンを ✅ と出さない（stale ✅ 禁止）。
 3. 修復できなかった場合は、原因・試した手段・**残る user 操作 1 件**を kim に fleet-mail または Discord で送る（放置しない）。
 4. **手渡し前の代替検証**: user に支払い・ログイン・設定を頼む前に、同じ能力を持つ生存レーンで実行して結果を示す。生存レーンがあるのに頼んだら違反（substitute-capability-gate が block）。user がそのプロバイダを名指しで要求した場合だけ `[SUBSTITUTE-OK]` で例外。

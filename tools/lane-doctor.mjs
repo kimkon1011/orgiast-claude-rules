@@ -72,8 +72,9 @@ function orders(health, home = laneHome()) {
   const billing = readJson(path.join(repo, 'tools/provider-billing.json'));
   const needsUser = ([p, s]) => isLane(p) && /^(?:dead:)?(?:payment_required|oauth_consent|account_creation|physical_operation)$/.test(s.reason)
     && !(s.reason.includes('payment') && billing[p]?.autoTopUp === false);
-  health.substituted = Object.entries(health.lanes).filter(([p, s]) => isLane(p) && (s.reason === 'billing' || s.reason?.includes('payment') && billing[p]?.autoTopUp === false))
+health.substituted = Object.entries(health.lanes).filter(([p, s]) => isLane(p) && (s.reason === 'billing' || s.reason?.includes('payment') && billing[p]?.autoTopUp === false && health.lanes.openrouter?.alive))
     .map(([provider]) => ({ provider, via: 'openrouter' }));
+  for (const { provider, via } of health.substituted) health.lanes[provider].via = via;
   health.deadNeedsUser = Object.entries(health.lanes).filter(needsUser)
     .map(([provider, s]) => ({ provider, reason: s.reason, tried: s.tried, fix: s.userFix || (s.reason.includes('payment') ? '請求設定でオートチャージ ON。手動チャージは禁止ルール。' : '本人アカウントで認証画面を開き OAuth 同意を完了する。') }));
   const missing = Object.entries(health.lanes).filter(([p, s]) => PROVIDERS.includes(p) && s.reason === 'missing_key').map(([p]) => p);
@@ -101,11 +102,12 @@ export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = tr
     }
     return true;
   });
+  const expiredBlocks = new Set();
   for (const [name, state] of [['provider-cooldown.json', cooldown], ['routing-overrides.json', routing.demote || {}]]) {
     const repairs = [], removed = {};
     for (const p of PROVIDERS) {
       const until = time(name.startsWith('routing') ? state[p]?.until ?? state[p] : state[p]?.until);
-      if (state[p] !== undefined && Number.isFinite(until) && until <= now) { removed[p] = state[p]; delete state[p]; repairs.push({ provider: p, action: name.startsWith('routing') ? 'demote_removed' : 'cooldown_removed', detail: '期限切れ' }); }
+      if (state[p] !== undefined && Number.isFinite(until) && until <= now) { removed[p] = state[p]; delete state[p]; expiredBlocks.add(p); repairs.push({ provider: p, action: name.startsWith('routing') ? 'demote_removed' : 'cooldown_removed', detail: '期限切れ' }); }
     }
     if (repairs.length) {
       if (!save || persist(path.join(dir, name), name.startsWith('routing') ? routing : cooldown, health)) health.repairs.push(...repairs);
@@ -125,9 +127,12 @@ export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = tr
     const recent = limits.filter(x => x.provider === p && time(x.until) > now && !(time(evidence.lastProbeOkAt) >= time(x.t ?? x.ts ?? x.at))).at(-1);
     const blocked = cooldown[p] || recent;
     let state = { alive: configured, reason: configured ? 'configured:unprobed' : p === 'codex' ? 'dead:oauth_consent' : 'missing_key' };
-    if (old.lanes?.[p]?.reason === 'billing' || old.lanes?.[p]?.reason === 'dead:payment_required' || (old.lanes?.[p]?.reason === 'dead:physical_operation' && old.lanes?.[p]?.error)) state = { ...previous };
+const paymentFresh = old.lanes?.[p]?.reason === 'dead:payment_required' && Number.isFinite(time(old.lanes[p].probedAt)) && now - time(old.lanes[p].probedAt) < 86400_000;
+    if (old.lanes?.[p]?.reason === 'billing' || paymentFresh || (old.lanes?.[p]?.reason === 'dead:physical_operation' && old.lanes?.[p]?.error)) state = { ...previous };
     else if (blocked && time(blocked.until) > now) state = { alive: false, reason: blocked.reason || 'cooldown', until: blocked.until };
     else if (routing.demote?.[p]) state = { alive: false, reason: 'demoted', until: routing.demote[p]?.until ?? routing.demote[p] };
+    else if (configured && /cooldown|usage[_ ]?limit/i.test(evidence.probeReason || '') && (expiredBlocks.has(p) || !previous.until || time(previous.until) <= now)) state = { alive: false, reason: 'configured:unprobed' };
+    else if (configured && old.lanes?.[p]?.reason === 'dead:payment_required') state = { alive: false, reason: 'configured:unprobed' };
     else if (configured && freshProbe(old.lanes?.[p]?.probedAt, now) && !(old.lanes[p].until && time(old.lanes[p].until) <= now)) state = { ...previous };
     else if (configured && evidence.lastProbeOkAt && !/^(?:auth_ok:)?probe_ok(?::stale)?$|^native_ok$/.test(evidence.probeReason || '')) state = { alive: false, reason: 'probe_failed:stale' };
     else if (configured && evidence.lastProbeOkAt) state = { alive: true, reason: 'probe_ok:stale' };
@@ -138,7 +143,8 @@ export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = tr
   applyRealLaneHealth(health, home, now);
   // API key の生存と CLI の有無は別条件。CLI が無い場合は実装候補にしない。
   health.lanes['gemini-cli'] = { ...health.lanes.gemini, alive: health.lanes.gemini.alive && executable('gemini'), reason: executable('gemini') ? health.lanes.gemini.reason : 'cli_missing' };
-  orders(health, home);
+orders(health, home);
+  if (!health.lanes.deepseek.alive && health.lanes.deepseek.reason === 'dead:payment_required' && health.lanes.openrouter?.alive) health.lanes.deepseek.via = 'openrouter';
   if (save) { demoteBilling(health, home, now); persist(path.join(dir, 'lane-health.json'), health, health); }
   return health;
 }
@@ -204,13 +210,14 @@ export function notificationText(item, home) {
 3. ${item.reason.includes('payment') ? '請求設定を開き支払い方法を確認し、オートチャージ ON を設定して保存する（手動チャージは禁止ルール）。' : 'Codex を開きログインを選択する。ブラウザーで同じアカウントを選び、OAuth の同意内容を確認して許可する。'}
 4. 完了後は Claude が lane-doctor --probe で復旧を確認します。`;
 }
-export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe } = {}) {
+export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe, providers = PROVIDERS } = {}) {
   const started = Date.now(), dir = path.join(home, '.claude');
   const health = laneDoctorQuick({ home, now, save: false });
   const previous = readJson(path.join(dir, 'lane-health.json'));
   const probeBudget = Math.max(1, budgetMs - 5000);
   // 各 provider を並行実測し、一つの停止レーンで90秒枠を使い切らない。
-  const results = await Promise.all([...PROVIDERS, ...OPTIONAL_PROVIDERS.filter(o => health.lanes[o])].map(async p => {
+  const probeProviders = providers.length ? providers : [...PROVIDERS, ...OPTIONAL_PROVIDERS.filter(o => health.lanes[o])];
+  const results = await Promise.all(probeProviders.map(async p => {
     if (health.lanes[p].reason === 'missing_key' || (p === 'codex' && !codexAuthStatus(home).login)) return [p, null];
     if (p === 'codex') {
       if (platform === 'win32' && await listWsl() === '') {
@@ -295,15 +302,23 @@ export async function notifyLaneStops(health, { home = laneHome(), now = Date.no
   }
 }
 export function summarize(health) {
-  const alive = Object.entries(health.lanes).filter(([,s]) => s.alive).map(([p,s]) => `${p} ✅${s.reason === 'probe_ok:stale' ? `(stale ${Math.floor((time(health.ts) - time(s.lastProbeOkAt)) / 60000)}m)` : ''}`).join(' ') || 'なし';
-  const dead = Object.entries(health.lanes).filter(([,s]) => !s.alive).map(([p,s]) => `${p} ❌(${s.reason === 'probe_failed:stale' ? `probe_failed, 前回OK ${s.lastProbeOkAt.slice(0, 10)}` : s.reason})`).join(' ') || 'なし';
+  const substituted = ([, s]) => !s.alive && s.via === 'openrouter' && health.lanes.openrouter?.alive;
+  const alive = Object.entries(health.lanes).filter((entry) => entry[1].alive || substituted(entry)).map(([p,s]) => substituted([p, s]) ? `${p} ✅(OpenRouter経由)` : `${p} ✅${s.reason === 'probe_ok:stale' ? `(stale ${Math.floor((time(health.ts) - time(s.lastProbeOkAt)) / 60000)}m)` : ''}`).join(' ') || 'なし';
+  const dead = Object.entries(health.lanes).filter((entry) => !entry[1].alive && !substituted(entry)).map(([p,s]) => {
+    const reason = s.reason === 'probe_failed:stale' ? `probe_failed, 前回OK ${s.lastProbeOkAt?.slice(0, 10) || 'なし'}` : s.reason;
+    const user = health.deadNeedsUser?.find(x => x.provider === p);
+    const next = s.autoProbeStarted ? '自動再確認中' : Number.isFinite(time(s.until)) && time(s.until) > time(health.ts) ? `復帰予定 ${new Date(time(s.until)).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).replace(/^\d{4}\//, '')} JST` : user ? `要対応: ${String(user.fix).replace(/\s+/g, ' ').slice(0, 80)}` : '自動再確認待ち';
+    return `${p} ❌(${reason})(${next})`;
+  }).join(' ') || 'なし';
   const summary = `生存: ${alive} ／ 停止: ${dead} ／ 修復: ${health.repairs.map(r => typeof r === 'string' ? r : `${r.provider} ${r.action}`).join(', ') || 'なし'}${health.errors.length ? ` ／ 保存エラー: ${health.errors.join(', ')}` : ''}`;
   return health.repairFirst?.required ? `${summary}\n🛑 安価AIレーン停止（${health.repairFirst.reasons.join(', ')}）: 絶対ルール — 最優先でこの場で修復する。修復（または人にしかできない操作の依頼送信）が済むまで通常タスクに着手しない。手順: ${health.repairFirst.steps.join(' ')}` : summary;
 }
 export async function main(args = process.argv.slice(2)) {
   const h = args.indexOf('--home'), home = h >= 0 ? args[h + 1] : laneHome();
+  const p = args.indexOf('--provider'), providers = p >= 0 ? [args[p + 1]] : PROVIDERS;
   if (!home) throw new Error('--home requires a directory');
-  const result = args.includes('--probe') ? await laneDoctorProbe({ home }) : laneDoctorQuick({ home, save: !args.includes('--read-only') });
+if (p >= 0 && !PROVIDERS.includes(args[p + 1])) throw new Error('--provider requires a known provider');
+  const result = args.includes('--probe') ? await laneDoctorProbe({ home, providers }) : laneDoctorQuick({ home, save: !args.includes('--read-only') });
   if (!args.includes('--probe') && !args.includes('--read-only')) await notifyLaneStops(result, { home });
   if (args.includes('--json')) console.log(JSON.stringify(result));
   else { console.log(summarize(result)); console.log(JSON.stringify(result)); }

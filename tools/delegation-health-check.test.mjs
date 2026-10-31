@@ -165,6 +165,26 @@ test('emptyOutputReason は Codex の認証失敗と ChatGPT モデル認証不�
   assert.equal(emptyOutputReason({ status: 1 }), 'exit_1');
 });
 
+test('emptyOutputReason は先頭が切れた認証失敗 stderrTail（401 も Missing b も欠落）を auth_failed に分類する', () => {
+  // 実測 2026-10-29〜31: codex-do が stderrTail を末尾200字へ切り詰め、"arer or basic authentication" で始まる形になる。
+  const truncated = 'arer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: a52b4a02b91c19e8-KIX, request id: req_c13287e0c5004bec97e2e26b1d8bef5b';
+  assert.doesNotMatch(truncated, /401|Missing b/i);
+  assert.equal(emptyOutputReason({ status: 1, exitCode: 1, launched: true, timedOut: false, secs: 3, stderrTail: truncated }), 'auth_failed');
+});
+
+test('先頭が切れた認証失敗 stderrTail の fallback 連続失敗は lane_outage_unrepaired ではなく codex_auth_failed に繋がる', () => {
+  const truncated = 'arer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: a52b4a02b91c19e8-KIX, request id: req_c13287e0c5004bec97e2e26b1d8bef5b';
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [0, 1, 2].map((i) => row({
+    t: `2026-09-09T10:0${i}:00Z`, provider: 'fallback', out: 0, status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 15, stderrTail: truncated,
+  })).join(''));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  const ids = findings.map((item) => item.id);
+  assert.ok(ids.includes('codex_auth_failed'), JSON.stringify(ids));
+  assert.ok(!ids.includes('lane_outage_unrepaired'), JSON.stringify(ids));
+  assert.equal(findings.find((item) => item.id === 'codex_auth_failed').severity, 'high');
+});
+
 test('emptyOutputReason は U+2019 と U+0027 の両方の usage limit 行を usage_limit に分類する', () => {
   // U+2019 (’)
   assert.equal(emptyOutputReason({

@@ -253,7 +253,10 @@ const SPAWN_FAILED = /syscall: 'spawn'|\bspawn E[A-Z]+\b|code: 'E[A-Z]{4,}'/;
 // token_revoked のとき codex は "workspace routing discovery unauthorized (401)" の語順で 401 を出す。
 // 旧パターン /401 unauthorized/ は語順が逆で一致せず、実測8件(2026-10-12〜10-14)が no_output に
 // 埋もれて codex_empty_output が毎晩起票された（2026-10-16 診断。修復=Windows の auth.json を WSL へコピー）。
-const CODEX_AUTH_FAILED = /401 unauthorized|unauthorized \(401\)|missing bearer or basic authentication/i;
+// stderrTail は末尾200字へ切り詰められ、"arer or basic authentication in header, url: ...v1/responses" だけが
+// 残ることがある。実測 2026-10-29〜31 の fallback 16件が一致せず lane_outage_unrepaired になったため、
+// 先頭欠落後も残る "or basic authentication in header" も一致させる。
+const CODEX_AUTH_FAILED = /401 unauthorized|unauthorized \(401\)|missing bearer or basic authentication|or basic authentication in header/i;
 
 // ChatGPT アカウント認証なのに sol/astra を選ぶと 400 で即死する。codex-do 側のレーン選択の
 // 問題なので、直せる欠陥として起票する（2026-09-22 診断: 09-20 の11件中7件）。
@@ -607,6 +610,14 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     if (benign.length === attempts.length) {
       findings.push({ id: 'provider_usage_limit', provider, severity: 'low', title: `${provider} は上限/レート制限で停止（欠陥ではない）`,
         evidence: [`${attempts.length}件すべて失敗`, ...reasonTop(attempts.map(row => ({ reason: row.stderrTail || row.reason || emptyOutputReason(row) })))] });
+      continue;
+    }
+    // 全失敗の原因が認証失敗なら、汎用の全滅ではなく名前付きの codex_auth_failed として起票する。
+    // codex 行側で同 id を出していれば重複させない。修復済み（後の成功・auth.json 更新）なら出さない。
+    if (attempts.every((row) => emptyOutputReason(row) === 'auth_failed')) {
+      if (!findings.some((item) => item.id === 'codex_auth_failed') && !repairedAfter(attempts) && !authRestoredAfter(home, attempts)) {
+        findings.push({ id: 'codex_auth_failed', provider, severity: 'high', title: `Codex CLI が未認証（${provider} 経由で全失敗・再ログインが必要）`, evidence: [`${attempts.length}件`, 'Windows の ~/.codex/auth.json を確認し codex login を実行'], fixTask: 'Windows の %USERPROFILE%\\.codex\\auth.json を確認し codex login status。auth.json が無い PC では keyserve 経由の鍵配布か、人の codex login（ChatGPT アカウントの OAuth 同意）が要る' });
+      }
       continue;
     }
     const times = attempts.map(row => row.t).sort((a, b) => Date.parse(a) - Date.parse(b));

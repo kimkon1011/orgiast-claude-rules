@@ -14,6 +14,9 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
 export const TIMEOUT_FIX_MERGED_AT = '2026-10-16T18:50:03Z'; // #773（600→900秒＋連鎖予算）
+// 孫プロセスが pipe を握って close が来ず予算を超えた問題の修正（#1260 / 13005ed の commit 日）。
+// 2026-10-28T09:31Z の gemini-cli 1044秒/予算600秒はこの修正より前の行。以後の超過だけを回帰として扱う。
+export const TIMEOUT_KILL_FIX_MERGED_AT = '2026-10-28T19:08:39Z';
 // フォールバック試行に与える既定予算。--cap で上書きできる。
 // 主経路（chain 無し）はこれではなく、その実行に与えた --timeout（既定 1800 秒）で判定する。
 export const DEFAULT_CAP_SECS = 900;
@@ -57,7 +60,7 @@ export function timeoutAttempts(row, { fallbackBudgetSecs = DEFAULT_CAP_SECS } =
 }
 
 export function judgeTimeoutRows(rows = [], {
-  since = TIMEOUT_FIX_MERGED_AT,
+  since = TIMEOUT_KILL_FIX_MERGED_AT,
   capSecs = DEFAULT_CAP_SECS,
   toleranceSecs = DEFAULT_TOLERANCE_SECS,
 } = {}) {
@@ -119,7 +122,7 @@ export function judgeTimeoutRows(rows = [], {
 function parseArgs(argv) {
   const args = {
     ledger: process.env.EXECUTOR_USAGE_LEDGER || path.join(os.homedir(), '.claude', 'executor-usage.jsonl'),
-    since: TIMEOUT_FIX_MERGED_AT,
+    since: TIMEOUT_KILL_FIX_MERGED_AT,
     capSecs: DEFAULT_CAP_SECS,
     toleranceSecs: DEFAULT_TOLERANCE_SECS,
     json: false,
@@ -137,7 +140,7 @@ function parseArgs(argv) {
 
 function renderText(report) {
   const lines = ['## ⏱ タイムアウトで捨てた秒数の判定'];
-  lines.push(`- 基準時刻(#773 マージ): ${report.since}`);
+  lines.push(`- 基準時刻(孫プロセス対策 #1260): ${report.since}`);
   lines.push(`- 上限: ${report.capSecs} 秒 + 許容 ${report.toleranceSecs} 秒`);
   if (report.verdict === 'unverified-no-recurrence') {
     lines.push(`- 判定: **未確認（再発なし）** — 基準時刻以降の timeout 行は 0 件（全期間 ${report.totalTimeoutRows} 件）`);

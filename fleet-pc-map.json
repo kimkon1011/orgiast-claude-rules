@@ -16,6 +16,7 @@
     "sheetName": "作業用004民泊用",
     "remoteName": "作業用004民泊用",
     "account": "nishi@orgiast.jp",
+    "discordId": "1543817340058083368",
     "hostname": "DESKTOP-PPD5V8I",
     "deviceId": "3BF4B9EF-B428-450D-9AC2-C59AF0D1C9B3",
     "_correction": "2026-10-09 kim のスクリーンショット2枚で確定: Chrome リモートデスクトップ『作業用004 民泊』の接続先のデバイス名＝DESKTOP-PPD5V8I（デバイスID 上記）。『作業用011』の接続先のデバイス名は『作業用011』（HP EliteDesk 800 G3 SFF、デバイスID B79CA602-6163-4252-B2A0-2A96C61F6767）で別のPC。よって kimko-PC の実体は作業用004民泊用で、シート行『作業用011(=DESKTOP-PPD5V8I)』の紐付けは誤り。sheetName と aliases は fleet-liveness がシート行の統合に使うため、シート側の表記を直すまで残す。アカウント nishi@ は kim 回答(2026-10-08)",
@@ -24,7 +25,7 @@
       "作業用011(=DESKTOP-PPD5V8I)",
       "作業用004民泊用"
     ],
-    "_evidence": "【訂正 2026-10-09】kim スクリーンショット 2026-10-09 で DESKTOP-PPD5V8I=作業用004民泊用 と確定。旧記載『作業用011(=DESKTOP-PPD5V8I)』は誤り。【以下は旧証拠・残置】2026-08-27 20:0x に Discord へ初報告し 🖥 hostname=DESKTOP-PPD5V8I を送ってきた（webhook 復旧の実証）。シート行『作業用011(=DESKTOP-PPD5V8I)』と hostname 一致。remoteName 根拠(2026-10-08): 台帳『PC稼働状況』D列=作業用011 の行(担当 金功勇)の fleet-mail疎通の根拠に『kimko-PCが送信/返信8通…紐付け=fleet-pc-map(作業用011)』とあり、作業用011=kimko-PC を台帳側が明示",
+    "_evidence": "【訂正 2026-10-09】kim スクリーンショット 2026-10-09 で DESKTOP-PPD5V8I=作業用004民泊用 と確定。旧記載『作業用011(=DESKTOP-PPD5V8I)』は誤り。【以下は旧証拠・残置】2026-08-27 20:0x に Discord へ初報告し 🖥 hostname=DESKTOP-PPD5V8I を送ってきた（webhook 復旧の実証）。シート行『作業用011(=DESKTOP-PPD5V8I)』と hostname 一致。remoteName 根拠(2026-10-08): 台帳『PC稼働状況』D列=作業用011 の行(担当 金功勇)の fleet-mail疎通の根拠に『kimko-PCが送信/返信8通…紐付け=fleet-pc-map(作業用011)』とあり、作業用011=kimko-PC を台帳側が明示。discordId=1543817340058083368（nishi@orgiast.jp の Discord・username nishiorgiast）は kim 指示(2026-10-29)で追加: この PC の進捗DM宛先が kim に誤解決されていた実害の修正",
     "codexAccount": "nishi@orgiast.jp"
   },
   "HP": {
@@ -36,13 +37,14 @@
   "nishi-PC": {
     "remoteName": "作業用019",
     "account": "nishi@orgiast.jp",
+    "discordId": "1543817340058083368",
     "_evidenceRemoteName": "kim のスクリーンショット(2026-10-09): Chrome リモートデスクトップ『作業用019/nishi』の接続先の設定→詳細情報でデバイス名 DESKTOP-04U31RG（Precision T3610、デバイスID 9D75ACC5-EB0D-48FB-B27E-D60113A9417B）。nishi-PC 自己申告の hostname=DESKTOP-04U31RG(2026-10-08 fleet-mail 返信)と一致。アカウント nishi@ は kim 回答(2026-10-08)",
     "hostname": "DESKTOP-04U31RG",
     "aliases": [
       "DESKTOP-04U31RG"
     ],
     "_gap": "手書き行が無い(PC稼働状況シートに追加が必要)",
-    "_evidence": "2026-08-28/29 に Discord へ hostname=DESKTOP-04U31RG / user=user / git=seisaku-team@orgiast.jp を含む報告を送信（rules-resync runId=rules-resync-2026-08-28-nightly-cost-fix 実行報告 および 日次トークン報告、いずれも実測）",
+    "_evidence": "2026-08-28/29 に Discord へ hostname=DESKTOP-04U31RG / user=user / git=seisaku-team@orgiast.jp を含む報告を送信（rules-resync runId=rules-resync-2026-08-28-nightly-cost-fix 実行報告 および 日次トークン報告、いずれも実測）。discordId=1543817340058083368（username nishiorgiast）は kim 指示(2026-10-29)で追加: 進捗DMの宛先解決用",
     "codexAccount": "nishi@orgiast.jp"
   },
   "作業用999": {

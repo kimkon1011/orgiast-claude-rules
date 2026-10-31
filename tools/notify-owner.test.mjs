@@ -114,9 +114,13 @@ test('ローカルmapのdiscordIdは正本のowner設定を継承する', t => {
  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-map-'));
  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
  fs.mkdirSync(path.join(home, '.claude'));
- fs.writeFileSync(path.join(home, '.claude', 'fleet-pc-map.json'), JSON.stringify({ 'nishi-PC': { discordId: '987' } }));
+ // 正本の kimko-PC/nishi-PC と同じ discordId なら、ローカルに account を書かなくても解決する。
+ fs.writeFileSync(path.join(home, '.claude', 'fleet-pc-map.json'), JSON.stringify({ 'nishi-PC': { discordId: '1543817340058083368' } }));
  assert.equal(resolveOwner({ home, label: 'nishi-PC' }), 'nishi@orgiast.jp');
- assert.equal(resolveOwnerDiscordId('nishi@orgiast.jp', { home, directory: [] }), '987');
+ assert.equal(resolveOwnerDiscordId('nishi@orgiast.jp', { home, directory: [] }), '1543817340058083368');
+ // 同一アカウント(nishi@)の別discordIdは矛盾として拒否する（kimko-PC の正本IDと衝突するため）。
+ fs.writeFileSync(path.join(home, '.claude', 'fleet-pc-map.json'), JSON.stringify({ 'nishi-PC': { discordId: '987' } }));
+ assert.equal(resolveOwnerDiscordId('nishi@orgiast.jp', { home, directory: [] }), '');
 });
 
 
@@ -267,4 +271,28 @@ test('Discord failure with a valid recipient falls back without setup warning', 
  const result = await notifyOwner('nishi@orgiast.jp', '進捗', { ...options, userId: '123', notify: async () => { throw new Error('network'); }, toast: text => { texts.push(text); return true; } });
  assert.equal(result.channel, 'toast');
  assert.deepEqual(texts, ['進捗']);
+});
+
+test('宛先解決不能時は next-session.md へ24時間に1回だけ起票する', async t => {
+ const options = localOptions(t);
+ Object.assign(options, { now: new Date(2026, 9, 28, 9).getTime(), toast: () => true });
+ const file = path.join(options.home, '.claude', 'next-session.md');
+ const tickets = () => (fs.readFileSync(file, 'utf8').match(/fleet-pc-map\.json の該当PCに discordId を追加してください/g) || []).length;
+ await notifyOwner('nishi@orgiast.jp', '進捗1', options);
+ await notifyOwner('nishi@orgiast.jp', '進捗2', options);
+ assert.equal(tickets(), 1);
+ const text = fs.readFileSync(file, 'utf8');
+ assert.match(text, /## 残TODO/);
+ assert.match(text, /- \[ \] \[notify-owner\] 進捗通知の Discord 宛先が解決できず、トーストに落ちています。fleet-pc-map\.json の該当PCに discordId を追加してください（owner: nishi@orgiast\.jp）/);
+ options.now = new Date(2026, 9, 29, 10).getTime(); // 25時間後は再起票する
+ await notifyOwner('nishi@orgiast.jp', '進捗3', options);
+ assert.equal(tickets(), 2);
+});
+
+test('kimko-PC と nishi-PC の discordId で nishi@orgiast.jp の宛先を解決する', () => {
+ const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+ const pcMap = JSON.parse(fs.readFileSync(path.join(repo, 'fleet-pc-map.json'), 'utf8'));
+ assert.equal(pcMap['kimko-PC'].discordId, '1543817340058083368');
+ assert.equal(pcMap['nishi-PC'].discordId, '1543817340058083368');
+ assert.equal(resolveOwnerDiscordId('nishi@orgiast.jp', { pcMap, directory: [] }), '1543817340058083368');
 });

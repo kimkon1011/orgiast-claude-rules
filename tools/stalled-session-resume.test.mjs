@@ -67,6 +67,26 @@ test('closed and auto-close eligible sessions excluded', async t => {
   f.io.stat = async () => ({ mtimeMs: f.io.now() - 7 * 86400000 });
   const r = await run(options([], {}), f.io); assert.deepEqual(r.rows.map(r => r.skip), ['closed', 'session-auto-close対象']); assert.equal(f.calls(), 0);
 });
+test('headless loop sessions are skipped (auto-managed by quota-sweep/auto-session)', async t => {
+  const f = await fixture(t, 2);
+  f.records[0].firstPrompt = '[headless:quota-sweep] Follow .loop/quota-sweep-claude.md for exactly one iteration';
+  f.records[1].firstPrompt = '通常の依頼';
+  const r = await run(options([], {}), f.io);
+  assert.equal(r.rows[0].skip, 'headless（自動ループ管理対象）');
+  assert.equal(r.rows[1].skip, '');
+  assert.equal(f.calls(), 1); // 自動ループ分は実行されない
+});
+test('codex deferred in run does not abort the night or file an error', async t => {
+  const f = await fixture(t, 3); let message;
+  f.io.execute = async () => ({ outcome: 'no-executor', reason: '実行役保留(codex-do deferred): unattended_budget' });
+  f.io.notify = async s => { message = s; };
+  const r = await run(options([], {}), f.io);
+  assert.equal(r.aborted, false);
+  assert.equal(message, undefined); // エラー通知なし
+  assert.equal(f.notices(), 0);
+  const ledger = await f.ledger();
+  assert.equal(ledger.nights['2026-09-24'].errors, 0);
+});
 test('missing transcript is skipped without aborting the run', async t => {
   const f = await fixture(t, 2);
   f.io.stat = async file => { if (file === 'file-0') throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); return { mtimeMs: f.io.now() - 86400000 }; };
@@ -100,6 +120,10 @@ test('adapter forwards deadline/resume and requires progress evidence', async ()
   io.runChild = async () => ({ status: 'failure', skippedNoExecutor: true, executorUsed: 'cheap-code:deepseek', stderr: 'payment_required' });
   const lane = await execute(r, { timeoutMs: 123 }, io);
   assert.equal(lane.outcome, 'no-executor'); assert.match(lane.reason, /payment_required/);
+  // codex-do の deferred(exit 75 / unattended_budget) は error ではなく保留扱い（2026-10-30 実測の誤通知防止）。
+  io.runChild = async () => ({ status: 'failure', deferred: true, executorUsed: 'codex-do' });
+  const deferred = await execute(r, { timeoutMs: 123 }, io);
+  assert.equal(deferred.outcome, 'no-executor'); assert.match(deferred.reason, /codex-do deferred/);
   assert.ok(buildClaudeHeadlessArgs({ repoCwd: '/fixture', historyCwd: '/fixture', resumeSessionId: 'abc' }).includes('--resume'));
 });
 test('invalid CLI/env values rejected', () => {

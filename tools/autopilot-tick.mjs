@@ -523,11 +523,12 @@ async function execute(command, args, ctx) {
     }
     if (state.status === 'paused' && state.pausedReason === 'runner_error' && (state.consecutiveRunnerErrors || 0) < 3) {
       if (state.runnerErrorRetryAt && new Date(state.runnerErrorRetryAt).getTime() <= now.getTime()) {
-        state.status = 'running';
-        state.pausedReason = null;
-        state.runnerErrorRetryAt = null;
-        state.consecutiveNoop = 0;
-        state.jevDecision = null;
+        // <3 回のリトライ: error カウンタは累積させて 3-strike に到達させる。
+        // resumeState() が consecutiveRunnerErrors を 0 に戻さないよう、
+        // 一旦保存して戻す (=このパスの唯一の差分)。
+        const kept = state.consecutiveRunnerErrors;
+        resumeState(state);
+        state.consecutiveRunnerErrors = kept;
       }
     }
     // A question that carries its own reply deadline must not freeze the run forever

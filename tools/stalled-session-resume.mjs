@@ -71,6 +71,10 @@ function chainAncestors(ledger, parentId) {
   return ancestors;
 }
 export function skipReason(record, entry, night, closed, mtimeMs, now, activeMs) {
+  // [headless: は自動ループ（quota-sweep / auto-session）の子セッション。ループ契約側が state・予算を
+  // 管理しており、停止再開で上書きすると二重管理になる（2026-10-30 実測: quota-sweep の2セッションが
+  // 停滞扱いで再開され、codex 保留中に error と誤判定された）。
+  if (String(record.firstPrompt ?? '').startsWith('[headless:')) return 'headless（自動ループ管理対象）';
   if (closed.sessions[record.sessionId]) return 'closed';
   if (now - mtimeMs >= 7 * 86400000) return 'session-auto-close対象';
   if (now - mtimeMs <= activeMs || record.sessionId === process.env.CLAUDE_SESSION_ID) return 'active';
@@ -91,6 +95,10 @@ export async function execute(record, { timeoutMs, resultFile, previous = [] }, 
   // 実行役が1つも起動できない(cheap-code 全レーン停止・Claude フォールバック無効)のはセッションの失敗ではない。
   // 2026-10-26 実測: deepseek payment_required で2件が1秒で error 扱い→「連続2件エラーで中止」の誤通知と noProgress 消費。
   if (result.skippedNoExecutor) return { outcome: 'no-executor', reason: `実行役なし: ${String(result.stderr ?? '').trim().slice(-300) || result.executorUsed || 'cheap-code'}` };
+  // codex-do が上限・無人割当超過で deferred(exit 75) を返した場合も同じ保留扱い。失敗ではない。
+  // 2026-10-30 実測: unattended_budget の deferred を error に数え、2件で「連続2件エラーで中止」の
+  // 誤通知と noProgress 消費が起きた（5f560710 / 558c1293 の夜間再開分）。
+  if (result.deferred === true) return { outcome: 'no-executor', reason: `実行役保留(codex-do deferred): ${String(result.stdout ?? result.stderr ?? '').trim().slice(-300) || 'deferred'}` };
   if (result.status !== 'success') return { outcome: 'error', reason: result.status };
   const report = await (io.readReport ?? readJson)(resultFile, null);
   return { outcome: report?.progressed === true && typeof report.evidence === 'string' && report.evidence.trim() ? 'progressed' : 'no-progress', reason: report?.evidence || '成果記録なし', executor: result.executorUsed };

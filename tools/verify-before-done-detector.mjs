@@ -152,7 +152,8 @@ export function evaluateVerification(entries, assistantText, { cwd = process.cwd
     const targets = paths(reason);
     return !targets.length || targets.some(target => sameFile(target, file) || (!target.includes('/') && path.posix.basename(normalize(file)) === target));
   });
-  if (exemptions.length && (files.size ? [...files.keys()].every(exempt) : exemptions.some(reason => !paths(reason).length))) return null;
+  // worktree 委譲など files が空の場合、有効な NO-TEST-OK が1つあれば十分（変更対象の照合が不能のため）
+  if (exemptions.length && (files.size ? [...files.keys()].every(exempt) : true)) return null;
   const missing = [...files.keys()].filter(f => !executed.has(f) && !exempt(f));
   const lastExecution = Math.max(...executed.values());
   const readback = executed.size > 0 && (/\[TESTED-LIVE:\s*[^\]\s][^\]]*\]/.test(assistantText) || calls.some(c => c.ok && c.index > lastExecution && (

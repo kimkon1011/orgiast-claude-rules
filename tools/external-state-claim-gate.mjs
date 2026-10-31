@@ -14,7 +14,7 @@ const denial = /denied by the Claude Code auto mode classifier|Permission for th
 
 export function findExternalStateClaim(text) {
   for (const sentence of sentences(text)) {
-    if (!subjects.test(sentence) || corrections.test(sentence) || meta.test(sentence)) continue;
+    if (sentence.includes('[NO-TEST-OK:') || sentence.includes('[NO-TEST-OK]') || !subjects.test(sentence) || corrections.test(sentence) || meta.test(sentence)) continue;
     if (unknown.test(sentence) && !probability.test(sentence) && !symptomDenials.test(sentence)) continue;
     if (symptomDenials.test(sentence)) return sentence;
     for (const match of sentence.matchAll(negatives)) {

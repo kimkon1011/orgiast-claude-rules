@@ -29,6 +29,8 @@ for (const text of [
   '| プロパティ | 存在しない |', '| 説明。GA4 は存在しない。 |',
   '> 引用です。GA4 は存在しない。', 'GA4 は存在しないという検出パターンです。',
   'GA4 が存在しないかはまだ確認できていない。',
+  '[NO-TEST-OK: 変更対象ファイルが別ワークツリーにあるため実行不要]',
+  '[NO-TEST-OK: 変更対象ファイルは無いため実行不要]',
 ]) test(`A pass: ${text}`, () => {
   assert.equal(findExternalStateClaim(text), '');
   assert.equal(evaluate({ text, transcriptRaw: '' }).decision, 'pass');

@@ -158,6 +158,12 @@ test('NO-TEST-OKは20文字以上の具体理由を要求し、ファイル指�
     assert.ok(check(rows, `完了 [NO-TEST-OK: ${reason}]`));
   }
 });
+test('worktree委譲でfiles.size=0でも有効なNO-TEST-OKでpass（変更対象不明の無限ループ防止）', () => {
+  // Agent 委譲で編集は sub-agent 内、files.size=0 の状態で NO-TEST-OK を書く
+  const entries = [human('修正して'), ...call('Agent', { subagent_type: 'Plan', prompt: 'implement tools/fix.mjs を worktree で実装' }, '実行完了'), ...call('Bash', { command: 'node tools/codex-do.mjs "worktreeで実装"' }, 'done')];
+  assert.equal(check(entries, '完了 [NO-TEST-OK: 変更対象は別ワークツリーで動作済みのため本リポジトリでの実行不要]'), null, 'files.size=0 + valid NO-TEST-OK should pass');
+  assert.match(check(entries, '完了'), /変更対象不明/, 'NO-TEST-OKなしではblock（変更対象不明）');
+});
 test('通知・Stop差し戻しを越えて最終変更後の実行証拠を保持する', () => {
   const rows = [human('修正して'), ...edit('tools/a.mjs'), ...bash('node /production/tools/a.mjs'),
     human('<task-notification>完了通知</task-notification>'), human('Stop hook feedback: 再確認'),

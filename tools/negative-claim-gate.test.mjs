@@ -67,6 +67,10 @@ test('assistant本文に一次ソースURLを書いただけではblock', () => 
 });
 test('留保表現はpass', () => assert.equal(run({ text: 'API があるかまだ確認できていない。' }).result.stdout, ''));
 test('通常応答はpass', () => assert.equal(run({ text: '調査結果をまとめました。' }).result.stdout, ''));
+test('[NO-TEST-OK: ... API ... 無い] を否定断定と誤判定しない（metaMarkers 除外）', () => {
+  assert.equal(run({ text: '[NO-TEST-OK: このAPIは別ワークツリーで動作済みのため照会不要]' }).result.stdout, '');
+  assert.equal(run({ text: '[NO-TEST-OK: MCP SDK は本リポジトリに配置不要のため照会不要]' }).result.stdout, '');
+});
 for (const [index, { text, shouldDetect }] of regressionFixtures.entries()) {
   test(`実データの否定断定回帰fixture ${index + 1}を期待どおり判定`, () => {
     assert.equal(Boolean(findNegativeClaim(text)), shouldDetect, text);

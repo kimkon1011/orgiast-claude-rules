@@ -16,7 +16,7 @@ const negativeTerms = /(?:存在しない|(?:が|は)\s*無い|提供されて�
 const reservations = /(?:まだ確認できていない|確認できていない|未確認|不明|分からない|わからない|と思われる|可能性がある|かもしれない|seem(?:s)?|appears?|may|might|unknown|unconfirmed)/i;
 const primarySources = /(?:registry\.npmjs\.org|\bnpm\s+(?:view|search)\b|pypi\.org|\bpip\s+index\b|api\.github\.com|\bgh\s+(?:api|search)\b|crates\.io|pkg\.go\.dev|rubygems\.org|packagist\.org)/i;
 const correctionMarkers = /(?:誤り(?:だった)?|訂正|と答えた|と書いた|と断定した|前回|先ほど)/i;
-const metaMarkers = /(?:検出|パターン|正規表現|ゲート|フック|ルール)/i;
+const metaMarkers = /(?:検出|パターン|正規表現|ゲート|フック|ルール|NO-TEST-OK)/i;
 const environmentAfterNegative = /(?:存在しない|(?:が|は)\s*無い|提供されていない|公開されていない|用意されていない|対応していない|未対応|使えない|組み込めない|不可能|実現できない)\s*(?:この\s*)?(?:機体|端末|PC|環境|マシン|サーバー?|コンテナ)/i;
 const judgmentMarkers = /(?:✅|❌|⚠️|真陽性|偽陽性|誤爆|期待)/;
 

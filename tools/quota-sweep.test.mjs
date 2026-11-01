@@ -85,12 +85,17 @@ test('deadline kills process tree, never spawns after deadline', async () => {
 });
 // 2026-10-26T20:17Z 実測: 期限到達時に watchdog と親のタイマーが同時に taskkill し、後勝ち側は
 // 「プロセスが見つかりません」exit 128 になる（子は既に終了済み = 正常な二重 kill）。
-// 128 は POSIX 分岐の ESRCH と同様に無視し、stderr / ledger の reason を汚さないこと。
-// 0 ・ 128 以外（例: 1 = アクセス拒否）は子が残るため従来どおり投げること。
+// 2026-11-02 実測: Node.js spawnSync 経由だと taskkill は exit 255 を返す（native Windows API）。
+// 128/255 は POSIX 分岐の ESRCH と同様に無視し、stderr / ledger の reason を汚さないこと。
+// 0 ・ 128 ・ 255 以外（例: 1 = アクセス拒否）は子が残るため従来どおり投げること。
 test('killTree tolerates taskkill 128 (process already exited)', () => {
   killTree(123, { platform: 'win32', spawnImpl: () => ({ status: 128 }) }); // must not throw
   assert.throws(() => killTree(123, { platform: 'win32', spawnImpl: () => ({ status: 1 }) }), /taskkill failed: 1/);
   assert.throws(() => killTree(123, { platform: 'win32', spawnImpl: () => ({ error: new Error('ENOENT') }) }), /ENOENT/);
+});
+test('killTree tolerates taskkill 255 (spawnSync native Windows path)', () => {
+  // Node.js spawnSync 経由で taskkill を呼ぶと、プロセス不在時に 255 が返る（Git Bash の 128 に相当）。
+  killTree(123, { platform: 'win32', spawnImpl: () => ({ status: 255 }) }); // must not throw
 });
 test('killTree tolerates taskkill ETIMEDOUT (kill timed out)', () => {
   // ETIMEDOUT from spawnSync means taskkill didn't finish within the 10s timeout.

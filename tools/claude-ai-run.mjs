@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { isUnspawnable, resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
 
@@ -110,9 +110,13 @@ export function parseArgs(argv) {
 }
 
 // spawn を注入可能にしてテストする本体。spawnFn の既定は node:child_process の spawn。
-// 戻り値 { code, stdout, stderr, timedOut }
+// stopWhen は累積 stdout を受け取り、true なら子を停止して成功を返す。
+// 戻り値 { code, stdout, stderr, timedOut }（早期完了時だけ stoppedEarly: true）
 export function runConnectorPrompt({
   spawnFn = spawn,
+  spawnSyncFn = spawnSync,
+  platform = process.platform,
+  stopWhen,
   executable,
   args,
   prompt = '',
@@ -132,6 +136,7 @@ export function runConnectorPrompt({
     let stderrText = '';
     let timedOut = false;
     let timer = null;
+    let stoppedEarly = false;
 
     const child = spawnFn(bin, childArgs, {
       windowsHide: true,
@@ -160,19 +165,35 @@ export function runConnectorPrompt({
 
     if (child.stdout) {
       child.stdout.on('data', (chunk) => {
+        if (stoppedEarly) return;
         stdoutText += chunk.toString();
         if (streamStdout) process.stdout.write(chunk);
+        if (stopWhen && stopWhen(stdoutText)) {
+          // 停止に伴う close/error より先に成功を確定し、タイマーも解除する。
+          stoppedEarly = true;
+          if (timer) clearTimeout(timer);
+          try {
+            if (platform === 'win32') {
+              spawnSyncFn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
+            } else {
+              child.kill('SIGTERM');
+            }
+          } catch {}
+          resolve({ code: 0, stdout: stdoutText, stderr: stderrText, timedOut: false, stoppedEarly: true });
+        }
       });
     }
 
     if (child.stderr) {
       child.stderr.on('data', (chunk) => {
+        if (stoppedEarly) return;
         stderrText += chunk.toString();
         if (streamStderr) process.stderr.write(chunk);
       });
     }
 
     child.on('error', (error) => {
+      if (stoppedEarly) return;
       if (timer) clearTimeout(timer);
       const msg = `claude CLI を起動できません: ${error.message}\n`;
       stderrText += msg;
@@ -181,6 +202,7 @@ export function runConnectorPrompt({
     });
 
     child.on('close', (code) => {
+      if (stoppedEarly) return;
       if (timer) clearTimeout(timer);
       const finalCode = timedOut ? 124 : (code ?? 1);
       resolve({ code: finalCode, stdout: stdoutText, stderr: stderrText, timedOut });

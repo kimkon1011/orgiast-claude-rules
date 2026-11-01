@@ -234,6 +234,12 @@
       "distributedAt": "2026-10-17T00:00:00Z",
       "denyAfter": "2026-10-24T00:00:00Z",
       "pilotDeny": true
+    },
+    "unregistered-promise-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-26T00:00:00Z",
+      "denyAfter": "2026-11-02T00:00:00Z",
+      "pilotDeny": true
     }
   },
   "pilotHostsEvidence": "fleet-pc-map.json: kim-PC.hostname (2026-08-27 recorded observation)"

@@ -237,7 +237,7 @@ test('prepareTree は追跡された .loop/ ファイルのローカル変更を
   // .loop/ の status → checkout --quiet -- .loop/ の順が確認できる
   const statusIdx = commands.findIndex(a => a[0] === 'status' && a[3] === '.loop/');
   assert.ok(statusIdx >= 0, '.loop/ status を確認した');
-  const resetIdx = commands.findIndex(a => a[0] === 'checkout' && a[1] === '--quiet' && a[2] === '--' && a[3] === '.loop/');
+  const resetIdx = commands.findIndex(a => a[0] === 'checkout' && a[1] === 'HEAD' && a[2] === '--' && a[3] === '.loop/');
   assert.ok(resetIdx >= 0, '.loop/ ファイルを復元した');
   assert.ok(resetIdx < commands.findIndex(a => a[0] === 'checkout' && a[1] === '--detach' && a[2] === 'origin/main'),
     '.loop/ の復元はチェックアウトより前');

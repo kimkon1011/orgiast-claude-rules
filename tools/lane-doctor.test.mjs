@@ -234,3 +234,40 @@ test('all live lanes do not require repair or add a stop line', t => {
   assert.equal(r.repairFirst.required, false);
   assert.doesNotMatch(summarize(r), /🛑/);
 });
+
+test('WSL-only auth configures Codex, probes it, and supplies notification account', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  const token = `x.${Buffer.from(JSON.stringify({ email: 'wsl@example.com' })).toString('base64url')}.x`;
+  const spawnImpl = (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: token } }) });
+  const options = { home, now, platform: 'win32', spawnImpl };
+  assert.equal(laneDoctorQuick({ ...options, save: false }).lanes.codex.reason, 'configured:unprobed');
+  const calls = [], sent = [];
+  const result = await laneDoctorProbe({ ...options, listWsl: () => 'Ubuntu', probe: async (provider, opts) => {
+    if (provider === 'codex') calls.push(opts.dryRun === true);
+    return provider === 'codex' && !opts.dryRun ? { code: 1, text: 'HTTP 401' } : { code: 0, text: 'PONG' };
+  }, notify: async text => { sent.push(text); return { delivered: 'test' }; } });
+  assert.deepEqual(calls, [true, false]);
+  assert.equal(result.lanes.codex.reason, 'dead:oauth_consent');
+  assert.ok(sent.some(text => text.includes('**wsl@example.com**')));
+});
+
+test('missing Windows and WSL auth skips Codex probe with oauth_consent', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  const result = await laneDoctorProbe({ home, now, platform: 'win32', spawnImpl: () => ({ status: 1 }),
+    probe: async provider => { assert.notEqual(provider, 'codex'); return { code: 0, text: 'PONG' }; },
+    notify: async () => ({ delivered: 'test' }), listWsl: () => 'Ubuntu' });
+  assert.equal(result.lanes.codex.reason, 'dead:oauth_consent');
+});
+
+test('WSL Codex recovery stays healthy despite eleven pre-login failures', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  fs.writeFileSync(path.join(home, '.claude/executor-usage.jsonl'), Array.from({ length: 11 }, () => JSON.stringify({ provider: 'codex', t: now - 1000, status: 'error', reason: 'HTTP 401' })).join('\n'));
+  const options = { home, now, platform: 'win32', spawnImpl: (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: 'fixture-token' } }) }) };
+  const result = await laneDoctorProbe({ ...options, listWsl: () => 'Ubuntu', probe: async () => ({ code: 0, text: 'PONG' }), notify: async () => ({ delivered: 'test' }) });
+  assert.equal(result.lanes.codex.alive, true);
+  assert.equal(result.lanes.codex.reason, 'auth_ok:probe_ok');
+  assert.equal(laneDoctorQuick({ ...options, now: now + 1000, save: false }).lanes.codex.alive, true);
+});

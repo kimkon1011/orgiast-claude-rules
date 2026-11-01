@@ -29,8 +29,10 @@ export function realLaneStats(home, now = Date.now()) {
     if (!Number.isFinite(at) || at < now - 86400_000 || at > now) continue;
     const status = normalizeExecutorStatus(row);
     if (status === 'unrouted' || !row.provider) continue;
-    const s = providers[row.provider] ||= { calls: 0, failures: 0, quotaCalls: 0, billingCalls: 0, lastBillingAt: 0, failRate: 0, reasons: {}, until: null, lastOkAt: 0, lastQuotaAt: 0 };
+    const s = providers[row.provider] ||= { calls: 0, failures: 0, quotaCalls: 0, billingCalls: 0, lastBillingAt: 0, failRate: 0, reasons: {}, until: null, lastOkAt: 0, lastQuotaAt: 0, events: [] };
     s.calls++;
+    const event = { at };
+    s.events.push(event);
     if (status === 'ok') { s.lastOkAt = Math.max(s.lastOkAt, at); continue; }
     const detail = [row.status, row.httpStatus, row.http_status, row.reason, row.stderr, row.stderrTail, row.spawnError].filter(Boolean).join(' ');
     // cooldown 状態の行は常に quota 扱い（実機: glm が 70 件の cooldown 行を持ち real_fail_rate と誤判定）。
@@ -49,6 +51,7 @@ export function realLaneStats(home, now = Date.now()) {
     s.failures++;
     const http = detail.match(/(?:HTTP[ _:]*|(?:^|\s))([45]\d\d)\b/i)?.[1];
     const reason = redactAll(http ? `HTTP ${http}` : String(row.reason || row.stderr || row.stderrTail || row.spawnError || row.status).split(/\r?\n/)[0]).slice(0, 180);
+    event.reason = reason;
     s.reasons[reason] = (s.reasons[reason] || 0) + 1;
   }
   for (const s of Object.values(providers)) s.failRate = s.calls ? s.failures / s.calls : 0;
@@ -72,11 +75,15 @@ export function applyRealLaneHealth(health, home, now = Date.now()) {
     const quota = ledgerQuota || (errorQuota && (!Number.isFinite(errorUntil) || errorUntil > now)) || cooldownQuota;
     const until = Math.max(ledgerQuota ? s.until || 0 : 0,
       errorQuota && errorUntil > now ? errorUntil : 0, cooldownQuota ? stateUntil : 0) || null;
-    if (s?.calls >= 5 && s.failRate >= .5) {
+    // Evaluate only calls after the latest proven recovery, independent of ledger order.
+    const lastOkAt = Math.max(s?.lastOkAt || 0, probeOkAt);
+    const calls = s?.events.filter(event => event.at > lastOkAt) || [];
+    const failures = calls.filter(event => event.reason !== undefined);
+    if (calls.length >= 5 && failures.length / calls.length >= .5) {
       state.alive = false;
       state.reason = 'real_fail_rate';
       delete state.until;
-      state.error = Object.entries(s.reasons).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([r, n]) => `${r} (${n})`).join('; ');
+      state.error = Object.entries(failures.reduce((reasons, event) => { reasons[event.reason] = (reasons[event.reason] || 0) + 1; return reasons; }, {})).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([r, n]) => `${r} (${n})`).join('; ');
     // A later real success supersedes wallet evidence; gateway probes do not.
     } else if ((s?.billingCalls > (s?.quotaCalls || 0) && s.lastBillingAt >= s.lastOkAt)
       || (!quota && !state.alive && billingFailure(`${state.reason} ${state.error || ''}`))) {

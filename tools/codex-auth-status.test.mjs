@@ -59,3 +59,38 @@ test('formatCodexLogin の全5分岐とプラン省略・認証ファイル優�
   assert.equal(formatCodexLogin({ login: false }, undefined), '判定不能');
   assert.equal(formatCodexLogin({ login: 1, email: 'codex@example.com' }, false), '未');
 });
+
+test('Windows fallback reads preferred WSL distro with bounded read-only commands', async t => {
+  const { codexAuthStatusAny } = await import('./codex-auth-status.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-any-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const calls = [];
+  const spawnImpl = (command, args, options) => {
+    calls.push({ command, args, options });
+    return { status: 0, stdout: args[0] === '-l' ? 'Debian\r\nUbuntu\r\n' : JSON.stringify({ tokens: { id_token: fixtureJwt({ email: 'wsl@example.com' }) } }) };
+  };
+  assert.deepEqual(codexAuthStatusAny(home, { platform: 'win32', spawnImpl }), { login: true, email: 'wsl@example.com', plan: null, source: 'wsl' });
+  assert.deepEqual(calls.map(c => c.args), [['-l', '-q'], ['-d', 'Ubuntu', '--', 'sh', '-c', 'cat "$HOME/.codex/auth.json"']]);
+  assert.deepEqual(calls.map(c => c.options), ['utf16le', 'utf8'].map(encoding => ({ encoding, windowsHide: true, timeout: 15000 })));
+  assert.ok(calls.every(c => c.command === 'wsl'));
+  let unexpectedSpawns = 0;
+  const forbiddenSpawn = () => { unexpectedSpawns++; throw new Error('must not spawn'); };
+  assert.equal(codexAuthStatusAny(home, { platform: 'linux', spawnImpl: forbiddenSpawn }).login, false);
+  fs.mkdirSync(path.join(home, '.codex'));
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), JSON.stringify({ tokens: { id_token: fixtureJwt({ email: 'win@example.com' }) } }));
+  assert.deepEqual(codexAuthStatusAny(home, { platform: 'win32', spawnImpl: forbiddenSpawn }), { login: true, email: 'win@example.com', plan: null, source: 'windows' });
+  assert.equal(unexpectedSpawns, 0);
+});
+
+test('WSL missing, timeout, exceptions and malformed auth fail closed', async t => {
+  const { codexAuthStatusAny } = await import('./codex-auth-status.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-missing-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  for (const result of [{ status: 1 }, { status: null, error: new Error('timeout') }, { status: 0, stdout: '{bad' }, { status: 0, stdout: '{}' }, { status: 0, stdout: '' }]) {
+    const spawnImpl = (_, args) => args[0] === '-l' ? { status: 0, stdout: 'Ubuntu' } : result;
+    assert.deepEqual(codexAuthStatusAny(home, { platform: 'win32', spawnImpl }), { login: false, email: null, plan: null, source: null });
+  }
+  for (const spawnImpl of [() => ({ status: 1 }), () => ({ status: 0, stdout: '' }), () => { throw new Error('unavailable'); }]) {
+    assert.equal(codexAuthStatusAny(home, { platform: 'win32', spawnImpl }).login, false);
+  }
+});

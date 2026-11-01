@@ -32,7 +32,8 @@ export async function pushKim(text, deps = {}) {
     const result = await (deps.runConnectorPrompt || runConnectorPrompt)({
       executable, args, prompt: buildPrompt(buildTriggerPrompt('run', payload)),
       env: { ...buildConnectorEnv(deps.env || process.env).env, ENABLE_CLAUDEAI_MCP_SERVERS: 'false' },
-      timeoutMs: deps.timeoutMs ?? 480_000,
+      // kim-PC はタスク起動時に claude.exe の起動だけで約2分、送信まで計7〜9分かかった（2026-11-01 実測 565 秒）。
+      timeoutMs: deps.timeoutMs ?? 840_000,
       stopWhen: out => out.includes('"session_id"'),
     });
     // タスク環境では通知実行後も子が終了せずタイムアウトするため、応答で成功を判定して重複再送を防ぐ。

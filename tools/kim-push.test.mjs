@@ -8,7 +8,7 @@ const deps = {
 test('終了コードやタイムアウトにかかわらずsession_idがある場合だけ成功する', async () => {
   for (const [code, timedOut, stdout, ok] of [[0, false, '{"session_id":"abc"}', true], [1, false, '{"session_id":"abc"}', true], [124, true, '{"session_id":"abc"}', true], [124, true, '{}', false], [0, false, '{}', false]]) {
     const result = await pushKim('本文', { ...deps, runConnectorPrompt: async options => {
-      assert.equal(options.timeoutMs, 480_000);
+      assert.equal(options.timeoutMs, 840_000);
       assert.equal(options.stopWhen('{"session_id":"abc"}'), true);
       assert.equal(options.stopWhen('{"session_'), false);
       assert.equal(options.stopWhen('{}'), false);

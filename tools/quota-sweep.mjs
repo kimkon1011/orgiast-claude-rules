@@ -330,10 +330,11 @@ export function prepareTree({ home, provider, run, previous, needRelativePointer
   }
   // .loop/ は gitignore 済みだが、過去の preserveDirtyTree で追跡されたファイルが残り、
   // ローカル変更があると git checkout --detach origin/main が失敗する（git-checkout-1 連続失敗）。
-  // 追跡ファイルのローカル変更を戻してから進める。
+  // 追跡ファイルのインデックスと作業ツリーの両方をHEADに戻してから進める
+  // （git checkout HEAD -- <path> は index + worktree 両方を HEAD に合わせる）。
   const loopDirty = run('git', ['status', '--porcelain', '--', '.loop/'], tree);
   if (loopDirty) {
-    run('git', ['checkout', '--quiet', '--', '.loop/'], tree);
+    run('git', ['checkout', 'HEAD', '--', '.loop/'], tree);
     log('quota-sweep: reset tracked .loop/ files to committed state before checkout');
   }
   run('git', ['checkout', '--detach', 'origin/main'], tree);

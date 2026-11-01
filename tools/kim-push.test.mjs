@@ -12,9 +12,9 @@ test('終了コードやタイムアウトにかかわらずsession_idがある�
       assert.equal(options.stopWhen('{"session_id":"abc"}'), true);
       assert.equal(options.stopWhen('{"session_'), false);
       assert.equal(options.stopWhen('{}'), false);
-      assert.ok(options.args.includes('--strict-mcp-config'));
-      assert.ok(!options.args.includes('--mcp-config'));
-      assert.equal(options.env.ENABLE_CLAUDEAI_MCP_SERVERS, 'false');
+      // タスク環境で MCP を切ると RemoteTrigger が呼ばれなかったため、外部接続を切らない。
+      assert.ok(!options.args.includes('--strict-mcp-config'));
+      assert.equal(options.env.ENABLE_CLAUDEAI_MCP_SERVERS, undefined);
       assert.deepEqual(options.args.slice(0, 3), ['-p', '--model', 'haiku']);
       assert.match(options.prompt, /RemoteTrigger/);
       assert.match(options.prompt, /"body":\{"text":"本文"\}/);

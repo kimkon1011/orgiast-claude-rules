@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
-import { ledgerFile, readLedger, writeLedger, OPEN_STATUSES, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES, originLine } from './auto-progress-ledger.mjs';
+import { ledgerFile, readLedger, writeLedger, cleanupOldLedgerTemps, OPEN_STATUSES, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES, originLine } from './auto-progress-ledger.mjs';
 export { MAX_RESUMES } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { notifyOwner, resolveOwner } from './notify-owner.mjs';
@@ -200,7 +200,7 @@ export function logDoneDm(home, row, delivery, message, now = Date.now(), io = {
       channel: delivery?.channel ?? null, ok: delivery?.ok, attempts: delivery?.attempts, toastExitCode: delivery?.toastExitCode,
       reason: delivery?.reason,
       httpStatus: delivery?.httpStatus, messageId: delivery?.messageId, recipientId: delivery?.recipientId,
-      text: message.slice(0, 200),
+      text: message.slice(0, 8000),
     });
     (io.appendFileSync ?? fs.appendFileSync)(file, `${payload}\n`);
   } catch (error) {
@@ -324,7 +324,7 @@ function recentTranscripts(home, now, io = {}) {
   return found;
 }
 
-async function registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io) {
+async function registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io, persist) {
   for (const transcriptPath of recentTranscripts(home, now, io)) {
     const found = (io.findUnansweredRequest ?? findUnansweredRequest)(transcriptPath);
     if (!found) continue;
@@ -344,7 +344,7 @@ async function registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io)
     };
     row.owner = ownerOf(row);
     rows.push(row);
-    writeLedger(ledgerFile(home), rows);
+    if (!persist(rows)) { rows.pop(); break; }
     summary.discovered += 1;
     if (isUnattendedRow(row, home)) continue;
     try {
@@ -394,12 +394,33 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   const file = ledgerFile(home);
   const clock = io.clock ?? Date.now;
   const stopAt = clock() + 45 * 60000;
-  const patch = (key, changes) => { // ledger hook と競合しないよう、書く直前に読み直して該当行だけ更新する。
-    if (dryRun) return;
-    const rows = readLedger(file);
-    writeLedger(file, rows.map((r) => rowKey(r) === key ? { ...r, ...changes, status: WATCHED.has(r.status) ? (changes.status ?? r.status) : r.status } : r));
-  };
   const summary = { checked: 0, done: 0, noop: 0, inProgress: 0, stalled: 0, resumed: 0, resumeDeferred: 0, reported: 0, expired: 0, graced: 0, superseded: 0, discovered: 0, errors: [] };
+  let notificationsStopped = false;
+  const ledgerFailure = (error) => {
+    notificationsStopped = true;
+    const detail = `ledger-write-failed: ${String(error?.code ? `${error.code}: ` : '')}${String(error?.message ?? error).slice(0, 240)}`;
+    summary.errors.push(detail);
+    const log = path.join(home, '.claude', 'logs', 'auto-progress-watch.log');
+    try {
+      (io.mkdirSync ?? fs.mkdirSync)(path.dirname(log), { recursive: true });
+      (io.appendFileSync ?? fs.appendFileSync)(log, `${new Date(now).toISOString()} ${detail}\n`);
+    } catch (logError) { (io.stderr ?? console.error)(`auto-progress-watch: ledger failure log failed: ${logError?.message ?? logError}`); }
+  };
+  const persist = (rows) => {
+    if (dryRun) return true;
+    if (notificationsStopped) return false;
+    try { (io.writeLedger ?? writeLedger)(file, rows, io.ledgerIo ?? {}); return true; }
+    catch (error) { ledgerFailure(error); return false; }
+  };
+  const patch = (key, changes) => { // ledger hook と競合しないよう、書く直前に読み直して該当行だけ更新する。
+    if (dryRun) return true;
+    const rows = readLedger(file);
+    return persist(rows.map((r) => rowKey(r) === key ? { ...r, ...changes, status: WATCHED.has(r.status) ? (changes.status ?? r.status) : r.status } : r));
+  };
+  if (!dryRun) {
+    try { (io.cleanupOldLedgerTemps ?? cleanupOldLedgerTemps)(file, { now, io: io.cleanupIo ?? {} }); }
+    catch (error) { summary.errors.push(`ledger-temp-cleanup-failed: ${String(error?.message ?? error).slice(0, 120)}`); }
+  }
   try { Object.assign(summary, await watchFleetMail({ home, now, dryRun, io })); }
   catch { summary.fleetExpired ??= 0; summary.fleetBlocked ??= 0; summary.errors.push('fleet-mail monitoring failed'); }
   const config = (io.sheetConfig ?? sheetConfig)(home);
@@ -409,6 +430,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   const askKim = (row, reason) => (io.notifyOwner ?? notifyOwner)(ownerOf(row),
     `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf(row), home })}\n自動進行が判断待ちです: ${row.promise}\n${reason || ''}`, { home });
   const notifyDone = async (row, reason, artifact) => {
+    if (notificationsStopped) return false;
     if (row.doneNotifiedAt) return false;
     if (isQuietHours(now)) return false;
     const message = formatDoneMessage(row, { reason, artifact, home, io, ownerOf });
@@ -426,7 +448,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     return ['dm', 'toast', 'inbox'].includes(delivery?.delivered);
   };
   const rows = readLedger(file);
-  await registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io);
+  await registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io, persist);
   let candidates = latestOpenPromises(rows);
   const selected = new Set(candidates);
   const pendingChecks = rows.filter(row => row.check && row.status === 'done' && row.checkResult === 'done' && row.checkNotifiedResult !== 'done');
@@ -440,7 +462,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   });
   // Update by row identity: equal timestamps share rowKey, so patch(key) would
   // also supersede the selected latest row. No await occurs between read/write.
-  if (!dryRun && summary.superseded) writeLedger(file, normalized);
+  if (!dryRun && summary.superseded) persist(normalized);
   // Expiration is cheap maintenance: never let checks/resumes exhaust its time budget.
   const expired = new Set(candidates.filter(row => isUnattendedRow(row, home) &&
     Number.isFinite(Date.parse(row.ts)) && now - Date.parse(row.ts) >= EXPIRE_UNATTENDED_MS));
@@ -469,10 +491,10 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     } catch (error) { summary.errors.push(`check: ${String(error?.message ?? error).slice(0, 120)}`); }
   }
   for (const row of doneSweep.recent) {
-    if (dryRun || clock() + 60000 >= stopAt) break;
+    if (dryRun || notificationsStopped || clock() + 60000 >= stopAt) break;
     await notifyDone(row, row.reason || '', row.doneNotifyArtifact || '');
   }
-  if (!dryRun && !isQuietHours(now) && clock() + 60000 < stopAt) {
+  if (!dryRun && !notificationsStopped && !isQuietHours(now) && clock() + 60000 < stopAt) {
     for (const group of formatDoneBacklogMessages(doneSweep.backlog, { home })) {
       let delivery = null;
       try {
@@ -498,13 +520,13 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     if (!Number.isFinite(recorded)) continue;
     const unattended = isUnattendedRow(row, home);
     if (row.status === 'waiting_user') {
-      if (kimAction(row) !== 'なし' && !unattended && !dryRun && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
+      if (kimAction(row) !== 'なし' && !unattended && !dryRun && !notificationsStopped && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
         try {
           const delivery = await askKim(row, row.reason);
           if (!['dm', 'toast', 'inbox'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
           patch(rowKey(row), { ownerNotifiedAt: new Date(now).toISOString() });
         } catch (error) { summary.errors.push(`notify-owner: ${String(error?.message ?? error).slice(0, 120)}`); }
-      } else if (kimAction(row) === 'なし' && !unattended && !dryRun && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
+      } else if (kimAction(row) === 'なし' && !unattended && !dryRun && !notificationsStopped && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
         try {
           const message = `⏳ 待ち状況（自動確認）\n約束: ${String(row.promise || '').slice(0, 160)}\n待っている理由: ${String(row.reason || '').slice(0, 240)}\n最終確認: ${row.lastCheckedAt || '不明'}\nuser の操作は不要です。進展があれば自動で再開します。`;
           const delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(row), message, { home });
@@ -560,7 +582,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         if (state === 'done' && !unattended && !dryRun && !row.doneNotifiedAt) {
           await notifyDone(row, outcome.reason, outcome.artifact || '');
         }
-        if (state === 'needs_user' && kimAction(current) !== 'なし' && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
+        if (state === 'needs_user' && !notificationsStopped && kimAction(current) !== 'なし' && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
           try {
             const delivery = await askKim(row, outcome.reason);
             if (!['dm', 'toast', 'inbox'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
@@ -583,6 +605,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       (io.appendFileSync ?? fs.appendFileSync)(log, `${new Date(now).toISOString()} ${JSON.stringify(summary)}\n`);
     } catch (error) { (io.stderr ?? console.error)(`auto-progress-watch: summary log failed: ${error?.message ?? error}`); }
     try {
+      if (notificationsStopped) return summary;
       const digest = io.digest ?? (await import('./auto-progress-digest.mjs')).run;
       summary.digest = await digest({ home, now, io: io.digestIo ?? {} });
     } catch (error) { summary.errors.push(`digest: ${String(error?.message ?? error).slice(0, 120)}`); }

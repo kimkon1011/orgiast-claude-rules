@@ -30,11 +30,11 @@ export function clipDiscordContent(text) {
   return content.length <= MAX_CONTENT ? content : `${content.slice(0, MAX_CONTENT - OMITTED.length)}${OMITTED}`;
 }
 
-async function postWebhook(url, content, fetchImpl, signal) {
+async function postWebhook(url, content, fetchImpl, signal, silent) {
   const response = await fetchImpl(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, ...(silent ? { flags: 4096 } : {}) }),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
   });
   if (!response.ok) throw new Error(`Webhook送信が HTTP ${response.status}`);
@@ -189,6 +189,7 @@ export async function deliverKim(text, {
   token,
   fetchImpl = globalThis.fetch,
   webhookFallback = true,
+  silent = process.env.NOTIFY_DISCORD_SILENT !== '0',
   fleetFallback = false,
   signal,
   plainJa = process.env.NOTIFY_PLAIN_JA !== '0',
@@ -222,7 +223,7 @@ export async function deliverKim(text, {
       const channelId = (await dm.json()).id;
       if (!channelId) throw new Error('DMチャンネルIDを取得できません');
       const sent = await fetchImpl(`${API}/channels/${channelId}/messages`, {
-        method: 'POST', headers, body: JSON.stringify({ content }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
+        method: 'POST', headers, body: JSON.stringify({ content, ...(silent ? { flags: 4096 } : {}) }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
       });
       if (!sent.ok) throw new Error(`DM送信が HTTP ${sent.status}`);
       const messageId = (await sent.json()).id;
@@ -240,7 +241,7 @@ export async function deliverKim(text, {
       || readTrimmed(path.join(home, '.claude', 'orgiast-discord-webhook.txt'));
     if (webhook) {
       try {
-        await postWebhook(webhook, content, fetchImpl, signal);
+        await postWebhook(webhook, content, fetchImpl, signal, silent);
         console.error(`notify-kim: DMで送れないため webhook へフォールバックしました (${dmReason})`);
         return { delivered: 'webhook', reason: dmReason };
       } catch (error) {

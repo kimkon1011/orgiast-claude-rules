@@ -22,7 +22,7 @@ test('token と userId で DM チャンネルを開いて投稿する', async ()
   assert.match(calls[0].url, /users\/@me\/channels$/);
   assert.deepEqual(JSON.parse(calls[0].init.body), { recipient_id: 'user' });
   assert.match(calls[1].url, /channels\/dm-channel\/messages$/);
-  assert.deepEqual(JSON.parse(calls[1].init.body), { content: 'hello' });
+  assert.deepEqual(JSON.parse(calls[1].init.body), { content: 'hello', flags: 4096 });
 });
 
 test('DM 失敗時は webhook へフォールバックする', async () => {
@@ -312,4 +312,28 @@ test('HTTP success without message id is not a delivered DM', async () => {
  const result = await deliverKim('進捗', { userId: 'test-recipient', token: 'test-token', plainJa: false, webhookFallback: false, fetchImpl: async () => ++calls === 1 ? response({ json: { id: 'channel' } }) : response({ json: {} }) });
  assert.equal(result.delivered, 'none');
  assert.match(result.reason, /メッセージID/);
+});
+
+test('silentはDMとwebhookでflagsを切り替え、環境変数の既定も反映する', async () => {
+  const old = process.env.NOTIFY_DISCORD_SILENT;
+  const dir = home(); fs.mkdirSync(path.join(dir, '.claude'));
+  fs.writeFileSync(path.join(dir, '.claude/orgiast-discord-webhook.txt'), 'https://example.test/webhook');
+  const originalError = console.error; console.error = () => {};
+  try {
+    for (const fallback of [false, true]) {
+      for (const [env, silent, expected] of [['1', undefined, 4096], ['0', undefined, undefined], ['0', true, 4096], ['1', false, undefined]]) {
+        process.env.NOTIFY_DISCORD_SILENT = env;
+        const bodies = [];
+        await deliverKim('本文', { home: dir, token: fallback ? '' : 'test', plainJa: false,
+          ...(silent === undefined ? {} : { silent }),
+          fetchImpl: async (url, options) => { bodies.push(JSON.parse(options.body)); return response({ json: { id: 'test' } }); },
+        });
+        assert.equal(bodies.at(-1).flags, expected);
+        assert.equal(Object.hasOwn(bodies.at(-1), 'flags'), expected !== undefined);
+      }
+    }
+  } finally {
+    if (old === undefined) delete process.env.NOTIFY_DISCORD_SILENT; else process.env.NOTIFY_DISCORD_SILENT = old;
+    console.error = originalError; fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

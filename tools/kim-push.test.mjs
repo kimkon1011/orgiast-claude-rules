@@ -5,17 +5,32 @@ const deps = {
   fs: { readFileSync: () => { throw Object.assign(new Error(), { code: 'ENOENT' }); } },
   resolveExecutable: async () => ({ executable: '/test/claude' }),
 };
-test('終了コード0かつsession_idがある場合だけ成功する', async () => {
-  for (const [code, stdout, ok] of [[0, '{"session_id":"abc"}', true], [1, '{"session_id":"abc"}', false], [0, '{}', false]]) {
-    assert.equal((await pushKim('本文', { ...deps, runConnectorPrompt: async options => {
-      assert.equal(options.timeoutMs, 240_000);
+test('終了コードやタイムアウトにかかわらずsession_idがある場合だけ成功する', async () => {
+  for (const [code, timedOut, stdout, ok] of [[0, false, '{"session_id":"abc"}', true], [1, false, '{"session_id":"abc"}', true], [124, true, '{"session_id":"abc"}', true], [124, true, '{}', false], [0, false, '{}', false]]) {
+    const result = await pushKim('本文', { ...deps, runConnectorPrompt: async options => {
+      assert.equal(options.timeoutMs, 150_000);
       assert.deepEqual(options.args.slice(0, 3), ['-p', '--model', 'haiku']);
       assert.match(options.prompt, /RemoteTrigger/);
       assert.match(options.prompt, /"body":\{"text":"本文"\}/);
       assert.equal(options.env.ANTHROPIC_API_KEY, undefined);
-      return { code, stdout };
-    } })).ok, ok);
+      return { code, timedOut, stdout };
+    } });
+    assert.equal(result.ok, ok);
+    if (!ok) {
+      assert.ok(result.reason.includes(`終了コード ${code}`));
+      assert.ok(result.reason.includes(`timedOut ${timedOut}`));
+    }
   }
+});
+test('失敗理由はstderrを伏せ字にして末尾200字だけ含め、指定タイムアウトを維持する', async () => {
+  const secret = 'sk-' + 'a'.repeat(210);
+  const result = await pushKim('本文', { ...deps, timeoutMs: 1234, runConnectorPrompt: async options => {
+    assert.equal(options.timeoutMs, 1234);
+    return { code: 124, timedOut: true, stdout: '{}', stderr: '先頭' + 'あ'.repeat(220) + secret + '末尾' };
+  } });
+  assert.equal(result.ok, false);
+  assert.ok(result.reason.endsWith(`stderr ${'あ'.repeat(188)}[REDACTED]末尾）`));
+  assert.doesNotMatch(result.reason, /先頭|sk-|a{10}/);
 });
 test('dry-runは起動せずpayloadとargvを返し、設定と文字数制限を反映する', async () => {
   const result = await pushKim('あ'.repeat(20_001), { ...deps, dryRun: true,

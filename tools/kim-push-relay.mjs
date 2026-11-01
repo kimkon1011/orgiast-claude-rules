@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
+import { redactSecrets } from './webhook-health.mjs';
 import { pushKim } from './kim-push.mjs';
 import { deliverKim, resolveDiscordBotToken, KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 
@@ -125,6 +126,7 @@ export async function runRelay(deps = {}) {
         state.pushLog.push(state.lastPushAt);
         state.failures = 0;
       } else {
+        (deps.log || console.error)(`kim-push 失敗: ${redactSecrets(result.reason || '原因不明').replace(/[\r\n]+/g, ' ')}`);
         state.failures++;
         // 3回目を永続化してから代替通知する。失敗しても毎回のDM送信を避ける。
         save();
@@ -153,9 +155,9 @@ export async function runRelay(deps = {}) {
     }
     if (dryRun) (deps.log || console.log)(JSON.stringify({ bodies }, null, 2));
     return { ok: true, bodies, state };
-  } catch {
-    // 例外に URL や秘密値が混ざってもログに出さない。
-    return { ok: false, reason: '通知中継の取得または状態保存に失敗しました' };
+  } catch (error) {
+    // 原因を残しつつ、例外に含まれる秘密値は伏せ字にする。
+    return { ok: false, reason: `通知中継に失敗: ${redactSecrets(error?.message ?? error)}` };
   } finally {
     if (fd !== undefined) { io.closeSync(fd); io.unlinkSync(lock); }
   }

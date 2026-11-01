@@ -5,6 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   ensureFeedbackIssue,
+  main,
+  precheckRepositories,
+  warnUnreachableRepositories,
+  lookupFeedbackIssue,
   appendFeedbackIssueLedger,
   buildIssueBody,
   chainBoothFeedbackIntake,
@@ -297,4 +301,92 @@ test('Issue lookup diagnostics redact secrets and URLs before limiting output', 
       return true;
     });
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+ test('Issue lookup preserves stderr alongside spawn errors and sanitizes thrown errors', () => {
+  assert.throws(() => lookupFeedbackIssue('id', 'o/r', () => ({
+    status: null, error: new Error('spawn ETIMEDOUT'), stderr: 'HTTP 502 upstream unavailable',
+  }), { attempts: 1 }), /status=null: spawn ETIMEDOUT \| HTTP 502 upstream unavailable/);
+  const secret = 'ghp_' + 'z'.repeat(36);
+  assert.throws(() => lookupFeedbackIssue('id', 'o/r', () => {
+    throw new Error(`network failure ${secret} https://example.test/private\n${'x'.repeat(800)}`);
+  }, { attempts: 1 }), error => {
+    assert.match(error.message, /network failure/);
+    assert.doesNotMatch(error.message, /z{36}|private|\n/);
+    assert.ok(error.message.length < 550);
+    return true;
+  });
+});
+
+for (const failure of ['404', '403', 'spawn-error', 'throw']) {
+  test(`main skips unreachable feedback (${failure}), warns once and preserves reachable quota`, async (t) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fti-precheck-'));
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    const logs = [], warnings = [], errors = [], calls = [], acks = [];
+    t.mock.method(console, 'log', (line) => logs.push(line));
+    t.mock.method(console, 'warn', (line) => warnings.push(line));
+    t.mock.method(console, 'error', (line) => errors.push(line));
+    const inaccessible = new Set(['cr568/warehouse-app', 'seisaku-team-org/event-shop']);
+    const gh = (args) => {
+      calls.push(args);
+      if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: 'kimkon1011\n' };
+      if (args[0] === 'api') {
+        if (inaccessible.has(args[1].slice(6))) {
+          if (failure === 'throw') throw new Error('spawn failed');
+          return failure === 'spawn-error' ? { error: new Error('spawn failed'), status: null }
+            : { status: 1, stderr: `gh: unavailable (HTTP ${failure})` };
+        }
+        return { status: 0, stdout: '{}' };
+      }
+      assert.deepEqual(args.slice(0, 4), ['issue', 'list', '--repo', 'kimkon1011/purchasing-management-app']);
+      return { status: 0, stdout: JSON.stringify([{ number: 7, url: 'https://github.com/kimkon1011/purchasing-management-app/issues/7', body: '<!-- feedback-dm:ok -->' }]) };
+    };
+    const items = ['倉庫アプリ', '倉庫アプリ', 'イベントショップ', '購買部管理アプリ'].map((app_name, i) => ({
+      message_id: i === 3 ? 'ok' : `skip-${i}`, app_name, parse_ok: true, kind: 'bug', title: 'test',
+    }));
+    const request = async (_url, _secret, options) => {
+      if (!options) return { items };
+      acks.push(JSON.parse(options.body).message_id);
+      return { acked: true };
+    };
+    assert.equal(await main(['--limit', '1'], { home, gh, request, config: { url: 'https://relay.test', secret: 'test' } }), 0);
+    assert.deepEqual(acks, ['ok']);
+    assert.deepEqual(errors, []);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /cr568\/warehouse-app/);
+    assert.match(warnings[0], /seisaku-team-org\/event-shop/);
+    assert.match(warnings[0], /実行アカウント: kimkon1011/);
+    assert.doesNotMatch(warnings[0], /\n/);
+    assert.ok(warnings[0].length <= 500);
+    assert.ok(logs.some(line => /スキップ: 3件（到達不能リポジトリ:3）/.test(line)));
+    assert.ok(logs.every(line => !line.includes('skip-') && !line.includes('上限')));
+    const probes = calls.filter(args => args[0] === 'api' && args[1].startsWith('repos/'));
+    assert.equal(probes.length, 8);
+    assert.equal(new Set(probes.map(args => args[1])).size, 8);
+    assert.equal(calls.filter(args => args[0] === 'issue').length, 1);
+  });
+}
+
+test('precheck deduplicates repositories and starts a fresh cache per run', () => {
+  const calls = [];
+  const gh = args => { calls.push(args); return { status: 0 }; };
+  assert.deepEqual([...precheckRepositories(['o/r', 'o/r', 'o/s'], gh)], [['o/r', 'OK'], ['o/s', 'OK']]);
+  assert.equal(calls.length, 2);
+  precheckRepositories(['o/r'], gh);
+  assert.equal(calls.length, 3);
+});
+
+test('reachability warning masks secrets, caps one line and falls back to unknown account', (t) => {
+  const warnings = [];
+  t.mock.method(console, 'warn', line => warnings.push(line));
+  const statuses = new Map([['o/r', '403']]);
+  warnUnreachableRepositories(new Map([['o/r', 'OK']]), () => assert.fail('no user lookup needed'));
+  assert.equal(warnings.length, 0);
+  warnUnreachableRepositories(statuses, () => { throw new Error('unavailable'); });
+  assert.match(warnings[0], /実行アカウント: unknown/);
+  warnUnreachableRepositories(statuses, () => ({ status: 1, stdout: 'wrong' }));
+  assert.match(warnings[1], /実行アカウント: unknown/);
+  warnUnreachableRepositories(statuses, () => ({ status: 0, stdout: `ghp_${'a'.repeat(36)}\nhttps://example.test/private ${'x'.repeat(800)}` }));
+  assert.ok(warnings[2].length <= 500);
+  assert.doesNotMatch(warnings[2], /a{36}|private|\n/);
 });

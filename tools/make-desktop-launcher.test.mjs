@@ -54,6 +54,22 @@ test('Japanese files: copy body outside tools, overwrite, JSON and remove withou
   assert.equal(fs.existsSync(source), true);
 });
 
+test('既定ブラウザで URL を開くスクリプトは作らせない（2026-11-01 Codex 再ログインで実害）', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'launcher-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const deps = { paths: path, resolve: () => ({ desktop: path.join(root, 'Desktop'), localAppData: path.join(root, 'Local') }) };
+  const source = path.join(root, 'open.ps1');
+  for (const body of ["Start-Process 'https://auth.openai.com/codex/device'", 'start https://manager.line.biz/', '[System.Diagnostics.Process]::Start("https://x.example/login")']) {
+    fs.writeFileSync(source, `Set-Clipboard -Value 'x'\n${body}\n`);
+    assert.throws(() => makeLauncher({ name: 'x', psFile: source }, deps), /open-url-as\.ps1/, body);
+    assert.equal(fs.existsSync(path.join(root, 'Desktop', 'x（ダブルクリック）.cmd')), false);
+  }
+  fs.writeFileSync(source, "# Start-Process 'https://comment.example'\n& pwsh -NoProfile -File open-url-as.ps1 -Account nishi@orgiast.jp -Url 'https://auth.openai.com/codex/device'\n");
+  assert.ok(makeLauncher({ name: 'ok', psFile: source }, deps).cmdPath);
+  fs.writeFileSync(source, "Start-Process 'https://www.lycbiz.com/jp/service/line-official-account/plan/'\n");
+  assert.ok(makeLauncher({ name: 'public', psFile: source, allowDefaultBrowser: true }, deps).cmdPath);
+});
+
 test('reject invalid arguments before writing; escape percent and keep delayed expansion off', () => {
   for (const name of ['../x', 'x\\y', 'CON', 'x"', 'x\n', 'x.']) assert.throws(() => makeLauncher({ name, psFile: 'C:\\x.ps1' }));
   assert.throws(() => makeLauncher({ name: 'x' }), /exactly one/);

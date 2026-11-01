@@ -22,6 +22,12 @@ function batchPath(value) {
   if (/["\r\n\x00]/.test(value)) throw new Error('Invalid script path');
   return value.replace(/%/g, '%%');
 }
+// 既定ブラウザで URL を開くと、どのアカウントで開くかが人任せになる（2026-11-01 Codex 再ログインで実害）。
+const defaultBrowserOpen = /(?:Start-Process|\bstart\b|explorer(?:\.exe)?|Process\]::Start)\s*(?:-FilePath\s+)?\(?\s*['"]?https?:\/\//i;
+export function findDefaultBrowserOpens(source) {
+  return String(source).split(/\r?\n/).filter(line => !/^\s*#/.test(line) && defaultBrowserOpen.test(line));
+}
+
 export function renderLauncher(psFile, verifyCmd) {
   const lines = ['@echo off', 'chcp 65001 >nul', 'setlocal DisableDelayedExpansion', 'set "launcher_ps=pwsh.exe"', 'where pwsh.exe >nul 2>nul', 'if errorlevel 1 set "launcher_ps=powershell.exe"', `"%launcher_ps%" -NoProfile -ExecutionPolicy Bypass -File "${batchPath(psFile)}"`, 'set "launcher_result=%errorlevel%"'];
   if (verifyCmd) {
@@ -50,6 +56,8 @@ export function makeLauncher(options, { resolve = resolveFolders, io = fs, paths
   const scriptPath = commandFile ? managedPsPath : psFile;
   const content = renderLauncher(scriptPath, verifyCmd);
   const source = io.readFileSync(commandFile || psFile, 'utf8');
+  const opens = options.allowDefaultBrowser ? [] : findDefaultBrowserOpens(source);
+  if (opens.length) throw new Error(`URL を既定のブラウザで開いています。tools/open-url-as.ps1 -Account <開く人のメール> -Url <URL> で開いてください（ONBOARDING §1.5.0）。アカウントに依存しない公開ページだけなら --allow-default-browser。\n${opens.join('\n')}`);
   if (commandFile) {
     io.mkdirSync(paths.dirname(managedPsPath), { recursive: true });
     // Windows PowerShell 5.1 needs BOM for Japanese script bodies.
@@ -62,8 +70,8 @@ export function makeLauncher(options, { resolve = resolveFolders, io = fs, paths
 
 if (isEntry(import.meta.url)) {
   try {
-    const { values } = parseArgs({ options: { name: { type: 'string' }, 'ps-file': { type: 'string' }, 'command-file': { type: 'string' }, 'verify-cmd': { type: 'string' }, remove: { type: 'boolean' } } });
-    const result = makeLauncher({ name: values.name, psFile: values['ps-file'], commandFile: values['command-file'], verifyCmd: values['verify-cmd'], remove: values.remove });
+    const { values } = parseArgs({ options: { name: { type: 'string' }, 'ps-file': { type: 'string' }, 'command-file': { type: 'string' }, 'verify-cmd': { type: 'string' }, remove: { type: 'boolean' }, 'allow-default-browser': { type: 'boolean' } } });
+    const result = makeLauncher({ name: values.name, psFile: values['ps-file'], commandFile: values['command-file'], verifyCmd: values['verify-cmd'], remove: values.remove, allowDefaultBrowser: values['allow-default-browser'] });
     console.log(JSON.stringify(result));
   } catch (error) {
     console.error(error.message);

@@ -8,7 +8,13 @@ const deps = {
 test('終了コードやタイムアウトにかかわらずsession_idがある場合だけ成功する', async () => {
   for (const [code, timedOut, stdout, ok] of [[0, false, '{"session_id":"abc"}', true], [1, false, '{"session_id":"abc"}', true], [124, true, '{"session_id":"abc"}', true], [124, true, '{}', false], [0, false, '{}', false]]) {
     const result = await pushKim('本文', { ...deps, runConnectorPrompt: async options => {
-      assert.equal(options.timeoutMs, 150_000);
+      assert.equal(options.timeoutMs, 840_000);
+      assert.equal(options.stopWhen('{"session_id":"abc"}'), true);
+      assert.equal(options.stopWhen('{"session_'), false);
+      assert.equal(options.stopWhen('{}'), false);
+      assert.ok(options.args.includes('--strict-mcp-config'));
+      assert.ok(!options.args.includes('--mcp-config'));
+      assert.equal(options.env.ENABLE_CLAUDEAI_MCP_SERVERS, 'false');
       assert.deepEqual(options.args.slice(0, 3), ['-p', '--model', 'haiku']);
       assert.match(options.prompt, /RemoteTrigger/);
       assert.match(options.prompt, /"body":\{"text":"本文"\}/);

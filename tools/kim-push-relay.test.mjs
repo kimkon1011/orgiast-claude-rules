@@ -110,7 +110,12 @@ test('ロック中は何もせず古いロックだけ奪う', async t => {
   const s = setup(t); const lock = path.join(s.dir, 'kim-push-relay.lock');
   fs.writeFileSync(lock, ''); fs.utimesSync(lock, new Date(s.deps.now), new Date(s.deps.now));
   assert.equal((await runRelay(s.deps)).locked, true); assert.equal(s.requests.length, 0);
-  fs.utimesSync(lock, new Date(s.deps.now - 16 * 60_000), new Date(s.deps.now - 16 * 60_000));
+  for (const minutes of [16, 25]) {
+    fs.utimesSync(lock, new Date(s.deps.now - minutes * 60_000), new Date(s.deps.now - minutes * 60_000));
+    assert.equal((await runRelay(s.deps)).locked, true); assert.equal(s.requests.length, 0);
+    assert.equal(fs.existsSync(lock), true);
+  }
+  fs.utimesSync(lock, new Date(s.deps.now - 25 * 60_000 - 1), new Date(s.deps.now - 25 * 60_000 - 1));
   await runRelay(s.deps); assert.equal(s.requests.length, 1); assert.equal(fs.existsSync(lock), false);
 });
 test('dry-runは本文を生成してもpushも状態変更もしない', async t => {

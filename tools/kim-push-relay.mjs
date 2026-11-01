@@ -52,7 +52,7 @@ export async function runRelay(deps = {}) {
   try {
     // dry-run はロックも状態も書き換えない。
     try {
-      if (now - io.statSync(lock).mtimeMs <= 15 * 60_000) return { ok: true, locked: true };
+      if (now - io.statSync(lock).mtimeMs <= 25 * 60_000) return { ok: true, locked: true };
       if (!dryRun) io.unlinkSync(lock);
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
     if (!dryRun) {

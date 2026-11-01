@@ -24,15 +24,17 @@ export async function pushKim(text, deps = {}) {
     // この PC の hook（起動時の点検・Stop ゲート）を通すと起動に約3分半かかり、送信後も終わらず
     // 打ち切られて「失敗」扱い→再送で通知が重複した（2026-11-01 実測）。中継は RemoteTrigger を
     // 1回呼ぶだけなので hook を外し、使えるツールもそれだけに絞る。
-    const args = [...buildChildArgs({ model: 'haiku' }), '--settings', '{"disableAllHooks":true}', '--allowedTools', 'RemoteTrigger'];
+    const args = [...buildChildArgs({ model: 'haiku' }), '--settings', '{"disableAllHooks":true}', '--allowedTools', 'RemoteTrigger', '--strict-mcp-config'];
     if (deps.dryRun) return { ok: true, payload, argv: [executable, ...args] };
     if (isUnspawnable(executable, process.platform) || (process.platform === 'win32' && executable === 'claude')) {
       return { ok: false, reason: '起動可能な Claude 実行ファイルがありません' };
     }
     const result = await (deps.runConnectorPrompt || runConnectorPrompt)({
       executable, args, prompt: buildPrompt(buildTriggerPrompt('run', payload)),
-      env: buildConnectorEnv(deps.env || process.env).env,
-      timeoutMs: deps.timeoutMs ?? 150_000,
+      env: { ...buildConnectorEnv(deps.env || process.env).env, ENABLE_CLAUDEAI_MCP_SERVERS: 'false' },
+      // kim-PC はタスク起動時に claude.exe の起動だけで約2分、送信まで計7〜9分かかった（2026-11-01 実測 565 秒）。
+      timeoutMs: deps.timeoutMs ?? 840_000,
+      stopWhen: out => out.includes('"session_id"'),
     });
     // タスク環境では通知実行後も子が終了せずタイムアウトするため、応答で成功を判定して重複再送を防ぐ。
     if (String(result.stdout).includes('"session_id"')) return { ok: true };

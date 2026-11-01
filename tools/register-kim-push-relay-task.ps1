@@ -11,7 +11,7 @@ $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script)
 # AtStartup needs admin (Register-ScheduledTask: Access is denied, 2026-11-01).
 # Same shape as OrgiastSgaDmWatch: one-time start, repeat every 10 minutes, no Duration = indefinite.
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 10)
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -MultipleInstances IgnoreNew
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 20) -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName 'OrgiastKimPushRelay' -Action $action -Trigger $trigger -Settings $settings -Description 'Relay kim Discord DMs to mobile push every 10 minutes on kim-PC' -Force | Out-Null
 Write-Host 'OK: task OrgiastKimPushRelay registered (every 10 minutes)'
 Get-ScheduledTask -TaskName 'OrgiastKimPushRelay' | Select-Object TaskName, State

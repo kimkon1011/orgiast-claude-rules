@@ -120,6 +120,7 @@ try {
       return { url: P.base, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(P.extraHeaders || {}) }, body: JSON.stringify(payload) } };
     },
     async onAttempt(info) {
+      if (args.includes('--no-persist')) return;
       let usage = {};
       if (info.status === 'ok') usage = (await info.response.clone().json().catch(() => ({}))).usage || {};
       appendAttempt(info, usage);

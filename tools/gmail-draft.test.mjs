@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   GMAIL_COMPOSE_SCOPE, DEFAULT_USER, buildRawMessage, buildForwardRaw, guardRecipients,
-  renderChatDisplay, classifyTokenError, probeScopes, createDraft, deleteDraft, runCli,
+  renderChatDisplay, classifyTokenError, probeScopes, createDraft, deleteDraft, runCli, mintDwdToken,
 } from './gmail-draft.mjs';
 
 const ledger = { domains: ['orgiast.jp', 'toho-kogyo.com'], addresses: ['staff@gmail.com'] };
@@ -236,10 +236,12 @@ test('引数・body-file の設定エラーは2、内容を漏らさず無通信
 test('SA キー欠落・JSON 破損は設定エラー（例外の秘密を漏らさない）', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmail-draft-test-'));
   try {
+    // トークン中継はキー欠落時に成功してしまうため、存在しない statePath で中継を迂回し readKey 経路だけを検証する。
+    const mintToken = options => mintDwdToken({ ...options, statePath: path.join(dir, 'missing-relay-state.json') });
     for (const content of [null, '{ "private_key": "SECRET', '{}']) {
       const keyPath = path.join(dir, 'key.json');
       if (content !== null) fs.writeFileSync(keyPath, content);
-      const results = await probeScopes({ keyPath, scopes: [GMAIL_COMPOSE_SCOPE] });
+      const results = await probeScopes({ keyPath, scopes: [GMAIL_COMPOSE_SCOPE], mintToken });
       assert.equal(results[0].errorKind, 'configuration_error');
       assert.equal(JSON.stringify(results).includes('SECRET'), false);
     }

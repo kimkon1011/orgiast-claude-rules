@@ -165,6 +165,21 @@ test('emptyOutputReason は Codex の認証失敗と ChatGPT モデル認証不�
   assert.equal(emptyOutputReason({ status: 1 }), 'exit_1');
 });
 
+test('古い Codex CLI を拒否した実台帳行は cli_outdated に分類し、出力ゼロと誤診しない', () => {
+  const row = {
+    t: '2026-10-27T00:24:45.820Z', provider: 'codex', model: 'codex-cli/gpt-6-astra',
+    lane: 'escalated:empty_diff', escalated: true, in: 2514, out: 0, launched: true,
+    timedOut: false, status: 'error', exitCode: 1, secs: 8.891,
+    stderrTail: 'ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'gpt-6-astra\' model requires a newer version of Codex. Please upgrade to the latest app or CLI and try again."}}',
+  };
+  assert.equal(emptyOutputReason(row), 'cli_outdated');
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', `${JSON.stringify(row)}\n`);
+  const findings = collectFindings({ home: dir, now: new Date('2026-10-27T01:00:00Z') });
+  assert.ok(!findings.some((item) => item.id === 'codex_empty_output'), JSON.stringify(findings));
+  assert.equal(findings.find((item) => item.id === 'codex_cli_outdated')?.evidence[0], '1件');
+});
+
 test('emptyOutputReason は U+2019 と U+0027 の両方の usage limit 行を usage_limit に分類する', () => {
   // U+2019 (’)
   assert.equal(emptyOutputReason({

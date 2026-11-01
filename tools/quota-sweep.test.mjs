@@ -135,7 +135,8 @@ test('prepareTree は dirty を commit・push してから新ブランチへ進�
   assert.ok(verbs.indexOf('commit') >= 0);
   assert.ok(verbs.indexOf('commit') < verbs.indexOf('push'));
   assert.ok(verbs.indexOf('push') < verbs.indexOf('checkout'));
-  assert.equal(statuses, 2);
+  // :!.loop の status（2回）＋ .loop/ の status（1回）＝3回
+  assert.equal(statuses, 3);
   // :!.loop を付けると git 2.55 は exit 1 で拒否し救済 commit が作られない（2026-10-24 実測）。
   assert.deepEqual(calls.find(args => args[0] === 'add'), ['add', '-A', '--', '.']);
 });
@@ -206,6 +207,35 @@ test('prepareTree は書き込み不能でも native git なら落とさず、WS
   assert.throws(() => prepareTree({ home, provider: 'codex', run, previous: null, io, needRelativePointer: true }), /EPERM/);
   // 読み取りが EPERM のままなら、native でも worktree は使えないので落とす。
   assert.throws(() => prepareTree({ home, provider: 'codex', run, previous: null, io: { readFile: () => { throw eperm(); }, chmod: () => {} } }), /EPERM/);
+});
+// 2026-11-02 実測: quota-sweep-repo に追跡された .loop/quota-sweep-claude-state.md があり、
+// ローカル変更があると git checkout --detach origin/main が「Your local changes to the following files
+// would be overwritten by checkout: .loop/quota-sweep-claude-state.md」で失敗する。
+// prepareTree は .loop/ の追跡ファイルを復元してから checkout する。
+test('prepareTree は追跡された .loop/ ファイルのローカル変更を復元してから checkout する', t => {
+  const { home, tree } = worktreeFixture(t); const commands = [];
+  const run = (_exe, args) => {
+    commands.push(args);
+    if (args[0] === 'status' && args[1] === '--porcelain') {
+      // 通常の作業ファイルは clean、.loop/ にのみ変更がある状態
+      if (args[2] === '--') {
+        if (args[3] === '.loop/') return ' M .loop/quota-sweep-claude-state.md';
+        return ''; // :!.loop では clean
+      }
+      return '';
+    }
+    if (args[0] === 'rev-parse') return 'base';
+    if (args[0] === 'branch') return '';
+    return '';
+  };
+  assert.doesNotThrow(() => prepareTree({ home, provider: 'claude', run, previous: null }));
+  // .loop/ の status → checkout --quiet -- .loop/ の順が確認できる
+  const statusIdx = commands.findIndex(a => a[0] === 'status' && a[3] === '.loop/');
+  assert.ok(statusIdx >= 0, '.loop/ status を確認した');
+  const resetIdx = commands.findIndex(a => a[0] === 'checkout' && a[1] === '--quiet' && a[2] === '--' && a[3] === '.loop/');
+  assert.ok(resetIdx >= 0, '.loop/ ファイルを復元した');
+  assert.ok(resetIdx < commands.findIndex(a => a[0] === 'checkout' && a[1] === '--detach' && a[2] === 'origin/main'),
+    '.loop/ の復元はチェックアウトより前');
 });
 function context(t, child) {
   const home = temp(t), tree = path.join(home, 'tree'); fs.mkdirSync(path.join(home, '.claude')); fs.mkdirSync(tree);

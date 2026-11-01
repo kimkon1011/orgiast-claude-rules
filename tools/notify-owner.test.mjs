@@ -19,7 +19,7 @@ test('HP ラベルは fleet-pc-map の account で cr@orgiast.jp に解決され
 });
 
 test('owner Discord ID をメールで解決する', () => {
-  assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', { directory: { x: { members: [{ id: '42', emails: ['cr@orgiast.jp'] }] } } }), '42');
+  assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', { pcMap: {}, directory: { x: { members: [{ id: '42', emails: ['cr@orgiast.jp'] }] } } }), '42');
 });
 test('DM 解決不能時は未達にして他人へ送らない', async () => {
   // pcMap を空にして「このPCの持ち主ではない」を明示する（実機の fleet-pc-map の HP→cr@ に依存させない）
@@ -29,9 +29,9 @@ test('DM 解決不能時は未達にして他人へ送らない', async () => {
 
 test('owner directory reads queries cache and refuses ambiguous email matches', () => {
   const directory = { queries: { cr: { members: [{ id: '42', emails: ['cr@orgiast.jp'] }] } } };
-  assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', { directory }), '42');
+  assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', { pcMap: {}, directory }), '42');
   directory.queries.other = { members: [{ id: '43', emails: ['cr@orgiast.jp'] }] };
-  assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', { directory }), '');
+  assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', { pcMap: {}, directory }), '');
 });
 
 test('owner空の旧行はローカル持ち主を解決して通知する', async t => {
@@ -65,6 +65,38 @@ test('nishi のローカルkim IDを拒否しtoastとログへ送る', async t =
  assert.equal((await notifyOwner('nishi@orgiast.jp', '進捗', options)).channel, 'toast');
  options.toast = () => false;
  assert.equal((await notifyOwner('nishi@orgiast.jp', '別の進捗', options)).channel, 'inbox');
+});
+
+test('ローカルPCの明示notifyDiscordIdはownerがcrでもkimへDMする', async t => {
+ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-explicit-'));
+ t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+ let sentTo = '';
+ const options = {
+   home,
+   label: 'cr-PC',
+   pcMap: { '作業用011': { account: 'cr@orgiast.jp', aliases: ['cr-PC'], notifyDiscordId: KIM_DISCORD_USER_ID } },
+   directory: [],
+   notify: async (_, notifyOptions) => { sentTo = notifyOptions.userId; return { delivered: 'dm', messageId: 'receipt' }; },
+   toast: () => assert.fail('must not fall back'),
+ };
+ assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', options), KIM_DISCORD_USER_ID);
+ assert.equal((await notifyOwner('cr@orgiast.jp', '進捗', options)).channel, 'discord');
+ assert.equal(sentTo, KIM_DISCORD_USER_ID);
+});
+
+test('notifyDiscordIdなしでIDファイルがkimなら従来どおりtoastへ送る', async t => {
+ const options = localOptions(t);
+ fs.writeFileSync(path.join(options.home, '.claude', 'orgiast-discord-user-id.txt'), KIM_DISCORD_USER_ID);
+ const result = await notifyOwner('nishi@orgiast.jp', '進捗', { ...options, notify: () => assert.fail('must not DM kim'), toast: () => true });
+ assert.equal(result.channel, 'toast');
+});
+
+test('別PCのnotifyDiscordIdはローカルPCの宛先に使わない', async t => {
+ const options = localOptions(t);
+ options.pcMap['作業用011'] = { account: 'cr@orgiast.jp', notifyDiscordId: KIM_DISCORD_USER_ID };
+ assert.equal(resolveOwnerDiscordId('nishi@orgiast.jp', options), '');
+ const result = await notifyOwner('nishi@orgiast.jp', '進捗', { ...options, notify: () => assert.fail('must not use another PC target'), toast: () => true });
+ assert.equal(result.channel, 'toast');
 });
 
 test('toast uses standard PowerShell AppId, encoded Unicode and 300 characters', () => {

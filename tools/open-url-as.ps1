@@ -1,4 +1,4 @@
-# open-url-as.ps1 — URL を「そのアカウントの Chrome プロファイル」で開く（ONBOARDING §1.5.0）。
+﻿# open-url-as.ps1 — URL を「そのアカウントの Chrome プロファイル」で開く（ONBOARDING §1.5.0）。
 # 使い方: pwsh -NoProfile -File "<rules repo>\tools\open-url-as.ps1" -Account seisaku-team@orgiast.jp -Url https://example.com
 #        pwsh -NoProfile -File "<rules repo>\tools\open-url-as.ps1" -List   ← アカウント→プロファイルの対応表
 # 対応表は Chrome の "Local State"（profile.info_cache の user_name）から毎回読む。手で保守する表は持たない。

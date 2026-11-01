@@ -309,6 +309,11 @@ export function emptyOutputReason(row) {
   // (2026-10-13 診断: glm の11件の実体は HTTP 429 と、その間の cooldown スキップだった)。
   if (isQuotaLimitedRow(row)) return 'quota_limited';
   if (isCooldownSkippedRow(row)) return 'cooldown_skipped';
+  // status:"ok" は API 呼出が成功したことを示す。出力が0でも呼出自体の失敗ではない
+  // (2026-10-30〜11-01 実測: gemini プローブが --max 10 で思考トークンを差し引かれ
+  // out=0 になったが HTTP 応答は正常で status:"ok"。これを no_output と判定すると
+  // lane_outage_unrepaired になる)。
+  if (String(row?.status ?? '') === 'ok') return 'ok';
   const status = Number(row?.status);
   if (Number.isFinite(status) && status !== 0) return `exit_${status}`;
   return 'no_output';

@@ -1013,6 +1013,9 @@ test('emptyOutputReason は台帳の文字列 status を no_output に潰さな�
   // 数値 status(終了コード)と既存の文字列 status の扱いは変えない。
   assert.equal(emptyOutputReason({ status: 3 }), 'exit_3');
   assert.equal(emptyOutputReason({ status: 'error' }), 'spawn_failed');
+  // status:"ok" は API 呼出が成功したことを示す。no_output にしてはならない
+  // (2026-10-30〜11-01 実測: gemini プローブが out=0 でも HTTP 応答は正常)。
+  assert.equal(emptyOutputReason({ status: 'ok', out: 0 }), 'ok');
 });
 
 test('cooldown 行を分母から外し、上限到達の glm を high の未修理全滅にしない', () => {

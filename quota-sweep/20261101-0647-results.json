@@ -1,0 +1,28 @@
+{
+  "sweepTimestamp": "2026-11-01T06:47:00Z",
+  "sinceRef": "quota-sweep/20261101-0321",
+  "sinceCommit": "1a14443",
+  "commits": [],
+  "summary": {
+    "totalCommits": 0,
+    "newMerges": 0,
+    "categories": {
+      "automation": 0,
+      "autopilot": 0,
+      "fix": 0,
+      "chore": 0,
+      "other": 0
+    },
+    "notable": "前回quota-sweep（1a14443, 2026-11-01 03:55 JST）以降、新規コミットは0件。ワーキングツリーはクリーン。変更なし。"
+  },
+  "claudeMdCheck": "skipped",
+  "analysis": {
+    "lastSweepCommit": "1a14443 quota sweep/20261101 0321 claude mvx9jv4d (#1374)",
+    "lastSweepAuthor": "nishiOrgiast",
+    "lastSweepTime": "2026-11-01T03:55:31Z",
+    "workingTree": "clean",
+    "commitsSinceLastSweep": 0,
+    "headCommit": "1a14443",
+    "headTime": "2026-11-01T03:55:31Z"
+  }
+}

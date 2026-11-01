@@ -1,0 +1,42 @@
+name: Google Property Check Weekly
+
+on:
+  schedule:
+    # 毎週月曜 09:00 JST = 毎週月曜 00:00 UTC
+    - cron: '0 0 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run Google Property Check tests
+        run: node --test tools/google-property-check.test.mjs
+
+      - name: Notify Discord on failure
+        if: failure()
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "::error::DISCORD_WEBHOOK_URL secret is not set — cannot notify Discord"
+            exit 1
+          fi
+          PAYLOAD=$(printf '{"content":":x: Google Property Check 定期検証が失敗しました\\nRepo: %s\\nRun: %s"}' \
+            "$REPO" "$RUN_URL")
+          curl -sf -X POST -H 'Content-Type: application/json' \
+            -d "$PAYLOAD" "$DISCORD_WEBHOOK_URL" \
+            || echo "::warning::Discord webhook POST failed (continuing)"

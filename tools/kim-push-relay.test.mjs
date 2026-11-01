@@ -57,16 +57,34 @@ test('1件・複数件の見出しは120字以内、本文に全文とリンク�
 });
 test('失敗しても取得位置を保存、urgentQueueは成功時だけ消し3回目だけDiscord通知', async t => {
   const s = setup(t); s.messages([msg(2, '警告')]);
+  const logs = []; s.deps.log = text => logs.push(text);
   s.deps.pushKim = async () => ({ ok: false, reason: 'テスト失敗' });
   await runRelay(s.deps); assert.equal(s.read().lastMessageId, '2');
   s.messages([]);
   for (let i = 0; i < 3; i++) await runRelay(s.deps);
   assert.equal(s.read().urgentQueue.length, 1); assert.equal(s.read().failures, 4);
   assert.equal(s.alerts.length, 1); assert.equal(s.alerts[0].options.silent, false);
+  assert.deepEqual(logs, Array(4).fill('kim-push 失敗: テスト失敗'));
   assert.match(s.alerts[0].body, /3回連続で失敗: テスト失敗/);
   s.deps.pushKim = async () => ({ ok: true }); await runRelay(s.deps);
   assert.equal(s.read().urgentQueue.length, 0); assert.equal(s.read().failures, 0);
   assert.equal(s.read().pushLog.length, 1);
+});
+test('取得例外の理由にはメッセージを残しBotトークンは伏せ字にする', async t => {
+  const s = setup(t);
+  const token = 'test-bot-token';
+  s.deps.fetch = async () => { throw new Error(`取得できません token=${token}`); };
+  const result = await runRelay(s.deps);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, '通知中継に失敗: 取得できません token=[REDACTED]');
+  assert.ok(!result.reason.includes(token));
+});
+test('push失敗ログは秘密値を伏せ字にして1行で出す', async t => {
+  const s = setup(t); s.messages([msg(2, '警告')]);
+  const logs = []; s.deps.log = text => logs.push(text);
+  s.deps.pushKim = async () => ({ ok: false, reason: '接続失敗\r\ntoken=test-bot-token' });
+  await runRelay(s.deps);
+  assert.deepEqual(logs, ['kim-push 失敗: 接続失敗 token=[REDACTED]']);
 });
 test('08時・18時のdigestは各1回、失敗時はpendingとslotを維持', async t => {
   const s = setup(t); s.messages([msg(2, '報告')]);

@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
+import { redactSecrets } from './webhook-health.mjs';
 import { buildTriggerPrompt } from './remote-trigger.mjs';
 import { buildChildArgs, buildPrompt, buildConnectorEnv, runConnectorPrompt } from './claude-ai-run.mjs';
 import { resolveClaudeExecutableFromDisk, isUnspawnable } from './claude-exe.mjs';
@@ -31,10 +32,13 @@ export async function pushKim(text, deps = {}) {
     const result = await (deps.runConnectorPrompt || runConnectorPrompt)({
       executable, args, prompt: buildPrompt(buildTriggerPrompt('run', payload)),
       env: buildConnectorEnv(deps.env || process.env).env,
-      timeoutMs: deps.timeoutMs ?? 240_000,
+      timeoutMs: deps.timeoutMs ?? 150_000,
     });
-    return result.code === 0 && String(result.stdout).includes('"session_id"')
-      ? { ok: true } : { ok: false, reason: `通知実行失敗（終了コード ${result.code}、セッション応答 ${String(result.stdout).includes('"session_id"') ? 'あり' : 'なし'}）` };
+    // タスク環境では通知実行後も子が終了せずタイムアウトするため、応答で成功を判定して重複再送を防ぐ。
+    if (String(result.stdout).includes('"session_id"')) return { ok: true };
+    // 秘密値が切断されて伏せ字をすり抜けないよう、先に出力全体を伏せ字にする。
+    const stderr = redactSecrets(result.stderr).slice(-200);
+    return { ok: false, reason: `通知実行失敗（終了コード ${result.code}、timedOut ${Boolean(result.timedOut)}、セッション応答 なし、stderr ${stderr}）` };
   } catch { return { ok: false, reason: 'スマホ通知の実行に失敗しました' }; }
 }
 

@@ -10,6 +10,7 @@ import { parseHandoff, selectTodoLanes } from './auto-session.mjs';
 import { buildClaudeHeadlessArgs, parseAutoSessionEnvText } from './auto-session-executor.mjs';
 import { resolveClaudeExecutableFromDisk, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
 import { notifyKim } from './notify-kim.mjs';
+import { parseRetryAfter } from './claude-plan-usage.mjs';
 import { decideSweep, readClaudeWindows, readCodexWindows, shouldStopTick, jsonlFiles, sameReset } from './lib/quota-windows.mjs';
 import { discoverWsl, passiveWslHomes, wslPath, interactiveCodex, nativeCommand } from './lib/quota-sweep-host.mjs';
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
@@ -189,8 +190,9 @@ export function claudeWindowReader({ home, fetchImpl, now = Date.now, ttlMs = 15
   const base = fetchImpl ?? ((url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(15_000) }));
   const wrapped = async (url, init) => {
     const response = await base(url, init);
-    const seconds = Number(response?.headers?.get?.('retry-after'));
-    if (response?.status === 429 && Number.isFinite(seconds) && seconds > 0) blockedUntil = now() + seconds * 1000;
+    const retryHeader = response?.headers?.get?.('retry-after');
+    const seconds = parseRetryAfter(retryHeader, now());
+    if (response?.status === 429 && seconds != null && seconds > 0) blockedUntil = now() + seconds * 1000;
     return response;
   };
   return async () => {
@@ -199,7 +201,8 @@ export function claudeWindowReader({ home, fetchImpl, now = Date.now, ttlMs = 15
     if (at < blockedUntil) return Object.assign([], { reason: 'HTTP 429', retryAfterMs: blockedUntil - at });
     const claude = await read({ home, fetchImpl: wrapped });
     if (claude.length) { cache = claude; cachedAt = at; }
-    else if (blockedUntil > now()) claude.retryAfterMs = blockedUntil - now();
+    else if (claude.retryAfterSeconds != null) blockedUntil = Math.max(blockedUntil, at + claude.retryAfterSeconds * 1000);
+    if (blockedUntil > now()) claude.retryAfterMs = blockedUntil - now();
     return claude;
   };
 }

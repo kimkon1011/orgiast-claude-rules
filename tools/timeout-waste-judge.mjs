@@ -21,7 +21,11 @@ export const TIMEOUT_KILL_FIX_MERGED_AT = '2026-10-28T19:08:39Z';
 // 主経路（chain 無し）はこれではなく、その実行に与えた --timeout（既定 1800 秒）で判定する。
 export const DEFAULT_CAP_SECS = 900;
 export const DEFAULT_PRIMARY_TIMEOUT_SECS = 1800; // codex-do の --timeout 既定
-export const DEFAULT_TOLERANCE_SECS = 5;
+// Windows の killProcessTree(taskkill /T) 後に forceTimer で強制終了するまでの猶予
+// (timeoutKillGraceMs=5000ms) と、execute 起動前の overhead を加味する。
+// 2026-11-01 実測: cheap-code:deepseek 600s 予算に対し 610.8s 記録（約11秒超過）。
+// 5秒では不足するため 15秒に拡大（2026-11-02）。
+export const DEFAULT_TOLERANCE_SECS = 15;
 
 export function isTimeoutRow(row) {
   return row?.status === 'timeout' || row?.timedOut === true;

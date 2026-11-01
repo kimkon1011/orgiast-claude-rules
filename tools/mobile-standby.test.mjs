@@ -177,7 +177,7 @@ test('resolveVscodeCli: PATH 上 / 実行中 Code.exe の隣 / 他ドライブ�
 test('convergeMobileStandby: 痕跡ありで CLI 無し → result.ok=false かつ lines に NG が出る', () => {
   const f = extFixture({ installed: '0.3.6' });
   const settingsPath = path.join(f.home, 'settings.json');
-  const run = convergeMobileStandby({ ...f, env: {}, exists: (p) => p.includes('extensions'), regQuery: () => '', settingsPath, rcPrefix: { platform: 'win32', readUserEnv: () => RC_NAME_PREFIX, writeUserEnv: () => {} } });
+  const run = convergeMobileStandby({ ...f, env: {}, exists: (p) => p.includes('extensions'), regQuery: () => '', settingsPath, rcPrefix: { platform: 'win32', resolvePcNumber: () => '', readUserEnv: () => RC_NAME_PREFIX, writeUserEnv: () => {} } });
   assert.equal(run.ok, false);
   assert.ok(run.lines.some((l) => /拡張: NG/.test(l)));
 });
@@ -193,7 +193,7 @@ test('convergeMobileStandby は 3 ステップを通し冪等', () => {
   const settingsPath = path.join(f.home, 'settings.json');
   fs.writeFileSync(settingsPath, '{"orgiast.nextSession.mobileTabs":0}');
   // 実 powershell を呼ばないようスタブを注入（rcPrefix 自体の検証は別テスト）。
-  const rcPrefix = { platform: 'win32', readUserEnv: () => RC_NAME_PREFIX, writeUserEnv: () => { throw new Error('呼ばれないはず'); } };
+  const rcPrefix = { platform: 'win32', resolvePcNumber: () => '', readUserEnv: () => RC_NAME_PREFIX, writeUserEnv: () => { throw new Error('呼ばれないはず'); } };
   const first = convergeMobileStandby({ ...f, settingsPath, rcPrefix });
   assert.equal(first.ok, true);
   assert.equal(first.config.changed, true);
@@ -209,7 +209,7 @@ test('convergeMobileStandby は 3 ステップを通し冪等', () => {
   assert.equal(second.extension.status, 'ok');
 });
 
-test('RC セッション名接頭辞は "待機" 固定', () => {
+test('RC セッション名番号なしの接頭辞は "待機"', () => {
   assert.equal(RC_NAME_PREFIX, '待機');
 });
 
@@ -217,6 +217,7 @@ test('RC接頭辞: 既に同じ値なら write せず changed=false（冪等）'
   const writes = [];
   const r = convergeRcNamePrefix({
     platform: 'win32',
+    resolvePcNumber: () => '',
     readUserEnv: () => RC_NAME_PREFIX,
     writeUserEnv: (...args) => { writes.push(args); },
   });
@@ -230,6 +231,7 @@ test('RC接頭辞: 未設定なら書き込み、changed=true、note に -> "待
   const writes = [];
   const r = convergeRcNamePrefix({
     platform: 'win32',
+    resolvePcNumber: () => '',
     readUserEnv: () => '',
     writeUserEnv: (...args) => { writes.push(args); },
   });
@@ -258,6 +260,7 @@ test('RC接頭辞: Windows 以外はスキップ（read/write を呼ばない）
 test('RC接頭辞: 書き込み失敗は ok=false を返す（例外を投げない）', () => {
   const r = convergeRcNamePrefix({
     platform: 'win32',
+    resolvePcNumber: () => '',
     readUserEnv: () => '',
     writeUserEnv: () => { throw new Error('boom'); },
   });
@@ -270,13 +273,13 @@ test('RC接頭辞: 書き込み失敗は ok=false を返す（例外を投げな
 test('convergeMobileStandby: result.rcPrefix が入り、ok=false なら result.ok も false', () => {
   const f = extFixture();
   const settingsPath = path.join(f.home, 'settings.json');
-  const okRun = convergeMobileStandby({ ...f, settingsPath, rcPrefix: { platform: 'win32', readUserEnv: () => RC_NAME_PREFIX, writeUserEnv: () => {} } });
+  const okRun = convergeMobileStandby({ ...f, settingsPath, rcPrefix: { platform: 'win32', resolvePcNumber: () => '', readUserEnv: () => RC_NAME_PREFIX, writeUserEnv: () => {} } });
   assert.equal(okRun.ok, true);
   assert.equal(okRun.rcPrefix.ok, true);
   assert.equal(okRun.rcPrefix.changed, false);
   assert.ok(okRun.lines.some((line) => line.startsWith('[mobile-standby] RC接頭辞:')));
 
-  const ngRun = convergeMobileStandby({ ...f, settingsPath, rcPrefix: { platform: 'win32', readUserEnv: () => '', writeUserEnv: () => { throw new Error('denied'); } } });
+  const ngRun = convergeMobileStandby({ ...f, settingsPath, rcPrefix: { platform: 'win32', resolvePcNumber: () => '', readUserEnv: () => '', writeUserEnv: () => { throw new Error('denied'); } } });
   assert.equal(ngRun.rcPrefix.ok, false);
   assert.equal(ngRun.ok, false);
 });
@@ -392,4 +395,13 @@ test('mobileTabs editing backs up JSONC and leaves ambiguous input unchanged', a
   fs.writeFileSync(settings, '{ broken');
   assert.equal(ensureMobileTabsDisabled(settings).changed, false);
   assert.equal(fs.readFileSync(settings, 'utf8'), '{ broken');
+});
+
+test('RC接頭辞: PC番号があればASCII数字を設定する', () => {
+  const writes = [];
+  const options = { platform: 'win32', resolvePcNumber: () => '018', readUserEnv: () => '待機', writeUserEnv: (...args) => writes.push(args) };
+  assert.equal(convergeRcNamePrefix(options).changed, true);
+  assert.deepEqual(writes, [['CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX', '018']]);
+  assert.equal(convergeRcNamePrefix({ ...options, readUserEnv: () => '018' }).changed, false);
+  assert.equal(writes.length, 1);
 });

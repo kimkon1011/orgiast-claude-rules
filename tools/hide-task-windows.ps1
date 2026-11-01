@@ -44,6 +44,10 @@ $tasks = Get-ScheduledTask | Where-Object {
   "$($_.Principal.LogonType)" -match '^Interactive' -and
   $_.Principal.UserId -and ($_.Principal.UserId -split '\\')[-1] -eq $env:USERNAME
 }
+# 非昇格プロセスからは RunLevel=Highest のタスクを Set-ScheduledTask で書き換えられない
+# (Access is denied)。夜間バッチは非昇格で走るため、該当タスクは失敗ではなく除外として
+# 報告する(2026-10-27〜29 実測: Orgiast Growi 自動クリーンアップ が3夜連続でステップを exit 1)。
+$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 foreach ($task in $tasks) {
   $name = $task.TaskPath + $task.TaskName
   $needs = $false; $complex = $false
@@ -63,6 +67,9 @@ foreach ($task in $tasks) {
   }
   if ($complex -and -not $needs) { $skipped++; Write-Host "skip(引用符入り引数・手動確認): $name"; continue }
   if (-not $needs) { continue }
+  if ($task.Principal.RunLevel -eq 'Highest' -and -not $isAdmin) {
+    $skipped++; Write-Host "skip(昇格が必要・手動確認): $name"; continue
+  }
   if ($Dry) { $changed++; Write-Host "dry: 隠し起動へ変更予定: $name"; continue }
   try {
     Set-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -Action @($newActions) | Out-Null

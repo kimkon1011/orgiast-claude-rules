@@ -549,6 +549,24 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/register-kim-push-relay-task.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kim 宛 DM をスマホ通知へ中継するタスクは kim-PC（kim@orgiast.jp の Claude アカウント所有の routine を叩く）だけで動かす"
+    },
+    {
+      "path": "tools/kim-push-relay.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kim-PC のタスク OrgiastKimPushRelay からだけ起動する中継本体"
+    },
+    {
+      "path": "tools/kim-push.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kim@orgiast.jp 所有の routine trig_01LmmkjNazcVuLTAYsRmJLH5 を叩くため kim-PC 専用"
+    },
+    {
       "path": "tools/register-internal-audit-task.ps1",
       "scope": "kim-only",
       "step": null,

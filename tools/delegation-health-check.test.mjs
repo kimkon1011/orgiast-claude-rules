@@ -1349,3 +1349,34 @@ test('cheap-code が HTTP 402 で cooldown を張った fallback 行も外部要
   write(dir, 'executor-usage.jsonl', [10, 11, 12].map((min) => row(FALLBACK_COOLDOWN_ROW(min, { chain: [{ ...FALLBACK_COOLDOWN_ROW(min).chain[0], stderrTail: tail402 }, ...FALLBACK_COOLDOWN_ROW(min).chain] }))).join(''));
   assert.equal(collectFindings({ home: dir, now: NOW }).some((f) => f.id === 'lane_outage_unrepaired' && f.provider === 'fallback'), false);
 });
+
+test('status:ok out:0 の gemini プローブ行だけでは lane_outage_unrepaired を出さない', () => {
+  const dir = home();
+  const probeRows = [0, 1, 2, 3, 4, 5].map((i) => row({
+    t: '2026-09-09T10:' + i + ':00.000Z', provider: 'gemini', model: 'gemini-3.7-flash',
+    in: 7, out: 0, secs: 2.5, status: 'ok', source: 'llm-ask',
+  }));
+  write(dir, 'executor-usage.jsonl', probeRows.join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.provider === 'gemini' && f.id === 'lane_outage_unrepaired'), false,
+    'gemini のプローブ行だけでは high の全滅を出してはならない');
+  assert.equal(findings.some((f) => f.provider === 'gemini'), false,
+    'gemini が健全なら finding 自体を出さない');
+});
+
+test('status:ok out:0 のプローブ行に実失敗が混ざれば lane_outage_unrepaired を出す', () => {
+  const dir = home();
+  const probes = [0, 1, 2].map((i) => row({
+    t: '2026-09-09T10:2' + i + ':00.000Z', provider: 'gemini', model: 'gemini-3.7-flash',
+    in: 7, out: 0, secs: 2.5, status: 'ok', source: 'llm-ask',
+  }));
+  const realFailures = [4, 5, 6].map((i) => row({
+    t: '2026-09-09T10:2' + i + ':00.000Z', provider: 'gemini', model: 'gemini-3.7-flash',
+    in: 173, out: 0, secs: 8, status: 'error', source: 'llm-ask',
+  }));
+  write(dir, 'executor-usage.jsonl', probes.concat(realFailures).join(''));
+  const outage = collectFindings({ home: dir, now: NOW }).find((f) => f.provider === 'gemini' && f.id === 'lane_outage_unrepaired');
+  assert.ok(outage, '実失敗が3件以上あれば high severity の全滅 finding を出す');
+  assert.equal(outage.severity, 'high');
+  assert.equal(outage.evidence[0], '3件すべて失敗');
+});

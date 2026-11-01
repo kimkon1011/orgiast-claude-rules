@@ -214,11 +214,11 @@ export async function mintDwdToken({ user, keyPath = DEFAULT_KEY, scope, fetchIm
   } catch (error) { throw Object.assign(new Error(safeFailure(error).error), safeFailure(error)); }
 }
 
-export async function probeScopes({ user = DEFAULT_USER, keyPath = DEFAULT_KEY, scopes = SCOPES, mintToken = mintDwdToken }) {
+export async function probeScopes({ user = DEFAULT_USER, keyPath = DEFAULT_KEY, scopes = SCOPES, mintToken = mintDwdToken, statePath }) {
   const results = [];
   for (const scope of scopes) {
     try {
-      await mintToken({ user, keyPath, scope });
+      await mintToken({ user, keyPath, scope, statePath });
       results.push({ scope, ok: true });
     } catch (error) { results.push({ scope, ok: false, ...safeFailure(error) }); }
   }

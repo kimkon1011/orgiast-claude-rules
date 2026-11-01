@@ -239,7 +239,7 @@ test('SA キー欠落・JSON 破損は設定エラー（例外の秘密を漏ら
     for (const content of [null, '{ "private_key": "SECRET', '{}']) {
       const keyPath = path.join(dir, 'key.json');
       if (content !== null) fs.writeFileSync(keyPath, content);
-      const results = await probeScopes({ keyPath, scopes: [GMAIL_COMPOSE_SCOPE] });
+      const results = await probeScopes({ keyPath, scopes: [GMAIL_COMPOSE_SCOPE], statePath: path.join(dir, 'no-relay-state.json') });
       assert.equal(results[0].errorKind, 'configuration_error');
       assert.equal(JSON.stringify(results).includes('SECRET'), false);
     }

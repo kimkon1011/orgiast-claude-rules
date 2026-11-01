@@ -216,10 +216,33 @@ function hasSessionWakeup(raw, input = {}) {
   return { autoProgress, background: background || persistent.background, scheduled: persistent.scheduled };
 }
 
+// Only affirmative promises in prose count; quoted examples and completed work do not.
+function selfDeferralViolation(text, raw) {
+  const prose = String(text).replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, '').replace(/^[ \t]*>.*$/gm, '');
+  const deferred = prose.split(/[。！？\n]/).some(line =>
+    /(?:次の|次回の|次)メッセージで|次(?:の)?ターンで/.test(line)
+    && /(?:仕上げ|進め|続け|実装し|修正し|報告し|完成させ|対応し)(?:ます|る|ていきます)/.test(line)
+    && !/「|」|『|』|しません|ではなく|と(?:書|言|約束)|先送り.*(?:防|検|禁止)/.test(line));
+  if (!deferred) return null;
+  const entries = currentTurnEntries(raw).filter(e => ['assistant', 'user'].includes(e.type));
+  const successful = new Set(entries.filter(e => e.type === 'user').flatMap(e => blocks([e], 'tool_result'))
+    .filter(b => b.is_error !== true && !/(?:\berror\b|失敗|拒否|denied)/i.test(typeof b.content === 'string' ? b.content : JSON.stringify(b.content)))
+    .map(b => b.tool_use_id));
+  const calls = blocks(entries, 'tool_use').filter(b => b.id && successful.has(b.id));
+  const cron = calls.some(b => b.name === 'CronCreate');
+  const check = calls.some(b => /^(?:Bash|PowerShell)$/.test(b.name || '')
+    && /(?:^|[;\n&|])\s*node\s+["]?(?:[^\s"]*[\\/])?auto-progress\.mjs["]?\s+/.test(String(b.input?.command || b.input?.script || ''))
+    && /--add-check\b/.test(String(b.input?.command || b.input?.script || ''))
+    && !/--(?:help|dry-run)\b/.test(String(b.input?.command || b.input?.script || '')));
+  return cron && check ? null : { decision: 'block', code: 'SELF-DEFERRAL-NO-WAKEUP', reason: '自分の作業を次のメッセージ・次ターンへ残しています。このターンで完了するか、同ターンで CronCreate（続きを進め進捗を報告）と node tools/auto-progress.mjs --add-check を実行し、両方の成功を確認してください。登録予定・過去ターンの登録は証拠になりません。' };
+}
+
 function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {}) {
   const source = String(text || '').trimEnd();
   const turnSource = String(options.turnText || source).trimEnd();
   if (!enabled()) return { decision: 'pass', reason: 'disabled' };
+  const selfDeferral = selfDeferralViolation(turnSource, transcriptRaw);
+  if (selfDeferral) return selfDeferral;
   const permanentFix = permanentFixViolation(turnSource, transcriptRaw);
   if (/[?？]$/.test(source)) return permanentFix || { decision: 'pass', reason: 'question' };
   if (reportsCloseSteps(source)) return permanentFix || { decision: 'pass', reason: 'close-steps' };

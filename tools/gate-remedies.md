@@ -116,6 +116,8 @@ Agent/Task の model を sonnet/haiku に明示。実装は node tools/codex-do.
 
 ## next-action-gate
 
+`SELF-DEFERRAL-NO-WAKEUP`: 自分の作業を「次のメッセージで」「次ターンで」と残す場合は、そのターンで完了するか、同じターンで CronCreate と `node tools/auto-progress.mjs --add-check …` の両方を成功させる。呼び出し予定・過去ターン・失敗結果は登録証拠に数えない。
+
 次にすること・自動進行・セッション終了可否を末尾に明記する。
 「この後の自動進行」が空・「なし」で始まる値以外なら、node tools/auto-progress.mjs --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" --next-claude "<次の手>" で進捗チェックを登録する。現在ターンのバックグラウンド Agent/Bash/PowerShell も可。subagents と CLAUDE_HEADLESS=1 はこの検査の対象外。
 人に作業を残す時は、このターンで実装・設定・依頼送信・ルール追加した具体物を `恒久策:` 行に書く。初回だけなら `恒久策: 一回限り: <理由>`。

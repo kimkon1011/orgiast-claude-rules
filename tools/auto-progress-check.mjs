@@ -56,7 +56,7 @@ export async function checkPromise(row, { home, now, patch, io = {} }) {
   const changes = { checkResult: state, checkText: oneLine(result.text), lastCheckedAt: new Date(now).toISOString(),
     verdict: state === 'done' ? 'done' : state === 'error' ? 'check_error' : overdue ? 'unmet' : 'in_progress',
     ...(state === 'done' ? { status: 'done', doneAt: row.doneAt || new Date(now).toISOString() } : {}) };
-  patch(rowKey(row), changes);
+  if (patch(rowKey(row), changes) === false) return 'ledger_error';
   if (state === 'unmet' && !overdue) {
     const lastNotified = Date.parse(row.lastUnmetNotifiedAt || row.ts) || 0;
     if (now - lastNotified < UNMET_INTERVAL_MS) return state;
@@ -67,7 +67,7 @@ export async function checkPromise(row, { home, now, patch, io = {} }) {
     const delivery = await (io.notifyOwner ?? notifyOwner)(owner, `${origin}\n${message}`, { home });
     if (!['dm', 'toast', 'inbox'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
     const notifyChanges = { lastUnmetNotifiedAt: new Date(now).toISOString() };
-    patch(rowKey(row), notifyChanges);
+    if (patch(rowKey(row), notifyChanges) === false) return 'ledger_error';
     Object.assign(row, notifyChanges);
     return state;
   }

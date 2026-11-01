@@ -54,7 +54,7 @@ session jsonl（`efe02524-….jsonl`、最終行は 2026-11-01T16:09:10Z）に�
 ## C5: 検証ゲート
 
 - `node --test tools/permanent-fix-deferral-scan.test.mjs`: 40 pass / 0 fail。
-- `node --test tools/*.test.mjs`: 結果は下記「最終ゲート」節に記録。
+- `node --test tools/*.test.mjs`: exit 1（7438 件中 pass 7409 / fail 19）。失敗19件は gate-runtime(1)・keyserve-enroll(3)・memory-publish(7)・nightly-bootstrap(1)・onboarding-sync-keyserve-refresh(4)・onboarding-sync(2) のテストで、本件の変更面（permanent-fix-deferral-scan とドキュメント1件）とは無関係。本件はコード無変更のため回帰ではないが、main 上の既存失敗かどうかの基準線実測は未実施のため、C5 は未達として扱う。
 
 ## 未確認事項
 

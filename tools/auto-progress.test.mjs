@@ -999,8 +999,8 @@ test('digest: 送信した本文を sent.jsonl に残し、dryRun では書か�
   const home = tmp(), at = Date.parse('2026-10-23T09:00:00+09:00');
   const sentFile = path.join(home, '.claude', 'logs', 'auto-progress-digest.sent.jsonl');
   const readSent = () => (fs.existsSync(sentFile) ? fs.readFileSync(sentFile, 'utf8').trim().split('\n').map(JSON.parse) : []);
-  const row = { sessionId: 's1', owner: 'kim@orgiast.jp', status: 'waiting_user', promise: '見積の承認', nextKim: '金額を承認', ts: new Date(at - H).toISOString() };
-  const base = { readLedger: () => [row], localOwner: 'kim@orgiast.jp' };
+  const row = { sessionId: 's1', owner: 'member@orgiast.jp', status: 'waiting_user', promise: '見積の承認', nextKim: '金額を承認', ts: new Date(at - H).toISOString() };
+  const base = { readLedger: () => [row], localOwner: 'member@orgiast.jp' };
 
   // dryRun では書かない
   const dry = await digest({ home, now: at, slot: '朝', dryRun: true, io: { ...base, notify: async () => assert.fail('dryRun must not send') } });

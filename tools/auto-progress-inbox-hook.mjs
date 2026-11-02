@@ -49,5 +49,19 @@ export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.home
   const event = input.hook_event_name || 'UserPromptSubmit';
   return { hookSpecificOutput: { hookEventName: event, additionalContext: `【必須】応答の冒頭で user に見える形で「📲 自動進行の結果（聞かれる前にお知らせ）」として次を表示せよ: ${displayText(lines.join('\n'), Infinity)}` } };
 }
-async function main() { try { const out = consumeInbox(JSON.parse(await readStdinWithTimeout())); if (out) console.log(JSON.stringify(out)); } catch {} }
-if (isEntry(import.meta.url)) await main();
+async function main() {
+  try {
+    const input = JSON.parse(await readStdinWithTimeout());
+    const out = consumeInbox(input);
+    const { sessionDigest } = await import('./auto-progress-digest.mjs');
+    const digest = sessionDigest();
+    if (digest) {
+      const context = `【進捗まとめ】以下を応答で提示する（最大5件・1件1行）。\n${digest}`;
+      if (out) out.hookSpecificOutput.additionalContext += '\n' + context;
+      else { console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: input.hook_event_name || 'UserPromptSubmit', additionalContext: context } })); return; }
+    }
+    if (out) console.log(JSON.stringify(out));
+  } catch (error) { console.error(`auto-progress-inbox: ${error.message}`); }
+}
+// Do not await at module scope: digest -> notify-owner -> this module is a cycle.
+if (isEntry(import.meta.url)) void main();

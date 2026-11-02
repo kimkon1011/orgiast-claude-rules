@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { acquireLock } from './lib/progress-file-lock.mjs';
 import { isEntry } from './is-entry.mjs';
 import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 import { ledgerFile, readLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES } from './auto-progress-ledger.mjs';
@@ -433,6 +434,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   }
 
   const deliveries = [...groups]
+    .filter(([owner]) => owner.toLowerCase() !== 'kim@orgiast.jp')
     .filter(([owner]) => !slotKey || !sentSlotOwners.has(`${slotKey}|${owner}`))
     .map(([owner, rows]) => {
     const owned = activeRows.filter(r => ownerOf(r) === owner);
@@ -454,6 +456,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     return { owner, rows, message };
   }).filter(d => Boolean(d.message));
 
+  if (!deliveries.length) return { sent: false, count: 0, skipped: 'session-context-only' };
   const messages = deliveries.map(d => d.message);
   const text = messages.join('\n');
   const count = countedRows.length;
@@ -542,6 +545,53 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   appendLog(home, { at: now, label, slot: slotKey || 'urgent', sent: true, count, parts: totalParts, receipts }, io);
   appendSentLog(home, { at: now, label, slot: slotKey || 'urgent', sent: true, count, parts: totalParts, receipts, text: redactSecrets(sentTexts.join('\n')) }, io);
   return { sent: true, count, parts: totalParts };
+}
+
+
+// kim-PC のセッション文脈専用。既存の定時通知とは状態を分離する。
+export function sessionDigest({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), dryRun = false, io = {} } = {}) {
+  if ((io.label ?? resolveFleetLabel(home)) !== 'kim-PC') return '';
+  const file = path.join(home, '.claude/state/auto-progress-session-digest.json');
+  const day = new Date(now + 9 * 3600000).toISOString().slice(0, 10);
+  const release = dryRun ? () => {} : acquireLock(file + '.lock');
+  if (!release) return '';
+  try {
+    let state = {};
+    try { state = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    if (!dryRun && state.day === day) return '';
+    const rows = (io.readLedger ?? readLedger)(ledgerFile(home));
+    const latest = new Map();
+    for (const row of rows) {
+      const key = row.sessionId || rowKey(row);
+      const previous = latest.get(key);
+      if (!previous || (Date.parse(row.ts) || 0) >= (Date.parse(previous.ts) || 0)) latest.set(key, row);
+    }
+    const previous = state.signatures || {};
+    const selected = [];
+    for (const [key, row] of latest) {
+      if (row.owner && row.owner.toLowerCase() !== 'kim@orgiast.jp') continue;
+      if (!['open', 'stalled', 'resumed', 'waiting_user'].includes(row.status) || isNoopPromise(row.promise)) continue;
+      const due = Date.parse(row.deadlineAt || row.dueAt || '');
+      const signature = JSON.stringify([row.status, row.verdict, row.nextKim, row.nextClaude, row.resumeOutcome]);
+      const changed = previous[key] ? previous[key] !== signature : now - rowTime(row) <= WINDOW_MS;
+      if (!(due <= now + WINDOW_MS) && !changed) continue;
+      const stage = due <= now ? '期限超過' : due <= now + WINDOW_MS ? '期限間近' : row.status === 'waiting_user' ? '判断待ち' : row.status === 'stalled' ? '停止中' : row.status === 'resumed' ? '再開済み' : '進行中';
+      const rawNext = String(row.nextClaude || '達成状況を確認する');
+      const nextClaude = /--prompt-file/.test(rawNext) ? '指示書に沿って実装・テストを進め、PR の結果を報告する' : rawNext.replace(/(?:DM|Discord)(?:で|に)/gi, 'このセッションで').split('、')[0];
+      const who = kimAction(row) !== 'なし' ? `kim が ${kimAction(row)}` : `Claude が ${nextClaude}`;
+      const oneLine = value => { const text = redactSecrets(String(value || '')).replace(/\s+/g, ' '); return text.length > 130 ? text.slice(0, 129) + '…' : text; };
+      const verdict = ({check_error:'確認処理エラー',unmet:'未達',in_progress:'進行中',needs_user:'判断待ち'})[row.verdict] || row.verdict;
+      selected.push({ key, signature, priority: due <= now ? 0 : due <= now + WINDOW_MS ? 1 : 2, due: Number.isFinite(due) ? due : Infinity,
+        text: `・${oneLine(row.label || row.promise || '作業')}：${stage}${row.verdict && !['open','stalled'].includes(row.verdict) ? `（${oneLine(verdict)}）` : ''}。次: ${oneLine(who)}` });
+    }
+    const top = selected.sort((a, b) => a.priority - b.priority || a.due - b.due || a.key.localeCompare(b.key)).slice(0, 5);
+    if (!top.length) return '';
+    if (!dryRun) {
+      const next = { day, signatures: { ...previous, ...Object.fromEntries(top.map(x => [x.key, x.signature])) } };
+      const temp = file + '.tmp'; fs.writeFileSync(temp, JSON.stringify(next) + '\n'); fs.renameSync(temp, file);
+    }
+    return top.map(x => x.text).join('\n');
+  } finally { release(); }
 }
 
 if (isEntry(import.meta.url)) {

@@ -324,7 +324,7 @@ test('silentはDMとwebhookでflagsを切り替え、環境変数の既定も反
       for (const [env, silent, expected] of [['1', undefined, 4096], ['0', undefined, undefined], ['0', true, 4096], ['1', false, undefined]]) {
         process.env.NOTIFY_DISCORD_SILENT = env;
         const bodies = [];
-        await deliverKim('本文', { home: dir, token: fallback ? '' : 'test', plainJa: false,
+        await deliverKim('本文', { home: dir, userId: 'test-recipient', token: fallback ? '' : 'test', plainJa: false,
           ...(silent === undefined ? {} : { silent }),
           fetchImpl: async (url, options) => { bodies.push(JSON.parse(options.body)); return response({ json: { id: 'test' } }); },
         });

@@ -76,6 +76,9 @@ export function buildBeacon({ home = process.env.ORGIAST_HOME || os.homedir(), l
     return { id, status, reason };
   });
   const metrics = dialogMetrics(home, now);
+  let knowledgeBytes=0;
+  try { knowledgeBytes=fs.statSync(path.join(home,'.claude','knowledge','production-sales','00_INDEX.md')).size; } catch {}
+  steps.push({ id:'production-sales-knowledge', status:knowledgeBytes>0?'ok':'fail', reason:knowledgeBytes>0?`00_INDEX.md ${knowledgeBytes} bytes`:'00_INDEX.md missing or empty' });
   if (process.platform === 'win32' || metrics.stuckDialogWatcherAt) steps.push({ id: 'stuck-dialog-watch', status: metrics.stuckDialogWatcherOk && !metrics.stuckDialogs24h ? 'ok' : 'fail', reason: `stuckDialogs24h=${metrics.stuckDialogs24h}; heartbeat=${metrics.stuckDialogWatcherAt || 'missing'}` });
   const failing = steps.filter((step) => step.status === 'fail').map((step) => step.id);
   const pollAt = String(readJson(path.join(home, '.claude', '.fleet-mail-last-poll.json'), {})?.at || '');

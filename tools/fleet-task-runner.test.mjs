@@ -197,3 +197,24 @@ test('codex classification preserves metadata and removes warnings only from std
   assert.equal(classifyExecutionResult({ ...result, stdoutTail: 'Unknown permission rule' }, { exec: 'codex' }).reason, 'empty');
   assert.equal(classifyExecutionResult({ ...result, exitCode: 1 }, { exec: 'codex' }).reason, 'exit-1');
 });
+
+test('fixed selfcheck runs without Claude, persists its Markdown once and still requires prompt opt-in', async t => {
+  const { SELFCHECK_PROMPT } = await import('./lib/fleet-selfcheck-prompt.mjs');
+  const f = fixture(t); writeInbox(f.dir, 'mail-selfcheck', SELFCHECK_PROMPT);
+  fs.writeFileSync(path.join(f.dir, 'fleet-sheet.env'), 'FLEET_PROMPT_TIMEOUT_SEC=700');
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), '{"accept":["prompt"]}');
+  let calls = 0;
+  const deps = { home: f.home, id: 'mail-selfcheck', env: {},
+    resolveClaudeExe: () => assert.fail('must not require Claude'), spawnImpl: () => assert.fail('no subprocess'),
+    selfcheck: async options => { calls++; assert.equal(options.home, f.home); return { markdown: '| Gmail | 失敗 | HTTP 403 |' }; } };
+  const first = await runReadOnlyTask(deps);
+  assert.equal(first.reason, null);
+  assert.equal(first.outputTail, '| Gmail | 失敗 | HTTP 403 |');
+  assert.deepEqual(await runReadOnlyTask(deps), first);
+  assert.equal(calls, 1);
+  writeInbox(f.dir, 'mail-selfcheck-no-optin', SELFCHECK_PROMPT);
+  fs.writeFileSync(path.join(f.dir, 'fleet-agent-optin.json'), '{"accept":[]}');
+  const denied = await runReadOnlyTask({ ...deps, id: 'mail-selfcheck-no-optin' });
+  assert.match(denied.stderrTail, /未オプトイン/);
+  assert.equal(calls, 1);
+});

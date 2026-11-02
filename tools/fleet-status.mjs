@@ -33,6 +33,10 @@ export function buildFleetStatus({ pcMap, beacons = [], serverPolls = {}, now = 
   for (const [label, at] of Object.entries(serverPolls || {})) if (label && parseTime(at) !== null && !labels.includes(label)) labels.push(label);
   return labels.map((label) => {
     const beacon = byLabel.get(label) || null;
+    const registered = fleetLabels(pcMap).map(key => pcMap[key]).find(entry =>
+      [entry.hostname, ...(entry.aliases || [])].filter(Boolean).some(name =>
+        [label, beacon?.hostname, beacon?.reporterLabel].filter(Boolean).some(value =>
+          String(value).toLowerCase() === String(name).toLowerCase()))) || pcMap?.[label];
     const beaconAt = beacon ? parseTime(beacon.reportedAt) : null;
     const beaconAgeMs = beaconAt === null ? null : now - beaconAt;
     const serverAt = parseTime(serverPolls?.[label] || beacon?.serverPollAt);
@@ -45,6 +49,7 @@ export function buildFleetStatus({ pcMap, beacons = [], serverPolls = {}, now = 
     const stale = (beaconAgeMs === null || beaconAgeMs > STALE_MS) || (pollAgeMs === null || pollAgeMs > STALE_MS);
     return {
       label,
+      remoteName: registered?.remoteName || '',
       account: beacon ? String(beacon.account || '') : '',
       hostname: String(beacon?.hostname || ''),
       reporterLabel: String(beacon?.reporterLabel || ''),
@@ -84,7 +89,7 @@ export function formatFleetTable(rows, now = Date.now()) {
     const beacon = row.hasBeacon ? `${jst(Date.parse(row.beaconAt))} (${formatAge(row.beaconAgeMs)})` : 'ビーコン無し';
     const failing = row.failing.length ? row.failing.join(',') : '-';
     const poll = row.pollAt ? `${jst(Date.parse(row.pollAt))} (${formatAge(row.pollAgeMs)}) [${row.pollSource}]` : '不明';
-    return `${warn}${row.label}${row.registrationCandidate ? ' [登録候補・アカウントは自己申告]' : ''} / ${row.account || '-'} / ビーコン: ${beacon} / 失敗: ${failing} / poll: ${poll}`;
+    return `${warn}${row.label}${row.remoteName ? `（${row.remoteName}）` : ''}${row.registrationCandidate ? ' [登録候補・アカウントは自己申告]' : ''} / ${row.account || '-'} / ビーコン: ${beacon} / 失敗: ${failing} / poll: ${poll}`;
   });
   return lines.join('\n');
 }

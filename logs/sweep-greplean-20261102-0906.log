@@ -1,0 +1,21 @@
+[2026-11-02 18:05] ===== 巨大ファイル調査結果 =====
+pack size: 109.88 MiB (4 packs)
+最大 pack: pack-f085303939a4c141632c46599d4e248e99ab227a.pack (54 MiB)
+
+Top 10:
+  1. 36.8 MB - .wt/decision-watch-git/objects/pack/pack-*       ← git-in-git (worktree pack を誤 commit)
+  2. 25.9 MB - .wt/internal-audit-evidence/live/snapshot-first.json
+  3. 18.3 MB - .wt/internal-audit-evidence/live/reports/2026-10-09.md
+  4. 18.2 MB - .wt/internal-audit-evidence/live/reports/first-run.md
+  5.  7.9 MB - .landing/fine-query/x/g_*pptx/f.zip
+  6.  5.0 MB - .wt/internal-audit-evidence/live/state.json
+  7-10:      - .landing/fine-query/ の PPTX zip (計 7件)
+
+判定: git filter-repo で履歴書き換えが必要（破壊的操作、要意図的判断）
+  - .wt/ 配下: 全て過去の worktree 成果物 → 消して良い
+  - .landing/fine-query/: 企画提案 zip → 安全確認後消し込み
+  - 対策: `git filter-repo --path .wt --path .landing/fine-query --invert-paths`
+  実施には filter-repo の install と全ユーザーへの調整が必要 → 今回は調査のみ
+
+[2026-11-02 18:06] ===== worktree prune =====
+git worktree prune で 3 prunable を除去

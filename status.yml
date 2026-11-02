@@ -1,0 +1,21 @@
+state: partial
+last_run: 2026-11-02T18:06
+sweep_greplean:
+  previous:
+    - git worktree prune (何も消えず)
+    - git fsck --lost-found → 59 orphans 退避 (.orphans/ は消失、worktree リセットの影響)
+    - git gc --auto --aggressive (271.3→271.3 MiB 変化なし)
+    - 小ゴミ掃除 (.aider 2 files, __pycache__ 7 files)
+  this_run:
+    - 巨大ファイル調査完了 → logs/sweep-greplean-20261102-0906.log 参照
+    - git worktree prune (3 prunable worktrees 除去)
+    - orphans: .orphans/ は存在せず (前回以降の converge で削除された模様)
+findings:
+  large_files:
+    culprit_1: ".wt/ 配下の worktree アーティファクトの誤 commit (~103 MB)"
+    culprit_2: ".landing/fine-query/ の PPTX zip (~20 MB)"
+    action: "git filter-repo --path .wt --path .landing/fine-query --invert-paths で回収可能。ただし履歴書き換えのため全ユーザー調整が必要"
+next:
+  - filter-repo で履歴圧縮 (要: 全ユーザー調整、git filter-repo install)
+  - 通常の gc 定期実行は converge health まかせ
+converge: converge --health --quick で日常的な gc は完了済みと思われる

@@ -1934,7 +1934,7 @@ test('buildUsageRow は timeoutSecs と chain[].budgetSecs を台帳へ残す', 
   const row = buildUsageRow({
     result: { status: 124, timedOut: true, outputChars: 0, stderr: '' },
     model: 'codex-cli/gpt-5.6-sol', seconds: 1800.28, provider: 'codex',
-    timeoutSecs: 1800, preSpawnSecs: 0.28, execSecs: 1800, lane: 'default_sol', promptChars: 400, origin: 'interactive', kind: 'implement', cwd: 'C:/repo', now,
+    timeoutSecs: 1800, preSpawnSecs: 0.28, execSecs: 1800, killSecs: 15, lane: 'default_sol', promptChars: 400, origin: 'interactive', kind: 'implement', cwd: 'C:/repo', now,
   });
   assert.equal(row.timeoutSecs, 1800);
   assert.equal(row.secs, 1800.28);
@@ -1942,6 +1942,7 @@ test('buildUsageRow は timeoutSecs と chain[].budgetSecs を台帳へ残す', 
   assert.equal(row.in, 100);
   assert.equal(row.preSpawnSecs, 0.28);
   assert.equal(row.execSecs, 1800);
+  assert.equal(row.killSecs, 15);
 
   const chained = buildUsageRow({
     result: { status: 124, timedOut: true, outputChars: 0, stderr: '' }, model: 'x',
@@ -1957,6 +1958,7 @@ test('buildUsageRow は timeoutSecs が無ければ行に生やさない（旧�
   assert.equal('timeoutSecs' in row, false);
   assert.equal('preSpawnSecs' in row, false);
   assert.equal('execSecs' in row, false);
+  assert.equal('killSecs' in row, false);
   assert.equal(row.status, 'ok');
 });
 
@@ -1974,9 +1976,21 @@ test('実 CLI の timer から settle までは予算 + kill 猶予 + 小さな�
   assert.notEqual(result.status, 0);
   const row = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)[0];
   assert.equal(row.status, 'timeout');
-  assert.ok(row.execSecs >= 0.9, `timer より前に settle した: ${row.execSecs}`);
+  // H1（kill と猶予が予算に加算）: fake codex は終了しないため settle は forceTimer 経由のみ。
+  // execSecs(=spawn→settle) = timer 予算 + killSecs(=taskkill 同期 + 猶予) が数字で分離できる。
+  assert.ok(Number.isFinite(row.killSecs), 'killSecs が台帳に無い');
+  assert.ok(row.killSecs >= 0.25, `kill 猶予(0.3秒)より短い: ${row.killSecs}`);
+  assert.ok(row.killSecs <= 2.0, `taskkill+猶予が2秒超: ${row.killSecs}`);
+  assert.ok(Math.abs((row.execSecs - row.killSecs) - 1.0) <= 0.25,
+    `execSecs - killSecs が timer 予算1秒でない: execSecs=${row.execSecs} killSecs=${row.killSecs}`);
+  assert.ok(row.execSecs > 1.0, `timer より前に settle した: ${row.execSecs}`);
   assert.ok(row.execSecs <= 1.8, `予算1秒 + kill猶予0.3秒 + 許容0.5秒を超えた: ${row.execSecs}`);
+  // H2（起動前時間の混入）: preSpawnSecs(起動前) と execSecs(timer 対象) は排他で足し上げが
+  // secs と一致する。judge は execSecs で判定するため、preSpawn は超過判定に混入しない。
+  // （起動前の実秒は git rev-parse 等の同期コマンドに左右されるので上限は緩く取る）
   assert.ok(row.preSpawnSecs >= 0);
+  assert.ok(Math.abs(row.secs - (row.preSpawnSecs + row.execSecs)) <= 0.01,
+    `secs(${row.secs}) != preSpawnSecs(${row.preSpawnSecs}) + execSecs(${row.execSecs})`);
 });
 
 // 2026-10-23 実測: gemini が拒否を3回出して以後無音のまま600秒 timeout になった（打ち切り未発火3件）。

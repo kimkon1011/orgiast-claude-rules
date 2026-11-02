@@ -58,6 +58,7 @@ export function timeoutAttempts(row, { fallbackBudgetSecs = DEFAULT_CAP_SECS } =
     secs: Number(row?.secs),
     ...(Number.isFinite(Number(row?.preSpawnSecs)) ? { preSpawnSecs: Number(row.preSpawnSecs) } : {}),
     ...(Number.isFinite(Number(row?.execSecs)) ? { execSecs: Number(row.execSecs) } : {}),
+    ...(Number.isFinite(Number(row?.killSecs)) ? { killSecs: Number(row.killSecs) } : {}),
     budgetSecs: attemptBudgetSecs(row?.timeoutSecs, DEFAULT_PRIMARY_TIMEOUT_SECS),
     path: 'primary',
   }];
@@ -88,10 +89,11 @@ export function judgeTimeoutRows(rows = [], {
           const allowedTolerance = toleranceSecs + (hasExecTiming ? DEFAULT_TIMEOUT_KILL_GRACE_SECS : 0);
           return measuredSecs > a.budgetSecs + allowedTolerance;
         })
-        .map(({ backend, model, secs, budgetSecs, path, preSpawnSecs, execSecs }) => ({
+        .map(({ backend, model, secs, budgetSecs, path, preSpawnSecs, execSecs, killSecs }) => ({
           backend, model, secs, budgetSecs, path,
           ...(Number.isFinite(preSpawnSecs) ? { preSpawnSecs } : {}),
           ...(Number.isFinite(execSecs) ? { execSecs } : {}),
+          ...(Number.isFinite(killSecs) ? { killSecs } : {}),
         }));
       return {
         t: Number.isFinite(at) ? new Date(at).toISOString() : null,

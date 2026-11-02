@@ -141,6 +141,26 @@ test('主経路の新形式は execSecs で強制打ち切りの超過を判定�
   assert.equal(report.events[0].attempts[0].preSpawnSecs, 15.786);
 });
 
+test('新形式は killSecs も attempts へ渡す（H1 の弁別材料）', () => {
+  const report = judgeTimeoutRows([{
+    t: '2026-11-01T16:18:49Z', provider: 'codex', status: 'timeout', timeoutSecs: 210,
+    secs: 226.786, execSecs: 211, preSpawnSecs: 15.786, killSecs: 10.4,
+  }], { since: SINCE });
+  assert.equal(report.events[0].attempts[0].killSecs, 10.4);
+  assert.equal(report.overCapAttempts.length, 0);
+});
+
+test('H3: secs が予算超でも execSecs が予算+kill 猶予内なら誤検出（新形式は救済）', () => {
+  // secs(=preSpawn+execSecs) は 225 秒で予算 210+許容5 を超えるが、実際に timer が掛かった
+  // execSecs は 210.9 秒で kill 猶予(5)内。H2 の preSpawn 混入が過大計上していた旧形式と対比する。
+  const report = judgeTimeoutRows([{
+    t: '2026-11-01T16:18:49Z', provider: 'codex', status: 'timeout', timeoutSecs: 210,
+    secs: 225.0, execSecs: 210.9, preSpawnSecs: 14.1, killSecs: 0.9,
+  }], { since: SINCE });
+  assert.equal(report.verdict, 'waste-within-cap');
+  assert.equal(report.overCapAttempts[0]?.execSecs, undefined);
+});
+
 test('主経路の旧形式は従来どおり secs と許容 5 秒で超過になる', () => {
   const report = judgeTimeoutRows([{
     t: '2026-11-01T16:18:49Z', provider: 'codex', status: 'timeout', timeoutSecs: 210,

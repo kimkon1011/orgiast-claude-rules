@@ -752,7 +752,7 @@ export function wslCodexLaunchPlan({ distroFound, codexPresent, versionOk, insta
 // provider=codex / secs=1800.28 / chain 無し = 既定 --timeout 1800 秒を予定どおり使い切った行）。
 export function buildUsageRow({
   result, model, seconds, provider = 'codex', attempts = 1, chain = null,
-  timeoutSecs = null, preSpawnSecs = null, execSecs = null,
+  timeoutSecs = null, preSpawnSecs = null, execSecs = null, killSecs = null,
   lane = null, escalated = false, promptChars = 0,
   origin = null, kind = null, cwd = null, reason = '', now = new Date()
 } = {}) {
@@ -781,6 +781,7 @@ export function buildUsageRow({
     ...(Number.isFinite(timeoutSecs) && timeoutSecs > 0 ? { timeoutSecs } : {}),
     ...(Number.isFinite(preSpawnSecs) && preSpawnSecs >= 0 ? { preSpawnSecs: Number(preSpawnSecs.toFixed(3)) } : {}),
     ...(Number.isFinite(execSecs) && execSecs >= 0 ? { execSecs: Number(execSecs.toFixed(3)) } : {}),
+    ...(Number.isFinite(killSecs) && killSecs >= 0 ? { killSecs: Number(killSecs.toFixed(3)) } : {}),
     secs: Number(seconds.toFixed(3))
   };
 }
@@ -1044,14 +1045,18 @@ function execute(command, commandArgs, options = {}) {
     // 待ったまま眠り続ける(2026-08-26 に 1日00:57 hang した実害)。
     const child = spawn(command, commandArgs, { ...spawnOptions, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     const spawnedAtMs = Date.now();
+    // timer 発火時の時刻。timeout 行の secs に「同期 taskkill + forceTimer 猶予」がどれだけ
+    // 加算されたかを台帳で区別するため（timeout_waste_exceeds_cap の H1 弁別、2026-11-02）。
+    let timerFiredAtMs = null;
     let settled = false, forceTimer = null;
     const settle = (value) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer); clearTimeout(forceTimer); clearInterval(stallTimer);
-      resolve({ ...value, spawnedAtMs });
+      resolve({ ...value, spawnedAtMs, timerFiredAtMs });
     };
     const timer = setTimeout(() => {
+      timerFiredAtMs = Date.now();
       timedOut = true;
       console.error(`\n⏱ ${command} が ${callTimeoutSeconds} 秒で応答を終えなかったので停止しました。--timeout で延長できます`);
       killProcessTree(child);
@@ -1127,7 +1132,7 @@ function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 
     const row = buildUsageRow({
       result, model: modelName, seconds, provider, attempts, chain,
       timeoutSecs: timeoutSeconds, lane: selectedLane.reason, escalated,
-      preSpawnSecs: timing?.preSpawnSecs, execSecs: timing?.execSecs,
+      preSpawnSecs: timing?.preSpawnSecs, execSecs: timing?.execSecs, killSecs: timing?.killSecs,
       promptChars: prompt.length, origin, kind: taskKind, cwd,
       reason: ledgerReason
     });
@@ -1279,7 +1284,14 @@ async function executeCodex() {
     const settledAtMs = Date.now();
     const elapsed = (settledAtMs - attemptStarted) / 1000;
     timing = Number.isFinite(result?.spawnedAtMs)
-      ? { preSpawnSecs: (result.spawnedAtMs - attemptStarted) / 1000, execSecs: (settledAtMs - result.spawnedAtMs) / 1000 }
+      ? {
+          preSpawnSecs: (result.spawnedAtMs - attemptStarted) / 1000,
+          execSecs: (settledAtMs - result.spawnedAtMs) / 1000,
+          // timer 発火→settle の実秒（同期 taskkill + forceTimer 猶予）。timeout 行だけ値を持つ。
+          killSecs: result?.timedOut && Number.isFinite(result?.timerFiredAtMs)
+            ? (settledAtMs - result.timerFiredAtMs) / 1000
+            : null,
+        }
       : null;
     seconds += elapsed;
     attempts = attempt;

@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { matchCase, exclusion, processPage, run, SOURCES, createDriveSink, parseArgs } from './comms-hub-sync.mjs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { matchCase, exclusion, processPage, run, SOURCES, createDriveSink, parseArgs, publishedText, parseEntries, collectSource, render, parseCaseRows } from './comms-hub-sync.mjs';
 const config = JSON.parse(fs.readFileSync(new URL('../config/comms-hub.json', import.meta.url)));
 const cases = [{ id: '261101ABC', name: '展示会Alpha', client: '共通顧客' }, { id: 'C1234', name: '制作Beta', client: '共通顧客' }];
 const message = { source: 'gmail-kim', id: 'same', ts: '2026-11-01T02:00:00.000Z', subject: '261101ABC 見積', text: '業務連絡', sender: 'staff@example.test' };
@@ -19,45 +22,99 @@ test('exclusions override case match; uncertain personal content never published
   assert.equal(exclusion({...message,subject:'見積依頼'},config,null),null);
 });
 function mockDrive() {
-  const files = new Map(); let seq=0, writes=0, failAfterInsert=false;
+  const files = new Map(); let seq=0, writes=0, failAfterUpload=false;
   const json = (x, status=200) => new Response(JSON.stringify(x), {status,headers:{'Content-Type':'application/json'}});
   const fetchImpl = async (url, init={}) => {
     const u = new URL(url), method=init.method || 'GET';
+    assert.notEqual(u.hostname, 'docs.googleapis.com', 'Docs API must never be used');
     if (u.pathname.includes('/permissions')) return json(method==='GET'?{permissions:[]}:{id:'permission'});
-    if (u.hostname==='docs.googleapis.com') {
-      const id=u.pathname.split('/').at(-1).split(':')[0], f=files.get(id);
-      if (method==='GET') return json({revisionId:'rev',body:{content:[{endIndex:f.text.length+1,paragraph:{elements:[{textRun:{content:f.text}}]}}]}});
-      const b=JSON.parse(init.body);
-      for(const r of b.requests) {
-        if(r.deleteContentRange) f.text='\n';
-        if(r.insertText) {const i=r.insertText.location.index-1; f.text=f.text.slice(0,i)+r.insertText.text+f.text.slice(i); writes++;}
-      }
-      if(failAfterInsert) {failAfterInsert=false; throw new Error('response lost');}
-      return json({});
+    if(method==='GET' && u.pathname.endsWith('/files')) {
+      const q=u.searchParams.get('q'), name=/name='([^']+)'/.exec(q)?.[1];
+      return json({files:[...files].filter(([,f])=>f.name===name).map(([id])=>({id}))});
     }
-    if(method==='GET' && u.pathname.endsWith('/files')) return json({files:[]});
+    if(method==='GET') {
+      const id=u.pathname.split('/')[4], f=files.get(id);
+      if(u.pathname.endsWith('/export')) return new Response(f.text);
+      if(u.searchParams.get('alt')==='media') return json(JSON.parse(f.text));
+    }
     if(method==='POST') {
-      const id=`doc${++seq}`; files.set(id,{text:'\n'}); return json({id});
+      let metadata, text='';
+      if(u.searchParams.get('uploadType')==='multipart') {
+        const parts=init.body.split(/--hub_[^\r\n]+/);
+        metadata=JSON.parse(parts[1].split('\r\n\r\n')[1].trim());
+        text=parts[2].split('\r\n\r\n').slice(1).join('\r\n\r\n').replace(/\r\n$/, '');
+        assert.equal(metadata.mimeType,'application/vnd.google-apps.document');
+        assert.match(parts[2],/text\/markdown/); writes++;
+      } else metadata=JSON.parse(init.body);
+      const id=`doc${++seq}`; files.set(id,{...metadata,text});
+      if(failAfterUpload && metadata.mimeType==='application/vnd.google-apps.document') {failAfterUpload=false;throw Error('response lost');}
+      return json({id});
+    }
+    if(method==='PATCH') {
+      assert.equal(u.searchParams.get('uploadType'),'media');
+      const id=u.pathname.split('/').at(-1),f=files.get(id);
+      f.text=init.body;writes++;
+      if(f.mimeType==='application/vnd.google-apps.document') assert.match(init.headers['Content-Type'],/text\/markdown/);
+      if(failAfterUpload) {failAfterUpload=false;throw Error('response lost');}
+      return json({id});
     }
     throw new Error('unexpected mock route '+url);
   };
-  return {fetchImpl,files,get writes(){return writes;}, loseNext(){failAfterInsert=true;}};
+  return {fetchImpl,files,get writes(){return writes;}, loseNext(){failAfterUpload=true;}};
 }
-test('Docs API mock: retries after lost response, source-separated IDs, late arrivals sorted', async () => {
-  const api=mockDrive(), state={sources:{'gmail-kim':{},'gmail-seisaku':{}},cases:{},files:{daily:'daily',cases:'cases'}};
-  const sink=createDriveSink({token:'mock',state,save(){},fetchImpl:api.fetchImpl});
+function fixture(t) {
+  const storeDir=fs.mkdtempSync(path.join(os.tmpdir(),'hub-store-'));
+  t.after(()=>fs.rmSync(storeDir,{recursive:true,force:true}));
+  const api=mockDrive(),state={sources:{'gmail-kim':{},'gmail-seisaku':{}},cases:{},files:{daily:'daily',cases:'cases',unassigned:'unassigned'},rootId:'root'};
+  const make=()=>createDriveSink({token:'mock',state,storeDir,now:Date.parse('2026-11-02'),save(){},fetchImpl:api.fetchImpl});
+  return {api,state,storeDir,make};
+}
+test('Drive only: durable dedup, lost response recovery, unchanged hash, chronological order',async t=>{
+  const {api,state,storeDir,make}=fixture(t);let sink=make();
   const args={source:message.source,page:{messages:[message],cursor:{since:5}},state,cases,config,sink,live:true};
-  api.loseNext(); await assert.rejects(processPage(args),/response lost/);
-  assert.equal(state.sources['gmail-kim'].cursor,undefined);
-  await processPage(args); const writes=api.writes;
-  await processPage(args); assert.equal(api.writes,writes);
-  await processPage({...args,source:'gmail-seisaku',page:{messages:[{...message,source:'gmail-seisaku'}],cursor:{since:5}}});
-  assert.equal(api.writes,writes+2);
-  await processPage({...args,page:{messages:[{...message,id:'old',ts:'2026-11-01T01:00:00.000Z'}],cursor:{since:6}}});
+  await processPage(args);
+  assert.equal(api.writes,0,'append commits locally before network publication');
+  api.loseNext();await assert.rejects(sink.finish(),/response lost/);
+  assert.match(fs.readFileSync(path.join(storeDir,'cases/261101ABC.md'),'utf8'),/業務連絡/);
+  sink=make();await sink.finish();
+  const writes=api.writes;await processPage({...args,sink});await sink.finish();assert.equal(api.writes,writes);
+  await processPage({...args,sink,source:'gmail-seisaku',page:{messages:[{...message,source:'gmail-seisaku'}],cursor:{since:5}}});
+  await processPage({...args,sink,page:{messages:[{...message,id:'old',ts:'2026-11-01T01:00:00.000Z'}],cursor:{since:6}}});
+  await sink.finish();
   const daily=api.files.get(state.files['daily/2026-11-01']).text;
   const caseText=api.files.get(state.files['cases/261101ABC']).text;
+  assert.equal(parseEntries(caseText).length,3);
   assert.ok(daily.indexOf('01:00:00.000Z') < daily.indexOf('02:00:00.000Z'));
   assert.ok(caseText.indexOf('02:00:00.000Z') < caseText.indexOf('01:00:00.000Z'));
+  const index=JSON.parse(api.files.get(state.files.index).text);
+  assert.equal(index.cases['261101ABC'].url,`https://docs.google.com/a/orgiast.jp/document/d/${state.files['cases/261101ABC']}/edit`);
+});
+test('case publication caps age and characters but keeps local complete text',async t=>{
+  const {api,state,storeDir,make}=fixture(t),sink=make();
+  const key='cases/261101ABC', marker=n=>crypto.createHash('sha256').update(n).digest('hex');
+  await sink.append(key,'case',marker('old'),'2026-07-01T00:00:00.000Z','old content');
+  await sink.append(key,'case',marker('new'),'2026-11-01T00:00:00.000Z','新'.repeat(210000));
+  await sink.finish();
+  const local=fs.readFileSync(path.join(storeDir,key+'.md'),'utf8'),remote=api.files.get(state.files[key]).text;
+  assert.ok(local.length>210000);assert.match(local,/old content/);
+  assert.equal(remote.length,200000);assert.ok(!remote.includes('old content'));
+  assert.equal(publishedText('daily/x',local),local);
+  assert.ok(render({...message,text:'a'.repeat(110000)},true).length>110000);
+  assert.equal(publishedText(key,local,Date.parse('2027-04-01')),'');
+});
+test('existing Doc migration uses Drive export and preserves prior entries',async t=>{
+ const {api,state,make}=fixture(t),sink=make(),key='daily/2026-11-01';
+ state.files[key]='old';api.files.set('old',{name:'2026-11-01',mimeType:'application/vnd.google-apps.document',text:`[hub:${'a'.repeat(64)}:2026-11-01T00:00:00.000Z]\nprior\n\n`});
+ await sink.append(key,'2026-11-01','b'.repeat(64),message.ts,'new');await sink.finish();
+ assert.equal(parseEntries(api.files.get('old').text).length,2);
+});
+test('partial local commit is replayable without duplicate blocks',async t=>{
+ const {state,storeDir,make}=fixture(t),sink=make();
+ const args={source:message.source,page:{messages:[message],cursor:{since:5}},state,cases,config,live:true};
+ await assert.rejects(processPage({...args,sink:{append:async(...a)=>{if(a[0].startsWith('cases/'))throw Error('disk full');return sink.append(...a);}}}),/disk full/);
+ assert.equal(state.sources[message.source].cursor,undefined);
+ await processPage({...args,sink});
+ assert.equal(parseEntries(fs.readFileSync(path.join(storeDir,'daily/2026-11-01.md'),'utf8')).length,1);
 });
 test('partial failure is isolated, all failures nonzero, dry-run never writes',async()=>{
   let writes=0;
@@ -117,4 +174,57 @@ test('publication failure preserves source results and creation counts in report
  const report=await run({live:true},{config,cases,state,save(){},collect:async()=>({messages:[],cursor:{since:1}}),sink:{createdDocs:2,async init(){},async finish(){throw Error('API HTTP 403 SERVICE_DISABLED');}}});
  assert.equal(report.exitCode,1);assert.equal(report.createdDocs,2);assert.equal(report.rootId,'root');
  assert.equal(Object.keys(report.sources).length,6);assert.match(state.publishError,/SERVICE_DISABLED/);
+});
+
+test('tl;dv missing transcript keeps metadata, continues page, records error and later upgrades',async t=>{
+ const {state,storeDir,make}=fixture(t);state.sources.tldv={};const sink=make();
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'hub-tldv-'));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+ fs.mkdirSync(path.join(home,'.claude'));fs.writeFileSync(path.join(home,'.claude','tldv.env'),'TLDV_API_KEY=mock');
+ let repaired=false;
+ const ctx={config,home,since:0,until:Date.now(),state:state.sources.tldv,fetchImpl:async url=>{
+  if(!url.includes('/transcript'))return Response.json({results:[{id:'a',happenedAt:message.ts,name:message.subject,url:'https://example.test/a'},{id:'b',happenedAt:message.ts,name:message.subject}],pages:1});
+  return url.includes('/a/')&&!repaired?Response.json({error:{}},{status:404}):Response.json({data:[{speaker:'staff',text:'recovered transcript'}]});
+ }};
+ const page=await collectSource('tldv',ctx);assert.equal(page.messages.length,2);assert.equal(page.messages[0].text,'');assert.match(page.messages[0].transcriptError,/404/);
+ const args={source:'tldv',state,cases,config,sink,live:true};await processPage({...args,page});
+ assert.match(state.sources.tldv.transcriptFailures.a.reason,/404/);
+ repaired=true;await processPage({...args,page:await collectSource('tldv',ctx)});
+ assert.deepEqual(state.sources.tldv.transcriptFailures,{});
+ const text=fs.readFileSync(path.join(storeDir,'cases/261101ABC.md'),'utf8');
+ assert.equal(parseEntries(text).length,2);assert.equal(text.match(/recovered transcript/g).length,2);
+});
+test('index distinguishes partial transcript failure from full success',async()=>{
+ const state={sources:{plaud:{lastSuccess:'2026-10-01T00:00:00.000Z'}},cases:{}};
+ const report=await run({live:true},{config,cases,state,save(){},collect:async source=>({messages:source==='plaud'?[{...message,source,transcriptError:'artifact missing',text:''}]:[],cursor:{since:1}}),sink:{createdDocs:0,async init(){},async append(){},async finish(){return {};}}});
+ assert.equal(report.exitCode,0);assert.equal(state.sources.plaud.lastSuccess,'2026-10-01T00:00:00.000Z');assert.match(state.sources.plaud.error,/artifact missing/);
+ assert.ok(state.sources.tldv.lastSuccess);
+});
+
+test('Plaud isolates missing, failed and empty transcripts while retaining metadata',async t=>{
+ const {collectPlaudForHub}=await import('./plaud-to-tldv.mjs');
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'hub-plaud-fallback-'));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+ const sessionFile=path.join(home,'.claude','plaud-to-tldv-state.json');fs.mkdirSync(path.dirname(sessionFile));
+ const exp=Math.floor(Date.now()/1000)+3600;
+ const ut=`a.${Buffer.from(JSON.stringify({exp,region:'aws:us-west-2'})).toString('base64url')}.z`;
+ fs.writeFileSync(sessionFile,JSON.stringify({session:{ut,workspaceId:'workspace',wt:'mock',wtExp:exp}}));
+ const now=Date.now();
+ const page=await collectPlaudForHub({home,since:now-86400000,until:now,config,fetchImpl:async url=>{
+  if(url.includes('/file/simple/')) return Response.json({status:0,data_file_total:4,data_file_list:['missing','denied','empty','ok'].map(id=>({id,filename:'見積会議 '+id,start_time:Math.floor((now-1000)/1000)}))});
+  if(url.includes('/file/detail/')) {const id=url.split('/').at(-1);return Response.json({status:0,data:{content_list:id==='missing'?[]:[{data_type:'transaction',data_link:`https://example.test/${id}`}]}});}
+  if(url.endsWith('/denied'))return new Response('',{status:403});
+  return Response.json(url.endsWith('/empty')?[{speaker:'staff',content:''}]:[{speaker:'staff',content:'業務連絡'}]);
+ }});
+ assert.equal(page.messages.length,4);assert.equal(page.messages.filter(m=>m.transcriptError).length,3);
+ assert.equal(page.messages[0].text,'');assert.match(page.messages[0].subject,/見積会議/);assert.ok(page.messages[0].url);
+ assert.equal(page.messages[3].text,'staff: 業務連絡');assert.equal(page.cursor.since,now);
+});
+
+test('case sheet resolves real I/J/K headers and deduplicates repeated case IDs',()=>{
+ const headers=['','予算項目','顧客名','実施計画URL','見積書URL','範囲','請求カウント','一覧カウント','ｺｰﾄﾞ','クライアント名','案件名'];
+ const row=['第21期4Q','アプローチリスト','顧客の別名','','','','','','261101ABC','顧客本名','展示会Alpha'];
+ const parsed=parseCaseRows([headers,row,row]);assert.equal(parsed.length,1);
+ assert.deepEqual(parsed[0],{id:'261101ABC',client:'顧客本名',name:'展示会Alpha'});
+ assert.equal(matchCase(message,parsed,config).id,'261101ABC');
+ assert.throws(()=>parseCaseRows([['wrong'],['261101ABC']]),/headers/);
+ assert.throws(()=>parseCaseRows([headers,[]]),/no valid/);
 });

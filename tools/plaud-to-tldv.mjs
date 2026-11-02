@@ -662,7 +662,7 @@ if (isEntry(import.meta.url)) {
 
 // Read-only hub adapter: reuse authentication, never import audio, notify, or
 // persist the existing Plaud session from this collector.
-export async function collectPlaudForHub({ home, since, until, cursor = {}, config, fetchImpl }) {
+export async function collectPlaudForHub({ home, since, until, cursor = {}, config, fetchImpl, state: sourceState = {} }) {
   const file = path.join(home, '.claude', 'plaud-to-tldv-state.json');
   let raw = {};
   try { raw = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
@@ -683,26 +683,32 @@ export async function collectPlaudForHub({ home, since, until, cursor = {}, conf
   if (!Array.isArray(body.data_file_list)) throw new Error('Plaud invalid listing');
   const rows = body.data_file_list, messages = [];
   const end = cursor.end || until;
+  const pending = Object.values(sourceState.transcriptFailures || {}).sort((a, b) => (a.lastAttempt || '').localeCompare(b.lastAttempt || '')).slice(0, Math.max(1, Math.floor(limit / 2)));
+  const records = new Map(pending.map(r => [r.id, { id: r.id, filename: r.title, start_time: Date.parse(r.ts) / 1000 }]));
   for (const r of rows) {
     const ts = epochToIso(r.start_time);
-    if (!ts || Date.parse(ts) < since || Date.parse(ts) > end) continue;
-    // Only read existing transcript artifacts. Never ask Plaud to start a task.
-    const { body: detail } = await client.call(`/file/detail/${encodeURIComponent(r.id)}`, { headers: authHeaders(state.session.wt) }, 'hub detail');
-    const link = detail.data?.content_list?.find(x => x.data_type === 'transaction' && x.data_link)?.data_link;
-    let segments;
-    if (link && /^https:\/\//.test(link)) {
-      // Signed media link: never attach the Plaud bearer token to this request.
-      const response = await fetchImpl(link);
+    if (ts && Date.parse(ts) >= since && Date.parse(ts) <= end) records.set(r.id, r);
+  }
+  for (const r of records.values()) {
+    const m = { source: 'plaud', id: r.id, ts: epochToIso(r.start_time), subject: r.filename || '', sender: 'Plaud', text: '', url: 'https://web.plaud.ai/' };
+    try {
+      // Only read existing artifacts. Never request transcription or audio import.
+      const { body: detail } = await client.call(`/file/detail/${encodeURIComponent(r.id)}`, { headers: authHeaders(state.session.wt) }, 'hub detail');
+      const link = detail.data?.content_list?.find(x => x.data_type === 'transaction' && x.data_link)?.data_link;
+      if (!link || !/^https:\/\//.test(link)) throw new Error('Plaud transcript not ready (artifact missing)');
+      const response = await fetchImpl(link); // Never attach bearer tokens to signed links.
       if (!response.ok) throw new Error(`Plaud transcript download HTTP ${response.status}`);
       const buffer = Buffer.from(await response.arrayBuffer());
       let raw;
       try { raw = gunzipSync(buffer, { maxOutputLength: 10000000 }).toString('utf8'); } catch { raw = buffer.toString('utf8'); }
-      const decoded = JSON.parse(raw);
-      segments = Array.isArray(decoded) ? decoded : Object.values(decoded);
-    }
-    const text = Array.isArray(segments) ? segments.map(x => `${x.speaker || x.original_speaker || ''}: ${x.content || x.text || ''}`).join('\n') : '';
-    if (!text.trim()) throw new Error('Plaud transcript not ready or unsupported schema');
-    messages.push({ source: 'plaud', id: r.id, ts, subject: r.filename || '', sender: 'Plaud', text, url: `https://web.plaud.ai/` });
+      let decoded;
+      try { decoded = JSON.parse(raw); } catch { throw new Error('Plaud transcript invalid JSON'); }
+      const segments = Array.isArray(decoded) ? decoded : decoded && typeof decoded === 'object' ? Object.values(decoded) : [];
+      const usable = segments.filter(x => x && typeof (x.content || x.text) === 'string' && (x.content || x.text).trim());
+      if (!usable.length) throw new Error('Plaud transcript not ready or unsupported schema');
+      m.text = usable.map(x => `${x.speaker || x.original_speaker || ''}: ${x.content || x.text}`).join('\n');
+    } catch (e) { m.transcriptError = String(e.message).slice(0, 300); }
+    messages.push(m);
   }
   const more = rows.length === limit && skip + rows.length < Number(body.data_file_total || Infinity) && !rows.some(r => Date.parse(epochToIso(r.start_time)) < since);
   return { messages, cursor: more ? { since, end, skip: skip + rows.length } : { since: end } };

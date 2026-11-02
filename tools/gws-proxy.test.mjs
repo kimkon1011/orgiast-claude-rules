@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {gwsFetch,proxyCredential,GWS_MARKER,channelRequest} from './lib/gws-proxy.mjs';
 import {collectLineRows,syncLineHistory} from './line-history-sync.mjs';
+import {syncKnowledge} from './onboarding-sync.mjs';
 test('missing key routes only fixed account and approved scopes without token relay',()=>{
  assert.equal(proxyCredential({keyPath:'nonexistent',impersonate:'seisaku-team@orgiast.jp',scope:'https://www.googleapis.com/auth/drive'}),GWS_MARKER);
  assert.throws(()=>proxyCredential({keyPath:'nonexistent',impersonate:'kim@orgiast.jp',scope:'https://www.googleapis.com/auth/drive'}));
@@ -35,4 +36,13 @@ test('LINE sync reads both existing formats, deduplicates by ID and appends RAW 
  }});
  const append=calls.find(([url])=>url.includes(':append'));assert.ok(append[0].includes('valueInputOption=RAW'));assert.equal(JSON.parse(append[1].body).values.length,1);
  calls.length=0;await syncLineHistory({home,config:{sheetId:'sheet'},dryRun:true,getToken:async()=> 'secret',fetchImpl:async(url,opts)=>{calls.push(opts);return Response.json({values:[['id']]});}});assert.ok(calls.every(x=>!x.method));
+});
+
+test('knowledge success marker cannot hide a missing index; existing index retains daily throttle',async t=>{
+ const home=fs.mkdtempSync(path.join(os.tmpdir(),'knowledge-repair-'));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+ fs.mkdirSync(path.join(home,'.claude'),{recursive:true});fs.writeFileSync(path.join(home,'.claude/.knowledge-sync-state.json'),JSON.stringify({last:new Date().toISOString()}));
+ let installs=0;const options={targetHome:home,forced:false,preview:false,emit:()=>{},install:async()=>{installs++;return{updated:1};}};
+ await syncKnowledge(options);assert.equal(installs,1);
+ const dir=path.join(home,'.claude/knowledge/production-sales');fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'00_INDEX.md'),'index');
+ await syncKnowledge(options);assert.equal(installs,1);
 });

@@ -15,6 +15,7 @@ export async function run(args=process.argv.slice(2), request=channelRequest) {
  const text=fs.readFileSync(value('--body-file'),'utf8');
  const contacts=await request('line',{query:{mode:'contacts'}}), query=value('--to');
  const matches=contacts.contacts.filter(c=>c.active&&(c.id===query||c.name===query));
+ if(!matches.length && /^[UC][a-f0-9]{32}$/i.test(query)) matches.push({id:query,name:'LINE ID指定'});
  if(matches.length!==1)throw Error('LINE宛先を一意に確認できません');
  const retryKey=value('--retry-key')||randomUUID();
  console.log(`宛先: ${matches[0].name} (${matches[0].id})\n本文:\n${text}\n再試行キー: ${retryKey}`);

@@ -577,7 +577,7 @@ export function sessionDigest({ home = process.env.ORGIAST_HOME || os.homedir(),
       if (!(due <= now + WINDOW_MS) && !changed) continue;
       const stage = due <= now ? '期限超過' : due <= now + WINDOW_MS ? '期限間近' : row.status === 'waiting_user' ? '判断待ち' : row.status === 'stalled' ? '停止中' : row.status === 'resumed' ? '再開済み' : '進行中';
       const rawNext = String(row.nextClaude || '達成状況を確認する');
-      const nextClaude = /--prompt-file/.test(rawNext) ? '指示書に沿って実装・テストを進め、PR の結果を報告する' : rawNext.replace(/(?:DM|Discord)(?:で|に)/gi, 'このセッションで').split('、')[0];
+      const nextClaude = /--prompt-file/.test(rawNext) ? '指示書に沿って実装・テストを進め、PR の結果を報告する' : rawNext.replace(/(?:DM|Discord)(?:で|に)/gi, 'このセッションで');
       const who = kimAction(row) !== 'なし' ? `kim が ${kimAction(row)}` : `Claude が ${nextClaude}`;
       const oneLine = value => { const text = redactSecrets(String(value || '')).replace(/\s+/g, ' '); return text.length > 130 ? text.slice(0, 129) + '…' : text; };
       const verdict = ({check_error:'確認処理エラー',unmet:'未達',in_progress:'進行中',needs_user:'判断待ち'})[row.verdict] || row.verdict;

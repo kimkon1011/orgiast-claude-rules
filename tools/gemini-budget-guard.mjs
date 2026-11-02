@@ -18,6 +18,7 @@ export function summarizeGeminiBudget(rows, { now = new Date(), budgetJpy = 5000
     const time = Date.parse(row.t);
     if (!Number.isFinite(time)) { invalidRows++; continue; }
     if (geminiMonth(time) !== month || time > new Date(now).getTime()) continue;
+    if (/^http_[45]\d\d$/.test(row.status)) continue;
     totalCalls++;
     const known = typeof row.usd === 'number' && Number.isFinite(row.usd) && row.usd >= 0;
     if (known) spentUsd += row.usd;

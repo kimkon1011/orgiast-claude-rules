@@ -1,6 +1,9 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/lib/fleet-selfcheck-prompt.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "固定の読み取り専用自己点検と受信runnerの実行時依存。通常のconverge配布に含める"},
+    {"path": "tools/fleet-task-runner.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "固定の読み取り専用自己点検と受信runnerの実行時依存。通常のconverge配布に含める"},
+    {"path": "tools/fleet-selfcheck.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "固定の読み取り専用自己点検と受信runnerの実行時依存。通常のconverge配布に含める"},
     {"path": "tools/register-daytrip-detect-task.ps1", "scope": "kim-only", "step": "task:daytrip-detect", "reason": "kim個人の出張候補。LINE受信ホストだけで登録"},
     {"path": "tools/register-daytrip-detect-task.mjs", "scope": "kim-only", "step": "task:daytrip-detect", "reason": "convergeからkim-PC用PowerShell登録をEnsureで呼ぶ"},
     {"path": "tools/lib/share-secrets.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "memory-share と案件会話保存で共通の秘密情報除去"},

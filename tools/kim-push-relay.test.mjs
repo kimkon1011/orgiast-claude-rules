@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runRelay, urgentBody, digestBody, isUrgent } from './kim-push-relay.mjs';
+import { runRelay, urgentBody, digestBody, isUrgent, triageUrgent, main } from './kim-push-relay.mjs';
 import { KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 const time = '2026-11-01T00:00:00Z'; // JST 09:00
 const msg = (id, content, author = 'bot') => ({ id: String(id), content, author: { id: author }, timestamp: time });
@@ -14,7 +14,7 @@ function setup(t, state = { channelId: 'dm', lastMessageId: '1' }) {
   const file = path.join(dir, 'kim-push-relay.json');
   if (state) fs.writeFileSync(file, JSON.stringify(state));
   const sent = [], alerts = [], requests = [];
-  const deps = { home, now: Date.parse(time), resolveDiscordBotToken: () => 'test-token',
+  const deps = { askLlm: async () => { throw new Error('LLM unavailable in legacy tests'); }, home, now: Date.parse(time), resolveDiscordBotToken: () => 'test-token',
     fetch: async (url, options) => { requests.push({ url, options }); return { ok: true, json: async () => url.includes('/users/') ? { id: 'dm' } : [] }; },
     pushKim: async body => { sent.push(body); return { ok: true }; },
     deliverKim: async (body, options) => { alerts.push({ body, options }); return { delivered: 'dm' }; }, log: () => {},
@@ -142,4 +142,85 @@ test('100件を超える未読を取得しpendingは最新500件に制限する'
   await runRelay(s.deps);
   assert.equal(pages, 7); assert.equal(s.read().lastMessageId, '601');
   assert.equal(s.read().pending.length, 500); assert.equal(s.read().pending[0].id, '102');
+});
+
+const decisionRows = messages => JSON.stringify(messages.map(m => ({ id: m.id, needsKim: false, what: '', action: '', deadline: '' })));
+test('自動対処・集計報告は要対応からpendingへ移し送信回数を増やさない', async t => {
+  const s = setup(t); s.deps.now = Date.parse('2026-10-31T22:30:00Z');
+  s.messages([
+    msg(2, '⚠️ LINE取り込みの監視…異常を検出\n自動復旧: 再起動'),
+    msg(3, '🚨 夜間KPI\n対処: 原因調査と修復を自動起票しました'),
+    msg(4, 'Gemini 月次予算警告\n自動起票'),
+    msg(5, '【kim-PC の自動進行】\nあなたの判断待ち 62件'),
+  ]);
+  s.deps.askLlm = decisionRows;
+  const result = await runRelay(s.deps);
+  assert.equal(result.ok, true); assert.equal(s.sent.length, 0);
+  assert.equal(s.read().pending.length, 4); assert.equal(s.read().urgentQueue.length, 0);
+  assert.equal(s.read().pushLog.length, 0);
+});
+test('具体的操作・期限・原文リンクを表示し全文は表示しない', async t => {
+  const s = setup(t);
+  const pr = 'https://github.com/kimkon1011/aujust-sales-automation/pull/185';
+  const originals = [msg(2, `【[不具合] 案件重複】あなたの承認待ちで 3 日止まっています。PR を確認してください。${pr}`),
+    msg(3, '旧TETSUKO成長ループの提案生成を止めてL1計測に差し替えてよいですか？【判断依頼】 はい/いいえ 期限: 2026-11-04 09:05Z 回答はこのチャットの一言でOK')];
+  s.messages(originals);
+  s.deps.askLlm = async () => JSON.stringify([
+    { id: '2', needsKim: true, what: '案件重複の不具合修正が承認待ち（3日）', action: `PR を開いて内容を確認 ${pr}`, deadline: '' },
+    { id: '3', needsKim: true, what: 'TETSUKO 提案生成を L1 計測に切り替えるか', action: 'Discord の Bot との DM に「はい」か「いいえ」と返信', deadline: '2026-11-04 09:05Z' },
+  ]);
+  await runRelay(s.deps);
+  assert.equal(s.sent.length, 1);
+  const body = s.sent[0];
+  assert.match(body, /^【やること 2件】/);
+  assert.match(body, /→ PR を開いて内容を確認/);
+  assert.match(body, /→ Discord の Bot との DM に「はい」か「いいえ」と返信/);
+  assert.match(body, /期限: 11\/4 18:05（JST）/);
+  for (const m of originals) {
+    assert.ok(body.includes(`元の連絡: https://discord.com/channels/@me/dm/${m.id}`));
+    assert.ok(!body.includes(m.content));
+  }
+  assert.equal(body.split(pr).length - 1, 1);
+  const rows = await triageUrgent([{ id: '2', content: originals[0].content }], {
+    askLlm: async () => JSON.stringify([{ id: '2', needsKim: true, what: 'PR確認', action: 'PRを確認', deadline: '' }]),
+  });
+  assert.match(urgentBody(rows, 'dm'), /^【やること】PR確認\n→/);
+  assert.ok(urgentBody(rows, 'dm').includes(pr));
+});
+for (const [name, askLlm] of [
+  ['例外', async () => { throw new Error('offline'); }],
+  ['不正JSON', async () => '{invalid'],
+  ['ID欠落', async () => '[]'],
+  ['未知ID', async () => JSON.stringify([{ id: '999', needsKim: false, what: '', action: '', deadline: '' }])],
+]) test(`${name}なら原文を落とさず送る`, async t => {
+  const s = setup(t); const content = '警告\n全文を残す'; s.messages([msg(2, content)]);
+  s.deps.askLlm = askLlm;
+  await runRelay(s.deps);
+  assert.equal(s.sent.length, 1);
+  assert.ok(s.sent[0].startsWith('（自動要約に失敗したため原文）'));
+  assert.ok(s.sent[0].includes(content)); assert.equal(s.read().urgentQueue.length, 0);
+});
+test('同じ先頭行11通は最新1通を1回のLLMに渡し残りをまとめの件数へ移す', async t => {
+  const s = setup(t); s.deps.now = Date.parse('2026-10-31T22:30:00Z');
+  s.messages(Array.from({ length: 11 }, (_, i) => msg(i + 2, `【kim-PC・kim@orgiast.jp の Claude Code】\n警告 ${i}`)));
+  let calls = 0;
+  s.deps.askLlm = async (messages, { system }) => {
+    calls++; assert.equal(messages.length, 1); assert.equal(messages[0].id, '12');
+    assert.match(system, /本文に無い操作を作らない/);
+    return JSON.stringify([{ id: '12', needsKim: true, what: '確認依頼', action: 'Discord の Bot との DM に返信', deadline: '' }]);
+  };
+  await runRelay(s.deps);
+  assert.equal(calls, 1); assert.equal(s.sent.length, 1); assert.equal(s.read().pending.length, 10);
+  assert.match(digestBody(s.read().pending), /×10/); assert.equal(s.read().urgentQueue.length, 0);
+});
+test('dry-runはLLMを呼ばず、--triage併用時だけ呼ぶが状態と送信は変更しない', async t => {
+  const s = setup(t); s.messages([msg(2, '警告')]);
+  const before = fs.readFileSync(s.file, 'utf8'); let calls = 0; const logs = [];
+  s.deps.askLlm = async messages => { calls++; return decisionRows(messages); };
+  s.deps.log = text => logs.push(text);
+  assert.equal(await main(['--dry-run'], s.deps), 0); assert.equal(calls, 0);
+  assert.equal(await main(['--dry-run', '--triage'], s.deps), 0); assert.equal(calls, 1);
+  assert.match(logs[1], /まとめ/);
+  assert.equal(s.sent.length, 0); assert.equal(fs.readFileSync(s.file, 'utf8'), before);
+  assert.deepEqual(fs.readdirSync(s.dir), ['kim-push-relay.json']);
 });

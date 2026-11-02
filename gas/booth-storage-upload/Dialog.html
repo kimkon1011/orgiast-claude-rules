@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_parent">
+    <title>Storage Material Upload</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        margin: 0;
+        padding: 20px;
+        background-color: #f5f5f5;
+      }
+      .container {
+        max-width: 800px;
+        margin: 0 auto;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        overflow: hidden;
+      }
+      .header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 20px;
+        text-align: center;
+      }
+      .header h1 {
+        margin: 0;
+        font-size: 24px;
+      }
+      .header p {
+        margin: 10px 0 0 0;
+        opacity: 0.9;
+        font-size: 14px;
+      }
+      .content {
+        padding: 30px;
+      }
+      .upload-section {
+        margin-bottom: 30px;
+      }
+      .upload-area {
+        border: 2px dashed #ddd;
+        border-radius: 8px;
+        padding: 40px;
+        text-align: center;
+        background-color: #f9f9f9;
+        cursor: pointer;
+        transition: all 0.3s ease;
+      }
+      .upload-area:hover {
+        border-color: #667eea;
+        background-color: #f0f4ff;
+      }
+      .upload-area.drag-over {
+        border-color: #667eea;
+        background-color: #e3f2fd;
+      }
+      .upload-icon {
+        font-size: 48px;
+        color: #667eea;
+        margin-bottom: 15px;
+      }
+      .upload-text {
+        font-size: 16px;
+        color: #666;
+        margin-bottom: 10px;
+      }
+      .upload-subtext {
+        font-size: 14px;
+        color: #999;
+      }
+      .form-group {
+        margin-bottom: 20px;
+      }
+      .form-group label {
+        display: block;
+        margin-bottom: 8px;
+        font-weight: 600;
+        color: #555;
+      }
+      .form-group input,
+      .form-group select,
+      .form-group textarea {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 14px;
+        box-sizing: border-box;
+      }
+      .form-group input:focus,
+      .form-group select:focus,
+      .form-group textarea:focus {
+        outline: none;
+        border-color: #667eea;
+        box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.2);
+      }
+      .btn {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        padding: 12px 24px;
+        border-radius: 4px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+      }
+      .btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(102, 126, 234, 0.3);
+      }
+      .btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+      }
+      .status-message {
+        padding: 15px;
+        border-radius: 4px;
+        margin-bottom: 20px;
+        display: none;
+      }
+      .status-success {
+        background-color: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+      }
+      .status-error {
+        background-color: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+      }
+      .tabs {
+        display: flex;
+        border-bottom: 2px solid #ddd;
+        margin-bottom: 30px;
+      }
+      .tab {
+        padding: 12px 24px;
+        cursor: pointer;
+        border: none;
+        background: none;
+        font-size: 14px;
+        font-weight: 600;
+        color: #666;
+        border-bottom: 2px solid transparent;
+        transition: all 0.3s ease;
+      }
+      .tab.active {
+        color: #667eea;
+        border-bottom-color: #667eea;
+      }
+      .tab:hover {
+        color: #667eea;
+        background-color: #f5f5f5;
+      }
+      .tab-content {
+        display: none;
+      }
+      .tab-content.active {
+        display: block;
+      }
+      .file-list {
+        max-height: 300px;
+        overflow-y: auto;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 10px;
+        background-color: #f9f9f9;
+      }
+      .file-item {
+        padding: 8px;
+        border-bottom: 1px solid #eee;
+        font-size: 13px;
+      }
+      .file-item:last-child {
+        border-bottom: none;
+      }
+      .file-name {
+        font-weight: 600;
+        color: #333;
+      }
+      .file-meta {
+        font-size: 12px;
+        color: #666;
+        margin-top: 2px;
+      }
+      .approval-status {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 12px;
+        font-size: 11px;
+        font-weight: 600;
+        margin-left: 8px;
+      }
+      .status-pending {
+        background-color: #fff3cd;
+        color: #856404;
+      }
+      .status-approved {
+        background-color: #d4edda;
+        color: #155724;
+      }
+      .status-not-required {
+        background-color: #d1ecf1;
+        color: #0c5460;
+      }
+      .loading {
+        text-align: center;
+        padding: 40px;
+        color: #666;
+      }
+      .spinner {
+        display: inline-block;
+        width: 20px;
+        height: 20px;
+        border: 2px solid rgba(102, 126, 234, 0.3);
+        border-radius: 50%;
+        border-top-color: #667eea;
+        animation: spin 1s ease-in-out infinite;
+        margin-right: 8px;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>📦 Storage Material Upload</h1>
+        <p>Booth Production System - Secure Material Management</p>
+      </div>
+      
+      <div class="content">
+        <div class="tabs">
+          <button class="tab active" onclick="showTab('upload')">Upload Material</button>
+          <button class="tab" onclick="showTab('files')">My Files</button>
+          <button class="tab" onclick="showTab('cases')">Case Management</button>
+        </div>
+        
+        <div id="upload-tab" class="tab-content active">
+          <div class="upload-section">
+            <h3>Upload Storage Materials</h3>
+            
+            <div class="form-group">
+              <label for="caseId">Case ID:</label>
+              <select id="caseId" onchange="loadCaseData()">
+                <option value="">Select a case...</option>
+              </select>
+            </div>
+            
+            <div class="form-group">
+              <label for="fileName">File Name:</label>
+              <input type="text" id="fileName" placeholder="Enter file name">
+            </div>
+            
+            <div class="form-group">
+              <label for="fileSize">File Size (bytes):</label>
+              <input type="number" id="fileSize" placeholder="Enter file size">
+            </div>
+            
+            <div class="form-group">
+              <label for="uploadType">Upload Type:</label>
+              <select id="uploadType">
+                <option value="material">Material</option>
+                <option value="document">Document</option>
+                <option value="image">Image</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            
+            <div class="form-group">
+              <label for="metadata">Metadata (JSON):</label>
+              <textarea id="metadata" placeholder='{"category": "example", "tags": ["tag1", "tag2"]}' rows="3"></textarea>
+            </div>
+            
+            <div id="statusMessage" class="status-message"></div>
+            
+            <button class="btn" onclick="uploadFile()" id="uploadBtn">Upload Material</button>
+          </div>
+        </div>
+        
+        <div id="files-tab" class="tab-content">
+          <h3>My Files</h3>
+          <div id="filesList" class="file-list">
+            <div class="loading">
+              <span class="spinner"></span>Loading files...
+            </div>
+          </div>
+        </div>
+        
+        <div id="cases-tab" class="tab-content">
+          <h3>Case Management</h3>
+          <div id="caseData" class="file-list">
+            <div class="loading">
+              <span class="spinner"></span>Loading case data...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <script>
+      let appConfig = {};
+      let currentUser = '';
+      
+      // ページ読み込み時の初期化
+      document.addEventListener('DOMContentLoaded', function() {
+        initializeApp();
+      });
+      
+      async function initializeApp() {
+        try {
+          // 現在のユーザー情報を取得
+          const response = await apiCall('/');
+          if (response.ok) {
+            currentUser = response.user;
+            await loadCases();
+          }
+          
+          // 認証をチェック（認証が必要な場合はGoogle OAuthが自動的に実行されます）
+          checkAuth();
+        } catch (error) {
+          showStatus('Failed to initialize app: ' + error.message, 'error');
+        }
+      }
+      
+      function showTab(tabName) {
+        // すべてのタブコンテンツを非表示
+        document.querySelectorAll('.tab-content').forEach(tab => {
+          tab.classList.remove('active');
+        });
+        
+        // すべてのタブボタンをアクティブ状態から解除
+        document.querySelectorAll('.tab').forEach(tab => {
+          tab.classList.remove('active');
+        });
+        
+        // 指定されたタブを表示
+        document.getElementById(tabName + '-tab').classList.add('active');
+        event.target.classList.add('active');
+      }
+      
+      async function loadCases() {
+        try {
+          const response = await apiCall('/?token=' + getToken());
+          if (response.ok) {
+            const cases = response.rows || [];
+            const caseSelect = document.getElementById('caseId');
+            caseSelect.innerHTML = '<option value="">Select a case...</option>';
+            
+            cases.forEach(caseData => {
+              const option = document.createElement('option');
+              option.value = caseData.caseId || '';
+              option.textContent = caseData.caseName || 'Unknown Case';
+              caseSelect.appendChild(option);
+            });
+          }
+        } catch (error) {
+          showStatus('Failed to load cases: ' + error.message, 'error');
+        }
+      }
+      
+      function checkAuth() {
+        // Google Apps Scriptの認証状況をチェック
+        // 認証が必要な場合は、Google OAuthフローが自動的に実行されます
+        // 現在のユーザーセッションで認証をチェック
+        try {
+          const token = getToken();
+          if (!token) {
+            // 認証が必要です
+            showStatus('Authentication required. Please login with Google.', 'error');
+          }
+        } catch (error) {
+          showStatus('Authentication check failed: ' + error.message, 'error');
+        }
+      }
+      
+      function getToken() {
+        // Google Apps Scriptのセッションからトークンを取得
+        // Note: 실제 구현에서는 ScriptApp.getOAuthToken()を使用するか
+        // PropertiesServiceからトークンを読み取ります
+        return appConfig.token || '';
+      }
+      
+      async function apiCall(endpoint, method = 'POST', data = null) {
+        const baseUrl = window.location.origin + window.location.pathname;
+        const url = baseUrl + endpoint;
+        
+        const headers = {
+          'Content-Type': 'application/json'
+        };
+        
+        const config = {
+          method: method,
+          headers: headers
+        };
+        
+        if (data) {
+          config.body = JSON.stringify(data);
+        }
+        
+        try {
+          const response = await fetch(url, config);
+          return await response.json();
+        } catch (error) {
+          throw new Error('API call failed: ' + error.message);
+        }
+      }
+      
+      function showStatus(message, type = 'success') {
+        const statusDiv = document.getElementById('statusMessage');
+        statusDiv.textContent = message;
+        statusDiv.className = 'status-message status-' + type;
+        statusDiv.style.display = 'block';
+        
+        // 3秒後に自動で非表示
+        setTimeout(() => {
+          statusDiv.style.display = 'none';
+        }, 3000);
+      }
+      
+      async function uploadFile() {
+        const caseId = document.getElementById('caseId').value;
+        const fileName = document.getElementById('fileName').value;
+        const fileSize = document.getElementById('fileSize').value;
+        const uploadType = document.getElementById('uploadType').value;
+        const metadataText = document.getElementById('metadata').value;
+        
+        // バリデーション
+        if (!caseId) {
+          showStatus('Please select a case', 'error');
+          return;
+        }
+        
+        if (!fileName) {
+          showStatus('Please enter a file name', 'error');
+          return;
+        }
+        
+        let metadata = {};
+        if (metadataText) {
+          try {
+            metadata = JSON.parse(metadataText);
+          } catch (error) {
+            showStatus('Invalid JSON in metadata', 'error');
+            return;
+          }
+        }
+        
+        const uploadBtn = document.getElementById('uploadBtn');
+        const originalText = uploadBtn.textContent;
+        uploadBtn.disabled = true;
+        uploadBtn.textContent = 'Uploading...';
+        
+        try {
+          const payload = {
+            action: 'upload',
+            caseId: caseId,
+            fileName: fileName,
+            fileSize: fileSize ? parseInt(fileSize) : 0,
+            uploadType: uploadType,
+            metadata: metadata,
+            user: currentUser
+          };
+          
+          const response = await apiCall('/', payload);
+          
+          if (response.ok) {
+            showStatus('File uploaded successfully! Upload ID: ' + response.uploadId, 'success');
+            // フォームをリセット
+            document.getElementById('fileName').value = '';
+            document.getElementById('fileSize').value = '';
+            document.getElementById('metadata').value = '';
+            
+            // ファイルリストを更新
+            if (document.getElementById('files-tab').classList.contains('active')) {
+              await loadFiles();
+            }
+          } else {
+            showStatus('Upload failed: ' + (response.error || 'Unknown error'), 'error');
+          }
+        } catch (error) {
+          showStatus('Upload failed: ' + error.message, 'error');
+        } finally {
+          uploadBtn.disabled = false;
+          uploadBtn.textContent = originalText;
+        }
+      }
+      
+      async function loadFiles() {
+        try {
+          const response = await apiCall('/?action=get_file_list&token=' + getToken());
+          if (response.ok) {
+            const filesList = document.getElementById('filesList');
+            filesList.innerHTML = '';
+            
+            if (response.fileList && response.fileList.length > 0) {
+              response.fileList.forEach(caseData => {
+                if (caseData.files && caseData.files.length > 0) {
+                  const caseDiv = document.createElement('div');
+                  caseDiv.className = 'file-item';
+                  caseDiv.innerHTML = `
+                    <div class="file-name">📁 ${caseData.caseName} (ID: ${caseData.caseId})</div>
+                    <div class="file-meta">
+                      Files: ${caseData.files.length}
+                    </div>
+                  `;
+                  filesList.appendChild(caseDiv);
+                  
+                  caseData.files.forEach(file => {
+                    const fileDiv = document.createElement('div');
+                    fileDiv.className = 'file-item';
+                    fileDiv.style.paddingLeft = '20px';
+                    fileDiv.innerHTML = `
+                      <div class="file-name">📄 ${file.fileName}</div>
+                      <div class="file-meta">
+                        Size: ${file.fileSize} bytes | Uploaded: ${new Date(file.uploadedAt).toLocaleString()}<br>
+                        By: ${file.uploadedBy} | Status: <span class="approval-status status-${file.approvalStatus}">${file.approvalStatus}</span>
+                      </div>
+                    `;
+                    filesList.appendChild(fileDiv);
+                  });
+                }
+              });
+            } else {
+              filesList.innerHTML = '<div class="loading">No files found.</div>';
+            }
+          } else {
+            showStatus('Failed to load files: ' + (response.error || 'Unknown error'), 'error');
+          }
+        } catch (error) {
+          showStatus('Failed to load files: ' + error.message, 'error');
+        }
+      }
+      
+      async function loadCaseData() {
+        const caseId = document.getElementById('caseId').value;
+        if (!caseId) return;
+        
+        try {
+          const response = await apiCall('/?action=get_case_data&caseId=' + caseId + '&token=' + getToken());
+          if (response.ok) {
+            const caseData = response.caseData;
+            const caseDataDiv = document.getElementById('caseData');
+            caseDataDiv.innerHTML = '';
+            
+            if (caseData) {
+              caseDataDiv.innerHTML = `
+                <div class="file-item">
+                  <div class="file-name">📋 Case: ${caseData.caseName}</div>
+                  <div class="file-meta">
+                    ID: ${caseData.caseId}<br>
+                    Owner: ${caseData.owner}<br>
+                    Created: ${new Date(caseData.createdAt).toLocaleString()}<br>
+                    Status: ${caseData.status}<br>
+                    Description: ${caseData.description}<br>
+                    Files: ${caseData.files ? caseData.files.length : 0}
+                  </div>
+                </div>
+              `;
+            }
+          }
+        } catch (error) {
+          showStatus('Failed to load case data: ' + error.message, 'error');
+        }
+      }
+      
+      // ドラッグ＆ドロップ機能
+      const uploadArea = document.createElement('div');
+      uploadArea.className = 'upload-area';
+      uploadArea.innerHTML = `
+        <div class="upload-icon">📤</div>
+        <div class="upload-text">Drag and drop files here or click to select</div>
+        <div class="upload-subtext">Supports all file types</div>
+        <input type="file" style="display: none;" id="fileInput">
+      `;
+      
+      // アップロードエリアをページに追加
+      const uploadSection = document.querySelector('.upload-section');
+      uploadSection.insertBefore(uploadArea, uploadSection.children[1]);
+      
+      // ドラッグ＆ドロップイベント
+      uploadArea.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        uploadArea.classList.add('drag-over');
+      });
+      
+      uploadArea.addEventListener('dragleave', function(e) {
+        e.preventDefault();
+        uploadArea.classList.remove('drag-over');
+      });
+      
+      uploadArea.addEventListener('drop', function(e) {
+        e.preventDefault();
+        uploadArea.classList.remove('drag-over');
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+          document.getElementById('fileName').value = files[0].name;
+          document.getElementById('fileSize').value = files[0].size;
+        }
+      });
+      
+      uploadArea.addEventListener('click', function() {
+        document.getElementById('fileInput').click();
+      });
+      
+      document.getElementById('fileInput').addEventListener('change', function(e) {
+        if (e.target.files.length > 0) {
+          document.getElementById('fileName').value = e.target.files[0].name;
+          document.getElementById('fileSize').value = e.target.files[0].size;
+        }
+      });
+    </script>
+  </body>
+</html>
+    </textarea>

@@ -1,0 +1,22 @@
+{
+  "timeZone": "Asia/Tokyo",
+  "dependencies": {
+    "googleAppsScript": [],
+    "libraries": []
+  },
+  "ui": {
+    "name": "Storage Material Upload",
+    "description": "Booth Production System - Secure Storage Material Management",
+    "icons": {
+      "iconSet": "ICONS_MINIMALIST_SIMPLE"
+    }
+  },
+  "webapp": {
+    "access": "LIMITED",
+    "codeUserAccess": {
+      "allUsers": true
+    },
+    "updateTriggersOnDeploy": "NONE"
+  },
+  "scriptId": "1t6eMvbPIu17m7hbv6foJcvd-fXrJkZqrePb8P6njxGI"
+}

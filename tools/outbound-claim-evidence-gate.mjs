@@ -43,8 +43,9 @@ async function readDraftBody(id, user) {
   const { getDriveToken } = await import('./lib/drive-auth.mjs');
   const { gwsFetch } = await import('./lib/gws-proxy.mjs');
   const { mimeText } = await import('./mail-consistency-check.mjs');
-  const token = await getDriveToken({ impersonate: user || 'seisaku-team@orgiast.jp', scope: 'https://www.googleapis.com/auth/gmail.readonly' });
-  const response = await gwsFetch(`https://gmail.googleapis.com/gmail/v1/users/me/drafts/${id}?format=full`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10000) });
+  const signal = AbortSignal.timeout(8000);
+  const token = await getDriveToken({ impersonate: user || 'seisaku-team@orgiast.jp', scope: 'https://www.googleapis.com/auth/gmail.readonly', signal });
+  const response = await gwsFetch(`https://gmail.googleapis.com/gmail/v1/users/me/drafts/${id}?format=full`, { headers: { Authorization: `Bearer ${token}` }, signal });
   if (!response.ok) throw Error(`draft read HTTP ${response.status}`);
   const payload = (await response.json()).message?.payload;
   if (!payload) throw Error('draft payload missing');

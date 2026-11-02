@@ -142,7 +142,7 @@ test('再開上限の失敗は最近の活動やAI判定に優先してstalled�
   }
 });
 
-test('timeoutを繰り返した実例は上限到達後にSheetとDMまとめへ一度報告される', async t => {
+test('timeoutを繰り返した実例は2回でSheetとDMまとめへ一度報告される', async t => {
   const { MAX_RESUMES } = await import('./auto-progress-watch.mjs');
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-exhausted-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -151,7 +151,7 @@ test('timeoutを繰り返した実例は上限到達後にSheetとDMまとめへ
     sessionId: '28c97712-092f-42d5-8f40-3efeb5ed3ef3', ts: new Date(now - 4 * 3600000).toISOString(),
     pc: 'test-pc', user: 'test', owner: 'kim', cwd: home, promise: 'Xの投稿を読み調査結果をまとめます',
     status: 'resumed', verdict: 'in_progress', reason: '判定AIが使えず様子見', nextKim: 'なし',
-    resumeCount: MAX_RESUMES, resumedAt: new Date(now - 60000).toISOString(),
+    resumeCount: 2, resumedAt: new Date(now - 60000).toISOString(), lastCheckedAt: new Date(now).toISOString(),
     resumeOutcome: 'error: timeout (claude exit null):', reportedKey: `stalled:true:${MAX_RESUMES}`,
   }]);
   const sheets = [], messages = [];
@@ -171,7 +171,8 @@ test('timeoutを繰り返した実例は上限到達後にSheetとDMまとめへ
   const row = readLedger(ledgerFile(home))[0];
   assert.equal(row.status, 'stalled');
   assert.equal(row.verdict, 'stalled');
-  assert.equal(row.reportedKey, `stalled:true:${MAX_RESUMES}:resume-exhausted`);
+  assert.equal(row.reportedKey, 'stalled:resume-failed');
+  assert.match(row.reason, /自動再開が連続2回失敗/);
   assert.equal(sheets[0].reason, row.reason);
   assert.equal(sheets[0].verdict, 'stalled');
   assert.equal(messages.length, 1);
@@ -179,4 +180,77 @@ test('timeoutを繰り返した実例は上限到達後にSheetとDMまとめへ
   await run({ home, now, io });
   assert.equal(sheets.length, 1);
   assert.equal(messages.length, 1);
+  io.resume = async () => ({ outcome: 'error', reason: 'timeout (claude exit null):' });
+  io.appendInbox = () => {};
+  const later = now + 2 * 3600000;
+  io.clock = () => later;
+  const retried = await run({ home, now: later, io });
+  assert.equal(retried.resumed, 1);
+  assert.equal(sheets.length, 1);
+  assert.equal(messages.length, 1);
+  const failed = readLedger(ledgerFile(home))[0];
+  assert.equal(failed.resumeFailureCount, 3);
+  assert.equal(failed.status, 'stalled');
+  io.resume = async () => ({ outcome: 'progressed', reason: '検証中' });
+  io.clock = () => later + 2 * 3600000;
+  await run({ home, now: later + 2 * 3600000, io });
+  const recovered = readLedger(ledgerFile(home))[0];
+  assert.equal(recovered.resumeFailureCount, 0);
+  assert.equal(recovered.verdict, 'progressed');
+  assert.equal(sheets.at(-1).verdict, 'in_progress');
+});
+
+
+test('失敗終了後の活動だけを数え、成功した再開の活動は保持する', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-evidence-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const end = Date.parse('2026-11-02T00:00:00Z');
+  const transcriptPath = path.join(home, 'session.jsonl');
+  const runsDir = path.join(home, '.claude', 'auto-session', 'runs');
+  fs.mkdirSync(runsDir, { recursive: true });
+  const log = path.join(runsDir, 'run.log');
+  fs.writeFileSync(log, 'session-test');
+  fs.utimesSync(log, new Date(end), new Date(end));
+  const row = { sessionId: 'session-test', transcriptPath, ts: new Date(end - 3600000).toISOString(),
+    resumedAt: new Date(end - 60000).toISOString(), lastCheckedAt: new Date(end).toISOString(),
+    resumeFinishedAt: new Date(end).toISOString(), resumeCount: 2, resumeOutcome: 'error: timeout (claude exit null):' };
+  const message = at => JSON.stringify({ type: 'assistant', timestamp: new Date(at).toISOString(), message: { content: '作業を進めています' } });
+  fs.writeFileSync(transcriptPath, message(end));
+  let evidence = gatherEvidence(row, home);
+  assert.equal(evidence.any, false);
+  assert.equal(judge(row, evidence, end).verdict, 'stalled');
+  for (const resumeOutcome of ['progressed: 検証中', 'done: 完了']) {
+    const success = { ...row, resumeOutcome };
+    evidence = gatherEvidence(success, home);
+    assert.equal(evidence.transcript.count, 1);
+    assert.equal(judge(success, evidence, end, { askLlm: () => null }).verdict, 'in_progress');
+  }
+  fs.appendFileSync(transcriptPath, '\n' + message(end + 1000));
+  evidence = gatherEvidence({ ...row, lastCheckedAt: new Date(end + 10000).toISOString() }, home);
+  assert.equal(evidence.transcript.count, 1);
+  assert.equal(judge(row, evidence, end + 10000, { askLlm: () => null }).verdict, 'in_progress');
+  fs.writeFileSync(transcriptPath, message(end));
+  fs.utimesSync(log, new Date(end + 1000), new Date(end + 1000));
+  evidence = gatherEvidence(row, home);
+  assert.equal(evidence.runs.names.length, 1);
+  assert.equal(judge(row, evidence, end + 10000, { askLlm: () => null }).verdict, 'in_progress');
+});
+
+
+test('終了後の本人発言を数え、総再開回数と連続失敗回数を区別する', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-user-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const end = Date.parse('2026-11-02T00:00:00Z');
+  const transcriptPath = path.join(home, 'session.jsonl');
+  const row = { transcriptPath, ts: new Date(end - 3600000).toISOString(),
+    resumedAt: new Date(end - 60000).toISOString(), resumeFinishedAt: new Date(end).toISOString(),
+    resumeCount: 7, resumeFailureCount: 1, resumeOutcome: 'blocked: 検証失敗' };
+  fs.writeFileSync(transcriptPath, JSON.stringify({ type: 'user', timestamp: new Date(end + 1000).toISOString(),
+    message: { content: '続けてください' } }));
+  const evidence = gatherEvidence(row, home);
+  assert.equal(evidence.transcript.count, 1);
+  assert.equal(judge({ ...row, resumeFailureCount: 2 }, evidence, end + 2000, { askLlm: () => null }).verdict, 'in_progress');
+  const stalled = judge(row, { any: false, lastEvidenceAt: 0 }, end + 2000);
+  assert.equal(stalled.verdict, 'stalled');
+  assert.equal(stalled.source, 'deterministic');
 });

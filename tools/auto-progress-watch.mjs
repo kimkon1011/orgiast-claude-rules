@@ -30,7 +30,7 @@ export const FALLBACK_STALL_MS = 24 * 3600 * 1000;
 
 // ---- 証拠収集 -------------------------------------------------------------
 // transcript の promise 記録時刻以降の assistant/tool メッセージを要約する。
-export function transcriptEvidence(transcriptPath, sinceMs, { readFile = (p) => fs.readFileSync(p, 'utf8') } = {}) {
+export function transcriptEvidence(transcriptPath, sinceMs, { readFile = (p) => fs.readFileSync(p, 'utf8'), graceMs = 60000, includeUser = false } = {}) {
   let text = '';
   try { text = readFile(transcriptPath); } catch { return { count: 0, lastAt: 0, snippets: [] }; }
   let count = 0, lastAt = 0; const snippets = [], touchedPaths = [];
@@ -39,11 +39,11 @@ export function transcriptEvidence(transcriptPath, sinceMs, { readFile = (p) => 
     let entry; try { entry = JSON.parse(line); } catch { continue; }
     const at = Date.parse(entry?.timestamp);
     // 約束を書いたメッセージ自体（記録時刻の直前直後）は証拠に数えない。
-    if (!Number.isFinite(at) || at <= sinceMs + 60000) continue;
+    if (!Number.isFinite(at) || at <= sinceMs + graceMs) continue;
     const content = entry?.message?.content;
     const parts = Array.isArray(content) ? content : [{ type: 'text', text: String(content ?? '') }];
     const body = parts.map((b) => b?.type === 'text' ? b.text : b?.type === 'tool_use' ? `[tool:${b.name}]` : '').filter(Boolean).join(' ').trim();
-    if (entry.type !== 'assistant' && !(entry.type === 'user' && Array.isArray(content) && content.some((b) => b?.type === 'tool_result'))) continue;
+    if (entry.type !== 'assistant' && !(entry.type === 'user' && ((includeUser && !entry.isMeta) || (Array.isArray(content) && content.some((b) => b?.type === 'tool_result'))))) continue;
     count += 1; lastAt = Math.max(lastAt, at);
     if (body) snippets.push(body.slice(0, 240));
     for (const block of parts.filter(b => b?.type === 'tool_use')) {
@@ -86,11 +86,22 @@ export function autoSessionRuns(home, row, sinceMs) {
   return { lastAt, names: hit.slice(0, 3) };
 }
 
+// Legacy rows have no streak counter; retain their recorded failed attempts.
+export const failedResume = row => /^(?:error|timeout|blocked)\b/i.test(String(row.resumeOutcome ?? '').trim());
+export const failedResumeCount = row => failedResume(row) ? (row.resumeFailureCount ?? row.resumeCount ?? 0) : 0;
+export function failedResumeEnd(row) {
+  if (!failedResume(row)) return 0;
+  return Math.max(Date.parse(row.resumeFinishedAt || row.lastCheckedAt) || 0, Date.parse(row.resumedAt) || 0);
+}
+
 export function gatherEvidence(row, home, io = {}) {
-  const since = Date.parse(row.ts);
-  const transcript = (io.transcriptEvidence ?? transcriptEvidence)(row.transcriptPath, since);
+  const cutoff = failedResumeEnd(row);
+  const since = Math.max(Date.parse(row.ts), cutoff);
+  let transcript = (io.transcriptEvidence ?? transcriptEvidence)(row.transcriptPath, since, { graceMs: cutoff ? 0 : 60000, includeUser: Boolean(cutoff) });
+  if (cutoff && transcript.lastAt <= cutoff) transcript = { count: 0, lastAt: 0, snippets: [], touchedPaths: [] };
   const files = (io.recentFiles ?? recentFiles)(row.cwd, since, { paths: transcript.touchedPaths || [] });
-  const runs = (io.autoSessionRuns ?? autoSessionRuns)(home, row, since);
+  let runs = (io.autoSessionRuns ?? autoSessionRuns)(home, row, since);
+  if (cutoff && runs.lastAt <= cutoff) runs = { lastAt: 0, names: [] };
   // ファイルは共有されるため、更新時刻をこの約束の進捗時刻には使わない。
   const lastEvidenceAt = Math.max(transcript.lastAt, runs.lastAt);
   return { transcript, files, runs, lastEvidenceAt, any: transcript.count > 0 || files.names.length > 0 || runs.names.length > 0 };
@@ -140,7 +151,13 @@ export function exhaustedResumeVerdict(row) {
 
 export function judge(row, evidence, now, io = {}) {
   // A failed resume writes transcript activity too; it must not reset the stall clock forever.
-  const exhausted = exhaustedResumeVerdict(row);
+  const cutoff = failedResumeEnd(row);
+  const freshActivity = cutoff && evidence.lastEvidenceAt > cutoff;
+  if (failedResumeCount(row) >= 2 && !freshActivity && cutoff) {
+    const summary = redactSecrets(String(row.resumeOutcome)).replace(/\s+/g, ' ').slice(0, 160);
+    return { verdict: 'stalled', reason: `自動再開が連続${failedResumeCount(row)}回失敗（${summary}）`, source: 'resume-failed' };
+  }
+  const exhausted = freshActivity ? null : exhaustedResumeVerdict(row);
   if (exhausted) return exhausted;
   if (!evidence.any) return deterministicVerdict(evidence, now); // 証拠ゼロは LLM に聞くまでもなく stalled
   const prompt = `次は AI セッションが「この後に自動で進める」と宣言した内容と、その後の証拠です。宣言が実行済みなら done、進行中なら in_progress、止まっているなら stalled と判定してください。\n出力は1行のみ: <done|in_progress|stalled> | <15字程度の理由>\n\n${evidenceSummary(row, evidence, now)}`;
@@ -550,8 +567,13 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     if (now - recorded < GRACE_MS) { summary.graced += 1; continue; }
     if (now - recorded >= EXPIRE_MS) { patch(rowKey(row), { status: 'expired' }); summary.expired += 1; continue; }
     summary.checked += 1;
+    // Freeze the legacy boundary before lastCheckedAt advances on subsequent polls.
+    if (failedResumeEnd(row) && !row.resumeFinishedAt) {
+      row.resumeFinishedAt = new Date(failedResumeEnd(row)).toISOString();
+      patch(rowKey(row), { resumeFinishedAt: row.resumeFinishedAt });
+    }
     const evidence = gatherEvidence(row, home, io);
-    const verdict = judge(row, evidence, now, io);
+    let verdict = judge(row, evidence, now, io);
     if (verdict.verdict === 'done') {
       patch(rowKey(row), { status: 'done', verdict: 'done', doneAt: new Date(now).toISOString(), reason: verdict.reason });
       summary.done += 1;
@@ -560,10 +582,10 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       }
       continue;
     }
-    if (verdict.verdict === 'in_progress') { patch(rowKey(row), { verdict: 'in_progress', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason }); summary.inProgress += 1; continue; }
+    if (verdict.verdict === 'in_progress') { patch(rowKey(row), { ...(row.status === 'stalled' ? { status: 'open' } : {}), verdict: 'in_progress', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason }); summary.inProgress += 1; continue; }
     summary.stalled += 1;
-    patch(rowKey(row), { ...((row.resumeCount ?? 0) >= MAX_RESUMES ? { status: 'stalled' } : {}), verdict: 'stalled', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason });
-    let current = { ...row, ...((row.resumeCount ?? 0) >= MAX_RESUMES ? { status: 'stalled' } : {}), verdict: verdict.verdict, reason: verdict.reason };
+    patch(rowKey(row), { ...((row.resumeCount ?? 0) >= MAX_RESUMES || verdict.source === 'resume-failed' ? { status: 'stalled' } : {}), verdict: 'stalled', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason });
+    let current = { ...row, ...((row.resumeCount ?? 0) >= MAX_RESUMES || verdict.source === 'resume-failed' ? { status: 'stalled' } : {}), verdict: verdict.verdict, reason: verdict.reason };
     const resumeEligible = !unattended && !dryRun && summary.resumed < MAX_RESUMES_PER_RUN &&(row.resumeCount ?? 0) < MAX_RESUMES && now - (Date.parse(row.resumedAt || 0) || 0) >= RESUME_INTERVAL_MS
       && row.cwd && (io.cwdExists ?? fs.existsSync)(row.cwd);
     const canResume = resumeEligible && !executorUnavailable;
@@ -576,7 +598,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       try { outcome = await (io.resume ?? resumeSession)(row, { home }); } catch (error) { outcome = { outcome: 'error', reason: String(error?.message ?? error).slice(0, 200) }; }
       if (outcome.deferred) {
         patch(rowKey(row), { status: row.status, resumedAt: row.resumedAt ?? '', resumeCount: row.resumeCount ?? 0,
-          resumeOutcome: 'deferred: ' + outcome.reason, resumeDeferredAt: new Date(now).toISOString(),
+          resumeOutcome: failedResume(row) ? row.resumeOutcome : 'deferred: ' + outcome.reason, resumeDeferredAt: new Date(now).toISOString(),
           lastCheckedAt: new Date(now).toISOString(), reason: outcome.reason });
         current = { ...row };
         executorUnavailable = true;
@@ -587,7 +609,21 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         const nextKim = outcome.nextKim ?? row.nextKim;
         const status = state === 'done' ? 'done' : state === 'needs_user' ? 'waiting_user' : 'resumed';
         current = { ...row, status, nextKim, resumedAt: new Date(now).toISOString(), resumeCount: (row.resumeCount ?? 0) + 1, resumeOutcome: `${state}: ${outcome.reason}` };
-        patch(rowKey(row), { status, nextKim, verdict: state, ...(state === 'done' ? { doneAt: new Date(now).toISOString() } : {}), resumedAt: current.resumedAt, resumeCount: current.resumeCount, resumeOutcome: current.resumeOutcome, lastCheckedAt: new Date(now).toISOString(), reason: outcome.reason });
+        current.resumeFinishedAt = new Date(clock()).toISOString();
+        current.resumeFailureCount = failedResume(current) ? failedResumeCount(row) + 1 : 0;
+        const failureVerdict = failedResume(current) ? judge(current, { any: false, lastEvidenceAt: 0 }, now, io) : null;
+        if (!failedResume(current)) {
+          if (verdict.source === 'resume-failed') verdict = { verdict: state === 'progressed' ? 'in_progress' : state, reason: outcome.reason, source: 'resume' };
+          current.reportedKey = '';
+        }
+        if (failedResume(current) && failureVerdict.source === 'resume-failed') {
+          verdict = failureVerdict;
+          current.status = 'stalled';
+        }
+        patch(rowKey(row), { status: current.status, nextKim,
+          resumeFinishedAt: current.resumeFinishedAt, resumeFailureCount: current.resumeFailureCount,
+          ...(!failedResume(current) ? { reportedKey: '' } : {}),
+          verdict: current.status === 'stalled' ? 'stalled' : state, ...(state === 'done' ? { doneAt: new Date(now).toISOString() } : {}), resumedAt: current.resumedAt, resumeCount: current.resumeCount, resumeOutcome: current.resumeOutcome, lastCheckedAt: current.resumeFinishedAt, reason: current.status === 'stalled' ? verdict.reason : outcome.reason });
         (io.appendInbox ?? appendInbox)(home, row.sessionId, { at: new Date(now).toISOString(), state, evidence: outcome.reason, artifact: outcome.artifact || '' });
         if (state === 'done' && !unattended && !dryRun && !row.doneNotifiedAt) {
           await notifyDone(row, outcome.reason, outcome.artifact || '');
@@ -602,7 +638,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         summary.resumed += 1;
       }
     }
-    const reportKey = `${verdict.verdict}:${Boolean(current.resumedAt)}:${current.resumeCount ?? 0}${verdict.source === 'resume-exhausted' ? ':resume-exhausted' : ''}`;
+    const reportKey = verdict.source === 'resume-failed' ? 'stalled:resume-failed' : `${verdict.verdict}:${Boolean(current.resumedAt)}:${current.resumeCount ?? 0}${verdict.source === 'resume-exhausted' ? ':resume-exhausted' : ''}`;
     if (config && current.reportedKey !== reportKey && !dryRun) {
       try { await (io.postSheet ?? postSheet)(config, 'auto-progress', { row: sheetRow(current, verdict, evidence, now) }); patch(rowKey(row), { reportedKey: reportKey }); summary.reported += 1; }
       catch (error) { summary.errors.push(`sheet: ${String(error?.message ?? error).slice(0, 120)}`); } // 次回巡回で再送する

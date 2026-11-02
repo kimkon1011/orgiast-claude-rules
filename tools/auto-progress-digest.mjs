@@ -75,7 +75,8 @@ export function needsDm(row, now = Date.now()) {
   if (isNoopPromise(row.promise)) return false;
   const verdict = verdictOf(row, now);
   return isHumanActionRequired(row) || ['done', 'open/期限超過'].includes(verdict) ||
-    (verdict === 'stalled' && Number(row.resumeCount) >= MAX_RESUMES);
+    (verdict === 'stalled' && (Number(row.resumeCount) >= MAX_RESUMES ||
+      (/^(?:error|timeout|blocked)\b/i.test(String(row.resumeOutcome || '')) && Number(row.resumeFailureCount ?? row.resumeCount) >= 2)));
 }
 
 export function cleanText(text, row = {}) {

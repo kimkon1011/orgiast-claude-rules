@@ -131,18 +131,19 @@ test('check notification includes exit code and stderr tail', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'watch-notify-exit-'));
   const now = Date.parse('2026-11-01T03:00:00Z');
   writeLedger(ledgerFile(home), [{
-    ts: new Date(now - 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'owner',
+    ts: new Date(now - 8 * 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'owner',
     sessionId: 'check-stderr', cwd: home, promise: 'stderr check', status: 'open',
     check: 'echo checking', deadlineAt: new Date(now + 3600000).toISOString(),
   }]);
   let message = '';
   const summary = await run({ home, now, io: {
     clock: () => now, sheetConfig: () => null, transcriptFiles: [],
+    // 6時間以上経過しているため、code=1 で未達の定期通知が届く
     executeCheck: () => ({ code: 1, text: '未達', stderr: 'Cannot find path /usr/bin/missing' }),
     notifyOwner: async (_owner, text) => { message = text; return { delivered: 'dm' }; },
     digest: async () => ({}),
   } });
-  // 未達（期限超過）の通知に exit code と stderr が含まれる
+  // 未達の定期通知に exit code と stderr が含まれる
   assert.match(message, /\[exit: 1\]/);
   assert.match(message, /stderr: Cannot find path/);
   // 台帳に lastCheckExit, lastCheckStderr が保存されている

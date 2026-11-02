@@ -1584,12 +1584,13 @@ test('addCheck: 実害の check 文字列は静的検査で拒否される', () 
   const pf = preflightCheck({ check: badCheck }, { home });
   assert.equal(pf.ok, false);
   assert.equal(pf.preflight, 'static_error');
-  assert.match(pf.text, /\\$env:/);
+  assert.match(pf.text, /\$env:/);
 });
 
-test('addCheck: \\$env: エスケープ版は拒否されず「未達（正常）」で通る', () => {
+test('addCheck: 未達 check（exit 1・stderrなし)は「未達（正常）」で通る', () => {
   const home = tmp();
-  const goodCheck = `${process.execPath} -e "process.exit(1)"`;
+  // bash で exit 1 は stderr が出ない普通の未達
+  const goodCheck = 'exit 1';
   const pf = preflightCheck({ check: goodCheck }, { home });
   assert.equal(pf.ok, true);
   assert.equal(pf.preflight, 'unmet');

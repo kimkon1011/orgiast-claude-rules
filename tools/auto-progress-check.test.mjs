@@ -99,13 +99,13 @@ test('check errors do not mark done; repeated errors notify once', async () => {
 });
 test('executeCheck honors exit contract, first line and bounded execution', () => {
   const command = `"${process.execPath}" -e "console.log('first');console.log('second');process.exit(1)"`;
-  const result = executeCheck({ check: command }, { home: tmp() });
-    assert.equal(result.code, 1); assert.equal(result.text, 'first'); assert.ok('stderr' in result);
-  const result = executeCheck({ check: 'anything' }, { home: tmp(), shellPath: null, spawnImpl: (_, options) => {
+  const r1 = executeCheck({ check: command }, { home: tmp() });
+    assert.equal(r1.code, 1); assert.equal(r1.text, 'first'); assert.ok('stderr' in r1);
+  const r2 = executeCheck({ check: 'anything' }, { home: tmp(), shellPath: null, spawnImpl: (_, options) => {
     assert.equal(options.timeout, CHECK_TIMEOUT_MS); assert.equal(options.windowsHide, true);
     return { status: null, error: new Error('timeout'), stdout: '' };
   } });
-  assert.equal(result.code, null); assert.match(result.text, /timeout/);
+  assert.equal(r2.code, null); assert.match(r2.text, /timeout/);
 });
 test('executeCheck lets a row extend its timeout for network-bound checks, bounded and validated', () => {
   const seen = [];
@@ -287,7 +287,7 @@ test('preflightCheck: 実害の check 文字列を静的検査で拒否する', 
   assert.equal(result.ok, false);
   assert.equal(result.preflight, 'static_error');
   assert.equal(result.code, 2);
-  assert.match(result.text, /\\$env:/);
+  assert.match(result.text, /\$env:/);
   assert.match(result.text, /単一引用符/);
 });
 
@@ -301,7 +301,7 @@ test('preflightCheck: --force-check で静的検査を回避できる', () => {
 
 test('preflightCheck: 正常な check で未達を返す', () => {
   const home = tmp();
-  const result = preflightCheck({ check: `${process.execPath} -e "process.exit(1)"` }, { home });
+  const result = preflightCheck({ check: `node -e "process.exit(1)"` }, { home });
   // exit 1 で stderr なし → unmet
   assert.equal(result.ok, true);
   assert.equal(result.preflight, 'unmet');

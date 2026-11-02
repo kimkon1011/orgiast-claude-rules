@@ -9,6 +9,7 @@ import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 import { ledgerFile, readLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES } from './auto-progress-ledger.mjs';
 export { isUnattendedRow } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
+import { collectCaseProgress } from './case-progress-digest.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 
 export const WINDOW_MS = 24 * 3600 * 1000;
@@ -419,10 +420,14 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     return { skipped: 'already-sent', sent: false, count: 0 };
   }
 
+  const caseDigest = !isOutside && label === 'kim-PC' && !sentSlotOwners.has(`${slotKey}|kim@orgiast.jp`)
+    ? await collectCaseProgress({ home, now, previous: state.caseProgress || {}, fetchResume: io.fetchCaseResume, dryRun })
+    : { text: '', checkpoints: {} };
+
   // 変化0件なら送らない（ただし朝枠は進行中または判断待ちがあれば定時報告として送る）
   const totalChanges = newlyDoneRows.length + newlyStalledRows.length + newlyResumedRows.length + newlyWaitingRows.length;
   const isMorningHeartbeat = currentSlot === '朝' && (inProgressRows.length > 0 || waitingRows.length > 0);
-  if (!isOutside && totalChanges === 0 && !isMorningHeartbeat) {
+  if (!isOutside && totalChanges === 0 && !isMorningHeartbeat && !caseDigest.text) {
     return { sent: false, count: 0 };
   }
 
@@ -465,6 +470,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     return { owner, rows, message };
   }).filter(d => Boolean(d.message));
 
+  if (caseDigest.text) deliveries.push({ owner: 'kim@orgiast.jp', rows: [], message: caseDigest.text });
   if (!deliveries.length) return { sent: false, count: 0, skipped: 'session-context-only' };
   const messages = deliveries.map(d => d.message);
   const text = messages.join('\n');
@@ -493,6 +499,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       if (!delivered) { error = result.reason || 'DM not delivered'; break; }
     }
     if (error) break;
+    if (owner === 'kim@orgiast.jp' && caseDigest.text) state.caseProgress = { ...state.caseProgress, ...caseDigest.checkpoints };
     if (slotKey) sentSlotOwners.add(`${slotKey}|${owner}`);
     for (const row of rows) {
       const key = rowKey(row);

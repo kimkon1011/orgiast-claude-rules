@@ -4,7 +4,8 @@ import os from 'node:os';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
-import { inboxFile, readRows } from './lib/auto-progress-inbox.mjs';
+import { isUnattendedSession } from './lib/unattended-session.mjs';
+import { inboxText, inboxFile, readRows } from './lib/auto-progress-inbox.mjs';
 export { inboxFile, appendInbox, appendOwnerInbox } from './lib/auto-progress-inbox.mjs';
 function displayText(text, limit = 1500) {
   const seen = new Set();
@@ -14,23 +15,37 @@ function displayText(text, limit = 1500) {
     seen.add(line); return true;
   }).join('\n').slice(0, limit);
 }
-export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.homedir() } = {}) {
+export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.homedir(), env = process.env } = {}) {
+  if (isUnattendedSession(input, { home, env })) return null;
   const sessionId = input?.session_id || input?.sessionId; if (!sessionId) return null;
-  const files = [...new Set([inboxFile(home, sessionId), inboxFile(home, '_owner')])];
-  const lines = [];
+  const ownerFile = inboxFile(home, '_owner');
+  const sessionFile = inboxFile(home, sessionId);
+  const sessionRows = readRows(sessionFile);
+  const ownerRows = readRows(ownerFile);
+  const unreadSession = sessionRows.filter(row => !row.shown);
+  const ids = new Set(unreadSession.map(row => row.id).filter(Boolean));
+  const unreadOwner = ownerRows.filter(row => !row.shown && !ids.has(row.id))
+    .sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0));
+  const lines = unreadSession.map(row => displayText(inboxText(row)));
+  lines.push(...unreadOwner.slice(0, 5).map(row => String(inboxText(row)).replace(/\s+/g, ' ').slice(0, 120)));
+  if (unreadOwner.length > 5) lines.push(`ほか ${unreadOwner.length - 5} 件`);
+  // Overflow remains unread so its contents can be delivered on the next prompt.
+  const selected = [...unreadSession, ...unreadOwner.slice(0, 5)];
+  const selectedIds = new Set(selected.map(row => row.id).filter(Boolean));
   const shownAt = new Date().toISOString();
+  const files = new Set([sessionFile, ownerFile]);
+  for (const row of selected) {
+    if (row.sessionId) files.add(inboxFile(home, row.sessionId));
+  }
   for (const file of files) {
-    const rows = readRows(file);
-    const unread = rows.filter(row => !row.shown);
-    if (!unread.length) continue;
-    fs.writeFileSync(file, rows.map(row => JSON.stringify(row.shown ? row : { ...row, shown: true, shownAt, shownSession: sessionId })).join('\n') + '\n');
-    if (file === inboxFile(home, '_owner')) {
-      const latest = unread.reduce((a, b) => Date.parse(a.at) > Date.parse(b.at) ? a : b);
-      lines.push(displayText(latest.text));
-      if (unread.length > 1) lines.push(`ほか ${unread.length - 1} 件（古い通知）`);
-    } else {
-      lines.push(...unread.map(row => displayText(`${row.state || 'progressed'}: ${row.evidence || ''}${row.artifact ? `（成果物: ${row.artifact}）` : ''}`)));
-    }
+    const rows = file === sessionFile ? sessionRows : file === ownerFile ? ownerRows : readRows(file);
+    let changed = false;
+    const updated = rows.map(row => {
+      if (row.shown || !(selectedIds.has(row.id) || selected.includes(row))) return row;
+      changed = true;
+      return { ...row, shown: true, shownAt, shownSession: sessionId };
+    });
+    if (changed) fs.writeFileSync(file, updated.map(JSON.stringify).join('\n') + '\n');
   }
   if (!lines.length) return null;
   const event = input.hook_event_name || 'UserPromptSubmit';

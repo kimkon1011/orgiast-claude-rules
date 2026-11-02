@@ -55,8 +55,21 @@ test('probe repairs healthy demotes, classifies payment and rate limits, caches 
   await laneDoctorProbe({platform: 'linux',home:h,now:now+86400001,probe,notify}); assert.equal(codexTasks,2); assert.equal(notifications,2);
 });
 test('quick preserves payment failure and cannot refresh probe timestamp', async t => {
-  const h=fixture(t); write(h,'lane-health.json',{probedAt:new Date(now-3600000).toISOString(),lanes:{gemini:{alive:false,reason:'dead:payment_required'}}});
+  const h=fixture(t); write(h,'lane-health.json',{probedAt:new Date(now-3600000).toISOString(),lanes:{gemini:{alive:false,reason:'dead:payment_required',probedAt:new Date(now-3600000).toISOString()}}});
   const r=laneDoctorQuick({home:h,now}); assert.equal(r.lanes.gemini.alive,false); assert.equal(freshProbe(r.probedAt,now),false);
+});
+test('expired cooldown failure becomes configured:unprobed', t => {
+  const h=fixture(t), probedAt=new Date(now-3600000).toISOString();
+  write(h,'provider-cooldown.json',{codex:{until:now-1,reason:'usage_limit'}});
+  write(h,'lane-health.json',{lanes:{codex:{alive:false,reason:'cooldown',probeReason:'cooldown',probedAt,lastProbeOkAt:new Date(now-86400000).toISOString(),until:now-1}}});
+  const r=laneDoctorQuick({home:h,now});
+  assert.equal(r.lanes.codex.alive,false); assert.equal(r.lanes.codex.reason,'configured:unprobed');
+});
+test('payment_required is retained for 24h then becomes recheckable', t => {
+  const h=fixture(t), probedAt=new Date(now-86400000).toISOString();
+  write(h,'lane-health.json',{lanes:{deepseek:{alive:false,reason:'dead:payment_required',probeReason:'dead:payment_required',probedAt}}});
+  const r=laneDoctorQuick({home:h,now});
+  assert.equal(r.lanes.deepseek.alive,false); assert.equal(r.lanes.deepseek.reason,'configured:unprobed');
 });
 test('corrupt routing is not silently overwritten',t=>{const h=fixture(t);fs.writeFileSync(path.join(h,'.claude/routing-overrides.json'),'{broken');assert.throws(()=>laneDoctorQuick({home:h,now}));assert.equal(fs.readFileSync(path.join(h,'.claude/routing-overrides.json'),'utf8'),'{broken');});
 test('every lane stop notification names the account to open, and passes the URL account gate',async t=>{
@@ -87,6 +100,8 @@ test('billing is substituted and notified even without auto top-up',async t=>{
   assert.ok(!r.deadNeedsUser.some(x=>x.provider==='deepseek'));
   assert.deepEqual(r.substituted,[{provider:'deepseek',via:'openrouter'}]);
   assert.equal(sent.filter(text=>/deepseek/i.test(text)).length,1);
+  assert.equal(r.lanes.deepseek.via,'openrouter');
+  assert.match(summarize(r),/deepseek ✅\(OpenRouter経由\)/);
 });
 test('a fresh failed Codex probe is re-measured instead of being reused',async t=>{
   const h=fixture(t);
@@ -96,11 +111,11 @@ test('a fresh failed Codex probe is re-measured instead of being reused',async t
   assert.equal(r.lanes.codex.alive,true);
 });
 test('notification reports key owner only from comments',t=>{const h=fixture(t);fs.appendFileSync(path.join(h,'.claude/gemini.env'),'# owner: owner@example.com\n');const text=notificationText({provider:'gemini',reason:'dead:payment_required'},h);assert.match(text,/owner@example.com/);assert.ok(!text.includes('test-fixture'));});
-test('successful probe supersedes older limit history; expired cooldown cache does not revive',t=>{
+test('successful probe supersedes older limit history; expired cooldown becomes recheckable',t=>{
   const h=fixture(t),stamp=new Date(now-1000).toISOString();
   fs.writeFileSync(path.join(h,'.claude/provider-limit-history.jsonl'),JSON.stringify({provider:'deepseek',t:new Date(now-2000).toISOString(),until:now+3600000})+'\n');
   write(h,'lane-health.json',{lanes:{deepseek:{alive:true,reason:'probe_ok',probedAt:stamp},glm:{alive:false,reason:'cooldown',until:now-1,probedAt:stamp}}});
-  const r=laneDoctorQuick({home:h,now});assert.equal(r.lanes.deepseek.alive,true);assert.equal(r.lanes.glm.alive,true);
+  const r=laneDoctorQuick({home:h,now});assert.equal(r.lanes.deepseek.alive,true);assert.equal(r.lanes.glm.alive,false);assert.equal(r.lanes.glm.reason,'configured:unprobed');
 });
 test('failed notification is retried, while successful delivery is deduped',async t=>{
   const h=fixture(t);let calls=0;

@@ -686,6 +686,10 @@ const positiveEnv = (value, fallback) => Number.isFinite(Number(value)) && Numbe
 export const policyStallMinElapsedSecs = (env = {}) => positiveEnv(env.CODEX_DO_POLICY_STALL_MIN_ELAPSED_SECS, POLICY_STALL_MIN_ELAPSED_SECS);
 // タイムアウトで kill してから 'close' を待つ猶予。超えたら pipe を破棄して打ち切る。
 export const timeoutKillGraceMs = (env = {}) => positiveEnv(env.CODEX_DO_TIMEOUT_KILL_GRACE_MS, 5000);
+
+export function remainingPrimaryBudgetSecs(budgetSecs, elapsedSecs) {
+  return Math.max(1, budgetSecs - elapsedSecs);
+}
 export const policyStallCheckMs = (env = {}) => positiveEnv(env.CODEX_DO_POLICY_STALL_CHECK_MS, 5000);
 
 export function shouldAbortPolicyStall({
@@ -1158,8 +1162,13 @@ if (!useCodex) {
   process.exit(routed.provider ? 0 : (routed.result.status || 1));
 }
 
-async function launchCodex(codexArgs) {
+async function launchCodex(codexArgs, primaryStarted = Date.now()) {
   let result;
+
+  const remainingTimeoutSecs = () => remainingPrimaryBudgetSecs(
+    timeoutSeconds,
+    (Date.now() - primaryStarted) / 1000,
+  );
 
   if (process.platform === 'win32' && !forceNative) {
     // 実機の distro 有無で分岐が変わると abort 経路のテストが非決定的になるため、
@@ -1216,7 +1225,7 @@ async function launchCodex(codexArgs) {
         if (error?.code !== 'ENOENT') console.error(`⚠️ worktree の gitdir 確認に失敗しました（処理は続行します）: ${error?.message ?? error}`);
       }
       recordLaneMode('wsl', review ? 'read-only' : 'workspace-write');
-      result = await execute('wsl', wslCodexArgs({ distro, cwd, codexArgs, inGitRepo: isInsideGitRepo(cwd) }));
+      result = await execute('wsl', wslCodexArgs({ distro, cwd, codexArgs, inGitRepo: isInsideGitRepo(cwd) }), { timeoutSecs: remainingTimeoutSecs() });
     }
     else {
       if (finalStep !== 'native') console.error(`🚨 ${failureReason}`);
@@ -1238,7 +1247,7 @@ async function launchCodex(codexArgs) {
       const native = resolveNativeCodex();
       const nativeArgs = applyNativeSandbox(codexArgs, { review });
       if (!isInsideGitRepo(cwd)) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
-      result = await execute(native.command, [...native.prefixArgs, ...nativeArgs], { cwd });
+      result = await execute(native.command, [...native.prefixArgs, ...nativeArgs], { cwd, timeoutSecs: remainingTimeoutSecs() });
     }
   } else {
     if (process.platform === 'win32') console.error('⚠️ --force-native によりネイティブ Windows codex で実行します');
@@ -1246,7 +1255,7 @@ async function launchCodex(codexArgs) {
     const native = resolveNativeCodex();
     const nativeArgs = process.platform === 'win32' ? applyNativeSandbox(codexArgs, { review }) : [...codexArgs];
     if (!isInsideGitRepo(cwd)) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
-    result = await execute(native.command, [...native.prefixArgs, ...nativeArgs], { cwd });
+    result = await execute(native.command, [...native.prefixArgs, ...nativeArgs], { cwd, timeoutSecs: remainingTimeoutSecs() });
   }
 
   return result;
@@ -1267,10 +1276,11 @@ async function executeCodex() {
   }
   const codexArgs = buildCodexExecArgs({ ...selectedLane, review });
   let result = null, attempts = 0, seconds = 0;
+  const primaryStarted = Date.now();
   for (let attempt = 1; attempt <= 2; attempt++) {
     const attemptStarted = Date.now();
     logCodex();
-    result = await launchCodex(codexArgs);
+    result = await launchCodex(codexArgs, primaryStarted);
     const elapsed = (Date.now() - attemptStarted) / 1000;
     seconds += elapsed;
     attempts = attempt;

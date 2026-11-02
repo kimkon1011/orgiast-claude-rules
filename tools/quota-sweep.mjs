@@ -328,6 +328,15 @@ export function prepareTree({ home, provider, run, previous, needRelativePointer
     if (dirty) throw new Error('Uncommitted prior work preserved in quota-sweep-repo; reconcile before starting a new branch');
     log(`quota-sweep: preserved uncommitted work on ${preserved.branch}${preserved.pushed ? '' : ' (local only)'}`);
   }
+  // .loop/ は gitignore 済みだが、過去の preserveDirtyTree で追跡されたファイルが残り、
+  // ローカル変更があると git checkout --detach origin/main が失敗する（git-checkout-1 連続失敗）。
+  // 追跡ファイルのインデックスと作業ツリーの両方をHEADに戻してから進める
+  // （git checkout HEAD -- <path> は index + worktree 両方を HEAD に合わせる）。
+  const loopDirty = run('git', ['status', '--porcelain', '--', '.loop/'], tree);
+  if (loopDirty) {
+    run('git', ['checkout', 'HEAD', '--', '.loop/'], tree);
+    log('quota-sweep: reset tracked .loop/ files to committed state before checkout');
+  }
   run('git', ['checkout', '--detach', 'origin/main'], tree);
   const branch = `quota-sweep/${new Date().toISOString().replace(/[-:]/g, '').slice(0, 13).replace('T', '-')}-${provider}-${Date.now().toString(36)}`;
   run('git', ['switch', '-c', branch], tree);
@@ -501,7 +510,9 @@ export async function runSweep(decision, context) {
     if (stop) { outcome = stop; return; }
     const prepared = (context.prepareTree ?? prepareTree)({ home, provider, run, previous, needRelativePointer: provider === 'codex' && Boolean(context.wsl), log, io: context.treeIo });
     ({ tree, branch } = prepared); Object.assign(record, prepared); save();
-    const model = env.ORGIAST_QUOTA_SWEEP_MODEL || 'sonnet';
+    // OpenRouter 等の非 Claude モデル名（deepseek/... など）は plan 枠を消費せず unrecognized_model で child-1 連続失敗になるため採用しない。
+    const requestedModel = env.ORGIAST_QUOTA_SWEEP_MODEL;
+    const model = requestedModel && !requestedModel.includes('/') ? requestedModel : 'sonnet';
     if (/opus|fable/i.test(model)) throw new Error('Supervisor model is not permitted for quota sweep');
     let executable, baseArgs, wsl;
     if (provider === 'claude') {
@@ -517,6 +528,8 @@ export async function runSweep(decision, context) {
     const childEnv = { ...sanitizeClaudeSupervisorEnv(env), ORGIAST_HOME: home, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: `quota-sweep:${provider}` };
     // No API-key billing fallback. Both hosts must use their existing plan authentication.
     for (const k of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY']) delete childEnv[k];
+    // 他レーン（autopilot の deepseek 等）の経路・モデル指定が親 env から漏れても plan 認証の Claude で動かす。
+    if (provider === 'claude') for (const k of Object.keys(childEnv)) if (/^ANTHROPIC_(BASE_URL|MODEL|.*_MODEL)$/i.test(k) || k === 'CLAUDE_CODE_MAX_CONTEXT_TOKENS') delete childEnv[k];
     const launch = async (prompt, timeoutMs) => {
       reason = null; failureKey = null;
       const stopAt = Math.min(decision.deadline, now() + timeoutMs);

@@ -328,11 +328,11 @@ bound scriptのscriptId不明時はDrive MCPで`mimeType='application/vnd.google
 
 ### 1.5 URL・名前・自己完結した手順（§1.5〜1.5.3）
 
-URL規約遵守、リンク事前共有、内部IDに名前併記、初心者向け全手順を毎回提示。
+URLの同じ行か直前に開くアカウントを明記、リンク事前共有、ID名前併記、全手順提示。
 
 **1.5.0 URL を出すときは「どのアカウントで開くか」を必ず併記する（kim 2026-10-04 厳命・全PC全アカウント・絶対）**
 
-リンクを提示するときは、**そのURLをどのアカウントでログインして開くのか**を必ず同じ場所に書く。ブラウザの既定アカウントは人ごとに違い、別アカウント所有のリソースは 404／アクセス権エラーになるか、**気付かず別アカウントのまま操作して意図しない結果になる**。形式は直前の行に「**<アカウント名>** で開いてください。」と書き、次の行に URL だけを置く（URL の直後に括弧・句読点・全角文字を続けない。スマホでリンク範囲がずれて 404 になる・2026-10-18 実害。stop gate `tools/url-format-guard.mjs` が差し戻す）。既定アカウントと違う場合は「シークレットウィンドウで開く」も併記する。Google Workspace は 1.5 の規約（全 Workspace で `authuser=開く人のメール`＋本文に同じメールを明記）で吸収されるが、**GitHub / Vercel / npm / X / Discord / Supabase など authuser 相当の仕組みが無いサービスは必ず明記**する。デスクトップのショートカットを配る場合もファイル名か本文にアカウント名を入れる。あわせて**選択肢の既定値が意図と違う箇所**も書く（実害 2026-10-04: GitHub の Add people で Role を選ばなかったため admin 依頼が write で発行された／settings/access をどのアカウントで開くか書かず kim の手が止まった）。この規約は stop gate `tools/url-account-gate.mjs` が全PCで強制する（理由コード URL-ACCOUNT、例外は `[URL-ACCOUNT-OK]`）。
+リンクを提示するときは、**そのURLをどのアカウントでログインして開くのか**を必ず同じ場所に書く。ブラウザの既定アカウントは人ごとに違い、別アカウント所有のリソースは 404／アクセス権エラーになるか、**気付かず別アカウントのまま操作して意図しない結果になる**。形式は直前の行に「**<アカウント名>** で開いてください。」と書き、次の行に URL だけを置く（URL の直後に括弧・句読点・全角文字を続けない。スマホでリンク範囲がずれて 404 になる・2026-10-18 実害。stop gate `tools/url-format-guard.mjs` が差し戻す）。既定アカウントと違う場合は「シークレットウィンドウで開く」も併記する。Google Workspace は 1.5 の規約（全 Workspace で `authuser=開く人のメール`＋本文に同じメールを明記）で吸収されるが、**GitHub / Vercel / npm / X / Discord / Supabase など authuser 相当の仕組みが無いサービスは必ず明記**する。デスクトップのショートカットを配る場合もファイル名か本文にアカウント名を入れる。あわせて**選択肢の既定値が意図と違う箇所**も書く（実害 2026-10-04: GitHub の Add people で Role を選ばなかったため admin 依頼が write で発行された／settings/access をどのアカウントで開くか書かず kim の手が止まった）。この規約は stop gate `tools/url-account-gate.mjs` が全PCで強制する（理由コード URL-ACCOUNT、例外は `[URL-ACCOUNT-OK]`）。**2026-11-01 nishi 指摘で強化**: 名簿にないログイン画面（`auth.` `login.` `accounts.` `manager.` などのホスト、`/device` `/oauth` `/authorize` `/login` などのパス）と、手順の中で「開いて」「ログインして」と渡す URL は、ドメインを問わず対象。アカウントは **URL と同じ行か直前の行** に書く（開いた後の行に書いても数えない。Codex 再ログイン手順で「開く」の2行後にメールを書き、user が迷った実害）。
 
 **1.5.0.1 リンクを渡す前に相手への共有を済ませる（kim 2026-10-17 厳命・全PC全アカウント・絶対）**
 
@@ -364,7 +364,7 @@ kim が読む Doc は `tools/gdoc-publish.mjs --authuser <開く人のメール>
 
 **共有config（DwD/IAM/DNS/Secrets/SaaS連携）を変更する手順を渡す前に既存の有無を必ず確認する**。上書きトグルは他アプリを壊す破壊力があるため、既存があればmerge、なければそのまま追加、と事前に明示。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/url-and-handoff-format.md`
 
-**URLは対象アカウントのブラウザプロファイルを指定して開く（2026-09-30 指示）**。所有アカウントを先に確定し（§1.12）、ランチャー・手順では `pwsh -NoProfile -File "<...>\.claude\open-url-as.ps1" -Account <メールアドレス> -Url <URL>` を使う。「そのアカウントで開いて」と書くだけで user に判断させない。ヘルパーが無ければ手順を渡す前に各PCの `~/.claude/open-url-as.ps1` へ設置し、対応表は同スクリプトの `-List` で確認する。
+**URLは対象アカウントのブラウザプロファイルを指定して開く（2026-09-30 指示）**。所有アカウントを先に確定し（§1.12）、ランチャー・手順では rules repo の `tools/open-url-as.ps1`（全PCに repo ごと配布。例: `pwsh -NoProfile -File "$HOME\.claude\nightly-repo\tools\open-url-as.ps1" -Account <メールアドレス> -Url <URL>`）を使う。「そのアカウントで開いて」と書くだけで user に判断させない。対応表は同スクリプトの `-List` で確認する。`tools/make-desktop-launcher.mjs` は既定ブラウザで URL を開くスクリプト（`Start-Process 'https://...'` など）を拒否する（2026-11-01・アカウント非依存の公開ページだけ `--allow-default-browser`）。
 
 - `%LOCALAPPDATA%\Google\Chrome\User Data\Local State` の `profile.info_cache` を毎回読み、Chrome を `--profile-directory=<プロファイルのディレクトリ名>` 付きで起動する。対応表を固定しない。
 - chrome.exe または指定アカウントのプロファイルが無い場合は、指定が効かなかった警告を user と Claude に見える形で出してから既定で開く。黙って別アカウントで開かない。
@@ -491,6 +491,7 @@ nishi 指摘:「**『閉じてよい』というのは Close 処理をこれか�
   - `/session-close をして（まだ閉じない・YYYY-MM-DD HH:MM まで待つ）`: 作業は終わったが /session-close 未実行。/session-close をする。こちらも「まだ閉じない」なので何日の何時まで待つかを必ず入れる
   - `まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）`: 作業継続中。何日の何時まで待つかを必ず入れる（例: `まだ閉じない（作業中・2026-11-02 23:59 まで待つ）`）。期限は待っている相手の作業や自動チェックの期限に合わせ、過ぎたら新しい期限に書き換えるか /session-close を提案する（2026-10-27 nishi 指示・next-action-gate が SESSION-OPEN-NO-DEADLINE / SESSION-OPEN-DEADLINE-PAST で機械検査）
   - 待つ期限は Stop hook `tools/session-wait-title.mjs` がセッション一覧のタイトルの頭に `【11/02/20:11まで】` の形（年なし）で自動で付け、閉じてよい定型文になったら外す。既存の全セッションにも SessionStart の `--all`（1時間に1回）で当てる（2026-10-27 nishi 指示・全PC全アカウント）
+  - PC番号（作業用018 なら `018`）がある PC では、セッション一覧のタイトル頭に `018｜` を付け、待機セッションの自動名も `018-…` にする。どのPCのセッションかをスマホで見分けるため（2026-11-01 kim 指示・全PC）。番号は fleet-pc-map.json から hostname で引く。上書きは env `ORGIAST_PC_NUMBER`
   これらは**セッションの状態を表す語**であって、user が次に押すものではない。
   **ゲートを満たしても user が迷えば説明として失敗**。分類の直後に上の3行を必ず書く。
 - 判定: **user が次の1アクションで迷ったら、その説明は失敗**とみなす。
@@ -1133,7 +1134,7 @@ Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM などの�
 
 #### 1.18.5 AIレーン放置禁止と手渡し前の代替検証
 
-1. 落ちたレーンは**同じセッション内で修復**。対象: codex/gemini/deepseek/groq/openrouter/xai/genspark/kimi/glm。既知の修復: WSL ディストリ不在 → Windows ネイティブ codex（danger-full-access）に自動切替／残高切れ → オートチャージ設定の確認と通知／OAuth 失効 → ログイン URL の提示。「既知」「自動で振り替わる」「別の AI で代用」と書いて済ませるのは **違反**。
+1. 落ちたレーンは**同じセッション内で修復**。対象: codex/gemini/deepseek/groq/openrouter/xai/genspark/kimi/glm。既知の修復: WSL ディストリ不在 → Windows ネイティブ codex（danger-full-access）に自動切替／残高切れ → オートチャージ設定の確認と通知／OAuth 失効 → ログイン URL の提示。「既知」「自動で振り替わる」「別の AI で代用」と書いて済ませるのは **違反**。SessionStart が停止レーンの再確認を自動起動し（30分に1回）、応答で停止を報告して [LANE-REPAIR] が無いものは lane-abandonment-gate が止める。
 2. lane-doctor の表示で、最後の probe が失敗したレーンを ✅ と出さない（stale ✅ 禁止）。
 3. 修復できなかった場合は、原因・試した手段・**残る user 操作 1 件**を kim に fleet-mail または Discord で送る（放置しない）。
 4. **手渡し前の代替検証**: user に支払い・ログイン・設定を頼む前に、同じ能力を持つ生存レーンで実行して結果を示す。生存レーンがあるのに頼んだら違反（substitute-capability-gate が block）。user がそのプロバイダを名指しで要求した場合だけ `[SUBSTITUTE-OK]` で例外。

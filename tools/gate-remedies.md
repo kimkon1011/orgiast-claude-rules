@@ -190,7 +190,7 @@ effortLevel を medium/high、model を既定監督モデルに戻す。
 
 ## url-account-gate
 
-Workspace の URL は authuser=開く人のメール を付け、本文の同じ行か直前に「<同じメール> で開いてください」と書く。自分宛は userEmail、他人宛は共有済みの相手メール。script.google.com/home/ 系は例外。他サービスはアカウント名を直前の行に書いて URL を単独行に置き、既定と違う場合はシークレットウィンドウも指定。
+Workspace の URL は authuser=開く人のメール を付け、本文の同じ行か直前に「<同じメール> で開いてください」と書く。自分宛は userEmail、他人宛は共有済みの相手メール。script.google.com/home/ 系は例外。他サービスはアカウント名を直前の行に書いて URL を単独行に置き、既定と違う場合はシークレットウィンドウも指定。名簿にないログイン画面（auth./login./accounts./manager. 等、/device・/oauth・/login 等）と、手順で「開いて」と渡す URL も対象。アカウントは開いた後の行ではなく、URL と同じ行か直前の行に書く。ランチャーで開くなら tools/open-url-as.ps1 -Account <メール> -Url <URL>。
 
 ## decision-research-gate
 
@@ -250,6 +250,12 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 作業や委譲の完了を待つ旨と、その完了後に行う作業を残したままターンを閉じず、当ターン内に完了まで進める。待機が不要なら、そのまま次の作業へ進めて結果まで報告する。
 
 コードブロック・引用行は対象外。既存 Stop runner から呼ぶため Stop hook 設定の追加登録は不要。`ORGIAST_DEFERRAL_WAIT_GATE=0` で無効化できる。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
+
+## unregistered-promise-gate
+
+本文で Claude 自身が今後行う作業を約束した場合は、そのターンで実行して結果を報告するか、末尾の「この後の自動進行」に具体的な作業を登録する。「なし」のまま約束を残さない。user の返事待ちを条件にせず、返事がなくても進む形へ直す。
+
+コードブロック・引用ブロック・かぎ括弧内の引用、過去形・完了報告は対象外。「この後の自動進行」の装飾・最終行・「なし」表記は台帳の判定を共用する。既存 Stop runner の同一ターン2回までの差し戻し上限を利用する。Stop hook 設定の追加登録は不要。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
 
 ## api-billing-guard
 `claude /login` で Team シートを選び直す。例外は user の `[API-BILLING-OK]`（同一セッション60分）。

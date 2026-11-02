@@ -58,6 +58,9 @@
     "deviceId": "B79CA602-6163-4252-B2A0-2A96C61F6767",
     "account": "cr@orgiast.jp",
     "person": "金功勇",
+    "notifyDiscordId": "715210673642012733",
+    "notifyTo": "kim@orgiast.jp（金功勇）",
+    "_notifyEvidence": "2026-10-23 本人が『進捗 DM の宛先は kim で正しい』と回答。PR #1227 後の 2026-10-27〜11-01、auto-progress-done-dm.sent.jsonl 44件がすべて delivered=toast、Discord DM 0件で、owner-inbox.md に229件が未読滞留したことを 2026-11-01 に作業用011で実測。",
     "aliases": [
       "cr-PC"
     ],

@@ -10,6 +10,33 @@ import { run } from './stop-gate-runner.mjs';
 
 const runner = fileURLToPath(new URL('./stop-gate-runner.mjs', import.meta.url));
 
+for (const rewrite of [false, true]) test(`未登録の約束は共通再試行上限で止まる（書き直し=${rewrite}）`, async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-promise-'));
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  const options = { mode: 'off', policyOptions: { home, hostname: 'kim-PC', notify: async () => ({ delivered: 'test' }) } };
+  const context = { assistantText: '記録済みです。', humanText: '', raw: '' };
+  const input = { session_id: `promise-retry-${rewrite}` };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const text = `${rewrite ? ['台帳へ', 'ノウハウへ', '手順書へ'][attempt] : '台帳へ'}記録します。\nこの後の自動進行: なし`;
+    const result = await run({ ...input, last_assistant_message: text, stop_hook_active: attempt > 0 }, context, options);
+    assert.ok(result.record.blockedBy.includes('unregistered-promise-gate'));
+    assert.ok(result.record.reasonCodes.includes('UNREGISTERED-PROMISE'));
+    assert.equal(result.record.verdict, attempt < 2 ? 'block' : 'retry-cap');
+    assert.equal(result.decision, attempt < 2 ? 'block' : undefined);
+  }
+  const repaired = await run({ ...input, last_assistant_message: '台帳へ記録しました。', stop_hook_active: true }, context, options);
+  assert.equal(repaired.record.verdict, 'pass');
+  assert.ok(!repaired.record.blockedBy.includes('unregistered-promise-gate'));
+  const records = fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(records[2].verdict, 'pass_after_cap');
+});
+
 // invoke() は process.env を子プロセスへそのまま渡す。自動セッション（CLAUDE_HEADLESS=1）の中で
 // 走らせると規則が伝播し、AUTOPILOT-NO-SESSION-WAKEUP の検査がskipされて「起床手段が無いのに
 // 通る」ケースが落ちる（2026-10-25 実測）。このファイルは通常セッションの判定を検証するので外す。
@@ -43,7 +70,7 @@ test('同一ターンは既存上限の3回目からpass_after_capを台帳に�
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   assert.equal(JSON.parse(invoke(home, 'cap', request).stdout).decision, 'block');
   assert.equal(JSON.parse(invoke(home, 'cap', request).stdout).decision, 'block');
-  assert.match(JSON.parse(invoke(home, 'cap', request).stdout).systemMessage, /次の応答で必ず訂正.*残存コード/);
+  assert.match(JSON.parse(invoke(home, 'cap', request).stdout).systemMessage, /次の応答で直して.*残存コード/);
   const records = fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split(/\r?\n/).map(JSON.parse);
   assert.deepEqual(records.map(({ verdict }) => verdict), ['block', 'block', 'pass_after_cap']);
   assert.deepEqual(records.map(({ sameTextRetries }) => sameTextRetries), [1, 2, 3]);
@@ -63,7 +90,7 @@ for (const [name, texts, counts] of [
       const result = invoke(home, 'reset', text);
       assert.equal(result.status, 0, result.stderr);
       const output = JSON.parse(result.stdout);
-      if (counts.at(-1) === 3 && index === texts.length - 1) assert.match(output.systemMessage, /次の応答で必ず訂正/);
+      if (counts.at(-1) === 3 && index === texts.length - 1) assert.match(output.systemMessage, /次の応答で直して/);
       else assert.equal(output.decision, 'block');
     }
     const records = fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);

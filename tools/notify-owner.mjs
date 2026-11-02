@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { appendOwnerInbox } from './auto-progress-inbox-hook.mjs';
 import { notifyKim, KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
+import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { isEntry } from './is-entry.mjs';
 // 所有者解決は lib/fleet-owner.mjs（kim-inbox と共用。ここに置くと notify-kim -> kim-inbox -> notify-owner の import が循環する）。
 import { ownerPcMap, resolveOwner } from './lib/fleet-owner.mjs';
@@ -14,14 +15,29 @@ export { resolveOwner };
 const readJson = (file, fallback = {}) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } };
 const readText = file => { try { return fs.readFileSync(file, 'utf8').trim(); } catch { return ''; } };
 
+function localPcEntry(map, label) {
+  return map[label] || Object.values(map).find(value => value && typeof value === 'object'
+    && [value.hostname, value.sheetName, value.remoteName, ...(value.aliases || [])].includes(label));
+}
+
+function explicitNotifyDiscordId(owner, { home = os.homedir(), label = resolveFleetLabel(home), pcMap } = {}) {
+  const configured = localPcEntry(pcMap ?? ownerPcMap(home), label);
+  const localOwner = String(configured?.account || configured?.owner || '').trim().toLowerCase();
+  return localOwner && localOwner === String(owner || '').trim().toLowerCase()
+    ? String(configured.notifyDiscordId || '').trim()
+    : '';
+}
+
 function directoryRows(home, directory) {
   const data = directory ?? readJson(path.join(home, '.claude', 'orgiast-discord-members.json'));
   return Array.isArray(data) ? data : Object.values(data?.queries || data || {}).flatMap(v => Array.isArray(v?.members) ? v.members : []);
 }
 
-function recipientMatchesOwner(owner, id, { home = os.homedir(), directory, pcMap } = {}) {
+function recipientMatchesOwner(owner, id, options = {}) {
+  const { home = os.homedir(), directory, pcMap } = options;
   const wanted = String(owner || '').trim().toLowerCase();
   if (!wanted || !String(id || '').trim()) return false;
+  if (String(id) === explicitNotifyDiscordId(owner, options)) return true;
   if (String(id) === KIM_DISCORD_USER_ID && wanted !== 'kim@orgiast.jp') return false;
   const memberMismatch = directoryRows(home, directory).some(row => String(row.id) === String(id)
     && ((wanted !== 'kim@orgiast.jp' && [row.username, row.global_name, row.nick].some(name => ['kimkon.', '金功勇'].includes(name)))
@@ -34,8 +50,10 @@ function recipientMatchesOwner(owner, id, { home = os.homedir(), directory, pcMa
 
 export function resolveOwnerDiscordId(owner, { home = os.homedir(), directory, ...options } = {}) {
   const wanted = String(owner || '').trim().toLowerCase();
+  const explicitId = explicitNotifyDiscordId(owner, { home, ...options });
+  if (explicitId) return explicitId;
   const rows = directoryRows(home, directory);
-  const safeId = id => recipientMatchesOwner(owner, id, { home, directory, pcMap: options.pcMap }) ? id : '';
+  const safeId = id => recipientMatchesOwner(owner, id, { home, directory, ...options }) ? id : '';
   const matches = [...new Set(rows.filter(row => wanted && (row.emails || []).some(email => String(email).toLowerCase() === wanted)).map(row => row.id).filter(Boolean).map(String))];
   if (matches.length === 1) return safeId(matches[0]);
   if (matches.length > 1) return '';

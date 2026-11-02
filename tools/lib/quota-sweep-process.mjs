@@ -9,12 +9,15 @@ export function killTree(pid, { platform = process.platform, spawnImpl = spawnSy
     // 親プロセス終了時に Windows がクリーンアップするため、無視してよい。
     if (r.error?.code === 'ETIMEDOUT') return;
     if (r.error) throw r.error;
-    // taskkill は対象プロセスが既に終了していると exit 128（プロセスが見つかりません）を返す。
-    // 期限到達時は watchdog と親のタイマーが同時に taskkill するため、後勝ち側は必ず 128 になる
+    // taskkill は対象プロセスが既に終了していると以下のいずれかの exit code を返す。
+    // - 128: Git Bash / MSYS2 / Cygwin 環境（プロセスが見つかりません）
+    // - 255: Node.js の spawnSync が native Windows API 経由で taskkill を呼び出した場合
+    // 期限到達時は watchdog と親のタイマーが同時に taskkill するため、後勝ち側は必ず 128 または 255 になる
     // （2026-10-26T20:17Z 実測: quota-sweep claude 13連続 failed の理由が "kill: taskkill failed: 128"
-    // に汚染され、kill 不能と誤読された）。POSIX 分岐の ESRCH と同様に 128 は無視する。
-    // 0 ・ 128 以外（例: 1 = アクセス拒否）は子が残る可能性があるため失敗として投げる。
-    if (r.status !== 0 && r.status !== 128) throw new Error(`taskkill failed: ${r.status}`);
+    // に汚染され、kill 不能と誤読された。2026-11-02 実測: spawnSync 経由では 255 になる）。
+    // POSIX 分岐の ESRCH と同様に 128/255 は無視する。
+    // 0 ・ 128 ・ 255 以外（例: 1 = アクセス拒否）は子が残る可能性があるため失敗として投げる。
+    if (r.status !== 0 && r.status !== 128 && r.status !== 255) throw new Error(`taskkill failed: ${r.status}`);
   } else {
     try { killImpl(-pid, 'SIGKILL'); } catch (e) { if (e.code !== 'ESRCH') throw e; }
   }

@@ -165,6 +165,26 @@ test('emptyOutputReason は Codex の認証失敗と ChatGPT モデル認証不�
   assert.equal(emptyOutputReason({ status: 1 }), 'exit_1');
 });
 
+test('emptyOutputReason は先頭が切れた認証失敗 stderrTail（401 も Missing b も欠落）を auth_failed に分類する', () => {
+  // 実測 2026-10-29〜31: codex-do が stderrTail を末尾200字へ切り詰め、"arer or basic authentication" で始まる形になる。
+  const truncated = 'arer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: a52b4a02b91c19e8-KIX, request id: req_c13287e0c5004bec97e2e26b1d8bef5b';
+  assert.doesNotMatch(truncated, /401|Missing b/i);
+  assert.equal(emptyOutputReason({ status: 1, exitCode: 1, launched: true, timedOut: false, secs: 3, stderrTail: truncated }), 'auth_failed');
+});
+
+test('先頭が切れた認証失敗 stderrTail の fallback 連続失敗は lane_outage_unrepaired ではなく codex_auth_failed に繋がる', () => {
+  const truncated = 'arer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: a52b4a02b91c19e8-KIX, request id: req_c13287e0c5004bec97e2e26b1d8bef5b';
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [0, 1, 2].map((i) => row({
+    t: `2026-09-09T10:0${i}:00Z`, provider: 'fallback', out: 0, status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 15, stderrTail: truncated,
+  })).join(''));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  const ids = findings.map((item) => item.id);
+  assert.ok(ids.includes('codex_auth_failed'), JSON.stringify(ids));
+  assert.ok(!ids.includes('lane_outage_unrepaired'), JSON.stringify(ids));
+  assert.equal(findings.find((item) => item.id === 'codex_auth_failed').severity, 'high');
+});
+
 test('emptyOutputReason は U+2019 と U+0027 の両方の usage limit 行を usage_limit に分類する', () => {
   // U+2019 (’)
   assert.equal(emptyOutputReason({
@@ -993,6 +1013,9 @@ test('emptyOutputReason は台帳の文字列 status を no_output に潰さな�
   // 数値 status(終了コード)と既存の文字列 status の扱いは変えない。
   assert.equal(emptyOutputReason({ status: 3 }), 'exit_3');
   assert.equal(emptyOutputReason({ status: 'error' }), 'spawn_failed');
+  // status:"ok" は API 呼出が成功したことを示す。no_output にしてはならない
+  // (2026-10-30〜11-01 実測: gemini プローブが out=0 でも HTTP 応答は正常)。
+  assert.equal(emptyOutputReason({ status: 'ok', out: 0 }), 'ok');
 });
 
 test('cooldown 行を分母から外し、上限到達の glm を high の未修理全滅にしない', () => {
@@ -1136,37 +1159,37 @@ test('低成果の chain 行だけでは fallback_low_yield を起票しない',
   assert.equal(findings.filter((f) => f.id === 'fallback_low_yield').length, 0);
 });
 
-test('#773 以降の timeout が上限を超えたら夜間に high で検出する', () => {
+test('孫プロセス対策(#1260)以降の timeout が上限を超えたら夜間に high で検出する', () => {
   const dir = home();
   write(dir, 'executor-usage.jsonl', row({
-    t: '2026-10-18T10:08:59Z', provider: 'fallback', status: 'timeout', secs: 1800,
+    t: '2026-10-29T10:08:59Z', provider: 'fallback', status: 'timeout', secs: 1800,
     chain: [{ backend: 'gemini-cli', outcome: 'timeout', secs: 1500 }, { backend: 'cheap-code:deepseek', outcome: 'ok', secs: 300 }],
   }));
-  const findings = collectFindings({ home: dir, now: new Date('2026-10-19T12:00:00Z'), codexUsedPercent: null });
+  const findings = collectFindings({ home: dir, now: new Date('2026-10-30T12:00:00Z'), codexUsedPercent: null });
   const finding = findings.find((f) => f.id === 'timeout_waste_exceeds_cap');
   assert.equal(finding?.severity, 'high');
   assert.deepEqual(finding.evidence, ['1件', '最大試行 1500秒', '上限 900秒', '超過: gemini-cli フォールバック 1500秒/予算900秒']);
 });
 
-test('#773 以降の timeout が上限内なら timeout_waste_exceeds_cap を出さない', () => {
+test('孫プロセス対策(#1260)以降の timeout が上限内なら timeout_waste_exceeds_cap を出さない', () => {
   const dir = home();
   write(dir, 'executor-usage.jsonl', row({
-    t: '2026-10-19T17:34:53Z', provider: 'codex', status: 'timeout', secs: 600.502, exitCode: 124,
+    t: '2026-10-29T17:34:53Z', provider: 'codex', status: 'timeout', secs: 600.502, exitCode: 124,
   }));
-  const findings = collectFindings({ home: dir, now: new Date('2026-10-19T20:00:00Z'), codexUsedPercent: null });
+  const findings = collectFindings({ home: dir, now: new Date('2026-10-30T20:00:00Z'), codexUsedPercent: null });
   assert.equal(findings.find((f) => f.id === 'timeout_waste_exceeds_cap'), undefined);
 });
 
 test('timeoutWasteSummary は上限内でも配備後の timeout を report に残す（再発時の効果判定用）', () => {
   const summary = timeoutWasteSummary([
-    { t: '2026-10-18T10:08:59Z', provider: 'fallback', status: 'timeout', secs: 1800, chain: [{ backend: 'gemini-cli', outcome: 'timeout', secs: 900 }, { backend: 'cheap-code:deepseek', outcome: 'timeout', secs: 899 }] },
-    { t: '2026-10-19T17:34:53Z', provider: 'codex', status: 'timeout', secs: 600.502, exitCode: 124 },
+    { t: '2026-10-29T10:08:59Z', provider: 'fallback', status: 'timeout', secs: 1800, chain: [{ backend: 'gemini-cli', outcome: 'timeout', secs: 900 }, { backend: 'cheap-code:deepseek', outcome: 'timeout', secs: 899 }] },
+    { t: '2026-10-29T17:34:53Z', provider: 'codex', status: 'timeout', secs: 600.502, exitCode: 124 },
   ]);
   assert.equal(summary.verdict, 'waste-within-cap');
   assert.equal(summary.postDeployTimeoutRows, 2);
   assert.equal(summary.overCapRows, 0);
   assert.equal(summary.maxAttemptSecs, 900);
-  assert.equal(summary.lastPostDeployTimeoutAt, '2026-10-19T17:34:53.000Z');
+  assert.equal(summary.lastPostDeployTimeoutAt, '2026-10-29T17:34:53.000Z');
 });
 
 test('policyStallAttempts は chain 試行ごとに拒否痕跡を抽出し outcome を引き継ぐ', () => {
@@ -1325,4 +1348,35 @@ test('cheap-code が HTTP 402 で cooldown を張った fallback 行も外部要
   const tail402 = '[cheap-code] deepseek は利用不可(402)。provider-cooldown.json に 2026-10-29T05:00:24.892Z まで記録しました。';
   write(dir, 'executor-usage.jsonl', [10, 11, 12].map((min) => row(FALLBACK_COOLDOWN_ROW(min, { chain: [{ ...FALLBACK_COOLDOWN_ROW(min).chain[0], stderrTail: tail402 }, ...FALLBACK_COOLDOWN_ROW(min).chain] }))).join(''));
   assert.equal(collectFindings({ home: dir, now: NOW }).some((f) => f.id === 'lane_outage_unrepaired' && f.provider === 'fallback'), false);
+});
+
+test('status:ok out:0 の gemini プローブ行だけでは lane_outage_unrepaired を出さない', () => {
+  const dir = home();
+  const probeRows = [0, 1, 2, 3, 4, 5].map((i) => row({
+    t: '2026-09-09T10:' + i + ':00.000Z', provider: 'gemini', model: 'gemini-3.7-flash',
+    in: 7, out: 0, secs: 2.5, status: 'ok', source: 'llm-ask',
+  }));
+  write(dir, 'executor-usage.jsonl', probeRows.join(''));
+  const findings = collectFindings({ home: dir, now: NOW });
+  assert.equal(findings.some((f) => f.provider === 'gemini' && f.id === 'lane_outage_unrepaired'), false,
+    'gemini のプローブ行だけでは high の全滅を出してはならない');
+  assert.equal(findings.some((f) => f.provider === 'gemini'), false,
+    'gemini が健全なら finding 自体を出さない');
+});
+
+test('status:ok out:0 のプローブ行に実失敗が混ざれば lane_outage_unrepaired を出す', () => {
+  const dir = home();
+  const probes = [0, 1, 2].map((i) => row({
+    t: '2026-09-09T10:2' + i + ':00.000Z', provider: 'gemini', model: 'gemini-3.7-flash',
+    in: 7, out: 0, secs: 2.5, status: 'ok', source: 'llm-ask',
+  }));
+  const realFailures = [4, 5, 6].map((i) => row({
+    t: '2026-09-09T10:2' + i + ':00.000Z', provider: 'gemini', model: 'gemini-3.7-flash',
+    in: 173, out: 0, secs: 8, status: 'error', source: 'llm-ask',
+  }));
+  write(dir, 'executor-usage.jsonl', probes.concat(realFailures).join(''));
+  const outage = collectFindings({ home: dir, now: NOW }).find((f) => f.provider === 'gemini' && f.id === 'lane_outage_unrepaired');
+  assert.ok(outage, '実失敗が3件以上あれば high severity の全滅 finding を出す');
+  assert.equal(outage.severity, 'high');
+  assert.equal(outage.evidence[0], '3件すべて失敗');
 });

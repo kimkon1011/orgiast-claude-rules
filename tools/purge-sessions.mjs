@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// One-shot, reversible transcript archival. Reads the VSCode state DBs only as bytes to detect sessions the extension still shows (open tabs, bookmarks, archived list); never writes them.
+// One-shot, reversible transcript archival. Reads VSCode state DBs only as bytes; never writes them.
+// Remote archives use workspace DBs only; all other reasons retain global DB protection.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -84,11 +85,12 @@ function vscodeStateFiles() {
   }
   return files;
 }
-function vscodeReferences() {
+function vscodeReferences(workspaceOnly = false) {
   const buffers = [];
   let unreadable = false, files;
   try { files = vscodeStateFiles(); } catch { return { buffers, unreadable: true }; }
   for (const file of files) {
+    if (workspaceOnly && path.basename(path.dirname(file)) === 'globalStorage') continue;
     try { buffers.push(fs.readFileSync(file)); } // Bytes only: the DB is never parsed or written.
     catch (error) { if (error.code !== 'ENOENT') unreadable = true; }
   }
@@ -255,7 +257,7 @@ export function purge({ dryRun = false, restore, after = '' } = {}) {
     const remoteLedger = json(path.join(base, 'remote-archived-sessions.json'));
     const remote = new Map((remoteLedger.ids ?? []).filter(row => !(remoteLedger.kept ?? []).includes(row.sessionId)).map(row => [row.sessionId, row]));
     const live = liveIds(base, now);
-    let vscodeRefs;
+    let vscodeRefs, workspaceRefs;
     // Enumerate incrementally: collecting every project first can consume the entire
     // budget on Windows before inspecting even one transcript. Cursor also advances
     // across empty project directories, so every account eventually gets a full pass.
@@ -279,11 +281,6 @@ export function purge({ dryRun = false, restore, after = '' } = {}) {
       result.scanned++;
       const [projectId, filename] = key.split('/'), sessionId = filename.slice(0, -6);
       if (live.has(sessionId)) continue;
-      // Judged before inspect(): a session the extension still shows must not move for any
-      // reason, and skipping it here also saves scan budget.
-      const refs = vscodeRefs ??= vscodeReferences();
-      if (refs.unreadable) { result.vscodeState = 'unreadable'; continue; }
-      if (refs.buffers.some(b => b.includes(sessionId))) { result.protected++; continue; }
       const from = path.join(base, 'projects', projectId), file = path.join(from, filename);
       try {
         const stat = fs.statSync(file);
@@ -291,6 +288,12 @@ export function purge({ dryRun = false, restore, after = '' } = {}) {
         // 同期後、保護解除待ちの間に再開した会話も退避しない。
         const remoteReady = remoteRow?.projectId === projectId && Number.isFinite(Date.parse(remoteRow.archivedAt))
           && now - stat.mtimeMs >= 45_000 && !resumedAfter(file, Date.parse(remoteRow.archivedAt));
+        // Only remote-archived candidates ignore global hidden/unread metadata.
+        // Closed keeps its existing precedence and full DB protection.
+        const remoteOnly = remoteReady && !closed.has(sessionId);
+        const refs = remoteOnly ? (workspaceRefs ??= vscodeReferences(true)) : (vscodeRefs ??= vscodeReferences());
+        if (refs.unreadable) { result.vscodeState = 'unreadable'; continue; }
+        if (refs.buffers.some(b => b.includes(sessionId))) { result.protected++; continue; }
         const data = inspect(file, stat, deadline, now, (closed.has(sessionId) || remoteReady) && now - stat.mtimeMs >= 45_000);
         if (!data) continue;
         const age = now - stat.mtimeMs, activityAge = now - data.lastAt;
@@ -301,7 +304,7 @@ export function purge({ dryRun = false, restore, after = '' } = {}) {
           : activityAge >= 72 * 60 * MINUTE ? 'abandoned' : null;
         if (!reason) continue;
         const row = { sessionId, projectId, reason, title: data.title, at: new Date(now).toISOString(),
-          ...(reason === 'remote-archived' ? { bridgeSessionId: remoteRow.bridgeSessionId } : {}),
+          ...(reason === 'remote-archived' ? { bridgeSessionId: remoteRow.bridgeSessionId, archivedAt: remoteRow.archivedAt, title: remoteRow.title ?? data.title } : {}),
           ...(reason === 'abandoned' ? { nextKim: data.nextKim || '', automatic: data.automatic || '' } : {}) };
         if (!dryRun) {
           const fresh = fs.statSync(file);

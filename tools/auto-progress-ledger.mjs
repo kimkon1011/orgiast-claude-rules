@@ -46,6 +46,13 @@ export function extractNextKim(text) {
 
 export const ledgerFile = (home = process.env.ORGIAST_HOME || os.homedir()) => path.join(home, '.claude', 'auto-progress-ledger.jsonl');
 
+export const LEDGER_RENAME_RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+export const LEDGER_RENAME_ATTEMPTS = 10;
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 export function readLedger(file) {
   let text = '';
   try { text = fs.readFileSync(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
@@ -57,11 +64,50 @@ export function readLedger(file) {
   return rows;
 }
 
-export function writeLedger(file, rows) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+export function writeLedger(file, rows, io = {}) {
+  const mkdirSync = io.mkdirSync ?? fs.mkdirSync;
+  const writeFileSync = io.writeFileSync ?? fs.writeFileSync;
+  const renameSync = io.renameSync ?? fs.renameSync;
+  const rmSync = io.rmSync ?? fs.rmSync;
+  const wait = io.sleepSync ?? sleepSync;
+  mkdirSync(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(temp, rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''));
-  fs.renameSync(temp, file);
+  writeFileSync(temp, rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''));
+  try {
+    for (let attempt = 0; attempt < LEDGER_RENAME_ATTEMPTS; attempt += 1) {
+      try {
+        renameSync(temp, file);
+        return;
+      } catch (error) {
+        if (!LEDGER_RENAME_RETRY_CODES.has(error?.code) || attempt === LEDGER_RENAME_ATTEMPTS - 1) throw error;
+        wait(Math.min(50 * (2 ** attempt), 2000));
+      }
+    }
+  } catch (error) {
+    try { rmSync(temp, { force: true }); } catch { /* 元の rename エラーを優先する */ }
+    throw error;
+  }
+}
+
+export function cleanupOldLedgerTemps(file, { now = Date.now(), maxAgeMs = 3600000, io = {} } = {}) {
+  const readdirSync = io.readdirSync ?? fs.readdirSync;
+  const statSync = io.statSync ?? fs.statSync;
+  const rmSync = io.rmSync ?? fs.rmSync;
+  const dir = path.dirname(file);
+  const prefix = `${path.basename(file)}.`;
+  let names;
+  try { names = readdirSync(dir); } catch (error) { if (error?.code === 'ENOENT') return 0; throw error; }
+  let removed = 0;
+  for (const name of names) {
+    if (!name.startsWith(prefix) || !name.endsWith('.tmp')) continue;
+    const candidate = path.join(dir, name);
+    try {
+      if (now - statSync(candidate).mtimeMs <= maxAgeMs) continue;
+      rmSync(candidate, { force: true });
+      removed += 1;
+    } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+  }
+  return removed;
 }
 
 export const MAX_RESUMES = 8; // 1件あたりの自動再開の累計上限（watch/digest 共用。循環 import 回避のためここに置く）

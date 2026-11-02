@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -16,6 +16,12 @@ function workDir() {
   return dir;
 }
 after(() => { for (const dir of runDirs) fs.rmSync(dir, { recursive: true, force: true }); });
+
+test('remainingPrimaryBudgetSecs は起動前経過を主経路予算から差し引き、最低 1 秒を残す', () => {
+  assert.equal(remainingPrimaryBudgetSecs(210, 16), 194);
+  assert.equal(remainingPrimaryBudgetSecs(210, 209.5), 1);
+  assert.equal(remainingPrimaryBudgetSecs(210, 240), 1);
+});
 
 function run(args, options = {}) {
   const home = options.home ?? workDir();
@@ -2086,4 +2092,41 @@ test('長期 cooldown の再確認成功で CLI が解除し、再度上限な�
       assert.match(result.stderr, /\[codex-do\] cooldown を期限前の生存確認で解除/);
     }
   }
+});
+
+// 2026-11-01 実測: 予算210秒の codex 主経路が 226.8 秒。secs は launchCodex 全体（再試行・起動前時間を含む）を
+// 計るのに execute の timer は呼び出しごとに --timeout 全量で掛かっていた。fast-fail の再試行（attempt 2）に
+// 残り予算だけが渡ることで、主経路全体が予算を超えないことを偽 codex で見る。
+function fakeNativeCodexEnv(body) {
+  const dir = workDir();
+  const script = path.join(dir, 'fake-codex.mjs');
+  fs.writeFileSync(script, body.replaceAll('__DIR__', JSON.stringify(dir)), 'utf8');
+  if (process.platform === 'win32') {
+    const binDir = path.join(dir, 'npm', 'node_modules', '@openai', 'codex', 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(path.join(binDir, 'codex.js'), `import ${JSON.stringify(pathToFileURL(script).href)};\n`, 'utf8');
+    return { APPDATA: dir, ProgramFiles: path.join(dir, 'none') };
+  }
+  fs.writeFileSync(path.join(dir, 'codex'), `#!/bin/sh\nexec node "${script}" "$@"\n`, { mode: 0o755 });
+  const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === 'PATH') || 'PATH';
+  return { PATH: `${dir}${path.delimiter}${process.env[pathKey] || ''}` };
+}
+
+test('fast-fail 再試行の timer は主経路の残り予算だけで掛かり、全体で --timeout を超えない', () => {
+  const env = fakeNativeCodexEnv(`
+import fs from 'node:fs';
+import path from 'node:path';
+const marker = path.join(__DIR__, 'first-done');
+if (!fs.existsSync(marker)) {
+  fs.writeFileSync(marker, '1');
+  setTimeout(() => process.exit(1), 4000);
+} else {
+  setInterval(() => {}, 1000);
+}
+`);
+  const result = run(['--force-native', '--cwd', workDir(), '--no-fallback', '--timeout', '8', '指示内容'], { env });
+  const timeouts = [...result.stderr.matchAll(/が (\d+(?:\.\d+)?) 秒で応答を終えなかった/g)].map((m) => Number(m[1]));
+  assert.ok(timeouts.length >= 1, `timeout 発火が見えない: ${result.stderr}`);
+  // 1 回目が約 4 秒使うので、2 回目の timer は 8 秒ではなく残り約 4 秒でなければならない。
+  assert.ok(timeouts[0] <= 5, `再試行の timer が残り予算でなく ${timeouts[0]} 秒だった`);
 });

@@ -271,6 +271,14 @@ test('runSweep は FINAL の未コミット作業を救済して同じ実行で�
   assert.deepEqual(calls.find(args => args[0] === 'push'), ['push', '-u', 'origin', 'quota-sweep/test']);
   assert.ok(logs.some(message => message.includes('preserved final uncommitted work')));
 });
+test('runSweep は親 env の非 Claude 経路・モデル指定を claude child へ渡さない', async t => {
+  let seen;
+  const ctx = context(t, async (_exe, args, opts) => { seen = { args, env: opts.env }; return { code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }; });
+  ctx.env = { ANTHROPIC_BASE_URL: 'https://openrouter.ai/api', ANTHROPIC_MODEL: 'deepseek/deepseek-v4-flash', ANTHROPIC_DEFAULT_SONNET_MODEL: 'deepseek/x', CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000', ORGIAST_QUOTA_SWEEP_MODEL: 'deepseek/deepseek-v4-flash' };
+  await runSweep(decision, ctx);
+  for (const k of ['ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'CLAUDE_CODE_MAX_CONTEXT_TOKENS']) assert.equal(seen.env[k], undefined, k);
+  assert.ok(!seen.args.some(a => String(a).includes('deepseek')), 'モデル引数に非 Claude 名を使わない');
+});
 test('runSweep は終了時の救済失敗をログに残し outcome を変えない', async t => {
   const ctx = context(t, async () => ({ code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }));
   const logs = [], calls = [];

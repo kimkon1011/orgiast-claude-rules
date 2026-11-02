@@ -196,5 +196,29 @@
     "route": "Gmail MCP は本環境に無い（mcpServers=gemini-cli のみ）が、下書きの削除は DWD 経路で Claude 側が完結する。削除は `node tools/gmail-draft.mjs --delete <draftId> [--user <addr>] [--json]`（DWD で seisaku-team@orgiast.jp を impersonate・scope=gmail.compose、SA 鍵は GOOGLE_SA_KEY または既定パス aujust-sales-automation/.gcp/sheets-sa.json）。削除は `DELETE /gmail/v1/users/me/drafts/{id}` で、応答は 204=削除成功 / 404=既に無い（ツールが `{deleted:true}` / `{deleted:false,errorKind:'not_found'}` を返す）。検証結果の報告はこの実応答を読み戻して行い、kim に下書き削除の画面操作・目視確認を依頼しない。Gmail 下書きの削除が不要な用件ではそもそも手渡ししない。",
     "confidence": "high",
     "source": "handoff-audit-nightly:4f579eb3fc37b478cef737816a253d53bce15d7739e071d3aa51d4e76f799c40 / 2026-10-29 tool-name-route レビューで route を手順化（route が道具名だけの `Gmail MCP` だったため手順文に置換）"
+  },
+  {
+    "pattern": "社外顧客への返信送信の同意確認",
+    "route": "社外送信に事前承認が必要な案件では、宛先・件名・本文・送信経路を完成形で1回だけ提示して可否を確認する。承認後の送信操作は user に返さず、対象サービスの既存の認証済み経路（例: アイミツは GitHub Actions の PRONI ワークフロー、Gmail は承認済みの送信経路）で Claude が実行し、送信済み本文またはサービス上の履歴を読み戻して報告する。承認前送信を禁止された案件では、承認が得られるまで送信・フォーム入力を行わない。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:7e6d5c9f7d77360d734a0465e0ea58e845af1e7ee43687666556925d37fa643d / 2026-11-03 tool-name-route レビューで `チャット表示` を承認・実行・read-back の手順文へ置換"
+  },
+  {
+    "pattern": "Drive 保存の手渡し（鍵不在を理由に別PC依頼）",
+    "route": "Drive 保存を別PCや user に渡す前に、当ターンで利用可能な Drive コネクタの create_file を試す。コネクタが無い・失敗した場合は、既定パス、GOOGLE_SA_KEY、GOOGLE_APPLICATION_CREDENTIALS、keyserve 配布先から SA 鍵を探索し、DWD で保存先所有者を impersonate して Drive API files.create を実行する。成功時は files.get で id・name・parents を読み戻す。全経路を実試行しても成立しない場合だけ各試行の errorKind とともに『未確認』と記録し、鍵不在を未試行で断定しない。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:8fba91a867c226685a8adb65bcf418e6f15f231e5d3510e44724a1b784993618 / 2026-11-03 tool-name-route レビューで `Drive MCP` をコネクタ→DWD→read-back の手順文へ置換"
+  },
+  {
+    "pattern": "修正対象ファイルが別 PC にあるための手渡し",
+    "route": "対象ファイルが別PCにしか無い場合は user の手作業にせず、そのPCの実行エージェントへ、絶対パス・変更内容・禁止事項・検証コマンドを含む単発タスクとして渡す。完了通知だけを証拠にせず、変更後ファイルのハッシュまたは検証出力を返させて照合する。対象PCへ到達できない場合は、現PCで代替ファイルを推測作成せず、到達経路と対象ファイルの所在を『未確認』として記録する。",
+    "confidence": "medium",
+    "source": "handoff-audit-nightly:ba761818268404cf467fcc5e7bbea448c15ba1f477463f32dd0b9fdfde674682 / 2026-11-03 tool-name-route レビューで `codex-do.mjs` を対象PCへの単発指示と成果物 read-back の手順文へ置換"
+  },
+  {
+    "pattern": "新セッション開始の Enter 送信を user に依頼",
+    "route": "VS Code の入力欄で Enter を押す作業を user に渡さない。継続が必要なら auto-session の再入またはスケジューラへ同じ目的・対象ファイル・完了条件を登録し、次回起動を自動化する。登録後はキューまたは実行台帳を読み戻して受付を確認する。自動起動経路が実試行で使えない場合は、当ターンで実行できる処理を完了させ、未完了部分と試行エラーを記録する。",
+    "confidence": "medium",
+    "source": "handoff-audit-nightly:fbfaba7737ee041c0d415f2d56ea3459f4265f7362f38146bbb5c2199349396c / 2026-11-03 tool-name-route レビューで `codex-do.mjs` を自動再入・台帳 read-back の手順文へ置換"
   }
 ]

@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, armTimeoutKill, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -1912,8 +1912,51 @@ test('detectQuotaLimit: U+2019 の引用符つき usage limit 文言を検出す
 test('killProcessTree は Windows でプロセス木ごと殺す（タイムアウトを実効させる）', () => {
   const calls = [];
   killProcessTree({ pid: 4242, kill: (sig) => calls.push(['kill', sig]) },
-    { spawnImpl: (cmd, args) => calls.push([cmd, args]), platform: 'win32' });
+    { spawnImpl: (cmd, args) => { calls.push([cmd, args]); }, platform: 'win32' });
   assert.deepEqual(calls, [['taskkill', ['/pid', '4242', '/T', '/F']]]);
+});
+
+test('killProcessTree は Windows の taskkill を非ブロッキング spawn として起動する', () => {
+  const calls = [];
+  const killer = {
+    on: (event, handler) => calls.push(['on', event, typeof handler]),
+    unref: () => calls.push(['unref'])
+  };
+  killProcessTree({ pid: 4242 }, {
+    platform: 'win32',
+    spawnImpl: (cmd, args, options) => {
+      calls.push(['spawn', cmd, args, options]);
+      return killer;
+    }
+  });
+  assert.deepEqual(calls, [
+    ['spawn', 'taskkill', ['/pid', '4242', '/T', '/F'], { stdio: 'ignore', windowsHide: true }],
+    ['on', 'error', 'function'],
+    ['unref']
+  ]);
+});
+
+test('armTimeoutKill は kill の同期処理時間を締切後の猶予に含める', async () => {
+  const started = Date.now();
+  // forceTimer は unref されるため、本番では子の pipe が event loop を保つ。テストでは代わりに保持する。
+  const keepAlive = setInterval(() => {}, 100);
+  let elapsed;
+  try {
+    elapsed = await new Promise((resolve) => {
+      armTimeoutKill({
+        child: { pid: 4242 },
+        graceMs: 1000,
+        kill: () => {
+          const until = Date.now() + 1500;
+          while (Date.now() < until) { /* 同期 taskkill の遅延を再現 */ }
+        },
+        onForce: () => resolve(Date.now() - started)
+      });
+    });
+  } finally {
+    clearInterval(keepAlive);
+  }
+  assert.ok(elapsed < 2200, `onForce took ${elapsed}ms`);
 });
 
 test('killProcessTree は非 Windows で SIGKILL を送る', () => {

@@ -89,10 +89,12 @@
     "remoteName": "作業用018",
     "hostname": "DESKTOP-N429M3V",
     "account": "cr@orgiast.jp",
+    "discordId": "1557228267566665729",
+    "notifyDiscordId": "1557228267566665729",
     "aliases": [
       "DESKTOP-N429M3V"
     ],
-    "_evidence": "2026-10-10 fleet-fix-now の自己申告 hostname=DESKTOP-N429M3V・label=w018-PC。kim 回答(2026-10-08)で 018=cr@。",
+    "_evidence": "2026-10-10 fleet-fix-now の自己申告 hostname=DESKTOP-N429M3V・label=w018-PC。kim 回答(2026-10-08)で 018=cr@。2026-11-02 Discord search_members で claudecode0850 / Claudecode(cr@) = 1557228267566665729 を実測。未設定のため owner-notify が Discord を毎回 skip していた",
     "codexAccount": "cr@orgiast.jp"
   },
   "DESKTOP-BDOAK99": {

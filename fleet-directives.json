@@ -3,13 +3,14 @@
   "_note": "kim/監督Claude が指示を1件書き、各PCの fleet-agent が15分以内に拾って結果を Discord へ返す。kind は status / prompt / enable-auto-session の3つだけ。prompt と enable-auto-session はそのPCの人がオプトイン済みの場合のみ実行される。空配列にすると全PCで何も起きない。 PC間メッセージは fleet-mail.mjs（双方向）を使う。",
   "directives": [
     {
-      "id": "status-20261031-130001-2317",
-      "kind": "status",
-      "targets": "all",
-      "why": "PR #1342/#1344 の差し戻し上限修正が各PCの実行版に届いているか（origin/main遅れ数）の確認",
-      "createdBy": "uers",
-      "createdAt": "2026-10-31T13:00:01.746Z",
-      "expiresAt": "2026-11-01T13:00:01.746Z"
+      "id": "run-20261102-100656-0987",
+      "kind": "run",
+      "targets": "DESKTOP-BDOAK99",
+      "why": "作業用008 引継ぎ自己点検の配布受信と台帳更新",
+      "task": "fleet-sheet-report",
+      "createdBy": "kim",
+      "createdAt": "2026-11-02T10:06:56.593Z",
+      "expiresAt": "2026-11-02T12:06:56.593Z"
     }
   ]
 }

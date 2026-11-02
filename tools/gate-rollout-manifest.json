@@ -232,6 +232,7 @@
       "denyAfter": "2026-10-27T00:00:00Z",
       "pilotDeny": true
     },
+    "third-party-nudge-gate": { "rollout": "deny", "distributedAt": "2026-11-02T00:00:00Z", "denyAfter": "2026-11-09T00:00:00Z", "pilotDeny": true },
     "past-log-search-gate": {
       "rollout": "deny",
       "distributedAt": "2026-10-17T00:00:00Z",

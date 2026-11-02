@@ -169,7 +169,8 @@ test('待ち語が無く、もう削除してよいならpass', () => {
 
 test('待ち語があり、起床手段があればまだ閉じないでpass', () => {
   const text = `${body} 結果待ちです。\n次に kim がすること: なし\nこの後の自動進行: 処理完了時に Codex がチャットで通知します\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ）`;
-  assert.equal(judgeNextAction(text, row('assistant', [{ type: 'tool_use', name: 'Agent', input: { run_in_background: true } }])).decision, 'pass');
+  assert.equal(judgeNextAction(text, row('assistant', [{ type: 'tool_use', name: 'Agent', input: { run_in_background: true } }])).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
+  withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
 });
 
 test('session-close実行証拠なしで閉じてよいならblock', () => {
@@ -267,13 +268,14 @@ test('定型文以外（旧表記・表記ゆれ・理由の付け足し）はbl
 test('定型文はそれぞれpass', () => {
   for (const state of [SESSION_PHRASES.closed, SESSION_PHRASES.delete, SESSION_PHRASES.pending, SESSION_PHRASES.open]) {
     const text = `/session-close を実行しました。\n${body}\n${twoLineFooter}\nこのセッション: ${state}`;
-    assert.equal(judgeNextAction(text).decision, 'pass', state);
+    withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass', state));
   }
 });
 
 test('pendingはバックグラウンド語があってもpass', () => {
   const text = `${body} Codex がバックグラウンドで実行中です。\n次に kim がすること: なし\nこの後の自動進行: 処理の完了時に私がこの画面で報告します\nこのセッション: ${SESSION_PHRASES.pending}`;
-  assert.equal(judgeNextAction(text, row('assistant', [{ type: 'tool_use', name: 'Agent', input: { run_in_background: true } }])).decision, 'pass');
+  assert.equal(judgeNextAction(text, row('assistant', [{ type: 'tool_use', name: 'Agent', input: { run_in_background: true } }])).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
+  withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
 });
 
 test('3行の順序違い・2つ以上の空行・行間の説明をblock', () => {
@@ -330,7 +332,7 @@ test('短文でもフッターがあれば定型外の「このセッション�
 test('短文でもフッターが定型どおりなら pass する', () => {
   const text = `作業は完了しました。\n\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.pending}`;
   assert.ok(text.length < 200);
-  assert.equal(judgeNextAction(text).decision, 'pass');
+  withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
 });
 
 test('フッター欠落の block 理由に定型4文を載せる', () => {
@@ -455,26 +457,26 @@ test('人待ちは登録コマンドの痕跡だけではpassしない', () => {
   }
 });
 
-test('人待ちがなければbackground Bashだけで自動進行を認める', () => {
-  assert.equal(judgeNextAction(promiseText, use('Bash', { run_in_background: true })).decision, 'pass');
+test('background Bashだけでは永続チェックを代替できない', () => {
+  assert.equal(judgeNextAction(promiseText, use('Bash', { run_in_background: true })).decision, 'block');
 });
 
 test('自動進行の約束だけではblock、CronCreateだけもblock、ブロック文にauto-progress.mjs --add-checkを含む', () => {
   const blocked = judgeNextAction(promiseText);
-  assert.equal(blocked.code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+  assert.equal(blocked.code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
   assert.match(blocked.reason, /auto-progress\.mjs --add-check/);
   assert.doesNotMatch(blocked.reason, /変化時だけ報告/);
   // CronCreate だけのターンはブロックされる（セッション内のみで user に届かないため）
-  assert.equal(judgeNextAction(promiseText, cron).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
-  assert.equal(judgeNextAction(promiseText, `${cron}\n${row('user', '続けて')}`).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+  assert.equal(judgeNextAction(promiseText, cron).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
+  assert.equal(judgeNextAction(promiseText, `${cron}\n${row('user', '続けて')}`).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
 });
 
-test('auto-progress --add-check 実行があればpass、登録は次ターン以降も有効（台帳が check を引き継ぐ）', () => {
-  assert.equal(judgeNextAction(promiseText, addCheckBash).decision, 'pass');
-  assert.equal(judgeNextAction(promiseText, addCheckPs).decision, 'pass');
-  assert.equal(judgeNextAction(promiseText, `${addCheckBash}\n${row('user', [{ type: 'tool_result', content: 'registered' }])}`).decision, 'pass');
-  assert.equal(judgeNextAction(promiseText, `${addCheckBash}\n${row('user', '新たな依頼')}`).decision, 'pass');
-  assert.equal(judgeNextAction(promiseText, row('user', '新たな依頼')).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+test('auto-progress 登録への言及だけでは実台帳なしの待機を許可しない', () => {
+  assert.equal(judgeNextAction(promiseText, addCheckBash).decision, 'block');
+  assert.equal(judgeNextAction(promiseText, addCheckPs).decision, 'block');
+  assert.equal(judgeNextAction(promiseText, `${addCheckBash}\n${row('user', [{ type: 'tool_result', content: 'registered' }])}`).decision, 'block');
+  assert.equal(judgeNextAction(promiseText, `${addCheckBash}\n${row('user', '新たな依頼')}`).decision, 'block');
+  assert.equal(judgeNextAction(promiseText, row('user', '新たな依頼')).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
 });
 
 test('会話に実行痕跡がなくても同じ session_id の open 台帳行があれば起床手段とみなす', t => {
@@ -489,37 +491,37 @@ test('会話に実行痕跡がなくても同じ session_id の open 台帳行�
     const result = judgeNextAction(text, '', { session_id: 'ledger-session' });
     assert.equal(result.decision, 'pass', JSON.stringify(result));
     assert.notEqual(result.code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
-    assert.notEqual(result.code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+    assert.notEqual(result.code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
   }
 });
 
-test('空・なし・なしで始まる値には起床手段は不要', () => {
+test('自動進行が空・なし・完了でも作業中なら永続チェックが必要', () => {
   for (const value of ['', 'なし', 'なし（完了）', 'なし。作業完了']) {
-    assert.equal(judgeNextAction(promiseText.replace('私が毎時進捗を確認して変化時に報告します', value)).decision, 'pass', value);
+    assert.equal(judgeNextAction(promiseText.replace('私が毎時進捗を確認して変化時に報告します', value)).decision, 'block', value);
   }
 });
 
-test('Agent・PowerShellは当ターン、background Bashは次ターンもpass', () => {
+test('バックグラウンド呼出しは永続チェックの代替にならない', () => {
   for (const transcript of [use('Agent'), use('Agent', { run_in_background: true }), use('Bash', { run_in_background: true }), use('PowerShell', { run_in_background: true })]) {
-    assert.equal(judgeNextAction(promiseText, transcript).decision, 'pass');
-    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '新たな依頼')}`).decision, transcript.includes('Bash') ? 'pass' : 'block');
-    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', [{ type: 'tool_result', content: 'started' }])}`).decision, 'pass');
-    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '<task-notification>終了</task-notification>', { isMeta: true })}`).decision, 'pass');
+    assert.equal(judgeNextAction(promiseText, transcript).decision, 'block');
+    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '新たな依頼')}`).decision, 'block');
+    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', [{ type: 'tool_result', content: 'started' }])}`).decision, 'block');
+    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '<task-notification>終了</task-notification>', { isMeta: true })}`).decision, 'block');
   }
 });
 
 test('前景実行・文章中の言及・sidechain・不正JSONは証拠にならない', () => {
   for (const transcript of [use('Agent', { run_in_background: false }), use('Bash'), use('PowerShell', { run_in_background: false }), row('assistant', 'CronCreate を実行予定'), row('user', [{ type: 'tool_use', name: 'CronCreate' }]), row('assistant', [{ type: 'tool_use', name: 'CronCreate' }], { isSidechain: true }), 'invalid\nnull']) {
-    assert.equal(judgeNextAction(promiseText, transcript).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+    assert.equal(judgeNextAction(promiseText, transcript).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
   }
 });
 
-test('subagentsとheadlessでは起床手段の検査をskipする', () => {
-  assert.equal(judgeNextAction(promiseText, '', { transcript_path: 'project/subagents/agent.jsonl' }).decision, 'pass');
+test('subagentsとheadlessでも作業中は永続チェックを要求する', () => {
+  assert.equal(judgeNextAction(promiseText, '', { transcript_path: 'project/subagents/agent.jsonl' }).decision, 'block');
   const previous = process.env.CLAUDE_HEADLESS;
   try {
     process.env.CLAUDE_HEADLESS = '1';
-    assert.equal(judgeNextAction(promiseText).decision, 'pass');
+    assert.equal(judgeNextAction(promiseText).decision, 'block');
   } finally {
     if (previous === undefined) delete process.env.CLAUDE_HEADLESS;
     else process.env.CLAUDE_HEADLESS = previous;
@@ -536,14 +538,14 @@ test('まだ閉じない: 期限なしの旧表記は SESSION-OPEN-NO-DEADLINE �
 
 test('まだ閉じない: 期限入りは pass、過ぎた期限は block', () => {
   const now = new Date(2026, 9, 27, 12, 0).getTime();
-  assert.equal(judgeNextAction(deadlineBase + 'まだ閉じない（作業中・2026-10-27 16:00 まで待つ）', '', { now }).decision, 'pass');
+  assert.equal(judgeNextAction(deadlineBase + 'まだ閉じない（作業中・2026-10-27 16:00 まで待つ）', '', { now }).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
   assert.equal(judgeNextAction(deadlineBase + 'まだ閉じない（作業中・2026-10-27 11:59 まで待つ）', '', { now }).code, 'SESSION-OPEN-DEADLINE-PAST');
 });
 
 test('/session-close をして（まだ閉じない）も期限が必須・過ぎた期限は block', () => {
   const now = new Date(2026, 9, 27, 12, 0).getTime();
   assert.equal(judgeNextAction(deadlineBase + '/session-close をして（まだ閉じない）', '', { now }).code, 'SESSION-OPEN-NO-DEADLINE');
-  assert.equal(judgeNextAction(deadlineBase + '/session-close をして（まだ閉じない・2026-10-27 16:00 まで待つ）', '', { now }).decision, 'pass');
+  assert.equal(judgeNextAction(deadlineBase + '/session-close をして（まだ閉じない・2026-10-27 16:00 まで待つ）', '', { now }).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
   assert.equal(judgeNextAction(deadlineBase + '/session-close をして（まだ閉じない・2026-10-27 11:59 まで待つ）', '', { now }).code, 'SESSION-OPEN-DEADLINE-PAST');
   assert.equal(openPhrase(new Date(2026, 10, 2, 9, 5), 'pending'), '/session-close をして（まだ閉じない・2026-11-02 09:05 まで待つ）');
 });
@@ -567,12 +569,12 @@ test('人待ちは自動進行なしでも同一sessionのopen台帳行を要求
     }
     fs.rmSync(file);
     assert.equal(judgeNextAction(text, '', input).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
-    assert.equal(judgeNextAction('[NO-AUTOCHECK-OK: 本人の電話の結果は自動取得できない]\n' + text, '', input).decision, 'pass');
+    assert.equal(judgeNextAction('[NO-AUTOCHECK-OK: 本人の電話の結果は自動取得できない]\n' + text, '', input).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
     for (const reason of ['', '   ']) {
       assert.equal(judgeNextAction(`[NO-AUTOCHECK-OK: ${reason}]\n${text}`, '', input).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
     }
     for (const action of ['なし', 'なし（完了）', '無し', 'ありません', '不要']) {
-      assert.equal(judgeNextAction(text.replace('西さんがトークンを保存する', action), '', input).decision, 'pass');
+      assert.equal(judgeNextAction(text.replace('西さんがトークンを保存する', action), '', input).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
     }
   });
 });
@@ -635,23 +637,23 @@ test('check 無しの open 約束行は待機中の起床証拠にしない', ()
       fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status: 'open', check }) + '\n');
       for (const state of ['open', 'pending']) {
         const text = promiseText.replace(SESSION_PHRASES.open, SESSION_PHRASES[state]);
-        assert.equal(judgeNextAction(text, '', input).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
-        assert.equal(judgeNextAction(text.replace('私が毎時進捗を確認して変化時に報告します', 'なし'), '', input).decision, 'pass');
+        assert.equal(judgeNextAction(text, '', input).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
+        assert.equal(judgeNextAction(text.replace('私が毎時進捗を確認して変化時に報告します', 'なし'), '', input).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
       }
     }
   });
 });
 
-test('ScheduleWakeup と Monitor の登録は次ターンも起床証拠になる', () => {
+test('ScheduleWakeup と Monitor の登録だけでは永続チェックにならない', () => {
   for (const name of ['ScheduleWakeup', 'Monitor']) {
     const transcript = name === 'Monitor' ? use(name) : row('assistant', [{ type: 'tool_use', id: 'wake-call', name, input: { delaySeconds: 3600 } }], { timestamp: new Date().toISOString() });
     for (const state of ['open', 'pending']) {
-      assert.equal(judgeNextAction(promiseText.replace(SESSION_PHRASES.open, SESSION_PHRASES[state]), transcript).decision, 'pass');
+      assert.equal(judgeNextAction(promiseText.replace(SESSION_PHRASES.open, SESSION_PHRASES[state]), transcript).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
     }
-    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '次の依頼')}`).decision, 'pass');
-    assert.equal(judgeNextAction(promiseText, row('assistant', [{ type: 'tool_use', name }], { isSidechain: true })).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+    assert.equal(judgeNextAction(promiseText, `${transcript}\n${row('user', '次の依頼')}`).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
+    assert.equal(judgeNextAction(promiseText, row('assistant', [{ type: 'tool_use', name }], { isSidechain: true })).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
   }
-  assert.equal(judgeNextAction(promiseText, use('ScheduleWakeup', { stop: true })).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
+  assert.equal(judgeNextAction(promiseText, use('ScheduleWakeup', { stop: true })).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
 });
 
 test('ラベルだけの次の一手は全文ブロックがあっても block', () => {

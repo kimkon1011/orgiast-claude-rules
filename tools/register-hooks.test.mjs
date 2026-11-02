@@ -36,6 +36,26 @@ test('setup converge timeout covers Node updates on new and existing PCs, idempo
   assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, 'utf8')), repaired);
 });
 
+test('kim 宛 Discord 報告の旧 hook（claude-watch-inbox の Stop/SessionStart）を全PCで外す', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-kim-discord-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const repo = path.resolve('.');
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  const legacy = cmd => ({ type: 'command', command: `pwsh -NoProfile -ExecutionPolicy Bypass -NonInteractive -File "C:\\Users\\x\\Downloads\\CLAUDE.md配布\\claude-watch-inbox\\hooks\\${cmd}"` });
+  const keep = { type: 'command', command: 'pwsh -NoProfile -File "C:\\Users\\x\\.claude\\hooks\\url-format-guard.ps1"' };
+  fs.writeFileSync(settingsFile, JSON.stringify({ hooks: {
+    Stop: [{ hooks: [legacy('post-stop-to-inbox.ps1'), keep] }, { hooks: [legacy('post-stop-to-discord.ps1')] }],
+    SessionStart: [{ hooks: [legacy('get-reply-on-session-start.ps1'), legacy('get-reply-from-discord.ps1')] }],
+  } }));
+  execFileSync(process.execPath, [path.join(repo, 'tools/register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } });
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const commands = event => settings.hooks[event].flatMap(g => g.hooks.map(h => h.command));
+  assert.ok(!commands('Stop').some(c => /post-stop-to-(?:inbox|discord)\.ps1/.test(c)), 'Stop の Discord 投稿 hook が残っている');
+  assert.ok(!commands('SessionStart').some(c => /get-reply-(?:on-session-start|from-discord)\.ps1/.test(c)), 'SessionStart の返信取得 hook が残っている');
+  assert.ok(commands('Stop').some(c => c.includes('url-format-guard.ps1')), '無関係な hook を消した');
+});
+
 test('既存PowerShell hookへExecutionPolicy Bypassを補いcost-loopをmjsへ移行する', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-'));
   const repo = path.resolve('.');

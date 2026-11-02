@@ -135,6 +135,29 @@ function removeDailySessionHooks(settings) {
 }
 
 function commands(groups) { return groups.flatMap((g) => Array.isArray(g?.hooks) ? g.hooks : []).map((h) => String(h?.command || '')); }
+// kim 宛の Discord 報告を全PCで止める（kim 2026-10-27 厳命）。claude-watch-inbox の Stop hook は
+// 応答の末尾を毎回 claude-code チャンネルへ kim メンション付きで投稿しており、報告が洪水になった主因。
+// 対になる SessionStart の返信取得 hook も、投稿を止めれば用済みなので外す。
+const KIM_DISCORD_REPORT_HOOKS = {
+  Stop: /(?:^|[\\/\s"'])post-stop-to-(?:inbox|discord)\.ps1(?=[\s"']|$)/i,
+  SessionStart: /(?:^|[\\/\s"'])get-reply-(?:on-session-start|from-discord)\.ps1(?=[\s"']|$)/i,
+};
+export function removeKimDiscordReportHooks(settings) {
+  let removed = 0;
+  for (const [event, pattern] of Object.entries(KIM_DISCORD_REPORT_HOOKS)) {
+    const groups = settings.hooks?.[event];
+    if (!Array.isArray(groups)) continue;
+    for (let i = groups.length - 1; i >= 0; i--) {
+      if (!Array.isArray(groups[i]?.hooks)) continue;
+      const hooks = groups[i].hooks;
+      for (let j = hooks.length - 1; j >= 0; j--) {
+        if (pattern.test(String(hooks[j]?.command || ''))) { hooks.splice(j, 1); removed++; }
+      }
+      if (!hooks.length) groups.splice(i, 1);
+    }
+  }
+  return removed;
+}
 function add(groups, scriptName, group) {
   // リポの同期が遅れている環境で、存在しないスクリプトを登録して毎回 ENOENT を出すのを防ぐ。
   if (scriptName.endsWith('.mjs') && !fs.existsSync(path.join(repo, 'tools', scriptName))) {
@@ -227,6 +250,7 @@ try {
   if (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks)) settings.hooks = {};
   for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd', 'Notification']) if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
   added += removeDailySessionHooks(settings);
+  added += removeKimDiscordReportHooks(settings);
   const command = (name, extra = '') => `node "${path.join(repo, 'tools', name)}"${extra}`;
   // 2026-09-06: 9本を別プロセスで動かすと304 Stop中198回が再Stopになったため、
   // ファイル名で旧登録を拾い、PCごとに異なるrepoパスのrunner 1本へ収束させる。
@@ -485,6 +509,7 @@ try {
     for (const [event, groups] of Object.entries(expected.hooks)) settings.hooks[event] = [...(retained[event] || []), ...groups];
     added = JSON.stringify(settings) === before ? 0 : 1;
   }
+  added += removeKimDiscordReportHooks(settings);
   // Reporting uses exactly the registrar's expected set without touching user files.
   if (expectedJson) { console.log(JSON.stringify({ hooks: settings.hooks, skippedNames })); process.exit(0); }
   // 初回配布で空の共有台帳を用意する。不在時 fail-open のまま恒常的に素通りさせない。

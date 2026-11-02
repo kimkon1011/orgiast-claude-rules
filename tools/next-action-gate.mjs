@@ -179,7 +179,7 @@ function hasOpenSessionCheck(input) {
 }
 
 // Persistent registrations survive user turns until expiration or task termination.
-function hasSessionWakeup(raw, input = {}) {
+export function hasSessionWakeup(raw, input = {}) {
   let autoProgress = false;
   let background = false;
   for (const line of String(raw || '').split(/\r?\n/)) {
@@ -310,6 +310,10 @@ function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {
   if (!permanentFix && (userHandoff || !NO_ACTION_PATTERN.test(footer.nextAction)) && classifyHandoff(source) !== 'reply-only'
     && !hasOpenSessionCheck(input) && !noAutocheck) {
     return { decision: 'block', code: 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', reason: (userHandoff ? 'user 本人への手渡し（[手渡し判定]／お願いする操作）も人待ちです。' : '') + '人待ちの自動進行は台帳の定期チェックに載せる: node tools/auto-progress.mjs --add-check --session <id> --check "<exit0=達成/1=未達のコマンド>" --deadline +7d --label "<名前>" --next-claude "<次の手>"。自動進行が「なし」でも同じセッションの open 行が必要です。自動確認できない場合だけ [NO-AUTOCHECK-OK: <理由>] を記載してください。' };
+  }
+  // Monitor / 起床通知はセッション終了で消える。実際の永続台帳を必須にする。
+  if (WAIT_STATES.has(sessionState) && !hasOpenSessionCheck(input)) {
+    return { decision: 'block', code: 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK', reason: '作業中のまま応答を終える前に、同じセッションの永続チェックを登録してください: node tools/auto-progress.mjs --add-check --session <id> --check "<達成判定>" --deadline +3d --label "<作業名>" --next-claude "<次の手>"。自動進行が「なし」でも必要です。バックグラウンド完了通知や登録コマンドへの言及だけでは代替できません。' };
   }
   if (!permanentFix && hasAutopilot && process.env.CLAUDE_HEADLESS !== '1'
     && !/subagents/i.test(input.transcript_path || '') && !wakeup.autoProgress && !wakeup.background && !wakeup.scheduled) {

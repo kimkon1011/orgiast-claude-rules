@@ -9,6 +9,8 @@ const {
 const { resolveClaudeShellPath } = require('./shell-path');
 const { decideAction, orderMobileOpenMethods } = require('./route');
 
+const { readRows, createToolRunner, createArchiveWatcher } = require('./archive-tabs');
+
 const PROBE_TEXT = 'ORGIAST_NEXT_SESSION_PROBE_OK';
 
 // 遅延生成する出力チャンネル（dry run の記録用）。
@@ -214,10 +216,18 @@ function activate(context) {
   });
   context.subscriptions.push(handler);
 
+  const archiveWatcher = createArchiveWatcher({
+    tabs: claudeTabs, close: tab => vscode.window.tabGroups.close(tab),
+    read: () => readRows(path.join(mobileHome, '.claude')),
+    run: createToolRunner(mobileHome, log), log,
+  });
+  const archiveTimer = setInterval(() => void archiveWatcher.check(), 30000);
+  archiveTimer?.unref?.();
+  context.subscriptions.push({ dispose() { clearInterval(archiveTimer); archiveWatcher.dispose(); } });
   const refill = () => {
     if (mobileEnabled) pool.ensure(mobileTarget).catch((error) => log(`mobile refill failed: ${error.message}`));
   };
-  context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(() => { syncTabTimes(); refill(); }));
+  context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(event => { archiveWatcher.change(event); syncTabTimes(); refill(); }));
   const timer = setInterval(refill, 5000);
   // 起動時に既存タブの出現時刻を初期化し、以後 opened は onDidChangeTabs 経由の sync で記録する。
   syncTabTimes();

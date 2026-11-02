@@ -90,7 +90,43 @@ Step "必要なツールの確認 (git / Node.js / GitHub CLI)"
 function Have($c){ $null -ne (Get-Command $c -ErrorAction SilentlyContinue) }
 if (-not (Have git)) { Warn "git が無いので導入します"; try { winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements | Out-Null } catch {} ; $env:Path += ';C:\Program Files\Git\cmd' }
 if (Have git) { OK "git あり" } else { Warn "git が入りませんでした。会社担当(kim)に連絡してください" }
-if (-not (Have node)) { Warn "Node.js が無いので導入します"; try { winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-package-agreements --accept-source-agreements | Out-Null } catch {} ; $env:Path += ';C:\Program Files\nodejs' }
+# Node.js の MSI(winget)は管理者昇格(UAC)を要求するため、Claude 代理実行など
+# 非対話/非昇格のコンテキストでは黙って失敗する。winget が入らなかった場合は
+# 公式zipをユーザー領域へ展開して昇格なしで導入する(フォールバック)。
+function Install-NodeUserScope {
+  try {
+    $arch = if ([Environment]::Is64BitOperatingSystem) { 'x64' } else { 'x86' }
+    $idx = Invoke-RestMethod -UseBasicParsing 'https://nodejs.org/dist/index.json'
+    $lts = ($idx | Where-Object { $_.lts } | Select-Object -First 1).version
+    if (-not $lts) { return $false }
+    $url = "https://nodejs.org/dist/$lts/node-$lts-win-$arch.zip"
+    $zip = Join-Path $env:TEMP ("node-" + $lts + ".zip")
+    $tmp = Join-Path $env:TEMP ('node-ext-' + [guid]::NewGuid().ToString('N'))
+    $dstRoot = Join-Path $env:LOCALAPPDATA 'Programs\nodejs'
+    Invoke-WebRequest -UseBasicParsing $url -OutFile $zip
+    Expand-Archive -Path $zip -DestinationPath $tmp -Force
+    $inner = Join-Path $tmp ("node-$lts-win-$arch")
+    if (-not (Test-Path $inner)) { return $false }
+    if (-not (Test-Path $dstRoot)) { New-Item -ItemType Directory -Force -Path $dstRoot | Out-Null }
+    Copy-Item (Join-Path $inner '*') $dstRoot -Recurse -Force
+    # ユーザーPATHへ恒久追加 + 現セッション(と以降の子プロセス)へ反映
+    $userPath = [Environment]::GetEnvironmentVariable('Path','User')
+    if (($userPath -split ';') -notcontains $dstRoot) { [Environment]::SetEnvironmentVariable('Path', (($userPath.TrimEnd(';')) + ';' + $dstRoot), 'User') }
+    if (($env:Path -split ';') -notcontains $dstRoot) { $env:Path += ";$dstRoot" }
+    Remove-Item $zip -Force -ErrorAction SilentlyContinue
+    Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    return (Have node)
+  } catch { return $false }
+}
+if (-not (Have node)) {
+  Warn "Node.js が無いので導入します"
+  try { winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-package-agreements --accept-source-agreements | Out-Null } catch {}
+  $env:Path += ';C:\Program Files\nodejs'
+  if (-not (Have node)) {
+    Warn "winget(MSI)が昇格なしで入らなかったため、ユーザー領域zipで導入します(UAC不要)"
+    [void](Install-NodeUserScope)
+  }
+}
 if (Have node) { OK ("Node.js あり (" + (node -v) + ")") } else { Warn "Node.js が入りませんでした。会社担当(kim)に連絡してください" }
 function Update-InstallerPath {
   try {

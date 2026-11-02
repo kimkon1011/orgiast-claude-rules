@@ -1,6 +1,6 @@
 # 日帰り出張候補の確認
 
-`tools/daytrip-detect.mjs` は kim@orgiast.jp の primary カレンダーから日帰り出張の候補を集計し、kim の既存Bot DMで確認する。規程施行日は2026-11-01、日当は代表5,000円。推定だけで出張と確定せず、kimの「はい」を受けて報告書へ追記する。
+`tools/daytrip-detect.mjs` は kim@orgiast.jp の primary カレンダーから日帰り出張の候補を集計し、Claude Code のセッション内で確認する。規程施行日は2026-11-01、日当は代表5,000円。推定だけで出張と確定せず、kimの「はい」を受けて報告書へ追記する。
 
 ## 検出
 
@@ -14,17 +14,25 @@
 
 [Nominatim利用規約](https://operations.osmfoundation.org/policies/nominatim/)に従い、User-Agentを付け、単一PC・直列処理・キャッシュを使う。定期スクリプトは毎分4件までのため公開サービスには15秒以上の間隔を設ける（1秒1件の上限より厳しい）。検索結果の出典は © OpenStreetMap contributors。外部に送るデータは場所の文字列のみで、予定名・参加者はジオコーダーやLLMへ渡さない。
 
-## DMと返信
+## セッションでの確認と回答
 
-未確認候補を1回の実行につき1通にまとめる。日付・予定名・場所・片道距離・外出時間・日当・注記を全文記載し、番号で「はい 1,3」「いいえ 2」と返信する。番号は実行をまたいで再利用しない。Botの質問送信後のkim本人のメッセージだけを採用し、自然言語の曖昧な返答や同じ番号への矛盾した回答は取り込まない。
+定期実行は候補に永続的な番号を振り、施行日以降・未回答の候補全件を `pending.json` に原子的に保存する。番号は再利用しない。過去の台帳の batch・queued も引き継ぐ。候補の文字数による分割や切り捨ては行わない。
 
-Discordの2,000文字上限に収めるため候補単位で分割する。入り切らない候補は永続キューに保持して次回の1通へ回し、本文を切り捨てない。単独の候補でも上限を超える場合はエラーとして台帳に質問済みを記録しない。
+`daytrip-ask-hook.mjs` が SessionStart / UserPromptSubmit でローカルの一覧を読み、Claude Code に「🚗 日帰り出張の確認（カレンダーから自動検出）」として全文を表示するよう指示する。宿泊なし・片道50km以上・外出4時間以上の業務出張かを確認し、会食・接待のみは対象外とする。pending がないPCでは無出力。hook はネットワークを使わず、入力待ちは75msで打ち切り、エラー時は無出力で終了する。
 
-「いいえ」は台帳にdeclinedを記録。「はい」はacceptedを記録し、予定日の翌日以降に報告書へ追記する。未来分は事前確認であり、記録前なら後から「いいえ 同じ番号」で取り消せる。記録後の訂正はシートで行う。追記に使う予定はDMで確認した時点のスナップショット。
+同一セッションでは候補番号の集合が変わらない限り1回だけ通知し、新しいセッションでは未回答の間は毎回通知する。別の話題だった場合は、本題への応答後にもう一度だけ一覧で確認する。
+
+回答例:
+
+```sh
+node tools/daytrip-detect.mjs --answer "はい 1,2 いいえ 3"
+```
+
+Claude Code が回答をそのまま `--answer` に渡す。曖昧な形式、重複番号、pending に存在しない番号が含まれる場合、回答全体を保存せず stderr に理由を表示して exit 1。受理した回答は decision として台帳に保存し、pending から除く。「いいえ」は対象外として記録する。「はい」は今日（JST）以前なら即時追記、未来なら「YYYY-MM-DD は当日以降の20:00に報告書へ追記予定」と表示する。未来の承認は当日以降の定期実行で追記する。回答済み番号への再回答は受け付けないため、回答後の訂正は台帳・シートを確認して運用者が行う。追記する内容は確認時点の候補スナップショット。
 
 報告書: spreadsheetId `156XZ7L2bA1eMI17kxH3Sb-NQyCUI8DXGMT6HXO3ShBc`。A〜Pの見出しが依頼の16列（または実シートで確認した「出張区分(宿泊/日帰り)」「勤務地からの片道距離(km)」等の補足付き見出し）と列順も含めて一致するタブを一意に特定する。Sheets APIに既存DWDのdriveスコープを使用し、`RAW`・`INSERT_ROWS`で末尾へ追加して読み戻す。1行目の見出しと2行目の記入例は変更しない。氏名=金功勇、役職=代表、区分=日帰り、目的=予定名、面談者=外部ドメイン参加者、日当=5000。行先と所在地は予定の場所。交通手段・添付・承認者は空欄。出発・帰着・所要時間は推定と明示。不明は不明と記載する。
 
-追記ごとに「1件を報告書に追加しました」とA〜Pの内容全文をDMする。既存の`sendDiscordDm`を使用し、宛先は既存kim IDに固定。追加の資格情報は不要。
+追記ごとに「1件を報告書に追加しました」とA〜Pの内容全文を stdout に出す。`--answer` 実行時は Claude Code がそのまま user に表示する。定期実行で未来分を追記した結果も stdout に出す。
 
 ## 状態・復旧
 
@@ -32,10 +40,12 @@ Discordの2,000文字上限に収めるため候補単位で分割する。入�
 
 - `config.json`: 設定。未作成なら既定値を使う。
 - `geocache.json`: 場所・市区町村ごとの検索結果、検索時刻。正常な検索の空結果もキャッシュ。通信失敗は永続キャッシュしない。
-- `ledger.jsonl`: 追記型の永続台帳。queued、batch（日付キー・番号・質問本文）、dm-intent/dm-sent、decision、append-intent、recordedをfsyncして保存する。削除すると質問の重複防止情報を失う。
+- `ledger.jsonl`: 追記型の永続台帳。queued、batch（日付キー・番号・質問本文）、decision、append-intent、recordedをfsyncして保存する。削除すると質問の重複防止情報を失う。
+- `pending.json`: updatedAt と未回答候補の items（番号・日付・予定名・場所・距離・時間・注記・表示用 line）。tmp に書いて rename する。
+- `shown.json`: session_id ごとの候補番号集合の hash と表示時刻 at。30日を過ぎた記録は次回表示時に掃除する。
 - `run.lock`: PIDによる排他。生存中のプロセスが持つロックは奪わず、死んだPIDだけ回収する。dry-runも共有キャッシュを保護するため排他する。
 
-送信・追記直前のintentがあり完了記録がない場合、DMの同一本文やシートの同一16列を読み戻して照合する。見つからなければ結果不明として自動再送・再追記を停止する。運用者が実際のDM/シートを確認し、バックアップした台帳の該当intentのみを取り除いて再試行する。送信・追記が成功していないことを確認するまでintentを削除しない。同日・同氏名の日帰り行があり内容が違う場合も自動追記を止める。
+追記直前の append-intent があり recorded がない場合、シートの同一16列を読み戻して照合する。見つからなければ結果不明として自動再追記を停止する。運用者が実シートを確認し、バックアップした台帳の該当intentのみを取り除いて再試行する。追記が成功していないことを確認するまでintentを削除しない。同日・同氏名の日帰り行があり内容が違う場合も自動追記を止める。回答保存後の追記失敗でも pending は更新し、承認は台帳に残すため次回定期実行で復旧処理を行う。定期実行と `--answer` は同じロックを使用する。
 
 設定例（`--config path` でも指定可）:
 
@@ -55,8 +65,10 @@ node tools/daytrip-detect.mjs --dry-run --from 2026-09-01 --to 2026-10-29
 powershell -File tools/register-daytrip-detect-task.ps1 -Ensure
 ```
 
-dry-runは実カレンダーとジオコーダー/LLMを読み、検出結果をJSONで出力する。キャッシュと一時ロックだけを更新し、Discordにはアクセスせず、シート・質問/確認台帳には書き込まない。self-testはフィクスチャのみでネットワーク不要。
+dry-runは実カレンダーとジオコーダー/LLMを読み、検出結果をJSONで出力する。キャッシュと一時ロックだけを更新し、シート・質問/確認台帳には書き込まない。self-testはフィクスチャのみでネットワーク不要。
 
 Windowsタスク`OrgiastDaytripDetect`を毎日20:00（PCのローカル時刻、kim-PCはJST）に非表示起動する。登録先は同期済みmainのみ。schedule-syncと同じ`Downloads\claude-mobile\app\api\line-ingest\route.ts`の存在判定でkim-PCに限定する。新規install、既存PCの日次fleet-poller、setup-manifest経由の`setup.mjs --converge`から`-Ensure`を呼ぶ。
 
-恒久停止はconfig.jsonの`disabled`をtrueにする。タスクの削除だけではconvergeで復活する。停止設定後、必要なら`powershell -File tools/register-daytrip-detect-task.ps1 -Remove`で削除する。再開はdisabledをfalseにして`-Ensure`。このPRの受け入れ確認では本番登録・実DM・シート書き込みは行わない。
+セッションhookは全PCの `register-hooks.mjs` と setup-manifest（実体＋2イベント）を通じて既存PCにもconvergeで配布する。候補がないPCでは無出力になる。
+
+恒久停止はconfig.jsonの`disabled`をtrueにする。タスクの削除だけではconvergeで復活する。停止設定後、必要なら`powershell -File tools/register-daytrip-detect-task.ps1 -Remove`で削除する。再開はdisabledをfalseにして`-Ensure`。このPRの受け入れ確認では本番登録・シート書き込みは行わない。

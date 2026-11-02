@@ -22,6 +22,8 @@ test('setup converge timeout covers Node updates on new and existing PCs, idempo
     const inbox = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('kim-inbox.mjs'));
     assert.equal(inbox.length, 1); assert.match(inbox[0].command, /--context/);
     assert.equal(inbox[0].timeout, 5); assert.notEqual(inbox[0].async, true);
+    const daytrip = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('daytrip-ask-hook.mjs'));
+    assert.equal(daytrip.length, 1); assert.equal(daytrip[0].timeout, 5); assert.notEqual(daytrip[0].async, true);
   }
   const report = settings.hooks.PreToolUse.filter(g => g.hooks.some(h => h.command.includes('kim-discord-report-gate.mjs')));
   assert.equal(report.length, 1);

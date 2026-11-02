@@ -12,7 +12,7 @@ import { parseEnvText } from './env-kv.mjs';
 import { ledgerFile, readLedger, writeLedger, cleanupOldLedgerTemps, OPEN_STATUSES, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES, originLine } from './auto-progress-ledger.mjs';
 export { MAX_RESUMES } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
-import { notifyOwner, resolveOwner } from './notify-owner.mjs';
+import { notifyOwner, resolveOwner, sendOwnerToast } from './notify-owner.mjs';
 import { isQuietHours, kimAction } from './auto-progress-digest.mjs';
 import { checkPromise } from './auto-progress-check.mjs';
 import { appendInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
@@ -455,6 +455,15 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       summary.errors.push(`notify-done: ${String(error?.message ?? error).slice(0, 120)}`);
     }
     logDoneDm(home, row, delivery, message, now, io);
+    // 完了通知は DM の成否に関係なく、owner がこの PC のローカル user ならトーストも毎回出す
+    try {
+      const rowOwner = ownerOf(row);
+      const pcOwner = io.localOwner ?? (() => { try { return resolveOwner({ home }); } catch { return ''; } })();
+      if (rowOwner && pcOwner && rowOwner.toLowerCase() === pcOwner.toLowerCase()) {
+        const toastText = `✅ 自動進行が完了: ${String(row.promise ?? '').slice(0, 120)}`;
+        (io.sendOwnerToast ?? sendOwnerToast)(toastText, { home });
+      }
+    } catch { /* トースト失敗は DM の成否判定に影響しない */ }
     return ['dm', 'session-inbox', 'toast', 'inbox'].includes(delivery?.delivered);
   };
   const rows = readLedger(file);
@@ -515,6 +524,15 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         summary.errors.push(`notify-done-backlog: ${String(error?.message ?? error).slice(0, 120)}`);
       }
       logDoneDm(home, group.rows[0], delivery, group.text, now, io);
+      // バックログ完了通知もローカル user にはトーストを出す
+      try {
+        const rowOwner = ownerOf(group.rows[0]);
+        const pcOwner = io.localOwner ?? (() => { try { return resolveOwner({ home }); } catch { return ''; } })();
+        if (rowOwner && pcOwner && rowOwner.toLowerCase() === pcOwner.toLowerCase()) {
+          const toastText = `✅ 自動進行が完了 (ほか ${group.rows.length - 1}件): ${String(group.rows[0].promise ?? '').slice(0, 80)}`;
+          (io.sendOwnerToast ?? sendOwnerToast)(toastText, { home });
+        }
+      } catch { /* トースト失敗は無視 */ }
     }
   }
   let executorUnavailable = false;

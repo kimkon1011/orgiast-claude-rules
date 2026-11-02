@@ -180,3 +180,50 @@ test('timeoutを繰り返した実例は上限到達後にSheetとDMまとめへ
   assert.equal(sheets.length, 1);
   assert.equal(messages.length, 1);
 });
+
+test('完了通知は DM 成功時もローカル user にトーストを送る', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'done-toast-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const now = Date.parse('2026-11-02T10:00:00Z');
+  writeLedger(ledgerFile(home), [{
+    ts: new Date(now - 2 * 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'kim@orgiast.jp',
+    sessionId: 'done-toast-test', cwd: home, promise: 'Xの投稿を読み調査結果をまとめます',
+    status: 'done', verdict: 'done', doneAt: new Date(now - 60000).toISOString(),
+  }]);
+  let toastCalls = 0; let toastText = '';
+  const io = {
+    clock: () => now, transcriptFiles: [], sheetConfig: () => null,
+    localOwner: 'kim@orgiast.jp',
+    notifyOwner: async () => ({ delivered: 'dm', messageId: 'receipt' }),
+    sendOwnerToast: async (text) => { toastCalls++; toastText = text; return true; },
+    digest: async () => ({}),
+  };
+  const summary = await run({ home, now, io });
+  assert.ok(summary.doneNotifications.recent >= 1);
+  assert.equal(toastCalls, 1);
+  assert.ok(toastText.startsWith('✅ 自動進行が完了'));
+  assert.ok(toastText.includes('Xの投稿を読み調査結果をまとめます'));
+});
+
+test('バックログ完了通知もローカル user にトーストを送る', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'backlog-toast-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const now = Date.parse('2026-11-02T10:00:00Z');
+  writeLedger(ledgerFile(home), [{
+    ts: new Date(now - 100 * 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'kim@orgiast.jp',
+    sessionId: 'backlog-toast-test', cwd: home, promise: 'Xの投稿を読み調査結果をまとめます',
+    status: 'done', verdict: 'done', doneAt: new Date(now - 73 * 3600000).toISOString(),
+  }]);
+  let toastCalls = 0; let toastText = '';
+  const io = {
+    clock: () => now, transcriptFiles: [], sheetConfig: () => null,
+    localOwner: 'kim@orgiast.jp',
+    notifyOwner: async () => ({ delivered: 'dm', messageId: 'receipt' }),
+    sendOwnerToast: async (text) => { toastCalls++; toastText = text; return true; },
+    digest: async () => ({}),
+  };
+  const summary = await run({ home, now, io });
+  assert.ok(summary.doneNotifications.backlog >= 1);
+  assert.equal(toastCalls, 1);
+  assert.ok(toastText.startsWith('✅ 自動進行が完了'));
+});

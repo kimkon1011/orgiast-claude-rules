@@ -196,5 +196,29 @@
     "route": "Gmail MCP は本環境に無い（mcpServers=gemini-cli のみ）が、下書きの削除は DWD 経路で Claude 側が完結する。削除は `node tools/gmail-draft.mjs --delete <draftId> [--user <addr>] [--json]`（DWD で seisaku-team@orgiast.jp を impersonate・scope=gmail.compose、SA 鍵は GOOGLE_SA_KEY または既定パス aujust-sales-automation/.gcp/sheets-sa.json）。削除は `DELETE /gmail/v1/users/me/drafts/{id}` で、応答は 204=削除成功 / 404=既に無い（ツールが `{deleted:true}` / `{deleted:false,errorKind:'not_found'}` を返す）。検証結果の報告はこの実応答を読み戻して行い、kim に下書き削除の画面操作・目視確認を依頼しない。Gmail 下書きの削除が不要な用件ではそもそも手渡ししない。",
     "confidence": "high",
     "source": "handoff-audit-nightly:4f579eb3fc37b478cef737816a253d53bce15d7739e071d3aa51d4e76f799c40 / 2026-10-29 tool-name-route レビューで route を手順化（route が道具名だけの `Gmail MCP` だったため手順文に置換）"
+  },
+  {
+    "pattern": "ループ契約の保存と起動をClaude側で行う",
+    "route": "`/makeloop` の依頼文から runtime・kind・上限・検証ゲート・slug・開始可否を読み取り、Claude 側で `.loop/<slug>.md`、状態ファイル、INDEX を保存する。依頼に「ループを開始しない」とある場合は保存と構文・参照先の read-back までで止め、`codex-do.mjs` や別セッションを起動しない。開始指定がある場合だけ、保存済み契約を入力に既定のループ実行経路を呼び、起動結果を直接確認する。道具名だけを route にせず、依頼の開始可否を優先する。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:8e62823031d40ff96253f1dc9fd5b521217cbfe88a7be874ad8b3c015e7e5d0a / 2026-11-03 tool-name-route レビューで `codex-do.mjs` を契約保存・開始可否確認・read-back の手順へ置換"
+  },
+  {
+    "pattern": "他AIレーン修復を hook 拒否で断念する",
+    "route": "hook 拒否を理由に修復を断念する前に、当ターンの tool_result から command・hook 名・error/denied 本文・exit code を直接確認する。実記録が無ければ『未確認』とし、同じ失敗コマンドを反復せず、別 shell、別 cwd、または登録済み `node tools/*` の順に安全な代替経路を1回ずつ試す。Codex レーンを再試行する場合は保存済み指示書を入力に `codex-do.mjs` を前景・単発・timeout 付きで実行し、非0または hook 拒否なら Claude 本体で同じ作業を続行する。過去ログの記述だけで PC 権限や現在の hook 状態を断定しない。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:15504fceda6d8166a9289547db496a5a39e6343ebd51b7ef04081dea8ce85843 / 2026-11-03 tool-name-route レビューで `codex-do.mjs` を直接証拠・代替経路・本体続行の手順へ置換"
+  },
+  {
+    "pattern": "社外・顧客宛チラシ案の選択と送信",
+    "route": "案の比較と推奨案の選定は Claude 側で済ませ、宛先・推奨理由・送信本文・添付予定ファイルをチャットに完成形で表示する。社外送信は `feedback-confirm-before-external-send` に従い、この完成形への kim の承認を得るまで実行しない。承認後は利用可能な登録済み送信経路を直接呼び、送信結果と添付を read-back する。LINE の受信確認は取得不能なので、既読・返信を推測したり kim に案の選択を戻したりしない。送信経路が無ければ未確認の事実と完成本文を示し、送信済みとは書かない。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:63678278063c518091b8f1116c79b741c1e44215e61499cbf587a5e282dbc1e6 / 2026-11-03 tool-name-route レビューで `チャット表示` を選定・事前承認・送信結果確認の手順へ置換"
+  },
+  {
+    "pattern": "LINE グループへの送信（公式LINE経由）",
+    "route": "公式LINE経由の送信は、まず対象グループ・宛先・本文・添付をチャットに完成形で表示し、社外宛なら送信前承認を得る。承認後に、その公式LINEアカウントでグループ送信できる登録済み API／Webhook 経路が実在するかを当ターンで照会し、実在する場合だけ送信して応答を保存する。公式LINEの1対1 Messaging API と LINEグループ送信を同一視しない。登録済み経路が無い場合は本文表示までとし、kim に送信済み・返信取得済みと誤報しない（LINE返信は Webhook 保存が無ければ取得不能）。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:551d30db529f1c5ff7634cb1877a612c8ce1230fa138de8da6ecfc070e3618c2 / 2026-11-03 tool-name-route レビューで `チャットに本文` を事前承認・送信経路照会・応答保存の手順へ置換"
   }
 ]

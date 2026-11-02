@@ -11,6 +11,17 @@
       "createdBy": "kim",
       "createdAt": "2026-11-02T10:06:56.593Z",
       "expiresAt": "2026-11-02T12:06:56.593Z"
+    },
+    {
+      "id": "prompt-20261102-shared-memory-probe",
+      "kind": "prompt",
+      "targets": "all",
+      "why": "PR #1230（kim 本人の席に kim-PC の memory を全部届け user=kim と扱う）が各席に届いたかの直接照会。status の memory 行は旧方式を数えていて使えないため",
+      "createdBy": "uers",
+      "createdAt": "2026-11-02T12:10:00.000Z",
+      "expiresAt": "2026-11-03T12:10:00.000Z",
+      "timeoutSeconds": 300,
+      "body": "読み取り専用の点検。ファイルの編集・作成・送信・コマンドのインストールは一切しない。次の6項目だけを、1項目1行・ラベル付きで出力して終わる。\n1. account: ~/.claude.json の oauthAccount.emailAddress\n2. state: ~/.claude/shared-memory/.state.json の generatedAt / files のキー数 / kimOperated（ファイルが無ければ「なし」）\n3. note: ~/.claude/shared-memory/MEMORY.md の先頭1200文字に「kim 本人が操作」があれば kim、「このPCの user は別人」があれば other、どちらも無ければ none、ファイルが無ければ「なし」\n4. user_files: ~/.claude/shared-memory/ 直下の user_ で始まる .md の件数\n5. claude_md: ~/.claude/CLAUDE.md に @~/.claude/shared-memory/MEMORY.md が含まれるか yes/no\n6. sync_log: ~/.claude/ 配下の onboarding-sync のログ（onboarding-sync.log 等）から『memory-share install』を含む最新1行（無ければ「なし」）"
     }
   ]
 }

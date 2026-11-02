@@ -1058,6 +1058,15 @@ function execute(command, commandArgs, options = {}) {
     };
     const timer = setTimeout(() => {
       timedOut = true;
+      // 予算が停滞判定の閾値秒（300秒）以下だと、締切タイマーが周期判定より先に発火し続け、
+      // ポリシー拒否で停滞した試行が outcome=timeout として記録される（2026-11-02 実測: gemini-cli 301秒/予算300秒 out0）。
+      // 締切到達時点で経過秒は予算に達しているので、秒数条件だけ外して拒否回数・出力字数で同じ判定を行う。
+      if (!abortedPolicyStall
+        && options.abortPolicyStall === true
+        && process.env.CODEX_DO_POLICY_STALL_ABORT !== '0'
+        && shouldAbortPolicyStall({ elapsedSecs: callTimeoutSeconds, outputChars, stderr, minElapsedSecs: 0 })) {
+        abortedPolicyStall = true;
+      }
       console.error(`\n⏱ ${command} が ${callTimeoutSeconds} 秒で応答を終えなかったので停止しました。--timeout で延長できます`);
       killProcessTree(child);
       // 親が先に終わって孫が pipe を握ったままだと taskkill /T の木から外れ 'close' が来ない

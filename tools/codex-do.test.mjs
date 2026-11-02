@@ -2036,6 +2036,17 @@ test('gemini が拒否3回の後に無音で停滞しても周期判定で打ち
   assert.ok(elapsedSecs < 50, `無音停滞が打ち切られず ${elapsedSecs} 秒かかった`);
 });
 
+// 2026-11-02 実測: 予算300秒 = 停滞判定の閾値秒だと締切タイマーが先に発火し outcome=timeout になっていた。
+test('予算が停滞判定の閾値秒以下でも、締切時に拒否3回・低出力なら blocked として次へ進む', () => {
+  const { result } = runFakeGemini(
+    silentAfter(DENY.repeat(3)),
+    { CODEX_DO_GEMINI_TIMEOUT_SECS: '3', CODEX_DO_POLICY_STALL_MIN_ELAPSED_SECS: '3', CODEX_DO_POLICY_STALL_CHECK_MS: '600000' }
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
+  assert.match(result.stderr, /ポリシー拒否で停滞しているため/);
+});
+
 test('ポリシー停滞の打ち切りは出力400字以上・拒否3回未満・無効化指定では発火しない', () => {
   const cases = [
     { name: '出力400字以上', body: silentAfter(DENY.repeat(3), 'x'.repeat(400)) },

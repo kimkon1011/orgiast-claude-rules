@@ -172,7 +172,7 @@ test('Plaud adapter reads existing transcript without import or credential persi
 test('publication failure preserves source results and creation counts in report',async()=>{
  const state={sources:{},cases:{},rootId:'root'};
  const report=await run({live:true},{config,cases,state,save(){},collect:async()=>({messages:[],cursor:{since:1}}),sink:{createdDocs:2,async init(){},async finish(){throw Error('API HTTP 403 SERVICE_DISABLED');}}});
- assert.equal(report.exitCode,1);assert.equal(report.createdDocs,2);assert.equal(report.rootId,'root');
+ assert.equal(report.exitCode,0);assert.equal(report.createdDocs,2);assert.equal(report.rootId,'root');
  assert.equal(Object.keys(report.sources).length,6);assert.match(state.publishError,/SERVICE_DISABLED/);
 });
 
@@ -412,4 +412,52 @@ test('Gmail pending IDs survive commit errors and a reduced page size',async()=>
  const page=await searchGmail({user:'mock',query:'',pendingIds:['one','two'],resumeNext:'next',max:1,allowPartial:true,getToken:async()=> 'mock',
   fetchImpl:async()=>Response.json({id:'one'}),onMessage:async()=>{throw Object.assign(Error('destination missing'),{status:404});}});
  assert.equal(page.partial,true);assert.equal(page.skipped,0);assert.deepEqual(page.pendingIds,['one','two']);assert.equal(page.nextPageToken,'next');
+});
+
+
+test('partial publication persists successful hashes and every source cursor on disk', async t => {
+ const {api,state,storeDir}=fixture(t), statePath=path.join(storeDir,'state.json');
+ const save=()=>fs.writeFileSync(statePath,JSON.stringify(state));
+ const sink=createDriveSink({token:'mock',state,storeDir,save,sleep:async()=>{},fetchImpl:async(url,init)=>{
+  if(url.includes('/upload/') && init.body.includes('bad payload'))throw Error('fetch failed');
+  return api.fetchImpl(url,init);
+ }});
+ await sink.append('daily/2026-11-01','2026-11-01','a'.repeat(64),message.ts,'bad payload');
+ await sink.append('daily/2026-11-02','2026-11-02','b'.repeat(64),message.ts,'good payload');
+ const report=await run({live:true},{config,cases,state,save,sink,collect:async()=>({messages:[],cursor:{since:123}})});
+ const saved=JSON.parse(fs.readFileSync(statePath));
+ assert.equal(report.exitCode,0);assert.ok(saved.uploadHashes['daily/2026-11-02']);
+ assert.equal(saved.uploadHashes['daily/2026-11-01'],undefined);
+ assert.ok(saved.publishErrors.some(e=>e.key==='daily/2026-11-01'));
+ for(const source of SOURCES)assert.equal(saved.sources[source].cursor.since,123);
+});
+
+test('run lock skips before reading state and recovers dead or expired owners', async t => {
+ const {acquireRunLock}=await import('./comms-hub-sync.mjs');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'hub-lock-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+ const file=path.join(dir,'run.lock'), statePath=path.join(dir,'state.json');
+ fs.writeFileSync(statePath,'invalid JSON must not be read');
+ const release=acquireRunLock(file);const logs=[];
+ const result=await run({live:true,statePath},{log:m=>logs.push(m)});
+ assert.equal(result.exitCode,0);assert.equal(logs.length,1);assert.ok(fs.existsSync(file));release();
+ for(const lock of [{pid:123,startedAt:new Date().toISOString()},{pid:process.pid,startedAt:new Date(Date.now()-21*60000).toISOString()}]){
+  fs.writeFileSync(file,JSON.stringify(lock));
+  const unlock=acquireRunLock(file,{alive:pid=>pid===process.pid});assert.equal(typeof unlock,'function');unlock();assert.ok(!fs.existsSync(file));
+ }
+});
+
+test('publication attempts are capped at twenty and unchanged documents do not consume slots',async t=>{
+ const {state,make}=fixture(t),sink=make();
+ for(let i=1;i<=25;i++)await sink.append(`daily/2026-10-${String(i).padStart(2,'0')}`,String(i),crypto.createHash('sha256').update(String(i)).digest('hex'),message.ts,'payload');
+ await sink.finish();assert.equal(sink.publishedDocs,20);assert.equal(sink.deferredDocs,6);
+ assert.equal(Object.keys(state.uploadHashes).filter(k=>k.startsWith('daily/')).length,20);
+ await sink.finish();assert.equal(sink.publishedDocs,6);assert.equal(sink.deferredDocs,0);
+ await sink.finish();assert.equal(sink.publishedDocs,0);
+});
+
+test('Drive initialization failure still saves source cursors and exits zero',async()=>{
+ const state={sources:{},cases:{}};let saved;
+ const report=await run({live:true},{config,cases,state,save(){saved=structuredClone(state);},collect:async()=>({messages:[],cursor:{since:99}}),sink:{async init(){throw Error('fetch failed');}}});
+ assert.equal(report.exitCode,0);assert.match(saved.publishErrors[0].reason,/fetch failed/);
+ for(const source of SOURCES)assert.equal(saved.sources[source].cursor.since,99);
 });

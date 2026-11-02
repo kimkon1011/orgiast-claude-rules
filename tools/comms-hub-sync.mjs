@@ -222,7 +222,7 @@ export function createDriveSink({ token, state, save, config = {}, fetchImpl = f
   const req = (url, method = 'GET', body) => jsonFetch(url, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, fetchImpl);
   const escape = s => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   state.files ||= {}; state.documents ||= {}; state.uploadHashes ||= {}; state.removedMarkers ||= {};
-  let createdDocs = 0;
+  let createdDocs = 0, publishedDocs = 0, attemptedDocs = 0, deferredDocs = 0;
   function localPath(key) {
     if (!/^(?:(?:cases|daily|unassigned)\/[a-zA-Z0-9_-]+|readme)$/.test(key)) throw new Error('invalid hub document key');
     return path.join(storeDir, `${key}.md`);
@@ -247,13 +247,16 @@ export function createDriveSink({ token, state, save, config = {}, fetchImpl = f
     for (let attempt = 0; ; attempt++) {
       try { checkBudget(); return await operation(); }
       catch (e) {
-        if (attempt >= 2 || !(e.name === 'TimeoutError' || e.name === 'AbortError' || e instanceof TypeError || e.status === 429 || e.status >= 500)) throw e;
+        if (attempt >= 2 || !(e.name === 'TimeoutError' || e.name === 'AbortError' || e instanceof TypeError || /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket/i.test(`${e.message} ${e.code || ''} ${e.cause?.code || ''}`) || e.status === 429 || e.status >= 500)) throw e;
         checkBudget(1000 * 2 ** attempt);
         await sleep(1000 * 2 ** attempt);
       }
     }
   }
   async function publish(key, name, text, parent) {
+    if (state.files[key] && state.uploadHashes[key] === digest(text)) return state.files[key];
+    if (attemptedDocs >= 20) { deferredDocs++; return state.files[key] || null; }
+    attemptedDocs++;
     return retry(() => publishOnce(key, name, text, parent));
   }
   async function publishOnce(key, name, text, parent) {
@@ -269,10 +272,12 @@ export function createDriveSink({ token, state, save, config = {}, fetchImpl = f
     } else {
       await uploadRequest(`${upload}/${id}?uploadType=media&fields=id`, { method: 'PATCH', headers: { Authorization: headers.Authorization, 'Content-Type': 'text/markdown; charset=UTF-8' }, body: text || '\n' });
     }
-    state.uploadHashes[key] = hash; save(); return id;
+    state.uploadHashes[key] = hash; publishedDocs++; save(); return id;
   }
   return {
     get createdDocs() { return createdDocs; },
+    get publishedDocs() { return publishedDocs; },
+    get deferredDocs() { return deferredDocs; },
     async init(readers = []) {
       state.rootId = await ensure('root', '案件情報ハブ', null, 'application/vnd.google-apps.folder'); save();
       // kim@ の業務メールを含むため、ドメイン全体ではなく Claude Code を使うアカウントだけに共有する
@@ -358,8 +363,9 @@ export function createDriveSink({ token, state, save, config = {}, fetchImpl = f
       }
     },
     async finish() {
+      publishedDocs = attemptedDocs = deferredDocs = 0;
+      const failures = state.publishErrors = [];
       await this.purge();
-      const failures = [];
       const publications = [];
       for (const [key, meta] of Object.entries(state.documents)) {
         if (dailyBase(key) && state.documents[dailyBase(key)]) continue;
@@ -377,7 +383,7 @@ export function createDriveSink({ token, state, save, config = {}, fetchImpl = f
         checkBudget();
         try {
           const id = await publish(key, name, text, state.files[key.split('/')[0]]);
-          if (key.startsWith('cases/') && state.cases[key.slice(6)]) Object.assign(state.cases[key.slice(6)], { docId: id, url: docUrl(id) });
+          if (id && key.startsWith('cases/') && state.cases[key.slice(6)]) Object.assign(state.cases[key.slice(6)], { docId: id, url: docUrl(id) });
         } catch (e) { failures.push({ key, reason: String(e.message).slice(0, 300) }); }
       }
       const index = { rootId: state.rootId, cases: Object.fromEntries(Object.entries(state.cases).map(([id, c]) => [id, { ...c, url: c.docId ? docUrl(c.docId) : null }])),
@@ -401,13 +407,48 @@ export function createDriveSink({ token, state, save, config = {}, fetchImpl = f
       if (!fs.existsSync(localPath('readme')) || fs.readFileSync(localPath('readme'), 'utf8') !== readme) atomicText(localPath('readme'), readme);
       try { await publish('readme', '00_README', readme, state.rootId); }
       catch (e) { failures.push({ key: 'readme', reason: String(e.message).slice(0, 300) }); }
+      save();
       if (failures.length) throw new Error(`Drive publication failed: ${failures.map(f => `${f.key}: ${f.reason}`).join('; ').slice(0, 260)}`);
       save(); return index;
     }
   };
 }
 
+// Acquire before reading state: a waiting runner must never overwrite newer hashes.
+export function acquireRunLock(file, { now = Date.now(), pid = process.pid, alive = id => {
+  try { process.kill(id, 0); return true; } catch (e) { if (e.code === 'ESRCH') return false; return true; }
+} } = {}) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const owner = JSON.stringify({ pid, startedAt: iso(now), token: crypto.randomUUID() });
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      fs.writeFileSync(file, owner, { flag: 'wx', mode: 0o600 });
+      return () => { try { if (fs.readFileSync(file, 'utf8') === owner) fs.unlinkSync(file); } catch (e) { if (e.code !== 'ENOENT') throw e; } };
+    } catch (e) { if (e.code !== 'EEXIST') throw e; }
+    try {
+      const raw = fs.readFileSync(file, 'utf8');
+      let lock; try { lock = JSON.parse(raw); } catch { lock = {}; }
+      const started = Date.parse(lock.startedAt) || fs.statSync(file).mtimeMs;
+      if (now - started <= 20 * 60000 && (!Number.isInteger(lock.pid) || alive(lock.pid))) return null;
+      if (fs.readFileSync(file, 'utf8') === raw) fs.unlinkSync(file);
+    } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  }
+  return null;
+}
+
 export async function run(options = {}, deps = {}) {
+  const home = process.env.ORGIAST_HOME || os.homedir();
+  const statePath = options.statePath || path.join(home, '.claude', 'comms-hub', 'state.json');
+  const release = options.live && !deps.state ? acquireRunLock(path.join(path.dirname(statePath), 'run.lock')) : () => {};
+  if (!release) {
+    (deps.log || console.log)('comms-hub: skipped: another run holds run.lock');
+    return { mode: 'live', skipped: 'run.lock held', exitCode: 0, publishedDocs: 0 };
+  }
+  try { return await runLocked({ ...options, statePath }, deps); }
+  finally { release(); }
+}
+
+async function runLocked(options = {}, deps = {}) {
   const config = deps.config || read(new URL('../config/comms-hub.json', import.meta.url));
   if (!Number.isInteger(config.maxPerSource) || config.maxPerSource < 1 || config.maxPerSource > 100 || !(config.sourceTimeoutMs > 0 && config.sourceTimeoutMs <= 60000)) throw new Error('invalid source limits');
   const clock = deps.clock || Date.now;
@@ -426,19 +467,6 @@ export async function run(options = {}, deps = {}) {
     return (deps.fetchImpl || fetch)(url, { ...init, signal: AbortSignal.any([globalSignal, activeSignal, signal, init.signal || AbortSignal.timeout(20000)]) });
   };
   const save = () => { if (live) (deps.save || (() => atomic(statePath, state)))(); };
-  let lock;
-  if (live && !deps.state) {
-    fs.mkdirSync(path.dirname(statePath), { recursive: true, mode: 0o700 });
-    lock = statePath + '.lock';
-    try { fs.writeFileSync(lock, String(process.pid), { flag: 'wx' }); }
-    catch (e) {
-      if (e.code !== 'EEXIST') throw e;
-      const pid = Number(fs.readFileSync(lock, 'utf8'));
-      if (!Number.isInteger(pid) || pid < 1) throw new Error('invalid hub lock');
-      try { process.kill(pid, 0); throw new Error('hub already running'); } catch (p) { if (p.code !== 'ESRCH') throw p; }
-      fs.unlinkSync(lock); fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
-    }
-  }
   const report = { mode: live ? 'live' : 'dry-run', sources: {}, createdDocs: 0 };
   try {
     const fetchImpl = boundedFetch(globalSignal);
@@ -449,7 +477,8 @@ export async function run(options = {}, deps = {}) {
       cases = parseCaseRows(data.values || []);
     }
     if (live && !sink) sink = createDriveSink({ token: await getDriveToken({ signal: globalSignal, fetchImpl }), config, state, save, fetchImpl, now, checkBudget, storeDir: options.storeDir || path.join(path.dirname(statePath), 'store') });
-    if (live) await sink.init(config.readers);
+    let initError;
+    if (live) { try { await sink.init(config.readers); } catch (e) { initError = e; } }
     for (const source of SOURCES) {
       const s = state.sources[source] ||= {};
       if (clock() >= collectionDeadline) {
@@ -498,11 +527,11 @@ export async function run(options = {}, deps = {}) {
     activeSignal = globalSignal;
     if (live) {
       report.rootId = state.rootId;
-      try { checkBudget(); report.index = await sink.finish(); delete state.publishError; delete state.publishDeferredAt; }
-      catch (e) { if (clock() >= deadline || globalSignal.aborted || e.code === 'HUB_BUDGET') { report.budgetExhausted = true; state.publishDeferredAt = iso(clock()); } else { report.publishError = String(e.message).slice(0, 300); state.publishError = report.publishError; } }
-      report.createdDocs = sink.createdDocs; save();
+      try { state.publishErrors = []; checkBudget(); if (initError) await sink.init(config.readers); report.index = await sink.finish(); delete state.publishError; delete state.publishDeferredAt; }
+      catch (e) { if (clock() >= deadline || globalSignal.aborted || e.code === 'HUB_BUDGET') { report.budgetExhausted = true; state.publishDeferredAt = iso(clock()); } else { report.publishError = String(e.message).slice(0, 300); state.publishError = report.publishError; if (!state.publishErrors.length) state.publishErrors.push({ key: 'publication', reason: report.publishError }); } }
+      report.createdDocs = sink.createdDocs; report.publishedDocs = sink.publishedDocs || 0; report.deferredDocs = sink.deferredDocs || 0; save();
     }
-    report.exitCode = report.budgetExhausted ? 0 : report.publishError || SOURCES.every(s => report.sources[s].error) ? 1 : 0;
+    report.exitCode = SOURCES.every(s => report.sources[s].error) ? 1 : 0;
     report.elapsedMs = clock() - started;
     return report;
   } catch (e) {
@@ -510,7 +539,7 @@ export async function run(options = {}, deps = {}) {
     report.budgetExhausted = true; report.exitCode = 0;
     for (const source of SOURCES) report.sources[source] ||= { skipped: 'process budget exhausted' };
     save(); return report;
-  } finally { if (lock) fs.unlinkSync(lock); }
+  } finally { save(); }
 }
 export function parseArgs(args) {
   const options = {};

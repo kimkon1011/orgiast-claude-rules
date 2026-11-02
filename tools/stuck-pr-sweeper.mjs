@@ -96,11 +96,10 @@ function repair(pr, record, home) {
     return { exitCode: 0, result: safe(output) };
   } catch (e) { return { exitCode: e.status ?? 1, result: safe(`${e.stdout || ''}\n${e.stderr || e.message}`) }; }
 }
-async function notify(pr, record, home) {
+export async function notifyStuckPr(pr, record, home, { inboxAvailable = fs.existsSync(path.join(root, 'tools/kim-inbox.mjs')) } = {}) {
   const marker = `[stuck-pr:${keyOf(pr)}]`;
   const text = `${marker} ${pr.title}\n${pr.url}\n原因: ${record.reasons.join(', ')}\n${record.attempts.map((a, i) => `試行${i + 1}: ${String(a.result || a.status).slice(-700)}`).join('\n')}\n人の判断が要る理由: 自動修復2回でも解消していません。記録とCIを確認し、追加修正の範囲またはレビュー・権限の担当を決めてください。\n次: kim が修復範囲・担当を判断、Claude が対応。`;
-  const inbox = path.join(root, 'tools/kim-inbox.mjs');
-  if (fs.existsSync(inbox)) {
+  if (inboxAvailable) {
     const { addItem, listItems } = await import('./kim-inbox.mjs');
     const old = listItems(home).find(x => x.text?.startsWith(marker));
     return old?.id || (await addItem(home, { kind: 'ask', text, source: 'stuck-pr-sweeper' })).id;
@@ -183,7 +182,7 @@ export async function sweep({ home = process.env.ORGIAST_HOME || os.homedir(), n
           const last = rec.attempts.at(-1);
           if (last && now - Date.parse(last.startedAt) < 3 * HOUR) { persist(); continue; }
           if (rec.attempts.length >= MAX_ATTEMPTS) {
-            if (!rec.notificationId) { rec.notificationId = await (io.notify || notify)(pr, rec, home); }
+            if (!rec.notificationId) { rec.notificationId = await (io.notify || notifyStuckPr)(pr, rec, home); }
             rec.status = 'needs-user'; persist(); continue;
           }
           if (!reasons.length) { persist(); continue; }

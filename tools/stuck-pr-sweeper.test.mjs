@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { classify, sweep, HOUR, acquireLock, repositories } from './stuck-pr-sweeper.mjs';
+import { classify, sweep, HOUR, acquireLock, repositories, notifyStuckPr } from './stuck-pr-sweeper.mjs';
 const now = Date.parse('2026-11-02T10:00:00Z');
 const ago = hours => new Date(now - hours * HOUR).toISOString();
 const base = () => ({ repo: 'kimkon1011/example', number: 1, title: 'repair example', url: 'https://github.com/kimkon1011/example/pull/1', state: 'OPEN', author: { login: 'kimkon1011' }, createdAt: ago(1), headRefOid: 'a'.repeat(40), statusCheckRollup: [], reviewRequests: [] });
@@ -105,4 +105,25 @@ test('attempts survive reopening the real state file', async t => {
 test('green checks without auto-merge never cause an automatic merge', async t => {
   const f=fixture(t); f.setPr({...base(),createdAt:ago(25),mergeable:'MERGEABLE',statusCheckRollup:[{status:'COMPLETED',conclusion:'SUCCESS'}]});
   f.io.merge=()=>assert.fail('no merge authorization'); await f.run(); assert.equal(f.counts().repairs,1);
+});
+
+for (const fallback of [false, true]) test(`real ${fallback ? 'auto-progress fallback' : 'kim-inbox'} registers once and closes after merge`, async t => {
+  const f=fixture(t);
+  fs.mkdirSync(path.join(f.home,'.claude'),{recursive:true});
+  fs.writeFileSync(path.join(f.home,'.claude/cost-reporter.env'),'REPORTER_LABEL=kim-PC\n');
+  const rec=f.state.prs['kimkon1011/example#1']={number:1,status:'verifying',reasons:['ci-failed-3h'],attempts:[{startedAt:ago(9),result:'first failed'},{startedAt:ago(4),result:'second failed'}]};
+  f.io.notify=(pr,r,home)=>notifyStuckPr(pr,r,home,{inboxAvailable:!fallback});
+  await f.run(); const id=rec.notificationId; assert.ok(id);
+  delete rec.notificationId; await f.run(); assert.equal(rec.notificationId,id);
+  if(fallback) {
+    const lines=fs.readFileSync(path.join(f.home,'.claude/auto-progress-ledger.jsonl'),'utf8').trim().split('\n');assert.equal(lines.length,1);
+  } else {
+    assert.equal(fs.readdirSync(path.join(f.home,'.claude/kim-inbox')).filter(x=>x.endsWith('.json')).length,1);
+  }
+  f.setPr({...base(),state:'MERGED'});await f.run();
+  if(fallback) {
+    const lines=fs.readFileSync(path.join(f.home,'.claude/auto-progress-ledger.jsonl'),'utf8').trim().split('\n').map(JSON.parse);assert.equal(lines.at(-1).status,'done');assert.ok(!lines.some(x=>x.status==='waiting_user'));
+  } else {
+    const item=JSON.parse(fs.readFileSync(path.join(f.home,'.claude/kim-inbox',id+'.json'),'utf8'));assert.equal(item.status,'dropped');
+  }
 });

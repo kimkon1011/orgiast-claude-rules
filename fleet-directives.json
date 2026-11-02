@@ -3,16 +3,6 @@
   "_note": "kim/監督Claude が指示を1件書き、各PCの fleet-agent が15分以内に拾って結果を Discord へ返す。kind は status / prompt / enable-auto-session の3つだけ。prompt と enable-auto-session はそのPCの人がオプトイン済みの場合のみ実行される。空配列にすると全PCで何も起きない。 PC間メッセージは fleet-mail.mjs（双方向）を使う。",
   "directives": [
     {
-      "id": "run-20261102-100656-0987",
-      "kind": "run",
-      "targets": "DESKTOP-BDOAK99",
-      "why": "作業用008 引継ぎ自己点検の配布受信と台帳更新",
-      "task": "fleet-sheet-report",
-      "createdBy": "kim",
-      "createdAt": "2026-11-02T10:06:56.593Z",
-      "expiresAt": "2026-11-02T12:06:56.593Z"
-    },
-    {
       "id": "prompt-20261102-shared-memory-probe",
       "kind": "prompt",
       "targets": "all",
@@ -42,6 +32,15 @@
       "createdBy": "kim",
       "createdAt": "2026-11-02T12:49:15.432Z",
       "expiresAt": "2026-11-03T12:49:15.432Z"
+    },
+    {
+      "id": "status-20261102-134317-7164",
+      "kind": "status",
+      "targets": "all",
+      "why": "打合せ前日自動準備: 作業用014の特定とprompt受付(opt-in)の確認",
+      "body": "[状態照会] 打合せ前日の自動準備（kim-PC から毎朝このPCの Claude を起動する仕組み）を有効にするための確認です。読み取りのみで、設定は変更しません。\n\n次の4点を Read で確認し、4行で返信してください。\n1. hostname\n2. Claude Code のログインアカウント（`~/.claude.json` の oauthAccount.emailAddress）\n3. このPCの作業用番号（Chrome リモートデスクトップ名。例: 作業用014）。手掛かりが無ければ「不明」\n4. `~/.claude/fleet-agent-optin.json` の accept 配列の中身。ファイルが無ければ「なし」\n",
+      "createdBy": "uers",
+      "createdAt": "2026-11-02T13:43:17.883Z"
     }
   ]
 }

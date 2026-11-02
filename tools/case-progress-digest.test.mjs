@@ -10,7 +10,7 @@ import { run } from './auto-progress-digest.mjs';
 const now = Date.parse('2026-11-02T01:00:00Z');
 const id = '260430EIG';
 const source = { account: 'seisaku-team@orgiast.jp', pc: 'cafe015-PC', timestamp: '2026-11-02T00:00:00Z', file: 'session.md' };
-const data = () => ({ state: renderState({ purpose: '開催日: 2026/12/12', decisions: [{ text: '課題企業を確定' }], next: '- 会場確認\n- kim待ち: 送信OK を判断\n- kim の承認\n- 四つ目' }, source), log: `${source.timestamp} ${source.account}/${source.pc}\n企業を確定\n会場確認` });
+const data = () => ({ state: renderState({ purpose: '開催日: 2026/12/12', decisions: [{ text: '課題企業を確定' }], next: '- 会場確認\n- kim待ち: 送信OK を判断\n- kim の承認\n- 資料確認\n- 四つ目' }, source), log: `${source.timestamp} ${source.account}/${source.pc}\n企業を確定\n会場確認` });
 function home(t) { const h = fs.mkdtempSync(path.join(os.tmpdir(), 'case-digest-')); t.after(() => fs.rmSync(h, { recursive: true, force: true })); return h; }
 
 test('watch adds, removes and migrates only recent bindings once', t => {
@@ -100,10 +100,55 @@ test('preview leaves watch migration and delivery state untouched', async t => {
   assert.match(result.text, /案件進捗/); assert.equal(fs.existsSync(path.join(h, '.claude/state/case-watch.json')), false);
 });
 test('failed later message part retains the previous delivery point for retry', async t => {
-  const h = home(t); caseWatch(h, { add: [id, ...Array.from({ length: 8 }, (_, i) => `C000${i}`)], now });
+  const h = home(t); caseWatch(h, { add: [id, ...Array.from({ length: 20 }, (_, i) => `C${String(i).padStart(4, '0')}`)], now });
   let state = {}, calls = 0;
   const io = { label: 'kim-PC', localOwner: 'kim@orgiast.jp', readLedger: () => [], readState: () => structuredClone(state), writeState: (_, value) => { state = value; }, fetchCaseResume: async () => data(), notifyOwner: async () => ++calls === 2 ? { reason: 'second part failed' } : { delivered: 'dm' } };
   const out = await run({ home: h, now, io });
   assert.ok(calls >= 2); assert.equal(out.sent, false); assert.equal(state.caseProgress, undefined);
   assert.equal((await run({ home: h, now, io })).sent, true); assert.ok(state.caseProgress[id]);
+});
+
+const eigCitation = '[20261030-session-user-PC-12345678-1234-1234-1234-123456789abc.md 2026-11-02T12:05:46.218Z]';
+function eigState({ decisions = '', next = '', customer = '', files = '' } = {}) {
+  return { state: `## 顧客の意向\n${customer}\n## 決定事項\n${decisions}\n## 未完了・次の一手\n${next}\n## 関連ファイル・ID\n${files}\n## 最終更新\n${source.account} / ${source.pc} / ${source.timestamp}`, log: data().log };
+}
+test('260430EIG removes citation tags and bullet or numbered prefixes from display', () => {
+  const input = eigState({ decisions: `- 会場を確定 ${eigCitation}\n* [要確認] 見積を確定 ${eigCitation}`, next: `1. 会場へ連絡 ${eigCitation}\n* 資料を準備 ${eigCitation}` });
+  const { text } = formatCaseProgress(id, input, undefined, now);
+  assert.match(text, /決定事項: 会場を確定 ／ \[要確認\] 見積を確定/);
+  assert.match(text, /未完了・次の一手: 会場へ連絡 ／ 資料を準備/);
+  assert.ok(!text.includes('20261030-session'));
+  assert.ok(!text.includes('2026-11-02T12:05:46.218Z'));
+});
+test('260430EIG splits numbered paragraphs and moves only matching items to kim waiting once', () => {
+  const input = eigState({
+    customer: `- 社外送信はkimの送信OK必須 ${eigCitation}`,
+    files: '- kimの判断履歴: archive.md',
+    next: `1. 会場確認 ${eigCitation} 2. kimの判断: 見積送信OK ${eigCitation} 3. 資料準備 4. 日程確認 5. 四つ目の通常作業 6. kimの返事を確認 7. kimによる承認 8. kim待ち: 予算確認 9. [x] kimの判断: 完了済み`,
+  });
+  const { text } = formatCaseProgress(id, input, undefined, now);
+  const nextLine = text.split('\n').find(s => s.startsWith('未完了・次の一手:'));
+  const waitingLine = text.split('\n').find(s => s.startsWith('kim の判断待ち:'));
+  assert.equal(nextLine, '未完了・次の一手: 会場確認 ／ 資料準備 ／ 日程確認');
+  assert.equal(waitingLine, 'kim の判断待ち: kimの判断: 見積送信OK ／ kimの返事を確認 ／ kimによる承認 ／ kim待ち: 予算確認');
+  assert.equal(text.match(/見積送信OK/g)?.length, 1);
+  for (const unwanted of ['社外送信', 'archive.md', '四つ目の通常作業', '完了済み']) assert.ok(!text.includes(unwanted), unwanted);
+});
+test('260430EIG limits each item to 80 characters and each case to 600 while retaining all sections', () => {
+  const long = 'あ'.repeat(100);
+  const single = formatCaseProgress(id, eigState({ decisions: `- ${long} ${eigCitation}`, next: `1. ${long}` }), undefined, now).text;
+  assert.equal(single.split('\n')[1], `決定事項: ${'あ'.repeat(79)}…`);
+  assert.equal(single.split('\n')[2], `未完了・次の一手: ${'あ'.repeat(79)}…`);
+  const input = eigState({
+    decisions: Array.from({ length: 10 }, (_, i) => `- 決定${i}${long} ${eigCitation}`).join('\n'),
+    next: Array.from({ length: 8 }, (_, i) => `${i + 1}. ${i < 3 ? `作業${i}` : 'kimの判断'}${long} ${eigCitation}`).join(' '),
+  });
+  const { text } = formatCaseProgress(id, input, undefined, now + 86400000);
+  assert.ok(text.length <= 600, text.length);
+  assert.equal(text.split('\n').length, 5);
+  for (const expected of ['作業0', '作業1', '作業2', '停滞', '決定事項:', '未完了・次の一手:', 'kim の判断待ち:', `最終更新: ${source.account} / ${source.pc} / ${source.timestamp}`]) assert.ok(text.includes(expected), expected);
+  const first = formatCaseProgress(id, input, undefined, now);
+  const unchanged = formatCaseProgress(id, input, first.checkpoint, now);
+  assert.equal(unchanged.text.split('\n').length, 1);
+  assert.ok(unchanged.text.length <= 600);
 });

@@ -10,7 +10,6 @@ import { machineIdentity, getClaudeAccountEmail } from './machine-identity.mjs';
 import { parseHandoff } from './auto-session.mjs';
 import { isEntry } from './is-entry.mjs';
 import { resolveClaudeExecutableFromDisk, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
-import { findLatestMemoryDir } from './memory-share.mjs';
 
 const ALLOWED_KINDS = new Set(['status', 'prompt', 'enable-auto-session', 'run']);
 const RUN_TASKS = Object.freeze({
@@ -98,26 +97,30 @@ function scheduledTaskStatus(run = runSync) {
   }
 }
 
-function sharedMemoryStatus(home) {
+export function sharedMemoryStatus(home) {
+  const dir = process.env.ORGIAST_SHARED_MEMORY_DIR || path.join(home, '.claude', 'shared-memory');
+  const result = { found: false, count: 0, generatedAt: null, kimOperated: null, kimNote: null, referenced: false };
   try {
-    const memoryDir = findLatestMemoryDir(home, () => {});
-    if (!memoryDir) return { found: false, count: 0, indexed: false };
-    let count = 0;
-    try {
-      count = fs.readdirSync(path.join(memoryDir, 'shared'), { withFileTypes: true })
-        .filter((entry) => entry.isFile() && entry.name.endsWith('.md')).length;
-    } catch {}
-    let indexed = false;
-    try { indexed = /index\/shared\.md/.test(fs.readFileSync(path.join(memoryDir, 'MEMORY.md'), 'utf8')); } catch {}
-    return { found: true, count, indexed };
-  } catch {
-    return { found: false, count: 0, indexed: false };
-  }
+    const state = JSON.parse(fs.readFileSync(path.join(dir, '.state.json'), 'utf8').replace(/^\uFEFF/, ''));
+    result.found = true;
+    result.count = Object.keys(state?.files ?? {}).length;
+    result.generatedAt = state?.generatedAt ?? null;
+    result.kimOperated = typeof state?.kimOperated === 'boolean' ? state.kimOperated : null;
+  } catch {}
+  try {
+    const note = fs.readFileSync(path.join(dir, 'MEMORY.md'), 'utf8').slice(0, 1200);
+    result.kimNote = note.includes('kim 本人が操作') ? true : note.includes('このPCの user は別人') ? false : null;
+  } catch {}
+  try {
+    result.referenced = fs.readFileSync(path.join(home, '.claude', 'CLAUDE.md'), 'utf8').includes('@~/.claude/shared-memory/MEMORY.md');
+  } catch {}
+  return result;
 }
 
 function formatMemoryLine(sharedMemory) {
-  if (!sharedMemory.found) return 'memory=なし';
-  return `memory=共有${sharedMemory.count}件 / MEMORY.md参照=${sharedMemory.indexed ? 'yes' : 'no'}`;
+  if (!sharedMemory.found) return 'memory=未受信（~/.claude/shared-memory/.state.json なし）';
+  const kimNote = sharedMemory.kimNote === null ? '不明' : sharedMemory.kimNote ? 'yes' : 'no';
+  return `memory=共有${sharedMemory.count}件 / 世代=${sharedMemory.generatedAt} / user=kim注記=${kimNote} / CLAUDE.md参照=${sharedMemory.referenced ? 'yes' : 'no'}`;
 }
 
 function fitStatusLines({ header, hostLine, codexLine, repoLine, memoryLine, jobStatus, syncLine, todoLine }) {

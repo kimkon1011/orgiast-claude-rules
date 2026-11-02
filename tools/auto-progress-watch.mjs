@@ -391,31 +391,110 @@ export async function watchFleetMail({ home, now, dryRun = false, io = {} }) {
   const notified = readFleetJson(file, {});
   const summary = { fleetExpired: 0, fleetBlocked: 0 };
   const label = io.label ?? resolveFleetLabel(home);
-  // Only recent outbound requests: old history would flood the owner on first run.
   const WINDOW = 7 * 24 * 3600000;
+  // Collect fleet-chase tracked mail IDs.
+  const chasedIds = new Set();
+  if (io.fleetChaseMailIds) {
+    for (const id of io.fleetChaseMailIds) chasedIds.add(id);
+  } else {
+    try {
+      const ledger = readFleetJson(path.join(home, '.claude', 'fleet-chase', 'ledger.json'), {});
+      for (const item of Object.values(ledger.items || {})) {
+        for (const id of [item?.mailId, ...(item?.chaseMailIds || [])]) if (id) chasedIds.add(id);
+      }
+    } catch { /* fleet-chase not available */ }
+  }
   const due = [];
   for (const [key, mail] of Object.entries(sent)) {
     const id = mail?.id || key;
     if (!mail || (mail.from && mail.from !== label) || id.startsWith('mail-reply-') || mail.replyTo) continue;
     if (!(now - Date.parse(mail.expiresAt || mail.createdAt) < WINDOW)) continue;
+    // Notes never need chasing: no result body expected, and fleet-chase ignores them.
+    if (mail.kind !== 'prompt') continue;
+    // Self-addressed: no cross-PC tracking needed.
+    if (mail.to === mail.from || mail.to === label) continue;
+    // fleet-chase own tracking IDs and already-chased mails.
+    if (id.startsWith('mail-chase-') || chasedIds.has(id)) continue;
     const expired = mail.status === 'expired';
-    // A note never gets a result body, so "empty result" only means something for prompts.
-    const empty = mail.kind === 'prompt' && !String(mail.resultBody || '').trim();
+    const empty = !String(mail.resultBody || '').trim();
     const blocked = mail.status === 'failed' || mail.status === 'done' && (empty || BLOCKER.test(mail.resultBody || ''));
     if (!expired && !blocked) continue;
     summary[expired ? 'fleetExpired' : 'fleetBlocked']++;
-    if (dryRun || (Number.isFinite(notified[id]) && now - notified[id] < 24 * 3600000)) continue;
-    due.push({ id, line: `・${id}（${mail.to || '宛先不明'}）${mail.status}${blocked && mail.status === 'done' ? '（回答が空または未実施）' : ''}: ${String(mail.why || '').slice(0, 60)}` });
+    if (dryRun) continue;
+    const prev = notified[id];
+    const prevNotifiedAt = typeof prev === 'number' ? prev : (prev?.notifiedAt ?? NaN);
+    if (Number.isFinite(prevNotifiedAt) && now - prevNotifiedAt < 24 * 3600000) continue;
+    due.push({ id, mail });
   }
   if (!due.length) return summary;
-  // One notification per run, not one per mail.
-  const message = redactSecrets(`他PCへの依頼 ${due.length} 件が止まっています。再送が必要です。\n${due.slice(0, 10).map(d => d.line).join('\n')}${due.length > 10 ? `\n…ほか ${due.length - 10} 件` : ''}\n再送: fleet-mail --send を同じ body で`);
-  const result = await (io.notifyOwner ?? notifyOwner)(io.localOwner ?? resolveOwner({ home }), message, { home });
-  if (['dm', 'session-inbox', 'toast', 'inbox'].includes(result?.delivered)) {
-    for (const { id } of due) notified[id] = now;
+  const isKimPc = label === 'kim-PC';
+  if (isKimPc) {
+    // kim-PC: no DM, fleet-chase ingest already tracks these outbound mails.
+    for (const { id } of due) {
+      const prev = notified[id];
+      notified[id] = typeof prev === 'number'
+        ? { notifiedAt: prev, handledAt: new Date(now).toISOString() }
+        : { ...(prev ?? {}), handledAt: new Date(now).toISOString() };
+    }
     saveFleetJson(file, notified);
+    return summary;
   }
+  // Non-kim-PC: auto-retry once per stuck mail, then log remaining.
+  for (const { id, mail } of due) {
+    const prev = notified[id];
+    const retryCount = typeof prev === 'object' ? (prev?.retryCount ?? 0) : 0;
+    if (retryCount > 0) {
+      // Already retried once; log but do not DM.
+      const log = path.join(home, '.claude', 'logs', 'auto-progress-watch.log');
+      try { fs.appendFileSync(log, `${new Date(now).toISOString()} fleet-retry-exhausted: ${id} (${mail.status})\n`); } catch {}
+      continue;
+    }
+    if (!dryRun) {
+      try { await autoRetryFleetMail(home, label, mail, id, now, io); }
+      catch (error) {
+        const log = path.join(home, '.claude', 'logs', 'auto-progress-watch.log');
+        try { fs.appendFileSync(log, `${new Date(now).toISOString()} fleet-retry-failed: ${id} (${String(error?.message ?? error).slice(0, 200)})\n`); } catch {}
+      }
+    }
+    notified[id] = typeof prev === 'number'
+      ? { notifiedAt: prev, retryCount: 1, retriedAt: new Date(now).toISOString() }
+      : { ...(prev ?? {}), retryCount: 1, retriedAt: new Date(now).toISOString() };
+  }
+  saveFleetJson(file, notified);
   return summary;
+}
+
+async function autoRetryFleetMail(home, fromLabel, mail, id, now, io = {}) {
+  let body = mail.body || '';
+  // Fall back to the sent log if body not in status cache.
+  if (!body) {
+    try {
+      const raw = io.readFile ? io.readFile(path.join(home, '.claude', 'fleet-mail-sent.jsonl'))
+        : String(fs.readFileSync(path.join(home, '.claude', 'fleet-mail-sent.jsonl'), 'utf8'));
+      for (const line of raw.split(/\r?\n/)) {
+        try { const e = JSON.parse(line); if (e.id === id && e.action === 'sent' && e.body) { body = e.body; break; } } catch {}
+      }
+    } catch {}
+  }
+  if (!body) throw new Error('body not found for auto-retry');
+  // 本文先頭は exec マーカーの解析位置なので触らず、再送の印は why に付ける（docs/fleet-chase.md）。
+  const retryBody = String(body).slice(0, 19500);
+  const retryWhy = `[自動再送] ${mail.why || ''}`.trim();
+  if (io.sendMail) { return io.sendMail({ id: `${id}-retry-1`, to: mail.to, body: retryBody, why: retryWhy }); }
+  const { parseEnvText } = await import('./env-kv.mjs');
+  const env = parseEnvText(
+    io.readFile ? io.readFile(path.join(home, '.claude', 'fleet-sheet.env'))
+      : String(fs.readFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'utf8')));
+  if (!env.FLEET_SHEET_URL || !env.FLEET_SHEET_TOKEN) throw new Error('fleet-sheet.env not configured');
+  const { createClient } = await import('./fleet-mail.mjs');
+  const request = createClient({ url: env.FLEET_SHEET_URL, token: env.FLEET_SHEET_TOKEN });
+  const newId = `${id}-retry-1`;
+  await request('mail-send', {
+    id: newId, from: fromLabel, to: mail.to, messageKind: 'prompt',
+    body: retryBody,
+    why: retryWhy, auto: true, hop: 1, priority: 'normal',
+    expiresAt: new Date(now + 24 * 3600000).toISOString(),
+  });
 }
 
 // ---- 本体 ----------------------------------------------------------------

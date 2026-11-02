@@ -155,3 +155,14 @@ test('kim 宛 Discord 停止は初受信の非 pilot PC でも即時拒否する
   const output = await runHook(path.join(toolsDir, 'kim-discord-report-gate.mjs'), JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'mcp__claude_ai_Discord__send_dm', tool_input: { user_id: '715210673642012733', content: '報告' } }), { env: { ...process.env, ORGIAST_HOME: home }, policyOptions: { home, hostname: '作業用011' } });
   assert.equal(JSON.parse(output.stdout).hookSpecificOutput.permissionDecision, 'deny');
 });
+
+test('app-llm gates deny immediately on a first-seen non-pilot PC under the 2026-11-02 kim policy', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'app-llm-immediate-'));
+  const policy = '2026-11-02 kim 指示: アプリからの Claude API 利用を全PC全アカウント全プロジェクトで禁止';
+  for (const name of ['app-llm-cost-gate', 'claude-fallback-report-gate']) {
+    const manifest = { pilotHosts: [], gates: { [name]: { rollout: 'deny', immediatePolicy: policy, distributedAt: '2026-11-02T00:00:00Z', denyAfter: '2026-11-09T00:00:00Z' } } };
+    assert.equal(rolloutMode(name, { manifest, home, hostname: 'new-pc', now: Date.parse('2026-11-02T12:00:00Z') }), 'deny');
+    manifest.gates[name].immediatePolicy = 'other';
+    assert.equal(rolloutMode(name, { manifest, home, hostname: 'new-pc', now: Date.parse('2026-11-02T12:00:00Z') }), 'warn');
+  }
+});

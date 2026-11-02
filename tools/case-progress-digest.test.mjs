@@ -1,0 +1,109 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { caseWatch, client, atomic } from './case-handoff.mjs';
+import { collectCaseProgress, expiredCase, formatCaseProgress } from './case-progress-digest.mjs';
+import { renderState } from './lib/case-handoff.mjs';
+import { run } from './auto-progress-digest.mjs';
+const now = Date.parse('2026-11-02T01:00:00Z');
+const id = '260430EIG';
+const source = { account: 'seisaku-team@orgiast.jp', pc: 'cafe015-PC', timestamp: '2026-11-02T00:00:00Z', file: 'session.md' };
+const data = () => ({ state: renderState({ purpose: '開催日: 2026/12/12', decisions: [{ text: '課題企業を確定' }], next: '- 会場確認\n- kim待ち: 送信OK を判断\n- kim の承認\n- 四つ目' }, source), log: `${source.timestamp} ${source.account}/${source.pc}\n企業を確定\n会場確認` });
+function home(t) { const h = fs.mkdtempSync(path.join(os.tmpdir(), 'case-digest-')); t.after(() => fs.rmSync(h, { recursive: true, force: true })); return h; }
+
+test('watch adds, removes and migrates only recent bindings once', t => {
+  const h = home(t), dir = path.join(h, '.claude/case-binding');
+  atomic(path.join(dir, 'recent.json'), { cases: [id] });
+  atomic(path.join(dir, 'old.json'), { cases: ['C0001'] });
+  fs.utimesSync(path.join(dir, 'old.json'), new Date(now - 31 * 86400000), new Date(now - 31 * 86400000));
+  assert.deepEqual(Object.keys(caseWatch(h, { now }).cases), [id]);
+  assert.deepEqual(caseWatch(h, { now, remove: [id] }).cases, {});
+  assert.deepEqual(caseWatch(h, { now }).cases, {});
+  assert.equal(caseWatch(h, { now, add: [id] }).cases[id].reason, 'watch');
+  assert.throws(() => caseWatch(h, { add: ['../bad'] }), /invalid/);
+});
+test('bind automatically watches kim-PC but not other seats', t => {
+  for (const label of ['kim-PC', 'cafe015-PC']) {
+    const h = home(t), c = client({ home: h, pc: label, label, account: source.account });
+    c.bind('session-1', [id]);
+    assert.equal(Boolean(caseWatch(h, { now, remove: [] }).cases[id]), true); // migration is independently supported
+    if (label === 'kim-PC') assert.equal(caseWatch(h).cases[id].reason, 'bind');
+    else assert.equal(caseWatch(h).cases[id].reason, 'binding migration');
+  }
+});
+test('watch expiration uses event date plus 14 days, not citation/update dates', async t => {
+  const added = '2026-09-01T00:00:00Z';
+  assert.equal(expiredCase('## 最終更新\n2026/09/01', added, now), false);
+  assert.equal(expiredCase('開催日: 2026/10/01', added, now), true);
+  assert.equal(expiredCase('開催日: 10/01 → 12/12 [s.md 2026-09-01]', added, now), false);
+  assert.equal(expiredCase('開催日: 1/12', '2026-12-01', Date.parse('2027-01-20')), false);
+  const h = home(t); caseWatch(h, { add: [id], now });
+  const out = await collectCaseProgress({ home: h, now, fetchResume: async () => ({ state: '開催日: 2026/10/01', log: '' }) });
+  assert.equal(out.text, ''); assert.deepEqual(caseWatch(h).cases, {});
+});
+test('changed progress includes new decisions, first three next steps, kim requests and seat in six lines', () => {
+  const result = formatCaseProgress(id, data(), undefined, now);
+  assert.ok(result.text.split('\n').length <= 6);
+  for (const text of ['課題企業を確定', '会場確認', 'kim待ち', '送信OK', 'kim の承認', 'cafe015-PC', source.timestamp]) assert.ok(result.text.includes(text), text);
+  assert.ok(!result.text.includes('四つ目')); assert.ok(!result.text.includes('停滞'));
+  const changed = data(); changed.state = changed.state.replace('課題企業を確定', '開催を延期');
+  const second = formatCaseProgress(id, changed, result.checkpoint, now);
+  assert.match(second.text, /開催を延期/); assert.ok(!second.text.includes('課題企業を確定'));
+});
+test('unchanged progress is one line and stale LOG still shows stagnation', () => {
+  const first = formatCaseProgress(id, data(), undefined, now);
+  const same = formatCaseProgress(id, data(), first.checkpoint, now);
+  assert.equal(same.text.split('\n').length, 1); assert.match(same.text, /変化なし・最終更新/);
+  assert.match(formatCaseProgress(id, data(), first.checkpoint, now + 86400000).text, /停滞/);
+  assert.match(formatCaseProgress(id, { ...data(), log: '' }, undefined, now).text, /停滞/);
+});
+test('one failed hub lookup does not stop other cases or advance its checkpoint', async t => {
+  const h = home(t); caseWatch(h, { add: [id, 'C0001'], now });
+  const result = await collectCaseProgress({ home: h, now, fetchResume: async key => { if (key === id) throw Error('HTTP 503'); return data(); } });
+  assert.match(result.text, /260430EIG: 照会失敗（HTTP 503）/); assert.match(result.text, /C0001: 案件進捗/);
+  assert.equal(result.checkpoints[id], undefined); assert.ok(result.checkpoints.C0001);
+});
+test('morning and evening digest sends watched cases without local ledger and commits delivery point only on success', async t => {
+  const h = home(t); caseWatch(h, { add: [id], now });
+  let state = {}, fail = true; const delivered = [];
+  const io = { label: 'kim-PC', localOwner: 'kim@orgiast.jp', readLedger: () => [], readState: () => structuredClone(state), writeState: (_, v) => { state = v; }, fetchCaseResume: async () => data(), notifyOwner: async (owner, message) => { assert.equal(owner, 'kim@orgiast.jp'); delivered.push(message); return fail ? { reason: 'offline' } : { delivered: 'session-inbox' }; } };
+  assert.equal((await run({ home: h, now, io })).sent, false); assert.equal(state.caseProgress, undefined);
+  await run({ home: h, now, io, dryRun: true }); assert.equal(state.caseProgress, undefined);
+  fail = false; assert.equal((await run({ home: h, now, io })).sent, true);
+  assert.equal(state.caseProgress[id].lastDeliveredAt, new Date(now).toISOString());
+  assert.equal((await run({ home: h, now, io })).skipped, 'already-sent');
+  const evening = now + 9 * 3600000;
+  assert.equal((await run({ home: h, now: evening, io })).sent, true); assert.match(delivered.at(-1), /変化なし/);
+  assert.equal(state.caseProgress[id].lastDeliveredAt, new Date(evening).toISOString());
+});
+test('other PCs and outside slots do not query watched cases', async t => {
+  const h = home(t); caseWatch(h, { add: [id], now });
+  const io = { label: 'other-PC', localOwner: 'kim@orgiast.jp', readLedger: () => [], fetchCaseResume: () => assert.fail('unexpected query') };
+  await run({ home: h, now, io }); await run({ home: h, now, slot: null, io: { ...io, label: 'kim-PC' } });
+});
+test('resume and digest share the same hub read function', async t => {
+  const h = home(t), requests = [];
+  const c = client({ home: h, pc: 'kim-PC', account: 'kim@orgiast.jp', fetchImpl: async url => { requests.push(url.searchParams.get('mode')); return { ok: true, json: async () => data() }; } });
+  assert.deepEqual(await c.fetchResume(id), data()); assert.match(await c.resume(id), /課題企業/);
+  assert.deepEqual(requests, ['resume', 'resume']);
+});
+test('changing citation timestamps does not repeat an already delivered decision', () => {
+  const first = formatCaseProgress(id, data(), undefined, now);
+  const changed = data(); changed.state = changed.state.replaceAll(source.timestamp, '2026-11-02T00:30:00Z');
+  assert.match(formatCaseProgress(id, changed, first.checkpoint, now).text, /決定事項: 新しい決定なし/);
+});
+test('preview leaves watch migration and delivery state untouched', async t => {
+  const h = home(t); atomic(path.join(h, '.claude/case-binding/session.json'), { cases: [id] });
+  const result = await collectCaseProgress({ home: h, now, dryRun: true, fetchResume: async () => data() });
+  assert.match(result.text, /案件進捗/); assert.equal(fs.existsSync(path.join(h, '.claude/state/case-watch.json')), false);
+});
+test('failed later message part retains the previous delivery point for retry', async t => {
+  const h = home(t); caseWatch(h, { add: [id, ...Array.from({ length: 8 }, (_, i) => `C000${i}`)], now });
+  let state = {}, calls = 0;
+  const io = { label: 'kim-PC', localOwner: 'kim@orgiast.jp', readLedger: () => [], readState: () => structuredClone(state), writeState: (_, value) => { state = value; }, fetchCaseResume: async () => data(), notifyOwner: async () => ++calls === 2 ? { reason: 'second part failed' } : { delivered: 'dm' } };
+  const out = await run({ home: h, now, io });
+  assert.ok(calls >= 2); assert.equal(out.sent, false); assert.equal(state.caseProgress, undefined);
+  assert.equal((await run({ home: h, now, io })).sent, true); assert.ok(state.caseProgress[id]);
+});

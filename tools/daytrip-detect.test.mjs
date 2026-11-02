@@ -6,13 +6,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { runSelfTest, fixtureEvent, fixtureCandidate } from './daytrip-detect.fixtures.mjs';
-import { run, journal, makeBatch, parseReply, dateRange, createGeocoder, createSheetClient, listEvents, reportRow, writeConfirmed, processReplies, deliverOnce, HEADERS, SHEET_HEADERS } from './daytrip-detect.mjs';
-import { KIM_DISCORD_USER_ID } from './notify-kim.mjs';
+import { run, journal, makeBatch, parseReply, dateRange, createGeocoder, createSheetClient, listEvents, reportRow, writeConfirmed, answerReply, refreshPending, pendingItems, HEADERS, SHEET_HEADERS } from './daytrip-detect.mjs';
 function temp(t) { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'daytrip-test-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true })); return dir; }
 function setup(t) {
   const dir = temp(t), ledger = journal(path.join(dir, 'ledger.jsonl')), c = fixtureCandidate(), batch = makeBatch([c], []);
   ledger.save(batch); ledger.save({ type: 'dm-sent', id: batch.id, messageId: '100', sentAt: '2026-11-02T01:00:00Z' });
-  return { ledger, c, batch };
+  refreshPending(dir, ledger);
+  return { dir, ledger, c, batch };
 }
 test('offline acceptance fixtures', async () => runSelfTest(() => {}));
 test('CLI self-test prints every fixture case and PASS to stdout', () => {
@@ -63,40 +63,12 @@ test('reply parser rejects ambiguous/conflicting syntax', () => {
   assert.deepEqual(parseReply('はい 1\nいいえ 1'), []); assert.deepEqual(parseReply('はい 1-3'), []);
   assert.deepEqual(parseReply('はい １、３'), [{ number: 1, accepted: true }, { number: 3, accepted: true }]);
 });
-test('only kim replies sent after the prompt are accepted; replay does not append twice', async t => {
-  const { ledger, c } = setup(t); const rows = [HEADERS, ['','（記入例）金']]; let appended = 0, sent = 0;
-  const messages = [{ id: '99', author: { id: KIM_DISCORD_USER_ID }, content: 'はい 1' }, { id: '101', author: { id: 'stranger' }, content: 'はい 1' }, { id: '102', author: { id: KIM_DISCORD_USER_ID }, content: 'はい 1' }];
-  const discord = { messages: async () => messages, send: async () => { sent++; return { messageId: '103', sentAt: '2026-11-03T12:00:00Z' }; } };
-  const factory = async () => ({ rows: async () => rows, append: async row => { appended++; rows.push(row); return 'report!A3:P3'; } });
-  await processReplies(ledger, discord, 'channel', factory, Date.parse('2026-11-02T12:00:00Z'));
-  assert.equal(appended, 0); // future / same-day approval does not become a completed report
-  await processReplies(ledger, discord, 'channel', factory, Date.parse('2026-11-03T12:00:00Z'));
-  await processReplies(ledger, discord, 'channel', factory, Date.parse('2026-11-04T12:00:00Z'));
-  assert.equal(appended, 1); assert.equal(sent, 1); assert.deepEqual(rows[2], reportRow(c)); assert.equal(rows[1][1], '（記入例）金');
-});
-test('decline writes ledger without sheets; later decline cancels pre-approval', async t => {
-  const { ledger } = setup(t);
-  const discord = { messages: async () => [{ id: '101', author: { id: KIM_DISCORD_USER_ID }, content: 'はい 1' }, { id: '102', author: { id: KIM_DISCORD_USER_ID }, content: 'いいえ 1' }] };
-  await processReplies(ledger, discord, 'channel', () => { throw new Error('must not access sheet'); }, Date.parse('2026-11-03T12:00:00Z'));
-  assert.equal(ledger.rows.filter(r => r.type === 'decision').at(-1).status, 'declined');
-});
 test('crash after sheet append reconciles, unknown append outcome is never retried', async t => {
   const { ledger, c } = setup(t); const row = reportRow(c);
   ledger.save({ type: 'append-intent', date: c.date, row });
   await assert.rejects(writeConfirmed(c, ledger, { rows: async () => [HEADERS, []], append: () => { throw new Error('unsafe'); } }), /uncertain sheet append/);
   await writeConfirmed(c, ledger, { rows: async () => [HEADERS, [], row], append: () => { throw new Error('duplicate'); } });
   assert.equal(ledger.rows.at(-1).type, 'recorded');
-});
-test('crash after DM reconciles before considering another send', async t => {
-  const dir = temp(t), log = journal(path.join(dir, 'ledger.jsonl'));
-  log.save({ type: 'dm-intent', id: 'batch', body: 'body' });
-  await deliverOnce(log, { messages: async () => [{ id: '1', author: { bot: true }, content: 'body', timestamp: new Date().toISOString() }], send: () => { throw new Error('duplicate'); } }, 'batch', 'body', 'channel');
-  assert.equal(log.rows.at(-1).type, 'dm-sent');
-});
-test('Discord length limit defers entire candidates without losing or clipping text', () => {
-  const c = fixtureCandidate(), many = Array.from({ length: 30 }, (_,i) => ({ ...c, date: `2026-11-${String(i+1).padStart(2,'0')}` }));
-  const batch = makeBatch(many, []); assert.ok(batch.body.length <= 1950); assert.ok(batch.items.length < many.length);
-  const next = makeBatch(many, [batch]); assert.equal(next.items[0].number, batch.items.length + 1);
 });
 test('sheet finds unique header tab and append uses RAW and INSERT_ROWS', async () => {
   const calls = [];
@@ -124,25 +96,120 @@ test('converge wrapper explicitly passes Ensure and propagates registration fail
   assert.equal(called.args.at(-1), '-Ensure');
   assert.throws(() => main({ platform: 'win32', spawnImpl: () => ({ status: 1, stderr: 'failed' }) }), /failed/);
 });
-test('normal rerun never asks a date twice, including declined dates', async t => {
-  const dir = temp(t); let sends = 0;
-  const discord = { channel: async () => 'channel', send: async () => { sends++; return { messageId: '100', sentAt: '2026-11-02T12:00:00Z', channelId: 'channel' }; }, messages: async () => [{ id: '101', content: 'いいえ 1', author: { id: KIM_DISCORD_USER_ID } }] };
-  const options = { stateDir: dir, from: '2026-11-02', to: '2026-11-02' }, deps = { now: Date.parse('2026-11-03T12:00:00Z'), events: [fixtureEvent()], geocode: async () => ({ lat: 35.01, lon: 135.76 }), discord, sheetsFactory: () => { throw new Error('unexpected sheet'); } };
-  await run(options, deps); await run(options, deps); await run(options, deps);
-  assert.equal(sends, 1);
-  const rows = journal(path.join(dir, 'ledger.jsonl')).rows;
-  assert.equal(rows.filter(r => r.type === 'batch').length, 1);
-  assert.equal(rows.filter(r => r.type === 'decision').at(-1).status, 'declined');
-});
-test('ledger persists candidate overflow beyond the next calendar window', async t => {
-  const dir = temp(t), log = journal(path.join(dir, 'ledger.jsonl')), c = fixtureCandidate();
-  log.save({ type: 'queued', candidate: c });
-  let body;
-  await run({ stateDir: dir, from: '2026-11-20', to: '2026-11-20' }, { events: [], geocode: () => { throw new Error(); }, discord: { channel: async () => 'channel', send: async text => { body = text; return { messageId: '100', sentAt: '2026-11-20T12:00:00Z' }; } } });
-  assert.match(body, /2026-11-02/);
-});
 test('sheet read-back failure retains append intent for recovery', async t => {
   const { ledger, c } = setup(t);
   await assert.rejects(writeConfirmed(c, ledger, { rows: async () => [HEADERS, []], append: async () => 'A3:P3' }), /read-back failed/);
   assert.equal(ledger.rows.at(-1).type, 'append-intent');
+});
+
+function fakeSheets() {
+  const rows = [HEADERS, ['', '（記入例）金']]; let reads = 0, appends = 0;
+  return { rows, get reads() { return reads; }, get appends() { return appends; },
+    factory: async () => ({ rows: async () => { reads++; return rows; }, append: async row => { appends++; rows.push(row); return 'report!A3:P3'; } }) };
+}
+const now = Date.parse('2026-11-03T12:00:00Z');
+test('run without Discord or token publishes only effective unanswered candidates and never reuses numbers', async t => {
+  const home = temp(t), dir = path.join(home, '.claude', 'daytrip-detect');
+  fs.mkdirSync(dir, { recursive: true });
+  const log = journal(path.join(dir, 'ledger.jsonl')), c = fixtureCandidate();
+  log.save(makeBatch([{ ...c, date: '2026-10-31' }, { ...c, date: '2026-11-01' }], []));
+  log.save({ type: 'decision', date: '2026-11-01', status: 'declined' });
+  const options = { home, from: '2026-11-02', to: '2026-11-02' };
+  const deps = { now, events: [fixtureEvent()], geocode: async () => ({ lat: 35.01, lon: 135.76 }), sheetsFactory() { throw new Error('unexpected sheets'); } };
+  await run(options, deps);
+  const pending = JSON.parse(fs.readFileSync(path.join(dir, 'pending.json')));
+  assert.deepEqual(pending.items.map(c => [c.number, c.date]), [[3, '2026-11-02']]);
+  assert.match(pending.items[0].line, /3\. 2026-11-02/);
+  assert.equal(pending.updatedAt, new Date(now).toISOString());
+  await answerReply('いいえ 3', options, deps);
+  await run(options, deps);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'pending.json'))).items, []);
+  assert.equal(journal(path.join(dir, 'ledger.jsonl')).rows.filter(r => r.type === 'batch').length, 2);
+});
+for (const date of ['2026-11-02', '2026-11-03']) test(`answer yes for past/today ${date} appends once and reads back`, async t => {
+  const { dir, ledger, c } = setup(t), sheet = fakeSheets();
+  // Use a second candidate to cover the JST date boundary (UTC is still Nov 2).
+  if (date !== c.date) ledger.save(makeBatch([{ ...c, date }], ledger.rows));
+  refreshPending(dir, ledger);
+  const number = date === c.date ? 1 : 2;
+  const deps = { now: Date.parse('2026-11-02T15:00:00Z'), sheetsFactory: sheet.factory };
+  const messages = await answerReply(`はい ${number}`, { stateDir: dir }, deps);
+  assert.equal(sheet.appends, 1); assert.equal(sheet.reads, 2);
+  assert.match(messages.join('\n'), /1件を報告書に追加しました/);
+  assert.match(messages.join('\n'), new RegExp(`日付: ${date}`));
+  assert.ok(!JSON.parse(fs.readFileSync(path.join(dir, 'pending.json'))).items.some(c => c.number === number));
+  await assert.rejects(answerReply(`はい ${number}`, { stateDir: dir }, deps), /未回答/);
+  await run({ stateDir: dir }, { ...deps, events: [], geocode() {}, output() {} });
+  assert.equal(sheet.appends, 1);
+});
+test('future approval schedules, disappears from pending and is recorded on the day', async t => {
+  const { dir } = setup(t), sheet = fakeSheets();
+  const messages = await answerReply('はい 1', { stateDir: dir }, { now: Date.parse('2026-11-01T12:00:00Z'), sheetsFactory: sheet.factory });
+  assert.deepEqual(messages, ['2026-11-02 は当日以降の20:00に報告書へ追記予定']);
+  assert.equal(sheet.appends, 0); assert.equal(sheet.reads, 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'pending.json'))).items, []);
+  await run({ stateDir: dir }, { now, events: [], geocode() {}, sheetsFactory: sheet.factory, output() {} });
+  assert.equal(sheet.appends, 1);
+});
+test('decline records only; malformed or unknown mixed answers write nothing', async t => {
+  const { dir } = setup(t), file = path.join(dir, 'ledger.jsonl'), pending = path.join(dir, 'pending.json');
+  const before = fs.readFileSync(file, 'utf8'), pendingBefore = fs.readFileSync(pending, 'utf8');
+  const deps = { now, sheetsFactory() { throw new Error('unexpected sheets'); } };
+  for (const text of ['はい 1 いいえ 99', 'はい 99', 'はい 1 いいえ 1', 'たぶん 1', '']) {
+    await assert.rejects(answerReply(text, { stateDir: dir }, deps));
+    assert.equal(fs.readFileSync(file, 'utf8'), before);
+    assert.equal(fs.readFileSync(pending, 'utf8'), pendingBefore);
+  }
+  assert.deepEqual(await answerReply('いいえ 1', { stateDir: dir }, deps), ['2026-11-02 は対象外として記録']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(pending)).items, []);
+});
+test('legacy queue drains all candidates without message length limits', async t => {
+  const dir = temp(t), log = journal(path.join(dir, 'ledger.jsonl')), c = fixtureCandidate();
+  for (let i = 1; i <= 30; i++) log.save({ type: 'queued', candidate: { ...c, date: `2026-11-${String(i).padStart(2, '0')}`, titles: ['長い予定'.repeat(600)] } });
+  await run({ stateDir: dir }, { now, events: [], geocode() {} });
+  const pending = JSON.parse(fs.readFileSync(path.join(dir, 'pending.json')));
+  assert.equal(pending.items.length, 30);
+  assert.ok(pending.items[0].line.length > 2000);
+});
+test('failed append preserves decisions and refreshes pending for scheduled recovery', async t => {
+  const { dir } = setup(t);
+  await assert.rejects(answerReply('はい 1', { stateDir: dir }, { now, sheetsFactory: async () => ({ rows: async () => [HEADERS, []], append: async () => { throw new Error('offline'); } }) }), /offline/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'pending.json'))).items, []);
+  const rows = journal(path.join(dir, 'ledger.jsonl')).rows;
+  assert.equal(rows.at(-1).type, 'append-intent');
+  assert.equal(rows.filter(r => r.type === 'decision').length, 1);
+});
+test('mixed answers validate together and preserve each outcome', async t => {
+  const { dir, ledger, c } = setup(t), sheet = fakeSheets();
+  ledger.save(makeBatch([{ ...c, date: '2026-11-10' }, { ...c, date: '2026-11-11' }], ledger.rows));
+  refreshPending(dir, ledger);
+  const messages = await answerReply('はい 1,2 いいえ 3', { stateDir: dir }, { now, sheetsFactory: sheet.factory });
+  assert.equal(sheet.appends, 1);
+  assert.ok(messages.includes('2026-11-10 は当日以降の20:00に報告書へ追記予定'));
+  assert.ok(messages.includes('2026-11-11 は対象外として記録'));
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'pending.json'))).items, []);
+});
+test('answer uses the run lock and CLI rejects unknown numbers without writing a ledger', async t => {
+  const home = temp(t), dir = path.join(home, '.claude', 'daytrip-detect');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'run.lock'), String(process.pid));
+  await assert.rejects(answerReply('はい 1', { home }), /already running/);
+  fs.unlinkSync(path.join(dir, 'run.lock'));
+  const result = spawnSync(process.execPath, ['tools/daytrip-detect.mjs', '--answer', 'はい 99'], { cwd: new URL('../', import.meta.url), encoding: 'utf8', timeout: 30000, env: { ...process.env, ORGIAST_HOME: home, HOME: home } });
+  assert.equal(result.status, 1); assert.match(result.stderr, /番号 99 は未回答/); assert.equal(result.stdout, '');
+  assert.ok(!fs.existsSync(path.join(dir, 'ledger.jsonl')));
+  assert.ok(!fs.existsSync(path.join(dir, 'pending.json')));
+});
+test('manifest distributes the hook and both synchronous events through converge', () => {
+  const manifest = JSON.parse(fs.readFileSync(new URL('setup-manifest.json', import.meta.url)));
+  const entries = manifest.items.filter(e => e.id.includes('daytrip-ask'));
+  assert.equal(entries.length, 3);
+  const file = entries.find(e => e.type === 'file-nonempty');
+  assert.deepEqual(file.repair, ['onboarding-sync.mjs', '--force']);
+  for (const event of ['SessionStart', 'UserPromptSubmit']) {
+    const entry = entries.find(e => e.spec.hookEvent === event);
+    assert.equal(entry.type, 'json-valid'); assert.equal(entry.spec.timeout, 5); assert.equal(entry.spec.async, false);
+    assert.equal(entry.spec.hookScript, 'daytrip-ask-hook.mjs');
+    assert.deepEqual(entry.repair, ['register-hooks.mjs', '--hooks-only']);
+  }
 });

@@ -441,15 +441,24 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env) {
 // child.kill() は cmd.exe だけを終わらせ、孫(gemini 等)が残る。孫が stdout パイプを握ったままだと
 // 'close' が発火せず、タイムアウトが実効しない
 // (2026-10-14 実測: 上限 600 秒の gemini-cli 試行が 4953 秒動き、1 回でチェーン全体 6153 秒を捨てた)。
-export function killProcessTree(child, { spawnImpl = spawnSync, platform = process.platform } = {}) {
+export function killProcessTree(child, { spawnImpl = spawn, platform = process.platform } = {}) {
   if (!child || !child.pid) return;
   if (platform === 'win32') {
     try {
-      spawnImpl('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 10_000 });
+      const killer = spawnImpl('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      killer?.on?.('error', () => {});
+      killer?.unref?.();
     } catch { /* 既に終了している */ }
     return;
   }
   try { child.kill('SIGKILL'); } catch { /* 既に終了している */ }
+}
+
+export function armTimeoutKill({ child, graceMs, kill = killProcessTree, onForce }) {
+  const forceTimer = setTimeout(onForce, graceMs);
+  forceTimer.unref?.();
+  kill(child);
+  return forceTimer;
 }
 
 // フォールバック連鎖の残り予算。1バックエンドの上限(既定900秒)をそのまま次のバックエンドにも
@@ -686,7 +695,7 @@ export function countPolicyDenials(text) {
 const positiveEnv = (value, fallback) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback;
 export const policyStallMinElapsedSecs = (env = {}) => positiveEnv(env.CODEX_DO_POLICY_STALL_MIN_ELAPSED_SECS, POLICY_STALL_MIN_ELAPSED_SECS);
 // タイムアウトで kill してから 'close' を待つ猶予。超えたら pipe を破棄して打ち切る。
-export const timeoutKillGraceMs = (env = {}) => positiveEnv(env.CODEX_DO_TIMEOUT_KILL_GRACE_MS, 5000);
+export const timeoutKillGraceMs = (env = {}) => positiveEnv(env.CODEX_DO_TIMEOUT_KILL_GRACE_MS, 3000);
 
 export function remainingPrimaryBudgetSecs(budgetSecs, elapsedSecs) {
   return Math.max(1, budgetSecs - elapsedSecs);
@@ -1068,14 +1077,16 @@ function execute(command, commandArgs, options = {}) {
         abortedPolicyStall = true;
       }
       console.error(`\n⏱ ${command} が ${callTimeoutSeconds} 秒で応答を終えなかったので停止しました。--timeout で延長できます`);
-      killProcessTree(child);
       // 親が先に終わって孫が pipe を握ったままだと taskkill /T の木から外れ 'close' が来ない
       // (2026-10-28 実測: 予算600秒の gemini-cli 試行が 1044 秒)。猶予後は close を待たず打ち切る。
-      forceTimer = setTimeout(() => {
-        for (const stream of [child.stdin, child.stdout, child.stderr]) { try { stream?.destroy(); } catch { /* 既に閉じている */ } }
-        settle({ status: 124, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null });
-      }, timeoutKillGraceMs(process.env));
-      forceTimer.unref?.();
+      forceTimer = armTimeoutKill({
+        child,
+        graceMs: timeoutKillGraceMs(process.env),
+        onForce: () => {
+          for (const stream of [child.stdin, child.stdout, child.stderr]) { try { stream?.destroy(); } catch { /* 既に閉じている */ } }
+          settle({ status: 124, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null });
+        }
+      });
     }, callTimeoutSeconds * 1000);
     timer.unref?.();
     // 拒否が閾値秒より前に出尽くして以後 stderr が静かになる停滞（2026-10-23 実測: gemini が拒否3回後に

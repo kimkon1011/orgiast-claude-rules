@@ -51,8 +51,8 @@ export function extractBody(payload, limit = 4000) {
   return text.replace(/&nbsp;/g, ' ').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, limit);
 }
 
-async function gmail(token, path, fetchImpl) {
-  const response = await fetchImpl(`${API}${path}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20_000) });
+async function gmail(token, path, fetchImpl, signal) {
+  const response = await fetchImpl(`${API}${path}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.any([AbortSignal.timeout(20_000), ...(signal ? [signal] : [])]) });
   if (!response.ok) {
     const error = new Error(`Gmail API ${response.status}: ${(await response.text()).slice(0, 200)}`);
     error.status = response.status;
@@ -61,28 +61,40 @@ async function gmail(token, path, fetchImpl) {
   return response.json();
 }
 
-export async function searchGmail({ user, query, max = 10, withBody = false, bodyLimit = 4000, pageToken, fetchImpl = gwsFetch, getToken = getDriveToken }) {
+export async function searchGmail({ user, query, max = 10, withBody = false, bodyLimit = 4000, pageToken, fetchImpl = gwsFetch, getToken = getDriveToken, signal, concurrency = 1, shouldFetchBody, pendingIds, resumeNext, onMessage, skipId = () => false, allowPartial = false }) {
   const token = await getToken({ scope: SCOPE, impersonate: user, signal: AbortSignal.timeout(20_000) });
-  const list = await gmail(token, `/messages?q=${encodeURIComponent(query)}&maxResults=${Math.min(100, max)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`, fetchImpl);
-  const results = [];
-  let skipped = 0;
-  for (const stub of (list.messages || []).slice(0, max)) {
-    const format = withBody ? 'full' : 'metadata';
-    const suffix = withBody ? '' : '&metadataHeaders=Date&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=List-Unsubscribe';
-    let message;
-    try {
-      message = await gmail(token, `/messages/${stub.id}?format=${format}${suffix}`, fetchImpl);
-    } catch (error) {
-      if (error?.status !== 404 && error?.status !== 410) throw error;
-      skipped++;
-      continue;
+  const list = pendingIds ? { messages: pendingIds.map(id => ({ id })), nextPageToken: resumeNext } : await gmail(token, `/messages?q=${encodeURIComponent(query)}&maxResults=${Math.min(100, max)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`, fetchImpl, signal);
+  const results = [], stubs = (list.messages || []).slice(0, max);
+  const pending = new Set((list.messages || []).map(s => s.id));
+  let skipped = 0, offset = 0, failure;
+  async function worker() {
+    while (offset < stubs.length && !signal?.aborted) {
+      const stub = stubs[offset++];
+      let retrieved = false;
+      try {
+        if (skipId(stub.id)) { pending.delete(stub.id); continue; }
+        const metadata = !withBody || !!shouldFetchBody;
+        let message = await gmail(token, `/messages/${stub.id}?format=${metadata ? 'metadata' : 'full'}${metadata ? '&metadataHeaders=Date&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=List-Unsubscribe' : ''}`, fetchImpl, signal);
+        let compact = compactMessage(message);
+        if (withBody && (!shouldFetchBody || shouldFetchBody(compact))) {
+          if (metadata) message = await gmail(token, `/messages/${stub.id}?format=full`, fetchImpl, signal);
+          compact = { ...compactMessage(message), body: extractBody(message.payload, bodyLimit) };
+        }
+        retrieved = true;
+        if (onMessage) await onMessage(compact);
+        results.push(compact); pending.delete(stub.id);
+      } catch (error) {
+        if (!retrieved && (error?.status === 404 || error?.status === 410)) { skipped++; pending.delete(stub.id); continue; }
+        failure ||= error;
+        if (!allowPartial) break;
+      }
     }
-    const compact = compactMessage(message);
-    if (withBody) compact.body = extractBody(message.payload, bodyLimit);
-    results.push(compact);
   }
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(5, concurrency)) }, worker));
+  if (failure && !allowPartial) throw failure;
+
   if (skipped > 0) console.error(`gmail-search: ${skipped}件のメッセージが取得前に削除または移動されたためスキップしました`);
-  return { estimate: Number(list.resultSizeEstimate) || results.length, messages: results, skipped, nextPageToken: list.nextPageToken || null };
+  return { estimate: Number(list.resultSizeEstimate) || results.length, messages: results, skipped, nextPageToken: list.nextPageToken || null, ...(allowPartial ? { pendingIds: [...pending], partial: pending.size > 0, error: failure?.message || (signal?.aborted ? "Gmail source budget exhausted" : undefined) } : {}) };
 }
 
 async function main() {

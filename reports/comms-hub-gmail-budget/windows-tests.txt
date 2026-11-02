@@ -1,0 +1,40 @@
+✔ rules: explicit ID, ambiguity, names, thread/channel, unknown ID (4.2371ms)
+✔ exclusions override case match; uncertain personal content never published (3.1019ms)
+✔ Drive only: durable dedup, lost response recovery, unchanged hash, chronological order (432.1044ms)
+✔ case publication caps age and characters but keeps local complete text (41.0704ms)
+✔ existing Doc migration uses Drive export and preserves prior entries (11.0895ms)
+✔ partial local commit is replayable without duplicate blocks (11.0003ms)
+✔ partial failure is isolated, all failures nonzero, dry-run never writes (3.8073ms)
+✔ CLI prohibits conflicting flags and cursor reset in live (0.6891ms)
+✔ source cursor advances only after all destinations commit (1.9239ms)
+✔ Gmail pagination preserves original upper boundary and account (1.1737ms)
+✔ Discord resumes a full page even when legacy truncated flag is false (0.5076ms)
+✔ Plaud adapter reads existing transcript without import or credential persistence (8.1082ms)
+✔ publication failure preserves source results and creation counts in report (1.2408ms)
+✔ tl;dv missing transcript keeps metadata, continues page, records error and later upgrades (26.002ms)
+✔ index distinguishes partial transcript failure from full success (2.3536ms)
+✔ Plaud isolates missing, failed and empty transcripts while retaining metadata (11.4794ms)
+✔ case sheet resolves real I/J/K headers and deduplicates repeated case IDs (0.8121ms)
+✔ init removes broad and unlisted access, downgrades readers, sends no notifications (1.8314ms)
+✔ Drive soft-line export restored; malformed local data still refused (10.3787ms)
+✔ sensitive terms excluded even for matched cases (0.7073ms)
+✔ policy changes purge all copies including truncated summary; failed upload retries (30.5678ms)
+✔ purge discovers remote-only Docs and deletes sensitive entries without new messages (15.3028ms)
+✔ upload timeout retries twice with exponential backoff and fresh signals; lost create is recovered (15.2382ms)
+✔ exhausted upload retries preserve hash and continue other documents; next run resends only failed document (23.0513ms)
+✔ daily views split losslessly at 200000, replay unchanged, and clear obsolete parts (84.0598ms)
+✔ size-aware upload budget and explicit state CLI override (6.2074ms)
+✔ Gmail timeout commits each completed message and resumes only pending IDs before next page (19.8765ms)
+✔ Gmail metadata filters automated mail and caps concurrent requests at five (73.9475ms)
+✔ process budget skips remaining sources, saves state and reserves publication time with exit zero (0.9535ms)
+✔ task registration and Ensure both require a fifteen minute execution limit (0.4747ms)
+✔ run retains Gmail partial progress without claiming full success (1.5558ms)
+✔ Gmail pending IDs survive commit errors and a reduced page size (0.7944ms)
+ℹ tests 32
+ℹ suites 0
+ℹ pass 32
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1465.1319

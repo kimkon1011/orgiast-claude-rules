@@ -330,3 +330,86 @@ test('size-aware upload budget and explicit state CLI override',async()=>{
  assert.deepEqual(parseArgs(['--live','--state-path','test.json']),{live:true,statePath:'test.json'});
  assert.throws(()=>parseArgs(['--state-path']));assert.deepEqual(parseArgs(['--live']),{live:true});
 });
+
+test('Gmail timeout commits each completed message and resumes only pending IDs before next page', async t => {
+ const {searchGmail}=await import('./gmail-search.mjs');
+ const {state,storeDir,make}=fixture(t), sink=make();
+ const controller=new AbortController();
+ let resume=false, lists=0; const gets=[];
+ const fetchImpl=async(url,init)=>{
+  const u=new URL(url);
+  if(u.pathname.endsWith('/messages')) {lists++;return Response.json({messages:[{id:'done'},{id:'pending'}],nextPageToken:'next-page'});}
+  const id=u.pathname.split('/').at(-1);gets.push(id);
+  if(id==='pending'&&!resume) {
+   await new Promise((resolve,reject)=>{init.signal.addEventListener('abort',()=>reject(init.signal.reason),{once:true});});
+  }
+  return Response.json({id,threadId:id,internalDate:String(Date.parse(message.ts)),payload:{headers:[{name:'Subject',value:message.subject}],mimeType:'text/plain',body:{data:Buffer.from('業務連絡').toString('base64url')}}});
+ };
+ const commitMessage=async m=>{
+  await processPage({source:message.source,page:{messages:[m],cursor:state.sources[message.source].cursor},state,cases,config,sink,live:true});
+  if(!resume)controller.abort(new DOMException('source deadline','TimeoutError'));
+ };
+ const ctx={config,home:'.',since:1,until:2000000000000,state:state.sources[message.source],signal:controller.signal,fetchImpl,commitMessage,
+  gmailSearch:args=>searchGmail({...args,getToken:async()=> 'mock'})};
+ const page=await collectSource(message.source,ctx);
+ assert.equal(page.partial,true);assert.deepEqual(page.cursor.pendingIds,['pending']);
+ assert.equal(Object.keys(state.sources[message.source].processed).length,1);
+ assert.match(fs.readFileSync(path.join(storeDir,'cases/261101ABC.md'),'utf8'),/業務連絡/);
+ await processPage({source:message.source,page,state,cases,config,sink,live:true});
+ assert.equal(state.sources[message.source].cursor.end,ctx.until);
+ resume=true;const before=gets.length;
+ const next=await collectSource(message.source,{...ctx,signal:new AbortController().signal,cursor:page.cursor});
+ assert.equal(lists,1);assert.deepEqual(gets.slice(before),['pending','pending']);
+ assert.deepEqual(next.cursor,{since:1,end:ctx.until,next:'next-page'});
+ assert.equal(Object.keys(state.sources[message.source].processed).length,2);
+});
+
+test('Gmail metadata filters automated mail and caps concurrent requests at five',async()=>{
+ const {searchGmail}=await import('./gmail-search.mjs');let active=0,peak=0;const full=[];
+ const page=await collectSource('gmail-kim',{config,home:'.',since:1,until:2000000000000,state:{},
+  gmailSearch:args=>searchGmail({...args,getToken:async()=> 'mock'}),fetchImpl:async url=>{
+   const u=new URL(url);if(u.pathname.endsWith('/messages'))return Response.json({messages:Array.from({length:12},(_,i)=>({id:String(i)}))});
+   active++;peak=Math.max(peak,active);await new Promise(r=>setTimeout(r,2));active--;
+   const id=u.pathname.split('/').at(-1);if(u.searchParams.get('format')==='full')full.push(id);
+   return Response.json({id,internalDate:String(Date.parse(message.ts)),payload:{headers:[{name:'From',value:id==='0'?'noreply@example.test':'staff@example.test'},{name:'Subject',value:message.subject}]}});
+  }});
+ assert.equal(page.messages.length,12);assert.equal(peak,5);assert.equal(full.length,11);assert.ok(!full.includes('0'));
+});
+
+test('process budget skips remaining sources, saves state and reserves publication time with exit zero',async()=>{
+ let clock=0,saves=0,finished=0;const visited=[];const state={sources:{},cases:{}};
+ const report=await run({live:true},{config,cases,state,clock:()=>clock,save(){saves++;},
+  collect:async source=>{visited.push(source);clock=360000;return {messages:[],cursor:{since:1}};},
+  sink:{async init(){},async finish(){finished++;assert.equal(clock,360000);clock=480000;throw Object.assign(Error('budget'),{code:'HUB_BUDGET'});}}});
+ assert.equal(report.exitCode,0);assert.equal(report.budgetExhausted,true);assert.deepEqual(visited,['gmail-kim']);
+ assert.equal(finished,1);assert.ok(saves>0);assert.equal(state.sources['gmail-kim'].cursor.since,1);
+ for(const source of SOURCES.slice(1)){assert.match(report.sources[source].skipped,/budget/);assert.ok(state.sources[source].deferredAt);assert.equal(state.sources[source].lastSuccess,undefined);}
+ assert.ok(state.publishDeferredAt);
+});
+
+test('task registration and Ensure both require a fifteen minute execution limit',()=>{
+ const script=fs.readFileSync(new URL('./register-comms-hub-sync.ps1',import.meta.url),'utf8');
+ assert.match(script,/ExecutionTimeLimit \(New-TimeSpan -Minutes 15\)/);
+ assert.match(script,/\$current.Settings.ExecutionTimeLimit -eq 'PT15M'/);
+ assert.match(script,/\$actual.Settings.ExecutionTimeLimit -ne 'PT15M'/);
+});
+
+test('run retains Gmail partial progress without claiming full success',async()=>{
+ const state={sources:{'gmail-kim':{lastSuccess:'old'}},cases:{}};let savedItems=0;
+ const report=await run({live:true},{config,cases,state,save(){savedItems=Math.max(savedItems,Object.keys(state.sources['gmail-kim'].processed||{}).length);},
+  collect:async(source,ctx)=>{
+   if(source!=='gmail-kim')return {messages:[],cursor:{since:2}};
+   await ctx.commitMessage(message);
+   assert.equal(savedItems,1,'committed before collector returns');
+   return {messages:[message],partial:true,error:'source budget',cursor:{since:1,end:2,pendingIds:['later']}};
+  },sink:{async init(){},async append(){},async finish(){}}});
+ assert.equal(report.exitCode,0);assert.equal(report.sources['gmail-kim'].accepted,1);assert.equal(report.sources['gmail-kim'].duplicate,0);
+ assert.deepEqual(state.sources['gmail-kim'].cursor.pendingIds,['later']);assert.equal(state.sources['gmail-kim'].lastSuccess,'old');assert.equal(state.sources['gmail-kim'].error,'source budget');
+});
+
+test('Gmail pending IDs survive commit errors and a reduced page size',async()=>{
+ const {searchGmail}=await import('./gmail-search.mjs');
+ const page=await searchGmail({user:'mock',query:'',pendingIds:['one','two'],resumeNext:'next',max:1,allowPartial:true,getToken:async()=> 'mock',
+  fetchImpl:async()=>Response.json({id:'one'}),onMessage:async()=>{throw Object.assign(Error('destination missing'),{status:404});}});
+ assert.equal(page.partial,true);assert.equal(page.skipped,0);assert.deepEqual(page.pendingIds,['one','two']);assert.equal(page.nextPageToken,'next');
+});

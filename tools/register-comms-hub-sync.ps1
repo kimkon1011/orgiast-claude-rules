@@ -30,6 +30,7 @@ foreach ($spec in $specs) {
     @($current.Triggers).Count -eq 1 -and
     $current.Triggers[0].Repetition.Interval -eq 'PT1H' -and
     ([datetime]$current.Triggers[0].StartBoundary).Minute -eq 15 -and
+    $current.Settings.ExecutionTimeLimit -eq 'PT15M' -and
     $current.State -ne 'Disabled'
   if ($Ensure -and $matches) { Write-Host 'ok: OrgiastCommsHubSync already registered'; continue }
   if ($DryRun) { Write-Host "[DRY] $($spec.TaskName): $scriptPath hourly at :15"; continue }
@@ -37,9 +38,9 @@ foreach ($spec in $specs) {
   $next = (Get-Date).Date.AddHours((Get-Date).Hour).AddMinutes(15)
   if ($next -le (Get-Date)) { $next = $next.AddHours(1) }
   $trigger = New-ScheduledTaskTrigger -Once -At $next -RepetitionInterval (New-TimeSpan -Hours 1)
-  $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+  $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
   Register-ScheduledTask -TaskName $spec.TaskName -Action $action -Trigger $trigger -Settings $settings -Description 'Sync business communications to Drive cases hub hourly at :15' -Force | Out-Null
   $actual = Get-ScheduledTask -TaskName $spec.TaskName -ErrorAction Stop
-  if ($actual.Actions[0].Arguments -ne $expectedArgs -or $actual.Triggers[0].Repetition.Interval -ne 'PT1H') { throw 'comms-hub task read-back failed' }
+  if ($actual.Actions[0].Arguments -ne $expectedArgs -or $actual.Triggers[0].Repetition.Interval -ne 'PT1H' -or $actual.Settings.ExecutionTimeLimit -ne 'PT15M') { throw 'comms-hub task read-back failed' }
   Write-Host 'ok: OrgiastCommsHubSync registered (hourly :15, synced main)'
 }

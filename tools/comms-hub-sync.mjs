@@ -110,9 +110,17 @@ export async function collectSource(source, ctx) {
   const limit = config.maxPerSource;
   if (source.startsWith('gmail')) {
     const end = cursor.end || until;
-    const p = await (ctx.gmailSearch || searchGmail)({ user: config.mailboxes[source], query: `-in:drafts -in:spam -in:trash after:${Math.floor(since / 1000) - 1} before:${Math.ceil(end / 1000) + 1}`, max: Math.min(100, limit), withBody: true, bodyLimit: 100000, pageToken: cursor.next, fetchImpl,
+    const convert = r => ({ ...r, source, sender: r.from, text: r.body || r.snippet, ts: iso(Number(r.internalDate) || Date.parse(r.date)), url: `https://mail.google.com/mail/u/${encodeURIComponent(config.mailboxes[source])}/#all/${r.threadId}` });
+    const p = await (ctx.gmailSearch || searchGmail)({ user: config.mailboxes[source], query: `-in:drafts -in:spam -in:trash after:${Math.floor(since / 1000) - 1} before:${Math.ceil(end / 1000) + 1}`, max: Math.min(100, limit), withBody: true, bodyLimit: 100000, pageToken: cursor.next, fetchImpl, signal,
+      concurrency: 5, allowPartial: true, pendingIds: cursor.pendingIds, resumeNext: cursor.resumeNext,
+      skipId: id => !!state.processed?.[messageKey({ source, id })],
+      // Unconfirmed messages still need their body for case and privacy matching.
+      shouldFetchBody: r => !['automated', 'excluded', 'private'].includes(exclusion(convert(r), config, null)),
+      onMessage: ctx.commitMessage ? r => ctx.commitMessage(convert(r)) : undefined,
       getToken: opts => getDriveToken({ ...opts, signal, fetchImpl }) });
-    return { messages: p.messages.map(r => ({ ...r, source, sender: r.from, text: r.body || r.snippet, ts: iso(Number(r.internalDate) || Date.parse(r.date)), url: `https://mail.google.com/mail/u/${encodeURIComponent(config.mailboxes[source])}/#all/${r.threadId}` })), cursor: p.nextPageToken ? { since, end, next: p.nextPageToken } : { since: end } };
+    return { messages: p.messages.map(convert), partial: p.partial, error: p.error,
+      cursor: p.partial ? { since, end, pendingIds: p.pendingIds, resumeNext: p.nextPageToken } : p.nextPageToken ? { since, end, next: p.nextPageToken } : { since: end } };
+
   }
   if (source === 'line') {
     const dir = path.join(home, '.claude', 'schedule-inbox');
@@ -206,7 +214,7 @@ export function splitDaily(text) {
 }
 const dailyBase = key => /^(daily\/\d{4}-\d{2}-\d{2})-(?:[2-9]|[1-9]\d+)$/.exec(key)?.[1];
 export function createDriveSink({ token, state, save, config = {}, fetchImpl = fetch,
-  storeDir = path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'comms-hub', 'store'), now = Date.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
+  storeDir = path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'comms-hub', 'store'), now = Date.now(), sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), checkBudget = () => {} }) {
   const drive = 'https://www.googleapis.com/drive/v3/files';
   const upload = 'https://www.googleapis.com/upload/drive/v3/files';
   const docMime = 'application/vnd.google-apps.document';
@@ -237,9 +245,10 @@ export function createDriveSink({ token, state, save, config = {}, fetchImpl = f
   }
   async function retry(operation) {
     for (let attempt = 0; ; attempt++) {
-      try { return await operation(); }
+      try { checkBudget(); return await operation(); }
       catch (e) {
         if (attempt >= 2 || !(e.name === 'TimeoutError' || e.name === 'AbortError' || e instanceof TypeError || e.status === 429 || e.status >= 500)) throw e;
+        checkBudget(1000 * 2 ** attempt);
         await sleep(1000 * 2 ** attempt);
       }
     }
@@ -365,6 +374,7 @@ export function createDriveSink({ token, state, save, config = {}, fetchImpl = f
         } catch (e) { failures.push({ key, reason: String(e.message).slice(0, 300) }); }
       }
       for (const { key, name, text } of publications) {
+        checkBudget();
         try {
           const id = await publish(key, name, text, state.files[key.split('/')[0]]);
           if (key.startsWith('cases/') && state.cases[key.slice(6)]) Object.assign(state.cases[key.slice(6)], { docId: id, url: docUrl(id) });
@@ -400,15 +410,21 @@ export function createDriveSink({ token, state, save, config = {}, fetchImpl = f
 export async function run(options = {}, deps = {}) {
   const config = deps.config || read(new URL('../config/comms-hub.json', import.meta.url));
   if (!Number.isInteger(config.maxPerSource) || config.maxPerSource < 1 || config.maxPerSource > 100 || !(config.sourceTimeoutMs > 0 && config.sourceTimeoutMs <= 60000)) throw new Error('invalid source limits');
+  const clock = deps.clock || Date.now;
+  const started = clock(), deadline = started + 480000, collectionDeadline = deadline - 120000;
+  const checkBudget = (reserve = 0) => { if (clock() + reserve >= deadline) throw Object.assign(new Error('Process budget exhausted; publication deferred'), { code: 'HUB_BUDGET' }); };
   const now = deps.now || Date.now();
   const live = options.live === true;
   const home = process.env.ORGIAST_HOME || os.homedir();
   const statePath = options.statePath || path.join(home, '.claude', 'comms-hub', 'state.json');
   const state = deps.state || read(statePath, { sources: {}, cases: {}, files: {} });
   state.cases ||= {}; state.sources ||= {};
-  const globalSignal = AbortSignal.timeout(570000);
+  const globalSignal = AbortSignal.timeout(Math.max(1, deadline - clock()));
   let activeSignal = globalSignal;
-  const boundedFetch = (signal) => (url, init = {}) => (deps.fetchImpl || fetch)(url, { ...init, signal: AbortSignal.any([globalSignal, activeSignal, signal, init.signal || AbortSignal.timeout(20000)]) });
+  const boundedFetch = (signal) => (url, init = {}) => {
+    checkBudget();
+    return (deps.fetchImpl || fetch)(url, { ...init, signal: AbortSignal.any([globalSignal, activeSignal, signal, init.signal || AbortSignal.timeout(20000)]) });
+  };
   const save = () => { if (live) (deps.save || (() => atomic(statePath, state)))(); };
   let lock;
   if (live && !deps.state) {
@@ -432,21 +448,43 @@ export async function run(options = {}, deps = {}) {
       const data = await jsonFetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.casesSheet}/values/${encodeURIComponent('案件一覧!A1:L')}`, { headers: { Authorization: `Bearer ${token}` } }, fetchImpl);
       cases = parseCaseRows(data.values || []);
     }
-    if (live && !sink) sink = createDriveSink({ token: await getDriveToken({ signal: globalSignal, fetchImpl }), config, state, save, fetchImpl, now, storeDir: options.storeDir || path.join(path.dirname(statePath), 'store') });
+    if (live && !sink) sink = createDriveSink({ token: await getDriveToken({ signal: globalSignal, fetchImpl }), config, state, save, fetchImpl, now, checkBudget, storeDir: options.storeDir || path.join(path.dirname(statePath), 'store') });
     if (live) await sink.init(config.readers);
     for (const source of SOURCES) {
       const s = state.sources[source] ||= {};
+      if (clock() >= collectionDeadline) {
+        report.budgetExhausted = true;
+        report.sources[source] = { skipped: 'process budget: reserved for Drive publication' };
+        s.deferredAt = iso(clock()); save(); continue;
+      }
+      delete s.deferredAt;
       s.initialSince ||= now - 14 * DAY;
       const since = options.since ?? s.cursor?.since ?? s.initialSince;
-      const signal = AbortSignal.timeout(config.sourceTimeoutMs);
+      const signal = AbortSignal.timeout(Math.max(1, Math.min(config.sourceTimeoutMs, collectionDeadline - clock())));
       activeSignal = signal;
+      let commits = Promise.resolve();
+      const committed = { fetched: 0, accepted: 0, excluded: 0, duplicate: 0 };
+      const requestSignal = source.startsWith('gmail') ? AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, Math.min(config.sourceTimeoutMs, collectionDeadline - clock()) - 5000))]) : signal;
       try {
-        const page = await (deps.collect || collectSource)(source, { config, home, since, until: now, cursor: options.since ? {} : s.cursor, signal, fetchImpl: boundedFetch(signal), state: s });
+        const page = await (deps.collect || collectSource)(source, { config, home, since, until: now, cursor: options.since ? {} : s.cursor, signal: requestSignal, fetchImpl: boundedFetch(requestSignal), state: s,
+          commitMessage: live ? m => {
+            const commit = () => processPage({ source, page: { messages: [m], cursor: s.cursor }, state, cases, config, sink, save, live });
+            // Serialize local commits while the five network workers continue.
+            commits = commits.then(commit).then(counts => {
+              for (const key of Object.keys(committed)) committed[key] += counts[key];
+            }); return commits;
+          } : undefined });
         report.sources[source] = await processPage({ source, page, state, cases, config, sink, save, live });
+        if (committed.fetched) {
+          // The final page replays already committed Gmail messages only to save its cursor.
+          for (const key of ['accepted', 'excluded']) report.sources[source][key] += committed[key];
+          report.sources[source].duplicate -= committed.accepted + committed.excluded;
+        }
         if (live) {
           s.lastAttempt = iso(now);
           const failures = Object.values(s.transcriptFailures || {});
-          if (failures.length) { s.error = `${failures.length} transcript(s) unavailable: ${[...new Set(failures.map(f => f.reason))].join('; ')}`.slice(0, 300); s.failedAt = iso(now); }
+          if (page.partial) { s.error = page.error || 'Gmail source budget exhausted; pending messages saved'; s.failedAt = iso(now); report.sources[source].partial = true; }
+          else if (failures.length) { s.error = `${failures.length} transcript(s) unavailable: ${[...new Set(failures.map(f => f.reason))].join('; ')}`.slice(0, 300); s.failedAt = iso(now); }
           else { s.lastSuccess = s.lastSync = iso(now); delete s.error; delete s.failedAt; }
           report.sources[source].transcriptFailures = failures.length;
           save();
@@ -460,12 +498,18 @@ export async function run(options = {}, deps = {}) {
     activeSignal = globalSignal;
     if (live) {
       report.rootId = state.rootId;
-      try { report.index = await sink.finish(); delete state.publishError; }
-      catch (e) { report.publishError = String(e.message).slice(0, 300); state.publishError = report.publishError; }
+      try { checkBudget(); report.index = await sink.finish(); delete state.publishError; delete state.publishDeferredAt; }
+      catch (e) { if (clock() >= deadline || globalSignal.aborted || e.code === 'HUB_BUDGET') { report.budgetExhausted = true; state.publishDeferredAt = iso(clock()); } else { report.publishError = String(e.message).slice(0, 300); state.publishError = report.publishError; } }
       report.createdDocs = sink.createdDocs; save();
     }
-    report.exitCode = report.publishError || SOURCES.every(s => report.sources[s].error) ? 1 : 0;
+    report.exitCode = report.budgetExhausted ? 0 : report.publishError || SOURCES.every(s => report.sources[s].error) ? 1 : 0;
+    report.elapsedMs = clock() - started;
     return report;
+  } catch (e) {
+    if (clock() < deadline && !globalSignal.aborted && e.code !== 'HUB_BUDGET') throw e;
+    report.budgetExhausted = true; report.exitCode = 0;
+    for (const source of SOURCES) report.sources[source] ||= { skipped: 'process budget exhausted' };
+    save(); return report;
   } finally { if (lock) fs.unlinkSync(lock); }
 }
 export function parseArgs(args) {

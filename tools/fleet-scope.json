@@ -787,6 +787,12 @@
       "reason": "fleet-mail v2 の提示・通知・初回移行を全PCへ配布"
     },
     {
+      "path": "tools/lib/unattended-session.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "fleet-inbox-context の無人セッション判定に必要な実行時 import 依存を全PCへ配布"
+    },
+    {
       "path": "tools/fleet-inbox-context.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",

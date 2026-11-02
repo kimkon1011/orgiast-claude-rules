@@ -7,15 +7,15 @@ Google Drive コネクタで `案件情報ハブ` を検索 → `index.json` →
 ルートは所有者と config の readers（seisaku-team@ / cr@ / nishi@）のみ。init はドメイン・一般公開・指定外共有を削除し、指定先を reader に揃える。共有通知メールは送らない。`00_README` に読み方と同期状況、`cases` に案件別の新しい順の本文（直近90日以内、最大20万文字）、`daily` に日本時間の日別昇順の本文先頭800字と元リンク、`unassigned` に案件が未確定の業務連絡を保存する。
 日時の遅い到着もローカル Markdown の時刻順に反映する。識別用 `[hub:…]` 行は削除しない。
 
-正本は `~/.claude/comms-hub/store/` の `cases/<案件ID>.md`、`daily/<日付>.md`、`unassigned/<日付>.md`。案件本文はローカルでは切り捨てず、Driveに公開する範囲だけを90日・20万文字で制限する。1件10万文字の切り捨ては廃止。既存日別要約の800文字上限は継続する。
+正本は `~/.claude/comms-hub/store/` の `cases/<案件ID>.md`、`daily/<日付>.md`、`unassigned/<日付>.md`。案件本文はローカルでは切り捨てず、Driveに公開する範囲だけを90日・20万文字で制限する。1件10万文字の切り捨ては廃止。既存日別要約の800文字上限は継続する。日別のDrive公開は1ファイル20万文字までとし、超過分を `<日付>-2`、`<日付>-3` に分割する。ローカル正本は分割しない。分割数が減った場合は余った公開ファイルを空にする。
 
-追記・同一ソースIDの置換をローカルで原子的に保存し、最後に変更ファイルを全文アップロードする。初回はDrive API v3 `files.create` の multipart（Google Doc MIME + text/markdown）、既存Docは `files.update` の media。Docs API は使わない。成功時だけSHA-256を保存し、本文が同じならアップロードしない。公開に失敗しても正本と公開待ち一覧が残り、次回再送する。既存Docの正本が無い移行時はDriveのtext/plainエクスポートから復元する。Drive が識別行直後の改行を空白へ変換した場合は、復元時だけ日時ヘッダーを確認して改行を補う。ローカル Markdown の破損は引き続き拒否する。
+追記・同一ソースIDの置換をローカルで原子的に保存し、最後に変更ファイルを全文アップロードする。初回はDrive API v3 `files.create` の multipart（Google Doc MIME + text/markdown）、既存Docは `files.update` の media。Docs API は使わない。アップロード制限は60秒＋UTF-8本文10万バイトごとに15秒（最大300秒）。タイムアウト・通信障害・HTTP 429/5xxは1秒、2秒の指数バックオフで最大2回再試行する。実行全体の570秒制限は維持する。成功時だけSHA-256を保存し、本文が同じならアップロードしない。公開に失敗しても正本と公開待ち一覧が残り、次回再送する。既存Docの正本が無い移行時はDriveのtext/plainエクスポートから復元する。Drive が識別行直後の改行を空白へ変換した場合は、復元時だけ日時ヘッダーを確認して改行を補う。ローカル Markdown の破損は引き続き拒否する。
 
 ## 同期
 
 `node tools/comms-hub-sync.mjs --dry-run --since 2d` は読取だけ。フラグなしも dry-run。
 `node tools/comms-hub-sync.mjs --live` のみ Drive と状態を更新する。
-状態は `~/.claude/comms-hub/state.json`。`COMMS_HUB_STATE` で変更可。store はstateと同じ親フォルダ配下が既定で、`COMMS_HUB_STORE` で変更可。ホームは `ORGIAST_HOME`、鍵は `GOOGLE_SA_KEY`、Drive/Sheets実行ユーザーは `GOOGLE_IMPERSONATE`。
+状態は `~/.claude/comms-hub/state.json`。テスト時の変更は明示的な `--state-path <path>` のみ。store はstateと同じ親フォルダ配下が既定で、`--store-dir <path>` で変更可。旧 `COMMS_HUB_STATE` / `COMMS_HUB_STORE` 環境変数は参照しない。ホームは `ORGIAST_HOME`、鍵は `GOOGLE_SA_KEY`、Drive/Sheets実行ユーザーは `GOOGLE_IMPERSONATE`。
 個人の環境値と認証情報は env または既存の env/keyserve 配布先から読む。鍵・状態・取得本文をGitに入れない。
 
 6ソースは gmail-kim / gmail-seisaku / discord / line / plaud / tldv。
@@ -112,3 +112,6 @@ Windows Node v24.22.2 で指定テスト22件成功、0失敗。`node tools/comm
 ソース別 lastSuccess / error: gmail-kim、gmail-seisaku、discord、line、plaud はすべて 2026-11-02T13:22:43.810Z / null。tldv は null / `1 transcript(s) unavailable: tl;dv transcript not ready or unsupported schema`。Markdown 検証失敗は解消し、未提供・形式未対応の文字起こし1件は完全成功として扱っていない。
 
 証跡は `.work/comms-hub/readback-correction2.json` と `tests-correction2.txt`。Git add は共有 Git 管理領域の index.lock が read-only で失敗したため、既存 review.git にコミットし、指定の comms-hub-sync.bundle を更新する。実装はこの作業ツリーに直接保持し、push・PR はしない。
+
+## 2026-11-02 アップロードのタイムアウト修正
+Windows指定テスト26件成功（exitCode 0）。本番stateでliveを1回実行しexitCode 0、publishErrorなし。gmail-kim / gmail-seisaku / discord / line / plaud のlastSuccessは2026-11-02T13:56:44.548Z、tldvは未記録。過去の作業ツリーstateによる検証とは異なり、今回は既定の本番stateを使用した。サイズ別タイムアウト、最大2回の指数バックオフ、部分失敗の続行と再送、日別20万文字の分割を追加した。

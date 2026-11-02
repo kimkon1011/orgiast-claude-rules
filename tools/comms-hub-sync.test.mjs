@@ -280,3 +280,53 @@ test('purge discovers remote-only Docs and deletes sensitive entries without new
  assert.equal(fs.readFileSync(path.join(storeDir,'daily/2026-11-01.md'),'utf8'),'');
  assert.equal(state.removedMarkers[marker],true);
 });
+
+test('upload timeout retries twice with exponential backoff and fresh signals; lost create is recovered',async t=>{
+ const {api,state,storeDir}=fixture(t),delays=[],signals=[];let attempts=0;
+ const sink=createDriveSink({token:'mock',state,storeDir,save(){},sleep:async ms=>delays.push(ms),fetchImpl:async(url,init)=>{
+  if(url.includes('/upload/') && init.body.includes('retry payload')) {
+   signals.push(init.signal);attempts++;
+   if(attempts===1){await api.fetchImpl(url,init);throw new DOMException('timeout','TimeoutError');}
+   if(attempts===2)throw new DOMException('timeout','TimeoutError');
+  }
+  return api.fetchImpl(url,init);
+ }});
+ await sink.append('daily/2026-11-01','2026-11-01','a'.repeat(64),message.ts,'retry payload');
+ await sink.finish();
+ assert.equal(attempts,3);assert.deepEqual(delays,[1000,2000]);assert.equal(new Set(signals).size,3);
+ assert.equal([...api.files.values()].filter(f=>f.name==='2026-11-01').length,1);
+ assert.ok(state.uploadHashes['daily/2026-11-01']);
+});
+test('exhausted upload retries preserve hash and continue other documents; next run resends only failed document',async t=>{
+ const {api,state,storeDir}=fixture(t);let failing=true,attempts=0;const delays=[];
+ const sink=createDriveSink({token:'mock',state,storeDir,save(){},sleep:async ms=>delays.push(ms),fetchImpl:async(url,init)=>{
+  if(url.includes('/upload/') && init.body.includes('failed payload')){attempts++;if(failing)throw new DOMException('timeout','TimeoutError');}
+  return api.fetchImpl(url,init);
+ }});
+ await sink.append('daily/2026-11-01','2026-11-01','a'.repeat(64),message.ts,'failed payload');
+ await sink.append('daily/2026-11-02','2026-11-02','b'.repeat(64),message.ts,'other payload');
+ await assert.rejects(sink.finish(),/daily\/2026-11-01/);
+ assert.equal(attempts,3);assert.deepEqual(delays,[1000,2000]);assert.equal(state.uploadHashes['daily/2026-11-01'],undefined);
+ const goodHash=state.uploadHashes['daily/2026-11-02'];assert.ok(goodHash);
+ failing=false;await sink.finish();assert.equal(attempts,4);assert.ok(state.uploadHashes['daily/2026-11-01']);assert.equal(state.uploadHashes['daily/2026-11-02'],goodHash);
+});
+test('daily views split losslessly at 200000, replay unchanged, and clear obsolete parts',async t=>{
+ const {api,state,storeDir,make}=fixture(t),sink=make(),key='daily/2026-11-01';
+ await sink.append(key,'2026-11-01','a'.repeat(64),message.ts,'😀'.repeat(210000));
+ await sink.finish();
+ const local=fs.readFileSync(path.join(storeDir,key+'.md'),'utf8');
+ const parts=[key,key+'-2',key+'-3'].map(k=>api.files.get(state.files[k]).text);
+ assert.equal(parts.join(''),local);for(const part of parts){assert.ok(part.length<=200000);assert.ok(!/[\uD800-\uDBFF]$/.test(part));}
+ const writes=api.writes;await sink.finish();assert.equal(api.writes,writes);
+ await sink.append(key,'2026-11-01','a'.repeat(64),message.ts,'short');await sink.finish();
+ assert.equal(api.files.get(state.files[key+'-2']).text,'\n');assert.equal(api.files.get(state.files[key+'-3']).text,'\n');
+});
+test('size-aware upload budget and explicit state CLI override',async()=>{
+ const {uploadTimeoutMs,splitDaily}=await import('./comms-hub-sync.mjs');
+ assert.ok(uploadTimeoutMs('a'.repeat(200000))>uploadTimeoutMs('a'));
+ assert.ok(uploadTimeoutMs('あ'.repeat(200000))>uploadTimeoutMs('a'.repeat(200000)));
+ assert.ok(uploadTimeoutMs('')>20000);assert.equal(uploadTimeoutMs('a'.repeat(2000000)),300000);
+ assert.deepEqual(splitDaily('a'.repeat(200000)),['a'.repeat(200000)]);
+ assert.deepEqual(parseArgs(['--live','--state-path','test.json']),{live:true,statePath:'test.json'});
+ assert.throws(()=>parseArgs(['--state-path']));assert.deepEqual(parseArgs(['--live']),{live:true});
+});

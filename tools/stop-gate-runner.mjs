@@ -42,7 +42,7 @@ import { judgeSideEffectLeft } from './side-effect-left-gate.mjs';
 import { judgeAnswerCanonical } from './answer-canonical-gate.mjs';
 import { judge as judgeDeferralWait } from './deferral-wait-gate.mjs';
 import { evaluateShallowAnswer } from './shallow-answer-gate.mjs';
-import { judgeResponseLanguage } from './response-language-gate.mjs';
+import { judgeTurnLanguage } from './response-language-gate.mjs';
 import { evaluateUnregisteredPromise } from './unregistered-promise-gate.mjs';
 import { appendStopLedger, registerStopViolation, CAP_CONTEXT } from './lib/stop-recheck.mjs';
 import { STOP_RETRY_INSTRUCTION, withStopRetryInstruction } from './lib/stop-retry-message.mjs';
@@ -59,7 +59,7 @@ function fullStepsReason(missing) {
 
 export async function evaluateGates(ctx, auditOptions = {}) {
   const gates = [
-    ['response-language-gate', () => judgeResponseLanguage(ctx.assistantText, ctx.humanText)],
+    ['response-language-gate', () => judgeTurnLanguage([...currentTurnEntries(ctx.transcriptRaw).filter(e => e.type === 'assistant').flatMap(e => blocks([e], 'text').map(b => b.text || '')), ctx.assistantText], ctx.humanText)],
     ['past-log-search-gate', () => evaluatePastLogSearch({ text: ctx.assistantText, humanText: ctx.humanText, transcriptRaw: ctx.transcriptRaw, playbookNames: listPlaybookNames(home()) })],
     ['handoff-quality-gate', () => evaluateQuality({ ...ctx.input, assistant_text: ctx.assistantText, transcript_raw: ctx.transcriptRaw })],
     ['handoff-action-gate', () => evaluateHandoffActionFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw })],

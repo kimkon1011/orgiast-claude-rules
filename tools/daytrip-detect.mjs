@@ -145,13 +145,18 @@ export function candidateForDay(date, events, distances) {
   return { date, titles: unique(events.map(e => e.title)), locations: unique(events.map(e => e.location)), attendees: unique(events.flatMap(e => e.attendees)), straightKm, roadKm,
     hours, departure, arrival, notes };
 }
-export async function detect(events, range, geocode, workplace = WORKPLACE) {
+export async function detect(events, range, geocode, workplace = WORKPLACE, overnight = new Map(), overnightConfig = OVERNIGHT_CONFIG) {
   const candidates = [];
   for (const [date, day] of [...groupEvents(events, range)].sort(([a],[b]) => a.localeCompare(b))) {
     const distances = [];
     for (const location of unique(day.map(e => e.location))) {
       const point = await geocode(location);
       distances.push(point ? { km: haversine(workplace, point), approximate: point.approximate } : null);
+    }
+    const roadKm = Math.max(...distances.filter(d => Number.isFinite(d?.km)).map(d => d.km * 1.3));
+    if (roadKm >= overnightConfig.minRoadKm) {
+      overnight.set(date, { date, reason: `overnight(片道約${Math.round(roadKm)}km)` });
+      continue;
     }
     const c = candidateForDay(date, day, distances); if (c) candidates.push(c);
   }
@@ -356,7 +361,14 @@ export async function run(options = {}, deps = {}) {
     });
     const events = deps.events || await listEvents(range, token, deps.fetchImpl);
     const allDayEvents = deps.allDayEvents || (deps.events ? deps.events : await listAllDayEvents(range, token, deps.fetchImpl));
-    const overnight = overnightDays(allDayEvents, range, config.overnight || OVERNIGHT_CONFIG);
+    const overnightConfig = { ...OVERNIGHT_CONFIG, ...config.overnight };
+    if (!Number.isFinite(overnightConfig.minRoadKm) || overnightConfig.minRoadKm <= 0) throw new Error('invalid overnight minRoadKm');
+    const overnight = overnightDays(allDayEvents, range, overnightConfig);
+    const geocode = deps.geocode || createGeocoder({ dir, home, config });
+    const candidates = await detect(events.filter(e => {
+      const start = Date.parse(e.start?.dateTime);
+      return !Number.isFinite(start) || !overnight.has(jstDate(start));
+    }), range, geocode, workplace, overnight, overnightConfig);
     const excluded = [...overnight.values()].sort((a,b) => a.date.localeCompare(b.date));
     if (!options.dryRun) {
       for (const entry of excluded) {
@@ -365,11 +377,6 @@ export async function run(options = {}, deps = {}) {
       }
       for (const message of await recordApproved(log, deps.sheetsFactory || defaultSheetsFactory, now)) (deps.output || console.log)(message);
     }
-    const geocode = deps.geocode || createGeocoder({ dir, home, config });
-    const candidates = await detect(events.filter(e => {
-      const start = Date.parse(e.start?.dateTime);
-      return !Number.isFinite(start) || !overnight.has(jstDate(start));
-    }), range, geocode, workplace);
     const pending = unasked(candidates, log.rows);
     if (!options.dryRun) {
       const queue = new Map(log.rows.filter(r => r.type === 'queued').map(r => [r.candidate.date, r.candidate]));

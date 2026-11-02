@@ -1,4 +1,5 @@
 {
+  "minRoadKm": 300,
   "daytripPrefectures": [
     "大阪",
     "京都",

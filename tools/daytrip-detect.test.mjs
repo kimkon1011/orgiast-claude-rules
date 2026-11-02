@@ -256,3 +256,40 @@ test('overnight decisions remove old pending and queued candidates and prevent a
   assert.deepEqual(pendingItems(rows), []);
   assert.equal(rows.filter(r => r.type === 'batch').length, 1);
 });
+
+// A northward point at the requested road distance (the detector uses R=6371km).
+const pointAtRoadKm = km => ({ lat: 34.6760 + (km / 1.3 / 6371) * 180 / Math.PI, lon: 135.5530 });
+for (const [km, excluded] of [[498, true], [120, false], [299.99, false], [300.01, true]]) {
+  test(`distance overnight without all-day event: ${km}km`, async t => {
+    const dir = temp(t);
+    const result = await run({ dryRun: true, stateDir: dir, from: '2026-11-02', to: '2026-11-02' }, {
+      events: [fixtureEvent({ end: { dateTime: '2026-11-02T12:00:00+09:00' } })], allDayEvents: [], geocode: async () => pointAtRoadKm(km),
+    });
+    assert.equal(result.candidates.length, excluded ? 0 : 1);
+    assert.deepEqual(result.excluded, excluded ? [{ date: '2026-11-02', reason: `overnight(片道約${Math.round(km)}km)` }] : []);
+    assert.ok(!fs.existsSync(path.join(dir, 'ledger.jsonl')));
+  });
+}
+test('distance overnight uses inclusive configured threshold', async t => {
+  const { haversine, WORKPLACE } = await import('./daytrip-detect.mjs');
+  const dir = temp(t), point = pointAtRoadKm(300);
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ overnight: { minRoadKm: haversine(WORKPLACE, point) * 1.3 } }));
+  const deps = { events: [fixtureEvent()], allDayEvents: [], geocode: async () => point };
+  const options = { dryRun: true, stateDir: dir, from: '2026-11-02', to: '2026-11-02' };
+  assert.equal((await run(options, deps)).excluded[0].reason, 'overnight(片道約300km)');
+  fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ overnight: { minRoadKm: 600 } }));
+  assert.equal((await run(options, deps)).candidates.length, 1);
+});
+test('distance overnight clears pending and queued, blocks approved append, and is idempotent', async t => {
+  const { dir, ledger, c } = setup(t);
+  ledger.save({ type: 'queued', candidate: c });
+  ledger.save({ type: 'decision', date: c.date, status: 'accepted' });
+  const deps = { now, events: [fixtureEvent()], allDayEvents: [], geocode: async () => pointAtRoadKm(498), sheetsFactory() { throw new Error('overnight must not append'); } };
+  await run({ stateDir: dir, from: c.date, to: c.date }, deps);
+  await run({ stateDir: dir, from: c.date, to: c.date }, deps);
+  const rows = journal(path.join(dir, 'ledger.jsonl')).rows;
+  assert.equal(rows.filter(r => r.status === 'overnight(片道約498km)').length, 1);
+  assert.deepEqual(pendingItems(rows), []);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'pending.json'), 'utf8')).items, []);
+  assert.equal(rows.filter(r => r.type === 'batch').length, 1);
+});

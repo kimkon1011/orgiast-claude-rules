@@ -80,3 +80,7 @@ kim@orgiast.jp の calendarList を全ページ取得し、非表示・共有を
 タイトル・場所に大阪および日帰り圏（京都・兵庫・奈良・滋賀・和歌山）以外の都道府県・県庁所在地・政令市が含まれる日は宿泊とする。判定リストは tools/daytrip-overnight-config.json に置き、config.json の overnight で全体を上書きできる。複数日にまたがる終日予定は地名によらず宿泊扱い。Google の end.date は含めず、前日開始の予定も判定する。キャンセル・本人辞退の予定は対象外。
 
 宿泊日は既存形式の decision に status = `overnight(終日予定: <予定名>)` を保存し、既存 pending・queued からも除外する。回答形式・台帳構造は変更しない。dry-run は candidates と excluded（日付・理由）を出力し、台帳は更新しない。
+
+## 距離による宿泊除外
+
+終日予定がなくても、推定片道道路距離が300km以上の日は宿泊出張として質問対象から除外する。しきい値は `tools/daytrip-overnight-config.json` の `minRoadKm`（正の数）で設定し、状態設定の `overnight.minRoadKm` で上書きできる。丸め前の距離で判定し、台帳には `overnight(片道約498km)` の形式で記録する。既存の未回答・承認済み候補も、報告書追記前に除外する。dry-run は台帳を更新せず除外理由を出力する。

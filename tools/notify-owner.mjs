@@ -167,8 +167,11 @@ export async function notifyOwner(owner, text, options = {}) {
   if (!owner || owner.toLowerCase() !== resolveOwner(options).toLowerCase()) {
     return finish({ delivered: 'none', channel: 'none', ok: false, reason });
   }
+  const fallbackText = !valid
+    ? safeText + `\n\n⚠ Discord 宛先未設定: fleet-pc-map.json の「${options.label ?? resolveFleetLabel(home)}」に notifyDiscordId を追加`
+    : safeText;
   let inboxOk = false;
-  try { await prependInbox(home, safeText, at); inboxOk = true; } catch { /* recorded below */ }
+  try { await prependInbox(home, fallbackText, at); inboxOk = true; } catch { /* recorded below */ }
   attempts.push({ channel: 'inbox', ok: inboxOk });
   try { appendOwnerInbox(home, { source: 'notify-owner', text: safeText }); } catch { /* legacy chat inbox */ }
   const toast = async (body, purpose) => {
@@ -178,7 +181,7 @@ export async function notifyOwner(owner, text, options = {}) {
     attempts.push({ channel: 'toast', purpose, ...(receipt || {}), ok });
     return ok;
   };
-  const sent = await toast(safeText, 'progress');
+  const sent = await toast(fallbackText, 'progress');
   if (!valid) {
     const file = path.join(home, '.claude', 'logs', 'owner-recipient-notice.json');
     const day = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;

@@ -300,3 +300,40 @@ test('Discord failure with a valid recipient falls back without setup warning', 
  assert.equal(result.channel, 'toast');
  assert.deepEqual(texts, ['進捗']);
 });
+
+test('fleet-pc-map の account を持つ行は discordId と notifyDiscordId を持つ', () => {
+  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const map = JSON.parse(fs.readFileSync(path.join(repo, 'fleet-pc-map.json'), 'utf8'));
+  const missing = [];
+  for (const [label, entry] of Object.entries(map)) {
+    if (label.startsWith('_')) continue;
+    if (label === '_unverified') continue;
+    if (!entry || typeof entry !== 'object') continue;
+    const hasAccount = String(entry.account || '').trim();
+    if (!hasAccount) continue;
+    const hasDiscordId = String(entry.discordId || '').trim();
+    const hasNotifyDiscordId = String(entry.notifyDiscordId || '').trim();
+    if (!hasDiscordId || !hasNotifyDiscordId) {
+      missing.push(`${label}: ${hasDiscordId ? 'discordId OK' : 'discordId なし'}, ${hasNotifyDiscordId ? 'notifyDiscordId OK' : 'notifyDiscordId なし'}`);
+    }
+  }
+  if (missing.length) {
+    const unverifiedMissing = [];
+    const uv = map._unverified;
+    if (uv && typeof uv === 'object') {
+      for (const [label, entry] of Object.entries(uv)) {
+        if (label.startsWith('_')) continue;
+        if (!entry || typeof entry !== 'object') continue;
+        const hasAccount = String(entry.account || '').trim();
+        if (!hasAccount) continue;
+        const hasDiscordId = String(entry.discordId || '').trim();
+        const hasNotifyDiscordId = String(entry.notifyDiscordId || '').trim();
+        if (!hasDiscordId || !hasNotifyDiscordId) {
+          unverifiedMissing.push(`${label}: ${hasDiscordId ? 'discordId OK' : 'discordId なし'}, ${hasNotifyDiscordId ? 'notifyDiscordId OK' : 'notifyDiscordId なし'}`);
+        }
+      }
+    }
+    assert.fail(`fleet-pc-map.json の account を持つ PC 行に discordId/notifyDiscordId が不足:\n${missing.join('\n')}` +
+      (unverifiedMissing.length ? `\n（_unverified 内の不足（検査対象外）: ${unverifiedMissing.join(', ')}）` : ''));
+  }
+});

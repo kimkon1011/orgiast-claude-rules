@@ -32,6 +32,17 @@ try {
 } catch { Write-Warning ("schedule-sync self-repair failed: " + $_.Exception.Message) }
 
 try {
+  $commsHubInstaller = Join-Path $repo 'tools\register-comms-hub-sync.ps1'
+  if ($repo -and (Test-Path -LiteralPath $commsHubInstaller)) {
+    if ($Dry) { DrySkip 'register-comms-hub-sync.ps1 -Ensure (DWD key host only)' }
+    else {
+      & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $commsHubInstaller -Ensure
+      if ($LASTEXITCODE -ne 0) { throw "register-comms-hub-sync.ps1 exit $LASTEXITCODE" }
+    }
+  }
+} catch { Write-Warning ("comms-hub-sync self-repair failed: " + $_.Exception.Message) }
+
+try {
   $daytripInstaller = Join-Path $repo 'tools\register-daytrip-detect-task.ps1'
   if ($repo -and (Test-Path -LiteralPath $daytripInstaller)) {
     if ($Dry) { DrySkip 'register-daytrip-detect-task.ps1 -Ensure (LINE receiver host only)' }

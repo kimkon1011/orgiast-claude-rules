@@ -12,6 +12,8 @@
     {"path": "tools/meeting-prep-dispatch.mjs", "scope": "kim-only", "step": "task:meeting-prep", "reason": "kim-PCの打合せ準備と結果回収"},
     {"path": "config/meeting-prep-routing.json", "scope": "kim-only", "step": "task:meeting-prep", "reason": "kim-PCの打合せ準備と結果回収"},
     {"path": "templates/meeting-prep-prompt.md", "scope": "kim-only", "step": "task:meeting-prep", "reason": "kim-PCの打合せ準備と結果回収"},
+    {"path": "tools/register-comms-hub-sync.ps1", "scope": "kim-only", "step": "task:comms-hub-sync", "reason": "DWD鍵ホストだけ案件情報ハブの同期を登録"},
+    {"path": "tools/register-comms-hub-sync.mjs", "scope": "kim-only", "step": "task:comms-hub-sync", "reason": "convergeからEnsure登録"},
 {"path": "tools/kim-discord-report-gate.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/kim-inbox.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/lib/kim-discord-allowlist.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},

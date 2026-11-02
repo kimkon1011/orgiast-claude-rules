@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 
@@ -657,4 +658,52 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
 
 if (isEntry(import.meta.url)) {
   process.exitCode = await run();
+}
+
+// Read-only hub adapter: reuse authentication, never import audio, notify, or
+// persist the existing Plaud session from this collector.
+export async function collectPlaudForHub({ home, since, until, cursor = {}, config, fetchImpl }) {
+  const file = path.join(home, '.claude', 'plaud-to-tldv-state.json');
+  let raw = {};
+  try { raw = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
+  catch (e) { if (e.code !== 'ENOENT') throw e; }
+  const envFile = path.join(home, '.claude', 'plaud.env');
+  const state = mergeState(raw);
+  state.session.ut ||= process.env.PLAUD_UT || readEnvValue(envFile, 'PLAUD_UT');
+  state.session.urt ||= process.env.PLAUD_URT || readEnvValue(envFile, 'PLAUD_URT');
+  if (!state.session.ut) throw new Error('Plaud session missing');
+  state.session.region = regionFromToken(state.session.ut) || state.session.region;
+  // Let the existing owner task refresh UT/URT; do not rotate its refresh token.
+  if (needsRefresh(jwtExp(state.session.ut))) throw new Error('Plaud session expired; owner plaud-to-tldv refresh required');
+  const persist = () => {};
+  const client = makePlaudClient(state, persist, { warn() {}, info() {} }, fetchImpl);
+  await ensureWorkspace(state, client, persist);
+  const skip = cursor.skip || 0, limit = config.maxPerSource;
+  const { body } = await client.call(`/file/simple/web?skip=${skip}&limit=${limit}&is_trash=2&sort_by=start_time&is_desc=true`, { headers: authHeaders(state.session.wt) }, 'hub recordings');
+  if (!Array.isArray(body.data_file_list)) throw new Error('Plaud invalid listing');
+  const rows = body.data_file_list, messages = [];
+  const end = cursor.end || until;
+  for (const r of rows) {
+    const ts = epochToIso(r.start_time);
+    if (!ts || Date.parse(ts) < since || Date.parse(ts) > end) continue;
+    // Only read existing transcript artifacts. Never ask Plaud to start a task.
+    const { body: detail } = await client.call(`/file/detail/${encodeURIComponent(r.id)}`, { headers: authHeaders(state.session.wt) }, 'hub detail');
+    const link = detail.data?.content_list?.find(x => x.data_type === 'transaction' && x.data_link)?.data_link;
+    let segments;
+    if (link && /^https:\/\//.test(link)) {
+      // Signed media link: never attach the Plaud bearer token to this request.
+      const response = await fetchImpl(link);
+      if (!response.ok) throw new Error(`Plaud transcript download HTTP ${response.status}`);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      let raw;
+      try { raw = gunzipSync(buffer, { maxOutputLength: 10000000 }).toString('utf8'); } catch { raw = buffer.toString('utf8'); }
+      const decoded = JSON.parse(raw);
+      segments = Array.isArray(decoded) ? decoded : Object.values(decoded);
+    }
+    const text = Array.isArray(segments) ? segments.map(x => `${x.speaker || x.original_speaker || ''}: ${x.content || x.text || ''}`).join('\n') : '';
+    if (!text.trim()) throw new Error('Plaud transcript not ready or unsupported schema');
+    messages.push({ source: 'plaud', id: r.id, ts, subject: r.filename || '', sender: 'Plaud', text, url: `https://web.plaud.ai/` });
+  }
+  const more = rows.length === limit && skip + rows.length < Number(body.data_file_total || Infinity) && !rows.some(r => Date.parse(epochToIso(r.start_time)) < since);
+  return { messages, cursor: more ? { since, end, skip: skip + rows.length } : { since: end } };
 }

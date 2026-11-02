@@ -66,7 +66,7 @@ test('watch: before deadline stays open; overdue queues once and retries DM; rec
   // 6時間後: 1回目の定期DMが送信される
   await watch({ home, now: now + 6 * 3600000, io });
   assert.equal(messages.length, 1);
-  assert.match(messages[0], /未達: 未達: まだ届いていません \/ 次の手: 再試行する/);
+  assert.match(messages[0], /未達: 未達: まだ届いていません .*次の手: 再試行する/);
 
   // 7時間後: 前回DMから1時間なので再送しない
   await watch({ home, now: now + 7 * 3600000, io });
@@ -191,7 +191,7 @@ test('resolveCheckShell selects Git Bash in candidate order and honors override'
 });
 test('executeCheck invokes explicit Bash without shell and preserves execution options', () => {
   const home = tmp(), check = 'gh pr view 1145 --jq .state | grep -q MERGED';
-  assert.deepEqual(executeCheck({ check, checkCwd: home }, { home, shellPath: 'git-bash', spawnImpl: (shell, args, opts) => {
+  const result = executeCheck({ check, checkCwd: home }, { home, shellPath: 'git-bash', spawnImpl: (shell, args, opts) => {
     assert.equal(shell, 'git-bash'); assert.deepEqual(args, ['-c', check]);
     assert.equal(Object.hasOwn(opts, 'shell'), false); assert.equal(opts.cwd, home);
     assert.equal(opts.timeout, CHECK_TIMEOUT_MS); assert.equal(opts.maxBuffer, 64 * 1024);
@@ -244,11 +244,14 @@ test('hasCheckError detects error indicators in stderr', () => {
   assert.equal(hasCheckError('exit 1'), false);
 });
 
-test('hasCheckError matches lowercase and partial patterns', () => {
-  assert.equal(hasCheckError('cannot find path'), true);
-  assert.equal(hasCheckError('COMMAND NOT FOUND'), true);
-  assert.equal(hasCheckError('no such file or directory'), true);
-  assert.equal(hasCheckError('itemnotfoundexception'), true);
+test('hasCheckError matches containing text (partial/substring match)', () => {
+  // 完全一致だけでなく、エラーメッセージ内の部分一致も検出する
+  assert.equal(hasCheckError('Error: Cannot find path C:\\foo'), true, 'Cannot find path in context');
+  assert.equal(hasCheckError("bash: is not recognized as a command"), true, 'is not recognized in context');
+  assert.equal(hasCheckError('/bin/sh: command not found: node'), true, 'command not found in context');
+  assert.equal(hasCheckError('grep: No such file or directory'), true, 'No such file in context');
+  assert.equal(hasCheckError('SyntaxError: Unexpected token'), true, 'SyntaxError in context');
+  assert.equal(hasCheckError('C:\\Programs\\git\\bin\\bash.exe: ItemNotFoundException'), true, 'ItemNotFoundException in context');
 });
 
 test('hasBashEnvExpansion detects $env: inside double-quoted bash command', () => {

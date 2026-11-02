@@ -228,3 +228,55 @@ test('case sheet resolves real I/J/K headers and deduplicates repeated case IDs'
  assert.throws(()=>parseCaseRows([['wrong'],['261101ABC']]),/headers/);
  assert.throws(()=>parseCaseRows([headers,[]]),/no valid/);
 });
+
+test('init removes broad and unlisted access, downgrades readers, sends no notifications',async()=>{
+ const permissions=[{id:'domain',type:'domain',role:'reader'},{id:'public',type:'anyone',role:'reader'},{id:'other',type:'user',emailAddress:'other@example.test',role:'reader'},{id:'owner',type:'user',role:'owner'},{id:'existing',type:'user',emailAddress:config.readers[0],role:'writer'}];
+ const calls=[];
+ const sink=createDriveSink({token:'mock',state:{files:{root:'root',cases:'cases',daily:'daily',unassigned:'unassigned'}},save(){},fetchImpl:async(url,init)=>{calls.push({url,...init});return Response.json(init.method==='GET'?{permissions}:{id:'ok'});}});
+ await sink.init(config.readers);
+ assert.deepEqual(calls.filter(c=>c.method==='DELETE').map(c=>c.url.split('/').at(-1)),['domain','public','other']);
+ assert.deepEqual(JSON.parse(calls.find(c=>c.method==='PATCH').body),{role:'reader'});
+ const posts=calls.filter(c=>c.method==='POST');assert.equal(posts.length,2);
+ for(const c of posts){assert.match(c.url,/sendNotificationEmail=false/);assert.equal(JSON.parse(c.body).role,'reader');assert.ok(config.readers.includes(JSON.parse(c.body).emailAddress));}
+});
+test('Drive soft-line export restored; malformed local data still refused',async t=>{
+ const {api,state,make}=fixture(t),sink=make(),key='daily/2026-11-01';
+ state.files[key]='old';api.files.set('old',{name:'2026-11-01',mimeType:'application/vnd.google-apps.document',text:`\uFEFF[hub:${'a'.repeat(64)}:${message.ts}] [2026-11-01 11:00:00][tldv][] 見積\nprior\n\n`});
+ await sink.append(key,'2026-11-01','b'.repeat(64),message.ts,'new');await sink.finish();
+ assert.equal(parseEntries(api.files.get('old').text).length,2);
+ assert.throws(()=>parseEntries('broken content'),/refusing/);
+});
+test('sensitive terms excluded even for matched cases',async()=>{
+ for(const text of ['労働審判','弁護士','裁判','訴訟','書記官','給与','人事評価','健康診断']){
+  let writes=0;const state={sources:{'gmail-kim':{}},cases:{}};
+  const result=await processPage({source:'gmail-kim',page:{messages:[{...message,text}],cursor:{}},state,cases,config,live:true,sink:{append(){writes++;}}});
+  assert.equal(result.excluded,1);assert.equal(writes,0);
+ }
+});
+test('policy changes purge all copies including truncated summary; failed upload retries',async t=>{
+ const {api,state,storeDir,make}=fixture(t);let sink=make();const marker='c'.repeat(64);
+ await sink.append('daily/2026-11-01','2026-11-01',marker,message.ts,'harmless summary');
+ await sink.append('cases/261101ABC','261101ABC_case',marker,message.ts,'x'.repeat(900)+'労働審判');
+ await sink.append('cases/261101ABC','261101ABC_case','d'.repeat(64),message.ts,'keep this');
+ await sink.finish();
+ sink=createDriveSink({token:'mock',state,storeDir,config,save(){},fetchImpl:api.fetchImpl});
+ api.loseNext();await assert.rejects(sink.finish(),/response lost/);
+ for(const key of ['daily/2026-11-01','cases/261101ABC'])assert.ok(!fs.readFileSync(path.join(storeDir,key+'.md'),'utf8').includes(marker));
+ await sink.finish();assert.equal(api.files.get(state.files['daily/2026-11-01']).text,'\n');
+ const text=api.files.get(state.files['cases/261101ABC']).text;assert.ok(!text.includes('労働審判'));assert.match(text,/keep this/);
+});
+
+test('purge discovers remote-only Docs and deletes sensitive entries without new messages',async t=>{
+ const {api,state,storeDir}=fixture(t),marker='e'.repeat(64);
+ api.files.set('remote',{name:'2026-11-01',mimeType:'application/vnd.google-apps.document',text:`[hub:${marker}:${message.ts}] [2026-11-01 11:00:00][tldv][] 労働審判\n\n`});
+ const fetchImpl=async(url,init={})=>{
+  const u=new URL(url),q=u.searchParams.get('q');
+  if(q?.includes("'daily' in parents")&&!q.includes('name='))return Response.json({files:[{id:'remote',name:'2026-11-01'}]});
+  return api.fetchImpl(url,init);
+ };
+ const sink=createDriveSink({token:'mock',state,storeDir,config,save(){},fetchImpl});
+ await sink.finish();
+ assert.equal(api.files.get('remote').text,'\n');
+ assert.equal(fs.readFileSync(path.join(storeDir,'daily/2026-11-01.md'),'utf8'),'');
+ assert.equal(state.removedMarkers[marker],true);
+});

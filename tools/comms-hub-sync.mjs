@@ -71,7 +71,7 @@ export async function processPage({ source, page, state, cases, config, sink, sa
     const key = messageKey(m);
     if (s.processed[key] && !s.transcriptFailures?.[m.id]) { counts.duplicate++; continue; }
     const c = matchCase(m, cases, config);
-    if (exclusion(m, config, c)) { counts.excluded++; }
+    if (exclusion(m, config, c)) { counts.excluded++; if (live) sink.remove?.(key); }
     else {
       if (live) {
         const day = new Date(Date.parse(m.ts) + 9 * 3600000).toISOString().slice(0, 10);
@@ -89,7 +89,7 @@ export async function processPage({ source, page, state, cases, config, sink, sa
     s.cursor = page.cursor;
     s.transcriptFailures ||= {};
     for (const m of page.messages) {
-      if (m.transcriptError) s.transcriptFailures[m.id] = { id: m.id, title: m.subject || '', ts: m.ts, url: m.url, reason: m.transcriptError, lastAttempt: iso(Date.now()) };
+      if (m.transcriptError && !exclusion(m, config, matchCase(m, cases, config))) s.transcriptFailures[m.id] = { id: m.id, title: m.subject || '', ts: m.ts, url: m.url, reason: m.transcriptError, lastAttempt: iso(Date.now()) };
       else delete s.transcriptFailures[m.id];
     }
     save();
@@ -181,6 +181,11 @@ export function parseEntries(text) {
   if (text.trim() && (!matches.length || text.slice(0, matches[0].index).trim())) throw new Error('invalid local hub Markdown; refusing to overwrite');
   return matches.map((m, i) => ({ marker: m[1], ts: m[2], text: text.slice(m.index + m[0].length, matches[i + 1]?.index ?? text.length) }));
 }
+// Drive collapses Markdown soft line breaks in text/plain exports.
+export function restoreExport(text) {
+  return text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n')
+    .replace(/^(\[hub:[a-f0-9]{64}:[^\]\r\n]+\])[ \t]+(?=\[\d{4}-\d{2}-\d{2} )/gm, '$1\n');
+}
 const entryText = e => `[hub:${e.marker}:${e.ts}]\n${e.text}`;
 export function publishedText(key, text, now = Date.now()) {
   if (!key.startsWith('cases/')) return text;
@@ -188,7 +193,7 @@ export function publishedText(key, text, now = Date.now()) {
   const clipped = recent.slice(0, 200000);
   return /[\uD800-\uDBFF]$/.test(clipped) ? clipped.slice(0, -1) : clipped;
 }
-export function createDriveSink({ token, state, save, fetchImpl = fetch,
+export function createDriveSink({ token, state, save, config = {}, fetchImpl = fetch,
   storeDir = path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'comms-hub', 'store'), now = Date.now() }) {
   const drive = 'https://www.googleapis.com/drive/v3/files';
   const upload = 'https://www.googleapis.com/upload/drive/v3/files';
@@ -196,7 +201,7 @@ export function createDriveSink({ token, state, save, fetchImpl = fetch,
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   const req = (url, method = 'GET', body) => jsonFetch(url, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, fetchImpl);
   const escape = s => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-  state.files ||= {}; state.documents ||= {}; state.uploadHashes ||= {};
+  state.files ||= {}; state.documents ||= {}; state.uploadHashes ||= {}; state.removedMarkers ||= {};
   let createdDocs = 0;
   function localPath(key) {
     if (!/^(?:(?:cases|daily|unassigned)\/[a-zA-Z0-9_-]+|readme)$/.test(key)) throw new Error('invalid hub document key');
@@ -232,10 +237,18 @@ export function createDriveSink({ token, state, save, fetchImpl = fetch,
   }
   return {
     get createdDocs() { return createdDocs; },
-    async init(domain) {
+    async init(readers = []) {
       state.rootId = await ensure('root', '案件情報ハブ', null, 'application/vnd.google-apps.folder'); save();
-      const p = await req(`${drive}/${state.rootId}/permissions?fields=permissions(type,domain,role)`);
-      if (!p.permissions.some(x => x.type === 'domain' && x.domain === domain && ['reader','writer','owner'].includes(x.role))) await req(`${drive}/${state.rootId}/permissions`, 'POST', { type: 'domain', role: 'reader', domain });
+      // kim@ の業務メールを含むため、ドメイン全体ではなく Claude Code を使うアカウントだけに共有する
+      const p = await req(`${drive}/${state.rootId}/permissions?fields=permissions(id,type,domain,emailAddress,role)`);
+      for (const x of p.permissions.filter(x => x.type === 'domain')) await req(`${drive}/${state.rootId}/permissions/${x.id}`, 'DELETE');
+      const allowed = new Set(readers.map(x => x.toLowerCase()));
+      for (const x of p.permissions.filter(x => x.type !== 'domain' && x.role !== 'owner')) {
+        if (x.type !== 'user' || !allowed.has(String(x.emailAddress).toLowerCase())) await req(`${drive}/${state.rootId}/permissions/${x.id}`, 'DELETE');
+        else if (x.role !== 'reader') await req(`${drive}/${state.rootId}/permissions/${x.id}`, 'PATCH', { role: 'reader' });
+      }
+      const have = new Set(p.permissions.filter(x => x.type === 'user').map(x => String(x.emailAddress).toLowerCase()));
+      for (const email of readers) if (!have.has(email.toLowerCase())) await req(`${drive}/${state.rootId}/permissions?sendNotificationEmail=false`, 'POST', { type: 'user', role: 'reader', emailAddress: email });
       for (const dir of ['cases','daily','unassigned']) await ensure(dir, dir, state.rootId, 'application/vnd.google-apps.folder');
     },
     async append(key, name, marker, ts, text) {
@@ -249,7 +262,7 @@ export function createDriveSink({ token, state, save, fetchImpl = fetch,
         if (id) {
           const response = await fetchImpl(`${drive}/${id}/export?mimeType=text%2Fplain`, { headers });
           if (!response.ok) throw new Error(`Drive migration export HTTP ${response.status}`);
-          current = (await response.text()).replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
+          current = restoreExport(await response.text());
         }
       }
       const entries = parseEntries(current);
@@ -263,7 +276,52 @@ export function createDriveSink({ token, state, save, fetchImpl = fetch,
       if (next !== current || !fs.existsSync(file)) atomicText(file, next);
       return state.files[key] || null;
     },
+    remove(marker) { state.removedMarkers[marker] = true; save(); },
+    async purge() {
+      // Discover existing Docs even when this machine has no local store yet.
+      for (const dir of ['cases', 'daily', 'unassigned']) {
+        let pageToken;
+        do {
+          const page = await req(`${drive}?${new URLSearchParams({ q: `trashed=false and '${escape(state.files[dir])}' in parents and mimeType='${docMime}'`, fields: 'files(id,name),nextPageToken', pageSize: '100', ...(pageToken ? { pageToken } : {}) })}`);
+          for (const f of page.files) {
+            const key = `${dir}/${dir === 'cases' ? f.name.split('_')[0] : f.name}`;
+            localPath(key);
+            if (state.files[key] && state.files[key] !== f.id) throw new Error(`ambiguous Drive destination: ${key}`);
+            state.files[key] = f.id; state.documents[key] = { name: f.name };
+          }
+          pageToken = page.nextPageToken;
+        } while (pageToken);
+      }
+      for (const dir of ['cases', 'daily', 'unassigned']) {
+        const folder = path.join(storeDir, dir);
+        if (!fs.existsSync(folder)) continue;
+        for (const name of fs.readdirSync(folder).filter(n => n.endsWith('.md'))) {
+          const key = `${dir}/${name.slice(0, -3)}`;
+          localPath(key); state.documents[key] ||= { name: name.slice(0, -3) };
+        }
+      }
+      const documents = new Map();
+      for (const [key] of Object.entries(state.documents)) {
+        const file = localPath(key);
+        let text;
+        if (fs.existsSync(file)) text = fs.readFileSync(file, 'utf8');
+        else {
+          const r = await fetchImpl(`${drive}/${state.files[key]}/export?mimeType=text%2Fplain`, { headers });
+          if (!r.ok) throw new Error(`Drive migration export HTTP ${r.status}`);
+          text = restoreExport(await r.text());
+          parseEntries(text); atomicText(file, text);
+        }
+        const entries = parseEntries(text); documents.set(key, { text, entries });
+        for (const e of entries) if ([...(config.excludePatterns || []), ...(config.privatePatterns || [])].some(p => new RegExp(p, 'i').test(norm(e.text)))) state.removedMarkers[e.marker] = true;
+      }
+      save(); // Persist tombstones before removing any of the copies.
+      for (const [key, { text, entries }] of documents) {
+        const next = entries.filter(e => !state.removedMarkers[e.marker]).map(entryText).join('');
+        if (next !== text) atomicText(localPath(key), next);
+      }
+    },
     async finish() {
+      await this.purge();
       const failures = [];
       for (const [key, meta] of Object.entries(state.documents)) {
         try {
@@ -331,8 +389,8 @@ export async function run(options = {}, deps = {}) {
       const data = await jsonFetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.casesSheet}/values/${encodeURIComponent('案件一覧!A1:L')}`, { headers: { Authorization: `Bearer ${token}` } }, fetchImpl);
       cases = parseCaseRows(data.values || []);
     }
-    if (live && !sink) sink = createDriveSink({ token: await getDriveToken({ signal: globalSignal, fetchImpl }), state, save, fetchImpl, now, storeDir: options.storeDir || process.env.COMMS_HUB_STORE || path.join(path.dirname(statePath), 'store') });
-    if (live) await sink.init(config.domain);
+    if (live && !sink) sink = createDriveSink({ token: await getDriveToken({ signal: globalSignal, fetchImpl }), config, state, save, fetchImpl, now, storeDir: options.storeDir || process.env.COMMS_HUB_STORE || path.join(path.dirname(statePath), 'store') });
+    if (live) await sink.init(config.readers);
     for (const source of SOURCES) {
       const s = state.sources[source] ||= {};
       s.initialSince ||= now - 14 * DAY;

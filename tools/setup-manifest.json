@@ -1,6 +1,7 @@
 {
   "version": 1,
   "items": [
+    {"id":"task:line-history-sync","type":"scheduled-task","severity":"required","scope":"kim-only","spec":{"name":"OrgiastLineHistorySync","requireActionTarget":true,"ifPresent":".claude/line-history-sync.json","maxRunAgeHours":3},"description":"kim-PC: LINE受信履歴を毎時共有Googleシートへ追記","repair":["register-line-history-sync.mjs"]},
     {"id": "hook:x-url-route-hint", "type": "file-nonempty", "severity": "required", "spec": {"paths": [".claude/nightly-repo/tools/x-url-route-hint.mjs", "orgiast-claude-rules/tools/x-url-route-hint.mjs", "Downloads/orgiast-claude-rules/tools/x-url-route-hint.mjs"]}, "description": "X投稿の読み取り経路案内hook実体", "repair": ["onboarding-sync.mjs", "--force"]},
     {"id": "settings:x-url-route-hint-UserPromptSubmit", "type": "json-valid", "severity": "required", "spec": {"path": ".claude/settings.json", "hookEvent": "UserPromptSubmit", "hookScript": "x-url-route-hint.mjs", "hookArgs": "", "async": false, "timeout": 5}, "description": "全PC: X投稿をgrok-x-fetchへ案内", "repair": ["register-hooks.mjs", "--hooks-only"]},
     {"id": "task:stuck-pr-sweeper", "type": "scheduled-task", "severity": "required", "scope": "kim-only", "spec": {"name": "OrgiastStuckPrSweeper", "requireActionTarget": true}, "description": "kim-PC: 停止した自前PRを3時間ごとに検知・最大2回修復", "repair": ["register-stuck-pr-task.mjs"]},

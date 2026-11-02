@@ -167,19 +167,21 @@ export function collectStatus({ home, repo, label, hostname, run = runSync, plat
   auditLaunch({ home, platform, intervalHours: 24 });
   const failures = jobStatus.failures ?? [];
   const sharedMemory = sharedMemoryStatus(home);
+  let knowledge = { present: false, bytes: 0 };
+  try { const stat=fs.statSync(path.join(home,'.claude','knowledge','production-sales','00_INDEX.md'));knowledge={present:stat.isFile()&&stat.size>0,bytes:stat.size}; } catch {}
   const lines = fitStatusLines({
     header: `📡 **[${label}]** status`,
     hostLine: `hostname=${hostname} / OS=${platform} ${os.release()} / account=${account}`,
     codexLine: !codex.login ? 'codex=未ログイン' : codex.email
       ? `codex=${codex.email} / plan=${codex.plan ?? '不明'}` : 'codex=ログイン済(詳細不明)',
     repoLine: `repo=${git.branch}, origin/mainより${git.behind}コミット遅れ`,
-    memoryLine: formatMemoryLine(sharedMemory),
+    memoryLine: `${formatMemoryLine(sharedMemory)} / knowledge=${knowledge.present ? `${knowledge.bytes}B` : 'なし'}`,
     jobStatus,
     syncLine: `onboarding-sync=${syncLast}`,
     todoLine: `残TODO=${todoCount} / mail 未読=${mailUnread} / prompt opt-in=${accepts.includes('prompt') ? 'yes' : 'no'} / codex opt-in=${accepts.includes('codex') ? 'yes' : 'no'}`,
   });
   const text = lines.join('\n');
-  return { text: redactSecrets(text), data: { label, hostname, platform, account, codex, git, syncLast, failures, todoCount, promptOptin: accepts.includes('prompt'), codexOptin: accepts.includes('codex'), sharedMemory, checkedAt: new Date().toISOString() } };
+  return { text: redactSecrets(text), data: { label, hostname, platform, account, codex, git, syncLast, failures, todoCount, promptOptin: accepts.includes('prompt'), codexOptin: accepts.includes('codex'), sharedMemory, knowledge, checkedAt: new Date().toISOString() } };
 }
 
 export async function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, spawnImpl = spawn, readOnly = false, onStart, resumeSessionId, resumeMailId, drivenByHub = false, home, setTimer = setTimeout, clearTimer = clearTimeout }) {

@@ -751,7 +751,7 @@ export async function syncKnowledge({ targetHome = home, forced = force, preview
   const stateFile = path.join(targetHome, '.claude', '.knowledge-sync-state.json');
   let previous;
   try { previous = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
-  if (!forced && previous?.last && now - new Date(previous.last) < 24 * 60 * 60 * 1000) return;
+  if (!forced && previous?.last && fs.existsSync(path.join(targetHome, '.claude', 'knowledge', 'production-sales', '00_INDEX.md')) && now - new Date(previous.last) < 24 * 60 * 60 * 1000) return;
   try {
     const result = await install({ home: targetHome, ...(receiver ? { source: false } : {}), emit });
     fs.mkdirSync(path.dirname(stateFile), { recursive: true });

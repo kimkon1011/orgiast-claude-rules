@@ -3,6 +3,7 @@
 // seisaku-team@ のような共有アカウントは kim の Gmail コネクタからは見えないため、
 // impersonate してこちらから読む。書き込み系は一切持たせない。
 import { getDriveToken } from './lib/drive-auth.mjs';
+import { gwsFetch } from './lib/gws-proxy.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
@@ -60,7 +61,7 @@ async function gmail(token, path, fetchImpl) {
   return response.json();
 }
 
-export async function searchGmail({ user, query, max = 10, withBody = false, bodyLimit = 4000, pageToken, fetchImpl = globalThis.fetch, getToken = getDriveToken }) {
+export async function searchGmail({ user, query, max = 10, withBody = false, bodyLimit = 4000, pageToken, fetchImpl = gwsFetch, getToken = getDriveToken }) {
   const token = await getToken({ scope: SCOPE, impersonate: user, signal: AbortSignal.timeout(20_000) });
   const list = await gmail(token, `/messages?q=${encodeURIComponent(query)}&maxResults=${Math.min(100, max)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`, fetchImpl);
   const results = [];

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { getDriveToken } from './lib/drive-auth.mjs';
+import { channelRequest, gwsFetch, GWS_MARKER } from './lib/gws-proxy.mjs';
 import { isKimOperated } from './lib/kim-operated.mjs';
 import { keyserveSecret, requireKeyservePcId, keyserveAuthHeaders } from './keyserve-auth.mjs';
 import { CASE_ID, resumeText } from './lib/case-handoff.mjs';
@@ -50,7 +51,7 @@ export async function runSelfcheck({ home = process.env.ORGIAST_HOME || os.homed
   }
   const readEnv = name => parseEnvText(optional(path.join(base, name)) || '');
   async function get(url, headers = {}) {
-    const response = await fetchImpl(url, { method: 'GET', headers, redirect: 'error', signal: AbortSignal.timeout(20_000) });
+    const response = await gwsFetch(url, { method: 'GET', headers, redirect: 'error', signal: AbortSignal.timeout(20_000) }, { home, env, fetchImpl });
     if (!response.ok) throw Error(`HTTP ${response.status}: ${await response.text()}`);
     return response.json();
   }
@@ -115,7 +116,12 @@ export async function runSelfcheck({ home = process.env.ORGIAST_HOME || os.homed
   const statePath = path.join(base, 'seisaku-gmail-token.json');
   async function googleToken(service, scope) {
     const key = optional(keyPath), relay = service === 'Gmail' ? optional(statePath) : null;
-    if (key === null && relay === null) throw absent(`${service}: SA鍵${service === 'Gmail' ? '・Gmail token relay' : ''}未配布（${keyPath}）`);
+    if (key === null) {
+      const credential = remember(keyserveSecret(home, env));
+      if (!credential) throw absent(`${service}: keyserve enrollment credential missing`);
+      requireKeyservePcId(home, env);
+      return GWS_MARKER;
+    }
     if (key !== null) remember(JSON.parse(key).private_key);
     if (relay !== null) remember(JSON.parse(relay).secret);
     return remember(await getToken({ keyPath, statePath, impersonate: 'seisaku-team@orgiast.jp', scope, fetchImpl, signal: AbortSignal.timeout(20_000) }));
@@ -124,7 +130,8 @@ export async function runSelfcheck({ home = process.env.ORGIAST_HOME || os.homed
     const token = await googleToken('Gmail', 'https://www.googleapis.com/auth/gmail.readonly');
     const data = await get('https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=1', { Authorization: `Bearer ${token}` });
     if (!Array.isArray(data.messages) && data.resultSizeEstimate !== 0) throw Error('Gmail: invalid messages response');
-    return `messages.list 読取成功 / ${data.messages?.length || 0} 件（本文非表示）`;
+    if (data.messages?.[0]?.id) await get(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(data.messages[0].id)}?format=metadata`, { Authorization: `Bearer ${token}` });
+    return `${token === GWS_MARKER ? 'enroll API / ' : ''}messages.list/get 読取成功 / ${data.messages?.length || 0} 件（本文非表示）`;
   });
   await check('Drive / seisaku-team@orgiast.jp / API', async () => {
     // Existing DWD grants drive, not drive.readonly (docs/drive-oldfile-trash-route.md).
@@ -132,7 +139,8 @@ export async function runSelfcheck({ home = process.env.ORGIAST_HOME || os.homed
     const token = await googleToken('Drive', 'https://www.googleapis.com/auth/drive');
     const data = await get('https://www.googleapis.com/drive/v3/files?pageSize=1&fields=files(id)&q=trashed%3Dfalse', { Authorization: `Bearer ${token}` });
     if (!Array.isArray(data.files)) throw Error('Drive: invalid files response');
-    return `files.list 読取成功 / ${data.files.length} 件（内容非表示）`;
+    if (data.files[0]?.id) await get(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(data.files[0].id)}?fields=id,name`, { Authorization: `Bearer ${token}` });
+    return `${token === GWS_MARKER ? 'enroll API / ' : ''}files.list/get 読取成功 / ${data.files.length} 件（内容非表示）`;
   });
   await check('Discord / Bot / メッセージ履歴', async () => {
     const token = remember(env.DISCORD_BOT_TOKEN?.trim() || optional(path.join(base, 'orgiast-discord-bot-token.txt'))?.trim());
@@ -146,7 +154,13 @@ export async function runSelfcheck({ home = process.env.ORGIAST_HOME || os.homed
     if (!Array.isArray(messages)) throw Error('Discord: invalid messages response');
     return `#${channel.name}（${channel.id}） / ${messages.length} 件（本文非表示、このチャンネルのみ検証）`;
   });
-  await check('LINE / 取り込み済みローカル履歴', () => {
+  await check('LINE / 共有API・取り込み済み履歴', async () => {
+    if (keyserveSecret(home, env)) {
+      const data = await channelRequest('line', { query: { mode: 'history', limit: '1' }, home, env, fetchImpl });
+      if (!Array.isArray(data.messages) || !data.messages.length || typeof data.messages[0].text !== 'string' || !data.messages[0].text) throw Error('LINE shared history: no readable message');
+      if (!Number.isFinite(data.ageSeconds) || data.ageSeconds > 7200) throw Error(`LINE shared history stale: ${data.syncedAt}`);
+      return `enroll API / ${data.messages.length} 件 / 同期=${data.syncedAt} / 最終発言時刻=${data.messages[0].ts}（本文非表示、ライブ受信は未検証）`;
+    }
     const store = env.LINE_STORE_DIR || path.join(base, 'line-openchat');
     let names;
     try { names = fs.readdirSync(store); } catch (error) { if (error.code === 'ENOENT') throw absent(`${store}: LINE履歴の取り込み経路なし`); throw error; }

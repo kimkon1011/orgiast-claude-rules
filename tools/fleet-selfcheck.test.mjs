@@ -33,6 +33,11 @@ function network(calls) {
     const url = new URL(raw); calls.push({ url: url.href, options });
     assert.equal(options.method, 'GET');
     assert.equal(options.body, undefined);
+    if (url.pathname === '/api/line') return Response.json({ messages: [{ text:'private chat', ts:1793577600000 }], syncedAt:new Date().toISOString(), ageSeconds:0 });
+    if (url.pathname === '/api/gws') {
+      const data = url.searchParams.get('service') === 'gmail' ? { messages:[{id:'private-mail'}] } : { files:[{id:'private-file'}] };
+      return Response.json({status:200,body:Buffer.from(JSON.stringify(data)).toString('base64')});
+    }
     if (url.searchParams.get('mode') === 'catalog') return Response.json({ cases: [
       { id: 'C0001', name: 'old', updatedAt: '2026-01-01' }, { id: 'C0039', name: '鹿沼案件', updatedAt: '2026-10-30' }] });
     if (url.searchParams.get('mode') === 'resume') { assert.equal(url.searchParams.get('caseId'), 'C0039'); return Response.json({ state: '引継ぎ', log: 'ログ' }); }
@@ -53,7 +58,7 @@ test('complete selfcheck performs only GET reads, preserves files and reports by
   assert.match(result.markdown, /鹿沼案件.*C0039.*bytes/);
   assert.match(result.markdown, /ライブ受信.*未検証/);
   assert.ok(!/private message|private chat|private-mail|private-file|secret-google|secret-hmac|secret-discord/.test(result.markdown));
-  assert.equal(calls.length, 6);
+  assert.equal(calls.length, 9);
   assert.equal(tokenCalls.length, 2);
   assert.deepEqual(snapshot(f.home), before);
 });
@@ -70,6 +75,7 @@ test('one service failure keeps other checks and original error text while redac
 test('missing routes are distinct from corrupt credentials and empty or malformed history', async t => {
   const f = fixture(t);
   fs.rmSync(f.env.GOOGLE_SA_KEY);
+  fs.rmSync(path.join(f.home, '.claude/keyserve.env'));
   fs.rmSync(path.join(f.home, '.claude/orgiast-discord-bot-token.txt'));
   fs.rmSync(path.join(f.home, '.claude/line-openchat'), { recursive: true });
   let result = await runSelfcheck({ ...f, fetchImpl: network([]), getToken: async () => assert.fail('no token request without route') });
@@ -79,14 +85,15 @@ test('missing routes are distinct from corrupt credentials and empty or malforme
   result = await runSelfcheck({ ...f, fetchImpl: network([]), getToken: async () => assert.fail('invalid credentials') });
   for (const service of ['Gmail', 'Drive', 'LINE']) assert.equal(result.rows.find(row => row.item.startsWith(service)).status, '失敗');
 });
-test('Gmail relay is attempted without an SA key; Drive is independently unavailable', async t => {
+test('enroll API replaces legacy Gmail token relay and also supplies Drive without a key', async t => {
   const f = fixture(t); fs.rmSync(f.env.GOOGLE_SA_KEY);
   f.put('.claude/seisaku-gmail-token.json', JSON.stringify({ secret: 'relay-secret' }));
   let calls = 0;
   const result = await runSelfcheck({ ...f, fetchImpl: network([]), getToken: async args => { calls++; assert.equal(args.statePath, path.join(f.home, '.claude/seisaku-gmail-token.json')); throw Error('relay-secret: OAuth consent required'); } });
-  assert.equal(calls, 1);
-  assert.equal(result.rows.find(row => row.item.startsWith('Gmail')).detail, '[REDACTED]: OAuth consent required');
-  assert.equal(result.rows.find(row => row.item.startsWith('Drive')).status, '経路なし');
+  assert.equal(calls, 0);
+  assert.equal(result.rows.find(row => row.item.startsWith('Gmail')).status, '読めた');
+  assert.match(result.rows.find(row => row.item.startsWith('Gmail')).detail, /enroll API/);
+  assert.equal(result.rows.find(row => row.item.startsWith('Drive')).status, '読めた');
 });
 test('catalog/resume failure is visible without file creation or skipping communication probes', async t => {
   const f = fixture(t), before = snapshot(f.home);

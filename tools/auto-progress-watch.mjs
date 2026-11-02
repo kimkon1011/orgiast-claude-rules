@@ -459,7 +459,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     try {
       const rowOwner = ownerOf(row);
       const pcOwner = io.localOwner ?? (() => { try { return resolveOwner({ home }); } catch { return ''; } })();
-      if (rowOwner && pcOwner && rowOwner.toLowerCase() === pcOwner.toLowerCase()) {
+      if (delivery?.delivered !== 'toast' && rowOwner && pcOwner && rowOwner.toLowerCase() === pcOwner.toLowerCase()) {
         const toastText = `✅ 自動進行が完了: ${String(row.promise ?? '').slice(0, 120)}`;
         (io.sendOwnerToast ?? sendOwnerToast)(toastText, { home });
       }
@@ -528,7 +528,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       try {
         const rowOwner = ownerOf(group.rows[0]);
         const pcOwner = io.localOwner ?? (() => { try { return resolveOwner({ home }); } catch { return ''; } })();
-        if (rowOwner && pcOwner && rowOwner.toLowerCase() === pcOwner.toLowerCase()) {
+        if (delivery?.delivered !== 'toast' && rowOwner && pcOwner && rowOwner.toLowerCase() === pcOwner.toLowerCase()) {
           const toastText = `✅ 自動進行が完了 (ほか ${group.rows.length - 1}件): ${String(group.rows[0].promise ?? '').slice(0, 80)}`;
           (io.sendOwnerToast ?? sendOwnerToast)(toastText, { home });
         }

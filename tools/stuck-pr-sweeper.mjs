@@ -113,6 +113,19 @@ async function notify(pr, record, home) {
   return sessionId;
 }
 
+async function closeNotification(record, home, status) {
+  if (!record.notificationId) return;
+  if (record.notificationId.startsWith('ki-') && fs.existsSync(path.join(root, 'tools/kim-inbox.mjs'))) {
+    const { listItems, dropItem } = await import('./kim-inbox.mjs');
+    if (listItems(home).some(item => item.id === record.notificationId && item.status === 'open')) dropItem(home, record.notificationId, `PR ${status}`);
+  } else if (record.notificationId.startsWith('stuck-pr:')) {
+    const { readLedger, writeLedger, ledgerFile, applyPromise } = await import('./auto-progress-ledger.mjs');
+    const file = ledgerFile(home), rows = readLedger(file);
+    const row = rows.findLast(x => x.sessionId === record.notificationId);
+    if (row && row.status !== 'done') writeLedger(file, applyPromise(rows, { ...row, status: 'done', doneAt: new Date().toISOString(), ts: new Date().toISOString() }));
+  }
+}
+
 export async function sweep({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), dryRun = false, io = {}, config = repositories() } = {}) {
   if (!dryRun && (io.label ?? resolveFleetLabel(home)) !== config.runner) return { skipped: 'not-designated-runner', items: [] };
   const file = path.join(home, '.claude/state/stuck-pr-sweeper.json');
@@ -141,7 +154,7 @@ export async function sweep({ home = process.env.ORGIAST_HOME || os.homedir(), n
           const reasons = classify(pr, now);
           let rec = state.prs[key];
           if (pr.state !== 'OPEN') {
-            if (rec && !dryRun) { rec.status = pr.state === 'MERGED' ? 'merged' : 'closed'; rec.closedAt = new Date(now).toISOString(); persist(); }
+            if (rec && !dryRun) { rec.status = pr.state === 'MERGED' ? 'merged' : 'closed'; rec.closedAt = new Date(now).toISOString(); await (io.closeNotification || closeNotification)(rec, home, rec.status); persist(); }
             continue;
           }
           if (pr.isDraft || pr.isCrossRepository) continue;
@@ -156,7 +169,7 @@ export async function sweep({ home = process.env.ORGIAST_HOME || os.homedir(), n
             else command(process.execPath, [path.join(root, 'tools/pr-merge.mjs'), String(pr.number), '--repo', cwd], { timeout: 180000 });
             const after = await (io.view || view)(repo, pr.number);
             if (after.state !== 'MERGED') throw new Error('merge read-back was not MERGED');
-            rec.status = 'merged'; rec.closedAt = new Date(now).toISOString(); persist(); continue;
+            rec.status = 'merged'; rec.closedAt = new Date(now).toISOString(); await (io.closeNotification || closeNotification)(rec, home, rec.status); persist(); continue;
           }
           // A newly pushed head must finish CI before charging another attempt or escalating.
           if ((pr.statusCheckRollup || []).some(pending) && !reasons.some(r => ['open-24h', 'auto-merge-12h'].includes(r))) { rec.status = 'waiting-ci'; persist(); continue; }

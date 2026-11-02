@@ -87,3 +87,22 @@ test('active PID locks are not stolen', t => {
   const f = fixture(t), file = path.join(f.home, 'lock'); const release = acquireLock(file);
   assert.equal(acquireLock(file), null); release(); assert.equal(fs.existsSync(file), false);
 });
+
+test('repair budget is four per sweep and persists even failed invocations', async t => {
+  const f = fixture(t);
+  f.io.list = () => Array.from({length: 6}, (_, i) => ({...failure(),number:i+1}));
+  f.io.view = (repo, number) => ({...failure(),number});
+  let calls=0; f.io.repair = () => { calls++; throw new Error('worker failed'); };
+  await f.run(); assert.equal(calls,4);
+  assert.equal(Object.values(f.state.prs).reduce((n,r)=>n+r.attempts.length,0),4);
+});
+test('attempts survive reopening the real state file', async t => {
+  const f=fixture(t); delete f.io.readState; delete f.io.saveState;
+  await f.run(); await f.run({now:now+3*HOUR});
+  const saved=JSON.parse(fs.readFileSync(path.join(f.home,'.claude/state/stuck-pr-sweeper.json'),'utf8'));
+  assert.equal(saved.prs['kimkon1011/example#1'].attempts.length,2);
+});
+test('green checks without auto-merge never cause an automatic merge', async t => {
+  const f=fixture(t); f.setPr({...base(),createdAt:ago(25),mergeable:'MERGEABLE',statusCheckRollup:[{status:'COMPLETED',conclusion:'SUCCESS'}]});
+  f.io.merge=()=>assert.fail('no merge authorization'); await f.run(); assert.equal(f.counts().repairs,1);
+});

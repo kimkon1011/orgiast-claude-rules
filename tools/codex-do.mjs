@@ -17,6 +17,7 @@ import { classifyTaskKind, CODEX_KINDS, TASK_KINDS } from './lib/task-kind.mjs';
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { EX_TEMPFAIL, budgetSummary, claudeFile, decideCodexGate, deferredPayload, isUsageLimitText, parseUsageLimitUntil, providerLimitedUntil, writeCodexCooldownFile } from './lib/executor-gate.mjs';
 import { coolingBackendNames, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
+import { scanDiffForClaudeApi } from './app-llm-cost-gate.mjs';
 
 // Windows の shell 経由起動では引数がクォートされないため、この値に空白を入れると
 // -p の値が割れて Gemini が使い方(ヘルプ)を出して終わる。空白を入れないこと。
@@ -942,7 +943,11 @@ if (mainMemory || related.length || claudeMd) {
   for (const item of related.slice(0, 3)) context.push(`\n## 関連 memory: ${item.name}\n${item.body}`);
   if (claudeMd) context.push(`\n## 対象プロジェクト CLAUDE.md\n${claudeMd}`);
 }
-const prompt = `${context.join('\n')}\n\n## 実装指示\n${instruction}`.trim();
+// Codex / cheap-code に渡す指示には、context の有無に関係なく Claude API 禁止の固定ブロックを
+// 必ず先頭に付ける（app-llm-cost-gate は Claude Code の PreToolUse でしか効かないため、
+// 委譲先の指示としてここで強制する。ONBOARDING §2.8.0）。
+const GLOBAL_PROHIBITION = '## 全プロジェクト共通の禁止事項\n- アプリ（デプロイ済み・GitHub Actions・cron・GAS・スクリプト）が呼ぶ LLM/検索に Claude API（@anthropic-ai/sdk・api.anthropic.com・claude-* モデル）を新しく使わない。他AI（Gemini・Groq・DeepSeek・OpenRouter・Perplexity・Grok・Kimi 等）を既定にし、Claude へ自動フォールバックする分岐も書かない（ONBOARDING §2.8.0）。';
+const prompt = `${GLOBAL_PROHIBITION}\n\n${context.join('\n')}\n\n## 実装指示\n${instruction}`.trim();
 // WSL 実機に触るのは auto かつ明示指定が無い時だけ。--dry-run も実際の実行計画を見せる
 // ものなので probe 自体はする(モデルだけ変わって中身は実行しないので副作用は無い)。
 const chatgptAuth = (!model && lane === 'auto') ? probeChatGptAuth({ forceNative }) : null;
@@ -1462,6 +1467,21 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
   }
 }
 
+// 実行後の作業ツリー（git diff HEAD ＋ 未追跡ファイル全行）を unified diff 文字列へ合成する。
+// 未追跡ファイルは `--- /dev/null\n+++ b/<path>` の疑似 hunk として scanDiffForClaudeApi に渡す。
+function collectWorktreeDiffForScan(cwd) {
+  const tracked = spawnSync('git', ['-C', cwd, 'diff', 'HEAD'], { windowsHide: true, encoding: 'utf8' });
+  const parts = [String(tracked.stdout || '')];
+  const untracked = spawnSync('git', ['-C', cwd, 'ls-files', '--others', '--exclude-standard'], { windowsHide: true, encoding: 'utf8' });
+  for (const file of String(untracked.stdout || '').split(/\r?\n/)) {
+    if (!file.trim()) continue;
+    let content = '';
+    try { content = fs.readFileSync(path.join(cwd, file), 'utf8'); } catch { continue; }
+    parts.push(`--- /dev/null\n+++ b/${file}\n${content.split(/\r?\n/).map(line => `+${line}`).join('\n')}`);
+  }
+  return parts.join('\n');
+}
+
 const secs = (Date.now() - started) / 1000;
 const reportedFallbackBackend = fallbackBackend ?? lastBackend;
 const diff = spawnSync('git', ['-C', cwd, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' });
@@ -1493,6 +1513,22 @@ if (executorName === 'fallback') {
   recordUsage(result, `${reportedFallbackBackend?.name ?? 'unknown'}/${reportedFallbackBackend?.model ?? 'unknown'}`, secs, 'fallback', 1, fallbackChain);
 }
 
+// 実行後スキャン: Codex / cheap-code が書いたコードにも Claude API 禁止を効かせる。
+// app-llm-cost-gate は Claude Code の PreToolUse でしか動かないため、委譲先の出力をここで検査する。
+// 違反があれば終了コード 3（deferred=75 はそのまま）。--review / --kind investigate / --dry-run では実行しない。
+let gateBlocked = false;
+if (!review && !dryRun && taskKind !== 'investigate' && isInsideGitRepo(cwd) && result) {
+  try {
+    const violations = scanDiffForClaudeApi(collectWorktreeDiffForScan(cwd));
+    if (violations.length) {
+      gateBlocked = true;
+      console.error('[codex-do] ⛔ app-llm-cost-gate: アプリに Claude API の呼び出しが追加されました（ONBOARDING §2.8.0）。他AIに置き換えてください:');
+      for (const violation of violations) console.error(`  ${violation.file}: ${violation.line}`);
+    }
+  } catch (error) {
+    console.error(`[codex-do] app-llm-cost-gate スキャン失敗（続行）: ${error?.message ?? error}`);
+  }
+}
 console.log(`[codex-do] executor=${executorName}${executorName === 'fallback' ? `:${reportedFallbackBackend?.name ?? 'unknown'} (理由: ${fallbackReason})` : ''}`);
-process.exit(result?.status ?? 1);
+process.exit(gateBlocked ? (result?.status === EX_TEMPFAIL ? EX_TEMPFAIL : 3) : (result?.status ?? 1));
 }

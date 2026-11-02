@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { scanDiffForClaudeApi } from './app-llm-cost-gate.mjs';
 
 const hook = path.resolve('tools/app-llm-cost-gate.mjs');
 function fixture(t) {
@@ -76,3 +77,29 @@ test('off bypasses', t => assert.equal(fixture(t).run('Edit', edit, { APP_LLM_CO
 test('malformed input fails open', () => { const r = spawnSync(process.execPath, [hook], { input: '{oops', encoding: 'utf8' }); assert.equal(r.status, 0); assert.equal(r.stdout, ''); });
 test('unreadable workflow segment is skipped', t => assert.equal(fixture(t).run('Bash', { command: 'gh workflow run absent.yml -f count=1000' }), undefined));
 test('5-sample estimate passes', t => { const f = fixture(t); f.say('[COST-ESTIMATE: 1件 $0.017(5件実測)×246件=$4.182 / 上限$5]'); assert.equal(f.run('Bash', { command: 'gh workflow run batch.yml -f limit=246' }), undefined); });
+
+// --- scanDiffForClaudeApi（Codex / cheap-code が書いたコードの検査） ---
+function diffWith(file, addedLines) {
+  return `diff --git a/${file} b/${file}\n--- a/${file}\n+++ b/${file}\n@@ -1 +1,${addedLines.length} @@\n${addedLines.map(line => `+${line}`).join('\n')}\n`;
+}
+test('scanDiffForClaudeApi: 追加行の SDK import を検出', () => {
+  const violations = scanDiffForClaudeApi(diffWith('app.ts', ['import Anthropic from "@anthropic-ai/sdk"']));
+  assert.deepEqual(violations, [{ file: 'app.ts', line: 'import Anthropic from "@anthropic-ai/sdk"' }]);
+});
+test('scanDiffForClaudeApi: 削除行だけなら検出しない', () => {
+  const diff = 'diff --git a/app.ts b/app.ts\n--- a/app.ts\n+++ b/app.ts\n@@ -1 +1 @@\n-import Anthropic from "@anthropic-ai/sdk"\n';
+  assert.deepEqual(scanDiffForClaudeApi(diff), []);
+});
+test('scanDiffForClaudeApi: claude モデル既定値の追加を検出', () => {
+  const violations = scanDiffForClaudeApi(diffWith('app.ts', ['const model = process.env.M ?? "claude-haiku-5-5"']));
+  assert.equal(violations.length, 1);
+  assert.match(violations[0].line, /claude-haiku-5-5/);
+});
+test('scanDiffForClaudeApi: 3社挙げた理由行があれば除外', () => {
+  const violations = scanDiffForClaudeApi(diffWith('app.ts', ['// LLM-PROVIDER-REASON: Gemini 一致1/3, Perplexity 一致2/5, Grok 一致1/5 で品質不足', 'import Anthropic from "@anthropic-ai/sdk"']));
+  assert.deepEqual(violations, []);
+});
+test('scanDiffForClaudeApi: foo.test.ts と README.md は除外', () => {
+  const violations = scanDiffForClaudeApi(diffWith('foo.test.ts', ['import Anthropic from "@anthropic-ai/sdk"']) + '\n' + diffWith('README.md', ['api.anthropic.com を使う']));
+  assert.deepEqual(violations, []);
+});

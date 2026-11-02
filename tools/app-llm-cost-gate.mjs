@@ -4,10 +4,66 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { readAssistantText } from './lib/assistant-text.mjs';
+import { isEntry } from './is-entry.mjs';
 
 const markers = ['@anthropic-ai/sdk', 'new Anthropic(', 'api.anthropic.com', 'anthropic.messages.create', 'web_search_20'];
 const providerMessage = 'アプリの LLM/検索は他AIが既定（ONBOARDING §2.8.0）。Web検索付き収集=Gemini Flash グラウンディング、分類・抽出・要約=Groq/DeepSeek/Gemini Flash。Claude API を使うなら `// LLM-PROVIDER-REASON: <比較した他AI 3社以上の名前と実測値>` を書く（1社だけ試して Claude に戻すのは禁止）。Claude への自動フォールバックは禁止。落とす先は別の他AI、全滅なら止めて通知（§2.8.0 5）';
 const bulkMessage = '一括実行の前に、1〜10件で1件あたり実費を実測し、[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z] を書く。自動リロードは予算上限ではない。予算上限はコード側で env (例 BULK_BUDGET_USD) により自動停止させる（§2.8.0）';
+
+// 理由行には比較した他AIを3社以上書く（1社だけ試して Claude に戻すのは禁止・§2.8.0 1-2）。
+// evaluate と scanDiffForClaudeApi の両方から使う（重複実装しない）。
+const otherAis = /gemini|perplexity|sonar|grok|xai|kimi|moonshot|deepseek|groq|mistral|glm|openrouter|qwen|cerebras/gi;
+const reasonLines = (text) => [...String(text || '').matchAll(/(?:\/\/|\/\*|#|<!--)\s*LLM-PROVIDER-REASON:\s*([^\r\n]+)/g)].map(m => m[1]);
+const enough = (line) => new Set((line.match(otherAis) || []).map(s => s.toLowerCase().replace(/^sonar$/, 'perplexity').replace(/^xai$/, 'grok').replace(/^moonshot$/, 'kimi'))).size >= 3;
+
+const claudeModel = /["'`]claude-(?:haiku|sonnet|opus|fable)[\w.-]*["'`]/gi;
+const anthropicLiteral = /["'`]anthropic["'`]/gi;
+const defaultContextBefore = (text, index, allowTernary = false) => {
+  const line = text.slice(0, index).split(/\r?\n/).at(-1) || '';
+  return !/\|\s*$/.test(line) && !/\bcase\s*$/.test(line)
+    && (allowTernary ? /(?:=|:|\?\??|\|\||\breturn|\bdefault)\s*$/ : /(?:=|:|\?\?|\|\||\breturn|\bdefault)\s*$/).test(line);
+};
+const contextualLiterals = (text, pattern, allowTernary = false) => {
+  const matches = [];
+  for (const match of String(text || '').matchAll(pattern)) {
+    if (defaultContextBefore(String(text || ''), match.index, allowTernary)) matches.push(match[0].toLowerCase());
+  }
+  return matches;
+};
+// テキストに「Claude API の呼び出しが新しく加わった」違反が含まれるか（old と比較）。
+// scanDiffForClaudeApi は old 相当が無い（old=''＝追加行を全て新規）ため、同じ関数を共用できる。
+function newlyAddsProviderViolation(newText, oldText = '') {
+  if (markers.some(word => String(newText || '').includes(word) && !String(oldText || '').includes(word))) return true;
+  const addedModel = contextualLiterals(newText, claudeModel);
+  const oldModel = new Set(contextualLiterals(oldText, claudeModel));
+  if (addedModel.some(value => !oldModel.has(value))) return true;
+  const addedAnthropic = contextualLiterals(newText, anthropicLiteral, true);
+  const oldAnthropic = new Set(contextualLiterals(oldText, anthropicLiteral, true));
+  return addedAnthropic.some(value => !oldAnthropic.has(value));
+}
+// Codex / cheap-code が書いた追加コードを検査するための diff スキャン。
+// app-llm-cost-gate は Claude Code の PreToolUse(Write/Edit/MultiEdit) でしか動かないため、
+// 委譲先の出力はここで unified diff に対して同じ基準を適用する。
+// 入力: `git diff HEAD` の文字列（未追跡ファイルは `--- /dev/null\n+++ b/<path>` の疑似 hunk を組み立てて渡す）。
+// 戻り値: 違反の配列 [{ file, line(追加行の内容 先頭120字) }]。違反なしは []。
+export function scanDiffForClaudeApi(diffText) {
+  const excluded = (file) => /(?:^|\/)(?:orgiast-claude-rules|\.claude)(?:\/|$)|\.test\.[^/]+$|\.md$/i.test(file);
+  const violations = [];
+  const flagged = new Set();
+  const exempt = new Set();
+  let file = null;
+  for (const rawLine of String(diffText || '').split(/\r?\n/)) {
+    const header = rawLine.match(/^diff --git a\/.* b\/(.*)$/);
+    if (header) { file = header[1].replaceAll('\\', '/'); continue; }
+    // `+++` ヘッダは追加行として扱わない。それ以外の `+` 始まりだけを見る。
+    if (file === null || /^\+{3} /.test(rawLine) || !rawLine.startsWith('+')) continue;
+    const line = rawLine.slice(1);
+    if (excluded(file) || flagged.has(file)) continue;
+    if (reasonLines(line).some(enough)) { exempt.add(file); continue; }
+    if (newlyAddsProviderViolation(line, '')) { flagged.add(file); violations.push({ file, line: line.slice(0, 120) }); }
+  }
+  return violations.filter((v) => !exempt.has(v.file));
+}
 
 function estimateMatches(text, count) {
   const amount = '(\\d+(?:\\.\\d+)?)';
@@ -32,37 +88,8 @@ export function evaluate(input) {
     if (!Array.isArray(edits)) return;
     let existing = '';
     try { existing = fs.readFileSync(file, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    // 理由行には比較した他AIを3社以上書く（1社だけ試して Claude に戻すのは禁止・§2.8.0 1-2）
-    const reasonLines = (text) => [...String(text || '').matchAll(/(?:\/\/|\/\*|#|<!--)\s*LLM-PROVIDER-REASON:\s*([^\r\n]+)/g)].map(m => m[1]);
-    const otherAis = /gemini|perplexity|sonar|grok|xai|kimi|moonshot|deepseek|groq|mistral|glm|openrouter|qwen|cerebras/gi;
-    const enough = (line) => new Set((line.match(otherAis) || []).map(s => s.toLowerCase().replace(/^sonar$/, 'perplexity').replace(/^xai$/, 'grok').replace(/^moonshot$/, 'kimi'))).size >= 3;
     if ([existing, ...edits.map(e => e.new_string)].some(t => reasonLines(t).some(enough))) return;
-    const claudeModel = /["'`]claude-(?:haiku|sonnet|opus|fable)[\w.-]*["'`]/gi;
-    const defaultContextBefore = (text, index, allowTernary = false) => {
-      const line = text.slice(0, index).split(/\r?\n/).at(-1) || '';
-      return !/\|\s*$/.test(line) && !/\bcase\s*$/.test(line)
-        && (allowTernary ? /(?:=|:|\?\??|\|\||\breturn|\bdefault)\s*$/ : /(?:=|:|\?\?|\|\||\breturn|\bdefault)\s*$/).test(line);
-    };
-    const contextualLiterals = (text, pattern, allowTernary = false) => {
-      const matches = [];
-      for (const match of String(text || '').matchAll(pattern)) {
-        if (defaultContextBefore(String(text || ''), match.index, allowTernary)) matches.push(match[0].toLowerCase());
-      }
-      return matches;
-    };
-    const newlyAddsClaudeModel = (edit) => {
-      const added = contextualLiterals(edit.new_string, claudeModel);
-      const old = new Set(contextualLiterals(edit.old_string, claudeModel));
-      return added.some(value => !old.has(value));
-    };
-    const anthropicLiteral = /["'`]anthropic["'`]/gi;
-    const newlyAddsAnthropicDefault = (edit) => {
-      const added = contextualLiterals(edit.new_string, anthropicLiteral, true);
-      const old = new Set(contextualLiterals(edit.old_string, anthropicLiteral, true));
-      return added.some(value => !old.has(value));
-    };
-    if (edits.some(e => markers.some(word => String(e.new_string || '').includes(word) && !String(e.old_string || '').includes(word))
-      || newlyAddsClaudeModel(e) || newlyAddsAnthropicDefault(e))) return providerMessage;
+    if (edits.some(e => newlyAddsProviderViolation(e.new_string, e.old_string))) return providerMessage;
   }
   if (!['Bash', 'PowerShell'].includes(tool) || typeof args.command !== 'string') return;
   // Inspect each shell segment without executing the command.
@@ -120,10 +147,14 @@ export function evaluate(input) {
   if (blockedSegment) return bulkMessage;
 }
 
-try {
-  const raw = await readStdinWithTimeout();
-  if (raw) {
-    const reason = evaluate(JSON.parse(raw));
-    if (reason) console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } }));
-  }
-} catch { /* Fail open on malformed input or unavailable files. */ }
+// フックとして起動されたときだけ stdin を読む。tools/codex-do.mjs から import された場合は
+// 読み込みを走らせない（codex-do の prompt 受け渡しに干渉するため）。
+if (isEntry(import.meta.url)) {
+  try {
+    const raw = await readStdinWithTimeout();
+    if (raw) {
+      const reason = evaluate(JSON.parse(raw));
+      if (reason) console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } }));
+    }
+  } catch { /* Fail open on malformed input or unavailable files. */ }
+}

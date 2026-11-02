@@ -118,6 +118,14 @@ test('--prompt-file に完了条件が無ければ警告するがブロックし
   assert.match(result.stderr, /\[codex-do\] 警告: 指示ファイルに完了条件がありません/);
 });
 
+test('Codex/cheap-code に渡す prompt の先頭に全プロジェクト共通の禁止事項が常に入る', () => {
+  const result = run(['--dry-run', 'ツールを実装する']);
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /## 全プロジェクト共通の禁止事項/);
+  assert.match(result.stdout, /claude-\* モデル/);
+  assert.ok(result.stdout.indexOf('## 全プロジェクト共通の禁止事項') < result.stdout.indexOf('ツールを実装する'));
+});
+
 test('バッククォート・$()・改行を含む指示が欠落せず原文のまま届く', () => {
   // argv で渡すとシェルがコマンド置換として実行し、仕様の一部が消えたプロンプトが
   // Codex に届く(2026-08-26 実害)。ファイル経路ではそれが起きないことを固定する。

@@ -126,3 +126,57 @@ test('done-dmログは本文を8000字まで保存する', t => {
   assert.equal(row.text, message);
   assert.equal(row.channel, 'discord');
 });
+
+test('再開上限の失敗は最近の活動やAI判定に優先してstalledになる', async () => {
+  const { MAX_RESUMES } = await import('./auto-progress-watch.mjs');
+  const now = Date.now();
+  const evidence = { any: true, transcript: { count: 1, lastAt: now, snippets: ['done'] }, files: { names: [] }, runs: { names: [] } };
+  for (const resumeOutcome of ['error: timeout (claude exit null):', 'timeout: expired', 'blocked: 成果記録なし']) {
+    const result = judge({ resumeCount: MAX_RESUMES, resumeOutcome }, evidence, now, { askLlm() { assert.fail('上限到達時はAIを呼ばない'); } });
+    assert.equal(result.verdict, 'stalled');
+    assert.match(result.reason, new RegExp(`自動再開が${MAX_RESUMES}回失敗`));
+    assert.equal(judge({ resumeCount: MAX_RESUMES - 1, resumeOutcome }, evidence, now, { askLlm: () => null }).verdict, 'in_progress');
+  }
+  for (const resumeOutcome of ['progressed: 検証中', 'done: 完了', 'deferred: 実行者なし', 'attempting']) {
+    assert.equal(judge({ resumeCount: MAX_RESUMES, resumeOutcome }, evidence, now, { askLlm: () => null }).verdict, 'in_progress');
+  }
+});
+
+test('timeoutを繰り返した実例は上限到達後にSheetとDMまとめへ一度報告される', async t => {
+  const { MAX_RESUMES } = await import('./auto-progress-watch.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-exhausted-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const now = Date.parse('2026-11-02T00:00:00Z');
+  writeLedger(ledgerFile(home), [{
+    sessionId: '28c97712-092f-42d5-8f40-3efeb5ed3ef3', ts: new Date(now - 4 * 3600000).toISOString(),
+    pc: 'test-pc', user: 'test', owner: 'kim', cwd: home, promise: 'Xの投稿を読み調査結果をまとめます',
+    status: 'resumed', verdict: 'in_progress', reason: '判定AIが使えず様子見', nextKim: 'なし',
+    resumeCount: MAX_RESUMES, resumedAt: new Date(now - 60000).toISOString(),
+    resumeOutcome: 'error: timeout (claude exit null):', reportedKey: `stalled:true:${MAX_RESUMES}`,
+  }]);
+  const sheets = [], messages = [];
+  const io = {
+    clock: () => now, transcriptFiles: [], sheetConfig: () => ({}),
+    transcriptEvidence: () => ({ count: 3, lastAt: now, snippets: ['自動再開の動作'] }),
+    recentFiles: () => ({ names: [], lastAt: 0 }), autoSessionRuns: () => ({ names: [], lastAt: 0 }),
+    askLlm: () => 'in_progress | 動作あり', resume: () => assert.fail('再開上限を超えてはいけない'),
+    postSheet: async (_config, _tab, payload) => sheets.push(payload.row),
+    digestIo: { label: 'test-pc', notify: async text => { messages.push(text); return { delivered: 'dm' }; } },
+  };
+  const summary = await run({ home, now, io });
+  assert.equal(summary.stalled, 1);
+  assert.equal(summary.resumed, 0);
+  assert.equal(summary.reported, 1);
+  assert.deepEqual(summary.errors, []);
+  const row = readLedger(ledgerFile(home))[0];
+  assert.equal(row.status, 'stalled');
+  assert.equal(row.verdict, 'stalled');
+  assert.equal(row.reportedKey, `stalled:true:${MAX_RESUMES}:resume-exhausted`);
+  assert.equal(sheets[0].reason, row.reason);
+  assert.equal(sheets[0].verdict, 'stalled');
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /止まっている 1件/);
+  await run({ home, now, io });
+  assert.equal(sheets.length, 1);
+  assert.equal(messages.length, 1);
+});

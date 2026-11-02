@@ -131,7 +131,17 @@ export function askLlm(prompt, { spawnImpl = spawnSync } = {}) {
   return String(result.stdout || '').trim() || null;
 }
 
+export function exhaustedResumeVerdict(row) {
+  const outcome = String(row.resumeOutcome ?? '').trim();
+  if (!(row.resumeCount >= MAX_RESUMES) || !/^(?:error|timeout|blocked)\b/i.test(outcome)) return null;
+  const summary = redactSecrets(outcome).replace(/\s+/g, ' ').slice(0, 160);
+  return { verdict: 'stalled', reason: `自動再開が${row.resumeCount}回失敗（${summary}）`, source: 'resume-exhausted' };
+}
+
 export function judge(row, evidence, now, io = {}) {
+  // A failed resume writes transcript activity too; it must not reset the stall clock forever.
+  const exhausted = exhaustedResumeVerdict(row);
+  if (exhausted) return exhausted;
   if (!evidence.any) return deterministicVerdict(evidence, now); // 証拠ゼロは LLM に聞くまでもなく stalled
   const prompt = `次は AI セッションが「この後に自動で進める」と宣言した内容と、その後の証拠です。宣言が実行済みなら done、進行中なら in_progress、止まっているなら stalled と判定してください。\n出力は1行のみ: <done|in_progress|stalled> | <15字程度の理由>\n\n${evidenceSummary(row, evidence, now)}`;
   let parsed = null;
@@ -553,7 +563,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     if (verdict.verdict === 'in_progress') { patch(rowKey(row), { verdict: 'in_progress', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason }); summary.inProgress += 1; continue; }
     summary.stalled += 1;
     patch(rowKey(row), { ...((row.resumeCount ?? 0) >= MAX_RESUMES ? { status: 'stalled' } : {}), verdict: 'stalled', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason });
-    let current = { ...row };
+    let current = { ...row, ...((row.resumeCount ?? 0) >= MAX_RESUMES ? { status: 'stalled' } : {}), verdict: verdict.verdict, reason: verdict.reason };
     const resumeEligible = !unattended && !dryRun && summary.resumed < MAX_RESUMES_PER_RUN &&(row.resumeCount ?? 0) < MAX_RESUMES && now - (Date.parse(row.resumedAt || 0) || 0) >= RESUME_INTERVAL_MS
       && row.cwd && (io.cwdExists ?? fs.existsSync)(row.cwd);
     const canResume = resumeEligible && !executorUnavailable;
@@ -592,7 +602,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         summary.resumed += 1;
       }
     }
-    const reportKey = `${verdict.verdict}:${Boolean(current.resumedAt)}:${current.resumeCount ?? 0}`;
+    const reportKey = `${verdict.verdict}:${Boolean(current.resumedAt)}:${current.resumeCount ?? 0}${verdict.source === 'resume-exhausted' ? ':resume-exhausted' : ''}`;
     if (config && current.reportedKey !== reportKey && !dryRun) {
       try { await (io.postSheet ?? postSheet)(config, 'auto-progress', { row: sheetRow(current, verdict, evidence, now) }); patch(rowKey(row), { reportedKey: reportKey }); summary.reported += 1; }
       catch (error) { summary.errors.push(`sheet: ${String(error?.message ?? error).slice(0, 120)}`); } // 次回巡回で再送する

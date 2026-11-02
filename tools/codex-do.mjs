@@ -752,7 +752,8 @@ export function wslCodexLaunchPlan({ distroFound, codexPresent, versionOk, insta
 // provider=codex / secs=1800.28 / chain 無し = 既定 --timeout 1800 秒を予定どおり使い切った行）。
 export function buildUsageRow({
   result, model, seconds, provider = 'codex', attempts = 1, chain = null,
-  timeoutSecs = null, lane = null, escalated = false, promptChars = 0,
+  timeoutSecs = null, preSpawnSecs = null, execSecs = null,
+  lane = null, escalated = false, promptChars = 0,
   origin = null, kind = null, cwd = null, reason = '', now = new Date()
 } = {}) {
   // child.on('error') で spawn 自体に失敗した行は status が数値で残らず、原因は result.error にしか無い。
@@ -778,6 +779,8 @@ export function buildUsageRow({
     attempts,
     ...(Array.isArray(chain) && chain.length ? { chain } : {}),
     ...(Number.isFinite(timeoutSecs) && timeoutSecs > 0 ? { timeoutSecs } : {}),
+    ...(Number.isFinite(preSpawnSecs) && preSpawnSecs >= 0 ? { preSpawnSecs: Number(preSpawnSecs.toFixed(3)) } : {}),
+    ...(Number.isFinite(execSecs) && execSecs >= 0 ? { execSecs: Number(execSecs.toFixed(3)) } : {}),
     secs: Number(seconds.toFixed(3))
   };
 }
@@ -1040,12 +1043,13 @@ function execute(command, commandArgs, options = {}) {
     // stdio を全て pipe にして TTY を渡さない。TTY 付きで起動すると codex が端末入力を
     // 待ったまま眠り続ける(2026-08-26 に 1日00:57 hang した実害)。
     const child = spawn(command, commandArgs, { ...spawnOptions, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const spawnedAtMs = Date.now();
     let settled = false, forceTimer = null;
     const settle = (value) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer); clearTimeout(forceTimer); clearInterval(stallTimer);
-      resolve(value);
+      resolve({ ...value, spawnedAtMs });
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -1116,13 +1120,14 @@ let escalated = false;
 // などの情報行)だけが stderrTail に残り、delegation-health は「全滅」の原因を stderrTail から
 // 特定できない(2026-10-19 実測: fallback 3件の stderrTail は全て無害な情報行だった)。
 let ledgerReason = '';
-function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 1, chain = null) {
+function recordUsage(result, modelName, seconds, provider = 'codex', attempts = 1, chain = null, timing = null) {
   try {
     const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
     const row = buildUsageRow({
       result, model: modelName, seconds, provider, attempts, chain,
       timeoutSecs: timeoutSeconds, lane: selectedLane.reason, escalated,
+      preSpawnSecs: timing?.preSpawnSecs, execSecs: timing?.execSecs,
       promptChars: prompt.length, origin, kind: taskKind, cwd,
       reason: ledgerReason
     });
@@ -1266,12 +1271,16 @@ async function executeCodex() {
     return { status: 3, outputChars: 0, output: '', stderr: skipCodexReason || 'codex_cooldown', timedOut: false, launched: false };
   }
   const codexArgs = buildCodexExecArgs({ ...selectedLane, review });
-  let result = null, attempts = 0, seconds = 0;
+  let result = null, attempts = 0, seconds = 0, timing = null;
   for (let attempt = 1; attempt <= 2; attempt++) {
     const attemptStarted = Date.now();
     logCodex();
     result = await launchCodex(codexArgs);
-    const elapsed = (Date.now() - attemptStarted) / 1000;
+    const settledAtMs = Date.now();
+    const elapsed = (settledAtMs - attemptStarted) / 1000;
+    timing = Number.isFinite(result?.spawnedAtMs)
+      ? { preSpawnSecs: (result.spawnedAtMs - attemptStarted) / 1000, execSecs: (settledAtMs - result.spawnedAtMs) / 1000 }
+      : null;
     seconds += elapsed;
     attempts = attempt;
     // そもそも起動できていない(launched:false)なら再試行しても結果は変わらない。
@@ -1287,7 +1296,7 @@ async function executeCodex() {
     const tail = String(result?.stderr || '').replace(/\s+/g, ' ').trim().slice(-200);
     if (attempt === 1) console.error(`[codex-do] codex が ${elapsed.toFixed(1)} 秒で出力ゼロ(exit ${result.status})のため 1 回だけ再試行します${tail ? `: ${tail}` : ''}`);
   }
-  recordUsage(result, `codex-cli/${selectedLane.slug || 'default'}`, seconds, 'codex', attempts);
+  recordUsage(result, `codex-cli/${selectedLane.slug || 'default'}`, seconds, 'codex', attempts, null, timing);
   return result;
 }
 

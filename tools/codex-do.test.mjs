@@ -1934,12 +1934,14 @@ test('buildUsageRow は timeoutSecs と chain[].budgetSecs を台帳へ残す', 
   const row = buildUsageRow({
     result: { status: 124, timedOut: true, outputChars: 0, stderr: '' },
     model: 'codex-cli/gpt-5.6-sol', seconds: 1800.28, provider: 'codex',
-    timeoutSecs: 1800, lane: 'default_sol', promptChars: 400, origin: 'interactive', kind: 'implement', cwd: 'C:/repo', now,
+    timeoutSecs: 1800, preSpawnSecs: 0.28, execSecs: 1800, lane: 'default_sol', promptChars: 400, origin: 'interactive', kind: 'implement', cwd: 'C:/repo', now,
   });
   assert.equal(row.timeoutSecs, 1800);
   assert.equal(row.secs, 1800.28);
   assert.equal(row.lane, 'default_sol');
   assert.equal(row.in, 100);
+  assert.equal(row.preSpawnSecs, 0.28);
+  assert.equal(row.execSecs, 1800);
 
   const chained = buildUsageRow({
     result: { status: 124, timedOut: true, outputChars: 0, stderr: '' }, model: 'x',
@@ -1953,7 +1955,28 @@ test('buildUsageRow は timeoutSecs と chain[].budgetSecs を台帳へ残す', 
 test('buildUsageRow は timeoutSecs が無ければ行に生やさない（旧形式との互換）', () => {
   const row = buildUsageRow({ result: { status: 0, outputChars: 4 }, model: 'm', seconds: 1, now: new Date('2026-10-22T00:00:00Z') });
   assert.equal('timeoutSecs' in row, false);
+  assert.equal('preSpawnSecs' in row, false);
+  assert.equal('execSecs' in row, false);
   assert.equal(row.status, 'ok');
+});
+
+test('実 CLI の timer から settle までは予算 + kill 猶予 + 小さな許容内で台帳に残る', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-execsecs-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const appData = path.join(home, 'appdata');
+  const fakeCodex = path.join(appData, 'npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+  fs.mkdirSync(path.dirname(fakeCodex), { recursive: true });
+  fs.writeFileSync(fakeCodex, 'setInterval(() => {}, 1000);\n', 'utf8');
+  const result = run(['--force-native', '--no-fallback', '--cwd', home, '--model', 'sol', '--timeout', '1', '説明して'], {
+    home,
+    env: { APPDATA: appData, CODEX_DO_TIMEOUT_KILL_GRACE_MS: '300' },
+  });
+  assert.notEqual(result.status, 0);
+  const row = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse)[0];
+  assert.equal(row.status, 'timeout');
+  assert.ok(row.execSecs >= 0.9, `timer より前に settle した: ${row.execSecs}`);
+  assert.ok(row.execSecs <= 1.8, `予算1秒 + kill猶予0.3秒 + 許容0.5秒を超えた: ${row.execSecs}`);
+  assert.ok(row.preSpawnSecs >= 0);
 });
 
 // 2026-10-23 実測: gemini が拒否を3回出して以後無音のまま600秒 timeout になった（打ち切り未発火3件）。

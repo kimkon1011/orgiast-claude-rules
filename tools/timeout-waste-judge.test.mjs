@@ -130,6 +130,35 @@ test('主経路でも与えた予算を超えたら上限超過としてバッ�
   assert.equal(report.overCapAttempts[0].budgetSecs, 1800);
 });
 
+test('主経路の新形式は execSecs で強制打ち切りの超過を判定する', () => {
+  const report = judgeTimeoutRows([{
+    t: '2026-11-01T16:18:49Z', provider: 'codex', status: 'timeout', timeoutSecs: 210,
+    secs: 226.786, execSecs: 211, preSpawnSecs: 15.786,
+  }], { since: SINCE });
+  assert.equal(report.verdict, 'waste-within-cap');
+  assert.equal(report.wasteSecs, 226.786);
+  assert.equal(report.events[0].attempts[0].execSecs, 211);
+  assert.equal(report.events[0].attempts[0].preSpawnSecs, 15.786);
+});
+
+test('主経路の旧形式は従来どおり secs と許容 5 秒で超過になる', () => {
+  const report = judgeTimeoutRows([{
+    t: '2026-11-01T16:18:49Z', provider: 'codex', status: 'timeout', timeoutSecs: 210,
+    secs: 226.786, preSpawnSecs: 15.786,
+  }], { since: SINCE });
+  assert.equal(report.verdict, 'waste-exceeds-cap');
+});
+
+test('主経路の execSecs 自体が予算と kill 猶予を超えれば超過のまま', () => {
+  const report = judgeTimeoutRows([{
+    t: '2026-11-01T16:18:49Z', provider: 'codex', status: 'timeout', timeoutSecs: 210,
+    secs: 255.786, execSecs: 240, preSpawnSecs: 15.786,
+  }], { since: SINCE });
+  assert.equal(report.verdict, 'waste-exceeds-cap');
+  assert.equal(report.overCapAttempts[0].execSecs, 240);
+  assert.equal(report.overCapAttempts[0].preSpawnSecs, 15.786);
+});
+
 test('チェーン試行は記録された budgetSecs を予算に使う', () => {
   const report = judgeTimeoutRows([
     { t: '2026-10-21T00:00:00Z', provider: 'fallback', timedOut: true, secs: 950, chain: [

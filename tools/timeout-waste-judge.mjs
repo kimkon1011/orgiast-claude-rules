@@ -22,6 +22,8 @@ export const TIMEOUT_KILL_FIX_MERGED_AT = '2026-10-28T19:08:39Z';
 export const DEFAULT_CAP_SECS = 900;
 export const DEFAULT_PRIMARY_TIMEOUT_SECS = 1800; // codex-do の --timeout 既定
 export const DEFAULT_TOLERANCE_SECS = 5;
+// tools/codex-do.mjs の timeoutKillGraceMs 既定 5000ms と同値。
+export const DEFAULT_TIMEOUT_KILL_GRACE_SECS = 5;
 
 export function isTimeoutRow(row) {
   return row?.status === 'timeout' || row?.timedOut === true;
@@ -54,6 +56,8 @@ export function timeoutAttempts(row, { fallbackBudgetSecs = DEFAULT_CAP_SECS } =
     backend: row?.provider ?? row?.model ?? null,
     model: row?.model ?? null,
     secs: Number(row?.secs),
+    ...(Number.isFinite(Number(row?.preSpawnSecs)) ? { preSpawnSecs: Number(row.preSpawnSecs) } : {}),
+    ...(Number.isFinite(Number(row?.execSecs)) ? { execSecs: Number(row.execSecs) } : {}),
     budgetSecs: attemptBudgetSecs(row?.timeoutSecs, DEFAULT_PRIMARY_TIMEOUT_SECS),
     path: 'primary',
   }];
@@ -78,8 +82,17 @@ export function judgeTimeoutRows(rows = [], {
       const wasteSecs = known.reduce((sum, a) => sum + a.secs, 0);
       const maxAttemptSecs = known.length ? Math.max(...known.map((a) => a.secs)) : null;
       const overCapAttempts = known
-        .filter((a) => a.secs > a.budgetSecs + toleranceSecs)
-        .map(({ backend, model, secs, budgetSecs, path }) => ({ backend, model, secs, budgetSecs, path }));
+        .filter((a) => {
+          const hasExecTiming = a.path === 'primary' && Number.isFinite(a.execSecs);
+          const measuredSecs = hasExecTiming ? a.execSecs : a.secs;
+          const allowedTolerance = toleranceSecs + (hasExecTiming ? DEFAULT_TIMEOUT_KILL_GRACE_SECS : 0);
+          return measuredSecs > a.budgetSecs + allowedTolerance;
+        })
+        .map(({ backend, model, secs, budgetSecs, path, preSpawnSecs, execSecs }) => ({
+          backend, model, secs, budgetSecs, path,
+          ...(Number.isFinite(preSpawnSecs) ? { preSpawnSecs } : {}),
+          ...(Number.isFinite(execSecs) ? { execSecs } : {}),
+        }));
       return {
         t: Number.isFinite(at) ? new Date(at).toISOString() : null,
         provider: row.provider ?? null,

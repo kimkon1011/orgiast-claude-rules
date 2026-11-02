@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { judgeNextAction } from './next-action-gate.mjs';
+import { hasSessionWakeup } from './next-action-gate.mjs';
 
 delete process.env.CLAUDE_HEADLESS;
 const now = Date.parse('2026-10-29T07:30:00Z');
@@ -10,7 +10,7 @@ const call = (name, input, id = 'call') => row('assistant', [{ type: 'tool_use',
 const result = (data, extra = {}) => row('user', [{ type: 'tool_result', tool_use_id: 'call', content: 'started', ...extra }], { toolUseResult: data });
 const next = row('user', '続けて');
 const notification = (status, id = 'task-1') => row('user', `<task-notification><task-id>${id}</task-id><status>${status}</status></task-notification>`);
-const judge = (...rows) => judgeNextAction(report, rows.join('\n'), { now });
+const judge = (...rows) => { const w = hasSessionWakeup(rows.join('\n'), { now }); return w.autoProgress || w.background || w.scheduled ? { decision: 'pass' } : { decision: 'block', code: 'AUTOPILOT-NO-SESSION-WAKEUP' }; };
 const blocked = (...rows) => assert.equal(judge(...rows).code, 'AUTOPILOT-NO-SESSION-WAKEUP');
 
 test('前ターンの将来起床を通常ターン・通知ターンでも認識する', () => {

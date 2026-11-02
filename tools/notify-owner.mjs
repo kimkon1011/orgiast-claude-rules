@@ -2,32 +2,18 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { appendOwnerInbox } from './auto-progress-inbox-hook.mjs';
+import { spawnSync } from 'node:child_process';
+import { appendOwnerInbox } from './lib/auto-progress-inbox.mjs';
 import { notifyKim, KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
-import { isEntry } from './is-entry.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
+import { isEntry } from './is-entry.mjs';
+// 所有者解決は lib/fleet-owner.mjs（kim-inbox と共用。ここに置くと notify-kim -> kim-inbox -> notify-owner の import が循環する）。
+import { ownerPcMap, resolveOwner } from './lib/fleet-owner.mjs';
+export { resolveOwner };
 
-const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const readJson = (file, fallback = {}) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } };
 const readText = file => { try { return fs.readFileSync(file, 'utf8').trim(); } catch { return ''; } };
-
-function ownerPcMap(home) {
-  const map = readJson(path.join(repo, 'fleet-pc-map.json'));
-  for (const [label, row] of Object.entries(readJson(path.join(home, '.claude', 'fleet-pc-map.json')))) {
-    map[label] = row && typeof row === 'object' ? { ...map[label], ...row } : row;
-  }
-  return map;
-}
-
-export function resolveOwner({ home = os.homedir(), label = resolveFleetLabel(home), pcMap, gitEmail } = {}) {
-  const map = pcMap ?? ownerPcMap(home);
-  const configured = localPcEntry(map, label);
-  if (configured?.account) return configured.account;
-  try { return String(gitEmail ?? execFileSync('git', ['config', '--global', 'user.email'], { encoding: 'utf8', windowsHide: true })).trim(); } catch { return ''; }
-}
 
 function localPcEntry(map, label) {
   return map[label] || Object.values(map).find(value => value && typeof value === 'object'
@@ -136,7 +122,8 @@ export async function notifyOwner(owner, text, options = {}) {
   const home = options.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   options = { ...options, home };
   owner = String(owner || resolveOwner(options)).trim();
-  const userId = options.userId ?? resolveOwnerDiscordId(owner, options);
+  // kim 宛は Discord ID の有無に関わらず notify-kim に渡し、kim-inbox 台帳（セッション回収）へ入れる（2026-10-27）。
+  const userId = options.userId ?? (owner.toLowerCase() === 'kim@orgiast.jp' ? KIM_DISCORD_USER_ID : resolveOwnerDiscordId(owner, options));
   const valid = recipientMatchesOwner(owner, userId, options);
   const now = new Date(options.now ?? Date.now());
   const at = now.toISOString();
@@ -155,6 +142,10 @@ export async function notifyOwner(owner, text, options = {}) {
   if (valid) {
     try {
       const result = await (options.notify ?? notifyKim)(text, { ...options, userId, webhookFallback: false });
+      if (result?.delivered === 'session-inbox') {
+        attempts.push({ channel: 'session-inbox', ok: true, id: result.id });
+        return finish({ ...result, channel: 'session-inbox', ok: true });
+      }
       if (result?.delivered === 'dm' && typeof result.messageId === 'string' && result.messageId.trim()) {
         attempts.push({ channel: 'discord', ok: true, messageId: result.messageId });
         return finish({ ...result, channel: 'discord', ok: true });
@@ -167,8 +158,11 @@ export async function notifyOwner(owner, text, options = {}) {
   if (!owner || owner.toLowerCase() !== resolveOwner(options).toLowerCase()) {
     return finish({ delivered: 'none', channel: 'none', ok: false, reason });
   }
+  const fallbackText = !valid
+    ? safeText + `\n\n⚠ Discord 宛先未設定: fleet-pc-map.json の「${options.label ?? resolveFleetLabel(home)}」に notifyDiscordId を追加`
+    : safeText;
   let inboxOk = false;
-  try { await prependInbox(home, safeText, at); inboxOk = true; } catch { /* recorded below */ }
+  try { await prependInbox(home, fallbackText, at); inboxOk = true; } catch { /* recorded below */ }
   attempts.push({ channel: 'inbox', ok: inboxOk });
   try { appendOwnerInbox(home, { source: 'notify-owner', text: safeText }); } catch { /* legacy chat inbox */ }
   const toast = async (body, purpose) => {
@@ -178,7 +172,7 @@ export async function notifyOwner(owner, text, options = {}) {
     attempts.push({ channel: 'toast', purpose, ...(receipt || {}), ok });
     return ok;
   };
-  const sent = await toast(safeText, 'progress');
+  const sent = await toast(fallbackText, 'progress');
   if (!valid) {
     const file = path.join(home, '.claude', 'logs', 'owner-recipient-notice.json');
     const day = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;

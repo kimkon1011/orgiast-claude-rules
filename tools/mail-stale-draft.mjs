@@ -17,6 +17,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getDriveToken, defaultDriveKeyPath } from './lib/drive-auth.mjs';
 import { relayStatePath } from './lib/seisaku-gmail-token.mjs';
+import { gwsFetch } from './lib/gws-proxy.mjs';
 import { isEntry } from './is-entry.mjs';
 
 export function hasAnyCredential({ env = process.env, exists = fs.existsSync, home = os.homedir() } = {}) {
@@ -82,7 +83,7 @@ export function staleFindings({ draft, sentByAddr }) {
   return findings;
 }
 
-async function gmail(token, endpoint, { fetchImpl = globalThis.fetch, method = 'GET', body, retryDelayMs = 2000, sleepImpl = sleep } = {}) {
+async function gmail(token, endpoint, { fetchImpl = gwsFetch, method = 'GET', body, retryDelayMs = 2000, sleepImpl = sleep } = {}) {
   const execute = () => fetchImpl(`${API}${endpoint}`, { method, headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(25000) });
   let res = await execute();
   if (res.status === 429 || (res.status >= 500 && res.status < 600)) {

@@ -7,8 +7,11 @@ import vm from 'node:vm';
 import { main as registerTasks } from './register-auto-progress-task.mjs';
 import { isNoopPromise, extractPromise, extractNextKim, applyPromise, buildRecord, record, readLedger, writeLedger, ledgerFile, rowKey, originLine } from './auto-progress-ledger.mjs';
 import { run as watch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, forgiveNoExecutorResumes, main as watchMain, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS, formatDoneMessage, readableReason, formatDoneBacklogMessages } from './auto-progress-watch.mjs';
-import { run as digest, selectRows, formatDigest, digestGroupKey, isUnattendedRow, WINDOW_MS, MAX_ITEMS, needsDm, verdictOf, cleanText, isHumanActionRequired, waitingNotificationKey, chunkMessage } from './auto-progress-digest.mjs';
+import { run as runDigest, selectRows, formatDigest, digestGroupKey, isUnattendedRow, WINDOW_MS, MAX_ITEMS, needsDm, verdictOf, cleanText, isHumanActionRequired, waitingNotificationKey, chunkMessage } from './auto-progress-digest.mjs';
 import { runRegisterPs1 } from './lib/run-register-ps1.mjs';
+
+// Keep mocked non-kim deliveries independent of the developer PC owner and global Git email.
+const digest = options => runDigest({ ...options, io: { localOwner: 'test-owner@example.com', ...options.io } });
 
 const tempHomes = [];
 const tmp = () => { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-progress-')); tempHomes.push(home); return home; };
@@ -999,8 +1002,8 @@ test('digest: 送信した本文を sent.jsonl に残し、dryRun では書か�
   const home = tmp(), at = Date.parse('2026-10-23T09:00:00+09:00');
   const sentFile = path.join(home, '.claude', 'logs', 'auto-progress-digest.sent.jsonl');
   const readSent = () => (fs.existsSync(sentFile) ? fs.readFileSync(sentFile, 'utf8').trim().split('\n').map(JSON.parse) : []);
-  const row = { sessionId: 's1', owner: 'kim@orgiast.jp', status: 'waiting_user', promise: '見積の承認', nextKim: '金額を承認', ts: new Date(at - H).toISOString() };
-  const base = { readLedger: () => [row], localOwner: 'kim@orgiast.jp' };
+  const row = { sessionId: 's1', owner: 'member@orgiast.jp', status: 'waiting_user', promise: '見積の承認', nextKim: '金額を承認', ts: new Date(at - H).toISOString() };
+  const base = { readLedger: () => [row], localOwner: 'member@orgiast.jp' };
 
   // dryRun では書かない
   const dry = await digest({ home, now: at, slot: '朝', dryRun: true, io: { ...base, notify: async () => assert.fail('dryRun must not send') } });
@@ -1378,7 +1381,7 @@ test('watch: 疎通確認の登録・完了再送でDMせず、digestは件数�
   assert.equal(notifications, 0);
   assert.equal(readLedger(ledgerFile(home)).length, 1);
   const normal = { ...rows[0], sessionId: 'normal', promise: '通常の作業', requestText: '', status: 'stalled' };
-  const result = await digest({ home, now, slot: '朝', dryRun: true, io: { readLedger: () => [normal, ...rows], readState: () => ({}) } });
+  const result = await digest({ home, now, slot: '朝', dryRun: true, io: { readLedger: () => [normal, ...rows].map(row => ({ ...row, owner: 'test-owner@example.com' })), readState: () => ({}) } });
   assert.doesNotMatch(result.text, /OK とだけ/);
   assert.match(result.text, /無人処理: 1件/);
 });

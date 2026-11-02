@@ -24,14 +24,16 @@ export async function pushKim(text, deps = {}) {
     // この PC の hook（起動時の点検・Stop ゲート）を通すと起動に約3分半かかり、送信後も終わらず
     // 打ち切られて「失敗」扱い→再送で通知が重複した（2026-11-01 実測）。中継は RemoteTrigger を
     // 1回呼ぶだけなので hook を外し、使えるツールもそれだけに絞る。
-    const args = [...buildChildArgs({ model: 'haiku' }), '--settings', '{"disableAllHooks":true}', '--allowedTools', 'RemoteTrigger', '--strict-mcp-config'];
+    // --strict-mcp-config / ENABLE_CLAUDEAI_MCP_SERVERS=false を付けるとタスクスケジューラ環境では
+    // RemoteTrigger が呼ばれず 840 秒打ち切りになった（対話環境では通る。2026-11-01 実測）。外部接続は読む。
+    const args = [...buildChildArgs({ model: 'haiku' }), '--settings', '{"disableAllHooks":true}', '--allowedTools', 'RemoteTrigger'];
     if (deps.dryRun) return { ok: true, payload, argv: [executable, ...args] };
     if (isUnspawnable(executable, process.platform) || (process.platform === 'win32' && executable === 'claude')) {
       return { ok: false, reason: '起動可能な Claude 実行ファイルがありません' };
     }
     const result = await (deps.runConnectorPrompt || runConnectorPrompt)({
       executable, args, prompt: buildPrompt(buildTriggerPrompt('run', payload)),
-      env: { ...buildConnectorEnv(deps.env || process.env).env, ENABLE_CLAUDEAI_MCP_SERVERS: 'false' },
+      env: buildConnectorEnv(deps.env || process.env).env,
       // kim-PC はタスク起動時に claude.exe の起動だけで約2分、送信まで計7〜9分かかった（2026-11-01 実測 565 秒）。
       timeoutMs: deps.timeoutMs ?? 840_000,
       stopWhen: out => out.includes('"session_id"'),

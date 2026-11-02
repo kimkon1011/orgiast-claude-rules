@@ -4,6 +4,8 @@ import os from 'node:os';
 import { getDiscordMembers, matchMember } from './discord-member-directory.mjs';
 import { isEntry } from './is-entry.mjs';
 import { clipDiscordContent, KIM_DISCORD_USER_ID, resolveDiscordBotToken } from './notify-kim.mjs';
+import { addItem, isKimSeat } from './kim-inbox.mjs';
+import { discordAllowed } from './lib/kim-discord-allowlist.mjs';
 import { classifyKimDm } from './lib/kim-dm-policy.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 
@@ -45,19 +47,9 @@ export async function sendDiscordDm(target, body, options = {}) {
   // kim 宛のシステム通知と違い、社内メンバーへの連絡は本文そのものが成果物。
   // notify-kim の toPlainJa（LLM 平易化）は通さない（実測: 「dry-run 検証」が
   // 「本番前のテスト確認」に書き換わり意味が変わる）。秘匿値の除去と長さ調整だけ行う。
-  let kimRecipient = null;
   let copyToKim = 'skipped';
-  if (!options.noCopyKim) {
-    try {
-      kimRecipient = await resolve('金功勇', { ...options, home, fetchImpl });
-      if (!kimRecipient) throw new Error('金功勇を一意に特定できません');
-    } catch (error) {
-      copyToKim = { delivered: false, error: error.message };
-    }
-  }
   const recipientName = recipient.displayName ?? recipient.label ?? recipient.username ?? '';
-  const isKim = Boolean((kimRecipient && String(kimRecipient.id) === String(recipient.id))
-    || String(recipient.id) === KIM_DISCORD_USER_ID || recipientName === '金功勇');
+  const isKim = String(recipient.id) === KIM_DISCORD_USER_ID || ['金功勇', 'kim'].includes(recipientName.toLowerCase());
   if (isKim && options.kimActionRequired !== true) {
     const policy = classifyKimDm(body);
     if (!policy.allowed) {
@@ -65,11 +57,14 @@ export async function sendDiscordDm(target, body, options = {}) {
       return { delivered: 'blocked', category: policy.category, reason: policy.reason };
     }
   }
+  const inbox = isKim && !discordAllowed(body, { home, allowlist: options.allowlist }).allowed;
+  if (!options.noCopyKim && !isKim) copyToKim = isKimSeat(home) ? 'in-session' : 'session-inbox';
   const finalBody = isKim ? String(body ?? '') : withReplyToKimFooter(body);
   const content = safeContent(finalBody);
-  if (options.dryRun) {
-    if (kimRecipient && !isKim) copyToKim = { dryRun: true, recipient: kimRecipient };
-    return { dryRun: true, recipient, content, copyToKim };
+  if (options.dryRun) return { dryRun: true, recipient, content, copyToKim, ...(inbox ? { delivered: 'session-inbox' } : {}) };
+  if (inbox) {
+    const item = await addItem(home, { kind: options.kimActionRequired ? 'ask' : 'info', text: body, source: 'discord-dm' });
+    return { delivered: 'session-inbox', id: item.id, copyToKim };
   }
 
   const token = options.token !== undefined ? options.token : resolveDiscordBotToken(home);
@@ -97,15 +92,14 @@ export async function sendDiscordDm(target, body, options = {}) {
     return channelId;
   };
   const channelId = await deliver(recipient, content);
-  if (kimRecipient && !isKim) {
+  if (copyToKim === 'session-inbox') {
     const displayName = recipient.displayName ?? recipient.label ?? recipient.username ?? target;
     try {
-      const copyChannelId = await deliver(kimRecipient, safeContent(`【写し】${displayName}さんへ送った内容\n\n${finalBody}`));
-      copyToKim = { delivered: true, recipient: kimRecipient, channelId: copyChannelId };
-    } catch (error) {
-      copyToKim = { delivered: false, error: error.message };
-    }
+      const item = await addItem(home, { kind: 'info', text: `（写し）${displayName} へ送信: ${body ?? ''}`, source: 'discord-dm-copy' });
+      copyToKim = { delivered: 'session-inbox', id: item.id, status: item.status };
+    } catch (error) { copyToKim = { delivered: false, error: error.message }; }
   }
+
   return { delivered: true, recipient, channelId, copyToKim };
 }
 

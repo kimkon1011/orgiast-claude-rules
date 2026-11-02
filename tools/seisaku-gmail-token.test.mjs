@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import { getDriveToken, DRIVE_SCOPE } from './lib/drive-auth.mjs';
+import { tryRelayToken } from './lib/seisaku-gmail-token.mjs';
 import vm from 'node:vm';
 import { mintDwdToken } from './gmail-draft.mjs';
 import { deploy } from './seisaku-gmail-token-deploy.mjs';
@@ -18,12 +19,12 @@ function fixture(t) {
   writeFileSync(statePath, JSON.stringify({ user, secret: randomBytes(24).toString('hex'), webAppUrl: `https://script.google.com/macros/s/${randomBytes(8).toString('hex')}/exec` }));
   return { statePath, keyPath: join(dir, 'missing.json'), impersonate: user, scope };
 }
-test('鍵なしは中継を利用しプロセス内キャッシュする', async t => {
+test('旧リレーの単体互換性: 鍵なしは中継を利用しキャッシュする', async t => {
   const opts = fixture(t); let calls = 0;
   const token = randomBytes(24).toString('hex');
   opts.fetchImpl = async (_url, options) => { calls++; assert.equal(options.method, 'POST'); assert.ok(JSON.parse(options.body).secret); return json({ ok: true, user, accessToken: token, expiresInSec: 3300 }); };
-  assert.ok(await getDriveToken(opts) === token);
-  assert.ok(await getDriveToken(opts) === token);
+  assert.ok(await tryRelayToken(opts) === token);
+  assert.ok(await tryRelayToken(opts) === token);
   assert.equal(calls, 1);
 });
 test('鍵ありは従来の JWT 経路', async t => {
@@ -34,23 +35,27 @@ test('鍵ありは従来の JWT 経路', async t => {
   assert.ok(await getDriveToken(opts));
 });
 for (const [name, override] of [['別ユーザー', { impersonate: 'other@example.invalid' }], ['Drive', { scope: DRIVE_SCOPE }], ['混在スコープ', { scope: scope + ' ' + DRIVE_SCOPE }]]) {
-  test(`鍵なし＋${name}は従来どおり ENOENT`, async t => {
-    await assert.rejects(getDriveToken({ ...fixture(t), ...override, fetchImpl: () => assert.fail('通信禁止') }), { code: 'ENOENT' });
+  test(`鍵なし＋${name}: 旧リレーは対象外、新APIは固定アカウントを検証`, async t => {
+    const options={ ...fixture(t), ...override, fetchImpl: () => assert.fail('通信禁止') };
+    assert.equal(await tryRelayToken(options),null);
+    if(name==='別ユーザー') await assert.rejects(getDriveToken(options),/固定/);
+    else assert.equal(await getDriveToken(options),'orgiast-server-side-gws');
   });
 }
-test('状態なしは ENOENT', async t => {
+test('旧リレー状態なしでも新サーバ経路へ切り替える', async t => {
   const opts = fixture(t); rmSync(opts.statePath);
-  await assert.rejects(getDriveToken(opts), { code: 'ENOENT' });
+  assert.equal(await tryRelayToken(opts),null);
+  assert.equal(await getDriveToken(opts),'orgiast-server-side-gws');
 });
-test('明示された GOOGLE_SA_KEY は中継しない', async t => {
+test('明示された欠落SA鍵も旧リレーではなく新サーバ経路へ切り替える', async t => {
   const previous = process.env.GOOGLE_SA_KEY; process.env.GOOGLE_SA_KEY = '/missing';
-  try { await assert.rejects(getDriveToken(fixture(t)), { code: 'ENOENT' }); }
+  try { const opts=fixture(t);assert.equal(await tryRelayToken(opts),null);assert.equal(await getDriveToken(opts),'orgiast-server-side-gws'); }
   finally { if (previous === undefined) delete process.env.GOOGLE_SA_KEY; else process.env.GOOGLE_SA_KEY = previous; }
 });
 for (const [name, response] of [['HTML', () => new Response('<html>Authorization needed</html>')], ['拒否', () => json({ ok: false, error: 'unauthorized' })], ['別ユーザー応答', () => json({ ok: true, user: 'other@example.invalid' })]]) {
   test(`${name}は承認 URL つき日本語エラー`, async t => {
     const opts = fixture(t);
-    await assert.rejects(getDriveToken({ ...opts, fetchImpl: async () => response() }), /seisaku-gmail-token: 未承認または失敗（.*）。承認 URL: https:\/\/script.google.com/u);
+    await assert.rejects(tryRelayToken({ ...opts, fetchImpl: async () => response() }), /seisaku-gmail-token: 未承認または失敗（.*）。承認 URL: https:\/\/script.google.com/u);
   });
 }
 test('deploy は初回 POST・2回目 PUT、secret と URL を維持', async t => {
@@ -81,10 +86,10 @@ test('dry-run は認証ファイル不要で通信しない', async t => {
   assert.equal(result.project, 'create');
 });
 
-test('下書きのトークン取得も共通中継を利用する', async t => {
+test('下書きは旧トークン配布を呼ばずサーバ操作マーカーを使う', async t => {
   const opts = fixture(t);
   const token = randomBytes(24).toString('hex');
-  assert.ok(await mintDwdToken({ ...opts, user, fetchImpl: async () => json({ ok: true, user, accessToken: token, expiresInSec: 3300 }) }) === token);
+  assert.equal(await mintDwdToken({ ...opts, user, fetchImpl: async () => assert.fail('Google token must not reach client') }), 'orgiast-server-side-gws');
 });
 test('GAS GET はトークンを返さず、POST は秘密一致時のみ発行する', () => {
   let tokenCalls = 0; let aliasCalls = 0;

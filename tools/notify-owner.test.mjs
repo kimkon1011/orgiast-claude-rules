@@ -120,10 +120,11 @@ test('daily setup notice is suppressed on the same day and resets next day', asy
  Object.assign(options, { now: new Date(2026, 9, 28, 9).getTime(), toast: text => { calls.push(text); return true; } });
  await notifyOwner('nishi@orgiast.jp', '進捗1', options);
  await notifyOwner('nishi@orgiast.jp', '進捗2', options);
- assert.deepEqual(calls, ['進捗1', RECIPIENT_NOTICE, '進捗2']);
+ const diagnostic = '\n\n⚠ Discord 宛先未設定: fleet-pc-map.json の「nishi-PC」に notifyDiscordId を追加';
+ assert.deepEqual(calls, ['進捗1' + diagnostic, RECIPIENT_NOTICE, '進捗2' + diagnostic]);
  options.now = new Date(2026, 9, 29, 9).getTime();
  await notifyOwner('nishi@orgiast.jp', '進捗3', options);
- assert.deepEqual(calls.slice(-2), ['進捗3', RECIPIENT_NOTICE]);
+ assert.deepEqual(calls.slice(-2), ['進捗3' + diagnostic, RECIPIENT_NOTICE]);
 });
 
 test('toast failure is recorded by exit code and inbox succeeds; failed setup can retry', async t => {
@@ -299,4 +300,37 @@ test('Discord failure with a valid recipient falls back without setup warning', 
  const result = await notifyOwner('nishi@orgiast.jp', '進捗', { ...options, userId: '123', notify: async () => { throw new Error('network'); }, toast: text => { texts.push(text); return true; } });
  assert.equal(result.channel, 'toast');
  assert.deepEqual(texts, ['進捗']);
+});
+
+test('kim 所有者は台帳配達を成功とし toast に重複通知しない', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-kim-inbox-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  let calls = 0;
+  const result = await notifyOwner('kim@orgiast.jp', '報告', { home, label: 'kim-PC', pcMap: { 'kim-PC': { account: 'kim@orgiast.jp' } }, directory: [], notify: async (_text, options) => {
+    calls++; assert.equal(options.userId, KIM_DISCORD_USER_ID); return { delivered: 'session-inbox', id: '項目' };
+  }, toast: () => assert.fail('二重通知禁止') });
+  assert.equal(calls, 1); assert.equal(result.channel, 'session-inbox'); assert.equal(result.ok, true);
+});
+
+test('w018-PC は fleet-pc-map に discordId と notifyDiscordId を持つ', () => {
+  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const map = JSON.parse(fs.readFileSync(path.join(repo, 'fleet-pc-map.json'), 'utf8'));
+  const entry = map['w018-PC'];
+  assert.ok(entry, 'w018-PC が fleet-pc-map.json に存在すること');
+  assert.ok(String(entry.discordId || '').trim(), 'w018-PC に discordId が設定されていること');
+  assert.ok(String(entry.notifyDiscordId || '').trim(), 'w018-PC に notifyDiscordId が設定されていること');
+  const missing = [];
+  for (const [label, entry] of Object.entries(map)) {
+    if (label.startsWith('_') || label === '_unverified' || label === 'w018-PC') continue;
+    if (!entry || typeof entry !== 'object') continue;
+    const hasAccount = String(entry.account || '').trim();
+    if (!hasAccount) continue;
+    if (!String(entry.discordId || '').trim() || !String(entry.notifyDiscordId || '').trim()) {
+      missing.push(label + ': discordId=' + (entry.discordId || '(なし)') + ', notifyDiscordId=' + (entry.notifyDiscordId || '(なし)'));
+    }
+  }
+  if (missing.length) {
+    console.log('INFO: 以下の PC 行は discordId/notifyDiscordId が不足しています（要調査）:');
+    for (const m of missing) console.log('  ' + m);
+  }
 });

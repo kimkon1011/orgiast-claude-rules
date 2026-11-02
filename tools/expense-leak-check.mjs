@@ -294,7 +294,7 @@ export async function runCheck(opts, injected = {}) {
         result.appendedRange = range;
       }
       result.notification = await (injected.notify || notifyKim)(dmText(result), { webhookFallback: false });
-      if (result.notification.delivered !== 'dm') throw new Error('Discord DM not delivered');
+      if (!['dm', 'session-inbox'].includes(result.notification.delivered)) throw new Error('Discord DM not delivered');
       state.lastRunAt = `${opts.today}T03:00:00+09:00`;
     }
     await checkpoint();

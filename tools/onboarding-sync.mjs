@@ -712,6 +712,15 @@ export function makeIndex(body) {
     const result = kept.join('\n');
     if (Buffer.byteLength(result) <= INDEX_BUDGET_BYTES) return result;
   }
+  // 読点までの短縮だけでは、新しい規約が数件入ると予算を超える。
+  // 見出し・絶対ルールを維持したまま通常の結論だけをさらに短縮する。
+  for (const [i, chars] of [...conclusions].sort((a, b) => b[1].length - a[1].length)) {
+    const shortened = chars.slice(0, 12).join('') + '…';
+    if (Buffer.byteLength(shortened) >= Buffer.byteLength(kept[i])) continue;
+    kept[i] = shortened;
+    const result = kept.join('\n');
+    if (Buffer.byteLength(result) <= INDEX_BUDGET_BYTES) return result;
+  }
   return original;
 }
 export function build(current, body, label) {
@@ -742,7 +751,7 @@ export async function syncKnowledge({ targetHome = home, forced = force, preview
   const stateFile = path.join(targetHome, '.claude', '.knowledge-sync-state.json');
   let previous;
   try { previous = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
-  if (!forced && previous?.last && now - new Date(previous.last) < 24 * 60 * 60 * 1000) return;
+  if (!forced && previous?.last && fs.existsSync(path.join(targetHome, '.claude', 'knowledge', 'production-sales', '00_INDEX.md')) && now - new Date(previous.last) < 24 * 60 * 60 * 1000) return;
   try {
     const result = await install({ home: targetHome, ...(receiver ? { source: false } : {}), emit });
     fs.mkdirSync(path.dirname(stateFile), { recursive: true });

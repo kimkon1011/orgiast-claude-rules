@@ -4,11 +4,11 @@
 // 他人宛は --share <相手のメール> を付ける（--share-role で権限指定）。
 import { shareAndRecord, shareRecipients } from './lib/drive-share.mjs';
 import { workspaceUrl } from './lib/workspace-url.mjs';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { basename, extname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
-import { getDriveToken, driveApi } from './lib/drive-auth.mjs';
+import { getDriveToken, driveApi, defaultDriveKeyPath } from './lib/drive-auth.mjs';
 
 const MIME = {
   '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
@@ -79,7 +79,7 @@ export async function upload({ file, folder, name, as, authuser = as, keyPath, s
 async function main() {
   try {
     const args = parseArgs(process.argv.slice(2));
-    const as = resolveAs(args);
+    const as = !args.as && !process.env.GOOGLE_IMPERSONATE && !existsSync(process.env.GOOGLE_SA_KEY || defaultDriveKeyPath()) ? 'seisaku-team@orgiast.jp' : resolveAs(args);
     console.log(JSON.stringify(await upload({ ...args, as })));
   } catch (error) {
     console.error(`drive-upload: ${error.message}`);

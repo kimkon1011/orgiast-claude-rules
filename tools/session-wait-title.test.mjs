@@ -28,12 +28,32 @@ test('期限が変わったら付け替え、同じなら書かない。旧形�
   assert.equal(desiredTitle(footer(WAIT), `${ai}\n${custom('【26/11/02/20:11まで】名前付き')}`), '【11/02/20:11まで】名前付き');
 });
 
-test('閉じてよいになったら期限だけ外す（旧形式も）。フッター無し・期限を付けていないなら何もしない', () => {
-  const closed = footer('/session-close は終わっているので、このセッションを閉じてよい');
-  assert.equal(desiredTitle(closed, custom('【11/01/09:00まで】名前付き')), '名前付き');
-  assert.equal(desiredTitle(closed, custom('【26/11/01/09:00まで】名前付き')), '名前付き');
-  assert.equal(desiredTitle(closed, ai), null);
+const CLOSED = '/session-close は終わっているので、このセッションを閉じてよい';
+const DELETE = '/session-close は不要なので、このセッションを閉じてよい';
+const withAction = (action, state) => `本文\n\n次に kim がすること: ${action}\nこの後の自動進行: なし（完了）\nこのセッション: ${state}`;
+
+test('閉じてよい＋kim のやることなしなら期限を外して【閉じて可】を付ける（旧形式も）', () => {
+  const closed = footer(CLOSED);
+  assert.equal(desiredTitle(closed, custom('【11/01/09:00まで】名前付き')), '【閉じて可】名前付き');
+  assert.equal(desiredTitle(closed, custom('【26/11/01/09:00まで】名前付き')), '【閉じて可】名前付き');
+  assert.equal(desiredTitle(closed, ai), '【閉じて可】トークン待ち');
+  assert.equal(desiredTitle(footer(DELETE), ai), '【閉じて可】トークン待ち');
+  assert.equal(desiredTitle(withAction('なし（完了）', DELETE), ai), '【閉じて可】トークン待ち');
+  assert.equal(desiredTitle(closed, custom('【閉じて可】名前付き')), null);
+});
+
+test('kim のやることが残るなら閉じてよいでも【閉じて可】を付けず、付いていれば外す', () => {
+  const pending = withAction('請求書PDFを先方へ手渡しする', DELETE);
+  assert.equal(desiredTitle(pending, ai), null);
+  assert.equal(desiredTitle(pending, custom('【閉じて可】名前付き')), '名前付き');
+  assert.equal(desiredTitle(pending, custom('【11/01/09:00まで】名前付き')), '名前付き');
+});
+
+test('再開して待ちに戻ったら【閉じて可】を期限に付け替え、フッター無しなら印を保持する', () => {
+  assert.equal(desiredTitle(footer(WAIT), custom('【閉じて可】名前付き')), '【11/02/20:11まで】名前付き');
+  assert.equal(desiredTitle('フッターなし', custom('【閉じて可】名前付き')), null);
   assert.equal(desiredTitle('フッターなし', custom('【11/01/09:00まで】名前付き')), null);
+  assert.equal(desiredTitle('本文', custom('【閉じて可】名前'), '018'), '018｜【閉じて可】名前');
 });
 
 const assistant = text => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
@@ -58,7 +78,10 @@ test('sweepAll は全プロジェクトの待ちセッションに付け、1時�
   const now = Date.now();
   const result = sweepAll({ base, now });
   assert.equal(result.scanned, 2);
-  assert.deepEqual(result.titled, [{ session: 'aaaaaaaa', title: '【11/02/20:11まで】トークン待ち' }]);
+  assert.deepEqual(result.titled.sort((a, b) => a.session.localeCompare(b.session)), [
+    { session: 'aaaaaaaa', title: '【11/02/20:11まで】トークン待ち' },
+    { session: 'bbbbbbbb', title: '【閉じて可】トークン待ち' },
+  ]);
   const last = JSON.parse(fs.readFileSync(path.join(proj, 'aaaaaaaa-1.jsonl'), 'utf8').trim().split('\n').at(-1));
   assert.equal(last.sessionId, 'aaaaaaaa-1');
   assert.deepEqual(sweepAll({ base, now: now + 1000 }), { skipped: 'cooldown' });

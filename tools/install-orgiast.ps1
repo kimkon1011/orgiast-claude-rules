@@ -521,6 +521,14 @@ try {
 } catch { Warn ("schedule-sync registration failed: " + $_.Exception.Message) }
 
 try {
+  $commsHubInstaller = Join-Path $REPO 'tools\register-comms-hub-sync.ps1'
+  if (Test-Path -LiteralPath $commsHubInstaller) {
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $commsHubInstaller -Ensure
+    if ($LASTEXITCODE -ne 0) { throw "register-comms-hub-sync.ps1 exit $LASTEXITCODE" }
+  }
+} catch { Warn ("comms-hub-sync registration failed: " + $_.Exception.Message) }
+
+try {
   $daytripInstaller = Join-Path $REPO 'tools\register-daytrip-detect-task.ps1'
   if (Test-Path -LiteralPath $daytripInstaller) {
     & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $daytripInstaller -Ensure

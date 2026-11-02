@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { candidateForDay, estimateTrip, candidateLine, dateRange, groupEvents, parseReply, makeBatch, unasked, reportRow } from './daytrip-detect.mjs';
+import { candidateForDay, estimateTrip, candidateLine, dateRange, groupEvents, parseReply, makeBatch, unasked, reportRow, pendingItems } from './daytrip-detect.mjs';
 export const fixtureEvent = (overrides = {}) => ({ id: 'event-1', summary: '商談', location: '京都駅', start: { dateTime: '2026-11-02T10:00:00+09:00' }, end: { dateTime: '2026-11-02T11:30:00+09:00' }, attendees: [{ email: 'kim@orgiast.jp', self: true }, { email: 'staff@orgiast.jp' }, { email: 'customer@example.com' }], ...overrides });
 export const fixtureRange = dateRange({ from: '2026-11-02', to: '2026-11-02' });
 export const fixtureDay = () => groupEvents([fixtureEvent()], fixtureRange).get('2026-11-02');
@@ -55,6 +55,10 @@ export async function runSelfTest(log = console.log) {
   assert.equal(makeBatch([{ ...boundary, date: '2026-11-03' }], [batch]).items[0].number, 2);
   assert.deepEqual(parseReply('はい 1,3\nいいえ 2'), [{ number: 1, accepted: true }, { number: 3, accepted: true }, { number: 2, accepted: false }]);
   assert.deepEqual(parseReply('はい 1 かもしれません'), []);
+  assert.equal(pendingItems([batch])[0].number, 1);
+  assert.deepEqual(pendingItems([batch, { type: 'decision', date: boundary.date, status: 'declined' }]), []);
+  const long = makeBatch([{ ...boundary, titles: ['予定'.repeat(2000)] }], []);
+  assert.ok(pendingItems([long])[0].line.length > 2000);
   assert.equal(reportRow(boundary)[8], 'customer@example.com');
   log('ok: date ledger deduplication / stable reply numbers / external attendees');
   log('daytrip-detect self-test: PASS (network-free)');

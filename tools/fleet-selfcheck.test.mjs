@@ -46,7 +46,7 @@ function network(calls) {
 test('complete selfcheck performs only GET reads, preserves files and reports bytes without message contents', async t => {
   const f = fixture(t), before = snapshot(f.home), calls = [], tokenCalls = [];
   const result = await runSelfcheck({ ...f, hostname: 'DESKTOP-BDOAK99', fetchImpl: network(calls), getToken: async args => {
-    tokenCalls.push(args); assert.ok(args.scope.endsWith('.readonly')); assert.equal(args.impersonate, 'seisaku-team@orgiast.jp'); return 'secret-google';
+    tokenCalls.push(args); assert.ok(['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/drive'].includes(args.scope)); assert.equal(args.impersonate, 'seisaku-team@orgiast.jp'); return 'secret-google';
   } });
   assert.equal(result.rows.length, 14);
   assert.ok(result.rows.every(row => row.status === '読めた'), result.markdown);

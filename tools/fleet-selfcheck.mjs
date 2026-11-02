@@ -127,7 +127,9 @@ export async function runSelfcheck({ home = process.env.ORGIAST_HOME || os.homed
     return `messages.list 読取成功 / ${data.messages?.length || 0} 件（本文非表示）`;
   });
   await check('Drive / seisaku-team@orgiast.jp / API', async () => {
-    const token = await googleToken('Drive', 'https://www.googleapis.com/auth/drive.readonly');
+    // Existing DWD grants drive, not drive.readonly (docs/drive-oldfile-trash-route.md).
+    // Reuse that grant; this probe still exposes GET files.list only.
+    const token = await googleToken('Drive', 'https://www.googleapis.com/auth/drive');
     const data = await get('https://www.googleapis.com/drive/v3/files?pageSize=1&fields=files(id)&q=trashed%3Dfalse', { Authorization: `Bearer ${token}` });
     if (!Array.isArray(data.files)) throw Error('Drive: invalid files response');
     return `files.list 読取成功 / ${data.files.length} 件（内容非表示）`;

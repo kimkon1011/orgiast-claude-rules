@@ -2,7 +2,7 @@
 
 `node tools/fleet-selfcheck.mjs` は身元、配布物、case-handoff の catalog と直近案件の resume バイト数、Gmail・Drive・Discord・LINE の読み取り結果を Markdown 表にする。結果は「読めた」「失敗（エラー原文。秘密値は伏字）」「経路なし」。一部の診断が失敗しても残りを続け、表を返せれば終了コードは0。
 
-自己点検本体は保存・設定変更・サブプロセス起動・送信を行わない。case-handoff の保存付き catalog/resume コマンドは呼ばず GET API を読む。Google の OAuth トークン取得だけ POST を使い、操作スコープは readonly。API に到達したかはファイルの有無だけでは判定しない。
+自己点検本体は保存・設定変更・サブプロセス起動・送信を行わない。case-handoff の保存付き catalog/resume コマンドは呼ばず GET API を読む。Google の OAuth トークン取得だけ POST を使い、Gmailはreadonlyスコープ。Driveは既存DWD委任済みのdriveスコープを使うが、実行はGET files.listだけ（drive.readonlyは既知の未委任）。API に到達したかはファイルの有無だけでは判定しない。
 
 - Gmail: seisaku-team@orgiast.jp の messages.list。既存 SA/DWD または Gmail token relay を使う。
 - Drive: 同アカウントの files.list を SA/DWD で読む。案件APIの成功からDrive全体の権限は推定しない。

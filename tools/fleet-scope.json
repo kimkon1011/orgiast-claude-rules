@@ -1,6 +1,7 @@
 {
   "version": 1,
   "entries": [
+    {"path":"tools/lib/auto-progress-inbox.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"通知書込と文脈表示を分離して import 循環を防ぐ"},
 {"path": "tools/kim-discord-report-gate.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/kim-inbox.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/lib/kim-discord-allowlist.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},

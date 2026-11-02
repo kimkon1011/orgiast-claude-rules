@@ -1,24 +1,11 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import os from 'node:os';
-import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
-export const inboxFile = (home, sessionId) => path.join(home, '.claude', 'auto-progress-inbox', `${sessionId}.jsonl`);
-export function appendInbox(home, sessionId, item) {
-  const file = inboxFile(home, sessionId); fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.appendFileSync(file, `${JSON.stringify({ ...item, shown: false })}\n`); return file;
-}
-function readRows(file) {
-  try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse); } catch { return []; }
-}
-export function appendOwnerInbox(home, { source, text }) {
-  const file = inboxFile(home, '_owner');
-  const now = Date.now();
-  if (readRows(file).some(row => !row.shown && row.text === text && now >= Date.parse(row.at) && now - Date.parse(row.at) < 24 * 60 * 60 * 1000)) return file;
-  return appendInbox(home, '_owner', { at: new Date(now).toISOString(), source, text });
-}
+import { inboxFile, readRows } from './lib/auto-progress-inbox.mjs';
+export { inboxFile, appendInbox, appendOwnerInbox } from './lib/auto-progress-inbox.mjs';
 function displayText(text, limit = 1500) {
   const seen = new Set();
   return String(text).split(/\r?\n/).filter(line => {
@@ -63,5 +50,4 @@ async function main() {
     if (out) console.log(JSON.stringify(out));
   } catch (error) { console.error(`auto-progress-inbox: ${error.message}`); }
 }
-// Do not await at module scope: digest -> notify-owner -> this module is a cycle.
-if (isEntry(import.meta.url)) void main();
+if (isEntry(import.meta.url)) await main();

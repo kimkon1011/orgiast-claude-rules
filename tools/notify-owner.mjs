@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { appendOwnerInbox } from './auto-progress-inbox-hook.mjs';
+import { appendOwnerInbox } from './lib/auto-progress-inbox.mjs';
 import { notifyKim, KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';

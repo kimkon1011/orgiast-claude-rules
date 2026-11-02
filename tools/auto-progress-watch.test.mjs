@@ -126,3 +126,48 @@ test('done-dmログは本文を8000字まで保存する', t => {
   assert.equal(row.text, message);
   assert.equal(row.channel, 'discord');
 });
+
+test('check notification includes exit code and stderr tail', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'watch-notify-exit-'));
+  const now = Date.parse('2026-11-01T03:00:00Z');
+  writeLedger(ledgerFile(home), [{
+    ts: new Date(now - 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'owner',
+    sessionId: 'check-stderr', cwd: home, promise: 'stderr check', status: 'open',
+    check: 'echo checking', deadlineAt: new Date(now + 3600000).toISOString(),
+  }]);
+  let message = '';
+  const summary = await run({ home, now, io: {
+    clock: () => now, sheetConfig: () => null, transcriptFiles: [],
+    executeCheck: () => ({ code: 1, text: '未達', stderr: 'Cannot find path /usr/bin/missing' }),
+    notifyOwner: async (_owner, text) => { message = text; return { delivered: 'dm' }; },
+    digest: async () => ({}),
+  } });
+  // 未達（期限超過）の通知に exit code と stderr が含まれる
+  assert.match(message, /\[exit: 1\]/);
+  assert.match(message, /stderr: Cannot find path/);
+  // 台帳に lastCheckExit, lastCheckStderr が保存されている
+  const row = readLedger(ledgerFile(home))[0];
+  assert.equal(row.lastCheckExit, 1);
+  assert.match(row.lastCheckStderr, /Cannot find path/);
+});
+
+test('check notification includes exit code on done state', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'watch-notify-done-'));
+  const now = Date.parse('2026-11-01T03:00:00Z');
+  writeLedger(ledgerFile(home), [{
+    ts: new Date(now - 7200000).toISOString(), pc: 'test-pc', user: 'test', owner: 'owner',
+    sessionId: 'check-done', cwd: home, promise: 'done check', status: 'open',
+    check: 'exit 0', deadlineAt: new Date(now - 3600000).toISOString(),
+  }]);
+  let message = '';
+  const summary = await run({ home, now, io: {
+    clock: () => now, sheetConfig: () => null, transcriptFiles: [],
+    executeCheck: () => ({ code: 0, text: '完了', stderr: '' }),
+    notifyOwner: async (_owner, text) => { message = text; return { delivered: 'dm' }; },
+    digest: async () => ({}),
+  } });
+  // done の場合は exit code は不要（done メッセージに余計な詳細は載せない）
+  // ただし lastCheckExit は保存される
+  const row = readLedger(ledgerFile(home))[0];
+  assert.equal(row.lastCheckExit, 0);
+});

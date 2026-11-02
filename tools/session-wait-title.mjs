@@ -2,7 +2,9 @@
 // Stop hook: 応答末尾の「このセッション: まだ閉じない（…YYYY-MM-DD HH:MM まで待つ）」の期限を、
 // セッション一覧のタイトルの頭に【11/02/20:11まで】の形（年なし）で付ける（2026-10-27 nishi 指示・全PC全アカウント）。
 // 一覧を見ただけで、どのタブをいつまで開けておくかが分かるようにする。
-// 閉じてよい定型文になったら頭の期限を外す。フッターが無い応答では期限を保持し、PC番号だけを付ける。fail-open・出力なし。
+// 閉じてよい定型文になったら頭の期限を外し、「次に kim がすること」が無い（なし等）ときだけ【閉じて可】を付ける
+// （2026-11-02 kim 指示・全PC全アカウント。kim のやることが残るセッションは閉じてよい定型文でも付けない）。
+// フッターが無い応答では頭の印を保持し、PC番号だけを付ける。fail-open・出力なし。
 // --all: 既存の全セッション（直近 RECENT_DAYS 日）にも同じ規則を当てる。SessionStart から1時間に1回だけ走る。
 import fs from 'node:fs';
 import os from 'node:os';
@@ -10,13 +12,20 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { resolvePcNumber } from './lib/pc-number.mjs';
-import { footerValues, openDeadline } from './next-action-gate.mjs';
+import { footerValues, NO_ACTION_PATTERN, openDeadline, SESSION_PHRASES } from './next-action-gate.mjs';
 
 const MAX_BYTES = 256 * 1024 * 1024;
 const RECENT_DAYS = 30;
 const SWEEP_COOLDOWN_MS = 60 * 60 * 1000;
-// 旧形式【26/11/02/20:11まで】（年あり）も外して新形式へ付け替える。
-const PREFIX = /^【(?:\d{2}\/)?\d{2}\/\d{2}\/\d{2}:\d{2}まで】\s*/;
+export const CLOSABLE_PREFIX = '【閉じて可】';
+// 旧形式【26/11/02/20:11まで】（年あり）も外して新形式へ付け替える。期限と【閉じて可】は排他で、どちらも付け替え対象。
+const PREFIX = /^(?:(?:【(?:\d{2}\/)?\d{2}\/\d{2}\/\d{2}:\d{2}まで】|【閉じて可】)\s*)+/;
+
+// 閉じてよい定型文（closed / delete）で、かつ kim のやることが無いときだけ true。
+export function isClosable(footer) {
+  return !!footer && [SESSION_PHRASES.closed, SESSION_PHRASES.delete].includes(footer.session)
+    && NO_ACTION_PATTERN.test(footer.nextAction);
+}
 
 export function waitPrefix(date) {
   const p = n => String(n).padStart(2, '0');
@@ -59,12 +68,12 @@ export function desiredTitle(text, raw, pc = '') {
   if (!footer && !pc) return null;
   const { custom, ai, firstPrompt, autoAi } = currentTitles(raw);
   const withoutPc = title => title.replace(/^\d{3}｜/, '');
-  const existingDeadline = withoutPc(custom).match(PREFIX)?.[0] || '';
+  const existingPrefix = withoutPc(custom).match(PREFIX)?.[0] || '';
   const base = (withoutPc(autoAi || custom).replace(PREFIX, '') || withoutPc(ai).replace(PREFIX, '') || firstPrompt || 'セッション').trim();
   const deadline = footer ? openDeadline(footer.session) : null;
-  const prefix = deadline ? waitPrefix(deadline) : !footer ? existingDeadline : '';
+  const prefix = deadline ? waitPrefix(deadline) : isClosable(footer) ? CLOSABLE_PREFIX : !footer ? existingPrefix : '';
   // Without a PC number, keep the existing footer-driven behavior.
-  if (!pc && !deadline && !existingDeadline) return null;
+  if (!pc && !prefix && !existingPrefix) return null;
   const next = `${pc ? pc + '｜' : ''}${prefix}${base}`;
   return next === custom ? null : next;
 }

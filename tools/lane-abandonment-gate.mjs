@@ -44,14 +44,24 @@ export function resultText(content) {
   if (Array.isArray(content)) return content.map(resultText).join('\n');
   return content?.text || (content?.content ? resultText(content.content) : '');
 }
+const LANE_EXECUTION = /(?:^|[\s/\\])(?:codex-do|cheap-code|llm-ask|gemini|qwen|lane-doctor)(?:\.mjs)?(?=[\s"']|$)/i;
+const SOURCE_CODE_LINE = /\/[^/\r\n]+\/[dgimsuvy]*\.test\s*\(|\bassert\s*\.|\bconst\s+[A-Za-z_$][\w$]*\s*=|=>/;
+const FILE_INSPECTION = /^\s*(?:(?:cat|head|tail|grep|rg|less|type|Get-Content)\b|sed\s+-n\b|git\s+(?:show|diff|log)\b)/i;
 export function failureSignal(text, command = '') {
+  const executesLane = delegated.test(command) || LANE_EXECUTION.test(command);
+  const commandKind = classifyBashCommand(command);
+  // Results from file-inspection commands quote arbitrary source and logs.  They
+  // are evidence being inspected, not the output of an AI lane invocation.
+  // A lane command remains inspectable even when its output is piped to tail.
+  if (command && !executesLane && (commandKind === 'read-only' || FILE_INSPECTION.test(command))) return '';
   for (const line of String(text).split(/\r?\n/)) {
     // Test descriptions quote failure messages; they are not provider output.
     const plain = line.replace(/\x1b\[[0-9;]*m/g, '').trimStart();
     if (/^(?:[✔✖ℹ]\s|(?:not )?ok\s+\d+\s+-\s|# Subtest:)/.test(plain)) continue;
+    if (SOURCE_CODE_LINE.test(plain)) continue;
     if (/全候補が失敗|demote中|usage limit|credits are depleted|RESOURCE_EXHAUSTED|PreToolUse:Bash hook error: このターンで Fable\/Opus 本体が直接/i.test(line)
       || /WSL ディストリが見つかりません|spawn \S+ ENOENT/.test(line)
-      || ((delegated.test(command) || /(?:^|[\s/\\])(?:codex-do|cheap-code|llm-ask|gemini|qwen)(?:\.mjs)?(?=[\s"']|$)/i.test(command)) && /is not recognized as an internal or external command|command not found/i.test(line))
+      || (executesLane && /is not recognized as an internal or external command|command not found/i.test(line))
       || /HTTP\s*4(?:02|29)\b(?!\s*:)/i.test(line)
       || (/codex-do(?:\.mjs)?/i.test(command) && /\bexit code\s*[:=]?\s*[1-9]\d*\b/i.test(line))) return safeText(line).slice(0, 180);
   }
@@ -60,13 +70,28 @@ export function failureSignal(text, command = '') {
 export function repairReported(text) {
   return String(text || '').split(/\r?\n/).some(line => /^\[LANE-REPAIR\][ \t]+[^:\r\n]+:[ \t]*(?:修復済み[ \t]+\S[^\r\n]*|修復不可[ \t]+試行:[ \t]*\S[^\r\n]*)$/.test(line.trim()));
 }
+const REPORTED_LANES = ['codex', 'deepseek', 'glm', 'gemini', 'groq', 'openrouter', 'kimi', 'xai', 'grok'];
+const STOP_WORD = /停止|失敗|残高(?:が)?不足|上限|使えない|動かない|落ちて|❌/i;
+export function reportedLaneStops(text) {
+  const prose = String(text || '').replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, '').split(/\r?\n/).filter(line => !/^\s*>/.test(line) && !/^\s*\[LANE-REPAIR\]/.test(line)).join('\n');
+  const found = new Set();
+  for (const sentence of prose.split(/[。\r\n]+/)) {
+    if (!STOP_WORD.test(sentence) || /\(OpenRouter経由\)|復帰予定|自動再確認中/i.test(sentence)) continue;
+    for (const lane of REPORTED_LANES) if (new RegExp(`\\b${lane}\\b`, 'i').test(sentence)) found.add(lane);
+  }
+  return [...found];
+}
+export function repairReportedFor(text, lane) {
+  return String(text || '').split(/\r?\n/).some(line => new RegExp(`^\\[LANE-REPAIR\\][ \\t]+${lane}:[ \\t]*(?:修復済み[ \\t]+\\S[^\\r\\n]*|修復不可[ \\t]+試行:[ \\t]*\\S[^\\r\\n]*)$`, 'i').test(line.trim()));
+}
 export function exemptions(ctx, events, failureIndex = -1, { requireRepair = false } = {}) {
   const users = turnEntries(ctx.transcriptRaw || '').filter(r => r.type === 'human' || r.message?.role === 'user');
   const userText = users.flatMap(r => typeof r.message?.content === 'string' ? [r.message.content] : (r.message?.content || []).filter(b => b.type === 'text').map(b => b.text)).join('\n');
   if (userText.includes('[LANE-OK]')) return 'lane-ok';
   // 汎用 course-correction の免除判定は互換性を維持し、この gate は修理必須で呼ぶ。
   if ((!requireRepair || repairReported(ctx.assistantText)) && /\[LANE-FALLBACK\][ \t]*\S[^\r\n]*/.test(ctx.assistantText || '')) return 'fallback';
-  if (events.slice(failureIndex + 1).some(e => e.type === 'tool_use' && /^(?:Bash|PowerShell)$/.test(e.name) && /(?:^|[\s/\\"'])lane-doctor\.mjs(?:\s|["']|$)/.test(e.input?.command || e.input?.script || ''))) return 'doctor';
+  const after = events.slice(failureIndex + 1), doctorIds = new Set(after.filter(e => e.type === 'tool_use' && /^(?:Bash|PowerShell)$/.test(e.name) && /(?:^|[\s/\\"'])lane-doctor\.mjs(?:\s|["']|$)/.test(e.input?.command || e.input?.script || '')).map(e => e.id));
+  if (after.some(e => e.type === 'tool_result' && doctorIds.has(e.tool_use_id) && /(?:^|\s)(?:codex|deepseek|glm|gemini|groq|openrouter|kimi|xai|grok)\s+✅/im.test(resultText(e.content)))) return 'doctor';
   return '';
 }
 export function currentModel(ctx) {
@@ -101,12 +126,15 @@ export function evaluateLaneAbandonment(ctx, { home = laneHome() } = {}) {
     const doc = /\.md$/i.test(target) || /memory|scratchpad/i.test(target) || /(?:^|\/)\.claude(?:\/|$)/i.test(target);
     if ((/^(?:Edit|Write|MultiEdit)$/.test(event.name) && !doc) || (event.name === 'Agent' && /opus|fable/i.test(event.input?.model || '')) || shellCalls >= 3) abandoned = true;
   }
+  const reportedStops = reportedLaneStops(ctx.assistantText);
+  for (const lane of reportedStops) if (!repairReportedFor(ctx.assistantText, lane)) signals.push(`${lane}: 停止報告に [LANE-REPAIR] なし`);
   const exemption = exemptions(ctx, events, failedAt, { requireRepair: true });
-  const enforcement = readJson(path.join(home, '.claude/rule-enforcement.json'));
+const enforcement = readJson(path.join(home, '.claude/rule-enforcement.json'));
   const promoted = enforcement['repair-failed-lane-first']?.mode === 'block';
   const modelEligible = promoted || /fable|opus/i.test(currentModel(ctx));
-  const eligible = modelEligible && failedAt >= 0;
-  const unrepaired = eligible && exemption !== 'lane-ok' && !repairReported(ctx.assistantText);
+  const eligible = modelEligible && (failedAt >= 0 || reportedStops.length > 0);
+  const textUnrepaired = reportedStops.some(lane => !repairReportedFor(ctx.assistantText, lane));
+  const unrepaired = eligible && exemption !== 'lane-ok' && (textUnrepaired || (failedAt >= 0 && !repairReported(ctx.assistantText)));
   const abandon = eligible && abandoned && !exemption;
   const expiry = modelEligible && !LANE_EXEMPT.test(ctx.assistantText || '') ? expiredWaitBody(ctx.assistantText) : '';
   const block = abandon || unrepaired || Boolean(expiry);

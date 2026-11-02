@@ -152,3 +152,30 @@ test('260430EIG limits each item to 80 characters and each case to 600 while ret
   assert.equal(unchanged.text.split('\n').length, 1);
   assert.ok(unchanged.text.length <= 600);
 });
+
+test('260430EIG splits adjacent numbered sentences and keeps the first three non-kim steps', () => {
+  const next = '1. Cqree回答待ち、5社再打診（締切11/13）→kimの送信OK後に代理送信。2. 地域交流センター神宮前の空き確認（エイトBO待ち）。3. 11/5 17:00 MTGまでにチラシ初稿PDF作成。4. 声かけ学生団体一覧共有待ち（明大マーケ研11/9回答予定）。5. Peatix 12/12用に更新。';
+  const { text } = formatCaseProgress(id, eigState({ next }), undefined, now);
+  assert.equal(text.split('\n')[2], '未完了・次の一手: 地域交流センター神宮前の空き確認（エイトBO待ち）。 ／ 11/5 17:00 MTGまでにチラシ初稿PDF作成。 ／ 声かけ学生団体一覧共有待ち（明大マーケ研11/9回答予定）。');
+  assert.equal(text.split('\n')[3], 'kim の判断待ち: Cqree回答待ち、5社再打診（締切11/13）→kimの送信OK後に代理送信。');
+  assert.ok(!text.includes('Peatix'));
+});
+test('C0039 splits parenthesized numbering and excludes completed items', () => {
+  const next = '1) kimの送信OK待ち 2) 地域交流センター確認 3) [x] 完了済み 4) チラシ初稿作成 5) 声かけ学生団体確認 6) 四つ目';
+  const { text } = formatCaseProgress('C0039', eigState({ next }), undefined, now);
+  assert.equal(text.split('\n')[2], '未完了・次の一手: 地域交流センター確認 ／ チラシ初稿作成 ／ 声かけ学生団体確認');
+  assert.equal(text.split('\n')[3], 'kim の判断待ち: kimの送信OK待ち');
+});
+test('numbered markers split after whitespace and punctuation without splitting dates, times or decimals', () => {
+  for (const separator of [' ', '\n', '。', '、', '；', ';']) {
+    for (const markers of [['1.', '2.', '3.'], ['1)', '2)', '3)'], ['1．', '2．', '3．'], ['1）', '2）', '3）'], ['①', '②', '⑳']]) {
+      const next = `${markers[0]} 締切11/13 17:00 12/12 1.5倍${separator}${markers[1]} kimの判断待ち${separator}${markers[2]} [x] 完了済み`;
+      const { text } = formatCaseProgress(id, eigState({ next }), undefined, now);
+      const punctuation = separator.trim();
+      assert.equal(text.split('\n')[2], `未完了・次の一手: 締切11/13 17:00 12/12 1.5倍${punctuation}`, next);
+      assert.equal(text.split('\n')[3], `kim の判断待ち: kimの判断待ち${punctuation}`, next);
+    }
+  }
+  const next = '1. 作業A2. 続きA③続き、1.5倍；12/12 17:00';
+  assert.equal(formatCaseProgress(id, eigState({ next }), undefined, now).text.split('\n')[2], '未完了・次の一手: 作業A2. 続きA③続き、1.5倍；12/12 17:00');
+});

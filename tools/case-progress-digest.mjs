@@ -6,18 +6,22 @@ import { redactSecrets } from './redact-secrets.mjs';
 const DAY = 86400000;
 const stamp = /^20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})/gm;
 const lines = text => String(text || '').split('\n').map(s => s.trim()).filter(Boolean);
+// Do not interpret decimal values such as 1.5 as list markers.
+const numberedMarker = String.raw`(?:\d+[.)．）](?!\d)|[①-⑳])`;
+const itemPrefix = new RegExp(String.raw`^\s*(?:[-*]\s+|${numberedMarker}\s*)`);
+const itemBoundary = new RegExp(String.raw`(?<=[\s。、；;])(?=${numberedMarker})`);
 function displayItem(text, limit = 80) {
   const clean = redactSecrets(String(text))
     .replace(/\[[^\]\r\n]*20\d{2}-[^\]\r\n]*\]/g, '')
-    .replace(/^\s*(?:[-*]\s+|\d+\.\s+)/, '')
+    .replace(itemPrefix, '')
     .replace(/\s+/g, ' ').trim();
   const chars = Array.from(clean);
   return chars.length > limit ? `${chars.slice(0, limit - 1).join('')}…` : clean;
 }
 // Split before display truncation so a kim request late in a paragraph is still found.
-const items = text => lines(text).flatMap(line => line.split(/\s+(?=\d+\.\s+)/));
+const items = text => lines(text).flatMap(line => line.split(itemBoundary).map(s => s.trim()).filter(Boolean));
 const needsKim = text => /kim\s*待ち|送信OK|kim\s*の\s*(?:判断|返事)|kim\s*による/i.test(text);
-const incomplete = text => !/^\s*(?:[-*]\s+|\d+\.\s+)?\[x\]/i.test(text);
+const incomplete = text => !/^\s*\[x\]/i.test(text.replace(itemPrefix, ''));
 export function sections(state) {
   const result = {}; let heading = '';
   for (const line of String(state).split('\n')) {

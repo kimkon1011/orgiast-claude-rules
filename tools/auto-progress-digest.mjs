@@ -217,6 +217,7 @@ export function formatDigest(rows, now = Date.now(), label = '', {
   const filtered = (allRows || rows || []).filter(row => !isNoopPromise(row.promise));
   if (!filtered.length && !(waitingRows?.length || doneRows?.length || stalledRows?.length || inProgressRows?.length)) return '';
 
+  const scheduled = filtered.filter(row => ['scheduled', 'start_overdue'].includes(row.status));
   const waitingAll = waitingRows ? [...waitingRows] : [];
   const done = doneRows ? [...doneRows] : [];
   let stalled = stalledRows ? [...stalledRows] : [];
@@ -225,6 +226,7 @@ export function formatDigest(rows, now = Date.now(), label = '', {
 
   if (!waitingRows && !doneRows && !stalledRows && !inProgressRows) {
     for (const row of filtered) {
+      if (scheduled.includes(row)) continue;
       if (row.status === 'done' || verdictOf(row, now) === 'done') {
         done.push(row);
       } else if (isHumanActionRequired(row)) {
@@ -249,7 +251,7 @@ export function formatDigest(rows, now = Date.now(), label = '', {
     const t = Date.parse(r.lastCheckedAt || r.resumedAt || r.ts || 0);
     return Number.isFinite(t) ? t : 0;
   };
-  const inProgressSorted = [...inProgressList].sort((a, b) => checkedTime(b) - checkedTime(a));
+  const inProgressSorted = inProgressList.filter(row => !scheduled.includes(row)).sort((a, b) => checkedTime(b) - checkedTime(a));
 
   const pcLabel = label || 'このPC';
   const header = `【${pcLabel} の自動進行】 完了 ${done.length}件・止まっている ${stalled.length}件・あなたの判断待ち ${waiting.length}件`;
@@ -260,6 +262,10 @@ export function formatDigest(rows, now = Date.now(), label = '', {
   // 全件を名前つきで並べる。1通1800字に収まらない時は分割指示（chunkMessage）を run() 側で行う。
   const render = () => {
     const lines = [header];
+    for (const row of scheduled) {
+      lines.push(itemLine(`・開始予約${row.status === 'start_overdue' ? '（期限超過）' : ''}: `,
+        cleanText(row.label || row.promise, row), `（開始条件の最終確認 ${row.lastCheckedAt || '未確認'}）`));
+    }
     // 1. あなたの判断待ち（古さに関係なく全件）
     for (const { row, count } of waiting) {
       const what = cleanText(row.label || row.promise || '約束した作業', row);
@@ -364,7 +370,9 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     const prevResumedAt = lastResumedAt[key];
     const prevWait = lastWaiting[key];
 
-    if (row.status === 'done' || v === 'done') {
+    if (['scheduled', 'start_overdue'].includes(row.status)) {
+      inProgressRows.push(row);
+    } else if (row.status === 'done' || v === 'done') {
       const doneAtTime = Date.parse(row.doneAt || 0) || 0;
       if (prevVerdict !== 'done' || (doneAtTime && doneAtTime > lastSuccessAt)) {
         newlyDoneRows.push(row);

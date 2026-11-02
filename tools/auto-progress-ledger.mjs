@@ -112,7 +112,7 @@ export function cleanupOldLedgerTemps(file, { now = Date.now(), maxAgeMs = 36000
 
 export const MAX_RESUMES = 8; // 1件あたりの自動再開の累計上限（watch/digest 共用。循環 import 回避のためここに置く）
 
-export const OPEN_STATUSES = new Set(['open', 'stalled', 'resumed', 'waiting_user']);
+export const OPEN_STATUSES = new Set(['open', 'stalled', 'resumed', 'waiting_user', 'scheduled', 'starting', 'start_overdue']);
 
 // Timestamp order is authoritative; equal timestamps prefer the later ledger line.
 export function latestOpenPromises(rows) {
@@ -130,13 +130,15 @@ export function latestOpenPromises(rows) {
 // 同じ session に open の check 付き行があるときは、新しい約束行に check 情報を引き継ぐ。
 export function applyPromise(rows, record) {
   let toAdd = record;
-  if (!toAdd.check) {
+  if (!toAdd.check && !toAdd.startWhen) {
     const existing = rows
-      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && row.check)
+      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && (row.check || row.startWhen))
       .sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0))[0];
     if (existing) {
       toAdd = {
         ...toAdd,
+        ...(existing.startWhen ? { startWhen: existing.startWhen, startedAt: existing.startedAt,
+          ...(['scheduled', 'starting', 'start_overdue'].includes(existing.status) ? { status: existing.status } : {}) } : {}),
         check: existing.check,
         checkCwd: existing.checkCwd ?? toAdd.cwd,
         deadlineAt: existing.deadlineAt,

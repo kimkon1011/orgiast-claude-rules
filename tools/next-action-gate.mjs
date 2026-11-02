@@ -197,7 +197,7 @@ function hasSessionWakeup(raw, input = {}) {
       if (tool?.type !== 'tool_use') continue;
       if (/^(?:Bash|PowerShell)$/.test(tool.name || '')) {
         const cmd = String(tool.input?.command || tool.input?.script || '');
-        if (/\bauto-progress(?:\.mjs)?\b/.test(cmd) && /--add-check\b/.test(cmd) && !/--help\b/.test(cmd)) {
+        if (/\bauto-progress(?:\.mjs)?\b/.test(cmd) && /--(?:add-check|start-when)\b/.test(cmd) && !/--help\b/.test(cmd)) {
           autoProgress = true;
         }
       }
@@ -313,7 +313,7 @@ function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {
   }
   if (!permanentFix && hasAutopilot && process.env.CLAUDE_HEADLESS !== '1'
     && !/subagents/i.test(input.transcript_path || '') && !wakeup.autoProgress && !wakeup.background && !wakeup.scheduled) {
-    return { decision: 'block', code: 'AUTOPILOT-NO-SESSION-WAKEUP', reason: '「この後の自動進行」が残っていますが、このセッションを定期的に起こす仕組みがありません。/loop で自走するか、Monitor か ScheduleWakeup を実際に呼ぶか、node tools/auto-progress.mjs --add-check … で定期チェックを登録してから終えてください。『次ターンで』『次回起きたら』は起床手段にならない。自動進行が無いなら「この後の自動進行: なし」と書いてください。' };
+    return { decision: 'block', code: 'AUTOPILOT-NO-SESSION-WAKEUP', reason: '「この後の自動進行」が残っていますが、このセッションを定期的に起こす仕組みがありません。/loop で自走するか、Monitor か ScheduleWakeup を実際に呼ぶか、node tools/auto-progress.mjs --add-check … で定期チェックを登録してから終えてください（「夜に着手」など開始の予約は --start-when "<開始条件>" --next-claude "<やること>"。--check は完了判定なので時刻を入れない）。『次ターンで』『次回起きたら』は起床手段にならない。自動進行が無いなら「この後の自動進行: なし」と書いてください。' };
   }
   return permanentFix || { decision: 'pass', reason: 'valid-footer' };
 }

@@ -928,7 +928,7 @@ test('resolveFallbackBackends は既定で cheap-code:deepseek → cheap-code:gl
     assert.ok(!backends.some((b) => b.kind === 'qwen'), '既定の並びに kind:qwen(実在しないqwenバイナリ依存)を含めない');
     assert.equal(backends[0].provider, 'deepseek');
     assert.equal(backends[1].provider, 'glm');
-    assert.equal(backends[2].model, 'gemini-3.7-flash');
+    assert.equal(backends[2].model, 'gemini-3.6-flash');
     assert.equal(backends[2].apiKey, 'sk-gemini-1');
   });
 });

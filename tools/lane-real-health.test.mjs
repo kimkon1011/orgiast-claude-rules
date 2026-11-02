@@ -216,3 +216,22 @@ test('direct probe success after an untimed 429 clears ledger-only quota_wait', 
   const fresh = { lanes: { deepseek: { alive: true, reason: 'probe_ok', lastProbeOkAt: new Date(now - 1000).toISOString() } } };
   applyRealLaneHealth(fresh, home, now); assert.equal(fresh.lanes.deepseek.alive, true); assert.equal(fresh.lanes.deepseek.reason, 'probe_ok');
 });
+test('gemini 503 high demand recovery: model swap brings fail rate below 50%', t => {
+  // Simulated 7 failures from gemini-3.7-flash (503 high demand)
+  const home = fixture(t, Array.from({ length: 7 }, () => ({ status: '503', reason: 'HTTP 503' })));
+  const stats = realLaneStats(home, now);
+  assert.equal(stats.deepseek.failures, 7);
+  assert.equal(stats.deepseek.failRate, 1);
+  const h = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(h, home, now);
+  assert.equal(h.lanes.deepseek.reason, 'real_fail_rate');
+  assert.equal(h.lanes.deepseek.error, 'HTTP 503 (7)');
+  // After model swap (gemini-3.7-flash → gemini-3.6-flash), 8 successful calls enter the ledger:
+  // 7 failures + 8 ok = 15 calls, 7/15=46.7% → below 50% threshold → recovered
+  fs.appendFileSync(path.join(home, '.claude/executor-usage.jsonl'), '\n' +
+    Array.from({ length: 8 }, () => JSON.stringify({ provider: 'deepseek', t: new Date(now).toISOString(), status: 'ok' })).join('\n'));
+  const fresh = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(fresh, home, now);
+  assert.equal(fresh.lanes.deepseek.reason, 'probe_ok');
+  assert.equal(fresh.lanes.deepseek.alive, true);
+});

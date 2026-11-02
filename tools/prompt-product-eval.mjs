@@ -18,7 +18,7 @@ const PROVIDERS = {
   groq: { base: 'https://api.groq.com/openai/v1/chat/completions', keyEnv: 'GROQ_API_KEY', keyFile: 'groq.env', model: 'openai/gpt-oss-120b' },
   deepseek: gatewayConfig('deepseek'),
   openrouter: { base: 'https://openrouter.ai/api/v1/chat/completions', keyEnv: 'OPENROUTER_API_KEY', keyFile: 'openrouter.env', model: 'meta-llama/llama-3.3-70b-instruct', headers: { 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast-prompt-product-eval' } },
-  gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', keyEnv: 'GEMINI_API_KEY', keyFile: 'gemini.env', model: 'gemini-3.7-flash' },
+  gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', keyEnv: 'GEMINI_API_KEY', keyFile: 'gemini.env', model: 'gemini-3.6-flash' },
   kimi: gatewayConfig('kimi'),
   mistral: { base: 'https://api.mistral.ai/v1/chat/completions', keyEnv: 'MISTRAL_API_KEY', keyFile: 'mistral.env', model: 'open-mistral-nemo' },
   ollama: { base: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434/v1/chat/completions', keyEnv: null, model: '' }

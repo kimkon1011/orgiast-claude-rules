@@ -213,3 +213,46 @@ test('manifest distributes the hook and both synchronous events through converge
     assert.deepEqual(entry.repair, ['register-hooks.mjs', '--hooks-only']);
   }
 });
+
+for (const [name, allDay, excluded] of [
+  ['Tokyo', { summary: '東京', start: { date: '2026-11-02' }, end: { date: '2026-11-03' } }, true],
+  ['Kyoto', { summary: '京都', start: { date: '2026-11-02' }, end: { date: '2026-11-03' } }, false],
+  ['no all-day event', null, false],
+  ['multi-day starting yesterday', { summary: '出張', start: { date: '2026-11-01' }, end: { date: '2026-11-03' } }, true],
+  ['multi-day ending tomorrow', { summary: '出張', start: { date: '2026-11-02' }, end: { date: '2026-11-04' } }, true],
+  ['exclusive end', { summary: '東京', start: { date: '2026-10-31' }, end: { date: '2026-11-02' } }, false],
+  ['location city', { summary: '移動', location: '新横浜', start: { date: '2026-11-02' }, end: { date: '2026-11-03' } }, true],
+]) test(`overnight exclusion: ${name}`, async t => {
+  const dir = temp(t);
+  const result = await run({ dryRun: true, stateDir: dir, from: '2026-11-02', to: '2026-11-02' }, {
+    events: [fixtureEvent()], allDayEvents: allDay ? [allDay] : [], geocode: async () => ({ lat: 35.01, lon: 135.76 }),
+  });
+  assert.equal(result.candidates.length, excluded ? 0 : 1);
+  assert.equal(result.excluded.length, excluded ? 1 : 0);
+  if (excluded) assert.equal(result.excluded[0].reason, `overnight(終日予定: ${allDay.summary})`);
+  assert.ok(!fs.existsSync(path.join(dir, 'ledger.jsonl')));
+});
+test('all calendar pages and event pages are read, including hidden calendars, excluding holidays', async () => {
+  const { listAllDayEvents } = await import('./daytrip-detect.mjs');
+  const calls = [], event = { summary: '東京', start: { date: '2026-11-02' }, end: { date: '2026-11-03' } };
+  const result = await listAllDayEvents(dateRange({ from: '2026-11-02', to: '2026-11-02' }), 'fake', async url => {
+    const u = new URL(url); calls.push(u);
+    if (u.pathname.endsWith('calendarList')) return Response.json(u.searchParams.has('pageToken') ? { items: [{ id: 'shared@example.jp', hidden: true }, { id: 'ja.japanese#holiday@group.v.calendar.google.com' }] } : { items: [{ id: 'kim@orgiast.jp' }], nextPageToken: 'cal2' });
+    return Response.json(u.searchParams.has('pageToken') ? { items: [event] } : { items: [{ start: { dateTime: '2026-11-02T12:00:00+09:00' } }], nextPageToken: 'events2' });
+  });
+  assert.equal(result.length, 2); assert.equal(calls.length, 6);
+  assert.ok(calls[0].searchParams.get('showHidden') === 'true');
+  assert.ok(!calls.some(u => u.pathname.includes('holiday')));
+});
+test('overnight decisions remove old pending and queued candidates and prevent approved append', async t => {
+  const { dir, ledger, c } = setup(t);
+  ledger.save({ type: 'queued', candidate: c });
+  ledger.save({ type: 'decision', date: c.date, status: 'accepted' });
+  const deps = { now, events: [fixtureEvent()], allDayEvents: [{ summary: '東京', start: { date: c.date }, end: { date: '2026-11-03' } }], geocode() { throw new Error('unnecessary geocoding'); }, sheetsFactory() { throw new Error('overnight must not append'); } };
+  await run({ stateDir: dir, from: c.date, to: c.date }, deps);
+  await run({ stateDir: dir, from: c.date, to: c.date }, deps);
+  const rows = journal(path.join(dir, 'ledger.jsonl')).rows;
+  assert.equal(rows.filter(r => r.status === 'overnight(終日予定: 東京)').length, 1);
+  assert.deepEqual(pendingItems(rows), []);
+  assert.equal(rows.filter(r => r.type === 'batch').length, 1);
+});

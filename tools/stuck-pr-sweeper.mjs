@@ -134,12 +134,19 @@ export async function sweep({ home = process.env.ORGIAST_HOME || os.homedir(), n
   try {
     const state = (io.readState || readState)(file);
     const persist = () => { if (!dryRun) (io.saveState || saveState)(file, state); };
+    if (!dryRun) {
+      for (const rec of Object.values(state.prs)) for (const attempt of rec.attempts || []) {
+        if (attempt.status === 'running') Object.assign(attempt, { status: 'interrupted', endedAt: new Date(now).toISOString(), result: '前回の巡回が修復完了前に中断しました。試行回数は消費済みです。' });
+      }
+      persist();
+    }
     const items = [], errors = [];
     let repairs = 0;
     for (const repo of config.repositories) {
       let prs;
       try { prs = io.list ? await io.list(repo) : JSON.parse(gh(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '1000', '--json', fields])); }
       catch (e) { errors.push(`${repo}: ${safe(e.message)}`); continue; }
+      if (prs.length >= 1000) errors.push(`${repo}: PR 一覧が上限1000件に達しました。全件を確認できていません。`);
       const current = new Map(prs.map(p => [String(p.number), { ...p, repo }]));
       for (const [key, rec] of Object.entries(state.prs)) if (key.startsWith(repo + '#') && !['merged', 'closed'].includes(rec.status) && !current.has(String(rec.number))) {
         try { current.set(String(rec.number), await (io.view || view)(repo, rec.number)); }

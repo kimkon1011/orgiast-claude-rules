@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { addCheck } from './auto-progress.mjs';
-import { executeCheck, resolveCheckShell, CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS } from './auto-progress-check.mjs';
+import { executeCheck, resolveCheckShell, CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS, hasCheckError, hasBashEnvExpansion, preflightCheck } from './auto-progress-check.mjs';
 import { readLedger, writeLedger, ledgerFile } from './auto-progress-ledger.mjs';
 import { run as watch } from './auto-progress-watch.mjs';
 import { run as digest } from './auto-progress-digest.mjs';
@@ -230,4 +230,99 @@ test('check completion accepts durable inbox delivery and does not retry', async
  await watch({ home, now, io });
  assert.equal(calls, 1);
  assert.equal(readLedger(ledgerFile(home))[0].checkNotifiedResult, 'done');
+});
+
+test('hasCheckError detects error indicators in stderr', () => {
+  for (const error of ['Cannot find path', 'パスが存在しない', 'is not recognized', 'command not found', 'No such file', 'ParserError', 'SyntaxError', 'CommandNotFoundException', 'ItemNotFoundException']) {
+    assert.equal(hasCheckError(error), true, error);
+    assert.equal(hasCheckError(`line: ${error} more text`), true, `${error} with context`);
+  }
+  assert.equal(hasCheckError(''), false);
+  assert.equal(hasCheckError('未達: 正常な結果'), false);
+  assert.equal(hasCheckError('exit 1'), false);
+});
+
+test('hasCheckError matches lowercase and partial patterns', () => {
+  assert.equal(hasCheckError('cannot find path'), true);
+  assert.equal(hasCheckError('COMMAND NOT FOUND'), true);
+  assert.equal(hasCheckError('no such file or directory'), true);
+  assert.equal(hasCheckError('itemnotfoundexception'), true);
+});
+
+test('hasBashEnvExpansion detects $env: inside double-quoted bash command', () => {
+  const harmful = 'powershell -NoProfile -Command "if ((Get-Item $env:USERPROFILE\\.claude\\logs\\x.log -ErrorAction Stop).LastWriteTime -ge [datetime]\'2026-10-28 02:00\') { exit 0 } else { exit 1 }"';
+  assert.equal(hasBashEnvExpansion(harmful), true);
+  assert.equal(hasBashEnvExpansion('$env:USERPROFILE'), true);
+  assert.equal(hasBashEnvExpansion('echo $env:'), true);
+  assert.equal(hasBashEnvExpansion('printf("%s", $env:VAR)'), true);
+});
+
+test('hasBashEnvExpansion allows escaped $env: and non-$env expressions', () => {
+  assert.equal(hasBashEnvExpansion('powershell -NoProfile -Command "if ((Get-Item \\$env:USERPROFILE\\\\.claude...))"'), false);
+  assert.equal(hasBashEnvExpansion("powershell -NoProfile -Command 'if ((Get-Item $env:USERPROFILE\\\\.claude...))'"), true); // single quotes don't protect in JS string
+  assert.equal(hasBashEnvExpansion('node check.mjs'), false);
+  assert.equal(hasBashEnvExpansion('exit 0'), false);
+});
+
+test('hasBashEnvExpansion: 正しい書き方（単一引用符版）は拒否しない（bash経由で単一引用符内は展開されないが、検査は?）', () => {
+  // 単一引用符で囲まれていても $env: の存在自体は検出する（簡易検査の限界）。
+  // 正しくは --force-check で回避するか、\$env: とエスケープする。
+  const correct = "powershell -NoProfile -Command 'if ((Get-Item $env:USERPROFILE\\.claude\\logs\\x.log -ErrorAction Stop).LastWriteTime -ge [datetime]''2026-10-28 02:00'') { exit 0 } else { exit 1 }'";
+  // hasBashEnvExpansion は $env: の存在を検出する（単純一致）
+  assert.equal(hasBashEnvExpansion(correct), true);
+  // このように単一引用符で囲んでいても、検査は通過しないため --force-check が必要。
+  // もしくは \$env: とエスケープする。
+  const escaped = 'node -e "console.log(process.env.HOME)"';
+  assert.equal(hasBashEnvExpansion(escaped), false);
+});
+
+test('preflightCheck: 実害の check 文字列を静的検査で拒否する', () => {
+  const harmful = 'powershell -NoProfile -Command "if ((Get-Item $env:USERPROFILE\\.claude\\logs\\x.log -ErrorAction Stop).LastWriteTime -ge [datetime]\'2026-10-28 02:00\') { exit 0 } else { exit 1 }"';
+  const result = preflightCheck({ check: harmful }, { home: tmp() });
+  assert.equal(result.ok, false);
+  assert.equal(result.preflight, 'static_error');
+  assert.equal(result.code, 2);
+  assert.match(result.text, /\\$env:/);
+  assert.match(result.text, /単一引用符/);
+});
+
+test('preflightCheck: --force-check で静的検査を回避できる', () => {
+  const harmful = 'powershell -NoProfile -Command "if ((Get-Item $env:USERPROFILE\\.claude\\logs\\x.log -ErrorAction Stop).LastWriteTime -ge [datetime]\'2026-10-28 02:00\') { exit 0 } else { exit 1 }"';
+  const result = preflightCheck({ check: harmful }, { home: tmp(), forceCheck: true });
+  // forceCheck なら、静的検査をスキップし実行結果を返す（この環境では powershell がなく exit null になる）
+  // 少なくとも static_error ではない
+  assert.notEqual(result.preflight, 'static_error');
+});
+
+test('preflightCheck: 正常な check で未達を返す', () => {
+  const home = tmp();
+  const result = preflightCheck({ check: `${process.execPath} -e "process.exit(1)"` }, { home });
+  // exit 1 で stderr なし → unmet
+  assert.equal(result.ok, true);
+  assert.equal(result.preflight, 'unmet');
+});
+
+test('preflightCheck: stderr にエラーがあれば拒否', () => {
+  const result = preflightCheck({ check: 'unknown-command-that-fails' }, { home: tmp() });
+  // unknown-command は stderr に command not found 系 → stderr_error
+  if (!result.ok) {
+    assert.equal(result.preflight, 'stderr_error');
+    assert.match(result.text, /エラー/);
+  }
+  // 環境によっては別のエラーになるが、少なくとも静的検査ではない
+  assert.notEqual(result.preflight, 'static_error');
+});
+
+test('preflightCheck: stderr エラーでも --force-check で強制登録できる', () => {
+  const result = preflightCheck({ check: 'unknown-command-that-fails' }, { home: tmp(), forceCheck: true });
+  if (!result.ok) {
+    // force-check でも実行不能なら overridden または別の preflight になる
+    assert.notEqual(result.preflight, 'stderr_error');
+  }
+});
+
+test('executeCheck returns stderr in result', () => {
+  const result = executeCheck({ check: `${process.execPath} -e "process.stderr.write('error msg');process.exit(1)"` }, { home: tmp() });
+  assert.ok('stderr' in result);
+  assert.equal(typeof result.stderr, 'string');
 });

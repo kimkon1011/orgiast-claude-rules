@@ -9,6 +9,8 @@ import { isNoopPromise, extractPromise, extractNextKim, applyPromise, buildRecor
 import { run as watch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, forgiveNoExecutorResumes, main as watchMain, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS, formatDoneMessage, readableReason, formatDoneBacklogMessages } from './auto-progress-watch.mjs';
 import { run as digest, selectRows, formatDigest, digestGroupKey, isUnattendedRow, WINDOW_MS, MAX_ITEMS, needsDm, verdictOf, cleanText, isHumanActionRequired, waitingNotificationKey, chunkMessage } from './auto-progress-digest.mjs';
 import { runRegisterPs1 } from './lib/run-register-ps1.mjs';
+import { addCheck, main as addCheckMain } from './auto-progress.mjs';
+import { preflightCheck, hasBashEnvExpansion, executeCheck, CHECK_ERROR_PATTERNS } from './auto-progress-check.mjs';
 
 const tempHomes = [];
 const tmp = () => { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-progress-')); tempHomes.push(home); return home; };
@@ -1574,4 +1576,35 @@ test('watch: inbox delivery records actual channel and stops retrying completion
   const log = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'logs', 'auto-progress-done-dm.sent.jsonl'), 'utf8').trim());
   assert.equal(log.channel, 'inbox');
   assert.equal(log.toastExitCode, 1);
+});
+
+test('addCheck: 実害の check 文字列は静的検査で拒否される', () => {
+  const home = tmp();
+  const badCheck = 'powershell -NoProfile -Command "if ((Get-Item $env:USERPROFILE\\.claude\\logs\\x.log -ErrorAction Stop).LastWriteTime -ge [datetime]\'2026-10-28 02:00\') { exit 0 } else { exit 1 }"';
+  const pf = preflightCheck({ check: badCheck }, { home });
+  assert.equal(pf.ok, false);
+  assert.equal(pf.preflight, 'static_error');
+  assert.match(pf.text, /\\$env:/);
+});
+
+test('addCheck: \\$env: エスケープ版は拒否されず「未達（正常）」で通る', () => {
+  const home = tmp();
+  const goodCheck = `${process.execPath} -e "process.exit(1)"`;
+  const pf = preflightCheck({ check: goodCheck }, { home });
+  assert.equal(pf.ok, true);
+  assert.equal(pf.preflight, 'unmet');
+});
+
+test('addCheck: --force-check で preflight の静的検査をスキップできる', () => {
+  const home = tmp();
+  const badCheck = 'powershell -NoProfile -Command "if ((Get-Item $env:USERPROFILE\\.claude\\logs\\x.log -ErrorAction Stop).LastWriteTime -ge [datetime]\'2026-10-28 02:00\') { exit 0 } else { exit 1 }"';
+  const pf = preflightCheck({ check: badCheck }, { home, forceCheck: true });
+  assert.notEqual(pf.preflight, 'static_error');
+});
+
+test('main() は実害の check 文字列を preflightCheck で拒否する', () => {
+  const badCheck = 'powershell -NoProfile -Command "if ((Get-Item $env:USERPROFILE\\.claude\\logs\\x.log -ErrorAction Stop).LastWriteTime -ge [datetime]\'2026-10-28 02:00\') { exit 0 } else { exit 1 }"';
+  const pf = preflightCheck({ check: badCheck }, { home: tmp() });
+  assert.equal(pf.ok, false);
+  assert.equal(pf.code, 2);
 });

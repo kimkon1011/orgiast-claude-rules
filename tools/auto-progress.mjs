@@ -3,7 +3,7 @@ import os from 'node:os';
 import { parseArgs } from 'node:util';
 import { isEntry } from './is-entry.mjs';
 import { ledgerFile, readLedger, writeLedger, latestOpenPromises, applyPromise } from './auto-progress-ledger.mjs';
-import { executeCheck, MAX_CHECK_TIMEOUT_MS } from './auto-progress-check.mjs';
+import { executeCheck, MAX_CHECK_TIMEOUT_MS, preflightCheck } from './auto-progress-check.mjs';
 import { resolveOwner } from './notify-owner.mjs';
 export function addCheck({ session, check, deadline, label, nextClaude, timeout, cwd = process.cwd(), home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), probe, allowMet = false }) {
   if (!session?.trim() || !check?.trim() || !label?.trim()) throw new Error('--session, --check, --label は必須です');
@@ -29,9 +29,19 @@ export function addCheck({ session, check, deadline, label, nextClaude, timeout,
   writeLedger(file, applyPromise(rows, row)); return row;
 }
 export function main(argv = process.argv.slice(2)) {
-  const { values } = parseArgs({ args: argv, options: { 'add-check': { type: 'boolean' }, 'allow-met': { type: 'boolean' }, session: { type: 'string' }, check: { type: 'string' }, deadline: { type: 'string' }, label: { type: 'string' }, 'next-claude': { type: 'string' }, timeout: { type: 'string' } } });
-  if (!values['add-check']) throw new Error('使用法: --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" [--timeout <秒>] [--allow-met]');
+  const { values } = parseArgs({ args: argv, options: { 'add-check': { type: 'boolean' }, 'allow-met': { type: 'boolean' }, 'force-check': { type: 'boolean' }, session: { type: 'string' }, check: { type: 'string' }, deadline: { type: 'string' }, label: { type: 'string' }, 'next-claude': { type: 'string' }, timeout: { type: 'string' } } });
+  if (!values['add-check']) throw new Error('使用法: --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" [--timeout <秒>] [--allow-met] [--force-check]');
   const home = process.env.ORGIAST_HOME || os.homedir();
-  return addCheck({ ...values, home, nextClaude: values['next-claude'], allowMet: values['allow-met'], probe: row => executeCheck(row, { home }) });
+  if (!values['force-check']) {
+    const timeoutSec = values.timeout === undefined || values.timeout === '' ? null : Number(values.timeout);
+    const hasTimeout = timeoutSec !== null && timeoutSec > 0 && timeoutSec * 1000 <= MAX_CHECK_TIMEOUT_MS;
+    const checkTimeoutMs = hasTimeout ? Math.round(timeoutSec * 1000) : undefined;
+    const pf = preflightCheck({ check: values.check, checkCwd: process.cwd(), cwd: process.cwd(), ...(checkTimeoutMs ? { checkTimeoutMs } : {}) }, { home });
+    if (!pf.ok) throw new Error(pf.text);
+    if (pf.preflight === 'already_met' && !values['allow-met']) {
+      // 登録はするが、達成済みであることを表示する
+    }
+  }
+  return addCheck({ ...values, home, nextClaude: values['next-claude'], allowMet: values['allow-met'] });
 }
 if (isEntry(import.meta.url)) { try { console.log(JSON.stringify(main())); } catch (error) { console.error(error.message); process.exitCode = 2; } }

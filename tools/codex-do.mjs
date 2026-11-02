@@ -1076,6 +1076,12 @@ function execute(command, commandArgs, options = {}) {
       console.error(`
 [codex-do] ${command} はポリシー拒否が続き、出力 ${outputChars} 文字のまま停滞したため停止します`);
       killProcessTree(child);
+      // killProcessTree 直後に settle して child.on('close') と timeout タイマーの
+      // 競合を回避する。settle しないと timeout が先に timedOut=true を立て、
+      // settle({timedOut:true, aborted:null}) で解決し policy_stall フラグが
+      // 破棄される（2026-11-01 実測: gemini-cli 拒否7回/0出力/300秒で
+      // outcome=timeout となり shouldAbortPolicyStall が効かなかった）。
+      settle({ status: 124, outputChars, output, stderr, timedOut: false, aborted: 'policy_stall' });
     };
     const stallTimer = setInterval(checkPolicyStall, policyStallCheckMs(process.env));
     stallTimer.unref?.();
@@ -1423,7 +1429,13 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
           // stderrTail は末尾200字のため拒否回数が欠ける。打ち切り判定と同じ実測値（全 stderr の拒否回数・出力文字数）を残す。
           policyDenials: countPolicyDenials(result.stderr),
           outChars: result.outputChars || 0,
-          secs: Number(((Date.now() - attemptStarted) / 1000).toFixed(3)),
+          // secs に killProcessTree 後の grace (timeoutKillGraceMs≈5秒) を含めると
+          // budgetSecs 超過に見え timeout-waste-judge が誤検出する。タイムアウト時は
+          // 与えた予算で頭打ちにする（2026-11-01: deepseek 611s/予算600s）。
+          secs: Number((result.timedOut
+            ? Math.min((Date.now() - attemptStarted) / 1000, Number(backendTimeout))
+            : (Date.now() - attemptStarted) / 1000
+          ).toFixed(3)),
           // この試行に実際に与えた予算。delegation-health の timeout 判定が
           // 「900 秒固定」ではなく与えた予算で判定できるようにする（2026-10-22）。
           budgetSecs: backendTimeout,

@@ -962,5 +962,5 @@ test('fixed selfcheck prompt passes without force; appended mutation remains blo
     assert.equal(await main(['--send', '--to', recipient, '--kind', 'prompt', '--body-file', f.body, '--why', '自己点検'], f.deps), extra ? 5 : 0);
     assert.equal(f.calls.length - before, extra ? 0 : 1);
   }
-  assert.ok(f.errors.some(line => line.includes('fleet-selfcheck-v1')));
+  assert.ok(f.errors.some(line => line.includes('fleet-selfcheck-v2')));
 });

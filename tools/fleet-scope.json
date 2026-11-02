@@ -1,6 +1,11 @@
 {
   "version": 1,
   "entries": [
+    {"path":"tools/lib/gws-proxy.mjs","scope":"fleet","step":"task:fleet-mail","reason":"全PCの鍵なしGmail・Drive・LINE APIと自己点検の共通認証経路"},
+    {"path":"tools/drive-read.mjs","scope":"fleet","step":"task:fleet-mail","reason":"全PCから共有Driveの検索と読み取り"},
+    {"path":"tools/line-channel.mjs","scope":"fleet","step":"task:fleet-mail","reason":"全PCから共通LINE履歴と公式botを利用"},
+    {"path":"tools/line-history-sync.mjs","scope":"kim-only","step":"task:line-history-sync","reason":"履歴の原本を持つkim-PCだけが毎時同期する"},
+    {"path":"tools/register-line-history-sync.mjs","scope":"kim-only","step":"task:line-history-sync","reason":"履歴の原本を持つkim-PCだけが毎時同期を登録する"},
     {"path":"tools/lib/auto-progress-inbox.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"通知書込と文脈表示を分離して import 循環を防ぐ"},
 {"path": "tools/kim-discord-report-gate.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/kim-inbox.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},

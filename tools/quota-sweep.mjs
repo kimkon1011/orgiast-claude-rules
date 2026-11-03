@@ -77,7 +77,7 @@ export async function enforceFailureStops({ home, state, providers, save, notify
       // never spam notifications or spend model tokens while awaiting repair.
       stop.notificationAttemptedAt = new Date(now()).toISOString(); save();
       try {
-        const result = await notify(`quota-sweep ${provider}: ${stop.failures}回連続未完了で停止。理由: ${stop.reason}。修復後に --resume ${provider} を明示実行してください。`, { home });
+        const result = await notify(`quota-sweep ${provider}: ${stop.failures}回連続未完了で停止。理由: ${stop.reason}。自動では再開しません。Claude が復旧内容を確認し、再開の可否を判断します。`, { home });
         stop.notificationResult = result ?? null;
       } catch (error) { stop.notificationError = error.message; log(`failure-stop notification failed: ${error.message}`); }
       save();

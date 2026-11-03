@@ -180,7 +180,7 @@ export function runProbe(provider, { home, timeoutMs, dryRun = false } = {}) {
 export function notificationText(item, home) {
   if (item.reason === 'keyserve_unenrolled') {
     const hostname = os.hostname(), pc = validKeyservePcId(hostname) ? hostname : 'PC名要指定', user = os.userInfo().username;
-    return `${hostname}（OSユーザー: ${user}）は keyserve 未登録のため安価AIレーンの鍵を取得できません。kim-PC で node tools/keyserve-enroll.mjs ${pc} を実行し、表示された1行コマンドを返してください。返信後は Claude がそのコマンドを実行して復旧確認します。`;
+    return `${hostname}（OSユーザー: ${user}）は keyserve 未登録のため安価AIレーンの鍵を取得できません。Claude が kim-PC 側で登録コマンドを発行します。対象PCでその1行を貼り付けて承認すると、Claude が復旧確認まで行います。`;
   }
   if (item.reason === 'billing') return `${os.hostname()} の ${item.provider} が残高不足(402)。入金（オートチャージON）が既定（CLAUDE.md 他AI節）。それまで OpenRouter 経由へ回しています`;
   if (item.tried) return `${item.provider} が停止しています（原因: WSL ディストリ不在・ネイティブ書き込み probe 失敗）。試した修復: ${item.tried}。残る操作: ${item.fix}`;

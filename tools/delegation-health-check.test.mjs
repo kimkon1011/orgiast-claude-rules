@@ -1208,31 +1208,32 @@ test('policyStallAttempts は chain 試行ごとに拒否痕跡を抽出し outc
   assert.equal(attempts[0].budgetSecs, 600);
 });
 
-test('#1059 以降で打ち切られずに300秒以上消費した policy 停滞を起票し、打ち切り済み・修正前は起票しない', () => {
-  const stall = (t, outcome, secs) => row({ t, provider: 'fallback', chain: [{ backend: 'gemini-cli', secs, out: 200, budgetSecs: 600, stderrTail: 'Tool execution denied by policy. Tool execution denied by policy. Tool execution denied by policy.', outcome }] });
+test('#1436 以降で打ち切られずに300秒以上消費した policy 停滞を起票し、打ち切り済み・修正前は起票しない', () => {
+  const stall = (t, outcome, secs, budgetSecs = 600) => row({ t, provider: 'fallback', chain: [{ backend: 'gemini-cli', secs, out: 200, budgetSecs, stderrTail: 'Tool execution denied by policy. Tool execution denied by policy. Tool execution denied by policy.', outcome }] });
   const unaborted = home();
-  write(unaborted, 'executor-usage.jsonl', stall('2026-10-24T03:00:00Z', 'ok', 880));
-  const found = collectFindings({ home: unaborted, now: new Date('2026-10-24T12:00:00Z'), codexUsedPercent: null });
+  write(unaborted, 'executor-usage.jsonl', stall('2026-11-03T03:00:00Z', 'ok', 880));
+  const found = collectFindings({ home: unaborted, now: new Date('2026-11-03T12:00:00Z'), codexUsedPercent: null });
   const finding = found.find((item) => item.id === 'policy_stall_not_aborted');
   assert.ok(finding, `起票されるべき: ${JSON.stringify(found.map((f) => f.id))}`);
   assert.match(finding.evidence.join(' '), /1件.*最大 880秒/);
 
   const aborted = home();
-  write(aborted, 'executor-usage.jsonl', stall('2026-10-24T03:00:00Z', 'blocked', 301));
-  assert.equal(collectFindings({ home: aborted, now: new Date('2026-10-24T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted'), false);
+  write(aborted, 'executor-usage.jsonl', stall('2026-11-03T03:00:00Z', 'blocked', 301));
+  assert.equal(collectFindings({ home: aborted, now: new Date('2026-11-03T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted'), false);
 
-  // #1059 マージ前の実測行（2026-10-23T10:43:58Z gemini 601秒 timeout）は、周期判定が無かった
-  // 時点のものなので「未修理」に数えない。#964 起点のままだとこれが永久に起票され続けた。
+  // #1436 マージ前の実測行（2026-11-02T19:27:12Z gemini-cli 301秒/予算300秒 out0 timeout）は、
+  // 締切タイマーが周期判定より先に発火していた時点のものなので「未修理」に数えない。
+  // ここを #1059 起点のままにすると、修正後もこの過去行だけで毎晩起票され続ける。
   const preFix = home();
-  write(preFix, 'executor-usage.jsonl', stall('2026-10-23T10:43:58Z', 'timeout', 601));
-  assert.equal(collectFindings({ home: preFix, now: new Date('2026-10-24T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted'), false);
+  write(preFix, 'executor-usage.jsonl', stall('2026-11-02T19:27:12.742Z', 'timeout', 300.353, 300));
+  assert.equal(collectFindings({ home: preFix, now: new Date('2026-11-03T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted'), false);
 });
 
 test('出力400字以上で進捗のあった policy 拒否つき試行は打ち切り対象外なので起票しない（2026-10-26 実測 out620/776/924 の偽陽性）', () => {
   const at = (out) => {
     const dir = home();
-    write(dir, 'executor-usage.jsonl', row({ t: '2026-10-26T09:01:52.687Z', provider: 'fallback', chain: [{ backend: 'gemini-cli', secs: 526, out, budgetSecs: 600, stderrTail: 'Tool execution denied by policy. Tool execution denied by policy. Tool execution denied by policy.', outcome: 'ok' }] }));
-    return collectFindings({ home: dir, now: new Date('2026-10-27T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted');
+    write(dir, 'executor-usage.jsonl', row({ t: '2026-11-03T09:01:52.687Z', provider: 'fallback', chain: [{ backend: 'gemini-cli', secs: 526, out, budgetSecs: 600, stderrTail: 'Tool execution denied by policy. Tool execution denied by policy. Tool execution denied by policy.', outcome: 'ok' }] }));
+    return collectFindings({ home: dir, now: new Date('2026-11-03T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted');
   };
   assert.equal(at(776), false);
   assert.equal(at(400), false, '境界: 400字ちょうどは codex-do も打ち切らない');
@@ -1242,8 +1243,8 @@ test('出力400字以上で進捗のあった policy 拒否つき試行は打ち
 test('拒否が3回未満の停滞は打ち切り条件を満たさないので起票せず、chain の実測 policyDenials/outChars を優先する（2026-10-26 09:04 gemini 600秒 out0 拒否1回の偽陽性）', () => {
   const at = (chain) => {
     const dir = home();
-    write(dir, 'executor-usage.jsonl', row({ t: '2026-10-26T09:04:57.085Z', provider: 'fallback', chain: [{ backend: 'gemini-cli', secs: 600, out: 0, budgetSecs: 600, outcome: 'timeout', ...chain }] }));
-    return collectFindings({ home: dir, now: new Date('2026-10-27T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted');
+    write(dir, 'executor-usage.jsonl', row({ t: '2026-11-03T09:04:57.085Z', provider: 'fallback', chain: [{ backend: 'gemini-cli', secs: 600, out: 0, budgetSecs: 600, outcome: 'timeout', ...chain }] }));
+    return collectFindings({ home: dir, now: new Date('2026-11-03T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted');
   };
   const one = 'Error executing tool run_shell_command: Tool execution denied by policy.';
   assert.equal(at({ stderrTail: one }), false, 'tail に拒否1回だけなら未発火の証拠にならない');
@@ -1252,15 +1253,19 @@ test('拒否が3回未満の停滞は打ち切り条件を満たさないので�
   assert.equal(at({ stderrTail: one, policyDenials: 5, outChars: 10, out: 900 }), true, 'out はトークン概算なので outChars があればそちらで判定');
 });
 
-test('policy 停滞の起票境界は #1059 のマージ時刻で、その前後で判定が分かれる', () => {
-  const at = (t) => {
+test('policy 停滞の起票境界は #1436 のマージ時刻で、その前後で判定が分かれる', () => {
+  const at = (t, { secs = 601, budgetSecs = 600 } = {}) => {
     const dir = home();
-    write(dir, 'executor-usage.jsonl', row({ t, provider: 'fallback', chain: [{ backend: 'gemini-cli', secs: 601, out: 0, budgetSecs: 600, stderrTail: 'Tool execution denied by policy. Tool execution denied by policy. Tool execution denied by policy.', outcome: 'timeout' }] }));
-    return collectFindings({ home: dir, now: new Date('2026-10-24T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted');
+    write(dir, 'executor-usage.jsonl', row({ t, provider: 'fallback', chain: [{ backend: 'gemini-cli', secs, out: 0, budgetSecs, stderrTail: 'Tool execution denied by policy. Tool execution denied by policy. Tool execution denied by policy.', outcome: 'timeout' }] }));
+    return collectFindings({ home: dir, now: new Date('2026-11-03T12:00:00Z'), codexUsedPercent: null }).some((item) => item.id === 'policy_stall_not_aborted');
   };
-  assert.equal(at('2026-10-23T20:03:23Z'), false, 'マージ1秒前は対象外');
-  assert.equal(at('2026-10-23T20:03:24Z'), true, 'マージ時刻ちょうどは対象');
-  assert.equal(POLICY_STALL_SINCE, '2026-10-23T20:03:24Z');
+  assert.equal(at('2026-11-02T19:39:03Z'), false, 'マージ1秒前は対象外');
+  assert.equal(at('2026-11-02T19:39:04Z'), true, 'マージ時刻ちょうどは対象');
+  // 実測の 300秒予算行（締切タイマーが周期判定より先に発火していた）は #1436 前なので対象外。
+  assert.equal(at('2026-11-02T10:09:43.712Z', { secs: 300.741, budgetSecs: 300 }), false, '#1436 前の 300秒予算の未打ち切りは回帰に数えない');
+  assert.equal(at('2026-11-02T19:27:12.742Z', { secs: 300.353, budgetSecs: 300 }), false, '最終の修正前実測行も対象外');
+  assert.equal(at('2026-11-02T20:09:43.712Z', { secs: 300.741, budgetSecs: 300 }), true, '#1436 後に同じ形が出たら起票する（検出を弱めない）');
+  assert.equal(POLICY_STALL_SINCE, '2026-11-02T19:39:04Z');
 });
 
 test('新名 Flash も過去ログと同様に低成果バックエンドとして集計する', () => {

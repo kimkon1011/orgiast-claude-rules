@@ -2008,7 +2008,7 @@ function runFakeGemini(body, extraEnv = {}, timeoutSecs = 60) {
       ...extraEnv
     }
   });
-  return { result, elapsedSecs: (Date.now() - started) / 1000 };
+  return { result, home, elapsedSecs: (Date.now() - started) / 1000 };
 }
 
 const DENY = 'Error executing tool run_shell_command: Tool execution denied by policy.\n';
@@ -2038,13 +2038,21 @@ test('gemini が拒否3回の後に無音で停滞しても周期判定で打ち
 
 // 2026-11-02 実測: 予算300秒 = 停滞判定の閾値秒だと締切タイマーが先に発火し outcome=timeout になっていた。
 test('予算が停滞判定の閾値秒以下でも、締切時に拒否3回・低出力なら blocked として次へ進む', () => {
-  const { result } = runFakeGemini(
+  const { result, home } = runFakeGemini(
     silentAfter(DENY.repeat(3)),
     { CODEX_DO_GEMINI_TIMEOUT_SECS: '3', CODEX_DO_POLICY_STALL_MIN_ELAPSED_SECS: '3', CODEX_DO_POLICY_STALL_CHECK_MS: '600000' }
   );
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
   assert.match(result.stderr, /ポリシー拒否で停滞しているため/);
+  // 実 chain の台帳に残る実測値まで固定する。outcome が timeout のままだと
+  // delegation-health の policy_stall_not_aborted が再発する（2026-11-02 実測の再現条件）。
+  const ledger = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  const gemini = ledger.at(-1).chain.find((a) => a.backend === 'gemini-cli');
+  assert.equal(gemini.outcome, 'blocked');
+  assert.ok(gemini.policyDenials >= 3, `拒否回数が台帳に残る: ${gemini.policyDenials}`);
+  assert.equal(gemini.outChars, 0);
+  assert.ok(gemini.budgetSecs <= 3, `打ち切った試行の予算: ${gemini.budgetSecs}`);
 });
 
 test('ポリシー停滞の打ち切りは出力400字以上・拒否3回未満・無効化指定では発火しない', () => {

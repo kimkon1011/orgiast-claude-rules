@@ -8,7 +8,7 @@ import { PassThrough } from 'node:stream';
 import { resolveProvider } from './cheap-code.mjs';
 import { dayBounds, isMeeting, excludeCalendar, matchCase, routeCase, chooseTransport, eventKey, planJobs,
   createGoogle, loadEvents, loadCases, parseCases, loadMailUpdates, loadMeetEvents, inspectFleet, ensureCalendar, upsertPreparation, workspaceUrl, validateWrite, applySheetWrite, applyResult, parseAnswer, collectAnswers, dispatchJobs, renderPrompt,
-  chooseExecution, collectRun, saveRunReport, runHeadless, localWorkerArgs, localWorkerEnv, loadLocalContext, buildLocalInput, dryRunPlanningState, LOCAL_JOB_TIMEOUT_MS } from './meeting-prep-dispatch.mjs';
+  chooseExecution, collectRun, saveRunReport, runHeadless, localWorkerArgs, localWorkerEnv, loadLocalContext, loadCaseMail, filterResultUrls, buildLocalInput, dryRunPlanningState, LOCAL_JOB_TIMEOUT_MS } from './meeting-prep-dispatch.mjs';
 const config = JSON.parse(fs.readFileSync(new URL('../config/meeting-prep-routing.json', import.meta.url)));
 const date = '2026-11-03';
 const event = (extra = {}) => ({ id: 'event1', iCalUID: 'ical1', calendarId: 'primary', summary: 'C1234 打合せ', start: { dateTime: `${date}T10:00:00+09:00` }, end: { dateTime: `${date}T11:00:00+09:00` }, ...extra });
@@ -476,15 +476,15 @@ test('ローカル資料はDWDのGETで読み、既存回答とハブを取得�
       assert.equal(method, 'GET'); calls.push({ scope, url });
       if (url.includes('fields=sheets')) return { sheets: [{ properties: { title: '確認事項', sheetId: 3 } }] };
       if (url.includes('/values/')) return { values: [['ID', '', '', '確認', '既存回答']] };
-      return { body: { content: [{ paragraph: { elements: [{ textRun: { content: '最新連絡' } }] } }] } };
+      assert.match(url, /files\/hub-doc\/export\?mimeType=text%2Fplain/); return '最新連絡';
     } };
   const mailGoogle = { pages: async () => [{ id: 'thread' }], request: async () => ({ messages: [{ internalDate: '123', payload: { mimeType: 'text/plain', body: { data: Buffer.from('C1234 最新情報').toString('base64url') } } }] }) };
   const context = await loadLocalContext(google, job, config, { mailGoogle });
   assert.equal(context.sheets.confirmation.tabs['確認事項'].values[0][4], '既存回答');
-  assert.equal(context.documents.length, 1); assert.equal(context.mail, undefined);
+  assert.equal(context.documents.length, 1); assert.deepEqual(context.mail, []); assert.equal(context.documents[0].text, '最新連絡');
   assert.ok(!calls.some(c => c.url.endsWith('/contact')));
   assert.ok(context.truncated.some(x => /資料本文/.test(x)));
-  assert.ok(context.unconfirmed.some(x => /submission/.test(x))); assert.ok(calls.some(c => c.url.endsWith('/hub-doc')));
+  assert.ok(context.unconfirmed.some(x => /submission/.test(x))); assert.ok(calls.some(c => c.url.includes('/hub-doc/export')));
 });
 test('CLIのis_errorや不正なresultsを成功として受け取らない', () => {
   assert.throws(() => parseAnswer('{"is_error":true,"result":"{\\"version\\":1,\\"batchId\\":\\"b\\",\\"results\\":[]}"}'), /実行エラー/);
@@ -629,4 +629,70 @@ test('collect再試行の成功でfailedを消し、過去の失敗で予定を�
   assert.equal(result.exitCode, 0, JSON.stringify(result.errors)); assert.deepEqual(state.failed, {}); assert.equal(Object.keys(state.sent).length, 1);
   await collectRun({ home: os.tmpdir(), state, fleet: { inbox: [] }, google: g, config, checkpoint() {}, now: '2026-11-03T08:00:00+09:00', runLocal() { assert.fail('成功済み'); } });
   assert.match([...g.events.values()][0].description, /完了/);
+});
+
+
+test('外部参考URLを適用し、成果物リンクと危険URLの項目だけ拒否する', async () => {
+  let values = [['old']];
+  const g = { pages: async () => [], request: async (_, url, method, body) => {
+    if (url.includes('fields=sheets')) return { sheets: [{ properties: { title: 'Claude_次回MTGアジェンダ', sheetId: 22 } }] };
+    if (method === 'PUT') values = body.values;
+    return { values };
+  } };
+  const reference = '背景 https://peatix.com/event/123 参考 https://timerex.net/r/example https://company.example';
+  const result = await applyResult(g, plan()[0], { status: 'apply', summary: '確認事項',
+    links: [{ label: '外部成果物', url: 'https://evil.example/out' }, { label: '計画書', url: 'https://docs.google.com/spreadsheets/d/plan/edit#gid=22' }],
+    writes: [write({ values: [[reference]] }), write({ range: 'B3:B3', values: [['javascript:alert(1)']] }), write({ range: 'B4:B4', values: [['data:text/html,test']] }), write({ range: 'B5:B5', url: 'https://evil.example/out' })] });
+  assert.equal(result.status, 'ready'); assert.deepEqual(values, [[reference]]);
+  assert.equal(result.rejectedItems.length, 4); assert.ok(result.links.every(l => l.url.includes('docs.google.com')));
+});
+test('最新14日・両アカウントの案件スレッド本文を新しい順に入力する', async () => {
+  const until = Date.parse('2026-11-04T00:00:00Z'), users = [];
+  const msg = (id, ago, text, subject = 'C1234') => ({ id, internalDate: String(until - ago), payload: { headers: [{ name: 'Subject', value: subject }], mimeType: 'text/plain', body: { data: Buffer.from(text).toString('base64url') } } });
+  const recent = await loadCaseMail(plan()[0], config, { until, mailGoogle: user => {
+    users.push(user);
+    return { pages: async (_, url) => { assert.match(new URL(url).searchParams.get('q'), /C1234/); return [{ id: 'thread' }, { id: 'unrelated' }]; },
+      request: async (_, url) => ({ messages: url.includes('unrelated') ? [msg('unrelated', 0, '他案件', '別件')] : [msg('old', 15 * 86400000, '古い'), msg('older', 2000, '本文2'), msg('newest', 1000, '最新本文' + 'あ'.repeat(3000)), msg('future', -1000, '未来')] }) };
+  } });
+  assert.deepEqual(users, ['seisaku-team@orgiast.jp', 'kim@orgiast.jp']); assert.equal(recent.mail.length, 4);
+  assert.equal(recent.mail[0].id, 'newest'); assert.equal(recent.mail[0].text.length, 2000);
+  const input = buildLocalInput({ jobs: plan() }, '指示', { mail: recent.mail }, { localInputBudgetChars: 10000 });
+  assert.match(input.prompt, /最新本文/); assert.match(input.prompt, /本文2/); assert.doesNotMatch(input.prompt, /古い|未来|他案件/);
+  assert.ok(input.inputChars <= 10000);
+});
+test('Drive export はJSONではなくtext/plainで読む', async () => {
+  const g = createGoogle({ token: async () => 'fake', fetchImpl: async () => ({ ok: true, status: 200, text: async () => 'ハブ本文', json: () => assert.fail('JSON不可') }) });
+  assert.equal(await g.request('drive', 'https://www.googleapis.com/drive/v3/files/hub/export?mimeType=text%2Fplain'), 'ハブ本文');
+});
+test('根拠不足を確認事項とアジェンダへ出力するプロンプト契約', () => {
+  const template = fs.readFileSync(new URL('../templates/meeting-prep-prompt.md', import.meta.url), 'utf8');
+  const prompt = buildLocalInput({ jobs: plan() }, renderPrompt(template, { id: 'b', method: 'local', jobs: plan() }), { unconfirmed: ['Gmail未取得', '案件情報ハブ: HTTP 403'] }).prompt;
+  for (const re of [/分かっている範囲で準備を完了/, /確認シートに起票し、アジェンダにも/, /必ず apply/, /場合だけ/, /before を捏造しない/]) assert.match(prompt, re);
+  const result = filterResultUrls({ writes: [write({ target: 'confirmation', tab: '確認事項', range: 'D2:D2', before: [['']], values: [['最新の連絡内容を確認']] }), write({ values: [['案件情報ハブの最新情報を確認']] })] });
+  assert.equal(result.writes.length, 2); result.writes.forEach(validateWrite);
+});
+
+test('外部リンク混在のapplyを回収してジョブを完了できる', async () => {
+  const g = calendarMock(), request = g.request; let values = [['old']];
+  g.request = async (scope, url, method, body) => {
+    if (url.includes('sheets.googleapis.com')) {
+      if (url.includes('fields=sheets')) return { sheets: [{ properties: { title: 'Claude_次回MTGアジェンダ', sheetId: 42 } }] };
+      if (method === 'PUT') values = body.values;
+      return { values };
+    }
+    return request(scope, url, method, body);
+  };
+  const state = {};
+  const errors = await dispatchJobs({ jobs: plan(), state, config, google: g, template: '{{PAYLOAD}}', checkpoint() {},
+    runLocal: async batch => JSON.stringify({ version: 1, batchId: batch.id, results: [{ key: batch.jobs[0].key, status: 'apply', summary: '最新連絡を確認',
+      links: [{ label: '参考', url: 'https://peatix.com/event/123' }], writes: [write({ values: [['確認事項 https://timerex.net/r/example']] })] }] }) });
+  assert.deepEqual(errors, []); assert.equal(Object.values(state.batches)[0].status, 'complete');
+  assert.match(values[0][0], /timerex/); assert.equal(Object.values(state.batches)[0].completed[plan()[0].key].result.rejectedItems.length, 1);
+});
+test('片方のGmailが未取得でも他方の本文と確認事項用の理由を残す', async () => {
+  const until = Date.parse('2026-11-04T00:00:00Z');
+  const recent = await loadCaseMail(plan()[0], config, { until, mailGoogle: user => ({ pages: async () => {
+    if (user === config.teamEmail) throw Error('HTTP 403'); return [{ id: 'thread' }];
+  }, request: async () => ({ messages: [{ id: 'm', internalDate: String(until), payload: { mimeType: 'text/plain', body: { data: Buffer.from('C1234 確認が必要').toString('base64url') } } }] }) }) });
+  assert.equal(recent.mail.length, 1); assert.match(recent.unconfirmed[0], /seisaku-team.*403/);
 });

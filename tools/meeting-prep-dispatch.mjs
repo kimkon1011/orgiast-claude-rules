@@ -210,7 +210,7 @@ export function createGoogle({ dryRun = false, user = USER, token = getDriveToke
     const res = await fetchImpl(url, { method, headers: { Authorization: `Bearer ${tokens.get(tokenScope)}`, 'Content-Type': 'application/json', ...headers },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: requestSignal });
     if (!res.ok) throw Object.assign(new Error(`${scope}: HTTP ${res.status} ${(await res.text()).slice(0, 400)}`), { status: res.status });
-    return res.status === 204 ? {} : res.json();
+    return res.status === 204 ? {} : new URL(url).pathname.endsWith('/export') ? res.text() : res.json();
   }
   async function pages(scope, url, field = 'items') {
     const out = []; let next;
@@ -480,6 +480,33 @@ export async function prepareMaterials(g, job) {
 }
 // Supply DWD snapshots to a tool-free worker. It cannot write through connectors,
 // shell commands or hooks; all proposed mutations go through applyResult below.
+// Reuse gmail-search MIME decoding and the kim-PC DWD authentication path.
+export async function loadCaseMail(job, config, { mailGoogle, signal, until = Date.now() } = {}) {
+  const since = until - 14 * 86400000, mail = [], unconfirmed = [];
+  const terms = [...caseIds(job.case), job.case.name].filter(Boolean).map(v => '"' + v.replace(/["\\]/g, ' ') + '"');
+  const query = `after:${Math.floor(since / 1000)} before:${Math.ceil(until / 1000) + 1} -in:drafts {${terms.join(' ')}}`;
+  for (const user of new Set([config.teamEmail || 'seisaku-team@orgiast.jp', config.userEmail || USER])) {
+    try {
+      const g = typeof mailGoogle === 'function' ? mailGoogle(user) : mailGoogle || createGoogle({ dryRun: true, user, signal });
+      const threads = await g.pages('gmail.readonly', `https://gmail.googleapis.com/gmail/v1/users/me/threads?${new URLSearchParams({ q: query, maxResults: '100' })}`, 'threads');
+      for (const { id } of threads) {
+        signal?.throwIfAborted();
+        const thread = await g.request('gmail.readonly', `https://gmail.googleapis.com/gmail/v1/users/me/threads/${enc(id)}?format=full`);
+        const messages = (thread.messages || []).filter(m => !m.labelIds?.includes('DRAFT'));
+        const text = messages.map(m => JSON.stringify(m.payload?.headers || []) + '\n' + extractBody(m.payload, Number.MAX_SAFE_INTEGER)).join('\n');
+        if (!caseIds(job.case).some(cid => mentionsId(text, cid)) && !(normalize(job.case.name).length >= 3 && normalize(text).includes(normalize(job.case.name)))) continue;
+        for (const m of messages) {
+          const at = Number(m.internalDate);
+          if (!(at >= since && at <= until)) continue;
+          const header = name => m.payload?.headers?.find(h => h.name.toLowerCase() === name)?.value || '';
+          mail.push({ user, threadId: id, id: m.id, at: new Date(at).toISOString(), subject: header('subject'), from: header('from'), text: extractBody(m.payload, 2000) });
+        }
+      }
+    } catch (e) { signal?.throwIfAborted(); unconfirmed.push(`${user} Gmail: ${e.message}`); }
+  }
+  mail.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  return { mail, unconfirmed };
+}
 export async function loadLocalContext(g, job, config, { signal, mailGoogle } = {}) {
   const context = { sheets: {}, documents: [], unconfirmed: [], files: [], truncated: [] };
   const attempt = async (label, fn) => {
@@ -510,9 +537,10 @@ export async function loadLocalContext(g, job, config, { signal, mailGoogle } = 
   context.truncated.push('案件フォルダ資料本文（タイトルとリンクのみ）');
   if (job.hub?.docId) docs.unshift({ id: job.hub.docId, name: '案件情報ハブ' });
   for (const file of [...new Map(docs.map(d => [d.id, d])).values()]) {
-    await attempt(file.name, async () => context.documents.push({ ...file, document: await g.request('documents', `${DOCS}/${enc(file.id)}`) }));
+    await attempt(file.name, async () => context.documents.push({ ...file, text: await g.request('drive', `${DRIVE}/files/${enc(file.id)}/export?mimeType=text%2Fplain`) }));
   }
-  context.truncated.push('Gmail本文（案件情報ハブを優先）');
+  const recent = await loadCaseMail(job, config, { signal, mailGoogle });
+  context.mail = recent.mail; context.unconfirmed.push(...recent.unconfirmed);
   context.unconfirmed.push('PDF・画像・サブフォルダ内資料・取得範囲外のセルは未確認。beforeは取得済み範囲のみを使う。');
   return context;
 }
@@ -560,6 +588,7 @@ export function buildLocalInput(batch, body, context, config = {}) {
   const job = batch.jobs[0];
   items.push(['予定情報', { event: job.event, links: job.materialLinks,
     descriptionLinks: [...new Set((job.event?.description || '').match(/https?:\/\/[^\s<>"']+/g) || [])] }]);
+  items.push(['最新Gmail本文', context.mail || []]);
   for (const doc of context.documents || []) {
     const texts = [];
     const walk = value => {
@@ -570,7 +599,7 @@ export function buildLocalInput(batch, body, context, config = {}) {
       }
     };
     walk(doc.document);
-    const text = texts.join('');
+    const text = doc.text ?? texts.join('');
     const matches = [...text.matchAll(/\[hub:[a-f0-9]{64}:([^\]\r\n]+)\]/g)];
     const entries = matches.length ? matches.map((m, i) => ({ at: m[1], text: text.slice(m.index, matches[i + 1]?.index ?? text.length) })) : [{ text }];
     entries.sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0));
@@ -668,8 +697,22 @@ export async function executeLocal(batch, body, { home, google, config, signal }
     env: localWorkerEnv(provider, key, process.env, configDir)
   });
 }
+export function filterResultUrls(result) {
+  const rejectedItems = [...(result.rejectedItems || [])];
+  const unsafe = value => /(?:javascript|data|vbscript)\s*:/i.test(JSON.stringify(value).replace(/\\[nrt]/g, ''));
+  const keep = (items, label, check) => (items || []).filter((item, i) => {
+    try { check(item); return true; }
+    catch (e) { rejectedItems.push(`${label}[${i}]: ${e.message}`); return false; }
+  });
+  const content = item => { if (unsafe(item)) throw new Error('危険なURLスキーム'); };
+  return { ...result, rejectedItems,
+    links: keep(result.links, 'links', link => { workspaceUrl(link.url); }),
+    writes: keep(result.writes, 'writes', w => { content(w.values); if (w.url) workspaceUrl(w.url); }),
+    documents: keep(result.documents, 'documents', d => { content(d.text); if (d.url) workspaceUrl(d.url); }) };
+}
 export async function applyResult(g, job, result) {
   if (!job.case) throw new Error('案件未特定のため代行書込不可');
+  result = filterResultUrls(result);
   const writes = result.writes || [], documents = result.documents || [];
   if (!writes.length && !documents.length) throw new Error('applyに書込内容がありません');
   if (documents.length > 1 || writes.length > 100) throw new Error('書込上限超過');
@@ -730,7 +773,7 @@ export async function collectAnswers({ state, answers, google, checkpoint, calen
         if (keys.has(r.key) || !batch.jobs.some(j => j.key === r.key)) throw new Error('結果の対象key重複または未知');
         keys.add(r.key);
         if (!['ready', 'apply', 'needsReview'].includes(r.status) || typeof r.summary !== 'string') throw new Error('結果status/summary不正');
-        for (const link of r.links || []) workspaceUrl(link.url);
+        Object.assign(r, filterResultUrls(r));
         if (r.status === 'ready' && (r.verified !== true || !r.links?.length)) throw new Error('readyには検証済み成果物URLが必要');
       }
       batch.completed ||= {};
@@ -1088,7 +1131,7 @@ export async function main(argv = process.argv.slice(2)) {
           const batch = { id: `prep-${'0'.repeat(32)}`, method: 'local', jobs: [job] };
           const context = await loadLocalContext(google, job, config);
           const input = buildLocalInput(batch, renderPrompt(template, batch), context, config);
-          Object.assign(rows[i], { inputChars: input.inputChars, truncated: input.truncated });
+          Object.assign(rows[i], { inputChars: input.inputChars, gmailMessages: context.mail.length, gmailThreads: new Set(context.mail.map(m => `${m.user}/${m.threadId}`)).size, unconfirmed: context.unconfirmed, truncated: input.truncated });
         } catch (e) { report.errors.push({ key: job.key, error: e.message }); }
       }
       return finish(report.errors.length ? 1 : 0);

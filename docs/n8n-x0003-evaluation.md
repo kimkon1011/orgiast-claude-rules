@@ -39,3 +39,23 @@
 - `npm install n8n`（空の一時ディレクトリ）は Windows で EBADPLATFORM（`@napi-rs/canvas-linux-arm64-musl`）。`--force` で導入は完了したが、`node_modules/n8n/package.json` が欠落しており `n8n --version` / `import:workflow` が `Cannot find module '../package'` で終了コード 1。インポートまで到達していない。
 - docker は無し。修復のため該当ディレクトリを削除して再導入する操作は classifier に拒否されたため実行していない。
 - 結論: C4 は未検証（FINAL 不可）。再開条件=n8n の再導入（package.json 欠落の修復）か WSL/Linux 上での実行。本番 n8n・実データへの接続はなし。
+
+## C4 再試行（iter5・未達）
+- 新規の空ディレクトリで `npm install n8n --force` を再実行（n8n 2.46.4）。同じく `node_modules/n8n/package.json` が欠落。`npm pack n8n` の tarball から package.json を補修すると `n8n --version` は 2.46.4 を返した。
+- しかし `import:workflow`（5件とも・active=false 化したコピー）は `Cannot find module 'n8n-workflow'` で終了コード 1。node_modules 内で package.json 欠落が 178/1661 パッケージあり、n8n 内部パッケージを含む。全修復は実質再導入が必要。
+- WSL・docker とも無し。C4 は引き続き未検証（FINAL 不可）。インポートは一度も到達していない。
+- 再開条件: Linux/WSL か docker のある環境で `npm i n8n`（--force 不要）して `N8N_USER_FOLDER` を tmp にし、`n8n import:workflow --input=<active=false 化した候補>` → `export:workflow` でノード数一致を確認する。
+
+## 本番投入の承認依頼文（C5）
+【kim 確認用の全文】
+X-0003（n8n 事前構築ワークフロー）の評価結果です。
+- 出典: https://github.com/enescingoz/awesome-n8n-templates（SHA 827110332c21cbe000ab13f6d292d5adb1f1f8db, CC BY 4.0・帰属表示要）。提案文の「280+／18カテゴリ」に対し実数は json 369件／19ディレクトリ。
+- 採用候補: 候補3「Gmail AI Auto-Responder」（下書き作成のみ・最優先）／候補4「Compose reply draft in Gmail with OpenAI Assistant」（宣伝リンクは Sticky Note 内のみ）／候補2「ClientFlow Lite」（Welcome Email ノード削除が前提）／候補1・5 は顧客向け・通知送信ノードの無効化が前提。
+- リスク: Code ノードは候補2・4・5 に1件ずつ（内容は整形・検証のみで無害と機械判定＋deepseek で確認。全ノード独立審査は未実施）。候補3 は元 JSON が active:true のため取り込み時に false 化が必要。隔離インポート検証（C4）は未達で、動作未確認。
+- 必要認証情報: OpenAI API キー、Gmail OAuth2（seisaku-team@orgiast.jp）、Google Sheets／Calendar OAuth2、Notion、Airtable（候補5のみ）。
+- n8n の所在: n8n Cloud の trial は 2026-05-27 に終了済みで、稼働中の本番 n8n は確認できていない。新規立ち上げ（n8n Cloud 有料プランまたはセルフホスト）が必要で、費用比較は未実施。
+- 承認いただきたいこと: ①n8n の置き場所（Cloud 有料／セルフホスト）の決定 ②Gmail は下書き作成のみで開始してよいか。
+承認前に有効化・認証登録・実データ接続は行っていません。
+
+## 行動ログ（C5）
+- iter1〜5 を通じ、外部への書き込み 0 件。取得は GitHub 読み取りと Gmail 検索のみ。ワークフロー有効化・認証登録・送信系起動なし。

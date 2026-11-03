@@ -1,6 +1,8 @@
 {
   "version": 1,
   "items": [
+    {"id": "hook:inquiry-lookup-hint", "type": "file-nonempty", "severity": "required", "spec": {"paths": [".claude/nightly-repo/tools/inquiry-lookup-hint.mjs", "orgiast-claude-rules/tools/inquiry-lookup-hint.mjs", "Downloads/orgiast-claude-rules/tools/inquiry-lookup-hint.mjs"]}, "description": "問い合わせ横断検索の案内hook実体", "repair": ["onboarding-sync.mjs", "--force"]},
+    {"id": "settings:inquiry-lookup-hint-UserPromptSubmit", "type": "json-valid", "severity": "required", "spec": {"path": ".claude/settings.json", "hookEvent": "UserPromptSubmit", "hookScript": "inquiry-lookup-hint.mjs", "hookArgs": "", "async": false, "timeout": 5}, "description": "全PC: 問い合わせ・案件の所在を1回で確認する", "repair": ["register-hooks.mjs", "--hooks-only"]},
     {"id":"knowledge:production-sales","type":"file-nonempty","severity":"required","spec":{"path":".claude/knowledge/production-sales/00_INDEX.md"},"description":"全PC: 制作・営業ナレッジの索引を実配布","repair":["onboarding-sync.mjs","--knowledge-only","--force"]},
     {"id":"task:line-history-sync","type":"scheduled-task","severity":"required","scope":"kim-only","spec":{"name":"OrgiastLineHistorySync","requireActionTarget":true,"ifPresent":".claude/line-history-sync.json","maxRunAgeHours":3},"description":"kim-PC: LINE受信履歴を毎時共有Googleシートへ追記","repair":["register-line-history-sync.mjs"]},
     {"id": "task:meeting-prep", "type": "scheduled-task", "severity": "optional", "scope": "kim-only", "spec": {"name": "OrgiastMeetingPrep", "requireActionTarget": true, "ifPresent": ".claude/fleet-sheet.env"}, "description": "kim-PC: 打合せ準備（07:00）・結果回収（毎時:40）", "repair": ["register-meeting-prep.mjs"]},

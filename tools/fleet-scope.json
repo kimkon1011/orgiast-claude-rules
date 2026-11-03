@@ -1,6 +1,14 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/gmail-search.mjs", "scope": "fleet", "step": "hook:inquiry-lookup-hint", "reason": "問い合わせ横断検索の実行時依存"},
+
+    {"path": "tools/inquiry-lookup.mjs", "scope": "fleet", "step": "hook:inquiry-lookup-hint", "reason": "問い合わせ横断検索・案内の全PC共通依存"},
+    {"path": "tools/inquiry-lookup-hint.mjs", "scope": "fleet", "step": "hook:inquiry-lookup-hint", "reason": "問い合わせ横断検索・案内の全PC共通依存"},
+    {"path": "config/mail-groups.json", "scope": "fleet", "step": "hook:inquiry-lookup-hint", "reason": "問い合わせ横断検索・案内の全PC共通依存"},
+    {"path": "tools/lib/inquiry-sheet.mjs", "scope": "fleet", "step": "hook:inquiry-lookup-hint", "reason": "問い合わせ横断検索・案内の全PC共通依存"},
+    {"path": "tools/lib/mail-groups.mjs", "scope": "fleet", "step": "hook:inquiry-lookup-hint", "reason": "問い合わせ横断検索・案内の全PC共通依存"},
+
     {"path": "tools/lib/owner-identity.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "台帳 hook の軽量な持ち主判定依存"},
     {"path": "tools/lib/fleet-chase-policy.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "hook の軽量な台帳判定依存"},
     {"path": "tools/kim-awaiting.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "kim の返事待ちの集約と回答配送"},

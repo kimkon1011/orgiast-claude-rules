@@ -224,6 +224,14 @@ export function todoExclusionReason(todo, today = new Date()) {
     const gated = Date.parse(`${date}T${match[4]}:${match[5]}+09:00`);
     if (Number.isFinite(gated) && gated > today.getTime()) return `${date} ${match[4]}:${match[5]} JST以降`;
   }
+  // 外部（kim・取引先・他PC）の操作待ちは、待っている間だけ寝かせる。TODO に
+  // 「（再確認: YYYY-MM-DD）」と書くと、その日が来るまで自動セッションに選ばれず、
+  // 日付を過ぎれば通常のTODOに戻る（2026-11-02〜04実測: 毎晩同じ確認でセッションを1本消費）。
+  // next-session-rotate はこの除外規則を使わないので、行自体はキューに残り続ける＝埋没しない。
+  for (const match of text.matchAll(/再確認\s*[:：]\s*(\d{4})-(\d{2})-(\d{2})/g)) {
+    const date = `${match[1]}-${match[2]}-${match[3]}`;
+    if (Number(`${match[1]}${match[2]}${match[3]}`) > todayNumber) return `${date}まで再確認待ち`;
+  }
   if (/(契約が必要|契約待ち|原価待ち|入金|支払|kim相談|kim に相談|kim と話す|人間の作業|人間しか|人間専用|human-only|要東邦鋼業側で確認|個別写真|撮影|電話|郵送|捺印|OAuth初回同意|アカウント作成|kim待ち|kim の判断|kimの判断|kim の同意|kimの同意|判断を仰|同意を得てから|同意が必要|OS管理操作|管理者権限が必要)/.test(text)) return '人間の作業が前提';
   return '';
 }

@@ -97,11 +97,34 @@ const LANE_STATUS_WAIT = /(?:セッション|Codex|codex-do|他AI|レーン)[^\n
 // （自分のサブエージェント待ちも同様）。
 const REPLY_WAIT = /(?:返事|返答)を待って(?:います|いる|おります)/;
 const EXTERNAL_WAIT_SUBJECT = /(お客様|客様|顧客|取引先|先方|問い?合わ?せ|サブエージェント)/;
+// 2026-11-02T04:31:09.948Z（handoff-audit:9b11ce35d2bc6d3a / 6b41b59b / W）の原文は
+// 「雇保の喪失届は、10月度の給与データが取り込まれるのを待っている状態です」で拾えたが、
+// 同じセッションが 04:08〜04:30 に書いた言い換え（「10月分の賃金が入れられず途中で止めています」
+// 「10月度の給与データはまだ未登録でした」「雇保は…そこで止まっています」）は全て素通りした。
+// 給与・勤怠など社内データの取込待ちは、Claude が取込を実行できるか取込後に自動で続けられる
+// 作業なので、待機の言い換えごと W に含める。外部（お客様・取引先）の入金待ちは正当な待機なので
+// 対象語をデータ種別に限る。過去形の報告（「…を取り込みました」「…を確認しました」）は
+// 「再開・続き・止まっています」など未了を示す語を要求して除外する。
+const DATA_SUBJECT = '(?:給与|賃金|勤怠|明細|データ|CSV|シート)';
+const DATA_WAIT = [
+  // 取込待ちです／取込を待っています／反映待ちの状態です
+  `${DATA_SUBJECT}[^」"'\\n]{0,15}(?:取込|取り込み|登録|反映)(?:を)?待ち(?:です|ます|の状態|中)?`,
+  // 取り込まれたら再開します／登録され次第、続きをやります／入るまで止めています
+  `${DATA_SUBJECT}[^」"'\\n]{0,25}(?:取り込まれ|登録され|反映され|入り|入る|揃い|揃う)(?:たら|次第|まで|までは)[^」"'\\n]{0,20}(?:再開|続き|進め|始め|埋め|止め)`,
+  // 給与データが揃うのを待って、賃金表を埋めます
+  `${DATA_SUBJECT}[^」"'\\n]{0,25}のを待って[、,][^」"'\\n]{0,20}(?:再開|続き|進め|始め|埋め|止め|実行|作り|作る|登録)`,
+  // 10月度の給与データが未登録のため、そこで止まっています
+  `(?:未登録|未取込|未反映)[^」"'\\n]{0,15}(?:ため|ので|で)[^」"'\\n]{0,12}(?:止まって(?:います|いる|おり)|止めています|中断|進め(?:ません|られ)|入れられ)`,
+  // 10月分の賃金が入れられず途中で止めています
+  `(?:賃金|給与)[^」"'\\n]{0,12}(?:が|を)?入れられ(?:ず|ません|ない)[^」"'\\n]{0,20}(?:止まって(?:います|いる|おり)|止めています|中断|保留)`
+].join('|');
+const DATA_WAIT_RE = new RegExp(DATA_WAIT);
 const W  = {
   find(text) {
-    for (const match of text.matchAll(new RegExp(`(数分|しばらく|少し|少々)[^」"'\\n]{0,20}(お?待ち|待って)|完了を?待って|完了を待ち(?:ます|、)|完了待ちで|[^\\s」"'\\n]{0,30}?のを待って(?:います|ます|いる|おります)|${REPLY_WAIT.source}|${ARRIVAL_WAIT.source}|${LANE_STATUS_WAIT.source}`, 'g'))) {
+    for (const match of text.matchAll(new RegExp(`(数分|しばらく|少し|少々)[^」"'\\n]{0,20}(お?待ち|待って)|完了を?待って|完了を待ち(?:ます|、)|完了待ちで|[^\\s」"'\\n]{0,30}?のを待って(?:います|ます|いる|おります)|${REPLY_WAIT.source}|${ARRIVAL_WAIT.source}|${LANE_STATUS_WAIT.source}|${DATA_WAIT}`, 'g'))) {
       if (isAuditCitation(text, match.index) || isPatternNameQuote(text, match.index)) continue;
       if (REPLY_WAIT.test(match[0]) && EXTERNAL_WAIT_SUBJECT.test(text.slice(Math.max(0, match.index - 60), match.index))) continue;
+	      if (DATA_WAIT_RE.test(match[0]) && EXTERNAL_WAIT_SUBJECT.test(text.slice(Math.max(0, match.index - 40), match.index))) continue;
       return match;
     }
     return null;

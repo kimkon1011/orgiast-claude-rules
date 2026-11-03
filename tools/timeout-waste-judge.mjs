@@ -16,12 +16,20 @@ import { isEntry } from './is-entry.mjs';
 export const TIMEOUT_FIX_MERGED_AT = '2026-10-16T18:50:03Z'; // #773（600→900秒＋連鎖予算）
 // 孫プロセスが pipe を握って close が来ず予算を超えた問題の修正（#1260 / 13005ed の commit 日）。
 // 2026-10-28T09:31Z の gemini-cli 1044秒/予算600秒はこの修正より前の行。以後の超過だけを回帰として扱う。
-export const TIMEOUT_KILL_FIX_MERGED_AT = '2026-10-28T19:08:39Z';
+// 2026-11-04: 締切後の kill を非同期化し猶予タイマーを kill より先に張る修正の commit 時刻へ進めた。
+// 2026-11-01T16:18Z の主経路 codex 226.786秒/予算210秒（sync taskkill の待ち 10 秒 + 猶予 5 秒）は
+// この修正より前の行なので回帰に数えない。
+export const TIMEOUT_KILL_FIX_MERGED_AT = '2026-11-03T15:38:52Z';
 // フォールバック試行に与える既定予算。--cap で上書きできる。
 // 主経路（chain 無し）はこれではなく、その実行に与えた --timeout（既定 1800 秒）で判定する。
 export const DEFAULT_CAP_SECS = 900;
 export const DEFAULT_PRIMARY_TIMEOUT_SECS = 1800; // codex-do の --timeout 既定
 export const DEFAULT_TOLERANCE_SECS = 5;
+// 締切後 kill して 'close' を待つ猶予（codex-do の CODEX_DO_TIMEOUT_KILL_GRACE_MS 既定 5000ms）。
+// これは上限に対する「設計上の追加上限」であって捨てた秒数ではない。猶予を許容に入れないと、
+// 予算ちょうどで正しく打ち切った行が +数秒で毎晩「上限超過」に化ける（2026-11-04 実測:
+// 予算210秒の主経路が 226.786 秒＝旧実装の sync taskkill 10 秒 + 猶予 5 秒まで伸びていた）。
+export const DEFAULT_TIMEOUT_KILL_GRACE_SECS = 5;
 
 export function isTimeoutRow(row) {
   return row?.status === 'timeout' || row?.timedOut === true;
@@ -63,11 +71,13 @@ export function judgeTimeoutRows(rows = [], {
   since = TIMEOUT_KILL_FIX_MERGED_AT,
   capSecs = DEFAULT_CAP_SECS,
   toleranceSecs = DEFAULT_TOLERANCE_SECS,
+  killGraceSecs = DEFAULT_TIMEOUT_KILL_GRACE_SECS,
 } = {}) {
   const sinceMs = Date.parse(since);
   if (!Number.isFinite(sinceMs)) throw new Error(`--since は有効な ISO 日時を指定してください: ${since}`);
   if (!Number.isFinite(capSecs) || capSecs <= 0) throw new Error(`cap は正の秒数で指定してください: ${capSecs}`);
   if (!Number.isFinite(toleranceSecs) || toleranceSecs < 0) throw new Error(`tolerance は 0 以上の秒数で指定してください: ${toleranceSecs}`);
+  if (!Number.isFinite(killGraceSecs) || killGraceSecs < 0) throw new Error(`killGrace は 0 以上の秒数で指定してください: ${killGraceSecs}`);
 
   const events = (Array.isArray(rows) ? rows : [])
     .filter(isTimeoutRow)
@@ -78,8 +88,8 @@ export function judgeTimeoutRows(rows = [], {
       const wasteSecs = known.reduce((sum, a) => sum + a.secs, 0);
       const maxAttemptSecs = known.length ? Math.max(...known.map((a) => a.secs)) : null;
       const overCapAttempts = known
-        .filter((a) => a.secs > a.budgetSecs + toleranceSecs)
-        .map(({ backend, model, secs, budgetSecs, path }) => ({ backend, model, secs, budgetSecs, path }));
+        .filter((a) => a.secs > a.budgetSecs + killGraceSecs + toleranceSecs)
+        .map(({ backend, model, secs, budgetSecs, path }) => ({ backend, model, secs, budgetSecs, killGraceSecs, path }));
       return {
         t: Number.isFinite(at) ? new Date(at).toISOString() : null,
         provider: row.provider ?? null,
@@ -105,6 +115,7 @@ export function judgeTimeoutRows(rows = [], {
     since: new Date(sinceMs).toISOString(),
     capSecs,
     toleranceSecs,
+    killGraceSecs,
     verdict,
     totalTimeoutRows: events.length,
     postDeployTimeoutRows: postDeploy.length,
@@ -125,6 +136,7 @@ function parseArgs(argv) {
     since: TIMEOUT_KILL_FIX_MERGED_AT,
     capSecs: DEFAULT_CAP_SECS,
     toleranceSecs: DEFAULT_TOLERANCE_SECS,
+    killGraceSecs: DEFAULT_TIMEOUT_KILL_GRACE_SECS,
     json: false,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -132,6 +144,7 @@ function parseArgs(argv) {
     else if (argv[i] === '--since') args.since = argv[++i];
     else if (argv[i] === '--cap') args.capSecs = Number(argv[++i]);
     else if (argv[i] === '--tolerance') args.toleranceSecs = Number(argv[++i]);
+    else if (argv[i] === '--kill-grace') args.killGraceSecs = Number(argv[++i]);
     else if (argv[i] === '--json') args.json = true;
     else throw new Error(`不明な引数: ${argv[i]}`);
   }
@@ -141,7 +154,7 @@ function parseArgs(argv) {
 function renderText(report) {
   const lines = ['## ⏱ タイムアウトで捨てた秒数の判定'];
   lines.push(`- 基準時刻(孫プロセス対策 #1260): ${report.since}`);
-  lines.push(`- 上限: ${report.capSecs} 秒 + 許容 ${report.toleranceSecs} 秒`);
+  lines.push(`- 上限: ${report.capSecs} 秒 + kill 猶予 ${report.killGraceSecs} 秒 + 許容 ${report.toleranceSecs} 秒`);
   if (report.verdict === 'unverified-no-recurrence') {
     lines.push(`- 判定: **未確認（再発なし）** — 基準時刻以降の timeout 行は 0 件（全期間 ${report.totalTimeoutRows} 件）`);
   } else {

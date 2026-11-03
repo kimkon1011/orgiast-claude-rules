@@ -67,6 +67,26 @@ test('closed and auto-close eligible sessions excluded', async t => {
   f.io.stat = async () => ({ mtimeMs: f.io.now() - 7 * 86400000 });
   const r = await run(options([], {}), f.io); assert.deepEqual(r.rows.map(r => r.skip), ['closed', 'session-auto-close対象']); assert.equal(f.calls(), 0);
 });
+test('closable sessions are not resumed', async t => {
+  const f = await fixture(t, 2);
+  f.records[0].displayTitle = '008｜【閉じて可】[headless:quota-sweep] Follow .loop/quota-sweep-claude.md';
+  const r = await run(options([], {}), f.io);
+  assert.deepEqual(r.rows.map(r => r.skip), ['閉じて可', '']);
+  assert.equal(f.calls(), 1);
+  assert.equal((await f.ledger()).sessions['session-0'].skipReason, '閉じて可');
+});
+test('sessions that asked to wait are skipped until their deadline', async t => {
+  const f = await fixture(t, 1);
+  const pad = n => String(n).padStart(2, '0');
+  const deadline = new Date(f.io.now() + 3600000);
+  f.records[0].displayTitle = `008｜【${pad(deadline.getMonth() + 1)}/${pad(deadline.getDate())}/${pad(deadline.getHours())}:${pad(deadline.getMinutes())}まで】Task 0`;
+  const before = await run(options([], {}), f.io);
+  assert.equal(before.rows[0].skip, '待機期限前'); assert.equal(f.calls(), 0);
+  // 期限を過ぎたら再開対象に戻る（期限切れの待機を永久に無視しない）。
+  f.next();
+  const after = await run(options([], {}), f.io);
+  assert.equal(after.rows[0].skip, ''); assert.equal(f.calls(), 1);
+});
 test('missing transcript is skipped without aborting the run', async t => {
   const f = await fixture(t, 2);
   f.io.stat = async file => { if (file === 'file-0') throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); return { mtimeMs: f.io.now() - 86400000 }; };

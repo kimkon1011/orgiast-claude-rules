@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 export const GATE_CONTRACT = {"name": "next-action-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "next-action-gate"}]};
+import { sessionWakeupEvidence } from './session-wakeup-evidence.mjs';
 import { isEntry } from './is-entry.mjs';
 import { readTranscriptContext } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
@@ -10,7 +11,9 @@ import { classifyHandoff } from './lib/handoff-kind.mjs';
 
 export const MIN_ENFORCED_LENGTH = 200;
 const FOOTER_PATTERN = /(?:^|\n)次に kim がすること:[ \t]*([^\r\n]*)\r?\n(?:[ \t]*\r?\n)?この後の自動進行:[ \t]*([^\r\n]*)\r?\n(?:[ \t]*\r?\n)?このセッション:[ \t]*([^\r\n]*)$/;
-const MULTIPLE_ACTIONS_PATTERN = /[、,，・]/;
+// Match list/action separators; exclude digit-grouping commas (e.g. "7,920円")
+// and 「、または」「、もしくは」「、あるいは」disjunctive phrases (one choice, not two actions).
+const MULTIPLE_ACTIONS_PATTERN = /[、・](?!\s*(?:または|もしくは|あるいは))|(?<!\d)[,，](?!\d)/;
 const ACTION_LABEL_PATTERN = /[①-⑳]|[A-ZＡ-Ｚa-z0-9０-９一二三]案|案[A-ZＡ-Ｚ0-9０-９]|選択肢\s*[0-9０-９]+|(?:番号|記号)で(?:選|答|返)/gu;
 const LABEL_ONLY_REASON = '[NEXT-ACTION-LABEL-ONLY] 「次に kim がすること」にラベル（①・B案・案A など）だけが書かれています。kim はそのラベルの中身を探しに遡る羽目になります（kim 2026-10-28）。(1) kim の過去の決定がある・支払いや同意が要らない・取り消せる判断なら、聞かずに Claude が決めて進め、結果を報告する。この行は「なし」にする (2) どうしても聞くなら、ラベルではなく中身をこの1行に書く（例:「1Password を月 $24.95 で契約するかを はい/いいえ で答える」）。例外は [NEXT-ACTION-LABEL-OK: <理由>]。';
 
@@ -36,7 +39,7 @@ const COMPLETE_PATTERN = /^なし\s*[（(]\s*完了\s*[）)]$/;
 const DEFERRAL_PATTERN = /(恒久策|恒久化|恒久的|次セッション|次回セッション|後日|先送り)/;
 const IMPLEMENTATION_PATTERN = /(実装|修正|改修|修復|作り直)/;
 const DELIVERY_PATTERN = /着地|マージ|\bPR\b|push|ブランチ|main に/;
-const NO_ACTION_PATTERN = /^(?:なし|無し|ありません|不要|返信不要)(?:[。．.]?[ \t]*$|[ \t]*[（(][^\r\n]*[）)][。．.]?[ \t]*$)/;
+export const NO_ACTION_PATTERN = /^(?:なし|無し|ありません|不要|返信不要)(?:[。．.]?[ \t]*$|[ \t]*[（(][^\r\n]*[）)][。．.]?[ \t]*$)/;
 const WAREHOUSE_PATTERN = /倉庫|棚|箱に入れ|セットに入れ|同梱|運ぶ|積む|持ち出し|格納|移動/;
 const PERMANENT_FIX_REASON = '人に作業を残すなら、今後その作業が人に来ないようにする策（自動化／担当者への依頼経路／ルール・ゲート・memory 化）をこのターンで実装し、`恒久策:` 行に実装物を書く。初回だけの作業なら `恒久策: 一回限り: <理由>`。';
 const DEFERRAL_REASON = '[NEXT-ACTION-DEFERRAL] 「次に kim がすること」に恒久修正の先送り（実装・修正・恒久化・次セッション対応）が書かれています。同じ文面は夜間監査 permanent-fix-deferral-scan が P3 として検出します（2026-10-14〜10-15 に 6 件）。kim に渡してよいのは「人が一度だけ実行できる具体的手順」だけです。自分で潰せるものはこのターン内に実装して着地させ、実行不能なら実行したコマンドと終了コードを本文に記録したうえで、移せる経路（例: Codex が生きている受信PCへの fleet-mail --exec codex 便）へ流してください。どうしても人にしかできない物理操作のときだけ、先送り語（恒久策・次セッション等）を使わず具体的な1手順だけを書いてください。';
@@ -175,8 +178,8 @@ function hasOpenSessionCheck(input) {
   } catch { return false; }
 }
 
-// auto-progress --add-check survives user turns (the ledger carries the check forward); background evidence belongs only to this turn.
-function hasSessionWakeup(raw, input = {}) {
+// Persistent registrations survive user turns until expiration or task termination.
+export function hasSessionWakeup(raw, input = {}) {
   let autoProgress = false;
   let background = false;
   for (const line of String(raw || '').split(/\r?\n/)) {
@@ -194,13 +197,13 @@ function hasSessionWakeup(raw, input = {}) {
       if (tool?.type !== 'tool_use') continue;
       if (/^(?:Bash|PowerShell)$/.test(tool.name || '')) {
         const cmd = String(tool.input?.command || tool.input?.script || '');
-        if (/\bauto-progress(?:\.mjs)?\b/.test(cmd) && /--add-check\b/.test(cmd) && !/--help\b/.test(cmd)) {
+        if (/\bauto-progress(?:\.mjs)?\b/.test(cmd) && /--(?:add-check|start-when)\b/.test(cmd) && !/--help\b/.test(cmd)) {
           autoProgress = true;
         }
       }
       // Completion detection is deliberately conservative: any current-turn call counts.
       if ((tool.name === 'Agent' && tool.input?.run_in_background !== false)
-        || (/^(?:Bash|PowerShell)$/.test(tool.name || '') && tool.input?.run_in_background === true)) background = true;
+        || (tool.name === 'PowerShell' && tool.input?.run_in_background === true)) background = true;
     }
   }
   if (!autoProgress && input.session_id) {
@@ -209,15 +212,15 @@ function hasSessionWakeup(raw, input = {}) {
         .some(row => row.sessionId === input.session_id && row.status === 'open' && typeof row.check === 'string' && row.check.trim());
     } catch { /* A missing or unreadable ledger is not wakeup evidence. */ }
   }
-  const scheduled = blocks(currentTurnEntries(raw), 'tool_use').some(tool =>
-    (tool.name === 'ScheduleWakeup' && tool.input?.stop !== true) || tool.name === 'Monitor');
-  return { autoProgress, background, scheduled };
+  const persistent = sessionWakeupEvidence(raw, input.now ?? Date.now());
+  return { autoProgress, background: background || persistent.background, scheduled: persistent.scheduled };
 }
 
-export function judgeNextAction(text, transcriptRaw = '', input = {}) {
+function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {}) {
   const source = String(text || '').trimEnd();
+  const turnSource = String(options.turnText || source).trimEnd();
   if (!enabled()) return { decision: 'pass', reason: 'disabled' };
-  const permanentFix = permanentFixViolation(source, transcriptRaw);
+  const permanentFix = permanentFixViolation(turnSource, transcriptRaw);
   if (/[?？]$/.test(source)) return permanentFix || { decision: 'pass', reason: 'question' };
   if (reportsCloseSteps(source)) return permanentFix || { decision: 'pass', reason: 'close-steps' };
 
@@ -237,7 +240,7 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
   if (!footer.nextAction) {
     return { decision: 'block', code: 'NEXT-ACTION-EMPTY', reason: '「次に kim がすること:」の値が空です。なし、または具体的な1件を書いてください。' };
   }
-  const labelOverride = [...source.matchAll(/\[NEXT-ACTION-LABEL-OK:[ \t]*([^\]\r\n]*)\]/g)]
+  const labelOverride = [...turnSource.matchAll(/\[NEXT-ACTION-LABEL-OK:[ \t]*([^\]\r\n]*)\]/g)]
     .some(([, reason]) => [...reason.trim()].length >= 5);
   if (hasUnexplainedLabel(footer.nextAction) && !labelOverride) {
     return { decision: 'block', code: 'NEXT-ACTION-LABEL-ONLY', reason: LABEL_ONLY_REASON };
@@ -245,22 +248,23 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
   if (footer.nextAction !== 'なし' && MULTIPLE_ACTIONS_PATTERN.test(footer.nextAction)) {
     return { decision: 'block', code: 'NEXT-ACTION-MULTIPLE', reason: 'kim への手渡しが2件以上あります。§1.1 最上位原則に従い、まず自分で潰して1件以下にしてください。' };
   }
-  const backrefOverride = [...source.matchAll(/\[NEXT-ACTION-BACKREF-OK:[ \t]*([^\]\r\n]*)\]/g)]
+  const backrefOverride = [...turnSource.matchAll(/\[NEXT-ACTION-BACKREF-OK:[ \t]*([^\]\r\n]*)\]/g)]
     .some(([, reason]) => [...reason.trim()].length >= 5);
   if (BACKREF_PATTERN.test(footer.nextAction) && !backrefOverride) {
     return { decision: 'block', code: 'NEXT-ACTION-BACKREF', reason: BACKREF_REASON };
   }
-  const approvalInlineOverride = [...source.matchAll(/\[NEXT-ACTION-APPROVAL-INLINE-OK:[ \t]*([^\]\r\n]*)\]/g)]
+  const approvalInlineOverride = [...turnSource.matchAll(/\[NEXT-ACTION-APPROVAL-INLINE-OK:[ \t]*([^\]\r\n]*)\]/g)]
     .some(([, reason]) => [...reason.trim()].length >= 5);
   // 末尾の実際のフッターより前だけを調べ、見出しが直前40行以内にあることを求める。
-  const footerStart = source.match(FOOTER_PATTERN).index;
-  const precedingLines = source.slice(0, footerStart).split(/\r?\n/).slice(-40);
+  const footerLabel = turnSource.lastIndexOf('次に kim がすること:');
+  const footerStart = Math.max(0, turnSource.lastIndexOf('\n', footerLabel));
+  const precedingLines = turnSource.slice(0, footerStart).split(/\r?\n/).slice(-40);
   const hasInlineApproval = precedingLines.some(line => line.trim() === '【kim 確認用の全文】');
   if (footer.nextAction !== 'なし' && APPROVAL_PATTERN.test(footer.nextAction)
     && !hasInlineApproval && !approvalInlineOverride) {
     return { decision: 'block', code: 'NEXT-ACTION-APPROVAL-INLINE', reason: APPROVAL_INLINE_REASON };
   }
-  const openActionOverride = [...source.matchAll(/\[NEXT-ACTION-OPEN-OK:[ \t]*([^\]\r\n]*)\]/g)]
+  const openActionOverride = [...turnSource.matchAll(/\[NEXT-ACTION-OPEN-OK:[ \t]*([^\]\r\n]*)\]/g)]
     .some(([, reason]) => [...reason.trim()].length >= 5);
   if (footer.nextAction !== 'なし' && OPEN_ACTION_PATTERN.test(footer.nextAction)
     && !HUMAN_ONLY_PATTERN.test(footer.nextAction) && !openActionOverride) {
@@ -299,7 +303,7 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
     return { decision: 'block', code: 'NEXT-ACTION-DEFERRAL', reason: DEFERRAL_REASON };
   }
   const wakeup = hasSessionWakeup(transcriptRaw, input);
-  const noAutocheck = [...source.matchAll(/\[NO-AUTOCHECK-OK:[ \t]*([^\]\r\n]*)\]/g)]
+  const noAutocheck = [...turnSource.matchAll(/\[NO-AUTOCHECK-OK:[ \t]*([^\]\r\n]*)\]/g)]
     .some(([, reason]) => reason.trim().length > 0);
   // チャットで答えるだけの返信待ち（reply-only）は会話に戻ってくるので台帳は要らない。それ以外の人待ちは載せる。
   const userHandoff = /\[手渡し判定\]|お願いする操作|^手間監査:/m.test(body);
@@ -307,11 +311,43 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}) {
     && !hasOpenSessionCheck(input) && !noAutocheck) {
     return { decision: 'block', code: 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', reason: (userHandoff ? 'user 本人への手渡し（[手渡し判定]／お願いする操作）も人待ちです。' : '') + '人待ちの自動進行は台帳の定期チェックに載せる: node tools/auto-progress.mjs --add-check --session <id> --check "<exit0=達成/1=未達のコマンド>" --deadline +7d --label "<名前>" --next-claude "<次の手>"。自動進行が「なし」でも同じセッションの open 行が必要です。自動確認できない場合だけ [NO-AUTOCHECK-OK: <理由>] を記載してください。' };
   }
+  // Monitor / 起床通知はセッション終了で消える。実際の永続台帳を必須にする。
+  if (WAIT_STATES.has(sessionState) && !hasOpenSessionCheck(input)) {
+    return { decision: 'block', code: 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK', reason: '作業中のまま応答を終える前に、同じセッションの永続チェックを登録してください: node tools/auto-progress.mjs --add-check --session <id> --check "<達成判定>" --deadline +3d --label "<作業名>" --next-claude "<次の手>"。自動進行が「なし」でも必要です。バックグラウンド完了通知や登録コマンドへの言及だけでは代替できません。' };
+  }
   if (!permanentFix && hasAutopilot && process.env.CLAUDE_HEADLESS !== '1'
     && !/subagents/i.test(input.transcript_path || '') && !wakeup.autoProgress && !wakeup.background && !wakeup.scheduled) {
-    return { decision: 'block', code: 'AUTOPILOT-NO-SESSION-WAKEUP', reason: '「この後の自動進行」が残っていますが、このセッションを定期的に起こす仕組みがありません。/loop で自走するか、Monitor か ScheduleWakeup を実際に呼ぶか、node tools/auto-progress.mjs --add-check … で定期チェックを登録してから終えてください。『次ターンで』『次回起きたら』は起床手段にならない。自動進行が無いなら「この後の自動進行: なし」と書いてください。' };
+    return { decision: 'block', code: 'AUTOPILOT-NO-SESSION-WAKEUP', reason: '「この後の自動進行」が残っていますが、このセッションを定期的に起こす仕組みがありません。/loop で自走するか、Monitor か ScheduleWakeup を実際に呼ぶか、node tools/auto-progress.mjs --add-check … で定期チェックを登録してから終えてください（「夜に着手」など開始の予約は --start-when "<開始条件>" --next-claude "<やること>"。--check は完了判定なので時刻を入れない）。『次ターンで』『次回起きたら』は起床手段にならない。自動進行が無いなら「この後の自動進行: なし」と書いてください。' };
   }
   return permanentFix || { decision: 'pass', reason: 'valid-footer' };
+}
+
+// Report independent footer defects together. The single evaluator remains the source of truth
+// for ordered/stateful checks; this supplement prevents label/back-reference/approval/open-action
+// defects from being revealed one Stop retry at a time.
+export function judgeNextAction(text, transcriptRaw = '', input = {}, options = {}) {
+  const primary = judgeNextActionSingle(text, transcriptRaw, input, options);
+  if (primary.decision !== 'block') return primary;
+  const source = String(text || '').trimEnd();
+  const turnSource = String(options.turnText || source).trimEnd();
+  const footer = footerValues(source);
+  if (!footer) return primary;
+  const issues = new Map([[primary.code, primary.reason]]);
+  const add = (code, reason) => issues.set(code, reason);
+  const permanent = permanentFixViolation(turnSource, transcriptRaw);
+  if (permanent) add(permanent.code, permanent.reason);
+  const override = (name, minimum = 5) => [...turnSource.matchAll(new RegExp(`\\[${name}:[ \\t]*([^\\]\\r\\n]*)\\]`, 'g'))]
+    .some(([, reason]) => [...reason.trim()].length >= minimum);
+  if (hasUnexplainedLabel(footer.nextAction) && !override('NEXT-ACTION-LABEL-OK')) add('NEXT-ACTION-LABEL-ONLY', LABEL_ONLY_REASON);
+  if (footer.nextAction !== 'なし' && MULTIPLE_ACTIONS_PATTERN.test(footer.nextAction)) add('NEXT-ACTION-MULTIPLE', 'kim への手渡しが2件以上あります。§1.1 最上位原則に従い、まず自分で潰して1件以下にしてください。');
+  if (BACKREF_PATTERN.test(footer.nextAction) && !override('NEXT-ACTION-BACKREF-OK')) add('NEXT-ACTION-BACKREF', BACKREF_REASON);
+  const footerLabel = turnSource.lastIndexOf('次に kim がすること:');
+  const footerStart = Math.max(0, turnSource.lastIndexOf('\n', footerLabel));
+  const hasInlineApproval = turnSource.slice(0, footerStart).split(/\r?\n/).slice(-40).some(line => line.trim() === '【kim 確認用の全文】');
+  if (footer.nextAction !== 'なし' && APPROVAL_PATTERN.test(footer.nextAction) && !hasInlineApproval && !override('NEXT-ACTION-APPROVAL-INLINE-OK')) add('NEXT-ACTION-APPROVAL-INLINE', APPROVAL_INLINE_REASON);
+  if (footer.nextAction !== 'なし' && OPEN_ACTION_PATTERN.test(footer.nextAction) && !HUMAN_ONLY_PATTERN.test(footer.nextAction) && !override('NEXT-ACTION-OPEN-OK')) add('NEXT-ACTION-OPEN', OPEN_ACTION_REASON);
+  if (issues.size === 1) return primary;
+  return { ...primary, reason: [...issues].map(([code, reason]) => String(reason).startsWith(`[${code}]`) ? reason : `[${code}] ${reason}`).join('\n') };
 }
 
 async function main() {

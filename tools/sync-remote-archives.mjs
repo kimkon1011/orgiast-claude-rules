@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
+import { hostExitArchive } from './lib/host-exit-archive.mjs';
 
 const COOLDOWN = 5 * 60_000;
 const TAIL = 512 * 1024;
@@ -50,15 +51,15 @@ export function resumedAfter(file, archivedAt) {
   } finally { fs.closeSync(fd); }
 }
 
-export async function syncRemoteArchives({ base = path.join(os.homedir(), '.claude'), now = Date.now(), fetchImpl = fetch, dryRun = false, since } = {}) {
+export async function syncRemoteArchives({ base = path.join(os.homedir(), '.claude'), now = Date.now(), fetchImpl = fetch, dryRun = false, since, force = false } = {}) {
   if (since !== undefined && (!dryRun || !Number.isFinite(Date.parse(since)))) throw new Error('--since requires --dry-run and an ISO date');
   const deadline = Date.now() + 60_000;
-  const result = { listed: 0, candidates: 0, queued: 0, skippedResumed: 0, skippedKept: 0, eventsFetched: 0, failed: 0 };
+  const result = { listed: 0, candidates: 0, queued: 0, skippedHostExit: 0, skippedResumed: 0, skippedKept: 0, eventsFetched: 0, failed: 0 };
   if (dryRun) result.sessions = [];
   const stateFile = path.join(base, 'sync-remote-archives-state.json');
   const state = json(stateFile);
   const baseline = since !== undefined ? Date.parse(since) : (Number.isFinite(state.since) ? state.since : now);
-  if (!dryRun && Number.isFinite(state.since) && now - (state.at ?? 0) < COOLDOWN) return { ...result, skipped: 'cooldown' };
+  if (!dryRun && !force && Number.isFinite(state.since) && now - (state.at ?? 0) < COOLDOWN) return { ...result, skipped: 'cooldown' };
   // 認証が未設定でも導入時刻は保存し、後日の初回接続で過去分を巻き込まない。
   if (!dryRun) { fs.mkdirSync(base, { recursive: true }); write(stateFile, { at: now, since: baseline }); }
   const h = headers(base);
@@ -104,6 +105,8 @@ export async function syncRemoteArchives({ base = path.join(os.homedir(), '.clau
         const event = (events.data ?? []).find(e => e.payload?.request?.subtype === 'end_session' && e.payload.request.reason === 'archived');
         const archivedAt = Date.parse(event?.created_at);
         if (!(archivedAt >= baseline)) continue;
+        // PC 側終了で本体が自動アーカイブしたものは restore-remote-sessions が戻すので、ローカルも退避しない。
+        if (hostExitArchive(events.data ?? [])) { result.skippedHostExit++; continue; }
         if (Date.now() >= deadline) return { ...result, limited: true };
         if (resumedAfter(local.file, archivedAt)) { result.skippedResumed++; continue; }
         // 書き込み直前に読み直し、復元済み ID や他の同期が追加した項目を保持する。
@@ -130,7 +133,7 @@ export async function syncRemoteArchives({ base = path.join(os.homedir(), '.clau
 if (isEntry(import.meta.url)) {
   const i = process.argv.indexOf('--since');
   const since = i < 0 ? undefined : process.argv[i + 1] ?? '';
-  syncRemoteArchives({ dryRun: process.argv.includes('--dry-run'), since })
+  syncRemoteArchives({ dryRun: process.argv.includes('--dry-run'), since, force: process.argv.includes('--force') })
     .then(result => console.log(JSON.stringify(result)))
     .catch(error => { console.error(error.message); process.exitCode = 1; });
 }

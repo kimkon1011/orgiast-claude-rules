@@ -34,6 +34,12 @@ GitHub にログイン済みの Claude Code で:
 | rules | `rules/gas.md` | GAS 開発の絶対ルール（`~/.claude/rules/` にコピーすると .gs 編集時に自動適用） |
 | doc | `ONBOARDING.md` | 全社共通の絶対ルール全文（詳細版） |
 
+## 設計文書
+
+| 文書 | 説明 |
+|---|---|---|
+| [c4-operationalization-design.md](c4-operationalization-design.md) | C4（fallback_chain_timeout 監視）実運用化の設計判断。巡回型スイープ統合・閾値・通知先を確定 |
+
 ## CLAUDE.md に足すもの（手動コピー、plugin では配布されない）
 
 各自の `~/.claude/CLAUDE.md` に最低限:

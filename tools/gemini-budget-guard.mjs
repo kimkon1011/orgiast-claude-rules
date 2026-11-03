@@ -18,6 +18,7 @@ export function summarizeGeminiBudget(rows, { now = new Date(), budgetJpy = 5000
     const time = Date.parse(row.t);
     if (!Number.isFinite(time)) { invalidRows++; continue; }
     if (geminiMonth(time) !== month || time > new Date(now).getTime()) continue;
+    if (/^http_[45]\d\d$/.test(row.status)) continue;
     totalCalls++;
     const known = typeof row.usd === 'number' && Number.isFinite(row.usd) && row.usd >= 0;
     if (known) spentUsd += row.usd;
@@ -78,7 +79,7 @@ export async function runGeminiBudgetGuard({ home = geminiHome(), now = new Date
   }
   if (status.level !== 'ok') {
     const result = await notifyImpl(`Gemini 月次予算警告\n${formatGeminiBudgetStatus(status, { now })}\n月末ペース（計測分）: ¥${Math.round(status.paceEomJpy).toLocaleString('ja-JP')}`, { home, webhookFallback: false });
-    if (result?.delivered !== 'dm') throw new Error(`Gemini予算警告DM未送信: ${result?.reason || '配信失敗'}`);
+    if (!['dm', 'session-inbox'].includes(result?.delivered)) throw new Error(`Gemini予算警告DM未送信: ${result?.reason || '配信失敗'}`);
   }
   return status;
 }

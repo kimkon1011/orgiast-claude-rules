@@ -105,7 +105,24 @@ test('project manifest has unique known item types and severities', () => {
   assert(parsed.items.every((entry) => ['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task'].includes(entry.type)));
   assert(parsed.items.every((entry) => ['required', 'optional', 'manual'].includes(entry.severity)));
   const outbound = parsed.items.find(entry => entry.id === 'settings:outbound-claim-evidence-gate');
-  assert.deepEqual(outbound.spec, { path: '.claude/settings.json', hookEvent: 'PreToolUse', hookScript: 'outbound-claim-evidence-gate.mjs', hookArgs: '', async: false, timeout: 10 });
+  assert.deepEqual(outbound.spec, { path: '.claude/settings.json', hookEvent: 'PreToolUse', hookScript: 'outbound-claim-evidence-gate.mjs', hookRunner: 'gate-hook-runner.mjs', hookArgs: '', async: false, timeout: 15 });
+});
+
+test('hook 検証は既知のリポ tools のどのパスでも通る', (t) => {
+  const home = temp('setup-known-tools-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const spec = { path: '.claude/settings.json', hookEvent: 'PreToolUse', hookScript: 'sample-gate.mjs', hookRunner: 'gate-hook-runner.mjs', hookArgs: '', async: false, timeout: 15 };
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([item('known-hook', 'json-valid', spec)])));
+  for (const toolsPath of [
+    path.join(home, 'orgiast-claude-rules', 'tools'),
+    path.join(home, '.claude', 'nightly-repo', 'tools'),
+    path.join(home, 'Downloads', 'orgiast-claude-rules', 'tools'),
+  ]) {
+    const command = `node "${path.join(toolsPath, spec.hookRunner)}" "${path.join(toolsPath, spec.hookScript)}"`;
+    write(path.join(home, spec.path), JSON.stringify({ hooks: { PreToolUse: [{ hooks: [{ type: 'command', command, timeout: 15 }] }] } }));
+    assert.equal(run(['--verify', '--home', home, '--manifest', mf]).status, 0);
+  }
 });
 
 test('converge実経路がhook登録・旧通知削除・allow反映を行い再実行で不変', (t) => {
@@ -370,3 +387,45 @@ for (const [name, change, expected] of [
     assert.equal(JSON.parse(result.stdout).items[0].status, expected);
   });
 }
+
+test('rule compliance missing task reaches manifest registrar on converge', async t => {
+  const home = temp('setup-rule-task-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const entry = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8')).items.find(x => x.id === 'task:rule-compliance');
+  assert.deepEqual(entry.repair, ['register-rule-compliance-task.mjs']);
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([entry])));
+  const fixture = path.join(home, 'tasks.json');
+  write(fixture, '{}');
+  const result = run(['--converge', '--json', '--home', home, '--manifest', mf], { ORGIAST_SETUP_TASK_INFO_FIXTURE: fixture });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).items[0].repaired, true);
+  const { main } = await import('./register-rule-compliance-task.mjs');
+  let called = false;
+  main({ platform: 'win32', spawnImpl(command, args) {
+    called = true;
+    assert.equal(command, 'powershell.exe');
+    assert.ok(args.at(-1).endsWith('register-rule-compliance-task.ps1'));
+    return { status: 0, stdout: '' };
+  } });
+  assert.equal(called, true);
+});
+
+
+test('outbound gate verifier accepts the actual registered wrapper and still rejects a missing hook', t => {
+  const home = temp('setup-outbound-wrapper-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const parsed = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8'));
+  const outbound = parsed.items.find(entry => entry.id === 'settings:outbound-claim-evidence-gate');
+  assert.equal(outbound.severity, 'required');
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([outbound])));
+  const registered = spawnSync(process.execPath, [path.join(toolsDir, 'register-hooks.mjs'), '--hooks-only'], {
+    encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: path.dirname(toolsDir) },
+  });
+  assert.equal(registered.status, 0, registered.stderr);
+  const verified = run(['--verify', '--home', home, '--manifest', mf]);
+  assert.equal(verified.status, 0, verified.stdout + verified.stderr);
+  write(path.join(home, '.claude/settings.json'), '{}');
+  assert.equal(run(['--verify', '--home', home, '--manifest', mf]).status, 1);
+});

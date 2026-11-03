@@ -12,6 +12,7 @@ const LINE = /api\.line\.me\/v2\/bot\/message\/(?:push|reply|multicast)/iu;
 const DISCORD_POST = /discord\.com\/api\/v10\/channels\/[^\s"'`]+\/messages[\s\S]{0,300}(?:method\s*:\s*["'`]POST|-[Xx]\s*POST)|(?:method\s*:\s*["'`]POST|-[Xx]\s*POST)[\s\S]{0,300}discord\.com\/api\/v10\/channels\/[^\s"'`]+\/messages/iu;
 const GMAIL_DRAFT = /(?:^|[\\/])gmail-draft\.mjs\b/iu;
 const DISCORD_DM = /(?:^|[\\/])discord-dm\.mjs\b/iu;
+const LINE_CHANNEL = /(?:^|[\\/])line-channel\.mjs\b/iu;
 const OPERATIONS = '(?:入力|予約|登録|送付|送信|手配|申込|申し込み|設定|発注|お振込|振込|共有|招待|追加|反映|公開|アップロード)';
 const COMPLETION = '(?:いたしました|致しました|しました|済み|済です|完了しました|が完了)';
 const CLAIM = new RegExp(`${OPERATIONS}${COMPLETION}`, 'u');
@@ -37,7 +38,21 @@ function stringLiterals(source) {
 
 function option(argv, name) { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : ''; }
 
-async function inspectedPayload(input) {
+async function readDraftBody(id, user) {
+  if (!/^[A-Za-z0-9_-]+$/.test(id || '')) throw Error('invalid draft ID');
+  const { getDriveToken } = await import('./lib/drive-auth.mjs');
+  const { gwsFetch } = await import('./lib/gws-proxy.mjs');
+  const { mimeText } = await import('./mail-consistency-check.mjs');
+  const signal = AbortSignal.timeout(8000);
+  const token = await getDriveToken({ impersonate: user || 'seisaku-team@orgiast.jp', scope: 'https://www.googleapis.com/auth/gmail.readonly', signal });
+  const response = await gwsFetch(`https://gmail.googleapis.com/gmail/v1/users/me/drafts/${id}?format=full`, { headers: { Authorization: `Bearer ${token}` }, signal });
+  if (!response.ok) throw Error(`draft read HTTP ${response.status}`);
+  const payload = (await response.json()).message?.payload;
+  if (!payload) throw Error('draft payload missing');
+  return mimeText(payload).text;
+}
+
+async function inspectedPayload(input, readDraft) {
   const command = String(input.tool_input?.command ?? '');
   const argv = tokens(command);
   let cwd = path.resolve(input.cwd || process.cwd());
@@ -47,17 +62,19 @@ async function inspectedPayload(input) {
     if (!/(?:^|[\\/])node(?:\.exe)?$/iu.test(argv[i])) continue;
     let j = i + 1;
     while (argv[j]?.startsWith('-') && !/^(?:-e|--eval|-p|--print)$/u.test(argv[j])) j++;
-    if (/\.(?:mjs|cjs|js)$/iu.test(argv[j] ?? '') && !/^(?:gmail-draft|discord-dm)\.mjs$/iu.test(path.basename(argv[j]))) script += `\n${await readLimited(path.resolve(cwd, argv[j]))}`;
+    if (/\.(?:mjs|cjs|js)$/iu.test(argv[j] ?? '') && !/^(?:gmail-draft|discord-dm|line-channel)\.mjs$/iu.test(path.basename(argv[j]))) script += `\n${await readLimited(path.resolve(cwd, argv[j]))}`;
   }
   const combined = `${command}\n${script}`;
-  const gmail = GMAIL_DRAFT.test(command) && argv.includes('--send') && argv.includes('--body-file');
+  const gmail = GMAIL_DRAFT.test(command) && argv.includes('--send');
   const discord = DISCORD_DM.test(command);
-  const sending = LINE.test(combined) || DISCORD_POST.test(combined) || gmail || discord;
+  const lineChannel = LINE_CHANNEL.test(command) && argv.includes('--send');
+  const sending = LINE.test(combined) || DISCORD_POST.test(combined) || gmail || discord || lineChannel;
   if (!sending || /api\.line\.me\/v2\/bot\/message\/(?:broadcast|narrowcast)/iu.test(combined)) return null;
   let body = script ? stringLiterals(script) : command;
   if (discord) body += `\n${option(argv, '--body')}`;
   const bodyFile = option(argv, '--body-file');
-  if (bodyFile && (gmail || discord)) body += `\n${await readLimited(path.resolve(cwd, bodyFile))}`;
+  if (bodyFile && (gmail || discord || lineChannel)) body += `\n${await readLimited(path.resolve(cwd, bodyFile))}`;
+  if (gmail && !bodyFile) body += `\n${await readDraft(option(argv, '--send'), option(argv, '--user'))}`;
   return body;
 }
 
@@ -87,10 +104,10 @@ function hasOverride(text) {
   return [...String(text).matchAll(/\[OUTBOUND-CLAIM-OK:\s*([^\]\n]+)\]/gu)].some(match => match[1].trim().length >= 10);
 }
 
-export async function judge(input, { warning = () => {} } = {}) {
+export async function judge(input, { warning = () => {}, readDraft = readDraftBody } = {}) {
   try {
     if (!input || !/^(?:Bash|PowerShell)$/u.test(input.tool_name ?? '')) return { decision: 'pass' };
-    const payload = await inspectedPayload(input);
+    const payload = await inspectedPayload(input, readDraft);
     if (payload === null) return { decision: 'pass' };
     const claims = findCompletionClaims(payload);
     if (!claims.length) return { decision: 'pass' };
@@ -106,7 +123,10 @@ export async function judge(input, { warning = () => {} } = {}) {
     });
     if (!missing.length) return { decision: 'pass' };
     return { decision: 'block', reason: `社外送信本文に読み戻し証拠のない完了主張があります: ${missing.map(claim => `「${claim}」`).join(' / ')}。送信前に実際の外部状態を読み戻し、現在ターンの assistant テキストへ [CLAIM-EVIDENCE: 主張の要約 => 読み戻し元] を書いてください。読み戻し元は gmail:<messageId> / calendar:<eventId> / url:<URL> / shot:<path> / api:<request-id>。予約・入力なら確認メールまたはカレンダー、送付・送信なら送信済みフォルダを確認してください。引用など真の主張でない場合だけ [OUTBOUND-CLAIM-OK: 10文字以上の理由] を使用できます。` };
-  } catch (error) { warning(`判定をスキップ: ${error.message}`); return { decision: 'pass' }; }
+  } catch (error) {
+    if (GMAIL_DRAFT.test(String(input?.tool_input?.command || '')) && tokens(input.tool_input.command).includes('--send')) return { decision: 'block', reason: '送信予定の下書き本文を読み戻せないため、完了主張の証拠を確認できません。Gmail読取経路を確認して再実行してください。' };
+    warning(`判定をスキップ: ${error.message}`); return { decision: 'pass' };
+  }
 }
 
 export async function main() {

@@ -12,7 +12,7 @@ function fixture(t, body) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gemini-cli-test-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const dir = path.join(home, '.claude'); fs.mkdirSync(dir);
-  fs.writeFileSync(path.join(dir, 'gemini-pricing.json'), JSON.stringify({ models: { 'gemini-3.7-flash': { inputUsdPerMillion: 0.75, outputUsdPerMillion: 3.75, batchMultiplier: 0.5 } } }));
+  fs.writeFileSync(path.join(dir, 'gemini-pricing.json'), JSON.stringify({ models: { 'gemini-3.6-flash': { inputUsdPerMillion: 0.75, outputUsdPerMillion: 3.75, batchMultiplier: 0.5 }, 'gemini-3.7-flash': { inputUsdPerMillion: 0.75, outputUsdPerMillion: 3.75, batchMultiplier: 0.5 } } }));
   const preload = path.join(home, 'fetch.mjs');
   // Freeze the child's local clock before its batch deadline. A real 23:59 clock
   // skips the job even with --force, leaving no usage ledger for rows() to read.

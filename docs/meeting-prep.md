@@ -35,13 +35,11 @@ DWDのスコープ:
 |---|---|
 |calendarListの全ページ・非表示も含む列挙|calendar.readonly（既存承認を再利用）|
 |予定の列挙・準備予定の作成更新|calendar.events|
-|準備カレンダー作成|calendar.calendars|
-|準備カレンダーの非公開確認|calendar.acls.readonly|
 |共有Gmailスレッド読取（seisaku-teamをDWDで代行）|gmail.readonly|
 |案件一覧・ハブの読取|spreadsheets.readonly / drive（既存承認を再利用）|
 |代行書込・読戻し|spreadsheets / drive（Docsも承認済みdriveを使用）|
 
-スコープの接頭辞は `https://www.googleapis.com/auth/`。細分化された `calendar.calendarlist.readonly` と `drive.readonly` が未承認でも、承認済みの上表スコープを使う。カレンダー新設とACL検証の権限は別途必要。[Google公式のスコープ一覧](https://developers.google.com/workspace/calendar/api/auth)参照。
+スコープの接頭辞は `https://www.googleapis.com/auth/`。細分化された `calendar.calendarlist.readonly` と `drive.readonly` が未承認でも、承認済みの上表スコープを使う。準備予定はkim@orgiast.jpのprimaryへ作成し、calendar.eventsのみを使用する。カレンダー新設・ACL確認は行わず、追加承認は不要。[Google公式のスコープ一覧](https://developers.google.com/workspace/calendar/api/auth)参照。
 
 ## 案件一覧と見出し解決
 
@@ -53,7 +51,7 @@ dry-runの `caseInventory` は読込案件数・進行中件数・イベントID
 
 ## 抽出・重複・状態
 
-日付はJSTの開始時刻で判定。終日・辞退・キャンセル・移動・休暇・作業ブロックを除外。祝日、案件専用Meet（ID先頭も照合）、My proposed times、準備カレンダーを除外する。calendarList/events/Driveはいずれも全ページを読む。列挙失敗は空扱いせず配送を止める。
+日付はJSTの開始時刻で判定。終日・辞退・キャンセル・移動・休暇・作業ブロックを除外。祝日、案件専用Meet（ID先頭も照合）、My proposed times、旧専用準備カレンダーを除外する。primary自体は除外せず、private拡張プロパティで準備予定だけを除外する。calendarList/events/Driveはいずれも全ページを読む。列挙失敗は空扱いせず配送を止める。
 
 案件はイベントID、専用Meet URL、案件ID、案件名、顧客名、顧客メールドメインを手掛かりに照合する。専用Meetカレンダーは配送候補には含めず、時間範囲外の恒久Meetも読み、説明・場所・会議情報のURLが同じ予定から案件を引く。同点は未特定。未特定・名称非公開・コード重複は配送対象に入れず、dry-runの `skipped` に理由を出す。配送直前にも拒否する。社内・一般フリーメールのドメインだけでは照合しない。案件が存在しseisaku-teamが主催または参加する打合せは014へ。014を名簿・beaconで解決できない場合は008へ代行し、記録に「014未解決のため008で代行」を残す。予定の無いレビューは主催者の根拠が無いためotherの008へ。
 
@@ -118,13 +116,13 @@ readyは検証済み成果物URLを要求。applyは、案件一覧の正本か�
 
 許可タブはアジェンダ・実施計画更新・制作物一覧・制作物デザイン・確認事項・提出依頼のみ。アイテムリストと確認事項の既存回答列は拒否する。新規タブのヘッダーはapplierが作成して読む。既存の提出フォーマット等が特定できなければ未完了として止め、似た名前のファイルを推測しない。
 
-補足資料は制作フォルダ内の `<日付>_打合せ補足資料` Google Doc。既存本文とrevisionを照合して更新し読み戻す。アジェンダの `{{document:キー}}` を実URLに置換する。共有権限を変更しない。準備予定は固定IDでupsertし、元の予定ID・元のcalendarIdをprivate拡張プロパティへ保存する。予定自体はprivate・空き時間扱い・招待者なし。準備カレンダーのACLがkim以外に公開されていれば書き込まず止める。
+補足資料は制作フォルダ内の `<日付>_打合せ補足資料` Google Doc。既存本文とrevisionを照合して更新し読み戻す。アジェンダの `{{document:キー}}` を実URLに置換する。共有権限を変更しない。準備予定は固定IDでupsertし、元の予定ID・元のcalendarIdをprivate拡張プロパティへ保存する。予定自体はprivate・空き時間扱い・招待者なし。作成先はkim@orgiast.jpのprimary（設定prepCalendarIdで変更可）。元予定と同時刻、タイトルは「📋 準備: 元の予定名」、グレー（colorId=8）、通知なし。meetingPrepSourceIdに元予定IDを保存し、元カレンダーIDと予定IDから固定IDを作るため、時刻や案件照合が変わっても重複作成しない。元予定の説明欄は変更しない。
 
 ## 検証と本番前の残件
 
 モックテストは予定除外、照合、014代行、同一予定の二重配送防止、PC別集約、送信応答消失、結果の出所照合、カレンダーupsert、applierの競合・再試行・回答列保護を検証する。
-2026-11-02の読み取り試験では calendar.readonly / calendar.events / drive / spreadsheets.readonly の認証を確認。calendar.calendars / calendar.acls.readonly は unauthorized_client。専用カレンダー作成とACL確認は承認後の本番前提条件である。タスク登録のWindows実機検証と外部書込E2Eは、このタスクの「実送信・カレンダー作成をしない」制約により未実施。
+2026-11-02の読み取り試験では calendar.readonly / calendar.events / drive / spreadsheets.readonly の認証を確認。専用カレンダー作成・ACL確認は現在廃止し、追加DWD承認は不要。タスク登録のWindows実機検証と外部書込E2Eは、このタスクの「実送信・カレンダー作成をしない」制約により未実施。
 
 2026-11-04のWindows検証: 指定テスト、11/5の読取dry-runが成功。エイト様の同時刻2予定は1ジョブとなり、日次レビュー3件と合わせて4件が `kim-PC(fallback: 受信側opt-in未確認)`。CLIの必要フラグは実機のヘルプで確認した。外部書込・CLIのLLM実行・タスク登録は未実施。
 
-同日の認証のみの検査では `calendar.calendars` と `calendar.acls.readonly` は引き続き `unauthorized_client`。本番で準備カレンダーを作成・検証するには管理者によるこの2スコープのDWD承認が必要。カレンダーの失敗でもローカル資料準備を続け、カレンダー未反映を失敗記録し、適用済みJSONはcollectで再開可能にする。ACL未確認の予定には書かない。Docsの個別 `documents` スコープも未承認だったため、[Docs APIが許可する既存のdriveスコープ](https://developers.google.com/workspace/docs/api/reference/rest/v1/documents/batchUpdate#authorization-scopes)を再利用する。
+準備予定の作成・更新は `calendar.events` のみ。全カレンダーの列挙には引き続き既存承認の `calendar.readonly` を使う。Docsは既存承認の `drive` スコープを再利用する。

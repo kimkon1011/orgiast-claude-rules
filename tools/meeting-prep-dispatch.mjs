@@ -38,11 +38,12 @@ export function dayBounds(date) {
   return { timeMin: new Date(start).toISOString(), timeMax: new Date(start + 86400000).toISOString() };
 }
 export function excludeCalendar(c, config, state = {}) {
-  return c.deleted || c.id === state.calendarId || c.summary === config.prepCalendarName ||
+  return c.deleted || (c.id === state.calendarId && !['primary', USER].includes(c.id) && !c.primary) || c.summary === config.prepCalendarName ||
     /祝日|holidays?|案件専用Meet|My proposed times/i.test(c.summary || '') ||
     /#holiday@/.test(c.id || '') || config.excludedCalendarPrefixes.some(p => c.id.startsWith(p));
 }
 export function isMeeting(e, date) {
+  if (e.extendedProperties?.private?.meetingPrepSourceId || e.extendedProperties?.private?.meetingPrepKey) return false;
   if (!e.start?.dateTime || !e.end?.dateTime || e.status === 'cancelled') return false;
   const b = dayBounds(date), t = Date.parse(e.start.dateTime);
   if (t < Date.parse(b.timeMin) || t >= Date.parse(b.timeMax)) return false;
@@ -284,23 +285,15 @@ export async function loadEvents(g, config, state, date, dateTo = date) {
   return { calendars, events, errors };
 }
 export async function ensureCalendar(g, state, config, checkpoint) {
-  const list = await g.pages('calendar.readonly', `${CAL}/users/me/calendarList?maxResults=250&showHidden=true`);
-  const c = state.calendarId ? list.find(c => c.id === state.calendarId) : one(list.filter(c => c.summary === config.prepCalendarName), config.prepCalendarName);
-  if (state.calendarId && !c) throw new Error('準備カレンダーIDがcalendarListに見つかりません');
-  if (c && c.accessRole !== 'owner') throw new Error('準備カレンダーはkim所有である必要があります');
-  if (!c) {
-    const created = await g.request('calendar.calendars', `${CAL}/calendars`, 'POST', { summary: config.prepCalendarName, timeZone: 'Asia/Tokyo', description: '社内の打合せ準備（meeting-prep）' });
-    state.calendarId = created.id; checkpoint();
-  } else { state.calendarId = c.id; checkpoint(); }
-  // A pre-existing calendar must not expose internal agendas to public/domain/other accounts.
-  const acl = await g.pages('calendar.acls.readonly', `${CAL}/calendars/${enc(state.calendarId)}/acl`);
-  if (acl.some(a => a.role !== 'none' && !(a.scope?.type === 'user' && a.scope.value?.toLowerCase() === USER))) throw new Error('準備カレンダーにkim以外の共有があります。社内資料を書き込まず停止');
+  // Resolve from configuration, never reuse a legacy dedicated-calendar state.
+  state.calendarId = config.prepCalendarId || 'primary';
+  checkpoint();
   return state.calendarId;
 }
 export async function upsertPreparation(g, calendarId, job, result = {}, now = new Date().toISOString()) {
   if (job.kind !== 'meeting') return;
-  if (calendarId === job.event.calendarId) throw new Error('元の予定への書込禁止');
-  const id = `mp${hash(job.key).slice(0, 48)}`;
+  const id = `mp${hash(`${job.event.calendarId}/${job.event.id}`).slice(0, 48)}`;
+  if (id === job.event.id) throw new Error('元の予定への書込禁止');
   const url = `${CAL}/calendars/${enc(calendarId)}/events/${id}`;
   const status = result.status === 'ready' ? '完了' : ['failed', 'needsReview'].includes(result.status) ? `失敗: ${result.summary || '要確認'}` : '準備中';
   const links = new Map([...(job.materialLinks || []), ...(result.links || [])].map(link => [link.label, link]));
@@ -313,10 +306,11 @@ export async function upsertPreparation(g, calendarId, job, result = {}, now = n
     job.executedOn ? `実行PC: ${job.executedOn}` : '',
     `担当PC: ${job.route.pc?.remoteName || job.route.requested} (${job.route.pc?.label || '未解決'})`, job.route.note, `最終更新: ${now}`].filter(Boolean).join('\n');
   const body = { summary: `📋 準備: ${job.event.summary || '(名称なし)'}`, description, start: job.event.start, end: job.event.end,
-    visibility: 'private', transparency: 'transparent', extendedProperties: { private: { sourceEventId: job.event.id, sourceCalendarId: job.event.calendarId, meetingPrepKey: job.key } } };
+    attendees: [], colorId: '8', reminders: { useDefault: false, overrides: [] },
+    visibility: 'private', transparency: 'transparent', extendedProperties: { private: { meetingPrepSourceId: job.event.id, sourceEventId: job.event.id, sourceCalendarId: job.event.calendarId, meetingPrepKey: job.key } } };
   let existing;
   try { existing = await g.request('calendar.events', url); } catch (e) { if (e.status !== 404) throw e; }
-  if (existing && existing.extendedProperties?.private?.meetingPrepKey !== job.key) throw new Error('準備予定IDの衝突');
+  if (existing && (existing.extendedProperties?.private?.meetingPrepSourceId !== job.event.id || existing.extendedProperties?.private?.sourceCalendarId !== job.event.calendarId)) throw new Error('準備予定IDの衝突');
   if (existing) await g.request('calendar.events', url, 'PATCH', body);
   else {
     try { await g.request('calendar.events', `${CAL}/calendars/${enc(calendarId)}/events`, 'POST', { id, ...body }); }

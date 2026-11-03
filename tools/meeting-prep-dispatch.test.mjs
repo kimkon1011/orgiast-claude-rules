@@ -87,10 +87,12 @@ test('calendarListの全対象を読み、取得失敗を空予定として隠�
 });
 function calendarMock() {
   const events = new Map(), calls = [];
-  return { events, calls, pages: async (_, url) => url.endsWith('/acl') ? [{ role: 'owner', scope: { type: 'user', value: 'kim@orgiast.jp' } }] : [{ id: 'prep', summary: config.prepCalendarName, accessRole: 'owner' }],
-    request: async (_, url, method = 'GET', body) => {
+  return { events, calls, pages: async () => [],
+    request: async (scope, url, method = 'GET', body) => {
+      assert.equal(scope, 'calendar.events');
       calls.push({ url, method, body });
-      assert.ok(url.includes('/calendars/prep/'), '元カレンダーにはアクセスしない');
+      assert.match(url, /\/calendars\/(primary|prep)\/events/);
+      assert.ok(!url.endsWith('/event1'), '元予定にはアクセスしない');
       const id = method === 'POST' ? body.id : url.split('/').at(-1);
       if (method === 'GET') { if (!events.has(id)) throw Object.assign(Error('404'), { status: 404 }); return events.get(id); }
       const result = { ...events.get(id), ...body }; events.set(id, result); return result;
@@ -98,13 +100,23 @@ function calendarMock() {
 }
 test('準備予定を同じIDで更新し元予定を変更しない・read-back不一致検出', async () => {
   const g = calendarMock(), job = plan()[0];
-  await upsertPreparation(g, 'prep', job, { summary: '初回' });
-  await upsertPreparation(g, 'prep', job, { summary: '更新' });
+  await upsertPreparation(g, 'primary', job, { summary: '初回' });
+  await upsertPreparation(g, 'primary', job, { summary: '更新' });
   assert.equal(g.events.size, 1); assert.equal(g.calls.filter(c => c.method === 'POST').length, 1);
   assert.match([...g.events.values()][0].description, /更新/);
   assert.equal([...g.events.values()][0].extendedProperties.private.sourceEventId, 'event1');
-  await assert.rejects(upsertPreparation(g, 'primary', job), /元の予定/);
-  await assert.rejects(upsertPreparation({ request: async () => ({ extendedProperties: { private: { meetingPrepKey: job.key } } }) }, 'prep', job), /read-back/);
+  const prep = [...g.events.values()][0];
+  assert.equal(prep.visibility, 'private'); assert.deepEqual(prep.attendees, []);
+  assert.equal(prep.colorId, '8'); assert.equal(prep.transparency, 'transparent');
+  assert.deepEqual(prep.reminders, { useDefault: false, overrides: [] });
+  assert.equal(prep.summary, `📋 準備: ${job.event.summary}`);
+  assert.deepEqual(prep.start, job.event.start); assert.deepEqual(prep.end, job.event.end);
+  assert.equal(prep.extendedProperties.private.meetingPrepSourceId, job.event.id);
+  assert.ok(g.calls.every(call => call.url.includes('/calendars/primary/events')));
+  assert.equal(isMeeting(prep, date), false);
+  await upsertPreparation(g, 'primary', { ...job, key: 'changed-case-or-time' });
+  assert.equal(g.events.size, 1);
+  await assert.rejects(upsertPreparation({ request: async () => ({ extendedProperties: { private: { meetingPrepSourceId: job.event.id, sourceCalendarId: job.event.calendarId } } }) }, 'prep', job), /read-back/);
 });
 test('送信前checkpoint・PCごと1通・再実行時二重送信なし', async () => {
   const state = {}, g = calendarMock(); let sends = 0, checkpoints = 0;
@@ -193,10 +205,14 @@ test('案件列を見出しで読み、ID・案件名がない表は拒否', asy
   assert.equal(result[0].eventId, 'event1'); assert.equal(result[0].planId, 'plan');
   await assert.rejects(loadCases({ request: async () => ({ values: [['', '予算項目', '顧客名']] }) }, config), /ヘッダー不一致/);
 });
-test('準備カレンダーの共有漏れを検知し業務データを書き込まない', async () => {
-  let writes = 0;
-  const g = { pages: async (_, url) => url.endsWith('/acl') ? [{ role: 'reader', scope: { type: 'default' } }] : [{ id: 'prep', summary: config.prepCalendarName, accessRole: 'owner' }], request: async () => { writes++; } };
-  await assert.rejects(ensureCalendar(g, {}, config, () => {}), /kim以外/); assert.equal(writes, 0);
+test('追加APIなしでprimaryを選択し、旧カレンダーstateを置き換える', async () => {
+  const state = { calendarId: 'legacy' }; let checkpoints = 0;
+  const g = { pages() { assert.fail('calendar list/ACL不要'); }, request() { assert.fail('calendar作成不要'); } };
+  assert.equal(await ensureCalendar(g, state, {}, () => checkpoints++), 'primary');
+  assert.equal(state.calendarId, 'primary'); assert.equal(checkpoints, 1);
+  assert.equal(excludeCalendar({ id: 'primary', summary: 'kim' }, config, state), false);
+  assert.equal(excludeCalendar({ id: 'kim@orgiast.jp', primary: true, summary: 'kim' }, config, { calendarId: 'kim@orgiast.jp' }), false);
+  assert.equal(await ensureCalendar(g, state, { prepCalendarId: 'custom' }, () => {}), 'custom');
 });
 test('DWD applierは返信の任意IDを使わず案件正本のplanIdへ書き込む', async () => {
   let values = [['old']]; const destinations = [];
@@ -359,15 +375,11 @@ test('ローカル失敗でも全打合せに準備予定があり、次ジョ�
     for (const label of ['実施計画書', '確認シート', '提出フォーマット', '制作フォルダ', 'アジェンダ', 'kim-PC(fallback:']) assert.ok(e.description.includes(label));
   }
 });
-test('新規準備カレンダーをworker失敗より先に作る', async () => {
-  const g = calendarMock(), request = g.request; let created = false;
-  g.pages = async (_, url) => url.includes('calendarList') ? [] : url.endsWith('/acl') ? [{ role: 'owner', scope: { type: 'user', value: 'kim@orgiast.jp' } }] : [];
-  g.request = async (scope, url, method, body) => {
-    if (scope === 'calendar.calendars') { assert.equal(body.summary, config.prepCalendarName); created = true; return { id: 'prep' }; }
-    return request(scope, url, method, body);
-  };
-  await dispatchJobs({ jobs: plan(), state: {}, config, template: '{{PAYLOAD}}', google: g, checkpoint() {}, runLocal() { assert.ok(created); throw Error('failed'); } });
-  assert.ok(created); assert.equal(g.events.size, 1);
+test('primaryの準備予定をworker失敗より先に作る', async () => {
+  const g = calendarMock();
+  await dispatchJobs({ jobs: plan(), state: {}, config, template: '{{PAYLOAD}}', google: g, checkpoint() {}, runLocal() { assert.equal(g.events.size, 1); throw Error('failed'); } });
+  assert.equal(g.events.size, 1);
+  assert.ok(g.calls.every(call => call.url.includes('/calendars/primary/events')));
 });
 test('ローカルJSONをDWD applierで適用し、リンク・要約を完了予定に更新', async () => {
   const g = calendarMock(), request = g.request, state = {}; let values = [['old']], puts = 0;
@@ -482,10 +494,10 @@ test('Docsは承認済みDriveスコープで認証する', async () => {
   await google.request('documents', 'https://docs.googleapis.com/v1/documents/test:batchUpdate', 'POST', {});
   assert.deepEqual(scopes, ['https://www.googleapis.com/auth/drive']);
 });
-test('カレンダー権限エラーでも全workerを実行し、ACL未確認の予定には書かない', async () => {
-  const g = calendarMock(), pages = g.pages; let runs = 0;
-  g.pages = async (scope, url) => { if (url.endsWith('/acl')) throw Error('unauthorized_client'); return pages(scope, url); };
+test('ACL APIなしで全workerを実行する', async () => {
+  const g = calendarMock(); let runs = 0;
+  g.pages = async () => { assert.fail('カレンダー/ACL列挙不要'); };
   const jobs = plan({ events: [event(), event({ id: 'two', start: { dateTime: `${date}T12:00:00+09:00` } })] });
   const errors = await dispatchJobs({ jobs, state: {}, config, template: '{{PAYLOAD}}', google: g, checkpoint() {}, runLocal() { runs++; throw Error('worker-failed'); } });
-  assert.equal(runs, 2); assert.equal(g.events.size, 0); assert.ok(errors.some(e => /unauthorized_client/.test(e.error)));
+  assert.equal(runs, 2); assert.equal(g.events.size, 2); assert.equal(errors.length, 2);
 });

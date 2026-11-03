@@ -1,6 +1,10 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/security-audit-readonly.ps1", "scope": "fleet", "step": "security-audit", "reason": "全PCの読み取り専用セキュリティ点検"},
+    {"path": "tools/security-audit-readonly.mjs", "scope": "fleet", "step": "security-audit", "reason": "全PCの読み取り専用セキュリティ点検"},
+    {"path": "tools/security-audit-report.mjs", "scope": "kim-only", "step": null, "reason": "kim-PC の集計"},
+    {"path": "tools/security-audit-readonly.test.mjs", "scope": "fleet", "step": "security-audit", "reason": "全PCの読み取り専用セキュリティ点検"},
     {"path":"tools/lib/gws-proxy.mjs","scope":"fleet","step":"task:fleet-mail","reason":"全PCの鍵なしGmail・Drive・LINE APIと自己点検の共通認証経路"},
     {"path":"tools/drive-read.mjs","scope":"fleet","step":"task:fleet-mail","reason":"全PCから共有Driveの検索と読み取り"},
     {"path":"tools/line-channel.mjs","scope":"fleet","step":"task:fleet-mail","reason":"全PCから共通LINE履歴と公式botを利用"},

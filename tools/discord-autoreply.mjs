@@ -81,7 +81,7 @@ const LLM_PROVIDERS = {
 // 返信文は日本語品質が要る。routing-table の jp_reply(llama-3.3-70b)は文が崩れ・質問を鸚鵡返しした
 // (2026-10-09 実測)ので、返信だけは日本語に強いモデルの連鎖に固定する。DISCORD_AUTOREPLY_PROVIDER で先頭を差し替え可。
 export const REPLY_CHAIN = Object.freeze([
-  { provider: 'gemini', model: 'gemini-3.7-flash' },
+  { provider: 'gemini', model: 'gemini-3.6-flash' },
   { provider: 'deepseek', model: 'deepseek-flash' },
   { provider: 'kimi', model: 'kimi-k3' },
   { provider: 'genspark', model: 'gpt-5.6-luna' },

@@ -20,10 +20,23 @@ function Format-NightlyDetail($Output) {
 # ステップの出力を捕捉し、失敗時は理由を1行でログに残す。
 # $Output は呼び出し側が @(& ... 2>&1) で受け取った配列。
 function Write-NightlyStepResult([string]$Step, [int]$ExitCode, $Output, [string]$Note = '') {
-    if ($ExitCode -eq 0) { Write-NightlyLog $Step 'ok'; return }
+    if ($ExitCode -eq 0) {
+        # fleet sheet の busy 再送を使い切ったジョブは exit 0 で戻る（夜間バッチは止めない）。
+        # ただし「ok」と書くと台帳へ届いていないのに成功したように見えるので警告として残す。
+        $busy = Get-NightlyBusyWarning $Output
+        if ($busy) { Write-NightlyLog $Step ('警告:' + $busy); return }
+        Write-NightlyLog $Step 'ok'; return
+    }
     $reason = Format-NightlyDetail $Output
     Write-NightlyLog $Step ('error:終了コード' + $ExitCode + $Note + ': ' + $reason)
     Write-Warning ("nightly-batch: " + $Step + " exited " + $ExitCode + ': ' + ($reason))
+}
+# tools/lib/fleet-sheet-post.mjs が出す busy_exhausted 行を拾う。
+function Get-NightlyBusyWarning($Output) {
+    if (-not $Output) { return '' }
+    $line = @($Output | ForEach-Object { "$_" } | Where-Object { $_ -match 'busy_exhausted' } | Select-Object -Last 1)
+    if ($line.Count -eq 0) { return '' }
+    return ([string]$line[0]).Trim()
 }
 function Finish-Nightly([int]$Code) {
     # Run once after the nightly jobs, including empty-queue and error exits.
@@ -609,9 +622,11 @@ try {
             $keyserveOutput = @(& $node.Source $keyserveStatus --json 2>$null | Select-Object -Last 1)
             if ($keyserveOutput.Count -eq 0) { throw 'JSON出力なし' }
             $env:ORGIAST_KEYSERVE_STATUS_JSON = [string]$keyserveOutput[0]
-            try { & $node.Source $fleetSheetReport --no-jitter *> $null } finally { Remove-Item Env:ORGIAST_KEYSERVE_STATUS_JSON -ErrorAction SilentlyContinue }
+            $fleetSheetOutput = $null
+            try { $fleetSheetOutput = @(& $node.Source $fleetSheetReport --no-jitter 2>&1) } finally { Remove-Item Env:ORGIAST_KEYSERVE_STATUS_JSON -ErrorAction SilentlyContinue }
             if ($LASTEXITCODE -ne 0) { throw ('fleet-sheet-report 終了コード' + $LASTEXITCODE) }
-            Write-NightlyLog 'keyserve-status' 'ok'
+            $busy = Get-NightlyBusyWarning $fleetSheetOutput
+            if ($busy) { Write-NightlyLog 'keyserve-status' ('警告:' + $busy) } else { Write-NightlyLog 'keyserve-status' 'ok' }
         } catch {
             Remove-Item Env:ORGIAST_KEYSERVE_STATUS_JSON -ErrorAction SilentlyContinue
             Write-NightlyLog 'keyserve-status' ('error:' + $_.Exception.Message)

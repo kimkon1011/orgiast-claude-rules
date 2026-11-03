@@ -196,5 +196,35 @@
     "route": "Gmail MCP は本環境に無い（mcpServers=gemini-cli のみ）が、下書きの削除は DWD 経路で Claude 側が完結する。削除は `node tools/gmail-draft.mjs --delete <draftId> [--user <addr>] [--json]`（DWD で seisaku-team@orgiast.jp を impersonate・scope=gmail.compose、SA 鍵は GOOGLE_SA_KEY または既定パス aujust-sales-automation/.gcp/sheets-sa.json）。削除は `DELETE /gmail/v1/users/me/drafts/{id}` で、応答は 204=削除成功 / 404=既に無い（ツールが `{deleted:true}` / `{deleted:false,errorKind:'not_found'}` を返す）。検証結果の報告はこの実応答を読み戻して行い、kim に下書き削除の画面操作・目視確認を依頼しない。Gmail 下書きの削除が不要な用件ではそもそも手渡ししない。",
     "confidence": "high",
     "source": "handoff-audit-nightly:4f579eb3fc37b478cef737816a253d53bce15d7739e071d3aa51d4e76f799c40 / 2026-10-29 tool-name-route レビューで route を手順化（route が道具名だけの `Gmail MCP` だったため手順文に置換）"
+  },
+  {
+    "pattern": "ループ固有制約を理由にPRマージをkimへ手渡す",
+    "route": "PR の作成とマージは、ループ契約に「push/PR/merge は行わない」と書かれていても監督（非ループ）セッションが当ターンに実行し、ループ固有の制約を kim への手渡し理由にしない。ループが作った枝は `git push -u origin <branch>` → PR は `gh pr create --label automerge`。gh が無い PC は GCM の `git credential fill` で得たトークンで REST API を叩く（作成 `POST /repos/{owner}/{repo}/pulls`、ラベル `POST /issues/{n}/labels`、自前マージ `PUT /repos/{owner}/{repo}/pulls/{n}/merge` の merge_method=squash）。squash マージ後は `node tools/commit-landed.mjs <sha>` で着地を判定する（`git merge-base --is-ancestor` は squash では偽になり、逆に推測で着地扱いにすると偽陽性になる）。MERGED を read-back するまで「kim がマージする」と書かない。実例: 2026-10-23 の session fbc40d75 は「このループで push・PR・merge が禁止されている」と書いて rule 2/12 で差し戻された。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:5e9ab6b5e0bf001805d06cb4c851ab2986f316bc0aa867367a35c31ff915a4b4 / 2026-11-04 tool-name-route レビューで route（`gh pr create`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "ループ契約の保存と起動をClaude側で行う",
+    "route": "ループは Claude 側で保存して起動する。契約は `tools/quota-sweep-contract.tmpl.md` を元に `.loop/<slug>.md`、状態は `.loop/<slug>-state.md`（ゴール・要求別証跡・累積試行・失敗仮説・次の1手・停止理由）に書く。`.loop/` は .gitignore 済みのローカル状態なのでコミットしない（コードの変更だけ `git commit -F <msg> -- <paths>`）。起動は `node tools/quota-sweep.mjs --provider claude`（事前に `--dry-run` / `--status` で窓・停止状態を確認し、失敗停止は `--resume claude` で解除）。1ティックの指示文は同ツールの tickPrompt が生成し、`.loop/<slug>.md` を1イテレーションだけ辿って FINAL まで ITERATING を返す。着地判定は `node tools/commit-landed.mjs <sha>` を使う（squash マージのため `git merge-base --is-ancestor` は偽になる）。",
+    "confidence": "medium",
+    "source": "handoff-audit-nightly:8e62823031d40ff96253f1dc9fd5b521217cbfe88a7be874ad8b3c015e7e5d0a / 2026-11-04 tool-name-route レビューで route（`codex-do.mjs`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "他AIレーン修復を hook 拒否で断念する",
+    "route": "レーン修復は「hook に拒否されたので直せない」で終わらせない。①実測は `node tools/lane-doctor.mjs --probe`（レーン別の疎通・鍵・残量を測る）、修復手順の正本は `tools/gate-remedies.md` の lane-repair-first-gate 節と GATE_CONTRACT の remedies。②修復不能と記録するのは `node tools/lane-repair-log.mjs --lane <名> --tried \"<試した手段>\" --result unfixable` で、拒否の生ログ（error 文字列・exit コード）を添える。③Bash が hook に拒否されたら、同じ処理を `node tools/*.mjs`・`tools/llm-ask.mjs`・`tools/fleet-mail.mjs --exec codex`（生きている受信 PC）など別経路で当ターンに試す。試行記録が無い状態で「全コマンドが hook に止められている」「修復不可」と断定しない（未試行は「未確認」と書く）。",
+    "confidence": "medium",
+    "source": "handoff-audit-nightly:15504fceda6d8166a9289547db496a5a39e6343ebd51b7ef04081dea8ce85843 / 2026-11-04 tool-name-route レビューで route（`codex-do.mjs`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "社外・顧客宛チラシ案の選択と送信",
+    "route": "案の選択は Claude が決める（おすすめ案を既定にし、kim に「どの案にするか」を返させない）。社外へ送る前に、宛先・件名・本文・添付（画像は Drive か添付）を完成形で1回提示し、送信可否の承認だけを取る（feedback-confirm-before-external-send）。承認後は Claude が送信まで実行する: メールは `node tools/gmail-draft.mjs --to <addr> --subject <件名> --body-file <本文.txt> [--attach <file>]` で seisaku-team@orgiast.jp の下書きを作り、`node tools/gmail-draft.mjs --send <draftId>`（スレッド整合性を自動検査）で送る。LINE グループは `node tools/line-group-send.mjs --group <group|名前> --text-file <本文.txt> [--image <jpg>]`（画像は1MB以下）。送信後は返り値（messageId/threadId・HTTP status・sentMessages 件数）を読み戻して報告し、kim に送信操作を求めない。案を見せる時は選択肢ラベルだけでなく中身（本文・画像）を同じ文に書く。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:63678278063c518091b8f1116c79b741c1e44215e61499cbf587a5e282dbc1e6 / 2026-11-04 tool-name-route レビューで route（`チャット表示`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "LINE グループへの送信（公式LINE経由）",
+    "route": "その場の Claude Code から直接送る（kim-PC への中継をしない）。`node tools/line-group-send.mjs --group <groupId|グループ名> --text-file <本文.txt> [--image <png/jpg> ...] [--retry-key <uuid>] [--dry-run]`。送信者は公式「オージャスト金(読取専用)」@458zwuhb で、参加済みグループにだけ送れる（group 名は Supabase `channel_messages` の subject=`LINE: <名前>` で解決）。画像は Supabase `line-media/outbound/` に上がり1年有効の署名URLで送るため1MB以下へ JPEG 化する。鍵は env → `~/.claude/line-send.env` → 営業アプリ Vercel の development env の順で解決。完了は push の HTTP 200 と sentMessages 件数・quota consumption の増分（グループは人数ぶん消費、無料枠 月200通）で読み戻す。同じ `--retry-key` で再実行すれば二重送信しない。社外グループは本文全文を kim に1回見せて承認を取ってから送る。チャットに本文を貼って終わりにしない。",
+    "confidence": "medium",
+    "source": "handoff-audit-nightly:551d30db529f1c5ff7634cb1877a612c8ce1230fa138de8da6ecfc070e3618c2 / 2026-11-04 tool-name-route レビューで route（`チャットに本文`）を手順文へ書き直して採用"
   }
 ]

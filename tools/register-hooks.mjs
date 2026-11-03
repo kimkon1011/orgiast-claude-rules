@@ -373,7 +373,9 @@ try {
   for (const event of ['SessionStart', 'UserPromptSubmit']) {
     if (add(settings.hooks[event], 'kim-inbox.mjs', { hooks: [{ type: 'command', command: command('kim-inbox.mjs', ' --context'), timeout: 5 }] })) added += 1;
     if (add(settings.hooks[event], 'fleet-inbox-context.mjs', { hooks: [{ type: 'command', command: command('fleet-inbox-context.mjs'), timeout: 5 }] })) added += 1;
+    if (add(settings.hooks[event], 'owner-inbox-hook.mjs', { hooks: [{ type: 'command', command: command('owner-inbox-hook.mjs'), timeout: 10 }] })) added += 1;
     if (add(settings.hooks[event], 'auto-progress-inbox-hook.mjs', { hooks: [{ type: 'command', command: command('auto-progress-inbox-hook.mjs'), timeout: 5 }] })) added += 1;
+    if (add(settings.hooks[event], 'kim-awaiting-context.mjs', { hooks: [{ type: 'command', command: command('kim-awaiting-context.mjs'), timeout: 5 }] })) added += 1;
     if (add(settings.hooks[event], 'daytrip-ask-hook.mjs', { hooks: [{ type: 'command', command: command('daytrip-ask-hook.mjs'), timeout: 5 }] })) added += 1;
     if (resolveFleetLabel(home) === 'kim-PC') {
       if (add(settings.hooks[event], 'fleet-chase-context.mjs', { hooks: [{ type: 'command', command: command('fleet-chase-context.mjs'), timeout: 5 }] })) added += 1;
@@ -447,6 +449,8 @@ try {
   // コマンドの手渡しに非エンジニア向けの開き方・入力場所・完了確認を必須化する。
   // 「この後の自動進行」宣言を台帳へ記録(fail-open・出力なし)。巡回は OrgiastAutoProgressWatch が担当。
   if (add(settings.hooks.Stop, 'auto-progress-ledger.mjs', { hooks: [{ type: 'command', command: command('auto-progress-ledger.mjs'), timeout: 8 }] })) added += 1;
+  // スマホの一覧にもPC番号を同期する（2026-11-03 kim 指示・全PC全アカウント）。
+  if (add(settings.hooks.UserPromptSubmit, 'session-wait-title.mjs', { hooks: [{ type: 'command', command: command('session-wait-title.mjs', ' --prompt-submit'), timeout: 8 }] })) added += 1;
   // 「まだ閉じない（…まで待つ）」の期限をセッション一覧のタイトルの頭に【MM/DD/HH:MMまで】で付ける(2026-10-27 nishi 指示)。
   if (add(settings.hooks.Stop, 'session-wait-title.mjs', { hooks: [{ type: 'command', command: command('session-wait-title.mjs'), timeout: 8 }] })) added += 1;
   // 既存の全セッションにも同じ規則を当てる（1時間に1回だけ走る）。

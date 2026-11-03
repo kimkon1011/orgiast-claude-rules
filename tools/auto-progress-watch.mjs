@@ -179,7 +179,7 @@ export async function resumeSession(row, { timeoutMs = 20 * 60000, home = os.hom
     : apiErrorResume
     ? `API エラーで返答できなかった user の依頼に、最初から通常どおり応えてください。依頼: ${row.requestText || row.promise.replace(/^API エラー（.*?）で返答できなかった依頼:\s*/, '')}`
     : `以前このセッションで宣言した「この後の自動進行」が止まっています。宣言: 「${row.promise}」。`;
-  const prompt = `${promptLead}${row.nextClaude ? `\nやること: ${row.nextClaude}` : ''}\n元の会話は ${row.transcriptPath} にあります。${apiErrorResume ? '依頼を完了まで進めてください。' : '宣言の最終成果まで進めてください。'}user の判断・承認が必要な地点では、判断材料を揃えて止まり needs_user を返してください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"成果物パスと検証結果、または進めない理由","artifact":"成果物パス（任意）","nextKim":"本人だけができる具体的な判断・操作。返信待ちや自動調査なら空文字"}`;
+  const prompt = `${promptLead}${row.kimAnswer ? `\nkim の返事: 「${row.kimAnswer}」。これを前提に続きを進めてください。` : ''}${row.nextClaude ? `\nやること: ${row.nextClaude}` : ''}\n元の会話は ${row.transcriptPath} にあります。${apiErrorResume ? '依頼を完了まで進めてください。' : '宣言の最終成果まで進めてください。'}user の判断・承認が必要な地点では、判断材料を揃えて止まり needs_user を返してください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"成果物パスと検証結果、または進めない理由","artifact":"成果物パス（任意）","nextKim":"本人だけができる具体的な判断・操作。返信待ちや自動調査なら空文字"}`;
   const rateLimited = apiErrorResume && /rate.?limit|usage.?credits?|429/i.test([row.error, row.apiError, row.apiErrorStatus].join(' '));
   const runOptions = { resumeSessionId: row.sessionId, ...(rateLimited ? { model: process.env.AUTO_PROGRESS_RESUME_MODEL || 'opus' } : {}) };
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, row.cwd, row.cwd, timeoutMs, runOptions);
@@ -702,6 +702,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       summary.noop += 1;
       continue;
     }
+    const answered = Boolean(row.kimAnswer && !row.resumedAt);
     const recorded = Date.parse(row.ts);
     if (!Number.isFinite(recorded)) continue;
     const unattended = isUnattendedRow(row, home);
@@ -723,8 +724,8 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       summary.inProgress += 1;
       continue;
     }
-    if (now - recorded < GRACE_MS) { summary.graced += 1; continue; }
-    if (now - recorded >= EXPIRE_MS) { patch(rowKey(row), { status: 'expired' }); summary.expired += 1; continue; }
+    if (!answered && now - recorded < GRACE_MS) { summary.graced += 1; continue; }
+    if (!answered && now - recorded >= EXPIRE_MS) { patch(rowKey(row), { status: 'expired' }); summary.expired += 1; continue; }
     summary.checked += 1;
     // Freeze the legacy boundary before lastCheckedAt advances on subsequent polls.
     if (failedResumeEnd(row) && !row.resumeFinishedAt) {
@@ -732,7 +733,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       patch(rowKey(row), { resumeFinishedAt: row.resumeFinishedAt });
     }
     const evidence = gatherEvidence(row, home, io);
-    let verdict = judge(row, evidence, now, io);
+    let verdict = answered ? { verdict: 'stalled', reason: 'kim の返事を受領' } : judge(row, evidence, now, io);
     if (verdict.verdict === 'done') {
       patch(rowKey(row), { status: 'done', verdict: 'done', doneAt: new Date(now).toISOString(), reason: verdict.reason });
       summary.done += 1;
@@ -745,7 +746,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     summary.stalled += 1;
     patch(rowKey(row), { ...((row.resumeCount ?? 0) >= MAX_RESUMES || verdict.source === 'resume-failed' ? { status: 'stalled' } : {}), verdict: 'stalled', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason });
     let current = { ...row, ...((row.resumeCount ?? 0) >= MAX_RESUMES || verdict.source === 'resume-failed' ? { status: 'stalled' } : {}), verdict: verdict.verdict, reason: verdict.reason };
-    const resumeEligible = !unattended && !dryRun && summary.resumed < MAX_RESUMES_PER_RUN &&(row.resumeCount ?? 0) < MAX_RESUMES && now - (Date.parse(row.resumedAt || 0) || 0) >= RESUME_INTERVAL_MS
+    const resumeEligible = !unattended && !dryRun && summary.resumed < MAX_RESUMES_PER_RUN && (answered || (row.resumeCount ?? 0) < MAX_RESUMES) && now - (Date.parse(row.resumedAt || 0) || 0) >= RESUME_INTERVAL_MS
       && row.cwd && (io.cwdExists ?? fs.existsSync)(row.cwd);
     const canResume = resumeEligible && !executorUnavailable;
     if (resumeEligible && executorUnavailable) summary.resumeDeferred += 1;

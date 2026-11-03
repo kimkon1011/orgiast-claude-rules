@@ -14,20 +14,20 @@ function fixture(t, rows) {
   return home;
 }
 test('24h failures override successful probe, preserve ranking and routing', t => {
-  const home = fixture(t, [...Array.from({ length: 4 }, () => ({ status: '500', reason: 'HTTP 500' })), { status: 'ok' }]);
+  const home = fixture(t, [...Array.from({ length: 5 }, () => ({ status: '500', reason: 'HTTP 500' })), { status: 'ok', t: now - 2000 }]);
   fs.writeFileSync(path.join(home, '.claude/openrouter.env'), 'OPENROUTER_API_KEY=test-only');
   fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify({ lanes: { deepseek: { alive: true, reason: 'probe_ok', probedAt: new Date(now - 2000).toISOString() } } }));
   const health = laneDoctorQuick({ home, now });
   assert.equal(health.lanes.deepseek.reason, 'real_fail_rate');
   assert.equal(health.lanes.deepseek.alive, false);
-  assert.equal(health.lanes.deepseek.error, 'HTTP 500 (4)');
+  assert.equal(health.lanes.deepseek.error, 'HTTP 500 (5)');
   assert.ok(!health.askOrder.includes('deepseek'));
   assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.claude/lane-health.json'))).lanes.deepseek.reason, 'real_fail_rate');
 });
 test('inclusive threshold excludes quota failures from numerator', t => {
-  const home = fixture(t, [{ status: '500' }, { status: '401' }, { status: '429' }, { status: 'error', reason: 'usage_limit' }, { status: 'ok' }]);
+  const home = fixture(t, [{ status: '500' }, { status: '401' }, { status: '429', until: now - 1 }, { status: 'error', reason: 'usage_limit', until: now - 1 }, { status: '429', until: now - 1 }, { status: 'ok', t: now - 2000 }]);
   const s = realLaneStats(home, now).deepseek;
-  assert.equal(s.calls, 5); assert.equal(s.failures, 2); assert.equal(s.failRate, .4);
+  assert.equal(s.calls, 6); assert.equal(s.failures, 2); assert.equal(s.failRate, 2 / 6);
   const h = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
   applyRealLaneHealth(h, home, now); assert.equal(h.lanes.deepseek.alive, true);
   fs.appendFileSync(path.join(home, '.claude/executor-usage.jsonl'), '\n' + JSON.stringify({ t: new Date(now).toISOString(), provider: 'deepseek', status: 'error', stderr: 'spawn sdk ENOENT' }));
@@ -47,11 +47,12 @@ test('known quota reset is quota_wait; later success invalidates ledger-only quo
   const fresh = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
   applyRealLaneHealth(fresh, home, now); assert.equal(fresh.lanes.deepseek.alive, true);
 });
-test('probe cannot mask real failure rate; quota probe becomes quota_wait', async t => {
+test('successful probe clears older failures; quota probe becomes quota_wait', async t => {
   const home = fixture(t, Array.from({ length: 5 }, () => ({ status: '503' })));
   fs.writeFileSync(path.join(home, '.claude/openrouter.env'), 'OPENROUTER_API_KEY=test-only');
+  fs.writeFileSync(path.join(home, '.claude/deepseek.env'), 'DEEPSEEK_API_KEY=test-only');
   let h = await laneDoctorProbe({ home, now, probe: async () => ({ code: 0, text: 'PONG' }), notify: async () => ({ delivered: 'test' }) });
-  assert.equal(h.lanes.deepseek.reason, 'real_fail_rate');
+  assert.equal(h.lanes.deepseek.reason, 'probe_ok');
   fs.writeFileSync(path.join(home, '.claude/executor-usage.jsonl'), '');
   h = await laneDoctorProbe({ home, now, probe: async () => ({ code: 1, text: 'HTTP 429 usage limit' }), notify: async () => ({ delivered: 'test' }) });
   assert.equal(h.lanes.deepseek.reason, 'quota_wait');
@@ -128,7 +129,7 @@ test('groq 429 with billing prose is quota without reset; 402 is billing', t => 
 });
 test('three server errors out of five still block implementation', async t => {
   const { evaluateRepairFirst } = await import('./lane-repair-first-gate.mjs');
-  const home = fixture(t, [{ status: '500' }, { status: '502' }, { status: '503' }, { status: 'ok' }, { status: 'ok' }]);
+  const home = fixture(t, [{ status: '500' }, { status: '502' }, { status: '503' }, { status: '429' }, { status: '429' }]);
   const health = { lanes: { deepseek: { alive: true } } };
   applyRealLaneHealth(health, home, now);
   assert.equal(health.lanes.deepseek.reason, 'real_fail_rate');
@@ -215,4 +216,34 @@ test('direct probe success after an untimed 429 clears ledger-only quota_wait', 
   applyRealLaneHealth(stale, home, now); assert.equal(stale.lanes.deepseek.reason, 'quota_wait');
   const fresh = { lanes: { deepseek: { alive: true, reason: 'probe_ok', lastProbeOkAt: new Date(now - 1000).toISOString() } } };
   applyRealLaneHealth(fresh, home, now); assert.equal(fresh.lanes.deepseek.alive, true); assert.equal(fresh.lanes.deepseek.reason, 'probe_ok');
+});
+
+test('recovery excludes eleven older failures and equal timestamps; subsequent failures still block', t => {
+  for (const ledgerSuccess of [false, true]) {
+    for (const newer of [0, 4, 5]) {
+      const home = fixture(t, [
+        ...Array.from({ length: 11 }, () => ({ status: '500', t: now - 3000 })),
+        ...Array.from({ length: newer }, () => ({ status: '503', t: now - 500 })),
+        { status: '500', t: now - 1000 },
+        ...(ledgerSuccess ? [{ status: 'ok', t: now - 1000 }] : []),
+      ]);
+      const health = { lanes: { deepseek: { alive: true, reason: 'probe_ok', lastProbeOkAt: ledgerSuccess ? now - 2000 : new Date(now - 1000).toISOString() } } };
+      applyRealLaneHealth(health, home, now);
+      assert.equal(health.lanes.deepseek.reason, newer >= 5 ? 'real_fail_rate' : 'probe_ok');
+      if (newer >= 5) assert.equal(health.lanes.deepseek.error, 'HTTP 503 (5)');
+    }
+  }
+});
+
+test('post-recovery fifty-percent boundary excludes older calls from denominator', t => {
+  for (const failures of [4, 5]) {
+    const home = fixture(t, [
+      ...Array.from({ length: 20 }, () => ({ status: '500', t: now - 3000 })),
+      ...Array.from({ length: failures }, () => ({ status: '500', t: now - 500 })),
+      ...Array.from({ length: 5 }, () => ({ status: '429', t: now - 500, until: now - 1 })),
+    ]);
+    const health = { lanes: { deepseek: { alive: true, reason: 'probe_ok', lastProbeOkAt: now - 1000 } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.deepseek.reason, failures === 5 ? 'real_fail_rate' : 'probe_ok');
+  }
 });

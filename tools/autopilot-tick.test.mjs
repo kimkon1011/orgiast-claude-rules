@@ -429,6 +429,21 @@ test('done pre replenishes in priority order, skips human work and previous obje
   assert.equal((await f.call('post', { summary: 'new work', progress: 10 })).noop, false);
 });
 
+test('done pre falls back to next-actions.md when business-goals.md is absent', async (t) => {
+  const asked = [];
+  const f = discord(t, { askImpl: async (candidate) => { asked.push(candidate.objective); return 'Yes'; } });
+  await f.call('start', { objective: '前の目的' });
+  await f.call('post', { summary: 'verified', progress: 100, evidence: '完了を確認' });
+  fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'next-actions.md'),
+    '<!-- NEXT-ACTIONS:BEGIN -->\n## 明日の推奨アクション（今日）\n1. テスト修正\n   - first_step: テストを実行\n## 別アカウント/他PCへの依頼（台帳）\n- 台帳項目\n<!-- NEXT-ACTIONS:END -->\n');
+  const pre = await f.call('pre');
+  assert.equal(pre.verdict, 'run');
+  assert.equal(pre.objective.objective, 'テスト修正');
+  assert.match(pre.objective.context, /テストを実行/);
+  assert.deepEqual(asked, ['テスト修正']);
+});
+
 test('refill skips every objective already closed in history, not just the most recent', async (t) => {
   const asked = [];
   const f = discord(t, { askImpl: async (candidate) => { asked.push(candidate.objective); return 'Yes'; } });

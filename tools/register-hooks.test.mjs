@@ -19,11 +19,20 @@ test('setup converge timeout covers Node updates on new and existing PCs, idempo
   assert.equal(hooks.length, 1);
   assert.equal(hooks[0].timeout, 1200);
   for (const event of ['SessionStart', 'UserPromptSubmit']) {
+    const ownerInbox = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('owner-inbox-hook.mjs'));
+    assert.equal(ownerInbox.length, 1); assert.equal(ownerInbox[0].timeout, 10); assert.notEqual(ownerInbox[0].async, true);
     const inbox = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('kim-inbox.mjs'));
     assert.equal(inbox.length, 1); assert.match(inbox[0].command, /--context/);
     assert.equal(inbox[0].timeout, 5); assert.notEqual(inbox[0].async, true);
     const daytrip = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('daytrip-ask-hook.mjs'));
     assert.equal(daytrip.length, 1); assert.equal(daytrip[0].timeout, 5); assert.notEqual(daytrip[0].async, true);
+  }
+  for (const [event, argument, timeout] of [['Stop', '', 15], ['SessionStart', ' --all', 30], ['UserPromptSubmit', ' --prompt-submit', 8]]) {
+    const titles = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('session-wait-title.mjs'));
+    assert.equal(titles.length, 1);
+    assert.ok(titles[0].command.endsWith(`session-wait-title.mjs"${argument}`));
+    assert.equal(titles[0].timeout, timeout);
+    assert.notEqual(titles[0].async, true);
   }
   const report = settings.hooks.PreToolUse.filter(g => g.hooks.some(h => h.command.includes('kim-discord-report-gate.mjs')));
   assert.equal(report.length, 1);

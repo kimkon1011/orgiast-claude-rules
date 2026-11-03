@@ -358,6 +358,19 @@ test('--sent-status reports missing mail as exit 4', async t => {
   assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 4);
   assert.ok(f.errors.some(e => e.includes('見つかりません')));
 });
+// 2026-11-04: hub 不達時に親の 30 秒制限を超えて固まらないよう、読取は 10 秒打ち切り・busy 再試行なし。
+test('--sent-status uses a bounded timeout and no busy retries', async t => {
+  const f = fixture(t);
+  f.deps.request = async (kind, p, timeoutMs, opts) => { f.calls.push({ kind, p, timeoutMs, opts }); return { mail: { id: p.id, status: 'new' } }; };
+  assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 0);
+  assert.deepEqual(f.calls, [{ kind: 'mail-get', p: { id: 'mail-1' }, timeoutMs: 10_000, opts: { retries: 0 } }]);
+});
+test('--sent-status exits 3 when the hub is unreachable instead of hanging', async t => {
+  const f = fixture(t);
+  f.deps.request = async () => { throw new Error('fetch failed'); };
+  assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 3);
+  assert.ok(f.errors.some(e => e.includes('状態を取得できません')));
+});
 test('--reply prints delivery guidance pointing to --sent-status', async t => {
   const f = fixture(t);
   f.deps.request = async () => ({ mail: {} });

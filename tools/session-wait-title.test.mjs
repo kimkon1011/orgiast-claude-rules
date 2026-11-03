@@ -3,7 +3,9 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { apply as applyReal, desiredTitle, sweepAll as sweepAllReal, waitPrefix } from './session-wait-title.mjs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { apply as applyReal, currentTitles, desiredTitle, isCloseRitualOnly, promptSubmit, sweepAll as sweepAllReal, waitPrefix } from './session-wait-title.mjs';
 
 const apply = input => applyReal(input, { resolvePcNumber: () => '' });
 const sweepAll = options => sweepAllReal({ ...options, resolvePcNumber: () => '' });
@@ -12,6 +14,53 @@ const footer = state => `本文\n\n次に kim がすること: なし\nこの後
 const ai = JSON.stringify({ type: 'ai-title', aiTitle: 'トークン待ち', sessionId: 's' });
 const custom = title => JSON.stringify({ type: 'custom-title', customTitle: title, sessionId: 's' });
 const WAIT = 'まだ閉じない（作業中・2026-11-02 20:11 まで待つ）';
+
+test('実例の新しいタブで Enter・古いタブを閉じるフッターに【閉じて可】を付ける', () => {
+  const text = `次に kim がすること: タブバーの一番右にある新しいタブで Enter を1回押し、この古いタブを ✕ で閉じる
+この後の自動進行: なし
+このセッション: /session-close は終わっているので、このセッションを閉じてよい`;
+  assert.equal(desiredTitle(text, ai), '【閉じて可】トークン待ち');
+});
+
+test('Enter・タブを閉じる操作は単独でも閉じて可', () => {
+  for (const action of ['新しいタブで Enter を1回押す', 'このタブを ✕ で閉じる']) {
+    assert.equal(desiredTitle(withAction(action, CLOSED), ai), '【閉じて可】トークン待ち');
+  }
+});
+
+test('承認が混ざる操作やサービス登録では閉じて可にしない', () => {
+  for (const action of ['PR を承認し、このタブを ✕ で閉じる', 'Resend に登録してキーを貼る']) {
+    assert.equal(desiredTitle(withAction(action, CLOSED), ai), null);
+  }
+});
+
+test('閉じる儀式は各区切りの全文を照合して別作業を除外する', () => {
+  for (const action of [
+    '右端のタブで /session-start を送る→セッションを閉じる。',
+    '新しいタブで Enter を押す，タブを閉じる',
+    '、。→，',
+  ]) assert.equal(isCloseRitualOnly(action), true, action);
+  for (const action of [
+    '新しいタブで Enter を押す前に確認する',
+    'ログインして新しいタブで Enter を押す',
+    '新しいタブで Enter を押す、返信する',
+    '設定を確認する→このタブを閉じる',
+    '新しいタブをクリックする',
+  ]) assert.equal(isCloseRitualOnly(action), false, action);
+  assert.equal(isCloseRitualOnly(undefined), false);
+  assert.equal(desiredTitle(withAction('このタブを閉じる', WAIT), ai), '【11/02/20:11まで】トークン待ち');
+});
+
+test('firstPrompt はスキル展開本文と command タグを飛ばして本当の依頼を拾う', () => {
+  const user = content => JSON.stringify({ type: 'user', message: { content } });
+  for (const content of ['Base directory for this skill: C:\\x', '<command-name>/session-close</command-name>', '<other>展開本文</other>']) {
+    const raw = `${user(content)}\n${user('本当の依頼')}`;
+    assert.equal(currentTitles(raw).firstPrompt, '本当の依頼');
+    assert.equal(desiredTitle('', raw, '008'), '008｜本当の依頼');
+  }
+  const raw = `${user([{ type: 'text', text: 'Base directory for this skill: C:\\x' }])}\n${user('本当の依頼')}`;
+  assert.equal(currentTitles(raw).firstPrompt, '本当の依頼');
+});
 
 test('waitPrefix は年なしの【11/02/20:11まで】', () => {
   assert.equal(waitPrefix(new Date(2026, 10, 2, 20, 11)), '【11/02/20:11まで】');
@@ -88,6 +137,43 @@ test('sweepAll は全プロジェクトの待ちセッションに付け、1時�
 });
 
 const auto = title => JSON.stringify({ type: 'custom-title', customTitle: title, source: 'orgiast-auto' });
+test('firstPrompt は Stop hook feedback と他のノイズを空白付きでも飛ばす', () => {
+  const user = content => JSON.stringify({ type: 'user', message: { content } });
+  for (const noise of ['Stop hook feedback: x', '  <tag>  ', ' Base directory for this skill: C:\\x ', ' [SYSTEM NOTIFICATION x] ', ' Caveat: x ']) {
+    const raw = `${user(noise)}\n${user('次の依頼')}`;
+    assert.equal(currentTitles(raw).firstPrompt, '次の依頼');
+  }
+});
+
+test('自動のノイズタイトルより宣言目的を採用して閉じて可を付ける', () => {
+  const raw = `${auto('008｜Base directory for this skill: C:\\x')}\n${assistant('**[本セッションの目的]** 道具名 route の昇格を止める')}`;
+  assert.equal(desiredTitle(footer(CLOSED), raw, '008'), '008｜【閉じて可】道具名 route の昇格を止める');
+});
+
+test('手動 custom-title は宣言目的があっても保持する', () => {
+  const raw = `${custom('私の名前')}\n${assistant('**[本セッションの目的]** 宣言された目的')}`;
+  assert.equal(desiredTitle(footer(CLOSED), raw, '008'), '008｜【閉じて可】私の名前');
+});
+
+test('宣言目的は行内の最初のものを空白正規化して40文字まで採用する', () => {
+  const purpose = `道具名   route\tの昇格を止める${'あ'.repeat(40)}`;
+  for (const marker of ['[本セッションの目的]', '**[本セッションの目的]**']) {
+    const raw = `${ai}\n${auto('008｜以前の自動名')}\n${assistant(`説明 ${marker} ${purpose}\n別の行`)}\n${assistant('[本セッションの目的] 後の目的')}`;
+    assert.equal(desiredTitle('', raw, '008'), `008｜${purpose.replace(/\s+/g, ' ').slice(0, 40)}`);
+  }
+});
+
+test('既存タイトルのPC番号と印を外してノイズなら次の候補へ落とす', () => {
+  const prompt = JSON.stringify({ type: 'user', message: { content: '本当の依頼' } });
+  const noiseAi = JSON.stringify({ type: 'ai-title', aiTitle: '008｜【閉じて可】Stop hook feedback: x' });
+  for (const title of [auto, custom]) {
+    assert.equal(desiredTitle('', `${ai}\n${title('008｜【閉じて可】Caveat: x')}`, '008'), '008｜【閉じて可】トークン待ち');
+    assert.equal(desiredTitle('', `${title('008｜【閉じて可】<tag>')}\n${noiseAi}\n${prompt}`, '008'), '008｜【閉じて可】本当の依頼');
+  }
+  assert.equal(desiredTitle('', `${auto('008｜有効な自動名')}\n${noiseAi}`, '008'), null);
+  assert.equal(desiredTitle('', noiseAi, '008'), '008｜セッション');
+});
+
 test('PC番号: フッターなしでも付与し、同じタイトルは追記しない', () => {
   assert.equal(desiredTitle('本文', ai, '018'), '018｜トークン待ち');
   assert.equal(desiredTitle('本文', custom('018｜トークン待ち'), '018'), null);
@@ -123,4 +209,63 @@ test('sweepAll は注入したPC番号を全件に適用し、追記は冪等', 
   assert.equal(JSON.parse(raw.trim().split('\n').at(-1)).source, 'orgiast-auto');
   assert.equal(sweepAllReal(options).titled.length, 0);
   assert.equal(fs.readFileSync(file, 'utf8'), raw);
+});
+
+const salesAi = JSON.stringify({ type: 'ai-title', aiTitle: '東邦の売上' });
+for (const [name, raw, pc, expected] of [
+  ['初回はAI命名を妨げない', JSON.stringify({ type: 'user', message: { content: '売上を確認' } }), '008', null],
+  ['AIタイトルに番号を付ける', salesAi, '008', '008｜東邦の売上'],
+  ['同じタイトルもサーバー同期へ渡す', auto('008｜x'), '008', '008｜x'],
+  ['番号なしPCは出力しない', salesAi, '', null],
+  ['人のrenameを保持する', custom('foo'), '008', '008｜foo'],
+  ['人のrenameには期限も追加しない', `${custom('  foo  ')}\n${assistant(footer(WAIT))}`, '008', '008｜  foo  '],
+  ['既存番号付きrenameを保持する', custom('018｜foo'), '008', '018｜foo'],
+  ['期限footerを反映する', `${salesAi}\n${assistant(footer(WAIT))}`, '008', '008｜【11/02/20:11まで】東邦の売上'],
+  ['自動タイトル後のAI名を反映する', `${auto('008｜古い名前')}\n${salesAi}`, '008', '008｜東邦の売上'],
+]) {
+  test(`promptSubmit: ${name}`, () => {
+    const result = promptSubmit({ transcript_path: 's.jsonl', session_id: 's' }, {
+      readFile: () => raw, statSize: () => Buffer.byteLength(raw), resolvePcNumber: () => pc,
+    });
+    assert.deepEqual(result, expected === null ? null : {
+      hookSpecificOutput: { hookEventName: 'UserPromptSubmit', sessionTitle: expected },
+    });
+  });
+}
+
+test('promptSubmit: subagent・巨大ファイル・入力不足・例外はfail-open', () => {
+  const input = { transcript_path: 's.jsonl', session_id: 's' };
+  const options = { resolvePcNumber: () => '008', statSize: () => 1, readFile: () => { assert.fail('読み込まない'); } };
+  assert.equal(promptSubmit({ ...input, transcript_path: 'p/subagents/a.jsonl' }, options), null);
+  assert.equal(promptSubmit(input, { ...options, statSize: () => 256 * 1024 * 1024 + 1 }), null);
+  assert.equal(promptSubmit({}, options), null);
+  assert.equal(promptSubmit(input, { ...options, statSize: () => { throw new Error('stat'); } }), null);
+  assert.equal(promptSubmit(input, { ...options, readFile: () => { throw new Error('read'); } }), null);
+  assert.equal(promptSubmit(input, { ...options, resolvePcNumber: () => { throw new Error('pc'); } }), null);
+});
+
+test('--prompt-submit CLI: JSON 1行・読み取り専用・不正入力でもexit 0', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-prompt-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 's.jsonl');
+  fs.writeFileSync(file, salesAi);
+  const before = fs.statSync(file);
+  const run = input => spawnSync(process.execPath, [fileURLToPath(new URL('./session-wait-title.mjs', import.meta.url)), '--prompt-submit'], {
+    input, encoding: 'utf8', env: { ...process.env, ORGIAST_PC_NUMBER: '008' },
+  });
+  const result = run(JSON.stringify({ transcript_path: file, session_id: 's' }));
+  assert.ifError(result.error);
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, '');
+  assert.equal(result.stdout, JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', sessionTitle: '008｜東邦の売上' } }) + '\n');
+  assert.equal(fs.statSync(file).mtimeMs, before.mtimeMs);
+  assert.equal(fs.statSync(file).size, before.size);
+  assert.equal(fs.readFileSync(file, 'utf8'), salesAi);
+  for (const input of ['{', JSON.stringify({ transcript_path: path.join(dir, 'missing'), session_id: 's' })]) {
+    const failed = run(input);
+    assert.ifError(failed.error);
+    assert.equal(failed.status, 0);
+    assert.equal(failed.stdout, '');
+    assert.equal(failed.stderr, '');
+  }
 });

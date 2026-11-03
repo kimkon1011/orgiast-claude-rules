@@ -866,6 +866,15 @@ test('未来日の以降ゲートだけを固定日付基準で除外する', ()
   );
 });
 
+test('再確認日が未来のTODOだけを寝かせ、当日以降は復帰させる', () => {
+  const today = new Date(2026, 10, 4); // 2026-11-04 ローカル
+  assert.equal(todoExclusionReason('L&B 共有待ち（再確認: 2026-11-10）', today), '2026-11-10まで再確認待ち');
+  assert.equal(todoExclusionReason('L&B 共有待ち（再確認：2026-11-10）', today), '2026-11-10まで再確認待ち');
+  assert.equal(todoExclusionReason('L&B 共有待ち（再確認: 2026-11-04）', today), '');
+  assert.equal(todoExclusionReason('L&B 共有待ち（再確認: 2026-10-30）', today), '');
+  assert.equal(todoExclusionReason('再確認: の書式を直す', today), '');
+});
+
 test('時刻付きの以降ゲート（22:00 JST 以降に着手）も除外する（2026-10-29 quota-sweep:codex 4連続 exhausted の原因）', () => {
   const gated = '【2026-10-30 22:00 JST 以降に着手・それより前は着手しない】アサインアプリの高速化';
   // ゲート（2026-10-30T22:00 JST = 13:00Z）を JST 壁時計で比較する。実行マシンの

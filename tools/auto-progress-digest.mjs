@@ -48,7 +48,7 @@ export function selectRows(rows, now = Date.now(), since = now - WINDOW_MS) {
   const ledger = Array.isArray(rows) ? rows : [];
   const active = new Set(latestOpenPromises(ledger));
   return ledger.filter((row) => {
-    if (isNoopPromise(row.promise)) return false;
+    if (row.kimAnswer || isNoopPromise(row.promise)) return false;
     if (row.status === 'done') return Number.isFinite(Date.parse(row.doneAt)) && Date.parse(row.doneAt) > since;
     return active.has(row);
   }).sort((a, b) => rowTime(a) - rowTime(b));
@@ -74,7 +74,7 @@ export const isHumanActionRequired = (row) => {
 };
 
 export function needsDm(row, now = Date.now()) {
-  if (isNoopPromise(row.promise)) return false;
+  if (row.kimAnswer || isNoopPromise(row.promise)) return false;
   const verdict = verdictOf(row, now);
   return isHumanActionRequired(row) || ['done', 'open/期限超過'].includes(verdict) ||
     (verdict === 'stalled' && (Number(row.resumeCount) >= MAX_RESUMES ||
@@ -217,7 +217,7 @@ export function formatDigest(rows, now = Date.now(), label = '', {
   owner = '',
   nightWaitingKeys = new Set(),
 } = {}) {
-  const filtered = (allRows || rows || []).filter(row => !isNoopPromise(row.promise));
+  const filtered = (allRows || rows || []).filter(row => !row.kimAnswer && !isNoopPromise(row.promise));
   if (!filtered.length && !(waitingRows?.length || doneRows?.length || stalledRows?.length || inProgressRows?.length)) return '';
 
   const scheduled = filtered.filter(row => ['scheduled', 'start_overdue'].includes(row.status));

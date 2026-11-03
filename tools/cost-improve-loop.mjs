@@ -524,8 +524,8 @@ function humanTodoMessage(violation, now, retryCount = 0, retryMode = 'directive
     const reportedAt = /last reported:\s*([^)]*)/.exec(violation.evidence)?.[1] || '日時不明';
     const reportedMs = parseJstOrIsoDate(reportedAt);
     const days = reportedMs === null ? '不明' : Math.max(0, Math.floor((now.getTime() - reportedMs) / 86400000));
-    if (!retryCount) return `【${pc}】から${reportedAt}以降 KPI の自己申告が届いていません（${days}日間）。そのPCで Claude Code を起動できているか確認し、起動していれば ` + '`node tools/fleet-sheet-report.mjs`' + ' が夜間に走っているかを見てください。';
-    return `【${pc}】から${reportedAt}以降 KPI の自己申告が届いていません（${days}日間）。自動再送（${retryMode}）を ${retryCount} 回試みたが復帰しないため、そのPCで Claude Code を1回起動してください。`;
+    if (!retryCount) return `【${pc}】から${reportedAt}以降 KPI の自己申告が届いていません（${days}日間）。Claude が自動で夜間レポートの再送を行いましたが、この実行では復帰を確認できませんでした。次回の夜間点検で再判定します。`;
+    return `【${pc}】から${reportedAt}以降 KPI の自己申告が届いていません（${days}日間）。自動再送（${retryMode}）を ${retryCount} 回試みたが復帰しません。次回の夜間点検で再判定します。`;
   }
   if (violation.kind === 'cost_spike') {
     const previous = violation.previousValue ?? /from \$(\d+(?:\.\d+)?)/.exec(violation.evidence)?.[1] ?? '不明';
@@ -541,11 +541,11 @@ function humanTodoMessage(violation, now, retryCount = 0, retryMode = 'directive
       : violation.pc === 'fleet'
         ? 'フリートの KPI を取得できていません'
         : 'このPCの計測ファイルまたは実行台帳を読み取れません';
-    return `【${pc}】${situation}。計測できていないため、この値を根拠にした自動修正は見送りました。\`node tools/fleet-sheet-report.mjs\` を実行し、委譲率と Claude 概算が記録されるか確認してください。`;
+    return `【${pc}】${situation}。計測できていないため、この値を根拠にした自動修正は見送りました。次回の夜間点検で再測定します。`;
   }
   if (violation.kind === 'budget_pace') {
     const pace = Number.isFinite(Number(violation.actualValue)) ? Number(violation.actualValue).toFixed(1) : '不明';
-    return `【このPC】の月次AI予算ペースが ${pace}% に達しています（日割りで月末を見込むと予算超過。しきい値 100%）。cost-enforce.json に budgetPressure を立てて量産系ルーティングを夜間バッチへ寄せる自動対処は済ませました。急ぎでない分類・生成・一括処理は \`node tools/batch-enqueue.mjs --provider <groq|deepseek> "指示"\` で夜間(03:00・半額)へ回してください。`;
+    return `【このPC】の月次AI予算ペースが ${pace}% に達しています（日割りで月末を見込むと予算超過。しきい値 100%）。cost-enforce.json に budgetPressure を立てて量産系ルーティングを夜間バッチへ寄せる自動対処は済ませました。急ぎでない分類・生成・一括処理は夜間(03:00・半額)のバッチへ回す運用にしています。`;
   }
   return `【${pc}】自動対処を完了できませんでした（実測: ${violation.evidence}）。状況を確認してください。`;
 }
@@ -1621,7 +1621,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   } else {
     reportText += `- なし\n`;
   }
-  for (const row of unmeasurableRows) reportText += `- **${row.pcName || row.label || 'unknown'}**: 自動では復旧不可 — そのPCで Claude Code を1回起動してください\n`;
+  for (const row of unmeasurableRows) reportText += `- **${row.pcName || row.label || 'unknown'}**: 自動では復旧不可 — 次回の夜間点検で再試行します\n`;
 
   // 人へ上げた内容と同じ情報をセッションへ登録。失敗は見える形で残す。
   const proposalActions = [...new Map([...(state.proposalRetry || []), ...newlyHuman].map(a => [JSON.stringify([a.pc, a.kind]), a])).values()];

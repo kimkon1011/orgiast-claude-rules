@@ -7,7 +7,7 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { readAssistantText } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
-import { resolveOwner } from './notify-owner.mjs';
+import { resolveOwner } from './lib/owner-identity.mjs';
 
 const NONE = /^(?:なし|無し|ナシ|ありません|—|–|-|－|ー|―|n\/a|none)$/i;
 // 「**この後の自動進行**: text」「- この後の自動進行：text」など装飾付きにも一致させる。
@@ -208,13 +208,11 @@ if (isEntry(import.meta.url)) { await main(); process.exitCode = 0; }
 
 export const rowKey = (row) => `${row.pc}|${row.user}|${row.sessionId}|${row.ts}`;
 
-export function isUnattendedRow(row, home) {
-  const normalize = value => String(value || '').replace(/\\/g, '/').replace(/^\/mnt\/([a-z])\//i, '$1:/').replace(/\/+$/, '').toLowerCase();
-  const cwd = normalize(row.cwd), root = normalize(home);
-  const request = cleanValue(row.requestText || String(row.promise || '').replace(/^API エラー（.*?）で返答できなかった依頼:\s*/, ''));
-  const probe = /^(?:[「『"']?)(?:OK|了解)(?:[」』"']?)\s*とだけ\s*(?:返して(?:ください)?|返信して(?:ください)?|答えて(?:ください)?)[。.!！\s]*$/i.test(request);
-  return probe || /^c:\/windows\/system32(?:\/|$)/.test(cwd) || /(?:^|\/)\.stall-sweeper(?:\/|$)/.test(cwd) || ['auto-session', 'scratch'].some(name => {
-    const base = `${root}/.claude/${name}`;
-    return cwd === base || cwd.startsWith(`${base}/`);
-  });
-}
+export { isUnattendedRow } from './lib/unattended-session.mjs';
+
+export const kimAction = row => {
+  const value = String(row.nextKim || '').trim();
+  const action = /^(?:(?:特に)?なし|無し|ナシ|(?:対応(?:は)?)?不要(?:です)?|(?:特に)?ありません|none|n\/a|[-—–－ー―])(?:[（(].*[）)])?[。．]?$/i.test(value) || !value ? 'なし' : value;
+  return action === 'なし' && row.status === 'waiting_user'
+    ? String(row.reason || row.resumeOutcome || '判断内容を確認してください').replace(/^needs_user:\s*/, '').slice(0, 80) : action;
+};

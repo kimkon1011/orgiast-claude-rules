@@ -118,6 +118,27 @@ async function prependInbox(home, text, at) {
   }
 }
 
+// 日単位の排他と送信前記録で、watch/digest の同時実行でも警告は1回まで。
+export async function alertUnresolvedRecipient(owner, options = {}) {
+  const home = options.home ?? process.env.ORGIAST_HOME ?? os.homedir();
+  const now = new Date(options.now ?? Date.now());
+  const day = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+  const file = path.join(home, '.claude', 'logs', 'owner-recipient-kim-alert.json');
+  const lock = `${file}.${day}.lock`;
+  let fd;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    if (readJson(file).day === day) return;
+    fd = fs.openSync(lock, 'wx', 0o600);
+    if (readJson(file).day === day) return;
+    fs.writeFileSync(file, JSON.stringify({ day, at: now.toISOString() }), { mode: 0o600 });
+    const label = options.label ?? resolveFleetLabel(home);
+    const text = redactSecrets(`⚠️ 進捗通知の Discord 宛先が未設定です。PC: ${label} / owner: ${owner || '(未設定)'}。notifyDiscordId の設定が必要です。通知は owner-inbox に保存され、チャットで表示されます。`);
+    await (options.notifyKim ?? notifyKim)(text, { home, userId: KIM_DISCORD_USER_ID, kimActionRequired: true, plainJa: false, webhookFallback: false, source: 'owner-recipient' });
+  } catch { /* warning failure must not prevent local delivery */ }
+  finally { if (fd !== undefined) { fs.closeSync(fd); try { fs.unlinkSync(lock); } catch {} } }
+}
+
 export async function notifyOwner(owner, text, options = {}) {
   const home = options.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   options = { ...options, home };
@@ -154,6 +175,7 @@ export async function notifyOwner(owner, text, options = {}) {
     } catch { reason = 'Discord DM delivery failed'; }
   }
   attempts.push({ channel: 'discord', ok: false, skipped: !valid, reason });
+  if (!valid) await alertUnresolvedRecipient(owner, options);
   // Local fallbacks must never deliver another PC owner's private progress here.
   if (!owner || owner.toLowerCase() !== resolveOwner(options).toLowerCase()) {
     return finish({ delivered: 'none', channel: 'none', ok: false, reason });

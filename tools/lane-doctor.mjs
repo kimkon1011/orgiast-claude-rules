@@ -6,7 +6,7 @@ import path from 'node:path';
 import { execFile, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
-import { codexAuthStatus } from './codex-auth-status.mjs';
+import { codexAuthStatusAny } from './codex-auth-status.mjs';
 import { loadEnvKey, loadGeminiKey, loadDeepseekKey } from './codex-do.mjs';
 import { providerResetUntil } from './codex-cooldown.mjs';
 import { notifyKim } from './notify-kim.mjs';
@@ -90,7 +90,7 @@ health.substituted = Object.entries(health.lanes).filter(([p, s]) => isLane(p) &
 function persist(file, value, health) {
   try { atomicJson(file, value); return true; } catch (e) { health.errors.push(`${path.basename(file)}: ${e.code || 'write_failed'}`); return false; }
 }
-export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = true } = {}) {
+export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = true, platform = process.platform, spawnImpl = spawnSync } = {}) {
   const dir = path.join(home, '.claude');
   const old = readJson(path.join(dir, 'lane-health.json'));
   const health = { ts: new Date(now).toISOString(), probedAt: old.probedAt || null, lanes: {}, implementOrder: [], askOrder: [], repairs: (old.repairs || []).filter(r => typeof r === 'string' && old.lanes?.codex?.alive), deadNeedsUser: [], errors: [], ignored: [] };
@@ -116,7 +116,7 @@ export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = tr
   }
   const keys = { gemini: loadGeminiKey(home), deepseek: loadDeepseekKey(home), glm: loadEnvKey(home, 'zai.env', 'ZAI_API_KEY'), groq: loadEnvKey(home, 'groq.env', 'GROQ_API_KEY'), openrouter: loadEnvKey(home, 'openrouter.env', 'OPENROUTER_API_KEY'), mistral: loadEnvKey(home, 'mistral.env', 'MISTRAL_API_KEY'), grok: loadEnvKey(home, 'xai.env', 'XAI_API_KEY') };
   for (const p of [...PROVIDERS, ...OPTIONAL_PROVIDERS.filter(o => keys[o])]) {
-    const configured = p === 'codex' ? codexAuthStatus(home).login : !!keys[p];
+    const configured = p === 'codex' ? codexAuthStatusAny(home, { platform, spawnImpl }).login : !!keys[p];
     const previous = { ...(old.lanes?.[p] || {}) }, evidence = probeHistory(previous);
     // A cached quota label/until alone is not provider-local evidence.
     if (/quota_wait|cooldown|usage_limit/.test(previous.reason || '') && !quotaFailure(previous.error)) {
@@ -180,7 +180,7 @@ export function runProbe(provider, { home, timeoutMs, dryRun = false } = {}) {
 export function notificationText(item, home) {
   if (item.reason === 'keyserve_unenrolled') {
     const hostname = os.hostname(), pc = validKeyservePcId(hostname) ? hostname : 'PC名要指定', user = os.userInfo().username;
-    return `${hostname}（OSユーザー: ${user}）は keyserve 未登録のため安価AIレーンの鍵を取得できません。kim-PC で node tools/keyserve-enroll.mjs ${pc} を実行し、表示された1行コマンドを返してください。返信後は Claude がそのコマンドを実行して復旧確認します。`;
+    return `${hostname}（OSユーザー: ${user}）は keyserve 未登録のため安価AIレーンの鍵を取得できません。Claude が kim-PC 側で登録コマンドを発行します。対象PCでその1行を貼り付けて承認すると、Claude が復旧確認まで行います。`;
   }
   if (item.reason === 'billing') return `${os.hostname()} の ${item.provider} が残高不足(402)。入金（オートチャージON）が既定（CLAUDE.md 他AI節）。それまで OpenRouter 経由へ回しています`;
   if (item.tried) return `${item.provider} が停止しています（原因: WSL ディストリ不在・ネイティブ書き込み probe 失敗）。試した修復: ${item.tried}。残る操作: ${item.fix}`;
@@ -201,7 +201,7 @@ export function notificationText(item, home) {
   const urls = { codex: 'https://chatgpt.com/', deepseek: 'https://platform.deepseek.com/', glm: 'https://z.ai/', groq: 'https://console.groq.com/', openrouter: 'https://openrouter.ai/', mistral: 'https://console.mistral.ai/', grok: 'https://console.x.ai/' };
   // 所有アカウントはカタログを正本にする。固定文の「未確認」で送ると kim がどこで開くか分からない（2026-10-25 DeepSeek 停止通知）。
   const owner = catalog.find(s => s.id === item.provider)?.account;
-  const account = item.provider === 'codex' ? codexAuthStatus(home).email || 'kim@orgiast.jp（保存認証のアカウントは未確認）'
+  const account = item.provider === 'codex' ? codexAuthStatusAny(home, item.authOptions).email || 'kim@orgiast.jp（保存認証のアカウントは未確認）'
     : owner || '[ACCOUNT-UNKNOWN] 契約アカウント（tools/ai-subscription-catalog.json に account 未登録）';
   // URL は行末に置き、直後に日本語を続けない（Discord のリンク範囲が日本語まで伸びて壊れる）。
   return `${item.provider} が停止しています（${item.reason}）。
@@ -210,15 +210,15 @@ export function notificationText(item, home) {
 3. ${item.reason.includes('payment') ? '請求設定を開き支払い方法を確認し、オートチャージ ON を設定して保存する（手動チャージは禁止ルール）。' : 'Codex を開きログインを選択する。ブラウザーで同じアカウントを選び、OAuth の同意内容を確認して許可する。'}
 4. 完了後は Claude が lane-doctor --probe で復旧を確認します。`;
 }
-export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe, providers = PROVIDERS } = {}) {
+export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe, spawnImpl = spawnSync, providers = PROVIDERS } = {}) {
   const started = Date.now(), dir = path.join(home, '.claude');
-  const health = laneDoctorQuick({ home, now, save: false });
+  const health = laneDoctorQuick({ home, now, save: false, platform, spawnImpl });
   const previous = readJson(path.join(dir, 'lane-health.json'));
   const probeBudget = Math.max(1, budgetMs - 5000);
   // 各 provider を並行実測し、一つの停止レーンで90秒枠を使い切らない。
   const probeProviders = providers.length ? providers : [...PROVIDERS, ...OPTIONAL_PROVIDERS.filter(o => health.lanes[o])];
   const results = await Promise.all(probeProviders.map(async p => {
-    if (health.lanes[p].reason === 'missing_key' || (p === 'codex' && !codexAuthStatus(home).login)) return [p, null];
+    if (health.lanes[p].reason === 'missing_key' || (p === 'codex' && !codexAuthStatusAny(home, { platform, spawnImpl }).login)) return [p, null];
     if (p === 'codex') {
       if (platform === 'win32' && await listWsl() === '') {
         let result;
@@ -270,7 +270,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
   health.lanes['gemini-cli'] = { ...health.lanes.gemini, alive: health.lanes.gemini.alive && executable('gemini') };
   orders(health, home);
   demoteBilling(health, home, now);
-  await notifyLaneStops(health, { home, now, notify, budgetMs, started });
+  await notifyLaneStops(health, { home, now, notify, budgetMs, started, platform, spawnImpl });
   persist(path.join(dir, 'lane-health.json'), health, health);
   return health;
 }
@@ -285,7 +285,7 @@ export function demoteBilling(health, home, now = Date.now()) {
   for (const [p] of billing) cooldown[p] = { until: now + 86400_000, at: now, reason: 'billing' };
   persist(cooldownFile, cooldown, health);
 }
-export async function notifyLaneStops(health, { home = laneHome(), now = Date.now(), notify = notifyKim, budgetMs = 5000, started = Date.now() } = {}) {
+export async function notifyLaneStops(health, { home = laneHome(), now = Date.now(), notify = notifyKim, budgetMs = 5000, started = Date.now(), platform = process.platform, spawnImpl = spawnSync } = {}) {
   const dir = path.join(home, '.claude');
   health.notifications = [];
   const notifiedFile = path.join(dir, 'lane-doctor-notified.json'), notified = readJson(notifiedFile);
@@ -296,7 +296,7 @@ export async function notifyLaneStops(health, { home = laneHome(), now = Date.no
     if (!persist(notifiedFile, notified, health)) { health.notifications.push({ provider: item.provider, delivered: 'none', reason: 'dedupe_write_failed' }); continue; }
     const remaining = budgetMs - (Date.now() - started);
     let timer;
-    const delivery = remaining > 0 ? await Promise.race([notify(notificationText(item, home), { home, webhookFallback: false, signal: AbortSignal.timeout(Math.max(1, remaining)) }).catch(() => ({ delivered: 'none', reason: 'notification_failed' })), new Promise(resolve => { timer = setTimeout(() => resolve({ delivered: 'unknown', reason: 'deadline' }), remaining); })]).finally(() => clearTimeout(timer)) : { delivered: 'none', reason: 'deadline' };
+    const delivery = remaining > 0 ? await Promise.race([notify(notificationText({ ...item, authOptions: { platform, spawnImpl } }, home), { home, webhookFallback: false, signal: AbortSignal.timeout(Math.max(1, remaining)) }).catch(() => ({ delivered: 'none', reason: 'notification_failed' })), new Promise(resolve => { timer = setTimeout(() => resolve({ delivered: 'unknown', reason: 'deadline' }), remaining); })]).finally(() => clearTimeout(timer)) : { delivered: 'none', reason: 'deadline' };
     health.notifications.push({ provider: item.provider, ...delivery });
     if (delivery.delivered === 'none') { if (before === undefined) delete notified[item.provider]; else notified[item.provider] = before; persist(notifiedFile, notified, health); }
   }

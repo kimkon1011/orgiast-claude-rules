@@ -594,5 +594,8 @@ test('差し戻し理由の先頭で前文を繰り返さないよう指示す�
     const result = invoke(home, 'retry-instruction', `${'本文です。'.repeat(50)}`);
     const output = JSON.parse(result.stdout);
     assert.match(output.reason, /^前のメッセージの経緯・ログ・説明は繰り返さない。指摘分を直したうえで、この書き直しが kim の読む最後のメッセージになる前提で書く: 末尾3行の直前に【最終まとめ】を置き、①報告（結論・結果・検証）②kim の確認事項（文面・選択肢・URL は全文）③kim がやること をすべて載せ、前のメッセージを参照させない（「上記」「前述」禁止）。/);
+    // 書き直しで同じ質問を出し直して kim に「2回聞かれた」と思わせない（2026-11-03 ベンツ車検の実害）
+    assert.match(output.reason, /このターン中に届いた kim の新着メッセージを確かめ、もう答えが来た質問は②から外して/);
+    assert.match(output.reason, /（前のメッセージと同じ質問です。もう答えていれば不要です）/);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

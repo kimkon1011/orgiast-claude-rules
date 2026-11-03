@@ -198,27 +198,81 @@
     "source": "handoff-audit-nightly:4f579eb3fc37b478cef737816a253d53bce15d7739e071d3aa51d4e76f799c40 / 2026-10-29 tool-name-route レビューで route を手順化（route が道具名だけの `Gmail MCP` だったため手順文に置換）"
   },
   {
-    "pattern": "ループ契約の保存と起動をClaude側で行う",
-    "route": "`/makeloop` の依頼文から runtime・kind・上限・検証ゲート・slug・開始可否を読み取り、Claude 側で `.loop/<slug>.md`、状態ファイル、INDEX を保存する。依頼に「ループを開始しない」とある場合は保存と構文・参照先の read-back までで止め、`codex-do.mjs` や別セッションを起動しない。開始指定がある場合だけ、保存済み契約を入力に既定のループ実行経路を呼び、起動結果を直接確認する。道具名だけを route にせず、依頼の開始可否を優先する。",
+    "pattern": "ループ固有制約を理由にPRマージをkimへ手渡す",
+    "route": "PR の作成とマージは、ループ契約に「push/PR/merge は行わない」と書かれていても監督（非ループ）セッションが当ターンに実行し、ループ固有の制約を kim への手渡し理由にしない。ループが作った枝は `git push -u origin <branch>` → PR は `gh pr create --label automerge`。gh が無い PC は GCM の `git credential fill` で得たトークンで REST API を叩く（作成 `POST /repos/{owner}/{repo}/pulls`、ラベル `POST /issues/{n}/labels`、自前マージ `PUT /repos/{owner}/{repo}/pulls/{n}/merge` の merge_method=squash）。squash マージ後は `node tools/commit-landed.mjs <sha>` で着地を判定する（`git merge-base --is-ancestor` は squash では偽になり、逆に推測で着地扱いにすると偽陽性になる）。MERGED を read-back するまで「kim がマージする」と書かない。実例: 2026-10-23 の session fbc40d75 は「このループで push・PR・merge が禁止されている」と書いて rule 2/12 で差し戻された。",
     "confidence": "high",
-    "source": "handoff-audit-nightly:8e62823031d40ff96253f1dc9fd5b521217cbfe88a7be874ad8b3c015e7e5d0a / 2026-11-03 tool-name-route レビューで `codex-do.mjs` を契約保存・開始可否確認・read-back の手順へ置換"
+    "source": "handoff-audit-nightly:5e9ab6b5e0bf001805d06cb4c851ab2986f316bc0aa867367a35c31ff915a4b4 / 2026-11-04 tool-name-route レビューで route（`gh pr create`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "ループ契約の保存と起動をClaude側で行う",
+    "route": "ループは Claude 側で保存して起動する。契約は `tools/quota-sweep-contract.tmpl.md` を元に `.loop/<slug>.md`、状態は `.loop/<slug>-state.md`（ゴール・要求別証跡・累積試行・失敗仮説・次の1手・停止理由）に書く。`.loop/` は .gitignore 済みのローカル状態なのでコミットしない（コードの変更だけ `git commit -F <msg> -- <paths>`）。起動は `node tools/quota-sweep.mjs --provider claude`（事前に `--dry-run` / `--status` で窓・停止状態を確認し、失敗停止は `--resume claude` で解除）。1ティックの指示文は同ツールの tickPrompt が生成し、`.loop/<slug>.md` を1イテレーションだけ辿って FINAL まで ITERATING を返す。着地判定は `node tools/commit-landed.mjs <sha>` を使う（squash マージのため `git merge-base --is-ancestor` は偽になる）。",
+    "confidence": "medium",
+    "source": "handoff-audit-nightly:8e62823031d40ff96253f1dc9fd5b521217cbfe88a7be874ad8b3c015e7e5d0a / 2026-11-04 tool-name-route レビューで route（`codex-do.mjs`）を手順文へ書き直して採用"
   },
   {
     "pattern": "他AIレーン修復を hook 拒否で断念する",
-    "route": "hook 拒否を理由に修復を断念する前に、当ターンの tool_result から command・hook 名・error/denied 本文・exit code を直接確認する。実記録が無ければ『未確認』とし、同じ失敗コマンドを反復せず、別 shell、別 cwd、または登録済み `node tools/*` の順に安全な代替経路を1回ずつ試す。Codex レーンを再試行する場合は保存済み指示書を入力に `codex-do.mjs` を前景・単発・timeout 付きで実行し、非0または hook 拒否なら Claude 本体で同じ作業を続行する。過去ログの記述だけで PC 権限や現在の hook 状態を断定しない。",
-    "confidence": "high",
-    "source": "handoff-audit-nightly:15504fceda6d8166a9289547db496a5a39e6343ebd51b7ef04081dea8ce85843 / 2026-11-03 tool-name-route レビューで `codex-do.mjs` を直接証拠・代替経路・本体続行の手順へ置換"
+    "route": "レーン修復は「hook に拒否されたので直せない」で終わらせない。①実測は `node tools/lane-doctor.mjs --probe`（レーン別の疎通・鍵・残量を測る）、修復手順の正本は `tools/gate-remedies.md` の lane-repair-first-gate 節と GATE_CONTRACT の remedies。②修復不能と記録するのは `node tools/lane-repair-log.mjs --lane <名> --tried \"<試した手段>\" --result unfixable` で、拒否の生ログ（error 文字列・exit コード）を添える。③Bash が hook に拒否されたら、同じ処理を `node tools/*.mjs`・`tools/llm-ask.mjs`・`tools/fleet-mail.mjs --exec codex`（生きている受信 PC）など別経路で当ターンに試す。試行記録が無い状態で「全コマンドが hook に止められている」「修復不可」と断定しない（未試行は「未確認」と書く）。",
+    "confidence": "medium",
+    "source": "handoff-audit-nightly:15504fceda6d8166a9289547db496a5a39e6343ebd51b7ef04081dea8ce85843 / 2026-11-04 tool-name-route レビューで route（`codex-do.mjs`）を手順文へ書き直して採用"
   },
   {
     "pattern": "社外・顧客宛チラシ案の選択と送信",
-    "route": "案の比較と推奨案の選定は Claude 側で済ませ、宛先・推奨理由・送信本文・添付予定ファイルをチャットに完成形で表示する。社外送信は `feedback-confirm-before-external-send` に従い、この完成形への kim の承認を得るまで実行しない。承認後は利用可能な登録済み送信経路を直接呼び、送信結果と添付を read-back する。LINE の受信確認は取得不能なので、既読・返信を推測したり kim に案の選択を戻したりしない。送信経路が無ければ未確認の事実と完成本文を示し、送信済みとは書かない。",
+    "route": "案の選択は Claude が決める（おすすめ案を既定にし、kim に「どの案にするか」を返させない）。社外へ送る前に、宛先・件名・本文・添付（画像は Drive か添付）を完成形で1回提示し、送信可否の承認だけを取る（feedback-confirm-before-external-send）。承認後は Claude が送信まで実行する: メールは `node tools/gmail-draft.mjs --to <addr> --subject <件名> --body-file <本文.txt> [--attach <file>]` で seisaku-team@orgiast.jp の下書きを作り、`node tools/gmail-draft.mjs --send <draftId>`（スレッド整合性を自動検査）で送る。LINE グループは `node tools/line-group-send.mjs --group <group|名前> --text-file <本文.txt> [--image <jpg>]`（画像は1MB以下）。送信後は返り値（messageId/threadId・HTTP status・sentMessages 件数）を読み戻して報告し、kim に送信操作を求めない。案を見せる時は選択肢ラベルだけでなく中身（本文・画像）を同じ文に書く。",
     "confidence": "high",
-    "source": "handoff-audit-nightly:63678278063c518091b8f1116c79b741c1e44215e61499cbf587a5e282dbc1e6 / 2026-11-03 tool-name-route レビューで `チャット表示` を選定・事前承認・送信結果確認の手順へ置換"
+    "source": "handoff-audit-nightly:63678278063c518091b8f1116c79b741c1e44215e61499cbf587a5e282dbc1e6 / 2026-11-04 tool-name-route レビューで route（`チャット表示`）を手順文へ書き直して採用"
   },
   {
     "pattern": "LINE グループへの送信（公式LINE経由）",
-    "route": "公式LINE経由の送信は、まず対象グループ・宛先・本文・添付をチャットに完成形で表示し、社外宛なら送信前承認を得る。承認後に、その公式LINEアカウントでグループ送信できる登録済み API／Webhook 経路が実在するかを当ターンで照会し、実在する場合だけ送信して応答を保存する。公式LINEの1対1 Messaging API と LINEグループ送信を同一視しない。登録済み経路が無い場合は本文表示までとし、kim に送信済み・返信取得済みと誤報しない（LINE返信は Webhook 保存が無ければ取得不能）。",
+    "route": "その場の Claude Code から直接送る（kim-PC への中継をしない）。`node tools/line-group-send.mjs --group <groupId|グループ名> --text-file <本文.txt> [--image <png/jpg> ...] [--retry-key <uuid>] [--dry-run]`。送信者は公式「オージャスト金(読取専用)」@458zwuhb で、参加済みグループにだけ送れる（group 名は Supabase `channel_messages` の subject=`LINE: <名前>` で解決）。画像は Supabase `line-media/outbound/` に上がり1年有効の署名URLで送るため1MB以下へ JPEG 化する。鍵は env → `~/.claude/line-send.env` → 営業アプリ Vercel の development env の順で解決。完了は push の HTTP 200 と sentMessages 件数・quota consumption の増分（グループは人数ぶん消費、無料枠 月200通）で読み戻す。同じ `--retry-key` で再実行すれば二重送信しない。社外グループは本文全文を kim に1回見せて承認を取ってから送る。チャットに本文を貼って終わりにしない。",
+    "confidence": "medium",
+    "source": "handoff-audit-nightly:551d30db529f1c5ff7634cb1877a612c8ce1230fa138de8da6ecfc070e3618c2 / 2026-11-04 tool-name-route レビューで route（`チャットに本文`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "他AIレーン(coze/gemini/deepseek)が枠切れ・タイムアウトで失敗し、Sonnet 禁止を理由に未実装で終える",
+    "route": "禁止されているのは Claude(Sonnet/Opus) を既定モデルにすることであって実装の停止ではない。`node tools/codex-do.mjs \"<指示>\" --cwd <path> --timeout <秒> --origin unattended` は内蔵フォールバックを持ち、`--no-fallback` を付けない限り codex が枠切れ・タイムアウトなら別レーン（gemini-cli / cheap-code:deepseek 等）へ自動で落ちる。落ちたレーンは `node tools/lane-doctor.mjs --probe --json` で provider ごとの ok/errorKind と `providerResetUntil`（復帰時刻）を read-back して報告に書く。フォールバックも全滅したら Claude 本体で当ターン内に実装まで終え、『Sonnet 禁止だから未実装』『レーン上限だから保留』で handoff しない（exit 75 の保留は無人割当超過のときだけ）。",
     "confidence": "high",
-    "source": "handoff-audit-nightly:551d30db529f1c5ff7634cb1877a612c8ce1230fa138de8da6ecfc070e3618c2 / 2026-11-03 tool-name-route レビューで `チャットに本文` を事前承認・送信経路照会・応答保存の手順へ置換"
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=codex-do.mjs）/ 2026-11-04 route を手順化"
+  },
+  {
+    "pattern": "AIレーン停止の表示・復帰予定・検知ゲートの実装（lane-doctor 経由の復旧）",
+    "route": "レーンの停止・復帰予定は記憶や推測で書かず `node tools/lane-doctor.mjs --probe --json` の実測から作る（provider ごとの ok/errorKind、`providerResetUntil` の復帰時刻、cooldown 残り、キー有無）。読み取り専用で状態だけ見たいときは `--read-only`、状態を保存して通知まで行うのは `--probe` を付けない通常実行。復旧は停止レーンを避けて `node tools/codex-do.mjs ... --timeout <秒>` を前景・単発で回し、`--no-fallback` を付けない（自動フォールバックに任せる）。『復帰予定』を書くときは必ず lane-doctor の実測値か cooldown の retryAt を引用する。",
+    "confidence": "medium",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=codex-do.mjs）/ 2026-11-04 route を手順化"
+  },
+  {
+    "pattern": "他AIレーン停止中の通知送信",
+    "route": "通知は `node tools/notify-kim.mjs \"<本文>\" [--kind info]`（`--kind ask` は kim の判断が要るときだけ／`--kim-action-required` は人が1アクション必要ときだけ）。Discord bot トークンが無い PC では送信されず受信箱（`tools/kim-inbox.mjs` の addItem）に積まれる＝それが正常経路なので、通知できなかったことを理由に作業を止めない。exit 3 は『配信ブロック（判断は受信箱へ）』であって失敗ではない。外部（社外 Discord・メール・SNS）への送信は行わない。",
+    "confidence": "medium",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=codex-do.mjs）/ 2026-11-04 route を手順化"
+  },
+  {
+    "pattern": "VS Code タブへの Enter 送信・古いタブの ✕ を user に依頼",
+    "route": "VS Code のタブ操作（Enter 押下でのセッション起動・古いタブの ✕・入力欄への貼り付け）を user に依頼しない。次セッションの起動は `node tools/next-session-launch.mjs`（runner が次セッションを起動する経路）で行い、claude.exe の更新可否は `tools/claude-exe.mjs` の `findClaudeInVersionedDir` で実体パスとバージョンを read-back して判定する。起動に失敗したら exit コードと stderr を報告し、user の手作業には戻さない。",
+    "confidence": "medium",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=codex-do.mjs 4件を統合）/ 2026-11-04 route を手順化"
+  },
+  {
+    "pattern": "セッション締めでの TODO 一覧確認",
+    "route": "残TODOは transcript の grep ではなく `~/.claude/next-session.md` の `## 残TODO` ブロックを直接読む（ローテーション・退避は `node tools/next-session-rotate.mjs` が行うので、古いスナップショットは archive/ 側を見る）。締めでは next-session.md の該当 TODO 行だけを行単位で置換し、全文を上書きしない。transcript grep は『その発言が本当にあったか』の証拠確認にだけ使い、TODO 一覧の正本にはしない。",
+    "confidence": "medium",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=transcript grep）/ 2026-11-04 route を手順化"
+  },
+  {
+    "pattern": "freee等SaaSのログインをパスワード入力理由でuserに手渡す",
+    "route": "ログイン画面が要る操作でも、まず Claude 側の認証済み経路を当ターンで試す。freee の API 操作は `node tools/freee-query.mjs`（トークンは購買部アプリの Neon DB `freee_tokens` にあり、期限切れは refresh_token を回して書き戻す＝user のパスワード入力は不要）。Web 画面でしかできない操作（明細の無視・ファイルボックス等）は内蔵ブラウザ/Playwright で、保存済みセッション（storageState・Chrome プロファイル）を再利用して Claude が操作する。ログインが切れていた場合も①API/refresh トークン経路 ②保存済みセッション ③画面の代替 API を順に実試し、失敗の error / HTTP ステータスをそのまま記録してから初めて「本人の操作が要る」と書く。パスワード入力の代行不可・スクショ送付を理由に手渡さない。実例: 2026-10-20 keiri2@ の freee 権限変更で『パスワード入力が要るので代行できません』と書き rule 3/12 で差し戻された。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:17608b57a284a9603d6e6b68f30870545d5e323d19a3c215b6faeccf81215a93 / 2026-11-04 tool-name-route レビューで route（`vercel env`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "Webアプリの定期集計・承認フローを経理担当の画面操作に手渡す",
+    "route": "定期集計・承認・freee 登録は Claude が API で実行する。keiri-hub の立替アプリは管理 API を持ち、集計は `POST /api/tatekae/admin/batches`（body に settlement_date）、freee 登録は `POST /api/tatekae/admin/batches/<id>/register`。認証は Supabase の @orgiast.jp セッションで、ログインリンクは Gmail DWD（`node tools/gmail-search.mjs`）で読めるため Claude が自分のセッションを作れる。承認・差戻の判断だけを kim/経理に結果として提示し、画面操作の手順を書かない。実行できなかった場合は叩いたエンドポイントと HTTP ステータスを記録し、「Claude では不可能」「経理の方が操作するだけで完結」と断定しない。実例: 2026-10-21 に『経理の方が管理画面を開いて操作するだけで完結します』と書き rule 2/3/12 で差し戻された。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:2126335fd3db14d9cc506619c8662aad5b893053825e5569effa3540322ee566 / 2026-11-04 tool-name-route レビューで route（`vercel env`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "外部送信を伴うテスト実行の可否を user に確認依頼",
+    "route": "送信を伴うテストの可否は Claude が判断して実行する。①送信先がテスト用（自分宛メール・テストギルド/チャンネル・テスト事業所）なら同意を取らずに実行し、送信ログ/API の読み戻しで確認する。②本番の社内チャンネルへの通知はテスト投稿先か dry-run を用意し、実測済みの既存経路（2026-10-22 の #経理チーム 投稿）で Claude が実行し、投稿 ID を読み戻す。③社外・顧客宛だけは送信前に1回だけ全文を見せて同意を取り、実行は Claude が `node tools/gmail-draft.mjs --send` / `node tools/line-group-send.mjs` 等で行う。「送ってよいか確認してから」で handoff せず、本物の通知を飛ばしたくない場合は宛先をテスト用に差し替える。実例: 2026-10-23 に『実際の送信は #経理チームに本物の通知が飛ぶので、テストで送ってよいかを確認してから』と書き rule 2 で差し戻された。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:25e3c6106928cc635de26df38db0d4d0f0aa698d5c0f021df5688e7148aa0bae / 2026-11-04 tool-name-route レビューで route（`チャット表示`）を手順文へ書き直して採用"
   }
 ]

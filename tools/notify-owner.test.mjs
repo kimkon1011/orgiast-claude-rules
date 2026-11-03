@@ -356,19 +356,42 @@ test('w018-PC は fleet-pc-map に discordId と notifyDiscordId を持つ', () 
   assert.ok(entry, 'w018-PC が fleet-pc-map.json に存在すること');
   assert.ok(String(entry.discordId || '').trim(), 'w018-PC に discordId が設定されていること');
   assert.ok(String(entry.notifyDiscordId || '').trim(), 'w018-PC に notifyDiscordId が設定されていること');
-  const missing = [];
+  assertNotifyRecipients(map);
+});
+
+const KNOWN_MISSING_NOTIFY = {
+  'kimko-PC': '使用者の Discord 未特定・2026-11-03',
+  'HP': '使用者の Discord 未特定・2026-11-03',
+  'nishi-PC': '使用者の Discord 未特定・2026-11-03',
+};
+
+function assertNotifyRecipients(map) {
   for (const [label, entry] of Object.entries(map)) {
-    if (label.startsWith('_') || label === '_unverified' || label === 'w018-PC') continue;
-    if (!entry || typeof entry !== 'object') continue;
-    const hasAccount = String(entry.account || '').trim();
-    if (!hasAccount) continue;
-    if (!String(entry.discordId || '').trim() || !String(entry.notifyDiscordId || '').trim()) {
-      missing.push(label + ': discordId=' + (entry.discordId || '(なし)') + ', notifyDiscordId=' + (entry.notifyDiscordId || '(なし)'));
+    if (label.startsWith('_') || !entry || typeof entry !== 'object') continue;
+    const hasId = Boolean(String(entry.notifyDiscordId || '').trim());
+    if (Object.hasOwn(KNOWN_MISSING_NOTIFY, label)) {
+      assert.ok(!hasId, `${label}: notifyDiscordId 設定済み。KNOWN_MISSING_NOTIFY の許可リストから消せ`);
+      continue;
+    }
+    if (String(entry.account || entry.owner || '').trim()) {
+      assert.ok(hasId, `${label}: notifyDiscordId が未登録`);
     }
   }
-  if (missing.length) {
-    console.log('INFO: 以下の PC 行は discordId/notifyDiscordId が不足しています（要調査）:');
-    for (const m of missing) console.log('  ' + m);
+}
+
+test('許可リスト外の account/owner 行の宛先不足は失敗する', () => {
+  for (const field of ['account', 'owner']) {
+    for (const notifyDiscordId of [undefined, '', '   ']) {
+      assert.throws(() => assertNotifyRecipients({ 'new-PC': { [field]: 'user@example.com', notifyDiscordId } }), /new-PC: notifyDiscordId が未登録/);
+    }
+    assertNotifyRecipients({ 'new-PC': { [field]: 'user@example.com', notifyDiscordId: '42' } });
+  }
+  assertNotifyRecipients(Object.fromEntries(Object.keys(KNOWN_MISSING_NOTIFY).map(label => [label, { account: 'user@example.com' }])));
+});
+
+test('既知の抜けに宛先を設定したら許可リストの削除を要求する', () => {
+  for (const label of Object.keys(KNOWN_MISSING_NOTIFY)) {
+    assert.throws(() => assertNotifyRecipients({ [label]: { account: 'user@example.com', notifyDiscordId: '42' } }), /許可リストから消せ/);
   }
 });
 
@@ -401,4 +424,21 @@ test('DMを保留してもローカル所有者のセッション受け箱へ保
  const rows = fs.readFileSync(path.join(options.home, '.claude', 'auto-progress-inbox', '_owner.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
  assert.equal(rows.length, 1);
  assert.equal(rows[0].text, text);
+});
+
+test('宛先未解決の inbox fallback は戻り値と台帳に劣化を記録する', async t => {
+  const options = { ...localOptions(t), toast: () => false };
+  const result = await notifyOwner('nishi@orgiast.jp', '進捗', options);
+  assert.equal(result.ok, true);
+  assert.equal(result.channel, 'inbox');
+  assert.equal(result.degraded, 'no-recipient');
+  const ledger = JSON.parse(fs.readFileSync(path.join(options.home, '.claude', 'logs', 'owner-notify-fallback.jsonl'), 'utf8'));
+  assert.equal(ledger.degraded, 'no-recipient');
+  for (const receipt of [result, ledger]) {
+    assert.equal(receipt.attempts.find(a => a.channel === 'discord').degraded, 'no-recipient');
+    assert.equal(receipt.attempts.find(a => a.channel === 'inbox').degraded, 'no-recipient');
+  }
+  const failedDm = await notifyOwner('nishi@orgiast.jp', 'DM失敗', { ...options, userId: '42', notify: async () => { throw new Error('offline'); } });
+  assert.equal(failedDm.degraded, undefined);
+  assert.ok(failedDm.attempts.every(a => a.degraded === undefined));
 });

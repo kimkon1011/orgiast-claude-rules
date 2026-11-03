@@ -211,7 +211,8 @@ export async function notifyOwner(owner, text, options = {}) {
       reason = result?.reason || 'Discord DM delivery failed or message id missing';
     } catch { reason = 'Discord DM delivery failed'; }
   }
-  attempts.push({ channel: 'discord', ok: false, skipped: !valid || !discordEnabled, reason });
+  const degradation = !valid && discordEnabled ? { degraded: 'no-recipient' } : {};
+  attempts.push({ channel: 'discord', ok: false, skipped: !valid || !discordEnabled, reason, ...degradation });
   if (!valid && discordEnabled) await alertUnresolvedRecipient(owner, options);
   // Local fallbacks must never deliver another PC owner's private progress here.
   if (!owner || owner.toLowerCase() !== resolveOwner(options).toLowerCase()) {
@@ -222,7 +223,7 @@ export async function notifyOwner(owner, text, options = {}) {
     : safeText;
   let inboxOk = localInboxOk;
   try { if (!inboxOk) { await prependInbox(home, fallbackText, at); inboxOk = true; } } catch { /* recorded below */ }
-  attempts.push({ channel: 'inbox', ok: inboxOk });
+  attempts.push({ channel: 'inbox', ok: inboxOk, ...degradation });
   try { if (!local || kim) appendOwnerInbox(home, { source: 'notify-owner', text: safeText }); } catch { /* legacy chat inbox */ }
   const toast = async (body, purpose) => {
     let receipt;
@@ -250,7 +251,7 @@ export async function notifyOwner(owner, text, options = {}) {
   }
   const channel = sent ? 'toast' : inboxOk ? 'inbox' : 'none';
   const progressToast = attempts.find(a => a.purpose === 'progress');
-  return finish({ delivered: channel, channel, ok: channel !== 'none', reason, toastExitCode: progressToast?.exitCode ?? null });
+  return finish({ delivered: channel, channel, ok: channel !== 'none', ...degradation, reason, toastExitCode: progressToast?.exitCode ?? null });
 }
 
 export async function main(args = process.argv.slice(2), options = {}) {

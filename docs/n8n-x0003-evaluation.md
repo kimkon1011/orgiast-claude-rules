@@ -18,5 +18,5 @@
 
 ### 照合メモ
 - Slack/Discord 通知用は今回上限枠に入れず（Slack/ 9 件・Discord/ 4 件は ボット・監視系で受付通知に直結せず）。通知は候補 1 の後段に別途追加する前提。必要なら iter3 で Slack/Discord を差し替え検討。
-- n8n の所在（Gmail 直接照会, seisaku-team@ 宛）: n8n Cloud アカウントが存在し、サインアップ確認・Welcome・「ワークフロー自動停止」通知・「trial has ended」通知を確認。トライアル終了済みで現在の稼働プランは未確認。本番 n8n への投入は承認待ちのため行わない（A2）。
+- n8n の所在（Gmail seisaku-team@ を直接照会）: n8n Cloud の workspace「orgiast」は 2026-05-27 13:02 JST に「Your n8n trial has ended」（onboarding@info.n8n.io）を受信、3日後に inactive・データは90日保持（≒2026-08 下旬まで）と記載。現在は無効または削除済みの可能性が高く、稼働中の本番 n8n は確認できていない。本番投入は承認待ちのため行わない（A2）。
 - C3（静的審査）・C4（隔離インポート）・承認依頼文は未実施。

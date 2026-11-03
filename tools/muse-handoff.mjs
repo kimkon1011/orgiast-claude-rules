@@ -19,7 +19,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 export const BUNDLE_MAGIC = 'muse1';
 export const DEFAULT_RECIPIENT = 'muse-wonder';
@@ -269,10 +269,6 @@ export async function main(argv) {
   }
 }
 
-export function isMainModule() {
-  return process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-}
-
-if (isMainModule()) {
+if (isEntry(import.meta.url)) {
   main(process.argv.slice(2)).then((code) => { process.exitCode = code; });
 }

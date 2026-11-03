@@ -1,4 +1,4 @@
-# X-0003 n8n 事前構築ワークフロー取り込み評価（途中経過: C1・C2 まで）
+# X-0003 n8n 事前構築ワークフロー取り込み評価（途中経過: C1〜C3 まで）
 
 ## C1 出典（実取得 2026-11-04, gh api）
 - リポジトリ: https://github.com/enescingoz/awesome-n8n-templates （stars 26252, 非アーカイブ）
@@ -19,4 +19,18 @@
 ### 照合メモ
 - Slack/Discord 通知用は今回上限枠に入れず（Slack/ 9 件・Discord/ 4 件は ボット・監視系で受付通知に直結せず）。通知は候補 1 の後段に別途追加する前提。必要なら iter3 で Slack/Discord を差し替え検討。
 - n8n の所在（Gmail seisaku-team@ を直接照会）: n8n Cloud の workspace「orgiast」は 2026-05-27 13:02 JST に「Your n8n trial has ended」（onboarding@info.n8n.io）を受信、3日後に inactive・データは90日保持（≒2026-08 下旬まで）と記載。現在は無効または削除済みの可能性が高く、稼働中の本番 n8n は確認できていない。本番投入は承認待ちのため行わない（A2）。
-- C3（静的審査）・C4（隔離インポート）・承認依頼文は未実施。
+- C4（隔離インポート）・承認依頼文は未実施。
+
+## C3 静的審査（2026-11-04, tools/n8n-workflow-audit.mjs ／ 校正テスト tools/n8n-workflow-audit.test.mjs 4件 pass: 安全例 pass・危険例 reject）
+審査項目: 実行系ノード(Code/Execute Command/Function/SSH)・ハードコード秘密・難読化/動的実行・外部 URL・外部送信/課金・active フラグ。審査対象は固定 SHA 上の取得物（SHA256 先頭16桁で対応）。
+
+| # | SHA256(16) | ノード | 機械判定 | 重大指摘 | 手動/独立確認 | 採否 |
+|---|---|---|---|---|---|---|
+| 1 | 8a629f139b29655a | 25 | pass | なし（Gmail 送信3ノード=medium、URL は docs/community のみ） | — | 候補（送信ノード要承認・無効化前提） |
+| 2 | aab4b697d91a8265 | 6 | reject(Code 1) | Code「Validate」（入力検証のみ。通信/FS/eval なし） | 本人+deepseek-v4-flash=無害 | 条件付き採用（Welcome Email 送信ノード削除前提） |
+| 3 | 1182fcc95492893a | 12 | pass | なし（下書き作成のみ。active:true→false 化要） | — | 採用可 |
+| 4 | 876f40e2ea016d69 | 23 | reject(Code 1) | Code「Convert raw to base64」（Buffer 変換のみ）。外部 URL は作者宣伝(workfloows.com, YouTube) | 本人+deepseek=無害 | 条件付き採用（宣伝リンクは Sticky Note 内のみ） |
+| 5 | 61960ec6226e386e | 38 | reject(Code 1) | Code「Format Notion Page Blocks」（整形のみ。正規表現失敗時の例外処理なし）。固定の Airtable URL 2件が含まれる（要除去） | 本人+deepseek=要注意（軽微） | 条件付き採用（通知送信2ノード無効化・Airtable URL 除去） |
+
+- 機械判定は Code ノードの存在だけで保守的に reject とする設計。内容を読んだ結果、ハードコード秘密・難読化・ネットワーク/FS/プロセス操作は 5 件とも 0。
+- 独立確認は llm-ask(deepseek) による Code 本文の判定のみ。codex-do 等によるフル審査（全ノード JSON）は未実施のため、重大指摘ゼロの最終承認は C4 の前に再確認する。

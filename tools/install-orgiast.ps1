@@ -94,29 +94,44 @@ if (Have git) { OK "git あり" } else { Warn "git が入りませんでした�
 # 非対話/非昇格のコンテキストでは黙って失敗する。winget が入らなかった場合は
 # 公式zipをユーザー領域へ展開して昇格なしで導入する(フォールバック)。
 function Install-NodeUserScope {
+  $zip = $null
+  $tmp = $null
   try {
-    $arch = if ([Environment]::Is64BitOperatingSystem) { 'x64' } else { 'x86' }
-    $idx = Invoke-RestMethod -UseBasicParsing 'https://nodejs.org/dist/index.json'
-    $lts = ($idx | Where-Object { $_.lts } | Select-Object -First 1).version
-    if (-not $lts) { return $false }
-    $url = "https://nodejs.org/dist/$lts/node-$lts-win-$arch.zip"
-    $zip = Join-Path $env:TEMP ("node-" + $lts + ".zip")
-    $tmp = Join-Path $env:TEMP ('node-ext-' + [guid]::NewGuid().ToString('N'))
     $dstRoot = Join-Path $env:LOCALAPPDATA 'Programs\nodejs'
-    Invoke-WebRequest -UseBasicParsing $url -OutFile $zip
-    Expand-Archive -Path $zip -DestinationPath $tmp -Force
-    $inner = Join-Path $tmp ("node-$lts-win-$arch")
-    if (-not (Test-Path $inner)) { return $false }
-    if (-not (Test-Path $dstRoot)) { New-Item -ItemType Directory -Force -Path $dstRoot | Out-Null }
-    Copy-Item (Join-Path $inner '*') $dstRoot -Recurse -Force
-    # ユーザーPATHへ恒久追加 + 現セッション(と以降の子プロセス)へ反映
+    # 前回の実行で展開済みならダウンロードし直さずPATHだけ直す(冪等)。
+    if (-not (Test-Path (Join-Path $dstRoot 'node.exe'))) {
+      $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') { 'arm64' } elseif ([Environment]::Is64BitOperatingSystem) { 'x64' } else { 'x86' }
+      $idx = Invoke-RestMethod -UseBasicParsing 'https://nodejs.org/dist/index.json'
+      $lts = ($idx | Where-Object { $_.lts } | Select-Object -First 1).version
+      if (-not $lts) { return $false }
+      $url = "https://nodejs.org/dist/$lts/node-$lts-win-$arch.zip"
+      $zip = Join-Path $env:TEMP ("node-" + $lts + "-" + $arch + ".zip")
+      $tmp = Join-Path $env:TEMP ('node-ext-' + [guid]::NewGuid().ToString('N'))
+      Invoke-WebRequest -UseBasicParsing $url -OutFile $zip
+      Expand-Archive -Path $zip -DestinationPath $tmp -Force
+      $inner = Join-Path $tmp ("node-$lts-win-$arch")
+      if (-not (Test-Path $inner)) { return $false }
+      if (-not (Test-Path $dstRoot)) { New-Item -ItemType Directory -Force -Path $dstRoot | Out-Null }
+      Copy-Item (Join-Path $inner '*') $dstRoot -Recurse -Force
+    }
+    # ユーザーPATHへ恒久追加 + 現セッション(と以降の子プロセス)へ反映。
+    # ユーザーPATHが未設定(null)でも落ちないよう、要素を組み立ててから join する。
+    # (null のまま TrimEnd すると catch に握り潰され、node は入ったのに失敗扱いになる)
+    $parts = @()
     $userPath = [Environment]::GetEnvironmentVariable('Path','User')
-    if (($userPath -split ';') -notcontains $dstRoot) { [Environment]::SetEnvironmentVariable('Path', (($userPath.TrimEnd(';')) + ';' + $dstRoot), 'User') }
+    if ($userPath) { $parts = @($userPath -split ';' | Where-Object { $_ }) }
+    if ($parts -notcontains $dstRoot) {
+      $parts += $dstRoot
+      [Environment]::SetEnvironmentVariable('Path', ($parts -join ';'), 'User')
+    }
     if (($env:Path -split ';') -notcontains $dstRoot) { $env:Path += ";$dstRoot" }
-    Remove-Item $zip -Force -ErrorAction SilentlyContinue
-    Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
     return (Have node)
   } catch { return $false }
+  finally {
+    # 早期 return / 例外でも一時ファイルを残さない。
+    if ($zip) { Remove-Item $zip -Force -ErrorAction SilentlyContinue }
+    if ($tmp) { Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+  }
 }
 if (-not (Have node)) {
   Warn "Node.js が無いので導入します"

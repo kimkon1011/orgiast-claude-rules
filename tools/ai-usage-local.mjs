@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import os from 'node:os';
-import { COST_PER_MILLION } from './llm-fallback.mjs';
+import { COST_PER_MILLION, executorCostUsd } from './llm-fallback.mjs';
 import { readLedger, jstMonthKey } from './cost-monthly-report.mjs';
 import { collectClaudeStats, collectCodexUsage } from './usage-stats.mjs';
 import { summarizeGeminiMonth } from './cost-work-loop.mjs';
@@ -35,7 +35,7 @@ export function aggregateExecutor(rows, { jpyPerUsd = 150, months = 13, now = ne
       (gemini[month] ||= []).push({ ...row, provider: 'gemini', usd: priced });
     } else if (entry.jpy !== null) {
       if (!prices || !token(row.in) || !token(row.out)) { entry.jpy = null; entry.billing = '判定不能'; }
-      else entry.jpy += (row.in * prices[0] + row.out * prices[1]) / 1e6 * jpyPerUsd;
+      else entry.jpy += (executorCostUsd(row) ?? 0) * jpyPerUsd;
     }
   }
   for (const [month, records] of Object.entries(gemini)) {

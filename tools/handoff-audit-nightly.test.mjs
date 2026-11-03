@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mergeKnowledge, enqueueTodos, selectTargets, runNightly, readJsonl, promotionFile, deferralLedgerFile, deferralTodo, deferralDetectorFile } from './handoff-audit-nightly.mjs';
 import { parseHandoff } from './auto-session.mjs';
+import { isToolNameRoute, enqueueToolRouteReview } from './handoff-audit-nightly.mjs';
 const detectorSource = fs.readFileSync(new URL('./permanent-fix-deferral-scan.mjs', import.meta.url), 'utf8');
 const cloneHome = t => {
   const home = fs.mkdtempSync(path.join(import.meta.dirname, '.audit-detector-test-'));
@@ -16,6 +17,57 @@ const writeClone = (home, text) => {
   return { ORGIAST_NIGHTLY_REPO: path.join(home, 'clone') };
 };
 const item = { pattern: 'API 確認', route: 'gh api', confidence: 'high' };
+test('knowledge.json の全 route は automation-routes の値（道具名）だけになっていない', () => {
+  const knowledge = JSON.parse(fs.readFileSync(new URL('./handoff-audit-knowledge.json', import.meta.url), 'utf8'));
+  const routes = JSON.parse(fs.readFileSync(new URL('./automation-routes.json', import.meta.url), 'utf8'));
+  for (const entry of knowledge) assert.equal(isToolNameRoute(entry.route, Object.values(routes).flat()), false, entry.pattern);
+});
+test('mergeKnowledge は道具名 route を confidence high でも昇格せず reason=tool-name-route で候補に保留する', () => {
+  const merged = mergeKnowledge([], [item], [], 'one', ['ｇｈ　 api ']);
+  assert.deepEqual(merged.knowledge, []);
+  assert.deepEqual(merged.promoted, []);
+  assert.deepEqual(merged.candidates, [{ ...item, observation: 'one', reason: 'tool-name-route' }]);
+  assert.equal(isToolNameRoute('GH API', ['gh api']), false);
+  assert.equal(isToolNameRoute('gh api で確認する', ['gh api']), false);
+  assert.equal(isToolNameRoute('gh api'), false);
+});
+test('道具名 route は前回観測(prior)があっても昇格しない', () => {
+  const medium = { ...item, confidence: 'medium' };
+  const prior = { ...medium, observation: 'one' };
+  const merged = mergeKnowledge([], [medium], [prior], 'two', ['gh api']);
+  assert.deepEqual(merged.knowledge, []);
+  assert.deepEqual(merged.promoted, []);
+  assert.deepEqual(merged.candidates, [prior, { ...medium, observation: 'two', reason: 'tool-name-route' }]);
+});
+test('道具名 route の同一観測は候補に重複して積まない', () => {
+  const first = mergeKnowledge([], [item, item], [], 'one', ['gh api']);
+  assert.equal(first.candidates.length, 1);
+  const again = mergeKnowledge([], [{ ...item, pattern: 'ＡＰＩ　確認 ', route: 'ｇｈ　 api ' }], first.candidates, 'one', ['gh api']);
+  assert.deepEqual(again, first);
+});
+test('夜間実行: 道具名 route は knowledge を書き換えず、監査TODOでなく見直しTODOを1本だけ積む', async t => {
+  const filed = deferralHome(t, [{ ts: new Date(2026, 8, 11, 10).toISOString(), sessionId: 'tool-route', verdict: 'pass', fired: true, evidence: { text: '[手渡し判定]', tools: [] } }]);
+  const learned = { pattern: 'PR の作成を user に返す', route: 'gh pr create', confidence: 'high' };
+  const nextFile = path.join(filed.dir, 'next-session.md');
+  const previous = '## 残TODO\n1. 既存作業\n';
+  fs.writeFileSync(nextFile, previous);
+  const before = fs.readFileSync(filed.knowledgeFile, 'utf8');
+  const result = await runNightly({ ...filed.options, ask: async () => ({ verdict: 'pass', violations: [], learned: [learned] }) });
+  assert.equal(result.reviewed, 1);
+  assert.equal(result.promoted, 0);
+  assert.equal(result.added, 0);
+  assert.equal(fs.readFileSync(filed.knowledgeFile, 'utf8'), before);
+  const todos = parseHandoff(fs.readFileSync(nextFile, 'utf8')).todos;
+  assert.equal(todos.filter(x => x.includes('[handoff-audit:tool-name-route]')).length, 1);
+  assert.ok(!todos.some(x => x.includes('再発防止の経路: gh pr create')), '道具名 route の監査TODOは積まない');
+  assert.equal(enqueueToolRouteReview(fs.readFileSync(nextFile, 'utf8'), 3), fs.readFileSync(nextFile, 'utf8'), '見直しTODOは重複させない');
+  assert.equal(enqueueToolRouteReview(previous, 0), previous);
+  assert.deepEqual(readJsonl(promotionFile(filed.home)), []);
+  const candidates = readJsonl(path.join(filed.dir, 'handoff-audit-candidates.jsonl'));
+  assert.equal(candidates.length, 1);
+  assert.deepEqual(candidates[0], { ...learned, observation: candidates[0].observation, reason: 'tool-name-route' });
+  assert.ok(candidates[0].observation);
+});
 test('promotionFileはhome配下のgit管理外台帳を返す', () => {
   assert.equal(promotionFile('/example/home'), path.join('/example/home', '.claude', 'handoff-audit-promotions.jsonl'));
 });
@@ -77,7 +129,9 @@ test('前日passとretry-cap/blocked後passを選ぶ、当日は除外', () => {
     { ...row, sessionId: 'c', verdict: 'retry-cap', auditEvidence: row.evidence }], since, until);
   assert.equal(targets.length, 3);
 });
-test('夜間実行: candidates永続化・別応答で昇格・再実行冪等・未知経路排除', async t => {
+// 監査は route を knowledge か automation-routes から「そのまま引用」させる。knowledge 側の route は一意性ガードで、
+// automation-routes 側は道具名ガードで昇格しないため、夜間実行は候補の保留だけを行い knowledge を書き換えない。
+test('夜間実行: candidates永続化・道具名は2観測でも昇格しない・再実行冪等・未知経路排除', async t => {
   const home = fs.mkdtempSync(path.join(import.meta.dirname, '.audit-nightly-test-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const dir = path.join(home, '.claude'); fs.mkdirSync(dir);
@@ -89,18 +143,16 @@ test('夜間実行: candidates永続化・別応答で昇格・再実行冪等�
   const existing = JSON.stringify({ pattern: '既存', route: '保持' }) + '\n';
   fs.writeFileSync(promotionFile(home), existing);
   const result = await runNightly(options);
-  assert.equal(result.promoted, 1);
-  const promotions = readJsonl(promotionFile(home));
-  assert.equal(promotions.length, 2);
-  assert.equal(promotions[1].route, item.route);
-  assert.equal(promotions[1].source, `handoff-audit-nightly:${promotions[1].observation}`);
-  assert.ok(Number.isFinite(Date.parse(promotions[1].ts)));
+  assert.equal(result.promoted, 0);
   const persisted = fs.readFileSync(promotionFile(home), 'utf8');
-  assert.ok(persisted.startsWith(existing));
-  assert.equal(result.added, 1); assert.equal(result.reviewed, 2);
-  assert.equal(readJsonl(path.join(dir, 'handoff-audit-candidates.jsonl')).length, 1);
-  assert.equal(JSON.parse(fs.readFileSync(knowledgeFile))[0].confidence, 'high');
-  assert.match(fs.readFileSync(path.join(dir, 'next-session.md'), 'utf8'), /gh api/);
+  assert.equal(persisted, existing);
+  assert.equal(result.added, 0); assert.equal(result.reviewed, 2);
+  const held = readJsonl(path.join(dir, 'handoff-audit-candidates.jsonl'));
+  assert.equal(held.length, 2, '別観測ごとに保留し、未知経路(invented)は積まない');
+  assert.ok(held.every(c => c.route === item.route && c.reason === 'tool-name-route'));
+  assert.equal(fs.readFileSync(knowledgeFile, 'utf8'), '[]');
+  const todos = parseHandoff(fs.readFileSync(path.join(dir, 'next-session.md'), 'utf8')).todos;
+  assert.equal(todos.length, 1); assert.match(todos[0], /tool-name-route/);
   assert.equal((await runNightly(options)).reviewed, 0);
   fs.writeFileSync(knowledgeFile, '[]'); // bootstrapのreset相当でも台帳は残る。
   assert.equal((await runNightly(options)).promoted, 0);

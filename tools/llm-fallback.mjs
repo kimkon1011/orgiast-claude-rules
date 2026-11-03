@@ -1,3 +1,4 @@
+import { routeCandidate } from './provider-routing.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -23,16 +24,50 @@ export const COST_PER_MILLION = Object.freeze({
   grok: [3, 15], kimi: [3, 15], mistral: [2, 6], cerebras: [0, 0], codex: [0, 0],
 });
 
+// Snapshot: https://openrouter.ai/api/v1/models (2026-10-28), USD / million tokens.
+// Historical native rows retain COST_PER_MILLION; routed rows use their actual model.
+export const OPENROUTER_COST_PER_MILLION = Object.freeze({
+  'moonshotai/kimi-k3.1-pro': [2.0, 10.0],
+  'deepseek/deepseek-v4.1-flash-1017': [0.15, 0.6],
+  'deepseek/deepseek-v4.1-flash': [0.14, 0.42],
+  'deepseek/deepseek-v4.1-flash:batch': [0.05, 0.15],
+  'deepseek/deepseek-v4-flash-vision-exp': [0.2156, 0.6468],
+  'deepseek/deepseek-v4-pro-0813': [0.66, 1.98],
+  'deepseek/deepseek-v4-flash-0731': [0.119, 0.238],
+  'moonshotai/kimi-k3': [0.15, 20.0],
+  'moonshotai/kimi-k3:batch': [2.28, 11.4],
+  'moonshotai/kimi-k2.7-code': [0.56, 3.1],
+  'deepseek/deepseek-v4-pro': [0.95526, 1.91052],
+  'deepseek/deepseek-v4-flash': [0.091, 0.182],
+  'moonshotai/kimi-k2.6': [0.65, 3.41],
+  'moonshotai/kimi-k2.5': [0.5, 2.5],
+  'deepseek/deepseek-v3.2': [0.28, 0.42],
+  'moonshotai/kimi-k2-thinking': [0.6, 2.5],
+  'deepseek/deepseek-v3.2-exp': [0.27, 0.41],
+  'deepseek/deepseek-v3.1-terminus': [0.27, 1.0],
+  'moonshotai/kimi-k2-0905': [0.6, 2.5],
+  'deepseek/deepseek-chat-v3.1': [0.25, 0.95],
+  'moonshotai/kimi-k2': [0.57, 2.3],
+  'deepseek/deepseek-r1-0528': [0.5, 2.15],
+  'deepseek/deepseek-chat-v3-0324': [0.29, 1.14],
+  'deepseek/deepseek-chat': [0.2574, 1.0287],
+});
+export function executorRates(provider, model) {
+  return OPENROUTER_COST_PER_MILLION[model] || COST_PER_MILLION[provider];
+}
+export function executorCostUsd(row) {
+  if (typeof row.usd === 'number' && Number.isFinite(row.usd) && row.usd >= 0) return row.usd;
+  const rates = executorRates(row.provider, row.model);
+  return rates ? ((Number(row.in) || 0) * rates[0] + (Number(row.out) || 0) * rates[1]) / 1e6 : null;
+}
+
 export const KNOWN_CHEAP_PROVIDERS = Object.freeze([
   'groq', 'glm', 'cerebras', 'deepseek', 'openrouter', 'gemini', 'gemini-cli',
   'grok', 'kimi', 'mistral', 'ollama', 'codex', 'qwen-code', 'genspark',
 ]);
 
 const ROUTING_TABLE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'routing-table.json');
-const GATEWAY_MODELS = Object.freeze({
-  deepseek: 'deepseek/deepseek-v4-flash',
-  kimi: 'moonshotai/kimi-k3',
-});
+
 
 // 会議・通話・Podcastの文字起こしでは話者と発言の帰属を優先し、DeepSeekを使わない。
 // OpenRouter経由でも同じモデルなので、直接APIからの迂回も防ぐ。
@@ -74,8 +109,7 @@ function dailyCost(file, timestamp) {
       let record;
       try { record = JSON.parse(line); } catch { return total; }
       if (localDay(record.t) !== day) return total;
-      const rates = COST_PER_MILLION[record.provider];
-      return rates ? total + ((Number(record.in) || 0) * rates[0] + (Number(record.out) || 0) * rates[1]) / 1_000_000 : total;
+      return total + (executorCostUsd(record) ?? 0);
     }, 0);
   } catch { return 0; }
 }
@@ -145,6 +179,8 @@ async function fetchBeforeDeadline(fetchImpl, request, deadline) {
 
 export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category = '', allowGatewayFallback = true, payloadFor, fetchImpl = fetch, onAttempt, onFailover, validateResponse, sleepImpl = defaultSleep, cooldownFile, ledgerFile, budgetFile, persistState = true, perProviderTimeoutMs, now = () => Date.now() }) {
   if (perProviderTimeoutMs != null && (!Number.isSafeInteger(perProviderTimeoutMs) || perProviderTimeoutMs <= 0 || perProviderTimeoutMs > 2147483647)) throw new Error('perProviderTimeoutMs must be a positive timer-safe integer');
+  start = routeCandidate(start);
+  chain = chain.map(routeCandidate);
   const home = process.env.ORGIAST_HOME || os.homedir();
   const timestamp = now();
   const cost = dailyCost(ledgerFile || path.join(home, '.claude', 'executor-usage.jsonl'), timestamp);
@@ -174,20 +210,17 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
   }
   const candidates = [];
   const seen = new Set();
-  const overrideModel = overrides?.gatewayBeforeDirect?.[start?.provider];
-  const gatewayModel = typeof overrideModel === 'string' && overrideModel.trim()
-    ? overrideModel : GATEWAY_MODELS[start?.provider];
-  // 明示された直APIを先頭に保ち、失敗時は同モデルのgatewayを通常チェーンより先に試す。
-  const expanded = allowGatewayFallback && gatewayModel
-    ? [start, { provider: 'openrouter', model: gatewayModel }, ...chain] : [start, ...chain];
+  // Gateway selection is routing, not failover; --no-fallback still uses OpenRouter.
+  const expanded = [start, ...chain];
   for (const candidate of expanded.filter(Boolean)) {
     if (!allowedForCategory(candidate, category)) continue;
-    if (seen.has(candidate.provider)) continue;
-    seen.add(candidate.provider);
+    const identity = `${candidate.provider}:${candidate.model}`;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     candidates.push(candidate);
   }
   if (demotedProviders.length) {
-    const rank = (candidate) => (demotedProviders.includes(candidate.provider) && candidate.provider !== start.provider ? 1 : 0);
+    const rank = (candidate) => (demotedProviders.includes(candidate.provider) && (candidate.provider !== start.provider || candidate.model !== start.model) ? 1 : 0);
     candidates.sort((a, b) => rank(a) - rank(b)); // Array#sort は安定なので同 rank 内の元順を保つ
     for (const provider of demotedProviders) {
       if (provider !== start.provider) console.error(`[routing] ${provider} はdemote中のため連鎖の末尾へ回します`);
@@ -302,14 +335,14 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
               const validationReason = typeof validation === 'string' ? validation : 'unusable response';
               lastReason = `unusable: ${validationReason}`;
               attempted++;
-              await onAttempt?.({ candidate, attempt, status: 'unusable', response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: candidate.provider !== start.provider });
+              await onAttempt?.({ candidate, attempt, status: 'unusable', response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: (candidate.provider !== start.provider || candidate.model !== start.model) });
               break;
             }
           }
-          await onAttempt?.({ candidate, attempt, status: 'ok', response, secs: (Date.now() - began) / 1000, failover: candidate.provider !== start.provider });
+          await onAttempt?.({ candidate, attempt, status: 'ok', response, secs: (Date.now() - began) / 1000, failover: (candidate.provider !== start.provider || candidate.model !== start.model) });
           clearCooldown(candidate.provider);
           saveCooldowns();
-          return { response, candidate, failover: candidate.provider !== start.provider, attempt };
+          return { response, candidate, failover: (candidate.provider !== start.provider || candidate.model !== start.model), attempt };
         }
         detail = (await response.clone().text().catch(() => '')).slice(0, 400);
         lastReason = `HTTP${status}${detail ? `: ${detail}` : ''}`;
@@ -318,7 +351,7 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
         lastReason = timedOut ? `timeout after ${perProviderTimeoutMs}ms` : `network: ${error?.message || String(error)}`;
       }
       attempted++;
-      await onAttempt?.({ candidate, attempt, status: timedOut ? 'timeout' : statusName(status), response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: candidate.provider !== start.provider });
+      await onAttempt?.({ candidate, attempt, status: timedOut ? 'timeout' : statusName(status), response, reason: lastReason, secs: (Date.now() - began) / 1000, failover: (candidate.provider !== start.provider || candidate.model !== start.model) });
       // groq の通常429の本文には `https://console.groq.com/settings/billing` が含まれるため、
       // 素の `billing` で判定すると日次上限(TPD)を恒久障害と誤判定する。恒久障害の文面だけを拾う。
       const permanentBilling = status === 429 && isPermanentBillingDetail(detail);

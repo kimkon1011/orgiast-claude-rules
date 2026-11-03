@@ -189,6 +189,12 @@ export async function checkLedger(ledger, { home, now, request, stderr = console
   }
   checkInbound(ledger, { home, now });
 }
+export function parseUntil(until, now) {
+  const relative = /^\+(\d+)(m|h|d)$/.exec(until || '');
+  const time = relative ? now + Number(relative[1]) * ({ m: 60000, h: HOUR, d: DAY }[relative[2]]) : Date.parse(until);
+  if (!Number.isFinite(time) || relative && Number(relative[1]) <= 0) throw new Error('invalid --until');
+  return time;
+}
 export function control(ledger, action, id, { reason, until, now }) {
   const item = ledger.items[id];
   if (!item) throw new Error('item not found');
@@ -197,8 +203,7 @@ export function control(ledger, action, id, { reason, until, now }) {
     item.status = 'cancelled';
     item.nextActionAt = null;
   } else if (action === 'defer') {
-    const relative = /^\+(\d+)d$/.exec(until || '');
-    const time = relative ? now + Number(relative[1]) * DAY : Date.parse(until);
+    const time = parseUntil(until, now);
     if (!Number.isFinite(time) || time <= now) throw new Error('--until must be in the future');
     item.deferredUntil = iso(time);
     item.deferReason = redactSecrets(reason);

@@ -10,6 +10,8 @@ on:
       - 'tools/setup.mjs'
       - 'tools/setup-manifest.json'
       - 'tools/onboarding-sync.*'
+      - 'tools/knowledge-pack.mjs'
+      - '.github/fixtures/knowledge-channel.mjs'
       - 'tools/ensure-run-hidden.ps1'
       - 'tools/register-hooks.mjs'
       - '.github/workflows/clean-install.yml'
@@ -46,6 +48,16 @@ jobs:
           if ($bootstrapLog -notmatch '\[ORGIAST-BOOTSTRAP-COMPLETE\]') {
             throw 'bootstrap.ps1 exited before its completion marker'
           }
+
+      # A clean runner has no enrollment credential for private knowledge. Exercise
+      # the real keyless receiver with synthetic transport data before verification.
+      - name: Install knowledge through the keyless receiver (fixture transport)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:ORGIAST_HOME = $env:USERPROFILE
+          node --import './.github/fixtures/knowledge-channel.mjs' './tools/onboarding-sync.mjs' --knowledge-only --knowledge-receiver --force
+          if ($LASTEXITCODE -ne 0) { throw 'knowledge receiver fixture failed' }
 
       # bootstrap が配布正本(main)を clone するため、PR 未マージの manifest/register-hooks
       # (setup.mjs --converge SessionStart 追加)はこの checkout(PR 版)から収束させて検証する。

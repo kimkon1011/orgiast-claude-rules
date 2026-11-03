@@ -42,7 +42,7 @@ test('masks secrets before clipping, including sender and reason', () => {
   assert.doesNotMatch(buildContext([mail('secret', { from: 'token=private', why: 'api_key=secret', body: 'https://discord.com/api/webhooks/123/private' })]), /private|secret|webhooks\/123/);
 });
 test('expired and terminal messages never appear; expired count includes cached expired state', () => {
-  const result = buildContext([mail('expired', { expiresAt: new Date(NOW - 1).toISOString() }), mail('expired-cached', { status: 'expired' }), mail('done', { status: 'done' }), mail('live')], { now: NOW });
+  const result = buildContext([mail('expired', { expiresAt: new Date(NOW - 1).toISOString() }), mail('expired-cached', { status: 'expired' }), mail('done', { status: 'done' }), mail('live')], { label: 'nishi-PC', now: NOW });
   assert.doesNotMatch(result, /id=mail-(?:expired|done)/); assert.match(result, /期限切れ 2 件は このPCの auto-progress-watch が毎時チェックし通知/); assert.match(result, /id=mail-live/);
 });
 test('headless decisions remain pending and cannot be acted on', () => {
@@ -174,7 +174,7 @@ test('D5 hook launches receive-only polling with no-exec', async t => {
 
 test('D10 failed messages never inflate the expired footer count', () => {
   const messages = [mail('failed', { status: 'failed', expiresAt: new Date(NOW - 1).toISOString() }), mail('expired', { status: 'expired' }), mail('live')];
-  const result = selectContext(messages, { now: NOW });
+  const result = selectContext(messages, { label: 'nishi-PC', now: NOW });
   assert.match(result.context, /期限切れ 1 件は このPCの auto-progress-watch が毎時チェックし通知/); assert.doesNotMatch(result.context, /id=mail-failed/);
 });
 

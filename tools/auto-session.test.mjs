@@ -866,6 +866,18 @@ test('未来日の以降ゲートだけを固定日付基準で除外する', ()
   );
 });
 
+test('時刻付きの以降ゲート（22:00 JST 以降に着手）も除外する（2026-10-29 quota-sweep:codex 4連続 exhausted の原因）', () => {
+  const gated = '【2026-10-30 22:00 JST 以降に着手・それより前は着手しない】アサインアプリの高速化';
+  // ゲート（2026-10-30T22:00 JST = 13:00Z）を JST 壁時計で比較する。実行マシンの
+  // タイムゾーンに依らず決まるよう、基準時刻は Date.UTC で固定した JST 時刻を与える。
+  assert.equal(todoExclusionReason(gated, new Date(Date.UTC(2026, 9, 29, 12, 0))), '2026-10-30 22:00 JST以降'); // JST 10-29 21:00（ゲート前）
+  assert.equal(todoExclusionReason(gated, new Date(Date.UTC(2026, 9, 30, 12, 0))), '2026-10-30 22:00 JST以降'); // JST 10-30 21:00（ゲート前）
+  assert.equal(todoExclusionReason(gated, new Date(Date.UTC(2026, 9, 30, 13, 0))), ''); // JST 10-30 22:00（ゲート時刻ちょうど）
+  assert.equal(todoExclusionReason(gated, new Date(Date.UTC(2026, 9, 31, 0, 0))), ''); // JST 10-31 09:00（ゲート後）
+  // 時刻なしの従来形式は従来どおり
+  assert.equal(todoExclusionReason('2026-08-27 以降に実行', new Date(2026, 7, 26)), '2026-08-27以降');
+});
+
 test('pickCwd は実在しない判定先を既存の標準リポジトリへフォールバックする', () => {
   const exists = () => false;
   assert.equal(pickCwd('案件Aを直す', exists, { 案件A: '/missing' }), DEFAULT_REPO);
@@ -1258,4 +1270,65 @@ test('「以下は下の別ブロックの残TODO…」型の案内文は参照�
 test('buildPrompt は fleet-mail の [判断依頼] へ返信も判断もしないよう指示する', () => {
   const prompt = buildPrompt('実装する', {}, '/repo', '/tmp/run.summary.md', 60);
   assert.match(prompt, /\[判断依頼\][^\n]*返信も判断も行わない/);
+});
+
+test('runChild は冷却中・失敗時の codex-do と保留・最終フォールバックを扱う', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-lane-'));
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  const configDir = path.join(home, '.claude');
+  const toolsDir = path.join(home, 'tools');
+  fs.mkdirSync(configDir);
+  fs.mkdirSync(toolsDir);
+  const traceFile = path.join(home, 'trace.jsonl');
+  const trace = `fs.appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ lane: process.env.ORGIAST_HEADLESS_JOB, args: process.argv.slice(2), stdin, prompt: process.argv.includes('--prompt-file') ? fs.readFileSync(process.argv[process.argv.indexOf('--prompt-file') + 1], 'utf8') : '' }) + '\\n');`;
+  const script = (code) => `import fs from 'node:fs'; let stdin = ''; for await (const chunk of process.stdin) stdin += chunk; ${trace} ${code}`;
+  try {
+    const scenarios = [
+      { name: '両方冷却中は cheap-code を起動しない', cooling: true, code: 0, lanes: ['codex-do'], status: 'success' },
+      { name: 'cheap-code と alternate 失敗後は1回だけ codex-do', alternate: true, code: 0, lanes: ['cheap-code:deepseek', 'cheap-code:glm', 'codex-do'], status: 'success' },
+      { name: '75 は Claude 有効でも保留する', cooling: true, code: 75, claude: true, lanes: ['codex-do'], status: 'failure', deferred: true },
+      { name: 'codex-do 失敗後は skipped', code: 1, lanes: ['cheap-code:deepseek', 'codex-do'], status: 'failure', skipped: true },
+      { name: 'codex-do 失敗後は Claude', cooling: true, code: 1, claude: true, lanes: ['codex-do', 'fallback-claude'], status: 'success' },
+      { name: '無効化時は従来どおり skipped', cooling: true, disabled: true, code: 0, lanes: ['cheap-code:deepseek'], status: 'failure', skipped: true },
+      { name: 'model 指定は Claude 固定', cooling: true, model: true, code: 0, lanes: ['fallback-claude'], status: 'success' },
+      { name: 'codex-do timeout は切替しない', cooling: true, timeout: true, claude: true, code: 0, lanes: ['codex-do'], status: 'timeout' },
+      { name: 'codex-do ファイル欠落は skipped', cooling: true, missing: true, lanes: [], status: 'failure', skipped: true },
+    ];
+    // Claude スタブは shebang 起動なので Windows では spawn できない。Claude レーンへ実際に落ちる
+    // シナリオだけ Windows では飛ばす(CI の Linux で検証する)。
+    const needsClaudeStub = (scenario) => scenario.lanes.includes('fallback-claude');
+    for (const scenario of scenarios) await t.test(scenario.name, { skip: process.platform === 'win32' && needsClaudeStub(scenario) ? 'shebang スタブは Windows で起動不可' : false }, async () => {
+      fs.writeFileSync(traceFile, '');
+      fs.writeFileSync(path.join(configDir, 'auto-session.env'), `ORGIAST_AUTO_SESSION_EXECUTOR=cheap-code\nORGIAST_AUTO_SESSION_PROVIDER=deepseek\nORGIAST_AUTO_SESSION_CODEX_LANE=${scenario.disabled ? 'off' : 'on'}\nORGIAST_AUTO_SESSION_CLAUDE_FALLBACK=${scenario.claude ? 'on' : 'off'}\n`);
+      // DeepSeek の推論先は OpenRouter なので、冷却状態も OpenRouter に記録される。
+      fs.writeFileSync(path.join(configDir, 'provider-cooldown.json'), JSON.stringify(scenario.cooling ? { openrouter: { until: Date.now() + 60000 }, glm: { until: Date.now() + 60000 } } : {}));
+      fs.writeFileSync(path.join(configDir, 'zai.env'), scenario.alternate ? 'ZAI_API_KEY=test' : '');
+      fs.writeFileSync(path.join(toolsDir, 'cheap-code.mjs'), script('process.exitCode = 1;'));
+      const codexFile = path.join(toolsDir, 'codex-do.mjs');
+      fs.writeFileSync(codexFile, script(scenario.timeout ? 'setInterval(() => {}, 1000);' : `process.exitCode = ${scenario.code ?? 1};`));
+      if (scenario.missing) fs.rmSync(codexFile);
+      // Claude のスタブは stdin を消費して成功させる。
+      const claudeFile = path.join(home, 'claude-stub');
+      fs.writeFileSync(claudeFile, `#!${process.execPath}\n(async () => { const fs = require('node:fs'); let stdin = ''; for await (const chunk of process.stdin) stdin += chunk; ${trace} })();\n`, { mode: 0o755 });
+      const result = await runChild(claudeFile, 'lane test', home, home, scenario.timeout ? 1500 : 5000, { executorRoot: home, ...(scenario.model ? { model: 'sonnet' } : {}) });
+      const rows = fs.readFileSync(traceFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+      assert.deepEqual(rows.map((row) => row.lane.replace('auto-session:', '')), scenario.lanes);
+      assert.equal(result.status, scenario.status);
+      assert.equal(result.deferred === true, scenario.deferred === true);
+      assert.equal(result.skippedNoExecutor, scenario.skipped === true);
+      assert.equal(result.executorUsed, scenario.lanes.at(-1) === 'fallback-claude' ? 'claude' : scenario.lanes.at(-1) ?? 'codex-do');
+      assert.equal(result.fallbackToClaude, !!scenario.claude && !scenario.deferred && !scenario.timeout);
+      for (const row of rows.filter((row) => row.lane.endsWith(':codex-do'))) {
+        assert.equal(row.stdin, '');
+        assert.equal(row.prompt, '[headless:auto-session]\nlane test');
+        assert.deepEqual(row.args.slice(-4), ['--cwd', home, '--origin', 'unattended']);
+        assert.equal(fs.existsSync(row.args[row.args.indexOf('--prompt-file') + 1]), false);
+      }
+    });
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });

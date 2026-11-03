@@ -5,19 +5,29 @@ import path from 'node:path';
 
 // Existing runner contract: initial block plus two rewritten responses.
 export const MAX_BLOCKS_PER_TURN = 2;
-export const CAP_CONTEXT = 'Stop ゲートの同一ターン上限に達したため今回は送信します。残った違反を次の応答で必ず訂正してください。';
+export const MAX_BLOCKS_PER_SESSION = 5;
+export const CAP_CONTEXT = 'Stop ゲートの同一ターン上限に達したため今回は送信します。残った違反は次の応答で直してください。ただし全体を再送せず、修正点（差分）だけを簡潔に返すこと。';
 
 const defaultHome = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || os.homedir();
 const digest = value => crypto.createHash('sha256').update(String(value ?? '')).digest('hex').slice(0, 16);
 
 function lastUserFingerprint(file) {
   try {
-    const rows = fs.readFileSync(file, 'utf8').trim().split(/\r?\n/).slice(-400);
+    const rows = fs.readFileSync(file, 'utf8').trim().split(/\r?\n/);
+    let legacyFingerprint = '';
+    // promptId stays shared by the human message, tool results and Stop feedback.
     for (let index = rows.length - 1; index >= 0; index--) {
       let row; try { row = JSON.parse(rows[index]); } catch { continue; }
-      if (row?.type !== 'user' && row?.message?.role !== 'user') continue;
-      return digest(JSON.stringify({ uuid: row.uuid, timestamp: row.timestamp, message: row.message ?? row.content }));
+      if (row?.promptId) return `promptId:${digest(row.promptId)}`;
+      // Older transcripts use the last real user message, skipping hook/tool rows.
+      if (legacyFingerprint || (row?.type !== 'user' && row?.message?.role !== 'user')) continue;
+      const content = row.message?.content ?? row.content;
+      if (row.isMeta === true) continue;
+      if (Array.isArray(content) && content.length > 0 && content.every(item => item?.type === 'tool_result')) continue;
+      if (typeof content === 'string' && content.startsWith('Stop hook feedback')) continue;
+      legacyFingerprint = digest(JSON.stringify({ uuid: row.uuid, timestamp: row.timestamp, message: row.message ?? row.content }));
     }
+    return legacyFingerprint;
   } catch {}
   return '';
 }
@@ -50,20 +60,23 @@ export function registerStopViolation({ input = {}, assistantText = '', reasonCo
     const stamp = Date.parse(value?.lastTs);
     if (!Number.isFinite(stamp) || stamp < now - 7 * 864e5) delete state[key];
   }
-  const prior = state[id.sessionId]?.turnKey === id.turnKey ? state[id.sessionId] : { turnKey: id.turnKey, blocks: 0, responses: {} };
+  const prior = state[id.sessionId]?.turnKey === id.turnKey
+    ? state[id.sessionId]
+    : { turnKey: id.turnKey, blocks: 0, totalBlocks: state[id.sessionId]?.totalBlocks || 0, responses: {} };
   const signature = [...blockedBy].sort().join(',') || [...reasonCodes].sort().join(',') || 'unknown';
   const response = prior.responses?.[id.responseHash];
   const seenByDifferentHook = response && !response.signatures?.includes(signature);
   const blockNumber = seenByDifferentHook ? response.blockNumber : prior.blocks + 1;
   prior.blocks = Math.max(prior.blocks, blockNumber);
+  if (!seenByDifferentHook) prior.totalBlocks = (prior.totalBlocks || 0) + 1;
   prior.responses = { ...(prior.responses || {}), [id.responseHash]: {
     blockNumber, signatures: [...new Set([...(response?.signatures || []), signature])],
   } };
   prior.lastHash = id.responseHash; prior.lastTs = new Date(now).toISOString();
   state[id.sessionId] = prior;
   try { writeState(home, state); } catch {}
-  const capped = blockNumber > MAX_BLOCKS_PER_TURN;
-  return { ...id, blockNumber, sameTextRetries: blockNumber, retryCap: capped, verdict: capped ? 'pass_after_cap' : 'block', reasonCodes, blockedBy, additionalContext: capped ? CAP_CONTEXT : undefined };
+  const capped = blockNumber > MAX_BLOCKS_PER_TURN || prior.totalBlocks > MAX_BLOCKS_PER_SESSION;
+  return { ...id, blockNumber, sameTextRetries: blockNumber, totalBlocks: prior.totalBlocks, retryCap: capped, verdict: capped ? 'pass_after_cap' : 'block', reasonCodes, blockedBy, additionalContext: capped ? CAP_CONTEXT : undefined };
 }
 
 export function stopGateOutput(result, reason) {

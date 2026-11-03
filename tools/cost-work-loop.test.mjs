@@ -17,13 +17,17 @@ test.after(() => fs.rmSync(isolatedHome, { recursive: true, force: true }));
 
 test('委譲ヘルスをプロバイダ健全性の直前へ挿入する', () => {
   fs.writeFileSync(path.join(isolatedHome, '.claude', 'executor-usage.jsonl'), JSON.stringify({ t: new Date().toISOString(), provider: 'skipped', status: 'no-cheap-executor' }) + '\n');
-  const run = spawnSync(process.execPath, [path.join(import.meta.dirname, 'cost-work-loop.mjs')], { cwd: isolatedHome, env: { ...process.env, ORGIAST_HOME: isolatedHome, COST_WORK_REPOS: isolatedHome }, encoding: 'utf8', timeout: 120_000 });
+  const codexDir = path.join(isolatedHome, '.codex', 'sessions');
+  fs.mkdirSync(codexDir, { recursive: true });
+  fs.writeFileSync(path.join(codexDir, 'run.jsonl'), JSON.stringify({ timestamp: new Date().toISOString(), model: 'gpt-6.1-sol', payload: { info: { total_token_usage: { output_tokens: 1200 } } } }));
+  const run = spawnSync(process.execPath, [path.join(import.meta.dirname, 'cost-work-loop.mjs')], { cwd: isolatedHome, env: { ...process.env, ORGIAST_HOME: isolatedHome, COST_WORK_REPOS: isolatedHome, CODEX_SESSIONS_DIRS: codexDir }, encoding: 'utf8', timeout: 120_000 });
   assert.equal(run.status, 0, run.stderr);
   const directive = fs.readFileSync(path.join(isolatedHome, '.claude', 'cost-directive.md'), 'utf8');
   assert.match(directive, /^<!-- COST-DIRECTIVE-START -->\n## 👤 user の手間/);
   assert.ok(directive.indexOf('user 手戻り') < directive.indexOf('## 📊 Claude Code'));
   assert.match(directive, /目的あたりの user 往復/);
   assert.match(directive, /未ルーティング: 1件/);
+  assert.match(directive, /gpt-6\.1-sol 1セッション\/1\.2k tok/);
   assert.doesNotMatch(directive, /skipped:.*fail/);
   assert.ok(directive.indexOf('## 🩺 委譲ヘルス') < directive.indexOf('### プロバイダ健全性'));
 });

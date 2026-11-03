@@ -1,4 +1,5 @@
 // eval-harness.mjs — 成功率・実測コスト・速度を同じゴールデンタスクで比較する。
+import { gatewayConfig, gatewayModel, gatewayParams, usageCostFields, routeCandidate } from './provider-routing.mjs';
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'; import { isDeepStrictEqual } from 'node:util'; import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runCheck } from './eval-exec-checks.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -8,13 +9,15 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 import { userHome, readConfig } from './lib/eval-config.mjs';
 export { userHome, readConfig };
 const HOME = userHome(); const EVAL_DIR = path.join(HOME, '.claude', 'eval'); const TASKS = path.join(EVAL_DIR, 'tasks.jsonl'); const SEED = path.join(HERE, 'eval-tasks.seed.jsonl'); const SEED_SYNCED = path.join(EVAL_DIR, '.seed-synced.jsonl'); const RESULTS = path.join(HOME, '.claude', 'eval-results.jsonl');
-import { COST_PER_MILLION } from './llm-fallback.mjs';
+import { COST_PER_MILLION, OPENROUTER_COST_PER_MILLION } from './llm-fallback.mjs';
 const PRICE = { ...COST_PER_MILLION, anthropic: [1, 5] };
 const validRates = rates => Array.isArray(rates) && rates.length === 2 && rates.every(n => typeof n === 'number' && Number.isFinite(n) && n >= 0);
 // 同期APIは保持。OpenRouter の不明単価に他モデルの価格を流用しない。
 export function evaluationCost(name, model, usage, cfg = {}, { catalogRates } = {}) {
-  const override = cfg.model === model && cfg.costPerMillion;
-  const rates = validRates(override) ? override : name === 'openrouter' ? catalogRates?.get(model) : PRICE[name];
+  if (typeof usage.usd === 'number' && Number.isFinite(usage.usd) && usage.usd >= 0) return usage.usd;
+  const mapped = gatewayModel(name, model);
+  const override = cfg.model === model && (mapped === model || model.includes('/')) && cfg.costPerMillion;
+  const rates = validRates(override) ? override : name === 'openrouter' ? catalogRates?.get(model) : OPENROUTER_COST_PER_MILLION[mapped] || PRICE[name];
   return validRates(rates) ? (usage.inTok * rates[0] + usage.outTok * rates[1]) / 1e6 : null;
 }
 // main ごとに生成し、並行タスクでも取得失敗も含めて1回だけ取得する。
@@ -43,8 +46,8 @@ const PROVIDERS = {
   groq: { base: 'https://api.groq.com/openai/v1/chat/completions', keyEnv: 'GROQ_API_KEY', keyFile: 'groq.env', model: 'openai/gpt-oss-120b' },
   openrouter: { base: 'https://openrouter.ai/api/v1/chat/completions', keyEnv: 'OPENROUTER_API_KEY', keyFile: 'openrouter.env', model: 'meta-llama/llama-3.3-70b-instruct', headers: { 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast-eval' } },
   gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', keyEnv: 'GEMINI_API_KEY', keyFile: 'gemini.env', model: 'gemini-3.7-flash' },
-  deepseek: { base: 'https://api.deepseek.com/chat/completions', keyEnv: 'DEEPSEEK_API_KEY', keyFile: 'deepseek.env', model: 'deepseek-flash' },
-  kimi: { base: 'https://api.moonshot.ai/v1/chat/completions', keyEnv: 'MOONSHOT_API_KEY', keyFile: 'kimi-api.env', model: 'kimi-k3', special: 'kimi' },
+  deepseek: gatewayConfig('deepseek'),
+  kimi: gatewayConfig('kimi'),
   mistral: { base: 'https://api.mistral.ai/v1/chat/completions', keyEnv: 'MISTRAL_API_KEY', keyFile: 'mistral.env', model: 'mistral-large-latest' },
   ollama: { base: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434/v1/chat/completions', model: '', local: true },
   anthropic: { base: 'https://api.anthropic.com/v1/messages', keyEnv: 'ANTHROPIC_API_KEY', keyFile: 'anthropic.env', model: 'claude-haiku-4-5-20251001', anthropic: true }
@@ -138,7 +141,7 @@ export function resultRecord(provider, model, rows, t = new Date().toISOString()
 }
 function dailyCooldownSkip(name) {
   const now = new Date();
-  const cooldown = activeDailyCooldown(name, { home: HOME, now });
+  const cooldown = activeDailyCooldown(routeCandidate({ provider: name }).provider, { home: HOME, now });
   return cooldown ? `SKIP ${name}: cooldown中 (${cooldown.reason}, 残り${Math.ceil((cooldown.until - now.getTime()) / 60000)}分)` : null;
 }
 // isDailyLimit: 本文の RPD 系文字列だけで日次上限を判定する公開API(単体テスト・外部呼び出し用)。
@@ -155,12 +158,12 @@ const resolveCost = createEvaluationCostResolver();
 if (has('--pareto')) { printPareto(); return; }
 fs.mkdirSync(path.join(EVAL_DIR, 'runs'), { recursive: true }); syncTasks();
 const schedulers = new Map(); function scheduler(name, minIntervalMs) { if (!schedulers.has(name)) schedulers.set(name, { next: 0, chain: Promise.resolve() }); const s = schedulers.get(name); return async () => { let release; const prior = s.chain; s.chain = new Promise((resolve) => { release = resolve; }); await prior; const wait = Math.max(0, s.next - Date.now()); if (wait) await sleep(wait); s.next = Date.now() + minIntervalMs; release(); }; }
-async function call(name, model, prompt, system, max, runtime = {}) { const skip = dailyCooldownSkip(name); if (skip) { const err = new Error(skip); err.dailyLimit = true; err.provider = name; throw err; } const P = PROVIDERS[name], key = loadKey(name); if (!key) throw new Error(`${P.keyEnv} 未設定。環境変数または ~/.claude/${P.keyFile} に ${P.keyEnv}=値 を置いてください`); let body, headers; if (P.anthropic) { body = { model, max_tokens: max, messages: [{ role: 'user', content: prompt }] }; if (system) body.system = system; headers = { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }; } else { const messages = []; if (system) messages.push({ role: 'system', content: system }); messages.push({ role: 'user', content: prompt }); body = { model, messages, max_tokens: max, stream: false }; headers = { Authorization: `Bearer ${key}`, 'content-type': 'application/json', ...(P.headers || {}) }; }
-  if (name === 'deepseek' && model === 'deepseek-flash') body.thinking = { type: 'disabled' };
+async function call(name, model, prompt, system, max, runtime = {}) { const skip = dailyCooldownSkip(name); if (skip) { const err = new Error(skip); err.dailyLimit = true; err.provider = name; throw err; } const P = PROVIDERS[name], key = loadKey(name); if (!key) throw new Error(`${P.keyEnv} 未設定。環境変数または ~/.claude/${P.keyFile} に ${P.keyEnv}=値 を置いてください`); model = gatewayModel(name, model); let body, headers; if (P.anthropic) { body = { model, max_tokens: max, messages: [{ role: 'user', content: prompt }] }; if (system) body.system = system; headers = { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }; } else { const messages = []; if (system) messages.push({ role: 'system', content: system }); messages.push({ role: 'user', content: prompt }); body = { model, messages, max_tokens: max, stream: false }; headers = { Authorization: `Bearer ${key}`, 'content-type': 'application/json', ...(P.headers || {}) }; }
+  Object.assign(body, gatewayParams(model));
   const params = runtime.params && typeof runtime.params === 'object' && !Array.isArray(runtime.params) ? runtime.params : null; if (params) Object.assign(body, params); let paramsApplied = Boolean(params), retriedWithoutParams = false;
   const reserve = scheduler(name, runtime.minIntervalMs || 0); let lastError;
-  for (let attempt = 0; attempt <= 3; attempt++) { await reserve(); const start = Date.now(); let r; try { r = await fetch(P.base, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(runtime.timeoutMs || 120000) }); } catch (e) { throw new Error(`通信エラー: ${e.message}`); } if (!r.ok) { const detail = (await r.text().catch(() => '')).slice(0, 300); lastError = new Error(`${r.status}: ${detail}`); if (r.status === 400 && paramsApplied && !retriedWithoutParams) { for (const key of Object.keys(params)) delete body[key]; paramsApplied = false; retriedWithoutParams = true; console.error(`RETRY ${name} HTTP 400 paramsなしで再試行`); attempt--; continue; } const rawMs = rawRetryAfterMs(r, attempt); if (isDailyQuotaResponse(r.status, detail, rawMs)) { markDailyProviderCooldown(name, { home: HOME }); const err = new Error(`${r.status}: ${detail}`); err.dailyLimit = true; err.provider = name; throw err; } if ((r.status === 429 || r.status >= 500) && attempt < 3) { const delay = retryDelay(r, attempt); console.error(`RETRY ${name} HTTP ${r.status} ${attempt + 1}/3 (${delay}ms後)`); await sleep(delay); continue; } throw lastError; }
-    let j; try { j = await r.json(); } catch (e) { throw new Error(`レスポンスJSON不正: ${e.message}`); } const text = P.anthropic ? (j.content || []).map((x) => x.text || '').join('') : j.choices?.[0]?.message?.content; const finishReason = P.anthropic ? j.stop_reason : (j.choices?.[0]?.finish_reason ?? j.choices?.[0]?.finishReason ?? j.candidates?.[0]?.finishReason ?? j.finishReason); const truncated = finishReason === 'length' || finishReason === 'max_tokens' || finishReason === 'MAX_TOKENS'; if ((typeof text !== 'string' || !text.trim()) && !truncated) throw new Error('レスポンス不正: モデル出力が空です'); return { text: typeof text === 'string' ? text : '', finishReason: finishReason ?? null, truncated, inTok: P.anthropic ? j.usage?.input_tokens || 0 : j.usage?.prompt_tokens || 0, outTok: P.anthropic ? j.usage?.output_tokens || 0 : j.usage?.completion_tokens || 0, ms: Date.now() - start }; }
+  for (let attempt = 0; attempt <= 3; attempt++) { await reserve(); const start = Date.now(); let r; try { r = await fetch(P.base, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(runtime.timeoutMs || 120000) }); } catch (e) { throw new Error(`通信エラー: ${e.message}`); } if (!r.ok) { const detail = (await r.text().catch(() => '')).slice(0, 300); lastError = new Error(`${r.status}: ${detail}`); if (r.status === 400 && paramsApplied && !retriedWithoutParams) { for (const key of Object.keys(params)) delete body[key]; paramsApplied = false; retriedWithoutParams = true; console.error(`RETRY ${name} HTTP 400 paramsなしで再試行`); attempt--; continue; } const rawMs = rawRetryAfterMs(r, attempt); if (isDailyQuotaResponse(r.status, detail, rawMs)) { markDailyProviderCooldown(routeCandidate({ provider: name }).provider, { home: HOME }); const err = new Error(`${r.status}: ${detail}`); err.dailyLimit = true; err.provider = name; throw err; } if ((r.status === 429 || r.status >= 500) && attempt < 3) { const delay = retryDelay(r, attempt); console.error(`RETRY ${name} HTTP ${r.status} ${attempt + 1}/3 (${delay}ms後)`); await sleep(delay); continue; } throw lastError; }
+    let j; try { j = await r.json(); } catch (e) { throw new Error(`レスポンスJSON不正: ${e.message}`); } const text = P.anthropic ? (j.content || []).map((x) => x.text || '').join('') : j.choices?.[0]?.message?.content; const finishReason = P.anthropic ? j.stop_reason : (j.choices?.[0]?.finish_reason ?? j.choices?.[0]?.finishReason ?? j.candidates?.[0]?.finishReason ?? j.finishReason); const truncated = finishReason === 'length' || finishReason === 'max_tokens' || finishReason === 'MAX_TOKENS'; if ((typeof text !== 'string' || !text.trim()) && !truncated) throw new Error('レスポンス不正: モデル出力が空です'); return { text: typeof text === 'string' ? text : '', finishReason: finishReason ?? null, truncated, ...usageCostFields(j.usage), inTok: P.anthropic ? j.usage?.input_tokens || 0 : j.usage?.prompt_tokens || 0, outTok: P.anthropic ? j.usage?.output_tokens || 0 : j.usage?.completion_tokens || 0, ms: Date.now() - start }; }
   throw lastError;
 }
 function jsonValue(text) { const s = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim(); return JSON.parse(s); } function machine(expect, text) { if (expect.type === 'contains') return text.includes(expect.value); if (expect.type === 'not_contains') return !text.includes(expect.value); if (expect.type === 'regex') return new RegExp(expect.value, 'u').test(text); if (expect.type === 'regex_all') return expect.values.every((value) => new RegExp(value, 'u').test(text)); if (expect.type === 'json_path') { try { const j = jsonValue(text); if (expect.path) return JSON.stringify(expect.path.split('.').reduce((x, p) => x?.[p], j)) === JSON.stringify(expect.value); return Object.entries(expect.value).every(([k, v]) => JSON.stringify(k.split('.').reduce((x, p) => x?.[p], j)) === JSON.stringify(v)); } catch { return false; } } return false; }

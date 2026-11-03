@@ -33,11 +33,20 @@ export function deferralDetectorFile(home, env = process.env) {
 }
 const key = value => String(value).normalize('NFKC').trim().replace(/\s+/g, ' ');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-export function mergeKnowledge(knowledge, learned, candidates, observation) {
+export function isToolNameRoute(route, toolRoutes = []) {
+  return toolRoutes.some(toolRoute => key(toolRoute) === key(route));
+}
+// automation-routes の道具名だけを昇格すると、監査対象が pattern でなく道具になり空回りする。
+// 確信度や観測回数によらず候補に保留し、人が手順文に書き直してから採用する。
+export function mergeKnowledge(knowledge, learned, candidates, observation, toolRoutes = []) {
   const next = [...knowledge];
   const pending = [...candidates];
   const promoted = [];
   for (const item of learned) {
+    if (isToolNameRoute(item.route, toolRoutes)) {
+      if (!pending.some(c => key(c.pattern) === key(item.pattern) && key(c.route) === key(item.route) && c.observation === observation)) pending.push({ ...item, observation, reason: 'tool-name-route' });
+      continue;
+    }
     if (next.some(k => key(k.pattern) === key(item.pattern))) continue;
     // 同じ経路を別ラベルで再学習すると route 重複エントリが毎晩増え、knowledge.json が dirty になって
     // rescue 枝が量産される（2026-10-22 実測: 3d8c172 は route が既存 entry と完全一致）。
@@ -73,6 +82,14 @@ export function enqueueTodos(markdown, items, knownRoutes = []) {
     routes.add(key(item.route));
   }
   return output;
+}
+// 道具名 route は自動昇格しないので、候補に積むだけだと誰も読まず腐る。見直し TODO を1本だけ常設する。
+export function enqueueToolRouteReview(markdown, held) {
+  if (!held || /\[handoff-audit:tool-name-route\]/.test(markdown)) return markdown;
+  const todo = `1. [handoff-audit:tool-name-route] handoff-audit-candidates.jsonl に route が道具名だけの候補（reason=tool-name-route）が保留されている — pattern ごとに route を手順文へ書き直して tools/handoff-audit-knowledge.json へ PR で採用するか、棄却する（2026-10-26 PR #1151 と同じ扱い）。kimへのDMなし。`;
+  const heading = /^## 残TODO[^\r\n]*(?:\r?\n|$)/m;
+  if (heading.test(markdown)) return markdown.replace(heading, m => `${m.endsWith('\n') ? m : m + '\n'}${todo}\n\n`);
+  return `${markdown}\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n${todo}\n`;
 }
 export function deferralLedgerFile(home) {
   return path.join(home, '.claude', 'handoff-audit-deferral-ledger.jsonl');
@@ -130,7 +147,8 @@ export async function runNightly(options = {}) {
     const stopRechecks = summarizeStopRechecks(stopRows, { since: +since });
     const stopRecheckWarnings = stopRechecks.skippedStopHookActive > 0
       ? [`stop_hook_active の素通りが ${stopRechecks.skippedStopHookActive} 件残っています`] : [];
-    const knownRoutes = new Set([...knowledge.map(k => k.route), ...Object.values(resources.routes).flat()]);
+    const toolRoutes = Object.values(resources.routes).flat();
+    const knownRoutes = new Set([...knowledge.map(k => k.route), ...toolRoutes]);
     let reviewed = 0, added = 0, promoted = 0;
     for (const target of targets) {
       const observation = hash([target.sessionId, target.evidence]);
@@ -140,7 +158,7 @@ export async function runNightly(options = {}) {
       // 既知経路にない生成文を自動実行キューへ流さない。
       const learned = result.learned.filter(l => knownRoutes.has(l.route));
       const priorRoutes = knowledge.map(k => k.route);
-      const merged = mergeKnowledge(knowledge, learned, candidates, observation);
+      const merged = mergeKnowledge(knowledge, learned, candidates, observation, toolRoutes);
       if (merged.knowledge.length !== knowledge.length) fs.writeFileSync(knowledgeFile, JSON.stringify(merged.knowledge, null, 2) + '\n');
       // nightly-bootstrap が毎回 reset --hard する tree の外に置く。reset で route 文が消えないようにするため。
       for (const entry of merged.promoted) {
@@ -150,7 +168,8 @@ export async function runNightly(options = {}) {
       for (const candidate of merged.candidates.slice(candidates.length)) appendJsonl(candidateFile, candidate);
       const nextFile = path.join(dir, 'next-session.md');
       let previous = ''; try { previous = fs.readFileSync(nextFile, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-      const updated = enqueueTodos(previous, learned.filter(l => l.confidence === 'high' || merged.promoted.some(p => key(p.pattern) === key(l.pattern))), priorRoutes);
+      const held = merged.candidates.slice(candidates.length).filter(c => c.reason === 'tool-name-route').length;
+      const updated = enqueueToolRouteReview(enqueueTodos(previous, learned.filter(l => !isToolNameRoute(l.route, toolRoutes) && (l.confidence === 'high' || merged.promoted.some(p => key(p.pattern) === key(l.pattern)))), priorRoutes), held);
       if (updated !== previous) writeHandoff(nextFile, updated);
       added += merged.promoted.length;
       knowledge = merged.knowledge; candidates = merged.candidates;

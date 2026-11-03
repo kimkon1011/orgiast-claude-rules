@@ -197,18 +197,21 @@ test('fallback acknowledgement is idempotent and enables six-hour renotification
   h.advance(h.renotifyMs - 60001); assert.equal(h.getFleetMailAlerts({}).alerts.length, 0);
   h.advance(1); h.fleetMailSweep(); assert.equal(h.getFleetMailAlerts({}).alerts[0].notifiedCount, 0);
 });
-test('server webhook success suppresses watchdog, retries only after six hours', () => {
+test('GAS は webhook 設定済みでも投稿せず watchdog の回収確認を待つ', () => {
   const h = harness(); h.properties.FLEET_MAIL_DISCORD_WEBHOOK = 'https://example.invalid/webhook'; send(h); h.advance(h.sla.undelivered + 1);
-  assert.equal(h.fleetMailSweep().notified, 1); assert.equal(h.webhooks.length, 1); assert.deepEqual(h.getFleetMailAlerts({}).alerts, []);
-  h.fleetMailSweep(); assert.equal(h.webhooks.length, 1);
-  h.advance(h.renotifyMs); h.fleetMailSweep(); assert.equal(h.webhooks.length, 2); assert.equal(h.alertRows.length, 2);
+  assert.equal(h.fleetMailSweep().notified, 0); assert.equal(h.webhooks.length, 0);
+  assert.equal(h.getFleetMailAlerts({}).alerts.length, 1);
+  h.getFleetMailAlerts({ notifiedIds: ['mail-original'] });
+  assert.deepEqual(h.getFleetMailAlerts({}).alerts, []);
+  h.advance(h.renotifyMs); h.fleetMailSweep();
+  assert.equal(h.webhooks.length, 0); assert.equal(h.getFleetMailAlerts({}).alerts.length, 1);
 });
-test('failed webhook leaves pending and alert values are literal/redacted', () => {
+test('直接投稿停止後も未確認通知の文字列と秘密除去を保持する', () => {
   const h = harness(); h.properties.FLEET_MAIL_DISCORD_WEBHOOK = 'https://example.invalid/webhook'; h.properties.WEBHOOK_STATUS = 500;
   send(h, { why: '=formula token=private' }); h.advance(h.sla.undelivered + 1);
   assert.equal(h.fleetMailSweep().notified, 0);
   const alert = h.getFleetMailAlerts({}).alerts[0]; assert.equal(alert.notifiedCount, 0); assert.match(alert.why, /^=formula/); assert.doesNotMatch(alert.why, /private/);
-  assert.deepEqual(JSON.parse(h.webhooks[0][1].payload).allowed_mentions, { parse: [] });
+  assert.equal(h.webhooks.length, 0);
 });
 test('trigger setup is idempotent and preserves other handlers', () => {
   const h = harness(); const other = { getHandlerFunction: () => 'processCommandQueue', getEventType: () => 'CLOCK', getTriggerSource: () => 'CLOCK' }; h.triggers.push(other);

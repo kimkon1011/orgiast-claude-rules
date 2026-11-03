@@ -1,5 +1,6 @@
+import { proxyCredential, gwsFetch, GWS_USER } from './gws-proxy.mjs';
 import { createSign } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,10 +14,14 @@ const b64url = (value) => Buffer.from(value).toString('base64url');
 
 export async function getDriveToken({
   keyPath = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath(),
-  impersonate = process.env.GOOGLE_IMPERSONATE ?? 'kim@orgiast.jp',
+  impersonate = process.env.GOOGLE_IMPERSONATE ?? (existsSync(keyPath) ? 'kim@orgiast.jp' : GWS_USER),
   scope = DRIVE_SCOPE,
   signal,
+  fetchImpl = globalThis.fetch,
+  statePath,
 } = {}) {
+  const relay = proxyCredential({ keyPath, impersonate, scope });
+  if (relay !== null) return relay;
   const key = JSON.parse(readFileSync(keyPath, 'utf8'));
   const now = Math.floor(Date.now() / 1000);
   const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
@@ -31,7 +36,7 @@ export async function getDriveToken({
   const signer = createSign('RSA-SHA256');
   signer.update(`${header}.${claims}`);
   const jwt = `${header}.${claims}.${signer.sign(key.private_key, 'base64url')}`;
-  const res = await fetch('https://oauth2.googleapis.com/token', {
+  const res = await fetchImpl('https://oauth2.googleapis.com/token', {
     method: 'POST',
     signal,
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -43,7 +48,7 @@ export async function getDriveToken({
 }
 
 export async function driveApi(token, url, opts = {}) {
-  const res = await fetch(url, {
+  const res = await gwsFetch(url, {
     ...opts,
     headers: { Authorization: `Bearer ${token}`, ...(opts.headers ?? {}) },
   });

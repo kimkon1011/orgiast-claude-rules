@@ -320,11 +320,18 @@ async function nextObjective(state, objective, ctx) {
   const closed = new Set((state?.objectiveHistory || [])
     .filter((entry) => ['done', 'stopped', 'failed_check'].includes(entry.status))
     .map((entry) => entry.objective));
-  for (const candidate of recommendedActions(readText(path.join(ctx.home, '.claude', 'business-goals.md')))) {
-    if (closed.has(candidate.objective) || candidate.objective === objective?.objective) continue;
-    try {
-      if (/^yes[.!]?$/i.test(String(await ctx.askImpl(candidate, ctx)).trim())) return candidate;
-    } catch { /* An unavailable classifier is not permission to start. */ }
+  // business-goals.md は手書きの優先順位、next-actions.md は夜間に機械生成される台帳。
+  // PC によっては前者が無いため、無い/空でも次の目的を補充できるよう後者を fallback にする。
+  const seen = new Set();
+  for (const file of ['business-goals.md', 'next-actions.md']) {
+    for (const candidate of recommendedActions(readText(path.join(ctx.home, '.claude', file)))) {
+      if (closed.has(candidate.objective) || candidate.objective === objective?.objective) continue;
+      if (seen.has(candidate.objective)) continue;
+      seen.add(candidate.objective);
+      try {
+        if (/^yes[.!]?$/i.test(String(await ctx.askImpl(candidate, ctx)).trim())) return candidate;
+      } catch { /* An unavailable classifier is not permission to start. */ }
+    }
   }
   return null;
 }

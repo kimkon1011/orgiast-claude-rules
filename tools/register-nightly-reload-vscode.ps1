@@ -18,7 +18,13 @@ function Get-NightlyTaskDefinition($Task) {
         Network = $Task.Settings.RunOnlyIfNetworkAvailable
     } | ConvertTo-Json -Depth 8 -Compress
 }
-function Register-NightlyReloadTask {
+# Scheduler calls are injectable: function shadowing does not reliably override the
+# ScheduledTasks module cmdlets, and a test must never reach the real scheduler.
+function Register-NightlyReloadTask(
+    # Enumerating (not -TaskName) distinguishes a missing task from a scheduler/access failure.
+    [scriptblock]$GetTask = { param($TaskName) Get-ScheduledTask -TaskPath '\' | Where-Object TaskName -eq $TaskName },
+    [scriptblock]$RegisterTask = { param($TaskName, $InputObject) Register-ScheduledTask -TaskName $TaskName -TaskPath '\' -InputObject $InputObject -Force | Out-Null }
+) {
     $name = 'OrgiastNightlyReloadVSCode'
     $scriptFile = Join-Path $PSScriptRoot 'nightly-reload-vscode.ps1'
     if (-not (Test-Path -LiteralPath $scriptFile)) { throw "Missing script: $scriptFile" }
@@ -30,13 +36,12 @@ function Register-NightlyReloadTask {
     # No catch-up outside the night window; no overlapping restart attempts.
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 19)
     $desired = New-ScheduledTask -Action $action -Trigger $triggers -Principal $principal -Settings $settings
-    # Enumerating first distinguishes a missing task from a scheduler/access failure.
-    $current = Get-ScheduledTask -TaskPath '\' | Where-Object TaskName -eq $name
+    $current = & $GetTask $name
     if ($current -and (Get-NightlyTaskDefinition $current) -ceq (Get-NightlyTaskDefinition $desired)) {
         return @{ changed = $false; taskName = $name }
     }
-    Register-ScheduledTask -TaskName $name -TaskPath '\' -InputObject $desired -Force | Out-Null
-    $actual = Get-ScheduledTask -TaskName $name -TaskPath '\'
+    & $RegisterTask $name $desired
+    $actual = & $GetTask $name
     if ((Get-NightlyTaskDefinition $actual) -cne (Get-NightlyTaskDefinition $desired)) { throw 'Task definition verification failed' }
     return @{ changed = $true; taskName = $name }
 }

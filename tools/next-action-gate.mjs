@@ -216,10 +216,36 @@ export function hasSessionWakeup(raw, input = {}) {
   return { autoProgress, background: background || persistent.background, scheduled: persistent.scheduled };
 }
 
+function selfDeferralViolation(text, raw, input) {
+  const prose = String(text).replace(/```[^\n]*\n[\s\S]*?```|~~~[^\n]*\n[\s\S]*?~~~/g, '').replace(/^[ \t]*>.*$/gm, '');
+  const deferred = prose.split(/[。！？\n]/).some(sentence =>
+    /(?:次の|次回の?)メッセージで|次(?:の)?ターンで/.test(sentence)
+    && /仕上げ|進め|続け|実装|修正|確認|報告|完成|対応/.test(sentence)
+    && !/と(?:書|言|述)|という|先ほど|前回|禁止|検出|パターン/.test(sentence)
+    && !/(?:しません|しない|ませんでした)/.test(sentence));
+  if (!deferred) return null;
+  const calls = new Set();
+  let cron = false;
+  for (const entry of currentTurnEntries(raw)) {
+    if (!['assistant', 'user'].includes(entry.type)) continue;
+    for (const block of Array.isArray(entry.message?.content) ? entry.message.content : []) {
+      if (entry.type === 'assistant' && block.type === 'tool_use' && block.name === 'CronCreate' && block.id) calls.add(block.id);
+      if (entry.type === 'user' && block.type === 'tool_result' && calls.has(block.tool_use_id) && block.is_error !== true) {
+        const result = typeof block.content === 'string' ? block.content : JSON.stringify(block.content ?? '');
+        if (result.trim() && !/denied|拒否|\berror\b|失敗/i.test(result)) cron = true;
+      }
+    }
+  }
+  if (cron && hasOpenSessionCheck(input)) return null;
+  return { decision: 'block', code: 'SELF-DEFERRAL-NEEDS-CRON-CHECK', reason: '自分の作業を「次のメッセージで」「次ターンで」と先送りしています。このターンで進めるか、同じターンで CronCreate による定期再開を登録し、auto-progress.mjs --add-check --session <id> --check "<達成判定>" で同一セッションの永続チェックを登録してください。CronCreate の成功結果と check 付き open 台帳行の両方が必要です。' };
+}
+
 function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {}) {
   const source = String(text || '').trimEnd();
   const turnSource = String(options.turnText || source).trimEnd();
   if (!enabled()) return { decision: 'pass', reason: 'disabled' };
+  const selfDeferral = selfDeferralViolation(turnSource, transcriptRaw, input);
+  if (selfDeferral) return selfDeferral;
   const permanentFix = permanentFixViolation(turnSource, transcriptRaw);
   if (/[?？]$/.test(source)) return permanentFix || { decision: 'pass', reason: 'question' };
   if (reportsCloseSteps(source)) return permanentFix || { decision: 'pass', reason: 'close-steps' };

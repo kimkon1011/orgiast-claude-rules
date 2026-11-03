@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync, spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dropClosed } from './purge-sessions.mjs';
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const script = path.join(dir, 'purge-sessions.mjs');
@@ -97,7 +97,7 @@ test('file cap rotates the cursor so retained sessions cannot starve later files
 test('hook returns while stdin is open, launches one shot and honors cooldown', async t => {
   const f = fixture(t); f.session('empty', []);
   // このテストはローカル退避の起動を検証する。補助処理はクールダウン中にして競合を避ける。
-  for (const name of ['purge-remote-sessions', 'sync-remote-titles', 'sync-remote-archives', 'mobile-standby-status']) {
+  for (const name of ['purge-remote-sessions', 'restore-remote-sessions', 'sync-remote-titles', 'sync-remote-archives', 'mobile-standby-status']) {
     f.put(`${name}-state.json`, JSON.stringify({ at: Date.now(), since: Date.now() }));
   }
   const start = Date.now();
@@ -113,6 +113,54 @@ test('hook returns while stdin is open, launches one shot and honors cooldown', 
   const hook = spawnSync(process.execPath, [script, '--hook'], {env:f.env,encoding:'utf8'});
   assert.equal(hook.status, 0); assert.equal(hook.stdout, '');
   assert.equal(fs.readFileSync(state,'utf8'), before);
+});
+test('hook launches remote restore after parent exit and skips spawning during cooldown', async t => {
+  const f = fixture(t);
+  for (const name of ['purge-sessions', 'purge-remote-sessions', 'sync-remote-titles', 'sync-remote-archives', 'mobile-standby-status']) {
+    f.put(`${name}-state.json`, JSON.stringify({ at: Date.now(), since: Date.now() }));
+  }
+  f.put('.credentials.json', JSON.stringify({ claudeAiOauth: { accessToken: 'test' } }));
+  f.put('../.claude.json', JSON.stringify({ oauthAccount: { organizationUuid: 'test' } }));
+  const marker = path.join(f.base, 'restore-fetch.json');
+  const parentExited = path.join(f.base, 'hook-exited');
+  const spawns = path.join(f.base, 'restore-spawns.txt');
+  const preload = f.put('restore-fetch-stub.mjs', `
+    import fs from 'node:fs';
+    import childProcess from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    const original = childProcess.spawn;
+    childProcess.spawn = (...args) => {
+      if (args[1]?.some(arg => arg.endsWith('restore-remote-sessions.mjs'))) {
+        fs.appendFileSync(${JSON.stringify(spawns)}, 'spawn\\n');
+      }
+      return original(...args);
+    };
+    syncBuiltinESMExports();
+    globalThis.fetch = async url => {
+      for (let i = 0; i < 500 && !fs.existsSync(${JSON.stringify(parentExited)}); i++) {
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      if (!fs.existsSync(${JSON.stringify(parentExited)})) throw new Error('hook did not exit');
+      fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ url }));
+      return { ok: true, json: async () => ({ data: [] }) };
+    };
+  `);
+  const env = { ...f.env, NODE_OPTIONS: `--import ${JSON.stringify(pathToFileURL(preload).href)}` };
+  // preload の読み込みを含む統合テスト。hook 自体の3秒上限は上の専用テストで検証する。
+  const runHook = () => spawnSync(process.execPath, [script, '--hook'], { env, encoding: 'utf8', timeout: 10_000 });
+  const first = runHook();
+  assert.equal(first.status, 0, first.stderr);
+  fs.writeFileSync(parentExited, 'exited');
+  for (let i = 0; i < 500 && !fs.existsSync(marker); i++) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(fs.existsSync(marker), 'detached restore child must run after hook exits');
+  assert.match(JSON.parse(fs.readFileSync(marker)).url, /\/v1\/code\/sessions\?limit=100$/);
+  const state = path.join(f.base, 'restore-remote-sessions-state.json');
+  const before = fs.readFileSync(state, 'utf8');
+  assert.ok(JSON.parse(before).at >= Date.now() - 15_000);
+  const second = runHook();
+  assert.equal(second.status, 0, second.stderr);
+  assert.equal(fs.readFileSync(state, 'utf8'), before);
+  assert.equal(fs.readFileSync(spawns, 'utf8'), 'spawn\n');
 });
 test('setup converge repairs both events on existing PCs and remains idempotent', t => {
   const f=fixture(t);
@@ -253,7 +301,7 @@ test('remote archives retain audit mapping, respect live/VSCode/recent/resumed g
   const rows = ids.map(sessionId => ({ sessionId, projectId: 'project', bridgeSessionId: `cse_${sessionId}`, archivedAt: new Date(now - 10 * minute).toISOString(), title: sessionId }));
   f.put('remote-archived-sessions.json', JSON.stringify({ ids: rows, kept: ['kept-remote'] }));
   f.put('current-sessions/live-remote.json', JSON.stringify({ sessionId: 'live-remote', at: new Date(now).toISOString() }));
-  const db = path.join(f.home, 'vscode-user', 'globalStorage', 'state.vscdb');
+  const db = path.join(f.home, 'vscode-user', 'workspaceStorage', 'abc', 'state.vscdb');
   fs.mkdirSync(path.dirname(db), { recursive: true }); fs.writeFileSync(db, 'tab-remote');
   assert.deepEqual(f.run('--dry-run').sessions.map(x => x.sessionId), ['free-remote']);
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.base, 'remote-archived-sessions.json'))).ids.length, 6);
@@ -270,4 +318,33 @@ test('remote archives retain audit mapping, respect live/VSCode/recent/resumed g
   fs.unlinkSync(path.join(f.base, 'current-sessions/free-remote.json'));
   f.put('remote-archived-sessions.json', JSON.stringify({ ...ledger(), ids: [...ledger().ids, rows[0]] }));
   assert.equal(f.run('--dry-run').sessions.some(x => x.sessionId === 'free-remote'), false);
+});
+
+for (const storage of ['globalStorage', 'workspaceStorage']) {
+  test(`remote archive with ID only in ${storage}`, t => {
+    const f = fixture(t);
+    f.session('remote', [msg('user', 'original title', 20 * minute)], 46_000);
+    const archivedAt = new Date(now - 10 * minute).toISOString();
+    f.put('remote-archived-sessions.json', JSON.stringify({ ids: [{ sessionId: 'remote', projectId: 'project', title: 'server title', archivedAt }] }));
+    const db = path.join(f.home, 'vscode-user', storage, ...(storage === 'workspaceStorage' ? ['abc'] : []), 'state.vscdb');
+    fs.mkdirSync(path.dirname(db), { recursive: true }); fs.writeFileSync(db, 'remote');
+    const r = f.run();
+    assert.equal(r.sessions.length, storage === 'globalStorage' ? 1 : 0);
+    assert.equal(fs.existsSync(path.join(f.base, 'projects/project/remote.jsonl')), storage === 'workspaceStorage');
+    if (r.sessions.length) {
+      assert.equal(r.sessions[0].reason, 'remote-archived');
+      assert.equal(r.sessions[0].title, 'server title');
+      assert.equal(r.sessions[0].archivedAt, archivedAt);
+    }
+  });
+}
+
+test('overlapping closed and remote archive retains closed global DB protection', t => {
+  const f = fixture(t); f.session('both', [msg('user', 'work', 20 * minute)], 46_000);
+  f.put('closed-sessions.json', JSON.stringify({ ids: ['both'] }));
+  f.put('remote-archived-sessions.json', JSON.stringify({ ids: [{ sessionId: 'both', projectId: 'project', archivedAt: new Date(now - 10 * minute).toISOString() }] }));
+  const db = path.join(f.home, 'vscode-user', 'globalStorage', 'state.vscdb');
+  fs.mkdirSync(path.dirname(db), { recursive: true }); fs.writeFileSync(db, 'both');
+  const result = f.run('--dry-run');
+  assert.equal(result.sessions.length, 0); assert.equal(result.protected, 1);
 });

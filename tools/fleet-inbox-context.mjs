@@ -20,9 +20,8 @@ export const CONTEXT_LIMIT = 1800;
 export const CATEGORY_LIMITS = Object.freeze([3, 3, 3, 2]);
 export const FOOTER = 'node tools/fleet-mail.mjs --inbox --unseen';
 export const MACHINE_REPORT = /\[(?:lane-health|rule-compliance)\]/;
-export function isHeadless(env = process.env) {
-  return env.CLAUDE_HEADLESS === '1' || !!String(env.ORGIAST_HEADLESS_JOB || '').trim();
-}
+import { isHeadless } from './lib/unattended-session.mjs';
+export { isHeadless } from './lib/unattended-session.mjs';
 export function selectContext(messages, { label = resolveFleetLabel(process.env.ORGIAST_HOME || os.homedir(), { hostname: os.hostname() }), headless = isHeadless(), sessionId = '', now = Date.now(), limit = CONTEXT_LIMIT } = {}) {
   const expired = messages.filter(m => m.status === 'expired' || (!TERMINAL_STATUSES.includes(m.status) && Date.parse(m.expiresAt) <= now));
   const active = messages.filter(m => (m.status === 'failed' && m.kind === 'prompt' && !(now - Date.parse(m.failedAt) > 72 * 60 * 60 * 1000) || !TERMINAL_STATUSES.includes(m.status)) && !expired.includes(m));

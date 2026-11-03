@@ -83,6 +83,27 @@ test('deadline kills process tree, never spawns after deadline', async () => {
   let args; killTree(123, { platform: 'win32', spawnImpl: (exe, argv) => { assert.equal(exe, 'taskkill'); args = argv; return { status: 0 }; } });
   assert.deepEqual(args, ['/PID', '123', '/T', '/F']);
 });
+// 2026-10-26T20:17Z 実測: 期限到達時に watchdog と親のタイマーが同時に taskkill し、後勝ち側は
+// 「プロセスが見つかりません」exit 128 になる（子は既に終了済み = 正常な二重 kill）。
+// 2026-11-02 実測: Node.js spawnSync 経由だと taskkill は exit 255 を返す（native Windows API）。
+// 128/255 は POSIX 分岐の ESRCH と同様に無視し、stderr / ledger の reason を汚さないこと。
+// 0 ・ 128 ・ 255 以外（例: 1 = アクセス拒否）は子が残るため従来どおり投げること。
+test('killTree tolerates taskkill 128 (process already exited)', () => {
+  killTree(123, { platform: 'win32', spawnImpl: () => ({ status: 128 }) }); // must not throw
+  assert.throws(() => killTree(123, { platform: 'win32', spawnImpl: () => ({ status: 1 }) }), /taskkill failed: 1/);
+  assert.throws(() => killTree(123, { platform: 'win32', spawnImpl: () => ({ error: new Error('ENOENT') }) }), /ENOENT/);
+});
+test('killTree tolerates taskkill 255 (spawnSync native Windows path)', () => {
+  // Node.js spawnSync 経由で taskkill を呼ぶと、プロセス不在時に 255 が返る（Git Bash の 128 に相当）。
+  killTree(123, { platform: 'win32', spawnImpl: () => ({ status: 255 }) }); // must not throw
+});
+test('killTree tolerates taskkill ETIMEDOUT (kill timed out)', () => {
+  // ETIMEDOUT from spawnSync means taskkill didn't finish within the 10s timeout.
+  // This is normal at deadline (race: watchdog and parent both try to kill).
+  killTree(123, { platform: 'win32', spawnImpl: () => ({ status: null, error: Object.assign(new Error('spawnSync taskkill ETIMEDOUT'), { code: 'ETIMEDOUT' }) }) }); // must not throw
+  // Other error codes should still throw
+  assert.throws(() => killTree(123, { platform: 'win32', spawnImpl: () => ({ status: null, error: Object.assign(new Error('spawnSync taskkill ENOENT'), { code: 'ENOENT' }) }) }), /ENOENT/);
+});
 test('FINAL only from final structured message, never quoted tool text', () => {
   assert.equal(parseOutput(JSON.stringify({ result: 'ITERATING: FINAL is not proven' })).final, false);
   assert.equal(parseOutput(JSON.stringify({ result: 'FINAL\nall evidence recorded', usage: { input_tokens: 4, output_tokens: 5 } })).final, true);
@@ -119,7 +140,8 @@ test('prepareTree は dirty を commit・push してから新ブランチへ進�
   assert.ok(verbs.indexOf('commit') >= 0);
   assert.ok(verbs.indexOf('commit') < verbs.indexOf('push'));
   assert.ok(verbs.indexOf('push') < verbs.indexOf('checkout'));
-  assert.equal(statuses, 2);
+  // :!.loop の status（2回）＋ .loop/ の status（1回）＝3回
+  assert.equal(statuses, 3);
   // :!.loop を付けると git 2.55 は exit 1 で拒否し救済 commit が作られない（2026-10-24 実測）。
   assert.deepEqual(calls.find(args => args[0] === 'add'), ['add', '-A', '--', '.']);
 });
@@ -191,6 +213,35 @@ test('prepareTree は書き込み不能でも native git なら落とさず、WS
   // 読み取りが EPERM のままなら、native でも worktree は使えないので落とす。
   assert.throws(() => prepareTree({ home, provider: 'codex', run, previous: null, io: { readFile: () => { throw eperm(); }, chmod: () => {} } }), /EPERM/);
 });
+// 2026-11-02 実測: quota-sweep-repo に追跡された .loop/quota-sweep-claude-state.md があり、
+// ローカル変更があると git checkout --detach origin/main が「Your local changes to the following files
+// would be overwritten by checkout: .loop/quota-sweep-claude-state.md」で失敗する。
+// prepareTree は .loop/ の追跡ファイルを復元してから checkout する。
+test('prepareTree は追跡された .loop/ ファイルのローカル変更を復元してから checkout する', t => {
+  const { home, tree } = worktreeFixture(t); const commands = [];
+  const run = (_exe, args) => {
+    commands.push(args);
+    if (args[0] === 'status' && args[1] === '--porcelain') {
+      // 通常の作業ファイルは clean、.loop/ にのみ変更がある状態
+      if (args[2] === '--') {
+        if (args[3] === '.loop/') return ' M .loop/quota-sweep-claude-state.md';
+        return ''; // :!.loop では clean
+      }
+      return '';
+    }
+    if (args[0] === 'rev-parse') return 'base';
+    if (args[0] === 'branch') return '';
+    return '';
+  };
+  assert.doesNotThrow(() => prepareTree({ home, provider: 'claude', run, previous: null }));
+  // .loop/ の status → checkout --quiet -- .loop/ の順が確認できる
+  const statusIdx = commands.findIndex(a => a[0] === 'status' && a[3] === '.loop/');
+  assert.ok(statusIdx >= 0, '.loop/ status を確認した');
+  const resetIdx = commands.findIndex(a => a[0] === 'checkout' && a[1] === 'HEAD' && a[2] === '--' && a[3] === '.loop/');
+  assert.ok(resetIdx >= 0, '.loop/ ファイルを復元した');
+  assert.ok(resetIdx < commands.findIndex(a => a[0] === 'checkout' && a[1] === '--detach' && a[2] === 'origin/main'),
+    '.loop/ の復元はチェックアウトより前');
+});
 function context(t, child) {
   const home = temp(t), tree = path.join(home, 'tree'); fs.mkdirSync(path.join(home, '.claude')); fs.mkdirSync(tree);
   fs.writeFileSync(path.join(home, '.claude/quota-sweep-goals.md'), `- [ ] ${DEFAULT_GOAL}\n`);
@@ -219,6 +270,14 @@ test('runSweep は FINAL の未コミット作業を救済して同じ実行で�
   assert.ok(calls.findIndex(args => args.includes('commit')) < calls.findIndex(args => args[0] === 'rev-list'));
   assert.deepEqual(calls.find(args => args[0] === 'push'), ['push', '-u', 'origin', 'quota-sweep/test']);
   assert.ok(logs.some(message => message.includes('preserved final uncommitted work')));
+});
+test('runSweep は親 env の非 Claude 経路・モデル指定を claude child へ渡さない', async t => {
+  let seen;
+  const ctx = context(t, async (_exe, args, opts) => { seen = { args, env: opts.env }; return { code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }; });
+  ctx.env = { ANTHROPIC_BASE_URL: 'https://openrouter.ai/api', ANTHROPIC_MODEL: 'deepseek/deepseek-v4-flash', ANTHROPIC_DEFAULT_SONNET_MODEL: 'deepseek/x', CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000', ORGIAST_QUOTA_SWEEP_MODEL: 'deepseek/deepseek-v4-flash' };
+  await runSweep(decision, ctx);
+  for (const k of ['ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'CLAUDE_CODE_MAX_CONTEXT_TOKENS']) assert.equal(seen.env[k], undefined, k);
+  assert.ok(!seen.args.some(a => String(a).includes('deepseek')), 'モデル引数に非 Claude 名を使わない');
 });
 test('runSweep は終了時の救済失敗をログに残し outcome を変えない', async t => {
   const ctx = context(t, async () => ({ code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }));
@@ -312,15 +371,27 @@ test('一時障害の判定は 429/5xx/network だけで、認証・形式不一
   for (const reason of ['HTTP 429', 'HTTP 503', 'HTTP 408', 'network: TimeoutError']) assert.equal(isTransientWindowReadError(reason), true);
   for (const reason of ['HTTP 401', 'HTTP 403', 'accessToken 未設定', 'credentials: ENOENT', 'usage response の形式が未対応', '', undefined]) assert.equal(isTransientWindowReadError(reason), false);
 });
-test('new reset archives old state and starts again, same-window retry keeps cumulative budget', async t => {
+test('new reset preserves completed contract and cumulative budget', async t => {
   let calls = 0; const ctx = context(t, async () => { calls++; return { code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }; });
   await runSweep(decision, ctx);
   const firstCalls = calls;
   const nextDecision = { ...decision, resetsAt: decision.resetsAt + minute, deadline: decision.deadline + minute };
   ctx.windows = async () => windows.map(w => w.window === '5h' ? { ...w, resetsAt: nextDecision.resetsAt } : w);
   await runSweep(nextDecision, ctx);
-  assert.equal(calls, firstCalls + 1); // contract reused; one new tick
-  assert.equal(ctx.state.lastRun.claude[nextDecision.resetsAt].outcome, 'final');
+  assert.equal(calls, firstCalls); // replenished quota cannot restart a completed goal
+  assert.equal(ctx.state.lastRun.claude[nextDecision.resetsAt].outcome, 'no-goal');
+  assert.ok(!fs.readdirSync(path.join(ctx.tree, '.loop')).some(n => n.startsWith('archive-')));
+});
+test('a different goal archives the prior contract and gets a new attempt budget', async t => {
+  let calls = 0; const ctx = context(t, async () => { calls++; return { code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }; });
+  await runSweep(decision, ctx);
+  const firstCalls = calls;
+  fs.writeFileSync(path.join(ctx.home, '.claude/quota-sweep-goals.md'), '- [ ] a different repair goal\n');
+  const next = { ...decision, resetsAt: decision.resetsAt + minute, deadline: decision.deadline + minute };
+  ctx.windows = async () => windows.map(w => w.window === '5h' ? { ...w, resetsAt: next.resetsAt } : w);
+  await runSweep(next, ctx);
+  assert.equal(calls, firstCalls + 2); // new contract generation and one tick
+  assert.equal(ctx.state.lastRun.claude[next.resetsAt].outcome, 'final');
   assert.ok(fs.readdirSync(path.join(ctx.tree, '.loop')).some(n => n.startsWith('archive-')));
 });
 test('eight ticks is hard cap and a retry cannot reset it', async t => {
@@ -330,6 +401,10 @@ test('eight ticks is hard cap and a retry cannot reset it', async t => {
   assert.equal(calls, MAX_TICKS + 1); // generation + ticks
   await runSweep(decision, ctx);
   assert.equal(calls, MAX_TICKS + 1);
+  const next = { ...decision, resetsAt: decision.resetsAt + minute, deadline: decision.deadline + minute };
+  ctx.windows = async () => windows.map(w => w.window === '5h' ? { ...w, resetsAt: next.resetsAt } : w);
+  await runSweep(next, ctx);
+  assert.equal(calls, MAX_TICKS + 1); // the next quota window also cannot reset the cap
 });
 test('PR only for new commits; notification failure is nonfatal', async t => {
   const commands = []; const ctx = context(t, async () => ({ code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }));

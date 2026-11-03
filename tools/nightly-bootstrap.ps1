@@ -54,7 +54,7 @@ function Send-NightlyHeartbeat([string]$StartedAt, [bool]$Ok, [string]$Summary) 
 }
 
 function Stop-Nightly([string]$Step, [string]$Result, [int]$Code) {
-    Write-NightlyLog $Step $Result
+    Write-NightlyLog $Step ($Result + " pid=" + $PID)
     Send-NightlyHeartbeat -StartedAt $nightlyStartedAt -Ok $false -Summary ("error:" + $Step + " " + $Result)
     exit $Code
 }
@@ -95,7 +95,7 @@ function Get-NightlyFileSha256([string]$Path) {
 }
 
 try {
-    Write-NightlyLog 'nightly-bootstrap' 'ok:開始'
+    Write-NightlyLog 'nightly-bootstrap' ("ok:開始 pid=" + $PID + " target=" + $Target)
 
     # 早期の Stop-Nightly(対象確認など)でも終了ハートビートに開始時刻を載せられるよう、最初に取る。
     $nightlyStartedAt = (Get-Date -Format 'o')
@@ -131,6 +131,7 @@ try {
                 $mutexTimeoutMs = $parsedTimeout
             }
         }
+        $mutexWait = [Diagnostics.Stopwatch]::StartNew()
         try {
             $mutexAcquired = $mutex.WaitOne($mutexTimeoutMs)
         } catch [Threading.AbandonedMutexException] {
@@ -138,8 +139,14 @@ try {
             Write-NightlyLog '排他制御' 'warn:放棄されたミューテックスを取得。続行'
         }
 
+        $mutexWait.Stop()
+        $mutexWaitSeconds = $mutexWait.Elapsed.TotalSeconds.ToString('F3', [Globalization.CultureInfo]::InvariantCulture)
+        if ($mutexAcquired) {
+            Write-NightlyLog '排他制御' ("ok:取得 pid=" + $PID + " 待ち=" + $mutexWaitSeconds)
+        }
+
         if (-not $mutexAcquired) {
-            Write-NightlyLog '排他制御' 'warn:他のタスクが同期中のためタイムアウト。既存版で続行'
+            Write-NightlyLog '排他制御' ("warn:他のタスクが同期中のためタイムアウト。既存版で続行 pid=" + $PID + " 待ち=" + $mutexWaitSeconds)
         } elseif ($env:ORGIAST_NIGHTLY_MUTEX_HOLD_MS -and [int]$env:ORGIAST_NIGHTLY_MUTEX_HOLD_MS -gt 0) {
             Start-Sleep -Milliseconds ([int]$env:ORGIAST_NIGHTLY_MUTEX_HOLD_MS)
         }
@@ -169,6 +176,19 @@ try {
             } else {
                 & $git.Source -C $repo fetch origin main
                 if ($LASTEXITCODE -ne 0) { throw "git fetch終了コード=$LASTEXITCODE" }
+                # 異常終了した git の残骸だけを除去し、10分以内のロックは実行中として残す。
+                try {
+                    $indexLock = Join-Path $gitDir 'index.lock'
+                    if (Test-Path -LiteralPath $indexLock -PathType Leaf) {
+                        $indexLockInfo = Get-Item -LiteralPath $indexLock -ErrorAction Stop
+                        if ($indexLockInfo.LastWriteTime -lt (Get-Date).AddMinutes(-10)) {
+                            Remove-Item -LiteralPath $indexLock -Force -ErrorAction Stop
+                            Write-NightlyLog 'リポ同期' ("warn:古い index.lock を削除 " + $indexLockInfo.CreationTime.ToString('o'))
+                        }
+                    }
+                } catch {
+                    Write-NightlyLog 'リポ同期' ("warn:index.lock の削除失敗 " + $_.Exception.Message)
+                }
                 if (Test-NightlyTreeClean $repo) {
                     & $git.Source -C $repo checkout --detach origin/main
                     if ($LASTEXITCODE -ne 0) { throw "git checkout終了コード=$LASTEXITCODE" }
@@ -338,19 +358,24 @@ try {
         } else {
             Stop-Nightly 'シェル確認' ("error:未知の-Shell " + $Shell) 1
         }
+        Write-NightlyLog '対象開始' ("ok:" + [IO.Path]::GetFileName($targetPath) + " pid=" + $PID)
+        $targetTimer = [Diagnostics.Stopwatch]::StartNew()
         & $shellCommand -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $targetPath @forwardArgs
         $targetExitCode = $LASTEXITCODE
     } elseif ($extension -eq '.mjs' -or $extension -eq '.js') {
         # WSL 経由で起動されると PATH に Linux 版の拡張子なし node が混ざり、掴むと「アプリの選択」が出る（2026-10-18 実測）。.exe に限定する。
         $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1
         if (-not $node) { Stop-Nightly 'node確認' 'error:nodeが見つからない' 1 }
+        Write-NightlyLog '対象開始' ("ok:" + [IO.Path]::GetFileName($targetPath) + " pid=" + $PID)
+        $targetTimer = [Diagnostics.Stopwatch]::StartNew()
         & $node.Source $targetPath @forwardArgs
         $targetExitCode = $LASTEXITCODE
     } else {
         Stop-Nightly '対象確認' ("error:対応していない拡張子 " + $extension) 1
     }
 
-    Write-NightlyLog '対象実行' ("ok:" + [IO.Path]::GetFileName($targetPath) + " 終了コード=" + $targetExitCode)
+    $targetTimer.Stop()
+    Write-NightlyLog '対象実行' ("ok:" + [IO.Path]::GetFileName($targetPath) + " 終了コード=" + $targetExitCode + " pid=" + $PID + " 所要=" + $targetTimer.Elapsed.TotalSeconds.ToString('F3', [Globalization.CultureInfo]::InvariantCulture))
     Send-NightlyHeartbeat -StartedAt $nightlyStartedAt -Ok $true -Summary ("対象=" + [IO.Path]::GetFileName($targetPath) + " 終了コード=" + $targetExitCode)
     exit $targetExitCode
 } catch {

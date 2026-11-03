@@ -28,7 +28,9 @@ export const GATE_CONTRACT = {"name": "self-check-before-asking-guard", "remedie
 // このセッションで一度も自分で叩いていない場合だけ。
 import fs from 'node:fs';
 import { isEntry } from './is-entry.mjs';
-import { lastAssistantText, readStdin } from './transcript-tail.mjs';
+import { readStdin } from './transcript-tail.mjs';
+import { currentTurnAssistantText } from './lib/assistant-text.mjs';
+import { withStopRetryInstruction } from './lib/stop-retry-message.mjs';
 
 // 「調べた結果をこちらに返してほしい」という形。実行依頼(押して/入力して)は含めない。
 const REPORT_BACK = /(?:教えて|返信して|報告して|共有して|知らせて|返して)\s*(?:ください|下さい|もらえますか|いただけますか|ほしい|欲しい)|返信(?:を)?(?:ください|下さい|お願い)|(?:確認|チェック|調べ|見)(?:して|し|て)\s*(?:みて)?\s*(?:ください|下さい|もらえますか|いただけますか)|(?:あるか|いるか|できるか|届いているか|存在するか|どちらか|どれか)[^。.\n]{0,20}(?:教えて|返信|報告|確認)|(?:分かりますか|わかりますか|ご存じですか|心当たり)/;
@@ -207,10 +209,11 @@ async function main() {
     if (!raw.trim()) return;
     const input = JSON.parse(raw);
     if (input.stop_hook_active || !input.transcript_path || !fs.existsSync(input.transcript_path)) return;
-    const result = findOutsourcedInvestigation(lastAssistantText(input.transcript_path), scanToolUses(input.transcript_path));
+    const transcriptRaw = fs.readFileSync(input.transcript_path, 'utf8');
+    const result = findOutsourcedInvestigation(currentTurnAssistantText(transcriptRaw), scanToolUsesFromRaw(transcriptRaw));
     const message = formatViolationMessage(result);
     if (message) {
-      console.error(message);
+      console.error(withStopRetryInstruction(message));
       process.exitCode = 2;
     }
   } catch {}

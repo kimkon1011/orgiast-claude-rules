@@ -402,7 +402,7 @@ test('crash after appending log does not lose a charged iteration or allow bypas
 
 function candidates(f, body) {
   fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(f.opts.home, '.claude', 'next-actions.md'), body);
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'business-goals.md'), body);
 }
 
 test('done pre replenishes in priority order, skips human work and previous objective, sends once', async (t) => {
@@ -463,7 +463,7 @@ test('refill with only the current objective in history still picks the first el
 test('never-started pre starts a candidate with mocked classifier and notifier', async (t) => {
   const sent = [];
   const f = fixture(t, { askImpl: async () => 'Yes', notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; } });
-  candidates(f, '## 推奨アクション\n- 自動テスト修正\n');
+  candidates(f, '## 売上・利益レバー（上から優先。1セッション=1件）\n- 自動テスト修正\n');
   assert.equal((await f.call('pre')).verdict, 'run');
   assert.equal((await f.call('status')).objective.objective, '自動テスト修正');
   assert.equal(sent.length, 1);
@@ -944,4 +944,59 @@ test('決定論的な完了・テスト失敗・noop・上限では Jev を呼�
   await done.call('start', { objective: 'test' });
   assert.equal((await done.call('post', { summary: 'done', progress: 100, evidence: 'verified' })).status, 'done');
   assert.equal(calls, 0);
+});
+
+test('post with --artifact counts fresh file as progress, resets consecutiveNoop, and records artifacts', async (t) => {
+  const f = fixture(t);
+  await f.call('start', { objective: 'maintain 95% SLA', 'max-noop': 3 });
+  await f.call('post', { summary: 'first iter', progress: 99 });
+
+  const noopPost = await f.call('post', { summary: 'no artifact', progress: 99 });
+  assert.equal(noopPost.noop, true);
+  assert.equal((await f.call('status')).state.consecutiveNoop, 1);
+
+  const freshPath = path.join(f.opts.home, 'fresh-artifact.txt');
+  fs.writeFileSync(freshPath, 'new content');
+  const freshTime = new Date(NOW.getTime() + 10_000);
+  fs.utimesSync(freshPath, freshTime, freshTime);
+
+  const relativeFresh = path.relative(process.cwd(), freshPath);
+  const freshPost = await f.call('post', { summary: 'maintained with artifact', progress: 99, artifact: relativeFresh });
+  assert.equal(freshPost.noop, false);
+  assert.deepEqual(freshPost.artifacts, [path.resolve(freshPath)]);
+  assert.deepEqual(freshPost.staleArtifacts, []);
+  assert.equal((await f.call('status')).state.consecutiveNoop, 0);
+
+  const logLines = fs.readFileSync(f.paths.log, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(logLines.at(-1).artifacts, [path.resolve(freshPath)]);
+});
+
+test('post with stale or missing artifact is noop, records staleArtifacts, and explicit noop overrides fresh artifact', async (t) => {
+  const f = fixture(t);
+  await f.call('start', { objective: 'maintain SLA' });
+  await f.call('post', { summary: 'first iter', progress: 99 });
+
+  const stalePath = path.join(f.opts.home, 'stale-artifact.txt');
+  fs.writeFileSync(stalePath, 'old content');
+  const staleTime = new Date(NOW.getTime() - 10_000);
+  fs.utimesSync(stalePath, staleTime, staleTime);
+  const missingPath = path.join(f.opts.home, 'missing-artifact.txt');
+
+  const stalePost = await f.call('post', { summary: 'stale artifacts', progress: 99, artifact: `${stalePath}, ${missingPath}` });
+  assert.equal(stalePost.noop, true);
+  assert.deepEqual(stalePost.artifacts, []);
+  assert.deepEqual(stalePost.staleArtifacts, [path.resolve(stalePath), path.resolve(missingPath)]);
+
+  const logLines = fs.readFileSync(f.paths.log, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(logLines.at(-1).artifacts, undefined);
+
+  const freshPath = path.join(f.opts.home, 'fresh-again.txt');
+  fs.writeFileSync(freshPath, 'fresh');
+  const freshTime = new Date(NOW.getTime() + 10_000);
+  fs.utimesSync(freshPath, freshTime, freshTime);
+
+  const explicitNoop = await f.call('post', { summary: 'explicit noop', progress: 99, artifact: freshPath, noop: true });
+  assert.equal(explicitNoop.noop, true);
+  assert.deepEqual(explicitNoop.artifacts, [path.resolve(freshPath)]);
+  assert.deepEqual(explicitNoop.staleArtifacts, []);
 });

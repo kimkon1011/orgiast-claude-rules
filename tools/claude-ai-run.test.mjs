@@ -197,6 +197,63 @@ test('runConnectorPrompt: タイムアウトで kill され timedOut: true か�
   assert.equal(res.code, 124);
 });
 
+for (const platform of ['win32', 'linux']) {
+  test(`runConnectorPrompt: ${platform} で累積stdoutがstopWhenを満たすと終了を待たず子を停止する`, async () => {
+    const child = new EventEmitter();
+    child.pid = 12345;
+    child.stdin = new PassThrough();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    const kills = [], taskkills = [], outputs = [];
+    child.kill = signal => {
+      kills.push(signal);
+      child.emit('close', 143);
+    };
+    const result = runConnectorPrompt({
+      spawnFn: () => child,
+      spawnSyncFn: (...args) => {
+        taskkills.push(args);
+        child.emit('close', 1);
+        return { status: 0 };
+      },
+      platform,
+      timeoutMs: 20,
+      stopWhen: out => { outputs.push(out); return out.includes('"session_id"'); },
+    });
+    child.stderr.write('診断');
+    child.stdout.write('{"session_');
+    assert.equal(kills.length + taskkills.length, 0);
+    child.stdout.write('id":"abc"}');
+    assert.deepEqual(await result, {
+      code: 0, stdout: '{"session_id":"abc"}', stderr: '診断', timedOut: false, stoppedEarly: true,
+    });
+    child.stdout.write('追加出力');
+    child.emit('error', new Error('停止後のエラー'));
+    await new Promise(resolve => setTimeout(resolve, 40));
+    assert.deepEqual(outputs, ['{"session_', '{"session_id":"abc"}']);
+    assert.deepEqual(kills, platform === 'win32' ? [] : ['SIGTERM']);
+    assert.deepEqual(taskkills, platform === 'win32'
+      ? [['taskkill', ['/PID', '12345', '/T', '/F'], { windowsHide: true }]] : []);
+  });
+}
+
+for (const stopWhen of [undefined, () => false]) {
+  test(`runConnectorPrompt: stopWhenが${stopWhen ? 'false' : '未指定'}なら終了まで待って従来の結果を返す`, async () => {
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.kill = () => assert.fail('停止禁止');
+    let completed = false;
+    const result = runConnectorPrompt({
+      spawnFn: () => child, spawnSyncFn: () => assert.fail('taskkill禁止'), stopWhen,
+    }).then(value => { completed = true; return value; });
+    child.stdout.write('{"session_id":"abc"}');
+    await Promise.resolve();
+    assert.equal(completed, false);
+    child.emit('close', 7);
+    assert.deepEqual(await result, { code: 7, stdout: '{"session_id":"abc"}', stderr: '', timedOut: false });
+  });
+}
+
 test('CLI --dry-run: JSON が返り strippedKeys に3キーが含まれ秘密値が出力されない', () => {
   const secretToken = 'TEST_SECRET_TOKEN_999';
   const secretBase = 'https://deepseek-secret.example.com';

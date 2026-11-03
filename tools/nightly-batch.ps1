@@ -705,6 +705,32 @@ try {
         }
     } else { $summary['cafe-digest-deliver'] = 'skip:ファイルなし'; Write-NightlyLog 'cafe-digest-deliver' 'skip:ファイルなし' }
 
+    $xTips = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\x-ai-tips-collect.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $xTips = $candidate; break }
+    }
+    if ($xTips) {
+        try {
+            $xTipsOutput = @(& $node.Source $xTips '--limit' '8' 2>&1)
+            $xTipsExitCode = $LASTEXITCODE
+            if ($xTipsExitCode -ne 0) {
+                $xTipsResult = 'error:終了コード' + $xTipsExitCode + ': ' + (Format-NightlyDetail $xTipsOutput)
+            } else {
+                $xTipsResult = @($xTipsOutput | Where-Object { $_ -match '^(ok:取得\d+件 追加\d+件 重複\d+件 費用\$[0-9.]+|skip:.+|error:.+)$' } | Select-Object -Last 1)
+                if ($xTipsResult.Count -eq 0) { $xTipsResult = 'error:状態不明' } else { $xTipsResult = [string]$xTipsResult[0] }
+            }
+            $summary['x-ai-tips-collect'] = $xTipsResult
+            Write-NightlyLog 'x-ai-tips-collect' $xTipsResult
+        } catch {
+            $summary['x-ai-tips-collect'] = ("error:" + $_.Exception.Message); Write-NightlyLog 'x-ai-tips-collect' $summary['x-ai-tips-collect']
+            Write-Warning ("nightly-batch: x-ai-tips-collect: " + $_.Exception.Message)
+        }
+    } else {
+        $summary['x-ai-tips-collect'] = 'skip:ファイルなし'
+        Write-NightlyLog 'x-ai-tips-collect' 'skip:ファイルなし'
+    }
+
     $triage = $null
     foreach ($repo in $repos) {
         $candidate = Join-Path $repo 'tools\ai-news-triage.mjs'

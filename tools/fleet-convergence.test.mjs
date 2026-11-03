@@ -138,3 +138,28 @@ test('missing names include definition drift and unavailable tools without expos
   assert.equal(row.hookMissing, 2);
   assert.equal(JSON.stringify(row).includes('VALUE'), false);
 });
+
+test('ZIP override falls back to nightly checkout and installed hook tree takes priority', t => {
+  const h = home(t), zip = path.join(h, 'orgiast-claude-rules');
+  const nightly = path.join(h, '.claude/nightly-repo');
+  const active = path.join(h, 'active hooks');
+  fs.mkdirSync(zip);
+  for (const dir of [nightly, active]) {
+    fs.mkdirSync(dir); execFileSync('git', ['init', dir], { stdio: 'pipe' });
+  }
+  const options = { home: h, repo: zip, expectedHooks: { hooks: {} } };
+  assert.equal(collectConvergence(options).syncRepo, nightly);
+  const hooks = { SessionStart: [{ hooks: [{ type: 'command', command: `node "${active}/tools/onboarding-sync.mjs"` }] }] };
+  fs.writeFileSync(path.join(h, '.claude/settings.json'), JSON.stringify({ hooks }));
+  assert.equal(collectConvergence({ ...options, repo: nightly }).syncRepo, active);
+});
+
+test('without any checkout hook counts stay unknown even with expected hooks', t => {
+  const h = home(t), zip = path.join(h, 'orgiast-claude-rules'); fs.mkdirSync(zip);
+  const row = collectConvergence({ home: h, repo: zip, expectedHooks: { hooks: { Stop: [{ hooks: [{ command: 'node missing.mjs' }] }] } } });
+  assert.equal(row.syncRepo, null);
+  assert.equal(row.note, 'sync repo not a git checkout');
+  assert.equal(row.hookMissing, null);
+  assert.equal(row.hookMissingNames, undefined);
+  assert.equal(row.behindMain, null);
+});

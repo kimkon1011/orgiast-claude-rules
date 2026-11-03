@@ -1,0 +1,51 @@
+[
+  {
+    "file": "/mnt/c/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.314-win32-x64/extension.js",
+    "sha256": "927fe02283d2f6c9c9ecfb25413711b7c391eda6bec0c5ca33a1ff5dc6b85e6e",
+    "hits": [
+      {
+        "symbol": "getArchivedSessionIds(){",
+        "line": 173,
+        "snippet": "getArchivedSessionIds(){return this.context.globalState.get(\"hiddenSessionIds\")??[]}async archiveSession(e){await this.archiveSessions([e])}async archiveSessions(e){let t=this.getArchivedSessionIds(),n=new Set(t),r=e.filter((o)=>!n.has(o));if(r.length>0)await this.context.globalState.update(\"hiddenSessionIds\",[...t,...new Set(r)])}async unarchiveSe"
+      },
+      {
+        "symbol": "getPanelTabSessions(){",
+        "line": 173,
+        "snippet": "getPanelTabSessions(){return axe(this.context.workspaceState.get(\"panelTabSessions\"))}async setPanelTabSessions(e){await this.context.workspaceState.update(\"panelTabSessions\",[...e])}getAutoArchiveInactiveDays(){return zCe(Ft(\"archiveInactiveSessions\"))}sessionGroupsKey(){return`sessionGroups:${this.sessionListScopeRoot()}`}sessionListScopeRoot(){l"
+      },
+      {
+        "symbol": "persistPanelSessions(){",
+        "line": 1143,
+        "snippet": "persistPanelSessions(){let e=[];for(let[n,r]of this.sessionPanels)if(Kw(n))e.push({sessionId:n,title:r.title,fullEditor:this.panelFullEditor.get(r)});e.push(...this.rememberedTabSessions);let t=JSON.stringify(e);if(t===this.lastPersistedPanelSessions)return;this.lastPersistedPanelSessions=t,this.settings.setPanelTabSessions?.(e).catch((n)=>{this.ou"
+      },
+      {
+        "symbol": "function QCe(",
+        "line": 148,
+        "snippet": "function QCe(e){if(!e)return\"Claude Code\";return e.length>25?e.substring(0,24)+\"…\":e}function exe(e,t){let n=JCe(e),r=JCe(t);if(n===\"\"||r===\"\")return!1;if(n.endsWith(\"…\")){let o=n.slice(0,-1);return o!==\"\"&&r!==o&&r.startsWith(o)}return n===r}function JCe(e){return e.replace(/\\s+/g,\" \").trim()}function CV(e){return e.claudeTabCount>0&&e.otherTabCou"
+      },
+      {
+        "symbol": "archived:o.has(s.sessionId)",
+        "line": 424,
+        "snippet": "archived:o.has(s.sessionId),lastModified:s.lastModified,lastActivity:t.get(s.sessionId)?.lastActivity,fileSize:s.fileSize,summary:s.summary,customTitle:s.customTitle,gitBranch:s.gitBranch,worktree:eF(s.cwd),isCurrentWorkspace:WJ(s.cwd,this.cwd),...a}}),store:r,archivedIds:o}}async buildSessionList(){let e=this.sessionListOptions(),t=await this.list"
+      }
+    ],
+    "end_session_occurrences": 0
+  },
+  {
+    "file": "/mnt/c/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.314-win32-x64/webview/index.js",
+    "sha256": "ef7910d63f3a0ae3e9bbf5d238c73c19fab8704363d7a07edab2157f10611e6d",
+    "hits": [
+      {
+        "symbol": "replaceActiveSessionIfArchived(e){",
+        "line": 1893,
+        "snippet": "replaceActiveSessionIfArchived(e){if(this.activeSession.value!==e)return;this.activeSession.value=void 0;let t=e.isPanelInitial&&!e.sessionIdFromCli.value;this.createSession().then((n)=>{if(t)n.isPanelInitial=!0})}isDroppedSessionId(e){return this.sessions.value.some((t)=>t.hasDroppedSessionId(e))||this.activeSession.value?.hasDroppedSessionId(e)=="
+      },
+      {
+        "symbol": "case\"session_archive_changed\"",
+        "line": 1698,
+        "snippet": "case\"session_archive_changed\":this.sessionArchiveChanged.value={sessionId:e.request.sessionId,archived:e.request.archived,seq:(this.sessionArchiveChanged.value?.seq??0)+1};break;case\"session_store_changed\":this.sessionStoreChanges.value++;break;case\"session_states_update\":if(this.sessionStates.value=e.request.sessions,this.activeSessionId.value=e.r"
+      }
+    ],
+    "end_session_occurrences": 0
+  }
+]

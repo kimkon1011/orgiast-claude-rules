@@ -28,6 +28,7 @@
     {"path": "tools/register-stuck-pr-task.mjs", "scope": "kim-only", "step": "task:stuck-pr-sweeper", "reason": "kim-PCだけが停止PRの修復を実行し二重修正を防ぐ"},
     {"path": "tools/register-stuck-pr-task.ps1", "scope": "kim-only", "step": "task:stuck-pr-sweeper", "reason": "kim-PCだけが停止PRの修復を実行し二重修正を防ぐ"},
     {"path": "config/stuck-pr-sweeper.json", "scope": "kim-only", "step": "task:stuck-pr-sweeper", "reason": "kim-PCだけが停止PRの修復を実行し二重修正を防ぐ"},
+    {"path": "tools/register-vehicle-inspection-task.ps1", "scope": "kim-only", "step": "task:vehicle-inspection-watch", "reason": "社用車の車検台帳を読み kim-inbox へ通知するのは kim-PC だけ。複数PCで動くと同じ通知が重複する"},
     {"path": "tools/register-daytrip-detect-task.ps1", "scope": "kim-only", "step": "task:daytrip-detect", "reason": "kim個人の出張候補。LINE受信ホストだけで登録"},
     {"path": "tools/register-daytrip-detect-task.mjs", "scope": "kim-only", "step": "task:daytrip-detect", "reason": "convergeからkim-PC用PowerShell登録をEnsureで呼ぶ"},
     {"path": "tools/daytrip-ask-hook.mjs", "scope": "fleet", "step": "hook:daytrip-ask", "reason": "日帰り出張のセッション内確認。全PCへconvergeで配布しpendingがないPCでは無出力"},

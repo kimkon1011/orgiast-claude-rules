@@ -1059,6 +1059,12 @@
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
     },
     {
+      "path": "tools/lib/fleet-sheet-post.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "webhook-health が fleet sheet への POST に使う実行時 import 依存（busy 再送の共通ヘルパ）"
+    },
+    {
       "path": "tools/fleet-question-relay.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",

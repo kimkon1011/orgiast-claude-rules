@@ -122,7 +122,7 @@ test('送信前checkpoint・PCごと1通・再実行時二重送信なし', asyn
   const state = {}, g = calendarMock(); let sends = 0, checkpoints = 0;
   const jobs = plan({ events: [event(), event({ id: 'event2', iCalUID: 'ical2', start: { dateTime: `${date}T14:00:00+09:00` }, end: { dateTime: `${date}T15:00:00+09:00` } })] });
   const args = { jobs, state, config, receivers: { pc008: receiver }, template: '{{PAYLOAD}}', google: g, checkpoint: () => checkpoints++, send: async batch => {
-    assert.equal(state.batches[batch.id].status, 'sending'); assert.equal(Object.keys(state.sent).length, 2); sends++; return { id: 'mail-test' };
+    assert.equal(state.batches[batch.id].status, 'sending'); assert.equal(Object.keys(state.sent).length, 0); sends++; return { id: 'mail-test' };
   } };
   await dispatchJobs(args); await dispatchJobs({ ...args, jobs: plan({ state, events: jobs.map(j => j.event) }) });
   assert.equal(sends, 1); assert.equal(g.events.size, 2); assert.ok(checkpoints >= 3);
@@ -438,10 +438,11 @@ test('ローカルはstdin・nightly cwd・非表示・tools/MCPなし、タイ�
   await assert.rejects(result, /15分/); assert.equal(killed, 1); assert.equal(input, 'PRIVATE PROMPT');
 });
 test('ローカル時間上限の後も次ジョブへ進む', async () => {
-  let runs = 0;
-  const errors = await dispatchJobs({ jobs: plan({ events: [], cases: [c, { ...c, id: 'C9999' }], updates: { C1234: { modifiedTime: '2026-11-02' }, C9999: { modifiedTime: '2026-11-02' } } }), state: {}, config, google: {}, template: '{{PAYLOAD}}', checkpoint() {}, timeoutMs: 5,
+  const state = {}; let runs = 0;
+  const errors = await dispatchJobs({ jobs: plan({ events: [], cases: [c, { ...c, id: 'C9999' }], updates: { C1234: { modifiedTime: '2026-11-02' }, C9999: { modifiedTime: '2026-11-02' } } }), state, config, google: {}, template: '{{PAYLOAD}}', checkpoint() {}, timeoutMs: 5,
     runLocal: (batch, body, { signal }) => { runs++; return new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })); } });
   assert.equal(runs, 2); assert.equal(errors.length, 2); assert.ok(errors.every(e => /15分/.test(e.error)));
+  assert.deepEqual(state.sent, {}); assert.equal(Object.keys(state.failed).length, 2);
 });
 test('DWDジョブ中断後は追加書込を行わない', async () => {
   const controller = new AbortController(); let calls = 0;
@@ -572,4 +573,60 @@ test('巨大ハブは最新本文を部分保持し、低優先のシートよ�
   assert.doesNotMatch(input.prompt, /LOW_PRIORITY_CELL/);
   assert.ok(input.truncated.some(x => /案件情報ハブ: 入力予算/.test(x)));
   assert.ok(input.truncated.some(x => /plan\/Task: 入力予算/.test(x)));
+});
+
+test('失敗はsentに入らず30分後に再試行、1日3回で停止する', async () => {
+  const state = {}, g = calendarMock(); let runs = 0;
+  const run = now => dispatchJobs({ jobs: plan(), state, config, google: g, template: '{{PAYLOAD}}', checkpoint() {}, now,
+    runLocal() { runs++; throw Error('retry failure'); } });
+  await run('2026-11-03T07:00:00+09:00');
+  assert.deepEqual(state.sent, {});
+  assert.equal(Object.values(state.failed)[0].attempts, 1);
+  assert.equal(Object.values(state.failed)[0].lastError, 'retry failure');
+  await run('2026-11-03T07:29:59+09:00'); assert.equal(runs, 1);
+  await run('2026-11-03T07:30:00+09:00'); assert.equal(runs, 2);
+  assert.match([...g.events.values()][0].description, /状態: 再試行 2\/3/);
+  await run('2026-11-03T08:00:00+09:00'); assert.equal(runs, 3);
+  await run('2026-11-03T08:30:00+09:00'); assert.equal(runs, 3);
+  assert.equal(Object.values(state.failed)[0].attempts, 3);
+});
+test('開始時刻以降は再試行せず、JST翌日は回数をリセットする', async () => {
+  for (const [now, expected] of [['2026-11-03T10:00:00+09:00', 0], ['2026-11-03T10:01:00+09:00', 0], ['2026-11-03T07:00:00+09:00', 1]]) {
+    const job = plan()[0], key = `${job.date}:${job.key}`, state = { failed: { [key]: { job, attempts: 3, day: '2026-11-02', lastAttemptAt: '2026-11-02T23:30:00+09:00' } } }; let runs = 0;
+    await dispatchJobs({ jobs: [], state, config, google: calendarMock(), template: '{{PAYLOAD}}', checkpoint() {}, now,
+      runLocal() { runs++; throw Error('failed'); } });
+    assert.equal(runs, expected);
+    if (expected) assert.equal(state.failed[key].attempts, 1);
+  }
+});
+test('旧sentの失敗を移行しcollectでも再試行する。成功は維持', async () => {
+  const job = plan()[0], key = `${job.date}:${job.key}`, state = { sent: { [key]: 'old', successful: 'success' }, batches: {
+    old: { id: 'old', method: 'local', status: 'failed', createdAt: '2026-11-03T07:00:00+09:00', error: 'timeout', jobs: [job] },
+    success: { id: 'success', status: 'complete', jobs: [] }
+  } }; let runs = 0;
+  const run = now => collectRun({ home: os.tmpdir(), state, fleet: { inbox: [] }, google: calendarMock(), config, checkpoint() {}, now,
+    template: '{{PAYLOAD}}', runLocal() { runs++; throw Error('again'); } });
+  await run('2026-11-03T07:20:00+09:00');
+  assert.equal(state.sent[key], undefined); assert.equal(state.sent.successful, 'success');
+  assert.equal(state.failed[key].attempts, 1); assert.equal(runs, 0);
+  await run('2026-11-03T07:30:00+09:00'); assert.equal(runs, 1); assert.equal(state.failed[key].attempts, 2);
+  await run('2026-11-03T07:40:00+09:00'); assert.equal(runs, 1); assert.equal(state.failed[key].attempts, 2);
+});
+test('collect再試行の成功でfailedを消し、過去の失敗で予定を上書きしない', async () => {
+  const g = calendarMock(), request = g.request; let values = [['old']];
+  g.request = async (scope, url, method, body) => {
+    if (url.includes('sheets.googleapis.com')) {
+      if (url.includes('fields=sheets')) return { sheets: [{ properties: { title: 'Claude_次回MTGアジェンダ', sheetId: 42 } }] };
+      if (method === 'PUT') values = body.values;
+      return { values };
+    }
+    return request(scope, url, method, body);
+  };
+  const state = {};
+  await dispatchJobs({ jobs: plan(), state, config, google: g, template: '{{PAYLOAD}}', checkpoint() {}, now: '2026-11-03T07:00:00+09:00', runLocal() { throw Error('timeout'); } });
+  const result = await collectRun({ home: os.tmpdir(), state, fleet: { inbox: [] }, google: g, config, checkpoint() {}, now: '2026-11-03T07:30:00+09:00', template: '{{PAYLOAD}}',
+    runLocal: async batch => JSON.stringify({ version: 1, batchId: batch.id, results: [{ key: batch.jobs[0].key, status: 'apply', summary: '復旧', writes: [write()] }] }) });
+  assert.equal(result.exitCode, 0, JSON.stringify(result.errors)); assert.deepEqual(state.failed, {}); assert.equal(Object.keys(state.sent).length, 1);
+  await collectRun({ home: os.tmpdir(), state, fleet: { inbox: [] }, google: g, config, checkpoint() {}, now: '2026-11-03T08:00:00+09:00', runLocal() { assert.fail('成功済み'); } });
+  assert.match([...g.events.values()][0].description, /完了/);
 });

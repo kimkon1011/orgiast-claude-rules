@@ -251,6 +251,24 @@ test('DM result without message id falls back, including injected notify', async
  assert.ok(fs.readFileSync(path.join(options.home, '.claude', 'owner-inbox.md'), 'utf8').includes('長'.repeat(500)));
 });
 
+// 実際の notify-kim 経路でも、HTTP 200 の本文が読めない DM 応答を配達成功にしない。
+for (const [label, sent] of [
+  ['json がない', { ok: true }],
+  ['JSON 解析が失敗する', { ok: true, json: async () => { throw new SyntaxError('invalid JSON'); } }],
+]) {
+  test(`DM 送信応答に ${label}場合は実際の通知経路でも未配達にする`, async t => {
+    const options = localOptions(t);
+    let calls = 0;
+    const result = await realNotifyOwner('nishi@orgiast.jp', '進捗', {
+      ...options, userId: '123', token: 'test-token', plainJa: false, toast: () => true,
+      fetchImpl: async () => ++calls === 1 ? { ok: true, json: async () => ({ id: 'channel' }) } : sent,
+    });
+    assert.equal(calls, 2);
+    assert.equal(result.delivered, 'toast');
+    assert.equal(result.attempts[0].ok, false);
+  });
+}
+
 test('kim names in directory reject alternate IDs for nishi', async t => {
  const options = localOptions(t);
  for (const row of [{ id: '999', username: 'kimkon.' }, { id: '999', global_name: '金功勇' }]) {

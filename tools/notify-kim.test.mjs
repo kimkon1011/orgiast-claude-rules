@@ -314,6 +314,26 @@ test('HTTP success without message id is not a delivered DM', async () => {
  assert.match(result.reason, /メッセージID/);
 });
 
+// HTTP 200 でも本文が読めない応答（json 無し・解析失敗・null）は配達証跡にならない。
+// 例外を投げても投げなくても「未配達」に落ちることを固定する。
+for (const [label, sent] of [
+  ['json がない', { ok: true }],
+  ['JSON 解析が失敗する', { ok: true, json: async () => { throw new SyntaxError('invalid JSON'); } }],
+  ['JSON が null', response({ json: null })],
+]) {
+  test(`DM 送信応答に ${label}場合は配達済みにしない`, async () => {
+    let calls = 0;
+    const result = await deliverKim('進捗', {
+      userId: 'test-recipient', token: 'test-token', plainJa: false, webhookFallback: false,
+      fetchImpl: async () => ++calls === 1 ? response({ json: { id: 'channel' } }) : sent,
+    });
+    assert.equal(calls, 2);
+    assert.equal(result.delivered, 'none');
+    assert.equal(result.messageId, undefined);
+    assert.ok(result.reason);
+  });
+}
+
 test('silentはDMとwebhookでflagsを切り替え、環境変数の既定も反映する', async () => {
   const old = process.env.NOTIFY_DISCORD_SILENT;
   const dir = home(); fs.mkdirSync(path.join(dir, '.claude'));

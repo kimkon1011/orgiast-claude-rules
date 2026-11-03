@@ -2,9 +2,10 @@
 // Stop hook: 応答末尾の「このセッション: まだ閉じない（…YYYY-MM-DD HH:MM まで待つ）」の期限を、
 // セッション一覧のタイトルの頭に【11/02/20:11まで】の形（年なし）で付ける（2026-10-27 nishi 指示・全PC全アカウント）。
 // 一覧を見ただけで、どのタブをいつまで開けておくかが分かるようにする。
-// 閉じてよい定型文になったら頭の期限を外し、「次に kim がすること」が無い（なし等）ときだけ【閉じて可】を付ける
+// 閉じてよい定型文になったら頭の期限を外し、「次に kim がすること」が無い（なし等）か閉じる操作だけなら【閉じて可】を付ける
 // （2026-11-02 kim 指示・全PC全アカウント。kim のやることが残るセッションは閉じてよい定型文でも付けない）。
 // フッターが無い応答では頭の印を保持し、PC番号だけを付ける。fail-open・出力なし。
+// 本体はノイズを除外し、手動の命名を最優先、その次に assistant が最初に宣言した目的を使う。
 // --all: 既存の全セッション（直近 RECENT_DAYS 日）にも同じ規則を当てる。SessionStart から1時間に1回だけ走る。
 import fs from 'node:fs';
 import os from 'node:os';
@@ -21,10 +22,22 @@ export const CLOSABLE_PREFIX = '【閉じて可】';
 // 旧形式【26/11/02/20:11まで】（年あり）も外して新形式へ付け替える。期限と【閉じて可】は排他で、どちらも付け替え対象。
 const PREFIX = /^(?:(?:【(?:\d{2}\/)?\d{2}\/\d{2}\/\d{2}:\d{2}まで】|【閉じて可】)\s*)+/;
 
-// 閉じてよい定型文（closed / delete）で、かつ kim のやることが無いときだけ true。
+// 任意の作業を巻き込まないよう、各片を許可した閉じる操作の全文と照合する。
+export function isCloseRitualOnly(nextAction) {
+  if (typeof nextAction !== 'string') return false;
+  const tab = '(?:(?:タブバーの)?(?:一番右|右端)(?:にある|の))?(?:新しい|この|古い)?タブ';
+  const start = new RegExp(`^${tab}で\\s*(?:Enter\\s*を\\s*(?:1回\\s*)?押(?:す|し)|/session-start\\s*を\\s*送(?:る|り))$`);
+  const close = /^(?:(?:この)?(?:古い)?タブを\s*(?:✕\s*で\s*)?|(?:この)?セッションを\s*)閉じ(?:る|て|ます)$/;
+  return nextAction.split(/[、。→，]/).every(part => {
+    const text = part.trim();
+    return !text || start.test(text) || close.test(text);
+  });
+}
+
+// 閉じてよい定型文（closed / delete）で、かつ kim のやることが無いか閉じる操作だけなら true。
 export function isClosable(footer) {
   return !!footer && [SESSION_PHRASES.closed, SESSION_PHRASES.delete].includes(footer.session)
-    && NO_ACTION_PATTERN.test(footer.nextAction);
+    && (NO_ACTION_PATTERN.test(footer.nextAction) || isCloseRitualOnly(footer.nextAction));
 }
 
 export function waitPrefix(date) {
@@ -32,9 +45,13 @@ export function waitPrefix(date) {
   return `【${p(date.getMonth() + 1)}/${p(date.getDate())}/${p(date.getHours())}:${p(date.getMinutes())}まで】`;
 }
 
-// transcript から現在のタイトル（custom-title が最優先、無ければ ai-title）を最後の行の値で拾う。
+function isNoiseText(text) {
+  return /^(?:<|Base directory for this skill:|Stop hook feedback:|\[SYSTEM NOTIFICATION|Caveat:)/.test(text.trim());
+}
+
+// transcript から現在のタイトルと、最初の依頼・宣言目的を拾う。
 export function currentTitles(raw) {
-  let custom = '', ai = '', firstPrompt = '', autoAi = '', customSource = '';
+  let custom = '', ai = '', firstPrompt = '', autoAi = '', customSource = '', declaredPurpose = '';
   for (const line of String(raw || '').split('\n')) {
     if (line.includes('"custom-title"')) { try { const e = JSON.parse(line); if (e.type === 'custom-title' && typeof e.customTitle === 'string') { custom = e.customTitle; customSource = e.source || ''; autoAi = ''; } } catch {} }
     else if (line.includes('"ai-title"')) { try { const e = JSON.parse(line); if (e.type === 'ai-title' && typeof e.aiTitle === 'string') { ai = e.aiTitle; if (customSource === 'orgiast-auto') autoAi = ai; } } catch {} }
@@ -42,11 +59,21 @@ export function currentTitles(raw) {
       try {
         const c = JSON.parse(line).message?.content;
         const text = typeof c === 'string' ? c : Array.isArray(c) ? c.find(b => b?.type === 'text')?.text : '';
-        if (text && !text.startsWith('<')) firstPrompt = text.replace(/\s+/g, ' ').trim().slice(0, 40);
+        if (text && !isNoiseText(text)) firstPrompt = text.replace(/\s+/g, ' ').trim().slice(0, 40);
+      } catch {}
+    }
+    else if (!declaredPurpose && line.includes('"assistant"')) {
+      try {
+        const e = JSON.parse(line);
+        if (e.type !== 'assistant') continue;
+        const c = e.message?.content;
+        const text = typeof c === 'string' ? c : Array.isArray(c) ? c.filter(b => b?.type === 'text').map(b => b.text).join('\n') : '';
+        const purpose = text.match(/(?:\*\*)?\[本セッションの目的\](?:\*\*)?[ \t]*([^\r\n]+)/)?.[1];
+        if (purpose) declaredPurpose = purpose.replace(/\s+/g, ' ').trim().slice(0, 40);
       } catch {}
     }
   }
-  return { custom, ai, firstPrompt, autoAi };
+  return { custom, ai, firstPrompt, autoAi, customSource, declaredPurpose };
 }
 
 export function lastAssistantText(raw) {
@@ -66,10 +93,15 @@ export function lastAssistantText(raw) {
 export function desiredTitle(text, raw, pc = '') {
   const footer = footerValues(text);
   if (!footer && !pc) return null;
-  const { custom, ai, firstPrompt, autoAi } = currentTitles(raw);
+  const { custom, ai, firstPrompt, autoAi, customSource, declaredPurpose } = currentTitles(raw);
   const withoutPc = title => title.replace(/^\d{3}｜/, '');
   const existingPrefix = withoutPc(custom).match(PREFIX)?.[0] || '';
-  const base = (withoutPc(autoAi || custom).replace(PREFIX, '') || withoutPc(ai).replace(PREFIX, '') || firstPrompt || 'セッション').trim();
+  const titleBody = title => {
+    const body = withoutPc(title.trim()).replace(PREFIX, '').trim();
+    return isNoiseText(body) ? '' : body;
+  };
+  const base = (customSource !== 'orgiast-auto' ? titleBody(custom) : '')
+    || declaredPurpose || titleBody(autoAi) || titleBody(custom) || titleBody(ai) || firstPrompt || 'セッション';
   const deadline = footer ? openDeadline(footer.session) : null;
   const prefix = deadline ? waitPrefix(deadline) : isClosable(footer) ? CLOSABLE_PREFIX : !footer ? existingPrefix : '';
   // Without a PC number, keep the existing footer-driven behavior.

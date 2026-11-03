@@ -226,5 +226,35 @@
     "route": "その場の Claude Code から直接送る（kim-PC への中継をしない）。`node tools/line-group-send.mjs --group <groupId|グループ名> --text-file <本文.txt> [--image <png/jpg> ...] [--retry-key <uuid>] [--dry-run]`。送信者は公式「オージャスト金(読取専用)」@458zwuhb で、参加済みグループにだけ送れる（group 名は Supabase `channel_messages` の subject=`LINE: <名前>` で解決）。画像は Supabase `line-media/outbound/` に上がり1年有効の署名URLで送るため1MB以下へ JPEG 化する。鍵は env → `~/.claude/line-send.env` → 営業アプリ Vercel の development env の順で解決。完了は push の HTTP 200 と sentMessages 件数・quota consumption の増分（グループは人数ぶん消費、無料枠 月200通）で読み戻す。同じ `--retry-key` で再実行すれば二重送信しない。社外グループは本文全文を kim に1回見せて承認を取ってから送る。チャットに本文を貼って終わりにしない。",
     "confidence": "medium",
     "source": "handoff-audit-nightly:551d30db529f1c5ff7634cb1877a612c8ce1230fa138de8da6ecfc070e3618c2 / 2026-11-04 tool-name-route レビューで route（`チャットに本文`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "他AIレーン(coze/gemini/deepseek)が枠切れ・タイムアウトで失敗し、Sonnet 禁止を理由に未実装で終える",
+    "route": "禁止されているのは Claude(Sonnet/Opus) を既定モデルにすることであって実装の停止ではない。`node tools/codex-do.mjs \"<指示>\" --cwd <path> --timeout <秒> --origin unattended` は内蔵フォールバックを持ち、`--no-fallback` を付けない限り codex が枠切れ・タイムアウトなら別レーン（gemini-cli / cheap-code:deepseek 等）へ自動で落ちる。落ちたレーンは `node tools/lane-doctor.mjs --probe --json` で provider ごとの ok/errorKind と `providerResetUntil`（復帰時刻）を read-back して報告に書く。フォールバックも全滅したら Claude 本体で当ターン内に実装まで終え、『Sonnet 禁止だから未実装』『レーン上限だから保留』で handoff しない（exit 75 の保留は無人割当超過のときだけ）。",
+    "confidence": "high",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=codex-do.mjs）/ 2026-11-04 route を手順化"
+  },
+  {
+    "pattern": "AIレーン停止の表示・復帰予定・検知ゲートの実装（lane-doctor 経由の復旧）",
+    "route": "レーンの停止・復帰予定は記憶や推測で書かず `node tools/lane-doctor.mjs --probe --json` の実測から作る（provider ごとの ok/errorKind、`providerResetUntil` の復帰時刻、cooldown 残り、キー有無）。読み取り専用で状態だけ見たいときは `--read-only`、状態を保存して通知まで行うのは `--probe` を付けない通常実行。復旧は停止レーンを避けて `node tools/codex-do.mjs ... --timeout <秒>` を前景・単発で回し、`--no-fallback` を付けない（自動フォールバックに任せる）。『復帰予定』を書くときは必ず lane-doctor の実測値か cooldown の retryAt を引用する。",
+    "confidence": "medium",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=codex-do.mjs）/ 2026-11-04 route を手順化"
+  },
+  {
+    "pattern": "他AIレーン停止中の通知送信",
+    "route": "通知は `node tools/notify-kim.mjs \"<本文>\" [--kind info]`（`--kind ask` は kim の判断が要るときだけ／`--kim-action-required` は人が1アクション必要ときだけ）。Discord bot トークンが無い PC では送信されず受信箱（`tools/kim-inbox.mjs` の addItem）に積まれる＝それが正常経路なので、通知できなかったことを理由に作業を止めない。exit 3 は『配信ブロック（判断は受信箱へ）』であって失敗ではない。外部（社外 Discord・メール・SNS）への送信は行わない。",
+    "confidence": "medium",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=codex-do.mjs）/ 2026-11-04 route を手順化"
+  },
+  {
+    "pattern": "VS Code タブへの Enter 送信・古いタブの ✕ を user に依頼",
+    "route": "VS Code のタブ操作（Enter 押下でのセッション起動・古いタブの ✕・入力欄への貼り付け）を user に依頼しない。次セッションの起動は `node tools/next-session-launch.mjs`（runner が次セッションを起動する経路）で行い、claude.exe の更新可否は `tools/claude-exe.mjs` の `findClaudeInVersionedDir` で実体パスとバージョンを read-back して判定する。起動に失敗したら exit コードと stderr を報告し、user の手作業には戻さない。",
+    "confidence": "medium",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=codex-do.mjs 4件を統合）/ 2026-11-04 route を手順化"
+  },
+  {
+    "pattern": "セッション締めでの TODO 一覧確認",
+    "route": "残TODOは transcript の grep ではなく `~/.claude/next-session.md` の `## 残TODO` ブロックを直接読む（ローテーション・退避は `node tools/next-session-rotate.mjs` が行うので、古いスナップショットは archive/ 側を見る）。締めでは next-session.md の該当 TODO 行だけを行単位で置換し、全文を上書きしない。transcript grep は『その発言が本当にあったか』の証拠確認にだけ使い、TODO 一覧の正本にはしない。",
+    "confidence": "medium",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=transcript grep）/ 2026-11-04 route を手順化"
   }
 ]

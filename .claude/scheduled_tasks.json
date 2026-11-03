@@ -1,0 +1,14 @@
+{
+  "tasks": [
+    {
+      "id": "ffaacac6",
+      "cron": "0 0 4 11 *",
+      "prompt": "Codex 無人枠が 2026-11-04 00:00 JST で復活した可能性があります。usage_limit クールダウンが切れているか確認し、未処理の検証タスクがあれば再開してください。tools/codex-do.mjs のフォールバック順序も確認（先頭が cheap-code:deepseek になっていること）。",
+      "createdAt": 1793697368633,
+      "createdBySessionId": "1dd6cf54-bdf2-4838-8255-6478999337b3",
+      "createdByPid": 55804,
+      "createdByProcStart": "134381707911813859",
+      "createdInProject": "C:\\Users\\uers\\.claude\\nightly-repo"
+    }
+  ]
+}

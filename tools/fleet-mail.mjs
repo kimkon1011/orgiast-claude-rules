@@ -722,8 +722,8 @@ export function parseArgs(argv) {
   return options;
 }
 export function createClient({ url, token, fetchImpl = fetch, sleepImpl = sleep }) {
-  return async (kind, payload, timeoutMs = 60_000) => {
-    const retries = kind === 'mail-send' ? COMMAND_LOCK_RETRIES : 2;
+  return async (kind, payload, timeoutMs = 60_000, opts = {}) => {
+    const retries = opts.retries ?? (kind === 'mail-send' ? COMMAND_LOCK_RETRIES : 2);
     for (let attempt = 0; attempt <= retries; attempt++) {
       const response = await fetchImpl(url, {
         method: 'POST', headers: { 'content-type': 'application/json' }, redirect: 'follow',
@@ -1279,8 +1279,11 @@ async function runMain(argv, deps) {
   if (!configured && !options['--dry-run'] && !options['--send']) { err('fleet-mail: fleet-sheet.env 未設定のためスキップ'); return 0; }
   if (options['--sent-status']) {
     // 読み取りのみ: 返信が相手の受信タスクに拾われたか（deliveredAt）と返信済みか（resultAt）を確認する。
+    // 読み取りは10秒で打ち切り、busy再試行もしない。hub不達でも親の呼出制限（例: auto-progress check 30秒）を超えないようにする。
     const id = options['--sent-status'];
-    const result = await request('mail-get', { id });
+    let result;
+    try { result = await request('mail-get', { id }, 10_000, { retries: 0 }); }
+    catch (error) { err(`fleet-mail: 状態を取得できません（hub不達: ${error.message}）`); return 3; }
     const mail = result?.mail;
     if (!mail) { err(`fleet-mail: ${id} はサーバーに見つかりません`); return 4; }
     out([`id: ${mail.id}`, ...['status', 'createdAt', 'expiresAt', 'deliveredAt', 'deliveredBy', 'seenAt', 'seenBy', 'resultAt', 'ackAt', 'failedAt', 'failReason'].map(key => `${key}: ${mail[key] || '(なし)'}`)].join('\n'));

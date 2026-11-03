@@ -8,7 +8,7 @@ import { PassThrough } from 'node:stream';
 import { resolveProvider } from './cheap-code.mjs';
 import { dayBounds, isMeeting, excludeCalendar, matchCase, routeCase, chooseTransport, eventKey, planJobs,
   createGoogle, loadEvents, loadCases, parseCases, loadMailUpdates, loadMeetEvents, inspectFleet, ensureCalendar, upsertPreparation, workspaceUrl, validateWrite, applySheetWrite, applyResult, parseAnswer, collectAnswers, dispatchJobs, renderPrompt,
-  chooseExecution, collectRun, saveRunReport, runHeadless, localWorkerArgs, localWorkerEnv, loadLocalContext, LOCAL_JOB_TIMEOUT_MS } from './meeting-prep-dispatch.mjs';
+  chooseExecution, collectRun, saveRunReport, runHeadless, localWorkerArgs, localWorkerEnv, loadLocalContext, buildLocalInput, dryRunPlanningState, LOCAL_JOB_TIMEOUT_MS } from './meeting-prep-dispatch.mjs';
 const config = JSON.parse(fs.readFileSync(new URL('../config/meeting-prep-routing.json', import.meta.url)));
 const date = '2026-11-03';
 const event = (extra = {}) => ({ id: 'event1', iCalUID: 'ical1', calendarId: 'primary', summary: 'C1234 打合せ', start: { dateTime: `${date}T10:00:00+09:00` }, end: { dateTime: `${date}T11:00:00+09:00` }, ...extra });
@@ -468,7 +468,7 @@ test('GLM/DeepSeekのCLI環境は親のClaude API/modelを引き継がない', (
     for (const key of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL']) assert.equal(env[key], provider.defaultModel);
   }
 });
-test('ローカル資料はDWDのGETで読み、既存回答とハブ・連絡本文を渡す', async () => {
+test('ローカル資料はDWDのGETで読み、既存回答とハブを取得しフォルダ本文は取得しない', async () => {
   const calls = [], job = { ...plan()[0], hub: { docId: 'hub-doc' } };
   const google = { pages: async () => [{ id: 'confirmation', name: '確認シート', mimeType: 'application/vnd.google-apps.spreadsheet' }, { id: 'contact', name: '外部連絡', mimeType: 'application/vnd.google-apps.document' }],
     request: async (scope, url, method = 'GET') => {
@@ -480,7 +480,9 @@ test('ローカル資料はDWDのGETで読み、既存回答とハブ・連絡�
   const mailGoogle = { pages: async () => [{ id: 'thread' }], request: async () => ({ messages: [{ internalDate: '123', payload: { mimeType: 'text/plain', body: { data: Buffer.from('C1234 最新情報').toString('base64url') } } }] }) };
   const context = await loadLocalContext(google, job, config, { mailGoogle });
   assert.equal(context.sheets.confirmation.tabs['確認事項'].values[0][4], '既存回答');
-  assert.equal(context.documents.length, 2); assert.match(context.mail[0].messages[0].body, /最新情報/);
+  assert.equal(context.documents.length, 1); assert.equal(context.mail, undefined);
+  assert.ok(!calls.some(c => c.url.endsWith('/contact')));
+  assert.ok(context.truncated.some(x => /資料本文/.test(x)));
   assert.ok(context.unconfirmed.some(x => /submission/.test(x))); assert.ok(calls.some(c => c.url.endsWith('/hub-doc')));
 });
 test('CLIのis_errorや不正なresultsを成功として受け取らない', () => {
@@ -500,4 +502,74 @@ test('ACL APIなしで全workerを実行する', async () => {
   const jobs = plan({ events: [event(), event({ id: 'two', start: { dateTime: `${date}T12:00:00+09:00` } })] });
   const errors = await dispatchJobs({ jobs, state: {}, config, template: '{{PAYLOAD}}', google: g, checkpoint() {}, runLocal() { runs++; throw Error('worker-failed'); } });
   assert.equal(runs, 2); assert.equal(g.events.size, 2); assert.equal(errors.length, 2);
+});
+
+
+test('巨大入力を優先順で予算内に収めて実行し省略を記録する', async () => {
+  const state = {}, g = calendarMock();
+  const context = { documents: [{ id: 'hub', document: { body: { content: [{ paragraph: { elements: [{ textRun: { content: '最新ハブ情報' } }] } }] } } }],
+    sheets: { plan: { id: 'plan', tabs: { Task: { gid: 0, values: Array.from({ length: 200 }, (_, i) => [i, 'x'.repeat(10000)]) } } },
+      confirmation: { id: 'confirm', tabs: { 確認事項: { values: [['状態', '内容'], ['未完了', 'LOW_PRIORITY']] } } } }, files: [{ id: 'file', name: '資料', body: 'DO_NOT_INCLUDE' }] };
+  let ran = false;
+  const errors = await dispatchJobs({ jobs: plan(), state, config, template: '{{PAYLOAD}}', google: g, checkpoint() {},
+    runLocal: async (batch, body) => {
+      const input = buildLocalInput(batch, body, context, { localInputBudgetChars: 12000 });
+      ran = true;
+      assert.ok(input.inputChars <= 12000);
+      assert.match(input.prompt, /C1234 打合せ/);
+      assert.match(input.prompt, /最新ハブ情報/);
+      assert.match(input.prompt, /xxxxxxxxxx/);
+      assert.ok(input.prompt.indexOf('予定情報') < input.prompt.indexOf('案件情報ハブ'));
+      assert.ok(input.prompt.indexOf('案件情報ハブ') < input.prompt.indexOf('plan\/Task'));
+      assert.match(input.prompt, /省略: .*plan\/Task/);
+      assert.doesNotMatch(input.prompt, /DO_NOT_INCLUDE/);
+      return JSON.stringify({ version: 1, batchId: batch.id, results: [{ key: batch.jobs[0].key, status: 'needsReview', summary: '確認待ち' }] });
+    } });
+  assert.ok(ran); assert.equal(errors.length, 1); assert.equal(errors[0].error, '確認待ち');
+  const batch = Object.values(state.batches)[0];
+  assert.ok(batch.inputChars <= 12000); assert.ok(batch.truncated.some(x => /plan\/Task/.test(x)));
+});
+test('ハブ直近30件・空行除外・未完了行の元行番号を維持', () => {
+  const entries = Array.from({ length: 40 }, (_, i) => `[hub:${'a'.repeat(64)}:2026-10-${String(i % 30 + 1).padStart(2, '0')}T00:00:00Z]\nentry${i}\n`).join('');
+  const batch = { jobs: plan() };
+  const input = buildLocalInput(batch, '', { documents: [{ id: 'hub', document: { textRun: { content: entries } } }], sheets: {
+    confirmation: { id: 'confirm', tabs: { 確認事項: { values: [['状態', '内容'], ['完了', 'DONE_ROW'], [], ['未完了', 'OPEN_ROW']] } } }
+  } });
+  assert.equal((input.prompt.match(/\[hub:/g) || []).length, 30);
+  assert.doesNotMatch(input.prompt, /DONE_ROW/); assert.match(input.prompt, /"row":4,"values":\["未完了","OPEN_ROW"\]/);
+  assert.ok(input.truncated.some(x => /直近30件/.test(x)));
+});
+test('巨大な予定説明も切り詰め、必須指示だけで超過した場合は項目名付きで失敗', () => {
+  const batch = { jobs: [{ ...plan()[0], event: event({ description: 'long'.repeat(100000) }) }] };
+  const input = buildLocalInput(batch, 'instructions', {}, { localInputBudgetChars: 2000 });
+  assert.ok(input.inputChars <= 2000); assert.match(input.prompt, /C1234 打合せ/);
+  assert.ok(input.truncated.some(x => /予定情報/.test(x)));
+  assert.throws(() => buildLocalInput(batch, 'instructions', {}, { localInputBudgetChars: 10 }), /省けなかった項目/);
+});
+
+test('dry-runは失敗ローカルの入力を再計測し永続claimと成功済み・送信中は維持', () => {
+  const state = { sent: { a: 'failed', b: 'sent', c: 'done' }, batches: {
+    failed: { id: 'failed', method: 'local', status: 'failed' }, sent: { id: 'sent', method: 'fleet-mail', status: 'sent' }, done: { id: 'done', method: 'local', status: 'complete' }
+  } };
+  assert.deepEqual(dryRunPlanningState(state).sent, { b: 'sent', c: 'done' });
+  assert.equal(state.sent.a, 'failed');
+  assert.ok(state.batches.failed); assert.equal(dryRunPlanningState(state).batches.failed, undefined);
+});
+test('予算超過の省けなかった項目名が準備予定にも残る', async () => {
+  const g = calendarMock();
+  const errors = await dispatchJobs({ jobs: plan(), state: {}, config, template: '{{PAYLOAD}}', google: g, checkpoint() {},
+    runLocal: async (batch, body) => buildLocalInput(batch, body, {}, { localInputBudgetChars: 1 }) });
+  assert.match(errors[0].error, /省けなかった項目/);
+  assert.match([...g.events.values()][0].description, /省けなかった項目: 実行指示/);
+});
+
+test('巨大ハブは最新本文を部分保持し、低優先のシートより先に予算を使う', () => {
+  const input = buildLocalInput({ jobs: plan() }, '', {
+    documents: [{ id: 'hub', document: { textRun: { content: 'HUB_FIRST' + 'h'.repeat(1000000) } } }],
+    sheets: { plan: { id: 'plan', tabs: { Task: { values: [['LOW_PRIORITY_CELL']] } } } }
+  }, { localInputBudgetChars: 4000 });
+  assert.ok(input.inputChars <= 4000); assert.match(input.prompt, /HUB_FIRST/);
+  assert.doesNotMatch(input.prompt, /LOW_PRIORITY_CELL/);
+  assert.ok(input.truncated.some(x => /案件情報ハブ: 入力予算/.test(x)));
+  assert.ok(input.truncated.some(x => /plan\/Task: 入力予算/.test(x)));
 });

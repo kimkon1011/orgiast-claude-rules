@@ -27,7 +27,7 @@ node tools/meeting-prep-dispatch.mjs --dry-run --identify-014
 node tools/meeting-prep-dispatch.mjs --live --identify-014
 ```
 
-`--live` が無いと常にdry-run。dry-runではGoogle APIのGETと認証、fleetの名簿読取（beacon-listは読取専用POST）のみを行い、業務データ・状態・受信箱・予定・配送を変更しない。実行記録だけは `~/.claude/meeting-prep/runs/<日時>.json` に保存する（`--run-dir` で保存先変更可）。標準出力は件数・成否・詳細パスの1行。`--home` または `ORGIAST_HOME` で実行元のホームを指定できる。鍵は既存 `tools/lib/drive-auth.mjs` の `GOOGLE_SA_KEY` / 既定パスを流用する。トークンを保存・表示しない。
+`--live` が無いと常にdry-run。dry-runではGoogle APIのGETと認証、fleetの名簿読取（beacon-listは読取専用POST）のみを行い、業務データ・状態・受信箱・予定・配送を変更しない。実行記録だけは `~/.claude/meeting-prep/runs/<日時>.json` に保存する（`--run-dir` で保存先変更可）。標準出力は件数・成否・詳細パスの1行。dry-runでは各ジョブの `inputChars` と `truncated` も表示する。`--home` または `ORGIAST_HOME` で実行元のホームを指定できる。鍵は既存 `tools/lib/drive-auth.mjs` の `GOOGLE_SA_KEY` / 既定パスを流用する。トークンを保存・表示しない。
 
 DWDのスコープ:
 
@@ -126,3 +126,12 @@ readyは検証済み成果物URLを要求。applyは、案件一覧の正本か�
 2026-11-04のWindows検証: 指定テスト、11/5の読取dry-runが成功。エイト様の同時刻2予定は1ジョブとなり、日次レビュー3件と合わせて4件が `kim-PC(fallback: 受信側opt-in未確認)`。CLIの必要フラグは実機のヘルプで確認した。外部書込・CLIのLLM実行・タスク登録は未実施。
 
 準備予定の作成・更新は `calendar.events` のみ。全カレンダーの列挙には引き続き既存承認の `calendar.readonly` を使う。Docsは既存承認の `drive` スコープを再利用する。
+
+
+## ローカル入力予算
+
+`config/meeting-prep-routing.json` の `localInputBudgetChars`（既定120,000字）は指示・JSON・省略一覧を含むプロンプト全体の上限。予定情報、案件情報ハブの最新30件、実施計画書のTask・制作物一覧・Claude_次回MTGアジェンダ、確認シート・提出フォーマットの未完了行、フォルダのタイトルとリンクの順に詰める。主要タブは先頭200行、確認・提出は取得範囲1,000行以内を対象に空行と状態列が完了の行を除く。状態列が判別できない場合は行を残す。セルを途中で切らず元の行番号を渡し、未取得の値をbeforeに使わせない。
+
+フォルダ内Doc本文・Gmail本文はローカル入力に入れない。ハブ未取得は未確認として扱う。省略内容はプロンプト末尾の「省略:」と実行記録のバッチ `truncated` に残し、`inputChars` は最終プロンプトの文字数。必須指示・案件識別・省略一覧だけでも予算に収まらない場合は、省けなかった項目名付きで失敗し準備予定へ記録する。ワーカーのツール無効化と他社モデル設定、JSON案をDWD applierで適用する経路は維持する。
+
+dry-runでは前回失敗したローカルジョブも再計測する。保存済みの送信済み印は変更せず、liveの自動再試行条件も変更しない。

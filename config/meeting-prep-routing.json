@@ -9,5 +9,6 @@
   "teamEmail": "seisaku-team@orgiast.jp",
   "userEmail": "kim@orgiast.jp",
   "excludedCalendarPrefixes": ["c_d8115960"],
+  "localInputBudgetChars": 120000,
   "receivers": {}
 }

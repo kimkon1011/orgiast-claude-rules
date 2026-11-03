@@ -1916,6 +1916,25 @@ test('killProcessTree は Windows でプロセス木ごと殺す（タイムア�
   assert.deepEqual(calls, [['taskkill', ['/pid', '4242', '/T', '/F']]]);
 });
 
+// 2026-11-04 実測: sync taskkill の待ち（最大10秒）がイベントループを止め、締切後の猶予タイマーごと
+// 後ろへずらして予算210秒の主経路が 226.786 秒まで伸びた。非同期 spawn で complete を待たない。
+test('killProcessTree は taskkill の完了を待たない（締切後の猶予を食い潰さない）', () => {
+  const calls = [];
+  let unrefed = false;
+  killProcessTree({ pid: 4242, kill: () => {} }, {
+    platform: 'win32',
+    spawnImpl: (cmd, args, options) => {
+      calls.push({ cmd, args, options });
+      return { unref: () => { unrefed = true; }, kill: () => {} };
+    },
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.stdio, 'ignore');
+  // spawnSync の timeout を渡す＝呼び出し側が完了までブロックする、という旧実装の印。
+  assert.equal('timeout' in calls[0].options, false);
+  assert.equal(unrefed, true, 'taskkill の子プロセスは unref して親の終了を待たせない');
+});
+
 test('killProcessTree は非 Windows で SIGKILL を送る', () => {
   const calls = [];
   killProcessTree({ pid: 4242, kill: (sig) => calls.push(['kill', sig]) },
@@ -2008,7 +2027,7 @@ function runFakeGemini(body, extraEnv = {}, timeoutSecs = 60) {
       ...extraEnv
     }
   });
-  return { result, elapsedSecs: (Date.now() - started) / 1000 };
+  return { result, elapsedSecs: (Date.now() - started) / 1000, home };
 }
 
 const DENY = 'Error executing tool run_shell_command: Tool execution denied by policy.\n';
@@ -2026,6 +2045,24 @@ test('timeout 後に孫プロセスが pipe を握り続けても猶予後に打
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
   assert.ok(elapsedSecs < 10, `孫が pipe を握ると timeout が実効せず ${elapsedSecs} 秒かかった`);
+});
+
+// 2026-11-04: timeout_waste_exceeds_cap の証拠は「予算210秒の主経路が 226.786 秒」だった。
+// kill が同期だと締切+taskkill待ち+猶予まで伸びるので、台帳の試行秒数が予算+猶予に収まることを固定する。
+test('timeout 行の試行秒数は予算+kill猶予に収まる（kill で締切が伸びない）', () => {
+  const { result, home: ledgerHome } = runFakeGemini(
+    silentAfter(''), { CODEX_DO_GEMINI_TIMEOUT_SECS: '2', CODEX_DO_TIMEOUT_KILL_GRACE_MS: '1000' }
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const ledger = fs.readFileSync(path.join(ledgerHome, '.claude', 'executor-usage.jsonl'), 'utf8')
+    .split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+  const timedOut = ledger.flatMap((row) => (row.chain || []).filter((a) => a.outcome === 'timeout'));
+  assert.ok(timedOut.length >= 1, 'gemini 試行が timeout として台帳に残る');
+  for (const attempt of timedOut) {
+    const allowed = attempt.budgetSecs + 1 + 2; // 予算 + kill猶予(1秒) + 起動/計測の揺れ(2秒)
+    assert.ok(attempt.secs <= allowed,
+      `${attempt.backend} が予算${attempt.budgetSecs}秒+猶予1秒を超えて ${attempt.secs} 秒記録された`);
+  }
 });
 
 test('gemini が拒否3回の後に無音で停滞しても周期判定で打ち切り次のバックエンドへ進む', () => {

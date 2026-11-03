@@ -441,11 +441,23 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env) {
 // child.kill() は cmd.exe だけを終わらせ、孫(gemini 等)が残る。孫が stdout パイプを握ったままだと
 // 'close' が発火せず、タイムアウトが実効しない
 // (2026-10-14 実測: 上限 600 秒の gemini-cli 試行が 4953 秒動き、1 回でチェーン全体 6153 秒を捨てた)。
-export function killProcessTree(child, { spawnImpl = spawnSync, platform = process.platform } = {}) {
+//
+// 🔴 2026-11-04 修正: taskkill を spawnSync で待つとイベントループが最大10秒止まり、締切後の猶予
+// タイマーがその分だけ後ろへずれる（＝予算を超えて秒数を捨てる）。実測 2026-11-01T16:18Z の
+// 主経路 codex-cli/gpt-5.6-sol は --timeout 210 秒に対し 226.786 秒＝締切+16.8 秒まで伸びた
+// （sync taskkill の待ち 10 秒 + 猶予 5 秒 + 起動分）。非同期 spawn にして即座に戻す。
+export function killProcessTree(child, { spawnImpl = spawn, platform = process.platform, killTimeoutMs = 10_000 } = {}) {
   if (!child || !child.pid) return;
   if (platform === 'win32') {
     try {
-      spawnImpl('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 10_000 });
+      const killer = spawnImpl('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      // taskkill 自体がハングしても子プロセスを残さない。呼び出し側は待たない。
+      const timeout = Number(killTimeoutMs);
+      if (killer && typeof killer.kill === 'function' && Number.isFinite(timeout) && timeout > 0) {
+        const killerTimer = setTimeout(() => { try { killer.kill('SIGKILL'); } catch { /* 既に終了している */ } }, timeout);
+        killerTimer.unref?.();
+      }
+      killer?.unref?.();
     } catch { /* 既に終了している */ }
     return;
   }
@@ -1068,7 +1080,8 @@ function execute(command, commandArgs, options = {}) {
         abortedPolicyStall = true;
       }
       console.error(`\n⏱ ${command} が ${callTimeoutSeconds} 秒で応答を終えなかったので停止しました。--timeout で延長できます`);
-      killProcessTree(child);
+      // 猶予タイマーは kill より先に張る。kill が同期で固まっても（旧実装の taskkill は最大10秒）
+      // 猶予の起点を締切時刻に固定し、打ち切りが予算+猶予を超えないようにする（2026-11-04 修正）。
       // 親が先に終わって孫が pipe を握ったままだと taskkill /T の木から外れ 'close' が来ない
       // (2026-10-28 実測: 予算600秒の gemini-cli 試行が 1044 秒)。猶予後は close を待たず打ち切る。
       forceTimer = setTimeout(() => {
@@ -1076,6 +1089,7 @@ function execute(command, commandArgs, options = {}) {
         settle({ status: 124, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null });
       }, timeoutKillGraceMs(process.env));
       forceTimer.unref?.();
+      killProcessTree(child);
     }, callTimeoutSeconds * 1000);
     timer.unref?.();
     // 拒否が閾値秒より前に出尽くして以後 stderr が静かになる停滞（2026-10-23 実測: gemini が拒否3回後に

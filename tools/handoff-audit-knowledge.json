@@ -196,5 +196,17 @@
     "route": "Gmail MCP は本環境に無い（mcpServers=gemini-cli のみ）が、下書きの削除は DWD 経路で Claude 側が完結する。削除は `node tools/gmail-draft.mjs --delete <draftId> [--user <addr>] [--json]`（DWD で seisaku-team@orgiast.jp を impersonate・scope=gmail.compose、SA 鍵は GOOGLE_SA_KEY または既定パス aujust-sales-automation/.gcp/sheets-sa.json）。削除は `DELETE /gmail/v1/users/me/drafts/{id}` で、応答は 204=削除成功 / 404=既に無い（ツールが `{deleted:true}` / `{deleted:false,errorKind:'not_found'}` を返す）。検証結果の報告はこの実応答を読み戻して行い、kim に下書き削除の画面操作・目視確認を依頼しない。Gmail 下書きの削除が不要な用件ではそもそも手渡ししない。",
     "confidence": "high",
     "source": "handoff-audit-nightly:4f579eb3fc37b478cef737816a253d53bce15d7739e071d3aa51d4e76f799c40 / 2026-10-29 tool-name-route レビューで route を手順化（route が道具名だけの `Gmail MCP` だったため手順文に置換）"
+  },
+  {
+    "pattern": "経営数値（口座・送料・納期）の復元",
+    "route": "Drive DWD（kim impersonate / drive スコープ）で Drive API v3 files.list を照会（q=\"name contains '振込' or name contains '送料' or name contains '納期' or name contains '返品' or mimeType='application/vnd.google-apps.spreadsheet'\"）。見つからなければ production bundle（Vercel env ls / .env.local）の値を確認、アプリの設定テーブル（Supabase等）を直接照会。3経路すべてで見つからなければ「未確認」と書き、不足値の名前＋探した経路の結果を手渡しに載せる。口座情報は seisaku-team@orgiast.jp の Gmail 検索（node tools/gmail-search.mjs --query '振込先 OR 口座' --body）でも既存の取引先通知を確認できる。user に再聞き禁止（knowledge entry「API キー/接続文字列/ID が要る」の原則を事業条件にも拡大）。",
+    "confidence": "medium",
+    "source": "2026-11-04 handoff-audit-candidates tool-name-route レビュー（元 pattern: 経営数値（口座・送料・納期）の復元 / route が .env.local だけだったため手順文に置換）"
+  },
+  {
+    "pattern": "事業条件（振込先・送料・納期・返品条件）をkinに聞き直す",
+    "route": "knowledge entry「API キー/接続文字列/ID が要る」の原則（user に再聞き禁止）を事業条件にも拡大適用。候補: (1) Drive DWD（kim impersonate / drive スコープ）で Drive API v3 files.list から該当ドキュメントを検索 (2) アプリ DB/Supabase 設定テーブルを直接照会 (3) Vercel 本番 env（vercel env ls --environment production）を確認 (4) seisaku-team@orgiast.jp の Gmail を検索（gmail-search.mjs --query '振込先 OR 送料 OR 納期 OR 返品' --body）。(1)〜(4)すべてで見つからなければ「未確認」と書き、不足値＋探した経路の結果を手渡しに載せる。kinにまとめて聞かず、不足値を特定してから1回の手渡しにまとめる。root causeは「Drive の事業条件ドキュメントが Claude 側で読める状態にない」であり、Drive 上に正本があるなら files.list + files.get で読める（DWD drive スコープ委任済み）。",
+    "confidence": "high",
+    "source": "2026-11-04 handoff-audit-candidates tool-name-route レビュー（元 pattern: 事業条件（振込先・送料・納期・返品条件）をkinに聞き直す / route が Drive MCP だけだったため手順文に置換）/ knowledge entry「API キー/接続文字列/ID が要る」の原則を事業条件に拡張"
   }
 ]

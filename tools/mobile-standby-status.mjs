@@ -17,6 +17,7 @@ import { notifyKim } from './notify-kim.mjs';
 const BASE = 'https://api.anthropic.com';
 const HOUR = 3_600_000;
 export const GOAL = 2;
+export const FRESH_HOURS = 6;
 export const COOLDOWN = HOUR; // 補充の起動間隔（purge-sessions.mjs 側の間引きも同じ 1 時間）
 export const NOTIFY_COOLDOWN = 6 * HOUR; // 同じ不足を DM で何度も知らせない
 export const STANDBY_TITLE = /^remote-control-/;
@@ -50,7 +51,10 @@ export function localBridgeIds(home = os.homedir(), { isAlive = pidAlive } = {})
 
 // 待機セッション = まだ発言していない枠。使われた瞬間にタイトルが会話名へ変わり context_usage が付く。
 // localIds を渡すと、その中の id を持つセッション（= この PC の生存セッション）だけを数える。
-export function isStandby(session, { localIds } = {}) {
+export function isStandby(session, { localIds, freshHours = FRESH_HOURS, now = Date.now() } = {}) {
+  // 時刻不明・未来の枠も健全とは数えない。期限切れでも会話やタブは閉じない。
+  const createdAt = typeof session?.created_at === 'string' ? Date.parse(session.created_at) : NaN;
+  if (!Number.isFinite(createdAt) || createdAt > now || now - createdAt > freshHours * HOUR) return false;
   if (session?.status !== 'active' || session?.connection_status !== 'connected') return false;
   const title = titleOf(session);
   if (!STANDBY_TITLE.test(title) && !AUTO_TITLE.test(title)) return false;
@@ -59,8 +63,8 @@ export function isStandby(session, { localIds } = {}) {
   return true;
 }
 
-export function summarize(sessions, goal = GOAL, { localIds } = {}) {
-  const standbys = sessions.filter((session) => isStandby(session, { localIds }));
+export function summarize(sessions, goal = GOAL, { localIds, freshHours = FRESH_HOURS, now = Date.now() } = {}) {
+  const standbys = sessions.filter((session) => isStandby(session, { localIds, freshHours, now }));
   return {
     goal,
     standby: standbys.length,
@@ -102,11 +106,11 @@ export async function listRemoteSessions({ headers, fetchImpl = fetch, timeoutMs
   return { sessions };
 }
 
-export async function checkStandby({ home, fetchImpl = fetch, goal = GOAL, localIds } = {}) {
+export async function checkStandby({ home, fetchImpl = fetch, goal = GOAL, localIds, freshHours = defaultFreshHours(home), now = Date.now() } = {}) {
   const listed = await listRemoteSessions({ headers: remoteHeaders(home), fetchImpl });
   if (listed.error === 'no-credentials') return { ...summarize([], goal), error: 'no-credentials' };
-  const summary = summarize(listed.sessions, goal, { localIds: localIds ?? localBridgeIds(home) });
-  return { ...summary, listed: listed.sessions.length, ...(listed.error ? { error: listed.error } : {}) };
+  const summary = summarize(listed.sessions, goal, { localIds: localIds ?? localBridgeIds(home), freshHours, now });
+  return { ...summary, freshHours, listed: listed.sessions.length, ...(listed.error ? { error: listed.error } : {}) };
 }
 
 export function planOpenCommand({ codeCli } = {}) {
@@ -140,14 +144,14 @@ export async function openStandbyTabs({ count, codeCli, spawnProcess = spawn, ho
 }
 
 export async function replenishStandby({
-  home, fetchImpl = fetch, goal = GOAL, localIds, waitMs = 30_000, now = Date.now,
+  home, fetchImpl = fetch, goal = GOAL, localIds, freshHours = defaultFreshHours(home), waitMs = 30_000, now = Date.now,
   spawnProcess = spawn, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   notify = notifyKim, codeCli, open = openStandbyTabs, stateFile,
 } = {}) {
   if (!pool.isMobileEnabled(home ?? os.homedir())) return { action: 'skipped', reason: 'disabled' };
   const state = stateFile ? json(stateFile) : {};
   const startedAt = now();
-  const before = await checkStandby({ home, fetchImpl, goal, localIds });
+  const before = await checkStandby({ home, fetchImpl, goal, localIds, freshHours, now: startedAt });
   if (before.error) return { action: 'skipped', reason: before.error, before };
   // 健全でも記録する。記録しないと purge-sessions --hook が SessionStart/Stop のたびに起動してしまう。
   // notifiedAt は引き継ぐ（DM の間引きに使う）。
@@ -159,7 +163,7 @@ export async function replenishStandby({
   try { opened = await open({ home, count: before.shortfall, codeCli: cli, spawnProcess }); }
   catch (error) { return { action: 'failed', reason: `open failed: ${error.message}`, before }; }
   await sleep(waitMs);
-  const after = await checkStandby({ home, fetchImpl, goal, localIds });
+  const after = await checkStandby({ home, fetchImpl, goal, localIds, freshHours, now: now() });
   if (after.shortfall) {
     // 開き直しても戻らない時だけ知らせる。同じ不足で毎時 DM しないよう 6 時間に 1 回まで。
     if (startedAt - (Number(state.notifiedAt) || 0) < NOTIFY_COOLDOWN) {
@@ -171,6 +175,13 @@ export async function replenishStandby({
     return { action: 'notified', opened, before, after, delivery };
   }
   return { action: 'replenished', opened, before, after };
+}
+
+// 正の有限時間だけを採用する。0 で期限を無効化せず、設定不備は既定 6 時間へ戻す。
+export function defaultFreshHours(home = os.homedir()) {
+  const value = json(path.join(home, '.claude', 'mobile-sessions.json')).freshHours;
+  const hours = typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(hours) && hours > 0 ? hours : FRESH_HOURS;
 }
 
 // 目標本数は <home>/.claude/mobile-sessions.json の count（スマホ用に開いておく本数）。

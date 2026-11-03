@@ -717,7 +717,6 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       } catch { /* トースト失敗は無視 */ }
     }
   }
-  let executorUnavailable = false;
   for (const row of candidates.filter(reservation)) {
     if (dryRun || notificationsStopped || clock() + 22 * 60000 >= stopAt) continue;
     if (row.startedAt || row.status === 'starting') continue; // 起動済みの予約は二重起動しない。

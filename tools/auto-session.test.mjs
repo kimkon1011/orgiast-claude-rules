@@ -866,6 +866,27 @@ test('未来日の以降ゲートだけを固定日付基準で除外する', ()
   );
 });
 
+test('再確認日が未来のTODOだけを寝かせ、当日以降は復帰させる', () => {
+  const today = new Date(2026, 10, 4); // 2026-11-04 ローカル
+  assert.equal(todoExclusionReason('L&B 共有待ち（再確認: 2026-11-10）', today), '2026-11-10まで再確認待ち');
+  assert.equal(todoExclusionReason('L&B 共有待ち（再確認：2026-11-10）', today), '2026-11-10まで再確認待ち');
+  assert.equal(todoExclusionReason('L&B 共有待ち（再確認: 2026-11-04）', today), '');
+  assert.equal(todoExclusionReason('L&B 共有待ち（再確認: 2026-10-30）', today), '');
+  assert.equal(todoExclusionReason('再確認: の書式を直す', today), '');
+});
+
+test('時刻付きの以降ゲート（22:00 JST 以降に着手）も除外する（2026-10-29 quota-sweep:codex 4連続 exhausted の原因）', () => {
+  const gated = '【2026-10-30 22:00 JST 以降に着手・それより前は着手しない】アサインアプリの高速化';
+  // ゲート（2026-10-30T22:00 JST = 13:00Z）を JST 壁時計で比較する。実行マシンの
+  // タイムゾーンに依らず決まるよう、基準時刻は Date.UTC で固定した JST 時刻を与える。
+  assert.equal(todoExclusionReason(gated, new Date(Date.UTC(2026, 9, 29, 12, 0))), '2026-10-30 22:00 JST以降'); // JST 10-29 21:00（ゲート前）
+  assert.equal(todoExclusionReason(gated, new Date(Date.UTC(2026, 9, 30, 12, 0))), '2026-10-30 22:00 JST以降'); // JST 10-30 21:00（ゲート前）
+  assert.equal(todoExclusionReason(gated, new Date(Date.UTC(2026, 9, 30, 13, 0))), ''); // JST 10-30 22:00（ゲート時刻ちょうど）
+  assert.equal(todoExclusionReason(gated, new Date(Date.UTC(2026, 9, 31, 0, 0))), ''); // JST 10-31 09:00（ゲート後）
+  // 時刻なしの従来形式は従来どおり
+  assert.equal(todoExclusionReason('2026-08-27 以降に実行', new Date(2026, 7, 26)), '2026-08-27以降');
+});
+
 test('pickCwd は実在しない判定先を既存の標準リポジトリへフォールバックする', () => {
   const exists = () => false;
   assert.equal(pickCwd('案件Aを直す', exists, { 案件A: '/missing' }), DEFAULT_REPO);
@@ -1289,7 +1310,8 @@ test('runChild は冷却中・失敗時の codex-do と保留・最終フォー�
     for (const scenario of scenarios) await t.test(scenario.name, { skip: process.platform === 'win32' && needsClaudeStub(scenario) ? 'shebang スタブは Windows で起動不可' : false }, async () => {
       fs.writeFileSync(traceFile, '');
       fs.writeFileSync(path.join(configDir, 'auto-session.env'), `ORGIAST_AUTO_SESSION_EXECUTOR=cheap-code\nORGIAST_AUTO_SESSION_PROVIDER=deepseek\nORGIAST_AUTO_SESSION_CODEX_LANE=${scenario.disabled ? 'off' : 'on'}\nORGIAST_AUTO_SESSION_CLAUDE_FALLBACK=${scenario.claude ? 'on' : 'off'}\n`);
-      fs.writeFileSync(path.join(configDir, 'provider-cooldown.json'), JSON.stringify(scenario.cooling ? { deepseek: { until: Date.now() + 60000 }, glm: { until: Date.now() + 60000 } } : {}));
+      // DeepSeek の推論先は OpenRouter なので、冷却状態も OpenRouter に記録される。
+      fs.writeFileSync(path.join(configDir, 'provider-cooldown.json'), JSON.stringify(scenario.cooling ? { openrouter: { until: Date.now() + 60000 }, glm: { until: Date.now() + 60000 } } : {}));
       fs.writeFileSync(path.join(configDir, 'zai.env'), scenario.alternate ? 'ZAI_API_KEY=test' : '');
       fs.writeFileSync(path.join(toolsDir, 'cheap-code.mjs'), script('process.exitCode = 1;'));
       const codexFile = path.join(toolsDir, 'codex-do.mjs');

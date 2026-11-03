@@ -55,7 +55,7 @@ test('beacon: creates fixed header sheet and upserts by label without growing ro
   const h = harness();
   const first = h.c.upsertFleetBeacon(beacon());
   assert.equal(first.ok, true); assert.equal(first.beacon.label, 'kim-PC');
-  assert.equal(JSON.stringify(h.beaconRows()[0]), JSON.stringify(['label', 'account', 'reportedAt', 'steps', 'failing', 'pollAt', 'serverPollAt']));
+  assert.equal(JSON.stringify(h.beaconRows()[0]), JSON.stringify(['label', 'account', 'reportedAt', 'steps', 'failing', 'pollAt', 'serverPollAt', 'reporterLabel', 'hostname']));
   assert.equal(h.beaconRows().length, 2);
   h.c.upsertFleetBeacon(beacon({ account: 'other.jp' }));
   assert.equal(h.beaconRows().length, 2);
@@ -151,4 +151,29 @@ test('beacon: WebApp authenticates before dispatch and routes beacon kinds', () 
   const listed = post({ kind: 'fleet-beacon-list', token: 'sheet-id' });
   assert.equal(listed.ok, true);
   assert.equal(listed.beacons.length, 1);
+});
+
+
+test('beacon: migrates existing seven-column sheet without losing rows; identity is whitelisted', () => {
+  const h = harness();
+  h.c.upsertFleetBeacon(beacon());
+  const rows = h.beaconRows();
+  rows[0] = rows[0].slice(0, 7); rows[1] = rows[1].slice(0, 7);
+  h.c.upsertFleetBeacon(beacon({ label: 'new-PC', account: 'member@example.com', reporterLabel: 'new-PC', hostname: 'HOST', accessToken: 'secret-token' }));
+  assert.equal(rows[0].length, 9); assert.equal(rows[1][0], 'kim-PC');
+  const listed = h.c.listFleetBeacons().beacons;
+  assert.equal(listed[1].hostname, 'HOST'); assert.equal(listed[1].reporterLabel, 'new-PC');
+  assert.equal(listed[1].account, 'member@example.com'); assert.doesNotMatch(JSON.stringify(listed), /secret-token|accessToken/);
+});
+test('mail trace returns matching metadata including wrong destinations without delivery side effects', () => {
+  const h = harness();
+  for (const [id, why, to] of [['mail-one', 'selfcheck report', 'wrong-PC'], ['mail-two', 'unrelated', 'kim-PC']]) {
+    h.c.sendFleetMail({ id, from: 'unknown-PC', to, why, messageKind: 'note', body: 'private body' });
+  }
+  const before = JSON.stringify(h.sheets.get('fleet-mail').rows);
+  const result = h.c.traceFleetMail({ matchWhy: 'selfcheck', since: '2026-01-01T00:00:00Z' });
+  assert.equal(result.ok, true); assert.equal(result.mails.length, 1); assert.equal(result.mails[0].to, 'wrong-PC');
+  assert.equal(result.mails[0].status, 'new'); assert.equal(result.mails[0].body, undefined);
+  assert.equal(JSON.stringify(h.sheets.get('fleet-mail').rows), before);
+  assert.throws(() => h.c.traceFleetMail({ matchWhy: '', since: 'bad' }));
 });

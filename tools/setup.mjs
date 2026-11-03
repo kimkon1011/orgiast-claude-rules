@@ -116,10 +116,16 @@ function check(item) {
       const parsed = JSON.parse(raw);
       if (spec.hookEvent) {
         const hooks = parsed.hooks?.[spec.hookEvent]?.flatMap(group => group.hooks || []) || [];
-        const expected = spec.hookRunner
-          ? `node "${path.join(scriptDir, spec.hookRunner)}" "${path.join(scriptDir, spec.hookScript)}"${spec.hookArgs ?? ''}`
-          : `node "${path.join(scriptDir, spec.hookScript)}"${spec.hookArgs ?? ' --hook'}`;
-        return hooks.some(hook => hook.type === 'command' && hook.command === expected
+        const knownToolsDirs = [
+          path.join(home, 'orgiast-claude-rules', 'tools'),
+          path.join(home, '.claude', 'nightly-repo', 'tools'),
+          path.join(home, 'Downloads', 'orgiast-claude-rules', 'tools'),
+          scriptDir,
+        ];
+        const expectedCommands = new Set(knownToolsDirs.map(toolsDir => spec.hookRunner
+          ? `node "${path.join(toolsDir, spec.hookRunner)}" "${path.join(toolsDir, spec.hookScript)}"${spec.hookArgs ?? ''}`
+          : `node "${path.join(toolsDir, spec.hookScript)}"${spec.hookArgs ?? ' --hook'}`));
+        return hooks.some(hook => hook.type === 'command' && expectedCommands.has(hook.command)
           && (spec.async !== false ? hook.async === true : hook.async === undefined || hook.async === false)
           && hook.timeout === (spec.timeout ?? 5));
       }
@@ -185,7 +191,9 @@ if (manifest) {
       // Let the registrar select the dedicated main anchor unless explicitly overridden.
       execFileSync(process.execPath, [path.join(scriptDir, 'register-hooks.mjs'), '--hooks-only'], {
         env: { ...process.env, ORGIAST_HOME: home },
-        timeout: 30_000, stdio: 'pipe', windowsHide: true,
+        // Registration also computes the expected hook set in a child process.
+        // Match other repairs on slow Windows/WSL filesystems.
+        timeout: 120_000, stdio: 'pipe', windowsHide: true,
       });
       const repaired = convergeAllowRules(home);
       settingsMigration = { item, status: 'OK', checked: true, repaired };

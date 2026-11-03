@@ -3,6 +3,7 @@
 // 背景(2026-09-17 診断): llm-fallback.mjs は retry-after しか読んでおらず、残量を知らずに投げるため
 // 429 に必ず当たる。事前に絞る仕組み(流量制御)の前提として、上限と残量を実測できるようにする。
 // ここで取れる `x-ratelimit-remaining-tokens` が、流量制御が使う入力そのもの。
+import { gatewayConfig, gatewayModel, gatewayParams } from './provider-routing.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,9 +16,9 @@ export const PROBE_PROVIDERS = Object.freeze({
   groq: { base: 'https://api.groq.com/openai/v1/chat/completions', keyEnv: 'GROQ_API_KEY', keyFile: 'groq.env', model: 'openai/gpt-oss-120b' },
   openrouter: { base: 'https://openrouter.ai/api/v1/chat/completions', keyEnv: 'OPENROUTER_API_KEY', keyFile: 'openrouter.env', model: 'openai/gpt-oss-120b' },
   cerebras: { base: 'https://api.cerebras.ai/v1/chat/completions', keyEnv: 'CEREBRAS_API_KEY', keyFile: 'cerebras.env', model: 'zai-glm-4.7' },
-  deepseek: { base: 'https://api.deepseek.com/chat/completions', keyEnv: 'DEEPSEEK_API_KEY', keyFile: 'deepseek.env', model: 'deepseek-flash' },
+  deepseek: gatewayConfig('deepseek'),
   grok: { base: 'https://api.x.ai/v1/chat/completions', keyEnv: 'XAI_API_KEY', keyFile: 'xai.env', model: 'grok-3' },
-  kimi: { base: 'https://api.moonshot.ai/v1/chat/completions', keyEnv: 'MOONSHOT_API_KEY', keyFile: 'kimi-api.env', model: 'kimi-k3' },
+  kimi: gatewayConfig('kimi'),
 });
 
 // ヘッダ解釈は rate-budget.mjs が正本(依存ゼロ側に置く)。ここは re-export して
@@ -41,14 +42,14 @@ export function loadProbeKey(provider, { home = process.env.ORGIAST_HOME || os.h
 export async function probeRateLimits({ provider, model, key, fetchImpl = fetch, now = () => Date.now() } = {}) {
   const config = PROBE_PROVIDERS[provider];
   if (!config) throw new Error(`未知の provider: ${provider} (対応: ${Object.keys(PROBE_PROVIDERS).join(', ')})`);
-  const useModel = model || config.model;
+  const useModel = gatewayModel(provider, model || config.model);
   const at = new Date(now()).toISOString();
   if (!key) return { provider, model: useModel, at, ok: false, reason: `${config.keyEnv} 未取得` };
   try {
     const response = await fetchImpl(config.base, {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: useModel, ...(provider === 'deepseek' && useModel === 'deepseek-flash' ? { thinking: { type: 'disabled' } } : {}), messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 }),
+      body: JSON.stringify({ model: useModel, ...gatewayParams(useModel), ...(provider === 'deepseek' && useModel === 'deepseek-flash' ? { thinking: { type: 'disabled' } } : {}), messages: [{ role: 'user', content: 'ping' }], max_tokens: 1 }),
     });
     const limits = parseRateLimitHeaders(response.headers);
     const usage = response.ok ? (await response.json().catch(() => null))?.usage ?? null : null;

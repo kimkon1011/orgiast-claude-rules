@@ -34,6 +34,10 @@ export function checkNaming(library, sources) {
   const bySource = new Map(sources.map((s) => [s.name, s]));
   const problems = [];
   for (const a of library) {
+    if (a.asset_id === 'scale_figure_1913') {
+      if (a.dims_mm[2] < 1880 || a.dims_mm[2] > 1940) problems.push(`${a.asset_id}: 高さが人型範囲外 (${a.dims_mm[2]})`);
+      continue;
+    }
     const src = bySource.get(a.source_file);
     if (!src) { problems.push(`${a.asset_id}: source_file が stl-sources.json に無い (${a.source_file})`); continue; }
     const expected = assetBaseId(src.slug, src.kind, a.dims_mm, src.step ?? 10);

@@ -1,0 +1,25 @@
+{
+  "endpoint": "https://orgiast-memoryserve.vercel.app/api/case-log",
+  "caseId": "000000ZZ",
+  "displayName": "TEST000000ZZ",
+  "at": "2026-10-29T10:46:15.312Z",
+  "catalogCases": 49,
+  "sourceUsers": 2,
+  "flush": {
+    "sent": 1,
+    "remaining": 0
+  },
+  "resumeBytes": 924,
+  "driveUsers": 2,
+  "stateBytes": 808,
+  "allHeadings": true,
+  "passed": true,
+  "cleanupConfirmed": true,
+  "serverPr": "https://github.com/kimkon1011/orgiast-memoryserve/pull/1",
+  "deployment": "https://orgiast-memoryserve-87hsrh2ob-kimkon-s-projects.vercel.app",
+  "unauthenticatedApiStatus": 401,
+  "privateBundleStatus": 404,
+  "preservedMemoryFiles": 1000,
+  "preservedMemoryGeneration": "2026-10-28T19:13:35.636Z",
+  "driveDomain": "orgiast.jp"
+}

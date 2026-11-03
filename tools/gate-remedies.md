@@ -90,6 +90,8 @@ claude.ai の Gmail コネクタは、本文や件名の `http://` / `https://` 
 
 - URL を含むメールは `node tools/gmail-draft.mjs --to … --subject … --body-file …` で Gmail API へ直接保存する。
 - SA 鍵がない PC では、aujust リポジトリの GitHub Actions と DWD を使う（memory: `project-cr-pc-gmail-read-via-gha-secret`）。
+- 上の経路が使えず急ぐ場合は、URL を `8sp.jp/food` のようにスキーム（https://）なしで書けば書き換えられず、受信側でリンクになる。
+- 2026-10-30 から全PCで初回から deny（観察期間なし）。user-PC で社外宛返信の URL が転送 URL に書き換わった実害による。
 - override は、転送 URL への書き換えが起きないことを生 MIME の読み戻しまで含めて確認でき、利用者がそのリスクを明示的に受け入れた場合だけ使う。`~/.claude/gmail-connector-url-gate-override` の1行目に短い有効期限の ISO 8601 時刻を書く。
 
 ## live-artifact-read-gate
@@ -115,12 +117,16 @@ Agent/Task の model を sonnet/haiku に明示。実装は node tools/codex-do.
 ## next-action-gate
 
 次にすること・自動進行・セッション終了可否を末尾に明記する。
-「この後の自動進行」が空・「なし」で始まる値以外なら、node tools/auto-progress.mjs --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" --next-claude "<次の手>" で進捗チェックを登録する。現在ターンのバックグラウンド Agent/Bash/PowerShell も可。subagents と CLAUDE_HEADLESS=1 はこの検査の対象外。
+「この後の自動進行」が空・「なし」で始まる値以外なら、node tools/auto-progress.mjs --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" --next-claude "<次の手>" で進捗チェックを登録する。--check は完了判定（exit 0 = 成果物ができた）なので時刻だけの条件は拒否される。「夜に着手」「リセット後に着手」など開始の予約は --start-when "<開始条件>" --next-claude "<やること>" で登録する。現在ターンのバックグラウンド Agent/Bash/PowerShell も可。subagents と CLAUDE_HEADLESS=1 はこの検査の対象外。
 人に作業を残す時は、このターンで実装・設定・依頼送信・ルール追加した具体物を `恒久策:` 行に書く。初回だけなら `恒久策: 一回限り: <理由>`。
 例外は `[PERMANENT-FIX-OK: <10文字以上の理由>]`。倉庫作業の依頼送信の検査は免除しない。
 倉庫の物理作業は `node tools/discord-dm.mjs <倉庫担当> --body-file <本文>` で依頼し、「倉庫担当へ依頼済み」と報告して kim の次の作業から外す。
 NEXT-ACTION-OPEN は PR・リンク・ファイルの状態を Claude が照会し、済みなら消し、未了なら自分で実行するか「この後の自動進行」へ移す。
 人にしかできない例外は `[NEXT-ACTION-OPEN-OK: <5文字以上の理由>]` を本文に書く。
+
+NEXT-ACTION-BACKREF は前の応答への参照を消し、確認対象を「【kim 確認用の全文】」ブロックとして3行フッター直前に全文再掲する。例外は `[NEXT-ACTION-BACKREF-OK: <5文字以上の理由>]`。
+NEXT-ACTION-APPROVAL-INLINE はフッター直前40行以内に「【kim 確認用の全文】」見出しを置き、文面・選択肢・URL を毎回省略せず全文載せる。例外は `[NEXT-ACTION-APPROVAL-INLINE-OK: <5文字以上の理由>]`。
+通る形（実測 2026-10-27）: 本文 →「【kim 確認用の全文】」見出し＋全文 →「恒久策: 一回限り: <理由>」→ `次に kim がすること: 上の全文でよいか返事を一言`。マーカー名に「・」を入れない（MULTIPLE 判定に当たる）、行に「読んで／確認して／開いて」を書かない（OPEN 判定に当たる）、「送信する」等の実行語を書かない（PERMANENT-FIX 判定に当たる）。
 
 ## pr-handoff-gate
 
@@ -184,7 +190,7 @@ effortLevel を medium/high、model を既定監督モデルに戻す。
 
 ## url-account-gate
 
-Workspace の URL は authuser=開く人のメール を付け、本文の同じ行か直前に「<同じメール> で開いてください」と書く。自分宛は userEmail、他人宛は共有済みの相手メール。script.google.com/home/ 系は例外。他サービスはアカウント名を直前の行に書いて URL を単独行に置き、既定と違う場合はシークレットウィンドウも指定。
+Workspace の URL は authuser=開く人のメール を付け、本文の同じ行か直前に「<同じメール> で開いてください」と書く。自分宛は userEmail、他人宛は共有済みの相手メール。script.google.com/home/ 系は例外。他サービスはアカウント名を直前の行に書いて URL を単独行に置き、既定と違う場合はシークレットウィンドウも指定。名簿にないログイン画面（auth./login./accounts./manager. 等、/device・/oauth・/login 等）と、手順で「開いて」と渡す URL も対象。アカウントは開いた後の行ではなく、URL と同じ行か直前の行に書く。ランチャーで開くなら tools/open-url-as.ps1 -Account <メール> -Url <URL>。
 
 ## decision-research-gate
 
@@ -230,11 +236,32 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 
 既存 Stop runner から呼ぶため Stop hook 設定 の追加登録は不要。`ORGIAST_SIDE_EFFECT_LEFT_GATE=0` で無効化できる。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
 
+## answer-canonical-gate
+
+人の質問への回答をその場限りの文面で終えず、答えを正本（社内マニュアル・FAQ・応募者向け案内ページ・テンプレート・memory・コード）に追記し、次から相手や担当者が自分で引ける形にする。追記後は `正本化: <追記先の名前とリンク>` を1行書く。
+正本に答えが無い（規定が未決）なら、決める項目を user に1回で聞き、決まり次第そこへ書く。個別事情で汎用性が無い回答だけ `[CANON-OK] <理由>` を付ける（空の理由は不可）。引用行・コードブロック内の文面やマーカーは判定対象外。
+
+事例: 2026-10-29 山元さんの「身分証の提出目的・保管方法が分かるページはあるか」という質問に、専用ページは無いと説明して直接回答用の文面だけを渡した。回答を正本へ追記し、返信にはそのリンクを載せる。
+
+既存 Stop runner から呼ぶため Stop hook 設定の追加登録は不要。`ORGIAST_ANSWER_CANONICAL_GATE=0` で無効化できる。pilot PC は即時 block、他PCは既存 rollout の7日間の観察期間に従う。
+
 ## deferral-wait-gate
 
 作業や委譲の完了を待つ旨と、その完了後に行う作業を残したままターンを閉じず、当ターン内に完了まで進める。待機が不要なら、そのまま次の作業へ進めて結果まで報告する。
 
 コードブロック・引用行は対象外。既存 Stop runner から呼ぶため Stop hook 設定の追加登録は不要。`ORGIAST_DEFERRAL_WAIT_GATE=0` で無効化できる。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
+
+## third-party-nudge-gate
+
+他の人・他PC・他アカウントの対応待ちで止まる報告には、最終まとめの「user がやること」に任意の後押し文を必ず入れる: 「急ぐ場合だけ、<相手>に口頭やチャットで『<その1文で分かる用件。何がどこに届いていて何を対応してほしいか>』と一言伝えてもらえると早く進みます」。user がやらなくても進む前提で、必須作業とは分けて書く。
+
+コードブロック・引用行は対象外。既存 Stop runner から呼ぶため Stop hook 設定の追加登録は不要。`ORGIAST_THIRD_PARTY_NUDGE_GATE=0` で無効化できる。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
+
+## unregistered-promise-gate
+
+本文で Claude 自身が今後行う作業を約束した場合は、そのターンで実行して結果を報告するか、末尾の「この後の自動進行」に具体的な作業を登録する。「なし」のまま約束を残さない。user の返事待ちを条件にせず、返事がなくても進む形へ直す。
+
+コードブロック・引用ブロック・かぎ括弧内の引用、過去形・完了報告は対象外。「この後の自動進行」の装飾・最終行・「なし」表記は台帳の判定を共用する。既存 Stop runner の同一ターン2回までの差し戻し上限を利用する。Stop hook 設定の追加登録は不要。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
 
 ## api-billing-guard
 `claude /login` で Team シートを選び直す。例外は user の `[API-BILLING-OK]`（同一セッション60分）。
@@ -252,11 +279,15 @@ LINE の全員配信が本当に必要なら、kim が同じセッションで�
 
 ## mail-draft-account-gate
 
-メールは seisaku-team@orgiast.jp の下書きに作る: `node tools/gmail-draft.mjs --to <宛先> --subject "<件名>" --body-file <本文ファイル> --json` → 読み戻し `node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "in:drafts subject:<件名>" --json` → user が「送って」と言ったら重複・矛盾照会後 `node tools/gmail-draft.mjs --send <draftId> --json`。緊急退避のみ `ORGIAST_MAIL_ACCOUNT_GATE=off`。
+メールは seisaku-team@orgiast.jp の下書きに作る: `node tools/gmail-draft.mjs --to <宛先> --subject "<件名>" --body-file <本文ファイル> --json` → 読み戻し `node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "in:drafts subject:<件名>" --json` → user が「送って」と言ったら重複・矛盾照会後 `node tools/gmail-draft.mjs --send <draftId> --json`。Claude Code に seisaku-team@orgiast.jp でログインしている席（`~/.claude.json` の oauthAccount）は Gmail MCP も共有アカウント名義なので通す。緊急退避のみ `ORGIAST_MAIL_ACCOUNT_GATE=off`。
 
 ## mail-consistency-gate
 
 生の Gmail API 送信は使わず、`node tools/gmail-draft.mjs --send <draftId> --json` で送る。この経路はスレッド全体の合意と下書きを自動照合する。block は下書きを直して解消する。やむを得ない場合のみ `--ack-consistency "<理由>"` を付け、理由を完了報告に記載する。
+
+## outbound-claim-evidence-gate
+
+LINE push/reply/multicast、Gmail 下書き送信、Discord DM/API 投稿の本文に「入力いたしました」「予約しました」「送付済み」など外部操作の完了主張がある場合、送信前の読み戻し証拠がなければ止める。現在ターンの assistant テキストへ `[CLAIM-EVIDENCE: TimeRex 入力 => calendar:<eventId>]` のように書く。読み戻し元は `gmail:<messageId>`、`calendar:<eventId>`、`url:<URL>`、`shot:<path>`、`api:<request-id>` のいずれか。予約・入力は確認メールかカレンダー、送付・送信は送信済みフォルダを実際に読む。引用など完了主張ではない文だけ、10文字以上の理由を付けた `[OUTBOUND-CLAIM-OK: 返信文の引用で主張ではない]` で例外にできる。
 
 ## merge-handoff-gate
 
@@ -267,3 +298,8 @@ PR のマージを人に頼む文（本文の「次に kim がすること」・
 ## message-locator-gate
 
 メッセージ・通知を人に案内する文（「Discord に送りました」「メールが届いています」「DM を開いて」など）は、次の目印がそろっている時だけ通す。毎日1000件以上のメッセージを受け取る人が、一発で見つけられるようにするため（2026-10-26 kim 指摘: 「Discord の DM で今日19時ごろの通知を開き」では、どのアカウントの誰からの何か分からず見つけられなかった）。①アプリと開くアカウント（例: Discord の cr@ ログイン、Gmail の seisaku-team@） ②送信者（Bot 名・人の名前・メールアドレス） ③場所（DM の相手名・チャンネル名・ラベル） ④日時（日付と時:分） ⑤先頭行か件名を原文のまま＋そのメッセージへの直接リンク（Discord は `https://discord.com/channels/<guild|@me>/<channel>/<message>`、Gmail は authuser 付きのスレッド URL）。できれば中身の要点も本文に書き、開かなくても判断できるようにする。目印が本当に不要な一般論だけ `[MSG-LOCATOR-OK: <理由>]`。既存 Stop runner から呼ぶので Stop hook の追加登録は不要。
+
+## lane-repair-first-gate
+
+全PC・全アカウントで修復可能なレーン故障を最初に直す。`node tools/lane-doctor.mjs --probe` で診断する。Codex の probe_failed は直接 `wsl -d Ubuntu -u root -- codex exec --skip-git-repo-check "ping"` の終了コードでも切り分け、probe 経路だけの故障をレーン停止と断定しない。
+修復を試し、成功を実測したら `node tools/lane-repair-log.mjs --lane <名> --tried "<試した手段と実測>" --result fixed`。直せなければ同コマンドの `--result unfixable` で6時間だけ解除する。同一故障で3回連続修復不可なら notify-kim に1回通知する。429/usage_limit で reset が判明している quota_wait は修復対象外で、SessionStart に出る代替の安いレーンへ回す。gate 自体の例外は gate-errors.jsonl に記録して fail-open。

@@ -1,4 +1,4 @@
-# booth-3d: 保有機材の 3D 部材ライブラリ（第 1 段階）
+# booth-3d: 保有機材ライブラリとブース自動組立
 
 Drive 上の保有機材 STL 23 件を、Blender をヘッドレスで動かして「部材 1 点 = 1 アセット」に分割・命名し、
 `library.blend`・`library.json`・サムネイル PNG を作る。展示会ブースの 3D パース・図面を自動生成するパイプラインの土台。
@@ -34,6 +34,18 @@ node tools/booth-3d/build-library.mjs --out <出力フォルダの絶対パス>
 
 管理を別アカウントへ移すときは、新アカウントに STL フォルダを共有し、SA 鍵のパスと sub を差し替える。
 STL の Drive ID は `stl-sources.json`（id・name・slidePage）。`slidePage` は「【マスター】保有機材リスト」のページ番号で、未確認の間は null。
+
+## 第2段階: ブース JSON → 3D・図面・BOM
+
+```powershell
+node tools/booth-3d/build-booth.mjs --spec tools/booth-3d/examples/sample-3x3-rebooth.json --out C:\Users\kimko\.claude\booth-3d\out\sample-3x3
+```
+
+既定では `%USERPROFILE%\.claude\booth-3d\library` の `library.json` / `library.blend` を使う。別のライブラリは `--library <絶対パス>` で指定する。入力仕様は `booth-spec.schema.json`、座標は左前角が原点で X=幅、Y=奥行、Z=上、`pos_mm` は底面中心。
+
+処理開始前に境界（許容5mm）・高さ・在庫を検証し、違反時はコード付きJSONを標準出力へ出して exit 1 とする。50mmを超えるAABB重なりは、壁面取付など意図的な重なりを許すため警告のみ。正常時は指定ビューのPNG、寸法線入り正射影図、`scene.blend`、`bom.json`、Excelで開けるUTF-8 BOM付き`bom.csv`を出す。
+
+ライブラリにない `ledup`、`floor_panel`、`system_panel` はパラメトリック生成できる。LEDUPの既定奥行は120mm。`scale_figure_1913` は段階1の再ビルド時にステージSTLから1体だけ抽出する。
 
 ## 分割の考え方（STL の実態）
 

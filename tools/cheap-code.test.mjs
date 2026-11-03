@@ -21,7 +21,7 @@ function run(args) {
 test('provider 未指定では DeepSeek の base を選ぶ', () => {
   const result = run(['--dry-run', '確認する']);
   assert.equal(result.status, 0);
-  assert.equal(JSON.parse(result.stdout).base, 'https://api.deepseek.com/anthropic');
+  assert.equal(JSON.parse(result.stdout).base, 'https://openrouter.ai/api');
 });
 
 test('--provider glm では Z.ai の base を選ぶ', () => {
@@ -39,7 +39,7 @@ test('不正な provider 名はエラーになる', () => {
 test('--model が provider の既定モデルを上書きする', () => {
   const result = run(['--dry-run', '--model', 'custom-model', '確認する']);
   assert.equal(result.status, 0);
-  assert.equal(JSON.parse(result.stdout).model, 'custom-model');
+  assert.equal(JSON.parse(result.stdout).model, 'deepseek/custom-model');
 });
 
 test('--prompt-file から指示を読める', () => {
@@ -82,7 +82,7 @@ test('子 env だけに Anthropic 接続設定を追加し process.env を汚染
   const beforeToken = process.env.ANTHROPIC_AUTH_TOKEN;
   const config = resolveProvider('deepseek');
   const childEnv = buildChildEnv(config, 'test-secret', { SAFE_PARENT: 'yes' });
-  assert.equal(childEnv.ANTHROPIC_BASE_URL, 'https://api.deepseek.com/anthropic');
+  assert.equal(childEnv.ANTHROPIC_BASE_URL, 'https://openrouter.ai/api');
   assert.equal(childEnv.ANTHROPIC_AUTH_TOKEN, 'test-secret');
   assert.equal(childEnv.SAFE_PARENT, 'yes');
   assert.equal(process.env.ANTHROPIC_BASE_URL, beforeBase);
@@ -107,9 +107,9 @@ test('buildChildEnv は親 env を浄化してから provider 値を入れ、wor
     CLAUDE_CODE_GIT_BASH_PATH: 'C:\\Program Files\\Git\\bin\\bash.exe',
   }, { configDir: 'C:\\worker\\dir' });
 
-  assert.equal(childEnv.ANTHROPIC_BASE_URL, 'https://api.deepseek.com/anthropic');
+  assert.equal(childEnv.ANTHROPIC_BASE_URL, 'https://openrouter.ai/api');
   assert.equal(childEnv.ANTHROPIC_AUTH_TOKEN, 'provider-key');
-  assert.equal(childEnv.ANTHROPIC_API_KEY, undefined);
+  assert.equal(childEnv.ANTHROPIC_API_KEY, '');
   assert.equal(childEnv.CLAUDECODE, undefined);
   assert.equal(childEnv.MCP_SERVER, undefined);
   assert.equal(childEnv.SAFE_PARENT, 'yes');
@@ -279,3 +279,9 @@ test('明示 provider が cooldown 中なら claude を起動せず exit 3 で�
   }
 });
 
+
+test('OpenRouter pins coding model slots and leaves GLM model selection alone', () => {
+  const env = buildChildEnv({ ...resolveProvider('deepseek'), defaultModel: 'deepseek/deepseek-v4-pro' }, 'test', {});
+  for (const key of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL']) assert.equal(env[key], 'deepseek/deepseek-v4-pro');
+  assert.equal(buildChildEnv(resolveProvider('glm'), 'test', {}).ANTHROPIC_DEFAULT_HAIKU_MODEL, undefined);
+});

@@ -39,6 +39,18 @@ export async function sampleCpuBusy({ sampleMs = 5000, cpusImpl = os.cpus, sleep
   const busy = (dTotal - dIdle) / dTotal;
   return Math.max(0, Math.min(1, busy));
 }
+// 監督モデルは既定で planIncluded に従う（true なら Fable）。PC ごとに変えたいときは
+// objective.md の JSON に "model": "claude-opus-5-5" のように書く（2026-10-29 nishi:
+// 「オートパイロットをオーパスに変えて」。共有リポジトリの既定を変えると他 PC まで変わるため）。
+// claude- 以外や、planIncluded=false での Fable 指定は無視して既定に戻す。
+export function supervisorModel(objectiveFile, policy) {
+  const fallback = fableAllowedForSupervisor(policy) ? 'claude-fable-5-1' : 'claude-opus-5';
+  let pinned = '';
+  try { pinned = JSON.parse(fs.readFileSync(objectiveFile, 'utf8').match(/```json\s*\n([\s\S]*?)\n```/)[1]).model; } catch {}
+  if (typeof pinned !== 'string' || !/^claude-[a-z0-9-]+$/.test(pinned)) return fallback;
+  if (/fable/.test(pinned) && !fableAllowedForSupervisor(policy)) return fallback;
+  return pinned;
+}
 export function buildWatchPrompt(watch, repo = REPO) {
   return `autopilot の「見張り」を1件だけ確かめる。実装・修正・外部への送信はしない（読む・数える・ログを見るだけ）。
 
@@ -55,7 +67,7 @@ export function buildWatchPrompt(watch, repo = REPO) {
 // OAuth ログインが切れると、スケジューラ起動の autopilot は毎周
 // "OAuth session expired and could not be refreshed" で exit 1 し、runner_error のまま paused で固まる
 // (2026-10-17 実測: accessToken/refreshToken が長さ0、run.log が 04:32Z 以降 skipped だけ)。
-// 同じ PC のデスクトップ側セッションは ~/.claude/deepseek.env の鍵で動いているので、
+// 同じ PC のデスクトップ側セッションは ~/.claude/openrouter.env の鍵で動いているので、
 // 資格情報が空のときだけその鍵を子へ渡し、監督モデルもそのレーンのモデルへ切り替える。
 // 鍵が無ければ従来どおり（何も変えずに OAuth 経路へ渡す）＝挙動を悪化させない。
 export function resolveSupervisorAuth({ home = process.env.ORGIAST_HOME || os.homedir(), env = process.env, readFile = fs.readFileSync } = {}) {
@@ -65,13 +77,13 @@ export function resolveSupervisorAuth({ home = process.env.ORGIAST_HOME || os.ho
   if (String(oauthToken).trim()) return { lane: 'oauth', model: null, env };
   let key = '';
   try {
-    for (const line of String(readFile(path.join(home, '.claude', 'deepseek.env'), 'utf8')).split(/\r?\n/)) {
-      const match = line.match(/^\s*DEEPSEEK_API_KEY\s*=\s*(.+?)\s*$/);
+    for (const line of String(readFile(path.join(home, '.claude', 'openrouter.env'), 'utf8')).split(/\r?\n/)) {
+      const match = line.match(/^\s*OPENROUTER_API_KEY\s*=\s*(.+?)\s*$/);
       if (match) { key = match[1].replace(/^["']|["']$/g, ''); break; }
     }
   } catch {}
   if (!key) return { lane: 'none', model: null, env };
-  return { lane: 'deepseek', model: 'deepseek-flash', env: { ...env, ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic', ANTHROPIC_AUTH_TOKEN: key, CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000' } };
+  return { lane: 'deepseek', model: 'deepseek/deepseek-v4-flash', env: { ...env, ANTHROPIC_BASE_URL: 'https://openrouter.ai/api', ANTHROPIC_AUTH_TOKEN: key, ANTHROPIC_API_KEY: '', CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000' } };
 }
 export function invokeClaude({ executable, args, prompt, cwd, timeoutMs, env = process.env, onProgress = () => {} }) {
   return new Promise((resolve) => {
@@ -135,7 +147,7 @@ export async function runOnce(options = {}) {
       if (watch) {
         // 完了・停止中でも見張りは確かめる。そうしないと「完了」のまま誰も結果を見ない。
         const policy = options.policy || loadFablePolicy();
-        const model = auth.model || (fableAllowedForSupervisor(policy) ? 'claude-fable-5-1' : 'claude-opus-5');
+        const model = auth.model || supervisorModel(paths.objective, policy);
         const repo = options.repo || REPO;
         const executable = options.executable || (await resolveClaudeExecutableFromDisk()).executable;
         const checked = await (options.invokeImpl || invokeClaude)({ executable, args: ['-p', '--model', model, '--output-format', 'stream-json', '--verbose'], prompt: buildWatchPrompt(watch, repo), cwd: repo,
@@ -170,7 +182,7 @@ export async function runOnce(options = {}) {
     }
     const before = await runAutopilot('status', {}, options);
     const policy = options.policy || loadFablePolicy();
-    const model = auth.model || (fableAllowedForSupervisor(policy) ? 'claude-fable-5-1' : 'claude-opus-5');
+    const model = auth.model || supervisorModel(paths.objective, policy);
     const repo = options.repo || REPO;
     const executable = options.executable || (await resolveClaudeExecutableFromDisk()).executable;
     const timeoutMs = options.timeoutMs ?? 40 * 60_000;

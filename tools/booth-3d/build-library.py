@@ -206,7 +206,7 @@ def main():
     root = bpy.data.collections.new("assets")
     sc.collection.children.link(root)
 
-    library, used_ids = [], set()
+    library, used_ids, saved_human = [], set(), None
     for src in sources:
         path = os.path.join(stl_dir, src["name"])
         parts = import_and_split(path)
@@ -223,6 +223,10 @@ def main():
         for u in units:
             mn, mx = bbox_of(u)
             (humans if is_human(mn, mx) else kept).append(u)
+        # パースの縮尺確認用として、ステージ STL に同梱された人型を 1 体だけ残す。
+        # それ以外の複製は従来どおり除外する。
+        if saved_human is None and humans and src["slug"] == "stage_panel":
+            saved_human = (humans.pop(0), src["name"])
         purge(humans)
 
         groups = []  # [dims, [objs]]
@@ -267,6 +271,23 @@ def main():
                             "count_in_stl": len(members), "faces": faces_of(rep),
                             "inventory": None, "thumb": "thumbs/%s.png" % unique})
         print("SRC %s parts=%d units=%d humans=%d assets=%d" % (src["slug"], n_parts, len(units), len(humans), len(groups)))
+
+    if saved_human:
+        rep, source_name = saved_human
+        ground_to_bottom_center(rep)
+        rep.name = "scale_figure_1913"
+        rep.data.name = rep.name
+        coll = bpy.data.collections.new(rep.name)
+        root.children.link(coll)
+        for c in list(rep.users_collection):
+            c.objects.unlink(rep)
+        coll.objects.link(rep)
+        mn, mx = bbox_of(rep)
+        dims = mx - mn
+        library.append({"asset_id": rep.name, "source_file": source_name,
+                        "dims_mm": [round(v, 3) for v in dims], "count_in_stl": 1,
+                        "faces": faces_of(rep), "inventory": 1,
+                        "thumb": "thumbs/%s.png" % rep.name})
 
     blend = os.path.join(out_dir, "library.blend")
     bpy.ops.wm.save_as_mainfile(filepath=blend, compress=True)

@@ -1,0 +1,154 @@
+✔ a-d archive by the correct clocks; active set and recent meaningful sessions survive; restore is lossless (18332.743047ms)
+✔ live lock skips; dead PID is reclaimed; destination collision preserves both originals (7500.067644ms)
+✔ subtracting closed IDs rereads the ledger and preserves concurrent additions (2.0324ms)
+✔ file cap rotates the cursor so retained sessions cannot starve later files (5103.023875ms)
+✖ hook returns while stdin is open, launches one shot and honors cooldown (3276.672589ms)
+✔ hook launches remote restore after parent exit and skips spawning during cooldown (17774.563844ms)
+✖ setup converge repairs both events on existing PCs and remains idempotent (30058.796655ms)
+✖ dry-run pagination is read-only and reaches every file beyond the cap (10082.558209ms)
+✔ failed audit append rolls the transcript and its companion directory back (8914.859229ms)
+✖ only the final assistant approval counts, and a fresh final JSONL timestamp prevents c/d (10087.456927ms)
+✔ concurrent invocations archive a session exactly once (2545.93904ms)
+✔ large transcripts use UTF-8-safe reverse reads and retain the latest handoff sections (6530.756209ms)
+✔ sessions still referenced by a VSCode state DB are never archived, for any reason (19901.516383ms)
+✔ an unreadable VSCode state DB blocks every archive in that pass (2699.953402ms)
+✔ new session footer wording: closed/delete approved, pending/open not (1068.170761ms)
+✖ remote archives retain audit mapping, respect live/VSCode/recent/resumed guards and restore into kept (10024.487144ms)
+✔ remote archive with ID only in globalStorage (6349.564638ms)
+✔ remote archive with ID only in workspaceStorage (3252.952571ms)
+✔ archives after since are queued once; baseline survives cooldown and subsequent runs (23.542399ms)
+✔ archive sync write: host_exit immediately before archive (3.0918ms)
+✔ archive sync dry-run: host_exit immediately before archive (2.2475ms)
+✔ archive sync write: no host_exit (14.0692ms)
+✔ archive sync dry-run: no host_exit (12.5155ms)
+✔ archive sync write: host_exit ten minutes before archive (3.7901ms)
+✔ archive sync dry-run: host_exit ten minutes before archive (2.2195ms)
+✔ archive sync write: older automatic archive before latest manual archive (11.9134ms)
+✔ archive sync dry-run: older automatic archive before latest manual archive (2.3959ms)
+✔ first invocation fixes since=now and permanently excludes older archives (12.8015ms)
+✔ active, old updated_at, unmatched, excluded projects and already archived files need no events (2.0394ms)
+✔ user and assistant activity after grace period is skipped, including a UTF-8 tail cut (33.396199ms)
+✔ a restored session is queued again only when archived after the restore (12.6427ms)
+✔ kept is reread after events and concurrent additions survive (3.7938ms)
+✔ dry-run with since override writes neither state nor ledger (12.9574ms)
+✔ pagination follows cursor; newest archive event wins and missing or invalid dates fail closed (12.7025ms)
+✔ events budget is capped at 100 and HTTP/network failures are counted (329.751497ms)
+✔ 60-second deadline stops before ledger write and pagination stops at 30 pages (17.3532ms)
+✔ force bypasses cooldown but preserves baseline, kept and resumed guards (2.941ms)
+ℹ tests 37
+ℹ suites 0
+ℹ pass 32
+ℹ fail 5
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 168239.870831
+
+✖ failing tests:
+
+test at tools/purge-sessions.test.mjs:97:1
+✖ hook returns while stdin is open, launches one shot and honors cooldown (3276.672589ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(Date.now() - start < 3000)
+  
+      at TestContext.<anonymous> (file:///mnt/c/Users/uers/.claude/wt-remote-archive-tab/tools/purge-sessions.test.mjs:106:10)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tools/purge-sessions.test.mjs:165:1
+✖ setup converge repairs both events on existing PCs and remains idempotent (30058.796655ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  null !== 0
+  
+      at run (file:///mnt/c/Users/uers/.claude/wt-remote-archive-tab/tools/purge-sessions.test.mjs:171:109)
+      at TestContext.<anonymous> (file:///mnt/c/Users/uers/.claude/wt-remote-archive-tab/tools/purge-sessions.test.mjs:172:3)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: null,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tools/purge-sessions.test.mjs:188:1
+✖ dry-run pagination is read-only and reaches every file beyond the cap (10082.558209ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  null !== 0
+  
+      at Object.run (file:///mnt/c/Users/uers/.claude/wt-remote-archive-tab/tools/purge-sessions.test.mjs:19:139)
+      at TestContext.<anonymous> (file:///mnt/c/Users/uers/.claude/wt-remote-archive-tab/tools/purge-sessions.test.mjs:191:17)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: null,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tools/purge-sessions.test.mjs:208:1
+✖ only the final assistant approval counts, and a fresh final JSONL timestamp prevents c/d (10087.456927ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  null !== 0
+  
+      at Object.run (file:///mnt/c/Users/uers/.claude/wt-remote-archive-tab/tools/purge-sessions.test.mjs:19:139)
+      at TestContext.<anonymous> (file:///mnt/c/Users/uers/.claude/wt-remote-archive-tab/tools/purge-sessions.test.mjs:213:22)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: null,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tools/purge-sessions.test.mjs:295:1
+✖ remote archives retain audit mapping, respect live/VSCode/recent/resumed guards and restore into kept (10024.487144ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  null !== 0
+  
+      at Object.run (file:///mnt/c/Users/uers/.claude/wt-remote-archive-tab/tools/purge-sessions.test.mjs:19:139)
+      at TestContext.<anonymous> (file:///mnt/c/Users/uers/.claude/wt-remote-archive-tab/tools/purge-sessions.test.mjs:306:22)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: null,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

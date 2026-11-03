@@ -45,19 +45,19 @@ export function cheapProvidersAllCooling(provider, home = process.env.ORGIAST_HO
   if (!alternate) return false;
   try {
     const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'provider-cooldown.json'), 'utf8'));
-    return Number(state?.[provider]?.until) > now && Number(state?.[alternate]?.until) > now;
+    return Number(state?.[provider === 'deepseek' ? 'openrouter' : provider]?.until) > now && Number(state?.[alternate === 'deepseek' ? 'openrouter' : alternate]?.until) > now;
   } catch { return false; }
 }
 
 export function alternateCheapProvider(provider, home = process.env.ORGIAST_HOME || os.homedir()) {
   const alternate = provider === 'glm' ? 'deepseek' : provider === 'deepseek' ? 'glm' : null;
   if (!alternate) return null;
-  const keyFile = path.join(home, '.claude', alternate === 'glm' ? 'zai.env' : 'deepseek.env');
-  const keyName = alternate === 'glm' ? 'ZAI_API_KEY' : 'DEEPSEEK_API_KEY';
+  const keyFile = path.join(home, '.claude', alternate === 'glm' ? 'zai.env' : 'openrouter.env');
+  const keyName = alternate === 'glm' ? 'ZAI_API_KEY' : 'OPENROUTER_API_KEY';
   try {
     if (!parseAutoSessionEnvText(fs.readFileSync(keyFile, 'utf8'))[keyName]) return null;
     const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'provider-cooldown.json'), 'utf8'));
-    if (Number(state?.[alternate]?.until) > Date.now()) return null;
+    if (Number(state?.[alternate === 'deepseek' ? 'openrouter' : alternate]?.until) > Date.now()) return null;
   } catch (error) {
     if (error?.code !== 'ENOENT' && error instanceof SyntaxError) return null;
     try { if (!parseAutoSessionEnvText(fs.readFileSync(keyFile, 'utf8'))[keyName]) return null; } catch { return null; }
@@ -192,9 +192,11 @@ export function recordFallbackToClaude({ home = process.env.ORGIAST_HOME || os.h
   } catch {}
 }
 
-export function recordSkippedNoExecutor({ home = process.env.ORGIAST_HOME || os.homedir(), reason, provider, appendImpl = null, now = new Date() } = {}) {
+export function recordSkippedNoExecutor({ home = process.env.ORGIAST_HOME || os.homedir(), reason, provider, stderr = '', appendImpl = null, now = new Date() } = {}) {
   try {
-    const row = `${JSON.stringify({ t: now.toISOString(), provider: 'skipped', category: 'unrouted', model: 'none', status: 'no-cheap-executor', reason: String(reason || provider || 'unknown') })}\n`;
+    // 原因（上限・残高・無人枠）が台帳に残らないと delegation-health が外部要因の停止を全滅と誤診する。末尾200字だけ残す。
+    const tail = String(stderr || '').trim().slice(-200);
+    const row = `${JSON.stringify({ t: now.toISOString(), provider: 'skipped', category: 'unrouted', model: 'none', status: 'no-cheap-executor', reason: String(reason || provider || 'unknown'), ...(tail ? { stderrTail: tail } : {}) })}\n`;
     const file = path.join(home, '.claude', 'executor-usage.jsonl');
     if (appendImpl) appendImpl(file, row, 'utf8');
     else { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.appendFileSync(file, row, 'utf8'); }

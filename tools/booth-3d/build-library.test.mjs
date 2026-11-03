@@ -76,7 +76,7 @@ test('ensure-blender: 配布一覧から最新の 5.2.x windows-x64 zip を選�
 export function measureBlender(env = process.env) {
   const exe = env.BOOTH3D_BLENDER || defaultBlenderPath();
   if (!existsSync(exe)) return { status: 'unmeasurable', exitCode: 2, reason: `Blender が見つからない: ${exe}` };
-  const r = spawnSync(exe, ['-b', '--python-expr', 'import bpy; print("BLENDER_OK", bpy.app.version_string)'], { encoding: 'utf8', timeout: 120000 });
+  const r = spawnSync(exe, ['-b', '--python-expr', 'import bpy; print("BLENDER_OK", bpy.app.version_string)'], { encoding: 'utf8', timeout: 120000, windowsHide: true });
   const m = /BLENDER_OK (\S+)/.exec(r.stdout ?? '');
   if (r.status !== 0 || !m) return { status: 'failed', exitCode: 1, reason: `Blender が起動しない (exit ${r.status})` };
   return { status: 'ok', exitCode: 0, version: m[1] };

@@ -3,11 +3,13 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { acquireLock } from './lib/progress-file-lock.mjs';
 import { isEntry } from './is-entry.mjs';
 import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 import { ledgerFile, readLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES } from './auto-progress-ledger.mjs';
 export { isUnattendedRow } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
+import { collectCaseProgress } from './case-progress-digest.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 
 export const WINDOW_MS = 24 * 3600 * 1000;
@@ -46,7 +48,7 @@ export function selectRows(rows, now = Date.now(), since = now - WINDOW_MS) {
   const ledger = Array.isArray(rows) ? rows : [];
   const active = new Set(latestOpenPromises(ledger));
   return ledger.filter((row) => {
-    if (isNoopPromise(row.promise)) return false;
+    if (row.kimAnswer || isNoopPromise(row.promise)) return false;
     if (row.status === 'done') return Number.isFinite(Date.parse(row.doneAt)) && Date.parse(row.doneAt) > since;
     return active.has(row);
   }).sort((a, b) => rowTime(a) - rowTime(b));
@@ -72,10 +74,11 @@ export const isHumanActionRequired = (row) => {
 };
 
 export function needsDm(row, now = Date.now()) {
-  if (isNoopPromise(row.promise)) return false;
+  if (row.kimAnswer || isNoopPromise(row.promise)) return false;
   const verdict = verdictOf(row, now);
   return isHumanActionRequired(row) || ['done', 'open/期限超過'].includes(verdict) ||
-    (verdict === 'stalled' && Number(row.resumeCount) >= MAX_RESUMES);
+    (verdict === 'stalled' && (Number(row.resumeCount) >= MAX_RESUMES ||
+      (/^(?:error|timeout|blocked)\b/i.test(String(row.resumeOutcome || '')) && Number(row.resumeFailureCount ?? row.resumeCount) >= 2)));
 }
 
 export function cleanText(text, row = {}) {
@@ -127,11 +130,30 @@ const projectOf = row => { const name = String(row.cwd || '').split(/[\\/]+/).fi
 // 1行が長すぎると1通1800字に収まらないので、項目の本文だけを切る（見出し・件数は残す）。
 const brief = (text, max) => { const s = String(text || ''); return s.length > max ? `${s.slice(0, max - 1)}…` : s; };
 
-// 判断待ちのうち、記録から72時間を超えたものは個別に並べず、末尾に件数だけ出す。
-export const WAITING_STALE_MS = 72 * 3600 * 1000;
-// 各区分の上限（判断待ち・完了・止まっている・進行中）。1800字に収まる限り最大5件まで個別表示する。
-export const CATEGORY_LIMITS = Object.freeze({ waiting: 5, done: 5, stalled: 5, inProgress: 5 });
 export const MAX_ITEM_CHARS = 80;
+// 1通の上限。超える時は件数を削らず run() 側で改行境界のまま複数DMに分割する（全件の名前を届けるため）。
+export const MESSAGE_MAX = 1800;
+// 分割DMの続きマーカー（（進捗DM 続き 12/12）等）が付いても上限を超えないように、分割は余裕を見て行う。
+export const PART_MARKER_MAX = 24;
+export const PART_CHUNK_MAX = MESSAGE_MAX - PART_MARKER_MAX;
+
+// 改行境界で分割し、各断片を max 字以内に収める。行自体が max を超える時だけ強制分割する。
+export function chunkMessage(text, max = PART_CHUNK_MAX) {
+  const parts = [];
+  let current = '';
+  for (let line of String(text || '').split('\n')) {
+    while (line.length > max) {
+      if (current) { parts.push(current); current = ''; }
+      parts.push(line.slice(0, max));
+      line = line.slice(max);
+    }
+    const candidate = current ? `${current}\n${line}` : line;
+    if (current && candidate.length > max) { parts.push(current); current = line; }
+    else current = candidate;
+  }
+  if (current) parts.push(current);
+  return parts.filter(Boolean);
+}
 // 80字を超える行は、末尾の「きみがすること」を残して説明側を縮める（行動が切れて伝わらないのを防ぐ）。
 const itemLine = (head, what, tail = '') => {
   const full = `${head}${what}${tail}`;
@@ -143,7 +165,6 @@ const itemLine = (head, what, tail = '') => {
 
 const rowTsOf = (row) => { const t = Date.parse(row?.ts || ''); return Number.isFinite(t) ? t : null; };
 export const isClosedRow = row => row?.status === 'done' || row?.status === 'superseded';
-export const isStaleWaiting = (row, now = Date.now()) => { const t = rowTsOf(row); return t !== null && now - t > WAITING_STALE_MS; };
 
 export function actionOf(row) {
   const kim = kimAction(row);
@@ -153,6 +174,37 @@ export function actionOf(row) {
   if (match) return cleanText(match[1], row);
   return cleanText(row.resumeOutcome || row.reason || '対応をお願いします', row);
 }
+
+// 同じ作業場所と許可事項だけをまとめ、識別子や言い回しの違いを吸収する。
+export function digestGroupKey(row, kind) {
+  const cwd = String(row.cwd || '').replaceAll('\\', '/').replace(/^\/mnt\/([a-z])\//i, '$1:/').replace(/\/+$/, '').toLowerCase();
+  if (!cwd) return rowKey(row);
+  const text = String(kind === 'waiting' ? actionOf(row) : row.promise || '').toLowerCase()
+    .replace(/`[^`]*`/g, '').replace(/\b[0-9a-f]{7,}\b/g, '')
+    .replace(/\b(?!push\/pr\b)[a-z0-9_.-]+\/[a-z0-9_./-]+/g, '');
+  const tags = [
+    ['push', /push/], ['pr', /\bpr\b|pull request|プルリク/], ['merge', /merge|マージ/],
+    ['curl', /curl/], ['token', /token|トークン/], ['write', /書き込み/],
+    ['delete', /削除/], ['exec', /実行/],
+  ].filter(([, pattern]) => pattern.test(text)).map(([tag]) => tag).sort();
+  return `${cwd}|${tags.length ? tags.join(',') : text.replace(/[\p{N}\p{P}\p{S}\s]/gu, '')}`;
+}
+
+function digestGroups(rows, kind) {
+  const groups = new Map();
+  for (const row of rows) {
+    // 作業場所がない行は、同一キーでも独立した項目として残す。
+    const key = row.cwd ? digestGroupKey(row, kind) : Symbol();
+    const group = groups.get(key);
+    if (!group) groups.set(key, { row, count: 1 });
+    else {
+      group.count++;
+      if ((rowTsOf(row) ?? -Infinity) > (rowTsOf(group.row) ?? -Infinity)) group.row = row;
+    }
+  }
+  return [...groups.values()];
+}
+const groupTail = count => count > 1 ? `（同じ内容 ×${count}）` : '';
 
 export function formatDigest(rows, now = Date.now(), label = '', {
   allRows = rows,
@@ -165,17 +217,19 @@ export function formatDigest(rows, now = Date.now(), label = '', {
   owner = '',
   nightWaitingKeys = new Set(),
 } = {}) {
-  const filtered = (allRows || rows || []).filter(row => !isNoopPromise(row.promise));
+  const filtered = (allRows || rows || []).filter(row => !row.kimAnswer && !isNoopPromise(row.promise));
   if (!filtered.length && !(waitingRows?.length || doneRows?.length || stalledRows?.length || inProgressRows?.length)) return '';
 
+  const scheduled = filtered.filter(row => ['scheduled', 'start_overdue'].includes(row.status));
   const waitingAll = waitingRows ? [...waitingRows] : [];
   const done = doneRows ? [...doneRows] : [];
-  const stalled = stalledRows ? [...stalledRows] : [];
+  let stalled = stalledRows ? [...stalledRows] : [];
   let inProgressList = inProgressRows ? [...inProgressRows] : [];
   let inProgress = typeof inProgressCount === 'number' ? inProgressCount : inProgressList.length;
 
   if (!waitingRows && !doneRows && !stalledRows && !inProgressRows) {
     for (const row of filtered) {
+      if (scheduled.includes(row)) continue;
       if (row.status === 'done' || verdictOf(row, now) === 'done') {
         done.push(row);
       } else if (isHumanActionRequired(row)) {
@@ -191,17 +245,16 @@ export function formatDigest(rows, now = Date.now(), label = '', {
     inProgress = inProgressList.length;
   }
 
-  // 判断待ちは、既に閉じた行と72時間より古い行を個別表示から外す。古い分は末尾に件数だけ残す。
-  const openWaiting = waitingAll.filter(row => !isClosedRow(row));
-  const waiting = openWaiting.filter(row => !isStaleWaiting(row, now));
-  const staleWaiting = openWaiting.filter(row => isStaleWaiting(row, now));
+  // 判断待ちは既に閉じた行だけ外し、古い行も含めて全件を名前つきで出す（件数だけにしない）。
+  const waiting = digestGroups(waitingAll.filter(row => !isClosedRow(row)), 'waiting');
+  stalled = digestGroups(stalled, 'stalled');
 
   // 進行中は最終判定が新しい順
   const checkedTime = (r) => {
     const t = Date.parse(r.lastCheckedAt || r.resumedAt || r.ts || 0);
     return Number.isFinite(t) ? t : 0;
   };
-  const inProgressSorted = [...inProgressList].sort((a, b) => checkedTime(b) - checkedTime(a));
+  const inProgressSorted = inProgressList.filter(row => !scheduled.includes(row)).sort((a, b) => checkedTime(b) - checkedTime(a));
 
   const pcLabel = label || 'このPC';
   const header = `【${pcLabel} の自動進行】 完了 ${done.length}件・止まっている ${stalled.length}件・あなたの判断待ち ${waiting.length}件`;
@@ -209,77 +262,49 @@ export function formatDigest(rows, now = Date.now(), label = '', {
   if (unattended > 0) footerParts.push(`無人処理: ${unattended}件`);
   const footer = footerParts.join(' ／ ');
 
-  let wLimit = Math.min(waiting.length, CATEGORY_LIMITS.waiting);
-  let dLimit = Math.min(done.length, CATEGORY_LIMITS.done);
-  let sLimit = Math.min(stalled.length, CATEGORY_LIMITS.stalled);
-  let pLimit = Math.min(inProgressSorted.length, CATEGORY_LIMITS.inProgress);
-
-  const render = (wL, dL, sL, pL) => {
+  // 全件を名前つきで並べる。1通1800字に収まらない時は分割指示（chunkMessage）を run() 側で行う。
+  const render = () => {
     const lines = [header];
-    // 1. あなたの判断待ち
-    for (const row of waiting.slice(0, wL)) {
+    for (const row of scheduled) {
+      lines.push(itemLine(`・開始予約${row.status === 'start_overdue' ? '（期限超過）' : ''}: `,
+        cleanText(row.label || row.promise, row), `（開始条件の最終確認 ${row.lastCheckedAt || '未確認'}）`));
+    }
+    // 1. あなたの判断待ち（古さに関係なく全件）
+    for (const { row, count } of waiting) {
       const what = cleanText(row.label || row.promise || '約束した作業', row);
       const night = nightWaitingKeys.has(waitingNotificationKey(row)) ? '夜間に出た判断待ち: ' : 'あなたの判断待ち: ';
-      lines.push(itemLine(`・${night}${projectOf(row)}`, what, ` — ${actionOf(row)}`));
-    }
-    if (waiting.length > wL) {
-      lines.push(`・あなたの判断待ち: ほか ${waiting.length - wL}件`);
+      const head = `・${night}${projectOf(row)}`;
+      const suffix = groupTail(count);
+      const action = count > 1 ? brief(actionOf(row), Math.max(0, MAX_ITEM_CHARS - head.length - suffix.length - 12)) : actionOf(row);
+      lines.push(itemLine(head, what, ` — ${action}${suffix}`));
     }
     // 2. 完了（各1行・80字以内）
-    for (const row of done.slice(0, dL)) {
+    for (const row of done) {
       const what = cleanText(row.label || row.promise || '約束した作業', row);
       lines.push(itemLine(`・完了: ${projectOf(row)}`, what));
     }
-    if (done.length > dL) {
-      lines.push(`・完了: ほか ${done.length - dL}件`);
-    }
     // 3. 止まっている（再開したかどうか）
-    for (const row of stalled.slice(0, sL)) {
+    for (const { row, count } of stalled) {
       const what = cleanText(row.label || row.promise || '約束した作業', row);
       const resumed = row.status === 'resumed' || Boolean(row.resumedAt);
       const resumeText = resumed ? '自動再開しました' : '自動再開していません';
-      lines.push(itemLine(`・止まっている: ${projectOf(row)}`, what, ` — ${resumeText}`));
+      lines.push(itemLine(`・止まっている: ${projectOf(row)}`, what, ` — ${resumeText}${groupTail(count)}`));
     }
-    if (stalled.length > sL) {
-      lines.push(`・止まっている: ほか ${stalled.length - sL}件`);
-    }
-    // 4. 進行中（最大5件を名前で出す・並びは最終判定が新しい順）
-    for (const row of inProgressSorted.slice(0, pL)) {
+    // 4. 進行中（並びは最終判定が新しい順）
+    for (const row of inProgressSorted) {
       const what = cleanText(row.label || row.promise || '約束した作業', row);
       lines.push(itemLine(`・進行中: ${projectOf(row)}`, what));
     }
     const totalProg = Math.max(inProgress, inProgressSorted.length);
-    if (inProgressSorted.length > 0 && totalProg > pL) {
-      lines.push(`・進行中: ほか ${totalProg - pL}件`);
-    } else if (inProgressSorted.length === 0 && inProgress > 0) {
+    if (inProgressSorted.length === 0 && inProgress > 0) {
       lines.push(`・進行中: ${inProgress}件`);
     }
 
     if (footer) lines.push(footer);
-    if (staleWaiting.length) {
-      lines.push(`・3日以上前の判断待ち ${staleWaiting.length}件（必要なら次のセッションで整理します）`);
-    }
     return lines.join('\n');
   };
 
-  // 1通1800字に収める。字数が足りない時だけ一番多い区分から1件ずつ削り、均等に減らす。
-  const tooLong = (text) => text.length > 1800;
-  let guard = 200;
-  while (tooLong(render(wLimit, dLimit, sLimit, pLimit)) && guard-- > 0) {
-    const candidates = [
-      { key: 'w', limit: wLimit },
-      { key: 'd', limit: dLimit },
-      { key: 's', limit: sLimit },
-      { key: 'p', limit: pLimit },
-    ].sort((a, b) => b.limit - a.limit);
-    const target = candidates.find(c => c.limit > 1) || candidates.find(c => c.limit > 0);
-    if (!target) break;
-    if (target.key === 'w') wLimit--;
-    else if (target.key === 'd') dLimit--;
-    else if (target.key === 's') sLimit--;
-    else pLimit--;
-  }
-  return render(wLimit, dLimit, sLimit, pLimit);
+  return render();
 }
 
 // 枠と日付キーは日本時間で決める。PCやCIのタイムゾーンに左右させると、
@@ -348,7 +373,9 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     const prevResumedAt = lastResumedAt[key];
     const prevWait = lastWaiting[key];
 
-    if (row.status === 'done' || v === 'done') {
+    if (['scheduled', 'start_overdue'].includes(row.status)) {
+      inProgressRows.push(row);
+    } else if (row.status === 'done' || v === 'done') {
       const doneAtTime = Date.parse(row.doneAt || 0) || 0;
       if (prevVerdict !== 'done' || (doneAtTime && doneAtTime > lastSuccessAt)) {
         newlyDoneRows.push(row);
@@ -393,10 +420,14 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     return { skipped: 'already-sent', sent: false, count: 0 };
   }
 
+  const caseDigest = !isOutside && label === 'kim-PC' && !sentSlotOwners.has(`${slotKey}|kim@orgiast.jp`)
+    ? await collectCaseProgress({ home, now, previous: state.caseProgress || {}, fetchResume: io.fetchCaseResume, dryRun })
+    : { text: '', checkpoints: {} };
+
   // 変化0件なら送らない（ただし朝枠は進行中または判断待ちがあれば定時報告として送る）
   const totalChanges = newlyDoneRows.length + newlyStalledRows.length + newlyResumedRows.length + newlyWaitingRows.length;
   const isMorningHeartbeat = currentSlot === '朝' && (inProgressRows.length > 0 || waitingRows.length > 0);
-  if (!isOutside && totalChanges === 0 && !isMorningHeartbeat) {
+  if (!isOutside && totalChanges === 0 && !isMorningHeartbeat && !caseDigest.text) {
     return { sent: false, count: 0 };
   }
 
@@ -417,6 +448,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   }
 
   const deliveries = [...groups]
+    .filter(([owner]) => owner.toLowerCase() !== 'kim@orgiast.jp')
     .filter(([owner]) => !slotKey || !sentSlotOwners.has(`${slotKey}|${owner}`))
     .map(([owner, rows]) => {
     const owned = activeRows.filter(r => ownerOf(r) === owner);
@@ -438,6 +470,8 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     return { owner, rows, message };
   }).filter(d => Boolean(d.message));
 
+  if (caseDigest.text) deliveries.push({ owner: 'kim@orgiast.jp', rows: [], message: caseDigest.text });
+  if (!deliveries.length) return { sent: false, count: 0, skipped: 'session-context-only' };
   const messages = deliveries.map(d => d.message);
   const text = messages.join('\n');
   const count = countedRows.length;
@@ -446,13 +480,26 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
 
   let error = '';
   const receipts = [];
+  const sentTexts = [];
+  let totalParts = 0;
   for (const { owner, rows, message } of deliveries) {
-    let result;
-    try {
-      result = io.notify ? await io.notify(message, { home, webhookFallback: false, owner }) : await (io.notifyOwner ?? notifyOwner)(owner, message, { home });
-    } catch (cause) { result = { reason: cause?.message || String(cause) }; }
-    if (!['dm', 'toast'].includes(result?.delivered)) { error = result?.reason || 'DM not delivered'; break; }
-    receipts.push({ owner, recipientId: result.recipientId, httpStatus: result.httpStatus, messageId: result.messageId, channelId: result.channelId });
+    // 1800字を超える本文は全件を載せたまま改行境界で分割し、続きマーカー付きの複数DMで届ける。
+    const parts = chunkMessage(message);
+    totalParts += Math.max(parts.length, 1);
+    const numbered = parts.length > 1 ? parts.map((part, i) => i === 0 ? part : `（進捗DM 続き ${i + 1}/${parts.length}）\n${part}`) : parts;
+    for (const part of numbered) {
+      let result;
+      try {
+        result = io.notify ? await io.notify(part, { home, webhookFallback: false, owner }) : await (io.notifyOwner ?? notifyOwner)(owner, part, { home });
+      } catch (cause) { result = { reason: cause?.message || String(cause) }; }
+      result ??= {};
+      const delivered = ['dm', 'session-inbox', 'toast', 'inbox'].includes(result.delivered);
+      receipts.push({ owner, ok: delivered, attempts: result.attempts, toastExitCode: result.toastExitCode, channel: result.channel ?? (result.delivered === 'dm' ? 'discord' : result.delivered || 'none'), recipientId: result.recipientId, httpStatus: result.httpStatus, messageId: result.messageId, channelId: result.channelId });
+      sentTexts.push(part);
+      if (!delivered) { error = result.reason || 'DM not delivered'; break; }
+    }
+    if (error) break;
+    if (owner === 'kim@orgiast.jp' && caseDigest.text) state.caseProgress = { ...state.caseProgress, ...caseDigest.checkpoints };
     if (slotKey) sentSlotOwners.add(`${slotKey}|${owner}`);
     for (const row of rows) {
       const key = rowKey(row);
@@ -484,7 +531,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
 
   if (error) {
     appendLog(home, { at: now, label, slot: slotKey || 'urgent', sent: false, count, error, receipts }, io);
-    appendSentLog(home, { at: now, label, slot: slotKey || 'urgent', sent: false, count, parts: messages.length, receipts, text: redactSecrets(text) }, io);
+    appendSentLog(home, { at: now, label, slot: slotKey || 'urgent', sent: false, count, parts: totalParts, receipts, text: redactSecrets(sentTexts.join('\n') || text) }, io);
     return { sent: false, count, error };
   }
 
@@ -511,9 +558,56 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     sentKeys: nextSentKeys,
   };
   (io.writeState ?? writeState)(home, next);
-  appendLog(home, { at: now, label, slot: slotKey || 'urgent', sent: true, count, parts: messages.length, receipts }, io);
-  appendSentLog(home, { at: now, label, slot: slotKey || 'urgent', sent: true, count, parts: messages.length, receipts, text: redactSecrets(text) }, io);
-  return { sent: true, count, parts: messages.length };
+  appendLog(home, { at: now, label, slot: slotKey || 'urgent', sent: true, count, parts: totalParts, receipts }, io);
+  appendSentLog(home, { at: now, label, slot: slotKey || 'urgent', sent: true, count, parts: totalParts, receipts, text: redactSecrets(sentTexts.join('\n')) }, io);
+  return { sent: true, count, parts: totalParts };
+}
+
+
+// kim-PC のセッション文脈専用。既存の定時通知とは状態を分離する。
+export function sessionDigest({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), dryRun = false, io = {} } = {}) {
+  if ((io.label ?? resolveFleetLabel(home)) !== 'kim-PC') return '';
+  const file = path.join(home, '.claude/state/auto-progress-session-digest.json');
+  const day = new Date(now + 9 * 3600000).toISOString().slice(0, 10);
+  const release = dryRun ? () => {} : acquireLock(file + '.lock');
+  if (!release) return '';
+  try {
+    let state = {};
+    try { state = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    if (!dryRun && state.day === day) return '';
+    const rows = (io.readLedger ?? readLedger)(ledgerFile(home));
+    const latest = new Map();
+    for (const row of rows) {
+      const key = row.sessionId || rowKey(row);
+      const previous = latest.get(key);
+      if (!previous || (Date.parse(row.ts) || 0) >= (Date.parse(previous.ts) || 0)) latest.set(key, row);
+    }
+    const previous = state.signatures || {};
+    const selected = [];
+    for (const [key, row] of latest) {
+      if (row.owner && row.owner.toLowerCase() !== 'kim@orgiast.jp') continue;
+      if (!['open', 'stalled', 'resumed', 'waiting_user'].includes(row.status) || isNoopPromise(row.promise)) continue;
+      const due = Date.parse(row.deadlineAt || row.dueAt || '');
+      const signature = JSON.stringify([row.status, row.verdict, row.nextKim, row.nextClaude, row.resumeOutcome]);
+      const changed = previous[key] ? previous[key] !== signature : now - rowTime(row) <= WINDOW_MS;
+      if (!(due <= now + WINDOW_MS) && !changed) continue;
+      const stage = due <= now ? '期限超過' : due <= now + WINDOW_MS ? '期限間近' : row.status === 'waiting_user' ? '判断待ち' : row.status === 'stalled' ? '停止中' : row.status === 'resumed' ? '再開済み' : '進行中';
+      const rawNext = String(row.nextClaude || '達成状況を確認する');
+      const nextClaude = /--prompt-file/.test(rawNext) ? '指示書に沿って実装・テストを進め、PR の結果を報告する' : rawNext.replace(/(?:DM|Discord)(?:で|に)/gi, 'このセッションで');
+      const who = kimAction(row) !== 'なし' ? `kim が ${kimAction(row)}` : `Claude が ${nextClaude}`;
+      const oneLine = value => { const text = redactSecrets(String(value || '')).replace(/\s+/g, ' '); return text.length > 130 ? text.slice(0, 129) + '…' : text; };
+      const verdict = ({check_error:'確認処理エラー',unmet:'未達',in_progress:'進行中',needs_user:'判断待ち'})[row.verdict] || row.verdict;
+      selected.push({ key, signature, priority: due <= now ? 0 : due <= now + WINDOW_MS ? 1 : 2, due: Number.isFinite(due) ? due : Infinity,
+        text: `・${oneLine(row.label || row.promise || '作業')}：${stage}${row.verdict && !['open','stalled'].includes(row.verdict) ? `（${oneLine(verdict)}）` : ''}。次: ${oneLine(who)}` });
+    }
+    const top = selected.sort((a, b) => a.priority - b.priority || a.due - b.due || a.key.localeCompare(b.key)).slice(0, 5);
+    if (!top.length) return '';
+    if (!dryRun) {
+      const next = { day, signatures: { ...previous, ...Object.fromEntries(top.map(x => [x.key, x.signature])) } };
+      const temp = file + '.tmp'; fs.writeFileSync(temp, JSON.stringify(next) + '\n'); fs.renameSync(temp, file);
+    }
+    return top.map(x => x.text).join('\n');
+  } finally { release(); }
 }
 
 if (isEntry(import.meta.url)) {

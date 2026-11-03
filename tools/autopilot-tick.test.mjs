@@ -29,7 +29,7 @@ function discord(t, overrides = {}) {
     if (url.endsWith('/users/@me/channels')) return { ok: true, json: async () => ({ id: 'dm' }) };
     const parsed = new URL(url), channel = parsed.pathname.split('/')[4];
     if (unavailable.has(channel)) return { ok: false, status: 503 };
-    if (init.method === 'POST') { sent.push(JSON.parse(init.body).content); return { ok: true }; }
+    if (init.method === 'POST') { sent.push(JSON.parse(init.body).content); return { ok: true, status: 200, json: async () => ({ id: snow(sent.length), channel_id: channel }) }; }
     const after = BigInt(parsed.searchParams.get('after'));
     return { ok: true, json: async () => channels[channel].filter((m) => BigInt(m.id) > after).sort((a, b) => BigInt(a.id) < BigInt(b.id) ? -1 : 1).slice(0, 100).reverse() };
   };
@@ -150,7 +150,7 @@ test('a dead login still resumes when the deepseek key can carry the child', asy
   fs.mkdirSync(path.dirname(creds), { recursive: true });
   fs.writeFileSync(creds, JSON.stringify({ claudeAiOauth: { accessToken: '', refreshToken: '' } }));
   fs.utimesSync(creds, new Date('2026-09-21T00:00:00Z'), new Date('2026-09-21T00:00:00Z'));
-  fs.writeFileSync(path.join(f.opts.home, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY="sk-test"\n');
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'openrouter.env'), 'OPENROUTER_API_KEY="sk-test"\n');
   await f.call('start', { objective: 'test' });
   for (let i = 0; i < 3; i += 1) await f.call('pause', { reason: 'runner_error', detail: 'OAuth session expired' });
   // Right after the pause nothing relaunches: a broken key must not spawn the child every tick.
@@ -173,7 +173,7 @@ test('without a deepseek key a dead login keeps the 3-strike pause', async (t) =
 test('the deepseek fallback does not wipe an unanswered question', async (t) => {
   const f = fixture(t);
   fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(f.opts.home, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY=sk-test\n');
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'openrouter.env'), 'OPENROUTER_API_KEY=sk-test\n');
   await f.call('start', { objective: 'test' });
   for (let i = 0; i < 3; i += 1) await f.call('pause', { reason: 'runner_error', detail: 'OAuth session expired' });
   await f.call('pause', { reason: 'runner_error', question: 'このまま進めますか？' });
@@ -402,7 +402,7 @@ test('crash after appending log does not lose a charged iteration or allow bypas
 
 function candidates(f, body) {
   fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(f.opts.home, '.claude', 'next-actions.md'), body);
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'business-goals.md'), body);
 }
 
 test('done pre replenishes in priority order, skips human work and previous objective, sends once', async (t) => {
@@ -427,6 +427,21 @@ test('done pre replenishes in priority order, skips human work and previous obje
   assert.equal(state.iterationsToday, 1);
   assert.equal(state.totalIterations, 1);
   assert.equal((await f.call('post', { summary: 'new work', progress: 10 })).noop, false);
+});
+
+test('done pre falls back to next-actions.md when business-goals.md is absent', async (t) => {
+  const asked = [];
+  const f = discord(t, { askImpl: async (candidate) => { asked.push(candidate.objective); return 'Yes'; } });
+  await f.call('start', { objective: '前の目的' });
+  await f.call('post', { summary: 'verified', progress: 100, evidence: '完了を確認' });
+  fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'next-actions.md'),
+    '<!-- NEXT-ACTIONS:BEGIN -->\n## 明日の推奨アクション（今日）\n1. テスト修正\n   - first_step: テストを実行\n## 別アカウント/他PCへの依頼（台帳）\n- 台帳項目\n<!-- NEXT-ACTIONS:END -->\n');
+  const pre = await f.call('pre');
+  assert.equal(pre.verdict, 'run');
+  assert.equal(pre.objective.objective, 'テスト修正');
+  assert.match(pre.objective.context, /テストを実行/);
+  assert.deepEqual(asked, ['テスト修正']);
 });
 
 test('refill skips every objective already closed in history, not just the most recent', async (t) => {
@@ -463,7 +478,7 @@ test('refill with only the current objective in history still picks the first el
 test('never-started pre starts a candidate with mocked classifier and notifier', async (t) => {
   const sent = [];
   const f = fixture(t, { askImpl: async () => 'Yes', notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; } });
-  candidates(f, '## 推奨アクション\n- 自動テスト修正\n');
+  candidates(f, '## 売上・利益レバー（上から優先。1セッション=1件）\n- 自動テスト修正\n');
   assert.equal((await f.call('pre')).verdict, 'run');
   assert.equal((await f.call('status')).objective.objective, '自動テスト修正');
   assert.equal(sent.length, 1);
@@ -944,4 +959,59 @@ test('決定論的な完了・テスト失敗・noop・上限では Jev を呼�
   await done.call('start', { objective: 'test' });
   assert.equal((await done.call('post', { summary: 'done', progress: 100, evidence: 'verified' })).status, 'done');
   assert.equal(calls, 0);
+});
+
+test('post with --artifact counts fresh file as progress, resets consecutiveNoop, and records artifacts', async (t) => {
+  const f = fixture(t);
+  await f.call('start', { objective: 'maintain 95% SLA', 'max-noop': 3 });
+  await f.call('post', { summary: 'first iter', progress: 99 });
+
+  const noopPost = await f.call('post', { summary: 'no artifact', progress: 99 });
+  assert.equal(noopPost.noop, true);
+  assert.equal((await f.call('status')).state.consecutiveNoop, 1);
+
+  const freshPath = path.join(f.opts.home, 'fresh-artifact.txt');
+  fs.writeFileSync(freshPath, 'new content');
+  const freshTime = new Date(NOW.getTime() + 10_000);
+  fs.utimesSync(freshPath, freshTime, freshTime);
+
+  const relativeFresh = path.relative(process.cwd(), freshPath);
+  const freshPost = await f.call('post', { summary: 'maintained with artifact', progress: 99, artifact: relativeFresh });
+  assert.equal(freshPost.noop, false);
+  assert.deepEqual(freshPost.artifacts, [path.resolve(freshPath)]);
+  assert.deepEqual(freshPost.staleArtifacts, []);
+  assert.equal((await f.call('status')).state.consecutiveNoop, 0);
+
+  const logLines = fs.readFileSync(f.paths.log, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(logLines.at(-1).artifacts, [path.resolve(freshPath)]);
+});
+
+test('post with stale or missing artifact is noop, records staleArtifacts, and explicit noop overrides fresh artifact', async (t) => {
+  const f = fixture(t);
+  await f.call('start', { objective: 'maintain SLA' });
+  await f.call('post', { summary: 'first iter', progress: 99 });
+
+  const stalePath = path.join(f.opts.home, 'stale-artifact.txt');
+  fs.writeFileSync(stalePath, 'old content');
+  const staleTime = new Date(NOW.getTime() - 10_000);
+  fs.utimesSync(stalePath, staleTime, staleTime);
+  const missingPath = path.join(f.opts.home, 'missing-artifact.txt');
+
+  const stalePost = await f.call('post', { summary: 'stale artifacts', progress: 99, artifact: `${stalePath}, ${missingPath}` });
+  assert.equal(stalePost.noop, true);
+  assert.deepEqual(stalePost.artifacts, []);
+  assert.deepEqual(stalePost.staleArtifacts, [path.resolve(stalePath), path.resolve(missingPath)]);
+
+  const logLines = fs.readFileSync(f.paths.log, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(logLines.at(-1).artifacts, undefined);
+
+  const freshPath = path.join(f.opts.home, 'fresh-again.txt');
+  fs.writeFileSync(freshPath, 'fresh');
+  const freshTime = new Date(NOW.getTime() + 10_000);
+  fs.utimesSync(freshPath, freshTime, freshTime);
+
+  const explicitNoop = await f.call('post', { summary: 'explicit noop', progress: 99, artifact: freshPath, noop: true });
+  assert.equal(explicitNoop.noop, true);
+  assert.deepEqual(explicitNoop.artifacts, [path.resolve(freshPath)]);
+  assert.deepEqual(explicitNoop.staleArtifacts, []);
 });

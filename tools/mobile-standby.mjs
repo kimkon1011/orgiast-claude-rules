@@ -1,6 +1,7 @@
 // setup --converge の「mobile standby」ステップ。スマホ(Remote Control)用の空き Claude Code タブを
 // 全PCで常時 3 本待機させるための収束処理。冪等。タブの起動自体は拡張（orgiast.next-session）が行う。
 import os from 'node:os';
+import { resolvePcNumber } from './lib/pc-number.mjs';
 import { isEntry } from './is-entry.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -186,7 +187,7 @@ function defaultWriteUserEnv(name, value) {
 
 // Windows のユーザー環境変数に RC のセッション名接頭辞を配る。冪等。
 // VS Code 拡張ホスト(Code.exe)の環境に入れておけば、拡張の spawn が process.env 経由で CLI に届ける。
-export function convergeRcNamePrefix({ platform = process.platform, readUserEnv, writeUserEnv, prefix = RC_NAME_PREFIX } = {}) {
+export function convergeRcNamePrefix({ platform = process.platform, readUserEnv, writeUserEnv, resolvePcNumber: resolveNumber = resolvePcNumber, prefix = resolveNumber() || RC_NAME_PREFIX } = {}) {
   if (platform !== 'win32') return { changed: false, ok: true, note: 'Windows 以外はスキップ' };
   const read = readUserEnv ?? defaultReadUserEnv;
   const write = writeUserEnv ?? defaultWriteUserEnv;

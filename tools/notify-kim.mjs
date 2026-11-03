@@ -8,6 +8,8 @@ import { isEntry } from './is-entry.mjs';
 import { toPlainJa } from './lib/plain-ja.mjs';
 import { classifyKimDm } from './lib/kim-dm-policy.mjs';
 import { redactSecrets } from './webhook-health.mjs';
+import { addItem } from './kim-inbox.mjs';
+import { discordAllowed } from './lib/kim-discord-allowlist.mjs';
 import { annotateAccounts } from './url-account-gate.mjs';
 
 const API = 'https://discord.com/api/v10';
@@ -30,11 +32,11 @@ export function clipDiscordContent(text) {
   return content.length <= MAX_CONTENT ? content : `${content.slice(0, MAX_CONTENT - OMITTED.length)}${OMITTED}`;
 }
 
-async function postWebhook(url, content, fetchImpl, signal) {
+async function postWebhook(url, content, fetchImpl, signal, silent) {
   const response = await fetchImpl(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify({ content, ...(silent ? { flags: 4096 } : {}) }),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
   });
   if (!response.ok) throw new Error(`Webhook送信が HTTP ${response.status}`);
@@ -81,6 +83,7 @@ export async function notifyKim(text, options = {}) {
       return { delivered: 'blocked', category: policy.category, reason: policy.reason };
     }
   }
+  options = { ...options, kind: options.kimActionRequired === true || options.kind === 'ask' ? 'ask' : 'info' };
   const raw = redactSecrets(String(text ?? ''));
   const bodyText = stripOwnerAddress(raw);
   if (STATUS_REPORT.test(bodyText) || ALREADY_FILED.test(bodyText) || isSuccessfulResumeReport(bodyText) || AUTO_RESUME_NOTICE.test(bodyText)) return deliverKim(raw, options);
@@ -90,6 +93,7 @@ export async function notifyKim(text, options = {}) {
   const benignQuotaReport = benignQuotaSweepReport(bodyText);
   const failure = !judgment && !benignQuotaReport && (FAILURE.test(bodyText) || (RESUME_REPORT.test(bodyText) && RESUME_ERROR.test(bodyText)));
   const handoff = !judgment && !benignQuotaReport && !humanEvidence && HANDOFF.test(bodyText);
+  if (judgment || handoff) options.kind = 'ask';
   if (!judgment && !failure && !handoff) return deliverKim(raw, options);
   const home = options.home || process.env.ORGIAST_HOME || os.homedir();
   const now = options.now ?? Date.now();
@@ -128,8 +132,11 @@ export async function notifyKim(text, options = {}) {
     if (state.sentAt != null && now >= state.sentAt && now - state.sentAt < 86_400_000) return { delivered: 'suppressed', reason: 'same-source-cause-24h' };
     let suffix = '';
     let body = raw;
-    const needsTask = !judgment && (handoff || !/^原因[:：][ \t]*\S.+$/m.test(bodyText) || !/^対処[:：][ \t]*\S.+$/m.test(bodyText));
-    if (judgment || needsTask) {
+    // 起票済みの修復TODOを引用した通知（quota-sweep の目標報告等）を再起票すると、TODO を包んだ TODO が新キーで増殖する（2026-10-29 b575a7d3）。
+    const nested = !judgment && /通知の原因調査・修復[:：]/.test(bodyText);
+    const needsTask = !judgment && !nested && (handoff || !/^原因[:：][ \t]*\S.+$/m.test(bodyText) || !/^対処[:：][ \t]*\S.+$/m.test(bodyText));
+    if (nested) suffix = '\n対処: 引用元の修復TODOで追跡中（新規起票なし）';
+    else if (judgment || needsTask) {
       const file = path.join(home, '.claude', 'next-session.md');
       const marker = `<!-- notify-kim:${key} -->`;
       let todo = '';
@@ -143,7 +150,7 @@ export async function notifyKim(text, options = {}) {
       }
       if (judgment) suffix = `\n自動起票: ${file}（判断待ち ${key}）`;
       else {
-        if (handoff) body = raw.split('\n').filter(line => !HANDOFF.test(line) && !/^\s*[123][.．]\s/.test(line)).join('\n');
+        if (handoff && options.kind !== 'ask') body = raw.split('\n').filter(line => !HANDOFF.test(line) && !/^\s*[123][.．]\s/.test(line)).join('\n');
         suffix = `\n原因: ${bodyText.match(/^原因[:：][ \t]*(.+)$/m)?.[1]?.slice(0, 240) || '未確定（実ログの調査を起票）'}\n対処: 原因調査と修復を自動起票しました。\n自動起票: ${file}（通知修復 ${key}）`;
       }
     } else {
@@ -151,7 +158,7 @@ export async function notifyKim(text, options = {}) {
       suffix = '\n' + ['原因', '対処'].map(label => raw.split('\n').find(line => line.startsWith(label + ':') || line.startsWith(label + '：')).slice(0, 400)).join('\n');
     }
     const result = await deliverKim(body, { ...options, suffix, allowHumanRequest: humanEvidence });
-    if (result.delivered === 'dm' || result.delivered === 'webhook') {
+    if (['dm', 'session-inbox'].includes(result.delivered) || result.delivered === 'webhook') {
       const temp = `${stateFile}.${process.pid}.tmp`;
       fs.writeFileSync(temp, JSON.stringify({ sentAt: now })); fs.renameSync(temp, stateFile);
     }
@@ -186,12 +193,14 @@ export async function deliverKim(text, {
   token,
   fetchImpl = globalThis.fetch,
   webhookFallback = true,
+  silent = process.env.NOTIFY_DISCORD_SILENT !== '0',
   fleetFallback = false,
   signal,
   plainJa = process.env.NOTIFY_PLAIN_JA !== '0',
   plainJaImpl = toPlainJa,
   suffix = '',
   allowHumanRequest = false,
+  kind = 'info', source = '', allowlist, repoRoot,
 } = {}) {
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
     || readTrimmed(path.join(home, '.claude', 'orgiast-discord-user-id.txt'))
@@ -201,7 +210,11 @@ export async function deliverKim(text, {
   // 失敗しても送信は止めない(plainJaImpl は例外を投げない契約)。
   // 平易化の書き換えでアカウント表記が落ちることがあるため、書き換え後の本文で補う。
   const translated = annotateAccounts(plainJa ? await plainJaImpl(String(text ?? '')) : text);
-  const body = suffix && !allowHumanRequest ? String(translated).split('\n').filter(line => !HANDOFF.test(line)).join('\n') : translated;
+  const body = suffix && !allowHumanRequest && kind !== 'ask' ? String(translated).split('\n').filter(line => !HANDOFF.test(line)).join('\n') : translated;
+  if ((userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID) && !discordAllowed(String(body) + suffix, { home, allowlist, repoRoot }).allowed) {
+    const item = await addItem(home, { kind, text: String(body) + suffix, source, signal });
+    return { delivered: 'session-inbox', id: item.id, kind: item.kind };
+  }
   const content = suffix ? String(body).slice(0, Math.max(0, MAX_CONTENT - suffix.length)) + suffix : clipDiscordContent(body);
   let dmReason = '';
 
@@ -219,17 +232,12 @@ export async function deliverKim(text, {
       const channelId = (await dm.json()).id;
       if (!channelId) throw new Error('DMチャンネルIDを取得できません');
       const sent = await fetchImpl(`${API}/channels/${channelId}/messages`, {
-        method: 'POST', headers, body: JSON.stringify({ content }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
+        method: 'POST', headers, body: JSON.stringify({ content, ...(silent ? { flags: 4096 } : {}) }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
       });
       if (!sent.ok) throw new Error(`DM送信が HTTP ${sent.status}`);
-      let messageId;
-      try {
-        messageId = (await sent.json?.())?.id;
-      } catch {
-        // HTTP 成功後の本文欠落・解析失敗は、messageId のない結果として返す。
-        // notifyOwner が配達証跡のない DM を未配達として判定する。
-      }
-      return { delivered: 'dm', ...(messageId ? { messageId: String(messageId) } : {}) };
+      const messageId = (await sent.json()).id;
+      if (typeof messageId !== 'string' || !messageId.trim()) throw new Error('DMメッセージIDを取得できません');
+      return { delivered: 'dm', messageId, channelId, recipientId: resolvedUserId, httpStatus: sent.status };
     } catch (error) {
       dmReason = redactSecrets(error?.message ?? error);
     }
@@ -242,7 +250,7 @@ export async function deliverKim(text, {
       || readTrimmed(path.join(home, '.claude', 'orgiast-discord-webhook.txt'));
     if (webhook) {
       try {
-        await postWebhook(webhook, content, fetchImpl, signal);
+        await postWebhook(webhook, content, fetchImpl, signal, silent);
         console.error(`notify-kim: DMで送れないため webhook へフォールバックしました (${dmReason})`);
         return { delivered: 'webhook', reason: dmReason };
       } catch (error) {
@@ -258,8 +266,14 @@ export async function deliverKim(text, {
 
 export async function main(args = process.argv.slice(2), options = {}) {
   const kimActionRequired = args.includes('--kim-action-required');
-  const text = args.filter(arg => arg !== '--kim-action-required').join(' ');
-  const result = await notifyKim(text, { ...options, kimActionRequired });
+  const words = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--kind' || args[i] === '--source') options = { ...options, [args[i].slice(2)]: args[++i] };
+    else if (args[i] !== '--kim-action-required') words.push(args[i]);
+  }
+  if (options.kind && !['ask', 'info'].includes(options.kind)) throw new Error('kind は ask または info');
+  const result = await notifyKim(words.join(' '), { ...options, kimActionRequired });
+  console.log(JSON.stringify(result));
   return result.delivered === 'blocked' ? 3 : 0;
 }
 

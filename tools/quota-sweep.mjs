@@ -10,12 +10,13 @@ import { parseHandoff, selectTodoLanes } from './auto-session.mjs';
 import { buildClaudeHeadlessArgs, parseAutoSessionEnvText } from './auto-session-executor.mjs';
 import { resolveClaudeExecutableFromDisk, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
 import { notifyKim } from './notify-kim.mjs';
+import { parseRetryAfter } from './claude-plan-usage.mjs';
 import { decideSweep, readClaudeWindows, readCodexWindows, shouldStopTick, jsonlFiles, sameReset } from './lib/quota-windows.mjs';
 import { discoverWsl, passiveWslHomes, wslPath, interactiveCodex, nativeCommand } from './lib/quota-sweep-host.mjs';
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { runBounded } from './lib/quota-sweep-process.mjs';
 
-export const DEFAULT_GOAL = 'このリポで node --test tools/ を実行し、失敗しているテスト・壊れた import・node --check で落ちるファイルを直す。全部緑なら docs/ 内のリンク切れ（相対パスの実在）を直す。受け入れ基準: node --test tools/ が緑、変更は git commit -F msg -- <paths> で小さくコミット';
+export const DEFAULT_GOAL = 'このリポで node --test tools/*.test.mjs を実行し、失敗しているテスト・壊れた import・node --check で落ちるファイルを直す。全部緑なら docs/ 内のリンク切れ（相対パスの実在）を直す。受け入れ基準: node --test tools/*.test.mjs が緑、変更は git commit -F msg -- <paths> で小さくコミット';
 export const MAX_TICKS = 8;
 const terminal = new Set(['exhausted', 'final', 'ceiling', 'deadline', 'no-goal']);
 const read = file => { try { return fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code === 'ENOENT') return ''; throw e; } };
@@ -43,18 +44,66 @@ function normalizeLandedContract(file) {
   if (text !== normalized) fs.writeFileSync(file, normalized);
 }
 export function contractPrompt(provider, slug, goal) {
-  return `[headless:quota-sweep]\n${provider === 'claude' ? '/makeloop' : '$makeloop:makeloop'} ${goal}\n質問せず保守的な前提を明記して進める。runtime=manual（1メッセージ1イテレーション）、kind=closed、累積上限 ${MAX_TICKS} イテレーション、検証ゲート node --test tools/、slug=${slug}、ループを開始しない、日本語。.loop/${slug}.md と状態・INDEX を保存する。commit の取込判定は \`node tools/commit-landed.mjs <sha>\` を使う（squash マージのため is-ancestor は偽になる）。`;
+  return `[headless:quota-sweep]\n${provider === 'claude' ? '/makeloop' : '$makeloop:makeloop'} ${goal}\n質問せず保守的な前提を明記して進める。runtime=manual（1メッセージ1イテレーション）、kind=closed、累積上限 ${MAX_TICKS} イテレーション、検証ゲート node --test tools/*.test.mjs、slug=${slug}、ループを開始しない、日本語。.loop/${slug}.md と状態・INDEX を保存する。commit の取込判定は \`node tools/commit-landed.mjs <sha>\` を使う（squash マージのため is-ancestor は偽になる）。`;
 }
+// A reset window is a budget boundary, not evidence that a broken job recovered.
+// Rebuild from the ledger so an upgrade also stops existing failure loops.
+export function sweepFailureStop(rows, provider, { since = 0, threshold = 3 } = {}) {
+  let failures = 0, last = null;
+  for (const row of rows) {
+    if (row.provider !== provider || Date.parse(row.ts) <= since) continue;
+    const outcome = row.stopOutcome || row.outcome;
+    if (['final', 'no-goal'].includes(outcome)) { failures = 0; last = null; }
+    else if (['failed', 'exhausted', 'deadline', 'ceiling'].includes(outcome)) { failures++; last = row; }
+    // Deferrals neither spend a job attempt nor prove recovery.
+  }
+  return failures >= threshold ? { failures, reason: last?.reason || last?.failureKey || last?.outcome, lastAt: last?.ts } : null;
+}
+
+export async function enforceFailureStops({ home, state, providers, save, notify = notifyKim, log = () => {}, now = Date.now }) {
+  const rows = read(path.join(home, '.claude', 'quota-sweep.jsonl')).split(/\r?\n/).flatMap(line => {
+    try { return [JSON.parse(line)]; } catch { return []; }
+  });
+  state.failureStops ??= {};
+  for (const provider of providers) {
+    let stop = state.failureStops[provider];
+    if (!stop) {
+      const failure = sweepFailureStop(rows, provider, { since: state.failureResumedAt?.[provider] || 0 });
+      if (!failure) continue;
+      stop = state.failureStops[provider] = { ...failure, stoppedAt: new Date(now()).toISOString() };
+      save();
+    }
+    if (!stop.notificationAttemptedAt) {
+      // Persist before delivery, including failure: scheduled invocations must
+      // never spam notifications or spend model tokens while awaiting repair.
+      stop.notificationAttemptedAt = new Date(now()).toISOString(); save();
+      try {
+        const result = await notify(`quota-sweep ${provider}: ${stop.failures}回連続未完了で停止。理由: ${stop.reason}。自動では再開しません。Claude が復旧内容を確認し、再開の可否を判断します。`, { home });
+        stop.notificationResult = result ?? null;
+      } catch (error) { stop.notificationError = error.message; log(`failure-stop notification failed: ${error.message}`); }
+      save();
+    }
+  }
+  return providers.filter(provider => !state.failureStops[provider]);
+}
+
 export function canRunWindow(state, decision) {
   const prior = state.lastRun?.[decision.provider]?.[decision.resetsAt];
   return !prior || (!terminal.has(prior.stopOutcome || prior.outcome) && (prior.attempts || 1) < 2);
 }
+// SDK/IDE からの単発呼び出し（ヘルスチェック等）は対話利用ではない。2026-10-24T16:11:33Z の
+// failed(interactive-active) は cwd=C:\WINDOWS\system32 で "OK とだけ返してください" を実行した
+// sdk-cli の記録を、プロンプト接頭辞だけの判定で対話と誤認して起きた。
+const PROGRAMMATIC_ENTRYPOINTS = new Set(['sdk-cli', 'sdk-ide']);
 export function interactiveClaude({ home, now = Date.now() }) {
   return jsonlFiles(path.join(home, '.claude', 'projects')).some(file => {
     try {
       if (now - fs.statSync(file).mtimeMs > 10 * 60_000) return false;
-      for (const line of read(file).split(/\r?\n/)) {
-        let row; try { row = JSON.parse(line); } catch { continue; }
+      const rows = [];
+      for (const line of read(file).split(/\r?\n/)) { try { rows.push(JSON.parse(line)); } catch { /* skip */ } }
+      const entrypoint = rows.map(row => row.entrypoint || row.entryPoint).find(Boolean);
+      if (PROGRAMMATIC_ENTRYPOINTS.has(entrypoint)) return false;
+      for (const row of rows) {
         if (row.type !== 'user' || row.isMeta) continue;
         const c = row.message?.content;
         const text = typeof c === 'string' ? c : Array.isArray(c) ? c.filter(b => b.type === 'text').map(b => b.text).join('\n') : '';
@@ -110,9 +159,10 @@ export function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (['--dry-run', '--json', '--status'].includes(arg)) o[arg.slice(2)] = true;
-    else if (['--provider', '--lead-min', '--min-remaining', '--home'].includes(arg)) {
+    else if (['--provider', '--lead-min', '--min-remaining', '--home', '--resume'].includes(arg)) {
       const value = argv[++i]; if (!value || value.startsWith('--')) throw new Error(`Missing ${arg}`);
       if (arg === '--provider') o.provider = value;
+      if (arg === '--resume') { if (!['claude', 'codex'].includes(value)) throw new Error('Invalid resume provider'); o.resume = value; }
       if (arg === '--home') o.home = path.resolve(value);
       if (arg === '--lead-min') o.leadMinutes = Number(value);
       if (arg === '--min-remaining') o.minRemainingPercent = Number(value);
@@ -140,8 +190,9 @@ export function claudeWindowReader({ home, fetchImpl, now = Date.now, ttlMs = 15
   const base = fetchImpl ?? ((url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(15_000) }));
   const wrapped = async (url, init) => {
     const response = await base(url, init);
-    const seconds = Number(response?.headers?.get?.('retry-after'));
-    if (response?.status === 429 && Number.isFinite(seconds) && seconds > 0) blockedUntil = now() + seconds * 1000;
+    const retryHeader = response?.headers?.get?.('retry-after');
+    const seconds = parseRetryAfter(retryHeader, now());
+    if (response?.status === 429 && seconds != null && seconds > 0) blockedUntil = now() + seconds * 1000;
     return response;
   };
   return async () => {
@@ -150,7 +201,8 @@ export function claudeWindowReader({ home, fetchImpl, now = Date.now, ttlMs = 15
     if (at < blockedUntil) return Object.assign([], { reason: 'HTTP 429', retryAfterMs: blockedUntil - at });
     const claude = await read({ home, fetchImpl: wrapped });
     if (claude.length) { cache = claude; cachedAt = at; }
-    else if (blockedUntil > now()) claude.retryAfterMs = blockedUntil - now();
+    else if (claude.retryAfterSeconds != null) blockedUntil = Math.max(blockedUntil, at + claude.retryAfterSeconds * 1000);
+    if (blockedUntil > now()) claude.retryAfterMs = blockedUntil - now();
     return claude;
   };
 }
@@ -176,8 +228,12 @@ export function commandRunner(spawnImpl = spawnSync, log = () => {}) {
       if (!r.error && r.status === 0) return String(r.stdout || '').trim();
       const error = new Error(`${exe} ${args[0]}: ${r.error?.message || String(r.stderr || '').slice(-1000)} (exit ${r.status}, timeout ${timeout}ms)`);
       error.failureKey = `${exe}-${args[0]}-${r.error?.code || r.status}`;
-      if (!network || attempt === 1) throw error;
-      log(`${error.message}; retry 1/1`);
+      // 共用 worktree の index.lock 競合（launcher の reset shared repo 等と並走）は数秒で
+      // 解消しうる。2026-10-27 に git-checkout-128 が2連続して handoff を起票した実績があるため、
+      // network と同様に1回だけ再試行する。lock ファイル自体は削除しない（稼働中の git を壊さない）。
+      const lockContention = /Unable to create '[^']*index\.lock': File exists\.|Another git process seems to be running/.test(String(r.stderr || '') + ' ' + String(r.error?.message || ''));
+      if ((!network && !lockContention) || attempt === 1) throw error;
+      log(`${error.message}; retry 1/1${lockContention ? ' (lock contention)' : ''}`);
     }
   };
 }
@@ -275,6 +331,15 @@ export function prepareTree({ home, provider, run, previous, needRelativePointer
     if (dirty) throw new Error('Uncommitted prior work preserved in quota-sweep-repo; reconcile before starting a new branch');
     log(`quota-sweep: preserved uncommitted work on ${preserved.branch}${preserved.pushed ? '' : ' (local only)'}`);
   }
+  // .loop/ は gitignore 済みだが、過去の preserveDirtyTree で追跡されたファイルが残り、
+  // ローカル変更があると git checkout --detach origin/main が失敗する（git-checkout-1 連続失敗）。
+  // 追跡ファイルのインデックスと作業ツリーの両方をHEADに戻してから進める
+  // （git checkout HEAD -- <path> は index + worktree 両方を HEAD に合わせる）。
+  const loopDirty = run('git', ['status', '--porcelain', '--', '.loop/'], tree);
+  if (loopDirty) {
+    run('git', ['checkout', 'HEAD', '--', '.loop/'], tree);
+    log('quota-sweep: reset tracked .loop/ files to committed state before checkout');
+  }
   run('git', ['checkout', '--detach', 'origin/main'], tree);
   const branch = `quota-sweep/${new Date().toISOString().replace(/[-:]/g, '').slice(0, 13).replace('T', '-')}-${provider}-${Date.now().toString(36)}`;
   run('git', ['switch', '-c', branch], tree);
@@ -313,11 +378,72 @@ export function queueRepeatedDeferral(home, state, row) {
   if (after !== before) writeHandoff(file, after);
 }
 
-function createPullRequest({ run, tree, branch, log }) {
+async function createPullRequestViaApi({ run, tree, branch, log, spawnImpl = spawnSync, fetchImpl = fetch }) {
+  // Fallback when gh CLI is not available: use git credential fill + GitHub REST API.
+  const fill = spawnImpl('git', ['credential', 'fill'], { cwd: tree, encoding: 'utf8', windowsHide: true, timeout: 15_000, input: 'protocol=https\nhost=github.com\n\n' });
+  if (fill.error || fill.status !== 0) throw new Error(`credential fill failed: ${fill.error?.message || `exit ${fill.status}`}`);
+  const token = String(fill.stdout || '').match(/password=(.+)/)?.[1];
+  if (!token) throw new Error('No password in credential fill output');
+
+  const remoteUrl = run('git', ['remote', 'get-url', 'origin'], tree);
+  const match = remoteUrl.match(/github\.com[/:](.+?)\/(.+?)\.git$/);
+  if (!match) throw new Error(`Cannot parse remote URL: ${remoteUrl}`);
+  const [, owner, repoName] = match;
+
+  // First, check if PR already exists.
+  const listUrl = `https://api.github.com/repos/${owner}/${repoName}/pulls?head=${encodeURIComponent(branch)}&state=all`;
+  const listRes = await fetchImpl(listUrl, { headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/vnd.github.v3+json' }, signal: AbortSignal.timeout(15_000) });
+  if (listRes.ok) {
+    const existing = await listRes.json();
+    if (existing.length > 0 && existing[0].html_url) {
+      log(`quota-sweep: found existing PR via API: ${existing[0].html_url}`);
+      return existing[0].html_url;
+    }
+  }
+
+  const title = `quota-sweep: ${branch.replace(/^quota-sweep\//, '')}`;
+  const createRes = await fetchImpl(`https://api.github.com/repos/${owner}/${repoName}/pulls`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Accept': 'application/vnd.github.v3+json' },
+    body: JSON.stringify({ title, head: branch, base: 'main' }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!createRes.ok) {
+    const body = await createRes.text();
+    throw new Error(`GitHub API PR create failed: ${createRes.status} ${body.slice(0, 500)}`);
+  }
+  const pr = await createRes.json();
+  const prUrl = pr.html_url;
+
+  // Best-effort automerge label.
+  try {
+    await fetchImpl(`https://api.github.com/repos/${owner}/${repoName}/issues/${pr.number}/labels`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Accept': 'application/vnd.github.v3+json' },
+      body: JSON.stringify({ labels: ['automerge'] }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (labelError) {
+    log(`quota-sweep: automerge label via API failed: ${labelError.message}`);
+  }
+  return prUrl;
+}
+
+export async function createPullRequest({ run, tree, branch, log, spawnImpl, fetchImpl }) {
   const args = ['pr', 'create', '--base', 'main', '--head', branch, '--fill'];
   try {
     return run('gh', [...args, '--label', 'automerge'], tree);
   } catch (error) {
+    // gh not installed: fall back to GitHub REST API via credential fill.
+    if (/ENOENT/.test(error.message)) {
+      log(`quota-sweep: gh not found; falling back to GitHub API: ${error.message}`);
+      try {
+        return await createPullRequestViaApi({ run, tree, branch, log, spawnImpl, fetchImpl });
+      } catch (apiError) {
+        log(`quota-sweep: GitHub API fallback also failed: ${apiError.message}`);
+        throw apiError;
+      }
+    }
     const prUrl = run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'], tree);
     if (prUrl) {
       log(`quota-sweep: automerge label failed; PR created without label: ${error.message}`);
@@ -387,7 +513,9 @@ export async function runSweep(decision, context) {
     if (stop) { outcome = stop; return; }
     const prepared = (context.prepareTree ?? prepareTree)({ home, provider, run, previous, needRelativePointer: provider === 'codex' && Boolean(context.wsl), log, io: context.treeIo });
     ({ tree, branch } = prepared); Object.assign(record, prepared); save();
-    const model = env.ORGIAST_QUOTA_SWEEP_MODEL || 'sonnet';
+    // OpenRouter 等の非 Claude モデル名（deepseek/... など）は plan 枠を消費せず unrecognized_model で child-1 連続失敗になるため採用しない。
+    const requestedModel = env.ORGIAST_QUOTA_SWEEP_MODEL;
+    const model = requestedModel && !requestedModel.includes('/') ? requestedModel : 'sonnet';
     if (/opus|fable/i.test(model)) throw new Error('Supervisor model is not permitted for quota sweep');
     let executable, baseArgs, wsl;
     if (provider === 'claude') {
@@ -403,6 +531,8 @@ export async function runSweep(decision, context) {
     const childEnv = { ...sanitizeClaudeSupervisorEnv(env), ORGIAST_HOME: home, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: `quota-sweep:${provider}` };
     // No API-key billing fallback. Both hosts must use their existing plan authentication.
     for (const k of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY']) delete childEnv[k];
+    // 他レーン（autopilot の deepseek 等）の経路・モデル指定が親 env から漏れても plan 認証の Claude で動かす。
+    if (provider === 'claude') for (const k of Object.keys(childEnv)) if (/^ANTHROPIC_(BASE_URL|MODEL|.*_MODEL)$/i.test(k) || k === 'CLAUDE_CODE_MAX_CONTEXT_TOKENS') delete childEnv[k];
     const launch = async (prompt, timeoutMs) => {
       reason = null; failureKey = null;
       const stopAt = Math.min(decision.deadline, now() + timeoutMs);
@@ -424,9 +554,10 @@ export async function runSweep(decision, context) {
     const loopDir = path.join(tree, '.loop'); fs.mkdirSync(loopDir, { recursive: true });
     const contract = path.join(loopDir, `${slug}.md`), budgetFile = path.join(loopDir, `${slug}-budget.json`);
     let budget = json(budgetFile, { goal: selection.goal, ticks: 0 });
-    if (budget.goal !== selection.goal || (budget.resetsAt && budget.resetsAt !== decision.resetsAt)) {
+    // A quota reset replenishes tokens, not the contract's cumulative attempt budget.
+    if (budget.goal !== selection.goal) {
       const archive = path.join(loopDir, `archive-${slug}-${now()}`); fs.mkdirSync(archive);
-      for (const name of [...(budget.goal !== selection.goal ? [`${slug}.md`] : []), `${slug}-state.md`, `${slug}-budget.json`]) if (fs.existsSync(path.join(loopDir, name))) fs.renameSync(path.join(loopDir, name), path.join(archive, name));
+      for (const name of [`${slug}.md`, `${slug}-state.md`, `${slug}-budget.json`]) if (fs.existsSync(path.join(loopDir, name))) fs.renameSync(path.join(loopDir, name), path.join(archive, name));
       budget = { goal: selection.goal, ticks: 0 };
     }
     budget.ticks = Math.max(budget.ticks, record.ticks); record.ticks = budget.ticks; save();
@@ -440,7 +571,7 @@ export async function runSweep(decision, context) {
       if ((generated.stopReason && generated.stopReason !== 'deadline') || now() >= decision.deadline) { outcome = generated.stopReason || 'deadline'; return; }
       if (!fs.existsSync(contract)) {
         const template = read(new URL('./quota-sweep-contract.tmpl.md', import.meta.url));
-        const values = { GOAL: selection.goal, SLUG: slug, GATE: 'node --test tools/', MAX_ITERATIONS: String(MAX_TICKS), DATE: new Date(now()).toISOString() };
+        const values = { GOAL: selection.goal, SLUG: slug, GATE: 'node --test tools/*.test.mjs', MAX_ITERATIONS: String(MAX_TICKS), DATE: new Date(now()).toISOString() };
         fs.writeFileSync(contract, normalizeLandedChecks(template.replace(/{{(GOAL|SLUG|GATE|MAX_ITERATIONS|DATE)}}/g, (_, k) => values[k])));
         log(`${provider}: built-in contract fallback`);
       }
@@ -480,8 +611,12 @@ export async function runSweep(decision, context) {
         if (run('git', ['branch', '--show-current'], tree) !== branch) throw new Error('Worktree branch changed externally; no push attempted');
         if (Number(run('git', ['rev-list', '--count', `${record.base}..HEAD`], tree)) > 0) {
           run('git', ['push', '-u', 'origin', branch], tree);
-          prUrl = run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'], tree);
-          if (!prUrl) prUrl = createPullRequest({ run, tree, branch, log });
+          try {
+            prUrl = run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'], tree);
+          } catch (ghError) {
+            if (!/ENOENT/.test(ghError.message)) throw ghError;
+          }
+          if (!prUrl) prUrl = await createPullRequest({ run, tree, branch, log, spawnImpl, fetchImpl: context.fetchImpl });
         }
       } catch (error) { log(`PR delivery failed: ${error.message}`); record.deliveryError = error.message; reason = [reason, `PR delivery: ${error.message}`].filter(Boolean).join('; '); failureKey = error.failureKey || 'pr-delivery'; outcome = 'failed'; }
     }
@@ -504,8 +639,9 @@ export async function runSweep(decision, context) {
     if (failureKey) usageRow.failureKey = failureKey;
     fs.appendFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), JSON.stringify(usageRow) + '\n');
     log(`${provider}: ${outcome}, ticks=${record.ticks}, reason=${reason || '完了'}`);
+    await enforceFailureStops({ home, state, providers: [provider], save, notify, log, now });
     const oneLine = value => String(value).replace(/[\r\n]+/g, ' ').slice(0, 250);
-    try { if (outcome !== 'no-goal') await notify([`${provider}/${decision.window}`, `${usedBefore}% → ${usedAfter ?? '?'}%`, `tick: ${record.ticks}`, oneLine(selection.goal), prUrl || '変更なし', outcome === 'partial' ? '成果あり・未完了' : outcome, reason ? `理由: ${oneLine(reason)}` : '検証完了'].join('\n'), { home }); }
+    try { if (outcome !== 'no-goal' && !state.failureStops?.[provider]) await notify([`${provider}/${decision.window}`, `${usedBefore}% → ${usedAfter ?? '?'}%`, `tick: ${record.ticks}`, oneLine(selection.goal), prUrl || '変更なし', outcome === 'partial' ? '成果あり・未完了' : outcome, reason ? `理由: ${oneLine(reason)}` : '検証完了'].join('\n'), { home }); }
     catch (error) { log(`DM failed: ${error.message}`); }
   }
 }
@@ -544,6 +680,16 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   if (!release) { log('skip: lock held'); return emit({ skipped: true, reason: 'lock held' }); }
   try {
     const state = json(stateFile, { lastRun: {} });
+    if (options.resume) {
+      delete state.failureStops?.[options.resume];
+      state.failureResumedAt ??= {};
+      state.failureResumedAt[options.resume] = now();
+      atomic(stateFile, state);
+      return emit({ resumed: options.resume, reason: 'Failure stop acknowledged; next scheduled run will observe eligibility' });
+    }
+    const providers = options.provider === 'all' ? ['claude', 'codex'] : [options.provider];
+    const allowed = await enforceFailureStops({ home, state, providers, save: () => atomic(stateFile, state), notify: io.notify ?? notifyKim, log, now });
+    if (!allowed.length) return emit({ skipped: true, reason: 'quota-sweep failure stop; repair and explicitly --resume <provider>', stops: state.failureStops });
     const wsl = Object.hasOwn(io, 'wsl') ? io.wsl : argv.includes('--home') ? null : discoverWsl({ spawnImpl });
     if (wsl?.home && !wslHomes.includes(wsl.home)) wslHomes.push(wsl.home);
     const active = io.active ?? (async provider => {
@@ -561,7 +707,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     }
     const currentWindows = async () => filterWindowsForCurrentAuth(await windows(), state);
     const observed = await currentWindows();
-    const decisions = decideSweep({ windows: observed, now: now(), ...options }).filter(d => (options.provider === 'all' || options.provider === d.provider) && canRunWindow(state, d));
+    const decisions = decideSweep({ windows: observed, now: now(), ...options }).filter(d => allowed.includes(d.provider) && canRunWindow(state, d));
     if (!decisions.length) {
       // 読み取り自体が失敗していた場合、これまでは「窓が無い」とだけ出て原因が残らなかった。
       const readIssues = Object.entries(observed.reasons ?? {}).filter(([, r]) => r).map(([p, r]) => `${p}: ${r}`);

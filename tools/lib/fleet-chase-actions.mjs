@@ -106,7 +106,7 @@ export async function chase(ledger, ctx) {
           attempt(item, 'owner-dm-attempt', person, now);
           persist();
           const response = await sendDm(person, redactSecrets(`${item.target} の電源と Claude Code 起動をお願いします（kim-PC からの依頼 ${item.title.slice(0, 200)} が届いていません）`));
-          if (response?.delivered !== true && response?.delivered !== 'dm') throw new Error('owner DM failed');
+          if (response?.delivered !== true && !['dm', 'session-inbox'].includes(response?.delivered)) throw new Error('owner DM failed');
           attempt(item, 'owner-dm', person, now);
           item.nextActionAt = iso(now + POLICY.ownerDm);
           persist();
@@ -155,7 +155,7 @@ export async function chase(ledger, ctx) {
   return plans;
 }
 export function digestText(ledger, { home, now }) {
-  const items = Object.values(ledger.items);
+  const items = Object.values(ledger.items).filter(i => i.kind !== 'expect-inbound');
   const pending = items.filter(active).sort(oldest);
   const inbound = pending.filter(i => i.kind === 'inbound').length;
   const blocked = pending.filter(i => i.status === 'blocked').length;
@@ -189,10 +189,11 @@ export async function digest(ledger, ctx) {
   const date = new Date(ctx.now + 9 * HOUR);
   const day = date.toISOString().slice(0, 10);
   if (date.getUTCHours() < 9 || ledger.digestDay === day) return { skipped: true };
+  if (!Object.values(ledger.items).some(i => i.kind !== 'expect-inbound')) return { skipped: true };
   const text = digestText(ledger, ctx);
   if (ctx.dryRun) return { text, planned: true };
   const result = await ctx.notify(text);
-  if (result?.delivered === 'dm') {
+  if (['dm', 'session-inbox'].includes(result?.delivered)) {
     ledger.digestDay = day;
     ctx.persist?.();
   }

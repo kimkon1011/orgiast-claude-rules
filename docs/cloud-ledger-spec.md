@@ -180,6 +180,19 @@ kim 指示 2026-08-28:
   `parseNpmWhoami(text, exitCode)` / `formatCloudTable(rows)` / `buildCloudLoginPayload(rows, identity)`。
   **OS コマンド実行部分はテストしない**（注入可能にする）。
 
+#### 安いAI行
+
+`collectCloudInventory()` は通常のクラウドログイン行に加え、Gemini / DeepSeek / GLM (z.ai) / Groq / OpenRouter / Mistral / Grok (xAI) / Kimi と Codex の行、およびPCを操作する Claude Code アカウントの行を返す。
+
+- `service`: AIレーンは `安いAI: <表示名>`、Claude は `Claude Code`。
+- `account`: APIキーレーンは `config/ai-key-owners.json` の provider・鍵末尾4文字に対応する契約アカウント。未登録は `所有者未登録(鍵 …XXXX)`。Codex は `~/.codex/auth.json` の `id_token` payload の email、Claude Code は `~/.claude.json` の `oauthAccount.emailAddress`。
+- `scope`: APIキーレーンは `鍵 …XXXX`、Claude Code は organizationName。
+- `source`: 鍵・認証ファイルのファイル名だけ（Gemini の代替場所は `.gemini/.env`）。フルパスは送らない。
+- `status`: 鍵無しは `キー無し`。鍵があれば `lane-health.json` の `lanes[provider].alive` を基に `稼働` / `停止(<reason>)`、health が無ければ `判定不能`。
+- `version`: 空文字。
+
+鍵本体、JWT本体、認証ファイル本文は行・ログ・payloadへ絶対に出さない。鍵の識別に使ってよいのは末尾4文字だけとする。
+
 ### C-2 `tools/project-locator.mjs`（新規・kim機のみで実行）
 
 GitHub / Vercel の API からプロジェクト所在地図を作る。

@@ -38,7 +38,23 @@ export function readCodexWindows({ home, wslHome, now = Date.now() } = {}) {
     try { return [{ file, mtime: fs.statSync(file).mtimeMs }]; } catch { return []; }
   }).sort((a, b) => b.mtime - a.mtime || a.file.localeCompare(b.file));
   if (!files.length) return Object.assign([], { reason: 'Codex session logs unavailable' });
-  const { file, mtime: observedAt } = files[0];
+  // 最新ファイルが起動直後（rate_limits 未書き込み）の場合、直前のファイルを代替に使う。
+  // 2026-10-25 実測: 3行の短いセッションが最新になると rate_limits が読めず window-info 失敗。
+  // 3行未満かつ mtime が2分以内のファイルは起動中とみなし、2番目のファイルを試す。
+  let bestIndex = 0, bestLines = 0;
+  for (let i = 0; i < files.length && i < 3; i++) {
+    try {
+      const text = fs.readFileSync(files[i].file, 'utf8');
+      const lines = text.split('\n').filter(Boolean).length;
+      if (i === 0 && lines < 3 && Number(now) - files[i].mtime <= 2 * MINUTE) { bestLines = 0; continue; }
+      const parsed = parseCodexRateLimits(text);
+      if (parsed.primary || parsed.secondary || parsed.exhausted) {
+        bestIndex = i; bestLines = lines; break;
+      }
+      if (lines > bestLines) { bestIndex = i; bestLines = lines; }
+    } catch { continue; }
+  }
+  const { file, mtime: observedAt } = files[bestIndex];
   let parsed;
   try { parsed = parseCodexRateLimits(fs.readFileSync(file, 'utf8')); } catch { return Object.assign([], { reason: 'Codex latest log unreadable' }); }
   const metadata = { provider: 'codex', observedAt, stale: Number(now) - observedAt > 6 * 60 * MINUTE, exhausted: parsed.exhausted };

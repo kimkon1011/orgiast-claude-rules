@@ -3,6 +3,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { getDriveToken } from './lib/drive-auth.mjs';
+import { gwsFetch } from './lib/gws-proxy.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
@@ -58,7 +59,7 @@ async function gmailJson(token, path, fetchImpl) {
   return response.json();
 }
 
-export async function downloadAttachment(args, { fetchImpl = globalThis.fetch, getToken = getDriveToken } = {}) {
+export async function downloadAttachment(args, { fetchImpl = gwsFetch, getToken = getDriveToken } = {}) {
   const token = await getToken({ scope: SCOPE, impersonate: args.user });
   let attachmentId = args.attachment;
   if (!attachmentId) {

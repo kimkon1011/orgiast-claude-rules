@@ -1,4 +1,4 @@
-# handoff-audit 検証記録: `4eaaf600e2247528`「Codex（Next.js 更新 PR）の完了待ちでの先送り文」の再発検証（2026-10-28）
+# handoff-audit 検証記録: `4eaaf600e2247528`「Codex（Next.js 更新 PR）の完了待ちでの先送り文」の再発検証（2026-10-28 初版・2026-10-29 再検証）
 
 対象 TODO: `[handoff-audit:4eaaf600e2247528] 恒久修正の先送り文を検出（2026-10-26T10:54:23.245Z / b5ec5293 / W）`。
 
@@ -18,25 +18,26 @@
 
 同 session の `10:57:56Z` にも同型 block（「Codex による event-shop / keiri-hub の Next.js 更新はまだ実行中で、完了通知を待っています」）。
 
-## 2. 再発走査（2026-10-28 実測）
+## 2. 再発走査（2026-10-29 再検証・実測）
 
-```
-node tools/permanent-fix-deferral-scan.mjs --since 2026-10-26T10:54:23.245Z --json
+```bash
+node tools/permanent-fix-deferral-scan.mjs --since 2026-10-26T10:54:23.245Z
 ```
 
 | 台帳 | 全行 | 窓内ヒット | 内訳 |
 |---|---:|---:|---|
-| `stop-gate-runner-ledger.jsonl` | 939 | 8（すべて W） | b5ec5293 ×5、5e1d2c93 ×1、2f10641b ×2 |
-| `handoff-audit-ledger.jsonl` | 2126 | 0 | — |
-| `handoff-audit-nightly-ledger.jsonl` | 79 | 0 | — |
+| `stop-gate-runner-ledger.jsonl` | 1234 | 9 | b5ec5293 ×5（W）、5e1d2c93 ×1（W）、2f10641b ×2（W）、454b60c1 ×1（P3） |
+| `handoff-audit-ledger.jsonl` | 2697 | 0 | — |
+| `handoff-audit-nightly-ledger.jsonl` | 99 | 0 | — |
 
 分類:
 
 - `b5ec5293` ×5（10:54:23 / 10:54:33 / 10:54:48 / 10:57:56 / 10:57:57）: 対象原文と同一セッション・同一原因の連続発火。指定の since が原文時刻を含むため、2026-10-27 の後続時刻からの走査記録より1行多い。
 - `5e1d2c93` ×1（2026-10-26T16:54:16Z）: nishi-PC または Vercel 権限のある環境による本番デプロイ待ち。Next.js 更新 PR の作成・マージ待ちとは別件で、恒久修正の再先送りではない。
 - `2f10641b` ×2（2026-10-27T08:42:13Z / 08:42:16Z）: 前回の検証完了報告が「Codex の完了待ち（W 型）」という判定自体を引用した自己言及。新しい待機・先送りではない。
+- `454b60c1` ×1（2026-10-28T08:32:06Z）: P3（`df0b6b4` を main へマージする判断を kim に渡す）。別の監査項目（quota-sweep 残高チャージ）由来で、W 型の Codex 完了待ちではない。
 
-以上より、新規の同型再発は0件。
+以上より、対象の W 型（Codex の完了待ち・通知待ち）の新規再発は0件。10-28 の検証時（全行 939 / ヒット 8）から追加されたヒットは 454b60c1 の P3 1行のみで、対象型の再発は変わらず0件。
 
 ## 3. 元の恒久修正の着地証拠
 

@@ -30,7 +30,8 @@
   "HP": {
     "sheetName": "東邦2階HP",
     "person": "木下真弓",
-    "_evidence": "ラベル名がシートD列『東邦2階HP』と一致。8/17申告と同日にラベル初登場。2026-08-18 を最後に停止（webhook削除と同時期）"
+    "account": "cr@orgiast.jp",
+    "_evidence": "ラベル名がシートD列『東邦2階HP』と一致。8/17申告と同日にラベル初登場。2026-08-18 を最後に停止（webhook削除と同時期）。account は 2026-10-29 追加: 本PCの ~/.claude.json oauthAccount emailAddress=cr@orgiast.jp・memory codex-on-this-pc「このPC(cr@orgiast.jp / リモートデスクトップ)」より。これが無いと resolveOwner が空になり notify-owner の !owner で完了通知が全て破棄される（2026-10-18〜10-23 の未通知13件の原因）"
   },
   "nishi-PC": {
     "remoteName": "作業用019",
@@ -57,6 +58,9 @@
     "deviceId": "B79CA602-6163-4252-B2A0-2A96C61F6767",
     "account": "cr@orgiast.jp",
     "person": "金功勇",
+    "notifyDiscordId": "715210673642012733",
+    "notifyTo": "kim@orgiast.jp（金功勇）",
+    "_notifyEvidence": "2026-10-23 本人が『進捗 DM の宛先は kim で正しい』と回答。PR #1227 後の 2026-10-27〜11-01、auto-progress-done-dm.sent.jsonl 44件がすべて delivered=toast、Discord DM 0件で、owner-inbox.md に229件が未読滞留したことを 2026-11-01 に作業用011で実測。",
     "aliases": [
       "cr-PC"
     ],
@@ -85,10 +89,21 @@
     "remoteName": "作業用018",
     "hostname": "DESKTOP-N429M3V",
     "account": "cr@orgiast.jp",
+    "discordId": "1557228267566665729",
+    "notifyDiscordId": "1557228267566665729",
     "aliases": [
       "DESKTOP-N429M3V"
     ],
-    "_evidence": "2026-10-10 fleet-fix-now の自己申告 hostname=DESKTOP-N429M3V・label=w018-PC。kim 回答(2026-10-08)で 018=cr@。",
+    "_evidence": "2026-10-10 fleet-fix-now の自己申告 hostname=DESKTOP-N429M3V・label=w018-PC。kim 回答(2026-10-08)で 018=cr@。2026-11-02 Discord search_members で claudecode0850 / Claudecode(cr@) = 1557228267566665729 を実測。未設定のため owner-notify が Discord を毎回 skip していた",
     "codexAccount": "cr@orgiast.jp"
+  },
+  "DESKTOP-BDOAK99": {
+    "hostname": "DESKTOP-BDOAK99",
+    "account": "seisaku-team@orgiast.jp",
+    "remoteName": "作業用008",
+    "aliases": [
+      "DESKTOP-BDOAK99"
+    ],
+    "_evidence": "kim-PC fleet-inbox: mail-reply-fa9b672e49db7164・mail-reply-828ab32aca705b84（2026-10-30 16:46、from=DESKTOP-BDOAK99）。~/.claude.json oauthAccount.emailAddress=seisaku-team@orgiast.jp、hostname=DESKTOP-BDOAK99 を実測し、作業用008宛の鹿沼案件引継ぎを受信。mail-reply-23b5030901dbd50f（2026-10-30 16:47）で「作業用008で受け取りました（ログイン: seisaku-team@orgiast.jp）」と確認。fleet-status 2026-11-02 の自己申告アカウントも一致。"
   }
 }

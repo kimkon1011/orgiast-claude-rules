@@ -295,7 +295,7 @@ export function recommendedActions(text) {
     const heading = line.match(/^(#{1,6})\s+(.*)/);
     if (heading) {
       if (depth && heading[1].length <= depth) break;
-      if (!depth && heading[2].includes('推奨アクション')) depth = heading[1].length;
+      if (!depth && (heading[2].includes('推奨アクション') || heading[2].includes('レバー'))) depth = heading[1].length;
       continue;
     }
     if (!depth) continue;
@@ -316,11 +316,11 @@ async function askCandidate(candidate, ctx) {
 }
 async function nextObjective(state, objective, ctx) {
   // Every objective already closed in history (done/stopped/failed_check) must stay closed,
-  // not just the most recent one, or a completed objective gets re-selected from next-actions.
+  // not just the most recent one, or a completed objective gets re-selected from business-goals.
   const closed = new Set((state?.objectiveHistory || [])
     .filter((entry) => ['done', 'stopped', 'failed_check'].includes(entry.status))
     .map((entry) => entry.objective));
-  for (const candidate of recommendedActions(readText(path.join(ctx.home, '.claude', 'next-actions.md')))) {
+  for (const candidate of recommendedActions(readText(path.join(ctx.home, '.claude', 'business-goals.md')))) {
     if (closed.has(candidate.objective) || candidate.objective === objective?.objective) continue;
     try {
       if (/^yes[.!]?$/i.test(String(await ctx.askImpl(candidate, ctx)).trim())) return candidate;
@@ -442,6 +442,8 @@ async function execute(command, args, ctx) {
       if (args[flag] !== undefined) objective[key] = Number(args[flag]);
     }
     validateObjective(objective);
+    // PC ごとの監督モデル固定（autopilot-run の supervisorModel）は目的を変えても引き継ぐ。
+    try { const prev = readObjective(paths.objective).model; if (typeof prev === 'string') objective.model = prev; } catch {}
     if (state && ['done', 'stopped'].includes(state.status)) rememberObjective(state, readObjective(paths.objective), now);
     // Keep the previous objective's history, but don't charge it to a new run.
     if (state) {
@@ -596,8 +598,35 @@ async function execute(command, args, ctx) {
     const unverified = String(args.unverified ?? '').trim();
     if (args.tests === 'failed' && progress >= 100) return { error: 'tests_failed' };
     if (progress >= 100 && !evidence && !unverified) return { error: 'evidence_required' };
-    const noop = Boolean(args.noop) || progress <= (currentLog().at(-1)?.progress ?? 0);
+    const previousRow = currentLog().at(-1);
+    const baselineIso = previousRow?.ts ?? state.startedAt;
+    const baselineMs = baselineIso ? Date.parse(baselineIso) : 0;
+    const rawArtifacts = typeof args.artifact === 'string'
+      ? args.artifact.split(',').map((p) => p.trim()).filter(Boolean)
+      : Array.isArray(args.artifact)
+        ? args.artifact.map((p) => String(p).trim()).filter(Boolean)
+        : [];
+    const freshArtifacts = [];
+    const staleArtifacts = [];
+    const seen = new Set();
+    for (const raw of rawArtifacts) {
+      const resolved = path.resolve(raw);
+      if (seen.has(resolved)) continue;
+      seen.add(resolved);
+      try {
+        const st = fs.statSync(resolved);
+        if (st.mtimeMs > baselineMs) {
+          freshArtifacts.push(resolved);
+        } else {
+          staleArtifacts.push(resolved);
+        }
+      } catch {
+        staleArtifacts.push(resolved);
+      }
+    }
+    const noop = Boolean(args.noop) || (progress <= (previousRow?.progress ?? 0) && freshArtifacts.length === 0);
     const row = { ts: now.toISOString(), host: ctx.hostname, iteration: state.totalIterations + 1, summary: args.summary.trim(), progress, noop, codexUsed: Boolean(args.codex), nextDelaySec: noop ? Math.max(1800, nextDelaySec) : nextDelaySec };
+    if (freshArtifacts.length > 0) row.artifacts = freshArtifacts;
     if (args['tokens-out'] !== undefined) row.tokensOut = Number(args['tokens-out']);
     fs.appendFileSync(paths.log, `${JSON.stringify(row)}\n`, 'utf8');
     log.push(row);
@@ -609,7 +638,7 @@ async function execute(command, args, ctx) {
         state.watches.push({ id: nextWatchId(state), objective: objective.objective, unverified, evidence, since: now.toISOString(), lastCheckAt: null, checks: 0, ng: 0 });
       }
       save(); await notify(null, true, { evidence, unverified });
-      return { ok: true, watchdog: null, status: 'done', noop, nextDelaySec: row.nextDelaySec, watch: unverified ? state.watches.at(-1).id : null };
+      return { ok: true, watchdog: null, status: 'done', noop, nextDelaySec: row.nextDelaySec, watch: unverified ? state.watches.at(-1).id : null, artifacts: freshArtifacts, staleArtifacts };
     }
     const fired = await watchdog();
     state.jevDecision = null;
@@ -619,7 +648,7 @@ async function execute(command, args, ctx) {
       if (action === 'ESCALATE') { state.status = 'paused'; state.pausedReason = 'jev_escalate'; }
     }
     save();
-    return { ok: true, watchdog: fired, status: state.status, noop, nextDelaySec: row.nextDelaySec, jevDecision: state.jevDecision };
+    return { ok: true, watchdog: fired, status: state.status, noop, nextDelaySec: row.nextDelaySec, jevDecision: state.jevDecision, artifacts: freshArtifacts, staleArtifacts };
   }
   if (command === 'watch') {
     const id = String(args.id ?? '').trim();
@@ -690,7 +719,7 @@ async function execute(command, args, ctx) {
     // evidence that the DM arrived (2026-10-17 実測)。呼び出し側が run.log に
     // delivered を残せるよう、結果を戻り値と state の両方に載せる。
     const delivery = await sendNotice(text, { ...ctx, periodicDigest: true });
-    if (delivery.delivered === 'dm' || delivery.channels.toast.status === 'submitted' || delivery.channels.file.status === 'written') {
+    if (['dm', 'session-inbox'].includes(delivery.delivered) || delivery.channels.toast.status === 'submitted' || delivery.channels.file.status === 'written') {
       // 送信済みの報告を、後片付けの失敗で「失敗した周」にしない。
       try { await acknowledgeWaiting(waiting.completedIds, { home: ctx.home, now }); }
       catch (error) {
@@ -781,7 +810,7 @@ export async function runAutopilot(command, args = {}, options = {}) {
 
 export async function main(argv = process.argv.slice(2)) {
   try {
-    const options = Object.fromEntries(['objective', 'done', 'max-iter-per-day', 'max-hours-per-day', 'max-noop', 'max-total-iter', 'summary', 'progress', 'tests', 'tokens-out', 'next-delay', 'reason', 'question', 'question-deadline', 'evidence', 'unverified', 'id', 'result', 'note', 'detail'].map((key) => [key, { type: 'string' }]));
+    const options = Object.fromEntries(['objective', 'done', 'max-iter-per-day', 'max-hours-per-day', 'max-noop', 'max-total-iter', 'summary', 'progress', 'tests', 'tokens-out', 'next-delay', 'reason', 'question', 'question-deadline', 'evidence', 'unverified', 'id', 'result', 'note', 'detail', 'artifact'].map((key) => [key, { type: 'string' }]));
     for (const key of ['noop', 'codex', 'pretty', 'dry-run']) options[key] = { type: 'boolean' };
     const { values, positionals } = parseArgs({ args: argv, options, allowPositionals: true });
     const result = await runAutopilot(positionals[0], values);

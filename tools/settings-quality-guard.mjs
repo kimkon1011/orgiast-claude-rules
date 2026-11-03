@@ -61,10 +61,10 @@ export function normalizeSessionSettings(settingsPath, { env = process.env } = {
   return { changed: true, from };
 }
 
-export function restoreEffortLevel(settingsPath, { now = Date.now(), backupDir } = {}) {
+export function restoreEffortLevel(settingsPath, { now = Date.now(), backupDir, includeUnset = false } = {}) {
   let settings;
   try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')); } catch { return { changed: false }; }
-  if (!isDowngradeValue(settings.effortLevel)) return { changed: false };
+  if (!isDowngradeValue(settings.effortLevel) && !(includeUnset && settings.effortLevel == null)) return { changed: false };
   const from = settings.effortLevel == null ? '未設定' : String(settings.effortLevel);
   const destinationDir = backupDir || path.join(path.dirname(settingsPath), 'backups');
   const instant = typeof now === 'function' ? now() : now;
@@ -86,7 +86,7 @@ if (isEntry(import.meta.url)) {
   if (mode === 'sessionstart') {
     const modelResult = normalizeSessionSettings(settingsPath);
     if (modelResult.changed) console.log(`[settings-guard] model: ${modelResult.from} → opus`);
-    const result = restoreEffortLevel(settingsPath, {});
+    const result = restoreEffortLevel(settingsPath, { includeUnset: true });
     if (result.changed) console.log(`⚠️ effortLevel が ${result.from} だったため medium へ自動復元しました（kim 2026-09-17 改定: 既定 medium。low 禁止）`);
   } else if (process.env.ORGIAST_ALLOW_EFFORT_DOWNGRADE !== '1') {
     try {

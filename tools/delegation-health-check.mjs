@@ -232,9 +232,16 @@ export function isEmptyDiffEscalationRow(row = {}) {
 // 名指ししない行は対象外(本物の障害を隠さない)。cooldown を張った当の行(「利用不可(402)」)も同じ外部要因。
 export function isFallbackCooldownSkipRow(row = {}) {
   if (row?.provider !== 'fallback') return false;
+  // stderrTail が cheap-code 全体の cooldown メッセージを含む行は外部要因で投げられなかっただけで、
+  // レーン障害ではない。47件の実測（2026-10-27）から、chain 全項目の every では gemini-cli
+  // が混ざると false になってしまい cooldown スキップ行が attempts に入り込んでいた。
+  if (typeof row.stderrTail === 'string' && /クールダウン中です|起動を省略しました/.test(row.stderrTail)) return true;
   const chain = Array.isArray(row?.chain) ? row.chain : [];
-  return chain.length > 0
-    && chain.every((item) => String(item?.backend ?? '').startsWith('cheap-code:') && Number(item?.status) === 3 && /クールダウン中|利用不可\((?:402|429)\)/.test(String(item?.stderrTail ?? '')));
+  if (chain.length === 0) return false;
+  // chain 内の cheap-code バックエンドがすべて status===3 かつ cooldown/402/429 なら cooldown スキップ
+  const ccBackends = chain.filter((item) => String(item?.backend ?? '').startsWith('cheap-code:'));
+  if (ccBackends.length === 0) return false;
+  return ccBackends.every((item) => Number(item?.status) === 3 && /クールダウン中|利用不可\((?:402|429)\)/.test(String(item?.stderrTail ?? '')));
 }
 
 // フォールバック先の子プロセスが OS エラーで起動できなかった行(例: spawn ENAMETOOLONG / ENOENT)。
@@ -246,7 +253,10 @@ const SPAWN_FAILED = /syscall: 'spawn'|\bspawn E[A-Z]+\b|code: 'E[A-Z]{4,}'/;
 // token_revoked のとき codex は "workspace routing discovery unauthorized (401)" の語順で 401 を出す。
 // 旧パターン /401 unauthorized/ は語順が逆で一致せず、実測8件(2026-10-12〜10-14)が no_output に
 // 埋もれて codex_empty_output が毎晩起票された（2026-10-16 診断。修復=Windows の auth.json を WSL へコピー）。
-const CODEX_AUTH_FAILED = /401 unauthorized|unauthorized \(401\)|missing bearer or basic authentication/i;
+// stderrTail は末尾200字へ切り詰められ、"arer or basic authentication in header, url: ...v1/responses" だけが
+// 残ることがある。実測 2026-10-29〜31 の fallback 16件が一致せず lane_outage_unrepaired になったため、
+// 先頭欠落後も残る "or basic authentication in header" も一致させる。
+const CODEX_AUTH_FAILED = /401 unauthorized|unauthorized \(401\)|missing bearer or basic authentication|or basic authentication in header/i;
 
 // ChatGPT アカウント認証なのに sol/astra を選ぶと 400 で即死する。codex-do 側のレーン選択の
 // 問題なので、直せる欠陥として起票する（2026-09-22 診断: 09-20 の11件中7件）。
@@ -299,6 +309,11 @@ export function emptyOutputReason(row) {
   // (2026-10-13 診断: glm の11件の実体は HTTP 429 と、その間の cooldown スキップだった)。
   if (isQuotaLimitedRow(row)) return 'quota_limited';
   if (isCooldownSkippedRow(row)) return 'cooldown_skipped';
+  // status:"ok" は API 呼出が成功したことを示す。出力が0でも呼出自体の失敗ではない
+  // (2026-10-30〜11-01 実測: gemini プローブが --max 10 で思考トークンを差し引かれ
+  // out=0 になったが HTTP 応答は正常で status:"ok"。これを no_output と判定すると
+  // lane_outage_unrepaired になる)。
+  if (String(row?.status ?? '') === 'ok') return 'ok';
   const status = Number(row?.status);
   if (Number.isFinite(status) && status !== 0) return `exit_${status}`;
   return 'no_output';
@@ -537,11 +552,34 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     // glm/deepseek クールダウンで codex-do exit 1 が12件)。stderrTail の無い旧行は従来どおり数える。
     const skippedExternalCause = (row) => row.provider === 'skipped' && row.status === 'no-cheap-executor'
       && /unattended_budget|無人枠|クールダウン中|上限[/]エラーで使えない|usage_limit|Insufficient Balance|HTTP ?(402|429)/.test(String(row.stderrTail || ''));
-    const attempts = rows.filter((row) => !isCooldownSkippedRow(row) && !skippedByCooldown(row) && !skippedExternalCause(row) && !skippedRepairedByCodex(row) && !isEmptyDiffEscalationRow(row) && !isFallbackCooldownSkipRow(row) && !isQuotaSweepBenignRow(row));
+    // stderrTail が空の旧 skipped(codex-do exit N)でも、同じ24h窓に cheap-code バックエンドの
+    // cooldown/http_402/http_429(残高切れ・上限)が co-occur していれば、外部要因で投げられなかった
+    // 記録であって疑似 provider 'skipped' の欠陥ではない(2026-10-28 実測: deepseek HTTP402 の 24h
+    // cooldown 中、10-27T19:01→10-28T04:02 に codex-do exit 3 が9件。stderrTail が空のため従来は
+    // high になったが、各 skipped 行の前後2h には必ず deepseek cooldown / kimi http_429 が在った)。
+    const skippedDuringCheapOutage = (row) => {
+      if (row.provider !== 'skipped' || row.status !== 'no-cheap-executor') return false;
+      if (!/^codex-do exit /.test(String(row.reason || ''))) return false;
+      const rowTime = Date.parse(row.t);
+      if (!Number.isFinite(rowTime)) return false;
+      return usageRows.some((other) => {
+        if (other === row || other.provider === 'skipped') return false;
+        if (!['deepseek', 'glm', 'kimi', 'qwen', 'groq', 'openrouter', 'gemini-cli', 'cheap-code', 'fallback'].includes(other.provider)) return false;
+        const otherTime = Date.parse(other.t || '');
+        if (!Number.isFinite(otherTime) || Math.abs(otherTime - rowTime) > 2 * 3600_000) return false;
+        return isCooldownSkippedRow(other) || isQuotaLimitedRow(other) || isBillingSuspendedRow(other)
+          || /クールダウン中|起動を省略しました/.test(String(other.stderrTail || ''));
+      });
+    };
+    const allNonSkipped = rows.filter((row) => !isCooldownSkippedRow(row) && !skippedByCooldown(row) && !skippedExternalCause(row) && !skippedRepairedByCodex(row) && !skippedDuringCheapOutage(row) && !isEmptyDiffEscalationRow(row) && !isFallbackCooldownSkipRow(row) && !isQuotaSweepBenignRow(row));
+	    // status:'ok' は API 呼出成功。out=0 でもレーン障害ではない（gemini プローブ行実測 2026-10-30〜11-01）。
+	    const attempts = allNonSkipped.filter((row) => emptyOutputReason(row) !== 'ok');
     // 24h 窓が cooldown だけで埋まる＝上限中で一度も試行していない。レーンは止まっているが
     // 原因は上限側で、コードの欠陥ではない。low の可視化だけ残す(high にすると上限が明けるまで
     // 毎晩同じ偽の修理タスクが積まれる。黙って消すと止まっている事実自体が見えなくなる)。
     if (!attempts.length) {
+      // status:'ok' は API 呼出成功。out=0 でもレーン障害ではない（gemini プローブ行実測 2026-10-30〜11-01）。
+      if (allNonSkipped.length && allNonSkipped.every((row) => emptyOutputReason(row) === 'ok')) continue;
       // quota-sweep の正常停止は cooldown ではないので、cooldown の low 表示も付けない。
       if (rows.every((row) => isQuotaSweepBenignRow(row) || skippedRepairedByCodex(row))) continue;
       // 窓が「代替は応答したが1行も変えなかった」行だけで埋まった場合も、レーン障害ではない。
@@ -581,6 +619,14 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     if (benign.length === attempts.length) {
       findings.push({ id: 'provider_usage_limit', provider, severity: 'low', title: `${provider} は上限/レート制限で停止（欠陥ではない）`,
         evidence: [`${attempts.length}件すべて失敗`, ...reasonTop(attempts.map(row => ({ reason: row.stderrTail || row.reason || emptyOutputReason(row) })))] });
+      continue;
+    }
+    // 全失敗の原因が認証失敗なら、汎用の全滅ではなく名前付きの codex_auth_failed として起票する。
+    // codex 行側で同 id を出していれば重複させない。修復済み（後の成功・auth.json 更新）なら出さない。
+    if (attempts.every((row) => emptyOutputReason(row) === 'auth_failed')) {
+      if (!findings.some((item) => item.id === 'codex_auth_failed') && !repairedAfter(attempts) && !authRestoredAfter(home, attempts)) {
+        findings.push({ id: 'codex_auth_failed', provider, severity: 'high', title: `Codex CLI が未認証（${provider} 経由で全失敗・再ログインが必要）`, evidence: [`${attempts.length}件`, 'Windows の ~/.codex/auth.json を確認し codex login を実行'], fixTask: 'Windows の %USERPROFILE%\\.codex\\auth.json を確認し codex login status。auth.json が無い PC では keyserve 経由の鍵配布か、人の codex login（ChatGPT アカウントの OAuth 同意）が要る' });
+      }
       continue;
     }
     const times = attempts.map(row => row.t).sort((a, b) => Date.parse(a) - Date.parse(b));

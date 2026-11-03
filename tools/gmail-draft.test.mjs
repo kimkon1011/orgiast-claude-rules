@@ -233,14 +233,15 @@ test('引数・body-file の設定エラーは2、内容を漏らさず無通信
   assert.equal(fromFile.code, 0);
 });
 
-test('SA キー欠落・JSON 破損は設定エラー（例外の秘密を漏らさない）', async () => {
+test('SA キー欠落はサーバ経路へ、JSON 破損は設定エラー（秘密を漏らさない）', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gmail-draft-test-'));
   try {
     for (const content of [null, '{ "private_key": "SECRET', '{}']) {
       const keyPath = path.join(dir, 'key.json');
       if (content !== null) fs.writeFileSync(keyPath, content);
-      const results = await probeScopes({ keyPath, scopes: [GMAIL_COMPOSE_SCOPE] });
-      assert.equal(results[0].errorKind, 'configuration_error');
+      const results = await probeScopes({ keyPath, scopes: [GMAIL_COMPOSE_SCOPE], fetchImpl:async()=>Response.json({emailAddress:'seisaku-team@orgiast.jp'}) });
+      if (content === null) assert.equal(results[0].ok, true);
+      else assert.equal(results[0].errorKind, 'configuration_error');
       assert.equal(JSON.stringify(results).includes('SECRET'), false);
     }
     const result = await cli(['--check', '--json'], { mintToken: async () => { throw Object.assign(new Error('SECRET'), { errorKind: 'configuration_error' }); } });

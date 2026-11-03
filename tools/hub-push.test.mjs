@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { normalizeLf, sha1Lf, isUnchanged, buildManifest, pushHub, collectTargets, tokyoDate } from './hub-push.mjs';
+import { normalizeLf, sha1Lf, isUnchanged, buildManifest, pushHub, collectTargets, tokyoDate, runNightlyHub } from './hub-push.mjs';
 
 const prev = { version: 7, updatedAt: '2026-09-01', note: 'preserve', files: [
   { title: 'CLAUDE.md.template', in: 'hub', localTarget: '~/.claude/CLAUDE.md', extra: true },
@@ -167,4 +167,15 @@ test('registration preserves the deployed hidden task, working directory and sch
   assert.match(script, /-TaskName 'OrgiastHubPush'.*-Force/);
   assert.match(script, /-Daily -At '02:40'/);
   assert.match(script, /Resolve-RegisterRepoRoot/);
+});
+
+
+test('nightly knowledge runs after hub, preserves dry-run and propagates failure to the task', async () => {
+  const calls = [];
+  await runNightlyHub({ push: async () => calls.push('hub'), knowledge: async () => calls.push('knowledge') });
+  assert.deepEqual(calls, ['hub', 'knowledge']);
+  calls.length = 0;
+  await runNightlyHub({ dryRun: true, push: async () => calls.push('hub'), knowledge: async () => calls.push('knowledge') });
+  assert.deepEqual(calls, ['hub']);
+  await assert.rejects(runNightlyHub({ push: async () => {}, knowledge: async () => { throw Error('knowledge failed'); } }), /knowledge failed/);
 });

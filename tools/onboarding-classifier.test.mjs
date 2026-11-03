@@ -105,12 +105,13 @@ test('予算内の索引は結論を1バイトも変更しない', () => {
   assert.equal(makeIndex(source), makeIndex('') + '\n' + source);
 });
 
-test('実文書の予算内の結論には省略記号を付けない', () => {
+test('予算超過時は省略記号を使って結論を短縮する', () => {
   const body = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
   const index = makeIndex(body);
   assert(Buffer.byteLength(index) <= INDEX_BUDGET_BYTES);
   for (const line of index.split('\n').filter(line => line.endsWith('…'))) {
-    assert(body.includes(line), line);
+    const prefix = line.slice(0, -1);
+    assert(body.includes(prefix), `${line} (prefix: ${JSON.stringify(prefix)})`);
   }
 });
 

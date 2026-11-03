@@ -5,10 +5,10 @@
 ## インストール
 
 ```sh
-code --install-extension orgiast-next-session-0.3.7.vsix --force
+code --install-extension orgiast-next-session-0.3.8.vsix --force
 ```
 
-通常は `tools/next-session-launch.mjs --target vscode-ext` が未導入時だけ同梱 VSIX を自動インストールします。
+通常は fleet converge の `mobile-standby`（`tools/mobile-standby.mjs`）が同梱 VSIX の最新版を自動インストールします。`tools/next-session-launch.mjs --target vscode-ext` も同じ版比較で導入・更新します。
 
 導入済みの版が同梱 VSIX より古い場合も、自動的に `--force` 更新します。
 
@@ -44,7 +44,7 @@ URI、起動時、タブ変更、5秒ごとの補充は同じ処理で直列化�
 
 副作用: 閉じた古い待機セッションの行は、スマホ一覧に offline として残ります（セッション自体は未使用のため実害はありません）。
 
-この変更はタブの補充を担当します。別の `claude-mobile` サーバーやスケジュールタスクを停止・変更しません。実機の補充・定期リフレッシュには同梱0.3.7 VSIXの導入が必要です。
+この変更はタブの補充を担当します。別の `claude-mobile` サーバーやスケジュールタスクを停止・変更しません。実機の補充・定期リフレッシュには同梱0.3.8 VSIXの導入が必要です。
 
 URI は外部プロセスやブラウザからも開けるため、`claude` パラメータは実在する絶対パスかつファイル名が `claude` / `claude.exe` の場合だけ実行します。
 
@@ -53,3 +53,8 @@ URI は外部プロセスやブラウザからも開けるため、`claude` パ�
 ```sh
 code --uninstall-extension orgiast.next-session
 ```
+
+## 0.3.8
+スマホでのアーカイブ後に題名が消えたタブを、元の題名・10分以内のアーカイブ台帳・現在のラベルで照合し、一意の場合だけ閉じます。30秒ごと、最大10分再照合し、曖昧な場合は Output に理由を残します。同期ツールは ORGIAST_NIGHTLY_REPO / ORGIAST_REPO、同期先 ~/.claude/nightly-repo、標準リポジトリの順で探索します。移動後の台帳にも title と archivedAt を保持します。
+
+配布は既存のリポジトリ同期 → `mobile-standby` converge → 最新版 VSIX の `code --install-extension --force` → 次の VSCode 拡張ホスト再起動で有効化、の順です。この機能からウィンドウの再読み込みは行いません。

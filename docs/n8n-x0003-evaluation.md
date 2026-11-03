@@ -34,3 +34,8 @@
 
 - 機械判定は Code ノードの存在だけで保守的に reject とする設計。内容を読んだ結果、ハードコード秘密・難読化・ネットワーク/FS/プロセス操作は 5 件とも 0。
 - 独立確認は llm-ask(deepseek) による Code 本文の判定のみ。codex-do 等によるフル審査（全ノード JSON）は未実施のため、重大指摘ゼロの最終承認は C4 の前に再確認する。
+
+## C4 隔離インポート試行（iter4・未達）
+- `npm install n8n`（空の一時ディレクトリ）は Windows で EBADPLATFORM（`@napi-rs/canvas-linux-arm64-musl`）。`--force` で導入は完了したが、`node_modules/n8n/package.json` が欠落しており `n8n --version` / `import:workflow` が `Cannot find module '../package'` で終了コード 1。インポートまで到達していない。
+- docker は無し。修復のため該当ディレクトリを削除して再導入する操作は classifier に拒否されたため実行していない。
+- 結論: C4 は未検証（FINAL 不可）。再開条件=n8n の再導入（package.json 欠落の修復）か WSL/Linux 上での実行。本番 n8n・実データへの接続はなし。

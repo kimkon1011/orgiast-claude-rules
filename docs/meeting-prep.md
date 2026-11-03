@@ -1,6 +1,6 @@
 # 打合せ前日の自動準備
 
-kim-PC の無人タスクが翌日の打合せを列挙し、担当PCの Claude Code に準備を依頼する。通常は fleet-mail（結果回収可能）を優先し、受信側の承諾・起動条件を実測で確認できた経路だけを使う。元のカレンダー予定は変更しない。
+kim-PC の無人タスクが翌日の打合せを列挙し、担当PCの Claude Code に準備を依頼する。担当PCの承諾・起動条件を実測で確認できれば fleet-mail（結果回収可能）を優先する。それ以外はkim-PCでローカル実行する。元のカレンダー予定は変更しない。
 
 ## ファイルと配布
 
@@ -27,7 +27,7 @@ node tools/meeting-prep-dispatch.mjs --dry-run --identify-014
 node tools/meeting-prep-dispatch.mjs --live --identify-014
 ```
 
-`--live` が無いと常にdry-run。dry-runではGoogle APIのGETと認証、fleetの名簿読取（beacon-listは読取専用POST）のみを行い、業務データ・状態・受信箱・予定・配送を変更しない。`--home` または `ORGIAST_HOME` で実行元のホームを指定できる。鍵は既存 `tools/lib/drive-auth.mjs` の `GOOGLE_SA_KEY` / 既定パスを流用する。トークンを保存・表示しない。
+`--live` が無いと常にdry-run。dry-runではGoogle APIのGETと認証、fleetの名簿読取（beacon-listは読取専用POST）のみを行い、業務データ・状態・受信箱・予定・配送を変更しない。実行記録だけは `~/.claude/meeting-prep/runs/<日時>.json` に保存する（`--run-dir` で保存先変更可）。標準出力は件数・成否・詳細パスの1行。`--home` または `ORGIAST_HOME` で実行元のホームを指定できる。鍵は既存 `tools/lib/drive-auth.mjs` の `GOOGLE_SA_KEY` / 既定パスを流用する。トークンを保存・表示しない。
 
 DWDのスコープ:
 
@@ -39,7 +39,7 @@ DWDのスコープ:
 |準備カレンダーの非公開確認|calendar.acls.readonly|
 |共有Gmailスレッド読取（seisaku-teamをDWDで代行）|gmail.readonly|
 |案件一覧・ハブの読取|spreadsheets.readonly / drive（既存承認を再利用）|
-|代行書込・読戻し|spreadsheets / drive / documents|
+|代行書込・読戻し|spreadsheets / drive（Docsも承認済みdriveを使用）|
 
 スコープの接頭辞は `https://www.googleapis.com/auth/`。細分化された `calendar.calendarlist.readonly` と `drive.readonly` が未承認でも、承認済みの上表スコープを使う。カレンダー新設とACL検証の権限は別途必要。[Google公式のスコープ一覧](https://developers.google.com/workspace/calendar/api/auth)参照。
 
@@ -61,7 +61,7 @@ dry-runの `caseInventory` は読込案件数・進行中件数・イベントID
 
 更新時刻の降順で1日10案件まで。同日再実行も送信済みバッチを数え、未完了案件を重ねて依頼しない。上限を超えた更新は `reviewUpdates` に保存して次回へ繰り越す。走査cursorは配送に成功した後だけ進め、案件ごとのreviewed時刻は成果物検証完了まで進めない。翌日打合せがある案件は、送信済み予定でもレビューと重複させない。範囲dry-runはカレンダーを全期間読み、日次レビューを開始日の表示に1回だけ含める（実際の判定時刻はgmail.scannedAt）。
 
-状態は `~/.claude/meeting-prep/state.json`。プロセスロックと原子的保存を使用。iCalUID+繰返し回の開始時刻でカレンダー間の複製をまとめ、対象日+対象keyを送信前に確保する。PCごと1通。本文がfleet-mailの20,000字制限に収まらない場合は全件未送信で停止する。
+状態は `~/.claude/meeting-prep/state.json`。プロセスロックと原子的保存を使用。案件ID+開始時刻（UTCで正規化）で異なるUIDの同時刻予定もまとめ、旧iCalUIDキーの送信履歴も確認する。対象日+対象keyを送信前に確保する。担当PCへの配送はPCごと1通。ローカルは1ジョブずつ実行する。過大本文・実行失敗は当該バッチに記録し、後続バッチを継続する。
 
 タイムアウトで送信結果不明の場合は自動再送しない。`--collect` は既存fleet-mail送信記録から送信IDを回収し、mail-getで結果を確認する。送信記録も無い場合はstateのsending/errorが残るので監督が配送事実を確認する。完了結果と案件ごとの日次レビューcursorは書込・読戻し・カレンダー反映が済んだ後だけ保存する。failed/expired/needsReviewは完了扱いにしない。
 
@@ -84,9 +84,9 @@ dry-runの `caseInventory` は読込案件数・進行中件数・イベントID
 }
 ```
 
-fleet-mailから読む場合、observedAtにはメール受信元のcreatedAtを用いる。JSONは実測情報の例であり承諾済みとの宣言ではない。008の既存返信からhostname・アカウント・nightly-repoパスは確認できたが、claude-resume/hubと現在のprompt承諾を同時に示す証拠は未取得。送信経路の既定はfleet-mail優先、実測情報がない場合は「不明」として停止する。
+fleet-mailから読む場合、observedAtにはメール受信元のcreatedAtを用いる。JSONは実測情報の例であり承諾済みとの宣言ではない。008の既存返信からhostname・アカウント・nightly-repoパスは確認できたが、claude-resume/hubと現在のprompt承諾を同時に示す証拠は未取得。送信経路の既定はfleet-mail優先、実測情報がない場合は「不明」と記録し、kim-PCへ切り替える。
 
-`fetchBeacons({ home })` はfleet-mailと同じ呼び出し。beaconのhostname・poll・converge成功は稼働情報で、accept/hub/cwdは含まれないため承諾の根拠にはしない。dry-runはPCごとに「opt-in 済み / 未承諾 / 不明」、確認日時、情報源、使える経路を示す。承諾があっても起動条件が欠ければ送信しない。「未承諾」は受信側の実測accept配列にprompt/claude-resumeがない場合だけ使い、PC未解決や証拠なしを未承諾と断定しない。
+`fetchBeacons({ home })` はfleet-mailと同じ呼び出し。beaconのhostname・poll・converge成功は稼働情報で、accept/hub/cwdは含まれないため承諾の根拠にはしない。dry-runはPCごとに「opt-in 済み / 未承諾 / 不明」、確認日時、情報源、使える経路を示す。承諾があっても起動条件が欠ければkim-PCで実行する。「未承諾」は受信側の実測accept配列にprompt/claude-resumeがない場合だけ使い、PC未解決や証拠なしを未承諾と断定しない。
 
 未承諾PCでの人の操作（1行）: 該当の作業用008（DESKTOP-BDOAK99）またはhostname特定後の作業用014で、PowerShellから nightly-repo の `tools/fleet-agent.mjs` が表示する `consentCommand('prompt')` 相当の承諾コマンドを本人が実行する（下記）。
 
@@ -97,6 +97,18 @@ node -e "const f=require('fs'),o=require('os'),p=require('path').join(o.homedir(
 この操作はprompt受付だけを承諾する。fleet-agent稼働と受信側実測報告も必要。AIは承諾ファイルを変更しない。
 
 `--identify-014` は既存fleet-directive-sendを使うkind=status・targets=allの状況照会。既存statusハンドラは自由文の指示を実行せず、hostname/account/prompt opt-in等の定型報告をDiscordと各PCのfleet-agent-last-status.jsonへ出す。リモート名014との対応は自己申告との照合が必要。statusの本文で任意コマンドを実行させるものではない。
+
+## ローカル実行・結果回収・実行記録
+
+受信側のopt-inが確認できない・受付経路がない・PCが未解決の場合は `executedOn: "kim-PC(fallback: <理由>)"` をジョブとバッチに残す。`cheap-code.mjs` のprovider選択・子環境と `claude-exe.mjs` のexe解決を再利用し、GLMまたはDeepSeekで `claude -p` を起動する。Claude API/modelへの追加経路は設けない。cwdは `~/.claude/nightly-repo`、プロンプトはテンプレートとDWD読取資料をstdinで渡す。CLIのツール・MCP・hooksは無効にし、最終JSONのapply/needsReviewだけを受け取る。
+
+DWDで案件のSheets（各タブA1:AZ1000）、案件フォルダ直下のDocs、ハブDoc、直近30日・最大30スレッドの共有Gmailを読む。未読資料・範囲外セルは未確認として明記し、before値を推測させない。モデル出力は保存してから既存applierで適用・読戻しする。部分適用後はcollectで同じJSONを再適用できる。入力が上限を超える場合は要確認として失敗記録する。
+
+資料読取・CLI・適用を含むローカルジョブの上限は15分。超過時は子プロセスを終了し、後続のGoogle API呼出しを中止して次のジョブへ進む。Windowsタスク全体の30分制限は解除し、各ジョブの上限で管理する（登録定義の変更だけでは既存タスクは変更されない）。
+
+全打合せの準備予定を実行開始前に作り、状態（準備中/完了/失敗と理由）と実施計画書・確認シート・提出フォーマット・制作フォルダ・アジェンダのリンクを記録する。未作成・特定できない資料はその旨を記す。適用後は要約と新しいアジェンダURLを更新する。
+
+collectはwhy/本文のmeeting-prepマーカー、またはstate.batchesにあるbatchIdだけを解析する。無関係なメールはログなしで無視し、関連結果がなければfleet認証なしでもexit 0。beacon照会も不要。既知の不正結果・適用失敗・期限切れ等はexit 1。詳細はruns JSONに保存する。
 
 ## 返信とDWD代行
 
@@ -112,3 +124,7 @@ readyは検証済み成果物URLを要求。applyは、案件一覧の正本か�
 
 モックテストは予定除外、照合、014代行、同一予定の二重配送防止、PC別集約、送信応答消失、結果の出所照合、カレンダーupsert、applierの競合・再試行・回答列保護を検証する。
 2026-11-02の読み取り試験では calendar.readonly / calendar.events / drive / spreadsheets.readonly の認証を確認。calendar.calendars / calendar.acls.readonly は unauthorized_client。専用カレンダー作成とACL確認は承認後の本番前提条件である。タスク登録のWindows実機検証と外部書込E2Eは、このタスクの「実送信・カレンダー作成をしない」制約により未実施。
+
+2026-11-04のWindows検証: 指定テスト、11/5の読取dry-runが成功。エイト様の同時刻2予定は1ジョブとなり、日次レビュー3件と合わせて4件が `kim-PC(fallback: 受信側opt-in未確認)`。CLIの必要フラグは実機のヘルプで確認した。外部書込・CLIのLLM実行・タスク登録は未実施。
+
+同日の認証のみの検査では `calendar.calendars` と `calendar.acls.readonly` は引き続き `unauthorized_client`。本番で準備カレンダーを作成・検証するには管理者によるこの2スコープのDWD承認が必要。カレンダーの失敗でもローカル資料準備を続け、カレンダー未反映を失敗記録し、適用済みJSONはcollectで再開可能にする。ACL未確認の予定には書かない。Docsの個別 `documents` スコープも未承認だったため、[Docs APIが許可する既存のdriveスコープ](https://developers.google.com/workspace/docs/api/reference/rest/v1/documents/batchUpdate#authorization-scopes)を再利用する。

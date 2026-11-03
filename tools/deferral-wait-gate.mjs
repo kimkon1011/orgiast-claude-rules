@@ -13,11 +13,45 @@ const FUTURE_WORK = /終わり次第|終わったら|終わると|終了後|完�
 // 離れた位置の言及（ツールの説明文など）を拾わないための距離。
 const FUTURE_WINDOW = 160;
 
+// 2026-10-22 実測: 「Codex が作業中です。終わったら本番まで出して確認します。」は
+// detect() の W（完了を待って／のを待っています）に一致せず、3 行とも素通りした。
+// 他AIレーンの実行中・待機を待機語として扱い、近接する後続作業があるときだけ block する。
+const AGENT = '(?:Codex|codex|他AI|エージェント|レーン)';
+const AGENT_RUNNING = new RegExp(`${AGENT}[^\\n」"']{0,40}?(?:作業中|実行中|進行中|稼働中|動いてい(?:ます|る)|走ってい(?:ます|る))`, 'g');
+// 「Codex の作業が終わったら、…します」「…のを待って、…します」は、条件節自体が待機で
+// 後続の動作が同一文に続くため、FUTURE_WORK を待たずに block する（動作が続くときだけ）。
+const AGENT_WAIT_THEN = new RegExp(`${AGENT}[^\\n」"']{0,40}?(?:終わったら|終わり次第|終わると|完了したら|待って[、,])`, 'g');
+const ACTION_AFTER = /します|する|進めます|実行します|確認します|出します|当てます|テストして|反映して|検証して|報告します|送ります|作ります|実装します|修正します|終えます/;
+const ACTION_WINDOW = 120;
+const AUDIT_QUOTE_MARKER = /handoff-audit:[0-9a-f]{16}/;
+
+// 監査記録・検証報告が実 excerpt を「…」で引用した行は、先送りの実行ではなく引用なので除外する。
+function inAuditQuote(prose, index) {
+  // 引用した本文自身が「…」を含む（「「承認」か…」）ため、直近の開き括弧は見出し語の中にある。
+  // 開き括弧を手前へ辿り、その行に handoff-audit ID が入っている開き括弧が 1 つでもあれば引用。
+  let open = prose.lastIndexOf('「', index);
+  while (open >= 0) {
+    const lineStart = prose.lastIndexOf('\n', open - 1) + 1;
+    if (AUDIT_QUOTE_MARKER.test(prose.slice(lineStart, open))) return true;
+    // open===0 のとき lastIndexOf('「', -1) は 0 にクランプされて open が減らず無限ループする。
+    if (open === 0) break;
+    open = prose.lastIndexOf('「', open - 1);
+  }
+  return false;
+}
+
 const REPLY_WAIT = /(?:返信|返事)(?:を|が)?お?(?:待って|待ち|待っています)|(?:返信|返事)が来たら|「?続けて」?と返|続けてと返|返信待ち|返事待ち/g;
 const PROD = /本番反映|本番デプロイ|本番配備|本番公開|vercel|deploy|デプロイ/i;
 const REPLY_WAIT_DONE = /不要|ありません|なし|完了|済み/;
 const REPLY_WAIT_WINDOW = 160;
 const REPLY_WAIT_DONE_WINDOW = 40;
+
+// 2026-10-22 実測（handoff-audit:42a15ac380371976 / f8387b05・677e8433）:
+// 「「承認」か「却下 <理由>」で返信する」「返事が来るまでは何もしません」は、user の返信を
+// 待つ形なのに REPLY_WAIT に一致せず Stop gate を 2 ターンとも pass していた。
+// 提案の採否を user に投げ返して止まる文面を直接拾う（本番反映語との近接は要求しない）。
+const DECISION_DEFERRAL = /「?承認」?(?:か|または|もしくは)「?却下|(?:返事|返信)が来るまで(?:は)?(?:何も|着手|実行)|採否を?(?:user|ユーザー|kim|あなた)?の?(?:返信|返事)/g;
+const DECISION_DEFERRAL_REASON = '提案の採否を user の返信に委ねて止まらず、推奨案を採用して当ターン内で実行し結果まで報告してください。採否が本当に user 固有の判断（支払い・アカウント作成・不可逆操作）なら、その理由を明記してください。';
 
 export function enabled() {
   return process.env.ORGIAST_DEFERRAL_WAIT_GATE !== '0';
@@ -60,14 +94,39 @@ export function judge(text) {
       };
     }
   }
-  const wait = detect(prose).find(result => result.pattern === 'W');
-  if (!wait) return { decision: 'pass' };
-  const from = wait.match.index;
-  const nearby = prose.slice(Math.max(0, from - FUTURE_WINDOW), from + wait.match[0].length + FUTURE_WINDOW);
-  if (!FUTURE_WORK.test(nearby)) return { decision: 'pass' };
-  return {
-    decision: 'block',
-    code: 'DEFERRAL-WAIT',
-    reason: '完了を待つのではなく、当ターン内に完了まで進めてください。待機が不要なら、待たずに次の作業へ進めて結果まで報告してください。',
-  };
+  const waits = [];
+  const literal = detect(prose).find(result => result.pattern === 'W');
+  if (literal) waits.push(literal.match);
+  for (const match of prose.matchAll(AGENT_RUNNING)) {
+    if (!inAuditQuote(prose, match.index)) waits.push(match);
+  }
+  // 引用判定は正規表現のカウンタに依存しないよう、配列に写してから回す。
+  for (const match of [...prose.matchAll(DECISION_DEFERRAL)]) {
+    if (!inAuditQuote(prose, match.index)) {
+      return { decision: 'block', code: 'DEFERRAL-WAIT', reason: DECISION_DEFERRAL_REASON };
+    }
+  }
+  for (const match of [...prose.matchAll(AGENT_WAIT_THEN)]) {
+    if (inAuditQuote(prose, match.index)) continue;
+    const after = prose.slice(match.index + match[0].length, match.index + match[0].length + ACTION_WINDOW);
+    if (ACTION_AFTER.test(after)) {
+      return {
+        decision: 'block',
+        code: 'DEFERRAL-WAIT',
+        reason: '完了を待つのではなく、当ターン内に完了まで進めてください。待機が不要なら、待たずに次の作業へ進めて結果まで報告してください。',
+      };
+    }
+  }
+  for (const wait of waits) {
+    const from = wait.index;
+    const nearby = prose.slice(Math.max(0, from - FUTURE_WINDOW), from + wait.length + FUTURE_WINDOW);
+    if (FUTURE_WORK.test(nearby)) {
+      return {
+        decision: 'block',
+        code: 'DEFERRAL-WAIT',
+        reason: '完了を待つのではなく、当ターン内に完了まで進めてください。待機が不要なら、待たずに次の作業へ進めて結果まで報告してください。',
+      };
+    }
+  }
+  return { decision: 'pass' };
 }

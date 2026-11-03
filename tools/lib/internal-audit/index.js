@@ -4,3 +4,5 @@ import './rules-payments.test.mjs';
 import './footprint.test.mjs';
 import './exfil.test.mjs';
 import './web.test.mjs';
+
+import './payees.test.mjs';

@@ -22,7 +22,7 @@ export function parseArgs(args) {
 export function mergePr(options, { exec = execFileSync } = {}) {
   const { pr, repo, method } = parseArgs([String(options.pr), '--repo', options.repo || process.cwd(), '--method', options.method || 'squash']);
   const gh = args => String(exec('gh', args, { cwd: repo, encoding: 'utf8', timeout: 60_000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })).trim();
-  const view = JSON.parse(gh(['pr', 'view', pr, '--json', 'state,mergeable,reviewDecision,statusCheckRollup,headRefOid']));
+  const view = JSON.parse(gh(['pr', 'view', pr, '--json', 'state,mergeable,reviewDecision,statusCheckRollup,headRefOid,headRefName']));
   if (view.state !== 'OPEN') throw new Error(`PR #${pr}: state=${view.state}（OPEN が必要）`);
   if (view.mergeable !== 'MERGEABLE') throw new Error(`PR #${pr}: mergeable=${view.mergeable}`);
   if (view.reviewDecision === 'CHANGES_REQUESTED') throw new Error(`PR #${pr}: CHANGES_REQUESTED`);
@@ -36,7 +36,20 @@ export function mergePr(options, { exec = execFileSync } = {}) {
   if (!Array.isArray(checks) || !checks.length || checks.some(check => check.bucket !== 'pass')) throw new Error(`PR #${pr}: gh pr checks が全成功ではありません`);
   // 検査後に新しいpushが入った場合は、未検査のheadをマージしない。
   if (!/^[a-f0-9]{40}$/i.test(view.headRefOid || '')) throw new Error(`PR #${pr}: head SHA を確認できません`);
-  gh(['pr', 'merge', pr, `--${method}`, ...(options.keepBranch ? [] : ['--delete-branch']), '--match-head-commit', view.headRefOid]);
+  try {
+    gh(['pr', 'merge', pr, `--${method}`, ...(options.keepBranch ? [] : ['--delete-branch']), '--match-head-commit', view.headRefOid]);
+  } catch (error) {
+    const message = `${error.stderr || ''}\n${error.message || ''}`;
+    if (!/MergePullRequest/i.test(message) || !/permission/i.test(message)) throw error;
+    const { nameWithOwner } = JSON.parse(gh(['repo', 'view', '--json', 'nameWithOwner']));
+    const result = JSON.parse(gh(['api', '-X', 'PUT', `repos/${nameWithOwner}/pulls/${pr}/merge`, '-f', `merge_method=${method}`, '-f', `sha=${view.headRefOid}`]));
+    if (result.merged !== true) throw new Error(`PR #${pr}: REST マージ失敗 (${result.message || 'merged != true'})`);
+    if (!options.keepBranch && view.headRefName) {
+      try {
+        gh(['api', '-X', 'DELETE', `repos/${nameWithOwner}/git/refs/heads/${encodeURIComponent(view.headRefName)}`]);
+      } catch {} // ブランチ削除の失敗はマージ成否に影響させない。
+    }
+  }
   const result = JSON.parse(gh(['pr', 'view', pr, '--json', 'state,mergedAt']));
   if (result.state !== 'MERGED' || !result.mergedAt) throw new Error(`PR #${pr}: マージ後の read-back が MERGED ではありません`);
   return { pr, ...result };

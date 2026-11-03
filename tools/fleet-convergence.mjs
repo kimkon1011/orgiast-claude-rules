@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { parseEnvText } from './env-kv.mjs';
 import { getClaudeAccountEmail } from './machine-identity.mjs';
+import { extractHookTreeRoots } from './hook-tree-selfheal.mjs';
+import { getSyncedRepoRoot } from './resolve-synced-repo.mjs';
 
 export const DAY = 86400000;
 export function readJson(file, fallback = {}) {
@@ -37,14 +39,33 @@ export function keyDeficits(home, manifest) {
   }
   return missing;
 }
+// Report the tree used by installed hooks, never a ZIP distribution directory.
+export function resolveConvergenceRepo({ home, repo, env = process.env } = {}) {
+  const settings = readJson(path.join(home, '.claude/settings.json'));
+  const candidates = [...extractHookTreeRoots(settings), repo,
+    getSyncedRepoRoot({ env: { ...env, ORGIAST_HOME: home } }), path.join(home, 'orgiast-claude-rules')];
+  for (const candidate of new Set(candidates.filter(Boolean))) {
+    try {
+      // Require a checkout root (including worktree .git files), not a directory
+      // accidentally nested inside some unrelated parent repository.
+      if (!fs.existsSync(path.join(candidate, '.git'))) continue;
+      if (execFileSync('git', ['-C', candidate, 'rev-parse', '--is-inside-work-tree'],
+        { encoding: 'utf8', timeout: 15000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim() === 'true') return path.resolve(candidate);
+    } catch { /* try the next checkout */ }
+  }
+  return null;
+}
 export function collectConvergence({ home, repo, hostname = os.hostname(), username = os.userInfo().username,
-  platform = process.platform, now = new Date(), git = args => execFileSync('git', ['-C', repo, ...args],
-    { encoding: 'utf8', timeout: 15000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim(), expectedHooks } = {}) {
+  platform = process.platform, now = new Date(), git, expectedHooks } = {}) {
+  repo = resolveConvergenceRepo({ home, repo });
+  git ||= args => execFileSync('git', ['-C', repo, ...args],
+    { encoding: 'utf8', timeout: 15000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   const row = { convergenceId: identityId(hostname, username), hostname, username, platform,
-    claudeAccount: '', syncRepo: path.resolve(repo), syncHead: '', mainHead: '', behindMain: null,
+    claudeAccount: '', syncRepo: repo, syncHead: '', mainHead: '', behindMain: null,
     missingSince: '', hookMissing: null, keyMissing: null, convergenceReportedAt: now.toISOString() };
   row.claudeAccount = getClaudeAccountEmail(home) || row.claudeAccount;
-  try {
+  if (!repo) row.note = 'sync repo not a git checkout';
+  if (repo) try {
     row.syncHead = git(['rev-parse', 'HEAD']); row.mainHead = git(['rev-parse', 'origin/main']);
     const count = git(['rev-list', '--count', 'HEAD..origin/main']);
     row.behindMain = /^\d+$/.test(count) ? Number(count) : null;
@@ -53,7 +74,7 @@ export function collectConvergence({ home, repo, hostname = os.hostname(), usern
       if (Number.isFinite(Date.parse(missing))) row.missingSince = missing;
     }
   } catch { /* ZIP/offline/missing remote is unknown, never zero. */ }
-  try {
+  if (repo) try {
     const expected = expectedHooks || JSON.parse(execFileSync(process.execPath,
       [fileURLToPath(new URL('./register-hooks.mjs', import.meta.url)), '--expected-json'],
       { encoding: 'utf8', timeout: 30000, windowsHide: true, env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } }));
@@ -64,7 +85,7 @@ export function collectConvergence({ home, repo, hostname = os.hostname(), usern
     row.hookMissingNames.push(...(expected.skippedNames || []).map(name => `unavailable:${name}`));
     row.hookMissing = row.hookMissingNames.length;
   } catch { /* failed expected-set generation remains unknown */ }
-  const missing = keyDeficits(home, readJson(path.join(repo, 'tools/keyserve-distribution-manifest.json')));
+  const missing = repo ? keyDeficits(home, readJson(path.join(repo, 'tools/keyserve-distribution-manifest.json'))) : null;
   row.keyMissing = missing?.length ?? null;
   const has = (file, key) => { try { return Boolean(parseEnvText(fs.readFileSync(path.join(home, '.claude', file), 'utf8'))[key]); } catch { return false; } };
   row.keyserveAuth = has('keyserve.env', 'ORGIAST_KEYSERVE_SECRET') ? 'primary' : has('enroll.env', 'ORGIAST_ENROLL_TOKEN') ? 'enroll' : has('cost-reporter.env', 'DISCORD_COST_WEBHOOK') ? 'legacy' : 'unset';

@@ -46,6 +46,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     return 0;
   }
   const home = io.homedir ?? env.ORGIAST_HOME ?? os.homedir();
+  if (!pool.isMobileEnabled(home)) return 0;
   let options;
   try { options = parseMobileArgs(argv, pool.readConfig(home, env)); } catch (error) {
     log(`[mobile-sessions] ${error.message}`);

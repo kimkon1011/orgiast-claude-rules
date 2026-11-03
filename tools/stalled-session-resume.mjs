@@ -37,6 +37,39 @@ export async function detect() {
   return (await Promise.all((await listFiles()).map(inspect))).filter(Boolean);
 }
 
+// 再開の連鎖: execute() が作る子セッションの初回プロンプトは
+// 「停滞セッション「…」(親sessionId)の承認済みの目的を1歩進めてください」で始まる。
+// 夜ごとに子の session id が変わるため、id 単位の noProgress では 3 に到達せず連鎖が
+// 自己再生産される（2026-10-13〜10-14 実測: c9ce7174 -> … -> 46cda47c）。親 id を拾って
+// 予算を連鎖で引き継ぐことで、同じ目的の再開は合計3回で retire される。
+const RESUMED_PROMPT = /停滞セッション「[^」]*」\(([^()\s]{6,})\)の承認済みの目的/;
+export function resumedParentId(firstPrompt = '') {
+  const match = RESUMED_PROMPT.exec(String(firstPrompt ?? ''));
+  return match ? match[1] : '';
+}
+// 連鎖の祖先で最も進んだ noProgress を返す。祖先の entry が無い所で打ち切る。
+export function chainNoProgress(ledger, parentId) {
+  const seen = new Set();
+  let max = 0;
+  for (let id = parentId; id && !seen.has(id); id = ledger.sessions[id]?.parentSessionId) {
+    seen.add(id);
+    const entry = ledger.sessions[id];
+    if (!entry) break;
+    max = Math.max(max, entry.noProgress ?? 0);
+  }
+  return max;
+}
+function chainAncestors(ledger, parentId) {
+  const seen = new Set();
+  const ancestors = [];
+  for (let id = parentId; id && !seen.has(id); id = ledger.sessions[id]?.parentSessionId) {
+    seen.add(id);
+    const entry = ledger.sessions[id];
+    if (!entry) break;
+    ancestors.push(entry);
+  }
+  return ancestors;
+}
 export function skipReason(record, entry, night, closed, mtimeMs, now, activeMs) {
   if (closed.sessions[record.sessionId]) return 'closed';
   if (now - mtimeMs >= 7 * 86400000) return 'session-auto-close対象';
@@ -55,6 +88,9 @@ export async function execute(record, { timeoutMs, resultFile, previous = [] }, 
 実行した成果を ${resultFile} にJSONで保存してください: {"progressed":true/false,"evidence":"変更した成果物と検証結果、または進めない理由"}。
 単なる進捗確認・計画・終了コード0は成果に含めません。\n当初依頼: ${record.firstPrompt}\n直近: ${record.lastAssistantText}`;
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, record.cwd, record.cwd, timeoutMs, { resumeSessionId: record.sessionId });
+  // 実行役が1つも起動できない(cheap-code 全レーン停止・Claude フォールバック無効)のはセッションの失敗ではない。
+  // 2026-10-26 実測: deepseek payment_required で2件が1秒で error 扱い→「連続2件エラーで中止」の誤通知と noProgress 消費。
+  if (result.skippedNoExecutor) return { outcome: 'no-executor', reason: `実行役なし: ${String(result.stderr ?? '').trim().slice(-300) || result.executorUsed || 'cheap-code'}` };
   if (result.status !== 'success') return { outcome: 'error', reason: result.status };
   const report = await (io.readReport ?? readJson)(resultFile, null);
   return { outcome: report?.progressed === true && typeof report.evidence === 'string' && report.evidence.trim() ? 'progressed' : 'no-progress', reason: report?.evidence || '成果記録なし', executor: result.executorUsed };
@@ -82,8 +118,13 @@ export async function run(config = options(), io = {}) {
     const records = (await (io.detect ?? detect)()).filter(r => ['要対応', '要確認'].includes(r.status)).sort((a, b) => b.score - a.score || a.ageDays - b.ageDays);
     const rows = [], results = [];
     const state = ledger.nights[night] ?? { count: 0, errors: 0, aborted: false };
+    if (!readonly) delete state.noExecutor;
     for (const record of records) {
-      const entry = ledger.sessions[record.sessionId] ?? { attempts: [], noProgress: 0 };
+      const parentId = resumedParentId(record.firstPrompt);
+      // 連鎖の子は、祖先が積んだ noProgress を引き継いでから数える（夜ごとに id が変わっても
+      // 「同じ目的への挑戦」として合計3回で retire させる）。
+      const entry = ledger.sessions[record.sessionId] ?? { attempts: [], noProgress: chainNoProgress(ledger, parentId) };
+      if (parentId && !entry.parentSessionId) entry.parentSessionId = parentId;
       const closed = await loadClosed();
       let mtimeMs;
       try {
@@ -118,10 +159,31 @@ export async function run(config = options(), io = {}) {
         const resultFile = path.join(dir, `stalled-result-${record.sessionId}-${night}.json`);
         await fs.rm(resultFile, { force: true });
         result = await (io.execute ?? execute)(record, { timeoutMs: config.timeoutMs, resultFile, previous: entry.attempts.slice(-4, -1) });
-        if (!['progressed', 'no-progress', 'error'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
+        if (!['progressed', 'no-progress', 'error', 'no-executor'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
       } catch (error) { result = { outcome: 'error', reason: String(error.message) }; }
+      if (result.outcome === 'no-executor') {
+        // 起動前に消費した試行を戻す(このセッションは何も試されていない)。レーン停止の通知は
+        // delegation-health の担当なのでここでは通知せず、後続も同じ理由で落ちるため今晩は打ち切る。
+        entry.attempts.pop();
+        entry.noProgress--;
+        state.count--;
+        state.noExecutor = redactSecrets(String(result.reason ?? '')).slice(0, 500);
+        await saveJson(ledgerFile, ledger);
+        break;
+      }
       Object.assign(attempt, result, { reason: redactSecrets(String(result.reason ?? '')).slice(0, 2000), endedAt: new Date(now()).toISOString() });
-      if (result.outcome === 'progressed') entry.noProgress = 0;
+      const ancestors = chainAncestors(ledger, entry.parentSessionId);
+      if (result.outcome === 'progressed') {
+        entry.noProgress = 0;
+        for (const ancestor of ancestors) { ancestor.noProgress = 0; delete ancestor.skipReason; }
+      } else {
+        // 子の不進捗は同じ目的を継ぐ祖先の予算にも加算する。これが無いと子の id が
+        // 毎晩変わるだけで祖先の noProgress が増えず、連鎖が retire されない。
+        for (const ancestor of ancestors) {
+          ancestor.noProgress = (ancestor.noProgress ?? 0) + 1;
+          if (ancestor.noProgress >= 3) ancestor.skipReason = '3回進捗なし';
+        }
+      }
       if (entry.noProgress >= 3) entry.skipReason = '3回進捗なし';
       state.errors = result.outcome === 'error' ? state.errors + 1 : 0;
       state.aborted = state.errors >= 2;
@@ -135,7 +197,7 @@ export async function run(config = options(), io = {}) {
       state.notification = await (io.notify ?? notifyKim)(message, { home });
       await saveJson(ledgerFile, ledger);
     }
-    return { rows, results, aborted: state.aborted };
+    return { rows, results, aborted: state.aborted, ...(state.noExecutor ? { noExecutor: state.noExecutor } : {}) };
   } finally {
     if (lock) lock();
   }

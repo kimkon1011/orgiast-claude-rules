@@ -2,7 +2,7 @@
   "name": "next-session",
   "displayName": "Orgiast Next Session",
   "description": "Starts the next Claude session and prepares mobile Remote Control tabs from a URI.",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "publisher": "orgiast",
   "license": "MIT",
   "repository": {
@@ -37,9 +37,9 @@
         },
         "orgiast.nextSession.mobileRefreshMinutes": {
           "type": "number",
-          "default": 60,
+          "default": 0,
           "minimum": 0,
-          "description": "この間隔（分）で古い待機タブを 1 本だけ閉じて作り直す（スマホ一覧の上に出すため）。0 は無効。"
+          "description": "この間隔（分）で古い待機タブを 1 本だけ閉じて作り直す（スマホ一覧の上に出すため）。0 は無効。作業中のスマホ会話のタブも閉じてしまうため既定無効。"
         },
         "orgiast.nextSession.mobileRefreshHours": {
           "type": "string",
@@ -57,6 +57,8 @@
     "mobile-pool.js",
     "mobile-state.cjs",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "archive-tab-match.js",
+    "archive-tabs.js"
   ]
 }

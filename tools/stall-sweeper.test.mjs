@@ -43,8 +43,15 @@ test('ジョブ: 最新実行のみ、後続成功・実行中・未実行は失
 test('会話: 最後のassistantの実行予告のみ', () => {
   const s = { sessionId: 's1', file: '/log', mtime: ago(3), lastRole: 'assistant', lastAssistantText: 'これから修正します。' };
   assert.equal(detectStalledSession([s], now).length, 1);
-  for (const delta of [{ lastRole: 'user' }, { lastAssistantText: 'これから修正します。\n修正完了しました。' }, { mtime: ago(2) }])
+  for (const delta of [{ lastAssistantText: 'これから修正します。\n修正完了しました。' }, { mtime: ago(2) }])
     assert.equal(detectStalledSession([{ ...s, ...delta }], now).length, 0);
+});
+test('会話: エラー無しの末尾userは拾わない', () => {
+  assert.equal(detectStalledSession([{ sessionId: 's3', file: '/log', mtime: ago(3), lastRole: 'user', endedWithError: false, lastAssistantText: '' }], now).length, 0);
+});
+test('会話: 末尾user未応答をAPIエラー理由で拾う', () => {
+  const found = detectStalledSession([{ sessionId: 's2', file: '/log', mtime: ago(3), lastRole: 'user', endedWithError: true, lastAssistantText: '' }], now);
+  assert.equal(found.length, 1); assert.equal(found[0].reason, 'API エラーで未返答');
 });
 test('委譲: exit=0かつ対応コミットなしのみ。未確認は分ける', () => {
   const l = { file: '/codex.log', t: ago(2), exit: 0, commitVerified: false };
@@ -61,6 +68,20 @@ test('CLI: dryが既定、件数検証、モード競合拒否', () => {
   assert.equal(parseArgs([]).apply, false); assert.equal(parseArgs([]).max, 5);
   assert.throws(() => parseArgs(['--apply', '--dry-run']));
   for (const n of ['0', '-1', 'NaN', '1.5']) assert.throws(() => parseArgs(['--max', n]));
+});
+test('既定の確認先: ホーム配下から導き、特定PCのユーザー名を埋め込まない', () => {
+  const prev = process.env.ORGIAST_HOME;
+  const home = path.join(os.tmpdir(), 'stall-sweeper-home-test');
+  process.env.ORGIAST_HOME = home;
+  try {
+    const out = parseArgs([]);
+    assert.equal(out.repos.length, 5);
+    assert.ok(out.repos.includes(path.join(path.resolve(home), '.claude', 'nightly-repo')));
+    for (const repo of out.repos) assert.ok(repo.startsWith(path.resolve(home)), repo);
+    assert.ok(!out.repos.some(repo => /[\\/]Users[\\/]uers[\\/]/.test(repo)));
+  } finally {
+    if (prev === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = prev;
+  }
 });
 test('排他: 同時実行を拒否、終了後に次世代を取得、削除不要', () => {
   const dir = temp(), fd = acquireLock(dir);

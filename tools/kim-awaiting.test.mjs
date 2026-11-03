@@ -148,18 +148,22 @@ test('answered old and exhausted row resumes on next watch', async t => {
   await watch({ home, now: NOW, io: { digest: async () => ({ sent: false }), sheetConfig: () => null, cwdExists: () => true, resume: async () => { resumed++; return { state: 'done', reason: '完了' }; }, appendInbox: () => {} } });
   assert.equal(resumed, 1);
 });
-test('digest reminds after 24h only, excludes answered, persists only after delivery', async t => {
-  const home = fixture(t), r = row(), key = rowKey(r);
-  let state = { lastVerdicts: { [key]: verdictOf(r) }, lastKim: { [key]: kimAction(r) }, lastNeedsDm: { [key]: true }, lastRemindedAt: { [key]: new Date(NOW).toISOString() } };
-  let message = '', records = [r];
-  const io = { label: 'test', localOwner: 'kim', readState: () => state, writeState: (_home, next) => { state = structuredClone(next); }, readLedger: () => records, notify: async text => { message = text; return { delivered: 'dm' }; } };
-  assert.equal((await digest({ home, now: NOW + WINDOW_MS - 1, io })).sent, false);
-  assert.equal((await digest({ home, now: NOW + WINDOW_MS, io })).sent, true);
-  assert.match(message, /・（再）3 日返事待ち/);
-  assert.equal(state.lastRemindedAt[key], new Date(NOW + WINDOW_MS).toISOString());
-  records = [{ ...r, kimAnswer: 'はい' }];
-  assert.equal(needsDm(records[0]), false);
-  assert.equal((await digest({ home, now: NOW + 3 * WINDOW_MS, io })).sent, false);
+test('kim reminders stay in session context across days and answered rows disappear', async t => {
+  const home = fixture(t), r = row();
+  writeLedger(ledgerFile(home), [r]);
+  const io = { label: 'kim-PC', localOwner: 'kim@orgiast.jp', readLedger: () => readLedger(ledgerFile(home)),
+    notify: () => assert.fail('kim summaries must not send an outbound notification') };
+  for (const now of [NOW, NOW + WINDOW_MS - 1, NOW + WINDOW_MS, NOW + 3 * WINDOW_MS]) {
+    const out = await digest({ home, now, slot: '朝', io });
+    assert.equal(out.sent, false);
+    assert.equal(out.skipped, 'session-context-only');
+    assert.match(context({ hook_event_name: 'SessionStart', session_id: 'reminder', cwd: '/project' },
+      { home, now, env: {} }).hookSpecificOutput.additionalContext, /配布してよいですか/);
+  }
+  writeLedger(ledgerFile(home), [{ ...r, kimAnswer: 'はい' }]);
+  assert.equal(needsDm({ ...r, kimAnswer: 'はい' }), false);
+  assert.equal(context({ hook_event_name: 'SessionStart', session_id: 'reminder', cwd: '/project' },
+    { home, now: NOW + 4 * WINDOW_MS, env: {} }), null);
 });
 
 test('lightweight chase categories match mail classification', () => {

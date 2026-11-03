@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'; import { fileURLToPath } from 'node:url';
-import { isEntry } from './is-entry.mjs'; import { parseEnvText } from './env-kv.mjs'; import { COST_PER_MILLION } from './llm-fallback.mjs'; import { summarizeGeminiMonth } from './cost-work-loop.mjs'; import { fetchAdminCostReport } from './cost-report.mjs';
+import { isEntry } from './is-entry.mjs'; import { parseEnvText } from './env-kv.mjs'; import { executorCostUsd } from './llm-fallback.mjs'; import { summarizeGeminiMonth } from './cost-work-loop.mjs'; import { fetchAdminCostReport } from './cost-report.mjs';
 import { readReceiptLedger, summarizeReceipts } from './ai-receipt-scan.mjs';
 const DEFAULT_CONFIG = path.join(path.dirname(fileURLToPath(import.meta.url)), 'budget-fixed.json');
 export function calculateBudgetStatus({ config, ledgerRows = [], receipts = { anthropicMtdUsd: 0, otherMtdUsd: 0, byVendor: {} }, developerPlatform = { available: false, reason: '計測不能' }, now = new Date() }) {
   const usdJpy = Number(config.usdJpy) || 0, monthlyBudgetJpy = Number(config.monthlyBudgetJpy) || 0, unfilled = [], fixedItems = []; let fixedJpy = 0;
   for (const item of config.fixed || []) { if (item.kind === 'cap') continue; let jpy = item.jpy == null ? (item.usd == null ? null : Number(item.usd) * usdJpy) : Number(item.jpy); if (!Number.isFinite(jpy)) { unfilled.push(item.name); jpy = null; } else fixedJpy += jpy; fixedItems.push({ name: item.name, jpy }); }
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime(), through = now.getTime(); let executorUsd = 0;
-  for (const row of ledgerRows) { const time = Date.parse(row.t || ''); if (time < monthStart || time > through || row.provider === 'gemini') continue; const price = COST_PER_MILLION[row.provider]; if (price) executorUsd += ((Number(row.in) || 0) * price[0] + (Number(row.out) || 0) * price[1]) / 1e6; }
+  for (const row of ledgerRows) { const time = Date.parse(row.t || ''); if (time < monthStart || time > through || row.provider === 'gemini') continue; executorUsd += executorCostUsd(row) ?? 0; }
   const gemini = summarizeGeminiMonth(ledgerRows, { now, usdJpy });
   const variableKnownJpy = executorUsd * usdJpy + gemini.totalJpy + Math.max(developerPlatform.available ? developerPlatform.totalUsd : 0, receipts.anthropicMtdUsd || 0) * usdJpy, totalKnownJpy = fixedJpy + variableKnownJpy;
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate(), elapsedDays = Math.max(1, now.getDate()), projectedJpy = totalKnownJpy / elapsedDays * daysInMonth;

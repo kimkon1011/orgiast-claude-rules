@@ -14,8 +14,7 @@ export function getScheduledTaskInfo(taskName, { spawnImpl = spawnSync } = {}) {
 }
 
 export function startScheduledTask(taskName, { spawnImpl = spawnSync } = {}) {
-  const name = String(taskName).replaceAll("'", "''");
-  run(`Start-ScheduledTask -TaskName '${name}' -ErrorAction Stop`, spawnImpl);
+  run(`Start-ScheduledTask ${taskSelector(taskName)} -ErrorAction Stop`, spawnImpl);
 }
 
 export function stopScheduledTask(taskName, { spawnImpl = spawnSync } = {}) {
@@ -24,8 +23,7 @@ export function stopScheduledTask(taskName, { spawnImpl = spawnSync } = {}) {
 }
 
 export function enableScheduledTask(taskName, { spawnImpl = spawnSync } = {}) {
-  const name = String(taskName).replaceAll("'", "''");
-  run(`Enable-ScheduledTask -TaskName '${name}' -ErrorAction Stop`, spawnImpl);
+  run(`Enable-ScheduledTask ${taskSelector(taskName)} -ErrorAction Stop | Out-Null`, spawnImpl);
 }
 
 // System ログ Power-Troubleshooter EventID 1（スリープ復帰）で起動するイベントトリガー。
@@ -55,4 +53,21 @@ export function listScheduledTasks({ spawnImpl = spawnSync } = {}) {
     [pscustomobject]@{taskName=($t.TaskPath+$t.TaskName);status=$i.LastTaskResult;t=$last;nextRunTime=$next;neverRun=(!$i.LastRunTime -or $i.LastRunTime.Year -le 1999);running=($t.State -eq 'Running');state=[string]$t.State;cycleMinutes=($cycles|Measure-Object -Minimum).Minimum;location=('taskschd.msc: '+$t.TaskName)}
   })|ConvertTo-Json -Compress`, spawnImpl);
   return result ? (Array.isArray(result) ? result : [result]) : [];
+}
+
+// One PowerShell invocation preserves trigger metadata for automatic cadence auditing.
+export function listScheduledTaskDetails({ spawnImpl = spawnSync } = {}) {
+  const result = run(`@(Get-ScheduledTask | Where-Object { $_.TaskName -match 'Orgiast|Claude' } | ForEach-Object {
+    $t=$_;$i=$t|Get-ScheduledTaskInfo
+    $last=if($i.LastRunTime){$i.LastRunTime.ToUniversalTime().ToString('o')}else{$null}
+    $next=if($i.NextRunTime){$i.NextRunTime.ToUniversalTime().ToString('o')}else{$null}
+    [pscustomobject]@{taskName=($t.TaskPath+$t.TaskName);state=[string]$t.State;lastRunTime=$last;lastTaskResult=$i.LastTaskResult;nextRunTime=$next;settings=@{startWhenAvailable=$t.Settings.StartWhenAvailable};triggers=@($t.Triggers|ForEach-Object{[pscustomobject]@{type=$_.CimClass.CimClassName;enabled=$_.Enabled;daysInterval=$_.DaysInterval;weeksInterval=$_.WeeksInterval;repetition=@{interval=$_.Repetition.Interval}}})}
+  })|ConvertTo-Json -Depth 6 -Compress`, spawnImpl);
+  return result ? (Array.isArray(result) ? result : [result]) : [];
+}
+
+function taskSelector(taskName) {
+  const value = String(taskName), at = value.lastIndexOf('\\');
+  const quote = s => "'" + s.replaceAll("'", "''") + "'";
+  return `-TaskName ${quote(value.slice(at + 1))}` + (at >= 0 ? ` -TaskPath ${quote(value.slice(0, at + 1))}` : '');
 }

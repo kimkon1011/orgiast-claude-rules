@@ -199,6 +199,46 @@ test('stall-sweeper の実行時成果物は追跡されず gitignore される'
     '.stall-sweeper/ は worktree を dirty にしない（救済ブランチを作らせない）');
 });
 
+test('.fleet-ig-post/ の IG 投稿一時ファイルは追跡されず gitignore される', t => {
+  const { repo, git } = fixture(t);
+  fs.writeFileSync(path.join(repo, '.gitignore'), fs.readFileSync(new URL('../.gitignore', import.meta.url), 'utf8'));
+  fs.mkdirSync(path.join(repo, '.fleet-ig-post'));
+  fs.writeFileSync(path.join(repo, '.fleet-ig-post', 'part1.b64'), 'AAAA');
+  fs.writeFileSync(path.join(repo, 'still-dirty'), 'x');
+  const status = git(repo, ['status', '--porcelain', '--untracked-files=all']);
+  assert.equal(status.includes('.fleet-ig-post'), false,
+    '.fleet-ig-post/ は worktree を dirty にしない（rescue の重複 PR churn を止める）');
+  assert.ok(status.includes('still-dirty'), '他の untracked は従来どおり dirty（テストが空振りしていない）');
+});
+
+test('repo 直下の .tmp-* は追跡されず gitignore される', t => {
+  const { repo, git } = fixture(t);
+  fs.writeFileSync(path.join(repo, '.gitignore'), fs.readFileSync(new URL('../.gitignore', import.meta.url), 'utf8'));
+  fs.writeFileSync(path.join(repo, '.tmp-extract-session.mjs'), 'x');
+  fs.writeFileSync(path.join(repo, '.tmp-session-digest.txt'), 'inner context');
+  fs.writeFileSync(path.join(repo, 'still-dirty'), 'x');
+  const status = git(repo, ['status', '--porcelain', '--untracked-files=all']);
+  assert.equal(status.includes('.tmp-'), false,
+    '.tmp-* は worktree を dirty にしない（内部要約が rescue 枝で公開されるのを止める）');
+  assert.ok(status.includes('still-dirty'), '他の untracked は従来どおり dirty（テストが空振りしていない）');
+});
+
+// 2026-10-21〜22 実測: この 5 つが ignore されていなかったため rescue 枝が毎時作られていた。
+// どれか 1 つでも .gitignore から落ちると churn が戻るので、個別に固定する。
+for (const dir of ['.landing', '.gate-rollout-check', '.expense-leak-evidence', '.scratch-lahaina', '.qwen']) {
+  test(`repo 直下の ${dir}/ は追跡されず gitignore される`, t => {
+    const { repo, git } = fixture(t);
+    fs.writeFileSync(path.join(repo, '.gitignore'), fs.readFileSync(new URL('../.gitignore', import.meta.url), 'utf8'));
+    fs.mkdirSync(path.join(repo, dir));
+    fs.writeFileSync(path.join(repo, dir, 'artifact.bin'), 'machine-local');
+    fs.writeFileSync(path.join(repo, 'still-dirty'), 'x');
+    const status = git(repo, ['status', '--porcelain', '--untracked-files=all']);
+    assert.equal(status.includes(dir), false,
+      `${dir}/ は worktree を dirty にしない（救済ブランチの毎時 churn を止める）`);
+    assert.ok(status.includes('still-dirty'), '他の untracked は従来どおり dirty（テストが空振りしていない）');
+  });
+}
+
 test('routing-table.json は追跡されず gitignore される', () => {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const git = (...args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8' }).trim();

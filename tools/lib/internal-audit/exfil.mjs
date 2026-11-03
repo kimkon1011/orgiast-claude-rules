@@ -31,9 +31,23 @@ export async function scanDrive({ google, state = {}, known = state.knownExterna
   state.externalShareFiles ||= {};
   let building = known === undefined;
   for (const user of USERS) {
-    const scan = state.driveScan[user] ||= { pageToken: null, startedAt: null, completedAt: null, modifiedCursor: null };
-    const priority = state.drivePriorityScan[user] ||= { pageToken: null, startedAt: null, completedAt: null, modifiedCursor: null };
-    const baseline = known === undefined || !scan.completedAt || !!scan.pageToken || !!priority.pageToken || !priority.completedAt;
+    const scan = state.driveScan[user] ||= { startedAt: null, completedAt: null, modifiedCursor: null };
+    const priority = state.drivePriorityScan[user] ||= { startedAt: null, completedAt: null, modifiedCursor: null };
+    for (const cursor of [scan, priority]) {
+      if (cursor.version !== 2) {
+        cursor.completedCursor = cursor.completedAt ? cursor.modifiedCursor : null;
+        cursor.modifiedCursor = null; cursor.inProgress = false; cursor.version = 2;
+      }
+      for (const key of ['modifiedCursor', 'completedCursor', 'startedAt', 'completedAt']) if (cursor[key] && !Number.isFinite(Date.parse(cursor[key]))) {
+        cursor[key] = null; cursor.boundaryIds = []; cursor.completedAt = null; cursor.inProgress = false;
+      }
+      delete cursor.pageToken; // Never reuse a server token from a previous execution.
+    }
+  }
+  for (const user of USERS) {
+    const scan = state.driveScan[user], priority = state.drivePriorityScan[user];
+    const resumedFrom = { priority: priority.inProgress ? priority.modifiedCursor : null, all: scan.inProgress ? scan.modifiedCursor : null };
+    const baseline = known === undefined || !scan.completedAt || scan.inProgress || priority.inProgress || !priority.completedAt;
     const canDetect = known !== undefined && !!scan.completedAt && !!priority.completedAt;
     state.pendingExternalFindings ||= {};
     building ||= baseline;
@@ -42,54 +56,75 @@ export async function scanDrive({ google, state = {}, known = state.knownExterna
     try {
       // Public/link-visible files are paginated before the complete ownership scan.
       for (const [cursor, visibility] of [[priority, true], [scan, false]]) {
-        if (!cursor.pageToken) cursor.startedAt = new Date(nowMillis()).toISOString();
-        const pageTokens = new Set(cursor.pageToken ? [cursor.pageToken] : []);
+        // Finish an interrupted full scan before starting another priority delta.
+        if (visibility && scan.inProgress && !cursor.inProgress && cursor.completedAt) continue;
+        if (!cursor.inProgress) {
+          cursor.startedAt = new Date(nowMillis()).toISOString();
+          cursor.modifiedCursor = null; cursor.boundaryIds = []; cursor.inProgress = true;
+        }
+        let pageToken, retried = false;
+        const pageTokens = new Set();
+        const query = () => ["trashed = false and 'me' in owners", visibility ? VISIBILITY : '',
+          cursor.completedCursor ? `modifiedTime > '${cursor.completedCursor}'` : '',
+          `modifiedTime <= '${cursor.modifiedCursor || cursor.startedAt}'`].filter(Boolean).join(' and ');
+        let q = query(); // Keep the query fixed for the lifetime of an in-run pageToken.
+        let boundaryTime = cursor.modifiedCursor, boundaryIds = new Set(cursor.boundaryIds || []);
         do {
           if (nowMillis() >= until) throw auditError('Drive 所有ファイル走査の時間上限（再開位置あり・次回継続）');
           const url = new URL('https://www.googleapis.com/drive/v3/files');
-          const q = ["trashed = false and 'me' in owners", visibility ? VISIBILITY : '',
-            cursor.modifiedCursor ? `modifiedTime > '${cursor.modifiedCursor}'` : ''].filter(Boolean).join(' and ');
           url.search = new URLSearchParams({ q, orderBy: 'modifiedTime desc', pageSize: '1000', fields: DRIVE_FIELDS,
-            ...(cursor.pageToken ? { pageToken: cursor.pageToken } : {}) });
+            ...(pageToken ? { pageToken } : {}) });
           let j;
           try { j = await google.request(url, user); }
           catch (e) {
-            // Expired continuation tokens restart the same interval, never advance its cursor.
-            if (e.status === 400 && cursor.pageToken) cursor.pageToken = null;
+            if (e.status === 400 && pageToken && !retried) {
+              pageToken = undefined; retried = true; pageTokens.clear(); q = query();
+              boundaryTime = cursor.modifiedCursor; boundaryIds = new Set(cursor.boundaryIds || []);
+              continue;
+            }
             throw e;
           }
           if (!Array.isArray(j.files) || j.incompleteSearch) throw auditError('Drive 一覧が不完全（次回継続）');
-          if (j.files.some(f => !Array.isArray(f.permissions))) throw auditError('Drive permissions 未取得');
+          if (j.files.some(f => !Array.isArray(f.permissions) || !Number.isFinite(Date.parse(f.modifiedTime)))) throw auditError('Drive permissions/modifiedTime 未取得');
           for (const raw of j.files) {
+            if (raw.modifiedTime === boundaryTime && boundaryIds.has(raw.id)) continue;
             const file = { ...raw, owner: user }, external = file.permissions.filter(isExternalPermission);
             state.externalShareFiles[`${user}:${file.id}`] = external.map(p => ({ owner: user, type: p.type, domain: shareDomain(p) }));
-            count++;
+            count++; cursor.scannedCount = (cursor.scannedCount || 0) + 1;
             for (const p of external) {
               const key = permissionKey(file, p);
-              if (canDetect && !priorKeys.has(key) && !keys.has(key)) {
-                const finding = sharingFinding(file, p);
-                state.pendingExternalFindings[key] = finding;
-              }
+              if (canDetect && !priorKeys.has(key) && !keys.has(key)) state.pendingExternalFindings[key] = sharingFinding(file, p);
               keys.add(key);
             }
           }
+          if (j.files.length) {
+            const lastTime = j.files.at(-1).modifiedTime;
+            const ids = new Set(lastTime === cursor.modifiedCursor ? cursor.boundaryIds || [] : []);
+            for (const f of j.files) if (f.modifiedTime === lastTime) ids.add(f.id);
+            cursor.modifiedCursor = lastTime; cursor.boundaryIds = [...ids];
+            boundaryTime = lastTime; boundaryIds = ids;
+          }
           const next = j.nextPageToken || null;
+          // Save consumed pages even when the server repeats its token.
+          state.knownExternalShares = [...keys];
+          await save(state);
           if (next && pageTokens.has(next)) throw auditError('ページトークンが反復したため取得中断（再開位置あり・次回継続）');
-          cursor.pageToken = next;
+          pageToken = next;
           if (next) pageTokens.add(next);
           else {
             cursor.completedAt = new Date(nowMillis()).toISOString();
-            cursor.modifiedCursor = cursor.startedAt;
+            cursor.completedCursor = cursor.startedAt;
+            cursor.inProgress = false;
+            await save(state);
           }
-          state.knownExternalShares = [...keys];
-          await save(state);
-        } while (cursor.pageToken);
+        } while (pageToken || cursor.inProgress);
+
       }
 
-      sources[`drive-sharing:${user}`] = { status: 'ok', count, reason: `${baseline ? 'ベースライン構築（今回完了）' : '差分走査完了'}。所有ファイルのみ・共有ドライブ対象外` };
+      sources[`drive-sharing:${user}`] = { status: 'ok', count, resumedFrom, reason: `${baseline ? 'ベースライン構築（今回完了）' : '差分走査完了'}。所有ファイルのみ・共有ドライブ対象外` };
     } catch (e) {
       building = true;
-      sources[`drive-sharing:${user}`] = { status: 'unverified', count, reason: `${reason(e)}。${scan.pageToken || priority.pageToken ? '再開位置あり・次回継続' : '未完了区間を次回再試行'}。ベースライン構築中` };
+      sources[`drive-sharing:${user}`] = { status: 'unverified', count, resumedFrom, reason: `${reason(e)}。${scan.inProgress || priority.inProgress ? '再開位置あり・次回継続' : '未完了区間を次回再試行'}。ベースライン構築中` };
       // Incomplete user scans suppress individual findings. Retain these keys as unreported
       // so a completed later incremental scan can still report them.
 

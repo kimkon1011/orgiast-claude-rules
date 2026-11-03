@@ -93,7 +93,7 @@ Say ("optin(" + $optin + ")=" + $(if (Test-Path $optin) { (Get-Content $optin -R
 
 # 3. hook・タスクの収束と受信タスクの再登録（現在のユーザーで -Force）
 $setupOut = (& $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $repo 'tools\setup.mjs') --converge 2>&1 | Out-String)
-Say ("setup --converge: exit=" + $LASTEXITCODE + "`n" + (Tail $setupOut 6))
+Say ("setup --converge: exit=" + $LASTEXITCODE + "`n" + $setupOut.TrimEnd())
 $regOut = (& powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $repo 'tools\register-fleet-mail.ps1') 2>&1 | Out-String)
 Say ("register-fleet-mail: exit=" + $LASTEXITCODE + " " + (Tail $regOut 3))
 

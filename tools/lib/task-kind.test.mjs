@@ -38,3 +38,10 @@ test('null / undefined でも落ちず implement', () => {
   assert.equal(classifyTaskKind(null), 'implement');
   assert.equal(classifyTaskKind(undefined), 'implement');
 });
+
+test('CLI フラグやコード中の label を分類語と誤認せず、実行依頼は Codex 経路にする', () => {
+  const regression = '1. `node C:/x/check.mjs` を1回実行し、標準出力と終了コードを記録する 2. node tools/auto-progress.mjs --add-check --session S --check "node x" --deadline +7d --label "L" を1回実行する';
+  assert.ok(CODEX_KINDS.has(classifyTaskKind(regression)));
+  assert.equal(classifyTaskKind('run this command\nnode tools/check.mjs --label triage'), 'verify');
+  assert.equal(classifyTaskKind('READ-ONLY。読み取りだけで確認する。次の `node x` は実行しない。--label classify'), 'investigate');
+});

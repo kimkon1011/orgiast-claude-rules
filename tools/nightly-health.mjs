@@ -1,6 +1,8 @@
 #!/usr/bin/env node
+import { runStaleTaskHealth } from './stale-task-health.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import fs from 'node:fs';
+import { runAudit } from './unattended-job-audit.mjs';
 import { scan as scanStalls, asAnomalies } from './stall-scan.mjs';
 import { expectationLog, logIsStale } from './lib/health-signals.mjs';
 import { runConvergenceWatch } from './fleet-convergence-watch.mjs';
@@ -311,9 +313,11 @@ export async function runNightlyHealth({
   baselinePath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'nightly-health-baseline.json'),
   scheduledTaskInfo = getScheduledTaskInfo,
   streakWatch = runAutoSessionStreakWatch,
+  staleTaskHealth = runStaleTaskHealth,
   streakNotifyImpl,
   gasDrift = checkGasMasterDrift,
   convergenceWatch = runConvergenceWatch,
+  unattendedAudit = runAudit,
   stallScan = scanStalls
 } = {}) {
   const dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -324,6 +328,17 @@ export async function runNightlyHealth({
   const newOffsets = { ...oldOffsets };
   const anomalies = [];
   const dedicatedStreakAnomalies = new Set();
+  try { anomalies.push(...(await staleTaskHealth({ home, now, platform, dryRun: dryRun || prime })).anomalies); }
+  catch (error) { anomalies.push({ type: 'stale_task_error', label: '定期タスク参照先', message: error.message }); }
+  try {
+    const audit = await unattendedAudit({ home, now: now.getTime(), platform, dryRun: dryRun || prime });
+    for (const finding of audit.unresolved || []) {
+      const anomaly = { type: 'unattended_unresolved', label: '無人ジョブ監査', message: `未修復: ${finding.name}（${finding.reason}）` };
+      anomalies.push(anomaly);
+      dedicatedStreakAnomalies.add(anomaly);
+    }
+    if (audit.error) anomalies.push({ type: 'unattended_audit_error', label: '無人ジョブ監査', message: '計測不能' });
+  } catch { anomalies.push({ type: 'unattended_audit_error', label: '無人ジョブ監査', message: '計測不能' }); }
   try { anomalies.push(...asAnomalies(await stallScan({ home, now: now.getTime(), platform, expectations, save: !dryRun }))); }
   catch (error) { anomalies.push({ type: 'stall_scan_error', label: '停滞診断', message: error.message }); }
   try {
@@ -469,12 +484,12 @@ export async function runNightlyHealth({
   const visible = notificationAnomalies.slice(0, MAX_NOTIFICATION_ITEMS);
   let notificationText = `⚠️ 夜間ジョブ異常 ${notificationAnomalies.length}件\n`;
   for (const anomaly of visible) notificationText += `- ${anomaly.label}: ${anomaly.message}\n`;
-  if (notificationAnomalies.length > visible.length) notificationText += `…ほか ${notificationAnomalies.length - visible.length}件（node tools/nightly-health.mjs --dry-run で全件）\n`;
+  if (notificationAnomalies.length > visible.length) notificationText += `…ほか ${notificationAnomalies.length - visible.length}件（全件は Claude が点検ログで確認します）\n`;
   if (suppressedCount) notificationText += `（既知の赤 ${suppressedCount}件は baseline により抑制）\n`;
   if (unregisteredLogs.length) {
     notificationText += `（未登録のログ ${unregisteredLogs.length}件: ${unregisteredLogs.slice(0, 5).join(', ')}）\n`;
   }
-  notificationText += '確認コマンド: node tools/nightly-health.mjs';
+  notificationText += '確認: Claude が夜間点検ログを確認します';
 
   const hash = crypto.createHash('sha256').update(notificationText).digest('hex');
   const statePath = path.join(home, '.claude', '.nightly-health-state.json');

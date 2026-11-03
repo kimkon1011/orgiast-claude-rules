@@ -29,7 +29,7 @@ function runWithDataAge(days) {
   try {
     return execFileSync(process.execPath, [script], {
       encoding: 'utf-8',
-      env: { ...process.env, HOME: home, USERPROFILE: home },
+      env: { ...process.env, HOME: home, USERPROFILE: home, ORGIAST_HOME: home },
     });
   } finally {
     fs.rmSync(home, { recursive: true, force: true });

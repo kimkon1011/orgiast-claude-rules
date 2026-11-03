@@ -1,4 +1,5 @@
 // Host discovery is kept separate so --dry-run never starts a process.
+import { wslInstalled as present } from './wsl-present.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -9,8 +10,8 @@ import { pickDistro } from './codex-wsl-auth-sync.mjs';
 export const WSL_PROBE_TIMEOUT_MS = 60_000;
 const NO_STDIN = ['ignore', 'pipe', 'pipe'];
 
-export function discoverWsl({ platform = process.platform, spawnImpl = spawnSync } = {}) {
-  if (platform !== 'win32') return null;
+export function discoverWsl({ platform = process.platform, spawnImpl = spawnSync, wslInstalled = present } = {}) {
+  if (platform !== 'win32' || !wslInstalled({ platform })) return null;
   const list = spawnImpl('wsl', ['-l', '-q'], { encoding: 'utf16le', timeout: WSL_PROBE_TIMEOUT_MS, windowsHide: true, stdio: NO_STDIN });
   const distro = list.status === 0 ? pickDistro(list.stdout) : null;
   if (!distro) return null;

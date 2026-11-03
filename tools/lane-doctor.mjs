@@ -1,17 +1,25 @@
 #!/usr/bin/env node
+import { wslInstalled } from './lib/wsl-present.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
-import { codexAuthStatus } from './codex-auth-status.mjs';
+import { codexAuthStatusAny } from './codex-auth-status.mjs';
 import { loadEnvKey, loadGeminiKey, loadDeepseekKey } from './codex-do.mjs';
 import { providerResetUntil } from './codex-cooldown.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { redactAll } from './lib/redact.mjs';
+import { catalog } from './provider-catalog.mjs';
+import { applyRealLaneHealth, billingFailure, quotaFailure } from './lib/lane-real-health.mjs';
+import { readEnvValue } from './env-kv.mjs';
+import { isEnrollToken, validKeyservePcId } from './keyserve-auth.mjs';
 
 export const PROVIDERS = ['codex', 'gemini', 'deepseek', 'glm', 'groq', 'openrouter'];
+// 任意レーン: キーがあるPCだけ実測する（2026-10-29 mistral 既定モデル 403 が未監視で放置された）。
+export const OPTIONAL_PROVIDERS = ['mistral', 'grok'];
+const isLane = p => PROVIDERS.includes(p) || OPTIONAL_PROVIDERS.includes(p);
 export const laneHome = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
 const repo = fileURLToPath(new URL('../', import.meta.url));
 export function readJson(file, fallback = {}) {
@@ -51,77 +59,116 @@ function executable(name) {
     try { fs.accessSync(path.join(dir, name + ext), fs.constants.X_OK); return true; } catch { return false; }
   }));
 }
-function orders(health) {
+const REPAIR_STEPS = ['node tools/lane-doctor.mjs --probe で停止原因を確認し、その場で修復する'];
+const KEYSERVE_STEPS = ['1) node tools/keyserve-status.mjs で確認', '2) ~/.claude/enroll.env があれば node tools/onboarding-sync.mjs --force', '3) 無ければ依頼して待たず、当ターンで ListAgents → issuer PC（ORGIAST_ENROLL_ISSUER_PCS 登録PC=kim-PC 等。keyserve-status の 200 は issuer の証拠にならない）のセッションへ SendMessage し node tools/keyserve-enroll.mjs --pc <このPC> --ttl-hours 2 --json を即実行させ、返った1行コマンドを Claude が実行する（kim への通知は並行の保険）', '4) node tools/lane-doctor.mjs --probe で復旧確認。復旧するまで通常タスクに戻らない'];
+function keyserveEnrolled(home, env = process.env) {
+  const secret = env.ORGIAST_KEYSERVE_SECRET || readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET');
+  return Boolean(secret && !isEnrollToken(secret));
+}
+function orders(health, home = laneHome()) {
   health.implementOrder = ['codex', 'deepseek', 'glm', 'gemini-cli'].filter(p => health.lanes[p]?.alive);
   health.askOrder = ['gemini', 'deepseek', 'groq', 'openrouter'].filter(p => health.lanes[p]?.alive);
-  health.deadNeedsUser = Object.entries(health.lanes).filter(([p, s]) => PROVIDERS.includes(p) && /^(?:dead:)?(?:payment_required|oauth_consent|account_creation|physical_operation)$/.test(s.reason))
+  // 旧 payment_required の扱いは維持し、billing は専用の日次通知と代替ルートに回す。
+  const billing = readJson(path.join(repo, 'tools/provider-billing.json'));
+  const needsUser = ([p, s]) => isLane(p) && /^(?:dead:)?(?:payment_required|oauth_consent|account_creation|physical_operation)$/.test(s.reason)
+    && !(s.reason.includes('payment') && billing[p]?.autoTopUp === false);
+health.substituted = Object.entries(health.lanes).filter(([p, s]) => isLane(p) && (s.reason === 'billing' || s.reason?.includes('payment') && billing[p]?.autoTopUp === false && health.lanes.openrouter?.alive))
+    .map(([provider]) => ({ provider, via: 'openrouter' }));
+  for (const { provider, via } of health.substituted) health.lanes[provider].via = via;
+  health.deadNeedsUser = Object.entries(health.lanes).filter(needsUser)
     .map(([provider, s]) => ({ provider, reason: s.reason, tried: s.tried, fix: s.userFix || (s.reason.includes('payment') ? '請求設定でオートチャージ ON。手動チャージは禁止ルール。' : '本人アカウントで認証画面を開き OAuth 同意を完了する。') }));
+  const missing = Object.entries(health.lanes).filter(([p, s]) => PROVIDERS.includes(p) && s.reason === 'missing_key').map(([p]) => p);
+  const reasons = [...(!health.askOrder.length ? ['ask_order_empty'] : []), ...(!health.implementOrder.length ? ['implement_order_empty'] : []), ...(missing.length ? [`missing_key:${missing.join(',')}`] : [])];
+  const unenrolled = missing.length > 0 && !keyserveEnrolled(home);
+  if (unenrolled) {
+    reasons.push('keyserve_unenrolled');
+    health.deadNeedsUser.push({ provider: 'keyserve', reason: 'keyserve_unenrolled', fix: 'kim-PC で enroll トークンを発行し、返信された1行コマンドを Claude が実行する。' });
+  }
+  health.repairFirst = { required: reasons.length > 0, reasons, steps: unenrolled ? KEYSERVE_STEPS : reasons.length ? REPAIR_STEPS : [] };
   return health;
 }
 function persist(file, value, health) {
   try { atomicJson(file, value); return true; } catch (e) { health.errors.push(`${path.basename(file)}: ${e.code || 'write_failed'}`); return false; }
 }
-export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = true } = {}) {
+export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = true, platform = process.platform, spawnImpl = spawnSync } = {}) {
   const dir = path.join(home, '.claude');
   const old = readJson(path.join(dir, 'lane-health.json'));
   const health = { ts: new Date(now).toISOString(), probedAt: old.probedAt || null, lanes: {}, implementOrder: [], askOrder: [], repairs: (old.repairs || []).filter(r => typeof r === 'string' && old.lanes?.codex?.alive), deadNeedsUser: [], errors: [], ignored: [] };
   const cooldown = readJson(path.join(dir, 'provider-cooldown.json')), routing = readJson(path.join(dir, 'routing-overrides.json'));
-  const limits = [...history(home, 'provider-limit-history.jsonl'), ...history(home, 'codex-limit-history.jsonl').map(x => ({ ...x, provider: 'codex' }))].filter(x => {
+  const limits = [...history(home, 'provider-limit-history.jsonl'), ...history(home, 'codex-limit-history.jsonl').filter(x => !x.provider || x.provider === 'codex').map(x => ({ ...x, provider: 'codex' }))].filter(x => {
     if (time(x.until) > now + MAX_HISTORY_RESET_MS) {
       health.ignored.push({ provider: x.provider, reason: 'until_beyond_7d', until: x.until });
       return false;
     }
     return true;
   });
+  const expiredBlocks = new Set();
   for (const [name, state] of [['provider-cooldown.json', cooldown], ['routing-overrides.json', routing.demote || {}]]) {
     const repairs = [], removed = {};
     for (const p of PROVIDERS) {
       const until = time(name.startsWith('routing') ? state[p]?.until ?? state[p] : state[p]?.until);
-      if (state[p] !== undefined && Number.isFinite(until) && until <= now) { removed[p] = state[p]; delete state[p]; repairs.push({ provider: p, action: name.startsWith('routing') ? 'demote_removed' : 'cooldown_removed', detail: '期限切れ' }); }
+      if (state[p] !== undefined && Number.isFinite(until) && until <= now) { removed[p] = state[p]; delete state[p]; expiredBlocks.add(p); repairs.push({ provider: p, action: name.startsWith('routing') ? 'demote_removed' : 'cooldown_removed', detail: '期限切れ' }); }
     }
     if (repairs.length) {
-      if (persist(path.join(dir, name), name.startsWith('routing') ? routing : cooldown, health)) health.repairs.push(...repairs);
+      if (!save || persist(path.join(dir, name), name.startsWith('routing') ? routing : cooldown, health)) health.repairs.push(...repairs);
       else Object.assign(state, removed);
     }
   }
-  const keys = { gemini: loadGeminiKey(home), deepseek: loadDeepseekKey(home), glm: loadEnvKey(home, 'zai.env', 'ZAI_API_KEY'), groq: loadEnvKey(home, 'groq.env', 'GROQ_API_KEY'), openrouter: loadEnvKey(home, 'openrouter.env', 'OPENROUTER_API_KEY') };
-  for (const p of PROVIDERS) {
-    const configured = p === 'codex' ? codexAuthStatus(home).login : !!keys[p];
-    const previous = old.lanes?.[p] || {}, evidence = probeHistory(previous);
+  const keys = { gemini: loadGeminiKey(home), deepseek: loadDeepseekKey(home), glm: loadEnvKey(home, 'zai.env', 'ZAI_API_KEY'), groq: loadEnvKey(home, 'groq.env', 'GROQ_API_KEY'), openrouter: loadEnvKey(home, 'openrouter.env', 'OPENROUTER_API_KEY'), mistral: loadEnvKey(home, 'mistral.env', 'MISTRAL_API_KEY'), grok: loadEnvKey(home, 'xai.env', 'XAI_API_KEY') };
+  for (const p of [...PROVIDERS, ...OPTIONAL_PROVIDERS.filter(o => keys[o])]) {
+    const configured = p === 'codex' ? codexAuthStatusAny(home, { platform, spawnImpl }).login : !!keys[p];
+    const previous = { ...(old.lanes?.[p] || {}) }, evidence = probeHistory(previous);
+    // A cached quota label/until alone is not provider-local evidence.
+    if (/quota_wait|cooldown|usage_limit/.test(previous.reason || '') && !quotaFailure(previous.error)) {
+      previous.alive = configured;
+      previous.reason = configured ? 'configured:unprobed' : 'missing_key';
+      delete previous.until;
+    }
     const recent = limits.filter(x => x.provider === p && time(x.until) > now && !(time(evidence.lastProbeOkAt) >= time(x.t ?? x.ts ?? x.at))).at(-1);
     const blocked = cooldown[p] || recent;
     let state = { alive: configured, reason: configured ? 'configured:unprobed' : p === 'codex' ? 'dead:oauth_consent' : 'missing_key' };
-    if (old.lanes?.[p]?.reason === 'dead:payment_required' || (old.lanes?.[p]?.reason === 'dead:physical_operation' && old.lanes?.[p]?.error)) state = { ...old.lanes[p] };
+const paymentFresh = old.lanes?.[p]?.reason === 'dead:payment_required' && Number.isFinite(time(old.lanes[p].probedAt)) && now - time(old.lanes[p].probedAt) < 86400_000;
+    if (old.lanes?.[p]?.reason === 'billing' || paymentFresh || (old.lanes?.[p]?.reason === 'dead:physical_operation' && old.lanes?.[p]?.error)) state = { ...previous };
     else if (blocked && time(blocked.until) > now) state = { alive: false, reason: blocked.reason || 'cooldown', until: blocked.until };
     else if (routing.demote?.[p]) state = { alive: false, reason: 'demoted', until: routing.demote[p]?.until ?? routing.demote[p] };
-    else if (configured && freshProbe(old.lanes?.[p]?.probedAt, now) && !(old.lanes[p].until && time(old.lanes[p].until) <= now)) state = { ...old.lanes[p] };
+    else if (configured && /cooldown|usage[_ ]?limit/i.test(evidence.probeReason || '') && (expiredBlocks.has(p) || !previous.until || time(previous.until) <= now)) state = { alive: false, reason: 'configured:unprobed' };
+    else if (configured && old.lanes?.[p]?.reason === 'dead:payment_required') state = { alive: false, reason: 'configured:unprobed' };
+    else if (configured && freshProbe(old.lanes?.[p]?.probedAt, now) && !(old.lanes[p].until && time(old.lanes[p].until) <= now)) state = { ...previous };
     else if (configured && evidence.lastProbeOkAt && !/^(?:auth_ok:)?probe_ok(?::stale)?$|^native_ok$/.test(evidence.probeReason || '')) state = { alive: false, reason: 'probe_failed:stale' };
     else if (configured && evidence.lastProbeOkAt) state = { alive: true, reason: 'probe_ok:stale' };
     else if (configured && evidence.probedAt) state = previous.until && time(previous.until) <= now
       ? { alive: true, reason: 'probe_expired' } : { ...previous };
     health.lanes[p] = { ...state, ...evidence };
   }
+  applyRealLaneHealth(health, home, now);
   // API key の生存と CLI の有無は別条件。CLI が無い場合は実装候補にしない。
   health.lanes['gemini-cli'] = { ...health.lanes.gemini, alive: health.lanes.gemini.alive && executable('gemini'), reason: executable('gemini') ? health.lanes.gemini.reason : 'cli_missing' };
-  orders(health);
-  if (save) persist(path.join(dir, 'lane-health.json'), health, health);
+orders(health, home);
+  if (!health.lanes.deepseek.alive && health.lanes.deepseek.reason === 'dead:payment_required' && health.lanes.openrouter?.alive) health.lanes.deepseek.via = 'openrouter';
+  if (save) { demoteBilling(health, home, now); persist(path.join(dir, 'lane-health.json'), health, health); }
   return health;
 }
 // WSL の列挙失敗はディストリ無しと決めつけない。
 export function listWslDistros() {
+  if (!wslInstalled()) return '';
   const r = spawnSync('wsl', ['-l', '-q'], { encoding: 'utf16le', windowsHide: true, timeout: 15000 });
   return r.status === 0 ? String(r.stdout || '').replace(/\0/g, '').trim() : null;
 }
+export function nativeWriteProbeArgs({ repo, cwd, timeoutMs, instruction }) {
+  // --kind を明示しないと codex-do が investigate と判定し llm-ask へ流れ、書き込み不能でレーン死亡と誤判定する（2026-10-22 実測）。
+  return [path.join(repo, 'tools/codex-do.mjs'), instruction, '--cwd', cwd, '--kind', 'implement', '--force-native', '--no-fallback', '--no-escalate', '--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))];
+}
 export async function runNativeWriteProbe({ home, timeoutMs }) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-codex-write-'));
-  const run = (cmd, args) => new Promise(resolve => execFile(cmd, args, { cwd, env: { ...process.env, ORGIAST_HOME: home }, timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 }, (e) => resolve({ code: e ? 1 : 0 })));
+  const run = (cmd, args) => new Promise(resolve => execFile(cmd, args, { cwd, env: { ...process.env, ORGIAST_HOME: home }, timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 }, (e, stdout, stderr) => resolve({ code: e ? 1 : 0, text: `${stdout}\n${stderr}` })));
   try {
     const init = await run('git', ['init', '--quiet']);
     if (init.code) return init;
-    const result = await run(process.execPath, [path.join(repo, 'tools/codex-do.mjs'), 'WRITE_OK.txt を作成し、内容を WRITE_OK にしてください。その後ファイルを読み返して確認してください。', '--cwd', cwd, '--force-native', '--no-fallback', '--no-escalate', '--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))]);
+    const instruction = 'WRITE_OK.txt を作成し、内容を WRITE_OK にしてください。その後ファイルを読み返して確認してください。';
+    const result = await run(process.execPath, nativeWriteProbeArgs({ repo, cwd, timeoutMs, instruction }));
     let ok = false;
     try { ok = fs.readFileSync(path.join(cwd, 'WRITE_OK.txt'), 'utf8').trim() === 'WRITE_OK'; } catch {}
-    return { code: result.code === 0 && ok ? 0 : 1, text: ok ? 'WRITE_OK' : '書き込み確認失敗' };
+    return { code: result.code === 0 && ok ? 0 : 1, text: ok ? 'WRITE_OK' : `書き込み確認失敗 ${result.text || ''}` };
   } finally { fs.rmSync(cwd, { recursive: true, force: true }); }
 }
 export function runProbe(provider, { home, timeoutMs, dryRun = false } = {}) {
@@ -131,6 +178,11 @@ export function runProbe(provider, { home, timeoutMs, dryRun = false } = {}) {
   return new Promise(resolve => execFile(process.execPath, args, { cwd: repo, env: { ...process.env, ORGIAST_HOME: home }, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 256 * 1024, windowsHide: true }, (e, stdout, stderr) => resolve({ code: e ? e.code || 1 : 0, text: redactAll(`${stdout}\n${stderr}`) })));
 }
 export function notificationText(item, home) {
+  if (item.reason === 'keyserve_unenrolled') {
+    const hostname = os.hostname(), pc = validKeyservePcId(hostname) ? hostname : 'PC名要指定', user = os.userInfo().username;
+    return `${hostname}（OSユーザー: ${user}）は keyserve 未登録のため安価AIレーンの鍵を取得できません。Claude が kim-PC 側で登録コマンドを発行します。対象PCでその1行を貼り付けて承認すると、Claude が復旧確認まで行います。`;
+  }
+  if (item.reason === 'billing') return `${os.hostname()} の ${item.provider} が残高不足(402)。入金（オートチャージON）が既定（CLAUDE.md 他AI節）。それまで OpenRouter 経由へ回しています`;
   if (item.tried) return `${item.provider} が停止しています（原因: WSL ディストリ不在・ネイティブ書き込み probe 失敗）。試した修復: ${item.tried}。残る操作: ${item.fix}`;
   if (item.provider === 'gemini') {
     let owner = '未確認';
@@ -146,18 +198,27 @@ export function notificationText(item, home) {
 6. 失敗時: 402 が続けばキー所有アカウントが別の可能性。「Gemini まだ 402」と Claude に一言。
 根拠: https://ai.google.dev/gemini-api/docs/billing`;
   }
-  const urls = { codex: 'https://chatgpt.com/', deepseek: 'https://platform.deepseek.com/', glm: 'https://z.ai/', groq: 'https://console.groq.com/', openrouter: 'https://openrouter.ai/' };
-  const account = item.provider === 'codex' ? codexAuthStatus(home).email || 'kim@orgiast.jp（保存認証のアカウントは未確認）' : '契約したアカウント（キー所有者は未確認）';
-  return `${item.provider} が停止しています（${item.reason}）。1. ${urls[item.provider]} を ${account} で開く。2. アカウント表示を確認する。3. ${item.reason.includes('payment') ? '請求設定を開き支払い方法を確認し、オートチャージ ON を設定して保存する（手動チャージは禁止ルール）。' : 'Codex を開きログインを選択する。ブラウザーで同じアカウントを選び、OAuth の同意内容を確認して許可する。'}4. 完了後は Claude が lane-doctor --probe で復旧を確認します。`;
+  const urls = { codex: 'https://chatgpt.com/', deepseek: 'https://platform.deepseek.com/', glm: 'https://z.ai/', groq: 'https://console.groq.com/', openrouter: 'https://openrouter.ai/', mistral: 'https://console.mistral.ai/', grok: 'https://console.x.ai/' };
+  // 所有アカウントはカタログを正本にする。固定文の「未確認」で送ると kim がどこで開くか分からない（2026-10-25 DeepSeek 停止通知）。
+  const owner = catalog.find(s => s.id === item.provider)?.account;
+  const account = item.provider === 'codex' ? codexAuthStatusAny(home, item.authOptions).email || 'kim@orgiast.jp（保存認証のアカウントは未確認）'
+    : owner || '[ACCOUNT-UNKNOWN] 契約アカウント（tools/ai-subscription-catalog.json に account 未登録）';
+  // URL は行末に置き、直後に日本語を続けない（Discord のリンク範囲が日本語まで伸びて壊れる）。
+  return `${item.provider} が停止しています（${item.reason}）。
+1. **${account}** で開く: ${urls[item.provider]}
+2. 右上のアカウント表示が **${account}** か確認する。
+3. ${item.reason.includes('payment') ? '請求設定を開き支払い方法を確認し、オートチャージ ON を設定して保存する（手動チャージは禁止ルール）。' : 'Codex を開きログインを選択する。ブラウザーで同じアカウントを選び、OAuth の同意内容を確認して許可する。'}
+4. 完了後は Claude が lane-doctor --probe で復旧を確認します。`;
 }
-export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe } = {}) {
+export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe, spawnImpl = spawnSync, providers = PROVIDERS } = {}) {
   const started = Date.now(), dir = path.join(home, '.claude');
-  const health = laneDoctorQuick({ home, now, save: false });
+  const health = laneDoctorQuick({ home, now, save: false, platform, spawnImpl });
   const previous = readJson(path.join(dir, 'lane-health.json'));
   const probeBudget = Math.max(1, budgetMs - 5000);
   // 各 provider を並行実測し、一つの停止レーンで90秒枠を使い切らない。
-  const results = await Promise.all(PROVIDERS.map(async p => {
-    if (health.lanes[p].reason === 'missing_key' || (p === 'codex' && !codexAuthStatus(home).login)) return [p, null];
+  const probeProviders = providers.length ? providers : [...PROVIDERS, ...OPTIONAL_PROVIDERS.filter(o => health.lanes[o])];
+  const results = await Promise.all(probeProviders.map(async p => {
+    if (health.lanes[p].reason === 'missing_key' || (p === 'codex' && !codexAuthStatusAny(home, { platform, spawnImpl }).login)) return [p, null];
     if (p === 'codex') {
       if (platform === 'win32' && await listWsl() === '') {
         let result;
@@ -167,7 +228,8 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       }
       const dry = await probe(p, { home, timeoutMs: Math.min(15000, probeBudget), dryRun: true });
       if (dry.code !== 0) return [p, dry];
-      if (freshProbe(previous.lanes?.codex?.probedAt, now)) return [p, { cached: previous.lanes.codex }];
+      // 再利用は成功結果だけ。失敗を30分使い回すと直後に直ったレーンが停止のまま残る（2026-10-25 実測: 直接実行は PONG なのに probe_failed）。
+      if (previous.lanes?.codex?.alive && freshProbe(previous.lanes.codex.probedAt, now)) return [p, { cached: previous.lanes.codex }];
     }
     return [p, { ...await probe(p, { home, timeoutMs: Math.max(1, probeBudget - (Date.now() - started)) }), ...(p === 'codex' ? { authOk: true } : {}) }];
   }));
@@ -187,47 +249,77 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       if (routing.demote?.[p] !== undefined) { delete routing.demote[p]; routingChanged = true; health.repairs.push({ provider: p, action: 'demote_removed', detail: '実測成功' }); }
       if (cooldown[p]) { delete cooldown[p]; cooldownChanged = true; health.repairs.push({ provider: p, action: 'cooldown_removed', detail: '実測成功' }); }
     } else {
-      const payment = /HTTP\s*402\b|credits are depleted|insufficient/i.test(text);
-      const limited = /HTTP\s*429\b|usage limit|RESOURCE_EXHAUSTED|rate.limit/i.test(text);
-      health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: payment ? 'dead:payment_required' : limited ? 'cooldown' : /HTTP\s*401|unauthorized|login required|token.*expired/i.test(text) ? (p === 'codex' ? 'dead:oauth_consent' : 'auth_invalid') : /Read-only file system|EROFS/i.test(text) ? 'execution_unavailable:read_only' : 'probe_failed', probedAt: stamp, ...(result.authOk ? { authOk: true } : {}) };
+      const limited = quotaFailure(text);
+      const payment = billingFailure(text) && !limited;
+      // codex-do が利用枠クールダウンで保留(exit 75)した場合は WSL 問題ではなく枠切れ。クールダウン自体は既存のまま触らない。
+      const deferred = /codex_cooldown/.test(text);
+      health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: payment ? 'billing' : (limited || deferred) ? 'cooldown' : /HTTP\s*401|unauthorized|login required|token.*expired/i.test(text) ? (p === 'codex' ? 'dead:oauth_consent' : 'auth_invalid') : /Read-only file system|EROFS/i.test(text) ? 'execution_unavailable:read_only' : 'probe_failed', probedAt: stamp, ...(result.authOk ? { authOk: true } : {}) };
       // 失敗の中身を必ず残す（2026-10-15 作業用011: 理由が記録されず原因を追えなかった）
       health.lanes[p].error = String(text || '').replace(/(sk-|eyJ)[A-Za-z0-9._-]{8,}/g, '$1***').replace(/\s+/g, ' ').trim().slice(-400);
       // native の失敗でも、認証・上限・課金が原因なら physical_operation（再起動が要る）と誤判定しない
       if (result.nativeRepair && health.lanes[p].reason === 'probe_failed') Object.assign(health.lanes[p], { reason: 'dead:physical_operation', tried: 'Windows ネイティブ(danger-full-access)でファイル作成・read-back', userFix: '管理者 PowerShell で wsl.exe --install --no-distribution を実行して Windows を再起動する。' });
       health.lanes[p].probeReason = health.lanes[p].reason;
+      if (deferred && cooldown[p]?.until) health.lanes[p].until = cooldown[p].until;
       if (limited && !payment) { const until = providerResetUntil(text, now); cooldown[p] = { until, at: now, reason: 'lane_doctor_usage_limit' }; cooldownChanged = true; health.lanes[p].until = until; }
     }
   }
   if (routingChanged && !persist(path.join(dir, 'routing-overrides.json'), routing, health)) health.repairs = health.repairs.filter(r => r.action !== 'demote_removed' || r.detail !== '実測成功');
   if (cooldownChanged && !persist(path.join(dir, 'provider-cooldown.json'), cooldown, health)) health.repairs = health.repairs.filter(r => r.action !== 'cooldown_removed' || r.detail !== '実測成功');
   health.probedAt = new Date(now).toISOString();
+  applyRealLaneHealth(health, home, now);
   health.lanes['gemini-cli'] = { ...health.lanes.gemini, alive: health.lanes.gemini.alive && executable('gemini') };
-  orders(health);
+  orders(health, home);
+  demoteBilling(health, home, now);
+  await notifyLaneStops(health, { home, now, notify, budgetMs, started, platform, spawnImpl });
+  persist(path.join(dir, 'lane-health.json'), health, health);
+  return health;
+}
+export function demoteBilling(health, home, now = Date.now()) {
+  const billing = Object.entries(health.lanes).filter(([p, s]) => isLane(p) && s.reason === 'billing');
+  if (!billing.length) return;
+  const file = path.join(home, '.claude/routing-overrides.json'), routing = readJson(file);
+  routing.demote ||= {};
+  for (const [p] of billing) routing.demote[p] = new Date(now + 86400_000).toISOString();
+  persist(file, routing, health);
+  const cooldownFile = path.join(home, '.claude/provider-cooldown.json'), cooldown = readJson(cooldownFile);
+  for (const [p] of billing) cooldown[p] = { until: now + 86400_000, at: now, reason: 'billing' };
+  persist(cooldownFile, cooldown, health);
+}
+export async function notifyLaneStops(health, { home = laneHome(), now = Date.now(), notify = notifyKim, budgetMs = 5000, started = Date.now(), platform = process.platform, spawnImpl = spawnSync } = {}) {
+  const dir = path.join(home, '.claude');
   health.notifications = [];
   const notifiedFile = path.join(dir, 'lane-doctor-notified.json'), notified = readJson(notifiedFile);
-  for (const item of health.deadNeedsUser) {
-    if (now - time(notified[item.provider]) < 86400_000) { health.notifications.push({ provider: item.provider, delivered: 'deduped' }); continue; }
+  for (const item of [...health.deadNeedsUser, ...Object.entries(health.lanes).filter(([p, s]) => isLane(p) && s.reason === 'billing').map(([provider]) => ({ provider, reason: 'billing' }))]) {
+    if (item.reason === 'billing' ? String(notified[item.provider] || '').slice(0, 10) === new Date(now).toISOString().slice(0, 10) : now - time(notified[item.provider]) < 86400_000) { health.notifications.push({ provider: item.provider, delivered: 'deduped' }); continue; }
     // 送信前にdedupeを確保。永続化できない環境からは繰り返しDMを送らない。
     const before = notified[item.provider]; notified[item.provider] = new Date(now).toISOString();
     if (!persist(notifiedFile, notified, health)) { health.notifications.push({ provider: item.provider, delivered: 'none', reason: 'dedupe_write_failed' }); continue; }
     const remaining = budgetMs - (Date.now() - started);
     let timer;
-    const delivery = remaining > 0 ? await Promise.race([notify(notificationText(item, home), { home, webhookFallback: false, signal: AbortSignal.timeout(Math.max(1, remaining)) }).catch(() => ({ delivered: 'none', reason: 'notification_failed' })), new Promise(resolve => { timer = setTimeout(() => resolve({ delivered: 'unknown', reason: 'deadline' }), remaining); })]).finally(() => clearTimeout(timer)) : { delivered: 'none', reason: 'deadline' };
+    const delivery = remaining > 0 ? await Promise.race([notify(notificationText({ ...item, authOptions: { platform, spawnImpl } }, home), { home, webhookFallback: false, signal: AbortSignal.timeout(Math.max(1, remaining)) }).catch(() => ({ delivered: 'none', reason: 'notification_failed' })), new Promise(resolve => { timer = setTimeout(() => resolve({ delivered: 'unknown', reason: 'deadline' }), remaining); })]).finally(() => clearTimeout(timer)) : { delivered: 'none', reason: 'deadline' };
     health.notifications.push({ provider: item.provider, ...delivery });
     if (delivery.delivered === 'none') { if (before === undefined) delete notified[item.provider]; else notified[item.provider] = before; persist(notifiedFile, notified, health); }
   }
-  persist(path.join(dir, 'lane-health.json'), health, health);
-  return health;
 }
 export function summarize(health) {
-  const alive = Object.entries(health.lanes).filter(([,s]) => s.alive).map(([p,s]) => `${p} ✅${s.reason === 'probe_ok:stale' ? `(stale ${Math.floor((time(health.ts) - time(s.lastProbeOkAt)) / 60000)}m)` : ''}`).join(' ') || 'なし';
-  const dead = Object.entries(health.lanes).filter(([,s]) => !s.alive).map(([p,s]) => `${p} ❌(${s.reason === 'probe_failed:stale' ? `probe_failed, 前回OK ${s.lastProbeOkAt.slice(0, 10)}` : s.reason})`).join(' ') || 'なし';
-  return `生存: ${alive} ／ 停止: ${dead} ／ 修復: ${health.repairs.map(r => typeof r === 'string' ? r : `${r.provider} ${r.action}`).join(', ') || 'なし'}${health.errors.length ? ` ／ 保存エラー: ${health.errors.join(', ')}` : ''}`;
+  const substituted = ([, s]) => !s.alive && s.via === 'openrouter' && health.lanes.openrouter?.alive;
+  const alive = Object.entries(health.lanes).filter((entry) => entry[1].alive || substituted(entry)).map(([p,s]) => substituted([p, s]) ? `${p} ✅(OpenRouter経由)` : `${p} ✅${s.reason === 'probe_ok:stale' ? `(stale ${Math.floor((time(health.ts) - time(s.lastProbeOkAt)) / 60000)}m)` : ''}`).join(' ') || 'なし';
+  const dead = Object.entries(health.lanes).filter((entry) => !entry[1].alive && !substituted(entry)).map(([p,s]) => {
+    const reason = s.reason === 'probe_failed:stale' ? `probe_failed, 前回OK ${s.lastProbeOkAt?.slice(0, 10) || 'なし'}` : s.reason;
+    const user = health.deadNeedsUser?.find(x => x.provider === p);
+    const next = s.autoProbeStarted ? '自動再確認中' : Number.isFinite(time(s.until)) && time(s.until) > time(health.ts) ? `復帰予定 ${new Date(time(s.until)).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).replace(/^\d{4}\//, '')} JST` : user ? `要対応: ${String(user.fix).replace(/\s+/g, ' ').slice(0, 80)}` : '自動再確認待ち';
+    return `${p} ❌(${reason})(${next})`;
+  }).join(' ') || 'なし';
+  const summary = `生存: ${alive} ／ 停止: ${dead} ／ 修復: ${health.repairs.map(r => typeof r === 'string' ? r : `${r.provider} ${r.action}`).join(', ') || 'なし'}${health.errors.length ? ` ／ 保存エラー: ${health.errors.join(', ')}` : ''}`;
+  return health.repairFirst?.required ? `${summary}\n🛑 安価AIレーン停止（${health.repairFirst.reasons.join(', ')}）: 絶対ルール — 最優先でこの場で修復する。修復（または人にしかできない操作の依頼送信）が済むまで通常タスクに着手しない。手順: ${health.repairFirst.steps.join(' ')}` : summary;
 }
 export async function main(args = process.argv.slice(2)) {
   const h = args.indexOf('--home'), home = h >= 0 ? args[h + 1] : laneHome();
+  const p = args.indexOf('--provider'), providers = p >= 0 ? [args[p + 1]] : PROVIDERS;
   if (!home) throw new Error('--home requires a directory');
-  const result = args.includes('--probe') ? await laneDoctorProbe({ home }) : laneDoctorQuick({ home });
+if (p >= 0 && !PROVIDERS.includes(args[p + 1])) throw new Error('--provider requires a known provider');
+  const result = args.includes('--probe') ? await laneDoctorProbe({ home, providers }) : laneDoctorQuick({ home, save: !args.includes('--read-only') });
+  if (!args.includes('--probe') && !args.includes('--read-only')) await notifyLaneStops(result, { home });
   if (args.includes('--json')) console.log(JSON.stringify(result));
   else { console.log(summarize(result)); console.log(JSON.stringify(result)); }
   if (result.errors.length) process.exitCode = 1;

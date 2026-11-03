@@ -28,6 +28,7 @@ test("parseArgs: 既定値とオプションを解釈する", () => {
     threadId: "123456",
     maxScrolls: DEFAULT_MAX_SCROLLS,
     out: null,
+    untilKnown: false,
     error: null,
   });
   assert.equal(parseArgs(["123456", "--max-scrolls", "10"]).maxScrolls, 10);
@@ -341,4 +342,76 @@ test("main: 引数不正は exit 1", async () => {
   const code = await main([], { stdout: () => {}, stderr: (line) => errors.push(line) });
   assert.equal(code, 1);
   assert.match(errors.join("\n"), /スレッドID/);
+});
+
+test('--until-known: 20種類の保存済みキーを1回のスナップショットで見た時だけ止める', () => {
+  assert.equal(parseArgs(['123', '--until-known']).untilKnown, true);
+  const known = Array.from({ length: 30 }, (_, i) => ({ key: String(i) }));
+  const tracker = createScrollTracker({ knownKeys: known.map(m => m.key) });
+  assert.equal(tracker.record(19, known.slice(0, 19)).stop, false);
+  assert.equal(tracker.record(30, known.slice(19)).stop, false);
+  assert.equal(tracker.record(31, Array(20).fill(known[0])).stop, false);
+  assert.equal(tracker.record(32, known.slice(0, 20)).reason, 'known-reached');
+  assert.equal(createScrollTracker().record(30, known).stop, false);
+});
+
+test('main: 保存済みログと最新画面を保持し、既知に届いたら1回で止まる', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'messenger-known-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const rows = Array.from({ length: 21 }, (_, i) => ({ sender: 'A', text: `投稿${i}`, time: `2026-10-10T10:${String(i).padStart(2, '0')}:00Z` }));
+  const saved = parseMessageRows(rows);
+  const file = defaultOutPath(home, '123');
+  writeJsonl(file, saved);
+  let snapshots = 0, closed = false;
+  const page = makePage();
+  page.evaluate = async fn => {
+    const source = String(fn);
+    if (source.includes('input[type="password"]')) return false;
+    if (source.includes('scrollHeight')) return { scrolled: true };
+    snapshots += 1;
+    return snapshots === 1 ? [rows.at(-1), { sender: 'A', text: '最新の投稿', time: '2026-10-25' }] : rows.slice(1);
+  };
+  const output = [];
+  const { main } = await import('./messenger-thread-export.mjs');
+  assert.equal(await main(['123', '--until-known'], { home, chromium: { launchPersistentContext: async () => ({ pages: () => [page], close: async () => { closed = true; } }) }, executablePath: 'fake', sleep: async () => {}, stdout: line => output.push(line), stderr: () => {} }), 0);
+  const result = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(result.length, 22);
+  assert.equal(result[0].key, saved[0].key);
+  assert.equal(result.at(-1).text, '最新の投稿');
+  assert.match(output.join('\n'), /1回スクロール.*known-reached/);
+  assert.equal(closed, true);
+});
+
+test('main: 空/未作成ファイルでは until-known でも通常の先頭判定を使う', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'messenger-empty-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const page = makePage({ rows: [{ sender: 'A', text: '最初', time: '12:00' }] });
+  const { main } = await import('./messenger-thread-export.mjs');
+  for (const emptyFile of [false, true]) {
+    const file = defaultOutPath(home, '123');
+    if (emptyFile) fs.writeFileSync(file, '');
+    const output = [];
+    assert.equal(await main(['123', '--until-known'], { home, chromium: { launchPersistentContext: async () => ({ pages: () => [page], close: async () => {} }) }, executablePath: 'fake', sleep: async () => {}, stdout: line => output.push(line) }), 0);
+    assert.match(output.join('\n'), /top-reached/);
+  }
+});
+
+test('main: 差分取得の空画面・打ち切りは成功扱いせず、破損ログは上書きしない', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'messenger-failed-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const { main } = await import('./messenger-thread-export.mjs');
+  const file = defaultOutPath(home, '123');
+  const run = rows => main(['123', '--until-known', '--max-scrolls', '1'], {
+    home, chromium: { launchPersistentContext: async () => ({ pages: () => [makePage({ rows })], close: async () => {} }) },
+    executablePath: 'fake', sleep: async () => {}, stdout: () => {}, stderr: () => {},
+  });
+  assert.equal(await run([]), 1);
+  assert.equal(fs.existsSync(file), false);
+  writeJsonl(file, [{ key: 'old', sender: 'A', text: '保存済み', time: '2026-10-10' }]);
+  const before = fs.readFileSync(file, 'utf8');
+  assert.equal(await run([{ sender: 'A', text: 'まだ途中', time: '12:00' }]), 1);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  fs.writeFileSync(file, '{broken');
+  assert.equal(await run([{ sender: 'A', text: '投稿', time: '12:00' }]), 1);
+  assert.equal(fs.readFileSync(file, 'utf8'), '{broken');
 });

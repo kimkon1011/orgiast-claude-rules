@@ -20,6 +20,7 @@ export const REQUIRED_HOOKS = [
   ['PreToolUse', 'pretooluse-codex-invocation.mjs'],
   ['PreToolUse', 'model-agent-guard.mjs'],
   ['PreToolUse', 'handover-doc-gate.mjs'],
+  ['PreToolUse', 'bihin-kcol-gate.mjs'],
   ['UserPromptSubmit', 'cost-routing-gate.mjs'],
   ['UserPromptSubmit', 'expensive-session-guard.mjs'],
   ['UserPromptSubmit', 'session-purpose-gate.mjs'],

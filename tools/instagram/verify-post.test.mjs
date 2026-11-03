@@ -10,6 +10,10 @@ import {
   isLoginWall,
   isJsShell,
   extractMetaContent,
+  extractRenderedCaption,
+  judgeRenderedPost,
+  judgeRenderedProfile,
+  findChromeExecutable,
   runCli,
 } from './verify-post.mjs';
 
@@ -230,4 +234,84 @@ test('verify-post.mjs --via graph は /me/media を正本として permalink を
   assert.match(seen[0], /graph\.instagram\.com\/v21\.0\/me\/media/);
   assert.match(seen[0], /access_token=TESTTOKEN/);
   fs.unlinkSync(envFile);
+});
+
+// --- ヘッドレスChrome描画経路（2026-10-20: 公開ページは描画すればログイン不要で実表示が読める） ---
+
+test('extractRenderedCaption は Unicode エスケープを含む caption を復号する', () => {
+  const html = '<script>{"caption":{"text":"\u30e9\u30cf\u30a4\u30caPV\u3067\u3059\u2728\n#\u725b\u7a93"}}</script>';
+  assert.equal(extractRenderedCaption(html), 'ラハイナPVです✨\n#牛窓');
+});
+
+test('judgeRenderedPost は描画後DOMの本文一致で verified', () => {
+  const html = '<html><head><meta property="og:image" content="https://scontent/x.jpg"></head>'
+    + '<body>{"caption":{"text":"\u30e9\u30cf\u30a4\u30caPV\u3067\u3059"}}</body></html>';
+  const result = judgeRenderedPost(html, { expect: 'ラハイナPV' });
+  assert.equal(result.verdict, 'verified');
+  assert.match(result.evidence, /ラハイナPV/);
+});
+
+test('judgeRenderedPost は本文不一致で mismatch', () => {
+  const html = '<html><body>{"caption":{"text":"\u5225\u306e\u6295\u7a3f"}}</body></html>';
+  assert.equal(judgeRenderedPost(html, { expect: 'ラハイナPV' }).verdict, 'mismatch');
+});
+
+test('judgeRenderedPost は実表示が無ければ unverified（嘘をつかない）', () => {
+  const html = '<html><head><title>Instagram</title></head><body></body></html>';
+  assert.equal(judgeRenderedPost(html).verdict, 'unverified');
+});
+
+test('judgeRenderedProfile は描画後の og:description で verified', () => {
+  const html = '<html><head><meta property="og:title" content="ワンちゃんと泊まる宿ラハイナ(@lahaina_ushimado)">'
+    + '<meta property="og:description" content="フォロワー1,149人、投稿166件"></head><body></body></html>';
+  assert.equal(judgeRenderedProfile(html, 'lahaina_ushimado').verdict, 'verified');
+});
+
+test('findChromeExecutable は CHROME_PATH を優先し、無ければ空文字', () => {
+  assert.equal(
+    findChromeExecutable({ env: { CHROME_PATH: 'C:\chrome.exe', PATH: '' }, exists: (p) => p === 'C:\chrome.exe', platform: 'win32' }),
+    'C:\chrome.exe'
+  );
+  assert.equal(
+    findChromeExecutable({ env: { PATH: '' }, exists: () => false, platform: 'linux' }),
+    ''
+  );
+});
+
+test('runCli --via render は描画後DOMで投稿を判定する（Chrome起動なし）', async () => {
+  const stdout = createMockStream();
+  const stderr = createMockStream();
+  let renderedUrl = '';
+  const code = await runCli(
+    ['--permalink', 'https://www.instagram.com/p/Ddf_thXPDK_/', '--via', 'render', '--expect', 'ラハイナPV'],
+    {
+      stdout,
+      stderr,
+      renderImpl: async (url) => {
+        renderedUrl = url;
+        return '<html><body>{"caption":{"text":"\u30e9\u30cf\u30a4\u30caPV\u3067\u3059"}}</body></html>';
+      },
+    }
+  );
+  assert.equal(code, 0);
+  assert.equal(renderedUrl, 'https://www.instagram.com/p/Ddf_thXPDK_/');
+  assert.match(stdout.output, /^verified:/);
+  assert.match(stdout.output, /ラハイナPV/);
+});
+
+test('runCli --via render は Chrome 起動失敗を unverified として報告する', async () => {
+  const stdout = createMockStream();
+  const stderr = createMockStream();
+  const code = await runCli(
+    ['--profile', '--via', 'render'],
+    {
+      stdout,
+      stderr,
+      renderImpl: async () => {
+        throw new Error('Chrome not found');
+      },
+    }
+  );
+  assert.equal(code, 1);
+  assert.match(stderr.output, /描画エラー: Chrome not found/);
 });

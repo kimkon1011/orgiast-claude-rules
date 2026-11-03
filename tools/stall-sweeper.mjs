@@ -90,10 +90,11 @@ export function detectFailedJob(rows, now = Date.now()) {
   });
 }
 export function detectStalledSession(sessions, now = Date.now()) {
-  return sessions.filter(s => age(s.mtime, now) >= 3 && s.lastRole === 'assistant' &&
-    /(?:これから|続いて|次に|それでは)[^。\n]{0,160}(?:します|進めます|行います)[。！!\s]*$/.test(s.lastAssistantText || ''))
+  return sessions.filter(s => age(s.mtime, now) >= 3 && ((s.lastRole === 'assistant' &&
+    /(?:これから|続いて|次に|それでは)[^。\n]{0,160}(?:します|進めます|行います)[。！!\s]*$/.test(s.lastAssistantText || '')) ||
+    (s.lastRole === 'user' && s.endedWithError === true)))
     .map(s => item('stalled_session', s.sessionId, s.displayTitle || s.sessionId, s.file, age(s.mtime, now),
-      'Codexで会話の依頼と現状を確認して再開', 'assistantが実行予告したまま終了', { cwd: localPath(s.cwd), eventTime: s.mtime }));
+      'Codexで会話の依頼と現状を確認して再開', s.lastRole === 'user' && s.endedWithError === true ? 'API エラーで未返答' : 'assistantが実行予告したまま終了', { cwd: localPath(s.cwd), eventTime: s.mtime }));
 }
 export function detectUnverifiedDelegation(logs, now = Date.now()) {
   return logs.filter(l => l.exit === 0 && l.commitVerified === false)
@@ -411,8 +412,10 @@ export function parseArgs(args) {
   if (dry && out.apply) throw new Error('--apply と --dry-run は同時指定できません');
   if (!Number.isInteger(out.max) || out.max < 1 || out.max > 100) throw new Error('--max は1〜100の整数です');
   if (out.kind && !KINDS.includes(out.kind)) throw new Error('--kind が不正です');
-  if (!out.repos.length) out.repos = ['C:/Users/uers/orgiast-main', 'C:/Users/uers/orgiast-claude-rules', 'C:/Users/uers/Downloads/orgiast-claude-rules', 'C:/Users/uers/Downloads/ブース制作アプリ'].map(localPath);
   out.home = localPath(out.home);
+  // 既定の確認先は利用者のホームから導く（PC 名を固定すると、その名前以外の PC では 0 件になる）
+  if (!out.repos.length) out.repos = ['orgiast-main', 'orgiast-claude-rules', path.join('Downloads', 'orgiast-claude-rules'), path.join('Downloads', 'ブース制作アプリ'), path.join('.claude', 'nightly-repo')]
+    .map(name => localPath(path.join(out.home, name)));
   out.outputDir = path.resolve(localPath(out.outputDir || path.join(out.home, '.claude')));
   out.repos = out.repos.map(repo => path.resolve(repo));
   return out;
@@ -518,7 +521,9 @@ export async function main(args = process.argv.slice(2)) {
         if (sent.delivered === 'none') return 2;
       }
     }
-    return results.some(r => r.result === '失敗') ? 1 : 0;
+    // 停滞ジョブの失敗は報告・台帳・issue に記録済み。タスク自身が完走したなら exit 0 とし、
+    // schedule-task 健全性チェックが毎日故障扱いしないようにする。return 2/1 はスイーパー自身の失敗のみ。
+    return 0;
   } finally {
     if (lockFd !== undefined) releaseLock(lockFd);
   }

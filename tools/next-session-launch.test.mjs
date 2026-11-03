@@ -1126,7 +1126,7 @@ test('headless は glm 失敗後に deepseek の代替レーンで成功する',
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-nsl-alternate-'));
   try {
     fs.mkdirSync(path.join(tempDir, '.claude'), { recursive: true });
-    fs.writeFileSync(path.join(tempDir, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY=test-key\n', 'utf8');
+    fs.writeFileSync(path.join(tempDir, '.claude', 'openrouter.env'), 'OPENROUTER_API_KEY=test-key\n', 'utf8');
     const { calls, spawnImpl } = headlessSpawnRecorder([3, 0]);
     const result = await runHeadlessNextSession({
       env: { ORGIAST_AUTO_SESSION_EXECUTOR: 'cheap-code', ORGIAST_AUTO_SESSION_PROVIDER: 'glm' },

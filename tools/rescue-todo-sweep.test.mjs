@@ -49,6 +49,28 @@ test('unique・error・scan に無い枝は kept に残す', () => {
   assert.deepEqual(result.kept, ['rescue/u', 'rescue/e', 'rescue/missing']);
 });
 
+test('unique は names が全てノイズの場合だけ noise-only として掃除する', () => {
+  const input = [todo(1, 'rescue/noise'), todo(2, 'rescue/mixed'), todo(3, 'rescue/unknown'), todo(4, 'rescue/empty')].join('\n');
+  const first = sweepLines(input, {
+    'rescue/noise': { status: 'unique', names: ['tools/handoff-audit-knowledge.json'] },
+    'rescue/mixed': { status: 'unique', names: ['tools/a.mjs', 'tools/handoff-audit-knowledge.json'] },
+    'rescue/unknown': { status: 'unique' },
+    'rescue/empty': { status: 'unique', names: [] },
+  }, { date: '2026-10-24' });
+  assert.deepEqual(first.swept, [{ branch: 'rescue/noise', status: 'noise-only' }]);
+  assert.deepEqual(first.kept, ['rescue/mixed', 'rescue/unknown', 'rescue/empty']);
+  assert.match(first.text, /rescue\/noise.*noise-only（台帳・実行時成果物のみでレビュー不要）/);
+  assert.ok(first.text.includes(todo(2, 'rescue/mixed')));
+  assert.ok(first.text.includes(todo(3, 'rescue/unknown')));
+  assert.ok(first.text.includes(todo(4, 'rescue/empty')));
+
+  const second = sweepLines(first.text, {
+    'rescue/noise': { status: 'unique', names: ['tools/handoff-audit-knowledge.json'] },
+  }, { date: '2026-10-24' });
+  assert.equal(second.changed, false);
+  assert.equal(second.text, first.text);
+});
+
 test('複数 repo は repo ごとに1回だけ scan する', () => {
   const input = [todo(1, 'rescue/a', '/one'), todo(2, 'rescue/b', '/one'), todo(3, 'rescue/c', '/two')].join('\n');
   const calls = [];

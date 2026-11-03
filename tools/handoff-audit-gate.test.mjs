@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fired, asksUser, claimsInability, evaluateAudit, turnEvidence, requestAudit, loadResources, buildPrompt, parseAudit } from './handoff-audit-gate.mjs';
+import { fired, asksUser, claimsInability, evaluateAudit, turnEvidence, requestAudit, loadResources, buildPrompt, parseAudit, askCli } from './handoff-audit-gate.mjs';
 import { run } from './stop-gate-runner.mjs';
 const pass = { verdict: 'pass', violations: [], learned: [] };
 const block = { verdict: 'block', violations: [{ rule: 4, quote: 'GA4は存在しない', fix: 'DWDで直接照会する' }], learned: [] };
@@ -188,4 +188,44 @@ test('rule 13 は失敗tool_resultから本文の能力否定なしでも監査�
   let called=0;
   const r=await evaluateAudit({text:'実装完了',transcriptRaw},{home,ask:async()=>{called++;return {verdict:'pass',violations:[],learned:[]};}});
   assert.equal(r.record.fired,true);assert.ok(called>0);
+});
+test('askCli は 40,000字のプロンプトを argv でなく --prompt-file で渡す', async t => {
+  const dir = fs.mkdtempSync(path.join(import.meta.dirname, '.audit-prompt-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const prompt = 'あ'.repeat(40000);
+  let captured = null;
+  const exec = (cmd, args, opts, cb) => {
+    const i = args.indexOf('--prompt-file');
+    captured = {
+      cmd,
+      argvChars: args.join(' ').length,
+      filePath: i >= 0 ? args[i + 1] : null,
+      content: i >= 0 ? fs.readFileSync(args[i + 1], 'utf8') : null,
+      existsDuring: i >= 0 && fs.existsSync(args[i + 1]),
+    };
+    cb(null, JSON.stringify(pass), 'in=42');
+  };
+  const result = await askCli({ provider: 'groq', prompt, home: dir }, { exec, tmpDir: dir });
+  assert.ok(captured.argvChars < 1000, `argv が長すぎる: ${captured.argvChars}字`);
+  assert.equal(captured.content, prompt);
+  assert.ok(captured.existsDuring);
+  assert.equal(fs.existsSync(captured.filePath), false, '実行後に一時ファイルが残っている');
+  assert.equal(result.text, JSON.stringify(pass));
+  assert.equal(result.usage, '42');
+});
+test('askCli は失敗時も一時ファイルを消し provider-unavailable を返す', async t => {
+  const dir = fs.mkdtempSync(path.join(import.meta.dirname, '.audit-prompt-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  let filePath = null;
+  const exec = (cmd, args, opts, cb) => {
+    filePath = args[args.indexOf('--prompt-file') + 1];
+    cb(new Error('spawn ENAMETOOLONG'), '', '');
+  };
+  await assert.rejects(() => askCli({ provider: 'deepseek', prompt: 'x', home: dir }, { exec, tmpDir: dir }), /provider-unavailable:deepseek/);
+  assert.equal(fs.existsSync(filePath), false, '失敗後に一時ファイルが残っている');
+});
+test('llm-ask.mjs は --prompt-file を実装している（askCli の前提）', () => {
+  const src = fs.readFileSync(path.join(import.meta.dirname, 'llm-ask.mjs'), 'utf8');
+  assert.match(src, /--prompt-file/);
+  assert.match(src, /readFileSync\(promptFile/);
 });

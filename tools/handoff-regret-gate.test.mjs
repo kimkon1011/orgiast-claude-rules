@@ -3,7 +3,7 @@ import test from 'node:test';
 import { evaluateHandoffRegret, isReadOnlyCommand, absolutePaths } from './handoff-regret-gate.mjs';
 
 const target = '~/.claude/settings.json';
-const row = content => JSON.stringify({ message: { content } });
+const row = (content, type = 'assistant', extra = {}) => JSON.stringify({ type, message: { role: type === 'assistant' ? 'assistant' : 'user', content }, ...extra });
 const handoff = row([{ type: 'text', text: `[手渡し判定]\nuser が ${target} を変更してください` }]);
 const use = path => row([{ type: 'tool_use', id: 'tool-1', name: 'Edit', input: { file_path: path } }]);
 const success = row([{ type: 'tool_result', tool_use_id: 'tool-1', content: 'updated' }]);
@@ -71,4 +71,16 @@ test('git -C <path> でも書き込み系は読み取り扱いしない', () => 
   assert.equal(isReadOnlyCommand('git -C C:/x push origin main'), false);
   assert.equal(isReadOnlyCommand('git -C C:/x branch -D x'), false);
   assert.equal(isReadOnlyCommand('git -C C:/x remote add o https://x'), false);
+});
+test('user entry の角括弧マーカーは手渡しとみなさない（注入索引・貼り付け本文）', () => {
+  const injected = row([{ type: 'text', text: `MEMORY.md 索引: [手渡し判定] の語を含む行 ${target}` }], 'user');
+  assert.equal(evaluateHandoffRegret([injected, use(target), success].join('\n'), '完了しました').decision, 'pass');
+});
+test('system-reminder 文脈の角括弧マーカーは手渡しとみなさない', () => {
+  const reminder = row([{ type: 'text', text: `<system-reminder>[手渡し判定] は assistant が出すもの ${target}</system-reminder>` }], 'user');
+  assert.equal(evaluateHandoffRegret([reminder, use(target), success].join('\n'), '完了').decision, 'pass');
+});
+test('sidechain（サブエージェント）の手渡し文面は数えない', () => {
+  const sidechain = row([{ type: 'text', text: `[手渡し判定]\nuser が ${target} を変更してください` }], 'assistant', { isSidechain: true });
+  assert.equal(evaluateHandoffRegret([sidechain, use(target), success].join('\n'), '完了').decision, 'pass');
 });

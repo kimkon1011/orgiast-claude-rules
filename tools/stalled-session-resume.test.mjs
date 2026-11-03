@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { run, options, execute, main } from './stalled-session-resume.mjs';
+import { run, options, execute, main, resumedParentId } from './stalled-session-resume.mjs';
 import { buildClaudeHeadlessArgs } from './auto-session-executor.mjs';
 
 async function fixture(t, count = 5) {
@@ -34,6 +34,20 @@ test('two consecutive errors abort night, including subsequent invocations', asy
   f.io.notify = async s => { message = s; };
   assert.equal((await run(options([], {}), f.io)).aborted, true);
   await run(options([], {}), f.io); assert.equal(calls, 2); assert.match(message, /連続2件エラー/);
+});
+test('no executor stops the night without error, notice, or consuming budget', async t => {
+  const f = await fixture(t); let calls = 0;
+  f.io.execute = async () => { calls++; return { outcome: 'no-executor', reason: '実行役なし: cheap-code/deepseek exit 3' }; };
+  const r = await run(options([], {}), f.io);
+  assert.equal(calls, 1); assert.equal(r.aborted, false); assert.equal(r.results.length, 0); assert.equal(f.notices(), 0);
+  assert.match(r.noExecutor, /deepseek exit 3/);
+  const ledger = await f.ledger();
+  assert.deepEqual(ledger.sessions['session-0'].attempts, []); assert.equal(ledger.sessions['session-0'].noProgress, 0);
+  assert.equal(ledger.nights['2026-09-24'].count, 0); assert.equal(ledger.nights['2026-09-24'].errors, 0);
+  // レーンが同じ晩に戻れば、同じセッションを再開できる。
+  f.io.execute = async () => { calls++; return { outcome: 'progressed', reason: 'artifact verified' }; };
+  const again = await run(options([], {}), f.io);
+  assert.equal(again.results[0].outcome, 'progressed'); assert.equal(again.noExecutor, undefined);
 });
 test('recently active sessions excluded using injected stat', async t => {
   const f = await fixture(t); f.io.stat = async () => ({ mtimeMs: f.io.now() - 60000 });
@@ -83,6 +97,9 @@ test('adapter forwards deadline/resume and requires progress evidence', async ()
   assert.equal((await execute(r, { timeoutMs: 123 }, io)).outcome, 'progressed');
   io.runChild = async () => ({ status: 'timeout' });
   assert.equal((await execute(r, { timeoutMs: 123 }, io)).outcome, 'error');
+  io.runChild = async () => ({ status: 'failure', skippedNoExecutor: true, executorUsed: 'cheap-code:deepseek', stderr: 'payment_required' });
+  const lane = await execute(r, { timeoutMs: 123 }, io);
+  assert.equal(lane.outcome, 'no-executor'); assert.match(lane.reason, /payment_required/);
   assert.ok(buildClaudeHeadlessArgs({ repoCwd: '/fixture', historyCwd: '/fixture', resumeSessionId: 'abc' }).includes('--resume'));
 });
 test('invalid CLI/env values rejected', () => {
@@ -101,6 +118,47 @@ test('progress clears failure budget, errors and no-progress consume it', async 
   f.io.execute = async () => ({ outcome: 'progressed', reason: 'artifact verified' });
   await run(options([], {}), f.io);
   assert.equal((await f.ledger()).sessions['session-0'].noProgress, 0);
+});
+test('resumedParentId reads the parent id from the runner prompt only', () => {
+  assert.equal(resumedParentId('停滞セッション「Task 0」(session-0)の承認済みの目的を1歩進めてください。'), 'session-0');
+  assert.equal(resumedParentId('停滞セッション「A」の承認済みの目的を1歩進めてください。'), '');
+  assert.equal(resumedParentId('普通の依頼です'), '');
+  assert.equal(resumedParentId(undefined), '');
+});
+test('resume chain shares the 3-strike budget across changing session ids', async t => {
+  const f = await fixture(t, 1);
+  const promptFor = id => `停滞セッション「Task 0」(${id})の承認済みの目的を1歩進めてください。当初依頼: x`;
+  await run(options([], {}), f.io); // night 1: session-0 noProgress=1
+  f.records.length = 0;
+  for (const [night, sessionId, parentId] of [[2, 'child-1', 'session-0'], [3, 'child-2', 'child-1'], [4, 'child-3', 'child-2']]) {
+    f.next();
+    // 実運用では前夜までの子はもう停滞一覧に残らない（新しい子に置き換わる）。
+    f.records.splice(0, f.records.length, { sessionId, displayTitle: 'Task 0', file: `file-${sessionId}`, cwd: f.io.home, status: '要対応', score: 90, ageDays: 1, firstPrompt: promptFor(parentId) });
+    const r = await run(options([], {}), f.io);
+    if (night === 4) {
+      // 祖先の積み上げで、毎晩 id が変わっても4夜目には retire される。
+      assert.equal(f.calls(), 3);
+      assert.equal(r.rows[0].skip, '3回進捗なし');
+      assert.equal(r.results.length, 0);
+    }
+  }
+  const ledger = await f.ledger();
+  assert.equal(ledger.sessions['child-2'].noProgress, 3);
+  assert.equal(ledger.sessions['child-2'].parentSessionId, 'child-1');
+  assert.equal(ledger.sessions['session-0'].noProgress, 3);
+});
+test('progress on a chain child resets the shared budget', async t => {
+  const f = await fixture(t, 1);
+  await run(options([], {}), f.io); // session-0 noProgress=1
+  f.next();
+  f.records.length = 0;
+  f.records.push({ sessionId: 'child-1', displayTitle: 'Task 0', file: 'file-child-1', cwd: f.io.home, status: '要対応', score: 90, ageDays: 1,
+    firstPrompt: '停滞セッション「Task 0」(session-0)の承認済みの目的を1歩進めてください。' });
+  f.io.execute = async () => ({ outcome: 'progressed', reason: 'artifact verified' });
+  await run(options([], {}), f.io);
+  const ledger = await f.ledger();
+  assert.equal(ledger.sessions['child-1'].noProgress, 0);
+  assert.equal(ledger.sessions['session-0'].noProgress, 0);
 });
 test('nightly order and converge repair are wired', async () => {
   const batch = await fs.readFile(new URL('./nightly-batch.ps1', import.meta.url), 'utf8');

@@ -9,6 +9,9 @@ import { fileURLToPath } from 'node:url';
 import { fleetHubNeedsConfiguration } from './register-fleet-mail.mjs';
 import { convergeAllowRules } from './allow-rules.mjs';
 import { convergeMobileStandby } from './mobile-standby.mjs';
+export { classifyTaskActions } from './setup-task-hidden-actions.mjs';
+import { inspectTaskHiddenActions } from './setup-task-hidden-actions.mjs';
+import { convergeNodeRuntimeSecurity } from './setup-node-runtime-security.mjs';
 
 const TYPES = new Set(['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task']);
 const SEVERITIES = new Set(['required', 'optional', 'manual']);
@@ -53,6 +56,38 @@ function readNonempty(target, kind) {
   }
 }
 function nested(value, dotted) { return dotted.split('.').reduce((v, key) => v?.[key], value); }
+function checkTaskDetails(spec, info) {
+  if (spec.requireActionTarget) {
+    for (const action of info.actions || []) {
+      // 引用された空白入りパスも拾い、exe や相対引数は検査対象にしない。
+      const tokens = String(action).match(/"[^"]*"|'[^']*'|[^\s"']+/g) || [];
+      for (const token of tokens) {
+        const target = token.replace(/^["']|["']$/g, '');
+        if ((path.isAbsolute(target) || path.win32.isAbsolute(target))
+          && /\.(mjs|js|ps1|vbs|cmd|bat)$/i.test(target) && !fs.existsSync(target)) return false;
+      }
+    }
+  }
+  if (typeof spec.maxRunAgeHours === 'number') {
+    const lastRun = Date.parse(info.lastRunTime);
+    // 初回実行前は登録直後にも起こるため、修復対象ではなく NOTICE にする。
+    if (!Number.isFinite(lastRun) || lastRun < Date.UTC(2000, 0, 1)) return null;
+    if (Date.now() - lastRun > spec.maxRunAgeHours * 3600000) return false;
+  }
+  return true;
+}
+function readTaskDetails(name) {
+  const quotedName = "'" + name.replaceAll("'", "''") + "'";
+  const command = `[Console]::OutputEncoding=[Text.Encoding]::UTF8; $ErrorActionPreference='Stop'; $task=Get-ScheduledTask -TaskName ${quotedName}; $info=$task | Get-ScheduledTaskInfo; [pscustomobject]@{actions=@($task.Actions | ForEach-Object { $_.Execute + ' ' + $_.Arguments }); lastRunTime=$info.LastRunTime.ToUniversalTime().ToString('o')} | ConvertTo-Json -Compress`;
+  try {
+    return JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, timeout: 15000,
+    }).replace(/^\uFEFF/, ''));
+  } catch {
+    // 詳細取得だけの失敗で NG を増やさず、従来の登録有無の判定を残す。
+    return null;
+  }
+}
 function check(item) {
   try {
     if (item.scope === 'kim-only' && resolveFleetLabel(home) !== 'kim-PC') return null;
@@ -81,8 +116,16 @@ function check(item) {
       const parsed = JSON.parse(raw);
       if (spec.hookEvent) {
         const hooks = parsed.hooks?.[spec.hookEvent]?.flatMap(group => group.hooks || []) || [];
-        const expected = `node "${path.join(scriptDir, spec.hookScript)}"${spec.hookArgs ?? ' --hook'}`;
-        return hooks.some(hook => hook.type === 'command' && hook.command === expected
+        const knownToolsDirs = [
+          path.join(home, 'orgiast-claude-rules', 'tools'),
+          path.join(home, '.claude', 'nightly-repo', 'tools'),
+          path.join(home, 'Downloads', 'orgiast-claude-rules', 'tools'),
+          scriptDir,
+        ];
+        const expectedCommands = new Set(knownToolsDirs.map(toolsDir => spec.hookRunner
+          ? `node "${path.join(toolsDir, spec.hookRunner)}" "${path.join(toolsDir, spec.hookScript)}"${spec.hookArgs ?? ''}`
+          : `node "${path.join(toolsDir, spec.hookScript)}"${spec.hookArgs ?? ' --hook'}`));
+        return hooks.some(hook => hook.type === 'command' && expectedCommands.has(hook.command)
           && (spec.async !== false ? hook.async === true : hook.async === undefined || hook.async === false)
           && hook.timeout === (spec.timeout ?? 5));
       }
@@ -102,9 +145,16 @@ function check(item) {
       }
       if (spec.hubMode && fleetHubNeedsConfiguration({ home })) return false;
       if (spec.migrationMarker && !fs.existsSync(resolveHome(spec.migrationMarker))) return false;
+      if (process.env.ORGIAST_SETUP_TASK_INFO_FIXTURE) {
+        const fixture = JSON.parse(fs.readFileSync(process.env.ORGIAST_SETUP_TASK_INFO_FIXTURE, 'utf8'));
+        const info = fixture[spec.name];
+        return info?.registered === true ? checkTaskDetails(spec, info) : false;
+      }
       if (process.platform !== 'win32') return false;
       execFileSync('schtasks.exe', ['/Query', '/TN', spec.name], { stdio: 'ignore', timeout: 10000, windowsHide: true });
-      return true;
+      if (!spec.requireActionTarget && typeof spec.maxRunAgeHours !== 'number') return true;
+      const info = readTaskDetails(spec.name);
+      return info ? checkTaskDetails(spec, info) : true;
     }
   } catch { return false; }
   return false;
@@ -182,6 +232,15 @@ if (manifest) {
       results.push({ item, status: outcome.ok ? 'OK' : 'NG', checked: true, repaired: Boolean(outcome.config?.changed || outcome.settings?.changed || outcome.extension?.status === 'installed' || outcome.rcPrefix?.changed),
         reason: outcome.ok ? '' : outcome.lines.filter((line) => /失敗|NG/.test(line)).join(' / ') });
     } catch { results.push({ item, status: 'NG', checked: true, repaired: false }); }
+  }
+  // 実機の更新は通常の converge のみ。verify / カスタム manifest は副作用なし。
+  if (converge && !valueAfter('--manifest')) {
+    const { description, ...outcome } = await convergeNodeRuntimeSecurity();
+    results.push({ item: { id: 'node-runtime-security', severity: 'optional', description }, ...outcome });
+  }
+  if (converge && !valueAfter('--manifest')) {
+    const { description, ...outcome } = inspectTaskHiddenActions({ converge });
+    results.push({ item: { id: 'task-hidden-actions', severity: 'optional', description }, ...outcome });
   }
   emit(results);
   // fleet ビーコン: converge の結果を GAS へ送る。fail-open（exit code に一切影響させない）。

@@ -524,8 +524,8 @@ function humanTodoMessage(violation, now, retryCount = 0, retryMode = 'directive
     const reportedAt = /last reported:\s*([^)]*)/.exec(violation.evidence)?.[1] || '日時不明';
     const reportedMs = parseJstOrIsoDate(reportedAt);
     const days = reportedMs === null ? '不明' : Math.max(0, Math.floor((now.getTime() - reportedMs) / 86400000));
-    if (!retryCount) return `【${pc}】から${reportedAt}以降 KPI の自己申告が届いていません（${days}日間）。そのPCで Claude Code を起動できているか確認し、起動していれば ` + '`node tools/fleet-sheet-report.mjs`' + ' が夜間に走っているかを見てください。';
-    return `【${pc}】から${reportedAt}以降 KPI の自己申告が届いていません（${days}日間）。自動再送（${retryMode}）を ${retryCount} 回試みたが復帰しないため、そのPCで Claude Code を1回起動してください。`;
+    if (!retryCount) return `【${pc}】から${reportedAt}以降 KPI の自己申告が届いていません（${days}日間）。Claude が自動で夜間レポートの再送を行いましたが、この実行では復帰を確認できませんでした。次回の夜間点検で再判定します。`;
+    return `【${pc}】から${reportedAt}以降 KPI の自己申告が届いていません（${days}日間）。自動再送（${retryMode}）を ${retryCount} 回試みたが復帰しません。次回の夜間点検で再判定します。`;
   }
   if (violation.kind === 'cost_spike') {
     const previous = violation.previousValue ?? /from \$(\d+(?:\.\d+)?)/.exec(violation.evidence)?.[1] ?? '不明';
@@ -541,11 +541,11 @@ function humanTodoMessage(violation, now, retryCount = 0, retryMode = 'directive
       : violation.pc === 'fleet'
         ? 'フリートの KPI を取得できていません'
         : 'このPCの計測ファイルまたは実行台帳を読み取れません';
-    return `【${pc}】${situation}。計測できていないため、この値を根拠にした自動修正は見送りました。\`node tools/fleet-sheet-report.mjs\` を実行し、委譲率と Claude 概算が記録されるか確認してください。`;
+    return `【${pc}】${situation}。計測できていないため、この値を根拠にした自動修正は見送りました。次回の夜間点検で再測定します。`;
   }
   if (violation.kind === 'budget_pace') {
     const pace = Number.isFinite(Number(violation.actualValue)) ? Number(violation.actualValue).toFixed(1) : '不明';
-    return `【このPC】の月次AI予算ペースが ${pace}% に達しています（日割りで月末を見込むと予算超過。しきい値 100%）。cost-enforce.json に budgetPressure を立てて量産系ルーティングを夜間バッチへ寄せる自動対処は済ませました。急ぎでない分類・生成・一括処理は \`node tools/batch-enqueue.mjs --provider <groq|deepseek> "指示"\` で夜間(03:00・半額)へ回してください。`;
+    return `【このPC】の月次AI予算ペースが ${pace}% に達しています（日割りで月末を見込むと予算超過。しきい値 100%）。cost-enforce.json に budgetPressure を立てて量産系ルーティングを夜間バッチへ寄せる自動対処は済ませました。急ぎでない分類・生成・一括処理は夜間(03:00・半額)のバッチへ回す運用にしています。`;
   }
   return `【${pc}】自動対処を完了できませんでした（実測: ${violation.evidence}）。状況を確認してください。`;
 }
@@ -1028,7 +1028,7 @@ export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath,
       if (res.status !== 0) { fail(stage, res); return; }
     }
     const body = `Evidence: ${first.specContent?.match(/- 根拠: (.*)/)?.[1] || label}\n\nSpec summary: ${label} on ${first.pc}; verify with node --test tools/*.test.mjs.`;
-    res = spawnSync('gh', ['pr', 'create', '--title', commitMsg, '--body', body, '--head', branchName], { windowsHide: true, cwd: tempTree, encoding: 'utf8' });
+    res = spawnSync('gh', ['pr', 'create', '--title', commitMsg, '--body', body, '--head', branchName, '--label', 'automerge'], { windowsHide: true, cwd: tempTree, encoding: 'utf8' });
     const url = `${res.stdout || ''}\n${res.stderr || ''}`.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0];
     if (res.status !== 0 || !url) { fail('PR creation failed', res); return; }
     for (const act of list) {
@@ -1097,7 +1097,7 @@ export function readLedgerCounts(filePath, now) {
 export function localProviderEnv(homeDir) {
   const providers = [
     { name: 'groq', envKey: 'GROQ_API_KEY', envFile: 'groq.env' },
-    { name: 'deepseek', envKey: 'DEEPSEEK_API_KEY', envFile: 'deepseek.env' },
+    { name: 'deepseek', envKey: 'OPENROUTER_API_KEY', envFile: 'openrouter.env' },
     { name: 'gemini', envKey: 'GEMINI_API_KEY', envFile: 'gemini.env' },
     { name: 'openrouter', envKey: 'OPENROUTER_API_KEY', envFile: 'openrouter.env' },
     { name: 'grok', envKey: 'XAI_API_KEY', envFile: 'xai.env' }
@@ -1621,7 +1621,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   } else {
     reportText += `- なし\n`;
   }
-  for (const row of unmeasurableRows) reportText += `- **${row.pcName || row.label || 'unknown'}**: 自動では復旧不可 — そのPCで Claude Code を1回起動してください\n`;
+  for (const row of unmeasurableRows) reportText += `- **${row.pcName || row.label || 'unknown'}**: 自動では復旧不可 — 次回の夜間点検で再試行します\n`;
 
   // 人へ上げた内容と同じ情報をセッションへ登録。失敗は見える形で残す。
   const proposalActions = [...new Map([...(state.proposalRetry || []), ...newlyHuman].map(a => [JSON.stringify([a.pc, a.kind]), a])).values()];
@@ -1654,7 +1654,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   if (!dryRun && !noNotify && !io.noNotify) {
     try {
       const notifyResult = await (io.notifyKim ?? notifyKim)(reportText, { home, webhookFallback: false });
-      if (!notifyResult || notifyResult.delivered !== 'dm') {
+      if (!notifyResult || !['dm', 'session-inbox'].includes(notifyResult.delivered)) {
         throw new Error(notifyResult?.reason || 'kim の DM に配信されませんでした');
       }
       delete finalState.lastNotifyError;
@@ -1684,7 +1684,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       if (await (io.shouldSendMonthlyReport || shouldSendMonthlyReport)({ home, now, claudeDir })) {
         const reportText = buildMonthlyReport({ home, now });
         const monthlyResult = await (io.notifyKim ?? notifyKim)(reportText, { home, webhookFallback: false });
-        if (monthlyResult?.delivered === 'dm') await (io.markMonthlyReportSent || markMonthlyReportSent)({ home, now, claudeDir });
+        if (['dm', 'session-inbox'].includes(monthlyResult?.delivered)) await (io.markMonthlyReportSent || markMonthlyReportSent)({ home, now, claudeDir });
         console.log('月次レポートを kim へ DM 送信しました');
       }
     } catch (error) {
@@ -1726,8 +1726,22 @@ async function mainFetch(argv) {
   return await fetchFleetKPIs({ sheetUrl: fleetEnv.FLEET_SHEET_URL, token: fleetEnv.FLEET_SHEET_TOKEN });
 }
 
+export function refreshCostDirective({ home, spawn = defaultSpawnSync } = {}) {
+  const result = spawn(process.execPath, [path.join(import.meta.dirname, 'cost-work-loop.mjs')], {
+    cwd: path.resolve(import.meta.dirname, '..'), env: { ...process.env, ORGIAST_HOME: home },
+    encoding: 'utf8', windowsHide: true, timeout: 300_000,
+  });
+  if (result.error || result.status !== 0) throw new Error(`cost-directive refresh failed: ${result.error?.message || `exit ${result.status}`} ${String(result.stderr || '').slice(-1000)}`);
+  return `cost-directive refreshed: ${path.join(home, '.claude', 'cost-directive.md')} (exit 0)`;
+}
+
 if (isEntry(import.meta.url)) {
-  main().catch((err) => {
+  Promise.resolve().then(() => {
+    // Run before fleet/network/notification work: a successful daily task must
+    // also refresh the local directive. Dry runs keep their read-only contract.
+    if (!process.argv.includes('--dry-run')) console.error(refreshCostDirective({ home: path.dirname(getClaudeDir(process.argv.slice(2))) }));
+    return main();
+  }).catch((err) => {
     console.error(err);
     process.exitCode = 1;
   });

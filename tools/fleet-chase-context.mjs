@@ -13,7 +13,9 @@ export const REPEAT_MS = 30 * 60_000;
 export const CONTEXT_COUNTS = Object.freeze({ inbound: 3, outbound: 2 });
 export function selectContext(ledger, { home, sessionId = '', now = Date.now() } = {}) {
   const pending = Object.values(ledger.items).filter(active).sort(oldest);
-  if (!pending.length) return '';
+  const candidates = ledger.registrationCandidates?.items || [];
+  const expectations = Object.values(ledger.items).filter(i => i.kind === 'expect-inbound' && (active(i) || i.status === 'done' && now - millis(i.lastEvidenceAt) < DAY)).sort(oldest);
+  if (!pending.length && !candidates.length && !expectations.length) return '';
   const incoming = pending.filter(i => i.kind === 'inbound');
   const inbound = [];
   for (const item of incoming) {
@@ -29,6 +31,12 @@ export function selectContext(ledger, { home, sessionId = '', now = Date.now() }
   const header = `[fleet-chase 未完了債務 ${pending.length} 件（受信 ${incoming.length} / 送信 ${pending.length - incoming.length}）] 完了の証拠が出るまで毎セッション表示されます。期限切れでも消えません。\n`;
   const footer = '一覧: node tools/fleet-chase.mjs --status';
   let result = header;
+  const expectation = expectations.find(i => i.diagnosis || i.status === 'done') || expectations[0];
+  if (expectation) {
+    const routes = [...(expectation.repairs || []), ...(expectation.pendingRepair ? [expectation.pendingRepair] : [])].flatMap(r => r.routes.map(route => `${route.payload.to}:prompt=${route.result?.status || '不明'}${route.result?.failReason ? `(${route.result.failReason})` : ''}`)).join(' / ');
+    result += redactSecrets(`受信待ち ${expectation.key}: ${expectation.status} / 原因=${expectation.diagnosis?.cause || '期限待ち'} / 修復=${expectation.repairs.length}/2 / ${expectation.humanReason || expectation.diagnosis?.detail || expectation.until} / 試した経路と結果: ${routes || 'なし'}${expectation.evidence ? ` / 受信証拠=${expectation.evidence.mailId}` : ''}`).slice(0, 500) + '\n';
+  }
+  if (candidates.length) result += redactSecrets(`登録候補（${ledger.registrationCandidates.at}時点・自己申告、作業用番号は未確定）: ${candidates.slice(0, 3).map(c => `${c.label} ${c.account}`).join(' / ')}${candidates.length > 3 ? ` ほか${candidates.length - 3}件` : ''}`).slice(0, 220) + '\n';
   const rollout = pending.filter(item => item.kind === 'rollout').sort((a, b) =>
     Number(b.pc === 'kim-PC' && b.subkind === 'violation') - Number(a.pc === 'kim-PC' && a.subkind === 'violation') || oldest(a, b))[0];
   if (rollout) {
@@ -40,7 +48,7 @@ export function selectContext(ledger, { home, sessionId = '', now = Date.now() }
   for (const item of [...inbound, ...outbound]) {
     const age = Math.floor((now - millis(item.createdAt)) / DAY);
     const deferred = millis(item.deferredUntil) > now ? ` 保留中:${item.deferredUntil} ${item.deferReason.slice(0, 35)}` : '';
-    const instruction = item.category === CATEGORY.decision ? '判断依頼は 📌 kim の返事待ち に表示済み。ヘッドレスは代行禁止。'
+    const instruction = item.category === CATEGORY.decision ? 'kim本人がセッションで判断（kim-inbox で回収）。ヘッドレスは代行禁止。'
       : `完了: node tools/fleet-mail.mjs --reply ${item.mailId} --body-file <file>`;
     const line = item.kind === 'inbound'
       ? `受信(最古) ${age}日 from=${item.from} id=${item.mailId} why=${item.title.slice(0, 40)}${deferred} → ${instruction} ／ 保留: node tools/fleet-chase.mjs --defer ${item.id} --until +3d --reason "<理由>"\n`
@@ -53,7 +61,7 @@ export function selectContext(ledger, { home, sessionId = '', now = Date.now() }
 export async function main({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now,
   readStdin = readStdinWithTimeout, stdout = console.log, stderr = console.error } = {}) {
   try {
-    if (resolveFleetLabel(home, { hostname: os.hostname() }) !== 'kim-PC') return;
+    if (resolveFleetLabel(home) !== 'kim-PC') return;
     const input = JSON.parse(await readStdin(100));
     const event = input.hook_event_name;
     if (!['SessionStart', 'UserPromptSubmit'].includes(event)) return;

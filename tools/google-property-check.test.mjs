@@ -181,3 +181,16 @@ test('renderHuman: 件数と未確認の理由を人が読める形で出す', (
   assert.match(out, /scope_not_delegated/);
   assert.match(out, /DWD にこのスコープが未登録/);
 });
+
+test('SA 鍵の既定パスをハードコードしない（旧 C:/Users/uers の打ち間違い再発防止・2026-10-23 実測）', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { homedir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { defaultDriveKeyPath } = await import('./lib/drive-auth.mjs');
+  for (const f of ['google-property-check.mjs', 'gmail-draft.mjs', 'gdoc-create.mjs', 'gdoc-update.mjs']) {
+    const src = readFileSync(new URL(`./${f}`, import.meta.url), 'utf8');
+    assert.ok(!src.includes('C:/Users/uers/'), `${f} に壊れた既定パス(Users/uers)が残っている`);
+  }
+  // 既定はその PC のホーム配下を指す（鍵が実在する PC で exit 2 にならない）。
+  assert.equal(defaultDriveKeyPath(), join(homedir(), 'Downloads', 'CLAUDE.md配布', 'aujust-sales-automation', '.gcp', 'sheets-sa.json'));
+});

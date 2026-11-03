@@ -5,6 +5,68 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 
+test('setup converge timeout covers Node updates on new and existing PCs, idempotently', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-node-runtime-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const repo = path.resolve('.');
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  const run = () => execFileSync(process.execPath, [path.join(repo, 'tools/register-hooks.mjs'), '--hooks-only'], {
+    encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo },
+  });
+  run();
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const hooks = settings.hooks.SessionStart.flatMap((group) => group.hooks).filter((hook) => hook.command.includes('setup.mjs'));
+  assert.equal(hooks.length, 1);
+  assert.equal(hooks[0].timeout, 1200);
+  for (const event of ['SessionStart', 'UserPromptSubmit']) {
+    const ownerInbox = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('owner-inbox-hook.mjs'));
+    assert.equal(ownerInbox.length, 1); assert.equal(ownerInbox[0].timeout, 10); assert.notEqual(ownerInbox[0].async, true);
+    const inbox = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('kim-inbox.mjs'));
+    assert.equal(inbox.length, 1); assert.match(inbox[0].command, /--context/);
+    assert.equal(inbox[0].timeout, 5); assert.notEqual(inbox[0].async, true);
+    const daytrip = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('daytrip-ask-hook.mjs'));
+    assert.equal(daytrip.length, 1); assert.equal(daytrip[0].timeout, 5); assert.notEqual(daytrip[0].async, true);
+  }
+  for (const [event, argument, timeout] of [['Stop', '', 15], ['SessionStart', ' --all', 30], ['UserPromptSubmit', ' --prompt-submit', 8]]) {
+    const titles = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('session-wait-title.mjs'));
+    assert.equal(titles.length, 1);
+    assert.ok(titles[0].command.endsWith(`session-wait-title.mjs"${argument}`));
+    assert.equal(titles[0].timeout, timeout);
+    assert.notEqual(titles[0].async, true);
+  }
+  const report = settings.hooks.PreToolUse.filter(g => g.hooks.some(h => h.command.includes('kim-discord-report-gate.mjs')));
+  assert.equal(report.length, 1);
+  assert.match('mcp__claude_ai_Discord__send_dm', new RegExp(report[0].matcher));
+
+  hooks[0].timeout = 60;
+  fs.writeFileSync(settingsFile, JSON.stringify(settings));
+  run();
+  const repaired = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  assert.equal(repaired.hooks.SessionStart.flatMap((group) => group.hooks).find((hook) => hook.command.includes('setup.mjs')).timeout, 1200);
+  run();
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, 'utf8')), repaired);
+});
+
+test('kim 宛 Discord 報告の旧 hook（claude-watch-inbox の Stop/SessionStart）を全PCで外す', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-kim-discord-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const repo = path.resolve('.');
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  const legacy = cmd => ({ type: 'command', command: `pwsh -NoProfile -ExecutionPolicy Bypass -NonInteractive -File "C:\\Users\\x\\Downloads\\CLAUDE.md配布\\claude-watch-inbox\\hooks\\${cmd}"` });
+  const keep = { type: 'command', command: 'pwsh -NoProfile -File "C:\\Users\\x\\.claude\\hooks\\url-format-guard.ps1"' };
+  fs.writeFileSync(settingsFile, JSON.stringify({ hooks: {
+    Stop: [{ hooks: [legacy('post-stop-to-inbox.ps1'), keep] }, { hooks: [legacy('post-stop-to-discord.ps1')] }],
+    SessionStart: [{ hooks: [legacy('get-reply-on-session-start.ps1'), legacy('get-reply-from-discord.ps1')] }],
+  } }));
+  execFileSync(process.execPath, [path.join(repo, 'tools/register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } });
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const commands = event => settings.hooks[event].flatMap(g => g.hooks.map(h => h.command));
+  assert.ok(!commands('Stop').some(c => /post-stop-to-(?:inbox|discord)\.ps1/.test(c)), 'Stop の Discord 投稿 hook が残っている');
+  assert.ok(!commands('SessionStart').some(c => /get-reply-(?:on-session-start|from-discord)\.ps1/.test(c)), 'SessionStart の返信取得 hook が残っている');
+  assert.ok(commands('Stop').some(c => c.includes('url-format-guard.ps1')), '無関係な hook を消した');
+});
+
 test('既存PowerShell hookへExecutionPolicy Bypassを補いcost-loopをmjsへ移行する', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-'));
   const repo = path.resolve('.');
@@ -17,6 +79,11 @@ test('既存PowerShell hookへExecutionPolicy Bypassを補いcost-loopをmjsへ�
   } }));
   const stdout = execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } });
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const costGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('app-llm-cost-gate.mjs')));
+  assert.equal(costGroups.length, 1);
+  assert.equal(costGroups[0].matcher, 'Write|Edit|MultiEdit|Bash|PowerShell');
+  // Shared gate wrapper reserves 15 seconds around the hook's 5-second budget.
+  assert.equal(costGroups[0].hooks[0].timeout, 15);
   const commands = Object.values(settings.hooks).flatMap((groups) => groups.flatMap((group) => group.hooks || [])).map((hook) => hook.command);
   assert.ok(commands.some((command) => command.includes('cost-loop.mjs')));
   assert.ok(!commands.some((command) => command.includes('cost-loop.ps1')));
@@ -25,6 +92,21 @@ test('既存PowerShell hookへExecutionPolicy Bypassを補いcost-loopをmjsへ�
   assert.match(stdout, /hook修復: 実行ポリシー1件 \/ cost-loop移行1件/);
   const shareGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('share-before-send-gate.mjs')));
   assert.equal(shareGroups.length, 1);
+  const domainGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('recipient-domain-gate.mjs')));
+  assert.equal(domainGroups.length, 1);
+  const mailGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('mail-draft-account-gate.mjs')));
+  assert.equal(mailGroups.length, 1);
+  const consistencyGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('mail-consistency-gate.mjs')));
+  const outboundClaimGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('outbound-claim-evidence-gate.mjs')));
+  assert.equal(consistencyGroups.length, 1);
+  assert.equal(outboundClaimGroups.length, 1);
+  assert.equal(outboundClaimGroups[0].matcher, 'Bash|PowerShell');
+  assert.equal(consistencyGroups[0].matcher, 'Bash|PowerShell');
+  for (const action of ['create_draft', 'update_draft', 'send_message', 'reply', 'forward']) {
+    for (const connector of ['Gmail', 'Gmail_2']) assert.match(`mcp__claude_ai_${connector}__${action}`, new RegExp(mailGroups[0].matcher));
+  }
+  for (const name of ['Bash', 'PowerShell', 'mcp__claude_ai_Gmail_2__send_message']) assert.match(name, new RegExp(domainGroups[0].matcher));
+  assert.equal(domainGroups[0].hooks.find(hook => hook.command.includes('recipient-domain-gate.mjs')).timeout, 30);
   assert.match('mcp__claude_ai_Discord__send_dm', new RegExp(shareGroups[0].matcher));
   assert.match('mcp__claude_ai_Gmail__create_draft', new RegExp(shareGroups[0].matcher));
   assert.equal(fs.readFileSync(path.join(home, '.claude/share-ledger.jsonl'), 'utf8'), '');
@@ -69,12 +151,12 @@ test('stop-gate-runner hook は timeout 30 で Stop に登録される', () => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test('旧Stop gate 9本をrunner 1本へ移行し無関係なStop hookを残す', () => {
+test('個別Stop gateをrunner 1本へ移行し無関係なStop hookを残す', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-runner-'));
   const repo = path.resolve('.');
   const settingsFile = path.join(home, '.claude', 'settings.json');
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-  const old = ['handoff-quality-gate.mjs','stop-gate.mjs','manual-request-fullsteps-gate.mjs','handoff-investigation-gate.mjs','handoff-info-guard.mjs','negative-claim-gate.mjs','report-length-gate.mjs','self-check-before-asking-guard.mjs','doc-link-drive-guard.mjs'];
+  const old = ['handoff-quality-gate.mjs','stop-gate.mjs','manual-request-fullsteps-gate.mjs','handoff-investigation-gate.mjs','handoff-info-guard.mjs','negative-claim-gate.mjs','report-length-gate.mjs','self-check-before-asking-guard.mjs','doc-link-drive-guard.mjs','claude-fallback-report-gate.mjs'];
   const hooks = old.map((name) => ({ hooks: [{ type: 'command', command: `node "C:\\old\\tools\\${name}"` }] }));
   hooks.push({ hooks: [{ type: 'command', command: 'powershell -NoProfile -File "C:\\keep.ps1"' }, { type: 'command', command: 'node "C:\\keep-tool.mjs"' }] });
   fs.writeFileSync(settingsFile, JSON.stringify({ hooks: { Stop: hooks } }));
@@ -118,8 +200,13 @@ test('手間削減hook 8本を正しいイベントへ登録しstop-gateは登�
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
   const names = (event) => settings.hooks[event].flatMap((group) => group.hooks || []).map((hook) => path.basename([...String(hook.command).matchAll(/"([^"]+\.mjs)"/g)].at(-1)?.[1] || ''));
   assert.deepEqual(['automation-first-reminder.mjs', 'credentials-reminder.mjs', 'playbook-inject.mjs'].every((name) => names('UserPromptSubmit').includes(name)), true);
-  assert.deepEqual(['pretooluse-headless-background.mjs', 'pretooluse-serial-investigation.mjs', 'pipe-stage-permissions.mjs'].every((name) => names('PreToolUse').includes(name)), true);
+  assert.deepEqual(['pretooluse-headless-background.mjs', 'pretooluse-line-broadcast-guard.mjs', 'exec-tree-edit-guard.mjs', 'pretooluse-serial-investigation.mjs', 'pipe-stage-permissions.mjs'].every((name) => names('PreToolUse').includes(name)), true);
+  const editGuard = settings.hooks.PreToolUse.find(group => group.hooks.some(hook => hook.command.includes('exec-tree-edit-guard.mjs')));
+  assert.equal(editGuard.matcher, 'Write|Edit|MultiEdit|NotebookEdit');
+  assert.equal(editGuard.hooks.find(hook => hook.command.includes('exec-tree-edit-guard.mjs')).timeout, 5);
+  assert.ok(!editGuard.hooks[0].command.includes('gate-hook-runner.mjs'));
   assert.deepEqual(['auto-progress-ledger.mjs', 'stop-gate-runner.mjs', 'handoff-detail-guard.mjs', 'url-format-guard.mjs', 'check-e2e-before-stop.mjs'].every((name) => names('Stop').includes(name)), true);
+  assert.ok(fs.readFileSync(path.join(repo, 'tools', 'stop-gate-runner.mjs'), 'utf8').includes("'claude-fallback-report-gate'"));
   assert.equal(Object.values(settings.hooks).flatMap((groups) => groups).flatMap((group) => group.hooks || []).some((hook) => /(?:^|[\\/])stop-gate\.mjs/.test(String(hook.command))), false);
   fs.rmSync(home, { recursive: true, force: true });
 });
@@ -132,7 +219,7 @@ test('手間削減hook 8本は2回実行しても各1本のまま', () => {
   execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
   execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env });
   const commands = Object.values(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).hooks).flatMap((groups) => groups).flatMap((group) => group.hooks || []).map((hook) => String(hook.command));
-  for (const name of ['auto-progress-ledger', 'automation-first-reminder', 'credentials-reminder', 'pretooluse-headless-background', 'pretooluse-serial-investigation', 'stop-gate-runner', 'handoff-detail-guard', 'pipe-stage-permissions', 'url-format-guard', 'check-e2e-before-stop']) {
+  for (const name of ['auto-progress-ledger', 'automation-first-reminder', 'credentials-reminder', 'pretooluse-headless-background', 'pretooluse-line-broadcast-guard', 'exec-tree-edit-guard', 'pretooluse-serial-investigation', 'stop-gate-runner', 'handoff-detail-guard', 'pipe-stage-permissions', 'url-format-guard', 'check-e2e-before-stop']) {
     assert.equal(commands.filter((command) => command.includes(name)).length, 1, `${name} must be unique`);
   }
   fs.rmSync(home, { recursive: true, force: true });
@@ -404,4 +491,41 @@ test('billing and implementation approval register synchronously, globally and i
     assert.equal(groups.length, 1); assert.equal(groups[0].matcher, undefined);
     const hook = groups[0].hooks.find(h => h.command.includes(name)); assert.equal(hook.timeout, 5); assert.ok(!hook.async);
   }
+});
+
+test('bihin K-column gate registers once with Sheets writes and both shells', async t => {
+  const { HOOK_MATCHER } = await import('./bihin-kcol-gate.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-bihin-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  // Reproduce the path/name collision even in CI checkouts named differently.
+  const repo = path.join(home, 'bihin-kcol-gate');
+  fs.symlinkSync(path.resolve('.'), repo, 'junction');
+  const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo };
+  for (let n = 0; n < 2; n++) execFileSync(process.execPath, [path.join(repo, 'tools/register-hooks.mjs'), '--hooks-only'], { env, encoding: 'utf8' });
+  const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude/settings.json'), 'utf8'));
+  const groups = settings.hooks.PreToolUse.filter(g => g.hooks.some(h => h.command.includes('bihin-kcol-gate.mjs')));
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].matcher, HOOK_MATCHER);
+  assert.equal(groups[0].hooks[0].timeout, 15); // runner adds its five-second budget
+  assert.match(groups[0].hooks[0].command, /gate-hook-runner/);
+});
+
+test('全OSの旧e2e/verify ps1登録を同期Stop mjsへ収束し再実行で不変', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-migration-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const file = path.join(home, '.claude/settings.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const commands = ['C:\\Users\\uers\\.claude\\hooks\\', '/Users/test/.claude/hooks/', '/home/test/.claude/hooks/'].flatMap(root => ['check-e2e-before-stop', 'verify-before-done-detector'].map(name => `pwsh -File "${root}${name}.ps1"`));
+  fs.writeFileSync(file, JSON.stringify({ hooks: { Stop: [{ hooks: commands.map(command => ({ command, async: true })) }] } }));
+  const run = () => execFileSync(process.execPath, [path.resolve('tools/register-hooks.mjs'), '--hooks-only'], { env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: path.resolve('.') } });
+  run();
+  const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const hooks = settings.hooks.Stop.flatMap(g => g.hooks);
+  for (const name of ['check-e2e-before-stop', 'verify-before-done-detector']) {
+    assert.equal(hooks.filter(h => h.command.includes(name + '.ps1')).length, 0);
+    const current = hooks.filter(h => h.command.includes(name + '.mjs'));
+    assert.equal(current.length, 1);
+    assert.notEqual(current[0].async, true);
+  }
+  run(); assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), settings);
 });

@@ -49,11 +49,26 @@
       "appName": "aujust／営業自動化",
       "kind": "next",
       "intake": "supabase",
-      "pagePathInclude": ["/dashboard", "/customers/", "/deals/"],
-      "pagePathExclude": ["/cases/", "/help/【購買部】", "/requests/self-purchase", "/admin/inquiries"],
+      "pagePathInclude": [
+        "/dashboard",
+        "/customers/",
+        "/deals/"
+      ],
+      "pagePathExclude": [
+        "/cases/",
+        "/help/【購買部】",
+        "/requests/self-purchase",
+        "/admin/inquiries"
+      ],
       "refs": {
-        "url": ["AUJUST_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL"],
-        "secret": ["AUJUST_SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_ROLE_KEY"],
+        "url": [
+          "AUJUST_SUPABASE_URL",
+          "NEXT_PUBLIC_SUPABASE_URL"
+        ],
+        "secret": [
+          "AUJUST_SUPABASE_SERVICE_ROLE_KEY",
+          "SUPABASE_SERVICE_ROLE_KEY"
+        ],
         "repo": "AUJUST_REPO",
         "appDir": "AUJUST_APP_DIR"
       }
@@ -78,6 +93,17 @@
         "secret": "FEEDBACK_RELAY_SECRET",
         "repo": "FEEDBACK_53423A14CB08_REPO",
         "appDir": "FEEDBACK_53423A14CB08_APP_DIR"
+      }
+    },
+    {
+      "appName": "construction-manual-app",
+      "kind": "next",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "FEEDBACK_F3898056D69F_REPO",
+        "appDir": "FEEDBACK_F3898056D69F_APP_DIR"
       }
     }
   ]

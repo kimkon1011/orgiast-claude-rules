@@ -9,7 +9,7 @@ import { readAssistantText } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { resolveOwner } from './lib/owner-identity.mjs';
 
-const NONE = /^(?:なし|無し|ナシ|—|–|-|－|ー|―|n\/a|none)$/i;
+const NONE = /^(?:なし|無し|ナシ|ありません|—|–|-|－|ー|―|n\/a|none)$/i;
 // 「**この後の自動進行**: text」「- この後の自動進行：text」など装飾付きにも一致させる。
 const PROMISE_RE = /この後の自動進行[\s*`_)）」』]*[:：][ \t]*([^\r\n]*)/g;
 const NEXT_KIM_RE = /次に\s*kim\s*がすること[\s*`_)）」』]*[:：][ \t]*([^\r\n]*)/gi;
@@ -46,6 +46,13 @@ export function extractNextKim(text) {
 
 export const ledgerFile = (home = process.env.ORGIAST_HOME || os.homedir()) => path.join(home, '.claude', 'auto-progress-ledger.jsonl');
 
+export const LEDGER_RENAME_RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+export const LEDGER_RENAME_ATTEMPTS = 10;
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 export function readLedger(file) {
   let text = '';
   try { text = fs.readFileSync(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
@@ -57,16 +64,55 @@ export function readLedger(file) {
   return rows;
 }
 
-export function writeLedger(file, rows) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+export function writeLedger(file, rows, io = {}) {
+  const mkdirSync = io.mkdirSync ?? fs.mkdirSync;
+  const writeFileSync = io.writeFileSync ?? fs.writeFileSync;
+  const renameSync = io.renameSync ?? fs.renameSync;
+  const rmSync = io.rmSync ?? fs.rmSync;
+  const wait = io.sleepSync ?? sleepSync;
+  mkdirSync(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(temp, rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''));
-  fs.renameSync(temp, file);
+  writeFileSync(temp, rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''));
+  try {
+    for (let attempt = 0; attempt < LEDGER_RENAME_ATTEMPTS; attempt += 1) {
+      try {
+        renameSync(temp, file);
+        return;
+      } catch (error) {
+        if (!LEDGER_RENAME_RETRY_CODES.has(error?.code) || attempt === LEDGER_RENAME_ATTEMPTS - 1) throw error;
+        wait(Math.min(50 * (2 ** attempt), 2000));
+      }
+    }
+  } catch (error) {
+    try { rmSync(temp, { force: true }); } catch { /* 元の rename エラーを優先する */ }
+    throw error;
+  }
+}
+
+export function cleanupOldLedgerTemps(file, { now = Date.now(), maxAgeMs = 3600000, io = {} } = {}) {
+  const readdirSync = io.readdirSync ?? fs.readdirSync;
+  const statSync = io.statSync ?? fs.statSync;
+  const rmSync = io.rmSync ?? fs.rmSync;
+  const dir = path.dirname(file);
+  const prefix = `${path.basename(file)}.`;
+  let names;
+  try { names = readdirSync(dir); } catch (error) { if (error?.code === 'ENOENT') return 0; throw error; }
+  let removed = 0;
+  for (const name of names) {
+    if (!name.startsWith(prefix) || !name.endsWith('.tmp')) continue;
+    const candidate = path.join(dir, name);
+    try {
+      if (now - statSync(candidate).mtimeMs <= maxAgeMs) continue;
+      rmSync(candidate, { force: true });
+      removed += 1;
+    } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+  }
+  return removed;
 }
 
 export const MAX_RESUMES = 8; // 1件あたりの自動再開の累計上限（watch/digest 共用。循環 import 回避のためここに置く）
 
-export const OPEN_STATUSES = new Set(['open', 'stalled', 'resumed', 'waiting_user']);
+export const OPEN_STATUSES = new Set(['open', 'stalled', 'resumed', 'waiting_user', 'scheduled', 'starting', 'start_overdue']);
 
 // Timestamp order is authoritative; equal timestamps prefer the later ledger line.
 export function latestOpenPromises(rows) {
@@ -81,9 +127,30 @@ export function latestOpenPromises(rows) {
 }
 
 // 同一 sessionId の open 行は最新で置換する（旧行は superseded）。resumed も「進行中の宣言」なので置換対象。
+// 同じ session に open の check 付き行があるときは、新しい約束行に check 情報を引き継ぐ。
 export function applyPromise(rows, record) {
-  const next = rows.map((row) => (row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) ? { ...row, status: 'superseded' } : row));
-  next.push(record);
+  let toAdd = record;
+  if (!toAdd.check && !toAdd.startWhen) {
+    const existing = rows
+      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && (row.check || row.startWhen))
+      .sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0))[0];
+    if (existing) {
+      toAdd = {
+        ...toAdd,
+        ...(existing.startWhen ? { startWhen: existing.startWhen, startedAt: existing.startedAt,
+          ...(['scheduled', 'starting', 'start_overdue'].includes(existing.status) ? { status: existing.status } : {}) } : {}),
+        check: existing.check,
+        checkCwd: existing.checkCwd ?? toAdd.cwd,
+        deadlineAt: existing.deadlineAt,
+        label: existing.label,
+        nextClaude: existing.nextClaude,
+        ...(existing.checkTimeoutMs ? { checkTimeoutMs: existing.checkTimeoutMs } : {}),
+        ...(existing.lastUnmetNotifiedAt ? { lastUnmetNotifiedAt: existing.lastUnmetNotifiedAt } : {}),
+      };
+    }
+  }
+  const next = rows.map((row) => (row.sessionId === toAdd.sessionId && OPEN_STATUSES.has(row.status) ? { ...row, status: 'superseded' } : row));
+  next.push(toAdd);
   return next;
 }
 
@@ -101,6 +168,22 @@ export function buildRecord(input, text, { now = Date.now(), hostname = os.hostn
 
 function safeUser() { try { return os.userInfo().username; } catch { return ''; } }
 
+// 通知の出どころ1行。DM 本文だけで「どの PC・アカウント・プロジェクトの Claude Code か」を判別できるようにする（2026-10-23 kim 指示）。
+export function originLine(row, { label = '', localOwner = '', home = '' } = {}) {
+  const pc = label && row.pc && label !== row.pc ? `${label}（${row.pc}）` : (label || row.pc || '不明なPC');
+  const account = row.owner || localOwner || row.user || '不明';
+  const project = String(row.cwd || '').split(/[\\/]+/).filter(Boolean).pop() || '不明';
+  let purpose = row.purpose || row.sessionPurpose || row.objective || '';
+  if (!purpose && home && row.sessionId) {
+    try { purpose = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'session-purpose', `${row.sessionId}.json`), 'utf8')).purpose || ''; } catch {}
+  }
+  purpose = String(purpose).replace(/\s+/g, ' ').trim();
+  const parts = [`プロジェクト: ${project}`];
+  if (purpose) parts.push(`セッションの目的: ${purpose.length > 50 ? `${purpose.slice(0, 50)}…` : purpose}`);
+  if (row.sessionId) parts.push(`作業ID: ${String(row.sessionId).slice(0, 8)}`);
+  return `【${pc}・${account} の Claude Code】${parts.join(' ／ ')}`;
+}
+
 export function record(input, { home, now, hostname, user, owner, readText = (p) => readAssistantText(p).text } = {}) {
   const text = typeof input?.last_assistant_message === 'string' && input.last_assistant_message.trim()
     ? input.last_assistant_message
@@ -108,8 +191,9 @@ export function record(input, { home, now, hostname, user, owner, readText = (p)
   const row = buildRecord(input, text, { now, hostname, user, owner: owner ?? resolveOwner({ home }) });
   if (!row) return null;
   const file = ledgerFile(home);
-  writeLedger(file, applyPromise(readLedger(file), row));
-  return row;
+  const rows = applyPromise(readLedger(file), row);
+  writeLedger(file, rows);
+  return rows.at(-1);
 }
 
 async function main() {
@@ -124,14 +208,7 @@ if (isEntry(import.meta.url)) { await main(); process.exitCode = 0; }
 
 export const rowKey = (row) => `${row.pc}|${row.user}|${row.sessionId}|${row.ts}`;
 
-export function isUnattendedRow(row, home) {
-  const normalize = value => String(value || '').replace(/\\/g, '/').replace(/^\/mnt\/([a-z])\//i, '$1:/').replace(/\/+$/, '').toLowerCase();
-  const cwd = normalize(row.cwd), root = normalize(home);
-  return /(?:^|\/)\.stall-sweeper(?:\/|$)/.test(cwd) || ['nightly-repo', 'auto-session', 'scratch'].some(name => {
-    const base = `${root}/.claude/${name}`;
-    return cwd === base || cwd.startsWith(`${base}/`);
-  });
-}
+export { isUnattendedRow } from './lib/unattended-session.mjs';
 
 export const kimAction = row => {
   const value = String(row.nextKim || '').trim();

@@ -11,12 +11,18 @@ import { machineIdentity } from './machine-identity.mjs';
 import { addDecision, listDecisions } from './pending-decisions.mjs';
 import { loadOptin, redactSecrets, consentCommand, validExecCwd, truncateAnswer } from './fleet-agent.mjs';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
-import { relayQuestions, readQuestion, clearResume, reconcileResumes, collectQuestions, validSessionId, RESUME_LIMIT_MS } from './fleet-question-relay.mjs';
+import { relayQuestions, readQuestion, clearResume, reconcileResumes, collectQuestions, validSessionId, RESUME_LIMIT_MS, HUB_LABEL } from './fleet-question-relay.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { LANE_HEALTH_KIM_PC, parseLaneDoctorOutput, deadLanes, repairAdvice, laneHealthSignature, buildLaneHealthMail } from './lib/lane-health.mjs';
 import { dailyRuleCompliance } from './fleet-rule-compliance-daily.mjs';
 import { appendAfterFromEnv } from './growi-manual.mjs';
+import { fetchMailTargets } from './fleet-mail-targets.mjs';
+import { allowedReadonlyPrompt } from './lib/fleet-selfcheck-prompt.mjs';
 export { resolveFleetLabel, dailyRuleCompliance };
+
+export function isFleetHub(label, config) {
+  return label === (config.FLEET_HUB || HUB_LABEL);
+}
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -199,13 +205,15 @@ export async function dailyLaneHealth({ dir, label, request, now = Date.now, pla
   const marker = path.join(dir, '.fleet-lane-health-day');
   const day = new Date(now()).toISOString().slice(0, 10);
   let last = ''; try { last = fs.readFileSync(marker, 'utf8').trim(); } catch {}
-  if (last === day) return { skipped: 'today' };
-  fs.writeFileSync(marker, day);
+  const cached = readJson(path.join(dir, 'lane-health.json'), {});
+  const stale = Object.values(cached?.lanes || {}).some(lane => /:stale$/.test(lane.reason || ''));
+  if (last === day && !stale) return { skipped: 'today' };
   const doctor = path.join(repo, 'tools', 'lane-doctor.mjs');
   if (!fs.existsSync(doctor)) return { skipped: 'no-script' };
-  const r = spawnSyncImpl(process.execPath, [doctor, '--probe', '--json'], { encoding: 'utf8', windowsHide: true, timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] });
+  const r = spawnSyncImpl(process.execPath, [doctor, '--probe', '--json'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: path.dirname(dir) }, windowsHide: true, timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] });
   const health = parseLaneDoctorOutput(r?.stdout);
-  if (!health) return { skipped: 'probe-failed' };
+  if (!health || r.error || r.status !== 0) return { skipped: 'probe-failed' };
+  fs.writeFileSync(marker, day);
   const dead = deadLanes(health);
   const stateFile = path.join(dir, '.fleet-lane-health-sent.json');
   const state = readJson(stateFile, {}) || {};
@@ -228,6 +236,12 @@ export async function dailyLaneHealth({ dir, label, request, now = Date.now, pla
   return { reported: dead.length ? dead : 'recovered', autoFix };
 }
 export const LOCK_MS = 10 * 60 * 1000;
+export const PRE_POLL_BUDGET_MS = 90_000;
+export const POLL_SOFT_DEADLINE_MS = 8 * 60_000;
+export const LOCK_HARD_CAP_MS = 20 * 60_000;
+export const SLOW_MAIL_PHASE_MS = 5_000;
+export const POLL_HARD_DEADLINE_MS = 15 * 60_000;
+export const POLL_HARD_DEADLINE_EXIT = 75;
 export function validId(id) {
   if (!/^mail-[A-Za-z0-9-]{1,180}$/.test(String(id ?? ''))) throw new Error('invalid mail id');
   return id;
@@ -281,10 +295,11 @@ const nextHop = mail => Number(mail.hop || 0) + 1;
 export function mailId(now = Date.now, random = randomBytes) {
   return `mail-${now()}-${random(4).toString('hex')}`;
 }
-export function resolveMailTarget(to, pcMap = {}, beacons = []) {
+export function resolveMailTarget(to, pcMap = {}, beacons = [], serverPolls = {}) {
   const remote = resolveRemoteName(to, pcMap);
   const entries = Object.entries(pcMap || {}).filter(([key, value]) => !key.startsWith('_') && value && typeof value === 'object' && !Array.isArray(value));
-  const known = [...entries.map(([label, entry]) => ({ ...entry, label })), ...(Array.isArray(beacons) ? beacons : []).filter(b => typeof b?.label === 'string')];
+  const polled = Object.entries(serverPolls || {}).filter(([, at]) => typeof at === 'string' && Number.isFinite(Date.parse(at))).map(([label]) => ({ label }));
+  const known = [...entries.map(([label, entry]) => ({ ...entry, label })), ...(Array.isArray(beacons) ? beacons : []).filter(b => typeof b?.label === 'string'), ...polled];
   const exact = remote.resolved ? remote.to : known.find(b => b.label === to)?.label
     ?? known.find(b => b.hostname?.toLowerCase() === to?.toLowerCase())?.label;
   if (exact || to === 'all') return { to: exact || 'all', resolved: true };
@@ -311,6 +326,7 @@ export const COMMAND_LOCK_DELAY_MS = 200;
 export const LOCK_BUSY_EXIT = 6;
 export const ACK_BATCH_LIMIT = 100;
 export const SENT_STATUS_MAX_LOOKUP_FAILURES = 5;
+export const FLEET_POLL_BUSY_STREAK_LIMIT = 5;
 export const CAPABILITY_BACKOFF_MS = 3600000;
 export const SERVER_MAX_ATTEMPTS = 5;
 export const INTERRUPTED_PROMPT_MS = 35 * 60000;
@@ -442,6 +458,7 @@ function validateMailResponse(kind, payload, result) {
   checked(result);
   const valid = kind === 'mail-poll' ? Array.isArray(result?.messages)
     : kind === 'mail-alerts' ? Array.isArray(result?.alerts)
+    : kind === 'mail-trace' ? Array.isArray(result?.mails)
     : kind === 'mail-ack' && payload.ids ? Array.isArray(result?.results)
     : result && Object.hasOwn(result, 'mail');
   if (!valid) throw Object.assign(new Error('fleet-mail: GAS mail handlers are not deployed'), { code: 'UNSUPPORTED_ACTION' });
@@ -603,7 +620,7 @@ function joinReply(home, mail) {
   if (!replies.some(row => row.replyId === mail.id)) fs.appendFileSync(repliesFile, `${JSON.stringify({ id: mail.replyTo, replyId: mail.id, from: mail.from, resultBody: mail.body, resultAt: mail.createdAt })}\n`, { mode: 0o600 });
 }
 
-export function acquireLock(file, { now = Date.now, pid = process.pid } = {}) {
+export function acquireLock(file, { now = Date.now, pid = process.pid, hardCapMs = LOCK_HARD_CAP_MS } = {}) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const owner = { pid, nonce: randomUUID(), createdAt: now() };
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -611,7 +628,12 @@ export function acquireLock(file, { now = Date.now, pid = process.pid } = {}) {
       const fd = fs.openSync(file, 'wx', 0o600);
       fs.writeFileSync(fd, JSON.stringify(owner)); fs.closeSync(fd);
       const owns = () => { try { return readJson(file)?.nonce === owner.nonce; } catch { return false; } };
-      const heartbeat = setInterval(() => { if (owns()) { const d = new Date(now()); fs.utimesSync(file, d, d); } }, 30_000);
+      const acquiredAt = now();
+      const heartbeat = setInterval(() => {
+        const at = now();
+        if (at - acquiredAt >= hardCapMs) { clearInterval(heartbeat); return; }
+        if (owns()) { const d = new Date(at); fs.utimesSync(file, d, d); }
+      }, 30_000);
       heartbeat.unref();
       return () => { clearInterval(heartbeat); if (owns()) fs.unlinkSync(file); };
     } catch (e) {
@@ -677,6 +699,7 @@ export function parseArgs(argv) {
   if (options['--send']) {
     for (const key of ['--to', '--kind', '--body-file', '--why']) if (!options[key]?.trim()) throw new Error(`${key} 必須`);
     if (!['prompt', 'note'].includes(options['--kind'])) throw new Error('--kind must be prompt or note');
+    if (options['--kind'] === 'note' && /^\s*\[作業依頼\]/.test(options['--why'])) throw new Error('[作業依頼] は受信側で実行されるよう --kind prompt で送ってください（note は表示のみで実行されません）');
     if (options['--to'].length > 128 || options['--why'].length > 1000) throw new Error('宛先または理由が長すぎます');
     if (options['--exec'] !== undefined) {
       if (!EXEC_KINDS.includes(options['--exec'])) throw new Error(`--exec は ${EXEC_KINDS.join(' / ')} のみ対応`);
@@ -698,16 +721,30 @@ export function parseArgs(argv) {
   if (options['--wait-for'] && (!['seen', 'done'].includes(options['--wait-for']) || options['--wait'] === undefined)) throw new Error('invalid --wait-for');
   return options;
 }
-export function createClient({ url, token, fetchImpl = fetch }) {
+export function createClient({ url, token, fetchImpl = fetch, sleepImpl = sleep }) {
   return async (kind, payload, timeoutMs = 60_000) => {
-    const response = await fetchImpl(url, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, redirect: 'follow',
-      body: JSON.stringify({ ...payload, kind, token }), signal: AbortSignal.timeout(Math.max(1, Math.ceil(timeoutMs)))
-    });
-    if (!response.ok) throw new Error(`fleet-mail HTTP ${response.status}`);
-    const result = await response.json();
-    if (result?.ok !== true) throw new Error(`fleet-mail: ${result?.reason || result?.error || 'invalid response'}`);
-    return validateMailResponse(kind, payload, result);
+    const retries = kind === 'mail-send' ? COMMAND_LOCK_RETRIES : 2;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      const response = await fetchImpl(url, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, redirect: 'follow',
+        body: JSON.stringify({ ...payload, kind, token }), signal: AbortSignal.timeout(Math.max(1, Math.ceil(timeoutMs)))
+      });
+      if (!response.ok && response.status !== 503) throw new Error(`fleet-mail HTTP ${response.status}`);
+      let result;
+      try { result = await response.json(); }
+      catch (error) {
+        if (!response.ok) throw new Error(`fleet-mail HTTP ${response.status}`);
+        throw error;
+      }
+      if (result?.ok === false && result.error === 'busy') {
+        if (attempt === retries) throw Object.assign(new Error('fleet-mail: busy'), { code: 'SERVER_BUSY' });
+        await sleepImpl(kind === 'mail-send' ? COMMAND_LOCK_DELAY_MS : 1_000 * 2 ** attempt);
+        continue;
+      }
+      if (!response.ok) throw new Error(`fleet-mail HTTP ${response.status}`);
+      if (result?.ok !== true) throw new Error(`fleet-mail: ${result?.reason || result?.error || 'invalid response'}`);
+      return validateMailResponse(kind, payload, result);
+    }
   };
 }
 export async function waitForReply(id, seconds, { request, now = Date.now, sleepImpl = sleep, waitFor = 'done' }) {
@@ -813,77 +850,129 @@ export async function pollOnce(deps = {}) {
   const err = deps.stderr ?? console.error;
   const now = deps.now ?? Date.now;
   const dryRun = !!deps.dryRun;
-  const config = envFile(path.join(dir, 'fleet-sheet.env'));
-  if (!config.FLEET_SHEET_URL || !config.FLEET_SHEET_TOKEN) { err('fleet-mail: fleet-sheet.env 未設定のためスキップ'); return { skipped: 'unconfigured' }; }
-  const identity = deps.identity ?? machineIdentity();
-  const label = deps.label ?? resolveFleetLabel(home, identity);
-  const request = deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch });
-  const release = dryRun ? () => {} : acquireLock(path.join(dir, 'fleet-mail.lock'), { now });
-  if (!release) { err('fleet-mail: 別の受信処理が実行中'); return { skipped: 'locked' }; }
-  const fileOf = id => inboxPath(home, id);
-  const log = (name, value) => fs.appendFileSync(path.join(dir, `fleet-mail-${name}.jsonl`), `${JSON.stringify({ at: new Date(now()).toISOString(), ...value })}\n`, { mode: 0o600 });
-  const state = (id, action, extra = {}) => syncMailState({ home, id, action, request, now, from: label, stderr: err, ...extra });
-  const client = capabilityClient(request, { home, now, stderr: err });
-  const quarantineDir = path.join(dir, 'fleet-inbox', 'quarantine');
-  const quarantineAttempts = new Set();
-  const failQuarantined = async (file, record) => {
-    if (!record.serverId || !record.pendingServer?.length || quarantineAttempts.has(record.serverId)) return;
-    quarantineAttempts.add(record.serverId);
-    try {
-      await client('mail-fail', { id: record.serverId, from: label, reason: record.reason });
-      writeJson(file, { ...record, pendingServer: [] });
-    } catch (error) {
-      if (error.code === 'CAPABILITY_BACKOFF') return;
-      record.attempts = (record.attempts || 0) + 1;
-      if (record.attempts >= SERVER_MAX_ATTEMPTS) { record.pendingServer = []; err('fleet-mail: 同期打切り=1'); }
-      writeJson(file, record);
-    }
+  const startedAt = now();
+  const phases = {};
+  let outcome = 'error', activePhase = null;
+  const endPhase = () => {
+    if (!activePhase) return;
+    const { name, at } = activePhase;
+    phases[name] = (phases[name] || 0) + now() - at;
+    activePhase = null;
   };
-  const quarantine = async (raw, error) => {
-    let serverId = null;
-    try { serverId = validId(raw?.id); } catch { /* Never send an invalid id. */ }
-    const id = serverId || `mail-invalid-${createHash('sha256').update(JSON.stringify(raw) ?? 'null').digest('hex').slice(0, 16)}`;
-    const record = { raw: JSON.parse(JSON.stringify(raw ?? null, (_key, value) => typeof value === 'string' ? redactSecrets(value) : value)), serverId, reason: redactSecrets(error.message).slice(0, 1000), pendingServer: serverId ? ['fail'] : [] };
-    const file = path.join(quarantineDir, `${id}.json`);
-    const prior = readJson(file);
-    if (prior) { record.attempts = prior.attempts || 0; record.pendingServer = prior.pendingServer || []; }
-    writeJson(file, record);
-    if (serverId) updateInbox(serverId, mail => mail && !terminal(mail) ? { ...mail, status: 'failed', failReason: record.reason } : null, { home });
-    await failQuarantined(file, record);
+  const startPhase = name => { endPhase(); activePhase = { name, at: now() }; };
+  const timed = async (name, run) => {
+    startPhase(name);
+    try { return await run(); } finally { endPhase(); }
   };
+  let release;
   try {
+    const config = envFile(path.join(dir, 'fleet-sheet.env'));
+    if (!config.FLEET_SHEET_URL || !config.FLEET_SHEET_TOKEN) { outcome = 'unconfigured'; err('fleet-mail: fleet-sheet.env 未設定のためスキップ'); return { skipped: 'unconfigured' }; }
+    const identity = deps.identity ?? machineIdentity();
+    const label = deps.label ?? resolveFleetLabel(home, identity);
+    const request = deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch, sleepImpl: deps.sleep });
+    release = dryRun ? () => {} : acquireLock(path.join(dir, 'fleet-mail.lock'), { now });
+    if (!release) { outcome = 'locked'; err('fleet-mail: 別の受信処理が実行中'); return { skipped: 'locked' }; }
+    deps.onLock?.(release, () => ({ startedAt, phases: { ...phases }, stuckIn: activePhase?.name ?? null }));
+    const fileOf = id => inboxPath(home, id);
+    const log = (name, value) => fs.appendFileSync(path.join(dir, `fleet-mail-${name}.jsonl`), `${JSON.stringify({ at: new Date(now()).toISOString(), ...value })}\n`, { mode: 0o600 });
+    const state = (id, action, extra = {}) => syncMailState({ home, id, action, request, now, from: label, stderr: err, ...extra });
+    const client = capabilityClient(request, { home, now, stderr: err });
+    const quarantineDir = path.join(dir, 'fleet-inbox', 'quarantine');
+    const quarantineAttempts = new Set();
+    const failQuarantined = async (file, record) => {
+      if (!record.serverId || !record.pendingServer?.length || quarantineAttempts.has(record.serverId)) return;
+      quarantineAttempts.add(record.serverId);
+      try {
+        await client('mail-fail', { id: record.serverId, from: label, reason: record.reason });
+        writeJson(file, { ...record, pendingServer: [] });
+      } catch (error) {
+        if (error.code === 'CAPABILITY_BACKOFF') return;
+        record.attempts = (record.attempts || 0) + 1;
+        if (record.attempts >= SERVER_MAX_ATTEMPTS) { record.pendingServer = []; err('fleet-mail: 同期打切り=1'); }
+        writeJson(file, record);
+      }
+    };
+    const quarantine = async (raw, error) => {
+      let serverId = null;
+      try { serverId = validId(raw?.id); } catch { /* Never send an invalid id. */ }
+      const id = serverId || `mail-invalid-${createHash('sha256').update(JSON.stringify(raw) ?? 'null').digest('hex').slice(0, 16)}`;
+      const record = { raw: JSON.parse(JSON.stringify(raw ?? null, (_key, value) => typeof value === 'string' ? redactSecrets(value) : value)), serverId, reason: redactSecrets(error.message).slice(0, 1000), pendingServer: serverId ? ['fail'] : [] };
+      const file = path.join(quarantineDir, `${id}.json`);
+      const prior = readJson(file);
+      if (prior) { record.attempts = prior.attempts || 0; record.pendingServer = prior.pendingServer || []; }
+      writeJson(file, record);
+      if (serverId) updateInbox(serverId, mail => mail && !terminal(mail) ? { ...mail, status: 'failed', failReason: record.reason } : null, { home });
+      await failQuarantined(file, record);
+    };
     if (!dryRun) {
-      arrivalMigrationTime(home, now);
-      const removed = collectQuestions({ home, now });
-      if (removed) err(`fleet-mail: 質問回収=${removed}`);
-      reconcileResumes({ home, now });
-      try { await relayQuestions({ home, hub: config.FLEET_HUB, label, request, now, stderr: err }); }
-      catch { err('fleet-mail: 質問転送再試行待ち=1'); }
-      migrateProcessed(home);
+      const preStartedAt = now();
+      let preDeferred = false;
+      const preBudgetAvailable = () => {
+        if (!preDeferred && now() - preStartedAt >= PRE_POLL_BUDGET_MS) {
+          preDeferred = true;
+          err('fleet-mail: 受信前処理を次回へ延期=1');
+        }
+        return !preDeferred;
+      };
+      const prePhase = async (name, run) => { if (preBudgetAvailable()) await timed(name, run); };
+      await prePhase('arrivalMigrationTime', () => arrivalMigrationTime(home, now));
+      await prePhase('collectQuestions', () => {
+        const removed = collectQuestions({ home, now });
+        if (removed) err(`fleet-mail: 質問回収=${removed}`);
+      });
+      await prePhase('reconcileResumes', () => reconcileResumes({ home, now }));
+      await prePhase('relayQuestions', async () => {
+        try { await relayQuestions({ home, hub: config.FLEET_HUB, label, request, now, stderr: err }); }
+        catch { err('fleet-mail: 質問転送再試行待ち=1'); }
+      });
+      await prePhase('migrateProcessed', () => migrateProcessed(home));
       // Archive corrupt cache under a per-file lock, then recover via mail-get even after delivery.
-      const inboxDir = path.join(dir, 'fleet-inbox');
-      if (fs.existsSync(inboxDir)) for (const name of fs.readdirSync(inboxDir).filter(n => /^mail-[A-Za-z0-9-]+\.json$/.test(n))) {
-        try { updateInbox(name.slice(0, -5), () => null, { home }); }
-        catch { err('fleet-mail: 保存再試行待ち=1'); }
-      }
-      expireInbox(home, now);
-      await syncPending({ home, request, now, from: label, stderr: err });
-      if (fs.existsSync(quarantineDir)) for (const name of fs.readdirSync(quarantineDir).filter(n => /^mail-[A-Za-z0-9-]+\.json$/.test(n))) {
-        try { const file = path.join(quarantineDir, name); await failQuarantined(file, readJson(file)); } catch { err('fleet-mail: 隔離記録の再同期失敗=1'); }
-      }
+      await prePhase('inboxScan', () => {
+        const inboxDir = path.join(dir, 'fleet-inbox');
+        if (fs.existsSync(inboxDir)) for (const name of fs.readdirSync(inboxDir).filter(n => /^mail-[A-Za-z0-9-]+\.json$/.test(n))) {
+          if (!preBudgetAvailable()) break;
+          try { updateInbox(name.slice(0, -5), () => null, { home }); }
+          catch { err('fleet-mail: 保存再試行待ち=1'); }
+        }
+      });
+      await prePhase('expireInbox', () => expireInbox(home, now));
+      await prePhase('syncPending', () => syncPending({ home, request, now, from: label, stderr: err }));
+      await prePhase('quarantineResync', async () => {
+        if (fs.existsSync(quarantineDir)) for (const name of fs.readdirSync(quarantineDir).filter(n => /^mail-[A-Za-z0-9-]+\.json$/.test(n))) {
+          if (!preBudgetAvailable()) break;
+          try { const file = path.join(quarantineDir, name); await failQuarantined(file, readJson(file)); } catch { err('fleet-mail: 隔離記録の再同期失敗=1'); }
+        }
+      });
     }
     const pollFile = path.join(dir, '.fleet-mail-poll.json');
     const batch = dryRun ? {} : readJson(pollFile) || { requestId: randomUUID(), successfulIds: [], quarantinedIds: [] };
     if (!dryRun) writeJson(pollFile, batch);
-    const response = checked(await request('mail-poll', { to: label, hostname: identity.hostname, dryRun, requestId: batch.requestId,
-      // Broadcast remains pending for presentation; the inbox itself is the durable delivery receipt.
-      processedIds: readInbox(home, { unreadOnly: false }).filter(m => m.to === 'all' && Date.parse(m.expiresAt) > now()).map(m => m.id) }));
+    const lastPollFile = path.join(dir, '.fleet-mail-last-poll.json');
+    let response;
+    try {
+      response = await timed('mail-poll', async () => checked(await request('mail-poll', { to: label, hostname: identity.hostname, dryRun, requestId: batch.requestId,
+        // Broadcast remains pending for presentation; the inbox itself is the durable delivery receipt.
+        processedIds: readInbox(home, { unreadOnly: false }).filter(m => m.to === 'all' && Date.parse(m.expiresAt) > now()).map(m => m.id) })));
+    } catch (error) {
+      if (error.code !== 'SERVER_BUSY' && !/^(?:fleet-mail: )?busy$/.test(error.message)) throw error;
+      const previous = readJson(lastPollFile, {});
+      const busyStreak = (previous.busyStreak || 0) + 1;
+      if (!dryRun) writeJson(lastPollFile, { ...previous, busyStreak, busyAt: new Date(now()).toISOString() });
+      if (busyStreak >= FLEET_POLL_BUSY_STREAK_LIMIT) {
+        throw Object.assign(new Error(`fleet-mail: サーバ混雑が${busyStreak}回連続（約${busyStreak * 2}分）。GAS のロック競合を確認`), { code: 'SERVER_BUSY' });
+      }
+      err(`fleet-mail: サーバ混雑のため受信を次回へ延期=1 (連続${busyStreak})`);
+      outcome = 'busy';
+      return { skipped: 'busy', busyStreak };
+    }
     if (dryRun) {
       const messages = response.messages.map(m => ({ ...m, from: redactSecrets(m.from), why: redactSecrets(m.why), body: redactSecrets(m.body), resultBody: redactSecrets(m.resultBody) }));
-      out(JSON.stringify(messages)); return { messages };
+      out(JSON.stringify(messages)); outcome = 'ok'; return { messages };
     }
     const received = [], handled = [], fresh = new Set();
     let rejected = 0, undurable = 0, legacy = 0;
+    startPhase('saveReceived');
     const recover = [], corruptDir = path.join(dir, 'fleet-inbox', 'corrupt');
     if (fs.existsSync(corruptDir)) for (const name of fs.readdirSync(corruptDir).filter(n => /^mail-[A-Za-z0-9-]+\.json$/.test(n))) {
       const id = name.slice(0, -5);
@@ -909,7 +998,14 @@ export async function pollOnce(deps = {}) {
           return terminal(raw) && !terminal(existing) ? { ...existing, ...raw, body: redactSecrets(raw.body), resultBody: redactSecrets(raw.resultBody) } : existing;
         }, { home });
         if (!saved) { undurable++; continue; }
-        if (created) { fresh.add(raw.id); log('received', { count: 1 }); if (legacyTo) legacy++; }
+        if (created) {
+          fresh.add(raw.id); if (legacyTo) legacy++;
+          // Durable receipt metadata survives inbox processing/archival; never log body or credentials.
+          log('received', { count: 1,
+            id: saved.id, from: saved.from, to: saved.to, kind: saved.kind, why: saved.why,
+            createdAt: saved.createdAt, receivedAt: saved.receivedAt
+          });
+        }
         joinReply(home, saved);
         received.push(raw.id);
         batch.successfulIds = [...new Set([...(batch.successfulIds || []), raw.id])];
@@ -925,12 +1021,14 @@ export async function pollOnce(deps = {}) {
     if (!undurable) fs.unlinkSync(pollFile);
     else err(`fleet-mail: 保存再試行待ち=${undurable}`);
     if (legacy) err(`fleet-mail: 旧形式宛先受信=${legacy}`);
-    const lastPollFile = path.join(dir, '.fleet-mail-last-poll.json');
-    writeJson(lastPollFile, { ...readJson(lastPollFile, {}), at: new Date(now()).toISOString() });
+    writeJson(lastPollFile, { ...readJson(lastPollFile, {}), at: new Date(now()).toISOString(), busyStreak: 0 });
+    endPhase();
     let promptHandled = false;
     let growiAppendHandled = false;
     const fleetMembers = deps.pcMap ?? readJson(new URL('../fleet-pc-map.json', import.meta.url), {});
     for (const pending of readInbox(home, { unreadOnly: false })) {
+      const phaseName = `processMail:${pending.id}`;
+      startPhase(phaseName);
       let mail = pending;
       try {
         mail = updateInbox(pending.id, current => current, { home }); // Observe replies and skip a busy file.
@@ -962,7 +1060,7 @@ export async function pollOnce(deps = {}) {
           }
           continue;
         }
-        const growiRequest = Object.hasOwn(fleetMembers, mail.from) && label === config.FLEET_HUB && fs.existsSync(path.join(dir, 'growi.env'))
+        const growiRequest = Object.hasOwn(fleetMembers, mail.from) && isFleetHub(label, config) && fs.existsSync(path.join(dir, 'growi.env'))
           && mail.kind === 'note' && /^\[growi-append\]/.test(String(mail.why ?? '')) && !mail.growiAppendDoneAt;
         if (growiRequest && !growiAppendHandled) {
           growiAppendHandled = true;
@@ -1058,21 +1156,56 @@ export async function pollOnce(deps = {}) {
       } catch (error) {
         if (hasDecisionRequest(mail)) { log('decision-intake-failed', { id: mail.id, error: redactSecrets(error.message) }); continue; }
         err('fleet-mail: 処理再試行待ち=1');
+      } finally {
+        endPhase();
+        phases.processMails = (phases.processMails || 0) + phases[phaseName];
+        // Keep only slow mails by id; a 700-mail inbox would otherwise bloat every timing line.
+        if (phases[phaseName] < SLOW_MAIL_PHASE_MS) delete phases[phaseName];
       }
     }
-    await refreshSentStatus({ home, request, stderr: err });
-    try { (deps.dailySelfHeal ?? dailySelfHeal)({ dir, now }); } catch (error) { err(`fleet-mail: 自己修復失敗: ${redactSecrets(error.message)}`); }
-    try { (deps.autoRunFixNow ?? autoRunFixNow)({ dir }); } catch (error) { err(`fleet-mail: 自動修復失敗: ${redactSecrets(error.message)}`); }
-    try { await (deps.dailyLaneHealth ?? dailyLaneHealth)({ dir, label, request, now }); } catch (error) { err(`fleet-mail: レーン健全性報告失敗: ${redactSecrets(error.message)}`); }
-    try {
-      await (deps.dailyRuleCompliance ?? dailyRuleCompliance)({ dir, home, label, request, now,
-        repo: deps.repo ?? ownRepo, background: true, stderr: err });
-    } catch { err('fleet-mail: ルール遵守報告失敗（pollは継続）'); }
+    let postDeferred = false;
+    const postPhase = async (name, run) => {
+      if (!postDeferred && now() - startedAt >= POLL_SOFT_DEADLINE_MS) {
+        postDeferred = true;
+        err('fleet-mail: 付帯処理を次回へ延期=1');
+      }
+      if (!postDeferred) await timed(name, run);
+    };
+    await postPhase('refreshSentStatus', () => refreshSentStatus({ home, request, stderr: err }));
+    await postPhase('dailySelfHeal', async () => {
+      try { await (deps.dailySelfHeal ?? dailySelfHeal)({ dir, now }); } catch (error) { err(`fleet-mail: 自己修復失敗: ${redactSecrets(error.message)}`); }
+    });
+    await postPhase('autoRunFixNow', async () => {
+      try { await (deps.autoRunFixNow ?? autoRunFixNow)({ dir }); } catch (error) { err(`fleet-mail: 自動修復失敗: ${redactSecrets(error.message)}`); }
+    });
+    await postPhase('dailyLaneHealth', async () => {
+      try { await (deps.dailyLaneHealth ?? dailyLaneHealth)({ dir, label, request, now }); } catch (error) { err(`fleet-mail: レーン健全性報告失敗: ${redactSecrets(error.message)}`); }
+    });
+    await postPhase('dailyRuleCompliance', async () => {
+      try {
+        await (deps.dailyRuleCompliance ?? dailyRuleCompliance)({ dir, home, label, request, now,
+          repo: deps.repo ?? ownRepo, background: true, stderr: err });
+      } catch { err('fleet-mail: ルール遵守報告失敗（pollは継続）'); }
+    });
     // Transport latency must never prevent durable receipt or per-mail processing.
-    await notifyPendingArrivals({ ...deps, home, label, now, stderr: err });
+    await postPhase('notifyPendingArrivals', () => notifyPendingArrivals({ ...deps, home, label, now, stderr: err }));
     out(deps.json ? JSON.stringify({ received, processed: handled }) : `受信=${received.length} / 処理=${handled.length} / 隔離=${rejected}`);
+    outcome = undurable ? 'undurable' : 'ok';
     return { received, handled, rejected };
-  } finally { release(); }
+  } finally {
+    try {
+      endPhase();
+      if (!dryRun) {
+        const at = now();
+        const file = path.join(dir, 'fleet-mail-poll-timing.jsonl');
+        fs.mkdirSync(dir, { recursive: true });
+        try { if (fs.statSync(file).size > 1024 * 1024) fs.renameSync(file, `${file}.1`); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+        fs.appendFileSync(file, `${JSON.stringify({ at: new Date(at).toISOString(), totalMs: at - startedAt, phases, outcome })}\n`, { mode: 0o600 });
+      }
+    } catch (error) { err(`fleet-mail: 計測ログ保存失敗: ${redactSecrets(error.message)}`); }
+    finally { release?.(); }
+  }
 }
 export async function main(argv = process.argv.slice(2), deps = {}) {
   try { return await runMain(argv, deps); }
@@ -1098,7 +1231,7 @@ async function runMain(argv, deps) {
   const configured = !!(config.FLEET_SHEET_URL && config.FLEET_SHEET_TOKEN);
   const identity = deps.identity ?? machineIdentity();
   const label = resolveFleetLabel(home, identity);
-  const request = configured ? deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch })
+  const request = configured ? deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch, sleepImpl: deps.sleep })
     : async () => { throw new Error('fleet-sheet.env 未設定'); };
   const state = (id, action, extra = {}) => syncMailState({ home, id, action, request, now, from: label, stderr: err, ...extra });
   if (options['--sync-pending']) {
@@ -1214,17 +1347,22 @@ async function runMain(argv, deps) {
       catch { /* Beacon labels can still resolve exact targets when the roster is unavailable. */ }
     }
 
-    // ビーコン取得は1回だけ（解決と鮮度表示で共有）。
+    // 再試行・キャッシュを含む同じスナップショットを解決と鮮度表示で共有する。
     let beaconPromise;
     const sharedBeacons = async args => {
-      if (options['--dry-run'] && !deps.fetchBeacons) return { ok: false, beacons: [] };
-      beaconPromise ??= Promise.resolve().then(async () => (deps.fetchBeacons ?? (await import('./fleet-beacon.mjs')).fetchBeacons)(args));
+      beaconPromise ??= fetchMailTargets({ ...args, now, fetchBeacons: deps.fetchBeacons, sleepImpl: deps.sleep,
+        offline: options['--dry-run'] && !deps.fetchBeacons });
       return beaconPromise;
     };
-    let beacons = [];
-    try { beacons = (await sharedBeacons({ home })).beacons || []; } catch {}
-    const target = resolveMailTarget(options['--to'], pcMap, beacons);
-    if (!target.resolved) { err(`fleet-mail: 宛先 ${options['--to']} は完全一致しません。候補: ${target.candidates.join(', ') || '(なし)'}`); return 4; }
+    const directory = await sharedBeacons({ home });
+    const target = resolveMailTarget(options['--to'], pcMap, directory.beacons, directory.serverPolls);
+    if (!target.resolved) {
+      const reason = directory.ok ? 'は完全一致しません（取得済みの名簿・beacons・poll 記録に該当なし）'
+        : `は beacons 取得失敗のため存在を確認できません（${directory.reason || '不明'}）`;
+      err(`fleet-mail: 宛先 ${options['--to']} ${reason}。候補: ${target.candidates.join(', ') || '(なし)'}`);
+      return 4;
+    }
+    if (directory.cached) err('fleet-mail: beacons 取得失敗。24時間以内の宛先キャッシュを使用（最新の poll 状況は不明）');
     if (!configured && !options['--dry-run']) { err('fleet-mail: fleet-sheet.env 未設定のためスキップ'); return 0; }
     if (target.to !== options['--to']) err(`${options['--to']} → ${target.to}`);
     const deliverable = await resolveDeliverableTarget({ to: target.to, home, now, fetchBeacons: sharedBeacons, pcMap });
@@ -1244,10 +1382,12 @@ async function runMain(argv, deps) {
     }
     // 全PCの設定変更・インストール・ファイル書き込みの依頼は fleet-mail で配らず setup --converge に載せる。
     // 相談・確認（--kind note）や、意図的な再送（--force）は通す。
-    if (options['--kind'] === 'prompt' && !options['--force'] && looksLikeInstallRequest(parseExecMarkers(body).body)) {
+    const readonlyPrompt = allowedReadonlyPrompt(parseExecMarkers(body).body);
+    if (options['--kind'] === 'prompt' && !options['--force'] && !readonlyPrompt && looksLikeInstallRequest(parseExecMarkers(body).body)) {
       err('全PCの設定変更は setup --converge 経由。fleet-mail は相談・確認用。');
       return 5;
     }
+    if (options['--kind'] === 'prompt' && readonlyPrompt) err(`読み取り専用許可: ${readonlyPrompt.id}（${readonlyPrompt.reason}）`);
     // 宛先が受信できているかを送信前に見せる（2026-10-10 事故: 受信タスク停止で返事が永遠に届かない）。
     // 取得失敗・未設定でも送信は続行する（fail-open）。
     try {
@@ -1321,7 +1461,24 @@ async function runMain(argv, deps) {
     out(`返信は相手の受信タスクが拾うまで届きません。届いたかは --sent-status ${id} で確認`);
     return 0;
   }
-  await pollOnce({ ...deps, executePrompts: options['--no-exec'] ? false : deps.executePrompts, dryRun: !!options['--dry-run'], json: !!options['--json'] });
+  // 2026-10-27 kim-PC: 通信も CPU も無いまま await で固まった poll が80分ロックを握った。工程間の予算では止まらないため、
+  // 定期実行の --poll だけはプロセスごと打ち切る（ロックは owns() 確認つきで外し、次の2分枠で受信できるようにする）。
+  const exit = deps.exit ?? (code => process.exit(code));
+  let releaseOnStop = null, snapshot = null;
+  const hardStop = options['--dry-run'] ? null : setTimeout(() => {
+    err(`fleet-mail: poll 上限${Math.round(POLL_HARD_DEADLINE_MS / 60000)}分超過で打ち切り=1`);
+    try {
+      const s = snapshot?.();
+      if (s) fs.appendFileSync(path.join(dir, 'fleet-mail-poll-timing.jsonl'), `${JSON.stringify({ at: new Date(now()).toISOString(), totalMs: now() - s.startedAt, phases: s.phases, stuckIn: s.stuckIn, outcome: 'hard-deadline' })}\n`, { mode: 0o600 });
+    } catch { /* 打ち切りを優先する */ }
+    try { releaseOnStop?.(); } catch { /* 次回の stale 回収に任せる */ }
+    exit(POLL_HARD_DEADLINE_EXIT);
+  }, deps.pollHardDeadlineMs ?? POLL_HARD_DEADLINE_MS);
+  hardStop?.unref();
+  try {
+    await pollOnce({ ...deps, executePrompts: options['--no-exec'] ? false : deps.executePrompts, dryRun: !!options['--dry-run'], json: !!options['--json'],
+      onLock: (release, snap) => { releaseOnStop = release; snapshot = snap; } });
+  } finally { if (hardStop) clearTimeout(hardStop); }
   return 0;
 }
 if (isEntry(import.meta.url)) {

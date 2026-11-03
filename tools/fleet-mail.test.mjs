@@ -801,3 +801,166 @@ test('real compliance worker entrypoint completes without circular-import deadlo
   assert.ok(saved.rulesHead.length >= 40);
   assert.equal(saved.rules[f.rule.id].applicable, 0);
 });
+
+test('parseArgs rejects work requests as notes but accepts prompts', () => {
+  for (const why of ['[作業依頼] 調査', '  [作業依頼] 調査']) {
+    const args = ['--send', '--to', 'PC', '--body-file', 'x', '--why', why, '--kind'];
+    assert.throws(() => parseArgs([...args, 'note']), { message: '[作業依頼] は受信側で実行されるよう --kind prompt で送ってください（note は表示のみで実行されません）' });
+    assert.doesNotThrow(() => parseArgs([...args, 'prompt']));
+  }
+});
+
+test('createClient retries GAS busy with backoff then succeeds', async () => {
+  let calls = 0; const delays = [];
+  const request = createClient({ url: 'https://example.invalid', token: 'x',
+    fetchImpl: async () => { calls++; return { ok: true, json: async () => calls < 3 ? { ok: false, error: 'busy' } : { ok: true, messages: [] } }; },
+    sleepImpl: async ms => delays.push(ms) });
+  assert.deepEqual(await request('mail-poll', {}), { ok: true, messages: [] });
+  assert.equal(calls, 3);
+  assert.deepEqual(delays, [1000, 2000]);
+});
+test('createClient gives up after three busy responses', async () => {
+  for (const status of [200, 503]) {
+    let calls = 0; const delays = [];
+    const request = createClient({ url: 'https://example.invalid', token: 'x',
+      fetchImpl: async () => { calls++; return { ok: status === 200, status, json: async () => ({ ok: false, error: 'busy' }) }; },
+      sleepImpl: async ms => delays.push(ms) });
+    await assert.rejects(request('mail-poll', {}), { message: /^fleet-mail: busy$/, code: 'SERVER_BUSY' });
+    assert.equal(calls, 3);
+    assert.deepEqual(delays, [1000, 2000]);
+  }
+});
+test('createClient does not retry non-busy rejections', async () => {
+  let calls = 0; const delays = [];
+  const request = createClient({ url: 'https://example.invalid', token: 'x',
+    fetchImpl: async () => { calls++; return { ok: true, json: async () => ({ ok: false, error: 'unauthorized' }) }; },
+    sleepImpl: async ms => delays.push(ms) });
+  await assert.rejects(request('mail-poll', {}), /unauthorized/);
+  assert.equal(calls, 1);
+  assert.deepEqual(delays, []);
+});
+test('createClient preserves HTTP errors for non-busy 503 and other HTTP statuses', async () => {
+  for (const response of [
+    { ok: false, status: 503, json: async () => { throw new SyntaxError('HTML'); } },
+    { ok: false, status: 503, json: async () => ({ ok: false, error: 'unauthorized' }) },
+    { ok: false, status: 403, json: async () => ({ ok: false, error: 'busy' }) },
+  ]) {
+    let calls = 0;
+    const request = createClient({ url: 'https://example.invalid', token: 'x',
+      fetchImpl: async () => { calls++; return response; }, sleepImpl: () => assert.fail('must not retry') });
+    await assert.rejects(request('mail-poll', {}), { message: `fleet-mail HTTP ${response.status}` });
+    assert.equal(calls, 1);
+  }
+});
+test('poll defers on server busy and resets after success', async t => {
+  const f = fixture(t); const request = f.deps.request;
+  const file = path.join(f.dir, '.fleet-mail-last-poll.json');
+  const prior = { at: '2026-10-25T00:00:00.000Z', serverCapabilities: { version: 2 }, sentStatus: { cached: true } };
+  fs.writeFileSync(file, JSON.stringify(prior));
+  f.deps.now = () => Date.parse('2026-10-26T00:00:00Z');
+  f.deps.request = async (kind, payload) => {
+    if (kind === 'mail-poll') throw Object.assign(new Error('fleet-mail: busy'), { code: 'SERVER_BUSY' });
+    return request(kind, payload);
+  };
+  for (let busyStreak = 1; busyStreak < 5; busyStreak++) {
+    assert.equal(await main(['--poll'], f.deps), 0);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { ...prior, busyStreak, busyAt: '2026-10-26T00:00:00.000Z' });
+    assert.match(f.errors.at(-1), /延期/);
+  }
+  await assert.rejects(main(['--poll'], f.deps), { message: /5回連続（約10分）/, code: 'SERVER_BUSY' });
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).busyStreak, 5);
+  f.deps.request = request;
+  assert.equal(await main(['--poll'], f.deps), 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), {
+    ...prior, at: '2026-10-26T00:00:00.000Z', busyStreak: 0, busyAt: '2026-10-26T00:00:00.000Z',
+  });
+});
+test('poll still fails on non-busy transport errors', async t => {
+  const f = fixture(t); const request = f.deps.request;
+  f.deps.request = async (kind, payload) => {
+    if (kind === 'mail-poll') throw new Error('fleet-mail: unauthorized');
+    return request(kind, payload);
+  };
+  await assert.rejects(main(['--poll'], f.deps), /unauthorized/);
+  assert.equal(fs.existsSync(path.join(f.dir, '.fleet-mail-last-poll.json')), false);
+});
+test('poll dry-run defers on busy messages without changing state', async t => {
+  const f = fixture(t); const file = path.join(f.dir, '.fleet-mail-last-poll.json');
+  for (const message of ['busy', 'fleet-mail: busy']) {
+    const before = fs.readdirSync(f.dir);
+    const prior = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+    f.deps.request = async () => { throw new Error(message); };
+    assert.equal(await main(['--poll', '--dry-run'], f.deps), 0);
+    assert.deepEqual(fs.readdirSync(f.dir), before);
+    assert.equal(fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null, prior);
+    fs.writeFileSync(file, JSON.stringify({ busyStreak: 2, serverCapabilities: { version: 2 } }));
+  }
+});
+// 2026-10-27 kim-PC: 受信前の後処理が長引き、1回の poll が80分ロックを握って新着が届かなかった。
+test('pollOnce defers housekeeping over budget but still receives, and records phase timing', async t => {
+  const f = fixture(t);
+  const { PRE_POLL_BUDGET_MS } = await import('./fleet-mail.mjs');
+  let clock = Date.parse('2026-10-27T14:00:00Z');
+  const now = () => (clock += PRE_POLL_BUDGET_MS);
+  const kinds = [];
+  const request = async kind => { kinds.push(kind); return kind === 'mail-poll' ? { messages: [mail({ id: 'mail-1793109976589-df939d96' })] } : { ok: true }; };
+  const errors = [];
+  const result = await pollOnce({ home: f.home, identity: { hostname: 'host-kim' }, request, now, executePrompts: false,
+    dailyLaneHealth: () => assert.fail('期限超過後の付帯処理は次回へ回す'), stdout: () => {}, stderr: e => errors.push(e) });
+  assert.ok(kinds.includes('mail-poll'));
+  assert.deepEqual(result.received.map(m => m.id ?? m), ['mail-1793109976589-df939d96'].filter(() => result.received.length));
+  assert.equal(readInbox(f.home, { unreadOnly: false }).length, 1);
+  assert.ok(errors.includes('fleet-mail: 受信前処理を次回へ延期=1'));
+  assert.ok(errors.includes('fleet-mail: 付帯処理を次回へ延期=1'));
+  const lines = fs.readFileSync(path.join(f.dir, 'fleet-mail-poll-timing.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].outcome, 'ok');
+  assert.ok(lines[0].phases['mail-poll'] >= 0);
+  assert.ok(!Object.keys(lines[0].phases).some(k => k.startsWith('processMail:') && lines[0].phases[k] < 5000));
+});
+test('acquireLock stops refreshing the heartbeat after the hard cap so a hung poller can be reclaimed', t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-lock-cap-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const file = path.join(home, 'fleet-mail.lock');
+  let clock = 1_000_000;
+  const release = acquireLock(file, { now: () => clock, hardCapMs: 60_000 });
+  const mtime = () => fs.statSync(file).mtimeMs;
+  clock += 30_000; t.mock.timers.tick(30_000);
+  assert.equal(Math.round(mtime()), clock);
+  clock += 60_000; t.mock.timers.tick(30_000);
+  const frozen = mtime();
+  clock += 30_000; t.mock.timers.tick(30_000);
+  assert.equal(mtime(), frozen);
+  release();
+});
+test('--poll hard deadline stops a poll stuck in an await, releases the lock and records where it stuck', { timeout: 5000 }, async t => {
+  const f = fixture(t);
+  const { POLL_HARD_DEADLINE_EXIT } = await import('./fleet-mail.mjs');
+  const errors = [];
+  // The production deadline is unref'ed; a pending request Promise alone cannot keep this test alive.
+  const keepAlive = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(keepAlive));
+  const exited = new Promise((resolve, reject) => {
+    main(['--poll', '--no-exec'], { ...f.deps, stderr: e => errors.push(e), pollHardDeadlineMs: 50, exit: resolve,
+      request: kind => kind === 'mail-poll' ? new Promise(() => {}) : Promise.resolve({ ok: true }) }).catch(reject);
+  });
+  assert.equal(await exited, POLL_HARD_DEADLINE_EXIT);
+  assert.ok(errors.some(e => /poll 上限\d+分超過で打ち切り=1/.test(e)));
+  assert.equal(fs.existsSync(path.join(f.dir, 'fleet-mail.lock')), false);
+  const line = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-poll-timing.jsonl'), 'utf8').trim().split('\n').at(-1));
+  assert.equal(line.outcome, 'hard-deadline');
+  assert.equal(line.stuckIn, 'mail-poll');
+});
+
+test('fixed selfcheck prompt passes without force; appended mutation remains blocked', async t => {
+  const { SELFCHECK_PROMPT } = await import('./lib/fleet-selfcheck-prompt.mjs');
+  const f = fixture(t);
+  for (const extra of ['', '\nsettings.json を書き換えて']) {
+    fs.writeFileSync(f.body, SELFCHECK_PROMPT + extra);
+    const before = f.calls.length;
+    assert.equal(await main(['--send', '--to', recipient, '--kind', 'prompt', '--body-file', f.body, '--why', '自己点検'], f.deps), extra ? 5 : 0);
+    assert.equal(f.calls.length - before, extra ? 0 : 1);
+  }
+  assert.ok(f.errors.some(line => line.includes('fleet-selfcheck-v2')));
+});

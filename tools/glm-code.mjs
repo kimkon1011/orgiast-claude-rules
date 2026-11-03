@@ -13,11 +13,23 @@ const cwdIndex = args.indexOf('--cwd');
 const modelIndex = args.indexOf('--model');
 const cwd = path.resolve(cwdIndex >= 0 && args[cwdIndex + 1] ? args[cwdIndex + 1] : process.cwd());
 const model = modelIndex >= 0 && args[modelIndex + 1] ? args[modelIndex + 1] : 'glm-5.3';
+const USAGE = '使い方: node tools/glm-code.mjs "<指示>" [--cwd <path>] [--model <name>] [--dry-run]';
+const helpIndex = args.findIndex((arg) => arg === '-h' || arg === '--help');
 const omitted = new Set();
 if (dryRun) omitted.add(args.indexOf('--dry-run'));
+if (helpIndex >= 0) omitted.add(helpIndex);
 for (const index of [cwdIndex, modelIndex]) if (index >= 0) { omitted.add(index); omitted.add(index + 1); }
-const instruction = args.filter((_, index) => !omitted.has(index)).join(' ').trim();
-if (!instruction) { console.error('使い方: node tools/glm-code.mjs "<指示>" [--cwd <path>] [--model <name>] [--dry-run]'); process.exitCode = 2; }
+let instruction = args.filter((_, index) => !omitted.has(index)).join(' ').trim();
+if (!instruction) {
+  // --help 単独は正常な要求(exit 0 / stdout)。指示が空なだけならエラー(exit 2)。
+  (helpIndex >= 0 ? console.log : console.error)(USAGE);
+  process.exitCode = helpIndex >= 0 ? 0 : 2;
+} else if (instruction.startsWith('--')) {
+  // 未知のオプションを指示文として通すと、そのまま有料セッションの指示になり課金だけ発生する(2026-10-15 実測)。
+  console.error(`不明なオプションです: ${instruction.split(/\s+/)[0]}\n${USAGE}`);
+  instruction = '';
+  process.exitCode = 2;
+}
 
 if (instruction) {
   const home = process.env.ORGIAST_HOME || os.homedir();

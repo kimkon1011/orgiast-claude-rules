@@ -256,5 +256,23 @@
     "route": "残TODOは transcript の grep ではなく `~/.claude/next-session.md` の `## 残TODO` ブロックを直接読む（ローテーション・退避は `node tools/next-session-rotate.mjs` が行うので、古いスナップショットは archive/ 側を見る）。締めでは next-session.md の該当 TODO 行だけを行単位で置換し、全文を上書きしない。transcript grep は『その発言が本当にあったか』の証拠確認にだけ使い、TODO 一覧の正本にはしない。",
     "confidence": "medium",
     "source": "handoff-audit-candidates.jsonl tool-name-route（route=transcript grep）/ 2026-11-04 route を手順化"
+  },
+  {
+    "pattern": "freee等SaaSのログインをパスワード入力理由でuserに手渡す",
+    "route": "ログイン画面が要る操作でも、まず Claude 側の認証済み経路を当ターンで試す。freee の API 操作は `node tools/freee-query.mjs`（トークンは購買部アプリの Neon DB `freee_tokens` にあり、期限切れは refresh_token を回して書き戻す＝user のパスワード入力は不要）。Web 画面でしかできない操作（明細の無視・ファイルボックス等）は内蔵ブラウザ/Playwright で、保存済みセッション（storageState・Chrome プロファイル）を再利用して Claude が操作する。ログインが切れていた場合も①API/refresh トークン経路 ②保存済みセッション ③画面の代替 API を順に実試し、失敗の error / HTTP ステータスをそのまま記録してから初めて「本人の操作が要る」と書く。パスワード入力の代行不可・スクショ送付を理由に手渡さない。実例: 2026-10-20 keiri2@ の freee 権限変更で『パスワード入力が要るので代行できません』と書き rule 3/12 で差し戻された。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:17608b57a284a9603d6e6b68f30870545d5e323d19a3c215b6faeccf81215a93 / 2026-11-04 tool-name-route レビューで route（`vercel env`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "Webアプリの定期集計・承認フローを経理担当の画面操作に手渡す",
+    "route": "定期集計・承認・freee 登録は Claude が API で実行する。keiri-hub の立替アプリは管理 API を持ち、集計は `POST /api/tatekae/admin/batches`（body に settlement_date）、freee 登録は `POST /api/tatekae/admin/batches/<id>/register`。認証は Supabase の @orgiast.jp セッションで、ログインリンクは Gmail DWD（`node tools/gmail-search.mjs`）で読めるため Claude が自分のセッションを作れる。承認・差戻の判断だけを kim/経理に結果として提示し、画面操作の手順を書かない。実行できなかった場合は叩いたエンドポイントと HTTP ステータスを記録し、「Claude では不可能」「経理の方が操作するだけで完結」と断定しない。実例: 2026-10-21 に『経理の方が管理画面を開いて操作するだけで完結します』と書き rule 2/3/12 で差し戻された。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:2126335fd3db14d9cc506619c8662aad5b893053825e5569effa3540322ee566 / 2026-11-04 tool-name-route レビューで route（`vercel env`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "外部送信を伴うテスト実行の可否を user に確認依頼",
+    "route": "送信を伴うテストの可否は Claude が判断して実行する。①送信先がテスト用（自分宛メール・テストギルド/チャンネル・テスト事業所）なら同意を取らずに実行し、送信ログ/API の読み戻しで確認する。②本番の社内チャンネルへの通知はテスト投稿先か dry-run を用意し、実測済みの既存経路（2026-10-22 の #経理チーム 投稿）で Claude が実行し、投稿 ID を読み戻す。③社外・顧客宛だけは送信前に1回だけ全文を見せて同意を取り、実行は Claude が `node tools/gmail-draft.mjs --send` / `node tools/line-group-send.mjs` 等で行う。「送ってよいか確認してから」で handoff せず、本物の通知を飛ばしたくない場合は宛先をテスト用に差し替える。実例: 2026-10-23 に『実際の送信は #経理チームに本物の通知が飛ぶので、テストで送ってよいかを確認してから』と書き rule 2 で差し戻された。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:25e3c6106928cc635de26df38db0d4d0f0aa698d5c0f021df5688e7148aa0bae / 2026-11-04 tool-name-route レビューで route（`チャット表示`）を手順文へ書き直して採用"
   }
 ]

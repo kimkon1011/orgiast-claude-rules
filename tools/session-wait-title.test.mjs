@@ -3,7 +3,9 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { apply as applyReal, currentTitles, desiredTitle, isCloseRitualOnly, sweepAll as sweepAllReal, waitPrefix } from './session-wait-title.mjs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { apply as applyReal, currentTitles, desiredTitle, isCloseRitualOnly, promptSubmit, sweepAll as sweepAllReal, waitPrefix } from './session-wait-title.mjs';
 
 const apply = input => applyReal(input, { resolvePcNumber: () => '' });
 const sweepAll = options => sweepAllReal({ ...options, resolvePcNumber: () => '' });
@@ -207,4 +209,63 @@ test('sweepAll は注入したPC番号を全件に適用し、追記は冪等', 
   assert.equal(JSON.parse(raw.trim().split('\n').at(-1)).source, 'orgiast-auto');
   assert.equal(sweepAllReal(options).titled.length, 0);
   assert.equal(fs.readFileSync(file, 'utf8'), raw);
+});
+
+const salesAi = JSON.stringify({ type: 'ai-title', aiTitle: '東邦の売上' });
+for (const [name, raw, pc, expected] of [
+  ['初回はAI命名を妨げない', JSON.stringify({ type: 'user', message: { content: '売上を確認' } }), '008', null],
+  ['AIタイトルに番号を付ける', salesAi, '008', '008｜東邦の売上'],
+  ['同じタイトルもサーバー同期へ渡す', auto('008｜x'), '008', '008｜x'],
+  ['番号なしPCは出力しない', salesAi, '', null],
+  ['人のrenameを保持する', custom('foo'), '008', '008｜foo'],
+  ['人のrenameには期限も追加しない', `${custom('  foo  ')}\n${assistant(footer(WAIT))}`, '008', '008｜  foo  '],
+  ['既存番号付きrenameを保持する', custom('018｜foo'), '008', '018｜foo'],
+  ['期限footerを反映する', `${salesAi}\n${assistant(footer(WAIT))}`, '008', '008｜【11/02/20:11まで】東邦の売上'],
+  ['自動タイトル後のAI名を反映する', `${auto('008｜古い名前')}\n${salesAi}`, '008', '008｜東邦の売上'],
+]) {
+  test(`promptSubmit: ${name}`, () => {
+    const result = promptSubmit({ transcript_path: 's.jsonl', session_id: 's' }, {
+      readFile: () => raw, statSize: () => Buffer.byteLength(raw), resolvePcNumber: () => pc,
+    });
+    assert.deepEqual(result, expected === null ? null : {
+      hookSpecificOutput: { hookEventName: 'UserPromptSubmit', sessionTitle: expected },
+    });
+  });
+}
+
+test('promptSubmit: subagent・巨大ファイル・入力不足・例外はfail-open', () => {
+  const input = { transcript_path: 's.jsonl', session_id: 's' };
+  const options = { resolvePcNumber: () => '008', statSize: () => 1, readFile: () => { assert.fail('読み込まない'); } };
+  assert.equal(promptSubmit({ ...input, transcript_path: 'p/subagents/a.jsonl' }, options), null);
+  assert.equal(promptSubmit(input, { ...options, statSize: () => 256 * 1024 * 1024 + 1 }), null);
+  assert.equal(promptSubmit({}, options), null);
+  assert.equal(promptSubmit(input, { ...options, statSize: () => { throw new Error('stat'); } }), null);
+  assert.equal(promptSubmit(input, { ...options, readFile: () => { throw new Error('read'); } }), null);
+  assert.equal(promptSubmit(input, { ...options, resolvePcNumber: () => { throw new Error('pc'); } }), null);
+});
+
+test('--prompt-submit CLI: JSON 1行・読み取り専用・不正入力でもexit 0', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-prompt-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 's.jsonl');
+  fs.writeFileSync(file, salesAi);
+  const before = fs.statSync(file);
+  const run = input => spawnSync(process.execPath, [fileURLToPath(new URL('./session-wait-title.mjs', import.meta.url)), '--prompt-submit'], {
+    input, encoding: 'utf8', env: { ...process.env, ORGIAST_PC_NUMBER: '008' },
+  });
+  const result = run(JSON.stringify({ transcript_path: file, session_id: 's' }));
+  assert.ifError(result.error);
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, '');
+  assert.equal(result.stdout, JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', sessionTitle: '008｜東邦の売上' } }) + '\n');
+  assert.equal(fs.statSync(file).mtimeMs, before.mtimeMs);
+  assert.equal(fs.statSync(file).size, before.size);
+  assert.equal(fs.readFileSync(file, 'utf8'), salesAi);
+  for (const input of ['{', JSON.stringify({ transcript_path: path.join(dir, 'missing'), session_id: 's' })]) {
+    const failed = run(input);
+    assert.ifError(failed.error);
+    assert.equal(failed.status, 0);
+    assert.equal(failed.stdout, '');
+    assert.equal(failed.stderr, '');
+  }
 });

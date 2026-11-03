@@ -6,6 +6,7 @@
 // （2026-11-02 kim 指示・全PC全アカウント。kim のやることが残るセッションは閉じてよい定型文でも付けない）。
 // フッターが無い応答では頭の印を保持し、PC番号だけを付ける。fail-open・出力なし。
 // 本体はノイズを除外し、手動の命名を最優先、その次に assistant が最初に宣言した目的を使う。
+// --prompt-submit: 既存タイトルにPC番号を付けてサーバーへ同期する（transcript は読み取り専用）。
 // --all: 既存の全セッション（直近 RECENT_DAYS 日）にも同じ規則を当てる。SessionStart から1時間に1回だけ走る。
 import fs from 'node:fs';
 import os from 'node:os';
@@ -110,6 +111,25 @@ export function desiredTitle(text, raw, pc = '') {
   return next === custom ? null : next;
 }
 
+// 初回のAI命名を待ってから、UserPromptSubmit の rename 経路へタイトルを渡す。
+export function promptSubmit(input, { readFile = fs.readFileSync, statSize = p => fs.statSync(p).size, resolvePcNumber: resolveNumber = resolvePcNumber } = {}) {
+  try {
+    const pc = resolveNumber();
+    const file = input?.transcript_path || input?.transcriptPath || '';
+    const sessionId = input?.session_id || input?.sessionId || '';
+    if (!pc || !file || !sessionId || /subagents/i.test(file)) return null;
+    if (statSize(file) > MAX_BYTES) return null;
+    const raw = readFile(file, 'utf8');
+    const { custom, ai, customSource } = currentTitles(raw);
+    if (!custom && !ai) return null;
+    // 人の /rename は番号以外を保持し、自動命名だけ期限フッターを反映する。
+    let title = custom && customSource !== 'orgiast-auto'
+      ? custom : desiredTitle(lastAssistantText(raw), raw, pc) ?? custom;
+    if (!/^\d{3}｜/.test(title)) title = `${pc}｜${title}`;
+    return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', sessionTitle: title } };
+  } catch { return null; }
+}
+
 export function apply(input, { readFile = fs.readFileSync, appendFile = fs.appendFileSync, statSize = p => fs.statSync(p).size, resolvePcNumber: resolveNumber = resolvePcNumber } = {}) {
   const file = input?.transcript_path || input?.transcriptPath || '';
   const sessionId = input?.session_id || input?.sessionId || '';
@@ -160,7 +180,13 @@ async function main() {
     }
     const raw = await readStdinWithTimeout();
     if (!raw.trim()) return;
-    apply(JSON.parse(raw));
+    const input = JSON.parse(raw);
+    if (process.argv.includes('--prompt-submit')) {
+      const output = promptSubmit(input);
+      if (output) console.log(JSON.stringify(output));
+      return;
+    }
+    apply(input);
   } catch { /* fail-open */ }
 }
 

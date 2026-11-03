@@ -47,6 +47,19 @@ test('Discord DM の本文にある完了主張を deny', async t => {
   assert.equal((await judge(input)).decision, 'block');
 });
 
+test('実際のgmail-draft --send は本文ファイルなしでも下書きを読み戻し証拠を検査する',async t=>{
+ const input=fixture(t,'unused');input.tool_input.command='node tools/gmail-draft.mjs --send draft123';
+ assert.equal((await judge(input,{readDraft:async id=>{assert.equal(id,'draft123');return '資料を送付しました';}})).decision,'block');
+ assert.equal((await judge(input,{readDraft:async()=>{throw Error('unavailable');}})).decision,'block');
+});
+test('LINE共有CLIのsendは既存の完了主張ゲートを通る',async t=>{
+ const input=fixture(t,'unused');fs.writeFileSync(path.join(input.cwd,'body.txt'),'予約しました');
+ input.tool_input.command='node tools/line-channel.mjs --to customer --body-file body.txt --send';
+ assert.equal((await judge(input)).decision,'block');
+ input.tool_input.command=input.tool_input.command.replace('--send','--dry-run');
+ assert.equal((await judge(input)).decision,'pass');
+});
+
 test('10文字以上の例外タグは task-notification を挟んでも pass', async t => {
   const input = fixture(t, line('TimeRex より打ち合わせの日程を入力いたしました'), [user, assistant('[OUTBOUND-CLAIM-OK: 返信文の引用で主張ではない]'), notification]);
   assert.equal((await judge(input)).decision, 'pass');

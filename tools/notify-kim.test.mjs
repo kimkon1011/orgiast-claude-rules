@@ -22,7 +22,7 @@ test('token と userId で DM チャンネルを開いて投稿する', async ()
   assert.match(calls[0].url, /users\/@me\/channels$/);
   assert.deepEqual(JSON.parse(calls[0].init.body), { recipient_id: 'user' });
   assert.match(calls[1].url, /channels\/dm-channel\/messages$/);
-  assert.deepEqual(JSON.parse(calls[1].init.body), { content: 'hello' });
+  assert.deepEqual(JSON.parse(calls[1].init.body), { content: 'hello', flags: 4096 });
 });
 
 test('DM 失敗時は webhook へフォールバックする', async () => {
@@ -45,12 +45,12 @@ test('token がなければ最初から webhook へ送る', async () => {
   } finally { console.error = original; }
 });
 
-test('通知先がなくても例外にせず stderr 1行で none を返す', async () => {
-  const lines = []; const original = console.error; console.error = (line) => lines.push(line);
-  try {
-    const result = await notifyKim('hello', { home: home(), token: '', userId: '' });
-    assert.equal(result.delivered, 'none'); assert.equal(lines.length, 1);
-  } finally { console.error = original; }
+test('宛先IDが空でも kim 宛報告は台帳に保存する', async () => {
+  const dir = home(); fs.mkdirSync(path.join(dir, '.claude'));
+  fs.writeFileSync(path.join(dir, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+  const result = await notifyKim('hello', { home: dir, token: '', userId: '', plainJa: false, fetchImpl: async () => assert.fail('Discord 禁止') });
+  assert.equal(result.delivered, 'session-inbox');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, '.claude/kim-inbox', `${result.id}.json`))).text, 'hello');
 });
 
 test('2000文字を超える本文を省略表示付きで切る', async () => {
@@ -79,7 +79,7 @@ test('NOTIFY_PLAIN_JA=0 相当（plainJa:false）では本文をそのまま送�
 
 function sender(dir, extra = {}) {
   const messages = [];
-  return { messages, options: { home: dir, token: 'token', plainJa: false, ...extra, fetchImpl: async (url, init) => {
+  return { messages, options: { allowlist: [{ category: 'test', pattern: '.' }], home: dir, token: 'token', plainJa: false, ...extra, fetchImpl: async (url, init) => {
     if (url.endsWith('/messages')) messages.push(JSON.parse(init.body).content);
     return response({ json: { id: 'dm' } });
   } } };
@@ -186,6 +186,15 @@ test('起票済みマーカーを含む本文を再通知しても二重起票�
   assert.equal(filed.match(/1\. \[ \]/g).length, 1);
   await notifyKim(`収集失敗\n${filed}`, { ...s.options, cause: '別経路からの再通知' });
   assert.equal(fs.readFileSync(path.join(dir, '.claude/next-session.md'), 'utf8').match(/1\. \[ \]/g).length, 1);
+});
+
+test('修復TODOを目標文に引用した quota-sweep 報告は新キーで再起票しない', async () => {
+  const dir = home(), s = sender(dir);
+  const goal = '[ ] 通知の原因調査・修復: codex が停止しています（dead:oauth_consent）。 1. **kim@orgiast.jp** で開く: https://chatgpt.com/';
+  const result = await notifyKim(['claude/5h', '47% → 48%', 'tick: 8', goal, '変更なし', 'exhausted', '理由: 利用枠または累積試行上限に到達'].join('\n'), s.options);
+  assert.equal(result.delivered, 'dm');
+  assert.equal(fs.existsSync(path.join(dir, '.claude/next-session.md')), false);
+  assert.match(s.messages[0], /新規起票なし/);
 });
 
 test('従来どおり失敗通知は起票する（完了報告ガードで塞がない）', async () => {
@@ -303,4 +312,28 @@ test('HTTP success without message id is not a delivered DM', async () => {
  const result = await deliverKim('進捗', { userId: 'test-recipient', token: 'test-token', plainJa: false, webhookFallback: false, fetchImpl: async () => ++calls === 1 ? response({ json: { id: 'channel' } }) : response({ json: {} }) });
  assert.equal(result.delivered, 'none');
  assert.match(result.reason, /メッセージID/);
+});
+
+test('silentはDMとwebhookでflagsを切り替え、環境変数の既定も反映する', async () => {
+  const old = process.env.NOTIFY_DISCORD_SILENT;
+  const dir = home(); fs.mkdirSync(path.join(dir, '.claude'));
+  fs.writeFileSync(path.join(dir, '.claude/orgiast-discord-webhook.txt'), 'https://example.test/webhook');
+  const originalError = console.error; console.error = () => {};
+  try {
+    for (const fallback of [false, true]) {
+      for (const [env, silent, expected] of [['1', undefined, 4096], ['0', undefined, undefined], ['0', true, 4096], ['1', false, undefined]]) {
+        process.env.NOTIFY_DISCORD_SILENT = env;
+        const bodies = [];
+        await deliverKim('本文', { home: dir, userId: 'test-recipient', token: fallback ? '' : 'test', plainJa: false,
+          ...(silent === undefined ? {} : { silent }),
+          fetchImpl: async (url, options) => { bodies.push(JSON.parse(options.body)); return response({ json: { id: 'test' } }); },
+        });
+        assert.equal(bodies.at(-1).flags, expected);
+        assert.equal(Object.hasOwn(bodies.at(-1), 'flags'), expected !== undefined);
+      }
+    }
+  } finally {
+    if (old === undefined) delete process.env.NOTIFY_DISCORD_SILENT; else process.env.NOTIFY_DISCORD_SILENT = old;
+    console.error = originalError; fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

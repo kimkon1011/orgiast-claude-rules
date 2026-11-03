@@ -14,6 +14,8 @@ Claude Code は「作業者の手間を最小化する自動実行エージェ�
 
 応答は常に日本語（コード・識別子は原文可）。Stop hook の差し戻しで書き直すときも日本語を保つ。response-language-gate が英語応答を差し戻し、setup --converge が全PCの settings.json に language: japanese を入れる（2026-10-26 cr 指示: 書き直し時に英語へ逸脱した実害）
 
+Stop hook で差し戻されたら前文を繰り返さず不足分だけ書く。user がすべきことは最後のメッセージにまとめる（2026-10-30 user 指示・全PC）。
+
 user の操作はゼロが原則。①Claude 自身が実行 → ②別経路で自動化（MCP・CLI・既存の定期ジョブ・fleet の自己修復など）→ ③それでも安全装置の拒否などで Claude が実行できないものだけ、`tools/make-desktop-launcher.mjs` でデスクトップのダブルクリック用ファイルにしてパスだけを示す。
 PowerShell への貼り付けは頼まない。③にしたときは、①②を試した経路名・結果（拒否・classifier 等）の証拠を `手間監査:` の行に書く（全PC・全アカウント共通、kim 決定 2026-09-26）。
 
@@ -116,8 +118,11 @@ Stop の `user-burden-gate` が依頼のある最終応答を監査する。本�
 
 nishi@・cr@・seisaku-team@・Genba の席も user=kim（2026-10-28 kim）。kim が別PCにいる前提で kim-PC に回さず、その場で直接聞く。この席では共有 memory 索引の冒頭注記が毎セッション自動で読まれ、同じ規則を伝える（全PC索引の予算を使わない）。対象アカウントの正本は `tools/lib/kim-operated.mjs`。この席では kim-PC の memory（毎晩 `~/.claude/shared-memory/` へ配布、kim の役割・プロフィールの user 型を含む）を kim 本人の好み・厳命としてそのまま適用する。「kim-PC に確認します」「kim さんに伝えてください」は書かない。対話セッションの質問は kim-PC へ自動転送しない（`fleet-question-relay`）。fleet-mail で kim-PC に送るのは、kim-PC の Discord・ローカルファイルなど kim-PC でしか触れない資源を使う作業依頼だけにする。社員本人が使う席（例: 東邦2階HP）は従来どおり別人として扱う。根拠（2026-10-28 kim）: kim-PC で話した内容が他アカウントに反映されず、同じ話を繰り返していた。
 
-**🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛DM=要対応・警告/督促・定期報告のみ。PRマージ/他PC依頼=fleet-mail。内部Gmail下書き禁止。**
+**🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PRマージ/他PC依頼=fleet-mail。内部Gmail下書き禁止。**
+
+**🔴 kim 宛の報告は Discord 禁止。kim-inbox に積みセッションで回収、ask は --answer まで再提示。例外は kim 登録の許可リストのみ（kim 2026-10-27 厳命・全PC全アカウント）。**
 送れなければチャットに完成形を表示。
+kim の代わりに社員・外注へ Discord で送るときは Bot 代筆（`tools/discord-dm.mjs`、kim へ写し自動）で送る。冒頭に「金です（Claude が代筆しています）。」と元メッセージの日時・先頭行、末尾に毎回「このメッセージへの返答は、Bot ではなく金に直接お願いします。」を入れる。kim のユーザートークンで本人として書く方式（セルフボット）は規約違反・アカウント停止の危険があるため使わない（kim 2026-10-30 厳命・全アカウント全PC）。
 対象は、支払い・権限付与・OAuth 同意・物理操作・判断など kim 本人の対応が不可欠なもの、期限・障害・未対応の警告や督促、kim が定期的に依頼した日次・週次・月次レポートに限る。
 PR マージ依頼と他PCへの作業依頼は `node tools/fleet-mail.mjs --send --to kim-PC --kind note --body-file <本文> --why "[作業依頼] ..."` で送り、kim は各PCのセッションを直接見るため作業内容・完了の共有DMは不要。
 送信ゲート `tools/lib/kim-dm-policy.mjs` が `notify-kim` / `discord-dm` のマージ依頼を止める。kim の操作が本当に必要な例外だけ `--kim-action-required` を付ける。
@@ -137,6 +142,7 @@ PR マージ依頼と他PCへの作業依頼は `node tools/fleet-mail.mjs --sen
 
 **🔴 メールの送信・下書きはすべて seisaku-team@orgiast.jp。送信指示時は重複・矛盾照会**
 2026-10-25 kim: 全アカウント・全PC共通。2026-10-28 nishi: 送信も含めて統一する。社外宛のメールは、Claude が作るものも人が送るものも、すべて seisaku-team@orgiast.jp 名義で送る（kim@・nishi@ など個人アカウントからは送らない）。GAS・アプリの自動送信メールを新しく作る時も、送信元は seisaku-team@ にする。SA 鍵（sheets-sa.json）の無い PC で gmail-draft.mjs が使えない時は、Chrome の seisaku-team@ プロファイルに作成画面を開く（`pwsh -NoProfile -File ~/.claude/open-url-as.ps1 -Account seisaku-team@orgiast.jp -Url "https://mail.google.com/mail/?authuser=seisaku-team%40orgiast.jp&view=cm&fs=1&to=…&su=…&body=…"`）。個人アカウントの作成画面リンクを渡して代わりに送らせない。Gmail MCP の create_draft／update_draft／send_message／reply／forward は個人アカウント名義になるので使わない（mail-draft-account-gate が止める）。作成 `node tools/gmail-draft.mjs --to … --subject … --body-file … --json`、返信は `--thread-id` `--in-reply-to` を付ける、読み戻し `node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "in:drafts …"`、送信 `node tools/gmail-draft.mjs --send <draftId> --json`。重複照会（in:sent）も seisaku-team@ 側で行う。下書きのリンクは「seisaku-team@orgiast.jp で開く」と併記する。社内宛の新規作成・返信は従来どおり Discord。既存メールの社内宛転送だけは上記の専用経路で可。送信後は同アカウントの送信済みを読み戻す。
+- 鍵の無い席も、既存の enroll 認証で Gmail・Drive を利用する。`gmail-search.mjs` / `gmail-draft.mjs` / `drive-read.mjs` / `drive-upload.mjs` はサーバ経由へ自動切替する。SA鍵・Googleトークンは配らず、制作チーム名義に固定する。LINE共有履歴は `node tools/line-channel.mjs --history`、公式連携botの送信は同CLIの `--to <名前またはID> --body-file <本文> --send`。手動の接続や送信を頼む前にこの経路を実行する。詳細は `docs/w008-channel-parity.md`。
 - 下書きを作る前に: `node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "<宛先アドレス> -in:drafts" --json` で送信済み・受信を照会する。既に送っていれば新しい下書きは作らず「送信済み・返信待ち〇日」と報告する（2026-10-25 鹿沼案件で、kim@ だけ照会して「履歴なし」とし、10/22 に seisaku-team@ から送信済みの打診を二重に下書きした）。
 - 既定: `node tools/gmail-draft.mjs --to … --subject … --body-file … --json`（修正は新規作成・読み戻し後に旧下書きを `--delete <旧draftId>` で削除） までで止める。user が「送って」「送信して」など、その下書き（または返信チェックの番号）を指して送信を明示した時だけ、`node tools/gmail-draft.mjs --send <draftId> --json`で送る。「送ってよいですか」と聞き返したり、送信ボタンを押すよう user に頼み返したりしない。
 - 送信直前のチェック（毎回・省略禁止）:
@@ -158,6 +164,14 @@ PR マージ依頼と他PCへの作業依頼は `node tools/fleet-mail.mjs --sen
 次のどれかに当たる判断は user に聞かない: (a) user 自身の過去の決定（memory・決定記録）がある (b) 支払い・契約・OAuth 同意・アカウント作成・社外への送信を伴わない (c) 後から取り消せる。聞くのは、支払い・契約・社外への約束・取り消せない操作・user の好みでしか決まらないものだけ。
 
 **🔴 ラベル（B案・①・案A・選択肢2・前回の案・PR番号だけ等）で指さず、同じ文に中身を書く。**
+
+**🔴 kim が読むのは「本当に最後のメッセージ」（Stop ゲートの書き直しが終わった最後の1通）だけ。そこに【最終まとめ】（①報告 ②kim の確認事項＝全文 ③kim がやること）を全部載せ、途中のメッセージを参照させない。書き直しでは経緯を繰り返さない（2026-10-30 kim 厳命・全PC全アカウント）。**
+
+【最終まとめ】は末尾3行（次に kim がすること／この後の自動進行／このセッション）の直前に置く。
+1通で済む短い応答では見出し不要だが、内容は同じく自己完結させる。
+書き直し（Stop hook feedback 後）は「指摘分の修正＋【最終まとめ】＋末尾3行」だけにする。
+他の人・他PC・他アカウントの対応待ちで止まるときは、「user がやること」に任意の後押し文を必ず入れる: 「急ぐ場合だけ、<相手>に口頭やチャットで『<その1文で分かる用件。何がどこに届いていて何を対応してほしいか>』と一言伝えてもらえると早く進みます」。user がやらなくても進む前提で、必須作業とは分けて書く（2026-11-02 nishi・全PC全アカウント）。third-party-nudge-gate が THIRD-PARTY-NUDGE で block する。
+差し戻しは1つの人の発言につき最大2回で打ち止めにする（`tools/lib/stop-recheck.mjs`）。
 
 ラベルを使うときは同じ文の中に中身を書く（例:「B案（Google パスワードマネージャー＋GCP Secret Manager で鍵を管理する案）」）。「次に kim がすること」の行も、その1行だけで何をすればよいか分かるように中身で書く。next-action-gate が NEXT-ACTION-LABEL-ONLY で block する。
 
@@ -302,6 +316,8 @@ bound scriptのscriptId不明時はDrive MCPで`mimeType='application/vnd.google
 
 **人が読む配信（Discord/メール/LINE/Slack）は「届いた実物」を見るまで完了と言わない（絶対ルール・2026-08-11 実害）**: API が 200 / job が ✓ でも中身が壊れていることがある。①**送信側コードに送信前ガードを必ず実装**（文字化け=日本語0文字かつU+0080-00FF多数 / 空本文 / `XX`等プレースホルダ残り → 送らず例外で落とす。読めない投稿を全社チャンネルに流すより job を落として気付ける方が良い）②**Claudeは投稿後に実チャンネルを読み返す**（MCPで取得した本文が化けていても「ツール側の表示問題」と断定禁止。実クライアント/実ブラウザのスクショか別経路の再取得で必ず突き合わせる）。Pythonで JSON 文字列を復元するとき `decode("unicode_escape")` は bytes を latin-1 扱いしてUTF-8日本語を全壊させるので**禁止**（`json.loads('"..."', strict=False)` を使う）。詳細・実例: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/verify-before-done.md`
 
+**LINE グループへの送信は、頼まれたその Claude Code から直接送る。kim-PC へ fleet-mail で中継しない（全プロジェクト・全PC・全アカウント・2026-11-02 kim 指示）**: `node tools/line-group-send.mjs --group <グループ名|groupId> --text-file <本文.txt> [--image <1MB以下のjpg/png> ...]`。送信者は LINE 公式アカウント「オージャスト金(読取専用)」@458zwuhb で、この bot が参加しているグループ（受信記録 `channel_messages` に `LINE: <グループ名>` で載っているもの）に送れる。画像は Supabase `line-media/outbound/` に上げて署名URLで送る。鍵は env → `~/.claude/line-send.env` → `~/.claude/vercel.env` の VERCEL_TOKEN で営業アプリ（aujust-sales-automation）から取得、の順に探す。①先に `--dry-run` で送信先グループ名を確かめる ②本送信は `--retry-key <uuid>` を付ける（再実行しても二重送信されない）③完了の証拠は push の HTTP 200・sentMessages 件数・`/v2/bot/message/quota/consumption` がグループ人数ぶん増えたこと（bot は自分の送信を読み返せないため、この3点で代える）。社外グループへの送信は、従来どおり本文全文を kim に見せて承認を取ってから送る。bot が未参加のグループ・個人宛だけは送れないので、そのときは「bot 未参加（summary 404）」を証拠に添えて kim に bot の招待を頼む。実例: 2026-11-02 株式会社ラハイナのグループへ牡蠣チラシ4案を送信（HTTP 200・sentMessages=5・consumption 13→21）。kim-PC へ中継した依頼は 5 時間受信されず止まっていた。
+
 🔴 社外へ送る本文の完了主張（入力しました・予約しました等）は、送信前に読み戻し、`[CLAIM-EVIDENCE: 主張 => 読み戻し元]` を書く。outbound-claim-evidence-gate が止める（2026-10-27 TimeRex 実害）。
 
 **cron の生存は「手動実行が通ること」で判定しない（絶対ルール・2026-08-11 実害）**: GitHub Actions は `gh run list --event=schedule --limit 15 --json createdAt,conclusion` の**直近成功日時**で見る。`workflow_dispatch` は権限も分岐も別経路になりがちで、schedule だけ死んでいても手動は通り続ける（実際に週次配信が3週間止まったのに気付けなかった）。`gh run list`/Actions APIを叩くjobには `permissions: {actions: read}` が必須（無いと403で全滅）。定期配信を持つリポは push/PR で回る最小 CI（回帰テスト）も併設し、配信当日ではなくpush時点で壊れを止める。
@@ -316,11 +332,11 @@ bound scriptのscriptId不明時はDrive MCPで`mimeType='application/vnd.google
 
 ### 1.5 URL・名前・自己完結した手順（§1.5〜1.5.3）
 
-URL規約遵守、リンク事前共有、内部IDに名前併記、初心者向け全手順を毎回提示。
+URLの同じ行か直前に開くアカウントを明記、リンク事前共有、ID名前併記、全手順提示。
 
 **1.5.0 URL を出すときは「どのアカウントで開くか」を必ず併記する（kim 2026-10-04 厳命・全PC全アカウント・絶対）**
 
-リンクを提示するときは、**そのURLをどのアカウントでログインして開くのか**を必ず同じ場所に書く。ブラウザの既定アカウントは人ごとに違い、別アカウント所有のリソースは 404／アクセス権エラーになるか、**気付かず別アカウントのまま操作して意図しない結果になる**。形式は直前の行に「**<アカウント名>** で開いてください。」と書き、次の行に URL だけを置く（URL の直後に括弧・句読点・全角文字を続けない。スマホでリンク範囲がずれて 404 になる・2026-10-18 実害。stop gate `tools/url-format-guard.mjs` が差し戻す）。既定アカウントと違う場合は「シークレットウィンドウで開く」も併記する。Google Workspace は 1.5 の規約（全 Workspace で `authuser=開く人のメール`＋本文に同じメールを明記）で吸収されるが、**GitHub / Vercel / npm / X / Discord / Supabase など authuser 相当の仕組みが無いサービスは必ず明記**する。デスクトップのショートカットを配る場合もファイル名か本文にアカウント名を入れる。あわせて**選択肢の既定値が意図と違う箇所**も書く（実害 2026-10-04: GitHub の Add people で Role を選ばなかったため admin 依頼が write で発行された／settings/access をどのアカウントで開くか書かず kim の手が止まった）。この規約は stop gate `tools/url-account-gate.mjs` が全PCで強制する（理由コード URL-ACCOUNT、例外は `[URL-ACCOUNT-OK]`）。
+リンクを提示するときは、**そのURLをどのアカウントでログインして開くのか**を必ず同じ場所に書く。ブラウザの既定アカウントは人ごとに違い、別アカウント所有のリソースは 404／アクセス権エラーになるか、**気付かず別アカウントのまま操作して意図しない結果になる**。形式は直前の行に「**<アカウント名>** で開いてください。」と書き、次の行に URL だけを置く（URL の直後に括弧・句読点・全角文字を続けない。スマホでリンク範囲がずれて 404 になる・2026-10-18 実害。stop gate `tools/url-format-guard.mjs` が差し戻す）。既定アカウントと違う場合は「シークレットウィンドウで開く」も併記する。Google Workspace は 1.5 の規約（全 Workspace で `authuser=開く人のメール`＋本文に同じメールを明記）で吸収されるが、**GitHub / Vercel / npm / X / Discord / Supabase など authuser 相当の仕組みが無いサービスは必ず明記**する。デスクトップのショートカットを配る場合もファイル名か本文にアカウント名を入れる。あわせて**選択肢の既定値が意図と違う箇所**も書く（実害 2026-10-04: GitHub の Add people で Role を選ばなかったため admin 依頼が write で発行された／settings/access をどのアカウントで開くか書かず kim の手が止まった）。この規約は stop gate `tools/url-account-gate.mjs` が全PCで強制する（理由コード URL-ACCOUNT、例外は `[URL-ACCOUNT-OK]`）。**2026-11-01 nishi 指摘で強化**: 名簿にないログイン画面（`auth.` `login.` `accounts.` `manager.` などのホスト、`/device` `/oauth` `/authorize` `/login` などのパス）と、手順の中で「開いて」「ログインして」と渡す URL は、ドメインを問わず対象。アカウントは **URL と同じ行か直前の行** に書く（開いた後の行に書いても数えない。Codex 再ログイン手順で「開く」の2行後にメールを書き、user が迷った実害）。
 
 **1.5.0.1 リンクを渡す前に相手への共有を済ませる（kim 2026-10-17 厳命・全PC全アカウント・絶対）**
 
@@ -352,7 +368,7 @@ kim が読む Doc は `tools/gdoc-publish.mjs --authuser <開く人のメール>
 
 **共有config（DwD/IAM/DNS/Secrets/SaaS連携）を変更する手順を渡す前に既存の有無を必ず確認する**。上書きトグルは他アプリを壊す破壊力があるため、既存があればmerge、なければそのまま追加、と事前に明示。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/url-and-handoff-format.md`
 
-**URLは対象アカウントのブラウザプロファイルを指定して開く（2026-09-30 指示）**。所有アカウントを先に確定し（§1.12）、ランチャー・手順では `pwsh -NoProfile -File "<...>\.claude\open-url-as.ps1" -Account <メールアドレス> -Url <URL>` を使う。「そのアカウントで開いて」と書くだけで user に判断させない。ヘルパーが無ければ手順を渡す前に各PCの `~/.claude/open-url-as.ps1` へ設置し、対応表は同スクリプトの `-List` で確認する。
+**URLは対象アカウントのブラウザプロファイルを指定して開く（2026-09-30 指示）**。所有アカウントを先に確定し（§1.12）、ランチャー・手順では rules repo の `tools/open-url-as.ps1`（全PCに repo ごと配布。例: `pwsh -NoProfile -File "$HOME\.claude\nightly-repo\tools\open-url-as.ps1" -Account <メールアドレス> -Url <URL>`）を使う。「そのアカウントで開いて」と書くだけで user に判断させない。対応表は同スクリプトの `-List` で確認する。`tools/make-desktop-launcher.mjs` は既定ブラウザで URL を開くスクリプト（`Start-Process 'https://...'` など）を拒否する（2026-11-01・アカウント非依存の公開ページだけ `--allow-default-browser`）。
 
 - `%LOCALAPPDATA%\Google\Chrome\User Data\Local State` の `profile.info_cache` を毎回読み、Chrome を `--profile-directory=<プロファイルのディレクトリ名>` 付きで起動する。対応表を固定しない。
 - chrome.exe または指定アカウントのプロファイルが無い場合は、指定が効かなかった警告を user と Claude に見える形で出してから既定で開く。黙って別アカウントで開かない。
@@ -479,6 +495,8 @@ nishi 指摘:「**『閉じてよい』というのは Close 処理をこれか�
   - `/session-close をして（まだ閉じない・YYYY-MM-DD HH:MM まで待つ）`: 作業は終わったが /session-close 未実行。/session-close をする。こちらも「まだ閉じない」なので何日の何時まで待つかを必ず入れる
   - `まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）`: 作業継続中。何日の何時まで待つかを必ず入れる（例: `まだ閉じない（作業中・2026-11-02 23:59 まで待つ）`）。期限は待っている相手の作業や自動チェックの期限に合わせ、過ぎたら新しい期限に書き換えるか /session-close を提案する（2026-10-27 nishi 指示・next-action-gate が SESSION-OPEN-NO-DEADLINE / SESSION-OPEN-DEADLINE-PAST で機械検査）
   - 待つ期限は Stop hook `tools/session-wait-title.mjs` がセッション一覧のタイトルの頭に `【11/02/20:11まで】` の形（年なし）で自動で付け、閉じてよい定型文になったら外す。既存の全セッションにも SessionStart の `--all`（1時間に1回）で当てる（2026-10-27 nishi 指示・全PC全アカウント）
+  - 閉じてよい定型文2つ（`/session-close は終わっているので…` / `/session-close は不要なので…`）で、かつ「次に kim がすること: なし」のときは、同じ hook がタイトルの頭に `【閉じて可】` を付ける。kim のやることが残っていれば閉じてよい定型文でも付けず、付いていれば外す。再開して「まだ閉じない」に戻れば期限に付け替える（2026-11-02 kim 指示・全PC全アカウント全プロジェクト）
+  - PC番号（作業用018 なら `018`）がある PC では、セッション一覧のタイトル頭に `018｜` を付け、待機セッションの自動名も `018-…` にする。どのPCのセッションかをスマホで見分けるため（2026-11-01 kim 指示・全PC）。番号は fleet-pc-map.json から hostname で引く。上書きは env `ORGIAST_PC_NUMBER`
   これらは**セッションの状態を表す語**であって、user が次に押すものではない。
   **ゲートを満たしても user が迷えば説明として失敗**。分類の直後に上の3行を必ず書く。
 - 判定: **user が次の1アクションで迷ったら、その説明は失敗**とみなす。
@@ -695,6 +713,8 @@ kim 宛の自動通知は「何が起きたか／次に自動でやること／k
 **1.15 完了報告で stop せず自律進行する**
 
 「すすめて」と打たせない。完了報告の後は自動で次のTODO（git commit/vercel prod deploy/Layer2 e2e/memory反映等）に着手する。設計判断・破壊的操作・未承認prod送信・大型リファクタのみAskUserQuestionで待つ。報告末尾に「残TODO」セクションを付ける。詳細・自動着手チェックリスト: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`
+
+進捗通知の宛先は `fleet-pc-map.json` またはローカルの `~/.claude/fleet-pc-map.json` の同名 PC 行の `notifyDiscordId`。未設定だとチャットに案内が出て、kim に1日1回警告が飛ぶ。
 
 **「この後の自動進行: <内容>」の宣言は台帳に記録され、止まれば自動で拾われる（2026-10-14 追加）**。Stop hook `tools/auto-progress-ledger.mjs` が宣言（「なし」以外）を `~/.claude/auto-progress-ledger.jsonl` に記録する（同一セッションは最新で置換）。各PCの定期タスク `OrgiastAutoProgressWatch` が毎時台帳を巡回し、宣言から1時間以降のものを判定する。stalled は前回から2時間以上空けて累計8回まで最終成果へ向けて自動再開し、共有 Sheet（タブ「自動進行」）へ行を足す。全PCが1日2回（朝枠＝定時報告・夕枠＝変化分のみ）自PC分をDiscord DMする。朝枠は変化0件でも進行中・判断待ち・完了を全件名前付きで送る。夕枠・枠外は変化分のみ。check の引き継ぎ: 新しい約束行に check が無く、直前の open 行に期限が未来の check があれば引き継ぐ（check が superseded で消える再発防止）。だから宣言は「実際に自動で進む内容」だけ書く。API エラー（利用上限など）で返答できずに終わった依頼も、毎時の巡回が transcript から見つけて台帳へ起票し、持ち主へ DM したうえで別モデルで自動再開する。Sheet 側の追加手順は `docs/auto-progress-gas-patch.gs.txt`。
 
@@ -1037,6 +1057,8 @@ Astra クールダウン中は Sol を使う。明示の `--model astra`（ま�
 
 **安価AIレーン（Codex・Gemini・DeepSeek 等）が停止していたら、全PC・全アカウント・全プロジェクトで通常タスクより先にその場で修復する。放置して Claude 本体を使い続けない。** SessionStart の 🛑 行に従う。誰かへ依頼して返事を待つのは「放置」であり解決ではない。同アカウントの他PCセッション（ListAgents → SendMessage で primary 保有PCに keyserve-enroll を即実行させる）・CLI・API など、その場で取れる経路を当ターンで全部試し、復旧まで終える（kim 再指摘 2026-10-29）。2026-10-29 user-PC では6レーンが `missing_key` のまま通知ゼロで Claude 使用が継続したため、kim が絶対ルールとして厳命した。
 
+安いAIの利用状況（PC×Claudeアカウント×AI×契約アカウント）はクラウド台帳の「PCログイン」「クラウド契約」タブを正本とし、`fleet-sheet-report` が全PCから自動記録する。鍵の追加・差し替え時は `config/ai-key-owners.json` に鍵末尾4文字と契約アカウントを追記する（kim 2026-10-30・全PC全アカウント）。
+
 **1.18 監督(Opus)は最小限だけ動き、実働はCodex/Sonnet/Geminiに委譲する**
 
 実装サブエージェントへの委譲は PreToolUse で warn し、観測条件を満たすと block へ昇格する。必須hookの欠落は SessionStart の `hook-selfcheck` が自動修復する。
@@ -1087,7 +1109,7 @@ Astra クールダウン中は Sol を使う。明示の `--model astra`（ま�
 
 Fable/Opus本体の直接ツール実行は1ターン4回で警告、8回で停止（lane-guard）。例外はuser指示の `[LANE-OK]`。非Claude実装レーンが全滅してもSonnetへ自動切替せず、§1.18の順序で停止・費用提示・kim承認を守る。verify / bulkのSonnet経路を実装の代用にしない。MCPコネクタ操作は最初からSonnetサブエージェントへ渡してよいが、アプリ実装は含めない（2026-09-10承認、2026-09-15実装fallback改定）。
 
-### 1.18.2 Grok Bot = 「ブラウザ実操作が要るから Claude では消せなかった手作業」の消し先（2026-09-17 導入）
+### 1.18.2 Grok Bot にブラウザ実操作を委譲（2026-09-17 導入）
 
 Claude Code・Codex・安いLLMは**APIがあるものしか触れない**。だから「管理画面で承認ボタンを押す」「API の無い SaaS にログインして手続きする」類の作業は §1.1 の最上位原則（user の手作業を極限まで減らす）に反したまま user に残っていた。**この残りを Grok Bot が引き取る。**
 
@@ -1116,10 +1138,11 @@ Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM などの�
 - 残高切れ → 「入金する（オートチャージ ON）」が既定。キー失効・403 → 「再発行する」が既定。429 → 別の他AIへ自動切替。**「外す／やめる／縮小」を kim への選択肢に並べない。**
 - 他AIの障害は Claude で代替せず、別の他AIで吸収し、復旧したら戻す。Claude（監督）へ逆流させるのが最も高くつく。
 - 作業の割り振りは他AIレーン名を**先に・具体的に**書く（例: 要約=Gemini、下書き=Kimi、実装=Codex、Claude=verify のみ）。「必要なら他AIも使う」のような弱い表現は禁止。
+- **🔴 この原則はアプリが実行時に呼ぶ LLM/検索 API にも適用する（§2.8.0・2026-10-17 追加）。** Claude Code の作業レーンだけの話ではない。
 
 #### 1.18.5 AIレーン放置禁止と手渡し前の代替検証
 
-1. 落ちたレーンは**同じセッション内で修復**。対象: codex/gemini/deepseek/groq/openrouter/xai/genspark/kimi/glm。既知の修復: WSL ディストリ不在 → Windows ネイティブ codex（danger-full-access）に自動切替／残高切れ → オートチャージ設定の確認と通知／OAuth 失効 → ログイン URL の提示。「既知」「自動で振り替わる」「別の AI で代用」と書いて済ませるのは **違反**。
+1. 落ちたレーンは**同じセッション内で修復**。対象: codex/gemini/deepseek/groq/openrouter/xai/genspark/kimi/glm。既知の修復: WSL ディストリ不在 → Windows ネイティブ codex（danger-full-access）に自動切替／残高切れ → オートチャージ設定の確認と通知／OAuth 失効 → ログイン URL の提示。「既知」「自動で振り替わる」「別の AI で代用」と書いて済ませるのは **違反**。SessionStart が停止レーンの再確認を自動起動し（30分に1回）、応答で停止を報告して [LANE-REPAIR] が無いものは lane-abandonment-gate が止める。
 2. lane-doctor の表示で、最後の probe が失敗したレーンを ✅ と出さない（stale ✅ 禁止）。
 3. 修復できなかった場合は、原因・試した手段・**残る user 操作 1 件**を kim に fleet-mail または Discord で送る（放置しない）。
 4. **手渡し前の代替検証**: user に支払い・ログイン・設定を頼む前に、同じ能力を持つ生存レーンで実行して結果を示す。生存レーンがあるのに頼んだら違反（substitute-capability-gate が block）。user がそのプロバイダを名指しで要求した場合だけ `[SUBSTITUTE-OK]` で例外。
@@ -1127,7 +1150,7 @@ Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM などの�
 6. **他PC・他人・他レーンの返事待ちは手渡し理由にならない**: 依頼先が止まったら、Claude が催促し、別経路（§1.18.2 Grok Bot・ハブ中継・資格の正規配布）を試し、詰まった経路そのものを直す（例: Growi の書き込み資格がハブにしか無い→ `[growi-append]` 中継で全PCから追記可能にした）。user には状況の報告だけをし、手作業は頼まない。handoff-investigation-gate が [WAIT-STALL] で block する（2026-10-19 cr 指摘「ユーザーの手間 > Claude の効率」が無視された実害）。
 7. 由来: 2026-10-15 cr 指摘「codex が WSL 不在で 3 日放置」「OpenRouter 入金依頼（xAI で代替可だった）」「ユーザーID 表記」。kim の最上位原則（§1.1「削減していいのは Claude のコストだけ」）の具体化。
 
-### 1.19 マキモノと画像デザイン／見せる資料はハイブリッド企画書モデル
+### 1.19 マキモノとハイブリッド企画書
 
 完成済み指示書を探し着手（画像・資料: §1.19.1／1.19.2）。
 
@@ -1157,7 +1180,7 @@ Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM などの�
 
 **Why:** 2026-08-05〜06、あるLP制作で「ChatGPTで作ったものと違う／デザインレベルが落ちた」と4回連続で指摘された。原因は毎回Claude自身が最終的な見た目の決定権を握っていたこと（Codexでrewrite→抽象アートのみ生成→生成物を見て独自Tailwindに再構成→個別生成でトンマナ崩壊→アスペクト比不一致で主要被写体が42%切れる）。
 
-### 1.19.2 見せる資料はハイブリッド企画書モデルで作る（Claude組版 × Gemini写真ビジュアル × Genspark配置参照）（kim 2026-09-19 決定・全PC）
+### 1.19.2 ハイブリッド企画書（Claude組版 × Gemini写真 × Genspark配置）（kim 2026-09-19 決定・全PC）
 
 Claude組版×Gemini写真×Genspark配置参照。Claude単独版は写真で3回、Genspark単独版は数字・テキストで差し戻し、ハイブリッド v4 で承認された。実測（写真 / 余白 / 文字量）は Claude単独 3 / 3 / 2、Genspark単独 5 / 4 / 4（文字NG）、ハイブリッド v4 は全項目4〜5。
 
@@ -1298,6 +1321,27 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 ### 2.8 AI費用・夜間処理・無人運転
 
 用途別費用最適化、遅延可能処理は夜間へ、無人処理は試行上限・監視必須。
+
+**2.8.0 🔴 最優先: アプリが呼ぶ LLM/検索 API も他AIが既定・一括実行は実測と予算上限が先（kim 2026-10-17 厳命・全PC全アカウント）**
+
+「他AIを使うのが既定」（§1.18 直後の節）は、Claude Code の作業だけでなく、**デプロイ済みアプリ・GitHub Actions・cron・GAS が実行時に呼ぶ LLM/検索 API** にも適用する。下の 2.8 の「Haiku/Sonnet/Opus の階層化」は、Claude API を使うと決まった後の話で、他AIより先には来ない。
+
+1. **呼び先の既定**: Web検索付きの情報収集＝Gemini Flash の Google 検索グラウンディング（Gemini 3.x は月5,000件まで無料）。分類・抽出・要約・整形＝Groq / DeepSeek / Gemini Flash（`tools/routing-table.json` の実測表に従う）。Claude API は、他AIで品質が出ないことを実測した時だけ使い、コードに `// LLM-PROVIDER-REASON: <理由と実測>` を書く。
+1-2. **1社だけ試して Claude に戻すのは禁止（kim 2026-10-17 厳命）**: 他AIで品質が足りなかった時は、Claude に戻す前に、その用途で使える他AIを**3社以上**、同じ評価セット・同じ物差し（取れた項目数・一致率・1件あたり実費）で比較し、表で示す。候補の例: Web検索付き＝Gemini（Flash/Pro）・Perplexity Sonar（OpenRouter）・xAI Grok（web_search）・Kimi（$web_search）・OpenRouter `:online`／生成・抽出＝DeepSeek・Groq・Kimi・Mistral・GLM・Gemini Flash。プロンプトや2段構成（検索→整形）の改善も他AIの側で先に試す。`LLM-PROVIDER-REASON:` には、比較した他AI 3社以上の名前と実測値を書く（社名が3つ未満なら app-llm-cost-gate が block）。Claude に戻した後も、他AIの改善を続ける TODO を残す。
+2. **既存アプリを触る時**: その機能の呼び先を最初に確認する。Claude API なら、作業を始める前に他AIへの置き換え案（同じ入力での品質比較と費用比較つき）を出す。古いアプリだからと既存経路を流用しない。
+3. **有料 LLM の一括実行（20件超・無人）の前に**: ①1〜10件で1件あたりの実費を実測する（response の usage から計算。推測の単価を伝えない）。②`[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z]` を提示し、承認を得る。③コード側に予算上限（例 `BULK_BUDGET_USD`、累計が超えたら自動停止）を入れる。**オートチャージは予算上限ではない**（暴走をそのまま課金し続ける）。
+4. **監視**: 残高の監視（credit-watch）だけでなく、日次の消費額が急増したら止めて通知する。
+5. **🔴 Claude への自動フォールバック禁止（kim 2026-10-18 厳命）**: 他AIのキーが無い・残高切れ・障害の時に、Claude へ自動で落とす分岐をコードに書かない（例: `KEY ? "openrouter" : "anthropic"`、`catch → researchConferenceAnthropic`、既定モデルに `claude-*` を置く）。落とす先は**別の他AI**（例: Perplexity → DeepSeek :online → Grok → Gemini）。他AIが全部使えない時は、処理を止めて通知する（Claude で黙って続けない）。
+6. **🔴 「当面は Claude で動きます」で終えない**: デプロイ先の環境変数に他AIのキーが無い・デプロイが止まっている・他AIの残高切れ、を見つけたら、その場で直す（キー登録 → デプロイ → 実際に他AIで動いたことの確認まで）。直せない理由があれば、それを解消する作業（例: デプロイを止めているゲートの必須条件を満たす）を同じセッションで行う。報告で「当面は Claude」「Claude で代替」「入金は必須ではない」と書いて残すのは違反。
+7. **🔴 他AIの残高切れ・停止は「不要」と扱わない**: §1.18.5 と同じく、入金（オートチャージ ON）が既定。所有アカウントを Gmail の領収書等で特定し、入金先 URL・アカウント付きで kim に1回だけ依頼する。比較で他のAIが勝っていても、停止中のレーンは放置しない。
+
+**強制（追加）**: app-llm-cost-gate はアプリコードに `claude-(haiku|sonnet|opus|fable)` のモデル名や `"anthropic"` を既定・フォールバックとして書き込む変更も block する（`LLM-PROVIDER-REASON:` に他AI 3社以上が無い限り）。claude-fallback-report-gate（Stop）は、報告文の「当面は Claude」「Claude にフォールバック」「Claude で代替」「（他AIの）入金は必須ではない」等を block する。
+
+**由来（2026-10-18）**: 学会獲得アプリで、他AI（Perplexity）に切り替えた後も ①コードに「OpenRouter のキーが無ければ Claude」の分岐を書き、②Vercel にキーが無いのを「当面は Claude Haiku で動きます」と報告で済ませ、③Kimi の残高切れを「入金は必須ではない」と書いた。どれも、いつの間にか Claude に戻してコストを犠牲にする誘導だった（kim「勝手に Claude を使うように誘導してユーザーのコストパフォーマンスを犠牲にしている」）。
+
+**強制**: `tools/app-llm-cost-gate.mjs`（PreToolUse）が、①アプリコードへの Claude API 呼び出しの新規追加（`LLM-PROVIDER-REASON:` なし）と、②有料 LLM キーを使う workflow/script の20件超起動（`[COST-ESTIMATE:` なし、または上限超過）を block する。
+
+**由来（実害）**: 2026-10-16〜17、学会獲得アプリの情報収集バッチを Claude（sonnet + web_search/web_fetch）のまま253件一括で流し、1件あたり数ドル・オートチャージで2日約 $100 を課金した。実費を測らず「1件数十円」と推測で伝え、予算上限なしで無人実行していた。原因は、①「他AI既定」が Claude Code の作業レーンにしか書かれておらず、アプリ実行時の呼び先は §2.8（Claude モデル階層化）が既定になっていたこと、②費用 hook がすべて Claude Code セッションのトークンしか見ておらず、アプリ側の課金が見えていなかったこと、③2026-07 に Claude 前提で作ったアプリを、2026-10-09 の他AI規則後も棚卸ししていなかったこと。同じ収集は Gemini Flash グラウンディングで、1件あたりの費用が1/10以下になる。
 
 **2.8 API（LLM）コスト最適化**
 

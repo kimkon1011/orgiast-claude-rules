@@ -1,6 +1,6 @@
 # PC名簿（Chrome リモートデスクトップ名 → fleet-mail 宛先）
 
-最終更新: 2026-10-09。正本は `fleet-pc-map.json`（証拠付き）。元データは台帳「オージャスト クラウド契約・プロジェクト台帳」の「PC稼働状況」タブ（kim@orgiast.jp 所有）と、kim が撮った各PCの「詳細情報」画面のスクリーンショット。
+最終更新: 2026-11-02。正本は `fleet-pc-map.json`（証拠付き）。元データは台帳「オージャスト クラウド契約・プロジェクト台帳」の「PC稼働状況」タブ（kim@orgiast.jp 所有）と、kim が撮った各PCの「詳細情報」画面のスクリーンショット。
 
 `fleet-mail --send --to 作業用019 ...` のように、リモートデスクトップ名をそのまま宛先に書ける。全角数字・前後の空白は自動で直る。名簿の番号は **PCのラベル（REPORTER_LABEL）** に変換して送る。hostname には変換しない（PC名と作業用番号がずれている例があるため）。完全一致のみ（作業用番号／ラベル／hostname／all）。解決できない値は送らず、候補は exit 4 で表示する。
 
@@ -8,6 +8,7 @@
 
 | 作業用番号 | 担当者 | アカウント | hostname | Claude Code 導入状況 | fleet-mail 宛先の書き方 |
 |---|---|---|---|---|---|
+| 作業用008 | 未確認 | seisaku-team@orgiast.jp | DESKTOP-BDOAK99 | 導入済み（2026-10-30 16:46–16:47 fleet-mail 自己申告） | `--to 作業用008`（→ DESKTOP-BDOAK99） |
 | 作業用019 | nishi | nishi@orgiast.jp | DESKTOP-04U31RG（Precision T3610） | 導入済み（2026-10-08 に fleet-mail で返信あり） | `--to 作業用019`（→ nishi-PC） |
 | 作業用004民泊用 | nishi | nishi@orgiast.jp | DESKTOP-PPD5V8I | 導入済み（ラベル kimko-PC で報告。台帳上は 2026-09-17 に停止、最終やり取り 2026-09-30） | `--to 作業用004民泊用`（→ kimko-PC） |
 | 作業用011 | cr | cr@orgiast.jp | 作業用011（HP EliteDesk 800 G3 SFF） | ラベル cr-PC（enroll 2026-10-09 発行・fleet 鍵の配布待ち） | `--to 作業用011`（→ cr-PC） |
@@ -28,6 +29,11 @@
 |---|---|---|---|---|---|
 | 作業用018 | 未確認 | cr@orgiast.jp（kim 回答 2026-10-08） | 未確認 | 未確認 | 011 の誤記と判明（2026-10-09） |
 | （番号なし）MacBook Air 13″・macOS 14.8.9・シリアル C02YK73PJK77 | 増田裕子 | cr@orgiast.jp（kim 申告 2026-10-13） | 未確認 | cr@ の Claude Code を使用中（kim 申告） | hostname／ラベル未報告 |
+
+| （番号未確認）cafe015-PC | 未確認 | seisaku-team@orgiast.jp（fleet-status 2026-11-02、自己申告） | 未確認 | 登録候補 | 作業用番号の証拠なし。008には紐付けない |
+| （番号未確認）user-PC | 未確認 | seisaku-team@orgiast.jp（fleet-status 2026-11-02、自己申告） | 未確認 | 登録候補 | 作業用番号の証拠なし。008には紐付けない |
+
+作業用008の証拠: `mail-reply-fa9b672e49db7164`・`mail-reply-828ab32aca705b84`（2026-10-30 16:46）、`mail-reply-23b5030901dbd50f`（同16:47）。日時はkim-PCの提示記録による。
 
 ## 確定のしかた
 

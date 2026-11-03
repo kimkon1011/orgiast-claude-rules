@@ -301,7 +301,7 @@ test('remote archives retain audit mapping, respect live/VSCode/recent/resumed g
   const rows = ids.map(sessionId => ({ sessionId, projectId: 'project', bridgeSessionId: `cse_${sessionId}`, archivedAt: new Date(now - 10 * minute).toISOString(), title: sessionId }));
   f.put('remote-archived-sessions.json', JSON.stringify({ ids: rows, kept: ['kept-remote'] }));
   f.put('current-sessions/live-remote.json', JSON.stringify({ sessionId: 'live-remote', at: new Date(now).toISOString() }));
-  const db = path.join(f.home, 'vscode-user', 'globalStorage', 'state.vscdb');
+  const db = path.join(f.home, 'vscode-user', 'workspaceStorage', 'abc', 'state.vscdb');
   fs.mkdirSync(path.dirname(db), { recursive: true }); fs.writeFileSync(db, 'tab-remote');
   assert.deepEqual(f.run('--dry-run').sessions.map(x => x.sessionId), ['free-remote']);
   assert.equal(JSON.parse(fs.readFileSync(path.join(f.base, 'remote-archived-sessions.json'))).ids.length, 6);
@@ -318,4 +318,33 @@ test('remote archives retain audit mapping, respect live/VSCode/recent/resumed g
   fs.unlinkSync(path.join(f.base, 'current-sessions/free-remote.json'));
   f.put('remote-archived-sessions.json', JSON.stringify({ ...ledger(), ids: [...ledger().ids, rows[0]] }));
   assert.equal(f.run('--dry-run').sessions.some(x => x.sessionId === 'free-remote'), false);
+});
+
+for (const storage of ['globalStorage', 'workspaceStorage']) {
+  test(`remote archive with ID only in ${storage}`, t => {
+    const f = fixture(t);
+    f.session('remote', [msg('user', 'original title', 20 * minute)], 46_000);
+    const archivedAt = new Date(now - 10 * minute).toISOString();
+    f.put('remote-archived-sessions.json', JSON.stringify({ ids: [{ sessionId: 'remote', projectId: 'project', title: 'server title', archivedAt }] }));
+    const db = path.join(f.home, 'vscode-user', storage, ...(storage === 'workspaceStorage' ? ['abc'] : []), 'state.vscdb');
+    fs.mkdirSync(path.dirname(db), { recursive: true }); fs.writeFileSync(db, 'remote');
+    const r = f.run();
+    assert.equal(r.sessions.length, storage === 'globalStorage' ? 1 : 0);
+    assert.equal(fs.existsSync(path.join(f.base, 'projects/project/remote.jsonl')), storage === 'workspaceStorage');
+    if (r.sessions.length) {
+      assert.equal(r.sessions[0].reason, 'remote-archived');
+      assert.equal(r.sessions[0].title, 'server title');
+      assert.equal(r.sessions[0].archivedAt, archivedAt);
+    }
+  });
+}
+
+test('overlapping closed and remote archive retains closed global DB protection', t => {
+  const f = fixture(t); f.session('both', [msg('user', 'work', 20 * minute)], 46_000);
+  f.put('closed-sessions.json', JSON.stringify({ ids: ['both'] }));
+  f.put('remote-archived-sessions.json', JSON.stringify({ ids: [{ sessionId: 'both', projectId: 'project', archivedAt: new Date(now - 10 * minute).toISOString() }] }));
+  const db = path.join(f.home, 'vscode-user', 'globalStorage', 'state.vscdb');
+  fs.mkdirSync(path.dirname(db), { recursive: true }); fs.writeFileSync(db, 'both');
+  const result = f.run('--dry-run');
+  assert.equal(result.sessions.length, 0); assert.equal(result.protected, 1);
 });

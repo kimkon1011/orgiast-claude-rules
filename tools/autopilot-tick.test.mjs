@@ -402,7 +402,7 @@ test('crash after appending log does not lose a charged iteration or allow bypas
 
 function candidates(f, body) {
   fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(f.opts.home, '.claude', 'next-actions.md'), body);
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'business-goals.md'), body);
 }
 
 test('done pre replenishes in priority order, skips human work and previous objective, sends once', async (t) => {
@@ -427,6 +427,21 @@ test('done pre replenishes in priority order, skips human work and previous obje
   assert.equal(state.iterationsToday, 1);
   assert.equal(state.totalIterations, 1);
   assert.equal((await f.call('post', { summary: 'new work', progress: 10 })).noop, false);
+});
+
+test('done pre falls back to next-actions.md when business-goals.md is absent', async (t) => {
+  const asked = [];
+  const f = discord(t, { askImpl: async (candidate) => { asked.push(candidate.objective); return 'Yes'; } });
+  await f.call('start', { objective: '前の目的' });
+  await f.call('post', { summary: 'verified', progress: 100, evidence: '完了を確認' });
+  fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'next-actions.md'),
+    '<!-- NEXT-ACTIONS:BEGIN -->\n## 明日の推奨アクション（今日）\n1. テスト修正\n   - first_step: テストを実行\n## 別アカウント/他PCへの依頼（台帳）\n- 台帳項目\n<!-- NEXT-ACTIONS:END -->\n');
+  const pre = await f.call('pre');
+  assert.equal(pre.verdict, 'run');
+  assert.equal(pre.objective.objective, 'テスト修正');
+  assert.match(pre.objective.context, /テストを実行/);
+  assert.deepEqual(asked, ['テスト修正']);
 });
 
 test('refill skips every objective already closed in history, not just the most recent', async (t) => {
@@ -463,7 +478,7 @@ test('refill with only the current objective in history still picks the first el
 test('never-started pre starts a candidate with mocked classifier and notifier', async (t) => {
   const sent = [];
   const f = fixture(t, { askImpl: async () => 'Yes', notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; } });
-  candidates(f, '## 推奨アクション\n- 自動テスト修正\n');
+  candidates(f, '## 売上・利益レバー（上から優先。1セッション=1件）\n- 自動テスト修正\n');
   assert.equal((await f.call('pre')).verdict, 'run');
   assert.equal((await f.call('status')).objective.objective, '自動テスト修正');
   assert.equal(sent.length, 1);

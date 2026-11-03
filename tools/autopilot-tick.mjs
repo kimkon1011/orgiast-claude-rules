@@ -295,7 +295,7 @@ export function recommendedActions(text) {
     const heading = line.match(/^(#{1,6})\s+(.*)/);
     if (heading) {
       if (depth && heading[1].length <= depth) break;
-      if (!depth && heading[2].includes('推奨アクション')) depth = heading[1].length;
+      if (!depth && (heading[2].includes('推奨アクション') || heading[2].includes('レバー'))) depth = heading[1].length;
       continue;
     }
     if (!depth) continue;
@@ -316,15 +316,22 @@ async function askCandidate(candidate, ctx) {
 }
 async function nextObjective(state, objective, ctx) {
   // Every objective already closed in history (done/stopped/failed_check) must stay closed,
-  // not just the most recent one, or a completed objective gets re-selected from next-actions.
+  // not just the most recent one, or a completed objective gets re-selected from business-goals.
   const closed = new Set((state?.objectiveHistory || [])
     .filter((entry) => ['done', 'stopped', 'failed_check'].includes(entry.status))
     .map((entry) => entry.objective));
-  for (const candidate of recommendedActions(readText(path.join(ctx.home, '.claude', 'next-actions.md')))) {
-    if (closed.has(candidate.objective) || candidate.objective === objective?.objective) continue;
-    try {
-      if (/^yes[.!]?$/i.test(String(await ctx.askImpl(candidate, ctx)).trim())) return candidate;
-    } catch { /* An unavailable classifier is not permission to start. */ }
+  // business-goals.md は手書きの優先順位、next-actions.md は夜間に機械生成される台帳。
+  // PC によっては前者が無いため、無い/空でも次の目的を補充できるよう後者を fallback にする。
+  const seen = new Set();
+  for (const file of ['business-goals.md', 'next-actions.md']) {
+    for (const candidate of recommendedActions(readText(path.join(ctx.home, '.claude', file)))) {
+      if (closed.has(candidate.objective) || candidate.objective === objective?.objective) continue;
+      if (seen.has(candidate.objective)) continue;
+      seen.add(candidate.objective);
+      try {
+        if (/^yes[.!]?$/i.test(String(await ctx.askImpl(candidate, ctx)).trim())) return candidate;
+      } catch { /* An unavailable classifier is not permission to start. */ }
+    }
   }
   return null;
 }
@@ -719,7 +726,7 @@ async function execute(command, args, ctx) {
     // evidence that the DM arrived (2026-10-17 実測)。呼び出し側が run.log に
     // delivered を残せるよう、結果を戻り値と state の両方に載せる。
     const delivery = await sendNotice(text, { ...ctx, periodicDigest: true });
-    if (delivery.delivered === 'dm' || delivery.channels.toast.status === 'submitted' || delivery.channels.file.status === 'written') {
+    if (['dm', 'session-inbox'].includes(delivery.delivered) || delivery.channels.toast.status === 'submitted' || delivery.channels.file.status === 'written') {
       // 送信済みの報告を、後片付けの失敗で「失敗した周」にしない。
       try { await acknowledgeWaiting(waiting.completedIds, { home: ctx.home, now }); }
       catch (error) {

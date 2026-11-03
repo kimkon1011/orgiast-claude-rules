@@ -10,8 +10,9 @@
 #       code.cmd を引数なしで起動する。復元されなければ storage.json から記録したフォルダを
 #       明示的に開く。強制終了はしない。
 #
+# 通常は日付をまたいだ Code を毎晩再起動。72時間以上経過時は busy を無視し理由を記録。
 # 中止条件: 可視ウィンドウなし、VSCode 内の対話セッションが直近15分に活動中、
-#             退避も拡張更新待ちもなし、code.cmd なし、または穏やかに終了できない場合。
+#             当日再起動済みで退避も拡張更新待ちもなし、code.cmd なし、または穏やかに終了できない場合。
 # `claude agents --json` が失敗または空なら、安全側として従来どおり全 jsonl を調べる。
 # ログ: %USERPROFILE%\.claude\nightly-reload-vscode.log
 # 手動テスト: pwsh -NoProfile -File tools/nightly-reload-vscode.ps1 -DryRun
@@ -28,6 +29,14 @@ function Write-Log($message) {
     $line = "{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $message
     try { Add-Content -Path $script:logPath -Value $line -Encoding utf8 } catch {}
     Write-Output $line
+}
+
+# Use the oldest live Code process, not the URI-reload marker (which is not a restart).
+function Get-RestartPolicy([datetime[]]$StartTimes, [datetime]$Now = (Get-Date)) {
+    $oldest = @($StartTimes | Sort-Object | Select-Object -First 1)
+    if ($oldest.Count -eq 0) { return @{ Due = $false; Overdue = $false; AgeHours = $null } }
+    $age = ($Now - $oldest[0]).TotalHours
+    return @{ Due = $oldest[0].Date -lt $Now.Date; Overdue = $age -ge 72; AgeHours = $age }
 }
 
 function Get-ActivatedExtVersion($Path) {
@@ -227,6 +236,9 @@ try {
     $windowHandles = @(Get-VSCodeWindowHandles)
     if ($windowHandles.Count -eq 0) { Write-Log 'SKIP: VSCode の表示中ウィンドウが無い'; exit 0 }
 
+    $policy = Get-RestartPolicy @(Get-Process Code -ErrorAction SilentlyContinue | ForEach-Object { $_.StartTime })
+    if ($policy.Overdue) { Write-Log ('FORCE-RESTART: Code age={0:N1}h >= 72h; bypass busy and URI reload' -f $policy.AgeHours) }
+
     $agentsUsable = $false
     $interactiveIds = @()
     try {
@@ -245,7 +257,7 @@ try {
         }
     } catch { $agentsUsable = $false }
     $busy = @(Get-BusySessionFiles (Join-Path $claude 'projects') (Get-Date).AddMinutes(-15) $interactiveIds $agentsUsable)
-    if ($busy.Count -gt 0) {
+    if ($busy.Count -gt 0 -and -not $policy.Overdue) {
         $busyMessage = "作業中（直近15分に更新されたVSCodeセッション {0} 件: {1}）" -f $busy.Count, $busy[0].Name
         if ($DryRun) { Write-Log ("DRYRUN: 実行時はSKIP（{0}）" -f $busyMessage) }
         else { Write-Log ("SKIP: {0}" -f $busyMessage) }
@@ -273,14 +285,15 @@ try {
             }
         }
     }
-    if ($moved -eq 0 -and -not $updatePending) { Write-Log 'SKIP: 退避されたセッションも拡張の更新待ちも無い'; exit 0 }
+    if (-not $policy.Due -and $moved -eq 0 -and -not $updatePending) { Write-Log 'SKIP: 退避されたセッションも拡張の更新待ちも無い'; exit 0 }
 
     $reasonParts = @()
+    if ($policy.Due) { $reasonParts += ('nightly restart / Code age={0:N1}h' -f $policy.AgeHours) }
     if ($moved -gt 0) { $reasonParts += "退避 $moved 件" }
     if ($updatePending) { $reasonParts += "更新待ち $diskVersion" }
     $reason = $reasonParts -join ' / '
     $requiredVersion = [version]'0.2.0'
-    $uriEligible = $diskVersion -and $diskVersion -ge $requiredVersion -and $activatedVersion -and $activatedVersion -ge $requiredVersion
+    $uriEligible = -not $policy.Due -and $diskVersion -and $diskVersion -ge $requiredVersion -and $activatedVersion -and $activatedVersion -ge $requiredVersion
     $pathLabel = if ($uriEligible) { 'URI（未確認時はRestart）' } else { 'Restart' }
     if ($DryRun) {
         Write-Log ("DRYRUN: ここで再起動する（{0} / {1} / 対象窓 {2}）" -f $pathLabel, $reason, $windowHandles.Count)

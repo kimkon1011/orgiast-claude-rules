@@ -84,4 +84,18 @@ gh api repos/<owner>/<repo> --jq '.permissions.push'   # → true
 3. 操作が許可されていて automerge ラベルを付けられない場合のみ、`gh pr checks <PR番号>` の全 green・変更のスコープ内・非破壊を確認して `gh pr merge <PR番号> --squash`。既存のレビュー付きツールは `node tools/pr-merge.mjs <PR番号>`。classifier 拒否時はカテゴリを1行報告し、別コマンドへの言い換え再試行はしない。
 4. 着地確認時に `git fetch origin` で参照を更新し、`node tools/commit-landed.mjs <sha>` で読み戻す。`git merge-base --is-ancestor` 単独は squash を見落とすので確認手段に使わない。`commit-landed` は ancestor・merged PR・patch-id を照合する。未着地は未着地として記録し、手動ポーリングしない。
 
+### ラベルを外すとき — auto-merge は残る
+
+`automerge` ラベルは付けた瞬間に `.github/workflows/auto-merge.yml` が `gh pr merge --auto --squash` を実行する。**ラベルを外しても GitHub 側の auto-merge は解除されない**（2026-11-03 PR #1451 の実害: 08:42Z にラベルを除去したが、07:40Z の付与時点で有効化済みの auto-merge が残り、08:52Z の CI green で bot が squash マージした）。`auto-merge.yml` は `unlabeled` イベントを購読しておらず、ラベル除去で auto-merge を解除する処理も無い。
+
+誤って付けたラベルを取り消すときは、ラベル除去だけで済ませず必ず次を実行し、読み戻しで `autoMergeRequest` が `null` であることを確認する:
+
+```
+gh pr edit <PR番号> --remove-label automerge
+gh pr merge <PR番号> --disable-auto
+gh pr view <PR番号> --json autoMergeRequest
+```
+
+恒久対策（kim の手動マージが必要・`workflow` スコープが要る）: `auto-merge.yml` の `types` に `unlabeled` を追加し、ラベルが無い PR には `gh pr merge --disable-auto` を実行する。これは起票のみで、本 playbook では変更しない。
+
 参照: [commit-landed.mjs](../tools/commit-landed.mjs)、[pr-merge.mjs](../tools/pr-merge.mjs)。元の認証・スコープ表は上記日付の実測であり、現在の権限は対象リポジトリへ直接照会する。

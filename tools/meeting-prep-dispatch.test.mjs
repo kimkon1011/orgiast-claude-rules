@@ -153,7 +153,7 @@ test('applierは範囲allowlistと寸法を検証しアイテムリスト/顧客
   assert.equal(validateWrite(write()).height, 1);
   for (const w of [write({ tab: 'アイテムリスト' }), write({ target: 'other' }), write({ range: "'アイテムリスト'!A1" }), write({ values: [] }), write({ target: 'confirmation', tab: '確認事項', range: 'E2:E2' })]) assert.throws(() => validateWrite(w));
 });
-test('applierは競合停止・書込後読戻し・同じ値の再適用は書込ゼロ', async () => {
+test('専用タブはbefore不要で全置換・読戻し・同じ値の再適用は書込ゼロ', async () => {
   let values = [['old']], puts = 0;
   const g = { request: async (_, url, method = 'GET', body) => {
     if (url.includes('fields=sheets')) return { sheets: [{ properties: { title: 'Claude_次回MTGアジェンダ', sheetId: 22 } }] };
@@ -161,7 +161,8 @@ test('applierは競合停止・書込後読戻し・同じ値の再適用は書�
   } };
   const link = await applySheetWrite(g, 'plan', write()); assert.match(link.url, /gid=22/);
   await applySheetWrite(g, 'plan', write()); assert.equal(puts, 1);
-  values = [['human edit']]; await assert.rejects(applySheetWrite(g, 'plan', write()), /競合/); assert.equal(puts, 1);
+  values = [['human edit']]; await applySheetWrite(g, 'plan', write()); assert.equal(puts, 2);
+  assert.equal(values[1][1], 'new');
 });
 test('新規デザインタブ作成後の障害からヘッダーを読み戻して再開', async () => {
   let sheet, headers, values; let created = 0;
@@ -174,7 +175,7 @@ test('新規デザインタブ作成後の障害からヘッダーを読み戻�
   } };
   const w = write({ tab: '制作物デザイン', range: 'A2:A2', before: [['']], create: true });
   await applySheetWrite(g, 'plan', w); await applySheetWrite(g, 'plan', w);
-  assert.equal(created, 1); assert.equal(headers[0][0], '制作物');
+  assert.equal(created, 1); assert.equal(values[0][0], '制作物');
 });
 test('結果回収は差出人・replyTo・batchId・対象keyを照合し二度適用しない', async () => {
   const job = plan()[0], batch = { id: 'b', pc: 'pc008', method: 'fleet-mail', mailId: 'mail1', jobs: [job], completed: {} };
@@ -222,7 +223,7 @@ test('DWD applierは返信の任意IDを使わず案件正本のplanIdへ書き�
   } };
   const result = await applyResult(g, plan()[0], { status: 'apply', summary: 'test', writes: [write({ spreadsheetId: 'evil' })] });
   assert.equal(result.status, 'ready'); assert.ok(destinations.every(u => u.includes('/plan')));
-  await assert.rejects(applyResult(g, plan()[0], { writes: [write(), write()] }), /重複/);
+  assert.equal(result.operations[0].readBack.verified, true);
 });
 test('案件未特定・保育園・名称非公開はskippedだけに残り配送しない', async () => {
   for (const extra of [{ summary: '保育園' }, { summary: '経営会議' }, { summary: undefined, description: 'C1234' }, { summary: '名称非公開', description: 'C1234' }]) {
@@ -643,7 +644,7 @@ test('外部参考URLを適用し、成果物リンクと危険URLの項目だ�
   const result = await applyResult(g, plan()[0], { status: 'apply', summary: '確認事項',
     links: [{ label: '外部成果物', url: 'https://evil.example/out' }, { label: '計画書', url: 'https://docs.google.com/spreadsheets/d/plan/edit#gid=22' }],
     writes: [write({ values: [[reference]] }), write({ range: 'B3:B3', values: [['javascript:alert(1)']] }), write({ range: 'B4:B4', values: [['data:text/html,test']] }), write({ range: 'B5:B5', url: 'https://evil.example/out' })] });
-  assert.equal(result.status, 'ready'); assert.deepEqual(values, [[reference]]);
+  assert.equal(result.status, 'ready'); assert.equal(values[1][1], reference);
   assert.equal(result.rejectedItems.length, 4); assert.ok(result.links.every(l => l.url.includes('docs.google.com')));
 });
 test('最新14日・両アカウントの案件スレッド本文を新しい順に入力する', async () => {
@@ -687,7 +688,7 @@ test('外部リンク混在のapplyを回収してジョブを完了できる', 
     runLocal: async batch => JSON.stringify({ version: 1, batchId: batch.id, results: [{ key: batch.jobs[0].key, status: 'apply', summary: '最新連絡を確認',
       links: [{ label: '参考', url: 'https://peatix.com/event/123' }], writes: [write({ values: [['確認事項 https://timerex.net/r/example']] })] }] }) });
   assert.deepEqual(errors, []); assert.equal(Object.values(state.batches)[0].status, 'complete');
-  assert.match(values[0][0], /timerex/); assert.equal(Object.values(state.batches)[0].completed[plan()[0].key].result.rejectedItems.length, 1);
+  assert.match(values[1][1], /timerex/); assert.equal(Object.values(state.batches)[0].completed[plan()[0].key].result.rejectedItems.length, 1);
 });
 test('片方のGmailが未取得でも他方の本文と確認事項用の理由を残す', async () => {
   const until = Date.parse('2026-11-04T00:00:00Z');
@@ -695,4 +696,161 @@ test('片方のGmailが未取得でも他方の本文と確認事項用の理由
     if (user === config.teamEmail) throw Error('HTTP 403'); return [{ id: 'thread' }];
   }, request: async () => ({ messages: [{ id: 'm', internalDate: String(until), payload: { mimeType: 'text/plain', body: { data: Buffer.from('C1234 確認が必要').toString('base64url') } } }] }) }) });
   assert.equal(recent.mail.length, 1); assert.match(recent.unconfirmed[0], /seisaku-team.*403/);
+});
+
+// Real output fixtures preserve row shapes, missing before fields and equality,
+// while every non-empty free-text cell is anonymized. 8a63 raw stdout was lost.
+const fixture = id => JSON.parse(fs.readFileSync(new URL(`./fixtures/meeting-prep/${id}.json`, import.meta.url), 'utf8'));
+const agendaHeader = ['No', '議題', '目的', '背景', 'この場で決めること', '選択肢', '所要分'];
+const confirmHeader = ['確認ID', 'フェーズ', 'カテゴリ', '確認内容', '回答', 'ステータス', '起票日時'];
+async function sheetSandbox(initial = {}, { confirmation = true, submission = false } = {}) {
+  const { createApplyPreview } = await import('./lib/meeting-prep-preview.mjs');
+  const readCalls = [];
+  const source = {
+    pages: async (_, url) => decodeURIComponent(url).includes('打合せ補足資料') ? [] : [
+      ...(confirmation ? [{ id: 'confirm', name: '確認シート', mimeType: 'application/vnd.google-apps.spreadsheet' }] : []),
+      ...(submission ? [{ id: 'submit', name: 'C1234_展示会準備_ご提出フォーマット', mimeType: 'application/vnd.google-apps.spreadsheet' }] : [])
+    ],
+    request: async (_, url, method = 'GET') => {
+      assert.equal(method, 'GET', 'dry-run must never write to the backing service'); readCalls.push(url);
+      const u = new URL(url), id = u.pathname.split('/')[3], tabs = initial[id] || {};
+      if (u.searchParams.has('fields')) return { sheets: Object.keys(tabs).map((title, i) => ({ properties: { title, sheetId: i + 1 } })) };
+      const tab = decodeURIComponent(u.pathname.split('/values/')[1]).match(/^'([^']+)'/)[1];
+      if (!Object.hasOwn(tabs, tab)) throw Error('unregistered tab');
+      return { values: structuredClone(tabs[tab]) };
+    }
+  };
+  return Object.assign(createApplyPreview(source), { readCalls });
+}
+const readTab = (g, id, tab) => g.request('spreadsheets', `https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(`'${tab}'`)}`);
+for (const id of ['cdfd', 'e6d7', '6a7a']) test(`保存済み実出力 ${id}: 寸法補正・提出先fallback・全タブ読戻し`, async () => {
+  const answer = fixture(id), result = answer.results[0];
+  const g = await sheetSandbox({ plan: { 'Claude_次回MTGアジェンダ': [agendaHeader, [1, '古い議題']], 'Claude_実施計画更新': [['項目', '確定内容', '根拠', '更新日時']] }, confirm: { '確認事項': [['確認ID', 'フェーズ', '確認カテゴリ', '確認内容', '回答', 'ステータス', '起票日時']] } });
+  const applied = await applyResult(g, plan()[0], result);
+  assert.equal(applied.status, 'ready'); assert.equal(applied.skipped.length, id === 'e6d7' ? 1 : 0);
+  assert.ok(applied.skipped.every(s => /gid/.test(s.reason)));
+  assert.ok(applied.operations.every(op => op.readBack.verified));
+  assert.equal(applied.operations.filter(op => op.tab === 'Claude_次回MTGアジェンダ').length, 1, 'split proposals replace the tab once');
+  const agenda = (await readTab(g, 'plan', 'Claude_次回MTGアジェンダ')).values;
+  assert.ok(!agenda.some(r => r.includes('古い議題')));
+  if (id !== '6a7a') {
+    assert.ok(applied.notes.includes('提出フォーマット未特定'));
+    assert.ok(agenda.some(r => r[1] === '提出依頼'));
+    assert.match(agenda.at(-1)[1], /^提出依頼:/);
+  }
+  const first = (await readTab(g, 'confirm', '確認事項')).values;
+  const again = await applyResult(g, plan()[0], result);
+  assert.equal(again.status, 'ready');
+  assert.deepEqual((await readTab(g, 'confirm', '確認事項')).values, first);
+  assert.ok(again.operations.filter(op => op.mode === 'append').every(op => op.rows === 0));
+  if (id === 'cdfd') {
+    assert.equal(first[1][3], result.writes.find(w => w.tab === '確認事項').values[0][2]);
+    assert.equal(first[1][4], '');
+  }
+});
+test('追記は内容で重複排除し既存回答を保持・列数を見出しへ補正', async () => {
+  const g = await sheetSandbox({ confirm: { '確認事項': [confirmHeader, ['old-id', 'p', 'c', '既存 内容', 'お客様の回答', '済', 'date']] },
+    submit: { 'Claude_提出依頼': [['提出物', '目的', '期限', '状態', '備考'], ['資料A', '目的', '', '受領済']] },
+    plan: { '制作物一覧': [['No', '品名', 'サイズ'], [1, '看板', 'A1']] } }, { submission: true });
+  const result = await applyResult(g, plan()[0], { writes: [
+    { target: 'confirmation', tab: '確認事項', range: 'A2:G3', values: [['new-id', 'p', 'c', '既存内容', '', '', ''], ['new', '', '', '新しい確認', '', '未', 'date', '余分']] },
+    { target: 'submission', tab: 'Claude_提出依頼', range: 'A2:E3', values: [['資料A', '書換不可'], ['資料B', '新規']] },
+    { target: 'plan', tab: '制作物一覧', range: 'A2:C3', values: [[99, '看板', '変更不可'], [2, '名札', 'A6', '切り捨て']] }
+  ] });
+  assert.equal(result.status, 'ready'); assert.equal(result.skipped.length, 0);
+  assert.deepEqual(result.operations.map(op => [op.rows, op.duplicates]), [[1, 1], [1, 1], [1, 1]]);
+  const rows = (await readTab(g, 'confirm', '確認事項')).values;
+  assert.equal(rows[1][4], 'お客様の回答'); assert.equal(rows[2].length, 7);
+  assert.deepEqual((await readTab(g, 'plan', '制作物一覧')).values[1], [1, '看板', 'A1']);
+});
+test('before不一致はその操作だけskip・一致する操作は適用・準備予定は一部完了', async () => {
+  const g = await sheetSandbox({ plan: { 'Claude_実施計画更新': [['項目', '確定内容', '根拠', '更新日時'], ['人が編集'], ['一致']] } });
+  const proposals = [write({ tab: 'Claude_実施計画更新', range: 'A2:A2', before: [['古い']], values: [['上書き禁止']] }),
+    write({ tab: 'Claude_実施計画更新', range: 'A3:A3', before: [['一致']], values: [['更新']] }), write()];
+  const checkpoints = [];
+  const result = await applyResult(g, plan()[0], { status: 'apply', summary: '準備', writes: proposals }, p => checkpoints.push(structuredClone(p)));
+  assert.equal(result.status, 'ready'); assert.equal(result.skipped.length, 1); assert.match(result.skipped[0].reason, /before不一致/);
+  assert.equal(result.operations.length, 2); assert.ok(checkpoints.some(p => p.operations.length));
+  const rows = (await readTab(g, 'plan', 'Claude_実施計画更新')).values;
+  assert.equal(rows[1][0], '人が編集'); assert.equal(rows[2][0], '更新');
+  const cal = calendarMock(); await upsertPreparation(cal, 'prep', plan()[0], result);
+  assert.match([...cal.events.values()][0].description, /一部完了（skip 1件:.*before不一致/);
+});
+test('missing confirmationをskipしても提出依頼と残りの成果物は適用', async () => {
+  const g = await sheetSandbox({ plan: { 'Claude_実施計画更新': [['項目', '確定内容', '根拠', '更新日時']] } }, { confirmation: false });
+  const result = await applyResult(g, plan()[0], fixture('cdfd').results[0]);
+  assert.equal(result.status, 'ready'); assert.equal(result.skipped.length, 1);
+  const cal = calendarMock(); await upsertPreparation(cal, 'prep', plan()[0], result);
+  assert.match([...cal.events.values()][0].description, /提出フォーマット未特定/);
+});
+test('synthetic 8a63 failure class: raw control characters survive tolerant parsing', () => {
+  const value = '改行\nタブ\tNUL\u0000引用"逆斜線\\';
+  const text = JSON.stringify({ version: 1, batchId: 'synthetic-8a63', results: [{ summary: value }] }).replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\u0000/g, '\u0000');
+  assert.throws(() => JSON.parse(text), SyntaxError);
+  for (const raw of [text, '```json\n' + text + '\n```', JSON.stringify({ result: text })]) assert.equal(parseAnswer(raw).results[0].summary, value);
+});
+test('JSON構文修正は1回限定・parse前stdoutも永続checkpoint対象', async () => {
+  for (const repairSucceeds of [true, false]) {
+    const state = {}, g = calendarMock(); let runs = 0;
+    await dispatchJobs({ jobs: plan(), state, config, template: '{{PAYLOAD}}', google: g, checkpoint() {},
+      runLocal: async (batch, body, options) => {
+        runs++;
+        if (runs === 1) { assert.equal(options.repairRaw, undefined); return '{invalid'; }
+        assert.equal(options.repairRaw, '{invalid');
+        return repairSucceeds ? JSON.stringify({ version: 1, batchId: batch.id, results: [{ key: batch.jobs[0].key, status: 'needsReview', summary: '構文修正済み' }] }) : '{still invalid';
+      } });
+    assert.equal(runs, 2);
+    const batch = Object.values(state.batches)[0];
+    assert.equal(batch.localRaw, '{invalid'); assert.equal(batch.jsonRetry.attempts, 1); assert.ok(batch.localRepairRaw);
+    assert.equal(batch.status, 'failed');
+  }
+});
+test('読戻し不一致をskipとして記録し他タブは続行する', async () => {
+  const g = await sheetSandbox(), original = g.request;
+  g.request = async (scope, url, method, body) => {
+    const response = await original(scope, url, method, body);
+    if ((method || 'GET') === 'GET' && url.includes('/values/') && decodeURIComponent(url).includes('制作物デザイン') && g.mutations.some(m => m.method === 'PUT' && decodeURIComponent(m.url).includes('制作物デザイン'))) return { values: [['unexpected']] };
+    return response;
+  };
+  const result = await applyResult(g, plan()[0], { writes: [write(), write({ tab: '制作物デザイン', range: 'A2:F2', values: [['制作物']] })] });
+  assert.equal(result.status, 'ready'); assert.equal(result.skipped.length, 1); assert.match(result.skipped[0].reason, /read-back/);
+  assert.ok(result.operations.every(op => op.readBack.verified));
+});
+test('アイテムリスト・回答・既存Docの削除は禁止、全skipなら成功にしない', async () => {
+  const g = await sheetSandbox();
+  const result = await applyResult(g, plan()[0], { writes: [write({ tab: 'アイテムリスト' })] });
+  assert.equal(result.status, 'needsReview'); assert.equal(g.mutations.length, 0);
+  const calls = [];
+  const docs = { pages: async () => [{ id: 'doc' }], request: async (_, url, method = 'GET') => { calls.push(method); return { revisionId: 'r', body: { content: [{ paragraph: { elements: [{ textRun: { content: 'existing\n' } }] } }] } }; } };
+  const d = await applyResult(docs, plan()[0], { documents: [{ key: 'doc', beforeText: 'existing', text: 'new' }] });
+  assert.equal(d.status, 'needsReview'); assert.match(d.skipped[0].reason, /削除・全置換は禁止/); assert.ok(calls.every(m => m === 'GET'));
+});
+test('提出依頼だけの再適用は既存アジェンダを保持して二重追記しない', async () => {
+  const g = await sheetSandbox({ plan: { 'Claude_次回MTGアジェンダ': [agendaHeader, [1, '保持する議題']] } });
+  const result = { writes: [{ target: 'submission', tab: 'Claude_提出依頼', range: 'A2:E2', values: [['資料', '目的', '', '', '']] }] };
+  await applyResult(g, plan()[0], result);
+  const before = (await readTab(g, 'plan', 'Claude_次回MTGアジェンダ')).values;
+  await applyResult(g, plan()[0], result);
+  assert.deepEqual((await readTab(g, 'plan', 'Claude_次回MTGアジェンダ')).values, before);
+  assert.equal(before[1][1], '保持する議題'); assert.equal(before.length, 4);
+});
+test('確認事項の末尾列だけ不足した場合はカテゴリをずらさず末尾を補完する', async () => {
+  const g = await sheetSandbox({ confirm: { '確認事項': [confirmHeader] } });
+  await applySheetWrite(g, 'confirm', { target: 'confirmation', tab: '確認事項', range: 'A2:G2', values: [['id', 'phase', 'カテゴリ', '確認内容', '', '未']] });
+  const row = (await readTab(g, 'confirm', '確認事項')).values[1];
+  assert.equal(row[2], 'カテゴリ'); assert.equal(row[3], '確認内容'); assert.equal(row[4], '');
+});
+test('書込直前の再読込でbeforeが変わっていた場合もskip', async () => {
+  let reads = 0, puts = 0;
+  const g = { request: async (_, url, method = 'GET') => {
+    if (url.includes('fields=')) return { sheets: [{ properties: { title: 'Claude_実施計画更新', sheetId: 1 } }] };
+    if (method === 'PUT') puts++;
+    return { values: [[++reads < 3 ? 'old' : 'human']] };
+  } };
+  await assert.rejects(applySheetWrite(g, 'plan', write({ tab: 'Claude_実施計画更新' })), /before不一致/);
+  assert.equal(puts, 0);
+});
+test('apply-dryとliveの併用は認証・実行前に拒否する', async () => {
+  const { main } = await import('./meeting-prep-dispatch.mjs');
+  await assert.rejects(main(['--apply-dry', 'batch', '--live']), /併用不可/);
 });

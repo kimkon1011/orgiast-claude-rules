@@ -17,6 +17,7 @@ import { LANE_HEALTH_KIM_PC, parseLaneDoctorOutput, deadLanes, repairAdvice, lan
 import { dailyRuleCompliance } from './fleet-rule-compliance-daily.mjs';
 import { appendAfterFromEnv } from './growi-manual.mjs';
 import { fetchMailTargets } from './fleet-mail-targets.mjs';
+import { allowedReadonlyPrompt } from './lib/fleet-selfcheck-prompt.mjs';
 export { resolveFleetLabel, dailyRuleCompliance };
 
 export function isFleetHub(label, config) {
@@ -1381,10 +1382,12 @@ async function runMain(argv, deps) {
     }
     // 全PCの設定変更・インストール・ファイル書き込みの依頼は fleet-mail で配らず setup --converge に載せる。
     // 相談・確認（--kind note）や、意図的な再送（--force）は通す。
-    if (options['--kind'] === 'prompt' && !options['--force'] && looksLikeInstallRequest(parseExecMarkers(body).body)) {
+    const readonlyPrompt = allowedReadonlyPrompt(parseExecMarkers(body).body);
+    if (options['--kind'] === 'prompt' && !options['--force'] && !readonlyPrompt && looksLikeInstallRequest(parseExecMarkers(body).body)) {
       err('全PCの設定変更は setup --converge 経由。fleet-mail は相談・確認用。');
       return 5;
     }
+    if (options['--kind'] === 'prompt' && readonlyPrompt) err(`読み取り専用許可: ${readonlyPrompt.id}（${readonlyPrompt.reason}）`);
     // 宛先が受信できているかを送信前に見せる（2026-10-10 事故: 受信タスク停止で返事が永遠に届かない）。
     // 取得失敗・未設定でも送信は続行する（fail-open）。
     try {

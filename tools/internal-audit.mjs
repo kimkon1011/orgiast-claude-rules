@@ -275,7 +275,7 @@ export async function main(argv = process.argv.slice(2)) {
     if (options.notify) {
       const location = await reportLocation(options.out ? path.resolve(options.out) : daily, { keyPath, date });
       const result = await notifyKim(safeText(notificationText(findings, location, date), secrets), { home: defaultHome, token, webhookFallback: false });
-      if (result.delivered !== 'dm') throw auditError('レポート保存済み。kim への DM 配信失敗');
+      if (!['dm', 'session-inbox'].includes(result.delivered)) throw auditError('レポート保存済み。kim への DM 配信失敗');
     }
     if (!options.out) process.stdout.write(report);
     return options['fail-on-high'] && findings.some(f => f.severity === 'high') ? 2 : 0;

@@ -226,7 +226,7 @@ export async function installKnowledge({ home = homeDefault(), source = isKnowle
   }
   // DWD authorizes exact scopes: reuse the approved Drive scope from hub sync.
   // drive.readonly is not authorized for the existing SA (live verification).
-  token ??= await getToken({ signal: AbortSignal.timeout(30000) });
+  token ??= await getToken({ impersonate: 'seisaku-team@orgiast.jp', signal: AbortSignal.timeout(30000) });
   const folderId = await folder(token, apiFn);
   const file = await find(token, 'manifest.json', folderId, apiFn);
   if (!file) throw new Error('knowledge manifest missing');

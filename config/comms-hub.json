@@ -1,0 +1,15 @@
+{
+  "domain": "orgiast.jp",
+  "readers": ["seisaku-team@orgiast.jp", "cr@orgiast.jp", "nishi@orgiast.jp"],
+  "mailboxes": {"gmail-kim": "kim@orgiast.jp", "gmail-seisaku": "seisaku-team@orgiast.jp"},
+  "casesSheet": "14RC6og1ma_I3LGHwCVwswKArgHwCOPxWlPB3g8adaYY",
+  "maxPerSource": 25,
+  "sourceTimeoutMs": 60000,
+  "excludePatterns": ["github", "vercel", "noreply", "no-reply", "notifications@", "accounts.google.com", "newsletter", "ニュースレター", "配信停止", "認証コード", "ワンタイムパスワード"],
+  "privatePatterns": ["私用", "プライベート", "個人的", "家族", "診療", "診察", "クレジットカード", "口座残高", "労働審判", "弁護士", "裁判", "訴訟", "書記官", "給与", "人事評価", "健康診断"],
+  "businessPatterns": ["見積", "請求", "納品", "発注", "施工", "展示会", "ブース", "入稿", "案件", "制作", "協賛"],
+  "allowedSenders": [],
+  "allowedChats": [],
+  "threadCases": {},
+  "channelCases": {}
+}

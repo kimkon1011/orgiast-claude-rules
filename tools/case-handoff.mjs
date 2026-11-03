@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { isEntry } from './is-entry.mjs';
 import { keyserveAuthHeaders, keyserveSecret, requireKeyservePcId } from './keyserve-auth.mjs';
 import { claudeAccount, isKimOperated } from './lib/kim-operated.mjs';
@@ -38,6 +39,31 @@ function updateBinding(file, fn) {
   try { const next = fn(readJson(file)); atomic(file, next); return next; }
   finally { fs.rmSync(lock, { force: true }); }
 }
+export const watchFile = home => path.join(home, '.claude', 'state', 'case-watch.json');
+export function caseWatch(home, { now = Date.now(), add = [], remove = [], reason = 'watch', persist = true } = {}) {
+  const update = saved => {
+    const value = saved || { cases: {} };
+    if (!saved) {
+      const dir = path.join(home, '.claude', 'case-binding');
+      for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+        if (!name.endsWith('.json')) continue;
+        const file = path.join(dir, name);
+        if (now - fs.statSync(file).mtimeMs > 30 * 86400000) continue;
+        for (const id of readJson(file)?.cases || []) {
+          if (CASE_ID.test(id)) value.cases[id] = { addedAt: new Date(now).toISOString(), reason: 'binding migration' };
+        }
+      }
+    }
+    for (const id of add) {
+      if (!CASE_ID.test(id)) throw Error('invalid case ID');
+      value.cases[id] = { addedAt: value.cases[id]?.addedAt || new Date(now).toISOString(), reason };
+    }
+    for (const id of remove) delete value.cases[id];
+    return value;
+  };
+  return persist ? updateBinding(watchFile(home), update) : update(readJson(watchFile(home)));
+}
+
 export function client(options = {}) {
   const home = options.home || process.env.ORGIAST_HOME || os.homedir();
   const base = path.join(home, '.claude');
@@ -80,10 +106,12 @@ export function client(options = {}) {
   function bind(sessionId, ids, transcriptPath) {
     const file = bindingFile(sessionId);
     for (const id of ids) if (!CASE_ID.test(id)) throw Error('invalid case ID');
-    return updateBinding(file, saved => {
+    const binding = updateBinding(file, saved => {
       const old = saved || { sessionId, account, pc, cases: [], cursors: {} };
       return { ...old, cases: [...new Set([...old.cases, ...ids])], ...(transcriptPath ? { transcriptPath } : {}) };
     });
+    if ((options.label ?? resolveFleetLabel(home)) === 'kim-PC' && ids.length) caseWatch(home, { add: ids, reason: 'bind' });
+    return binding;
   }
   function findTranscript(sessionId) {
     const walk = dir => {
@@ -161,9 +189,12 @@ export function client(options = {}) {
       throw e;
     } finally { fs.rmSync(lock, { force: true }); }
   }
-  async function resume(caseId, { transcripts = false } = {}) {
+  async function fetchResume(caseId) {
     if (!CASE_ID.test(caseId)) throw Error('invalid case ID');
-    const data = await request({ caseId, mode: 'resume' });
+    return request({ caseId, mode: 'resume' });
+  }
+  async function resume(caseId, { transcripts = false } = {}) {
+    const data = await fetchResume(caseId);
     const dir = path.join(base, 'case-sessions', caseId);
     atomic(path.join(dir, 'STATE.md'), data.state); atomic(path.join(dir, 'LOG.md'), data.log);
     if (transcripts) {
@@ -181,7 +212,7 @@ export function client(options = {}) {
     }
     return resumeText(data.state, data.log);
   }
-  return { home, base, account, pc, request, catalog, bind, stage, drain, resume, bindingFile };
+  return { home, base, account, pc, request, catalog, bind, stage, drain, resume, fetchResume, bindingFile };
 }
 
 function background(c, force = false) {
@@ -243,12 +274,15 @@ export async function main(args = process.argv.slice(2)) {
   }
   const ids = CASE_ID.test(value || '') ? [value] : detectCases(value, await c.catalog());
   if (ids.length !== 1) throw Error('案件を一意に特定できません。案件一覧の案件IDを指定してください');
-  if (command === 'bind') {
+  if (command === 'watch' || command === 'unwatch') {
+    caseWatch(home, { [command === 'watch' ? 'add' : 'remove']: ids });
+    console.log(`case-handoff: ${command} ${ids[0]}`);
+  } else if (command === 'bind') {
     const session = args.includes('--session') ? opt('--session') : process.env.CLAUDE_SESSION_ID;
     if (!session) throw Error('--session <現在のセッションID> が必要です');
     c.bind(session, ids, args.includes('--transcript') ? opt('--transcript') : undefined);
     console.log(`case-handoff: ${ids[0]} に紐付けました`);
   } else if (command === 'resume' || command === 'sync') console.log(await c.resume(ids[0], { transcripts: command === 'sync' }));
-  else throw Error('usage: case-handoff.mjs bind|resume|sync <案件ID/案件名> | flush <sessionId> | retry | hook');
+  else throw Error('usage: case-handoff.mjs bind|watch|unwatch|resume|sync <案件ID/案件名> | flush <sessionId> | retry | hook');
 }
 if (isEntry(import.meta.url)) main().catch(e => { console.error(`[case-handoff] ${e.message}`); process.exitCode = 1; });

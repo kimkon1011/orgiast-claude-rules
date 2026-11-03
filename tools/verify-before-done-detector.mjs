@@ -3,10 +3,11 @@ export const GATE_CONTRACT = {"name": "verify-before-done-detector", "remedies":
 import fs from 'node:fs';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
-import { latestAssistantText } from './lib/assistant-text.mjs';
+import { currentTurnAssistantText, latestAssistantText } from './lib/assistant-text.mjs';
 import { readLastLines } from './transcript-tail.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { appendStopLedger, registerStopViolation, stopGateOutput } from './lib/stop-recheck.mjs';
+import { withStopRetryInstruction } from './lib/stop-retry-message.mjs';
 
 const normalize = value => String(value).replaceAll('\\', '/').replace(/^\.\//, '');
 const excluded = file => /(?:^|\/)(?:memory|scratchpad|tests?)(?:\/|$)|(?:\.test|\.spec)\.|\.md$/i.test(normalize(file));
@@ -169,12 +170,13 @@ if (isEntry(import.meta.url)) {
       const data = JSON.parse(stdin);
       if (data.transcript_path && fs.existsSync(data.transcript_path)) {
         const entries = readLastLines(data.transcript_path, 4000, 8 * 1024 * 1024).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
-        const assistantText = latestAssistantText(data.transcript_path);
+        const latestText = latestAssistantText(data.transcript_path);
+        const assistantText = currentTurnAssistantText(entries.map(entry => JSON.stringify(entry)).join('\n')) || latestText;
         const reason = evaluateVerification(entries, assistantText, { cwd: data.cwd || process.cwd() });
         if (reason) {
           const recheck = registerStopViolation({ input: data, assistantText, blockedBy: ['verify-before-done-detector'], reasonCodes: ['VERIFY-BEFORE-DONE'] });
           appendStopLedger({ sessionId: recheck.sessionId, verdict: recheck.verdict, blockedBy: recheck.blockedBy, reasonCodes: recheck.reasonCodes, retryCap: recheck.retryCap, excerpt: assistantText.slice(0, 200) });
-          console.log(JSON.stringify(stopGateOutput(recheck, reason)));
+          console.log(JSON.stringify(stopGateOutput(recheck, withStopRetryInstruction(reason))));
         }
       }
     }

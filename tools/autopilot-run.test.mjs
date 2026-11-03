@@ -34,7 +34,8 @@ test('run.log records whether the digest was actually delivered, even on a pause
   assert.equal(result.skipped, 'manual_pause');
   const log = fs.readFileSync(path.join(opts.dir, 'run.log'), 'utf8');
   assert.match(log, /"digest":"2026-09-21-12"/);
-  assert.match(log, /"delivered":"none"/);
+  // kim 宛は Discord ではなく kim-inbox 台帳へ配達される（2026-10-27）。
+  assert.match(log, /"delivered":"session-inbox"/);
 });
 
 test('models follow planIncluded; prompt comes from skill and headless uses one foreground iteration', async (t) => {
@@ -155,7 +156,7 @@ test('runner failures pause and send one short runner_error DM', async (t) => {
 test('existing runner entry replenishes before launching Claude without explicit start', async (t) => {
   const opts = fixture(t), sent = [];
   fs.mkdirSync(path.join(opts.home, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(opts.home, '.claude', 'next-actions.md'), '## 推奨アクション\n1. テスト修正');
+  fs.writeFileSync(path.join(opts.home, '.claude', 'business-goals.md'), '## 売上・利益レバー（上から優先。1セッション=1件）\n1. テスト修正');
   const result = await runOnce({ ...opts, askImpl: async () => 'Yes', notifyImpl: async text => { sent.push(text); }, invokeImpl: async () => {
     assert.equal((await runAutopilot('status', {}, opts)).objective.objective, 'テスト修正');
     await runAutopilot('post', { summary: 'work', progress: 10 }, opts);

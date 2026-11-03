@@ -3,11 +3,13 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { acquireLock } from './lib/progress-file-lock.mjs';
 import { isEntry } from './is-entry.mjs';
 import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 import { ledgerFile, readLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES } from './auto-progress-ledger.mjs';
 export { isUnattendedRow } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
+import { collectCaseProgress } from './case-progress-digest.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 
 export const WINDOW_MS = 24 * 3600 * 1000;
@@ -75,7 +77,8 @@ export function needsDm(row, now = Date.now()) {
   if (isNoopPromise(row.promise)) return false;
   const verdict = verdictOf(row, now);
   return isHumanActionRequired(row) || ['done', 'open/期限超過'].includes(verdict) ||
-    (verdict === 'stalled' && Number(row.resumeCount) >= MAX_RESUMES);
+    (verdict === 'stalled' && (Number(row.resumeCount) >= MAX_RESUMES ||
+      (/^(?:error|timeout|blocked)\b/i.test(String(row.resumeOutcome || '')) && Number(row.resumeFailureCount ?? row.resumeCount) >= 2)));
 }
 
 export function cleanText(text, row = {}) {
@@ -217,6 +220,7 @@ export function formatDigest(rows, now = Date.now(), label = '', {
   const filtered = (allRows || rows || []).filter(row => !isNoopPromise(row.promise));
   if (!filtered.length && !(waitingRows?.length || doneRows?.length || stalledRows?.length || inProgressRows?.length)) return '';
 
+  const scheduled = filtered.filter(row => ['scheduled', 'start_overdue'].includes(row.status));
   const waitingAll = waitingRows ? [...waitingRows] : [];
   const done = doneRows ? [...doneRows] : [];
   let stalled = stalledRows ? [...stalledRows] : [];
@@ -225,6 +229,7 @@ export function formatDigest(rows, now = Date.now(), label = '', {
 
   if (!waitingRows && !doneRows && !stalledRows && !inProgressRows) {
     for (const row of filtered) {
+      if (scheduled.includes(row)) continue;
       if (row.status === 'done' || verdictOf(row, now) === 'done') {
         done.push(row);
       } else if (isHumanActionRequired(row)) {
@@ -249,7 +254,7 @@ export function formatDigest(rows, now = Date.now(), label = '', {
     const t = Date.parse(r.lastCheckedAt || r.resumedAt || r.ts || 0);
     return Number.isFinite(t) ? t : 0;
   };
-  const inProgressSorted = [...inProgressList].sort((a, b) => checkedTime(b) - checkedTime(a));
+  const inProgressSorted = inProgressList.filter(row => !scheduled.includes(row)).sort((a, b) => checkedTime(b) - checkedTime(a));
 
   const pcLabel = label || 'このPC';
   const header = `【${pcLabel} の自動進行】 完了 ${done.length}件・止まっている ${stalled.length}件・あなたの判断待ち ${waiting.length}件`;
@@ -260,6 +265,10 @@ export function formatDigest(rows, now = Date.now(), label = '', {
   // 全件を名前つきで並べる。1通1800字に収まらない時は分割指示（chunkMessage）を run() 側で行う。
   const render = () => {
     const lines = [header];
+    for (const row of scheduled) {
+      lines.push(itemLine(`・開始予約${row.status === 'start_overdue' ? '（期限超過）' : ''}: `,
+        cleanText(row.label || row.promise, row), `（開始条件の最終確認 ${row.lastCheckedAt || '未確認'}）`));
+    }
     // 1. あなたの判断待ち（古さに関係なく全件）
     for (const { row, count } of waiting) {
       const what = cleanText(row.label || row.promise || '約束した作業', row);
@@ -364,7 +373,9 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     const prevResumedAt = lastResumedAt[key];
     const prevWait = lastWaiting[key];
 
-    if (row.status === 'done' || v === 'done') {
+    if (['scheduled', 'start_overdue'].includes(row.status)) {
+      inProgressRows.push(row);
+    } else if (row.status === 'done' || v === 'done') {
       const doneAtTime = Date.parse(row.doneAt || 0) || 0;
       if (prevVerdict !== 'done' || (doneAtTime && doneAtTime > lastSuccessAt)) {
         newlyDoneRows.push(row);
@@ -409,10 +420,14 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     return { skipped: 'already-sent', sent: false, count: 0 };
   }
 
+  const caseDigest = !isOutside && label === 'kim-PC' && !sentSlotOwners.has(`${slotKey}|kim@orgiast.jp`)
+    ? await collectCaseProgress({ home, now, previous: state.caseProgress || {}, fetchResume: io.fetchCaseResume, dryRun })
+    : { text: '', checkpoints: {} };
+
   // 変化0件なら送らない（ただし朝枠は進行中または判断待ちがあれば定時報告として送る）
   const totalChanges = newlyDoneRows.length + newlyStalledRows.length + newlyResumedRows.length + newlyWaitingRows.length;
   const isMorningHeartbeat = currentSlot === '朝' && (inProgressRows.length > 0 || waitingRows.length > 0);
-  if (!isOutside && totalChanges === 0 && !isMorningHeartbeat) {
+  if (!isOutside && totalChanges === 0 && !isMorningHeartbeat && !caseDigest.text) {
     return { sent: false, count: 0 };
   }
 
@@ -433,6 +448,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   }
 
   const deliveries = [...groups]
+    .filter(([owner]) => owner.toLowerCase() !== 'kim@orgiast.jp')
     .filter(([owner]) => !slotKey || !sentSlotOwners.has(`${slotKey}|${owner}`))
     .map(([owner, rows]) => {
     const owned = activeRows.filter(r => ownerOf(r) === owner);
@@ -454,6 +470,8 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     return { owner, rows, message };
   }).filter(d => Boolean(d.message));
 
+  if (caseDigest.text) deliveries.push({ owner: 'kim@orgiast.jp', rows: [], message: caseDigest.text });
+  if (!deliveries.length) return { sent: false, count: 0, skipped: 'session-context-only' };
   const messages = deliveries.map(d => d.message);
   const text = messages.join('\n');
   const count = countedRows.length;
@@ -475,12 +493,13 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         result = io.notify ? await io.notify(part, { home, webhookFallback: false, owner }) : await (io.notifyOwner ?? notifyOwner)(owner, part, { home });
       } catch (cause) { result = { reason: cause?.message || String(cause) }; }
       result ??= {};
-      const delivered = ['dm', 'toast', 'inbox'].includes(result.delivered);
+      const delivered = ['dm', 'session-inbox', 'toast', 'inbox'].includes(result.delivered);
       receipts.push({ owner, ok: delivered, attempts: result.attempts, toastExitCode: result.toastExitCode, channel: result.channel ?? (result.delivered === 'dm' ? 'discord' : result.delivered || 'none'), recipientId: result.recipientId, httpStatus: result.httpStatus, messageId: result.messageId, channelId: result.channelId });
       sentTexts.push(part);
       if (!delivered) { error = result.reason || 'DM not delivered'; break; }
     }
     if (error) break;
+    if (owner === 'kim@orgiast.jp' && caseDigest.text) state.caseProgress = { ...state.caseProgress, ...caseDigest.checkpoints };
     if (slotKey) sentSlotOwners.add(`${slotKey}|${owner}`);
     for (const row of rows) {
       const key = rowKey(row);
@@ -542,6 +561,53 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   appendLog(home, { at: now, label, slot: slotKey || 'urgent', sent: true, count, parts: totalParts, receipts }, io);
   appendSentLog(home, { at: now, label, slot: slotKey || 'urgent', sent: true, count, parts: totalParts, receipts, text: redactSecrets(sentTexts.join('\n')) }, io);
   return { sent: true, count, parts: totalParts };
+}
+
+
+// kim-PC のセッション文脈専用。既存の定時通知とは状態を分離する。
+export function sessionDigest({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), dryRun = false, io = {} } = {}) {
+  if ((io.label ?? resolveFleetLabel(home)) !== 'kim-PC') return '';
+  const file = path.join(home, '.claude/state/auto-progress-session-digest.json');
+  const day = new Date(now + 9 * 3600000).toISOString().slice(0, 10);
+  const release = dryRun ? () => {} : acquireLock(file + '.lock');
+  if (!release) return '';
+  try {
+    let state = {};
+    try { state = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    if (!dryRun && state.day === day) return '';
+    const rows = (io.readLedger ?? readLedger)(ledgerFile(home));
+    const latest = new Map();
+    for (const row of rows) {
+      const key = row.sessionId || rowKey(row);
+      const previous = latest.get(key);
+      if (!previous || (Date.parse(row.ts) || 0) >= (Date.parse(previous.ts) || 0)) latest.set(key, row);
+    }
+    const previous = state.signatures || {};
+    const selected = [];
+    for (const [key, row] of latest) {
+      if (row.owner && row.owner.toLowerCase() !== 'kim@orgiast.jp') continue;
+      if (!['open', 'stalled', 'resumed', 'waiting_user'].includes(row.status) || isNoopPromise(row.promise)) continue;
+      const due = Date.parse(row.deadlineAt || row.dueAt || '');
+      const signature = JSON.stringify([row.status, row.verdict, row.nextKim, row.nextClaude, row.resumeOutcome]);
+      const changed = previous[key] ? previous[key] !== signature : now - rowTime(row) <= WINDOW_MS;
+      if (!(due <= now + WINDOW_MS) && !changed) continue;
+      const stage = due <= now ? '期限超過' : due <= now + WINDOW_MS ? '期限間近' : row.status === 'waiting_user' ? '判断待ち' : row.status === 'stalled' ? '停止中' : row.status === 'resumed' ? '再開済み' : '進行中';
+      const rawNext = String(row.nextClaude || '達成状況を確認する');
+      const nextClaude = /--prompt-file/.test(rawNext) ? '指示書に沿って実装・テストを進め、PR の結果を報告する' : rawNext.replace(/(?:DM|Discord)(?:で|に)/gi, 'このセッションで');
+      const who = kimAction(row) !== 'なし' ? `kim が ${kimAction(row)}` : `Claude が ${nextClaude}`;
+      const oneLine = value => { const text = redactSecrets(String(value || '')).replace(/\s+/g, ' '); return text.length > 130 ? text.slice(0, 129) + '…' : text; };
+      const verdict = ({check_error:'確認処理エラー',unmet:'未達',in_progress:'進行中',needs_user:'判断待ち'})[row.verdict] || row.verdict;
+      selected.push({ key, signature, priority: due <= now ? 0 : due <= now + WINDOW_MS ? 1 : 2, due: Number.isFinite(due) ? due : Infinity,
+        text: `・${oneLine(row.label || row.promise || '作業')}：${stage}${row.verdict && !['open','stalled'].includes(row.verdict) ? `（${oneLine(verdict)}）` : ''}。次: ${oneLine(who)}` });
+    }
+    const top = selected.sort((a, b) => a.priority - b.priority || a.due - b.due || a.key.localeCompare(b.key)).slice(0, 5);
+    if (!top.length) return '';
+    if (!dryRun) {
+      const next = { day, signatures: { ...previous, ...Object.fromEntries(top.map(x => [x.key, x.signature])) } };
+      const temp = file + '.tmp'; fs.writeFileSync(temp, JSON.stringify(next) + '\n'); fs.renameSync(temp, file);
+    }
+    return top.map(x => x.text).join('\n');
+  } finally { release(); }
 }
 
 if (isEntry(import.meta.url)) {

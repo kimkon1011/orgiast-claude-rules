@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isTimeoutRow, timeoutAttempts, judgeTimeoutRows, TIMEOUT_FIX_MERGED_AT } from './timeout-waste-judge.mjs';
+import { isTimeoutRow, timeoutAttempts, judgeTimeoutRows, TIMEOUT_FIX_MERGED_AT, TIMEOUT_KILL_FIX_MERGED_AT } from './timeout-waste-judge.mjs';
 
 const SINCE = '2026-10-16T18:50:03Z';
 
@@ -63,8 +63,41 @@ test('--since が不正なら例外', () => {
   assert.throws(() => judgeTimeoutRows([], { capSecs: 0 }), /cap/);
 });
 
-test('#773 のマージ時刻を既定の基準にしている', () => {
+test('#773 のマージ時刻は引き続き公開定数として固定', () => {
   assert.equal(TIMEOUT_FIX_MERGED_AT, SINCE);
+});
+
+// 2026-10-28T09:31Z の gemini-cli 1044秒/予算600秒は孫プロセス対策(13005ed 2026-10-28T19:08:39Z)の前の行。
+const PRE_FIX_ROW = {
+  t: '2026-10-28T09:31:24.679Z', provider: 'fallback', status: 'timeout', secs: 1091.46,
+  chain: [{ backend: 'gemini-cli', model: 'gemini-3.7-flash', outcome: 'timeout', secs: 1044.395, budgetSecs: 600 }],
+};
+
+test('既定の基準は孫プロセス対策の配備日で、配備前の超過行は回帰として数えない', () => {
+  assert.equal(TIMEOUT_KILL_FIX_MERGED_AT, '2026-10-28T19:08:39Z');
+  const report = judgeTimeoutRows([PRE_FIX_ROW]);
+  assert.equal(report.verdict, 'unverified-no-recurrence');
+  assert.equal(report.totalTimeoutRows, 1);
+  assert.equal(report.overCapRows, 0);
+});
+
+test('既定の基準でも、配備後に予算を超えた試行は waste-exceeds-cap のまま', () => {
+  const report = judgeTimeoutRows([
+    PRE_FIX_ROW,
+    { ...PRE_FIX_ROW, t: '2026-10-29T10:00:00Z' },
+  ]);
+  assert.equal(report.verdict, 'waste-exceeds-cap');
+  assert.equal(report.overCapRows, 1);
+});
+
+test('既定の基準でも、配備後の予算内 timeout は waste-within-cap', () => {
+  const report = judgeTimeoutRows([
+    PRE_FIX_ROW,
+    { t: '2026-10-29T09:04:37.108Z', provider: 'fallback', status: 'timeout', secs: 601.958,
+      chain: [{ backend: 'deepseek', outcome: 'timeout', secs: 601.958, budgetSecs: 600 }] },
+  ]);
+  assert.equal(report.verdict, 'waste-within-cap');
+  assert.equal(report.postDeployTimeoutRows, 1);
 });
 
 test('2026-10-20 の実例（主経路 codex / 1800.28 秒 / chain 無し）は上限超過ではない', () => {

@@ -46,6 +46,13 @@ export function extractNextKim(text) {
 
 export const ledgerFile = (home = process.env.ORGIAST_HOME || os.homedir()) => path.join(home, '.claude', 'auto-progress-ledger.jsonl');
 
+export const LEDGER_RENAME_RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+export const LEDGER_RENAME_ATTEMPTS = 10;
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 export function readLedger(file) {
   let text = '';
   try { text = fs.readFileSync(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
@@ -57,16 +64,55 @@ export function readLedger(file) {
   return rows;
 }
 
-export function writeLedger(file, rows) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+export function writeLedger(file, rows, io = {}) {
+  const mkdirSync = io.mkdirSync ?? fs.mkdirSync;
+  const writeFileSync = io.writeFileSync ?? fs.writeFileSync;
+  const renameSync = io.renameSync ?? fs.renameSync;
+  const rmSync = io.rmSync ?? fs.rmSync;
+  const wait = io.sleepSync ?? sleepSync;
+  mkdirSync(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(temp, rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''));
-  fs.renameSync(temp, file);
+  writeFileSync(temp, rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''));
+  try {
+    for (let attempt = 0; attempt < LEDGER_RENAME_ATTEMPTS; attempt += 1) {
+      try {
+        renameSync(temp, file);
+        return;
+      } catch (error) {
+        if (!LEDGER_RENAME_RETRY_CODES.has(error?.code) || attempt === LEDGER_RENAME_ATTEMPTS - 1) throw error;
+        wait(Math.min(50 * (2 ** attempt), 2000));
+      }
+    }
+  } catch (error) {
+    try { rmSync(temp, { force: true }); } catch { /* 元の rename エラーを優先する */ }
+    throw error;
+  }
+}
+
+export function cleanupOldLedgerTemps(file, { now = Date.now(), maxAgeMs = 3600000, io = {} } = {}) {
+  const readdirSync = io.readdirSync ?? fs.readdirSync;
+  const statSync = io.statSync ?? fs.statSync;
+  const rmSync = io.rmSync ?? fs.rmSync;
+  const dir = path.dirname(file);
+  const prefix = `${path.basename(file)}.`;
+  let names;
+  try { names = readdirSync(dir); } catch (error) { if (error?.code === 'ENOENT') return 0; throw error; }
+  let removed = 0;
+  for (const name of names) {
+    if (!name.startsWith(prefix) || !name.endsWith('.tmp')) continue;
+    const candidate = path.join(dir, name);
+    try {
+      if (now - statSync(candidate).mtimeMs <= maxAgeMs) continue;
+      rmSync(candidate, { force: true });
+      removed += 1;
+    } catch (error) { if (error?.code !== 'ENOENT') throw error; }
+  }
+  return removed;
 }
 
 export const MAX_RESUMES = 8; // 1件あたりの自動再開の累計上限（watch/digest 共用。循環 import 回避のためここに置く）
 
-export const OPEN_STATUSES = new Set(['open', 'stalled', 'resumed', 'waiting_user']);
+export const OPEN_STATUSES = new Set(['open', 'stalled', 'resumed', 'waiting_user', 'scheduled', 'starting', 'start_overdue']);
 
 // Timestamp order is authoritative; equal timestamps prefer the later ledger line.
 export function latestOpenPromises(rows) {
@@ -84,13 +130,15 @@ export function latestOpenPromises(rows) {
 // 同じ session に open の check 付き行があるときは、新しい約束行に check 情報を引き継ぐ。
 export function applyPromise(rows, record) {
   let toAdd = record;
-  if (!toAdd.check) {
+  if (!toAdd.check && !toAdd.startWhen) {
     const existing = rows
-      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && row.check)
+      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && (row.check || row.startWhen))
       .sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0))[0];
     if (existing) {
       toAdd = {
         ...toAdd,
+        ...(existing.startWhen ? { startWhen: existing.startWhen, startedAt: existing.startedAt,
+          ...(['scheduled', 'starting', 'start_overdue'].includes(existing.status) ? { status: existing.status } : {}) } : {}),
         check: existing.check,
         checkCwd: existing.checkCwd ?? toAdd.cwd,
         deadlineAt: existing.deadlineAt,
@@ -160,13 +208,4 @@ if (isEntry(import.meta.url)) { await main(); process.exitCode = 0; }
 
 export const rowKey = (row) => `${row.pc}|${row.user}|${row.sessionId}|${row.ts}`;
 
-export function isUnattendedRow(row, home) {
-  const normalize = value => String(value || '').replace(/\\/g, '/').replace(/^\/mnt\/([a-z])\//i, '$1:/').replace(/\/+$/, '').toLowerCase();
-  const cwd = normalize(row.cwd), root = normalize(home);
-  const request = cleanValue(row.requestText || String(row.promise || '').replace(/^API エラー（.*?）で返答できなかった依頼:\s*/, ''));
-  const probe = /^(?:[「『"']?)(?:OK|了解)(?:[」』"']?)\s*とだけ\s*(?:返して(?:ください)?|返信して(?:ください)?|答えて(?:ください)?)[。.!！\s]*$/i.test(request);
-  return probe || /^c:\/windows\/system32(?:\/|$)/.test(cwd) || /(?:^|\/)\.stall-sweeper(?:\/|$)/.test(cwd) || ['auto-session', 'scratch'].some(name => {
-    const base = `${root}/.claude/${name}`;
-    return cwd === base || cwd.startsWith(`${base}/`);
-  });
-}
+export { isUnattendedRow } from './lib/unattended-session.mjs';

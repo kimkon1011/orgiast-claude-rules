@@ -210,10 +210,19 @@ export function todoExclusionReason(todo, today = new Date()) {
   // (生成側 next-session-rotate.mjs の見出し境界と二重の防御)。
   if (/^#{1,6}\s/.test(body)) return '見出しのみ（作業内容が無い）';
   const todayNumber = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate();
-  for (const match of text.matchAll(/(\d{4})-(\d{2})-(\d{2})\s*以降/g)) {
+  // 「2026-10-30 22:00 JST 以降」のような時刻付きゲートも拾う（2026-10-29 実測:
+  // 「【2026-10-30 22:00 JST 以降に着手・それより前は着手しない】」が時刻付きのため
+  // 日付だけの正規表現に一致せず、quota-sweep:codex が着手禁止の目標に8tick使い切って
+  // 4連続 exhausted で停止した）。日付だけは従来どおり dateNumber 比較、時刻付きは
+  // JST（UTC+9）表記を絶対時刻に変換して「現在より未来なら除外」で判定する。
+  for (const match of text.matchAll(/(\d{4})-(\d{2})-(\d{2})(?:\s(\d{1,2}):(\d{2})\s*JST)?\s*以降/g)) {
     const date = `${match[1]}-${match[2]}-${match[3]}`;
-    const dateNumber = Number(`${match[1]}${match[2]}${match[3]}`);
-    if (dateNumber > todayNumber) return `${date}以降`;
+    if (!match[4]) {
+      if (Number(`${match[1]}${match[2]}${match[3]}`) > todayNumber) return `${date}以降`;
+      continue;
+    }
+    const gated = Date.parse(`${date}T${match[4]}:${match[5]}+09:00`);
+    if (Number.isFinite(gated) && gated > today.getTime()) return `${date} ${match[4]}:${match[5]} JST以降`;
   }
   if (/(契約が必要|契約待ち|原価待ち|入金|支払|kim相談|kim に相談|kim と話す|人間の作業|人間しか|人間専用|human-only|要東邦鋼業側で確認|個別写真|撮影|電話|郵送|捺印|OAuth初回同意|アカウント作成|kim待ち|kim の判断|kimの判断|kim の同意|kimの同意|判断を仰|同意を得てから|同意が必要|OS管理操作|管理者権限が必要)/.test(text)) return '人間の作業が前提';
   return '';

@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -210,6 +210,37 @@ test('backendSpecificTimeoutSecs は gemini-cli に既定300秒・cheap-code:dee
   assert.equal(backendSpecificTimeoutSecs('cheap-code:glm', {}), null);
   assert.equal(backendSpecificTimeoutSecs('qwen', {}), null);
   assert.equal(backendSpecificTimeoutSecs('openrouter-free', {}), null);
+});
+
+// 2026-11-02 実測（delegation-health:fallback_chain_timeout 6件 / 捨てた秒数 合計3607秒）:
+// 全バックエンドが冷却中だと keepAtLeastOne で元の配列が丸ごと戻り、gemini-cli 300秒 +
+// cheap-code:deepseek 600秒 を同じだけ再試行して 900 秒を毎回捨てていた（10:00/10:03/10:05 の
+// 3連続 timeout と 12:23 の 900 秒全捨て）。冷却中は探り予算まで縮めて「復帰したか」だけを見る。
+test('effectiveBackendTimeoutSecs は冷却中の backend を探り予算まで縮め、通常時は従来どおりの上限を返す', () => {
+  // 通常時: backend 固有の上限がそのまま効く
+  assert.equal(effectiveBackendTimeoutSecs('gemini-cli', { chainBudget: 720, cooling: false }), 300);
+  assert.equal(effectiveBackendTimeoutSecs('cheap-code:deepseek', { chainBudget: 720, cooling: false }), 600);
+  // 冷却中: 探り予算(120秒)まで縮む＝同じ停滞を繰り返しても捨てる秒数が 3〜5 分の1になる
+  assert.equal(effectiveBackendTimeoutSecs('gemini-cli', { chainBudget: 720, cooling: true }), COOLING_PROBE_TIMEOUT_SECS);
+  assert.equal(effectiveBackendTimeoutSecs('cheap-code:deepseek', { chainBudget: 720, cooling: true }), COOLING_PROBE_TIMEOUT_SECS);
+  // 固有上限を持たない backend も冷却中は探り予算、通常時は連鎖の残り予算
+  assert.equal(effectiveBackendTimeoutSecs('openrouter-free', { chainBudget: 720, cooling: false }), 720);
+  assert.equal(effectiveBackendTimeoutSecs('openrouter-free', { chainBudget: 40, cooling: false }), 40);
+  // 連鎖の残り予算が探り予算より小さいときは残り予算が優先（総予算を超えない）
+  assert.equal(effectiveBackendTimeoutSecs('gemini-cli', { chainBudget: 90, cooling: true }), 90);
+  // 環境変数の上書きも通常時は効く
+  assert.equal(effectiveBackendTimeoutSecs('gemini-cli', { chainBudget: 720, cooling: false, env: { CODEX_DO_GEMINI_TIMEOUT_SECS: '450' } }), 450);
+});
+
+test('実測シナリオ: 冷却中の全滅でも 300秒+600秒 ではなく 120秒×2 で打ち切る', () => {
+  const chainBudget = () => chainBackendBudgetSecs(1800, 0, {});
+  const before = Math.min(chainBudget(), backendSpecificTimeoutSecs('gemini-cli', {}))
+    + Math.min(chainBudget(), backendSpecificTimeoutSecs('cheap-code:deepseek', {}));
+  const after = effectiveBackendTimeoutSecs('gemini-cli', { chainBudget: chainBudget(), cooling: true })
+    + effectiveBackendTimeoutSecs('cheap-code:deepseek', { chainBudget: chainBudget(), cooling: true });
+  assert.equal(before, 900);
+  assert.equal(after, 240);
+  assert.ok(after < before);
 });
 
 // 実測シナリオ（2026-10-28）: 連鎖で gemini-cli 600秒 → cheap-code:deepseek 900秒 と2本タイムアウトし

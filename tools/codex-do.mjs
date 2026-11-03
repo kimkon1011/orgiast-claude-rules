@@ -437,6 +437,23 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env) {
   return null;
 }
 
+// 冷却中(直近6時間に timeout/blocked)の backend を keepAtLeastOne でチェーンへ戻したときだけ使う
+// 「探り」の予算。全 backend が冷却中だと候補ゼロを避けるため元の配列がそのまま復活するが、
+// 同じ上限（gemini-cli 300秒 + deepseek 600秒）を再び与えると同じ 900 秒を毎回捨てる。
+// 2026-11-02 実測: 10:00/10:03/10:05 に gemini-cli が3連続 timeout し、12:23 には
+// gemini-cli 300秒 + cheap-code:deepseek 600秒 が両方 timeout（900秒を丸ごと廃棄）。
+// 冷却中は「復帰したか」だけを見たいので、短い探り予算で打ち切って次へ進む。
+export const COOLING_PROBE_TIMEOUT_SECS = 120;
+
+// 1試行に実際に与える秒数。冷却中でなければ従来どおり
+// min(連鎖の残り予算, backend 固有の上限)。冷却中ならさらに探り予算まで縮める。
+export function effectiveBackendTimeoutSecs(backendName, { chainBudget, cooling = false, env = process.env } = {}) {
+  const base = Math.min(Number(chainBudget), backendSpecificTimeoutSecs(backendName, env) ?? Infinity);
+  if (!Number.isFinite(base)) return base;
+  if (!cooling) return base;
+  return Math.max(60, Math.min(base, COOLING_PROBE_TIMEOUT_SECS));
+}
+
 // タイムアウト時にプロセス木ごと殺す。Windows で shell:true のとき直接の子は cmd.exe なので、
 // child.kill() は cmd.exe だけを終わらせ、孫(gemini 等)が残る。孫が stdout パイプを握ったままだと
 // 'close' が発火せず、タイムアウトが実効しない
@@ -1404,7 +1421,8 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
     console.error(`[codex-do] Falling back to an agentic CLI...`);
 
     const resolvedBackends = resolveFallbackBackends(home);
-    const backends = skipCoolingBackends(resolvedBackends, coolingBackendNames(home));
+    const cooling = coolingBackendNames(home);
+    const backends = skipCoolingBackends(resolvedBackends, cooling);
     if (backends.length === 0) {
       console.error('GEMINI_API_KEY、OPENROUTER_API_KEY、ZAI_API_KEY が無いためフォールバックを実行できません');
       result.status = 1;
@@ -1412,10 +1430,12 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
       const chainStarted = Date.now();
       fallbackChain = [];
       for (const backend of backends) {
-        const backendTimeout = Math.min(
-          chainBackendBudgetSecs(timeoutSeconds, (Date.now() - chainStarted) / 1000),
-          backendSpecificTimeoutSecs(backend.name) ?? Infinity
-        );
+        // 全 backend が冷却中で keepAtLeastOne により戻された場合は探り予算まで縮める
+        // （さもないと 300秒 + 600秒 をもう一度丸ごと捨てる。effectiveBackendTimeoutSecs の説明を参照）。
+        const backendTimeout = effectiveBackendTimeoutSecs(backend.name, {
+          chainBudget: chainBackendBudgetSecs(timeoutSeconds, (Date.now() - chainStarted) / 1000),
+          cooling: cooling.has(backend.name)
+        });
         if (backendTimeout <= 0) {
           console.error(`[codex-do] フォールバック全体の時間枠(${timeoutSeconds}秒)を使い切ったため、残りのバックエンドは実行しません`);
           break;
@@ -1469,7 +1489,12 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
           outcome
         });
 
-        if (outcome === 'timeout' || outcome === 'cli_missing' || outcome === 'blocked') recordFallbackBackendOutcome(home, { backend: backend.name, outcome });
+        // ok も記録する。以前は失敗だけを追記していたため、timeout のあとに成功しても
+        // 「最後の outcome」が timeout のままで6時間冷却が解けず、全 backend が冷却中になって
+        // keepAtLeastOne が死んだ組み合わせを丸ごと復活させていた（2026-11-02 実測:
+        // deepseek は 10:13:40 に 568秒で成功しているのに、その後の 12:23 も timeout 扱いで
+        // 300秒+600秒を再試行）。成功を残せば冷却は実績どおり即座に解ける。
+        if (outcome === 'ok' || outcome === 'timeout' || outcome === 'cli_missing' || outcome === 'blocked') recordFallbackBackendOutcome(home, { backend: backend.name, outcome });
         if (outcome === 'blocked') {
           console.error(`[codex-do] backend=${backend.name} がポリシー拒否で停滞しているため ${fallbackChain.at(-1).secs} 秒で打ち切って次へ`);
         } else if (outcome === 'timeout') {

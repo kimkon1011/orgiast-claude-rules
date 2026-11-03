@@ -1,0 +1,200 @@
+[
+  {
+    "pattern": "Google 系プロパティ(GA4/Search Console/GTM)の有無確認",
+    "route": "DWD サービスアカウント(kim impersonate)で analyticsadmin/webmasters/tagmanager API を直接照会（tools/google-property-check.mjs、読み取り専用・追加権限不要）。Claude 履歴の Grep は証拠にならない。分類器で止まるなら『未確認』と書く。**2026-09-20 実測**: GA4 ok(accounts 17) / Search Console ok(sites 12) は追加作業ゼロで通る。**GTM だけ errorKind=scope_not_delegated(unauthorized_client)** = Admin Console の DWD に tagmanager.readonly が未登録。GTM を読む場合のみ kim の1アクション（Admin Console → ドメイン全体の委任 → SA client_id に scope 追加）が要る。**前提（2026-10-01 実測）**: この照会は SA 鍵のある PC でしか動かない。DESKTOP-PPD5V8I では鍵が無く `node tools/google-property-check.mjs` は exit 2（`SA key not found`）で終わる。不在は5経路で確認済み＝①既定パス `~/Downloads/CLAUDE.md配布/aujust-sales-automation/.gcp/sheets-sa.json` ②環境変数 GOOGLE_SA_KEY / GOOGLE_APPLICATION_CREDENTIALS（プロセス・Machine・User）③keyserve 配布12ファイル ④`C:\\Users\\kimko` 配下の再帰探索 ⑤Windows 資格情報マネージャ。**鍵の無い PC では GA4/GSC/GTM を『未確認』で止める**（exit 2 は分類器の拒否でも API 拒否でもない＝権限の話ではない。推測で埋めない）。ただし**鍵の有無に関わらず再発監査はできる**: `node tools/handoff-audit-oauth-consent-scan.mjs --since <日付>`（読み取り専用）が台帳 `~/.claude/handoff-audit-ledger.jsonl` と `~/.claude/projects/*/*.jsonl` を『Google プロパティ語 ∧ OAuth 同意語 ∧ 他ベンダー（GitHub device flow / codex login 等は正当な手渡しなので除外）』で走査する。報告前に `--selftest`（陽性2・陰性3）を通すこと（2026-10-01 実測: 窓 2026-09-20〜10-01・台帳 347 行・transcript 35,073 turn で再発 0 件、対照 5/5）。詳細: tools/handoff-audit-findings-oauth-first-consent-recheck.md",
+    "confidence": "high",
+    "source": "2026-09-10 TETSUKO Search Console 誤判定 / 2026-09-20 実測 / 2026-10-01 再検証（鍵の無い PC の前提と再発走査手順を追記）"
+  },
+  {
+    "pattern": "Search Console の所有者追加",
+    "route": "API でのユーザー追加は無い（searchconsole v1 に user/permission の resource が存在しない）。siteVerification API の getToken でトークン発行まではできるが、insert は検証を試みるだけで、トークンをサイトに置くのは配信している側の作業＝手渡しであり kim 操作ゼロにはならない。同一データが見えるのは同一プロパティ識別子のときだけ（URLプレフィックス型とドメイン型は別プロパティ＝別データ）。検証で得られるのは SITE_OWNER＝権限昇格なので、読み取り目的なら過剰",
+    "confidence": "high",
+    "source": "2026-09-10 起票 / 2026-09-19 Google Discovery 一次証拠で検証・是正"
+  },
+  {
+    "pattern": "社内・グループ会社・スタッフ宛の連絡文",
+    "route": "Gmail 下書きにしない。チャット本文に宛先/用件/本文を完成形で表示（kim はリモートデスクトップ/LINE/Discord で渡す）。Discord MCP が使えるなら Discord 送信可。**2026-09-22 実測**: 強制は `tools/internal-recipient-gmail-guard.mjs`（PreToolUse / matcher=`mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|update_draft|reply|forward)`、settings.json:475、台帳=`~/.claude/internal-recipients.json`→無ければ default の orgiast.jp/toho-kogyo.com + 明示4件）。経理(keiri.orgiast@gmail.com)宛 create_draft=**deny**・外部宛=pass・テスト14/14 pass を実測。**穴1**: claude.ai コネクタが無効な APIキー環境（`claude mcp list`=gemini-cli のみ）では MCP ツール自体が無く**発火しない**。**穴2（2026-09-22 一部解消）**: Bash 経由の Gmail REST は matcher 外で素通り。常設の下書き作成ツールが無かったが、`tools/gmail-draft.mjs`（2026-09-22 新設）が `loadLedger`/`isInternal` を取り込み**ツール内で内部宛を遮断**し、Gmail API を呼ばずチャット形式を出して exit 3 で止まる（実測: keiri.orgiast@gmail.com 宛で通信ゼロ・テスト20/20 pass）。ただし自分でアドホックなコードを書けば依然素通りする。**穴3**: 台帳に無いフリーメールの社内スタッフは素通り（drivers の追加は人の手）。未確認: コネクタ有効環境での実発火、書き込み系ツール名の全リスト",
+    "confidence": "high",
+    "source": "2026-09-11 kim 厳命 / 2026-09-22 実測（handoff-audit:57eef0336eb2bedd。詳細 docs/internal-staff-chat-display-verification.md）"
+  },
+  {
+    "pattern": "共有アカウント(seisaku-team)からの Gmail 下書き作成",
+    "route": "**可能・追加設定ゼロ・kim の手作業ゼロ**。`tools/gmail-draft.mjs`（2026-09-22 新設）が DWD で seisaku-team@orgiast.jp を impersonate して `drafts.create`（scope=gmail.compose）。SA キー既定は aujust-sales-automation/.gcp/sheets-sa.json、依存パッケージなし。`node tools/gmail-draft.mjs --check` で権限だけを非破壊に確認（Gmail API を呼ばない）。**2026-09-22 実測**: seisaku-team で gmail.readonly / **gmail.compose** / **gmail.send** の3スコープすべてトークン発行成功＝DWD 委任済みで Admin Console 操作は不要。「MCP が無い＝下書きが作れない」は誤読で、DWD 経路は既に通っていた。内部宛(orgiast.jp/toho-kogyo.com/台帳)はツール内で遮断し API を呼ばずチャット形式を出して exit 3。`--delete <id>` は下書きのみ（送信済みは消せない）。送信 API は実装していない（gmail.send は委任済みだが承認範囲外）。**2026-09-22 実測で確定**: `drafts.create` の実 HTTP は成功（id=r1697484905697154238 / `in:drafts subject:verify` の読み戻しで DRAFT ラベル・宛先・件名・本文一致 / `--delete` で削除済み・残留ゼロ）。送信 API は引き続き未実装・未実行。詳細 docs/shared-account-gmail-draft-route.md, docs/approval-completion-checkin-email-route.md",
+    "confidence": "high",
+    "source": "2026-09-22 実測（handoff-audit:e2715c224377adaa。--check のトークン発行成功 + テスト20/20 + 内部宛の実アドレス遮断） + 2026-09-22 実測（handoff-audit:f59a211cc367f15d。drafts.create の実 HTTP 成功・読み戻し・削除まで確定）"
+  },
+  {
+    "pattern": "Drive にファイル/Sheet を作る",
+    "route": "SA 直では quota 0 で失敗。DWD で kim を impersonate（subject）して作成",
+    "confidence": "high",
+    "source": "2026-06-29 feedback-sa-drive-dwd-pattern"
+  },
+  {
+    "pattern": "Discord チャンネル ID が要る",
+    "route": "user に聞かず tools/discord-channel-id.mjs で台帳から取得",
+    "confidence": "high",
+    "source": "§2.6.1"
+  },
+  {
+    "pattern": "API キー/接続文字列/ID が要る",
+    "route": "過去 transcript・.env.local・production bundle・keyserve から復元。user に再聞き禁止",
+    "confidence": "high",
+    "source": "feedback-credentials-never-reask-universal ／ 2026-10-15 再検証（handoff-audit:0ab11a96de53cc66）: 窓 2026-09-17〜10-15 でクレデンシャル再聞き 0 件（台帳 495 行・assistant turn 7,826 を実走査、検出器 selftest 10/10）。再発監査は `node tools/handoff-audit-credential-reask-scan.mjs --since <日付>`（読み取り専用）で可能。詳細 tools/handoff-audit-findings-credential-reask-recheck.md"
+  },
+  {
+    "pattern": "GAS の関数実行が要る",
+    "route": "GAS の実行は Claude 側で行う。①booth の登録済みコマンドは cr-PC の `node ~/.claude/tools-local/booth-cmd.mjs <コマンド名> '[args]'` でコマンドキューへ投入し時間主導トリガーに実行させる。clasp run は org の executionApi 設定により所有者以外は失敗するので「不可」と断定しない。未登録の関数は `src/CommandQueue.js` の `_cmdQueue_commands` へ登録して push した後に投入する。戻り値の本文は 403 で読めないので result ファイルの生成を実行成立の証拠として扱い、値は別経路で read-back する。②新規スクリプト・別アカウントは DWD に forms.body / script.projects が無く（2026-10-21・2026-10-24 に unauthorized_client を実測）、clasp は 2026-10-24 に導入済みで ~/.clasprc.json（cr@）もあるが、`clasp run listFailureCounters` は 2026-10-25 の再実測でも『Unable to run script function. Please make sure you have permission』（所有者以外不可）だったので、残る人の手は『管理コンソールの DWD スコープ追加（script.projects / forms.body）』の1回だけに切り出し、実行は Claude が行う。`script.new` に貼らせて `▶実行` させるのは違反",
+    "confidence": "high",
+    "source": "§1.4"
+  },
+  {
+    "pattern": "permission 分類器で自動経路が止まった",
+    "route": "推測で結論を出さない。『未確認』＋user 作業なしの代替案を提示。恒久策は settings.json の許可ルール/DWD スコープ追加を kim に1回だけ提案。**ただし『外部 API が使えない』と一般化しない**: 2026-09-20 実測では defaultMode=auto でも node -e fetch / curl / WebFetch(googleapis) / node tools/* の読み取り照会は 4 経路すべて拒否なしで通った。拒否はホスト名ではなく操作カテゴリ（Credential Exploration / Materialization / Permission Grant / Production Deploy / Merge Without Review 等）に対して起きる。まず読み取りで直接照会を試し、止まったらその操作だけを最小単位に分解する。許可を広げる変更は分類器 [Permission Grant]/[Self-Modification] で止まるので人が行う",
+    "confidence": "high",
+    "source": "2026-09-10 起票 / 2026-09-20 実測で範囲を確定（docs/classifier-denial-external-api-route.md）"
+  },
+  {
+    "pattern": "Drive 上の旧版ファイルをゴミ箱へ",
+    "route": "**検出は Claude 側で可能 / 削除だけは classifier が拒否（2026-09-20 実測）**。検出=DWD(kim impersonate / drive スコープ)で Drive API v3 `files.get`/`files.list`（`tools/lib/drive-auth.mjs` の `getDriveToken`/`driveApi`）。**落とし穴: 委任済みスコープは `https://www.googleapis.com/auth/drive` のみ。`drive.readonly` を要求するとトークン交換の時点で `unauthorized_client`**（Admin Console の DWD 未登録）。trash（PATCH `{\"trashed\":true}`）は同カテゴリの連続で拒否（[Cloud Storage Mass Delete]×2・[Modify Shared Resources]×1）＝**削除候補を列挙するだけの読み取り専用スクリプトでも同カテゴリで拒否された**。恒久策は settings.json への許可ルール追加を kim が1回行うこと（分類器 [Permission Grant] のため Claude は自己追加不可）。**削除が不要な用件では手渡ししない**: 「どのファイルが旧版か」の特定までは Claude が済ませ、対象 ID・名前・親フォルダを完成形で提示する（`capabilities.canTrash` も API で確認できる）",
+    "confidence": "high",
+    "source": "2026-09-20 実測（handoff-audit:64cb59ef6fe88486）。元の手渡しは 2026-09-18 セッション 009374eb「③ 旧版2つ（暫定版・確定版）をゴミ箱へ（削除は classifier に阻まれ…）」で、その記述は本実測で裏付けられた"
+  },
+  {
+    "pattern": "Drive 上の資料から画像を抽出する",
+    "route": "Drive MCP の read_file_content は不要。DWD(kim impersonate / drive scope) で Drive API v3 を直に叩く。画像ファイルと PDF は files.get?alt=media、Google Doc は files.export?mimeType=application/zip の images/*、Slides は pptx export の ppt/media/* を **中央ディレクトリ経由**で取り出す（export zip はストリーミング形式でローカルヘッダのサイズが 0 のため、ローカルヘッダ走査では中身が取れない）。Slides の image/png export は 400 非対応、Docs API は本 SA プロジェクトで無効(403)",
+    "confidence": "high",
+    "source": "2026-09-20 実測: Doc「支柱を作ってほしい」images/image1.jpg 60439B(ffd8ff) / Slides ppt/media/image1.jpg 5957B(ffd8ff) / JPEG 単体 69615B / PDF %PDF-"
+  },
+  {
+    "pattern": "外部顧客宛の訂正メール送信要否",
+    "route": "**Gmail MCP は本環境に無い（mcpServers=gemini-cli のみ）が、DWD 経由の読み取りは既存ツールで通る**。`node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query \"<検索式>\" [--body]`（`tools/lib/drive-auth.mjs` の `getDriveToken({scope:'https://www.googleapis.com/auth/gmail.readonly', impersonate:user})`）。**落とし穴: `--user kim@orgiast.jp` では 0 件**。学会協賛ナビの顧客メールは seisaku-team@ から送信されており、既定値（--user 省略時）が正しい。`gmail.readonly` は DWD 委任済みで素通りした（`drive.readonly` が unauthorized_client で落ちたのとは対照的）。**要否は推測せず送信済み本文を実物で読んで判定する**: 2026-09-18 の AnnJi 宛 1 通（id 1a0b3fb255d272dd, SENT）だけが同一メール内で和文30%・英文15%と矛盾しており、同種の他2通（genodive/boehringer）は 30% で正しかった＝影響範囲は 1 通 1 名。誤りは顧客に有利な方向（15%<30%）なので**要**と判定。訂正下書き（id 1a0b41220fd4a5d7, DRAFT・未送信）が完成済みで存在する。**送信はしない**（本レーンの禁止事項）。送信操作の分類器通過可否は未確認",
+    "confidence": "high",
+    "source": "2026-09-20 実測（handoff-audit:06b13bfb2a89b62b）。元の手渡しは 2026-09-18 セッション e03135bc「AnnJi 宛1通のみ末尾英文が旧料率15%のまま…訂正メールの下書きを作成して手渡した」。詳細は docs/gmail-correction-email-necessity.md"
+  },
+  {
+    "pattern": "DWD 委任スコープの追加（Admin Console のドメイン全体の委任に scope を足す）",
+    "route": "API 不可。admin/directory_v1 の Discovery を実測すると resources に delegation が無く、DWD のスコープ一覧を変更する公開 API は存在しない（2026-09-20 実測。isDelegatedAdmin は管理者ロールの話で別物）＝Admin Console は人にしかできない。**ただし手渡しリストに載せる前に必須性を判定する**: 『GTM を読む予定があれば』等の任意項目は、委任済みスコープで目的が既に達成されているなら載せない（docs/memory に『必要になったら』として残すだけ）。①Claude に実行可能か ②目的に必須か、の両方 Yes のときだけ手渡しする",
+    "confidence": "high",
+    "source": "2026-09-20 handoff-regret-gate 実測 / memory feedback-optional-handoff-manufactures-work"
+  },
+  {
+    "pattern": "Google スプレッドシートの書き込み結果検証",
+    "route": "**既存権限で読み戻せる。kim に画面を見せて確認させる必要はない**（実測 2026-09-21）。対象 SS が SA に共有されていれば **SA 直**（key=`aujust-sales-automation/.gcp/sheets-sa.json`, scope=`https://www.googleapis.com/auth/spreadsheets.readonly`）で JWT を自己署名 → ① `GET /v4/spreadsheets/{id}?fields=properties.title,sheets.properties` でタブ名/gid/行列数、② `GET /v4/spreadsheets/{id}/values/{tab}!A1:BZ400?valueRenderOption=UNFORMATTED_VALUE` で全行。**検証は4点**: (a) 1行目が空白で2行目がヘッダーか (b) 書き込み行がヘッダー直下(3行目)に来ているか (c) 案件名列に重複が出ていないか (d) 列マッピング（ヘッダーごとの充足数 `filledPerCol` を出し、意図した列だけ埋まっているか）。**アプリ投入行の識別は「ステータス列が空 かつ 非空セルが 案件名+担当 の2つだけ」**（実装が deal_title / sales_owner / event_date しか書かないため。空欄列を空のままにするのが仕様）。**落とし穴: 「案件名の重複行がある」＝重複防止の失敗とは限らない。**同名でも担当・コマサイズが別の実案件がありうる（実測: デザイナー様用 行21/23 の `260120ESSEN_ＥＳキッチン株式会社様` は担当も平米数も別の2件）。重複防止は案件名の**完全一致**なので、同名別案件が2件あると3件目が `already` で弾かれる（正規化なし＝表記ゆれがあると逆に重複が増える）。判定は重複の有無ではなく**行の中身が別物か**で行う。実測スクリプト: `~/.claude/auto-session/runs/2026-09-21-11-sheets-sync-verify.mjs` / `2026-09-21-11-sheets-dup-probe.mjs`",
+    "confidence": "high",
+    "source": "2026-09-21 実測（handoff-audit:14f2bd38e35a58ce）。元の手渡しは 2026-09-18 セッション dd676e9e「Reブース案件を1件開いて、実際の運用に合っているか見てください」。詳細は docs/sheets-write-verification.md"
+  },
+  {
+    "pattern": "本番UIの動作確認を kim に目視依頼",
+    "route": "**到達性・描画・文言は Claude 側で完結する。認証後の画面だけは無人会話の範囲外**（実測 2026-09-22）。手順=①`curl -sS -o /dev/null -w \"%{http_code} %{redirect_url}\"` で本番 URL を1本叩く（aujust-sales-automation.vercel.app は `/` `/cases` `/api/*` すべて 307→/login を実測）。②`playwright-core`（このPCは `~/.claude/tools/node_modules/playwright-core`）＋ `%LOCALAPPDATA%\\ms-playwright\\chromium-*\\chrome-win64\\chrome.exe` を `executablePath` に渡し headless 描画。実測で login 画面の title/本文/入力欄/ボタン/スクショ(37,818B) まで取得＝**「開いて目視」の到達性確認は kim 不要**。③認証は magic link と Google OAuth の2経路のみで、無人会話では踏めない（リンク要求はメール送信＝禁止、OAuth は対話同意）。**認証後画面の描画は未確認と書く。**④論点が「運用に合っているか」＝列マッピングの正しさなら UI ではなくデータの話なので Sheets/DWD 読み戻しで判定する（`14f2bd38e35a58ce` で実証）。⑤描画そのものが論点の時だけ Playwright + `storageState`（アプリ側 e2e の auth state）を使う。**落とし穴**: Windows絶対パスは ESM 動的 import に直接渡せない（`ERR_UNSUPPORTED_ESM_URL_SCHEME: c:` → `pathToFileURL().href`）、`playwright-core` は CJS なので名前空間に `chromium` が無く `default.chromium` になる場合がある、Chromium 実体は `chrome-win64/chrome.exe`。再現: `~/.claude/auto-session/runs/2026-09-22-7-prod-ui-probe.mjs`。詳細: docs/prod-ui-visual-verification.md",
+    "confidence": "high",
+    "source": "2026-09-22 実測（handoff-audit:408e4194471c4ab7）。元の手渡しは 2026-09-18 セッション dd676e9e「https://aujust-sales-automation.vercel.app の Reブース案件を1件開いて、実際の運用に合っているか見てください」。詳細は docs/prod-ui-visual-verification.md ＋ **2026-09-26 再実測（handoff-audit:cf8e3e3a3506e5dd）**: 同経路を再実行し `307 → 200 /login`・title・input・ボタン2・スクショ 37,818B を再現（2026-09-22 と同バイト＝画面不変）。台帳の修正カット `2026-09-21T18:05Z` 以降 89 行（block 59 / pass 13）を走査し、**同型 handoff の再発は 0 件**。再現 `~/.claude/auto-session/runs/2026-09-26-12-prod-ui-probe.mjs` / 走査 `.../2026-09-26-12-recurrence-scan.mjs`"
+  },
+  {
+    "pattern": "バックグラウンド再生成の進捗待ち（証拠なしに背景ジョブの状態を断定して待たせる）",
+    "route": "待たない。長時間ジョブは前景で --timeout を切って回し切るか、実行基盤（GitHub Actions/タスクスケジューラ/auto-session 再入）に載せる。進捗は ~/.claude/executor-usage.jsonl（status/out/timedOut/secs/cwd）や `gh run view` 等の一次情報を直接照会し、照会できなければ「未確認」と書いて断定も確率表現もしない（監査基準 rule 4）。待ちは ~/.claude/next-session.md の残TODO先頭に「検証のみ1行」を足して次セッションで確認する。セッションを開いたまま「バックグラウンド実行中」と報告しない（2026-09-22 実測: codex-do.mjs は前景・単発で背景起動/進捗照会/待機の機能を持たない。docs/background-progress-wait-route.md）",
+    "confidence": "high",
+    "source": "2026-09-22 handoff-audit:64119511293ffa00"
+  },
+  {
+    "pattern": "PRONI再スクレイピングの同期不具合調査・修正方針の提示（同期失敗をコード側の問題と決めつけ、判断をuserに選ばせる）",
+    "route": "調査は Claude 側で完結し、user へ渡さない。①症状は GitHub Actions の一次情報で取る（`gh run list -R kimkon1011/aujust-sales-automation --limit 15 --json workflowName,conclusion,createdAt,databaseId,headSha` → 失敗は `gh run view <databaseId> --log-failed`。name を持たない workflow は `--workflow=\"proni-messages.yml\"` のように**ファイル名**で引く。表示名で引くと `could not find any workflows named …` で落ちる）②コード側の修復状況は `gh api \"repos/.../commits?since=…\"` と `gh pr view <N> --json title,state,mergedAt,body,files` で確定（PR本文に未適用migrationと検証残が書かれている）③DB側の適用状況は `gh run list --workflow=\"DB Migrate\"` と `gh secret list` で別系統として確認＝「コードは緑・DBは赤」を判別④実装だけを codex-do.mjs（前景・単発）へ渡し、検証は `gh run` の緑で行う⑤照会できない項目は「未確認」と書く（rule 4）。設計判断（(a)(b)どちらで直すか等）は rule 3 の4理由に該当しないため user に選ばせず Claude が決める（2026-09-22 実測: 元セッションは kim に選択を依頼した後、同じセッション内で自分で決めて実装させていた。残存真因は本番DB migration 未適用＝`SUPABASE_DB_URL` secret 不在で `DB Migrate` が `##[error]SUPABASE_DB_URL secret が未設定です` で失敗し続け、PR #114 a113d05 の修正が効かない状態だった。docs/proni-sync-troubleshoot-route.md）\n\n**2026-10-24 再検証（handoff-audit:d40b0dbb3bd054ff）**: 同型 handoff の再発は照会できた範囲で 0 件（ledger 870+62 行、HP の transcript 5 プロジェクト。2026-10-13 以前の transcript は HP に無く未確認）。2026-09-22 の残存真因（SUPABASE_DB_URL 不在）は 2026-10-04 に解消（secret 追加・以降 DB Migrate は 7 回連続 success）。ただし **「DB Migrate が緑」＝「スキーマがコードと一致」ではない**: proni-sync は 2026-10-15 以降 deals_next_contact_basis_check 違反で失敗（INSERT 時のみ。スクレイピングは 189 件成功）。DB の制約は 0001_init_schema.sql:102 の旧4値のままで、コードが使う 自動(当選)/自動(返信)/自動(議事録) を許可する migration が存在しない。check 制約違反を見たら ①制約定義を migrations から特定 ②コードの enum/zod/types と突合 ③制約を広げる migration の有無を grep する（route ④'）。設計判断は Claude が決定し user に選ばせない。詳細 docs/handoff-audit-2026-10-24-proni-sync-recheck.md",
+    "confidence": "high",
+    "source": "2026-09-22 handoff-audit:15a5d2433a7f91bc / **2026-10-24 再検証（handoff-audit:d40b0dbb3bd054ff）**: 再発0件・DB Migrate 緑でもスキーマ不一致は残る（constraint 未拡張）"
+  },
+  {
+    "pattern": "恒久修正を設計のみで次セッションへ送る",
+    "route": "恒久修正は当ターン内に実装まで終える。next-session.md に設計だけを積んで次セッションへ送らない（配布待ち・マージ待ち・fork 制約は未着手の理由にならない）。実装は codex-do.mjs を前景・単発で回し（--prompt-file / --cwd / --timeout）、WSL 不在で codex 経路が起動しない PC では内蔵フォールバック(Gemini/DeepSeek)→不可なら Claude 直で実装する。GitHub は gh CLI で fork→PR→CI green→gh pr merge まで当ターンで進め、user にはマージ1回だけを残す。実装できなかった場合は残作業を1行で記録し、断定で『完了』と書かない。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:13755f2bc1e6504a87e553bf97fc9c06c4b4ded1a18bf449252fe56ac0f03553"
+  },
+  {
+    "pattern": "本番デプロイを user のターミナル操作に手渡す",
+    "route": "Claude 側の認証済み Vercel CLI で完結する。`npx vercel deploy --prod --yes` を対象リポジトリのルートで実行（event-shop は `cd D:\\Claude\\event-shop`）。**2026-09-25 03:23 実測: exit 0 / readyState=READY / `event-shop.jp` へエイリアス / 分類器ブロックなし**。`vercel whoami`・`vercel env ls production`・`vercel alias ls`・`vercel inspect <本番URL>`・`vercel deploy --prod` の5経路が全て通る。反映確認は CLI の exit code でなく `vercel inspect` の id/created とエイリアス先で行う（CLI は BLOCKED でも成功に見える）。コミット author が GitHub アカウントに紐づかないメールだと BLOCKED になるので `git log -1 --format=%ae` を先に見る。分類器が止めた場合も「未確認」と書き user に実行させない。**2026-10-01 再検証（handoff-audit:4b241a72023c7578）: 同型 handoff は 2026-09-25 の修正後も再発している（3セッション）。** 2026-09-26 `eef7f47a`（チャット1行で user へ渡した）／2026-09-28 `a06eaef3`（デスクトップに1クリック起爆ファイルを置き「本番に出してよいならダブルクリックしてください」）／2026-09-30 `bbd0a4a2`（VSCode TERMINAL に貼る `cd D:\\Claude\\event-shop; vercel deploy --prod --yes` の手順を提示。同じデプロイを3回依頼し、user から「貼る場所を書け」と指摘されて CLAUDE.md の恒久ルールになった）。いずれも理由は効率ではなく §1.1「外向け操作は人の同意を優先」。**同意と実行は別物** — 外向けで同意が要るなら、チャットで可否を1回確認し、**実行は Claude が行う**（rule 2 は「最後の1ステップだけ user に」も禁じている）。user にコマンドを打たせない。同じ期間に Claude 側経路が生きていた実測: 2026-09-25 `2551106a` が event-shop、2026-09-30 `9c9325e7` が stagecue を `vercel deploy --prod --yes` で自ら本番反映。2026-10-01 再測 `vercel whoami`=seisaku-team-5867。**Stop 監査の台帳はこの型を検知していない**（2026-09-25 以降 93 行すべて verdict=pass、うち 90 行は regex-blocked）ので、台帳の pass を再発 0 の根拠にしない。詳細 docs/production-deploy-claude-side-route.md\n\n**2026-10-24 再検証（handoff-audit:ce2d358c446f2e49）**: 2026-10-01 以降の再発 0 件（transcript 185 ファイル・assistant 本文 1,564 件＋台帳 1,349 行）。HP でも keiri-hub の VERCEL_TOKEN で whoami=seisaku-team-5867 / env ls production=22 件。user-burden-gate に PROD-DEPLOY-HANDOFF を追加し、ターミナル手渡しも1クリック起爆ファイルも block（テスト19件 pass）。詳細 tools/handoff-audit-findings-production-deploy-terminal-20261024.md",
+    "confidence": "high",
+    "source": "2026-09-25 auto-session 実測 / handoff-audit:a50af9c008c0c626 / **2026-10-01 再検証（handoff-audit:4b241a72023c7578）**: 実物で再発3件を確認し route を是正。再現 `~/.claude/auto-session/runs/2026-10-01-1-recurrence-scan.mjs`・`2026-10-01-1-transcript-scan.mjs`・`2026-10-01-1-detail.mjs` / **2026-10-24 再検証（handoff-audit:ce2d358c446f2e49）**: 再発0件を実測、ゲートで恒久化"
+  },
+  {
+    "pattern": "外部サービスの課金・購入画面の操作",
+    "route": "支払い・カード登録は rule 3 の正当な手渡し理由（X の課金は API が無く画面操作のみ。2026-09-25 session 56e5c1e7 実測: `gh api repos/*/actions/secrets` は名前のみ・`node tools/env-kv.mjs --list` は出力0件でローカルに鍵が無い）。**2026-09-26 実測**: `console.x.com` を Playwright headless(chromium) で開くと 200 → `https://x.com/login?redirect_after_login=…` へ遷移し **403**（本文・ラベル・入力欄は取得不可）＝Claude 側で残高や項目名を読む経路は無い。よって改善点は手渡しの作り方だけ: ①**見ていない画面の多段手順を推測で書かない**（『表示が違ったら教えてください』は往復を強制＝rule 5 違反。2026-09-25 session 12e72c80 が『一般的な課金画面の構成に基づく』10段手順で実際に違反）②**購入前後にスクショを求めない**（rule 6: 余分な手作業。2026-09-25 session 56e5c1e7）③**kim 1人が同じ画面で購入まで完結する1回の手順**を渡し、Claude は結果の報告だけを受ける ④照会できない設定値（自動チャージ条件・補充額・月上限）は断定せず**『未確認』**と書く（rule 4）",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:a3fdf40662a661547fc0f4c6daeee1590f5dd0ce573769545bd17e4fcbea0989 / 2026-09-26 auto-session 実測（handoff-audit:13b51c81aad5a98a。再発を実物で確認し route を是正。詳細 docs/billing-screen-handoff-route.md）"
+  },
+  {
+    "pattern": "既存 Google Doc の本文更新（Docs 編集ツールがセッションに無い）",
+    "route": "node C:/Users/uers/orgiast-claude-rules/tools/gdoc-update.mjs --id <docId> --file <本文.md>（DWD SA で kim を代理、URL 不変・全置換・read-back 付き。--check で現状取得。表はヘッダが崩れるのでリストで書く）。新規 Doc 作成やコネクタ有効化の依頼に逃げない",
+    "confidence": "high",
+    "source": "2026-09-28 バドミントン指示書で「未接続」と誤って手渡し"
+  },
+  {
+    "pattern": "Vercel 環境変数の登録",
+    "route": "Claude 側で完結する（**2026-10-23 実測 / HP**）。`vercel` は PATH に無い → npx キャッシュ `node C:/Users/test/AppData/Local/npm-cache/_npx/69f9afb961c37556/node_modules/vercel/dist/index.js`（65.0.0）。未ログインでも `whoami` は `> Logged out.` を出して **exit 0** になるので終了コードで判定しない。認証は登録対象リポジトリの `.env.local` の `VERCEL_TOKEN` を env に渡す（`VERCEL_TOKEN=$(grep '^VERCEL_TOKEN' .env.local | cut -d= -f2-)`。値は出力しない）。確認は `vercel whoami` → `seisaku-team-5867`、`vercel env ls --environment production` → keiri-hub で 22 件（2026-10-23）。登録は `printf %s \"$VALUE\" | vercel env add <NAME> --environment production`（**書き込みは未実測**。承認範囲を確認してから）。対象プロジェクトは `<repo>/.vercel/project.json` の projectId/orgId で決まる。トークンが無い PC では `vercel login` を user に頼まず、`.env.local` / keyserve / 別PCの実績を先に探す。",
+    "confidence": "high",
+    "source": "2026-10-23 handoff-audit:d8f654e5431abcab の再発防止エントリ。原文は handoff-audit-ledger 2026-10-21T18:02:03.431Z / 4d7e4383（rule 3/12「所有者の kim さんの設定が必要」）。窓内 6 台帳 584 行で再発 0、経路は .env.local の VERCEL_TOKEN で読み取り成功（whoami=seisaku-team-5867 / env ls=22件）。詳細 docs/handoff-audit-2026-10-23-vercel-env.md"
+  },
+  {
+    "pattern": "サブエージェント/他AIレーンへ実装を委譲して『実行中』で終わる",
+    "route": "codex-do.mjs を前景・単発（--timeout 付き）で回し、実装を委譲したら『実行中』のまま handoff せず当ターン内に完了まで見届ける（バックグラウンド起動・『実行中で終える』は禁止。WSL 不在で codex 経路が起動しない PC は内蔵フォールバック→不可なら Claude 直で実装）",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:cd0e44f6287a30bd9eb06925705ff6833711b4c62af5246898c21dcfd0229578 / 2026-10-15 rescue/auto-session-20261014-030203 のレビューで landing（同 rescue の他2件は既存 entry と route が重複のため除外。当該型の再発監査ツールは PR #781）"
+  },
+  {
+    "pattern": "GitHub の画面操作・ボタン押下を user に依頼（handoff-audit:48967056d3adecf6）",
+    "route": "gh CLI で代替する。**実測（2026-09-24〜25、このPC / gh version 2.96.0）**: `gh auth status` は github.com に `cr568` でログイン済み（scopes: gist, read:org, repo, workflow）、`gh api user -q .login` → `cr568`。画面操作を求めたくなった場面ごとの代替コマンド:\n- PR の作成: `gh pr create --title \"...\" --body \"...\"`\n- PR の内容確認（Web で見せる代わり）: `gh pr view <N> --repo <owner>/<repo> --json number,title,state,mergedAt,body,files` / `gh pr diff <N>`。**実測 ✅**: `gh pr view 547 --repo kimkon1011/orgiast-claude-rules --json number,title,state,mergedAt` → `547 MERGED ...`\n- Issue の確認（Web で見せる代わり）: `gh issue view <N> -R <owner>/<repo> --comments`。**実測 ✅**: `gh issue view 508 --repo ... --json number,title,state` → 取得成功（なお PR と issue は番号空間を共有するので、番号だけ渡された場合は `gh pr view` 側も試す）\n- PR のマージ（Merge ボタン相当）: `gh pr merge <N> --squash --delete-branch`（`--merge`/`--rebase` も選択可）。レビュー承認が必須な branch protection 下では `gh pr merge` が `not all required reviews have been provided` 等で失敗するので、その時だけ `gh pr review <N> --approve` を試す（自分が author だと自己承認不可のことがあり、その場合のみ人の承認待ちが正当な例外）\n- Actions の実行状況確認（Actions タブ相当）: `gh run list --repo <owner>/<repo> --limit N --json workflowName,status,conclusion,headBranch`。**実測 ✅**: kimkon1011/orgiast-claude-rules で `CI / test` の completed/success を取得成功\n- Actions の手動実行（Actions タブ→Run workflow 相当）: `gh workflow run <file.yml> --repo <owner>/<repo> [-f key=value]`（**表示名ではなくワークフロー定義ファイル名で引く**。表示名指定は `could not find any workflows named …` で失敗する）。実行状況は `gh run watch <run-id> --exit-status` → 失敗ログは `gh run view <run-id> --log-failed`\n- Secrets 設定（Settings→Secrets）: `gh secret set <NAME> --body \"<value>\" --repo <owner>/<repo>`、確認は `gh secret list --repo <owner>/<repo>`。**実測での権限条件 ⚠️**: この2つは**対象リポジトリの admin 権限が必要**。上流 `kimkon1011/orgiast-claude-rules` では `gh secret list` が `HTTP 403: You must have repository read permissions or have the repository secrets fine-grained permission.` で失敗し、admin を持つ `cr568/assign-app` では成功（一覧が空で返る）。403 が出たら「画面を開いて設定してください」ではなく、そのリポジトリの admin 権限を持つアカウント/トークンに切り替えるか、権限を持つ人に `gh secret set` の1コマンドを渡す\n- ブランチ保護の確認: `gh api repos/<owner>/<repo>/branches/<branch>/protection`（GET）／変更は `gh api -X PUT …`。**実測での挙動 ⚠️**: 保護が未設定なら `404 Not Found`（上流 main で実測）、**非公開リポジトリは `Upgrade to GitHub Pro or make this repository public to enable this feature.` が返る**（cr568/assign-app で実測）＝これは権限ではなくプラン制約なので、Settings→Branches を開かせても解決しない。非公開＋無料プランでは branch protection 自体が存在しない\n- リポジトリ設定変更（Settings 全般）: `gh api -X PATCH repos/<owner>/<repo> -f <field>=<value>`（default branch, visibility, description 等）\n- Collaborator 追加（Settings→Collaborators）: `gh api -X PUT repos/<owner>/<repo>/collaborators/<username> -f permission=push`\n- Issue/Label 操作: `gh issue create/comment/close`、`gh label create/edit/delete --repo <owner>/<repo>`\n\n**注意（人が介在する操作の例外）**: 他人によるレビュー承認そのものが branch protection の要件になっている場合、API 権限があっても『他人の承認』は代替できない。その場合のみ user 依頼が例外として許容される。それ以外の画面操作（クリック・ボタン押下・タブ移動・設定画面での入力）は上記 gh コマンドで完結させる。\n**上流リポジトリへの反映手段（実測）**: 上流へ push 権限が無いアカウント（例: cr568）でも、自分の fork `cr568/orgiast-claude-rules` へブランチを push し、`gh pr create --repo kimkon1011/orgiast-claude-rules --head cr568:<branch>` で fork 跨ぎ PR を出せる（push --dry-run 実測 ✅）。「権限が無いから PR は無理」と判断せず、fork 経由の PR まで自分で作る。\n\n**書き込み系の実測（2026-09-25、admin 権限を持つ fork `cr568/orgiast-claude-rules` で実施。副作用は probe 専用ブランチ・一時 secret・一時 description に限定し、すべて削除/復元済み）**:\n- Secrets 設定: `gh secret set <NAME> --body \"<value>\" --repo <owner>/<repo>` → ✅ 成功。`gh secret list` に反映されることも確認、`gh secret delete <NAME>` も ✅（削除後に一覧から消えることを実測）。**admin 権限が必須**（上流では 403）。\n- リポジトリ設定変更（Settings→Description 等）: `gh api -X PATCH repos/<owner>/<repo> -f description=\"...\"` → ✅ 成功。元の値へ戻す PATCH も ✅。\n- PR のマージ（Merge ボタン相当）: `gh pr merge <N> --squash --delete-branch` → ✅ 成功。**実測**: fork 内に probe-base / probe-feat ブランチを作り、contents API でファイルを1つ commit → `gh pr create --base probe-base --head probe-feat` → `gh pr merge --squash --delete-branch` → `1 MERGED 2026-09-24T18:07:52Z`、head ブランチも自動削除を確認。**branch protection が無いリポジトリなら無人のマージが可能**。\n- ファイルの新規作成/更新（Web の New file / Edit ボタン相当）: `gh api -X PUT repos/<owner>/<repo>/contents/<path> -f message=\"...\" -f content=<base64> -f branch=<branch> [-f sha=<既存 blob sha>]` → ✅ 成功（本エントリの追記自体をこの経路で commit した）。\n- Actions の手動実行（Actions タブ→Run workflow 相当）: `gh workflow run <file.yml> --repo <owner>/<repo> [--ref <branch>]`。**実測 ✅（2026-09-25、使い捨て private リポジトリ `cr568/gh-cli-probe-tmp`）**: `on: workflow_dispatch` の `.github/workflows/probe.yml` を **default branch（main）に commit した状態**で `gh workflow run probe.yml --repo cr568/gh-cli-probe-tmp` を実行 → 実行が登録され `gh run list` に `completed / success`（run 36039467913）が出ることを確認。`gh run watch <run-id> --exit-status` での完了待ちも ✅。前提条件は **① 対象ワークフローが default branch に存在すること**（feature ブランチにしか無い場合は `HTTP 404: workflow <file>.yml not found on the default branch` となり、`--ref` で別ブランチを指定しても解決しない）と **② そのリポジトリの admin 権限**（上流 `kimkon1011/orgiast-claude-rules` では `HTTP 403: Must have admin rights to Repository.`）の2つ。どちらが欠けているかは `gh workflow list --repo <owner>/<repo> --all`（0 件なら default branch に未登録）と `gh auth status` で切り分ける。**両方満たせば「Actions タブ→Run workflow」の画面操作は gh で完全に代替できる**。ワークフローを1つも持たないリポジトリでは Run workflow ボタン自体が存在しないため、その場合のみ cron endpoint を curl する等の HTTP 経路に切り替える。\n\n**追記（2026-10-10 実測・このPC/cr568）**: 上記の fork 経由 PR は「作成はできる」が、**このPCの権限では完了できない**。実測: `gh api repos/kimkon1011/orgiast-claude-rules --jq .permissions` → `{admin:false,maintain:false,pull:true,push:false,triage:false}`。fork PR（`kimkon1011/orgiast-claude-rules#548`）は base が protected で、必須チェックは fork 側 workflow（`CI` / `Auto merge` / `test`）が **conclusion=action_required**（fork PR の workflow は base リポジトリの write 権限者の承認が要る）のまま停止し続ける。承認には base リポジトリの権限が要るため cr568 では `gh pr merge` / REST merge も 404。**よって fork PR は「作って終わり」にせず、同じ作業単位で次のどちらかを必ず用意する**: (A) write 権限アカウント（nishiOrgiast / seisaku-team-org / genbateamtoho-ctrl / kimkon1011）で動くPCから**正本ブランチ + `automerge` ラベル**で同一内容を push（人手ゼロ・§1.18 の正しい慣行）／(B) base リポジトリの write 権限者へ Actions の「Approve and run」を1回依頼（fork PR の通常フローであり安全機構の解除ではない）。また fork PR を長期間放置すると main の前進で**同一位置への挿入コンフリクト**を起こし、「MERGEABLE なので1クリックで通る」という引き継ぎが誤りになる（2026-10-10 時点の実測でも継続: `mergeable=CONFLICTING` → 2026-10-08 に main をマージした merge commit で解消、以後 `merge-tree` exit 0 を維持）。",
+    "confidence": "high",
+    "source": "2026-09-24 handoff-audit:48967056d3adecf6 の再発防止エントリ。2026-09-25 に読み取り系（gh 2.96.0 / cr568、`gh pr view` `gh issue view` `gh run list` `gh api .../protection` `gh secret list` fork push）と**書き込み系（`gh secret set/list/delete` `gh api -X PATCH` `gh pr merge --squash --delete-branch` `gh api -X PUT contents` `gh workflow run`）**を実測。書き込み系の副作用は admin 権限を持つ fork 上の probe 専用ブランチ・一時 secret・一時 description のみに限定し、全ブランチ削除・secret 削除・description 復元まで確認済み。`gh workflow run` は当初 403（上流=admin 権限なし）と 404（fork=ワークフローが default branch に未登録）で失敗していたが、2026-09-25 に `on: workflow_dispatch` のワークフローを default branch へ置いた使い捨て private リポジトリで**成功を再現**（run 36039467913 / completed success）＝前提条件2つを満たせば画面操作は不要、と確定した。／2026-10-10 追記: fork 経由 PR の到達不能性（action_required で永久停止・cr568 は push:false）と、正しい引き継ぎ先（正本ブランチ+automerge / base 権限者の Approve and run）を実測記録。"
+  },
+  {
+    "pattern": "Codex等の他AIレーン待機が期限切れ→Claude本体で続行",
+    "route": "待機期限が切れたら user に判断を返さず、同じ指示書ファイルで codex-do.mjs を前景・単発（--timeout 付き）で1回だけ再実行し、それも exit 非0なら Claude 本体で当ターン内に実装を完了する。続行した事実と理由（期限切れ・exit コード・cooldown の有無）を完了報告に書き、『実行中』『待機中』のまま handoff しない",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:5088cc02c86ec878e5d78ad866b46a06b7f016253e6c2180a91df31dabac38ea"
+  },
+  {
+    "pattern": "本番反映をuserの返信待ちにする",
+    "route": "本番反映は Claude 側で完結させ、user の返信を待たない。環境変数は認証済み Vercel CLI（PATH に無ければ npx キャッシュの vercel）で vercel env add → vercel env pull で値を読み戻し、反映は vercel deploy --prod または main マージで行い、本番 URL を curl で実叩きして 200 と内容を確認してから報告する。user に残してよいのはキー発行・支払い等 rule 3 の正当な手渡しだけ",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:5088cc02c86ec878e5d78ad866b46a06b7f016253e6c2180a91df31dabac38ea"
+  },
+  {
+    "pattern": "社内スタッフ宛の連絡",
+    "route": "**2026-10-23 実測（このPC=HP）**: 「Discord MCP で送る」は実行できない（`~/.claude.json` の mcpServers は gemini-cli のみ。settings.json の `mcp__claude_ai_Discord…` matcher はツールが無いため latent）。`node tools/discord-dm.mjs <名前> --body … --dry-run` は「Discord Bot トークンが見つかりません」→ SEND_FAILED（env DISCORD_BOT_TOKEN も `~/.claude/orgiast-discord-bot-token.txt` も無い）。`tools/discord-channel-id.mjs` は `~/.claude/fleet-sheet.env` 不在で ENOENT（ローカル台帳フォールバック無し）。実行可能なのは ①宛先/用件/本文の完成形をチャット表示（既定・送信なし） ②kim 宛なら fleet-mail（2026-10-22 実測成功） ③keiri-hub `/shoyo` の #経理チーム 投稿（2026-10-22 実送信・アプリ専用で汎用の送信口ではない）。汎用 DM の実送信はトークン設置後に未検証。送信・権限変更は既存の承認範囲のみ",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:a3ba93d328a2f82cbed847fbd90be4d9b58b51ce3850d934b545c230243d89a7 / 2026-10-23 再発検証（docs/handoff-audit-2026-10-23-internal-staff-discord.md）"
+  },
+  {
+    "pattern": "Discord DM 送信を前提にした社内連絡",
+    "route": "2026-10-25 実測（HP）: Discord DM は Bot トークン不在で実送信できない（node tools/discord-dm.mjs 宮地麻里 --body … --dry-run → SEND_FAILED、resolveDiscordBotToken=false）。社内連絡は宛先/用件/本文をチャット本文に完成形で表示する（既定・送信なし）。内部宛の Gmail 下書き/送信は tools/internal-recipient-gmail-guard.mjs が deny し、tools/gmail-draft.mjs はチャット表示を出して exit 3（実測）。「送って」の返信を前提にしない。再発走査は tools/handoff-audit-discord-dm-premise-scan.mjs。送信・権限変更は既存の承認範囲のみ",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:4780e59fbe87f4260f1d0b82be7a8a420d8b538b7b16dd8e25927240d7d41f37 / 2026-10-25 再発検証（tools/handoff-audit-findings-discord-dm-premise-60e9dd3b.md）"
+  },
+  {
+    "pattern": "Vercel 本番環境変数の未登録を kim の返信待ちにする",
+    "route": "**2026-10-25 実測（HP）: 登録は Claude 側で完結できる。kim に設定を依頼しない。** `vercel` は PATH に無い → npx キャッシュ `%LOCALAPPDATA%\npm-cache_npx\u00069f9afb961c37556\node_modules\u000berceldistindex.js`（65.2.0）。keiri-hub の `.env.local` から `VERCEL_TOKEN` を読み、`VERCEL_TOKEN=... node <cache>/vercel/dist/index.js whoami` = `seisaku-team-5867`（exit 0）、`env ls --environment production` = 22 件（exit 0・値は非出力）。トークン無しは `Logged out.` でも **exit 0** なので終了コードで未ログインを判定しない。登録は `env add <name> --environment production`（設定変更なので既存の承認範囲のみ）。未登録の判定は keiri-hub の `node scripts/set-shoyo-discord-token.mjs --check`（読み取りのみ）で行う。値そのもの（例: Discord Bot トークン）は secret で、API からは type=sensitive のため読めない → 値の提供だけが rule 3 の正当な手渡し。詳細 docs/handoff-audit-2026-10-25-vercel-env-recheck.md / 前回 docs/handoff-audit-2026-10-23-vercel-env.md",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:4780e59fbe87f4260f1d0b82be7a8a420d8b538b7b16dd8e25927240d7d41f37 / 2026-10-25 再発検証（docs/handoff-audit-2026-10-25-vercel-env-recheck.md）"
+  },
+  {
+    "pattern": "quota-sweep claude: window-info の連続失敗",
+    "route": "**2026-10-25 再検証: 再発 0・新規修正不要。** 原文は `~/.claude/quota-sweep.jsonl` の `2026-10-23T19:52:17Z` / `20:22:39Z`（claude・`reason=利用窓情報が不足または不正: [] (HTTP 429)`）。修正は #1051/#1052/#1056/#1060 で main 済み・`~/.claude/nightly-repo` HEAD `3555e85` に配備済み。`tools/quota-sweep.mjs:129-131` が一時障害を `network:`/`HTTP 408|429|5xx` に限定し、`:300-309` が 2s/15s/30s で再読→なお読めなければ `window-unreadable` の **deferred**（failed にしない）、`:468-482` が成功のみ 15s キャッシュ。実測: `2026-10-24T14:13-14:15Z` の 429 連続はリトライ 3 回後に deferred で止まり `failed(window-info)` にならなかった（`quota-sweep.log` 405-410 行）。窓（10-23T20:22:39Z 以降）の台帳 4 行に claude の window-info は 0、state の failureStreaks は claude=child-deadline/count 1・codex=window-info/count 1 で閾値 2 未満。回帰テストは `tools/quota-sweep.test.mjs:276`（429 継続→3 回再読→deferred・子プロセス 0）と `:289`（401 等は failed）に既存。codex の 1 件（`No rate_limits in latest Codex log`）は一時障害ではない別レーンで本 handoff の再発ではない。判定は `node --test tools/quota-sweep.test.mjs` と台帳の `failureKey=window-info` 抽出で行う。詳細 docs/handoff-audit-2026-10-25-quota-sweep-window-info.md",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:6d4ea6ec4a15cedf033e41ae0f473534814990a4ce32364d57cd0ad12c885eb1 / 2026-10-25 再発検証（docs/handoff-audit-2026-10-25-quota-sweep-window-info.md）"
+  },
+  {
+    "pattern": "内部スタッフ宛DMの送信",
+    "route": "**2026-10-25 再検証（このPC=作業用011）: 再発 0。** 内部スタッフ宛は Claude が `node tools/discord-dm.mjs <名前 or メール> --body-file <path>` で送る（宛先は tools/discord-member-directory.mjs が解決、非 kim 宛は金功勇へ写し）。**トークンは PC ごとに有無が違う**: 作業用011 は ~/.claude/orgiast-discord-bot-token.txt が有効（GET /users/@me = 200 / bot ClaudeInboxBridge）で --dry-run も宛先解決まで通る。HP はトークン不在で SEND_FAILED。**使えない PC ではチャット本文に宛先／用件／本文の完成形を表示**し、内部宛 Gmail 下書きにはしない（tools/gmail-draft.mjs が通信前に exit 3）。**証拠にならないもの**: discord-dm.mjs の起動確認・--help、自アカウント（持ち主）宛の到達（2026-10-23 の原文2件がこれで違反）。再発走査は `node tools/handoff-audit-discord-dm-premise-scan.mjs --since <最後の検出時刻>`（--selftest の P6/P7 が原文、ヒットは人手分類が必須）。詳細 docs/handoff-audit-2026-10-25-internal-dm-recheck.md",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:905fe753107b298551d436825851d0f7f3c4010cf930ae6b77616371cb245325 / 1ccea7743ba0ab1b122d2cd161288bb11196304437643377d5e35f11d7646894 / 2026-10-25 再発検証（docs/handoff-audit-2026-10-25-internal-dm-recheck.md）"
+  },
+  {
+    "pattern": "PRマージを『通常運用に任せる』としてClaude側で完結しない",
+    "route": "PR は作成時に `gh pr create --label automerge` で出す（ラベル無しの PR は auto-merge.yml が eligible=false と判定し、永久に着地しない）。作成後は同じセッションで `gh pr view <N> --json state,mergedAt` を叩き、MERGED になるまで追う。自分の PC でラベルを付けられない場合は、fleet-mail で write 権限のある PC へ automerge ラベルの付与を依頼し、MERGED を read-back するまで完了にしない。実証: 2026-10-26 #1141/#1133 は依頼から 16〜43 分で MERGED（a74a6bf0）。rescue/auto-session-20261025-030203 では route が道具名だけの `gh pr create` だったため手順文に置換した。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:3de88bab689d3bd74aff43895daa8a61d59e192040a3af1efff71ca78d2876cb / 2026-10-26 rescue e7c10a2 レビューで route を手順化"
+  },
+  {
+    "pattern": "Gmail 下書きの削除・検証結果報告",
+    "route": "Gmail MCP は本環境に無い（mcpServers=gemini-cli のみ）が、下書きの削除は DWD 経路で Claude 側が完結する。削除は `node tools/gmail-draft.mjs --delete <draftId> [--user <addr>] [--json]`（DWD で seisaku-team@orgiast.jp を impersonate・scope=gmail.compose、SA 鍵は GOOGLE_SA_KEY または既定パス aujust-sales-automation/.gcp/sheets-sa.json）。削除は `DELETE /gmail/v1/users/me/drafts/{id}` で、応答は 204=削除成功 / 404=既に無い（ツールが `{deleted:true}` / `{deleted:false,errorKind:'not_found'}` を返す）。検証結果の報告はこの実応答を読み戻して行い、kim に下書き削除の画面操作・目視確認を依頼しない。Gmail 下書きの削除が不要な用件ではそもそも手渡ししない。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:4f579eb3fc37b478cef737816a253d53bce15d7739e071d3aa51d4e76f799c40 / 2026-10-29 tool-name-route レビューで route を手順化（route が道具名だけの `Gmail MCP` だったため手順文に置換）"
+  }
+]

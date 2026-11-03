@@ -1064,6 +1064,18 @@
       "path": "tools/rescue-review-findings.md",
       "scope": "kim-only",
       "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
+    },
+    {
+      "path": "tools/line-log-export.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kim の個人 LINE 受信ログ（Supabase の channel_messages）を kim@orgiast.jp の Drive 権限でシートへ追記する専用ジョブ。他PCでは収集対象が無い"
+    },
+    {
+      "path": "tools/register-line-log-export.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "line-log-export.mjs を毎時実行するタスクを kim-PC にだけ登録する。converge 経路なし"
     }
   ]
 }

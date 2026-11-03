@@ -96,14 +96,5 @@
     ],
     "_evidence": "2026-10-10 fleet-fix-now の自己申告 hostname=DESKTOP-N429M3V・label=w018-PC。kim 回答(2026-10-08)で 018=cr@。2026-11-02 Discord search_members で claudecode0850 / Claudecode(cr@) = 1557228267566665729 を実測。未設定のため owner-notify が Discord を毎回 skip していた",
     "codexAccount": "cr@orgiast.jp"
-  },
-  "DESKTOP-BDOAK99": {
-    "hostname": "DESKTOP-BDOAK99",
-    "account": "seisaku-team@orgiast.jp",
-    "remoteName": "作業用008",
-    "aliases": [
-      "DESKTOP-BDOAK99"
-    ],
-    "_evidence": "kim-PC fleet-inbox: mail-reply-fa9b672e49db7164・mail-reply-828ab32aca705b84（2026-10-30 16:46、from=DESKTOP-BDOAK99）。~/.claude.json oauthAccount.emailAddress=seisaku-team@orgiast.jp、hostname=DESKTOP-BDOAK99 を実測し、作業用008宛の鹿沼案件引継ぎを受信。mail-reply-23b5030901dbd50f（2026-10-30 16:47）で「作業用008で受け取りました（ログイン: seisaku-team@orgiast.jp）」と確認。fleet-status 2026-11-02 の自己申告アカウントも一致。"
   }
 }

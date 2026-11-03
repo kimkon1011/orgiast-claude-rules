@@ -98,3 +98,16 @@ C2/C3の待機箇所を区別するため、Node diagnostics_channelのundiciイ
 - auto-progress-watch*で見つかった現ログはwatch.log（100234 bytes）とwatch.summary.log（79743 bytes）の2件。marker/checkファイル名/30秒上限定型文はいずれも0件。回転・lockedログはこのglobで見つからない。生ログ不存在や他の呼出経路不存在の証明にはしない。時刻・SHA-256・一致結果は.loop/assign-link-attempt-007-probe.jsonへ秘匿化保存。
 - 元超過の根本原因、元返信・利用アカウント・実投稿照合は未確定。実装変更・timeout延長なし、完了候補ではなく必須全体ゲート未実行。
 - 次は許可された既存返信記録の別読取経路を探索する。親ログを再検索して子の生出力が得られるとは期待しない。元実行時の別記録がなければ復元不能の制約を残す。
+
+## attempt-008（2026-11-04 自動セッション）原因確定と修正
+
+前日 attempt-001〜007 の観測（fetch接続確立・body送信は到達、初回応答ヘッダが12秒を過ぎても返らない）を継続し、当日の再観測で hub（GAS Web App）は依然として HTTP 応答を返さない（curl HTTP=000、12.6秒打ち切り）ことを確認。`--sent-status` 分岐は timeout 未指定のまま `mail-get` を呼ぶため、hub不達時は 60秒×3回（最大183秒）待ち、auto-progress の親の 30 秒制限で check エラーになっていた。
+
+### 修正（PR 対象）
+- `tools/fleet-mail.mjs` createClient に `opts.retries` を追加。`--sent-status` は読取専用のため `mail-get` を 10秒打ち切り・busy再試行なし（`{retries: 0}`）で呼び、hub不達は `exit 3` で即返す。
+- `~/.claude/scripts/check-assign-history-link-reply.mjs`（repo外・実行ツリー）に spawnSync `timeout: 25000` を追加し、不達は未達（exit 1）として継続監視する。
+
+### 実測
+- check 実測 11.5秒で完了、`未返信（hub不達…）` exit 1。30秒超過の check エラーは解消。
+- テスト: tools/fleet-mail.test.mjs 90件 green（2件追加）。
+- 保留: hub 自体の応答停止（2026-11-03T18:12Z 以降、全PCの poll も busy）は GAS 側の要因で、このPCからは手を入れていない。復旧後に mail-get で返信有無を再確認する。

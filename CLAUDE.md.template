@@ -1,5 +1,7 @@
 # User-global preferences (kim@orgiast.jp)
 
+**🔴 kim への報告は Discord 禁止（kim 2026-10-27 厳命・全PC全アカウント）。kim 宛は kim-inbox（~/.claude/kim-inbox、`node tools/kim-inbox.mjs`）に積みセッションで回収。ask は返答を --answer で記録するまで毎プロンプト再提示、info は伝えたら --seen。セッションを閉じても台帳に残り次セッションで再提示（クローズは止めない）。Discord MCP の直接送信はゲートが拒否。例外は config/kim-discord-allowlist.json に kim が登録したカテゴリのみ。詳細 docs/kim-inbox.md**
+
 ユーザーグローバルの恒久ルール集。全プロジェクトでロード。手続き系の詳細は rules/ と skills/ に分離済み（2026-07-03 再編、旧版: backups/CLAUDE.md.bak-20260703）。
 
 ---
@@ -9,6 +11,8 @@
 Workspace の URL は authuser=開く人のメール を付け、本文に開くアカウントを書く。自分宛はその Claude 環境の userEmail、他人宛は共有済みの相手メールを使い、特定個人をハードコードしない。既存クエリには &authuser= を追加し、#gid 等のフラグメントより前に置く。本文の同じ行か直前に「<メール> で開いてください」と書く。script.google.com の /home/ 系だけは素URL＋アカウント切替案内の例外を維持する。
 
 **🔴 seisaku-team@ のメール送信は `gmail-draft.mjs --send` の自動チェックを通す。矛盾照会は最新メールだけでなくスレッド全体の合意×見積明細（金額・数量・人件費・納品形態・日程等）。block は修正し、生の Gmail API 送信は禁止。**
+
+**🔴 安価AIレーン（Codex・Gemini・DeepSeek 等）が停止していたら、最優先でその場で修復する。放置して Claude 本体を使い続けない。SessionStart の 🛑 行が出たら通常タスクより先に lane-doctor の手順を実行し、誰かへ依頼して返事を待つのは解決ではない。同アカウントの他PCセッションへの SendMessage・CLI・API など、その場で取れる経路を当ターンで全部試して復旧まで終える（kim 2026-10-29 厳命・全PC全アカウント全プロジェクト）。人にしかできない操作は、このPCを操作している人（kim）へその場で直接頼み、復旧の実測まで同じセッションで終える。「生存 ✅」表示は信用せず各レーンを実呼び出しで確かめる（2026-10-29: mistral 既定モデルの 403 が ✅ 表示のまま放置されていた）。**
 
 2026-10-10、nishi@orgiast.jp が `/a/orgiast.jp/` 形式の Doc を開けなかった。ブラウザの既定アカウントが別だとドメイン指定だけでは解決しないため、nishi の原文「リンクを出すときは必ずどのアカウントで開くかを明記して、ブラウザもそのアカウントで開くように設定して」に従い、URL と本文の両方で受け手を指定する。
 
@@ -78,8 +82,15 @@ kim が読む Doc は `tools/gdoc-publish.mjs --authuser <開く人のメール>
 
 ## 他AIは「積極的に使う」のが既定（kim 2026-10-09 厳命・全PC全アカウント）
 
+**他AIが使えなくなったら、その場で直す（全PC・全アカウント・無人も同じ）**。失敗の原因を調べ、修復を試し、成功を実測する。`lane-repair-first-gate` が未修復での本体編集・通常作業を block する。`node tools/lane-doctor.mjs --probe` で健全化するか、`node tools/lane-repair-log.mjs --lane <名> --tried "<試した手段>" --result fixed|unfixable` で記録（6時間有効）。応答にも `[LANE-REPAIR]` を明記する。reset が判明した429/usage_limitは quota_wait とし、代替の安いレーンへ回す。Codex の probe 失敗は直接 WSL 実行の終了コードでも切り分ける（ONBOARDING §1.18）。
+
 Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM などの他AIは**使うのが既定**。Claude だけで済ませる方が例外で、例外には理由の明記が要る。
 - 残高切れ → 「入金する（オートチャージ ON）」が既定。キー失効・403 → 「再発行する」が既定。429 → 別の他AIへ自動切替。**「外す／やめる／縮小」を kim への選択肢に並べない。**
 - 他AIの障害は Claude で代替せず、別の他AIで吸収し、復旧したら戻す。Claude（監督）へ逆流させるのが最も高くつく。
 - 作業の割り振りは他AIレーン名を**先に・具体的に**書く（例: 要約=Gemini、下書き=Kimi、実装=Codex、Claude=verify のみ）。「必要なら他AIも使う」のような弱い表現は禁止。
 - **Claude だけで実装しない・従量課金で Claude Code を動かさない（kim 2026-10-17 厳命・絶対）**: 実装コードの直接書き込み・大きなインラインプログラム・実装サブエージェントは hook がモデルを問わず deny する。解除は user がプロンプトに `[CLAUDE-IMPL-OK]` と書いた60分だけ（override ファイル・クールダウン自動解除は廃止）。APIキー／Console ログインの Claude Code は `api-billing-guard` が全ツールを止める。AI の従量課金は全アカウントの Gmail 領収書を毎日集計して kim に DM する（ONBOARDING §2.8.5）。
+- **🔴 最優先: アプリ（デプロイ済み・GitHub Actions・cron・GAS）が呼ぶ LLM/検索も他AIが既定（kim 2026-10-17 厳命・全PC全アカウント）。** Web検索付き収集=Gemini Flash グラウンディング、分類・抽出・要約=Groq/DeepSeek/Gemini Flash。Claude API は代替不可の理由を `LLM-PROVIDER-REASON:` で書いた時だけ。**1社だけ試して Claude に戻すのは禁止**: 他AIを3社以上、同じ評価セットで比較した表（取れた項目数・一致率・1件あたり実費）を示してから。**Claude への自動フォールバックも禁止**: 他AIのキー欠如・残高切れ・障害時は別の他AIへ落とし、全滅なら止めて通知。「当面は Claude で動きます」「入金は必須ではない」で済ませず、キー登録・デプロイ・入金依頼までその場で直す（§2.8.0 5〜7）。既存アプリを触る時も呼び先を確認し、Claude API なら他AIへの置き換えを先に出す。**有料 LLM の一括実行（20件超）は、1〜10件で1件あたり実費を実測 → `[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z]` を提示 → コード側の予算上限（超えたら自動停止）を入れてから。** オートチャージは予算上限ではない。app-llm-cost-gate が block する（ONBOARDING §2.8.0）。
+
+安いAIの利用状況（PC×Claudeアカウント×AI×契約アカウント）は台帳の「PCログイン」「クラウド契約」タブが正本で、`fleet-sheet-report` が全PCから自動記録する。鍵を新しく入れた／差し替えたら `config/ai-key-owners.json` に末尾4文字→契約アカウントを1行足す（kim 2026-10-30 指示・全PC全アカウント）。
+
+案件の引き継ぎ: kim 操作アカウントの案件作業は case-sessions に自動保存。別席では `/case-resume <案件ID/案件名>`（初回6KB以内）、明示紐付けは `/case <案件ID>`。全文は必要箇所だけ同期して Grep。閉じる前に case-handoff.mjs flush で STATE 更新を確認。

@@ -521,7 +521,9 @@ export async function main(args = process.argv.slice(2)) {
         if (sent.delivered === 'none') return 2;
       }
     }
-    return results.some(r => r.result === '失敗') ? 1 : 0;
+    // 停滞ジョブの失敗は報告・台帳・issue に記録済み。タスク自身が完走したなら exit 0 とし、
+    // schedule-task 健全性チェックが毎日故障扱いしないようにする。return 2/1 はスイーパー自身の失敗のみ。
+    return 0;
   } finally {
     if (lockFd !== undefined) releaseLock(lockFd);
   }

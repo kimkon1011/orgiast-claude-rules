@@ -28,6 +28,12 @@ test('parseArgs: 必須3項目と複数の --ref を読む', () => {
   assert.deepEqual(o.refs, ['logo.png', 'photo.jpg']);
 });
 
+test('parseArgs: --blender-out を読み、refs は初期状態で空', () => {
+  const o = parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o', '--blender-out', 'blender-out']);
+  assert.equal(o.blenderOut, 'blender-out');
+  assert.deepEqual(o.refs, []);
+});
+
 test('parseArgs: 必須項目が欠けたら使い方付きで止まる', () => {
   assert.throws(() => parseArgs(['--brief', 'b.txt', '--out', 'out']), /--plans is required/);
 });

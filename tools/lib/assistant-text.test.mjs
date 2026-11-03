@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { latestAssistantText, readAssistantText, readLastHumanText } from './assistant-text.mjs';
+import { currentTurnAssistantText, latestAssistantText, readAssistantText, readLastHumanText } from './assistant-text.mjs';
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'assistant-text-'));
 let sequence = 0;
@@ -91,4 +91,19 @@ test('sidechain の user エントリを飛ばす', () => {
 test('人間の user 発言が無ければ reason を返す', () => {
   const result = readLastHumanText(fixture([{ type: 'user', message: { content: '<local-command-caveat>自動</local-command-caveat>' } }]));
   assert.deepEqual({ text: result.text, reason: result.reason }, { text: '', reason: 'no-human-text' });
+});
+
+test('同じ実userターンのassistant本文をStop feedback越しに連結する', () => {
+  const raw = [
+    { type: 'user', message: { content: '依頼' } },
+    assistant(textBlock('【kim 確認用の全文】\n承認対象本文')),
+    { type: 'user', message: { content: 'Stop hook feedback: フッター不足' } },
+    assistant(textBlock('次に kim がすること: 内容を承認する')),
+  ].map(JSON.stringify).join('\n');
+  assert.equal(currentTurnAssistantText(raw), '【kim 確認用の全文】\n承認対象本文\n\n次に kim がすること: 内容を承認する');
+});
+
+test('新しい実user発言より前のassistant本文を連結しない', () => {
+  const raw = [assistant('古い本文'), { type: 'user', message: { content: '新しい依頼' } }, assistant('新しい本文')].map(JSON.stringify).join('\n');
+  assert.equal(currentTurnAssistantText(raw), '新しい本文');
 });

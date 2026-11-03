@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { getDriveToken } from './lib/drive-auth.mjs';
+import { gwsFetch } from './lib/gws-proxy.mjs';
 import { isEntry } from './is-entry.mjs';
 import { staleFindingsForDraft, resolveKeyPath } from './mail-stale-draft.mjs';
 
@@ -91,7 +92,7 @@ async function gmailJson(token, endpoint, fetchImpl) {
   if (!res.ok) throw new Error(`Gmail API ${res.status}`);
   return res.json();
 }
-export async function loadTarget({ draftId, threadId, body, user, fetchImpl = globalThis.fetch, getToken = options => getDriveToken({ ...options, keyPath: resolveKeyPath() }) }) {
+export async function loadTarget({ draftId, threadId, body, user, fetchImpl = gwsFetch, getToken = options => getDriveToken({ ...options, keyPath: resolveKeyPath() }) }) {
   const token = await getToken({ scope: SCOPE, impersonate: user });
   let draft, stale = [];
   if (draftId) {

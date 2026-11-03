@@ -1,28 +1,39 @@
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveOwner, resolveOwnerDiscordId, notifyOwner, sendOwnerToast, RECIPIENT_NOTICE } from './notify-owner.mjs';
+import { resolveOwner, resolveOwnerDiscordId, notifyOwner as realNotifyOwner, sendOwnerToast, RECIPIENT_NOTICE } from './notify-owner.mjs';
 import { KIM_DISCORD_USER_ID } from './notify-kim.mjs';
+
+const notifyOwner = (owner, text, options = {}) => realNotifyOwner(owner, text, { notifyKim: async () => ({ delivered: 'session-inbox' }), ...options });
 
 test('owner 解決は fleet account を使う', () => {
   assert.equal(resolveOwner({ label: 'cr-PC', pcMap: { 'cr-PC': { account: 'cr@orgiast.jp' } }, gitEmail: 'other@example.com' }), 'cr@orgiast.jp');
 });
+test('HP ラベルは fleet-pc-map の account で cr@orgiast.jp に解決される（未通知13件の原因データ）', () => {
+  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const pcMap = JSON.parse(fs.readFileSync(path.join(repo, 'fleet-pc-map.json'), 'utf8'));
+  assert.equal(pcMap.HP.account, 'cr@orgiast.jp');
+  assert.equal(resolveOwner({ label: 'HP', pcMap }), 'cr@orgiast.jp');
+});
+
 test('owner Discord ID をメールで解決する', () => {
-  assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', { directory: { x: { members: [{ id: '42', emails: ['cr@orgiast.jp'] }] } } }), '42');
+  assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', { pcMap: {}, directory: { x: { members: [{ id: '42', emails: ['cr@orgiast.jp'] }] } } }), '42');
 });
 test('DM 解決不能時は未達にして他人へ送らない', async () => {
-  const result = await notifyOwner('cr@orgiast.jp', '結果', { home: fs.mkdtempSync(path.join(os.tmpdir(), 'notify-owner-')), directory: {}, notify: async () => { assert.fail('must not send'); } });
+  // pcMap を空にして「このPCの持ち主ではない」を明示する（実機の fleet-pc-map の HP→cr@ に依存させない）
+  const result = await notifyOwner('cr@orgiast.jp', '結果', { home: fs.mkdtempSync(path.join(os.tmpdir(), 'notify-owner-')), directory: {}, pcMap: {}, gitEmail: '', notify: async () => { assert.fail('must not send'); } });
   assert.equal(result.delivered, 'none');
 });
 
 test('owner directory reads queries cache and refuses ambiguous email matches', () => {
   const directory = { queries: { cr: { members: [{ id: '42', emails: ['cr@orgiast.jp'] }] } } };
-  assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', { directory }), '42');
+  assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', { pcMap: {}, directory }), '42');
   directory.queries.other = { members: [{ id: '43', emails: ['cr@orgiast.jp'] }] };
-  assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', { directory }), '');
+  assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', { pcMap: {}, directory }), '');
 });
 
 test('owner空の旧行はローカル持ち主を解決して通知する', async t => {
@@ -58,6 +69,38 @@ test('nishi のローカルkim IDを拒否しtoastとログへ送る', async t =
  assert.equal((await notifyOwner('nishi@orgiast.jp', '別の進捗', options)).channel, 'inbox');
 });
 
+test('ローカルPCの明示notifyDiscordIdはownerがcrでもkimへDMする', async t => {
+ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-explicit-'));
+ t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+ let sentTo = '';
+ const options = {
+   home,
+   label: 'cr-PC',
+   pcMap: { '作業用011': { account: 'cr@orgiast.jp', aliases: ['cr-PC'], notifyDiscordId: KIM_DISCORD_USER_ID } },
+   directory: [],
+   notify: async (_, notifyOptions) => { sentTo = notifyOptions.userId; return { delivered: 'dm', messageId: 'receipt' }; },
+   toast: () => assert.fail('must not fall back'),
+ };
+ assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', options), KIM_DISCORD_USER_ID);
+ assert.equal((await notifyOwner('cr@orgiast.jp', '進捗', options)).channel, 'discord');
+ assert.equal(sentTo, KIM_DISCORD_USER_ID);
+});
+
+test('notifyDiscordIdなしでIDファイルがkimなら従来どおりtoastへ送る', async t => {
+ const options = localOptions(t);
+ fs.writeFileSync(path.join(options.home, '.claude', 'orgiast-discord-user-id.txt'), KIM_DISCORD_USER_ID);
+ const result = await notifyOwner('nishi@orgiast.jp', '進捗', { ...options, notify: () => assert.fail('must not DM kim'), toast: () => true });
+ assert.equal(result.channel, 'toast');
+});
+
+test('別PCのnotifyDiscordIdはローカルPCの宛先に使わない', async t => {
+ const options = localOptions(t);
+ options.pcMap['作業用011'] = { account: 'cr@orgiast.jp', notifyDiscordId: KIM_DISCORD_USER_ID };
+ assert.equal(resolveOwnerDiscordId('nishi@orgiast.jp', options), '');
+ const result = await notifyOwner('nishi@orgiast.jp', '進捗', { ...options, notify: () => assert.fail('must not use another PC target'), toast: () => true });
+ assert.equal(result.channel, 'toast');
+});
+
 test('toast uses standard PowerShell AppId, encoded Unicode and 300 characters', () => {
  const text = "日本語<&>\n'quoted' ` $(); " + '長'.repeat(350);
  assert.equal(sendOwnerToast(text, { spawn: (file, args) => {
@@ -79,10 +122,11 @@ test('daily setup notice is suppressed on the same day and resets next day', asy
  Object.assign(options, { now: new Date(2026, 9, 28, 9).getTime(), toast: text => { calls.push(text); return true; } });
  await notifyOwner('nishi@orgiast.jp', '進捗1', options);
  await notifyOwner('nishi@orgiast.jp', '進捗2', options);
- assert.deepEqual(calls, ['進捗1', RECIPIENT_NOTICE, '進捗2']);
+ const diagnostic = '\n\n⚠ Discord 宛先未設定: fleet-pc-map.json の「nishi-PC」に notifyDiscordId を追加';
+ assert.deepEqual(calls, ['進捗1' + diagnostic, RECIPIENT_NOTICE, '進捗2' + diagnostic]);
  options.now = new Date(2026, 9, 29, 9).getTime();
  await notifyOwner('nishi@orgiast.jp', '進捗3', options);
- assert.deepEqual(calls.slice(-2), ['進捗3', RECIPIENT_NOTICE]);
+ assert.deepEqual(calls.slice(-2), ['進捗3' + diagnostic, RECIPIENT_NOTICE]);
 });
 
 test('toast failure is recorded by exit code and inbox succeeds; failed setup can retry', async t => {
@@ -258,4 +302,37 @@ test('Discord failure with a valid recipient falls back without setup warning', 
  const result = await notifyOwner('nishi@orgiast.jp', '進捗', { ...options, userId: '123', notify: async () => { throw new Error('network'); }, toast: text => { texts.push(text); return true; } });
  assert.equal(result.channel, 'toast');
  assert.deepEqual(texts, ['進捗']);
+});
+
+test('kim 所有者は台帳配達を成功とし toast に重複通知しない', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-kim-inbox-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  let calls = 0;
+  const result = await notifyOwner('kim@orgiast.jp', '報告', { home, label: 'kim-PC', pcMap: { 'kim-PC': { account: 'kim@orgiast.jp' } }, directory: [], notify: async (_text, options) => {
+    calls++; assert.equal(options.userId, KIM_DISCORD_USER_ID); return { delivered: 'session-inbox', id: '項目' };
+  }, toast: () => assert.fail('二重通知禁止') });
+  assert.equal(calls, 1); assert.equal(result.channel, 'session-inbox'); assert.equal(result.ok, true);
+});
+
+test('w018-PC は fleet-pc-map に discordId と notifyDiscordId を持つ', () => {
+  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const map = JSON.parse(fs.readFileSync(path.join(repo, 'fleet-pc-map.json'), 'utf8'));
+  const entry = map['w018-PC'];
+  assert.ok(entry, 'w018-PC が fleet-pc-map.json に存在すること');
+  assert.ok(String(entry.discordId || '').trim(), 'w018-PC に discordId が設定されていること');
+  assert.ok(String(entry.notifyDiscordId || '').trim(), 'w018-PC に notifyDiscordId が設定されていること');
+  const missing = [];
+  for (const [label, entry] of Object.entries(map)) {
+    if (label.startsWith('_') || label === '_unverified' || label === 'w018-PC') continue;
+    if (!entry || typeof entry !== 'object') continue;
+    const hasAccount = String(entry.account || '').trim();
+    if (!hasAccount) continue;
+    if (!String(entry.discordId || '').trim() || !String(entry.notifyDiscordId || '').trim()) {
+      missing.push(label + ': discordId=' + (entry.discordId || '(なし)') + ', notifyDiscordId=' + (entry.notifyDiscordId || '(なし)'));
+    }
+  }
+  if (missing.length) {
+    console.log('INFO: 以下の PC 行は discordId/notifyDiscordId が不足しています（要調査）:');
+    for (const m of missing) console.log('  ' + m);
+  }
 });

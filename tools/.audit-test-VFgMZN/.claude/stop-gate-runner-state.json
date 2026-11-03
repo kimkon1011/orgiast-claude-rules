@@ -1,0 +1,17 @@
+{
+  "regex": {
+    "turnKey": "session:regex",
+    "blocks": 1,
+    "totalBlocks": 1,
+    "responses": {
+      "31372188215f7517": {
+        "blockNumber": 1,
+        "signatures": [
+          "external-state-claim-gate"
+        ]
+      }
+    },
+    "lastHash": "31372188215f7517",
+    "lastTs": "2026-11-01T03:47:40.046Z"
+  }
+}

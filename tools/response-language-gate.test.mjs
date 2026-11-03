@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { judgeResponseLanguage } from './response-language-gate.mjs';
+import { judgeResponseLanguage, judgeTurnLanguage } from './response-language-gate.mjs';
 
 const japanese = { settings: { language: 'japanese' } };
 const longEnglish = 'The implementation is complete and all related tests passed successfully. The configuration was deployed and verified on every target computer without overwriting any unrelated user preference or existing hook registration.';
@@ -30,6 +30,28 @@ test('human が英語で settings も日本語でなければ英語応答を pas
 test('2026-10-26 の実害サンプルを block する', () => {
   const text = "The design document is ready, with D5 (Timee's terms of use) now confirmed. Only the five items D1, D2, D3, D4 and D6 above are left for you to decide. If the recommended options are fine, reply \"OK\". If you want to change any, tell me its number.";
   assert.equal(judgeResponseLanguage(text, '', japanese).decision, 'block');
+});
+
+const footer = ['恒久策: 一回限り: 設計書の承認は案件ごとに1回だけの判断で今後同じ作業は発生しない', '', '次に kim がすること: D1〜D6 の推奨案で良いか返事をする', 'この後の自動進行: なし', 'このセッション: まだ閉じない（作業中）'].join('\n');
+
+test('2026-10-26 実害: 本文英語＋日本語の定型フッターでも block する', () => {
+  const body = "The design document is ready, with D5 (Timee's terms of use) now confirmed. Only the five items D1, D2, D3, D4 and D6 above are left for you to decide. If the recommended options are fine, reply \"OK\". If you want to change any, tell me its number.";
+  assert.equal(judgeResponseLanguage(`${body}\n\n${footer}`, '', japanese).decision, 'block');
+});
+
+test('2026-10-26 実害: 短い英語本文＋タグ行＋日本語フッターでも block する', () => {
+  const body = 'The only thing that moves forward next is your reply, so nothing runs automatically. Once you reply "OK", I\'ll create tasklist.md (the list of implementation tasks).';
+  assert.equal(judgeResponseLanguage(`${body}\n\n[NO-TEST-OK: reason]\n\n${footer}`, '', japanese).decision, 'block');
+});
+
+test('日本語本文＋定型フッターは pass する', () => {
+  assert.equal(judgeResponseLanguage(`設計書の D5 を確認しました。残りの判断は D1〜D6 の推奨案で良いかだけです。\n\n${footer}`, '', japanese).decision, 'pass');
+});
+
+test('ターン途中の英語の経過報告も block する（最終メッセージが日本語でも）', () => {
+  const interim = "I'll make the change in a separate working copy built from the latest upstream main, then run the tests and replay real replies.";
+  assert.equal(judgeTurnLanguage([interim, `修正して検証しました。\n\n${footer}`], '', japanese).decision, 'block');
+  assert.equal(judgeTurnLanguage(['作業ツリーを作って修正します。', `修正して検証しました。\n\n${footer}`], '', japanese).decision, 'pass');
 });
 
 test('human の日本語だけでも日本語を期待する', () => assert.equal(judgeResponseLanguage(longEnglish, '結果を教えてください。', { settings: {} }).decision, 'block'));

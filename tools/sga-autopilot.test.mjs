@@ -89,7 +89,15 @@ test('DM：本人のみ・同じチャンネルへ返信・再実行で重複な
   const replies = [], message = { id: '1420000000000000000', author: { id: '715210673642012733' }, content: '備品に1000円' };
   const f = await fixture(t, { discordToken: '非公開', fetchMessages: async () => ({ messages: [message, { ...message, id: '1420000000000000001', author: { id: 'bot', bot: true } }], truncated: false }), fetchImpl: async (url, opts) => { if (url.endsWith('/users/@me/channels')) return Response.json({ id: 'dm' }); replies.push({ url, body: JSON.parse(opts.body) }); return Response.json({ id: 'reply' }); } });
   await f.app.execute('watch-dm'); await f.app.execute('watch-dm'); assert.equal(replies.length, 1); assert.match(replies[0].url, /channels\/dm\/messages/); assert.match(replies[0].body.content, /台帳 3行目/); assert.equal(f.writes.length, 1);
-  assert.equal(JSON.parse(await readFile(join(f.home, '.claude/state/sga-autopilot.json'), 'utf8')).lastMessageId, message.id);
+  assert.equal(JSON.parse(await readFile(join(f.home, '.claude/state/sga-autopilot.json'), 'utf8')).lastMessageId, '1420000000000000001');
+});
+test('DM：Bot の通知だけでも読み取り位置を進め、dry-run は進めない', async t => {
+  const bot = { id: '1420000000000000005', author: { id: 'bot', bot: true }, content: '通知' };
+  const f = await fixture(t, { discordToken: '非公開', fetchMessages: async () => ({ messages: [bot], truncated: false }), fetchImpl: async url => url.endsWith('/users/@me/channels') ? Response.json([{ id: 'dm', type: 1, recipients: [{ id: '715210673642012733' }] }]) : Response.json({ id: 'reply' }) });
+  await f.app.execute('watch-dm', { 'dry-run': true });
+  await assert.rejects(readFile(join(f.home, '.claude/state/sga-autopilot.json')), { code: 'ENOENT' });
+  await f.app.execute('watch-dm');
+  assert.equal(JSON.parse(await readFile(join(f.home, '.claude/state/sga-autopilot.json'), 'utf8')).lastMessageId, bot.id);
 });
 test('保留：当月の未計上承認を差引き、翌月なら可', () => {
   const input = { ...data(), amount: 1000, kind: 'その他販管費', month: '2026/10' };

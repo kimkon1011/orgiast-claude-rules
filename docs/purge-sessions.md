@@ -62,3 +62,12 @@ UUID がない・取得に失敗した場合は保持する。
 
 手動確認は `node tools/purge-remote-sessions.mjs --dry-run`。誤ってアーカイブしたものは
 `POST /v1/code/sessions/{id}/unarchive` で戻せる（記録は `~/.claude/archived-remote-sessions.jsonl`）。
+
+`--hook` は `tools/restore-remote-sessions.mjs` も15分間隔で起動し、直近7日以内に更新された archived のうち、最新20イベントで最新アーカイブの直前2分以内に `system` / `host_exit` がある会話を自動復元する（時計差としてアーカイブ後1秒まで許容）。アーカイブイベントが取得範囲に無い場合は `host_exit` の有無で判定する。
+空タイトル・`remote-control-` / `desktop-` / `会話なし` で始まる待機枠、purge の退避記録にある ID、最新 user/assistant の UUID が明示クローズ済みの会話は除外する。
+復元は `unarchived-remote-sessions.jsonl` に記録し、同じ ID は前回の復元時刻より新しい `host_exit` がある場合だけ戻すため、復元後の手動アーカイブを尊重する。
+一覧は `next_cursor` で最大30ページ、イベント取得150件・60秒まで。手動確認は `node tools/restore-remote-sessions.mjs --dry-run`（クールダウンを無視し、タイトル一覧の JSON を出力。POST・書き込みなし）。
+
+`--hook` は `tools/sync-remote-archives.mjs` を5分ごとに起動し、導入後のサーバー側アーカイブを PC の退避帳簿へ同期する。再開済み・復元済みの会話は除外し、既存の live / VSCode 参照 / 直近更新の保護を通して退避する。
+直前2分以内に `host_exit` がある archived（PC 側終了による本体の自動アーカイブ）は退避しない。
+試算は `node tools/sync-remote-archives.mjs --dry-run --since <ISO>`。`purge-sessions.mjs --restore <id>` で復元すると `kept` に入り再同期を防ぐ。サーバー側の手動アーカイブと致命的エラー由来の archived は区別できない。

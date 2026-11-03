@@ -87,3 +87,14 @@ test('DeepSeek Flash は推論なしで送信し、Proの推論設定には触�
     assert.equal(body.thinking, undefined);
   }
 });
+
+test('Gemini は --max が小さくても思考トークン分の下限を確保し、他プロバイダの --max は変えない', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-ask-gemini-max-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const mock = path.join(dir, 'mock.mjs');
+  fs.writeFileSync(mock, `globalThis.fetch = async (url, init) => { console.error('MAX ' + new URL(url).hostname + ' ' + JSON.parse(init.body).max_tokens); return new Response(JSON.stringify({ choices: [{ message: { content: 'PONG' } }], usage: {} })); };`);
+  const run = async provider => (await execute(process.execPath, ['--import', pathToFileURL(mock).href, fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', provider, '--no-fallback', '--no-persist', '--max', '10', 'Reply with exactly: PONG'], { env: { ...process.env, ORGIAST_HOME: dir, GEMINI_API_KEY: 'test-only', GROQ_API_KEY: 'test-only' }, timeout: 10000 })).stderr;
+  const sent = provider => run(provider).then(err => Number(err.match(/MAX \S+ (\d+)/)[1]));
+  assert.ok(await sent('gemini') >= 256, 'gemini max_tokens が思考分の下限を満たさない');
+  assert.equal(await sent('groq'), 10);
+});

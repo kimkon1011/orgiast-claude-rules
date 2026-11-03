@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { isEntry } from './is-entry.mjs';
 import { keyserveAuthHeaders, keyserveSecret, requireKeyservePcId } from './keyserve-auth.mjs';
 import { claudeAccount, isKimOperated } from './lib/kim-operated.mjs';
@@ -38,10 +39,37 @@ function updateBinding(file, fn) {
   try { const next = fn(readJson(file)); atomic(file, next); return next; }
   finally { fs.rmSync(lock, { force: true }); }
 }
+export const watchFile = home => path.join(home, '.claude', 'state', 'case-watch.json');
+export function caseWatch(home, { now = Date.now(), add = [], remove = [], reason = 'watch', persist = true } = {}) {
+  const update = saved => {
+    const value = saved || { cases: {} };
+    if (!saved) {
+      const dir = path.join(home, '.claude', 'case-binding');
+      for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+        if (!name.endsWith('.json')) continue;
+        const file = path.join(dir, name);
+        if (now - fs.statSync(file).mtimeMs > 30 * 86400000) continue;
+        for (const id of readJson(file)?.cases || []) {
+          if (CASE_ID.test(id)) value.cases[id] = { addedAt: new Date(now).toISOString(), reason: 'binding migration' };
+        }
+      }
+    }
+    for (const id of add) {
+      if (!CASE_ID.test(id)) throw Error('invalid case ID');
+      value.cases[id] = { addedAt: value.cases[id]?.addedAt || new Date(now).toISOString(), reason };
+    }
+    for (const id of remove) delete value.cases[id];
+    return value;
+  };
+  return persist ? updateBinding(watchFile(home), update) : update(readJson(watchFile(home)));
+}
+
 export function client(options = {}) {
   const home = options.home || process.env.ORGIAST_HOME || os.homedir();
   const base = path.join(home, '.claude');
   const fetchImpl = options.fetchImpl || fetch;
+  const sleep = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const random = options.random || Math.random;
   const api = options.api || process.env.ORGIAST_CASE_URL || 'https://orgiast-memoryserve.vercel.app/api/case-log';
   const account = options.account || claudeAccount(home);
   const pc = options.pc || requireKeyservePcId(home);
@@ -49,13 +77,23 @@ export function client(options = {}) {
   async function request(query, body) {
     if (!isKimOperated(home, account)) throw Error('case-handoff: kim 操作アカウントのみ利用できます');
     const url = new URL(api); for (const [k, v] of Object.entries(query)) url.searchParams.set(k, v);
-    const response = await fetchImpl(url, {
-      method: body ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(120000),
-      headers: { ...keyserveAuthHeaders(keyserveSecret(home), Date.now(), pc), 'Content-Type': 'application/json' },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
-    if (!response.ok) throw Error(`case-handoff: HTTP ${response.status}（未送信分はキューに保持）`);
-    return response.json();
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetchImpl(url, {
+        method: body ? 'POST' : 'GET', redirect: 'error', signal: AbortSignal.timeout(120000),
+        headers: { ...keyserveAuthHeaders(keyserveSecret(home), Date.now(), pc), 'Content-Type': 'application/json' },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      if (!response.ok) {
+        let data; try { data = await response.json(); } catch {}
+        // Only known codes may reach hooks/logs; never echo an upstream body.
+        const code = ['batch_changed', 'drive_busy', 'drive_contention', 'state_not_ready'].includes(data?.code) ? data.code : '';
+        if (response.status === 409 && ['drive_busy', 'drive_contention'].includes(code) && attempt < 3) {
+          await sleep(500 * 2 ** attempt + Math.floor(random() * 500)); continue;
+        }
+        throw Object.assign(Error(`case-handoff: HTTP ${response.status}${code ? ` [${code}]` : ''}（未送信分はキューに保持）`), { status: response.status, code });
+      }
+      return response.json();
+    }
   }
   async function catalog(refresh = false) {
     const file = path.join(base, 'case-catalog.json');
@@ -68,10 +106,12 @@ export function client(options = {}) {
   function bind(sessionId, ids, transcriptPath) {
     const file = bindingFile(sessionId);
     for (const id of ids) if (!CASE_ID.test(id)) throw Error('invalid case ID');
-    return updateBinding(file, saved => {
+    const binding = updateBinding(file, saved => {
       const old = saved || { sessionId, account, pc, cases: [], cursors: {} };
       return { ...old, cases: [...new Set([...old.cases, ...ids])], ...(transcriptPath ? { transcriptPath } : {}) };
     });
+    if ((options.label ?? resolveFleetLabel(home)) === 'kim-PC' && ids.length) caseWatch(home, { add: ids, reason: 'bind' });
+    return binding;
   }
   function findTranscript(sessionId) {
     const walk = dir => {
@@ -85,18 +125,20 @@ export function client(options = {}) {
     return walk(path.join(base, 'projects'));
   }
   function stage(sessionId) {
-    const file = bindingFile(sessionId), binding = readJson(file);
-    if (!binding?.cases?.length) return [];
-    const transcriptPath = binding.transcriptPath || findTranscript(sessionId);
-    if (!transcriptPath) throw Error('紐付いたセッションの transcript が見つかりません');
-    const raw = fs.readFileSync(transcriptPath, 'utf8');
-    const queued = [];
-    for (const caseId of binding.cases) {
-      const queueFile = path.join(base, 'case-queue', `${caseId}-${sessionId}.json`);
-      if (fs.existsSync(queueFile)) { queued.push(queueFile); continue; }
-      const batch = nextBatch(raw, binding.cursors[caseId], { sessionId, account: binding.account, pc: binding.pc }, caseId);
-      if (batch) { atomic(queueFile, batch); queued.push(queueFile); }
-    }
+    const file = bindingFile(sessionId), queued = [];
+    if (!readJson(file)?.cases?.length) return queued;
+    updateBinding(file, binding => {
+      const transcriptPath = binding.transcriptPath || findTranscript(sessionId);
+      if (!transcriptPath) throw Error('紐付いたセッションの transcript が見つかりません');
+      const raw = fs.readFileSync(transcriptPath, 'utf8');
+      for (const caseId of binding.cases) {
+        const queueFile = path.join(base, 'case-queue', `${caseId}-${sessionId}.json`);
+        if (fs.existsSync(queueFile)) { queued.push(queueFile); continue; }
+        const batch = nextBatch(raw, binding.cursors[caseId], { sessionId, account: binding.account, pc: binding.pc }, caseId);
+        if (batch) { atomic(queueFile, batch); queued.push(queueFile); }
+      }
+      return binding;
+    });
     return queued;
   }
   async function drain({ dueOnly = false } = {}) {
@@ -113,28 +155,33 @@ export function client(options = {}) {
     try {
       const deadline = Date.now() + 240000;
       const eligibleSessions = new Set();
+      const failed = new Set(), errors = [];
       while (Date.now() < deadline) {
         const files = fs.readdirSync(dir).filter(n => n.endsWith('.json'));
         if (!files.length) break;
         let progressed = false;
         for (const name of files) {
           if (Date.now() >= deadline) break;
-          const file = path.join(dir, name), batch = readJson(file);
-          const current = readJson(bindingFile(batch.sessionId));
-          if (dueOnly && !eligibleSessions.has(batch.sessionId) && !fs.existsSync(path.join(base, 'case-last-error.txt')) && Date.now() - (current?.lastSentAt || 0) < 600000) continue;
-          eligibleSessions.add(batch.sessionId);
-          const result = await request({}, batch);
-          if (result.batchId !== batch.batchId || result.stateReady !== true) throw Error('保存／STATE更新の読み戻し確認に失敗');
-          updateBinding(bindingFile(batch.sessionId), binding => {
-            if (!binding) throw Error('案件の紐付けが消失しました。キューを保持します');
-            binding.cursors[batch.caseId] = batch.lastUuid; binding.lastSentAt = Date.now(); return binding;
-          });
-          fs.unlinkSync(file); sent++; progressed = true;
-          stage(batch.sessionId);
+          if (failed.has(name)) continue;
+          try {
+            const file = path.join(dir, name), batch = readJson(file);
+            const current = readJson(bindingFile(batch.sessionId));
+            if (dueOnly && !eligibleSessions.has(batch.sessionId) && !fs.existsSync(path.join(base, 'case-last-error.txt')) && Date.now() - (current?.lastSentAt || 0) < 600000) continue;
+            eligibleSessions.add(batch.sessionId);
+            const result = await request({}, batch);
+            if (result.batchId !== batch.batchId || result.stateReady !== true) throw Error('保存／STATE更新の読み戻し確認に失敗');
+            updateBinding(bindingFile(batch.sessionId), binding => {
+              if (!binding) throw Error('案件の紐付けが消失しました。キューを保持します');
+              binding.cursors[batch.caseId] = batch.lastUuid; binding.lastSentAt = Date.now(); return binding;
+            });
+            fs.unlinkSync(file); sent++; progressed = true;
+            stage(batch.sessionId);
+          } catch (error) { failed.add(name); errors.push(error); }
         }
         if (!progressed) break;
       }
       const remaining = fs.readdirSync(dir).filter(n => n.endsWith('.json')).length;
+      if (errors.length) throw Error(errors.map(error => error.message).join('; '));
       if (!remaining) fs.rmSync(path.join(base, 'case-last-error.txt'), { force: true });
       return { sent, remaining };
     } catch (e) {
@@ -142,9 +189,12 @@ export function client(options = {}) {
       throw e;
     } finally { fs.rmSync(lock, { force: true }); }
   }
-  async function resume(caseId, { transcripts = false } = {}) {
+  async function fetchResume(caseId) {
     if (!CASE_ID.test(caseId)) throw Error('invalid case ID');
-    const data = await request({ caseId, mode: 'resume' });
+    return request({ caseId, mode: 'resume' });
+  }
+  async function resume(caseId, { transcripts = false } = {}) {
+    const data = await fetchResume(caseId);
     const dir = path.join(base, 'case-sessions', caseId);
     atomic(path.join(dir, 'STATE.md'), data.state); atomic(path.join(dir, 'LOG.md'), data.log);
     if (transcripts) {
@@ -162,7 +212,7 @@ export function client(options = {}) {
     }
     return resumeText(data.state, data.log);
   }
-  return { home, base, account, pc, request, catalog, bind, stage, drain, resume, bindingFile };
+  return { home, base, account, pc, request, catalog, bind, stage, drain, resume, fetchResume, bindingFile };
 }
 
 function background(c, force = false) {
@@ -224,12 +274,15 @@ export async function main(args = process.argv.slice(2)) {
   }
   const ids = CASE_ID.test(value || '') ? [value] : detectCases(value, await c.catalog());
   if (ids.length !== 1) throw Error('案件を一意に特定できません。案件一覧の案件IDを指定してください');
-  if (command === 'bind') {
+  if (command === 'watch' || command === 'unwatch') {
+    caseWatch(home, { [command === 'watch' ? 'add' : 'remove']: ids });
+    console.log(`case-handoff: ${command} ${ids[0]}`);
+  } else if (command === 'bind') {
     const session = args.includes('--session') ? opt('--session') : process.env.CLAUDE_SESSION_ID;
     if (!session) throw Error('--session <現在のセッションID> が必要です');
     c.bind(session, ids, args.includes('--transcript') ? opt('--transcript') : undefined);
     console.log(`case-handoff: ${ids[0]} に紐付けました`);
   } else if (command === 'resume' || command === 'sync') console.log(await c.resume(ids[0], { transcripts: command === 'sync' }));
-  else throw Error('usage: case-handoff.mjs bind|resume|sync <案件ID/案件名> | flush <sessionId> | retry | hook');
+  else throw Error('usage: case-handoff.mjs bind|watch|unwatch|resume|sync <案件ID/案件名> | flush <sessionId> | retry | hook');
 }
 if (isEntry(import.meta.url)) main().catch(e => { console.error(`[case-handoff] ${e.message}`); process.exitCode = 1; });

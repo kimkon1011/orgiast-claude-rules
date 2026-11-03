@@ -17,6 +17,7 @@ import { buildCloudLoginPayload, collectCloudInventory } from './cloud-inventory
 import { collectInteractionAdoption } from './interaction-adoption.mjs';
 import { fetchClaudePlanUsage } from './claude-plan-usage.mjs';
 import { collectBudgetStatus } from './budget-status.mjs';
+import { BUSY_POLICY, defaultBudgetPath, formatBusyExhausted, postFleetSheet } from './lib/fleet-sheet-post.mjs';
 
 const dryRun = process.argv.includes('--dry-run');
 const noJitter = process.argv.includes('--no-jitter');
@@ -200,10 +201,16 @@ async function main() {
   // 2本は独立して送る。1本目が落ちたら2本目も送られない(かつ main の catch が
   // 握り潰す)と、拡張監査が「一度も届いていないのに誰も気付かない」状態になる。
   const status = await post(fleetEnv.FLEET_SHEET_URL, 'status', payload);
-  if (specPayload) await post(fleetEnv.FLEET_SHEET_URL, 'pc-spec', specPayload);
-  await post(fleetEnv.FLEET_SHEET_URL, 'extensions', extensionPayload);
-  if (cloudPayload) await post(fleetEnv.FLEET_SHEET_URL, 'cloud-login', cloudPayload);
-  if (!status.ok) process.exitCode = 1;
+  if (status.busyExhausted) {
+    // ロックが取れないまま再送予算を使い切った。後続の kind も同じロックで
+    // 落ちるだけなので、ここで打ち切って夜間バッチを遅らせない。
+    console.error(formatBusyExhausted(status, 'status'));
+  } else {
+    if (specPayload) await post(fleetEnv.FLEET_SHEET_URL, 'pc-spec', specPayload);
+    await post(fleetEnv.FLEET_SHEET_URL, 'extensions', extensionPayload);
+    if (cloudPayload) await post(fleetEnv.FLEET_SHEET_URL, 'cloud-login', cloudPayload);
+  }
+  if (!status.ok && !status.busyExhausted) process.exitCode = 1;
 }
 
 // GAS Web App はリダイレクト＋コールドスタートで数十秒かかることがある。
@@ -222,27 +229,34 @@ function safeError(error) {
   return String(error?.message || error?.name || 'error').replace(/https?:\/\/\S+/gi, '<url>').replace(/[\r\n]+/g, ' ').slice(0, 160);
 }
 export async function post(url, kind, body, options = {}) {
-  const fetchFn = options.fetchFn || fetch, wait = options.sleepFn || sleep, random = options.random || Math.random;
   const logFile = options.logFile || path.join(home, '.claude', 'logs', 'fleet-sheet-report.log');
-  let lastError = '';
-  for (let attempt = 1; attempt <= 3; attempt++) try {
-    const response = await fetchFn(url, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(POST_TIMEOUT_MS), redirect: 'follow',
+  try {
+    const posted = await postFleetSheet(url, body, {
+      fetchImpl: options.fetchFn || fetch,
+      sleepImpl: options.sleepFn || sleep,
+      random: options.random || Math.random,
+      now: options.now,
+      policy: options.policy || BUSY_POLICY,
+      timeoutMs: POST_TIMEOUT_MS,
+      // 3 ジョブで 1 夜の再送予算を共有する。テストは null を渡して隔離する。
+      // ORGIAST_HOME を使う PC では予算ファイルもそこへ置く（実ホームを汚さない）。
+      budgetPath: options.budgetPath === undefined ? defaultBudgetPath(home) : options.budgetPath,
+      logFile,
+      kind,
+      // 従来どおり timeout / 通信断も再送する（busy と同じバックオフ）。
+      retryOnNetwork: true,
     });
-    const text = await response.text();
-    let parsed = null; try { parsed = text ? JSON.parse(text) : null; } catch {}
-    if (!response.ok || parsed?.ok === false) throw new Error(parsed?.error || `HTTP ${response.status}`);
-    fs.mkdirSync(path.dirname(logFile), { recursive: true });
-    fs.appendFileSync(logFile, `${new Date().toISOString()} kind=${kind} attempts=${attempt} result=ok error=-\n`);
-    return { ok: true, attempts: attempt };
+    if (posted.ok) return { ok: true, attempts: posted.attempts };
+    console.error(`fleet-sheet: ${kind} の送信を断念 (${formatBusyExhausted(posted, kind)})`);
+    return { ok: false, busyExhausted: true, attempts: posted.attempts, waitedMs: posted.waitedMs, error: 'busy' };
   } catch (error) {
-    lastError = safeError(error);
-    if (attempt < 3) await wait(Math.round([5000, 15000][attempt - 1] * (0.8 + random() * 0.4)));
+    const lastError = safeError(error);
+    const attempts = Number.isFinite(error?.attempts) ? error.attempts : 0;
+    fs.mkdirSync(path.dirname(logFile), { recursive: true });
+    fs.appendFileSync(logFile, `${new Date().toISOString()} kind=${kind} attempts=${attempts} result=failed error=${lastError}\n`);
+    console.error(`fleet-sheet: ${kind} の送信に失敗 (${lastError})`);
+    return { ok: false, attempts, error: lastError };
   }
-  fs.mkdirSync(path.dirname(logFile), { recursive: true });
-  fs.appendFileSync(logFile, `${new Date().toISOString()} kind=${kind} attempts=3 result=failed error=${lastError}\n`);
-  console.error(`fleet-sheet: ${kind} の送信に失敗 (${lastError})`);
-  return { ok: false, attempts: 3, error: lastError };
 }
 
 if (isEntry(import.meta.url)) main().catch(error => { console.error(`fleet-sheet: fatal (${safeError(error)})`); process.exitCode = 1; });

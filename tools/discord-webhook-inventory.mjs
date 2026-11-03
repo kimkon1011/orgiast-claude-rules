@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
+import { defaultBudgetPath, formatBusyExhausted, postFleetSheet } from './lib/fleet-sheet-post.mjs';
 
 const API = 'https://discord.com/api/v10';
 const DEFAULT_GUILD_ID = '715211007307284530';
@@ -75,13 +76,22 @@ export async function run(argv = process.argv.slice(2), { fetchImpl = fetch, hom
   const env = parseEnvText(envText);
   if (!env.FLEET_SHEET_URL || !env.FLEET_SHEET_TOKEN) throw new Error('FLEET_SHEET_URL/TOKEN が未設定です');
   const checkedAt = new Date().toISOString().slice(0, 10);
-  const response = await fetchImpl(env.FLEET_SHEET_URL, {
-    method: 'POST', redirect: 'follow', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ token: env.FLEET_SHEET_TOKEN, kind: 'webhooks', label: REPORTER_LABEL, checkedAt, partial: true, webhooks: rows }),
+  // GAS は busy を HTTP 200 + {ok:false,error:'busy'} で返す。HTTP だけ見て
+  // 「送信に失敗しました (HTTP 200)」と出すと原因が分からないので、
+  // 本文の busy を共通ヘルパで判定して再送する。
+  const posted = await postFleetSheet(env.FLEET_SHEET_URL, {
+    token: env.FLEET_SHEET_TOKEN, kind: 'webhooks', label: REPORTER_LABEL, checkedAt, partial: true, webhooks: rows,
+  }, {
+    fetchImpl,
+    budgetPath: defaultBudgetPath(home),
+    logFile: path.join(claudeDir, 'logs', 'fleet-sheet-report.log'),
+    kind: 'webhooks',
   });
-  let result = {};
-  try { result = JSON.parse(await response.text()); } catch {}
-  if (!response.ok || !result.ok) throw new Error(`Webhook台帳送信に失敗しました (HTTP ${response.status})`);
+  if (!posted.ok) {
+    // 台帳へ書けなくても棚卸し自体は成立している。夜間バッチは落とさず警告に留める。
+    stdout.write(`${formatBusyExhausted(posted, 'webhooks')}\n`);
+    return { posted: false, busyExhausted: true, count: rows.length };
+  }
   stdout.write(`Discord webhook inventory: ${rows.length}件を台帳へ送信しました\n`);
   return { posted: true, count: rows.length };
 }

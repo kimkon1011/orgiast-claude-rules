@@ -1,0 +1,18 @@
+{
+  "sessions": [
+    {
+      "sessionId": "97ff1eb0-430c-4330-b6bd-6d490dba4aed",
+      "projectId": "c--Users-uers-Downloads-CLAUDE-md--",
+      "reason": "remote-archived",
+      "title": "【11/01/09:40まで】毎月の固定費を600万円までにおさえるというループは生きてるかな？",
+      "at": "2026-11-02T06:31:39.920Z",
+      "bridgeSessionId": "cse_01Q9uE1ow68ZLzeqJ1zCFUhU",
+      "archivedAt": "2026-11-01T11:10:39.199928Z"
+    }
+  ],
+  "scanned": 34,
+  "limited": true,
+  "protected": 20,
+  "nextCursor": "c--Users-uers-Downloads-CLAUDE-md--/adaa828e-1acc-4288-9fa0-b0a940c7cd67.jsonl",
+  "otherCandidateCount": 0
+}

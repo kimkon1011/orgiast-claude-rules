@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { tryRelayToken } from './lib/seisaku-gmail-token.mjs';
+import { proxyCredential, gwsFetch, GWS_MARKER } from './lib/gws-proxy.mjs';
 /**
  * gmail-draft.mjs — 共有アカウントの外部宛 Gmail 下書きを作る常設経路。
  * なぜ要るか: アドホックなコードや手作業をなくし、内部宛はチャット表示に戻す。
@@ -191,8 +191,8 @@ function readKey(keyPath) {
   } catch { throw configError(); }
 }
 
-export async function mintDwdToken({ user, keyPath = DEFAULT_KEY, scope, fetchImpl = globalThis.fetch, statePath }) {
-  const relay = await tryRelayToken({ keyPath, impersonate: user, scope, fetchImpl, statePath });
+export async function mintDwdToken({ user, keyPath = DEFAULT_KEY, scope, fetchImpl = gwsFetch, statePath }) {
+  const relay = proxyCredential({ keyPath, impersonate: user, scope });
   if (relay !== null) return relay;
   const key = readKey(keyPath);
   const now = Math.floor(Date.now() / 1000);
@@ -214,11 +214,12 @@ export async function mintDwdToken({ user, keyPath = DEFAULT_KEY, scope, fetchIm
   } catch (error) { throw Object.assign(new Error(safeFailure(error).error), safeFailure(error)); }
 }
 
-export async function probeScopes({ user = DEFAULT_USER, keyPath = DEFAULT_KEY, scopes = SCOPES, mintToken = mintDwdToken }) {
+export async function probeScopes({ user = DEFAULT_USER, keyPath = DEFAULT_KEY, scopes = SCOPES, mintToken = mintDwdToken, fetchImpl = gwsFetch }) {
   const results = [];
   for (const scope of scopes) {
     try {
-      await mintToken({ user, keyPath, scope });
+      const token=await mintToken({ user, keyPath, scope });
+      if(token===GWS_MARKER){const response=await fetchImpl('https://gmail.googleapis.com/gmail/v1/users/me/profile',{headers:{Authorization:`Bearer ${token}`}});if(!response.ok)throw Error('GWS profile unavailable');}
       results.push({ scope, ok: true });
     } catch (error) { results.push({ scope, ok: false, ...safeFailure(error) }); }
   }
@@ -246,7 +247,7 @@ async function getReplyHeaders({ user, threadId, fetchImpl, getToken }) {
   return { inReplyTo, references: references ? `${references} ${inReplyTo}` : inReplyTo, subject: header('subject') ?? '' };
 }
 
-export async function createDraft({ user = DEFAULT_USER, raw, threadId, fetchImpl = globalThis.fetch, getToken }) {
+export async function createDraft({ user = DEFAULT_USER, raw, threadId, fetchImpl = gwsFetch, getToken }) {
   try {
     const token = await (getToken ?? (args => mintDwdToken({ ...args, fetchImpl })))({ user, scope: GMAIL_COMPOSE_SCOPE });
     const res = await fetchImpl('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
@@ -263,7 +264,7 @@ export async function createDraft({ user = DEFAULT_USER, raw, threadId, fetchImp
   } catch (error) { throw Object.assign(new Error(safeFailure(error).error), safeFailure(error)); }
 }
 
-export async function deleteDraft({ user = DEFAULT_USER, id, fetchImpl = globalThis.fetch, getToken }) {
+export async function deleteDraft({ user = DEFAULT_USER, id, fetchImpl = gwsFetch, getToken }) {
   try {
     // ID を単一の URL パス要素に限定し、別エンドポイントへの遷移を防ぐ。
     if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(id)) throw configError();
@@ -288,7 +289,7 @@ async function fetchDraftBody({ user, id, fetchImpl, getToken }) {
 }
 
 /** Read the existing MIME headers before sending; include hidden Bcc recipients. */
-export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger(), fetchImpl = globalThis.fetch, getToken, draft: suppliedDraft }) {
+export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger(), fetchImpl = gwsFetch, getToken, draft: suppliedDraft }) {
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(id)) throw configError();
   const token = await (getToken ?? (args => mintDwdToken({ ...args, fetchImpl })))({ user, scope: GMAIL_COMPOSE_SCOPE });
   const request = async (url, options = {}) => {
@@ -343,7 +344,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     const senders = addresses(args.user ?? DEFAULT_USER, true);
     if (senders.length !== 1) throw configError();
     user = senders[0];
-    const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
+    const fetchImpl = deps.fetchImpl ?? gwsFetch;
     const mintToken = deps.mintToken ?? (options => mintDwdToken({ ...options, fetchImpl }));
     if (Object.hasOwn(args, 'forward')) {
       if (['send', 'delete', 'check', 'subject', 'thread-id', 'in-reply-to', 'attach', 'ack-consistency'].some(k => Object.hasOwn(args, k)) || !Object.hasOwn(args, 'to') || (Object.hasOwn(args, 'body') && Object.hasOwn(args, 'body-file'))) throw configError();
@@ -406,7 +407,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     }
     if (args.check) {
       if (['to', 'cc', 'subject', 'body', 'body-file', 'dry-run', 'thread-id', 'in-reply-to', 'attach', 'ack-consistency'].some(k => Object.hasOwn(args, k))) throw configError();
-      const results = await probeScopes({ user, keyPath: DEFAULT_KEY, scopes: SCOPES, mintToken });
+      const results = await probeScopes({ user, keyPath: DEFAULT_KEY, scopes: SCOPES, mintToken, fetchImpl });
       const failed = results.filter(r => !r.ok);
       emit({ ok: !failed.length, results, ...(failed.length ? { errorKind: failed[0].errorKind } : {}) },
         results.map(r => `${r.ok ? 'OK' : 'NG'} ${r.scope}${r.ok ? '' : ` ${r.errorKind}: ${r.error}`}`).join('\n'));

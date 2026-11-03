@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { detectCases, transcriptRecords, nextBatch, renderState, resumeText, HEADINGS, bytes } from './lib/case-handoff.mjs';
+import { detectCases, transcriptRecords, nextBatch, renderState, resumeText, HEADINGS, bytes, hash } from './lib/case-handoff.mjs';
 import { redactForShare } from './lib/share-secrets.mjs';
 import { client, atomic } from './case-handoff.mjs';
 
@@ -41,6 +41,78 @@ test('UUID checkpoints are deterministic and incomplete tail never acknowledged'
   assert.equal(nextBatch(transcript + '{"uuid":', '', identity, '261021KGS').lastUuid, 'u2');
   assert.throws(() => nextBatch(transcript, 'lost', identity, '261021KGS'), /uuid/);
   assert.throws(() => transcriptRecords('{bad}\n' + transcript), /line 1/);
+});
+
+test('empty internal records do not change content; v2 distinguishes cursor and content under the same end UUID', () => {
+  const raw = JSON.stringify({ type: 'progress', uuid: 'internal' }) + '\n' + transcript;
+  const a = nextBatch(raw, '', identity, '261021KGS');
+  const b = nextBatch(raw, 'internal', identity, '261021KGS');
+  assert.equal(a.markdown, b.markdown); assert.equal(a.lastUuid, b.lastUuid);
+  assert.notEqual(a.batchId, b.batchId); assert.equal(a.version, 2);
+  assert.notEqual(a.batchId, nextBatch(raw.replace('次の作業', '変更'), '', identity, '261021KGS').batchId);
+  assert.notEqual(a.batchId, nextBatch(raw, '', identity, '261029AB').batchId);
+  assert.equal(a.batchId, nextBatch(raw, '', identity, '261021KGS').batchId);
+});
+
+test('identical UUID-less bridge records have distinct stable checkpoints instead of rolling the cursor back', () => {
+  const bridge = JSON.stringify({ type: 'bridge-session', bridgeId: 'same' });
+  const raw = bridge + '\n' + transcript + bridge + '\n';
+  const records = transcriptRecords(raw);
+  assert.notEqual(records[0].uuid, records.at(-1).uuid);
+  const batch = nextBatch(raw, '', identity, '261021KGS');
+  assert.equal(nextBatch(raw, batch.lastUuid, identity, '261021KGS'), null);
+  const extended = raw + row('new', 'user', '追加発言') + '\n' + bridge + '\n';
+  const next = nextBatch(extended, batch.lastUuid, identity, '261021KGS');
+  assert.equal(next.userCount, 1); assert.ok(!next.markdown.includes('案件261021KGSを続けて'));
+  assert.equal(nextBatch(extended, next.lastUuid, identity, '261021KGS'), null);
+  const legacy = nextBatch(raw, `line-${hash(bridge)}`, identity, '261021KGS');
+  assert.equal(legacy.userCount, 2); assert.equal(legacy.lastUuid, batch.lastUuid);
+});
+
+test('known 409 codes are shown safely and only Drive conflicts use bounded jittered retries', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'case-codes-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  for (const code of ['batch_changed', 'drive_busy', 'drive_contention', 'state_not_ready', 'secret-upstream-text']) {
+    let calls = 0; const delays = [];
+    const c = client({ home, ...identity, random: () => 0.5, sleep: async ms => delays.push(ms), fetchImpl: async () => {
+      calls++; return Response.json({ code, error: 'transcript-secret' }, { status: 409 });
+    } });
+    await assert.rejects(c.request({}, {}), e => e.message.includes('HTTP 409') && !e.message.includes('secret') &&
+      (code === 'secret-upstream-text' || e.message.includes(`[${code}]`)));
+    const retryable = ['drive_busy', 'drive_contention'].includes(code);
+    assert.equal(calls, retryable ? 4 : 1); assert.deepEqual(delays, retryable ? [750, 1250, 2250] : []);
+  }
+});
+
+test('Drive contention retries the identical persisted batch and advances cursor only after success', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'case-retry-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const file = path.join(home, 'session.jsonl'); fs.writeFileSync(file, transcript);
+  const bodies = [];
+  const c = client({ home, ...identity, sleep: async () => {}, fetchImpl: async (_url, init) => {
+    bodies.push(init.body);
+    assert.equal(JSON.parse(fs.readFileSync(c.bindingFile(identity.sessionId))).cursors['261021KGS'], undefined);
+    c.stage(identity.sessionId);
+    return bodies.length === 1 ? Response.json({ code: 'drive_contention' }, { status: 409 }) : Response.json({ batchId: JSON.parse(init.body).batchId, stateReady: true });
+  } });
+  c.bind(identity.sessionId, ['261021KGS'], file); c.stage(identity.sessionId);
+  assert.deepEqual(await c.drain(), { sent: 1, remaining: 0 }); assert.equal(bodies[0], bodies[1]);
+  assert.equal(JSON.parse(fs.readFileSync(c.bindingFile(identity.sessionId))).cursors['261021KGS'], 'u2');
+});
+
+test('a conflicting legacy batch is retained without starving an unrelated case', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'case-fair-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const file = path.join(home, 'session.jsonl'); fs.writeFileSync(file, transcript);
+  const c = client({ home, ...identity, fetchImpl: async (_url, init) => {
+    const b = JSON.parse(init.body);
+    return b.caseId === '261021KGS' ? Response.json({ code: 'batch_changed' }, { status: 409 }) : Response.json({ batchId: b.batchId, stateReady: true });
+  } });
+  c.bind(identity.sessionId, ['261021KGS', 'C0039'], file); c.stage(identity.sessionId);
+  const queued = path.join(c.base, 'case-queue', `261021KGS-${identity.sessionId}.json`);
+  const legacy = JSON.parse(fs.readFileSync(queued)); legacy.version = 1; legacy.batchId = hash(`${legacy.sessionId}\n${legacy.lastUuid}`); atomic(queued, legacy);
+  const before = fs.readFileSync(queued, 'utf8');
+  await assert.rejects(c.drain(), /batch_changed/);
+  assert.equal(fs.readFileSync(queued, 'utf8'), before);
+  assert.deepEqual(fs.readdirSync(path.dirname(queued)), [path.basename(queued)]);
+  assert.equal(JSON.parse(fs.readFileSync(c.bindingFile(identity.sessionId))).cursors.C0039, 'u2');
 });
 test('state keeps all headings within 4KB, resume within 6KB in Japanese', () => {
   const long = 'あ'.repeat(10000);

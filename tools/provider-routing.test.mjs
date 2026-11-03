@@ -121,3 +121,8 @@ test('daily cap and budget reports use actual billed USD rather than a generic g
   fs.writeFileSync(configFile, JSON.stringify(config));
   assert.equal(previousMonthBudget({ home, now: new Date('2026-11-01T12:00:00Z'), configFile }).executorUsd, 6);
 });
+test('mistral routes through the OpenRouter wallet and maps direct-only model ids', () => {
+  assert.deepEqual(routeCandidate({ provider: 'mistral' }), { provider: 'openrouter', model: 'mistralai/mistral-medium-3.1' });
+  assert.equal(gatewayModel('mistral', 'mistral-large-latest'), 'mistralai/mistral-medium-3.1');
+  assert.equal(gatewayModel('mistral', 'mistralai/codestral-2508'), 'mistralai/codestral-2508');
+});

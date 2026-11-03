@@ -19,7 +19,7 @@ const PROVIDERS = {
   deepseek: gatewayConfig('deepseek'),
   grok: { base: 'https://api.x.ai/v1/chat/completions', keyEnv: 'XAI_API_KEY', keyFile: 'xai.env', model: 'grok-3' },
   kimi: gatewayConfig('kimi'),
-  mistral: { base: 'https://api.mistral.ai/v1/chat/completions', keyEnv: 'MISTRAL_API_KEY', keyFile: 'mistral.env', model: 'mistral-medium-latest' },
+  mistral: gatewayConfig('mistral'),
 };
 
 const args = process.argv.slice(2);
@@ -76,6 +76,7 @@ if (!prompt) { console.error('指示テキストがありません'); process.ex
 const messages = [];
 if (system) messages.push({ role: 'system', content: system });
 messages.push({ role: 'user', content: prompt });
+const GEMINI_MIN_MAX_TOKENS = 256;
 const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
 function appendAttempt(info, usage = {}) {
   if (args.includes('--no-persist')) return;
@@ -111,12 +112,15 @@ try {
     payloadFor(candidate) {
       const P = PROVIDERS[candidate.provider]; const key = loadKey(candidate.provider);
       if (!P || !key) return null;
-      const payload = { model: candidate.model || P.model, messages, max_tokens: maxTok, stream: false };
+      // gemini の思考トークンは max_tokens から差し引かれる。--max 10 のプローブは本文が空・out=0 の ok 行になり、
+      // delegation-health が lane_outage_unrepaired(gemini) と判定していた（2026-10-30〜11-01 実測）。
+      const payload = { model: candidate.model || P.model, messages, max_tokens: candidate.provider === 'gemini' ? Math.max(maxTok, GEMINI_MIN_MAX_TOKENS) : maxTok, stream: false };
       Object.assign(payload, gatewayParams(payload.model));
       if (P.special === 'kimi') Object.assign(payload, { reasoning_effort: 'none', temperature: 0.6 });
       return { url: P.base, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(P.extraHeaders || {}) }, body: JSON.stringify(payload) } };
     },
     async onAttempt(info) {
+      if (args.includes('--no-persist')) return;
       let usage = {};
       if (info.status === 'ok') usage = (await info.response.clone().json().catch(() => ({}))).usage || {};
       appendAttempt(info, usage);

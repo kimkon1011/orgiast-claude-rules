@@ -17,10 +17,14 @@ test('does nothing when no pending decisions exist', async () => {
 test('posts once, appends TODO, and marks decisions batched', async () => {
   const dir = home(); const now = new Date('2026-08-31T07:00:00Z');
   addDecision({ source: 'discord-inbox', text: '見積確認', author: 'kim' }, { home: dir, now });
+  // kim 席: 朝バッチの報告は Discord webhook ではなく kim-inbox 台帳へ1件入る（2026-10-27）。
+  fs.writeFileSync(path.join(dir, '.claude', 'cost-reporter.env'), 'REPORTER_LABEL=kim-PC\n');
   let fetches = 0;
   const fetchImpl = async () => { fetches++; return { ok: true, status: 204, text: async () => '' }; };
   await runMorning({ home: dir, now, intakeImpl: emptyIntake, webhookUrl: 'https://example.test/hook', fetchImpl });
-  assert.equal(fetches, 1);
+  assert.equal(fetches, 0);
+  const inboxDir = path.join(dir, '.claude', 'kim-inbox');
+  assert.equal(fs.readdirSync(inboxDir).filter(f => f.endsWith('.json')).length, 1);
   const md = fs.readFileSync(path.join(dir, '.claude', 'next-session.md'), 'utf8');
   assert.match(md, /## 朝バッチ取り込み \(2026-08-31\)/); assert.match(md, /- \[ \] 見積確認/);
   assert.equal(listDecisions({ home: dir })[0].status, 'batched');

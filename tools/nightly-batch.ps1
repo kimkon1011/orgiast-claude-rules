@@ -623,8 +623,12 @@ try {
             if ($keyserveOutput.Count -eq 0) { throw 'JSON出力なし' }
             $env:ORGIAST_KEYSERVE_STATUS_JSON = [string]$keyserveOutput[0]
             $fleetSheetOutput = $null
-            try { $fleetSheetOutput = @(& $node.Source $fleetSheetReport --no-jitter 2>&1) } finally { Remove-Item Env:ORGIAST_KEYSERVE_STATUS_JSON -ErrorAction SilentlyContinue }
-            if ($LASTEXITCODE -ne 0) { throw ('fleet-sheet-report 終了コード' + $LASTEXITCODE) }
+            $fleetSheetExit = 1
+            try {
+                $fleetSheetOutput = @(& $node.Source $fleetSheetReport --no-jitter 2>&1)
+                $fleetSheetExit = $LASTEXITCODE
+            } finally { Remove-Item Env:ORGIAST_KEYSERVE_STATUS_JSON -ErrorAction SilentlyContinue }
+            if ($fleetSheetExit -ne 0) { throw ('fleet-sheet-report 終了コード' + $fleetSheetExit) }
             $busy = Get-NightlyBusyWarning $fleetSheetOutput
             if ($busy) { Write-NightlyLog 'keyserve-status' ('警告:' + $busy) } else { Write-NightlyLog 'keyserve-status' 'ok' }
         } catch {

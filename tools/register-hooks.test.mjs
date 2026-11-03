@@ -19,6 +19,8 @@ test('setup converge timeout covers Node updates on new and existing PCs, idempo
   assert.equal(hooks.length, 1);
   assert.equal(hooks[0].timeout, 1200);
   for (const event of ['SessionStart', 'UserPromptSubmit']) {
+    const ownerInbox = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('owner-inbox-hook.mjs'));
+    assert.equal(ownerInbox.length, 1); assert.equal(ownerInbox[0].timeout, 10); assert.notEqual(ownerInbox[0].async, true);
     const inbox = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('kim-inbox.mjs'));
     assert.equal(inbox.length, 1); assert.match(inbox[0].command, /--context/);
     assert.equal(inbox[0].timeout, 5); assert.notEqual(inbox[0].async, true);

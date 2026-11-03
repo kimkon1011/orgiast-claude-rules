@@ -5,8 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveOwner, resolveOwnerDiscordId, notifyOwner, sendOwnerToast, RECIPIENT_NOTICE } from './notify-owner.mjs';
+import { resolveOwner, resolveOwnerDiscordId, notifyOwner as realNotifyOwner, sendOwnerToast, RECIPIENT_NOTICE } from './notify-owner.mjs';
 import { KIM_DISCORD_USER_ID } from './notify-kim.mjs';
+
+const notifyOwner = (owner, text, options = {}) => realNotifyOwner(owner, text, { notifyKim: async () => ({ delivered: 'session-inbox' }), ...options });
 
 test('owner 解決は fleet account を使う', () => {
   assert.equal(resolveOwner({ label: 'cr-PC', pcMap: { 'cr-PC': { account: 'cr@orgiast.jp' } }, gitEmail: 'other@example.com' }), 'cr@orgiast.jp');

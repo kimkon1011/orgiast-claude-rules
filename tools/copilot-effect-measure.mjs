@@ -121,7 +121,7 @@ export function appendRun(reportPath, run) {
 function commandExists(command, cwd) {
   if (command === 'node') return true; // 自身のランタイム
   if (path.isAbsolute(command)) return fs.existsSync(command); // 絶対パスは直接存在確認
-  const probe = spawnSync(process.platform === 'win32' ? 'where' : 'which', [command], { encoding: 'utf8', timeout: 5000 });
+  const probe = spawnSync(process.platform === 'win32' ? 'where' : 'which', [command], { encoding: 'utf8', timeout: 5000, windowsHide: true });
   return probe.status === 0;
 }
 
@@ -131,7 +131,7 @@ export function runOnce({ task, backend, prompt, home, cwd, now = () => Date.now
   const spec = registry[backend];
   const argv = [...spec.args, ...(backend === 'cloud' ? [prompt] : ['--prompt-file', path.join(home, '.copilot-effect-measure', `${task}.prompt.txt`)])];
   const start = now();
-  const result = spawnSync(spec.command, argv, { cwd, encoding: 'utf8', timeout: 60000 });
+  const result = spawnSync(spec.command, argv, { cwd, encoding: 'utf8', timeout: 60000, windowsHide: true });
   const elapsedMs = now() - start;
   return { task, backend, elapsedMs, promptChars: prompt.length, completionChars: (result.stdout || '').length, status: result.status, error: result.error?.message ?? null };
 }

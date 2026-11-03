@@ -37,12 +37,19 @@ const vendors = [
   ['stripe', /Stripe/i], ['discord', /Discord/i], ['notion', /Notion/i], ['slack', /Slack/i],
 ];
 export function claimVendors(sentence) {
+  // Extract vendors from [直接照会: vendor-name] markers before stripping them,
+  // so `[直接照会: GitHub] 存在しない` still carries the 'github' vendor.
+  const markerVendors = [...String(sentence).matchAll(/\[直接照会:([^\]]+)\]/g)]
+    .map(m => m[1].trim()).flatMap(name =>
+      vendors.filter(([, pattern]) => pattern.test(name)).map(([v]) => v)
+    );
   sentence = String(sentence).replace(/\[直接照会:[^\]]+\]/g, "");
   const found = vendors.filter(([, pattern]) => pattern.test(sentence)).map(([name]) => name);
   if (!found.length && /Console|Billing|残高|クレジット|支払い|自動チャージ|オートチャージ/.test(sentence)) found.push('anthropic');
-  return new Set(found);
+  return new Set([...found, ...markerVendors]);
 }
 export function claimVendor(sentence) { return [...claimVendors(sentence)][0] || null; }
+export { vendors };
 const hosts = { 'github.com': 'github', 'githubusercontent.com': 'github', 'vercel.com': 'vercel',
   'google.com': 'google', 'googleapis.com': 'google', 'supabase.com': 'supabase', 'supabase.co': 'supabase',
   'cloudflare.com': 'cloudflare', 'freee.co.jp': 'freee', 'freee.com': 'freee', 'stripe.com': 'stripe',

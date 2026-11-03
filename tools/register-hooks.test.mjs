@@ -35,6 +35,26 @@ test('setup converge timeout covers Node updates on new and existing PCs, idempo
   const hooks = settings.hooks.SessionStart.flatMap((group) => group.hooks).filter((hook) => hook.command.includes('setup.mjs'));
   assert.equal(hooks.length, 1);
   assert.equal(hooks[0].timeout, 1200);
+  for (const event of ['SessionStart', 'UserPromptSubmit']) {
+    const ownerInbox = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('owner-inbox-hook.mjs'));
+    assert.equal(ownerInbox.length, 1); assert.equal(ownerInbox[0].timeout, 10); assert.notEqual(ownerInbox[0].async, true);
+    const inbox = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('kim-inbox.mjs'));
+    assert.equal(inbox.length, 1); assert.match(inbox[0].command, /--context/);
+    assert.equal(inbox[0].timeout, 5); assert.notEqual(inbox[0].async, true);
+    const daytrip = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('daytrip-ask-hook.mjs'));
+    assert.equal(daytrip.length, 1); assert.equal(daytrip[0].timeout, 5); assert.notEqual(daytrip[0].async, true);
+  }
+  for (const [event, argument, timeout] of [['Stop', '', 15], ['SessionStart', ' --all', 30], ['UserPromptSubmit', ' --prompt-submit', 8]]) {
+    const titles = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('session-wait-title.mjs'));
+    assert.equal(titles.length, 1);
+    assert.ok(titles[0].command.endsWith(`session-wait-title.mjs"${argument}`));
+    assert.equal(titles[0].timeout, timeout);
+    assert.notEqual(titles[0].async, true);
+  }
+  const report = settings.hooks.PreToolUse.filter(g => g.hooks.some(h => h.command.includes('kim-discord-report-gate.mjs')));
+  assert.equal(report.length, 1);
+  assert.match('mcp__claude_ai_Discord__send_dm', new RegExp(report[0].matcher));
+
   hooks[0].timeout = 60;
   fs.writeFileSync(settingsFile, JSON.stringify(settings));
   run();
@@ -42,6 +62,26 @@ test('setup converge timeout covers Node updates on new and existing PCs, idempo
   assert.equal(repaired.hooks.SessionStart.flatMap((group) => group.hooks).find((hook) => hook.command.includes('setup.mjs')).timeout, 1200);
   run();
   assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, 'utf8')), repaired);
+});
+
+test('kim 宛 Discord 報告の旧 hook（claude-watch-inbox の Stop/SessionStart）を全PCで外す', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-kim-discord-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const repo = path.resolve('.');
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  const legacy = cmd => ({ type: 'command', command: `pwsh -NoProfile -ExecutionPolicy Bypass -NonInteractive -File "C:\\Users\\x\\Downloads\\CLAUDE.md配布\\claude-watch-inbox\\hooks\\${cmd}"` });
+  const keep = { type: 'command', command: 'pwsh -NoProfile -File "C:\\Users\\x\\.claude\\hooks\\url-format-guard.ps1"' };
+  fs.writeFileSync(settingsFile, JSON.stringify({ hooks: {
+    Stop: [{ hooks: [legacy('post-stop-to-inbox.ps1'), keep] }, { hooks: [legacy('post-stop-to-discord.ps1')] }],
+    SessionStart: [{ hooks: [legacy('get-reply-on-session-start.ps1'), legacy('get-reply-from-discord.ps1')] }],
+  } }));
+  execFileSync(process.execPath, [path.join(repo, 'tools/register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } });
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const commands = event => settings.hooks[event].flatMap(g => g.hooks.map(h => h.command));
+  assert.ok(!commands('Stop').some(c => /post-stop-to-(?:inbox|discord)\.ps1/.test(c)), 'Stop の Discord 投稿 hook が残っている');
+  assert.ok(!commands('SessionStart').some(c => /get-reply-(?:on-session-start|from-discord)\.ps1/.test(c)), 'SessionStart の返信取得 hook が残っている');
+  assert.ok(commands('Stop').some(c => c.includes('url-format-guard.ps1')), '無関係な hook を消した');
 });
 
 test('既存PowerShell hookへExecutionPolicy Bypassを補いcost-loopをmjsへ移行する', () => {
@@ -56,6 +96,11 @@ test('既存PowerShell hookへExecutionPolicy Bypassを補いcost-loopをmjsへ�
   } }));
   const stdout = execFileSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } });
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const costGroups = settings.hooks.PreToolUse.filter(group => group.hooks.some(hook => hook.command.includes('app-llm-cost-gate.mjs')));
+  assert.equal(costGroups.length, 1);
+  assert.equal(costGroups[0].matcher, 'Write|Edit|MultiEdit|Bash|PowerShell');
+  // Shared gate wrapper reserves 15 seconds around the hook's 5-second budget.
+  assert.equal(costGroups[0].hooks[0].timeout, 15);
   const commands = Object.values(settings.hooks).flatMap((groups) => groups.flatMap((group) => group.hooks || [])).map((hook) => hook.command);
   assert.ok(commands.some((command) => command.includes('cost-loop.mjs')));
   assert.ok(!commands.some((command) => command.includes('cost-loop.ps1')));
@@ -123,12 +168,12 @@ test('stop-gate-runner hook は timeout 30 で Stop に登録される', () => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test('旧Stop gate 9本をrunner 1本へ移行し無関係なStop hookを残す', () => {
+test('個別Stop gateをrunner 1本へ移行し無関係なStop hookを残す', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-runner-'));
   const repo = path.resolve('.');
   const settingsFile = path.join(home, '.claude', 'settings.json');
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-  const old = ['handoff-quality-gate.mjs','stop-gate.mjs','manual-request-fullsteps-gate.mjs','handoff-investigation-gate.mjs','handoff-info-guard.mjs','negative-claim-gate.mjs','report-length-gate.mjs','self-check-before-asking-guard.mjs','doc-link-drive-guard.mjs'];
+  const old = ['handoff-quality-gate.mjs','stop-gate.mjs','manual-request-fullsteps-gate.mjs','handoff-investigation-gate.mjs','handoff-info-guard.mjs','negative-claim-gate.mjs','report-length-gate.mjs','self-check-before-asking-guard.mjs','doc-link-drive-guard.mjs','claude-fallback-report-gate.mjs'];
   const hooks = old.map((name) => ({ hooks: [{ type: 'command', command: `node "C:\\old\\tools\\${name}"` }] }));
   hooks.push({ hooks: [{ type: 'command', command: 'powershell -NoProfile -File "C:\\keep.ps1"' }, { type: 'command', command: 'node "C:\\keep-tool.mjs"' }] });
   fs.writeFileSync(settingsFile, JSON.stringify({ hooks: { Stop: hooks } }));
@@ -178,6 +223,7 @@ test('手間削減hook 8本を正しいイベントへ登録しstop-gateは登�
   assert.equal(editGuard.hooks.find(hook => hook.command.includes('exec-tree-edit-guard.mjs')).timeout, 5);
   assert.ok(!editGuard.hooks[0].command.includes('gate-hook-runner.mjs'));
   assert.deepEqual(['auto-progress-ledger.mjs', 'stop-gate-runner.mjs', 'handoff-detail-guard.mjs', 'url-format-guard.mjs', 'check-e2e-before-stop.mjs'].every((name) => names('Stop').includes(name)), true);
+  assert.ok(fs.readFileSync(path.join(repo, 'tools', 'stop-gate-runner.mjs'), 'utf8').includes("'claude-fallback-report-gate'"));
   assert.equal(Object.values(settings.hooks).flatMap((groups) => groups).flatMap((group) => group.hooks || []).some((hook) => /(?:^|[\\/])stop-gate\.mjs/.test(String(hook.command))), false);
   fs.rmSync(home, { recursive: true, force: true });
 });

@@ -170,3 +170,15 @@ test('60-second deadline stops before ledger write and pagination stops at 30 pa
   } });
   assert.equal(pages, 30); assert.equal(paged.limited, true);
 });
+
+test('force bypasses cooldown but preserves baseline, kept and resumed guards', async t => {
+  const f = fixture(t); f.state(); f.session('a'); f.session('kept');
+  f.session('resumed', [{ type: 'user', timestamp: iso(0) }]);
+  f.put('remote-archived-sessions.json', { ids: [], kept: ['kept'] });
+  f.put('sync-remote-archives-state.json', { at: now, since: now - 300_000 });
+  const options = { base: f.base, now, fetchImpl: f.server(['a', 'kept', 'resumed'].map(id => f.remote(id))) };
+  assert.equal((await syncRemoteArchives(options)).skipped, 'cooldown');
+  const r = await syncRemoteArchives({ ...options, force: true });
+  assert.equal(r.queued, 1); assert.equal(r.skippedKept, 1); assert.equal(r.skippedResumed, 1);
+  assert.equal(f.read('sync-remote-archives-state.json').since, now - 300_000);
+});

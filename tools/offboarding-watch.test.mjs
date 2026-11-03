@@ -150,21 +150,24 @@ test('定期登録はkim-PC Windowsだけ', () => {
   assert.match(source, /07:10/); assert.match(source, /'--notify', '--apply-revoke'/); assert.match(source, /--is-controller/);
 });
 
-test('既存notify-kimのDM配信関数で本文・承認事項・未取得を保持する', async t => {
-  const f = fixture(t), sent = [];
+test('既存notify-kimの台帳経路で本文・承認事項・未取得を保持しDiscordへ送らない', async t => {
+  const f = fixture(t);
   delete f.deps.notify;
   fs.mkdirSync(path.join(f.home, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(f.home, '.claude/orgiast-discord-bot-token.txt'), 'secret-test-token');
+  fs.writeFileSync(path.join(f.home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
   f.deps.collectors.workspace = async () => ({ status: 'unavailable', reason: 'HTTP 401 unauthorized_client', data: [] });
   f.member.status = 'retired'; f.write('claude-account-ledger.json', f.ledger);
-  f.deps.fetch = async (url, options) => {
-    sent.push({ url: String(url), body: JSON.parse(options.body) });
-    return { ok: true, status: 200, json: async () => ({ id: 'mock-id' }) };
-  };
+  f.deps.fetch = async () => assert.fail('Discord への送信は禁止');
   const { result, code } = await f.run(['--notify']);
   assert.equal(code, 0); assert.equal(result.notification.status, 'sent');
-  assert.equal(sent.length, 2);
-  assert.match(sent[1].body.content, /未取得: workspace（HTTP 401 unauthorized_client）/);
-  assert.match(sent[1].body.content, /Claude 組織からの削除・Workspace 停止を承認/);
+  const inbox = path.join(f.home, '.claude/kim-inbox');
+  const files = fs.readdirSync(inbox).filter(name => name.endsWith('.json'));
+  assert.equal(files.length, 1);
+  const item = JSON.parse(fs.readFileSync(path.join(inbox, files[0]), 'utf8'));
+  assert.match(item.text, /未取得: workspace（HTTP 401 unauthorized_client）/);
+  assert.match(item.text, /Claude 組織からの削除・Workspace 停止を承認/);
+  assert.equal((await f.run(['--notify'])).result.notification.status, 'suppressed');
+  assert.equal(fs.readdirSync(inbox).filter(name => name.endsWith('.json')).length, 1);
   assert.doesNotMatch(f.output, /secret-test-token/);
 });

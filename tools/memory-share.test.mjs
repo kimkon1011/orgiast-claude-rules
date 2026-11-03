@@ -212,6 +212,8 @@ test('source PC skips by explicit identity or 50% root name overlap only without
   assert.equal(explicit.skipped, 2); assert.equal(fs.existsSync(f.dir), false);
   const local = path.join(f.home, '.claude/projects/p/memory'); fs.mkdirSync(local, { recursive: true });
   fs.writeFileSync(path.join(local, 'a.md'), 'local');
+  // hostname が非 ASCII の PC でも PC 名を解決できるよう、保存済み PC 名を置く
+  fs.mkdirSync(path.join(f.home, '.claude'), { recursive: true }); fs.writeFileSync(path.join(f.home, '.claude', 'keyserve-pc.txt'), 'receiver');
   const fallback = await installSharedMemories({ ...f.options, env: {}, fetchImpl: a.fetchImpl });
   assert.equal(fallback.skipped, 2);
   const received = await installSharedMemories({ ...f.options, fetchImpl: a.fetchImpl });

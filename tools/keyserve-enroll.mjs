@@ -102,7 +102,7 @@ export async function main(argv = process.argv.slice(2), {
       let sent;
       try { sent = await notify(instructions, { home, webhookFallback: false }); }
       catch { throw new Error('Discord DM 送信に失敗しました。表示されたコマンドを対象PCの人へ個別に渡してください。'); }
-      if (sent?.delivered !== 'dm') throw new Error('Discord DM を送信できませんでした。Bot と kim のユーザーID設定を確認してください。');
+      if (!['dm', 'session-inbox'].includes(sent?.delivered)) throw new Error('Discord DM を送信できませんでした。Bot と kim のユーザーID設定を確認してください。');
     }
     return 0;
   } catch (error) {

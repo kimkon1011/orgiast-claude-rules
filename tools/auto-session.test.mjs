@@ -866,6 +866,18 @@ test('未来日の以降ゲートだけを固定日付基準で除外する', ()
   );
 });
 
+test('時刻付きの以降ゲート（22:00 JST 以降に着手）も除外する（2026-10-29 quota-sweep:codex 4連続 exhausted の原因）', () => {
+  const gated = '【2026-10-30 22:00 JST 以降に着手・それより前は着手しない】アサインアプリの高速化';
+  // ゲート（2026-10-30T22:00 JST = 13:00Z）を JST 壁時計で比較する。実行マシンの
+  // タイムゾーンに依らず決まるよう、基準時刻は Date.UTC で固定した JST 時刻を与える。
+  assert.equal(todoExclusionReason(gated, new Date(Date.UTC(2026, 9, 29, 12, 0))), '2026-10-30 22:00 JST以降'); // JST 10-29 21:00（ゲート前）
+  assert.equal(todoExclusionReason(gated, new Date(Date.UTC(2026, 9, 30, 12, 0))), '2026-10-30 22:00 JST以降'); // JST 10-30 21:00（ゲート前）
+  assert.equal(todoExclusionReason(gated, new Date(Date.UTC(2026, 9, 30, 13, 0))), ''); // JST 10-30 22:00（ゲート時刻ちょうど）
+  assert.equal(todoExclusionReason(gated, new Date(Date.UTC(2026, 9, 31, 0, 0))), ''); // JST 10-31 09:00（ゲート後）
+  // 時刻なしの従来形式は従来どおり
+  assert.equal(todoExclusionReason('2026-08-27 以降に実行', new Date(2026, 7, 26)), '2026-08-27以降');
+});
+
 test('pickCwd は実在しない判定先を既存の標準リポジトリへフォールバックする', () => {
   const exists = () => false;
   assert.equal(pickCwd('案件Aを直す', exists, { 案件A: '/missing' }), DEFAULT_REPO);

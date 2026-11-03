@@ -311,6 +311,9 @@ export function createAutopilot(deps = {}) {
       if (text) await request(`/channels/${channel.id}/messages`, { content: text.slice(0, 2000), message_reference: { message_id: message.id }, allowed_mentions: { parse: [] } });
       results.push({ id: message.id, text });
     }
+    // Bot の通知だけでも読み取り位置を進めます。進めないと未読が溜まり、取得上限で毎回止まります。
+    const newest = messages.at(-1)?.id;
+    if (!options['dry-run'] && newest && (!state.lastMessageId || BigInt(newest) > BigInt(state.lastMessageId))) { state.lastMessageId = newest; await stateSave(state); }
     return { results };
   }
   async function run(command, options = {}) {

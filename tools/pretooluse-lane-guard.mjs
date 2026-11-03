@@ -15,7 +15,7 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
 
 const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-export const delegated = /pr-merge\.mjs|lane-doctor\.mjs|codex-do\.mjs|autopilot-tick\.mjs|llm-ask\.mjs|batch-(?:enqueue|run)\.mjs|(?:^|\s)gemini\s|(?:^|\s)codex\s|wsl[^\r\n]*\bcodex\b|claude\s+-p|node[^\r\n]*usage-stats\.mjs/i;
+export const delegated = /pr-merge\.mjs|lane-doctor\.mjs|lane-repair-log\.mjs|codex-do\.mjs|autopilot-tick\.mjs|llm-ask\.mjs|batch-(?:enqueue|run)\.mjs|(?:^|\s)gemini\s|(?:^|\s)codex\s|wsl[^\r\n]*\bcodex\b|claude\s+-p|node[^\r\n]*usage-stats\.mjs/i;
 export const operator = /line-pc-act\.ps1|line-send\.ps1|make-desktop-launcher\.mjs|notify-kim\.mjs|discord-dm\.mjs|fleet-mail\.mjs/i;
 export const gateRequired = /(?:^|[\\/])auto-progress\.mjs(?:\s|$)/i;
 export function isGateRequiredCommand(command) {

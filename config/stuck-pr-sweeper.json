@@ -1,0 +1,17 @@
+{
+  "runner": "kim-PC",
+  "owners": [
+    "kimkon1011"
+  ],
+  "authors": [
+    "kimkon1011",
+    "nishiOrgiast",
+    "seisaku-team-org",
+    "cr568",
+    "genbateamtoho-ctrl"
+  ],
+  "repositories": [
+    "kimkon1011/orgiast-claude-rules",
+    "kimkon1011/orgiast-memoryserve"
+  ]
+}

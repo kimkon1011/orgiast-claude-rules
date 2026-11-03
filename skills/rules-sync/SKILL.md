@@ -20,7 +20,9 @@ Drive ハブ（正本）: `claude-common-rules` folder `1RLYbK6CKyPWRJsG6LY0WB9O
 - 「統合 / マージ / inbox 処理」→ **merge**（kim 環境のみ）。kim 環境で pull 実行時に inbox 未処理があれば merge も提案する
 
 ## pull（全アカウント共通）
-1. `search_files parentId='1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw' and title contains 'manifest'` → modifiedTime 最新の manifest.json を read_file_content
+1. `search_files parentId='1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw' and title contains 'manifest'` → modifiedTime 最新の manifest.json を **download_file_content** で取得し base64 デコード
+   - **制作・営業ナレッジは独立した manifest で毎回確認する（ハブの version が同じでも省略しない）**。ハブ直下の `production-sales-knowledge` フォルダを名前で検索し、その `manifest.json` と掲載された7つの Markdown を `download_file_content`（base64 → デコード）で取得する。各ファイルの bytes と SHA-256 を照合し、すべて検証できてから `~/.claude/knowledge/production-sales/` に保存。同じハッシュなら更新しない。`read_file_content` は本文・manifest とも使わない。
+   - SA/DWD 認証が利用できるPCは `node <repo>/tools/knowledge-pack.mjs --pull` でも同じ取り込みができる。発信元PCは元ソースからローカル生成物を配置する。他PC相当の検証は `--receiver` を加える。onboarding-sync も日次で取り込む。
 2. ローカル `~/.claude/orgiast-rules-version.txt` の版番号と比較。同じなら「最新です」で終了。**注意：version 番号だけで新旧を判定せず、ハブ側と手元の中身の最終日付も比較すること。もしハブ側が古ければ pull を中止し退行を防ぐこと。**（※GitHub main → Drive ハブへは、夜間ジョブ `drive-hub-mirror.mjs` が毎日自動でミラー同期します）。kim 環境の `tools/hub-push.mjs` も毎晩ローカル正本を自動 push するため、配布の正本は hub。それでも手元の方が内容的に新しければ、上書きせず保留し `/share-knowledge` で hub へ戻す。
 3. manifest の files を順に取得（該当フォルダを parentId 検索 → 同タイトルの最新を **download_file_content** で取得し base64 デコード）
 4. 反映先:

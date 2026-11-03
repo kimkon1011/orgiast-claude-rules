@@ -179,7 +179,7 @@ export async function runWatch({ home = os.homedir(), repo = ROOT, staleDays = 3
   if (!dry && result.actionable.length) {
     try {
       result.notification = await notify(notificationText(result.items, result.reportPath, staleDays), { home, webhookFallback: false });
-      if (result.notification?.delivered !== 'dm') result.errors.push(`notification: ${result.notification?.reason || 'DM not delivered'}`);
+      if (!['dm', 'session-inbox'].includes(result.notification?.delivered)) result.errors.push(`notification: ${result.notification?.reason || 'DM not delivered'}`);
     } catch (e) { result.errors.push(`notification: ${e.message}`); }
     fs.writeFileSync(result.reportPath, renderReport(result));
   }

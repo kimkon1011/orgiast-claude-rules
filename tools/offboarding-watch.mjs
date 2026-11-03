@@ -224,7 +224,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       let state = {}; try { state = read(stateFile); } catch (e) { if (e.code !== 'ENOENT') throw e; }
       if (state.date !== date || !state.hashes?.includes(hash)) {
         const result = await ctx.notify(message, { home: ctx.home, fetchImpl: ctx.fetch, plainJa: false, kimActionRequired: true, webhookFallback: false });
-        if (result?.delivered !== 'dm') throw Error();
+        if (!['dm', 'session-inbox'].includes(result?.delivered)) throw Error();
         save(stateFile, { date, hashes: [...(state.date === date ? state.hashes || [] : []), hash] });
         r.notification = { status: 'sent', body: message };
       } else r.notification = { status: 'suppressed' };

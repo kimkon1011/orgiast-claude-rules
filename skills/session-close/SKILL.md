@@ -75,10 +75,16 @@ description: セッションを綺麗に閉じて次に引き継ぐ。「終わ�
 - 結果は `出品: <title> → pending (sub_xxx) / 未公開の滞留 M件` の形で滞留件数まで報告する。`--stale-days`（既定3日）超過があれば、その件数も kim への報告に1行入れる。
 - 出品しなかった場合は「出品対象なし」と1行書く（黙って飛ばさない）。
 
+## 4.5 kim-inbox 未回収の引き継ぎ
+
+`node <repo>/tools/kim-inbox.mjs --status` を実行し、open の ask があれば成果報告と next-session.md の「未決」に `kim-inbox 未回収 N件（先頭: <id> <1行目>）` を1行入れる。**クローズは止めない**。台帳が残り、次セッションの SessionStart hook が再提示する。
+
 ## 5. 残TODO を列挙
 
 - 「次セッションで最初にやる1件」を先頭にして残TODOを列挙する。
 - ブロッカーがあれば理由も添える。
+
+紐付いた案件があれば `node tools/case-handoff.mjs flush <sessionId>` を実行し、全文保存と STATE.md 更新の完了を確認してから閉じる。失敗時はキューを保持し、完了扱いにしない。
 
 ## 6. 引き継ぎを `~/.claude/next-session.md` に書き出す
 

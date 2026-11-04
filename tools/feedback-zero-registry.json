@@ -107,6 +107,17 @@
       }
     },
     {
+      "appName": "wt-aujust-fbkit",
+      "kind": "next",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "FEEDBACK_A7682C4952D1_REPO",
+        "appDir": "FEEDBACK_A7682C4952D1_APP_DIR"
+      }
+    },
+    {
       "appName": "展示会かぶりチェッカー",
       "kind": "next",
       "intake": "relay",

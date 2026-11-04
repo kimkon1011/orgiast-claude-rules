@@ -765,10 +765,26 @@ export async function syncKnowledge({ targetHome = home, forced = force, preview
   }
 }
 
+export function runSeatInvitations({ targetHome = home, targetRepo = repoPath, preview = dryRun,
+  onlyKeys = keysOnly, exec = execFileSync, emit = console.log } = {}) {
+  if (preview || onlyKeys) return false;
+  const seatRepo = resolveConvergenceRepo({ home: targetHome, repo: targetRepo });
+  const inviteTool = path.join(seatRepo || targetRepo, 'tools/gh-accept-invites.mjs');
+  if (!fs.existsSync(inviteTool)) return false;
+  emit(exec(process.execPath, [inviteTool, '--daily'], {
+    windowsHide: true, timeout: 60000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, ORGIAST_HOME: targetHome },
+  }).trim());
+  return true;
+}
+
 async function main() { try {
   const now = new Date();
   if (args.includes('--knowledge-only')) { await syncKnowledge({ now }); return; }
   const plan = executionPlan(args);
+  // 既存の全PC SessionStart 経路。同期の間引き・失敗より前に日次招待承諾を実行する。
+  try { runSeatInvitations(); }
+  catch { log('招待: 日次確認を完了できません。node tools/gh-accept-invites.mjs で再試行'); }
   if (keysOnly) {
     await provisionKeys(now, { quiet: true });
     return;

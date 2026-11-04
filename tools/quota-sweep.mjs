@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import { publishSeatPr } from './pr-land.mjs';
+import { isKimOperated } from './lib/kim-operated.mjs';
+import { repositoryTarget } from './lib/seat-github.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import { enqueueTodos } from './handoff-audit-nightly.mjs';
@@ -220,9 +223,9 @@ export function isTransientWindowReadError(reason) {
 const defaultSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 export function commandRunner(spawnImpl = spawnSync, log = () => {}) {
-  return (exe, args, cwd) => {
+  return (exe, args, cwd, options = {}) => {
     const network = exe === 'git' && ['fetch', 'push'].includes(args[0]);
-    const timeout = exe === 'git' ? (network ? 300_000 : 120_000) : 60_000;
+    const timeout = options.timeout ?? (exe === 'git' ? (network ? 300_000 : 120_000) : 60_000);
     for (let attempt = 0; ; attempt++) {
       const r = spawnImpl(exe, args, { cwd, encoding: 'utf8', windowsHide: true, timeout, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
       if (!r.error && r.status === 0) return String(r.stdout || '').trim();
@@ -269,7 +272,7 @@ export function writeWorktreePointer(file, value, { writeFile = fs.writeFileSync
   }
 }
 
-export function preserveDirtyTree({ tree, run, log = () => {}, now = Date.now }) {
+export function preserveDirtyTree({ tree, run, log = () => {}, now = Date.now, home = process.env.ORGIAST_HOME || os.homedir() }) {
   const stamp = new Date(now()).toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
   let branch = run('git', ['branch', '--show-current'], tree);
   if (!branch) {
@@ -282,7 +285,13 @@ export function preserveDirtyTree({ tree, run, log = () => {}, now = Date.now })
   run('git', ['add', '-A', '--', '.'], tree);
   run('git', ['-c', 'user.name=quota-sweep', '-c', 'user.email=quota-sweep@localhost', 'commit', '--no-verify', '-m', `chore(quota-sweep): preserve uncommitted work ${stamp}`], tree);
   let pushed = true, warning = null;
-  try { run('git', ['push', '-u', 'origin', branch], tree); }
+  try {
+    if (isKimOperated(home)) {
+      const target = repositoryTarget((file, args) => run(file, args, tree));
+      if (!target.push) throw new Error('node tools/access-doctor.mjs --fix');
+      run('git', ['push', target.url, `HEAD:refs/heads/${branch}`], tree);
+    } else run('git', ['push', '-u', 'origin', branch], tree);
+  }
   catch (error) {
     pushed = false;
     warning = `preserved locally but push failed: ${error.message}`;
@@ -316,7 +325,7 @@ export function prepareTree({ home, provider, run, previous, needRelativePointer
       // 前回ブランチがローカルに残っていれば dirty を救済してから戻る（2026-10-24T10:02Z claude が5秒で failed）。
       if (!run('git', ['branch', '--list', previous.branch], tree)) throw new Error('Interrupted branch changed; preserve worktree for recovery');
       if (run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree)) {
-        preserveDirtyTree({ tree, run, log });
+        preserveDirtyTree({ tree, run, log, home });
         if (run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree)) throw new Error('Interrupted branch changed; preserve worktree for recovery');
       }
       run('git', ['switch', previous.branch], tree);
@@ -326,7 +335,7 @@ export function prepareTree({ home, provider, run, previous, needRelativePointer
   }
   let dirty = run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree);
   if (dirty) {
-    const preserved = preserveDirtyTree({ tree, run, log });
+    const preserved = preserveDirtyTree({ tree, run, log, home });
     dirty = run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree);
     if (dirty) throw new Error('Uncommitted prior work preserved in quota-sweep-repo; reconcile before starting a new branch');
     log(`quota-sweep: preserved uncommitted work on ${preserved.branch}${preserved.pushed ? '' : ' (local only)'}`);
@@ -415,24 +424,15 @@ async function createPullRequestViaApi({ run, tree, branch, log, spawnImpl = spa
   const pr = await createRes.json();
   const prUrl = pr.html_url;
 
-  // Best-effort automerge label.
-  try {
-    await fetchImpl(`https://api.github.com/repos/${owner}/${repoName}/issues/${pr.number}/labels`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Accept': 'application/vnd.github.v3+json' },
-      body: JSON.stringify({ labels: ['automerge'] }),
-      signal: AbortSignal.timeout(15_000),
-    });
-  } catch (labelError) {
-    log(`quota-sweep: automerge label via API failed: ${labelError.message}`);
-  }
   return prUrl;
 }
 
-export async function createPullRequest({ run, tree, branch, log, spawnImpl, fetchImpl }) {
+export async function createPullRequest({ run, tree, branch, log, spawnImpl, fetchImpl, home = process.env.ORGIAST_HOME || os.homedir() }) {
+  const published = publishSeatPr({ cwd: tree, home, branch, fill: true, out: log, run: (file, args, options) => run(file, args, tree, options) });
+  if (published) return published.url;
   const args = ['pr', 'create', '--base', 'main', '--head', branch, '--fill'];
   try {
-    return run('gh', [...args, '--label', 'automerge'], tree);
+    return run('gh', args, tree);
   } catch (error) {
     // gh not installed: fall back to GitHub REST API via credential fill.
     if (/ENOENT/.test(error.message)) {
@@ -446,10 +446,10 @@ export async function createPullRequest({ run, tree, branch, log, spawnImpl, fet
     }
     const prUrl = run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'], tree);
     if (prUrl) {
-      log(`quota-sweep: automerge label failed; PR created without label: ${error.message}`);
+      log(`quota-sweep: PR create response failed; existing PR recovered: ${error.message}`);
       return prUrl;
     }
-    log(`quota-sweep: automerge label unavailable; retrying pr create without label: ${error.message}`);
+    log(`quota-sweep: PR create failed; retrying without duplicate PR: ${error.message}`);
     return run('gh', args, tree);
   }
 }
@@ -601,7 +601,7 @@ export async function runSweep(decision, context) {
         // Another session may have switched branches; only preserve this run's work.
         const currentBranch = run('git', ['branch', '--show-current'], tree);
         if (currentBranch === branch && run('git', ['status', '--porcelain', '--', '.', ':!.loop'], tree)) {
-          const preserved = preserveDirtyTree({ tree, run, log, now });
+          const preserved = preserveDirtyTree({ tree, run, log, now, home });
           log(`quota-sweep: preserved final uncommitted work on ${preserved.branch}${preserved.pushed ? '' : ' (local only)'}`);
         }
       } catch (error) { log(`quota-sweep: final dirty-tree preservation failed: ${error.message}`); }
@@ -610,13 +610,13 @@ export async function runSweep(decision, context) {
       try {
         if (run('git', ['branch', '--show-current'], tree) !== branch) throw new Error('Worktree branch changed externally; no push attempted');
         if (Number(run('git', ['rev-list', '--count', `${record.base}..HEAD`], tree)) > 0) {
-          run('git', ['push', '-u', 'origin', branch], tree);
+          if (!isKimOperated(home)) run('git', ['push', '-u', 'origin', branch], tree);
           try {
             prUrl = run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'], tree);
           } catch (ghError) {
             if (!/ENOENT/.test(ghError.message)) throw ghError;
           }
-          if (!prUrl) prUrl = await createPullRequest({ run, tree, branch, log, spawnImpl, fetchImpl: context.fetchImpl });
+          if (!prUrl || isKimOperated(home)) prUrl = await createPullRequest({ run, tree, branch, log, spawnImpl, fetchImpl: context.fetchImpl, home });
         }
       } catch (error) { log(`PR delivery failed: ${error.message}`); record.deliveryError = error.message; reason = [reason, `PR delivery: ${error.message}`].filter(Boolean).join('; '); failureKey = error.failureKey || 'pr-delivery'; outcome = 'failed'; }
     }

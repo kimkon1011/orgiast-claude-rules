@@ -169,7 +169,7 @@ test('prepareTree は救済 commit 後も dirty なら従来メッセージで�
 });
 test('preserveDirtyTree は push 失敗を warning にしてローカル commit を保持する', t => {
   const { tree } = worktreeFixture(t); const logs = [];
-  const result = preserveDirtyTree({ tree, now: () => Date.UTC(2026, 9, 24, 1, 2, 3), log: text => logs.push(text), run: (_exe, args) => {
+  const result = preserveDirtyTree({ home: os.tmpdir(), tree, now: () => Date.UTC(2026, 9, 24, 1, 2, 3), log: text => logs.push(text), run: (_exe, args) => {
     if (args[0] === 'branch') return 'quota-sweep/prior';
     if (args[0] === 'push') throw new Error('offline');
     return '';
@@ -179,7 +179,7 @@ test('preserveDirtyTree は push 失敗を warning にしてローカル commit 
 });
 test('preserveDirtyTree は detached HEAD に rescue ブランチを作る', t => {
   const { tree } = worktreeFixture(t); const calls = [];
-  const result = preserveDirtyTree({ tree, now: () => Date.UTC(2026, 9, 24, 1, 2, 3), run: (_exe, args) => { calls.push(args); return ''; } });
+  const result = preserveDirtyTree({ home: os.tmpdir(), tree, now: () => Date.UTC(2026, 9, 24, 1, 2, 3), run: (_exe, args) => { calls.push(args); return ''; } });
   assert.equal(result.branch, 'quota-sweep/rescue-20261024-010203');
   assert.deepEqual(calls[1], ['switch', '-c', result.branch]);
   assert.equal(result.pushed, true);
@@ -419,12 +419,12 @@ test('PR only for new commits; notification failure is nonfatal', async t => {
   await runSweep(decision, ctx);
   assert.ok(commands.some(c => c[1] === 'push'));
   assert.deepEqual(commands.find(c => c[1] === 'pr' && c[2] === 'create'),
-    ['gh', 'pr', 'create', '--base', 'main', '--head', 'quota-sweep/test', '--fill', '--label', 'automerge']);
+    ['gh', 'pr', 'create', '--base', 'main', '--head', 'quota-sweep/test', '--fill']);
   assert.equal(commands.some(c => c.includes('merge')), false);
   assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'final');
 });
-test('label create failure with no PR retries without label and records URL', async t => {
-  const commands = [], logs = [];
+test('create failure with no PR retries and records URL', async t => {
+  const commands = [], logs = []; let attempts = 0;
   const ctx = context(t, async () => ({ code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }));
   ctx.log = message => logs.push(message);
   ctx.command = (exe, args) => {
@@ -432,7 +432,7 @@ test('label create failure with no PR retries without label and records URL', as
     if (args[0] === 'branch') return 'quota-sweep/test';
     if (args[0] === 'rev-list') return '1';
     if (args[0] === 'pr' && args[1] === 'create') {
-      if (args.includes('--label')) throw new Error('label unavailable');
+      if (++attempts === 1) throw new Error('temporary failure');
       return 'https://github.com/example/repo/pull/2';
     }
     return '';
@@ -440,13 +440,13 @@ test('label create failure with no PR retries without label and records URL', as
   await runSweep(decision, ctx);
   assert.deepEqual(commands.filter(c => c[1] === 'pr'), [
     ['gh', 'pr', 'list', '--head', 'quota-sweep/test', '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'],
-    ['gh', 'pr', 'create', '--base', 'main', '--head', 'quota-sweep/test', '--fill', '--label', 'automerge'],
+    ['gh', 'pr', 'create', '--base', 'main', '--head', 'quota-sweep/test', '--fill'],
     ['gh', 'pr', 'list', '--head', 'quota-sweep/test', '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'],
     ['gh', 'pr', 'create', '--base', 'main', '--head', 'quota-sweep/test', '--fill'],
   ]);
   assert.equal(ctx.state.lastRun.claude[decision.resetsAt].prUrl, 'https://github.com/example/repo/pull/2');
   assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'final');
-  assert.ok(logs.includes('quota-sweep: automerge label unavailable; retrying pr create without label: label unavailable'));
+  assert.ok(logs.includes('quota-sweep: PR create failed; retrying without duplicate PR: temporary failure'));
 });
 test('label create failure with existing PR reuses URL without another create', async t => {
   const commands = [], logs = []; let created = false;
@@ -466,12 +466,12 @@ test('label create failure with existing PR reuses URL without another create', 
   await runSweep(decision, ctx);
   assert.deepEqual(commands.filter(c => c[1] === 'pr'), [
     ['gh', 'pr', 'list', '--head', 'quota-sweep/test', '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'],
-    ['gh', 'pr', 'create', '--base', 'main', '--head', 'quota-sweep/test', '--fill', '--label', 'automerge'],
+    ['gh', 'pr', 'create', '--base', 'main', '--head', 'quota-sweep/test', '--fill'],
     ['gh', 'pr', 'list', '--head', 'quota-sweep/test', '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'],
   ]);
   assert.equal(ctx.state.lastRun.claude[decision.resetsAt].prUrl, 'https://github.com/example/repo/pull/3');
   assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'final');
-  assert.ok(logs.includes('quota-sweep: automerge label failed; PR created without label: label failed'));
+  assert.ok(logs.includes('quota-sweep: PR create response failed; existing PR recovered: label failed'));
 });
 test('disable guard precedes observation and locking', async t => {
   const home = temp(t); fs.mkdirSync(path.join(home, '.claude'));
@@ -745,16 +745,16 @@ test('gh 不在時に createPullRequestViaApi が credential fill + GitHub REST 
     }
     return { error: Object.assign(new Error('spawnSync gh ENOENT'), { code: 'ENOENT' }) };
   };
-  const result = await createPullRequest({ run, tree, branch: 'quota-sweep/test-branch', log: msg => logs.push(msg), spawnImpl, fetchImpl });
+  const result = await createPullRequest({ home: os.tmpdir(), run, tree, branch: 'quota-sweep/test-branch', log: msg => logs.push(msg), spawnImpl, fetchImpl });
   assert.equal(result, 'https://github.com/example/repo/pull/api-1');
   assert.ok(commands.some(c => c[1] === 'remote' && c[2] === 'get-url'), 'remote URL query called');
-  assert.equal(fetchCalls, 3, 'PR list + create + label');
+  assert.equal(fetchCalls, 2, '非kim席: PR list + create、ラベルなし');
   assert.ok(logs.some(msg => /gh not found/.test(msg)), 'fallback log');
 });
 test('createPullRequestViaApi は credential fill 失敗時にエラーを throw する', async t => {
   const run = (exe) => { if (exe === 'gh') throw Object.assign(new Error('spawnSync gh ENOENT'), { code: 'ENOENT' }); return ''; };
   const spawnImpl = () => ({ error: Object.assign(new Error('spawnSync git ENOENT'), { code: 'ENOENT' }), status: null });
-  await assert.rejects(() => createPullRequest({ run, tree: '/tmp', branch: 'test', log: () => {}, spawnImpl, fetchImpl: async () => ({ ok: false }) }), /credential fill failed/);
+  await assert.rejects(() => createPullRequest({ home: os.tmpdir(), run, tree: '/tmp', branch: 'test', log: () => {}, spawnImpl, fetchImpl: async () => ({ ok: false }) }), /credential fill failed/);
 });
 test('createPullRequestViaApi は既存 PR を検出して再利用する', async t => {
   const home = temp(t), tree = path.join(home, 'tree');
@@ -773,7 +773,7 @@ test('createPullRequestViaApi は既存 PR を検出して再利用する', asyn
     return { ok: false, status: 404, text: async () => 'unexpected' };
   };
   const spawnImpl = () => ({ status: 0, stdout: 'password=gho_test_token_abc\n' });
-  const result = await createPullRequest({ run, tree, branch: 'quota-sweep/existing', log: msg => logs.push(msg), spawnImpl, fetchImpl });
+  const result = await createPullRequest({ home: os.tmpdir(), run, tree, branch: 'quota-sweep/existing', log: msg => logs.push(msg), spawnImpl, fetchImpl });
   assert.equal(result, 'https://github.com/example/repo/pull/existing-42');
   assert.ok(logs.some(msg => /existing PR/.test(msg)));
   assert.equal(commands.filter(c => c[1] === 'remote').length, 1);

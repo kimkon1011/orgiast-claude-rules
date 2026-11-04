@@ -120,13 +120,13 @@ Stop の `user-burden-gate` が依頼のある最終応答を監査する。本�
 
 nishi@・cr@・seisaku-team@・Genba の席も user=kim（2026-10-28 kim）。kim が別PCにいる前提で kim-PC に回さず、その場で直接聞く。この席では共有 memory 索引の冒頭注記が毎セッション自動で読まれ、同じ規則を伝える（全PC索引の予算を使わない）。対象アカウントの正本は `tools/lib/kim-operated.mjs`。この席では kim-PC の memory（毎晩 `~/.claude/shared-memory/` へ配布、kim の役割・プロフィールの user 型を含む）を kim 本人の好み・厳命としてそのまま適用する。「kim-PC に確認します」「kim さんに伝えてください」は書かない。対話セッションの質問は kim-PC へ自動転送しない（`fleet-question-relay`）。fleet-mail で kim-PC に送るのは、kim-PC の Discord・ローカルファイルなど kim-PC でしか触れない資源を使う作業依頼だけにする。社員本人が使う席（例: 東邦2階HP）は従来どおり別人として扱う。根拠（2026-10-28 kim）: kim-PC で話した内容が他アカウントに反映されず、同じ話を繰り返していた。
 
-**🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PRマージ/他PC依頼=fleet-mail。内部Gmail下書き禁止。**
+**🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PR は作った席が自分で着地させる（automerge ラベル／CI 合格後に自分でマージ）。権限・鍵・マージを kim-PC に頼まない。不足時は `node tools/access-doctor.mjs --fix`。内部Gmail下書き禁止。**
 
 **🔴 kim 宛の報告は Discord 禁止。kim-inbox に積みセッションで回収、ask は --answer まで再提示。例外は kim 登録の許可リストのみ（kim 2026-10-27 厳命・全PC全アカウント）。**
 送れなければチャットに完成形を表示。
 kim の代わりに社員・外注へ Discord で送るときは Bot 代筆（`tools/discord-dm.mjs`、kim へ写し自動）で送る。冒頭に「金です（Claude が代筆しています）。」と元メッセージの日時・先頭行、末尾に毎回「このメッセージへの返答は、Bot ではなく金に直接お願いします。」を入れる。kim のユーザートークンで本人として書く方式（セルフボット）は規約違反・アカウント停止の危険があるため使わない（kim 2026-10-30 厳命・全アカウント全PC）。
 対象は、支払い・権限付与・OAuth 同意・物理操作・判断など kim 本人の対応が不可欠なもの、期限・障害・未対応の警告や督促、kim が定期的に依頼した日次・週次・月次レポートに限る。
-PR マージ依頼と他PCへの作業依頼は `node tools/fleet-mail.mjs --send --to kim-PC --kind note --body-file <本文> --why "[作業依頼] ..."` で送り、kim は各PCのセッションを直接見るため作業内容・完了の共有DMは不要。
+PR は作った席が `node tools/pr-land.mjs --title "<題>" --body-file <本文>` で base に push し、通常変更は automerge、鍵関連などの安全弁パスは CI 合格後に pr-merge の検証を通して自分でマージする。権限・鍵・招待の不足は `node tools/access-doctor.mjs --fix` で診断・修復する。kim-PC に頼まない。
 送信ゲート `tools/lib/kim-dm-policy.mjs` が `notify-kim` / `discord-dm` のマージ依頼を止める。kim の操作が本当に必要な例外だけ `--kim-action-required` を付ける。
 メール送信の前に recipient-domain-gate が宛先ドメインの実在（MX/A）を検査し、存在しないドメイン宛は止める（2026-10-23 名刺OCR誤読でバウンス2件）。
 
@@ -217,6 +217,9 @@ PR マージ依頼と他PCへの作業依頼は `node tools/fleet-mail.mjs --sen
 **userに渡すコマンドはシェルに合わせる（絶対）**: kim・社内PCのターミナル既定は **Windows PowerShell 5.1**（Claude 側の PowerShell tool は pwsh 7 なので同じ書き方が通ってしまう＝油断しやすい）。`cd "パス" && node script.mjs` は `トークン '&&' は、このバージョンでは有効なステートメント区切りではありません` で**必ず失敗する**。**`;` 区切り**（`Set-Location "パス"; node script.mjs`）で書き、空白・日本語を含むパスは必ず `"` で囲む。`head`/`tail`/`which`/`touch`/`wc -l` も存在しない。2026-08-20 に実際に `&&` を渡して失敗させた。
 
 **git/PRフローも同様 — PRは自分でマージする（2026-08-19 kim決定・全アカウント共通）**: commit→push→`gh pr create`→**`node tools/pr-merge.mjs <PR番号>` まで自分で完結**する。「マージお願いします」で止めない。旧ルールの「自作PRのマージだけは人間の1クリック」は**廃止**（kimに毎回1クリックを残すこと自体が§1.1最上位原則に反し、実運用で「マージ待ち」の滞留を生んでいたため）。
+- 全 kim 操作席では GitHub 招待を SessionStart の onboarding-sync から1日1回承諾する（招待者・リポ所有者がともに kimkon1011 のみ）。即時実行は `node tools/gh-accept-invites.mjs`。診断だけなら `node tools/access-doctor.mjs`、招待承諾・origin 修復は `--fix`。fork リモートは保存する。
+- auto-merge.yml の「🔒 kim の手動マージが必要」は「作成した席が CI 合格後に pr-merge で自分でマージする」と読み替える。ただし `.github/workflows/*` を含む PR は例外として止め、workflow 権限・レビューの専用経路で扱う。
+- fleet-mail は kim 操作席から kim-PC への権限・鍵・マージ依頼を exit 2 で拒否する。kim-PC 固有のローカル資源が必要な場合だけ `--kim-pc-only-resource "<具体的理由>"` を指定する。理由は送信ログに残る。
 
 **人間レビューを外す代わりに、CIをゲートにする**。`orgiast-claude-rules` では main に branch protection を設定し、CIジョブ `test` が green でなければマージできない（`.github/workflows/ci.yml`＝全 `*.test.mjs` + `selftest-guards.mjs` + 全 `.mjs` の構文チェック）。**新しくこの方式にするリポジトリでは、先にCIを用意してから auto-merge を有効化すること**。CIが無いまま自動マージすると検証層がゼロになり、手渡しより悪化する。
 
@@ -724,8 +727,8 @@ kim 宛の定期ダイジェスト（朝/夜/urgent）・完了通知・配送�
 
 自動進行の結果はセッションの持ち主に DM とセッション内表示で必ず届く。user に「進捗どう？」と聞かせたら違反（2026-10-19 cr 指摘）。
 
-PR は原則 `gh pr create ... --label automerge` で作り、CI が赤なら Claude が直す。「マージしてください」と user に頼まない。
-workflow・keyserve・secrets・env・fleet 指令ファイルに触る時だけ label を付けず、PR 冒頭に kim の手動マージが必要な理由を書く。
+kim 操作席の PR は `node tools/pr-land.mjs --title "<題>" --body-file <本文>` で作り、CI が赤なら作成席が直す。通常変更だけ automerge ラベルを付ける。「マージしてください」と user に頼まない。
+`.github/workflows/*` は停止。その他の安全弁パス（keyserve・secrets・.env）はラベルを付けず、作成席が CI 合格後に `node tools/pr-merge.mjs <PR番号>` でマージする。fleet 指令ファイルは現在の安全弁対象外。
 完了結論は 3 行以内、詳細はファイルへのリンク 1 本とし、応答末尾を必ず `**次に kim がすること: なし**` または 1 件だけの行動で終える。
 
 **開いて確かめるだけの項目は書かない**（2026-10-26 cr 指摘）: PR・リンク・ファイルを開いて確認/レビュー/マージする類は、開く手間そのものが user の負担。状態は Claude が照会し（済んでいれば書かない）、未了なら Claude が実行するか「この後の自動進行」に回す。この行に書けるのは人にしかできない操作（支払い・OAuth 同意・アカウント作成・物理作業・選択肢を示した判断）だけ。next-action-gate が NEXT-ACTION-OPEN で block する。
@@ -857,7 +860,7 @@ ONBOARDING にこの経路が書いてあったのに、`next-session.md` に残
 **ルール本文が経路を認めているなら、引き継ぎの可否待ちメモは消化済みとして扱う。**
 
 **通常PRは正本ブランチ＋`automerge`でマージまで完結させる**（§1.21）。write権限と適格条件を実測し、`autoMergeRequest` がnullでないことと必須チェック `test` / `test-posix` のgreenを確認する。古いclassifier拒否の記録を恒久的な不可理由にしない。
-安全弁の対象と§1.15のfleet指令ファイルだけはラベルを付けず、kimの手動マージが必要な理由をPR冒頭に書く。安全弁を迂回せず、手渡し前にはgreenをAPIで確認し、`[PR 手渡し]` の必須2点（開くアカウント・試したこと）を添える。
+安全弁パスではラベルを付けず、作成席が CI 合格を確認して `node tools/pr-merge.mjs <PR番号>` でマージする。workflow 変更だけは専用権限・レビュー経路で扱うため停止する。権限不足は `node tools/access-doctor.mjs --fix` で直し、kim-PC にマージを依頼しない。
 
 <!-- MACHINE-STATE-START 各PCは自分の行だけを更新して push する -->
 
@@ -1236,7 +1239,7 @@ gh pr edit <番号> --repo kimkon1011/orgiast-claude-rules --add-label automerge
 gh pr view <番号> --repo kimkon1011/orgiast-claude-rules --json autoMergeRequest   # null でないこと
 ```
 
-- 自動マージには①正本内のブランチ ②draftでない ③authorがcollaborator ④`automerge`ラベル ⑤`.github/workflows/*` / `*keyserve*` / `*secrets*` / `*.env*` を変更しない、の全条件を満たす。安全弁対象と§1.15のfleet指令ファイルはラベルを付けず、kimの手動マージが必要な理由をPR冒頭に書く。安全弁を迂回しない。
+- 自動マージには①正本内のブランチ ②draftでない ③authorがcollaborator ④`automerge`ラベル ⑤`.github/workflows/*` / `*keyserve*` / `*secrets*` / `*.env*` を変更しない、の全条件を満たす。workflow 変更は停止し、その他の安全弁対象はラベルを付けず、作成席が CI 合格後に `node tools/pr-merge.mjs <PR番号>` でマージする。権限不足は `node tools/access-doctor.mjs --fix` で診断・修復する。
 - CIのgreenだけで有効化済みと判断しない。ラベルなしでは `enable-auto-merge` がpassでも `eligible=false` のままなので、`autoMergeRequest` がnullでないことを毎回確認する。
 - `gh`未認証でも§1.15のcredential helper経路でClaudeがPRを作る。`gh pr merge` のGraphQL `mergePullRequest` が拒否されても、それだけで不可能と断定しない。安全弁の対象外ならRESTの `gh api -X PUT repos/<repo>/pulls/<番号>/merge -f merge_method=squash` が通る場合もある。`docs/pr-flow-canonical-branch.md` を参照する（onboarding-syncはdocsを配布しないため、必要なら `gh api repos/kimkon1011/orgiast-claude-rules/contents/docs/pr-flow-canonical-branch.md -H "Accept: application/vnd.github.raw+json"` で読む）。
 

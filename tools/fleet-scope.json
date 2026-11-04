@@ -1,6 +1,10 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/gh-accept-invites.mjs", "scope": "fleet", "step": "hook:onboarding-sync", "reason": "全PC SessionStart の日次招待承諾。kim操作席だけ実行"},
+    {"path": "tools/access-doctor.mjs", "scope": "fleet", "step": "hook:onboarding-sync", "reason": "各席の権限・origin・配布ファイルの診断と明示修復"},
+    {"path": "tools/pr-land.mjs", "scope": "fleet", "step": "hook:onboarding-sync", "reason": "kim操作席がbase pushとPR着地を完結"},
+    {"path": "tools/lib/seat-github.mjs", "scope": "fleet", "step": "hook:onboarding-sync", "reason": "招待・診断・PRの共通GitHub操作"},
     {"path": "tools/gmail-search.mjs", "scope": "fleet", "step": "hook:inquiry-lookup-hint", "reason": "問い合わせ横断検索の実行時依存"},
 
     {"path": "tools/inquiry-lookup.mjs", "scope": "fleet", "step": "hook:inquiry-lookup-hint", "reason": "問い合わせ横断検索・案内の全PC共通依存"},

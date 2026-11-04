@@ -73,6 +73,11 @@ test('new rollout entries must declare the seven day window; legacy inventory is
       assert.equal(row.immediatePolicy, '2026-10-27 TimeRex 実害: 社外送信の完了主張に読み戻し証拠を要求');
       continue; // External communication cannot be undone, immediate on all PCs.
     }
+    if (name === 'deliverable-drive-link-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-11-04 nishi 指示: 渡すファイルが見つからず往復が発生した実害の再発防止');
+      continue; // Explicit recurrence-prevention policy applies immediately.
+    }
     if (name === 'bihin-kcol-gate') {
       assert.equal(row.rollout, 'deny');
       assert.equal(row.immediatePolicy, '2026-10-23 古川さん依頼: 備品管理表K列のデータ破損防止');

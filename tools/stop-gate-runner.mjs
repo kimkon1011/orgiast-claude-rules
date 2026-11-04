@@ -3,6 +3,7 @@ export const GATE_CONTRACT = {"name": "stop-gate-runner", "remedies": [{"kind": 
 // 2026-09-06: Stop 304回中198回が再Stop、handoff-quality 78件中71件が誤爆だった。
 // 9プロセスの逐次差し戻しを1回の評価・1つのblockへまとめ、userの再読を最大1回にする。
 import { evaluatePastLogSearch, listPlaybookNames, classifyHandoff } from './past-log-search-gate.mjs';
+import { judgeDeliverableDriveLink, registerDeliverableCheck } from './deliverable-drive-link-gate.mjs';
 import { evaluateInvitePermissions } from './hooks/discord-invite-permission-gate.mjs';
 import { applyNamedGatePolicy } from './gate-runtime.mjs';
 import os from 'node:os';
@@ -136,6 +137,15 @@ export async function run(input, context, auditOptions = {}) {
   const invite = evaluateInvitePermissions(assistantText);
   if (invite.decision === 'block') return invite;
   const base = { sessionId, blockedBy: [], reasonCodes: [], excerpt: String(assistantText || '').slice(0, 200) };
+  const deliverable = judgeDeliverableDriveLink({ text: assistantText || '', toolUses: blocks(currentTurnEntries(context.raw), 'tool_use') });
+  const streak = registerDeliverableCheck({ home: home(), sessionId, blocked: deliverable.decision === 'block' });
+  if (deliverable.decision === 'block') {
+    const record = { ...base, verdict: streak.capped ? 'pass_cap' : 'block', blockedBy: ['deliverable-drive-link-gate'], reasonCodes: [deliverable.code], sameTextRetries: streak.count };
+    ledger(streak.capped ? { ...record, verdict: 'deliverable-cap' } : record);
+    return streak.capped
+      ? { record, systemMessage: 'deliverable-drive-link-gate: 3回書き直しても Drive URL がありません' }
+      : { record, decision: 'block', reason: withStopRetryInstruction(deliverable.reason) };
+  }
   if (!assistantText) { const record = { ...base, verdict: 'skipped', reasonCodes: [context.reason || 'no-assistant-text'] }; ledger(record); return { record }; }
   // session-close SKILL.md §7.1 の閉じ際3行は、それ自体が user への次の一手の指示なので手渡し系ゲートを適用しない。
   // 適用すると「ルール通りに閉じる」だけで FULL-STEPS／INVESTIGATION／USER-BURDEN が発火して余分な1ターンを強制し、

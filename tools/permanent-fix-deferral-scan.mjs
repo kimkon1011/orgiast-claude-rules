@@ -50,7 +50,8 @@ function isAuditCitation(text, index) {
 // これは先送りを実行した文ではなく検出器の出力をデータとして引いた文なので、一致がその引用スパンの
 // 内側にあり、開き引用符の手前にパターン名（P1-P4/W）がある場合だけ採用しない。パターン名の前置きを
 // 条件にするのは、素の引用文（「…完了を待っています」）を巻き込まないため。
-const QUOTE_PAIRS = [['「', '」'], ['"', '"'], ["'", "'"]];
+// 検出結果の Markdown インラインコード引用も対象（a10e02fc596196b1）。
+const QUOTE_PAIRS = [['「', '」'], ['"', '"'], ["'", "'"], ['`', '`']];
 const PATTERN_TOKEN = /(?:^|[^A-Za-z0-9])(P1|P2|P3|P4|W)(?![A-Za-z0-9])/;
 function isPatternNameQuote(text, index) {
   return QUOTE_PAIRS.some(([open, close]) => {

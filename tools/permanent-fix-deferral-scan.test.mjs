@@ -394,3 +394,12 @@ test('完了報告・検出器の説明文は言い換え拡張でWと誤検出�
     '作業は終わり次第ではなく、今ターンで完了しました。'
   ]) assert.deepEqual(detect(text).map(found => found.pattern), [], text);
 });
+
+
+test('a10e02fc: W のバッククォート引用を除外し引用外の待機は検出する', () => {
+  const report = '検出器が原文で W を返しました（`終わったら自動で知らせが来` に一致）。';
+  assert.deepEqual(detect(report), []);
+  assert.equal(detect('`終わったら自動で知らせが来ます`')[0]?.pattern, 'W');
+  assert.equal(detect(report + '\n終わったら自動で知らせが来ます。')[0]?.pattern, 'W');
+  assert.equal(detect('検出器が原文で W を返しました（`終わったら自動で知らせが来')[0]?.pattern, 'W');
+});

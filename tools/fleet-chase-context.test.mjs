@@ -90,3 +90,9 @@ test('CLI emits bounded additionalContext, expected hooks include both kim event
   fs.writeFileSync(path.join(f.home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=other-PC\n');
   assert.doesNotMatch(JSON.stringify(expected()), /fleet-chase-context/);
 });
+
+test('explicit employee operator suppresses kim-only decision prompts even on kim-PC label', async t => {
+  const f = fixture(t); f.add('decision', 1, 'inbound', { category: CATEGORY.decision }); f.save();
+  fs.writeFileSync(path.join(f.home, '.claude/fleet-pc-map.json'), JSON.stringify({ 'kim-PC': { operator: '佐藤優奈' } }));
+  await f.run(); assert.equal(f.outputs.length, 0);
+});

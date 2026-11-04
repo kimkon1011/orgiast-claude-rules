@@ -9,6 +9,9 @@ import { runAutopilot, acquireLock } from './autopilot-tick.mjs';
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-run-test-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=autopilot-test');
+  fs.writeFileSync(path.join(home, '.claude/fleet-pc-map.json'), JSON.stringify({ 'autopilot-test': { operator: 'kim' } }));
   return { home, askJevImpl: async () => ({ ok: false, reason: 'test_offline' }), platform: 'linux', dir: path.join(home, 'state'), token: '', userId: '', now: new Date('2026-09-21T01:00:00Z'), fetchImpl: async () => { throw new Error('unexpected network'); }, cpuBusyImpl: async () => 0 };
 }
 

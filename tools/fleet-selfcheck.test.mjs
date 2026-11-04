@@ -12,6 +12,7 @@ function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-selfcheck-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const put = (name, body) => { const file = path.join(home, name); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, body); return file; };
+  put('.claude/fleet-pc-map.json', JSON.stringify({ 'DESKTOP-BDOAK99': { operator: 'kim' } }));
   put('.claude.json', JSON.stringify({ oauthAccount: { emailAddress: 'seisaku-team@orgiast.jp' } }));
   put('.claude/cost-reporter.env', 'REPORTER_LABEL=DESKTOP-BDOAK99\n');
   put('.claude/keyserve.env', 'ORGIAST_KEYSERVE_SECRET=secret-hmac\nORGIAST_KEYSERVE_PC=DESKTOP-BDOAK99\n');
@@ -126,4 +127,12 @@ test('actual roster resolves 作業用008 to observed label and status shows its
   const row = rows.find(row => row.label === 'DESKTOP-BDOAK99');
   assert.equal(row.remoteName, '作業用008'); assert.equal(row.registrationCandidate, false);
   assert.match(formatFleetTable([row]), /DESKTOP-BDOAK99（作業用008）/);
+});
+
+test('employee override blocks case reads for the shared account', async t => {
+  const f = fixture(t), calls = [];
+  f.put('.claude/fleet-pc-map.json', JSON.stringify({ 'DESKTOP-BDOAK99': { operator: '佐藤優奈' } }));
+  const result = await runSelfcheck({ ...f, fetchImpl: network(calls), getToken: async () => 'secret-google' });
+  assert.match(result.markdown, /kim 操作アカウントのみ/);
+  assert.ok(!calls.some(call => String(call.url ?? call).includes('/api/case-log')));
 });

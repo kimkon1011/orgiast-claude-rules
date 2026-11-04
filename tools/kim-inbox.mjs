@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { resolveOwner } from './lib/fleet-owner.mjs';
-import { isKimOperated } from './lib/kim-operated.mjs';
+import { claudeAccount, isKimOperated } from './lib/kim-operated.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -21,7 +21,10 @@ export const CONTEXT_LIMIT = 1800;
 // アカウント = lib/kim-operated.mjs）では、kim-PC へ転送せずその場のセッションで回収する（2026-10-28 kim）。
 export function isKimSeat(home) {
   const label = resolveFleetLabel(home, { hostname: os.hostname() });
-  return label === 'kim-PC' || isKimOperated(home) || resolveOwner({ home, label }).toLowerCase() === 'kim@orgiast.jp';
+  // 従来の PC 名・所有者による判定も PC 上書きより優先させない。
+  const account = label === 'kim-PC' || resolveOwner({ home, label }).toLowerCase() === 'kim@orgiast.jp'
+    ? 'kim@orgiast.jp' : claudeAccount(home);
+  return isKimOperated(home, account);
 }
 function save(home, item) {
   const file = path.join(directory(home), `${item.id}.json`);
@@ -69,6 +72,9 @@ function create(home, { kind = 'info', text, source = '', from = resolveFleetLab
 export async function addItem(home, options) {
   const item = create(home, options);
   if (isKimSeat(home)) return item;
+  return forwardItem(home, item, options);
+}
+async function forwardItem(home, item, options = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-inbox-'));
   try {
     const file = path.join(temp, 'body.txt');
@@ -76,10 +82,24 @@ export async function addItem(home, options) {
     const { stdout } = await (options.execImpl ?? exec)(process.execPath, [fileURLToPath(new URL('./fleet-mail.mjs', import.meta.url)), '--send', '--to', 'kim-PC', '--kind', 'note', '--why', `[kim-inbox:${item.kind}] ${item.text.split(/\r?\n/)[0].slice(0, 60)}`, '--body-file', file], { encoding: 'utf8', windowsHide: true, timeout: 60000, signal: options.signal, env: { ...process.env, ORGIAST_HOME: home } });
     const id = stdout.trim().match(/^(?:送信済み: )?(mail-[A-Za-z0-9-]+)$/m)?.[1];
     if (!id) throw new Error('転送先のメールIDを取得できません');
-    return update(home, item.id, current => { current.status = 'forwarded'; current.forwardMailId = id; });
+    return update(home, item.id, current => { current.status = 'forwarded'; current.forwardMailId = id; current.forwardError = null; });
   } catch (error) {
     return update(home, item.id, current => { current.forwardError = clean(error.message); });
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+}
+// 直下の台帳だけを走査する。.skipped や受信済みメール由来の項目は再転送しない。
+// kinds を省略すると ask も info も転送する。gate-report 等の info が数十件溜まっている席では
+// --kind ask で判断依頼だけを kim-PC へ送り、kim の受信箱を埋めない。
+export async function forwardStale(home, { dryRun = false, skip = [], kinds = null, ...options } = {}) {
+  if (isKimSeat(home)) return [];
+  const excluded = new Set(skip);
+  const allowedKinds = kinds ? new Set(kinds) : null;
+  const candidates = listItems(home, { status: 'open' }).filter(item => item.forwardMailId === null && !excluded.has(item.id)
+    && (!allowedKinds || allowedKinds.has(item.kind)));
+  if (dryRun) return candidates;
+  const results = [];
+  for (const item of candidates) results.push(await forwardItem(home, item, options));
+  return results;
 }
 export function listItems(home, { status } = {}) {
   let files;
@@ -186,10 +206,19 @@ export function selectContext(items, { sessionId = '', now = Date.now() } = {}) 
   }
   return redactSecrets(text + footer);
 }
-export async function main(args = process.argv.slice(2), { home = process.env.ORGIAST_HOME || os.homedir(), stdout = console.log, stderr = console.error, readStdin = readStdinWithTimeout } = {}) {
+export async function main(args = process.argv.slice(2), { home = process.env.ORGIAST_HOME || os.homedir(), stdout = console.log, stderr = console.error, readStdin = readStdinWithTimeout, execImpl } = {}) {
   const value = flag => args[args.indexOf(flag) + 1];
   try {
-    if (args.includes('--context')) {
+    if (args.includes('--forward-stale')) {
+      const skip = args.flatMap((arg, index) => arg === '--skip' ? [args[index + 1]] : []);
+      if (skip.some(id => !validId(id || ''))) throw new Error('--skip に有効な ID が必要です');
+      const dryRun = args.includes('--dry-run');
+      const kinds = args.includes('--kind') ? [value('--kind')] : null;
+      if (kinds && !['ask', 'info'].includes(kinds[0])) throw new Error('--kind は ask か info');
+      const items = await forwardStale(home, { dryRun, skip, kinds, execImpl });
+      stdout(JSON.stringify({ dryRun, items: items.map(({ id, kind, status, text, forwardMailId, forwardError }) => ({ id, kind, status, text, forwardMailId, forwardError })) }));
+      if (!dryRun && items.some(item => item.status !== 'forwarded')) return 1;
+    } else if (args.includes('--context')) {
       const input = JSON.parse(await readStdin(100));
       const event = input.hook_event_name;
       if (!['SessionStart', 'UserPromptSubmit'].includes(event)) return 0;
@@ -212,7 +241,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       const items = listItems(home, { status: args.includes('--open') || args.includes('--status') ? 'open' : undefined });
       if (args.includes('--status')) stdout(`kim-inbox: open ask ${items.filter(i => i.kind === 'ask').length} / open info ${items.filter(i => i.kind === 'info').length}\n最古: ${items.length ? `${items[0].id} ${items[0].text.split(/\r?\n/)[0].slice(0, 120)}` : 'なし'}`);
       else stdout(args.includes('--json') ? JSON.stringify(items) : items.map(i => `${i.id} ${i.kind} ${i.status} ${i.text.split(/\r?\n/)[0]}`).join('\n'));
-    } else throw new Error('--add / --answer / --seen / --drop / --list / --status / --context を指定してください');
+    } else throw new Error('--add / --answer / --seen / --drop / --list / --status / --context / --forward-stale [--dry-run] [--skip <id>] を指定してください');
     return 0;
   } catch (error) { stderr(`kim-inbox: ${clean(error.message).replace(/[\r\n]+/g, ' ')}`); return args.includes('--context') ? 0 : 1; }
 }

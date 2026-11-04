@@ -17,7 +17,8 @@ const MAX_CONTENT = 2_000;
 const OMITTED = '…(以下省略)';
 const USER_AGENT = 'orgiast-notify-kim/1.0';
 // kim の Discord ユーザーID（秘密ではない）。設定ファイルの無い PC でも DM が届くよう既定値にする。
-export const KIM_DISCORD_USER_ID = '715210673642012733';
+import { KIM_DISCORD_USER_ID } from './lib/kim-identity.mjs';
+export { KIM_DISCORD_USER_ID } from './lib/kim-identity.mjs';
 
 function readTrimmed(file) { try { return fs.readFileSync(file, 'utf8').trim(); } catch { return ''; } }
 
@@ -200,7 +201,7 @@ export async function deliverKim(text, {
   plainJaImpl = toPlainJa,
   suffix = '',
   allowHumanRequest = false,
-  kind = 'info', source = '', allowlist, repoRoot,
+  kind = 'info', source = '', allowlist, repoRoot, execImpl,
 } = {}) {
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
     || readTrimmed(path.join(home, '.claude', 'orgiast-discord-user-id.txt'))
@@ -212,7 +213,7 @@ export async function deliverKim(text, {
   const translated = annotateAccounts(plainJa ? await plainJaImpl(String(text ?? '')) : text);
   const body = suffix && !allowHumanRequest && kind !== 'ask' ? String(translated).split('\n').filter(line => !HANDOFF.test(line)).join('\n') : translated;
   if ((userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID) && !discordAllowed(String(body) + suffix, { home, allowlist, repoRoot }).allowed) {
-    const item = await addItem(home, { kind, text: String(body) + suffix, source, signal });
+    const item = await addItem(home, { kind, text: String(body) + suffix, source, signal, execImpl });
     return { delivered: 'session-inbox', id: item.id, kind: item.kind };
   }
   const content = suffix ? String(body).slice(0, Math.max(0, MAX_CONTENT - suffix.length)) + suffix : clipDiscordContent(body);

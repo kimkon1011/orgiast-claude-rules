@@ -10,7 +10,7 @@ function seat(t, label = 'kim-PC') {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ki-test-'));
   fs.mkdirSync(path.join(home, '.claude'));
   fs.writeFileSync(path.join(home, '.claude/cost-reporter.env'), `REPORTER_LABEL=${label}`);
-  fs.writeFileSync(path.join(home, '.claude/fleet-pc-map.json'), JSON.stringify({ [label]: { account: label === 'kim-PC' ? 'kim@orgiast.jp' : 'test@example.test' } }));
+  fs.writeFileSync(path.join(home, '.claude/fleet-pc-map.json'), JSON.stringify({ [label]: { account: label === 'kim-PC' ? 'kim@orgiast.jp' : 'test@example.test', operator: label === 'kim-PC' ? 'kim' : 'employee' } }));
   t.after(() => fs.rmSync(home, { force: true, recursive: true })); return home;
 }
 test('ask は毎回提示し回答後に消える。info は確認できるが ask は確認だけで消せない', async t => {
@@ -121,4 +121,63 @@ test('fleet 受信ファイルが使用中でも項目を表示でき、次回�
   assert.match(selectContext(listItems(home)), /確認が必要/);
   fs.unlinkSync(`${file}.lock`);
   await ingestFleetMail(home); assert.equal(JSON.parse(fs.readFileSync(file)).status, 'done'); assert.equal(listItems(home).length, 1);
+});
+
+function employee(home) {
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'seisaku-team@orgiast.jp' } }));
+  fs.writeFileSync(path.join(home, '.claude/fleet-pc-map.json'), JSON.stringify({ 'kim-PC': { account: 'kim@orgiast.jp', operator: '佐藤優奈' } }));
+}
+test('forward-stale dry-run is read-only and excludes skipped, forwarded and answered items', async t => {
+  const home = seat(t);
+  const pending = await addItem(home, { text: '滞留', kind: 'ask' });
+  const skip = await addItem(home, { text: '手動転送済み' });
+  const received = await addItem(home, { text: '受信', forwardMailId: 'mail-received' });
+  const answered = await addItem(home, { text: '回答済み' }); answerItem(home, answered.id, '済');
+  const dir = path.join(home, '.claude/kim-inbox');
+  fs.mkdirSync(path.join(dir, '.skipped'));
+  fs.writeFileSync(path.join(dir, '.skipped', pending.id + '.json'), JSON.stringify(pending));
+  employee(home); assert.equal(isKimSeat(home), false);
+  const before = fs.readdirSync(dir).filter(x => x.endsWith('.json')).map(x => fs.readFileSync(path.join(dir, x), 'utf8'));
+  const output = [];
+  assert.equal(await main(['--forward-stale', '--dry-run', '--skip', skip.id], { home, stdout: x => output.push(JSON.parse(x)), execImpl: async () => assert.fail('dry-run must not send') }), 0);
+  assert.deepEqual(output[0].items.map(x => x.id), [pending.id]);
+  assert.equal(output[0].dryRun, true);
+  assert.deepEqual(fs.readdirSync(dir).filter(x => x.endsWith('.json')).map(x => fs.readFileSync(path.join(dir, x), 'utf8')), before);
+  assert.equal(listItems(home).find(x => x.id === received.id).status, 'open');
+});
+test('forward-stale sends through fleet-mail, honors skip, and is idempotent after success', async t => {
+  const home = seat(t), pending = await addItem(home, { text: '判断本文', kind: 'ask' }), skip = await addItem(home, { text: '手動転送済み' });
+  employee(home);
+  let calls = 0;
+  const options = { home, stdout: () => {}, execImpl: async (node, args, opts) => {
+    calls++; assert.equal(node, process.execPath); assert.equal(opts.env.ORGIAST_HOME, home);
+    assert.ok(args.includes('kim-PC')); assert.ok(args.includes('[kim-inbox:ask] 判断本文'));
+    assert.equal(fs.readFileSync(args.at(-1), 'utf8'), '判断本文');
+    return { stdout: '送信済み: mail-retry-test' };
+  } };
+  const args = ['--forward-stale', '--skip', skip.id];
+  assert.equal(await main(args, options), 0); assert.equal(await main(args, options), 0);
+  assert.equal(calls, 1);
+  assert.equal(listItems(home).find(x => x.id === pending.id).status, 'forwarded');
+  assert.equal(listItems(home).find(x => x.id === skip.id).status, 'open');
+});
+test('forward-stale keeps failures retryable and does nothing on a kim seat', async t => {
+  const home = seat(t); await addItem(home, { text: '判断' });
+  const args = ['--forward-stale'];
+  assert.equal(await main(args, { home, stdout: () => {}, execImpl: async () => assert.fail('kim seat must not forward') }), 0);
+  employee(home);
+  assert.equal(await main(args, { home, stdout: () => {}, execImpl: async () => { throw Error('offline'); } }), 1);
+  assert.equal(listItems(home)[0].status, 'open'); assert.equal(listItems(home)[0].forwardError, 'offline');
+  assert.equal(await main(args, { home, stdout: () => {}, execImpl: async () => ({ stdout: 'mail-recovered' }) }), 0);
+  assert.equal(listItems(home)[0].forwardError, null);
+  assert.equal(await main(['--forward-stale', '--skip'], { home, stderr: () => {} }), 1);
+});
+test('notifyKim ask forwards from a shared-account employee seat without Discord', async t => {
+  const home = seat(t); employee(home);
+  let calls = 0;
+  const result = await notifyKim('判断してください', { home, kind: 'ask', plainJa: false,
+    fetchImpl: async () => assert.fail('Discord must not be called'),
+    execImpl: async () => { calls++; return { stdout: 'mail-notify-test' }; } });
+  assert.equal(result.delivered, 'session-inbox'); assert.equal(calls, 1);
+  assert.equal(listItems(home)[0].status, 'forwarded');
 });

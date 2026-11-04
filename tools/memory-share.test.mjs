@@ -252,3 +252,14 @@ test('invalid paths, hashes and mixed generations leave installed files and stat
     assert.equal(fs.readFileSync(path.join(f.dir, 'a.md'), 'utf8'), 'a');
   }
 });
+
+test('shared-account employee does not install kim user memory without a test override', async t => {
+  const r = receiver(t), a = remote({ 'MEMORY.md': '# index', 'user_role.md': memory('kim の役割', 'user') });
+  fs.mkdirSync(path.join(r.options.home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(r.options.home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'seisaku-team@orgiast.jp' } }));
+  fs.writeFileSync(path.join(r.options.home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=employee-test');
+  fs.writeFileSync(path.join(r.options.home, '.claude/fleet-pc-map.json'), JSON.stringify({ 'employee-test': { operator: '佐藤優奈' } }));
+  await installSharedMemories({ ...r.options, fetchImpl: a.fetchImpl });
+  assert.equal(fs.existsSync(path.join(r.dir, 'user_role.md')), false);
+  assert.match(fs.readFileSync(path.join(r.dir, 'MEMORY.md'), 'utf8'), /このPCの user は別人/);
+});

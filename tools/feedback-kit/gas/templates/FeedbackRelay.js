@@ -451,6 +451,7 @@ function FeedbackRelay_serveForm(params) {
   var template = _FeedbackRelay_loadFormTemplate();
   template.appName = String(opts.app || _FeedbackRelay_config().appName || '');
   template.sourceUrl = String(opts.src || '');
+  template.historyUrl = FeedbackRelay_historyUrl();
   return template.evaluate()
     .setTitle('不具合・要望の報告')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
@@ -644,4 +645,26 @@ function FeedbackRelay_submitFromForm(payload) {
   } catch (e) { /* 通知は best-effort */ }
 
   return { ok: true, logged: true, images: candidates.length, notified: notify.via !== 'none' };
+}
+
+/** 閲覧URLは明示設定 > 記録シート（既存のGoogle閲覧権限） > アプリ既定の案内ページ。 */
+function FeedbackRelay_historyUrl() {
+  var props = PropertiesService.getScriptProperties();
+  var explicit = String(props.getProperty('FEEDBACK_HISTORY_URL') || '').trim();
+  if (/^https:\/\//i.test(explicit)) return explicit;
+  try {
+    var config = _FeedbackRelay_config();
+    var ss = _FeedbackRelay_resolveLogSpreadsheet(config, {});
+    var sheet = ss.getSheetByName(_FeedbackRelay_resolveLogSheetName(config, {}));
+    return sheet ? _FeedbackRelay_sheetUrl(config, ss, sheet) : ss.getUrl();
+  } catch (e) {
+    var base = String(props.getProperty('FEEDBACK_FORM_URL') || ScriptApp.getService().getUrl() || '');
+    return base.split('?')[0] + '?view=mine';
+  }
+}
+
+/** 記録先未設定でもリンクを消さず、設定状況を秘密値なしで案内する。 */
+function FeedbackRelay_serveHistory() {
+  return HtmlService.createHtmlOutput('<h1>送信した内容・対応状況</h1><p>記録先の一覧を開けません。担当者に記録先の設定と閲覧権限を確認してください。</p>')
+    .setTitle('送信した内容・対応状況');
 }

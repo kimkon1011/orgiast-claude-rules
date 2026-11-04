@@ -17,12 +17,12 @@ test('deepseek-ask は同じ Flash モデルで推論なし/ありを切り替�
     globalThis.fetch = async (url, init) => new Response(JSON.stringify({ choices: [{ message: { content: init.body } }], usage: {} }));`);
   for (const reasoner of [false, true]) {
     const { stdout } = await execute(process.execPath, ['--import', pathToFileURL(mock).href, fileURLToPath(new URL('./deepseek-ask.mjs', import.meta.url)), ...(reasoner ? ['--reasoner'] : []), '確認'], {
-      env: { ...process.env, ORGIAST_HOME: dir, DEEPSEEK_API_KEY: 'test-only' },
+      env: { ...process.env, ORGIAST_HOME: dir, OPENROUTER_API_KEY: 'test-only' },
     });
     const body = JSON.parse(stdout);
-    assert.equal(body.model, 'deepseek-flash');
-    assert.deepEqual(body.thinking, reasoner ? undefined : { type: 'disabled' });
+    assert.equal(body.model, 'deepseek/deepseek-v4-flash');
+    assert.deepEqual(body.reasoning, reasoner ? undefined : { enabled: false });
   }
   const rows = fs.readFileSync(path.join(dir, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.deepEqual(rows.map(row => row.model), ['deepseek-flash', 'deepseek-flash']);
+  assert.deepEqual(rows.map(row => row.model), ['deepseek/deepseek-v4-flash', 'deepseek/deepseek-v4-flash']);
 });

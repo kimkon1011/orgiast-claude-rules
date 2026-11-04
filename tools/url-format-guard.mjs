@@ -5,6 +5,7 @@ import { isEntry } from './is-entry.mjs';
 import { latestAssistantText } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { appendStopLedger, registerStopViolation, stopGateOutput } from './lib/stop-recheck.mjs';
+import { withStopRetryInstruction } from './lib/stop-retry-message.mjs';
 
 
 const RAW_URL = /(?<!\]\()https?:\/\/[A-Za-z0-9._~:/?#@!$&'*+,;=%\-]+/g;
@@ -50,7 +51,7 @@ async function main() {
     if (result.decision === 'block') {
       const recheck = registerStopViolation({ input, assistantText: text, blockedBy: ['url-format-guard'], reasonCodes: ['URL-FORMAT'] });
       appendStopLedger({ sessionId: recheck.sessionId, verdict: recheck.verdict, blockedBy: recheck.blockedBy, reasonCodes: recheck.reasonCodes, retryCap: recheck.retryCap, excerpt: text.slice(0, 200) });
-      console.log(JSON.stringify(stopGateOutput(recheck, result.reason)));
+      console.log(JSON.stringify(stopGateOutput(recheck, withStopRetryInstruction(result.reason))));
     }
   } catch {}
 }

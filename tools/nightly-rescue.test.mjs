@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { dirtyStatus, rescueTree } from './nightly-rescue.mjs';
+import { snapshotTree } from './rescue-policy.mjs';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'nightly-rescue-'));
@@ -106,7 +107,9 @@ test('unreadable state fails closed without making a branch', async t => {
   fs.renameSync(path.join(f.repo, 'tracked'), path.join(f.repo, 'renamed file'));
   f.git('add', '-A');
   fs.writeFileSync(path.join(f.repo, '[literal]'), 'keep');
+  const snapshot = snapshotTree(f.repo, dirtyStatus(f.repo));
   const result = await rescueTree(f.repo, f.home, f);
+  assert.equal(f.git('rev-parse', 'HEAD^{tree}').trim(), snapshot);
   assert.ok(result.events.some(e => e.step === 'RESCUE_LOCAL_OK'), JSON.stringify(result.events));
   assert.equal(f.git('show', 'HEAD:renamed file'), 'original');
   assert.equal(f.git('show', 'HEAD:[literal]'), 'keep');
@@ -117,7 +120,9 @@ for (const staged of [false, true]) test(`rescues a deletion: staged=${staged}`,
   const f = fixture(t);
   fs.unlinkSync(path.join(f.repo, 'tracked'));
   if (staged) f.git('add', '-A');
+  const snapshot = snapshotTree(f.repo, dirtyStatus(f.repo));
   const result = await rescueTree(f.repo, f.home, f);
+  assert.equal(f.git('rev-parse', 'HEAD^{tree}').trim(), snapshot);
   assert.ok(result.events.some(e => e.step === 'RESCUE_LOCAL_OK'), JSON.stringify(result.events));
   assert.equal(f.git('ls-tree', '--name-only', 'HEAD'), '');
 });
@@ -166,4 +171,32 @@ test('5分より古い index.lock は残骸として消し、通常の退避コ�
   assert.equal(fs.existsSync(lock), false);
   assert.ok(!branches(f).some(b => b.endsWith('-snapshot')), branches(f).join(','));
   assert.equal(f.git('show', 'HEAD:tracked'), 'valuable change');
+});
+
+test('auto-session rescues skip a snapshot tree a rescue branch already holds', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.repo, 'tracked'), 'changed');
+  const snapshot = snapshotTree(f.repo, dirtyStatus(f.repo));
+  const first = await rescueTree(f.repo, f.home, f);
+  assert.ok(first.events.some(e => e.step === 'RESCUE_LOCAL_OK'), JSON.stringify(first.events));
+  assert.equal(f.git('rev-parse', 'HEAD^{tree}').trim(), snapshot);
+  assert.equal(branches(f).length, 1);
+  const handoff = path.join(f.home, '.claude', 'next-session.md');
+  const before = fs.readFileSync(handoff, 'utf8');
+  const messages = [...f.messages];
+  f.git('switch', 'main');
+  fs.writeFileSync(path.join(f.repo, 'tracked'), 'changed');
+  const status = f.git('status', '--porcelain');
+  const second = await rescueTree(f.repo, f.home, { ...f, now: f.now + 6 * 3600000 });
+  assert.ok(second.events.some(e => e.step === 'RESCUE_DUPLICATE'), JSON.stringify(second.events));
+  assert.equal(branches(f).length, 1);
+  assert.equal(f.git('branch', '--show-current').trim(), 'main');
+  assert.equal(f.git('status', '--porcelain'), status);
+  assert.equal(fs.readFileSync(handoff, 'utf8'), before);
+  assert.deepEqual(f.messages, messages);
+  assert.equal(f.git('ls-remote', '--heads', 'origin', 'refs/heads/rescue/*').trim().split('\n').length, 1);
+  fs.writeFileSync(path.join(f.repo, 'tracked'), 'different');
+  const third = await rescueTree(f.repo, f.home, { ...f, now: f.now + 12 * 3600000 });
+  assert.ok(third.events.some(e => e.step === 'RESCUE_LOCAL_OK'), JSON.stringify(third.events));
+  assert.equal(branches(f).length, 2);
 });

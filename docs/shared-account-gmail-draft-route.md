@@ -28,7 +28,7 @@ node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "in:sent to:c
 ```
 
 返信は In-Reply-To / References と threadId を付ける。件名は元メールに合わせる。修正は新規下書きを作成して読み戻した後、旧下書きを `--delete <旧draftId>` で削除する。
-送信直前に同じスレッドの送信済み・最新受信を読み、重複と日程・金額・数量・約束・名義の矛盾を照合する。送信後も宛先・件名・日時を読み戻す。下書きリンクには「seisaku-team@orgiast.jp で開く」と併記する。社内宛は Discord。
+送信直前に同じスレッドの送信済みを読み、重複を照合する。`--send` は `mail-consistency-check.mjs` を自動実行し、最新受信だけでなくスレッド全体の合意（金額・数量・人件費／設営／撤去・納品形態・日程・名義・支払条件・約束）と下書き・見積明細を照合する。block は下書きを直す。例外は `--ack-consistency "<理由>"` に限定し、理由を台帳と完了報告へ残す。生の Gmail API 送信は `mail-consistency-gate` が拒否する。送信後も宛先・件名・日時を読み戻す。下書きリンクには「seisaku-team@orgiast.jp で開く」と併記する。社内宛は Discord。
 
 `--send` は指定アカウント（既定 seisaku-team@、既存互換用の `--user` も可）の下書きを取得し、To/Cc/Bcc を既存台帳で照合する。内部宛は exit 3 で送信しない。JSON は `sentMessageId`, `threadId`, `to`, `subject` を含む。作成時の内部宛は認証前に拒否し、送信時は下書きの読み取り後に拒否する。送信 API の自動再試行は行わない。
 
@@ -138,3 +138,16 @@ DWD のスコープが委任済みであれば `drafts.create` は当該ユー�
 - 既存の読み取り経路: `tools/gmail-search.mjs`、`docs/gmail-correction-email-necessity.md`
 - 内部宛ルール: `tools/internal-recipient-gmail-guard.mjs`、`docs/internal-staff-chat-display-verification.md`
 - 記録: `tools/handoff-audit-knowledge.json`
+
+## SA 鍵の無い PC
+
+SA 鍵は配布せず、seisaku-team@orgiast.jp が所有・実行するトークン中継 GAS を利用する。初回は以下を順に行う。
+
+1. `clasp -u seisaku login` を実行し、seisaku-team@orgiast.jp の Chrome で許可する。
+2. `node tools/seisaku-gmail-token-deploy.mjs` を実行する（`--dry-run` は通信・保存なし）。
+3. 出力された Web App URL を seisaku-team@orgiast.jp で開いて権限を承認する。承認画面へ進めない場合は出力の `authorizationUrl`（スクリプト編集画面）を同じアカウントで開き、`doGet` を実行して権限を承認する。
+4. `node tools/gmail-draft.mjs --check` で確認する。
+
+設定は `~/.claude/seisaku-gmail-token.json` に保存する。secret を含むため共有・ログ出力・リポジトリへの追加はしない。再デプロイは同じコマンドで既存 deployment を更新し、URL と secret を維持する。Apps Script API を clasp の認証プロジェクトで利用可能にしておく必要がある。
+
+既定の鍵が存在せず、`GOOGLE_SA_KEY` が未設定で、代理先が seisaku-team@orgiast.jp、要求が Gmail スコープのみ、かつ状態ファイルがある場合に限り自動使用する。Drive や他ユーザーは従来の認証経路を使う。トークンはプロセス内で期限までキャッシュする。既存の宛先・送信前整合性検査は引き続き適用される。

@@ -7,6 +7,8 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 
+import { wslInstalled } from './lib/wsl-present.mjs';
+
 const DIST = 'https://nodejs.org/dist';
 const exec = promisify(execFile);
 const psQuote = (value) => `'${String(value).replaceAll("'", "''")}'`;
@@ -102,6 +104,13 @@ function system(overrides) {
     temp: process.env.TEMP || os.tmpdir(),
     account: process.env.USERNAME || os.userInfo().username,
     fs,
+    wslInstalled,
+    async msiBusy() {
+      const tasks = await exec('tasklist.exe', ['/FI', 'IMAGENAME eq msiexec.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+      if ((tasks.stdout.match(/"msiexec\.exe"/gi) || []).length >= 2) return true;
+      const result = await exec('powershell.exe', psArgs("try { $m = [Threading.Mutex]::OpenExisting('Global\\_MSIExecute'); $m.Dispose(); 'true' } catch [Threading.WaitHandleCannotBeOpenedException] { 'false' }"), { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+      return result.stdout.trim().toLowerCase() === 'true';
+    },
     now: Date.now,
     sleep: delay,
     async run(file, args, options = {}) {
@@ -128,6 +137,14 @@ async function windowsRuntime(io, releases) {
   const target = targetVersion(current, releases);
   if (compareVersions(current, target) >= 0) return { text: `Windows ${current}`, repaired: false };
   if (io.arch !== 'x64') throw new Error(`Windows ${current}: x64 MSI 非対応 (${io.arch})`);
+  const stateFile = path.join(io.home, '.claude', 'state', 'node-runtime-security.json');
+  let previous;
+  try { previous = JSON.parse(await io.fs.readFile(stateFile, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (previous && compareVersions(current, previous.target) < 0 && io.now() - previous.lastAttemptAt < 6 * 60 * 60 * 1000) {
+    return { notice: true, text: '前回の更新試行から6時間以内', repaired: false };
+  }
+  if (await io.msiBusy()) return { notice: true, text: 'Windows Installer が実行中のためスキップ', repaired: false };
+  const recordAttempt = () => io.fs.writeFile(stateFile, JSON.stringify({ lastAttemptAt: io.now(), target }));
   const filename = `node-${target}-x64.msi`;
   const sums = await io.download(`${DIST}/${target}/SHASUMS256.txt`);
   const bytes = await io.download(`${DIST}/${target}/${filename}`);
@@ -140,6 +157,7 @@ async function windowsRuntime(io, releases) {
   if (elevated) {
     // execFile bypasses PowerShell's native argument joining and waits for the installer.
     try {
+      await recordAttempt();
       await io.run('msiexec.exe', ['/i', msi, '/qn', '/norestart', '/l*v', log], { timeout: 300_000 });
     } catch (error) {
       if (![1641, 3010].includes(error.code)) throw new Error(`Windows ${current}: msiexec exit=${error.code ?? brief(error)}; log=${log}`);
@@ -161,7 +179,9 @@ async function windowsRuntime(io, releases) {
   const deadline = io.now() + 60_000;
   let actual = current;
   try {
+    await recordAttempt();
     await io.launch(`$ErrorActionPreference = 'Stop'; Start-Process msiexec.exe -ArgumentList ${psQuote(windowsInstallCommand(msi, log))} -Verb RunAs`);
+    io.keepLock = true;
     while (io.now() < deadline) {
       await io.sleep(Math.min(2000, deadline - io.now()));
       try { actual = readVersion(await io.run('node.exe', ['-v'], { timeout: Math.max(1, Math.min(5000, deadline - io.now())) })); }
@@ -178,6 +198,7 @@ async function windowsRuntime(io, releases) {
 }
 
 async function ubuntuRuntime(io, releases) {
+  if (!await io.wslInstalled({ platform: io.platform })) return { text: 'WSL なし' };
   let distros;
   try { distros = await io.run('wsl.exe', ['--list', '--quiet']); }
   catch (error) { if (error.code === 'ENOENT') return { text: 'WSL なし' }; throw error; }
@@ -203,16 +224,60 @@ async function ubuntuRuntime(io, releases) {
 export async function convergeNodeRuntimeSecurity(overrides = {}) {
   const io = system(overrides);
   if (io.platform !== 'win32') return { status: 'NOTICE', checked: false, repaired: false, description: 'Windows ホストで実行してください（WSL Ubuntu も Windows 経由で検査）' };
-  let releases;
+  const lock = path.join(io.home, '.claude', 'state', 'node-runtime-security.lock');
+  const notice = (description) => ({ status: 'NOTICE', checked: true, repaired: false, description });
+  let handle;
   try {
-    releases = JSON.parse(String(await io.download(`${DIST}/index.json`)));
-    if (!Array.isArray(releases) || releases.some((release) => !release || typeof release.version !== 'string')) throw new Error('index.json が不正です');
-  } catch (error) { return { status: 'NOTICE', checked: false, repaired: false, description: brief(error) }; }
-  const outcomes = [];
-  for (const [label, operation] of [['Windows', windowsRuntime], ['WSL', ubuntuRuntime]]) {
-    try { outcomes.push(await operation(io, releases)); }
-    catch (error) { outcomes.push({ notice: true, text: `${label}: ${brief(error)}` }); }
+    await io.fs.mkdir(path.dirname(lock), { recursive: true });
+    try { handle = await io.fs.open(lock, 'wx'); }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      // Serialize stale recovery too: two observers must not unlink each other's new lock.
+      const recovery = `${lock}.recovery`;
+      try { await io.fs.mkdir(recovery); }
+      catch (busy) {
+        if (busy.code !== 'EEXIST') throw busy;
+        // An interrupted recovery gets one cleanup-only pass; never reclaim and install together.
+        if (io.now() - (await io.fs.stat(recovery)).mtimeMs >= 30 * 60 * 1000) {
+          try { await io.fs.rmdir(recovery); } catch {}
+        }
+        return notice('他の converge が Node 更新中のためスキップ');
+      }
+      try {
+        // Re-read under the recovery guard; the original holder may already have finished.
+        let stale = false;
+        try {
+          const stat = await io.fs.stat(lock);
+          let startedAt = stat.mtimeMs;
+          try { const data = JSON.parse(await io.fs.readFile(lock, 'utf8')); if (Number.isFinite(data.startedAt)) startedAt = data.startedAt; } catch {}
+          stale = io.now() - startedAt >= 30 * 60 * 1000;
+          if (!stale) return notice('他の converge が Node 更新中のためスキップ');
+        } catch (missing) { if (missing.code !== 'ENOENT') throw missing; }
+        if (stale) await io.fs.unlink(lock);
+        try { handle = await io.fs.open(lock, 'wx'); }
+        catch (retry) { if (retry.code === 'EEXIST') return notice('他の converge が Node 更新中のためスキップ'); throw retry; }
+      } finally { await io.fs.rmdir(recovery); }
+    }
+    await handle.writeFile(JSON.stringify({ pid: process.pid, startedAt: io.now() }));
+  } catch (error) {
+    if (handle) { await handle.close(); await io.fs.rm(lock, { force: true }); }
+    return notice(brief(error));
   }
-  return { status: outcomes.some((outcome) => outcome.notice) ? 'NOTICE' : 'OK', checked: true,
-    repaired: outcomes.some((outcome) => outcome.repaired), description: outcomes.map((outcome) => outcome.text).join(' / ') };
+  try {
+    let releases;
+    try {
+      releases = JSON.parse(String(await io.download(`${DIST}/index.json`)));
+      if (!Array.isArray(releases) || releases.some((release) => !release || typeof release.version !== 'string')) throw new Error('index.json が不正です');
+    } catch (error) { return { status: 'NOTICE', checked: false, repaired: false, description: brief(error) }; }
+    const outcomes = [];
+    for (const [label, operation] of [['Windows', windowsRuntime], ['WSL', ubuntuRuntime]]) {
+      try { outcomes.push(await operation(io, releases)); }
+      catch (error) { outcomes.push({ notice: true, text: `${label}: ${brief(error)}` }); }
+    }
+    return { status: outcomes.some((outcome) => outcome.notice) ? 'NOTICE' : 'OK', checked: true,
+      repaired: outcomes.some((outcome) => outcome.repaired), description: outcomes.map((outcome) => outcome.text).join(' / ') };
+  } finally {
+    await handle.close();
+    if (!io.keepLock) await io.fs.rm(lock, { force: true });
+  }
 }

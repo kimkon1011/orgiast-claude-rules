@@ -17,6 +17,16 @@ test('全滅かつ古いprobeはdeny',()=>{const h=setup('implement','claude-opu
 test('lane-doctor呼び出しは委譲扱い',()=>{const h=setup('implement','claude-opus-5',{toolCalls:100});assert.equal(run(h,{tool_name:'Bash',tool_input:{command:'node tools/lane-doctor.mjs --probe'}}),null);});
 test('autopilot-tick呼び出しは委譲扱い',()=>{const h=setup('implement','claude-opus-5',{toolCalls:100});assert.equal(run(h,{tool_name:'Bash',tool_input:{command:'node tools/autopilot-tick.mjs post --status running'}}),null);});
 
+test('gateRequired の auto-progress は上限超過後も通し、通常コマンドは deny', t => {
+  const h = setup('implement', 'claude-opus-5', { toolCalls: 9 });
+  t.after(() => fs.rmSync(h, { recursive: true, force: true }));
+  const allowed = 'node tools/auto-progress.mjs --add-check --session S --check "node x" --deadline +7d --label "L"';
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: allowed } }), null);
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: `cd "${h}" && ${allowed}` } }), null);
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: `${allowed}; node tools/foo.mjs` } }).hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: 'node tools/foo.mjs' } }).hookSpecificOutput.permissionDecision, 'deny');
+});
+
 test('Codex alive deny points directly to codex-do without unavailable wording',t=>{
   const h=setup('implement','claude-opus-5',{toolCalls:7});
   t.after(()=>fs.rmSync(h,{recursive:true,force:true}));
@@ -84,3 +94,9 @@ for (const tool_name of ['Bash', 'PowerShell']) {
     }
   });
 }
+
+test('repair log remains callable after lane guard limit in unattended session', t => {
+  const h = setup('implement', 'claude-sonnet-5', { toolCalls: 100 });
+  t.after(() => fs.rmSync(h, { recursive: true, force: true }));
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: 'node tools/lane-repair-log.mjs --lane deepseek --tried check --result unfixable' } }), null);
+});

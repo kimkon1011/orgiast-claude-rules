@@ -16,7 +16,7 @@ export function readOwnerDiscordId(file = join(homedir(), ".claude", "orgiast-di
 export async function main() {
 
 const RAW = "https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/feedback-kit/widget/templates";
-const TEMPLATE_NAMES = ["api-route.ts", "FeedbackWidget.tsx", "FeedbackTriggerButton.tsx", "feedback-admin-page.tsx", "feedback-update-route.ts", "list-feedback.mjs", "migration_app_feedback.sql"];
+const TEMPLATE_NAMES = ["api-route.ts", "FeedbackWidget.tsx", "FeedbackTriggerButton.tsx", "feedback-mine-page.tsx", "feedback-admin-page.tsx", "feedback-update-route.ts", "list-feedback.mjs", "migration_app_feedback.sql"];
 const args = process.argv.slice(2); const options = { target: process.cwd(), appName: "", channel: "", webhook: "", relay: "", relaySecret: "", ownerDiscordId: "", admin: true, dryRun: false, force: false };
 function value(name) { const index = args.indexOf(name); if (index < 0 || !args[index + 1]) return ""; return args[index + 1]; }
 options.target = resolve(value("--target") || options.target); options.appName = value("--app-name"); options.channel = value("--discord-channel") || options.channel; options.webhook = value("--webhook"); options.relay = value("--relay"); options.relaySecret = value("--relay-secret"); options.ownerDiscordId = value("--owner-discord-id");
@@ -77,6 +77,7 @@ async function template(name) {
 function tokens(text) { return text.replaceAll("{{APP_NAME}}", JSON.stringify(options.appName).slice(1, -1)).replaceAll("{{DISCORD_CHANNEL_ID}}", options.channel).replaceAll("{{ADMIN_PAGE}}", options.admin ? "true" : "false").replaceAll("{{IMPORT_PREFIX}}", alias ? "@" : "relative"); }
 
 const destinations = [
+  ["feedback-mine-page.tsx", join(appRoot, "feedback/mine/page.tsx")],
   ["api-route.ts", join(appRoot, "api/feedback/route.ts")], ["FeedbackWidget.tsx", join(componentRoot, "FeedbackWidget.tsx")], ["FeedbackTriggerButton.tsx", join(componentRoot, "FeedbackTriggerButton.tsx")], ["list-feedback.mjs", join(options.target, "scripts/list-feedback.mjs")],
   ...(options.admin ? [["feedback-admin-page.tsx", join(appRoot, "feedback/page.tsx")], ["feedback-update-route.ts", join(appRoot, "api/feedback/update/route.ts")]] : []),
 ];

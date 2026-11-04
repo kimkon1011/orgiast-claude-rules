@@ -76,12 +76,12 @@ const LLM_PROVIDERS = {
   ...PROVIDERS,
   glm: { url: 'https://api.z.ai/api/coding/paas/v4/chat/completions', env: 'ZAI_API_KEY', file: 'zai.env', model: 'glm-5.3' },
   genspark: { url: 'https://www.genspark.ai/api/llm_proxy/v1/chat/completions', env: 'GSK_PROXY_KEY', file: 'genspark-proxy.env', model: 'gpt-5.6-luna' },
-  mistral: { url: 'https://api.mistral.ai/v1/chat/completions', env: 'MISTRAL_API_KEY', file: 'mistral.env', model: 'mistral-large-latest' },
+  mistral: { url: 'https://api.mistral.ai/v1/chat/completions', env: 'MISTRAL_API_KEY', file: 'mistral.env', model: 'open-mistral-nemo' },
 };
 // 返信文は日本語品質が要る。routing-table の jp_reply(llama-3.3-70b)は文が崩れ・質問を鸚鵡返しした
 // (2026-10-09 実測)ので、返信だけは日本語に強いモデルの連鎖に固定する。DISCORD_AUTOREPLY_PROVIDER で先頭を差し替え可。
 export const REPLY_CHAIN = Object.freeze([
-  { provider: 'gemini', model: 'gemini-3.7-flash' },
+  { provider: 'gemini', model: 'gemini-3.6-flash' },
   { provider: 'deepseek', model: 'deepseek-flash' },
   { provider: 'kimi', model: 'kimi-k3' },
   { provider: 'genspark', model: 'gpt-5.6-luna' },
@@ -204,7 +204,7 @@ export async function runOnce(options = {}) {
       home, token, userId: read(path.join(home, '.claude', 'orgiast-discord-user-id.txt')).trim() || '715210673642012733',
       fetchImpl: options.fetchImpl ?? fetch, plainJa: false, webhookFallback: false,
     });
-    if (sent?.delivered !== 'dm') throw new Error('kim health notification failed');
+    if (!['dm', 'session-inbox'].includes(sent?.delivered)) throw new Error('kim health notification failed');
   };
   const errorText = e => String(e.message || e).replaceAll(token || '\0', '[redacted]').slice(0, 1000);
   try {

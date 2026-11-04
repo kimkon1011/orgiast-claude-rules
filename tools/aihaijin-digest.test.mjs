@@ -212,6 +212,8 @@ test('一時worktreeでcommit/push/PR/既存マージ経路を通り、利用者
   const f = await publishingFixture(t);
   const result = await publishCandidates(f.input, { run: f.run, stderr: line => f.errors.push(line) });
   assert.equal(result.prUrl, 'https://github.com/o/r/pull/42');
+  const create = f.calls.find(c => c.command === 'gh' && c.args[0] === 'pr' && c.args[1] === 'create');
+  assert.ok(create.args.some((arg, i) => arg === '--label' && create.args[i + 1] === 'automerge'));
   assert.match(f.errors[0], /PRを残します/);
   assert.equal(fs.readFileSync(path.join(f.repo, 'rules/ai-ops-playbook.md'), 'utf8'), '# 利用者の未コミット作業\n');
   assert.equal((await f.git(['branch', '--show-current'], f.repo)).trim(), 'main');

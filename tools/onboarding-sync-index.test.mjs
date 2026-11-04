@@ -88,5 +88,13 @@ test('管理ブロックが固定共有memoryを @ 参照する', async () => {
 test('メールの共有アカウント必須見出しを圧縮索引にも保持する', async () => {
   const { makeIndex } = await import('./onboarding-sync.mjs');
   const body = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
-  assert.ok(makeIndex(body).includes('**🔴 下書き: seisaku-team@orgiast.jp。送信指示時は重複・矛盾照会**'));
+  assert.ok(makeIndex(body).includes('**🔴 メールの送信・下書きはすべて seisaku-team@orgiast.jp。送信指示時は重複・矛盾照会**'));
+});
+
+test('最後のメッセージにまとめる絶対ルールが実文書の索引に残る', async () => {
+  const { makeIndex } = await import('./onboarding-sync.mjs');
+  const body = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
+  const rule = body.split(/\r?\n/).find(line => line.startsWith('**🔴 kim が読むのは「本当に最後のメッセージ」'));
+  assert.ok(rule);
+  assert.ok(makeIndex(body).split('\n').includes(rule.replace('（2026-10-30 kim 厳命・全PC全アカウント）', '')));
 });

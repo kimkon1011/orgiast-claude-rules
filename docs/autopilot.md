@@ -14,4 +14,4 @@
 
 対話 `/loop` は画面を開いたまま・PC スリープ不可。停止すると Discord の監視も止まるので `/autopilot resume` が必要。定期 runner が登録済みなら、停止中も30分ごとの pre で Discord の再開・目的変更を読み、run の時だけ Claude を起動する。対話ループと定期 runner は同時に使わない。
 
-`autopilot-run.mjs` は policy の planIncluded=true なら `claude-fable-5-1`、それ以外は `claude-opus-5`。別アカウントでは定額対象であることを確認して policy を設定する。1回25分で打ち切り、post 未記録の失敗も noop として番犬に数える。stdout 末尾と終了コードは autopilot/run.log。完了済みは単なる「続けて」で再開せず、新しい start または目的変更を使う。日次上限は翌日以降に明示的に再開し、累計上限は resume では解除されない。
+`autopilot-run.mjs` は policy の planIncluded=true なら `claude-fable-5-1`、それ以外は `claude-opus-5`。PC ごとに変えるときは objective.md の JSON に `"model": "claude-opus-5-5"` のように書く（`claude-` 以外と、planIncluded=false での Fable 指定は無視）。別アカウントでは定額対象であることを確認して policy を設定する。1回25分で打ち切り、post 未記録の失敗も noop として番犬に数える。stdout 末尾と終了コードは autopilot/run.log。完了済みは単なる「続けて」で再開せず、新しい start または目的変更を使う。日次上限は翌日以降に明示的に再開し、累計上限は resume では解除されない。

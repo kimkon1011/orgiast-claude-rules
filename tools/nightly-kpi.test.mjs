@@ -273,3 +273,14 @@ test('topicConcentration はJSONにもtextにも現れない', () => {
   assert.doesNotMatch(formatText(kpi), /topicConcentration|テーマ集中/);
   assert.match(formatText(kpi), /成果 1PR\/1セッション = 100\.0%/);
 });
+
+
+test('an in-progress snapshot is not reported as a confirmed stopped batch', () => {
+  const prefix = '2026-10-23 07:08:48 / batch-run / ok:0件処理';
+  const base = { date: '2026-10-23', noOpRate: null, closeRate: null };
+  const pending = improvementTodos({ ...base, ...parseBatchLog(prefix) });
+  assert.match(pending.join('\n'), /集計時点で完了未確認/);
+  assert.doesNotMatch(pending.join('\n'), /途中で停止/);
+  const complete = parseBatchLog(prefix + '\n2026-10-23 07:11:22 / サマリ / nightly-batch 完了');
+  assert.deepEqual(improvementTodos({ ...base, ...complete }), []);
+});

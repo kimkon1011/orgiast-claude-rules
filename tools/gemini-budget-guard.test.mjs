@@ -19,6 +19,31 @@ test('unmeasured >20% is unknown, exactly 20% is not', () => {
   assert.equal(summarizeGeminiBudget([row(null), ...Array.from({ length: 3 }, () => row(1))], options).level, 'unknown');
   assert.equal(summarizeGeminiBudget([row(undefined, { in: 0, out: 0 })], options).unmeasuredCalls, 1);
 });
+test('HTTP 4xx/5xx failures are excluded, while successful unmeasured calls remain unknown', () => {
+  const failures = ['http_429', 'http_503', 'http_404'].map((status) => row(null, { status, in: null, out: null, estimated: true }));
+  for (const usd of [1, 60, 86]) {
+    const successes = [row(usd, { status: 'ok' })];
+    assert.deepEqual(summarizeGeminiBudget([...successes, ...failures], options), summarizeGeminiBudget(successes, options));
+  }
+  assert.deepEqual(summarizeGeminiBudget(failures, options), summarizeGeminiBudget([], options));
+
+  for (const status of ['ok', undefined]) {
+    const successful = summarizeGeminiBudget([row(null, { status, estimated: true }), ...failures], options);
+    assert.equal(successful.totalCalls, 1);
+    assert.equal(successful.unmeasuredCalls, 1);
+    assert.equal(successful.level, 'unknown');
+  }
+});
+test('HTTP failure filtering preserves invalid timestamp and JSON accounting', async () => {
+  const fsImpl = fixture([row(1, { status: 'ok' }), row(null, { status: 'http_429', t: 'invalid' })], options);
+  const ledger = path.join(dir, 'executor-usage.jsonl');
+  fsImpl.files.set(ledger, fsImpl.files.get(ledger) + 'broken\n');
+  const status = await runGeminiBudgetGuard({ home, now, fsImpl, dryRun: true });
+  assert.equal(status.invalidRows, 2);
+  assert.equal(status.totalCalls, 1);
+  assert.equal(status.unmeasuredCalls, 0);
+  assert.equal(status.level, 'unknown');
+});
 test('JST month filtering, currency conversion and end-of-month pace', () => {
   const status = summarizeGeminiBudget([row(1, { t: '2026-08-31T15:00:00Z' }), row(99, { t: '2026-08-31T14:59:59Z' }), row(99, { t: '2026-09-20T00:00:00Z' }), row(99, { provider: 'groq' })], { now });
   assert.equal(status.spentUsd, 1); assert.equal(status.spentJpy, 150); assert.equal(status.paceEomJpy, 150 / 14 * 30);

@@ -16,15 +16,28 @@ const INVESTIGATE = /調査|調べ|原因(?:特定|究明|を探)|比較|確認(
 
 const INVESTIGATE_STRONG = /調査|調べ|原因(?:特定|究明|を探)|investigat|root cause/i;
 
+function proseOnly(raw) {
+  return raw
+    .replace(/```[^\n]*\n[\s\S]*?```|~~~[^\n]*\n[\s\S]*?~~~/g, ' ')
+    .replace(/`[^`\r\n]*`/g, ' ')
+    .replace(/--[a-z0-9][a-z0-9-]*(?:=(?:"[^"]*"|'[^']*'|\S+)|\s+(?!--)(?:"[^"]*"|'[^']*'|\S+))?/gi, ' ');
+}
+
+function requestsCommandExecution(raw) {
+  return /コマンドを実行して|(?:を|コマンドを)実行する|run this command/i.test(raw)
+    || /^\s*(?:node|npm|git)\s+\S+/im.test(raw);
+}
+
 export function classifyTaskKind(text) {
   const raw = String(text ?? '');
   if (!raw.trim()) return 'implement';
-  const body = raw.replace(DOC_OUTPUT, ' ');
+  const body = proseOnly(raw).replace(DOC_OUTPUT, ' ');
   const implement = IMPLEMENT.test(body);
   const verify = VERIFY.test(body);
   const readOnly = READ_ONLY.test(body);
   // 実装の意図が少しでもあれば Codex(安全側)。「調査して実装」「原因を調べて修正」もここ。
   if (implement) return 'implement';
+  if (requestsCommandExecution(raw) && !readOnly) return 'verify';
   // 検証だが「読み取り」「コマンド実行なし」と明示されていれば、コマンドを伴わない調査。
   if (verify && !readOnly) return 'verify';
   if (CLASSIFY.test(body)) return 'classify';

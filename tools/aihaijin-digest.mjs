@@ -207,7 +207,7 @@ export async function publishCandidates({ repo, candidates, date, keys }, { run 
     if (!prUrl) {
       const bodyFile = path.join(temp, "pr-body.md");
       fs.writeFileSync(bodyFile, `AI廃人部の未反映投稿から、運用改善候補を出典・短い引用付きで追加します。報告値は自社での実測保証ではありません。\n\n検証: 候補のJSON形式、原文引用、題名の重複を確認。\n\n${marker}\n`);
-      prUrl = (await gh(["pr", "create", "--base", "main", "--head", branch, "--title", `AI廃人部の週次取り込み ${date}`, "--body-file", bodyFile], worktree)).trim();
+      prUrl = (await gh(["pr", "create", "--base", "main", "--head", branch, "--title", `AI廃人部の週次取り込み ${date}`, "--body-file", bodyFile, "--label", "automerge"], worktree)).trim();
     }
     const match = prUrl.match(/\/pull\/(\d+)$/);
     if (!match) throw new Error("作成したPRのURLを確認できません");

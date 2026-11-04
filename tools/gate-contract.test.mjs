@@ -23,10 +23,35 @@ test('new rollout entries must declare the seven day window; legacy inventory is
     const row = manifest.gates[name];
     assert.ok(row, `${name}: missing rollout entry`);
     assert.ok(['warn','deny'].includes(row.rollout));
+    if (name === 'seat-name-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-11-04 kim 厳命: 席番号呼称と Drive 引き渡し (§1.5.0.2/§1.5.0.3)');
+      continue;
+    }
+    if (name === 'kim-discord-report-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-27 kim 厳命: kim 宛 Discord 報告を全PCで停止');
+      continue; // kim の明示指示で初受信のPCにも即時適用。
+    }
+    if (name === 'lane-repair-first-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-29 user 指示: 全PC・全アカウントで故障レーン修復を最優先');
+      continue; // Explicit repair-first policy applies immediately on every PC.
+    }
+    if (name === 'exec-tree-edit-guard') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-26 user 指示: 実行ツリーの直接編集を即時拒否');
+      continue; // Direct synchronous policy hook, outside staged rollout.
+    }
     if (name === 'mail-draft-account-gate') {
       assert.equal(row.rollout, 'deny');
       assert.equal(row.immediatePolicy, '2026-10-25 kim 指示: 全PCのメール下書きは seisaku-team@orgiast.jp に統一');
       continue; // Explicit account policy applies immediately on every PC.
+    }
+    if (name === 'response-language-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-26 cr 指示: Stop hook の書き直しで英語へ逸脱した実害');
+      continue; // Explicit response-language policy applies immediately on every PC.
     }
     if (name === 'api-billing-guard') {
       assert.equal(row.rollout, 'deny');
@@ -42,6 +67,16 @@ test('new rollout entries must declare the seven day window; legacy inventory is
       assert.equal(row.rollout, 'deny');
       assert.equal(row.immediatePolicy, '2026-10-23 kim 指示: LINE broadcast による宛先違い誤送信の再発防止');
       continue; // Misdelivery to the wrong person cannot be undone, immediate on all PCs.
+    }
+    if (name === 'outbound-claim-evidence-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-27 TimeRex 実害: 社外送信の完了主張に読み戻し証拠を要求');
+      continue; // External communication cannot be undone, immediate on all PCs.
+    }
+    if (name === 'deliverable-drive-link-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-11-04 nishi 指示: 渡すファイルが見つからず往復が発生した実害の再発防止');
+      continue; // Explicit recurrence-prevention policy applies immediately.
     }
     if (name === 'bihin-kcol-gate') {
       assert.equal(row.rollout, 'deny');

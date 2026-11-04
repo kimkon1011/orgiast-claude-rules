@@ -1,0 +1,14 @@
+{
+  "case_id": "SAMPLE-3X3", "title": "Reブース 3m×3m",
+  "booth": { "w_mm": 3000, "d_mm": 3000, "height_limit_mm": 2700, "open_sides": ["front"], "walls": ["back", "left"] },
+  "items": [
+    { "param": "system_panel", "w_mm": 2600, "h_mm": 2400, "t_mm": 40, "pos_mm": [1500, 2940, 0] },
+    { "asset_id": "panel_display_450x900x790", "pos_mm": [650, 2200, 0] },
+    { "asset_id": "shodan_high_810x810x900", "pos_mm": [1700, 1450, 0] },
+    { "asset_id": "shodan_high_400x400x720", "pos_mm": [1000, 1350, 0] },
+    { "asset_id": "shodan_high_400x400x720", "pos_mm": [2400, 1350, 0] },
+    { "asset_id": "monitor_42_50x970x560", "pos_mm": [1500, 2860, 1250], "rot_deg": 90 },
+    { "asset_id": "scale_figure_1913", "pos_mm": [2450, 750, 0], "rot_deg": 200 }
+  ],
+  "views": ["persp_front_left", "persp_front_right", "top", "front", "side_left"]
+}

@@ -36,10 +36,13 @@ export function parsePart(text, part) {
     const title = lines[i].text.slice('### ページタイトル: '.length);
     const pathLine = lines[i + 1]?.text ?? '';
     const match = pathLine.match(/^--- 内部パス: (.*) ---$/);
-    if (!match || lines[i + 3]?.text !== BODY_MARKER) continue;
-    const byteStart = lines[i + 3].next;
+    // Drive の Google ドキュメントを text/plain で書き出すと、パス行と本文マーカーの間の空行が増える
+    let marker = i + 2;
+    while (marker < i + 6 && lines[marker]?.text === '') marker++;
+    if (!match || marker === i + 2 || lines[marker]?.text !== BODY_MARKER) continue;
+    const byteStart = lines[marker].next;
     let byteEnd = buffer.length;
-    for (let j = i + 4; j < lines.length; j++) {
+    for (let j = marker + 1; j < lines.length; j++) {
       if (/^=+\s*次のページ\s*=+\s*$/.test(lines[j].text)) { byteEnd = lines[j].start; break; }
     }
     pages.push({ part, byteStart, byteEnd, title: cleanField(title), path: cleanField(match[1]) });
@@ -508,6 +511,12 @@ export function ingestFiles(files, cacheDir = CACHE_DIR) {
   }
   if (fs.existsSync(path.join(cacheDir, 'index.tsv')) && fs.existsSync(path.join(cacheDir, 'meta.json'))) {
     const meta = loadPreviousMeta(cacheDir);
+    for (const item of meta.parts ?? []) {
+      const file = path.join(cacheDir, partName(item.part));
+      if (!fs.existsSync(file)) continue;
+      const updatedAt = parsePart(fs.readFileSync(file, 'utf8').slice(0, 1000), item.part).updatedAt;
+      if (updatedAt && item.更新日時 && updatedAt !== item.更新日時) console.error(`警告: Part ${item.part} の本文（${updatedAt}）が索引（${item.更新日時}）と別の版です。get は内部パスで本文を引き直しますが、Part 間で移動したページは install-index で索引を更新するまで見つからないことがあります。`);
+    }
     return { ingested, parts: meta.parts.length, pages: readIndex(cacheDir).length };
   }
   return { ingested, ...buildIndex(cacheDir) };
@@ -557,6 +566,18 @@ export function searchEntries(query, options = {}, cacheDir = CACHE_DIR) {
 }
 
 function formatEntry(entry) { return `${entry.id}\t${entry.part}\t${entry.title}\t${entry.path}`; }
+// 索引と本文の版がずれるとバイト位置が別ページを指すため、内部パスで本文側から引き直す
+export function locateBody(entry, cacheDir = CACHE_DIR) {
+  const parts = fs.readdirSync(cacheDir).map((name) => Number(name.match(/^part(\d+)\.txt$/)?.[1])).filter(Number.isInteger);
+  for (const part of [entry.part, ...parts.filter((part) => part !== entry.part)]) {
+    const file = path.join(cacheDir, partName(part));
+    if (!fs.existsSync(file)) continue;
+    const parsed = parsePart(fs.readFileSync(file, 'utf8'), part);
+    const page = parsed.pages.find((item) => item.path === entry.path);
+    if (page) return Buffer.from(parsed.normalized, 'utf8').subarray(page.byteStart, page.byteEnd);
+  }
+  return null;
+}
 function readBody(fd, entry) {
   const length = entry.byteEnd - entry.byteStart;
   const buffer = Buffer.alloc(length);
@@ -793,11 +814,16 @@ export async function main(args = process.argv.slice(2)) {
       console.error(`このページは Part ${entry.part} にありますが、本文がまだ取得されていません。\n\n  1) Drive MCP で download_file_content を呼ぶ\n     fileId: ${item.fileId ?? 'meta.json に fileId がありません'}\n     exportMimeType: text/plain\n     （サイズが大きいためローカルに保存されます。その保存パスを控える）\n  2) node ${process.argv[1]} ingest <保存パス>\n\n取り込むと Part ${entry.part} の ${item.pages ?? '不明な'} ページすべてが get できるようになります。`);
       return 3;
     }
-    const fd = fs.openSync(bodyFile, 'r');
-    try {
-      process.stdout.write(`### ページタイトル: ${entry.title}\n--- 内部パス: ${entry.path} ---\n\n`);
-      process.stdout.write(readBody(fd, entry));
-    } finally { fs.closeSync(fd); }
+    const body = locateBody(entry);
+    if (!body) {
+      const meta = loadPreviousMeta(CACHE_DIR);
+      const item = (meta.parts ?? []).find((part) => part.part === entry.part) ?? {};
+      const bodyUpdatedAt = parsePart(fs.readFileSync(bodyFile, 'utf8').slice(0, 1000), entry.part).updatedAt;
+      console.error(`索引が本文と合っていません: ${entry.path} が取得済みの本文に見つかりません（索引の Part ${entry.part} 更新日時 ${item.更新日時 ?? '不明'} / 本文 ${bodyUpdatedAt || '不明'}）。\n別ページの本文を出さないため中断します。共通ハブの growi-manual-index.tsv と growi-manual-meta.json を Drive MCP で取得し、node ${process.argv[1]} install-index <2ファイル> で索引を更新してください。`);
+      return 4;
+    }
+    process.stdout.write(`### ページタイトル: ${entry.title}\n--- 内部パス: ${entry.path} ---\n\n`);
+    process.stdout.write(body);
     return 0;
   }
   if (command === 'status') {

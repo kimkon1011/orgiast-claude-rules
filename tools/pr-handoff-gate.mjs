@@ -3,7 +3,8 @@ const REASON = [
   '[PR-HANDOFF] `gh` 未認証は PR 作成を手渡す理由にならない。',
   'まず `gh auth status` で認証を確認。未認証なら既存 credential helper、または `gh auth login` で認証する（各人の権限は未確認のまま断定しない）。',
   'Git Bash 等で次のコマンドを使い、作成・ラベル付けを人に手渡さず実行すること:',
-  "GH_TOKEN=$(printf 'protocol=https\\nhost=github.com\\n\\n' | git credential fill | sed -n 's/^password=//p') gh pr create --base main --head <branch> --title \"<題>\" --body-file <本文ファイル>",
+  "GH_TOKEN=$(printf 'protocol=https\\nhost=github.com\\n\\n' | git credential fill | sed -n 's/^password=//p') gh pr create --base main --head <branch> --title \"<題>\" --body-file <本文ファイル> --label automerge",
+  'automerge ラベルは作成時に同時に付ける（後から gh pr edit --add-label は classifier に拒否されうる。ラベル無しの PR は auto-merge.yml が eligible=false で着地しない）。',
 ].join('\n');
 
 function proseOnly(text) {

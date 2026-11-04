@@ -21,7 +21,7 @@ function toWindowsPath(path) {
 }
 
 before(() => {
-  root = realpathSync.native(mkdtempSync(join(tmpdir(), 'repair-task-paths-')));
+  root = realpathSync.native(mkdtempSync(join(process.platform === 'linux' && hasPowerShell ? process.cwd() : tmpdir(), 'repair-task-paths-')));
 });
 
 after(() => {
@@ -30,7 +30,7 @@ after(() => {
 
 // Builds a synced repo (optionally holding the script a task points at) plus a stale
 // copy, then runs the repair in dry-run mode over a synthetic task snapshot.
-function runPlan(name, { actions, presentTools = [] }) {
+function runPlan(name, { actions, presentTools = [], setup, inject = true }) {
   const dir = join(root, name);
   const synced = join(dir, 'nightly-repo');
   const stale = join(dir, 'orgiast-claude-rules');
@@ -38,8 +38,12 @@ function runPlan(name, { actions, presentTools = [] }) {
   mkdirSync(join(stale, 'tools'), { recursive: true });
   for (const tool of presentTools) writeFileSync(join(synced, 'tools', tool), '# fixture\n');
 
+  execFileSync('git', ['init', '-q', dir]);
+  execFileSync('git', ['init', '-q', synced]);
+  if (!setup) execFileSync('git', ['init', '-q', stale]);
+  const actualStale = setup ? setup(stale, dir) : stale;
   const syncedWin = toWindowsPath(synced);
-  const staleWin = toWindowsPath(stale);
+  const staleWin = toWindowsPath(actualStale);
   const inputPath = join(dir, 'tasks.json');
   const outPath = join(dir, 'plan.json');
   writeFileSync(inputPath, JSON.stringify([{
@@ -51,7 +55,7 @@ function runPlan(name, { actions, presentTools = [] }) {
   const launcher = join(dir, 'invoke.ps1');
   writeFileSync(launcher, [
     `$env:ORGIAST_NIGHTLY_REPO = ${psQuote(syncedWin)}`,
-    `$env:ORGIAST_STALE_REPO_ROOTS = ${psQuote(staleWin)}`,
+    `$env:ORGIAST_STALE_REPO_ROOTS = ${psQuote(inject ? staleWin : '')}`,
     `& ${psQuote(toWindowsPath(script))} -InputJson ${psQuote(toWindowsPath(inputPath))} -OutJson ${psQuote(toWindowsPath(outPath))}`,
     'exit $LASTEXITCODE',
   ].join('\n'), 'utf8');
@@ -116,4 +120,103 @@ test('actions already pointing at the synced repo produce no changes', { skip: !
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.equal(plan.length, 0);
   assert.match(result.stdout, /ok:dry-run/);
+});
+
+
+test('real git worktree origin is discovered without root injection', { skip: !hasPowerShell }, () => {
+  const { result, plan, synced } = runPlan('worktree', {
+    inject: false,
+    presentTools: ['worker.mjs', 'nightly-bootstrap.ps1'],
+    setup: (stale, dir) => {
+      const worktree = join(dir, 'messenger-watch-wt');
+      const launcher = join(dir, 'windows-worktree.ps1');
+      const quote = value => `'${value.replaceAll("'", "''")}'`;
+      const repo = quote(toWindowsPath(stale));
+      writeFileSync(launcher, [
+        `git init ${repo}`,
+        `git -C ${repo} remote add origin https://github.com/kimkon1011/orgiast-claude-rules.git`,
+        `git -C ${repo} -c user.name=Fixture -c user.email=fixture@example.com commit --allow-empty -m fixture`,
+        `git -C ${repo} worktree add --detach ${quote(toWindowsPath(worktree))}`,
+        'exit $LASTEXITCODE',
+      ].join('\n'));
+      execFileSync(powershell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', toWindowsPath(launcher)]);
+      return worktree;
+    },
+    actions: stale => [{ Execute: 'node.exe', Arguments: `"${stale}\\tools\\nightly-bootstrap.ps1" -Target tools\\worker.mjs`, WorkingDirectory: stale }],
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(plan.length, 1);
+  assert.equal(plan[0].NewWorkingDirectory, synced);
+  assert.match(plan[0].NewArguments, /nightly-repo/);
+});
+
+test('injected auto-session root is reported and left unchanged', { skip: !hasPowerShell }, () => {
+  const homeWin = execFileSync(powershell, ['-NoProfile', '-Command', '[Console]::Write($HOME)'], { encoding: 'utf8' }).trim();
+  const { result, plan } = runPlan('pinned', {
+    setup: () => process.platform === 'win32' ? `${homeWin}\\.claude\\auto-session-repo` : execFileSync('wslpath', ['-u', `${homeWin}\\.claude\\auto-session-repo`], { encoding: 'utf8' }).trim(),
+    actions: stale => [{ Execute: 'node.exe', Arguments: `"${stale}\\tools\\auto-session-launcher.mjs"` }],
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(plan[0].Status, 'pinned:auto-session');
+  assert.equal(plan[0].NewArguments, plan[0].OldArguments);
+});
+
+test('root prefix sibling is not rewritten', { skip: !hasPowerShell }, () => {
+  const { result, plan } = runPlan('prefix-sibling', {
+    actions: stale => [{ Execute: 'node.exe', Arguments: `"${stale}-other\\tools\\worker.mjs"` }],
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(plan.length, 0);
+});
+
+test('missing working directory without bootstrap warns and preserves the entire action', { skip: !hasPowerShell }, () => {
+  const { result, plan } = runPlan('missing-working-directory', {
+    presentTools: ['worker.mjs'],
+    actions: stale => [{ Execute: 'node.exe', Arguments: `"${stale}\\tools\\worker.mjs"`, WorkingDirectory: `${stale}\\absent` }],
+  });
+  assert.equal(result.status, 0);
+  assert.equal(plan[0].Status, 'warning:working-directory');
+  assert.equal(plan[0].NewArguments, plan[0].OldArguments);
+  assert.equal(plan[0].NewWorkingDirectory, plan[0].OldWorkingDirectory);
+});
+
+for (const exists of [true, false]) {
+  test(`bootstrap fallback working directory is repaired (exists=${exists})`, { skip: !hasPowerShell }, () => {
+    const { result, plan, synced } = runPlan(`fallback-${exists}`, {
+      inject: false,
+      setup: (_stale, dir) => {
+        const fallback = join(dir, 'auto-session-tree-fallback-20260910-003004');
+        if (exists) mkdirSync(fallback);
+        return fallback;
+      },
+      actions: stale => [{ Execute: 'powershell.exe', Arguments: '-File "C:\\bootstrap\\nightly-bootstrap.ps1" -Target tools\\fleet-agent.mjs', WorkingDirectory: stale }],
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(plan[0].Status, 'planned');
+    assert.equal(plan[0].Pinned, false);
+    assert.equal(plan[0].NewWorkingDirectory, synced);
+    assert.equal(plan[0].NewArguments, plan[0].OldArguments);
+  });
+}
+
+for (const scriptName of ['auto-session-launcher.mjs', 'auto-session-verify.mjs']) {
+  test(`${scriptName} is pinned independently of its root; stale cwd follows registration`, { skip: !hasPowerShell }, () => {
+    const { result, plan, synced } = runPlan(scriptName, {
+      actions: stale => [{ Execute: 'node.exe', Arguments: `"C:\\fixed\\${scriptName}"`, WorkingDirectory: stale }],
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(plan[0].Pinned, true);
+    assert.equal(plan[0].Status, 'planned');
+    assert.equal(plan[0].NewWorkingDirectory, synced);
+    assert.equal(plan[0].NewArguments, plan[0].OldArguments);
+  });
+}
+
+test('non-script suffix is not pinned', { skip: !hasPowerShell }, () => {
+  const { result, plan } = runPlan('suffix', {
+    actions: stale => [{ Execute: 'node.exe', Arguments: 'auto-session-launcher.mjs.bak', WorkingDirectory: stale }],
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(plan[0].Pinned, false);
+  assert.equal(plan[0].Status, 'warning:working-directory');
 });

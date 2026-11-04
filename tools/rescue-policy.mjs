@@ -68,7 +68,7 @@ function rescuedTrees(tree) {
   return new Map(byTree.filter(([t]) => t));
 }
 
-function snapshotRescue(tree, status, branch, stamp, log) {
+export function snapshotTree(tree, status) {
   // A private index snapshots changes without changing HEAD, the real index or files.
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-rescue-index-'));
   try {
@@ -77,17 +77,22 @@ function snapshotRescue(tree, status, branch, stamp, log) {
     git(tree, ['read-tree', parent], undefined, env);
     if (status.snapshotPaths.length) git(tree, ['add', '-A', '--pathspec-from-file=-', '--pathspec-file-nul'],
       status.snapshotPaths.map(p => `:(top,literal)${p}\0`).join(''), env);
-    const snapshot = git(tree, ['write-tree'], undefined, env).trim();
-    const alreadyRescued = rescuedTrees(tree).get(snapshot);
-    if (alreadyRescued) {
-      log('RESCUE_DUPLICATE', `${tree} snapshot already rescued as ${alreadyRescued}`);
-      return { sha: null, branch: alreadyRescued };
-    }
-    const sha = git(tree, ['-c', 'user.name=Auto Session Rescue', '-c', 'user.email=auto-session-rescue@localhost',
-      'commit-tree', snapshot, '-p', parent, '-m', `sync-orgiast-main-rescue-${stamp}`]).trim();
-    git(tree, ['update-ref', `refs/heads/${branch}`, sha, '0000000000000000000000000000000000000000']);
-    return { sha, branch };
+    return git(tree, ['write-tree'], undefined, env).trim();
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+}
+
+function snapshotRescue(tree, status, branch, stamp, log) {
+  const parent = git(tree, ['rev-parse', 'HEAD']).trim();
+  const snapshot = snapshotTree(tree, status);
+  const alreadyRescued = rescuedTrees(tree).get(snapshot);
+  if (alreadyRescued) {
+    log('RESCUE_DUPLICATE', `${tree} snapshot already rescued as ${alreadyRescued}`);
+    return { sha: null, branch: alreadyRescued };
+  }
+  const sha = git(tree, ['-c', 'user.name=Auto Session Rescue', '-c', 'user.email=auto-session-rescue@localhost',
+    'commit-tree', snapshot, '-p', parent, '-m', `sync-orgiast-main-rescue-${stamp}`]).trim();
+  git(tree, ['update-ref', `refs/heads/${branch}`, sha, '0000000000000000000000000000000000000000']);
+  return { sha, branch };
 }
 
 export async function rescueTree(tree, home, { now = Date.now(), notify = notifyKim, preserveTree = false, pc = os.hostname() } = {}) {
@@ -177,6 +182,12 @@ export async function rescueTree(tree, home, { now = Date.now(), notify = notify
         ({ sha } = snapshotRescue(tree, status, branch, stamp, log));
         if (!sha) return { clean: false, dirtyCount, events };
       } else {
+        const snapshot = snapshotTree(tree, status);
+        const already = rescuedTrees(tree).get(snapshot);
+        if (already) {
+          log('RESCUE_DUPLICATE', `${tree} snapshot already rescued as ${already}`);
+          return { clean: false, dirtyCount, events };
+        }
         git(tree, ['switch', '-c', branch]);
         // Explicit, NUL-delimited literal paths avoid Git treating ignored exclude
         // pathspecs as errors, and cannot sweep up a clone created after status.

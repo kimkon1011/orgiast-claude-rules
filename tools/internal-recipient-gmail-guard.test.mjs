@@ -46,9 +46,15 @@ test('ドメインは完全一致で照合する', () => {
 });
 test('全対象操作と番号付きアカウントを判定する', () => {
   for (const action of GMAIL_WRITE_ACTIONS) {
-    for (const account of ['', '_2', '_12']) assert.equal(judge(hook({ bcc: 'keiri.orgiast@gmail.com' }, action, account), ledger).decision, 'block');
+    for (const account of ['', '_2', '_12']) assert.equal(judge(hook({ bcc: 'keiri.orgiast@gmail.com' }, action, account), ledger).decision, action === 'forward' ? 'pass' : 'block');
   }
   assert.equal(judge(hook({ to: 'keiri.orgiast@gmail.com' }, 'read_message'), ledger).decision, 'pass');
+});
+test('MCP forward の内部宛は pass、create_draft と reply は block のまま', () => {
+  assert.equal(judge(hook({ to: 'staff@orgiast.jp' }, 'forward'), ledger).decision, 'pass');
+  assert.equal(judge(hook({ to: 'staff@orgiast.jp' }, 'create_draft'), ledger).decision, 'block');
+  assert.equal(judge(hook({ to: 'staff@orgiast.jp' }, 'reply'), ledger).decision, 'block');
+  assert.match(judge(hook({ to: 'staff@orgiast.jp' }, 'reply'), ledger).reason, /gmail-draft\.mjs --forward/u);
 });
 test('guard の対象 tool 名と hook matcher が一致する', () => {
   const matcher = new RegExp(`^(?:${HOOK_MATCHER})$`);

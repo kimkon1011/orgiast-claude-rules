@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { createReclaimDirectory, removeReclaimDirectory } from './lib/reclaim-lock.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -8,6 +9,7 @@ import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { redactSecrets } from './fleet-agent.mjs';
+import { isKimOperated } from './lib/kim-operated.mjs';
 
 // Hook budget: docs/fleet-mail-v2-design.md §5 and registered hook timeout (5s).
 export const HOOK_DEADLINE_MS = 5000;
@@ -40,12 +42,12 @@ export function updateQuestion(home, id, update) {
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
       const reclaim = `${lock}.reclaim`;
-      try { fs.mkdirSync(reclaim); } catch (error) { if (error.code === 'EEXIST') return null; throw error; }
+      try { createReclaimDirectory(reclaim); } catch (error) { if (error.code === 'EEXIST') return null; throw error; }
       try {
         if (Date.now() - fs.statSync(lock).mtimeMs < QUESTION_LOCK_MS) return null;
         fs.unlinkSync(lock);
       } catch (error) { if (error.code !== 'ENOENT') throw error; }
-      finally { fs.rmdirSync(reclaim); }
+      finally { removeReclaimDirectory(reclaim); }
     }
   }
   if (fd === undefined) return null;
@@ -205,7 +207,7 @@ export function collectQuestions({ home, now = Date.now }) {
   }
   return removed;
 }
-export async function relayQuestions({ home, hub, label, request, now = Date.now, stderr = console.error }) {
+export async function relayQuestions({ home, hub, label, request, now = Date.now, stderr = console.error, kimOperated = isKimOperated(home) }) {
   if (!hub || hub === label) return 0;
   const dir = path.join(home, '.claude', 'fleet-questions');
   let files; try { files = fs.readdirSync(dir); } catch (error) { if (error.code === 'ENOENT') return 0; throw error; }
@@ -214,6 +216,8 @@ export async function relayQuestions({ home, hub, label, request, now = Date.now
     try {
       const q = readQuestion(home, name.slice(0, -5));
       if (!q?.question || q.relayedAt || !Number.isFinite(Date.parse(q.askedAt))) continue;
+      // kim 本人の席の対話セッションは kim がその画面で答える。kim-PC へ転送すると同じ質問が二重になる。
+      if (kimOperated && !q.drivenByHub) continue;
       if (!q.drivenByHub && (now() - Date.parse(q.askedAt) < RELAY_WAIT_MS || await hasNewUserMessage(q))) continue;
       // A stable transport id makes a lost response/local-write retry safe.
       const id = `mail-question-${createHash('sha256').update(`${label}\n${q.sessionId}\n${q.questionHash}`).digest('hex').slice(0, 24)}`;

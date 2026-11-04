@@ -20,5 +20,6 @@
 | 観測不能型 | 他PCの状態を照会する手段がなく、未反映を user がスマホで発見した（2026-10-11） | 「全PCに反映した」と報告する箇所。状態を人に確認させている手順 | converge ビーコン、`tools/fleet-status.mjs`（未ビーコンの PC は「未確認」と書く） |
 | ログ不在＝不在型 | Claude 側ログに無いことを外部の状態の不在の証拠にした（2026-09-10）。ゲート: external-state-claim-gate | 外部状態を「無い」「未接続」と断定する文面 | external-state-claim-gate（既存） |
 | 単一指標の最適化による盲点型 | 費用だけで新AIを選び高性能モデルの品質改善を見逃した（2026-10-15） | selectCandidates / pendingCandidates / evaluationCost / nightly-batch | フロンティア検出・品質+5pt・単価不明・日次評価の回帰テスト。docs/incidents/2026-10-15-frontier-model-blind-spot.md |
+| 実行元ツリー固着型 | 定期タスクが同期されない worktree/別クローン/固定ブランチを実行し続け、移行済みの経路(DeepSeek→OpenRouter)を旧コードが本家直結で叩き HTTP 402。実プローブは全レーン正常で監視に映らなかった。同期側も未コミット1ファイル(rescue 済み)で 4日間 skip(2026-10-29 kim-PC・PR #1302) | Orgiast* タスクの Action に nightly-repo 以外のパス(worktree・auto-session-repo・orgiast-main 等)を持つもの。register-*.ps1 で作業ツリーのパスを焼き込む箇所。DIRTY_WORKTREE_SKIP が続く同期ログ | repair-task-paths の worktree/別クローン検出と日次自動実行(ブランチ fix/stale-task-tree-detect)、register-messenger-watch.ps1 -UpdateActionOnly |
 
 追記ルール: 型名は構造を表す語にする。症状は1行、日付と出典を付ける。ゲート列が空の行は未完了として扱い、埋まるまで消さない。

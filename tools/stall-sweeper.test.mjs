@@ -69,6 +69,20 @@ test('CLI: dryが既定、件数検証、モード競合拒否', () => {
   assert.throws(() => parseArgs(['--apply', '--dry-run']));
   for (const n of ['0', '-1', 'NaN', '1.5']) assert.throws(() => parseArgs(['--max', n]));
 });
+test('既定の確認先: ホーム配下から導き、特定PCのユーザー名を埋め込まない', () => {
+  const prev = process.env.ORGIAST_HOME;
+  const home = path.join(os.tmpdir(), 'stall-sweeper-home-test');
+  process.env.ORGIAST_HOME = home;
+  try {
+    const out = parseArgs([]);
+    assert.equal(out.repos.length, 5);
+    assert.ok(out.repos.includes(path.join(path.resolve(home), '.claude', 'nightly-repo')));
+    for (const repo of out.repos) assert.ok(repo.startsWith(path.resolve(home)), repo);
+    assert.ok(out.repos.every(repo => path.relative(path.resolve(home), repo).split(path.sep)[0] !== '..'));
+  } finally {
+    if (prev === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = prev;
+  }
+});
 test('排他: 同時実行を拒否、終了後に次世代を取得、削除不要', () => {
   const dir = temp(), fd = acquireLock(dir);
   assert.throws(() => acquireLock(dir)); releaseLock(fd);
@@ -89,7 +103,7 @@ function fixture() {
 test('実git: 専用ブランチに1コミット・main不変・force/merge/deleteなし', async () => {
   const { repo, g, candidate } = fixture(), before = g('rev-parse', 'main'), commands = [], log = [];
   const run = (exe, args, opts) => { commands.push([exe, ...args]); if (exe === 'gh') return args[1] === 'list' ? '[]' : 'https://github.com/test/test/pull/1'; return command(exe, args, opts); };
-  const result = await advanceUncommitted(candidate, { run, log: r => log.push(r), plan: () => [[process.execPath, ['-e', 'process.exit(0)']]] });
+  const result = await advanceUncommitted(candidate, { home: os.tmpdir(), run, log: r => log.push(r), plan: () => [[process.execPath, ['-e', 'process.exit(0)']]] });
   assert.equal(g('rev-list', '--count', 'main..HEAD'), '1'); assert.equal(g('rev-parse', 'main'), before);
   assert.equal(g('log', '-1', '--format=%H'), result.commit); assert.equal(log[0].action, 'コミット保存');
   assert.ok(commands.some(c => c.includes('create'))); assert.ok(!commands.flat().some(a => ['--force', 'merge', '--delete'].includes(a)));
@@ -98,7 +112,7 @@ test('実git: 専用ブランチに1コミット・main不変・force/merge/dele
 });
 test('テスト失敗: コミット・push・PRなし', async () => {
   const { g, candidate } = fixture(), before = g('rev-parse', 'HEAD');
-  await assert.rejects(advanceUncommitted(candidate, { plan: () => [[process.execPath, ['-e', 'process.exit(1)']]] }));
+  await assert.rejects(advanceUncommitted(candidate, { home: os.tmpdir(), plan: () => [[process.execPath, ['-e', 'process.exit(1)']]] }));
   assert.equal(g('rev-parse', 'HEAD'), before);
 });
 test('他セッションによる更新: ステージ前に停止', async () => {
@@ -108,7 +122,7 @@ test('他セッションによる更新: ステージ前に停止', async () => 
 });
 test('テストでファイル更新: コミットを停止', async () => {
   const { g, candidate } = fixture(), before = g('rev-parse', 'HEAD');
-  await assert.rejects(advanceUncommitted(candidate, { plan: () => [[process.execPath, ['-e', "require('fs').writeFileSync('file.txt','changed')"]]] }));
+  await assert.rejects(advanceUncommitted(candidate, { home: os.tmpdir(), plan: () => [[process.execPath, ['-e', "require('fs').writeFileSync('file.txt','changed')"]]] }));
   assert.equal(g('rev-parse', 'HEAD'), before);
 });
 test('委譲exit=0でも完了証拠なしなら失敗', async () => {
@@ -166,11 +180,11 @@ test('委譲ログのテスト出力中のexit=0は実行成功の証拠にし�
 });
 test('コミット後にpush失敗しても、保存済みコミットからPR作成を再開する', async () => {
   const { candidate, g } = fixture(), rows = [];
-  await assert.rejects(advanceUncommitted(candidate, { plan: () => [], log: r => rows.push(r), run: (exe, args, opts) => {
+  await assert.rejects(advanceUncommitted(candidate, { home: os.tmpdir(), plan: () => [], log: r => rows.push(r), run: (exe, args, opts) => {
     if (args.includes('push')) throw new Error('通信失敗'); return command(exe, args, opts);
   } }));
   assert.equal(rows.length, 1);
-  const result = await advanceUncommitted({ ...candidate, pending: rows[0] }, { run: (exe, args, opts) => {
+  const result = await advanceUncommitted({ ...candidate, pending: rows[0] }, { home: os.tmpdir(), run: (exe, args, opts) => {
     if (exe === 'gh') return args[1] === 'list' ? '[]' : 'https://github.com/test/test/pull/2'; return command(exe, args, opts);
   } });
   assert.equal(g('rev-list', '--count', 'main..HEAD'), '1'); assert.equal(result.commit, rows[0].commit);

@@ -13,6 +13,8 @@ import { loadOptin, consentCommand, runPrompt, validExecCwd, redactSecrets, trun
 import { parseEnvText } from './env-kv.mjs';
 import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
 import { updateQuestion, clearResume, RESUME_LIMIT_MS, validSessionId } from './fleet-question-relay.mjs';
+import { allowedReadonlyPrompt } from './lib/fleet-selfcheck-prompt.mjs';
+import { runSelfcheck } from './fleet-selfcheck.mjs';
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const execMarker = /^<!--\s*fleet-exec:\s*codex\s*-->\s*$/;
@@ -167,7 +169,7 @@ export function promptTimeoutSeconds(config = {}) {
   const value = Number(config.FLEET_PROMPT_TIMEOUT_SEC);
   return Number.isFinite(value) && value > 0 ? Math.min(value, 1800) : 600;
 }
-export async function runReadOnlyTask({ id, home, repo = ownRepo, spawnImpl = spawn, resolveClaudeExe = resolveClaudeExecutableFromDisk, promptSetTimer, promptClearTimer, env = process.env } = {}) {
+export async function runReadOnlyTask({ id, home, repo = ownRepo, spawnImpl = spawn, resolveClaudeExe = resolveClaudeExecutableFromDisk, promptSetTimer, promptClearTimer, env = process.env, selfcheck = runSelfcheck } = {}) {
   const dir = path.join(home, '.claude');
   const file = path.join(dir, 'fleet-agent-results', `${validId(id)}.json`);
   const release = acquireLock(`${file}.runner.lock`);
@@ -180,12 +182,18 @@ export async function runReadOnlyTask({ id, home, repo = ownRepo, spawnImpl = sp
     try {
       const config = parseEnvText(fs.readFileSync(path.join(dir, 'fleet-sheet.env'), 'utf8'));
       if (!loadOptin(path.join(dir, 'fleet-agent-optin.json')).includes('prompt')) throw new Error(`未オプトイン。承諾コマンド: ${consentCommand('prompt')}`);
-      const resolved = await resolveClaudeExe({ platform: process.platform, env });
-      const executable = (typeof resolved === 'string' ? resolved : resolved?.executable) || 'claude';
-      const header = `これは ${mail.from} PC の Claude Code からのメッセージです。回答は標準出力に書けば自動で相手に返ります。ファイル変更や外部送信が要る内容は実行せず、必要な理由と手順を回答に書いてください。`;
-      result = await runPrompt({ claudeExe: executable, body: `${header}\n\n${mail.body}`, cwd: process.env.ORGIAST_REPO ?? repo,
-        home, readOnly: true, timeoutSeconds: promptTimeoutSeconds(config), spawnImpl, setTimer: promptSetTimer, clearTimer: promptClearTimer });
-      if (isMissingClaudeError(result)) result.stderrTail = missingClaudeMessage(executable, resolved?.candidates || []);
+      if (allowedReadonlyPrompt(mail.body)) {
+        // Fixed trusted implementation; do not ask an LLM to interpret this request.
+        // Existing prompt opt-in, lock, result persistence and reply transport remain intact.
+        result = { exitCode: 0, stdoutTail: (await selfcheck({ home, env })).markdown };
+      } else {
+        const resolved = await resolveClaudeExe({ platform: process.platform, env });
+        const executable = (typeof resolved === 'string' ? resolved : resolved?.executable) || 'claude';
+        const header = `これは ${mail.from} PC の Claude Code からのメッセージです。回答は標準出力に書けば自動で相手に返ります。ファイル変更や外部送信が要る内容は実行せず、必要な理由と手順を回答に書いてください。`;
+        result = await runPrompt({ claudeExe: executable, body: `${header}\n\n${mail.body}`, cwd: process.env.ORGIAST_REPO ?? repo,
+          home, readOnly: true, timeoutSeconds: promptTimeoutSeconds(config), spawnImpl, setTimer: promptSetTimer, clearTimer: promptClearTimer });
+        if (isMissingClaudeError(result)) result.stderrTail = missingClaudeMessage(executable, resolved?.candidates || []);
+      }
     } catch (error) { result = { exitCode: null, stderrTail: redactSecrets(error.message) }; }
     result = classifyExecutionResult(result);
     writeJsonAtomic(file, result);

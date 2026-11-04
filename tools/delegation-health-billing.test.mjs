@@ -20,7 +20,7 @@ test('恒久課金切れは Moonshot 本文だけを検出し Groq の課金URL�
   assert.equal(isBillingSuspendedRow({ status: 'http_429', reason: MOONSHOT }), true);
 });
 
-test('Moonshot の恒久課金切れ429は24時間 cooldown を書く', async () => {
+test('OpenRouter経由のKimiの恒久課金切れ429はOpenRouterに24時間 cooldown を書く', async () => {
   const dir = home();
   const cooldownFile = path.join(dir, '.claude', 'provider-cooldown.json');
   let calls = 0;
@@ -30,10 +30,31 @@ test('Moonshot の恒久課金切れ429は24時間 cooldown を書く', async ()
     fetchImpl: async () => ++calls === 1 ? new Response(MOONSHOT, { status: 429 }) : new Response('{}', { status: 200 }),
     sleepImpl: async () => {}, cooldownFile, now: () => NOW.getTime(),
   });
-  const state = JSON.parse(fs.readFileSync(cooldownFile, 'utf8')).kimi;
+  const state = JSON.parse(fs.readFileSync(cooldownFile, 'utf8')).openrouter;
   assert.equal(state.until - state.at, 24 * 60 * 60 * 1000);
   assert.equal(state.reason, 'http_429');
   assert.equal(state.permanentBilling, true);
+});
+
+test('恒久課金切れ cooldown は読み戻しで15分に切り詰めず、kimi 直APIを叩かない', async () => {
+  const dir = home();
+  const cooldownFile = path.join(dir, '.claude', 'provider-cooldown.json');
+  fs.writeFileSync(cooldownFile, JSON.stringify({
+    kimi: { until: NOW.getTime() + 86_400_000, at: NOW.getTime(), reason: 'http_429', permanentBilling: true },
+  }));
+  const fetched = [];
+  await callWithFallback({
+    start: { provider: 'kimi', model: 'kimi-k3' },
+    chain: [{ provider: 'groq', model: 'fallback' }],
+    payloadFor: (c) => ({ url: c.provider, init: {} }),
+    fetchImpl: async (url) => { fetched.push(url); return new Response('{}', { status: 200 }); },
+    sleepImpl: async () => {},
+    cooldownFile,
+    now: () => NOW.getTime() + 20 * 60_000,
+  });
+  assert.equal(fetched.includes('kimi'), false);
+  const state = JSON.parse(fs.readFileSync(cooldownFile, 'utf8')).kimi;
+  assert.equal(state.until, NOW.getTime() + 86_400_000);
 });
 
 test('Moonshot 429だけの全滅は修理不能な残高切れとして low にする', () => {

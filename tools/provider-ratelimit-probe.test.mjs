@@ -138,7 +138,7 @@ test('DeepSeek probe は Flash の推論を無効化し Pro は既定を保つ',
       body = JSON.parse(init.body); return response({});
     } });
     assert.equal(result.ok, true);
-    assert.equal(body.model, model || 'deepseek-flash');
-    assert.deepEqual(body.thinking, model ? undefined : { type: 'disabled' });
+    assert.equal(body.model, model ? 'deepseek/deepseek-v4-pro' : 'deepseek/deepseek-v4-flash');
+    assert.deepEqual(body.reasoning, model ? undefined : { enabled: false });
   }
 });

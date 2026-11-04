@@ -36,9 +36,22 @@ try {
   ({ HOOK_MATCHER: SHARE_BEFORE_SEND_MATCHER } = await import('./share-before-send-gate.mjs'));
 } catch { /* 同期途中でも既存登録を維持 */ }
 
+let KIM_DISCORD_REPORT_MATCHER = 'mcp__claude_ai_Discord[^|]*__(send_dm|send_message|reply_message)|Bash|PowerShell';
+try { ({ HOOK_MATCHER: KIM_DISCORD_REPORT_MATCHER } = await import('./kim-discord-report-gate.mjs')); } catch { /* 未同期でも全PC登録を継続 */ }
+
 let RECIPIENT_DOMAIN_MATCHER = HOOK_MATCHER;
 try {
   ({ HOOK_MATCHER: RECIPIENT_DOMAIN_MATCHER } = await import('./recipient-domain-gate.mjs'));
+} catch { /* 同期途中でも登録を継続する */ }
+
+let MAIL_CONSISTENCY_MATCHER = 'Bash|PowerShell';
+try {
+  ({ HOOK_MATCHER: MAIL_CONSISTENCY_MATCHER } = await import('./mail-consistency-gate.mjs'));
+} catch { /* 同期途中でも登録を継続する */ }
+
+let OUTBOUND_CLAIM_MATCHER = 'Bash|PowerShell';
+try {
+  ({ HOOK_MATCHER: OUTBOUND_CLAIM_MATCHER } = await import('./outbound-claim-evidence-gate.mjs'));
 } catch { /* 同期途中でも登録を継続する */ }
 
 let BIHIN_KCOL_MATCHER = 'mcp__.*Google_Sheets__(update_values|append_values|update_formulas|batch_clear_values|update_spreadsheet|batch_update)$|Bash|PowerShell';
@@ -122,6 +135,29 @@ function removeDailySessionHooks(settings) {
 }
 
 function commands(groups) { return groups.flatMap((g) => Array.isArray(g?.hooks) ? g.hooks : []).map((h) => String(h?.command || '')); }
+// kim 宛の Discord 報告を全PCで止める（kim 2026-10-27 厳命）。claude-watch-inbox の Stop hook は
+// 応答の末尾を毎回 claude-code チャンネルへ kim メンション付きで投稿しており、報告が洪水になった主因。
+// 対になる SessionStart の返信取得 hook も、投稿を止めれば用済みなので外す。
+const KIM_DISCORD_REPORT_HOOKS = {
+  Stop: /(?:^|[\\/\s"'])post-stop-to-(?:inbox|discord)\.ps1(?=[\s"']|$)/i,
+  SessionStart: /(?:^|[\\/\s"'])get-reply-(?:on-session-start|from-discord)\.ps1(?=[\s"']|$)/i,
+};
+export function removeKimDiscordReportHooks(settings) {
+  let removed = 0;
+  for (const [event, pattern] of Object.entries(KIM_DISCORD_REPORT_HOOKS)) {
+    const groups = settings.hooks?.[event];
+    if (!Array.isArray(groups)) continue;
+    for (let i = groups.length - 1; i >= 0; i--) {
+      if (!Array.isArray(groups[i]?.hooks)) continue;
+      const hooks = groups[i].hooks;
+      for (let j = hooks.length - 1; j >= 0; j--) {
+        if (pattern.test(String(hooks[j]?.command || ''))) { hooks.splice(j, 1); removed++; }
+      }
+      if (!hooks.length) groups.splice(i, 1);
+    }
+  }
+  return removed;
+}
 function add(groups, scriptName, group) {
   // リポの同期が遅れている環境で、存在しないスクリプトを登録して毎回 ENOENT を出すのを防ぐ。
   if (scriptName.endsWith('.mjs') && !fs.existsSync(path.join(repo, 'tools', scriptName))) {
@@ -212,15 +248,20 @@ try {
   let policyRepaired = 0;
   let costLoopMigrated = 0;
   if (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks)) settings.hooks = {};
-  for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'Notification']) if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
+  for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd', 'Notification']) if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
   added += removeDailySessionHooks(settings);
+  added += removeKimDiscordReportHooks(settings);
   const command = (name, extra = '') => `node "${path.join(repo, 'tools', name)}"${extra}`;
-  // 2026-09-06: 9本を別プロセスで動かすと304 Stop中198回が再Stopになったため、
+  // Stop ゲートは別プロセスで増やさず runner 1本へ収束させる。
   // ファイル名で旧登録を拾い、PCごとに異なるrepoパスのrunner 1本へ収束させる。
+  for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd']) {
+    if (add(settings.hooks[event], 'case-handoff.mjs', { hooks: [{ type: 'command', command: command('case-handoff.mjs', ' hook'), timeout: 60 }] })) added += 1;
+  }
   const oldStopGates = [
     'handoff-quality-gate.mjs', 'stop-gate.mjs', 'manual-request-fullsteps-gate.mjs',
     'handoff-investigation-gate.mjs', 'handoff-info-guard.mjs', 'negative-claim-gate.mjs',
     'report-length-gate.mjs', 'self-check-before-asking-guard.mjs', 'doc-link-drive-guard.mjs',
+    'claude-fallback-report-gate.mjs',
   ];
   if (fs.existsSync(path.join(repo, 'tools', 'stop-gate-runner.mjs'))) {
     for (const oldName of oldStopGates) added += migrate(settings.hooks.Stop, oldName, 'stop-gate-runner.mjs', command('stop-gate-runner.mjs'));
@@ -309,6 +350,8 @@ try {
   added += migrate(settings.hooks.UserPromptSubmit, 'current-session.mjs', 'current-session.mjs', command('current-session.mjs'));
   if (add(settings.hooks.UserPromptSubmit, 'current-session.mjs', { hooks: [{ type: 'command', command: command('current-session.mjs'), timeout: 5 }] })) added += 1;
   added += migrate(settings.hooks.UserPromptSubmit, 'delegation-gate', 'cost-routing-gate.mjs', command('cost-routing-gate.mjs'));
+  if (add(settings.hooks.UserPromptSubmit, 'x-url-route-hint.mjs', { hooks: [{ type: 'command', command: command('x-url-route-hint.mjs'), timeout: 5 }] })) added += 1;
+  if (add(settings.hooks.UserPromptSubmit, 'inquiry-lookup-hint.mjs', { hooks: [{ type: 'command', command: command('inquiry-lookup-hint.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.UserPromptSubmit, 'playbook-inject.mjs', { hooks: [{ type: 'command', command: command('playbook-inject.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.UserPromptSubmit, 'cost-routing-gate.mjs', { hooks: [{ type: 'command', command: command('cost-routing-gate.mjs') }] })) added += 1;
   // additionalContext を返すため同期実行。高額モデル・肥大セッションを純ローカルで検知する。
@@ -329,8 +372,12 @@ try {
   added += syncMatcherFor(settings.hooks.PreToolUse, 'fleet-question-relay.mjs', 'AskUserQuestion');
   // 過去に受領済みのクレデンシャルをuserへ再質問する前に復元経路を注入する。
   for (const event of ['SessionStart', 'UserPromptSubmit']) {
+    if (add(settings.hooks[event], 'kim-inbox.mjs', { hooks: [{ type: 'command', command: command('kim-inbox.mjs', ' --context'), timeout: 5 }] })) added += 1;
     if (add(settings.hooks[event], 'fleet-inbox-context.mjs', { hooks: [{ type: 'command', command: command('fleet-inbox-context.mjs'), timeout: 5 }] })) added += 1;
+    if (add(settings.hooks[event], 'owner-inbox-hook.mjs', { hooks: [{ type: 'command', command: command('owner-inbox-hook.mjs'), timeout: 10 }] })) added += 1;
     if (add(settings.hooks[event], 'auto-progress-inbox-hook.mjs', { hooks: [{ type: 'command', command: command('auto-progress-inbox-hook.mjs'), timeout: 5 }] })) added += 1;
+    if (add(settings.hooks[event], 'kim-awaiting-context.mjs', { hooks: [{ type: 'command', command: command('kim-awaiting-context.mjs'), timeout: 5 }] })) added += 1;
+    if (add(settings.hooks[event], 'daytrip-ask-hook.mjs', { hooks: [{ type: 'command', command: command('daytrip-ask-hook.mjs'), timeout: 5 }] })) added += 1;
     if (resolveFleetLabel(home) === 'kim-PC') {
       if (add(settings.hooks[event], 'fleet-chase-context.mjs', { hooks: [{ type: 'command', command: command('fleet-chase-context.mjs'), timeout: 5 }] })) added += 1;
     }
@@ -338,18 +385,26 @@ try {
   if (add(settings.hooks.UserPromptSubmit, 'credentials-reminder.mjs', { hooks: [{ type: 'command', command: command('credentials-reminder.mjs'), timeout: 5 }] })) added += 1;
   added += migrate(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.ps1', 'pretooluse-delegation-warn.mjs', command('pretooluse-delegation-warn.mjs'));
   if (add(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.mjs', { matcher: 'Write|Edit|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-delegation-warn.mjs') }] })) added += 1;
+  if (add(settings.hooks.PreToolUse, 'app-llm-cost-gate.mjs', { matcher: 'Write|Edit|MultiEdit|Bash|PowerShell', hooks: [{ type: 'command', command: command('app-llm-cost-gate.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-bash-delegation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-bash-delegation.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-lane-guard.mjs', { matcher: 'Bash|PowerShell|Edit|Write|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-lane-guard.mjs'), timeout: 5 }] })) added += 1;
+  if (add(settings.hooks.PreToolUse, 'lane-repair-first-gate.mjs', { matcher: 'Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit', hooks: [{ type: 'command', command: command('lane-repair-first-gate.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-codex-invocation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-codex-invocation.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', { matcher: HOOK_MATCHER, hooks: [{ type: 'command', command: command('internal-recipient-gmail-guard.mjs'), timeout: 5 }] })) added += 1;
   added += syncMatcherFor(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', HOOK_MATCHER);
   if (add(settings.hooks.PreToolUse, 'mail-draft-account-gate.mjs', { matcher: 'mcp__claude_ai_Gmail.*__(create_draft|update_draft|send_message|reply|forward)', hooks: [{ type: 'command', command: command('mail-draft-account-gate.mjs'), timeout: 5 }] })) added += 1;
   added += syncMatcherFor(settings.hooks.PreToolUse, 'mail-draft-account-gate.mjs', 'mcp__claude_ai_Gmail.*__(create_draft|update_draft|send_message|reply|forward)');
+  if (add(settings.hooks.PreToolUse, 'kim-discord-report-gate.mjs', { matcher: KIM_DISCORD_REPORT_MATCHER, hooks: [{ type: 'command', command: command('kim-discord-report-gate.mjs'), timeout: 5 }] })) added += 1;
+  added += syncMatcherFor(settings.hooks.PreToolUse, 'kim-discord-report-gate.mjs', KIM_DISCORD_REPORT_MATCHER);
   if (add(settings.hooks.PreToolUse, 'share-before-send-gate.mjs', { matcher: SHARE_BEFORE_SEND_MATCHER, hooks: [{ type: 'command', command: command('share-before-send-gate.mjs'), timeout: 5 }] })) added += 1;
   added += syncMatcherFor(settings.hooks.PreToolUse, 'share-before-send-gate.mjs', SHARE_BEFORE_SEND_MATCHER);
   if (add(settings.hooks.PreToolUse, 'recipient-domain-gate.mjs', { matcher: RECIPIENT_DOMAIN_MATCHER, hooks: [{ type: 'command', command: command('recipient-domain-gate.mjs'), timeout: 30 }] })) added += 1;
   added += syncMatcherFor(settings.hooks.PreToolUse, 'recipient-domain-gate.mjs', RECIPIENT_DOMAIN_MATCHER);
+  if (add(settings.hooks.PreToolUse, 'mail-consistency-gate.mjs', { matcher: MAIL_CONSISTENCY_MATCHER, hooks: [{ type: 'command', command: command('mail-consistency-gate.mjs'), timeout: 10 }] })) added += 1;
+  added += syncMatcherFor(settings.hooks.PreToolUse, 'mail-consistency-gate.mjs', MAIL_CONSISTENCY_MATCHER);
+  if (add(settings.hooks.PreToolUse, 'outbound-claim-evidence-gate.mjs', { matcher: OUTBOUND_CLAIM_MATCHER, hooks: [{ type: 'command', command: command('outbound-claim-evidence-gate.mjs'), timeout: 10 }] })) added += 1;
+  added += syncMatcherFor(settings.hooks.PreToolUse, 'outbound-claim-evidence-gate.mjs', OUTBOUND_CLAIM_MATCHER);
   // 社外宛メールで説明している Google ファイルを、直近に中身として読んだかを確かめる。
   // 3.4MB の transcript で初回 18 秒かかった実測があるため 30 秒にする（5 秒だと時間切れで素通りする）。
   if (add(settings.hooks.PreToolUse, 'live-artifact-read-gate.mjs', { matcher: LIVE_ARTIFACT_MATCHER, hooks: [{ type: 'command', command: command('live-artifact-read-gate.mjs'), timeout: 30 }] })) added += 1;
@@ -359,6 +414,7 @@ try {
   // ヘッドレス実行で消失するバックグラウンド処理を実行前に拒否する。
   if (add(settings.hooks.PreToolUse, 'pretooluse-headless-background.mjs', { matcher: 'Bash|PowerShell|ScheduleWakeup', hooks: [{ type: 'command', command: command('pretooluse-headless-background.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.PreToolUse, 'pretooluse-line-broadcast-guard.mjs', { matcher: 'Bash|PowerShell|Write|Edit|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-line-broadcast-guard.mjs'), timeout: 5 }] })) added += 1;
+  if (add(settings.hooks.PreToolUse, 'exec-tree-edit-guard.mjs', { matcher: 'Write|Edit|MultiEdit|NotebookEdit', hooks: [{ type: 'command', command: command('exec-tree-edit-guard.mjs'), timeout: 5 }] })) added += 1;
   // read-only調査の逐次実行を検知し、まとめて調査するよう同期注入する。
   if (add(settings.hooks.PreToolUse, 'pretooluse-serial-investigation.mjs', { hooks: [{ type: 'command', command: command('pretooluse-serial-investigation.mjs'), timeout: 5 }] })) added += 1;
   // Gemini MCP(gemini-cli) の応答から実トークンを台帳(executor-usage.jsonl)へ記録する。
@@ -394,7 +450,15 @@ try {
   // コマンドの手渡しに非エンジニア向けの開き方・入力場所・完了確認を必須化する。
   // 「この後の自動進行」宣言を台帳へ記録(fail-open・出力なし)。巡回は OrgiastAutoProgressWatch が担当。
   if (add(settings.hooks.Stop, 'auto-progress-ledger.mjs', { hooks: [{ type: 'command', command: command('auto-progress-ledger.mjs'), timeout: 8 }] })) added += 1;
+  // スマホの一覧にもPC番号を同期する（2026-11-03 kim 指示・全PC全アカウント）。
+  if (add(settings.hooks.UserPromptSubmit, 'session-wait-title.mjs', { hooks: [{ type: 'command', command: command('session-wait-title.mjs', ' --prompt-submit'), timeout: 8 }] })) added += 1;
+  // 「まだ閉じない（…まで待つ）」の期限をセッション一覧のタイトルの頭に【MM/DD/HH:MMまで】で付ける(2026-10-27 nishi 指示)。
+  if (add(settings.hooks.Stop, 'session-wait-title.mjs', { hooks: [{ type: 'command', command: command('session-wait-title.mjs'), timeout: 8 }] })) added += 1;
+  // 既存の全セッションにも同じ規則を当てる（1時間に1回だけ走る）。
+  if (add(settings.hooks.SessionStart, 'session-wait-title.mjs', { hooks: [{ type: 'command', command: command('session-wait-title.mjs', ' --all'), timeout: 30 }] })) added += 1;
   if (add(settings.hooks.Stop, 'handoff-detail-guard.mjs', { hooks: [{ type: 'command', command: command('handoff-detail-guard.mjs'), timeout: 10 }] })) added += 1;
+  // §1.5.0.2/§1.5.0.3: runner の5秒を加えて登録時は15秒。
+  if (add(settings.hooks.Stop, 'seat-name-gate.mjs', { hooks: [{ type: 'command', command: command('seat-name-gate.mjs'), timeout: 10 }] })) added += 1;
   // 生URLと日本語・全角文字の直接隣接によるリンク破損を差し戻す。
   if (add(settings.hooks.Stop, 'url-format-guard.mjs', { hooks: [{ type: 'command', command: command('url-format-guard.mjs'), timeout: 8 }] })) added += 1;
   // 完了報告にLayer 1/2・e2e等の検証記載がなければ同期警告する。
@@ -456,6 +520,7 @@ try {
     for (const [event, groups] of Object.entries(expected.hooks)) settings.hooks[event] = [...(retained[event] || []), ...groups];
     added = JSON.stringify(settings) === before ? 0 : 1;
   }
+  added += removeKimDiscordReportHooks(settings);
   // Reporting uses exactly the registrar's expected set without touching user files.
   if (expectedJson) { console.log(JSON.stringify({ hooks: settings.hooks, skippedNames })); process.exit(0); }
   // 初回配布で空の共有台帳を用意する。不在時 fail-open のまま恒常的に素通りさせない。

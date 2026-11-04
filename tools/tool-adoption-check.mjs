@@ -1,3 +1,4 @@
+import { wslInstalled } from './lib/wsl-present.mjs';
 // ツール採用チェッカー: Codex / Gemini / Kimi が「実際に使われているか」を各PCで定期点検し、
 // 未導入・未認証・未設定・未使用を検出して、自動修復できるものは直し、Discordに報告する。
 //
@@ -77,6 +78,7 @@ function cmdProbe(cmd, timeout = LOCAL_TIMEOUT_MS) {
   catch (error) { return { ok: false, stdout: '', reason: failureReason(error) }; }
 }
 function wslDistros() {
+  if (!wslInstalled()) return [];
   if (process.platform !== 'win32') return [];
   const remaining = remainingMs();
   if (remaining <= 0) { deadlineSkipped = true; return []; }
@@ -85,6 +87,7 @@ function wslDistros() {
 function preferredDistro() { const all = wslDistros(); return all.find((x) => x.toLowerCase() === 'ubuntu') || all[0] || ''; }
 // wsl -d に引用符付きで渡すと cmd.exe 経由で壊れて必ず失敗する(実測)。shellを介さず配列で渡す。
 function wslRun(distro, argv) {
+  if (!wslInstalled()) return { ok: false, stdout: '', reason: 'WSL なし' };
   const tries = distro ? [['-d', distro, '--', ...argv], ['--', ...argv]] : [['--', ...argv]];
   let lastReason = 'notfound';
   for (const args of tries) {

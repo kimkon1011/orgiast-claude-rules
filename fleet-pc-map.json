@@ -101,6 +101,10 @@
     "hostname": "DESKTOP-BDOAK99",
     "account": "seisaku-team@orgiast.jp",
     "remoteName": "作業用008",
+    "notifyDiscordId": "715210673642012733",
+    "notifyTo": "kim@orgiast.jp（金功勇）",
+    "_notifyEvidence": "2026-11-04 kim 指摘: このPCの進捗DM（【DESKTOP-BDOAK99 の自動進行】TETSUKO・Amazon 等）が佐藤優奈さん（satou1319 / 1423319951980232744）に届いていた。seisaku-team@ は共用アカウントで、名簿にメールが無いため宛先がPCローカルの orgiast-discord-user-id.txt 等に落ちていた。全席は kim が操作している（feedback_kim_operates_all_seats）ため kim に固定。",
+    "_identityConflict": "2026-11-04 kim 回答「作業用008ではテツコのことはやっていない。作業用999で genbateam.toho@gmail.com で行っているはず」。このPCは TETSUKO（genbateamtoho-ctrl/tetsuko-unified、Vercel genbateamtoho-ctrl）の作業を報告している（mail-reply-886024345b357f27 / mail-1793177348234-daa327dd）。remoteName=作業用008 は 10/30 の受信者の自己申告由来で誤りの可能性が高い。作業用999 の実機照合が済むまで remoteName は変えない。",
     "aliases": [
       "DESKTOP-BDOAK99"
     ],

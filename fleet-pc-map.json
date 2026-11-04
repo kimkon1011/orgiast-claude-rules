@@ -45,12 +45,6 @@
     "_evidence": "2026-08-28/29 に Discord へ hostname=DESKTOP-04U31RG / user=user / git=seisaku-team@orgiast.jp を含む報告を送信（rules-resync runId=rules-resync-2026-08-28-nightly-cost-fix 実行報告 および 日次トークン報告、いずれも実測）",
     "codexAccount": "nishi@orgiast.jp"
   },
-  "作業用999": {
-    "sheetName": "作業用999",
-    "remoteName": "作業用999",
-    "installedAt": "2026-09-03",
-    "_evidence": "remoteName 根拠: 既存 sheetName=作業用999(シートD列表記)。ただし hostname 未報告のため fleet-mail では照合値=キー名『作業用999』になり、実機の label/hostname と一致する保証なし。配布インストーラ完走(結果 OK 29 / NG 3)と claude --version 2.1.258 を kim のスクリーンショットで実機確認(2026-09-03)。hostname は未報告のため未記入。fleet-sheet.env 未取得で未報告 → PR #285 の自己修復待ち"
-  },
   "作業用011": {
     "remoteName": "作業用011",
     "sheetName": "作業用011",
@@ -100,14 +94,16 @@
   "DESKTOP-BDOAK99": {
     "hostname": "DESKTOP-BDOAK99",
     "account": "seisaku-team@orgiast.jp",
-    "remoteName": "作業用008",
+    "remoteName": "作業用999",
     "notifyDiscordId": "715210673642012733",
     "notifyTo": "kim@orgiast.jp（金功勇）",
     "_notifyEvidence": "2026-11-04 kim 指摘: このPCの進捗DM（【DESKTOP-BDOAK99 の自動進行】TETSUKO・Amazon 等）が佐藤優奈さん（satou1319 / 1423319951980232744）に届いていた。seisaku-team@ は共用アカウントで、名簿にメールが無いため宛先がPCローカルの orgiast-discord-user-id.txt 等に落ちていた。全席は kim が操作している（feedback_kim_operates_all_seats）ため kim に固定。",
     "_identityConflict": "2026-11-04 kim 回答「作業用008ではテツコのことはやっていない。作業用999で genbateam.toho@gmail.com で行っているはず」。このPCは TETSUKO（genbateamtoho-ctrl/tetsuko-unified、Vercel genbateamtoho-ctrl）の作業を報告している（mail-reply-886024345b357f27 / mail-1793177348234-daa327dd）。remoteName=作業用008 は 10/30 の受信者の自己申告由来で誤りの可能性が高い。作業用999 の実機照合が済むまで remoteName は変えない。",
     "aliases": [
-      "DESKTOP-BDOAK99"
+      "DESKTOP-BDOAK99",
+      "作業用008"
     ],
-    "_evidence": "kim-PC fleet-inbox: mail-reply-fa9b672e49db7164・mail-reply-828ab32aca705b84（2026-10-30 16:46、from=DESKTOP-BDOAK99）。~/.claude.json oauthAccount.emailAddress=seisaku-team@orgiast.jp、hostname=DESKTOP-BDOAK99 を実測し、作業用008宛の鹿沼案件引継ぎを受信。mail-reply-23b5030901dbd50f（2026-10-30 16:47）で「作業用008で受け取りました（ログイン: seisaku-team@orgiast.jp）」と確認。fleet-status 2026-11-02 の自己申告アカウントも一致。"
+    "_evidence": "2026-11-04 利用者申告「このパソコンは999」で作業用999に訂正。旧登録(PR #1401)の作業用008は、kim-PC が 008 前提で送った引継ぎメールに本PCの Claude が「作業用008で受け取りました」と返した自己申告が根拠で、作業用番号はローカルで検証不能だった（誤登録）。作業用008 宛の既存経路（鹿沼案件引継ぎ・meeting-prep-routing）を切らないため aliases に残す。実在の作業用008 が別にあるかは kim 確認待ち。旧 作業用999 行の記録: remoteName 根拠: 既存 sheetName=作業用999(シートD列表記)。ただし hostname 未報告のため fleet-mail では照合値=キー名『作業用999』になり、実機の label/hostname と一致する保証なし。配布インストーラ完走(結果 OK 29 / NG 3)と claude --version 2.1.258 を kim のスクリーンショットで実機確認(2026-09-03)。hostname は未報告のため未記入。fleet-sheet.env 未取得で未報告 → PR #285 の自己修復待ち",
+    "sheetName": "作業用999"
   }
 }

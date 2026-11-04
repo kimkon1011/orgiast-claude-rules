@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { analyzeThread, analyzeDraft, addressee, dedupe, scan, notifyText, isShortAck, loadStaff, KIM, HOUR } from './external-waiting.mjs';
+import { analyzeThread, analyzeDraft, addressee, dedupe, scan, notifyText, stripQuoted, isAckOnly, loadStaff, KIM, HOUR } from './external-waiting.mjs';
 import { externalFile, readJsonSafe, addSkip, readSkips, isSkipped } from './lib/external-waiting-state.mjs';
 
 const NOW = Date.parse('2026-11-04T03:00:00Z');
@@ -60,8 +60,13 @@ test('同じメールが両メールボックスにあれば kim 宛を残して
   const out = dedupe([b, a]);
   assert.equal(out.length, 1); assert.equal(out[0].group, 'kim');
 });
-test('お礼だけの短文は確認対象になる', () => {
-  assert.ok(isShortAck('ありがとうございます。承知しました。')); assert.ok(!isShortAck('ありがとうございます。日程はいつがよいですか？'));
+test('引用と署名を除き、了承だけの短文を正規表現でも判定できる', () => {
+  assert.equal(stripQuoted('11月6日14時で押さえております。宜しくお願いいたします。\n\n2026年11月4日 15:00 金 <kim@orgiast.jp>:\n> 日程のご相談'), '11月6日14時で押さえております。宜しくお願いいたします。');
+  assert.equal(stripQuoted('承知しました。\n-----\n株式会社A 川口'), '承知しました。');
+  assert.ok(isAckOnly('11月6日（金）14:00〜15:00で押さえておりますので、宜しくお願いいたします。'));
+  assert.ok(isAckOnly('ありがとうございます。承知しました。'));
+  assert.ok(!isAckOnly('ありがとうございます。日程はいつがよいですか？'));
+  assert.ok(!isAckOnly('承知しました。資料を送ってください。'));
 });
 
 function fixture(t) {
@@ -70,10 +75,13 @@ function fixture(t) {
   return home;
 }
 // Gmail の応答をフィクスチャで返す fetch（ネットワークは使わない）。
-function fakeGmail({ threads = [], drafts = [], fail = false } = {}) {
+function fakeGmail({ threads = [], drafts = [], fail = false, bodies = {}, sent = [] } = {}) {
   const json = (status, body) => ({ ok: status < 400, status, json: async () => body, text: async () => JSON.stringify(body) });
   return async url => {
     if (fail) return json(500, { error: 'boom' });
+    if (url.includes('/messages?')) return json(200, { messages: sent.map((x, i) => ({ id: `s${i}` })) });
+    const s = url.match(/\/messages\/s(\d+)\?format=minimal/); if (s) return json(200, { id: `s${s[1]}`, internalDate: String(sent[Number(s[1])]) });
+    const f = url.match(/\/messages\/([^?]+)\?format=full/); if (f && bodies[f[1]]) return json(200, { payload: { mimeType: 'text/plain', body: { data: Buffer.from(bodies[f[1]]).toString('base64url') } } });
     if (url.includes('/threads?')) return json(200, { threads: threads.map(x => ({ id: x.id })) });
     const t = url.match(/\/threads\/([^?]+)/); if (t) return json(200, threads.find(x => x.id === t[1]));
     if (url.includes('/drafts?')) return json(200, { drafts: drafts.map(x => ({ id: x.id })) });
@@ -122,12 +130,32 @@ test('通知に失敗したら通知済みにしない・--no-push 相当では�
   assert.equal(calls, 2);
   await run(home, { threads }, { push: false, notify: async () => assert.fail('push=false で送ってはいけない') });
 });
-test('短い了承メールは LLM が no と答えたら除外し、失敗時は表示側に倒す', async t => {
-  const home = fixture(t);
-  const threads = [thread(message('m1', { snippet: 'ありがとうございます。承知しました。' }))];
-  assert.equal((await run(home, { threads }, { classify: () => false })).state.items.length, 0);
-  const other = fixture(t);
-  assert.equal((await run(other, { threads }, { classify: () => true })).state.items.length, 1);
+test('引用・署名を除いた本文が短いメールは LLM が no なら除外、yes なら残し、失敗時は正規表現で判定する', async t => {
+  const threads = [thread(message('m1'))];
+  const ack = { m1: '11月6日（金）14:00〜15:00で押さえておりますので、宜しくお願いいたします。\n\n> 元の長い引用\n> ' + 'あ'.repeat(400) };
+  let r = await run(fixture(t), { threads, bodies: ack }, { classify: () => assert.fail('了承だけと判る文は LLM を呼ばない') });
+  assert.equal(r.state.items.length, 0); assert.deepEqual(r.state.stats, { llmCalls: 0, llmFailures: 0, ackSkipped: 1, answeredElsewhere: 0 });
+  const other = { m1: 'では来週の水曜にお伺いします。' };
+  r = await run(fixture(t), { threads, bodies: other }, { classify: () => false });
+  assert.equal(r.state.items.length, 0); assert.deepEqual(r.state.stats, { llmCalls: 1, llmFailures: 0, ackSkipped: 1, answeredElsewhere: 0 });
+  r = await run(fixture(t), { threads, bodies: other }, { classify: () => true });
+  assert.equal(r.state.items.length, 1);
+  r = await run(fixture(t), { threads, bodies: other }, { classify: () => null });
+  assert.equal(r.state.items.length, 1, 'LLM 失敗時は表示側に倒す'); assert.equal(r.state.stats.llmFailures, 1);
+  const question = { m1: 'ご確認いただけますでしょうか。よろしくお願いします。' };
+  r = await run(fixture(t), { threads, bodies: question }, { classify: () => true });
+  assert.equal(r.state.items.length, 1, '依頼表現があれば了承扱いにしない');
+  r = await run(fixture(t), { threads, bodies: { m1: 'あ'.repeat(300) } }, { classify: () => assert.fail('長い本文は LLM に聞かない') });
+  assert.equal(r.state.items.length, 1);
+});
+test('同じ相手宛ての送信済みが since より後にあれば、別スレッドで返信済みとして除外する', async t => {
+  const threads = [thread(message('m1', { ageH: 30 }))];
+  let r = await run(fixture(t), { threads, sent: [NOW - 5 * HOUR] });
+  assert.equal(r.state.items.length, 0); assert.equal(r.state.stats.answeredElsewhere, 1);
+  r = await run(fixture(t), { threads, sent: [NOW - 40 * HOUR] });
+  assert.equal(r.state.items.length, 1, 'since より前の送信は返信済みにしない');
+  r = await run(fixture(t), { threads });
+  assert.equal(r.state.items.length, 1);
 });
 test('通知文は失敗系の語を伏せる', () => {
   const text = notifyText([{ kind: 'reply', who: 'A', subject: 'エラーの件', since: new Date(NOW - 30 * HOUR).toISOString(), group: 'kim' }], NOW);

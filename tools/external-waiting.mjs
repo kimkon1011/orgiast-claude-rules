@@ -59,10 +59,19 @@ const dateOf = message => Number(message.internalDate) || Date.parse(headerValue
 const clean = text => String(text || '').replace(/\s+/g, ' ').trim();
 
 // お礼・了承だけの短文は返信が不要なことが多い。LLM に聞く対象かどうか。
-export const isShortAck = snippet => {
-  const text = clean(snippet);
-  return text.length > 0 && text.length <= 60 && /ありがとう|承知|了解|かしこまり|拝受|確認(?:しました|いたしました)|お礼|助かり/.test(text) && !/[?？]|お願い|ください|下さい|いただけ|頂け/.test(text);
-};
+export const SHORT_BODY_MAX = 150;
+// 引用（> 行・「…wrote:」「…のメッセージ:」以降）と署名を除いた本文。
+export function stripQuoted(body) {
+  const out = [];
+  for (const line of String(body || '').split(/\r?\n/)) {
+    if (/^\s*>/.test(line) || /^\s*(?:On .{0,200}wrote:|\d{4}年.{0,120}(?:書きました|wrote|のメッセージ|[:：]\s*$)|.{0,120}のメッセージ[:：]|-{2,}\s*(?:Original Message|元のメッセージ)|差出人[:：]|From:\s)/i.test(line)) break;
+    if (/^\s*(?:--\s*$|[―ー━─=_\-]{5,}\s*$)/.test(line)) break;
+    out.push(line);
+  }
+  return out.join('\n').replace(/\s+/g, ' ').trim();
+}
+// 疑問・依頼が無く、了承・お礼の表現がある短文。LLM が使えないときの予備判定。
+export const isAckOnly = text => !/[?？]|いかが|ご確認|いただけ|頂け|ください|下さい|でしょうか|お願いできますか|ご教示/.test(text) && /承知|押さえ|かしこまり|ありがとうございま|よろしくお願い|宜しくお願い|拝受|受領/.test(text);
 
 // スレッド1件を判定する。返信待ちなら項目、そうでなければ null。
 export function analyzeThread(thread, { mailbox, staff = new Set() }) {
@@ -77,7 +86,7 @@ export function analyzeThread(thread, { mailbox, staff = new Set() }) {
   return {
     id: makeId(mailbox, thread.id), kind: 'reply', group: mailbox === KIM ? 'kim' : 'window', mailbox, who: displayName(headers.from), sender,
     subject: clean(headers.subject), since: new Date(dateOf(last)).toISOString(), ask: snippet.slice(0, 60) || '返信内容を決める',
-    threadId: String(thread.id), lastMessageId: String(last.id), messageIdHeader: headers.messageIdHeader.trim(), needsCheck: isShortAck(snippet),
+    threadId: String(thread.id), lastMessageId: String(last.id), messageIdHeader: headers.messageIdHeader.trim(),
   };
 }
 
@@ -111,7 +120,7 @@ async function mapLimit(values, limit, fn) {
   return out;
 }
 
-export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = getDriveToken, staff, now = Date.now() }) {
+export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = getDriveToken, staff, now = Date.now(), stats = { answeredElsewhere: 0 } }) {
   const token = await getToken({ scope: SCOPE, impersonate: mailbox, signal: AbortSignal.timeout(20_000) });
   const get = async (route, { optional = false } = {}) => {
     const response = await fetchImpl(`${API}${route}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(30_000) });
@@ -127,12 +136,26 @@ export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = ge
   }
   const threads = (await mapLimit(stubs, 5, stub => get(`/threads/${stub.id}?format=metadata&${META}`, { optional: true }))).filter(Boolean);
   const items = threads.map(thread => analyzeThread(thread, { mailbox, staff })).filter(Boolean);
-  if (mailbox !== KIM) {
-    await mapLimit(items.filter(item => item.kind === 'reply'), 5, async item => {
-      const full = await get(`/messages/${item.lastMessageId}?format=full`, { optional: true });
-      item.assignee = full ? addressee(extractBody(full.payload, 1500)) : '';
-    });
-  }
+  // 別スレッドで返信済み: 同じ相手宛ての送信済みが since より後にあれば除外する（相手ごとに1回検索）。
+  const bySender = new Map();
+  for (const item of items) bySender.set(item.sender, [...(bySender.get(item.sender) || []), item]);
+  const answered = new Set();
+  await mapLimit([...bySender], 5, async ([sender, group]) => {
+    const earliest = Math.min(...group.map(item => Date.parse(item.since)));
+    const list = await get(`/messages?q=${encodeURIComponent(`in:sent to:${sender} after:${Math.floor(earliest / 1000)}`)}&maxResults=50`);
+    const sent = (await mapLimit(list.messages || [], 5, stub => get(`/messages/${stub.id}?format=minimal`, { optional: true }))).filter(Boolean).map(m => Number(m.internalDate) || 0);
+    for (const item of group) if (sent.some(at => at > Date.parse(item.since))) answered.add(item.id);
+  });
+  stats.answeredElsewhere += answered.size;
+  const replies = items.filter(item => item.kind === 'reply' && !answered.has(item.id));
+  await mapLimit(replies, 5, async item => {
+    const full = await get(`/messages/${item.lastMessageId}?format=full`, { optional: true });
+    const body = full ? extractBody(full.payload, 4000) : '';
+    if (mailbox !== KIM) item.assignee = addressee(body);
+    const text = stripQuoted(body);
+    item.shortBody = text && text.length <= SHORT_BODY_MAX ? text : null;
+  });
+  items.splice(0, items.length, ...items.filter(item => !answered.has(item.id)));
   const drafts = (await get('/drafts?maxResults=100')).drafts || [];
   const detailed = await mapLimit(drafts, 5, stub => get(`/drafts/${stub.id}?format=metadata&${META}`, { optional: true }));
   items.push(...detailed.filter(Boolean).map(draft => analyzeDraft(draft, { mailbox, now })).filter(Boolean));
@@ -149,15 +172,16 @@ export function dedupe(items) {
   return [...seen.values()].sort((a, b) => Date.parse(a.since) - Date.parse(b.since));
 }
 
-// 安価レーンに「返信が必要か」を聞く。失敗時は表示側に倒す（true）。
+// 安価レーンに「返信が必要か」を聞く。true=必要 / false=不要 / null=失敗（呼び出し側が正規表現で判定する）。
 export function askLlm(item, { spawnImpl = spawnSync, tmpDir = os.tmpdir() } = {}) {
   const file = path.join(tmpDir, `external-waiting-${process.pid}-${item.lastMessageId}.txt`);
   try {
-    fs.writeFileSync(file, `次の受信メールに、こちらから返信する必要はありますか。お礼や了承だけで返信不要なら no、質問・依頼・日程・確認などがあるなら yes。yes か no の1語だけで答えてください。\n\n件名: ${item.subject}\n本文: ${item.ask}\n`);
-    const result = spawnImpl(process.execPath, [path.join(toolsDir, 'llm-ask.mjs'), '--provider', 'groq', '--category', 'classification', '--max', '10', '--prompt-file', file], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+    fs.writeFileSync(file, `次の受信メールに、こちらから返信する必要はありますか。お礼や了承だけで返信不要なら no、質問・依頼・日程・確認などがあるなら yes。yes か no の1語だけで答えてください。\n\n件名: ${item.subject}\n本文: ${item.shortBody || item.ask}\n`);
+    const result = spawnImpl(process.execPath, [path.join(toolsDir, 'llm-ask.mjs'), '--provider', 'groq', '--category', 'classification', '--max', '300', '--prompt-file', file], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
     const answer = String(result.stdout || '').trim().toLowerCase();
-    return result.status === 0 && /^no\b/.test(answer) ? false : true;
-  } catch { return true; }
+    if (result.status !== 0) return null;
+    return /^no\b/.test(answer) ? false : /^yes\b/.test(answer) ? true : null;
+  } catch { return null; }
   finally { fs.rmSync(file, { force: true }); }
 }
 
@@ -174,9 +198,9 @@ export async function scan({ home = defaultHome(), now = Date.now(), mailboxes =
   const previous = readJsonSafe(externalFile(home), {});
   const cacheFile = path.join(stateDir(home), 'external-waiting-llm-cache.json');
   const cache = readJsonSafe(cacheFile, {});
-  const sources = {}, collected = [];
+  const sources = {}, collected = [], stats = { llmCalls: 0, llmFailures: 0, ackSkipped: 0, answeredElsewhere: 0 };
   for (const mailbox of mailboxes) {
-    try { collected.push(...await scanMailbox(mailbox, { ...deps, staff, now })); sources[mailbox] = { ok: true }; }
+    try { collected.push(...await scanMailbox(mailbox, { ...deps, staff, now, stats })); sources[mailbox] = { ok: true }; }
     catch (error) {
       sources[mailbox] = { ok: false, error: String(error.message || error).slice(0, 300) };
       collected.push(...(previous.items || []).filter(item => item.mailbox === mailbox)); // 取得失敗を 0 件扱いにしない
@@ -185,11 +209,23 @@ export async function scan({ home = defaultHome(), now = Date.now(), mailboxes =
   const skips = readSkips(home), kept = [];
   for (const item of dedupe(collected)) {
     if (isSkipped(skips, item)) continue;
-    if (item.needsCheck) {
-      if (!(item.lastMessageId in cache)) cache[item.lastMessageId] = classify(item);
-      if (cache[item.lastMessageId] === false) continue;
+    const { shortBody, ...rest } = item;
+    if (shortBody) {
+      // 引用・署名を除いた本文が短い返信。了承・お礼だけ（疑問・依頼なし）と判る文は正規表現で除外し、
+      // 残りは LLM に聞く。LLM が失敗したら表示側に倒す。
+      let verdict = true;
+      if (isAckOnly(shortBody)) verdict = false;
+      else {
+        verdict = cache[item.lastMessageId];
+        if (typeof verdict !== 'boolean') {
+          stats.llmCalls++;
+          verdict = classify({ ...item, shortBody });
+          if (typeof verdict === 'boolean') cache[item.lastMessageId] = verdict;
+          else { stats.llmFailures++; verdict = true; }
+        }
+      }
+      if (verdict === false) { stats.ackSkipped++; continue; }
     }
-    const { needsCheck, ...rest } = item;
     kept.push(rest);
   }
   writeJsonAtomic(cacheFile, Object.fromEntries(Object.entries(cache).slice(-500)));
@@ -204,14 +240,14 @@ export async function scan({ home = defaultHome(), now = Date.now(), mailboxes =
       if (NOTIFY_OK.includes(notified?.delivered)) for (const item of due) pushed[item.id] = now;
     }
   }
-  const state = { generatedAt: new Date(now).toISOString(), sources, items: kept, pushed };
+  const state = { generatedAt: new Date(now).toISOString(), sources, stats, items: kept, pushed };
   writeJsonAtomic(externalFile(home), state);
   return { state, notified };
 }
 
 export function summarize(state) {
   const count = key => kept => kept.reduce((acc, item) => ({ ...acc, [item[key]]: (acc[item[key]] || 0) + 1 }), {});
-  return { sources: state.sources, total: state.items.length, byKind: count('kind')(state.items), byMailbox: count('mailbox')(state.items) };
+  return { sources: state.sources, stats: state.stats, total: state.items.length, byKind: count('kind')(state.items), byMailbox: count('mailbox')(state.items) };
 }
 
 if (isEntry(import.meta.url)) {

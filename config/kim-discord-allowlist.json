@@ -1,1 +1,3 @@
-{ "version": 1, "note": "kim が明示的に Discord へ流すと決めたカテゴリだけ。編集は kim のセッションのみ。", "entries": [] }
+{ "version": 1, "note": "kim が明示的に Discord へ流すと決めたカテゴリだけ。編集は kim のセッションのみ。", "entries": [
+  { "category": "external-waiting", "pattern": "^【社外返信待ち】", "note": "kim 本人が 2026-11-04 のセッションで「AIからのプッシュで遅れをなくしたい」と依頼したため登録（社外の人を24時間以上待たせている返信の通知）" }
+] }

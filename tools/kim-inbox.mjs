@@ -68,6 +68,14 @@ function normalizationKey(text) {
 function create(home, options) {
   return locked(home, 'info-aggregation', () => {
     const text = clean(options.text);
+    if (options.kind === 'deadline') {
+      if (!options.key || !/^[A-Za-z0-9_-]+$/.test(options.key)) throw new Error('deadline には有効な --key が必要です');
+      const existing = listItems(home, { status: 'open' }).find(i => i.kind === 'deadline' && i.key === options.key);
+      if (existing) return update(home, existing.id, current => {
+        current.text = text; current.due = options.due || ''; current.remainingDays = options.remainingDays ?? null;
+        current.lastAt = new Date().toISOString();
+      });
+    }
     // Durable producers retry after a crash between inbox delivery and ledger update.
     // Keep distinct jobs separate even when their text normalizes to the same prefix.
     if (options.dedupeKey) {
@@ -122,20 +130,20 @@ export function compactItems(home) {
     return result;
   });
 }
-function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey }) {
-  if (!['ask', 'info'].includes(kind)) throw new Error('kind は ask または info');
+function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays }) {
+  if (!['ask', 'info', 'deadline'].includes(kind)) throw new Error('kind は ask / info / deadline');
   fs.mkdirSync(directory(home), { recursive: true });
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(dedupeKey ? { dedupeKey: clean(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: clean(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
   }
 }
 export async function addItem(home, options) {
   const item = create(home, options);
-  if (isKimSeat(home) || item.forwardMailId || ['seen', 'answered', 'dropped'].includes(item.status)) return item;
+  if (item.kind === 'deadline' || isKimSeat(home) || item.forwardMailId || ['seen', 'answered', 'dropped'].includes(item.status)) return item;
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-inbox-'));
   try {
     const file = path.join(temp, 'body.txt');
@@ -154,7 +162,7 @@ export function listItems(home, { status } = {}) {
   return files.filter(f => validId(f.replace(/\.json$/, '')) && f.endsWith('.json')).flatMap(f => {
     try {
       const item = JSON.parse(fs.readFileSync(path.join(directory(home), f), 'utf8'));
-      const valid = validId(item.id) && ['ask', 'info'].includes(item.kind) && typeof item.createdAt === 'string'
+      const valid = validId(item.id) && ['ask', 'info', 'deadline'].includes(item.kind) && typeof item.createdAt === 'string'
         && Number.isFinite(Date.parse(item.createdAt)) && typeof item.text === 'string'
         && Array.isArray(item.shownSessions) && Number.isFinite(item.shownCount);
       return valid && (!status || item.status === status) ? [item] : [];
@@ -167,6 +175,15 @@ export function answerItem(home, id, answer, sessionId = '') {
 }
 export function markSeen(home, id) {
   return update(home, id, item => { if (item.kind !== 'info') throw new Error('ask は --answer で返答を記録してください'); item.status = 'seen'; });
+}
+export function closeKey(home, key) {
+  return locked(home, 'info-aggregation', () => listItems(home, { status: 'open' })
+    .filter(i => i.kind === 'deadline' && i.key === key)
+    .map(i => update(home, i.id, current => { current.status = 'seen'; })));
+}
+export function deadlineSheetUrl(home) {
+  const config = readJsonFile(path.join(home, '.claude/deadline-watch/config.json'));
+  return config?.sheetId ? `https://docs.google.com/spreadsheets/d/${config.sheetId}/edit` : '（未初期化）';
 }
 export function dropItem(home, id, reason) {
   if (!String(reason ?? '').trim()) throw new Error('取り下げ理由が必要です');
@@ -234,12 +251,28 @@ export async function ingestFleetMail(home) {
   }
   return imported;
 }
-export function selectContext(items, { sessionId = '', now = Date.now() } = {}) {
+function deadlineDays(item, now) {
+  if (item.due && /^\d{4}-\d{2}-\d{2}$/.test(item.due)) return Math.floor((Date.parse(item.due) - now) / 86400000);
+  if (Number.isFinite(item.remainingDays)) return item.remainingDays;
+  const days = item.text.match(/あと(-?\d+)日|(-?\d+)日超過/);
+  if (days) return days[1] !== undefined ? Number(days[1]) : -Number(days[2]);
+  return /期限切れ/.test(item.text) ? -Infinity : Infinity;
+}
+export function selectContext(items, { sessionId = '', now = Date.now(), sheetUrl = '（未初期化）' } = {}) {
   const pending = items.filter(i => i.status === 'open').sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const asks = pending.filter(i => i.kind === 'ask'), infos = pending.filter(i => i.kind === 'info');
   if (!pending.length) return '';
-  let text = `[kim-inbox 未回収 ask ${asks.length} 件 / 未確認 info ${infos.length} 件] kim への報告は Discord ではなくこのセッションで行う（kim 2026-10-27）。ask は kim の返答を会話で受け取り記録するまで毎プロンプト再提示される。セッションを閉じても台帳に残り次セッションで再提示される。\n`;
+  const deadlines = pending.filter(i => i.kind === 'deadline').sort((a, b) => deadlineDays(a, now) - deadlineDays(b, now) || String(a.key).localeCompare(String(b.key)));
+  let text = `[kim-inbox 期限 ${deadlines.length} / 未回収 ask ${asks.length} 件 / 未確認 info ${infos.length} 件] kim への報告は Discord ではなくこのセッションで行う（kim 2026-10-27）。ask は kim の返答を会話で受け取り記録するまで毎プロンプト再提示される。セッションを閉じても台帳に残り次セッションで再提示される。\n`;
   const footer = '一覧: node tools/kim-inbox.mjs --list --open';
+  if (deadlines.length) {
+    text += `[期限 ${deadlines.length} 件 — 期限台帳 ${sheetUrl}] 返事は「D-003 完了」「D-003 延期 11/20」「D-003 不要」で可（Claude が node tools/deadline-watch.mjs --done/--defer/--drop で台帳と inbox を更新する）\n`;
+    for (const item of deadlines.slice(0, 5)) {
+      text += clean(item.text).replace(/[\r\n]+/g, ' ').slice(0, 140) + '\n';
+      item.shownSessions = [...new Set([...item.shownSessions, sessionId])];
+      item.shownCount++; item.lastShownAt = new Date(now).toISOString();
+    }
+  }
   const own = item => sessionId.length >= 8 && [...item.text.matchAll(/作業ID:\s*([a-f0-9]{8})(?![a-f0-9])/gi)]
     .some(match => match[1].toLowerCase() === sessionId.slice(0, 8).toLowerCase());
   const unseenFirst = (a, b) => Number(a.shownCount > 0) - Number(b.shownCount > 0) || newestFirst(a, b);
@@ -249,7 +282,8 @@ export function selectContext(items, { sessionId = '', now = Date.now() } = {}) 
   // 未表示の進捗は ask より先に短く出す。ask 5件が表示枠を使い切り、進捗が永久に出ない事故（2026-11-04 実測 121件）を防ぐ。
   const unseenHigh = highInfos.filter(i => i.shownCount === 0).slice(0, 3);
   const laterHigh = highInfos.filter(i => !unseenHigh.includes(i)).slice(0, Math.max(0, 5 - unseenHigh.length));
-  for (const item of [...sessionInfos, ...unseenHigh, ...asks.slice(0, 5), ...laterHigh, ...otherInfos.slice(0, 2)]) {
+  const selected = deadlines.length ? [...asks.slice(0, 5), ...[...sessionInfos, ...unseenHigh, ...laterHigh, ...otherInfos].slice(0, 3)] : [...sessionInfos, ...unseenHigh, ...asks.slice(0, 5), ...laterHigh, ...otherInfos.slice(0, 2)];
+  for (const item of selected) {
     if (otherInfos.includes(item) && [...sessionInfos, ...highInfos].some(i => i.shownCount === 0)) break;
     const repeat = item.shownSessions.includes(sessionId);
     const compact = unseenHigh.includes(item) || laterHigh.includes(item);
@@ -277,16 +311,17 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       if (kim) await ingestFleetMail(home);
       const items = listItems(home, { status: 'open' }).filter(i => kim || i.forwardError);
       const counts = new Map(items.map(i => [i.id, i.shownCount]));
-      const context = selectContext(items, { sessionId: String(input.session_id ?? '') });
+      const context = selectContext(items, { sessionId: String(input.session_id ?? ''), sheetUrl: deadlineSheetUrl(home) });
       for (const item of items.filter(i => i.shownCount !== counts.get(i.id))) update(home, item.id, current => {
         current.shownSessions = [...new Set([...current.shownSessions, ...item.shownSessions])]; current.shownCount++; current.lastShownAt = item.lastShownAt;
       });
       if (context) stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }));
     } else if (args.includes('--add')) {
-      const item = await addItem(home, { text: fs.readFileSync(value('--body-file'), 'utf8'), kind: args.includes('--kind') ? value('--kind') : 'info', source: args.includes('--source') ? value('--source') : '' });
+      const item = await addItem(home, { text: fs.readFileSync(value('--body-file'), 'utf8'), kind: args.includes('--kind') ? value('--kind') : 'info', key: args.includes('--key') ? value('--key') : undefined, due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '' });
       stdout(JSON.stringify({ id: item.id, status: item.status, forwarded: item.status === 'forwarded' }));
     } else if (args.includes('--answer')) stdout(JSON.stringify(answerItem(home, value('--answer'), fs.readFileSync(value('--body-file'), 'utf8'), process.env.CLAUDE_SESSION_ID || '')));
     else if (args.includes('--seen')) stdout(JSON.stringify(markSeen(home, value('--seen'))));
+    else if (args.includes('--close-key')) stdout(JSON.stringify(closeKey(home, value('--close-key'))));
     else if (args.includes('--drop')) stdout(JSON.stringify(dropItem(home, value('--drop'), args.includes('--reason') ? value('--reason') : '')));
     else if (args.includes('--compact')) stdout(JSON.stringify(compactItems(home)));
     else if (args.includes('--status') || args.includes('--list')) {

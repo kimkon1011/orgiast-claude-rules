@@ -13,6 +13,7 @@ import { ledgerFile, readLedger, writeLedger, cleanupOldLedgerTemps, OPEN_STATUS
 export { MAX_RESUMES } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { notifyOwner, resolveOwner, sendOwnerToast } from './notify-owner.mjs';
+import { escalateKimDecisions } from './auto-progress-escalate.mjs';
 import { isQuietHours, kimAction } from './auto-progress-digest.mjs';
 import { checkPromise, executeCheck, queueCheckFollowup } from './auto-progress-check.mjs';
 import { appendInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
@@ -814,6 +815,11 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       const digest = io.digest ?? (await import('./auto-progress-digest.mjs')).run;
       summary.digest = await digest({ home, now, io: io.digestIo ?? {} });
     } catch (error) { summary.errors.push(`digest: ${String(error?.message ?? error).slice(0, 120)}`); }
+  }
+  if (!notificationsStopped) {
+    try {
+      summary.escalation = await (io.escalateKimDecisions ?? escalateKimDecisions)({ home, now, dryRun, io: io.escalationIo ?? {} });
+    } catch (error) { summary.errors.push(`escalate: ${String(error?.message ?? error).slice(0, 120)}`); }
   }
   return summary;
 }

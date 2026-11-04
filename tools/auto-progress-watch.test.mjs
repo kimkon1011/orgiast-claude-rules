@@ -301,3 +301,25 @@ test('バックログ完了通知もローカル user にトーストを送る',
   assert.equal(toastCalls, 1);
   assert.ok(toastText.startsWith('✅ 自動進行が完了'));
 });
+
+test('巡回末尾の督促へhome/時刻/dry-runを渡し、失敗も巡回を落とさない', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'watch-escalate-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const now = Date.parse('2026-11-04T10:00:00Z');
+  for (const dryRun of [false, true]) {
+    const order = [];
+    const result = await run({ home, now, dryRun, io: {
+      transcriptFiles: [], sheetConfig: () => null,
+      digest: async () => { order.push('digest'); return { sent: false }; },
+      escalateKimDecisions: async options => {
+        assert.equal(options.home, home);
+        assert.equal(options.now, now);
+        assert.equal(options.dryRun, dryRun);
+        order.push('escalate');
+        throw new Error('mock failure');
+      },
+    } });
+    assert.deepEqual(order, dryRun ? ['escalate'] : ['digest', 'escalate']);
+    assert.ok(result.errors.includes('escalate: mock failure'));
+  }
+});

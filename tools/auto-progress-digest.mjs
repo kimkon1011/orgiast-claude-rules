@@ -11,6 +11,7 @@ export { isUnattendedRow } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { collectCaseProgress } from './case-progress-digest.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
+import { decisionOwnerOf, isChoiceFormat } from './auto-progress-decision-owner.mjs';
 
 export const WINDOW_MS = 24 * 3600 * 1000;
 const stateFile = (home) => path.join(home, '.claude', 'state', 'auto-progress-digest.json');
@@ -67,6 +68,8 @@ export const kimAction = row => {
 
 export const isHumanActionRequired = (row) => {
   if (row.status === 'done') return false;
+  // 依頼本文が欠けた明示的な判断待ちは約束を代わりに表示する。
+  if (row.status === 'waiting_user' && !String(row.nextKim || '').trim()) return true;
   if (kimAction(row) !== 'なし') return true;
   // promise は Claude 自身が進める約束なので語句では判定しない（「判断」等を含むだけで誤って判断待ちになる）。
   // 人の操作が要るのは「次に kim がすること」か、自動再開の結果が needs_user を返した時だけ。
@@ -246,7 +249,9 @@ export function formatDigest(rows, now = Date.now(), label = '', {
   }
 
   // 判断待ちは既に閉じた行だけ外し、古い行も含めて全件を名前つきで出す（件数だけにしない）。
-  const waiting = digestGroups(waitingAll.filter(row => !isClosedRow(row)), 'waiting');
+  const activeWaiting = waitingAll.filter(row => !isClosedRow(row));
+  const waiting = digestGroups(activeWaiting.filter(row => decisionOwnerOf(row) === 'owner'), 'waiting');
+  const kimWaiting = digestGroups(activeWaiting.filter(row => decisionOwnerOf(row) === 'kim'), 'waiting');
   stalled = digestGroups(stalled, 'stalled');
 
   // 進行中は最終判定が新しい順
@@ -257,7 +262,7 @@ export function formatDigest(rows, now = Date.now(), label = '', {
   const inProgressSorted = inProgressList.filter(row => !scheduled.includes(row)).sort((a, b) => checkedTime(b) - checkedTime(a));
 
   const pcLabel = label || 'このPC';
-  const header = `【${pcLabel} の自動進行】 完了 ${done.length}件・止まっている ${stalled.length}件・あなたの判断待ち ${waiting.length}件`;
+  const header = `【${pcLabel} の自動進行】 完了 ${done.length}件・止まっている ${stalled.length}件・あなたの判断待ち ${waiting.length}件・kim の判断待ち ${kimWaiting.length}件`;
   const footerParts = [];
   if (unattended > 0) footerParts.push(`無人処理: ${unattended}件`);
   const footer = footerParts.join(' ／ ');
@@ -269,14 +274,16 @@ export function formatDigest(rows, now = Date.now(), label = '', {
       lines.push(itemLine(`・開始予約${row.status === 'start_overdue' ? '（期限超過）' : ''}: `,
         cleanText(row.label || row.promise, row), `（開始条件の最終確認 ${row.lastCheckedAt || '未確認'}）`));
     }
-    // 1. あなたの判断待ち（古さに関係なく全件）
-    for (const { row, count } of waiting) {
-      const what = cleanText(row.label || row.promise || '約束した作業', row);
-      const night = nightWaitingKeys.has(waitingNotificationKey(row)) ? '夜間に出た判断待ち: ' : 'あなたの判断待ち: ';
-      const head = `・${night}${projectOf(row)}`;
-      const suffix = groupTail(count);
-      const action = count > 1 ? brief(actionOf(row), Math.max(0, MAX_ITEM_CHARS - head.length - suffix.length - 12)) : actionOf(row);
-      lines.push(itemLine(head, what, ` — ${action}${suffix}`));
+    // 判断内容を先に出す。従来の80字制限では依頼本文が切れるため別枠で表示する。
+    for (const [groups, heading] of [[waiting, 'あなたの判断待ち'], [kimWaiting, 'kim の判断待ち（あなたの操作は不要）']]) {
+      for (const { row, count } of groups) {
+        const action = String(row.nextKim || '').trim();
+        const warning = isChoiceFormat(action) ? '⚠ 選択肢形式（Claude が推奨案で決めるべき内容） ' : '';
+        const night = nightWaitingKeys.has(waitingNotificationKey(row)) ? '夜間に出た判断待ち: ' : '';
+        const what = action ? cleanText(action.slice(0, 120), row) : cleanText(row.promise || '約束した作業', row);
+        const promise = action ? `（約束: ${cleanText(String(row.promise || '').slice(0, 40), row)}）` : '';
+        lines.push(`・${heading}: ${night}${projectOf(row)}${warning}${what}${promise}${groupTail(count)}`);
+      }
     }
     // 2. 完了（各1行・80字以内）
     for (const row of done) {

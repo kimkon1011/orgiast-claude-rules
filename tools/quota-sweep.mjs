@@ -222,6 +222,33 @@ export function isTransientWindowReadError(reason) {
 
 const defaultSleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+// index.lock がこれ以上古ければ残骸とみなして削除する。しきい値は既存の
+// tools/dirty-worktree-guard.mjs（DEFAULT_STALE_INDEX_LOCK_MS = 5 分）と同じ慣行に揃える。
+// 若い lock（稼働中の git の競合）は絶対に触らない。dirty-worktree-guard は worktree ルートの
+// `.git/index.lock` しか見ないが、quota-sweep の対象は linked worktree（`.git` がファイルで
+// gitdir は `親/.git/worktrees/<名>/` 配下）のため、エラー文に含まれる実パスから特定する。
+const STALE_INDEX_LOCK_MS = 5 * 60 * 1000;
+
+// エラー文に含まれる index.lock のパスを取り出す。取り出せない/判別不能なら null（削除しない）。
+// 相対パスは cwd 基準で解決する（git のエラーはそれを実行した cwd 基準で相対表記されうる）。
+export function indexLockPath(text, { cwd = process.cwd() } = {}) {
+  const m = String(text ?? '').match(/Unable to create '([^']*index\.lock)': File exists\./);
+  if (!m) return null;
+  return path.isAbsolute(m[1]) ? m[1] : path.resolve(cwd, m[1]);
+}
+
+// 生成から STALE_INDEX_LOCK_MS 以上経過した index.lock だけを削除し true を返す。
+// ・パスを特定できない/既に消えている/読めない → false（従来どおり触らない）
+// ・若い lock（稼働中の git が握っている可能性）→ false（競合は数秒で解消しうるので再試行に任せる）
+export function tryRemoveStaleIndexLock(text, { cwd = process.cwd(), now = Date.now, stat = fs.statSync, unlink = fs.unlinkSync, staleMs = STALE_INDEX_LOCK_MS } = {}) {
+  const file = indexLockPath(text, { cwd });
+  if (!file) return false;
+  let mtimeMs;
+  try { mtimeMs = stat(file).mtimeMs; } catch { return false; }
+  if (now() - mtimeMs < staleMs) return false;
+  try { unlink(file); return true; } catch { return false; }
+}
+
 export function commandRunner(spawnImpl = spawnSync, log = () => {}) {
   return (exe, args, cwd, options = {}) => {
     const network = exe === 'git' && ['fetch', 'push'].includes(args[0]);
@@ -233,9 +260,15 @@ export function commandRunner(spawnImpl = spawnSync, log = () => {}) {
       error.failureKey = `${exe}-${args[0]}-${r.error?.code || r.status}`;
       // 共用 worktree の index.lock 競合（launcher の reset shared repo 等と並走）は数秒で
       // 解消しうる。2026-10-27 に git-checkout-128 が2連続して handoff を起票した実績があるため、
-      // network と同様に1回だけ再試行する。lock ファイル自体は削除しない（稼働中の git を壊さない）。
-      const lockContention = /Unable to create '[^']*index\.lock': File exists\.|Another git process seems to be running/.test(String(r.stderr || '') + ' ' + String(r.error?.message || ''));
+      // network と同様に1回だけ再試行する。若い lock は削除しない（稼働中の git を壊さない）。
+      const lockText = String(r.stderr || '') + ' ' + String(r.error?.message || '');
+      const lockContention = /Unable to create '[^']*index\.lock': File exists\.|Another git process seems to be running/.test(lockText);
       if ((!network && !lockContention) || attempt === 1) throw error;
+      // 2026-11-04 実測: commit 中に殺された run が index.lock を残し、以降の run が codex 2 回 +
+      // handoff-audit 1 回の計 3 連続 git-checkout-128 で失敗した。stale lock は再試行しても消えない
+      // ため、生成から 5 分以上経った残骸だけ削除してから再試行する（若い競合は従来どおり待つ）。
+      // 削除しても失敗すれば従来どおり failed として記録され、handoff 起票は壊さない。
+      if (lockContention) tryRemoveStaleIndexLock(lockText, { cwd });
       log(`${error.message}; retry 1/1${lockContention ? ' (lock contention)' : ''}`);
     }
   };

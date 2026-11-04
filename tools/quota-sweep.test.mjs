@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { normalizeLandedChecks, filterWindowsForCurrentAuth, isTransientWindowReadError, claudeWindowReader, commandRunner, queueRepeatedFailure, queueRepeatedDeferral, writeWorktreePointer, prepareTree, preserveDirtyTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer, createPullRequest } from './quota-sweep.mjs';
+import { normalizeLandedChecks, filterWindowsForCurrentAuth, isTransientWindowReadError, claudeWindowReader, commandRunner, indexLockPath, tryRemoveStaleIndexLock, queueRepeatedFailure, queueRepeatedDeferral, writeWorktreePointer, prepareTree, preserveDirtyTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer, createPullRequest } from './quota-sweep.mjs';
 import { runBounded, killTree } from './lib/quota-sweep-process.mjs';
 import { interactiveCodex, wslPath } from './lib/quota-sweep-host.mjs';
 import { decideSweep, resetKey, sameReset } from './lib/quota-windows.mjs';
@@ -588,7 +588,7 @@ test('fetch and push get a longer timeout and exactly one retry', () => {
   let calls = 0;
   assert.equal(commandRunner(() => ++calls === 1 ? { status: 1 } : { status: 0, stdout: 'ok' })('git', ['fetch']), 'ok');
 });
-test('index.lock 競合で失敗した git コマンドは1回だけ再試行し、lock は削除しない', () => {
+test('index.lock 競合で失敗した git コマンドは1回だけ再試行し、若い lock は削除しない', () => {
   const lockStderr = "fatal: Unable to create 'C:/repo/.git/worktrees/sweep/index.lock': File exists.\n\nAnother git process seems to be running in this repository, or the lock file may be stale\n";
   let calls = 0;
   const run = commandRunner(() => ++calls === 1 ? { status: 128, stderr: lockStderr } : { status: 0, stdout: 'ok' });
@@ -604,6 +604,50 @@ test('index.lock 競合で失敗した git コマンドは1回だけ再試行し
   const run3 = commandRunner(() => { calls++; return { status: 128, stderr: 'fatal: not a git repository\n' }; });
   assert.throws(() => run3('git', ['status'], '/tmp'), /git status:/);
   assert.equal(calls, 1);
+});
+test('stale index.lock（生成から5分超）は削除してから再試行し、若い lock は残す', t => {
+  const dir = temp(t), lock = path.join(dir, 'index.lock');
+  const lockStderr = () => `fatal: Unable to create '${lock}': File exists.\n\nAnother git process seems to be running in this repository, or the lock file may be stale\n`;
+  // 生成から 60 秒以上経過した stale lock → 削除して再試行し成功する
+  fs.writeFileSync(lock, ''); fs.utimesSync(lock, new Date(Date.now() - 360_000), new Date(Date.now() - 360_000));
+  let calls = 0;
+  const run = commandRunner(() => ++calls === 1 ? { status: 128, stderr: lockStderr() } : { status: 0, stdout: 'ok' });
+  assert.equal(run('git', ['checkout', '--detach', 'origin/main'], dir), 'ok');
+  assert.equal(calls, 2);
+  assert.equal(fs.existsSync(lock), false, 'stale index.lock は削除される');
+  // 生成直後の若い lock（稼働中 git の競合相当）→ 削除せず、再試行しても失敗したら throws
+  fs.writeFileSync(lock, '');
+  calls = 0;
+  const run2 = commandRunner(() => { calls++; return { status: 128, stderr: lockStderr() }; });
+  assert.throws(() => run2('git', ['checkout', '--detach', 'origin/main'], dir), /git checkout:.*index\.lock/s);
+  assert.equal(calls, 2);
+  assert.equal(fs.existsSync(lock), true, '若い index.lock は削除されない');
+  // stale lock を削除しても再試行が失敗する場合は従来どおり failed（handoff 起票を壊さない）
+  fs.utimesSync(lock, new Date(Date.now() - 360_000), new Date(Date.now() - 360_000));
+  calls = 0;
+  const run3 = commandRunner(() => { calls++; return { status: 128, stderr: lockStderr() }; });
+  assert.throws(() => run3('git', ['checkout', '--detach', 'origin/main'], dir), /git checkout:.*index\.lock/s);
+  assert.equal(calls, 2);
+  assert.equal(fs.existsSync(lock), false, 'stale lock は削除の上で再試行し、それでも失敗したら failed');
+});
+test('indexLockPath / tryRemoveStaleIndexLock は相対パスを cwd 基準で解決し、Missing/young は触らない', t => {
+  const dir = temp(t);
+  assert.equal(indexLockPath(`Unable to create '${path.join(dir, 'index.lock')}': File exists.`), path.join(dir, 'index.lock'));
+  assert.equal(indexLockPath("Unable to create 'relative/.git/index.lock': File exists.", { cwd: dir }), path.join(dir, 'relative', '.git', 'index.lock'));
+  assert.equal(indexLockPath('fatal: not a git repository'), null);
+  const lock = path.join(dir, 'index.lock');
+  fs.writeFileSync(lock, '');
+  // 若い lock は削除しない
+  assert.equal(tryRemoveStaleIndexLock(`Unable to create '${lock}': File exists.`), false);
+  assert.equal(fs.existsSync(lock), true);
+  // 5分超の stale lock は削除する（mtime 注入で判定）
+  fs.utimesSync(lock, new Date(Date.now() - 360_000), new Date(Date.now() - 360_000));
+  assert.equal(tryRemoveStaleIndexLock(`Unable to create '${lock}': File exists.`), true);
+  assert.equal(fs.existsSync(lock), false);
+  // 既に消えている lock は false（削除不要だがエラーにもしない）
+  assert.equal(tryRemoveStaleIndexLock(`Unable to create '${lock}': File exists.`), false);
+  // 読めない/存在しない lock（テストのフェイクパス）は false
+  assert.equal(tryRemoveStaleIndexLock("Unable to create 'C:/repo/no-such/index.lock': File exists."), false);
 });
 test('filtering current windows keeps provider read reasons', () => {
   const all = Object.assign([{ provider: 'claude', window: '5h', usedPercent: 0, resetsAt: null }, { provider: 'codex', observedAt: 2, window: 'primary' }], { reasons: { claude: 'HTTP 401', codex: null } });

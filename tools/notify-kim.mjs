@@ -211,7 +211,11 @@ export async function deliverKim(text, {
   // 平易化の書き換えでアカウント表記が落ちることがあるため、書き換え後の本文で補う。
   const translated = annotateAccounts(plainJa ? await plainJaImpl(String(text ?? '')) : text);
   const body = suffix && !allowHumanRequest && kind !== 'ask' ? String(translated).split('\n').filter(line => !HANDOFF.test(line)).join('\n') : translated;
-  if ((userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID) && !discordAllowed(String(body) + suffix, { home, allowlist, repoRoot }).allowed) {
+  // 許可判定は平易化前の原文でも行う。平易化（LLM 書き換え）で「【… の自動進行】」等の見出しが変わり、
+  // 許可リストに合わなくなって定期ダイジェストが kim-inbox に落ちた（2026-11-04 実測）。
+  const allowedForKim = discordAllowed(String(text ?? '') + suffix, { home, allowlist, repoRoot }).allowed
+    || discordAllowed(String(body) + suffix, { home, allowlist, repoRoot }).allowed;
+  if ((userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID) && !allowedForKim) {
     const item = await addItem(home, { kind, text: String(body) + suffix, source, signal });
     return { delivered: 'session-inbox', id: item.id, kind: item.kind };
   }

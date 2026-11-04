@@ -55,13 +55,72 @@ function update(home, id, fn) {
     fn(item); save(home, item); return item;
   });
 }
-function create(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null }) {
+const isHighInfo = item => item.kind === 'info' && /完了:|✅|未達|確認エラー|判断待ち|自動進行|まとめ/.test(item.text);
+const hasWorkId = item => /作業ID:\s*[a-f0-9]{8}(?![a-f0-9])/i.test(item.text);
+const newestFirst = (a, b) => (b.lastAt || b.createdAt).localeCompare(a.lastAt || a.createdAt) || b.id.localeCompare(a.id);
+function normalizationKey(text) {
+  return text.replace(/^【[^\r\n]*】[^\S\r\n]*(?:\r?\n|$)/, '')
+    .replace(/\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?/g, '#')
+    .replace(/\b(?:0x[a-f0-9]+|[a-f0-9]{8,})\b/gi, '#')
+    .replace(/\d+/g, '#').slice(0, 120);
+}
+// 集約の検索と作成を同じロックで守り、同時追加も取りこぼさない。
+function create(home, options) {
+  return locked(home, 'info-aggregation', () => {
+    const text = clean(options.text);
+    if ((options.kind ?? 'info') === 'info') {
+      const key = normalizationKey(text);
+      const matches = listItems(home, { status: 'open' }).filter(i => i.kind === 'info' && normalizationKey(i.text) === key).sort(newestFirst);
+      for (const match of matches) {
+        let merged = false;
+        const item = update(home, match.id, current => {
+          if (current.status !== 'open') return;
+          current.repeatCount = (current.repeatCount ?? 1) + 1;
+          current.lastAt = new Date().toISOString(); current.text = text;
+          if (options.forwardMailId) current.forwardMailId = options.forwardMailId;
+          merged = true;
+        });
+        if (merged) return item;
+      }
+    }
+    return createNew(home, options);
+  });
+}
+export function compactItems(home) {
+  return locked(home, 'info-aggregation', () => {
+    const groups = new Map();
+    for (const item of listItems(home, { status: 'open' })) {
+      if (item.kind !== 'info' || isHighInfo(item) || hasWorkId(item)) continue;
+      const key = normalizationKey(item.text);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(item);
+    }
+    const result = { groups: 0, merged: 0 };
+    for (const items of groups.values()) {
+      if (items.length < 2) continue;
+      const [latest, ...duplicates] = items.sort(newestFirst);
+      // 回答・既読化と競合しても、閉じた項目を再び集約しない。
+      update(home, latest.id, kept => {
+        if (kept.status !== 'open') return;
+        let merged = 0;
+        for (const duplicate of duplicates) update(home, duplicate.id, current => {
+          if (current.status !== 'open') return;
+          kept.repeatCount = (kept.repeatCount ?? 1) + (current.repeatCount ?? 1);
+          current.status = 'merged'; current.mergedInto = kept.id; merged++;
+        });
+        if (merged) { kept.lastAt ||= kept.createdAt; result.groups++; result.merged += merged; }
+      });
+    }
+    return result;
+  });
+}
+function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null }) {
   if (!['ask', 'info'].includes(kind)) throw new Error('kind は ask または info');
   fs.mkdirSync(directory(home), { recursive: true });
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
   }
@@ -173,10 +232,17 @@ export function selectContext(items, { sessionId = '', now = Date.now() } = {}) 
   if (!pending.length) return '';
   let text = `[kim-inbox 未回収 ask ${asks.length} 件 / 未確認 info ${infos.length} 件] kim への報告は Discord ではなくこのセッションで行う（kim 2026-10-27）。ask は kim の返答を会話で受け取り記録するまで毎プロンプト再提示される。セッションを閉じても台帳に残り次セッションで再提示される。\n`;
   const footer = '一覧: node tools/kim-inbox.mjs --list --open';
-  for (const item of [...asks.slice(0, 5), ...infos.slice(0, 3)]) {
+  const own = item => sessionId.length >= 8 && [...item.text.matchAll(/作業ID:\s*([a-f0-9]{8})(?![a-f0-9])/gi)]
+    .some(match => match[1].toLowerCase() === sessionId.slice(0, 8).toLowerCase());
+  const unseenFirst = (a, b) => Number(a.shownCount > 0) - Number(b.shownCount > 0) || newestFirst(a, b);
+  const sessionInfos = infos.filter(own).sort(unseenFirst);
+  const highInfos = infos.filter(i => !own(i) && isHighInfo(i)).sort(unseenFirst);
+  const otherInfos = infos.filter(i => !own(i) && !isHighInfo(i)).sort(newestFirst);
+  for (const item of [...sessionInfos, ...asks.slice(0, 5), ...highInfos.slice(0, 5), ...otherInfos.slice(0, 2)]) {
+    if (otherInfos.includes(item) && [...sessionInfos, ...highInfos].some(i => i.shownCount === 0)) break;
     const repeat = item.shownSessions.includes(sessionId);
     const body = repeat ? item.text.split(/\r?\n/)[0].slice(0, 120) : item.text.slice(0, 600);
-    const heading = clean(`■ ${item.kind} ${item.id} (${Math.max(0, Math.floor((now - Date.parse(item.createdAt)) / 86400000))}日前 from=${item.from} source=${item.source})`).slice(0, 220);
+    const heading = clean(`■ ${item.kind} ${item.id}${item.kind === 'info' && !own(item) && !isHighInfo(item) ? ` ×${item.repeatCount ?? 1}` : ''} (${Math.max(0, Math.floor((now - Date.parse(item.createdAt)) / 86400000))}日前 from=${item.from} source=${item.source})`).slice(0, 220);
     const command = item.kind === 'ask' ? `→ kim に提示して返答をもらい: node tools/kim-inbox.mjs --answer ${item.id} --body-file <返答ファイル>` : `→ kim に伝えたら: node tools/kim-inbox.mjs --seen ${item.id}`;
     const room = CONTEXT_LIMIT - text.length - footer.length - heading.length - command.length - 3;
     if (room < 1) break;
@@ -208,11 +274,12 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
     } else if (args.includes('--answer')) stdout(JSON.stringify(answerItem(home, value('--answer'), fs.readFileSync(value('--body-file'), 'utf8'), process.env.CLAUDE_SESSION_ID || '')));
     else if (args.includes('--seen')) stdout(JSON.stringify(markSeen(home, value('--seen'))));
     else if (args.includes('--drop')) stdout(JSON.stringify(dropItem(home, value('--drop'), args.includes('--reason') ? value('--reason') : '')));
+    else if (args.includes('--compact')) stdout(JSON.stringify(compactItems(home)));
     else if (args.includes('--status') || args.includes('--list')) {
       const items = listItems(home, { status: args.includes('--open') || args.includes('--status') ? 'open' : undefined });
       if (args.includes('--status')) stdout(`kim-inbox: open ask ${items.filter(i => i.kind === 'ask').length} / open info ${items.filter(i => i.kind === 'info').length}\n最古: ${items.length ? `${items[0].id} ${items[0].text.split(/\r?\n/)[0].slice(0, 120)}` : 'なし'}`);
       else stdout(args.includes('--json') ? JSON.stringify(items) : items.map(i => `${i.id} ${i.kind} ${i.status} ${i.text.split(/\r?\n/)[0]}`).join('\n'));
-    } else throw new Error('--add / --answer / --seen / --drop / --list / --status / --context を指定してください');
+    } else throw new Error('--add / --answer / --seen / --drop / --list / --status / --context / --compact を指定してください');
     return 0;
   } catch (error) { stderr(`kim-inbox: ${clean(error.message).replace(/[\r\n]+/g, ' ')}`); return args.includes('--context') ? 0 : 1; }
 }

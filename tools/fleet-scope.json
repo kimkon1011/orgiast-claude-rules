@@ -982,6 +982,18 @@
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
     },
     {
+      "path": "tools/lib/owner-dm-policy.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "持ち主DMの送信制御・まとめの実行時 import 依存"
+    },
+    {
+      "path": "tools/lib/owner-dm-digest.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "持ち主DMの送信制御・まとめの実行時 import 依存"
+    },
+    {
       "path": "tools/lib/kim-dm-policy.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",

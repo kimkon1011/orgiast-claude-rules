@@ -2,8 +2,8 @@
 // 各PCのローカル台帳から、完了・進行中・停滞/再開・判断待ちを 持ち主の DM へ定期報告する。
 import fs from 'node:fs';
 import { readDeferred } from './lib/owner-dm-policy.mjs';
-import { compactDigest } from './lib/owner-dm-digest.mjs';
-export { compactDigest } from './lib/owner-dm-digest.mjs';
+import { compactDigest, kimAction, isHumanActionRequired, cleanText } from './lib/owner-dm-digest.mjs';
+export { compactDigest, kimAction, isHumanActionRequired, cleanText } from './lib/owner-dm-digest.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { acquireLock } from './lib/progress-file-lock.mjs';
@@ -59,22 +59,6 @@ export function selectRows(rows, now = Date.now(), since = now - WINDOW_MS) {
 
 export const verdictOf = (row, now = Date.now()) => row.status === 'done' ? 'done' : row.status === 'waiting_user' ? 'waiting_user' : row.status === 'resumed' ? 'resumed' : row.verdict || (row.status === 'stalled' ? 'stalled' : deadlinePassed(row, now) ? 'open/期限超過' : row.lastCheckedAt ? 'in_progress' : 'open');
 export const MAX_ITEMS = 10;
-export const kimAction = row => {
-  const value = String(row.nextKim || '').trim();
-  // 「なし / 0件」「なし（…」のように補足付き・途中で切れた「なし」も人の操作は不要として扱う。
-  if (/^(?:特に)?(?:なし|無し|ナシ)/.test(value)) return 'なし';
-  const action = /^(?:(?:特に)?なし|無し|ナシ|(?:対応(?:は)?)?不要(?:です)?|(?:特に)?ありません|none|n\/a|[-—–－ー―])(?:[（(].*[）)])?[。．]?$/i.test(value) || !value ? 'なし' : value;
-  // 相手・別処理からの到着を待つ条件は kim の操作ではない。
-  return /(?:待機|待つ|返事待ち|返信待ち|確認待ち|判断待ち|(?:が|から).*来たら|(?:が|を).*したら)/.test(action) ? 'なし' : action;
-};
-
-export const isHumanActionRequired = (row) => {
-  if (row.status === 'done') return false;
-  if (kimAction(row) !== 'なし') return true;
-  // promise は Claude 自身が進める約束なので語句では判定しない（「判断」等を含むだけで誤って判断待ちになる）。
-  // 人の操作が要るのは「次に kim がすること」か、自動再開の結果が needs_user を返した時だけ。
-  return /^needs_user\b/.test(String(row.resumeOutcome || '').trim());
-};
 
 export function needsDm(row, now = Date.now()) {
   if (row.kimAnswer || isNoopPromise(row.promise)) return false;
@@ -84,50 +68,6 @@ export function needsDm(row, now = Date.now()) {
       (/^(?:error|timeout|blocked)\b/i.test(String(row.resumeOutcome || '')) && Number(row.resumeFailureCount ?? row.resumeCount) >= 2)));
 }
 
-export function cleanText(text, row = {}) {
-  let s = String(text || '');
-  // 先頭の定型句
-  s = s.replace(/^[-*•\s]*(?:\*\*|__)?(?:この後の自動進行|自動進行|約束)(?:\*\*|__)?[:：\s]*/i, '');
-  // バッククォートの中身（コマンド・パス・ファイル名）は消さずに残し、記号のバッククォートだけ外す。
-  // 中身を消すと「マージ後に と で同期すれば」のように文へ穴が開く。平易化は送信時の notify-kim 側で行う。
-  const kept = [];
-  s = s.replace(/`([\s\S]*?)`/g, (_, inner) => { kept.push(inner); return `\u0000K${kept.length - 1}\u0000`; });
-  // 英語ステータス名を日本語へ
-  s = s.replace(/\bdone\b/gi, '完了');
-  s = s.replace(/\bstalled\b/gi, '止まっている');
-  s = s.replace(/\bin_progress\b/gi, '進行中');
-  s = s.replace(/\bwaiting_user\b/gi, '判断待ち');
-  s = s.replace(/\bneeds_user\b/gi, '判断待ち');
-  s = s.replace(/\bresumed\b/gi, '再開済み');
-  s = s.replace(/\bopen\/期限超過\b/gi, '期限超過');
-  s = s.replace(/\bprogressed\b/gi, '進行');
-  s = s.replace(/\bblocked\b/gi, '中断');
-  s = s.replace(/\bsuperseded\b/gi, '更新');
-
-  if (row.pc) s = s.split(row.pc).join('');
-  if (row.sessionId) s = s.split(row.sessionId).join('');
-
-  // ID、UUID、ハッシュ
-  s = s.replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '');
-  s = s.replace(/\b[0-9a-f]{16,64}\b/gi, '');
-  s = s.replace(/\b[0-9a-f]{8,12}\b/gi, '');
-  s = s.replace(/\bDESKTOP-[A-Z0-9]+\b/g, '');
-
-  // ファイルパス・ディレクトリパス
-  s = s.replace(/[a-zA-Z]:\\[^\s:：()（）「」\r\n]+/g, '');
-  s = s.replace(/(?:^|[\s(（])(?:\/[a-zA-Z0-9_.-]+){2,}/g, '');
-  s = s.replace(/~\/\.[a-zA-Z0-9_.-]+[^\s:：()（）「」\r\n]*/g, '');
-
-  // コマンド名（node / git 等）は文脈ごと消すと穴が開くので、ここでは削らない。
-
-  // 保護したバッククォートの中身を戻す
-  s = s.replace(/\u0000K(\d+)\u0000/g, (_, index) => kept[Number(index)] ?? '');
-
-  // 空白正規化
-  s = s.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
-  s = s.replace(/^[:：\-–—\s]+/, '').replace(/[:：\-–—\s]+$/, '');
-  return s;
-}
 
 const projectOf = row => { const name = String(row.cwd || '').split(/[\\/]+/).filter(Boolean).pop(); return name ? `［${name}］` : ''; };
 // 1行が長すぎると1通1800字に収まらないので、項目の本文だけを切る（見出し・件数は残す）。

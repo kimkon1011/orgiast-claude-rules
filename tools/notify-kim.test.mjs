@@ -304,7 +304,8 @@ test('notify-kim CLIはblockedでexit 3、明示例外なら送信する', async
     assert.equal(await main(['PR #943 をマージしてください']), 3);
     const calls = [];
     assert.equal(await main(['PR #943 をマージしてください', '--kim-action-required'], {
-      token: 'token', userId: 'user', plainJa: false,
+      // 送信枠の台帳も一時homeへ隔離し、実ユーザーの状態に触れない。
+      home: home(), token: 'token', userId: 'user', plainJa: false,
       fetchImpl: async () => { calls.push(1); return calls.length === 1 ? response({ json: { id: 'dm' } }) : response(); },
     }), 0);
     assert.equal(calls.length, 2);

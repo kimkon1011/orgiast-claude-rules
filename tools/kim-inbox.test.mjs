@@ -156,6 +156,15 @@ test('古い雑多な info 50件より新しい完了通知を先に表示する
   assert.ok(context.indexOf(done.id) < context.indexOf('雑多な連絡'));
   assert.ok(context.length <= CONTEXT_LIMIT);
 });
+test('長い ask が多数あっても未表示の進捗 info を表示枠から追い出さない', async t => {
+  const home = seat(t);
+  for (let n = 0; n < 8; n++) await addItem(home, { kind: 'ask', text: `判断依頼 ${n}\n` + 'い'.repeat(600) });
+  const done = await addItem(home, { text: '【kim-PC の Claude Code】プロジェクト: x ／ 作業ID: deadbeef\n完了: 別セッションの検証が通りました' });
+  const context = selectContext(listItems(home), { sessionId: '0c1acc2f-0000' });
+  assert.match(context, /完了: 別セッションの検証が通りました/);
+  assert.ok(context.indexOf(done.id) < context.indexOf('■ ask'));
+  assert.ok(context.length <= CONTEXT_LIMIT);
+});
 test('hook の session_id と一致する作業IDの info を ask より先に表示する', async t => {
   const home = seat(t);
   await addItem(home, { kind: 'ask', text: '先に届いた質問' });

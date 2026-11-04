@@ -240,10 +240,15 @@ export function selectContext(items, { sessionId = '', now = Date.now() } = {}) 
   const sessionInfos = infos.filter(own).sort(unseenFirst);
   const highInfos = infos.filter(i => !own(i) && isHighInfo(i)).sort(unseenFirst);
   const otherInfos = infos.filter(i => !own(i) && !isHighInfo(i)).sort(newestFirst);
-  for (const item of [...sessionInfos, ...asks.slice(0, 5), ...highInfos.slice(0, 5), ...otherInfos.slice(0, 2)]) {
+  // 未表示の進捗は ask より先に短く出す。ask 5件が表示枠を使い切り、進捗が永久に出ない事故（2026-11-04 実測 121件）を防ぐ。
+  const unseenHigh = highInfos.filter(i => i.shownCount === 0).slice(0, 3);
+  const laterHigh = highInfos.filter(i => !unseenHigh.includes(i)).slice(0, Math.max(0, 5 - unseenHigh.length));
+  for (const item of [...sessionInfos, ...unseenHigh, ...asks.slice(0, 5), ...laterHigh, ...otherInfos.slice(0, 2)]) {
     if (otherInfos.includes(item) && [...sessionInfos, ...highInfos].some(i => i.shownCount === 0)) break;
     const repeat = item.shownSessions.includes(sessionId);
-    const body = repeat ? item.text.split(/\r?\n/)[0].slice(0, 120) : item.text.slice(0, 600);
+    const compact = unseenHigh.includes(item) || laterHigh.includes(item);
+    const body = repeat ? item.text.split(/\r?\n/)[0].slice(0, 120)
+      : compact ? item.text.replace(/^【[^\r\n]*\r?\n/, '').slice(0, 240) : item.text.slice(0, 600);
     const heading = clean(`■ ${item.kind} ${item.id}${item.kind === 'info' && !own(item) && !isHighInfo(item) ? ` ×${item.repeatCount ?? 1}` : ''} (${Math.max(0, Math.floor((now - Date.parse(item.createdAt)) / 86400000))}日前 from=${item.from} source=${item.source})`).slice(0, 220);
     const command = item.kind === 'ask' ? `→ kim に提示して返答をもらい: node tools/kim-inbox.mjs --answer ${item.id} --body-file <返答ファイル>` : `→ kim に伝えたら: node tools/kim-inbox.mjs --seen ${item.id}`;
     const room = CONTEXT_LIMIT - text.length - footer.length - heading.length - command.length - 3;

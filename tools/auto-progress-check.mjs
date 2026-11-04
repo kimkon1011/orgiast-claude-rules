@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { isUnattendedRow, rowKey, originLine } from './auto-progress-ledger.mjs';
 import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
+import { addItem as addKimInboxItem, listItems as listKimInboxItems } from './kim-inbox.mjs';
 
 export const CHECK_TIMEOUT_MS = 30000;
 export const MAX_CHECK_TIMEOUT_MS = 300000;
@@ -78,12 +79,20 @@ export async function checkPromise(row, { home, now, patch, io = {} }) {
   }
   if (state !== 'done') (io.queueCheckFollowup ?? queueCheckFollowup)(home, row, result);
   // State, not volatile stdout/count/timestamps, determines duplicate delivery.
-  if (row.checkNotifiedResult === state) return state;
-  const message = `${state === 'done' ? '完了' : '確認エラー'}: ${oneLine(row.label || row.promise, 80)}\n${changes.checkText}${state === 'done' ? '' : `\n${pendingAction(row)}（next-session.md に起票）`}`;
+  if (row.checkNotifiedResult === state && (state !== 'done' || row.doneNotifiedAt)) return state;
+  const message = `${state === 'done' ? '完了' : '確認エラー'}: ${oneLine(row.label || row.promise, 80)}\n${changes.checkText}${state === 'done' ? (String(row.nextClaude || '').trim() ? `\nClaude の作業が残っています: ${oneLine(row.nextClaude)}` : '') : `\n${pendingAction(row)}（next-session.md に起票）`}`;
   const owner = row.owner || resolveOwner({ home });
   const origin = originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: owner, home });
-  const delivery = await (io.notifyOwner ?? notifyOwner)(owner, `${origin}\n${message}`, { home, now, kind: state === 'done' && !isUnattendedRow(row, home) ? 'done-requested' : pendingAction(row).startsWith('あなたの作業待ち:') ? 'action' : 'automatic', session: row });
-  if (!['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
-  patch(rowKey(row), { checkNotifiedResult: state });
+  if (state === 'done') {
+    const text = `${origin}\n✅ 自動進行のcheck達成\n${message}`;
+    const item = await (io.addKimInboxItem ?? addKimInboxItem)(home, { kind: 'info', text, source: 'auto-progress-check' });
+    const readBack = (io.listKimInboxItems ?? listKimInboxItems)(home).find(current => current.id === item?.id && current.text === text);
+    if (!readBack) throw new Error('kim-inbox delivery read-back failed');
+    if (patch(rowKey(row), { checkNotifiedResult: state, doneNotifiedAt: new Date(now).toISOString(), doneNotifyPending: false }) === false) return 'ledger_error';
+  } else {
+    const delivery = await (io.notifyOwner ?? notifyOwner)(owner, `${origin}\n${message}`, { home, now, kind: pendingAction(row).startsWith('あなたの作業待ち:') ? 'action' : 'automatic', session: row });
+    if (!['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
+    patch(rowKey(row), { checkNotifiedResult: state });
+  }
   return state;
 }

@@ -593,7 +593,10 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   await registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io, persist);
   let candidates = latestOpenPromises(rows);
   const selected = new Set(candidates);
-  const pendingChecks = rows.filter(row => row.check && row.status === 'done' && row.checkResult === 'done' && row.checkNotifiedResult !== 'done');
+  // doneNotifiedAt が無い旧行は、checkNotifiedResult=done でも実配信の証拠が無い。
+  // kim-inbox への read-back が成功するまで再試行する。
+  const pendingChecks = rows.filter(row => row.check && row.status === 'done' && row.checkResult === 'done' &&
+    (row.checkNotifiedResult !== 'done' || !row.doneNotifiedAt));
   // 完了した経路に依存せず未通知を拾う。古い完了は個別DMを大量送信せず一覧にまとめる。
   const doneSweep = doneNoticeSweepRows(rows, home, now);
   summary.doneNotifications = { recent: doneSweep.recent.length, backlog: doneSweep.backlog.length };

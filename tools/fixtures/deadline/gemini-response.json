@@ -1,0 +1,8 @@
+{"items":[
+  {"title":"学会の請求振込","due":"2026-11-30","kind":"支払","company":"学会","action":"振込を確認","assignee":"経理","confidence":0.95,"quote":"振込期日は2026年11月30日です。","sourceRef":"gmail:kim@orgiast.jp:fixture-invoice"},
+  {"title":"事業化状況報告書の提出","due":null,"kind":"補助金・申請","company":"","action":"提出期限を確認","assignee":"kim","confidence":0.7,"quote":"事業化状況報告書を提出してください。回答期限は追ってお知らせします。","sourceRef":"gmail:kim@orgiast.jp:fixture-subsidy"},
+  {"title":"消防の質問書回答","due":"2026-11-10","kind":"行政・消防","company":"","action":"回答案を作成","assignee":"kim","confidence":0.9,"quote":"2026年11月10日までに回答をお願いします。","sourceRef":"drive:fixture-fire"},
+  {"title":"LINEの協業回答","due":"2026-11-04","kind":"回答・返信","company":"","action":"協業案を回答","assignee":"金","confidence":0.9,"quote":"明日までに回答をお願いします。","sourceRef":"line:fixture:reply"},
+  {"title":"資料の提出","due":"2026-11-10","kind":"提出","company":"","action":"資料提出","assignee":"田中","confidence":0.9,"quote":"1週間以内に資料を提出してください。","sourceRef":"line:fixture:week"},
+  {"title":"契約の更新","due":"2026-12-03","kind":"契約更新","company":"","action":"更新条件確認","assignee":"kim","confidence":0.9,"quote":"契約更新期限は2026年12月03日です。","sourceRef":"discord:fixture:update"}
+]}

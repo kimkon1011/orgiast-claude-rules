@@ -664,6 +664,12 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/register-nightly-reload-vscode.ps1",
+      "scope": "fleet",
+      "step": "nightly-reload-vscode",
+      "reason": "VS Code 夜間再起動タスクの登録（converge 経由）"
+    },
+    {
       "path": "tools/register-plaud-task.ps1",
       "scope": "kim-only",
       "step": null,

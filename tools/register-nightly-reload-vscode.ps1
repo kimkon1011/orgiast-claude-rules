@@ -1,6 +1,7 @@
 # Registration only: never starts the task or VS Code.
 param([switch]$FunctionsOnly)
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
 function Get-NightlyTaskDefinition($Task) {
     $triggers = @($Task.Triggers | ForEach-Object {
         [ordered]@{ Type = $_.CimClass.CimClassName; Time = ([datetime]$_.StartBoundary).ToString('HH:mm:ss');
@@ -26,7 +27,8 @@ function Register-NightlyReloadTask(
     [scriptblock]$RegisterTask = { param($TaskName, $InputObject) Register-ScheduledTask -TaskName $TaskName -TaskPath '\' -InputObject $InputObject -Force | Out-Null }
 ) {
     $name = 'OrgiastNightlyReloadVSCode'
-    $scriptFile = Join-Path $PSScriptRoot 'nightly-reload-vscode.ps1'
+    $toolsDir = Resolve-RegisterToolsDir -Fallback $PSScriptRoot
+    $scriptFile = Join-Path $toolsDir 'nightly-reload-vscode.ps1'
     if (-not (Test-Path -LiteralPath $scriptFile)) { throw "Missing script: $scriptFile" }
     $action = New-ScheduledTaskAction -Execute (Join-Path $PSHOME 'powershell.exe') -Argument ('-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $scriptFile)
     $triggers = @('04:40', '05:00', '05:20', '05:40', '06:00') | ForEach-Object {

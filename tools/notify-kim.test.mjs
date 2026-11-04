@@ -136,10 +136,13 @@ test('起票失敗では未修復通知を送らない', async () => {
 });
 test('送信失敗後は再送可能、同時呼び出しでも1通知・1起票', async () => {
   const s = sender(home());
-  assert.equal((await notifyKim('失敗', { ...s.options, token: '', webhookFallback: false })).delivered, 'none');
+  // DM/webhook が使えない kim 宛通知は kim-inbox に保存される（2026-11-04 rescue）
+  const inboxResult = await notifyKim('失敗', { ...s.options, token: '', webhookFallback: false });
+  assert.equal(inboxResult.delivered, 'session-inbox');
+  // kim-inbox への保存も状態記録されるため、同一内容の再送は24時間抑制される
   const results = await Promise.all([notifyKim('失敗', s.options), notifyKim('失敗', s.options)]);
-  assert.deepEqual(results.map(r => r.delivered).sort(), ['dm', 'suppressed']);
-  assert.equal(s.messages.length, 1);
+  assert.deepEqual(results.map(r => r.delivered).sort(), ['suppressed', 'suppressed']);
+  assert.equal(s.messages.length, 0);
 });
 
 

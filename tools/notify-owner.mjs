@@ -36,7 +36,7 @@ function directoryRows(home, directory) {
 function recipientMatchesOwner(owner, id, options = {}) {
   const { home = os.homedir(), directory, pcMap } = options;
   const wanted = String(owner || '').trim().toLowerCase();
-  if (!wanted || !String(id || '').trim()) return false;
+  if (!wanted || !String(id || '').trim() || String(id).trim() === 'PENDING') return false;
   if (String(id) === explicitNotifyDiscordId(owner, options)) return true;
   if (String(id) === KIM_DISCORD_USER_ID && wanted !== 'kim@orgiast.jp') return false;
   const memberMismatch = directoryRows(home, directory).some(row => String(row.id) === String(id)
@@ -51,7 +51,7 @@ function recipientMatchesOwner(owner, id, options = {}) {
 export function resolveOwnerDiscordId(owner, { home = os.homedir(), directory, ...options } = {}) {
   const wanted = String(owner || '').trim().toLowerCase();
   const explicitId = explicitNotifyDiscordId(owner, { home, ...options });
-  if (explicitId) return explicitId;
+  if (explicitId) return explicitId === 'PENDING' ? '' : explicitId;
   const rows = directoryRows(home, directory);
   const safeId = id => recipientMatchesOwner(owner, id, { home, directory, ...options }) ? id : '';
   const matches = [...new Set(rows.filter(row => wanted && (row.emails || []).some(email => String(email).toLowerCase() === wanted)).map(row => row.id).filter(Boolean).map(String))];
@@ -175,7 +175,7 @@ export async function notifyOwner(owner, text, options = {}) {
     } catch { reason = 'Discord DM delivery failed'; }
   }
   attempts.push({ channel: 'discord', ok: false, skipped: !valid, reason });
-  if (!valid) await alertUnresolvedRecipient(owner, options);
+  if (!valid && !options.recipientAlertHandled) await alertUnresolvedRecipient(owner, options);
   // Local fallbacks must never deliver another PC owner's private progress here.
   if (!owner || owner.toLowerCase() !== resolveOwner(options).toLowerCase()) {
     return finish({ delivered: 'none', channel: 'none', ok: false, reason });

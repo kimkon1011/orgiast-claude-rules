@@ -339,18 +339,21 @@ test('w018-PC は fleet-pc-map に discordId と notifyDiscordId を持つ', () 
   assert.ok(entry, 'w018-PC が fleet-pc-map.json に存在すること');
   assert.ok(String(entry.discordId || '').trim(), 'w018-PC に discordId が設定されていること');
   assert.ok(String(entry.notifyDiscordId || '').trim(), 'w018-PC に notifyDiscordId が設定されていること');
-  const missing = [];
-  for (const [label, entry] of Object.entries(map)) {
-    if (label.startsWith('_') || label === '_unverified' || label === 'w018-PC') continue;
-    if (!entry || typeof entry !== 'object') continue;
-    const hasAccount = String(entry.account || '').trim();
-    if (!hasAccount) continue;
-    if (!String(entry.discordId || '').trim() || !String(entry.notifyDiscordId || '').trim()) {
-      missing.push(label + ': discordId=' + (entry.discordId || '(なし)') + ', notifyDiscordId=' + (entry.notifyDiscordId || '(なし)'));
-    }
-  }
-  if (missing.length) {
-    console.log('INFO: 以下の PC 行は discordId/notifyDiscordId が不足しています（要調査）:');
-    for (const m of missing) console.log('  ' + m);
-  }
+});
+
+test('account を持つ全 PC は Discord 宛先または PENDING を明示する', () => {
+  const map = JSON.parse(fs.readFileSync(new URL('../fleet-pc-map.json', import.meta.url), 'utf8'));
+  const missing = Object.entries(map).filter(([label, entry]) => !label.startsWith('_') && entry?.account
+    && !String(entry.notifyDiscordId || '').trim() && !String(entry.discordId || '').trim());
+  assert.deepEqual(missing.map(([label]) => label), []);
+});
+
+test('PENDING は名簿やローカル ID にフォールバックせず未解決になる', async t => {
+  const options = localOptions(t);
+  options.pcMap['nishi-PC'].notifyDiscordId = 'PENDING';
+  options.directory = [{ id: '123', emails: ['nishi@orgiast.jp'] }];
+  assert.equal(resolveOwnerDiscordId('nishi@orgiast.jp', options), '');
+  const result = await notifyOwner('nishi@orgiast.jp', '進捗', { ...options, userId: 'PENDING',
+    toast: () => false, notify: () => assert.fail('PENDING must never be sent') });
+  assert.equal(result.channel, 'inbox');
 });

@@ -11,7 +11,7 @@ import { run as runDigest, selectRows, formatDigest, digestGroupKey, isUnattende
 import { runRegisterPs1 } from './lib/run-register-ps1.mjs';
 
 // Keep mocked non-kim deliveries independent of the developer PC owner and global Git email.
-const digest = options => runDigest({ ...options, io: { localOwner: 'test-owner@example.com', ...options.io } });
+const digest = options => runDigest({ ...options, io: { resolveOwnerDiscordId: () => '123', localOwner: 'test-owner@example.com', ...options.io } });
 
 const tempHomes = [];
 const tmp = () => { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-progress-')); tempHomes.push(home); return home; };

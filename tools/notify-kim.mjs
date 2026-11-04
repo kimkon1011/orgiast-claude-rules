@@ -84,6 +84,12 @@ export async function notifyKim(text, options = {}) {
     }
   }
   options = { ...options, kind: options.kimActionRequired === true || options.kind === 'ask' ? 'ask' : 'info' };
+  // 宛先登録の警告は digest が日次抑制する。件名中の「マージ」等で修復TODOに変換しない。
+  if (options.source === 'auto-progress-recipient-warning' && options.userId === KIM_DISCORD_USER_ID
+    && options.kimActionRequired === true
+    && /^[^\n]+の通知先が未登録のため、承認待ち \d+ 件・進捗 \d+ 件が届いていません。登録先: fleet-pc-map\.json の notifyDiscordId(?:\n・[^\n]{0,160}){0,3}$/.test(String(text))) {
+    return deliverKim(redactSecrets(String(text)), options);
+  }
   const raw = redactSecrets(String(text ?? ''));
   const bodyText = stripOwnerAddress(raw);
   if (STATUS_REPORT.test(bodyText) || ALREADY_FILED.test(bodyText) || isSuccessfulResumeReport(bodyText) || AUTO_RESUME_NOTICE.test(bodyText)) return deliverKim(raw, options);

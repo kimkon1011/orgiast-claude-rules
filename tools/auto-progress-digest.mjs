@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { acquireLock } from './lib/progress-file-lock.mjs';
 import { isEntry } from './is-entry.mjs';
-import { notifyOwner, resolveOwner } from './notify-owner.mjs';
+import { notifyKim, KIM_DISCORD_USER_ID } from './notify-kim.mjs';
+import { notifyOwner, resolveOwner, resolveOwnerDiscordId } from './notify-owner.mjs';
 import { ledgerFile, readLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES } from './auto-progress-ledger.mjs';
 export { isUnattendedRow } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
@@ -331,7 +332,43 @@ export function slotOf(now = Date.now()) {
   return null;
 }
 
-export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), dryRun = false, slot, io = {} } = {}) {
+// 専用警告だけを DM として許可する。通常のダイジェストには適用しない。
+async function warnUnresolvedOwners({ home, now, label, rows, ownerOf, state, io }) {
+  const day = jstDate(now).toISOString().slice(0, 10);
+  const owners = new Set(rows.filter(row => !isUnattendedRow(row, home)).map(ownerOf));
+  for (const owner of owners) {
+    if (owner.toLowerCase() === 'kim@orgiast.jp') continue;
+    if ((io.resolveOwnerDiscordId ?? resolveOwnerDiscordId)(owner, { home, label })) continue;
+    const key = JSON.stringify([label, owner]);
+    if (state.recipientWarnings?.[key]?.day === day) continue;
+    const owned = rows.filter(row => ownerOf(row) === owner && !isUnattendedRow(row, home));
+    const waiting = owned.filter(isHumanActionRequired);
+    const subjects = waiting.slice(0, 3).map(row => '・' + Array.from(redactSecrets(String(row.nextKim || '')).replace(/\s+/g, ' ')).slice(0, 80).join(''));
+    const text = redactSecrets(`${label}（${owner}）の通知先が未登録のため、承認待ち ${waiting.length} 件・進捗 ${owned.length - waiting.length} 件が届いていません。登録先: fleet-pc-map.json の notifyDiscordId`)
+      + (subjects.length ? '\n' + subjects.join('\n') : '');
+    // 送信前に保存し、失敗・タイムアウト・同時起動でも1日1回までにする。
+    state.recipientWarnings = { ...state.recipientWarnings, [key]: { day, attemptedAt: new Date(now).toISOString() } };
+    (io.writeState ?? writeState)(home, state);
+    try {
+      const result = await (io.notifyKim ?? notifyKim)(text, { home, now, userId: KIM_DISCORD_USER_ID,
+        kimActionRequired: true, plainJa: false, silent: false, webhookFallback: false,
+        source: 'auto-progress-recipient-warning',
+        allowlist: [{ category: 'recipient-warning', pattern: 'の通知先が未登録のため、承認待ち \\d+ 件・進捗 \\d+ 件が届いていません。登録先: fleet-pc-map\\.json の notifyDiscordId' }] });
+      state.recipientWarnings[key].delivered = result?.delivered || 'none';
+    } catch (error) { state.recipientWarnings[key].error = redactSecrets(String(error?.message || error)); }
+    (io.writeState ?? writeState)(home, state);
+  }
+}
+
+export async function run(options = {}) {
+  const home = options.home ?? process.env.ORGIAST_HOME ?? os.homedir();
+  const release = options.dryRun ? () => {} : acquireLock(stateFile(home) + '.lock');
+  if (!release) return { sent: false, count: 0, skipped: 'locked' };
+  try { return await runUnlocked({ ...options, home }); }
+  finally { release(); }
+}
+
+async function runUnlocked({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), dryRun = false, slot, io = {} } = {}) {
   const label = io.label ?? resolveFleetLabel(home);
   const state = (io.readState ?? readState)(home);
 
@@ -346,6 +383,8 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   // 前回送信の瞬間に完了した行も「前回以降の変化」に含める（境界は前回送信時刻を含む）。
   const since = state.lastSuccessAt ? Date.parse(state.lastSuccessAt) : now - WINDOW_MS;
   const activeRows = selectRows(ledger, now, since - 1).filter(row => !isNoopPromise(row.promise));
+
+  if (!dryRun) await warnUnresolvedOwners({ home, now, label, rows: activeRows, ownerOf, state, io });
 
   const lastVerdicts = { ...(state.lastVerdicts || {}) };
   const lastKim = { ...(state.lastKim || {}) };
@@ -490,7 +529,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     for (const part of numbered) {
       let result;
       try {
-        result = io.notify ? await io.notify(part, { home, webhookFallback: false, owner }) : await (io.notifyOwner ?? notifyOwner)(owner, part, { home });
+        result = io.notify ? await io.notify(part, { home, webhookFallback: false, owner }) : await (io.notifyOwner ?? notifyOwner)(owner, part, { home, label, now, recipientAlertHandled: true });
       } catch (cause) { result = { reason: cause?.message || String(cause) }; }
       result ??= {};
       const delivered = ['dm', 'session-inbox', 'toast', 'inbox'].includes(result.delivered);

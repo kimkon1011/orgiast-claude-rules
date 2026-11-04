@@ -355,6 +355,25 @@ URLの同じ行か直前に開くアカウントを明記、リンク事前共�
 - **渡すときの書式**: リンクに「<相手> に共有済み（<権限>）」を併記する。共有できなかった相手は「未共有: <理由>」と書き、そのまま送らせない。
 - **機械化**: PreToolUse `tools/share-before-send-gate.mjs` が、Discord / Gmail 送信の本文に Google ファイルのリンクがあり共有の証跡（`~/.claude/share-ledger.jsonl` か当セッションの共有実行）が無ければ送信を止める。
 
+**1.5.0.2 パソコンは割り当て番号（作業用014 など）でしか呼ばない（kim 2026-11-04 厳命・全PC全アカウント全プロジェクト・絶対）**
+
+人に見せる文章（チャット・報告・Discord・メール・Doc・fleet-mail 本文）では、パソコンを **fleet-pc-map.json の remoteName（例: 作業用014、kim-PC）** だけで呼ぶ。hostname（DELL、DESKTOP-XXXXXXX）、OS ユーザー名、自分で推測した番号は使わない。kim が操作するのは Chrome リモートデスクトップの番号であり、hostname では席を特定できない。
+
+- **自席の番号は推測しない**: `node tools/seat-name.mjs --self`（hostname → fleet-pc-map の remoteName）で引く。引けなければ「番号未登録の席（hostname: X）」と書き、自分で番号を名乗らない。他席から番号を聞かれても同じ。
+- **他席を指すとき**も fleet-pc-map で remoteName に直してから書く。map に無い hostname は「番号未登録の席（hostname: X）」と書き、kim に Chrome リモートデスクトップ上の名前を1回だけ確認して fleet-pc-map に登録する（PR）。
+- hostname はコマンド引数・内部 ID・証跡としてなら使ってよい（例: keyserve の PC 名）。人向けの文では番号を主語にし、hostname は括弧内の補足に限る。
+- **機械化**: Stop gate `tools/seat-name-gate.mjs` が、remoteName を伴わない hostname を応答から検出して差し戻す（理由コード SEAT-NAME、例外は `[SEAT-NAME-OK: 理由]`）。SessionStart で自席番号を注入する。
+- 実害 2026-11-04: 作業用014（hostname DELL）の Claude が自席を「作業用999」と申告し、kim-PC 側も「DELL 席」と書いた。どの席の話なのか kim が往復で解く羽目になった。
+
+**1.5.0.3 他の席に渡す手順・秘密は、その席のアカウントに共有した Google ドキュメントにし、その席の Claude に読ませる（kim 2026-11-04 厳命・全PC全アカウント・絶対）**
+
+別の席（別PC・別アカウント）で実行させたいコマンドや手順を、ローカルファイルのパス（scratchpad・Temp・~/.claude 配下など）や「ファイルを開いて○行目をコピー」の形で kim に渡さない。ローカルのパスはクリックで開けず、kim のスマホからは見えず、kim が転記役になる。
+
+- **作り方**: Google ドキュメントを作り（`gdoc-publish.mjs` か Drive MCP の `create_file`）、**対象席の Claude のアカウント（例: seisaku-team@orgiast.jp）に閲覧者で共有**する。本文の先頭に「この文書を読んだら Claude 自身が実行する。kim に手作業を頼まない」と書く。読み戻して確認する。
+- **届け方**: fleet-mail が通じる席なら fleet-mail で Doc の ID を送る。通じない席（未登録で fleet-sheet.env が無いなど）には、kim がその席の Claude に打つ1行（例: 「Drive の『作業用014 の Claude へ…』を読んで実行して」）だけを渡す。kim にコピーさせるのはこの1行が上限。
+- **秘密を含む Doc**: 共有先は対象席のアカウントだけにする。期限（例: 48時間）をタイトルに入れ、受信側が完了を知らせたら作成側で削除する。
+- **機械化**: Stop gate `tools/seat-name-gate.mjs` が、kim に向けて「ローカルパスのファイルを開いてコピー」させる手順を検出して差し戻す（理由コード LOCAL-HANDOFF）。
+
 **1.5 Google Workspace URL は開くアカウントを URL と本文で指定**
 
 Workspace の URL は authuser=開く人のメール を付け、本文に開くアカウントを書く。自分宛はその Claude 環境の userEmail、他人宛は共有済みの相手メールを使い、特定個人をハードコードしない。既存クエリには &authuser= を追加し、#gid 等のフラグメントより前に置く。本文の同じ行か直前に「<メール> で開いてください」と書く。script.google.com の /home/ 系だけは素URL＋アカウント切替案内の例外を維持する。

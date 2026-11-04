@@ -457,6 +457,8 @@ try {
   // 既存の全セッションにも同じ規則を当てる（1時間に1回だけ走る）。
   if (add(settings.hooks.SessionStart, 'session-wait-title.mjs', { hooks: [{ type: 'command', command: command('session-wait-title.mjs', ' --all'), timeout: 30 }] })) added += 1;
   if (add(settings.hooks.Stop, 'handoff-detail-guard.mjs', { hooks: [{ type: 'command', command: command('handoff-detail-guard.mjs'), timeout: 10 }] })) added += 1;
+  // §1.5.0.2/§1.5.0.3: runner の5秒を加えて登録時は15秒。
+  if (add(settings.hooks.Stop, 'seat-name-gate.mjs', { hooks: [{ type: 'command', command: command('seat-name-gate.mjs'), timeout: 10 }] })) added += 1;
   // 生URLと日本語・全角文字の直接隣接によるリンク破損を差し戻す。
   if (add(settings.hooks.Stop, 'url-format-guard.mjs', { hooks: [{ type: 'command', command: command('url-format-guard.mjs'), timeout: 8 }] })) added += 1;
   // 完了報告にLayer 1/2・e2e等の検証記載がなければ同期警告する。

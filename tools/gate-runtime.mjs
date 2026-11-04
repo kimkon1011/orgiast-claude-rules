@@ -15,6 +15,8 @@ const hostName = () => process.env.ORGIAST_HOSTNAME || os.hostname();
 export function rolloutMode(name, { manifest = readRollout(), home = homeDir(), hostname = hostName(), now = Date.now() } = {}) {
   const entry = manifest?.gates?.[name];
   // kim の明示指示により、報告停止は初受信のPCにも即時適用する。
+  if (name === 'seat-name-gate' && entry?.rollout === 'deny'
+    && entry.immediatePolicy === '2026-11-04 kim 厳命: 席番号呼称と Drive 引き渡し (§1.5.0.2/§1.5.0.3)') return 'deny';
   if (name === 'kim-discord-report-gate' && entry?.rollout === 'deny'
     && entry.immediatePolicy === '2026-10-27 kim 厳命: kim 宛 Discord 報告を全PCで停止') return 'deny';
   if (name === 'lane-repair-first-gate' && entry?.rollout === 'deny'

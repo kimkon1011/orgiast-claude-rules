@@ -3,7 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { classify, classifyDetailed, classifyOrphanClaudeWaitLoops, classifyOrphanConsoleWindows, classifyVscodeIdle, parseOptions, parseProcessLines, shouldKillVscodeIdle, vscodeCpuPolicy, sampleVscodeCpu, main } from './process-hygiene.mjs';
+import { classify, classifyDetailed, classifyOrphanClaudeWaitLoops, classifyOrphanConsoleWindows, classifyVscodeIdle, parseOptions, parseProcessLines, readHygieneConfig, shouldKillVscodeIdle, vscodeCpuPolicy, sampleVscodeCpu, main } from './process-hygiene.mjs';
 
 const now = Date.parse('2026-09-11T06:00:00Z');
 const VSC_CMD = 'C:\\Users\\kim\\.vscode\\extensions\\anthropic.claude-code-2.1.285-win32-x64\\resources\\native-binary\\claude.exe --output-format stream-json';
@@ -301,4 +301,33 @@ test('orphan-claude-wait-loop: --kill でツリー停止し dry-run では止め
     else process.env.ORGIAST_LOCK_HOME = previousLockHome;
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test('readHygieneConfig: 設定ファイルの読み込みとデフォルト動作', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hygiene-cfg-'));
+  try {
+    assert.deepEqual(readHygieneConfig(home), {});
+
+    const claudeDir = path.join(home, '.claude');
+    fs.mkdirSync(claudeDir, { recursive: true });
+    const cfgPath = path.join(claudeDir, 'process-hygiene.json');
+    fs.writeFileSync(cfgPath, '{invalid json');
+    assert.deepEqual(readHygieneConfig(home), {});
+
+    fs.writeFileSync(cfgPath, JSON.stringify({ vscodeIdleKill: false }));
+    assert.deepEqual(readHygieneConfig(home), { vscodeIdleKill: false });
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('classifyVscodeIdle: vscodeIdleKill: false の時は候補を 0 件にする', () => {
+  const procs = [vscProc(1, t0)];
+  const sessions = { 1: idleSession(1, t0, 721) };
+
+  const disabled = idleRun(procs, sessions, { vscodeIdleKill: false });
+  assert.equal(disabled.length, 0);
+
+  const enabled = idleRun(procs, sessions);
+  assert.equal(enabled.length, 1);
 });

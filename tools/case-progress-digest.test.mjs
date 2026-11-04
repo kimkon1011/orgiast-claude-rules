@@ -24,13 +24,13 @@ test('watch adds, removes and migrates only recent bindings once', t => {
   assert.equal(caseWatch(h, { now, add: [id] }).cases[id].reason, 'watch');
   assert.throws(() => caseWatch(h, { add: ['../bad'] }), /invalid/);
 });
-test('bind automatically watches kim-PC but not other seats', t => {
+test('bind automatically watches every receiving seat even with an existing watch file', t => {
   for (const label of ['kim-PC', 'cafe015-PC']) {
     const h = home(t), c = client({ home: h, pc: label, label, account: source.account });
+    caseWatch(h, { now });
     c.bind('session-1', [id]);
     assert.equal(Boolean(caseWatch(h, { now, remove: [] }).cases[id]), true); // migration is independently supported
-    if (label === 'kim-PC') assert.equal(caseWatch(h).cases[id].reason, 'bind');
-    else assert.equal(caseWatch(h).cases[id].reason, 'binding migration');
+    assert.equal(caseWatch(h).cases[id].reason, 'bind');
   }
 });
 test('watch expiration uses event date plus 14 days, not citation/update dates', async t => {
@@ -47,22 +47,23 @@ test('changed progress includes new decisions, first three next steps, kim reque
   const result = formatCaseProgress(id, data(), undefined, now);
   assert.ok(result.text.split('\n').length <= 6);
   for (const text of ['課題企業を確定', '会場確認', 'kim待ち', '送信OK', 'kim の承認', 'cafe015-PC', source.timestamp]) assert.ok(result.text.includes(text), text);
-  assert.ok(!result.text.includes('四つ目')); assert.ok(!result.text.includes('停滞'));
+  assert.ok(result.text.includes('四つ目')); // 承認を ask に移すため通常作業の3件目も残る
+  assert.ok(!result.text.includes('停滞'));
   const changed = data(); changed.state = changed.state.replace('課題企業を確定', '開催を延期');
   const second = formatCaseProgress(id, changed, result.checkpoint, now);
   assert.match(second.text, /開催を延期/); assert.ok(!second.text.includes('課題企業を確定'));
 });
-test('unchanged progress is one line and stale LOG still shows stagnation', () => {
+test('unchanged progress retains its ask and stale LOG still shows stagnation', () => {
   const first = formatCaseProgress(id, data(), undefined, now);
   const same = formatCaseProgress(id, data(), first.checkpoint, now);
-  assert.equal(same.text.split('\n').length, 1); assert.match(same.text, /変化なし・最終更新/);
+  assert.equal(same.entries.length, 2); assert.match(same.entries[0].text, /変化なし・最終更新/); assert.match(same.entries[1].text, /kim待ち/);
   assert.match(formatCaseProgress(id, data(), first.checkpoint, now + 86400000).text, /停滞/);
   assert.match(formatCaseProgress(id, { ...data(), log: '' }, undefined, now).text, /停滞/);
 });
 test('one failed hub lookup does not stop other cases or advance its checkpoint', async t => {
   const h = home(t); caseWatch(h, { add: [id, 'C0001'], now });
   const result = await collectCaseProgress({ home: h, now, fetchResume: async key => { if (key === id) throw Error('HTTP 503'); return data(); } });
-  assert.match(result.text, /260430EIG: 照会失敗（HTTP 503）/); assert.match(result.text, /C0001: 案件進捗/);
+  assert.match(result.text, /260430EIG 案件名未登録: 照会失敗（HTTP 503）/); assert.match(result.text, /C0001 案件名未登録: 案件進捗/);
   assert.equal(result.checkpoints[id], undefined); assert.ok(result.checkpoints.C0001);
 });
 test('morning and evening digest sends watched cases without local ledger and commits delivery point only on success', async t => {
@@ -75,12 +76,12 @@ test('morning and evening digest sends watched cases without local ledger and co
   assert.equal(state.caseProgress[id].lastDeliveredAt, new Date(now).toISOString());
   assert.equal((await run({ home: h, now, io })).skipped, 'already-sent');
   const evening = now + 9 * 3600000;
-  assert.equal((await run({ home: h, now: evening, io })).sent, true); assert.match(delivered.at(-1), /変化なし/);
+  assert.equal((await run({ home: h, now: evening, io })).sent, true); assert.match(delivered.at(-2), /変化なし/); assert.match(delivered.at(-1), /kim の判断待ち/);
   assert.equal(state.caseProgress[id].lastDeliveredAt, new Date(evening).toISOString());
 });
-test('other PCs and outside slots do not query watched cases', async t => {
+test('employee PCs and outside slots do not query watched cases', async t => {
   const h = home(t); caseWatch(h, { add: [id], now });
-  const io = { label: 'other-PC', localOwner: 'kim@orgiast.jp', readLedger: () => [], fetchCaseResume: () => assert.fail('unexpected query') };
+  const io = { label: 'other-PC', localOwner: 'employee@example.test', readLedger: () => [], fetchCaseResume: () => assert.fail('unexpected query') };
   await run({ home: h, now, io }); await run({ home: h, now, slot: null, io: { ...io, label: 'kim-PC' } });
 });
 test('resume and digest share the same hub read function', async t => {
@@ -100,14 +101,14 @@ test('preview leaves watch migration and delivery state untouched', async t => {
   assert.match(result.text, /案件進捗/); assert.equal(fs.existsSync(path.join(h, '.claude/state/case-watch.json')), false);
 });
 test('failed later message part retains the previous delivery point for retry', async t => {
-  // 2026-11-04 仕様変更: 大量案件も1通。失敗時に配達点を進めず、同じ枠で再送できる意図を維持する。
+  // 案件ごとに info/ask を配達し、途中失敗では配達点を進めない。
   const h = home(t); caseWatch(h, { add: [id, ...Array.from({ length: 20 }, (_, i) => `C${String(i).padStart(4, '0')}`)], now });
   let state = {}, calls = 0;
-  const io = { label: 'kim-PC', localOwner: 'kim@orgiast.jp', readLedger: () => [], readState: () => structuredClone(state), writeState: (_, value) => { state = value; }, fetchCaseResume: async () => data(), notifyOwner: async (_, text) => { assert.ok(text.length <= 1800); return ++calls === 1 ? { reason: 'offline' } : { delivered: 'dm' }; } };
+  const io = { label: 'kim-PC', localOwner: 'kim@orgiast.jp', readLedger: () => [], readState: () => structuredClone(state), writeState: (_, value) => { state = value; }, fetchCaseResume: async () => data(), notifyOwner: async (_, text) => { assert.ok(text.length <= 1800); return ++calls === 2 ? { reason: 'offline' } : { delivered: 'session-inbox' }; } };
   const out = await run({ home: h, now, io });
-  assert.equal(calls, 1); assert.equal(out.sent, false); assert.equal(state.caseProgress, undefined);
+  assert.equal(calls, 2); assert.equal(out.sent, false); assert.equal(state.caseProgress, undefined);
   assert.equal((await run({ home: h, now, io })).sent, true); assert.ok(state.caseProgress[id]);
-  assert.equal(calls, 2);
+  assert.equal(calls, 44);
   assert.equal((await run({ home: h, now, io })).skipped, 'already-sent');
 });
 
@@ -137,23 +138,23 @@ test('260430EIG splits numbered paragraphs and moves only matching items to kim 
   assert.equal(text.match(/見積送信OK/g)?.length, 1);
   for (const unwanted of ['社外送信', 'archive.md', '四つ目の通常作業', '完了済み']) assert.ok(!text.includes(unwanted), unwanted);
 });
-test('260430EIG limits each item to 80 characters and each case to 600 while retaining all sections', () => {
+test('260430EIG preserves full case text and every approval beyond the old 600 character limit', () => {
   const long = 'あ'.repeat(100);
   const single = formatCaseProgress(id, eigState({ decisions: `- ${long} ${eigCitation}`, next: `1. ${long}` }), undefined, now).text;
-  assert.equal(single.split('\n')[1], `決定事項: ${'あ'.repeat(79)}…`);
-  assert.equal(single.split('\n')[2], `未完了・次の一手: ${'あ'.repeat(79)}…`);
+  assert.equal(single.split('\n')[1], `決定事項: ${long}`);
+  assert.equal(single.split('\n')[2], `未完了・次の一手: ${long}`);
   const input = eigState({
     decisions: Array.from({ length: 10 }, (_, i) => `- 決定${i}${long} ${eigCitation}`).join('\n'),
     next: Array.from({ length: 8 }, (_, i) => `${i + 1}. ${i < 3 ? `作業${i}` : 'kimの判断'}${long} ${eigCitation}`).join(' '),
   });
   const { text } = formatCaseProgress(id, input, undefined, now + 86400000);
-  assert.ok(text.length <= 600, text.length);
+  assert.ok(text.length > 600, text.length);
   assert.equal(text.split('\n').length, 5);
   for (const expected of ['作業0', '作業1', '作業2', '停滞', '決定事項:', '未完了・次の一手:', 'kim の判断待ち:', `最終更新: ${source.account} / ${source.pc} / ${source.timestamp}`]) assert.ok(text.includes(expected), expected);
   const first = formatCaseProgress(id, input, undefined, now);
   const unchanged = formatCaseProgress(id, input, first.checkpoint, now);
-  assert.equal(unchanged.text.split('\n').length, 1);
-  assert.ok(unchanged.text.length <= 600);
+  assert.equal(unchanged.entries[1].kind, 'ask');
+  assert.ok(unchanged.entries[1].text.includes(long));
 });
 
 test('260430EIG splits adjacent numbered sentences and keeps the first three non-kim steps', () => {

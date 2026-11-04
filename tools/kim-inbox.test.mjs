@@ -167,15 +167,15 @@ test('hook の session_id と一致する作業IDの info を ask より先に�
   assert.equal(context.match(/■ info (ki-[\d-]+[a-f0-9]+)/)[1], own.id);
   assert.ok(context.indexOf(own.id) < context.indexOf('■ ask'));
 });
-test('未表示 high を既表示 high とその他より優先し、表示上限後もその他で追い越さない', async t => {
+test('未表示 high と通常項目を既表示 high より優先する', async t => {
   const home = seat(t);
   const base = await addItem(home, { text: '通常連絡' });
   const highs = Array.from({ length: 7 }, (_, n) => ({ ...base, id: `ki-20261104000000-${n.toString(16).padStart(4, '0')}`, text: `完了: ${n}`, createdAt: `2026-11-0${n + 1}T00:00:00Z`, lastAt: `2026-11-0${n + 1}T00:00:00Z`, shownCount: n === 6 ? 1 : 0 }));
   const context = selectContext([base, ...highs]);
   assert.ok(context.indexOf(highs[5].id) > 0);
-  assert.doesNotMatch(context, /通常連絡/);
-  assert.equal(highs[6].shownCount, 1);
-  assert.ok(highs.filter(i => i.lastShownAt).length <= 5);
+  assert.ok(context.indexOf('通常連絡') > context.indexOf(highs[0].id));
+  assert.ok(context.indexOf(highs[6].id) > context.indexOf('通常連絡'));
+  assert.equal(highs.filter(i => i.lastShownAt).length, 7);
   assert.ok(context.length <= CONTEXT_LIMIT);
 });
 test('--compact は旧データの重複を最新へ合算し ask・high・閉じた項目を保持する', async t => {

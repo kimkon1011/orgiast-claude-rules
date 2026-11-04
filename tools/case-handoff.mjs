@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { resolveFleetLabel } from './lib/fleet-label.mjs';
+import { resolveOwner } from './lib/fleet-owner.mjs';
 import { isEntry } from './is-entry.mjs';
 import { keyserveAuthHeaders, keyserveSecret, requireKeyservePcId } from './keyserve-auth.mjs';
 import { claudeAccount, isKimOperated } from './lib/kim-operated.mjs';
@@ -71,7 +71,7 @@ export function client(options = {}) {
   const sleep = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const random = options.random || Math.random;
   const api = options.api || process.env.ORGIAST_CASE_URL || 'https://orgiast-memoryserve.vercel.app/api/case-log';
-  const account = options.account || claudeAccount(home);
+  const account = options.account || claudeAccount(home) || resolveOwner({ home });
   const pc = options.pc || requireKeyservePcId(home);
   const bindingFile = session => { validateIdentity({ sessionId: session, pc, account }); return path.join(base, 'case-binding', `${session}.json`); };
   async function request(query, body) {
@@ -95,11 +95,11 @@ export function client(options = {}) {
       return response.json();
     }
   }
-  async function catalog(refresh = false) {
+  async function catalog(refresh = false, { persist = true } = {}) {
     const file = path.join(base, 'case-catalog.json');
     let saved = readJson(file, { cases: [] });
     if (refresh || Date.now() - (saved.at || 0) > 24 * 3600000) {
-      saved = { ...(await request({ mode: 'catalog' })), at: Date.now() }; atomic(file, saved);
+      saved = { ...(await request({ mode: 'catalog' })), at: Date.now() }; if (persist) atomic(file, saved);
     }
     return saved.cases;
   }
@@ -110,7 +110,7 @@ export function client(options = {}) {
       const old = saved || { sessionId, account, pc, cases: [], cursors: {} };
       return { ...old, cases: [...new Set([...old.cases, ...ids])], ...(transcriptPath ? { transcriptPath } : {}) };
     });
-    if ((options.label ?? resolveFleetLabel(home)) === 'kim-PC' && ids.length) caseWatch(home, { add: ids, reason: 'bind' });
+    if (ids.length) caseWatch(home, { add: ids, reason: 'bind' });
     return binding;
   }
   function findTranscript(sessionId) {

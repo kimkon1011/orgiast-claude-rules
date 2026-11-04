@@ -76,6 +76,7 @@ const normalizeFailure = text => String(text).replace(/\d{4}-\d{2}-\d{2}(?:[T ][
 
 // Use the existing next-session TODO consumer; no separate repair queue.
 export async function notifyKim(text, options = {}) {
+  if (options.source === 'case-progress-digest') return deliverKim(text, { ...options, plainJa: false });
   if (options.kimActionRequired !== true) {
     const policy = classifyKimDm(text);
     if (!policy.allowed) {
@@ -200,7 +201,7 @@ export async function deliverKim(text, {
   plainJaImpl = toPlainJa,
   suffix = '',
   allowHumanRequest = false,
-  kind = 'info', source = '', allowlist, repoRoot,
+  kind = 'info', source = '', allowlist, repoRoot, deliveryKey,
 } = {}) {
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
     || readTrimmed(path.join(home, '.claude', 'orgiast-discord-user-id.txt'))
@@ -209,11 +210,11 @@ export async function deliverKim(text, {
   // kim 宛の全通知を、システムを知らない人でも読める日本語にしてから送る。
   // 失敗しても送信は止めない(plainJaImpl は例外を投げない契約)。
   // 平易化の書き換えでアカウント表記が落ちることがあるため、書き換え後の本文で補う。
-  const translated = annotateAccounts(plainJa ? await plainJaImpl(String(text ?? '')) : text);
+  const translated = source === 'case-progress-digest' ? text : annotateAccounts(plainJa ? await plainJaImpl(String(text ?? '')) : text);
   const body = suffix && !allowHumanRequest && kind !== 'ask' ? String(translated).split('\n').filter(line => !HANDOFF.test(line)).join('\n') : translated;
-  if ((userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID) && !discordAllowed(String(body) + suffix, { home, allowlist, repoRoot }).allowed) {
-    const item = await addItem(home, { kind, text: String(body) + suffix, source, signal });
-    return { delivered: 'session-inbox', id: item.id, kind: item.kind };
+  if (source === 'case-progress-digest' || ((userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID) && !discordAllowed(String(body) + suffix, { home, allowlist, repoRoot }).allowed)) {
+    const item = await addItem(home, { kind, text: String(body) + suffix, source, signal, deliveryKey });
+    return { delivered: item.forwardError ? 'none' : 'session-inbox', id: item.id, kind: item.kind, status: item.status, reason: item.forwardError || undefined };
   }
   const content = suffix ? String(body).slice(0, Math.max(0, MAX_CONTENT - suffix.length)) + suffix : clipDiscordContent(body);
   let dmReason = '';

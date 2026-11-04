@@ -187,6 +187,15 @@ export function isCooldownSkippedRow(row = {}) {
   return String(row?.status ?? '').toLowerCase() === 'cooldown';
 }
 
+// 保留(deferred)の行は「上限中・無人枠超過なので Codex を起動しなかった」記録で、失敗ではない
+// (codex-do.mjs が終了コード75で返し、台帳には status:'deferred' / reason:'codex_cooldown' /
+// 'unattended_budget' で残る)。status:'cooldown' と同じく全滅の分母に入れてはならない。
+// 入れると上限中の1日分が「N件すべて失敗」の high 未修理全滅になり、上限が明けるまで毎晩
+// 同じ偽の修理タスクが積まれる（2026-11-03 実測: 403件中398件が codex_cooldown の deferred 行）。
+export function isDeferredSkippedRow(row = {}) {
+  return String(row?.status ?? '').toLowerCase() === 'deferred';
+}
+
 // quota-sweep は終了状態をそのまま status に書く(final/exhausted/ceiling/deadline/no-goal/failed)。
 // exhausted は「累積上限まで走り切った」＝レーンは動いている。トークンを消費した行を成功証拠に
 // 数えないと、8 tick 走った翌晩も 24h 窓の過去失敗だけで「全滅」の high 起票が続く
@@ -281,6 +290,11 @@ export function emptyOutputReason(row) {
   if (row?.timedOut == null && Number(row?.secs) >= 300) return 'timeout';
   if (String(row?.status ?? '').toLowerCase() === 'network') return 'infra_transient';
   if (WSL_LANE_ABSENT.test(String(row?.stderrTail || ''))) return 'launch_failed';
+  // 上限中・無人枠超過で Codex を起動しなかった deferred 行(終了コード75)は「投げなかった」記録
+  // (status:'deferred' / reason:'codex_cooldown'|'unattended_budget')。launched:false のまま
+  // preflight_blocked に落とすと cooldown 期間全体が起動前ゲートの低可視化になり、全滅の分母へ
+  // 混入して「すべて失敗」の high を毎晩作る(2026-11-03 実測: deferred 398件)。
+  if (isDeferredSkippedRow(row)) return 'cooldown_skipped';
   // 起動前のゲートが「意図的に止めた」行。launched:false だが codex は一度も起動されておらず、
   // 起動失敗ではない。codex-do が書く行の status は必ず数値で、起動前ゲートは文字列の番兵を書く
   // (2026-09-23 実測: status:"spec-missing-context" / stderrTail 空)。これを launch_failed に
@@ -487,7 +501,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     const lastFailureTime = Math.max(...failures.map((row) => Date.parse(row.t)));
     return codexSuccessTimes.some((time) => time > lastFailureTime);
   };
-  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed', 'usage_limit', 'model_capacity'].includes(item.reason));
+  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed', 'usage_limit', 'model_capacity', 'cooldown_skipped'].includes(item.reason));
   const launchFailed = empty.filter((item) => item.reason === 'launch_failed');
   const authFailed = empty.filter((item) => item.reason === 'auth_failed');
   const modelAuthMismatch = empty.filter((item) => item.reason === 'model_auth_mismatch');
@@ -576,7 +590,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
           || /クールダウン中|起動を省略しました/.test(String(other.stderrTail || ''));
       });
     };
-    const allNonSkipped = rows.filter((row) => !isCooldownSkippedRow(row) && !skippedByCooldown(row) && !skippedExternalCause(row) && !skippedRepairedByCodex(row) && !skippedDuringCheapOutage(row) && !isEmptyDiffEscalationRow(row) && !isFallbackCooldownSkipRow(row) && !isQuotaSweepBenignRow(row));
+    const allNonSkipped = rows.filter((row) => !isCooldownSkippedRow(row) && !isDeferredSkippedRow(row) && !skippedByCooldown(row) && !skippedExternalCause(row) && !skippedRepairedByCodex(row) && !skippedDuringCheapOutage(row) && !isEmptyDiffEscalationRow(row) && !isFallbackCooldownSkipRow(row) && !isQuotaSweepBenignRow(row));
 	    // status:'ok' は API 呼出成功。out=0 でもレーン障害ではない（gemini プローブ行実測 2026-10-30〜11-01）。
 	    const attempts = allNonSkipped.filter((row) => emptyOutputReason(row) !== 'ok');
     // 24h 窓が cooldown だけで埋まる＝上限中で一度も試行していない。レーンは止まっているが
@@ -611,7 +625,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     // 上限・課金切れ・一過性ネットワークだけで全滅した行は「レーンが壊れている」証拠ではない。
     // 実測 2026-10-22: kimi の 24h 449 行 = http_429 440 + status:'network' 9(10.7秒で
     // タイムアウト) で、network を no_output 扱いしていたため毎日 high になっていた。
-    const benign = attempts.filter((row) => isQuotaLimitedRow(row) || emptyOutputReason(row) === 'infra_transient');
+    const benign = attempts.filter((row) => isQuotaLimitedRow(row) || emptyOutputReason(row) === 'infra_transient' || emptyOutputReason(row) === 'usage_limit');
     const billingSuspended = attempts.filter(isBillingSuspendedRow);
     // 行に reason が無い旧記録でも、llm-fallback が残した 24h の恒久課金切れ cooldown で判別できる。
     const billingCooldown = cooldown[provider]?.permanentBilling === true && Number(cooldown[provider]?.until) > nowMs;

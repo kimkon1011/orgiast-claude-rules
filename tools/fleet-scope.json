@@ -1,6 +1,24 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/gh-accept-invites.mjs", "scope": "fleet", "step": "hook:onboarding-sync", "reason": "全PC SessionStart の日次招待承諾。kim操作席だけ実行"},
+    {"path": "tools/access-doctor.mjs", "scope": "fleet", "step": "hook:onboarding-sync", "reason": "各席の権限・origin・配布ファイルの診断と明示修復"},
+    {"path": "tools/pr-land.mjs", "scope": "fleet", "step": "hook:onboarding-sync", "reason": "kim操作席がbase pushとPR着地を完結"},
+    {"path": "tools/lib/seat-github.mjs", "scope": "fleet", "step": "hook:onboarding-sync", "reason": "招待・診断・PRの共通GitHub操作"},
+    {"path": "tools/gmail-search.mjs", "scope": "fleet", "step": "hook:inquiry-lookup-hint", "reason": "問い合わせ横断検索の実行時依存"},
+
+    {"path": "tools/inquiry-lookup.mjs", "scope": "fleet", "step": "hook:inquiry-lookup-hint", "reason": "問い合わせ横断検索・案内の全PC共通依存"},
+    {"path": "tools/inquiry-lookup-hint.mjs", "scope": "fleet", "step": "hook:inquiry-lookup-hint", "reason": "問い合わせ横断検索・案内の全PC共通依存"},
+    {"path": "config/mail-groups.json", "scope": "fleet", "step": "hook:inquiry-lookup-hint", "reason": "問い合わせ横断検索・案内の全PC共通依存"},
+    {"path": "tools/lib/inquiry-sheet.mjs", "scope": "fleet", "step": "hook:inquiry-lookup-hint", "reason": "問い合わせ横断検索・案内の全PC共通依存"},
+    {"path": "tools/lib/mail-groups.mjs", "scope": "fleet", "step": "hook:inquiry-lookup-hint", "reason": "問い合わせ横断検索・案内の全PC共通依存"},
+
+    {"path": "tools/lib/owner-identity.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "台帳 hook の軽量な持ち主判定依存"},
+    {"path": "tools/lib/fleet-chase-policy.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "hook の軽量な台帳判定依存"},
+    {"path": "tools/kim-awaiting.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "kim の返事待ちの集約と回答配送"},
+    {"path": "tools/kim-awaiting-context.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "kim の返事待ちの集約と回答配送"},
+
+    {"path":"tools/lib/reclaim-lock.mjs","scope":"fleet","step":"task:fleet-mail","reason":"fleet-mail / 質問中継が使う、残った .reclaim の自動回収"},
     {"path":"tools/lib/gws-proxy.mjs","scope":"fleet","step":"task:fleet-mail","reason":"全PCの鍵なしGmail・Drive・LINE APIと自己点検の共通認証経路"},
     {"path":"tools/drive-read.mjs","scope":"fleet","step":"task:fleet-mail","reason":"全PCから共有Driveの検索と読み取り"},
     {"path":"tools/line-channel.mjs","scope":"fleet","step":"task:fleet-mail","reason":"全PCから共通LINE履歴と公式botを利用"},
@@ -651,6 +669,12 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/register-nightly-reload-vscode.ps1",
+      "scope": "fleet",
+      "step": "nightly-reload-vscode",
+      "reason": "VS Code 夜間再起動タスクの登録（converge 経由）"
+    },
+    {
       "path": "tools/register-plaud-task.ps1",
       "scope": "kim-only",
       "step": null,
@@ -961,6 +985,18 @@
       "scope": "fleet",
       "step": "task:fleet-mail",
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
+    },
+    {
+      "path": "tools/lib/owner-dm-policy.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "持ち主DMの送信制御・まとめの実行時 import 依存"
+    },
+    {
+      "path": "tools/lib/owner-dm-digest.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "持ち主DMの送信制御・まとめの実行時 import 依存"
     },
     {
       "path": "tools/lib/kim-dm-policy.mjs",

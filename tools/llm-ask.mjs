@@ -15,7 +15,7 @@ const PROVIDERS = {
   cerebras: { base: 'https://api.cerebras.ai/v1/chat/completions', keyEnv: 'CEREBRAS_API_KEY', keyFile: 'cerebras.env', model: 'zai-glm-4.7' },
   // Genspark Pro の前払いクレジット枠。OpenAI 互換の LLM proxy で claude-opus-5 等36モデルが1キーで叩ける。
   genspark: { base: 'https://www.genspark.ai/api/llm_proxy/v1/chat/completions', keyEnv: 'GSK_PROXY_KEY', keyFile: 'genspark-proxy.env', model: 'gpt-5.6-luna' },
-  gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', keyEnv: 'GEMINI_API_KEY', keyFile: 'gemini.env', model: 'gemini-3.7-flash' },
+  gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', keyEnv: 'GEMINI_API_KEY', keyFile: 'gemini.env', model: 'gemini-3.6-flash' },
   deepseek: gatewayConfig('deepseek'),
   grok: { base: 'https://api.x.ai/v1/chat/completions', keyEnv: 'XAI_API_KEY', keyFile: 'xai.env', model: 'grok-3' },
   kimi: gatewayConfig('kimi'),

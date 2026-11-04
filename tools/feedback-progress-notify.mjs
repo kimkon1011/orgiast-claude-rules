@@ -57,7 +57,7 @@ export function selectProgress(issue, prs = [], now = new Date()) {
   if (String(issue.state).toUpperCase() !== 'OPEN') return null;
   if (waitingForReply(issue.comments)) {
     const latest = [...issue.comments].sort((a, b) => timestamp(b.created_at || b.createdAt) - timestamp(a.created_at || a.createdAt))[0];
-    return { state: 'answered', url: latest.html_url || latest.url || (latest.id ? `${issue.html_url || issue.url}#issuecomment-${latest.id}` : issue.html_url || issue.url) };
+    return { question: latest.body, state: 'answered', url: latest.html_url || latest.url || (latest.id ? `${issue.html_url || issue.url}#issuecomment-${latest.id}` : issue.html_url || issue.url) };
   }
   const pr = prs.filter((entry) => entry.state === 'OPEN').sort((a, b) => timestamp(b.createdAt) - timestamp(a.createdAt))[0];
   if (pr) {
@@ -308,6 +308,7 @@ export async function runProgressNotify({ args = process.argv.slice(2), home = u
           ? `【${row.title.slice(0, 150)}】\n${messages[row.state]}\n${row.url}`
           : `この報告の依頼主が特定できません。元シートの行を確認してください。\n【${row.title.slice(0, 150)}】\n${selected ? messages[row.state] + '\n' : ''}${issue.html_url || issue.url}${selected && row.url !== (issue.html_url || issue.url) ? '\n' + row.url : ''}`;
         if (!recipient && source.sheetUrl) row.content += `\n照合元シート（該当行は未特定）: ${source.sheetUrl}`;
+        if (selected?.state === 'answered' && selected.question) row.content += `\n質問: ${selected.question}\nリンク先のコメントに返信してください。`;
         jobs.push({ row, userId: row.recipientId, content: row.content, save: () => {
           progress.items[key] = { ...(sameState ? last : {}), lastState: row.state,
             notifiedAt: current.toISOString(), delivery, firstSeenAt,
@@ -331,14 +332,14 @@ export async function runProgressNotify({ args = process.argv.slice(2), home = u
       if (!token) throw new Error('Discord Bot トークンが見つかりません');
       for (const job of jobs.slice(0, individualCount)) {
         try {
-          await sendDm({ token, userId: job.userId, content: job.content, fetchImpl });
+          await sendDm({ token, userId: job.userId, content: job.content, fetchImpl, home, kind: job.row.state === 'answered' ? 'action' : 'automatic' });
           job.row.sent = true;
           job.save();
           io.write(progressFile, `${JSON.stringify(progress, null, 2)}\n`);
         } catch (error) { warn(job.row.key, error); }
       }
       if (report.overflow) {
-        try { await sendDm({ token, userId: KIM_USER_ID, content: report.overflow.content, fetchImpl }); }
+        try { await sendDm({ token, userId: KIM_USER_ID, content: report.overflow.content, fetchImpl, home, kind: 'automatic' }); }
         catch (error) { warn('上限超過の集約通知', error); }
       }
     }

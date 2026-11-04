@@ -325,7 +325,12 @@ export function emptyOutputReason(row) {
 // 周期タイマーへ直したので、期待できる起点は #1059。ここを #964 のままにすると、
 // #1059 で直した症状の過去行が永久に「未修理」として毎晩起票され続け、完了判定ができなくなる
 // （2026-10-25 実測: 打ち切り未発火の最終行は 2026-10-23T10:43:58Z で #1059 より前）。
-export const POLICY_STALL_SINCE = '2026-10-23T20:03:24Z';
+// #1436（2026-11-02T19:39:04Z マージ）は、フォールバックに与える予算が停滞判定の閾値秒(300秒)以下だと
+// 締切タイマーが周期判定(5秒間隔)より先に発火し、拒否3回・出力0字でも outcome=timeout として
+// 記録される欠陥を直した（締切到達時点でも同じ判定を回す）。実測 2026-11-02T03:16/10:09/10:13/10:15/19:27Z の
+// 5件が 300〜301秒/予算300秒 out0 の timeout。これらは #1436 より前のコードでは打ち切れないため、
+// 起点を #1436 のマージ時刻へ進める（進めないと修正後も過去行だけで毎晩起票され続ける）。
+export const POLICY_STALL_SINCE = '2026-11-02T19:39:04Z';
 // 打ち切り判定（POLICY_STALL_MIN_ELAPSED_SECS=300）に届いた停滞だけを「打ち切られるべきだった」と数える。
 export const POLICY_STALL_MIN_ABORTABLE_SECS = 300;
 // codex-do の POLICY_STALL_MIN_OUTPUT_CHARS と同値。出力がこれ以上出た試行は進捗ありで打ち切り対象外（偽陽性防止）。
@@ -505,7 +510,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   if (modelAuthMismatch.length) findings.push({ id: 'codex_model_auth_mismatch', severity: 'medium', title: 'Codex が ChatGPT アカウントで sol/astra を選んで失敗', evidence: [`${modelAuthMismatch.length}件`, ...reasonTop(modelAuthMismatch)], fixTask: 'codex-do のレーン選択が ChatGPT アカウント認証を検出できず sol/astra を選んでいる。detectChatGptAuth と decideCodexLane の判定を照合し、再現テストを追加して修正' });
   // 2026-10-19 実測: Windows はログイン済みなのに、WSL 側 401 の履歴だけで毎晩 high 起票されていた。
   // codex-do は起動時に Windows の auth.json を WSL へ同期するため、失敗後の再ログインも修復として扱う。
-  if (authFailed.length && !repairedAfter(authFailed) && !authRestoredAfter(home, authFailed)) findings.push({ id: 'codex_auth_failed', severity: 'high', title: 'Codex CLI が未認証（WSL 側の再ログインが必要）', evidence: [`${authFailed.length}件`, 'WSL の ~/.codex/auth.json を確認し codex login を実行'], fixTask: 'Windows の %USERPROFILE%\\.codex\\auth.json を WSL の ~/.codex/ にコピーし codex login status。Windows 側も未ログインのときだけ人の codex login が要る' });
+  if (authFailed.length && !repairedAfter(authFailed) && !authRestoredAfter(home, authFailed)) findings.push({ id: 'codex_auth_failed', severity: 'high', title: 'Codex CLI が未認証（WSL 側の再ログインが必要）', evidence: [`${authFailed.length}件`, 'WSL の ~/.codex/auth.json を確認し codex login を実行'], fixTask: 'Windows の %USERPROFILE%\\.codex\\auth.json を WSL の ~/.codex/ にコピーし codex login status。Windows 側も未ログインのときだけ人の codex login が要る。WSL ディストロが無い PC（wsl -l -q が空）は codex-do がネイティブ実行するため WSL へのコピーは不要で、Windows 側 auth.json が無ければ人の codex login（.loop/codex-login.ps1 相当）だけが復旧手段' });
   if (realEmpty.length) findings.push({ id: 'codex_empty_output', severity: 'medium', title: 'Codex の出力ゼロ', evidence: [`${realEmpty.length}件`, ...reasonTop(realEmpty), ...(empty.length > realEmpty.length ? [`インフラ/起動失敗で除外 ${empty.length - realEmpty.length}件`] : [])], fixTask: 'codex が出力ゼロで終了した原因（認証切れ/上限/起動失敗）を codex-do のログから特定' });
   for (const [provider, state] of Object.entries(cooldown)) if (state?.reason === 'http_402' && Number(state.until) > nowMs) findings.push({ id: 'provider_balance_exhausted', severity: 'low', title: `${provider} の残高切れ`, evidence: [`provider ${provider}`, CLAUDE_FALLBACK_RULE] });
   const providers = new Map();

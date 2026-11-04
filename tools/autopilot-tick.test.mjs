@@ -6,6 +6,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { spawnSync } from 'node:child_process';
 import { runAutopilot, sendNotice, autopilotPaths, parseControl, capReason, dateKey, acquireLock } from './autopilot-tick.mjs';
+import { readDeferred } from './lib/owner-dm-policy.mjs';
 import { toastSummary } from './autopilot-local-notice.mjs';
 
 const NOW = new Date('2026-09-21T01:00:00Z');
@@ -22,6 +23,9 @@ function discord(t, overrides = {}) {
   const f = fixture(t, { token: 'test-token', userId: 'kim', ...overrides });
   fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(f.opts.home, '.claude', 'orgiast-autopilot-channel-id.txt'), 'control');
+  // owner DM ルーティングに必要なテスト用PC所有者を明示し、実機のgit設定に依存しない。
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'cost-reporter.env'), 'REPORTER_LABEL=autopilot-test-PC\n');
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'fleet-pc-map.json'), JSON.stringify({ 'autopilot-test-PC': { account: 'test@example.com', discordId: 'kim' } }));
   const unavailable = new Set();
   f.opts.fetchImpl = async (url, init = {}) => {
     calls.push({ url, init });
@@ -192,18 +196,24 @@ test('an invalid question deadline is ignored', async (t) => {
 
 test('hours cap uses the range of today log timestamps and fires immediately on post', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: 'test', 'max-hours-per-day': 1 });
   await f.call('post', { summary: 'first', progress: 10 });
   const result = await f.call('post', { summary: 'second', progress: 20 }, { now: new Date(NOW.getTime() + 3_600_000) });
   assert.equal(result.status, 'paused');
   assert.equal(result.watchdog.reason, 'daily_hours_cap');
-  assert.match(f.sent[0], /⚠️ 止まりました: test/);
-  assert.match(f.sent[0], /今日の作業時間の上限になりました。明日また続けます。/);
-  assert.doesNotMatch(f.sent[0], /daily_hours_cap/);
+  assert.match(deferredTexts()[0], /⚠️ 止まりました: test/);
+  assert.match(deferredTexts()[0], /今日の作業時間の上限になりました。明日また続けます。/);
+  assert.doesNotMatch(deferredTexts()[0], /daily_hours_cap/);
 });
 
 test('consecutiveNoop resets on progress, unchanged progress is noop, watchdog only notifies on transition', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: 'test', 'max-noop': 2 });
   await f.call('pre');
   await f.call('post', { summary: 'blocked', progress: 0, noop: true });
@@ -216,9 +226,9 @@ test('consecutiveNoop resets on progress, unchanged progress is noop, watchdog o
   const fired = await f.call('post', { summary: 'blocked', progress: 10 });
   assert.deepEqual(fired.watchdog, { reason: 'noop_streak' });
   await f.call('pre');
-  assert.equal(f.sent.filter((s) => s.includes('止まりました')).length, 1);
-  assert.match(f.sent[0], /3回続けて進みませんでした。いったん止めています。/);
-  assert.doesNotMatch(f.sent[0], /noop_streak/);
+  assert.equal(deferredTexts().filter((s) => s.includes('止まりました')).length, 1);
+  assert.match(deferredTexts()[0], /3回続けて進みませんでした。いったん止めています。/);
+  assert.doesNotMatch(deferredTexts()[0], /noop_streak/);
   assert.equal((await f.call('resume')).status, 'running');
   assert.equal((await f.call('status')).state.consecutiveNoop, 0);
 });
@@ -296,29 +306,33 @@ test('running pre/post and day rollover never send progress DMs; logs retain wor
 });
 
 test('digest records the real delivery result and never re-sends the same slot', async (t) => {
+  // 2026-11-04 仕様変更: 定期報告は保留台帳への保存を記録し、同枠の再登録を防ぐ。
   const f = discord(t);
   await f.call('start', { objective: 'digest goal' });
   const noon = { now: new Date('2026-09-21T03:00:00Z') };
   const sent = await f.call('digest', {}, noon);
   assert.equal(sent.ok, true);
   assert.equal(sent.slot, '2026-09-21-12');
-  assert.equal(sent.delivered, 'dm');
-  assert.equal((await f.call('status', {}, noon)).state.lastDigestDelivered, 'dm');
+  assert.equal(sent.delivered, 'deferred');
+  assert.equal((await f.call('status', {}, noon)).state.lastDigestDelivered, 'deferred');
   assert.equal((await f.call('digest', {}, noon)).skipped, 'not_due_or_already_sent');
-  f.unavailable.add('dm');
+  f.unavailable.add('deferred');
   const evening = { now: new Date('2026-09-21T12:00:00Z') };
   const failed = await f.call('digest', {}, evening);
-  assert.equal(failed.delivered, 'none');
-  assert.equal((await f.call('status', {}, evening)).state.lastDigestDelivered, 'none');
-  assert.equal(f.sent.length, 1); // 未達の分は送れた扱いにしない
+  assert.equal(failed.delivered, 'deferred');
+  assert.equal((await f.call('status', {}, evening)).state.lastDigestDelivered, 'deferred');
+  assert.equal(f.sent.length, 0); // 未達の分は送れた扱いにしない
 });
 
 test('done is durable, notifies once, and handoff contains the seven session-close headings', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: 'test', done: 'pass tests' });
   assert.equal((await f.call('post', { summary: 'verified', progress: 100, evidence: 'テストが全部通った' })).status, 'done');
-  assert.match(f.sent[0], /✅ 終わりました: test/);
-  assert.match(f.sent[0], /確かめたこと: テストが全部通った/);
+  assert.match(deferredTexts()[0], /✅ 終わりました: test/);
+  assert.match(deferredTexts()[0], /確かめたこと: テストが全部通った/);
   assert.equal((await f.call('post', { summary: 'duplicate', progress: 100 })).error, 'not_running');
   assert.equal((await f.call('resume')).error, 'already_done');
   f.channels.dm.push(f.message('continue', 1));
@@ -408,9 +422,12 @@ function candidates(f, body) {
 test('done pre replenishes in priority order, skips human work and previous objective, sends once', async (t) => {
   const asked = [];
   const f = discord(t, { askImpl: async (candidate) => { asked.push(candidate); return candidate.objective === '電話する' ? 'No' : 'Yes'; } });
+  // 2026-11-04 仕様変更: 無人の次作業の予告は即送信せず保留台帳で重複を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: '前の目的' });
   await f.call('post', { summary: 'verified', progress: 100, evidence: '完了を確認' });
-  f.sent.length = 0;
+  deferredOffset = readDeferred(f.opts.home).length;
   candidates(f, '## 明日の推奨アクション（今日）\n1. 前の目的\n2. 電話する\n   - first_step: 顧客へ電話\n3. テスト修正\n   - first_step: テストを実行\n4. 後回し\n');
   const pre = await f.call('pre');
   assert.equal(pre.verdict, 'run');
@@ -421,7 +438,7 @@ test('done pre replenishes in priority order, skips human work and previous obje
   assert.match(asked[0].context, /顧客へ電話/);
   assert.deepEqual(pre.recentLog, []);
   await f.call('pre');
-  assert.deepEqual(f.sent, ['▶ 次はこれをやります: テスト修正\nやめてほしいときは「止めて」と返信してください。（test-pc）']);
+  assert.deepEqual(deferredTexts(), ['▶ 次はこれをやります: テスト修正\nやめてほしいときは「止めて」と返信してください。（test-pc）']);
   const state = (await f.call('status')).state;
   assert.equal(state.objectiveHistory.at(-1).objective, '前の目的');
   assert.equal(state.iterationsToday, 1);
@@ -562,17 +579,23 @@ test('classifier errors or uncertain answers never authorize work', async (t) =>
 
 test('progress 100 without evidence or unverified is rejected and does not change state', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: 'test' });
   const before = fs.readFileSync(f.paths.state, 'utf8');
   assert.equal((await f.call('post', { summary: 'done', progress: 100 })).error, 'evidence_required');
   assert.equal(fs.readFileSync(f.paths.state, 'utf8'), before);
   assert.equal((await f.call('status')).state.status, 'running');
   assert.equal((await f.call('status')).state.totalIterations, 0);
-  assert.deepEqual(f.sent, []);
+  assert.deepEqual(deferredTexts(), []);
 });
 
 test('progress 100 with unverified completes and registers a watch', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: '返信を送る' });
   const post = await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
   assert.equal(post.status, 'done');
@@ -580,53 +603,62 @@ test('progress 100 with unverified completes and registers a watch', async (t) =
   const state = (await f.call('status')).state;
   assert.equal(state.watches.length, 1);
   assert.deepEqual({ ...state.watches[0], since: undefined }, { id: 'w1', objective: '返信を送る', unverified: '相手に届いたか', evidence: '', since: undefined, lastCheckAt: null, checks: 0, ng: 0 });
-  assert.match(f.sent[0], /🟡 だいたい終わりました: 返信を送る/);
-  assert.match(f.sent[0], /まだ確かめられていないこと: 相手に届いたか/);
-  assert.match(f.sent[0], /毎日たしかめて、結果をまた知らせます。/);
+  assert.match(deferredTexts()[0], /🟡 だいたい終わりました: 返信を送る/);
+  assert.match(deferredTexts()[0], /まだ確かめられていないこと: 相手に届いたか/);
+  assert.match(deferredTexts()[0], /毎日たしかめて、結果をまた知らせます。/);
 });
 
 test('watch ok removes the watch and notifies once', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: '返信を送る' });
   await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
-  f.sent.length = 0;
+  deferredOffset = readDeferred(f.opts.home).length;
   const result = await f.call('watch', { id: 'w1', result: 'ok', note: '相手から返事が来た' });
   assert.equal(result.status, 'ok');
   assert.equal((await f.call('status')).state.watches.length, 0);
-  assert.equal(f.sent.length, 1);
-  assert.match(f.sent[0], /✅ 確かめられました: 返信を送る/);
-  assert.match(f.sent[0], /相手から返事が来た/);
+  assert.equal(deferredTexts().length, 1);
+  assert.match(deferredTexts()[0], /✅ 確かめられました: 返信を送る/);
+  assert.match(deferredTexts()[0], /相手から返事が来た/);
 });
 
 test('watch ng three times fails the check, notifies once and records history', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: '返信を送る' });
   await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
-  f.sent.length = 0;
+  deferredOffset = readDeferred(f.opts.home).length;
   assert.equal((await f.call('watch', { id: 'w1', result: 'ng', note: 'まだ届いていない' })).status, 'ng');
   assert.equal((await f.call('watch', { id: 'w1', result: 'ng', note: 'まだ届いていない' })).status, 'ng');
-  assert.deepEqual(f.sent, []);
+  assert.deepEqual(deferredTexts(), []);
   const third = await f.call('watch', { id: 'w1', result: 'ng', note: 'まだ届いていない' });
   assert.equal(third.status, 'failed_check');
   assert.equal((await f.call('status')).state.watches.length, 0);
   assert.equal((await f.call('status')).state.objectiveHistory.at(-1).status, 'failed_check');
-  assert.equal(f.sent.length, 1);
-  assert.match(f.sent[0], /⚠️ うまくいっていません: 返信を送る/);
-  assert.match(f.sent[0], /わかったこと: まだ届いていない/);
-  assert.match(f.sent[0], /直すなら「直して」、やめるなら「止めて」と返信してください。/);
+  assert.equal(deferredTexts().length, 1);
+  assert.match(deferredTexts()[0], /⚠️ うまくいっていません: 返信を送る/);
+  assert.match(deferredTexts()[0], /わかったこと: まだ届いていない/);
+  assert.match(deferredTexts()[0], /直すなら「直して」、やめるなら「止めて」と返信してください。/);
 });
 
 test('watch expires after seven days and notifies once', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: '返信を送る' });
   await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
-  f.sent.length = 0;
+  deferredOffset = readDeferred(f.opts.home).length;
   const later = { now: new Date(NOW.getTime() + 8 * 24 * 3600 * 1000) };
   const result = await f.call('watch', { id: 'w1', result: 'ng', note: 'まだ届いていない' }, later);
   assert.equal(result.status, 'failed_check');
   assert.equal((await f.call('status', {}, later)).state.watches.length, 0);
-  assert.equal(f.sent.length, 1);
-  assert.match(f.sent[0], /⚠️ うまくいっていません: 返信を送る/);
+  assert.equal(deferredTexts().length, 1);
+  assert.match(deferredTexts()[0], /⚠️ うまくいっていません: 返信を送る/);
 });
 
 test('watch validates input and reports unknown ids', async (t) => {
@@ -653,6 +685,9 @@ test('watchesDue lists never-checked and stale watches only', async (t) => {
 
 test('Discord notices never leak internal codes, commands or ids', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: '[P1タスク] 返信を送る' });
   await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
   await f.call('watch', { id: 'w1', result: 'ng', note: 'まだ届いていない' });
@@ -662,8 +697,9 @@ test('Discord notices never leak internal codes, commands or ids', async (t) => 
   await f.call('post', { summary: 'blocked', progress: 0, noop: true });
   await f.call('post', { summary: 'blocked', progress: 0, noop: true });
   await f.call('pause', { question: 'この変更を適用しますか？' });
-  assert.ok(f.sent.length >= 4);
-  for (const text of f.sent) {
+  assert.ok(deferredTexts().length >= 3);
+  assert.equal(f.sent.length, 1);
+  for (const text of [...deferredTexts(), ...f.sent]) {
     assert.doesNotMatch(text, /_cap|runner_error|noop|P1|gh |FB-fb-|daily_iter|daily_hours|total_cap/);
     assert.doesNotMatch(text, /\[P1タスク\]/);
     assert.ok(text.split('\n').length <= 4, text);
@@ -678,21 +714,24 @@ test('直して resumes like 続けて', () => {
 
 test('a watch never checked for seven days is closed by pre with one plain notice', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: '[P1タスク] 返信を送る' });
   await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
-  f.sent.length = 0;
+  deferredOffset = readDeferred(f.opts.home).length;
   const later = { now: new Date(NOW.getTime() + 8 * 24 * 3600 * 1000) };
   const pre = await f.call('pre', {}, later);
   assert.deepEqual(pre.watchesDue, []);
   const state = (await f.call('status', {}, later)).state;
   assert.equal(state.watches.length, 0);
   assert.equal(state.objectiveHistory.at(-1).status, 'failed_check');
-  assert.equal(f.sent.length, 1);
-  assert.match(f.sent[0], /⚠️ うまくいっていません: 返信を送る/);
-  assert.match(f.sent[0], /7日間、確かめられませんでした/);
-  assert.doesNotMatch(f.sent[0], /P1|w1|watch/);
+  assert.equal(deferredTexts().length, 1);
+  assert.match(deferredTexts()[0], /⚠️ うまくいっていません: 返信を送る/);
+  assert.match(deferredTexts()[0], /7日間、確かめられませんでした/);
+  assert.doesNotMatch(deferredTexts()[0], /P1|w1|watch/);
   await f.call('pre', {}, later);
-  assert.equal(f.sent.length, 1);
+  assert.equal(deferredTexts().length, 1);
 });
 
 function mirrorConfig(f, command = ['node', 'mirror.mjs']) {
@@ -873,11 +912,14 @@ test('digest dry-run includes waiting section without delivery or state/ledger c
 });
 test('periodic DM preserves waiting action and days despite notify-kim handoff/failure rewriting', async t => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: '報告' });
   fs.writeFileSync(path.join(f.opts.home, '.claude/waiting-on-user.json'), JSON.stringify([{ id: 'a', title: '登録', since: '2026-10-10', nextStep: '接続して確認してください' }]));
   const result = await f.call('digest', {}, { now: new Date('2026-10-23T03:00:00Z') });
-  assert.equal(f.sent[0], result.text);
-  assert.match(f.sent[0], /待ち 13 日.*接続して確認してください/);
+  assert.equal(deferredTexts()[0], result.text);
+  assert.match(deferredTexts()[0], /待ち 13 日.*接続して確認してください/);
   assert.equal(fs.readFileSync(result.channels.file.path, 'utf8'), result.text);
 });
 test('corrupt waiting ledger never silences the digest and is recorded', async t => {

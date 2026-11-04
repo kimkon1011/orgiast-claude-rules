@@ -70,8 +70,34 @@ function chainAncestors(ledger, parentId) {
   }
   return ancestors;
 }
+// タイトル頭の Stop フック印（tools/session-wait-title.mjs）は、そのセッション自身が
+// 「次に kim がすることが無いので閉じてよい」「この時刻まで待つ」と宣言した結果。
+// それでも再開すると、済んだ作業を毎晩やり直して枠を消費し、長いものは20分で
+// タイムアウトして error 行になり、kim 宛の修復TODOに化ける（2026-11-03 実測:
+// 64c3b3c8 は【閉じて可】なのに再開され timeout、5c76ae26 は 18:00 まで待つ宣言の
+// 03:44 に再開された）。タイトル印を再開可否の判定に使う。
+const CLOSABLE_TITLE = /(?:^|｜)【閉じて可】/;
+// 新形式【MM/DD/HH:MMまで】と旧形式【YY/MM/DD/HH:MMまで】の両方を受ける。
+const WAIT_TITLE = /^(?:\d{3}｜)?【(?:(\d{2})\/)?(\d{2})\/(\d{2})\/(\d{2}):(\d{2})まで】/;
+
+export function titleSkipReason(displayTitle, now) {
+  const title = String(displayTitle ?? '');
+  if (CLOSABLE_TITLE.test(title)) return '閉じて可';
+  const match = WAIT_TITLE.exec(title);
+  if (!match) return '';
+  const [, yy, month, day, hour, minute] = match;
+  const at = (year) => new Date(year, Number(month) - 1, Number(day), Number(hour), Number(minute)).getTime();
+  let deadline = yy ? at(2000 + Number(yy)) : at(new Date(now).getFullYear());
+  // 年なし形式は年跨ぎで過去日になり得る。半年以上先なら前年の日付とみなす。
+  if (!yy && deadline - now > 180 * 86400000) deadline = at(new Date(now).getFullYear() - 1);
+  // 期限切れの待機は解除済みとして再開対象に戻す（永久に無視しない）。
+  return now < deadline ? '待機期限前' : '';
+}
+
 export function skipReason(record, entry, night, closed, mtimeMs, now, activeMs) {
   if (closed.sessions[record.sessionId]) return 'closed';
+  const titleSkip = titleSkipReason(record.displayTitle, now);
+  if (titleSkip) return titleSkip;
   if (now - mtimeMs >= 7 * 86400000) return 'session-auto-close対象';
   if (now - mtimeMs <= activeMs || record.sessionId === process.env.CLAUDE_SESSION_ID) return 'active';
   if ((entry.noProgress ?? 0) >= 3) return '3回進捗なし';

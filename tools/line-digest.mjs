@@ -30,7 +30,7 @@ export const PROVIDERS = {
   cerebras: { url: 'https://api.cerebras.ai/v1/chat/completions', env: 'CEREBRAS_API_KEY', file: 'cerebras.env', model: 'zai-glm-4.7' },
   deepseek: { url: 'https://openrouter.ai/api/v1/chat/completions', env: 'OPENROUTER_API_KEY', file: 'openrouter.env', model: 'deepseek/deepseek-v4-flash' },
   openrouter: { url: 'https://openrouter.ai/api/v1/chat/completions', env: 'OPENROUTER_API_KEY', file: 'openrouter.env', model: 'openai/gpt-oss-120b', extraHeaders: { 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast' } },
-  gemini: { url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', env: 'GEMINI_API_KEY', file: 'gemini.env', model: 'gemini-3.7-flash' },
+  gemini: { url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', env: 'GEMINI_API_KEY', file: 'gemini.env', model: 'gemini-3.6-flash' },
   kimi: { url: 'https://openrouter.ai/api/v1/chat/completions', env: 'OPENROUTER_API_KEY', file: 'openrouter.env', model: 'moonshotai/kimi-k3', special: 'kimi' },
   grok: { url: 'https://api.x.ai/v1/chat/completions', env: 'XAI_API_KEY', file: 'xai.env', model: 'grok-3' },
 };

@@ -1,1 +1,21 @@
-{ "version": 1, "note": "kim が明示的に Discord へ流すと決めたカテゴリだけ。編集は kim のセッションのみ。", "entries": [] }
+{
+  "version": 1,
+  "note": "kim 宛の自動進行定期ダイジェスト・完了通知を Discord へ配送するための許可リスト。編集権限は kim のセッションのみ。",
+  "entries": [
+    {
+      "category": "progress-digest",
+      "pattern": "^【[^】]+ の自動進行】|^【進捗まとめ】",
+      "reason": "kim 2026-11-04 指示（進捗は聞かれる前に Discord へ）"
+    },
+    {
+      "category": "progress-done",
+      "pattern": "✅\\s*(?:自動進行が完了|完了)|📋\\s*未通知だった自動進行の完了一覧",
+      "reason": "kim 2026-11-04 指示（進捗は聞かれる前に Discord へ）"
+    },
+    {
+      "category": "progress-health",
+      "pattern": "⚠️\\s*進捗ダイジェストが Discord に届いていません",
+      "reason": "kim 2026-11-04 指示（進捗は聞かれる前に Discord へ）"
+    }
+  ]
+}

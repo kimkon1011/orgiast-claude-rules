@@ -87,6 +87,8 @@ test('Drive only: durable dedup, lost response recovery, unchanged hash, chronol
   assert.ok(daily.indexOf('01:00:00.000Z') < daily.indexOf('02:00:00.000Z'));
   assert.ok(caseText.indexOf('02:00:00.000Z') < caseText.indexOf('01:00:00.000Z'));
   const index=JSON.parse(api.files.get(state.files.index).text);
+  assert.ok(Object.hasOwn(index.sources, 'inquiry-sheet'));
+  assert.ok(Object.hasOwn(index.sources['inquiry-sheet'], 'lastSuccess'));
   assert.equal(index.cases['261101ABC'].url,`https://docs.google.com/a/orgiast.jp/document/d/${state.files['cases/261101ABC']}/edit`);
 });
 test('case publication caps age and characters but keeps local complete text',async t=>{
@@ -173,7 +175,7 @@ test('publication failure preserves source results and creation counts in report
  const state={sources:{},cases:{},rootId:'root'};
  const report=await run({live:true},{config,cases,state,save(){},collect:async()=>({messages:[],cursor:{since:1}}),sink:{createdDocs:2,async init(){},async finish(){throw Error('API HTTP 403 SERVICE_DISABLED');}}});
  assert.equal(report.exitCode,0);assert.equal(report.createdDocs,2);assert.equal(report.rootId,'root');
- assert.equal(Object.keys(report.sources).length,6);assert.match(state.publishError,/SERVICE_DISABLED/);
+ assert.equal(Object.keys(report.sources).length,SOURCES.length);assert.match(state.publishError,/SERVICE_DISABLED/);
 });
 
 test('tl;dv missing transcript keeps metadata, continues page, records error and later upgrades',async t=>{
@@ -381,8 +383,8 @@ test('process budget skips remaining sources, saves state and reserves publicati
  const report=await run({live:true},{config,cases,state,clock:()=>clock,save(){saves++;},
   collect:async source=>{visited.push(source);clock=360000;return {messages:[],cursor:{since:1}};},
   sink:{async init(){},async finish(){finished++;assert.equal(clock,360000);clock=480000;throw Object.assign(Error('budget'),{code:'HUB_BUDGET'});}}});
- assert.equal(report.exitCode,0);assert.equal(report.budgetExhausted,true);assert.deepEqual(visited,['gmail-kim']);
- assert.equal(finished,1);assert.ok(saves>0);assert.equal(state.sources['gmail-kim'].cursor.since,1);
+ assert.equal(report.exitCode,0);assert.equal(report.budgetExhausted,true);assert.deepEqual(visited,[SOURCES[0]]);
+ assert.equal(finished,1);assert.ok(saves>0);assert.equal(state.sources[SOURCES[0]].cursor.since,1);
  for(const source of SOURCES.slice(1)){assert.match(report.sources[source].skipped,/budget/);assert.ok(state.sources[source].deferredAt);assert.equal(state.sources[source].lastSuccess,undefined);}
  assert.ok(state.publishDeferredAt);
 });

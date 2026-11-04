@@ -28,6 +28,7 @@ test('priority buckets and per-category caps come from the presentation policy',
   const { shown, context } = selectContext(messages.reverse(), { headless: false });
   assert.deepEqual(shown.map(m => Number(m.id.split('-')[1])), CATEGORY_LIMITS.flatMap((count, i) => Array(count).fill(i)));
   assert.ok(context.length <= CONTEXT_LIMIT);
+  assert.match(context, /判断依頼は 📌 kim の返事待ち に表示済み/);
 });
 test('newest notes come first independent of inbox filename order', () => {
   const { shown } = selectContext([mail('old', { createdAt: '2020-01-01' }), mail('new', { createdAt: '2026-01-01' }), mail('middle', { createdAt: '2025-01-01' })]);

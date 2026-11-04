@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { getDriveToken } from './lib/drive-auth.mjs';
+import { INQUIRY_SHEET, INQUIRY_TAB, readSheet, searchRows, excludedInquiry, companyName } from './lib/inquiry-sheet.mjs';
 import { searchGmail } from './gmail-search.mjs';
 import { collectMessages, isAutomatedGmail } from './schedule-sync.mjs';
 import { discordChannels, DEFAULT_GUILD_ID } from './discord-task-digest.mjs';
@@ -12,7 +13,7 @@ import { resolveDiscordBotToken } from './notify-kim.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { collectPlaudForHub } from './plaud-to-tldv.mjs';
 import { isEntry } from './is-entry.mjs';
-export const SOURCES = ['gmail-kim', 'gmail-seisaku', 'discord', 'line', 'plaud', 'tldv'];
+export const SOURCES = ['inquiry-sheet', 'gmail-kim', 'gmail-seisaku', 'discord', 'line', 'plaud', 'tldv'];
 const DAY = 86400000;
 const iso = n => new Date(n).toISOString();
 const digest = v => crypto.createHash('sha256').update(v).digest('hex');
@@ -39,6 +40,11 @@ export function parseCaseRows(rows) {
   return [...result.values()];
 }
 export function matchCase(m, cases, config) {
+  if (m.source === 'inquiry-sheet') {
+    const client = companyName(m.company);
+    const matches = client ? cases.filter(c => companyName(c.client) === client) : [];
+    return matches.length === 1 ? matches[0] : null;
+  }
   const text = norm([m.subject, m.text, m.chat].join('\n'));
   const ids = [...text.matchAll(/(?<![a-z0-9])(?:\d{6}[a-z]{2,6}|c\d{4,})(?![a-z0-9])/g)].map(x => x[0]);
   const explicit = cases.filter(c => ids.includes(norm(c.id)));
@@ -52,9 +58,11 @@ export function matchCase(m, cases, config) {
 }
 export function exclusion(m, config, matched) {
   const text = norm([m.sender, m.subject, m.text, m.chat].join('\n'));
+  if (m.source === 'inquiry-sheet' && m.excluded) return 'excluded';
   if (m.source.startsWith('gmail') && isAutomatedGmail(m)) return 'automated';
   if ((config.excludePatterns || []).some(p => new RegExp(p, 'i').test(text))) return 'excluded';
   if ((config.privatePatterns || []).some(p => new RegExp(p, 'i').test(text))) return 'private';
+  if (m.source === 'inquiry-sheet') return null;
   if (matched || (config.allowedSenders || []).includes(m.sender) || (config.allowedChats || []).includes(m.chat)) return null;
   return (config.businessPatterns || []).some(p => new RegExp(p, 'i').test(text)) ? null : 'business-unconfirmed';
 }
@@ -108,6 +116,20 @@ async function jsonFetch(url, init, fetchImpl) {
 export async function collectSource(source, ctx) {
   const { config, home, since, until, cursor = {}, fetchImpl, signal, state } = ctx;
   const limit = config.maxPerSource;
+  if (source === 'inquiry-sheet') {
+    const rows = await (ctx.sheetReader || readSheet)(INQUIRY_SHEET, INQUIRY_TAB, {
+      fetchImpl, signal, getToken: ctx.getToken || (opts => getDriveToken({ ...opts, signal, fetchImpl })) });
+    const all = searchRows(rows, [], { matchedRows: new Set(rows.slice(1).map((_, i) => i + 2)) });
+    const pending = all.filter(r => r.date && Date.parse(r.date) >= since && Date.parse(r.date) <= until).map(r => {
+      const row = rows[r.row - 1];
+      return { source, id: String(r.row), ts: r.date, company: row[5], sender: row[7] || row[2] || row[1],
+        subject: r.title, text: r.columns.map(c => `${c.column} ${c.name}: ${c.value}`).join('\n'), url: r.url, excluded: excludedInquiry(row, rows[0]) };
+    }).filter(m => !state.processed?.[messageKey(m)]);
+    const messages = pending.slice(0, limit);
+    const invalid = all.filter(r => !r.date && rows[r.row - 1].some(Boolean));
+    return { messages, cursor: { since: pending.length > limit ? since : until }, partial: pending.length > limit || invalid.length > 0,
+      error: invalid.length ? `問い合わせ日時が不明: ${invalid.map(r => r.row).join(', ')}行目` : pending.length > limit ? '問い合わせシートの残りを次回取得' : undefined };
+  }
   if (source.startsWith('gmail')) {
     const end = cursor.end || until;
     const convert = r => ({ ...r, source, sender: r.from, text: r.body || r.snippet, ts: iso(Number(r.internalDate) || Date.parse(r.date)), url: `https://mail.google.com/mail/u/${encodeURIComponent(config.mailboxes[source])}/#all/${r.threadId}` });

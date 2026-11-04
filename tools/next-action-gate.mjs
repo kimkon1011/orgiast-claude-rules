@@ -53,8 +53,9 @@ const IMPLEMENTATION_PATTERN = /(実装|修正|改修|修復|作り直)/;
 const DELIVERY_PATTERN = /着地|マージ|\bPR\b|push|ブランチ|main に/;
 export const NO_ACTION_PATTERN = /^(?:なし|無し|ありません|不要|返信不要)(?:[。．.]?[ \t]*$|[ \t]*[（(][^\r\n]*[）)][。．.]?[ \t]*$)/;
 const WAREHOUSE_PATTERN = /倉庫|棚|箱に入れ|セットに入れ|同梱|運ぶ|積む|持ち出し|格納|移動/;
-const SESSION_CRON_REASON = '「まだ閉じない」で待つなら、このセッション内に定期の進捗確認を仕込んでから終える。CronCreate（recurring・毎時・分は 0/30 を避ける）で、プロンプトに『残作業の状態を照会し 1〜3 行でこのセッションに報告、状態が変わった時か判断が要る時だけ PushNotification、全部終わったら CronDelete して /session-close を提案』を書く。台帳（auto-progress --add-check）は Discord 通知用でセッションには報告しないので代わりにならない（nishi 2026-10-29・11-04 指示）。例外は [NO-SESSION-CRON-OK: <理由>]（理由5文字以上）。';
-const PERMANENT_FIX_REASON = '人に作業を残すなら、今後その作業が人に来ないようにする策（自動化／担当者への依頼経路／ルール・ゲート・memory 化）をこのターンで実装し、`恒久策:` 行に実装物を書く。初回だけの作業なら `恒久策: 一回限り: <理由>`。';
+const SESSION_CRON_REASON = '「まだ閉じない」で待つなら、このセッション内に定期の進捗確認を仕込んでから終える。CronCreate（recurring・毎時・分は 0/30 を避ける）で、プロンプトに『残作業の状態を照会し 1〜3 行でこのセッションに報告、状態が変わった時か判断が要る時だけ PushNotification、全部終わったら CronDelete して、確認せず自分で /session-close を実行』を書く。台帳（auto-progress --add-check）は Discord 通知用でセッションには報告しないので代わりにならない（nishi 2026-10-29・11-04 指示）。例外は [NO-SESSION-CRON-OK: <理由>]（理由5文字以上）。';
+const SESSION_CLOSE_HANDOFF_REASON = '[SESSION-CLOSE-HANDOFF] 「/session-close をして」は kim に close を委ねる終わり方なので禁止です（2026-08-30・2026-11-04 kim 厳命「最終の場合は自動でセッションクローズをして」・全PC全アカウント全プロジェクト）。作業が終わったなら、確認や提案をせず、このターンで Skill session-close を自分で実行し、「このセッション: /session-close は終わっているので、このセッションを閉じてよい」で終えてください。まだ待つなら「まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）」です。実行したが失敗した時だけ、実行したコマンドと終了コードを本文に書き [SESSION-CLOSE-PENDING-OK: <理由>]（理由5文字以上）を付けてください。';
+const PERMANENT_FIX_REASON ='人に作業を残すなら、今後その作業が人に来ないようにする策（自動化／担当者への依頼経路／ルール・ゲート・memory 化）をこのターンで実装し、`恒久策:` 行に実装物を書く。初回だけの作業なら `恒久策: 一回限り: <理由>`。';
 const DEFERRAL_REASON = '[NEXT-ACTION-DEFERRAL] 「次に kim がすること」に恒久修正の先送り（実装・修正・恒久化・次セッション対応）が書かれています。同じ文面は夜間監査 permanent-fix-deferral-scan が P3 として検出します（2026-10-14〜10-15 に 6 件）。kim に渡してよいのは「人が一度だけ実行できる具体的手順」だけです。自分で潰せるものはこのターン内に実装して着地させ、実行不能なら実行したコマンドと終了コードを本文に記録したうえで、移せる経路（例: Codex が生きている受信PCへの fleet-mail --exec codex 便）へ流してください。どうしても人にしかできない物理操作のときだけ、先送り語（恒久策・次セッション等）を使わず具体的な1手順だけを書いてください。';
 // kim が毎回同じ文で判断できるよう、表記ゆれを許さない完全一致の定型文にする（2026-09-25 kim 指示）。
 // 「閉じてよい」だけでは /session-close をこれからするのか、済んだので消してよいのかが分からない
@@ -90,7 +91,8 @@ export function openPhrase(date, state = 'open') {
   const p = n => String(n).padStart(2, '0');
   return SESSION_PHRASES[state].replace('YYYY-MM-DD HH:MM', `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}`);
 }
-const SESSION_PHRASE_LIST = Object.values(SESSION_PHRASES).map(phrase => `「${phrase}」`).join('');
+// pending（kim に /session-close を委ねる）は SESSION-CLOSE-HANDOFF で禁止したので案内しない。
+const SESSION_PHRASE_LIST = Object.entries(SESSION_PHRASES).filter(([state]) => state !== 'pending').map(([, phrase]) => `「${phrase}」`).join('');
 const CLOSABLE_STATES = new Set(['closed', 'delete']);
 const SESSION_STATES = Object.entries(SESSION_PHRASES).map(([state, phrase]) => [state, { test: WAIT_STATES.has(state) ? value => WAIT_PATTERNS[state].test(value) && openDeadline(value) !== null : value => value === phrase }]);
 
@@ -290,6 +292,13 @@ function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {
     return { decision: 'block', code: 'SESSION-EMPTY', reason: `「このセッション:」の値が空です。${SESSION_PHRASE_LIST}のいずれかを一字一句そのまま書いてください。` };
   }
   const sessionState = SESSION_STATES.find(([, pattern]) => pattern.test(footer.session))?.[0];
+  // 作業が終わったのに /session-close を kim に委ねる終わり方は禁止（2026-08-30・2026-11-04 kim 厳命・全PC全アカウント）。
+  // Claude が確認せず自分で /session-close を実行し、closed の定型文で終える。実行して失敗した時だけ例外マーカーで通す。
+  const pendingOverride = [...turnSource.matchAll(/\[SESSION-CLOSE-PENDING-OK:[ \t]*([^\]\r\n]*)\]/g)]
+    .some(([, reason]) => [...reason.trim()].length >= 5);
+  if (footer.session.startsWith('/session-close をして') && !pendingOverride) {
+    return { decision: 'block', code: 'SESSION-CLOSE-HANDOFF', reason: SESSION_CLOSE_HANDOFF_REASON };
+  }
   if (!sessionState && (footer.session.startsWith('まだ閉じない（作業中') || footer.session.startsWith('/session-close をして（まだ閉じない'))) {
     const state = footer.session.startsWith('/session-close') ? 'pending' : 'open';
     return { decision: 'block', code: 'SESSION-OPEN-NO-DEADLINE', reason: `「まだ閉じない」のときは、何日の何時まで待つかを入れてください。書式: 「${SESSION_PHRASES[state]}」（例: 「${openPhrase(new Date(Date.now() + 4 * 3600 * 1000), state)}」）。期限は、待っている相手の作業や自動チェックの期限に合わせる。` };
@@ -298,7 +307,7 @@ function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {
     return { decision: 'block', code: 'SESSION-INVALID', reason: `「このセッション:」は定型文${SESSION_PHRASE_LIST}のいずれかを一字一句そのまま書いてください（理由は「この後の自動進行」に書く）。` };
   }
   if (WAIT_STATES.has(sessionState) && openDeadline(footer.session).getTime() < (input.now ?? Date.now())) {
-    return { decision: 'block', code: 'SESSION-OPEN-DEADLINE-PAST', reason: '「まだ閉じない」の待つ期限が既に過ぎています。待ち続けるなら新しい期限を書き、待つのをやめるなら /session-close を提案してください。' };
+    return { decision: 'block', code: 'SESSION-OPEN-DEADLINE-PAST', reason: '「まだ閉じない」の待つ期限が既に過ぎています。待ち続けるなら新しい期限を書き、待つのをやめるなら確認せず自分で /session-close を実行してください。' };
   }
   const body = source.slice(0, source.lastIndexOf('次に kim がすること:'));
   const isComplete = COMPLETE_PATTERN.test(footer.autopilot);
@@ -313,7 +322,7 @@ function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {
     return { decision: 'block', code: 'SESSION-BACKGROUND-CONTRADICTION', reason: `本文ではバックグラウンド処理が進行中なのに、このセッションを閉じてよいと書かれており矛盾しています。ジョブが宙に浮かないよう「${SESSION_PHRASES.open}」（期限を入れる）としてください。` };
   }
   if (sessionState === 'closed' && !hasSessionCloseEvidence(source, transcriptRaw)) {
-    return { decision: 'block', code: 'SESSION-CLOSE-NO-EVIDENCE', reason: `「このセッション: ${SESSION_PHRASES.closed}」とありますが、本文または会話に /session-close を実行した形跡がありません。/session-close を実行するか、「${SESSION_PHRASES.pending}」にしてください。` };
+    return { decision: 'block', code: 'SESSION-CLOSE-NO-EVIDENCE', reason: `「このセッション: ${SESSION_PHRASES.closed}」とありますが、本文または会話に /session-close を実行した形跡がありません。確認せず自分で /session-close を実行してから終えてください（kim に実行を委ねない）。` };
   }
   if (footer.nextAction !== 'なし' && (DEFERRAL_PATTERN.test(footer.nextAction) || isLandingDeferral(footer.nextAction) || (IMPLEMENTATION_PATTERN.test(footer.nextAction) && DELIVERY_PATTERN.test(body)))) {
     return { decision: 'block', code: 'NEXT-ACTION-DEFERRAL', reason: DEFERRAL_REASON };

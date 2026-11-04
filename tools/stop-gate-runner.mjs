@@ -60,7 +60,7 @@ const PERIODIC_REPORT_GATES = new Set([...FORM_GATES,
   'handoff-audit-gate', 'report-length-gate', 'next-action-gate', 'third-party-nudge-gate',
 ]);
 export const RETRY_INSTRUCTION = STOP_RETRY_INSTRUCTION;
-const HANDOFF_HINT = "末尾に『次に kim がすること』『この後の自動進行』『このセッション: /session-close は終わっているので、このセッションを閉じてよい / /session-close は不要なので、このセッションを閉じてよい / /session-close をして（まだ閉じない・YYYY-MM-DD HH:MM まで待つ） / まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）』の定型文を3行で入れること(user が『この先はどうしたらいいの？』と聞き返した回数: 7日で9回)";
+const HANDOFF_HINT = "末尾に『次に kim がすること』『この後の自動進行』『このセッション: /session-close は終わっているので、このセッションを閉じてよい / /session-close は不要なので、このセッションを閉じてよい / まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）』の定型文を3行で入れること。作業が終わったら /session-close は kim に頼まず自分で実行する(user が『この先はどうしたらいいの？』と聞き返した回数: 7日で9回)";
 
 function fullStepsReason(missing) {
   return `[FULL-STEPS] 人に手作業を頼んでいますが、次が足りません: ${missing.join('・')}（§1.5.1 絶対ルール）`;

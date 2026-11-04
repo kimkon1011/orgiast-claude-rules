@@ -491,11 +491,11 @@ nishi 指摘:「**『閉じてよい』というのは Close 処理をこれか�
   セッション退避では「私が `/session-close` を実行 → 私は以後書かない → user がタブを✕で閉じる」が正しい順で、
   `/session-close` の**後に会話を続けると退避が無効になり、セッションが一覧に復活する**（633KB 復活を実測）。
 - 順番が結果を変えるなら理由を1行添える。
-- Stop hook の `next-action-gate` が要求する「このセッション:」行は次の定型4文のどれか（2026-10-01 kim 指示。`/session-close` の状態とタブを閉じてよいかを1文に両方書く）。
+- Stop hook の `next-action-gate` が要求する「このセッション:」行は次の定型3文のどれか（2026-10-01 kim 指示。`/session-close` の状態とタブを閉じてよいかを1文に両方書く）。
   - `/session-close は終わっているので、このセッションを閉じてよい`: Claude が /session-close 済み。タブを✕してよい
   - `/session-close は不要なので、このセッションを閉じてよい`: 引き継ぎ不要。タブを✕してよい
-  - `/session-close をして（まだ閉じない・YYYY-MM-DD HH:MM まで待つ）`: 作業は終わったが /session-close 未実行。/session-close をする。こちらも「まだ閉じない」なので何日の何時まで待つかを必ず入れる
-  - `まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）`: 作業継続中。何日の何時まで待つかを必ず入れる（例: `まだ閉じない（作業中・2026-11-02 23:59 まで待つ）`）。期限は待っている相手の作業や自動チェックの期限に合わせ、過ぎたら新しい期限に書き換えるか /session-close を提案する（2026-10-27 nishi 指示・next-action-gate が SESSION-OPEN-NO-DEADLINE / SESSION-OPEN-DEADLINE-PAST で機械検査）
+  - `まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）`: 作業継続中。何日の何時まで待つかを必ず入れる（例: `まだ閉じない（作業中・2026-11-02 23:59 まで待つ）`）。期限は待っている相手の作業や自動チェックの期限に合わせ、過ぎたら新しい期限に書き換えるか、確認せず自分で /session-close を実行する（
+  - 🔴 **最終の応答では /session-close を Claude が自分で実行する（2026-08-30・2026-11-04 kim 厳命・全PC全アカウント全プロジェクト）**: 目的が完了したら「/session-close しますか？」と聞かず、「/session-close をして」と頼まず、そのターンで Skill `session-close` を実行して `/session-close は終わっているので…` で終える。旧定型文 `/session-close をして（まだ閉じない・…）` は kim に close を委ねるので廃止し、`next-action-gate` が `SESSION-CLOSE-HANDOFF` で差し戻す。実行して失敗した時だけ、コマンドと終了コードを本文に書いて `[SESSION-CLOSE-PENDING-OK: <理由>]` を付ける2026-10-27 nishi 指示・next-action-gate が SESSION-OPEN-NO-DEADLINE / SESSION-OPEN-DEADLINE-PAST で機械検査）
   - 待つ期限は Stop hook `tools/session-wait-title.mjs` がセッション一覧のタイトルの頭に `【11/02/20:11まで】` の形（年なし）で自動で付け、閉じてよい定型文になったら外す。既存の全セッションにも SessionStart の `--all`（1時間に1回）で当てる（2026-10-27 nishi 指示・全PC全アカウント）
   - 閉じてよい定型文2つ（`/session-close は終わっているので…` / `/session-close は不要なので…`）で、かつ「次に kim がすること: なし」のときは、同じ hook がタイトルの頭に `【閉じて可】` を付ける。kim のやることが残っていれば閉じてよい定型文でも付けず、付いていれば外す。再開して「まだ閉じない」に戻れば期限に付け替える（2026-11-02 kim 指示・全PC全アカウント全プロジェクト）
   - PC番号（作業用018 なら `018`）がある PC では、セッション一覧のタイトル頭に `018｜` を付け、待機セッションの自動名も `018-…` にする。どのPCのセッションかをスマホで見分けるため（2026-11-01 kim 指示・全PC）。番号は fleet-pc-map.json から hostname で引く。上書きは env `ORGIAST_PC_NUMBER`
@@ -715,7 +715,7 @@ kim の返事待ちは SessionStart と各セッションで「📌 kim の返�
 
 **1.15 完了報告で stop せず自律進行する**
 
-「すすめて」と打たせない。完了報告の後は自動で次のTODO（git commit/vercel prod deploy/Layer2 e2e/memory反映等）に着手する。設計判断・破壊的操作・未承認prod送信・大型リファクタのみAskUserQuestionで待つ。報告末尾に「残TODO」セクションを付ける。詳細・自動着手チェックリスト: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`
+「すすめて」「閉じて」と打たせない。目的が完了した最終の応答では、確認せず Claude が自分で `/session-close` を実行して閉じる（2026-11-04 kim 厳命・全PC全アカウント全プロジェクト。詳細は「次の一手は『誰が・何を・どの順で』書く」節の「このセッション:」定型文）。完了報告の後は自動で次のTODO（git commit/vercel prod deploy/Layer2 e2e/memory反映等）に着手する。設計判断・破壊的操作・未承認prod送信・大型リファクタのみAskUserQuestionで待つ。報告末尾に「残TODO」セクションを付ける。詳細・自動着手チェックリスト: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`
 
 進捗通知の宛先は `fleet-pc-map.json` またはローカルの `~/.claude/fleet-pc-map.json` の同名 PC 行の `notifyDiscordId`。未設定だとチャットに案内が出て、kim に1日1回警告が飛ぶ。
 kim 宛の定期ダイジェスト（朝/夜/urgent）・完了通知・配送異常の警告は `config/kim-discord-allowlist.json` の許可リストで Discord DM へ流す（kim 2026-11-04 指示「進捗は聞かれる前に届ける」）。許可判定は平易化前の原文でも行う。許可リストを空にする・この区分を消す変更は `tools/kim-discord-allowlist.test.mjs` が落とす。

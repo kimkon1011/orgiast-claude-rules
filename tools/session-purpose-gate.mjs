@@ -54,7 +54,7 @@ try {
 
   if (event === 'SessionStart') {
     save();
-    let ctx = '【1セッション=1目的 §1.18】このセッションの目的は1件だけ。最初の依頼を受けたら応答の冒頭で `**[本セッションの目的]** <目的>` を1行宣言し、以後その目的から外れる依頼が来たら着手前に「ここで区切って /session-close → 続きは新セッションで」と1行提案せよ(userが「このまま続けて」と言えば継続)。目的が完了したら自分から /session-close を提案する。継続性は memory が担保するので区切って良い。';
+    let ctx = '【1セッション=1目的 §1.18】このセッションの目的は1件だけ。最初の依頼を受けたら応答の冒頭で `**[本セッションの目的]** <目的>` を1行宣言し、以後その目的から外れる依頼が来たら着手前に「ここで区切って /session-close → 続きは新セッションで」と1行提案せよ(userが「このまま続けて」と言えば継続)。目的が完了したら（最終の応答では）提案も確認もせず、Claude が自分で /session-close を実行する（2026-11-04 kim 厳命・全PC全アカウント）。継続性は memory が担保するので区切って良い。';
     if (state.promptCount >= 1) ctx += `\n本セッションの目的は「${state.purpose}」。この目的に沿った作業だけを続け、別目的なら新セッションを提案せよ。`;
     output('SessionStart', ctx);
     process.exit(0);
@@ -90,7 +90,7 @@ try {
     ctx = `【目的ドリフト検知 §1.18】本セッションの目的は「${state.purpose}」。今回の依頼は別目的の可能性が高い。**着手する前に**応答の冒頭で1行:『これは別目的なので、ここで /session-close して新セッションで続けるのを推奨します(このまま続けるなら「続けて」と言ってください)』と提案せよ。userが継続を選んだ場合のみ着手する。継続性は memory が担保。`;
   } else if (!drift) {
     state.purposeTokens = [...new Set([...base, ...current])].slice(0, 200);
-    if (state.promptCount > 15 && state.promptCount - Number(state.lastNudgeAt || 0) >= 8) ctx = `【セッション肥大 §1.18】このセッションは ${state.promptCount} ターン目。目的「${state.purpose}」が完了しているなら /session-close を提案し、続きは新セッションへ。`;
+    if (state.promptCount > 15 && state.promptCount - Number(state.lastNudgeAt || 0) >= 8) ctx = `【セッション肥大 §1.18】このセッションは ${state.promptCount} ターン目。目的「${state.purpose}」が完了しているなら確認せず自分で /session-close を実行し、続きは新セッションへ。`;
   }
   if (ctx) {
     state.lastNudgeAt = state.promptCount;

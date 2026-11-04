@@ -122,13 +122,14 @@ Agent/Task の model を sonnet/haiku に明示。実装は node tools/codex-do.
 例外は `[PERMANENT-FIX-OK: <10文字以上の理由>]`。倉庫作業の依頼送信の検査は免除しない。
 倉庫の物理作業は `node tools/discord-dm.mjs <倉庫担当> --body-file <本文>` で依頼し、「倉庫担当へ依頼済み」と報告して kim の次の作業から外す。
 NEXT-ACTION-OPEN は PR・リンク・ファイルの状態を Claude が照会し、済みなら消し、未了なら自分で実行するか「この後の自動進行」へ移す。
+SESSION-CLOSE-HANDOFF / SESSION-CLOSE-NO-EVIDENCE は、確認せずこのターンで Skill `session-close` を実行し、「このセッション: /session-close は終わっているので、このセッションを閉じてよい」で終える（2026-11-04 kim 厳命）。まだ待つ物があるなら「まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）」。実行して失敗した時だけ、コマンドと終了コードを本文に書き `[SESSION-CLOSE-PENDING-OK: <5文字以上の理由>]` を付ける。
 人にしかできない例外は `[NEXT-ACTION-OPEN-OK: <5文字以上の理由>]` を本文に書く。
 
 NEXT-ACTION-BACKREF は前の応答への参照を消し、確認対象を「【kim 確認用の全文】」ブロックとして3行フッター直前に全文再掲する。例外は `[NEXT-ACTION-BACKREF-OK: <5文字以上の理由>]`。
 NEXT-ACTION-APPROVAL-INLINE はフッター直前40行以内に「【kim 確認用の全文】」見出しを置き、文面・選択肢・URL を毎回省略せず全文載せる。例外は `[NEXT-ACTION-APPROVAL-INLINE-OK: <5文字以上の理由>]`。
 NEXT-ACTION-APPROVAL-NOT-LAST は「【kim 確認用の全文】」の後ろに ①〜⑨・【見出し・手間監査・恒久策・# 見出し・[マーカー] がある時に出る。順番を【最終まとめ】①②③ → 手間監査/恒久策 → 【kim 確認用の全文】 → 3行フッターに並べ替える（kim 2026-11-04: 一番下だけ読む）。例外は `[NEXT-ACTION-APPROVAL-NOT-LAST-OK: <5文字以上の理由>]`。
 通る形（実測 2026-10-27）: 本文 →「【kim 確認用の全文】」見出し＋全文 →「恒久策: 一回限り: <理由>」→ `次に kim がすること: 上の全文でよいか返事を一言`。マーカー名に「・」を入れない（MULTIPLE 判定に当たる）、行に「読んで／確認して／開いて」を書かない（OPEN 判定に当たる）、「送信する」等の実行語を書かない（PERMANENT-FIX 判定に当たる）。
-SESSION-OPEN-NEEDS-IN-SESSION-CHECK は「まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）」なのに、このセッションを起こす仕組みが無い時に対話セッションで出る（nishi 2026-10-29・11-04 指示）。台帳（`--add-check`）は Discord へ通知するだけでセッション内には何も報告しないので代わりにならない。`CronCreate` を `cron: "17 * * * *"`（毎時・分は 0/30 を避ける）・`recurring: true`・`prompt: "残作業の状態を照会し 1〜3 行でこのセッションに報告、状態が変わった時か判断が要る時だけ PushNotification、全部終わったら CronDelete して /session-close を提案"` で仕込む。CronDelete するまで7日間有効。このターン限りでよいなら ScheduleWakeup でも通る。ヘッドレス（`CLAUDE_HEADLESS=1`）・subagents の transcript・`[NO-SESSION-CRON-OK: <5文字以上の理由>]` は対象外。
+SESSION-OPEN-NEEDS-IN-SESSION-CHECK は「まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）」なのに、このセッションを起こす仕組みが無い時に対話セッションで出る（nishi 2026-10-29・11-04 指示）。台帳（`--add-check`）は Discord へ通知するだけでセッション内には何も報告しないので代わりにならない。`CronCreate` を `cron: "17 * * * *"`（毎時・分は 0/30 を避ける）・`recurring: true`・`prompt: "残作業の状態を照会し 1〜3 行でこのセッションに報告、状態が変わった時か判断が要る時だけ PushNotification、全部終わったら CronDelete して、確認せず自分で /session-close を実行"` で仕込む。CronDelete するまで7日間有効。このターン限りでよいなら ScheduleWakeup でも通る。ヘッドレス（`CLAUDE_HEADLESS=1`）・subagents の transcript・`[NO-SESSION-CRON-OK: <5文字以上の理由>]` は対象外。
 
 ## pr-handoff-gate
 

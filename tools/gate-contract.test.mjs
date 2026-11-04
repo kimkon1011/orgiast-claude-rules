@@ -73,6 +73,11 @@ test('new rollout entries must declare the seven day window; legacy inventory is
       assert.equal(row.immediatePolicy, '2026-10-23 古川さん依頼: 備品管理表K列のデータ破損防止');
       continue; // Explicit data-corruption prevention policy, immediate on all PCs.
     }
+    if (name === 'cmd-ascii-guard') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-11-04 kim 指示: .cmd の文字化け（日本語行で全行失敗）を全PC全アカウント全プロジェクトで再発防止');
+      continue; // .cmd/.bat non-ASCII corruption prevention, immediate on all PCs.
+    }
     if (!row.legacy) {
       assert.ok(Number.isFinite(Date.parse(row.distributedAt)));
       if (row.rollout === 'deny') assert.ok(Date.parse(row.denyAfter) >= Date.parse(row.distributedAt) + 7*86400000);

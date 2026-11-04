@@ -30,7 +30,20 @@ const BACKREF_PATTERN = /前の応答|前々回|前回の応答|上の応答|先
 const APPROVAL_PATTERN = /OK|承認|確認|了承|選んで|選択|どちら|可否|返事|返信文|文面/;
 const BACKREF_REASON = '[NEXT-ACTION-BACKREF] 「次に kim がすること」が前の応答を参照しています。kim はこの行だけを見て判断します。確認してほしい文面・選択肢・URL は、3行フッターの直前に「【kim 確認用の全文】」ブロックとして省略せず再掲し、この行は「上の【kim 確認用の全文】を読んで 返事を一言」のようにその応答内で閉じてください（nishi 2026-10-27 厳命・全PC）。例外は [NEXT-ACTION-BACKREF-OK: <理由>]。';
 const APPROVAL_INLINE_REASON = '[NEXT-ACTION-APPROVAL-INLINE] kim に確認・承認を求めていますが、対象の全文がこの応答にありません。3行フッターの直前に「【kim 確認用の全文】」見出しを置き、文面・選択肢・URL を省略せず全文載せてください（承認待ちが続く間は毎回の応答で再掲する。要約・参照・リンク置換は不可）。例外は [NEXT-ACTION-APPROVAL-INLINE-OK: <理由>]。';
-const OPEN_ACTION_PATTERN = /マージ|merge|\bPR\b|#\d+|https?:\/\/|\]\(|開く|開いて|ひらいて|確認(?:する|して|を)|見る|見て|目を通|レビュー|チェック(?:する|して)|読む|読んで|反映を確か/i;
+const APPROVAL_NOT_LAST_REASON = '[NEXT-ACTION-APPROVAL-NOT-LAST] 【kim 確認用の全文】の後ろに別の節（③・手間監査・恒久策・別見出し等）があります。kim は一番下だけを読むので、【kim 確認用の全文】は3行フッターの真上（最後の節）に置き、③・手間監査・恒久策はその前へ移してください（kim 2026-11-04）。例外は [NEXT-ACTION-APPROVAL-NOT-LAST-OK: <理由>]。';
+const APPROVAL_HEADING = '【kim 確認用の全文】';
+const SECTION_START_PATTERN = /^(?:[①-⑨]|【|手間監査|恒久策|#{1,6}\s|\[)/;
+
+// フッター直前40行の【kim 確認用の全文】の位置: missing / not-last（後ろに別の節がある）/ last。
+function approvalPlacement(turnSource) {
+  const footerLabel = turnSource.lastIndexOf('次に kim がすること:');
+  const footerStart = Math.max(0, turnSource.lastIndexOf('\n', footerLabel));
+  const lines = turnSource.slice(0, footerStart).split(/\r?\n/).slice(-40).map(line => line.trim());
+  const heading = lines.lastIndexOf(APPROVAL_HEADING);
+  if (heading < 0) return 'missing';
+  return lines.slice(heading + 1).some(line => SECTION_START_PATTERN.test(line)) ? 'not-last' : 'last';
+}
+const OPEN_ACTION_PATTERN =/マージ|merge|\bPR\b|#\d+|https?:\/\/|\]\(|開く|開いて|ひらいて|確認(?:する|して|を)|見る|見て|目を通|レビュー|チェック(?:する|して)|読む|読んで|反映を確か/i;
 const HUMAN_ONLY_PATTERN = /支払|入金|決済|課金|OAuth|同意|ログインして許可|アカウント(?:を)?作成|物理|現地|署名|押印|電話(?:する|して)|口頭|選んで|選ぶ|決めて|決める|判断/;
 const OPEN_ACTION_REASON = '[NEXT-ACTION-OPEN] 「次に kim がすること」に、開いて見る・確認する・マージする・レビューするなど、Claude や自動処理で済む項目が入っています。開く手間そのものが user の負担です（2026-10-26 cr 指摘）。(1) 状態は自分で照会する（例: gh pr view <N> --json state,mergedAt）。済んでいれば書かない (2) 未了なら自分で実行するか（gh pr merge <N> --squash --auto 等）「この後の自動進行」に回す (3) この行は「なし」にする。書いてよいのは人にしかできない操作（支払い・OAuth 同意・アカウント作成・物理作業・本文で選択肢を示した判断）だけ。例外は [NEXT-ACTION-OPEN-OK: <理由>]。';
 const WAITING_PATTERN = /(完了通知|待ち|実行中|バックグラウンド|cron|定期実行|CI)/i;
@@ -255,14 +268,17 @@ function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {
   }
   const approvalInlineOverride = [...turnSource.matchAll(/\[NEXT-ACTION-APPROVAL-INLINE-OK:[ \t]*([^\]\r\n]*)\]/g)]
     .some(([, reason]) => [...reason.trim()].length >= 5);
-  // 末尾の実際のフッターより前だけを調べ、見出しが直前40行以内にあることを求める。
-  const footerLabel = turnSource.lastIndexOf('次に kim がすること:');
-  const footerStart = Math.max(0, turnSource.lastIndexOf('\n', footerLabel));
-  const precedingLines = turnSource.slice(0, footerStart).split(/\r?\n/).slice(-40);
-  const hasInlineApproval = precedingLines.some(line => line.trim() === '【kim 確認用の全文】');
-  if (footer.nextAction !== 'なし' && APPROVAL_PATTERN.test(footer.nextAction)
-    && !hasInlineApproval && !approvalInlineOverride) {
-    return { decision: 'block', code: 'NEXT-ACTION-APPROVAL-INLINE', reason: APPROVAL_INLINE_REASON };
+  // 末尾の実際のフッターより前だけを調べ、見出しが直前40行以内かつ最後の節であることを求める。
+  const approvalNotLastOverride = [...turnSource.matchAll(/\[NEXT-ACTION-APPROVAL-NOT-LAST-OK:[ \t]*([^\]\r\n]*)\]/g)]
+    .some(([, reason]) => [...reason.trim()].length >= 5);
+  const placement = approvalPlacement(turnSource);
+  if (footer.nextAction !== 'なし' && APPROVAL_PATTERN.test(footer.nextAction)) {
+    if (placement === 'missing' && !approvalInlineOverride) {
+      return { decision: 'block', code: 'NEXT-ACTION-APPROVAL-INLINE', reason: APPROVAL_INLINE_REASON };
+    }
+    if (placement === 'not-last' && !approvalNotLastOverride) {
+      return { decision: 'block', code: 'NEXT-ACTION-APPROVAL-NOT-LAST', reason: APPROVAL_NOT_LAST_REASON };
+    }
   }
   const openActionOverride = [...turnSource.matchAll(/\[NEXT-ACTION-OPEN-OK:[ \t]*([^\]\r\n]*)\]/g)]
     .some(([, reason]) => [...reason.trim()].length >= 5);
@@ -341,10 +357,9 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}, options = 
   if (hasUnexplainedLabel(footer.nextAction) && !override('NEXT-ACTION-LABEL-OK')) add('NEXT-ACTION-LABEL-ONLY', LABEL_ONLY_REASON);
   if (footer.nextAction !== 'なし' && MULTIPLE_ACTIONS_PATTERN.test(footer.nextAction)) add('NEXT-ACTION-MULTIPLE', 'kim への手渡しが2件以上あります。§1.1 最上位原則に従い、まず自分で潰して1件以下にしてください。');
   if (BACKREF_PATTERN.test(footer.nextAction) && !override('NEXT-ACTION-BACKREF-OK')) add('NEXT-ACTION-BACKREF', BACKREF_REASON);
-  const footerLabel = turnSource.lastIndexOf('次に kim がすること:');
-  const footerStart = Math.max(0, turnSource.lastIndexOf('\n', footerLabel));
-  const hasInlineApproval = turnSource.slice(0, footerStart).split(/\r?\n/).slice(-40).some(line => line.trim() === '【kim 確認用の全文】');
-  if (footer.nextAction !== 'なし' && APPROVAL_PATTERN.test(footer.nextAction) && !hasInlineApproval && !override('NEXT-ACTION-APPROVAL-INLINE-OK')) add('NEXT-ACTION-APPROVAL-INLINE', APPROVAL_INLINE_REASON);
+  const placement = approvalPlacement(turnSource);
+  if (footer.nextAction !== 'なし' && APPROVAL_PATTERN.test(footer.nextAction) && placement === 'missing' && !override('NEXT-ACTION-APPROVAL-INLINE-OK')) add('NEXT-ACTION-APPROVAL-INLINE', APPROVAL_INLINE_REASON);
+  if (footer.nextAction !== 'なし' && APPROVAL_PATTERN.test(footer.nextAction) && placement === 'not-last' && !override('NEXT-ACTION-APPROVAL-NOT-LAST-OK')) add('NEXT-ACTION-APPROVAL-NOT-LAST', APPROVAL_NOT_LAST_REASON);
   if (footer.nextAction !== 'なし' && OPEN_ACTION_PATTERN.test(footer.nextAction) && !HUMAN_ONLY_PATTERN.test(footer.nextAction) && !override('NEXT-ACTION-OPEN-OK')) add('NEXT-ACTION-OPEN', OPEN_ACTION_REASON);
   if (issues.size === 1) return primary;
   return { ...primary, reason: [...issues].map(([code, reason]) => String(reason).startsWith(`[${code}]`) ? reason : `[${code}] ${reason}`).join('\n') };

@@ -616,6 +616,22 @@ test('全文見出しはフッター直前40行以内だけ有効で改行形式
   assert.equal(judgeNextAction(inlineReport('なし（確認）')).code, 'NEXT-ACTION-APPROVAL-INLINE');
 });
 
+test('全文ブロックの後ろに別の節があれば最後の節ではないとして拒否する（kim 2026-11-04）', () => {
+  const action = '今回の提案を採用するか保留するか選んでください';
+  const after = ['③ kim がやること: 返信する', '手間監査: 同意が必要', '恒久策: 一回限り: 初回のみ', '【最終まとめ】', '## 補足', '[STOP-OK] 返信待ち'];
+  for (const newline of ['\n', '\r\n']) {
+    for (const line of after) {
+      const text = inlineReport(action, `${inlineContent}${line}\n`).replaceAll('\n', newline);
+      assert.equal(judgeNextAction(text).code, 'NEXT-ACTION-APPROVAL-NOT-LAST', `${line} ${JSON.stringify(newline)}`);
+    }
+    const last = inlineReport(action, `③ kim がやること: 返信する\n${inlineContent}料金の出典: https://example.com\n`).replaceAll('\n', newline);
+    withOpenCheck(input => assert.equal(judgeNextAction(last, '', input).decision, 'pass'));
+  }
+  const overridden = inlineReport(action, `${inlineContent}恒久策: 追記\n[NEXT-ACTION-APPROVAL-NOT-LAST-OK: 表の都合で後置]\n`);
+  assert.notEqual(judgeNextAction(overridden).code, 'NEXT-ACTION-APPROVAL-NOT-LAST');
+  assert.equal(judgeNextAction(inlineReport('なし', `${inlineContent}恒久策: 追記\n`)).code === 'NEXT-ACTION-APPROVAL-NOT-LAST', false);
+});
+
 test('理由付き例外は本文のどこでも有効で空や短い理由は無効', () => {
   const action = '前の応答の今回の提案を採用するか保留するか選んでください';
   const overrides = '[NEXT-ACTION-BACKREF-OK: 本人の指定があるため]\n[NEXT-ACTION-APPROVAL-INLINE-OK: 本人の指定があるため]\n';

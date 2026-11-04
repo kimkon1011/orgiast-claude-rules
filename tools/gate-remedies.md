@@ -126,6 +126,7 @@ NEXT-ACTION-OPEN は PR・リンク・ファイルの状態を Claude が照会�
 
 NEXT-ACTION-BACKREF は前の応答への参照を消し、確認対象を「【kim 確認用の全文】」ブロックとして3行フッター直前に全文再掲する。例外は `[NEXT-ACTION-BACKREF-OK: <5文字以上の理由>]`。
 NEXT-ACTION-APPROVAL-INLINE はフッター直前40行以内に「【kim 確認用の全文】」見出しを置き、文面・選択肢・URL を毎回省略せず全文載せる。例外は `[NEXT-ACTION-APPROVAL-INLINE-OK: <5文字以上の理由>]`。
+NEXT-ACTION-APPROVAL-NOT-LAST は「【kim 確認用の全文】」の後ろに ①〜⑨・【見出し・手間監査・恒久策・# 見出し・[マーカー] がある時に出る。順番を【最終まとめ】①②③ → 手間監査/恒久策 → 【kim 確認用の全文】 → 3行フッターに並べ替える（kim 2026-11-04: 一番下だけ読む）。例外は `[NEXT-ACTION-APPROVAL-NOT-LAST-OK: <5文字以上の理由>]`。
 通る形（実測 2026-10-27）: 本文 →「【kim 確認用の全文】」見出し＋全文 →「恒久策: 一回限り: <理由>」→ `次に kim がすること: 上の全文でよいか返事を一言`。マーカー名に「・」を入れない（MULTIPLE 判定に当たる）、行に「読んで／確認して／開いて」を書かない（OPEN 判定に当たる）、「送信する」等の実行語を書かない（PERMANENT-FIX 判定に当たる）。
 
 ## pr-handoff-gate

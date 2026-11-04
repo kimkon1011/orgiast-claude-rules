@@ -157,7 +157,7 @@ PR マージ依頼と他PCへの作業依頼は `node tools/fleet-mail.mjs --sen
 
 **🔴 承認文面・選択肢は毎回「【kim 確認用の全文】」で全文再掲し、遡らせない。**
 
-承認待ちが続く限り毎回の応答で同じブロックを丸ごと再掲し、「次に kim がすること」はその行とブロックだけで判断が終わる形にする。要約・参照・リンク置換は不可。next-action-gate が NEXT-ACTION-BACKREF / NEXT-ACTION-APPROVAL-INLINE で block する。理由: 2026-10-27 Cocolive 様返信文の承認で「前の応答末尾を見て」を4回書き、nishi が会話を遡る羽目になった。
+承認待ちが続く限り毎回の応答で同じブロックを丸ごと再掲し、「次に kim がすること」はその行とブロックだけで判断が終わる形にする。要約・参照・リンク置換は不可。ブロックは最後の節に置き、③・手間監査・恒久策はその前に書く（kim は一番下だけ読む・2026-11-04）。next-action-gate が NEXT-ACTION-BACKREF / NEXT-ACTION-APPROVAL-INLINE / NEXT-ACTION-APPROVAL-NOT-LAST で block する。理由: 2026-10-27 Cocolive 様返信文の承認で「前の応答末尾を見て」を4回書き、nishi が会話を遡る羽目になった。
 
 **🔴 Claude が決められる判断は聞かずに決めて進め、結果を報告する。**
 

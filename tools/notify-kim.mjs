@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { routeOwnerDm } from './lib/owner-dm-policy.mjs';
+import { resolveOwner as resolveNotificationOwner } from './lib/fleet-owner.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -49,7 +51,7 @@ const HANDOFF = /接続し[て、]|接続して確認|どれを選|選んでほ�
 // そのTODO（目的が「通知の原因調査と修復」になる）が次の自動セッションを生み、その完了報告が
 // また起票される自己増殖ループになる（2026-10-24 実測: 06:15 と 12:05 の完了DMが
 // next-session.md の第5・第6ブロックとして起票され、同じ目的のセッションが繰り返された）。
-const STATUS_REPORT = /✅\s*自動進行が完了しました|^【[^\n]*の自動進行】\s*完了/m;
+const STATUS_REPORT = /^【進捗まとめ】|✅\s*自動進行が完了しました|^【[^\n]*の自動進行】\s*完了/m;
 // 既に起票した本文（マーカー付き）を別経路が再通知しても二重起票しない。
 const ALREADY_FILED = /<!--\s*notify-kim:[0-9a-f]{20}\s*-->/;
 // notify-owner.mjs は本文の先頭に「宛先: ...」行を付ける。これは通知経路のメタ情報で、
@@ -83,7 +85,7 @@ export async function notifyKim(text, options = {}) {
       return { delivered: 'blocked', category: policy.category, reason: policy.reason };
     }
   }
-  options = { ...options, kind: options.kimActionRequired === true || options.kind === 'ask' ? 'ask' : 'info' };
+  options = { ...options, ownerKind: options.ownerKind ?? options.kind, kind: options.kimActionRequired === true || options.kind === 'ask' ? 'ask' : 'info' };
   const raw = redactSecrets(String(text ?? ''));
   const bodyText = stripOwnerAddress(raw);
   if (STATUS_REPORT.test(bodyText) || ALREADY_FILED.test(bodyText) || isSuccessfulResumeReport(bodyText) || AUTO_RESUME_NOTICE.test(bodyText)) return deliverKim(raw, options);
@@ -187,7 +189,17 @@ function benignQuotaSweepReport(text) {
   return QUOTA_SWEEP_BENIGN.has(outcome);
 }
 
-export async function deliverKim(text, {
+export async function deliverKim(text, options = {}) {
+  if (!options.ownerPolicyApplied) {
+    const home = options.home || process.env.ORGIAST_HOME || os.homedir();
+    const owner = options.owner || (String(options.userId || KIM_DISCORD_USER_ID) === KIM_DISCORD_USER_ID ? 'kim@orgiast.jp' : resolveNotificationOwner({ home }));
+    const deferred = await routeOwnerDm(owner, text, { ...options, home, kind: options.kimActionRequired || ['action', 'ask'].includes(options.ownerKind ?? options.kind) ? 'action' : options.ownerKind ?? options.kind });
+    if (deferred) return deferred;
+  }
+  return deliverKimTransport(text, options);
+}
+
+async function deliverKimTransport(text, {
   home = process.env.ORGIAST_HOME || os.homedir(),
   userId,
   token,

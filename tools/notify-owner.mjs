@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { notificationKind, routeOwnerDm } from './lib/owner-dm-policy.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -143,6 +144,9 @@ export async function notifyOwner(owner, text, options = {}) {
   const home = options.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   options = { ...options, home };
   owner = String(owner || resolveOwner(options)).trim();
+  const deferred = await routeOwnerDm(owner, text, options);
+  if (deferred) return deferred;
+  options = { ...options, ownerPolicyApplied: true, ...(notificationKind(text, options) === 'action' ? { kimActionRequired: true, kind: 'ask', plainJa: false } : {}) };
   // kim 宛は Discord ID の有無に関わらず notify-kim に渡し、kim-inbox 台帳（セッション回収）へ入れる（2026-10-27）。
   const userId = options.userId ?? (owner.toLowerCase() === 'kim@orgiast.jp' ? KIM_DISCORD_USER_ID : resolveOwnerDiscordId(owner, options));
   const valid = recipientMatchesOwner(owner, userId, options);

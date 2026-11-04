@@ -8,7 +8,8 @@ import assert from 'node:assert/strict';
 import { resolveOwner, resolveOwnerDiscordId, notifyOwner as realNotifyOwner, sendOwnerToast, RECIPIENT_NOTICE } from './notify-owner.mjs';
 import { KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 
-const notifyOwner = (owner, text, options = {}) => realNotifyOwner(owner, text, { notifyKim: async () => ({ delivered: 'session-inbox' }), ...options });
+// 2026-11-04 仕様変更: 配達・宛先検査は即時配信対象の定時まとめで行う。未指定kindは別の回帰テストで保留を検査する。
+const notifyOwner = (owner, text, options = {}) => realNotifyOwner(owner, text, { kind: 'digest', notifyKim: async () => ({ delivered: 'session-inbox' }), ...options });
 
 test('owner 解決は fleet account を使う', () => {
   assert.equal(resolveOwner({ label: 'cr-PC', pcMap: { 'cr-PC': { account: 'cr@orgiast.jp' } }, gitEmail: 'other@example.com' }), 'cr@orgiast.jp');
@@ -260,7 +261,7 @@ for (const [label, sent] of [
     const options = localOptions(t);
     let calls = 0;
     const result = await realNotifyOwner('nishi@orgiast.jp', '進捗', {
-      ...options, userId: '123', token: 'test-token', plainJa: false, toast: () => true,
+      ...options, kind: 'digest', userId: '123', token: 'test-token', plainJa: false, toast: () => true,
       fetchImpl: async () => ++calls === 1 ? { ok: true, json: async () => ({ id: 'channel' }) } : sent,
     });
     assert.equal(calls, 2);

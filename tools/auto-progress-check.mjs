@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { rowKey, originLine } from './auto-progress-ledger.mjs';
+import { isUnattendedRow, rowKey, originLine } from './auto-progress-ledger.mjs';
 import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 
@@ -64,8 +64,8 @@ export async function checkPromise(row, { home, now, patch, io = {} }) {
     const message = `未達: ${changes.checkText} / 次の手: ${next}`;
     const owner = row.owner || resolveOwner({ home });
     const origin = originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: owner, home });
-    const delivery = await (io.notifyOwner ?? notifyOwner)(owner, `${origin}\n${message}`, { home });
-    if (!['dm', 'session-inbox', 'toast', 'inbox'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
+    const delivery = await (io.notifyOwner ?? notifyOwner)(owner, `${origin}\n${message}`, { home, now, kind: state === 'done' && !isUnattendedRow(row, home) ? 'done-requested' : 'automatic', session: row });
+    if (!['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
     const notifyChanges = { lastUnmetNotifiedAt: new Date(now).toISOString() };
     if (patch(rowKey(row), notifyChanges) === false) return 'ledger_error';
     Object.assign(row, notifyChanges);
@@ -78,8 +78,8 @@ export async function checkPromise(row, { home, now, patch, io = {} }) {
   const message = `${state === 'done' ? '完了' : state === 'unmet' ? '未達（期限超過）' : '確認エラー'}: ${oneLine(row.label || row.promise, 80)}\n${changes.checkText}${state === 'done' ? '' : `\nClaude の次の手: ${next}（next-session.md に起票）`}`;
   const owner = row.owner || resolveOwner({ home });
   const origin = originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: owner, home });
-  const delivery = await (io.notifyOwner ?? notifyOwner)(owner, `${origin}\n${message}`, { home });
-  if (!['dm', 'session-inbox', 'toast', 'inbox'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
+  const delivery = await (io.notifyOwner ?? notifyOwner)(owner, `${origin}\n${message}`, { home, now, kind: state === 'done' && !isUnattendedRow(row, home) ? 'done-requested' : 'automatic', session: row });
+  if (!['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
   patch(rowKey(row), { checkNotifiedResult: state });
   return state;
 }

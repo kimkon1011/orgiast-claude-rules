@@ -164,14 +164,15 @@ test('digest: hundreds of rows across three categories are all delivered in 1800
   const rows = Array.from({ length: 200 }, (_, i) => ({ sessionId: `s${i}`, promise: '長い約束'.repeat(100), status: i % 3 === 0 ? 'done' : i % 3 === 1 ? 'waiting_user' : 'open',
     ts: new Date(now - 1000).toISOString(), doneAt: new Date(now).toISOString(), nextKim: i % 3 === 1 ? '判断してください'.repeat(100) : 'なし' }));
   const io = { readLedger: () => rows, notify: async text => { messages.push(text); return { delivered: 'dm' }; } };
-  // 変化分（完了67件・判断待ち67件）を数え、件数を削らず複数DMに分割して全件届ける。
+  // 2026-11-04 仕様変更: 全200件を数え、名前の羅列・分割をやめて1通に要約する。
   const result = await digest({ home, now, slot: '朝', io });
-  assert.equal(result.count, 134);
-  assert.ok(result.parts >= 2, `parts was ${result.parts}`);
-  const body = messages.join('\n');
-  assert.equal(body.split('\n').filter(line => line.startsWith('・完了:')).length, 67);
-  assert.equal(body.split('\n').filter(line => line.startsWith('・あなたの判断待ち:')).length, 67);
-  assert.ok(messages.every(message => message.length <= 1800), `lengths: ${messages.map(m => m.length)}`);
+  assert.equal(result.count, 200);
+  assert.equal(result.parts, 1);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /完了 67件/);
+  assert.match(messages[0], /あなたの返事待ち/);
+  assert.ok(messages[0].split('\n').length <= 10);
+  assert.ok(messages[0].length <= 1800);
   assert.equal((await digest({ home, now: now + 3600000, slot: '朝', io })).sent, false);
 });
 

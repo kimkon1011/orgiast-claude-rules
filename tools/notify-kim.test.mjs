@@ -3,9 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { main, notifyKim, deliverKim } from './notify-kim.mjs';
+import { main, notifyKim as realNotifyKim, deliverKim as realDeliverKim } from './notify-kim.mjs';
 import { parseHandoff, todoExclusionReason } from './auto-session.mjs';
 import { planRotation } from './next-session-rotate.mjs';
+
+// 2026-11-04 仕様変更: 通信・修復の検査は明示的な定時まとめとして配達し、未指定kindの保留と分離する。
+const notifyKim = (text, options) => realNotifyKim(text, { home: home(), kind: 'digest', ...options });
+const deliverKim = (text, options) => realDeliverKim(text, { home: home(), kind: 'digest', ...options });
 
 function home() { return fs.mkdtempSync(path.join(os.tmpdir(), 'notify-kim-')); }
 function response({ ok = true, status = 200, json = { id: 'message' } } = {}) { return { ok, status, json: async () => json }; }
@@ -282,7 +286,7 @@ test('PRマージ依頼は送信せずblockedを返す', async () => {
   let errorLine = '';
   console.error = value => { errorLine = value; };
   try {
-    const result = await notifyKim('PR #943 をマージしてください', {
+    const result = await realNotifyKim('PR #943 をマージしてください', {
       fetchImpl: async () => { fetches += 1; throw new Error('unexpected fetch'); },
     });
     assert.deepEqual(result, {

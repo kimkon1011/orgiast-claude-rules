@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 // State machine; Discord and candidate classification are injectable.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -821,7 +822,7 @@ export async function runAutopilot(command, args = {}, options = {}) {
     const home = paths.home;
     const token = options.token ?? (process.env.DISCORD_BOT_TOKEN?.trim() || readText(path.join(home, '.claude', 'orgiast-discord-bot-token.txt')));
     const userId = noticeRecipient(home, options.userId ?? (process.env.ORGIAST_DISCORD_USER_ID?.trim() || readText(path.join(home, '.claude', 'orgiast-discord-user-id.txt')))).userId;
-    return await execute(command, args, { paths, home, token, userId, now: options.now || new Date(), hostname: options.hostname || os.hostname(), askJevImpl: options.askJevImpl || askJev, fetchImpl: options.fetchImpl || globalThis.fetch, askImpl: options.askImpl || askCandidate, notifyImpl: options.notifyImpl || (command === 'digest' ? deliverKim : notifyKim), platform: options.platform, execFileImpl: options.execFileImpl, checkImpl: options.checkImpl, spawnImpl: options.spawnImpl, mirrorTimeoutMs: options.mirrorTimeoutMs });
+    return await execute(command, args, { paths, home, token, userId, now: options.now || new Date(), hostname: options.hostname || os.hostname(), askJevImpl: options.askJevImpl || askJev, fetchImpl: options.fetchImpl || globalThis.fetch, askImpl: options.askImpl || askCandidate, notifyImpl: options.notifyImpl || ((text, opts = {}) => notifyOwner(resolveOwner({ home }), text, { ...opts, home, now: (options.now || new Date()).getTime(), kind: /^❓/.test(text) ? 'action' : 'automatic', source: 'autopilot' })), platform: options.platform, execFileImpl: options.execFileImpl, checkImpl: options.checkImpl, spawnImpl: options.spawnImpl, mirrorTimeoutMs: options.mirrorTimeoutMs });
   } catch (error) { return { error: error.code || error.message || 'autopilot_error' }; }
   finally { release?.(); }
 }

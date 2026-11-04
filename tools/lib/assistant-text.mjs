@@ -22,13 +22,14 @@ function tailLines(file, maxLines, maxBytes) {
 }
 
 export function readTranscriptContext(transcriptPath, options = {}) {
-  if (!transcriptPath) return { assistantText: '', humanText: '', raw: '', reason: 'no-path', scannedLines: 0 };
+  if (!transcriptPath) return { assistantText: '', humanText: '', lastUserPrompt: '', raw: '', reason: 'no-path', scannedLines: 0 };
   let lines;
   try { lines = tailLines(transcriptPath, options.maxLines ?? DEFAULT_MAX_LINES, options.maxBytes ?? DEFAULT_MAX_BYTES); }
-  catch { return { assistantText: '', humanText: '', raw: '', reason: 'unreadable', scannedLines: 0 }; }
+  catch { return { assistantText: '', humanText: '', lastUserPrompt: '', raw: '', reason: 'unreadable', scannedLines: 0 }; }
   let assistantText = '';
   let humanText = '';
-  for (let index = lines.length - 1; index >= 0 && (!assistantText || !humanText); index--) {
+  let lastUserPrompt;
+  for (let index = lines.length - 1; index >= 0 && (!assistantText || !humanText || lastUserPrompt === undefined); index--) {
     let entry; try { entry = JSON.parse(lines[index]); } catch { continue; }
     if (entry?.isSidechain === true) continue;
     const content = entry?.message?.content;
@@ -36,12 +37,17 @@ export function readTranscriptContext(transcriptPath, options = {}) {
       ? content.filter((block) => block?.type === 'text' && typeof block.text === 'string').map((block) => block.text).join('\n')
       : typeof content === 'string' ? content : '';
     if (!assistantText && (entry?.type === 'assistant' || entry?.message?.role === 'assistant') && text.trim()) assistantText = text;
-    if (!humanText && entry?.type === 'user' && !(Array.isArray(content) && content.some((block) => block?.type === 'tool_result'))) {
+    if ((entry?.type === 'user' || entry?.message?.role === 'user') && !(Array.isArray(content) && content.some((block) => block?.type === 'tool_result'))) {
       const trimmed = text.trimStart();
-      if (trimmed && !MACHINE_USER_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) humanText = text;
+      const machine = MACHINE_USER_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
+      if (!machine || trimmed.startsWith('[Image:')) {
+        // An image-only user turn must not inherit an older periodic prompt.
+        if (lastUserPrompt === undefined) lastUserPrompt = text;
+      }
+      if (!humanText && trimmed && !machine) humanText = text;
     }
   }
-  return { assistantText, humanText, raw: lines.join('\n'), reason: assistantText ? 'ok' : 'no-assistant-text', scannedLines: lines.length };
+  return { assistantText, humanText, lastUserPrompt: lastUserPrompt ?? '', raw: lines.join('\n'), reason: assistantText ? 'ok' : 'no-assistant-text', scannedLines: lines.length };
 }
 
 export function readAssistantText(transcriptPath, options = {}) {

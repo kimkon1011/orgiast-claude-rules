@@ -16,6 +16,8 @@ Claude Code は「作業者の手間を最小化する自動実行エージェ�
 
 Stop hook で差し戻されたら前文を繰り返さず不足分だけ書く。user がすべきことは最後のメッセージにまとめる（2026-10-30 user 指示・全PC）。
 
+状態が変わらない定期報告は『変化なし』の1行だけ。確認事項・本文・手順・別件一覧を毎回再掲しない（2026-11-03 nishi・全PC）
+
 user の操作はゼロが原則。①Claude 自身が実行 → ②別経路で自動化（MCP・CLI・既存の定期ジョブ・fleet の自己修復など）→ ③それでも安全装置の拒否などで Claude が実行できないものだけ、`tools/make-desktop-launcher.mjs` でデスクトップのダブルクリック用ファイルにしてパスだけを示す。
 PowerShell への貼り付けは頼まない。③にしたときは、①②を試した経路名・結果（拒否・classifier 等）の証拠を `手間監査:` の行に書く（全PC・全アカウント共通、kim 決定 2026-09-26）。
 
@@ -716,6 +718,7 @@ kim の返事待ちは SessionStart と各セッションで「📌 kim の返�
 「すすめて」と打たせない。完了報告の後は自動で次のTODO（git commit/vercel prod deploy/Layer2 e2e/memory反映等）に着手する。設計判断・破壊的操作・未承認prod送信・大型リファクタのみAskUserQuestionで待つ。報告末尾に「残TODO」セクションを付ける。詳細・自動着手チェックリスト: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`
 
 進捗通知の宛先は `fleet-pc-map.json` またはローカルの `~/.claude/fleet-pc-map.json` の同名 PC 行の `notifyDiscordId`。未設定だとチャットに案内が出て、kim に1日1回警告が飛ぶ。
+kim 宛の定期ダイジェスト（朝/夜/urgent）・完了通知・配送異常の警告は `config/kim-discord-allowlist.json` の許可リストで Discord DM へ流す（kim 2026-11-04 指示「進捗は聞かれる前に届ける」）。許可判定は平易化前の原文でも行う。許可リストを空にする・この区分を消す変更は `tools/kim-discord-allowlist.test.mjs` が落とす。
 
 **「この後の自動進行: <内容>」の宣言は台帳に記録され、止まれば自動で拾われる（2026-10-14 追加）**。Stop hook `tools/auto-progress-ledger.mjs` が宣言（「なし」以外）を `~/.claude/auto-progress-ledger.jsonl` に記録する（同一セッションは最新で置換）。各PCの定期タスク `OrgiastAutoProgressWatch` が毎時台帳を巡回し、宣言から1時間以降のものを判定する。stalled は前回から2時間以上空けて累計8回まで最終成果へ向けて自動再開し、共有 Sheet（タブ「自動進行」）へ行を足す。全PCが1日2回（朝枠＝定時報告・夕枠＝変化分のみ）自PC分をDiscord DMする。朝枠は変化0件でも進行中・判断待ち・完了を全件名前付きで送る。夕枠・枠外は変化分のみ。check の引き継ぎ: 新しい約束行に check が無く、直前の open 行に期限が未来の check があれば引き継ぐ（check が superseded で消える再発防止）。だから宣言は「実際に自動で進む内容」だけ書く。API エラー（利用上限など）で返答できずに終わった依頼も、毎時の巡回が transcript から見つけて台帳へ起票し、持ち主へ DM したうえで別モデルで自動再開する。Sheet 側の追加手順は `docs/auto-progress-gas-patch.gs.txt`。
 
@@ -978,6 +981,8 @@ node tools/fleet-mail.mjs --reply <id> --body-file answer.txt
 kim が操作する対象アカウントの案件作業は、案件ID・案件一覧の名前から自動で紐付き、Drive ハブの `case-sessions/<案件ID>/` に残る。明示は `/case <案件ID>`。別の席で続けるときは `/case-resume <案件ID または案件名>` を使う（STATE 4KB＋直近LOG、初回6KB以内）。全文は丸読みせず、必要な箇所だけ同期して Grep する。別席が直近30分以内に作業中なら警告する。
 
 Stop の10分間隔と SessionEnd に未送信分を保存する。秘密情報を除去した発言本文は全文、ツール結果は先頭500字、添付はパス・Drive IDを記録する。保存失敗はローカルキューとエラーに残し次回再送する。閉じる前に `node tools/case-handoff.mjs flush <sessionId>` の完了確認をする。個別の画像・添付バイナリそのものを複製する機能ではない。配布は `node tools/setup.mjs --converge`。
+
+案件同期・秘匿値取得は keyserve の鍵が前提（全PC全アカウント共通）。case-handoff が HTTP 401、または `node tools/keyserve-status.mjs` が「未設定」なら、この席は keyserve 未登録。401 のままローカルキューに溜めて放置せず、primary を持つPC（kim-PC 等。fleet-mail でその Claude に依頼可）で enroll トークンを発行させ、当該PCで配備して `keyserve-status` が primary / HTTP 200 になるまで案内・実行する。鍵は primary を持つPCだけが発行でき未登録PC単独では取得できない設計。新PC・新アカウントはセットアップ時に必ず通す（手順は STANDARD-PC-SETUP.md「手順5.5 keyserve 鍵を配備する」。2026-11-04 DELL席の未登録 401 で明文化）。
 
 ### 1.16 Fableの用途制限
 

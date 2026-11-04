@@ -48,10 +48,17 @@ import { evaluateUnregisteredPromise } from './unregistered-promise-gate.mjs';
 import { appendStopLedger, registerStopViolation, CAP_CONTEXT } from './lib/stop-recheck.mjs';
 import { STOP_RETRY_INSTRUCTION, withStopRetryInstruction } from './lib/stop-retry-message.mjs';
 import { evaluateClaudeFallbackReport } from './claude-fallback-report-gate.mjs';
+import { isUnchangedPeriodicReport } from './lib/unchanged-periodic-report.mjs';
 
 
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
 export const FORM_GATES = ['handoff-quality-gate', 'manual-request-fullsteps-gate', 'handoff-info-guard', 'handoff-branch-coverage-gate', 'user-burden-gate', 'handoff-investigation-gate'];
+// Exempt presentation/repetition only. Permission, evidence, outstanding work and
+// other operational checks must still run on automatic periodic turns.
+const PERIODIC_REPORT_GATES = new Set([...FORM_GATES,
+  'past-log-search-gate', 'message-locator-gate', 'handoff-regret-gate',
+  'handoff-audit-gate', 'report-length-gate', 'next-action-gate', 'third-party-nudge-gate',
+]);
 export const RETRY_INSTRUCTION = STOP_RETRY_INSTRUCTION;
 const HANDOFF_HINT = "末尾に『次に kim がすること』『この後の自動進行』『このセッション: /session-close は終わっているので、このセッションを閉じてよい / /session-close は不要なので、このセッションを閉じてよい / /session-close をして（まだ閉じない・YYYY-MM-DD HH:MM まで待つ） / まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）』の定型文を3行で入れること(user が『この先はどうしたらいいの？』と聞き返した回数: 7日で9回)";
 
@@ -60,6 +67,10 @@ function fullStepsReason(missing) {
 }
 
 export async function evaluateGates(ctx, auditOptions = {}) {
+  const unchangedPeriodicReport = isUnchangedPeriodicReport({ lastUserPrompt: ctx.lastUserPrompt ?? ctx.humanText, assistantText: ctx.assistantText });
+  // Meta cron turns can share currentTurnAssistantText with an older handoff.
+  // This exemption concerns the final status report, not that historical text.
+  const reportText = unchangedPeriodicReport ? ctx.assistantText : ctx.turnText;
   const gates = [
     ['response-language-gate', () => judgeTurnLanguage([...currentTurnEntries(ctx.transcriptRaw).filter(e => e.type === 'assistant').flatMap(e => blocks([e], 'text').map(b => b.text || '')), ctx.assistantText], ctx.humanText)],
     ['past-log-search-gate', () => evaluatePastLogSearch({ text: ctx.assistantText, humanText: ctx.humanText, transcriptRaw: ctx.transcriptRaw, playbookNames: listPlaybookNames(home()) })],
@@ -72,7 +83,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['handoff-regret-gate', () => evaluateHandoffRegret(ctx.transcriptRaw, ctx.assistantText)],
     ['handoff-info-guard', () => { const found = findHandoffWithoutInfo(ctx.assistantText); return found ? { decision: 'block', reason: formatHandoffInfo(found), code: 'HANDOFF-INFO' } : { decision: 'pass' }; }],
     ['gh-handoff-gate', () => { const result = judgeGhHandoff(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: ghHandoffReason(), code: 'GH-HANDOFF' } : { decision: 'pass' }; }],
-    ['url-account-gate', () => { const result = judgeUrlAccount(ctx.turnText); return result.triggered && result.missing.length ? { decision: 'block', reason: urlAccountReason(result.missing), code: 'URL-ACCOUNT' } : { decision: 'pass' }; }],
+    ['url-account-gate', () => { const result = judgeUrlAccount(reportText); return result.triggered && result.missing.length ? { decision: 'block', reason: urlAccountReason(result.missing), code: 'URL-ACCOUNT' } : { decision: 'pass' }; }],
     ['message-locator-gate', () => { const result = judgeMessageLocator(ctx.assistantText); return result.triggered ? { decision: 'block', reason: messageLocatorReason(result.missing, result.line), code: 'MSG-LOCATOR' } : { decision: 'pass' }; }],
     ['decision-research-gate', () => { const result = judgeDecisionResearch(ctx.assistantText); return result.triggered ? { decision: 'block', reason: decisionResearchReason(result.missing), code: 'RESEARCH-FIRST' } : { decision: 'pass' }; }],
     ['negative-claim-gate', () => { const result = evaluateNegativeClaimFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' && configuredMode() !== 'block' ? { ...result, decision: 'warn' } : result; }],
@@ -86,7 +97,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['course-correction-gate', () => evaluateCourseCorrections(ctx, { home: home(), ...auditOptions })],
     // 第2段は全regexの結果確定後に評価する。
     ['handoff-audit-gate', () => evaluateAudit({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw, sessionId: ctx.sessionId, regexBlocked: results.length > 0 }, { home: home(), ...auditOptions })],
-    ['self-check-before-asking-guard', () => { const found = findOutsourcedInvestigation(ctx.turnText, scanToolUsesFromRaw(ctx.transcriptRaw)); return found ? { decision: 'block', reason: formatSelfCheck(found), code: 'SELF-CHECK' } : { decision: 'pass' }; }],
+    ['self-check-before-asking-guard', () => { const found = findOutsourcedInvestigation(reportText, scanToolUsesFromRaw(ctx.transcriptRaw)); return found ? { decision: 'block', reason: formatSelfCheck(found), code: 'SELF-CHECK' } : { decision: 'pass' }; }],
     ['stop-gate', () => { if (!stopGateEnabled()) return { decision: 'pass' }; const todo = shouldBlock(ctx.assistantText); const question = !todo && shouldBlockProgressQuestion(ctx.assistantText); return todo ? { decision: 'block', reason: reasonFor(remainingItems(ctx.assistantText)), code: 'remaining-todo' } : question ? { decision: 'block', reason: progressQuestionReason(), code: 'progress-question' } : { decision: 'pass' }; }],
     ['report-length-gate', () => reportLengthEnabled() ? judgeReportLengthWithLlm(ctx.assistantText, ctx.humanText) : { decision: 'pass' }],
     ['side-effect-left-gate', () => judgeSideEffectLeft(ctx.assistantText, blocks(currentTurnEntries(ctx.transcriptRaw), 'tool_use'))],
@@ -102,14 +113,16 @@ export async function evaluateGates(ctx, auditOptions = {}) {
   const results = [];
   const errors = [];
   for (const [name, evaluate] of gates) {
-    if (name === 'handoff-audit-gate') continue;
+    if (name === 'handoff-audit-gate' || (unchangedPeriodicReport && PERIODIC_REPORT_GATES.has(name))) continue;
     try { const result = await evaluate(); if (['block', 'warn'].includes(result?.decision)) results.push({ name, ...result }); }
     catch { errors.push(`error:${name}`); }
   }
-  const audit = await gates.find(([name]) => name === 'handoff-audit-gate')[1]();
+  const audit = unchangedPeriodicReport
+    ? { decision: 'pass', record: { skipped: 'unchanged-periodic-report', evidence: 'unchanged-periodic-report' } }
+    : await gates.find(([name]) => name === 'handoff-audit-gate')[1]();
   if (['block', 'warn'].includes(audit.decision)) results.push({ name: 'handoff-audit-gate', ...audit });
   results.sort((a, b) => gates.findIndex(([name]) => name === a.name) - gates.findIndex(([name]) => name === b.name));
-  return { results, errors, audit, retry: async name => ({ name, ...await gates.find(([gate]) => gate === name)[1]() }) };
+  return { results, errors, audit, unchangedPeriodicReport, retry: async name => ({ name, ...await gates.find(([gate]) => gate === name)[1]() }) };
 }
 
 function ledger(record) {
@@ -135,7 +148,7 @@ export async function run(input, context, auditOptions = {}) {
   }
   const transcriptTurnText = currentTurnAssistantText(context.raw);
   const turnText = transcriptTurnText.includes(assistantText) ? transcriptTurnText : [transcriptTurnText, assistantText].filter(Boolean).join('\n\n');
-  const evaluated = await evaluateGates({ input, assistantText, turnText, humanText: context.humanText, transcriptRaw: context.raw, sessionId }, auditOptions);
+  const evaluated = await evaluateGates({ input, assistantText, turnText, humanText: context.humanText, lastUserPrompt: context.lastUserPrompt, transcriptRaw: context.raw, sessionId }, auditOptions);
   const audit = evaluated.audit;
   const warnings = [];
   const effective = [];
@@ -160,7 +173,7 @@ export async function run(input, context, auditOptions = {}) {
   // operational outcome separately so nightly metrics can count it.
   const verdict = cap.retryCap ? 'retry-cap' : blockedBy.length ? 'block' : 'pass';
   const capMessage = cap.retryCap ? `${CAP_CONTEXT} 残存コード: ${reasonCodes.join(', ')}` : undefined;
-  const record = { ...base, verdict, blockedBy, reasonCodes, demoted, handoffKind, retryCap: cap.retryCap, sameTextRetries: cap.sameTextRetries ?? 0, auditEvidence: audit.record.evidence };
+  const record = { ...base, verdict, blockedBy, reasonCodes, demoted, handoffKind, unchangedPeriodicReport: evaluated.unchangedPeriodicReport, retryCap: cap.retryCap, sameTextRetries: cap.sameTextRetries ?? 0, auditEvidence: audit.record.evidence };
   ledger(cap.retryCap ? { ...record, verdict: 'pass_after_cap', runnerVerdict: verdict } : record);
   if (verdict !== 'block') return { record, ...((capMessage || systemMessage) ? { systemMessage: [capMessage, systemMessage].filter(Boolean).join('\n') } : {}) };
   const sections = [];
@@ -172,8 +185,13 @@ export async function run(input, context, auditOptions = {}) {
     const summaries = evaluated.results.filter(r => FORM_GATES.includes(r.name)).map(r => `- ${r.name}: ${String(r.reason || '').split(/\r?\n/).slice(0, 2).map(line => line.slice(0, 200)).join(' ')}`);
     sections.push(`### 手渡しの形式（1回の書き直しでまとめて直す）\n${summaries.join('\n')}`);
   }
-  if (!blockedBy.includes('next-action-gate') && !hasRequiredFooter(assistantText)) sections.push(`### ピギーバック・ヒント\n- ${HANDOFF_HINT}`);
-  return { decision: 'block', reason: withStopRetryInstruction(sections.join('\n\n')), record, ...(systemMessage ? { systemMessage } : {}) };
+  if (!evaluated.unchangedPeriodicReport && !blockedBy.includes('next-action-gate') && !hasRequiredFooter(assistantText)) sections.push(`### ピギーバック・ヒント\n- ${HANDOFF_HINT}`);
+  // A remaining operational violation can still block, without demanding that
+  // the previous summary, questions or instructions be repeated in full.
+  const reason = evaluated.unchangedPeriodicReport
+    ? `指摘された問題だけを修正する。状態が変わらなければ「変化なし」の1行だけとし、確認事項・本文・手順・別件一覧は再掲しない。\n\n${sections.join('\n\n')}`
+    : withStopRetryInstruction(sections.join('\n\n'));
+  return { decision: 'block', reason, record, ...(systemMessage ? { systemMessage } : {}) };
 }
 
 async function main() {

@@ -274,15 +274,16 @@ function doneTime(row) {
   return 0;
 }
 
-function doneWasAlreadyReportedByCheck(row) {
+function doneWasAlreadyReportedByCheck(row, home) {
   // checkResult=done は checkPromise 自身が未達を再送する。掃除側でも送ると、
   // 同じ巡回で check の結果通知と汎用完了DMが二重になる。
-  return row.check && row.checkResult === 'done';
+  if (!row.check || row.checkResult !== 'done') return false;
+  return usesKimDoneInbox(row, home) ? hasDoneInboxReceipt(row) : Boolean(row.doneNotifiedAt || row.checkNotifiedResult === 'done');
 }
 
 export function doneNoticeSweepRows(rows, home, now = Date.now()) {
   const eligible = rows.filter(row => row.status === 'done' && !(usesKimDoneInbox(row, home) ? hasDoneInboxReceipt(row) : row.doneNotifiedAt) && !row.doneNotifySkipped &&
-    !isUnattendedRow(row, home) && !doneWasAlreadyReportedByCheck(row));
+    !isUnattendedRow(row, home) && !doneWasAlreadyReportedByCheck(row, home));
   return {
     recent: eligible.filter(row => now - doneTime(row) <= DONE_NOTICE_RECENT_MS),
     backlog: eligible.filter(row => now - doneTime(row) > DONE_NOTICE_RECENT_MS),

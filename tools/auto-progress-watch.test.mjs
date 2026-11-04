@@ -457,3 +457,51 @@ test('定期ターン中でもcheckが達成なら従来どおりdoneにする',
   assert.deepEqual(summary.errors, []);
   assert.equal(readLedger(ledgerFile(f.home))[0].status, 'done');
 });
+
+test('doneNoticeSweepRows: check 達成で hasDoneInboxReceipt なしの過去完了行を拾い kim-inbox へ配送する', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'check-sweep-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'kim@orgiast.jp' } }));
+  const now = Date.parse('2026-11-04T12:00:00Z');
+  const pastRow = {
+    sessionId: 'dmm-past-1', status: 'done', check: 'mock-check', checkResult: 'done',
+    checkText: '2026-10-30 振込済', checkNotifiedResult: 'done', doneAt: new Date(now - 120 * 3600000).toISOString(),
+    promise: 'DMM 木下さん振込明細の回収', nextClaude: '次処理を実行', ts: new Date(now - 120 * 3600000).toISOString(),
+  };
+  writeLedger(ledgerFile(home), [pastRow]);
+  const io = { clock: () => now, transcriptFiles: [], sheetConfig: () => null, digest: async () => ({}), escalateKimDecisions: async () => ({}),
+    notifyOwner: () => assert.fail('must not use Discord for kim inbox sweep') };
+  const summary = await run({ home, now, io });
+  assert.deepEqual(summary.errors, []);
+  const [updated] = readLedger(ledgerFile(home));
+  assert.ok(updated.doneInboxId);
+  assert.ok(updated.doneInboxVerifiedAt);
+  const items = listItems(home);
+  assert.equal(items.length, 1);
+  assert.match(items[0].text, /check 達成: DMM 木下さん振込明細の回収/);
+  assert.match(items[0].text, /作業全体の完了は未確認です。Claude の次の手（実行状況を確認して続行）: 次処理を実行/);
+});
+
+test('doneNoticeSweepRows: check なしの過去完了行は backlog としてまとめて kim-inbox へ配送する', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'backlog-sweep-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'kim@orgiast.jp' } }));
+  const now = Date.parse('2026-11-04T12:00:00Z');
+  const pastRow = {
+    sessionId: 'dmm-past-2', status: 'done',
+    checkText: '手動完了', doneAt: new Date(now - 120 * 3600000).toISOString(),
+    promise: 'DMM 法の里手動対応完了', ts: new Date(now - 120 * 3600000).toISOString(),
+  };
+  writeLedger(ledgerFile(home), [pastRow]);
+  const io = { clock: () => now, transcriptFiles: [], sheetConfig: () => null, digest: async () => ({}), escalateKimDecisions: async () => ({}),
+    notifyOwner: () => assert.fail('must not use Discord for kim inbox sweep') };
+  const summary = await run({ home, now, io });
+  assert.deepEqual(summary.errors, []);
+  const [updated] = readLedger(ledgerFile(home));
+  assert.ok(updated.doneInboxId);
+  assert.ok(updated.doneInboxVerifiedAt);
+  const items = listItems(home);
+  assert.equal(items.length, 1);
+  assert.match(items[0].text, /未通知だった自動進行の完了一覧/);
+  assert.match(items[0].text, /DMM 法の里手動対応完了/);
+});

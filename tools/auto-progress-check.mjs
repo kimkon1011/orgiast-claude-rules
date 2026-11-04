@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { isUnattendedRow, rowKey, originLine } from './auto-progress-ledger.mjs';
 import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
-import { deliverDoneInbox, hasDoneInboxReceipt } from './lib/auto-progress-done-inbox.mjs';
+import { deliverDoneInbox, hasDoneInboxReceipt, usesKimDoneInbox } from './lib/auto-progress-done-inbox.mjs';
 
 export const CHECK_TIMEOUT_MS = 30000;
 export const MAX_CHECK_TIMEOUT_MS = 300000;
@@ -64,13 +64,26 @@ export async function checkPromise(row, { home, now, patch, io = {} }) {
     ...(state === 'done' ? { status: 'done', doneAt: row.doneAt || new Date(now).toISOString() } : {}) };
   if (patch(rowKey(row), changes) === false) return 'ledger_error';
   if (state === 'done') {
-    if (hasDoneInboxReceipt(row)) return state;
+    if (usesKimDoneInbox(row, home)) {
+      if (hasDoneInboxReceipt(row)) return state;
+      const next = String(row.nextClaude || '').trim();
+      const message = `✅ check 達成: ${oneLine(row.label || row.promise, 160)}\n${changes.checkText}\n作業ID: ${row.sessionId || rowKey(row)}\n${next ? `作業全体の完了は未確認です。Claude の次の手（実行状況を確認して続行）: ${next.slice(0, 1800)}` : 'kim がすること: なし'}`;
+      const delivery = await deliverDoneInbox(home, [row], message, { now, io });
+      const receipt = { ...delivery.receipt, checkNotifiedResult: 'done' };
+      if (patch(rowKey(row), receipt) === false) return 'ledger_error';
+      Object.assign(row, changes, receipt);
+      return state;
+    }
+    if (row.checkNotifiedResult === 'done' && row.doneNotifiedAt) return state;
     const next = String(row.nextClaude || '').trim();
     const message = `✅ check 達成: ${oneLine(row.label || row.promise, 160)}\n${changes.checkText}\n作業ID: ${row.sessionId || rowKey(row)}\n${next ? `作業全体の完了は未確認です。Claude の次の手（実行状況を確認して続行）: ${next.slice(0, 1800)}` : 'kim がすること: なし'}`;
-    const delivery = await deliverDoneInbox(home, [row], message, { now, io });
-    const receipt = { ...delivery.receipt, checkNotifiedResult: 'done' };
-    if (patch(rowKey(row), receipt) === false) return 'ledger_error';
-    Object.assign(row, changes, receipt);
+    const owner = row.owner || resolveOwner({ home });
+    const origin = originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: owner, home });
+    const delivery = await (io.notifyOwner ?? notifyOwner)(owner, `${origin}\n${message}`, { home, now, kind: 'automatic', session: row });
+    if (!['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
+    const notifyChanges = { checkNotifiedResult: 'done', doneNotifiedAt: new Date(now).toISOString() };
+    if (patch(rowKey(row), notifyChanges) === false) return 'ledger_error';
+    Object.assign(row, notifyChanges, changes);
     return state;
   }
   if (state === 'unmet') {

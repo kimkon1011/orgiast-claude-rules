@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
-import { parseRows as parseVehicles } from './vehicle-inspection-watch.mjs';
+import { parseRows as parseVehicles, retireVehicleAsks } from './vehicle-inspection-watch.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
 import { reportHeartbeat } from './lib/heartbeat.mjs';
@@ -40,7 +40,7 @@ export function formatDigest(rows, today, config) {
   return ['今週の期限', ...entries.map(x => `${x.row.id} ${x.due}（${x.remainingDays < 0 ? `${-x.remainingDays}日超過` : `あと${x.remainingDays}日`}）${x.row.title}｜担当 ${x.row.assignee || 'kim'}`), entries.length ? '' : '14日以内・超過の期限はありません。', `期限台帳: ${sheetUrl(config)}`].filter(Boolean).join('\n');
 }
 export function vehicleRows(values, config) {
-  return parseVehicles(values).map(v => ({ id: v.id, title: `${v.name} 車検`, kind: '車検', company: v.company, assignee: v.assignee || 'kim', due: v.expiry,
+  return parseVehicles(values).map(v => ({ id: v.id, vehicleName: v.name, plate: v.plate, title: `${v.name} 車検`, kind: '車検', company: v.company, assignee: v.assignee || 'kim', due: v.expiry,
     status: ['完了','売却済'].includes(v.status) ? '完了' : ['予約済','入庫中'].includes(v.status) ? '対応中' : '未着手',
     action: v.status === '完了' && !v.nextExpiry ? '次回満了日を車検台帳に記録' : '入庫手配・更新確認',
     quote: `https://docs.google.com/spreadsheets/d/${config.vehicleSheetId}/edit`, source: '車検台帳', sourceId: v.id, readOnly: true }));
@@ -58,6 +58,7 @@ export async function inboxAction({ home, row, decision, config, close = false, 
   try {
     const file = path.join(dir, 'body.txt'); fs.writeFileSync(file, notificationLine(row, decision, config), { mode: 0o600 });
     const result = await execImpl(process.execPath, [inboxScript, '--add', '--kind', 'deadline', '--key', row.id, '--due', decision.due, '--remaining-days', String(decision.remainingDays), '--source', 'deadline-watch', '--body-file', file], { encoding: 'utf8', windowsHide: true, timeout: 60000, env: { ...process.env, ORGIAST_HOME: home } });
+    if (row.readOnly) retireVehicleAsks(home, { name: row.vehicleName, plate: row.plate });
     return result;
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
@@ -67,8 +68,14 @@ export function sourceMetadata(row) {
 export async function hasSentReply(row, request) {
   if (row.kind !== '回答・返信' || !/^gmail$/i.test(row.source)) return false;
   const meta = sourceMetadata(row);
-  if (!meta.mailbox || !meta.threadId || !Number.isFinite(Date.parse(row.detectedAt))) return false;
-  const thread = await request(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(meta.threadId)}?format=metadata`, { user: meta.mailbox, scope: 'https://www.googleapis.com/auth/gmail.readonly' });
+  if (!meta.mailbox || !Number.isFinite(Date.parse(row.detectedAt))) return false;
+  let threadId = meta.threadId;
+  if (!threadId && meta.messageId) {
+    const message = await request(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(meta.messageId)}?format=metadata`, { user: meta.mailbox, scope: 'https://www.googleapis.com/auth/gmail.readonly' });
+    threadId = message.threadId;
+  }
+  if (!threadId) return false;
+  const thread = await request(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=metadata`, { user: meta.mailbox, scope: 'https://www.googleapis.com/auth/gmail.readonly' });
   return (thread.messages || []).some(m => m.labelIds?.includes('SENT') && Number(m.internalDate) > Date.parse(row.detectedAt));
 }
 export async function syncCalendar(row, { config, state, request, persist = () => {}, log = console.error }) {
@@ -182,6 +189,8 @@ export function parseArgs(argv) {
   if (args.now && parseSheetDate(args.now) !== args.now) throw new Error('--now は YYYY-MM-DD');
   if (args.defer && (!args.until || parseSheetDate(args.until) !== args.until)) throw new Error('--until は YYYY-MM-DD');
   if (['done','defer','drop','approve'].filter(k => args[k]).length > 1) throw new Error('操作は1つずつ指定してください');
+  if (args.digest && ['done','defer','drop','approve'].some(k => args[k])) throw new Error('--digest と更新操作は併用できません');
+  if (args.until && !args.defer || args.note && !['done','defer','drop'].some(k => args[k])) throw new Error('--until / --note に対応する操作がありません');
   if (args.fixture && !args['dry-run']) throw new Error('--fixture は --dry-run と併用してください');
   return args;
 }
@@ -191,6 +200,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   try {
     args = parseArgs(argv); const today = args.now || jstDate();
     const fixture = args.fixture ? readJson(args.fixture) : null;
+    if (args.fixture && (!fixture || !Array.isArray(fixture.rows))) throw new Error('fixture の台帳JSONがありません、または形式が不正です');
     const config = fixture ? { ...DEFAULT_CONFIG, ...fixture.config, calendar: { enabled: false } } : deps.config || loadConfig(home);
     if (!config.sheetId) throw new Error('先に node tools/deadline-ledger.mjs --init を実行してください');
     const sheets = deps.sheets || createSheetsClient({ fetchImpl: gwsFetch });

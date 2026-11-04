@@ -89,3 +89,9 @@ test('Driveの50件上限とLINE/Discordの新規行を読み込む', async t =>
   fs.writeFileSync(path.join(home,'.claude/pending-decisions.jsonl'), JSON.stringify({ id:'one', source:'discord-inbox', capturedAt: now.toISOString(), text:'回答期限は11/5' })+'\n');
   assert.equal((await collectDiscord({ home, now })).documents.length, 1);
 });
+
+test('不存在のfixtureで本番ソースへfallbackしない', async t => {
+  const home=homeFor(t), errors=[];
+  assert.equal(await main(['--dry-run','--fixture',home],{home,config:{...DEFAULT_CONFIG,sheetId:'live'},stderr:e=>errors.push(e),search:()=>assert.fail('live read')}),1);
+  assert.match(errors[0],/fixture/); assert.deepEqual(fs.readdirSync(home),[]);
+});

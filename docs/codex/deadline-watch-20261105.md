@@ -77,4 +77,20 @@
 - 時間切れで全部できない場合は、件4 → 件5 → 件1 → 件3 → 件2 → 件6 の順に価値が高い。できた件までをコミットし、残りを `docs/codex/deadline-watch-20261105.md` 末尾の「## 残件」に書く。
 
 ## 残件
-（Codex が記入）
+- 件1〜6の実装は完了。元のGit管理領域が読み取り専用のため、6コミットはbundleで納品。後続セッションで `node tools/restore-deadline-commits.mjs` を実行し、元ブランチへ取り込んでから起動側のpush/PR処理を続ける。
+- 指定の全体テストは **全面green未達**。Windows連携を分けた515ファイルの実行では8,241成功・2失敗・43skip。2失敗のうちsetup隔離テストの追加依存漏れは修正して単独再検証成功。残るWindows PowerShellのMSIモック実行は30秒上限で失敗。既存nightly-lane-probeもWindowsネイティブNodeで4ケースが15秒上限で失敗し、repair-task-pathsは完走未確認。これらの本体実装は変更していない。単独の PowerShell `exit 0` も31.21秒かかることを実測した。通常速度でPowerShellが起動できる検証環境で全体を再実行する。
+- 本番の `--init`、タスク登録、既存info掃除、ライブdry-run、Calendar/DWD確認は、指示どおり後続の検証セッションで実施する。今回の新規テストはネットワーク・鍵・実ホームに依存しない。
+- 証拠は `reports/deadline-watch-20261105/verification.json` と同フォルダのログ。検出フィクスチャは追加5件・候補1件、追跡フィクスチャは5通知。関連135テスト、追加の台帳・追跡13テスト、期限inbox21テスト、履歴復元テスト等はすべて成功。
+
+### Codex 実装記録（2026-11-05）
+
+件1〜6を実装。固定入力の検出・追跡、期限レーン、ノイズ抑止、初期化、自動完了・Calendar、タスク登録・配布を追加。実装の使い方は [期限台帳](../deadline-watch.md)。本番の初期化・掃除・タスク登録・送信は未実行で、指示どおり後続検証セッションの対象。
+
+Git管理領域 `/mnt/c/Users/uers/Downloads/orgiast-claude-rules/.git/worktrees/deadline-watch` が読み取り専用で、通常の `git add` は `index.lock: Read-only file system`。実装ファイルはこのツリーに保存し、書込可能な独立Git管理領域で件別コミットを作成した。履歴は `reports/deadline-watch-20261105/deadline-watch.bundle`、基点・先端は同フォルダの `commits.json` に保存する。後続の検証セッションは **push前に** `node tools/restore-deadline-commits.mjs` を実行して取り込む。現在のブランチ・基点・ステージ済み変更・各変更ファイルの内容を照合し、不一致なら変更せず停止する。Windows用の同じ入口は `tools/restore-deadline-commits.cmd`。push／PRは作成していない。
+
+### Codex 仕上げ検証（2026-11-05）
+
+- Gmailの返信済み照合で通信エラーになると、その行の期限通知まで省略される不具合を回帰テストで再現して修正。完了の証拠が取れない行は未完了のまま通知し、`errors` に `phase: auto-close` を残す。
+- 修正後の関連68テストが成功。指定の固定入力も検出5件・候補1件、追跡5通知、エラーなしを再確認。
+- setupの既存テストも再実行し、隔離依存の修正は成功。Windows PowerShellのMSIモックは再び30秒タイムアウトで失敗。全体greenの完了条件は引き続き未達であり、本番検証も未実施。
+- 原Git管理領域への `git add -- docs/deadline-watch-claim.md` は今回も `index.lock: Read-only file system`。修正は件3のコミットへ反映し、6コミット構成のbundleと照合記録を更新した。push/PRは行っていない。

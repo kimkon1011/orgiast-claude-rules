@@ -85,7 +85,9 @@ export function createLedger({ sheets = createSheetsClient({ fetchImpl: gwsFetch
   async function patch(id, changes, tab = '期限台帳') {
     const row = (await read(tab)).find(r => r.id === id);
     if (!row) throw new Error(`${tab}: ${id} が見つかりません`);
-    for (const [key, value] of Object.entries(changes)) {
+    // Commit status last: a failed deferral must never hide the old deadline.
+    const entries = Object.entries(changes).sort(([a], [b]) => Number(a === 'status') - Number(b === 'status'));
+    for (const [key, value] of entries) {
       const field = FIELDS.indexOf(key); if (field < 0) throw new Error(`未知の列: ${key}`);
       await sheets.update(config.sheetId, `${quoteTab(tab)}!${columnLetter(row.header.indexOf(HEADERS[field]))}${row.rowNumber}`, [[value ?? '']]);
     }
@@ -103,9 +105,15 @@ export function nextId(rows) {
 export function normalizeSeed(input, today = jstDate()) {
   const row = Object.fromEntries(FIELDS.map((key, i) => [key, input[key] ?? input[HEADERS[i]] ?? '']));
   row.title ||= input.subject || ''; row.sourceId ||= input.sourceRef || input.messageId || '';
+  row.quote ||= input.evidence || ''; row.notes ||= input.note || '';
+  const mailbox = /^gmail:(.+@.+)$/i.exec(row.source)?.[1];
+  if (mailbox && row.sourceId && !row.sourceId.startsWith('gmail:')) {
+    row.notes = JSON.stringify({ mailbox, messageId: row.sourceId }) + (row.notes ? '\n' + row.notes : '');
+    row.sourceId = `gmail:${mailbox}:${row.sourceId}`; row.source = 'Gmail';
+  }
   row.due = parseSheetDate(row.due); row.kind = KINDS.includes(row.kind) ? row.kind : 'その他';
   row.assignee ||= row.kind === '支払' ? '経理' : 'kim'; row.detectedAt ||= today;
-  row.status = row.due ? '未着手' : '候補'; row.notifyCount = 0;
+  row.status = STATUSES.includes(row.status) ? row.status : row.due ? '未着手' : '候補'; row.notifyCount = 0;
   if (!row.title || !row.sourceId) throw new Error('初期データには件名と出典IDが必要です');
   return row;
 }
@@ -156,7 +164,7 @@ export async function initialize({ home = defaultHome(), sheets = createSheetsCl
 }
 if (isEntry(import.meta.url)) {
   try {
-    if (!process.argv.includes('--init')) throw new Error('--init を指定してください');
+    if (process.argv.length !== 3 || process.argv[2] !== '--init') throw new Error('--init を指定してください');
     console.log(JSON.stringify(await withLedgerLock(defaultHome(), () => initialize())));
   } catch (e) { console.error(`deadline-ledger: ${e.message}`); process.exitCode = 1; }
 }

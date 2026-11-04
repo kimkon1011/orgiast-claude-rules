@@ -230,6 +230,7 @@ test('期限は残日数順に先頭5件、upsertは表示回数を増やさずc
   const again = await addItem(home, { kind: 'deadline', key: 'D-2', remainingDays: -8, text: '期限-8 更新' });
   assert.equal(first.id, again.id); assert.equal(again.shownCount, 0);
   const items = listItems(home); const context = selectContext(items, { sheetUrl: 'https://example.test/ledger' });
+  assert.ok(context.startsWith('[kim-inbox 期限 6 / 未回収 ask 1 / 未確認 info 1]'));
   assert.ok(context.indexOf('期限-8 更新') < context.indexOf('期限0 '));
   assert.ok(context.indexOf('期限0 ') < context.indexOf('期限3 '));
   assert.doesNotMatch(context, /期限30 /); assert.ok(context.length <= CONTEXT_LIMIT);

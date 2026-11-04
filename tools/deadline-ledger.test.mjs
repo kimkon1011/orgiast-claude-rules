@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { HEADERS, parseRows, serializeRow, isDuplicate, nextId, normalizeSeed, initialize, dataPath, saveJson, withLedgerLock, googleClient } from './deadline-ledger.mjs';
+import { HEADERS, parseRows, serializeRow, isDuplicate, nextId, normalizeSeed, initialize, dataPath, saveJson, withLedgerLock, googleClient, createLedger } from './deadline-ledger.mjs';
 
 test('台帳の列、連番、重複と未確認種の候補化', () => {
   const seed = normalizeSeed({ title: '=質問書', kind: '行政・消防', sourceId: 'one' }, '2026-11-04');
@@ -42,4 +42,21 @@ test('--initはkim所有で作成、通知メールなし共有、途中再実�
 test('Google client explicitly impersonates kim and preserves HTTP error status', async () => {
   const client = googleClient({ getToken: async opts => { assert.equal(opts.impersonate, 'kim@orgiast.jp'); return 'token'; }, fetchImpl: async () => ({ ok: false, status: 403 }) });
   await assert.rejects(client('https://example.invalid'), e => e.status === 403);
+});
+
+test('既存seedsのevidence/noteとgmail:メール箱形式を保持して正規化する', () => {
+  const row=normalizeSeed({title:'協業回答',source:'gmail:seisaku-team@orgiast.jp',sourceId:'mail-one',due:'2026-11-06',kind:'回答・返信',evidence:'https://example.invalid/message',note:'確認メモ'});
+  assert.equal(row.source,'Gmail'); assert.equal(row.sourceId,'gmail:seisaku-team@orgiast.jp:mail-one');
+  assert.equal(row.quote,'https://example.invalid/message'); assert.match(row.notes,/確認メモ/);
+  assert.deepEqual(JSON.parse(row.notes.split('\n')[0]),{mailbox:'seisaku-team@orgiast.jp',messageId:'mail-one'});
+});
+
+test('延期先などの書込成功後に状態を更新し、途中失敗で期限を隠さない', async () => {
+  const writes=[];
+  const sheets={get:async()=>[HEADERS,serializeRow({id:'D-001',title:'提出',due:'2026-11-06',status:'未着手'})],update:async(_,range,values)=>writes.push([range,values])};
+  const ledger=createLedger({config:{sheetId:'test'},sheets});
+  await ledger.patch('D-001',{status:'延期',notes:'延期先: 2026-11-20',lastNotified:''});
+  assert.match(writes.at(-1)[0],/!G2$/); assert.match(writes[0][0],/!Q2$/);
+  const failed=createLedger({config:{sheetId:'test'},sheets:{...sheets,update:async(_,range)=>{assert.doesNotMatch(range,/!G2$/);throw Error('offline');}}});
+  await assert.rejects(failed.patch('D-001',{status:'延期',notes:'延期先: 2026-11-20'}),/offline/);
 });

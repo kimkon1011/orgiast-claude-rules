@@ -1,6 +1,14 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/deadline-ledger.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
+    {"path": "tools/deadline-detect.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
+    {"path": "tools/deadline-watch.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
+    {"path": "tools/lib/deadline-sources.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
+    {"path": "tools/setup-deadline-watch.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
+    {"path": "tools/register-deadline-watch-tasks.ps1", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
+    {"path": "tools/lib/fleet-chase-ledger.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "watchdogが未達通知をkimへ送らず追跡台帳へ保存する共通依存"},
+
     {"path": "tools/gh-accept-invites.mjs", "scope": "fleet", "step": "hook:onboarding-sync", "reason": "全PC SessionStart の日次招待承諾。kim操作席だけ実行"},
     {"path": "tools/access-doctor.mjs", "scope": "fleet", "step": "hook:onboarding-sync", "reason": "各席の権限・origin・配布ファイルの診断と明示修復"},
     {"path": "tools/pr-land.mjs", "scope": "fleet", "step": "hook:onboarding-sync", "reason": "kim操作席がbase pushとPR着地を完結"},

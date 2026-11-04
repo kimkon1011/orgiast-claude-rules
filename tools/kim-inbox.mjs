@@ -273,7 +273,7 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
   const asks = pending.filter(i => i.kind === 'ask'), infos = pending.filter(i => i.kind === 'info');
   if (!pending.length) return '';
   const deadlines = pending.filter(i => i.kind === 'deadline').sort((a, b) => deadlineDays(a, now) - deadlineDays(b, now) || String(a.key).localeCompare(String(b.key)));
-  let text = `[kim-inbox 期限 ${deadlines.length} / 未回収 ask ${asks.length} 件 / 未確認 info ${infos.length} 件] kim への報告は Discord ではなくこのセッションで行う（kim 2026-10-27）。ask は kim の返答を会話で受け取り記録するまで毎プロンプト再提示される。セッションを閉じても台帳に残り次セッションで再提示される。\n`;
+  let text = `[kim-inbox 期限 ${deadlines.length} / 未回収 ask ${asks.length} / 未確認 info ${infos.length}] kim への報告は Discord ではなくこのセッションで行う（kim 2026-10-27）。ask は kim の返答を会話で受け取り記録するまで毎プロンプト再提示される。セッションを閉じても台帳に残り次セッションで再提示される。\n`;
   const footer = '一覧: node tools/kim-inbox.mjs --list --open';
   if (deadlines.length) {
     text += `[期限 ${deadlines.length} 件 — 期限台帳 ${sheetUrl}] 返事は「D-003 完了」「D-003 延期 11/20」「D-003 不要」で可（Claude が node tools/deadline-watch.mjs --done/--defer/--drop で台帳と inbox を更新する）\n`;

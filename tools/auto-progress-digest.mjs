@@ -324,7 +324,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       const caseCount = Object.keys(ownerCases.checkpoints).length;
       const caseUnchanged = caseCount && Object.entries(ownerCases.checkpoints).every(([id, cp]) => state.caseProgress?.[id]?.fingerprint === cp.fingerprint);
       const deadlinePrefix = owner === 'kim@orgiast.jp' && deadlineText ? deadlineText + '\n\n' : '';
-      const text = redactSecrets(`${deadlinePrefix}【進捗まとめ】\n${digest.text}${ownerCases.text ? `（案件 ${caseCount}件${caseUnchanged ? '・変化なし' : ''}）` : ''}`);
+      const text = redactSecrets(deadlinePrefix + `【進捗まとめ】\n${digest.text}${ownerCases.text ? `（案件 ${caseCount}件${caseUnchanged ? '・変化なし' : ''}）` : ''}`);
       messages.push(text);
       if (dryRun) continue;
       const options = { home, now, owner, kind: 'digest', source: 'auto-progress-digest', webhookFallback: false };

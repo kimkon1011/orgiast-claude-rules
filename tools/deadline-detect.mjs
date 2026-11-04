@@ -130,6 +130,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     const now = new Date(opts.now || deps.now || new Date()); if (!Number.isFinite(now.getTime())) throw new Error('--now が不正です');
     valid = true;
     const fixture = opts.fixture ? readJson(path.join(opts.fixture, 'ledger.json'), {}) : null;
+    if (opts.fixture && (!fixture || !Array.isArray(fixture.rows))) throw new Error('fixture の台帳JSONがありません、または形式が不正です');
     const config = fixture ? { ...DEFAULT_CONFIG, ...fixture.config } : deps.config || loadConfig(home);
     if (!config.sheetId) throw new Error('先に node tools/deadline-ledger.mjs --init を実行してください');
     const sheets = deps.sheets || createSheetsClient({ fetchImpl: gwsFetch });

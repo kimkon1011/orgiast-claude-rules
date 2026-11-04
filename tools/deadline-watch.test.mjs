@@ -78,6 +78,14 @@ test('fixture dry-runはネットワーク、ローカル書込、heartbeatを�
   assert.match(formatDigest([base], '2026-11-04', config), /担当 kim/);
 });
 
+test('旧seedのメッセージIDからスレッドを取得して返信完了を照合', async () => {
+  const calls=[];
+  assert.equal(await hasSentReply({...base,source:'Gmail',detectedAt:'2026-11-03',notes:'{"mailbox":"seisaku-team@orgiast.jp","messageId":"mail-one"}\n確認メモ'},async url=>{
+    calls.push(url); return url.includes('/messages/') ? {threadId:'actual-thread'} : {messages:[{labelIds:['SENT'],internalDate:Date.parse('2026-11-04')}]};
+  }),true);
+  assert.match(calls[1],/threads\/actual-thread/);
+});
+
 test('Gmailの完了照合に失敗しても期限通知を届け、失敗として記録する', async t => {
   const row = { ...base, due: '2026-11-05', source: 'Gmail', detectedAt: '2026-11-03', notes: '{"mailbox":"kim@orgiast.jp","threadId":"thread"}' };
   const changes = [], notices = [];
@@ -92,3 +100,8 @@ test('Gmailの完了照合に失敗しても期限通知を届け、失敗とし
   assert.deepEqual(result.errors, [{ id: row.id, phase: 'auto-close', error: 'Gmail unavailable' }]);
 });
 
+test('不存在のfixtureで本番の読取へfallbackしない', async t => {
+  const home=homeFor(t), errors=[];
+  assert.equal(await main(['--dry-run','--fixture',path.join(home,'missing.json')],{home,config,stderr:e=>errors.push(e),sheets:{get:()=>assert.fail('live read')}}),1);
+  assert.match(errors[0],/fixture/); assert.deepEqual(fs.readdirSync(home),[]);
+});

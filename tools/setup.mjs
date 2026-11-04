@@ -11,6 +11,7 @@ import { convergeAllowRules } from './allow-rules.mjs';
 import { convergeMobileStandby } from './mobile-standby.mjs';
 export { classifyTaskActions } from './setup-task-hidden-actions.mjs';
 import { inspectTaskHiddenActions } from './setup-task-hidden-actions.mjs';
+import { convergeDeadlineTasks } from './setup-deadline-watch.mjs';
 import { convergeNightlyReload } from './setup-nightly-reload.mjs';
 import { convergeNodeRuntimeSecurity } from './setup-node-runtime-security.mjs';
 
@@ -246,6 +247,10 @@ if (manifest) {
   if (converge && !valueAfter('--manifest')) {
     const { description, ...outcome } = convergeNightlyReload();
     results.push({ item: { id: 'nightly-reload-vscode', severity: 'required', description }, ...outcome });
+  }
+  if (converge && !valueAfter('--manifest')) {
+    const { description, ...outcome } = convergeDeadlineTasks({ home });
+    results.push({ item: { id: 'deadline-watch', severity: 'required', description }, ...outcome });
   }
   emit(results);
   // fleet ビーコン: converge の結果を GAS へ送る。fail-open（exit code に一切影響させない）。

@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { addCheck } from './auto-progress.mjs';
-import { executeCheck, resolveCheckShell, CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS } from './auto-progress-check.mjs';
+import { executeCheck, resolveCheckShell, CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS, pendingAction } from './auto-progress-check.mjs';
 import { readLedger, writeLedger, ledgerFile } from './auto-progress-ledger.mjs';
 import { run as watch } from './auto-progress-watch.mjs';
 import { run as digest } from './auto-progress-digest.mjs';
@@ -66,7 +67,7 @@ test('watch: before deadline stays open; overdue queues once and retries DM; rec
   // 6時間後: 1回目の定期DMが送信される
   await watch({ home, now: now + 6 * 3600000, io });
   assert.equal(messages.length, 1);
-  assert.match(messages[0], /未達: 未達: まだ届いていません \/ 次の手: 再試行する/);
+  assert.match(messages[0], /未達: 未達: まだ届いていません\nClaude の次の手: 再試行する/);
 
   // 7時間後: 前回DMから1時間なので再送しない
   await watch({ home, now: now + 7 * 3600000, io });
@@ -79,7 +80,7 @@ test('watch: before deadline stays open; overdue queues once and retries DM; rec
   // 24時間後（期限切れ）: overdue の未達（期限超過）通知
   await watch({ home, now: now + 24 * 3600000, io });
   assert.equal(messages.length, 3);
-  assert.match(messages[2], /未達（期限超過）/);
+  assert.match(messages[2], /期限切れ（/);
   });
   test('watch: failed completion delivery retries without running check again; dry run has no side effects', async () => {
   const home = tmp(); register(home); let checks = 0, sends = 0;
@@ -230,4 +231,49 @@ test('check completion accepts durable inbox delivery and does not retry', async
  await watch({ home, now, io });
  assert.equal(calls, 1);
  assert.equal(readLedger(ledgerFile(home))[0].checkNotifiedResult, 'done');
+});
+
+test('ask file 全文を保存し、人待ちと期限切れを24時間ごとに再通知する', async () => {
+ const home = tmp();
+ const askFile = path.join(home, 'ask.txt');
+ const ask = 'Google アカウントで開いてください。\nスクリプト URL を貼ってください。';
+ fs.writeFileSync(askFile, ask);
+ const row = addCheck({ home, now, session: 'human', check: 'node check.mjs', label: '清掃報告GAS URL待ち', deadline: '+24h', askFile });
+ assert.equal(readLedger(ledgerFile(home))[0].ask, ask);
+ const messages = [];
+ const io = { ...baseIo, executeCheck: () => ({ code: 1, text: '未達' }), notifyOwner: async (_, text) => { messages.push(text); return { delivered: 'inbox' }; } };
+ await watch({ home, now: now + 6 * 3600000, io });
+ assert.match(messages[0], /あなたの作業待ち: 清掃報告GAS URL待ち/);
+ assert.ok(messages[0].includes(ask));
+ assert.doesNotMatch(messages[0], /check の実行ログ/);
+ await watch({ home, now: now + 24 * 3600000, io });
+ assert.match(messages[1], /期限切れ（2026-10-24T00:00:00.000Z）/);
+ await watch({ home, now: now + 47 * 3600000, io });
+ assert.equal(messages.length, 2);
+ await watch({ home, now: now + 48 * 3600000, io });
+ assert.equal(messages.length, 3);
+ assert.ok(messages[2].includes(ask));
+ assert.equal(readLedger(ledgerFile(home))[0].lastUnmetNotifiedAt, new Date(now + 48 * 3600000).toISOString());
+ assert.doesNotMatch(fs.readFileSync(path.join(home, '.claude', 'next-session.md'), 'utf8'), /check の実行ログ/);
+});
+
+ test('人待ちで ask がなければ promise を全文表示する', () => {
+   const promise = 'URL を受け取ったら修正します。\n対象の URL を貼ってください。';
+   const text = pendingAction({ label: 'URL待ち', promise, nextKim: '返信' });
+   assert.ok(text.includes(promise));
+   assert.doesNotMatch(text, /check の実行ログ/);
+   assert.ok(pendingAction({ label: '確認', nextClaude: '再試行', ask: '承認してください' }).includes('承認してください'));
+ });
+
+test('CLI --ask-file を ledger の ask に渡す（欠落ファイルでは登録しない）', () => {
+ const home = tmp(), askFile = path.join(home, 'request.txt');
+ fs.writeFileSync(askFile, '依頼全文\n二行目');
+ const args = ['tools/auto-progress.mjs', '--add-check', '--session', 'cli', '--check', 'node -e "process.exit(1)"', '--deadline', '+7d', '--label', '承認待ち', '--ask-file', askFile];
+ const env = { ...process.env, HOME: home, ORGIAST_HOME: home };
+ const result = spawnSync(process.execPath, args, { env, encoding: 'utf8' });
+ assert.equal(result.status, 0, result.stderr);
+ assert.equal(readLedger(ledgerFile(home))[0].ask, '依頼全文\n二行目');
+ fs.unlinkSync(askFile);
+ assert.equal(spawnSync(process.execPath, args, { env, encoding: 'utf8' }).status, 2);
+ assert.equal(readLedger(ledgerFile(home)).length, 1);
 });

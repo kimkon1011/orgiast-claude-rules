@@ -34,6 +34,7 @@
     "_evidence": "ラベル名がシートD列『東邦2階HP』と一致。8/17申告と同日にラベル初登場。2026-08-18 を最後に停止（webhook削除と同時期）。account は 2026-10-29 追加: 本PCの ~/.claude.json oauthAccount emailAddress=cr@orgiast.jp・memory codex-on-this-pc「このPC(cr@orgiast.jp / リモートデスクトップ)」より。これが無いと resolveOwner が空になり notify-owner の !owner で完了通知が全て破棄される（2026-10-18〜10-23 の未通知13件の原因）"
   },
   "nishi-PC": {
+    "notifyChannels": ["session", "toast"],
     "remoteName": "作業用019",
     "account": "nishi@orgiast.jp",
     "_evidenceRemoteName": "kim のスクリーンショット(2026-10-09): Chrome リモートデスクトップ『作業用019/nishi』の接続先の設定→詳細情報でデバイス名 DESKTOP-04U31RG（Precision T3610、デバイスID 9D75ACC5-EB0D-48FB-B27E-D60113A9417B）。nishi-PC 自己申告の hostname=DESKTOP-04U31RG(2026-10-08 fleet-mail 返信)と一致。アカウント nishi@ は kim 回答(2026-10-08)",

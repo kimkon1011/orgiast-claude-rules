@@ -14,7 +14,7 @@ export { MAX_RESUMES } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { notifyOwner, resolveOwner, sendOwnerToast } from './notify-owner.mjs';
 import { isQuietHours, kimAction } from './auto-progress-digest.mjs';
-import { checkPromise, executeCheck, queueCheckFollowup } from './auto-progress-check.mjs';
+import { checkPromise, executeCheck, queueCheckFollowup, pendingAction } from './auto-progress-check.mjs';
 import { appendInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { BLOCKER, readJson as readFleetJson, saveJson as saveFleetJson } from './lib/fleet-chase-ledger.mjs';
@@ -536,7 +536,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   let localOwner;
   const ownerOf = row => row.owner || (localOwner ??= io.localOwner ?? (() => { try { return resolveOwner({ home }); } catch { return ''; } })());
   const askKim = (row, reason) => (io.notifyOwner ?? notifyOwner)(ownerOf(row),
-    `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf(row), home })}\n自動進行が判断待ちです: ${row.promise}\n${reason || ''}`, { home });
+    `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf(row), home })}\n自動進行が判断待ちです: ${row.promise}\n${reason || ''}\n${pendingAction(row)}`, { home });
   const notifyDone = async (row, reason, artifact) => {
     if (notificationsStopped) return false;
     if (row.doneNotifiedAt) return false;

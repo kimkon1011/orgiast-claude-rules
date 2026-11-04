@@ -161,7 +161,7 @@ test('spawn errors and nonzero exits never count as toast delivery', () => {
  }
 });
 
-test('toast・none は伏字本文をowner inboxに保存しDM成功では保存しない', async t => {
+test('toast・none・DM成功すべて伏字本文をowner inboxに保存する', async t => {
  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-inbox-delivery-'));
  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
  const options = { home, label: 'nishi-PC', pcMap: { 'nishi-PC': { account: 'nishi@orgiast.jp' } }, directory: [], toast: () => true };
@@ -179,9 +179,11 @@ test('toast・none は伏字本文をowner inboxに保存しDM成功では保存
  await notifyOwner('nishi@orgiast.jp', 'token=example-secret', options);
  assert.equal(rows()[2].text, 'token=***REDACTED***');
  await notifyOwner('nishi@orgiast.jp', 'DM成功', { ...options, userId: '42', notify: async () => ({ delivered: 'dm', messageId: 'receipt' }) });
- assert.equal(rows().length, 3);
+ assert.equal(rows().length, 4);
+ assert.equal(rows()[3].text, 'DM成功');
+ assert.match(fs.readFileSync(path.join(home, '.claude', 'owner-inbox.md'), 'utf8'), /DM成功/);
  await notifyOwner('kim@orgiast.jp', '他の持ち主宛', options);
- assert.equal(rows().length, 3);
+ assert.equal(rows().length, 4);
 });
 
 test('owner inbox 書き込み失敗でも呼び出し元を壊さない', async t => {
@@ -353,4 +355,19 @@ test('w018-PC は fleet-pc-map に discordId と notifyDiscordId を持つ', () 
     console.log('INFO: 以下の PC 行は discordId/notifyDiscordId が不足しています（要調査）:');
     for (const m of missing) console.log('  ' + m);
   }
+});
+
+test('session/toast 設定は Discord と宛先設定依頼を送らない', async t => {
+ const options = localOptions(t);
+ options.pcMap['nishi-PC'].notifyChannels = ['session', 'toast'];
+ let toasted = 0;
+ const result = await notifyOwner('nishi@orgiast.jp', '本人への依頼', {
+   ...options, userId: '42', notify: () => assert.fail('Discord disabled'),
+   notifyKim: () => assert.fail('no setup alert'), toast: () => { toasted++; return true; },
+ });
+ assert.equal(result.channel, 'toast');
+ assert.equal(toasted, 1);
+ const file = path.join(options.home, '.claude', 'auto-progress-inbox', '_owner.jsonl');
+ assert.equal(fs.readFileSync(file, 'utf8').trim().split('\n').length, 1);
+ assert.match(fs.readFileSync(path.join(options.home, '.claude', 'owner-inbox.md'), 'utf8'), /本人への依頼/);
 });

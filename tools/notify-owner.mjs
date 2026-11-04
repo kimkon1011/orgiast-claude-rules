@@ -159,8 +159,18 @@ export async function notifyOwner(owner, text, options = {}) {
     } catch { /* return the receipt even when the ledger is unwritable */ }
     return result;
   };
-  let reason = 'owner Discord recipient unresolved or mismatched';
-  if (valid) {
+  const local = owner && owner.toLowerCase() === resolveOwner(options).toLowerCase();
+  const kim = owner.toLowerCase() === 'kim@orgiast.jp';
+  const configured = localPcEntry(options.pcMap ?? ownerPcMap(home), options.label ?? resolveFleetLabel(home));
+  const channels = local && !kim && Array.isArray(configured?.notifyChannels) ? configured.notifyChannels : null;
+  const discordEnabled = !channels || channels.includes('discord');
+  let localInboxOk = false;
+  if (local && !kim) {
+    try { await prependInbox(home, safeText, at); localInboxOk = true; } catch { /* continue other delivery paths */ }
+    try { appendOwnerInbox(home, { source: 'notify-owner', text: safeText }); } catch { /* continue other delivery paths */ }
+  }
+  let reason = discordEnabled ? 'owner Discord recipient unresolved or mismatched' : 'Discord disabled by notifyChannels';
+  if (valid && discordEnabled) {
     try {
       const result = await (options.notify ?? notifyKim)(text, { ...options, userId, webhookFallback: false });
       if (result?.delivered === 'session-inbox') {
@@ -174,19 +184,19 @@ export async function notifyOwner(owner, text, options = {}) {
       reason = result?.reason || 'Discord DM delivery failed or message id missing';
     } catch { reason = 'Discord DM delivery failed'; }
   }
-  attempts.push({ channel: 'discord', ok: false, skipped: !valid, reason });
-  if (!valid) await alertUnresolvedRecipient(owner, options);
+  attempts.push({ channel: 'discord', ok: false, skipped: !valid || !discordEnabled, reason });
+  if (!valid && discordEnabled) await alertUnresolvedRecipient(owner, options);
   // Local fallbacks must never deliver another PC owner's private progress here.
   if (!owner || owner.toLowerCase() !== resolveOwner(options).toLowerCase()) {
     return finish({ delivered: 'none', channel: 'none', ok: false, reason });
   }
-  const fallbackText = !valid
+  const fallbackText = !valid && discordEnabled
     ? safeText + `\n\n⚠ Discord 宛先未設定: fleet-pc-map.json の「${options.label ?? resolveFleetLabel(home)}」に notifyDiscordId を追加`
     : safeText;
-  let inboxOk = false;
-  try { await prependInbox(home, fallbackText, at); inboxOk = true; } catch { /* recorded below */ }
+  let inboxOk = localInboxOk;
+  try { if (!inboxOk) { await prependInbox(home, fallbackText, at); inboxOk = true; } } catch { /* recorded below */ }
   attempts.push({ channel: 'inbox', ok: inboxOk });
-  try { appendOwnerInbox(home, { source: 'notify-owner', text: safeText }); } catch { /* legacy chat inbox */ }
+  try { if (!local || kim) appendOwnerInbox(home, { source: 'notify-owner', text: safeText }); } catch { /* legacy chat inbox */ }
   const toast = async (body, purpose) => {
     let receipt;
     let ok = false;
@@ -194,8 +204,8 @@ export async function notifyOwner(owner, text, options = {}) {
     attempts.push({ channel: 'toast', purpose, ...(receipt || {}), ok });
     return ok;
   };
-  const sent = await toast(fallbackText, 'progress');
-  if (!valid) {
+  const sent = (!channels || channels.includes('toast')) && await toast(fallbackText, 'progress');
+  if (!valid && discordEnabled) {
     const file = path.join(home, '.claude', 'logs', 'owner-recipient-notice.json');
     const day = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
     // Exclusive creation prevents hourly watch and morning digest racing each other.

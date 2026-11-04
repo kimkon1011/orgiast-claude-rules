@@ -238,3 +238,16 @@ test('期限は残日数順に先頭5件、upsertは表示回数を増やさずc
   assert.equal(await main(['--close-key', 'D-2'], { home, stdout: () => {} }), 0);
   assert.equal(listItems(home, { status: 'open' }).filter(i => i.key === 'D-2').length, 0);
 });
+
+test('未達とgate-reportのinfoは抑止、掃除はsourceも検索しaskを保持', async t => {
+  const home = seat(t);
+  for (const options of [{ text: '別のパソコン（PC）へ送った連絡が届いていません' }, { source: 'gate-report', text: '統計' }]) {
+    assert.equal((await addItem(home, options)).status, 'suppressed');
+  }
+  const legacy = await addItem(home, { text: '旧通知' });
+  writeItem(home, { ...legacy, source: 'gate-report' });
+  await addItem(home, { kind: 'ask', source: 'gate-report', text: '判断が必要' });
+  assert.equal(await main(['--seen-matching', '^gate-report', '--kind', 'info'], { home, stdout() {} }), 0);
+  assert.equal(listItems(home, { status: 'open' }).length, 1);
+  assert.equal(listItems(home, { status: 'open' })[0].kind, 'ask');
+});

@@ -8,7 +8,7 @@ import { isEntry } from './is-entry.mjs';
 import { toPlainJa } from './lib/plain-ja.mjs';
 import { classifyKimDm } from './lib/kim-dm-policy.mjs';
 import { redactSecrets } from './webhook-health.mjs';
-import { addItem } from './kim-inbox.mjs';
+import { addItem, isInboxNoise } from './kim-inbox.mjs';
 import { discordAllowed } from './lib/kim-discord-allowlist.mjs';
 import { annotateAccounts } from './url-account-gate.mjs';
 
@@ -76,6 +76,7 @@ const normalizeFailure = text => String(text).replace(/\d{4}-\d{2}-\d{2}(?:[T ][
 
 // Use the existing next-session TODO consumer; no separate repair queue.
 export async function notifyKim(text, options = {}) {
+  if (isInboxNoise({ ...options, text: String(text ?? '') })) return { delivered: 'suppressed', reason: 'fleet-ledger-or-gate-statistics' };
   if (options.kimActionRequired !== true) {
     const policy = classifyKimDm(text);
     if (!policy.allowed) {
@@ -202,6 +203,7 @@ export async function deliverKim(text, {
   allowHumanRequest = false,
   kind = 'info', source = '', allowlist, repoRoot,
 } = {}) {
+  if (isInboxNoise({ kind, source, text: String(text ?? '') })) return { delivered: 'suppressed', reason: 'fleet-ledger-or-gate-statistics' };
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
     || readTrimmed(path.join(home, '.claude', 'orgiast-discord-user-id.txt'))
     || KIM_DISCORD_USER_ID);

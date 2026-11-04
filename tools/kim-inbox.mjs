@@ -141,7 +141,17 @@ function createNew(home, { kind = 'info', text, source = '', from = resolveFleet
     catch (error) { if (error.code !== 'EEXIST') throw error; }
   }
 }
+export function isInboxNoise({ kind = 'info', source = '', text = '' }) {
+  return kind === 'info' && (source === 'gate-report' || /^gate-report\b/.test(text) || /別のパソコン[^\n]*送った連絡が(?:届いて|読まれて)/.test(text));
+}
+export function seenMatching(home, expression, kind = 'info') {
+  if (kind !== 'info') throw new Error('--seen-matching は info 専用です');
+  const pattern = new RegExp(expression);
+  return listItems(home, { status: 'open' }).filter(i => i.kind === kind && (pattern.test(i.text) || pattern.test(i.source)))
+    .map(i => markSeen(home, i.id));
+}
 export async function addItem(home, options) {
+  if (isInboxNoise(options)) return { id: null, status: 'suppressed', kind: options.kind || 'info' };
   const item = create(home, options);
   if (item.kind === 'deadline' || isKimSeat(home) || item.forwardMailId || ['seen', 'answered', 'dropped'].includes(item.status)) return item;
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-inbox-'));
@@ -240,7 +250,7 @@ export async function ingestFleetMail(home) {
     locked(home, 'ingest', () => {
       if (fs.existsSync(marker)) return;
       // 作成直後に終了しても forwardMailId から再発見し、二重起票を防ぐ。
-      const item = listItems(home).find(i => i.forwardMailId === id) ?? create(home, { kind, text: mail.body, from: mail.from, source: 'fleet-mail', forwardMailId: id });
+      const item = listItems(home).find(i => i.forwardMailId === id) ?? (isInboxNoise({ kind, text: mail.body }) ? { id: 'suppressed', status: 'suppressed' } : create(home, { kind, text: mail.body, from: mail.from, source: 'fleet-mail', forwardMailId: id }));
       fs.mkdirSync(path.dirname(marker), { recursive: true });
       fs.writeFileSync(marker, item.id, { flag: 'wx', mode: 0o600 });
       imported.push(item);
@@ -320,6 +330,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       const item = await addItem(home, { text: fs.readFileSync(value('--body-file'), 'utf8'), kind: args.includes('--kind') ? value('--kind') : 'info', key: args.includes('--key') ? value('--key') : undefined, due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '' });
       stdout(JSON.stringify({ id: item.id, status: item.status, forwarded: item.status === 'forwarded' }));
     } else if (args.includes('--answer')) stdout(JSON.stringify(answerItem(home, value('--answer'), fs.readFileSync(value('--body-file'), 'utf8'), process.env.CLAUDE_SESSION_ID || '')));
+    else if (args.includes('--seen-matching')) stdout(JSON.stringify(seenMatching(home, value('--seen-matching'), args.includes('--kind') ? value('--kind') : 'info')));
     else if (args.includes('--seen')) stdout(JSON.stringify(markSeen(home, value('--seen'))));
     else if (args.includes('--close-key')) stdout(JSON.stringify(closeKey(home, value('--close-key'))));
     else if (args.includes('--drop')) stdout(JSON.stringify(dropItem(home, value('--drop'), args.includes('--reason') ? value('--reason') : '')));

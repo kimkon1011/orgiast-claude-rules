@@ -351,6 +351,7 @@ try {
   if (add(settings.hooks.UserPromptSubmit, 'current-session.mjs', { hooks: [{ type: 'command', command: command('current-session.mjs'), timeout: 5 }] })) added += 1;
   added += migrate(settings.hooks.UserPromptSubmit, 'delegation-gate', 'cost-routing-gate.mjs', command('cost-routing-gate.mjs'));
   if (add(settings.hooks.UserPromptSubmit, 'x-url-route-hint.mjs', { hooks: [{ type: 'command', command: command('x-url-route-hint.mjs'), timeout: 5 }] })) added += 1;
+  if (add(settings.hooks.UserPromptSubmit, 'inquiry-lookup-hint.mjs', { hooks: [{ type: 'command', command: command('inquiry-lookup-hint.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.UserPromptSubmit, 'playbook-inject.mjs', { hooks: [{ type: 'command', command: command('playbook-inject.mjs'), timeout: 5 }] })) added += 1;
   if (add(settings.hooks.UserPromptSubmit, 'cost-routing-gate.mjs', { hooks: [{ type: 'command', command: command('cost-routing-gate.mjs') }] })) added += 1;
   // additionalContext を返すため同期実行。高額モデル・肥大セッションを純ローカルで検知する。
@@ -375,6 +376,7 @@ try {
     if (add(settings.hooks[event], 'fleet-inbox-context.mjs', { hooks: [{ type: 'command', command: command('fleet-inbox-context.mjs'), timeout: 5 }] })) added += 1;
     if (add(settings.hooks[event], 'owner-inbox-hook.mjs', { hooks: [{ type: 'command', command: command('owner-inbox-hook.mjs'), timeout: 10 }] })) added += 1;
     if (add(settings.hooks[event], 'auto-progress-inbox-hook.mjs', { hooks: [{ type: 'command', command: command('auto-progress-inbox-hook.mjs'), timeout: 5 }] })) added += 1;
+    if (add(settings.hooks[event], 'kim-awaiting-context.mjs', { hooks: [{ type: 'command', command: command('kim-awaiting-context.mjs'), timeout: 5 }] })) added += 1;
     if (add(settings.hooks[event], 'daytrip-ask-hook.mjs', { hooks: [{ type: 'command', command: command('daytrip-ask-hook.mjs'), timeout: 5 }] })) added += 1;
     if (resolveFleetLabel(home) === 'kim-PC') {
       if (add(settings.hooks[event], 'fleet-chase-context.mjs', { hooks: [{ type: 'command', command: command('fleet-chase-context.mjs'), timeout: 5 }] })) added += 1;
@@ -455,6 +457,8 @@ try {
   // 既存の全セッションにも同じ規則を当てる（1時間に1回だけ走る）。
   if (add(settings.hooks.SessionStart, 'session-wait-title.mjs', { hooks: [{ type: 'command', command: command('session-wait-title.mjs', ' --all'), timeout: 30 }] })) added += 1;
   if (add(settings.hooks.Stop, 'handoff-detail-guard.mjs', { hooks: [{ type: 'command', command: command('handoff-detail-guard.mjs'), timeout: 10 }] })) added += 1;
+  // §1.5.0.2/§1.5.0.3: runner の5秒を加えて登録時は15秒。
+  if (add(settings.hooks.Stop, 'seat-name-gate.mjs', { hooks: [{ type: 'command', command: command('seat-name-gate.mjs'), timeout: 10 }] })) added += 1;
   // 生URLと日本語・全角文字の直接隣接によるリンク破損を差し戻す。
   if (add(settings.hooks.Stop, 'url-format-guard.mjs', { hooks: [{ type: 'command', command: command('url-format-guard.mjs'), timeout: 8 }] })) added += 1;
   // 完了報告にLayer 1/2・e2e等の検証記載がなければ同期警告する。

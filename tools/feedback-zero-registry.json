@@ -105,6 +105,17 @@
         "repo": "FEEDBACK_F3898056D69F_REPO",
         "appDir": "FEEDBACK_F3898056D69F_APP_DIR"
       }
+    },
+    {
+      "appName": "展示会かぶりチェッカー",
+      "kind": "next",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "EXHIBITION_OVERLAP_REPO",
+        "appDir": "EXHIBITION_OVERLAP_APP_DIR"
+      }
     }
   ]
 }

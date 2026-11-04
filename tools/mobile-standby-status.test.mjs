@@ -5,11 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   isStandby, summarize, listRemoteSessions, planOpenCommand, replenishStandby,
-  localBridgeIds, checkStandby, defaultGoal, main,
+  localBridgeIds, checkStandby, defaultGoal, defaultFreshHours, main,
 } from './mobile-standby-status.mjs';
 
 const HOUR = 3_600_000;
-const standby = (title, extra = {}) => ({ id: `cse_${title}`, status: 'active', connection_status: 'connected', title, ...extra });
+const NOW = Date.parse('2026-11-03T12:58:00Z');
+const standby = (title, extra = {}) => ({ id: `cse_${title}`, status: 'active', connection_status: 'connected', title, created_at: new Date(Date.now() - 1000).toISOString(), ...extra });
 const response = (data, next_cursor) => ({ ok: true, json: async () => ({ data, ...(next_cursor ? { next_cursor } : {}) }) });
 
 function tempHome({ local = [] } = {}) {
@@ -48,7 +49,7 @@ test('keeps only the sessions of this PC when local ids are given', () => {
   // localIds を渡さなければアカウント全体で数える（従来どおり）。
   assert.equal(isStandby(standby('desktop-n429m3v-snug-peacock')), true);
   // サーバー側は cse_、ローカル帳簿は session_ 接頭辞。どちらでも同じ id として突き合わせる。
-  assert.equal(isStandby({ id: 'cse_abc', status: 'active', connection_status: 'connected', title: '011-prancy-dusk' }, { localIds: new Set(['abc']) }), true);
+  assert.equal(isStandby(standby('011-prancy-dusk', { id: 'cse_abc' }), { localIds: new Set(['abc']) }), true);
 });
 
 test('summarize reports the shortfall and titles', () => {
@@ -276,19 +277,19 @@ test('replenish does nothing when the goal is already met, but records the coold
   const result = await replenishStandby({
     home,
     localIds: new Set(['remote-control-a-b', 'remote-control-c-d']),
-    fetchImpl: async () => response([standby('remote-control-a-b'), standby('remote-control-c-d')]),
+    fetchImpl: async () => response(['remote-control-a-b', 'remote-control-c-d'].map(title => standby(title, { created_at: new Date(NOW).toISOString() }))),
     codeCli: 'C:/code.cmd',
     open: async () => { opened += 1; return 1; },
     sleep: async () => {},
     notify: async () => ({ delivered: 'dm' }),
-    now: () => Date.parse('2026-10-18T00:00:00Z'),
+    now: () => NOW,
     stateFile,
   });
   const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
   fs.rmSync(home, { recursive: true, force: true });
   assert.equal(result.action, 'none');
   assert.equal(opened, 0);
-  assert.deepEqual(state, { at: Date.parse('2026-10-18T00:00:00Z'), standby: 2, goal: 2 });
+  assert.deepEqual(state, { at: NOW, standby: 2, goal: 2 });
 });
 
 test('disabled PC never opens standby tabs or fetches remote status for replenishment', async () => {
@@ -297,4 +298,89 @@ test('disabled PC never opens standby tabs or fetches remote status for replenis
   fs.writeFileSync(path.join(home, '.claude', 'mobile-sessions.json'), '{"enabled":false}');
   assert.equal(await openStandbyTabs({ home, count: 3, codeCli: 'code.cmd', spawnProcess() { assert.fail(); } }), 0);
   assert.deepEqual(await replenishStandby({ home, fetchImpl() { assert.fail(); }, open() { assert.fail(); } }), { action: 'skipped', reason: 'disabled' });
+});
+
+
+test('freshness excludes stale, missing, invalid and future creation times; boundary is inclusive', () => {
+  const row = created_at => standby('remote-control-a-b', { created_at });
+  const atAge = age => row(new Date(NOW - age).toISOString());
+  assert.equal(isStandby(atAge(6 * HOUR), { now: NOW }), true);
+  assert.equal(isStandby(atAge(6 * HOUR + 1), { now: NOW }), false);
+  assert.equal(isStandby(atAge(7 * HOUR), { now: NOW, freshHours: 8 }), true);
+  for (const value of [undefined, null, '', 'invalid', 0, new Date(NOW + 1).toISOString()]) {
+    assert.equal(isStandby(row(value), { now: NOW }), false);
+  }
+  const old = ['remote-control-rippling-sparkle', 'remote-control-jolly-bee'].map(title =>
+    standby(title, { created_at: '2026-10-26T10:07:00Z' }));
+  assert.deepEqual(summarize(old, 2, { now: NOW }), { goal: 2, standby: 0, shortfall: 2, titles: [] });
+});
+
+test('freshHours config accepts positive hours and falls back to six for invalid settings', t => {
+  const home = tempHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const file = path.join(home, '.claude', 'mobile-sessions.json');
+  assert.equal(defaultFreshHours(home), 6);
+  for (const value of [0, -1, null, true, [], {}, 'invalid', 'Infinity', '']) {
+    fs.writeFileSync(file, JSON.stringify({ freshHours: value }));
+    assert.equal(defaultFreshHours(home), 6);
+  }
+  for (const value of [0.5, 12, '8']) {
+    fs.writeFileSync(file, JSON.stringify({ freshHours: value }));
+    assert.equal(defaultFreshHours(home), Number(value));
+  }
+  fs.writeFileSync(file, '{broken');
+  assert.equal(defaultFreshHours(home), 6);
+});
+
+test('checkStandby honors home freshness configuration', async t => {
+  const home = tempHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const options = { home, now: NOW, localIds: new Set(['remote-control-a-b']),
+    fetchImpl: async () => response([standby('remote-control-a-b', { created_at: new Date(NOW - 7 * HOUR).toISOString() })]) };
+  assert.equal((await checkStandby(options)).standby, 0);
+  fs.writeFileSync(path.join(home, '.claude', 'mobile-sessions.json'), '{"freshHours":8}');
+  const result = await checkStandby(options);
+  assert.equal(result.standby, 1);
+  assert.equal(result.freshHours, 8);
+});
+
+test('replenishes stale standbys without mutating old, used, renamed or other-PC sessions', async t => {
+  const home = tempHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const stale = { created_at: '2026-10-26T10:07:00Z', last_event_at: '2026-10-26T10:08:00Z',
+    external_metadata: { context_usage: { used_tokens: 0 } } };
+  const sessions = [
+    standby('remote-control-rippling-sparkle', stale),
+    standby('remote-control-jolly-bee', stale),
+    standby('日本語の会話', stale),
+    standby('remote-control-used-tokens', { ...stale, external_metadata: { context_usage: { used_tokens: 42 } } }),
+    standby('remote-control-used-events', { ...stale, last_event_at: '2026-11-03T12:00:00Z' }),
+    standby('remote-control-other-pc', stale),
+  ];
+  const snapshot = structuredClone(sessions);
+  const localIds = new Set(sessions.slice(0, -1).map(s => s.id.slice(4)));
+  let calls = 0;
+  const result = await replenishStandby({ home, localIds, now: () => NOW, codeCli: 'C:/code.cmd',
+    fetchImpl: async (url, options) => {
+      assert.match(url, /\/v1\/code\/sessions\?/);
+      assert.equal(options.method ?? 'GET', 'GET'); // No archive/delete requests, even for stale sessions.
+      calls++;
+      return response(sessions);
+    },
+    open: async ({ count }) => {
+      assert.equal(count, 2);
+      for (const title of ['remote-control-new-one', 'remote-control-new-two']) {
+        const s = standby(title, { created_at: new Date(NOW).toISOString() });
+        localIds.add(s.id.slice(4)); sessions.push(s);
+      }
+      return count;
+    },
+    sleep: async () => {}, spawnProcess: () => assert.fail('must not terminate processes'),
+    notify: async () => assert.fail('replenishment succeeds'),
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.before.standby, 0);
+  assert.equal(result.after.standby, 2);
+  assert.equal(result.action, 'replenished');
+  assert.deepEqual(sessions.slice(0, snapshot.length), snapshot);
 });

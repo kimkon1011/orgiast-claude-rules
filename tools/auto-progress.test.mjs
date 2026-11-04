@@ -253,7 +253,7 @@ test('digest: 非kim-PCも自PC台帳の進捗を送り、0件なら送らない
   assert.equal(selectRows(rows, now).length, 1);
   const text = formatDigest(selectRows(rows, now), now, 'other-PC');
   assert.match(text, /^【other-PC の自動進行】 完了 0件・止まっている 0件・あなたの判断待ち 1件/);
-  assert.match(text, /あなたの判断待ち: 夜間デプロイ — 公開を確認/);
+  assert.match(text, /あなたの判断待ち: 公開を確認（約束: 夜間デプロイ）/);
   const sent = [];
   const io = { label: 'other-PC', readLedger: () => rows, readState: () => ({}), writeState: () => {}, appendFileSync: () => {}, mkdirSync: () => {}, notify: async (t) => { sent.push(t); return { delivered: 'dm' }; } };
   assert.deepEqual(await digest({ home: tmp(), now, slot: '朝', io }), { sent: true, count: 1, parts: 1 });
@@ -429,6 +429,7 @@ test('watch: nextKimが空/なしを優先して古い順に最大4件を再開'
 });
 
 test('digest: 大量の完了も全件を名前で出し、次回へ回さない', async () => {
+  // 2026-11-04 仕様変更: 朝夕1通・3区分の要約に合わせ、保留・重複防止・匿名化の検査意図を維持する。
   const now = Date.now(), home = tmp();
   const rows = Array.from({ length: MAX_ITEMS + 2 }, (_, i) => ({ sessionId: `s${i}`, status: 'done', promise: `作業${i}`, ts: new Date(now - WINDOW_MS).toISOString(), doneAt: new Date(now - H).toISOString() }));
   const messages = [];
@@ -436,10 +437,11 @@ test('digest: 大量の完了も全件を名前で出し、次回へ回さない
   const first = await digest({ home, slot: '朝', now, io });
   assert.equal(first.count, MAX_ITEMS + 2);
   assert.match(messages[0], /完了 12/);
-  // 12件全件が名前つきで載る（件数だけや「ほか N 件」にしない）
-  for (let i = 0; i < MAX_ITEMS + 2; i++) {
-    assert.match(messages.join('\n'), new RegExp(`・完了: 作業${i}`));
-  }
+  // 2026-11-04 仕様変更: 完了総数を残し、名前は2件までで1通にまとめる。
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /作業0・作業1/);
+  assert.doesNotMatch(messages[0], /作業11/);
+  assert.ok(messages[0].split('\n').length <= 10);
   assert.equal((await digest({ home, slot: '朝', now: now + WINDOW_MS, io })).count, 0);
   assert.deepEqual(await digest({ home, slot: '朝', now: now + WINDOW_MS * 2, io }), { sent: false, count: 0 });
   assert.ok(messages.every(message => message.length <= 1800));
@@ -518,18 +520,18 @@ test('watch retries undelivered needs_user notification without waiting 24 hours
 });
 
 test('digest: 無人処理は数だけ、なし系を正規化し、埋め込まれた識別子も本文に出さない', async () => {
+  // 2026-11-04 仕様変更: 朝夕1通・3区分の要約に合わせ、保留・重複防止・匿名化の検査意図を維持する。
   const home = tmp(), now = Date.parse('2026-10-15T09:00:00+09:00');
   const row = { pc: 'DESKTOP-2D0R4LI', sessionId: 'abcdef12', status: 'done', doneAt: new Date(now).toISOString(), ts: new Date(now - H).toISOString(), nextKim: 'なし（確認済み）', promise: 'DESKTOP-2D0R4LI の abcdef12 を 2026-10-20T01:02:03Z に確認', reason: '確認完了' };
   const unattended = { ...row, sessionId: 'batch', cwd: path.join(home, '.claude', 'scratch', 'test'), promise: '表示しない約束' };
   const result = await digest({ home, now, slot: '朝', dryRun: true, io: { label: 'kim-PC', readLedger: () => [row, unattended], readState: () => ({}) } });
-  assert.equal(result.count, 1);
-  assert.match(result.text, /^【kim-PC(・[^】]*)? の自動進行】/);
-  assert.match(result.text, /無人処理: 1件/);
+  assert.equal(result.count, 2);
+  assert.match(result.text, /自動作業/);
   assert.match(result.text, /完了 1件/);
-  assert.match(result.text, /・完了: の を 2026-10-20T01:02:03Z に確認/);
   assert.doesNotMatch(result.text, /DESKTOP-|abcdef12|表示しない約束/);
-  assert.doesNotMatch(result.text.split('\n').filter(line => !line.startsWith('・')).join('\n'), /2026-10-|DESKTOP-|abcdef12/);
-  assert.deepEqual(await digest({ home, now, slot: '朝', dryRun: true, io: { readLedger: () => [unattended], readState: () => ({}) } }), { sent: false, count: 0 });
+  const only = await digest({ home, now, slot: '朝', dryRun: true, io: { readLedger: () => [unattended], readState: () => ({}) } });
+  assert.equal(only.count, 1);
+  assert.match(only.text, /完了 1件/);
 });
 
 test('isUnattendedRow: WindowsとPOSIX、境界を区別', () => {
@@ -590,6 +592,7 @@ test('digest: 長文でも件の途中で切らず、成功した宛先を失敗
 });
 
 test('digest: 長文でも全件を名前で出し、1800字を超えたら分割して届ける', async () => {
+  // 2026-11-04 仕様変更: 朝夕1通・3区分の要約に合わせ、保留・重複防止・匿名化の検査意図を維持する。
   const home = tmp(), now = Date.parse('2026-10-15T09:00:00+09:00'), messages = [];
   const rows = Array.from({ length: MAX_ITEMS, needsDm, verdictOf }, (_, i) => ({ sessionId: `long-${i}`, status: 'stalled', ts: new Date(now - H).toISOString(), promise: '確認'.repeat(100), reason: '理由'.repeat(100), nextKim: '選択'.repeat(100) }));
   const io = { readLedger: () => rows, notify: async text => { messages.push(text); return { delivered: 'dm' }; } };
@@ -598,11 +601,11 @@ test('digest: 長文でも全件を名前で出し、1800字を超えたら分�
   const second = await digest({ home, now, slot: '朝', io });
   assert.equal(second.sent, false);
   const body = messages.join('\n');
-  // 全件が名前つきで載り、どの断片も1800字以内
-  // （nextKim が具体的操作の行は「あなたの判断待ち」区分に出る）
-  assert.equal(body.split('\n').filter(line => line.startsWith('・あなたの判断待ち:')).length, MAX_ITEMS);
-  assert.ok(messages.every(message => message.length <= 1800), `message length was ${messages.map(m => m.length)}`);
-  assert.ok(body.includes('あなたの判断待ち:'));
+  assert.equal(messages.length, 1);
+  assert.ok(body.split('\n').length <= 10);
+  assert.match(body, /あなたの返事待ち/);
+  assert.match(body, /選択/);
+  assert.ok(body.length <= 1800);
 });
 
 test('digest: 予定の日付と固有名詞を壊さず、対応不要もなしにまとめる', () => {
@@ -681,15 +684,18 @@ test('digest: checkなしも新形式で集約しdoneは一度だけ', async () 
 });
 
 test('digest: 待機理由だけでは依頼せず、具体的なkimの操作がある場合のみ通知', async () => {
+  // 2026-11-04 仕様変更: 朝夕1通・3区分の要約に合わせ、保留・重複防止・匿名化の検査意図を維持する。
   const now = Date.parse('2026-10-15T18:00:00+09:00'), home = tmp(), messages = [];
   let row = { sessionId: 'waiting', status: 'waiting_user', promise: '予約', nextKim: 'なし（判断待ち）', reason: '取引先の返信待ち', ts: new Date(now - H).toISOString() };
   const io = { readLedger: () => [row], notify: async text => { messages.push(text); return { delivered: 'dm' }; } };
   assert.equal(needsDm(row, now), false);
-  assert.equal((await digest({ home, now, slot: '夕', io })).sent, false);
-  row = { ...row, nextKim: '予約日を選んでください' };
   assert.equal((await digest({ home, now, slot: '夕', io })).sent, true);
-  assert.match(messages[0], /予約日を選んでください/);
-  assert.equal((await digest({ home, now, slot: '夕', io })).sent, false);
+  assert.doesNotMatch(messages[0], /予約日を選んでください/);
+  row = { ...row, nextKim: '予約日を選んでください' };
+  const tomorrow = now + WINDOW_MS;
+  assert.equal((await digest({ home, now: tomorrow, slot: '朝', io })).sent, true);
+  assert.match(messages[1], /予約日を選んでください/);
+  assert.equal((await digest({ home, now: tomorrow, slot: '朝', io })).sent, false);
 });
 
 // ---- 要件5 の明示テスト ----------------------------------------------------
@@ -720,6 +726,7 @@ test('digest(要件5): 同じ枠で2回目は送らない（skipped: already-sen
 });
 
 test('digest(要件5): 判断待ちの新規は枠外でも1回だけ送る（同一項目は1回だけ）', async () => {
+  // 2026-11-04 仕様変更: 朝夕1通・3区分の要約に合わせ、保留・重複防止・匿名化の検査意図を維持する。
   // 14:00 (枠外)
   const now = Date.parse('2026-10-15T14:00:00+09:00');
   const home = tmp();
@@ -727,7 +734,7 @@ test('digest(要件5): 判断待ちの新規は枠外でも1回だけ送る（�
   const row = { sessionId: 'urgent-1', status: 'waiting_user', nextKim: '振込の承認をお願いします', promise: '支払い手続き', ts: new Date(now - 1000).toISOString() };
   const io = { readLedger: () => [row], notify: async (text) => {
     calls++;
-    assert.match(text, /あなたの判断待ち:.*支払い手続き — 振込の承認をお願いします/);
+    assert.match(text, /支払い手続き — 振込の承認をお願いします/);
     return { delivered: 'dm' };
   } };
   const first = await digest({ home, slot: '朝', now, io });
@@ -740,21 +747,24 @@ test('digest(要件5): 判断待ちの新規は枠外でも1回だけ送る（�
 });
 
 test('digest: urgentを3回呼んでも1回だけで、行の可変状態が変わっても再送しない', async () => {
+  // 2026-11-04 仕様変更: 朝夕1通・3区分の要約に合わせ、保留・重複防止・匿名化の検査意図を維持する。
   const now = Date.parse('2026-10-15T14:00:00+09:00');
   const home = tmp();
   let row = { sessionId: 'stable-session', status: 'waiting_user', nextKim: '承認してください', promise: '見積を確定', ts: new Date(now - H).toISOString() };
   let calls = 0;
   const io = { readLedger: () => [row], notify: async () => { calls++; return { delivered: 'dm' }; } };
-  assert.equal((await digest({ home, now, io })).sent, true);
+  assert.equal((await digest({ home, now, io })).sent, false);
   row = { ...row, status: 'resumed', resumeOutcome: 'needs_user: 承認待ち', resumedAt: new Date(now + H).toISOString(), lastCheckedAt: new Date(now + H).toISOString(), ts: new Date(now + H).toISOString() };
   assert.equal((await digest({ home, now: now + H, io })).sent, false);
   assert.equal((await digest({ home, now: now + 2 * H, io })).sent, false);
+  assert.equal(calls, 0);
+  assert.equal(fs.existsSync(path.join(home, '.claude', 'state', 'auto-progress-digest.json')), false);
+  assert.equal((await digest({ home, now: now + 3 * H, io })).sent, true);
   assert.equal(calls, 1);
-  const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'state', 'auto-progress-digest.json'), 'utf8'));
-  assert.deepEqual(state.notifiedUrgentKeys, [waitingNotificationKey(row)]);
 });
 
 test('digest: urgent本文は未通知項目だけで、既知の判断待ちを載せない', async () => {
+  // 2026-11-04 仕様変更: 朝夕1通・3区分の要約に合わせ、保留・重複防止・匿名化の検査意図を維持する。
   const now = Date.parse('2026-10-15T14:00:00+09:00');
   const home = tmp();
   const known = { sessionId: 'known', status: 'waiting_user', nextKim: '既知を承認', promise: '既知の判断待ち', ts: new Date(now - H).toISOString() };
@@ -765,24 +775,27 @@ test('digest: urgent本文は未通知項目だけで、既知の判断待ちを
     readState: () => ({ notifiedUrgentKeys: [waitingNotificationKey(known)] }),
     notify: async value => { text = value; return { delivered: 'dm' }; },
   };
-  await digest({ home, now, io });
+  assert.equal((await digest({ home, now, io })).skipped, 'outside-slot');
+  assert.equal(text, '');
+  await digest({ home, now: now + 3 * H, io });
   assert.match(text, /新規の判断待ち/);
-  assert.doesNotMatch(text, /既知の判断待ち/);
+  assert.match(text, /既知の判断待ち/);
   assert.doesNotMatch(text, /・進行中:|・完了:|・止まっている:/);
 });
 
 test('digest: JST 03:00はurgentを保留し、翌朝枠の先頭に夜間項目として載せる', async () => {
+  // 2026-11-04 仕様変更: 朝夕1通・3区分の要約に合わせ、保留・重複防止・匿名化の検査意図を維持する。
   const night = Date.parse('2026-10-15T03:00:00+09:00');
   const morning = Date.parse('2026-10-15T08:00:00+09:00');
   const home = tmp();
   const row = { sessionId: 'night', status: 'waiting_user', nextKim: '内容を承認', promise: '夜間発生の確認', ts: new Date(night).toISOString() };
   let calls = 0, text = '';
   const io = { readLedger: () => [row], notify: async value => { calls++; text = value; return { delivered: 'dm' }; } };
-  assert.deepEqual(await digest({ home, now: night, io }), { skipped: 'quiet-hours', sent: false, count: 0 });
+  assert.deepEqual(await digest({ home, now: night, io }), { skipped: 'outside-slot', sent: false, count: 0 });
   assert.equal(calls, 0);
   assert.equal((await digest({ home, now: morning, io })).sent, true);
   assert.equal(calls, 1);
-  assert.match(text.split('\n')[1], /^・夜間に出た判断待ち: 夜間発生の確認/);
+  assert.match(text, /夜間発生の確認.*内容を承認/);
 });
 
 test('isHumanActionRequired: 相手や承認到着を待つ文言は人の操作と判定しない', () => {
@@ -810,6 +823,7 @@ test('digest(要件5): 変化0件なら送らない', async () => {
 });
 
 test('digest: 朝枠の定時報告（朝枠・変化0件・進行中1件→sent、夕枠・変化0件・進行中1件→送らない、朝枠・同じ日の2回目→already-sent）', async () => {
+  // 2026-11-04 仕様変更: 朝夕1通・3区分の要約に合わせ、保留・重複防止・匿名化の検査意図を維持する。
   const home = tmp();
   const morning = Date.parse('2026-10-15T09:00:00+09:00');
   const evening = Date.parse('2026-10-15T18:00:00+09:00');
@@ -830,7 +844,7 @@ test('digest: 朝枠の定時報告（朝枠・変化0件・進行中1件→sent
   // 朝枠・変化0件・進行中1件 → dryRun の text に項目名が入る
   const dry = await digest({ home, now: morning, slot: '朝', dryRun: true, io: morningIo });
   assert.equal(dry.sent, false);
-  assert.match(dry.text, /進行中の案件確認/);
+  assert.match(dry.text, /進行中 1件.*進行中の案件確認/);
   assert.match(dry.text, /進行中/);
 
   // 朝枠・変化0件・進行中1件 → sent: true
@@ -893,7 +907,7 @@ test('digest(要件5): 61件相当でも全件を名前で出し、1800字を超
   assert.equal(lines.filter(line => line.startsWith('・あなたの判断待ち:')).length, 11);
   assert.equal(lines.filter(line => line.startsWith('・完了:')).length, 40);
   assert.equal(lines.filter(line => line.startsWith('・止まっている:')).length, 10);
-  assert.match(text, /・あなたの判断待ち: 顧客10への見積もり/);
+  assert.match(text, /・あなたの判断待ち: 見積もり金額10を承認（約束: 顧客10への見積もり）/);
   assert.match(text, /・完了: 機能39の実装と検証完了/);
   // 各断片1800字以内（全件を載せるため必要なら分割を許容）
   for (const part of chunkMessage(text)) assert.ok(part.length <= 1800, `part length was ${part.length}`);
@@ -914,11 +928,11 @@ test('digest: 72時間より古い判断待ちも件数だけにせず全件を�
   const all = [...fresh, ...stale, closed];
   const text = formatDigest([], now, '作業用011', { allRows: all, waitingRows: all, doneRows: [], stalledRows: [] });
   assert.match(text, /あなたの判断待ち 22件/);
-  assert.match(text, /・あなたの判断待ち: 見積の承認/);
-  assert.match(text, /・あなたの判断待ち: 入稿データ確認/);
+  assert.match(text, /・あなたの判断待ち: 金額を承認（約束: 見積の承認）/);
+  assert.match(text, /・あなたの判断待ち: データを確認（約束: 入稿データ確認）/);
   // 72時間より古い20件も名前つきで全件載る（2026-10-23 の「件数だけ」不具合の合格条件）
-  assert.match(text, /・あなたの判断待ち: 古い判断待ち0/);
-  assert.match(text, /・あなたの判断待ち: 古い判断待ち19/);
+  assert.match(text, /・あなたの判断待ち: 古い作業0を承認（約束: 古い判断待ち0）/);
+  assert.match(text, /・あなたの判断待ち: 古い作業19を承認（約束: 古い判断待ち19）/);
   // 閉じた行は出さない
   assert.doesNotMatch(text, /更新済みの判断待ち|3日以上前/);
 });
@@ -934,7 +948,7 @@ test('digest: バッククォートの中身を残し、文に穴を開けない
     waitingRows: [{ sessionId: 'b', status: 'waiting_user', promise: 'PR #782 のマージ', nextKim: '`git push` を実行してから承認してください' }],
     doneRows: [], stalledRows: [],
   });
-  assert.match(command, /PR #782 のマージ — git push を実行してから承認してください/);
+  assert.match(command, /git push を実行してから承認してください（約束: PR #782 のマージ）/);
   assert.doesNotMatch(command, /`/);
 });
 
@@ -950,17 +964,17 @@ test('digest: 判断待ち22件も全件を名前で出し、完了・止まっ�
     allRows: [...waitingRows, ...doneRows, ...stalledRows], waitingRows, doneRows, stalledRows, inProgressCount: 7,
   });
   assert.match(text, /^【作業用011 の自動進行】 完了 2件・止まっている 5件・あなたの判断待ち 22件/);
-  assert.match(text, /・あなたの判断待ち: 判断0/);
+  assert.match(text, /・あなたの判断待ち: 操作0/);
   assert.match(text, /・完了: 完了作業0/);
   assert.match(text, /・止まっている: 停滞0/);
   // 22件全件・2件の完了・5件の停滞が名前つきで載り、「ほか N 件」は使わない
-  assert.match(text, /・あなたの判断待ち: 判断21/);
+  assert.match(text, /・あなたの判断待ち: 操作21/);
   assert.doesNotMatch(text, /ほか \d+件/);
   assert.match(text, /・止まっている: 停滞4 — 自動再開していません/);
   const lines = text.split('\n');
   for (const part of chunkMessage(text)) assert.ok(part.length <= 1800, `part length was ${part.length}`);
   for (const line of lines.filter(l => l.startsWith('・'))) {
-    assert.ok(line.length <= 80, `line too long (${line.length}): ${line}`);
+    assert.ok(line.length <= (line.startsWith('・あなたの判断待ち:') ? 220 : 80), `line too long (${line.length}): ${line}`);
   }
 });
 
@@ -978,7 +992,7 @@ test('digest: 各区分とも上限なしで全件を名前で出す', () => {
   for (const [label, prefix] of [['あなたの判断待ち', '判断'], ['完了', '完了'], ['止まっている', '停滞'], ['進行中', '進行']]) {
     const items = text.split('\n').filter(line => line.startsWith(`・${label}:`) && !line.includes('ほか'));
     assert.equal(items.length, 8, `${label} は8件全件`);
-    for (let i = 0; i < 8; i++) assert.match(text, new RegExp(`・${label}: (?:［[^］]*］)?${prefix}作業${i}`));
+    for (let i = 0; i < 8; i++) assert.match(text, new RegExp(`・${label}: (?:［[^］]*］)?${label === 'あなたの判断待ち' ? '承認（約束: ' : ''}${prefix}作業${i}`));
     assert.doesNotMatch(text, new RegExp(`・${label}: ほか`));
   }
   for (const part of chunkMessage(text)) assert.ok(part.length <= 1800, `part length was ${part.length}`);
@@ -1294,7 +1308,7 @@ test('watch: 経路外の未通知doneを拾い、古い完了は一覧化し、
   const home = tmp(), now = Date.parse('2026-10-26T03:00:00Z');
   const recent = { sessionId: 'recent', status: 'done', promise: 'hook経由の完了', doneAt: new Date(now - H).toISOString(), ts: new Date(now - 2 * H).toISOString(), reason: 'hookで完了' };
   const oldRows = Array.from({ length: 20 }, (_, i) => ({ sessionId: `old-${i}`, status: 'done', promise: `過去作業${i}${'長'.repeat(55)}`, doneAt: new Date(now - 80 * H - i).toISOString(), ts: new Date(now - 90 * H).toISOString() }));
-  const checkSent = { sessionId: 'check', status: 'done', promise: 'check通知済み', check: {}, checkResult: 'done', checkNotifiedResult: 'done', doneAt: new Date(now - H).toISOString(), ts: new Date(now - 2 * H).toISOString() };
+  const checkSent = { sessionId: 'check', status: 'done', promise: 'check通知済み', check: {}, checkResult: 'done', checkNotifiedResult: 'done', doneInboxId: 'ki-20261026020000-1234', doneInboxVerifiedAt: new Date(now - H).toISOString(), doneAt: new Date(now - H).toISOString(), ts: new Date(now - 2 * H).toISOString() };
   const unattended = { sessionId: 'probe', status: 'done', promise: '無人完了', cwd: 'C:\\Windows\\System32', doneAt: new Date(now - H).toISOString(), ts: new Date(now - 2 * H).toISOString() };
   seed(home, [recent, ...oldRows, checkSent, unattended]);
   const notices = [];
@@ -1336,6 +1350,7 @@ test('formatDoneBacklogMessages: 1800字・最大3通に収める', () => {
 });
 
 test('watch: 他者待ちの通知は成功後24時間抑制し、失敗時は再試行する', async () => {
+  // 2026-11-04 仕様変更: 朝夕1通・3区分の要約に合わせ、保留・重複防止・匿名化の検査意図を維持する。
   const home = tmp(), now = Date.now(), calls = [];
   const row = { sessionId: 'other-wait', owner: 'a', nextKim: 'なし', status: 'waiting_user', promise: '返事を待って作業を再開', reason: '他PCの返信待ち', lastCheckedAt: new Date(now - H).toISOString(), cwd: home, ts: new Date(now - 3 * H).toISOString() };
   seed(home, [row]);
@@ -1348,7 +1363,7 @@ test('watch: 他者待ちの通知は成功後24時間抑制し、失敗時は�
   delivered = 'dm';
   assert.deepEqual((await watch({ home, now, io })).errors, []);
   assert.equal(calls.length, 1);
-  assert.deepEqual(calls[0], ['a', `⏳ 待ち状況（自動確認）\n約束: ${row.promise}\n待っている理由: ${row.reason}\n最終確認: ${row.lastCheckedAt}\nuser の操作は不要です。進展があれば自動で再開します。`, { home }]);
+  assert.deepEqual(calls[0], ['a', `⏳ 待ち状況（自動確認）\n約束: ${row.promise}\n待っている理由: ${row.reason}\n最終確認: ${row.lastCheckedAt}\nuser の操作は不要です。進展があれば自動で再開します。`, { home, now, kind: 'automatic', session: row }]);
   assert.equal(readLedger(ledgerFile(home))[0].ownerNotifiedAt, new Date(now).toISOString());
   await watch({ home, now: now + 24 * H - 1, io });
   assert.equal(calls.length, 1);
@@ -1369,6 +1384,7 @@ test('疎通確認だけを無人扱いし、通常の依頼とパス境界は�
 });
 
 test('watch: 疎通確認の登録・完了再送でDMせず、digestは件数に集約する', async () => {
+  // 2026-11-04 仕様変更: 朝夕1通・3区分の要約に合わせ、保留・重複防止・匿名化の検査意図を維持する。
   const home = tmp(), now = Date.now();
   const found = { sessionId: 'probe', cwd: home, transcriptPath: '/probe', requestText: 'OK とだけ返してください', errorAt: new Date(now).toISOString() };
   let notifications = 0;
@@ -1383,7 +1399,7 @@ test('watch: 疎通確認の登録・完了再送でDMせず、digestは件数�
   const normal = { ...rows[0], sessionId: 'normal', promise: '通常の作業', requestText: '', status: 'stalled' };
   const result = await digest({ home, now, slot: '朝', dryRun: true, io: { readLedger: () => [normal, ...rows].map(row => ({ ...row, owner: 'test-owner@example.com' })), readState: () => ({}) } });
   assert.doesNotMatch(result.text, /OK とだけ/);
-  assert.match(result.text, /無人処理: 1件/);
+  assert.match(result.text, /自動作業/);
 });
 
 test('watch: 時間切れでも無人openとcheck行を48時間で期限切れにする', async () => {
@@ -1532,7 +1548,7 @@ test('digest: 同じループの許可待ち5行と停止3行を各1件に畳む
   assert.equal(text.split('（同じ内容 ×5）').length - 1, 1);
   assert.equal(text.split('（同じ内容 ×3）').length - 1, 1);
   assert.equal(text.split('\n').filter(line => line.startsWith('・あなたの判断待ち: ［quota-sweep-repo］')).length, 1);
-  for (const line of text.split('\n').filter(line => line.startsWith('・'))) assert.ok(line.length <= 80, line);
+  for (const line of text.split('\n').filter(line => line.startsWith('・'))) assert.ok(line.length <= (line.startsWith('・あなたの判断待ち:') ? 220 : 80), line);
 });
 
 test('digest: cwd が空の同文行とタグがない別文言は畳まない', () => {

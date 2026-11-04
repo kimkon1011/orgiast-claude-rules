@@ -287,6 +287,7 @@ test('setup integration emits exactly one runtime result, skips verify and custo
     'lib/playbook-distribution.mjs': 'export const distributePlaybooks = () => 0;',
     'lib/fleet-label.mjs': 'export const resolveFleetLabel = () => "test";',
     'register-fleet-mail.mjs': 'export const fleetHubNeedsConfiguration = () => false;',
+	    'setup-nightly-reload.mjs': 'export const convergeNightlyReload = () => ({status: "OK", checked: true, repaired: false, description: "VS Code night restart"});',
     'allow-rules.mjs': 'export const convergeAllowRules = () => false;',
     'mobile-standby.mjs': 'export const convergeMobileStandby = () => ({ok: true, lines: []});',
     'register-hooks.mjs': '',

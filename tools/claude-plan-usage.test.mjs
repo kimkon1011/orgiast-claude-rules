@@ -1,6 +1,24 @@
 import test from 'node:test'; import assert from 'node:assert/strict'; import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
-import { fetchClaudePlanUsage, formatClaudePlanUsage } from './claude-plan-usage.mjs';
+import { fetchClaudePlanUsage, formatClaudePlanUsage, parseRetryAfter } from './claude-plan-usage.mjs';
 function home(t) { const h = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-')); t.after(() => fs.rmSync(h, { recursive: true, force: true })); fs.mkdirSync(path.join(h, '.claude')); fs.writeFileSync(path.join(h, '.claude', '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'secret' } })); return h; }
+test('parseRetryAfter parses numeric seconds and HTTP dates', () => {
+  assert.equal(parseRetryAfter('120'), 120);
+  assert.equal(parseRetryAfter(null), null);
+  const now = 100000;
+  const futureDate = new Date(now + 60000).toUTCString();
+  assert.equal(parseRetryAfter(futureDate, now), 60);
+});
+test('plan usage 429 parses retry-after header', async (t) => {
+  const res = await fetchClaudePlanUsage({
+    home: home(t),
+    fetchImpl: async () => ({
+      ok: false,
+      status: 429,
+      headers: new Map([['retry-after', '120']]),
+    }),
+  });
+  assert.deepEqual(res, { available: false, reason: 'HTTP 429', retryAfterSeconds: 120 });
+});
 test('plan usage parses utilization', async (t) => assert.deepEqual(await fetchClaudePlanUsage({ home: home(t), fetchImpl: async () => ({ ok: true, json: async () => ({ five_hour: { utilization: 25, resets_at: 'a' }, seven_day: { utilization: 80, resets_at: 'b' } }) }) }), { available: true, fiveHour: { utilization: 25, resetsAt: 'a' }, sevenDay: { utilization: 80, resetsAt: 'b' }, scoped: [] }));
 test('plan usage parses and formats scoped weekly limit', async (t) => {
   const result = await fetchClaudePlanUsage({ home: home(t), fetchImpl: async () => ({ ok: true, json: async () => ({ five_hour: { utilization: 10 }, seven_day: { utilization: 15 }, limits: [{ kind: 'weekly_scoped', percent: 26, resets_at: 'c', is_active: true, scope: { model: { id: 'claude-fable', display_name: 'Fable' } } }] }) }) });

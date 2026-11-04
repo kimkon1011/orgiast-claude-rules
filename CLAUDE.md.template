@@ -73,6 +73,8 @@ kim が読む Doc は `tools/gdoc-publish.mjs --authuser <開く人のメール>
 
 事故・手戻り・user に発見された不具合は、その場の修正に加え ①原因を型で言語化 ②同型を横断検索して一緒に直す ③機械ゲートで再発を止める（文書だけは不可）④全PC配布は converge ⑤カタログに1行追記。完了報告に「型／横展開した箇所数／追加したゲート」を書く。全PC・全アカウントの変更は converge のみ。fleet-mail は相談・状態照会用で変更依頼に使わない。全PC反映の報告は fleet-status の実データで出し、未ビーコンは「未確認」。
 
+状態が変わらない定期報告は『変化なし』の1行だけ。確認事項・本文・手順・別件一覧を毎回再掲しない（2026-11-03 nishi・全PC）
+
 ## トークン効率
 
 - **出力は Caveman**: 前置きなし、完了報告 1〜3 行（output-styles/caveman.md）
@@ -94,3 +96,5 @@ Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM などの�
 安いAIの利用状況（PC×Claudeアカウント×AI×契約アカウント）は台帳の「PCログイン」「クラウド契約」タブが正本で、`fleet-sheet-report` が全PCから自動記録する。鍵を新しく入れた／差し替えたら `config/ai-key-owners.json` に末尾4文字→契約アカウントを1行足す（kim 2026-10-30 指示・全PC全アカウント）。
 
 案件の引き継ぎ: kim 操作アカウントの案件作業は case-sessions に自動保存。別席では `/case-resume <案件ID/案件名>`（初回6KB以内）、明示紐付けは `/case <案件ID>`。全文は必要箇所だけ同期して Grep。閉じる前に case-handoff.mjs flush で STATE 更新を確認。
+
+PR は作った席が自分で着地させる。kim 操作席は `node tools/pr-land.mjs --title "<題>" --body-file <本文>` で base に push、通常変更は automerge ラベル、安全弁パスは CI 合格後に pr-merge の検証を通して自分でマージする。workflow 変更は停止する。権限・鍵・マージを kim-PC に頼まず、不足時は `node tools/access-doctor.mjs --fix`。

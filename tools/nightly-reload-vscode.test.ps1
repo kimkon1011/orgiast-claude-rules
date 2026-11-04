@@ -109,3 +109,12 @@ try {
 } finally {
     Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+$now = [datetime]'2026-11-04T05:00:00'
+Assert (-not (Get-RestartPolicy @() $now).Overdue) 'unknown process age does not force restart'
+Assert (-not (Get-RestartPolicy @($now.AddHours(-72).AddSeconds(1)) $now).Overdue) 'before 72h respects busy'
+Assert ((Get-RestartPolicy @($now.AddHours(-72)) $now).Overdue) '72h boundary bypasses busy'
+Assert ((Get-RestartPolicy @($now.AddDays(-11), $now.AddHours(-1)) $now).Overdue) 'old main process survives new child process'
+Assert (-not (Get-RestartPolicy @($now.AddMinutes(-20)) $now).Due) 'later nightly trigger does not restart again'
+Assert ((Get-RestartPolicy @($now.AddDays(-1)) $now).Due) 'daily restart independent of extension updates'
+Write-Output 'PASS: restart age policy (6 cases)'

@@ -13,6 +13,8 @@ function fixture({ view = {}, checks, readback, failAt } = {}) {
     '', readback ?? { state: 'MERGED', mergedAt: '2026-09-17T00:00:00Z' },
   ];
   return { calls, exec(file, args, options) {
+    if (args[0] === 'repo') return JSON.stringify({ nameWithOwner: 'owner/repo' });
+    if (args.includes('--slurp')) return JSON.stringify([[{ filename: 'tools/example.mjs' }]]);
     calls.push({ file, args, options });
     if (calls.length === failAt) throw new Error('gh failed');
     return JSON.stringify(answers[calls.length - 1]);
@@ -60,6 +62,8 @@ function restFixture({ error, deleteFails = false, restResult = { merged: true }
   const base = fixture({ view: { headRefName: 'fix/rest-fallback' }, readback });
   const calls = [];
   return { calls, exec(file, args, options) {
+    if (args[0] === 'repo') return JSON.stringify({ nameWithOwner: 'owner/repo' });
+    if (args.includes('--slurp')) return JSON.stringify([[{ filename: 'tools/example.mjs' }]]);
     calls.push({ file, args, options });
     if (args[0] === 'pr' && args[1] === 'merge') throw error;
     if (args[0] === 'repo') return JSON.stringify({ nameWithOwner: 'owner/repo' });
@@ -81,10 +85,9 @@ test('GraphQL権限エラーのみRESTで同じSHAをマージしread-backする
         : "GraphQL: does not have the correct permissions to execute 'MergePullRequest'";
       const f = restFixture({ error });
       assert.equal(mergePr({ pr: 123, repo: process.cwd(), method }, f).state, 'MERGED');
-      assert.deepEqual(f.calls[3].args, ['repo', 'view', '--json', 'nameWithOwner']);
-      assert.deepEqual(f.calls[4].args, ['api', '-X', 'PUT', 'repos/owner/repo/pulls/123/merge', '-f', `merge_method=${method}`, '-f', `sha=${'a'.repeat(40)}`]);
-      assert.deepEqual(f.calls[5].args, ['api', '-X', 'DELETE', 'repos/owner/repo/git/refs/heads/fix%2Frest-fallback']);
-      assert.equal(f.calls[6].args.at(-1), 'state,mergedAt');
+      assert.deepEqual(f.calls[3].args, ['api', '-X', 'PUT', 'repos/owner/repo/pulls/123/merge', '-f', `merge_method=${method}`, '-f', `sha=${'a'.repeat(40)}`]);
+      assert.deepEqual(f.calls[4].args, ['api', '-X', 'DELETE', 'repos/owner/repo/git/refs/heads/fix%2Frest-fallback']);
+      assert.equal(f.calls[5].args.at(-1), 'state,mergedAt');
       assert(f.calls.every(call => call.options.cwd === process.cwd() && !call.options.shell));
       assert.match(f.calls[0].args.at(-1), /headRefName/);
     }
@@ -114,4 +117,14 @@ test('別エラーはそのままthrowし、正常系ではRESTを呼ばない',
   const normal = fixture();
   mergePr({ pr: 1 }, normal);
   assert(!normal.calls.some(call => ['api', 'repo'].includes(call.args[0])));
+});
+
+test('全ページのworkflow変更とパス取得失敗はマージを停止', () => {
+  for (const response of [JSON.stringify([[{ filename: 'tools/a.mjs' }], [{ filename: '.github/workflows/x.yml' }]]),
+    JSON.stringify([[{ filename: 'docs/old-workflow.yml', previous_filename: '.github/workflows/x.yml' }]]), '{}']) {
+    const f = fixture();
+    const exec = (file, args, options) => args.includes('--slurp') ? response : f.exec(file, args, options);
+    assert.throws(() => mergePr({ pr: 1 }, { exec }), /停止|確認できません/);
+    assert(!f.calls.some(c => c.args[1] === 'merge'));
+  }
 });

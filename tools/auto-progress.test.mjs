@@ -1304,7 +1304,7 @@ test('watch: 完了DMの送信に失敗した行は次の巡回で再送し、�
   await watch({ home, now: now + 2 * H, io: noEvidenceIo({ resume: () => assert.fail('must not resume'), notifyOwner: () => assert.fail('must not notify') }) });
 });
 
-test('watch: 経路外の未通知doneを拾い、古い完了は一覧化し、通知済みcheckとunattendedを除外する', async () => {
+test('watch: 経路外の未通知doneを拾い、古い完了は一覧化し、配信証拠のない旧checkも救済する', async () => {
   const home = tmp(), now = Date.parse('2026-10-26T03:00:00Z');
   const recent = { sessionId: 'recent', status: 'done', promise: 'hook経由の完了', doneAt: new Date(now - H).toISOString(), ts: new Date(now - 2 * H).toISOString(), reason: 'hookで完了' };
   const oldRows = Array.from({ length: 20 }, (_, i) => ({ sessionId: `old-${i}`, status: 'done', promise: `過去作業${i}${'長'.repeat(55)}`, doneAt: new Date(now - 80 * H - i).toISOString(), ts: new Date(now - 90 * H).toISOString() }));
@@ -1324,7 +1324,7 @@ test('watch: 経路外の未通知doneを拾い、古い完了は一覧化し、
   const rows = readLedger(ledgerFile(home));
   assert.ok(rows.find(row => row.sessionId === 'recent').doneNotifiedAt);
   assert.equal(rows.find(row => row.sessionId === 'old-0').doneNotifyMode, 'backlog');
-  assert.equal(rows.find(row => row.sessionId === 'check').doneNotifiedAt, undefined);
+  assert.ok(rows.find(row => row.sessionId === 'check').doneNotifiedAt);
   assert.equal(rows.find(row => row.sessionId === 'probe').doneNotifiedAt, undefined);
 });
 

@@ -39,7 +39,8 @@ test('watch: before deadline stays open; overdue queues once and retries DM; rec
   assert.equal(fs.readFileSync(path.join(home, '.claude', 'next-session.md'), 'utf8').match(/- \[ \]/g).length, 1);
   code = 0;
   await watch({ home, now: later, io }); await watch({ home, now: later, io });
-  assert.equal(deliveries, 3);
+  // 達成通知は Discord/notifyOwner ではなく kim-inbox へ直接積む。
+  assert.equal(deliveries, 2);
   const row = readLedger(ledgerFile(home))[0];
   assert.equal(readLedger(ledgerFile(home))[0].status, 'done'); assert.equal(row.checkText, '確認結果');
   assert.equal((await digest({ home, now: later, io: { notify: () => assert.fail('duplicate digest') } })).sent, false);
@@ -82,9 +83,11 @@ test('watch: before deadline stays open; overdue queues once and retries DM; rec
   assert.equal(messages.length, 3);
   assert.match(messages[2], /期限切れ（/);
   });
-  test('watch: failed completion delivery retries without running check again; dry run has no side effects', async () => {
-  const home = tmp(); register(home); let checks = 0, sends = 0;
-  const io = { ...baseIo, executeCheck: () => { checks++; return { code: 0, text: '完了' }; }, notifyOwner: async () => ({ delivered: ++sends === 1 ? 'none' : 'dm' }) };
+test('watch: failed kim-inbox completion delivery retries without running check again; dry run has no side effects', async () => {
+  const home = tmp(); register(home); let checks = 0, sends = 0; const items = [];
+  const io = { ...baseIo, executeCheck: () => { checks++; return { code: 0, text: '完了' }; },
+    addKimInboxItem: async (_home, options) => { const item = { id: `ki-${++sends}`, ...options }; if (sends > 1) items.push(item); return item; },
+    listKimInboxItems: () => items };
   const before = fs.readFileSync(ledgerFile(home), 'utf8');
   await watch({ home, now, dryRun: true, io });
   assert.equal(checks, 0); assert.equal(fs.readFileSync(ledgerFile(home), 'utf8'), before);
@@ -224,14 +227,34 @@ for (const { code, allowMet, accepted } of [
   });
 }
 
-test('check completion accepts durable inbox delivery and does not retry', async () => {
+test('check completion writes kim-inbox even without Discord and does not retry after read-back', async () => {
  const home = tmp(); register(home);
- let calls = 0;
- const io = { ...baseIo, executeCheck: () => ({ code: 0, text: '完了' }), notifyOwner: async () => { calls++; return { delivered: 'inbox', channel: 'inbox', ok: true }; } };
+ let calls = 0, notifyCalls = 0;
+ const items = [];
+ const io = { ...baseIo, executeCheck: () => ({ code: 0, text: '完了' }),
+   notifyOwner: async () => { notifyCalls++; return { delivered: 'none', reason: 'Discord unset' }; },
+   addKimInboxItem: async (_home, options) => { calls++; const item = { id: 'ki-test', ...options }; items.push(item); return item; },
+   listKimInboxItems: () => items };
  await watch({ home, now, io });
  await watch({ home, now, io });
  assert.equal(calls, 1);
- assert.equal(readLedger(ledgerFile(home))[0].checkNotifiedResult, 'done');
+ assert.equal(notifyCalls, 0);
+ const row = readLedger(ledgerFile(home))[0];
+ assert.equal(row.checkNotifiedResult, 'done');
+ assert.equal(row.doneNotifiedAt, new Date(now).toISOString());
+ assert.match(items[0].text, /✅ 自動進行のcheck達成/);
+});
+
+test('check completion remains unnotified and retries when kim-inbox read-back fails', async () => {
+ const home = tmp(); register(home); let writes = 0;
+ const io = { ...baseIo, executeCheck: () => ({ code: 0, text: '完了' }),
+   addKimInboxItem: async () => ({ id: `ki-${++writes}` }), listKimInboxItems: () => [] };
+ assert.equal((await watch({ home, now, io })).errors.length, 1);
+ let row = readLedger(ledgerFile(home))[0];
+ assert.equal(row.checkNotifiedResult, undefined); assert.equal(row.doneNotifiedAt, undefined);
+ assert.equal((await watch({ home, now: now + 1, io })).errors.length, 1);
+ row = readLedger(ledgerFile(home))[0];
+ assert.equal(writes, 2); assert.equal(row.checkNotifiedResult, undefined); assert.equal(row.doneNotifiedAt, undefined);
 });
 
 test('ask file 全文を保存し、人待ちと期限切れを24時間ごとに再通知する', async () => {

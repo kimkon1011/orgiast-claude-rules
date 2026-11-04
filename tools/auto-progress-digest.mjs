@@ -221,6 +221,14 @@ export function formatDigest(rows, now = Date.now(), label = '', {
         const action = String(row.nextKim || '').trim();
         const warning = isChoiceFormat(action) ? '⚠ 選択肢形式（Claude が推奨案で決めるべき内容） ' : '';
         const night = nightWaitingKeys.has(waitingNotificationKey(row)) ? '夜間に出た判断待ち: ' : '';
+        if (heading === 'あなたの判断待ち') {
+          // 判断の中身（nextKim）を必ず全文に近い形で出す。約束は短くして、改行の次行に判断内容を置く。
+          const shortPromise = cleanText(String(row.label || row.promise || '約束した作業').slice(0, 60), row);
+          const wanted = cleanText(String(action || row.reason || row.promise || '対応をお願いします').slice(0, 400), row);
+          lines.push(`・${heading}: ${night}${projectOf(row)}${warning}${shortPromise}${groupTail(count)}`);
+          lines.push(`  → 判断してほしいこと: ${wanted}`);
+          continue;
+        }
         const what = action ? cleanText(action.slice(0, 120), row) : cleanText(row.promise || '約束した作業', row);
         const promise = action ? `（約束: ${cleanText(String(row.promise || '').slice(0, 40), row)}）` : '';
         lines.push(`・${heading}: ${night}${projectOf(row)}${warning}${what}${promise}${groupTail(count)}`);

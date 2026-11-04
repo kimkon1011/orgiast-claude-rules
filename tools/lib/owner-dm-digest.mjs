@@ -17,7 +17,15 @@ export function compactDigest(rows, deferred, now, { home, owner = '' } = {}) {
   for (const row of rows) if (isHumanActionRequired(row)) {
     const kimWaiting = decisionOwnerOf(row) === 'kim' && owner.toLowerCase() !== 'kim@orgiast.jp';
     const action = kimAction(row);
-    actions.push({ text: `${kimWaiting ? 'kim の判断待ち: ' : ''}${[plain(row.label || row.promise).slice(0, 60), action === 'なし' ? '' : plain(action)].filter(Boolean).join(' — ')}`, reply: !kimWaiting, at: row.changedAt || row.ts });
+    if (kimWaiting) {
+      actions.push({ text: `kim の判断待ち: ${plain(row.label || row.promise).slice(0, 60)}`, reply: false, at: row.changedAt || row.ts });
+      continue;
+    }
+    // 判断待ちだけは「何に答えるのか」を隠さない。約束は60字に縮め、判断内容（nextKim）は
+    // 改行して最大400字まで全文を出す。従来は約束側の60字で切れてOKの対象が分からなかった。
+    const shortPromise = plain(row.label || row.promise).slice(0, 60);
+    const wanted = plain(String(row.nextKim || '').trim() || String(row.reason || '').trim() || (action === 'なし' ? '' : action)).slice(0, 400);
+    actions.push({ text: shortPromise, detail: wanted, reply: true, at: row.changedAt || row.ts });
   }
   const byText = new Map();
   for (const action of actions) {
@@ -34,9 +42,17 @@ export function compactDigest(rows, deferred, now, { home, owner = '' } = {}) {
   let chars = 0;
   for (const a of recent) {
     const text = plain(a.text);
-    if (included.length >= 2 || chars + text.length > 1350) continue;
-    included.push(a); chars += text.length;
-    lines.push(`・${text}${a.reply === false ? '（あなたの操作は不要）' : '（このDMに返信してください）'}`);
+    const detail = a.detail ? plain(a.detail) : '';
+    const lineLen = text.length + (detail ? detail.length + 20 : 0);
+    if (included.length >= 2 || chars + lineLen > 1350) continue;
+    included.push(a); chars += lineLen;
+    if (a.reply === false) {
+      lines.push(`・${text}（あなたの操作は不要）`);
+      continue;
+    }
+    // 「何に答えるのか」が分かるよう、判断内容は改行して独立の行に出す（1通1800字の分割は行単位）。
+    lines.push(`・${text}（このDMに返信してください）`);
+    if (detail) lines.push(`  → 判断してほしいこと: ${detail}`);
   }
   const extra = [];
   if (old.length) extra.push(`古い待ち ${old.length}件（7日以上動きなし）`);

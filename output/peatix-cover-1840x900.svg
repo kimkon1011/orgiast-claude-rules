@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1840" height="900" viewBox="0 0 1840 900">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#16213e"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#e94560"/>
+      <stop offset="100%" style="stop-color:#ff6b6b"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1840" height="900" fill="url(#bg)"/>
+
+  <!-- Accent bar -->
+  <rect x="0" y="0" width="1840" height="8" fill="url(#accent)"/>
+  <rect x="0" y="892" width="1840" height="8" fill="url(#accent)"/>
+
+  <!-- Decorative circles -->
+  <circle cx="1600" cy="150" r="300" fill="#e94560" opacity="0.08"/>
+  <circle cx="1650" cy="180" r="200" fill="#ff6b6b" opacity="0.06"/>
+  <circle cx="200" cy="700" r="250" fill="#e94560" opacity="0.05"/>
+
+  <!-- Main title -->
+  <text x="160" y="280" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif" font-size="64" font-weight="bold" fill="#ffffff" letter-spacing="4">
+    <tspan x="160" dy="0">食×AI</tspan>
+    <tspan x="160" dy="80" font-size="56">ビジネスアイデアピッチ</tspan>
+  </text>
+
+  <!-- Subtitle -->
+  <text x="160" y="430" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif" font-size="28" fill="#cccccc" letter-spacing="2">
+    12/12（土）14:00〜17:00  @原宿エリア／オンライン参加可
+  </text>
+
+  <!-- Description -->
+  <text x="160" y="500" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif" font-size="22" fill="#999999">
+    <tspan x="160" dy="0">食関連企業の実際の課題に対して、</tspan>
+    <tspan x="160" dy="40">AI を使った解決アイデアをピッチするイベント</tspan>
+  </text>
+
+  <!-- Key info boxes -->
+  <rect x="160" y="580" width="220" height="100" rx="12" fill="#e94560" opacity="0.15" stroke="#e94560" stroke-width="1"/>
+  <text x="270" y="625" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif" font-size="16" fill="#e94560" text-anchor="middle">参加費</text>
+  <text x="270" y="655" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif" font-size="24" font-weight="bold" fill="#ffffff" text-anchor="middle">無料</text>
+
+  <rect x="410" y="580" width="220" height="100" rx="12" fill="#e94560" opacity="0.15" stroke="#e94560" stroke-width="1"/>
+  <text x="520" y="625" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif" font-size="16" fill="#e94560" text-anchor="middle">定員</text>
+  <text x="520" y="655" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif" font-size="24" font-weight="bold" fill="#ffffff" text-anchor="middle">20名</text>
+
+  <rect x="660" y="580" width="220" height="100" rx="12" fill="#e94560" opacity="0.15" stroke="#e94560" stroke-width="1"/>
+  <text x="770" y="625" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif" font-size="16" fill="#e94560" text-anchor="middle">申込締切</text>
+  <text x="770" y="655" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif" font-size="24" font-weight="bold" fill="#ffffff" text-anchor="middle">12/7(月)</text>
+
+  <!-- CTA button -->
+  <rect x="1400" y="580" width="280" height="70" rx="35" fill="url(#accent)"/>
+  <text x="1540" y="623" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif" font-size="22" font-weight="bold" fill="#ffffff" text-anchor="middle">申し込む ▶</text>
+
+  <!-- Footer info -->
+  <text x="160" y="780" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif" font-size="16" fill="#666666">
+    <tspan x="160" dy="0">課題公開：11/16（月） ／ 案内ページ：8sp.jp/food</tspan>
+    <tspan x="160" dy="30">主催：株式会社エイト ／ 企画運営：株式会社オージャスト</tspan>
+  </text>
+
+  <!-- Trophy icon (simplified) -->
+  <g transform="translate(1400, 250)">
+    <rect x="0" y="60" width="80" height="15" rx="3" fill="#ffd700"/>
+    <rect x="10" y="0" width="60" height="70" rx="8" fill="#ffd700"/>
+    <rect x="15" y="5" width="50" height="50" rx="6" fill="#ffec8b"/>
+    <rect x="25" y="60" width="30" height="15" rx="2" fill="#ffd700"/>
+    <!-- Stars -->
+    <text x="40" y="85" font-family="sans-serif" font-size="12" fill="#8B4513" text-anchor="middle">★</text>
+  </g>
+</svg>

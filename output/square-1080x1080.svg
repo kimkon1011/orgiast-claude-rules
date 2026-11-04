@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1080" viewBox="0 0 1080 1080">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#16213e"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#e94560"/>
+      <stop offset="100%" style="stop-color:#ff6b6b"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1080" height="1080" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1080" height="8" fill="url(#accent)"/>
+  <rect x="0" y="1072" width="1080" height="8" fill="url(#accent)"/>
+
+  <!-- Decorative circles -->
+  <circle cx="900" cy="200" r="200" fill="#e94560" opacity="0.08"/>
+  <circle cx="200" cy="900" r="180" fill="#ff6b6b" opacity="0.05"/>
+
+  <text x="540" y="300" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif" font-size="56" font-weight="bold" fill="#ffffff" letter-spacing="3" text-anchor="middle">
+    <tspan x="540" dy="0">食×AI</tspan>
+    <tspan x="540" dy="70" font-size="48">ビジネスアイデアピッチ</tspan>
+  </text>
+
+  <text x="540" y="480" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif" font-size="26" fill="#cccccc" text-anchor="middle">
+    12/12（土）14:00〜17:00
+  </text>
+  <text x="540" y="530" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif" font-size="22" fill="#aaaaaa" text-anchor="middle">
+    @原宿エリア／オンライン参加可
+  </text>
+
+  <rect x="240" y="600" width="600" height="80" rx="40" fill="url(#accent)"/>
+  <text x="540" y="652" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif" font-size="26" font-weight="bold" fill="#ffffff" text-anchor="middle">参加無料 ／ 定員20名</text>
+
+  <text x="540" y="780" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif" font-size="18" fill="#888888" text-anchor="middle">
+    申込締切：12/7(月) ／ 課題公開：11/16(月)
+  </text>
+  <text x="540" y="820" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',sans-serif" font-size="16" fill="#666666" text-anchor="middle">
+    案内ページ：8sp.jp/food ／ 主催：株式会社エイト
+  </text>
+</svg>

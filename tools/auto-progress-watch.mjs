@@ -757,6 +757,20 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       let outcome;
       try { outcome = await (io.resume ?? resumeSession)(row, { home }); } catch (error) { outcome = { outcome: 'error', reason: String(error?.message ?? error).slice(0, 200) }; }
       if (outcome.deferred) {
+        // Check is done but cannot resume due to executor unavailable -> send notification
+        if (row.check && row.checkResult === 'done') {
+          const checkCode = row.checkCode || 0;
+          const checkOutput = row.checkText || '';
+          const firstLine = checkOutput.split(/\r?\n/)[0] || '';
+          const message = `✅ チェック完了、ただし再開不可: ${row.label || row.promise}\n` +
+            `チェックコード: ${checkCode}、出力: ${firstLine}\n` +
+            `次のステップ: ${row.nextClaude}\n` +
+            `オーナー用次のステップ: ${row.nextKim}\n` +
+            `再開不可理由: ${outcome.reason}`;
+          try {
+            await (io.notifyOwner ?? notifyOwner)(ownerOf(row), message, { home });
+          } catch (error) { summary.errors.push(`notify-deferred-check: ${String(error?.message ?? error).slice(0, 120)}`); }
+        }
         patch(rowKey(row), { status: row.status, resumedAt: row.resumedAt ?? '', resumeCount: row.resumeCount ?? 0,
           resumeOutcome: failedResume(row) ? row.resumeOutcome : 'deferred: ' + outcome.reason, resumeDeferredAt: new Date(now).toISOString(),
           lastCheckedAt: new Date(now).toISOString(), reason: outcome.reason });

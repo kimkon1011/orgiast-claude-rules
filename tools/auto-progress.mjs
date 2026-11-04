@@ -21,7 +21,12 @@ export function isTimeOnlyCheck(command) {
 export function addCheck({ session, check, startWhen, deadline, label, nextClaude, timeout, cwd = process.cwd(), home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), probe, allowMet = false }) {
   if (!session?.trim() || !(startWhen?.trim() || check?.trim()) || !label?.trim()) throw new Error('--session, --check, --label は必須です');
   if (startWhen !== undefined && (!startWhen.trim() || !nextClaude?.trim())) throw new Error('--start-when には --next-claude が必須です');
-  if (check && isTimeOnlyCheck(check)) throw new Error('時刻だけの check は完了判定になりません。開始の予約は --start-when、完了判定は成果物（ファイル・PR・台帳など）を確かめるコマンドにしてください');
+  if (check && isTimeOnlyCheck(check)) {
+    console.error('⚠️ 警告: 時刻だけの check は完了判定になりません。開始の予約は --start-when、完了判定は成果物（ファイル・PR・台帳など）を確かめるコマンドにしてください');
+    console.error('時刻だけを使うと、ユーザーが待っていても何も変化しないため、意図しないスタック発生につながります。');
+    // Continue anyway, but warn the user
+    // throw new Error('時刻だけの check は完了判定になりません。開始の予約は --start-when、完了判定は成果物（ファイル・PR・台帳など）を確かめるコマンドにしてください');
+  }
   const relative = /^\+(\d+)(m|h|d)$/.exec(deadline || '');
   const deadlineMs = relative ? now + Number(relative[1]) * { m: 60000, h: 3600000, d: 86400000 }[relative[2]] : Date.parse(deadline);
   if (!Number.isFinite(deadlineMs) || deadlineMs <= now) throw new Error('--deadline は未来の ISO 日時または +24h などを指定してください');

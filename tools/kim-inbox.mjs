@@ -88,10 +88,14 @@ async function forwardItem(home, item, options = {}) {
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 }
 // 直下の台帳だけを走査する。.skipped や受信済みメール由来の項目は再転送しない。
-export async function forwardStale(home, { dryRun = false, skip = [], ...options } = {}) {
+// kinds を省略すると ask も info も転送する。gate-report 等の info が数十件溜まっている席では
+// --kind ask で判断依頼だけを kim-PC へ送り、kim の受信箱を埋めない。
+export async function forwardStale(home, { dryRun = false, skip = [], kinds = null, ...options } = {}) {
   if (isKimSeat(home)) return [];
   const excluded = new Set(skip);
-  const candidates = listItems(home, { status: 'open' }).filter(item => item.forwardMailId === null && !excluded.has(item.id));
+  const allowedKinds = kinds ? new Set(kinds) : null;
+  const candidates = listItems(home, { status: 'open' }).filter(item => item.forwardMailId === null && !excluded.has(item.id)
+    && (!allowedKinds || allowedKinds.has(item.kind)));
   if (dryRun) return candidates;
   const results = [];
   for (const item of candidates) results.push(await forwardItem(home, item, options));
@@ -209,7 +213,9 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       const skip = args.flatMap((arg, index) => arg === '--skip' ? [args[index + 1]] : []);
       if (skip.some(id => !validId(id || ''))) throw new Error('--skip に有効な ID が必要です');
       const dryRun = args.includes('--dry-run');
-      const items = await forwardStale(home, { dryRun, skip, execImpl });
+      const kinds = args.includes('--kind') ? [value('--kind')] : null;
+      if (kinds && !['ask', 'info'].includes(kinds[0])) throw new Error('--kind は ask か info');
+      const items = await forwardStale(home, { dryRun, skip, kinds, execImpl });
       stdout(JSON.stringify({ dryRun, items: items.map(({ id, kind, status, text, forwardMailId, forwardError }) => ({ id, kind, status, text, forwardMailId, forwardError })) }));
       if (!dryRun && items.some(item => item.status !== 'forwarded')) return 1;
     } else if (args.includes('--context')) {

@@ -118,6 +118,17 @@
       }
     },
     {
+      "appName": "aujust-sales-automation",
+      "kind": "next",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "FEEDBACK_695A36C282EA_REPO",
+        "appDir": "FEEDBACK_695A36C282EA_APP_DIR"
+      }
+    },
+    {
       "appName": "展示会かぶりチェッカー",
       "kind": "next",
       "intake": "relay",

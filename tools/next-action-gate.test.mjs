@@ -170,7 +170,7 @@ test('待ち語が無く、もう削除してよいならpass', () => {
 test('待ち語があり、起床手段があればまだ閉じないでpass', () => {
   const text = `${body} 結果待ちです。\n次に kim がすること: なし\nこの後の自動進行: 処理完了時に Codex がチャットで通知します\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ）`;
   assert.equal(judgeNextAction(text, row('assistant', [{ type: 'tool_use', name: 'Agent', input: { run_in_background: true } }])).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
-  withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
+  withOpenCheck(input => assert.equal(judgeNextAction(text, cronRow, input).decision, 'pass'));
 });
 
 test('session-close実行証拠なしで閉じてよいならblock', () => {
@@ -218,6 +218,11 @@ test('環境変数で無効化できる', () => {
 
 const closedText = `${body}\n${twoLineFooter}\nこのセッション: /session-close は終わっているので、このセッションを閉じてよい`;
 const row = (role, content, extra = {}) => JSON.stringify({ type: role, message: { role, content }, ...extra });
+// 「まだ閉じない」を通すには台帳とセッション内 Cron の両方が要る（nishi 2026-11-04）。
+const cronRow = [
+  row('assistant', [{ type: 'tool_use', id: 'cron-call', name: 'CronCreate', input: { cron: '7 * * * *', recurring: true } }], { timestamp: new Date().toISOString() }),
+  row('user', [{ type: 'tool_result', tool_use_id: 'cron-call', content: 'Scheduled recurring job cron-abc123' }]),
+].join('\n');
 
 test('本文でsession-close完了を明記すればpass', () => {
   for (const report of ['/session-close 実行済み。', '`/session-close` を実行しました。', '/session-close を完了しました。']) {
@@ -268,14 +273,14 @@ test('定型文以外（旧表記・表記ゆれ・理由の付け足し）はbl
 test('定型文はそれぞれpass', () => {
   for (const state of [SESSION_PHRASES.closed, SESSION_PHRASES.delete, SESSION_PHRASES.pending, SESSION_PHRASES.open]) {
     const text = `/session-close を実行しました。\n${body}\n${twoLineFooter}\nこのセッション: ${state}`;
-    withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass', state));
+    withOpenCheck(input => assert.equal(judgeNextAction(text, cronRow, input).decision, 'pass', state));
   }
 });
 
 test('pendingはバックグラウンド語があってもpass', () => {
   const text = `${body} Codex がバックグラウンドで実行中です。\n次に kim がすること: なし\nこの後の自動進行: 処理の完了時に私がこの画面で報告します\nこのセッション: ${SESSION_PHRASES.pending}`;
   assert.equal(judgeNextAction(text, row('assistant', [{ type: 'tool_use', name: 'Agent', input: { run_in_background: true } }])).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
-  withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
+  withOpenCheck(input => assert.equal(judgeNextAction(text, cronRow, input).decision, 'pass'));
 });
 
 test('3行の順序違い・2つ以上の空行・行間の説明をblock', () => {
@@ -332,7 +337,7 @@ test('短文でもフッターがあれば定型外の「このセッション�
 test('短文でもフッターが定型どおりなら pass する', () => {
   const text = `作業は完了しました。\n\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: ${SESSION_PHRASES.pending}`;
   assert.ok(text.length < 200);
-  withOpenCheck(input => assert.equal(judgeNextAction(text, '', input).decision, 'pass'));
+  withOpenCheck(input => assert.equal(judgeNextAction(text, cronRow, input).decision, 'pass'));
 });
 
 test('フッター欠落の block 理由に定型4文を載せる', () => {
@@ -488,7 +493,7 @@ test('会話に実行痕跡がなくても同じ session_id の open 台帳行�
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(home, '.claude', 'auto-progress-ledger.jsonl'), `${JSON.stringify({ ts: new Date().toISOString(), sessionId: 'ledger-session', status: 'open', check: 'node x' })}\n`);
   for (const text of [promiseText, humanWaitText]) {
-    const result = judgeNextAction(text, '', { session_id: 'ledger-session' });
+    const result = judgeNextAction(text, cronRow, { session_id: 'ledger-session' });
     assert.equal(result.decision, 'pass', JSON.stringify(result));
     assert.notEqual(result.code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
     assert.notEqual(result.code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
@@ -561,8 +566,8 @@ test('openPhrase と openDeadline は往復できる', () => {
 test('人待ちは自動進行なしでも同一sessionのopen台帳行を要求する', () => {
   const text = humanWaitText.replace('私が保存を定期確認して結果を報告します', 'なし');
   withOpenCheck((input, file) => {
-    assert.equal(judgeNextAction(text, '', input).decision, 'pass');
-    assert.equal(judgeNextAction(text, '', { session_id: 'other' }).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
+    assert.equal(judgeNextAction(text, cronRow, input).decision, 'pass');
+    assert.equal(judgeNextAction(text, cronRow, { session_id: 'other' }).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
     for (const status of ['done', 'superseded', 'waiting_user', 'stalled', 'resumed']) {
       fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status, check: 'node check.mjs' }));
       assert.equal(judgeNextAction(text, '', input).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', status);
@@ -647,7 +652,7 @@ test('理由付き例外は本文のどこでも有効で空や短い理由は�
 test('check 無しの open 約束行は待機中の起床証拠にしない', () => {
   withOpenCheck((input, file) => {
     for (const state of ['open', 'pending']) {
-      assert.equal(judgeNextAction(promiseText.replace(SESSION_PHRASES.open, SESSION_PHRASES[state]), '', input).decision, 'pass');
+      assert.equal(judgeNextAction(promiseText.replace(SESSION_PHRASES.open, SESSION_PHRASES[state]), cronRow, input).decision, 'pass');
     }
     for (const check of [undefined, '', '   ']) {
       fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status: 'open', check }) + '\n');
@@ -657,6 +662,48 @@ test('check 無しの open 約束行は待機中の起床証拠にしない', ()
         assert.equal(judgeNextAction(text.replace('私が毎時進捗を確認して変化時に報告します', 'なし'), '', input).code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
       }
     }
+  });
+});
+
+test('まだ閉じない＋台帳open行でもセッション内Cronが無ければblock', () => {
+  withOpenCheck(input => {
+    const blocked = judgeNextAction(promiseText, '', input);
+    assert.equal(blocked.decision, 'block');
+    assert.equal(blocked.code, 'SESSION-OPEN-NEEDS-IN-SESSION-CHECK');
+    assert.match(blocked.reason, /CronCreate/);
+    assert.match(blocked.reason, /1〜3 行/);
+    assert.equal(judgeNextAction(promiseText, cronRow, input).decision, 'pass');
+    assert.equal(judgeNextAction(humanWaitText, '', input).code, 'SESSION-OPEN-NEEDS-IN-SESSION-CHECK');
+  });
+});
+
+test('CronCreateの失敗・one-shot・言及だけではセッション内Cronの証拠にならない', () => {
+  const timestamp = new Date().toISOString();
+  const failed = `${row('assistant', [{ type: 'tool_use', id: 'cron-call', name: 'CronCreate', input: { cron: '7 * * * *', recurring: true } }], { timestamp })}\n${row('user', [{ type: 'tool_result', tool_use_id: 'cron-call', is_error: true, content: 'failed' }])}`;
+  const oneShot = `${row('assistant', [{ type: 'tool_use', id: 'cron-call', name: 'CronCreate', input: { at: '2026-11-05T09:00:00Z', recurring: false } }], { timestamp })}\n${row('user', [{ type: 'tool_result', tool_use_id: 'cron-call', content: 'Scheduled one-shot task cron-once' }])}`;
+  withOpenCheck(input => {
+    for (const transcript of ['', failed, oneShot, row('assistant', 'CronCreate を実行予定'), row('assistant', [{ type: 'tool_use', name: 'CronCreate', input: { cron: '7 * * * *', recurring: true } }])]) {
+      assert.equal(judgeNextAction(promiseText, transcript, input).code, 'SESSION-OPEN-NEEDS-IN-SESSION-CHECK', transcript);
+    }
+  });
+});
+
+test('headlessとsubagentsではセッション内Cronを要求しない', () => {
+  const previous = process.env.CLAUDE_HEADLESS;
+  try {
+    process.env.CLAUDE_HEADLESS = '1';
+    withOpenCheck(input => assert.equal(judgeNextAction(promiseText, '', input).decision, 'pass'));
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_HEADLESS;
+    else process.env.CLAUDE_HEADLESS = previous;
+  }
+  withOpenCheck(input => assert.equal(judgeNextAction(promiseText, '', { ...input, transcript_path: 'project/subagents/agent.jsonl' }).decision, 'pass'));
+});
+
+test('[NO-SESSION-CRON-OK: <5文字以上>] だけが免除になり、短い理由は免除しない', () => {
+  withOpenCheck(input => {
+    assert.equal(judgeNextAction(`[NO-SESSION-CRON-OK: 常時監視の別端末がある]\n${promiseText}`, '', input).decision, 'pass');
+    assert.equal(judgeNextAction(`[NO-SESSION-CRON-OK: 理由]\n${promiseText}`, '', input).code, 'SESSION-OPEN-NEEDS-IN-SESSION-CHECK');
   });
 });
 

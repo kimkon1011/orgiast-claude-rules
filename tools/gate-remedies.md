@@ -128,6 +128,7 @@ NEXT-ACTION-BACKREF は前の応答への参照を消し、確認対象を「【
 NEXT-ACTION-APPROVAL-INLINE はフッター直前40行以内に「【kim 確認用の全文】」見出しを置き、文面・選択肢・URL を毎回省略せず全文載せる。例外は `[NEXT-ACTION-APPROVAL-INLINE-OK: <5文字以上の理由>]`。
 NEXT-ACTION-APPROVAL-NOT-LAST は「【kim 確認用の全文】」の後ろに ①〜⑨・【見出し・手間監査・恒久策・# 見出し・[マーカー] がある時に出る。順番を【最終まとめ】①②③ → 手間監査/恒久策 → 【kim 確認用の全文】 → 3行フッターに並べ替える（kim 2026-11-04: 一番下だけ読む）。例外は `[NEXT-ACTION-APPROVAL-NOT-LAST-OK: <5文字以上の理由>]`。
 通る形（実測 2026-10-27）: 本文 →「【kim 確認用の全文】」見出し＋全文 →「恒久策: 一回限り: <理由>」→ `次に kim がすること: 上の全文でよいか返事を一言`。マーカー名に「・」を入れない（MULTIPLE 判定に当たる）、行に「読んで／確認して／開いて」を書かない（OPEN 判定に当たる）、「送信する」等の実行語を書かない（PERMANENT-FIX 判定に当たる）。
+SESSION-OPEN-NEEDS-IN-SESSION-CHECK は「まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）」なのに、このセッションを起こす仕組みが無い時に対話セッションで出る（nishi 2026-10-29・11-04 指示）。台帳（`--add-check`）は Discord へ通知するだけでセッション内には何も報告しないので代わりにならない。`CronCreate` を `cron: "17 * * * *"`（毎時・分は 0/30 を避ける）・`recurring: true`・`prompt: "残作業の状態を照会し 1〜3 行でこのセッションに報告、状態が変わった時か判断が要る時だけ PushNotification、全部終わったら CronDelete して /session-close を提案"` で仕込む。CronDelete するまで7日間有効。このターン限りでよいなら ScheduleWakeup でも通る。ヘッドレス（`CLAUDE_HEADLESS=1`）・subagents の transcript・`[NO-SESSION-CRON-OK: <5文字以上の理由>]` は対象外。
 
 ## pr-handoff-gate
 

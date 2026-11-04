@@ -53,6 +53,7 @@ const IMPLEMENTATION_PATTERN = /(実装|修正|改修|修復|作り直)/;
 const DELIVERY_PATTERN = /着地|マージ|\bPR\b|push|ブランチ|main に/;
 export const NO_ACTION_PATTERN = /^(?:なし|無し|ありません|不要|返信不要)(?:[。．.]?[ \t]*$|[ \t]*[（(][^\r\n]*[）)][。．.]?[ \t]*$)/;
 const WAREHOUSE_PATTERN = /倉庫|棚|箱に入れ|セットに入れ|同梱|運ぶ|積む|持ち出し|格納|移動/;
+const SESSION_CRON_REASON = '「まだ閉じない」で待つなら、このセッション内に定期の進捗確認を仕込んでから終える。CronCreate（recurring・毎時・分は 0/30 を避ける）で、プロンプトに『残作業の状態を照会し 1〜3 行でこのセッションに報告、状態が変わった時か判断が要る時だけ PushNotification、全部終わったら CronDelete して /session-close を提案』を書く。台帳（auto-progress --add-check）は Discord 通知用でセッションには報告しないので代わりにならない（nishi 2026-10-29・11-04 指示）。例外は [NO-SESSION-CRON-OK: <理由>]（理由5文字以上）。';
 const PERMANENT_FIX_REASON = '人に作業を残すなら、今後その作業が人に来ないようにする策（自動化／担当者への依頼経路／ルール・ゲート・memory 化）をこのターンで実装し、`恒久策:` 行に実装物を書く。初回だけの作業なら `恒久策: 一回限り: <理由>`。';
 const DEFERRAL_REASON = '[NEXT-ACTION-DEFERRAL] 「次に kim がすること」に恒久修正の先送り（実装・修正・恒久化・次セッション対応）が書かれています。同じ文面は夜間監査 permanent-fix-deferral-scan が P3 として検出します（2026-10-14〜10-15 に 6 件）。kim に渡してよいのは「人が一度だけ実行できる具体的手順」だけです。自分で潰せるものはこのターン内に実装して着地させ、実行不能なら実行したコマンドと終了コードを本文に記録したうえで、移せる経路（例: Codex が生きている受信PCへの fleet-mail --exec codex 便）へ流してください。どうしても人にしかできない物理操作のときだけ、先送り語（恒久策・次セッション等）を使わず具体的な1手順だけを書いてください。';
 // kim が毎回同じ文で判断できるよう、表記ゆれを許さない完全一致の定型文にする（2026-09-25 kim 指示）。
@@ -225,7 +226,7 @@ export function hasSessionWakeup(raw, input = {}) {
     } catch { /* A missing or unreadable ledger is not wakeup evidence. */ }
   }
   const persistent = sessionWakeupEvidence(raw, input.now ?? Date.now());
-  return { autoProgress, background: background || persistent.background, scheduled: persistent.scheduled };
+  return { autoProgress, background: background || persistent.background, scheduled: persistent.scheduled, cron: persistent.cron === true };
 }
 
 function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {}) {
@@ -329,6 +330,14 @@ function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {
   // Monitor / 起床通知はセッション終了で消える。実際の永続台帳を必須にする。
   if (WAIT_STATES.has(sessionState) && !hasOpenSessionCheck(input)) {
     return { decision: 'block', code: 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK', reason: '作業中のまま応答を終える前に、同じセッションの永続チェックを登録してください: node tools/auto-progress.mjs --add-check --session <id> --check "<達成判定>" --deadline +3d --label "<作業名>" --next-claude "<次の手>"。自動進行が「なし」でも必要です。バックグラウンド完了通知や登録コマンドへの言及だけでは代替できません。' };
+  }
+  // 台帳は Discord へ通知するだけでセッション内には何も報告しない。対話セッションで「まだ閉じない」
+  // なら、セッション自身を起こす CronCreate（台帳と同じく両方要る）を必須にする（nishi 2026-10-29・11-04）。
+  const noSessionCron = [...turnSource.matchAll(/\[NO-SESSION-CRON-OK:[ \t]*([^\]\r\n]*)\]/g)]
+    .some(([, reason]) => [...reason.trim()].length >= 5);
+  const interactive = process.env.CLAUDE_HEADLESS !== '1' && !/subagents/i.test(input.transcript_path || '');
+  if (!permanentFix && WAIT_STATES.has(sessionState) && interactive && !wakeup.cron && !wakeup.scheduled && !noSessionCron) {
+    return { decision: 'block', code: 'SESSION-OPEN-NEEDS-IN-SESSION-CHECK', reason: SESSION_CRON_REASON };
   }
   if (!permanentFix && hasAutopilot && process.env.CLAUDE_HEADLESS !== '1'
     && !/subagents/i.test(input.transcript_path || '') && !wakeup.autoProgress && !wakeup.background && !wakeup.scheduled) {

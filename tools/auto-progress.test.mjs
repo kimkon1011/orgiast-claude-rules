@@ -1308,7 +1308,7 @@ test('watch: 経路外の未通知doneを拾い、古い完了は一覧化し、
   const home = tmp(), now = Date.parse('2026-10-26T03:00:00Z');
   const recent = { sessionId: 'recent', status: 'done', promise: 'hook経由の完了', doneAt: new Date(now - H).toISOString(), ts: new Date(now - 2 * H).toISOString(), reason: 'hookで完了' };
   const oldRows = Array.from({ length: 20 }, (_, i) => ({ sessionId: `old-${i}`, status: 'done', promise: `過去作業${i}${'長'.repeat(55)}`, doneAt: new Date(now - 80 * H - i).toISOString(), ts: new Date(now - 90 * H).toISOString() }));
-  const checkSent = { sessionId: 'check', status: 'done', promise: 'check通知済み', check: {}, checkResult: 'done', checkNotifiedResult: 'done', doneAt: new Date(now - H).toISOString(), ts: new Date(now - 2 * H).toISOString() };
+  const checkSent = { sessionId: 'check', status: 'done', promise: 'check通知済み', check: {}, checkResult: 'done', checkNotifiedResult: 'done', doneInboxId: 'ki-20261026020000-1234', doneInboxVerifiedAt: new Date(now - H).toISOString(), doneAt: new Date(now - H).toISOString(), ts: new Date(now - 2 * H).toISOString() };
   const unattended = { sessionId: 'probe', status: 'done', promise: '無人完了', cwd: 'C:\\Windows\\System32', doneAt: new Date(now - H).toISOString(), ts: new Date(now - 2 * H).toISOString() };
   seed(home, [recent, ...oldRows, checkSent, unattended]);
   const notices = [];

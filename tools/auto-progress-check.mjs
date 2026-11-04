@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { isUnattendedRow, rowKey, originLine } from './auto-progress-ledger.mjs';
 import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
+import { deliverDoneInbox, hasDoneInboxReceipt } from './lib/auto-progress-done-inbox.mjs';
 
 export const CHECK_TIMEOUT_MS = 30000;
 export const MAX_CHECK_TIMEOUT_MS = 300000;
@@ -62,6 +63,16 @@ export async function checkPromise(row, { home, now, patch, io = {} }) {
     verdict: state === 'done' ? 'done' : state === 'error' ? 'check_error' : overdue ? 'unmet' : 'in_progress',
     ...(state === 'done' ? { status: 'done', doneAt: row.doneAt || new Date(now).toISOString() } : {}) };
   if (patch(rowKey(row), changes) === false) return 'ledger_error';
+  if (state === 'done') {
+    if (hasDoneInboxReceipt(row)) return state;
+    const next = String(row.nextClaude || '').trim();
+    const message = `✅ check 達成: ${oneLine(row.label || row.promise, 160)}\n${changes.checkText}\n作業ID: ${row.sessionId || rowKey(row)}\n${next ? `作業全体の完了は未確認です。Claude の次の手（実行状況を確認して続行）: ${next.slice(0, 1800)}` : 'kim がすること: なし'}`;
+    const delivery = await deliverDoneInbox(home, [row], message, { now, io });
+    const receipt = { ...delivery.receipt, checkNotifiedResult: 'done' };
+    if (patch(rowKey(row), receipt) === false) return 'ledger_error';
+    Object.assign(row, changes, receipt);
+    return state;
+  }
   if (state === 'unmet') {
     const lastNotified = Date.parse(row.lastUnmetNotifiedAt || (!overdue ? row.ts : '')) || 0;
     if ((!overdue || row.checkNotifiedResult === 'unmet') && now - lastNotified < (overdue ? 24 * 3600000 : UNMET_INTERVAL_MS)) return state;

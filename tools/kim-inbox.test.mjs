@@ -13,6 +13,18 @@ function seat(t, label = 'kim-PC') {
   fs.writeFileSync(path.join(home, '.claude/fleet-pc-map.json'), JSON.stringify({ [label]: { account: label === 'kim-PC' ? 'kim@orgiast.jp' : 'test@example.test' } }));
   t.after(() => fs.rmSync(home, { force: true, recursive: true })); return home;
 }
+
+test('durable producer keys survive aggregation, seen state and retries', async t => {
+  const home = seat(t);
+  const a = await addItem(home, { text: '同じ作業 1', dedupeKey: 'job:1' });
+  const b = await addItem(home, { text: '同じ作業 2', dedupeKey: 'job:2' });
+  assert.notEqual(a.id, b.id);
+  markSeen(home, a.id);
+  const retry = await addItem(home, { text: '同じ作業 1', dedupeKey: 'job:1' });
+  assert.equal(retry.id, a.id); assert.equal(retry.status, 'seen');
+  const unkeyed = await addItem(home, { text: '同じ作業 3' });
+  assert.notEqual(unkeyed.id, b.id); assert.equal(listItems(home).length, 3);
+});
 test('ask は毎回提示し回答後に消える。info は確認できるが ask は確認だけで消せない', async t => {
   const home = seat(t); const ask = await addItem(home, { kind: 'ask', text: '判断してください\n詳細', source: '試験' });
   const info = await addItem(home, { kind: 'info', text: '完了' });

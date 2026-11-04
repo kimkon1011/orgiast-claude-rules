@@ -10,8 +10,9 @@ import { readLedger, writeLedger, ledgerFile } from './auto-progress-ledger.mjs'
 import { run as watch } from './auto-progress-watch.mjs';
 import { run as digest } from './auto-progress-digest.mjs';
 import { checkArrivals } from './checks/wechat-ingest-arrived.mjs';
+import { addItem, listItems, markSeen } from './kim-inbox.mjs';
 const homes = [];
-const tmp = () => { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'progress-check-')); homes.push(home); return home; };
+const tmp = () => { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'progress-check-')); homes.push(home); fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'seisaku-team@orgiast.jp' } })); return home; };
 after(() => homes.forEach(home => fs.rmSync(home, { recursive: true, force: true })));
 const now = Date.parse('2026-10-23T00:00:00Z');
 const register = home => addCheck({ home, now, session: 'session', check: 'node check.mjs', label: '着信確認', deadline: '+24h' });
@@ -39,7 +40,8 @@ test('watch: before deadline stays open; overdue queues once and retries DM; rec
   assert.equal(fs.readFileSync(path.join(home, '.claude', 'next-session.md'), 'utf8').match(/- \[ \]/g).length, 1);
   code = 0;
   await watch({ home, now: later, io }); await watch({ home, now: later, io });
-  assert.equal(deliveries, 3);
+  assert.equal(deliveries, 2);
+  assert.equal(listItems(home).length, 1);
   const row = readLedger(ledgerFile(home))[0];
   assert.equal(readLedger(ledgerFile(home))[0].status, 'done'); assert.equal(row.checkText, '確認結果');
   assert.equal((await digest({ home, now: later, io: { notify: () => assert.fail('duplicate digest') } })).sent, false);
@@ -84,7 +86,9 @@ test('watch: before deadline stays open; overdue queues once and retries DM; rec
   });
   test('watch: failed completion delivery retries without running check again; dry run has no side effects', async () => {
   const home = tmp(); register(home); let checks = 0, sends = 0;
-  const io = { ...baseIo, executeCheck: () => { checks++; return { code: 0, text: '完了' }; }, notifyOwner: async () => ({ delivered: ++sends === 1 ? 'none' : 'dm' }) };
+  const io = { ...baseIo, executeCheck: () => { checks++; return { code: 0, text: '完了' }; },
+    notifyOwner: () => assert.fail('completion must not use Discord'),
+    addKimInboxItem: async (home, options) => { if (++sends === 1) throw new Error('disk full'); return addItem(home, options); } };
   const before = fs.readFileSync(ledgerFile(home), 'utf8');
   await watch({ home, now, dryRun: true, io });
   assert.equal(checks, 0); assert.equal(fs.readFileSync(ledgerFile(home), 'utf8'), before);
@@ -224,14 +228,73 @@ for (const { code, allowMet, accepted } of [
   });
 }
 
-test('check completion accepts durable inbox delivery and does not retry', async () => {
+test('check completion requires inbox read-back and does not retry after success', async () => {
  const home = tmp(); register(home);
  let calls = 0;
- const io = { ...baseIo, executeCheck: () => ({ code: 0, text: '完了' }), notifyOwner: async () => { calls++; return { delivered: 'inbox', channel: 'inbox', ok: true }; } };
+ const io = { ...baseIo, executeCheck: () => ({ code: 0, text: '完了' }),
+   notifyOwner: () => assert.fail('must bypass owner DM policy'),
+   addKimInboxItem: async (home, options) => { calls++; return addItem(home, options); } };
  await watch({ home, now, io });
  await watch({ home, now, io });
  assert.equal(calls, 1);
  assert.equal(readLedger(ledgerFile(home))[0].checkNotifiedResult, 'done');
+});
+
+test('missing Discord, quiet hours and daily DM quota do not suppress check completion or nextClaude', async () => {
+  const home = tmp();
+  addCheck({ home, now, session: 'quiet-check', check: 'x', label: '到着確認', deadline: '+24h', nextClaude: '添付を確認して承認用の本文を作る' });
+  const later = Date.parse('2026-11-04T16:00:00Z'); // 01:00 JST
+  const io = { ...baseIo, executeCheck: () => ({ code: 0, text: '到着済み' }), notifyOwner: () => assert.fail('no Discord') };
+  const summary = await watch({ home, now: later, io });
+  assert.deepEqual(summary.errors, []);
+  const [item] = listItems(home), [row] = readLedger(ledgerFile(home));
+  assert.equal(item.kind, 'info');
+  assert.match(item.text, /check 達成: 到着確認/);
+  assert.match(item.text, /作業全体の完了は未確認です。Claude の次の手（実行状況を確認して続行）: 添付を確認して承認用の本文を作る/);
+  assert.equal(row.doneInboxId, item.id);
+  assert.equal(row.doneNotifiedAt, new Date(later).toISOString());
+});
+
+test('missing or mismatched read-back leaves completion unnotified and retries without rerunning check', async () => {
+  const home = tmp(); register(home); let checks = 0, readback = false;
+  const io = { ...baseIo, executeCheck: () => { checks++; return { code: 0, text: '達成' }; },
+    notifyOwner: () => assert.fail('no Discord'), listKimInboxItems: home => readback ? listItems(home) : [] };
+  const first = await watch({ home, now, io });
+  assert.match(first.errors.join(), /read-back failed/);
+  const [failed] = readLedger(ledgerFile(home));
+  assert.equal(failed.status, 'done'); assert.equal(failed.checkNotifiedResult, undefined); assert.equal(failed.doneNotifiedAt, undefined);
+  readback = true; await watch({ home, now, io }); await watch({ home, now, io });
+  assert.equal(checks, 1); assert.equal(listItems(home).length, 1);
+  assert.equal(readLedger(ledgerFile(home))[0].checkNotifiedResult, 'done');
+});
+
+test('legacy false notification flags including doneNotifiedAt are recovered once with distinct receipts', async () => {
+  const home = tmp();
+  const base = { status: 'done', ts: '2026-10-29T00:00:00Z', doneAt: '2026-10-30T03:00:00Z', check: 'never execute', checkResult: 'done', checkNotifiedResult: 'done', doneNotifiedAt: '2026-11-04T05:00:00Z', checkText: '達成' };
+  writeLedger(ledgerFile(home), ['job-1', 'job-2'].map(sessionId => ({ ...base, sessionId, label: '同じ見出し' })));
+  const io = { ...baseIo, executeCheck: () => assert.fail('must not rerun completed checks'), notifyOwner: () => assert.fail('no Discord') };
+  await watch({ home, now, io }); await watch({ home, now, io });
+  const items = listItems(home); assert.equal(items.length, 2);
+  const rows = readLedger(ledgerFile(home)); assert.notEqual(rows[0].doneInboxId, rows[1].doneInboxId);
+  assert.ok(rows.every(row => row.checkNotifiedResult === 'done' && row.doneInboxVerifiedAt));
+  markSeen(home, items[0].id);
+  // Simulate a crash after inbox persistence but before the receipt reaches the ledger.
+  writeLedger(ledgerFile(home), rows.map(({ doneInboxId, doneInboxVerifiedAt, ...row }) => row));
+  await watch({ home, now, io });
+  assert.equal(listItems(home).length, 2);
+  assert.equal(listItems(home).find(item => item.id === items[0].id).status, 'seen');
+});
+
+test('ledger failure after delivery retains inbox and retries the receipt without duplicates', async () => {
+  const home = tmp(); register(home); let writes = 0;
+  const io = { ...baseIo, executeCheck: () => ({ code: 0, text: '達成' }), notifyOwner: () => assert.fail('no Discord'),
+    writeLedger: (file, rows) => { if (++writes === 2) throw new Error('receipt write failed'); writeLedger(file, rows); } };
+  assert.match((await watch({ home, now, io })).errors.join(), /receipt write failed/);
+  assert.equal(readLedger(ledgerFile(home))[0].checkNotifiedResult, undefined);
+  assert.equal(listItems(home).length, 1);
+  await watch({ home, now, io: { ...io, writeLedger, executeCheck: () => assert.fail('already done') } });
+  assert.equal(readLedger(ledgerFile(home))[0].checkNotifiedResult, 'done');
+  assert.equal(listItems(home).length, 1);
 });
 
 test('ask file 全文を保存し、人待ちと期限切れを24時間ごとに再通知する', async () => {

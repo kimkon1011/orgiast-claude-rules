@@ -68,9 +68,15 @@ function normalizationKey(text) {
 function create(home, options) {
   return locked(home, 'info-aggregation', () => {
     const text = clean(options.text);
+    // Durable producers retry after a crash between inbox delivery and ledger update.
+    // Keep distinct jobs separate even when their text normalizes to the same prefix.
+    if (options.dedupeKey) {
+      const existing = listItems(home).find(item => item.dedupeKey === clean(options.dedupeKey));
+      return existing || createNew(home, options);
+    }
     if ((options.kind ?? 'info') === 'info') {
       const key = normalizationKey(text);
-      const matches = listItems(home, { status: 'open' }).filter(i => i.kind === 'info' && normalizationKey(i.text) === key).sort(newestFirst);
+      const matches = listItems(home, { status: 'open' }).filter(i => !i.dedupeKey && i.kind === 'info' && normalizationKey(i.text) === key).sort(newestFirst);
       for (const match of matches) {
         let merged = false;
         const item = update(home, match.id, current => {
@@ -92,7 +98,7 @@ export function compactItems(home) {
   return locked(home, 'info-aggregation', () => {
     const groups = new Map();
     for (const item of listItems(home, { status: 'open' })) {
-      if (item.kind !== 'info' || isHighInfo(item) || hasWorkId(item)) continue;
+      if (item.dedupeKey || item.kind !== 'info' || isHighInfo(item) || hasWorkId(item)) continue;
       const key = normalizationKey(item.text);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(item);
@@ -116,20 +122,20 @@ export function compactItems(home) {
     return result;
   });
 }
-function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null }) {
+function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey }) {
   if (!['ask', 'info'].includes(kind)) throw new Error('kind は ask または info');
   fs.mkdirSync(directory(home), { recursive: true });
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(dedupeKey ? { dedupeKey: clean(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
   }
 }
 export async function addItem(home, options) {
   const item = create(home, options);
-  if (isKimSeat(home)) return item;
+  if (isKimSeat(home) || item.forwardMailId || ['seen', 'answered', 'dropped'].includes(item.status)) return item;
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-inbox-'));
   try {
     const file = path.join(temp, 'body.txt');
@@ -137,7 +143,7 @@ export async function addItem(home, options) {
     const { stdout } = await (options.execImpl ?? exec)(process.execPath, [fileURLToPath(new URL('./fleet-mail.mjs', import.meta.url)), '--send', '--to', 'kim-PC', '--kind', 'note', '--why', `[kim-inbox:${item.kind}] ${item.text.split(/\r?\n/)[0].slice(0, 60)}`, '--body-file', file], { encoding: 'utf8', windowsHide: true, timeout: 60000, signal: options.signal, env: { ...process.env, ORGIAST_HOME: home } });
     const id = stdout.trim().match(/^(?:送信済み: )?(mail-[A-Za-z0-9-]+)$/m)?.[1];
     if (!id) throw new Error('転送先のメールIDを取得できません');
-    return update(home, item.id, current => { current.status = 'forwarded'; current.forwardMailId = id; });
+    return update(home, item.id, current => { current.status = 'forwarded'; current.forwardMailId = id; current.forwardError = null; });
   } catch (error) {
     return update(home, item.id, current => { current.forwardError = clean(error.message); });
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }

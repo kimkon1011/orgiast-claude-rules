@@ -33,7 +33,6 @@ const APPROVAL_INLINE_REASON = '[NEXT-ACTION-APPROVAL-INLINE] kim に確認・�
 const APPROVAL_NOT_LAST_REASON = '[NEXT-ACTION-APPROVAL-NOT-LAST] 【kim 確認用の全文】の後ろに別の節（③・手間監査・恒久策・別見出し等）があります。kim は一番下だけを読むので、【kim 確認用の全文】は3行フッターの真上（最後の節）に置き、③・手間監査・恒久策はその前へ移してください（kim 2026-11-04）。例外は [NEXT-ACTION-APPROVAL-NOT-LAST-OK: <理由>]。';
 const APPROVAL_HEADING = '【kim 確認用の全文】';
 const SECTION_START_PATTERN = /^(?:[①-⑨]|【|手間監査|恒久策|#{1,6}\s|\[)/;
-
 // フッター直前40行の【kim 確認用の全文】の位置: missing / not-last（後ろに別の節がある）/ last。
 function approvalPlacement(turnSource) {
   const footerLabel = turnSource.lastIndexOf('次に kim がすること:');
@@ -43,7 +42,7 @@ function approvalPlacement(turnSource) {
   if (heading < 0) return 'missing';
   return lines.slice(heading + 1).some(line => SECTION_START_PATTERN.test(line)) ? 'not-last' : 'last';
 }
-const OPEN_ACTION_PATTERN =/マージ|merge|\bPR\b|#\d+|https?:\/\/|\]\(|開く|開いて|ひらいて|確認(?:する|して|を)|見る|見て|目を通|レビュー|チェック(?:する|して)|読む|読んで|反映を確か/i;
+const OPEN_ACTION_PATTERN = /マージ|merge|\bPR\b|#\d+|https?:\/\/|\]\(|開く|開いて|ひらいて|確認(?:する|して|を)|見る|見て|目を通|レビュー|チェック(?:する|して)|読む|読んで|反映を確か/i;
 const HUMAN_ONLY_PATTERN = /支払|入金|決済|課金|OAuth|同意|ログインして許可|アカウント(?:を)?作成|物理|現地|署名|押印|電話(?:する|して)|口頭|選んで|選ぶ|決めて|決める|判断/;
 const OPEN_ACTION_REASON = '[NEXT-ACTION-OPEN] 「次に kim がすること」に、開いて見る・確認する・マージする・レビューするなど、Claude や自動処理で済む項目が入っています。開く手間そのものが user の負担です（2026-10-26 cr 指摘）。(1) 状態は自分で照会する（例: gh pr view <N> --json state,mergedAt）。済んでいれば書かない (2) 未了なら自分で実行するか（gh pr merge <N> --squash --auto 等）「この後の自動進行」に回す (3) この行は「なし」にする。書いてよいのは人にしかできない操作（支払い・OAuth 同意・アカウント作成・物理作業・本文で選択肢を示した判断）だけ。例外は [NEXT-ACTION-OPEN-OK: <理由>]。';
 const WAITING_PATTERN = /(完了通知|待ち|実行中|バックグラウンド|cron|定期実行|CI)/i;

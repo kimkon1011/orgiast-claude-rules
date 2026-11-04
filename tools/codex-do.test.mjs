@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -2224,4 +2224,72 @@ if (!fs.existsSync(marker)) {
   assert.ok(timeouts.length >= 1, `timeout 発火が見えない: ${result.stderr}`);
   // 1 回目が約 4 秒使うので、2 回目の timer は 8 秒ではなく残り約 4 秒でなければならない。
   assert.ok(timeouts[0] <= 5, `再試行の timer が残り予算でなく ${timeouts[0]} 秒だった`);
+});
+
+// ── parseCodexOutput ──────────────────────────────────────────────
+// delegation-health codex_empty_output 診断用: 出力の空/JSON/パースエラーを分類する。
+
+test('parseCodexOutput: null または undefined は no_output', () => {
+  const r = parseCodexOutput(null);
+  assert.equal(r.status, 'no_output');
+  assert.equal(r.raw, '');
+});
+
+test('parseCodexOutput: 空文字列は no_output', () => {
+  const r = parseCodexOutput('');
+  assert.equal(r.status, 'no_output');
+  assert.equal(r.raw, '');
+});
+
+test('parseCodexOutput: 空白のみは no_output', () => {
+  const r = parseCodexOutput('  \n  \t  ');
+  assert.equal(r.status, 'no_output');
+  assert.equal(r.raw, '  \n  \t  ');
+});
+
+test('parseCodexOutput: 空JSONオブジェクト{}は no_output', () => {
+  const r = parseCodexOutput('{}');
+  assert.equal(r.status, 'no_output');
+  assert.equal(r.raw, '{}');
+});
+
+test('parseCodexOutput: プレーンテキスト(非JSON)は parse_error', () => {
+  const r = parseCodexOutput('some random text output');
+  assert.equal(r.status, 'parse_error');
+  assert.equal(r.raw, 'some random text output');
+});
+
+test('parseCodexOutput: codex 形式のテキスト出力は parse_error', () => {
+  const r = parseCodexOutput('--- a/foo.js\n+++ b/foo.js\n@@ -1 +1 @@\n+console.log("hello");');
+  assert.equal(r.status, 'parse_error');
+});
+
+test('parseCodexOutput: 有効なJSONオブジェクトは ok と解析済みdataを返す', () => {
+  const r = parseCodexOutput('{"key": "value", "num": 42}');
+  assert.equal(r.status, 'ok');
+  assert.equal(r.data.key, 'value');
+  assert.equal(r.data.num, 42);
+});
+
+test('parseCodexOutput: 有効なJSON配列は ok を返す', () => {
+  const r = parseCodexOutput('["a", "b", "c"]');
+  assert.equal(r.status, 'ok');
+  assert.deepEqual(r.data, ['a', 'b', 'c']);
+});
+
+test('parseCodexOutput: 入れ子JSONは ok', () => {
+  const r = parseCodexOutput('{"status": "completed", "files": ["a.js", "b.js"]}');
+  assert.equal(r.status, 'ok');
+  assert.equal(r.data.files.length, 2);
+});
+
+test('parseCodexOutput: JSON null リテラルは no_output', () => {
+  const r = parseCodexOutput('null');
+  assert.equal(r.status, 'no_output');
+});
+
+test('parseCodexOutput: 閉じ括弧欠落のmalformed JSONは parse_error', () => {
+  const r = parseCodexOutput('{"key": "value"');
+  assert.equal(r.status, 'parse_error');
+  assert.ok(r.raw.includes('key'));
 });

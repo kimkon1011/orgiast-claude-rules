@@ -253,7 +253,7 @@ test('digest: 非kim-PCも自PC台帳の進捗を送り、0件なら送らない
   assert.equal(selectRows(rows, now).length, 1);
   const text = formatDigest(selectRows(rows, now), now, 'other-PC');
   assert.match(text, /^【other-PC の自動進行】 完了 0件・止まっている 0件・あなたの判断待ち 1件/);
-  assert.match(text, /あなたの判断待ち: 公開を確認（約束: 夜間デプロイ）/);
+  assert.match(text, /あなたの判断待ち: 夜間デプロイ\n  → 判断してほしいこと: 公開を確認/);
   const sent = [];
   const io = { label: 'other-PC', readLedger: () => rows, readState: () => ({}), writeState: () => {}, appendFileSync: () => {}, mkdirSync: () => {}, notify: async (t) => { sent.push(t); return { delivered: 'dm' }; } };
   assert.deepEqual(await digest({ home: tmp(), now, slot: '朝', io }), { sent: true, count: 1, parts: 1 });
@@ -734,7 +734,7 @@ test('digest(要件5): 判断待ちの新規は枠外でも1回だけ送る（�
   const row = { sessionId: 'urgent-1', status: 'waiting_user', nextKim: '振込の承認をお願いします', promise: '支払い手続き', ts: new Date(now - 1000).toISOString() };
   const io = { readLedger: () => [row], notify: async (text) => {
     calls++;
-    assert.match(text, /支払い手続き — 振込の承認をお願いします/);
+    assert.match(text, /・支払い手続き（このDMに返信してください）\n  → 判断してほしいこと: 振込の承認をお願いします/);
     return { delivered: 'dm' };
   } };
   const first = await digest({ home, slot: '朝', now, io });
@@ -795,7 +795,7 @@ test('digest: JST 03:00はurgentを保留し、翌朝枠の先頭に夜間項目
   assert.equal(calls, 0);
   assert.equal((await digest({ home, now: morning, io })).sent, true);
   assert.equal(calls, 1);
-  assert.match(text, /夜間発生の確認.*内容を承認/);
+  assert.match(text, /・夜間発生の確認（このDMに返信してください）\n  → 判断してほしいこと: 内容を承認/);
 });
 
 test('isHumanActionRequired: 相手や承認到着を待つ文言は人の操作と判定しない', () => {
@@ -907,7 +907,7 @@ test('digest(要件5): 61件相当でも全件を名前で出し、1800字を超
   assert.equal(lines.filter(line => line.startsWith('・あなたの判断待ち:')).length, 11);
   assert.equal(lines.filter(line => line.startsWith('・完了:')).length, 40);
   assert.equal(lines.filter(line => line.startsWith('・止まっている:')).length, 10);
-  assert.match(text, /・あなたの判断待ち: 見積もり金額10を承認（約束: 顧客10への見積もり）/);
+  assert.match(text, /・あなたの判断待ち: 顧客10への見積もり\n  → 判断してほしいこと: 見積もり金額10を承認/);
   assert.match(text, /・完了: 機能39の実装と検証完了/);
   // 各断片1800字以内（全件を載せるため必要なら分割を許容）
   for (const part of chunkMessage(text)) assert.ok(part.length <= 1800, `part length was ${part.length}`);
@@ -928,11 +928,11 @@ test('digest: 72時間より古い判断待ちも件数だけにせず全件を�
   const all = [...fresh, ...stale, closed];
   const text = formatDigest([], now, '作業用011', { allRows: all, waitingRows: all, doneRows: [], stalledRows: [] });
   assert.match(text, /あなたの判断待ち 22件/);
-  assert.match(text, /・あなたの判断待ち: 金額を承認（約束: 見積の承認）/);
-  assert.match(text, /・あなたの判断待ち: データを確認（約束: 入稿データ確認）/);
+  assert.match(text, /・あなたの判断待ち: 見積の承認\n  → 判断してほしいこと: 金額を承認/);
+  assert.match(text, /・あなたの判断待ち: 入稿データ確認\n  → 判断してほしいこと: データを確認/);
   // 72時間より古い20件も名前つきで全件載る（2026-10-23 の「件数だけ」不具合の合格条件）
-  assert.match(text, /・あなたの判断待ち: 古い作業0を承認（約束: 古い判断待ち0）/);
-  assert.match(text, /・あなたの判断待ち: 古い作業19を承認（約束: 古い判断待ち19）/);
+  assert.match(text, /・あなたの判断待ち: 古い判断待ち0\n  → 判断してほしいこと: 古い作業0を承認/);
+  assert.match(text, /・あなたの判断待ち: 古い判断待ち19\n  → 判断してほしいこと: 古い作業19を承認/);
   // 閉じた行は出さない
   assert.doesNotMatch(text, /更新済みの判断待ち|3日以上前/);
 });
@@ -948,7 +948,7 @@ test('digest: バッククォートの中身を残し、文に穴を開けない
     waitingRows: [{ sessionId: 'b', status: 'waiting_user', promise: 'PR #782 のマージ', nextKim: '`git push` を実行してから承認してください' }],
     doneRows: [], stalledRows: [],
   });
-  assert.match(command, /git push を実行してから承認してください（約束: PR #782 のマージ）/);
+  assert.match(command, /・あなたの判断待ち: PR #782 のマージ\n  → 判断してほしいこと: git push を実行してから承認してください/);
   assert.doesNotMatch(command, /`/);
 });
 
@@ -964,11 +964,11 @@ test('digest: 判断待ち22件も全件を名前で出し、完了・止まっ�
     allRows: [...waitingRows, ...doneRows, ...stalledRows], waitingRows, doneRows, stalledRows, inProgressCount: 7,
   });
   assert.match(text, /^【作業用011 の自動進行】 完了 2件・止まっている 5件・あなたの判断待ち 22件/);
-  assert.match(text, /・あなたの判断待ち: 操作0/);
+  assert.match(text, /・あなたの判断待ち: 判断0[^\n]*\n  → 判断してほしいこと: 操作0/);
   assert.match(text, /・完了: 完了作業0/);
   assert.match(text, /・止まっている: 停滞0/);
   // 22件全件・2件の完了・5件の停滞が名前つきで載り、「ほか N 件」は使わない
-  assert.match(text, /・あなたの判断待ち: 操作21/);
+  assert.match(text, /・あなたの判断待ち: 判断21[^\n]*\n  → 判断してほしいこと: 操作21/);
   assert.doesNotMatch(text, /ほか \d+件/);
   assert.match(text, /・止まっている: 停滞4 — 自動再開していません/);
   const lines = text.split('\n');
@@ -992,7 +992,7 @@ test('digest: 各区分とも上限なしで全件を名前で出す', () => {
   for (const [label, prefix] of [['あなたの判断待ち', '判断'], ['完了', '完了'], ['止まっている', '停滞'], ['進行中', '進行']]) {
     const items = text.split('\n').filter(line => line.startsWith(`・${label}:`) && !line.includes('ほか'));
     assert.equal(items.length, 8, `${label} は8件全件`);
-    for (let i = 0; i < 8; i++) assert.match(text, new RegExp(`・${label}: (?:［[^］]*］)?${label === 'あなたの判断待ち' ? '承認（約束: ' : ''}${prefix}作業${i}`));
+    for (let i = 0; i < 8; i++) assert.match(text, new RegExp(`・${label}: (?:［[^］]*］)?${label === 'あなたの判断待ち' ? `${prefix}作業${i}\\n  → 判断してほしいこと: 承認` : `${prefix}作業${i}`}`));
     assert.doesNotMatch(text, new RegExp(`・${label}: ほか`));
   }
   for (const part of chunkMessage(text)) assert.ok(part.length <= 1800, `part length was ${part.length}`);

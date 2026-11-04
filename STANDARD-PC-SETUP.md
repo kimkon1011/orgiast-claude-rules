@@ -1,6 +1,6 @@
 # Claude Code 標準設定書（全アカウント・全PC共通）
 
-版 v2.2／最終更新 2026-10-29／正本: この md（GitHub kimkon1011/orgiast-claude-rules の STANDARD-PC-SETUP.md）。Google Doc はこの md から自動生成（直接編集しない。編集は md → `node tools/gdoc-update.mjs --id 1p9_YkCIXDRbGrFsRDbtNxHVmZ7AglDOqBlamn2Ij4NA --file STANDARD-PC-SETUP.md`）。
+版 v2.3／最終更新 2026-11-04／正本: この md（GitHub kimkon1011/orgiast-claude-rules の STANDARD-PC-SETUP.md）。Google Doc はこの md から自動生成（直接編集しない。編集は md → `node tools/gdoc-update.mjs --id 1p9_YkCIXDRbGrFsRDbtNxHVmZ7AglDOqBlamn2Ij4NA --file STANDARD-PC-SETUP.md`）。
 
 この文書は今後、設定が増えるたびにこの1本を更新していく運用です。新しい設定を追加するときは、このページの該当章に追記し、末尾「根拠」に出典を1行足してください。別の文書を新設しないでください。
 
@@ -80,6 +80,19 @@ Claude Code からは自動再起動しない。ログインは手順6でまと�
 - `<ホームフォルダ>\.claude\settings.json` の `SessionStart` に `onboarding-sync.mjs` が登録されている
 いずれか欠けていたら手順1をもう一度実行する。
 
+### 手順5.5 keyserve 鍵を配備する（案件同期・秘匿値取得に必須）
+
+keyserve の鍵が無いと、案件の自動引き継ぎ（case-handoff）や秘匿値取得が **HTTP 401** で失敗する。鍵は primary を持つPC（kim-PC 等）だけが発行でき、**未登録のPC単独では取得できない**（設計上のセキュリティ境界）。新PCをセットアップしたら、Claude は黙って先へ進めず、ここで必ず配備状態を確認し、未登録なら鍵を取り寄せる。
+
+1. `node <repo>\tools\keyserve-status.mjs` を実行する。
+2. 「認証経路: primary / HTTP 200」なら配備済み。手順6へ進む。
+3. 「未設定」ならこのPCは keyserve 未登録。次で鍵を取り寄せる（401 のまま放置・キュー溜めにしない）:
+   - primary を持つPC（kim-PC 等。`keyserve-status` が primary のPC）で、このPC名を指定して enroll トークンを発行してもらう: `node <repo>\tools\keyserve-enroll.mjs --pc "<このPC名>" --dm`。トークン入りの1行コマンドが kim の Discord DM に届く（秘密情報なので共有チャンネルに貼らない）。
+   - fleet-mail が使える席なら、primary を持つPCの Claude に発行を依頼し、1行コマンドを受け取ってもよい。
+   - 届いた1行コマンドをこのPCの PowerShell で実行する（`install-orgiast.ps1 -Enroll <token>` 相当。`enroll.env` 書き込み → onboarding-sync が派生鍵を取得 → `keyserve.env` 生成）。
+4. 再度 `node <repo>\tools\keyserve-status.mjs` を実行し、「primary / HTTP 200」を確認する。
+5. 日本語 hostname のPCは、1行コマンドが `~/.claude/keyserve.env` に `ORGIAST_KEYSERVE_PC=<ASCIIのPC名>` を自動設定する（手動で書く場合も同じ）。
+
 ### 手順6 ログイン4件を1つの見える画面で行う
 
 （パスワード・トークンはチャットで絶対に聞かない）。`node <repo>/tools/make-desktop-launcher.mjs --name "オージャスト ログイン4件" --ps-file <repo>/tools/login-services.ps1` でデスクトップに置き、Claude 自身が `Start-Process` で起動する。利用者にコマンドを貼らせない。
@@ -98,6 +111,7 @@ Claude は5秒ごとに `gh auth status` / `~/.clasprc.json` / `npx -y vercel wh
 | Bash が LANE-REPAIR-FIRST の hook で止まる、または Codex 委譲ができない | Codex が未ログイン。手順6でログインが済めば解消するので、それまでは PowerShell ツールで進める |
 | clasp でブラウザが開かない、localhost が ERR_CONNECTION_REFUSED になる | login-services.ps1 が URL を抽出して開き直す。古いタブは閉じてよいと本人に1行で伝える |
 | 許可ルールを /permissions で入れるよう求められている気がする | 手順7のツールで Claude が入れる。本人には頼まない |
+| case-handoff（案件同期）や秘匿値取得が HTTP 401 になる／`keyserve-status` が「未設定」 | このPCが keyserve 未登録。手順5.5 で primary を持つPC（kim-PC 等）に enroll トークンを発行してもらい、1行コマンドで配備する。未登録PC単独では直せない（2026-11-04 DELL席で実測） |
 
 ### 手順7 許可ルール15行（下記5.3）は Claude Code が追加する（本人に /permissions を操作させない）
 
@@ -255,6 +269,7 @@ PowerShell(Get-ScheduledTask -TaskName *)
 | 4 | permission modeがbypassPermissions | ~/.claude/settings.jsonのpermissions.defaultModeが"bypassPermissions" |
 | 5 | effortLevelがmedium | 同ファイルの"effortLevel": "medium" |
 | 6 | 日次コスト自己申告が届いている | Discordに当月コストの自己申告メッセージが日次で届く |
+| 7 | keyserve 鍵が配備されている（案件同期・秘匿値取得に必須） | `node <repo>\tools\keyserve-status.mjs` が「認証経路: primary / HTTP 200」。「未設定」なら手順5.5で配備する（未登録だと case-handoff が HTTP 401 になる） |
 
 ## 7. 困ったとき
 
@@ -289,6 +304,7 @@ PowerShell(Get-ScheduledTask -TaskName *)
 - gh／clasp／vercelの位置づけ：rules-extracted/project-launch-playbook.md（ghのwinget導入コマンド）、および実機settings.jsonのpermissions.allowにnpx clasp *・npx vercel *系が多数登録されていること（個別インストールでなくnpx経由が実運用）。
 - VS Code拡張の前提：既存Doc「Claude Code 許可設定の追加手順」の手順文中の記述、および tools/RESTORE-claude-backup.md のVS Code拡張導入手順。
 - 2026-10-29 user-PC 実測：pwsh の `$p` 先行展開、自動再起動、Gemini 非対話入力、zip 二重入れ子、hook 誤NG、4サービス認証の迷いを再現し、v2.1 で是正。
+- 2026-11-04 DELL席（seisaku-team@）実測：keyserve 未登録のため case-handoff の案件同期が HTTP 401（`keyserve.env`/`enroll.env` とも不在、`keyserve-status` が「未設定」）。従来の手順1〜8に keyserve enroll の配備・確認が無く、トークン未配備の新PCが未登録のまま放置される構造だったため、手順5.5・6章#7・詰まり対処表を追加（v2.3）。enroll トークンは primary を持つPCだけが発行でき未登録PC単独では取得できない設計（tools/keyserve-enroll.mjs:64、keyserve-auth.mjs、onboarding-sync.mjs の provisionKeys）。
 
 ## 未確認事項
 

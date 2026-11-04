@@ -979,6 +979,8 @@ kim が操作する対象アカウントの案件作業は、案件ID・案件�
 
 Stop の10分間隔と SessionEnd に未送信分を保存する。秘密情報を除去した発言本文は全文、ツール結果は先頭500字、添付はパス・Drive IDを記録する。保存失敗はローカルキューとエラーに残し次回再送する。閉じる前に `node tools/case-handoff.mjs flush <sessionId>` の完了確認をする。個別の画像・添付バイナリそのものを複製する機能ではない。配布は `node tools/setup.mjs --converge`。
 
+🔴 案件同期（case-handoff）・秘匿値取得は keyserve の鍵が前提（全PC全アカウント共通）。新PC・新アカウントは keyserve enroll を必ず通す（手順は STANDARD-PC-SETUP.md「手順5.5 keyserve 鍵を配備する」）。鍵は primary を持つPC（kim-PC 等）だけが `node tools/keyserve-enroll.mjs --pc "<PC名>"` で発行でき、未登録PC単独では取得できない設計。case-handoff が HTTP 401、または `node tools/keyserve-status.mjs` が「未設定」なら「この席は keyserve 未登録」と判定し、401 のままローカルキューに溜めて放置しない。primary を持つPC（または fleet-mail 経由でその Claude）に enroll トークンを発行させ→当該PCで `-Enroll` の1行コマンドを実行→`keyserve-status` が primary / HTTP 200、まで案内・実行する（2026-11-04 DELL席の未登録 401 を受けて明文化）。
+
 ### 1.16 Fableの用途制限
 
 FableはplanIncludedがtrueなら監督のみ可、falseなら全用途禁止。

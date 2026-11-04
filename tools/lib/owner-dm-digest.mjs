@@ -1,9 +1,14 @@
+import { decisionOwnerOf } from '../auto-progress-decision-owner.mjs';
 import { notificationKind } from './owner-dm-policy.mjs';
 const day = 86400000;
 const plain = value => cleanText(value).replace(/(?:作業ID|セッションの目的|プロジェクト)[:：][^\n]*/g, '').replace(/(?:[A-Za-z]:\\|~?\/)[^\s、。]+/g, '').replace(/\b(?:autopilot|headless|quota-sweep|nightly-repo|unattended)\b[^\s、。]*/gi, '').replace(/\s+/g, ' ').trim();
-export function compactDigest(rows, deferred, now, { home } = {}) {
+export function compactDigest(rows, deferred, now, { home, owner = '' } = {}) {
   const actions = deferred.filter(r => r.kind === 'action');
-  for (const row of rows) if (isHumanActionRequired(row)) actions.push({ text: [plain(row.label || row.promise).slice(0, 60), plain(kimAction(row))].filter(Boolean).join(' — '), at: row.changedAt || row.ts });
+  for (const row of rows) if (isHumanActionRequired(row)) {
+    const kimWaiting = decisionOwnerOf(row) === 'kim' && owner.toLowerCase() !== 'kim@orgiast.jp';
+    const action = kimAction(row);
+    actions.push({ text: `${kimWaiting ? 'kim の判断待ち: ' : ''}${[plain(row.label || row.promise).slice(0, 60), action === 'なし' ? '' : plain(action)].filter(Boolean).join(' — ')}`, reply: !kimWaiting, at: row.changedAt || row.ts });
+  }
   const byText = new Map();
   for (const action of actions) {
     const previous = byText.get(action.text);
@@ -21,7 +26,7 @@ export function compactDigest(rows, deferred, now, { home } = {}) {
     const text = plain(a.text);
     if (included.length >= 2 || chars + text.length > 1350) continue;
     included.push(a); chars += text.length;
-    lines.push(`・${text}（このDMに返信してください）`);
+    lines.push(`・${text}${a.reply === false ? '（あなたの操作は不要）' : '（このDMに返信してください）'}`);
   }
   const extra = [];
   if (old.length) extra.push(`古い待ち ${old.length}件（7日以上動きなし）`);
@@ -52,6 +57,8 @@ export const kimAction = row => {
 
 export const isHumanActionRequired = (row) => {
   if (row.status === 'done') return false;
+  // main: 依頼本文がない明示的な判断待ちも取りこぼさない。
+  if (row.status === 'waiting_user' && !String(row.nextKim || '').trim()) return true;
   if (kimAction(row) !== 'なし') return true;
   // promise は Claude 自身が進める約束なので語句では判定しない（「判断」等を含むだけで誤って判断待ちになる）。
   // 人の操作が要るのは「次に kim がすること」か、自動再開の結果が needs_user を返した時だけ。

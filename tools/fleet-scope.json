@@ -14,6 +14,7 @@
     {"path": "tools/kim-awaiting.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "kim の返事待ちの集約と回答配送"},
     {"path": "tools/kim-awaiting-context.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "kim の返事待ちの集約と回答配送"},
 
+    {"path":"tools/lib/reclaim-lock.mjs","scope":"fleet","step":"task:fleet-mail","reason":"fleet-mail / 質問中継が使う、残った .reclaim の自動回収"},
     {"path":"tools/lib/gws-proxy.mjs","scope":"fleet","step":"task:fleet-mail","reason":"全PCの鍵なしGmail・Drive・LINE APIと自己点検の共通認証経路"},
     {"path":"tools/drive-read.mjs","scope":"fleet","step":"task:fleet-mail","reason":"全PCから共有Driveの検索と読み取り"},
     {"path":"tools/line-channel.mjs","scope":"fleet","step":"task:fleet-mail","reason":"全PCから共通LINE履歴と公式botを利用"},

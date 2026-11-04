@@ -96,3 +96,18 @@ test('compact digest containing a failure title never creates another repair tas
   assert.equal(result.delivered, 'dm');
   assert.equal(fs.existsSync(path.join(f.home, '.claude/next-session.md')), false);
 });
+
+test('compact digest identifies kim decisions and retains waiting rows without nextKim', t => {
+ const f = fixture(t);
+ const rows = [
+   { ...row('owner@example.com'), reason: 'kim の判断', promise: '契約の確認' },
+   { ...row('owner@example.com'), nextKim: '', promise: '日付の確認' },
+ ];
+ const out = compactDigest(rows, [], now, { home: f.home, owner: 'owner@example.com' }).text;
+ assert.match(out, /kim の判断待ち: .*（あなたの操作は不要）/);
+ assert.match(out, /日程の確認（このDMに返信してください）/);
+ assert.ok(`【進捗まとめ】\n${out}`.split('\n').length <= 10);
+ const kim = compactDigest([rows[0]], [], now, { home: f.home, owner: 'kim@orgiast.jp' }).text;
+ assert.match(kim, /このDMに返信してください/);
+ assert.doesNotMatch(kim, /あなたの操作は不要/);
+});

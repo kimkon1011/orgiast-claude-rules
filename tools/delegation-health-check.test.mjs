@@ -377,6 +377,13 @@ test('失敗より古い / トークン無し / 壊れた JSON / ファイル無
   }
 });
 
+test('codex_auth_failed の fixTask は WSL 無し PC ではコピー不要で人の codex login だけが手段と案内する', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, status: 1, stderrTail: '401 Unauthorized: Missing bearer or basic authentication in header' }));
+  const finding = collectFindings({ home: dir, now: NOW }).find((item) => item.id === 'codex_auth_failed');
+  assert.match(finding.fixTask, /WSL ディストロが無い PC.*ネイティブ.*コピーは不要.*人の codex login/);
+});
+
 test('BOM 付き・access_token のみでも復旧扱い', () => {
   const dir = home();
   write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, status: 1, stderrTail: '401 Unauthorized: Missing bearer or basic authentication in header' }));

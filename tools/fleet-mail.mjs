@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { createReclaimDirectory, removeReclaimDirectory } from './lib/reclaim-lock.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -19,6 +20,7 @@ import { appendAfterFromEnv } from './growi-manual.mjs';
 import { fetchMailTargets } from './fleet-mail-targets.mjs';
 import { allowedReadonlyPrompt } from './lib/fleet-selfcheck-prompt.mjs';
 export { resolveFleetLabel, dailyRuleCompliance };
+export { RECLAIM_STALE_MS } from './lib/reclaim-lock.mjs';
 
 export function isFleetHub(label, config) {
   return label === (config.FLEET_HUB || HUB_LABEL);
@@ -351,10 +353,10 @@ export function updateInbox(id, fn, { home = process.env.ORGIAST_HOME || os.home
       // Only EEXIST permits stale inspection; sharing conflicts use the same
       // bounded wait without touching another worker's lock.
       if (error.code === 'EEXIST') try {
-        fs.mkdirSync(reclaim); ownsReclaim = true;
+        createReclaimDirectory(reclaim, { now }); ownsReclaim = true;
         if (now() - fs.statSync(lock).mtimeMs > INBOX_LOCK_STALE_MS) { fs.unlinkSync(lock); reclaimed = true; }
       } catch (error) { if (!['EEXIST', 'ENOENT'].includes(error.code) && !windowsLockBusy(error)) throw error; }
-      finally { if (ownsReclaim) fs.rmdirSync(reclaim); }
+      finally { if (ownsReclaim) removeReclaimDirectory(reclaim); }
       if (reclaimed) { attempt--; continue; }
       if (attempt === retries) return null;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
@@ -639,13 +641,13 @@ export function acquireLock(file, { now = Date.now, pid = process.pid, hardCapMs
     } catch (e) {
       if (e.code !== 'EEXIST') throw e;
       const reclaim = `${file}.reclaim`;
-      try { fs.mkdirSync(reclaim); } catch (error) { if (error.code === 'EEXIST') return null; throw error; }
+      try { createReclaimDirectory(reclaim, { now }); } catch (error) { if (error.code === 'EEXIST') return null; throw error; }
       try {
         const stat = fs.statSync(file);
         if (now() - stat.mtimeMs < LOCK_MS) return null;
         fs.unlinkSync(file);
       } catch (error) { if (error.code !== 'ENOENT') throw error; }
-      finally { fs.rmdirSync(reclaim); }
+      finally { removeReclaimDirectory(reclaim); }
     }
   }
   return null;
@@ -872,7 +874,19 @@ export async function pollOnce(deps = {}) {
     const label = deps.label ?? resolveFleetLabel(home, identity);
     const request = deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch, sleepImpl: deps.sleep });
     release = dryRun ? () => {} : acquireLock(path.join(dir, 'fleet-mail.lock'), { now });
-    if (!release) { outcome = 'locked'; err('fleet-mail: 別の受信処理が実行中'); return { skipped: 'locked' }; }
+    if (!release) {
+      outcome = 'locked';
+      const lock = path.join(dir, 'fleet-mail.lock');
+      let unrecoverable = false;
+      try { unrecoverable = now() - fs.statSync(lock).mtimeMs >= 3 * LOCK_MS; }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (unrecoverable) {
+        err(`fleet-mail: ロック回収不能（${lock} / reclaim 残留）`);
+        return { skipped: 'locked', exitCode: LOCK_BUSY_EXIT };
+      }
+      err('fleet-mail: 別の受信処理が実行中');
+      return { skipped: 'locked' };
+    }
     deps.onLock?.(release, () => ({ startedAt, phases: { ...phases }, stuckIn: activePhase?.name ?? null }));
     const fileOf = id => inboxPath(home, id);
     const log = (name, value) => fs.appendFileSync(path.join(dir, `fleet-mail-${name}.jsonl`), `${JSON.stringify({ at: new Date(now()).toISOString(), ...value })}\n`, { mode: 0o600 });
@@ -1479,10 +1493,10 @@ async function runMain(argv, deps) {
   }, deps.pollHardDeadlineMs ?? POLL_HARD_DEADLINE_MS);
   hardStop?.unref();
   try {
-    await pollOnce({ ...deps, executePrompts: options['--no-exec'] ? false : deps.executePrompts, dryRun: !!options['--dry-run'], json: !!options['--json'],
+    const result = await pollOnce({ ...deps, executePrompts: options['--no-exec'] ? false : deps.executePrompts, dryRun: !!options['--dry-run'], json: !!options['--json'],
       onLock: (release, snap) => { releaseOnStop = release; snapshot = snap; } });
+    return result?.exitCode ?? 0;
   } finally { if (hardStop) clearTimeout(hardStop); }
-  return 0;
 }
 if (isEntry(import.meta.url)) {
   try { process.exitCode = await main(); }

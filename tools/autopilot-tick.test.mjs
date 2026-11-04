@@ -23,6 +23,9 @@ function discord(t, overrides = {}) {
   const f = fixture(t, { token: 'test-token', userId: 'kim', ...overrides });
   fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(f.opts.home, '.claude', 'orgiast-autopilot-channel-id.txt'), 'control');
+  // owner DM ルーティングに必要なテスト用PC所有者を明示し、実機のgit設定に依存しない。
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'cost-reporter.env'), 'REPORTER_LABEL=autopilot-test-PC\n');
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'fleet-pc-map.json'), JSON.stringify({ 'autopilot-test-PC': { account: 'test@example.com', discordId: 'kim' } }));
   const unavailable = new Set();
   f.opts.fetchImpl = async (url, init = {}) => {
     calls.push({ url, init });

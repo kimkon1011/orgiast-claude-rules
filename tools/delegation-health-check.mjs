@@ -590,7 +590,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
           || /クールダウン中|起動を省略しました/.test(String(other.stderrTail || ''));
       });
     };
-    const allNonSkipped = rows.filter((row) => !isCooldownSkippedRow(row) && !isDeferredSkippedRow(row) && !skippedByCooldown(row) && !skippedExternalCause(row) && !skippedRepairedByCodex(row) && !skippedDuringCheapOutage(row) && !isEmptyDiffEscalationRow(row) && !isFallbackCooldownSkipRow(row) && !isQuotaSweepBenignRow(row));
+    const allNonSkipped = rows.filter((row) => !isCooldownSkippedRow(row) && !isDeferredSkippedRow(row) && !skippedByCooldown(row) && !skippedExternalCause(row) && !skippedRepairedByCodex(row) && !skippedDuringCheapOutage(row) && !isEmptyDiffEscalationRow(row) && !isFallbackCooldownSkipRow(row) && !isQuotaSweepBenignRow(row) && emptyOutputReason(row) !== 'preflight_blocked');
 	    // status:'ok' は API 呼出成功。out=0 でもレーン障害ではない（gemini プローブ行実測 2026-10-30〜11-01）。
 	    const attempts = allNonSkipped.filter((row) => emptyOutputReason(row) !== 'ok');
     // 24h 窓が cooldown だけで埋まる＝上限中で一度も試行していない。レーンは止まっているが

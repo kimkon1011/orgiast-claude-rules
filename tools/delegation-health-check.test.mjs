@@ -186,6 +186,20 @@ test('先頭が切れた認証失敗 stderrTail の fallback 連続失敗は lan
   assert.equal(findings.find((item) => item.id === 'codex_auth_failed').severity, 'high');
 });
 
+test('認証失敗に preflight_blocked（unattended_budget 保留）が混ざっても lane_outage_unrepaired ではなく codex_auth_failed に繋がる', () => {
+  const truncated = 'arer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: a52b4a02b91c19e8-KIX, request id: req_c13287e0c5004bec97e2e26b1d8bef5b';
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [
+    row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 15, stderrTail: truncated }),
+    row({ t: '2026-09-09T10:01:00Z', provider: 'codex', out: 0, status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 16, stderrTail: truncated }),
+    row({ t: '2026-09-09T10:02:00Z', provider: 'codex', model: 'codex-cli/gpt-5.6-sol', status: 'deferred', reason: 'unattended_budget', retryAt: 1793804400000, origin: 'unattended', kind: 'implement', launched: false, cwd: '/tmp' }),
+  ].join(''));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  const ids = findings.map((item) => item.id);
+  assert.ok(ids.includes('codex_auth_failed'), JSON.stringify(ids));
+  assert.ok(!ids.includes('lane_outage_unrepaired'), JSON.stringify(ids));
+});
+
 test('emptyOutputReason は U+2019 と U+0027 の両方の usage limit 行を usage_limit に分類する', () => {
   // U+2019 (’)
   assert.equal(emptyOutputReason({

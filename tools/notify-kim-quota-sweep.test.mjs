@@ -28,8 +28,7 @@ const todoFile = dir => path.join(dir, '.claude/next-session.md');
 
 test('quota-sweep の deferred 通知は目的文に「失敗」があっても起票しない', async () => {
   const dir = home(), s = sender(dir);
-  // 2026-11-04 仕様変更: 無人巡回の報告は保留し、修復TODOの誤起票がないことを守る。
-  assert.equal((await notifyKim(report('deferred', { reason: '利用窓を読めない一時障害のため次回へ延期: HTTP 429' }), s.options)).delivered, 'deferred');
+  assert.equal((await notifyKim(report('deferred', { reason: '利用窓を読めない一時障害のため次回へ延期: HTTP 429' }), s.options)).delivered, 'dm');
   assert.equal(fs.existsSync(todoFile(dir)), false);
 });
 

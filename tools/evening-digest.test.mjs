@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { readDeferred } from './lib/owner-dm-policy.mjs';
 import { listItems } from './kim-inbox.mjs';
 import { runEvening } from './evening-digest.mjs';
 
@@ -24,9 +23,7 @@ test('台帳へ結果を保存し同日抑制と明示再送を維持する', as
   assert.equal((await runEvening({ home: dir, now, webhookUrl: 'https://example.test/hook', fetchImpl })).skipped, true);
   await runEvening({ home: dir, now, force: true, webhookUrl: 'https://example.test/hook', fetchImpl });
   assert.equal(sends, 0);
-  // 2026-11-04 仕様変更: 自動報告は即配達せず保留台帳に保存。同日抑制・force再送は維持する。
-  assert.equal(listItems(dir).length, 0);
-  assert.equal(readDeferred(dir).length, 2);
+  assert.equal(listItems(dir).length, 2);
 });
 test('チャンネル取得失敗でもダイジェスト本体を送る', async () => {
   const dir = home(); let notified = 0;

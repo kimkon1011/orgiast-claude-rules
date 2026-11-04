@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-import { routeOwnerDm } from './lib/owner-dm-policy.mjs';
-import { resolveOwner as resolveNotificationOwner } from './lib/fleet-owner.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -85,7 +83,7 @@ export async function notifyKim(text, options = {}) {
       return { delivered: 'blocked', category: policy.category, reason: policy.reason };
     }
   }
-  options = { ...options, ownerKind: options.ownerKind ?? options.kind, kind: options.kimActionRequired === true || options.kind === 'ask' ? 'ask' : 'info' };
+  options = { ...options, kind: options.kimActionRequired === true || options.kind === 'ask' ? 'ask' : 'info' };
   const raw = redactSecrets(String(text ?? ''));
   const bodyText = stripOwnerAddress(raw);
   if (STATUS_REPORT.test(bodyText) || ALREADY_FILED.test(bodyText) || isSuccessfulResumeReport(bodyText) || AUTO_RESUME_NOTICE.test(bodyText)) return deliverKim(raw, options);
@@ -189,17 +187,7 @@ function benignQuotaSweepReport(text) {
   return QUOTA_SWEEP_BENIGN.has(outcome);
 }
 
-export async function deliverKim(text, options = {}) {
-  if (!options.ownerPolicyApplied) {
-    const home = options.home || process.env.ORGIAST_HOME || os.homedir();
-    const owner = options.owner || (String(options.userId || KIM_DISCORD_USER_ID) === KIM_DISCORD_USER_ID ? 'kim@orgiast.jp' : resolveNotificationOwner({ home }));
-    const deferred = await routeOwnerDm(owner, text, { ...options, home, kind: options.kimActionRequired || ['action', 'ask'].includes(options.ownerKind ?? options.kind) ? 'action' : options.ownerKind ?? options.kind });
-    if (deferred) return deferred;
-  }
-  return deliverKimTransport(text, options);
-}
-
-async function deliverKimTransport(text, {
+export async function deliverKim(text, {
   home = process.env.ORGIAST_HOME || os.homedir(),
   userId,
   token,

@@ -1,4 +1,6 @@
 [
+  { "log": "deadline-detect.log", "maxAgeHours": 36, "maxLastRunHours": 36, "label": "期限自動検出", "scan": "stale-only", "task": "OrgiastDeadlineDetect", "tool": "tools/deadline-detect.mjs", "maxRunHours": 1, "fleetLabel": "kim-PC" },
+  { "log": "deadline-watch.log", "maxAgeHours": 36, "maxLastRunHours": 36, "label": "期限追跡", "scan": "stale-only", "task": "OrgiastDeadlineWatch", "tool": "tools/deadline-watch.mjs", "maxRunHours": 1, "fleetLabel": "kim-PC" },
   { "log": "nightly-health-remediate.log", "maxAgeHours": 26, "label": "夜間ヘルス自動修復", "scan": "stale-only", "task": "OrgiastNightlyRemediate", "tool": "tools/nightly-health-remediate.mjs", "maxRunHours": 1.5 },
   { "log": "stuck-dialog-watch.log", "maxAgeHours": 0.17, "label": "操作を止める画面の監視", "scan": "stale-only", "task": "OrgiastStuckDialogWatch", "tool": "tools/stuck-dialog-watch.mjs", "maxRunHours": 0.17, "platform": "win32" },
   { "log": "model-scout.log", "maxAgeHours": 30, "label": "新AIモデル日次偵察", "scan": "keywords", "tool": "tools/model-scout-daily.mjs", "successPattern": "model-scout 完了", "fleetLabel": "kim-PC" },

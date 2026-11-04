@@ -43,6 +43,12 @@ export function mergeKnowledge(knowledge, learned, candidates, observation, tool
   const pending = [...candidates];
   const promoted = [];
   for (const item of learned) {
+    // 監査キュー自身の話(Self-reference)は学習しない。レビューセッションの最終文
+    // 「tool-name-route の候補1件は棄却しました」を夜間監査が pattern に変換した行
+    // （2026-11-03 実測: pattern="tool-name-route の棄却" / route="gh secret"）は
+    // 実先送り文ではなく、route も道具名のままで手順文に書き直せない。保留すると
+    // 見直しTODOが再発するので、候補にも積まずに捨てる（[[feedback_handoff_audit_self_reference_false_positive]]）。
+    if (key(item.pattern).startsWith('tool-name-route の')) continue;
     if (isToolNameRoute(item.route, toolRoutes)) {
       if (!pending.some(c => key(c.pattern) === key(item.pattern) && key(c.route) === key(item.route) && c.observation === observation)) pending.push({ ...item, observation, reason: 'tool-name-route' });
       continue;

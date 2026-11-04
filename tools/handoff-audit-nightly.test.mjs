@@ -31,6 +31,15 @@ test('mergeKnowledge は道具名 route を confidence high でも昇格せず r
   assert.equal(isToolNameRoute('gh api で確認する', ['gh api']), false);
   assert.equal(isToolNameRoute('gh api'), false);
 });
+test('mergeKnowledge は自己言及パターン（tool-name-route の〜）を候補に積まず捨てる', () => {
+  const meta = { pattern: 'tool-name-route の棄却', route: 'gh secret', confidence: 'high' };
+  const merged = mergeKnowledge([], [meta], [], 'one', ['gh secret']);
+  assert.deepEqual(merged.knowledge, []);
+  assert.deepEqual(merged.promoted, []);
+  assert.deepEqual(merged.candidates, []);
+  const again = mergeKnowledge([], [{ ...meta, pattern: 'tool-name-route の採用', route: 'gh api' }], [], 'two', ['gh api']);
+  assert.deepEqual(again.candidates, []);
+});
 test('道具名 route は前回観測(prior)があっても昇格しない', () => {
   const medium = { ...item, confidence: 'medium' };
   const prior = { ...medium, observation: 'one' };

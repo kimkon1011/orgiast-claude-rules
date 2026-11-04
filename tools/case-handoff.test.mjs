@@ -9,6 +9,13 @@ import { detectCases, transcriptRecords, nextBatch, renderState, resumeText, HEA
 import { redactForShare } from './lib/share-secrets.mjs';
 import { client, atomic } from './case-handoff.mjs';
 
+function kimHome(prefix) {
+  const home = fs.mkdtempSync(prefix);
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=case-test-seat');
+  return home;
+}
+
 const identity = { sessionId: 'session-1', account: 'kim@orgiast.jp', pc: 'kim-PC' };
 const source = { ...identity, file: '20261029-kim-session-1.md', timestamp: '2026-10-29T01:00:00Z' };
 const row = (uuid, type, content) => JSON.stringify({ uuid, type, timestamp: source.timestamp, message: { content } });
@@ -70,7 +77,7 @@ test('identical UUID-less bridge records have distinct stable checkpoints instea
 });
 
 test('known 409 codes are shown safely and only Drive conflicts use bounded jittered retries', async t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'case-codes-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const home = kimHome(path.join(os.tmpdir(), 'case-codes-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   for (const code of ['batch_changed', 'drive_busy', 'drive_contention', 'state_not_ready', 'secret-upstream-text']) {
     let calls = 0; const delays = [];
     const c = client({ home, ...identity, random: () => 0.5, sleep: async ms => delays.push(ms), fetchImpl: async () => {
@@ -84,7 +91,7 @@ test('known 409 codes are shown safely and only Drive conflicts use bounded jitt
 });
 
 test('Drive contention retries the identical persisted batch and advances cursor only after success', async t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'case-retry-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const home = kimHome(path.join(os.tmpdir(), 'case-retry-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const file = path.join(home, 'session.jsonl'); fs.writeFileSync(file, transcript);
   const bodies = [];
   const c = client({ home, ...identity, sleep: async () => {}, fetchImpl: async (_url, init) => {
@@ -99,7 +106,7 @@ test('Drive contention retries the identical persisted batch and advances cursor
 });
 
 test('a conflicting legacy batch is retained without starving an unrelated case', async t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'case-fair-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const home = kimHome(path.join(os.tmpdir(), 'case-fair-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const file = path.join(home, 'session.jsonl'); fs.writeFileSync(file, transcript);
   const c = client({ home, ...identity, fetchImpl: async (_url, init) => {
     const b = JSON.parse(init.body);
@@ -122,7 +129,7 @@ test('state keeps all headings within 4KB, resume within 6KB in Japanese', () =>
   assert.ok(bytes(resumeText(state, long)) <= 6144);
 });
 test('failure keeps exact batch queued, successful replay advances cursor once, cold resume is bounded', async t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'case-test-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const home = kimHome(path.join(os.tmpdir(), 'case-test-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const file = path.join(home, 'session.jsonl'); fs.writeFileSync(file, transcript);
   let fail = true; const batches = new Set(); let calls = 0;
   const c = client({ home, ...identity, fetchImpl: async (_url, init) => {
@@ -138,7 +145,7 @@ test('failure keeps exact batch queued, successful replay advances cursor once, 
 });
 
 test('setup converge installs all four hooks with matching verification and repairs a missing hook', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'case-setup-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const home = kimHome(path.join(os.tmpdir(), 'case-setup-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const manifest = JSON.parse(fs.readFileSync(path.join(repo, 'tools/setup-manifest.json'), 'utf8'));
   const items = manifest.items.filter(i => i.id.startsWith('settings:case-handoff-'));
@@ -153,7 +160,7 @@ test('setup converge installs all four hooks with matching verification and repa
 });
 
 test('debounced Stop sends a complete multi-batch burst then defers new speech for ten minutes', async t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'case-burst-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const home = kimHome(path.join(os.tmpdir(), 'case-burst-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const file = path.join(home, 'session.jsonl');
   fs.writeFileSync(file, row('one', 'user', '長'.repeat(40000)) + '\n' + row('two', 'assistant', '文'.repeat(40000)) + '\n');
   const c = client({ home, ...identity, fetchImpl: async (_url, init) => Response.json({ batchId: JSON.parse(init.body).batchId, stateReady: true }) });
@@ -165,7 +172,7 @@ test('debounced Stop sends a complete multi-batch burst then defers new speech f
 });
 
 test('adding a case while the worker awaits acknowledgment retains both bindings and the cursor', async t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'case-binding-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const home = kimHome(path.join(os.tmpdir(), 'case-binding-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const file = path.join(home, 'session.jsonl'); fs.writeFileSync(file, transcript);
   const c = client({ home, ...identity, fetchImpl: async (_url, init) => {
     c.bind(identity.sessionId, ['261029AB'], file);
@@ -178,4 +185,12 @@ test('adding a case while the worker awaits acknowledgment retains both bindings
   fs.writeFileSync(`${c.bindingFile(identity.sessionId)}.lock`, String(process.pid));
   assert.throws(() => c.bind(identity.sessionId, ['261030AB'], file), /使用中/);
   assert.ok(!JSON.parse(fs.readFileSync(c.bindingFile(identity.sessionId))).cases.includes('261030AB'));
+});
+
+test('shared-account employee seat cannot request case data', async t => {
+  const home = kimHome(path.join(os.tmpdir(), 'case-employee-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(home, '.claude/fleet-pc-map.json'), JSON.stringify({ 'case-test-seat': { operator: '佐藤優奈' } }));
+  const c = client({ home, ...identity, account: 'seisaku-team@orgiast.jp', fetchImpl: async () => assert.fail('employee must not fetch') });
+  await assert.rejects(c.request({}), /kim 操作アカウントのみ/);
 });

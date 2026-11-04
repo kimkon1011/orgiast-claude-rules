@@ -13,6 +13,9 @@ const snow = (offset) => String((BigInt(NOW.getTime() - 1420070400000 + offset) 
 function fixture(t, overrides = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-test-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=autopilot-test');
+  fs.writeFileSync(path.join(home, '.claude/fleet-pc-map.json'), JSON.stringify({ 'autopilot-test': { operator: 'kim' } }));
   const opts = { home, askJevImpl: async () => ({ ok: false, reason: 'test_offline' }), platform: 'linux', dir: path.join(home, 'state'), now: NOW, token: '', userId: '', hostname: 'test-pc', fetchImpl: async () => { throw new Error('unexpected network'); }, ...overrides };
   const call = (command, args = {}, extra = {}) => runAutopilot(command, args, { ...opts, ...extra });
   return { opts, call, paths: autopilotPaths(opts) };

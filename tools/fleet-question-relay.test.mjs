@@ -183,3 +183,20 @@ for (const stale of [true, false]) {
     assert.deepEqual(readQuestion(f.home, id), result);
   });
 }
+
+test('shared-account employee questions relay to kim while kim operator stays local', async t => {
+  const { relayQuestions, RELAY_WAIT_MS } = await import('./fleet-question-relay.mjs');
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'seisaku-team@orgiast.jp' } }));
+  fs.writeFileSync(path.join(f.home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=relay-test');
+  const mapFile = path.join(f.home, '.claude/fleet-pc-map.json');
+  fs.writeFileSync(mapFile, JSON.stringify({ 'relay-test': { operator: 'kim' } }));
+  fs.writeFileSync(f.transcript, JSON.stringify(assistant('続行しますか？')) + '\n');
+  await f.run({ now: () => 1000 });
+  let calls = 0;
+  const options = { home: f.home, hub: 'kim-PC', label: 'relay-test', now: () => 1000 + RELAY_WAIT_MS,
+    request: async (action, payload) => { calls++; assert.equal(action, 'mail-send'); assert.equal(payload.to, 'kim-PC'); return { ok: true }; } };
+  assert.equal(await relayQuestions(options), 0);
+  fs.writeFileSync(mapFile, JSON.stringify({ 'relay-test': { operator: '佐藤優奈' } }));
+  assert.equal(await relayQuestions(options), 1); assert.equal(calls, 1);
+});

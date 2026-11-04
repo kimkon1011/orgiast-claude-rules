@@ -2,6 +2,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { isKimSeat } from './kim-inbox.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { loadLedger, readJson, saveJson, active, oldest, millis, DAY, CATEGORY } from './lib/fleet-chase-ledger.mjs';
 import { redactSecrets } from './fleet-agent.mjs';
@@ -61,7 +62,7 @@ export function selectContext(ledger, { home, sessionId = '', now = Date.now() }
 export async function main({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now,
   readStdin = readStdinWithTimeout, stdout = console.log, stderr = console.error } = {}) {
   try {
-    if (resolveFleetLabel(home) !== 'kim-PC') return;
+    if (resolveFleetLabel(home) !== 'kim-PC' || !isKimSeat(home)) return;
     const input = JSON.parse(await readStdin(100));
     const event = input.hook_event_name;
     if (!['SessionStart', 'UserPromptSubmit'].includes(event)) return;

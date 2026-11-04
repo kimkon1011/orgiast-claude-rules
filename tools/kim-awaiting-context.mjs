@@ -15,8 +15,9 @@ export function context(input, { home = process.env.ORGIAST_HOME || os.homedir()
     if (env.ORGIAST_AUTO_SESSION === '1' || env.CLAUDE_HEADLESS || isUnattendedRow(input, home)) return null;
     const event = input.hook_event_name || 'UserPromptSubmit';
     if (!['SessionStart', 'UserPromptSubmit'].includes(event)) return null;
-    const items = collect({ home, now, budgetMs: COLLECT_BUDGET_MS });
-    const state = readJson(shownFile(home), {}), session = String(input.session_id || input.sessionId || 'unknown');
+    const sessionId = String(input.session_id || input.sessionId || '');
+    const items = collect({ home, now, budgetMs: COLLECT_BUDGET_MS, sessionId });
+    const state = readJson(shownFile(home), {}), session = sessionId || 'unknown';
     for (const [key, value] of Object.entries(state)) if (now - value.at > SESSION_TTL) delete state[key];
     const ids = items.map(item => item.id).sort(), prior = Object.hasOwn(state, session) ? state[session] : null;
     if (event !== 'SessionStart' && prior && now - prior.at < REPEAT_MS && JSON.stringify(ids) === JSON.stringify(prior.ids)) return null;
@@ -24,9 +25,12 @@ export function context(input, { home = process.env.ORGIAST_HOME || os.homedir()
     saveJson(shownFile(home), state);
     if (!items.length) return null;
     const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url))).replace(/^\/mnt\/([a-z])\//i, (_, drive) => `${drive.toUpperCase()}:/`);
-    const visible = items.slice(0, DISPLAY_LIMIT).map(item => `・${item.title} ／ 答えてほしいこと: ${item.ask} ／ ${item.ageDays}日待ち`).join('\n');
-    const routes = items.slice(0, DISPLAY_LIMIT).map(item => `id=${item.id} | ${item.title}`).join('\n');
-    return { hookSpecificOutput: { hookEventName: event, additionalContext: `【必須・kim の返事待ち】応答の冒頭で user に見える形で、次の一覧をそのまま表示せよ。今回の依頼と無関係でも省略しない。\n📌 kim の返事待ち ${items.length} 件（古い順）\n${visible}${items.length > DISPLAY_LIMIT ? `\nほか ${items.length - DISPLAY_LIMIT} 件` : ''}\nkim がこのどれかに答えたら、その答えを本文ファイルに書いて node "${repo}/tools/kim-awaiting.mjs" --answer <id> --body-file <file> で届けよ。kim が「不要」と言ったものは --skip <id> --reason ...。以下の id は kim に見せない。\n${routes}` } };
+    const isCurrent = item => sessionId && item.source === 'auto-progress' && item.route?.sessionId === sessionId;
+    const current = items.filter(isCurrent);
+    const displayed = [...current, ...items.filter(item => !isCurrent(item)).slice(0, DISPLAY_LIMIT)];
+    const visible = displayed.map(item => `・${item.title} ／ 答えてほしいこと: ${item.ask} ／ ${item.ageDays}日待ち`).join('\n');
+    const routes = displayed.map(item => `id=${item.id} | ${item.title}`).join('\n');
+    return { hookSpecificOutput: { hookEventName: event, additionalContext: `【必須・kim の返事待ち】応答の冒頭で user に見える形で、次の一覧をそのまま表示せよ。今回の依頼と無関係でも省略しない。\n📌 kim の返事待ち ${items.length} 件（${current.length ? '現セッション優先・ほかは古い順' : '古い順'}）\n${visible}${items.length > displayed.length ? `\nほか ${items.length - displayed.length} 件` : ''}\nkim がこのどれかに答えたら、その答えを本文ファイルに書いて node "${repo}/tools/kim-awaiting.mjs" --answer <id> --body-file <file> で届けよ。kim が「不要」と言ったものは --skip <id> --reason ...。以下の id は kim に見せない。\n${routes}` } };
   } catch { return null; }
 }
 if (isEntry(import.meta.url)) { try { const out = context(JSON.parse(await readStdinWithTimeout(500))); if (out) console.log(JSON.stringify(out)); } catch {} }

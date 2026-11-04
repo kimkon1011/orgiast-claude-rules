@@ -620,6 +620,7 @@ CLI未インストールは「手作業で…」と言わず自分で`winget`/`s
 - **秘密は `.env` で渡さない**: D1・R2・KV・Queues などは Binding で Worker に渡す（接続文字列もキーも持たない）。外部 API キーだけ `wrangler secret put` にし、`.env` やリポジトリに置かない。
 - **作成・デプロイは Claude が `wrangler` で完結させる**（`wrangler d1 create` / `r2 bucket create` / `kv namespace create` / `deploy`）。user の操作は初回の `wrangler login` の承認だけ。アカウントは §1.12 に従って最初に宣言する。
 - **Cloudflare 以外を選ぶ条件**: Cloudflare に代わりがない場合（Google Workspace と連携する GAS、Supabase Auth が必要な既存の仕組みなど）、または既に動いているアプリ。その時は理由を1行書く。
+- **初回ログイン・OAuth 同意など user の操作が残る場合は、認証済みの基盤（例: Vercel）で先に公開し、user の操作をゼロにする。Cloudflare への移行は、Claude 側で認証が済んでいて user 操作なしで完了できる時に行う（kim 2026-11-04 厳命。実害: 展示会かぶりチェッカーで wrangler login を kim に残し 13 日間未公開）。**
 - **既存の Vercel / Supabase アプリは移行しない**。大きな改修のついでに、移行した方が得かを検討するだけにする（移行作業そのものが手間とリスクになるため）。
 
 ### 1.11 DWDとアカウント所有権（§1.11〜1.12）

@@ -77,6 +77,8 @@ function create(home, options) {
           if (current.status !== 'open') return;
           current.repeatCount = (current.repeatCount ?? 1) + 1;
           current.lastAt = new Date().toISOString(); current.text = text;
+          // 進捗の再送（まとめの明示再送など）は既表示でも kim にもう一度出す。
+          if (isHighInfo(current)) { current.shownSessions = []; current.shownCount = 0; }
           if (options.forwardMailId) current.forwardMailId = options.forwardMailId;
           merged = true;
         });

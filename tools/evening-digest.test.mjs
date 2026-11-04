@@ -23,7 +23,9 @@ test('台帳へ結果を保存し同日抑制と明示再送を維持する', as
   assert.equal((await runEvening({ home: dir, now, webhookUrl: 'https://example.test/hook', fetchImpl })).skipped, true);
   await runEvening({ home: dir, now, force: true, webhookUrl: 'https://example.test/hook', fetchImpl });
   assert.equal(sends, 0);
-  assert.equal(listItems(dir).length, 2);
+  // 同文の明示再送は1件に集約し、回数を数えて未表示へ戻す。
+  const items = listItems(dir);
+  assert.equal(items.length, 1); assert.equal(items[0].repeatCount, 2); assert.equal(items[0].shownCount, 0);
 });
 test('チャンネル取得失敗でもダイジェスト本体を送る', async () => {
   const dir = home(); let notified = 0;

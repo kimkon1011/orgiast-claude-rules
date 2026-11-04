@@ -83,10 +83,12 @@ test('専用警告は notify-kim の実経路で DM を送る（HTTP はスタ�
 
 test('正本の PENDING を解決し、旧警告と重複せずローカルへ保存する', async t => {
   const f = fixture(t);
-  delete f.io.resolveOwnerDiscordId;
   delete f.io.notify;
-  const { notifyOwner } = await import('./notify-owner.mjs');
-  f.io.notifyOwner = (owner, text, options) => notifyOwner(owner, text, { ...options,
+  const { notifyOwner, resolveOwnerDiscordId } = await import('./notify-owner.mjs');
+  // 正本の宛先が埋まっても検証できるよう、PENDING の PC 行を固定で渡す。
+  const pcMap = { 'DESKTOP-BDOAK99': { hostname: 'DESKTOP-BDOAK99', account: 'seisaku-team@orgiast.jp', notifyDiscordId: 'PENDING' } };
+  f.io.resolveOwnerDiscordId = (owner, options) => resolveOwnerDiscordId(owner, { ...options, pcMap, directory: [] });
+  f.io.notifyOwner = (owner, text, options) => notifyOwner(owner, text, { ...options, pcMap, directory: [],
     toast: () => false, notifyKim: () => assert.fail('旧警告を重複送信しない'),
     notify: () => assert.fail('PENDING 宛へ本文を送らない') });
   await run(f);

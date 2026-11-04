@@ -121,7 +121,7 @@ test('actual roster resolves 作業用999 to observed label and status shows its
   const pcMap = JSON.parse(fs.readFileSync(new URL('../fleet-pc-map.json', import.meta.url), 'utf8'));
   assert.equal(resolveMailTarget('作業用999', pcMap).to, 'DESKTOP-BDOAK99');
   assert.notEqual(resolveMailTarget('作業用008', pcMap).to, 'DESKTOP-BDOAK99');
-  assert.equal(pcMap['DESKTOP-BDOAK99'].notifyDiscordId, 'PENDING');
+  assert.equal(pcMap['DESKTOP-BDOAK99'].notifyDiscordId, '715210673642012733');
   assert.equal(pcMap['DESKTOP-BDOAK99'].account, 'seisaku-team@orgiast.jp');
   assert.equal(pcMap['cafe015-PC'], undefined); assert.equal(pcMap['user-PC'], undefined);
   const rows = buildFleetStatus({ pcMap, beacons: [{ label: 'DESKTOP-BDOAK99', account: 'seisaku-team@orgiast.jp' }] });

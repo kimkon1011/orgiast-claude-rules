@@ -98,13 +98,15 @@
     "hostname": "DESKTOP-BDOAK99",
     "account": "seisaku-team@orgiast.jp",
     "remoteName": "作業用999",
-    "notifyDiscordId": "PENDING",
+    "notifyDiscordId": "715210673642012733",
     "aliases": [
       "DESKTOP-BDOAK99",
       "作業用999"
     ],
-    "_evidence": "user 申告 2026-11-04: このPCは作業用999。#1401 の 008 は誤り（008 宛ての mail を誤受信）",
+    "_evidence": "2026-11-04 kim 回答「作業用008ではテツコのことはやっていない。作業用999で genbateam.toho@gmail.com で行っているはず」＋このPCの user 申告（2026-11-04 セッション 1fde2bc7）「このパソコンは999だよ」で作業用999 と確定。#1401 の 作業用008 は、008 宛ての fleet-mail（mail-reply-fa9b672e49db7164 / 828ab32aca705b84 / 23b5030901dbd50f）をこのPCが誤受信した自己申告由来の誤り。",
     "sheetName": "作業用999",
-    "installedAt": "2026-09-03"
+    "installedAt": "2026-09-03",
+    "notifyTo": "kim@orgiast.jp（金功勇）",
+    "_notifyEvidence": "2026-11-04 kim 指摘: このPCの進捗DM（【DESKTOP-BDOAK99 の自動進行】TETSUKO・Amazon 等）が佐藤優奈さん（satou1319 / 1423319951980232744）に届いていた。seisaku-team@ は共用アカウントで、名簿にメールが無いため宛先がPCローカルの orgiast-discord-user-id.txt 等に落ちていた。全席は kim が操作している（feedback_kim_operates_all_seats）ため kim に固定。"
   }
 }

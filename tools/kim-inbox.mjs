@@ -263,7 +263,8 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
   const value = flag => args[args.indexOf(flag) + 1];
   try {
     if (args.includes('--context')) {
-      const input = JSON.parse(await readStdin(100));
+      // 100ms では混雑時に入力を読み切れず、何も表示せず終わっていた（2026-11-04 実測 3回中1回）。
+      const input = JSON.parse(await readStdin(2000));
       const event = input.hook_event_name;
       if (!['SessionStart', 'UserPromptSubmit'].includes(event)) return 0;
       const kim = isKimSeat(home);

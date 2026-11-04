@@ -22,6 +22,9 @@ tools/.ps.tmp.ps1
 # $env:LOCALAPPDATA が未設定のまま PowerShell を起動すると repo 直下に掘られるキャッシュ
 /Microsoft/
 
+# AWS CLI/SDK が cwd=repo で起動されたときに掘る空の既定設定ディレクトリ（機械ローカル）
+/.aws/
+
 # Genspark Tool CLI の自動生成スキル (gsk init-skills)。ベンダー成果物なのでコミットしない
 .gsk/
 

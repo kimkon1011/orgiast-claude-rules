@@ -1,7 +1,17 @@
 import { decisionOwnerOf } from '../auto-progress-decision-owner.mjs';
 import { notificationKind } from './owner-dm-policy.mjs';
 const day = 86400000;
-const plain = value => cleanText(value).replace(/(?:作業ID|セッションの目的|プロジェクト)[:：][^\n]*/g, '').replace(/(?:[A-Za-z]:\\|~?\/)[^\s、。]+/g, '').replace(/\b(?:autopilot|headless|quota-sweep|nightly-repo|unattended)\b[^\s、。]*/gi, '').replace(/\s+/g, ' ').trim();
+// まとめの1行を作る。2026-11-04 nishi: 届いたまとめが「【kimko-PC（）・… の Claude Code】（このDMに返信してください）」
+// 「新しいセッションが で引き継ぎ」「10 に成約率」と穴だらけで、結局「進捗どう？」と聞くしかなかった。
+// - 出どころの見出し行（【…の Claude Code】プロジェクト: … ／ 作業ID: …）は改行を潰す前に行ごと外す。
+//   以前は cleanText で改行を潰してから「プロジェクト:〜行末」を消していたため、後ろの質問文まで消えていた。
+// - パスは「C:\…」「~/…」「/a/b…」だけを外し、`/session-start` のような1段の語や 10/28 の日付は残す。
+// - 社内用語は消さずに言い換える（消すと文に穴が開く）。
+const JARGON = { autopilot: '自動ループ', headless: '無人実行', 'quota-sweep': '定期処理', 'nightly-repo': '共通ツール', unattended: '無人' };
+const plain = value => cleanText(String(value || '').split(/\r?\n/).filter(line => !/^\s*【[^】]*Claude Code】/.test(line) && !/^\s*(?:作業ID|セッションの目的|プロジェクト)[:：]/.test(line)).join('\n'))
+  .replace(/(?<![\w/])(?:[A-Za-z]:\\|~\/|\/[\w.-]+\/)[^\s、。]+/g, '')
+  .replace(/\b(autopilot|headless|quota-sweep|nightly-repo|unattended)\b/gi, word => JARGON[word.toLowerCase()])
+  .replace(/\s+/g, ' ').trim();
 export function compactDigest(rows, deferred, now, { home, owner = '' } = {}) {
   const actions = deferred.filter(r => r.kind === 'action');
   for (const row of rows) if (isHumanActionRequired(row)) {
@@ -69,7 +79,8 @@ export const isHumanActionRequired = (row) => {
 export function cleanText(text, row = {}) {
   let s = String(text || '');
   // 先頭の定型句
-  s = s.replace(/^[-*•\s]*(?:\*\*|__)?(?:この後の自動進行|自動進行|約束)(?:\*\*|__)?[:：\s]*/i, '');
+  // 「:」か空白が続く見出しだけを外す。「自動進行が判断待ちです」の主語まで消すと「・が判断待ちです」になる。
+  s = s.replace(/^[-*•\s]*(?:\*\*|__)?(?:この後の自動進行|自動進行|約束)(?:\*\*|__)?(?:[:：]\s*|\s+)/i, '');
   // バッククォートの中身（コマンド・パス・ファイル名）は消さずに残し、記号のバッククォートだけ外す。
   // 中身を消すと「マージ後に と で同期すれば」のように文へ穴が開く。平易化は送信時の notify-kim 側で行う。
   const kept = [];

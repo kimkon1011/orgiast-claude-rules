@@ -16,6 +16,7 @@ import { installSharedMemories } from './memory-share.mjs';
 import { installKnowledge } from './knowledge-pack.mjs';
 import { resolveConvergenceRepo } from './fleet-convergence.mjs';
 import { gitBlobSha } from './version-drift.mjs';
+import { isKimOperated } from './lib/kim-operated.mjs';
 
 const args = process.argv.slice(2);
 const force = args.includes('--force');
@@ -767,7 +768,7 @@ export async function syncKnowledge({ targetHome = home, forced = force, preview
 
 export function runSeatInvitations({ targetHome = home, targetRepo = repoPath, preview = dryRun,
   onlyKeys = keysOnly, exec = execFileSync, emit = console.log } = {}) {
-  if (preview || onlyKeys) return false;
+  if (preview || onlyKeys || !isKimOperated(targetHome)) return false;
   const seatRepo = resolveConvergenceRepo({ home: targetHome, repo: targetRepo });
   const inviteTool = path.join(seatRepo || targetRepo, 'tools/gh-accept-invites.mjs');
   if (!fs.existsSync(inviteTool)) return false;

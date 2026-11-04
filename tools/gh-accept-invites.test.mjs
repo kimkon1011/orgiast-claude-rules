@@ -75,6 +75,7 @@ test('全PCの既存SessionStartからdailyを実行しdry-runとkeys-onlyは変
   assert.equal(calls[0].config.env.ORGIAST_HOME, home);
   assert.equal(runSeatInvitations({ ...options, preview: true }), false);
   assert.equal(runSeatInvitations({ ...options, onlyKeys: true }), false);
+  assert.equal(runSeatInvitations({ ...options, targetHome: seat(t, 'employee@example.com') }), false);
   assert.equal(calls.length, 1);
   const source = fs.readFileSync(new URL('./onboarding-sync.mjs', import.meta.url), 'utf8');
   assert(source.indexOf('try { runSeatInvitations(); }') < source.indexOf('const minIntervalMin'));

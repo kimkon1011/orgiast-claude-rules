@@ -82,9 +82,7 @@ test('台帳 rename が10回失敗しても巡回は落ちず、エラーを記�
   let attempts = 0;
   let notifications = 0;
   const summary = await run({ home, now, io: {
-    clock: () => now,
-    sheetConfig: () => null,
-    transcriptFiles: [],
+    clock: () => now, sheetConfig: () => null, transcriptFiles: [],
     executeCheck: () => ({ code: 0, text: '達成' }),
     notifyOwner: async () => { notifications += 1; return { delivered: 'dm' }; },
     digest: async () => ({}),
@@ -144,8 +142,7 @@ test('再開上限の失敗は最近の活動やAI判定に優先してstalled�
 
 test('timeoutを繰り返した実例は2回でSheetとDMまとめへ一度報告される', async t => {
   const { MAX_RESUMES } = await import('./auto-progress-watch.mjs');
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-exhausted-'));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-exhausted-'));n  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const now = Date.parse('2026-11-02T00:00:00Z');
   writeLedger(ledgerFile(home), [{
     sessionId: '28c97712-092f-42d5-8f40-3efeb5ed3ef3', ts: new Date(now - 4 * 3600000).toISOString(),
@@ -200,7 +197,6 @@ test('timeoutを繰り返した実例は2回でSheetとDMまとめへ一度報�
   assert.equal(sheets.at(-1).verdict, 'in_progress');
 });
 
-
 test('失敗終了後の活動だけを数え、成功した再開の活動は保持する', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-evidence-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -236,7 +232,6 @@ test('失敗終了後の活動だけを数え、成功した再開の活動は�
   assert.equal(judge(row, evidence, end + 10000, { askLlm: () => null }).verdict, 'in_progress');
 });
 
-
 test('終了後の本人発言を数え、総再開回数と連続失敗回数を区別する', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-user-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -256,8 +251,8 @@ test('終了後の本人発言を数え、総再開回数と連続失敗回数�
 });
 
 test('完了通知は DM 成功時もローカル user にトーストを送る', async t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'done-toast-'));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const home = mkdtempSync(join(tmpdir(), 'done-toast-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
   const now = Date.parse('2026-11-02T10:00:00Z');
   writeLedger(ledgerFile(home), [{
     ts: new Date(now - 2 * 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'kim@orgiast.jp',
@@ -279,9 +274,9 @@ test('完了通知は DM 成功時もローカル user にトーストを送る'
   assert.ok(toastText.includes('Xの投稿を読み調査結果をまとめます'));
 });
 
-test('バックログ完了通知もローカル user にトーストを送る', async t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'backlog-toast-'));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+test('バックログ完了通知もローカル user にはトーストを送る', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'backlog-toast-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
   const now = Date.parse('2026-11-02T10:00:00Z');
   writeLedger(ledgerFile(home), [{
     ts: new Date(now - 100 * 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'kim@orgiast.jp',
@@ -300,4 +295,46 @@ test('バックログ完了通知もローカル user にトーストを送る',
   assert.ok(summary.doneNotifications.backlog >= 1);
   assert.equal(toastCalls, 1);
   assert.ok(toastText.startsWith('✅ 自動進行が完了'));
+});
+test('時刻だけの check は警告を出し、チェック結果を通知する（再開不可時）', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'deferred-check-notification-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const now = Date.parse('2026-11-02T10:00:00Z');
+  writeLedger(ledgerFile(home), [{
+    ts: new Date(now - 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'owner',
+    sessionId: 'deferred-check-test', cwd: home, promise: 'テストを実行する',
+    label: 'テスト', check: 'echo "check passed"', checkCode: 0, checkText: 'check passed',
+    checkResult: 'done', status: 'done', verdict: 'done', doneAt: new Date(now - 60000).toISOString(),
+  }]);
+  const summary = await run({ home, now, dryRun: true });
+  assert.equal(summary.doneNotifications.backlog, 0);
+  assert.equal(summary.errors.length, 0);
+});
+test('再開できないチェックの完了時にオーナーに通知', async t => {
+  const home = mkdtempSync(join(tmpdir(), 'deferred-check-owner-notify-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const now = Date.parse('2026-11-02T10:00:00Z');
+  writeLedger(ledgerFile(home), [{
+    ts: new Date(now - 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'owner',
+    sessionId: 'deferred-owner-notify', cwd: home, promise: 'チェックが完了したが再開不可',
+    label: '再開不可通知テスト', check: 'echo "done"', checkCode: 0, checkText: 'done',
+    checkResult: 'done', status: 'done', verdict: 'done', doneAt: new Date(now - 60000).toISOString(),
+  }]);
+  let notifications = [];
+  const io = {
+    clock: () => now, transcriptFiles: [], sheetConfig: () => null,
+    notifyOwner: async (owner, message, options) => {
+      notifications.push({ owner, message });
+      return { delivered: 'dm', messageId: 'test-id' };
+    },
+    sendOwnerToast: async () => false,
+    digest: async () => ({}),
+    // Simulate the deferred scenario without actually running the resume
+    resume: async (row, options) => ({ outcome: 'deferred', reason: 'シミュレートされた再開不可' }),
+  };
+  const summary = await run({ home, now, dryRun: false, io });
+  // The notification should be sent when check is done but resume is deferred
+  assert.equal(notifications.length, 1);
+  assert.ok(notifications[0].message.includes('チェックが完了したが再開不可'));
+  assert.ok(notifications[0].message.includes('チェックコード: 0'));
 });

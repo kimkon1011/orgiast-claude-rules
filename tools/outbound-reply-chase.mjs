@@ -2,7 +2,7 @@
 // Read-only: EXAMINE + BODY.PEEK, Gmail metadata GET only. Never log server errors or credentials.
 import tls from 'node:tls';
 import { readFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const DAY = 86_400_000;
 // Automated destinations and list/robot headers do not represent a human reply obligation.
@@ -229,6 +229,6 @@ export async function main(args = process.argv.slice(2)) {
   // Retrieval failures must never look like an empty successful scan.
   process.exitCode = errors.length ? 2 : waiting.length ? 1 : 0;
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch(() => {
+if (isEntry(import.meta.url)) main().catch(() => {
   console.error('実行できませんでした。オプションと設定を確認してください。'); process.exitCode = 2;
 });

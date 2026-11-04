@@ -323,3 +323,114 @@ test('巡回末尾の督促へhome/時刻/dry-runを渡し、失敗も巡回を�
     assert.ok(result.errors.includes('escalate: mock failure'));
   }
 });
+
+// 実例と同じ metadata を持つ定期ターン。各時刻は now からの経過時間。
+function scheduledFixture(t) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduled-evidence-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const now = Date.parse('2026-11-04T10:00:00Z');
+  const transcriptPath = path.join(home, 'session.jsonl');
+  const entry = (hours, type, content, extra = {}) => ({ type,
+    timestamp: new Date(now - hours * 3600000).toISOString(), message: { role: type, content }, ...extra });
+  const lines = [entry(30, 'user', 'Muse 提案を作ってください'), entry(29, 'assistant', '調査を進めます')];
+  for (const hours of [5, 3, 1]) {
+    lines.push(entry(hours, 'user', '[定期進捗チェック: 28c97712] 進捗を確認', {
+      isMeta: true, promptSource: 'system', wakeupSource: 'schedule_wakeup', turnOrigin: 'scheduled',
+    }), entry(hours - 0.01, 'assistant', '確認しました。引き続き進めます'));
+  }
+  const save = () => fs.writeFileSync(transcriptPath, lines.map(line => JSON.stringify(line)).join('\n'));
+  save();
+  const row = { sessionId: '28c97712-scheduled-test', transcriptPath, cwd: home, owner: 'kim',
+    ts: new Date(now - 31 * 3600000).toISOString(), promise: 'Muse 提案を作成します', status: 'open',
+    deadlineAt: new Date(now + 24 * 3600000).toISOString() };
+  return { home, now, row, lines, entry, save };
+}
+
+test('期限前でも2時間ごとの定期確認3回だけでは24時間以上の停滞を解消しない', async t => {
+  const f = scheduledFixture(t);
+  const evidence = gatherEvidence(f.row, f.home);
+  assert.equal(evidence.transcript.count, 1);
+  assert.equal(evidence.transcript.ignoredScheduledCount, 6);
+  assert.equal(evidence.lastEvidenceAt, f.now - 29 * 3600000);
+  const result = judge(f.row, evidence, f.now, { askLlm: () => null });
+  assert.equal(result.verdict, 'stalled');
+  assert.match(result.reason, /定期確認のみで進捗なし/);
+  writeLedger(ledgerFile(f.home), [f.row]);
+  const sheets = [];
+  const io = { clock: () => f.now, transcriptFiles: [], sheetConfig: () => ({}), cwdExists: () => false,
+    askLlm: () => null, postSheet: async (_config, _tab, payload) => sheets.push(payload.row),
+    digest: async () => ({}), escalateKimDecisions: async () => ({}) };
+  const summary = await run({ home: f.home, now: f.now, io });
+  assert.equal(summary.stalled, 1);
+  assert.equal(summary.inProgress, 0);
+  assert.deepEqual(summary.errors, []);
+  assert.equal(readLedger(ledgerFile(f.home))[0].verdict, 'stalled');
+  await run({ home: f.home, now: f.now, io });
+  assert.equal(sheets.length, 1);
+});
+
+test('各定期 metadata を単独で判定し、cutoff前の起点とtool結果を追跡する', t => {
+  const f = scheduledFixture(t);
+  for (const metadata of [{ turnOrigin: 'scheduled' }, { wakeupSource: 'schedule_wakeup' }]) {
+    f.lines.splice(0, f.lines.length,
+      f.entry(3, 'user', '確認', metadata),
+      f.entry(1, 'assistant', [{ type: 'tool_use', name: 'Write', input: { file_path: f.row.transcriptPath } }]),
+      f.entry(0.9, 'user', [{ type: 'tool_result', content: 'ok' }]),
+      f.entry(0.8, 'user', '補助情報', { isMeta: true }),
+      f.entry(0.7, 'queue-operation', 'queue'), f.entry(0.6, 'attachment', 'attachment'),
+      f.entry(0.5, 'assistant', '確認完了'));
+    f.save();
+    const row = { ...f.row, resumeOutcome: 'error: timeout', resumeCount: 2,
+      resumeFinishedAt: new Date(f.now - 2 * 3600000).toISOString() };
+    const evidence = gatherEvidence(row, f.home);
+    assert.equal(evidence.any, false);
+    assert.deepEqual(evidence.transcript.touchedPaths, []);
+    assert.equal(evidence.transcript.ignoredScheduledCount, 4);
+    const verdict = judge(row, evidence, f.now, { askLlm: () => assert.fail('定期確認は再開失敗を解除しない') });
+    assert.equal(verdict.source, 'resume-failed');
+    assert.match(verdict.reason, /定期確認のみで進捗なし/);
+    f.lines.push(f.entry(0.1, 'user', '続けてください'));
+    f.save();
+    const human = gatherEvidence(row, f.home);
+    assert.equal(human.transcript.count, 1);
+    assert.equal(judge(row, human, f.now, { askLlm: () => null }).verdict, 'in_progress');
+    f.lines.push(f.entry(0.05, 'assistant', '調査を再開しました'));
+    f.save();
+    assert.equal(gatherEvidence(row, f.home).transcript.count, 2);
+  }
+});
+
+test('バックグラウンド完了通知（promptSource:system）は定期扱いせず、その後の作業を数える', t => {
+  const f = scheduledFixture(t);
+  f.lines.splice(0, f.lines.length,
+    f.entry(1, 'user', '<task-notification>完了</task-notification>', { promptSource: 'system', turnOrigin: 'task_notification' }),
+    f.entry(0.9, 'assistant', 'Codex の差分を確認します'));
+  f.save();
+  const evidence = gatherEvidence(f.row, f.home);
+  assert.equal(evidence.transcript.ignoredScheduledCount, 0);
+  assert.equal(evidence.transcript.count, 1);
+});
+
+test('isMetaだけでは定期扱いせず、queueとattachmentは活動に数えない', t => {
+  const f = scheduledFixture(t);
+  f.lines.splice(0, f.lines.length, f.entry(1, 'user', '補助情報', { isMeta: true }),
+    f.entry(0.9, 'assistant', '調査中'), f.entry(0.8, 'queue-operation', 'queue'), f.entry(0.7, 'attachment', 'attachment'));
+  f.save();
+  const evidence = gatherEvidence(f.row, f.home);
+  assert.equal(evidence.transcript.count, 1);
+  assert.equal(evidence.transcript.ignoredScheduledCount, 0);
+  assert.equal(evidence.lastEvidenceAt, f.now - 0.9 * 3600000);
+});
+
+test('定期ターン中でもcheckが達成なら従来どおりdoneにする', async t => {
+  const f = scheduledFixture(t);
+  writeLedger(ledgerFile(f.home), [{ ...f.row, check: 'mock check' }]);
+  const summary = await run({ home: f.home, now: f.now, io: {
+    clock: () => f.now, transcriptFiles: [], sheetConfig: () => null,
+    executeCheck: () => ({ code: 0, text: 'Muse 提案の成果物を確認' }),
+    notifyOwner: async () => ({ delivered: 'dm' }), digest: async () => ({}), escalateKimDecisions: async () => ({}),
+  } });
+  assert.equal(summary.done, 1);
+  assert.deepEqual(summary.errors, []);
+  assert.equal(readLedger(ledgerFile(f.home))[0].status, 'done');
+});

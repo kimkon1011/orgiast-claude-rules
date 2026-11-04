@@ -35,13 +35,25 @@ export function transcriptEvidence(transcriptPath, sinceMs, { readFile = (p) => 
   let text = '';
   try { text = readFile(transcriptPath); } catch { return { count: 0, lastAt: 0, snippets: [] }; }
   let count = 0, lastAt = 0; const snippets = [], touchedPaths = [];
+  let scheduledTurn = false, ignoredScheduledCount = 0;
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
     let entry; try { entry = JSON.parse(line); } catch { continue; }
+    const content = entry?.message?.content;
+    const toolResult = Array.isArray(content) && content.some(b => b?.type === 'tool_result');
+    // 時刻で絞る前に起点を追う。tool_result や meta 行は本人の次の発言ではない。
+    if (entry.type === 'user') {
+      // promptSource:'system' はバックグラウンド完了通知（turnOrigin:'task_notification'）にも付き、本物の進捗なので見ない。
+      if (entry.turnOrigin === 'scheduled' || entry.wakeupSource) scheduledTurn = true;
+      else if (!entry.isMeta && !toolResult) scheduledTurn = false;
+    }
     const at = Date.parse(entry?.timestamp);
     // 約束を書いたメッセージ自体（記録時刻の直前直後）は証拠に数えない。
     if (!Number.isFinite(at) || at <= sinceMs + graceMs) continue;
-    const content = entry?.message?.content;
+    if (scheduledTurn && (entry.type === 'user' || entry.type === 'assistant')) {
+      ignoredScheduledCount += 1;
+      continue;
+    }
     const parts = Array.isArray(content) ? content : [{ type: 'text', text: String(content ?? '') }];
     const body = parts.map((b) => b?.type === 'text' ? b.text : b?.type === 'tool_use' ? `[tool:${b.name}]` : '').filter(Boolean).join(' ').trim();
     if (entry.type !== 'assistant' && !(entry.type === 'user' && ((includeUser && !entry.isMeta) || (Array.isArray(content) && content.some((b) => b?.type === 'tool_result'))))) continue;
@@ -56,7 +68,7 @@ export function transcriptEvidence(transcriptPath, sinceMs, { readFile = (p) => 
       }
     }
   }
-  return { count, lastAt, snippets: snippets.slice(-4), touchedPaths: touchedPaths.slice(-50) };
+  return { count, lastAt, snippets: snippets.slice(-4), touchedPaths: touchedPaths.slice(-50), ignoredScheduledCount };
 }
 
 // この session の tool_use が明示したファイルだけを見る。他 session の cwd 更新は証拠にしない。
@@ -99,7 +111,7 @@ export function gatherEvidence(row, home, io = {}) {
   const cutoff = failedResumeEnd(row);
   const since = Math.max(Date.parse(row.ts), cutoff);
   let transcript = (io.transcriptEvidence ?? transcriptEvidence)(row.transcriptPath, since, { graceMs: cutoff ? 0 : 60000, includeUser: Boolean(cutoff) });
-  if (cutoff && transcript.lastAt <= cutoff) transcript = { count: 0, lastAt: 0, snippets: [], touchedPaths: [] };
+  if (cutoff && transcript.lastAt <= cutoff) transcript = { ...transcript, count: 0, lastAt: 0, snippets: [], touchedPaths: [] };
   const files = (io.recentFiles ?? recentFiles)(row.cwd, since, { paths: transcript.touchedPaths || [] });
   let runs = (io.autoSessionRuns ?? autoSessionRuns)(home, row, since);
   if (cutoff && runs.lastAt <= cutoff) runs = { lastAt: 0, names: [] };
@@ -113,6 +125,7 @@ export function evidenceSummary(row, evidence, now) {
   return [
     `約束: ${row.promise}`, `記録: ${row.ts}`,
     `記録後の会話/ツール動作: ${evidence.transcript.count}件（最後 ${hours(evidence.transcript.lastAt)}）`,
+    ...(evidence.transcript.ignoredScheduledCount ? ['定期確認のプロンプト・応答は進捗から除外'] : []),
     ...evidence.transcript.snippets.map((s) => `  - ${s}`),
     `記録後に更新されたファイル: ${evidence.files.names.join(', ') || 'なし'}（最後 ${hours(evidence.files.lastAt)}）`,
     `auto-session ログ: ${evidence.runs.names.join(', ') || 'なし'}`,
@@ -151,6 +164,15 @@ export function exhaustedResumeVerdict(row) {
 }
 
 export function judge(row, evidence, now, io = {}) {
+  const result = judgeEvidence(row, evidence, now, io);
+  // source は維持し、既存の reportKey による重複通知抑止を変えない。
+  if (result.verdict === 'stalled' && evidence.transcript?.ignoredScheduledCount) {
+    result.reason = `定期確認のみで進捗なし（${result.reason}）`;
+  }
+  return result;
+}
+
+function judgeEvidence(row, evidence, now, io) {
   // A failed resume writes transcript activity too; it must not reset the stall clock forever.
   const cutoff = failedResumeEnd(row);
   const freshActivity = cutoff && evidence.lastEvidenceAt > cutoff;

@@ -241,7 +241,7 @@ export function formatDoneMessage(row, { reason = '', artifact = '', home = proc
   return lines.join('\n').slice(0, 1900);
 }
 
-export function logDoneDm(home, row, delivery, message, now = Date.now(), io = {}) {
+export function logDoneDm(home, row, delivery, message, now = Date.now(), io = {}, toastResult = null) {
   const file = path.join(home, '.claude', 'logs', 'auto-progress-done-dm.sent.jsonl');
   try {
     (io.mkdirSync ?? fs.mkdirSync)(path.dirname(file), { recursive: true });
@@ -253,6 +253,7 @@ export function logDoneDm(home, row, delivery, message, now = Date.now(), io = {
       reason: delivery?.reason,
       httpStatus: delivery?.httpStatus, messageId: delivery?.messageId, recipientId: delivery?.recipientId,
       text: message.slice(0, 8000),
+      ...(toastResult ? { toast: { ok: toastResult.ok, exitCode: toastResult.exitCode } } : {}),
     });
     (io.appendFileSync ?? fs.appendFileSync)(file, `${payload}\n`);
   } catch (error) {
@@ -575,16 +576,17 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       patch(rowKey(row), { doneNotifyPending: true, doneNotifyArtifact: artifact ? String(artifact) : '' });
       summary.errors.push(`notify-done: ${String(error?.message ?? error).slice(0, 120)}`);
     }
-    logDoneDm(home, row, delivery, message, now, io);
-    // 完了通知は DM の成否に関係なく、owner がこの PC のローカル user ならトーストも毎回出す
+    // 完了通知は DM の成否に関係なく、owner ��この PC のローカル user ならトーストも毎回出す
+    let toastResult = null;
     try {
       const rowOwner = ownerOf(row);
       const pcOwner = io.localOwner ?? (() => { try { return resolveOwner({ home }); } catch { return ''; } })();
       if (delivery?.delivered !== 'toast' && rowOwner && pcOwner && rowOwner.toLowerCase() === pcOwner.toLowerCase()) {
         const toastText = `✅ 自動進行が完了: ${String(row.promise ?? '').slice(0, 120)}`;
-        (io.sendOwnerToast ?? sendOwnerToast)(toastText, { home });
+        (io.sendOwnerToast ?? sendOwnerToast)(toastText, { home, onToastResult: value => { toastResult = value; } });
       }
     } catch { /* トースト失敗は DM の成否判定に影響しない */ }
+    logDoneDm(home, row, delivery, message, now, io, toastResult);
     return ['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered);
   };
   const rows = readLedger(file);
@@ -645,16 +647,17 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       } catch (error) {
         summary.errors.push(`notify-done-backlog: ${String(error?.message ?? error).slice(0, 120)}`);
       }
-      logDoneDm(home, group.rows[0], delivery, group.text, now, io);
       // バックログ完了通知もローカル user にはトーストを出す
+      let toastResult = null;
       try {
         const rowOwner = ownerOf(group.rows[0]);
         const pcOwner = io.localOwner ?? (() => { try { return resolveOwner({ home }); } catch { return ''; } })();
         if (delivery?.delivered !== 'toast' && rowOwner && pcOwner && rowOwner.toLowerCase() === pcOwner.toLowerCase()) {
           const toastText = `✅ 自動進行が完了 (ほか ${group.rows.length - 1}件): ${String(group.rows[0].promise ?? '').slice(0, 80)}`;
-          (io.sendOwnerToast ?? sendOwnerToast)(toastText, { home });
+          (io.sendOwnerToast ?? sendOwnerToast)(toastText, { home, onToastResult: value => { toastResult = value; } });
         }
       } catch { /* トースト失敗は無視 */ }
+      logDoneDm(home, group.rows[0], delivery, group.text, now, io, toastResult);
     }
   }
   let executorUnavailable = false;

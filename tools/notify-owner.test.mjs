@@ -102,17 +102,31 @@ test('別PCのnotifyDiscordIdはローカルPCの宛先に使わない', async t
  assert.equal(result.channel, 'toast');
 });
 
-test('toast uses standard PowerShell AppId, encoded Unicode and 300 characters', () => {
+test('toast uses NotifyIcon ShowBalloonTip, encoded Unicode and 300 characters', () => {
  const text = "日本語<&>\n'quoted' ` $(); " + '長'.repeat(350);
- assert.equal(sendOwnerToast(text, { spawn: (file, args) => {
+ assert.equal(sendOwnerToast(text, { exe: 'powershell.exe', spawn: (file, args) => {
    assert.equal(file, 'powershell.exe');
    assert.deepEqual(args.slice(0, 3), ['-NoProfile', '-NonInteractive', '-EncodedCommand']);
    const script = Buffer.from(args[3], 'base64').toString('utf16le');
-   assert.ok(script.includes('<text>Claude 進捗</text>'));
-   assert.ok(script.includes('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe'));
-   assert.ok(script.includes('[Security.SecurityElement]::Escape($body)'));
+   assert.ok(script.includes('System.Windows.Forms.NotifyIcon'));
+   assert.ok(script.includes('ShowBalloonTip(5000)'));
+   assert.ok(script.includes('Claude 進捗'));
+   assert.ok(script.includes('Start-Sleep -Seconds 6'));
+   assert.ok(script.includes('.Dispose()'));
    assert.ok(script.includes(Buffer.from(Array.from(text).slice(0,300).join(''), 'utf8').toString('base64')));
    assert.ok(!script.includes('msg.exe'));
+   assert.ok(!script.includes('ToastNotificationManager'));
+   return { status: 0 };
+ } }), true);
+});
+
+test('sendOwnerToast accepts exe override for pwsh.exe', () => {
+ assert.equal(sendOwnerToast('test', { exe: 'pwsh.exe', spawn: (file) => {
+   assert.equal(file, 'pwsh.exe');
+   return { status: 0 };
+ } }), true);
+ assert.equal(sendOwnerToast('test', { exe: 'powershell.exe', spawn: (file) => {
+   assert.equal(file, 'powershell.exe');
    return { status: 0 };
  } }), true);
 });
@@ -182,7 +196,7 @@ test('toast・none・DM成功すべて伏字本文をowner inboxに保存する'
  await notifyOwner('nishi@orgiast.jp', 'DM成功', { ...options, userId: '42', notify: async () => ({ delivered: 'dm', messageId: 'receipt' }) });
  assert.equal(rows().length, 4);
  assert.equal(rows()[3].text, 'DM成功');
- assert.match(fs.readFileSync(path.join(home, '.claude', 'owner-inbox.md'), 'utf8'), /DM成功/);
+ assert.match(fs.readFileSync(path.join(options.home, '.claude', 'owner-inbox.md'), 'utf8'), /DM成功/);
  await notifyOwner('kim@orgiast.jp', '他の持ち主宛', options);
  assert.equal(rows().length, 4);
 });

@@ -27,7 +27,7 @@ export function mergePr(options, { exec = execFileSync } = {}) {
   // --json files は上限があるため REST の全ページで workflow 変更を確認する。
   const files = JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${repository}/pulls/${pr}/files?per_page=100`]));
   if (!Array.isArray(files) || files.some(page => !Array.isArray(page))) throw new Error('PR 変更パスを確認できません');
-  if (files.flat().some(file => file.filename?.startsWith('.github/workflows/'))) throw new Error('.github/workflows/ を含む PR は専用経路で扱うため停止');
+  if (files.flat().some(file => [file.filename, file.previous_filename].some(name => name?.startsWith('.github/workflows/')))) throw new Error('.github/workflows/ を含む PR は専用経路で扱うため停止');
   if (view.state !== 'OPEN') throw new Error(`PR #${pr}: state=${view.state}（OPEN が必要）`);
   if (view.mergeable !== 'MERGEABLE') throw new Error(`PR #${pr}: mergeable=${view.mergeable}`);
   if (view.reviewDecision === 'CHANGES_REQUESTED') throw new Error(`PR #${pr}: CHANGES_REQUESTED`);

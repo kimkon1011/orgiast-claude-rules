@@ -120,7 +120,8 @@ test('別エラーはそのままthrowし、正常系ではRESTを呼ばない',
 });
 
 test('全ページのworkflow変更とパス取得失敗はマージを停止', () => {
-  for (const response of [JSON.stringify([[{ filename: 'tools/a.mjs' }], [{ filename: '.github/workflows/x.yml' }]]), '{}']) {
+  for (const response of [JSON.stringify([[{ filename: 'tools/a.mjs' }], [{ filename: '.github/workflows/x.yml' }]]),
+    JSON.stringify([[{ filename: 'docs/old-workflow.yml', previous_filename: '.github/workflows/x.yml' }]]), '{}']) {
     const f = fixture();
     const exec = (file, args, options) => args.includes('--slurp') ? response : f.exec(file, args, options);
     assert.throws(() => mergePr({ pr: 1 }, { exec }), /停止|確認できません/);

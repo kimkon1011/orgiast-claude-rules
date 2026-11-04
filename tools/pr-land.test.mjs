@@ -38,6 +38,7 @@ function fixture(t, { files = ['tools/a.mjs'], push = true, account = 'nishi@org
 test('fork起点でもbaseへpush→PR→automergeラベル→read-back', t => {
   const f = fixture(t), result = publishSeatPr(f);
   assert.equal(result.route, 'automerge');
+  assert(f.calls.find(c => c[1] === 'diff').includes('--no-renames'));
   assert.deepEqual(f.calls.find(c => c[1] === 'push'), ['git', 'push', 'https://github.com/kimkon1011/repo.git', `${'a'.repeat(40)}:refs/heads/feat/seat`]);
   const create = f.calls.findIndex(c => c[2] === 'create'), label = f.calls.findIndex(c => c.includes('--add-label'));
   assert(create >= 0 && label > create);

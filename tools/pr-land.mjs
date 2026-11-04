@@ -40,7 +40,7 @@ export function publishSeatPr({ cwd = process.cwd(), home = process.env.ORGIAST_
   const head = run('git', ['rev-parse', 'HEAD']);
   if (!/^[a-f0-9]{40}$/i.test(head) || run('git', ['rev-parse', `refs/heads/${branch}`]) !== head) throw new Error('作業ブランチと HEAD が一致しません');
   run('git', ['fetch', target.url, base]);
-  const files = run('git', ['diff', '--name-only', '-z', `FETCH_HEAD...${head}`]).split('\0').filter(Boolean);
+  const files = run('git', ['diff', '--no-renames', '--name-only', '-z', `FETCH_HEAD...${head}`]).split('\0').filter(Boolean);
   const route = landingRoute(files);
   if (route === 'workflow-stop') throw new Error('.github/workflows/ を含むため停止。workflow 権限とレビューの専用経路で扱ってください');
   // origin が fork でも、確認した base に明示的に push。remote 設定には副作用を出さない。

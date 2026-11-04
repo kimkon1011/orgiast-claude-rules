@@ -79,3 +79,8 @@ FEEDBACK_KIT_REPORT.md
 # brandcard-print-pdf.mjs が qrcode.min.js を実行時に tools/.cache/ へ落とすキャッシュ先。
 # 追跡しないため dirty-worktree-guard の救済対象にしない（2026-11-02 に rescue が拾った実測）。
 tools/.cache/
+
+# CodeGraph (colbymchenry/codegraph) 索引成果物。WSL /mnt/ は .codegraph-wsl/
+/.codegraph/
+/.codegraph-wsl/
+/.codegraph-npm-cache/

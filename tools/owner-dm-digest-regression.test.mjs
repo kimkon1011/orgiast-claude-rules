@@ -111,3 +111,26 @@ test('compact digest identifies kim decisions and retains waiting rows without n
  assert.match(kim, /このDMに返信してください/);
  assert.doesNotMatch(kim, /あなたの操作は不要/);
 });
+
+// 2026-11-04 nishi: 夕方のまとめの返事待ちが見出しだけ、本文が「新しいセッションが で引き継ぎ」「10 に成約率」と穴だらけだった。
+test('compact digest keeps the question body, slash words, dates and jargon instead of punching holes', () => {
+  const deferred = [{ id: 'a1', kind: 'action', at: new Date(now - 1000).toISOString(),
+    text: '【kimko-PC（DESKTOP-PPD5V8I）・nishi@orgiast.jp の Claude Code】プロジェクト: nightly-repo ／ セッションの目的: [headless:quota-sweep] x ／ 作業ID: a72f3713\n901 と 902 の前倒し案内を2通送ってよいですか。はい／いいえで返信してください。' }];
+  const rows = [{ owner: 'nishi@orgiast.jp', sessionId: 's1', status: 'in_progress', label: '新しいセッションが `/session-start` で引き継ぎを読み、10/28 に成約率を測り直します。回答が届けば autopilot が自動で再開。~/.claude/x.md も見る', ts: new Date(now - 1000).toISOString() }];
+  const { text } = compactDigest(rows, deferred, now, { owner: 'nishi@orgiast.jp' });
+  assert.match(text, /・901 と 902 の前倒し案内を2通送ってよいですか。はい／いいえで返信してください。（このDMに返信してください）/);
+  assert.doesNotMatch(text, /Claude Code】|（）|作業ID|DESKTOP-/);
+  const body = compactDigest([{ ...rows[0], nextKim: rows[0].label, status: 'waiting_user' }], [], now, { owner: 'nishi@orgiast.jp' }).text;
+  assert.match(body, /\/session-start で引き継ぎ/);
+  assert.match(body, /10\/28 に成約率/);
+  assert.match(body, /回答が届けば 自動ループ が自動で再開/);
+  assert.doesNotMatch(body, /x.md/);
+});
+
+test('compact digest keeps the subject of 「自動進行が判断待ちです」 while still stripping the 自動進行: label', () => {
+  const deferred = [{ id: 'b1', kind: 'action', at: new Date(now - 1000).toISOString(), text: '自動進行が判断待ちです: 901 の案内を送ってよいですか' },
+    { id: 'b2', kind: 'action', at: new Date(now - 2000).toISOString(), text: '自動進行: 902 の案内を送ってよいですか' }];
+  const { text } = compactDigest([], deferred, now, { owner: 'nishi@orgiast.jp' });
+  assert.match(text, /・自動進行が判断待ちです: 901 の案内を送ってよいですか/);
+  assert.match(text, /・902 の案内を送ってよいですか/);
+});

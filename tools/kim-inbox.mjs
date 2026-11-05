@@ -189,7 +189,7 @@ export async function drainSpool(home, { stderr = console.error, execImpl, signa
         const record = JSON.parse(fs.readFileSync(file, 'utf8'));
         if (!['ask', 'info'].includes(record.kind) || typeof record.text !== 'string' || !record.dedupeKey) throw new Error('invalid spool record');
         const item = await addItem(home, { ...record, execImpl, signal }, { drain: false });
-        if (item.forwardError) break; // Retry forwarding on the next pass as well.
+        if (item.status === 'open' && item.forwardError) break; // Retry forwarding on the next pass as well.
         fs.unlinkSync(file);
         imported.push(item);
       } catch (error) {

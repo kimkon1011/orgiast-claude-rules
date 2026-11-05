@@ -318,3 +318,15 @@ test('concurrent spool consumers preserve a single forwarding attempt and retry 
   assert.equal(listItems(home)[0].status, 'forwarded');
   assert.equal(fs.readdirSync(path.join(home, '.claude/kim-inbox/spool')).length, 0);
 });
+
+test('an answered spool item with an old forwarding error does not block later notifications', async t => {
+  const { spoolItem, drainSpool } = await import('./kim-inbox.mjs');
+  const home = seat(t, '作業用011');
+  spoolItem(home, { kind: 'ask', text: 'ローカルで回答する依頼' });
+  await drainSpool(home, { execImpl: async () => { throw new Error('offline'); } });
+  answerItem(home, listItems(home)[0].id, '回答済み');
+  let forwarded = false;
+  await drainSpool(home, { execImpl: async () => { forwarded = true; throw new Error('must not forward answered item'); } });
+  assert.equal(forwarded, false);
+  assert.equal(fs.readdirSync(path.join(home, '.claude/kim-inbox/spool')).length, 0);
+});

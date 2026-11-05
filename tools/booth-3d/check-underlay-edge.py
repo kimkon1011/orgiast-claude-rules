@@ -5,12 +5,14 @@ def load(p):
 base,bw,bh,bg,br=load(base_path); cand,cw,ch,cg,cr=load(cand_path)
 if (cw,ch)!=(bw,bh): cand.scale(bw,bh); cand.filepath_raw=cand_path; cand.file_format='PNG'; cand.save(); bpy.data.images.remove(cand); cand,cw,ch,cg,cr=load(cand_path)
 e=meta['front_top_edge_px']; x0=max(2,round(min(e[0][0],e[1][0]))); x1=min(bw-3,round(max(e[0][0],e[1][0]))); expected=(e[0][1]+e[1][1])/2; booth_h=meta['booth_height_px']; radius=max(10,round(booth_h*.22))
-def score(y):
+def line_y(x): return e[0][1]+(e[1][1]-e[0][1])*(x-e[0][0])/(e[1][0]-e[0][0])
+def score(offset):
  t=0
  for x in range(x0,x1+1):
+  y=round(line_y(x)+offset)
   gx=(cg[(y-1)*bw+x+1]+2*cg[y*bw+x+1]+cg[(y+1)*bw+x+1])-(cg[(y-1)*bw+x-1]+2*cg[y*bw+x-1]+cg[(y+1)*bw+x-1]); gy=(cg[(y+1)*bw+x-1]+2*cg[(y+1)*bw+x]+cg[(y+1)*bw+x+1])-(cg[(y-1)*bw+x-1]+2*cg[(y-1)*bw+x]+cg[(y-1)*bw+x+1]); t+=math.hypot(gx,gy)
  return t/(x1-x0+1)
-s,y=max((score(y),y) for y in range(max(2,round(expected-radius)),min(bh-2,round(expected+radius))+1)); shift=(y-expected)/booth_h*100; passed=abs(shift)<=5; result={'expected_top_y_px':expected,'detected_top_y_px':y,'top_shift_percent':shift,'threshold_percent':5,'sobel_score':s,'passed':passed,'search_x_px':[x0,x1]}; json.dump(result,open(out_json,'w',encoding='utf-8'),ensure_ascii=False,indent=2)
+s,offset=max((score(d),d) for d in range(-radius,radius+1)); found=expected+offset; shift=offset/booth_h*100; passed=abs(shift)<=5; result={'expected_top_y_px':expected,'detected_top_y_px':found,'top_shift_percent':shift,'threshold_percent':5,'sobel_score':s,'passed':passed,'search_x_px':[x0,x1]}; json.dump(result,open(out_json,'w',encoding='utf-8'),ensure_ascii=False,indent=2)
 out=bpy.data.images.new('comparison',width=bw*2,height=bh,alpha=True); dst=[0.0]*(bw*2*bh*4)
 for yy in range(bh):
  for x in range(bw):

@@ -5,7 +5,7 @@
     "out": "work\\gridbeyond-v4\\out\\perse-standard.png",
     "ok": true,
     "model": "google/gemini-2.5-flash-image",
-    "cost": 0.0397044
+    "cost": 0.0396344
   },
   {
     "id": "premium",
@@ -13,7 +13,7 @@
     "out": "work\\gridbeyond-v4\\out\\perse-premium.png",
     "ok": true,
     "model": "google/gemini-2.5-flash-image",
-    "cost": 0.0396359
+    "cost": 0.0395634
   },
   {
     "id": "impact",
@@ -21,6 +21,6 @@
     "out": "work\\gridbeyond-v4\\out\\perse-impact.png",
     "ok": true,
     "model": "google/gemini-2.5-flash-image",
-    "cost": 0.0396216
+    "cost": 0.0396816
   }
 ]

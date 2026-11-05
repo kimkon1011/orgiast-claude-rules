@@ -1,9 +1,9 @@
 {
   "expected_top_y_px": 296.8473587036133,
-  "detected_top_y_px": 280,
-  "top_shift_percent": -5.206895638623003,
+  "detected_top_y_px": 342.8473587036133,
+  "top_shift_percent": 14.216899134775856,
   "threshold_percent": 5,
-  "sobel_score": 0.6035959874238526,
+  "sobel_score": 0.548224786594966,
   "passed": false,
   "search_x_px": [
     637,

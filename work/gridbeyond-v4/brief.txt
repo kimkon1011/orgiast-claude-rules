@@ -8,3 +8,4 @@ Brand colours: Navy #1c1463, Vibrant Blue #0566d8, Purple #9052f3; cool white li
 Zones: NOC screen wall (Japan map dashboard), standing presentation spot (no audience chairs), meeting zone with low tables x 2 low chairs (4-5 sets), cloak room ~2 m x 2 m with door, explanation counter with LED logo top, infographic wall + pamphlet rack.
 Rules: faithful GridBeyond logo, no readable body text, no numbers/prices, clean finished booth.
 CRITICAL GEOMETRY OVERRIDE: Trace the underlay's visible top truss line pixel-for-pixel. Do not place any illuminated panel, halo, logo, arch, infinity loop, suspension, or decorative glow above that exact line. The dark empty hall area above the underlay top line must remain empty.
+Treat this as a precise image-to-image material paint-over, not a new composition. Retain the underlay geometry pixels and silhouette as hard constraints. The top front beam must run through exactly the same endpoints as the underlay.

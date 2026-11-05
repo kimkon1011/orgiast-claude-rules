@@ -9,7 +9,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
-const USAGE = '使い方: node tools/booth-perse-gen.mjs --brief <brief.txt> --plans <plans.json> --out <dir> [--base <寸法どおりの下絵.png>] [--ref <image> ...] [--blender-out <dir>] [--max-height <m>（会場の装飾高さ上限・既定3.6）] [--model <OpenRouter model>]';
+const USAGE = '使い方: node tools/booth-perse-gen.mjs --brief <brief.txt> --plans <plans.json> --out <dir> [--only <plan-id>] [--base <寸法どおりの下絵.png>] [--ref <image> ...] [--blender-out <dir>] [--max-height <m>（会場の装飾高さ上限・既定3.6）] [--model <OpenRouter model>]';
 const DEFAULT_MODEL = 'openai/gpt-5.4-image-2';
 const DEFAULT_MAX_HEIGHT = 3.6;
 const BLENDER_PERSP_FILES = ['persp_front_left.png', 'persp_front_right.png'];
@@ -30,6 +30,7 @@ export function parseArgs(argv) {
     if (a === '--brief') { opts.brief = v; i += 1; }
     else if (a === '--plans') { opts.plans = v; i += 1; }
     else if (a === '--out') { opts.out = v; i += 1; }
+    else if (a === '--only') { opts.only = v; i += 1; }
     else if (a === '--base') { opts.base = v; i += 1; }
     else if (a === '--ref') { opts.refs.push(v); i += 1; }
     else if (a === '--blender-out') { opts.blenderOut = v; i += 1; }
@@ -98,8 +99,12 @@ async function main() {
       console.error('[blender-out] 段階2のパース画像が見つかりませんでした（--blender-out は無視して続行）');
     }
   }
-  const plans = JSON.parse(readFileSync(opts.plans, 'utf8'));
+  let plans = JSON.parse(readFileSync(opts.plans, 'utf8'));
   if (!Array.isArray(plans) || plans.length !== 3) throw new Error('プラン定義は3件（梅・竹・松に当たる3案）にする');
+  if (opts.only) {
+    plans = plans.filter((plan) => plan.id === opts.only);
+    if (plans.length !== 1) throw new Error(`--only に一致するプランがありません: ${opts.only}`);
+  }
   const common = readFileSync(opts.brief, 'utf8');
   if (opts.base) opts.refs.unshift(opts.base);
   const key = loadKey();

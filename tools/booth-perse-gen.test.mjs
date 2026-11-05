@@ -32,6 +32,11 @@ test('parseArgs: --base を寸法下絵として読む', () => {
   assert.deepEqual(o.refs, ['logo.png']);
 });
 
+test('parseArgs: --only で再生成する案を1件に絞れる', () => {
+  const o = parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o', '--only', 'premium']);
+  assert.equal(o.only, 'premium');
+});
+
 test('buildPrompt: 下絵の外形と人物スケールを固定し日本語文字を禁止する', () => {
   const t = buildPrompt('BRIEF', { add: 'PLAN' });
   assert.match(t, /FIRST reference image is a dimensionally accurate 3D underlay/);

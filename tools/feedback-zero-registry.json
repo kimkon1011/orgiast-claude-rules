@@ -13,17 +13,6 @@
       }
     },
     {
-      "appName": "カフェ業務チェック",
-      "kind": "next",
-      "intake": "relay",
-      "refs": {
-        "url": "FEEDBACK_RELAY_URL",
-        "secret": "FEEDBACK_RELAY_SECRET",
-        "repo": "CAFE_REPO",
-        "appDir": "CAFE_APP_DIR"
-      }
-    },
-    {
       "appName": "イベントショップ",
       "kind": "gas",
       "intake": "relay",
@@ -137,6 +126,17 @@
         "secret": "FEEDBACK_RELAY_SECRET",
         "repo": "EXHIBITION_OVERLAP_REPO",
         "appDir": "EXHIBITION_OVERLAP_APP_DIR"
+      }
+    },
+    {
+      "appName": "カフェ業務チェック",
+      "kind": "next",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "CAFE_REPO",
+        "appDir": "CAFE_APP_DIR"
       }
     }
   ]

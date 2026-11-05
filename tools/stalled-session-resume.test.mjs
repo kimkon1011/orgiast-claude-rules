@@ -263,10 +263,16 @@ test('fair order uses oldest last night then score and age', async t => {
 test('parallel execution excludes shared cwd and persists attempts before launch', async t => {
   const f = await fixture(t, 4); f.records[2].cwd = path.join(f.io.home, 'other');
   const active = new Set(); let max = 0;
+  // Promise-based synchronization: wait until 2 different cwds have entered before releasing any.
+  // This avoids the flaky setTimeout(20) which could let the first execute finish before the second starts.
+  let releaseBoth;
+  const both = new Promise(resolve => { releaseBoth = resolve; });
+  let started = 0;
   f.io.execute = async record => {
     assert.ok(!active.has(record.cwd)); active.add(record.cwd); max = Math.max(max, active.size);
     assert.equal((await f.ledger()).sessions[record.sessionId].attempts.at(-1).outcome, 'interrupted');
-    await new Promise(resolve => setTimeout(resolve, 20)); active.delete(record.cwd);
+    if (++started === 2) releaseBoth();
+    await both; active.delete(record.cwd);
     return { outcome: 'progressed' };
   };
   const r = await run(options([], {}), f.io);

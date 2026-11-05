@@ -92,7 +92,14 @@ test('input bodies from explicit inputs/dependencies are included; output and pa
   atomicWrite(path.join(ctx.root, 'data/marketing/source.md'), '確認済みの用途');
   assert.match(buildPrompt(a, ctx.root, []), /確認済みの用途/);
   for (const p of ['../secret', '/tmp/file', '.git/config', 'data/.env', 'C:\\secret']) assert.throws(() => safePath(ctx.root, p));
-  fs.symlinkSync(os.tmpdir(), path.join(ctx.root, 'link'));
+  try {
+    fs.symlinkSync(os.tmpdir(), path.join(ctx.root, 'link'));
+  } catch (error) {
+    if (error.code !== 'EPERM') throw error;
+    // Windows may require elevated privileges or Developer Mode to create symlinks.
+    t.skip('Symlink creation is not permitted');
+    return;
+  }
   assert.throws(() => safePath(ctx.root, 'link/secret'));
 });
 test('dry-run is read only, first action A01, no subprocess/network/inbox', async t => {

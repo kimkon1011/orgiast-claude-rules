@@ -1,0 +1,51 @@
+=== 1. tools/gmail-search.mjs --user satou@orgiast.jp --query "(from:ogawa@bc9.jp OR to:ogawa@bc9.jp) after:2026/11/1" --max 20 --body --body-limit 1500 ===
+satou@orgiast.jp はGoogleグループです。seisaku-team@orgiast.jp の to:satou@orgiast.jp 検索に切り替えました。
+{
+  "user": "seisaku-team@orgiast.jp",
+  "query": "to:satou@orgiast.jp ((from:ogawa@bc9.jp OR to:ogawa@bc9.jp) after:2026/11/1)",
+  "notice": "satou@orgiast.jp はGoogleグループです。seisaku-team@orgiast.jp の to:satou@orgiast.jp 検索に切り替えました。",
+  "estimate": 2,
+  "messages": [
+    {
+      "id": "1a1a91fd8781d42c",
+      "internalDate": "1793838616000",
+      "threadId": "1a16225d64625eb4",
+      "date": "Thu, 5 Nov 2026 09:30:16 +0900",
+      "from": "ogawa <ogawa@bc9.jp>",
+      "to": "\"'株式会社オージャスト 佐藤'\" <satou@orgiast.jp>",
+      "subject": "RE: イベント資料の件",
+      "listUnsubscribe": "<mailto:googlegroups-manage+219193380052+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/satou/subscribe>",
+      "snippet": "株式会社オージャスト佐藤様お世話になっております。 鹿沼ケーブルテレビ 小川です。 イオン担当者と連絡がつかず回答が遅れており申し訳ございません。 現時点でお答えできるのが、 (1) 控室：出演者2名が準備・休憩に使えるお部屋をお借りできるか （12月19日はマジシャン・バルーンの2名、20日はバルーンの1名） →弊社の事務所の倉庫部分（完全に仕切られています）を控室として使っていただいて 大丈夫",
+      "labels": [
+        "Label_9132928237949015116",
+        "IMPORTANT",
+        "CATEGORY_FORUMS",
+        "INBOX"
+      ],
+      "body": "株式会社オージャスト\r\n佐藤様\r\n\r\nお世話になっております。\r\n\r\n鹿沼ケーブルテレビ　小川です。\r\n\r\nイオン担当者と連絡がつかず回答が遅れており申し訳ございません。\r\n現時点でお答えできるのが、\r\n(1) 控室：出演者2名が準備・休憩に使えるお部屋をお借りできるか\r\n　（12月19日はマジシャン・バルーンの2名、20日はバルーンの1名）\r\n→弊社の事務所の倉庫部分（完全に仕切られています）を控室として使っていただいて\r\n　大丈夫です。当日は簡易的なイスにはなってしまいますがご用意いたします。\r\nそれ以外の点は、ただいま確認中でございます。\r\n\r\nマジシャンの方の宣伝素材とお菓子のイメージ画像ありがとうございます。\r\nバルーンアーティストの方の素材が届き次第とのこと承知いたしました。\r\n引き続きよろしくお願いいたします。\r\n\r\nKCTおまかせ光\r\n鹿沼ケーブルテレビ㈱\r\n営業部　おまかせ光推進グループ\r\n小川直久\r\n〒322-0021　栃木県鹿沼市上野町281-4\r\nTEL：0289-63-0005　/{FAX：0289-63-1119\r\n携帯電話番号：080-6848-9518\r\nMail：ogawa@bc9.jp\r\nURL：https://kctnet.co.jp/\r\n\r\n-----Original Message-----\r\nFrom: 株式会社オージャスト 佐藤 <satou@orgiast.jp> \r\nSent: Wednesday, November 4, 2026 9:04 PM\r\nTo: ogawa <ogawa@bc9.jp>\r\nSubject: Re: イベント資料の件\r\n\r\n鹿沼ケーブルテレビ株式会社\r\n小川 直久 様\r\n\r\nいつもお世話になっております。\r\n株式会社オージャストの佐藤でございます。\r\n\r\n先日は資料のご送付と、出演者についてのご回答をいただき、ありがとうございました。\r\nマジシャン博士様、バルーンパフォーマーSAKURA様ともに、出演が決まりましたのでご報告いたします。\r\n\r\n━━━━━━━━━━━━━━━━━━\r\n1. 出演の予定\r\n━━━━━━━━━━━━━━━━━━\r\n■マジシャン博士（12月19日（土））\r\n・ステージマジック：11:00〜／14:00〜／16:00〜（各約20分）\r\n・会場入り：9:00頃\r\n\r\n■バルーンパフォーマーSAKURA（12月19日（土）・20日（日））\r\n・バルーンの制作・プレゼント：各日 合計3時間（1時間×3回、休憩を挟む形）\r\n・実施時間帯は、ステージショーの合間で調整し、決まり次第お知らせいたします\r\n・会場入り：実施開始の1時間半〜2時間前\r\n\r\n━━━━━━━━━━━━━━━━━━\r\n2. イオン様へのご確認をお願いしたい事項\r\n━━━━━━━━━━━━━━━━━━\r\nお手数ですが、下記をイオン様にご確認いただけますでしょうか。\r\n\r\n(1) 控室：出演者2名が準備・休憩に使えるお部屋をお借りできるか\r\n　（12月19日はマジシャン・バルーンの2名、20日はバルーンの1名）\r\n(2) 駐車場：出演者の車をとめる場所をご用意いただけるか\r\n　（12月19日は2台、20日は1台）\r\n(3) 電源：ステージショーの音響用に、ステージ付近でコンセントを1口お借りできるか\r\n(4) 案内看板：バルーンをプレゼントしていることが分かる看板等をブース前に置いてよいか\r\n(5) 搬入・入館：出演者が会場入りする際の入口と、入館の手続きがあるか\r\n\r\n━━━━━━━━━"
+    },
+    {
+      "id": "1a19ab9e4830772d",
+      "internalDate": "1793597052000",
+      "threadId": "1a16225d64625eb4",
+      "date": "Mon, 2 Nov 2026 14:24:12 +0900",
+      "from": "ogawa <ogawa@bc9.jp>",
+      "to": "\"'株式会社オージャスト 佐藤'\" <satou@orgiast.jp>",
+      "subject": "RE: イベント資料の件",
+      "listUnsubscribe": "<mailto:googlegroups-manage+219193380052+unsubscribe@googlegroups.com>, <https://groups.google.com/a/orgiast.jp/group/satou/subscribe>",
+      "snippet": "株式会社オージャスト 佐藤様 お世話になっております。 鹿沼ケーブルテレビ 小川です。 添付ファイルが多いためギガファイル便になりますが、 よろしくお願いいたします。 https://3.gigafile.nu/1107-876567c3bc29a8d200c2a1b9ae2e1f10 ステージショーの時間ですが、 チラシには10：00～となっていますが、準備の時間なども考慮し、 11：00，14：",
+      "labels": [
+        "Label_9132928237949015116",
+        "IMPORTANT",
+        "CATEGORY_FORUMS",
+        "INBOX"
+      ],
+      "body": "株式会社オージャスト\r\n\r\n佐藤様\r\n\r\n \r\n\r\nお世話になっております。\r\n\r\n鹿沼ケーブルテレビ　小川です。\r\n\r\n \r\n\r\n添付ファイルが多いためギガファイル便になりますが、\r\n\r\nよろしくお願いいたします。\r\nhttps://3.gigafile.nu/1107-876567c3bc29a8d200c2a1b9ae2e1f10\r\n\r\nステージショーの時間ですが、\r\nチラシには10：00～となっていますが、準備の時間なども考慮し、\r\n\r\n11：00，14：00，16：00で考えています。\r\n\r\n(2) イオン館内アナウンスを流していただけるかどうか→担当者が本日お休みみたいで、明日か明後日の回答になります。\r\n(3) 前日設営の要否（装飾の内容に応じてご判断いただく件）→同上\r\n(4) チラシに掲載するお問い合わせ先の電話番号と受付時間→0120-988-1119：00～18：00\r\n\r\n \r\n\r\nマジシャンについて\r\n\r\nマジシャン博士様で問題ありません。\r\n\r\n以前弊社で、福田屋百貨店でお願いしたマジシャンの方で、\r\n\r\nすごく好評でしたので、よろしくお願いいたします。\r\n\r\n \r\n\r\nバルーンアーティストについて\r\n\r\nバルーンパフォーマーSAKURAさんで問題ありません。\r\n\r\n是非お願いします。\r\n\r\nマジシャンさんとバルーンアーティストさんの画像などはいただけますでしょうか？\r\n\r\nもしくは、二人のインスタ等の画像を使ってもよろしいのでしょうか。\r\n\r\nよろしくお願いいたします。\r\n\r\nhttps://29.gigafile.nu/1107-cb6f68869e1a0d30f061fe51fa89edcf5\r\n\r\n上記がよく使ったいるアンケートになります。\r\n\r\n \r\n\r\nKCTおまかせ光\r\n\r\n鹿沼ケーブルテレビ㈱\r\n営業部　おまかせ光推進グループ\r\n\r\n小川直久\r\n〒322-0021　栃木県鹿沼市上野町281-4\r\nTEL：0289-63-0005　/　FAX：0289-63-1119\r\n携帯電話番号：080-6848-9518\r\n\r\nMail： <mailto:ogawa@bc9.jp> ogawa@bc9.jp\r\n\r\nURL： <https://kctnet.co.jp/> https://kctnet.co.jp/\r\n\r\n \r\n\r\nFrom: 株式会社オージャスト 佐藤 <satou@orgiast.jp> \r\nSent: Monday, November 2, 2026 12:16 PM\r\nTo: ogawa <ogawa@bc9.jp>\r\nSubject: Re: イベント資料の件\r\n\r\n \r\n\r\n鹿沼ケーブルテレビ株式会社\r\n小川 直久 様\r\n\r\nいつもお世話になっております。\r\n株式会社オージャストの佐藤でございます。\r\n\r\n先日10月30日（金）のお打合せでは、お時間をいただきありがとうございました。\r\nお打合せでお願いした事項を一覧にまとめましたので、ご確認をお願いいたします。\r\nあわせて、12月19日（土）のステージショーの出演者のご提案と、バルーンアーティストのご報告をさせてください。\r\n\r\n━━━━━━━━━━━━━━━━━━\r\nご送付をお願いしている資料\r\n━━━━━━━━━━━━━━━━━━ \r\n(1) マスコットキャラクター（慶ちゃん・ブル君）の画像データ 　　剣を持ったポーズ、魔法のスティックを持ったポーズのものを含めてお送りください\r\n(2) ロゴとカラーのガイドライン\r\n(3) 普段お"
+    }
+  ],
+  "skipped": 0,
+  "nextPageToken": null
+}
+
+=== 2. tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "(from:ogawa@bc9.jp OR to:ogawa@bc9.jp) after:2026/11/1" --max 20 --body --body-limit 1500 ===
+Error: Tool execution denied by policy.

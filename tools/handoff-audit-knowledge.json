@@ -292,5 +292,11 @@
     "route": "見積の金額確認・送信可否は Claude 側で判断する。見積の金額・数量・諸条件は、既存データ（案件シート・見積履歴・社内規程の粗利ルール）と突合して Claude 自身で検証し、kim に「合っているか」をチャットで確認させない。値引きの可否や価格設定は社内規程（30%ルール等）と原価データに基づいて Claude が判断する——粗利がルール内ならそのまま進める。見積PDFの生成は Drive DWD（kim impersonate / drive スコープ）でテンプレートを検索し、files.export?mimeType=application/pdf で出力する（Drive MCP は不要）。送信まで行う場合は、宛先・件名・本文・添付PDFを完成形で1回提示し、送信可否の承認だけを取る（feedback-confirm-before-external-send）。承認後は Claude が送信まで実行する: メールは `node tools/gmail-draft.mjs --to <addr> --subject <件名> --body-file <本文.txt> --attach <PDF>` で seisaku-team@orgiast.jp の下書きを作り、`node tools/gmail-draft.mjs --send <draftId>` で送る。送信後は返り値（messageId/threadId・HTTP status）を読み戻して報告し、kim に送信操作を求めない。",
     "confidence": "high",
     "source": "handoff-audit-nightly:f8e76d7286ebc8e3bf7902fcd7bb744aff78af1007c0521b512ff5b4a84bfbfd / 2026-11-06 tool-name-route レビューで route（）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "ループ報告で外部状態を直接API照会せずに断定",
+    "route": "ループ・自動進行の報告で、外部システム（GitHub の PR/CI/マージ状態、Drive のファイル、Vercel の本番、Gmail 等）の状態を、自分側のログや記憶だけで「完了した／無い／マージ済み」と断定しない。報告前に当ターンで直接照会して読み戻す。GitHub は `gh pr view <番号> -R <owner/repo> --json state,mergedAt,mergeCommit,statusCheckRollup`、`gh pr checks <番号> -R <owner/repo>`、`gh run list -R <owner/repo> --limit 10 --json status,conclusion,headSha,name`、任意の API は `gh api repos/<owner>/<repo>/<path>`。Drive は DWD（kim impersonate / drive スコープ）で files.get / files.list の実応答を読む。Vercel は `vercel inspect <url>` で Ready を確認する。コミットの取込判定は squash マージで is-ancestor が偽になるため `node tools/commit-landed.mjs <sha>` を使う。照会に失敗した項目は実際のエラー本文を貼り「未確認」と書き、確率付きの否定や「user が確認して」への丸投げをしない。報告は「要素 × 照会コマンド × 実データ」の表にし、状態が変わるまで待つだけの項目も最後に再照会した結果を載せる。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:8ccfb76e6a69329b0f49d1810e9006178f22fbd0ff1bd4a6b6b1b2747be19211 / 2026-11-06 tool-name-route レビューで route（`gh api`）を手順文へ書き直して採用 / 組織指示「外部状態は直接照会だけで判定し、未照会は未確認と書く」と commit-landed.mjs の運用に整合"
   }
 ]

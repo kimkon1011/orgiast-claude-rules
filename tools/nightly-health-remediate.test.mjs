@@ -258,3 +258,30 @@ test('no anomalies still advances the monitored log', async (t) => {
   await runRemediation({ home });
   assert.match(fs.readFileSync(path.join(home, '.claude', 'logs', 'nightly-health-remediate.log'), 'utf8'), /remediation started/);
 });
+
+
+test('wrapper-held log uses stdout and a durable sibling without retrying its lock', async (t) => {
+  const home = makeHome(t, { anomalies: [{ label: 'one' }, { label: 'two' }] });
+  const logFile = path.join(home, '.claude', 'logs', 'nightly-health-remediate.log');
+  const append = fs.appendFileSync;
+  let lockedAttempts = 0;
+  t.mock.method(fs, 'appendFileSync', (file, ...args) => {
+    if (file === logFile) {
+      lockedAttempts++;
+      throw Object.assign(new Error('wrapper holds log'), { code: 'EBUSY' });
+    }
+    return append(file, ...args);
+  });
+  const { value: { value: result, lines }, lines: warnings } = await captureConsoleError(() => captureConsole(() => runRemediation({
+    home, playbooks: [], maxCodex: 0,
+    notify: async () => assert.fail('no external notification'), decision: () => assert.fail('no decision')
+  })));
+  assert.equal(result.deferred.length, 2);
+  assert.equal(lockedAttempts, 1);
+  assert.deepEqual(warnings, []);
+  assert.equal(fs.readFileSync(logFile.replace(/\.log$/, '.events.log'), 'utf8'), lines.slice(0, 2).join('\n') + '\n');
+  fs.writeFileSync(path.join(home, '.claude', '.nightly-health-last.json'), JSON.stringify({ anomalies: [] }));
+  const healthy = await captureConsole(() => runRemediation({ home }));
+  assert.match(healthy.lines[0], /remediation started/);
+  assert.match(fs.readFileSync(logFile.replace(/\.log$/, '.events.log'), 'utf8'), /remediation started/);
+});

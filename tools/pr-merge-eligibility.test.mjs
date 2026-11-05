@@ -43,11 +43,11 @@ test('ラベル: 文字列でもオブジェクトでも automerge を検出す�
   assert.equal(hasLabel({}, 'automerge'), false);
 });
 
-test('判定: 安全弁つきラベル済み PR は manual_merge_required（可否を聞かない）', () => {
+test('判定: 安全弁つきラベル済み PR は workflow_stop（可否を聞かない）', () => {
   const item = evaluatePr(pr567, { repo: REPO });
-  assert.equal(item.verdict, 'manual_merge_required');
+  assert.equal(item.verdict, 'workflow_stop');
   assert.equal(item.guarded, '.github/workflows/test.yml');
-  assert.match(item.action, /kim/);
+  assert.match(item.action, /停止/);
   assert.doesNotMatch(item.action, /--add-label/);
 });
 
@@ -100,9 +100,9 @@ test('集計: verdict ごとに件数を数える', () => {
     prs: [pr567, { ...pr567, number: 568, labels: [], files: [{ path: 'tools/x.mjs' }] }, { ...pr567, number: 566 }],
   });
   assert.equal(report.items.length, 3);
-  assert.equal(report.counts.manual_merge_required, 2);
+  assert.equal(report.counts.workflow_stop, 2);
   assert.equal(report.counts.missing_label, 1);
-  assert.match(renderText(report), /manual_merge_required=2/);
+  assert.match(renderText(report), /workflow_stop=2/);
 });
 
 test('fetchState: gh の引数と collaborator の404を正しく扱う', () => {
@@ -146,5 +146,12 @@ test('main: --json で判定結果を返す（gh は差し替え）', () => {
   const code = main(['node', 'x.mjs', '--repo', REPO, '--json'], { run, log: (line) => out.push(line) });
   assert.equal(code, 0);
   const report = JSON.parse(out.join('\n'));
-  assert.equal(report.items[0].verdict, 'manual_merge_required');
+  assert.equal(report.items[0].verdict, 'workflow_stop');
+});
+
+test('鍵関連は人への依頼ではなく作成席のpr-mergeへ案内する', () => {
+  const item = evaluatePr({ ...pr567, files: [{ path: 'tools/keyserve-auth.mjs' }] }, { repo: REPO });
+  assert.equal(item.verdict, 'self_merge_required');
+  assert.match(item.action, /pr-merge\.mjs/);
+  assert.doesNotMatch(item.action, /人（kim）|kim-PC/);
 });

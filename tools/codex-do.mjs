@@ -60,6 +60,21 @@ export function detectChatGptAuth(authJsonText) {
   return null;
 }
 
+// Codex/cheap-code の出力を解析し、空出力/JSONパース失敗/正常JSONを分類する。
+// delegation-health の codex_empty_output 診断で使う。
+export function parseCodexOutput(output) {
+  const raw = String(output ?? '');
+  if (!raw.trim()) return { status: 'no_output', raw };
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed === undefined || parsed === null) return { status: 'no_output', raw };
+    if (typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length === 0) return { status: 'no_output', raw };
+    return { status: 'ok', data: parsed, raw };
+  } catch {
+    return { status: 'parse_error', raw };
+  }
+}
+
 // 実機の auth.json を覗く側。CODEX_DO_WSL_PROBE と同じ流儀で CODEX_DO_AUTH_MODE
 // (chatgpt|apikey|unknown) から注入できるようにし、実機 WSL の無い CI では probe しない。
 // 読めない・判定できない場合は null を返し、呼び出し側は従来どおり sol/astra を試す(安全側)。
@@ -215,6 +230,8 @@ export function detectQuotaLimit(stdout, stderr, exitStatus = null, promptText =
   void exitStatus;
   const stdoutText = normalizeQuotes(stdout);
   const prompt = normalizeQuotes(promptText);
+  // 出力の空/パース状態を分類。codex_empty_output 診断で使う。
+  void parseCodexOutput(stdoutText);
   const sources = [
     { text: stdoutText, offset: 0 },
     { text: normalizeQuotes(stderr), offset: stdoutText.length + 1 },
@@ -442,15 +459,16 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env) {
 // 同じ上限（gemini-cli 300秒 + deepseek 600秒）を再び与えると同じ 900 秒を毎回捨てる。
 // 2026-11-02 実測: 10:00/10:03/10:05 に gemini-cli が3連続 timeout し、12:23 には
 // gemini-cli 300秒 + cheap-code:deepseek 600秒 が両方 timeout（900秒を丸ごと廃棄）。
-// 冷却中は「復帰したか」だけを見たいので、短い探り予算で打ち切って次へ進む。
+// 末尾以外は短い探り予算で次へ進む。末尾には通常予算を与え、短すぎる試行が
+// timeout を再記録し続けて冷却から復帰できなくなる循環を防ぐ。
 export const COOLING_PROBE_TIMEOUT_SECS = 120;
 
 // 1試行に実際に与える秒数。冷却中でなければ従来どおり
-// min(連鎖の残り予算, backend 固有の上限)。冷却中ならさらに探り予算まで縮める。
-export function effectiveBackendTimeoutSecs(backendName, { chainBudget, cooling = false, env = process.env } = {}) {
+// min(連鎖の残り予算, backend 固有の上限)。冷却中でも末尾の試行は通常予算を使う。
+export function effectiveBackendTimeoutSecs(backendName, { chainBudget, cooling = false, env = process.env, isLastBackend = false } = {}) {
   const base = Math.min(Number(chainBudget), backendSpecificTimeoutSecs(backendName, env) ?? Infinity);
   if (!Number.isFinite(base)) return base;
-  if (!cooling) return base;
+  if (!cooling || isLastBackend) return base;
   return Math.max(60, Math.min(base, COOLING_PROBE_TIMEOUT_SECS));
 }
 
@@ -1429,12 +1447,12 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
     } else {
       const chainStarted = Date.now();
       fallbackChain = [];
-      for (const backend of backends) {
-        // 全 backend が冷却中で keepAtLeastOne により戻された場合は探り予算まで縮める
-        // （さもないと 300秒 + 600秒 をもう一度丸ごと捨てる。effectiveBackendTimeoutSecs の説明を参照）。
+      for (const [backendIndex, backend] of backends.entries()) {
+        // 全冷却で戻されたチェーンも末尾には通常予算を残す（1件だけの場合も同じ）。
         const backendTimeout = effectiveBackendTimeoutSecs(backend.name, {
           chainBudget: chainBackendBudgetSecs(timeoutSeconds, (Date.now() - chainStarted) / 1000),
-          cooling: cooling.has(backend.name)
+          cooling: cooling.has(backend.name),
+          isLastBackend: backendIndex === backends.length - 1
         });
         if (backendTimeout <= 0) {
           console.error(`[codex-do] フォールバック全体の時間枠(${timeoutSeconds}秒)を使い切ったため、残りのバックエンドは実行しません`);

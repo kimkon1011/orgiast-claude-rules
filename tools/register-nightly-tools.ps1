@@ -33,6 +33,10 @@ $specs = @(
 # The tasks must run from the synced repo, not from the tree this script sits in.
 $repo = Resolve-RegisterRepoRoot -Fallback (Split-Path -Parent $PSScriptRoot) -RequiredPaths @($specs | ForEach-Object { Join-Path 'tools' $_.ScriptName })
 
+# Deadline jobs have their own schedules and kim-seat guard.
+& (Join-Path $PSScriptRoot 'register-deadline-watch-tasks.ps1') -Ensure -DryRun:$DryRun -Unregister:$Remove
+if (-not $?) { throw 'deadline-watch registration failed' }
+
 # Resolve every prerequisite before changing either task.
 $taskNames = @($specs | ForEach-Object { $_.TaskName } | Select-Object -Unique)
 $tasks = @{}

@@ -163,3 +163,23 @@ for (const message of ['Claude needs your permission to use Bash', 'permission t
   await f.run();
   assert.equal(readQuestion(f.home, f.input.session_id), null);
 });
+
+for (const stale of [true, false]) {
+  test(`question lock ${stale ? 'recovers stale' : 'preserves fresh'} reclaim directory`, t => {
+    const f = fixture(t), id = 'session-reclaim';
+    const file = path.join(f.home, '.claude', 'fleet-questions', `${id}.json`), lock = `${file}.lock`;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(lock, 'abandoned');
+    const old = new Date(Date.now() - 120_000);
+    fs.utimesSync(lock, old, old);
+    fs.mkdirSync(`${lock}.reclaim`);
+    if (stale) fs.utimesSync(`${lock}.reclaim`, old, old);
+    let visited = false;
+    const result = updateQuestion(f.home, id, () => { visited = true; return { sessionId: id }; });
+    assert.equal(visited, stale);
+    assert.deepEqual(result, stale ? { sessionId: id } : null);
+    assert.equal(fs.existsSync(lock), !stale);
+    assert.equal(fs.existsSync(`${lock}.reclaim`), !stale);
+    assert.deepEqual(readQuestion(f.home, id), result);
+  });
+}

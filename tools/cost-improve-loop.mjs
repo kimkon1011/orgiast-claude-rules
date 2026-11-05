@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { publishSeatPr } from './pr-land.mjs';
 import fs from 'node:fs';
 import { writeHandoff } from './next-session-rotate.mjs';
 import { appendLineWithRetry } from './lib/append-line.mjs';
@@ -982,7 +983,7 @@ export function executeLocalAction({ act, dryRun = false, claudeDir, home, now =
 // reset/clean/checkout -b を投げない(#294)。検証テストが通れば gh pr create で実PRを作り、
 // 成功した acts 全件の state に PR URL を記録する。空 diff・検証失敗・実行失敗時は変更を捨てて
 // worktree を破棄し、acts 全件を failed にする。
-export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath, now = new Date(), spawnSync = defaultSpawnSync }) {
+export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath, home = process.env.ORGIAST_HOME || os.homedir(), now = new Date(), spawnSync = defaultSpawnSync }) {
   const list = Array.isArray(acts) ? acts : [acts];
   if (list.length === 0) return;
   const first = list[0];
@@ -1021,14 +1022,27 @@ export function runAutoCodexIsolated({ acts, specFile, dryRun = false, repoPath,
     for (const [program, args, stage] of [
       ['git', ['-C', tempTree, 'checkout', '-b', branchName], 'branch creation failed'],
       ['git', ['-C', tempTree, 'add', '-A'], 'git add failed'],
-      ['git', ['-C', tempTree, 'commit', '-m', commitMsg], 'commit failed'],
-      ['git', ['-C', tempTree, 'push', '-u', 'origin', branchName], 'push failed']
+      ['git', ['-C', tempTree, 'commit', '-m', commitMsg], 'commit failed']
     ]) {
       res = spawnSync(program, args, { windowsHide: true, encoding: 'utf8' });
       if (res.status !== 0) { fail(stage, res); return; }
     }
     const body = `Evidence: ${first.specContent?.match(/- 根拠: (.*)/)?.[1] || label}\n\nSpec summary: ${label} on ${first.pc}; verify with node --test tools/*.test.mjs.`;
-    res = spawnSync('gh', ['pr', 'create', '--title', commitMsg, '--body', body, '--head', branchName, '--label', 'automerge'], { windowsHide: true, cwd: tempTree, encoding: 'utf8' });
+    try {
+      const published = publishSeatPr({ cwd: tempTree, home, branch: branchName, title: commitMsg, body,
+        run: (file, args, options) => {
+          const result = spawnSync(file, args, { cwd: tempTree, encoding: 'utf8', windowsHide: true, timeout: 60000, ...options });
+          if (result.error || result.status !== 0) throw new Error(`${file} ${args[0]} failed`);
+          return String(result.stdout || '').trim();
+        } });
+      if (published) {
+        for (const act of list) { act.pr = published.url; act.note = `Successfully fixed via Codex: ${published.url}`; act.result = 'pending'; }
+        return;
+      }
+    } catch (error) { fail('PR delivery failed', { stderr: error.message }); return; }
+    res = spawnSync('git', ['-C', tempTree, 'push', '-u', 'origin', branchName], { windowsHide: true, encoding: 'utf8' });
+    if (res.status !== 0) { fail('push failed', res); return; }
+    res = spawnSync('gh', ['pr', 'create', '--title', commitMsg, '--body', body, '--head', branchName], { windowsHide: true, cwd: tempTree, encoding: 'utf8' });
     const url = `${res.stdout || ''}\n${res.stderr || ''}`.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0];
     if (res.status !== 0 || !url) { fail('PR creation failed', res); return; }
     for (const act of list) {
@@ -1450,7 +1464,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
           console.log(`[dry-run] Would execute combined spec in temp worktree: ${combinedSpecFile}`);
           for (const batchAct of batchCodexActions) batchAct.result = 'pending';
         } else {
-          runAutoCodexIsolated({ acts: batchCodexActions, specFile: combinedSpecFile, dryRun, repoPath, now, spawnSync: runSpawnSync });
+          runAutoCodexIsolated({ acts: batchCodexActions, specFile: combinedSpecFile, dryRun, repoPath, home, now, spawnSync: runSpawnSync });
         }
       }
     } else if (act.mode === 'auto-codex') {
@@ -1470,7 +1484,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
         act.result = 'pending';
       } else {
         // 一時 worktree 内での実行・検証・実PR作成・失敗時の破棄は runAutoCodexIsolated() に集約(#294)。
-        runAutoCodexIsolated({ acts: [act], specFile, dryRun, repoPath, now, spawnSync: runSpawnSync });
+        runAutoCodexIsolated({ acts: [act], specFile, dryRun, repoPath, home, now, spawnSync: runSpawnSync });
       }
     } else if (act.mode === 'human') {
       console.log(`Logging human todo: ${act.todoMessage}`);

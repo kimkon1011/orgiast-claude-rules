@@ -7,6 +7,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { closeKey, dropItem, listItems } from './kim-inbox.mjs';
 import { isEntry } from './is-entry.mjs';
 import { createSheetsClient, quoteTab } from './lib/sheets-dwd.mjs';
 
@@ -175,10 +176,22 @@ async function withBodyFile(body, fn) {
   }
 }
 
-export async function defaultNotifyKim({ home, kind, body }) {
-  return withBodyFile(body, (file) => execFileAsync(process.execPath, [
-    path.join(toolsDir, 'kim-inbox.mjs'), '--add', '--kind', kind, '--source', 'vehicle-inspection', '--body-file', file,
+export function retireVehicleAsks(home, row) {
+  if (!row.name || !row.plate) return;
+  for (const item of listItems(home, { status: 'open' })) {
+    if (item.kind === 'ask' && item.source === 'vehicle-inspection' && item.text.startsWith(`【車検】${row.name}（${row.plate}）`)) dropItem(home, item.id, '期限レーンに移行');
+  }
+}
+
+export async function defaultNotifyKim({ home, kind, body, key, due, remainingDays, row }) {
+  if (kind === 'deadline') body = `${remainingDays <= 3 ? '🔴' : remainingDays <= 14 ? '🟠' : '🟡'} ${key} ${body.replace(/[\r\n]+/g, '｜')}`;
+  const result = await withBodyFile(body, (file) => execFileAsync(process.execPath, [
+    path.join(toolsDir, 'kim-inbox.mjs'), '--add', '--kind', kind,
+    ...(kind === 'deadline' ? ['--key', key, ...(due ? ['--due', due] : []), ...(remainingDays !== undefined ? ['--remaining-days', String(remainingDays)] : [])] : []),
+    '--source', 'vehicle-inspection', '--body-file', file,
   ], { encoding: 'utf8', windowsHide: true, timeout: 60_000, env: { ...process.env, ORGIAST_HOME: home } }));
+  if (row && kind === 'deadline') retireVehicleAsks(home, row);
+  return result;
 }
 
 export async function defaultNotifyStaff({ home, assignee, body }) {
@@ -280,6 +293,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
 
   for (const row of rows) {
     if (row.status === CLOSED_STATUS) {
+      if (!args.dryRun) closeKey(home, row.id);
       decisions.push(decision(row, 'skip', '売却済'));
       continue;
     }
@@ -295,6 +309,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
             sheets, sheetId, tab, row: fresh,
             changes: { 車検満了日: row.nextExpiry, 次回満了日: '', 状態: '未手配', 依頼先: '', 入庫予定日: '' },
           });
+          closeKey(home, row.id);
           await notifyKim({ home, kind: 'info', body: `${row.name} の車検更新を記録しました。次の満了日 ${row.nextExpiry}` });
           notified += 1;
         } catch (error) {
@@ -309,7 +324,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       decisions.push(decision(row, 'ask-next-expiry', '次回満了日が空'));
       if (args.dryRun) continue;
       try {
-        await notifyKim({ home, kind: 'ask', body: missingNextExpiryBody(row, sheetId) });
+        await notifyKim({ home, kind: 'deadline', key: row.id, row, remainingDays: -1, body: missingNextExpiryBody(row, sheetId) });
         await recordNotification({ sheets, sheetId, tab, row, today });
         state[row.id] = { lastNotifiedDate: today, lastStage: null };
         stateChanged = true;
@@ -338,7 +353,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     if (args.dryRun) continue;
     try {
       const body = notificationBody({ row, remainingDays, sheetId });
-      await notifyKim({ home, kind: 'ask', body });
+      await notifyKim({ home, kind: 'deadline', key: row.id, due: row.expiry, remainingDays, row, body });
       if (row.assignee) {
         try {
           await notifyStaff({ home, assignee: row.assignee, body });

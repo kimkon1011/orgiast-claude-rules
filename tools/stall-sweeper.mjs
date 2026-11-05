@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // 既定は検出のみ。外部照会失敗は「未確認」として独立して報告する。
+import { publishSeatPr } from './pr-land.mjs';
 import fs from 'node:fs';
 import { listScheduledTasks } from './lib/scheduled-task.mjs';
 import os from 'node:os';
@@ -278,7 +279,7 @@ export function testPlan(repo) {
   const tests = fs.existsSync(dir) ? fs.readdirSync(dir).filter(n => n.endsWith('.test.mjs')).map(n => path.join('tools', n)) : [];
   return tests.length ? [[process.execPath, ['--test', ...tests]]] : [];
 }
-export async function advanceUncommitted(candidate, { run = command, inspect = inspectRepo, plan = testPlan, log = () => {} } = {}) {
+export async function advanceUncommitted(candidate, { home = process.env.ORGIAST_HOME || os.homedir(), run = command, inspect = inspectRepo, plan = testPlan, log = () => {} } = {}) {
   const repo = candidate.cwd;
   const g = (...args) => run('git', ['-C', repo, ...args]).trim();
   let branch, commit;
@@ -311,6 +312,10 @@ export async function advanceUncommitted(candidate, { run = command, inspect = i
     commit = g('rev-parse', 'HEAD');
     log({ action: 'コミット保存', result: '途中', branch, commit });
   }
+  const published = publishSeatPr({ cwd: repo, home, branch, base: 'main', title: candidate.title,
+    body: `2日以上停滞した変更を保存しました。コミット: ${commit}。利用可能なテストを実行済み。`,
+    run: (file, args, options) => run(file, args, { cwd: repo, ...options }) });
+  if (published) return { commit, branch, url: published.url };
   g('push', '--set-upstream', 'origin', `${branch}:refs/heads/${branch}`);
   const existing = JSON.parse(run('gh', ['pr', 'list', '--head', branch, '--state', 'all', '--json', 'url', '--limit', '1'], { cwd: repo }));
   const url = existing[0]?.url || run('gh', ['pr', 'create', '--base', 'main', '--head', branch, '--title', candidate.title,
@@ -494,7 +499,7 @@ export async function main(args = process.argv.slice(2)) {
           log({ kind: candidate.kind, id: candidate.id, action: '着手', result: '実行中', runId });
           let row;
           try {
-            const detail = candidate.kind === 'uncommitted' ? await advanceUncommitted(candidate, { log: r => log({ kind: candidate.kind, id: candidate.id, ...r }) }) : await advanceDelegated(candidate, options);
+            const detail = candidate.kind === 'uncommitted' ? await advanceUncommitted(candidate, { home: options.home, log: r => log({ kind: candidate.kind, id: candidate.id, ...r }) }) : await advanceDelegated(candidate, options);
             row = finishExecution(candidate, runId, detail);
           } catch (e) {
             row = finishExecution(candidate, runId, null, e);

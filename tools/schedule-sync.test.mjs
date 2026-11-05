@@ -609,3 +609,64 @@ test('schedule CLI can restore automatic extraction routing and override provide
   await llm(message);
   for (const args of [['--llm-provider'], ['--llm-provider', 'wrong'], ['--per-provider-timeout-ms', '0']]) assert.throws(() => parseArgs(args));
 });
+
+for (const confidence of ['high', 'medium']) {
+  for (const field of ['title', 'quote', 'text']) {
+    test(`面談設定の新卒を除外: ${confidence}, ${field}`, async t => {
+      const x = setup(t), logs = [];
+      const text = field === 'title' ? message.text : `${message.text}\n新卒`;
+      const input = { ...message, source: 'discord', chat: '採用・面談設定チャンネル', text };
+      const event = { ...candidate, confidence, title: field === 'title' ? '面談（加納 翔真様・新卒）' : '面談', quote: field === 'quote' ? text : message.text };
+      x.options.sources = ['discord'];
+      x.deps.collect = async () => ({ messages: [input], stats: { discord: 1 } });
+      x.deps.llm = async () => [event];
+      x.deps.log = line => logs.push(line);
+      x.deps.calendar.get = async () => { assert.fail('excluded candidates must not access Calendar'); };
+      const result = await x.run();
+      assert.equal(result.counts.excluded, 1);
+      assert.equal(result.counts.created, 0); assert.equal(result.counts.review, 0);
+      assert.equal(x.creates.length, 0); assert.equal(x.dms.length, 0);
+      assert.ok(logs.includes(`schedule-sync: 除外ルールで登録しない: kim は新卒面談に参加しない（2026-11-04 kim 指示） ${event.title}`));
+      assert.equal((await x.run()).alreadyProcessed, 1);
+    });
+  }
+}
+
+for (const [chat, title] of [['面談設定', '中途の面談'], ['研修', '新卒研修 MTG']]) {
+  test(`除外対象外は登録: ${chat} / ${title}`, async t => {
+    const x = setup(t);
+    const input = { ...message, chat, text: `${message.text}\n${title}` };
+    x.deps.collect = async () => ({ messages: [input], stats: {} });
+    x.deps.llm = async () => [{ ...candidate, title, quote: input.text }];
+    const result = await x.run();
+    assert.equal(result.counts.created, 1); assert.equal(result.counts.excluded, 0);
+    assert.equal(x.creates.length, 1);
+  });
+}
+
+for (const config of [undefined, '{broken', 'null', '{"rules":{}}', '{"rules":[null,{"chat":"面談設定","pattern":"[","reason":"invalid"}]}']) {
+  test(`除外設定が無い・壊れている場合も登録: ${config}`, async t => {
+    const x = setup(t);
+    x.options.excludeFile = path.join(x.dir, 'exclude.json');
+    if (config !== undefined) fs.writeFileSync(x.options.excludeFile, config);
+    const input = { ...message, chat: '面談設定', text: `${message.text}\n新卒` };
+    x.deps.collect = async () => ({ messages: [input], stats: {} });
+    x.deps.llm = async () => [{ ...candidate, title: '新卒面談', quote: input.text }];
+    const result = await x.run();
+    assert.equal(result.counts.created, 1); assert.equal(result.counts.excluded, 0);
+    assert.equal(x.creates.length, 1);
+  });
+}
+
+test('不正な正規表現の後の有効な除外ルールも評価する', async t => {
+  const x = setup(t);
+  x.options.excludeFile = path.join(x.dir, 'exclude.json');
+  fs.writeFileSync(x.options.excludeFile, JSON.stringify({ rules: [
+    { chat: '面談設定', pattern: '[', reason: 'invalid' },
+    { chat: '面談設定', pattern: '新[卒人]', reason: 'regex match' },
+  ] }));
+  x.deps.collect = async () => ({ messages: [{ ...message, chat: '面談設定' }], stats: {} });
+  x.deps.llm = async () => [{ ...candidate, title: '新人面談' }];
+  assert.equal((await x.run()).counts.excluded, 1);
+  assert.equal(x.creates.length, 0);
+});

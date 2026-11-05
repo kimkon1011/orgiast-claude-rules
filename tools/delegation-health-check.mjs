@@ -187,6 +187,15 @@ export function isCooldownSkippedRow(row = {}) {
   return String(row?.status ?? '').toLowerCase() === 'cooldown';
 }
 
+// 保留(deferred)の行は「上限中・無人枠超過なので Codex を起動しなかった」記録で、失敗ではない
+// (codex-do.mjs が終了コード75で返し、台帳には status:'deferred' / reason:'codex_cooldown' /
+// 'unattended_budget' で残る)。status:'cooldown' と同じく全滅の分母に入れてはならない。
+// 入れると上限中の1日分が「N件すべて失敗」の high 未修理全滅になり、上限が明けるまで毎晩
+// 同じ偽の修理タスクが積まれる（2026-11-03 実測: 403件中398件が codex_cooldown の deferred 行）。
+export function isDeferredSkippedRow(row = {}) {
+  return String(row?.status ?? '').toLowerCase() === 'deferred';
+}
+
 // quota-sweep は終了状態をそのまま status に書く(final/exhausted/ceiling/deadline/no-goal/failed)。
 // exhausted は「累積上限まで走り切った」＝レーンは動いている。トークンを消費した行を成功証拠に
 // 数えないと、8 tick 走った翌晩も 24h 窓の過去失敗だけで「全滅」の high 起票が続く
@@ -256,7 +265,7 @@ const SPAWN_FAILED = /syscall: 'spawn'|\bspawn E[A-Z]+\b|code: 'E[A-Z]{4,}'/;
 // stderrTail は末尾200字へ切り詰められ、"arer or basic authentication in header, url: ...v1/responses" だけが
 // 残ることがある。実測 2026-10-29〜31 の fallback 16件が一致せず lane_outage_unrepaired になったため、
 // 先頭欠落後も残る "or basic authentication in header" も一致させる。
-const CODEX_AUTH_FAILED = /401 unauthorized|unauthorized \(401\)|missing bearer or basic authentication|or basic authentication in header/i;
+const CODEX_AUTH_FAILED = /401 unauthorized|unauthorized \(401\)|missing bearer or basic authentication|or basic authentication in header|Failed to refresh token|log out and sign in again/i;
 
 // ChatGPT アカウント認証なのに sol/astra を選ぶと 400 で即死する。codex-do 側のレーン選択の
 // 問題なので、直せる欠陥として起票する（2026-09-22 診断: 09-20 の11件中7件）。
@@ -281,6 +290,11 @@ export function emptyOutputReason(row) {
   if (row?.timedOut == null && Number(row?.secs) >= 300) return 'timeout';
   if (String(row?.status ?? '').toLowerCase() === 'network') return 'infra_transient';
   if (WSL_LANE_ABSENT.test(String(row?.stderrTail || ''))) return 'launch_failed';
+  // 上限中・無人枠超過で Codex を起動しなかった deferred 行(終了コード75)は「投げなかった」記録
+  // (status:'deferred' / reason:'codex_cooldown'|'unattended_budget')。launched:false のまま
+  // preflight_blocked に落とすと cooldown 期間全体が起動前ゲートの低可視化になり、全滅の分母へ
+  // 混入して「すべて失敗」の high を毎晩作る(2026-11-03 実測: deferred 398件)。
+  if (isDeferredSkippedRow(row)) return 'cooldown_skipped';
   // 起動前のゲートが「意図的に止めた」行。launched:false だが codex は一度も起動されておらず、
   // 起動失敗ではない。codex-do が書く行の status は必ず数値で、起動前ゲートは文字列の番兵を書く
   // (2026-09-23 実測: status:"spec-missing-context" / stderrTail 空)。これを launch_failed に
@@ -487,7 +501,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     const lastFailureTime = Math.max(...failures.map((row) => Date.parse(row.t)));
     return codexSuccessTimes.some((time) => time > lastFailureTime);
   };
-  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed', 'usage_limit', 'model_capacity'].includes(item.reason));
+  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed', 'usage_limit', 'model_capacity', 'cooldown_skipped'].includes(item.reason));
   const launchFailed = empty.filter((item) => item.reason === 'launch_failed');
   const authFailed = empty.filter((item) => item.reason === 'auth_failed');
   const modelAuthMismatch = empty.filter((item) => item.reason === 'model_auth_mismatch');
@@ -510,7 +524,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   if (modelAuthMismatch.length) findings.push({ id: 'codex_model_auth_mismatch', severity: 'medium', title: 'Codex が ChatGPT アカウントで sol/astra を選んで失敗', evidence: [`${modelAuthMismatch.length}件`, ...reasonTop(modelAuthMismatch)], fixTask: 'codex-do のレーン選択が ChatGPT アカウント認証を検出できず sol/astra を選んでいる。detectChatGptAuth と decideCodexLane の判定を照合し、再現テストを追加して修正' });
   // 2026-10-19 実測: Windows はログイン済みなのに、WSL 側 401 の履歴だけで毎晩 high 起票されていた。
   // codex-do は起動時に Windows の auth.json を WSL へ同期するため、失敗後の再ログインも修復として扱う。
-  if (authFailed.length && !repairedAfter(authFailed) && !authRestoredAfter(home, authFailed)) findings.push({ id: 'codex_auth_failed', severity: 'high', title: 'Codex CLI が未認証（WSL 側の再ログインが必要）', evidence: [`${authFailed.length}件`, 'WSL の ~/.codex/auth.json を確認し codex login を実行'], fixTask: 'Windows の %USERPROFILE%\\.codex\\auth.json を WSL の ~/.codex/ にコピーし codex login status。Windows 側も未ログインのときだけ人の codex login が要る' });
+  if (authFailed.length && !repairedAfter(authFailed) && !authRestoredAfter(home, authFailed)) findings.push({ id: 'codex_auth_failed', severity: 'high', title: 'Codex CLI が未認証（WSL 側の再ログインが必要）', evidence: [`${authFailed.length}件`, 'WSL の ~/.codex/auth.json を確認し codex login を実行'], fixTask: 'Windows の %USERPROFILE%\\.codex\\auth.json を WSL の ~/.codex/ にコピーし codex login status。Windows 側も未ログインのときだけ人の codex login が要る。WSL ディストロが無い PC（wsl -l -q が空）は codex-do がネイティブ実行するため WSL へのコピーは不要で、Windows 側 auth.json が無ければ人の codex login（.loop/codex-login.ps1 相当）だけが復旧手段' });
   if (realEmpty.length) findings.push({ id: 'codex_empty_output', severity: 'medium', title: 'Codex の出力ゼロ', evidence: [`${realEmpty.length}件`, ...reasonTop(realEmpty), ...(empty.length > realEmpty.length ? [`インフラ/起動失敗で除外 ${empty.length - realEmpty.length}件`] : [])], fixTask: 'codex が出力ゼロで終了した原因（認証切れ/上限/起動失敗）を codex-do のログから特定' });
   for (const [provider, state] of Object.entries(cooldown)) if (state?.reason === 'http_402' && Number(state.until) > nowMs) findings.push({ id: 'provider_balance_exhausted', severity: 'low', title: `${provider} の残高切れ`, evidence: [`provider ${provider}`, CLAUDE_FALLBACK_RULE] });
   const providers = new Map();
@@ -576,7 +590,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
           || /クールダウン中|起動を省略しました/.test(String(other.stderrTail || ''));
       });
     };
-    const allNonSkipped = rows.filter((row) => !isCooldownSkippedRow(row) && !skippedByCooldown(row) && !skippedExternalCause(row) && !skippedRepairedByCodex(row) && !skippedDuringCheapOutage(row) && !isEmptyDiffEscalationRow(row) && !isFallbackCooldownSkipRow(row) && !isQuotaSweepBenignRow(row));
+    const allNonSkipped = rows.filter((row) => !isCooldownSkippedRow(row) && !isDeferredSkippedRow(row) && !skippedByCooldown(row) && !skippedExternalCause(row) && !skippedRepairedByCodex(row) && !skippedDuringCheapOutage(row) && !isEmptyDiffEscalationRow(row) && !isFallbackCooldownSkipRow(row) && !isQuotaSweepBenignRow(row) && emptyOutputReason(row) !== 'preflight_blocked');
 	    // status:'ok' は API 呼出成功。out=0 でもレーン障害ではない（gemini プローブ行実測 2026-10-30〜11-01）。
 	    const attempts = allNonSkipped.filter((row) => emptyOutputReason(row) !== 'ok');
     // 24h 窓が cooldown だけで埋まる＝上限中で一度も試行していない。レーンは止まっているが
@@ -611,7 +625,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     // 上限・課金切れ・一過性ネットワークだけで全滅した行は「レーンが壊れている」証拠ではない。
     // 実測 2026-10-22: kimi の 24h 449 行 = http_429 440 + status:'network' 9(10.7秒で
     // タイムアウト) で、network を no_output 扱いしていたため毎日 high になっていた。
-    const benign = attempts.filter((row) => isQuotaLimitedRow(row) || emptyOutputReason(row) === 'infra_transient');
+    const benign = attempts.filter((row) => isQuotaLimitedRow(row) || emptyOutputReason(row) === 'infra_transient' || emptyOutputReason(row) === 'usage_limit');
     const billingSuspended = attempts.filter(isBillingSuspendedRow);
     // 行に reason が無い旧記録でも、llm-fallback が残した 24h の恒久課金切れ cooldown で判別できる。
     const billingCooldown = cooldown[provider]?.permanentBilling === true && Number(cooldown[provider]?.until) > nowMs;

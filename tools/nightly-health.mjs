@@ -39,6 +39,10 @@ export function evaluateScheduledTaskHealth(expectation, info, { now = new Date(
   const anomalies = [];
   const anomaly = (type, message) => ({ type, label: expectation.label, message, expectation });
 
+  if (Number.isFinite(expectation.maxLastRunHours) && elapsedMs > expectation.maxLastRunHours * 3600000) {
+    anomalies.push(anomaly('task_stale', `最終起動 ${lastRunTime} が期待 ${expectation.maxLastRunHours} 時間を超えています`));
+  }
+
   if (info.state === 'Running' && elapsedMs / 3_600_000 > expectation.maxRunHours) {
     anomalies.push(anomaly('task_overrun', `実行が上限 ${expectation.maxRunHours} 時間を超えて継続中（開始: ${lastRunTime}）。前回インスタンスの長期生存は次回起動の拒否（0x800710E0）につながります`));
   }

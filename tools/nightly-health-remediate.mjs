@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { publishSeatPr } from './pr-land.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -205,10 +206,17 @@ export async function runRemediation({
         const testTimeout = laneTimeout();
         const tested = run(process.execPath, ['--test', 'tools/*.test.mjs', 'tools/lib/*.test.mjs'], { cwd: worktree, timeout: Math.min(20 * 60000, testTimeout) });
         if (tested.status !== 0) throw new Error(`回帰テスト失敗: ${tested.stderr.slice(0, 300)}`);
-        const pushed = run('git', ['push', '-u', 'origin', branch], { cwd: worktree, timeout: 120000 }); if (pushed.status !== 0) throw new Error(pushed.stderr);
         const bodyFile = path.join(os.tmpdir(), `nightly-remediate-pr-${process.pid}.txt`);
         fs.writeFileSync(bodyFile, redactAll(`fingerprint: ${fingerprint}\n\n異常: ${anomaly.label}: ${anomaly.message}\n\n変更点: Codexによる最小修復\n検証: 全テスト成功\n`), 'utf8');
-        const pr = run('gh', ['pr', 'create', '--label', 'automerge', '--title', `fix(${slug}): ${anomaly.label} を自動修復`, '--body-file', bodyFile], { cwd: worktree });
+        const published = publishSeatPr({ cwd: worktree, home, branch, title: `fix(${slug}): ${anomaly.label} を自動修復`, bodyFile,
+          run: (file, args, options) => {
+            const value = run(file, args, { cwd: worktree, timeout: 120000, ...options });
+            if (value.error || value.status !== 0) throw new Error(`${file} ${args[0]} failed`);
+            return String(value.stdout || '').trim();
+          } });
+        if (published) { result.prs.push(await record(anomaly, 'pr', { prUrl: published.url })); handled = true; continue; }
+        const pushed = run('git', ['push', '-u', 'origin', branch], { cwd: worktree, timeout: 120000 }); if (pushed.status !== 0) throw new Error(pushed.stderr);
+        const pr = run('gh', ['pr', 'create', '--title', `fix(${slug}): ${anomaly.label} を自動修復`, '--body-file', bodyFile], { cwd: worktree });
         if (pr.status !== 0) throw new Error(pr.stderr); const prUrl = pr.stdout.trim();
         result.prs.push(await record(anomaly, 'pr', { prUrl })); handled = true;
       } catch (error) { laneReason = redactAll(error.message || error); }

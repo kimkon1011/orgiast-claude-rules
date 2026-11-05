@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { main, parseArgs, createClient, waitForReply, acquireLock, LOCK_MS, readInbox, findPriorReply, resolveRemoteName, parseExecMarkers, looksLikeInstallRequest, describeTargetFreshness, mailId } from './fleet-mail.mjs';
+import { main, parseArgs, createClient, waitForReply, acquireLock, LOCK_MS, updateInbox, INBOX_LOCK_STALE_MS, RECLAIM_STALE_MS, LOCK_BUSY_EXIT, readInbox, findPriorReply, resolveRemoteName, parseExecMarkers, looksLikeInstallRequest, describeTargetFreshness, mailId } from './fleet-mail.mjs';
 import { main as register } from './register-fleet-mail.mjs';
 import { consentCommand } from './fleet-agent.mjs';
 import { listDecisions, markDecisions, queuePath } from './pending-decisions.mjs';
@@ -977,3 +977,65 @@ test('fixed selfcheck prompt passes without force; appended mutation remains blo
   }
   assert.ok(f.errors.some(line => line.includes('fleet-selfcheck-v2')));
 });
+
+for (const stale of [true, false]) {
+  test(`acquireLock ${stale ? 'recovers stale' : 'preserves fresh'} reclaim directory`, t => {
+    const f = fixture(t), lock = path.join(f.dir, 'fleet-mail.lock');
+    const now = Date.now();
+    fs.writeFileSync(lock, 'abandoned');
+    fs.utimesSync(lock, new Date(now - LOCK_MS - 1000), new Date(now - LOCK_MS - 1000));
+    fs.mkdirSync(`${lock}.reclaim`);
+    const at = new Date(now - (stale ? RECLAIM_STALE_MS + 1000 : 0));
+    fs.utimesSync(`${lock}.reclaim`, at, at);
+    const release = acquireLock(lock, { now: () => now });
+    if (stale) {
+      assert.equal(typeof release, 'function');
+      try { assert.equal(acquireLock(lock, { now: () => now }), null); }
+      finally { release(); }
+      assert.equal(fs.existsSync(lock), false);
+      assert.equal(fs.existsSync(`${lock}.reclaim`), false);
+    } else {
+      assert.equal(release, null);
+      assert.equal(fs.readFileSync(lock, 'utf8'), 'abandoned');
+      assert.equal(fs.existsSync(`${lock}.reclaim`), true);
+    }
+  });
+  test(`updateInbox ${stale ? 'recovers stale' : 'preserves fresh'} reclaim directory`, t => {
+    const f = fixture(t), id = mail().id;
+    const file = path.join(f.dir, 'fleet-inbox', `${id}.json`), lock = `${file}.lock`;
+    const now = Date.now();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(mail()));
+    fs.writeFileSync(lock, 'abandoned');
+    const old = new Date(now - INBOX_LOCK_STALE_MS - 1000);
+    fs.utimesSync(lock, old, old);
+    fs.mkdirSync(`${lock}.reclaim`);
+    const at = new Date(now - (stale ? RECLAIM_STALE_MS + 1000 : 0));
+    fs.utimesSync(`${lock}.reclaim`, at, at);
+    let visited = false;
+    const result = updateInbox(id, current => {
+      visited = true;
+      return { ...current, body: 'updated' };
+    }, { home: f.home, now: () => now, retries: 0 });
+    assert.equal(visited, stale);
+    assert.equal(result?.body ?? null, stale ? 'updated' : null);
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).body, stale ? 'updated' : 'hello');
+    assert.equal(fs.existsSync(lock), !stale);
+    assert.equal(fs.existsSync(`${lock}.reclaim`), !stale);
+  });
+}
+for (const age of [0, 3 * LOCK_MS + 1000]) {
+  test(`poll reports blocked lock aged ${age} with the appropriate exit code`, async t => {
+    const f = fixture(t), lock = path.join(f.dir, 'fleet-mail.lock');
+    const now = Date.now(); f.deps.now = () => now;
+    fs.writeFileSync(lock, 'abandoned');
+    const at = new Date(now - age); fs.utimesSync(lock, at, at);
+    fs.mkdirSync(`${lock}.reclaim`);
+    assert.equal(await main(['--poll'], f.deps), age ? LOCK_BUSY_EXIT : 0);
+    assert.deepEqual(f.errors, [age ? `fleet-mail: ロック回収不能（${lock} / reclaim 残留）` : 'fleet-mail: 別の受信処理が実行中']);
+    assert.equal(f.calls.length, 0);
+    const timing = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-poll-timing.jsonl'), 'utf8').trim());
+    assert.equal(timing.outcome, 'locked');
+    assert.equal(fs.readFileSync(lock, 'utf8'), 'abandoned');
+  });
+}

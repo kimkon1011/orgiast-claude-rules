@@ -15,6 +15,17 @@ test('setup converge timeout covers Node updates on new and existing PCs, idempo
   });
   run();
   const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const seatHooks = settings.hooks.Stop.flatMap(group => group.hooks).filter(hook => hook.command.includes('seat-name-gate.mjs'));
+  assert.equal(seatHooks.length, 1);
+  assert.match(seatHooks[0].command, /gate-hook-runner\.mjs/);
+  assert.equal(seatHooks[0].timeout, 15);
+  assert.notEqual(seatHooks[0].async, true);
+  const manifest = JSON.parse(fs.readFileSync(path.join(repo, 'tools/setup-manifest.json'), 'utf8'));
+  const seatItem = manifest.items.find(item => item.id === 'settings:seat-name-gate');
+  assert.equal(seatItem.severity, 'required');
+  assert.equal(seatItem.spec.hookEvent, 'Stop');
+  assert.equal(seatItem.spec.hookRunner, 'gate-hook-runner.mjs');
+  assert.deepEqual(seatItem.repair, ['register-hooks.mjs', '--hooks-only']);
   const hooks = settings.hooks.SessionStart.flatMap((group) => group.hooks).filter((hook) => hook.command.includes('setup.mjs'));
   assert.equal(hooks.length, 1);
   assert.equal(hooks[0].timeout, 1200);

@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
+import { resolveOwner, resolveOwnerDiscordId } from './notify-owner.mjs';
+import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
@@ -15,7 +18,32 @@ function displayText(text, limit = 1500) {
     seen.add(line); return true;
   }).join('\n').slice(0, limit);
 }
-export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.homedir(), env = process.env } = {}) {
+function recipientWarning(options, now) {
+  const { home, label } = options;
+  const owner = resolveOwner(options);
+  if (resolveOwnerDiscordId(owner, options)) return '';
+  const file = path.join(home, '.claude', 'auto-progress-inbox', '_recipient-warning.json');
+  const day = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+  try {
+    if (JSON.parse(fs.readFileSync(file, 'utf8')).day === day) return '';
+  } catch { /* First display or invalid state. */ }
+  // Serialize concurrent prompt hooks before checking and recording the daily display.
+  const lock = `${file}.lock`;
+  let fd;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fd = fs.openSync(lock, 'wx', 0o600);
+    try {
+      if (JSON.parse(fs.readFileSync(file, 'utf8')).day === day) return '';
+    } catch { /* First display or invalid state. */ }
+    fs.writeFileSync(file, JSON.stringify({ day, at: now.toISOString() }), { mode: 0o600 });
+    return `⚠ 進捗DMの宛先が未登録（PC: ${label} / ${owner}）: 進捗報告が Discord に届いていません。Claude は Discord メンバー検索で使用者を特定し、fleet-pc-map.json の当該行に notifyDiscordId を足す PR を出すこと（使用者が誰かだけを1問で確認してよい）。`;
+  } catch { return ''; /* Keep inbox consumption independent of warning state. */ }
+  finally {
+    if (fd !== undefined) { fs.closeSync(fd); fs.unlinkSync(lock); }
+  }
+}
+export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.homedir(), env = process.env, now = Date.now(), label = resolveFleetLabel(home), ...ownerOptions } = {}) {
   if (isUnattendedSession(input, { home, env })) return null;
   const sessionId = input?.session_id || input?.sessionId; if (!sessionId) return null;
   const ownerFile = inboxFile(home, '_owner');
@@ -47,9 +75,11 @@ export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.home
     });
     if (changed) fs.writeFileSync(file, updated.map(JSON.stringify).join('\n') + '\n');
   }
-  if (!lines.length) return null;
+  const warning = recipientWarning({ ...ownerOptions, home, label }, new Date(now));
+  if (!lines.length && !warning) return null;
   const event = input.hook_event_name || 'UserPromptSubmit';
-  return { hookSpecificOutput: { hookEventName: event, additionalContext: `【必須】応答の冒頭で user に見える形で「📲 自動進行の結果（聞かれる前にお知らせ）」として次を表示せよ: ${displayText(lines.join('\n'), Infinity)}` } };
+  const context = lines.length ? `【必須】応答の冒頭で user に見える形で「📲 自動進行の結果（聞かれる前にお知らせ）」として次を表示せよ: ${displayText(lines.join('\n'), Infinity)}` : '';
+  return { hookSpecificOutput: { hookEventName: event, additionalContext: [warning, context].filter(Boolean).join('\n') } };
 }
 async function main() {
   try {

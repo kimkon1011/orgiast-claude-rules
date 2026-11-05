@@ -42,7 +42,7 @@ export function parseArgs(argv) {
 
 // 高さと明るさは提案の柱なので、ブリーフに書き忘れても全案へ必ず足す（kim 2026-10-27・サポリス案が2.7mで低かった）。
 export function heightLightClause(maxHeight = DEFAULT_MAX_HEIGHT) {
-  return `MANDATORY HEIGHT & LIGHT (applies to this plan, overrides any lower height above): the booth's overall height is ${maxHeight} m, the maximum allowed decoration height - use a truss frame (or tall structure) reaching ${maxHeight} m with a sign on top so the booth is clearly taller than neighbouring 2.7 m booths and visible from far down the aisle. The booth must also look BRIGHT - noticeably brighter than the neighbouring booths (spotlights and/or backlit light boxes), graphics evenly lit, no dark corners.`;
+  return `MANDATORY HEIGHT & LIGHT (applies to this plan, overrides any taller height above): this is a SINGLE-STOREY exhibition stand. Its overall structure/truss height is about ${maxHeight} m and MUST NOT exceed ${maxHeight} m. It must look like a normal single-level booth within a ${maxHeight} m decoration limit - NEVER a double-height, two-storey or 5-6 m tall hall structure. Keep headers and the top logo sign low, around ${maxHeight} m. The booth must also look BRIGHT - noticeably brighter than the neighbouring booths (spotlights and/or backlit light boxes), graphics evenly lit, no dark corners.`;
 }
 
 export function buildPrompt(common, plan, maxHeight = DEFAULT_MAX_HEIGHT) {

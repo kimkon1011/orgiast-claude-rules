@@ -3,9 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { main, notifyKim, deliverKim } from './notify-kim.mjs';
+import { main, notifyKim as realNotifyKim, deliverKim as realDeliverKim } from './notify-kim.mjs';
 import { parseHandoff, todoExclusionReason } from './auto-session.mjs';
 import { planRotation } from './next-session-rotate.mjs';
+
+// 2026-11-04 仕様変更: 通信・修復の検査は明示的な定時まとめとして配達し、未指定kindの保留と分離する。
+const notifyKim = (text, options) => realNotifyKim(text, { home: home(), kind: 'digest', ...options });
+const deliverKim = (text, options) => realDeliverKim(text, { home: home(), kind: 'digest', ...options });
 
 function home() { return fs.mkdtempSync(path.join(os.tmpdir(), 'notify-kim-')); }
 function response({ ok = true, status = 200, json = { id: 'message' } } = {}) { return { ok, status, json: async () => json }; }
@@ -132,10 +136,13 @@ test('起票失敗では未修復通知を送らない', async () => {
 });
 test('送信失敗後は再送可能、同時呼び出しでも1通知・1起票', async () => {
   const s = sender(home());
-  assert.equal((await notifyKim('失敗', { ...s.options, token: '', webhookFallback: false })).delivered, 'none');
+  // DM/webhook が使えない kim 宛通知は kim-inbox に保存される（2026-11-04 rescue）
+  const inboxResult = await notifyKim('失敗', { ...s.options, token: '', webhookFallback: false });
+  assert.equal(inboxResult.delivered, 'session-inbox');
+  // kim-inbox への保存も状態記録されるため、同一内容の再送は24時間抑制される
   const results = await Promise.all([notifyKim('失敗', s.options), notifyKim('失敗', s.options)]);
-  assert.deepEqual(results.map(r => r.delivered).sort(), ['dm', 'suppressed']);
-  assert.equal(s.messages.length, 1);
+  assert.deepEqual(results.map(r => r.delivered).sort(), ['suppressed', 'suppressed']);
+  assert.equal(s.messages.length, 0);
 });
 
 
@@ -282,7 +289,7 @@ test('PRマージ依頼は送信せずblockedを返す', async () => {
   let errorLine = '';
   console.error = value => { errorLine = value; };
   try {
-    const result = await notifyKim('PR #943 をマージしてください', {
+    const result = await realNotifyKim('PR #943 をマージしてください', {
       fetchImpl: async () => { fetches += 1; throw new Error('unexpected fetch'); },
     });
     assert.deepEqual(result, {
@@ -300,7 +307,8 @@ test('notify-kim CLIはblockedでexit 3、明示例外なら送信する', async
     assert.equal(await main(['PR #943 をマージしてください']), 3);
     const calls = [];
     assert.equal(await main(['PR #943 をマージしてください', '--kim-action-required'], {
-      token: 'token', userId: 'user', plainJa: false,
+      // 送信枠の台帳も一時homeへ隔離し、実ユーザーの状態に触れない。
+      home: home(), token: 'token', userId: 'user', plainJa: false,
       fetchImpl: async () => { calls.push(1); return calls.length === 1 ? response({ json: { id: 'dm' } }) : response(); },
     }), 0);
     assert.equal(calls.length, 2);

@@ -49,7 +49,7 @@ function fixture(t, { ff = true, pushFail = false, claspFail = false, mismatch =
   };
   return { project, calls, run(dryRun = false) {
     const code = runOverlay({ project, files: ['Code.js'], dryRun }, { runner,
-      syncMaster: (opts, io) => syncGasMaster(opts, { ...io, spawn: injected }),
+      syncMaster: (opts, io) => syncGasMaster({ ...opts, home: os.tmpdir() }, { ...io, spawn: injected }),
       stdout: s => { output += s; }, stderr: s => { errors += s; },
     });
     return { code, result: JSON.parse(output.trim().split('\n').at(-1)), output, errors };

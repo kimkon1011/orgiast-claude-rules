@@ -109,15 +109,16 @@ test('Stop aggregate applies warning policy to each child and keeps its reason v
  const result=await run({session_id:'warn-stop',assistant_text:text},{assistantText:text,humanText:'',raw:''},{mode:'off',policyOptions:{home,manifest:{gates:Object.fromEntries(discoverGates().map(n=>[n,{rollout:'warn'}]))},notify:async line=>{notifications.push(line);return {delivered:'dm'};}}});
  assert.notEqual(result.decision,'block');assert.match(result.systemMessage,/pr-handoff-gate/);assert.ok(notifications.some(line=>line.includes('name=pr-handoff-gate verdict=warn')));
 });
-test('他メンバーPCのgate報告も Discord に送らず台帳に残す',async t=>{
+test('他メンバーPCのgate報告はkim-inboxへ入れず統計だけに残す',async t=>{
  const {notifyKim}=await import('./notify-kim.mjs');const home=temp(t);fs.mkdirSync(path.join(home,'.claude'),{recursive:true});
  for(const [file,value] of Object.entries({'orgiast-discord-user-id.txt':'member-id','orgiast-discord-bot-token.txt':'mock-bot-token','orgiast-discord-webhook.txt':'https://example.invalid/member','cost-reporter.env':'DISCORD_COST_WEBHOOK=https://example.invalid/central\n'}))fs.writeFileSync(path.join(home,'.claude',file),value);
  fs.writeFileSync(path.join(home,'.claude/fleet-pc-map.json'),JSON.stringify({'test-member':{account:'test@example.test'}}));
  fs.appendFileSync(path.join(home,'.claude/cost-reporter.env'),'REPORTER_LABEL=test-member\n');
  const targets=[];const result=await reportGate(contract,'warn',[],{home,notify:(line,options)=>notifyKim(line,{...options,fetchImpl:async url=>{targets.push(url);return {ok:true};}})});
- assert.equal(result.delivered,'session-inbox');assert.deepEqual(targets,[]);
- const item=JSON.parse(fs.readFileSync(path.join(home,'.claude/kim-inbox',`${result.id}.json`),'utf8'));
- assert.equal(item.source,'gate-report');assert.equal(item.status,'open');assert.ok(item.forwardError);
+ assert.equal(result.delivered,'suppressed');assert.deepEqual(targets,[]);
+ assert.equal(fs.existsSync(path.join(home,'.claude/kim-inbox')),false);
+ const reports=fs.readdirSync(path.join(home,'.claude/gate-reports'));
+ assert.equal(JSON.parse(fs.readFileSync(path.join(home,'.claude/gate-reports',reports[0]))).delivery,'suppressed');
 });
 
 test('pilotDenyはpilotだけ即denyとし他PCは観測期間を守る', t => {

@@ -132,12 +132,12 @@ export function latestOpenPromises(rows) {
 }
 
 // 同一 sessionId の通常行、または同一 sessionId + label の check 行は最新で置換する。
-// 同じ session に開始予約の行があるときは、新しい約束行に予約・check 情報を引き継ぐ。
+// 同じ session に open の自動確認行があるときは、新しい約束行に予約・check 情報を引き継ぐ。
 export function applyPromise(rows, record) {
   let toAdd = record;
   if (!toAdd.check && !toAdd.startWhen && !toAdd.autoRegisteredCheck) {
     const existing = rows
-      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && row.startWhen)
+      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && (row.check || row.startWhen || row.autoRegisteredCheck === true))
       .sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0))[0];
     if (existing) {
       toAdd = {

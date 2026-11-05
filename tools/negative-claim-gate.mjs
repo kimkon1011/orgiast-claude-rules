@@ -13,6 +13,7 @@ const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || proces
 const targets = /(?:API|CLI|SDK|MCP|エンドポイント|パッケージ|ライブラリ|プラグイン|コマンド|公式ツール|インテグレーション)/i;
 const negatives = /(?:存在しない|(?:が|は)\s*無い|提供されていない|公開されていない|用意されていない|対応していない|未対応|使えない|組み込めない|不可能|実現できない|no public API|not available|does not exist)/i;
 const negativeTerms = /(?:存在しない|(?:が|は)\s*無い|提供されていない|公開されていない|用意されていない|対応していない|未対応|使えない|組み込めない|不可能|実現できない|no public API|not available|does not exist)/gi;
+const missingCapability = /(?:方法は(?:ありません|無い|ない)|手段が(?:ありません|無い)|機能は(?:ありません|無い)|(?:設定|変更)できる場所は(?:ありません|無い))/;
 const reservations = /(?:まだ確認できていない|確認できていない|未確認|不明|分からない|わからない|と思われる|可能性がある|かもしれない|seem(?:s)?|appears?|may|might|unknown|unconfirmed)/i;
 const primarySources = /(?:registry\.npmjs\.org|\bnpm\s+(?:view|search)\b|pypi\.org|\bpip\s+index\b|api\.github\.com|\bgh\s+(?:api|search)\b|crates\.io|pkg\.go\.dev|rubygems\.org|packagist\.org)/i;
 const correctionMarkers = /(?:誤り(?:だった)?|訂正|と答えた|と書いた|と断定した|前回|先ほど)/i;
@@ -51,7 +52,7 @@ function isExcludedContext(sentence) {
 
 export function findNegativeClaim(text) {
   for (const sentence of sentences(text)) {
-    if (targets.test(sentence) && negatives.test(sentence) && !reservations.test(sentence) && !isExcludedContext(sentence)) return sentence;
+    if (((targets.test(sentence) && negatives.test(sentence)) || missingCapability.test(sentence)) && !reservations.test(sentence) && !isExcludedContext(sentence)) return sentence;
   }
   return '';
 }

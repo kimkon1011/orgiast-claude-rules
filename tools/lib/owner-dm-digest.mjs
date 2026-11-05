@@ -1,13 +1,31 @@
 import { decisionOwnerOf } from '../auto-progress-decision-owner.mjs';
 import { notificationKind } from './owner-dm-policy.mjs';
 const day = 86400000;
-const plain = value => cleanText(value).replace(/(?:作業ID|セッションの目的|プロジェクト)[:：][^\n]*/g, '').replace(/(?:[A-Za-z]:\\|~?\/)[^\s、。]+/g, '').replace(/\b(?:autopilot|headless|quota-sweep|nightly-repo|unattended)\b[^\s、。]*/gi, '').replace(/\s+/g, ' ').trim();
+// まとめの1行を作る。2026-11-04 nishi: 届いたまとめが「【kimko-PC（）・… の Claude Code】（このDMに返信してください）」
+// 「新しいセッションが で引き継ぎ」「10 に成約率」と穴だらけで、結局「進捗どう？」と聞くしかなかった。
+// - 出どころの見出し行（【…の Claude Code】プロジェクト: … ／ 作業ID: …）は改行を潰す前に行ごと外す。
+//   以前は cleanText で改行を潰してから「プロジェクト:〜行末」を消していたため、後ろの質問文まで消えていた。
+// - パスは「C:\…」「~/…」「/a/b…」だけを外し、`/session-start` のような1段の語や 10/28 の日付は残す。
+// - 社内用語は消さずに言い換える（消すと文に穴が開く）。
+const JARGON = { autopilot: '自動ループ', headless: '無人実行', 'quota-sweep': '定期処理', 'nightly-repo': '共通ツール', unattended: '無人' };
+const plain = value => cleanText(String(value || '').split(/\r?\n/).filter(line => !/^\s*【[^】]*Claude Code】/.test(line) && !/^\s*(?:作業ID|セッションの目的|プロジェクト)[:：]/.test(line)).join('\n'))
+  .replace(/(?<![\w/])(?:[A-Za-z]:\\|~\/|\/[\w.-]+\/)[^\s、。]+/g, '')
+  .replace(/\b(autopilot|headless|quota-sweep|nightly-repo|unattended)\b/gi, word => JARGON[word.toLowerCase()])
+  .replace(/\s+/g, ' ').trim();
 export function compactDigest(rows, deferred, now, { home, owner = '' } = {}) {
   const actions = deferred.filter(r => r.kind === 'action');
   for (const row of rows) if (isHumanActionRequired(row)) {
     const kimWaiting = decisionOwnerOf(row) === 'kim' && owner.toLowerCase() !== 'kim@orgiast.jp';
     const action = kimAction(row);
-    actions.push({ text: `${kimWaiting ? 'kim の判断待ち: ' : ''}${[plain(row.label || row.promise).slice(0, 60), action === 'なし' ? '' : plain(action)].filter(Boolean).join(' — ')}`, reply: !kimWaiting, at: row.changedAt || row.ts });
+    if (kimWaiting) {
+      actions.push({ text: `kim の判断待ち: ${plain(row.label || row.promise).slice(0, 60)}`, reply: false, at: row.changedAt || row.ts });
+      continue;
+    }
+    // 判断待ちだけは「何に答えるのか」を隠さない。約束は60字に縮め、判断内容（nextKim）は
+    // 改行して最大400字まで全文を出す。従来は約束側の60字で切れてOKの対象が分からなかった。
+    const shortPromise = plain(row.label || row.promise).slice(0, 60);
+    const wanted = plain(String(row.nextKim || '').trim() || String(row.reason || '').trim() || (action === 'なし' ? '' : action)).slice(0, 400);
+    actions.push({ text: shortPromise, detail: wanted, reply: true, at: row.changedAt || row.ts });
   }
   const byText = new Map();
   for (const action of actions) {
@@ -24,9 +42,17 @@ export function compactDigest(rows, deferred, now, { home, owner = '' } = {}) {
   let chars = 0;
   for (const a of recent) {
     const text = plain(a.text);
-    if (included.length >= 2 || chars + text.length > 1350) continue;
-    included.push(a); chars += text.length;
-    lines.push(`・${text}${a.reply === false ? '（あなたの操作は不要）' : '（このDMに返信してください）'}`);
+    const detail = a.detail ? plain(a.detail) : '';
+    const lineLen = text.length + (detail ? detail.length + 20 : 0);
+    if (included.length >= 2 || chars + lineLen > 1350) continue;
+    included.push(a); chars += lineLen;
+    if (a.reply === false) {
+      lines.push(`・${text}（あなたの操作は不要）`);
+      continue;
+    }
+    // 「何に答えるのか」が分かるよう、判断内容は改行して独立の行に出す（1通1800字の分割は行単位）。
+    lines.push(`・${text}（このDMに返信してください）`);
+    if (detail) lines.push(`  → 判断してほしいこと: ${detail}`);
   }
   const extra = [];
   if (old.length) extra.push(`古い待ち ${old.length}件（7日以上動きなし）`);
@@ -69,7 +95,8 @@ export const isHumanActionRequired = (row) => {
 export function cleanText(text, row = {}) {
   let s = String(text || '');
   // 先頭の定型句
-  s = s.replace(/^[-*•\s]*(?:\*\*|__)?(?:この後の自動進行|自動進行|約束)(?:\*\*|__)?[:：\s]*/i, '');
+  // 「:」か空白が続く見出しだけを外す。「自動進行が判断待ちです」の主語まで消すと「・が判断待ちです」になる。
+  s = s.replace(/^[-*•\s]*(?:\*\*|__)?(?:この後の自動進行|自動進行|約束)(?:\*\*|__)?(?:[:：]\s*|\s+)/i, '');
   // バッククォートの中身（コマンド・パス・ファイル名）は消さずに残し、記号のバッククォートだけ外す。
   // 中身を消すと「マージ後に と で同期すれば」のように文へ穴が開く。平易化は送信時の notify-kim 側で行う。
   const kept = [];

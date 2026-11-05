@@ -32,6 +32,21 @@ function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return fallback; throw error; }
 }
+function loadExcludeRules(file) {
+  try {
+    const { rules } = readJson(file, {});
+    if (!Array.isArray(rules)) return [];
+    return rules.flatMap(rule => {
+      if (!rule || typeof rule.chat !== 'string' || typeof rule.pattern !== 'string' || typeof rule.reason !== 'string') return [];
+      try { return [{ ...rule, pattern: new RegExp(rule.pattern) }]; }
+      catch { return []; }
+    });
+  } catch { return []; }
+}
+function exclusionRule(rules, candidate, message) {
+  return rules.find(rule => String(message.chat ?? '').includes(rule.chat)
+    && [candidate.title, candidate.quote, message.text].some(text => rule.pattern.test(String(text ?? ''))));
+}
 function readLines(file) {
   try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse); }
   catch (error) { if (error.code === 'ENOENT') return []; throw new Error(`${file}: ${error.message}`); }
@@ -372,6 +387,7 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
   const sources = options.sources || ['line', 'discord', 'gmail'];
   const dryRun = Boolean(options.dryRun);
   const log = dependencies.log || console.error;
+  const excludeRules = loadExcludeRules(options.excludeFile ?? new URL('../config/schedule-sync-exclude.json', import.meta.url));
   // A transient lock also covers dry-runs without touching the persistent home.
   const releaseTransient = acquireLock(path.join(os.tmpdir(), 'schedule-sync-locks', hash(path.resolve(dir))));
   let release;
@@ -516,7 +532,11 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
         if (results.has(itemKey)) continue;
         const row = { type: 'result', key: itemKey, messageKey: key, title: candidate.title, start: candidate.start, source: sourceLabel(message), status: 'ignored', eventId: null };
         if (candidate.kind === 'new_event' && Date.parse(candidate.start) > now) {
-          if (candidate.confidence === 'medium') row.status = 'review';
+          const excluded = exclusionRule(excludeRules, candidate, message);
+          if (excluded) {
+            row.status = 'excluded';
+            log(`schedule-sync: 除外ルールで登録しない: ${excluded.reason} ${candidate.title}`);
+          } else if (candidate.confidence === 'medium') row.status = 'review';
           else if (candidate.confidence === 'high') {
             if (!calendar) row.status = 'calendar-unverified';
             else {
@@ -577,7 +597,7 @@ export async function runScheduleSync(options = {}, dependencies = {}) {
     }
     const successful = selected.filter(m => plans.has(messageKey(m))).length;
     if (extractionFailures.length) log(`schedule-sync: warning: ${extractionFailures.length} extraction failures, ${successful} messages succeeded`);
-    const counts = Object.fromEntries(['created', 'would-create', 'review', 'duplicate', 'ignored', 'calendar-unverified']
+    const counts = Object.fromEntries(['created', 'would-create', 'review', 'duplicate', 'ignored', 'excluded', 'calendar-unverified']
       .map(status => [status, rows.filter(r => r.status === status).length]));
     for (const status of ['failed', 'skipped']) counts[status] = extractionFailures.filter(r => r.status === status).length;
     return {

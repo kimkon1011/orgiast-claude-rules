@@ -502,7 +502,19 @@ export function hasUnsentVscodeTab({ state, now, promptConsumed, windowMs = 6 * 
   return promptConsumed === false;
 }
 
-export function shouldLaunch({ state, now, env, force, pendingTab }) {
+// 2026-11-04 kim-PC: 並行セッションの hook 爆発で PC が操作不能になった最中にも新しいタブを開き続け、
+// VSCode が応答せず「Another instance of Code is running but not responding」が4回出た。
+export const DEFAULT_MAX_CLAUDE_PROCESSES = 12;
+
+export function countClaudeProcesses(exec = execFileSync) {
+  if (process.platform !== 'win32' && exec === execFileSync) return null;
+  try {
+    const out = exec('tasklist', ['/FI', 'IMAGENAME eq claude.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+    return String(out).split(/\r?\n/).filter(line => /^"claude\.exe"/i.test(line)).length;
+  } catch { return null; }
+}
+
+export function shouldLaunch({ state, now, env, force, pendingTab, claudeProcesses = null }) {
   if (state.enabled === false) {
     return { ok: false, reason: '設定で無効化されています (~/.claude/next-session-launch.json の enabled:false)' };
   }
@@ -515,6 +527,10 @@ export function shouldLaunch({ state, now, env, force, pendingTab }) {
   const lastLaunch = Date.parse(state.lastLaunchAt);
   if (!force && !Number.isNaN(lastLaunch) && now - lastLaunch < 120_000) {
     return { ok: false, reason: '120秒以内に起動済みなので二重起動を防ぎます' };
+  }
+  const maxClaude = Number(env.ORGIAST_NEXT_SESSION_MAX_CLAUDE) || DEFAULT_MAX_CLAUDE_PROCESSES;
+  if (!force && Number.isFinite(claudeProcesses) && claudeProcesses >= maxClaude) {
+    return { ok: false, reason: `claude.exe が ${claudeProcesses} 個動いていて PC が過負荷になるため起動しません（上限 ${maxClaude}、ORGIAST_NEXT_SESSION_MAX_CLAUDE で変更可）` };
   }
   if (!force && pendingTab === true) {
     return { ok: false, reason: '前回開いた VSCode タブがまだ未送信です。タブバー右端のタブ（タブ名 Claude Code）で Enter を押すと始まります。新しく開き直すには --force-launch' };
@@ -563,6 +579,7 @@ export async function launchNextSession(argv = [], io = {}) {
   const writeFile = io.writeFile ?? fs.promises.writeFile;
   const rename = io.rename ?? fs.promises.rename;
   const spawnProcess = io.spawn ?? spawn;
+  const countClaude = io.countClaudeProcesses ?? countClaudeProcesses;
   const wait = io.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const log = io.log ?? console.log;
   const arm = io.armToFile ?? armToFile;
@@ -667,7 +684,7 @@ export async function launchNextSession(argv = [], io = {}) {
     }
     const launchEnv = { ...childEnv({ env, configDir, source: configDirSource }), ORGIAST_HEADLESS_JOB: 'next-session-launch' };
     const pendingTab = hasUnsentVscodeTab({ state, now, promptConsumed });
-    const decision = shouldLaunch({ state, now, env, force: flags.force, pendingTab: route === 'inline' || route === 'headless' ? false : pendingTab });
+    const decision = shouldLaunch({ state, now, env, force: flags.force, pendingTab: route === 'inline' || route === 'headless' ? false : pendingTab, claudeProcesses: countClaude() });
     if (!decision.ok) {
       log(`[next-session] スキップ: ${decision.reason}`);
       return 0;

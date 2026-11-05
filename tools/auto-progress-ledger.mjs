@@ -130,16 +130,18 @@ export function latestOpenPromises(rows) {
 // 同じ session に open の check 付き行があるときは、新しい約束行に check 情報を引き継ぐ。
 export function applyPromise(rows, record) {
   let toAdd = record;
-  if (!toAdd.check && !toAdd.startWhen) {
+  if (!toAdd.check && !toAdd.startWhen && !toAdd.autoRegisteredCheck) {
     const existing = rows
-      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && (row.check || row.startWhen))
+      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && (row.check || row.startWhen || row.autoRegisteredCheck === true))
       .sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0))[0];
     if (existing) {
       toAdd = {
         ...toAdd,
         ...(existing.startWhen ? { startWhen: existing.startWhen, startedAt: existing.startedAt,
           ...(['scheduled', 'starting', 'start_overdue'].includes(existing.status) ? { status: existing.status } : {}) } : {}),
+        ...(existing.autoRegisteredCheck ? { autoRegisteredCheck: true } : {}),
         check: existing.check,
+        checkRegisteredAt: existing.checkRegisteredAt,
         checkCwd: existing.checkCwd ?? toAdd.cwd,
         deadlineAt: existing.deadlineAt,
         label: existing.label,
@@ -177,6 +179,21 @@ export function originLine(row, { label = '', localOwner = '', home = '' } = {})
   if (!purpose && home && row.sessionId) {
     try { purpose = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'session-purpose', `${row.sessionId}.json`), 'utf8')).purpose || ''; } catch {}
   }
+  const synthetic = value => /^\s*<(?:task-notification\b|system-reminder\b|command-)/.test(String(value));
+  if ((!purpose || synthetic(purpose)) && row.transcriptPath) {
+    purpose = '';
+    try {
+      for (const line of fs.readFileSync(row.transcriptPath, 'utf8').split(/\r?\n/)) {
+        let entry;
+        try { entry = JSON.parse(line); } catch { continue; }
+        if (entry.isSidechain || (entry.message?.role || entry.type) !== 'user') continue;
+        const content = entry.message?.content;
+        const text = typeof content === 'string' ? content : (Array.isArray(content) ? content.filter(block => block?.type === 'text').map(block => block.text || '').join('\n') : '');
+        if (text.trim() && !synthetic(text)) { purpose = text; break; }
+      }
+    } catch { /* ログが無い場合は台帳の label を使う。 */ }
+  }
+  if (!purpose || synthetic(purpose)) purpose = row.label || '';
   purpose = String(purpose).replace(/\s+/g, ' ').trim();
   const parts = [`プロジェクト: ${project}`];
   if (purpose) parts.push(`セッションの目的: ${purpose.length > 50 ? `${purpose.slice(0, 50)}…` : purpose}`);
@@ -216,3 +233,9 @@ export const kimAction = row => {
   return action === 'なし' && row.status === 'waiting_user'
     ? String(row.reason || row.resumeOutcome || '判断内容を確認してください').replace(/^needs_user:\s*/, '').slice(0, 80) : action;
 };
+
+export function hasClaudeWork(value) {
+  const text = cleanValue(value);
+  if (!text || isNoopPromise(text)) return false;
+  return /マージ|merge|配布|実装|送信|送る|送ります|組み込|反映|修正|更新|登録|記録|確認|調査|作成|通知|進め|対応|監視|deploy|push/i.test(text);
+}

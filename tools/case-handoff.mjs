@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -232,7 +233,7 @@ export async function main(args = process.argv.slice(2)) {
   const opt = key => args[args.indexOf(key) + 1];
   if (command === 'retry') { console.log(JSON.stringify(await c.drain({ dueOnly: args.includes('--due') }))); return; }
   if (command === 'hook') {
-    const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+    const input = JSON.parse(await readStdinWithTimeout());
     const session = input.session_id;
     if (!session) return;
     if (['Stop', 'SessionEnd'].includes(input.hook_event_name)) {
@@ -285,4 +286,4 @@ export async function main(args = process.argv.slice(2)) {
   } else if (command === 'resume' || command === 'sync') console.log(await c.resume(ids[0], { transcripts: command === 'sync' }));
   else throw Error('usage: case-handoff.mjs bind|watch|unwatch|resume|sync <案件ID/案件名> | flush <sessionId> | retry | hook');
 }
-if (isEntry(import.meta.url)) main().catch(e => { console.error(`[case-handoff] ${e.message}`); process.exitCode = 1; });
+if (isEntry(import.meta.url)) await main().catch(e => { console.error(`[case-handoff] ${e.message}`); process.exitCode = 1; });

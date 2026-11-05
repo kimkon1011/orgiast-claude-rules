@@ -1,8 +1,9 @@
 {
   "version": 1,
   "_note": "配布対象の単一定義。stuck-dialog-watch / stall-scan と設定は tools、手順書は docs として既存PCへ配布する。onboarding-sync の zip フォールバックはここを読む。リポのトップレベル全項目は dirs / files / notDistributed のどれかに入れること（tools/distribution-coverage.test.mjs が検査）。",
-  "dirs": ["tools", "rules-extracted", "skills", "packages", "protocols", "rules", "docs", "decisions", "config", "scripts", "playbooks", "templates"],
-  "files": ["fleet-pc-map.json", "fleet-command.json", "fleet-directives.json", "manifest.json", "ONBOARDING.md", "CLAUDE.md.template"],
+  "dirs": ["tools", "rules-extracted", "skills", "packages", "protocols", "rules", "docs", "decisions", "config", "scripts", "playbooks", "templates", "seo"],
+  "files": [
+    "HANDOVER.md","fleet-pc-map.json", "fleet-command.json", "fleet-directives.json", "manifest.json", "ONBOARDING.md", "CLAUDE.md.template"],
   "notDistributed": {
     ".agents": { "reason": "ローカルエージェント環境の管理領域。PC配布対象外" },
     ".codex": { "reason": "ローカルCodex環境の管理領域。PC配布対象外" },
@@ -12,6 +13,7 @@
     "data": { "reason": "codex 可用性プローブ履歴等のデータ。実行時参照なし" },
     "evidence": { "reason": "証跡置き場。実行時参照なし" },
     "reports": { "reason": "レポート置き場。実行時参照なし" },
+    "results": { "reason": "PR作業の結果レポート。配布先PCの実行時参照なし" },
     "package.json": { "reason": "repo 自体の依存宣言。tools の参照は対象アプリ側の package.json" },
     "knowledge-merged.json": { "reason": "rules-sync merge の作業物。実行時参照なし" },
     "README.md": { "reason": "GitHub 表示用" },

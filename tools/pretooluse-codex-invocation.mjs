@@ -2,16 +2,19 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+import { isEntry } from './is-entry.mjs';
+
+export async function hookMain(raw) {
 
 try {
-  const raw = await readStdinWithTimeout();
+
 
   const input = JSON.parse(raw);
   const tool = String(input.tool_name || '');
-  if (!/^(Bash|PowerShell)$/.test(tool)) process.exit(0);
+  if (!/^(Bash|PowerShell)$/.test(tool)) return;
 
   const command = String(input.tool_input?.command || '');
-  if (!/(?:\bcodex\s+exec\b|\bcodex-do\.mjs\b)/i.test(command)) process.exit(0);
+  if (!/(?:\bcodex\s+exec\b|\bcodex-do\.mjs\b)/i.test(command)) return;
 
   const findings = [];
   const usesPromptFile = /(?:^|\s)--prompt-file(?:\s|=)/i.test(command);
@@ -37,7 +40,7 @@ try {
     findings.push('no-timeout: 実行時間の上限がなく、stdin 待ちなどで無限に残る可能性があります。');
   }
 
-  if (!findings.length) process.exit(0);
+  if (!findings.length) return;
 
   const repo = process.env.ORGIAST_REPO || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const recommended = `node "${path.join(repo, 'tools', 'codex-do.mjs')}" --prompt-file <指示を書いたファイル> --cwd <対象パス> --timeout 1800`;
@@ -50,3 +53,6 @@ try {
   ].join('\n');
   console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: context } }));
 } catch {}
+
+}
+if (isEntry(import.meta.url)) await hookMain(await readStdinWithTimeout());

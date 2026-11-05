@@ -1,10 +1,34 @@
+import { progressHome, notificationMocks } from './test-helpers/auto-progress-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { formatDoneLine, formatDoneMessage, formatDoneBacklogMessages, gatherEvidence, deterministicVerdict, judge, evidenceSummary, logDoneDm, run } from './auto-progress-watch.mjs';
+import { legacyAddCheckMigrationRows, formatDoneLine, formatDoneMessage, formatDoneBacklogMessages, gatherEvidence, deterministicVerdict, judge, evidenceSummary, logDoneDm, run as runWatch } from './auto-progress-watch.mjs';
 import { cleanupOldLedgerTemps, ledgerFile, readLedger, writeLedger } from './auto-progress-ledger.mjs';
+import { listItems } from './kim-inbox.mjs';
+
+const run = options => runWatch({ ...options, io: { ...notificationMocks, ...options.io } });
+
+test('kim の recent/backlog 完了は静穏時間も保存・読み戻しし、旧通知済み印を救済する', async t => {
+  const home = progressHome('kim-done-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'seisaku-team@orgiast.jp' } }));
+  const now = Date.parse('2026-11-04T16:00:00Z');
+  writeLedger(ledgerFile(home), [1, 100].map(hours => ({ sessionId: `job-${hours}`, status: 'done',
+    ts: new Date(now - hours * 3600000).toISOString(), doneAt: new Date(now - hours * 3600000).toISOString(),
+    doneNotifiedAt: new Date(now - 1000).toISOString(), promise: '作業', reason: '成果物を検証済み' })));
+  let failRead = true;
+  const io = { clock: () => now, transcriptFiles: [], sheetConfig: () => null, digest: async () => ({}), escalateKimDecisions: async () => ({}),
+    listKimInboxItems: home => failRead ? [] : listItems(home), notifyOwner: () => assert.fail('no Discord') };
+  const failed = await run({ home, now, io });
+  assert.equal(failed.errors.length, 2);
+  assert.ok(readLedger(ledgerFile(home)).every(row => !row.doneInboxVerifiedAt));
+  failRead = false;
+  assert.deepEqual((await run({ home, now, io })).errors, []);
+  assert.ok(readLedger(ledgerFile(home)).every(row => row.doneInboxId && row.doneInboxVerifiedAt));
+  await run({ home, now, io });
+  assert.equal(listItems(home).length, 2);
+});
 
 test('共有ファイルが新しくてもセッションの会話・実行が25時間前ならstalled', () => {
   const now = Date.parse('2026-10-28T10:00:00Z');
@@ -26,7 +50,7 @@ test('共有ファイルが新しくてもセッションの会話・実行が25
 });
 
 test('完了通知はresumeの結果を使い、予告文を出さない', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'done-notice-'));
+  const home = progressHome('done-notice-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const dir = path.join(home, '.claude', 'auto-progress-inbox');
   fs.mkdirSync(dir, { recursive: true });
@@ -54,7 +78,7 @@ test('完了通知はresumeの結果を使い、予告文を出さない', t => 
 });
 
 test('台帳 rename が2回失敗しても再試行で保存できる', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-retry-'));
+  const home = progressHome('ledger-retry-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const file = ledgerFile(home);
   let attempts = 0;
@@ -71,7 +95,7 @@ test('台帳 rename が2回失敗しても再試行で保存できる', t => {
 });
 
 test('台帳 rename が10回失敗しても巡回は落ちず、エラーを記録して通知を止める', async t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-failure-'));
+  const home = progressHome('ledger-failure-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const now = Date.parse('2026-11-01T03:00:00Z');
   writeLedger(ledgerFile(home), [{
@@ -101,7 +125,7 @@ test('台帳 rename が10回失敗しても巡回は落ちず、エラーを記�
 });
 
 test('1時間より古い台帳 tmp だけを掃除する', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-cleanup-'));
+  const home = progressHome('ledger-cleanup-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const file = ledgerFile(home);
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -118,7 +142,7 @@ test('1時間より古い台帳 tmp だけを掃除する', t => {
 });
 
 test('done-dmログは本文を8000字まで保存する', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'done-dm-log-'));
+  const home = progressHome('done-dm-log-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const message = '完了内容'.repeat(900);
   logDoneDm(home, { sessionId: 'done-full-text' }, { delivered: 'dm', channel: 'discord' }, message, Date.parse('2026-11-01T03:00:00Z'));
@@ -144,7 +168,7 @@ test('再開上限の失敗は最近の活動やAI判定に優先してstalled�
 
 test('timeoutを繰り返した実例は2回でSheetとDMまとめへ一度報告される', async t => {
   const { MAX_RESUMES } = await import('./auto-progress-watch.mjs');
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-exhausted-'));
+  const home = progressHome('resume-exhausted-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const now = Date.parse('2026-11-02T00:00:00Z');
   writeLedger(ledgerFile(home), [{
@@ -202,7 +226,7 @@ test('timeoutを繰り返した実例は2回でSheetとDMまとめへ一度報�
 
 
 test('失敗終了後の活動だけを数え、成功した再開の活動は保持する', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-evidence-'));
+  const home = progressHome('resume-evidence-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const end = Date.parse('2026-11-02T00:00:00Z');
   const transcriptPath = path.join(home, 'session.jsonl');
@@ -238,7 +262,7 @@ test('失敗終了後の活動だけを数え、成功した再開の活動は�
 
 
 test('終了後の本人発言を数え、総再開回数と連続失敗回数を区別する', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-user-'));
+  const home = progressHome('resume-user-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const end = Date.parse('2026-11-02T00:00:00Z');
   const transcriptPath = path.join(home, 'session.jsonl');
@@ -256,18 +280,18 @@ test('終了後の本人発言を数え、総再開回数と連続失敗回数�
 });
 
 test('完了通知は DM 成功時もローカル user にトーストを送る', async t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'done-toast-'));
+  const home = progressHome('done-toast-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const now = Date.parse('2026-11-02T10:00:00Z');
   writeLedger(ledgerFile(home), [{
-    ts: new Date(now - 2 * 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'kim@orgiast.jp',
+    ts: new Date(now - 2 * 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'staff@example.test',
     sessionId: 'done-toast-test', cwd: home, promise: 'Xの投稿を読み調査結果をまとめます',
     status: 'done', verdict: 'done', doneAt: new Date(now - 60000).toISOString(),
   }]);
   let toastCalls = 0; let toastText = '';
   const io = {
     clock: () => now, transcriptFiles: [], sheetConfig: () => null,
-    localOwner: 'kim@orgiast.jp',
+    localOwner: 'staff@example.test',
     notifyOwner: async () => ({ delivered: 'dm', messageId: 'receipt' }),
     sendOwnerToast: async (text) => { toastCalls++; toastText = text; return true; },
     digest: async () => ({}),
@@ -280,18 +304,18 @@ test('完了通知は DM 成功時もローカル user にトーストを送る'
 });
 
 test('バックログ完了通知もローカル user にトーストを送る', async t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'backlog-toast-'));
+  const home = progressHome('backlog-toast-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const now = Date.parse('2026-11-02T10:00:00Z');
   writeLedger(ledgerFile(home), [{
-    ts: new Date(now - 100 * 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'kim@orgiast.jp',
+    ts: new Date(now - 100 * 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'staff@example.test',
     sessionId: 'backlog-toast-test', cwd: home, promise: 'Xの投稿を読み調査結果をまとめます',
     status: 'done', verdict: 'done', doneAt: new Date(now - 73 * 3600000).toISOString(),
   }]);
   let toastCalls = 0; let toastText = '';
   const io = {
     clock: () => now, transcriptFiles: [], sheetConfig: () => null,
-    localOwner: 'kim@orgiast.jp',
+    localOwner: 'staff@example.test',
     notifyOwner: async () => ({ delivered: 'dm', messageId: 'receipt' }),
     sendOwnerToast: async (text) => { toastCalls++; toastText = text; return true; },
     digest: async () => ({}),
@@ -303,7 +327,7 @@ test('バックログ完了通知もローカル user にトーストを送る',
 });
 
 test('巡回末尾の督促へhome/時刻/dry-runを渡し、失敗も巡回を落とさない', async t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'watch-escalate-'));
+  const home = progressHome('watch-escalate-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const now = Date.parse('2026-11-04T10:00:00Z');
   for (const dryRun of [false, true]) {
@@ -322,4 +346,126 @@ test('巡回末尾の督促へhome/時刻/dry-runを渡し、失敗も巡回を�
     assert.deepEqual(order, dryRun ? ['escalate'] : ['digest', 'escalate']);
     assert.ok(result.errors.includes('escalate: mock failure'));
   }
+});
+
+// 実例と同じ metadata を持つ定期ターン。各時刻は now からの経過時間。
+function scheduledFixture(t) {
+  const home = progressHome('scheduled-evidence-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const now = Date.parse('2026-11-04T10:00:00Z');
+  const transcriptPath = path.join(home, 'session.jsonl');
+  const entry = (hours, type, content, extra = {}) => ({ type,
+    timestamp: new Date(now - hours * 3600000).toISOString(), message: { role: type, content }, ...extra });
+  const lines = [entry(30, 'user', 'Muse 提案を作ってください'), entry(29, 'assistant', '調査を進めます')];
+  for (const hours of [5, 3, 1]) {
+    lines.push(entry(hours, 'user', '[定期進捗チェック: 28c97712] 進捗を確認', {
+      isMeta: true, promptSource: 'system', wakeupSource: 'schedule_wakeup', turnOrigin: 'scheduled',
+    }), entry(hours - 0.01, 'assistant', '確認しました。引き続き進めます'));
+  }
+  const save = () => fs.writeFileSync(transcriptPath, lines.map(line => JSON.stringify(line)).join('\n'));
+  save();
+  const row = { sessionId: '28c97712-scheduled-test', transcriptPath, cwd: home, owner: 'kim',
+    ts: new Date(now - 31 * 3600000).toISOString(), promise: 'Muse 提案を作成します', status: 'open',
+    deadlineAt: new Date(now + 24 * 3600000).toISOString() };
+  return { home, now, row, lines, entry, save };
+}
+
+test('期限前でも2時間ごとの定期確認3回だけでは24時間以上の停滞を解消しない', async t => {
+  const f = scheduledFixture(t);
+  const evidence = gatherEvidence(f.row, f.home);
+  assert.equal(evidence.transcript.count, 1);
+  assert.equal(evidence.transcript.ignoredScheduledCount, 6);
+  assert.equal(evidence.lastEvidenceAt, f.now - 29 * 3600000);
+  const result = judge(f.row, evidence, f.now, { askLlm: () => null });
+  assert.equal(result.verdict, 'stalled');
+  assert.match(result.reason, /定期確認のみで進捗なし/);
+  writeLedger(ledgerFile(f.home), [f.row]);
+  const sheets = [];
+  const io = { clock: () => f.now, transcriptFiles: [], sheetConfig: () => ({}), cwdExists: () => false,
+    askLlm: () => null, postSheet: async (_config, _tab, payload) => sheets.push(payload.row),
+    digest: async () => ({}), escalateKimDecisions: async () => ({}) };
+  const summary = await run({ home: f.home, now: f.now, io });
+  assert.equal(summary.stalled, 1);
+  assert.equal(summary.inProgress, 0);
+  assert.deepEqual(summary.errors, []);
+  assert.equal(readLedger(ledgerFile(f.home))[0].verdict, 'stalled');
+  await run({ home: f.home, now: f.now, io });
+  assert.equal(sheets.length, 1);
+});
+
+test('各定期 metadata を単独で判定し、cutoff前の起点とtool結果を追跡する', t => {
+  const f = scheduledFixture(t);
+  for (const metadata of [{ turnOrigin: 'scheduled' }, { wakeupSource: 'schedule_wakeup' }]) {
+    f.lines.splice(0, f.lines.length,
+      f.entry(3, 'user', '確認', metadata),
+      f.entry(1, 'assistant', [{ type: 'tool_use', name: 'Write', input: { file_path: f.row.transcriptPath } }]),
+      f.entry(0.9, 'user', [{ type: 'tool_result', content: 'ok' }]),
+      f.entry(0.8, 'user', '補助情報', { isMeta: true }),
+      f.entry(0.7, 'queue-operation', 'queue'), f.entry(0.6, 'attachment', 'attachment'),
+      f.entry(0.5, 'assistant', '確認完了'));
+    f.save();
+    const row = { ...f.row, resumeOutcome: 'error: timeout', resumeCount: 2,
+      resumeFinishedAt: new Date(f.now - 2 * 3600000).toISOString() };
+    const evidence = gatherEvidence(row, f.home);
+    assert.equal(evidence.any, false);
+    assert.deepEqual(evidence.transcript.touchedPaths, []);
+    assert.equal(evidence.transcript.ignoredScheduledCount, 4);
+    const verdict = judge(row, evidence, f.now, { askLlm: () => assert.fail('定期確認は再開失敗を解除しない') });
+    assert.equal(verdict.source, 'resume-failed');
+    assert.match(verdict.reason, /定期確認のみで進捗なし/);
+    f.lines.push(f.entry(0.1, 'user', '続けてください'));
+    f.save();
+    const human = gatherEvidence(row, f.home);
+    assert.equal(human.transcript.count, 1);
+    assert.equal(judge(row, human, f.now, { askLlm: () => null }).verdict, 'in_progress');
+    f.lines.push(f.entry(0.05, 'assistant', '調査を再開しました'));
+    f.save();
+    assert.equal(gatherEvidence(row, f.home).transcript.count, 2);
+  }
+});
+
+test('バックグラウンド完了通知（promptSource:system）は定期扱いせず、その後の作業を数える', t => {
+  const f = scheduledFixture(t);
+  f.lines.splice(0, f.lines.length,
+    f.entry(1, 'user', '<task-notification>完了</task-notification>', { promptSource: 'system', turnOrigin: 'task_notification' }),
+    f.entry(0.9, 'assistant', 'Codex の差分を確認します'));
+  f.save();
+  const evidence = gatherEvidence(f.row, f.home);
+  assert.equal(evidence.transcript.ignoredScheduledCount, 0);
+  assert.equal(evidence.transcript.count, 1);
+});
+
+test('isMetaだけでは定期扱いせず、queueとattachmentは活動に数えない', t => {
+  const f = scheduledFixture(t);
+  f.lines.splice(0, f.lines.length, f.entry(1, 'user', '補助情報', { isMeta: true }),
+    f.entry(0.9, 'assistant', '調査中'), f.entry(0.8, 'queue-operation', 'queue'), f.entry(0.7, 'attachment', 'attachment'));
+  f.save();
+  const evidence = gatherEvidence(f.row, f.home);
+  assert.equal(evidence.transcript.count, 1);
+  assert.equal(evidence.transcript.ignoredScheduledCount, 0);
+  assert.equal(evidence.lastEvidenceAt, f.now - 0.9 * 3600000);
+});
+
+test('定期ターン中でもcheckが達成なら従来どおりdoneにする', async t => {
+  const f = scheduledFixture(t);
+  fs.writeFileSync(path.join(f.home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'kim@orgiast.jp' } }));
+  writeLedger(ledgerFile(f.home), [{ ...f.row, check: 'mock check' }]);
+  const summary = await run({ home: f.home, now: f.now, io: {
+    clock: () => f.now, transcriptFiles: [], sheetConfig: () => null,
+    executeCheck: () => ({ code: 0, text: 'Muse 提案の成果物を確認' }),
+    notifyOwner: async () => ({ delivered: 'dm' }), digest: async () => ({}), escalateKimDecisions: async () => ({}),
+  } });
+  assert.equal(summary.done, 1);
+  assert.deepEqual(summary.errors, []);
+  assert.equal(readLedger(ledgerFile(f.home))[0].status, 'done');
+});
+
+test('レシート済み完了は legacy add-check 移行で復活させない', () => {
+  const base = { pc: 'PC1', user: 'user', sessionId: 's-receipt', ts: '2026-11-05T10:00:00.000Z',
+    status: 'done', check: 'node check.mjs', nextClaude: 'x' };
+  const withReceipt = { ...base, doneInboxId: 'ki-1', doneInboxVerifiedAt: '2026-11-05T11:00:00.000Z', doneNotifiedAt: '2026-11-05T11:00:00.000Z' };
+  const notifiedOnly = { ...base, ts: '2026-11-05T10:05:00.000Z', doneInboxId: '', doneInboxVerifiedAt: '', doneNotifiedAt: '2026-11-05T11:05:00.000Z' };
+  const noReceipt = { ...base, ts: '2026-11-05T10:10:00.000Z', doneInboxId: '', doneInboxVerifiedAt: '', doneNotifiedAt: '' };
+  const rows = [withReceipt, notifiedOnly, noReceipt];
+  assert.deepEqual(legacyAddCheckMigrationRows(rows), [noReceipt]);
 });

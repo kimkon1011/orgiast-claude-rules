@@ -128,8 +128,8 @@ async function main() {
   // 判定できないのに合格扱いにするのは「timeout を未導入と誤報告」と同じ誤り。
   const fableKnown = reporter.fable5Detected !== undefined || adoption.fable5OutTok !== undefined;
   const fableDetected = Boolean(reporter.fable5Detected || Number(adoption.fable5OutTok || 0) > 0);
-  const planUsage = await fetchClaudePlanUsage({ home });
-  const budget = await collectBudgetStatus({ home });
+  // 独立した2つの外部照会(別エンドポイント・共有状態なし)は並列に待つ。
+  const [planUsage, budget] = await Promise.all([fetchClaudePlanUsage({ home }), collectBudgetStatus({ home })]);
   const settings = readJson(path.join(claudeDir, 'settings.json'));
   const nonClaudeRatio = firstFiniteNumber(cost.nonClaudeDelegRatio, enforce.nonClaudeDelegRatio);
   const legacyRatio = firstFiniteNumber(cost.delegRatio, enforce.delegRatio);

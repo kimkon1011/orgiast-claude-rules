@@ -1026,24 +1026,22 @@ test('全 auto-session プロンプトは Windows の --cwd をダブルクォ�
   }
 });
 
-test('buildPrompt は PR に automerge ラベルを付け、CI 緑を待たずに自動マージさせる', () => {
+test('buildPrompt は作成席でbase pushと変更パスに応じたPR着地を行う', () => {
   const prompt = buildPrompt('実装する', {}, '/repo', '/tmp/run.summary.md', 60);
-  assert.ok(prompt.includes('--add-label automerge'));
-  assert.ok(prompt.includes('GitHub が自動で squash マージ'));
-  // ラベルが付けられない環境向けのフォールバックも残す
-  assert.ok(prompt.includes('gh pr merge --squash'));
+  assert.ok(prompt.includes('pr-land.mjs'));
+  assert.ok(prompt.includes('access-doctor.mjs --fix'));
+  assert.ok(prompt.includes('pr-merge.mjs'));
+  assert.ok(prompt.includes('.github/workflows/*'));
+  assert.ok(prompt.includes('kim-PC に頼まない'));
+  assert.ok(prompt.includes('automerge'));
+  assert.ok(prompt.includes('CI 合格を待って'));
 });
 
-test('buildPrompt は GitHub 経路を実測し、不能なら先送りせず exec codex 便へ移送させる', () => {
+test('buildPrompt は権限不足を別PCへ移送せず自己診断へ案内する', () => {
   const prompt = buildPrompt('実装する', {}, '/repo', '/tmp/run.summary.md', 60);
-  assert.ok(prompt.includes('command -v gh'));
-  assert.ok(prompt.includes('where gh'));
-  assert.ok(prompt.includes('timeout 15'));
-  assert.ok(prompt.includes('exit 124'));
-  assert.ok(prompt.includes('gh auth login'));
-  assert.ok(prompt.includes('w018-PC'));
-  assert.ok(prompt.includes('--exec codex'));
-  assert.ok(prompt.includes('先送りを書かず'));
+  assert.ok(prompt.includes('access-doctor.mjs --fix'));
+  assert.ok(prompt.includes('権限・鍵・マージを kim-PC に頼まない'));
+  assert.ok(!prompt.includes('w018-PC'));
 });
 
 test('localDate は Date のローカル日付を YYYY-MM-DD で返す', () => {

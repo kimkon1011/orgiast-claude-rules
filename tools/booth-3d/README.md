@@ -61,3 +61,28 @@ node tools/booth-3d/build-booth.mjs --spec tools/booth-3d/examples/sample-3x3-re
 - STL・Blender 本体は Git に入れない（Drive／公式配布のキャッシュ）。Python は Blender 同梱のみ、Node は標準 API のみ
 - `render.filepath` は必ず絶対パス（相対だと Blender がドライブ直下へ書く）
 - 自動取得の Blender は Windows x64 のみ。他 OS は `BOOTH3D_BLENDER` で指定
+
+### Dimension-locked image verification and GridBeyond fallback
+
+`check-underlay-edge.py` uses top-left coordinates and reports negative shifts for
+lower roofs. The accepted edge range is -25% through +5%. Source images are never
+resized on disk. The Sobel result is a screening result: visually verify the entire
+roof, signs and hanging features before accepting it. A bright canopy bottom edge
+can be stronger than its top edge, so a passing Sobel score alone is insufficient.
+
+Regression check: `python tools/booth-3d/check-underlay-edge.test.py`.
+
+After three rejected image attempts, the deterministic GridBeyond renderer retains
+the 6m x 6m x 3.6m envelope and the underlay camera. Use a persistent output directory
+outside any disposable worktree, containing `underlay-meta.json` from
+`render-dimension-underlay.py`:
+
+```powershell
+python tools/booth-3d/make-gridbeyond-noc.py <output-directory>
+blender --background --python tools/booth-3d/render-gridbeyond-final.py -- <output-directory> standard
+```
+
+Repeat for `premium` and `impact`. Texture generation requires Pillow. The renderer
+writes a 1600x900 PNG, a .blend with its NOC texture packed, and a geometry audit.
+It asserts the booth bounds and compares the projected roof to the reference
+metadata. Its effective pixel aspect matches the 1344x768 reference at 1600x900.

@@ -2,12 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { mergeKnowledge, enqueueTodos, selectTargets, runNightly, readJsonl, promotionFile, deferralLedgerFile, deferralTodo, deferralDetectorFile } from './handoff-audit-nightly.mjs';
 import { parseHandoff } from './auto-session.mjs';
 import { isToolNameRoute, enqueueToolRouteReview } from './handoff-audit-nightly.mjs';
 const detectorSource = fs.readFileSync(new URL('./permanent-fix-deferral-scan.mjs', import.meta.url), 'utf8');
+// tools/ の横断ガードと並列実行しても、一時クローンを走査させない。
 const cloneHome = t => {
-  const home = fs.mkdtempSync(path.join(import.meta.dirname, '.audit-detector-test-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-detector-test-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   return home;
 };
@@ -30,6 +32,15 @@ test('mergeKnowledge は道具名 route を confidence high でも昇格せず r
   assert.equal(isToolNameRoute('GH API', ['gh api']), false);
   assert.equal(isToolNameRoute('gh api で確認する', ['gh api']), false);
   assert.equal(isToolNameRoute('gh api'), false);
+});
+test('mergeKnowledge は自己言及パターン（tool-name-route の〜）を候補に積まず捨てる', () => {
+  const meta = { pattern: 'tool-name-route の棄却', route: 'gh secret', confidence: 'high' };
+  const merged = mergeKnowledge([], [meta], [], 'one', ['gh secret']);
+  assert.deepEqual(merged.knowledge, []);
+  assert.deepEqual(merged.promoted, []);
+  assert.deepEqual(merged.candidates, []);
+  const again = mergeKnowledge([], [{ ...meta, pattern: 'tool-name-route の採用', route: 'gh api' }], [], 'two', ['gh api']);
+  assert.deepEqual(again.candidates, []);
 });
 test('道具名 route は前回観測(prior)があっても昇格しない', () => {
   const medium = { ...item, confidence: 'medium' };
@@ -132,7 +143,7 @@ test('前日passとretry-cap/blocked後passを選ぶ、当日は除外', () => {
 // 監査は route を knowledge か automation-routes から「そのまま引用」させる。knowledge 側の route は一意性ガードで、
 // automation-routes 側は道具名ガードで昇格しないため、夜間実行は候補の保留だけを行い knowledge を書き換えない。
 test('夜間実行: candidates永続化・道具名は2観測でも昇格しない・再実行冪等・未知経路排除', async t => {
-  const home = fs.mkdtempSync(path.join(import.meta.dirname, '.audit-nightly-test-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-nightly-test-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const dir = path.join(home, '.claude'); fs.mkdirSync(dir);
   const knowledgeFile = path.join(home, 'knowledge.json'); fs.writeFileSync(knowledgeFile, '[]');
@@ -159,7 +170,7 @@ test('夜間実行: candidates永続化・道具名は2観測でも昇格しな�
   assert.equal(fs.readFileSync(promotionFile(home), 'utf8'), persisted);
 });
 function deferralHome(t, lines = []) {
-  const home = fs.mkdtempSync(path.join(import.meta.dirname, '.audit-nightly-test-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-nightly-test-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const dir = path.join(home, '.claude'); fs.mkdirSync(dir);
   const knowledgeFile = path.join(home, 'knowledge.json'); fs.writeFileSync(knowledgeFile, '[]');

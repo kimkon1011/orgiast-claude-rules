@@ -12,7 +12,7 @@ import { providerResetUntil } from './codex-cooldown.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { redactAll } from './lib/redact.mjs';
 import { catalog } from './provider-catalog.mjs';
-import { applyRealLaneHealth, billingFailure, quotaFailure } from './lib/lane-real-health.mjs';
+import { applyRealLaneHealth, billingFailure, billingWithQuotaHint, quotaFailure } from './lib/lane-real-health.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { isEnrollToken, validKeyservePcId } from './keyserve-auth.mjs';
 
@@ -182,16 +182,18 @@ export function notificationText(item, home) {
     const hostname = os.hostname(), pc = validKeyservePcId(hostname) ? hostname : 'PC名要指定', user = os.userInfo().username;
     return `${hostname}（OSユーザー: ${user}）は keyserve 未登録のため安価AIレーンの鍵を取得できません。Claude が kim-PC 側で登録コマンドを発行します。対象PCでその1行を貼り付けて承認すると、Claude が復旧確認まで行います。`;
   }
-  if (item.reason === 'billing') return `${os.hostname()} の ${item.provider} が残高不足(402)。入金（オートチャージON）が既定（CLAUDE.md 他AI節）。それまで OpenRouter 経由へ回しています`;
+  if (item.reason === 'billing' && item.provider !== 'gemini') return `${os.hostname()} の ${item.provider} が残高不足(402)。入金（オートチャージON）が既定（CLAUDE.md 他AI節）。それまで OpenRouter 経由へ回しています`;
   if (item.tried) return `${item.provider} が停止しています（原因: WSL ディストリ不在・ネイティブ書き込み probe 失敗）。試した修復: ${item.tried}。残る操作: ${item.fix}`;
   if (item.provider === 'gemini') {
-    let owner = '未確認';
+    let owner = '';
     for (const f of [path.join(home, '.claude/gemini.env'), path.join(home, '.gemini/.env')]) {
       try { const comments = fs.readFileSync(f, 'utf8').split('\n').filter(l => /^\s*#/.test(l)).join('\n'); owner = comments.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i)?.[0] || owner; } catch {}
     }
-    return `Gemini が停止しています（${item.reason}）。
-1. https://aistudio.google.com/billing を kim@orgiast.jp で開く（既定アカウントが個人 Gmail のためシークレットウィンドウ推奨）。
-2. 右上アバターが kim@orgiast.jp か確認（使用キーの所有アカウント: ${owner}）。
+    owner ||= 'seisaku-team@orgiast.jp（TrackPlanner、未確認なら AI Studio で確認）';
+    const prepaid = /prepayment credits are depleted/i.test(item.error || '') ? '\n前払いクレジットが 0。Setup auto-reload（上限付き）を設定してください。' : '';
+    return `Gemini が残高不足(402)で停止しています（${item.reason}）。${prepaid}
+1. https://aistudio.google.com/billing を ${owner} で開く（既定アカウントが個人 Gmail のためシークレットウィンドウ推奨）。
+2. 右上アバターが ${owner} か確認（使用キーの所有アカウント: ${owner}）。
 3. 「Available credits」の「Setup auto-reload」（既に設定済みなら「Manage auto-reload」）を開く。
 4. 支払い方法・補充額・最低残高しきい値を設定し、月間上限（Monthly Limit / monthly auto-charge limit）も設定して保存する。
 5. 成功の見え方: Available credits が 0 より大きくなる。翌 03:00 の夜間 probe か次セッション開始の 1 行で gemini ✅。
@@ -249,8 +251,8 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       if (routing.demote?.[p] !== undefined) { delete routing.demote[p]; routingChanged = true; health.repairs.push({ provider: p, action: 'demote_removed', detail: '実測成功' }); }
       if (cooldown[p]) { delete cooldown[p]; cooldownChanged = true; health.repairs.push({ provider: p, action: 'cooldown_removed', detail: '実測成功' }); }
     } else {
-      const limited = quotaFailure(text);
-      const payment = billingFailure(text) && !limited;
+      const payment = billingFailure(text) && !billingWithQuotaHint(text);
+      const limited = !payment && quotaFailure(text);
       // codex-do が利用枠クールダウンで保留(exit 75)した場合は WSL 問題ではなく枠切れ。クールダウン自体は既存のまま触らない。
       const deferred = /codex_cooldown/.test(text);
       health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: payment ? 'billing' : (limited || deferred) ? 'cooldown' : /HTTP\s*401|unauthorized|login required|token.*expired/i.test(text) ? (p === 'codex' ? 'dead:oauth_consent' : 'auth_invalid') : /Read-only file system|EROFS/i.test(text) ? 'execution_unavailable:read_only' : 'probe_failed', probedAt: stamp, ...(result.authOk ? { authOk: true } : {}) };
@@ -289,7 +291,7 @@ export async function notifyLaneStops(health, { home = laneHome(), now = Date.no
   const dir = path.join(home, '.claude');
   health.notifications = [];
   const notifiedFile = path.join(dir, 'lane-doctor-notified.json'), notified = readJson(notifiedFile);
-  for (const item of [...health.deadNeedsUser, ...Object.entries(health.lanes).filter(([p, s]) => isLane(p) && s.reason === 'billing').map(([provider]) => ({ provider, reason: 'billing' }))]) {
+  for (const item of [...health.deadNeedsUser, ...Object.entries(health.lanes).filter(([p, s]) => isLane(p) && s.reason === 'billing').map(([provider, state]) => ({ provider, reason: 'billing', error: state.error }))]) {
     if (item.reason === 'billing' ? String(notified[item.provider] || '').slice(0, 10) === new Date(now).toISOString().slice(0, 10) : now - time(notified[item.provider]) < 86400_000) { health.notifications.push({ provider: item.provider, delivered: 'deduped' }); continue; }
     // 送信前にdedupeを確保。永続化できない環境からは繰り返しDMを送らない。
     const before = notified[item.provider]; notified[item.provider] = new Date(now).toISOString();

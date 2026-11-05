@@ -13,24 +13,19 @@ function fixture(t, alerts = [{ id: 'mail-one', to: 'kim-PC', from: 'PC', kind: 
   const deps = { allowlist: [{ category: 'test', pattern: '.' }], home, token: 'test', stdout: x => outputs.push(x), stderr() {}, request: async (kind, payload) => { calls.push({ kind, payload }); return { ok: true, alerts: payload.notifiedIds ? [] : alerts }; }, postChannel: async (...args) => posts.push(args), notifyKim: async (...args) => { dms.push(args); return { delivered: 'dm' }; } };
   return { home, calls, posts, dms, outputs, deps };
 }
-test('watchdog reads alerts and confirms only after channel/DM delivery', async t => {
+test('watchdog keeps delivery evidence only in fleet-chase and confirms after persistence', async t => {
   const f = fixture(t); await main([], f.deps);
-  assert.deepEqual(f.calls, [{ kind: 'mail-alerts', payload: {} }, { kind: 'mail-alerts', payload: { notifiedIds: ['mail-one'] } }]);
-  assert.equal(f.posts[0][1], CHANNEL); assert.equal(f.dms[0][1].userId, KIM_USER_ID); assert.equal(f.dms[0][1].webhookFallback, false);
+  assert.equal(f.calls.length, 2); assert.equal(f.posts.length, 0); assert.equal(f.dms.length, 0);
+  const ledger = JSON.parse(fs.readFileSync(path.join(f.home, '.claude/fleet-chase/ledger.json')));
+  assert.equal(ledger.deliveryAlerts['mail-one'].kind, 'unseen');
 });
-test('server webhook delivered alerts are not duplicated', async t => {
+test('server-confirmed alerts are not duplicated', async t => {
   const f = fixture(t, [{ id: 'mail-one', notifiedCount: 1 }]); await main([], f.deps);
   assert.equal(f.posts.length, 0); assert.equal(f.dms.length, 0); assert.equal(f.calls.length, 1);
 });
-test('failed routes including delivered:none leave alerts pending', async t => {
-  const f = fixture(t); await main([], { ...f.deps, postChannel: async () => { throw new Error('offline'); }, notifyKim: async () => ({ delivered: 'none' }) });
+test('failed ledger write leaves alert pending', async t => {
+  const f = fixture(t); await main([], { ...f.deps, recordAlert: () => { throw Error('locked'); } });
   assert.equal(f.calls.length, 1);
-});
-test('successful DM alone confirms delivery', async t => {
-  const f = fixture(t); await main([], { ...f.deps, token: '' }); assert.equal(f.posts.length, 0); assert.equal(f.calls.length, 2);
-});
-test('successful channel alone confirms delivery', async t => {
-  const f = fixture(t); await main([], { ...f.deps, notifyKim: async () => { throw new Error('offline'); } }); assert.equal(f.calls.length, 2);
 });
 test('dry run reads only and logs counts without contents', async t => {
   const f = fixture(t); await main(['--dry-run', '--json'], f.deps); assert.equal(f.calls.length, 1); assert.equal(f.posts.length, 0); assert.equal(f.dms.length, 0); assert.equal(JSON.parse(f.outputs[0]).pending, 1); assert.doesNotMatch(f.outputs[0], /mail-one|確認/);
@@ -96,7 +91,7 @@ for (const mode of ['throw', 'negative']) test(`D7 watchdog isolates ${mode} ack
     return result;
   };
   await main(['--json'], f.deps);
-  assert.equal(f.posts.length, 2); assert.equal(f.dms.length, 2);
+  assert.equal(f.posts.length, 0); assert.equal(f.dms.length, 0);
   assert.deepEqual(f.calls.at(-1).payload.notifiedIds, ['mail-two']);
   assert.deepEqual(JSON.parse(f.outputs[0]), { total: 2, pending: 2, notified: 1, failed: 1 });
   assert.deepEqual(errors, ['fleet-mail-watchdog: 通知確認失敗=1']);
@@ -134,4 +129,51 @@ test('空の許可リストでは到着投稿せず台帳への配達を成功�
   assert.deepEqual(errors, ['fleet-mail: 到着通知は kim-inbox 方針で停止']);
   await main([], { ...f.deps, allowlist: [], notifyKim: async () => ({ delivered: 'session-inbox' }) });
   assert.equal(f.posts.length, 0); assert.equal(f.calls.length, 2);
+});
+
+test('watchdog drains spool even without fleet configuration and dry-run leaves it intact', async t => {
+  const { spoolItem, listItems } = await import('./kim-inbox.mjs');
+  const f = fixture(t);
+  fs.unlinkSync(path.join(f.home, '.claude/fleet-sheet.env'));
+  fs.writeFileSync(path.join(f.home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+  spoolItem(f.home, { text: 'watchdog で回収する進捗' });
+  await main(['--dry-run'], f.deps);
+  assert.equal(listItems(f.home).length, 0);
+  await main([], f.deps);
+  assert.equal(listItems(f.home).length, 1);
+});
+
+test('overlapping watchdog runs skip work and release their instance lock', async t => {
+  const f = fixture(t);
+  let finish, entered;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const first = main([], { ...f.deps, laneHealthWatch: async () => {
+    entered(); await new Promise(resolve => { finish = resolve; }); return { rows: [], notified: [] };
+  } });
+  await ready;
+  let ran = false;
+  assert.equal(await main([], { ...f.deps, laneHealthWatch: async () => { ran = true; return { rows: [], notified: [] }; } }), 0);
+  assert.equal(ran, false);
+  finish(); await first;
+  assert.equal(fs.existsSync(path.join(f.home, '.claude/fleet-mail-watchdog.lock')), false);
+});
+
+test('watchdog CLI deadline also terminates handles left alive after main completes', async t => {
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath, pathToFileURL } = await import('node:url');
+  const f = fixture(t);
+  fs.unlinkSync(path.join(f.home, '.claude/fleet-sheet.env'));
+  const preload = path.join(f.home, 'deadline-preload.mjs');
+  fs.writeFileSync(preload, `
+    const original = globalThis.setTimeout;
+    globalThis.setTimeout = (fn, ms, ...args) => original(fn, ms === 15 * 60_000 ? 100 : ms, ...args);
+    setInterval(() => {}, 1000);
+  `);
+  const result = spawnSync(process.execPath, ['--import', pathToFileURL(preload).href, fileURLToPath(new URL('./fleet-mail-watchdog.mjs', import.meta.url))], {
+    env: { ...process.env, ORGIAST_HOME: f.home }, encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /未設定=1/);
+  assert.match(result.stderr, /deadline exceeded=1/);
+  assert.equal(fs.existsSync(path.join(f.home, '.claude/fleet-mail-watchdog.lock')), false);
 });

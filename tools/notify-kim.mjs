@@ -8,7 +8,7 @@ import { isEntry } from './is-entry.mjs';
 import { toPlainJa } from './lib/plain-ja.mjs';
 import { classifyKimDm } from './lib/kim-dm-policy.mjs';
 import { redactSecrets } from './webhook-health.mjs';
-import { addItem } from './kim-inbox.mjs';
+import { addItem, spoolItem, isInboxNoise } from './kim-inbox.mjs';
 import { discordAllowed } from './lib/kim-discord-allowlist.mjs';
 import { annotateAccounts } from './url-account-gate.mjs';
 
@@ -76,7 +76,7 @@ const normalizeFailure = text => String(text).replace(/\d{4}-\d{2}-\d{2}(?:[T ][
 
 // Use the existing next-session TODO consumer; no separate repair queue.
 export async function notifyKim(text, options = {}) {
-  if (options.source === 'case-progress-digest') return deliverKim(text, { ...options, plainJa: false });
+  if (isInboxNoise({ ...options, text: String(text ?? '') })) return { delivered: 'suppressed', reason: 'fleet-ledger-or-gate-statistics' };
   if (options.kimActionRequired !== true) {
     const policy = classifyKimDm(text);
     if (!policy.allowed) {
@@ -159,7 +159,7 @@ export async function notifyKim(text, options = {}) {
       suffix = '\n' + ['原因', '対処'].map(label => raw.split('\n').find(line => line.startsWith(label + ':') || line.startsWith(label + '：')).slice(0, 400)).join('\n');
     }
     const result = await deliverKim(body, { ...options, suffix, allowHumanRequest: humanEvidence });
-    if (['dm', 'session-inbox'].includes(result.delivered) || result.delivered === 'webhook') {
+    if (['dm', 'session-inbox', 'spooled'].includes(result.delivered) || result.delivered === 'webhook') {
       const temp = `${stateFile}.${process.pid}.tmp`;
       fs.writeFileSync(temp, JSON.stringify({ sentAt: now })); fs.renameSync(temp, stateFile);
     }
@@ -188,6 +188,18 @@ function benignQuotaSweepReport(text) {
   return QUOTA_SWEEP_BENIGN.has(outcome);
 }
 
+async function persistKim(home, options) {
+  try {
+    const item = await addItem(home, options);
+    return { delivered: 'session-inbox', id: item.id, kind: item.kind };
+  } catch (error) {
+    try { return spoolItem(home, options); }
+    catch (spoolError) {
+      return { delivered: 'none', reason: `kim-inbox: ${redactSecrets(error.message)}; spool: ${redactSecrets(spoolError.message)}` };
+    }
+  }
+}
+
 export async function deliverKim(text, {
   home = process.env.ORGIAST_HOME || os.homedir(),
   userId,
@@ -201,8 +213,9 @@ export async function deliverKim(text, {
   plainJaImpl = toPlainJa,
   suffix = '',
   allowHumanRequest = false,
-  kind = 'info', source = '', allowlist, repoRoot, deliveryKey,
+  kind = 'info', source = '', allowlist, repoRoot,
 } = {}) {
+  if (isInboxNoise({ kind, source, text: String(text ?? '') })) return { delivered: 'suppressed', reason: 'fleet-ledger-or-gate-statistics' };
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
     || readTrimmed(path.join(home, '.claude', 'orgiast-discord-user-id.txt'))
     || KIM_DISCORD_USER_ID);
@@ -210,11 +223,14 @@ export async function deliverKim(text, {
   // kim 宛の全通知を、システムを知らない人でも読める日本語にしてから送る。
   // 失敗しても送信は止めない(plainJaImpl は例外を投げない契約)。
   // 平易化の書き換えでアカウント表記が落ちることがあるため、書き換え後の本文で補う。
-  const translated = source === 'case-progress-digest' ? text : annotateAccounts(plainJa ? await plainJaImpl(String(text ?? '')) : text);
+  const translated = annotateAccounts(plainJa ? await plainJaImpl(String(text ?? '')) : text);
   const body = suffix && !allowHumanRequest && kind !== 'ask' ? String(translated).split('\n').filter(line => !HANDOFF.test(line)).join('\n') : translated;
-  if (source === 'case-progress-digest' || ((userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID) && !discordAllowed(String(body) + suffix, { home, allowlist, repoRoot }).allowed)) {
-    const item = await addItem(home, { kind, text: String(body) + suffix, source, signal, deliveryKey });
-    return { delivered: item.forwardError ? 'none' : 'session-inbox', id: item.id, kind: item.kind, status: item.status, reason: item.forwardError || undefined };
+  // 許可判定は平易化前の原文でも行う。平易化（LLM 書き換え）で「【… の自動進行】」等の見出しが変わり、
+  // 許可リストに合わなくなって定期ダイジェストが kim-inbox に落ちた（2026-11-04 実測）。
+  const allowedForKim = discordAllowed(String(text ?? '') + suffix, { home, allowlist, repoRoot }).allowed
+    || discordAllowed(String(body) + suffix, { home, allowlist, repoRoot }).allowed;
+  if ((userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID) && !allowedForKim) {
+    return persistKim(home, { kind, text: String(body) + suffix, source, signal });
   }
   const content = suffix ? String(body).slice(0, Math.max(0, MAX_CONTENT - suffix.length)) + suffix : clipDiscordContent(body);
   let dmReason = '';
@@ -257,9 +273,15 @@ export async function deliverKim(text, {
       } catch (error) {
         const webhookReason = redactSecrets(error?.message ?? error);
         console.error(`notify-kim: DM/webhook のどちらにも送れません (${dmReason}; ${webhookReason})`);
-        return { delivered: 'none', reason: `${dmReason}; ${webhookReason}` };
+        // フォールスルーして kim-inbox へ保存
+        dmReason = `${dmReason}; ${webhookReason}`;
       }
     }
+  }
+  // Discord/webhook が使えない kim 宛通知は kim-inbox に保存する（2026-11-04）
+  // これにより Discord Bot トークンが無い PC でも通知が失われない。
+  if (resolvedUserId === KIM_DISCORD_USER_ID || String(userId) === KIM_DISCORD_USER_ID) {
+    return persistKim(home, { kind, text: String(body) + suffix, source, signal });
   }
   console.error(`notify-kim: 通知先を解決できず送信しません (${dmReason})`);
   return { delivered: 'none', reason: dmReason };
@@ -275,7 +297,7 @@ export async function main(args = process.argv.slice(2), options = {}) {
   if (options.kind && !['ask', 'info'].includes(options.kind)) throw new Error('kind は ask または info');
   const result = await notifyKim(words.join(' '), { ...options, kimActionRequired });
   console.log(JSON.stringify(result));
-  return result.delivered === 'blocked' ? 3 : 0;
+  return result.delivered === 'blocked' ? 3 : result.delivered === 'none' ? 1 : 0;
 }
 
 if (isEntry(import.meta.url)) process.exitCode = await main();

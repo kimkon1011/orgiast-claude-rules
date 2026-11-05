@@ -7,10 +7,10 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { readContract, toolsDir } from './gate-contracts.mjs';
 import { rolloutMode, applyGatePolicy } from './gate-runtime.mjs';
 
-export async function runHook(script, raw, { args = [], timeout = 30000, env = process.env, policyOptions = {} } = {}) {
+export async function runHook(script, raw, { args = [], timeout = 30000, env = process.env, policyOptions = {}, executeImpl } = {}) {
   const file = path.resolve(script);
-  const execute = () => spawnSync(process.execPath, [file, ...args], { input: raw, encoding: 'utf8', env, timeout, windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
-  let child = execute();
+  const execute = executeImpl || (() => spawnSync(process.execPath, [file, ...args], { input: raw, encoding: 'utf8', env, timeout, windowsHide: true, maxBuffer: 4 * 1024 * 1024 }));
+  let child = await execute();
   const parse = output => {
     for (const line of String(output).trim().split(/\r?\n/).reverse()) { try { return JSON.parse(line); } catch {} }
     return null;
@@ -27,18 +27,21 @@ export async function runHook(script, raw, { args = [], timeout = 30000, env = p
   if (!contract && result.decision === 'warn') return child;
   const transformed = await applyGatePolicy(contract, result, {
     ...policyOptions, name: path.basename(file, '.mjs'),
-    retry: () => { child = execute(); payload = parse(child.stdout); return child.status === 2 ? { decision: 'block', reason: child.stderr } : normalize(payload); },
+    retry: async () => { child = await execute(); payload = parse(child.stdout); return child.status === 2 ? { decision: 'block', reason: child.stderr } : normalize(payload); },
   });
   if (!['block', 'warn'].includes(transformed?.decision)) return child;
   let input = {}; try { input = JSON.parse(raw); } catch {}
   const pre = input.hook_event_name === 'PreToolUse' || payload?.hookSpecificOutput?.hookEventName === 'PreToolUse' || Boolean(input.tool_name);
+  const context = payload?.hookSpecificOutput?.additionalContext;
+  const systemMessage = payload?.systemMessage;
   if (transformed.decision === 'block') {
-    payload = pre ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: transformed.reason } } : { decision: 'block', reason: transformed.reason };
+    payload = pre ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: transformed.reason, ...(context ? { additionalContext: context } : {}) } } : { decision: 'block', reason: transformed.reason };
   } else {
     const reason = `[gate warn: ${contract?.name || path.basename(file)}] ${transformed.reason}`;
     // Stop does not accept additionalContext: systemMessage is user-visible and non-blocking.
-    payload = pre ? { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: reason } } : { systemMessage: reason };
+    payload = pre ? { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: [context, reason].filter(Boolean).join('\n') } } : { systemMessage: [systemMessage, reason].filter(Boolean).join('\n') };
   }
+  if (systemMessage && (pre || transformed.decision === 'block')) payload.systemMessage = systemMessage;
   return { ...child, status: 0, stdout: JSON.stringify(payload) + '\n' };
 }
 export function wrapRegisteredGates(settings, repo) {
@@ -55,7 +58,7 @@ export function wrapRegisteredGates(settings, repo) {
     const script = path.basename(match[1].replace(/\\/g, '/'));
     // Billing and execution-tree edit policies are immediate, never downgraded by rollout.
     // case-handoff persists a queue; it is an observer, not a decision gate.
-    if (['stop-gate-runner.mjs', 'fleet-question-relay.mjs', 'case-handoff.mjs', 'api-billing-guard.mjs', 'exec-tree-edit-guard.mjs'].includes(script) || !fs.existsSync(path.join(repo, 'tools', script))) continue;
+    if (['hook-dispatch.mjs', 'stop-gate-runner.mjs', 'fleet-question-relay.mjs', 'case-handoff.mjs', 'api-billing-guard.mjs', 'exec-tree-edit-guard.mjs'].includes(script) || !fs.existsSync(path.join(repo, 'tools', script))) continue;
     // Migrate stale paths as well as new installations. Leave unrelated hooks alone.
     if (path.resolve(match[1]) !== path.resolve(repo, 'tools', script) && !readContract(path.join(repo, 'tools', script))) continue;
     hook.command = `node "${path.join(repo, 'tools', 'gate-hook-runner.mjs')}" "${path.join(repo, 'tools', script)}"${match[2]}`;

@@ -33,3 +33,9 @@ UserPromptSubmit / SessionStart は案件一覧の1日キャッシュを使い�
 2026-10-29の実測: 260430EIGは保存済み172,506 bytesとキュー172,504 bytesの差が先頭の改行2個だけで、伏字は同一。同じbridge-sessionレコードが327回あり、UUIDなし行の内容hashをcursorにしたためfindIndexが先頭の同一行へ戻っていた。新cursorは内容hash＋出現番号で一意にし、旧cursorは最初の一致から安全に再送する。開始位置を含まない旧batchIdと空レコードの改行化が409を発生させ、drainの即時中断がC0039も滞留させていた。C0039は案件一覧Sheetの「案件一覧」タブの「医療法人阡周会様／病院の外壁イルミネーション装飾・施工依頼 / 近畿（大阪）」とセッション内容が一致し、個別送信は成功。キューの案件変更・破棄は不要。
 
 kim-PC の `bind` は案件を `~/.claude/state/case-watch.json` に自動追加し、`case-handoff.mjs watch <ID>` / `unwatch <ID>` で明示追加・解除できる。初回は直近30日に更新されたローカル binding を取り込み、STATE の開催日・実施日・終了日・会期から14日を過ぎた案件は解除する（年なし日付は登録年を基準に年越しを補正）。既存の朝夕 digest が同じ resume 取得処理でハブの STATE/LOG を読み、決定事項の差分、未完了の先頭3件、kim の判断待ち、最終更新の席・時刻、24時間以上 LOG がない停滞を最大6行で通知する。変化なしは1行、照会失敗は案件単位で理由を載せる。配信は既存の notifyOwner を使い、送信に成功した案件の配信点だけ auto-progress-digest.json に保存するため、失敗・再試行で決定事項を取り落とさない。既存PCも通常のrepo同期と既設の朝夕digest実行で有効になり、新規タスク登録は不要。
+
+## 案件進捗の定期回収（2026-11-04）
+
+案件を bind した全席で watch を登録する。既存の OrgiastAutoProgressDigest（08:40）と OrgiastAutoProgressWatch（毎時、朝夕枠で digest）から、kim 操作アカウント・fleet 自己申告の席も案件カタログを照合し、STATE/LOG を確認する。登録・配布は既存 register-auto-progress-task.ps1 / setup --converge を使い、追加の手作業は不要。
+
+進捗は案件別の info、承認待ちは案件別の ask。各項目の先頭に案件ID・案件名を付け、平易化せず kim-inbox へ送る。案件名を取得できない時は「案件名未登録」と明示する。STATE の変化がなくても承認待ちを朝夕の各枠で再提示し、開催日から14日を過ぎても承認待ちがあれば watch を残す。転送失敗・途中失敗では配達チェックポイントを進めず、再送する。保存・hub転送とセッション提示は別で、提示の確認は shownCount に記録する。Discord・新サービス・追加の LLM 呼び出しは使わない。

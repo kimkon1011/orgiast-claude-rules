@@ -10,7 +10,7 @@ const now = Date.parse('2026-11-02T10:00:00Z');
 const row = (id, extra = {}) => ({ ts: new Date(now - 1000).toISOString(), sessionId: id, owner: 'kim@orgiast.jp', status: 'open', label: `作業${id}`, promise: '調査を続ける', nextKim: 'なし', nextClaude: '修正を検証する', ...extra });
 function fixture(t, rows) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'session-digest-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  return { home, now, io: { label: 'kim-PC', readLedger: () => rows } };
+  return { home, now, io: { label: 'kim-PC', fetchCaseCatalog: async () => [], readLedger: () => rows } };
 }
 test('at most five one-line items with next actor/action and priority', t => {
   const f = fixture(t, Array.from({ length: 9 }, (_, n) => row(String(n), { deadlineAt: new Date(now + (n - 2) * 3600000).toISOString() })));

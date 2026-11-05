@@ -26,9 +26,9 @@ test('unattended sessions block edits and nonrepair shell; reads pass', t => {
   for (const name of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash', 'PowerShell']) assert.equal(evaluateRepairFirst(input(name, 'npm test'), { home, now }).decision, 'block', name);
   for (const name of ['Read', 'Grep', 'Glob']) assert.equal(evaluateRepairFirst(input(name), { home, now }).decision, 'pass');
 });
-test('log unlocks same fault for six hours; future, expired and unrelated records cannot', async t => {
+test('fixed log unlocks same fault for six hours; future, expired and unrelated records cannot', async t => {
   const { home } = fixture(t);
-  await recordRepair({ home, lane: 'deepseek', tried: 'key and direct API checked: HTTP 500', result: 'unfixable', now });
+  await recordRepair({ home, lane: 'deepseek', tried: 'key and direct API checked: recovered', result: 'fixed', now });
   assert.equal(evaluateRepairFirst(input('Edit'), { home, now }).decision, 'pass');
   assert.equal(evaluateRepairFirst(input('Edit'), { home, now: now + REPAIR_TTL }).decision, 'block');
   assert.equal(evaluateRepairFirst(input('Edit'), { home, now: now - 1 }).decision, 'block');
@@ -47,7 +47,7 @@ test('diagnostic invocations pass; compound and disguised writes block', () => {
   for (const cmd of ['node tools/lane-doctor.mjs; touch x', 'node tools/lane-doctor.mjs && npm install', 'echo lane-doctor.mjs', 'node /tmp/lane-doctor.mjs', 'node tools/lane-doctor.mjs > x', 'git push', 'git diff --output=x', 'wsl -- bash -c "touch x"', 'gh pr create', 'node -e "writeFiles()"', 'node tools/lane-doctor.mjs $(touch x)', 'node tools/lane-doctor.mjs @(Remove-Item x)', 'git log --out=x', 'git diff --textconv', '& "C:\\\\Program Files\\\\nodejs\\\\node.exe" /tmp/lane-doctor.mjs', '&& node tools/lane-doctor.mjs --probe', '& "C:\\\\Program Files\\\\nodejs\\\\node.exe" tools/lane-doctor.mjs && rm -rf X', '& node tools/lane-doctor.mjs & rm -rf X']) assert.equal(repairCommand(cmd), false, cmd);
 });
 test('notify once at three consecutive unfixable attempts; fixed resets episode', async t => {
-  const { home } = fixture(t); let notifications = 0;
+  const { home } = fixture(t, { alive: false, reason: 'dead:oauth_consent' }); let notifications = 0;
   const notify = async () => { notifications++; return { delivered: 'test' }; };
   for (let i = 0; i < 5; i++) await recordRepair({ home, lane: 'deepseek', tried: `attempt ${i}`, result: 'unfixable', now: now + i, notify });
   assert.equal(notifications, 1);
@@ -76,8 +76,33 @@ test('invalid repair records fail without exemption', async t => {
   assert.equal(evaluateRepairFirst(input('Edit'), { home, now }).decision, 'block');
 });
 
+test('unfixable accepts only human/time-only reasons and records fallback and kim notification', async t => {
+  for (const reason of ['billing', 'dead:oauth_consent', 'dead:physical_operation', 'quota_wait']) {
+    const { home, health } = fixture(t, { alive: false, reason });
+    health.substituted = [{ provider: 'deepseek', via: 'openrouter' }];
+    health.notifications = [{ provider: 'deepseek', delivered: 'dm' }];
+    fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify(health));
+    const row = await recordRepair({ home, lane: 'deepseek', tried: 'classified and fallback checked', result: 'unfixable', now });
+    assert.deepEqual(row.alternative.substituted, { provider: 'deepseek', via: 'openrouter' });
+    assert.equal(row.kimNotified, true);
+  }
+  for (const reason of ['real_fail_rate', 'probe_failed', 'auth_invalid', 'unknown_reason']) {
+    const { home } = fixture(t, { alive: false, reason });
+    await assert.rejects(recordRepair({ home, lane: 'deepseek', tried: 'checked', result: 'unfixable', now }), /原因が未分類/);
+  }
+});
+
+test('gemini-cli emitted by the gate can be recorded', async t => {
+  const { home } = fixture(t);
+  const health = { lanes: { 'gemini-cli': { alive: false, reason: 'probe_failed', error: 'launch failed' } } };
+  fs.writeFileSync(path.join(home, '.claude/lane-health.json'), JSON.stringify(health));
+  assert.equal(evaluateRepairFirst(input('Edit'), { home, now }).decision, 'block');
+  const row = await recordRepair({ home, lane: 'gemini-cli', tried: 'CLI reinstalled and probe recovered', result: 'fixed', now });
+  assert.equal(row.lane, 'gemini-cli');
+});
+
 test('stale writer lock is recovered, active writer lock prevents duplicate records', async t => {
-  const { home } = fixture(t), lock = path.join(home, '.claude/lane-repair-log.lock');
+  const { home } = fixture(t, { alive: false, reason: 'dead:physical_operation' }), lock = path.join(home, '.claude/lane-repair-log.lock');
   fs.writeFileSync(lock, '');
   await assert.rejects(recordRepair({ home, lane: 'deepseek', tried: 'check', result: 'unfixable' }), { code: 'EEXIST' });
   const old = new Date(Date.now() - 120000); fs.utimesSync(lock, old, old);

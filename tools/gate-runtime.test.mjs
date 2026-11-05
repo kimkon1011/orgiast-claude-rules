@@ -1,3 +1,4 @@
+import { readHookSettings } from './fixtures/read-hook-settings.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -65,7 +66,7 @@ test('new and existing registration migrate to wrapper idempotently, unrelated h
   if(existing) fs.writeFileSync(file,JSON.stringify({hooks:{PreToolUse:[{matcher:'Bash|PowerShell',hooks:[{type:'command',command:'node "C:/old/tools/feedback-form-gate.mjs"',timeout:10}]}]}}));
   const run=()=>spawnSync(process.execPath,[path.join(toolsDir,'register-hooks.mjs'),'--hooks-only'],{env:{...process.env,ORGIAST_HOME:home,ORGIAST_REPO:repoDir},encoding:'utf8'});
   assert.equal(run().status,0);const before=fs.readFileSync(file,'utf8');assert.equal(run().status,0);assert.equal(fs.readFileSync(file,'utf8'),before);
-  const settings=JSON.parse(before);const hook=settings.hooks.PreToolUse.flatMap(g=>g.hooks).find(h=>h.command.includes('feedback-form-gate.mjs'));
+  const settings=readHookSettings(file);const hook=settings.hooks.PreToolUse.flatMap(g=>g.hooks).find(h=>h.command.includes('feedback-form-gate.mjs'));
   assert.match(hook.command,/gate-hook-runner\.mjs/);assert.ok(hook.command.includes(toolsDir));
  }
  const custom={hooks:{Stop:[{hooks:[{type:'command',command:'node "/unrelated/custom.mjs"'}]}]}};

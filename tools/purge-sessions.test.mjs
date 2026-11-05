@@ -1,3 +1,4 @@
+import { readHookSettings } from './fixtures/read-hook-settings.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -171,7 +172,7 @@ test('setup converge repairs both events on existing PCs and remains idempotent'
   const run=()=>{const r=spawnSync(process.execPath,args,{env:f.env,encoding:'utf8',timeout:30_000});assert.equal(r.status,0,r.stderr+r.stdout);return JSON.parse(r.stdout);};
   run();
   const settingsFile=path.join(f.base,'settings.json');
-  const settings=JSON.parse(fs.readFileSync(settingsFile));
+  const settings=readHookSettings(settingsFile);
   for(const event of ['SessionStart','Stop']) {
     const hooks=settings.hooks[event].flatMap(x=>x.hooks).filter(x=>x.command.includes('purge-sessions.mjs'));
     assert.equal(hooks.length,1); assert.ok(hooks[0].command.includes(path.join(dir,'purge-sessions.mjs'))); assert.ok(hooks[0].command.endsWith(' --hook'));
@@ -183,7 +184,7 @@ test('setup converge repairs both events on existing PCs and remains idempotent'
   settings.hooks.Stop=settings.hooks.Stop.filter(x=>!x.hooks.some(h=>h.command.includes('purge-sessions')));
   fs.writeFileSync(settingsFile,JSON.stringify(settings));
   assert.ok(run().items.every(x=>x.status === 'OK'));
-  assert.ok(JSON.parse(fs.readFileSync(settingsFile)).hooks.Stop.some(x=>x.hooks.some(h=>h.command.includes('purge-sessions.mjs'))));
+  assert.ok(readHookSettings(settingsFile).hooks.Stop.some(x=>x.hooks.some(h=>h.command.includes('purge-sessions.mjs'))));
 });
 test('dry-run pagination is read-only and reaches every file beyond the cap', t => {
   const f=fixture(t);

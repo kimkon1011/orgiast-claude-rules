@@ -1,0 +1,592 @@
+{
+  "version": 1,
+  "events": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/case-handoff.mjs\" hook",
+        "timeout": 60
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/onboarding-sync.mjs\"",
+        "timeout": 300,
+        "async": true
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/fleet-convergence-sync.mjs\"",
+        "timeout": 360,
+        "async": true
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/setup.mjs\" --converge",
+        "timeout": 1200,
+        "async": true
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/claude-cost-reporter.mjs\"",
+        "timeout": 15,
+        "async": true
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/tool-adoption-check.mjs\" --fix",
+        "timeout": 60,
+        "async": true
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/cost-loop.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/sessionstart-lane-health.mjs\" --hook",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/hook-selfcheck.mjs\"",
+        "timeout": 10
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/hook-budget-check.mjs\"",
+        "timeout": 10
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/makimono-host-detect.mjs\"",
+        "timeout": 10
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/session-purpose-gate.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/session-claim-collision.mjs\"",
+        "timeout": 10
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/api-billing-guard.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/fable-session-guard.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/purge-sessions.mjs\" --hook",
+        "timeout": 5,
+        "async": true
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/session-relaunch.mjs\" --hook",
+        "timeout": 10
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/kim-inbox.mjs\" --context",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/fleet-inbox-context.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/owner-inbox-hook.mjs\"",
+        "timeout": 10
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/auto-progress-inbox-hook.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/kim-awaiting-context.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/daytrip-ask-hook.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/fleet-chase-context.mjs\"",
+        "timeout": 5,
+        "scope": "kim-only"
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/session-wait-title.mjs\" --all",
+        "timeout": 30
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/case-handoff.mjs\" hook",
+        "timeout": 60
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/session-purpose-gate.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/session-claim-collision.mjs\"",
+        "timeout": 10
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/api-billing-guard.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/claude-impl-approval.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/fable-session-guard.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/plan-usage-report.mjs\" --hook",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/current-session.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/x-url-route-hint.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/inquiry-lookup-hint.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/playbook-inject.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/cost-routing-gate.mjs\""
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/expensive-session-guard.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/makimono-gate.mjs\"",
+        "timeout": 6
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/automation-first-reminder.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/intake-two-axes-hook.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/kim-inbox.mjs\" --context",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/fleet-inbox-context.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/owner-inbox-hook.mjs\"",
+        "timeout": 10
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/auto-progress-inbox-hook.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/kim-awaiting-context.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/daytrip-ask-hook.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/fleet-chase-context.mjs\"",
+        "timeout": 5,
+        "scope": "kim-only"
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/credentials-reminder.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/hooks/discord-drafts-context.mjs\"",
+        "timeout": 5,
+        "scope": "kim-only"
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/session-wait-title.mjs\" --prompt-submit",
+        "timeout": 8
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell|Edit|Write|MultiEdit",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/session-claim-collision.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/api-billing-guard.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "type": "command",
+        "command": "node \"${repo}/tools/fleet-question-relay.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/pretooluse-delegation-warn.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/cmd-ascii-guard.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/app-llm-cost-gate.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/pretooluse-bash-delegation.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "Bash|PowerShell|Edit|Write|MultiEdit",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/pretooluse-lane-guard.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/lane-repair-first-gate.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/pretooluse-codex-invocation.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "Agent|Task",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/model-agent-guard.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|update_draft|reply|forward)|Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/internal-recipient-gmail-guard.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "mcp__claude_ai_Gmail.*__(create_draft|update_draft|send_message|reply|forward)",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/mail-draft-account-gate.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "mcp__claude_ai_Discord[^|]*__(send_dm|send_message|reply_message)|Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/kim-discord-report-gate.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "mcp__claude_ai_Discord[^|]*__(send_dm|send_message|reply_message)|mcp__claude_ai_Gmail(?:_\\d+)?__(send_message|create_draft|reply|forward|update_draft)|Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/share-before-send-gate.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "mcp__claude_ai_Gmail(?:_\\d+)?__(send_message|create_draft|reply|forward|update_draft)|Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/recipient-domain-gate.mjs\"",
+        "timeout": 30
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/mail-consistency-gate.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/outbound-claim-evidence-gate.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|update_draft|send_message|reply|forward)|Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/live-artifact-read-gate.mjs\"",
+        "timeout": 35
+      },
+      {
+        "matcher": "mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|update_draft|send_message|reply|forward)",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/gmail-connector-url-gate.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "Bash|PowerShell|ScheduleWakeup",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/pretooluse-headless-background.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "Bash|PowerShell|Write|Edit|MultiEdit",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/pretooluse-line-broadcast-guard.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "type": "command",
+        "command": "node \"${repo}/tools/exec-tree-edit-guard.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/pretooluse-serial-investigation.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "Bash",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/pipe-stage-permissions.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/feedback-form-gate.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "mcp__.*Google_Sheets__(update_values|append_values|update_formulas|batch_clear_values|update_spreadsheet|batch_update)$|Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/bihin-kcol-gate.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/handover-doc-gate.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/askuser-selfcheck-gate.mjs\"",
+        "timeout": 15
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__gemini-cli__(?:ask-gemini|geminiChat|googleSearch)",
+        "type": "command",
+        "command": "node \"${repo}/tools/gemini-mcp-usage-hook.mjs\"",
+        "timeout": 10
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/case-handoff.mjs\" hook",
+        "timeout": 60
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/stop-gate-runner.mjs\"",
+        "timeout": 30
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/purge-sessions.mjs\" --hook",
+        "timeout": 5,
+        "async": true
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/fleet-question-relay.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/verify-before-done-detector.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/auto-progress-ledger.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/session-wait-title.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/handoff-detail-guard.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/seat-name-gate.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/url-format-guard.mjs\"",
+        "timeout": 15
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/check-e2e-before-stop.mjs\"",
+        "timeout": 15
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/case-handoff.mjs\" hook",
+        "timeout": 60
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/fleet-question-relay.mjs\"",
+        "timeout": 5
+      }
+    ]
+  }
+}

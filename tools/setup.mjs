@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { distributePlaybooks } from './lib/playbook-distribution.mjs';
 import fs from 'node:fs';
+import { effectiveHooks, runtimeManifestPath, dispatcherProblems } from './hook-dispatch-registry.mjs';
 import os from 'node:os';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import path from 'node:path';
@@ -109,14 +110,20 @@ function check(item) {
       return candidates.some((target) => readNonempty(target, spec.kind));
     }
     if (item.type === 'file-contains') {
-      const raw = fs.readFileSync(resolveHome(spec.path), 'utf8');
+      let raw = fs.readFileSync(resolveHome(spec.path), 'utf8');
+      if (spec.path === '.claude/settings.json') {
+        const settings = JSON.parse(raw.replace(/^\uFEFF/, ''));
+        try { raw += JSON.stringify(effectiveHooks(settings, JSON.parse(fs.readFileSync(runtimeManifestPath(home), 'utf8')))); } catch {}
+      }
       return spec.regex ? new RegExp(spec.regex).test(raw) : raw.includes(spec.contains);
     }
     if (item.type === 'json-valid') {
       const raw = fs.readFileSync(resolveHome(spec.path), 'utf8');
       if (spec.bom === false && raw.startsWith('\uFEFF')) return false;
       const parsed = JSON.parse(raw);
+      if (spec.dispatchers) return dispatcherProblems(parsed, path.dirname(scriptDir)).length === 0 && fs.existsSync(runtimeManifestPath(home));
       if (spec.hookEvent) {
+        try { parsed.hooks = effectiveHooks(parsed, JSON.parse(fs.readFileSync(runtimeManifestPath(home), 'utf8'))); } catch {}
         const hooks = parsed.hooks?.[spec.hookEvent]?.flatMap(group => group.hooks || []) || [];
         const knownToolsDirs = [
           path.join(home, 'orgiast-claude-rules', 'tools'),

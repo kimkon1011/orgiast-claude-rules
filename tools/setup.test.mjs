@@ -1,3 +1,4 @@
+import { readHookSettings } from './fixtures/read-hook-settings.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -137,7 +138,7 @@ test('converge実経路がhook登録・旧通知削除・allow反映を行い再
   const args = ['--converge', '--json', '--home', home, '--manifest', mf];
   const first = run(args);
   assert.equal(first.status, 0, first.stdout + first.stderr);
-  const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const settings = readHookSettings(file);
   assert(settings.permissions.allow.includes('Bash(gh pr:*)'));
   assert(settings.permissions.allow.includes('Bash(custom:*)'));
   assert(settings.permissions.deny.includes('Bash(git push -f*)'));
@@ -150,7 +151,7 @@ test('converge実経路がhook登録・旧通知削除・allow反映を行い再
   assert.match(hooks, /custom\.mjs/);
   assert.match(hooks, /setup\.mjs.*--converge/);
   assert.equal(run(args).status, 0);
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), settings);
+  assert.deepEqual(readHookSettings(file), settings);
 });
 
 test('fleet mail scheduled task is skipped until its transport config exists', () => {
@@ -309,7 +310,7 @@ test('E task:fleet-mail converge adds hub configuration even with the v2 migrati
   const result = run(['--converge', '--json', '--home', home, '--manifest', mf]);
   assert.equal(result.status, 0);
   assert.match(fs.readFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'utf8'), /FLEET_HUB=kim-PC/);
-  const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
+  const settings = readHookSettings(path.join(home, '.claude', 'settings.json'));
   assert.ok(settings.hooks.Stop.some(g => g.hooks.some(h => h.command.includes('fleet-question-relay.mjs') && h.timeout === 5)));
 });
 

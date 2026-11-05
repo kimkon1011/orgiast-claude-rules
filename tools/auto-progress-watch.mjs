@@ -714,6 +714,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   const rows = readLedger(file);
   await registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io, persist);
   let candidates = latestOpenPromises(rows);
+  // check 付き行は sessionId + label ごとに1件選ばれるため、別 label の自動チェックはすべて残る。
   const selected = new Set(candidates);
   const migratedSourceKeys = new Set(rows.flatMap(row => [row.migratedFromTimeOnlyCheck, row.migratedFromLegacyAddCheck]).filter(Boolean));
   const pendingChecks = rows.filter(row => row.check && row.status === 'done' && row.checkResult === 'done' &&

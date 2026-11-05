@@ -460,6 +460,28 @@ test('定期ターン中でもcheckが達成なら従来どおりdoneにする',
   assert.equal(readLedger(ledgerFile(f.home))[0].status, 'done');
 });
 
+test('同一セッションの異なる label の check を両方評価する', async t => {
+  const home = progressHome('multi-check-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'kim@orgiast.jp' } }));
+  const now = Date.parse('2026-10-29T11:00:00.000Z');
+  const base = { pc: 'test-pc', user: 'test', owner: 'kim@orgiast.jp', sessionId: 'session-1', cwd: home,
+    promise: '機器設定を確認する', status: 'open', check: 'mock check', deadlineAt: new Date(now + 3600000).toISOString() };
+  writeLedger(ledgerFile(home), [
+    { ...base, label: 'NVIDIAドライバー582.78更新', ts: '2026-10-29T10:00:00.000Z' },
+    { ...base, label: 'HDMIダミープラグ取り付け', ts: '2026-10-29T10:00:02.000Z' },
+  ]);
+  const evaluated = [];
+  const summary = await run({ home, now, io: {
+    clock: () => now, transcriptFiles: [], sheetConfig: () => null,
+    executeCheck: row => { evaluated.push(row.label); return { code: 1, text: '未達成' }; },
+    digest: async () => ({}), escalateKimDecisions: async () => ({}),
+  } });
+  assert.deepEqual(evaluated, ['NVIDIAドライバー582.78更新', 'HDMIダミープラグ取り付け']);
+  assert.equal(summary.checked, 2);
+  assert.deepEqual(readLedger(ledgerFile(home)).map(row => row.status), ['open', 'open']);
+});
+
 test('レシート済み完了は legacy add-check 移行で復活させない', () => {
   const base = { pc: 'PC1', user: 'user', sessionId: 's-receipt', ts: '2026-11-05T10:00:00.000Z',
     status: 'done', check: 'node check.mjs', nextClaude: 'x' };

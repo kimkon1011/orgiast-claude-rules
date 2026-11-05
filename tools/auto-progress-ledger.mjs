@@ -120,19 +120,24 @@ export function latestOpenPromises(rows) {
   const active = rows.filter(row => OPEN_STATUSES.has(row.status));
   for (const row of active) {
     if (!row.sessionId) continue;
-    const previous = latest.get(row.sessionId);
-    if (!previous || (Date.parse(row.ts) || 0) >= (Date.parse(previous.ts) || 0)) latest.set(row.sessionId, row);
+    const key = row.check ? `${row.sessionId}\0${row.label ?? ''}` : row.sessionId;
+    const previous = latest.get(key);
+    if (!previous || (Date.parse(row.ts) || 0) >= (Date.parse(previous.ts) || 0)) latest.set(key, row);
   }
-  return active.filter(row => !row.sessionId || latest.get(row.sessionId) === row);
+  return active.filter(row => {
+    if (!row.sessionId) return true;
+    const key = row.check ? `${row.sessionId}\0${row.label ?? ''}` : row.sessionId;
+    return latest.get(key) === row;
+  });
 }
 
-// 同一 sessionId の open 行は最新で置換する（旧行は superseded）。resumed も「進行中の宣言」なので置換対象。
-// 同じ session に open の check 付き行があるときは、新しい約束行に check 情報を引き継ぐ。
+// 同一 sessionId の通常行、または同一 sessionId + label の check 行は最新で置換する。
+// 同じ session に開始予約の行があるときは、新しい約束行に予約・check 情報を引き継ぐ。
 export function applyPromise(rows, record) {
   let toAdd = record;
   if (!toAdd.check && !toAdd.startWhen && !toAdd.autoRegisteredCheck) {
     const existing = rows
-      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && (row.check || row.startWhen || row.autoRegisteredCheck === true))
+      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && row.startWhen)
       .sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0))[0];
     if (existing) {
       toAdd = {
@@ -151,7 +156,12 @@ export function applyPromise(rows, record) {
       };
     }
   }
-  const next = rows.map((row) => (row.sessionId === toAdd.sessionId && OPEN_STATUSES.has(row.status) ? { ...row, status: 'superseded' } : row));
+  const replaces = (row) => {
+    if (row.sessionId !== toAdd.sessionId || !OPEN_STATUSES.has(row.status)) return false;
+    if (row.check) return Boolean(toAdd.check) && row.label === toAdd.label;
+    return true;
+  };
+  const next = rows.map((row) => (replaces(row) ? { ...row, status: 'superseded' } : row));
   next.push(toAdd);
   return next;
 }

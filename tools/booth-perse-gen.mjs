@@ -9,9 +9,38 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
-const USAGE = '使い方: node tools/booth-perse-gen.mjs --brief <brief.txt> --plans <plans.json> --out <dir> [--ref <image> ...] [--blender-out <dir>] [--max-height <m>（会場の装飾高さ上限・既定3.6）]';
-const MODEL = 'openai/gpt-5.4-image-2';
+const USAGE = '使い方: node tools/booth-perse-gen.mjs --brief <brief.txt> --plans <plans.json> --out <dir> [--ref <image> ...] [--blender-out <dir>] [--max-height <m>] [--model <slug>] [--models <csv>]';
+const DEFAULT_MODELS = ['openai/gpt-5.4-image-2', 'openai/gpt-5-image', 'google/gemini-3-pro-image'];
 const DEFAULT_MAX_HEIGHT = 3.6;
+
+export function resolveModels(userModel, userModelsCsv) {
+  // --models で全候補上書き、--model で先頭に追加（重複除去）
+  let models = [...DEFAULT_MODELS];
+  if (userModelsCsv) {
+    models = userModelsCsv.split(',').map((s) => s.trim()).filter(Boolean);
+    if (models.length === 0) models = [...DEFAULT_MODELS];
+  }
+  if (userModel) {
+    models = [userModel, ...models.filter((m) => m !== userModel)];
+  }
+  return models;
+}
+
+export function extractImageUrl(j) {
+  // レスポンス JSON から画像 URL を取り出す（なければ null）
+  return j?.choices?.[0]?.message?.images?.[0]?.image_url?.url ?? null;
+}
+
+export function evaluateImageResponse(ok, status, body) {
+  if (!ok) {
+    return { ok: false, error: `HTTP ${status}: ${JSON.stringify(body).slice(0, 300)}` };
+  }
+  const imageUrl = extractImageUrl(body);
+  if (!imageUrl) {
+    return { ok: false, error: `画像が返らなかった（HTTP200 だが images が空）: ${JSON.stringify(body).slice(0, 300)}` };
+  }
+  return { ok: true, imageUrl, cost: body?.usage?.cost ?? null };
+}
 const BLENDER_PERSP_FILES = ['persp_front_left.png', 'persp_front_right.png'];
 
 function findBlenderRefs(dir) {
@@ -33,6 +62,8 @@ export function parseArgs(argv) {
     else if (a === '--ref') { opts.refs.push(v); i += 1; }
     else if (a === '--blender-out') { opts.blenderOut = v; i += 1; }
     else if (a === '--max-height') { opts.maxHeight = Number(v); i += 1; }
+    else if (a === '--model') { opts.model = v; i += 1; }
+    else if (a === '--models') { opts.models = v; i += 1; }
     else throw new Error(`unknown option: ${a}\n${USAGE}`);
   }
   for (const k of ['brief', 'plans', 'out']) if (!opts[k]) throw new Error(`--${k} is required\n${USAGE}`);
@@ -60,19 +91,32 @@ export function loadKey(home = homedir()) {
 const mime = (p) => (p.endsWith('.png') ? 'image/png' : p.endsWith('.webp') ? 'image/webp' : 'image/jpeg');
 const imagePart = (p) => ({ type: 'image_url', image_url: { url: `data:${mime(p)};base64,${readFileSync(p).toString('base64')}` } });
 
-async function generate({ key, text, refs, out }) {
-  const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: MODEL, modalities: ['image', 'text'], image_config: { aspect_ratio: '16:9' },
-      messages: [{ role: 'user', content: [{ type: 'text', text }, ...refs.map(imagePart)] }] }),
-  });
-  const j = await r.json();
-  if (!r.ok) throw new Error(`HTTP ${r.status} ${JSON.stringify(j).slice(0, 300)}`);
-  const url = j.choices?.[0]?.message?.images?.[0]?.image_url?.url;
-  if (!url) throw new Error(`画像が返らなかった: ${JSON.stringify(j).slice(0, 300)}`);
-  writeFileSync(out, Buffer.from(url.split(',')[1], 'base64'));
-  return { model: j.model, cost: j.usage?.cost ?? null };
+async function generate({ key, text, refs, out, models }) {
+  let lastError;
+  for (const model of models) {
+    try {
+      const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, modalities: ['image', 'text'], image_config: { aspect_ratio: '16:9' },
+          messages: [{ role: 'user', content: [{ type: 'text', text }, ...refs.map(imagePart)] }] }),
+      });
+      const j = await r.json();
+      const result = evaluateImageResponse(r.ok, r.status, j);
+      if (!result.ok) {
+        lastError = new Error(result.error);
+        console.error(`[fallback] ${model}: ${result.error} → 次モデルへ`);
+        continue;
+      }
+      writeFileSync(out, Buffer.from(result.imageUrl.split(',')[1], 'base64'));
+      console.error(`[model] ${model} cost ${result.cost ?? 'unknown'}`);
+      return { model, cost: result.cost };
+    } catch (e) {
+      lastError = e;
+      console.error(`[fallback] ${model}: ${e.message || e} → 次モデルへ`);
+    }
+  }
+  throw lastError || new Error('全モデルで画像生成に失敗');
 }
 
 async function main() {
@@ -90,11 +134,12 @@ async function main() {
   if (!Array.isArray(plans) || plans.length !== 3) throw new Error('プラン定義は3件（梅・竹・松に当たる3案）にする');
   const common = readFileSync(opts.brief, 'utf8');
   const key = loadKey();
+  const models = resolveModels(opts.model, opts.models);
   mkdirSync(opts.out, { recursive: true });
   const results = await Promise.all(plans.map(async (p) => {
     const out = path.join(opts.out, `perse-${p.id}.png`);
     try {
-      const r = await generate({ key, text: buildPrompt(common, p, opts.maxHeight), refs: opts.refs, out });
+      const r = await generate({ key, text: buildPrompt(common, p, opts.maxHeight), refs: opts.refs, out, models });
       return { id: p.id, label: p.label, out, ok: true, ...r };
     } catch (e) {
       return { id: p.id, label: p.label, out, ok: false, error: String(e.message || e) };

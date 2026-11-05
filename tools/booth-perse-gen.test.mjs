@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { parseArgs, loadKey, buildPrompt } from './booth-perse-gen.mjs';
+import { parseArgs, loadKey, buildPrompt, resolveModels, extractImageUrl, evaluateImageResponse } from './booth-perse-gen.mjs';
 
 test('buildPrompt: どの案にも高さ3.6mと明るさの指示が必ず入る', () => {
   const t = buildPrompt('BRIEF', { add: 'PLAN SIMPLE: white panels about 2.7 m high' });
@@ -40,7 +40,7 @@ test('parseArgs: 必須項目が欠けたら使い方付きで止まる', () => 
 });
 
 test('parseArgs: 知らないオプションは止まる', () => {
-  assert.throws(() => parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o', '--model', 'x']), /unknown option/);
+  assert.throws(() => parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o', '--nonexistent']), /unknown option/);
 });
 
 test('loadKey: openrouter.env の OPENROUTER_API_KEY を読む', () => {
@@ -55,4 +55,77 @@ test('loadKey: キーが無ければ止まる', () => {
   mkdirSync(path.join(home, '.claude'));
   writeFileSync(path.join(home, '.claude', 'openrouter.env'), 'OTHER=1\n');
   assert.throws(() => loadKey(home), /OPENROUTER_API_KEY/);
+});
+
+test('resolveModels: --model なし --models なし → 既定の3候補', () => {
+  const m = resolveModels(undefined, undefined);
+  assert.equal(m.length, 3);
+  assert.equal(m[0], 'openai/gpt-5.4-image-2');
+  assert.equal(m[1], 'openai/gpt-5-image');
+  assert.equal(m[2], 'google/gemini-3-pro-image');
+});
+
+test('resolveModels: --model で先頭に追加（重複除去）', () => {
+  const m = resolveModels('my/custom-model', undefined);
+  assert.equal(m.length, 4);
+  assert.equal(m[0], 'my/custom-model');
+  assert.equal(m[1], 'openai/gpt-5.4-image-2');
+});
+
+test('resolveModels: --models で全上書き', () => {
+  const m = resolveModels(undefined, 'a/x,b/y');
+  assert.equal(m.length, 2);
+  assert.equal(m[0], 'a/x');
+  assert.equal(m[1], 'b/y');
+});
+
+test('resolveModels: --model + --models で先頭追加＋上書き', () => {
+  const m = resolveModels('z/override', 'a/x,b/y');
+  assert.equal(m.length, 3);
+  assert.equal(m[0], 'z/override');
+  assert.equal(m[1], 'a/x');
+  assert.equal(m[2], 'b/y');
+});
+
+test('resolveModels: --model が --models 候補と重複 → 先頭に移動し重複除去', () => {
+  const m = resolveModels('a/x', 'a/x,b/y');
+  assert.equal(m.length, 2);
+  assert.equal(m[0], 'a/x');
+  assert.equal(m[1], 'b/y');
+});
+
+test('resolveModels: --models 空文字列 → 既定に戻る', () => {
+  const m = resolveModels(undefined, '');
+  assert.equal(m.length, 3);
+  assert.equal(m[0], 'openai/gpt-5.4-image-2');
+});
+
+test('extractImageUrl: 正常な画像URLを抽出', () => {
+  const j = { choices: [{ message: { images: [{ image_url: { url: 'data:image/png;base64,abc' } }] } }] };
+  assert.equal(extractImageUrl(j), 'data:image/png;base64,abc');
+});
+
+test('extractImageUrl: images が空 → null', () => {
+  assert.equal(extractImageUrl({ choices: [{ message: { images: [] } }] }), null);
+});
+
+test('extractImageUrl: choices なし → null', () => {
+  assert.equal(extractImageUrl({}), null);
+});
+
+test('evaluateImageResponse: HTTP200 でも画像なしは失敗、画像ありは cost 付きで採用', () => {
+  assert.equal(evaluateImageResponse(true, 200, { choices: [{ message: { images: [] } }] }).ok, false);
+  assert.deepEqual(evaluateImageResponse(true, 200, {
+    choices: [{ message: { images: [{ image_url: { url: 'data:image/png;base64,abc' } }] } }],
+    usage: { cost: 0.137 },
+  }), { ok: true, imageUrl: 'data:image/png;base64,abc', cost: 0.137 });
+});
+
+test('parseArgs: --model と --models のパース', () => {
+  const o = parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o', '--model', 'foo/bar', '--models', 'x,y,z']);
+  assert.equal(o.model, 'foo/bar');
+  assert.equal(o.models, 'x,y,z');
+  const models = resolveModels(o.model, o.models);
+  assert.equal(models[0], 'foo/bar');
+  assert.equal(models[1], 'x');
 });

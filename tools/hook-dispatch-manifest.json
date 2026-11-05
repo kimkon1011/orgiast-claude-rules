@@ -503,6 +503,12 @@
     ],
     "PostToolUse": [
       {
+        "matcher": "mcp__claude_ai_Discord(?:_2)?__(?:send_dm|send_message|reply_message)",
+        "type": "command",
+        "command": "node \"${repo}/tools/discord-ask-register-hook.mjs\"",
+        "timeout": 5
+      },
+      {
         "matcher": "mcp__gemini-cli__(?:ask-gemini|geminiChat|googleSearch)",
         "type": "command",
         "command": "node \"${repo}/tools/gemini-mcp-usage-hook.mjs\"",

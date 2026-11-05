@@ -180,6 +180,7 @@ try {
   added += removeDailySessionHooks(settings);
   added += removeKimDiscordReportHooks(settings);
   // Repository manifest is the canonical set, including matcher, args and budgets.
+  // PostToolUse Discord request registration is defined there for new and existing PCs.
   // The old individual definitions are retained only in per-home migration input.
   for (const [event, groups] of Object.entries(repositoryHooks(repo, home))) {
     for (const group of groups) {

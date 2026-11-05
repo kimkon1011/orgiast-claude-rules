@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // Mail is read-only; only the manual ledger is written. EXAMINE + BODY.PEEK, Gmail metadata GET only. Never log server errors or credentials.
 import tls from 'node:tls';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync, rmdirSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
 // Manual CLI (never connects to mail):
-// --add --who <name> --channel <LINE|電話|FAX|対面|メール> --sent YYYY-MM-DD
+// --add --who <name> --channel <LINE|電話|FAX|対面|メール|Discord> --sent YYYY-MM-DD
 //   --subject <text> [--note <text>] [--stale-days N] [--reading <romaji/kana>]
 // --done <id> / --list-manual (all waiting entries, including those not yet stale)
 // --ledger <file> overrides ORGIAST_HOME/.claude/reply-waiting.json.
@@ -252,6 +252,31 @@ export function readManualLedger(file = manualLedgerPath()) {
       new Set(ledger.entries.map(entry => entry.id)).size !== ledger.entries.length) throw new Error('手動台帳が不正です');
   return ledger;
 }
+// Share the lock with the Discord hook so concurrent sends and --done cannot lose rows.
+export function updateManualLedger(file, update) {
+  mkdirSync(path.dirname(file), { recursive: true });
+  const lock = `${file}.lock`, pending = `${file}.${process.pid}.tmp`;
+  const until = Date.now() + 1500;
+  for (;;) {
+    try { mkdirSync(lock); break; }
+    catch (error) {
+      if (error.code !== 'EEXIST' || Date.now() >= until) throw error;
+      // A hook killed by its timeout must not disable all later registrations.
+      try { if (Date.now() - statSync(lock).mtimeMs > 300_000) { rmdirSync(lock); continue; } } catch {}
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+  try {
+    const ledger = readManualLedger(file);
+    const result = update(ledger);
+    writeFileSync(pending, JSON.stringify(ledger, null, 2) + '\n', { mode: 0o600 });
+    renameSync(pending, file);
+    return result;
+  } finally {
+    try { unlinkSync(pending); } catch {}
+    rmdirSync(lock);
+  }
+}
 // Kanji readings cannot be inferred reliably without a dictionary. Use --reading
 // for other kanji names; preserve this explicitly supplied contact's reading.
 export function manualSlug(who, reading) {
@@ -280,7 +305,7 @@ export function manualSlug(who, reading) {
 }
 export function addManual(ledger, options) {
   if (!nonempty(options.who) || !nonempty(options.subject) || !validDay(options.sent) ||
-      !['LINE', '電話', 'FAX', '対面', 'メール'].includes(options.channel)) throw new Error('相手・チャネル・送信日・用件を確認してください');
+      !['LINE', '電話', 'FAX', '対面', 'メール', 'Discord'].includes(options.channel)) throw new Error('相手・チャネル・送信日・用件を確認してください');
   const base = `${manualSlug(options.who, options.reading)}-${options.sent.replaceAll('-', '')}`;
   let id = base, suffix = 2;
   const ids = new Set(ledger.entries.map(entry => entry.id));
@@ -312,10 +337,7 @@ export async function main(args = process.argv.slice(2), { now = Date.now(), sca
   const options = parseOptions(args), waiting = [], errors = [], warnings = [];
   const ledgerPath = options.ledger || manualLedgerPath();
   if (options.add || options.done) {
-    const ledger = readManualLedger(ledgerPath);
-    const entry = options.add ? addManual(ledger, { ...options, explicitStaleDays: args.includes('--stale-days') }) : completeManual(ledger, options.done);
-    mkdirSync(path.dirname(ledgerPath), { recursive: true });
-    writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2) + '\n', { mode: 0o600 });
+    const entry = updateManualLedger(ledgerPath, ledger => options.add ? addManual(ledger, { ...options, explicitStaleDays: args.includes('--stale-days') }) : completeManual(ledger, options.done));
     console.log(options.json ? JSON.stringify(entry) : `${options.add ? '登録' : '完了'}: ${entry.id}`);
     process.exitCode = 0;
     return;

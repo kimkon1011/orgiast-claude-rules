@@ -16,7 +16,7 @@ import { parseCodexResetUntil, providerCooldownMs, writeCodexCooldown } from './
 import { classifyTaskKind, CODEX_KINDS, TASK_KINDS } from './lib/task-kind.mjs';
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { EX_TEMPFAIL, budgetSummary, claudeFile, decideCodexGate, deferredPayload, isUsageLimitText, parseUsageLimitUntil, providerLimitedUntil, writeCodexCooldownFile } from './lib/executor-gate.mjs';
-import { coolingBackendNames, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
+import { coolingBackendNames, deprioritizeUnreliableBackends, readFallbackBackendHistory, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
 import { scanDiffForClaudeApi } from './app-llm-cost-gate.mjs';
 
 // Windows の shell 経由起動では引数がクォートされないため、この値に空白を入れると
@@ -1434,7 +1434,7 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
 
     const resolvedBackends = resolveFallbackBackends(home);
     const cooling = coolingBackendNames(home);
-    const backends = skipCoolingBackends(resolvedBackends, cooling);
+    const backends = deprioritizeUnreliableBackends(skipCoolingBackends(resolvedBackends, cooling), readFallbackBackendHistory(home));
     if (backends.length === 0) {
       console.error('GEMINI_API_KEY、OPENROUTER_API_KEY、ZAI_API_KEY が無いためフォールバックを実行できません');
       result.status = 1;

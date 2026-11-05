@@ -64,6 +64,47 @@ export function coolingBackendNames(homeDir, { now = Date.now(), cooldownMs = FA
   return cooling;
 }
 
+// backend ごとに直近 windowMs の履歴を集計し、成功率が基準を下回る backend を
+// 末尾へ移す（stable partition）。除外はせず配列長は不変。
+// history が配列でなければ [] 扱い。
+export function deprioritizeUnreliableBackends(backends, history, {
+  now = Date.now(),
+  windowMs = 7 * 24 * 60 * 60 * 1000,
+  minRuns = 10,
+  minSuccessRate = 0.4,
+} = {}) {
+  const list = Array.isArray(backends) ? backends : [];
+  const rows = Array.isArray(history) ? history : [];
+  const lowReliability = new Set();
+  for (const backend of list) {
+    const name = backend && backend.name;
+    if (!name) continue;
+    let runs = 0, ok = 0;
+    for (const row of rows) {
+      const t = Number(row.t);
+      if (!Number.isFinite(t)) continue;
+      if (now - t >= windowMs) continue;
+      if (String(row.backend).trim() !== name) continue;
+      runs++;
+      if (row.outcome === 'ok') ok++;
+    }
+    if (runs >= minRuns && ok / runs < minSuccessRate) {
+      lowReliability.add(name);
+      console.error(`[codex-do] fallback backend=${name} は直近の成功率が低いため連鎖の後方へ回します (ok=${ok}/${runs})`);
+    }
+  }
+  if (lowReliability.size === 0 || lowReliability.size >= list.length) return [...list];
+  const reliable = [], unreliable = [];
+  for (const backend of list) {
+    if (lowReliability.has(backend?.name)) {
+      unreliable.push(backend);
+    } else {
+      reliable.push(backend);
+    }
+  }
+  return [...reliable, ...unreliable];
+}
+
 // name が cooling に含まれる backend を除いた配列を返す。
 // keepAtLeastOne が true（既定）で除外した結果が空になる場合は、元の配列をそのまま返す
 // （＝候補ゼロで詰むのを防ぐ）。除外した backend は1件につき1行 console.error で出す。

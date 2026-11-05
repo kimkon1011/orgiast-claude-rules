@@ -8,7 +8,7 @@ import { judge } from './mail-send-approval-gate.mjs';
 function createFixture() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mail-gate-test-'));
   const transcriptPath = path.join(tmpDir, 'transcript.jsonl');
-  
+
   return {
     tmpDir,
     transcriptPath,

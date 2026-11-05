@@ -771,3 +771,11 @@ test('独立したnext-action違反を1回の差し戻しへまとめる', () =>
     assert.match(result.reason, new RegExp(`\\[${code}\\]`));
   }
 });
+
+
+test('複数手渡しでも見張り登録漏れ4コードを同時に返す', () => {
+  const result = judgeNextAction(`次に kim がすること: 支払い、署名\nこの後の自動進行: 返信が届いたら結果を報告する\nこのセッション: まだ閉じない（作業中・2099-11-05 12:00 まで待つ）`);
+  for (const code of ['NEXT-ACTION-MULTIPLE', 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK', 'SESSION-OPEN-NEEDS-IN-SESSION-CHECK', 'AUTOPILOT-NO-SESSION-WAKEUP']) {
+    assert.ok(result.reasonCodes.includes(code), code);
+  }
+});

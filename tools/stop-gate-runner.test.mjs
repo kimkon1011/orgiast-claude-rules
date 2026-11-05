@@ -206,7 +206,7 @@ test('stdin経由の2行・3行・バックグラウンド矛盾を他gateと分
     const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').at(-1));
     assert.equal(record.verdict, code ? 'block' : 'pass');
     assert.deepEqual(record.blockedBy, code ? ['next-action-gate'] : []);
-    assert.deepEqual(record.reasonCodes, code ? [code] : []);
+    assert.deepEqual(record.reasonCodes, code ? [code, ...(code === 'SESSION-BACKGROUND-CONTRADICTION' ? ['AUTOPILOT-NO-SESSION-WAKEUP'] : [])] : []);
   }
 });
 
@@ -619,4 +619,68 @@ test('自動進行の check は runner から現在ターンとセッション�
   addCheck({ session: input.session_id, check: 'test -f result.txt', label: '配布', deadline: '+2d', home, now });
   const passed = await run(input, { raw, humanText: '', assistantText: '' }, options);
   assert.ok(!passed.record.blockedBy.includes('unregistered-promise-gate'));
+});
+
+// The safety net must run independently of the ordinary rewrite budget.
+for (const mode of ['cap', 'pass', 'open', 'cron', 'scheduled', 'none', 'failure']) test(`autopilot fallback: ${mode}`, async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-fallback-'));
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  const { readLedger, ledgerFile } = await import('./auto-progress-ledger.mjs');
+  const { consumeInbox } = await import('./auto-progress-inbox-hook.mjs');
+  const { registerStopViolation, stateFile } = await import('./lib/stop-recheck.mjs');
+  const input = { session_id: 'fallback', cwd: home };
+  const autopilot = mode === 'none' ? 'なし' : '返信が届きしだい報告し、深夜2時に残作業を実施する。' + '進行'.repeat(30);
+  const text = `${mode === 'pass' ? '[AUTOPROGRESS-CHECK-OK: 機械判定できない返信待ち]' : '記録します。'}\n次に kim がすること: ${mode === 'cap' ? '支払い、署名' : 'なし'}\nこの後の自動進行: ${autopilot}\nこのセッション: /session-close は不要なので、このセッションを閉じてよい`;
+  if (mode !== 'pass') for (let i = 0; i < 2; i++) registerStopViolation({ input, assistantText: `prior-${i}`, blockedBy: ['unregistered-promise-gate'], home });
+  const file = ledgerFile(home);
+  if (mode === 'open') fs.writeFileSync(file, JSON.stringify({ ts: new Date().toISOString(), sessionId: 'fallback', status: 'open', check: 'node -e "process.exit(1)"' }) + '\n');
+  if (mode === 'failure') fs.mkdirSync(file);
+  const name = mode === 'scheduled' ? 'ScheduleWakeup' : 'CronCreate';
+  const raw = ['cron', 'scheduled'].includes(mode) ? [
+    { type: 'assistant', timestamp: new Date().toISOString(), message: { content: [{ type: 'tool_use', name, id: 'timer', input: { recurring: true, delaySeconds: 3600 } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'timer', content: 'Scheduled recurring job: timer' }] } },
+  ].map(JSON.stringify).join('\n') : '';
+  const context = { raw, humanText: '', assistantText: text };
+  const options = { mode: 'off', policyOptions: { home, hostname: 'kim-PC', notify: async () => ({ delivered: 'test' }) } };
+  const result = await run(input, context, options);
+  if (mode === 'failure') {
+    assert.equal(result.decision, 'block');
+    assert.ok(result.record.reasonCodes.includes('AUTOPILOT-REGISTRATION-FAILED'));
+    return;
+  }
+  assert.notEqual(result.decision, 'block', result.reason);
+  const created = ['cap', 'pass'].includes(mode);
+  assert.equal(result.record.autoRegisteredCheck, created);
+  const rows = readLedger(file);
+  assert.equal(rows.length, created || mode === 'open' ? 1 : 0);
+  if (!created) return;
+  const [row] = rows;
+  assert.equal(row.status, 'open');
+  assert.equal(row.check, undefined);
+  assert.equal(row.startWhen, undefined);
+  assert.equal(row.nextClaude, autopilot);
+  assert.equal(row.label, [...autopilot].slice(0, 60).join(''));
+  assert.equal(Date.parse(row.deadlineAt) - Date.parse(row.ts), 2 * 86400000);
+  const records = readLedger(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'));
+  assert.equal(records.at(-1).verdict, mode === 'cap' ? 'pass_after_cap' : 'pass');
+  assert.equal(records.at(-1).autoRegisteredCheck, true);
+  if (mode === 'pass') assert.equal(fs.existsSync(stateFile(home)), false);
+  const notice = consumeInbox({ ...input, hook_event_name: 'UserPromptSubmit' }, { home, env: {} });
+  assert.match(notice.hookSpecificOutput.additionalContext, /自動登録した/);
+  assert.equal(consumeInbox(input, { home, env: {} }), null);
+  // The separate ledger Stop hook must retain the fallback's monitoring metadata.
+  const { record: recordPromise } = await import('./auto-progress-ledger.mjs');
+  recordPromise({ ...input, last_assistant_message: text }, { home });
+  const refreshed = readLedger(file).at(-1);
+  assert.equal(refreshed.autoRegisteredCheck, true);
+  assert.equal(refreshed.deadlineAt, row.deadlineAt);
+  const before = readLedger(file).length;
+  await run(input, context, options);
+  assert.equal(readLedger(file).length, before);
 });

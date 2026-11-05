@@ -130,15 +130,16 @@ export function latestOpenPromises(rows) {
 // 同じ session に open の check 付き行があるときは、新しい約束行に check 情報を引き継ぐ。
 export function applyPromise(rows, record) {
   let toAdd = record;
-  if (!toAdd.check && !toAdd.startWhen) {
+  if (!toAdd.check && !toAdd.startWhen && !toAdd.autoRegisteredCheck) {
     const existing = rows
-      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && (row.check || row.startWhen))
+      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && (row.check || row.startWhen || row.autoRegisteredCheck === true))
       .sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0))[0];
     if (existing) {
       toAdd = {
         ...toAdd,
         ...(existing.startWhen ? { startWhen: existing.startWhen, startedAt: existing.startedAt,
           ...(['scheduled', 'starting', 'start_overdue'].includes(existing.status) ? { status: existing.status } : {}) } : {}),
+        ...(existing.autoRegisteredCheck ? { autoRegisteredCheck: true } : {}),
         check: existing.check,
         checkRegisteredAt: existing.checkRegisteredAt,
         checkCwd: existing.checkCwd ?? toAdd.cwd,

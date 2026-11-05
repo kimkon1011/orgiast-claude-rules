@@ -29,7 +29,7 @@ import { evaluateLaneAbandonment } from './lane-abandonment-gate.mjs';
 import { evaluateCourseCorrections } from './course-correction-gate.mjs';
 import { evaluateAudit } from './handoff-audit-gate.mjs';
 import { enabled as reportLengthEnabled, judgeReportLengthWithLlm } from './report-length-gate.mjs';
-import { hasRequiredFooter, judgeNextAction, reportsCloseSteps } from './next-action-gate.mjs';
+import { hasRequiredFooter, judgeNextAction, reportsCloseSteps, hasOpenSessionCheck, hasSessionWakeup, WATCH_REGISTRATION_CODES } from './next-action-gate.mjs';
 import { judgeSubstituteCapability } from './substitute-capability-gate.mjs';
 import { judgeUserBurden, desktopLauncherPattern } from './user-burden-gate.mjs';
 import { findOutsourcedInvestigation, formatViolationMessage as formatSelfCheck, scanToolUsesFromRaw } from './self-check-before-asking-guard.mjs';
@@ -49,6 +49,8 @@ import { evaluateUnregisteredPromise } from './unregistered-promise-gate.mjs';
 import { appendStopLedger, registerStopViolation, CAP_CONTEXT } from './lib/stop-recheck.mjs';
 import { STOP_RETRY_INSTRUCTION, withStopRetryInstruction } from './lib/stop-retry-message.mjs';
 import { evaluateClaudeFallbackReport } from './claude-fallback-report-gate.mjs';
+import { buildRecord, extractPromise, ledgerFile as progressLedgerFile, readLedger, writeLedger, applyPromise } from './auto-progress-ledger.mjs';
+import { appendInbox } from './lib/auto-progress-inbox.mjs';
 import { isUnchangedPeriodicReport } from './lib/unchanged-periodic-report.mjs';
 
 
@@ -130,8 +132,36 @@ function ledger(record) {
   appendStopLedger(record, home());
 }
 
+// No invented shell predicate: auto-progress-watch evaluates evidence for open rows without check.
+export function ensureAutopilotCheck(input, assistantText, transcriptRaw, now = Date.now()) {
+  const promise = extractPromise(assistantText);
+  if (!promise || hasOpenSessionCheck(input, home())) return false;
+  const wakeup = hasSessionWakeup(transcriptRaw, input);
+  if (wakeup.cron || wakeup.scheduled) return false;
+  const row = buildRecord(input, assistantText, { now });
+  if (!row) throw new Error('自動進行の登録に session_id が必要です');
+  Object.assign(row, { autoRegisteredCheck: true, label: [...promise].slice(0, 60).join(''),
+    nextClaude: promise, deadlineAt: new Date(now + 2 * 86400000).toISOString() });
+  const file = progressLedgerFile(home());
+  writeLedger(file, applyPromise(readLedger(file), row));
+  appendInbox(home(), row.sessionId, { source: 'stop-gate-runner',
+    text: `自動進行の見張りを自動登録した: ${row.label}（期限: ${row.deadlineAt}）` });
+  return true;
+}
+
+function protectAutopilot(input, text, raw, record) {
+  try { record.autoRegisteredCheck = ensureAutopilotCheck(input, text, raw); }
+  catch (error) {
+    record.verdict = 'block'; record.reasonCodes.push('AUTOPILOT-REGISTRATION-FAILED');
+    ledger(record);
+    return { decision: 'block', reason: `自動進行の見張り登録に失敗しました: ${error.message}`, record };
+  }
+  return null;
+}
+
 export async function run(input, context, auditOptions = {}) {
   const sessionId = input?.session_id || input?.sessionId || path.basename(input?.transcript_path || '', '.jsonl');
+  input = { ...input, session_id: sessionId };
   const assistantText = input?.last_assistant_message ?? input?.assistant_text ?? context.assistantText;
   // Deterministic permission guard: enforce before retry/close bypasses and rollout demotion.
   const invite = evaluateInvitePermissions(assistantText);
@@ -141,6 +171,10 @@ export async function run(input, context, auditOptions = {}) {
   const streak = registerDeliverableCheck({ home: home(), sessionId, blocked: deliverable.decision === 'block' });
   if (deliverable.decision === 'block') {
     const record = { ...base, verdict: streak.capped ? 'pass_cap' : 'block', blockedBy: ['deliverable-drive-link-gate'], reasonCodes: [deliverable.code], sameTextRetries: streak.count };
+    if (streak.capped) {
+      const failure = protectAutopilot(input, assistantText, context.raw, record);
+      if (failure) return failure;
+    }
     ledger(streak.capped ? { ...record, verdict: 'deliverable-cap' } : record);
     return streak.capped
       ? { record, systemMessage: 'deliverable-drive-link-gate: 3回書き直しても Drive URL がありません' }
@@ -153,6 +187,8 @@ export async function run(input, context, auditOptions = {}) {
   // （[[feedback-close-session-then-keep-talking-recreates-jsonl]]）。
   if (reportsCloseSteps(assistantText)) {
     const record = { ...base, verdict: 'pass', reasonCodes: ['close-steps'], auditEvidence: 'close-steps' };
+    const failure = protectAutopilot(input, assistantText, context.raw, record);
+    if (failure) return failure;
     ledger(record);
     return { record };
   }
@@ -177,13 +213,22 @@ export async function run(input, context, auditOptions = {}) {
   }
   const systemMessage = warnings.length ? warnings.join('\n') : undefined;
   const blockedBy = evaluated.results.map(({ name }) => name);
-  const reasonCodes = [...evaluated.results.map(({ code, name }) => code || name), ...evaluated.errors];
-  const cap = blockedBy.length ? registerStopViolation({ input, assistantText, blockedBy, reasonCodes, home: home() }) : { retryCap: false, sameTextRetries: 0 };
+  const codesFor = ({ reasonCodes, code, name }) => reasonCodes || [code || name];
+  const reasonCodes = [...new Set(evaluated.results.flatMap(codesFor)), ...evaluated.errors];
+  // Watch registration is repaired by the runner, never charged to the rewrite budget.
+  const retryResults = evaluated.results.filter(result => codesFor(result).some(code => !WATCH_REGISTRATION_CODES.has(code)));
+  const retryBlockedBy = retryResults.map(({ name }) => name);
+  const retryReasonCodes = retryResults.flatMap(codesFor).filter(code => !WATCH_REGISTRATION_CODES.has(code));
+  const cap = retryBlockedBy.length ? registerStopViolation({ input, assistantText, blockedBy: retryBlockedBy, reasonCodes: retryReasonCodes, home: home() }) : { retryCap: false, sameTextRetries: 0 };
   // Keep the caller-facing verdict compatible; the ledger records the new
   // operational outcome separately so nightly metrics can count it.
-  const verdict = cap.retryCap ? 'retry-cap' : blockedBy.length ? 'block' : 'pass';
+  const verdict = cap.retryCap ? 'retry-cap' : retryBlockedBy.length ? 'block' : 'pass';
   const capMessage = cap.retryCap ? `${CAP_CONTEXT} 残存コード: ${reasonCodes.join(', ')}` : undefined;
   const record = { ...base, verdict, blockedBy, reasonCodes, demoted, handoffKind, unchangedPeriodicReport: evaluated.unchangedPeriodicReport, retryCap: cap.retryCap, sameTextRetries: cap.sameTextRetries ?? 0, auditEvidence: audit.record.evidence };
+  if (verdict !== 'block') {
+    const failure = protectAutopilot(input, assistantText, context.raw, record);
+    if (failure) return failure;
+  }
   ledger(cap.retryCap ? { ...record, verdict: 'pass_after_cap', runnerVerdict: verdict } : record);
   if (verdict !== 'block') return { record, ...((capMessage || systemMessage) ? { systemMessage: [capMessage, systemMessage].filter(Boolean).join('\n') } : {}) };
   const sections = [];

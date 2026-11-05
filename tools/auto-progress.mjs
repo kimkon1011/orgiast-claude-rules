@@ -41,7 +41,7 @@ export function addCheck({ session, check, startWhen, deadline, label, nextClaud
   // A new revision keeps prior results auditable and resets notification state.
   const row = { ts: new Date(now).toISOString(), pc: old?.pc || os.hostname(), user: old?.user || os.userInfo().username,
     owner: old?.owner || resolveOwner({ home }), sessionId: session, cwd: old?.cwd || cwd, transcriptPath: old?.transcriptPath || '',
-    promise: old?.promise || label, nextKim: old?.nextKim || 'なし', status: startWhen ? 'scheduled' : 'open', ...(check ? { check: check.trim() } : {}), ...(startWhen ? { startWhen: startWhen.trim() } : {}), checkCwd: cwd,
+    promise: old?.promise || label, nextKim: old?.nextKim || 'なし', status: startWhen ? 'scheduled' : 'open', ...(check ? { check: check.trim(), checkRegisteredAt: new Date(now).toISOString() } : {}), ...(startWhen ? { startWhen: startWhen.trim() } : {}), checkCwd: cwd,
     deadlineAt: new Date(deadlineMs).toISOString(), label: label.trim(), nextClaude: nextClaude || '', ...(ask !== undefined || old?.ask ? { ask: ask ?? old.ask } : {}), ...timeoutFields };
   writeLedger(file, applyPromise(rows, row)); return row;
 }

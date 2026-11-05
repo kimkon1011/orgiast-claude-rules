@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
-import { ledgerFile, readLedger, writeLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, kimAction } from './auto-progress-ledger.mjs';
+import { ledgerFile, readLedger, writeLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, kimAction, hasClaudeWork } from './auto-progress-ledger.mjs';
 import { appendInbox } from './auto-progress-inbox-hook.mjs';
 import { active, CATEGORY, DAY } from './lib/fleet-chase-policy.mjs';
 import { externalFile, readSkips, isSkipped, addSkip, saveAnswer } from './lib/external-waiting-state.mjs';
@@ -70,7 +70,7 @@ export function collectExternal({ home, now }) {
 }
 export function formatList(items) {
   const external = items.filter(item => item.external), internal = items.filter(item => !item.external);
-  const line = item => `・${item.title} ／ 答えてほしいこと: ${item.ask} ／ ${ageLabel(item)}`;
+  const line = item => `・${item.title} ／ 答えてほしいこと: ${item.ask} ／ ${ageLabel(item)}${item.progress ? ` ／ ${item.progress}` : ''}`;
   return [...(external.length ? [`🔴 社外の人を待たせています ${external.filter(item => !item.warning).length} 件（古い順）`, ...external.map(line)] : []), `📌 kim の返事待ち ${internal.length} 件（古い順）`, ...internal.map(line)].join('\n');
 }
 export function collectAwaiting({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), budgetMs = Infinity, sessionId = '' } = {}) {
@@ -82,7 +82,11 @@ export function collectAwaiting({ home = process.env.ORGIAST_HOME || os.homedir(
     const action = kimAction(row);
     if (SESSION_OP_RE.test(action)) continue;
     const ask = EVIDENCE_RE.test(action.trim()) ? '進めてよいか判断して返事をする' : readable(action, row, sessionId && row.sessionId === sessionId ? Infinity : 80);
-    result.push({ id: apId(row), source: 'auto-progress', title: readable(row.purpose || row.promise, row, 60), ask, waitingSince: row.ts, route: { sessionId: row.sessionId } });
+    const claudePending = row.status === 'open' && !String(row.check || '').trim() && (hasClaudeWork(row.nextClaude) || hasClaudeWork(row.promise));
+    const updatedAt = row.updatedAt || row.ts;
+    const ageHours = Math.max(0, Math.floor((now - Date.parse(updatedAt)) / 3600000));
+    const progress = claudePending ? `Claude 側で進行中（最終更新 ${ageHours} 時間前）${ageHours >= 6 ? ' ⚠️ 止まっている可能性' : ''}` : '';
+    result.push({ progress, id: apId(row), source: 'auto-progress', title: readable(row.purpose || row.promise, row, 60), ask, waitingSince: row.ts, route: { sessionId: row.sessionId } });
   }
   const file = ledgerPath(home);
   // Bound synchronous JSON work as well as item traversal inside the five-second hook.

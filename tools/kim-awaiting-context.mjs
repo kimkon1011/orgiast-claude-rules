@@ -26,7 +26,7 @@ export function context(input, { home = process.env.ORGIAST_HOME || os.homedir()
     saveJson(shownFile(home), state);
     if (!items.length) return null;
     const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url))).replace(/^\/mnt\/([a-z])\//i, (_, drive) => `${drive.toUpperCase()}:/`);
-    const line = item => `・${item.title} ／ 答えてほしいこと: ${item.ask} ／ ${ageLabel(item)}`;
+    const line = item => `・${item.title} ／ 答えてほしいこと: ${item.ask} ／ ${ageLabel(item)}${item.progress ? ` ／ ${item.progress}` : ''}`;
     const external = items.filter(item => item.external), internal = items.filter(item => !item.external);
     const isCurrent = item => sessionId && item.source === 'auto-progress' && item.route?.sessionId === sessionId;
     const current = internal.filter(isCurrent);

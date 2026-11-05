@@ -9,8 +9,8 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
-const USAGE = '使い方: node tools/booth-perse-gen.mjs --brief <brief.txt> --plans <plans.json> --out <dir> [--ref <image> ...] [--blender-out <dir>] [--max-height <m>（会場の装飾高さ上限・既定3.6）]';
-const MODEL = 'openai/gpt-5.4-image-2';
+const USAGE = '使い方: node tools/booth-perse-gen.mjs --brief <brief.txt> --plans <plans.json> --out <dir> [--ref <image> ...] [--blender-out <dir>] [--max-height <m>（会場の装飾高さ上限・既定3.6）] [--model <OpenRouter model>]';
+const DEFAULT_MODEL = 'openai/gpt-5.4-image-2';
 const DEFAULT_MAX_HEIGHT = 3.6;
 const BLENDER_PERSP_FILES = ['persp_front_left.png', 'persp_front_right.png'];
 
@@ -23,7 +23,7 @@ function findBlenderRefs(dir) {
 }
 
 export function parseArgs(argv) {
-  const opts = { refs: [], maxHeight: DEFAULT_MAX_HEIGHT };
+  const opts = { refs: [], maxHeight: DEFAULT_MAX_HEIGHT, model: DEFAULT_MODEL };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     const v = argv[i + 1];
@@ -33,16 +33,24 @@ export function parseArgs(argv) {
     else if (a === '--ref') { opts.refs.push(v); i += 1; }
     else if (a === '--blender-out') { opts.blenderOut = v; i += 1; }
     else if (a === '--max-height') { opts.maxHeight = Number(v); i += 1; }
+    else if (a === '--model') { opts.model = v; i += 1; }
     else throw new Error(`unknown option: ${a}\n${USAGE}`);
   }
   for (const k of ['brief', 'plans', 'out']) if (!opts[k]) throw new Error(`--${k} is required\n${USAGE}`);
   if (!(opts.maxHeight > 0)) throw new Error(`--max-height は数値（m）で指定する\n${USAGE}`);
+  if (!opts.model) throw new Error(`--model は空にできません\n${USAGE}`);
   return opts;
 }
 
 // 高さと明るさは提案の柱なので、ブリーフに書き忘れても全案へ必ず足す（kim 2026-10-27・サポリス案が2.7mで低かった）。
 export function heightLightClause(maxHeight = DEFAULT_MAX_HEIGHT) {
-  return `MANDATORY HEIGHT & LIGHT (applies to this plan, overrides any taller height above): this is a SINGLE-STOREY exhibition stand. Its overall structure/truss height is about ${maxHeight} m and MUST NOT exceed ${maxHeight} m. It must look like a normal single-level booth within a ${maxHeight} m decoration limit - NEVER a double-height, two-storey or 5-6 m tall hall structure. Keep headers and the top logo sign low, around ${maxHeight} m. The booth must also look BRIGHT - noticeably brighter than the neighbouring booths (spotlights and/or backlit light boxes), graphics evenly lit, no dark corners.`;
+  return `MANDATORY HEIGHT & LIGHT (applies to this plan, overrides any taller height above): this is a SINGLE-STOREY exhibition stand. Its overall structure/truss height is about ${maxHeight} m and MUST NOT exceed ${maxHeight} m. It must look like a normal single-level booth within a ${maxHeight} m decoration limit - NEVER a double-height, two-storey or 5-6 m tall hall structure. Keep headers and the top logo sign low, around ${maxHeight} m. The booth must also look BRIGHT - noticeably brighter than the neighbouring booths (spotlights and/or backlit light boxes), graphics evenly lit, no dark corners.
+
+MANDATORY HUMAN SCALE: show multiple people about 1.7 m tall in the foreground as explicit scale references. The highest point of the booth (top edge of any truss or upper logo sign) must be only about twice a person's height (${maxHeight} m) and never higher. The clear space from the people's heads to the ceiling truss should be about one person's height.
+
+MANDATORY PROPORTIONS: the booth footprint is 6 m wide by 6 m deep. Its 6 m width is about 1.7 times its ${maxHeight} m height. From the front, the overall silhouette must look distinctly wider than tall, never vertically elongated.
+
+MANDATORY HALL SCALE: the exhibition hall ceiling is more than 10 m high and must appear far above the booth. Adjacent exhibition booths are only about 2.7-3.6 m high, similar in height to this booth. Preserve a large visible vertical gap between every booth and the hall ceiling.`;
 }
 
 export function buildPrompt(common, plan, maxHeight = DEFAULT_MAX_HEIGHT) {
@@ -60,11 +68,11 @@ export function loadKey(home = homedir()) {
 const mime = (p) => (p.endsWith('.png') ? 'image/png' : p.endsWith('.webp') ? 'image/webp' : 'image/jpeg');
 const imagePart = (p) => ({ type: 'image_url', image_url: { url: `data:${mime(p)};base64,${readFileSync(p).toString('base64')}` } });
 
-async function generate({ key, text, refs, out }) {
+async function generate({ key, text, refs, out, model }) {
   const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: MODEL, modalities: ['image', 'text'], image_config: { aspect_ratio: '16:9' },
+    body: JSON.stringify({ model, modalities: ['image', 'text'], image_config: { aspect_ratio: '16:9' },
       messages: [{ role: 'user', content: [{ type: 'text', text }, ...refs.map(imagePart)] }] }),
   });
   const j = await r.json();
@@ -94,7 +102,7 @@ async function main() {
   const results = await Promise.all(plans.map(async (p) => {
     const out = path.join(opts.out, `perse-${p.id}.png`);
     try {
-      const r = await generate({ key, text: buildPrompt(common, p, opts.maxHeight), refs: opts.refs, out });
+      const r = await generate({ key, text: buildPrompt(common, p, opts.maxHeight), refs: opts.refs, out, model: opts.model });
       return { id: p.id, label: p.label, out, ok: true, ...r };
     } catch (e) {
       return { id: p.id, label: p.label, out, ok: false, error: String(e.message || e) };

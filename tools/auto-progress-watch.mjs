@@ -33,10 +33,17 @@ export const FALLBACK_STALL_MS = 24 * 3600 * 1000;
 export const TIME_ONLY_REASON = '時刻だけの check は完了判定にできないため開始予約へ変換';
 export const LEGACY_ADD_CHECK_REASON = 'nextClaude 付き add-check の誤完了を開始予約へ変換';
 
+// 完了が本人に配達・検証済み（done inbox レシートまたは done 通知済み）の行は誤完了ではない。
+// レシートがあるのに移行で復活させると、完了済みの約束が偽の開始予約として何度も再開される（2026-11-05 17件実害）。
+export function doneConcludedWithReceipt(row) {
+  return Boolean((row.doneInboxId && row.doneInboxVerifiedAt) || row.doneNotifiedAt);
+}
+
 export function legacyAddCheckMigrationRows(rows) {
   const migrated = new Set(rows.map(row => row.migratedFromLegacyAddCheck).filter(Boolean));
   return rows.filter(row => row.status === 'done' && String(row.check || '').trim() &&
-    String(row.nextClaude || '').trim() && !isTimeOnlyCheck(row.check) && !row.resumedAt && !migrated.has(rowKey(row)));
+    String(row.nextClaude || '').trim() && !isTimeOnlyCheck(row.check) && !row.resumedAt &&
+    !doneConcludedWithReceipt(row) && !migrated.has(rowKey(row)));
 }
 
 export function legacyAddCheckReservation(row, now = Date.now()) {

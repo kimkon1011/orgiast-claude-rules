@@ -5,6 +5,13 @@
       {
         "matcher": "*",
         "type": "command",
+        "command": "node \"${repo}/tools/plaud-renewal-notice.mjs\"",
+        "timeout": 300,
+        "scope": "kim-only"
+      },
+      {
+        "matcher": "*",
+        "type": "command",
         "command": "node \"${repo}/tools/case-handoff.mjs\" hook",
         "timeout": 60
       },

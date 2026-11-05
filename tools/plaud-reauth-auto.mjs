@@ -104,8 +104,9 @@ export async function reauthInto(session, deps = {}) {
   if (inCooldown()) return false;
   try {
     const tokens = await loginViaOtp(deps);
-    applyToSession(session, tokens);
+    const updated = applyToSession({ ...session }, tokens);
     writeEnvTokens(tokens);
+    Object.assign(session, updated);
     writeReauthState({ lastOkAt: Date.now(), lastFailAt: 0, urtExpireAt: tokens.urtExpireAt, lastError: '' });
     return true;
   } catch (error) {
@@ -119,7 +120,7 @@ export async function main() {
   const claude = claudeDir();
   const statePath = path.join(claude, 'plaud-to-tldv-state.json');
   // plaud-to-tldv.mjs はこのファイルを import しているため、循環を避けて state は自前で読み書きする。
-  const readState = () => { try { return { state: JSON.parse(fs.readFileSync(statePath, 'utf8').replace(/^﻿/, '')) }; } catch { return { state: { session: {} } }; } };
+  const readState = () => { try { return { state: JSON.parse(fs.readFileSync(statePath, 'utf8').replace(/^﻿/, '')) }; } catch (error) { if (error.code !== 'ENOENT') throw error; return { state: { session: {} } }; } };
   const writeStateAtomic = (p, s) => { const tmp = `${p}.tmp-${process.pid}`; fs.writeFileSync(tmp, JSON.stringify(s, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(tmp, p); };
   if (ifNeeded && inCooldown()) return 1;
   if (ifNeeded) {
@@ -165,10 +166,10 @@ export function failureToday(record, now = Date.now()) {
     failed > Number(record?.lastOkAt || 0) && day(failed) === day(now) && record.lastError ? record.lastError : '';
 }
 
-export async function maintainSession(session, persist, { now, reauth = reauthInto, readRecord = readReauthState } = {}) {
+export async function maintainSession(session, persist, { now, reauth = reauthInto, readRecord = readReauthState, force = false } = {}) {
   const clock = () => now ?? Date.now();
   const days = () => (Number(session.urtExp || 0) * 1000 - clock()) / 86400000;
-  if (session.urt && days() > PREVENT_DAYS) return '';
+  if (!force && session.urt && days() > PREVENT_DAYS) return '';
   if (await reauth(session)) persist();
   if (session.urt && days() > PREVENT_DAYS) return '';
   return failureToday(readRecord(), clock());

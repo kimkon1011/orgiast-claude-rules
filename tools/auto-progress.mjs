@@ -4,21 +4,10 @@ import fs from 'node:fs';
 import { parseArgs } from 'node:util';
 import { isEntry } from './is-entry.mjs';
 import { ledgerFile, readLedger, writeLedger, latestOpenPromises, applyPromise } from './auto-progress-ledger.mjs';
-import { executeCheck, preflightCheck, MAX_CHECK_TIMEOUT_MS } from './auto-progress-check.mjs';
+import { executeCheck, preflightCheck, MAX_CHECK_TIMEOUT_MS, isTimeOnlyCheck } from './auto-progress-check.mjs';
 import { resolveOwner } from './notify-owner.mjs';
 // 外部の成果を読まず、時計と定数だけで決まる典型的な判定を拒否する。
-export function isTimeOnlyCheck(command) {
-  const text = String(command || '');
-  if (!/Date\.(?:now|parse)|new\s+Date|Get-Date|date\s+['"]?\+%s/i.test(text)) return false;
-  if (/\b(?:fs|require|import|child_process|fetch|argv|env|stdin|readFile|Test-Path|Get-Content)\b/i.test(text)) return false;
-  const code = text.replace(/(['"])(?:(?!\1)[^\\]|\\.)*\1/g, match => {
-    // node -e / PowerShell の外側の引用はコードなので残す。
-    return /Date|date\s+.*%s/i.test(match) ? match.slice(1, -1) : '';
-  }).replace(/(['"])(?:(?!\1)[^\\]|\\.)*\1/g, '');
-  const words = code.match(/[A-Za-z_$][\w$]*/g) || [];
-  const allowed = new Set(['node', 'exe', 'e', 'eval', 'process', 'exit', 'exitCode', 'Date', 'now', 'parse', 'new', 'getTime', 'valueOf', 'if', 'else', 'true', 'false', 'powershell', 'pwsh', 'NoProfile', 'Command', 'Get', 'date', 's', 'DateTime', 'datetime', 'int', 'long', 'gt', 'ge', 'lt', 'le', 'eq', 'ne', 'and', 'or', 'not', 'test']);
-  return words.every(word => word === '$' || allowed.has(word));
-}
+export { isTimeOnlyCheck } from './auto-progress-check.mjs';
 export function addCheck({ session, check, startWhen, deadline, label, nextClaude, askFile, timeout, cwd = process.cwd(), home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), probe, allowMet = false }) {
   if (!session?.trim() || !(startWhen?.trim() || check?.trim()) || !label?.trim()) throw new Error('--session, --check, --label は必須です');
   if (startWhen !== undefined && (!startWhen.trim() || !nextClaude?.trim())) throw new Error('--start-when には --next-claude が必須です');

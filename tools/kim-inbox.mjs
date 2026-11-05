@@ -12,6 +12,7 @@ import { isKimOperated } from './lib/kim-operated.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
+import { createReclaimDirectory, removeReclaimDirectory } from './lib/reclaim-lock.mjs';
 const exec = promisify(execFile);
 const directory = home => path.join(home, '.claude/kim-inbox');
 const clean = value => redactSecrets(String(value ?? '')).slice(0, 4000);
@@ -34,20 +35,41 @@ function locked(home, key, fn) {
   fs.mkdirSync(directory(home), { recursive: true });
   const lock = path.join(directory(home), `${key}.lock`);
   let fd;
-  for (let n = 0; n < 100; n++) {
-    try { fd = fs.openSync(lock, 'wx', 0o600); fs.writeFileSync(fd, String(process.pid)); break; }
+  const until = Date.now() + 5000;
+  for (;;) {
+    try { fd = fs.openSync(lock, 'wx', 0o600); break; }
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
       try {
-        const pid = Number(fs.readFileSync(lock, 'utf8'));
-        if (pid > 0) { try { process.kill(pid, 0); } catch (e) { if (e.code === 'ESRCH') fs.unlinkSync(lock); } }
-      } catch { /* 所有者が不明ならロックを奪わない。 */ }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+        const before = fs.statSync(lock);
+        const raw = fs.readFileSync(lock, 'utf8').trim();
+        const pid = /^\d+$/.test(raw) ? Number(raw) : NaN;
+        let abandoned = !Number.isSafeInteger(pid) || pid <= 0 || pid > 2147483647;
+        if (!abandoned) {
+          try { process.kill(pid, 0); }
+          catch (e) { abandoned = e.code === 'ESRCH'; }
+        }
+        if (abandoned && Date.now() - before.mtimeMs > 60000) {
+          const reclaim = `${lock}.reclaim`;
+          createReclaimDirectory(reclaim);
+          try {
+            const current = fs.statSync(lock);
+            if (current.ino === before.ino && current.mtimeMs === before.mtimeMs && current.size === before.size) {
+              fs.unlinkSync(lock);
+              continue;
+            }
+          } finally { removeReclaimDirectory(reclaim); }
+        }
+      } catch { /* 競合や読み取り失敗は再試行。生存確認不能な所有者は奪わない。 */ }
+      const remaining = until - Date.now();
+      if (remaining <= 0) throw new Error('kim-inbox: 台帳が使用中です');
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(20, remaining));
     }
   }
-  if (fd === undefined) throw new Error('kim-inbox: 台帳が使用中です');
-  try { return fn(); } finally { fs.closeSync(fd); fs.unlinkSync(lock); }
+  try { fs.writeFileSync(fd, String(process.pid)); return fn(); }
+  finally { fs.closeSync(fd); fs.unlinkSync(lock); }
 }
+
 function update(home, id, fn) {
   if (!validId(id)) throw new Error('kim-inbox: ID が不正です');
   return locked(home, id, () => {
@@ -66,26 +88,37 @@ function normalizationKey(text) {
 }
 // 集約の検索と作成を同じロックで守り、同時追加も取りこぼさない。
 function create(home, options) {
-  return locked(home, 'info-aggregation', () => {
-    const text = clean(options.text);
+  // 秘匿処理・送信元解決は共有ロックの外。ask は集約不要。
+  options = { ...options, text: clean(options.text), source: clean(options.source),
+    from: clean(options.from ?? resolveFleetLabel(home, { hostname: os.hostname() })),
+    ...(options.dedupeKey ? { dedupeKey: clean(options.dedupeKey) } : {}) };
+  if (options.kind === 'ask' && !options.dedupeKey) return createNew(home, options);
+  const selected = locked(home, 'info-aggregation', () => {
+    const text = options.text;
     if (options.kind === 'deadline') {
       if (!options.key || !/^[A-Za-z0-9_-]+$/.test(options.key)) throw new Error('deadline には有効な --key が必要です');
       const existing = listItems(home, { status: 'open' }).find(i => i.kind === 'deadline' && i.key === options.key);
-      if (existing) return update(home, existing.id, current => {
-        current.text = text; current.due = options.due || ''; current.remainingDays = options.remainingDays ?? null;
-        current.lastAt = new Date().toISOString();
-      });
+      if (existing) return () => {
+        let updated = false;
+        const item = update(home, existing.id, current => {
+          if (current.status !== 'open') return;
+          current.text = text; current.due = options.due || ''; current.remainingDays = options.remainingDays ?? null;
+          current.lastAt = new Date().toISOString(); updated = true;
+        });
+        return updated ? item : create(home, options);
+      };
     }
     // Durable producers retry after a crash between inbox delivery and ledger update.
     // Keep distinct jobs separate even when their text normalizes to the same prefix.
     if (options.dedupeKey) {
-      const existing = listItems(home).find(item => item.dedupeKey === clean(options.dedupeKey));
+      const existing = listItems(home).find(item => item.dedupeKey === options.dedupeKey);
       return existing || createNew(home, options);
     }
     if ((options.kind ?? 'info') === 'info') {
       const key = normalizationKey(text);
       const matches = listItems(home, { status: 'open' }).filter(i => !i.dedupeKey && i.kind === 'info' && normalizationKey(i.text) === key).sort(newestFirst);
-      for (const match of matches) {
+      if (matches.length) return () => {
+        const match = matches[0];
         let merged = false;
         const item = update(home, match.id, current => {
           if (current.status !== 'open') return;
@@ -96,14 +129,17 @@ function create(home, options) {
           if (options.forwardMailId) current.forwardMailId = options.forwardMailId;
           merged = true;
         });
-        if (merged) return item;
-      }
+        return merged ? item : create(home, options);
+      };
     }
     return createNew(home, options);
   });
+  // 項目ロックの待ち時間を info-aggregation に伝播させない。
+  return typeof selected === 'function' ? selected() : selected;
 }
 export function compactItems(home) {
-  return locked(home, 'info-aggregation', () => {
+  // 全体の追加を止めず、複数の compact だけを直列化する。
+  return locked(home, 'compact', () => {
     const groups = new Map();
     for (const item of listItems(home, { status: 'open' })) {
       if (item.dedupeKey || item.kind !== 'info' || isHighInfo(item) || hasWorkId(item)) continue;
@@ -136,7 +172,7 @@ function createNew(home, { kind = 'info', text, source = '', from = resolveFleet
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: clean(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), kind, source, from, text, status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
   }
@@ -187,9 +223,9 @@ export function markSeen(home, id) {
   return update(home, id, item => { if (item.kind !== 'info') throw new Error('ask は --answer で返答を記録してください'); item.status = 'seen'; });
 }
 export function closeKey(home, key) {
-  return locked(home, 'info-aggregation', () => listItems(home, { status: 'open' })
+  return listItems(home, { status: 'open' })
     .filter(i => i.kind === 'deadline' && i.key === key)
-    .map(i => update(home, i.id, current => { current.status = 'seen'; })));
+    .map(i => update(home, i.id, current => { current.status = 'seen'; }));
 }
 export function deadlineSheetUrl(home) {
   const config = readJsonFile(path.join(home, '.claude/deadline-watch/config.json'));

@@ -218,7 +218,7 @@ for (const { code, allowMet, accepted } of [
     const home = tmp(); register(home);
     const file = ledgerFile(home), before = fs.readFileSync(file, 'utf8');
     const cwd = home;
-    const add = () => addCheck({ home, now: now + 1, session: 'session', check: 'check command', label: 'test', deadline: '+24h', cwd, allowMet,
+    const add = () => addCheck({ home, now: now + 1, session: 'session', check: 'check command', label: 'test', deadline: '+24h', cwd, allowMet, replace: true,
       probe: row => { assert.deepEqual(row, { check: 'check command', checkCwd: cwd, cwd }); return { code, text: 'probe result' }; } });
     if (accepted) { add(); assert.equal(readLedger(file).length, 2); }
     else {

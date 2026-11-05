@@ -743,6 +743,8 @@ kim の返事待ちは SessionStart と各セッションで「📌 kim の返�
 進捗通知の宛先は `fleet-pc-map.json` またはローカルの `~/.claude/fleet-pc-map.json` の同名 PC 行の `notifyDiscordId`。未設定だとチャットに案内が出て、kim に1日1回警告が飛ぶ。
 kim 宛の定期ダイジェスト（朝/夜/urgent）・完了通知・配送異常の警告は `config/kim-discord-allowlist.json` の許可リストで Discord DM へ流す（kim 2026-11-04 指示「進捗は聞かれる前に届ける」）。許可判定は平易化前の原文でも行う。許可リストを空にする・この区分を消す変更は `tools/kim-discord-allowlist.test.mjs` が落とす。
 
+`auto-progress.mjs --add-check`: 同じセッションで約束が増えたら1つの check にまとめる（別ラベルは拒否される）。kim の操作待ちは必ず `--ask-file` に kim がやることの全文を書く。
+
 **「この後の自動進行: <内容>」の宣言は台帳に記録され、止まれば自動で拾われる（2026-10-14 追加）**。Stop hook `tools/auto-progress-ledger.mjs` が宣言（「なし」以外）を `~/.claude/auto-progress-ledger.jsonl` に記録する（同一セッションは最新で置換）。各PCの定期タスク `OrgiastAutoProgressWatch` が毎時台帳を巡回し、宣言から1時間以降のものを判定する。stalled は前回から2時間以上空けて累計8回まで最終成果へ向けて自動再開し、共有 Sheet（タブ「自動進行」）へ行を足す。全PCが1日2回（朝枠＝定時報告・夕枠＝変化分のみ）自PC分をDiscord DMする。朝枠は変化0件でも進行中・判断待ち・完了を全件名前付きで送る。夕枠・枠外は変化分のみ。check の引き継ぎ: 新しい約束行に check が無く、直前の open 行に期限が未来の check があれば引き継ぐ（check が superseded で消える再発防止）。だから宣言は「実際に自動で進む内容」だけ書く。API エラー（利用上限など）で返答できずに終わった依頼も、毎時の巡回が transcript から見つけて台帳へ起票し、持ち主へ DM したうえで別モデルで自動再開する。Sheet 側の追加手順は `docs/auto-progress-gas-patch.gs.txt`。
 
 自動進行の結果はセッションの持ち主に DM とセッション内表示で必ず届く。user に「進捗どう？」と聞かせたら違反（2026-10-19 cr 指摘）。

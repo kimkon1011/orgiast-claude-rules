@@ -113,6 +113,11 @@ test('payload rejects invalid addresses, header injection and oversized cells; f
 });
 test('sheet provisioning uses shared account, literal cells, checkbox, sharing, clasp push and readback',async t=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bulk-mail-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  // Exercise clasp discovery without depending on a global installation on the runner.
+  const clasp=path.join(dir,'clasp fixture.js');fs.writeFileSync(clasp,'// clasp execution is captured by run below\n');
+  const previousClasp=process.env.ORGIAST_CLASP_JS;
+  t.after(()=>{if(previousClasp===undefined)delete process.env.ORGIAST_CLASP_JS;else process.env.ORGIAST_CLASP_JS=previousClasp;});
+  process.env.ORGIAST_CLASP_JS=clasp;
   const items=[{company:'A社',to:'a@example.com',subject:'案内',body:'=literal'}];const payload=createSpreadsheetPayload(items);const calls=[];let runArgs;
   const api=async(token,url,opts)=>{
     calls.push({token,url,opts});let value={};
@@ -126,6 +131,8 @@ test('sheet provisioning uses shared account, literal cells, checkbox, sharing, 
   const result=await createBulkApproval(items,{projectDir:dir,getClaspToken:async()=> 'oauth',getToken:async opts=>{assert.equal(opts.impersonate,'seisaku-team@orgiast.jp');return 'dwd';},api,run:(...args)=>{runArgs=args;}});
   assert.match(result.url,/sheet1.*authuser=kim@orgiast.jp/);assert.equal(result.status,'setup-required');assert.match(result.setupUrl,/authuser=seisaku-team@orgiast.jp/);
   assert.ok(runArgs[1].includes('push'));assert.ok(runArgs[1].includes('--force'));assert.equal(JSON.parse(fs.readFileSync(path.join(dir,'.clasp.json'))).scriptId,'script1');
+  assert.equal(runArgs[0],process.execPath);assert.equal(runArgs[1][0],clasp);
+  assert.equal(runArgs[1][runArgs[1].indexOf('--project')+1],path.join(dir,'.clasp.json'));assert.equal(runArgs[2].cwd,dir);
   assert.ok(calls.some(c=>c.url.includes(':batchUpdate')&&c.opts.body.includes('BOOLEAN')));assert.ok(calls.some(c=>c.url.includes('/permissions')&&c.opts.body.includes('kim@orgiast.jp')));
 });
 test('wrong clasp identity stops before creating any sheet',async()=>{

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import os from 'node:os';
-import { pathToFileURL } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 import { addItem } from './kim-inbox.mjs';
 
 const COMPANIES_URL = 'https://api.freee.co.jp/api/1/companies';
@@ -191,7 +191,7 @@ export async function main(argv = process.argv.slice(2)) {
   return runFreeeTokenHealth({ env, notify });
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntry(import.meta.url)) {
   try { process.exitCode = await main(); }
   catch { console.error('freee-token-health: unconfirmed: invalid configuration'); process.exitCode = 0; }
 }

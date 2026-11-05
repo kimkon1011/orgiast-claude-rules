@@ -286,5 +286,11 @@
     "route": "事業条件の聞き直しを防ぐため、振込先・送料・納期・返品条件を対象とする。不足値ごとに次の順で既存情報を確認する。(1) Drive DWD（kim impersonate / drive スコープ）で Drive API v3 files.list を使い、振込先・口座・送料・納期・返品の文書を検索する。検索結果の本文は通常ファイルなら files.get（alt=media）、Google Docs/Sheets なら Docs/Sheets API または files.export で読む。権限エラーは実応答を記録し、DWD 委任済み・読取可能とは断定しない。(2) Vercel の対象プロジェクトで vercel env ls production により変数の有無を確認する。ls は値の取得ではないため、必要な値は vercel env pull <一時ファイル> --environment=production で確認し、本番との対応を確認できた .env.local とアプリ DB/Supabase 設定テーブルも調べる。(3) node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query '振込先 OR 口座 OR 送料 OR 納期 OR 返品' --body で既存通知を検索する。(1)〜(3)をすべて試しても不足する値だけ「未確認」と書き、不足値の名前・探した経路・各結果（未発見または実際のエラー）を1回の手渡しにまとめる。出典と更新日を確認し、値が食い違えば推測で確定しない。API キー/接続文字列/ID が要る場合と同様、経路を試す前に user に聞き直さない。",
     "confidence": "high",
     "source": "2026-11-04 handoff-audit-candidates tool-name-route レビュー（元 pattern: 事業条件（振込先・送料・納期・返品条件）をkinに聞き直す / route が Drive MCP だけだったため手順文に置換）/ knowledge entry「API キー/接続文字列/ID が要る」の原則を事業条件に拡張 / 2026-11-05 PR #1457 レビュー: Drive → Vercel env/DB → Gmail → 未確認の順を明示し、権限・真因の未実測の断定を除去"
+  },
+  {
+    "pattern": "見積確認の依頼",
+    "route": "見積の金額確認・送信可否は Claude 側で判断する。見積の金額・数量・諸条件は、既存データ（案件シート・見積履歴・社内規程の粗利ルール）と突合して Claude 自身で検証し、kim に「合っているか」をチャットで確認させない。値引きの可否や価格設定は社内規程（30%ルール等）と原価データに基づいて Claude が判断する——粗利がルール内ならそのまま進める。見積PDFの生成は Drive DWD（kim impersonate / drive スコープ）でテンプレートを検索し、files.export?mimeType=application/pdf で出力する（Drive MCP は不要）。送信まで行う場合は、宛先・件名・本文・添付PDFを完成形で1回提示し、送信可否の承認だけを取る（feedback-confirm-before-external-send）。承認後は Claude が送信まで実行する: メールは `node tools/gmail-draft.mjs --to <addr> --subject <件名> --body-file <本文.txt> --attach <PDF>` で seisaku-team@orgiast.jp の下書きを作り、`node tools/gmail-draft.mjs --send <draftId>` で送る。送信後は返り値（messageId/threadId・HTTP status）を読み戻して報告し、kim に送信操作を求めない。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:f8e76d7286ebc8e3bf7902fcd7bb744aff78af1007c0521b512ff5b4a84bfbfd / 2026-11-06 tool-name-route レビューで route（）を手順文へ書き直して採用"
   }
 ]

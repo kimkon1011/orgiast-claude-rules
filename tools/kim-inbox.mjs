@@ -130,13 +130,13 @@ export function compactItems(home) {
     return result;
   });
 }
-function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays }) {
+function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false }) {
   if (!['ask', 'info', 'deadline'].includes(kind)) throw new Error('kind は ask / info / deadline');
   fs.mkdirSync(directory(home), { recursive: true });
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: clean(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(urgent ? { urgent: true } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: clean(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
   }
@@ -270,10 +270,11 @@ function deadlineDays(item, now) {
 }
 export function selectContext(items, { sessionId = '', now = Date.now(), sheetUrl = '（未初期化）' } = {}) {
   const pending = items.filter(i => i.status === 'open').sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  const asks = pending.filter(i => i.kind === 'ask'), infos = pending.filter(i => i.kind === 'info');
+  const allAsks = pending.filter(i => i.kind === 'ask');
+  const asks = allAsks.filter(i => !i.urgent), infos = pending.filter(i => i.kind === 'info');
   if (!pending.length) return '';
   const deadlines = pending.filter(i => i.kind === 'deadline').sort((a, b) => deadlineDays(a, now) - deadlineDays(b, now) || String(a.key).localeCompare(String(b.key)));
-  let text = `[kim-inbox 期限 ${deadlines.length} / 未回収 ask ${asks.length} / 未確認 info ${infos.length}] kim への報告は Discord ではなくこのセッションで行う（kim 2026-10-27）。ask は kim の返答を会話で受け取り記録するまで毎プロンプト再提示される。セッションを閉じても台帳に残り次セッションで再提示される。\n`;
+  let text = `[kim-inbox 期限 ${deadlines.length} / 未回収 ask ${allAsks.length} / 未確認 info ${infos.length}] kim への報告は Discord ではなくこのセッションで行う（kim 2026-10-27）。ask は kim の返答を会話で受け取り記録するまで毎プロンプト再提示される。セッションを閉じても台帳に残り次セッションで再提示される。\n`;
   const footer = '一覧: node tools/kim-inbox.mjs --list --open';
   if (deadlines.length) {
     text += `[期限 ${deadlines.length} 件 — 期限台帳 ${sheetUrl}] 返事は「D-003 完了」「D-003 延期 11/20」「D-003 不要」で可（Claude が node tools/deadline-watch.mjs --done/--defer/--drop で台帳と inbox を更新する）\n`;
@@ -286,6 +287,14 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
   const own = item => sessionId.length >= 8 && [...item.text.matchAll(/作業ID:\s*([a-f0-9]{8})(?![a-f0-9])/gi)]
     .some(match => match[1].toLowerCase() === sessionId.slice(0, 8).toLowerCase());
   const unseenFirst = (a, b) => Number(a.shownCount > 0) - Number(b.shownCount > 0) || newestFirst(a, b);
+  // 急ぎは通常の CONTEXT_LIMIT と別枠で確保し、期限・進捗よりも先頭に出す。
+  let urgentText = '';
+  for (const item of allAsks.filter(i => i.urgent).sort(unseenFirst).slice(0, 5)) {
+    const heading = clean(`■ 🔴急ぎ ask ${item.id} (from=${item.from} source=${item.source})`).slice(0, 220);
+    urgentText += `${heading}\n${clean(item.text).slice(0, 600)}\n→ kim に提示して返答をもらい: node tools/kim-inbox.mjs --answer ${item.id} --body-file <返答ファイル>\n`;
+    item.shownSessions = [...new Set([...item.shownSessions, sessionId])];
+    item.shownCount++; item.lastShownAt = new Date(now).toISOString();
+  }
   const sessionInfos = infos.filter(own).sort(unseenFirst);
   const highInfos = infos.filter(i => !own(i) && isHighInfo(i)).sort(unseenFirst);
   const otherInfos = infos.filter(i => !own(i) && !isHighInfo(i)).sort(newestFirst);
@@ -307,7 +316,7 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
     item.shownSessions = [...new Set([...item.shownSessions, sessionId])];
     item.shownCount++; item.lastShownAt = new Date(now).toISOString();
   }
-  return redactSecrets(text + footer);
+  return redactSecrets(urgentText + text + footer);
 }
 export async function main(args = process.argv.slice(2), { home = process.env.ORGIAST_HOME || os.homedir(), stdout = console.log, stderr = console.error, readStdin = readStdinWithTimeout } = {}) {
   const value = flag => args[args.indexOf(flag) + 1];
@@ -327,7 +336,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       });
       if (context) stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }));
     } else if (args.includes('--add')) {
-      const item = await addItem(home, { text: fs.readFileSync(value('--body-file'), 'utf8'), kind: args.includes('--kind') ? value('--kind') : 'info', key: args.includes('--key') ? value('--key') : undefined, due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '' });
+      const item = await addItem(home, { urgent: args.includes('--urgent'), text: fs.readFileSync(value('--body-file'), 'utf8'), kind: args.includes('--kind') ? value('--kind') : 'info', key: args.includes('--key') ? value('--key') : undefined, due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '' });
       stdout(JSON.stringify({ id: item.id, status: item.status, forwarded: item.status === 'forwarded' }));
     } else if (args.includes('--answer')) stdout(JSON.stringify(answerItem(home, value('--answer'), fs.readFileSync(value('--body-file'), 'utf8'), process.env.CLAUDE_SESSION_ID || '')));
     else if (args.includes('--seen-matching')) stdout(JSON.stringify(seenMatching(home, value('--seen-matching'), args.includes('--kind') ? value('--kind') : 'info')));

@@ -252,3 +252,48 @@ test('未達とgate-reportのinfoは抑止、掃除はsourceも検索しaskを�
   assert.equal(listItems(home, { status: 'open' }).length, 1);
   assert.equal(listItems(home, { status: 'open' })[0].kind, 'ask');
 });
+
+test('--urgent を保存し、古い通常 ask 150件・期限・セッション進捗より先に本文を出す', async t => {
+  const home = seat(t), file = path.join(home, 'urgent.txt');
+  const body = '開示可否の確認\n' + '至急の詳細。'.repeat(80);
+  fs.writeFileSync(file, body);
+  assert.equal(await main(['--add', '--kind', 'ask', '--urgent', '--body-file', file], { home, stdout: () => {} }), 0);
+  const [urgent] = listItems(home);
+  assert.equal(urgent.urgent, true);
+  const normal = Array.from({ length: 150 }, (_, n) => ({ ...urgent, id: `normal-${n}`, urgent: false, createdAt: '2026-01-01T00:00:00Z', text: `通常質問${n}`, shownSessions: [] }));
+  const deadline = { ...urgent, id: 'deadline', kind: 'deadline', text: '期限の確認', due: '2026-11-05', shownSessions: [] };
+  const info = { ...urgent, id: 'info', kind: 'info', text: '進捗 作業ID: deadbeef', shownSessions: [] };
+  const items = [...normal, deadline, info, urgent];
+  for (let n = 0; n < 2; n++) {
+    const context = selectContext(items, { sessionId: 'deadbeef-1234' });
+    assert.ok(context.startsWith(`■ 🔴急ぎ ask ${urgent.id}`));
+    assert.ok(context.includes(body));
+    assert.ok(context.indexOf(body) < context.indexOf(deadline.text));
+    assert.ok(context.indexOf(body) < context.indexOf(info.text));
+    assert.equal((context.match(/■ ask normal-/g) || []).length, 5);
+  }
+  assert.equal(urgent.shownCount, 2);
+});
+
+test('急ぎは上限超過でも600字を保ち、未表示優先・最大5件・open限定で通常枠と分離する', async t => {
+  const home = seat(t);
+  const base = await addItem(home, { kind: 'ask', text: '通常', urgent: false });
+  assert.equal(base.urgent, undefined);
+  const urgent = Array.from({ length: 7 }, (_, n) => ({ ...base, id: `urgent-${n}`, urgent: true,
+    createdAt: `2026-11-0${n + 1}T00:00:00Z`, text: `${n}` + 'あ'.repeat(599) + '切り捨て部分',
+    shownCount: n === 6 ? 1 : 0, shownSessions: [] }));
+  const closed = { ...base, id: 'closed-urgent', urgent: true, status: 'answered', text: '回答済み' };
+  const context = selectContext([base, ...urgent, closed], { sessionId: 's' });
+  assert.ok(context.length > CONTEXT_LIMIT);
+  assert.ok(context.startsWith('■ 🔴急ぎ ask urgent-5'));
+  for (const item of urgent.slice(1, 6)) {
+    assert.ok(context.includes(item.text.slice(0, 600)));
+    assert.equal(item.shownCount, 1);
+    assert.deepEqual(item.shownSessions, ['s']);
+  }
+  assert.equal((context.match(/■ 🔴急ぎ ask/g) || []).length, 5);
+  assert.doesNotMatch(context, /切り捨て部分|urgent-0|urgent-6|closed-urgent/);
+  assert.equal(urgent[0].shownCount, 0);
+  assert.equal(urgent[6].shownCount, 1);
+  assert.ok(context.includes(`■ ask ${base.id}`));
+});

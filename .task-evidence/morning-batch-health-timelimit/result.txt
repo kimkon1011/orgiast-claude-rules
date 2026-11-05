@@ -1,0 +1,86 @@
+方式: A（nightly-healthを独立タスクへ分離）
+理由: MorningBatchの合計15分制限から健康入力の生成を切り離す。open-work.mjsは健康JSONを読まず、nightly-batchログを読むためMorningBatchに残した。
+
+PR: #1602 https://github.com/kimkon1011/orgiast-claude-rules/pull/1602
+PR読み戻し: OPEN、automergeラベル付与済み。取得時点のautoMergeRequestはnull（自動マージ有効化の完了までは未確認）。
+Commit: ebb298b8
+Branch: fix/morning-batch-health-timelimit（816f9112から作成）
+作業ディレクトリ: C:\Users\uers\.claude\nightly-repo\.wt\morning-batch-health-timelimit
+共有.gitが読み取り専用のためworktreeではなく独立クローンを使用。共有indexには変更なし。
+
+検証: Windows node --test tools/register-nightly-tools.test.mjs = 8 pass / 0 fail。
+Windows git diff --check = exit 0。
+
+適用: register-nightly-tools.ps1 -HealthOnly を実行し成功。
+通常再登録は対象外NightlyBatchへ4アクション追加を予定したため、対象を限定するHealthOnlyスイッチを追加した。
+XML比較: MorningBatchのSettings変更なし。HealthのPrincipal・時間制限以外のSettingsはMorningBatchと一致。
+OrgiastNightlyBatch / OrgiastDeadlineDetect / OrgiastDeadlineWatch / OrgiastNightlyRemediate の定義変更なし。
+他タスク削除・無効化なし。
+
+11/05遅延要因:
+07:15:32更新のnightly-health.log末尾30行では、OrgiastDeadlineWatchのGet-ScheduledTask / Get-ScheduledTaskInfo取得がspawnSync powershell.exe ETIMEDOUTで終了。
+呼び出しはtools/lib/scheduled-task.mjsの20秒タイムアウト付きで、タスク状態照会が遅延要因の一つ。末尾にはOrgiastDiscordTaskDigestの照会記録もある。
+各処理の時刻がないため全体の時間配分と強制終了瞬間の命令は断定できない。監督確認済みの11/05 07:15:33 / 267014と整合するが、health更新再開は次回07:10の実行後に確認が必要。
+入力の最終更新: 2026-11-04 07:02:47.382 JST（本作業ではhealth本体を手動実行していない）。
+
+タスク読み戻し（実機）:
+[
+    {
+        "TaskName":  "OrgiastMorningBatch",
+        "Actions":  [
+                        {
+                            "Execute":  "C:\\Windows\\System32\\wscript.exe",
+                            "Arguments":  "//nologo \"C:\\Users\\uers\\.claude\\tools\\run-hidden.vbs\" \"powershell.exe\" \"-NoProfile\" \"-NonInteractive\" \"-ExecutionPolicy\" \"Bypass\" \"-File\" \"C:\\Users\\uers\\.claude\\tools\\nightly-bootstrap.ps1\" \"-Target\" \"tools\\morning-batch.mjs\"",
+                            "WorkingDirectory":  null
+                        },
+                        {
+                            "Execute":  "C:\\WINDOWS\\System32\\wscript.exe",
+                            "Arguments":  "//nologo \"C:\\Users\\uers\\.claude\\tools\\run-hidden.vbs\" \"C:\\Program Files\\nodejs\\node.exe\" \"C:\\Users\\uers\\.claude\\nightly-repo\\tools\\next-actions.mjs\"",
+                            "WorkingDirectory":  null
+                        },
+                        {
+                            "Execute":  "C:\\WINDOWS\\System32\\wscript.exe",
+                            "Arguments":  "//nologo \"C:\\Users\\uers\\.claude\\tools\\run-hidden.vbs\" \"C:\\Program Files\\nodejs\\node.exe\" \"C:\\Users\\uers\\.claude\\nightly-repo\\tools\\open-work.mjs\"",
+                            "WorkingDirectory":  null
+                        }
+                    ],
+        "ExecutionTimeLimit":  "PT15M",
+        "MultipleInstances":  "IgnoreNew",
+        "Principal":  {
+                          "UserId":  "uers",
+                          "LogonType":  3,
+                          "RunLevel":  0
+                      },
+        "Triggers":  [
+                         {
+                             "StartBoundary":  "2026-08-31T07:00:00+09:00",
+                             "DaysInterval":  1,
+                             "Enabled":  true
+                         }
+                     ]
+    },
+    {
+        "TaskName":  "OrgiastNightlyHealth",
+        "Actions":  [
+                        {
+                            "Execute":  "C:\\WINDOWS\\System32\\wscript.exe",
+                            "Arguments":  "//nologo \"C:\\Users\\uers\\.claude\\tools\\run-hidden.vbs\" \"C:\\Program Files\\nodejs\\node.exe\" \"C:\\Users\\uers\\.claude\\nightly-repo\\tools\\nightly-health.mjs\"",
+                            "WorkingDirectory":  "C:\\Users\\uers\\.claude\\nightly-repo"
+                        }
+                    ],
+        "ExecutionTimeLimit":  "PT30M",
+        "MultipleInstances":  "IgnoreNew",
+        "Principal":  {
+                          "UserId":  "uers",
+                          "LogonType":  3,
+                          "RunLevel":  0
+                      },
+        "Triggers":  [
+                         {
+                             "StartBoundary":  "2026-11-06T07:10:00+09:00",
+                             "DaysInterval":  1,
+                             "Enabled":  true
+                         }
+                     ]
+    }
+]

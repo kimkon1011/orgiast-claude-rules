@@ -1,0 +1,12 @@
+{
+  "expected_top_y_px": 296.8473587036133,
+  "detected_top_y_px": 258,
+  "top_shift_percent": -12.00628218134189,
+  "threshold_percent": 5,
+  "sobel_score": 0.84009862170991,
+  "passed": false,
+  "search_x_px": [
+    637,
+    965
+  ]
+}

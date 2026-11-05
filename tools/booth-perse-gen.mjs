@@ -59,7 +59,7 @@ export function buildPrompt(common, plan, maxHeight = DEFAULT_MAX_HEIGHT) {
   return `${common}\n${plan.add}\n${heightLightClause(maxHeight)}\n
 MANDATORY BASE-IMAGE FIDELITY: The FIRST reference image is a dimensionally accurate 3D underlay. Preserve its composition, camera position and perspective, booth outer envelope, truss top edge, all four column positions, wall position, and every person's size and position EXACTLY. Paint in materials, lighting and brand treatment only. Do NOT make the booth envelope, canopy, columns, signs, or infinity feature taller or larger than the underlay. Keep the three open sides open.
 
-MANDATORY TEXT: Do not draw Japanese text or Japanese signs. The only readable text allowed anywhere is "GridBeyond" and one short English tagline. No invented words, numbers, prices, or pseudo-lettering.\n`;
+MANDATORY TEXT: Do not draw Japanese text or Japanese signs. The only readable text allowed anywhere is "GridBeyond". No invented words, numbers, prices, or pseudo-lettering.\n`;
 }
 
 export function loadKey(home = homedir()) {

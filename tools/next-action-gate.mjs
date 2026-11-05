@@ -185,12 +185,23 @@ export function reportsCloseSteps(text) {
   return numbered('1') && numbered('2') && numbered('3');
 }
 
-function hasOpenSessionCheck(input) {
-  if (!input.session_id) return false;
+function sessionCheckState(input) {
+  const missing = { open: false, closedStatus: null };
+  if (!input.session_id) return missing;
   try {
-    return latestOpenPromises(readLedger(ledgerFile()))
-      .some(row => row.sessionId === input.session_id && row.status === 'open' && typeof row.check === 'string' && row.check.trim());
-  } catch { return false; }
+    const rows = readLedger(ledgerFile()).filter(row => row.sessionId === input.session_id);
+    return {
+      open: latestOpenPromises(rows)
+        .some(row => row.status === 'open' && typeof row.check === 'string' && row.check.trim()),
+      closedStatus: rows.find(row => row.status === 'done' || row.status === 'closed')?.status ?? null,
+    };
+  } catch { return missing; }
+}
+
+function closedCheckReason(checkState) {
+  return checkState.closedStatus
+    ? `台帳の行は ${checkState.closedStatus} で閉じています。追加の依頼を受けたなら、\`node tools/auto-progress.mjs --add-check ...\` で登録し直してください（done の目印は kim の受け取り返答後にだけ作る）。`
+    : '';
 }
 
 // Persistent registrations survive user turns until expiration or task termination.
@@ -328,17 +339,18 @@ function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {
     return { decision: 'block', code: 'NEXT-ACTION-DEFERRAL', reason: DEFERRAL_REASON };
   }
   const wakeup = hasSessionWakeup(transcriptRaw, input);
+  const checkState = sessionCheckState(input);
   const noAutocheck = [...turnSource.matchAll(/\[NO-AUTOCHECK-OK:[ \t]*([^\]\r\n]*)\]/g)]
     .some(([, reason]) => reason.trim().length > 0);
   // チャットで答えるだけの返信待ち（reply-only）は会話に戻ってくるので台帳は要らない。それ以外の人待ちは載せる。
   const userHandoff = /\[手渡し判定\]|お願いする操作|^手間監査:/m.test(body);
   if (!permanentFix && (userHandoff || !NO_ACTION_PATTERN.test(footer.nextAction)) && classifyHandoff(source) !== 'reply-only'
-    && !hasOpenSessionCheck(input) && !noAutocheck) {
-    return { decision: 'block', code: 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', reason: (userHandoff ? 'user 本人への手渡し（[手渡し判定]／お願いする操作）も人待ちです。' : '') + '人待ちの自動進行は台帳の定期チェックに載せる: node tools/auto-progress.mjs --add-check --session <id> --check "<exit0=達成/1=未達のコマンド>" --deadline +7d --label "<名前>" --next-claude "<次の手>"。自動進行が「なし」でも同じセッションの open 行が必要です。自動確認できない場合だけ [NO-AUTOCHECK-OK: <理由>] を記載してください。' };
+    && !checkState.open && !noAutocheck) {
+    return { decision: 'block', code: 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', reason: closedCheckReason(checkState) + (userHandoff ? 'user 本人への手渡し（[手渡し判定]／お願いする操作）も人待ちです。' : '') + '人待ちの自動進行は台帳の定期チェックに載せる: node tools/auto-progress.mjs --add-check --session <id> --check "<exit0=達成/1=未達のコマンド>" --deadline +7d --label "<名前>" --next-claude "<次の手>"。自動進行が「なし」でも同じセッションの open 行が必要です。自動確認できない場合だけ [NO-AUTOCHECK-OK: <理由>] を記載してください。' };
   }
   // Monitor / 起床通知はセッション終了で消える。実際の永続台帳を必須にする。
-  if (WAIT_STATES.has(sessionState) && !hasOpenSessionCheck(input)) {
-    return { decision: 'block', code: 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK', reason: '作業中のまま応答を終える前に、同じセッションの永続チェックを登録してください: node tools/auto-progress.mjs --add-check --session <id> --check "<達成判定>" --deadline +3d --label "<作業名>" --next-claude "<次の手>"。自動進行が「なし」でも必要です。バックグラウンド完了通知や登録コマンドへの言及だけでは代替できません。' };
+  if (WAIT_STATES.has(sessionState) && !checkState.open) {
+    return { decision: 'block', code: 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK', reason: closedCheckReason(checkState) + '作業中のまま応答を終える前に、同じセッションの永続チェックを登録してください: node tools/auto-progress.mjs --add-check --session <id> --check "<達成判定>" --deadline +3d --label "<作業名>" --next-claude "<次の手>"。自動進行が「なし」でも必要です。バックグラウンド完了通知や登録コマンドへの言及だけでは代替できません。' };
   }
   // 台帳は Discord へ通知するだけでセッション内には何も報告しない。対話セッションで「まだ閉じない」
   // なら、セッション自身を起こす CronCreate（台帳と同じく両方要る）を必須にする（nishi 2026-10-29・11-04）。

@@ -1,4 +1,4 @@
-﻿param([switch]$Remove)
+﻿param([switch]$Remove, [string]$EnvFile = '')
 $ErrorActionPreference = 'Stop'
 $name = 'ClaudeFreeeTokenHealth'
 if ($Remove) { Unregister-ScheduledTask -TaskName $name -Confirm:$false; exit }
@@ -9,6 +9,10 @@ $node = (Get-Command node.exe -ErrorAction Stop).Source
 $hidden = Join-Path $env:USERPROFILE '.claude\tools\run-hidden.vbs'
 if (!(Test-Path $script) -or !(Test-Path $hidden)) { throw 'Health script or run-hidden.vbs missing' }
 $arguments = '"{0}" "{1}" "{2}"' -f $hidden,$node,$script
+if ($EnvFile) {
+  if (-not (Test-Path -LiteralPath $EnvFile -PathType Leaf)) { throw "env file not found: $EnvFile" }
+  $arguments = '{0} --env-file "{1}"' -f $arguments, $EnvFile
+}
 $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\wscript.exe') -Argument $arguments -WorkingDirectory (Split-Path $toolsDir)
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Hours 6)
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -Priority 4 -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)

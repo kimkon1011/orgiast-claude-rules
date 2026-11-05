@@ -33,7 +33,8 @@ export function sessionProgressCheck(session, { home = process.env.ORGIAST_HOME 
         ? content.filter(block => block.type === 'text').map(block => block.text || '').join('\n') : '';
       if (text.trim()) finalText = text;
     }
-    const sessionState = footerValues(finalText)?.session;
+    // Normalize transcript text as well as JSONL record separators on Windows.
+    const sessionState = footerValues(finalText.replace(/\r\n/g, '\n'))?.session;
     return [SESSION_PHRASES.closed, SESSION_PHRASES.delete].includes(sessionState) ? 0 : 1;
   } catch { return 1; }
 }

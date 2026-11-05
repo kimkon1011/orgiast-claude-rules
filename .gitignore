@@ -22,6 +22,9 @@ tools/.ps.tmp.ps1
 # $env:LOCALAPPDATA が未設定のまま PowerShell を起動すると repo 直下に掘られるキャッシュ
 /Microsoft/
 
+# AWS CLI/SDK が cwd=repo で起動されたときに掘る空の既定設定ディレクトリ（機械ローカル）
+/.aws/
+
 # Genspark Tool CLI の自動生成スキル (gsk init-skills)。ベンダー成果物なのでコミットしない
 .gsk/
 
@@ -79,3 +82,8 @@ FEEDBACK_KIT_REPORT.md
 # brandcard-print-pdf.mjs が qrcode.min.js を実行時に tools/.cache/ へ落とすキャッシュ先。
 # 追跡しないため dirty-worktree-guard の救済対象にしない（2026-11-02 に rescue が拾った実測）。
 tools/.cache/
+
+# CodeGraph (colbymchenry/codegraph) 索引成果物。WSL /mnt/ は .codegraph-wsl/
+/.codegraph/
+/.codegraph-wsl/
+/.codegraph-npm-cache/

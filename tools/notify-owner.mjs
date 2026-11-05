@@ -69,26 +69,41 @@ export function resolveOwnerDiscordId(owner, { home = os.homedir(), directory, .
 }
 
 // EncodedCommand uses UTF-16LE in Windows PowerShell, including Japanese text.
-export function sendOwnerToast(text, { spawn = spawnSync, onToastResult } = {}) {
+// 2026-11-04: ToastNotificationManager が画面に出ないため NotifyIcon.ShowBalloonTip に変更。
+// pwsh.exe 優先、無ければ powershell.exe。
+export function sendOwnerToast(text, { spawn = spawnSync, onToastResult, exe } = {}) {
   const payload = Buffer.from(Array.from(String(text)).slice(0, 300).join(''), 'utf8').toString('base64');
+  const shellExe = exe || resolvePowerShellExe();
   const script = `$ErrorActionPreference='Stop'
 try {
+  Add-Type -AssemblyName System.Windows.Forms
   $body=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${payload}'))
-  [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime] > $null
-  [Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime] > $null
-  $xml=New-Object Windows.Data.Xml.Dom.XmlDocument
-  $xml.LoadXml('<toast><visual><binding template="ToastGeneric"><text>Claude 進捗</text><text>'+[Security.SecurityElement]::Escape($body)+'</text></binding></visual></toast>')
-  $toast=[Windows.UI.Notifications.ToastNotification]::new($xml)
-  [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe').Show($toast)
+  $icon=New-Object System.Windows.Forms.NotifyIcon
+  $icon.Icon=[System.Drawing.SystemIcons]::Information
+  $icon.BalloonTipIcon='Info'
+  $icon.BalloonTipTitle='Claude 進捗'
+  $icon.BalloonTipText=$body
+  $icon.Visible=$true
+  $icon.ShowBalloonTip(5000)
+  Start-Sleep -Seconds 6
+  $icon.Dispose()
   exit 0
 } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }`;
   let result;
   try {
-    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, timeout: 15000, encoding: 'utf8' });
+    const child = spawn(shellExe, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, timeout: 20000, encoding: 'utf8' });
     result = { ok: !child.error && child.status === 0, exitCode: child.status ?? null, ...(child.error ? { error: child.error.code || child.error.message } : child.status !== 0 ? { error: redactSecrets(String(child.stderr || '')).trim().slice(0, 500) } : {}) };
   } catch (error) { result = { ok: false, exitCode: null, error: error.code || error.message }; }
   onToastResult?.(result);
   return result.ok;
+}
+
+function resolvePowerShellExe() {
+  try {
+    const result = spawnSync('where.exe', ['pwsh'], { windowsHide: true, timeout: 5000, encoding: 'utf8' });
+    if (result.status === 0 && String(result.stdout || '').trim()) return 'pwsh.exe';
+  } catch { /* fall through */ }
+  return 'powershell.exe';
 }
 
 export const RECIPIENT_NOTICE = 'Discord の宛先が未設定です。Claude のチャットに『Discordユーザー名: xxx』と送れば設定されます';
@@ -196,7 +211,8 @@ export async function notifyOwner(owner, text, options = {}) {
       reason = result?.reason || 'Discord DM delivery failed or message id missing';
     } catch { reason = 'Discord DM delivery failed'; }
   }
-  attempts.push({ channel: 'discord', ok: false, skipped: !valid || !discordEnabled, reason });
+  const degradation = !valid && discordEnabled ? { degraded: 'no-recipient' } : {};
+  attempts.push({ channel: 'discord', ok: false, skipped: !valid || !discordEnabled, reason, ...degradation });
   if (!valid && discordEnabled) await alertUnresolvedRecipient(owner, options);
   // Local fallbacks must never deliver another PC owner's private progress here.
   if (!owner || owner.toLowerCase() !== resolveOwner(options).toLowerCase()) {
@@ -207,7 +223,7 @@ export async function notifyOwner(owner, text, options = {}) {
     : safeText;
   let inboxOk = localInboxOk;
   try { if (!inboxOk) { await prependInbox(home, fallbackText, at); inboxOk = true; } } catch { /* recorded below */ }
-  attempts.push({ channel: 'inbox', ok: inboxOk });
+  attempts.push({ channel: 'inbox', ok: inboxOk, ...degradation });
   try { if (!local || kim) appendOwnerInbox(home, { source: 'notify-owner', text: safeText }); } catch { /* legacy chat inbox */ }
   const toast = async (body, purpose) => {
     let receipt;
@@ -235,7 +251,7 @@ export async function notifyOwner(owner, text, options = {}) {
   }
   const channel = sent ? 'toast' : inboxOk ? 'inbox' : 'none';
   const progressToast = attempts.find(a => a.purpose === 'progress');
-  return finish({ delivered: channel, channel, ok: channel !== 'none', reason, toastExitCode: progressToast?.exitCode ?? null });
+  return finish({ delivered: channel, channel, ok: channel !== 'none', ...degradation, reason, toastExitCode: progressToast?.exitCode ?? null });
 }
 
 export async function main(args = process.argv.slice(2), options = {}) {

@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { parseHandoff } from './auto-session.mjs';
-import { applyAutoHeal, authRestoredAfter, collectFindings, dedupeLimitEvents, emptyOutputReason, isCooldownSkippedRow, isEmptyDiffEscalationRow, isQuotaLimitedRow, lowYieldBackends, metricFromLaterWindow, parseRateLimitsFromText, POLICY_STALL_SINCE, policyStallAttempts, quotaSweepPartialProgressRow, quotaSweepProgressRow, readCodexUsedPercent, timeoutWasteSummary, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
+import { applyAutoHeal, authRestoredAfter, collectFindings, dedupeLimitEvents, emptyOutputReason, isCooldownSkippedRow, isDeferredSkippedRow, isEmptyDiffEscalationRow, isQuotaLimitedRow, lowYieldBackends, metricFromLaterWindow, parseRateLimitsFromText, POLICY_STALL_SINCE, policyStallAttempts, quotaSweepPartialProgressRow, quotaSweepProgressRow, readCodexUsedPercent, timeoutWasteSummary, upsertFixTasks, windowResetsAfterLimit } from './delegation-health-check.mjs';
 import { TIMEOUT_KILL_FIX_MERGED_AT } from './timeout-waste-judge.mjs';
 
 const NOW = new Date('2026-09-09T12:00:00.000Z');
@@ -173,6 +173,27 @@ test('emptyOutputReason は先頭が切れた認証失敗 stderrTail（401 も M
   assert.equal(emptyOutputReason({ status: 1, exitCode: 1, launched: true, timedOut: false, secs: 3, stderrTail: truncated }), 'auth_failed');
 });
 
+test('emptyOutputReason は Failed to refresh token のトークン期限切れを auth_failed に分類する', () => {
+  // 実測 2026-11-03: codex-do が stderrTail を末尾200字へ切り詰め、"ager: Failed to refresh token" で始まる。
+  const truncated = 'ager: Failed to refresh token: Your access token could not be refreshed. Please log out and sign in again. ERROR: worksp';
+  assert.doesNotMatch(truncated, /401|Missing b|or basic authentication/i);
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 27, stderrTail: truncated }), 'auth_failed');
+});
+
+test('Failed to refresh token の出力ゼロで codex_empty_output を出さない', () => {
+  const dir = home();
+  const truncated = 'ager: Failed to refresh token: Your access token could not be refreshed. Please log out and sign in again. ERROR: worksp';
+  write(dir, 'executor-usage.jsonl', [0, 1].map((i) => row({
+    t: `2026-11-03T23:1${i}:00.000Z`, provider: 'codex', out: 0, status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 20,
+    stderrTail: truncated,
+  })).join(''));
+  const findings = collectFindings({ home: dir, now: new Date('2026-11-04T00:00:00.000Z'), codexUsedPercent: null });
+  const ids = findings.map((item) => item.id);
+  assert.ok(ids.includes('codex_auth_failed'), JSON.stringify(ids));
+  assert.ok(!ids.includes('codex_empty_output'), JSON.stringify(ids));
+  assert.equal(findings.find((item) => item.id === 'codex_auth_failed').severity, 'high');
+});
+
 test('先頭が切れた認証失敗 stderrTail の fallback 連続失敗は lane_outage_unrepaired ではなく codex_auth_failed に繋がる', () => {
   const truncated = 'arer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: a52b4a02b91c19e8-KIX, request id: req_c13287e0c5004bec97e2e26b1d8bef5b';
   const dir = home();
@@ -184,6 +205,20 @@ test('先頭が切れた認証失敗 stderrTail の fallback 連続失敗は lan
   assert.ok(ids.includes('codex_auth_failed'), JSON.stringify(ids));
   assert.ok(!ids.includes('lane_outage_unrepaired'), JSON.stringify(ids));
   assert.equal(findings.find((item) => item.id === 'codex_auth_failed').severity, 'high');
+});
+
+test('認証失敗に preflight_blocked（unattended_budget 保留）が混ざっても lane_outage_unrepaired ではなく codex_auth_failed に繋がる', () => {
+  const truncated = 'arer or basic authentication in header, url: https://api.openai.com/v1/responses, cf-ray: a52b4a02b91c19e8-KIX, request id: req_c13287e0c5004bec97e2e26b1d8bef5b';
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [
+    row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 15, stderrTail: truncated }),
+    row({ t: '2026-09-09T10:01:00Z', provider: 'codex', out: 0, status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 16, stderrTail: truncated }),
+    row({ t: '2026-09-09T10:02:00Z', provider: 'codex', model: 'codex-cli/gpt-5.6-sol', status: 'deferred', reason: 'unattended_budget', retryAt: 1793804400000, origin: 'unattended', kind: 'implement', launched: false, cwd: '/tmp' }),
+  ].join(''));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  const ids = findings.map((item) => item.id);
+  assert.ok(ids.includes('codex_auth_failed'), JSON.stringify(ids));
+  assert.ok(!ids.includes('lane_outage_unrepaired'), JSON.stringify(ids));
 });
 
 test('emptyOutputReason は U+2019 と U+0027 の両方の usage limit 行を usage_limit に分類する', () => {
@@ -1412,4 +1447,73 @@ test('status:ok out:0 のプローブ行に実失敗が混ざれば lane_outage_
   assert.ok(outage, '実失敗が3件以上あれば high severity の全滅 finding を出す');
   assert.equal(outage.severity, 'high');
   assert.equal(outage.evidence[0], '3件すべて失敗');
+});
+
+// 2026-11-03 実測: codex の「403件すべて失敗」の実体は codex_cooldown で保留(deferred)された398件
+// + 上限到達(usage_limit)5件。deferred は「上限中なので投げなかった」記録(終了コード75・失敗ではない)で、
+// attempts の分母に入っていたため high の lane_outage_unrepaired が起票された。
+const DEFERRED_ROW = (i) => ({ t: `2026-09-09T10:1${i}:00.000Z`, provider: 'codex', model: 'codex-cli/default', status: 'deferred', reason: 'codex_cooldown', origin: 'unattended', kind: 'implement', launched: false });
+const USAGE_LIMIT_ROW = (i) => ({ t: `2026-09-09T10:2${i}:30.000Z`, provider: 'codex', model: 'codex-cli/default', in: 3531, out: 0, status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 32, stderrTail: TRUNCATED_USAGE_LIMIT_STDERR });
+
+test('isDeferredSkippedRow は deferred の行だけを true にする', () => {
+  for (const status of ['deferred', 'Deferred', 'DEFERRED']) assert.equal(isDeferredSkippedRow({ status }), true, status);
+  for (const status of ['cooldown', 'error', 'ok', 0, '0', 75, '', undefined, null]) assert.equal(isDeferredSkippedRow({ status }), false, String(status));
+  assert.equal(isDeferredSkippedRow({}), false);
+  assert.equal(isDeferredSkippedRow(null), false);
+  assert.equal(isDeferredSkippedRow(), false);
+});
+
+test('emptyOutputReason は deferred 行を cooldown_skipped に分類し preflight_blocked と区別する', () => {
+  assert.equal(emptyOutputReason({ launched: false, status: 'deferred', reason: 'codex_cooldown' }), 'cooldown_skipped');
+  // 対照: 起動前ゲートの番兵行(status が文字列)は従来どおり preflight_blocked
+  assert.equal(emptyOutputReason({ launched: false, status: 'spec-missing-context' }), 'preflight_blocked');
+  // 対照: 上限メッセージは従来どおり usage_limit
+  assert.equal(emptyOutputReason({ launched: true, status: 'error', exitCode: 1, stderrTail: TRUNCATED_USAGE_LIMIT_STDERR }), 'usage_limit');
+});
+
+test('deferred 行だけの窓（上限中で一度も投げていない）は high の未修理全滅にしない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [0, 1, 2, 3, 4].map((i) => row(DEFERRED_ROW(i))).join(''));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  const ids = findings.map((f) => f.id);
+  assert.ok(!ids.includes('lane_outage_unrepaired'), JSON.stringify(ids));
+  const visible = findings.find((f) => f.id === 'provider_cooldown_skipped');
+  assert.ok(visible, 'cooldown 中で試行されていない事実は low で可視化する');
+  assert.equal(visible.severity, 'low');
+  assert.equal(visible.fixTask, undefined);
+});
+
+test('codex_cooldown の deferred 行と usage_limit 行の混在は lane_outage_unrepaired でなく low の可視化にする（2026-11-03 実測の再現）', () => {
+  const dir = home();
+  const rows = [0, 1, 2, 3, 4].map((i) => DEFERRED_ROW(i)).concat([5, 6, 7, 8, 9].map((i) => USAGE_LIMIT_ROW(i)));
+  write(dir, 'executor-usage.jsonl', rows.map(row).join(''));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  const ids = findings.map((f) => f.id);
+  assert.ok(!ids.includes('lane_outage_unrepaired'), JSON.stringify(ids));
+  assert.ok(ids.includes('codex_usage_limit'), JSON.stringify(ids));
+  const visible = findings.find((f) => f.id === 'provider_usage_limit');
+  assert.ok(visible, '上限/レート制限だけで全滅した事実は low で可視化する');
+  assert.equal(visible.provider, 'codex');
+  assert.equal(visible.severity, 'low');
+  assert.equal(visible.fixTask, undefined);
+});
+
+test('usage_limit だけで全滅した codex 窓も lane_outage_unrepaired でなく low の可視化にする', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl', [0, 1, 2, 3, 4].map((i) => row(USAGE_LIMIT_ROW(i))).join(''));
+  const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
+  const ids = findings.map((f) => f.id);
+  assert.ok(!ids.includes('lane_outage_unrepaired'), JSON.stringify(ids));
+  assert.ok(ids.includes('codex_usage_limit'), JSON.stringify(ids));
+  assert.equal(findings.find((f) => f.id === 'provider_usage_limit').severity, 'low');
+});
+
+test('deferred 行に本物の失敗（上限以外の exit_1）が混ざれば従来どおり high の未修理全滅にする', () => {
+  const dir = home();
+  const realFails = [5, 6, 7].map((i) => ({ t: `2026-09-09T10:2${i}:40.000Z`, provider: 'codex', out: 0, status: 1, launched: true }));
+  write(dir, 'executor-usage.jsonl', [0, 1, 2].map((i) => DEFERRED_ROW(i)).concat(realFails).map(row).join(''));
+  const outage = collectFindings({ home: dir, now: NOW, codexUsedPercent: null }).find((f) => f.id === 'lane_outage_unrepaired');
+  assert.ok(outage, '上限以外の実失敗が3件以上残れば high の全滅 finding を出す');
+  assert.equal(outage.provider, 'codex');
+  assert.equal(outage.severity, 'high');
 });

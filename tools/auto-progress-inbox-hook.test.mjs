@@ -6,9 +6,9 @@ import { appendOwnerInbox, appendInbox, consumeInbox, inboxFile } from './auto-p
 test('inbox を hook に注入して既読化する', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'progress-inbox-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   appendInbox(home, 's1', { state: 'done', evidence: '検証済み', artifact: 'out/report.html' });
-  const out = consumeInbox({ session_id: 's1', hook_event_name: 'SessionStart' }, { home });
+  const out = consumeInbox({ session_id: 's1', hook_event_name: 'SessionStart' }, { home, env: {} });
   assert.match(out.hookSpecificOutput.additionalContext, /done: 検証済み（成果物: out\/report.html）/);
-  assert.equal(consumeInbox({ session_id: 's1' }, { home }), null);
+  assert.equal(consumeInbox({ session_id: 's1' }, { home, env: {} }), null);
   assert.equal(JSON.parse(fs.readFileSync(inboxFile(home, 's1'), 'utf8')).shown, true);
 });
 
@@ -18,7 +18,7 @@ test('owner inbox は別セッションで最大120字の各通知を表示し�
   appendOwnerInbox(home, { source: 'notify-owner', text: '古い通知' });
   appendInbox(home, 'original', { evidence: '別セッション専用' });
   appendOwnerInbox(home, { source: 'digest', text: 'あなたの判断待ち\nあなたの判断待ち\n' + '長'.repeat(1600) });
-  const out = consumeInbox({ session_id: 'new', hook_event_name: 'SessionStart' }, { home });
+  const out = consumeInbox({ session_id: 'new', hook_event_name: 'SessionStart' }, { home, env: {} });
   const context = out.hookSpecificOutput.additionalContext;
   assert.equal(out.hookSpecificOutput.hookEventName, 'SessionStart');
   assert.match(context, /📲 自動進行の結果（聞かれる前にお知らせ）/);
@@ -26,7 +26,7 @@ test('owner inbox は別セッションで最大120字の各通知を表示し�
   assert.ok(context.includes(('あなたの判断待ち あなたの判断待ち ' + '長'.repeat(1600)).slice(0, 120)));
   assert.ok(!context.includes('長'.repeat(1500)));
   assert.match(context, /古い通知/);
-  assert.equal(consumeInbox({ session_id: 'third' }, { home }), null);
+  assert.equal(consumeInbox({ session_id: 'third' }, { home, env: {} }), null);
   const rows = fs.readFileSync(inboxFile(home, '_owner'), 'utf8').trim().split('\n').map(JSON.parse);
   assert.ok(rows.every(row => row.shown && row.shownAt && row.shownSession === 'new'));
   assert.equal(JSON.parse(fs.readFileSync(inboxFile(home, 'original'), 'utf8')).shown, false);
@@ -41,7 +41,7 @@ test('owner inbox の24時間抑止は未表示同文だけに適用する', t =
   const file = inboxFile(home, '_owner');
   fs.writeFileSync(file, JSON.stringify({ ...rows()[0], at: new Date(Date.now() - 86400001).toISOString() }) + '\n');
   add(); assert.equal(rows().length, 2);
-  assert.equal(consumeInbox({ session_id: 's', hook_event_name: 'UserPromptSubmit' }, { home }).hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+  assert.equal(consumeInbox({ session_id: 's', hook_event_name: 'UserPromptSubmit' }, { home, env: {} }).hookSpecificOutput.hookEventName, 'UserPromptSubmit');
   add(); assert.equal(rows().length, 3);
 });
 
@@ -89,4 +89,46 @@ test('owner は新しい順に5件・1行120字、残りは次回表示', t => {
   const next = consumeInbox({ session_id: 's' }, { home, env: {} }).hookSpecificOutput.additionalContext;
   assert.match(next, /1:/); assert.match(next, /0:/);
   assert.equal(consumeInbox({ session_id: 's' }, { home, env: {} }), null);
+});
+
+function warningOptions(t) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'recipient-warning-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  return { home, env: {}, label: 'test-PC', pcMap: { 'test-PC': { account: 'owner@example.com' } }, directory: [], now: new Date(2026, 10, 3, 9).getTime() };
+}
+
+test('宛先空なら先頭に警告し同日別セッションは抑止、翌日は再表示', t => {
+  const options = warningOptions(t);
+  appendInbox(options.home, 's1', { evidence: '通常の結果' });
+  const out = consumeInbox({ session_id: 's1' }, options);
+  assert.ok(out.hookSpecificOutput.additionalContext.startsWith('⚠ 進捗DMの宛先が未登録（PC: test-PC / owner@example.com）:'));
+  assert.match(out.hookSpecificOutput.additionalContext, /通常の結果/);
+  const file = path.join(options.home, '.claude', 'auto-progress-inbox', '_recipient-warning.json');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).at, new Date(options.now).toISOString());
+  assert.equal(consumeInbox({ session_id: 's2' }, options), null);
+  appendInbox(options.home, 's2', { evidence: '次の結果' });
+  const next = consumeInbox({ session_id: 's2' }, options).hookSpecificOutput.additionalContext;
+  assert.match(next, /次の結果/);
+  assert.doesNotMatch(next, /⚠ 進捗DM/);
+  options.now = new Date(2026, 10, 4, 0).getTime();
+  assert.match(consumeInbox({ session_id: 's3' }, options).hookSpecificOutput.additionalContext, /^⚠ 進捗DM/);
+});
+
+test('宛先ありなら警告も警告記録も出さない', t => {
+  const options = warningOptions(t);
+  options.pcMap['test-PC'].notifyDiscordId = '42';
+  assert.equal(consumeInbox({ session_id: 's1' }, options), null);
+  appendInbox(options.home, 's1', { evidence: '通常の結果' });
+  const out = consumeInbox({ session_id: 's1' }, options);
+  assert.match(out.hookSpecificOutput.additionalContext, /通常の結果/);
+  assert.doesNotMatch(out.hookSpecificOutput.additionalContext, /⚠ 進捗DM/);
+  assert.equal(fs.existsSync(path.join(options.home, '.claude', 'auto-progress-inbox', '_recipient-warning.json')), false);
+});
+
+test('無人・session IDなしでは警告の表示済み時刻を記録しない', t => {
+  const options = warningOptions(t);
+  assert.equal(consumeInbox({}, options), null);
+  assert.equal(consumeInbox({ session_id: 's1' }, { ...options, env: { CLAUDE_HEADLESS: '1' } }), null);
+  assert.equal(fs.existsSync(path.join(options.home, '.claude', 'auto-progress-inbox', '_recipient-warning.json')), false);
+  assert.match(consumeInbox({ session_id: 's1' }, options).hookSpecificOutput.additionalContext, /^⚠ 進捗DM/);
 });

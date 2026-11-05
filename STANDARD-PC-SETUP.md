@@ -190,6 +190,49 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command '$p=Join-Path $env:TEMP '
 
 この3点のいずれかが欠けていたら「配布が届いていない端末」なので、4.1の復旧コマンドを実行する（Claude Codeに頼めば自動で確認・復旧する）。
 
+### 4.4 「いちいちYES/NOを聞かれる」を無くすための4点（2026-11-04〜11-05 追記）
+
+Claude Code が勝手に動けないと、user の作業が「指示→Yes→指示→Yes…」の繰り返しになる。これを無くすため、新PCセットアップの段階で以下を**自動で入れ切る**（手作業ゼロ）。
+
+#### (1) Node.js を Claude Code の PowerShell から**即**使えるようにする
+
+`install-orgiast.ps1` は winget で Node.js LTS を入れるが、**セッションで有効な PATH を Claude Code プロセスに伝える経路が無い**ため、`node` コマンドが「`not recognized`」になるPCがある（2026-11-04 seisaku-team@DELL で確認。Node は `C:\Program Files\nodejs\node.exe` に存在するのに `Get-Command node` が失敗し、fleet-mail / register-fleet-mail など全 `.mjs` ツールが呼べなかった）。
+
+**対策**: `setup --converge` が `~/.claude/settings.json` の `env` または hook で以下を強制する。
+- `PATH` に `C:\Program Files\nodejs`（Windows）/ `/usr/local/bin`（Mac）を先頭追記
+- もしくは PowerShell セッション起動 hook で `$env:PATH = "C:\Program Files\nodejs;$env:PATH"` を自動実行
+
+これが入っていないと、fleet-mail / onboarding-sync 等の `.mjs` ツールが「node が見つかりません」で Claude から呼べず、user に手作業を依頼する羽目になる（本来 Claude で完結できるはずの用件まで user に回る）。
+
+#### (2) 既存GASプロジェクトも command queue パターンに retrofit する
+
+CLAUDE.md §1.4.1 の command queue パターン（1分トリガー + Drive フォルダ監視）は「全GASプロジェクトで導入する」が方針だが、**既存のプロジェクトに後付けする運用が無い**。結果、単発スクリプト（dumpDrafts 等）が残っているプロジェクトは、毎回 user に ▶実行 を押させている（2026-11-04 seisaku-team@ の下書き30通一括修正で判明）。
+
+**対策**: 新しい関数を既存プロジェクトに追加する際、合わせて以下も必ず仕込む（gas-project-setup skill の実装テンプレがそのまま流用できる）。
+- `setupOnce()` — エントリ関数。「今回やりたい処理」と「queue install」を同時に走らせる
+- `installCommandQueue()` — Drive フォルダ作成 + 1分トリガー登録（冪等）
+- `processCommandQueue()` — フォルダ内 `cmd_*.json` を順次実行
+- `COMMANDS` ホワイトリスト — 動的呼び出し禁止、明示登録のみ
+
+これで「1回 Run を押してもらう → 以後は Claude が cmd_*.json を Drive に投げるだけでゼロクリック」が実現する。
+
+#### (3) Gmail MCP が使えるセッションではそれを最優先にする
+
+Claude Code のコンテキスト再読込後に `mcp__claude_ai_Gmail__*` が利用可能になることがある（2026-11-05 seisaku-team@ 実測）。この時、GAS 経由より **直接 Gmail MCP を叩く方が圧倒的に速い**（下書き26通の書き換えが GAS では 1クリック＋トリガー1分、MCP なら数秒）。
+
+**対策**:
+- セッション開始時に `ToolSearch` で `mcp__claude_ai_Gmail__*` の存在確認を既定にする
+- 存在する場合は GAS スクリプト起草を飛ばし、Gmail MCP で直接書き換える
+- 存在しない場合のみ GAS フォールバック
+
+#### (4) ターン中の進捗報告を定着させる
+
+長時間ターン（画像OCR多数・ファイル多数処理など）で Claude が沈黙し、user が「進捗どう？」と尋ねる手間が繰り返されていた（2026-11-04 名刺30通チェック案件）。既存の `auto-progress-ledger.mjs` / `auto-progress-inbox-hook.mjs` は**ターン終了時**の「次にkimがすること」抽出用で、ターン中の経過報告ではない。
+
+**対策**:
+- memory `intra-turn-progress-updates.md` を全PCに配布（shared-memory 経路）。「2〜3ツール呼び出しごとに1行の進捗を出す」を Claude の既定行動にする
+- 将来的に PostToolUse hook でツール呼び出しカウンタ → 一定数ごとに system-reminder 挿入、で強制することも検討（現状は memory のみで様子見）
+
 ## 5. 許可ルール15行の追加（Claude が行う）
 
 Claude Codeの一部の操作（本番反映・特定の確認コマンド）を「常に許可」にする設定。追加は Claude Code が `tools/add-permission-rules.mjs` で行う（手順7）。本人の操作は、Aグループを入れてよいかの返事1回だけ。下の5.2は Claude Code が使えない場合の予備手順。

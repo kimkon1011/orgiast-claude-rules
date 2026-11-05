@@ -20,6 +20,7 @@ import { appendInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { BLOCKER, readJson as readFleetJson, saveJson as saveFleetJson } from './lib/fleet-chase-ledger.mjs';
 import { errorKind, findUnansweredRequest } from './lib/unanswered-request.mjs';
+import { deliverDoneInbox, hasDoneInboxReceipt, usesKimDoneInbox } from './lib/auto-progress-done-inbox.mjs';
 
 export const GRACE_MS = 1 * 3600 * 1000;
 export const RESUME_INTERVAL_MS = 2 * 3600 * 1000;
@@ -241,7 +242,7 @@ export function formatDoneMessage(row, { reason = '', artifact = '', home = proc
   return lines.join('\n').slice(0, 1900);
 }
 
-export function logDoneDm(home, row, delivery, message, now = Date.now(), io = {}) {
+export function logDoneDm(home, row, delivery, message, now = Date.now(), io = {}, toastResult = null) {
   const file = path.join(home, '.claude', 'logs', 'auto-progress-done-dm.sent.jsonl');
   try {
     (io.mkdirSync ?? fs.mkdirSync)(path.dirname(file), { recursive: true });
@@ -253,6 +254,7 @@ export function logDoneDm(home, row, delivery, message, now = Date.now(), io = {
       reason: delivery?.reason,
       httpStatus: delivery?.httpStatus, messageId: delivery?.messageId, recipientId: delivery?.recipientId,
       text: message.slice(0, 8000),
+      ...(toastResult ? { toast: { ok: toastResult.ok, exitCode: toastResult.exitCode } } : {}),
     });
     (io.appendFileSync ?? fs.appendFileSync)(file, `${payload}\n`);
   } catch (error) {
@@ -279,7 +281,7 @@ function doneWasAlreadyReportedByCheck(row) {
 }
 
 export function doneNoticeSweepRows(rows, home, now = Date.now()) {
-  const eligible = rows.filter(row => row.status === 'done' && !row.doneNotifiedAt && !row.doneNotifySkipped &&
+  const eligible = rows.filter(row => row.status === 'done' && !(usesKimDoneInbox(row, home) ? hasDoneInboxReceipt(row) : row.doneNotifiedAt) && !row.doneNotifySkipped &&
     !isUnattendedRow(row, home) && !doneWasAlreadyReportedByCheck(row));
   return {
     recent: eligible.filter(row => now - doneTime(row) <= DONE_NOTICE_RECENT_MS),
@@ -562,36 +564,49 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf(row), home })}\n自動進行が判断待ちです: ${row.promise}\n${reason || ''}\n${pendingAction(row)}`, { home, now, kind: 'action', session: row });
   const notifyDone = async (row, reason, artifact) => {
     if (notificationsStopped) return false;
+    if (usesKimDoneInbox(row, home)) {
+      if (hasDoneInboxReceipt(row)) return false;
+      const message = formatDoneMessage(row, { reason, artifact, home, io, ownerOf });
+      let delivery = null;
+      try {
+        delivery = await deliverDoneInbox(home, [row], message, { now, io });
+        return patch(rowKey(row), delivery.receipt);
+      } catch (error) {
+        summary.errors.push(`notify-done: ${String(error?.message ?? error).slice(0, 120)}`);
+        return false;
+      } finally { logDoneDm(home, row, delivery, message, now, io); }
+    }
     if (row.doneNotifiedAt) return false;
     if (isQuietHours(now)) return false;
     const message = formatDoneMessage(row, { reason, artifact, home, io, ownerOf });
     let delivery = null;
     try {
       delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(row), message, { home, now, kind: row.status === 'done' && !isUnattendedRow(row, home) ? 'done-requested' : 'automatic', session: row });
-      if (!['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
+      if (!['dm', 'session-inbox', 'toast', 'inbox'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
       patch(rowKey(row), { doneNotifiedAt: new Date(now).toISOString(), doneNotifyPending: false });
     } catch (error) {
       // done は open の集合から外れるので、印を残さないと次回の巡回で拾えず結果が消える。
       patch(rowKey(row), { doneNotifyPending: true, doneNotifyArtifact: artifact ? String(artifact) : '' });
       summary.errors.push(`notify-done: ${String(error?.message ?? error).slice(0, 120)}`);
     }
-    logDoneDm(home, row, delivery, message, now, io);
-    // 完了通知は DM の成否に関係なく、owner がこの PC のローカル user ならトーストも毎回出す
+    // 完了通知は DM の成否に関係なく、owner ��この PC のローカル user ならトーストも毎回出す
+    let toastResult = null;
     try {
       const rowOwner = ownerOf(row);
       const pcOwner = io.localOwner ?? (() => { try { return resolveOwner({ home }); } catch { return ''; } })();
       if (delivery?.delivered !== 'toast' && rowOwner && pcOwner && rowOwner.toLowerCase() === pcOwner.toLowerCase()) {
         const toastText = `✅ 自動進行が完了: ${String(row.promise ?? '').slice(0, 120)}`;
-        (io.sendOwnerToast ?? sendOwnerToast)(toastText, { home });
+        (io.sendOwnerToast ?? sendOwnerToast)(toastText, { home, onToastResult: value => { toastResult = value; } });
       }
     } catch { /* トースト失敗は DM の成否判定に影響しない */ }
-    return ['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered);
+    logDoneDm(home, row, delivery, message, now, io, toastResult);
+    return ['dm', 'session-inbox', 'toast', 'inbox'].includes(delivery?.delivered);
   };
   const rows = readLedger(file);
   await registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io, persist);
   let candidates = latestOpenPromises(rows);
   const selected = new Set(candidates);
-  const pendingChecks = rows.filter(row => row.check && row.status === 'done' && row.checkResult === 'done' && row.checkNotifiedResult !== 'done');
+  const pendingChecks = rows.filter(row => row.check && row.status === 'done' && row.checkResult === 'done' && !hasDoneInboxReceipt(row));
   // 完了した経路に依存せず未通知を拾う。古い完了は個別DMを大量送信せず一覧にまとめる。
   const doneSweep = doneNoticeSweepRows(rows, home, now);
   summary.doneNotifications = { recent: doneSweep.recent.length, backlog: doneSweep.backlog.length };
@@ -622,7 +637,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   const executable = [...candidates.filter(row => row.check && !reservation(row)), ...pendingChecks];
   executable.sort((a, b) => (Date.parse(a.lastCheckedAt) || 0) - (Date.parse(b.lastCheckedAt) || 0));
   for (const row of executable) {
-    if (clock() + 60000 >= stopAt) break;
+    if (notificationsStopped || clock() + 60000 >= stopAt) break;
     if (dryRun) continue; // --dry-run must never execute arbitrary commands.
     summary.checked++;
     try {
@@ -635,26 +650,45 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     if (dryRun || notificationsStopped || clock() + 60000 >= stopAt) break;
     await notifyDone(row, row.reason || '', row.doneNotifyArtifact || '');
   }
-  if (!dryRun && !notificationsStopped && !isQuietHours(now) && clock() + 60000 < stopAt) {
-    for (const group of formatDoneBacklogMessages(doneSweep.backlog, { home })) {
+  if (!dryRun && !notificationsStopped && clock() + 60000 < stopAt) {
+    // Never put a kim notice into a staff DM group on a non-kim PC.
+    const inboxBacklog = doneSweep.backlog.filter(row => usesKimDoneInbox(row, home));
+    const ownerBacklog = doneSweep.backlog.filter(row => !usesKimDoneInbox(row, home));
+    const groups = [...formatDoneBacklogMessages(inboxBacklog, { home }), ...formatDoneBacklogMessages(ownerBacklog, { home })];
+    for (const group of groups) {
+      // Inbox persistence must not depend on DM quiet hours or daily quotas.
+      if (usesKimDoneInbox(group.rows[0], home)) {
+        let delivery = null;
+        try {
+          delivery = await deliverDoneInbox(home, group.rows, group.text, { now, io });
+          for (const row of group.rows) {
+            if (!patch(rowKey(row), { ...delivery.receipt, doneNotifyMode: 'backlog' })) break;
+          }
+        } catch (error) { summary.errors.push(`notify-done-backlog: ${String(error?.message ?? error).slice(0, 120)}`); }
+        logDoneDm(home, group.rows[0], delivery, group.text, now, io);
+        if (notificationsStopped) break;
+        continue;
+      }
+      if (isQuietHours(now)) continue;
       let delivery = null;
       try {
         delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(group.rows[0]), group.text, { home, now, kind: 'automatic' });
-        if (!['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
+        if (!['dm', 'session-inbox', 'toast', 'inbox'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
         for (const row of group.rows) patch(rowKey(row), { doneNotifiedAt: new Date(now).toISOString(), doneNotifyMode: 'backlog', doneNotifyPending: false });
       } catch (error) {
         summary.errors.push(`notify-done-backlog: ${String(error?.message ?? error).slice(0, 120)}`);
       }
-      logDoneDm(home, group.rows[0], delivery, group.text, now, io);
       // バックログ完了通知もローカル user にはトーストを出す
+      let toastResult = null;
       try {
         const rowOwner = ownerOf(group.rows[0]);
         const pcOwner = io.localOwner ?? (() => { try { return resolveOwner({ home }); } catch { return ''; } })();
         if (delivery?.delivered !== 'toast' && rowOwner && pcOwner && rowOwner.toLowerCase() === pcOwner.toLowerCase()) {
           const toastText = `✅ 自動進行が完了 (ほか ${group.rows.length - 1}件): ${String(group.rows[0].promise ?? '').slice(0, 80)}`;
-          (io.sendOwnerToast ?? sendOwnerToast)(toastText, { home });
+          (io.sendOwnerToast ?? sendOwnerToast)(toastText, { home, onToastResult: value => { toastResult = value; } });
         }
       } catch { /* トースト失敗は無視 */ }
+      logDoneDm(home, group.rows[0], delivery, group.text, now, io, toastResult);
     }
   }
   let executorUnavailable = false;

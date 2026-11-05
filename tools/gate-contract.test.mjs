@@ -23,6 +23,11 @@ test('new rollout entries must declare the seven day window; legacy inventory is
     const row = manifest.gates[name];
     assert.ok(row, `${name}: missing rollout entry`);
     assert.ok(['warn','deny'].includes(row.rollout));
+    if (name === 'seat-name-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-11-04 kim 厳命: 席番号呼称と Drive 引き渡し (§1.5.0.2/§1.5.0.3)');
+      continue;
+    }
     if (name === 'kim-discord-report-gate') {
       assert.equal(row.rollout, 'deny');
       assert.equal(row.immediatePolicy, '2026-10-27 kim 厳命: kim 宛 Discord 報告を全PCで停止');
@@ -68,10 +73,20 @@ test('new rollout entries must declare the seven day window; legacy inventory is
       assert.equal(row.immediatePolicy, '2026-10-27 TimeRex 実害: 社外送信の完了主張に読み戻し証拠を要求');
       continue; // External communication cannot be undone, immediate on all PCs.
     }
+    if (name === 'deliverable-drive-link-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-11-04 nishi 指示: 渡すファイルが見つからず往復が発生した実害の再発防止');
+      continue; // Explicit recurrence-prevention policy applies immediately.
+    }
     if (name === 'bihin-kcol-gate') {
       assert.equal(row.rollout, 'deny');
       assert.equal(row.immediatePolicy, '2026-10-23 古川さん依頼: 備品管理表K列のデータ破損防止');
       continue; // Explicit data-corruption prevention policy, immediate on all PCs.
+    }
+    if (name === 'cmd-ascii-guard') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-11-04 kim 指示: .cmd の文字化け（日本語行で全行失敗）を全PC全アカウント全プロジェクトで再発防止');
+      continue; // .cmd/.bat non-ASCII corruption prevention, immediate on all PCs.
     }
     if (!row.legacy) {
       assert.ok(Number.isFinite(Date.parse(row.distributedAt)));

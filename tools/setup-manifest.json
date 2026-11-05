@@ -1,6 +1,7 @@
 {
   "version": 1,
   "items": [
+    {"id":"settings:seat-name-gate","type":"json-valid","severity":"required","spec":{"path":".claude/settings.json","hookEvent":"Stop","hookScript":"seat-name-gate.mjs","hookRunner":"gate-hook-runner.mjs","hookArgs":"","async":false,"timeout":15},"description":"全PC: SEAT-NAME / LOCAL-HANDOFF (§1.5.0.2/§1.5.0.3)","repair":["register-hooks.mjs","--hooks-only"]},
     {"id": "hook:inquiry-lookup-hint", "type": "file-nonempty", "severity": "required", "spec": {"paths": [".claude/nightly-repo/tools/inquiry-lookup-hint.mjs", "orgiast-claude-rules/tools/inquiry-lookup-hint.mjs", "Downloads/orgiast-claude-rules/tools/inquiry-lookup-hint.mjs"]}, "description": "問い合わせ横断検索の案内hook実体", "repair": ["onboarding-sync.mjs", "--force"]},
     {"id": "settings:inquiry-lookup-hint-UserPromptSubmit", "type": "json-valid", "severity": "required", "spec": {"path": ".claude/settings.json", "hookEvent": "UserPromptSubmit", "hookScript": "inquiry-lookup-hint.mjs", "hookArgs": "", "async": false, "timeout": 5}, "description": "全PC: 問い合わせ・案件の所在を1回で確認する", "repair": ["register-hooks.mjs", "--hooks-only"]},
     {"id":"knowledge:production-sales","type":"file-nonempty","severity":"required","spec":{"path":".claude/knowledge/production-sales/00_INDEX.md"},"description":"全PC: 制作・営業ナレッジの索引を実配布","repair":["onboarding-sync.mjs","--knowledge-only","--force"]},

@@ -166,7 +166,7 @@ export function digestText(ledger, { home, now }) {
   const lines = [`📌 fleet 追跡: 未完了 ${pending.length} 件（送信 ${pending.length - inbound} / 受信 ${inbound} / ブロッカー ${blocked} / 宛先停止 ${stopped.length}）／24h で完了 ${done} 件`];
   lines.push(rolloutSummary(ledger));
   for (const item of rolloutTop(ledger)) lines.push(`遵守追跡: ${item.title.slice(0, 160)}`);
-  const footer = [`要 kim 判断: ${decisions} 件 → Discord の判断依頼チャンネルで回答`];
+  const footer = [`要 kim 判断: ${decisions} 件 → このセッションで回答`];
   const workExhausted = pending.filter(i => i.attempts.filter(a => a.action === 'work').length >= POLICY.workAttempts).length;
   const finalLevel = pending.filter(i => i.level >= 3).length;
   if (workExhausted || finalLevel) footer.push(`L3 ${finalLevel} 件 / 自動消化5回失敗 ${workExhausted} 件（hookで追跡継続）`);
@@ -190,7 +190,9 @@ export async function digest(ledger, ctx) {
   const day = date.toISOString().slice(0, 10);
   if (date.getUTCHours() < 9 || ledger.digestDay === day) return { skipped: true };
   if (!Object.values(ledger.items).some(i => i.kind !== 'expect-inbound')) return { skipped: true };
-  const text = digestText(ledger, ctx);
+  const decisions = Object.fromEntries(Object.entries(ledger.items).filter(([, i]) => active(i) && i.category === CATEGORY.decision && (i.kind === 'inbound' || i.direction === 'inbound')));
+  if (!Object.keys(decisions).length) return { skipped: true, reason: 'no-kim-decision' };
+  const text = digestText({ ...ledger, items: decisions }, ctx);
   if (ctx.dryRun) return { text, planned: true };
   const result = await ctx.notify(text);
   if (['dm', 'session-inbox'].includes(result?.delivered)) {

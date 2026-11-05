@@ -111,3 +111,44 @@ test('compact digest identifies kim decisions and retains waiting rows without n
  assert.match(kim, /このDMに返信してください/);
  assert.doesNotMatch(kim, /あなたの操作は不要/);
 });
+
+// 2026-11-04 nishi: 夕方のまとめの返事待ちが見出しだけ、本文が「新しいセッションが で引き継ぎ」「10 に成約率」と穴だらけだった。
+test('compact digest keeps the question body, slash words, dates and jargon instead of punching holes', () => {
+  const deferred = [{ id: 'a1', kind: 'action', at: new Date(now - 1000).toISOString(),
+    text: '【kimko-PC（DESKTOP-PPD5V8I）・nishi@orgiast.jp の Claude Code】プロジェクト: nightly-repo ／ セッションの目的: [headless:quota-sweep] x ／ 作業ID: a72f3713\n901 と 902 の前倒し案内を2通送ってよいですか。はい／いいえで返信してください。' }];
+  const rows = [{ owner: 'nishi@orgiast.jp', sessionId: 's1', status: 'in_progress', label: '新しいセッションが `/session-start` で引き継ぎを読み、10/28 に成約率を測り直します。回答が届けば autopilot が自動で再開。~/.claude/x.md も見る', ts: new Date(now - 1000).toISOString() }];
+  const { text } = compactDigest(rows, deferred, now, { owner: 'nishi@orgiast.jp' });
+  assert.match(text, /・901 と 902 の前倒し案内を2通送ってよいですか。はい／いいえで返信してください。（このDMに返信してください）/);
+  assert.doesNotMatch(text, /Claude Code】|（）|作業ID|DESKTOP-/);
+  const body = compactDigest([{ ...rows[0], nextKim: rows[0].label, status: 'waiting_user' }], [], now, { owner: 'nishi@orgiast.jp' }).text;
+  assert.match(body, /\/session-start で引き継ぎ/);
+  assert.match(body, /10\/28 に成約率/);
+  assert.match(body, /回答が届けば 自動ループ が自動で再開/);
+  assert.doesNotMatch(body, /x.md/);
+});
+
+test('compact digest keeps the subject of 「自動進行が判断待ちです」 while still stripping the 自動進行: label', () => {
+  const deferred = [{ id: 'b1', kind: 'action', at: new Date(now - 1000).toISOString(), text: '自動進行が判断待ちです: 901 の案内を送ってよいですか' },
+    { id: 'b2', kind: 'action', at: new Date(now - 2000).toISOString(), text: '自動進行: 902 の案内を送ってよいですか' }];
+  const { text } = compactDigest([], deferred, now, { owner: 'nishi@orgiast.jp' });
+  assert.match(text, /・自動進行が判断待ちです: 901 の案内を送ってよいですか/);
+  assert.match(text, /・902 の案内を送ってよいですか/);
+});
+
+// 2026-11-02: 「あなたの判断待ち」が約束側の60字で切れて、何にOKするのかDMだけでは分からなかった。
+test('compact digest shows the full decision (up to 400 chars) on its own line', () => {
+  const long = '［CLAUDE.md配布］OK の後、データ修正 → パネル作り直し → ファインスティール2月東京の登録 → Codex に頼んでコードを直す。' + 'あ'.repeat(300);
+  const { text } = compactDigest([{ owner: 'owner@example.com', sessionId: 's1', status: 'waiting_user',
+    label: 'パネル修正と本番反映', promise: 'パネル修正と本番反映', nextKim: long, ts: new Date(now - 1000).toISOString() }], [], now, { owner: 'owner@example.com' });
+  const lines = text.split('\n');
+  assert.ok(lines.includes('・パネル修正と本番反映（このDMに返信してください）'));
+  assert.ok(lines.some(line => line.startsWith('  → 判断してほしいこと: ')), text);
+  assert.ok(text.includes('ファインスティール2月東京の登録'), text);
+  assert.ok(text.includes('あ'.repeat(300)), 'nextKim が途中で切れていないこと');
+  assert.ok(text.split('\n').length <= 12);
+});
+test('compact digest falls back to reason when nextKim is empty', () => {
+  const { text } = compactDigest([{ owner: 'owner@example.com', sessionId: 's1', status: 'waiting_user',
+    label: '接続の設定', promise: '接続の設定', nextKim: '', reason: '認証の再実行をお願いします', ts: new Date(now - 1000).toISOString() }], [], now, { owner: 'owner@example.com' });
+  assert.match(text, /→ 判断してほしいこと: 認証の再実行をお願いします/);
+});

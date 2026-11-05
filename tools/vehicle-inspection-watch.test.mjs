@@ -151,7 +151,8 @@ test('段階通知を送り、台帳と state を書き戻す', async (t) => {
   const f = fixture(t, { rows: [HEADERS, row({ 車検満了日: '2026-11-10' })] });
   assert.equal(await f.run(), 0);
   assert.equal(f.kim.length, 1);
-  assert.equal(f.kim[0].kind, 'ask');
+  assert.equal(f.kim[0].kind, 'deadline');
+  assert.ok(f.kim[0].key);
   assert.match(f.kim[0].body, /あと7日/);
   assert.equal(f.staff.length, 1);
   assert.equal(f.staff[0].assignee, '田中');
@@ -216,7 +217,8 @@ test('完了＋次回満了日なしは毎日 ask する', async (t) => {
   const f = fixture(t, { rows: [HEADERS, row({ 状態: '完了', 次回満了日: '' })] });
   assert.equal(await f.run(), 0);
   assert.equal(f.kim.length, 1);
-  assert.equal(f.kim[0].kind, 'ask');
+  assert.equal(f.kim[0].kind, 'deadline');
+  assert.ok(f.kim[0].key);
   assert.match(f.kim[0].body, /新しい車検証の満了日が台帳に入っていません/);
   assert.equal(await f.run(), 0);
   assert.equal(f.kim.length, 1);

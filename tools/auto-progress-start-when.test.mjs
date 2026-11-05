@@ -7,6 +7,7 @@ import { addCheck, isTimeOnlyCheck, main } from './auto-progress.mjs';
 import { run, resumeSession, MAX_RESUMES_PER_RUN } from './auto-progress-watch.mjs';
 import { ledgerFile, readLedger, writeLedger, applyPromise } from './auto-progress-ledger.mjs';
 import { formatDigest, run as digest } from './auto-progress-digest.mjs';
+import { listItems } from './kim-inbox.mjs';
 const now = Date.parse('2026-11-02T03:00:00Z');
 function setup(t, extra = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduled-start-'));
@@ -81,10 +82,13 @@ test('deferredは回数を消費せず次回再試行、doneで完了通知は�
 test('完了check併用は成果確認がexit 0のときだけdone', async t => {
   for (const code of [0, 1, 2]) {
     const { options, home } = setup(t, { check: 'artifact-check' }); addCheck(options); const notices = [];
+    fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'kim@orgiast.jp' } }));
     await run({ home, now, io: { ...ioBase, executeCheck: row => ({ code: row.check === 'exit 0' ? 0 : code, text: '成果確認' }),
       resume: async () => ({ outcome: 'done', reason: '作成済み' }), notifyOwner: async (_, text) => { notices.push(text); return { delivered: 'dm' }; } } });
     assert.equal(readLedger(ledgerFile(home))[0].status, code === 0 ? 'done' : 'open');
-    assert.equal(notices.filter(text => /完了/.test(text)).length, code === 0 ? 1 : 0);
+    assert.equal(notices.filter(text => /完了/.test(text)).length, 0);
+    assert.equal(listItems(home).filter(item => /check 達成/.test(item.text)).length, code === 0 ? 1 : 0);
+    if (code === 0) assert.ok(readLedger(ledgerFile(home))[0].doneInboxVerifiedAt);
   }
 });
 test('needs_user / blocked / error と起動例外を記録する', async t => {

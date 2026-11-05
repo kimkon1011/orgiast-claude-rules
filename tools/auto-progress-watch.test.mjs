@@ -5,6 +5,28 @@ import os from 'node:os';
 import path from 'node:path';
 import { formatDoneLine, formatDoneMessage, formatDoneBacklogMessages, gatherEvidence, deterministicVerdict, judge, evidenceSummary, logDoneDm, run } from './auto-progress-watch.mjs';
 import { cleanupOldLedgerTemps, ledgerFile, readLedger, writeLedger } from './auto-progress-ledger.mjs';
+import { listItems } from './kim-inbox.mjs';
+
+test('kim の recent/backlog 完了は静穏時間も保存・読み戻しし、旧通知済み印を救済する', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-done-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'seisaku-team@orgiast.jp' } }));
+  const now = Date.parse('2026-11-04T16:00:00Z');
+  writeLedger(ledgerFile(home), [1, 100].map(hours => ({ sessionId: `job-${hours}`, status: 'done',
+    ts: new Date(now - hours * 3600000).toISOString(), doneAt: new Date(now - hours * 3600000).toISOString(),
+    doneNotifiedAt: new Date(now - 1000).toISOString(), promise: '作業', reason: '成果物を検証済み' })));
+  let failRead = true;
+  const io = { clock: () => now, transcriptFiles: [], sheetConfig: () => null, digest: async () => ({}), escalateKimDecisions: async () => ({}),
+    listKimInboxItems: home => failRead ? [] : listItems(home), notifyOwner: () => assert.fail('no Discord') };
+  const failed = await run({ home, now, io });
+  assert.equal(failed.errors.length, 2);
+  assert.ok(readLedger(ledgerFile(home)).every(row => !row.doneInboxVerifiedAt));
+  failRead = false;
+  assert.deepEqual((await run({ home, now, io })).errors, []);
+  assert.ok(readLedger(ledgerFile(home)).every(row => row.doneInboxId && row.doneInboxVerifiedAt));
+  await run({ home, now, io });
+  assert.equal(listItems(home).length, 2);
+});
 
 test('共有ファイルが新しくてもセッションの会話・実行が25時間前ならstalled', () => {
   const now = Date.parse('2026-10-28T10:00:00Z');
@@ -260,14 +282,14 @@ test('完了通知は DM 成功時もローカル user にトーストを送る'
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const now = Date.parse('2026-11-02T10:00:00Z');
   writeLedger(ledgerFile(home), [{
-    ts: new Date(now - 2 * 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'kim@orgiast.jp',
+    ts: new Date(now - 2 * 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'staff@example.test',
     sessionId: 'done-toast-test', cwd: home, promise: 'Xの投稿を読み調査結果をまとめます',
     status: 'done', verdict: 'done', doneAt: new Date(now - 60000).toISOString(),
   }]);
   let toastCalls = 0; let toastText = '';
   const io = {
     clock: () => now, transcriptFiles: [], sheetConfig: () => null,
-    localOwner: 'kim@orgiast.jp',
+    localOwner: 'staff@example.test',
     notifyOwner: async () => ({ delivered: 'dm', messageId: 'receipt' }),
     sendOwnerToast: async (text) => { toastCalls++; toastText = text; return true; },
     digest: async () => ({}),
@@ -284,14 +306,14 @@ test('バックログ完了通知もローカル user にトーストを送る',
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const now = Date.parse('2026-11-02T10:00:00Z');
   writeLedger(ledgerFile(home), [{
-    ts: new Date(now - 100 * 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'kim@orgiast.jp',
+    ts: new Date(now - 100 * 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'staff@example.test',
     sessionId: 'backlog-toast-test', cwd: home, promise: 'Xの投稿を読み調査結果をまとめます',
     status: 'done', verdict: 'done', doneAt: new Date(now - 73 * 3600000).toISOString(),
   }]);
   let toastCalls = 0; let toastText = '';
   const io = {
     clock: () => now, transcriptFiles: [], sheetConfig: () => null,
-    localOwner: 'kim@orgiast.jp',
+    localOwner: 'staff@example.test',
     notifyOwner: async () => ({ delivered: 'dm', messageId: 'receipt' }),
     sendOwnerToast: async (text) => { toastCalls++; toastText = text; return true; },
     digest: async () => ({}),
@@ -424,6 +446,7 @@ test('isMetaだけでは定期扱いせず、queueとattachmentは活動に数�
 
 test('定期ターン中でもcheckが達成なら従来どおりdoneにする', async t => {
   const f = scheduledFixture(t);
+  fs.writeFileSync(path.join(f.home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'kim@orgiast.jp' } }));
   writeLedger(ledgerFile(f.home), [{ ...f.row, check: 'mock check' }]);
   const summary = await run({ home: f.home, now: f.now, io: {
     clock: () => f.now, transcriptFiles: [], sheetConfig: () => null,

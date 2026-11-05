@@ -394,3 +394,14 @@ test('完了報告・検出器の説明文は言い換え拡張でWと誤検出�
     '作業は終わり次第ではなく、今ターンで完了しました。'
   ]) assert.deepEqual(detect(text).map(found => found.pattern), [], text);
 });
+
+// 116827928ab09de7 の原セッション行1320で再テストを後続へ残した言い換え。
+test('他レーンが修正中のため未検証という先送りを検出する', () => {
+  assert.deepEqual(detect('[NO-TEST-OK: tools/notify-kim.mjs の kim 宛て経路への巻き添えを Codex が修正中で、まだ確かめられる状態にないため]').map(hit => hit.pattern), ['W']);
+  for (const text of [
+    'Codex が修正中に見つけた問題も解消し、関連テストは全件合格しました。',
+    'Codex の修正は完了し、検証できる状態です。',
+    '修正中で、まだ確かめられる状態にないという表現を調査した。',
+    '[handoff-audit:116827928ab09de7] 恒久修正の先送り文を検出（W）「Codex が修正中で、まだ確かめられる状態にないため」'
+  ]) assert.deepEqual(detect(text), [], text);
+});

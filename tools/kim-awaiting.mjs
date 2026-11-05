@@ -73,7 +73,7 @@ export function formatList(items) {
   const line = item => `・${item.title} ／ 答えてほしいこと: ${item.ask} ／ ${ageLabel(item)}`;
   return [...(external.length ? [`🔴 社外の人を待たせています ${external.filter(item => !item.warning).length} 件（古い順）`, ...external.map(line)] : []), `📌 kim の返事待ち ${internal.length} 件（古い順）`, ...internal.map(line)].join('\n');
 }
-export function collectAwaiting({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), budgetMs = Infinity } = {}) {
+export function collectAwaiting({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), budgetMs = Infinity, sessionId = '' } = {}) {
   const started = performance.now();
   const external = collectExternal({ home, now });
   const result = [];
@@ -81,7 +81,7 @@ export function collectAwaiting({ home = process.env.ORGIAST_HOME || os.homedir(
     if (row.kimAnswer || isUnattendedRow(row, home) || isNoopPromise(row.promise) || (row.status !== 'waiting_user' && kimAction(row) === 'なし')) continue;
     const action = kimAction(row);
     if (SESSION_OP_RE.test(action)) continue;
-    const ask = EVIDENCE_RE.test(action.trim()) ? '進めてよいか判断して返事をする' : readable(action, row, 80);
+    const ask = EVIDENCE_RE.test(action.trim()) ? '進めてよいか判断して返事をする' : readable(action, row, sessionId && row.sessionId === sessionId ? Infinity : 80);
     result.push({ id: apId(row), source: 'auto-progress', title: readable(row.purpose || row.promise, row, 60), ask, waitingSince: row.ts, route: { sessionId: row.sessionId } });
   }
   const file = ledgerPath(home);
@@ -110,7 +110,13 @@ export function collectAwaiting({ home = process.env.ORGIAST_HOME || os.homedir(
   }
   result.sort((a, b) => Date.parse(a.waitingSince) - Date.parse(b.waitingSince));
   const titles = new Set();
-  const internal = result.filter(item => { if (titles.has(item.title)) return false; titles.add(item.title); return true; }).map(item => ({ ...item, ageDays: Math.max(0, Math.floor((now - Date.parse(item.waitingSince)) / DAY)) }));
+  const internal = result.filter(item => {
+    // 現セッションの待ちは、別セッションの同名項目に埋もれさせない。
+    if (sessionId && item.source === 'auto-progress' && item.route.sessionId === sessionId) return true;
+    if (titles.has(item.title)) return false;
+    titles.add(item.title);
+    return true;
+  }).map(item => ({ ...item, ageDays: Math.max(0, Math.floor((now - Date.parse(item.waitingSince)) / DAY)) }));
   return [...external, ...internal];
 }
 export function clearShown(home, id) {

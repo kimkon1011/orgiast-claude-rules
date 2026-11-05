@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { launchAudit, auditContext } from './unattended-job-audit.mjs';
+import { seatContext } from './seat-name.mjs';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { sessionSummary } from './stall-scan.mjs';
@@ -39,7 +40,7 @@ export function sessionLaneHealth(options) {
   (options?.auditLaunch || launchAudit)({ ...options, home, intervalHours: 6 });
   const health = laneDoctorQuick(options);
 launchLaneAutoProbes(health, { ...options, home });
-  return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: [context, summarize(health), repairContext(health, home, options?.now), sessionSummary(home, options?.now)].filter(Boolean).join(" / ") } };
+  return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: seatContext(options?.pcMap, options?.hostname) + '\n' + [context, summarize(health), repairContext(health, home, options?.now), sessionSummary(home, options?.now)].filter(Boolean).join(" / ") } };
 }
 export async function main() {
   await readStdinWithTimeout();

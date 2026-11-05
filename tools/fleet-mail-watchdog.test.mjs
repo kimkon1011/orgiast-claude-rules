@@ -13,24 +13,19 @@ function fixture(t, alerts = [{ id: 'mail-one', to: 'kim-PC', from: 'PC', kind: 
   const deps = { allowlist: [{ category: 'test', pattern: '.' }], home, token: 'test', stdout: x => outputs.push(x), stderr() {}, request: async (kind, payload) => { calls.push({ kind, payload }); return { ok: true, alerts: payload.notifiedIds ? [] : alerts }; }, postChannel: async (...args) => posts.push(args), notifyKim: async (...args) => { dms.push(args); return { delivered: 'dm' }; } };
   return { home, calls, posts, dms, outputs, deps };
 }
-test('watchdog reads alerts and confirms only after channel/DM delivery', async t => {
+test('watchdog keeps delivery evidence only in fleet-chase and confirms after persistence', async t => {
   const f = fixture(t); await main([], f.deps);
-  assert.deepEqual(f.calls, [{ kind: 'mail-alerts', payload: {} }, { kind: 'mail-alerts', payload: { notifiedIds: ['mail-one'] } }]);
-  assert.equal(f.posts[0][1], CHANNEL); assert.equal(f.dms[0][1].userId, KIM_USER_ID); assert.equal(f.dms[0][1].webhookFallback, false);
+  assert.equal(f.calls.length, 2); assert.equal(f.posts.length, 0); assert.equal(f.dms.length, 0);
+  const ledger = JSON.parse(fs.readFileSync(path.join(f.home, '.claude/fleet-chase/ledger.json')));
+  assert.equal(ledger.deliveryAlerts['mail-one'].kind, 'unseen');
 });
-test('server webhook delivered alerts are not duplicated', async t => {
+test('server-confirmed alerts are not duplicated', async t => {
   const f = fixture(t, [{ id: 'mail-one', notifiedCount: 1 }]); await main([], f.deps);
   assert.equal(f.posts.length, 0); assert.equal(f.dms.length, 0); assert.equal(f.calls.length, 1);
 });
-test('failed routes including delivered:none leave alerts pending', async t => {
-  const f = fixture(t); await main([], { ...f.deps, postChannel: async () => { throw new Error('offline'); }, notifyKim: async () => ({ delivered: 'none' }) });
+test('failed ledger write leaves alert pending', async t => {
+  const f = fixture(t); await main([], { ...f.deps, recordAlert: () => { throw Error('locked'); } });
   assert.equal(f.calls.length, 1);
-});
-test('successful DM alone confirms delivery', async t => {
-  const f = fixture(t); await main([], { ...f.deps, token: '' }); assert.equal(f.posts.length, 0); assert.equal(f.calls.length, 2);
-});
-test('successful channel alone confirms delivery', async t => {
-  const f = fixture(t); await main([], { ...f.deps, notifyKim: async () => { throw new Error('offline'); } }); assert.equal(f.calls.length, 2);
 });
 test('dry run reads only and logs counts without contents', async t => {
   const f = fixture(t); await main(['--dry-run', '--json'], f.deps); assert.equal(f.calls.length, 1); assert.equal(f.posts.length, 0); assert.equal(f.dms.length, 0); assert.equal(JSON.parse(f.outputs[0]).pending, 1); assert.doesNotMatch(f.outputs[0], /mail-one|確認/);
@@ -96,7 +91,7 @@ for (const mode of ['throw', 'negative']) test(`D7 watchdog isolates ${mode} ack
     return result;
   };
   await main(['--json'], f.deps);
-  assert.equal(f.posts.length, 2); assert.equal(f.dms.length, 2);
+  assert.equal(f.posts.length, 0); assert.equal(f.dms.length, 0);
   assert.deepEqual(f.calls.at(-1).payload.notifiedIds, ['mail-two']);
   assert.deepEqual(JSON.parse(f.outputs[0]), { total: 2, pending: 2, notified: 1, failed: 1 });
   assert.deepEqual(errors, ['fleet-mail-watchdog: 通知確認失敗=1']);

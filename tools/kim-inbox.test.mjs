@@ -13,6 +13,18 @@ function seat(t, label = 'kim-PC') {
   fs.writeFileSync(path.join(home, '.claude/fleet-pc-map.json'), JSON.stringify({ [label]: { account: label === 'kim-PC' ? 'kim@orgiast.jp' : 'test@example.test' } }));
   t.after(() => fs.rmSync(home, { force: true, recursive: true })); return home;
 }
+
+test('durable producer keys survive aggregation, seen state and retries', async t => {
+  const home = seat(t);
+  const a = await addItem(home, { text: '同じ作業 1', dedupeKey: 'job:1' });
+  const b = await addItem(home, { text: '同じ作業 2', dedupeKey: 'job:2' });
+  assert.notEqual(a.id, b.id);
+  markSeen(home, a.id);
+  const retry = await addItem(home, { text: '同じ作業 1', dedupeKey: 'job:1' });
+  assert.equal(retry.id, a.id); assert.equal(retry.status, 'seen');
+  const unkeyed = await addItem(home, { text: '同じ作業 3' });
+  assert.notEqual(unkeyed.id, b.id); assert.equal(listItems(home).length, 3);
+});
 test('ask は毎回提示し回答後に消える。info は確認できるが ask は確認だけで消せない', async t => {
   const home = seat(t); const ask = await addItem(home, { kind: 'ask', text: '判断してください\n詳細', source: '試験' });
   const info = await addItem(home, { kind: 'info', text: '完了' });
@@ -207,4 +219,36 @@ test('--compact は旧データの重複を最新へ合算し ask・high・閉�
   for (const item of protectedItems) assert.deepEqual(all.find(i => i.id === item.id), item);
   await main(['--compact'], { home, stdout: x => output.push(JSON.parse(x)) });
   assert.deepEqual(output[1], { groups: 0, merged: 0 });
+});
+
+test('期限は残日数順に先頭5件、upsertは表示回数を増やさずclose-keyで閉じる', async t => {
+  const home = seat(t);
+  await addItem(home, { kind: 'ask', text: '質問' });
+  await addItem(home, { kind: 'info', text: '完了: 進捗' });
+  for (const n of [30, 7, -8, 3, 0, 14]) await addItem(home, { kind: 'deadline', key: `D-${n + 10}`, remainingDays: n, text: `期限${n} ${'あ'.repeat(200)}` });
+  const first = listItems(home).find(i => i.key === 'D-2');
+  const again = await addItem(home, { kind: 'deadline', key: 'D-2', remainingDays: -8, text: '期限-8 更新' });
+  assert.equal(first.id, again.id); assert.equal(again.shownCount, 0);
+  const items = listItems(home); const context = selectContext(items, { sheetUrl: 'https://example.test/ledger' });
+  assert.ok(context.startsWith('[kim-inbox 期限 6 / 未回収 ask 1 / 未確認 info 1]'));
+  assert.ok(context.indexOf('期限-8 更新') < context.indexOf('期限0 '));
+  assert.ok(context.indexOf('期限0 ') < context.indexOf('期限3 '));
+  assert.doesNotMatch(context, /期限30 /); assert.ok(context.length <= CONTEXT_LIMIT);
+  assert.equal(items.filter(i => i.kind === 'deadline' && i.shownCount).length, 5);
+  assert.ok(context.indexOf('期限-8 更新') < context.indexOf('■ ask'));
+  assert.equal(await main(['--close-key', 'D-2'], { home, stdout: () => {} }), 0);
+  assert.equal(listItems(home, { status: 'open' }).filter(i => i.key === 'D-2').length, 0);
+});
+
+test('未達とgate-reportのinfoは抑止、掃除はsourceも検索しaskを保持', async t => {
+  const home = seat(t);
+  for (const options of [{ text: '別のパソコン（PC）へ送った連絡が届いていません' }, { source: 'gate-report', text: '統計' }]) {
+    assert.equal((await addItem(home, options)).status, 'suppressed');
+  }
+  const legacy = await addItem(home, { text: '旧通知' });
+  writeItem(home, { ...legacy, source: 'gate-report' });
+  await addItem(home, { kind: 'ask', source: 'gate-report', text: '判断が必要' });
+  assert.equal(await main(['--seen-matching', '^gate-report', '--kind', 'info'], { home, stdout() {} }), 0);
+  assert.equal(listItems(home, { status: 'open' }).length, 1);
+  assert.equal(listItems(home, { status: 'open' })[0].kind, 'ask');
 });

@@ -459,15 +459,16 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env) {
 // 同じ上限（gemini-cli 300秒 + deepseek 600秒）を再び与えると同じ 900 秒を毎回捨てる。
 // 2026-11-02 実測: 10:00/10:03/10:05 に gemini-cli が3連続 timeout し、12:23 には
 // gemini-cli 300秒 + cheap-code:deepseek 600秒 が両方 timeout（900秒を丸ごと廃棄）。
-// 冷却中は「復帰したか」だけを見たいので、短い探り予算で打ち切って次へ進む。
+// 末尾以外は短い探り予算で次へ進む。末尾には通常予算を与え、短すぎる試行が
+// timeout を再記録し続けて冷却から復帰できなくなる循環を防ぐ。
 export const COOLING_PROBE_TIMEOUT_SECS = 120;
 
 // 1試行に実際に与える秒数。冷却中でなければ従来どおり
-// min(連鎖の残り予算, backend 固有の上限)。冷却中ならさらに探り予算まで縮める。
-export function effectiveBackendTimeoutSecs(backendName, { chainBudget, cooling = false, env = process.env } = {}) {
+// min(連鎖の残り予算, backend 固有の上限)。冷却中でも末尾の試行は通常予算を使う。
+export function effectiveBackendTimeoutSecs(backendName, { chainBudget, cooling = false, env = process.env, isLastBackend = false } = {}) {
   const base = Math.min(Number(chainBudget), backendSpecificTimeoutSecs(backendName, env) ?? Infinity);
   if (!Number.isFinite(base)) return base;
-  if (!cooling) return base;
+  if (!cooling || isLastBackend) return base;
   return Math.max(60, Math.min(base, COOLING_PROBE_TIMEOUT_SECS));
 }
 
@@ -1446,12 +1447,12 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
     } else {
       const chainStarted = Date.now();
       fallbackChain = [];
-      for (const backend of backends) {
-        // 全 backend が冷却中で keepAtLeastOne により戻された場合は探り予算まで縮める
-        // （さもないと 300秒 + 600秒 をもう一度丸ごと捨てる。effectiveBackendTimeoutSecs の説明を参照）。
+      for (const [backendIndex, backend] of backends.entries()) {
+        // 全冷却で戻されたチェーンも末尾には通常予算を残す（1件だけの場合も同じ）。
         const backendTimeout = effectiveBackendTimeoutSecs(backend.name, {
           chainBudget: chainBackendBudgetSecs(timeoutSeconds, (Date.now() - chainStarted) / 1000),
-          cooling: cooling.has(backend.name)
+          cooling: cooling.has(backend.name),
+          isLastBackend: backendIndex === backends.length - 1
         });
         if (backendTimeout <= 0) {
           console.error(`[codex-do] フォールバック全体の時間枠(${timeoutSeconds}秒)を使い切ったため、残りのバックエンドは実行しません`);

@@ -110,6 +110,36 @@ test('hook caps display while tracking all ids', t => {
   assert.match(out.hookSpecificOutput.additionalContext, /ほか 2 件/);
   assert.equal(readJson(shownFile(home)).s.ids.length, DISPLAY_LIMIT + 2);
 });
+test('hook shows the current session first in full plus five older items', t => {
+  const home = fixture(t);
+  const ask = '公開前に確認していただきたい内容です。'.repeat(8) + 'この条件で進めてよいですか？';
+  const current = row({ sessionId: 'current', promise: '現在の判断', nextKim: ask });
+  const older = Array.from({ length: 10 }, (_, i) => row({
+    sessionId: `older-${i}`, promise: `古い判断${i}`, ts: new Date(NOW - (20 - i) * DAY).toISOString(),
+  }));
+  writeLedger(ledgerFile(home), [...older, current]);
+  assert.equal(collectAwaiting({ home, now: NOW }).at(-1).ask.length, 80);
+  const out = context({ session_id: 'current', cwd: '/project' }, { home, env: {}, now: NOW });
+  const text = out.hookSpecificOutput.additionalContext;
+  const lines = text.split('\n').filter(line => line.startsWith('・'));
+  assert.equal(lines.length, DISPLAY_LIMIT + 1);
+  assert.equal(lines[0], `・現在の判断 ／ 答えてほしいこと: ${ask} ／ 2日待ち`);
+  for (let i = 0; i < DISPLAY_LIMIT; i++) assert.ok(lines[i + 1].startsWith(`・古い判断${i} ／`));
+  assert.match(text, /ほか 5 件/);
+  assert.equal(text.split('\n').filter(line => line.startsWith('id=')).length, DISPLAY_LIMIT + 1);
+  assert.ok(text.includes(`id=${apId(current)} | 現在の判断`));
+  assert.equal(readJson(shownFile(home)).current.ids.length, 11);
+});
+test('hook keeps the current-session item even when another session has the same title', t => {
+  const home = fixture(t);
+  const current = [row({ sessionId: 'current', promise: '判断0' })];
+  writeLedger(ledgerFile(home), [row({ sessionId: 'older', promise: '判断0', ts: new Date(NOW - 10 * DAY).toISOString() }), ...current]);
+  const text = context({ sessionId: 'current', cwd: '/project' }, { home, env: {}, now: NOW }).hookSpecificOutput.additionalContext;
+  const routes = text.split('\n').filter(line => line.startsWith('id='));
+  assert.equal(routes.length, 2);
+  for (let i = 0; i < current.length; i++) assert.ok(routes[i].startsWith(`id=${apId(current[i])} |`));
+  assert.doesNotMatch(text, /ほか \d+ 件/);
+});
 test('answer ap patches ledger, clears marker and delivers inbox; skip closes', t => {
   const home = fixture(t), original = row({ resumedAt: new Date(NOW).toISOString() });
   writeLedger(ledgerFile(home), [original]);

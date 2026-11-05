@@ -120,13 +120,13 @@ Stop の `user-burden-gate` が依頼のある最終応答を監査する。本�
 
 nishi@・cr@・seisaku-team@・Genba の席も user=kim（2026-10-28 kim）。kim が別PCにいる前提で kim-PC に回さず、その場で直接聞く。この席では共有 memory 索引の冒頭注記が毎セッション自動で読まれ、同じ規則を伝える（全PC索引の予算を使わない）。対象アカウントの正本は `tools/lib/kim-operated.mjs`。この席では kim-PC の memory（毎晩 `~/.claude/shared-memory/` へ配布、kim の役割・プロフィールの user 型を含む）を kim 本人の好み・厳命としてそのまま適用する。「kim-PC に確認します」「kim さんに伝えてください」は書かない。対話セッションの質問は kim-PC へ自動転送しない（`fleet-question-relay`）。fleet-mail で kim-PC に送るのは、kim-PC の Discord・ローカルファイルなど kim-PC でしか触れない資源を使う作業依頼だけにする。社員本人が使う席（例: 東邦2階HP）は従来どおり別人として扱う。根拠（2026-10-28 kim）: kim-PC で話した内容が他アカウントに反映されず、同じ話を繰り返していた。
 
-**🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PRマージ/他PC依頼=fleet-mail。内部Gmail下書き禁止。**
+**🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PR は作った席が自分で着地させる（automerge ラベル／CI 合格後に自分でマージ）。権限・鍵・マージを kim-PC に頼まない。不足時は `node tools/access-doctor.mjs --fix`。内部Gmail下書き禁止。**
 
 **🔴 kim 宛の報告は Discord 禁止。kim-inbox に積みセッションで回収、ask は --answer まで再提示。例外は kim 登録の許可リストのみ（kim 2026-10-27 厳命・全PC全アカウント）。**
 送れなければチャットに完成形を表示。
 kim の代わりに社員・外注へ Discord で送るときは Bot 代筆（`tools/discord-dm.mjs`、kim へ写し自動）で送る。冒頭に「金です（Claude が代筆しています）。」と元メッセージの日時・先頭行、末尾に毎回「このメッセージへの返答は、Bot ではなく金に直接お願いします。」を入れる。kim のユーザートークンで本人として書く方式（セルフボット）は規約違反・アカウント停止の危険があるため使わない（kim 2026-10-30 厳命・全アカウント全PC）。
 対象は、支払い・権限付与・OAuth 同意・物理操作・判断など kim 本人の対応が不可欠なもの、期限・障害・未対応の警告や督促、kim が定期的に依頼した日次・週次・月次レポートに限る。
-PR マージ依頼と他PCへの作業依頼は `node tools/fleet-mail.mjs --send --to kim-PC --kind note --body-file <本文> --why "[作業依頼] ..."` で送り、kim は各PCのセッションを直接見るため作業内容・完了の共有DMは不要。
+PR は作った席が `node tools/pr-land.mjs --title "<題>" --body-file <本文>` で base に push し、通常変更は automerge、鍵関連などの安全弁パスは CI 合格後に pr-merge の検証を通して自分でマージする。権限・鍵・招待の不足は `node tools/access-doctor.mjs --fix` で診断・修復する。kim-PC に頼まない。
 送信ゲート `tools/lib/kim-dm-policy.mjs` が `notify-kim` / `discord-dm` のマージ依頼を止める。kim の操作が本当に必要な例外だけ `--kim-action-required` を付ける。
 メール送信の前に recipient-domain-gate が宛先ドメインの実在（MX/A）を検査し、存在しないドメイン宛は止める（2026-10-23 名刺OCR誤読でバウンス2件）。
 
@@ -167,7 +167,7 @@ PR マージ依頼と他PCへの作業依頼は `node tools/fleet-mail.mjs --sen
 
 **🔴 ラベル（B案・①・案A・選択肢2・前回の案・PR番号だけ等）で指さず、同じ文に中身を書く。**
 
-**🔴 kim が読むのは「本当に最後のメッセージ」（Stop ゲートの書き直しが終わった最後の1通）だけ。そこに【最終まとめ】（①報告 ②kim の確認事項＝全文 ③kim がやること）を全部載せ、途中のメッセージを参照させない。書き直しでは経緯を繰り返さない（2026-10-30 kim 厳命・全PC全アカウント）。**
+**🔴 kim が読むのは「本当に最後のメッセージ」（Stop ゲートの書き直しが終わった最後の1通）だけ。そこに【最終まとめ】（①報告 ②kim の確認事項＝全文 ③kim がやること）を全部載せ、途中のメッセージを参照させない。③で使うファイルは Drive の URL を同じ行に毎回書く。書き直しでは経緯を繰り返さない（2026-10-30 kim 厳命・全PC全アカウント）。**
 
 【最終まとめ】は末尾3行（次に kim がすること／この後の自動進行／このセッション）の直前に置く。
 1通で済む短い応答では見出し不要だが、内容は同じく自己完結させる。
@@ -217,6 +217,9 @@ PR マージ依頼と他PCへの作業依頼は `node tools/fleet-mail.mjs --sen
 **userに渡すコマンドはシェルに合わせる（絶対）**: kim・社内PCのターミナル既定は **Windows PowerShell 5.1**（Claude 側の PowerShell tool は pwsh 7 なので同じ書き方が通ってしまう＝油断しやすい）。`cd "パス" && node script.mjs` は `トークン '&&' は、このバージョンでは有効なステートメント区切りではありません` で**必ず失敗する**。**`;` 区切り**（`Set-Location "パス"; node script.mjs`）で書き、空白・日本語を含むパスは必ず `"` で囲む。`head`/`tail`/`which`/`touch`/`wc -l` も存在しない。2026-08-20 に実際に `&&` を渡して失敗させた。
 
 **git/PRフローも同様 — PRは自分でマージする（2026-08-19 kim決定・全アカウント共通）**: commit→push→`gh pr create`→**`node tools/pr-merge.mjs <PR番号>` まで自分で完結**する。「マージお願いします」で止めない。旧ルールの「自作PRのマージだけは人間の1クリック」は**廃止**（kimに毎回1クリックを残すこと自体が§1.1最上位原則に反し、実運用で「マージ待ち」の滞留を生んでいたため）。
+- 全 kim 操作席では GitHub 招待を SessionStart の onboarding-sync から1日1回承諾する（招待者・リポ所有者がともに kimkon1011 のみ）。即時実行は `node tools/gh-accept-invites.mjs`。診断だけなら `node tools/access-doctor.mjs`、招待承諾・origin 修復は `--fix`。fork リモートは保存する。
+- auto-merge.yml の「🔒 kim の手動マージが必要」は「作成した席が CI 合格後に pr-merge で自分でマージする」と読み替える。ただし `.github/workflows/*` を含む PR は例外として止め、workflow 権限・レビューの専用経路で扱う。
+- fleet-mail は kim 操作席から kim-PC への権限・鍵・マージ依頼を exit 2 で拒否する。kim-PC 固有のローカル資源が必要な場合だけ `--kim-pc-only-resource "<具体的理由>"` を指定する。理由は送信ログに残る。
 
 **人間レビューを外す代わりに、CIをゲートにする**。`orgiast-claude-rules` では main に branch protection を設定し、CIジョブ `test` が green でなければマージできない（`.github/workflows/ci.yml`＝全 `*.test.mjs` + `selftest-guards.mjs` + 全 `.mjs` の構文チェック）。**新しくこの方式にするリポジトリでは、先にCIを用意してから auto-merge を有効化すること**。CIが無いまま自動マージすると検証層がゼロになり、手渡しより悪化する。
 
@@ -351,6 +354,25 @@ URLの同じ行か直前に開くアカウントを明記、リンク事前共�
 - **宛先が決まっていない**: 依頼文・会話・Discord の相手名から推定し、メールは `tools/discord-member-directory.mjs` や社内名簿で引く。引けない場合だけ「誰に渡すか」を1回聞く。kim が自分で送る想定のリンクでも、渡す相手が分かっていれば共有してから渡す。
 - **渡すときの書式**: リンクに「<相手> に共有済み（<権限>）」を併記する。共有できなかった相手は「未共有: <理由>」と書き、そのまま送らせない。
 - **機械化**: PreToolUse `tools/share-before-send-gate.mjs` が、Discord / Gmail 送信の本文に Google ファイルのリンクがあり共有の証跡（`~/.claude/share-ledger.jsonl` か当セッションの共有実行）が無ければ送信を止める。
+
+**1.5.0.2 パソコンは割り当て番号（作業用014 など）でしか呼ばない（kim 2026-11-04 厳命・全PC全アカウント全プロジェクト・絶対）**
+
+人に見せる文章（チャット・報告・Discord・メール・Doc・fleet-mail 本文）では、パソコンを **fleet-pc-map.json の remoteName（例: 作業用014、kim-PC）** だけで呼ぶ。hostname（DELL、DESKTOP-XXXXXXX）、OS ユーザー名、自分で推測した番号は使わない。kim が操作するのは Chrome リモートデスクトップの番号であり、hostname では席を特定できない。
+
+- **自席の番号は推測しない**: `node tools/seat-name.mjs --self`（hostname → fleet-pc-map の remoteName）で引く。引けなければ「番号未登録の席（hostname: X）」と書き、自分で番号を名乗らない。他席から番号を聞かれても同じ。
+- **他席を指すとき**も fleet-pc-map で remoteName に直してから書く。map に無い hostname は「番号未登録の席（hostname: X）」と書き、kim に Chrome リモートデスクトップ上の名前を1回だけ確認して fleet-pc-map に登録する（PR）。
+- hostname はコマンド引数・内部 ID・証跡としてなら使ってよい（例: keyserve の PC 名）。人向けの文では番号を主語にし、hostname は括弧内の補足に限る。
+- **機械化**: Stop gate `tools/seat-name-gate.mjs` が、remoteName を伴わない hostname を応答から検出して差し戻す（理由コード SEAT-NAME、例外は `[SEAT-NAME-OK: 理由]`）。SessionStart で自席番号を注入する。
+- 実害 2026-11-04: 作業用014（hostname DELL）の Claude が自席を「作業用999」と申告し、kim-PC 側も「DELL 席」と書いた。どの席の話なのか kim が往復で解く羽目になった。
+
+**1.5.0.3 他の席に渡す手順・秘密は、その席のアカウントに共有した Google ドキュメントにし、その席の Claude に読ませる（kim 2026-11-04 厳命・全PC全アカウント・絶対）**
+
+別の席（別PC・別アカウント）で実行させたいコマンドや手順を、ローカルファイルのパス（scratchpad・Temp・~/.claude 配下など）や「ファイルを開いて○行目をコピー」の形で kim に渡さない。ローカルのパスはクリックで開けず、kim のスマホからは見えず、kim が転記役になる。
+
+- **作り方**: Google ドキュメントを作り（`gdoc-publish.mjs` か Drive MCP の `create_file`）、**対象席の Claude のアカウント（例: seisaku-team@orgiast.jp）に閲覧者で共有**する。本文の先頭に「この文書を読んだら Claude 自身が実行する。kim に手作業を頼まない」と書く。読み戻して確認する。
+- **届け方**: fleet-mail が通じる席なら fleet-mail で Doc の ID を送る。通じない席（未登録で fleet-sheet.env が無いなど）には、kim がその席の Claude に打つ1行（例: 「Drive の『作業用014 の Claude へ…』を読んで実行して」）だけを渡す。kim にコピーさせるのはこの1行が上限。
+- **秘密を含む Doc**: 共有先は対象席のアカウントだけにする。期限（例: 48時間）をタイトルに入れ、受信側が完了を知らせたら作成側で削除する。
+- **機械化**: Stop gate `tools/seat-name-gate.mjs` が、kim に向けて「ローカルパスのファイルを開いてコピー」させる手順を検出して差し戻す（理由コード LOCAL-HANDOFF）。
 
 **1.5 Google Workspace URL は開くアカウントを URL と本文で指定**
 
@@ -491,11 +513,11 @@ nishi 指摘:「**『閉じてよい』というのは Close 処理をこれか�
   セッション退避では「私が `/session-close` を実行 → 私は以後書かない → user がタブを✕で閉じる」が正しい順で、
   `/session-close` の**後に会話を続けると退避が無効になり、セッションが一覧に復活する**（633KB 復活を実測）。
 - 順番が結果を変えるなら理由を1行添える。
-- Stop hook の `next-action-gate` が要求する「このセッション:」行は次の定型4文のどれか（2026-10-01 kim 指示。`/session-close` の状態とタブを閉じてよいかを1文に両方書く）。
+- Stop hook の `next-action-gate` が要求する「このセッション:」行は次の定型3文のどれか（2026-10-01 kim 指示。`/session-close` の状態とタブを閉じてよいかを1文に両方書く）。
   - `/session-close は終わっているので、このセッションを閉じてよい`: Claude が /session-close 済み。タブを✕してよい
   - `/session-close は不要なので、このセッションを閉じてよい`: 引き継ぎ不要。タブを✕してよい
-  - `/session-close をして（まだ閉じない・YYYY-MM-DD HH:MM まで待つ）`: 作業は終わったが /session-close 未実行。/session-close をする。こちらも「まだ閉じない」なので何日の何時まで待つかを必ず入れる
-  - `まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）`: 作業継続中。何日の何時まで待つかを必ず入れる（例: `まだ閉じない（作業中・2026-11-02 23:59 まで待つ）`）。期限は待っている相手の作業や自動チェックの期限に合わせ、過ぎたら新しい期限に書き換えるか /session-close を提案する（2026-10-27 nishi 指示・next-action-gate が SESSION-OPEN-NO-DEADLINE / SESSION-OPEN-DEADLINE-PAST で機械検査）
+  - `まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）`: 作業継続中。何日の何時まで待つかを必ず入れる（例: `まだ閉じない（作業中・2026-11-02 23:59 まで待つ）`）。期限は待っている相手の作業や自動チェックの期限に合わせ、過ぎたら新しい期限に書き換えるか、確認せず自分で /session-close を実行する（
+  - 🔴 **最終の応答では /session-close を Claude が自分で実行する（2026-08-30・2026-11-04 kim 厳命・全PC全アカウント全プロジェクト）**: 目的が完了したら「/session-close しますか？」と聞かず、「/session-close をして」と頼まず、そのターンで Skill `session-close` を実行して `/session-close は終わっているので…` で終える。旧定型文 `/session-close をして（まだ閉じない・…）` は kim に close を委ねるので廃止し、`next-action-gate` が `SESSION-CLOSE-HANDOFF` で差し戻す。実行して失敗した時だけ、コマンドと終了コードを本文に書いて `[SESSION-CLOSE-PENDING-OK: <理由>]` を付ける2026-10-27 nishi 指示・next-action-gate が SESSION-OPEN-NO-DEADLINE / SESSION-OPEN-DEADLINE-PAST で機械検査）
   - 待つ期限は Stop hook `tools/session-wait-title.mjs` がセッション一覧のタイトルの頭に `【11/02/20:11まで】` の形（年なし）で自動で付け、閉じてよい定型文になったら外す。既存の全セッションにも SessionStart の `--all`（1時間に1回）で当てる（2026-10-27 nishi 指示・全PC全アカウント）
   - 閉じてよい定型文2つ（`/session-close は終わっているので…` / `/session-close は不要なので…`）で、かつ「次に kim がすること: なし」のときは、同じ hook がタイトルの頭に `【閉じて可】` を付ける。kim のやることが残っていれば閉じてよい定型文でも付けず、付いていれば外す。再開して「まだ閉じない」に戻れば期限に付け替える（2026-11-02 kim 指示・全PC全アカウント全プロジェクト）
   - PC番号（作業用018 なら `018`）がある PC では、セッション一覧のタイトル頭に `018｜` を付け、待機セッションの自動名も `018-…` にする。どのPCのセッションかをスマホで見分けるため（2026-11-01 kim 指示・全PC）。番号は fleet-pc-map.json から hostname で引く。上書きは env `ORGIAST_PC_NUMBER`
@@ -505,7 +527,7 @@ nishi 指摘:「**『閉じてよい』というのは Close 処理をこれか�
 
 **依頼は応答末尾の「やること」1か所にまとめる（2026-09-30 指示）**。本文に手順・パス・コマンド・URLを散らさず、初心者が上から順になぞれる番号付き手順にする。本文には結果と根拠を書き、操作に必要な値・リンクは末尾に揃える。値の調査・ファイル生成・検証手段・URLの到達確認は Claude 側で先に済ませ、権限上できない操作だけを残す。
 
-- 残る手順を数え、2つ以上なら `tools/make-desktop-launcher.mjs` でデスクトップのダブルクリック1個に畳む。前提確認→本処理→結果の自動検証→後続処理を組み込み、完了済み工程は自動スキップする。
+- 残る手順を数え、2つ以上なら `tools/make-desktop-launcher.mjs` でデスクトップのダブルクリック1個に畳む。前提確認→本処理→結果の自動検証→後続処理を組み込み、完了済み工程は自動スキップする。.cmd/.bat を Write で手書きしない。手書きするなら英数字だけにし、日本語の案内は .ps1/.mjs 側で出す（cmd.exe は CP932 で読むので chcp 65001 を書いても全行が文字化けで失敗する。2026-11-04 kim-PC 実害。cmd-ascii-guard が止める）。
 - 末尾にファイル名と実行内容を書き、症状→対処の表を添える。失敗時は「Claude にこう伝えてください」で止め、user に原因調査をさせない。§1.5.1の完全手順と併用する。
 
 **実害（2026-09-30）**: event-shop のDB列追加・アカウント指定・本番反映を別々の場所に書き、user に手順を組み立て直させた。
@@ -620,6 +642,7 @@ CLI未インストールは「手作業で…」と言わず自分で`winget`/`s
 - **秘密は `.env` で渡さない**: D1・R2・KV・Queues などは Binding で Worker に渡す（接続文字列もキーも持たない）。外部 API キーだけ `wrangler secret put` にし、`.env` やリポジトリに置かない。
 - **作成・デプロイは Claude が `wrangler` で完結させる**（`wrangler d1 create` / `r2 bucket create` / `kv namespace create` / `deploy`）。user の操作は初回の `wrangler login` の承認だけ。アカウントは §1.12 に従って最初に宣言する。
 - **Cloudflare 以外を選ぶ条件**: Cloudflare に代わりがない場合（Google Workspace と連携する GAS、Supabase Auth が必要な既存の仕組みなど）、または既に動いているアプリ。その時は理由を1行書く。
+- **初回ログイン・OAuth 同意など user の操作が残る場合は、認証済みの基盤（例: Vercel）で先に公開し、user の操作をゼロにする。Cloudflare への移行は、Claude 側で認証が済んでいて user 操作なしで完了できる時に行う（kim 2026-11-04 厳命。実害: 展示会かぶりチェッカーで wrangler login を kim に残し 13 日間未公開）。**
 - **既存の Vercel / Supabase アプリは移行しない**。大きな改修のついでに、移行した方が得かを検討するだけにする（移行作業そのものが手間とリスクになるため）。
 
 ### 1.11 DWDとアカウント所有権（§1.11〜1.12）
@@ -715,7 +738,7 @@ kim の返事待ちは SessionStart と各セッションで「📌 kim の返�
 
 **1.15 完了報告で stop せず自律進行する**
 
-「すすめて」と打たせない。完了報告の後は自動で次のTODO（git commit/vercel prod deploy/Layer2 e2e/memory反映等）に着手する。設計判断・破壊的操作・未承認prod送信・大型リファクタのみAskUserQuestionで待つ。報告末尾に「残TODO」セクションを付ける。詳細・自動着手チェックリスト: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`
+「すすめて」「閉じて」と打たせない。目的が完了した最終の応答では、確認せず Claude が自分で `/session-close` を実行して閉じる（2026-11-04 kim 厳命・全PC全アカウント全プロジェクト。詳細は「次の一手は『誰が・何を・どの順で』書く」節の「このセッション:」定型文）。完了報告の後は自動で次のTODO（git commit/vercel prod deploy/Layer2 e2e/memory反映等）に着手する。設計判断・破壊的操作・未承認prod送信・大型リファクタのみAskUserQuestionで待つ。報告末尾に「残TODO」セクションを付ける。詳細・自動着手チェックリスト: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`
 
 進捗通知の宛先は `fleet-pc-map.json` またはローカルの `~/.claude/fleet-pc-map.json` の同名 PC 行の `notifyDiscordId`。未設定だとチャットに案内が出て、kim に1日1回警告が飛ぶ。
 kim 宛の定期ダイジェスト（朝/夜/urgent）・完了通知・配送異常の警告は `config/kim-discord-allowlist.json` の許可リストで Discord DM へ流す（kim 2026-11-04 指示「進捗は聞かれる前に届ける」）。許可判定は平易化前の原文でも行う。許可リストを空にする・この区分を消す変更は `tools/kim-discord-allowlist.test.mjs` が落とす。
@@ -724,8 +747,8 @@ kim 宛の定期ダイジェスト（朝/夜/urgent）・完了通知・配送�
 
 自動進行の結果はセッションの持ち主に DM とセッション内表示で必ず届く。user に「進捗どう？」と聞かせたら違反（2026-10-19 cr 指摘）。
 
-PR は原則 `gh pr create ... --label automerge` で作り、CI が赤なら Claude が直す。「マージしてください」と user に頼まない。
-workflow・keyserve・secrets・env・fleet 指令ファイルに触る時だけ label を付けず、PR 冒頭に kim の手動マージが必要な理由を書く。
+kim 操作席の PR は `node tools/pr-land.mjs --title "<題>" --body-file <本文>` で作り、CI が赤なら作成席が直す。通常変更だけ automerge ラベルを付ける。「マージしてください」と user に頼まない。
+`.github/workflows/*` は停止。その他の安全弁パス（keyserve・secrets・.env）はラベルを付けず、作成席が CI 合格後に `node tools/pr-merge.mjs <PR番号>` でマージする。fleet 指令ファイルは現在の安全弁対象外。
 完了結論は 3 行以内、詳細はファイルへのリンク 1 本とし、応答末尾を必ず `**次に kim がすること: なし**` または 1 件だけの行動で終える。
 
 **開いて確かめるだけの項目は書かない**（2026-10-26 cr 指摘）: PR・リンク・ファイルを開いて確認/レビュー/マージする類は、開く手間そのものが user の負担。状態は Claude が照会し（済んでいれば書かない）、未了なら Claude が実行するか「この後の自動進行」に回す。この行に書けるのは人にしかできない操作（支払い・OAuth 同意・アカウント作成・物理作業・選択肢を示した判断）だけ。next-action-gate が NEXT-ACTION-OPEN で block する。
@@ -857,7 +880,7 @@ ONBOARDING にこの経路が書いてあったのに、`next-session.md` に残
 **ルール本文が経路を認めているなら、引き継ぎの可否待ちメモは消化済みとして扱う。**
 
 **通常PRは正本ブランチ＋`automerge`でマージまで完結させる**（§1.21）。write権限と適格条件を実測し、`autoMergeRequest` がnullでないことと必須チェック `test` / `test-posix` のgreenを確認する。古いclassifier拒否の記録を恒久的な不可理由にしない。
-安全弁の対象と§1.15のfleet指令ファイルだけはラベルを付けず、kimの手動マージが必要な理由をPR冒頭に書く。安全弁を迂回せず、手渡し前にはgreenをAPIで確認し、`[PR 手渡し]` の必須2点（開くアカウント・試したこと）を添える。
+安全弁パスではラベルを付けず、作成席が CI 合格を確認して `node tools/pr-merge.mjs <PR番号>` でマージする。workflow 変更だけは専用権限・レビュー経路で扱うため停止する。権限不足は `node tools/access-doctor.mjs --fix` で直し、kim-PC にマージを依頼しない。
 
 <!-- MACHINE-STATE-START 各PCは自分の行だけを更新して push する -->
 
@@ -1236,7 +1259,7 @@ gh pr edit <番号> --repo kimkon1011/orgiast-claude-rules --add-label automerge
 gh pr view <番号> --repo kimkon1011/orgiast-claude-rules --json autoMergeRequest   # null でないこと
 ```
 
-- 自動マージには①正本内のブランチ ②draftでない ③authorがcollaborator ④`automerge`ラベル ⑤`.github/workflows/*` / `*keyserve*` / `*secrets*` / `*.env*` を変更しない、の全条件を満たす。安全弁対象と§1.15のfleet指令ファイルはラベルを付けず、kimの手動マージが必要な理由をPR冒頭に書く。安全弁を迂回しない。
+- 自動マージには①正本内のブランチ ②draftでない ③authorがcollaborator ④`automerge`ラベル ⑤`.github/workflows/*` / `*keyserve*` / `*secrets*` / `*.env*` を変更しない、の全条件を満たす。workflow 変更は停止し、その他の安全弁対象はラベルを付けず、作成席が CI 合格後に `node tools/pr-merge.mjs <PR番号>` でマージする。権限不足は `node tools/access-doctor.mjs --fix` で診断・修復する。
 - CIのgreenだけで有効化済みと判断しない。ラベルなしでは `enable-auto-merge` がpassでも `eligible=false` のままなので、`autoMergeRequest` がnullでないことを毎回確認する。
 - `gh`未認証でも§1.15のcredential helper経路でClaudeがPRを作る。`gh pr merge` のGraphQL `mergePullRequest` が拒否されても、それだけで不可能と断定しない。安全弁の対象外ならRESTの `gh api -X PUT repos/<repo>/pulls/<番号>/merge -f merge_method=squash` が通る場合もある。`docs/pr-flow-canonical-branch.md` を参照する（onboarding-syncはdocsを配布しないため、必要なら `gh api repos/kimkon1011/orgiast-claude-rules/contents/docs/pr-flow-canonical-branch.md -H "Accept: application/vnd.github.raw+json"` で読む）。
 

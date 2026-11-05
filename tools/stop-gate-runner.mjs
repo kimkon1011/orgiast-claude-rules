@@ -3,6 +3,7 @@ export const GATE_CONTRACT = {"name": "stop-gate-runner", "remedies": [{"kind": 
 // 2026-09-06: Stop 304回中198回が再Stop、handoff-quality 78件中71件が誤爆だった。
 // 9プロセスの逐次差し戻しを1回の評価・1つのblockへまとめ、userの再読を最大1回にする。
 import { evaluatePastLogSearch, listPlaybookNames, classifyHandoff } from './past-log-search-gate.mjs';
+import { judgeDeliverableDriveLink, registerDeliverableCheck } from './deliverable-drive-link-gate.mjs';
 import { evaluateInvitePermissions } from './hooks/discord-invite-permission-gate.mjs';
 import { applyNamedGatePolicy } from './gate-runtime.mjs';
 import os from 'node:os';
@@ -60,7 +61,7 @@ const PERIODIC_REPORT_GATES = new Set([...FORM_GATES,
   'handoff-audit-gate', 'report-length-gate', 'next-action-gate', 'third-party-nudge-gate',
 ]);
 export const RETRY_INSTRUCTION = STOP_RETRY_INSTRUCTION;
-const HANDOFF_HINT = "末尾に『次に kim がすること』『この後の自動進行』『このセッション: /session-close は終わっているので、このセッションを閉じてよい / /session-close は不要なので、このセッションを閉じてよい / /session-close をして（まだ閉じない・YYYY-MM-DD HH:MM まで待つ） / まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）』の定型文を3行で入れること(user が『この先はどうしたらいいの？』と聞き返した回数: 7日で9回)";
+const HANDOFF_HINT = "末尾に『次に kim がすること』『この後の自動進行』『このセッション: /session-close は終わっているので、このセッションを閉じてよい / /session-close は不要なので、このセッションを閉じてよい / まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）』の定型文を3行で入れること。作業が終わったら /session-close は kim に頼まず自分で実行する(user が『この先はどうしたらいいの？』と聞き返した回数: 7日で9回)";
 
 function fullStepsReason(missing) {
   return `[FULL-STEPS] 人に手作業を頼んでいますが、次が足りません: ${missing.join('・')}（§1.5.1 絶対ルール）`;
@@ -136,6 +137,15 @@ export async function run(input, context, auditOptions = {}) {
   const invite = evaluateInvitePermissions(assistantText);
   if (invite.decision === 'block') return invite;
   const base = { sessionId, blockedBy: [], reasonCodes: [], excerpt: String(assistantText || '').slice(0, 200) };
+  const deliverable = judgeDeliverableDriveLink({ text: assistantText || '', toolUses: blocks(currentTurnEntries(context.raw), 'tool_use') });
+  const streak = registerDeliverableCheck({ home: home(), sessionId, blocked: deliverable.decision === 'block' });
+  if (deliverable.decision === 'block') {
+    const record = { ...base, verdict: streak.capped ? 'pass_cap' : 'block', blockedBy: ['deliverable-drive-link-gate'], reasonCodes: [deliverable.code], sameTextRetries: streak.count };
+    ledger(streak.capped ? { ...record, verdict: 'deliverable-cap' } : record);
+    return streak.capped
+      ? { record, systemMessage: 'deliverable-drive-link-gate: 3回書き直しても Drive URL がありません' }
+      : { record, decision: 'block', reason: withStopRetryInstruction(deliverable.reason) };
+  }
   if (!assistantText) { const record = { ...base, verdict: 'skipped', reasonCodes: [context.reason || 'no-assistant-text'] }; ledger(record); return { record }; }
   // session-close SKILL.md §7.1 の閉じ際3行は、それ自体が user への次の一手の指示なので手渡し系ゲートを適用しない。
   // 適用すると「ルール通りに閉じる」だけで FULL-STEPS／INVESTIGATION／USER-BURDEN が発火して余分な1ターンを強制し、

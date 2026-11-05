@@ -62,6 +62,40 @@ test('対象外の報告と成果物を参照しない返信は通す', () => {
   assert.equal(judge({ text: '【最終まとめ】\n② 確認事項\n- 日程は明日でよいですか？\n③ やること\n- 上の2つの確認事項に返信する。' }).decision, 'pass');
 });
 
+test('確認用見出しと③後のClaude側予定は成果物単位にしない', () => {
+  const text = `【最終まとめ】
+① 報告
+完了
+② kim の確認事項
+【kim 確認用の全文】
+- チラシを見てください。 https://drive.google.com/file/d/flyer/view?authuser=kim@example.com
+③ kim がやること
+- チラシを確認して返信してください。 https://drive.google.com/file/d/flyer/view?authuser=kim@example.com
+
+- **次に kim がすること:** チラシを見て返信する https://drive.google.com/file/d/flyer/view?authuser=kim@example.com
+- **この後の自動進行:** 返信を受けたら、チラシを直すか「このままでOK」を記録
+- **このセッション:** 作業結果を記録する`;
+  assert.equal(judge({ text }).decision, 'pass');
+  assert.equal(judge({ text: text.replace(/- \*\*次に kim がすること:[\s\S]*/, '障害時アナログ運営: チラシを確認して手動修正する') }).decision, 'pass');
+  assert.equal(judge({ text: '【最終まとめ】\n② 確認事項\n【確認用画像】\n③ やること\nなし' }).decision, 'pass');
+  assert.equal(judge({ text: '【最終まとめ】\n② 確認事項\n確認用です。確認してください。\n③ やること\nなし' }).decision, 'pass');
+  assert.equal(judge({ text: '【最終まとめ】\n② 確認事項\n確認用画像を確認してください。\n③ やること\nなし' }).decision, 'block');
+});
+
+test('③後でも次にkimがする成果物確認はURL必須', () => {
+  const text = `【最終まとめ】
+① 報告
+完了
+② 確認事項
+なし
+③ kim がやること
+なし
+
+- **次に kim がすること:** チラシを見て返信する
+- **この後の自動進行:** 返信を受けたらチラシを直す`;
+  assert.equal(judge({ text }).decision, 'block');
+});
+
 test('runner: reply-only・既存cap後でも3回blockし、4回目は専用cap', async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'deliverable-test-'));
   const previous = process.env.ORGIAST_HOME;

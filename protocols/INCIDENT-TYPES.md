@@ -23,3 +23,5 @@
 | 実行元ツリー固着型 | 定期タスクが同期されない worktree/別クローン/固定ブランチを実行し続け、移行済みの経路(DeepSeek→OpenRouter)を旧コードが本家直結で叩き HTTP 402。実プローブは全レーン正常で監視に映らなかった。同期側も未コミット1ファイル(rescue 済み)で 4日間 skip(2026-10-29 kim-PC・PR #1302) | Orgiast* タスクの Action に nightly-repo 以外のパス(worktree・auto-session-repo・orgiast-main 等)を持つもの。register-*.ps1 で作業ツリーのパスを焼き込む箇所。DIRTY_WORKTREE_SKIP が続く同期ログ | repair-task-paths の worktree/別クローン検出と日次自動実行(ブランチ fix/stale-task-tree-detect)、register-messenger-watch.ps1 -UpdateActionOnly |
 
 追記ルール: 型名は構造を表す語にする。症状は1行、日付と出典を付ける。ゲート列が空の行は未完了として扱い、埋まるまで消さない。
+
+- 型: 夜間メンテが待機中セッションを「作業中でない」と誤判定して殺す（活動時刻ベースの busy 判定） → 対策: 生存＋未クローズで保護、落ちたら host_exit から自動再オープン。

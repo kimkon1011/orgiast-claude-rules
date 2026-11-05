@@ -1,14 +1,16 @@
+import { progressHome, notificationMocks } from './test-helpers/auto-progress-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { formatDoneLine, formatDoneMessage, formatDoneBacklogMessages, gatherEvidence, deterministicVerdict, judge, evidenceSummary, logDoneDm, run } from './auto-progress-watch.mjs';
+import { formatDoneLine, formatDoneMessage, formatDoneBacklogMessages, gatherEvidence, deterministicVerdict, judge, evidenceSummary, logDoneDm, run as runWatch } from './auto-progress-watch.mjs';
 import { cleanupOldLedgerTemps, ledgerFile, readLedger, writeLedger } from './auto-progress-ledger.mjs';
 import { listItems } from './kim-inbox.mjs';
 
+const run = options => runWatch({ ...options, io: { ...notificationMocks, ...options.io } });
+
 test('kim の recent/backlog 完了は静穏時間も保存・読み戻しし、旧通知済み印を救済する', async t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-done-'));
+  const home = progressHome('kim-done-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'seisaku-team@orgiast.jp' } }));
   const now = Date.parse('2026-11-04T16:00:00Z');
@@ -48,7 +50,7 @@ test('共有ファイルが新しくてもセッションの会話・実行が25
 });
 
 test('完了通知はresumeの結果を使い、予告文を出さない', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'done-notice-'));
+  const home = progressHome('done-notice-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const dir = path.join(home, '.claude', 'auto-progress-inbox');
   fs.mkdirSync(dir, { recursive: true });
@@ -76,7 +78,7 @@ test('完了通知はresumeの結果を使い、予告文を出さない', t => 
 });
 
 test('台帳 rename が2回失敗しても再試行で保存できる', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-retry-'));
+  const home = progressHome('ledger-retry-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const file = ledgerFile(home);
   let attempts = 0;
@@ -93,7 +95,7 @@ test('台帳 rename が2回失敗しても再試行で保存できる', t => {
 });
 
 test('台帳 rename が10回失敗しても巡回は落ちず、エラーを記録して通知を止める', async t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-failure-'));
+  const home = progressHome('ledger-failure-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const now = Date.parse('2026-11-01T03:00:00Z');
   writeLedger(ledgerFile(home), [{
@@ -123,7 +125,7 @@ test('台帳 rename が10回失敗しても巡回は落ちず、エラーを記�
 });
 
 test('1時間より古い台帳 tmp だけを掃除する', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-cleanup-'));
+  const home = progressHome('ledger-cleanup-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const file = ledgerFile(home);
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -140,7 +142,7 @@ test('1時間より古い台帳 tmp だけを掃除する', t => {
 });
 
 test('done-dmログは本文を8000字まで保存する', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'done-dm-log-'));
+  const home = progressHome('done-dm-log-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const message = '完了内容'.repeat(900);
   logDoneDm(home, { sessionId: 'done-full-text' }, { delivered: 'dm', channel: 'discord' }, message, Date.parse('2026-11-01T03:00:00Z'));
@@ -166,7 +168,7 @@ test('再開上限の失敗は最近の活動やAI判定に優先してstalled�
 
 test('timeoutを繰り返した実例は2回でSheetとDMまとめへ一度報告される', async t => {
   const { MAX_RESUMES } = await import('./auto-progress-watch.mjs');
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-exhausted-'));
+  const home = progressHome('resume-exhausted-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const now = Date.parse('2026-11-02T00:00:00Z');
   writeLedger(ledgerFile(home), [{
@@ -224,7 +226,7 @@ test('timeoutを繰り返した実例は2回でSheetとDMまとめへ一度報�
 
 
 test('失敗終了後の活動だけを数え、成功した再開の活動は保持する', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-evidence-'));
+  const home = progressHome('resume-evidence-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const end = Date.parse('2026-11-02T00:00:00Z');
   const transcriptPath = path.join(home, 'session.jsonl');
@@ -260,7 +262,7 @@ test('失敗終了後の活動だけを数え、成功した再開の活動は�
 
 
 test('終了後の本人発言を数え、総再開回数と連続失敗回数を区別する', t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'resume-user-'));
+  const home = progressHome('resume-user-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const end = Date.parse('2026-11-02T00:00:00Z');
   const transcriptPath = path.join(home, 'session.jsonl');
@@ -278,7 +280,7 @@ test('終了後の本人発言を数え、総再開回数と連続失敗回数�
 });
 
 test('完了通知は DM 成功時もローカル user にトーストを送る', async t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'done-toast-'));
+  const home = progressHome('done-toast-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const now = Date.parse('2026-11-02T10:00:00Z');
   writeLedger(ledgerFile(home), [{
@@ -302,7 +304,7 @@ test('完了通知は DM 成功時もローカル user にトーストを送る'
 });
 
 test('バックログ完了通知もローカル user にトーストを送る', async t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'backlog-toast-'));
+  const home = progressHome('backlog-toast-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const now = Date.parse('2026-11-02T10:00:00Z');
   writeLedger(ledgerFile(home), [{
@@ -325,7 +327,7 @@ test('バックログ完了通知もローカル user にトーストを送る',
 });
 
 test('巡回末尾の督促へhome/時刻/dry-runを渡し、失敗も巡回を落とさない', async t => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'watch-escalate-'));
+  const home = progressHome('watch-escalate-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const now = Date.parse('2026-11-04T10:00:00Z');
   for (const dryRun of [false, true]) {
@@ -348,7 +350,7 @@ test('巡回末尾の督促へhome/時刻/dry-runを渡し、失敗も巡回を�
 
 // 実例と同じ metadata を持つ定期ターン。各時刻は now からの経過時間。
 function scheduledFixture(t) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduled-evidence-'));
+  const home = progressHome('scheduled-evidence-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const now = Date.parse('2026-11-04T10:00:00Z');
   const transcriptPath = path.join(home, 'session.jsonl');

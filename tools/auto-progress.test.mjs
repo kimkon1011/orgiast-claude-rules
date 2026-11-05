@@ -1,3 +1,4 @@
+import { progressHome, notificationMocks } from './test-helpers/auto-progress-home.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -7,15 +8,17 @@ import vm from 'node:vm';
 import { spawnSync } from 'node:child_process';
 import { main as registerTasks } from './register-auto-progress-task.mjs';
 import { isNoopPromise, extractPromise, extractNextKim, applyPromise, buildRecord, record, readLedger, writeLedger, ledgerFile, rowKey, originLine } from './auto-progress-ledger.mjs';
-import { run as watch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, forgiveNoExecutorResumes, main as watchMain, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS, formatDoneMessage, readableReason, formatDoneBacklogMessages } from './auto-progress-watch.mjs';
+import { run as runWatch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, forgiveNoExecutorResumes, main as watchMain, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS, formatDoneMessage, readableReason, formatDoneBacklogMessages } from './auto-progress-watch.mjs';
 import { run as runDigest, selectRows, formatDigest, digestGroupKey, isUnattendedRow, WINDOW_MS, MAX_ITEMS, needsDm, verdictOf, cleanText, isHumanActionRequired, waitingNotificationKey, chunkMessage } from './auto-progress-digest.mjs';
 import { runRegisterPs1 } from './lib/run-register-ps1.mjs';
+
+const watch = options => runWatch({ ...options, io: { ...notificationMocks, ...options.io } });
 
 // Keep mocked non-kim deliveries independent of the developer PC owner and global Git email.
 const digest = options => runDigest({ ...options, io: { localOwner: 'test-owner@example.com', ...options.io } });
 
 const tempHomes = [];
-const tmp = () => { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-progress-')); tempHomes.push(home); return home; };
+const tmp = () => { const home = progressHome(); tempHomes.push(home); return home; };
 after(() => { for (const home of tempHomes) fs.rmSync(home, { recursive: true, force: true }); });
 const H = 3600000;
 
@@ -336,7 +339,7 @@ test('digest: DM未達を成功にせず、公開webhookへ送らない', async 
 });
 
 test('resumeSession: 古い成果JSONは再利用しない', async () => {
-  const home = tmp(); fs.mkdirSync(path.join(home, '.claude'));
+  const home = tmp(); fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(home, '.claude', 'auto-progress-resume-session.json'), '{"progressed":true,"evidence":"old"}');
   const result = await resumeSession({ sessionId: 'session', cwd: home, promise: 'p' }, { home, io: { executable: 'mock', runChild: async () => ({ status: 'success' }) } });
   assert.equal(result.outcome, 'blocked');
@@ -388,7 +391,7 @@ test('GAS追加案: 同一keyは更新、別PCは別行、24h抽出と再開フ�
 
 test('readLedger: 壊れたJSONとnull/配列を無視して有効行を処理する', () => {
   const home = tmp(), file = ledgerFile(home);
-  fs.mkdirSync(path.dirname(file));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, 'null\n[]\nbroken\n{"sessionId":"s","status":"open"}\n');
   assert.deepEqual(readLedger(file), [{ sessionId: 's', status: 'open' }]);
 });
@@ -1069,7 +1072,7 @@ test('watch: resumed のまま上限に達した行も停滞確認後はDM対象
 });
 
 test('originLine: PC ラベル・アカウント・プロジェクト・目的を1行に出す', () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-'));
+  const home = progressHome('origin-');
   fs.mkdirSync(path.join(home, '.claude', 'session-purpose'), { recursive: true });
   fs.writeFileSync(path.join(home, '.claude', 'session-purpose', 'abcdef1234.json'), JSON.stringify({ purpose: '学会協賛 62社へ案内メール' }));
   const row = { pc: 'DESKTOP-X', owner: '', user: 'cr', cwd: 'C:/Users/cr/Downloads/学会協賛ナビ/',sessionId: 'abcdef1234' };

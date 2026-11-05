@@ -1,16 +1,18 @@
+import { progressHome, notificationMocks } from './test-helpers/auto-progress-home.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { addCheck, isTimeOnlyCheck, main } from './auto-progress.mjs';
-import { run, resumeSession, MAX_RESUMES_PER_RUN } from './auto-progress-watch.mjs';
+import { run as runWatch, resumeSession, MAX_RESUMES_PER_RUN } from './auto-progress-watch.mjs';
 import { ledgerFile, readLedger, writeLedger, applyPromise } from './auto-progress-ledger.mjs';
 import { formatDigest, run as digest } from './auto-progress-digest.mjs';
 import { listItems } from './kim-inbox.mjs';
+const run = options => runWatch({ ...options, io: { ...notificationMocks, ...options.io } });
+
 const now = Date.parse('2026-11-02T03:00:00Z');
 function setup(t, extra = {}) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduled-start-'));
+  const home = progressHome('scheduled-start-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const options = { home, now, cwd: home, session: 'scheduled', label: '予約作業', deadline: '+24h', startWhen: 'exit 0', nextClaude: '成果物を作って検証する', ...extra };
   return { home, options };

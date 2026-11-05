@@ -1,0 +1,12 @@
+{
+  "name": "cafe-pc-test",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build-test.mjs",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0"
+  }
+}

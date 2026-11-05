@@ -1,0 +1,10 @@
+ok: OrgiastDeadlineDetect already registered
+ok: OrgiastDeadlineWatch already registered
+[DRY] OrgiastNightlyHealth daily 07:10 PT30M; remove health from OrgiastMorningBatch
+スキップ:OrgiastMorningBatch / open-work.mjs
+スキップ:OrgiastMorningBatch / next-actions.mjs
+追加:OrgiastNightlyBatch / ai-news-triage.mjs
+追加:OrgiastNightlyBatch / pricing-brief.mjs
+追加:OrgiastNightlyBatch / drive-hub-mirror.mjs
+追加:OrgiastNightlyBatch / expense-leak-check.mjs
+ok:追加4件/更新0件/スキップ2件

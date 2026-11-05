@@ -1,0 +1,2 @@
+2026-11-05 07:15:32.123160000 +0900 /mnt/c/Users/uers/.claude/logs/nightly-health.log
+2026-11-04 07:02:47.382597400 +0900 /mnt/c/Users/uers/.claude/.nightly-health-last.json

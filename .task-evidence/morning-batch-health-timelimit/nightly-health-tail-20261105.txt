@@ -1,0 +1,30 @@
+    '-Command',
+    "[Console]::OutputEncoding=[Text.Encoding]::UTF8;$ErrorActionPreference='Stop';try{$t=Get-ScheduledTask -TaskName 'OrgiastDiscordTaskDigest' -ErrorAction Stop;$i=Get-ScheduledTaskInfo -TaskName 'OrgiastDiscordTaskDigest' -ErrorAction Stop;[pscustomobject]@{taskName=$t.TaskName;state=[string]$t.State;lastRunTime=$i.LastRunTime.ToString('o');nextRunTime=$i.NextRunTime.ToString('o');lastTaskResult=$i.LastTaskResult;neverRun=($i.LastRunTime.Year -le 1999)}|ConvertTo-Json -Compress}catch{if($_.FullyQualifiedErrorId -match 'NoMatchingMSFT_ScheduledTaskFound'){Write-Output 'null'}else{throw}}"
+  ]
+}
+フック版ずれ判定をスキップ: uers/.claude: fatal: not a git repository (or any of the parent directories): .git
+フック版ずれ判定をスキップ: Downloads/claude-mobile: fatal: 'origin' does not appear to be a git repository fatal: Could not read from remote repository.  Please make sure you have the correct access rights and the repository exists.
+sent:通知送信完了
+フック版ずれ判定をスキップ: uers/.claude: fatal: not a git repository (or any of the parent directories): .git
+フック版ずれ判定をスキップ: Downloads/claude-mobile: fatal: 'origin' does not appear to be a git repository fatal: Could not read from remote repository.  Please make sure you have the correct access rights and the repository exists.
+sent:通知送信完了
+エラーが発生しました: Error: spawnSync powershell.exe ETIMEDOUT
+    at Object.spawnSync (node:internal/child_process:1191:20)
+    at spawnSync (node:child_process:929:24)
+    at run (file:///C:/Users/uers/.claude/nightly-repo/tools/lib/scheduled-task.mjs:4:18)
+    at getScheduledTaskInfo (file:///C:/Users/uers/.claude/nightly-repo/tools/lib/scheduled-task.mjs:13:26)
+    at runNightlyHealth (file:///C:/Users/uers/.claude/nightly-repo/tools/nightly-health.mjs:394:26)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async main (file:///C:/Users/uers/.claude/nightly-repo/tools/nightly-health.mjs:537:20)
+    at async file:///C:/Users/uers/.claude/nightly-repo/tools/nightly-health.mjs:552:50 {
+  errno: -4039,
+  code: 'ETIMEDOUT',
+  syscall: 'spawnSync powershell.exe',
+  path: 'powershell.exe',
+  spawnargs: [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    "[Console]::OutputEncoding=[Text.Encoding]::UTF8;$ErrorActionPreference='Stop';try{$t=Get-ScheduledTask -TaskName 'OrgiastDeadlineWatch' -ErrorAction Stop;$i=Get-ScheduledTaskInfo -TaskName 'OrgiastDeadlineWatch' -ErrorAction Stop;[pscustomobject]@{taskName=$t.TaskName;state=[string]$t.State;lastRunTime=$i.LastRunTime.ToString('o');nextRunTime=$i.NextRunTime.ToString('o');lastTaskResult=$i.LastTaskResult;neverRun=($i.LastRunTime.Year -le 1999)}|ConvertTo-Json -Compress}catch{if($_.FullyQualifiedErrorId -match 'NoMatchingMSFT_ScheduledTaskFound'){Write-Output 'null'}else{throw}}"
+  ]
+}

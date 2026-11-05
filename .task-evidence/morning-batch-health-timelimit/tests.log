@@ -1,0 +1,16 @@
+✔ existing batch tasks are extended and only the independent health task is registered (4.245ms)
+✔ dry-run and removal switches are part of the contract (0.2986ms)
+✔ all three nightly scripts are wired (0.2905ms)
+✔ changes are read back and machine-specific paths are absent (0.3519ms)
+✔ remediation is removed from morning specs and has a separate hidden 90-minute task (0.6478ms)
+✔ health has an independent hidden daily budget while open-work stays in morning (0.4161ms)
+✔ health migration verifies replacement before removing the old action and supports dry-run (0.3506ms)
+✔ targeted health repair skips unrelated nightly and deadline registrations (0.3336ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 150.2771

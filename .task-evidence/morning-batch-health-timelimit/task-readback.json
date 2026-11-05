@@ -1,0 +1,60 @@
+﻿[
+    {
+        "TaskName":  "OrgiastMorningBatch",
+        "Actions":  [
+                        {
+                            "Execute":  "C:\\Windows\\System32\\wscript.exe",
+                            "Arguments":  "//nologo \"C:\\Users\\uers\\.claude\\tools\\run-hidden.vbs\" \"powershell.exe\" \"-NoProfile\" \"-NonInteractive\" \"-ExecutionPolicy\" \"Bypass\" \"-File\" \"C:\\Users\\uers\\.claude\\tools\\nightly-bootstrap.ps1\" \"-Target\" \"tools\\morning-batch.mjs\"",
+                            "WorkingDirectory":  null
+                        },
+                        {
+                            "Execute":  "C:\\WINDOWS\\System32\\wscript.exe",
+                            "Arguments":  "//nologo \"C:\\Users\\uers\\.claude\\tools\\run-hidden.vbs\" \"C:\\Program Files\\nodejs\\node.exe\" \"C:\\Users\\uers\\.claude\\nightly-repo\\tools\\next-actions.mjs\"",
+                            "WorkingDirectory":  null
+                        },
+                        {
+                            "Execute":  "C:\\WINDOWS\\System32\\wscript.exe",
+                            "Arguments":  "//nologo \"C:\\Users\\uers\\.claude\\tools\\run-hidden.vbs\" \"C:\\Program Files\\nodejs\\node.exe\" \"C:\\Users\\uers\\.claude\\nightly-repo\\tools\\open-work.mjs\"",
+                            "WorkingDirectory":  null
+                        }
+                    ],
+        "ExecutionTimeLimit":  "PT15M",
+        "MultipleInstances":  "IgnoreNew",
+        "Principal":  {
+                          "UserId":  "uers",
+                          "LogonType":  3,
+                          "RunLevel":  0
+                      },
+        "Triggers":  [
+                         {
+                             "StartBoundary":  "2026-08-31T07:00:00+09:00",
+                             "DaysInterval":  1,
+                             "Enabled":  true
+                         }
+                     ]
+    },
+    {
+        "TaskName":  "OrgiastNightlyHealth",
+        "Actions":  [
+                        {
+                            "Execute":  "C:\\WINDOWS\\System32\\wscript.exe",
+                            "Arguments":  "//nologo \"C:\\Users\\uers\\.claude\\tools\\run-hidden.vbs\" \"C:\\Program Files\\nodejs\\node.exe\" \"C:\\Users\\uers\\.claude\\nightly-repo\\tools\\nightly-health.mjs\"",
+                            "WorkingDirectory":  "C:\\Users\\uers\\.claude\\nightly-repo"
+                        }
+                    ],
+        "ExecutionTimeLimit":  "PT30M",
+        "MultipleInstances":  "IgnoreNew",
+        "Principal":  {
+                          "UserId":  "uers",
+                          "LogonType":  3,
+                          "RunLevel":  0
+                      },
+        "Triggers":  [
+                         {
+                             "StartBoundary":  "2026-11-06T07:10:00+09:00",
+                             "DaysInterval":  1,
+                             "Enabled":  true
+                         }
+                     ]
+    }
+]

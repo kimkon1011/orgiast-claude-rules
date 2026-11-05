@@ -7,7 +7,8 @@ import { parseArgs, loadKey, buildPrompt } from './booth-perse-gen.mjs';
 
 test('buildPrompt: どの案にも高さ3.6mと明るさの指示が必ず入る', () => {
   const t = buildPrompt('BRIEF', { add: 'PLAN SIMPLE: white panels about 2.7 m high' });
-  assert.match(t, /overall height is 3\.6 m/);
+  assert.match(t, /MUST NOT exceed 3\.6 m/);
+  assert.doesNotMatch(t, /taller than neighbouring/);
   assert.match(t, /BRIGHT/);
   assert.ok(t.indexOf('MANDATORY HEIGHT') > t.indexOf('PLAN SIMPLE'), '案の記述より後ろに置き、低い高さの記述を上書きする');
 });
@@ -16,7 +17,7 @@ test('parseArgs: --max-height で会場の上限に合わせられ、既定は3.
   assert.equal(parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o']).maxHeight, 3.6);
   const o = parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o', '--max-height', '4.5']);
   assert.equal(o.maxHeight, 4.5);
-  assert.match(buildPrompt('B', { add: 'P' }, o.maxHeight), /overall height is 4\.5 m/);
+  assert.match(buildPrompt('B', { add: 'P' }, o.maxHeight), /MUST NOT exceed 4\.5 m/);
   assert.throws(() => parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o', '--max-height', 'x']), /--max-height/);
 });
 

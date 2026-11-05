@@ -15,8 +15,8 @@ export function human(e) {
 }
 export function approved(text, kind) {
   const s = text.trim();
-  if (/ない|ません|確認|(?:よい|いい)か|待|まだ|やめ|取り消|取消|禁止|不可|ダメ|駄目|[?？]|\b(?:not|no|don't|stop)\b/i.test(s)) return false;
-  if (/^(?:OK|はい|YES|承認します)[!！。\s]*$/i.test(s)) return true;
+  if (/送らないで|送信しないで|消さないで|削除しないで|まだ送らない|待って|やめて|取り消し|取消|禁止|不可|ダメ|駄目|\bNG\b|(?:よい|いい)か(?:[?？]?$|確認)|[?？]$|ません|(?:OK|はい|承認)(?:では|じゃ)?ない|\b(?:not|no|don't|stop)\b/i.test(s)) return false;
+  if (/(?:^|[^a-z])OK\s*(?:です)?[!！。\s]*$/i.test(s) || /^(?:はい|YES|承認します)[!！。\s]*$/i.test(s)) return true;
   return kind === 'mail' ? /送って(?:よい|いい|ください|下さい)?|送信して(?:よい|いい|ください|下さい)?|送信を許可/.test(s)
     : /削除して(?:よい|いい|ください|下さい)?|消して(?:よい|いい|ください|下さい)?|削除を許可/.test(s);
 }

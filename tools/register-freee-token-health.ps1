@@ -1,4 +1,4 @@
-param([switch]$Remove)
+﻿param([switch]$Remove)
 $ErrorActionPreference = 'Stop'
 $name = 'ClaudeFreeeTokenHealth'
 if ($Remove) { Unregister-ScheduledTask -TaskName $name -Confirm:$false; exit }

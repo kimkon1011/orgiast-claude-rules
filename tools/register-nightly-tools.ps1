@@ -1,9 +1,11 @@
 param(
   [switch]$DryRun,
-  [switch]$Remove
+  [switch]$Remove,
+  [switch]$HealthOnly
 )
 
 $ErrorActionPreference = 'Stop'
+if ($HealthOnly -and $Remove) { throw 'HealthOnly cannot be combined with Remove' }
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
 
 function J([string]$Text) {
@@ -22,20 +24,24 @@ $wscript = Join-Path $env:WINDIR 'System32\wscript.exe'
 $specs = @(
   [pscustomobject]@{ TaskName = 'OrgiastMorningBatch'; ScriptName = 'open-work.mjs'; ScriptArgs = @() },
   [pscustomobject]@{ TaskName = 'OrgiastMorningBatch'; ScriptName = 'next-actions.mjs'; ScriptArgs = @() },
-  [pscustomobject]@{ TaskName = 'OrgiastMorningBatch'; ScriptName = 'nightly-health.mjs'; ScriptArgs = @() },
   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'ai-news-triage.mjs'; ScriptArgs = @('--confidence', 'high,medium', '--limit', '8') },
   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'pricing-brief.mjs'; ScriptArgs = @('--limit', '8') },
   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'drive-hub-mirror.mjs'; ScriptArgs = @() },
   [pscustomobject]@{ TaskName = 'OrgiastNightlyBatch'; ScriptName = 'expense-leak-check.mjs'; ScriptArgs = @('--weekly') }
 )
 
+# Targeted repair avoids adding unrelated nightly actions on older installations.
+if ($HealthOnly) { $specs = @($specs | Where-Object { $_.TaskName -eq 'OrgiastMorningBatch' }) }
+
 . (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
 # The tasks must run from the synced repo, not from the tree this script sits in.
-$repo = Resolve-RegisterRepoRoot -Fallback (Split-Path -Parent $PSScriptRoot) -RequiredPaths @($specs | ForEach-Object { Join-Path 'tools' $_.ScriptName })
+$repo = Resolve-RegisterRepoRoot -Fallback (Split-Path -Parent $PSScriptRoot) -RequiredPaths (@($specs | ForEach-Object { Join-Path 'tools' $_.ScriptName }) + @('tools\nightly-health.mjs'))
 
 # Deadline jobs have their own schedules and kim-seat guard.
-& (Join-Path $PSScriptRoot 'register-deadline-watch-tasks.ps1') -Ensure -DryRun:$DryRun -Unregister:$Remove
-if (-not $?) { throw 'deadline-watch registration failed' }
+if (-not $HealthOnly) {
+  & (Join-Path $PSScriptRoot 'register-deadline-watch-tasks.ps1') -Ensure -DryRun:$DryRun -Unregister:$Remove
+  if (-not $?) { throw 'deadline-watch registration failed' }
+}
 
 # Resolve every prerequisite before changing either task.
 $taskNames = @($specs | ForEach-Object { $_.TaskName } | Select-Object -Unique)
@@ -72,6 +78,10 @@ foreach ($spec in $specs) {
   }
 }
 
+if (-not (Test-Path -LiteralPath (Join-Path $repo 'tools\nightly-health.mjs') -PathType Leaf)) {
+  $errors += 'nightly-health.mjs is missing'
+}
+
 if ($errors.Count -gt 0) {
   foreach ($problem in $errors) { Write-Host ((J '\u30a8\u30e9\u30fc:') + $problem) }
   exit 1
@@ -83,11 +93,56 @@ $updateCount = 0
 $skipCount = 0
 $removeCount = 0
 
+# Health needs its own budget: the morning task's PT15M covers all actions.
+# open-work reads nightly-batch logs, not .nightly-health-last.json, so it stays.
+# Register and verify the replacement BEFORE removing the old morning action.
+if (-not $Remove) {
+  $morning = $tasks['OrgiastMorningBatch']
+  $healthPath = Join-Path $repo 'tools\nightly-health.mjs'
+  $healthArguments = @('//nologo', (Quote-TaskArgument $runHidden), (Quote-TaskArgument $node), (Quote-TaskArgument $healthPath)) -join ' '
+  $healthPattern = '(?i)(^|[\\/" ])nightly-health\.mjs(?=[" ]|$)'
+  $healthKept = @($morning.Actions | Where-Object { [string]$_.Arguments -notmatch $healthPattern })
+  if ($healthKept.Count -eq 0) { throw 'refusing to remove the last morning action' }
+  if ($DryRun) {
+    Write-Host '[DRY] OrgiastNightlyHealth daily 07:10 PT30M; remove health from OrgiastMorningBatch'
+  } else {
+    $healthAction = New-ScheduledTaskAction -Execute $wscript -Argument $healthArguments -WorkingDirectory $repo
+    $healthTrigger = New-ScheduledTaskTrigger -Daily -At '07:10'
+    # This is a detached CIM copy; the morning task retains its original limit.
+    $healthSettings = [Microsoft.Management.Infrastructure.CimInstance]::new($morning.Settings)
+    $healthSettings.ExecutionTimeLimit = 'PT30M'
+    Register-ScheduledTask -TaskName 'OrgiastNightlyHealth' -Action $healthAction -Trigger $healthTrigger -Principal $morning.Principal -Settings $healthSettings -Description 'Collect nightly health (daily 07:10, independent 30-minute budget)' -Force -ErrorAction Stop | Out-Null
+    $health = Get-ScheduledTask -TaskName 'OrgiastNightlyHealth' -ErrorAction Stop
+    if (@($health.Actions).Count -ne 1 -or
+        $health.Actions[0].Execute -ine $wscript -or
+        $health.Actions[0].Arguments -ne $healthArguments -or
+        $health.Actions[0].WorkingDirectory -ne $repo -or
+        $health.Settings.ExecutionTimeLimit -ne 'PT30M' -or
+        $health.Settings.MultipleInstances -ne $morning.Settings.MultipleInstances -or
+        $health.Principal.UserId -ne $morning.Principal.UserId -or
+        $health.Principal.LogonType -ne $morning.Principal.LogonType -or
+        $health.Principal.RunLevel -ne $morning.Principal.RunLevel -or
+        @($health.Triggers).Count -ne 1 -or
+        $health.Triggers[0].StartBoundary -notmatch 'T07:10:00' -or
+        $health.Triggers[0].DaysInterval -ne 1) {
+      throw 'OrgiastNightlyHealth read-back failed; morning health action retained'
+    }
+    if ($healthKept.Count -ne @($morning.Actions).Count) {
+      Set-ScheduledTask -TaskName 'OrgiastMorningBatch' -Action $healthKept -ErrorAction Stop | Out-Null
+    }
+    $tasks['OrgiastMorningBatch'] = Get-ScheduledTask -TaskName 'OrgiastMorningBatch' -ErrorAction Stop
+    if (@($tasks['OrgiastMorningBatch'].Actions | Where-Object { [string]$_.Arguments -match $healthPattern }).Count) {
+      throw 'legacy health action remains in OrgiastMorningBatch'
+    }
+    Write-Host 'ok: OrgiastNightlyHealth daily 07:10 PT30M; morning health action removed'
+  }
+}
+
 # Converge old installations: remediation now has its own 90-minute task.
 $legacyPattern = '(?i)(^|[\\/" ])nightly-health-remediate\.mjs(?=[" ]|$)'
 $morning = $tasks['OrgiastMorningBatch']
 $kept = @($morning.Actions | Where-Object { [string]$_.Arguments -notmatch $legacyPattern })
-if ($kept.Count -ne @($morning.Actions).Count) {
+if (-not $HealthOnly -and $kept.Count -ne @($morning.Actions).Count) {
   if ($kept.Count -eq 0) { throw 'refusing to remove the last morning action' }
   if (-not $DryRun) {
     Set-ScheduledTask -TaskName 'OrgiastMorningBatch' -Action $kept -ErrorAction Stop | Out-Null

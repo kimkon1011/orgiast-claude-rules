@@ -59,7 +59,7 @@ test('記録の失敗で全体を落とさない: ログ追記が失敗しても
   ] });
   fs.writeFileSync(path.join(home, '.claude', 'logs'), '');
   let notifications = 0;
-  const { value: { value: result, lines }, lines: warnings } = await captureConsoleError(() => captureConsole(() => runRemediation({
+  const { value: { value: result, lines }, lines: warnings } = await captureConsoleError(() => captureConsole(() => runRemediation({ noWait: true,
     home, playbooks: [], maxCodex: 0, notify: async () => notifications++, decision: () => {}
   })));
   assert.equal(result.escalated.length, 1);
@@ -76,7 +76,7 @@ test('dry-run reports PLAN for a matching playbook and never calls apply or noti
   const home = makeHome(t, { anomalies: [{ label: 'x', message: 'bad' }] });
   let applied = 0, notified = 0;
   const pb = { name: 'test', match: async () => true, apply: async () => { applied++; return { outcome: 'fixed' }; }, verify: async () => true };
-  const { value: result, lines } = await captureConsole(() => runRemediation({ home, dryRun: true, json: false, playbooks: [pb], notify: async () => notified++ }));
+  const { value: result, lines } = await captureConsole(() => runRemediation({ noWait: true, home, dryRun: true, json: false, playbooks: [pb], notify: async () => notified++ }));
   assert.equal(applied, 0); assert.equal(notified, 0); assert.equal(result.plan[0].action, 'playbook=test');
   assert.match(lines.join('\n'), /PLAN x: playbook=test/);
   assert.match(lines.at(-1), /deferred=0/);
@@ -85,7 +85,7 @@ test('dry-run reports PLAN for a matching playbook and never calls apply or noti
 test('repair limit defers without decision or notification', async (t) => {
   const home = makeHome(t, { anomalies: [{ label: 'limit', message: 'bad' }] });
   let decisions = 0, notifications = 0;
-  const result = await runRemediation({ home, playbooks: [], maxCodex: 0, decision: () => decisions++, notify: async () => notifications++ });
+  const result = await runRemediation({ noWait: true, home, playbooks: [], maxCodex: 0, decision: () => decisions++, notify: async () => notifications++ });
   assert.equal(result.deferred.length, 1); assert.equal(result.escalated.length, 0);
   assert.equal(decisions, 0); assert.equal(notifications, 0);
 });
@@ -95,11 +95,11 @@ test('open PR defers, while merged or closed PR allows retry', async (t) => {
   const anomaly = { label: 'pr-case', message: 'bad' }, fingerprint = anomalyFingerprint(anomaly);
   const ledger = [{ fingerprint, label: anomaly.label, outcome: 'pr', ranAt: '2026-09-08T12:00:00Z' }];
   const openHome = makeHome(t, { anomalies: [anomaly] }, ledger);
-  const open = await runRemediation({ home: openHome, now, dryRun: true, json: true, playbooks: [], run: () => ({ status: 0, stdout: '[{"url":"https://example.test/pr/1"}]', stderr: '' }) });
+  const open = await runRemediation({ noWait: true, home: openHome, now, dryRun: true, json: true, playbooks: [], run: () => ({ status: 0, stdout: '[{"url":"https://example.test/pr/1"}]', stderr: '' }) });
   assert.equal(open.plan[0].action, 'deferred'); assert.match(open.plan[0].reason, /PRがopen/);
 
   const mergedHome = makeHome(t, { anomalies: [anomaly] }, ledger);
-  const merged = await runRemediation({ home: mergedHome, now, dryRun: true, json: true, playbooks: [], run: () => ({ status: 0, stdout: '[]', stderr: '' }) });
+  const merged = await runRemediation({ noWait: true, home: mergedHome, now, dryRun: true, json: true, playbooks: [], run: () => ({ status: 0, stdout: '[]', stderr: '' }) });
   assert.equal(merged.plan[0].action, 'codex');
 });
 
@@ -110,23 +110,23 @@ test('third recurrence after two deferred or PR outcomes escalates', async (t) =
     { fingerprint, outcome: 'deferred', ranAt: '2026-09-04T12:00:00Z' },
     { fingerprint, outcome: 'deferred', ranAt: '2026-09-06T12:00:00Z' }
   ]);
-  const result = await runRemediation({ home, now, dryRun: true, json: true, playbooks: [] });
+  const result = await runRemediation({ noWait: true, home, now, dryRun: true, json: true, playbooks: [] });
   assert.equal(result.plan[0].action, 'escalate'); assert.match(result.plan[0].reason, /2回以上/);
 });
 
 test('missing and empty anomaly caches print an explicit ok line', async (t) => {
   const missing = makeHome(t, undefined);
-  const missingOutput = await captureConsole(() => runRemediation({ home: missing }));
+  const missingOutput = await captureConsole(() => runRemediation({ noWait: true, home: missing }));
   assert.deepEqual(missingOutput.lines, ['ok:異常なし（キャッシュなし）']);
   const empty = makeHome(t, { ranAt: '2026-09-10T06:30:00Z', anomalies: [] });
-  const emptyOutput = await captureConsole(() => runRemediation({ home: empty }));
+  const emptyOutput = await captureConsole(() => runRemediation({ noWait: true, home: empty }));
   assert.deepEqual(emptyOutput.lines, ['ok:異常なし（2026-09-10T06:30:00Z）']);
 });
 
 test('playbook exception is recorded and the next anomaly is still processed', async (t) => {
   const home = makeHome(t, { anomalies: [{ label: 'one', message: 'bad one' }, { label: 'two', message: 'bad two' }] });
   const pb = { name: 'broken', match: async () => { throw new Error(`token=${'s'.repeat(30)}`); } };
-  const result = await runRemediation({ home, playbooks: [pb], notify: async () => {} });
+  const result = await runRemediation({ noWait: true, home, playbooks: [pb], notify: async () => {} });
   assert.equal(result.playbookErrors.length, 2);
   assert.equal(result.playbookErrors.every((row) => row.outcome === 'playbook-error'), true);
   assert.equal(JSON.stringify(result).includes('s'.repeat(30)), false);
@@ -143,7 +143,7 @@ test('any nonzero codex exit tries cheap-code once and reports both redacted fai
     if (args.some((arg) => String(arg).endsWith('cheap-code.mjs'))) return { status: 7, stdout: '', stderr: `cheap sk-${'b'.repeat(20)}` };
     return { status: 0, stdout: '', stderr: '' };
   };
-  const result = await runRemediation({ home, playbooks: [], run, decision: () => {}, notify: async () => {} });
+  const result = await runRemediation({ noWait: true, home, playbooks: [], run, decision: () => {}, notify: async () => {} });
   assert.equal(calls.filter((args) => args.some((arg) => String(arg).endsWith('cheap-code.mjs'))).length, 1);
   assert.match(result.escalated[0].reason, /codex exit 124/);
   assert.match(result.escalated[0].reason, /cheap-code exit 7/);
@@ -162,7 +162,7 @@ test('codex-do が保留(75)なら escalated にせず quota_deferred を台帳�
     return { status: 0, stdout: '', stderr: '' };
   };
   const codexArgs = () => calls.find((args) => args.some((arg) => String(arg).endsWith('codex-do.mjs')));
-  const result = await runRemediation({ home, playbooks: [], run, decision: () => {}, notify: async () => {} });
+  const result = await runRemediation({ noWait: true, home, playbooks: [], run, decision: () => {}, notify: async () => {} });
   assert.equal(result.escalated.length, 0);
   assert.equal(result.deferred.length, 1);
   assert.equal(result.deferred[0].outcome, 'quota_deferred');
@@ -177,7 +177,7 @@ test('codex-do が保留(75)なら escalated にせず quota_deferred を台帳�
   const rows = ledger.trim().split('\n').map(JSON.parse).map((row) => ({ ...row, ranAt: new Date(Date.now() - 2 * 86400000).toISOString() }));
   fs.writeFileSync(ledgerFile, `${rows.map(JSON.stringify).join('\n')}\n`);
   calls.length = 0;
-  const second = await runRemediation({ home, playbooks: [], run, decision: () => {}, notify: async () => {} });
+  const second = await runRemediation({ noWait: true, home, playbooks: [], run, decision: () => {}, notify: async () => {} });
   assert.equal(codexArgs(), undefined, 'retryAt 前は codex-do を呼ばない');
   assert.equal(second.deferred.length, 1);
   assert.match(second.deferred[0].reason, /Codex保留中/);
@@ -187,7 +187,7 @@ test('dead GUI watcher follows registration playbook and verifies heartbeat, no 
   const now = new Date();
   const home = makeHome(t, { anomalies: [{ type: 'watcher_dead', label: '監視停止', message: 'heartbeat 未作成' }] });
   const calls = [];
-  const result = await runRemediation({ home, now,
+  const result = await runRemediation({ noWait: true, home, now,
     run: (exe,args) => {
       calls.push([exe,args]);
       assert.equal(exe, process.execPath); assert.match(args[0], /register-stuck-dialog-task\.mjs$/);
@@ -204,7 +204,7 @@ test('budget caps the existing limit and recalculates fallback timeouts', async 
   const home = makeHome(t, { anomalies: [{ label: 'budget', message: 'bad' }] });
   let elapsed = 0;
   const calls = [];
-  const result = await runRemediation({ home, playbooks: [], budgetMinutes: 10, clock: () => elapsed,
+  const result = await runRemediation({ noWait: true, home, playbooks: [], budgetMinutes: 10, clock: () => elapsed,
     notify: async () => {}, decision: () => {},
     run: (exe, args, options) => {
       calls.push({ args, options });
@@ -228,7 +228,7 @@ test('budget caps the existing limit and recalculates fallback timeouts', async 
 test('under five minutes defers without launching and dry-run remains read-only', async (t) => {
   for (const dryRun of [false, true]) {
     const home = makeHome(t, { anomalies: [{ label: 'short', message: 'bad' }] });
-    const result = await runRemediation({ home, playbooks: [], budgetMinutes: 4, dryRun,
+    const result = await runRemediation({ noWait: true, home, playbooks: [], budgetMinutes: 4, dryRun,
       run: () => { throw new Error('must not launch'); } });
     assert.equal(dryRun ? result.plan[0].action : result.deferred[0].outcome, 'deferred');
     if (dryRun) assert.equal(fs.existsSync(path.join(home, '.claude', 'logs')), false);
@@ -239,7 +239,7 @@ test('default and invalid budget values preserve the 45 minute cap', async (t) =
   for (const budgetMinutes of [undefined, '', 'bad', -1, 80]) {
     const home = makeHome(t, { anomalies: [{ label: 'cap', message: 'bad' }] });
     let elapsed = 0;
-    await runRemediation({ home, playbooks: [], budgetMinutes, clock: () => elapsed,
+    await runRemediation({ noWait: true, home, playbooks: [], budgetMinutes, clock: () => elapsed,
       run: (exe, args, options) => {
         if (args[0]?.endsWith('codex-do.mjs')) {
           assert.equal(options.timeout, 42 * 60000);
@@ -255,7 +255,7 @@ test('default and invalid budget values preserve the 45 minute cap', async (t) =
 
 test('no anomalies still advances the monitored log', async (t) => {
   const home = makeHome(t, { anomalies: [] });
-  await runRemediation({ home });
+  await runRemediation({ noWait: true, home });
   assert.match(fs.readFileSync(path.join(home, '.claude', 'logs', 'nightly-health-remediate.log'), 'utf8'), /remediation started/);
 });
 
@@ -272,7 +272,7 @@ test('wrapper-held log uses stdout and a durable sibling without retrying its lo
     }
     return append(file, ...args);
   });
-  const { value: { value: result, lines }, lines: warnings } = await captureConsoleError(() => captureConsole(() => runRemediation({
+  const { value: { value: result, lines }, lines: warnings } = await captureConsoleError(() => captureConsole(() => runRemediation({ noWait: true,
     home, playbooks: [], maxCodex: 0,
     notify: async () => assert.fail('no external notification'), decision: () => assert.fail('no decision')
   })));
@@ -281,7 +281,69 @@ test('wrapper-held log uses stdout and a durable sibling without retrying its lo
   assert.deepEqual(warnings, []);
   assert.equal(fs.readFileSync(logFile.replace(/\.log$/, '.events.log'), 'utf8'), lines.slice(0, 2).join('\n') + '\n');
   fs.writeFileSync(path.join(home, '.claude', '.nightly-health-last.json'), JSON.stringify({ anomalies: [] }));
-  const healthy = await captureConsole(() => runRemediation({ home }));
+  const healthy = await captureConsole(() => runRemediation({ noWait: true, home }));
   assert.match(healthy.lines[0], /remediation started/);
   assert.match(fs.readFileSync(logFile.replace(/\.log$/, '.events.log'), 'utf8'), /remediation started/);
+});
+
+function waitEvents(home) {
+  const file = path.join(home, '.claude', 'logs', 'nightly-health-remediate.events.log');
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, 'utf8').trim().split('\n')
+    .filter(line => line.startsWith('{')).map(JSON.parse)
+    .filter(row => row.event === 'remediate.wait_for_health');
+}
+
+test('wait_for_health reloads yesterday cache and processes today input after completion', async (t) => {
+  const now = new Date('2026-11-06T00:20:00Z');
+  const home = makeHome(t, { ranAt: '2026-11-05T00:27:00Z', anomalies: [{ label: 'stale' }] });
+  const fresh = { ranAt: '2026-11-06T00:27:00Z', anomalies: [{ label: 'fresh' }] };
+  let elapsed = 0, timer;
+  const append = fs.appendFileSync;
+  t.mock.method(fs, 'appendFileSync', (file, line, ...args) => {
+    const result = append(file, line, ...args);
+    if (String(file).endsWith('.events.log') && String(line).includes('"status":"start"')) {
+      timer = setTimeout(() => fs.writeFileSync(path.join(home, '.claude', '.nightly-health-last.json'), JSON.stringify(fresh)), 5);
+    }
+    return result;
+  });
+  t.after(() => clearTimeout(timer));
+  const result = await runRemediation({
+    home, now, waitMin: 0.001, pollMs: 10, clock: () => now.getTime() + (elapsed += 10),
+    playbooks: [], maxCodex: 0, run: () => assert.fail('no command expected'),
+    notify: async () => assert.fail('no notification expected'), decision: () => assert.fail('no decision expected')
+  });
+  const events = waitEvents(home);
+  assert.deepEqual(events.map(row => row.status), ['start', 'completed']);
+  assert.equal(events[1].ranAtInput, fresh.ranAt);
+  assert.deepEqual(result.deferred.map(row => row.label), ['fresh']);
+});
+
+test('wait_for_health marks stale input on timeout and continues remediation', async (t) => {
+  const now = new Date('2026-11-06T00:20:00Z');
+  const ranAt = '2026-11-05T00:27:00Z';
+  const home = makeHome(t, { ranAt, anomalies: [{ label: 'stale' }] });
+  let elapsed = 0;
+  const result = await runRemediation({
+    home, now, waitMin: 0.001, pollMs: 10, clock: () => now.getTime() + (elapsed += 10),
+    playbooks: [], maxCodex: 0, run: () => assert.fail('no command expected'),
+    notify: async () => assert.fail('no notification expected'), decision: () => assert.fail('no decision expected')
+  });
+  const events = waitEvents(home);
+  assert.deepEqual(events.map(row => row.status), ['start', 'timeout']);
+  assert.equal(events[1].stale_input, true);
+  assert.equal(events[1].ranAtInput, ranAt);
+  assert.deepEqual(result.deferred.map(row => row.label), ['stale']);
+});
+
+test('noWait bypasses wait_for_health events even with yesterday input', async (t) => {
+  const now = new Date('2026-11-06T00:20:00Z');
+  const home = makeHome(t, { ranAt: '2026-11-05T00:27:00Z', anomalies: [{ label: 'stale' }] });
+  const result = await runRemediation({
+    home, now, noWait: true, waitMin: 0.001, pollMs: 10, clock: () => now.getTime(),
+    playbooks: [], maxCodex: 0, run: () => assert.fail('no command expected'),
+    notify: async () => assert.fail('no notification expected'), decision: () => assert.fail('no decision expected')
+  });
+  assert.deepEqual(waitEvents(home), []);
+  assert.deepEqual(result.deferred.map(row => row.label), ['stale']);
 });

@@ -19,6 +19,31 @@ export function normalizeMessage(value) { return String(value || '').replace(/\d
 export function anomalyFingerprint(anomaly) { return crypto.createHash('sha256').update(`${anomaly.label}|${normalizeMessage(anomaly.message)}`).digest('hex').slice(0, 16); }
 export function slugify(value) { return String(value).normalize('NFKD').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase().slice(0, 40) || 'nightly-health'; }
 
+export function getTodayJstStartMs(nowDate = new Date()) {
+  const d = nowDate instanceof Date ? nowDate : new Date(nowDate);
+  if (Number.isNaN(d.getTime())) return NaN;
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Tokyo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  const parts = formatter.formatToParts(d);
+  const year = parts.find((p) => p.type === 'year').value;
+  const month = parts.find((p) => p.type === 'month').value;
+  const day = parts.find((p) => p.type === 'day').value;
+  return Date.parse(`${year}-${month}-${day}T00:00:00+09:00`);
+}
+
+export function isRanAtTodayJst(ranAtStr, nowDate = new Date()) {
+  if (!ranAtStr) return false;
+  const ranAtMs = Date.parse(ranAtStr);
+  if (Number.isNaN(ranAtMs)) return false;
+  const startMs = getTodayJstStartMs(nowDate);
+  if (Number.isNaN(startMs)) return false;
+  return ranAtMs >= startMs;
+}
+
 function readJson(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
 function readLedger(file) { try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse); } catch { return []; } }
 function redactValue(value) {
@@ -32,6 +57,7 @@ function ymd(now) { return now.toISOString().slice(0, 10).replaceAll('-', ''); }
 
 export async function runRemediation({
   home = process.env.ORGIAST_HOME || os.homedir(), now = new Date(), dryRun = false, json = false,
+  noWait = false, waitMin = process.env.NIGHTLY_REMEDIATE_WAIT_MIN, pollMs = process.env.NIGHTLY_REMEDIATE_WAIT_POLL_MS,
   repo = path.resolve(import.meta.dirname, '..'), playbooks = defaultPlaybooks, run = command,
   notify = notifyKim, decision = addDecision, maxCodex = 3, maxMinutes = 45,
   clock = Date.now, budgetMinutes = process.env.NIGHTLY_REMEDIATE_BUDGET_MIN,
@@ -49,6 +75,7 @@ export async function runRemediation({
   // run-hidden.vbs redirects stdout to logFile and holds a Windows write handle.
   // Retrying that handle cannot succeed until this process exits. Keep a durable
   // sibling record and let the wrapper write the same line through stdout.
+  const eventsLogFile = logFile.replace(/\.log$/, '.events.log');
   let wrapperOwnsLog = false;
   const appendLog = async (line) => {
     if (!wrapperOwnsLog) {
@@ -56,9 +83,62 @@ export async function runRemediation({
       catch (error) { if (error.code !== 'EBUSY') throw error; wrapperOwnsLog = true; }
     }
     console.log(line);
-    await appendLineWithRetry(logFile.replace(/\.log$/, '.events.log'), line);
+    await appendLineWithRetry(eventsLogFile, line);
   };
-  const input = readJson(path.join(home, '.claude', '.nightly-health-last.json'), { anomalies: [] });
+  const appendEvent = async (eventObj, line) => {
+    const jsonl = typeof eventObj === 'string' ? eventObj : JSON.stringify(eventObj);
+    try { await appendLineWithRetry(eventsLogFile, jsonl); }
+    catch (error) { console.error(`WARN events.log追記失敗: ${redactAll(error?.message ?? error)}`); }
+    if (line) {
+      console.log(line);
+      if (!wrapperOwnsLog) {
+        try { await appendLineWithRetry(logFile, line, { attempts: 1 }); }
+        catch (error) { if (error.code === 'EBUSY') wrapperOwnsLog = true; else console.error(`WARN ログ追記失敗: ${redactAll(error?.message ?? error)}`); }
+      }
+    }
+  };
+
+  const healthFile = path.join(home, '.claude', '.nightly-health-last.json');
+  let input = readJson(healthFile, { anomalies: [] });
+
+  const parsedWaitMin = Number(waitMin);
+  const effectiveWaitMin = Number.isFinite(parsedWaitMin) && parsedWaitMin > 0 ? parsedWaitMin : 25;
+  const parsedPollMs = Number(pollMs);
+  const effectivePollMs = Number.isFinite(parsedPollMs) && parsedPollMs > 0 ? parsedPollMs : 30000;
+
+  if (!noWait && !isRanAtTodayJst(input.ranAt, now)) {
+    const startWaitIso = new Date(clock()).toISOString();
+    await appendEvent(
+      { event: 'remediate.wait_for_health', status: 'start', ranAt: startWaitIso, ranAtInput: input.ranAt || null, waitMin: effectiveWaitMin, pollMs: effectivePollMs },
+      `${startWaitIso} remediate.wait_for_health start (ranAt: ${input.ranAt || 'none'}, max ${effectiveWaitMin}m)`
+    );
+
+    const waitDeadline = clock() + effectiveWaitMin * 60000;
+    let fresh = false;
+    while (clock() < waitDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, effectivePollMs));
+      input = readJson(healthFile, { anomalies: [] });
+      if (isRanAtTodayJst(input.ranAt, now)) {
+        fresh = true;
+        break;
+      }
+    }
+
+    if (fresh) {
+      const endWaitIso = new Date(clock()).toISOString();
+      await appendEvent(
+        { event: 'remediate.wait_for_health', status: 'completed', ranAt: endWaitIso, ranAtInput: input.ranAt || null },
+        `${endWaitIso} remediate.wait_for_health completed (ranAt: ${input.ranAt || 'none'})`
+      );
+    } else {
+      const endWaitIso = new Date(clock()).toISOString();
+      await appendEvent(
+        { event: 'remediate.wait_for_health', status: 'timeout', stale_input: true, ranAt: endWaitIso, ranAtInput: input.ranAt || null },
+        `${endWaitIso} remediate.wait_for_health timeout stale_input (ranAt: ${input.ranAt || 'none'})`
+      );
+    }
+  }
+
   const anomalies = Array.isArray(input.anomalies) ? input.anomalies : [];
   if (!anomalies.length) {
     // A healthy/no-op run must also advance the monitored heartbeat.
@@ -258,4 +338,4 @@ export async function runRemediation({
   return result;
 }
 
-if (isEntry(import.meta.url)) runRemediation({ dryRun: process.argv.includes('--dry-run'), json: process.argv.includes('--json') }).then((r) => { process.exitCode = r.exitCode; }).catch((e) => { console.error(redactAll(e.stack || e)); process.exitCode = 1; });
+if (isEntry(import.meta.url)) runRemediation({ dryRun: process.argv.includes('--dry-run'), json: process.argv.includes('--json'), noWait: process.argv.includes('--no-wait') }).then((r) => { process.exitCode = r.exitCode; }).catch((e) => { console.error(redactAll(e.stack || e)); process.exitCode = 1; });

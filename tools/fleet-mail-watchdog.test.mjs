@@ -130,3 +130,30 @@ test('空の許可リストでは到着投稿せず台帳への配達を成功�
   await main([], { ...f.deps, allowlist: [], notifyKim: async () => ({ delivered: 'session-inbox' }) });
   assert.equal(f.posts.length, 0); assert.equal(f.calls.length, 2);
 });
+
+test('watchdog drains spool even without fleet configuration and dry-run leaves it intact', async t => {
+  const { spoolItem, listItems } = await import('./kim-inbox.mjs');
+  const f = fixture(t);
+  fs.unlinkSync(path.join(f.home, '.claude/fleet-sheet.env'));
+  fs.writeFileSync(path.join(f.home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+  spoolItem(f.home, { text: 'watchdog で回収する進捗' });
+  await main(['--dry-run'], f.deps);
+  assert.equal(listItems(f.home).length, 0);
+  await main([], f.deps);
+  assert.equal(listItems(f.home).length, 1);
+});
+
+test('overlapping watchdog runs skip work and release their instance lock', async t => {
+  const f = fixture(t);
+  let finish, entered;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const first = main([], { ...f.deps, laneHealthWatch: async () => {
+    entered(); await new Promise(resolve => { finish = resolve; }); return { rows: [], notified: [] };
+  } });
+  await ready;
+  let ran = false;
+  assert.equal(await main([], { ...f.deps, laneHealthWatch: async () => { ran = true; return { rows: [], notified: [] }; } }), 0);
+  assert.equal(ran, false);
+  finish(); await first;
+  assert.equal(fs.existsSync(path.join(f.home, '.claude/fleet-mail-watchdog.lock')), false);
+});

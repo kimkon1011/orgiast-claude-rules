@@ -30,11 +30,13 @@ function save(home, item) {
   finally { fs.rmSync(temp, { force: true }); }
 }
 // 同じ項目の回答・表示更新を直列化し、古い表示更新が回答を上書きしない。
-function locked(home, key, fn) {
+function acquireInboxLock(home, key, waitMs = 10_000) {
   fs.mkdirSync(directory(home), { recursive: true });
   const lock = path.join(directory(home), `${key}.lock`);
   let fd;
-  for (let n = 0; n < 100; n++) {
+  const deadline = performance.now() + waitMs;
+  let delay = 10;
+  for (;;) {
     try { fd = fs.openSync(lock, 'wx', 0o600); fs.writeFileSync(fd, String(process.pid)); break; }
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
@@ -42,11 +44,18 @@ function locked(home, key, fn) {
         const pid = Number(fs.readFileSync(lock, 'utf8'));
         if (pid > 0) { try { process.kill(pid, 0); } catch (e) { if (e.code === 'ESRCH') fs.unlinkSync(lock); } }
       } catch { /* 所有者が不明ならロックを奪わない。 */ }
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(delay, remaining));
+      delay = Math.min(delay * 2, 500);
     }
   }
   if (fd === undefined) throw new Error('kim-inbox: 台帳が使用中です');
-  try { return fn(); } finally { fs.closeSync(fd); fs.unlinkSync(lock); }
+  return () => { fs.closeSync(fd); fs.unlinkSync(lock); };
+}
+function locked(home, key, fn) {
+  const release = acquireInboxLock(home, key);
+  try { return fn(); } finally { release(); }
 }
 function update(home, id, fn) {
   if (!validId(id)) throw new Error('kim-inbox: ID が不正です');
@@ -150,7 +159,49 @@ export function seenMatching(home, expression, kind = 'info') {
   return listItems(home, { status: 'open' }).filter(i => i.kind === kind && (pattern.test(i.text) || pattern.test(i.source)))
     .map(i => markSeen(home, i.id));
 }
-export async function addItem(home, options) {
+// Publish complete, redacted records atomically; never depend on the aggregation lock.
+export function spoolItem(home, options) {
+  const dir = path.join(directory(home), 'spool');
+  fs.mkdirSync(dir, { recursive: true });
+  const id = randomBytes(16).toString('hex');
+  const file = path.join(dir, `${id}.json`), temp = `${file}.tmp`;
+  const record = { kind: options.kind || 'info', text: clean(options.text), source: clean(options.source),
+    from: clean(options.from ?? resolveFleetLabel(home, { hostname: os.hostname() })),
+    dedupeKey: options.dedupeKey ? clean(options.dedupeKey) : `spool:${id}` };
+  try {
+    fs.writeFileSync(temp, JSON.stringify(record) + '\n', { flag: 'wx', mode: 0o600 });
+    fs.renameSync(temp, file);
+  } finally { fs.rmSync(temp, { force: true }); }
+  return { delivered: 'spooled', id };
+}
+export async function drainSpool(home, { stderr = console.error, execImpl, signal } = {}) {
+  const dir = path.join(directory(home), 'spool');
+  if (!fs.existsSync(dir)) return [];
+  let release;
+  try { release = acquireInboxLock(home, 'spool-drain', 0); }
+  catch { return []; } // Another consumer will finish; records remain durable.
+  const imported = [];
+  try {
+    // Bound each pass so a backlog cannot monopolize a hook or watchdog run.
+    for (const name of fs.readdirSync(dir).filter(n => /^[a-f0-9]{32}\.json$/.test(n)).sort().slice(0, 20)) {
+      const file = path.join(dir, name);
+      try {
+        const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (!['ask', 'info'].includes(record.kind) || typeof record.text !== 'string' || !record.dedupeKey) throw new Error('invalid spool record');
+        const item = await addItem(home, { ...record, execImpl, signal }, { drain: false });
+        if (item.forwardError) break; // Retry forwarding on the next pass as well.
+        fs.unlinkSync(file);
+        imported.push(item);
+      } catch (error) {
+        stderr(`kim-inbox: spool を保持して次回再試行: ${clean(error.message)}`);
+        break;
+      }
+    }
+  } finally { release(); }
+  return imported;
+}
+export async function addItem(home, options, { drain = true } = {}) {
+  if (drain) await drainSpool(home, { execImpl: options.execImpl, signal: options.signal });
   if (isInboxNoise(options)) return { id: null, status: 'suppressed', kind: options.kind || 'info' };
   const item = create(home, options);
   if (item.kind === 'deadline' || isKimSeat(home) || item.forwardMailId || ['seen', 'answered', 'dropped'].includes(item.status)) return item;
@@ -318,6 +369,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       const event = input.hook_event_name;
       if (!['SessionStart', 'UserPromptSubmit'].includes(event)) return 0;
       const kim = isKimSeat(home);
+      await drainSpool(home);
       if (kim) await ingestFleetMail(home);
       const items = listItems(home, { status: 'open' }).filter(i => kim || i.forwardError);
       const counts = new Map(items.map(i => [i.id, i.shownCount]));

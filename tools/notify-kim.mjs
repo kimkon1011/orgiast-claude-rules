@@ -8,7 +8,7 @@ import { isEntry } from './is-entry.mjs';
 import { toPlainJa } from './lib/plain-ja.mjs';
 import { classifyKimDm } from './lib/kim-dm-policy.mjs';
 import { redactSecrets } from './webhook-health.mjs';
-import { addItem, isInboxNoise } from './kim-inbox.mjs';
+import { addItem, spoolItem, isInboxNoise } from './kim-inbox.mjs';
 import { discordAllowed } from './lib/kim-discord-allowlist.mjs';
 import { annotateAccounts } from './url-account-gate.mjs';
 
@@ -159,7 +159,7 @@ export async function notifyKim(text, options = {}) {
       suffix = '\n' + ['原因', '対処'].map(label => raw.split('\n').find(line => line.startsWith(label + ':') || line.startsWith(label + '：')).slice(0, 400)).join('\n');
     }
     const result = await deliverKim(body, { ...options, suffix, allowHumanRequest: humanEvidence });
-    if (['dm', 'session-inbox'].includes(result.delivered) || result.delivered === 'webhook') {
+    if (['dm', 'session-inbox', 'spooled'].includes(result.delivered) || result.delivered === 'webhook') {
       const temp = `${stateFile}.${process.pid}.tmp`;
       fs.writeFileSync(temp, JSON.stringify({ sentAt: now })); fs.renameSync(temp, stateFile);
     }
@@ -186,6 +186,18 @@ function benignQuotaSweepReport(text) {
   if (!/^tick: \d+$/.test(lines[2])) return false;
   const outcome = lines.find((line, index) => index >= 4 && QUOTA_SWEEP_OUTCOME.test(line));
   return QUOTA_SWEEP_BENIGN.has(outcome);
+}
+
+async function persistKim(home, options) {
+  try {
+    const item = await addItem(home, options);
+    return { delivered: 'session-inbox', id: item.id, kind: item.kind };
+  } catch (error) {
+    try { return spoolItem(home, options); }
+    catch (spoolError) {
+      return { delivered: 'none', reason: `kim-inbox: ${redactSecrets(error.message)}; spool: ${redactSecrets(spoolError.message)}` };
+    }
+  }
 }
 
 export async function deliverKim(text, {
@@ -218,8 +230,7 @@ export async function deliverKim(text, {
   const allowedForKim = discordAllowed(String(text ?? '') + suffix, { home, allowlist, repoRoot }).allowed
     || discordAllowed(String(body) + suffix, { home, allowlist, repoRoot }).allowed;
   if ((userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID) && !allowedForKim) {
-    const item = await addItem(home, { kind, text: String(body) + suffix, source, signal });
-    return { delivered: 'session-inbox', id: item.id, kind: item.kind };
+    return persistKim(home, { kind, text: String(body) + suffix, source, signal });
   }
   const content = suffix ? String(body).slice(0, Math.max(0, MAX_CONTENT - suffix.length)) + suffix : clipDiscordContent(body);
   let dmReason = '';
@@ -270,12 +281,7 @@ export async function deliverKim(text, {
   // Discord/webhook が使えない kim 宛通知は kim-inbox に保存する（2026-11-04）
   // これにより Discord Bot トークンが無い PC でも通知が失われない。
   if (resolvedUserId === KIM_DISCORD_USER_ID || String(userId) === KIM_DISCORD_USER_ID) {
-    try {
-      const item = await addItem(home, { kind, text: String(body) + suffix, source, signal });
-      return { delivered: 'session-inbox', id: item.id, kind: item.kind };
-    } catch (error) {
-      console.error(`notify-kim: kim-inbox fallback failed: ${redactSecrets(String(error?.message ?? error))}`);
-    }
+    return persistKim(home, { kind, text: String(body) + suffix, source, signal });
   }
   console.error(`notify-kim: 通知先を解決できず送信しません (${dmReason})`);
   return { delivered: 'none', reason: dmReason };
@@ -291,7 +297,7 @@ export async function main(args = process.argv.slice(2), options = {}) {
   if (options.kind && !['ask', 'info'].includes(options.kind)) throw new Error('kind は ask または info');
   const result = await notifyKim(words.join(' '), { ...options, kimActionRequired });
   console.log(JSON.stringify(result));
-  return result.delivered === 'blocked' ? 3 : 0;
+  return result.delivered === 'blocked' ? 3 : result.delivered === 'none' ? 1 : 0;
 }
 
 if (isEntry(import.meta.url)) process.exitCode = await main();

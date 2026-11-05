@@ -252,3 +252,69 @@ test('未達とgate-reportのinfoは抑止、掃除はsourceも検索しaskを�
   assert.equal(listItems(home, { status: 'open' }).length, 1);
   assert.equal(listItems(home, { status: 'open' })[0].kind, 'ask');
 });
+
+test('notify CLI spools while aggregation is locked, then addItem imports exactly once', async t => {
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const { drainSpool } = await import('./kim-inbox.mjs');
+  const home = seat(t), dir = path.join(home, '.claude/kim-inbox');
+  fs.mkdirSync(dir);
+  const lock = path.join(dir, 'info-aggregation.lock');
+  fs.writeFileSync(lock, String(process.pid));
+  const started = performance.now();
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./notify-kim.mjs', import.meta.url)), '--kind', 'info', '--source', 'spool-test', '進捗: 通知退避の検証 token=private'], {
+    env: { ...process.env, ORGIAST_HOME: home, NOTIFY_PLAIN_JA: '0' }, encoding: 'utf8', timeout: 25000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).delivered, 'spooled');
+  assert.ok(performance.now() - started >= 9900);
+  const spoolDir = path.join(dir, 'spool'), name = fs.readdirSync(spoolDir)[0];
+  const record = fs.readFileSync(path.join(spoolDir, name), 'utf8');
+  assert.doesNotMatch(record, /private/);
+  fs.unlinkSync(lock);
+  await addItem(home, { text: '別の通知' });
+  assert.equal(fs.readdirSync(spoolDir).length, 0);
+  assert.equal(listItems(home).filter(i => i.source === 'spool-test').length, 1);
+  // Simulate a crash after inbox persistence but before removing the spool file.
+  fs.writeFileSync(path.join(spoolDir, name), record);
+  await drainSpool(home);
+  assert.equal(listItems(home).filter(i => i.source === 'spool-test').length, 1);
+  assert.equal(listItems(home).find(i => i.source === 'spool-test').repeatCount, 1);
+});
+
+test('notify CLI exits 1 when both inbox and spool writes fail', async t => {
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const home = seat(t);
+  fs.writeFileSync(path.join(home, '.claude/kim-inbox'), 'not a directory');
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./notify-kim.mjs', import.meta.url)), '--kind', 'info', '進捗: 保存不能の検証'], {
+    env: { ...process.env, ORGIAST_HOME: home, NOTIFY_PLAIN_JA: '0' }, encoding: 'utf8', timeout: 25000,
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(JSON.parse(result.stdout).delivered, 'none');
+  assert.match(JSON.parse(result.stdout).reason, /spool/);
+});
+
+test('context imports spooled notifications before selecting what to show', async t => {
+  const { spoolItem } = await import('./kim-inbox.mjs');
+  const home = seat(t), output = [];
+  spoolItem(home, { kind: 'ask', text: '退避していた判断依頼' });
+  assert.equal(await main(['--context'], { home, stdout: line => output.push(line), readStdin: async () => '{"hook_event_name":"UserPromptSubmit","session_id":"spool-context"}' }), 0);
+  assert.match(output[0], /退避していた判断依頼/);
+  assert.equal(listItems(home)[0].shownCount, 1);
+});
+
+test('concurrent spool consumers preserve a single forwarding attempt and retry failed forwarding', async t => {
+  const { spoolItem, drainSpool } = await import('./kim-inbox.mjs');
+  const home = seat(t, '作業用011');
+  spoolItem(home, { kind: 'ask', text: '転送する判断依頼' });
+  await drainSpool(home, { execImpl: async () => { throw new Error('offline'); } });
+  assert.equal(fs.readdirSync(path.join(home, '.claude/kim-inbox/spool')).length, 1);
+  let calls = 0;
+  const execImpl = async () => { calls++; await new Promise(resolve => setTimeout(resolve, 30)); return { stdout: '送信済み: mail-spool\n' }; };
+  await Promise.all([drainSpool(home, { execImpl }), drainSpool(home, { execImpl })]);
+  assert.equal(calls, 1);
+  assert.equal(listItems(home).length, 1);
+  assert.equal(listItems(home)[0].status, 'forwarded');
+  assert.equal(fs.readdirSync(path.join(home, '.claude/kim-inbox/spool')).length, 0);
+});

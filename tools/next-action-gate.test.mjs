@@ -771,3 +771,33 @@ test('独立したnext-action違反を1回の差し戻しへまとめる', () =>
     assert.match(result.reason, new RegExp(`\\[${code}\\]`));
   }
 });
+
+
+test('作業中は同一sessionのopenチェックが必須でdone/closedや過去の登録では通さない', () => {
+  withOpenCheck((input, file) => {
+    const registration = row('assistant', [{ type: 'tool_use', name: 'Bash', input: { command: addCheckCmd } }]);
+    const transcript = `${registration}\n${row('user', '追加の依頼')}\n${cronRow}`;
+    const entry = { sessionId: input.session_id, check: 'node check.mjs' };
+    const write = rows => fs.writeFileSync(file, rows.map(value => JSON.stringify(value)).join('\n') + '\n');
+    for (const text of [promiseText, promiseText.replace('私が毎時進捗を確認して変化時に報告します', 'なし')]) {
+      write([{ ...entry, status: 'open' }]);
+      assert.equal(judgeNextAction(text, transcript, input).decision, 'pass');
+      for (const status of ['done', 'closed']) {
+        write([{ ...entry, status }, { ...entry, sessionId: 'other', status: 'open' }]);
+        const result = judgeNextAction(text, transcript, input);
+        assert.equal(result.decision, 'block', status);
+        assert.equal(result.code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK', status);
+        assert.ok(result.reason.includes(`台帳の行は ${status} で閉じています。`));
+        assert.ok(result.reason.includes('`node tools/auto-progress.mjs --add-check ...` で登録し直してください'));
+        assert.ok(result.reason.includes('done の目印は kim の受け取り返答後にだけ作る'));
+      }
+      write([]);
+      const missing = judgeNextAction(text, transcript, input);
+      assert.equal(missing.decision, 'block');
+      assert.equal(missing.code, 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK');
+      assert.ok(!missing.reason.includes('で閉じています'));
+      write([{ ...entry, status: 'done' }, { ...entry, status: 'open' }]);
+      assert.equal(judgeNextAction(text, transcript, input).decision, 'pass');
+    }
+  });
+});

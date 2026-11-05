@@ -41,12 +41,12 @@ test('a first-line absolute rule is emitted once in full, including later senten
   assert.ok(output.includes(rule));
 });
 
-test('an index above the soft budget keeps absolute rules without restoring redundant long previews', () => {
+test('mandatory rules above the optional budget do not shorten optional previews within budget', () => {
   const absolute = `**🔴 ${'必須'.repeat(1500)}**`;
   const preview = '通常の案内文が長い場合には読点以降を短くする、ここは詳細への案内なので省略可能。';
   const output = makeIndex(`### 1.1 詳細\n${preview}\n${absolute}`);
   assert.ok(output.includes(absolute));
-  assert.ok(!output.includes(preview));
+  assert.ok(output.includes(preview));
 });
 
 test('template is reproducible and contains actionable rules, not just an ONBOARDING reference', () => {

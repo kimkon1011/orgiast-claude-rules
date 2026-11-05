@@ -642,6 +642,8 @@ function save(hash, now) {
   if (dryRun) return;
   try { fs.mkdirSync(path.dirname(statePath), { recursive: true }); fs.writeFileSync(statePath, `${JSON.stringify({ lastCheck: now.toISOString(), hash }, null, 2)}\n`, 'utf8'); } catch {}
 }
+// Only optional navigation (headings/previews) consumes this budget. Mandatory
+// rules are distributed in full and have a separate size guard in the tests.
 export const INDEX_BUDGET_BYTES = 8000;
 export const INDEX_PROTECTED = [
   /副作用・影響は報告で終わらせず、その場で直す/,
@@ -649,6 +651,19 @@ export const INDEX_PROTECTED = [
   /planIncluded.*監督.*全用途禁止/,
   /setup --converge.*allow/,
 ];
+
+export function isMandatoryIndexLine(line) {
+  return /^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(line)
+    || INDEX_PROTECTED.some(pattern => pattern.test(line));
+}
+
+export function measureIndexBytes(index) {
+  const totalBytes = Buffer.byteLength(index);
+  const optionalBytes = Buffer.byteLength(index.split('\n').filter(line => !isMandatoryIndexLine(line)).join('\n'));
+  // Charge separators removed with mandatory lines to the mandatory allocation,
+  // so the two allocations sum exactly to the distributed UTF-8 size.
+  return { optionalBytes, mandatoryBytes: totalBytes - optionalBytes, totalBytes };
+}
 
 export function makeIndex(body) {
   let fence = null;
@@ -686,7 +701,8 @@ export function makeIndex(body) {
         if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(candidate)) break;
         const end = candidate.indexOf('。');
         // 結論文の日付付き由来も見出しと同じく全文へ委ねる(予算の常時の余裕を作る)。
-        const conclusion = (end >= 0 ? candidate.slice(0, end + 1) : candidate).replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, '');
+        const conclusion = isMandatoryIndexLine(candidate) ? candidate
+          : (end >= 0 ? candidate.slice(0, end + 1) : candidate).replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, '');
         // 結論として拾った絶対ルール・太字小見出しも短縮対象にしない。
         if (!/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(candidate)
           && !/^\*\*\d+(?:\.\d+)+\s+.+\*\*$/.test(candidate)
@@ -707,7 +723,7 @@ export function makeIndex(body) {
     }
   }
   const original = kept.join('\n');
-  if (Buffer.byteLength(original) <= INDEX_BUDGET_BYTES || !conclusions.size) return original;
+  if (measureIndexBytes(original).optionalBytes <= INDEX_BUDGET_BYTES || !conclusions.size) return original;
   // 文書内の位置ではなく結論の長さ順に、必要な件数だけ短縮する。
   for (const [i, chars] of [...conclusions].sort((a, b) => b[1].length - a[1].length)) {
     const comma = chars.indexOf('、');
@@ -715,7 +731,7 @@ export function makeIndex(body) {
     if (Buffer.byteLength(shortened) >= Buffer.byteLength(kept[i])) continue;
     kept[i] = shortened;
     const result = kept.join('\n');
-    if (Buffer.byteLength(result) <= INDEX_BUDGET_BYTES) return result;
+    if (measureIndexBytes(result).optionalBytes <= INDEX_BUDGET_BYTES) return result;
   }
   // 読点までの短縮だけでは、新しい規約が数件入ると予算を超える。
   // 見出し・絶対ルールを維持したまま通常の結論だけをさらに短縮する。
@@ -724,13 +740,11 @@ export function makeIndex(body) {
     if (Buffer.byteLength(shortened) >= Buffer.byteLength(kept[i])) continue;
     kept[i] = shortened;
     const result = kept.join('\n');
-    if (Buffer.byteLength(result) <= INDEX_BUDGET_BYTES) return result;
+    if (measureIndexBytes(result).optionalBytes <= INDEX_BUDGET_BYTES) return result;
   }
-  // Mandatory rules alone can exceed the target after preference migration;
-  // retain their full text and the shortened previews in that case. Otherwise
-  // preserve the existing all-or-nothing fallback (e.g. an oversized heading).
-  const absoluteBytes = Buffer.byteLength(kept.filter(line => /^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(line)).join('\n'));
-  return absoluteBytes > INDEX_BUDGET_BYTES ? kept.join('\n') : original;
+  // Preserve the existing all-or-nothing fallback for optional navigation that
+  // cannot fit (e.g. an oversized heading). Mandatory size never affects it.
+  return original;
 }
 export function build(current, body, label) {
   current = dedupePreferences(current, body);

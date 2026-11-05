@@ -444,6 +444,12 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/claude-md-legacy.json",
+      "scope": "fleet",
+      "step": "hook:onboarding-sync",
+      "reason": "onboarding-sync が使う既知の配布文と移行先規則の完全一致照合"
+    },
+    {
       "path": "tools/onboarding-sync.mjs",
       "scope": "fleet",
       "step": "hook:onboarding-sync",

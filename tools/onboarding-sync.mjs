@@ -726,9 +726,11 @@ export function makeIndex(body) {
     const result = kept.join('\n');
     if (Buffer.byteLength(result) <= INDEX_BUDGET_BYTES) return result;
   }
-  // Absolute rules may themselves exceed the target. Keep them all, but do not
-  // undo the safe shortening of ordinary previews when the target is unattainable.
-  return kept.join('\n');
+  // Mandatory rules alone can exceed the target after preference migration;
+  // retain their full text and the shortened previews in that case. Otherwise
+  // preserve the existing all-or-nothing fallback (e.g. an oversized heading).
+  const absoluteBytes = Buffer.byteLength(kept.filter(line => /^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(line)).join('\n'));
+  return absoluteBytes > INDEX_BUDGET_BYTES ? kept.join('\n') : original;
 }
 export function build(current, body, label) {
   current = dedupePreferences(current, body);

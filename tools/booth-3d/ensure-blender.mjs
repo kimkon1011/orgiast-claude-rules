@@ -57,8 +57,9 @@ export async function ensureBlender({ env = process.env, home = homedir(), log =
   let x = spawnSync('tar', ['-xf', zipPath, '-C', work], { encoding: 'utf8', windowsHide: true });
   // Windows の bsdtar はドライブ文字を remote:path と誤認する環境がある。
   if (x.status !== 0) {
+    const psQuote = (value) => `'${String(value).replaceAll("'", "''")}'`;
     x = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      'Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force', zipPath, work],
+      `Expand-Archive -LiteralPath ${psQuote(zipPath)} -DestinationPath ${psQuote(work)} -Force`],
       { encoding: 'utf8', windowsHide: true });
   }
   if (x.status !== 0) throw new Error(`zip 展開に失敗: ${x.stderr || x.stdout}`);

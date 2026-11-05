@@ -104,5 +104,6 @@ if (isEntry(import.meta.url)) {
   deadline.unref();
   try { process.exitCode = await main(); }
   catch { console.error('fleet-mail-watchdog: 監視失敗=1'); process.exitCode = 1; }
-  finally { clearTimeout(deadline); }
+  // Keep the unref'ed deadline armed: leaked handles after main returns must
+  // also stop, while normal runs exit immediately without waiting for it.
 }

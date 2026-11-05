@@ -451,12 +451,16 @@ test('digest: 大量の完了も全件を名前で出し、次回へ回さない
   assert.ok(messages.every(message => message.length <= 1800));
 });
 
-test('schedule: watchは毎時・実行上限55分とし既存PCも更新する', () => {
+test('schedule: watchは毎時、digestは08:30/18:00・優先度4・上限10分', () => {
   const script = fs.readFileSync(new URL('./register-auto-progress-task.ps1', import.meta.url), 'utf8');
   const triggers = script.match(/\$watchTriggers = (.*)/)[1];
   assert.deepEqual([...triggers.matchAll(/-At '([^']+)'/g)].map(m => m[1]), ['00:00']);
   assert.match(triggers, /New-TimeSpan -Hours 1/);
   assert.match(script, /-ExecutionTimeLimit \(New-TimeSpan -Minutes 55\)/);
+  assert.match(script, /\$digestSettings = .*ExecutionTimeLimit \(New-TimeSpan -Minutes 10\)/);
+  assert.match(script, /\$digestSettings\.Priority = 4/);
+  assert.match(script, /New-ScheduledTaskTrigger -Daily -At '08:30'/);
+  assert.match(script, /New-ScheduledTaskTrigger -Daily -At '18:00'/);
   const poller = fs.readFileSync(new URL('./fleet-poller.ps1', import.meta.url), 'utf8');
   assert.match(poller, /if \(\$Dry\) \{ DrySkip 'register-auto-progress-task.ps1/);
   assert.match(poller, /-File \$autoProgressInstaller/);

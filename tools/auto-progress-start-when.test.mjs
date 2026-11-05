@@ -96,13 +96,15 @@ test('next-claude なしの add-check は従来どおり done で終了する', 
   await run({ home, now, io: { ...ioBase, executeCheck: () => ({ code: 0, text: '達成' }), resume: () => assert.fail('resume しない') } });
   assert.equal(readLedger(ledgerFile(home)).at(-1).status, 'done');
 });
-test('legacy add-check migration は resume 未実施の done 行を1回だけ予約に戻す', async t => {
+test('legacy add-check migration は status/verdict done 行を再オープンしない', async t => {
   const { home } = setup(t);
-  const done = { ts: new Date(now - 1000).toISOString(), sessionId: 'legacy-add-check', status: 'done', promise: '旧作業', label: '旧作業', cwd: home, deadlineAt: new Date(now - 500).toISOString(), check: 'artifact-ready', nextClaude: '続きを実行', doneAt: new Date(now - 500).toISOString() };
-  writeLedger(ledgerFile(home), [done]);
-  assert.equal((await migrateLegacyAddChecks({ home, now })).appended, 1); assert.equal((await migrateLegacyAddChecks({ home, now })).appended, 0);
-  const rows = readLedger(ledgerFile(home));
-  assert.equal(rows.length, 2); assert.deepEqual(rows[0], done); assert.equal(rows[1].status, 'scheduled'); assert.equal(rows[1].startWhen, done.check); assert.equal(rows[1].reason, LEGACY_ADD_CHECK_REASON);
+  const rows = [
+    { ts: new Date(now - 1000).toISOString(), sessionId: 'status-done', status: 'done', promise: '旧作業', check: 'artifact-ready', nextClaude: '続きを実行' },
+    { ts: new Date(now - 900).toISOString(), sessionId: 'verdict-done', status: 'open', verdict: 'done', promise: '旧作業2', check: 'artifact-ready', nextClaude: '続きを実行' },
+  ];
+  writeLedger(ledgerFile(home), rows);
+  assert.equal((await migrateLegacyAddChecks({ home, now })).appended, 0);
+  assert.deepEqual(readLedger(ledgerFile(home)), rows);
 });
 test('予約登録とprobe、必須引数、Stop更新で予約を保持する', t => {
   const { options, home } = setup(t);

@@ -311,8 +311,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       try { deadlineText = await (io.readDeadlineDigest || readDeadlineDigest)({ home, today: new Date(now + 9 * 3600000).toISOString().slice(0, 10) }); }
       catch (e) { deadlineText = '今週の期限\n期限台帳を取得できません。再試行が必要です。'; (io.stderr || console.error)(`deadline digest: ${e.message}`); }
     }
-    // kim の通常の台帳まとめは会話内で回収する。案件ハブ・保留DMは朝夕の配達経路を使う。
-    if (label === 'kim-PC' && localOwner === 'kim@orgiast.jp' && !cases.text && !pending.length && !deadlineText && !rows.some(row => row.check && Date.parse(row.deadlineAt) - now >= 12 * 3600000)) return { sent: false, count: 0, skipped: 'session-context-only' };
+    // kim の通常台帳も許可済み progress-digest 経路へ push する。会話開始待ちに戻さない。
     const groups = new Map();
     const group = owner => { const key = String(owner || localOwner).trim().toLowerCase(); if (!groups.has(key)) groups.set(key, { rows: [], pending: [] }); return groups.get(key); };
     for (const row of rows) group(row.owner).rows.push(row);

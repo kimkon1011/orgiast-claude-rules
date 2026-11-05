@@ -40,10 +40,40 @@ export function doneConcludedWithReceipt(row) {
 }
 
 export function legacyAddCheckMigrationRows(rows) {
-  const migrated = new Set(rows.map(row => row.migratedFromLegacyAddCheck).filter(Boolean));
-  return rows.filter(row => row.status === 'done' && String(row.check || '').trim() &&
-    String(row.nextClaude || '').trim() && !isTimeOnlyCheck(row.check) && !row.resumedAt &&
-    !doneConcludedWithReceipt(row) && !migrated.has(rowKey(row)));
+  // status=done / verdict=done を再オープンした旧移行は廃止。新規 add-check は登録時点で
+  // startWhen に変換されるため、既存行を推測で復活させる必要はない。
+  return [];
+}
+
+// 旧 migration が完了行を予約へ戻した実データを、追記型台帳の正規 writer で閉じ直す。
+export function repairReopenedDoneRows(rows, now = Date.now()) {
+  const byKey = new Map(rows.map(row => [rowKey(row), row]));
+  const badSessions = new Map();
+  for (const row of rows) {
+    if (!row.migratedFromLegacyAddCheck) continue;
+    const source = byKey.get(row.migratedFromLegacyAddCheck);
+    if (source && (source.status === 'done' || source.verdict === 'done')) badSessions.set(row.sessionId, source);
+  }
+  if (!badSessions.size) return { rows, repaired: [] };
+  const repaired = [];
+  const next = rows.map(row => {
+    const source = badSessions.get(row.sessionId);
+    if (!source || row === source || row.status === 'done' || row.status === 'superseded') return row;
+    return { ...row, status: 'superseded', repairedReopenedDoneAt: new Date(now).toISOString() };
+  });
+  for (const [sessionId, source] of badSessions) {
+    if (rows.some(row => row.sessionId === sessionId && row.repairedFromLegacyReopen && row.status === 'done')) continue;
+    const row = { ...source, ts: new Date(now).toISOString(), status: 'done', verdict: 'done',
+      repairedFromLegacyReopen: true, repairedFromLegacyReopenAt: new Date(now).toISOString() };
+    next.push(row); repaired.push(row);
+  }
+  return { rows: next, repaired };
+}
+
+export function repairReopenedDoneLedger({ home, now = Date.now(), dryRun = false, io = {} }) {
+  const file = ledgerFile(home), result = repairReopenedDoneRows(readLedger(file), now);
+  if (!dryRun && result.repaired.length) (io.writeLedger ?? writeLedger)(file, result.rows, io.ledgerIo ?? {});
+  return result;
 }
 
 export function legacyAddCheckReservation(row, now = Date.now()) {
@@ -621,6 +651,12 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   if (!dryRun) {
     try { (io.cleanupOldLedgerTemps ?? cleanupOldLedgerTemps)(file, { now, io: io.cleanupIo ?? {} }); }
     catch (error) { summary.errors.push(`ledger-temp-cleanup-failed: ${String(error?.message ?? error).slice(0, 120)}`); }
+  }
+  try {
+    const repair = repairReopenedDoneLedger({ home, now, dryRun, io });
+    summary.reopenedDoneRepair = repair.repaired.length;
+  } catch (error) {
+    summary.errors.push(`reopened-done-repair: ${String(error?.message ?? error).slice(0, 120)}`);
   }
   try {
     const migration = await migrateTimeOnlyChecks({ home, now, dryRun, io });

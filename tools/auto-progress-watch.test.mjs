@@ -3,11 +3,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { legacyAddCheckMigrationRows, formatDoneLine, formatDoneMessage, formatDoneBacklogMessages, gatherEvidence, deterministicVerdict, judge, evidenceSummary, logDoneDm, run as runWatch } from './auto-progress-watch.mjs';
+import { legacyAddCheckMigrationRows, repairReopenedDoneRows, formatDoneLine, formatDoneMessage, formatDoneBacklogMessages, gatherEvidence, deterministicVerdict, judge, evidenceSummary, logDoneDm, run as runWatch } from './auto-progress-watch.mjs';
 import { cleanupOldLedgerTemps, ledgerFile, readLedger, writeLedger } from './auto-progress-ledger.mjs';
 import { listItems } from './kim-inbox.mjs';
 
 const run = options => runWatch({ ...options, io: { ...notificationMocks, ...options.io } });
+
+test('旧 migration で再オープンされた完了行を superseded + done に戻す', () => {
+  const source = { ts: '2026-10-28T01:20:39.486Z', pc: 'PC', user: 'u', sessionId: 's', status: 'done', verdict: 'done', promise: '完了済み' };
+  const migrated = { ...source, ts: '2026-11-05T13:00:03.540Z', status: 'open', migratedFromLegacyAddCheck: 'PC|u|s|2026-10-28T01:20:39.486Z' };
+  const result = repairReopenedDoneRows([source, migrated], Date.parse('2026-11-06T00:00:00Z'));
+  assert.equal(result.repaired.length, 1);
+  assert.equal(result.rows[1].status, 'superseded');
+  assert.equal(result.rows.at(-1).status, 'done');
+  assert.equal(result.rows.at(-1).repairedFromLegacyReopen, true);
+});
 
 test('kim の recent/backlog 完了は静穏時間も保存・読み戻しし、旧通知済み印を救済する', async t => {
   const home = progressHome('kim-done-');
@@ -467,5 +477,5 @@ test('レシート済み完了は legacy add-check 移行で復活させない',
   const notifiedOnly = { ...base, ts: '2026-11-05T10:05:00.000Z', doneInboxId: '', doneInboxVerifiedAt: '', doneNotifiedAt: '2026-11-05T11:05:00.000Z' };
   const noReceipt = { ...base, ts: '2026-11-05T10:10:00.000Z', doneInboxId: '', doneInboxVerifiedAt: '', doneNotifiedAt: '' };
   const rows = [withReceipt, notifiedOnly, noReceipt];
-  assert.deepEqual(legacyAddCheckMigrationRows(rows), [noReceipt]);
+  assert.deepEqual(legacyAddCheckMigrationRows(rows), []);
 });

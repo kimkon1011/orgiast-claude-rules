@@ -1,0 +1,3 @@
+fix(pending-decisions): include legacy open decisions in morning intake
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>

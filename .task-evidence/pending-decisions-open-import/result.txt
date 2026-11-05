@@ -1,0 +1,46 @@
+## 真因
+tools/morning-batch.mjs:65 は status=pending を指定し、修正前 tools/pending-decisions.mjs:60 はstatus完全一致だったためopen5件が取り込みから漏れた。
+nightly-healthはログ監視、nightly-health-remediate.mjs:91は追加側。朝バッチからnotify-kim経由でkim-inboxに入る。
+
+## 5件の実データ
+id / status / createdAt / capturedAt
+20261009060000000-001 / open / 未定義 / 2026-10-09T06:00:00.000Z
+20261009060000000-002 / open / 未定義 / 2026-10-09T06:00:00.000Z
+20261009060000000-003 / open / 未定義 / 2026-10-09T06:00:00.000Z
+20261009060000000-004 / open / 未定義 / 2026-10-09T06:00:00.000Z
+20261009060000000-005 / open / 未定義 / 2026-10-09T06:00:00.000Z
+
+## 変更ファイル
+tools/pending-decisions.mjs
+tools/pending-decisions.test.mjs
+tools/morning-batch.test.mjs
+
+## テスト
+Windows (process.platform=win32):
+node.exe --test .wt/pending-decisions-open-import/tools/pending-decisions.test.mjs .wt/pending-decisions-open-import/tools/morning-batch.test.mjs .wt/pending-decisions-open-import/tools/nightly-health.test.mjs .wt/pending-decisions-open-import/tools/nightly-health-remediate.test.mjs .wt/pending-decisions-open-import/tools/kim-inbox.test.mjs .wt/pending-decisions-open-import/tools/fleet-chase.test.mjs
+生出力の要点（exit 0を確認）:
+ℹ tests 154
+ℹ suites 0
+ℹ pass 154
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 136050.0814
+Linux: node --test tools/pending-decisions.test.mjs tools/morning-batch.test.mjs → pass 12 / fail 0。
+実データread-back: pendingフィルター27件（既存pending22件 + 対象open5件）。元ファイルは無変更、作業前後SHA-256一致を確認。
+
+## PR
+#1604 https://github.com/kimkon1011/orgiast-claude-rules/pull/1604
+commit: f18b90e0e76ea4bf56c4d0cabce38980a4f2b398
+pr-land.mjs で作成、automergeラベルをread-back確認。gh pr merge --auto --squash実行成功。
+autoMergeRequest.mergeMethod=SQUASH / enabledAt=2026-11-05T21:52:07Z
+state=OPEN（CI実行中）。
+
+## 未完了
+依頼の修正・Windows検証・PR作成・automerge有効化は完了。CI完了と自動マージは待機中。本番朝バッチの再実行は元データ変更禁止のため行っていない。
+
+作業環境上の差異:
+共有.gitは読み取り専用でFETCH_HEADが書き込み拒否されたため、独立bare clone .wt/pending-decisions-gitのmainから指定ブランチ・worktreeを作成。共有indexは未変更。
+PR本文指定先は書き込み許可範囲外のためworktree内task-evidence/pr-body-20261106-pending-decisions-import.mdを代替利用。
+06:50頃、証跡ディレクトリが消失（原因未特定）。読み戻し済みのテスト生出力要点・実データを再保存。

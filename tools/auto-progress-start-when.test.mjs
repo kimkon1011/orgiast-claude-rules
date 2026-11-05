@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { addCheck, isTimeOnlyCheck, main } from './auto-progress.mjs';
-import { run as runWatch, resumeSession, MAX_RESUMES_PER_RUN, migrateTimeOnlyChecks, TIME_ONLY_REASON } from './auto-progress-watch.mjs';
+import { run as runWatch, resumeSession, MAX_RESUMES_PER_RUN, migrateTimeOnlyChecks, migrateLegacyAddChecks, TIME_ONLY_REASON, LEGACY_ADD_CHECK_REASON } from './auto-progress-watch.mjs';
 import { ledgerFile, readLedger, writeLedger, applyPromise } from './auto-progress-ledger.mjs';
 import { formatDigest, run as digest } from './auto-progress-digest.mjs';
 import { listItems } from './kim-inbox.mjs';
@@ -34,7 +34,7 @@ test('時計だけの判定は拒否し、成果物の判定は許可する', t 
     `node -e "process.exit(Date.now()>123 && require('fs').existsSync('x')?0:1)"`,
     `node -e "process.exit(Date.now()>Number(process.argv[1])?0:1)"`]) {
     assert.equal(isTimeOnlyCheck(check), false, check);
-    assert.equal(addCheck({ ...options, startWhen: undefined, check, probe: () => ({ code: 1 }) }).status, 'open');
+    assert.equal(addCheck({ ...options, startWhen: undefined, nextClaude: undefined, check, probe: () => ({ code: 1 }) }).status, 'open');
   }
 });
 test('旧時刻checkのopen行は達成扱いにせず開始予約へ変換する', async t => {
@@ -80,6 +80,29 @@ test('成果物checkは従来どおりexit 0でdoneになり通知にコマン�
   await run({ home, now, io: { ...ioBase, executeCheck: () => ({ code: 0, text: '成果物あり' }) } });
   assert.equal(readLedger(ledgerFile(home)).at(-1).status, 'done');
   assert.match(listItems(home).at(-1).text, /確認コマンド: node -e/);
+});
+test('add-check + next-claude は start-when に変換し、達成時に resume する', async t => {
+  const { home } = setup(t);
+  const row = addCheck({ home, now, cwd: home, session: 'converted', check: 'artifact-ready', label: '待機後作業', deadline: '+24h', nextClaude: '続きを実行', probe: () => ({ code: 1 }) });
+  assert.equal(row.status, 'scheduled'); assert.equal(row.startWhen, 'artifact-ready'); assert.equal(row.check, undefined);
+  assert.equal(row.registrationNotice, 'start-when として登録しました');
+  let resumes = 0;
+  await run({ home, now, io: { ...ioBase, executeCheck: () => ({ code: 0 }), resume: async () => { resumes++; return { outcome: 'done', reason: '完了' }; } } });
+  assert.equal(resumes, 1); assert.equal(readLedger(ledgerFile(home)).at(-1).status, 'done');
+});
+test('next-claude なしの add-check は従来どおり done で終了する', async t => {
+  const { home } = setup(t);
+  addCheck({ home, now, cwd: home, session: 'plain-check', check: 'artifact-ready', label: '完了確認', deadline: '+24h', probe: () => ({ code: 1 }) });
+  await run({ home, now, io: { ...ioBase, executeCheck: () => ({ code: 0, text: '達成' }), resume: () => assert.fail('resume しない') } });
+  assert.equal(readLedger(ledgerFile(home)).at(-1).status, 'done');
+});
+test('legacy add-check migration は resume 未実施の done 行を1回だけ予約に戻す', async t => {
+  const { home } = setup(t);
+  const done = { ts: new Date(now - 1000).toISOString(), sessionId: 'legacy-add-check', status: 'done', promise: '旧作業', label: '旧作業', cwd: home, deadlineAt: new Date(now - 500).toISOString(), check: 'artifact-ready', nextClaude: '続きを実行', doneAt: new Date(now - 500).toISOString() };
+  writeLedger(ledgerFile(home), [done]);
+  assert.equal((await migrateLegacyAddChecks({ home, now })).appended, 1); assert.equal((await migrateLegacyAddChecks({ home, now })).appended, 0);
+  const rows = readLedger(ledgerFile(home));
+  assert.equal(rows.length, 2); assert.deepEqual(rows[0], done); assert.equal(rows[1].status, 'scheduled'); assert.equal(rows[1].startWhen, done.check); assert.equal(rows[1].reason, LEGACY_ADD_CHECK_REASON);
 });
 test('予約登録とprobe、必須引数、Stop更新で予約を保持する', t => {
   const { options, home } = setup(t);

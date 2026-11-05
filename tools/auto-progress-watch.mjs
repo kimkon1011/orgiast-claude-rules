@@ -31,6 +31,36 @@ const WATCHED = OPEN_STATUSES;
 export const EXPIRE_UNATTENDED_MS = 48 * 3600 * 1000;
 export const FALLBACK_STALL_MS = 24 * 3600 * 1000;
 export const TIME_ONLY_REASON = '時刻だけの check は完了判定にできないため開始予約へ変換';
+export const LEGACY_ADD_CHECK_REASON = 'nextClaude 付き add-check の誤完了を開始予約へ変換';
+
+export function legacyAddCheckMigrationRows(rows) {
+  const migrated = new Set(rows.map(row => row.migratedFromLegacyAddCheck).filter(Boolean));
+  return rows.filter(row => row.status === 'done' && String(row.check || '').trim() &&
+    String(row.nextClaude || '').trim() && !isTimeOnlyCheck(row.check) && !row.resumedAt && !migrated.has(rowKey(row)));
+}
+
+export function legacyAddCheckReservation(row, now = Date.now()) {
+  const reset = { ...row };
+  for (const key of ['check', 'checkRegisteredAt', 'checkResult', 'checkText', 'doneAt', 'doneNotifiedAt', 'doneInboxId',
+    'doneInboxVerifiedAt', 'checkNotifiedResult', 'lastCheckedAt', 'startedAt', 'startOverdueNotifiedAt']) delete reset[key];
+  return { ...reset, ts: new Date(now).toISOString(), status: 'scheduled', startWhen: row.check,
+    deadlineAt: new Date(now + 24 * 3600000).toISOString(), reason: LEGACY_ADD_CHECK_REASON,
+    migratedLegacyAddCheckAt: new Date(now).toISOString(), migratedFromLegacyAddCheck: rowKey(row) };
+}
+
+export async function migrateLegacyAddChecks({ home, now = Date.now(), dryRun = false, io = {} }) {
+  const file = ledgerFile(home), rows = readLedger(file), targets = legacyAddCheckMigrationRows(rows);
+  if (dryRun || !targets.length) return { targets, appended: 0 };
+  const additions = targets.map(row => legacyAddCheckReservation(row, now));
+  (io.writeLedger ?? writeLedger)(file, [...rows, ...additions], io.ledgerIo ?? {});
+  for (const row of additions) {
+    const text = `nextClaude 付き check を再開対象に戻しました: ${row.label || row.promise}`;
+    (io.stdout ?? console.log)(text);
+    await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-legacy-add-check-migration', text,
+      dedupeKey: `auto-progress-legacy-add-check-migration:${row.sessionId || rowKey(row)}` });
+  }
+  return { targets, appended: additions.length };
+}
 
 export function timeOnlyMigrationRows(rows) {
   const migrated = new Set(rows.map(row => row.migratedFromTimeOnlyCheck).filter(Boolean));
@@ -311,8 +341,9 @@ function doneWasAlreadyReportedByCheck(row) {
 }
 
 export function doneNoticeSweepRows(rows, home, now = Date.now()) {
+  const migrated = new Set(rows.flatMap(row => [row.migratedFromTimeOnlyCheck, row.migratedFromLegacyAddCheck]).filter(Boolean));
   const eligible = rows.filter(row => row.status === 'done' && !(usesKimDoneInbox(row, home) ? hasDoneInboxReceipt(row) : row.doneNotifiedAt) && !row.doneNotifySkipped &&
-    !isUnattendedRow(row, home) && !doneWasAlreadyReportedByCheck(row));
+    !isUnattendedRow(row, home) && !doneWasAlreadyReportedByCheck(row) && !migrated.has(rowKey(row)));
   return {
     recent: eligible.filter(row => now - doneTime(row) <= DONE_NOTICE_RECENT_MS),
     backlog: eligible.filter(row => now - doneTime(row) > DONE_NOTICE_RECENT_MS),
@@ -590,6 +621,12 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   } catch (error) {
     summary.errors.push(`time-only-migration: ${String(error?.message ?? error).slice(0, 120)}`);
   }
+  try {
+    const migration = await migrateLegacyAddChecks({ home, now, dryRun, io });
+    summary.legacyAddCheckMigration = { count: migration.targets.length, labels: migration.targets.map(row => row.label || row.promise), appended: migration.appended };
+  } catch (error) {
+    summary.errors.push(`legacy-add-check-migration: ${String(error?.message ?? error).slice(0, 120)}`);
+  }
   try { Object.assign(summary, await watchFleetMail({ home, now, dryRun, io })); }
   catch { summary.fleetExpired ??= 0; summary.fleetBlocked ??= 0; summary.errors.push('fleet-mail monitoring failed'); }
   const config = (io.sheetConfig ?? sheetConfig)(home);
@@ -642,7 +679,9 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   await registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io, persist);
   let candidates = latestOpenPromises(rows);
   const selected = new Set(candidates);
-  const pendingChecks = rows.filter(row => row.check && row.status === 'done' && row.checkResult === 'done' && !hasDoneInboxReceipt(row));
+  const migratedSourceKeys = new Set(rows.flatMap(row => [row.migratedFromTimeOnlyCheck, row.migratedFromLegacyAddCheck]).filter(Boolean));
+  const pendingChecks = rows.filter(row => row.check && row.status === 'done' && row.checkResult === 'done' &&
+    !hasDoneInboxReceipt(row) && !migratedSourceKeys.has(rowKey(row)));
   // 完了した経路に依存せず未通知を拾う。古い完了は個別DMを大量送信せず一覧にまとめる。
   const doneSweep = doneNoticeSweepRows(rows, home, now);
   summary.doneNotifications = { recent: doneSweep.recent.length, backlog: doneSweep.backlog.length };

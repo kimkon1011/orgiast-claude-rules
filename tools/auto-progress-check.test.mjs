@@ -50,7 +50,7 @@ test('watch: before deadline stays open; overdue closes and retries final DM; a 
   });
   test('watch: 未達（code=1）でも6時間ごとに owner へ定期的に状況を DM する', async () => {
   const home = tmp();
-  addCheck({ home, now, session: 'unmet-session', check: 'node check.mjs', label: '着信確認', deadline: '+24h', nextClaude: '再試行する' });
+  addCheck({ home, now, session: 'unmet-session', check: 'node check.mjs', label: '着信確認', deadline: '+24h' });
   const messages = [];
   const io = {
     ...baseIo,
@@ -71,7 +71,7 @@ test('watch: before deadline stays open; overdue closes and retries final DM; a 
   // 6時間後: 1回目の定期DMが送信される
   await watch({ home, now: now + 6 * 3600000, io });
   assert.equal(messages.length, 1);
-  assert.match(messages[0], /未達: 着信確認\n達成 0件 \/ 未達 1件[\s\S]*Claude の次の手: 再試行する/);
+  assert.match(messages[0], /未達: 着信確認\n達成 0件 \/ 未達 1件/);
 
   // 7時間後: 前回DMから1時間なので再送しない
   await watch({ home, now: now + 7 * 3600000, io });
@@ -242,19 +242,16 @@ test('check completion requires inbox read-back and does not retry after success
  assert.equal(readLedger(ledgerFile(home))[0].checkNotifiedResult, 'done');
 });
 
-test('missing Discord, quiet hours and daily DM quota do not suppress check completion or nextClaude', async () => {
+test('missing Discord, quiet hours and daily DM quota do not suppress nextClaude resume', async () => {
   const home = tmp();
-  addCheck({ home, now, session: 'quiet-check', check: 'x', label: '到着確認', deadline: '+24h', nextClaude: '添付を確認して承認用の本文を作る' });
   const later = Date.parse('2026-11-04T16:00:00Z'); // 01:00 JST
-  const io = { ...baseIo, executeCheck: () => ({ code: 0, text: '到着済み' }), notifyOwner: () => assert.fail('no Discord') };
+  addCheck({ home, now: later - 3600000, session: 'quiet-check', check: 'x', label: '到着確認', deadline: '+24h', nextClaude: '添付を確認して承認用の本文を作る' });
+  let resumes = 0;
+  const io = { ...baseIo, clock: () => later, executeCheck: () => ({ code: 0, text: '到着済み' }), resume: async () => { resumes++; return { outcome: 'done', reason: '本文作成済み' }; }, notifyOwner: () => assert.fail('no Discord') };
   const summary = await watch({ home, now: later, io });
   assert.deepEqual(summary.errors, []);
-  const [item] = listItems(home), [row] = readLedger(ledgerFile(home));
-  assert.equal(item.kind, 'info');
-  assert.match(item.text, /check 達成: 到着確認/);
-  assert.match(item.text, /作業全体の完了は未確認です。Claude の次の手（実行状況を確認して続行）: 添付を確認して承認用の本文を作る/);
-  assert.equal(row.doneInboxId, item.id);
-  assert.equal(row.doneNotifiedAt, new Date(later).toISOString());
+  const [row] = readLedger(ledgerFile(home));
+  assert.equal(resumes, 1); assert.equal(row.status, 'done'); assert.match(row.resumeOutcome, /^done:/);
 });
 
 test('missing or mismatched read-back leaves completion unnotified and retries without rerunning check', async () => {

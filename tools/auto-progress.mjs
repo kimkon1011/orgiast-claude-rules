@@ -9,6 +9,8 @@ import { resolveOwner } from './notify-owner.mjs';
 // 外部の成果を読まず、時計と定数だけで決まる典型的な判定を拒否する。
 export { isTimeOnlyCheck } from './auto-progress-check.mjs';
 export function addCheck({ session, check, startWhen, deadline, label, nextClaude, askFile, timeout, cwd = process.cwd(), home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), probe, allowMet = false }) {
+  const convertedToStartWhen = startWhen === undefined && Boolean(check?.trim()) && Boolean(nextClaude?.trim());
+  if (convertedToStartWhen) startWhen = check;
   if (!session?.trim() || !(startWhen?.trim() || check?.trim()) || !label?.trim()) throw new Error('--session, --check, --label は必須です');
   if (startWhen !== undefined && (!startWhen.trim() || !nextClaude?.trim())) throw new Error('--start-when には --next-claude が必須です');
   if (check && isTimeOnlyCheck(check)) throw new Error('時刻だけの check は完了判定になりません。開始の予約は --start-when、完了判定は成果物（ファイル・PR・台帳など）を確かめるコマンドにしてください');
@@ -30,7 +32,8 @@ export function addCheck({ session, check, startWhen, deadline, label, nextClaud
   // A new revision keeps prior results auditable and resets notification state.
   const row = { ts: new Date(now).toISOString(), pc: old?.pc || os.hostname(), user: old?.user || os.userInfo().username,
     owner: old?.owner || resolveOwner({ home }), sessionId: session, cwd: old?.cwd || cwd, transcriptPath: old?.transcriptPath || '',
-    promise: old?.promise || label, nextKim: old?.nextKim || 'なし', status: startWhen ? 'scheduled' : 'open', ...(check ? { check: check.trim(), checkRegisteredAt: new Date(now).toISOString() } : {}), ...(startWhen ? { startWhen: startWhen.trim() } : {}), checkCwd: cwd,
+    promise: old?.promise || label, nextKim: old?.nextKim || 'なし', status: startWhen ? 'scheduled' : 'open', ...(!convertedToStartWhen && check ? { check: check.trim(), checkRegisteredAt: new Date(now).toISOString() } : {}), ...(startWhen ? { startWhen: startWhen.trim() } : {}), checkCwd: cwd,
+    ...(convertedToStartWhen ? { convertedFromAddCheck: true, registrationNotice: 'start-when として登録しました' } : {}),
     deadlineAt: new Date(deadlineMs).toISOString(), label: label.trim(), nextClaude: nextClaude || '', ...(ask !== undefined || old?.ask ? { ask: ask ?? old.ask } : {}), ...timeoutFields };
   writeLedger(file, applyPromise(rows, row)); return row;
 }

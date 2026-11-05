@@ -214,6 +214,7 @@ test('needsNativeCodexProbe is win32-only and follows the WSL distro listing', (
   assert.equal(needsNativeCodexProbe({ platform: 'win32', env: {}, spawn: () => ({ status: 1, stdout: '' }) }), true);
   assert.equal(needsNativeCodexProbe({ platform: 'win32', env: {}, spawn: () => ({ status: 0, stdout: '\u0000\r\n' }) }), true);
   assert.equal(needsNativeCodexProbe({ platform: 'win32', env: {}, spawn: () => ({ status: 0, stdout: 'Ubuntu\r\n' }) }), false);
+});
 
 
 test('最新 probe 失敗は過去の成功で復活しない', t => {

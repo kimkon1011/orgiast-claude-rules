@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readDigest as readDeadlineDigest } from './deadline-watch.mjs';
+import { listItems as listKimInboxItems, markSeen as markKimInboxSeen } from './kim-inbox.mjs';
 // 各PCのローカル台帳から、完了・進行中・停滞/再開・判断待ちを 持ち主の DM へ定期報告する。
 import fs from 'node:fs';
 import { readDeferred } from './lib/owner-dm-policy.mjs';
@@ -304,6 +305,9 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     const pending = readDeferred(home).filter(r => !consumed.has(r.id));
     const rows = selectRows((io.readLedger ?? readLedger)(ledgerFile(home)), now, state.lastSuccessAt ? Date.parse(state.lastSuccessAt) - 1 : now - WINDOW_MS)
       .filter(row => row.status !== 'done' || state.lastVerdicts?.[rowKey(row)] !== 'done');
+    const inboxSince = state.lastSuccessAt ? Date.parse(state.lastSuccessAt) : now - WINDOW_MS;
+    const doneInbox = (io.listKimInboxItems ?? listKimInboxItems)(home, { status: 'open' }).filter(item =>
+      item.source === 'auto-progress-done' && (Date.parse(item.createdAt || item.lastAt) || 0) > inboxSince);
     const cases = label === 'kim-PC' ? await collectCaseProgress({ home, now, previous: state.caseProgress, fetchResume: io.fetchCaseResume, dryRun }) : { text: '', checkpoints: {} };
     let deadlineText = '';
     if (currentSlot === '朝' && localOwner === 'kim@orgiast.jp') {
@@ -312,9 +316,10 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     }
     // kim の通常台帳も許可済み progress-digest 経路へ push する。会話開始待ちに戻さない。
     const groups = new Map();
-    const group = owner => { const key = String(owner || localOwner).trim().toLowerCase(); if (!groups.has(key)) groups.set(key, { rows: [], pending: [] }); return groups.get(key); };
+    const group = owner => { const key = String(owner || localOwner).trim().toLowerCase(); if (!groups.has(key)) groups.set(key, { rows: [], pending: [], inbox: [] }); return groups.get(key); };
     for (const row of rows) group(row.owner).rows.push(row);
     for (const row of pending) group(row.owner).pending.push(row);
+    for (const item of doneInbox) group(localOwner).inbox.push(item);
     if (cases.text || deadlineText) group(localOwner);
     const changed = rows.some(row => state.lastVerdicts?.[rowKey(row)] !== verdictOf(row, now) || state.lastKim?.[rowKey(row)] !== kimAction(row) || state.lastWaiting?.[rowKey(row)] !== isHumanActionRequired(row));
     if (currentSlot === '夕' && !changed && !pending.length && !cases.text) return { sent: false, count: 0 };
@@ -335,7 +340,8 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       const dailyChecks = currentSlot === '朝' && state.checkSummaryDays?.[owner] !== key.split('|')[0] ? longChecks : [];
       // 見出し「【進捗まとめ】\n」は Discord 許可リストの照合対象なので形を変えない。
       const progressText = dailyChecks.length ? '日次進捗\n' + dailyChecks.map(row => `${row.label || row.promise}\n${checkProgressSummary(row.checkText || 'まだ確認結果がありません')}`).join('\n') + '\n' : '';
-      const text = redactSecrets(deadlinePrefix + `【進捗まとめ】\n${progressText}${digest.text}${ownerCases.text ? `（案件 ${caseCount}件${caseUnchanged ? '・変化なし' : ''}）` : ''}`);
+      const inboxText = items.inbox.length ? '\n完了通知\n' + items.inbox.map(item => `・${String(item.text || '').split(/\r?\n/)[0]}`).join('\n') : '';
+      const text = redactSecrets(deadlinePrefix + `【進捗まとめ】\n${progressText}${digest.text}${inboxText}${ownerCases.text ? `（案件 ${caseCount}件${caseUnchanged ? '・変化なし' : ''}）` : ''}`);
       messages.push(text);
       if (dryRun) continue;
       const options = { home, now, owner, kind: 'digest', source: 'auto-progress-digest', webhookFallback: false };
@@ -349,6 +355,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       receipts.push({ owner, ...result, channel: result?.channel || result?.delivered, recipientId: result?.recipientId ?? result?.userId ?? null, messageId: result?.messageId ?? null, httpStatus: result?.httpStatus ?? result?.status ?? null });
       if (!ok) { error ||= result?.reason || 'DM not delivered'; continue; }
       deliveredOwners.add(owner);
+      for (const item of items.inbox) (io.markKimInboxSeen ?? markKimInboxSeen)(home, item.id);
       for (const row of items.pending) if (row.kind !== 'action' || digest.includedIds.includes(row.id)) consumed.add(row.id);
       const lastVerdicts = { ...state.lastVerdicts }, lastKim = { ...state.lastKim }, lastWaiting = { ...state.lastWaiting };
       for (const row of items.rows) { lastVerdicts[rowKey(row)] = verdictOf(row, now); lastKim[rowKey(row)] = kimAction(row); lastWaiting[rowKey(row)] = isHumanActionRequired(row); }

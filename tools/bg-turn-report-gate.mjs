@@ -1,3 +1,5 @@
+export const GATE_CONTRACT = {"name": "bg-turn-report-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "bg-turn-report-gate"}]};
+
 import { isRealHumanEntry } from './lib/assistant-text.mjs';
 
 const REASON = 'バックグラウンドの結果を報告せずに終わろうとしています。①結果（成功／失敗とその証拠）②次の自動進行 を書き、`node tools/notify-kim.mjs --kind info "<進捗報告>"` で kim-inbox に progress（info 種別）を積んでから終えること';

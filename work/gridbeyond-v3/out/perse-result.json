@@ -1,0 +1,26 @@
+[
+  {
+    "id": "standard",
+    "label": "①コスト妥当：堅実に光る",
+    "out": "work\\gridbeyond-v3\\out\\perse-standard.png",
+    "ok": true,
+    "model": "google/gemini-2.5-flash-image",
+    "cost": 0.0390593
+  },
+  {
+    "id": "premium",
+    "label": "②コスト高め：全面発光の洗練",
+    "out": "work\\gridbeyond-v3\\out\\perse-premium.png",
+    "ok": true,
+    "model": "google/gemini-2.5-flash-image",
+    "cost": 0.0391083
+  },
+  {
+    "id": "impact",
+    "label": "③奇抜：∞（無限大）の光のゲート",
+    "out": "work\\gridbeyond-v3\\out\\perse-impact.png",
+    "ok": true,
+    "model": "google/gemini-2.5-flash-image",
+    "cost": 0.0390602
+  }
+]

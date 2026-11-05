@@ -298,5 +298,41 @@
     "route": "ループ・自動進行の報告で、外部システム（GitHub の PR/CI/マージ状態、Drive のファイル、Vercel の本番、Gmail 等）の状態を、自分側のログや記憶だけで「完了した／無い／マージ済み」と断定しない。報告前に当ターンで直接照会して読み戻す。GitHub は `gh pr view <番号> -R <owner/repo> --json state,mergedAt,mergeCommit,statusCheckRollup`、`gh pr checks <番号> -R <owner/repo>`、`gh run list -R <owner/repo> --limit 10 --json status,conclusion,headSha,name`、任意の API は `gh api repos/<owner>/<repo>/<path>`。Drive は DWD（kim impersonate / drive スコープ）で files.get / files.list の実応答を読む。Vercel は `vercel inspect <url>` で Ready を確認する。コミットの取込判定は squash マージで is-ancestor が偽になるため `node tools/commit-landed.mjs <sha>` を使う。照会に失敗した項目は実際のエラー本文を貼り「未確認」と書き、確率付きの否定や「user が確認して」への丸投げをしない。報告は「要素 × 照会コマンド × 実データ」の表にし、状態が変わるまで待つだけの項目も最後に再照会した結果を載せる。",
     "confidence": "high",
     "source": "handoff-audit-nightly:8ccfb76e6a69329b0f49d1810e9006178f22fbd0ff1bd4a6b6b1b2747be19211 / 2026-11-06 tool-name-route レビューで route（`gh api`）を手順文へ書き直して採用 / 組織指示「外部状態は直接照会だけで判定し、未照会は未確認と書く」と commit-landed.mjs の運用に整合"
+  },
+  {
+    "pattern": "Workspaceユーザーのメールエイリアス追加",
+    "route": "Admin SDK Directory API（POST /admin/directory/v1/users/{userKey}/aliases）で可能。現在の DWD 委任スコープには admin.directory.user.alias が含まれていないため、追加が必要な場合は「DWD 委任スコープの追加」パターンに従い kim 1回の Admin Console 操作（ドメイン全体の委任 → SA client_id に https://www.googleapis.com/auth/admin.directory.user.alias 追加）が必要。追加後は Claude 側で API を直接叩ける。DWD 未委任の状態では「未確認」と書く。",
+    "confidence": "medium",
+    "source": "2026-11-06 handoff-audit-candidates tool-name-route レビュー（元 route: DWD → 手順文に置換）"
+  },
+  {
+    "pattern": "Google Workspace ユーザーのメールエイリアス付け替え",
+    "route": "既存エイリアスを削除（DELETE /admin/directory/v1/users/{userKey}/aliases/{alias}）→ 新規追加（POST）の2段階。Admin SDK Directory API で可能だが、DWD に admin.directory.user.alias が未委任のため scope 拡張（「Workspaceユーザーのメールエイリアス追加」と同じ）が必要。追加後は Claude 側で DELETE+POST の API コールを実行できる。",
+    "confidence": "medium",
+    "source": "2026-11-06 handoff-audit-candidates tool-name-route レビュー（元 route: DWD → 手順文に置換）"
+  },
+  {
+    "pattern": "GitHub App のインストール/認可を user に依頼",
+    "route": "まず `gh api -X GET /user/installations` で既存インストール一覧を確認。新規インストールはリポジトリ admin 権限を持つ環境で `gh api -X POST /repos/{owner}/{repo}/installations -f app_id=<id>` を試す。Org-level インストールは Org owner の承認が必要。試行前に `gh auth status` と `gh api repos/<owner>/<repo> --jq .permissions` で権限を確認する。権限不足で失敗した場合も「インストールできない」と断定せず実際の error/HTTP ステータスを記録する。それでも不足する場合のみ「Org owner/リポジトリ admin の操作が必要」と書く。",
+    "confidence": "medium",
+    "source": "2026-11-06 handoff-audit-candidates tool-name-route レビュー（元 route: gh api → 手順文に置換）"
+  },
+  {
+    "pattern": "PRマージ後のテスト・typecheck・eslint 再実行を user に依頼",
+    "route": "PR マージ後は `gh pr checks <番号> -R <owner>/<repo>` で CI 全チェックの結論を取得し、すべて緑（pass/success/neutral）を確認する。赤（failure/action_required/cancelled）があれば `gh run view <runId> --log-failed` で失敗ログを取得し Claude が修正する。ローカルでも該当リポジトリで `pnpm typecheck`、`pnpm lint` を再実行し exit 0 を確認する。squash マージのマージコミットは `node tools/commit-landed.mjs <sha>` で着地を確認する。すべて通ってから完了報告に含める。",
+    "confidence": "medium",
+    "source": "2026-11-06 handoff-audit-candidates tool-name-route レビュー（元 route: gh pr checks → 手順文に置換）"
+  },
+  {
+    "pattern": "Growi（社内Wiki）へのページ書き込み・更新",
+    "route": "Growi への書き込みは認証必須サイトのため、まず Drive の一次ソース（`社内マニュアル_NotebookLM連携` フォルダ）が最新かつ該当するかを確認し、あればそちらを参照する。Growi API の疎通を `node -e fetch` 等で実際に試し、HTTP ステータス・エラーを記録してから判断する（事前に「不可能」と決めつけない）。API 操作が不可ならチャット本文にページの目的・タイトル・更新内容の完成形を表示して kim に渡す（Gmail 下書きにはしない）。Growi に書く必要があるかの判断も Claude が行う。",
+    "confidence": "medium",
+    "source": "2026-11-06 handoff-audit-candidates tool-name-route レビュー（元 route: チャット表示 → 手順文に置換。candidates #7/#8 を統合）"
+  },
+  {
+    "pattern": "修正方針の可否判断・照合材料の提供を user に依頼",
+    "route": "修正方針の決定は Claude が行い、user に選ばせない。複数案がある場合は、(1) 各案を既存コード・ドキュメント・過去セッションと突き合わせて Claude が推奨案を決定する (2) 決定に必要な情報（該当コード行・API の応答・過去 failure log）は Claude が収集して証拠を提示する (3)「A案/B案のどちらがいいですか」「合っているか見てください」型の判断依頼を user に送らない。選択が不可逆な破壊的操作（DB reset・全件削除等）だけは確認を取る。",
+    "confidence": "medium",
+    "source": "2026-11-06 handoff-audit-candidates tool-name-route レビュー（元 route: gh api → 手順文に置換）"
   }
 ]

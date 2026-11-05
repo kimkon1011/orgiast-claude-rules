@@ -662,8 +662,8 @@ for (const mode of ['cap', 'pass', 'open', 'cron', 'scheduled', 'none', 'failure
     assert.equal(result.record.autoRegisteredCheck, false);
     const rows = readLedger(file);
     assert.equal(rows.length, 1);
-    assert.equal(rows[0].status, 'open');
-    assert.match(rows[0].check, /session-progress-check\.mjs" --session "fallback"$/);
+    assert.equal(rows[0].status, 'scheduled');
+    assert.match(rows[0].startWhen, /session-progress-check\.mjs" --session "fallback"$/);
     assert.equal(readLedger(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl')).at(-1).verdict, 'pass_after_autoregister');
     const { record: recordPromise } = await import('./auto-progress-ledger.mjs');
     recordPromise({ ...input, last_assistant_message: text }, { home });

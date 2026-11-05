@@ -190,7 +190,10 @@ export function hasOpenSessionCheck(input, home) {
   if (!input.session_id) return false;
   try {
     return latestOpenPromises(readLedger(ledgerFile(home)))
-      .some(row => row.sessionId === input.session_id && row.status === 'open' && ((typeof row.check === 'string' && row.check.trim()) || row.autoRegisteredCheck === true));
+      .some(row => row.sessionId === input.session_id && (
+        (row.status === 'open' && ((typeof row.check === 'string' && row.check.trim()) || row.autoRegisteredCheck === true)) ||
+        (row.status === 'scheduled' && typeof row.startWhen === 'string' && row.startWhen.trim())
+      ));
   } catch { return false; }
 }
 

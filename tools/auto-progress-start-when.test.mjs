@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { addCheck, isTimeOnlyCheck, main } from './auto-progress.mjs';
-import { run as runWatch, resumeSession, MAX_RESUMES_PER_RUN } from './auto-progress-watch.mjs';
+import { run as runWatch, resumeSession, MAX_RESUMES_PER_RUN, migrateTimeOnlyChecks, TIME_ONLY_REASON } from './auto-progress-watch.mjs';
 import { ledgerFile, readLedger, writeLedger, applyPromise } from './auto-progress-ledger.mjs';
 import { formatDigest, run as digest } from './auto-progress-digest.mjs';
 import { listItems } from './kim-inbox.mjs';
@@ -36,6 +36,50 @@ test('時計だけの判定は拒否し、成果物の判定は許可する', t 
     assert.equal(isTimeOnlyCheck(check), false, check);
     assert.equal(addCheck({ ...options, startWhen: undefined, check, probe: () => ({ code: 1 }) }).status, 'open');
   }
+});
+test('旧時刻checkのopen行は達成扱いにせず開始予約へ変換する', async t => {
+  const { home } = setup(t);
+  const check = `node -e "process.exit(Date.now()>=Date.parse('2026-11-01')?0:1)"`;
+  writeLedger(ledgerFile(home), [{ ts: new Date(now - 1000).toISOString(), sessionId: 'legacy-open', status: 'open',
+    promise: '夜間作業', label: '夜間作業', cwd: home, deadlineAt: new Date(now + 86400000).toISOString(), check }]);
+  let checks = 0;
+  await run({ home, now, io: { ...ioBase, executeCheck: () => { checks++; return { code: 0, text: '達成を確認' }; } } });
+  const row = readLedger(ledgerFile(home)).at(-1);
+  assert.equal(checks, 0);
+  assert.equal(row.status, 'scheduled');
+  assert.equal(row.startWhen, check);
+  assert.equal(row.check, undefined);
+  assert.equal(row.reason, TIME_ONLY_REASON);
+  assert.equal(listItems(home).filter(item => /誤って達成扱い/.test(item.text)).length, 1);
+});
+test('migrationは最新done時刻checkをappend-onlyで予約へ戻し冪等', async t => {
+  const { home } = setup(t);
+  const check = `node -e "process.exit(new Date().getTime()>123?0:1)"`;
+  const done = { ts: new Date(now - 1000).toISOString(), sessionId: 'legacy-done', status: 'done', promise: '旧約束',
+    label: '旧約束', cwd: home, deadlineAt: new Date(now - 500).toISOString(), check, checkResult: 'done', checkText: '達成を確認', doneAt: new Date(now - 500).toISOString() };
+  writeLedger(ledgerFile(home), [done]);
+  const messages = [];
+  const io = { stdout: text => messages.push(text) };
+  assert.equal((await migrateTimeOnlyChecks({ home, now, io })).appended, 1);
+  assert.equal((await migrateTimeOnlyChecks({ home, now, io })).appended, 0);
+  const rows = readLedger(ledgerFile(home));
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows[0], done);
+  assert.equal(rows[1].status, 'scheduled');
+  assert.equal(rows[1].startWhen, check);
+  assert.equal(rows[1].reason, TIME_ONLY_REASON);
+  assert.equal(messages.length, 1);
+  assert.equal(listItems(home).filter(item => /旧約束/.test(item.text)).length, 1);
+});
+test('成果物checkは従来どおりexit 0でdoneになり通知にコマンドを含む', async t => {
+  const { home } = setup(t);
+  const check = `node -e "process.exit(require('fs').existsSync('x')?0:1)"`;
+  fs.writeFileSync(path.join(home, 'x'), 'ok');
+  addCheck({ home, now, cwd: home, session: 'artifact', check, label: '成果物', deadline: '+24h', allowMet: true,
+    probe: () => ({ code: 0, text: 'ok' }) });
+  await run({ home, now, io: { ...ioBase, executeCheck: () => ({ code: 0, text: '成果物あり' }) } });
+  assert.equal(readLedger(ledgerFile(home)).at(-1).status, 'done');
+  assert.match(listItems(home).at(-1).text, /確認コマンド: node -e/);
 });
 test('予約登録とprobe、必須引数、Stop更新で予約を保持する', t => {
   const { options, home } = setup(t);

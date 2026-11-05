@@ -22,6 +22,19 @@ export const CHECK_ERROR_PATTERNS = [
 export const CHECK_TIMEOUT_MS = 30000;
 export const MAX_CHECK_TIMEOUT_MS = 300000;
 export const UNMET_INTERVAL_MS = 6 * 3600000;
+// 外部の成果を読まず、時計と定数だけで決まる典型的な判定。
+// 登録時だけでなく、旧台帳を評価する watch からも同じ判定を使う。
+export function isTimeOnlyCheck(command) {
+  const text = String(command || '');
+  if (!/Date\.(?:now|parse)|new\s+Date|Get-Date|date\s+['"]?\+%s/i.test(text)) return false;
+  if (/\b(?:fs|require|import|child_process|fetch|argv|env|stdin|readFile|Test-Path|Get-Content)\b/i.test(text)) return false;
+  const code = text.replace(/(['"])(?:(?!\1)[^\\]|\\.)*\1/g, match => {
+    return /Date|date\s+.*%s/i.test(match) ? match.slice(1, -1) : '';
+  }).replace(/(['"])(?:(?!\1)[^\\]|\\.)*\1/g, '');
+  const words = code.match(/[A-Za-z_$][\w$]*/g) || [];
+  const allowed = new Set(['node', 'exe', 'e', 'eval', 'process', 'exit', 'exitCode', 'Date', 'now', 'parse', 'new', 'getTime', 'valueOf', 'if', 'else', 'true', 'false', 'powershell', 'pwsh', 'NoProfile', 'Command', 'Get', 'date', 's', 'DateTime', 'datetime', 'int', 'long', 'gt', 'ge', 'lt', 'le', 'eq', 'ne', 'and', 'or', 'not', 'test']);
+  return words.every(word => word === '$' || allowed.has(word));
+}
 export function hasCheckError(stderr) {
   return CHECK_ERROR_PATTERNS.some(pattern => pattern.test(stderr));
 }
@@ -126,6 +139,7 @@ export function queueCheckFollowup(home, row, result) {
   fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text);
 }
 export async function checkPromise(row, { home, now, patch, io = {} }) {
+  if (isTimeOnlyCheck(row.check)) return 'time_only';
   const result = row.status === 'done' && row.checkResult === 'done'
     ? { code: 0, text: row.checkText } : await (io.executeCheck ?? executeCheck)(row, { home });
   const state = result.code === 0 ? 'done' : result.code === 1 ? 'unmet' : 'error';
@@ -137,7 +151,8 @@ export async function checkPromise(row, { home, now, patch, io = {} }) {
   if (state === 'done') {
     if (hasDoneInboxReceipt(row)) return state;
     const next = String(row.nextClaude || '').trim();
-    const message = `✅ check 達成: ${oneLine(row.label || row.promise, 160)}\n${changes.checkText}\n作業ID: ${row.sessionId || rowKey(row)}\n${next ? `作業全体の完了は未確認です。Claude の次の手（実行状況を確認して続行）: ${next.slice(0, 1800)}` : 'kim がすること: なし'}`;
+    const checkSummary = oneLine(row.check, 240);
+    const message = `✅ check 達成: ${oneLine(row.label || row.promise, 160)}\n${changes.checkText}\n確認コマンド: ${checkSummary}\n作業ID: ${row.sessionId || rowKey(row)}\n${next ? `作業全体の完了は未確認です。Claude の次の手（実行状況を確認して続行）: ${next.slice(0, 1800)}` : 'kim がすること: なし'}`;
     const delivery = await deliverDoneInbox(home, [row], message, { now, io });
     const receipt = { ...delivery.receipt, checkNotifiedResult: 'done' };
     if (patch(rowKey(row), receipt) === false) return 'ledger_error';

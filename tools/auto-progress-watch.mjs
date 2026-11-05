@@ -15,7 +15,8 @@ import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { notifyOwner, resolveOwner, sendOwnerToast } from './notify-owner.mjs';
 import { escalateKimDecisions } from './auto-progress-escalate.mjs';
 import { isQuietHours, kimAction } from './auto-progress-digest.mjs';
-import { checkPromise, executeCheck, queueCheckFollowup, pendingAction } from './auto-progress-check.mjs';
+import { checkPromise, executeCheck, isTimeOnlyCheck, queueCheckFollowup, pendingAction } from './auto-progress-check.mjs';
+import { addItem } from './kim-inbox.mjs';
 import { appendInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { BLOCKER, readJson as readFleetJson, saveJson as saveFleetJson } from './lib/fleet-chase-ledger.mjs';
@@ -29,6 +30,35 @@ export const MAX_RESUMES_PER_RUN = 4; // 1回の巡回あたり（4件 × 最大
 const WATCHED = OPEN_STATUSES;
 export const EXPIRE_UNATTENDED_MS = 48 * 3600 * 1000;
 export const FALLBACK_STALL_MS = 24 * 3600 * 1000;
+export const TIME_ONLY_REASON = '時刻だけの check は完了判定にできないため開始予約へ変換';
+
+export function timeOnlyMigrationRows(rows) {
+  const migrated = new Set(rows.map(row => row.migratedFromTimeOnlyCheck).filter(Boolean));
+  return rows.filter(row => row.status === 'done' && isTimeOnlyCheck(row.check) && !migrated.has(rowKey(row)));
+}
+
+export function timeOnlyReservation(row, now = Date.now()) {
+  const reset = { ...row };
+  for (const key of ['check', 'checkResult', 'checkText', 'doneAt', 'doneNotifiedAt', 'doneInboxId', 'doneInboxVerifiedAt', 'checkNotifiedResult', 'lastCheckedAt', 'startedAt', 'startOverdueNotifiedAt']) delete reset[key];
+  return { ...reset, ts: new Date(now).toISOString(), status: 'scheduled', startWhen: row.check,
+    deadlineAt: new Date(now + 24 * 3600000).toISOString(), reason: TIME_ONLY_REASON,
+    nextClaude: String(row.nextClaude || '').trim() || `「${row.label || row.promise}」の作業を再開し、成果物を確認して完了まで進める`,
+    migratedTimeOnlyCheckAt: new Date(now).toISOString(), migratedFromTimeOnlyCheck: rowKey(row) };
+}
+
+export async function migrateTimeOnlyChecks({ home, now = Date.now(), dryRun = false, io = {} }) {
+  const file = ledgerFile(home), rows = readLedger(file), targets = timeOnlyMigrationRows(rows);
+  if (dryRun || !targets.length) return { targets, appended: 0 };
+  const additions = targets.map(row => timeOnlyReservation(row, now));
+  (io.writeLedger ?? writeLedger)(file, [...rows, ...additions], io.ledgerIo ?? {});
+  for (const row of additions) {
+    const text = `誤って達成扱いだった約束を再開しました: ${row.label || row.promise}`;
+    (io.stdout ?? console.log)(text);
+    await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-time-only-migration', text,
+      dedupeKey: `auto-progress-time-only-migration:${row.sessionId || rowKey(row)}` });
+  }
+  return { targets, appended: additions.length };
+}
 
 // ---- 証拠収集 -------------------------------------------------------------
 // transcript の promise 記録時刻以降の assistant/tool メッセージを要約する。
@@ -554,6 +584,12 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     try { (io.cleanupOldLedgerTemps ?? cleanupOldLedgerTemps)(file, { now, io: io.cleanupIo ?? {} }); }
     catch (error) { summary.errors.push(`ledger-temp-cleanup-failed: ${String(error?.message ?? error).slice(0, 120)}`); }
   }
+  try {
+    const migration = await migrateTimeOnlyChecks({ home, now, dryRun, io });
+    summary.timeOnlyMigration = { count: migration.targets.length, labels: migration.targets.map(row => row.label || row.promise), appended: migration.appended };
+  } catch (error) {
+    summary.errors.push(`time-only-migration: ${String(error?.message ?? error).slice(0, 120)}`);
+  }
   try { Object.assign(summary, await watchFleetMail({ home, now, dryRun, io })); }
   catch { summary.fleetExpired ??= 0; summary.fleetBlocked ??= 0; summary.errors.push('fleet-mail monitoring failed'); }
   const config = (io.sheetConfig ?? sheetConfig)(home);
@@ -642,6 +678,16 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     summary.checked++;
     try {
       const state = await checkPromise(row, { home, now, patch, io });
+      if (state === 'time_only') {
+        const reservationRow = timeOnlyReservation(row, now);
+        if (!dryRun && persist([...readLedger(file), reservationRow])) {
+          const text = `誤って達成扱いだった約束を再開しました: ${row.label || row.promise}`;
+          (io.stdout ?? console.log)(text);
+          await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-time-only-migration', text,
+            dedupeKey: `auto-progress-time-only-migration:${row.sessionId || rowKey(row)}` });
+        }
+        continue;
+      }
       if (state === 'done') summary.done++;
       else if (state === 'unmet') summary.inProgress++;
     } catch (error) { summary.errors.push(`check: ${String(error?.message ?? error).slice(0, 120)}`); }

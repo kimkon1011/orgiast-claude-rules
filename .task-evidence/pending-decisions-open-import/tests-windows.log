@@ -1,0 +1,296 @@
+✔ rollout requires three distinct consecutive days, minimum sample, validated nondelegated rules (2541.5259ms)
+✔ rollout closes on later improvement, never on missing/zero samples or stale reports; history retained 30 days (38.8418ms)
+✔ block needs verified done reply plus a subsequent fresh report; replay cannot reopen done (908.2729ms)
+✔ stopped reports keep violation open and open no-report only for PCs polling within 48h (652.1333ms)
+✔ convergence mirrors entries, never sends, missing state never completes; removal does (678.0728ms)
+✔ self rollout is inbound, sends nothing, local work waits for next report and context prioritizes self (1274.0396ms)
+✔ collects actual inbox and self JSON; ingest persists history; compliance-only and dry-run write nothing (7573.9855ms)
+✔ no-report resolves when a delayed but fresh report arrives; done reply alone is insufficient (1197.1505ms)
+✔ recurrence needs three new bad days and uses a new mail ID; cancelled/deferred rollout remains controlled (635.3908ms)
+✔ digest retains rollout counts and three top issues under its length budget (702.9171ms)
+✔ no-report waits for fleet warm-up: with no report history at all, polling PCs are not accused on day one (633.0262ms)
+✔ convergence display upgrades existing hash mirrors without changing IDs (693.2627ms)
+✔ ingestion includes expired/failed requests and excludes broadcasts, self, replies, notices; idempotent chase grouping (4483.2195ms)
+✔ initial age > policy threshold is stale, never re-stales revived entries (1011.0885ms)
+✔ GAS done closes outbound, cache done alone cannot; blockers derive a single inbound item (2384.104ms)
+✔ checks rotate across original and chase IDs, bounded by exported limit even with failures (1006.842ms)
+✔ decision receipt and batched are not answers; human answer plus actual reply is required (2184.9207ms)
+✔ L0 resends at most once per policy interval, preserves exact exec markers, persists grouping (2791.0556ms)
+✔ L0 waits for 80% of TTL; dry-run never sends or persists even on invalid length (2273.3423ms)
+✔ ambiguous send retry reuses durable ID and payload after reload (1978.569ms)
+✔ L1 no resend when poll stops, owner DM rate-limited, unknown owner/poll and kim are digest-only (1737.3087ms)
+✔ L2 after seen+24h, L3 after seen+48h keeps 72h reminders (2575.0331ms)
+✔ digest only after 09 JST, once per day only after DM, summary capped at 8 (1233.5944ms)
+✔ cancel/defer/revive validate explicit reason and dates; deferred work stays visible without sending (657.9068ms)
+✔ work opt-in, 2 items, 6h retry, 5 attempts, excludes decisions and deferred; no network/LLM in dry-run (8851.3088ms)
+✔ work done requires final marker, successful execution and actual inbox evidence; timeout cannot close next check (2801.5227ms)
+✔ full dry-run leaves HOME byte-identical, no lock, send, DM, notify or worker; non-kim no-op (1552.6967ms)
+✔ ledger lock suppresses concurrent runs and malformed ledger is not replaced (1239.2744ms)
+✔ registrar is kim-only, validates scheduled task without real registration (615.9077ms)
+✔ unverified originals or failed checks cannot trigger a blind resend after bulk import (734.2824ms)
+✔ recovering blocker closes derived debt on fresh authoritative evidence (898.0341ms)
+✔ blocker guard excludes self-originated at creation and from persisted work (1702.8019ms)
+✔ blocker guard excludes reply at creation and from persisted work (1350.5801ms)
+✔ blocker guard excludes auto-reply at creation and from persisted work (1401.3165ms)
+✔ blocker guard excludes inbox-done at creation and from persisted work (1714.6431ms)
+✔ unanswered blocker from another PC can still be dispatched (1349.9232ms)
+✔ headless cannot cancel debts and cannot bypass kim-only guard (931.3563ms)
+✔ long digest stays within Discord budget and retains counts/control footer (486.3497ms)
+✔ resend tracking header cannot hide a body-only human decision tag from recipient (1139.8335ms)
+✔ send cap covers resends, oldest first and resumes after 30 minutes (2339.3364ms)
+✔ send cap covers reminders, oldest first and resumes after 30 minutes (2817.1062ms)
+✔ send caps are per target and include ambiguous failed attempts; owner DMs are excluded (6192.2506ms)
+✔ 機械の未達や他席宛の判断依頼だけではkimへ通知しない (552.7492ms)
+✔ durable producer keys survive aggregation, seen state and retries (4600.8442ms)
+✔ ask は毎回提示し回答後に消える。info は確認できるが ask は確認だけで消せない (6881.96ms)
+✔ 非 kim 席は転送IDを保存し失敗だけをローカル表示する (4357.8692ms)
+✔ fleet-mail は一度だけ取り込み元の from を保持して ack を同期待ちにする (3756.5258ms)
+✔ 本文上限・秘匿・表示予算と ask 優先を守り、表示した件だけ更新する (5169.8762ms)
+✔ 許可リストは追加マージし壊れた正規表現では許可しない (1379.451ms)
+✔ 通知は fetch ゼロで台帳に ask を保存し24時間抑制も維持する (2330.2604ms)
+✔ hook は無関係なイベント・不正な入力でセッションを止めない (567.6755ms)
+✔ PC ラベルが別名でも所有者が kim なら kim 席として扱う (862.559ms)
+✔ 手作業依頼を ask に分類し台帳に依頼本文を残す (2149.6055ms)
+kim-inbox: 取込済みメールの確認を次回再試行: 受信ファイルが使用中です
+✔ 複数プロセスの info は集約し ask は全件保存する (18202.8213ms)
+✔ 破損・欠損フィールドのあるファイルで正常な未回収項目を隠さない (1420.5637ms)
+✔ fleet 受信ファイルが使用中でも項目を表示でき、次回に確認を再試行する (3883.5208ms)
+✔ 同文 info 30件は1件に集約し、見出し・日時・ID・PC番号の差も吸収する (17815.9804ms)
+✔ 古い雑多な info 50件より新しい完了通知を先に表示する (38400.5181ms)
+✔ 長い ask が多数あっても未表示の進捗 info を表示枠から追い出さない (1206.1333ms)
+✔ hook の session_id と一致する作業IDの info を ask より先に表示する (831.4533ms)
+✔ 未表示 high を既表示 high とその他より優先し、表示上限後もその他で追い越さない (294.5513ms)
+✔ --compact は旧データの重複を最新へ合算し ask・high・閉じた項目を保持する (1023.0375ms)
+✔ 期限は残日数順に先頭5件、upsertは表示回数を増やさずclose-keyで閉じる (1683.8402ms)
+✔ 未達とgate-reportのinfoは抑止、掃除はsourceも検索しaskを保持 (282.6897ms)
+✔ notify CLI spools while aggregation is locked, then addItem imports exactly once (11436.9183ms)
+✔ notify CLI exits 1 when both inbox and spool writes fail (848.8752ms)
+✔ context imports spooled notifications before selecting what to show (320.6053ms)
+✔ concurrent spool consumers preserve a single forwarding attempt and retry failed forwarding (538.8384ms)
+✔ an answered spool item with an old forwarding error does not block later notifications (550.1708ms)
+✔ --urgent を保存し、古い通常 ask 150件・期限・セッション進捗より先に本文を出す (169.4556ms)
+✔ 急ぎは上限超過でも600字を保ち、未表示優先・最大5件・open限定で通常枠と分離する (133.2646ms)
+✔ does nothing when no pending decisions exist (232.4905ms)
+✔ posts once, appends TODO, and marks decisions batched (2798.5785ms)
+✔ dry-run has no side effects (776.4797ms)
+✔ adds TODOs inside an existing same-day section (5378.668ms)
+✔ formats saved attachments as a count and readable path (0.4405ms)
+✔ shows failed attachment acquisition and leaves attachment-free rows unchanged (0.3498ms)
+✔ 通知本文を kim DM ヘルパに渡す (785.2546ms)
+✔ October 9 legacy open decisions reach kim-inbox once and dry-run preserves the queue (2523.9817ms)
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+{
+  "exitCode": 0,
+  "fixed": [],
+  "prs": [],
+  "escalated": [],
+  "deferred": [],
+  "suppressed": [],
+  "skipped": [],
+  "plan": [
+    {
+      "label": "pr-case",
+      "action": "deferred",
+      "reason": "同じfingerprintのPRがopenでマージ待ち",
+      "text": "PLAN pr-case: deferred(同じfingerprintのPRがopenでマージ待ち)"
+    }
+  ]
+}
+{
+  "exitCode": 0,
+  "fixed": [],
+  "prs": [],
+  "escalated": [],
+  "deferred": [],
+  "suppressed": [],
+  "skipped": [],
+  "plan": [
+    {
+      "label": "pr-case",
+      "action": "codex",
+      "text": "PLAN pr-case: codex"
+    }
+  ]
+}
+{
+  "exitCode": 0,
+  "fixed": [],
+  "prs": [],
+  "escalated": [],
+  "deferred": [],
+  "suppressed": [],
+  "skipped": [],
+  "plan": [
+    {
+      "label": "repeat",
+      "action": "escalate",
+      "reason": "過去7日に2回以上deferred/prを経て再発",
+      "text": "PLAN repeat: escalate(過去7日に2回以上deferred/prを経て再発)"
+    }
+  ]
+}
+fixed=0 pr=0 deferred=0 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=0 escalated=1 suppressed=0
+[nightly-health-remediate] codex 保留(codex_cooldown): 2026-11-06T00:48:31.086Z 以降
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+fixed=1 pr=0 deferred=0 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+PLAN short: deferred(4分の全体予算: 残り5分未満)
+fixed=0 pr=0 deferred=0 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+ok:異常なし（キャッシュなし）
+✔ fingerprint ignores changing timestamps and counts (4.3235ms)
+✔ self-healed and failover playbooks require a later success (1.2529ms)
+✔ hung-task-stop does not stop the dialog watcher for a detected-dialog anomaly (375.662ms)
+✔ log contention recognizes appendLineWithRetry migration (0.6201ms)
+✔ 記録の失敗で全体を落とさない: ログ追記が失敗しても複数異常を最後まで処理し通知まで到達する (1588.7576ms)
+✔ dry-run reports PLAN for a matching playbook and never calls apply or notification (621.0634ms)
+✔ repair limit defers without decision or notification (1184.2108ms)
+✔ open PR defers, while merged or closed PR allows retry (1429.6859ms)
+✔ third recurrence after two deferred or PR outcomes escalates (776.0735ms)
+✔ missing and empty anomaly caches print an explicit ok line (1420.3119ms)
+✔ playbook exception is recorded and the next anomaly is still processed (1186.8334ms)
+✔ any nonzero codex exit tries cheap-code once and reports both redacted failures (1333.4861ms)
+✔ codex-do が保留(75)なら escalated にせず quota_deferred を台帳に残し、retryAt までは再試行しない (1353.814ms)
+✔ dead GUI watcher follows registration playbook and verifies heartbeat, no real tasks/notifications (1466.8521ms)
+✔ budget caps the existing limit and recalculates fallback timeouts (1103.0097ms)
+✔ under five minutes defers without launching and dry-run remains read-only (1492.8369ms)
+✔ default and invalid budget values preserve the 45 minute cap (5996.9567ms)
+✔ no anomalies still advances the monitored log (845.708ms)
+✔ wrapper-held log uses stdout and a durable sibling without retrying its lock (1615.3253ms)
+⚠️ 夜間ジョブ異常 1件
+- ローカルテスト: テスト実行が15分でタイムアウト
+確認: Claude が夜間点検ログを確認します
+⚠️ 夜間ジョブ異常 1件
+- feedback:kimkon1011/app#13: 2 日連続失敗。判断してください
+確認: Claude が夜間点検ログを確認します
+ok:異常なし
+sent:通知送信完了
+sent:通知送信完了
+sent:通知送信完了
+sent:通知送信完了
+sent:通知送信完了
+sent:通知送信完了
+ok:異常なし
+sent:通知送信完了
+sent:通知送信完了
+sent:通知送信完了
+ok:異常なし
+ok:異常なし
+sent:通知送信完了
+ok:異常なし
+sent:通知送信完了
+sent:通知送信完了
+sent:通知送信完了
+ok:異常なし
+sent:通知送信完了
+prime:通知せず基準を記録（検知 1件）
+prime:通知せず基準を記録（検知 1件）
+ok:異常なし
+sent:通知送信完了
+ok:異常なし
+⚠️ 夜間ジョブ異常 2件
+- フック版ずれ: nightly-health-test-FbqDpv/checkout-a が origin/main より 3 コミット遅れ / フック実行ファイル 1件が main と不一致: hook-0.mjs
+- フック版ずれ: nightly-health-test-FbqDpv/checkout-b が origin/main より 3 コミット遅れ / フック実行ファイル 1件が main と不一致: hook-1.mjs
+確認: Claude が夜間点検ログを確認します
+⚠️ 夜間ジョブ異常 1件
+- フック版ずれ: nightly-health-test-vNOOOA/checkout-a が origin/main より 68 コミット遅れ / フック実行ファイル 7件が main と不一致: hook-0.mjs, hook-1.mjs, hook-2.mjs, hook-3.mjs, hook-4.mjs
+確認: Claude が夜間点検ログを確認します
+ok:異常なし
+ok:異常なし
+ok:異常なし
+ok:異常なし
+ok:異常なし
+sent:通知送信完了
+skip:前回と同一
+auto-session:専用 DM 経路で通知・重複抑制済み
+⚠️ 夜間ジョブ異常 1件
+- feedback:kimkon1011/app#13: 【auto-session 異常】feedback:kimkon1011/app#13 が 2 日連続失敗しています。
+最新エラー: integration failure
+最初の失敗日: 2026-09-17
+最後の成功日: 成功記録なし
+
+原因調査と修復を自動起票します。
+
+run JSON: C:\Users\uers\AppData\Local\Temp\nightly-health-test-vgL0kW\.claude\auto-session\runs\2026-09-18-feedback-app-13.json
+summary: C:\Users\uers\AppData\Local\Temp\nightly-health-test-vgL0kW\.claude\auto-session\runs\2026-09-18-feedback-app-13.summary.md
+確認: Claude が夜間点検ログを確認します
+prime:通知せず基準を記録（検知 1件）
+sent:通知送信完了
+ok:異常なし
+⚠️ 夜間ジョブ異常 1件
+- GAS/master 週次監査: pull failed
+確認: Claude が夜間点検ログを確認します
+prime:通知せず基準を記録（検知 1件）
+prime:通知せず基準を記録（検知 1件）
+sent:通知送信完了
+✔ defaultRunTests enforces the 15 minute hard timeout (10.402ms)
+✔ test timeout becomes one anomaly and still writes the nightly cache (2379.6368ms)
+✔ auto-session の streak 検出を既存 anomaly 型へ追加する (1167.124ms)
+✔ scheduled task の起動拒否・時間超過・ログ未生成を判定する (1.9202ms)
+✔ 異常ゼロなら notify が1度も呼ばれず ok:異常なし になる (1726.4705ms)
+✔ scan: keywords のログに error 行があれば検知され、通知本文にそのラベルが含まれる (2088.1994ms)
+✔ 24時間より古い失敗行は拾わない（新しい行だけ拾う） (1992.2892ms)
+✔ 期待リストのログが存在しなければ異常として報告される (1870.1437ms)
+✔ maxAgeHours を超えて更新されていないログが stale として報告される (2140.5926ms)
+✔ テストランナーが fail>0 を返したら異常として報告される (1675.2669ms)
+✔ 走査済みログはオフセットにより再通知しない (3177.1931ms)
+✔ 実ログのゼロ件カウンタと error=- は失敗扱いしない (1.5524ms)
+✔ git の同期出力は失敗扱いせず、通常の error 行は検知する (0.3995ms)
+✔ Windows 形式パスは win32 では維持し linux で WSL パスへ変換する (0.3717ms)
+✔ / サマリ / 行は失敗を含んでも除外する (0.2786ms)
+✔ robocopy の列挙行はファイル名に error を含んでも失敗扱いしない (0.2535ms)
+✔ 前回オフセット以降に追記された行だけを検知する (2116.568ms)
+✔ ファイル縮小時は末尾から読み直す (2104.1962ms)
+✔ 初回は末尾200行だけを走査する (2045.9137ms)
+✔ --dry-run ではオフセットを更新しない (1307.6ms)
+✔ scan 省略時は stale-only になり散文の失敗語を検知しない (1596.1863ms)
+✔ 期待リストにないログは本文を読まず未登録のログを1行だけ付ける (2095.8473ms)
+✔ 未登録ログが0件なら未登録のログ行を付けない (1369.2701ms)
+✔ pattern は最新の日付付きログ1件だけを人間向けラベルで走査する (2385.7703ms)
+✔ pattern に一致するログがなければ存在しないと報告する (1058.7558ms)
+✔ baseline の既知失敗を本文から除き抑制件数を示し、未知失敗だけ通知する (1838.462ms)
+✔ --update-baseline のときだけ現状の失敗名で baseline を上書きする (1663.0583ms)
+✔ 異常13件では本文を12件に制限し残数を示す (1522.959ms)
+✔ ℹ fail 10 形式から失敗件数を抽出する (1.8012ms)
+✔ 通知が例外を投げたら exit code 相当が 1 になる (1519.1252ms)
+✔ --prime は通知せずオフセットと state を記録する (1932.4322ms)
+✔ --prime の直後は追記が無いので異常ゼロになり通知しない (3899.2636ms)
+✔ 未登録ログや baseline 抑制だけでは通知しない（平穏な夜は無音） (550.2615ms)
+✔ 全フックから node の mjs と PowerShell -File の ps1 絶対パスを抽出する (1.1361ms)
+✔ 複数チェックアウトのフックをルートごとにまとめて判定する (2077.062ms)
+✔ 不一致ファイルをチェックアウトごとに1 anomalyへまとめ名前は最大5件にする (3492.8081ms)
+✔ 内容が一致すれば100コミット遅れでも報告しない (1604.6595ms)
+✔ origin/main に存在しないフックファイルは不一致に数えない (1592.4296ms)
+✔ git fetch 失敗は理由を1行出してチェックアウト判定を異常なしでスキップする (1601.2348ms)
+✔ settings.json が読めないかフックが無ければ git を呼ばず何も報告しない (1383.3216ms)
+✔ booth feedback uses the registered Intake task name (31.5529ms)
+✔ 毎日09:00実行の feedback-nag.log は翌朝のヘルスで stale 誤検知しない (1332.2737ms)
+✔ streak 専用 DM は1回だけ送り、通常通知は他の anomaly のみ送る (2987.8304ms)
+✔ streak のみなら通常通知を呼ばず anomaly は返す (1686.7089ms)
+✔ dry-run と prime は実 watcher でも DM を送らず streak state を更新しない (2971.8576ms)
+✔ DM 失敗でも検出したジョブと他の監視結果を失わず通常経路で通知障害を報告する (1759.8387ms)
+✔ GAS 週次監査は夜間経路から呼ばれ、prime/dry-run と notifier を引き継ぐ (1029.5993ms)
+✔ GAS 監査エラーを異常として残し、他の夜間チェックは継続する (734.2656ms)
+✔ daily stall scan findings reach remediation input and suppress normal cooldowns (1247.1286ms)
+✔ nightly audit passes prime/dry-run and saves unresolved in existing report (1357.6251ms)
+✔ stale task repair results use the existing nightly notification (1299.9568ms)
+✔ 期限ジョブはログが新しくてもLastRunTimeが36時間超なら検出する (0.2845ms)
+✔ add, list, and mark decisions (859.8671ms)
+✔ ignores broken lines and rejects empty text (209.7098ms)
+✔ ORGIAST_HOME selects decision storage while explicit home takes precedence (1643.3509ms)
+✔ pending and legacy open share a filter without rewriting stored status (820.7549ms)
+ℹ tests 154
+ℹ suites 0
+ℹ pass 154
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 136050.0814

@@ -1,0 +1,30 @@
+## 真因
+tools/morning-batch.mjs:65 が status=pending を指定し、tools/pending-decisions.mjs:60 が status を完全一致で抽出するため、open の5件が除外される。
+nightly-health はログ監視、nightly-health-remediate.mjs:91 は判断待ちの追加側。取り込みは morning-batch → notify-kim → kim-inbox。
+
+## 5件の実データ
+id / status / createdAt / capturedAt
+20261009060000000-001 / open / 未定義 / 2026-10-09T06:00:00.000Z
+20261009060000000-002 / open / 未定義 / 2026-10-09T06:00:00.000Z
+20261009060000000-003 / open / 未定義 / 2026-10-09T06:00:00.000Z
+20261009060000000-004 / open / 未定義 / 2026-10-09T06:00:00.000Z
+20261009060000000-005 / open / 未定義 / 2026-10-09T06:00:00.000Z
+
+## 変更ファイル
+tools/pending-decisions.mjs
+tools/pending-decisions.test.mjs
+tools/morning-batch.test.mjs
+
+## テスト
+Windows修正前: node.exe --test tools/pending-decisions.test.mjs tools/morning-batch.test.mjs
+pass 10 / fail 0。
+Windows修正後: 関連6ファイルを実行中。
+実データread-back: pending抽出27件（既存pending22件 + 対象open5件）。本体は読み取りのみ。
+
+## PR
+未作成
+
+## 未完了
+テスト・commit・PR作成・automerge確認。
+共有 .git は読み取り専用で git fetch が FETCH_HEAD 書き込み拒否。共有indexは未変更。独立bare clone .wt/pending-decisions-git の main から指定ブランチ・worktreeを作成。
+指定PR本文パスは書き込み許可範囲外のため、作業領域の .task-evidence/pending-decisions-open-import/pr-body-20261106-pending-decisions-import.md を代替利用する。

@@ -1,0 +1,7 @@
+fix(pending-decisions): include legacy open decisions in morning intake
+
+Normalize the legacy open status when filtering pending decisions so the
+morning batch and pending counts include unbatched requests. Keep stored
+statuses and completed records unchanged during reads.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>

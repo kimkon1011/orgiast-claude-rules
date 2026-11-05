@@ -1,0 +1,18 @@
+✔ does nothing when no pending decisions exist (358.5477ms)
+✔ posts once, appends TODO, and marks decisions batched (4647.93ms)
+✔ dry-run has no side effects (904.6597ms)
+✔ adds TODOs inside an existing same-day section (9401.9138ms)
+✔ formats saved attachments as a count and readable path (0.4547ms)
+✔ shows failed attachment acquisition and leaves attachment-free rows unchanged (1.439ms)
+✔ 通知本文を kim DM ヘルパに渡す (1333.3385ms)
+✔ add, list, and mark decisions (1478.0107ms)
+✔ ignores broken lines and rejects empty text (348.6322ms)
+✔ ORGIAST_HOME selects decision storage while explicit home takes precedence (2627.3265ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 25712.4875

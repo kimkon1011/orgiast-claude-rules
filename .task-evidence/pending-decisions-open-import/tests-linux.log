@@ -1,0 +1,20 @@
+✔ does nothing when no pending decisions exist (9.0677ms)
+✔ posts once, appends TODO, and marks decisions batched (114.992701ms)
+✔ dry-run has no side effects (1.0377ms)
+✔ adds TODOs inside an existing same-day section (3432.697416ms)
+✔ formats saved attachments as a count and readable path (0.7333ms)
+✔ shows failed attachment acquisition and leaves attachment-free rows unchanged (0.6124ms)
+✔ 通知本文を kim DM ヘルパに渡す (1.177ms)
+✔ October 9 legacy open decisions reach kim-inbox once and dry-run preserves the queue (94.2364ms)
+✔ add, list, and mark decisions (23.1962ms)
+✔ ignores broken lines and rejects empty text (1.1812ms)
+✔ ORGIAST_HOME selects decision storage while explicit home takes precedence (2.5391ms)
+✔ pending and legacy open share a filter without rewriting stored status (1.6588ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5172.306525

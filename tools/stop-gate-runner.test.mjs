@@ -599,3 +599,24 @@ test('差し戻し理由の先頭で前文を繰り返さないよう指示す�
     assert.match(output.reason, /（前のメッセージと同じ質問です。もう答えていれば不要です）/);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
+
+test('自動進行の check は runner から現在ターンとセッションを照合する', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-current-check-'));
+  const previous = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  t.after(() => {
+    if (previous === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previous;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  const now = Date.now();
+  const raw = JSON.stringify({ type: 'user', timestamp: new Date(now - 1000).toISOString(), message: { role: 'user', content: '配布を進めて' } });
+  const input = { session_id: 'current-check', last_assistant_message: 'この後の自動進行: 返信を待って配布へ組み込む' };
+  const options = { mode: 'off', policyOptions: { home, hostname: 'kim-PC', notify: async () => ({ delivered: 'test' }) } };
+  const blocked = await run(input, { raw, humanText: '', assistantText: '' }, options);
+  assert.ok(blocked.record.reasonCodes.includes('AUTOPROGRESS-NEEDS-CURRENT-CHECK'));
+  const { addCheck } = await import('./auto-progress.mjs');
+  addCheck({ session: input.session_id, check: 'test -f result.txt', label: '配布', deadline: '+2d', home, now });
+  const passed = await run(input, { raw, humanText: '', assistantText: '' }, options);
+  assert.ok(!passed.record.blockedBy.includes('unregistered-promise-gate'));
+});

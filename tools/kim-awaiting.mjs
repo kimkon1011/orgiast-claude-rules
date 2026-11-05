@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
-import { ledgerFile, readLedger, writeLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, kimAction } from './auto-progress-ledger.mjs';
+import { ledgerFile, readLedger, writeLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, kimAction, hasClaudeWork } from './auto-progress-ledger.mjs';
 import { appendInbox } from './auto-progress-inbox-hook.mjs';
 import { active, CATEGORY, DAY } from './lib/fleet-chase-policy.mjs';
 
@@ -52,7 +52,11 @@ export function collectAwaiting({ home = process.env.ORGIAST_HOME || os.homedir(
     const action = kimAction(row);
     if (SESSION_OP_RE.test(action)) continue;
     const ask = EVIDENCE_RE.test(action.trim()) ? '進めてよいか判断して返事をする' : readable(action, row, sessionId && row.sessionId === sessionId ? Infinity : 80);
-    result.push({ id: apId(row), source: 'auto-progress', title: readable(row.purpose || row.promise, row, 60), ask, waitingSince: row.ts, route: { sessionId: row.sessionId } });
+    const claudePending = row.status === 'open' && !String(row.check || '').trim() && (hasClaudeWork(row.nextClaude) || hasClaudeWork(row.promise));
+    const updatedAt = row.updatedAt || row.ts;
+    const ageHours = Math.max(0, Math.floor((now - Date.parse(updatedAt)) / 3600000));
+    const progress = claudePending ? `Claude 側で進行中（最終更新 ${ageHours} 時間前）${ageHours >= 6 ? ' ⚠️ 止まっている可能性' : ''}` : '';
+    result.push({ progress, id: apId(row), source: 'auto-progress', title: readable(row.purpose || row.promise, row, 60), ask, waitingSince: row.ts, route: { sessionId: row.sessionId } });
   }
   const file = ledgerPath(home);
   // Bound synchronous JSON work as well as item traversal inside the five-second hook.
@@ -122,7 +126,7 @@ if (isEntry(import.meta.url)) {
     const args = process.argv.slice(2), value = flag => args[args.indexOf(flag) + 1];
     if (args.includes('--list')) {
       const items = collectAwaiting();
-      console.log(args.includes('--json') ? JSON.stringify(items, null, 2) : [`📌 kim の返事待ち ${items.length} 件（古い順）`, ...items.map(item => `・${item.title} ／ 答えてほしいこと: ${item.ask} ／ ${item.ageDays}日待ち`)].join('\n'));
+      console.log(args.includes('--json') ? JSON.stringify(items, null, 2) : [`📌 kim の返事待ち ${items.length} 件（古い順）`, ...items.map(item => `・${item.title} ／ 答えてほしいこと: ${item.ask} ／ ${item.ageDays}日待ち${item.progress ? ` ／ ${item.progress}` : ''}`)].join('\n'));
     } else process.exitCode = respond(value(args.includes('--skip') ? '--skip' : '--answer'), { skip: args.includes('--skip'), reason: value('--reason'), bodyFile: args.includes('--body-file') ? value('--body-file') : undefined });
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

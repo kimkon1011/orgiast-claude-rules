@@ -28,7 +28,7 @@ export function context(input, { home = process.env.ORGIAST_HOME || os.homedir()
     const isCurrent = item => sessionId && item.source === 'auto-progress' && item.route?.sessionId === sessionId;
     const current = items.filter(isCurrent);
     const displayed = [...current, ...items.filter(item => !isCurrent(item)).slice(0, DISPLAY_LIMIT)];
-    const visible = displayed.map(item => `・${item.title} ／ 答えてほしいこと: ${item.ask} ／ ${item.ageDays}日待ち`).join('\n');
+    const visible = displayed.map(item => `・${item.title} ／ 答えてほしいこと: ${item.ask} ／ ${item.ageDays}日待ち${item.progress ? ` ／ ${item.progress}` : ''}`).join('\n');
     const routes = displayed.map(item => `id=${item.id} | ${item.title}`).join('\n');
     return { hookSpecificOutput: { hookEventName: event, additionalContext: `【必須・kim の返事待ち】応答の冒頭で user に見える形で、次の一覧をそのまま表示せよ。今回の依頼と無関係でも省略しない。\n📌 kim の返事待ち ${items.length} 件（${current.length ? '現セッション優先・ほかは古い順' : '古い順'}）\n${visible}${items.length > displayed.length ? `\nほか ${items.length - displayed.length} 件` : ''}\nkim がこのどれかに答えたら、その答えを本文ファイルに書いて node "${repo}/tools/kim-awaiting.mjs" --answer <id> --body-file <file> で届けよ。kim が「不要」と言ったものは --skip <id> --reason ...。以下の id は kim に見せない。\n${routes}` } };
   } catch { return null; }

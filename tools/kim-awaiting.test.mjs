@@ -206,3 +206,20 @@ test('collectAwaiting: セッション限りの画面操作は追わず、調査
   for (const text of ['この古いタブを ✕ で1回閉じる', '右端の「Claude Code」タブで Enter を押す', '/session-close` を打つ（1回だけ）']) assert.match(text, SESSION_OP_RE);
   for (const text of ['上の案でよいか（変えたい月だけ）を一言で返す', '「cr-PC に一本化」か「このPCでも続ける」のどちらかを返答する']) assert.doesNotMatch(text, SESSION_OP_RE);
 });
+
+test('check のない Claude 作業を質問と併記し6時間で警告する', t => {
+  const home = fixture(t);
+  for (const hours of [5, 6, 10]) {
+    writeLedger(ledgerFile(home), [row({ status: 'open', nextKim: '色を選ぶ', ts: new Date(NOW - hours * 3600000).toISOString() })]);
+    const [item] = collectAwaiting({ home, now: NOW });
+    assert.equal(item.ask, '色を選ぶ');
+    assert.match(item.progress, new RegExp(`Claude 側で進行中（最終更新 ${hours} 時間前）`));
+    assert.equal(item.progress.includes('⚠️ 止まっている可能性'), hours >= 6);
+    const output = context({ session_id: 'current', hook_event_name: 'SessionStart' }, { home, now: NOW, env: {} });
+    assert.ok(output.hookSpecificOutput.additionalContext.includes(item.progress));
+  }
+  for (const extra of [{ check: 'test -f result.txt' }, { promise: '返信を待つ' }, { status: 'waiting_user' }]) {
+    writeLedger(ledgerFile(home), [row({ status: 'open', nextKim: '色を選ぶ', ...extra })]);
+    assert.equal(collectAwaiting({ home, now: NOW })[0].progress, '');
+  }
+});

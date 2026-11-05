@@ -7,7 +7,7 @@ import { Worker } from 'node:worker_threads';
 import { spawn } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
-import { EVENTS, defaultRepo, readDispatchManifest, tokens } from './hook-dispatch-registry.mjs';
+import { EVENTS, defaultRepo, readDispatchManifest, tokens, isDispatcher } from './hook-dispatch-registry.mjs';
 
 export function matches(matcher, event, input) {
   if (!matcher || matcher === '*') return true;
@@ -92,49 +92,96 @@ export function appendMetrics(home, record) {
     fs.appendFileSync(path.join(dir, `${record.at.slice(0, 10)}.jsonl`), JSON.stringify(record) + '\n');
   } catch { /* disk failure must not prevent gate execution */ }
 }
-function workerHook(hook, raw, timeoutMs, options) {
-  return new Promise(resolve => {
-    let stdout = '', stderr = '', result, settled = false, timedOut = false;
-    const children = new Set();
-    const worker = new Worker(new URL('./hook-dispatch-worker.mjs', import.meta.url), {
-      workerData: { hook, raw, deadline: Date.now() + timeoutMs }, stdout: true, stderr: true,
-      env: options.env || process.env, execArgv: [],
-    });
-    const finish = value => {
-      if (settled) return; settled = true; clearTimeout(timer);
-      resolve(value);
-    };
-    // Bound output as well as time, preventing a broken hook from exhausting RAM.
-    const collect = (stream, chunk) => {
-      if (stream === 'stdout') stdout = (stdout + chunk).slice(-4 * 1024 * 1024);
-      else stderr = (stderr + chunk).slice(-65536);
-    };
-    worker.stdout.on('data', chunk => collect('stdout', chunk));
-    worker.stderr.on('data', chunk => collect('stderr', chunk));
-    worker.on('message', message => {
-      if (message.deadlineHit) expire();
-      if (message.childSpawn) options.onWorkerSpawn?.(message.childSpawn, hook);
-      if (message.childPid) children.add(message.childPid);
-      if (message.childClosed) children.delete(message.childClosed);
-      if (message.stream) collect(message.stream, message.text);
-      if (message.result) result = message.result;
-    });
-    worker.once('error', error => { stderr += error.message; });
-    const timeoutResult = () => {
-      const contextComplete = hook.name === 'kim-inbox.mjs' && Boolean(parseOutput(stdout)?.hookSpecificOutput?.additionalContext);
-      return { status: 0, stdout: contextComplete ? stdout : '', stderr: '', timedOut: true, contextComplete };
-    };
-    worker.once('exit', status => finish(timedOut ? timeoutResult() : result || { status, stdout, stderr }));
-    const expire = () => {
-      // Preserve only a complete inbox context emitted before bookkeeping; partial gate outputs remain discarded.
-      timedOut = true;
-      for (const pid of children) { try { process.kill(pid, 'SIGKILL'); } catch {} }
-      worker.unref();
-      void worker.terminate();
-      finish(timeoutResult());
-    };
-    const timer = setTimeout(expire, timeoutMs);
-  });
+// Leave time for metrics, output and isolate shutdown before the CLI timeout.
+function dispatchBudgetMs(home, event, manifest) {
+  let seconds = Math.max(1, ...(manifest.events[event] || []).map(h => Number(h.timeout) || 10)) + 10;
+  try {
+    const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude/settings.json'), 'utf8'));
+    for (const hook of (settings.hooks?.[event] || []).flatMap(g => g.hooks || [])) {
+      if (isDispatcher(hook) && tokens(hook.command).at(-1) === event && Number(hook.timeout) > 0) {
+        seconds = Math.min(seconds, Number(hook.timeout));
+      }
+    }
+  } catch { /* isolated calls use the same default as collapseHooks */ }
+  return seconds * 1000 - Math.min(1000, seconds * 100);
+}
+function workerSlot(options) {
+  let worker, current, retired = false;
+  const children = new Set();
+  const retire = () => {
+    retired = true;
+    for (const pid of children) { try { process.kill(pid, 'SIGKILL'); } catch {} }
+    children.clear();
+    if (worker) { worker.unref(); void worker.terminate(); }
+  };
+  // kim-inbox pushes its context before persisting shown-state, so it can stall
+  // after a complete delivery. A timed-out gate that already emitted an intact
+  // context keeps it for mergeResults; partial output stays discarded (#1621).
+  const timeoutResult = () => {
+    const hook = current?.hook;
+    const contextComplete = hook?.name === 'kim-inbox.mjs'
+      && Boolean(hook?.node && parseOutput(current?.stdout || '')?.hookSpecificOutput?.additionalContext);
+    return { status: 0, stdout: contextComplete ? current.stdout : '', stderr: '', timedOut: true, contextComplete };
+  };
+  return {
+    get retired() { return retired; },
+    close: retire,
+    run(hook, raw, timeoutMs) {
+      if (retired) throw new Error('worker retired');
+      return new Promise(resolve => {
+        const id = randomUUID();
+        const finish = result => {
+          if (current?.id !== id) return;
+          clearTimeout(current.timer); current = null;
+          resolve(result);
+        };
+        // Streamed task-local writes accumulate here so the timeout decision can
+        // see a completed context even after the isolate is wedged.
+        current = { id, hook, stdout: '', finish, timer: setTimeout(() => {
+          const result = timeoutResult();
+          retire();
+          finish(result);
+        }, timeoutMs) };
+        if (!worker) {
+          try {
+            worker = new Worker(new URL('./hook-dispatch-worker.mjs', import.meta.url), {
+              workerData: { pool: true }, stdout: true, stderr: true,
+              env: options.env || process.env, execArgv: [],
+            });
+          } catch (error) {
+            retire(); finish({ status: 1, stdout: '', stderr: error.message }); return;
+          }
+          options.onWorkerCreated?.();
+          // Hooks use the bounded, task-local capture in the worker. Drain any
+          // runtime diagnostics without mixing them with another hook's JSON.
+          worker.stdout.resume(); worker.stderr.resume();
+          worker.on('message', message => {
+            if (message.id !== current?.id) return;
+            if (message.stream) { current.stdout = (current.stdout + String(message.text)).slice(-4 * 1024 * 1024); return; }
+            if (message.childSpawn) options.onWorkerSpawn?.(message.childSpawn, current.hook);
+            if (message.childPid) children.add(message.childPid);
+            if (message.childClosed) children.delete(message.childClosed);
+            if (message.deadlineHit) {
+              if (typeof message.stdout === 'string') current.stdout = message.stdout;
+              const result = timeoutResult();
+              retire();
+              current.finish(result);
+            } else if (message.result) {
+              children.clear(); current.finish(message.result);
+            }
+          });
+          worker.once('error', error => {
+            retire(); current?.finish({ status: 1, stdout: '', stderr: error.message });
+          });
+          worker.once('exit', status => {
+            retired = true;
+            current?.finish({ status: status || 1, stdout: '', stderr: 'worker exited before completing hook' });
+          });
+        }
+        worker.postMessage({ id, hook, raw, deadline: Date.now() + timeoutMs });
+      });
+    },
+  };
 }
 function externalHook(hook, raw, timeoutMs, options) {
   return new Promise(resolve => {
@@ -164,7 +211,7 @@ export async function dispatch(event, raw, options = {}) {
   const home = options.home || process.env.ORGIAST_HOME || os.homedir();
   let input;
   try {
-    input = JSON.parse(String(raw).replace(/^\uFEFF/, ''));
+    input = JSON.parse(String(raw).replace(/^﻿/, ''));
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('not an object');
   } catch {
     const metrics = { at: new Date().toISOString(), event, durationMs: 0, childProcesses: 0, timedOut: 0, skipped: 0, hooks: [], inputError: 'invalid-json' };
@@ -173,8 +220,8 @@ export async function dispatch(event, raw, options = {}) {
   }
   // The CLI event is authoritative, even if a client omitted hook_event_name.
   raw = JSON.stringify({ ...input, hook_event_name: event });
-  const manifest = options.manifest || readDispatchManifest(home, options.repo || defaultRepo);
   const start = Date.now();
+  const manifest = options.manifest || readDispatchManifest(home, options.repo || defaultRepo);
   const lease = acquireLoadLease(home, options.loadOptions);
   const overloaded = options.overloaded ?? lease.overloaded;
   const selected = (manifest.events[event] || []).filter(h => matches(h.matcher, event, input));
@@ -182,31 +229,67 @@ export async function dispatch(event, raw, options = {}) {
   // Durable inbox delivery must not be shed or expire while waiting for other hooks.
   for (const hook of selected) if (hook.name === 'kim-inbox.mjs') hook.critical = true;
   const queue = selected.map((hook, i) => ({ hook, i })).sort((a, b) => Number(b.hook.name === 'kim-inbox.mjs') - Number(a.hook.name === 'kim-inbox.mjs') || Number(b.hook.critical) - Number(a.hook.critical));
-  let childProcesses = 0;
-  const execute = options.execute || ((hook, body, timeout) => hook.node ? workerHook(hook, body, timeout, { ...options, onWorkerSpawn: (...args) => { childProcesses++; options.onWorkerSpawn?.(...args); } })
-    : externalHook(hook, body, timeout, { ...options, onSpawn: (...args) => { childProcesses++; options.onSpawn?.(...args); } }));
-  const consume = async () => {
-    while (queue.length) {
-      const { hook, i } = queue.shift(), began = Date.now();
+  let childProcesses = 0, workersCreated = 0;
+  // Most hooks are short. Reserve CPUs for the client and other sessions instead
+  // of multiplying V8/module startup costs on every logical processor.
+  const poolSize = Math.max(1, Math.min(8, Math.floor(Number(options.concurrency) || Math.max(4, Math.ceil(os.availableParallelism() / 4)))));
+  const slots = [];
+  const deadline = start + (options.budgetMs ?? dispatchBudgetMs(home, event, manifest));
+  const unavailable = (hook, why) => hook.critical
+    ? { status: 0, stdout: '', stderr: '', criticalUnfinished: why }
+    : { status: 0, skipped: why };
+  const save = (item, result, began) => {
+    results[item.i] = { ...result, name: item.hook.name, critical: !!item.hook.critical, durationMs: Date.now() - began, queueMs: began - start };
+  };
+  const consume = async (pending, slot, external = false) => {
+    while (pending.length && !slot?.retired) {
+      const item = pending.shift(), { hook } = item, began = Date.now();
       let result;
       if (overloaded && !hook.critical) result = { status: 0, skipped: 'load-shed' };
+      else if (began >= deadline) result = unavailable(hook, 'dispatch-budget');
       else {
-        const remaining = (Number(hook.timeout) || 10) * 1000 - (hook.name === 'kim-inbox.mjs' ? 0 : began - start);
-        if (remaining <= 0) result = { status: 0, timedOut: true, queued: true };
-        else { try { result = await execute(hook, raw, remaining); } catch (e) { result = { status: 1, error: e.message }; } }
+        // Queue time never consumes the hook's own budget. A separate event
+        // deadline keeps us inside settings.json; unfinished gates pass with metrics.
+        const timeout = Math.min((Number(hook.timeout) || 10) * 1000, deadline - began);
+        try {
+          result = options.execute ? await options.execute(hook, raw, timeout)
+            : external ? await externalHook(hook, raw, timeout, { ...options, onSpawn: (...args) => { childProcesses++; options.onSpawn?.(...args); } })
+              : await slot.run(hook, raw, timeout);
+          if (hook.critical && (result.timedOut || ![0, 2].includes(result.status))) {
+            // A timed-out kim-inbox gate that already completed its context keeps
+            // the delivery; only the unfinished reason is recorded.
+            result = result.contextComplete
+              ? { ...result, criticalUnfinished: result.timedOut ? 'hook-timeout' : 'hook-error' }
+              : { ...result, ...unavailable(hook, result.timedOut ? 'hook-timeout' : 'hook-error') };
+          }
+        } catch (e) { result = hook.critical ? { ...unavailable(hook, 'hook-error'), error: e.message } : { status: 1, error: e.message }; }
       }
-      results[i] = { ...result, name: hook.name, durationMs: Date.now() - began, queueMs: began - start };
+      save(item, result, began);
     }
   };
   try {
-    const concurrency = Math.max(1, Math.min(4, Math.floor(Number(options.concurrency) || 4)));
-    await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, consume));
+    const nodeQueue = options.execute ? queue : queue.filter(item => item.hook.node);
+    const externalQueue = options.execute ? [] : queue.filter(item => !item.hook.node);
+    const consumers = Array.from({ length: Math.min(poolSize, nodeQueue.length) }, () => {
+      const slot = options.execute ? null : workerSlot({ ...options,
+        onWorkerCreated() { workersCreated++; options.onWorkerCreated?.(); },
+        onWorkerSpawn(...args) { childProcesses++; options.onWorkerSpawn?.(...args); },
+      });
+      if (slot) slots.push(slot);
+      return consume(nodeQueue, slot);
+    });
+    consumers.push(...Array.from({ length: Math.min(4, poolSize, externalQueue.length) }, () => consume(externalQueue, null, true)));
+    await Promise.all(consumers);
+    // Retired workers are never replaced: even a set of hanging hooks cannot
+    // cause unbounded isolate creation. Healthy workers drain the remaining queue.
+    for (const item of nodeQueue) save(item, unavailable(item.hook, Date.now() >= deadline ? 'dispatch-budget' : 'hook-error'), Date.now());
     const record = { at: new Date(start).toISOString(), event, durationMs: Date.now() - start, overloaded, active: lease.active,
-      childProcesses, timedOut: results.filter(r => r.timedOut).length, skipped: results.filter(r => r.skipped).length,
-      hooks: results.map(({ name, durationMs, queueMs, timedOut, skipped, status, error }) => ({ name, durationMs, queueMs, timedOut: !!timedOut, skipped, status, error })) };
+      childProcesses, workersCreated, poolSize, budgetMs: deadline - start,
+      timedOut: results.filter(r => r.timedOut).length, skipped: results.filter(r => r.skipped).length,
+      hooks: results.map(({ name, critical, durationMs, queueMs, timedOut, skipped, status, error, criticalUnfinished }) => ({ name, critical, durationMs, queueMs, timedOut: !!timedOut, skipped, status, error, criticalUnfinished })) };
     appendMetrics(home, record);
     return { ...mergeResults(event, results), metrics: record, results };
-  } finally { lease.release(); }
+  } finally { for (const slot of slots) slot.close(); lease.release(); }
 }
 export async function hookMain(raw, event = process.argv[2]) {
   const result = await dispatch(event, raw);

@@ -54,8 +54,8 @@ export function collapseHooks(hooks, repo = defaultRepo) {
       }
       if (asynchronous.length) asyncGroups.push({ ...group, hooks: asynchronous });
     }
-    // All hook deadlines start at dispatch admission, including queue time. The
-    // OS never needs to kill the entire dispatcher just to stop one slow hook.
+    // Each hook gets its own execution budget; the dispatcher separately enforces
+    // this event timeout with a margin for output and Worker shutdown.
     const timeout = Math.max(1, ...events[event].map(h => Number(h.timeout) || 10)) + 10;
     settingsHooks[event] = [{ matcher: '*', hooks: [{ type: 'command', command: `node "${path.join(repo, 'tools/hook-dispatch.mjs')}" ${event}`, timeout }] }, ...asyncGroups];
   }

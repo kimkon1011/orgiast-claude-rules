@@ -8,6 +8,7 @@ import { currentTurnEntries, blocks } from './state-claim-evidence.mjs';
 import { isLandingDeferral } from './permanent-fix-deferral-scan.mjs';
 import { ledgerFile, readLedger, latestOpenPromises } from './auto-progress-ledger.mjs';
 import { classifyHandoff } from './lib/handoff-kind.mjs';
+import { judgeBgTurnReport } from './bg-turn-report-gate.mjs';
 
 export const MIN_ENFORCED_LENGTH = 200;
 const FOOTER_PATTERN = /(?:^|\n)次に kim がすること:[ \t]*([^\r\n]*)\r?\n(?:[ \t]*\r?\n)?この後の自動進行:[ \t]*([^\r\n]*)\r?\n(?:[ \t]*\r?\n)?このセッション:[ \t]*([^\r\n]*)$/;
@@ -376,6 +377,11 @@ function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {
 // for ordered/stateful checks; this supplement prevents label/back-reference/approval/open-action
 // defects from being revealed one Stop retry at a time.
 export function judgeNextAction(text, transcriptRaw = '', input = {}, options = {}) {
+  if (input.stop_hook_active) return { decision: 'pass', reason: 'stop-hook-active' };
+  if (enabled()) {
+    const background = judgeBgTurnReport(transcriptRaw, input);
+    if (background.decision === 'block') return background;
+  }
   const primary = judgeNextActionSingle(text, transcriptRaw, input, options);
   if (primary.decision !== 'block') return primary;
   const source = String(text || '').trimEnd();
@@ -409,7 +415,6 @@ async function main() {
     if (input?.stop_hook_active) return;
     const context = readTranscriptContext(input?.transcript_path);
     const assistantText = input?.assistant_text || context.assistantText;
-    if (!assistantText) return;
     const result = judgeNextAction(assistantText, context.raw, input);
     if (result.decision === 'block') process.stdout.write(`${JSON.stringify({ decision: 'block', reason: result.reason })}\n`);
   } catch { /* ゲート自身の失敗で応答を止めない。 */ }

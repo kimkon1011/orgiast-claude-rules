@@ -3,13 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { run, options, execute, main, resumedParentId } from './stalled-session-resume.mjs';
+import { run, options, execute, main, resumedParentId, saveJson } from './stalled-session-resume.mjs';
 import { buildClaudeHeadlessArgs } from './auto-session-executor.mjs';
 
 async function fixture(t, count = 5) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'stalled-test-'));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
-  let time = new Date('2026-09-24T03:00:00Z').getTime();
+  let time = new Date(2026, 8, 24, 3).getTime();
   let calls = 0, notices = 0;
   const records = Array.from({ length: count }, (_, i) => ({ sessionId: `session-${i}`, displayTitle: `Task ${i}`, file: `file-${i}`, cwd: home, status: '要対応', score: 100 - i, ageDays: 1 }));
   const io = { home, now: () => time, detect: async () => records, stat: async () => ({ mtimeMs: time - 86400000 }),
@@ -17,29 +17,67 @@ async function fixture(t, count = 5) {
   const file = path.join(home, '.claude/stalled-session-resume.json');
   return { io, file, records, next: () => { time += 86400000; }, calls: () => calls, notices: () => notices, ledger: async () => JSON.parse(await fs.readFile(file, 'utf8')) };
 }
+test('saveJson retries two EPERM failures and uses unique temporary files', async t => {
+  const f = await fixture(t, 0);
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  await fs.writeFile(f.file, JSON.stringify({ old: true }));
+  const sources = []; let calls = 0;
+  await saveJson(f.file, { saved: true }, async (source, destination) => {
+    sources.push(source);
+    if (++calls <= 2) {
+      assert.deepEqual(await f.ledger(), { old: true });
+      throw Object.assign(new Error('reader busy'), { code: 'EPERM' });
+    }
+    await fs.rename(source, destination);
+  });
+  assert.equal(calls, 3);
+  assert.equal(new Set(sources).size, 1);
+  assert.deepEqual(await f.ledger(), { saved: true });
+  await saveJson(f.file, { saved: 'again' }, async (source, destination) => {
+    assert.notEqual(source, sources[0]);
+    await fs.rename(source, destination);
+  });
+  assert.deepEqual(await f.ledger(), { saved: 'again' });
+  assert.deepEqual(await fs.readdir(path.dirname(f.file)), [path.basename(f.file)]);
+});
+test('saveJson cleans up and preserves the original error when rename fails', async t => {
+  const f = await fixture(t, 0);
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  await fs.writeFile(f.file, JSON.stringify({ old: true }));
+  for (const code of ['EBUSY', 'ENOENT']) {
+    let calls = 0;
+    const failure = Object.assign(new Error('rename failed'), { code });
+    await assert.rejects(saveJson(f.file, { saved: true }, async () => {
+      calls++; throw failure;
+    }), error => error === failure);
+    assert.equal(calls, code === 'EBUSY' ? 8 : 1);
+    assert.deepEqual(await f.ledger(), { old: true });
+    assert.deepEqual(await fs.readdir(path.dirname(f.file)), [path.basename(f.file)]);
+  }
+});
 test('0 stalled: no execution or notification', async t => {
   const f = await fixture(t, 0); await run(options([], {}), f.io); assert.equal(f.calls(), 0); assert.equal(f.notices(), 0);
 });
 test('nightly limit is enforced across repeated invocations', async t => {
-  const f = await fixture(t); await run(options([], {}), f.io); await run(options([], {}), f.io); assert.equal(f.calls(), 3); assert.equal(f.notices(), 1);
+  const f = await fixture(t); await run(options(['--limit', '3'], {}), f.io); await run(options(['--limit', '3'], {}), f.io); assert.equal(f.calls(), 3); assert.equal(f.notices(), 2);
 });
 test('three attempts without progress persist skip reason', async t => {
   const f = await fixture(t, 1);
   for (let i = 0; i < 4; i++) { await run(options([], {}), f.io); f.next(); }
   assert.equal(f.calls(), 3); assert.equal((await f.ledger()).sessions['session-0'].skipReason, '3回進捗なし');
 });
-test('two consecutive errors abort night, including subsequent invocations', async t => {
+test('three consecutive errors abort night, including subsequent invocations', async t => {
   const f = await fixture(t); let calls = 0, message;
   f.io.execute = async () => { calls++; throw new Error('fixture error'); };
   f.io.notify = async s => { message = s; };
   assert.equal((await run(options([], {}), f.io)).aborted, true);
-  await run(options([], {}), f.io); assert.equal(calls, 2); assert.match(message, /連続2件エラー/);
+  await run(options([], {}), f.io); assert.equal(calls, 3); assert.match(message, /連続3件エラー/);
 });
-test('no executor stops the night without error, notice, or consuming budget', async t => {
+test('no executor stops the night without error or consuming budget', async t => {
   const f = await fixture(t); let calls = 0;
   f.io.execute = async () => { calls++; return { outcome: 'no-executor', reason: '実行役なし: cheap-code/deepseek exit 3' }; };
   const r = await run(options([], {}), f.io);
-  assert.equal(calls, 1); assert.equal(r.aborted, false); assert.equal(r.results.length, 0); assert.equal(f.notices(), 0);
+  assert.equal(calls, 1); assert.equal(r.aborted, false); assert.equal(r.results.length, 0); assert.equal(f.notices(), 1);
   assert.match(r.noExecutor, /deepseek exit 3/);
   const ledger = await f.ledger();
   assert.deepEqual(ledger.sessions['session-0'].attempts, []); assert.equal(ledger.sessions['session-0'].noProgress, 0);
@@ -60,12 +98,12 @@ test('dry-run and list leave ledger byte-for-byte unchanged', async t => {
   const f = await fixture(t); await run(options([], {}), f.io);
   const before = await fs.readFile(f.file, 'utf8'); f.next();
   await run(options(['--dry-run'], {}), f.io); await run(options(['--list'], {}), f.io);
-  assert.equal(await fs.readFile(f.file, 'utf8'), before); assert.equal(f.calls(), 3);
+  assert.equal(await fs.readFile(f.file, 'utf8'), before); assert.equal(f.calls(), 5);
 });
-test('closed and auto-close eligible sessions excluded', async t => {
+test('closed sessions excluded but seven-day-old sessions resumed', async t => {
   const f = await fixture(t, 2); f.io.loadClosed = async () => ({ sessions: { 'session-0': {} } });
   f.io.stat = async () => ({ mtimeMs: f.io.now() - 7 * 86400000 });
-  const r = await run(options([], {}), f.io); assert.deepEqual(r.rows.map(r => r.skip), ['closed', 'session-auto-close対象']); assert.equal(f.calls(), 0);
+  const r = await run(options([], {}), f.io); assert.deepEqual(r.rows.map(r => r.skip), ['closed', '']); assert.equal(f.calls(), 1);
 });
 test('closable sessions are not resumed', async t => {
   const f = await fixture(t, 2);
@@ -182,8 +220,122 @@ test('progress on a chain child resets the shared budget', async t => {
 });
 test('nightly order and converge repair are wired', async () => {
   const batch = await fs.readFile(new URL('./nightly-batch.ps1', import.meta.url), 'utf8');
-  assert.match(batch, /session-triage\.mjs[\s\S]*?if \(\$triageExit -eq 0\)[\s\S]*?stalled-session-resume\.mjs/);
+  assert.match(batch, /Write-NightlyLog 'stalled-session-resume' 'moved:OrgiastStalledSessionSweep'/);
+  assert.doesNotMatch(batch, /stalled-session-resume\.mjs/);
   const manifest = JSON.parse(await fs.readFile(new URL('./setup-manifest.json', import.meta.url), 'utf8'));
   assert.deepEqual(manifest.items.find(i => i.id === 'task:nightly').repair, ['register-stalled-session-nightly.mjs']);
   assert.deepEqual(manifest.items.find(i => i.id === 'tool:stalled-session-resume').repair, ['onboarding-sync.mjs', '--force']);
+});
+
+test('unlimited defaults, all and numeric limits; concurrency and deadline validation', async t => {
+  assert.equal(options([], {}).limit, Infinity);
+  assert.equal(options(['--limit', 'all'], {}).limit, Infinity);
+  assert.equal(options([], { STALLED_SESSION_LIMIT: '4' }).limit, 4);
+  assert.equal(options([], { STALLED_SESSION_CONCURRENCY: '3', STALLED_SESSION_DEADLINE: '06:15' }).concurrency, 3);
+  for (const args of [['--concurrency', '0'], ['--concurrency', '1.5'], ['--deadline', '24:00'], ['--deadline'], ['--limit', 'Infinity']]) assert.throws(() => options(args, {}));
+  const f = await fixture(t, 8); await run(options([], {}), f.io); assert.equal(f.calls(), 8);
+});
+
+test('deadline stops new launches and next night prioritizes unattempted sessions', async t => {
+  const f = await fixture(t, 4); let time = f.io.now(); const started = [];
+  f.io.now = () => time;
+  f.io.execute = async record => { started.push(record.sessionId); time += 5 * 3600000; return { outcome: 'progressed' }; };
+  const r = await run(options([], {}), f.io);
+  assert.equal(r.results.length, 1);
+  assert.equal(r.rows.filter(row => row.skip === '締切超過(翌晩へ)').length, 3);
+  time = new Date(2026, 8, 25, 3).getTime();
+  await run(options(['--limit', '1'], {}), f.io);
+  assert.deepEqual(started, ['session-0', 'session-1']);
+});
+
+test('fair order uses oldest last night then score and age', async t => {
+  const f = await fixture(t, 4);
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  await fs.writeFile(f.file, JSON.stringify({ version: 1, nights: {}, sessions: {
+    'session-0': { attempts: [{ night: '2026-09-23' }], noProgress: 0 },
+    'session-1': { attempts: [{ night: '2026-09-22' }], noProgress: 0 }
+  } }));
+  f.records[2].score = f.records[3].score; f.records[2].ageDays = 2;
+  const r = await run(options(['--list'], {}), f.io);
+  assert.deepEqual(r.rows.map(r => r.sessionId), ['session-3', 'session-2', 'session-1', 'session-0']);
+});
+
+test('parallel execution excludes shared cwd and persists attempts before launch', async t => {
+  const f = await fixture(t, 4); f.records[2].cwd = path.join(f.io.home, 'other');
+  const active = new Set(); let max = 0;
+  f.io.execute = async record => {
+    assert.ok(!active.has(record.cwd)); active.add(record.cwd); max = Math.max(max, active.size);
+    assert.equal((await f.ledger()).sessions[record.sessionId].attempts.at(-1).outcome, 'interrupted');
+    await new Promise(resolve => setTimeout(resolve, 20)); active.delete(record.cwd);
+    return { outcome: 'progressed' };
+  };
+  const r = await run(options([], {}), f.io);
+  assert.equal(max, 2); assert.equal(r.results.length, 4); assert.equal((await f.ledger()).nights['2026-09-24'].count, 4);
+});
+
+test('no executor prevents further launches and waits for running children', async t => {
+  const f = await fixture(t, 4); f.records.forEach((r, i) => { r.cwd = path.join(f.io.home, String(i)); });
+  const started = []; let release, entered;
+  const both = new Promise(resolve => { entered = resolve; });
+  f.io.execute = async record => {
+    started.push(record.sessionId);
+    if (record.sessionId === 'session-0') { await both; return { outcome: 'no-executor', reason: 'offline' }; }
+    entered(); await new Promise(resolve => { release = resolve; }); return { outcome: 'progressed' };
+  };
+  const running = run(options([], {}), f.io);
+  await both; await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(started.length, 2); release();
+  const r = await running; assert.equal(r.results.length, 1); assert.equal(started.length, 2);
+  assert.equal((await f.ledger()).sessions['session-0'].attempts.length, 0);
+});
+
+test('zero results still report retired sessions, excluding closed, at most twenty', async t => {
+  const f = await fixture(t, 25); let message;
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  await fs.writeFile(f.file, JSON.stringify({ version: 1, nights: {}, sessions: Object.fromEntries(f.records.map(r => [r.sessionId, { title: r.displayTitle, attempts: [], noProgress: 3 }])) }));
+  f.io.loadClosed = async () => ({ sessions: { 'session-0': {} } });
+  f.io.notify = async value => { message = value; };
+  const r = await run(options([], {}), f.io);
+  assert.equal(r.results.length, 0); assert.match(message, /確認 0件.*停止中 24/);
+  assert.match(message, /自動では進められないので kim の判断待ち/);
+  assert.equal((message.match(/Task \d+ \(session-\d+\)/g) ?? []).length, 20);
+  assert.doesNotMatch(message, /\(session-0\)/);
+});
+
+test('dedicated sweep registration and required converge manifest', async () => {
+  const ps = await fs.readFile(new URL('./register-stalled-session-nightly.ps1', import.meta.url), 'utf8');
+  for (const name of ['OrgiastNightlyBatch', 'OrgiastStalledSessionSweep']) {
+    assert.ok(ps.includes(`Register-ScheduledTask -TaskName '${name}'`));
+    assert.ok(ps.includes(`Get-ScheduledTask -TaskName '${name}'`));
+  }
+  assert.match(ps, /Get-Command node -CommandType Application.*Where-Object Extension -eq '\.exe'.*\.Source/);
+  assert.ok(ps.includes("if (-not $node) { throw 'node.exe not found' }"));
+  assert.ok(ps.includes("$sweepScript = Join-Path $repo 'tools\\stalled-session-resume.mjs'"));
+  assert.match(ps, /& \$node --check \$sweepScript\s+if \(\$LASTEXITCODE -ne 0\) \{ throw "node --check failed: \$sweepScript" \}/);
+  assert.ok(ps.indexOf('& $node --check $sweepScript') < ps.indexOf('Register-ScheduledTask'));
+  assert.match(ps, /New-HiddenScheduledTaskAction -Execute \$node -ChildArgument @\(\$sweepScript\) -WorkingDirectory \$repo/);
+  assert.match(ps, /-At 3:05am -RandomDelay \(New-TimeSpan -Minutes 2\)/);
+  assert.match(ps, /-StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit \(New-TimeSpan -Hours 5\)/);
+  const manifest = JSON.parse(await fs.readFile(new URL('./setup-manifest.json', import.meta.url), 'utf8'));
+  const sweep = manifest.items.find(i => i.id === 'task:stalled-session-sweep');
+  assert.equal(sweep.severity, 'required'); assert.equal(sweep.type, 'scheduled-task');
+  assert.deepEqual(sweep.spec, { requireActionTarget: true, maxRunAgeHours: 50, name: 'OrgiastStalledSessionSweep' });
+  assert.deepEqual(sweep.repair, ['register-stalled-session-nightly.mjs']);
+});
+
+test('three errors in completion order stop launches even if an in-flight child later progresses', async t => {
+  const f = await fixture(t, 7); const started = []; const resolvers = new Map();
+  f.records.forEach((r, i) => { r.cwd = path.join(f.io.home, String(i)); });
+  const waitFor = async n => { for (let i = 0; started.length < n && i < 200; i++) await new Promise(r => setTimeout(r, 5)); assert.equal(started.length, n); };
+  f.io.execute = record => { started.push(record.sessionId); return new Promise(resolve => resolvers.set(record.sessionId, resolve)); };
+  const running = run(options(['--concurrency', '4'], {}), f.io);
+  await waitFor(4);
+  for (const id of ['session-2', 'session-1', 'session-0']) {
+    resolvers.get(id)({ outcome: 'error' });
+  }
+  await new Promise(r => setTimeout(r, 30));
+  resolvers.get('session-3')({ outcome: 'progressed' });
+  const result = await running;
+  assert.equal(result.aborted, true); assert.equal(started.length, 4);
+  assert.deepEqual(result.results.map(r => r.sessionId), ['session-2', 'session-1', 'session-0', 'session-3']);
 });

@@ -7,10 +7,10 @@ import { spawnSync } from 'node:child_process';
 import { judge } from './seat-name-gate.mjs';
 import { rolloutMode } from './gate-runtime.mjs';
 const map = { desk: { hostname: 'DELL', remoteName: '作業用014' }, old: { hostname: 'DESKTOP-BDOAK99', remoteName: '作業用999' } };
-for (const text of ['DELL 席', 'DELL PC', 'DELLのPC', 'DELL側', 'desk の状態', 'DESKTOP-BDOAK99', 'DESKTOP-ZZZZ999', '作業用0140（DELL 席）', '作業用999\nDESKTOP-BDOAK99']) test(`SEAT-NAME denies ${text}`, () => {
+for (const text of ['DELL 席', 'DELL PC', 'DELLのPC', 'DELL側', 'DELL の Codex ログインをお願いします', 'DELL（seisaku-team@）で確認', '作業用014 は DELL です', 'desk の状態', 'DESKTOP-BDOAK99', 'DESKTOP-ZZZZ999', '作業用0140（DELL 席）', '作業用999\nDESKTOP-BDOAK99']) test(`SEAT-NAME denies ${text}`, () => {
   assert.deepEqual(judge(text, map).reasonCodes, ['SEAT-NAME']);
 });
-for (const text of ['作業用014（hostname: DELL）', '作業用014（DELL 席）', '作業用999（DESKTOP-BDOAK99）', '番号未登録の席（hostname: DESKTOP-ZZZZ999）', 'Dell のモニタ', 'DELL P2422H', 'MYDELL 席', '```text\nDESKTOP-BDOAK99\n```', '~~~\nDESKTOP-ZZZZ999\n~~~', '`DELL 席`', 'https://example.com/DESKTOP-ZZZZ999', 'DELL 席 [SEAT-NAME-OK: 証跡]', 'DESKTOP-ZZZZ999X']) test(`allows ${text}`, () => assert.equal(judge(text, map).decision, 'pass'));
+for (const text of ['作業用014（hostname: DELL）', '作業用014（DELL 席）', '作業用999（DESKTOP-BDOAK99）', '番号未登録の席（hostname: DESKTOP-ZZZZ999）', 'Dell のモニタ', 'DELL P2422H', 'MYDELL 席', '```text\nDESKTOP-BDOAK99\n```', '~~~\nDESKTOP-ZZZZ999\n~~~', '`DELL 席`', 'https://example.com/DESKTOP-ZZZZ999', 'DELL 席 [SEAT-NAME-OK: 証跡]', 'DELL です [SEAT-NAME-OK: 製品名]', 'DESKTOP-ZZZZ999X']) test(`allows ${text}`, () => assert.equal(judge(text, map).decision, 'pass'));
 test('DELL must be registered as hostname and remedy names assigned seat', () => {
   assert.equal(judge('DELL 席', {}).decision, 'pass');
   assert.equal(judge('DELL 席', { DELL: { remoteName: '作業用014' } }).decision, 'pass');

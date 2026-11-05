@@ -319,3 +319,9 @@ PR のマージを人に頼む文（本文の「次に kim がすること」・
 - 全手段が失敗した場合は `[DRIVE-UPLOAD-FAILED: <20字以上の実際のエラー本文>]` を記載する。
 
 SendUserFile、コードブロック内のローカルパス、チャット添付だけでは完了しない。形式ゲートの降格・一般 retry cap・close-steps より先に判定する。専用状態ファイルでセッションごとの連続 block を数え、3回後の4回目だけ警告付き pass（台帳 verdict: `deliverable-cap`）とする。合格または上限通過で連続数をリセットする。
+
+## bg-turn-report-gate
+
+バックグラウンド完了通知の後は、成功／失敗とその証拠、次の自動進行を本文に書く。同じ通知ターン内で `node tools/notify-kim.mjs --kind info "<結果・証拠・次の自動進行>"` を実行し、`delivered: "session-inbox"`・`id`・`kind: "info"` の成功応答を確認する。直前の人の入力から10分以内は inbox 保存のみ免除される。`stop_hook_active` が真なら再ブロックしない。
+
+`setup --converge` は既存の `stop-gate-runner.mjs` を登録し、その `next-action-gate.mjs` から本ゲートを呼ぶため、独立した Stop フックは登録しない。実体は tools ディレクトリの配布に含まれる。

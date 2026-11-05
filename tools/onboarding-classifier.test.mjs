@@ -31,6 +31,7 @@ test('索引は日付付き由来だけを圧縮し、規約と通常の括弧�
 
 function assertIndexRules(index) {
   for (const pattern of INDEX_PROTECTED) assert.match(index, pattern);
+  assert.match(index, /今日やること・要対応・未返信は全チャネルで済みか照会。済みを除外し、照会経路・未確認理由を明記。userには人にしか決められない判断だけ残す/);
   assert.match(index, /1\.20 auto mode classifier/);
   assert.doesNotMatch(index, /丸1日|1-00:57|コマンド置換として実行/);
 }

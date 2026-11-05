@@ -1,9 +1,17 @@
 #!/usr/bin/env node
-// Read-only: EXAMINE + BODY.PEEK, Gmail metadata GET only. Never log server errors or credentials.
+// Mail is read-only; only the manual ledger is written. EXAMINE + BODY.PEEK, Gmail metadata GET only. Never log server errors or credentials.
 import tls from 'node:tls';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
+// Manual CLI (never connects to mail):
+// --add --who <name> --channel <LINE|電話|FAX|対面|メール> --sent YYYY-MM-DD
+//   --subject <text> [--note <text>] [--stale-days N] [--reading <romaji/kana>]
+// --done <id> / --list-manual (all waiting entries, including those not yet stale)
+// --ledger <file> overrides ORGIAST_HOME/.claude/reply-waiting.json.
+// Default scan includes only stale entries. Omitted entry thresholds follow --stale-days.
 const DAY = 86_400_000;
 // Automated destinations and list/robot headers do not represent a human reply obligation.
 export const EXCLUDED_ADDRESSES = /(?:no[._-]?reply|notification|mailer-daemon|postmaster|newsletter|do[._-]?not[._-]?reply)/i;
@@ -89,13 +97,21 @@ export function parseOptions(args) {
   const options = { staleDays: 7, daysBack: 180, json: false, skipGmail: false, skipYahoo: false };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (['--json', '--skip-gmail', '--skip-yahoo'].includes(arg)) options[{ '--json': 'json', '--skip-gmail': 'skipGmail', '--skip-yahoo': 'skipYahoo' }[arg]] = true;
+    if (['--add', '--list-manual'].includes(arg)) options[arg === '--add' ? 'add' : 'listManual'] = true;
+    else if (['--who', '--channel', '--sent', '--subject', '--note', '--done', '--ledger', '--reading'].includes(arg)) {
+      const value = args[++i];
+      if (!value || value.startsWith('--')) throw new Error('オプションの値が必要です');
+      options[arg.slice(2)] = value;
+    }
+    else if (['--json', '--skip-gmail', '--skip-yahoo'].includes(arg)) options[{ '--json': 'json', '--skip-gmail': 'skipGmail', '--skip-yahoo': 'skipYahoo' }[arg]] = true;
     else if (arg === '--stale-days' || arg === '--days-back') {
       const value = Number(args[++i]);
       if (!Number.isSafeInteger(value) || value < (arg === '--days-back' ? 1 : 0)) throw new Error('日数には有効な整数を指定してください');
       options[arg === '--stale-days' ? 'staleDays' : 'daysBack'] = value;
     } else throw new Error('不明なオプションです');
   }
+  if ([options.add, options.done, options.listManual].filter(Boolean).length > 1) throw new Error('操作は一つだけ指定してください');
+  if (!options.add && ['who', 'channel', 'sent', 'subject', 'note', 'reading'].some(key => key in options)) throw new Error('--add が必要です');
   return options;
 }
 
@@ -212,23 +228,115 @@ export function formatDate(date) {
   const parts = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(date));
   return parts;
 }
-export async function main(args = process.argv.slice(2)) {
-  const options = parseOptions(args), now = Date.now(), waiting = [], errors = [];
-  for (const [name, skip, scan] of [['Yahoo! メール', options.skipYahoo, yahoo], ...['kim@orgiast.jp', 'seisaku-team@orgiast.jp'].map(account => [`Gmail (${account})`, options.skipGmail, (opts, time) => gmail(opts, time, account)])]) {
+// Manual entries use Tokyo calendar days; a date-only promise has no time of day.
+export function manualLedgerPath() {
+  return path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'reply-waiting.json');
+}
+function validDay(value) {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+    Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
+}
+function nonempty(value) { return typeof value === 'string' && value.trim().length > 0; }
+function validManual(entry) {
+  return entry && nonempty(entry.id) && nonempty(entry.who) && nonempty(entry.channel) &&
+    nonempty(entry.subject) && validDay(entry.sentAt) && ['waiting', 'done'].includes(entry.status) &&
+    (entry.note === undefined || typeof entry.note === 'string') &&
+    (entry.staleDays === undefined || (Number.isSafeInteger(entry.staleDays) && entry.staleDays >= 0));
+}
+export function readManualLedger(file = manualLedgerPath()) {
+  let raw;
+  try { raw = readFileSync(file, 'utf8'); }
+  catch (error) { if (error.code === 'ENOENT') return { entries: [] }; throw error; }
+  const ledger = JSON.parse(raw.replace(/^\uFEFF/, ''));
+  if (!ledger || !Array.isArray(ledger.entries) || !ledger.entries.every(validManual) ||
+      new Set(ledger.entries.map(entry => entry.id)).size !== ledger.entries.length) throw new Error('手動台帳が不正です');
+  return ledger;
+}
+// Kanji readings cannot be inferred reliably without a dictionary. Use --reading
+// for other kanji names; preserve this explicitly supplied contact's reading.
+export function manualSlug(who, reading) {
+  const known = { '日栄工業 黒崎直人': 'nichiei-kogyo-kurosaki-naoto' };
+  let text = (reading || known[who] || who).normalize('NFKC').toLowerCase()
+    .replace(/[ァ-ヶ]/g, c => String.fromCharCode(c.charCodeAt(0) - 0x60));
+  const kana = {};
+  for (const [chars, values] of [
+    ['あいうえお', 'a i u e o'], ['かきくけこ', 'ka ki ku ke ko'], ['さしすせそ', 'sa shi su se so'],
+    ['たちつてと', 'ta chi tsu te to'], ['なにぬねの', 'na ni nu ne no'], ['はひふへほ', 'ha hi fu he ho'],
+    ['まみむめも', 'ma mi mu me mo'], ['やゆよ', 'ya yu yo'], ['らりるれろ', 'ra ri ru re ro'],
+    ['わをん', 'wa o n'], ['がぎぐげご', 'ga gi gu ge go'], ['ざじずぜぞ', 'za ji zu ze zo'],
+    ['だぢづでど', 'da ji zu de do'], ['ばびぶべぼ', 'ba bi bu be bo'], ['ぱぴぷぺぽ', 'pa pi pu pe po'],
+    ['ぁぃぅぇぉ', 'a i u e o'],
+  ]) [...chars].forEach((c, i) => { kana[c] = values.split(' ')[i]; });
+  text = text.replace(/([きぎしじちにひびぴみり])([ゃゅょ])/g, (_, a, b) => {
+    const stem = { し: 'sh', じ: 'j', ち: 'ch' }[a] || kana[a].slice(0, -1) + 'y';
+    return stem + { ゃ: 'a', ゅ: 'u', ょ: 'o' }[b];
+  }).replace(/[ぁ-ん]/g, c => kana[c] || c)
+    .replace(/っ([bcdfghjklmnpqrstvwxyz])/g, '$1$1').replace(/([aeiou])ー/g, '$1');
+  text = text.normalize('NFD').replace(/\p{M}/gu, '');
+  if (/[^a-z0-9\s._-]/.test(text)) throw new Error('漢字名などには --reading でローマ字またはかなの読みを指定してください');
+  const slug = text.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  if (!slug) throw new Error('相手の読みを指定してください');
+  return slug;
+}
+export function addManual(ledger, options) {
+  if (!nonempty(options.who) || !nonempty(options.subject) || !validDay(options.sent) ||
+      !['LINE', '電話', 'FAX', '対面', 'メール'].includes(options.channel)) throw new Error('相手・チャネル・送信日・用件を確認してください');
+  const base = `${manualSlug(options.who, options.reading)}-${options.sent.replaceAll('-', '')}`;
+  let id = base, suffix = 2;
+  const ids = new Set(ledger.entries.map(entry => entry.id));
+  while (ids.has(id)) id = `${base}-${suffix++}`;
+  const entry = { id, who: options.who, channel: options.channel, sentAt: options.sent,
+    subject: options.subject, note: options.note || '', status: 'waiting' };
+  // Omission means follow the scan's --stale-days, not the registration default.
+  if (options.explicitStaleDays) entry.staleDays = options.staleDays;
+  ledger.entries.push(entry);
+  return entry;
+}
+export function completeManual(ledger, id) {
+  const entry = ledger.entries.find(entry => entry.id === id);
+  if (!entry) throw new Error('指定したIDが台帳にありません');
+  entry.status = 'done';
+  return entry;
+}
+export function findManualWaiting(entries, { staleDays = 7, now = Date.now(), includeFresh = false } = {}) {
+  const today = formatDate(now).slice(0, 10);
+  return entries.filter(entry => entry.status === 'waiting').map(entry => ({ ...entry, manual: true,
+    elapsedDays: elapsedDays(entry.sentAt, today) })).filter(entry => includeFresh || entry.elapsedDays >= (entry.staleDays ?? staleDays));
+}
+export function formatManual(item) {
+  const clean = value => String(value).replace(/[\r\n\x00-\x1f\x7f]/g, ' ');
+  return `手動 ID: ${clean(item.id)} | チャネル: ${clean(item.channel)} | 相手: ${clean(item.who)} | 用件: ${clean(item.subject)} | 送った日: ${item.sentAt} | 経過: ${item.elapsedDays}日 | メモ: ${clean(item.note || '（なし）')}`;
+}
+
+export async function main(args = process.argv.slice(2), { now = Date.now(), scans } = {}) {
+  const options = parseOptions(args), waiting = [], errors = [], warnings = [];
+  const ledgerPath = options.ledger || manualLedgerPath();
+  if (options.add || options.done) {
+    const ledger = readManualLedger(ledgerPath);
+    const entry = options.add ? addManual(ledger, { ...options, explicitStaleDays: args.includes('--stale-days') }) : completeManual(ledger, options.done);
+    mkdirSync(path.dirname(ledgerPath), { recursive: true });
+    writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2) + '\n', { mode: 0o600 });
+    console.log(options.json ? JSON.stringify(entry) : `${options.add ? '登録' : '完了'}: ${entry.id}`);
+    process.exitCode = 0;
+    return;
+  }
+  try { waiting.push(...findManualWaiting(readManualLedger(ledgerPath).entries, { ...options, now, includeFresh: options.listManual })); }
+  catch { warnings.push('手動台帳を読み込めませんでした。JSONとエントリを確認してください。'); }
+  for (const [name, skip, scan] of (options.listManual ? [] : scans || [['Yahoo! メール', options.skipYahoo, yahoo], ...['kim@orgiast.jp', 'seisaku-team@orgiast.jp'].map(account => [`Gmail (${account})`, options.skipGmail, (opts, time) => gmail(opts, time, account)])])) {
     if (skip) continue;
     try { waiting.push(...await scan(options, now)); }
     catch (error) { errors.push(`${name}: 取得に失敗しました${error.safeStage ? `（${error.safeStage}）` : ''}。接続・認証設定を確認してください（認証情報とサーバー応答は非表示）。`); }
   }
   waiting.sort((a, b) => b.elapsedDays - a.elapsedDays);
-  if (options.json) console.log(JSON.stringify({ waiting, errors }, null, 2));
+  if (options.json) console.log(JSON.stringify({ waiting, errors, warnings }, null, 2));
   else {
-    for (const item of waiting) console.log(`アプリ: ${item.app} | 開くアカウント: ${item.account} | 相手: ${item.recipient} | フォルダ: ${item.folder} | 日時: ${formatDate(item.date)} JST | 件名: ${item.subject.replace(/[\r\n]/g, ' ')} | 経過: ${item.elapsedDays}日`);
+    for (const item of waiting) if (item.manual) console.log(formatManual(item)); else console.log(`アプリ: ${item.app} | 開くアカウント: ${item.account} | 相手: ${item.recipient} | フォルダ: ${item.folder} | 日時: ${formatDate(item.date)} JST | 件名: ${item.subject.replace(/[\r\n]/g, ' ')} | 経過: ${item.elapsedDays}日`);
     if (!waiting.length && !errors.length) console.log('返信待ちはありません');
-    for (const error of errors) console.error(error);
+    for (const error of [...errors, ...warnings]) console.error(error);
   }
   // Retrieval failures must never look like an empty successful scan.
-  process.exitCode = errors.length ? 2 : waiting.length ? 1 : 0;
+  process.exitCode = waiting.length ? 1 : errors.length || (options.listManual && warnings.length) ? 2 : 0;
 }
 if (isEntry(import.meta.url)) main().catch(() => {
-  console.error('実行できませんでした。オプションと設定を確認してください。'); process.exitCode = 2;
+  console.error('実行できませんでした。オプション・台帳・設定を確認してください。漢字名などには --reading で読みを指定してください。'); process.exitCode = 2;
 });

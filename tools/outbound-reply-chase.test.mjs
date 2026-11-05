@@ -82,3 +82,108 @@ test('missing or malformed Date falls back to IMAP INTERNALDATE', () => {
   assert.equal(messageFromHeaders({ date: 'invalid' }, {}, fallback).date, fallback);
   assert.equal(messageFromHeaders({ date: 'Tue, 13 Oct 2026 09:00:00 +0900' }, {}, fallback).date, '2026-10-13T00:00:00.000Z');
 });
+
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { main, findManualWaiting, manualSlug, manualLedgerPath } from './outbound-reply-chase.mjs';
+
+function fixture(t) {
+  const home = mkdtempSync(path.join(os.tmpdir(), 'reply-waiting-test-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const file = path.join(home, '.claude', 'reply-waiting.json');
+  const cli = (...args) => spawnSync(process.execPath, [fileURLToPath(new URL('./outbound-reply-chase.mjs', import.meta.url)), ...args], {
+    env: { ...process.env, ORGIAST_HOME: home }, encoding: 'utf8', timeout: 10000,
+  });
+  const add = (...args) => cli('--add', '--who', 'Nichiei Kurosaki', '--channel', 'LINE', '--sent', '2026-11-04', '--subject', '再見積の依頼', ...args);
+  return { home, file, cli, add, ledger: () => JSON.parse(readFileSync(file, 'utf8')) };
+}
+const manual = { id: 'test-20261104', who: '相手', channel: '電話', sentAt: '2026-11-04', subject: '見積', note: '折返し待ち', status: 'waiting' };
+
+test('manual CLI adds slug/date IDs and unique suffixes, retaining explicit and omitted thresholds', t => {
+  const f = fixture(t);
+  assert.equal(f.add('--stale-days', '5').status, 0);
+  assert.equal(f.add().status, 0);
+  const [a, b] = f.ledger().entries;
+  assert.equal(a.id, 'nichiei-kurosaki-20261104');
+  assert.equal(b.id, 'nichiei-kurosaki-20261104-2');
+  assert.equal(a.staleDays, 5);
+  assert.equal(Object.hasOwn(b, 'staleDays'), false);
+  assert.equal(a.status, 'waiting');
+  assert.equal(manualSlug('日栄工業 黒崎直人'), 'nichiei-kogyo-kurosaki-naoto');
+  assert.equal(manualSlug('山田', 'やまだ'), 'yamada');
+  assert.equal(manualSlug('クロサキ ナオト'), 'kurosaki-naoto');
+  assert.throws(() => manualSlug('未知の漢字'));
+});
+test('manual CLI lists fresh entries with every locator and note, then done hides the entry', t => {
+  const f = fixture(t);
+  assert.equal(f.add('--note', '確認する', '--stale-days', '999999').status, 0);
+  const listed = f.cli('--list-manual');
+  assert.equal(listed.status, 1, listed.stderr);
+  for (const value of ['LINE', 'Nichiei Kurosaki', '再見積の依頼', '2026-11-04', '経過:', '日', 'メモ: 確認する']) assert.ok(listed.stdout.includes(value));
+  assert.equal(f.cli('--skip-gmail', '--skip-yahoo').status, 0);
+  assert.equal(f.cli('--done', f.ledger().entries[0].id).status, 0);
+  assert.equal(f.ledger().entries[0].status, 'done');
+  const done = f.cli('--list-manual', '--json');
+  assert.equal(done.status, 0);
+  assert.deepEqual(JSON.parse(done.stdout).waiting, []);
+  assert.equal(f.cli('--done', 'unknown').status, 2);
+});
+test('manual threshold uses Tokyo calendar days, entry override, CLI fallback, and excludes done', () => {
+  const time = Date.parse('2026-11-08T15:00:00Z'); // Nov 9 in Tokyo, exactly 5 days.
+  assert.equal(findManualWaiting([manual], { now: time, staleDays: 6 }).length, 0);
+  assert.equal(findManualWaiting([manual], { now: time, staleDays: 5 })[0].elapsedDays, 5);
+  assert.equal(findManualWaiting([{ ...manual, staleDays: 5 }], { now: time, staleDays: 7 }).length, 1);
+  assert.equal(findManualWaiting([{ ...manual, staleDays: 5 }], { now: time - 1, staleDays: 0 }).length, 0);
+  assert.equal(findManualWaiting([{ ...manual, status: 'done' }], { now: time, includeFresh: true }).length, 0);
+});
+async function capture(args, scans) {
+  const log = console.log, error = console.error, exitCode = process.exitCode;
+  const output = [], warnings = [];
+  console.log = value => output.push(value); console.error = value => warnings.push(value);
+  try {
+    await main(args, { now: Date.parse('2026-11-09T00:00:00Z'), scans });
+    return { output: output.join('\n'), warnings, status: process.exitCode };
+  } finally { console.log = log; console.error = error; process.exitCode = exitCode; }
+}
+test('missing and corrupt ledgers still show email results; combined results preserve exit codes', async t => {
+  const f = fixture(t);
+  const email = findWaiting([sent], [], { now })[0];
+  const scans = [['fixture email', false, async () => [email]]];
+  const args = ['--ledger', f.file, '--json'];
+  let result = await capture(args, scans);
+  assert.equal(result.status, 1);
+  assert.deepEqual(JSON.parse(result.output).waiting, [email]);
+  f.add('--stale-days', '5');
+  result = await capture(args, scans);
+  assert.equal(result.status, 1);
+  const combined = JSON.parse(result.output).waiting;
+  assert.equal(combined.length, 2);
+  assert.equal(combined.find(item => item.manual).elapsedDays, 5);
+  for (const raw of ['{broken', '{"entries":[null]}']) {
+    writeFileSync(f.file, raw);
+    result = await capture(args, scans);
+    assert.equal(result.status, 1);
+    assert.deepEqual(JSON.parse(result.output).waiting, [email]);
+    assert.equal(JSON.parse(result.output).warnings.length, 1);
+    assert.equal(f.add().status, 2);
+    assert.equal(f.cli('--done', 'test').status, 2);
+    assert.equal(readFileSync(f.file, 'utf8'), raw);
+  }
+  rmSync(f.file);
+  assert.equal((await capture(args, [])).status, 0);
+  assert.equal((await capture(args, [['failed', false, async () => { throw new Error('secret'); }]])).status, 2);
+});
+test('invalid manual arguments never create a ledger; explicit ledger path overrides home', t => {
+  const f = fixture(t);
+  for (const args of [['--sent', '2026-02-30'], ['--channel', 'SMS'], ['--subject', ' '], ['--stale-days', '-1'], ['--done', 'x']]) {
+    assert.equal(f.add(...args).status, 2);
+    assert.equal(existsSync(f.file), false);
+  }
+  const custom = path.join(f.home, 'custom.json');
+  assert.equal(f.add('--ledger', custom).status, 0);
+  assert.equal(existsSync(f.file), false);
+  assert.equal(JSON.parse(readFileSync(custom, 'utf8')).entries.length, 1);
+});

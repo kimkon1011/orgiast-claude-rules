@@ -561,7 +561,7 @@ test('main の追加ゲートを critical な dispatcher 登録として保持�
   for (const id of ['hook:bg-turn-report-gate', 'task:external-waiting', 'task:stalled-session-sweep', 'task:nightly']) {
     assert.ok(source.items.some(item => item.id === id), id);
   }
-  const ids = ['settings:hook-dispatchers', 'settings:seat-name-gate', 'settings:stop-gate-runner'];
+  const ids = ['settings:hook-dispatchers', 'settings:seat-name-gate', 'settings:stop-gate-runner', 'settings:mail-send-approval-gate', 'settings:delete-approval-gate'];
   const items = ids.map(id => {
     const item = source.items.find(item => item.id === id);
     assert.ok(item, id);
@@ -590,6 +590,11 @@ test('main の追加ゲートを critical な dispatcher 登録として保持�
       assert.equal(hooks[0].critical, true);
       assert.equal(hooks[0].policy, policy);
       assert.notEqual(hooks[0].async, true);
+    }
+    for (const name of ['mail-send-approval-gate.mjs', 'delete-approval-gate.mjs']) {
+      const hooks = dispatch.events.PreToolUse.filter(h => h.name === name);
+      assert.equal(hooks.length, 1); assert.equal(hooks[0].critical, true); assert.equal(hooks[0].policy, true);
+      for (const tool of ['Bash','PowerShell', name.startsWith('mail') ? 'mcp__claude_ai_Gmail__send_message' : 'mcp__claude_ai_Canva__delete_design']) assert.match(tool, new RegExp(hooks[0].matcher));
     }
     const result = verify();
     assert.equal(result.status, 0, result.stdout + result.stderr);

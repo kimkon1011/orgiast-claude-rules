@@ -7,6 +7,7 @@ import { run } from './auto-progress-digest.mjs';
 import { compactDigest } from './lib/owner-dm-digest.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { routeOwnerDm } from './lib/owner-dm-policy.mjs';
+import { acquireLock } from './lib/progress-file-lock.mjs';
 
 const now = Date.parse('2026-11-04T00:00:00Z');
 const row = owner => ({ owner, sessionId: `session-${owner}`, status: 'waiting_user', label: '日程の確認', promise: '日程を確認する', nextKim: '5日か6日を選んでください', ts: new Date(now - 1000).toISOString() });
@@ -151,4 +152,48 @@ test('compact digest falls back to reason when nextKim is empty', () => {
   const { text } = compactDigest([{ owner: 'owner@example.com', sessionId: 's1', status: 'waiting_user',
     label: '接続の設定', promise: '接続の設定', nextKim: '', reason: '認証の再実行をお願いします', ts: new Date(now - 1000).toISOString() }], [], now, { owner: 'owner@example.com' });
   assert.match(text, /→ 判断してほしいこと: 認証の再実行をお願いします/);
+});
+
+// 2026-10-29 実害: 08:00 開始の1回目のダイジェストが DM 送信で40分以上かかる間に 08:40 の2回目が走り、
+// 同じ朝枠（2026-10-29|朝）が2回送信された（sent.jsonl に slot 同一で2件）。ロックを保持した実行が残っている間は送らない。
+test('digest 並行実行はロック中なら送らず skipped: locked（10/29 二重送信の再発防止）', async t => {
+  const f = fixture(t);
+  let calls = 0;
+  f.io.notifyOwner = async () => { calls += 1; return { delivered: 'dm', messageId: 'm' }; };
+  const release = acquireLock(path.join(f.home, '.claude/state/owner-compact-digest.lock'));
+  assert.ok(release, 'lock が取れてテストの前提が成立');
+  try {
+    assert.deepEqual(await run(f), { sent: false, count: 0, skipped: 'locked' });
+  } finally { release(); }
+  assert.equal(calls, 0, 'ロック保持中の2回目は DM を送らない');
+  // ロック解放後は通常どおり1回だけ送信できる
+  assert.equal((await run(f)).sent, true);
+  assert.equal(calls, 1);
+});
+
+// 2026-11-04 実害: 朝枠で cr@orgiast.jp に同一内容の2通が届いた（parts=2・receipts が同一 owner×2）。
+// 同じ宛先は1枠につき1通だけ・本文の先頭は「あなたの返事待ち」でなければならない。
+test('digest 同じ宛先には1枠1通だけ送り、本文先頭を返事待ちにする（11/04 複数通の再発防止）', async t => {
+  const f = fixture(t);
+  const rows = ['a', 'b'].map(sfx => ({ ...row('owner@example.com'), sessionId: `session-${sfx}`, label: `日程の確認${sfx}` }));
+  f.io.readLedger = () => rows;
+  // digest の pending は owner-dm-deferred.jsonl（kind=action）から読まれる。routeOwnerDm の action は即時経路なので直接シードする。
+  const deferred = ['日程8を選んでください', '日程9を選んでください'].map((text, i) => ({ id: `q${i}`, kind: 'action', text, at: new Date(now - 1000 - i).toISOString(), owner: 'owner@example.com' }));
+  fs.mkdirSync(path.join(f.home, '.claude/logs'), { recursive: true });
+  fs.writeFileSync(path.join(f.home, '.claude/logs/owner-dm-deferred.jsonl'), deferred.map(JSON.stringify).join('\n') + '\n');
+  const calls = [];
+  f.io.notifyOwner = async (owner, text) => { calls.push({ owner, text }); return { delivered: 'dm', messageId: `m-${calls.length}` }; };
+  const result = await run(f);
+  assert.equal(result.sent, true);
+  assert.equal(result.parts, 1, '同じ宛先へのメッセージは1通だけ');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].owner, 'owner@example.com');
+  const lines = calls[0].text.split('\n');
+  assert.equal(lines[0], '【進捗まとめ】');
+  assert.equal(lines[1], 'あなたの返事待ち', '本文は返事待ち（判断待ち）が先頭');
+  const body = calls[0].text;
+  assert.ok(body.indexOf('あなたの返事待ち') < body.indexOf('あなたが頼んだこと'), '返事待ちが依頼済み作業より前に来る');
+  assert.ok(body.includes('日程8を選んでください'), '待ちの質問が載る');
+  assert.ok(body.includes('日程9を選んでください'), '待ちの質問が載る');
+  assert.ok(body.includes('日程の確認a') || body.includes('ほか返事待ち'), '台帳の判断待ちが載る');
 });

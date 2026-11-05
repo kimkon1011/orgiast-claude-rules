@@ -499,6 +499,18 @@
         "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/askuser-selfcheck-gate.mjs\"",
         "timeout": 15
+      },
+      {
+        "matcher": "Bash|PowerShell|mcp__claude_ai_Gmail(?:_\\d+)?__(send_message|reply|forward)",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/mail-send-approval-gate.mjs\"",
+        "timeout": 45
+      },
+      {
+        "matcher": "Bash|PowerShell|mcp__claude_ai_Google_Drive[^|]*__(trash_file|delete_file)|mcp__claude_ai_Gmail[^|]*__(trash_message|trash_thread|delete_draft|delete_label)|mcp__[^|]*(?:Canva|Docs)[^|]*__delete[^|]*",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/delete-approval-gate.mjs\"",
+        "timeout": 15
       }
     ],
     "PostToolUse": [

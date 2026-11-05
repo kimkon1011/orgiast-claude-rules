@@ -326,3 +326,11 @@ SendUserFile、コードブロック内のローカルパス、チャット添�
 バックグラウンド完了通知の後は、成功／失敗とその証拠、次の自動進行を本文に書く。同じ通知ターン内で `node tools/notify-kim.mjs --kind info "<結果・証拠・次の自動進行>"` を実行し、`delivered: "session-inbox"`・`id`・`kind: "info"` の成功応答を確認する。直前の人の入力から10分以内は inbox 保存のみ免除される。`stop_hook_active` が真なら再ブロックしない。
 
 `setup --converge` は既存の `stop-gate-runner.mjs` を登録し、その `next-action-gate.mjs` から本ゲートを呼ぶため、独立した Stop フックは登録しない。実体は tools ディレクトリの配布に含まれる。
+
+## mail-send-approval-gate
+
+本文の全文をチャットに表示し、その後の kim の明示承認を得る。本文を変えたら再表示・再承認する。gmail-draft --send は現在の下書きを読み戻して照合する。多数宛は `node tools/mail-bulk-approve.mjs --input <JSON> --project-dir <新規clasp管理dir>` で1社ずつチェックする承認シートを作る。下書き作成・更新は止めない。
+
+## delete-approval-gate
+
+削除対象のパス/IDを全件チャットに列挙し、その後の kim の明示許可を得る。globや変数は実際の対象を展開して列挙し、具体的なパスで実行する。OS一時フォルダ・指定生成物・同ターンに新規作成成功を確認できたファイルは対象外。

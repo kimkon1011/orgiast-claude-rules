@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { formatDoneLine, formatDoneMessage, formatDoneBacklogMessages, gatherEvidence, deterministicVerdict, judge, evidenceSummary, logDoneDm, run as runWatch } from './auto-progress-watch.mjs';
+import { legacyAddCheckMigrationRows, formatDoneLine, formatDoneMessage, formatDoneBacklogMessages, gatherEvidence, deterministicVerdict, judge, evidenceSummary, logDoneDm, run as runWatch } from './auto-progress-watch.mjs';
 import { cleanupOldLedgerTemps, ledgerFile, readLedger, writeLedger } from './auto-progress-ledger.mjs';
 import { listItems } from './kim-inbox.mjs';
 
@@ -458,4 +458,14 @@ test('定期ターン中でもcheckが達成なら従来どおりdoneにする',
   assert.equal(summary.done, 1);
   assert.deepEqual(summary.errors, []);
   assert.equal(readLedger(ledgerFile(f.home))[0].status, 'done');
+});
+
+test('レシート済み完了は legacy add-check 移行で復活させない', () => {
+  const base = { pc: 'PC1', user: 'user', sessionId: 's-receipt', ts: '2026-11-05T10:00:00.000Z',
+    status: 'done', check: 'node check.mjs', nextClaude: 'x' };
+  const withReceipt = { ...base, doneInboxId: 'ki-1', doneInboxVerifiedAt: '2026-11-05T11:00:00.000Z', doneNotifiedAt: '2026-11-05T11:00:00.000Z' };
+  const notifiedOnly = { ...base, ts: '2026-11-05T10:05:00.000Z', doneInboxId: '', doneInboxVerifiedAt: '', doneNotifiedAt: '2026-11-05T11:05:00.000Z' };
+  const noReceipt = { ...base, ts: '2026-11-05T10:10:00.000Z', doneInboxId: '', doneInboxVerifiedAt: '', doneNotifiedAt: '' };
+  const rows = [withReceipt, notifiedOnly, noReceipt];
+  assert.deepEqual(legacyAddCheckMigrationRows(rows), [noReceipt]);
 });

@@ -168,3 +168,15 @@ test('app-llm gates deny immediately on a first-seen non-pilot PC under the 2026
     assert.equal(rolloutMode(name, { manifest, home, hostname: 'new-pc', now: Date.parse('2026-11-02T12:00:00Z') }), 'warn');
   }
 });
+
+test('2026-11-05 mail/delete policies deny immediately through real runner on first-seen PCs', async t => {
+  const home = temp(t);
+  for (const [name, input] of [
+    ['mail-send-approval-gate', {tool_name:'mcp__claude_ai_Gmail__send_message',tool_input:{body:'unapproved'}}],
+    ['delete-approval-gate', {tool_name:'mcp__claude_ai_Google_Drive__trash_file',tool_input:{file_id:'unapproved'}}],
+  ]) {
+    assert.equal(rolloutMode(name,{home,hostname:'new-pc'}),'deny');
+    const result = await runHook(path.join(toolsDir,name+'.mjs'),JSON.stringify(input),{env:{...process.env,ORGIAST_HOME:home},policyOptions:{home,hostname:'new-pc',notify:async()=>({delivered:'mock'})}});
+    assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision,'deny');
+  }
+});

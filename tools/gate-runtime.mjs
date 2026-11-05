@@ -14,6 +14,8 @@ function readRollout() { try { return JSON.parse(fs.readFileSync(path.join(tools
 const hostName = () => process.env.ORGIAST_HOSTNAME || os.hostname();
 export function rolloutMode(name, { manifest = readRollout(), home = homeDir(), hostname = hostName(), now = Date.now() } = {}) {
   const entry = manifest?.gates?.[name];
+  if (name === 'mail-send-approval-gate' && entry?.rollout === 'deny' && entry.immediatePolicy === '2026-11-05 kim 承認: 組織指示11 メール送信は本文確認＋明示承認後のみ') return 'deny';
+  if (name === 'delete-approval-gate' && entry?.rollout === 'deny' && entry.immediatePolicy === '2026-11-05 kim 承認: 組織指示12 削除は user 許可後のみ') return 'deny';
   // kim の明示指示により、報告停止は初受信のPCにも即時適用する。
   if (name === 'seat-name-gate' && entry?.rollout === 'deny'
     && entry.immediatePolicy === '2026-11-04 kim 厳命: 席番号呼称と Drive 引き渡し (§1.5.0.2/§1.5.0.3)') return 'deny';

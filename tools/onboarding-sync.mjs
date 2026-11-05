@@ -17,6 +17,7 @@ import { installKnowledge } from './knowledge-pack.mjs';
 import { resolveConvergenceRepo } from './fleet-convergence.mjs';
 import { gitBlobSha } from './version-drift.mjs';
 import { isKimOperated } from './lib/kim-operated.mjs';
+import { dedupePreferences } from './claude-md-dedupe.mjs';
 
 const args = process.argv.slice(2);
 const force = args.includes('--force');
@@ -680,6 +681,9 @@ export function makeIndex(body) {
       for (let j = i + 1; /^###\s/.test(line) && j < lines.length && !/^#{1,3}(?:\s|$)/.test(lines[j]); j++) {
         const candidate = lines[j].trim();
         if (!candidate) continue;
+        // Absolute rules are emitted in full by the outer loop. A first-sentence
+        // preview would duplicate (and sometimes truncate) the same obligation.
+        if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(candidate)) break;
         const end = candidate.indexOf('。');
         // 結論文の日付付き由来も見出しと同じく全文へ委ねる(予算の常時の余裕を作る)。
         const conclusion = (end >= 0 ? candidate.slice(0, end + 1) : candidate).replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, '');
@@ -722,9 +726,12 @@ export function makeIndex(body) {
     const result = kept.join('\n');
     if (Buffer.byteLength(result) <= INDEX_BUDGET_BYTES) return result;
   }
-  return original;
+  // Absolute rules may themselves exceed the target. Keep them all, but do not
+  // undo the safe shortening of ordinary previews when the target is unattainable.
+  return kept.join('\n');
 }
 export function build(current, body, label) {
+  current = dedupePreferences(current, body);
   const block = `${beginPrefix} (自動同期 ${label}) -->\n${body}\n- 全社共有の知見（kim-PC の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る\n- 制作・営業・見積・案件の着手前: ~/.claude/knowledge/production-sales/00_INDEX.md を読み、必要な節だけ Grep。全文を丸読みしない。\n${endMarker}`;
   if (current === null) return { updated: block, action: '新規作成' };
   // 行全体が開始マーカー形式そのものである場合だけ対象にする(部分一致は自己言及文書に誤爆する)。

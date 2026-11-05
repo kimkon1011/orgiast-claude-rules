@@ -320,8 +320,8 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     for (const row of pending) group(row.owner).pending.push(row);
     if (cases.text || deadlineText) group(localOwner);
     const changed = rows.some(row => state.lastVerdicts?.[rowKey(row)] !== verdictOf(row, now) || state.lastKim?.[rowKey(row)] !== kimAction(row) || state.lastWaiting?.[rowKey(row)] !== isHumanActionRequired(row));
-    if (currentSlot === '夕' && !changed && !pending.length && !cases.text) return { sent: false, count: 0 };
-    const count = rows.length + pending.length + Object.keys(cases.checkpoints).length;
+    if (currentSlot === '夕' && !changed && !pending.length && !doneInbox.length && !cases.text) return { sent: false, count: 0 };
+    const count = rows.length + pending.length + doneInbox.length + Object.keys(cases.checkpoints).length;
     if (!groups.size) return { sent: false, count: 0 };
     const deliveredOwners = new Set(state.slotOwners?.[key] || []);
     const receipts = [], messages = [];

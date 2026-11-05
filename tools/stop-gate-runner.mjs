@@ -8,6 +8,8 @@ import { evaluateInvitePermissions } from './hooks/discord-invite-permission-gat
 import { applyNamedGatePolicy } from './gate-runtime.mjs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { addCheck } from './auto-progress.mjs';
 import { isEntry } from './is-entry.mjs';
 import { currentTurnAssistantText, readTranscriptContext } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
@@ -29,7 +31,7 @@ import { evaluateLaneAbandonment } from './lane-abandonment-gate.mjs';
 import { evaluateCourseCorrections } from './course-correction-gate.mjs';
 import { evaluateAudit } from './handoff-audit-gate.mjs';
 import { enabled as reportLengthEnabled, judgeReportLengthWithLlm } from './report-length-gate.mjs';
-import { hasRequiredFooter, judgeNextAction, reportsCloseSteps, hasOpenSessionCheck, hasSessionWakeup, WATCH_REGISTRATION_CODES } from './next-action-gate.mjs';
+import { hasRequiredFooter, judgeNextAction, reportsCloseSteps, hasOpenSessionCheck, hasSessionWakeup, WATCH_REGISTRATION_CODES, footerValues, openDeadline, WAIT_CHECK_CODES } from './next-action-gate.mjs';
 import { judgeSubstituteCapability } from './substitute-capability-gate.mjs';
 import { judgeUserBurden, desktopLauncherPattern } from './user-burden-gate.mjs';
 import { findOutsourcedInvestigation, formatViolationMessage as formatSelfCheck, scanToolUsesFromRaw } from './self-check-before-asking-guard.mjs';
@@ -108,7 +110,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['deferral-wait-gate', () => judgeDeferralWait(ctx.assistantText)],
     ['third-party-nudge-gate', () => judgeThirdPartyNudge(ctx.assistantText)],
     ['unregistered-promise-gate', () => evaluateUnregisteredPromise(ctx.assistantText, { sessionId: ctx.sessionId, transcriptRaw: ctx.transcriptRaw, home: home() })],
-    ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw, ctx.input, { turnText: ctx.turnText })],
+    ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw, { ...ctx.input, session_id: ctx.sessionId }, { turnText: ctx.turnText })],
     ['user-burden-gate', () => judgeUserBurden(ctx.assistantText, ctx.humanText)],
     ['substitute-capability-gate', () => judgeSubstituteCapability(ctx.assistantText)],
     ['doc-link-drive-guard', () => { const hits = findLocalDocLinks(ctx.assistantText); if (hits.length) return { decision: 'block', reason: formatDocLink(hits), code: 'DOC-LINK' }; const bare = findBareLocalDocPaths(ctx.assistantText); return bare.length ? { decision: 'block', reason: formatBarePathMessage(bare), code: 'DOC-LINK' } : { decision: 'pass' }; }],
@@ -222,16 +224,38 @@ export async function run(input, context, auditOptions = {}) {
   const cap = retryBlockedBy.length ? registerStopViolation({ input, assistantText, blockedBy: retryBlockedBy, reasonCodes: retryReasonCodes, home: home() }) : { retryCap: false, sameTextRetries: 0 };
   // Keep the caller-facing verdict compatible; the ledger records the new
   // operational outcome separately so nightly metrics can count it.
-  const verdict = cap.retryCap ? 'retry-cap' : retryBlockedBy.length ? 'block' : 'pass';
-  const capMessage = cap.retryCap ? `${CAP_CONTEXT} 残存コード: ${reasonCodes.join(', ')}` : undefined;
+  let verdict = cap.retryCap ? 'retry-cap' : retryBlockedBy.length ? 'block' : 'pass';
+  let autoRegisterError;
+  if (cap.retryCap && reasonCodes.some(code => WAIT_CHECK_CODES.has(code))) {
+    try {
+      const purpose = String(assistantText).match(/^\s*(?:\*\*)?\[本セッションの目的\](?:\*\*)?[ \t]*([^\r\n]+)(?:\r?\n|$)/)?.[1]?.trim();
+      const label = purpose || [...String(context.lastUserPrompt || context.humanText || '')].slice(0, 60).join('');
+      const deadline = openDeadline(footerValues(assistantText)?.session)?.toISOString() || '+24h';
+      const script = fileURLToPath(new URL('./session-progress-check.mjs', import.meta.url)).replaceAll('\\', '/');
+      // Double quotes work in both cmd.exe and the check executor's Bash shell.
+      // Reject shell metacharacters that still expand within double quotes.
+      if (/["$`%!\r\n]/.test(script) || !/^[a-zA-Z0-9_-]+$/.test(sessionId)) throw new Error('台帳チェックのパスまたは session ID が不正です');
+      await (auditOptions.addCheck || addCheck)({
+        session: sessionId, label: `自動登録: ${label || sessionId}`, deadline,
+        check: `node "${script}" --session "${sessionId}"`,
+        nextClaude: 'このセッションの未完了の約束（この後の自動進行の行）を進め、結果を kim に報告する',
+        home: home(), cwd: input.cwd || path.dirname(path.dirname(script)),
+      });
+      verdict = 'pass_after_autoregister';
+    } catch (error) {
+      verdict = 'block';
+      autoRegisterError = `待機チェックの台帳への自動登録に失敗しました: ${error.message}`;
+    }
+  }
+  const capMessage = verdict === 'pass_after_autoregister' ? '待機チェックを台帳へ自動登録しました。' : cap.retryCap && verdict !== 'block' ? `${CAP_CONTEXT} 残存コード: ${reasonCodes.join(', ')}` : undefined;
   const record = { ...base, verdict, blockedBy, reasonCodes, demoted, handoffKind, unchangedPeriodicReport: evaluated.unchangedPeriodicReport, retryCap: cap.retryCap, sameTextRetries: cap.sameTextRetries ?? 0, auditEvidence: audit.record.evidence };
   if (verdict !== 'block') {
     const failure = protectAutopilot(input, assistantText, context.raw, record);
     if (failure) return failure;
   }
-  ledger(cap.retryCap ? { ...record, verdict: 'pass_after_cap', runnerVerdict: verdict } : record);
+  ledger(verdict === 'retry-cap' ? { ...record, verdict: 'pass_after_cap', runnerVerdict: verdict } : { ...record, ...(autoRegisterError ? { autoRegisterError } : {}) });
   if (verdict !== 'block') return { record, ...((capMessage || systemMessage) ? { systemMessage: [capMessage, systemMessage].filter(Boolean).join('\n') } : {}) };
-  const sections = [];
+  const sections = autoRegisterError ? [autoRegisterError] : [];
   let formAdded = false;
   for (const { name, reason } of evaluated.results) {
     if (!FORM_GATES.includes(name)) { sections.push(`### ${name}\n- ${reason}`); continue; }

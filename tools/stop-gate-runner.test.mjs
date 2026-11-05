@@ -656,6 +656,20 @@ for (const mode of ['cap', 'pass', 'open', 'cron', 'scheduled', 'none', 'failure
   }
   assert.notEqual(result.decision, 'block', result.reason);
   const created = ['cap', 'pass'].includes(mode);
+  // At the retry cap, explicit progress checks supersede the generic watch fallback.
+  if (mode === 'cap') {
+    assert.equal(result.record.verdict, 'pass_after_autoregister');
+    assert.equal(result.record.autoRegisteredCheck, false);
+    const rows = readLedger(file);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].status, 'open');
+    assert.match(rows[0].check, /session-progress-check\.mjs" --session "fallback"$/);
+    assert.equal(readLedger(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl')).at(-1).verdict, 'pass_after_autoregister');
+    const { record: recordPromise } = await import('./auto-progress-ledger.mjs');
+    recordPromise({ ...input, last_assistant_message: text }, { home });
+    assert.equal(readLedger(file).at(-1).check, rows[0].check);
+    return;
+  }
   assert.equal(result.record.autoRegisteredCheck, created);
   const rows = readLedger(file);
   assert.equal(rows.length, created || mode === 'open' ? 1 : 0);

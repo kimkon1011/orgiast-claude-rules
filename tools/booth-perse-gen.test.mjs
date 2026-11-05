@@ -26,6 +26,21 @@ test('parseArgs: --model で OpenRouter の画像モデルを切り替えられ�
   assert.equal(o.model, 'google/gemini-2.5-flash-image');
 });
 
+test('parseArgs: --base を寸法下絵として読む', () => {
+  const o = parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o', '--base', 'underlay.png', '--ref', 'logo.png']);
+  assert.equal(o.base, 'underlay.png');
+  assert.deepEqual(o.refs, ['logo.png']);
+});
+
+test('buildPrompt: 下絵の外形と人物スケールを固定し日本語文字を禁止する', () => {
+  const t = buildPrompt('BRIEF', { add: 'PLAN' });
+  assert.match(t, /FIRST reference image is a dimensionally accurate 3D underlay/);
+  assert.match(t, /all four column positions/);
+  assert.match(t, /person's size and position EXACTLY/);
+  assert.match(t, /Do not draw Japanese text/);
+  assert.match(t, /only readable text allowed anywhere is "GridBeyond"/);
+});
+
 test('parseArgs: --max-height で会場の上限に合わせられ、既定は3.6', () => {
   assert.equal(parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o']).maxHeight, 3.6);
   const o = parseArgs(['--brief', 'b', '--plans', 'p', '--out', 'o', '--max-height', '4.5']);

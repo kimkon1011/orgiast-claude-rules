@@ -54,7 +54,13 @@ export async function ensureBlender({ env = process.env, home = homedir(), log =
   log(`取得中: ${RELEASE_INDEX}${zipName}`);
   await download(RELEASE_INDEX + zipName, zipPath);
   // Windows 10 以降の tar(bsdtar) は zip を展開できる。
-  const x = spawnSync('tar', ['-xf', zipPath, '-C', work], { encoding: 'utf8', windowsHide: true });
+  let x = spawnSync('tar', ['-xf', zipPath, '-C', work], { encoding: 'utf8', windowsHide: true });
+  // Windows の bsdtar はドライブ文字を remote:path と誤認する環境がある。
+  if (x.status !== 0) {
+    x = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      'Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force', zipPath, work],
+      { encoding: 'utf8', windowsHide: true });
+  }
   if (x.status !== 0) throw new Error(`zip 展開に失敗: ${x.stderr || x.stdout}`);
   const extracted = readdirSync(work, { withFileTypes: true }).find((e) => e.isDirectory() && e.name.startsWith('blender-'));
   if (!extracted) throw new Error('展開結果に blender-* フォルダがありません');

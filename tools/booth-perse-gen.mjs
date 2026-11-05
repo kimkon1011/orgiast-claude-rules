@@ -9,7 +9,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 
-const USAGE = '使い方: node tools/booth-perse-gen.mjs --brief <brief.txt> --plans <plans.json> --out <dir> [--ref <image> ...] [--blender-out <dir>] [--max-height <m>（会場の装飾高さ上限・既定3.6）] [--model <OpenRouter model>]';
+const USAGE = '使い方: node tools/booth-perse-gen.mjs --brief <brief.txt> --plans <plans.json> --out <dir> [--base <寸法どおりの下絵.png>] [--ref <image> ...] [--blender-out <dir>] [--max-height <m>（会場の装飾高さ上限・既定3.6）] [--model <OpenRouter model>]';
 const DEFAULT_MODEL = 'openai/gpt-5.4-image-2';
 const DEFAULT_MAX_HEIGHT = 3.6;
 const BLENDER_PERSP_FILES = ['persp_front_left.png', 'persp_front_right.png'];
@@ -30,6 +30,7 @@ export function parseArgs(argv) {
     if (a === '--brief') { opts.brief = v; i += 1; }
     else if (a === '--plans') { opts.plans = v; i += 1; }
     else if (a === '--out') { opts.out = v; i += 1; }
+    else if (a === '--base') { opts.base = v; i += 1; }
     else if (a === '--ref') { opts.refs.push(v); i += 1; }
     else if (a === '--blender-out') { opts.blenderOut = v; i += 1; }
     else if (a === '--max-height') { opts.maxHeight = Number(v); i += 1; }
@@ -54,7 +55,10 @@ MANDATORY HALL SCALE: the exhibition hall ceiling is more than 10 m high and mus
 }
 
 export function buildPrompt(common, plan, maxHeight = DEFAULT_MAX_HEIGHT) {
-  return `${common}\n${plan.add}\n${heightLightClause(maxHeight)}\n`;
+  return `${common}\n${plan.add}\n${heightLightClause(maxHeight)}\n
+MANDATORY BASE-IMAGE FIDELITY: The FIRST reference image is a dimensionally accurate 3D underlay. Preserve its composition, camera position and perspective, booth outer envelope, truss top edge, all four column positions, wall position, and every person's size and position EXACTLY. Paint in materials, lighting and brand treatment only. Do NOT make the booth envelope, canopy, columns, signs, or infinity feature taller or larger than the underlay. Keep the three open sides open.
+
+MANDATORY TEXT: Do not draw Japanese text or Japanese signs. The only readable text allowed anywhere is "GridBeyond" and one short English tagline. No invented words, numbers, prices, or pseudo-lettering.\n`;
 }
 
 export function loadKey(home = homedir()) {
@@ -97,6 +101,7 @@ async function main() {
   const plans = JSON.parse(readFileSync(opts.plans, 'utf8'));
   if (!Array.isArray(plans) || plans.length !== 3) throw new Error('プラン定義は3件（梅・竹・松に当たる3案）にする');
   const common = readFileSync(opts.brief, 'utf8');
+  if (opts.base) opts.refs.unshift(opts.base);
   const key = loadKey();
   mkdirSync(opts.out, { recursive: true });
   const results = await Promise.all(plans.map(async (p) => {

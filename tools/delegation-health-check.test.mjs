@@ -140,6 +140,8 @@ test('emptyOutputReason は timeout・終了コード・原因不明を分類す
   assert.equal(emptyOutputReason({ secs: 300 }), 'timeout');
   assert.equal(emptyOutputReason({ secs: 600, timedOut: false, status: 1 }), 'exit_1');
   assert.equal(emptyOutputReason({ status: 1, stderrTail: 'failed to lookup address information' }), 'infra_transient');
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 1, launched: true, stderrTail: 'ERROR codex_core::session: failed to record rollout items: thread 01a1aaf4-bef7-7242-9948-2769e20f460a not found tokens used 59,591' }), 'infra_transient');
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 1, launched: true, stderrTail: 'failed to record rollout items: thread abc-def not found' }), 'infra_transient');
   assert.equal(emptyOutputReason({ status: 1, stderrTail: 'Not inside a trusted directory and --skip-git-repo-check was not specified.' }), 'untrusted_cwd');
   assert.equal(emptyOutputReason({ status: 1 }), 'exit_1');
   // 起動失敗は「出力ゼロ」ではなく「そもそも走っていない」。exit_3 に埋もれさせない。

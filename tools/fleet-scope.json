@@ -571,6 +571,12 @@
       "reason": "task:decision-watch ステップの登録スクリプト"
     },
     {
+      "path": "tools/register-nightly-tools.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "nightly-health/morning-batch タスクの登録管理。既存タスクを持つPC（主にkim-PC）で実効"
+    },
+    {
       "path": "tools/register-discord-autoreply.ps1",
       "scope": "kim-only",
       "step": null,

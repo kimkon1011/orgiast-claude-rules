@@ -16,6 +16,11 @@
       "category": "progress-health",
       "pattern": "⚠️\\s*進捗ダイジェストが Discord に届いていません",
       "reason": "kim 2026-11-04 指示（進捗は聞かれる前に Discord へ）"
+    },
+    {
+      "category": "external-waiting",
+      "pattern": "^【社外返信待ち】",
+      "reason": "kim 本人が 2026-11-04 のセッションで「AIからのプッシュで遅れをなくしたい」と依頼したため登録（社外の人を24時間以上待たせている返信の通知）"
     }
   ]
 }

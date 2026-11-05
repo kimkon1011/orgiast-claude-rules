@@ -9,6 +9,7 @@ import { isEntry } from './is-entry.mjs';
 import { ledgerFile, readLedger, writeLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, kimAction, hasClaudeWork } from './auto-progress-ledger.mjs';
 import { appendInbox } from './auto-progress-inbox-hook.mjs';
 import { active, CATEGORY, DAY } from './lib/fleet-chase-policy.mjs';
+import { externalFile, readSkips, isSkipped, addSkip, saveAnswer } from './lib/external-waiting-state.mjs';
 
 export function readJson(file, fallback = null) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
@@ -44,8 +45,37 @@ const PERMISSION_RE = /needs your permission|AskUserQuestion|permission to use/i
 export const SESSION_OP_RE = /タブ|✕|Enter\s*を|\/session-(?:close|start)|\/clear|新しいセッション|古いタブ/;
 // 判断待ちの理由欄に入った調査記録（「宣言…を実測で確認した」等）は、kim への問いとして見せない。
 const EVIDENCE_RE = /^(?:宣言|実測|検証|確認した|\(\d\))/;
+export const EXTERNAL_STALE_MS = 3 * 3600_000;
+const jstHour = now => new Date(now + 9 * 3600_000).getUTCHours();
+export const ageLabel = item => item.ageHours != null && item.ageHours < 48 ? `${item.ageHours}時間待ち` : `${item.ageDays}日待ち`;
+// 社外の人を待たせている返信。状態ファイルを読むだけ（hook の予算を守るためネットワークには行かない）。
+export function collectExternal({ home, now }) {
+  const state = readJson(externalFile(home), null);
+  if (!state) return [];
+  const skips = readSkips(home), out = [];
+  const age = now - Date.parse(state.generatedAt), failed = Object.entries(state.sources || {}).filter(([, source]) => source.ok === false);
+  // 毎時 8〜21 時の巡回なので、夜間は古くて当然。日中は3時間、夜明け後は14時間を超えたら止まっているとみなす。
+  const stale = !(age <= EXTERNAL_STALE_MS) && (jstHour(now) >= 9 || age > 14 * 3600_000) || Number.isNaN(age);
+  if (stale || failed.length) {
+    const reason = failed.map(([mailbox, source]) => `${mailbox}: ${source.error || '取得失敗'}`).join(' / ') || 'なし';
+    out.push({ id: 'ex:monitor', source: 'external', external: true, warning: true, title: `社外返信の監視が止まっています（最終更新 ${state.generatedAt || '不明'} / エラー ${reason}）`, ask: '監視を直す（Claude が対応）', waitingSince: state.generatedAt || new Date(now).toISOString(), ageDays: 0, route: {} });
+  }
+  const items = (state.items || []).filter(item => !isSkipped(skips, item)).sort((a, b) => Date.parse(a.since) - Date.parse(b.since));
+  for (const item of items) {
+    const ms = Math.max(0, now - Date.parse(item.since));
+    const title = item.kind === 'draft' ? `下書きのまま未送信: ${item.who}「${item.subject}」` : `${item.who}${item.assignee ? `（担当: ${item.assignee}）` : ''}「${item.subject}」`;
+    out.push({ id: item.id, source: 'external', external: true, title, ask: item.ask || '返信内容を決める', waitingSince: item.since, ageDays: Math.floor(ms / DAY), ageHours: Math.floor(ms / 3600_000), route: { threadId: item.threadId, mailbox: item.mailbox } });
+  }
+  return out;
+}
+export function formatList(items) {
+  const external = items.filter(item => item.external), internal = items.filter(item => !item.external);
+  const line = item => `・${item.title} ／ 答えてほしいこと: ${item.ask} ／ ${ageLabel(item)}${item.progress ? ` ／ ${item.progress}` : ''}`;
+  return [...(external.length ? [`🔴 社外の人を待たせています ${external.filter(item => !item.warning).length} 件（古い順）`, ...external.map(line)] : []), `📌 kim の返事待ち ${internal.length} 件（古い順）`, ...internal.map(line)].join('\n');
+}
 export function collectAwaiting({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), budgetMs = Infinity, sessionId = '' } = {}) {
   const started = performance.now();
+  const external = collectExternal({ home, now });
   const result = [];
   for (const row of latestOpenPromises(readLedger(ledgerFile(home)))) {
     if (row.kimAnswer || isUnattendedRow(row, home) || isNoopPromise(row.promise) || (row.status !== 'waiting_user' && kimAction(row) === 'なし')) continue;
@@ -84,13 +114,14 @@ export function collectAwaiting({ home = process.env.ORGIAST_HOME || os.homedir(
   }
   result.sort((a, b) => Date.parse(a.waitingSince) - Date.parse(b.waitingSince));
   const titles = new Set();
-  return result.filter(item => {
+  const internal = result.filter(item => {
     // 現セッションの待ちは、別セッションの同名項目に埋もれさせない。
     if (sessionId && item.source === 'auto-progress' && item.route.sessionId === sessionId) return true;
     if (titles.has(item.title)) return false;
     titles.add(item.title);
     return true;
   }).map(item => ({ ...item, ageDays: Math.max(0, Math.floor((now - Date.parse(item.waitingSince)) / DAY)) }));
+  return [...external, ...internal];
 }
 export function clearShown(home, id) {
   const state = readJson(shownFile(home), {});
@@ -101,7 +132,10 @@ export function respond(id, { home = process.env.ORGIAST_HOME || os.homedir(), b
   if (skip ? !reason?.trim() : !bodyFile) throw new Error(skip ? '--reason required' : '--body-file required');
   const body = skip ? '' : fs.readFileSync(bodyFile, 'utf8').trim();
   if (!skip && !body) throw new Error('empty answer');
-  if (id.startsWith('ap:')) {
+  if (id.startsWith('ex:')) {
+    // 社外返信待ち: skip は skips ファイルへ、指示は answers へ（Claude が見て返信下書きを作る）。送信はしない。
+    if (skip) addSkip(home, id, reason, now); else saveAnswer(home, id, body, now);
+  } else if (id.startsWith('ap:')) {
     const rows = readLedger(ledgerFile(home));
     const row = latestOpenPromises(rows).find(row => apId(row) === id);
     if (!row) throw new Error('awaiting item not found');
@@ -126,7 +160,7 @@ if (isEntry(import.meta.url)) {
     const args = process.argv.slice(2), value = flag => args[args.indexOf(flag) + 1];
     if (args.includes('--list')) {
       const items = collectAwaiting();
-      console.log(args.includes('--json') ? JSON.stringify(items, null, 2) : [`📌 kim の返事待ち ${items.length} 件（古い順）`, ...items.map(item => `・${item.title} ／ 答えてほしいこと: ${item.ask} ／ ${item.ageDays}日待ち${item.progress ? ` ／ ${item.progress}` : ''}`)].join('\n'));
+      console.log(args.includes('--json') ? JSON.stringify(items, null, 2) : formatList(items));
     } else process.exitCode = respond(value(args.includes('--skip') ? '--skip' : '--answer'), { skip: args.includes('--skip'), reason: value('--reason'), bodyFile: args.includes('--body-file') ? value('--body-file') : undefined });
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

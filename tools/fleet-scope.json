@@ -25,6 +25,7 @@
     {"path": "tools/lib/fleet-chase-policy.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "hook の軽量な台帳判定依存"},
     {"path": "tools/kim-awaiting.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "kim の返事待ちの集約と回答配送"},
     {"path": "tools/kim-awaiting-context.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "kim の返事待ちの集約と回答配送"},
+    {"path": "tools/lib/external-waiting-state.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "kim-awaiting が読む社外返信待ちの状態ファイル入出力"},
 
     {"path":"tools/lib/reclaim-lock.mjs","scope":"fleet","step":"task:fleet-mail","reason":"fleet-mail / 質問中継が使う、残った .reclaim の自動回収"},
     {"path":"tools/lib/gws-proxy.mjs","scope":"fleet","step":"task:fleet-mail","reason":"全PCの鍵なしGmail・Drive・LINE APIと自己点検の共通認証経路"},
@@ -549,6 +550,12 @@
       "scope": "kim-only",
       "step": null,
       "reason": "要確認"
+    },
+    {
+      "path": "tools/register-external-waiting.ps1",
+      "scope": "fleet",
+      "step": "task:external-waiting",
+      "reason": "task:external-waiting ステップの登録スクリプト"
     },
     {
       "path": "tools/register-decision-watch.ps1",

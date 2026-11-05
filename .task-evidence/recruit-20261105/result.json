@@ -1,0 +1,26 @@
+{
+  "date": "2026-11-05",
+  "writes": 0,
+  "applicant_contact_or_drafts": 0,
+  "coverage": "Six public postings verified; full cross-platform enumeration and applicant-to-job-ID attribution incomplete",
+  "account": "saiyo@orgiast.jp",
+  "credential_source": "Growi p2028 -> spreadsheet 1rBt6vwIsfER8tgwlF3A7WmRr_pKiJPQh7f56c0JEj4Q シート1 rows 62 and 93; secret values not retained",
+  "airwork": {
+    "management_url": "https://ats.rct.airwork.net/dashboards",
+    "jobs": {"7753167":"イベントオーガナイザー", "7812831":"イベントオーガナイザー(新卒)", "11992494":"イベント制作会社の営業"},
+    "current": "基本給 : 月給 28万円",
+    "probation": "試用・研修期間：6ヶ月",
+    "regular": "基本給：月給 30万円 〜 / 固定残業代：なし",
+    "browser_error": "airwork locator.click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for getByRole('link', { name: 'ログイン', exact: true })"
+  },
+  "engage": {
+    "management_url": "https://en-gage.net/company_login/login/",
+    "jobs": {"4902834":"イベントオーガナイザー", "7780994":"イベントプロデューサー", "17763843":"イベント制作会社の営業"},
+    "current": "※試用期間中の月給：28万円",
+    "probation": "試用期間の長さ：6ヶ月",
+    "browser_error": "engage locator.click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for getByRole('button', { name: 'ログイン', exact: true })"
+  },
+  "proposed_not_saved": "試用期間（6ヶ月）：月給23万円／本採用：月給30万円（固定残業手当41,280円・月20時間分を含む。超過分は別途支給）",
+  "applicant": "Thread 1a17d86241eb44ce establishes event-organizer application with Indeed relay; later applicant quotation explicitly mentions Townwork. Exact Airwork job-ID not established.",
+  "other": "求人ボックス notifications found; CheerCareer checked listing uses 23万円 probation, six months; Drive Jimoty draft is three subcontractor warehouse roles, not monthly 28万円 employment."
+}

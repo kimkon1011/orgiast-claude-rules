@@ -207,6 +207,56 @@ test('collectAwaiting: セッション限りの画面操作は追わず、調査
   for (const text of ['上の案でよいか（変えたい月だけ）を一言で返す', '「cr-PC に一本化」か「このPCでも続ける」のどちらかを返答する']) assert.doesNotMatch(text, SESSION_OP_RE);
 });
 
+const extItem = (extra = {}) => ({ id: 'ex:aaaaaaaaaaaa', kind: 'reply', group: 'window', mailbox: 'seisaku-team@orgiast.jp', who: '川口様', subject: '日程のご相談', since: new Date(NOW - 30 * 3600_000).toISOString(), ask: '11/6 14時でお願いします', threadId: 't1', lastMessageId: 'm1', ...extra });
+const writeExternal = (home, state) => saveJson(path.join(home, '.claude', 'state', 'external-waiting.json'), { generatedAt: new Date(NOW - 3600_000).toISOString(), sources: {}, items: [], ...state });
+test('external は他のすべての項目より前に並び、external: true が付く', t => {
+  const home = fixture(t);
+  writeLedger(ledgerFile(home), [row()]);
+  writeExternal(home, { items: [extItem({ id: 'ex:bbbbbbbbbbbb', since: new Date(NOW - 2 * 3600_000).toISOString() }), extItem()] });
+  const items = collectAwaiting({ home, now: NOW });
+  assert.deepEqual(items.map(item => item.id).slice(0, 2), ['ex:aaaaaaaaaaaa', 'ex:bbbbbbbbbbbb']);
+  assert.ok(items[0].external && items[1].external && !items[2].external);
+  assert.equal(items[0].title, '川口様「日程のご相談」'); assert.equal(items[0].ageHours, 30);
+});
+test('下書きは「下書きのまま未送信」と表示する', t => {
+  const home = fixture(t);
+  writeExternal(home, { items: [extItem({ kind: 'draft', who: 'cust@example.com', ask: '送信するか決める' })] });
+  assert.equal(collectAwaiting({ home, now: NOW })[0].title, '下書きのまま未送信: cust@example.com「日程のご相談」');
+});
+test('状態ファイルが古い・取得失敗があると警告項目が先頭に入る', t => {
+  const home = fixture(t);
+  writeExternal(home, { generatedAt: new Date(NOW - 5 * 3600_000).toISOString(), items: [extItem()] });
+  let items = collectAwaiting({ home, now: NOW });
+  assert.equal(items[0].id, 'ex:monitor'); assert.match(items[0].title, /^社外返信の監視が止まっています（最終更新 .+ \/ エラー /);
+  writeExternal(home, { sources: { 'kim@orgiast.jp': { ok: false, error: 'Gmail API 403' } }, items: [] });
+  items = collectAwaiting({ home, now: NOW });
+  assert.match(items[0].title, /kim@orgiast\.jp: Gmail API 403/);
+  writeExternal(home, { items: [extItem()] });
+  assert.equal(collectAwaiting({ home, now: NOW }).some(item => item.warning), false);
+});
+test('hook は external を15件まで別枠で表示し、集合が変わると REPEAT_MS 前でも再表示する', t => {
+  const home = fixture(t), input = { hook_event_name: 'UserPromptSubmit', session_id: 's', cwd: '/project' }, options = { home, now: NOW, env: {} };
+  writeLedger(ledgerFile(home), Array.from({ length: DISPLAY_LIMIT + 1 }, (_, i) => row({ sessionId: `s${i}`, promise: `社内${i}` })));
+  writeExternal(home, { items: Array.from({ length: 17 }, (_, i) => extItem({ id: `ex:${String(i).padStart(12, '0')}`, subject: `件${i}` })) });
+  const text = context(input, options).hookSpecificOutput.additionalContext;
+  assert.match(text, /🔴 社外の人を待たせています 17 件（古い順）/); assert.match(text, /ほか 2 件/);
+  assert.ok(text.indexOf('🔴') < text.indexOf('📌')); assert.match(text, /get_thread で読み、返信下書きまで作って/);
+  assert.equal(text.split('\n').filter(line => line.startsWith('・') && line.includes('件')).length >= 15, true);
+  assert.equal(context(input, options), null);
+  writeExternal(home, { items: [extItem({ id: 'ex:cccccccccccc' })] });
+  assert.ok(context(input, { ...options, now: NOW + 60_000 }));
+});
+test('ex: の --skip / --answer は専用ファイルへ書き、lastMessageId が変わると再表示される', t => {
+  const home = fixture(t), bodyFile = path.join(home, 'answer.txt'); fs.writeFileSync(bodyFile, 'この日で返信して');
+  writeExternal(home, { items: [extItem()] });
+  assert.equal(respond('ex:aaaaaaaaaaaa', { home, bodyFile, now: NOW }), 0);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'state', 'external-waiting-answers', 'aaaaaaaaaaaa.json'), 'utf8')).answer, 'この日で返信して');
+  assert.equal(respond('ex:aaaaaaaaaaaa', { home, skip: true, reason: '対応済み', now: NOW }), 0);
+  assert.equal(collectAwaiting({ home, now: NOW }).length, 0);
+  writeExternal(home, { items: [extItem({ lastMessageId: 'm2' })] });
+  assert.equal(collectAwaiting({ home, now: NOW }).length, 1);
+});
+
 test('check のない Claude 作業を質問と併記し6時間で警告する', t => {
   const home = fixture(t);
   for (const hours of [5, 6, 10]) {
@@ -222,4 +272,19 @@ test('check のない Claude 作業を質問と併記し6時間で警告する',
     writeLedger(ledgerFile(home), [row({ status: 'open', nextKim: '色を選ぶ', ...extra })]);
     assert.equal(collectAwaiting({ home, now: NOW })[0].progress, '');
   }
+});
+
+ test('社外の先頭別枠と現セッションの Claude 進行表示を CLI・hook で両立する', async t => {
+  const { formatList } = await import('./kim-awaiting.mjs');
+  const home = fixture(t);
+  writeExternal(home, { items: [extItem()] });
+  writeLedger(ledgerFile(home), [row({ sessionId: 'current', status: 'open', nextKim: '色を選ぶ', ts: new Date(NOW - 6 * 3600000).toISOString() })]);
+  const items = collectAwaiting({ home, now: NOW, sessionId: 'current' });
+  const hook = context({ session_id: 'current', hook_event_name: 'SessionStart' }, { home, now: NOW, env: {} }).hookSpecificOutput.additionalContext;
+  for (const text of [formatList(items), hook]) {
+    assert.ok(text.indexOf('🔴') < text.indexOf('📌'));
+    assert.match(text, /30時間待ち/);
+    assert.match(text, /Claude 側で進行中（最終更新 6 時間前） ⚠️ 止まっている可能性/);
+  }
+  assert.match(hook, /現セッション優先/);
 });

@@ -43,8 +43,8 @@ test('quota_wait never blocks and context names cheap alternatives', t => {
   assert.match(repairContext(health, home, now), /代替の安いレーン: groq/);
 });
 test('diagnostic invocations pass; compound and disguised writes block', () => {
-  for (const cmd of ['node tools/lane-doctor.mjs --probe', 'node tools/lane-repair-log.mjs --lane deepseek --tried "key checked; HTTP 500" --result unfixable', 'node tools/env-kv.mjs --help', 'git status --short', 'gh pr view 123', 'wsl -d Ubuntu -u root -- codex exec --skip-git-repo-check "ping"', 'wsl -l -q', 'wsl --install -d Ubuntu --no-launch', 'wsl -d Ubuntu -u root -- npm install -g @openai/codex', 'wsl -d Ubuntu -u root -- codex login status']) assert.equal(repairCommand(cmd), true, cmd);
-  for (const cmd of ['node tools/lane-doctor.mjs; touch x', 'node tools/lane-doctor.mjs && npm install', 'echo lane-doctor.mjs', 'node /tmp/lane-doctor.mjs', 'node tools/lane-doctor.mjs > x', 'git push', 'git diff --output=x', 'wsl -- bash -c "touch x"', 'gh pr create', 'node -e "writeFiles()"', 'node tools/lane-doctor.mjs $(touch x)', 'node tools/lane-doctor.mjs @(Remove-Item x)', 'git log --out=x', 'git diff --textconv']) assert.equal(repairCommand(cmd), false, cmd);
+  for (const cmd of ['node tools/lane-doctor.mjs --probe', 'node tools/lane-repair-log.mjs --lane deepseek --tried "key checked; HTTP 500" --result unfixable', 'node tools/env-kv.mjs --help', 'git status --short', 'gh pr view 123', 'wsl -d Ubuntu -u root -- codex exec --skip-git-repo-check "ping"', 'wsl -l -q', 'wsl --install -d Ubuntu --no-launch', 'wsl -d Ubuntu -u root -- npm install -g @openai/codex', 'wsl -d Ubuntu -u root -- codex login status', '& "C:\\\\Program Files\\\\nodejs\\\\node.exe" tools/lane-doctor.mjs --probe', '& node tools/lane-doctor.mjs --probe', '"C:\\\\Program Files\\\\nodejs\\\\node.exe" tools/lane-repair-log.mjs --lane deepseek --tried "x" --result unfixable']) assert.equal(repairCommand(cmd), true, cmd);
+  for (const cmd of ['node tools/lane-doctor.mjs; touch x', 'node tools/lane-doctor.mjs && npm install', 'echo lane-doctor.mjs', 'node /tmp/lane-doctor.mjs', 'node tools/lane-doctor.mjs > x', 'git push', 'git diff --output=x', 'wsl -- bash -c "touch x"', 'gh pr create', 'node -e "writeFiles()"', 'node tools/lane-doctor.mjs $(touch x)', 'node tools/lane-doctor.mjs @(Remove-Item x)', 'git log --out=x', 'git diff --textconv', '& "C:\\\\Program Files\\\\nodejs\\\\node.exe" /tmp/lane-doctor.mjs', '&& node tools/lane-doctor.mjs --probe', '& "C:\\\\Program Files\\\\nodejs\\\\node.exe" tools/lane-doctor.mjs && rm -rf X', '& node tools/lane-doctor.mjs & rm -rf X']) assert.equal(repairCommand(cmd), false, cmd);
 });
 test('notify once at three consecutive unfixable attempts; fixed resets episode', async t => {
   const { home } = fixture(t); let notifications = 0;
@@ -104,4 +104,5 @@ test('cd prefix permits one diagnostic invocation and preserves chain blocking',
   assert.equal(repairCommand(`cd "${repo}" && node tools/lane-doctor.mjs --probe && rm -rf /`), false);
   // cd 前置の dir に特殊文字
   assert.equal(repairCommand('cd some;path && node tools/lane-doctor.mjs'), false);
+  assert.equal(repairCommand(`cd "${repo}" && "C:\\Program Files\\nodejs\\node.exe" tools/lane-doctor.mjs --probe`), true);
 });

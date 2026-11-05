@@ -27,7 +27,7 @@ test('CLI validates deadline, preserves promise and registers a new revision', (
   assert.throws(() => addCheck({ home, session: 's', check: 'x', label: 'x', deadline: 'bad' }), /deadline/);
   assert.equal(readLedger(ledgerFile(home)).length, 2);
 });
-test('watch: before deadline stays open; overdue queues once and retries DM; recovery sends completion once', async () => {
+test('watch: before deadline stays open; overdue closes and retries final DM; a new revision can complete', async () => {
   const home = tmp(); register(home); let code = 1, deliveries = 0, fail = true;
   const io = { ...baseIo, executeCheck: () => ({ code, text: '確認結果\n本文は捨てる' }), notifyOwner: async () => { deliveries++; return { delivered: fail ? 'none' : 'dm' }; } };
   await watch({ home, now, io }); assert.equal(deliveries, 0);
@@ -38,12 +38,14 @@ test('watch: before deadline stays open; overdue queues once and retries DM; rec
   await watch({ home, now: later, io }); await watch({ home, now: later, io });
   assert.equal(deliveries, 2);
   assert.equal(fs.readFileSync(path.join(home, '.claude', 'next-session.md'), 'utf8').match(/- \[ \]/g).length, 1);
+  assert.equal(readLedger(ledgerFile(home))[0].status, 'overdue_reported');
   code = 0;
+  addCheck({ home, now: later + 1, session: 'session', check: 'node check.mjs', label: '着信再確認', deadline: '+24h' });
   await watch({ home, now: later, io }); await watch({ home, now: later, io });
   assert.equal(deliveries, 2);
   assert.equal(listItems(home).length, 1);
-  const row = readLedger(ledgerFile(home))[0];
-  assert.equal(readLedger(ledgerFile(home))[0].status, 'done'); assert.equal(row.checkText, '確認結果');
+  const row = readLedger(ledgerFile(home)).at(-1);
+  assert.equal(row.status, 'done'); assert.equal(row.checkText, '確認結果\n本文は捨てる');
   assert.equal((await digest({ home, now: later, io: { notify: () => assert.fail('duplicate digest') } })).sent, false);
   });
   test('watch: 未達（code=1）でも6時間ごとに owner へ定期的に状況を DM する', async () => {
@@ -69,7 +71,7 @@ test('watch: before deadline stays open; overdue queues once and retries DM; rec
   // 6時間後: 1回目の定期DMが送信される
   await watch({ home, now: now + 6 * 3600000, io });
   assert.equal(messages.length, 1);
-  assert.match(messages[0], /未達: 未達: まだ届いていません\nClaude の次の手: 再試行する/);
+  assert.match(messages[0], /未達: 着信確認\n達成 0件 \/ 未達 1件[\s\S]*Claude の次の手: 再試行する/);
 
   // 7時間後: 前回DMから1時間なので再送しない
   await watch({ home, now: now + 7 * 3600000, io });
@@ -102,9 +104,9 @@ test('check errors do not mark done; repeated errors notify once', async () => {
   assert.equal(messages.length, 1); assert.match(messages[0], /確認エラー/);
   assert.equal(readLedger(ledgerFile(home))[0].status, 'open');
 });
-test('executeCheck honors exit contract, first line and bounded execution', () => {
+test('executeCheck honors exit contract, full output and bounded execution', () => {
   const command = `"${process.execPath}" -e "console.log('first');console.log('second');process.exit(1)"`;
-  assert.deepEqual(executeCheck({ check: command }, { home: tmp() }), { code: 1, text: 'first', stderr: '' });
+  assert.deepEqual(executeCheck({ check: command }, { home: tmp() }), { code: 1, text: 'first\nsecond', stderr: '' });
   const result = executeCheck({ check: 'anything' }, { home: tmp(), shellPath: null, spawnImpl: (_, options) => {
     assert.equal(options.timeout, CHECK_TIMEOUT_MS); assert.equal(options.windowsHide, true);
     return { status: null, error: new Error('timeout'), stdout: '' };
@@ -297,7 +299,7 @@ test('ledger failure after delivery retains inbox and retries the receipt withou
   assert.equal(listItems(home).length, 1);
 });
 
-test('ask file 全文を保存し、人待ちと期限切れを24時間ごとに再通知する', async () => {
+test('ask file 全文を保存し、人待ちを通知して期限切れは最終報告1回で閉じる', async () => {
  const home = tmp();
  const askFile = path.join(home, 'ask.txt');
  const ask = 'Google アカウントで開いてください。\nスクリプト URL を貼ってください。';
@@ -315,9 +317,10 @@ test('ask file 全文を保存し、人待ちと期限切れを24時間ごとに
  await watch({ home, now: now + 47 * 3600000, io });
  assert.equal(messages.length, 2);
  await watch({ home, now: now + 48 * 3600000, io });
- assert.equal(messages.length, 3);
- assert.ok(messages[2].includes(ask));
- assert.equal(readLedger(ledgerFile(home))[0].lastUnmetNotifiedAt, new Date(now + 48 * 3600000).toISOString());
+ assert.equal(messages.length, 2);
+ assert.ok(messages[1].includes(ask));
+ assert.equal(readLedger(ledgerFile(home))[0].status, 'overdue_reported');
+ assert.ok(readLedger(ledgerFile(home))[0].overdueReportedAt);
  assert.doesNotMatch(fs.readFileSync(path.join(home, '.claude', 'next-session.md'), 'utf8'), /check の実行ログ/);
 });
 

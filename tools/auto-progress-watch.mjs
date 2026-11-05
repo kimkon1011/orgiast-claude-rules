@@ -15,7 +15,7 @@ import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { notifyOwner, resolveOwner, sendOwnerToast } from './notify-owner.mjs';
 import { escalateKimDecisions } from './auto-progress-escalate.mjs';
 import { isQuietHours, kimAction } from './auto-progress-digest.mjs';
-import { checkPromise, executeCheck, isTimeOnlyCheck, queueCheckFollowup, pendingAction } from './auto-progress-check.mjs';
+import { checkPromise, checkProgressSummary, executeCheck, isTimeOnlyCheck, queueCheckFollowup, pendingAction } from './auto-progress-check.mjs';
 import { addItem } from './kim-inbox.mjs';
 import { appendInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
@@ -233,7 +233,7 @@ export async function resumeSession(row, { timeoutMs = 20 * 60000, home = os.hom
     : apiErrorResume
     ? `API エラーで返答できなかった user の依頼に、最初から通常どおり応えてください。依頼: ${row.requestText || row.promise.replace(/^API エラー（.*?）で返答できなかった依頼:\s*/, '')}`
     : `以前このセッションで宣言した「この後の自動進行」が止まっています。宣言: 「${row.promise}」。`;
-  const prompt = `${promptLead}${row.kimAnswer ? `\nkim の返事: 「${row.kimAnswer}」。これを前提に続きを進めてください。` : ''}${row.nextClaude ? `\nやること: ${row.nextClaude}` : ''}\n元の会話は ${row.transcriptPath} にあります。${apiErrorResume ? '依頼を完了まで進めてください。' : '宣言の最終成果まで進めてください。'}user の判断・承認が必要な地点では、判断材料を揃えて止まり needs_user を返してください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"成果物パスと検証結果、または進めない理由","artifact":"成果物パス（任意）","nextKim":"本人だけができる具体的な判断・操作。返信待ちや自動調査なら空文字"}`;
+  const prompt = `${promptLead}${row.kimAnswer ? `\nkim の返事: 「${row.kimAnswer}」。これを前提に続きを進めてください。` : ''}${reason === 'check-overdue' ? `\n期限超過の最終確認です。確認出力全文:\n${row.checkText || ''}\n確認エラー:\n${row.checkStderr || ''}` : ''}${row.nextClaude ? `\nやること: ${row.nextClaude}` : ''}\n元の会話は ${row.transcriptPath} にあります。${apiErrorResume ? '依頼を完了まで進めてください。' : '宣言の最終成果まで進めてください。'}user の判断・承認が必要な地点では、判断材料を揃えて止まり needs_user を返してください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"成果物パスと検証結果、または進めない理由","artifact":"成果物パス（任意）","nextKim":"本人だけができる具体的な判断・操作。返信待ちや自動調査なら空文字"}`;
   const rateLimited = apiErrorResume && /rate.?limit|usage.?credits?|429/i.test([row.error, row.apiError, row.apiErrorStatus].join(' '));
   const runOptions = { resumeSessionId: row.sessionId, ...(rateLimited ? { model: process.env.AUTO_PROGRESS_RESUME_MODEL || 'opus' } : {}) };
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, row.cwd, row.cwd, timeoutMs, runOptions);
@@ -557,7 +557,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   const file = ledgerFile(home);
   const clock = io.clock ?? Date.now;
   const stopAt = clock() + 45 * 60000;
-  const summary = { checked: 0, done: 0, noop: 0, inProgress: 0, stalled: 0, resumed: 0, resumeDeferred: 0, reported: 0, expired: 0, graced: 0, superseded: 0, discovered: 0, errors: [] };
+  const summary = { checked: 0, done: 0, overdueReported: 0, noop: 0, inProgress: 0, stalled: 0, resumed: 0, resumeDeferred: 0, reported: 0, expired: 0, graced: 0, superseded: 0, discovered: 0, errors: [] };
   let notificationsStopped = false;
   const ledgerFailure = (error) => {
     notificationsStopped = true;
@@ -656,7 +656,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   if (!dryRun && summary.superseded) persist(normalized);
   // Expiration is cheap maintenance: never let checks/resumes exhaust its time budget.
   const reservation = row => row.startWhen && ['scheduled', 'starting', 'start_overdue'].includes(row.status);
-  const expired = new Set(candidates.filter(row => !reservation(row) && isUnattendedRow(row, home) &&
+  const expired = new Set(candidates.filter(row => !reservation(row) && !row.check && isUnattendedRow(row, home) &&
     Number.isFinite(Date.parse(row.ts)) && now - Date.parse(row.ts) >= EXPIRE_UNATTENDED_MS));
   for (const row of expired) patch(rowKey(row), { status: 'expired' });
   summary.expired += expired.size;
@@ -669,6 +669,19 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   };
   const needsKim = row => !['', 'なし'].includes(String(row.nextKim ?? '').trim());
   candidates.sort((a, b) => Number(needsKim(a)) - Number(needsKim(b)) || Date.parse(a.ts) - Date.parse(b.ts));
+  let executorUnavailable = false;
+  const reportOverdue = async row => {
+    const text = row.overdueReportText;
+    const delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(row), text,
+      { home, now, kind: 'automatic', session: row });
+    if (!['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'final report not delivered');
+    patch(rowKey(row), { overdueReportedAt: new Date(now).toISOString() });
+  };
+  // Retry delivery only, never the check or resume, after a transport failure.
+  for (const row of rows.filter(r => r.status === 'overdue_reported' && !r.overdueReportedAt)) {
+    if (dryRun || notificationsStopped) break;
+    try { await reportOverdue(row); } catch (error) { summary.errors.push(`overdue-report: ${error.message}`); }
+  }
   // Checks run first, before the potentially lengthy legacy resume lane.
   const executable = [...candidates.filter(row => row.check && !reservation(row)), ...pendingChecks];
   executable.sort((a, b) => (Date.parse(a.lastCheckedAt) || 0) - (Date.parse(b.lastCheckedAt) || 0));
@@ -677,7 +690,39 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     if (dryRun) continue; // --dry-run must never execute arbitrary commands.
     summary.checked++;
     try {
-      const state = await checkPromise(row, { home, now, patch, io });
+      const overdue = now >= Date.parse(row.deadlineAt);
+      let state = await checkPromise(row, { home, now, patch, io, suppressNotices: overdue });
+      if (overdue && ['unmet', 'error'].includes(state)) {
+        const at = new Date(now).toISOString();
+        let outcome = { reason: '再開上限・実行時間・作業場所の条件により再開できません' };
+        const eligible = !executorUnavailable && summary.resumed < MAX_RESUMES_PER_RUN &&
+          (row.resumeCount ?? 0) < MAX_RESUMES && now - (Date.parse(row.resumedAt || '') || 0) >= RESUME_INTERVAL_MS &&
+          clock() + 22 * 60000 < stopAt && row.cwd && (io.cwdExists ?? fs.existsSync)(row.cwd) && !isUnattendedRow(row, home);
+        if (eligible) {
+          if (!patch(rowKey(row), { status: 'resumed', resumedAt: at, resumeCount: (row.resumeCount ?? 0) + 1, resumeOutcome: 'attempting' })) continue;
+          try { outcome = await (io.resume ?? resumeSession)(row, { home, reason: 'check-overdue' }); }
+          catch (error) { outcome = { outcome: 'error', reason: String(error.message || error) }; }
+          if (outcome.deferred || outcome.outcome === 'deferred') {
+            executorUnavailable = true;
+            summary.resumeDeferred++;
+            if (!patch(rowKey(row), { resumedAt: row.resumedAt || '', resumeCount: row.resumeCount ?? 0, resumeDeferredAt: at, resumeOutcome: `deferred: ${outcome.reason}` })) continue;
+          } else {
+            summary.resumed++;
+            if (!patch(rowKey(row), { resumeOutcome: `${outcome.state || outcome.outcome}: ${outcome.reason}`, resumeFinishedAt: new Date(clock()).toISOString(), nextKim: outcome.nextKim ?? row.nextKim })) continue;
+            row.nextKim = outcome.nextKim ?? row.nextKim;
+            // A resume report alone cannot establish that an explicit check has passed.
+            state = await checkPromise(row, { home, now, patch, io, suppressNotices: true });
+          }
+        }
+        if (state !== 'done' && state !== 'ledger_error') {
+          const report = `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf(row), home })}\n最終報告（期限超過・未完了）: ${row.label || row.promise}\n期限切れ（${row.deadlineAt}）\n約束: ${row.promise}\n${checkProgressSummary(row.checkText)}\n再開結果: ${outcome.reason}\n次の一手: ${kimAction(row) !== 'なし' ? `${ownerOf(row)} が ${kimAction(row)}` : pendingAction(row)}`;
+          if (!patch(rowKey(row), { status: 'overdue_reported', verdict: 'unmet', overdueClosedAt: at, overdueReportText: redactSecrets(report) })) continue;
+          summary.overdueReported++;
+          state = 'overdue_reported';
+          (io.queueCheckFollowup ?? queueCheckFollowup)(home, row, { text: row.checkText });
+          await reportOverdue({ ...row, overdueReportText: redactSecrets(report) });
+        }
+      }
       if (state === 'time_only') {
         const reservationRow = timeOnlyReservation(row, now);
         if (!dryRun && persist([...readLedger(file), reservationRow])) {
@@ -737,7 +782,6 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       logDoneDm(home, group.rows[0], delivery, group.text, now, io, toastResult);
     }
   }
-  let executorUnavailable = false;
   for (const row of candidates.filter(reservation)) {
     if (dryRun || notificationsStopped || clock() + 22 * 60000 >= stopAt) continue;
     if (row.startedAt || row.status === 'starting') continue; // 起動済みの予約は二重起動しない。

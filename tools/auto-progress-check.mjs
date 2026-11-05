@@ -122,7 +122,15 @@ export function executeCheck(row, { home, spawnImpl = spawnSync, shellPath = res
   const failure = result.error?.code === 'ETIMEDOUT'
     ? `check が ${options.timeout / 1000} 秒の上限を超えました（遅い check は --add-check --timeout <秒> で延長・最大 ${MAX_CHECK_TIMEOUT_MS / 1000} 秒）`
     : oneLine(result.error?.message || gotStderr) || code;
-  return { code, text: oneLine(result.stdout) || (code === 0 ? '達成を確認' : code === 1 ? '未達' : `check エラー: ${failure}`), stderr: gotStderr };
+  return { code, text: String(result.stdout || '').trim() || (code === 0 ? '達成を確認' : code === 1 ? '未達' : `check エラー: ${failure}`), stderr: gotStderr };
+}
+// Count each nonempty evidence line once; negative markers take precedence over 完了/達成.
+export function checkProgressSummary(text) {
+  const lines = String(text || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  const unmet = lines.filter(s => /未達|未完|なし|失敗|エラー|停止|不足|未配布|NG|✗|❌|pending|unmet|failed/i.test(s));
+  const done = lines.filter(s => !unmet.includes(s) && /達成|完了|済|成功|あり|OK|✅|done|passed/i.test(s));
+  const unknown = lines.filter(s => !unmet.includes(s) && !done.includes(s));
+  return `達成 ${done.length}件 / 未達 ${unmet.length}件${unknown.length ? ` / 判定不明 ${unknown.length}件` : ''}\n達成: ${done.join(' ／ ').slice(0, 450) || '確認なし'}\n未達: ${unmet.join(' ／ ').slice(0, 650) || '確認なし'}${unknown.length ? `\nその他: ${unknown.join(' ／ ').slice(0, 250)}` : ''}`;
 }
 export function pendingAction(row) {
   const human = !String(row.nextClaude || '').trim() && /待ち|受け取ったら|返信|貼|承認/.test([row.label, row.promise, row.nextKim].join(' '));
@@ -138,13 +146,16 @@ export function queueCheckFollowup(home, row, result) {
   text = /^## 残TODO\s*$/m.test(text) ? text.replace(/(^## 残TODO\s*$)/m, `$1\n${item}`) : `${text}\n## 残TODO\n${item}`;
   fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text);
 }
-export async function checkPromise(row, { home, now, patch, io = {} }) {
+export async function checkPromise(row, { home, now, patch, io = {}, suppressNotices = false }) {
   if (isTimeOnlyCheck(row.check)) return 'time_only';
-  const result = row.status === 'done' && row.checkResult === 'done'
-    ? { code: 0, text: row.checkText } : await (io.executeCheck ?? executeCheck)(row, { home });
+  let result;
+  try {
+    result = row.status === 'done' && row.checkResult === 'done'
+      ? { code: 0, text: row.checkText } : await (io.executeCheck ?? executeCheck)(row, { home });
+  } catch (error) { result = { code: null, text: `check エラー: ${error.message || error}` }; }
   const state = result.code === 0 ? 'done' : result.code === 1 ? 'unmet' : 'error';
   const overdue = now >= Date.parse(row.deadlineAt);
-  const changes = { checkResult: state, checkText: oneLine(result.text), lastCheckedAt: new Date(now).toISOString(),
+  const changes = { checkResult: state, checkText: String(result.text || ''), checkStderr: String(result.stderr || ''), lastCheckedAt: new Date(now).toISOString(),
     verdict: state === 'done' ? 'done' : state === 'error' ? 'check_error' : overdue ? 'unmet' : 'in_progress',
     ...(state === 'done' ? { status: 'done', doneAt: row.doneAt || new Date(now).toISOString() } : {}) };
   if (patch(rowKey(row), changes) === false) return 'ledger_error';
@@ -159,11 +170,13 @@ export async function checkPromise(row, { home, now, patch, io = {} }) {
     Object.assign(row, changes, receipt);
     return state;
   }
+  Object.assign(row, changes);
+  if (suppressNotices) return state;
   if (state === 'unmet') {
     const lastNotified = Date.parse(row.lastUnmetNotifiedAt || (!overdue ? row.ts : '')) || 0;
     if ((!overdue || row.checkNotifiedResult === 'unmet') && now - lastNotified < (overdue ? 24 * 3600000 : UNMET_INTERVAL_MS)) return state;
     if (overdue) (io.queueCheckFollowup ?? queueCheckFollowup)(home, row, result);
-    const message = `${overdue ? `期限切れ（${row.deadlineAt}）: ${row.label || row.promise}` : `未達: ${changes.checkText}`}\n${pendingAction(row)}`;
+    const message = `${overdue ? `期限切れ（${row.deadlineAt}）: ${row.label || row.promise}` : `未達: ${row.label || row.promise}`}\n${checkProgressSummary(changes.checkText)}\n${pendingAction(row)}`;
     const owner = row.owner || resolveOwner({ home });
     const origin = originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: owner, home });
     const delivery = await (io.notifyOwner ?? notifyOwner)(owner, `${origin}\n${message}`, { home, now, kind: state === 'done' && !isUnattendedRow(row, home) ? 'done-requested' : pendingAction(row).startsWith('あなたの作業待ち:') ? 'action' : 'automatic', session: row });

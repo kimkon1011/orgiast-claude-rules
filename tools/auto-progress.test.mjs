@@ -1406,14 +1406,14 @@ test('watch: 疎通確認の登録・完了再送でDMせず、digestは件数�
   assert.match(result.text, /自動作業/);
 });
 
-test('watch: 時間切れでも無人openとcheck行を48時間で期限切れにする', async () => {
+test('watch: 時間切れでも無人openを期限切れにし、check行は最終確認用に保持する', async () => {
   const home = tmp(), now = Date.now();
   seed(home, [false, true].map((check, i) => ({ sessionId: `old-${i}`, status: 'open', ts: new Date(now - EXPIRE_UNATTENDED_MS).toISOString(),
     cwd: path.join(home, '.claude', 'auto-session'), source: 'api-error-unanswered', ...(check ? { check: { command: 'unused' } } : {}) })));
   let clocks = 0;
   const result = await watch({ home, now, io: noEvidenceIo({ clock: () => clocks++ === 0 ? now : now + 46 * H / 60 }) });
-  assert.equal(result.expired, 2);
-  assert.deepEqual(readLedger(ledgerFile(home)).map(row => row.status), ['expired', 'expired']);
+  assert.equal(result.expired, 1);
+  assert.deepEqual(readLedger(ledgerFile(home)).map(row => row.status), ['expired', 'open']);
 });
 
  test('nightly-repo の対話行は完了通知の対象', async () => {

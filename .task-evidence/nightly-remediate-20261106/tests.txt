@@ -1,0 +1,94 @@
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+{
+  "exitCode": 0,
+  "fixed": [],
+  "prs": [],
+  "escalated": [],
+  "deferred": [],
+  "suppressed": [],
+  "skipped": [],
+  "plan": [
+    {
+      "label": "pr-case",
+      "action": "deferred",
+      "reason": "同じfingerprintのPRがopenでマージ待ち",
+      "text": "PLAN pr-case: deferred(同じfingerprintのPRがopenでマージ待ち)"
+    }
+  ]
+}
+{
+  "exitCode": 0,
+  "fixed": [],
+  "prs": [],
+  "escalated": [],
+  "deferred": [],
+  "suppressed": [],
+  "skipped": [],
+  "plan": [
+    {
+      "label": "pr-case",
+      "action": "codex",
+      "text": "PLAN pr-case: codex"
+    }
+  ]
+}
+{
+  "exitCode": 0,
+  "fixed": [],
+  "prs": [],
+  "escalated": [],
+  "deferred": [],
+  "suppressed": [],
+  "skipped": [],
+  "plan": [
+    {
+      "label": "repeat",
+      "action": "escalate",
+      "reason": "過去7日に2回以上deferred/prを経て再発",
+      "text": "PLAN repeat: escalate(過去7日に2回以上deferred/prを経て再発)"
+    }
+  ]
+}
+fixed=0 pr=0 deferred=0 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=0 escalated=1 suppressed=0
+[nightly-health-remediate] codex 保留(codex_cooldown): 2026-11-05T23:18:59.752Z 以降
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+fixed=1 pr=0 deferred=0 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+PLAN short: deferred(4分の全体予算: 残り5分未満)
+fixed=0 pr=0 deferred=0 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+fixed=0 pr=0 deferred=1 escalated=0 suppressed=0
+ok:異常なし（キャッシュなし）
+✔ fingerprint ignores changing timestamps and counts (5.4277ms)
+✔ self-healed and failover playbooks require a later success (0.904ms)
+✔ hung-task-stop does not stop the dialog watcher for a detected-dialog anomaly (8.532499ms)
+✔ log contention recognizes appendLineWithRetry migration (0.4064ms)
+✔ 記録の失敗で全体を落とさない: ログ追記が失敗しても複数異常を最後まで処理し通知まで到達する (8.5716ms)
+✔ dry-run reports PLAN for a matching playbook and never calls apply or notification (1.3504ms)
+✔ repair limit defers without decision or notification (3.6968ms)
+✔ open PR defers, while merged or closed PR allows retry (4.4353ms)
+✔ third recurrence after two deferred or PR outcomes escalates (2.0336ms)
+✔ missing and empty anomaly caches print an explicit ok line (1.6837ms)
+✔ playbook exception is recorded and the next anomaly is still processed (2.5824ms)
+✔ any nonzero codex exit tries cheap-code once and reports both redacted failures (3.811299ms)
+✔ codex-do が保留(75)なら escalated にせず quota_deferred を台帳に残し、retryAt までは再試行しない (3.3604ms)
+✔ dead GUI watcher follows registration playbook and verifies heartbeat, no real tasks/notifications (2.5935ms)
+✔ budget caps the existing limit and recalculates fallback timeouts (1.9804ms)
+✔ under five minutes defers without launching and dry-run remains read-only (2.5887ms)
+✔ default and invalid budget values preserve the 45 minute cap (5.8642ms)
+✔ no anomalies still advances the monitored log (1.0552ms)
+✔ wrapper-held log uses stdout and a durable sibling without retrying its lock (4.8709ms)
+ℹ tests 19
+ℹ suites 0
+ℹ pass 19
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 694.476578

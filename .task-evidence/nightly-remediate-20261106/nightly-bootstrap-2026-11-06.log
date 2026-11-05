@@ -1,0 +1,100 @@
+2026-11-06 02:41:11 / nightly-bootstrap / ok:開始 pid=56752 target=tools\booth-feedback-intake.mjs
+2026-11-06 02:41:39 / 排他制御 / ok:取得 pid=56752 待ち=2.538
+2026-11-06 02:43:02 / nightly-bootstrap / ok:開始 pid=3992 target=tools\sga-autopilot.mjs
+2026-11-06 02:44:30 / nightly-bootstrap / ok:開始 pid=23444 target=tools\decision-watch.mjs
+2026-11-06 02:46:03 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行 pid=3992 待ち=180.050
+2026-11-06 02:47:30 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行 pid=23444 待ち=180.082
+2026-11-06 02:48:17 / 対象開始 / ok:sga-autopilot.mjs pid=3992
+2026-11-06 02:48:52 / nightly-bootstrap / ok:開始 pid=22432 target=tools\fleet-agent.mjs
+2026-11-06 02:48:59 / 対象開始 / ok:decision-watch.mjs pid=23444
+2026-11-06 02:50:23 / 対象実行 / ok:sga-autopilot.mjs 終了コード=1 pid=3992 所要=126.066
+2026-11-06 02:50:50 / 対象実行 / ok:decision-watch.mjs 終了コード=0 pid=23444 所要=111.275
+2026-11-06 02:51:52 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行 pid=22432 待ち=180.031
+2026-11-06 02:53:27 / nightly-bootstrap / ok:開始 pid=34612 target=tools\decision-watch.mjs
+2026-11-06 02:53:31 / 対象開始 / ok:fleet-agent.mjs pid=22432
+2026-11-06 02:55:58 / nightly-bootstrap / ok:開始 pid=56668 target=tools\feedback-to-issues.mjs
+2026-11-06 02:56:08 / 対象実行 / ok:fleet-agent.mjs 終了コード=0 pid=22432 所要=157.304
+2026-11-06 02:56:27 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行 pid=34612 待ち=180.043
+2026-11-06 02:57:27 / 対象開始 / ok:decision-watch.mjs pid=34612
+2026-11-06 02:58:15 / nightly-bootstrap / ok:開始 pid=57016 target=tools\booth-feedback-intake.mjs
+2026-11-06 02:59:32 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行 pid=56668 待ち=187.775
+2026-11-06 02:59:40 / 対象実行 / ok:decision-watch.mjs 終了コード=0 pid=34612 所要=132.770
+2026-11-06 02:59:55 / 対象実行 / ok:feedback-to-issues.mjs 終了コード=0 pid=51864 所要=1438.981
+2026-11-06 03:01:15 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行 pid=57016 待ち=180.053
+2026-11-06 03:01:42 / 対象開始 / ok:feedback-to-issues.mjs pid=56668
+2026-11-06 03:01:42 / 対象実行 / ok:fleet-mail.mjs 終了コード=75 pid=62572 所要=1998.125
+2026-11-06 03:01:45 / nightly-bootstrap / ok:開始 pid=52292 target=tools\sga-autopilot.mjs
+2026-11-06 03:01:48 / nightly-bootstrap / ok:開始 pid=58484 target=tools\decision-watch.mjs
+2026-11-06 03:01:49 / 対象開始 / ok:booth-feedback-intake.mjs pid=57016
+2026-11-06 03:01:49 / nightly-bootstrap / ok:開始 pid=37928 target=tools\fleet-agent.mjs
+2026-11-06 03:01:49 / リポ同期 / ok:origin/main 87bcf75
+2026-11-06 03:01:49 / nightly-bootstrap / ok:開始 pid=33812 target=tools\nightly-batch.ps1
+2026-11-06 03:01:49 / 排他制御 / ok:取得 pid=52292 待ち=3.446
+2026-11-06 03:01:55 / 対象開始 / ok:booth-feedback-intake.mjs pid=56752
+2026-11-06 03:02:10 / リポ同期 / ok:origin/main 87bcf75
+2026-11-06 03:02:10 / 排他制御 / ok:取得 pid=58484 待ち=21.218
+2026-11-06 03:02:11 / nightly-bootstrap / ok:開始 pid=64856 target=tools\fleet-mail.mjs
+2026-11-06 03:02:17 / 対象開始 / ok:sga-autopilot.mjs pid=52292
+2026-11-06 03:02:19 / 対象実行 / ok:booth-feedback-intake.mjs 終了コード=0 pid=56752 所要=23.827
+2026-11-06 03:02:19 / 対象実行 / ok:booth-feedback-intake.mjs 終了コード=0 pid=57016 所要=30.260
+2026-11-06 03:02:26 / 対象実行 / ok:feedback-to-issues.mjs 終了コード=0 pid=56668 所要=44.384
+2026-11-06 03:02:27 / 対象実行 / ok:sga-autopilot.mjs 終了コード=0 pid=52292 所要=10.095
+2026-11-06 03:02:50 / リポ同期 / ok:origin/main 87bcf75
+2026-11-06 03:02:50 / 排他制御 / ok:取得 pid=37928 待ち=61.075
+2026-11-06 03:03:03 / 対象開始 / ok:decision-watch.mjs pid=58484
+2026-11-06 03:03:09 / 対象実行 / ok:decision-watch.mjs 終了コード=0 pid=58484 所要=6.409
+2026-11-06 03:03:39 / リポ同期 / ok:origin/main 87bcf75
+2026-11-06 03:03:39 / 排他制御 / ok:取得 pid=33812 待ち=110.175
+2026-11-06 03:03:44 / 対象開始 / ok:fleet-agent.mjs pid=37928
+2026-11-06 03:03:55 / 対象実行 / ok:fleet-agent.mjs 終了コード=0 pid=37928 所要=10.001
+2026-11-06 03:04:09 / リポ同期 / ok:origin/main 87bcf75
+2026-11-06 03:04:10 / 排他制御 / ok:取得 pid=64856 待ち=119.010
+2026-11-06 03:04:17 / 対象開始 / ok:nightly-batch.ps1 pid=33812
+2026-11-06 03:04:48 / リポ同期 / ok:origin/main 87bcf75
+2026-11-06 03:05:04 / 対象開始 / ok:fleet-mail.mjs pid=64856
+2026-11-06 03:05:54 / nightly-bootstrap / ok:開始 pid=62348 target=tools\funnel-probe.mjs
+2026-11-06 03:05:59 / 排他制御 / ok:取得 pid=62348 待ち=0.046
+2026-11-06 05:06:04 / nightly-bootstrap / ok:開始 pid=45708 target=tools\fleet-mail.mjs
+2026-11-06 05:06:08 / 排他制御 / ok:取得 pid=45708 待ち=0.008
+2026-11-06 05:08:03 / nightly-bootstrap / ok:開始 pid=41844 target=tools\fleet-mail-watchdog.mjs
+2026-11-06 05:08:05 / nightly-bootstrap / ok:開始 pid=20972 target=tools\booth-feedback-intake.mjs
+2026-11-06 05:08:06 / nightly-bootstrap / ok:開始 pid=43876 target=tools\funnel-probe.mjs
+2026-11-06 05:11:08 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行 pid=41844 待ち=180.018
+2026-11-06 05:11:10 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行 pid=20972 待ち=180.011
+2026-11-06 05:11:11 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行 pid=43876 待ち=180.020
+2026-11-06 05:11:28 / nightly-bootstrap / ok:開始 pid=57624 target=tools\plaud-to-tldv.mjs
+2026-11-06 05:11:37 / 対象開始 / ok:fleet-mail-watchdog.mjs pid=41844
+2026-11-06 05:11:38 / 対象開始 / ok:booth-feedback-intake.mjs pid=20972
+2026-11-06 05:11:39 / 対象開始 / ok:funnel-probe.mjs pid=43876
+2026-11-06 05:12:00 / 対象実行 / ok:funnel-probe.mjs 終了コード=1 pid=43876 所要=21.268
+2026-11-06 05:12:12 / 対象実行 / ok:booth-feedback-intake.mjs 終了コード=0 pid=20972 所要=33.923
+2026-11-06 05:12:47 / nightly-bootstrap / ok:開始 pid=57068 target=tools\sga-autopilot.mjs
+2026-11-06 05:12:54 / nightly-bootstrap / ok:開始 pid=38440 target=tools\decision-watch.mjs
+2026-11-06 05:13:25 / nightly-bootstrap / ok:開始 pid=16472 target=tools\feedback-to-issues.mjs
+2026-11-06 05:14:32 / 排他制御 / warn:他のタスクが同期中のためタイムアウト。既存版で続行 pid=57624 待ち=180.023
+2026-11-06 05:14:38 / 対象開始 / ok:plaud-to-tldv.mjs pid=57624
+2026-11-06 05:14:40 / 対象実行 / ok:plaud-to-tldv.mjs 終了コード=0 pid=57624 所要=1.832
+2026-11-06 05:14:42 / リポ同期 / ok:origin/main d91311e
+2026-11-06 05:14:42 / 排他制御 / ok:取得 pid=57068 待ち=112.423
+2026-11-06 05:14:45 / 対象開始 / ok:fleet-mail.mjs pid=45708
+2026-11-06 05:14:49 / リポ同期 / ok:origin/main d91311e
+2026-11-06 05:14:49 / 排他制御 / ok:取得 pid=38440 待ち=112.432
+2026-11-06 05:14:53 / 対象開始 / ok:sga-autopilot.mjs pid=57068
+2026-11-06 05:14:55 / リポ同期 / ok:origin/main d91311e
+2026-11-06 05:14:55 / 排他制御 / ok:取得 pid=16472 待ち=87.893
+2026-11-06 05:14:55 / 対象実行 / ok:sga-autopilot.mjs 終了コード=0 pid=57068 所要=1.962
+2026-11-06 05:14:59 / 対象開始 / ok:decision-watch.mjs pid=38440
+2026-11-06 05:14:59 / リポ同期 / ok:origin/main d91311e
+2026-11-06 05:14:59 / 対象実行 / ok:decision-watch.mjs 終了コード=0 pid=38440 所要=0.881
+2026-11-06 05:15:02 / nightly-bootstrap / ok:開始 pid=42112 target=tools\booth-feedback-intake.mjs
+2026-11-06 05:15:02 / 排他制御 / ok:取得 pid=42112 待ち=0.004
+2026-11-06 05:15:03 / nightly-bootstrap / ok:開始 pid=7572 target=tools\fleet-agent.mjs
+2026-11-06 05:15:03 / 対象開始 / ok:feedback-to-issues.mjs pid=16472
+2026-11-06 05:15:06 / リポ同期 / ok:origin/main d91311e
+2026-11-06 05:15:06 / 排他制御 / ok:取得 pid=7572 待ち=2.922
+2026-11-06 05:15:09 / 対象開始 / ok:booth-feedback-intake.mjs pid=42112
+2026-11-06 05:15:11 / リポ同期 / ok:origin/main d91311e
+2026-11-06 05:15:12 / 対象実行 / ok:feedback-to-issues.mjs 終了コード=0 pid=16472 所要=9.383
+2026-11-06 05:15:14 / 対象開始 / ok:fleet-agent.mjs pid=7572
+2026-11-06 05:15:18 / 対象実行 / ok:fleet-agent.mjs 終了コード=0 pid=7572 所要=4.275
+2026-11-06 05:15:20 / 対象実行 / ok:booth-feedback-intake.mjs 終了コード=0 pid=42112 所要=11.077

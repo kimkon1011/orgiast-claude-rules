@@ -1,0 +1,115 @@
+{
+    "Now":  "2026-11-06T05:17:35.1372964+09:00",
+    "State":  "Ready",
+    "LastRunTime":  "2026-11-05T07:20:01.0000000+09:00",
+    "LastTaskResult":  0,
+    "NextRunTime":  "2026-11-06T07:20:00.0000000+09:00",
+    "Actions":  [
+                    {
+                        "CimClass":  {
+                                         "CimSuperClassName":  "MSFT_TaskAction",
+                                         "CimSuperClass":  {
+                                                               "CimSuperClassName":  null,
+                                                               "CimSuperClass":  null,
+                                                               "CimClassProperties":  [
+                                                                                          "Id"
+                                                                                      ],
+                                                               "CimClassQualifiers":  [
+
+                                                                                      ],
+                                                               "CimClassMethods":  [
+
+                                                                                   ],
+                                                               "CimSystemProperties":  {
+                                                                                           "Namespace":  "ROOT/Microsoft/Windows/TaskScheduler",
+                                                                                           "ServerName":  "DESKTOP-2D0R4LI",
+                                                                                           "ClassName":  "MSFT_TaskAction",
+                                                                                           "Path":  null
+                                                                                       }
+                                                           },
+                                         "CimClassProperties":  [
+                                                                    {
+                                                                        "Name":  "Id",
+                                                                        "Value":  null,
+                                                                        "CimType":  14,
+                                                                        "Flags":  "Property, NullValue",
+                                                                        "Qualifiers":  "",
+                                                                        "ReferenceClassName":  null
+                                                                    },
+                                                                    {
+                                                                        "Name":  "Arguments",
+                                                                        "Value":  null,
+                                                                        "CimType":  14,
+                                                                        "Flags":  "Property, NullValue",
+                                                                        "Qualifiers":  "",
+                                                                        "ReferenceClassName":  null
+                                                                    },
+                                                                    {
+                                                                        "Name":  "Execute",
+                                                                        "Value":  null,
+                                                                        "CimType":  14,
+                                                                        "Flags":  "Property, NullValue",
+                                                                        "Qualifiers":  "",
+                                                                        "ReferenceClassName":  null
+                                                                    },
+                                                                    {
+                                                                        "Name":  "WorkingDirectory",
+                                                                        "Value":  null,
+                                                                        "CimType":  14,
+                                                                        "Flags":  "Property, NullValue",
+                                                                        "Qualifiers":  "",
+                                                                        "ReferenceClassName":  null
+                                                                    }
+                                                                ],
+                                         "CimClassQualifiers":  [
+
+                                                                ],
+                                         "CimClassMethods":  [
+
+                                                             ],
+                                         "CimSystemProperties":  {
+                                                                     "Namespace":  "Root/Microsoft/Windows/TaskScheduler",
+                                                                     "ServerName":  "DESKTOP-2D0R4LI",
+                                                                     "ClassName":  "MSFT_TaskExecAction",
+                                                                     "Path":  null
+                                                                 }
+                                     },
+                        "CimInstanceProperties":  [
+                                                      {
+                                                          "Name":  "Id",
+                                                          "Value":  null,
+                                                          "CimType":  14,
+                                                          "Flags":  "Property, NotModified, NullValue",
+                                                          "IsValueModified":  false
+                                                      },
+                                                      {
+                                                          "Name":  "Arguments",
+                                                          "Value":  "//nologo \"C:\\Users\\uers\\.claude\\tools\\run-hidden.vbs\" \"C:\\Program Files\\nodejs\\node.exe\" \"C:\\Users\\uers\\.claude\\nightly-repo\\tools\\nightly-health-remediate.mjs\"",
+                                                          "CimType":  14,
+                                                          "Flags":  "Property, NotModified",
+                                                          "IsValueModified":  false
+                                                      },
+                                                      {
+                                                          "Name":  "Execute",
+                                                          "Value":  "C:\\WINDOWS\\System32\\wscript.exe",
+                                                          "CimType":  14,
+                                                          "Flags":  "Property, NotModified",
+                                                          "IsValueModified":  false
+                                                      },
+                                                      {
+                                                          "Name":  "WorkingDirectory",
+                                                          "Value":  "C:\\Users\\uers\\.claude\\nightly-repo",
+                                                          "CimType":  14,
+                                                          "Flags":  "Property, NotModified",
+                                                          "IsValueModified":  false
+                                                      }
+                                                  ],
+                        "CimSystemProperties":  {
+                                                    "Namespace":  "Root/Microsoft/Windows/TaskScheduler",
+                                                    "ServerName":  "DESKTOP-2D0R4LI",
+                                                    "ClassName":  "MSFT_TaskExecAction",
+                                                    "Path":  null
+                                                }
+                    }
+                ]
+}

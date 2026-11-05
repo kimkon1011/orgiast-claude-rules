@@ -1,0 +1,100 @@
+ appended=0 dm=none yahooFailed=true failed=true
+警告: nightly-batch: hide-task-windows exited 1: エラー: \Orgiast Growi 自動クリーンアップ: Access is denied. / 完了: 変更=0 / 除外=0 / 
+失敗=1
+{"targets":33,"reviewed":33,"added":0,"promoted":0,"deferral":{"total":16560,"hits":6,"byPattern":{"P1":0,"P2":0,"P3":0,"P4":0,"W":6},"enqueued":2,"detector":"local","detectorDiffers":false},"stopRechecks":{"skippedStopHookActive":0,"passAfterCap":51},"stopRecheckWarnings":[]}
+警告: nightly-batch: stalled-session-resume exited 1: "outcome": "no-progress", / "reason": "成果記録なし", / "executor": 
+"cheap-code:deepseek", / "endedAt": "2026-11-01T20:31:52.640Z" / } / ], / "aborted": false / }
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude-nightly-repo\memory\MEMORY.md
+skip: v2索引のため対象外
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers-Downloads-orgiast-claude-rules\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude-secretary-state\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude-remediate-worktrees-tools-nightly-batch-ps1-5f2f94-20260925\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\c--Users-uers-Downloads---------\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers-Downloads\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers\memory\MEMORY.md
+警告: nightly-batch: feedback-zero-sweep exited 1: "delivered": "dm", / "messageId": "1566589783281504432", / 
+"channelId": "1509558231687757846", / "recipientId": "715210673642012733", / "httpStatus": 200 / } / } / 
+unknown_rows=完了報告:投稿者へのDM未達
+警告: nightly-batch: growi-manual exited 1: Growi ページ列挙中 6414/7006 / Growi ページ列挙中 6514/7006 / Growi ページ列挙中 6614/7006 / 
+Growi ページ列挙中 6714/7006 / Growi ページ列挙中 6814/7006 / Growi ページ列挙中 6914/7006 / Growi ページ列挙完了: 固有 6980 / totalCount 7006（重複行
+ 26・全行走査済み） / fetch failed
+From https://github.com/kimkon1011/orgiast-claude-rules
+ * branch            main       -> FETCH_HEAD
+HEAD is now at 447a2e3 chore(quota-sweep): preserve uncommitted work 20261102-172834 (#1432)
+HEAD is now at 447a2e3 chore(quota-sweep): preserve uncommitted work 20261102-172834 (#1432)
+警告: nightly-batch: hide-task-windows exited 1: エラー: \Orgiast Growi 自動クリーンアップ: Access is denied. / 完了: 変更=0 / 除外=0 / 
+失敗=1
+{"targets":64,"reviewed":64,"added":0,"promoted":0,"deferral":{"total":17126,"hits":14,"byPattern":{"P1":0,"P2":0,"P3":0,"P4":0,"W":14},"enqueued":6,"detector":"local","detectorDiffers":false},"stopRechecks":{"skippedStopHookActive":0,"passAfterCap":138},"stopRecheckWarnings":[]}
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude-nightly-repo\memory\MEMORY.md
+skip: v2索引のため対象外
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers-Downloads-orgiast-claude-rules\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude-secretary-state\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude-remediate-worktrees-tools-nightly-batch-ps1-5f2f94-20260925\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\c--Users-uers-Downloads---------\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers-Downloads\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers\memory\MEMORY.md
+警告: nightly-batch: feedback-zero-sweep exited 1: ], / "notification": { / "delivered": "session-inbox", / "id": 
+"ki-20261102200005-316c", / "kind": "info" / } / } / unknown_rows=購買部管理アプリ:EPERM: operation not permitted, rename 
+'C:\Users\uers\.claude\feedback-zero-state.json.27184.tmp' -> 'C:\Users\uers\.claude\feedback-zero-state.json'; 
+完了報告:投稿者へのDM未達
+警告: nightly-batch: webhook-health exited 1: Error: fleet sheet rejected request: busy / at postWebhookSheet 
+(file:///C:/Users/uers/.claude/nightly-repo/tools/webhook-health.mjs:189:26) / at process.processTicksAndRejections 
+(node:internal/process/task_queues:104:5) / at async run 
+(file:///C:/Users/uers/.claude/nightly-repo/tools/webhook-health.mjs:276:20)
+警告: nightly-batch: webhook-inventory exited 1: Webhook台帳送信に失敗しました (HTTP 200)
+From https://github.com/kimkon1011/orgiast-claude-rules
+ * branch            main       -> FETCH_HEAD
+HEAD is now at d076edf fix(meeting-prep): tolerate local proposals and apply partial results safely (#1472)
+HEAD is now at d076edf fix(meeting-prep): tolerate local proposals and apply partial results safely (#1472)
+{"targets":49,"reviewed":49,"added":0,"promoted":0,"deferral":{"total":17580,"hits":3,"byPattern":{"P1":0,"P2":0,"P3":0,"P4":1,"W":2},"enqueued":3,"detector":"local","detectorDiffers":false},"stopRechecks":{"skippedStopHookActive":0,"passAfterCap":99},"stopRecheckWarnings":[]}
+skip: v2索引のため対象外
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude-nightly-repo\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers-Downloads-orgiast-claude-rules\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude-secretary-state\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude-remediate-worktrees-tools-nightly-batch-ps1-5f2f94-20260925\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\c--Users-uers-Downloads---------\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers-Downloads\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers\memory\MEMORY.md
+警告: nightly-batch: feedback-zero-sweep exited 1: ], / "notification": { / "delivered": "session-inbox", / "id": 
+"ki-20261103184040-b8be", / "kind": "info" / } / } / unknown_rows=完了報告:投稿者へのDM未達
+警告: nightly-batch: discord-channels exited 1: fleet sheet rejected request: busy
+From https://github.com/kimkon1011/orgiast-claude-rules
+ * branch            main       -> FETCH_HEAD
+HEAD is now at d987364 feat(feedback): wt-aujust-fbkit (aujust 向け fbkit / next・relay) を feedback-apps / zero-registry に登録 (#1536)
+HEAD is now at d987364 feat(feedback): wt-aujust-fbkit (aujust 向け fbkit / next・relay) を feedback-apps / zero-registry に登録 (#1536)
+{"targets":122,"reviewed":122,"added":0,"promoted":0,"deferral":{"total":18334,"hits":11,"byPattern":{"P1":0,"P2":0,"P3":1,"P4":0,"W":10},"enqueued":8,"detector":"local","detectorDiffers":false},"stopRechecks":{"skippedStopHookActive":0,"passAfterCap":226},"stopRecheckWarnings":[]}
+警告: nightly-batch: stalled-session-resume exited 1: "startedAt": "2026-11-04T19:13:49.222Z", / "outcome": "error", / 
+"reason": "timeout", / "endedAt": "2026-11-04T19:34:03.191Z" / } / ], / "aborted": false / }
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude-nightly-repo\memory\MEMORY.md
+skip: v2索引のため対象外
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers-Downloads-orgiast-claude-rules\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude-secretary-state\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude-remediate-worktrees-tools-nightly-batch-ps1-5f2f94-20260925\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\c--Users-uers-Downloads---------\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers-Downloads\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers\memory\MEMORY.md
+警告: nightly-batch: feedback-zero-sweep exited 1: ], / "notification": { / "delivered": "session-inbox", / "id": 
+"ki-20261103184040-b8be", / "kind": "info" / } / } / unknown_rows=完了報告:投稿者へのDM未達
+警告: nightly-batch: discord-channels exited 1: fleet sheet rejected request: busy
+From https://github.com/kimkon1011/orgiast-claude-rules
+ * branch              main       -> FETCH_HEAD
+HEAD is now at 87bcf752 perf(codex-do): backend-specific timeoutを250s/500sに引き下げ（実測241s/464sベース） (#1593)
+HEAD is now at 87bcf752 perf(codex-do): backend-specific timeoutを250s/500sに引き下げ（実測241s/464sベース） (#1593)
+警告: nightly-batch: model-scout exited 1: model-scout 開始 / model-scout error: 日次処理失敗（scout failed）。次回再試行
+{"targets":91,"reviewed":91,"added":0,"promoted":0,"deferral":{"total":18943,"hits":4,"byPattern":{"P1":0,"P2":0,"P3":0,"P4":0,"W":4},"enqueued":3,"detector":"local","detectorDiffers":false},"stopRechecks":{"skippedStopHookActive":0,"passAfterCap":192},"stopRecheckWarnings":[]}
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude-nightly-repo\memory\MEMORY.md
+skip: v2索引のため対象外
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers-Downloads-orgiast-claude-rules\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude-secretary-state\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude-remediate-worktrees-tools-nightly-batch-ps1-5f2f94-20260925\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\c--Users-uers-Downloads---------\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers-Downloads\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers--claude\memory\MEMORY.md
+しきい値未満のためスキップ: C:\Users\uers\.claude\projects\C--Users-uers\memory\MEMORY.md
+警告: nightly-batch: feedback-zero-sweep exited 1: } / ], / "notification": { / "delivered": "session-inbox", / "id": 
+"ki-20261103184040-b8be", / "kind": "info" / } / }
+警告: nightly-batch: discord-channels exited 1: fleet sheet rejected request: busy

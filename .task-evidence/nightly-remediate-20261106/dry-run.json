@@ -1,0 +1,375 @@
+{
+  "exitCode": 0,
+  "fixed": [],
+  "prs": [],
+  "escalated": [],
+  "deferred": [],
+  "suppressed": [],
+  "skipped": [
+    {
+      "fingerprint": "014ed3fa9b74d787",
+      "label": "無人ジョブ監査",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "8935d412eb467a77",
+      "label": "無人ジョブ監査",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "82e32df571760c7b",
+      "label": "無人ジョブ監査",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "eeb679208e0a5c2f",
+      "label": "無人ジョブ監査",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "2b7953f5ca91d305",
+      "label": "無人ジョブ監査",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "528223fe83de90a7",
+      "label": "無人ジョブ監査",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "da13a93ec18bfc15",
+      "label": "画面監視が停止・異常",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "1900bf0c9fc270e2",
+      "label": "実行失敗: \\Orgiast-SecurityAudit-Night-20261029",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "c2bf5bff33fdb1d4",
+      "label": "実行失敗: \\OrgiastFleetMailWatchdog",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "c95274ebf8a400b6",
+      "label": "実行失敗: \\OrgiastInternalAudit",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "fe6466ea10e4befd",
+      "label": "実行失敗: \\OrgiastMailStaleDraft",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "38241ccd8b1e11cb",
+      "label": "定期タスクが未実行",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "f9c148ba7abb8b3a",
+      "label": "定期タスクが未実行",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "31519381c82b699b",
+      "label": "定期タスクが未実行",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "6decebdeb9496fcc",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "29bfc010042e264a",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "65c41dad7bb52794",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "061a3fe5bf634433",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "24c7e5fd6be0fccf",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "548f72328ddf25ba",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "bacaaa883bf0ee44",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "f3a2aa785d2014c0",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "2b72c71e7feb2651",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "d87d2ab10e5338f1",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "24b3bc74c7a8ba7b",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "1778dcf46a1a6c10",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "0d1e7b6a336d0211",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "87a1bcaa4ee6b8c6",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "44585b82b7504852",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "07008818edda9ad9",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "d495cb213fde2994",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "f249c472506c082b",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "e68f7f12fddc8b10",
+      "label": "再開しても進まない会話",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "e96e0fd85462867c",
+      "label": "停滞会話の処理が未完了",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "2c6d5836d268f2f8",
+      "label": "停滞会話の処理が未完了",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "4f065489de445e67",
+      "label": "停滞会話の処理が未完了",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "7a5f2a8110841342",
+      "label": "task-FB-fb-1793002350019-t8zzesmf",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "05476f8f948eca53",
+      "label": "task-FB-fb-1793002350019-t8zzesmf",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "c8663dadc83648f9",
+      "label": "X AI活用tips収集",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "a8f7790c1aa1e0ce",
+      "label": "AIニュース選別",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "f0d0e0d6a51011c9",
+      "label": "Google Tasks同期",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "9151ea65bfdf127b",
+      "label": "価格ブリーフ",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "092ba508877a0772",
+      "label": "夜間バッチ(日次)",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "a4ed7ab74966e504",
+      "label": "ドライブバックアップ",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "5ab28aafa1d68fe1",
+      "label": "Driveバックアップ",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "7daa9aa5e2b8319c",
+      "label": "朝バッチ",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "ea9769aa5cb010ea",
+      "label": "コスト改善ループ",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "277d41e802e9827b",
+      "label": "夕方ダイジェスト",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "6237db2840240096",
+      "label": "フィードバック課題化",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "d113cddd6c74dc27",
+      "label": "夜間KPI",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "daefac32246fdd39",
+      "label": "ルール準拠ループ",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    },
+    {
+      "fingerprint": "5972dd1bd9d5d847",
+      "label": "Top3追跡",
+      "outcome": "skipped",
+      "reason": "同日処理済み",
+      "ranAt": "2026-11-05T20:19:00.355Z"
+    }
+  ],
+  "plan": []
+}

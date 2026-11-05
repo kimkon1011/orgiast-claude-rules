@@ -1,0 +1,200 @@
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 無人ジョブ監査
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z fixed 画面監視が停止・異常 (stuck-dialog-watcher)
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 実行失敗: \Orgiast-SecurityAudit-Night-20261029
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 実行失敗: \OrgiastFleetMailWatchdog
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 実行失敗: \OrgiastInternalAudit
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 実行失敗: \OrgiastMailStaleDraft
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 定期タスクが未実行
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z escalated 定期タスクが未実行
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 定期タスクが未実行
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z escalated 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 停滞会話の処理が未完了
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 停滞会話の処理が未完了
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 停滞会話の処理が未完了
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred task-FB-fb-1793002350019-t8zzesmf
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred task-FB-fb-1793002350019-t8zzesmf
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred X AI活用tips収集
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred AIニュース選別
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z escalated Google Tasks同期
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 価格ブリーフ
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 夜間バッチ(日次)
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred ドライブバックアップ
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred Driveバックアップ
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 朝バッチ
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred コスト改善ループ
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 夕方ダイジェスト
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred フィードバック課題化
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred 夜間KPI
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred ルール準拠ループ
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-03T22:20:02.849Z deferred Top3追跡
+fixed=1 pr=0 deferred=46 escalated=5 suppressed=0
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 無人ジョブ監査
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 無人ジョブ監査
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 無人ジョブ監査
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 無人ジョブ監査
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 無人ジョブ監査
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 無人ジョブ監査
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z playbook-error 画面監視が停止・異常 (stuck-dialog-watcher)
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 実行失敗: \Orgiast-SecurityAudit-Night-20261029
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 実行失敗: \OrgiastFleetMailWatchdog
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 実行失敗: \OrgiastInternalAudit
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 実行失敗: \OrgiastMailStaleDraft
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 定期タスクが未実行
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 定期タスクが未実行
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 定期タスクが未実行
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 再開しても進まない会話
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 停滞会話の処理が未完了
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 停滞会話の処理が未完了
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 停滞会話の処理が未完了
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated task-FB-fb-1793002350019-t8zzesmf
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred task-FB-fb-1793002350019-t8zzesmf
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred X AI活用tips収集
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated AIニュース選別
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred Google Tasks同期
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z escalated 価格ブリーフ
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 夜間バッチ(日次)
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred ドライブバックアップ
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred Driveバックアップ
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 朝バッチ
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred コスト改善ループ
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 夕方ダイジェスト
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred フィードバック課題化
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred 夜間KPI
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred ルール準拠ループ
+WARN ログ追記失敗: EBUSY: resource busy or locked, open 'C:\Users\uers\.claude\logs\nightly-health-remediate.log'
+2026-11-04T22:21:37.799Z deferred Top3追跡
+fixed=0 pr=0 deferred=29 escalated=22 suppressed=0

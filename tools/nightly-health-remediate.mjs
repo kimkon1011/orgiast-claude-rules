@@ -46,12 +46,24 @@ export async function runRemediation({
     return Math.floor((remainingMs() - 3 * 60000) / 1000) * 1000;
   };
   const logFile = path.join(home, '.claude', 'logs', 'nightly-health-remediate.log');
+  // run-hidden.vbs redirects stdout to logFile and holds a Windows write handle.
+  // Retrying that handle cannot succeed until this process exits. Keep a durable
+  // sibling record and let the wrapper write the same line through stdout.
+  let wrapperOwnsLog = false;
+  const appendLog = async (line) => {
+    if (!wrapperOwnsLog) {
+      try { await appendLineWithRetry(logFile, line, { attempts: 1 }); return; }
+      catch (error) { if (error.code !== 'EBUSY') throw error; wrapperOwnsLog = true; }
+    }
+    console.log(line);
+    await appendLineWithRetry(logFile.replace(/\.log$/, '.events.log'), line);
+  };
   const input = readJson(path.join(home, '.claude', '.nightly-health-last.json'), { anomalies: [] });
   const anomalies = Array.isArray(input.anomalies) ? input.anomalies : [];
   if (!anomalies.length) {
     // A healthy/no-op run must also advance the monitored heartbeat.
     if (!dryRun) {
-      try { await appendLineWithRetry(logFile, `${now.toISOString()} remediation started`); }
+      try { await appendLog(`${now.toISOString()} remediation started`); }
       catch (error) { console.error(`WARN ログ追記失敗: ${redactAll(error?.message ?? error)}`); }
     }
 
@@ -71,7 +83,7 @@ export async function runRemediation({
       const line = `${row.ranAt} ${outcome} ${anomaly.label}${extra.playbook ? ` (${extra.playbook})` : ''}${extra.prUrl ? ` ${extra.prUrl}` : ''}`;
       try { await appendLineWithRetry(ledgerFile, JSON.stringify(row)); }
       catch (error) { console.error(`WARN 台帳追記失敗: ${redactAll(error?.message ?? error)}`); }
-      try { await appendLineWithRetry(logFile, line); }
+      try { await appendLog(line); }
       catch (error) { console.error(`WARN ログ追記失敗: ${redactAll(error?.message ?? error)}`); console.log(line); }
     }
     return row;

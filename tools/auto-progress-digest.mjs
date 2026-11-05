@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { readDigest as readDeadlineDigest } from './deadline-watch.mjs';
-import { addItem as addDeadlineDigest } from './kim-inbox.mjs';
 // 各PCのローカル台帳から、完了・進行中・停滞/再開・判断待ちを 持ち主の DM へ定期報告する。
 import fs from 'node:fs';
 import { readDeferred } from './lib/owner-dm-policy.mjs';
@@ -343,10 +342,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       let result;
       try {
         if (io.notify) result = await io.notify(text, options);
-        else if (deadlinePrefix) {
-          const item = await addDeadlineDigest(home, { kind: 'info', source: 'deadline-digest', text, dedupeKey: `deadline-digest:${key}` });
-          result = { delivered: 'session-inbox', id: item.id };
-        } else result = await (io.notifyOwner ?? notifyOwner)(owner, text, options);
+        else result = await (io.notifyOwner ?? notifyOwner)(owner, text, options);
       }
       catch (e) { result = { delivered: 'none', reason: String(e?.message || e) }; }
       const ok = ['dm', 'session-inbox', 'toast', 'inbox'].includes(result?.delivered);

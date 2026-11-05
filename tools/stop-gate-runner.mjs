@@ -7,6 +7,7 @@ import { judgeDeliverableDriveLink, registerDeliverableCheck } from './deliverab
 import { evaluateInvitePermissions } from './hooks/discord-invite-permission-gate.mjs';
 import { applyNamedGatePolicy } from './gate-runtime.mjs';
 import os from 'node:os';
+import { evaluateProgressCron } from './progress-cron-gate.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { addCheck } from './auto-progress.mjs';
@@ -110,6 +111,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['deferral-wait-gate', () => judgeDeferralWait(ctx.assistantText)],
     ['third-party-nudge-gate', () => judgeThirdPartyNudge(ctx.assistantText)],
     ['unregistered-promise-gate', () => evaluateUnregisteredPromise(ctx.assistantText, { sessionId: ctx.sessionId, transcriptRaw: ctx.transcriptRaw, home: home() })],
+    ['progress-cron-gate', () => evaluateProgressCron(ctx.input, { home: home() })],
     ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw, { ...ctx.input, session_id: ctx.sessionId }, { turnText: ctx.turnText })],
     ['user-burden-gate', () => judgeUserBurden(ctx.assistantText, ctx.humanText)],
     ['substitute-capability-gate', () => judgeSubstituteCapability(ctx.assistantText)],

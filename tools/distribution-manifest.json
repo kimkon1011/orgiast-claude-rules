@@ -13,6 +13,7 @@
     "data": { "reason": "codex 可用性プローブ履歴等のデータ。実行時参照なし" },
     "evidence": { "reason": "証跡置き場。実行時参照なし" },
     "reports": { "reason": "レポート置き場。実行時参照なし" },
+    "results": { "reason": "PR作業の結果レポート。配布先PCの実行時参照なし" },
     "package.json": { "reason": "repo 自体の依存宣言。tools の参照は対象アプリ側の package.json" },
     "knowledge-merged.json": { "reason": "rules-sync merge の作業物。実行時参照なし" },
     "README.md": { "reason": "GitHub 表示用" },

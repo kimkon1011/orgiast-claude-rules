@@ -200,7 +200,7 @@ try {
     ['pretooluse-delegation-warn.mjs', 5], ['model-agent-guard.mjs', 5],
     ['pretooluse-serial-investigation.mjs', 5], ['current-session.mjs', 5],
     ['cost-loop.mjs', 5], ['rule-compliance-report.mjs', 10],
-    ['next-actions-notice.mjs', 10], ['plaud-renewal-notice.mjs', 5],
+    ['next-actions-notice.mjs', 10], ['plaud-renewal-notice.mjs', 300],
     ['clear-ack.mjs', 5], ['verify-before-done-detector.ps1', 10],
   ];
   for (const groups of Object.values(settings.hooks)) {
@@ -236,7 +236,9 @@ try {
     for (const [event, groups] of Object.entries(originalHooks)) {
       if (!Array.isArray(groups)) continue;
       retained[event] = groups.flatMap(group => {
-        const hooks = (group.hooks || []).filter(hook => !managed(hook.command));
+        // The old home copy blindly replayed F12 markdown; replace it with the repository hook.
+        const hooks = (group.hooks || []).filter(hook => !managed(hook.command) &&
+          !(event === 'SessionStart' && /(?:^|[\\/])plaud-renewal-notice\.mjs["']?(?:\s|$)/.test(hook.command || '')));
         return hooks.length ? [{ ...group, hooks }] : [];
       });
     }

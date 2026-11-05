@@ -249,7 +249,8 @@ if (manifest) {
   }
   if (converge && !valueAfter('--manifest')) {
     const { description, ...outcome } = inspectTaskHiddenActions({ converge });
-    results.push({ item: { id: 'task-hidden-actions', severity: 'optional', description }, ...outcome });
+    // reason は fleet beacon に載る。NG のときにタスク名をリモートから特定できるようにする。
+    results.push({ item: { id: 'task-hidden-actions', severity: 'optional', description }, ...outcome, reason: outcome.status === 'OK' ? '' : description });
   }
   if (converge && !valueAfter('--manifest')) {
     const { description, ...outcome } = convergeNightlyReload();

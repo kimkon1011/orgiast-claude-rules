@@ -16,6 +16,7 @@ import { displayPcNames } from './lib/pc-display.mjs';
 import { formatInboxBrief, relayDue, recordInjection, recordPromptAnswers, recordNaturalLanguageAnswers, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
 import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mjs';
 import { matchesRow, parseEscalation, syncEscalationAnswer } from './lib/escalation-answer-sync.mjs';
+import { createReclaimDirectory, removeReclaimDirectory } from './lib/reclaim-lock.mjs';
 const exec = promisify(execFile);
 const directory = home => path.join(home, '.claude/kim-inbox');
 const clean = value => redactSecrets(String(value ?? '')).slice(0, 4000);
@@ -27,32 +28,28 @@ export function inboxDedupeKey(value) {
 }
 const validId = id => /^ki-\d{14}-[a-f0-9]{4}$/.test(id);
 export const CONTEXT_LIMIT = 1800;
-// 古いロック(EPERM/pid再利用)を mtime で回収。既定5分、環境変数で上書き可。
-const STALE_LOCK_MS = Number(process.env.KIM_INBOX_STALE_LOCK_MS) || 300_000;
-// ロックが古いとき削除ではなく .stale-<epoch> へ rename して証跡を残す。
-function renameStaleLock(lock) {
-  try {
-    const stale = `${lock}.stale-${Date.now()}`;
-    fs.renameSync(lock, stale);
-    console.error(`kim-inbox: 古いロックを rename しました ${lock} -> ${stale}`);
-    return true;
-  } catch { return false; }
-}
-// mtime と（必要な場合）PID 存活確認でロックを回収できるか判定する。
+const STALE_LOCK_MS = Number(process.env.KIM_INBOX_STALE_LOCK_MS) || 60_000;
 function tryReclaimLock(lock) {
   try {
-    const stat = fs.statSync(lock);
-    if (Date.now() - stat.mtimeMs > STALE_LOCK_MS) return renameStaleLock(lock);
-    // mtime が新しい — PID が消えていたら回収
+    const before = fs.statSync(lock);
+    if (Date.now() - before.mtimeMs <= STALE_LOCK_MS) return false;
+    const raw = fs.readFileSync(lock, 'utf8').trim();
+    const pid = /^\d+$/.test(raw) ? Number(raw) : NaN;
+    if (Number.isInteger(pid) && pid > 0 && pid <= 2147483647) {
+      try { process.kill(pid, 0); return false; }
+      catch (error) { if (error.code !== 'ESRCH') return false; }
+    }
+    const reclaim = `${lock}.reclaim`;
+    createReclaimDirectory(reclaim);
     try {
-      const pid = Number(fs.readFileSync(lock, 'utf8'));
-      if (pid > 0) try { process.kill(pid, 0); } catch (e) {
-        if (e.code === 'ESRCH') return renameStaleLock(lock);
-        // EPERM: PID が保護済み/再利用 — mtime が新しいので待つ
-      }
-    } catch { /* 読めない/不正なPID */ }
-  } catch (statErr) { if (statErr.code === 'ENOENT') return true; } // 直前に解放済み
-  return false;
+      const current = fs.statSync(lock);
+      if (current.ino !== before.ino || current.mtimeMs !== before.mtimeMs || current.size !== before.size) return false;
+      const stale = `${lock}.stale-${Date.now()}`;
+      fs.renameSync(lock, stale);
+      console.error(`kim-inbox: 古いロックを rename しました ${lock} -> ${stale}`);
+      return true;
+    } finally { removeReclaimDirectory(reclaim); }
+  } catch (error) { return error.code === 'ENOENT'; }
 }
 // kim 本人が座る席（kim-PC、所有者が kim のPC、kim が操作する nishi@/cr@/seisaku-team@ 等の
 // アカウント = lib/kim-operated.mjs）では、kim-PC へ転送せずその場のセッションで回収する（2026-10-28 kim）。
@@ -67,14 +64,14 @@ function save(home, item) {
   finally { fs.rmSync(temp, { force: true }); }
 }
 // 同じ項目の回答・表示更新を直列化し、古い表示更新が回答を上書きしない。
-function acquireInboxLock(home, key, waitMs = 10_000) {
+function acquireInboxLock(home, key, waitMs = 5000) {
   fs.mkdirSync(directory(home), { recursive: true });
   const lock = path.join(directory(home), `${key}.lock`);
   let fd;
   const deadline = performance.now() + waitMs;
   let delay = 10;
   for (;;) {
-    try { fd = fs.openSync(lock, 'wx', 0o600); fs.writeFileSync(fd, String(process.pid)); break; }
+    try { fd = fs.openSync(lock, 'wx', 0o600); break; }
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
       if (tryReclaimLock(lock)) continue;
@@ -85,7 +82,9 @@ function acquireInboxLock(home, key, waitMs = 10_000) {
     }
   }
   if (fd === undefined) throw new Error('kim-inbox: 台帳が使用中です');
-  return () => { fs.closeSync(fd); fs.unlinkSync(lock); };
+  const release = () => { fs.closeSync(fd); fs.unlinkSync(lock); };
+  try { fs.writeFileSync(fd, String(process.pid)); } catch (error) { release(); throw error; }
+  return release;
 }
 function locked(home, key, fn, waitMs) {
   const release = acquireInboxLock(home, key, waitMs);
@@ -110,22 +109,31 @@ const legacyInfoKey = text => text.replace(/^【[^\r\n]*】[^\S\r\n]*(?:\r?\n|$)
   .replace(/\d+/g, '#').slice(0, 120);
 // 集約の検索と作成を同じロックで守り、同時追加も取りこぼさない。
 function create(home, options) {
-  return locked(home, 'info-aggregation', () => {
-    const text = clean(options.text);
+  const text = clean(options.text);
+  const prepared = { ...options, text, source: clean(options.source),
+    from: clean(options.from ?? resolveFleetLabel(home, { hostname: os.hostname() })),
+    sessionId: clean(options.sessionId), dedupeKey: options.dedupeKey ? inboxDedupeKey(options.dedupeKey) : undefined };
+  const select = () => locked(home, 'info-aggregation', () => {
     if (options.kind === 'deadline') {
       if (!options.key || !/^[A-Za-z0-9_-]+$/.test(options.key)) throw new Error('deadline には有効な --key が必要です');
       const existing = listItems(home, { status: 'open' }).find(i => i.kind === 'deadline' && i.key === options.key);
-      if (existing) return update(home, existing.id, current => {
-        current.text = text; current.due = options.due || ''; current.remainingDays = options.remainingDays ?? null;
-        current.lastAt = new Date().toISOString();
-      });
+      if (existing) return () => {
+        let updated = false;
+        const item = update(home, existing.id, current => {
+          if (current.status !== 'open') return;
+          updated = true;
+          current.text = text; current.due = options.due || ''; current.remainingDays = options.remainingDays ?? null;
+          current.lastAt = new Date().toISOString();
+        });
+        return updated ? item : undefined;
+      };
     }
     // Durable producers retry after a crash between inbox delivery and ledger update.
     // Keep distinct jobs separate even when their text normalizes to the same prefix.
     if (options.dedupeKey) {
-      const existing = listItems(home).find(item => item.dedupeKey === inboxDedupeKey(options.dedupeKey));
+      const existing = listItems(home).find(item => item.dedupeKey === prepared.dedupeKey);
       if (existing && options.progressAt && options.kind === 'info') {
-        return update(home, existing.id, current => {
+        return () => update(home, existing.id, current => {
           if ((Date.parse(current.progressAt) || 0) >= Date.parse(options.progressAt)) return;
           current.text = text; current.progressAt = options.progressAt; current.lastAt = options.progressAt;
           current.repeatCount = (current.repeatCount ?? 1) + 1;
@@ -133,18 +141,18 @@ function create(home, options) {
           current.forwardMailId = null; current.forwardError = null;
         });
       }
-      if (existing && options.refresh && existing.source === 'morning-session-sweep' && options.source === existing.source && options.kind === 'info') return update(home, existing.id, current => {
+      if (existing && options.refresh && existing.source === 'morning-session-sweep' && options.source === existing.source && options.kind === 'info') return () => update(home, existing.id, current => {
         current.text = text; current.lastAt = new Date().toISOString(); current.status = 'open';
         current.shownCount = 0; current.shownSessions = []; current.lastShownAt = null;
         current.forwardMailId = options.forwardMailId || null; current.forwardError = null;
       });
-      if (existing && options.refresh && (existing.source === 'auto-progress-heartbeat' || (existing.source === 'auto-progress-done' && existing.kind === 'info' && options.kind === 'ask' && ['open', 'seen'].includes(existing.status)))) return update(home, existing.id, current => {
+      if (existing && options.refresh && (existing.source === 'auto-progress-heartbeat' || (existing.source === 'auto-progress-done' && existing.kind === 'info' && options.kind === 'ask' && ['open', 'seen'].includes(existing.status)))) return () => update(home, existing.id, current => {
         if (current.source === 'auto-progress-done' && (current.kind !== 'info' || !['open', 'seen'].includes(current.status))) return;
         current.text = text; current.kind = options.kind; current.status = 'open'; current.priority = 'high'; current.lastAt = new Date().toISOString();
         current.shownCount = 0; current.shownSessions = []; current.lastShownAt = null;
         current.forwardMailId = options.forwardMailId || null; current.forwardError = null;
       });
-      if (existing && options.replaceExisting) return update(home, existing.id, current => {
+      if (existing && options.replaceExisting) return () => update(home, existing.id, current => {
         const changed = current.text !== text || (options.revision !== undefined && current.revision !== options.revision) || (options.dailyProgress && (!current.dailyProgress || current.progressDay !== options.progressDay));
         if (options.forwardMailId) current.forwardMailId = options.forwardMailId;
         if (!changed) return;
@@ -158,16 +166,17 @@ function create(home, options) {
           current.progressVersion = (current.progressVersion || 0) + 1;
         }
       });
-      return existing || createNew(home, options);
+      return existing || createNew(home, prepared);
     }
     const kind = options.kind ?? 'info';
     if (['ask', 'info'].includes(kind)) {
       const key = `${kind}\n${normalizeInboxText(text)}`;
       const matches = listItems(home, { status: 'open' }).filter(i => !i.dedupeKey && contentDedupeKey(i) === key).sort(newestFirst);
-      for (const match of matches) {
+      if (matches.length) return () => {
+        const match = matches[0];
         let merged = false;
         const item = update(home, match.id, current => {
-          if (current.status !== 'open') return;
+          if (current.status !== 'open' || current.dedupeKey || contentDedupeKey(current) !== key) return;
           const now = new Date().toISOString();
           current.count = (current.count ?? current.repeatCount ?? 1) + 1;
           current.lastSeenAt = now;
@@ -177,11 +186,18 @@ function create(home, options) {
           if (options.forwardMailId) current.forwardMailId = options.forwardMailId;
           merged = true;
         });
-        if (merged) return item;
-      }
+        return merged ? item : undefined;
+      };
     }
-    return createNew(home, options);
+    return createNew(home, prepared);
   });
+  // 項目ロックの待ち時間を info-aggregation に伝播させない。
+  for (;;) {
+    const selected = select();
+    if (typeof selected !== 'function') return selected;
+    const updated = selected();
+    if (updated) return updated;
+  }
 }
 export function compactItems(home) {
   return locked(home, 'info-aggregation', () => {
@@ -241,14 +257,14 @@ export function dedupeExisting(home, { apply = false } = {}) {
   };
   return apply ? locked(home, 'info-aggregation', inspect) : inspect();
 }
-function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen, progressAt }) {
+function createNew(home, { kind = 'info', text, source, from, forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen, progressAt }) {
   if (!['ask', 'info', 'deadline'].includes(kind)) throw new Error('kind は ask / info / deadline');
   if (doneWhen && kind !== 'ask') throw new Error('--done-when-gmail は ask 専用です');
   fs.mkdirSync(directory(home), { recursive: true });
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(['ask', 'info'].includes(kind) ? { count: 1, lastSeenAt: progressAt || createdAt } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey } : {}), ...(['ask', 'info'].includes(kind) ? { count: 1, lastSeenAt: progressAt || createdAt } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), kind, source, from, text, status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     if (revision !== undefined) item.revision = revision;
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -402,9 +418,9 @@ export function markSeen(home, id) {
   return update(home, id, item => { if (item.kind !== 'info') throw new Error('ask は --answer で返答を記録してください'); item.status = 'seen'; });
 }
 export function closeKey(home, key) {
-  return locked(home, 'info-aggregation', () => listItems(home, { status: 'open' })
-    .filter(i => i.kind === 'deadline' && i.key === key)
-    .map(i => update(home, i.id, current => { current.status = 'seen'; })));
+  const items = locked(home, 'info-aggregation', () => listItems(home, { status: 'open' })
+    .filter(i => i.kind === 'deadline' && i.key === key));
+  return items.map(i => update(home, i.id, current => { current.status = 'seen'; }));
 }
 // gmail-search.mjs を子プロセスとして実行する既定の検索実装。
 async function defaultGmailSearch(user, query) {

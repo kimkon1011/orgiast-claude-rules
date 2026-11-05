@@ -3,14 +3,14 @@ import os from 'node:os';
 import fs from 'node:fs';
 import { parseArgs } from 'node:util';
 import { isEntry } from './is-entry.mjs';
-import { ledgerFile, readLedger, writeLedger, latestOpenPromises, applyPromise, isSessionProgressCheck, SESSION_CHECK_TIMEOUT_MS, SESSION_DEADLINE_MS } from './auto-progress-ledger.mjs';
+import { ledgerFile, readLedger, writeLedger, latestOpenPromises, applyPromise, OPEN_STATUSES, isSessionProgressCheck, SESSION_CHECK_TIMEOUT_MS, SESSION_DEADLINE_MS } from './auto-progress-ledger.mjs';
 import { executeCheck, preflightCheck, sessionStateReference, MAX_CHECK_TIMEOUT_MS, isTimeOnlyCheck } from './auto-progress-check.mjs';
 import { resolveOwner } from './notify-owner.mjs';
 import { hasReferencedApproval } from './lib/send-approval.mjs';
 import { externalSpec, MONITOR_DAYS } from './lib/external-monitor-state.mjs';
 // 外部の成果を読まず、時計と定数だけで決まる典型的な判定を拒否する。
 export { isTimeOnlyCheck } from './auto-progress-check.mjs';
-export function addCheck({ session, check, startWhen, deadline, label, nextClaude, nextKim, doneFile, askFile, timeout, cwd = process.cwd(), home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), probe, allowMet = false, autoRegisteredCheck = false, transcriptPath = '' }) {
+export function addCheck({ session, check, startWhen, deadline, label, nextClaude, nextKim, doneFile, askFile, timeout, cwd = process.cwd(), home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), probe, allowMet = false, autoRegisteredCheck = false, transcriptPath = '', replace = false }) {
   const external = externalSpec({ check });
   if (!session?.trim() || !(startWhen?.trim() || check?.trim()) || !label?.trim()) throw new Error('--session, --check, --label は必須です');
   if (startWhen !== undefined && (!startWhen.trim() || !nextClaude?.trim())) throw new Error('--start-when には --next-claude が必須です');
@@ -23,6 +23,9 @@ export function addCheck({ session, check, startWhen, deadline, label, nextClaud
   const sessionCheck = isSessionProgressCheck({ check });
   if (autoRegisteredCheck && sessionCheck) deadlineMs = Math.max(deadlineMs, now + SESSION_DEADLINE_MS);
   const timeoutFields = timeoutSec === null ? (sessionCheck ? { checkTimeoutMs: SESSION_CHECK_TIMEOUT_MS } : {}) : { checkTimeoutMs: Math.min(Math.round(timeoutSec * 1000), MAX_CHECK_TIMEOUT_MS) };
+  const file = ledgerFile(home), rows = readLedger(file);
+  const conflicts = rows.filter(row => row.sessionId === session && OPEN_STATUSES.has(row.status) && row.label?.trim() && row.label.trim() !== label.trim());
+  if (!replace && conflicts.length) throw new Error(`同じセッションの約束を上書きできません: ${JSON.stringify(conflicts.map(({ label, check, startWhen, ask }) => ({ label, check: check || '', startWhen: startWhen || '', ask: ask || '' })))}。約束を1つの check にまとめ直すか、--replace を付ける`);
   if (probe) {
     const { code, text } = probe({ check: startWhen || check, checkCwd: cwd, cwd, ...timeoutFields });
     if (code === 0 && !startWhen && !allowMet && !external) throw new Error(`check が登録時点で既に達成(exit 0)と判定されました: ${text}。達成時だけ exit 0 になる形か確認してください（例: … | grep -q MERGED）。本当に達成済みなら登録は不要です`);
@@ -32,7 +35,6 @@ export function addCheck({ session, check, startWhen, deadline, label, nextClaud
     if (code === null && !/上限を超えました/.test(text)) throw new Error(`check がこの PC で実行できません(exit ${code}): ${text}`);
   }
   const ask = askFile === undefined ? undefined : fs.readFileSync(askFile, 'utf8');
-  const file = ledgerFile(home), rows = readLedger(file);
   const old = latestOpenPromises(rows).find(row => row.sessionId === session)
     || rows.filter(row => row.sessionId === session).sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts))[0];
   const promisedWork = [nextClaude, external ? '' : old?.promise, label].filter(Boolean).join('\n');
@@ -43,10 +45,8 @@ export function addCheck({ session, check, startWhen, deadline, label, nextClaud
   if (nextKim !== undefined) {
     const trimmed = nextKim.trim();
     resolvedNextKim = (trimmed === '' || trimmed === 'なし') ? 'なし' : trimmed;
-  } else if (askFile !== undefined) {
-    resolvedNextKim = old?.nextKim || 'なし';
-  } else {
-    resolvedNextKim = 'なし';
+  } else if (ask !== undefined) {
+    resolvedNextKim = [...ask.split(/\r?\n/, 1)[0]].slice(0, 120).join('') || 'なし';
   }
   // A new revision keeps prior results auditable and resets notification state.
   const row = { ts: new Date(now).toISOString(), pc: old?.pc || os.hostname(), user: old?.user || os.userInfo().username,
@@ -54,7 +54,7 @@ export function addCheck({ session, check, startWhen, deadline, label, nextClaud
     promise: label.trim(), nextKim: resolvedNextKim, status: startWhen ? 'scheduled' : 'open', ...(check ? { check: check.trim(), checkRegisteredAt: new Date(now).toISOString() } : {}), ...(startWhen ? { startWhen: startWhen.trim() } : {}), checkCwd: cwd,
     ...(autoRegisteredCheck ? { autoRegisteredCheck: true } : {}),
     deadlineAt: new Date(deadlineMs).toISOString(), label: label.trim(), nextClaude: nextClaude || '', ...(ask !== undefined || old?.ask ? { ask: ask ?? old.ask } : {}), ...(doneFile ? { doneFile } : {}), ...timeoutFields };
-  writeLedger(file, applyPromise(rows, row)); return row;
+  writeLedger(file, applyPromise(rows, row, { replace })); return row;
 }
 export function auditChecks({ home = process.env.ORGIAST_HOME || os.homedir(), execute = executeCheck } = {}) {
   const rows = readLedger(ledgerFile(home)).filter(row => row.status === 'open' && row.check);
@@ -69,8 +69,8 @@ export function auditChecks({ home = process.env.ORGIAST_HOME || os.homedir(), e
 }
 export function main(argv = process.argv.slice(2)) {
   if (argv.length === 1 && argv[0] === '--audit-checks') return auditChecks();
-  const { values } = parseArgs({ args: argv, options: { 'add-check': { type: 'boolean' }, 'ask-file': { type: 'string' }, 'done-file': { type: 'string' }, 'start-when': { type: 'string' }, 'allow-met': { type: 'boolean' }, 'force-check': { type: 'boolean' }, 'allow-session-state': { type: 'boolean' }, session: { type: 'string' }, check: { type: 'string' }, deadline: { type: 'string' }, label: { type: 'string' }, 'next-claude': { type: 'string' }, 'next-kim': { type: 'string' }, timeout: { type: 'string' } } });
-  if (!values['add-check'] && !values['start-when']) throw new Error('使用法: --start-when "<cmd>" --session <id> --label "<名前>" --deadline +24h --next-claude "<作業>" [--check "<完了判定>"] または --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" [--timeout <秒>] [--next-kim "<文|なし>"] [--ask-file <path>] [--done-file <path>] [--allow-met] [--force-check] [--allow-session-state] または --audit-checks。check: exit 0=完了 / 1=未達 / 3=停滞（stdout 最終行が理由）/ その他=エラー');
+  const { values } = parseArgs({ args: argv, options: { 'add-check': { type: 'boolean' }, replace: { type: 'boolean' }, 'ask-file': { type: 'string' }, 'done-file': { type: 'string' }, 'start-when': { type: 'string' }, 'allow-met': { type: 'boolean' }, 'force-check': { type: 'boolean' }, 'allow-session-state': { type: 'boolean' }, session: { type: 'string' }, check: { type: 'string' }, deadline: { type: 'string' }, label: { type: 'string' }, 'next-claude': { type: 'string' }, 'next-kim': { type: 'string' }, timeout: { type: 'string' } } });
+  if (!values['add-check'] && !values['start-when']) throw new Error('使用法: --start-when "<cmd>" --session <id> --label "<名前>" --deadline +24h --next-claude "<作業>" [--check "<完了判定>"] または --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" [--timeout <秒>] [--next-kim "<文|なし>"] [--ask-file <path>] [--done-file <path>] [--replace] [--allow-met] [--force-check] [--allow-session-state] または --audit-checks。check: exit 0=完了 / 1=未達 / 3=停滞（stdout 最終行が理由）/ その他=エラー');
   const home = process.env.ORGIAST_HOME || os.homedir();
   if (!values['start-when'] && !values['allow-session-state']
       && sessionStateReference({ check: values.check, checkCwd: process.cwd() }, { home })) {

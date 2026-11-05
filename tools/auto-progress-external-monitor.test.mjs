@@ -229,7 +229,7 @@ test('Stop hook registers only successful sends from current turn, keeps cursor 
 test('external add-check defaults to fourteen days and never converts next action to one-shot start', t => {
   const home = fixture(t);
   writeLedger(ledgerFile(home), [{ ...baseRow(), sessionId: 'session', check: undefined, promise: '古い送信約束を実行する' }]);
-  const row = addCheck({ home, now, session: 'session', label: 'monitor', check: baseRow().check, nextClaude: '履歴を確認', probe: () => ({ code: 0 }) });
+  const row = addCheck({ home, now, session: 'session', label: 'monitor', replace: true, check: baseRow().check, nextClaude: '履歴を確認', probe: () => ({ code: 0 }) });
   assert.equal(row.status, 'open'); assert.ok(!row.startWhen); assert.equal(Date.parse(row.deadlineAt), now + MONITOR_DAYS);
 });
 test('empty polls do not widen the initial baseline and include equal timestamps only after arrival', async t => {

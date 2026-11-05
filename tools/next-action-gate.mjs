@@ -267,6 +267,14 @@ function waitingCheckIssues(source, transcriptRaw, input, turnSource) {
     && !hasOpenSessionCheck(input) && !noAutocheck) {
     issues.push({ decision: 'block', code: 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', reason: (userHandoff ? 'user 本人への手渡し（[手渡し判定]／お願いする操作）も人待ちです。' : '') + '人待ちの自動進行は台帳の定期チェックに載せる: node tools/auto-progress.mjs --add-check --session <id> --check "<exit0=達成/1=未達のコマンド>" --deadline +7d --label "<名前>" --next-claude "<次の手>"。自動進行が「なし」でも同じセッションの open 行が必要です。自動確認できない場合だけ [NO-AUTOCHECK-OK: <理由>] を記載してください。' });
   }
+  if ((userHandoff || !NO_ACTION_PATTERN.test(footer.nextAction)) && classifyHandoff(source) !== 'reply-only'
+    && !noAutocheck && input.session_id) {
+    const openRows = latestOpenPromises(readLedger(ledgerFile()))
+      .filter(row => row.sessionId === input.session_id && row.status === 'open');
+    if (openRows.length && !openRows.some(row => typeof row.ask === 'string' && row.ask.trim())) {
+      issues.push({ decision: 'block', code: 'NEXT-ACTION-USER-WAIT-NEEDS-ASK', reason: '本人待ちの open 台帳行に頼みごとの全文（ask）がありません。node tools/auto-progress.mjs --add-check --session <id> --check "<達成判定>" --deadline +7d --label "<名前>" --next-claude "<次の手>" --ask-file <頼みごとの全文ファイル> で登録し直してください。通知だけで持ち主が操作できる全文を保存してください。例外は [NO-AUTOCHECK-OK: <理由>]。' });
+    }
+  }
   // Monitor / 起床通知はセッション終了で消える。実際の永続台帳を必須にする。
   if (WAIT_STATES.has(sessionState) && !hasOpenSessionCheck(input)) {
     issues.push({ decision: 'block', code: 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK', reason: '作業中のまま応答を終える前に、同じセッションの永続チェックを登録してください: node tools/auto-progress.mjs --add-check --session <id> --check "<達成判定>" --deadline +3d --label "<作業名>" --next-claude "<次の手>"。自動進行が「なし」でも必要です。バックグラウンド完了通知や登録コマンドへの言及だけでは代替できません。' });

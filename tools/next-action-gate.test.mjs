@@ -25,7 +25,7 @@ function withOpenCheck(run) {
   process.env.ORGIAST_HOME = home;
   fs.mkdirSync(path.join(home, '.claude'));
   const file = path.join(home, '.claude', 'auto-progress-ledger.jsonl');
-  fs.writeFileSync(file, JSON.stringify({ sessionId: 'registered', status: 'open', check: 'node check.mjs' }) + '\n');
+  fs.writeFileSync(file, JSON.stringify({ sessionId: 'registered', status: 'open', check: 'node check.mjs', ask: '本人が行う操作の全文です。' }) + '\n');
   try { return run({ session_id: 'registered' }, file); }
   finally {
     if (previous === undefined) delete process.env.ORGIAST_HOME;
@@ -503,7 +503,7 @@ test('会話に実行痕跡がなくても同じ session_id の open 台帳行�
   process.env.ORGIAST_HOME = home;
   t.after(() => previous === undefined ? delete process.env.ORGIAST_HOME : process.env.ORGIAST_HOME = previous);
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(home, '.claude', 'auto-progress-ledger.jsonl'), `${JSON.stringify({ ts: new Date().toISOString(), sessionId: 'ledger-session', status: 'open', check: 'node x' })}\n`);
+  fs.writeFileSync(path.join(home, '.claude', 'auto-progress-ledger.jsonl'), `${JSON.stringify({ ts: new Date().toISOString(), sessionId: 'ledger-session', status: 'open', check: 'node x', ask: '本人が行う操作の全文です。' })}\n`);
   for (const text of [promiseText, humanWaitText]) {
     const result = judgeNextAction(text, cronRow, { session_id: 'ledger-session' });
     assert.equal(result.decision, 'pass', JSON.stringify(result));
@@ -586,7 +586,7 @@ test('人待ちは自動進行なしでも同一sessionのopen台帳行を要求
     assert.equal(judgeNextAction(text, cronRow, input).decision, 'pass');
     assert.equal(judgeNextAction(text, cronRow, { session_id: 'other' }).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
     for (const status of ['done', 'superseded', 'waiting_user', 'stalled', 'resumed']) {
-      fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status, check: 'node check.mjs' }));
+      fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status, check: 'node check.mjs', ask: '本人が行う操作の全文です。' }));
       assert.equal(judgeNextAction(text, '', input).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', status);
     }
     fs.rmSync(file);

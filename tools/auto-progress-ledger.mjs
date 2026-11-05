@@ -179,6 +179,21 @@ export function originLine(row, { label = '', localOwner = '', home = '' } = {})
   if (!purpose && home && row.sessionId) {
     try { purpose = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'session-purpose', `${row.sessionId}.json`), 'utf8')).purpose || ''; } catch {}
   }
+  const synthetic = value => /^\s*<(?:task-notification\b|system-reminder\b|command-)/.test(String(value));
+  if ((!purpose || synthetic(purpose)) && row.transcriptPath) {
+    purpose = '';
+    try {
+      for (const line of fs.readFileSync(row.transcriptPath, 'utf8').split(/\r?\n/)) {
+        let entry;
+        try { entry = JSON.parse(line); } catch { continue; }
+        if (entry.isSidechain || (entry.message?.role || entry.type) !== 'user') continue;
+        const content = entry.message?.content;
+        const text = typeof content === 'string' ? content : (Array.isArray(content) ? content.filter(block => block?.type === 'text').map(block => block.text || '').join('\n') : '');
+        if (text.trim() && !synthetic(text)) { purpose = text; break; }
+      }
+    } catch { /* ログが無い場合は台帳の label を使う。 */ }
+  }
+  if (!purpose || synthetic(purpose)) purpose = row.label || '';
   purpose = String(purpose).replace(/\s+/g, ' ').trim();
   const parts = [`プロジェクト: ${project}`];
   if (purpose) parts.push(`セッションの目的: ${purpose.length > 50 ? `${purpose.slice(0, 50)}…` : purpose}`);

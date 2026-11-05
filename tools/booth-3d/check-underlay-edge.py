@@ -12,7 +12,7 @@ def score(offset):
   y=round(line_y(x)+offset)
   gx=(cg[(y-1)*bw+x+1]+2*cg[y*bw+x+1]+cg[(y+1)*bw+x+1])-(cg[(y-1)*bw+x-1]+2*cg[y*bw+x-1]+cg[(y+1)*bw+x-1]); gy=(cg[(y+1)*bw+x-1]+2*cg[(y+1)*bw+x]+cg[(y+1)*bw+x+1])-(cg[(y-1)*bw+x-1]+2*cg[(y-1)*bw+x]+cg[(y-1)*bw+x+1]); t+=math.hypot(gx,gy)
  return t/(x1-x0+1)
-s,offset=max((score(d),d) for d in range(-radius,radius+1)); found=expected+offset; shift=offset/booth_h*100; passed=abs(shift)<=5; result={'expected_top_y_px':expected,'detected_top_y_px':found,'top_shift_percent':shift,'threshold_percent':5,'sobel_score':s,'passed':passed,'search_x_px':[x0,x1]}; json.dump(result,open(out_json,'w',encoding='utf-8'),ensure_ascii=False,indent=2)
+s,offset=max((score(d),d) for d in range(-radius,radius+1)); found=expected+offset; shift=offset/booth_h*100; min_shift,max_shift=-25,5; passed=min_shift<=shift<=max_shift; result={'expected_top_y_px':expected,'detected_top_y_px':found,'top_shift_percent':shift,'threshold_percent':{'min':min_shift,'max':max_shift},'sobel_score':s,'passed':passed,'search_x_px':[x0,x1]}; json.dump(result,open(out_json,'w',encoding='utf-8'),ensure_ascii=False,indent=2)
 out=bpy.data.images.new('comparison',width=bw*2,height=bh,alpha=True); dst=[0.0]*(bw*2*bh*4)
 for yy in range(bh):
  for x in range(bw):

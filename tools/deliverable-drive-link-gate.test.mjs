@@ -14,7 +14,10 @@ const toolUses = [{ name: 'SendUserFile', input: { files: ['C:/Users/x/a.pdf', '
 
 test('実害文と③にURLを追加した修正版', () => {
   assert.equal(judge({ text: incident }).decision, 'block');
-  assert.equal(judge({ text: incident + links }).decision, 'pass');
+  const linkedIncident = incident
+    .replace('048-839-8614 へ送ってください。', '048-839-8614 へ送ってください。 https://drive.google.com/file/d/a/view?authuser=x@example.com')
+    .replace('048-643-5793 へ送ってください。', '048-643-5793 へ送ってください。 https://docs.google.com/document/d/b/edit?authuser=x@example.com');
+  assert.equal(judge({ text: linkedIncident }).decision, 'pass');
   assert.equal(judge({ text: links + incident }).decision, 'block');
 });
 test('SendUserFileの異なる2ファイルには2本必要', () => {
@@ -38,7 +41,25 @@ test('③だけでも発火し、次の見出しのURLは数えない', () => {
   const text = '【最終まとめ】\n③ やること\nPDFを印刷してください。';
   assert.equal(judge({ text }).decision, 'block');
   assert.equal(judge({ text: text + '\n① 報告' + links }).decision, 'block');
-  assert.equal(judge({ text: text + links }).decision, 'pass');
+  assert.equal(judge({ text: text + links }).decision, 'block');
+  assert.equal(judge({ text: text.replace('ください。', 'ください。 https://drive.google.com/file/d/a/view') }).decision, 'pass');
+});
+
+test('②で確認してもらう成果物にも同じ単位のDrive URLが必要', () => {
+  const text = `【最終まとめ】
+**① 報告**
+31件を移動しました。
+**② kim の確認事項**
+- チラシ初稿と告知画像3枚を、このまま 11/5 17:00 の打ち合わせで森田社長に見せてよいですか？
+**③ kim がやること**
+- 上の2つの確認事項に返信する。`;
+  assert.equal(judge({ text }).decision, 'block');
+  assert.equal(judge({ text: text.replace('見せてよいですか？', '見せてよいですか？ https://drive.google.com/file/d/example/view') }).decision, 'pass');
+});
+
+test('対象外の報告と成果物を参照しない返信は通す', () => {
+  assert.equal(judge({ text: '【最終まとめ】\n① 報告\n- チラシを保存しました。\n② 確認事項\nなし\n③ やること\nなし' }).decision, 'pass');
+  assert.equal(judge({ text: '【最終まとめ】\n② 確認事項\n- 日程は明日でよいですか？\n③ やること\n- 上の2つの確認事項に返信する。' }).decision, 'pass');
 });
 
 test('runner: reply-only・既存cap後でも3回blockし、4回目は専用cap', async t => {

@@ -313,6 +313,7 @@ PR のマージを人に頼む文（本文の「次に kim がすること」・
 ## deliverable-drive-link-gate
 
 成果物は Drive にアップロードし、最終メッセージに異なるファイル数以上の Drive / Docs URL を載せる。③でファイルの利用を依頼する場合は③にも必要数の URL を載せ、authuser に開く人のメールを付ける。
+② と ③ で見てもらう成果物は、その箇条書きと同じ単位に Drive / Docs URL を書く（例: `- チラシ初稿 PDF https://drive.google.com/file/d/…/view`）。
 
 - `node tools/drive-upload.mjs --file <path> --folder <folderId> --authuser <開く人のメール>`
 - 鍵が無い PC: `rclone copyto <file> <remote>:<name> --drive-root-folder-id <folderId>`（drive リモート）、または Drive MCP。

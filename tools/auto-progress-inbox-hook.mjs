@@ -6,6 +6,7 @@ import { resolveOwner, resolveOwnerDiscordId } from './notify-owner.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+import { listPending as listPendingPush } from './mobile-push-queue.mjs';
 
 import { isUnattendedSession } from './lib/unattended-session.mjs';
 import { inboxText, inboxFile, readRows } from './lib/auto-progress-inbox.mjs';
@@ -77,10 +78,31 @@ export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.home
     if (changed) fs.writeFileSync(file, updated.map(JSON.stringify).join('\n') + '\n');
   }
   const warning = recipientWarning({ ...ownerOptions, home, label }, new Date(now));
-  if (!lines.length && !warning) return null;
+  // mobile-push 未送信要求があれば PushNotification での送信指示を注入する
+  const pushRequests = listPendingPush(home);
+  const nowMs = Date.now();
+  const recent = [], old = [];
+  for (const req of pushRequests) {
+    const age = nowMs - Date.parse(req.ts);
+    if (age < 24 * 3600 * 1000) recent.push(req);
+    else old.push(req);
+  }
+  const pushContextLines = [];
+  for (const req of recent) {
+    pushContextLines.push(
+      `【mobile-push要求: ${req.id}】次の内容を PushNotification ツールで送信し、送信後に \`node tools/mobile-push-queue.mjs --mark-sent ${req.id}\` を実行せよ:\n${req.body}`
+    );
+  }
+  if (old.length > 0) {
+    pushContextLines.push(
+      `【mobile-push要求: 古い未送信 ${old.length} 件】次の内容をまとめて PushNotification ツールで送信し、送信後に各 ID を \`node tools/mobile-push-queue.mjs --mark-sent <id>\` で既読化せよ:\n${old.map(r => `- ${r.id}: ${r.body.slice(0, 100)}`).join('\n')}`
+    );
+  }
+  const pushContext = pushContextLines.join('\n\n');
+  if (!lines.length && !warning && !pushContext) return null;
   const event = input.hook_event_name || 'UserPromptSubmit';
   const context = lines.length ? `【必須】応答の冒頭で user に見える形で「📲 自動進行の結果（聞かれる前にお知らせ）」として次を表示せよ: ${displayText(lines.join('\n'), Infinity)}` : '';
-  return { hookSpecificOutput: { hookEventName: event, additionalContext: [warning, context].filter(Boolean).join('\n') } };
+  return { hookSpecificOutput: { hookEventName: event, additionalContext: [warning, context, pushContext].filter(Boolean).join('\n') } };
 }
 async function main() {
   try {

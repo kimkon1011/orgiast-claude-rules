@@ -10,6 +10,7 @@ import { notifyKim, KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { isEntry } from './is-entry.mjs';
+import { enqueue as enqueueMobilePush } from './mobile-push-queue.mjs';
 // 所有者解決は lib/fleet-owner.mjs（kim-inbox と共用。ここに置くと notify-kim -> kim-inbox -> notify-owner の import が循環する）。
 import { ownerPcMap, resolveOwner, canonicalOwnerPcMap, isSharedOwner } from './lib/fleet-owner.mjs';
 export { resolveOwner };
@@ -203,10 +204,19 @@ export async function notifyOwner(owner, text, options = {}) {
   const configured = localPcEntry(options.pcMap ?? ownerPcMap(home), options.label ?? resolveFleetLabel(home));
   const channels = local && !kim && Array.isArray(configured?.notifyChannels) ? configured.notifyChannels : null;
   const discordEnabled = !channels || channels.includes('discord');
+  const mobilePushEnabled = channels && channels.includes('mobile-push');
   let localInboxOk = false;
   if (local && !kim) {
     try { await prependInbox(home, safeText, at); localInboxOk = true; } catch { /* continue other delivery paths */ }
     try { appendOwnerInbox(home, { source: 'notify-owner', text: safeText }); } catch { /* continue other delivery paths */ }
+  }
+  // mobile-push channel: queue for PushNotification delivery instead of Discord/toast.
+  if (mobilePushEnabled && local && !kim) {
+    try {
+      const id = enqueueMobilePush({ owner, title: 'Claude 進捗', body: safeText, home });
+      attempts.push({ channel: 'mobile-push', ok: true, id });
+      return finish({ delivered: 'mobile-push-queued', channel: 'mobile-push', ok: true, id });
+    } catch { /* fall through to other delivery paths */ }
   }
   let reason = discordEnabled ? 'owner Discord recipient unresolved or mismatched' : 'Discord disabled by notifyChannels';
   if (valid && discordEnabled) {

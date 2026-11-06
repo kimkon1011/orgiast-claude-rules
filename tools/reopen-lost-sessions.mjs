@@ -42,12 +42,53 @@ function run(command, args, spawn = spawnSync) {
 }
 function ps(script, spawn) { return run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], spawn); }
 const quotePS = s => "'" + s.replaceAll("'", "''") + "'";
-export function resolveCodeCli(env = process.env, exists = fs.existsSync) {
-  const candidates = [env.VSCODE_CLI_PATH, path.join(env.LOCALAPPDATA || '', 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'),
-    'C:\\Program Files\\Microsoft VS Code\\bin\\code.cmd', 'C:\\Program Files (x86)\\Microsoft VS Code\\bin\\code.cmd'];
-  const cli = candidates.find(x => x && exists(x));
-  if (!cli) throw Error('code.cmd not found');
-  return cli;
+export function resolveClaudeCli(env = process.env, exists = fs.existsSync) {
+  // Try multiple paths in order
+  const candidates = [
+    // 1. Environment variable
+    env.CLAUDE_CLI,
+    // 2. ~/.local/bin/claude.exe
+    path.join(env.HOME || '', '.local', 'bin', 'claude.exe'),
+    path.join(env.USERPROFILE || '', '.local', 'bin', 'claude.exe'),
+    // 3. which/where command
+    undefined, // placeholder, will be resolved dynamically
+    // 4. Winget installation location
+    path.join(env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Packages', 'Anthropic.ClaudeCode_*', 'claude.exe'),
+  ];
+
+  // Check static paths first
+  for (let i = 0; i < 4; i++) {
+    const cli = candidates[i];
+    if (cli && exists(cli)) return cli;
+  }
+
+  // Try which/where command for path resolution
+  try {
+    const whichResult = run('where.exe', ['claude'], spawnSync);
+    if (whichResult && whichResult.trim()) {
+      const cli = whichResult.split('\n')[0].trim();
+      if (exists(cli)) return cli;
+    }
+  } catch (e) {}
+
+  // Try which command for other platforms
+  try {
+    const whichResult = run('which', ['claude'], spawnSync);
+    if (whichResult && whichResult.trim()) {
+      const cli = whichResult.split('\n')[0].trim();
+      if (exists(cli)) return cli;
+    }
+  } catch (e) {}
+
+  // Try glob for Winget installation (cross-platform safe)
+  try {
+    const globPattern = path.join(env.LOCALAPPDATA || '', 'Microsoft', 'WinGet', 'Packages', 'Anthropic.ClaudeCode_*', 'claude.exe');
+    const matches = glob || (() => []); // glob would need to be imported
+    const cli = matches(globPattern).find(f => exists(f));
+    if (cli) return cli;
+  } catch (e) {}
+
+  throw Error('claude CLI not found');
 }
 export function localIndex(base, onlyId) {
   const index = new Map();
@@ -124,7 +165,7 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
     if (!token || !org) throw Error('Missing RC credentials');
     const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01',
       'anthropic-beta': 'ccr-byoc-2025-07-29', 'x-organization-uuid': org };
-    const cli = path.join(base, '..', '.local', 'bin', 'claude.exe');
+    const cli = resolveClaudeCli();
     const alive = () => parseAgents(run(cli, ['agents', '--json'], spawn));
     const living = alive();
     const locals = localIndex(base), closed = closedIds(base);

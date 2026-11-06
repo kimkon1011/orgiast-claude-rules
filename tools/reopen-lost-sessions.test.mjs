@@ -93,6 +93,22 @@ test('API failure is explicit and partial candidates survive API-only deadline',
   assert.equal(result.candidates.length, 1);
   assert.equal(result.apiError, 'API time limit');
 });
+
+test('resolveClaudeCli finds cli in multiple paths', () => {
+  const originalEnv = process.env.CLAUDE_CLI;
+  try {
+    // Test that it throws when cli not found
+    assert.throws(() => resolveClaudeCli());
+    
+    // Mock env variable for testing
+    process.env.CLAUDE_CLI = 'C:\\test\\claude.exe';
+    // Mock exists to return true for this path
+    const mockExists = (p) => p === 'C:\\test\\claude.exe';
+    assert.equal(resolveClaudeCli((env) => ({ CLAUDE_CLI: 'C:\\test\\claude.exe' }), mockExists), 'C:\\test\\claude.exe');
+  } finally {
+    process.env.CLAUDE_CLI = originalEnv;
+  }
+});
 test('closed during fetch is excluded at dispatch time', async t => {
   const base = fixture(t);
   const result = await reopenLost({ base, since, until, codeCli: 'mock',

@@ -5,10 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { checkPromise, checkProgressSummary } from './auto-progress-check.mjs';
 import { notifyOwner } from './notify-owner.mjs';
-import { listItems, markSeen } from './kim-inbox.mjs';
+import { listItems as allInboxItems, markSeen } from './kim-inbox.mjs';
 import { routeOwnerDm, deferredFile } from './lib/owner-dm-policy.mjs';
 import { compactDigest } from './lib/owner-dm-digest.mjs';
 import { isKimHumanProgress, deliverHumanProgress } from './lib/auto-progress-human-inbox.mjs';
+const listItems = home => allInboxItems(home).filter(item => !item.dailyProgress);
 const now = Date.parse('2026-11-06T00:00:00Z');
 const row = () => ({ sessionId: 'human-session', ts: '2026-11-05T00:00:00Z', owner: 'kim@orgiast.jp', transcriptPath: '/transcript.jsonl', label: '保存の確認', promise: '保存されたら確認', status: 'open', check: 'check-command', deadlineAt: '2026-11-08T00:00:00Z', nextKim: '', nextClaude: '権限を確認する' });
 function home(t) {
@@ -19,7 +20,8 @@ function home(t) {
 }
 test('A/B human changes bypass quota and digest-only, preserve deferred bytes, deliver to inbox only', async t => {
   const dir = home(t), r = row();
-  for (let i = 0; i < 9; i++) await routeOwnerDm(r.owner, `質問${i}`, { home: dir, now, kind: 'action' });
+  // Fill another member's unchanged DM quota; kim no longer enters this queue.
+  for (let i = 0; i < 9; i++) await routeOwnerDm('other@example.com', `質問${i}`, { home: dir, now, kind: 'action' });
   const before = fs.readFileSync(deferredFile(dir), 'utf8');
   let code = 1, text = 'まだ保存されていません\n詳細';
   const opts = { home: dir, now, patch: (_, change) => Object.assign(r, change), io: {
@@ -27,6 +29,7 @@ test('A/B human changes bypass quota and digest-only, preserve deferred bytes, d
   } };
   await checkPromise(r, opts);
   let items = listItems(dir); assert.equal(items.length, 1);
+  assert.equal(allInboxItems(dir).filter(item => item.dailyProgress).length, 1);
   assert.equal(items[0].text, '依頼名: 保存の確認\nいまの状態: まだ保存されていません\nkim の次の1手: なし\nClaude の次の手: 権限を確認する');
   markSeen(dir, items[0].id);
   text = 'まだ保存されていません\n変化する詳細';
@@ -48,9 +51,16 @@ test('A strict provenance and policy exemption do not exempt unrelated automatic
   const dir = home(t), r = row();
   for (const patch of [{ owner: 'other@example.com' }, { transcriptPath: '' }, { label: '', promise: '' }]) {
     assert.equal(isKimHumanProgress({ ...r, ...patch }), false);
-    assert.equal((await routeOwnerDm('kim@orgiast.jp', '進捗', { home: dir, now, kind: 'automatic', session: { ...r, ...patch, owner: 'kim@orgiast.jp', ...(patch.owner ? { transcriptPath: '' } : {}) } })).delivered, 'deferred');
+    assert.equal((await routeOwnerDm('other@example.com', '進捗', { home: dir, now, kind: 'automatic', session: { ...r, ...patch, owner: 'other@example.com' } })).delivered, 'deferred');
   }
-  assert.equal(await routeOwnerDm(r.owner, '進捗', { home: dir, now, kind: 'automatic', session: r }), null);
+  const before = fs.readFileSync(deferredFile(dir), 'utf8');
+  for (const session of [r, { ...r, transcriptPath: '' }]) {
+    const result = await routeOwnerDm(r.owner, '進捗', { home: dir, now, kind: 'automatic', session, fetchImpl: () => assert.fail('no Discord') });
+    assert.equal(result.delivered, 'session-inbox');
+    assert.equal(result.channel, 'kim-inbox');
+    assert.ok(listItems(dir).some(item => item.id === result.id && item.text === '進捗'));
+  }
+  assert.equal(fs.readFileSync(deferredFile(dir), 'utf8'), before);
 });
 test('B notifyOwner routes overdue human progress directly and deduplicates without Discord', async t => {
   const dir = home(t), r = { ...row(), status: 'overdue_reported', checkResult: 'unmet', checkText: '保存待ちです' };

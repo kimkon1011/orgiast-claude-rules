@@ -83,7 +83,8 @@ test('NOTIFY_PLAIN_JA=0 相当（plainJa:false）では本文をそのまま送�
 
 function sender(dir, extra = {}) {
   const messages = [];
-  return { messages, options: { allowlist: [{ category: 'test', pattern: '.' }], home: dir, token: 'token', plainJa: false, ...extra, fetchImpl: async (url, init) => {
+  // Transport/failure tests exercise employee delivery; kim's inbox-only routing is covered by kim-no-dm.test.mjs.
+  return { messages, options: { userId: 'test-employee', allowlist: [{ category: 'test', pattern: '.' }], home: dir, token: 'token', plainJa: false, ...extra, fetchImpl: async (url, init) => {
     if (url.endsWith('/messages')) messages.push(JSON.parse(init.body).content);
     return response({ json: { id: 'dm' } });
   } } };
@@ -134,8 +135,11 @@ test('起票失敗では未修復通知を送らない', async () => {
   assert.equal((await notifyKim('失敗', s.options)).delivered, 'none');
   assert.equal(s.messages.length, 0);
 });
-test('送信失敗後は再送可能、同時呼び出しでも1通知・1起票', async () => {
-  const s = sender(home());
+test('kim-inbox保存後は同時呼び出しでも1通知・1起票', async () => {
+  const dir = home();
+  fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+  const s = sender(dir, { userId: '715210673642012733' });
   // DM/webhook が使えない kim 宛通知は kim-inbox に保存される（2026-11-04 rescue）
   const inboxResult = await notifyKim('失敗', { ...s.options, token: '', webhookFallback: false });
   assert.equal(inboxResult.delivered, 'session-inbox');

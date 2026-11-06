@@ -53,7 +53,7 @@ export function compactDigest(rows, deferred, now, { home, owner = '' } = {}) {
       continue;
     }
     // 「何に答えるのか」が分かるよう、判断内容は改行して独立の行に出す（1通1800字の分割は行単位）。
-    lines.push(`・${text}（このDMに返信してください）`);
+    lines.push(`・${text}（${owner.toLowerCase() === 'kim@orgiast.jp' ? 'このセッションで回答してください' : 'このDMに返信してください'}）`);
     if (detail) lines.push(`  → 判断してほしいこと: ${detail}`);
   }
   const extra = [];

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { checkOutput, pushDailyProgress } from './lib/auto-progress-daily.mjs';
 import { isUnattendedRow, rowKey, originLine } from './auto-progress-ledger.mjs';
 import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
@@ -58,22 +59,52 @@ export function hasBashEnvExpansion(command) {
   return /(?<!\\)\$env:/i.test(command);
 }
 
+/** Quoted/relative script paths are resolved against the check's working directory.
+ * This is a literal source scan, not a shell parser or an audit of imported files.
+ */
+export function sessionStateReference(row, { home } = {}) {
+  const tokens = String(row.check || '').match(/"[^"\n]*"|'[^'\n]*'|[^\s;|&<>]+/g) || [];
+  for (const token of tokens) {
+    let file = token.replace(/^(['"])(.*)\1$/, '$2');
+    if (!/\.(?:mjs|js|ps1|py)$/i.test(file)) continue;
+    file = file.replace(/\\/g, '/');
+    if (home && file.startsWith('~/')) file = path.join(home, file.slice(2));
+    file = path.resolve(row.checkCwd || row.cwd || process.cwd(), file);
+    let source;
+    try { source = fs.readFileSync(file, 'utf8'); }
+    catch (error) {
+      // Missing scripts are diagnosed by the existing trial execution.
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') continue;
+      throw error;
+    }
+    // Also normalize doubled backslashes in JS/Python string literals.
+    const normalized = source.replace(/\\+/g, '/').toLowerCase();
+    if (['appdata/local/temp/claude/', 'nightly-repo/.scratch/', '/tmp/'].some(value => normalized.includes(value))) return file;
+  }
+  return null;
+}
+
+export function checkPatternWarnings(command) {
+  return /(?<!\\)\$(?=[/'"])/.test(String(command || '')) && /readFile|Get-Content|grep|Select-String|\.log/i.test(command)
+    ? ['末尾の $ は CRLF や exit=0 rounds=1 の追加フィールドで不一致になり得ます。実際の成功行を使って検証し、改行を正規化するか exit=0(?:\\s|$) のように境界を指定してください。'] : [];
+}
 /**
  * addCheck の事前確認:
- * 1. 静的検査（$env: 展開の検出）
+ * 1. 静的検査（セッション限定の中間状態・$env: 展開の検出）
  * 2. 試し実行
  * 戻り値: { ok, code, text, stderr, preflight }
  *   ok=false → 登録拒否（exit 2）
  *   preflight=already_met → exit 0 で達成済み
  *   preflight=unmet → exit 1 で未達（正常）
+ *   preflight=session_state → セッション限定の中間ファイル参照を検出
  *   preflight=static_error → $env: 展開を検出
  *   preflight=stderr_error → stderr にエラー印を検出
  */
-export function checkPatternWarnings(command) {
-  return /(?<!\\)\$(?=[/'"])/.test(String(command || '')) && /readFile|Get-Content|grep|Select-String|\.log/i.test(command)
-    ? ['末尾の $ は CRLF や exit=0 rounds=1 の追加フィールドで不一致になり得ます。実際の成功行を使って検証し、改行を正規化するか exit=0(?:\\s|$) のように境界を指定してください。'] : [];
-}
-export function preflightCheck(row, { home, forceCheck = false } = {}) {
+export function preflightCheck(row, { home, forceCheck = false, allowSessionState = false } = {}) {
+  if (!allowSessionState && sessionStateReference(row, { home })) {
+    const msg = '完了判定はセッションが書く中間ファイルではなく、外部の一次情報（公開ページ・API・gh・タスクスケジューラ等）を直接照会してください。セッションが落ちると中間ファイルが更新されず、完了を検知できません（2026-11-06 実害）。例外として登録する場合だけ --allow-session-state を指定してください。';
+    return { ok: false, code: 2, text: msg, stderr: msg, preflight: 'session_state' };
+  }
   for (const warning of checkPatternWarnings(row.check)) console.error(`check preflight 警告: ${warning}`);
   // 静的検査
   if (!forceCheck && hasBashEnvExpansion(row.check)) {
@@ -140,7 +171,7 @@ export function executeCheck(row, { home, spawnImpl = spawnSync, shellPath = res
   const failure = result.error?.code === 'ETIMEDOUT'
     ? `check が ${options.timeout / 1000} 秒の上限を超えました（遅い check は --add-check --timeout <秒> で延長・最大 ${MAX_CHECK_TIMEOUT_MS / 1000} 秒）`
     : oneLine(result.error?.message || gotStderr) || code;
-  return { code, text: code === null ? `check エラー: ${failure}` : String(result.stdout || '').trim() || (code === 0 ? '達成を確認' : code === 1 ? '未達' : `check エラー: ${failure}`), stderr: gotStderr };
+  return { code, stdout: String(result.stdout || ''), text: code === null ? `check エラー: ${failure}` : String(result.stdout || '').trim() || (code === 0 ? '達成を確認' : code === 1 ? '未達' : `check エラー: ${failure}`), stderr: gotStderr };
 }
 export { checkProgressSummary } from './lib/check-progress-summary.mjs';
 export function pendingAction(row) {
@@ -166,10 +197,16 @@ export async function checkPromise(row, { home, now, patch, io = {}, suppressNot
   } catch (error) { result = { code: null, text: `check エラー: ${error.message || error}` }; }
   const state = result.code === 0 ? 'done' : result.code === 1 ? 'unmet' : 'error';
   const overdue = now >= Date.parse(row.deadlineAt);
-  const changes = { checkResult: state, checkText: String(result.text || ''), checkStderr: String(result.stderr || ''), lastCheckedAt: new Date(now).toISOString(),
+  const changes = { lastCheckOutput: checkOutput(result.stdout ?? result.text), checkResult: state, checkText: String(result.text || ''), checkStderr: String(result.stderr || ''), lastCheckedAt: new Date(now).toISOString(),
     verdict: state === 'done' ? 'done' : state === 'error' ? 'check_error' : overdue ? 'unmet' : 'in_progress',
     ...(state === 'done' ? { status: 'done', ...(!hasDoneInboxReceipt(row) ? { doneNotifyPending: true } : {}), doneAt: row.doneAt || new Date(now).toISOString() } : {}) };
   if (patch(rowKey(row), changes) === false) return 'ledger_error';
+  if (changes.verdict === 'in_progress' && !isKimHumanProgress(row)) {
+    Object.assign(row, changes);
+    if (!suppressNotices) await pushDailyProgress(home, row, { now, patch, io });
+    // 人への具体的な依頼は毎朝の進捗とは別に既存の回収経路を保つ。
+    if (!pendingAction(row).startsWith('あなたの作業待ち:')) return state;
+  }
   if (isKimHumanProgress(row) && (!suppressNotices || state === 'done')) {
     Object.assign(row, changes);
     if (state === 'error' || (state === 'unmet' && overdue)) (io.queueCheckFollowup ?? queueCheckFollowup)(home, row, result);
@@ -180,6 +217,7 @@ export async function checkPromise(row, { home, now, patch, io = {}, suppressNot
     } : {}) };
     if (patch(rowKey(row), receipt) === false) return 'ledger_error';
     Object.assign(row, receipt);
+    if (changes.verdict === 'in_progress' && !suppressNotices) await pushDailyProgress(home, row, { now, patch, io });
     return state;
   }
   if (state === 'done') {

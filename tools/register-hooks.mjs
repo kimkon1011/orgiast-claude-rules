@@ -22,7 +22,7 @@ function selectAnchor() {
     try {
       const git = (...args) => execFileSync('git', ['-C', candidate, ...args], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
       const branch = git('branch', '--show-current');
-      if ((branch && branch !== 'main') || git('status', '--porcelain')) continue;
+      if ((branch && branch !== 'main') || git('status', '--porcelain', '--untracked-files=no')) continue;
       const head = git('rev-parse', 'HEAD');
       const main = git('rev-parse', 'refs/remotes/origin/main');
       if (head !== main) {

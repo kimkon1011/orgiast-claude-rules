@@ -9,7 +9,6 @@ import { toPlainJa } from './lib/plain-ja.mjs';
 import { classifyKimDm } from './lib/kim-dm-policy.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { addItem, spoolItem, isInboxNoise } from './kim-inbox.mjs';
-import { discordAllowed } from './lib/kim-discord-allowlist.mjs';
 import { annotateAccounts } from './url-account-gate.mjs';
 
 const API = 'https://discord.com/api/v10';
@@ -81,11 +80,11 @@ export async function notifyKim(text, options = {}) {
     const policy = classifyKimDm(text);
     if (!policy.allowed) {
       console.error(`kim への Discord DM を止めました（${policy.reason}）。PR のマージ・他PCへの依頼は fleet-mail --to kim-PC で送ってください`);
-      const delivery = await persistKim(options.home || process.env.ORGIAST_HOME || os.homedir(), { ...options, priority: 'high', kind: options.kind === 'ask' ? 'ask' : 'info', text: redactSecrets(String(text ?? '')), source: options.source || 'notify-kim-blocked' });
+      const delivery = await persistKim(options.home || process.env.ORGIAST_HOME || os.homedir(), { ...options, priority: 'high', kind: ['ask', 'action'].includes(options.kind) ? 'ask' : 'info', text: redactSecrets(String(text ?? '')), source: options.source || 'notify-kim-blocked' });
       return { ...delivery, discordBlocked: true, category: policy.category, reason: delivery.reason || policy.reason };
     }
   }
-  options = { ...options, kind: options.kimActionRequired === true || options.kind === 'ask' ? 'ask' : 'info' };
+  options = { ...options, kind: options.kimActionRequired === true || ['ask', 'action'].includes(options.kind) ? 'ask' : 'info' };
   const raw = redactSecrets(String(text ?? ''));
   const bodyText = stripOwnerAddress(raw);
   if (STATUS_REPORT.test(bodyText) || ALREADY_FILED.test(bodyText) || isSuccessfulResumeReport(bodyText) || AUTO_RESUME_NOTICE.test(bodyText)) return deliverKim(raw, options);
@@ -214,7 +213,7 @@ export async function deliverKim(text, {
   plainJaImpl = toPlainJa,
   suffix = '',
   allowHumanRequest = false,
-  kind = 'info', source = '', sessionId = '', allowlist, repoRoot,
+  kind = 'info', source = '', sessionId = '',
 } = {}) {
   if (isInboxNoise({ kind, source, text: String(text ?? '') })) return { delivered: 'suppressed', reason: 'fleet-ledger-or-gate-statistics' };
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
@@ -226,12 +225,9 @@ export async function deliverKim(text, {
   // 平易化の書き換えでアカウント表記が落ちることがあるため、書き換え後の本文で補う。
   const translated = annotateAccounts(plainJa ? await plainJaImpl(String(text ?? '')) : text);
   const body = suffix && !allowHumanRequest && kind !== 'ask' ? String(translated).split('\n').filter(line => !HANDOFF.test(line)).join('\n') : translated;
-  // 許可判定は平易化前の原文でも行う。平易化（LLM 書き換え）で「【… の自動進行】」等の見出しが変わり、
-  // 許可リストに合わなくなって定期ダイジェストが kim-inbox に落ちた（2026-11-04 実測）。
-  const allowedForKim = discordAllowed(String(text ?? '') + suffix, { home, allowlist, repoRoot }).allowed
-    || discordAllowed(String(body) + suffix, { home, allowlist, repoRoot }).allowed;
-  if ((userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID) && !allowedForKim) {
-    return persistKim(home, { kind, text: String(body) + suffix, source, sessionId, signal });
+  // 2026-11-06: kim は緊急・定期まとめを含め常に kim-inbox。旧許可リストは適用しない。
+  if (userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID) {
+    return persistKim(home, { kind: ['ask', 'action'].includes(kind) ? 'ask' : 'info', text: String(body) + suffix, source, sessionId, signal });
   }
   const content = suffix ? String(body).slice(0, Math.max(0, MAX_CONTENT - suffix.length)) + suffix : clipDiscordContent(body);
   let dmReason = '';

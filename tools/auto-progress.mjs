@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { parseArgs } from 'node:util';
 import { isEntry } from './is-entry.mjs';
 import { ledgerFile, readLedger, writeLedger, latestOpenPromises, applyPromise } from './auto-progress-ledger.mjs';
-import { executeCheck, preflightCheck, MAX_CHECK_TIMEOUT_MS, isTimeOnlyCheck } from './auto-progress-check.mjs';
+import { executeCheck, preflightCheck, sessionStateReference, MAX_CHECK_TIMEOUT_MS, isTimeOnlyCheck } from './auto-progress-check.mjs';
 import { resolveOwner } from './notify-owner.mjs';
 // 外部の成果を読まず、時計と定数だけで決まる典型的な判定を拒否する。
 export { isTimeOnlyCheck } from './auto-progress-check.mjs';
@@ -50,14 +50,18 @@ export function auditChecks({ home = process.env.ORGIAST_HOME || os.homedir(), e
 }
 export function main(argv = process.argv.slice(2)) {
   if (argv.length === 1 && argv[0] === '--audit-checks') return auditChecks();
-  const { values } = parseArgs({ args: argv, options: { 'add-check': { type: 'boolean' }, 'ask-file': { type: 'string' }, 'done-file': { type: 'string' }, 'start-when': { type: 'string' }, 'allow-met': { type: 'boolean' }, 'force-check': { type: 'boolean' }, session: { type: 'string' }, check: { type: 'string' }, deadline: { type: 'string' }, label: { type: 'string' }, 'next-claude': { type: 'string' }, timeout: { type: 'string' } } });
-  if (!values['add-check'] && !values['start-when']) throw new Error('使用法: --start-when "<cmd>" --session <id> --label "<名前>" --deadline +24h --next-claude "<作業>" [--check "<完了判定>"] または --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" [--timeout <秒>] [--ask-file <path>] [--done-file <path>] [--allow-met] [--force-check] または --audit-checks');
+  const { values } = parseArgs({ args: argv, options: { 'add-check': { type: 'boolean' }, 'ask-file': { type: 'string' }, 'done-file': { type: 'string' }, 'start-when': { type: 'string' }, 'allow-met': { type: 'boolean' }, 'force-check': { type: 'boolean' }, 'allow-session-state': { type: 'boolean' }, session: { type: 'string' }, check: { type: 'string' }, deadline: { type: 'string' }, label: { type: 'string' }, 'next-claude': { type: 'string' }, timeout: { type: 'string' } } });
+  if (!values['add-check'] && !values['start-when']) throw new Error('使用法: --start-when "<cmd>" --session <id> --label "<名前>" --deadline +24h --next-claude "<作業>" [--check "<完了判定>"] または --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" [--timeout <秒>] [--ask-file <path>] [--done-file <path>] [--allow-met] [--force-check] [--allow-session-state] または --audit-checks');
   const home = process.env.ORGIAST_HOME || os.homedir();
+  if (!values['start-when'] && !values['allow-session-state']
+      && sessionStateReference({ check: values.check, checkCwd: process.cwd() }, { home })) {
+    throw new Error('完了判定はセッションが書く中間ファイルではなく、外部の一次情報（公開ページ・API・gh・タスクスケジューラ等）を直接照会してください。セッションが落ちると中間ファイルが更新されず、完了を検知できません（2026-11-06 実害）。例外として登録する場合だけ --allow-session-state を指定してください。');
+  }
   if (!values['start-when']) {
     const timeoutSec = values.timeout === undefined || values.timeout === '' ? null : Number(values.timeout);
     const hasTimeout = timeoutSec !== null && timeoutSec > 0 && timeoutSec * 1000 <= MAX_CHECK_TIMEOUT_MS;
     const checkTimeoutMs = hasTimeout ? Math.round(timeoutSec * 1000) : undefined;
-    const pf = preflightCheck({ check: values.check, checkCwd: process.cwd(), cwd: process.cwd(), ...(checkTimeoutMs ? { checkTimeoutMs } : {}) }, { home, forceCheck: values['force-check'] });
+    const pf = preflightCheck({ check: values.check, checkCwd: process.cwd(), cwd: process.cwd(), ...(checkTimeoutMs ? { checkTimeoutMs } : {}) }, { home, forceCheck: values['force-check'], allowSessionState: values['allow-session-state'] });
     if (!pf.ok) throw new Error(pf.text);
   }
   return addCheck({ ...values, home, askFile: values['ask-file'], doneFile: values['done-file'], startWhen: values['start-when'], nextClaude: values['next-claude'], allowMet: values['allow-met'], probe: row => executeCheck(row, { home }) });

@@ -29,7 +29,7 @@ test('--initはkim所有で作成、通知メールなし共有、途中再実�
   const request = async (url, options) => {
     requests.push([url, options]);
     if (url.endsWith('/spreadsheets')) { creates++; return { spreadsheetId: 'test-book' }; }
-    return { permissions: [] };
+    return { permissions: [{ type: 'user', emailAddress: 'kim@orgiast.jp', role: 'owner' }] };
   };
   saveJson(dataPath(home, 'seeds.json'), [{ title: '支払', kind: '支払', due: '2026-11-30', sourceId: 'mail-one' }, { title: '質問書', sourceId: 'mail-two' }]);
   assert.equal((await initialize({ home, sheets, request })).added, 2);

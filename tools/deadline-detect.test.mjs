@@ -72,7 +72,7 @@ test('Gmailは件名/snippet選別し、日80通の残数とページカーソ�
 test('Drive OCRはコピーだけ削除、export失敗でも後始末、dry-runはコピーなし', async () => {
   const calls = [];
   const file = { id: 'original', mimeType: 'application/pdf' };
-  const request = async (url, o) => { calls.push([url,o]); if (o.method === 'POST') return { id: 'temporary' }; if (o.method === 'DELETE') return null; throw Error('export failed'); };
+  const request = async (url, o) => { calls.push([url,o]); if (url.includes('/permissions')) return { permissions: [{ type: 'user', emailAddress: 'kim@orgiast.jp', role: 'owner' }] }; if (o.method === 'PATCH') return {};  if (o.method === 'POST') return { id: 'temporary' }; if (o.method === 'DELETE') return null; throw Error('export failed'); };
   await assert.rejects(readDriveText(file, { user: 'kim@orgiast.jp', request }), /export failed/);
   assert.match(calls.at(-1)[0], /temporary$/); assert.equal(calls.at(-1)[1].method, 'DELETE');
   assert.equal(await readDriveText(file, { dryRun: true, request: () => assert.fail('mutation') }), '');

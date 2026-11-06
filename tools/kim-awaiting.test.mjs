@@ -221,7 +221,7 @@ test('external は他のすべての項目より前に並び、external: true �
 test('下書きは「下書きのまま未送信」と表示する', t => {
   const home = fixture(t);
   writeExternal(home, { items: [extItem({ kind: 'draft', who: 'cust@example.com', ask: '送信するか決める' })] });
-  assert.equal(collectAwaiting({ home, now: NOW })[0].title, '下書きのまま未送信: cust@example.com「日程のご相談」');
+  assert.equal(collectAwaiting({ home, now: NOW })[0].title, '下書きのまま未送信: cust@example.com（seisaku-team@ の下書き）「日程のご相談」');
 });
 test('状態ファイルが古い・取得失敗があると警告項目が先頭に入る', t => {
   const home = fixture(t);

@@ -12,6 +12,8 @@ import { isKimOperated } from './lib/kim-operated.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
+import { displayPcNames } from './lib/pc-display.mjs';
+import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mjs';
 const exec = promisify(execFile);
 const directory = home => path.join(home, '.claude/kim-inbox');
 const clean = value => redactSecrets(String(value ?? '')).slice(0, 4000);
@@ -100,6 +102,20 @@ function create(home, options) {
         current.shownCount = 0; current.shownSessions = []; current.lastShownAt = null;
         current.forwardMailId = options.forwardMailId || null; current.forwardError = null;
       });
+      if (existing && options.replaceExisting) return update(home, existing.id, current => {
+        const changed = current.text !== text || (options.revision !== undefined && current.revision !== options.revision) || (options.dailyProgress && (!current.dailyProgress || current.progressDay !== options.progressDay));
+        if (options.forwardMailId) current.forwardMailId = options.forwardMailId;
+        if (!changed) return;
+        current.text = text; current.lastAt = new Date().toISOString(); current.status = 'open';
+        if (options.revision !== undefined) current.revision = options.revision;
+        current.answer = null; current.answeredAt = null; current.answerSession = null;
+        current.shownSessions = []; current.shownCount = 0;
+        current.forwardMailId = options.forwardMailId || null; current.forwardError = null;
+        if (options.dailyProgress) {
+          current.dailyProgress = true; current.progressDay = options.progressDay;
+          current.progressVersion = (current.progressVersion || 0) + 1;
+        }
+      });
       return existing || createNew(home, options);
     }
     if ((options.kind ?? 'info') === 'info') {
@@ -150,13 +166,14 @@ export function compactItems(home) {
     return result;
   });
 }
-function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority }) {
+function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '' }) {
   if (!['ask', 'info', 'deadline'].includes(kind)) throw new Error('kind は ask / info / deadline');
   fs.mkdirSync(directory(home), { recursive: true });
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(priority === 'high' ? { priority } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: clean(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: clean(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    if (revision !== undefined) item.revision = revision;
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
   }
@@ -315,7 +332,9 @@ export async function ingestFleetMail(home) {
     locked(home, 'ingest', () => {
       if (fs.existsSync(marker)) return;
       // 作成直後に終了しても forwardMailId から再発見し、二重起票を防ぐ。
-      const item = listItems(home).find(i => i.forwardMailId === id) ?? (isInboxNoise({ kind, text: mail.body }) ? { id: 'suppressed', status: 'suppressed' } : create(home, { kind, text: mail.body, from: mail.from, source, ...(producerKey ? { dedupeKey: `fleet:${mail.from}:${producerKey}`, refresh: true } : {}), forwardMailId: id }));
+      const daily = /^【進捗・毎朝】/.test(mail.body || '');
+      const progressId = daily && mail.body.match(/作業ID:\s*([^\r\n]+)/)?.[1];
+      const item = listItems(home).find(i => i.forwardMailId === id) ?? (isInboxNoise({ kind, text: mail.body }) ? { id: 'suppressed', status: 'suppressed' } : create(home, { kind, text: mail.body, from: mail.from, source, ...(producerKey ? { dedupeKey: `fleet:${mail.from}:${producerKey}`, refresh: true } : {}), forwardMailId: id, ...(progressId ? { dedupeKey: `auto-progress-daily:${progressId}`, replaceExisting: true, dailyProgress: true, progressDay: new Date((Date.parse(mail.createdAt || mail.ts) || Date.now()) + 9 * 3600000).toISOString().slice(0, 10) } : {}) }));
       fs.mkdirSync(path.dirname(marker), { recursive: true });
       fs.writeFileSync(marker, item.id, { flag: 'wx', mode: 0o600 });
       imported.push(item);
@@ -333,7 +352,7 @@ function deadlineDays(item, now) {
   if (days) return days[1] !== undefined ? Number(days[1]) : -Number(days[2]);
   return /期限切れ/.test(item.text) ? -Infinity : Infinity;
 }
-export function selectContext(items, { sessionId = '', now = Date.now(), sheetUrl = '（未初期化）' } = {}) {
+export function selectContext(items, { sessionId = '', now = Date.now(), sheetUrl = '（未初期化）', home = process.env.ORGIAST_HOME || os.homedir(), event = 'UserPromptSubmit' } = {}) {
   const own = item => {
     if (sessionId.length < 8) return false;
     const current = sessionId.slice(0, 8).toLowerCase();
@@ -347,10 +366,18 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
     requiredText += `■ ${item.kind} ${item.id} (${item.source})\n${item.kind === 'ask' || item.source === 'auto-progress-heartbeat' ? clean(item.text) : clean(item.text).split(/\r?\n/).slice(0, 2).join(' ').slice(0, 220)}\n`;
     item.shownSessions = [...new Set([...item.shownSessions, sessionId])]; item.shownCount++; item.lastShownAt = new Date(now).toISOString();
   }
-  const pending = items.filter(i => i.status === 'open' && !required.includes(i)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  // 完了・取消済みのセッションは、過去の毎朝通知から復活させない。
+  const ledger = items.some(i => i.dailyProgress) ? readLedger(ledgerFile(home)) : [];
+  const finished = item => {
+    if (!item.dailyProgress) return false;
+    const id = item.dedupeKey?.replace(/^auto-progress-daily:/, '');
+    const rows = ledger.filter(row => (row.sessionId || '') === id);
+    return rows.length > 0 && rows.every(row => !OPEN_STATUSES.has(row.status));
+  };
+  const pending = items.filter(i => (i.status === 'open' || (i.dailyProgress && i.status === 'seen')) && !finished(i) && !required.includes(i)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const allAsks = pending.filter(i => i.kind === 'ask');
-  const infos = pending.filter(i => i.kind === 'info');
-  if (!pending.length) return requiredText ? `[kim-inbox 完了・進捗・承認待ち] kim に次の内容を伝え、ask は返答後 --answer、info は報告後 --seen で記録する。\n${requiredText}` : '';
+  const infos = pending.filter(i => i.kind === 'info' && !i.dailyProgress);
+  if (!pending.length) return requiredText ? redactSecrets(displayPcNames(`[kim-inbox 完了・進捗・承認待ち] kim に次の内容を伝え、ask は返答後 --answer、info は報告後 --seen で記録する。\n${requiredText}`, { home })) : '';
 
   const deadlines = pending.filter(i => i.kind === 'deadline').sort((a, b) => Number(own(b)) - Number(own(a))
     || deadlineDays(a, now) - deadlineDays(b, now) || String(a.key).localeCompare(String(b.key)));
@@ -386,6 +413,19 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
     item.shownSessions = [...new Set([...item.shownSessions, sessionId])];
     item.shownCount++; item.lastShownAt = new Date(now).toISOString();
   }
+  // Daily progress has its own reserved space: asks and prior shownCount cannot starve it.
+  let dailyText = '';
+  if (event === 'UserPromptSubmit') for (const item of pending.filter(i => i.dailyProgress)) {
+    const date = new Date(now + 9 * 3600000), day = date.toISOString().slice(0, 10);
+    const previous = item.dailyShown?.[sessionId];
+    const changed = !previous || previous.version !== (item.progressVersion || 1);
+    const morning = date.getUTCHours() >= 9 && previous?.day !== day;
+    if (!changed && !morning) continue;
+    dailyText += `■ info ${item.id}\n${clean(item.text)}\n`;
+    item.dailyShown = { ...(item.dailyShown || {}), [sessionId]: { day: date.getUTCHours() >= 9 ? day : previous?.day || '', version: item.progressVersion || 1 } };
+    item.shownSessions = [...new Set([...item.shownSessions, sessionId])];
+    item.shownCount++; item.lastShownAt = new Date(now).toISOString();
+  }
   const sessionInfos = infos.filter(own).sort(unseenFirst);
   const highInfos = infos.filter(i => !own(i) && isHighInfo(i)).sort(unseenFirst);
   const otherInfos = infos.filter(i => !own(i) && !isHighInfo(i)).sort(newestFirst);
@@ -408,7 +448,7 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
     item.shownSessions = [...new Set([...item.shownSessions, sessionId])];
     item.shownCount++; item.lastShownAt = new Date(now).toISOString();
   }
-  return redactSecrets(ownAskText + requiredText + urgentText + text + footer);
+  return redactSecrets(displayPcNames(ownAskText + dailyText + requiredText + urgentText + text + footer, { home }));
 }
 export async function main(args = process.argv.slice(2), { home = process.env.ORGIAST_HOME || os.homedir(), stdout = console.log, stderr = console.error, readStdin = readStdinWithTimeout } = {}) {
   const value = flag => args[args.indexOf(flag) + 1];
@@ -421,12 +461,13 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       const kim = isKimSeat(home);
       await drainSpool(home);
       if (kim) await ingestFleetMail(home);
-      const items = listItems(home, { status: 'open' }).filter(i => kim || i.forwardError);
+      const items = listItems(home).filter(i => (i.status === 'open' || (i.dailyProgress && i.status === 'seen')) && (kim || i.forwardError));
       const counts = new Map(items.map(i => [i.id, i.shownCount]));
-      const context = selectContext(items, { sessionId: String(input.session_id ?? ''), sheetUrl: deadlineSheetUrl(home) });
+      const context = selectContext(items, { sessionId: String(input.session_id ?? ''), sheetUrl: deadlineSheetUrl(home), home, event });
       if (context) stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }));
       for (const item of items.filter(i => i.shownCount !== counts.get(i.id))) update(home, item.id, current => {
         current.shownSessions = [...new Set([...current.shownSessions, ...item.shownSessions])]; current.shownCount++; current.lastShownAt = item.lastShownAt;
+        if (item.dailyShown) current.dailyShown = { ...(current.dailyShown || {}), ...item.dailyShown };
       });
     } else if (args.includes('--add')) {
       const item = await addItem(home, { urgent: args.includes('--urgent'), text: fs.readFileSync(value('--body-file'), 'utf8'), kind: args.includes('--kind') ? value('--kind') : 'info', key: args.includes('--key') ? value('--key') : undefined, due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '' });
@@ -440,7 +481,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
     else if (args.includes('--status') || args.includes('--list')) {
       const items = listItems(home, { status: args.includes('--open') || args.includes('--status') ? 'open' : undefined });
       if (args.includes('--status')) stdout(`kim-inbox: open ask ${items.filter(i => i.kind === 'ask').length} / open info ${items.filter(i => i.kind === 'info').length}\n最古: ${items.length ? `${items[0].id} ${items[0].text.split(/\r?\n/)[0].slice(0, 120)}` : 'なし'}`);
-      else stdout(args.includes('--json') ? JSON.stringify(items) : items.map(i => `${i.id} ${i.kind} ${i.status} ${i.text.split(/\r?\n/)[0]}`).join('\n'));
+      else stdout(args.includes('--json') ? JSON.stringify(items) : displayPcNames(items.map(i => `${i.id} ${i.kind} ${i.status} ${i.text.split(/\r?\n/)[0]}`).join('\n'), { home }));
     } else throw new Error('--add / --answer / --seen / --drop / --list / --status / --context / --compact を指定してください');
     return 0;
   } catch (error) { stderr(`kim-inbox: ${clean(error.message).replace(/[\r\n]+/g, ' ')}`); return args.includes('--context') ? 0 : 1; }

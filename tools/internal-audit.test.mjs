@@ -90,7 +90,7 @@ test('Drive report upload uses kim root folder, creates only when absent and reu
     const calls = [];
     const result = await uploadReport('/local/report.md', {
       getToken: async args => { assert.equal(args.impersonate, 'kim@orgiast.jp'); return 'test'; },
-      api: async (token, url, options) => { calls.push([String(url), options]); return { json: async () => options?.method === 'POST' ? { id: 'new-folder' } : { files: exists ? [{ id: 'existing' }] : [] } }; },
+      api: async (token, url, options) => { if (String(url).includes('/permissions')) return Response.json({ permissions: [{ type: 'user', emailAddress: 'kim@orgiast.jp', role: 'owner' }] }); if (options?.method === 'PATCH') return Response.json({ id: 'new-folder' }); calls.push([String(url), options]); return { json: async () => options?.method === 'POST' ? { id: 'new-folder' } : { files: exists ? [{ id: 'existing' }] : [] } }; },
       uploadFile: async args => { assert.equal(args.as, 'kim@orgiast.jp'); assert.equal(args.folder, exists ? 'existing' : 'new-folder'); return { url: 'https://drive.google.com/file/d/report/view' }; },
     });
     assert.equal(calls.length, exists ? 1 : 2);

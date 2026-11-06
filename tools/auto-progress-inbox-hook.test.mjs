@@ -153,3 +153,49 @@ for (const item of [
   const original = consumeInbox({ session_id: 'original' }, { home, env: {} });
   assert.ok(original.hookSpecificOutput.additionalContext.endsWith(text));
 });
+
+test('mobile-push pending requests appear in additionalContext', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-mobile-push-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  const { enqueue } = await import('./mobile-push-queue.mjs');
+  enqueue({ owner: 'cr@orgiast.jp', title: '進捗', body: 'mobile-push 本文', home });
+  const out = consumeInbox({ session_id: 'test', hook_event_name: 'UserPromptSubmit' }, { home, env: {} });
+  assert.ok(out);
+  assert.match(out.hookSpecificOutput.additionalContext, /mobile-push 本文/);
+  assert.match(out.hookSpecificOutput.additionalContext, /PushNotification/);
+  assert.match(out.hookSpecificOutput.additionalContext, /--mark-sent/);
+});
+
+test('mobile-push 古い未送信はまとめて表示', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-mobile-old-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  const { writeQueue } = await import('./mobile-push-queue.mjs');
+  const oldTs = new Date(Date.now() - 30 * 3600 * 1000).toISOString();
+  const items = [
+    { id: 'old1', ts: oldTs, owner: 'cr@orgiast.jp', title: '進捗', body: '古い通知1', sent: false },
+    { id: 'old2', ts: oldTs, owner: 'cr@orgiast.jp', title: '進捗', body: '古い通知2', sent: false },
+  ];
+  writeQueue(home, items);
+  const out = consumeInbox({ session_id: 'test', hook_event_name: 'UserPromptSubmit' }, { home, env: {} });
+  assert.ok(out);
+  assert.match(out.hookSpecificOutput.additionalContext, /古い未送信 2 件/);
+  assert.match(out.hookSpecificOutput.additionalContext, /古い通知1/);
+  assert.match(out.hookSpecificOutput.additionalContext, /古い通知2/);
+});
+
+test('mobile-push 送信済みは additionalContext に出ない', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-mobile-sent-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  const m = await import('./mobile-push-queue.mjs');
+  m.enqueue({ owner: 'cr@orgiast.jp', title: '進捗', body: '送信済み本文', home });
+  const items = m.readQueue(home);
+  if (items.length) m.markSent(items[0].id, home);
+  appendInbox(home, 'test', { evidence: '通常結果' });
+  const out2 = consumeInbox({ session_id: 'test' }, { home, env: {} });
+  assert.ok(out2);
+  assert.doesNotMatch(out2.hookSpecificOutput.additionalContext, /mobile-push/);
+  assert.match(out2.hookSpecificOutput.additionalContext, /通常結果/);
+});

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimHumanProgress, deliverHumanProgress } from './lib/auto-progress-human-inbox.mjs';
 import fs from 'node:fs';
 import { notificationKind, routeOwnerDm } from './lib/owner-dm-policy.mjs';
 import os from 'node:os';
@@ -159,6 +160,9 @@ export async function notifyOwner(owner, text, options = {}) {
   const home = options.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   options = { ...options, home };
   owner = String(owner || resolveOwner(options)).trim();
+  if (isKimHumanProgress({ ...options.session, owner }) && options.kind !== 'digest') {
+    return deliverHumanProgress(home, { ...options.session, owner }, { now: options.now, io: options });
+  }
   const deferred = await routeOwnerDm(owner, text, options);
   if (deferred) {
     // DM の保留とセッション受け箱への配達は独立（#1485）。

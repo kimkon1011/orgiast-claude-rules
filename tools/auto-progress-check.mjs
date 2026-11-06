@@ -1,3 +1,5 @@
+import { checkProgressSummary } from './lib/check-progress-summary.mjs';
+import { isKimHumanProgress, deliverHumanProgress } from './lib/auto-progress-human-inbox.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -124,14 +126,7 @@ export function executeCheck(row, { home, spawnImpl = spawnSync, shellPath = res
     : oneLine(result.error?.message || gotStderr) || code;
   return { code, text: String(result.stdout || '').trim() || (code === 0 ? '達成を確認' : code === 1 ? '未達' : `check エラー: ${failure}`), stderr: gotStderr };
 }
-// Count each nonempty evidence line once; negative markers take precedence over 完了/達成.
-export function checkProgressSummary(text) {
-  const lines = String(text || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-  const unmet = lines.filter(s => /未達|未完|なし|失敗|エラー|停止|不足|未配布|NG|✗|❌|pending|unmet|failed/i.test(s));
-  const done = lines.filter(s => !unmet.includes(s) && /達成|完了|済|成功|あり|OK|✅|done|passed/i.test(s));
-  const unknown = lines.filter(s => !unmet.includes(s) && !done.includes(s));
-  return `達成 ${done.length}件 / 未達 ${unmet.length}件${unknown.length ? ` / 判定不明 ${unknown.length}件` : ''}\n達成: ${done.join(' ／ ').slice(0, 450) || '確認なし'}\n未達: ${unmet.join(' ／ ').slice(0, 650) || '確認なし'}${unknown.length ? `\nその他: ${unknown.join(' ／ ').slice(0, 250)}` : ''}`;
-}
+export { checkProgressSummary } from './lib/check-progress-summary.mjs';
 export function pendingAction(row) {
   const human = !String(row.nextClaude || '').trim() && /待ち|受け取ったら|返信|貼|承認/.test([row.label, row.promise, row.nextKim].join(' '));
   if (human) return `あなたの作業待ち: ${row.label || row.promise}\n${row.ask || row.promise || ''}`;
@@ -159,6 +154,18 @@ export async function checkPromise(row, { home, now, patch, io = {}, suppressNot
     verdict: state === 'done' ? 'done' : state === 'error' ? 'check_error' : overdue ? 'unmet' : 'in_progress',
     ...(state === 'done' ? { status: 'done', doneAt: row.doneAt || new Date(now).toISOString() } : {}) };
   if (patch(rowKey(row), changes) === false) return 'ledger_error';
+  if (isKimHumanProgress(row) && (!suppressNotices || state === 'done')) {
+    Object.assign(row, changes);
+    if (state === 'error' || (state === 'unmet' && overdue)) (io.queueCheckFollowup ?? queueCheckFollowup)(home, row, result);
+    const delivery = await deliverHumanProgress(home, row, { now, io });
+    const receipt = { checkNotifiedResult: state, ...(state === 'done' ? {
+      doneInboxId: delivery.id, doneInboxVerifiedAt: new Date(now).toISOString(),
+      doneNotifiedAt: new Date(now).toISOString(), doneNotifyPending: false,
+    } : {}) };
+    if (patch(rowKey(row), receipt) === false) return 'ledger_error';
+    Object.assign(row, receipt);
+    return state;
+  }
   if (state === 'done') {
     if (hasDoneInboxReceipt(row)) return state;
     const next = String(row.nextClaude || '').trim();

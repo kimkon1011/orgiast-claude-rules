@@ -71,7 +71,7 @@ test('watch: before deadline stays open; overdue closes and retries final DM; a 
   // 6時間後: 1回目の定期DMが送信される
   await watch({ home, now: now + 6 * 3600000, io });
   assert.equal(messages.length, 1);
-  assert.match(messages[0], /未達: 着信確認\n達成 0件 \/ 未達 1件/);
+  assert.match(messages[0], /未達: 着信確認\n未達: まだ届いていません/);
 
   // 7時間後: 前回DMから1時間なので再送しない
   await watch({ home, now: now + 7 * 3600000, io });
@@ -178,8 +178,8 @@ test('digest: hundreds of rows across three categories are all delivered in 1800
   assert.equal(messages.length, 1);
   assert.match(messages[0], /完了 67件/);
   assert.match(messages[0], /あなたの返事待ち/);
-  assert.ok(messages[0].split('\n').length <= 10);
-  assert.ok(messages[0].length <= 1800);
+  assert.match(messages[0], /ほか 190件/);
+  assert.equal((messages[0].match(/nextKim:/g) || []).length, 10);
   assert.equal((await digest({ home, now: now + 3600000, slot: '朝', io })).sent, false);
 });
 

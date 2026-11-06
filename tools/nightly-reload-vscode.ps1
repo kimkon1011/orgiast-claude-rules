@@ -122,9 +122,10 @@ function Get-ProtectedSessionIds {
 }
 
 function Test-RemoteControlProtection {
-    try { $protected = @(Get-ProtectedSessionIds) } catch {
-        Write-Log 'SKIP: セッション一覧を取得できない（Remote Control 保護）' | Out-Host
-        return $true
+    $protected = @(Get-ProtectedSessionIds -ErrorAction SilentlyContinue)
+    if ($LASTEXITCODE -ne 0) {
+        Write-Log 'WARN: セッション一覧取得に失敗（Remote Control 保護）' | Out-Host
+        return $false
     }
     if ($protected.Count -gt 0) {
         Write-Log ("SKIP: 未クローズの稼働セッション {0} 件（Remote Control 保護）" -f $protected.Count) | Out-Host
@@ -408,6 +409,10 @@ try {
             $reopenUntil = (Get-Date).ToUniversalTime().ToString('o')
             Start-Process -FilePath (Get-Command node.exe -ErrorAction Stop).Source -ArgumentList @(('"{0}"' -f $reopenScript), '--since', $restartSince, '--until', $reopenUntil) -WindowStyle Hidden | Out-Null
             Write-Log 'RECOVERY: host_exit の自動復旧をバックグラウンドで起動'
+            # Now schedule regular reopen-lost-sessions runs to catch sessions that lost connection during restart
+            $registerScript = Join-Path $PSScriptRoot 'register-reopen-lost-sessions.ps1'
+            $regAction = Start-Process -FilePath (Get-Command powershell.exe -ErrorAction Stop).Source -ArgumentList ('-NoProfile', '-Command', '& "{0}" -FunctionsOnly' -f $registerScript) -Wait -PassThru -RedirectStandardOutput (Join-Path $claude 'register-result.txt')
+            if ($regAction.ExitCode -ne 0) { Write-Log ('WARN: 再スケジュール登録に失敗（コード {0})' -f $regAction.ExitCode) } else { $regResult = Get-Content -Path (Join-Path $claude 'register-result.txt') -Raw -ErrorAction SilentlyContinue; if ($regResult) { Write-Log ('REGISTERED: OrgiastReopenLostSessions タスク' + ($regResult | ConvertFrom-Json).changed) } }
         } finally {
             Disable-SleepInhibition
         }

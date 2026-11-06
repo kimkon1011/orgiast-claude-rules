@@ -24,12 +24,18 @@ function Register-ReopenLostTask(
     foreach ($required in @($file, $hidden, $node)) { if (-not (Test-Path -LiteralPath $required)) { throw "Missing: $required" } }
     $user = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\wscript.exe') -Argument ('//nologo "{0}" "{1}" "{2}"' -f $hidden, $node, $file)
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
-    $trigger.Delay = 'PT3M'
     $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
     # No 60-second task limit: only API acquisition has that limit.
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit ([timespan]::Zero)
-    $desired = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings
+    $logonTrigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+    $logonTrigger.Delay = 'PT3M'
+    # Add periodic trigger for every 15 minutes to catch sessions lost during VSCode restarts
+    $periodicTrigger = New-ScheduledTaskTrigger -Daily -At 12:00 -User $user
+    $periodicTrigger.StartBoundary = 'T'
+    # Weekly trigger for Sunday midnight to catch sessions lost during weekly restarts
+    $weeklyTrigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At 00:00 -User $user
+    $weeklyTrigger.StartBoundary = 'T'
+    $desired = New-ScheduledTask -Action $action -Trigger @($logonTrigger, $periodicTrigger, $weeklyTrigger) -Principal $principal -Settings $settings
     $current = & $GetTask $name
     if ($current -and (Get-ReopenDefinition $current) -ceq (Get-ReopenDefinition $desired)) { return @{ changed = $false; taskName = $name } }
     & $RegisterTask $name $desired

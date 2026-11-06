@@ -78,7 +78,7 @@ seisaku-team@orgiast.jp
 - `node tools/gdoc-create.mjs --file article-<顧客>.md --subject seisaku-team@orgiast.jp --parent <案件の制作フォルダID> --force-new`
   （所有者 seisaku-team@。`<!-- src -->` コメントは Doc に残らないよう、Doc 化前に外した版を渡す。検証用の版は手元に残す）
 - お客様が開けるように「リンクを知っている全員が閲覧可」にする: Drive API `permissions.create` に `{type:'anyone', role:'reader'}`（`tools/lib/drive-auth.mjs` の `getDriveToken({impersonate:'seisaku-team@orgiast.jp'})` で実行）。drive-share.mjs は user/group 専用なので使わない。
-- read-back: 本文エクスポートで見出しが一致することを確認する。URL は `docs.google.com/a/orgiast.jp/document/d/<ID>/edit`（kim 向け）と素の `docs.google.com/document/d/<ID>/edit`（お客様向け）を分けて書く。
+- read-back: 本文エクスポートで見出しが一致することを確認する。URL は `docs.google.com/document/d/<ID>/edit?authuser=kim@orgiast.jp`（kim 向け）と素の `docs.google.com/document/d/<ID>/edit`（お客様向け）を分けて書く。
 
 ## 5. 下書きは seisaku-team@ の Gmail に作る（送信は kim の OK 後）
 
@@ -88,7 +88,7 @@ seisaku-team@orgiast.jp
 
 ## 6. 報告
 
-- `node tools/notify-kim.mjs --kim-action-required "<本文>"` で DM。本文: 記事 Doc リンク（アカウント併記）／下書きの宛先・件名／「OK なら『送って』と返信」。
+- `node tools/kim-inbox.mjs add ask --summary "<要約>" --detail "<本文>"` で kim-inbox に積む。本文: 記事 Doc リンク（アカウント併記）／下書きの宛先・件名／「OK なら『送って』と返信」。
 - 【kim 確認用の全文】（メール全文・記事要旨・引用検証表・未確認事項）を REPORT.md 等に残し、遡らせない。
 
 ## 禁止

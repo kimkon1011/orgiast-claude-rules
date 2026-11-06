@@ -227,15 +227,18 @@ export async function probeScopes({ user = DEFAULT_USER, keyPath = DEFAULT_KEY, 
 }
 
 async function getReplyHeaders({ user, threadId, fetchImpl, getToken }) {
-  const token = await getToken({ user, scope: SCOPES[0] });
+  let token;
+  try { token = await getToken({ user, scope: SCOPES[0] }); }
+  catch { throw sendAsFailure('返信元スレッド取得のトークン発行'); }
   const query = new URLSearchParams({ format: 'metadata' });
   for (const name of ['Message-ID', 'References', 'Subject']) query.append('metadataHeaders', name);
-  const res = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?${query}`, {
-    method: 'GET', signal: AbortSignal.timeout(25000), headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) throw Object.assign(new Error('Gmail API 失敗'), {
-    errorKind: res.status === 403 ? 'forbidden_no_access' : res.status === 401 ? 'unauthorized' : 'error',
-  });
+  let res;
+  try {
+    res = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?${query}`, {
+      method: 'GET', signal: AbortSignal.timeout(25000), headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch { throw sendAsFailure('返信元スレッド取得 API 通信'); }
+  if (!res.ok) throw sendAsFailure(`返信元スレッド取得 API status ${res.status}`);
   const thread = await res.json();
   const parent = thread.messages?.findLast(message => !message.labelIds?.includes('DRAFT'));
   const headers = parent?.payload?.headers;
@@ -255,13 +258,14 @@ export async function createDraft({ user = DEFAULT_USER, raw, threadId, fetchImp
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: { raw, ...(threadId ? { threadId } : {}) } }),
     });
-    if (!res.ok) throw Object.assign(new Error('Gmail API 失敗'), {
-      errorKind: res.status === 403 ? 'forbidden_no_access' : res.status === 401 ? 'unauthorized' : 'error',
-    });
+    if (!res.ok) throw sendAsFailure(`下書き作成 API status ${res.status}`);
     const json = await res.json();
     if (typeof json?.id !== 'string' || !json.id) throw new Error('下書き ID がありません');
     return { id: json.id, messageId: json.message?.id, threadId: json.message?.threadId };
-  } catch (error) { throw Object.assign(new Error(safeFailure(error).error), safeFailure(error)); }
+  } catch (error) {
+    if (error?.publicMessage) throw error;
+    throw sendAsFailure('下書き作成 API 通信');
+  }
 }
 
 export async function deleteDraft({ user = DEFAULT_USER, id, fetchImpl = gwsFetch, getToken }) {

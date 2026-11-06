@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, reopenLost } from './reopen-lost-sessions.mjs';
+import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, reopenLost, resolveClaudeCli } from './reopen-lost-sessions.mjs';
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
 const exit = { event_type: 'system', payload: { reason: 'host_exit' }, created_at: since };
 test('host exit interval inclusive; excludes wrong reason/type/time', () => {
@@ -97,14 +97,18 @@ test('API failure is explicit and partial candidates survive API-only deadline',
 test('resolveClaudeCli finds cli in multiple paths', () => {
   const originalEnv = process.env.CLAUDE_CLI;
   try {
-    // Test that it throws when cli not found
-    assert.throws(() => resolveClaudeCli());
+    // Mock exists to return false for all paths (simulate cli not found)
+    const mockExists = () => false;
     
-    // Mock env variable for testing
-    process.env.CLAUDE_CLI = 'C:\\test\\claude.exe';
-    // Mock exists to return true for this path
-    const mockExists = (p) => p === 'C:\\test\\claude.exe';
-    assert.equal(resolveClaudeCli((env) => ({ CLAUDE_CLI: 'C:\\test\\claude.exe' }), mockExists), 'C:\\test\\claude.exe');
+    // Test that it throws when cli not found
+    // Create a clean environment for this test
+    const testEnv = {};
+    assert.throws(() => resolveClaudeCli(testEnv, mockExists), /claude CLI not found/);
+    
+    // Test that it finds cli when provided via env variable
+    const testEnvWithPath = { CLAUDE_CLI: 'C:\\test\\claude.exe' };
+    const mockExistsWithEnv = (p) => p === 'C:\\test\\claude.exe';
+    assert.equal(resolveClaudeCli(testEnvWithPath, mockExistsWithEnv), 'C:\\test\\claude.exe');
   } finally {
     process.env.CLAUDE_CLI = originalEnv;
   }

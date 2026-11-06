@@ -26,10 +26,12 @@ function Register-ReopenLostTask(
     $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\wscript.exe') -Argument ('//nologo "{0}" "{1}" "{2}"' -f $hidden, $node, $file)
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
     $trigger.Delay = 'PT3M'
+    # Add recurring 15-minute trigger for background monitoring
+    $recurringTrigger = New-ScheduledTaskTrigger -Daily -At 12:00 -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration (New-TimeSpan -Days 36500)
     $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
     # No 60-second task limit: only API acquisition has that limit.
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit ([timespan]::Zero)
-    $desired = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings
+    $desired = New-ScheduledTask -Action $action -Trigger @($trigger, $recurringTrigger) -Principal $principal -Settings $settings
     $current = & $GetTask $name
     if ($current -and (Get-ReopenDefinition $current) -ceq (Get-ReopenDefinition $desired)) { return @{ changed = $false; taskName = $name } }
     & $RegisterTask $name $desired

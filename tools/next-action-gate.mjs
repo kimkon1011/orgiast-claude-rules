@@ -191,7 +191,7 @@ export function hasOpenSessionCheck(input, home) {
   try {
     return latestOpenPromises(readLedger(ledgerFile(home)))
       .some(row => row.sessionId === input.session_id && (
-        (row.status === 'open' && ((typeof row.check === 'string' && row.check.trim()) || row.autoRegisteredCheck === true)) ||
+        (['open', 'overdue', 'resumed', 'stalled'].includes(row.status) && ((typeof row.check === 'string' && row.check.trim()) || row.autoRegisteredCheck === true)) ||
         (row.status === 'scheduled' && typeof row.startWhen === 'string' && row.startWhen.trim())
       ));
   } catch { return false; }
@@ -228,7 +228,7 @@ export function hasSessionWakeup(raw, input = {}) {
   if (!autoProgress && input.session_id) {
     try {
       autoProgress = latestOpenPromises(readLedger(ledgerFile()))
-        .some(row => row.sessionId === input.session_id && row.status === 'open' && ((typeof row.check === 'string' && row.check.trim()) || row.autoRegisteredCheck === true));
+        .some(row => row.sessionId === input.session_id && ['open', 'overdue', 'resumed', 'stalled'].includes(row.status) && ((typeof row.check === 'string' && row.check.trim()) || row.autoRegisteredCheck === true));
     } catch { /* A missing or unreadable ledger is not wakeup evidence. */ }
   }
   const persistent = sessionWakeupEvidence(raw, input.now ?? Date.now());

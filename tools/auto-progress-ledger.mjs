@@ -112,7 +112,18 @@ export function cleanupOldLedgerTemps(file, { now = Date.now(), maxAgeMs = 36000
 
 export const MAX_RESUMES = 8; // 1件あたりの自動再開の累計上限（watch/digest 共用。循環 import 回避のためここに置く）
 
-export const OPEN_STATUSES = new Set(['open', 'stalled', 'resumed', 'waiting_user', 'scheduled', 'starting', 'start_overdue']);
+export const OPEN_STATUSES = new Set(['open', 'overdue', 'stalled', 'resumed', 'waiting_user', 'scheduled', 'starting', 'start_overdue']);
+
+// Session checks need time to survive overloaded PCs and active sessions.
+export const SESSION_DEADLINE_MS = 6 * 3600000;
+export const SESSION_CHECK_TIMEOUT_MS = 120000;
+export const isSessionProgressCheck = row => /session-progress-check\.mjs(?:["'\s]|$)/.test(row?.check || '');
+export function rollingSessionFields(row, activityAt = 0) {
+  if (!isSessionProgressCheck(row)) return {};
+  const registered = Date.parse(row.checkRegisteredAt || row.ts) || 0;
+  const deadline = Math.max(Date.parse(row.deadlineAt) || 0, Math.max(registered, activityAt) + SESSION_DEADLINE_MS);
+  return { deadlineAt: new Date(deadline).toISOString(), checkTimeoutMs: Math.max(Number(row.checkTimeoutMs) || 0, SESSION_CHECK_TIMEOUT_MS) };
+}
 
 // Timestamp order is authoritative; equal timestamps prefer the later ledger line.
 export function latestOpenPromises(rows) {
@@ -141,7 +152,10 @@ export function applyPromise(rows, record) {
       .sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0))[0];
     if (existing) {
       toAdd = {
+        ...existing,
         ...toAdd,
+        // A Stop report must not reset retry limits or periodic notification clocks.
+        status: existing.status,
         ...(existing.startWhen ? { startWhen: existing.startWhen, startedAt: existing.startedAt,
           ...(['scheduled', 'starting', 'start_overdue'].includes(existing.status) ? { status: existing.status } : {}) } : {}),
         ...(existing.autoRegisteredCheck ? { autoRegisteredCheck: true } : {}),
@@ -156,6 +170,7 @@ export function applyPromise(rows, record) {
       };
     }
   }
+  toAdd = { ...toAdd, ...rollingSessionFields(toAdd, Date.parse(record.ts) || 0) };
   const replaces = (row) => {
     if (row.sessionId !== toAdd.sessionId || !OPEN_STATUSES.has(row.status)) return false;
     if (row.check) return Boolean(toAdd.check) && row.label === toAdd.label;

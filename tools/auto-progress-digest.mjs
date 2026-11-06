@@ -11,7 +11,7 @@ import path from 'node:path';
 import { acquireLock } from './lib/progress-file-lock.mjs';
 import { isEntry } from './is-entry.mjs';
 import { notifyOwner, resolveOwner } from './notify-owner.mjs';
-import { ledgerFile, readLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES } from './auto-progress-ledger.mjs';
+import { ledgerFile, readLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES, OPEN_STATUSES } from './auto-progress-ledger.mjs';
 export { isUnattendedRow } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { collectCaseProgress } from './case-progress-digest.mjs';
@@ -55,12 +55,14 @@ export function selectRows(rows, now = Date.now(), since = now - WINDOW_MS) {
   const ledger = Array.isArray(rows) ? rows : [];
   const active = new Set(latestOpenPromises(ledger));
   return ledger.filter((row) => {
-    if (row.kimAnswer || isNoopPromise(row.promise)) return false;
+    if ((row.kimAnswer && !(row.check && OPEN_STATUSES.has(row.status))) || isNoopPromise(row.promise)) return false;
     if (row.status === 'done') return !row.doneNotifiedAt && Number.isFinite(Date.parse(row.doneAt)) && Date.parse(row.doneAt) > since;
     return active.has(row);
   }).sort((a, b) => rowTime(a) - rowTime(b));
 }
 
+export const claudeCheck = row => Boolean(row.check) && OPEN_STATUSES.has(row.status) && kimAction(row) === 'なし';
+export const progressState = row => row.status === 'stalled' ? '止まっている' : row.checkResult === 'unknown' ? '判定不能' : row.status === 'overdue' ? '期限超過・追跡中' : '進行中';
 export const verdictOf = (row, now = Date.now()) => row.status === 'done' ? 'done' : row.status === 'waiting_user' ? 'waiting_user' : row.status === 'resumed' ? 'resumed' : row.verdict || (row.status === 'stalled' ? 'stalled' : deadlinePassed(row, now) ? 'open/期限超過' : row.lastCheckedAt ? 'in_progress' : 'open');
 export const MAX_ITEMS = 10;
 
@@ -312,14 +314,14 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       catch (e) { deadlineText = '今週の期限\n期限台帳を取得できません。再試行が必要です。'; (io.stderr || console.error)(`deadline digest: ${e.message}`); }
     }
     // kim の通常の台帳まとめは会話内で回収する。案件ハブ・保留DMは朝夕の配達経路を使う。
-    if (label === 'kim-PC' && localOwner === 'kim@orgiast.jp' && !cases.text && !pending.length && !deadlineText && !rows.some(row => row.check && Date.parse(row.deadlineAt) - now >= 12 * 3600000)) return { sent: false, count: 0, skipped: 'session-context-only' };
+    if (label === 'kim-PC' && localOwner === 'kim@orgiast.jp' && !cases.text && !pending.length && !deadlineText && !rows.some(claudeCheck)) return { sent: false, count: 0, skipped: 'session-context-only' };
     const groups = new Map();
     const group = owner => { const key = String(owner || localOwner).trim().toLowerCase(); if (!groups.has(key)) groups.set(key, { rows: [], pending: [] }); return groups.get(key); };
     for (const row of rows) group(row.owner).rows.push(row);
     for (const row of pending) group(row.owner).pending.push(row);
     if (cases.text || deadlineText) group(localOwner);
     const changed = rows.some(row => state.lastVerdicts?.[rowKey(row)] !== verdictOf(row, now) || state.lastKim?.[rowKey(row)] !== kimAction(row) || state.lastWaiting?.[rowKey(row)] !== isHumanActionRequired(row));
-    if (currentSlot === '夕' && !changed && !pending.length && !cases.text) return { sent: false, count: 0 };
+    if (currentSlot === '夕' && !changed && !pending.length && !cases.text && !rows.some(claudeCheck)) return { sent: false, count: 0 };
     const count = rows.length + pending.length + Object.keys(cases.checkpoints).length;
     if (!groups.size) return { sent: false, count: 0 };
     const deliveredOwners = new Set(state.slotOwners?.[key] || []);
@@ -336,7 +338,8 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       const longChecks = items.rows.filter(row => row.check && Date.parse(row.deadlineAt) - now >= 12 * 3600000 && !['done', 'overdue_reported'].includes(row.status));
       const dailyChecks = currentSlot === '朝' && state.checkSummaryDays?.[owner] !== key.split('|')[0] ? longChecks : [];
       // 見出し「【進捗まとめ】\n」は Discord 許可リストの照合対象なので形を変えない。
-      const progressText = dailyChecks.length ? '日次進捗\n' + dailyChecks.map(row => `${row.label || row.promise}\n${checkProgressSummary(row.checkText || 'まだ確認結果がありません')}`).join('\n') + '\n' : '';
+      const ongoingChecks = items.rows.filter(claudeCheck);
+      const progressText = ongoingChecks.length ? `${dailyChecks.length ? '日次進捗' : 'Claude 側の進捗'}\n` + ongoingChecks.map(row => `・${row.label || row.promise}（${progressState(row)}）\n${checkProgressSummary(row.checkText || 'まだ判定できていません')}`).join('\n') + '\n' : '';
       const text = redactSecrets(deadlinePrefix + `【進捗まとめ】\n${progressText}${digest.text}${ownerCases.text ? `（案件 ${caseCount}件${caseUnchanged ? '・変化なし' : ''}）` : ''}`);
       messages.push(text);
       if (dryRun) continue;

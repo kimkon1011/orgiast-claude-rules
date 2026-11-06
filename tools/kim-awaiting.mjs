@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
-import { ledgerFile, readLedger, writeLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, kimAction, hasClaudeWork } from './auto-progress-ledger.mjs';
+import { ledgerFile, readLedger, writeLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, kimAction, hasClaudeWork, MAX_RESUMES } from './auto-progress-ledger.mjs';
 import { appendInbox } from './auto-progress-inbox-hook.mjs';
 import { active, CATEGORY, DAY } from './lib/fleet-chase-policy.mjs';
 import { externalFile, readSkips, isSkipped, addSkip, saveAnswer } from './lib/external-waiting-state.mjs';
@@ -78,14 +78,15 @@ export function collectAwaiting({ home = process.env.ORGIAST_HOME || os.homedir(
   const external = collectExternal({ home, now });
   const result = [];
   for (const row of latestOpenPromises(readLedger(ledgerFile(home)))) {
-    if (row.kimAnswer || isUnattendedRow(row, home) || isNoopPromise(row.promise) || (row.status !== 'waiting_user' && kimAction(row) === 'なし')) continue;
-    const action = kimAction(row);
+    const exhausted = row.status === 'stalled' && (row.resumeCount ?? 0) >= MAX_RESUMES;
+    if ((!exhausted && row.kimAnswer) || isUnattendedRow(row, home) || isNoopPromise(row.promise) || (!exhausted && row.status !== 'waiting_user' && kimAction(row) === 'なし')) continue;
+    const action = exhausted ? `止まっている: 自動再開上限（${MAX_RESUMES}回）。再開するか不要かを返答する` : kimAction(row);
     if (SESSION_OP_RE.test(action)) continue;
     const ask = EVIDENCE_RE.test(action.trim()) ? '進めてよいか判断して返事をする' : readable(action, row, sessionId && row.sessionId === sessionId ? Infinity : 80);
     const claudePending = row.status === 'open' && !String(row.check || '').trim() && (hasClaudeWork(row.nextClaude) || hasClaudeWork(row.promise));
     const updatedAt = row.updatedAt || row.ts;
     const ageHours = Math.max(0, Math.floor((now - Date.parse(updatedAt)) / 3600000));
-    const progress = claudePending ? `Claude 側で進行中（最終更新 ${ageHours} 時間前）${ageHours >= 6 ? ' ⚠️ 止まっている可能性' : ''}` : '';
+    const progress = exhausted ? '止まっている（再開上限・check の追跡は継続）' : claudePending ? `Claude 側で進行中（最終更新 ${ageHours} 時間前）${ageHours >= 6 ? ' ⚠️ 止まっている可能性' : ''}` : '';
     result.push({ progress, id: apId(row), source: 'auto-progress', title: readable(row.purpose || row.promise, row, 60), ask, waitingSince: row.ts, route: { sessionId: row.sessionId } });
   }
   const file = ledgerPath(home);
@@ -141,6 +142,10 @@ export function respond(id, { home = process.env.ORGIAST_HOME || os.homedir(), b
     if (!row) throw new Error('awaiting item not found');
     if (skip) Object.assign(row, { status: 'done', reason: `kim 不要: ${reason}`, doneAt: new Date(now).toISOString(), nextKim: 'なし' });
     else {
+      if (row.check && (row.resumeCount ?? 0) >= MAX_RESUMES) {
+        row.resumeCountBeforeAnswer = row.resumeCount;
+        row.resumeCount = 0;
+      }
       Object.assign(row, { kimAnswer: body, kimAnsweredAt: new Date(now).toISOString(), status: 'stalled', nextKim: 'なし' });
       delete row.resumedAt;
     }

@@ -27,66 +27,38 @@ test('CLI validates deadline, preserves promise and registers a new revision', (
   assert.throws(() => addCheck({ home, session: 's', check: 'x', label: 'x', deadline: 'bad' }), /deadline/);
   assert.equal(readLedger(ledgerFile(home)).length, 2);
 });
-test('watch: before deadline stays open; overdue closes and retries final DM; a new revision can complete', async () => {
-  const home = tmp(); register(home); let code = 1, deliveries = 0, fail = true;
-  const io = { ...baseIo, executeCheck: () => ({ code, text: '確認結果\n本文は捨てる' }), notifyOwner: async () => { deliveries++; return { delivered: fail ? 'none' : 'dm' }; } };
-  await watch({ home, now, io }); assert.equal(deliveries, 0);
-  assert.equal(fs.existsSync(path.join(home, '.claude', 'next-session.md')), false);
-  const later = now + 86400000;
-  assert.equal((await watch({ home, now: later, io })).errors.length, 1);
-  fail = false;
-  await watch({ home, now: later, io }); await watch({ home, now: later, io });
-  assert.equal(deliveries, 2);
-  assert.equal(fs.readFileSync(path.join(home, '.claude', 'next-session.md'), 'utf8').match(/- \[ \]/g).length, 1);
-  assert.equal(readLedger(ledgerFile(home))[0].status, 'overdue_reported');
-  code = 0;
-  addCheck({ home, now: later + 1, session: 'session', check: 'node check.mjs', label: '着信再確認', deadline: '+24h' });
-  await watch({ home, now: later, io }); await watch({ home, now: later, io });
-  assert.equal(deliveries, 2);
-  assert.equal(listItems(home).length, 1);
-  const row = readLedger(ledgerFile(home)).at(-1);
-  assert.equal(row.status, 'done'); assert.equal(row.checkText, '確認結果\n本文は捨てる');
-  assert.equal((await digest({ home, now: later, io: { notify: () => assert.fail('duplicate digest') } })).sent, false);
-  });
-  test('watch: 未達（code=1）でも6時間ごとに owner へ定期的に状況を DM する', async () => {
-  const home = tmp();
-  addCheck({ home, now, session: 'unmet-session', check: 'node check.mjs', label: '着信確認', deadline: '+24h' });
-  const messages = [];
-  const io = {
-    ...baseIo,
-    executeCheck: () => ({ code: 1, text: '未達: まだ届いていません' }),
-    notifyOwner: async (_, text) => {
-      messages.push(text);
-      return { delivered: 'dm' };
-    },
-  };
-  // 登録直後（0h）: 6時間未満なのでDMしない
+test('watch: overdue keeps checking without a new registration and completes on evidence', async () => {
+  const home = tmp(); register(home); let code = 1, checks = 0;
+  const io = { ...baseIo, cwdExists: () => false,
+    executeCheck: () => { checks++; return { code, text: '確認結果\n本文は捨てる' }; },
+    notifyOwner: async () => ({ delivered: 'dm' }) };
   await watch({ home, now, io });
-  assert.equal(messages.length, 0);
+  const later = now + 86400000;
+  for (let i = 0; i < 2; i++) {
+    assert.deepEqual((await watch({ home, now: later, io })).errors, []);
+    assert.equal(readLedger(ledgerFile(home))[0].status, 'overdue');
+  }
+  assert.equal(checks, 3);
+  assert.equal(fs.readFileSync(path.join(home, '.claude', 'next-session.md'), 'utf8').match(/- \[ \]/g).length, 1);
+  code = 0;
+  await watch({ home, now: later + 1, io });
+  const row = readLedger(ledgerFile(home))[0];
+  assert.equal(row.status, 'done'); assert.equal(row.checkText, '確認結果\n本文は捨てる');
+  assert.equal(listItems(home).filter(item => /check 達成/.test(item.text)).length, 1);
+});
+test('watch: 未達の Claude 作業は3時間ごとに1件の info に集約する', async () => {
+  const home = tmp(); register(home);
+  const io = { ...baseIo, executeCheck: () => ({ code: 1, text: '未達: まだ届いていません' }),
+    notifyOwner: () => assert.fail('進捗は kim-inbox へ集約する') };
+  for (const hour of [0, 1, 2]) await watch({ home, now: now + hour * 3600000, io });
+  assert.equal(listItems(home).length, 0);
+  for (const hour of [3, 6, 9]) await watch({ home, now: now + hour * 3600000, io });
+  const items = listItems(home);
+  assert.equal(items.length, 1); assert.equal(items[0].repeatCount, 3);
+  assert.match(items[0].text, /未達: まだ届いていません/);
+});
 
-  // 1時間後: 6時間未満なのでDMしない
-  await watch({ home, now: now + 3600000, io });
-  assert.equal(messages.length, 0);
-
-  // 6時間後: 1回目の定期DMが送信される
-  await watch({ home, now: now + 6 * 3600000, io });
-  assert.equal(messages.length, 1);
-  assert.match(messages[0], /未達: 着信確認\n達成 0件 \/ 未達 1件/);
-
-  // 7時間後: 前回DMから1時間なので再送しない
-  await watch({ home, now: now + 7 * 3600000, io });
-  assert.equal(messages.length, 1);
-
-  // 12時間後: 前回DMから6時間経過で2回目の定期DM
-  await watch({ home, now: now + 12 * 3600000, io });
-  assert.equal(messages.length, 2);
-
-  // 24時間後（期限切れ）: overdue の未達（期限超過）通知
-  await watch({ home, now: now + 24 * 3600000, io });
-  assert.equal(messages.length, 3);
-  assert.match(messages[2], /期限切れ（/);
-  });
-  test('watch: failed completion delivery retries without running check again; dry run has no side effects', async () => {
+test('watch: failed completion delivery retries without running check again; dry run has no side effects', async () => {
   const home = tmp(); register(home); let checks = 0, sends = 0;
   const io = { ...baseIo, executeCheck: () => { checks++; return { code: 0, text: '完了' }; },
     notifyOwner: () => assert.fail('completion must not use Discord'),
@@ -97,11 +69,13 @@ test('watch: before deadline stays open; overdue closes and retries final DM; a 
   await watch({ home, now, io }); await watch({ home, now, io }); await watch({ home, now, io });
   assert.equal(checks, 1); assert.equal(sends, 2);
 });
-test('check errors do not mark done; repeated errors notify once', async () => {
-  const home = tmp(); register(home); const messages = [];
-  const io = { ...baseIo, executeCheck: () => ({ code: 2, text: '実行エラー' }), notifyOwner: async (_, text) => { messages.push(text); return { delivered: 'dm' }; } };
-  await watch({ home, now, io }); await watch({ home, now, io });
-  assert.equal(messages.length, 1); assert.match(messages[0], /確認エラー/);
+test('check errors remain open and are included in periodic info without duplicates', async () => {
+  const home = tmp(); register(home);
+  const io = { ...baseIo, executeCheck: () => ({ code: 2, text: '実行エラー' }), notifyOwner: () => assert.fail('periodic inbox only') };
+  await watch({ home, now, io });
+  await watch({ home, now: now + 3 * 3600000, io });
+  await watch({ home, now: now + 3 * 3600000, io });
+  assert.equal(listItems(home).length, 1); assert.match(listItems(home)[0].text, /実行エラー/);
   assert.equal(readLedger(ledgerFile(home))[0].status, 'open');
 });
 test('executeCheck honors exit contract, full output and bounded execution', () => {
@@ -242,12 +216,13 @@ test('check completion requires inbox read-back and does not retry after success
  assert.equal(readLedger(ledgerFile(home))[0].checkNotifiedResult, 'done');
 });
 
-test('missing Discord, quiet hours and daily DM quota do not suppress nextClaude resume', async () => {
+test('missing Discord and quiet hours do not suppress overdue nextClaude resume', async () => {
   const home = tmp();
-  const later = Date.parse('2026-11-04T16:00:00Z'); // 01:00 JST
-  addCheck({ home, now: later - 3600000, session: 'quiet-check', check: 'x', label: '到着確認', deadline: '+24h', nextClaude: '添付を確認して承認用の本文を作る' });
+  const later = Date.parse('2026-11-04T16:00:00Z');
+  addCheck({ home, now: later - 2 * 3600000, session: 'quiet-check', check: 'x', label: '本文作成確認', deadline: '+1h', nextClaude: '承認用の本文を作る' });
   let resumes = 0;
-  const io = { ...baseIo, clock: () => later, executeCheck: () => ({ code: 0, text: '到着済み' }), resume: async () => { resumes++; return { outcome: 'done', reason: '本文作成済み' }; }, notifyOwner: () => assert.fail('no Discord') };
+  const io = { ...baseIo, clock: () => later, executeCheck: () => ({ code: resumes ? 0 : 1, text: resumes ? '本文作成済み' : '未達' }),
+    resume: async () => { resumes++; return { outcome: 'done', reason: '本文作成済み' }; }, notifyOwner: () => assert.fail('no Discord') };
   const summary = await watch({ home, now: later, io });
   assert.deepEqual(summary.errors, []);
   const [row] = readLedger(ledgerFile(home));
@@ -296,29 +271,21 @@ test('ledger failure after delivery retains inbox and retries the receipt withou
   assert.equal(listItems(home).length, 1);
 });
 
-test('ask file 全文を保存し、人待ちを通知して期限切れは最終報告1回で閉じる', async () => {
- const home = tmp();
- const askFile = path.join(home, 'ask.txt');
- const ask = 'Google アカウントで開いてください。\nスクリプト URL を貼ってください。';
- fs.writeFileSync(askFile, ask);
- const row = addCheck({ home, now, session: 'human', check: 'node check.mjs', label: '清掃報告GAS URL待ち', deadline: '+24h', askFile });
- assert.equal(readLedger(ledgerFile(home))[0].ask, ask);
- const messages = [];
- const io = { ...baseIo, executeCheck: () => ({ code: 1, text: '未達' }), notifyOwner: async (_, text) => { messages.push(text); return { delivered: 'inbox' }; } };
- await watch({ home, now: now + 6 * 3600000, io });
- assert.match(messages[0], /あなたの作業待ち: 清掃報告GAS URL待ち/);
- assert.ok(messages[0].includes(ask));
- assert.doesNotMatch(messages[0], /check の実行ログ/);
- await watch({ home, now: now + 24 * 3600000, io });
- assert.match(messages[1], /期限切れ（2026-10-24T00:00:00.000Z）/);
- await watch({ home, now: now + 47 * 3600000, io });
- assert.equal(messages.length, 2);
- await watch({ home, now: now + 48 * 3600000, io });
- assert.equal(messages.length, 2);
- assert.ok(messages[1].includes(ask));
- assert.equal(readLedger(ledgerFile(home))[0].status, 'overdue_reported');
- assert.ok(readLedger(ledgerFile(home))[0].overdueReportedAt);
- assert.doesNotMatch(fs.readFileSync(path.join(home, '.claude', 'next-session.md'), 'utf8'), /check の実行ログ/);
+test('ask file 全文を保存し、人待ちは期限後も追跡し定期通知する', async () => {
+  const home = tmp(), askFile = path.join(home, 'ask.txt');
+  const ask = 'Google アカウントで開いてください。\nスクリプト URL を貼ってください。';
+  fs.writeFileSync(askFile, ask);
+  writeLedger(ledgerFile(home), [{ ts: new Date(now - 1).toISOString(), sessionId: 'human', status: 'open', nextKim: 'URL を貼る' }]);
+  addCheck({ home, now, session: 'human', check: 'node check.mjs', label: '清掃報告GAS URL待ち', deadline: '+24h', askFile });
+  const messages = [];
+  const io = { ...baseIo, executeCheck: () => ({ code: 1, text: '未達' }), notifyOwner: async (_, text) => { messages.push(text); return { delivered: 'inbox' }; } };
+  for (const hours of [6, 24, 27]) await watch({ home, now: now + hours * 3600000, io });
+  assert.equal(readLedger(ledgerFile(home))[0].status, 'superseded');
+  assert.equal(readLedger(ledgerFile(home)).at(-1).status, 'overdue');
+  assert.equal(messages.length, 3);
+  for (const message of messages) assert.ok(message.includes(ask));
+  assert.equal(readLedger(ledgerFile(home)).at(-1).ask, ask);
+  assert.doesNotMatch(fs.readFileSync(path.join(home, '.claude', 'next-session.md'), 'utf8'), /check の実行ログ/);
 });
 
  test('人待ちで ask がなければ promise を全文表示する', () => {

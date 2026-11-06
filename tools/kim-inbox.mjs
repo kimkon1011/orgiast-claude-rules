@@ -89,6 +89,16 @@ function create(home, options) {
     // Keep distinct jobs separate even when their text normalizes to the same prefix.
     if (options.dedupeKey) {
       const existing = listItems(home).find(item => item.dedupeKey === clean(options.dedupeKey));
+      // A periodic producer reuses one row, while retrying the same occurrence is idempotent.
+      if (existing && options.progressAt && options.kind === 'info') {
+        return update(home, existing.id, current => {
+          if ((Date.parse(current.progressAt) || 0) >= Date.parse(options.progressAt)) return;
+          current.text = text; current.progressAt = options.progressAt; current.lastAt = options.progressAt;
+          current.repeatCount = (current.repeatCount ?? 1) + 1;
+          current.status = 'open'; current.shownSessions = []; current.shownCount = 0; current.lastShownAt = null;
+          current.forwardMailId = null; current.forwardError = null;
+        });
+      }
       return existing || createNew(home, options);
     }
     if ((options.kind ?? 'info') === 'info') {
@@ -139,13 +149,13 @@ export function compactItems(home) {
     return result;
   });
 }
-function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false }) {
+function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, progressAt }) {
   if (!['ask', 'info', 'deadline'].includes(kind)) throw new Error('kind は ask / info / deadline');
   fs.mkdirSync(directory(home), { recursive: true });
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(urgent ? { urgent: true } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: clean(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(progressAt ? { progressAt } : {}), ...(urgent ? { urgent: true } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: clean(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: progressAt || createdAt } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
   }
@@ -167,7 +177,7 @@ export function spoolItem(home, options) {
   const file = path.join(dir, `${id}.json`), temp = `${file}.tmp`;
   const record = { kind: options.kind || 'info', text: clean(options.text), source: clean(options.source),
     from: clean(options.from ?? resolveFleetLabel(home, { hostname: os.hostname() })),
-    dedupeKey: options.dedupeKey ? clean(options.dedupeKey) : `spool:${id}` };
+    ...(options.progressAt ? { progressAt: options.progressAt } : {}), dedupeKey: options.dedupeKey ? clean(options.dedupeKey) : `spool:${id}` };
   try {
     fs.writeFileSync(temp, JSON.stringify(record) + '\n', { flag: 'wx', mode: 0o600 });
     fs.renameSync(temp, file);
@@ -352,7 +362,7 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
   // 未表示の進捗は ask より先に短く出す。ask 5件が表示枠を使い切り、進捗が永久に出ない事故（2026-11-04 実測 121件）を防ぐ。
   const unseenHigh = highInfos.filter(i => i.shownCount === 0).slice(0, 3);
   const laterHigh = highInfos.filter(i => !unseenHigh.includes(i)).slice(0, Math.max(0, 5 - unseenHigh.length));
-  const selected = deadlines.length ? [...asks.slice(0, 5), ...[...sessionInfos, ...unseenHigh, ...laterHigh, ...otherInfos].slice(0, 3)] : [...sessionInfos, ...unseenHigh, ...asks.slice(0, 5), ...laterHigh, ...otherInfos.slice(0, 2)];
+  const selected = deadlines.length ? [...[...sessionInfos, ...unseenHigh].slice(0, 3), ...asks.slice(0, 5), ...laterHigh.slice(0, 1)] : [...sessionInfos, ...unseenHigh, ...asks.slice(0, 5), ...laterHigh, ...otherInfos.slice(0, 2)];
   for (const item of selected) {
     if (otherInfos.includes(item) && [...sessionInfos, ...highInfos].some(i => i.shownCount === 0)) break;
     const repeat = item.shownSessions.includes(sessionId);

@@ -9,13 +9,13 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
-import { ledgerFile, readLedger, writeLedger, cleanupOldLedgerTemps, OPEN_STATUSES, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES, originLine } from './auto-progress-ledger.mjs';
+import { ledgerFile, readLedger, writeLedger, cleanupOldLedgerTemps, OPEN_STATUSES, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, MAX_RESUMES, originLine, rollingSessionFields, isSessionProgressCheck } from './auto-progress-ledger.mjs';
 export { MAX_RESUMES } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { notifyOwner, resolveOwner, sendOwnerToast } from './notify-owner.mjs';
 import { escalateKimDecisions } from './auto-progress-escalate.mjs';
 import { isQuietHours, kimAction } from './auto-progress-digest.mjs';
-import { checkPromise, checkProgressSummary, executeCheck, isTimeOnlyCheck, queueCheckFollowup, pendingAction } from './auto-progress-check.mjs';
+import { checkPromise, checkProgressSummary, executeCheck, isTimeOnlyCheck, queueCheckFollowup, pendingAction, resolveCheckTimeout } from './auto-progress-check.mjs';
 import { addItem } from './kim-inbox.mjs';
 import { appendInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
@@ -31,7 +31,8 @@ const WATCHED = OPEN_STATUSES;
 export const EXPIRE_UNATTENDED_MS = 48 * 3600 * 1000;
 export const FALLBACK_STALL_MS = 24 * 3600 * 1000;
 export const TIME_ONLY_REASON = '時刻だけの check は完了判定にできないため開始予約へ変換';
-export const LEGACY_ADD_CHECK_REASON = 'nextClaude 付き add-check の誤完了を開始予約へ変換';
+export const LEGACY_ADD_CHECK_REASON = '誤変換された add-check を完了判定へ復元';
+export const PROGRESS_INTERVAL_MS = 3 * 3600000;
 
 // 完了が本人に配達・検証済み（done inbox レシートまたは done 通知済み）の行は誤完了ではない。
 // レシートがあるのに移行で復活させると、完了済みの約束が偽の開始予約として何度も再開される（2026-11-05 17件実害）。
@@ -40,33 +41,23 @@ export function doneConcludedWithReceipt(row) {
 }
 
 export function legacyAddCheckMigrationRows(rows) {
-  const migrated = new Set(rows.map(row => row.migratedFromLegacyAddCheck).filter(Boolean));
-  return rows.filter(row => row.status === 'done' && String(row.check || '').trim() &&
-    String(row.nextClaude || '').trim() && !isTimeOnlyCheck(row.check) && !row.resumedAt &&
-    !doneConcludedWithReceipt(row) && !migrated.has(rowKey(row)));
-}
-
-export function legacyAddCheckReservation(row, now = Date.now()) {
-  const reset = { ...row };
-  for (const key of ['check', 'checkRegisteredAt', 'checkResult', 'checkText', 'doneAt', 'doneNotifiedAt', 'doneInboxId',
-    'doneInboxVerifiedAt', 'checkNotifiedResult', 'lastCheckedAt', 'startedAt', 'startOverdueNotifiedAt']) delete reset[key];
-  return { ...reset, ts: new Date(now).toISOString(), status: 'scheduled', startWhen: row.check,
-    deadlineAt: new Date(now + 24 * 3600000).toISOString(), reason: LEGACY_ADD_CHECK_REASON,
-    migratedLegacyAddCheckAt: new Date(now).toISOString(), migratedFromLegacyAddCheck: rowKey(row) };
+  return rows.filter(row => WATCHED.has(row.status) && row.startWhen &&
+    (row.convertedFromAddCheck === true || row.migratedFromLegacyAddCheck) && !row.restoredAddCheckAt);
 }
 
 export async function migrateLegacyAddChecks({ home, now = Date.now(), dryRun = false, io = {} }) {
   const file = ledgerFile(home), rows = readLedger(file), targets = legacyAddCheckMigrationRows(rows);
   if (dryRun || !targets.length) return { targets, appended: 0 };
-  const additions = targets.map(row => legacyAddCheckReservation(row, now));
-  (io.writeLedger ?? writeLedger)(file, [...rows, ...additions], io.ledgerIo ?? {});
-  for (const row of additions) {
-    const text = `nextClaude 付き check を再開対象に戻しました: ${row.label || row.promise}`;
-    (io.stdout ?? console.log)(text);
-    await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-legacy-add-check-migration', text,
-      dedupeKey: `auto-progress-legacy-add-check-migration:${row.sessionId || rowKey(row)}` });
-  }
-  return { targets, appended: additions.length };
+  const selected = new Set(targets);
+  const restored = rows.map(row => {
+    if (!selected.has(row)) return row;
+    const { startWhen, startedAt, startOverdueNotifiedAt, ...rest } = row;
+    return { ...rest, check: row.check || startWhen, status: 'open',
+      checkRegisteredAt: row.checkRegisteredAt || row.ts,
+      restoredAddCheckAt: new Date(now).toISOString(), reason: LEGACY_ADD_CHECK_REASON };
+  });
+  (io.writeLedger ?? writeLedger)(file, restored, io.ledgerIo ?? {});
+  return { targets, appended: 0, restored: targets.length };
 }
 
 export function timeOnlyMigrationRows(rows) {
@@ -270,7 +261,7 @@ export async function resumeSession(row, { timeoutMs = 20 * 60000, home = os.hom
     : apiErrorResume
     ? `API エラーで返答できなかった user の依頼に、最初から通常どおり応えてください。依頼: ${row.requestText || row.promise.replace(/^API エラー（.*?）で返答できなかった依頼:\s*/, '')}`
     : `以前このセッションで宣言した「この後の自動進行」が止まっています。宣言: 「${row.promise}」。`;
-  const prompt = `${promptLead}${row.kimAnswer ? `\nkim の返事: 「${row.kimAnswer}」。これを前提に続きを進めてください。` : ''}${reason === 'check-overdue' ? `\n期限超過の最終確認です。確認出力全文:\n${row.checkText || ''}\n確認エラー:\n${row.checkStderr || ''}` : ''}${row.nextClaude ? `\nやること: ${row.nextClaude}` : ''}\n元の会話は ${row.transcriptPath} にあります。${apiErrorResume ? '依頼を完了まで進めてください。' : '宣言の最終成果まで進めてください。'}user の判断・承認が必要な地点では、判断材料を揃えて止まり needs_user を返してください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"成果物パスと検証結果、または進めない理由","artifact":"成果物パス（任意）","nextKim":"本人だけができる具体的な判断・操作。返信待ちや自動調査なら空文字"}`;
+  const prompt = `${promptLead}${row.kimAnswer ? `\nkim の返事: 「${row.kimAnswer}」。これを前提に続きを進めてください。` : ''}${reason === 'check-overdue' ? `\n期限超過の継続確認です。確認出力全文:\n${row.checkText || ''}\n確認エラー:\n${row.checkStderr || ''}` : ''}${row.nextClaude ? `\nやること: ${row.nextClaude}` : ''}\n元の会話は ${row.transcriptPath} にあります。${apiErrorResume ? '依頼を完了まで進めてください。' : '宣言の最終成果まで進めてください。'}user の判断・承認が必要な地点では、判断材料を揃えて止まり needs_user を返してください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"成果物パスと検証結果、または進めない理由","artifact":"成果物パス（任意）","nextKim":"本人だけができる具体的な判断・操作。返信待ちや自動調査なら空文字"}`;
   const rateLimited = apiErrorResume && /rate.?limit|usage.?credits?|429/i.test([row.error, row.apiError, row.apiErrorStatus].join(' '));
   const runOptions = { resumeSessionId: row.sessionId, ...(rateLimited ? { model: process.env.AUTO_PROGRESS_RESUME_MODEL || 'opus' } : {}) };
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, row.cwd, row.cwd, timeoutMs, runOptions);
@@ -630,7 +621,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   }
   try {
     const migration = await migrateLegacyAddChecks({ home, now, dryRun, io });
-    summary.legacyAddCheckMigration = { count: migration.targets.length, labels: migration.targets.map(row => row.label || row.promise), appended: migration.appended };
+    summary.legacyAddCheckMigration = { count: migration.targets.length, labels: migration.targets.map(row => row.label || row.promise), appended: migration.appended, restored: migration.restored || 0 };
   } catch (error) {
     summary.errors.push(`legacy-add-check-migration: ${String(error?.message ?? error).slice(0, 120)}`);
   }
@@ -711,7 +702,17 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     logDoneDm(home, row, delivery, message, now, io, toastResult);
     return ['dm', 'session-inbox', 'toast', 'inbox'].includes(delivery?.delivered);
   };
-  const rows = readLedger(file);
+  // Recover rows closed by the old one-shot overdue branch. Completed/skipped rows stay closed.
+  let rows = readLedger(file);
+  const recovered = rows.map(row => row.status === 'overdue_reported' && row.check &&
+    !rows.some(later => later.sessionId === row.sessionId && later.label === row.label &&
+      (later.status === 'done' || later.status === 'skipped') && Date.parse(later.ts) >= Date.parse(row.ts))
+    ? { ...row, status: (row.resumeCount ?? 0) >= MAX_RESUMES ? 'stalled' : 'overdue',
+        overdueRecoveredAt: new Date(now).toISOString() } : row);
+  if (recovered.some((row, i) => row !== rows[i])) {
+    if (!persist(recovered)) return summary;
+    rows = recovered;
+  }
   await registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io, persist);
   let candidates = latestOpenPromises(rows);
   // check 付き行は sessionId + label ごとに1件選ばれるため、別 label の自動チェックはすべて残る。
@@ -746,57 +747,75 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   const needsKim = row => !['', 'なし'].includes(String(row.nextKim ?? '').trim());
   candidates.sort((a, b) => Number(needsKim(a)) - Number(needsKim(b)) || Date.parse(a.ts) - Date.parse(b.ts));
   let executorUnavailable = false;
-  const reportOverdue = async row => {
-    const text = row.overdueReportText;
-    const delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(row), text,
-      { home, now, kind: 'automatic', session: row });
-    if (!['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'final report not delivered');
-    patch(rowKey(row), { overdueReportedAt: new Date(now).toISOString() });
-  };
-  // Retry delivery only, never the check or resume, after a transport failure.
-  for (const row of rows.filter(r => r.status === 'overdue_reported' && !r.overdueReportedAt)) {
-    if (dryRun || notificationsStopped) break;
-    try { await reportOverdue(row); } catch (error) { summary.errors.push(`overdue-report: ${error.message}`); }
-  }
   // Checks run first, before the potentially lengthy legacy resume lane.
   const executable = [...candidates.filter(row => row.check && !reservation(row)), ...pendingChecks];
   executable.sort((a, b) => (Date.parse(a.lastCheckedAt) || 0) - (Date.parse(b.lastCheckedAt) || 0));
   for (const row of executable) {
-    if (notificationsStopped || clock() + 60000 >= stopAt) break;
+    if (notificationsStopped || clock() + resolveCheckTimeout(row) + 5000 >= stopAt) break;
     if (dryRun) continue; // --dry-run must never execute arbitrary commands.
     summary.checked++;
     try {
+      if (isSessionProgressCheck(row)) {
+        const activity = (io.transcriptEvidence ?? transcriptEvidence)(row.transcriptPath, Date.parse(row.ts) || 0);
+        const fields = rollingSessionFields(row, Math.min(activity.lastAt || 0, now));
+        if (row.status === 'overdue' && Date.parse(fields.deadlineAt) > now) fields.status = 'open';
+        if (!patch(rowKey(row), fields)) continue;
+        Object.assign(row, fields);
+      }
       const overdue = now >= Date.parse(row.deadlineAt);
-      let state = await checkPromise(row, { home, now, patch, io, suppressNotices: overdue });
-      if (overdue && ['unmet', 'error'].includes(state)) {
+      let state = await checkPromise(row, { home, now, patch, io, suppressNotices: overdue || kimAction(row) === 'なし' });
+      if (overdue && ['unmet', 'error', 'unknown'].includes(state)) {
         const at = new Date(now).toISOString();
-        let outcome = { reason: '再開上限・実行時間・作業場所の条件により再開できません' };
-        const eligible = !executorUnavailable && summary.resumed < MAX_RESUMES_PER_RUN &&
-          (row.resumeCount ?? 0) < MAX_RESUMES && now - (Date.parse(row.resumedAt || '') || 0) >= RESUME_INTERVAL_MS &&
-          clock() + 22 * 60000 < stopAt && row.cwd && (io.cwdExists ?? fs.existsSync)(row.cwd) && !isUnattendedRow(row, home);
-        if (eligible) {
-          if (!patch(rowKey(row), { status: 'resumed', resumedAt: at, resumeCount: (row.resumeCount ?? 0) + 1, resumeOutcome: 'attempting' })) continue;
+        const exhausted = () => (row.resumeCount ?? 0) >= MAX_RESUMES;
+        let reason = exhausted() ? `自動再開上限（${MAX_RESUMES}回）に到達し止まっています`
+          : state === 'unknown' ? '判定不能のため次周期で check を再試行します'
+          : kimAction(row) !== 'なし' || row.status === 'waiting_user' ? '本人の判断を待っています'
+          : executorUnavailable ? '実行者が利用できないため次周期で再試行します'
+          : summary.resumed >= MAX_RESUMES_PER_RUN ? 'この周期の再開数上限のため次周期へ繰り越します'
+          : now - (Date.parse(row.resumedAt || '') || 0) < RESUME_INTERVAL_MS ? '再開間隔に未到達のため次周期で再確認します'
+          : clock() + 22 * 60000 >= stopAt ? 'この周期の残り時間不足のため次周期へ繰り越します'
+          : !row.cwd || !(io.cwdExists ?? fs.existsSync)(row.cwd) ? '作業場所を確認できないため次周期で再確認します'
+          : isUnattendedRow(row, home) ? '無人処理のため check による追跡を続けます' : '';
+        if (!reason) {
+          const prior = { resumedAt: row.resumedAt || '', resumeCount: row.resumeCount ?? 0 };
+          const attempt = { status: 'resumed', resumedAt: at, resumeCount: prior.resumeCount + 1, resumeOutcome: 'attempting' };
+          if (!patch(rowKey(row), attempt)) continue;
+          Object.assign(row, attempt);
+          let outcome;
           try { outcome = await (io.resume ?? resumeSession)(row, { home, reason: 'check-overdue' }); }
           catch (error) { outcome = { outcome: 'error', reason: String(error.message || error) }; }
+          reason = outcome.reason || outcome.state || outcome.outcome || '再開結果を確認できません';
+          let changes;
           if (outcome.deferred || outcome.outcome === 'deferred') {
             executorUnavailable = true;
             summary.resumeDeferred++;
-            if (!patch(rowKey(row), { resumedAt: row.resumedAt || '', resumeCount: row.resumeCount ?? 0, resumeDeferredAt: at, resumeOutcome: `deferred: ${outcome.reason}` })) continue;
+            changes = { ...prior, resumeDeferredAt: at, resumeOutcome: `deferred: ${reason}` };
           } else {
             summary.resumed++;
-            if (!patch(rowKey(row), { resumeOutcome: `${outcome.state || outcome.outcome}: ${outcome.reason}`, resumeFinishedAt: new Date(clock()).toISOString(), nextKim: outcome.nextKim ?? row.nextKim })) continue;
-            row.nextKim = outcome.nextKim ?? row.nextKim;
-            // A resume report alone cannot establish that an explicit check has passed.
+            changes = { resumeOutcome: `${outcome.state || outcome.outcome}: ${reason}`,
+              resumeFinishedAt: new Date(clock()).toISOString(), nextKim: outcome.nextKim ?? row.nextKim,
+              ...((outcome.state || outcome.outcome) === 'needs_user' ? { status: 'waiting_user' } : {}) };
+          }
+          if (!patch(rowKey(row), changes)) continue;
+          Object.assign(row, changes);
+          // Only the completion check may establish that this task is done.
+          if (!outcome.deferred && outcome.outcome !== 'deferred') {
             state = await checkPromise(row, { home, now, patch, io, suppressNotices: true });
           }
         }
         if (state !== 'done' && state !== 'ledger_error') {
-          const report = `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf(row), home })}\n最終報告（期限超過・未完了）: ${row.label || row.promise}\n期限切れ（${row.deadlineAt}）\n約束: ${row.promise}\n${checkProgressSummary(row.checkText)}\n再開結果: ${outcome.reason}\n次の一手: ${kimAction(row) !== 'なし' ? `${ownerOf(row)} が ${kimAction(row)}` : pendingAction(row)}`;
-          if (!patch(rowKey(row), { status: 'overdue_reported', verdict: 'unmet', overdueClosedAt: at, overdueReportText: redactSecrets(report) })) continue;
-          summary.overdueReported++;
-          state = 'overdue_reported';
+          const status = exhausted() ? 'stalled' : row.status === 'waiting_user' ? 'waiting_user' : 'overdue';
+          if (exhausted() && !reason.startsWith('自動再開上限')) reason = `自動再開上限（${MAX_RESUMES}回）に到達し止まっています。${reason}`;
+          const changes = { status, verdict: status === 'stalled' ? 'stalled' : state === 'unknown' ? 'check_unknown' : state === 'error' ? 'check_error' : 'unmet', reason };
+          if (!patch(rowKey(row), changes)) continue;
+          Object.assign(row, changes);
+          if (status === 'stalled') summary.stalled++;
           (io.queueCheckFollowup ?? queueCheckFollowup)(home, row, { text: row.checkText });
-          await reportOverdue({ ...row, overdueReportText: redactSecrets(report) });
+          // Human decisions are still visible even though periodic Claude progress excludes them.
+          if (kimAction(row) !== 'なし' && now - (Date.parse(row.ownerNotifiedAt || '') || 0) >= PROGRESS_INTERVAL_MS) {
+            const delivery = await askKim(row, reason);
+            if (['dm', 'session-inbox', 'toast', 'inbox'].includes(delivery?.delivered)) patch(rowKey(row), { ownerNotifiedAt: at });
+          }
         }
       }
       if (state === 'time_only') {
@@ -1034,6 +1053,23 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     if (config && current.reportedKey !== reportKey && !dryRun) {
       try { await (io.postSheet ?? postSheet)(config, 'auto-progress', { row: sheetRow(current, verdict, evidence, now) }); patch(rowKey(row), { reportedKey: reportKey }); summary.reported += 1; }
       catch (error) { summary.errors.push(`sheet: ${String(error?.message ?? error).slice(0, 120)}`); } // 次回巡回で再送する
+    }
+  }
+  if (!dryRun && !notificationsStopped) {
+    for (const row of latestOpenPromises(readLedger(file)).filter(row => row.check && kimAction(row) === 'なし')) {
+      const previous = Date.parse(row.lastProgressNotifiedAt || row.checkRegisteredAt || row.ts) || 0;
+      if (now - previous < PROGRESS_INTERVAL_MS) continue;
+      const at = new Date(now).toISOString();
+      const state = row.status === 'stalled' ? '止まっている（再開上限）' : row.checkResult === 'unknown' ? '判定不能・再確認待ち'
+        : row.status === 'overdue' ? '期限超過・追跡中' : '進行中';
+      const text = redactSecrets(`${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf(row), home })}\n自動進行の進捗: ${row.label || row.promise}（${state}）\n${pendingAction(row)}\n確認結果: ${row.checkText || 'まだ判定できていません'}\n再開状況: ${row.reason || '次周期で確認を続けます'}`);
+      try {
+        const item = await (io.addProgressInboxItem ?? io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-periodic', text,
+          dedupeKey: `auto-progress-periodic:${row.pc || ''}:${row.user || ''}:${row.sessionId}:${row.label || ''}`, progressAt: at });
+        if (!item?.id || item.forwardError || !['open', 'forwarded'].includes(item.status)) throw new Error(item?.forwardError || 'progress inbox not delivered');
+        if (!patch(rowKey(row), { lastProgressNotifiedAt: at })) break;
+        summary.progressReported = (summary.progressReported || 0) + 1;
+      } catch (error) { summary.errors.push(`progress-inbox: ${String(error.message || error).slice(0, 120)}`); }
     }
   }
   await sendDeferredNotices();

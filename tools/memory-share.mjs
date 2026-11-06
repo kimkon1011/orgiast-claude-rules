@@ -9,6 +9,8 @@ import { redactForShare, findSharedSecret, parseMemoryFrontmatter } from './lib/
 import { readEnvValue } from './env-kv.mjs';
 import { keyserveAuthHeaders, requireKeyservePcId, keyserveSecret } from './keyserve-auth.mjs';
 import { isKimOperated } from './lib/kim-operated.mjs';
+import { getDriveToken } from './lib/drive-auth.mjs';
+import { findOrCreateFolder, listFiles, downloadFileContent } from './lib/drive-files.mjs';
 
 const DEFAULT_MEMORY_URL = 'https://orgiast-memoryserve.vercel.app/api/memory';
 const CUSTOMER_PATTERNS = [
@@ -208,12 +210,99 @@ function annotation(manifest, kimOperated) {
 
 `;
 }
+export async function installFromDriveMaster(options = {}) {
+  const home = options.home || process.env.ORGIAST_HOME || os.homedir();
+  const dir = options.sharedDir || path.join(home, '.claude', 'shared-memory');
+  const emit = options.emit || console.log;
+
+  const getDriveTokenFn = options.getDriveTokenFn || getDriveToken;
+  const findOrCreateFolderFn = options.findOrCreateFolderFn || findOrCreateFolder;
+  const listFilesFn = options.listFilesFn || listFiles;
+  const downloadFileContentFn = options.downloadFileContentFn || downloadFileContent;
+
+  let token;
+  try {
+    token = await getDriveTokenFn({ home });
+  } catch (err) {
+    emit(`[shared-memory] Drive auth failed: ${err.message}`);
+    return null;
+  }
+
+  let masterFiles = [];
+  try {
+    const masterFolder = await findOrCreateFolderFn(token, 'knowledge', '1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw');
+    masterFiles = await listFilesFn(token, masterFolder.id);
+  } catch (err) {
+    emit(`[shared-memory] Drive folder list failed: ${err.message}`);
+    return null;
+  }
+
+  if (!masterFiles || masterFiles.length === 0) {
+    return null;
+  }
+
+  let installed = 0, updated = 0, unchanged = 0;
+  fs.mkdirSync(dir, { recursive: true });
+
+  for (const file of masterFiles) {
+    if (!file.name.endsWith('.md')) continue;
+    const dest = path.join(dir, file.name);
+
+    if (fs.existsSync(dest)) {
+      const localStat = fs.statSync(dest);
+      const remoteMtime = new Date(file.modifiedTime).getTime();
+      // Guard: do not overwrite newer local file with older remote file
+      if (localStat.mtimeMs > remoteMtime + 5000) {
+        unchanged++;
+        continue;
+      }
+    }
+
+    try {
+      const contentBuf = await downloadFileContentFn(token, file.id);
+      const content = contentBuf.toString('utf8');
+      const existing = fs.existsSync(dest) ? fs.readFileSync(dest, 'utf8') : null;
+
+      if (existing === content) {
+        unchanged++;
+      } else {
+        if (existing !== null) updated++; else installed++;
+        if (!options.dryRun) fs.writeFileSync(dest, content, 'utf8');
+      }
+    } catch {}
+  }
+
+  return {
+    source: 'drive-master',
+    generatedAt: new Date().toISOString(),
+    installed,
+    updated,
+    unchanged,
+    skipped: 0,
+    dir,
+  };
+}
+
 export async function installSharedMemories(options = {}) {
   const home = options.home || process.env.ORGIAST_HOME || os.homedir();
   const env = options.env || process.env;
   const dir = options.sharedDir || env.ORGIAST_SHARED_MEMORY_DIR || path.join(home, '.claude', 'shared-memory');
   const emit = options.emit || console.log;
   const result = { generatedAt: '', installed: 0, updated: 0, removed: 0, unchanged: 0, skipped: 0, dir };
+
+  // Try Drive master first if not offline/fromDir
+  if (!options.fromDir && !options.preferHttpOnly) {
+    try {
+      const driveRes = await installFromDriveMaster({ home, sharedDir: dir, emit, ...options });
+      if (driveRes) {
+        emit(`[shared-memory] synced from Drive master: installed=${driveRes.installed} updated=${driveRes.updated} unchanged=${driveRes.unchanged}`);
+        return driveRes;
+      }
+    } catch (e) {
+      emit(`[shared-memory] Drive master sync failed (${e.message}), falling back to memoryserve HTTP`);
+    }
+  }
+
   try {
     const request = async (query) => {
       const url = new URL(options.memoryUrl || env.ORGIAST_MEMORY_URL || DEFAULT_MEMORY_URL);

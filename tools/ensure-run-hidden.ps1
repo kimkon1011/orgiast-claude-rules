@@ -1,6 +1,20 @@
 # Deploy the hidden console runner outside the development worktree and build a
 # Scheduled Task action whose child arguments are individually quoted.
 
+function Get-FileHashSafe {
+  param([string]$Path)
+  if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+  }
+  Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue
+  if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+  }
+  $bytes = [System.IO.File]::ReadAllBytes($Path)
+  $hasher = [System.Security.Cryptography.SHA256]::Create()
+  return [System.BitConverter]::ToString($hasher.ComputeHash($bytes)) -replace '-'
+}
+
 function Ensure-RunHidden {
   $source = Join-Path $PSScriptRoot 'run-hidden.vbs'
   if (-not (Test-Path -LiteralPath $source)) { throw "hidden runner not found: $source" }
@@ -11,7 +25,7 @@ function Ensure-RunHidden {
   # Running tasks may hold the installed runner open. Identical bytes need no copy.
   $copyRequired = -not (Test-Path -LiteralPath $destination -PathType Leaf)
   if (-not $copyRequired) {
-    $copyRequired = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
+    $copyRequired = (Get-FileHashSafe -Path $source) -ne (Get-FileHashSafe -Path $destination)
   }
   if ($copyRequired) { Copy-Item -LiteralPath $source -Destination $destination -Force }
   return $destination

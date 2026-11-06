@@ -82,6 +82,21 @@ export function buildBeacon({ home = process.env.ORGIAST_HOME || os.homedir(), l
   if (process.platform === 'win32' || metrics.stuckDialogWatcherAt) steps.push({ id: 'stuck-dialog-watch', status: metrics.stuckDialogWatcherOk && !metrics.stuckDialogs24h ? 'ok' : 'fail', reason: `stuckDialogs24h=${metrics.stuckDialogs24h}; heartbeat=${metrics.stuckDialogWatcherAt || 'missing'}` });
   const failing = steps.filter((step) => step.status === 'fail').map((step) => step.id);
   const pollAt = String(readJson(path.join(home, '.claude', '.fleet-mail-last-poll.json'), {})?.at || '');
+
+  let upstreamState = {};
+  try { upstreamState = readJson(path.join(home, '.claude', 'knowledge-upstream-state.json'), {}); } catch {}
+  let sharedMemState = {};
+  try { sharedMemState = readJson(path.join(home, '.claude', 'shared-memory', '.state.json'), {}); } catch {}
+
+  const lastUpstreamAt = String(upstreamState.lastRunAt || '');
+  const unsentUpstreamCount = Array.isArray(upstreamState.unsentQueue) ? upstreamState.unsentQueue.length : 0;
+  const lastDownstreamAt = String(sharedMemState.generatedAt || sharedMemState.at || '');
+  let knowledgeMasterVersion = 0;
+  try {
+    const sharedDir = path.join(home, '.claude', 'shared-memory');
+    if (fs.existsSync(sharedDir)) knowledgeMasterVersion = fs.readdirSync(sharedDir).filter(f => f.endsWith('.md')).length;
+  } catch {}
+
   return {
     label: resolvedLabel,
     account: getClaudeAccountEmail(home) || '',
@@ -91,6 +106,10 @@ export function buildBeacon({ home = process.env.ORGIAST_HOME || os.homedir(), l
     steps,
     failing,
     pollAt,
+    lastUpstreamAt,
+    unsentUpstreamCount,
+    lastDownstreamAt,
+    knowledgeMasterVersion,
     ...metrics
   };
 }

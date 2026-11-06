@@ -25,6 +25,28 @@ export async function listFiles(token, parentId, { apiFn = api } = {}) {
 }
 
 /**
+ * Finds or creates a subfolder by name within a parent directory.
+ */
+export async function findOrCreateFolder(token, folderName, parentId, { apiFn = api } = {}) {
+  const q = encodeURIComponent(`name='${folderName.replace(/'/g, "\\'")}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`);
+  const res = await apiFn(token, `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`);
+  const json = await res.json();
+  if (json.files && json.files.length > 0) {
+    return json.files[0];
+  }
+  const createRes = await apiFn(token, 'https://www.googleapis.com/drive/v3/files?fields=id,name', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json; charset=UTF-8' },
+    body: JSON.stringify({
+      name: folderName,
+      parents: [parentId],
+      mimeType: 'application/vnd.google-apps.folder',
+    }),
+  });
+  return await createRes.json();
+}
+
+/**
  * Downloads a file's raw content as a Buffer.
  */
 export async function downloadFileContent(token, fileId, { apiFn = api } = {}) {

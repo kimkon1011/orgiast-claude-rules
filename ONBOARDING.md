@@ -909,16 +909,15 @@ kim「**ほかのアカウントでまた同じ試行錯誤が発生している
 - `status` だけはオプトイン不要（読み取り専用の自己申告。既に fleet-poller が毎日 verify-setup の結果を
   投げているのと同じ扱い）。ただし本文は `redactSecrets` を通し、**webhook URL やキーは絶対に載せない**。
 
-##### memory（試行錯誤の実測）は毎日自動で配られる（2026-10-15）
+##### memory（試行錯誤の実測）は全PC・全アカウント間で毎時自動で双方向同期される（2026-11-06 改定）
 
-kim-PC の memory は全件（feedback / project / reference、人物像の user は除く）を private な専用プロジェクト orgiast-memoryserve の `/api/memory`（認証は keyserve `/api/keys` へ委譲。鍵配布の認証面を夜間デプロイで触らないため分離） から毎日配る。`MEMORY.md` と `index/*.md` も配信対象。
+全PCの memory (feedback / project / reference, 人物像の user は除く), playbooks, incident, 学びの台帳は、Google Drive を正本として毎時およびセッション終了時に双方向同期されます。
 
-- kim-PC の夜間処理がバンドル v2 を生成し、内容が変わったときだけ Vercel にデプロイする。
-- 各PCの `onboarding-sync` が差分を `~/.claude/shared-memory/` に受信する。CLAUDE.md の管理ブロックから `@~/.claude/shared-memory/MEMORY.md` を参照する。
-- 発信元PCは受信をスキップする。本文中の「ユーザー」「kim」は発信元の人物なので、個人の既定を受け手へそのまま適用しない。
-- 秘密値は資格情報の除外門で除外する。frontmatter の `share: false` または `metadata.share: false` で個別に除外できる。
-- 受け手で編集禁止（毎日上書き）。このPCの知見は通常の auto-memory に書き、全社への戻しは `/share-knowledge` で投稿する。
-- public export は従来どおり feedback のみで、資格情報と顧客情報の両方を除外する。
+- 全PCの `tools/knowledge-upstream.mjs` が毎時および SessionEnd にローカルの差分を Google Drive の受付ハブ (`claude-common-rules/knowledge-inbox/<PC>-<account>/`) へ送信します。
+- kim-PC の `tools/knowledge-merge.mjs` が毎時受付ハブの新着を読み、呼称やパスの汎用化・重複の統合を行って Google Drive 正本 (`claude-common-rules/knowledge/`) へ反映します。3回以上の出現で PROMOTE 候補へ載せます。
+- 各PCの `onboarding-sync` が毎時および SessionStart に Drive 正本から最新ナレッジを `~/.claude/shared-memory/` へ受信します。
+- 秘密値・顧客情報は除外門で排除され、frontmatter の `share: false` で個別に共有除外できます。
+- 受け手で `shared-memory` の直接編集は禁止。知見の記録は通常の auto-memory や playbook へ書けば自動で集約されます。
 
 検証方法と構成は [docs/memory-share.md](docs/memory-share.md) を参照。
 

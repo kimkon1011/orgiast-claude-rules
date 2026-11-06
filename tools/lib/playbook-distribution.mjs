@@ -6,12 +6,12 @@ const normalizeNewlines = (value) => value.replace(/\r\n/g, '\n');
 
 function isCommittedPlaybookVersion(repo, relativePath, content) {
   try {
-    const commits = execFileSync('git', ['-C', repo, 'log', '--format=%H', '--follow', '--', relativePath], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    const commits = execFileSync('git', ['-C', repo, 'log', '--format=%H', '--follow', '--', relativePath], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })
       .split(/\r?\n/)
       .filter(Boolean);
     return commits.some(commit => {
       try {
-        const committed = execFileSync('git', ['-C', repo, 'show', `${commit}:${relativePath}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+        const committed = execFileSync('git', ['-C', repo, 'show', `${commit}:${relativePath}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
         return normalizeNewlines(committed) === normalizeNewlines(content);
       } catch {
         return false;

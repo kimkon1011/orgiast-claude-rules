@@ -48,17 +48,19 @@ test('watch: before deadline stays open; overdue closes and retries final DM; a 
   assert.equal(row.status, 'done'); assert.equal(row.checkText, '確認結果\n本文は捨てる');
   assert.equal((await digest({ home, now: later, io: { notify: () => assert.fail('duplicate digest') } })).sent, false);
   });
-  test('watch: 未達は6時間ごとにkim-inboxを更新し、owner通知と二重にしない', async () => {
-  const home = tmp(); register(home);
-  let notices = 0;
-  const io = { ...baseIo, executeCheck: () => ({ code: 1, text: '未達: 到着待ち' }), notifyOwner: async () => { notices++; return { delivered: 'dm' }; } };
-  await watch({ home, now, io }); assert.equal(listItems(home).length, 0);
-  await watch({ home, now: now + 6 * 3600000, io });
-  const [first] = listItems(home); assert.equal(first.priority, 'high'); assert.match(first.text, /到着待ち/);
-  await watch({ home, now: now + 12 * 3600000, io });
-  assert.equal(listItems(home).length, 1); assert.equal(listItems(home)[0].id, first.id);
-  assert.match(listItems(home)[0].text, /変化なし/); assert.equal(notices, 0);
-  });
+  test('watch: 未達は毎朝inboxに保存し、同じ内容の定期DMは送らない', async () => {
+  const home = tmp(); register(home); const messages = [];
+  const io = { ...baseIo, executeCheck: () => ({ code: 1, text: '未達: まだ届いていません' }),
+    notifyOwner: async (_, text) => { messages.push(text); return { delivered: 'dm' }; } };
+  for (const hours of [0, 1, 6, 7, 12]) await watch({ home, now: now + hours * 3600000, io });
+  assert.equal(messages.length, 0);
+  const daily = listItems(home).filter(item => item.dailyProgress);
+  assert.equal(daily.length, 1); assert.match(daily[0].text, /未達: まだ届いていません/);
+  assert.equal(readLedger(ledgerFile(home))[0].lastCheckOutput, '未達: まだ届いていません');
+  await watch({ home, now: now + 24 * 3600000, io });
+  assert.equal(messages.length, 1); assert.match(messages[0], /期限切れ（/);
+  assert.equal(listItems(home).filter(item => item.source === 'auto-progress-heartbeat').length, 1);
+});
   test('watch: failed completion delivery retries without running check again; dry run has no side effects', async () => {
   const home = tmp(); register(home); let checks = 0, sends = 0;
   const io = { ...baseIo, executeCheck: () => { checks++; return { code: 0, text: '完了' }; },
@@ -79,7 +81,7 @@ test('check errors do not mark done; repeated errors notify once', async () => {
 });
 test('executeCheck honors exit contract, full output and bounded execution', () => {
   const command = `"${process.execPath}" -e "console.log('first');console.log('second');process.exit(1)"`;
-  assert.deepEqual(executeCheck({ check: command }, { home: tmp() }), { code: 1, text: 'first\nsecond', stderr: '' });
+  assert.deepEqual(executeCheck({ check: command }, { home: tmp() }), { code: 1, stdout: 'first\nsecond\n', text: 'first\nsecond', stderr: '' });
   const result = executeCheck({ check: 'anything' }, { home: tmp(), shellPath: null, spawnImpl: (_, options) => {
     assert.equal(options.timeout, CHECK_TIMEOUT_MS); assert.equal(options.windowsHide, true);
     return { status: null, error: new Error('timeout'), stdout: '' };
@@ -177,7 +179,7 @@ test('executeCheck invokes explicit Bash without shell and preserves execution o
     assert.equal(opts.timeout, CHECK_TIMEOUT_MS); assert.equal(opts.maxBuffer, 64 * 1024);
     assert.equal(opts.windowsHide, true); assert.equal(opts.encoding, 'utf8'); assert.equal(opts.env.ORGIAST_HOME, home);
     return { status: 1, stdout: '' };
-  } }), { code: 1, text: '未達', stderr: '' });
+  } }), { code: 1, stdout: '', text: '未達', stderr: '' });
 });
 test('executeCheck with null shell retains the shell:true invocation', () => {
   executeCheck({ check: 'check command' }, { shellPath: null, spawnImpl: (...args) => {

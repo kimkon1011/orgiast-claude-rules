@@ -5,10 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { checkPromise, checkProgressSummary } from './auto-progress-check.mjs';
 import { notifyOwner } from './notify-owner.mjs';
-import { listItems, markSeen } from './kim-inbox.mjs';
+import { listItems as allInboxItems, markSeen } from './kim-inbox.mjs';
 import { routeOwnerDm, deferredFile } from './lib/owner-dm-policy.mjs';
 import { compactDigest } from './lib/owner-dm-digest.mjs';
 import { isKimHumanProgress, deliverHumanProgress } from './lib/auto-progress-human-inbox.mjs';
+const listItems = home => allInboxItems(home).filter(item => !item.dailyProgress);
 const now = Date.parse('2026-11-06T00:00:00Z');
 const row = () => ({ sessionId: 'human-session', ts: '2026-11-05T00:00:00Z', owner: 'kim@orgiast.jp', transcriptPath: '/transcript.jsonl', label: '保存の確認', promise: '保存されたら確認', status: 'open', check: 'check-command', deadlineAt: '2026-11-08T00:00:00Z', nextKim: '', nextClaude: '権限を確認する' });
 function home(t) {
@@ -28,6 +29,7 @@ test('A/B human changes bypass quota and digest-only, preserve deferred bytes, d
   } };
   await checkPromise(r, opts);
   let items = listItems(dir); assert.equal(items.length, 1);
+  assert.equal(allInboxItems(dir).filter(item => item.dailyProgress).length, 1);
   assert.equal(items[0].text, '依頼名: 保存の確認\nいまの状態: まだ保存されていません\nkim の次の1手: なし\nClaude の次の手: 権限を確認する');
   markSeen(dir, items[0].id);
   text = 'まだ保存されていません\n変化する詳細';

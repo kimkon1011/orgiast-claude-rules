@@ -19,6 +19,7 @@ import { completionActions } from './lib/auto-progress-artifact.mjs';
 import { reportCheckProgress } from './lib/auto-progress-heartbeat.mjs';
 import { checkPromise, checkProgressSummary, executeCheck, isTimeOnlyCheck, queueCheckFollowup, pendingAction } from './auto-progress-check.mjs';
 import { addItem } from './kim-inbox.mjs';
+import { pushDailyProgress } from './lib/auto-progress-daily.mjs';
 import { appendInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { BLOCKER, readJson as readFleetJson, saveJson as saveFleetJson } from './lib/fleet-chase-ledger.mjs';
@@ -978,7 +979,15 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       }
       continue;
     }
-    if (verdict.verdict === 'in_progress') { patch(rowKey(row), { ...(row.status === 'stalled' ? { status: 'open' } : {}), verdict: 'in_progress', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason }); summary.inProgress += 1; continue; }
+    if (verdict.verdict === 'in_progress') {
+      const changes = { ...(row.status === 'stalled' ? { status: 'open' } : {}), verdict: 'in_progress', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason };
+      if (patch(rowKey(row), changes) !== false && !dryRun && !notificationsStopped) {
+        Object.assign(row, changes);
+        try { await pushDailyProgress(home, row, { now, patch, io }); }
+        catch (error) { summary.errors.push(`daily-progress: ${error.message}`); }
+      }
+      summary.inProgress += 1; continue;
+    }
     summary.stalled += 1;
     patch(rowKey(row), { ...((row.resumeCount ?? 0) >= MAX_RESUMES || verdict.source === 'resume-failed' ? { status: 'stalled' } : {}), verdict: 'stalled', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason });
     let current = { ...row, ...((row.resumeCount ?? 0) >= MAX_RESUMES || verdict.source === 'resume-failed' ? { status: 'stalled' } : {}), verdict: verdict.verdict, reason: verdict.reason };

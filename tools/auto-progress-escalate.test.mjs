@@ -22,7 +22,7 @@ test('48h boundary, older timestamp, statuses and owner filtering', async t => {
 test('successful delivery persists dedup and allows retry at 24h', async t => {
   const r = row(60), opts = setup(t, [r]);
   let calls = 0;
-  opts.io.notifyKim = async (text, options) => { calls++; assert.equal(options.kind, 'ask'); assert.equal(options.kimActionRequired, true); return { delivered: 'dm' }; };
+  opts.io.notifyKim = async (text, options) => { calls++; assert.equal(options.kind, 'ask'); assert.equal(options.kimActionRequired, true); assert.equal(options.sessionId, r.sessionId); return { delivered: 'dm' }; };
   assert.equal((await escalateKimDecisions(opts)).sent, 1);
   const state = JSON.parse(fs.readFileSync(path.join(opts.home, '.claude/auto-progress-escalated.json')));
   assert.equal(state[escalationRowKey(r)], new Date(now).toISOString());

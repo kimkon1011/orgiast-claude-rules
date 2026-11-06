@@ -44,18 +44,48 @@ export function hasBashEnvExpansion(command) {
   return /(?<!\\)\$env:/i.test(command);
 }
 
+/** Quoted/relative script paths are resolved against the check's working directory.
+ * This is a literal source scan, not a shell parser or an audit of imported files.
+ */
+export function sessionStateReference(row, { home } = {}) {
+  const tokens = String(row.check || '').match(/"[^"\n]*"|'[^'\n]*'|[^\s;|&<>]+/g) || [];
+  for (const token of tokens) {
+    let file = token.replace(/^(['"])(.*)\1$/, '$2');
+    if (!/\.(?:mjs|js|ps1|py)$/i.test(file)) continue;
+    file = file.replace(/\\/g, '/');
+    if (home && file.startsWith('~/')) file = path.join(home, file.slice(2));
+    file = path.resolve(row.checkCwd || row.cwd || process.cwd(), file);
+    let source;
+    try { source = fs.readFileSync(file, 'utf8'); }
+    catch (error) {
+      // Missing scripts are diagnosed by the existing trial execution.
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') continue;
+      throw error;
+    }
+    // Also normalize doubled backslashes in JS/Python string literals.
+    const normalized = source.replace(/\\+/g, '/').toLowerCase();
+    if (['appdata/local/temp/claude/', 'nightly-repo/.scratch/', '/tmp/'].some(value => normalized.includes(value))) return file;
+  }
+  return null;
+}
+
 /**
  * addCheck の事前確認:
- * 1. 静的検査（$env: 展開の検出）
+ * 1. 静的検査（セッション限定の中間状態・$env: 展開の検出）
  * 2. 試し実行
  * 戻り値: { ok, code, text, stderr, preflight }
  *   ok=false → 登録拒否（exit 2）
  *   preflight=already_met → exit 0 で達成済み
  *   preflight=unmet → exit 1 で未達（正常）
+ *   preflight=session_state → セッション限定の中間ファイル参照を検出
  *   preflight=static_error → $env: 展開を検出
  *   preflight=stderr_error → stderr にエラー印を検出
  */
-export function preflightCheck(row, { home, forceCheck = false } = {}) {
+export function preflightCheck(row, { home, forceCheck = false, allowSessionState = false } = {}) {
+  if (!allowSessionState && sessionStateReference(row, { home })) {
+    const msg = '完了判定はセッションが書く中間ファイルではなく、外部の一次情報（公開ページ・API・gh・タスクスケジューラ等）を直接照会してください。セッションが落ちると中間ファイルが更新されず、完了を検知できません（2026-11-06 実害）。例外として登録する場合だけ --allow-session-state を指定してください。';
+    return { ok: false, code: 2, text: msg, stderr: msg, preflight: 'session_state' };
+  }
   // 静的検査
   if (!forceCheck && hasBashEnvExpansion(row.check)) {
     const msg = [

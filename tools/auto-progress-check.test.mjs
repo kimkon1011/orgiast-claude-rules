@@ -4,7 +4,7 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import test, { after } from 'node:test';
-import { addCheck } from './auto-progress.mjs';
+import { addCheck, main } from './auto-progress.mjs';
 import { executeCheck, preflightCheck, hasBashEnvExpansion, hasCheckError, CHECK_ERROR_PATTERNS, resolveCheckShell, CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS, pendingAction } from './auto-progress-check.mjs';
 import { readLedger, writeLedger, ledgerFile } from './auto-progress-ledger.mjs';
 import { run as watch } from './auto-progress-watch.mjs';
@@ -372,4 +372,93 @@ test('hasBashEnvExpansion / hasCheckError は期待どおり判定する', () =>
   assert.equal(hasCheckError('bash: command not found: foo'), true);
   assert.equal(hasCheckError('ok'), false);
   assert.equal(CHECK_ERROR_PATTERNS.length >= 5, true);
+});
+
+
+test('preflightCheck: scratchpad・.scratch・tmp を読むスクリプトは実行前に拒否する', () => {
+  const home = tmp();
+  const references = [
+    'C:/Users/test/AppData/Local/Temp/claude/session/scratchpad/state.json',
+    String.raw`C:\Users\test\APPDATA\LOCAL\TEMP\CLAUDE\session\state.json`,
+    String.raw`C:\\Users\\test\\NIGHTLY-REPO\\.SCRATCH\\state.json`,
+    '/TMP/session/state.json',
+  ];
+  for (const extension of ['mjs', 'js', 'ps1', 'py']) {
+    const file = `check state.${extension}`;
+    for (const reference of references) {
+      fs.writeFileSync(path.join(home, file), `readFile(${JSON.stringify(reference)})`);
+      for (const quote of ['"', "'"]) {
+        const result = preflightCheck({ check: `node ${quote}${file}${quote}`, checkCwd: home }, { home, forceCheck: true });
+        assert.equal(result.ok, false, `${extension}: ${reference}`);
+        assert.equal(result.preflight, 'session_state');
+        assert.match(result.text, /外部の一次情報/);
+        assert.match(result.text, /2026-11-06 実害/);
+      }
+    }
+  }
+});
+
+test('preflightCheck: 公開 URL を fetch するだけのスクリプトは通る', () => {
+  const home = tmp(), file = path.join(home, 'public-check.mjs');
+  fs.writeFileSync(file, "const response = await fetch('https://example.com/jobs'); process.exit(response.ok ? 0 : 1);\n");
+  // Stub only the HTTP transport so the test does not depend on network availability.
+  const stub = 'data:text/javascript,globalThis.fetch=async()=>({ok:false})';
+  const result = preflightCheck({ check: `"${process.execPath}" --import "${stub}" "${file}"` }, { home });
+  assert.equal(result.ok, true, result.text);
+  assert.equal(result.preflight, 'unmet');
+});
+
+test('CLI: --allow-session-state だけが中間状態の検査を解除する', () => {
+  const home = tmp(), file = path.join(home, 'session-check.mjs');
+  fs.writeFileSync(file, "import fs from 'node:fs'; try { fs.readFileSync('/tmp/auto-progress-missing-state.json'); } catch {} process.exit(1);\n");
+  const args = ['--add-check', '--session', 'session-state', '--check', `"${process.execPath}" "${file}"`, '--deadline', '+24h', '--label', '中間状態確認'];
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  try {
+    for (const flags of [[], ['--force-check']]) {
+      assert.throws(() => main([...args, ...flags]), /セッションが落ちると/);
+      assert.equal(readLedger(ledgerFile(home)).length, 0);
+    }
+    assert.equal(main([...args, '--allow-session-state']).sessionId, 'session-state');
+    assert.equal(readLedger(ledgerFile(home)).length, 1);
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+  }
+});
+
+
+test('CLI: --force-check は $env: を含む未達の check の静的検査を飛ばして登録する', () => {
+  const home = tmp();
+  const check = `"${process.execPath}" -e "process.exit(1)" "$env:USERPROFILE"`;
+  const args = ['--add-check', '--session', 'force-unmet', '--check', check, '--deadline', '+24h', '--label', '未達の確認'];
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  try {
+    assert.equal(hasBashEnvExpansion(check), true);
+    assert.throws(() => main(args), /\$env:/);
+    assert.equal(readLedger(ledgerFile(home)).length, 0);
+    const row = main([...args, '--force-check']);
+    assert.equal(row.status, 'open');
+    assert.equal(readLedger(ledgerFile(home)).length, 1);
+    assert.equal(readLedger(ledgerFile(home))[0].check, check);
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+  }
+});
+
+test('CLI: --force-check だけでは scratchpad 参照を登録できない', () => {
+  const home = tmp(), file = path.join(home, 'scratchpad-check.mjs');
+  fs.writeFileSync(file, "import fs from 'node:fs'; fs.writeFileSync(new URL('./executed', import.meta.url), 'called'); fs.readFileSync('C:/Users/test/AppData/Local/Temp/claude/session/scratchpad/state.json'); process.exit(1);\n");
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  try {
+    assert.throws(() => main(['--add-check', '--force-check', '--session', 'force-scratchpad', '--check', `"${process.execPath}" "${file}"`, '--deadline', '+24h', '--label', '中間状態確認']), /セッションが落ちると/);
+    assert.equal(readLedger(ledgerFile(home)).length, 0);
+    assert.equal(fs.existsSync(path.join(home, 'executed')), false);
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+  }
 });

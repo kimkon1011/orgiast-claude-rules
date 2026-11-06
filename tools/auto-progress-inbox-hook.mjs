@@ -102,7 +102,7 @@ export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.home
     if (changed) fs.writeFileSync(file, updated.map(JSON.stringify).join('\n') + '\n');
   }
   const warning = recipientWarning({ ...ownerOptions, home, label }, new Date(now));
-  if (!lines.length && !warning) return null;
+  if (!lines.length && !warning && !mobilePushContext) return null;
   const event = input.hook_event_name || 'UserPromptSubmit';
   const context = lines.length ? `【必須】応答の冒頭で user に見える形で「📲 自動進行の結果（聞かれる前にお知らせ）」として次を表示せよ: ${displayText(lines.join('\n'), Infinity)}` : '';
   return { hookSpecificOutput: { hookEventName: event, additionalContext: [warning, context].filter(Boolean).join('\n') } };

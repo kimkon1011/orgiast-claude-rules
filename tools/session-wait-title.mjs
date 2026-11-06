@@ -90,19 +90,26 @@ export function lastAssistantText(raw) {
   return '';
 }
 
+const withoutPc = title => title.replace(/^\d{3}｜/, '');
+function titleBody(title) {
+  const body = withoutPc(title.trim()).replace(PREFIX, '').trim();
+  return isNoiseText(body) ? '' : body;
+}
+
+// hook の仮名は source なしで記録されても人の /rename として扱わない。
+function isPlaceholder(title) {
+  return titleBody(title) === '待機中';
+}
+
 // 書くべき custom-title を返す。変更不要なら null。
 export function desiredTitle(text, raw, pc = '') {
   const footer = footerValues(text);
   if (!footer && !pc) return null;
   const { custom, ai, firstPrompt, autoAi, customSource, declaredPurpose } = currentTitles(raw);
-  const withoutPc = title => title.replace(/^\d{3}｜/, '');
   const existingPrefix = withoutPc(custom).match(PREFIX)?.[0] || '';
-  const titleBody = title => {
-    const body = withoutPc(title.trim()).replace(PREFIX, '').trim();
-    return isNoiseText(body) ? '' : body;
-  };
-  const base = (customSource !== 'orgiast-auto' ? titleBody(custom) : '')
-    || declaredPurpose || titleBody(autoAi) || titleBody(custom) || titleBody(ai) || firstPrompt || 'セッション';
+  const customBody = isPlaceholder(custom) ? '' : titleBody(custom);
+  const base = (customSource !== 'orgiast-auto' ? customBody : '')
+    || declaredPurpose || titleBody(autoAi) || customBody || titleBody(ai) || firstPrompt || 'セッション';
   const deadline = footer ? openDeadline(footer.session) : null;
   const prefix = deadline ? waitPrefix(deadline) : isClosable(footer) ? CLOSABLE_PREFIX : !footer ? existingPrefix : '';
   // Without a PC number, keep the existing footer-driven behavior.
@@ -111,7 +118,36 @@ export function desiredTitle(text, raw, pc = '') {
   return next === custom ? null : next;
 }
 
-// 初回のAI命名を待ってから、UserPromptSubmit の rename 経路へタイトルを渡す。
+// 新規セッションは transcript がまだ作られていなくても待機名を返す。
+export function sessionStart(input, { readFile = fs.readFileSync, statSize = p => fs.statSync(p).size, resolvePcNumber: resolveNumber = resolvePcNumber } = {}) {
+  try {
+    const pc = resolveNumber();
+    const file = input?.transcript_path || input?.transcriptPath || '';
+    if (!pc || !file || /subagents/i.test(file)) return null;
+    let raw = '';
+    try {
+      if (statSize(file) > MAX_BYTES) return null;
+      raw = readFile(file, 'utf8');
+    } catch (error) { if (error.code !== 'ENOENT') return null; }
+    const { custom, ai } = currentTitles(raw);
+    if (custom || ai) return null;
+    return { hookSpecificOutput: { hookEventName: 'SessionStart', sessionTitle: `${pc}｜待機中` } };
+  } catch { return null; }
+}
+
+// 半角は0.5文字として、全角換算30文字までの冒頭を使う。
+function promptTitle(prompt) {
+  const text = typeof prompt === 'string' ? prompt.replace(/\s+/g, ' ').trim() : '';
+  let title = '', width = 0;
+  for (const char of text) {
+    width += /[\x20-\x7e\uff61-\uff9f]/.test(char) ? 1 : 2;
+    if (width > 60) break;
+    title += char;
+  }
+  return title.trim() || '待機中';
+}
+
+// UserPromptSubmit の rename 経路へタイトルを渡す。
 export function promptSubmit(input, { readFile = fs.readFileSync, statSize = p => fs.statSync(p).size, resolvePcNumber: resolveNumber = resolvePcNumber } = {}) {
   try {
     const pc = resolveNumber();
@@ -121,9 +157,10 @@ export function promptSubmit(input, { readFile = fs.readFileSync, statSize = p =
     if (statSize(file) > MAX_BYTES) return null;
     const raw = readFile(file, 'utf8');
     const { custom, ai, customSource } = currentTitles(raw);
-    if (!custom && !ai) return null;
+    const hasCustom = custom && !isPlaceholder(custom);
+    if (!hasCustom && !ai) return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', sessionTitle: `${pc}｜${promptTitle(input.prompt)}` } };
     // 人の /rename は番号以外を保持し、自動命名だけ期限フッターを反映する。
-    let title = custom && customSource !== 'orgiast-auto'
+    let title = hasCustom && customSource !== 'orgiast-auto'
       ? custom : desiredTitle(lastAssistantText(raw), raw, pc) ?? custom;
     if (!/^\d{3}｜/.test(title)) title = `${pc}｜${title}`;
     return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', sessionTitle: title } };
@@ -181,8 +218,8 @@ async function main() {
     const raw = await readStdinWithTimeout();
     if (!raw.trim()) return;
     const input = JSON.parse(raw);
-    if (process.argv.includes('--prompt-submit')) {
-      const output = promptSubmit(input);
+    if (input.hook_event_name === 'SessionStart' || input.hook_event_name === 'UserPromptSubmit' || process.argv.includes('--prompt-submit')) {
+      const output = input.hook_event_name === 'SessionStart' ? sessionStart(input) : promptSubmit(input);
       if (output) console.log(JSON.stringify(output));
       return;
     }

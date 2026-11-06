@@ -22,7 +22,7 @@ function selectAnchor() {
     try {
       const git = (...args) => execFileSync('git', ['-C', candidate, ...args], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
       const branch = git('branch', '--show-current');
-      if ((branch && branch !== 'main') || git('status', '--porcelain')) continue;
+      if ((branch && branch !== 'main') || git('status', '--porcelain', '--untracked-files=no')) continue;
       const head = git('rev-parse', 'HEAD');
       const main = git('rev-parse', 'refs/remotes/origin/main');
       if (head !== main) {
@@ -136,7 +136,10 @@ function add(groups, scriptName, group) {
   const fileBase = path.posix.basename(base.replace(/\\/g, '/'));
   const escaped = fileBase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const scriptPattern = new RegExp(`(?:^|[\\\\/\\s"'])${escaped}\\.(?:mjs|ps1)(?=["'\\s]|$)`);
-  if (commands(groups).some((cmd) => scriptPattern.test(cmd))) return false;
+  // タイトルの一括更新と同期命名は同じスクリプトを別引数で登録する。
+  const sameMode = cmd => fileBase !== 'session-wait-title'
+    || cmd.includes('--all') === group.hooks[0].command.includes('--all');
+  if (commands(groups).some((cmd) => scriptPattern.test(cmd) && sameMode(cmd))) return false;
   groups.push(group); return true;
 }
 function setTimeoutFor(groups, scriptName, timeout) {

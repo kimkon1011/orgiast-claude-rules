@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { apply as applyReal, currentTitles, desiredTitle, isCloseRitualOnly, promptSubmit, sweepAll as sweepAllReal, waitPrefix } from './session-wait-title.mjs';
+import { apply as applyReal, currentTitles, desiredTitle, isCloseRitualOnly, promptSubmit, sessionStart, sweepAll as sweepAllReal, waitPrefix } from './session-wait-title.mjs';
 
 const apply = input => applyReal(input, { resolvePcNumber: () => '' });
 const sweepAll = options => sweepAllReal({ ...options, resolvePcNumber: () => '' });
@@ -213,7 +213,7 @@ test('sweepAll は注入したPC番号を全件に適用し、追記は冪等', 
 
 const salesAi = JSON.stringify({ type: 'ai-title', aiTitle: '東邦の売上' });
 for (const [name, raw, pc, expected] of [
-  ['初回はAI命名を妨げない', JSON.stringify({ type: 'user', message: { content: '売上を確認' } }), '008', null],
+  ['プロンプトもタイトルも無ければ待機名', JSON.stringify({ type: 'user', message: { content: '売上を確認' } }), '008', '008｜待機中'],
   ['AIタイトルに番号を付ける', salesAi, '008', '008｜東邦の売上'],
   ['同じタイトルもサーバー同期へ渡す', auto('008｜x'), '008', '008｜x'],
   ['番号なしPCは出力しない', salesAi, '', null],
@@ -267,5 +267,98 @@ test('--prompt-submit CLI: JSON 1行・読み取り専用・不正入力でもex
     assert.equal(failed.status, 0);
     assert.equal(failed.stdout, '');
     assert.equal(failed.stderr, '');
+  }
+});
+
+const freshInput = { transcript_path: 's.jsonl', session_id: 's' };
+const freshOptions = { resolvePcNumber: () => '999', statSize: () => 0, readFile: () => '' };
+test('source なしの待機名はプロンプト冒頭に置き換える', () => {
+  for (const title of ['999｜待機中', '待機中', '999｜【11/02/20:11まで】待機中', '999｜【26/11/02/20:11まで】 待機中 ', '999｜【閉じて可】待機中']) {
+    const result = promptSubmit({ ...freshInput, prompt: '売上を確認する' }, {
+      ...freshOptions, readFile: () => custom(title),
+    });
+    assert.equal(result.hookSpecificOutput.sessionTitle, '999｜売上を確認する');
+  }
+});
+
+test('待機名より ai-title を promptSubmit・desiredTitle・apply で採用する', () => {
+  for (const placeholder of [custom, auto]) {
+    for (const raw of [`${placeholder('999｜待機中')}\n${salesAi}`, `${salesAi}\n${placeholder('999｜待機中')}`]) {
+      const options = { ...freshOptions, readFile: () => raw };
+      assert.equal(promptSubmit({ ...freshInput, prompt: '別の入力' }, options).hookSpecificOutput.sessionTitle, '999｜東邦の売上');
+      assert.equal(desiredTitle('', raw, '999'), '999｜東邦の売上');
+      let appended = '';
+      assert.equal(applyReal(freshInput, { ...options, appendFile: (_file, text) => { appended += text; } }), '999｜東邦の売上');
+      assert.equal(JSON.parse(appended.trim()).customTitle, '999｜東邦の売上');
+    }
+  }
+});
+
+test('source なしでも待機中以外の手動名は保持する', () => {
+  for (const title of ['999｜手動の名前', '999｜待機中の調査']) {
+    const raw = `${custom(title)}\n${salesAi}`;
+    const options = { ...freshOptions, readFile: () => raw };
+    assert.equal(promptSubmit({ ...freshInput, prompt: '別の入力' }, options).hookSpecificOutput.sessionTitle, title);
+    assert.equal(desiredTitle('', raw, '999'), null);
+    assert.equal(applyReal(freshInput, { ...options, appendFile: () => assert.fail('変更不要') }), null);
+  }
+});
+
+test('SessionStart: 未入力なら待機名、既存タイトルなら保持する', () => {
+  assert.deepEqual(sessionStart(freshInput, freshOptions), {
+    hookSpecificOutput: { hookEventName: 'SessionStart', sessionTitle: '999｜待機中' },
+  });
+  for (const raw of [ai, custom('手動名'), auto('999｜既存名')]) {
+    assert.equal(sessionStart(freshInput, { ...freshOptions, readFile: () => raw }), null);
+  }
+  const missing = () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); };
+  for (const options of [{ statSize: missing }, { readFile: missing }]) {
+    assert.equal(sessionStart(freshInput, { ...freshOptions, ...options }).hookSpecificOutput.sessionTitle, '999｜待機中');
+  }
+});
+
+test('SessionStart: 対象外と読み取りエラーはfail-open', () => {
+  for (const input of [{}, { transcript_path: 'p/subagents/s.jsonl' }]) {
+    assert.equal(sessionStart(input, freshOptions), null);
+  }
+  for (const options of [
+    { resolvePcNumber: () => '' },
+    { resolvePcNumber: () => { throw new Error('pc'); } },
+    { statSize: () => 256 * 1024 * 1024 + 1 },
+    { statSize: () => { throw new Error('stat'); } },
+    { readFile: () => { throw Object.assign(new Error('denied'), { code: 'EACCES' }); } },
+  ]) assert.equal(sessionStart(freshInput, { ...freshOptions, ...options }), null);
+});
+
+test('promptSubmit: AI名が無ければ今回の冒頭を空白正規化・全角30文字に制限する', () => {
+  for (const [prompt, title] of [
+    ['  売上\n\t を   確認  ', '売上 を 確認'],
+    ['あ'.repeat(31), 'あ'.repeat(30)],
+    ['a'.repeat(61), 'a'.repeat(60)],
+    ['abc' + 'あ'.repeat(30), 'abc' + 'あ'.repeat(28)],
+    ['😀'.repeat(31), '😀'.repeat(30)],
+    [' \n\t ', '待機中'],
+    [undefined, '待機中'],
+  ]) {
+    assert.deepEqual(promptSubmit({ ...freshInput, prompt }, freshOptions), {
+      hookSpecificOutput: { hookEventName: 'UserPromptSubmit', sessionTitle: `999｜${title}` },
+    });
+  }
+});
+
+test('CLI: hook_event_name で SessionStart と UserPromptSubmit を振り分ける', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-events-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 's.jsonl');
+  for (const [event, title] of [['SessionStart', '待機中'], ['UserPromptSubmit', '売上確認']]) {
+    if (event === 'UserPromptSubmit') fs.writeFileSync(file, '');
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL('./session-wait-title.mjs', import.meta.url))], {
+      input: JSON.stringify({ hook_event_name: event, transcript_path: file, session_id: 's', prompt: '売上確認' }),
+      encoding: 'utf8', env: { ...process.env, ORGIAST_PC_NUMBER: '999' },
+    });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0);
+    assert.equal(result.stderr, '');
+    assert.deepEqual(JSON.parse(result.stdout), { hookSpecificOutput: { hookEventName: event, sessionTitle: `999｜${title}` } });
   }
 });

@@ -151,6 +151,8 @@ export function applyPromise(rows, record) {
         deadlineAt: existing.deadlineAt,
         label: existing.label,
         nextClaude: existing.nextClaude,
+        ...Object.fromEntries(['lastCheckOutput', 'progressFingerprint', 'progressOutput', 'progressDay',
+          'progressInboxId', 'progressPending'].filter(key => existing[key] !== undefined).map(key => [key, existing[key]])),
         ...(existing.checkTimeoutMs ? { checkTimeoutMs: existing.checkTimeoutMs } : {}),
         ...(existing.lastUnmetNotifiedAt ? { lastUnmetNotifiedAt: existing.lastUnmetNotifiedAt } : {}),
       };

@@ -4,7 +4,7 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import test, { after } from 'node:test';
-import { addCheck } from './auto-progress.mjs';
+import { addCheck, main } from './auto-progress.mjs';
 import { executeCheck, preflightCheck, hasBashEnvExpansion, hasCheckError, CHECK_ERROR_PATTERNS, resolveCheckShell, CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS, pendingAction } from './auto-progress-check.mjs';
 import { readLedger, writeLedger, ledgerFile } from './auto-progress-ledger.mjs';
 import { run as watch } from './auto-progress-watch.mjs';
@@ -43,49 +43,24 @@ test('watch: before deadline stays open; overdue closes and retries final DM; a 
   addCheck({ home, now: later + 1, session: 'session', check: 'node check.mjs', label: '着信再確認', deadline: '+24h' });
   await watch({ home, now: later, io }); await watch({ home, now: later, io });
   assert.equal(deliveries, 2);
-  assert.equal(listItems(home).length, 1);
+  assert.equal(listItems(home).filter(i => i.source === 'auto-progress-done').length, 1);
   const row = readLedger(ledgerFile(home)).at(-1);
   assert.equal(row.status, 'done'); assert.equal(row.checkText, '確認結果\n本文は捨てる');
   assert.equal((await digest({ home, now: later, io: { notify: () => assert.fail('duplicate digest') } })).sent, false);
   });
-  test('watch: 未達（code=1）でも6時間ごとに owner へ定期的に状況を DM する', async () => {
-  const home = tmp();
-  addCheck({ home, now, session: 'unmet-session', check: 'node check.mjs', label: '着信確認', deadline: '+24h' });
-  const messages = [];
-  const io = {
-    ...baseIo,
-    executeCheck: () => ({ code: 1, text: '未達: まだ届いていません' }),
-    notifyOwner: async (_, text) => {
-      messages.push(text);
-      return { delivered: 'dm' };
-    },
-  };
-  // 登録直後（0h）: 6時間未満なのでDMしない
-  await watch({ home, now, io });
+  test('watch: 未達は毎朝inboxに保存し、同じ内容の定期DMは送らない', async () => {
+  const home = tmp(); register(home); const messages = [];
+  const io = { ...baseIo, executeCheck: () => ({ code: 1, text: '未達: まだ届いていません' }),
+    notifyOwner: async (_, text) => { messages.push(text); return { delivered: 'dm' }; } };
+  for (const hours of [0, 1, 6, 7, 12]) await watch({ home, now: now + hours * 3600000, io });
   assert.equal(messages.length, 0);
-
-  // 1時間後: 6時間未満なのでDMしない
-  await watch({ home, now: now + 3600000, io });
-  assert.equal(messages.length, 0);
-
-  // 6時間後: 1回目の定期DMが送信される
-  await watch({ home, now: now + 6 * 3600000, io });
-  assert.equal(messages.length, 1);
-  assert.match(messages[0], /未達: 着信確認\n達成 0件 \/ 未達 1件/);
-
-  // 7時間後: 前回DMから1時間なので再送しない
-  await watch({ home, now: now + 7 * 3600000, io });
-  assert.equal(messages.length, 1);
-
-  // 12時間後: 前回DMから6時間経過で2回目の定期DM
-  await watch({ home, now: now + 12 * 3600000, io });
-  assert.equal(messages.length, 2);
-
-  // 24時間後（期限切れ）: overdue の未達（期限超過）通知
+  const daily = listItems(home).filter(item => item.dailyProgress);
+  assert.equal(daily.length, 1); assert.match(daily[0].text, /未達: まだ届いていません/);
+  assert.equal(readLedger(ledgerFile(home))[0].lastCheckOutput, '未達: まだ届いていません');
   await watch({ home, now: now + 24 * 3600000, io });
-  assert.equal(messages.length, 3);
-  assert.match(messages[2], /期限切れ（/);
-  });
+  assert.equal(messages.length, 1); assert.match(messages[0], /期限切れ（/);
+  assert.equal(listItems(home).filter(item => item.source === 'auto-progress-heartbeat').length, 1);
+});
   test('watch: failed completion delivery retries without running check again; dry run has no side effects', async () => {
   const home = tmp(); register(home); let checks = 0, sends = 0;
   const io = { ...baseIo, executeCheck: () => { checks++; return { code: 0, text: '完了' }; },
@@ -101,12 +76,12 @@ test('check errors do not mark done; repeated errors notify once', async () => {
   const home = tmp(); register(home); const messages = [];
   const io = { ...baseIo, executeCheck: () => ({ code: 2, text: '実行エラー' }), notifyOwner: async (_, text) => { messages.push(text); return { delivered: 'dm' }; } };
   await watch({ home, now, io }); await watch({ home, now, io });
-  assert.equal(messages.length, 1); assert.match(messages[0], /確認エラー/);
+  assert.equal(messages.length, 1); assert.match(messages[0], /確認処理エラー: 着信確認 実行エラー/);
   assert.equal(readLedger(ledgerFile(home))[0].status, 'open');
 });
 test('executeCheck honors exit contract, full output and bounded execution', () => {
   const command = `"${process.execPath}" -e "console.log('first');console.log('second');process.exit(1)"`;
-  assert.deepEqual(executeCheck({ check: command }, { home: tmp() }), { code: 1, text: 'first\nsecond', stderr: '' });
+  assert.deepEqual(executeCheck({ check: command }, { home: tmp() }), { code: 1, stdout: 'first\nsecond\n', text: 'first\nsecond', stderr: '' });
   const result = executeCheck({ check: 'anything' }, { home: tmp(), shellPath: null, spawnImpl: (_, options) => {
     assert.equal(options.timeout, CHECK_TIMEOUT_MS); assert.equal(options.windowsHide, true);
     return { status: null, error: new Error('timeout'), stdout: '' };
@@ -178,8 +153,8 @@ test('digest: hundreds of rows across three categories are all delivered in 1800
   assert.equal(messages.length, 1);
   assert.match(messages[0], /完了 67件/);
   assert.match(messages[0], /あなたの返事待ち/);
-  assert.ok(messages[0].split('\n').length <= 10);
-  assert.ok(messages[0].length <= 1800);
+  assert.match(messages[0], /ほか 190件/);
+  assert.equal((messages[0].match(/nextKim:/g) || []).length, 10);
   assert.equal((await digest({ home, now: now + 3600000, slot: '朝', io })).sent, false);
 });
 
@@ -204,7 +179,7 @@ test('executeCheck invokes explicit Bash without shell and preserves execution o
     assert.equal(opts.timeout, CHECK_TIMEOUT_MS); assert.equal(opts.maxBuffer, 64 * 1024);
     assert.equal(opts.windowsHide, true); assert.equal(opts.encoding, 'utf8'); assert.equal(opts.env.ORGIAST_HOME, home);
     return { status: 1, stdout: '' };
-  } }), { code: 1, text: '未達', stderr: '' });
+  } }), { code: 1, stdout: '', text: '未達', stderr: '' });
 });
 test('executeCheck with null shell retains the shell:true invocation', () => {
   executeCheck({ check: 'check command' }, { shellPath: null, spawnImpl: (...args) => {
@@ -372,4 +347,93 @@ test('hasBashEnvExpansion / hasCheckError は期待どおり判定する', () =>
   assert.equal(hasCheckError('bash: command not found: foo'), true);
   assert.equal(hasCheckError('ok'), false);
   assert.equal(CHECK_ERROR_PATTERNS.length >= 5, true);
+});
+
+
+test('preflightCheck: scratchpad・.scratch・tmp を読むスクリプトは実行前に拒否する', () => {
+  const home = tmp();
+  const references = [
+    'C:/Users/test/AppData/Local/Temp/claude/session/scratchpad/state.json',
+    String.raw`C:\Users\test\APPDATA\LOCAL\TEMP\CLAUDE\session\state.json`,
+    String.raw`C:\\Users\\test\\NIGHTLY-REPO\\.SCRATCH\\state.json`,
+    '/TMP/session/state.json',
+  ];
+  for (const extension of ['mjs', 'js', 'ps1', 'py']) {
+    const file = `check state.${extension}`;
+    for (const reference of references) {
+      fs.writeFileSync(path.join(home, file), `readFile(${JSON.stringify(reference)})`);
+      for (const quote of ['"', "'"]) {
+        const result = preflightCheck({ check: `node ${quote}${file}${quote}`, checkCwd: home }, { home, forceCheck: true });
+        assert.equal(result.ok, false, `${extension}: ${reference}`);
+        assert.equal(result.preflight, 'session_state');
+        assert.match(result.text, /外部の一次情報/);
+        assert.match(result.text, /2026-11-06 実害/);
+      }
+    }
+  }
+});
+
+test('preflightCheck: 公開 URL を fetch するだけのスクリプトは通る', () => {
+  const home = tmp(), file = path.join(home, 'public-check.mjs');
+  fs.writeFileSync(file, "const response = await fetch('https://example.com/jobs'); process.exit(response.ok ? 0 : 1);\n");
+  // Stub only the HTTP transport so the test does not depend on network availability.
+  const stub = 'data:text/javascript,globalThis.fetch=async()=>({ok:false})';
+  const result = preflightCheck({ check: `"${process.execPath}" --import "${stub}" "${file}"` }, { home });
+  assert.equal(result.ok, true, result.text);
+  assert.equal(result.preflight, 'unmet');
+});
+
+test('CLI: --allow-session-state だけが中間状態の検査を解除する', () => {
+  const home = tmp(), file = path.join(home, 'session-check.mjs');
+  fs.writeFileSync(file, "import fs from 'node:fs'; try { fs.readFileSync('/tmp/auto-progress-missing-state.json'); } catch {} process.exit(1);\n");
+  const args = ['--add-check', '--session', 'session-state', '--check', `"${process.execPath}" "${file}"`, '--deadline', '+24h', '--label', '中間状態確認'];
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  try {
+    for (const flags of [[], ['--force-check']]) {
+      assert.throws(() => main([...args, ...flags]), /セッションが落ちると/);
+      assert.equal(readLedger(ledgerFile(home)).length, 0);
+    }
+    assert.equal(main([...args, '--allow-session-state']).sessionId, 'session-state');
+    assert.equal(readLedger(ledgerFile(home)).length, 1);
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+  }
+});
+
+
+test('CLI: --force-check は $env: を含む未達の check の静的検査を飛ばして登録する', () => {
+  const home = tmp();
+  const check = `"${process.execPath}" -e "process.exit(1)" "$env:USERPROFILE"`;
+  const args = ['--add-check', '--session', 'force-unmet', '--check', check, '--deadline', '+24h', '--label', '未達の確認'];
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  try {
+    assert.equal(hasBashEnvExpansion(check), true);
+    assert.throws(() => main(args), /\$env:/);
+    assert.equal(readLedger(ledgerFile(home)).length, 0);
+    const row = main([...args, '--force-check']);
+    assert.equal(row.status, 'open');
+    assert.equal(readLedger(ledgerFile(home)).length, 1);
+    assert.equal(readLedger(ledgerFile(home))[0].check, check);
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+  }
+});
+
+test('CLI: --force-check だけでは scratchpad 参照を登録できない', () => {
+  const home = tmp(), file = path.join(home, 'scratchpad-check.mjs');
+  fs.writeFileSync(file, "import fs from 'node:fs'; fs.writeFileSync(new URL('./executed', import.meta.url), 'called'); fs.readFileSync('C:/Users/test/AppData/Local/Temp/claude/session/scratchpad/state.json'); process.exit(1);\n");
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  try {
+    assert.throws(() => main(['--add-check', '--force-check', '--session', 'force-scratchpad', '--check', `"${process.execPath}" "${file}"`, '--deadline', '+24h', '--label', '中間状態確認']), /セッションが落ちると/);
+    assert.equal(readLedger(ledgerFile(home)).length, 0);
+    assert.equal(fs.existsSync(path.join(home, 'executed')), false);
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+  }
 });

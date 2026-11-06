@@ -4,6 +4,57 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { renderDocument, buildRequests, verifyReadBack, publishDocument, parseArgs, main, DEFAULT_FOLDER } from './gdoc-publish.mjs';
+import { renderHtml } from './gdoc-publish.mjs';
+
+function fallbackApi({ error = '403 SERVICE_DISABLED', exported = '題名\n設定\n', failDrive = false, existing } = {}) {
+  const calls = [], warnings = [], grants = [];
+  return { calls, warnings, grants, stderr: text => warnings.push(text), getToken: async () => 'test',
+    ensure: async id => grants.push(id),
+    api: async (_token, url, options = {}) => {
+      calls.push({ url, ...options });
+      if (url.startsWith('https://docs.googleapis.com')) throw new Error(error);
+      if (url.includes('/upload/')) {
+        if (failDrive) throw new Error('Drive conversion failed');
+        return Response.json({ id: existing || 'converted' });
+      }
+      if (url.includes('/export?')) return new Response(exported);
+      if (url.includes('fields=mimeType')) return Response.json({ mimeType: 'application/vnd.google-apps.folder', capabilities: { canAddChildren: true } });
+      if (url.includes('fields=parents')) return Response.json({ parents: [DEFAULT_FOLDER] });
+      if (options.method === 'PATCH') return Response.json({ id: existing || 'converted' });
+      throw new Error(`unexpected ${url}`);
+    },
+  };
+}
+for (const error of ['403 SERVICE_DISABLED', '403 PERMISSION_DENIED']) test(`${error}: converts HTML and verifies Drive text export`, async () => {
+  const mock = fallbackApi({ error });
+  const result = await publishDocument({ title: '題名', source: '# 題名\n[設定](https://example.test/?a=1&b=2)', authuser: 'kim@orgiast.jp' }, mock);
+  assert.equal(result.id, 'converted'); assert.equal(result.verification, 'drive-text-export');
+  const upload = mock.calls.find(c => c.url.includes('/upload/'));
+  assert.equal(upload.method, 'POST'); assert.match(upload.body, /text\/html/);
+  assert.match(upload.body, /<a href="https:\/\/example.test\/\?a=1&amp;b=2">設定<\/a>/);
+  assert.match(upload.body, /application\/vnd.google-apps.document/);
+  assert.deepEqual(mock.grants, ['converted']); assert.equal(mock.warnings.length, 1);
+  assert.ok(mock.calls.at(-1).url.includes('/export?'));
+});
+test('fallback update preserves ID and does not create a replacement', async () => {
+  const mock = fallbackApi({ existing: 'existing' });
+  assert.equal((await publishDocument({ title: '題名', source: '題名\n設定', update: 'existing', authuser: 'kim@orgiast.jp' }, mock)).id, 'existing');
+  const upload = mock.calls.find(c => c.url.includes('/upload/'));
+  assert.equal(upload.method, 'PATCH'); assert.match(upload.url, /files\/existing\?/);
+  assert.ok(mock.calls.every(c => c.method !== 'POST'));
+});
+test('unrelated 403, conversion failure and mismatched exports fail closed', async () => {
+  for (const options of [{ error: '403 rateLimitExceeded' }, { failDrive: true }, { exported: '欠落' }]) {
+    const mock = fallbackApi(options);
+    await assert.rejects(publishDocument({ title: '題名', source: '題名\n設定', authuser: 'kim@orgiast.jp' }, mock));
+    if (options.error) assert.ok(!mock.calls.some(c => c.url.includes('/upload/')));
+  }
+});
+test('HTML conversion escapes markup and preserves link labels', () => {
+  const html = renderHtml(renderDocument('<script> [表示](https://example.test/?q="x"&v=2)'));
+  assert.ok(!html.includes('<script>')); assert.match(html, /&lt;script&gt;/);
+  assert.match(html, /q=&quot;x&quot;&amp;v=2/);
+});
 
 function document(text, links = []) {
   const cuts = [...new Set([1, text.length + 1, ...links.flatMap(l => [l.startIndex, l.endIndex])])].sort((a, b) => a - b);
@@ -20,6 +71,7 @@ function mockApi(rendered, { existing = document('古い本文\n'), missingLinks
   let reads = 0;
   return {
     calls,
+    ensure: async () => {},
     getToken: async options => { assert.deepEqual(options, { impersonate: 'kim@orgiast.jp' }); return 'mock-token'; },
     api: async (token, url, options) => {
       assert.equal(token, 'mock-token');

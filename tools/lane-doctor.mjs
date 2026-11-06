@@ -67,17 +67,18 @@ function keyserveEnrolled(home, env = process.env) {
 }
 function orders(health, home = laneHome()) {
   health.implementOrder = ['codex', 'deepseek', 'glm', 'gemini-cli'].filter(p => health.lanes[p]?.alive);
-  health.askOrder = ['gemini', 'deepseek', 'groq', 'openrouter'].filter(p => health.lanes[p]?.alive);
   // 旧 payment_required の扱いは維持し、billing は専用の日次通知と代替ルートに回す。
   const billing = readJson(path.join(repo, 'tools/provider-billing.json'));
   const needsUser = ([p, s]) => isLane(p) && /^(?:dead:)?(?:payment_required|oauth_consent|account_creation|physical_operation)$/.test(s.reason)
     && !(s.reason.includes('payment') && billing[p]?.autoTopUp === false);
-health.substituted = Object.entries(health.lanes).filter(([p, s]) => isLane(p) && (s.reason === 'billing' || s.reason?.includes('payment') && billing[p]?.autoTopUp === false && health.lanes.openrouter?.alive))
+health.substituted = Object.entries(health.lanes).filter(([p, s]) => isLane(p) && (s.reason === 'billing' || s.reason?.includes('payment') && billing[p]?.autoTopUp === false && health.lanes.openrouter?.alive
+    || p === 'gemini' && s.reason === 'missing_key' && health.lanes.openrouter?.alive))
     .map(([provider]) => ({ provider, via: 'openrouter' }));
   for (const { provider, via } of health.substituted) health.lanes[provider].via = via;
+  health.askOrder = ['gemini', 'deepseek', 'groq', 'openrouter'].filter(p => health.lanes[p]?.alive || health.lanes[p]?.via === 'openrouter' && health.lanes.openrouter?.alive);
   health.deadNeedsUser = Object.entries(health.lanes).filter(needsUser)
     .map(([provider, s]) => ({ provider, reason: s.reason, tried: s.tried, fix: s.userFix || (s.reason.includes('payment') ? '請求設定でオートチャージ ON。手動チャージは禁止ルール。' : '本人アカウントで認証画面を開き OAuth 同意を完了する。') }));
-  const missing = Object.entries(health.lanes).filter(([p, s]) => PROVIDERS.includes(p) && s.reason === 'missing_key').map(([p]) => p);
+  const missing = Object.entries(health.lanes).filter(([p, s]) => PROVIDERS.includes(p) && s.reason === 'missing_key' && s.via !== 'openrouter').map(([p]) => p);
   const reasons = [...(!health.askOrder.length ? ['ask_order_empty'] : []), ...(!health.implementOrder.length ? ['implement_order_empty'] : []), ...(missing.length ? [`missing_key:${missing.join(',')}`] : [])];
   const unenrolled = missing.length > 0 && !keyserveEnrolled(home);
   if (unenrolled) {

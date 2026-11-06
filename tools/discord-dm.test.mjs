@@ -100,7 +100,7 @@ test('相手が金功勇本人なら写しを送らない', async () => {
   assert.equal(result.copyToKim, 'skipped');
 });
 
-test('金功勇本人へのPRマージ依頼は送信せずblockedを返す', async () => {
+test('金功勇本人へのPRマージ依頼もkim-inboxへ保存する', async () => {
   const kim = { id: 'kim-id', label: '金功勇' };
   let fetches = 0;
   const originalError = console.error;
@@ -110,13 +110,12 @@ test('金功勇本人へのPRマージ依頼は送信せずblockedを返す', as
       home, token: 'test-token', resolve: async () => kim,
       fetchImpl: async () => { fetches += 1; throw new Error('unexpected fetch'); },
     });
-    assert.equal(result.delivered, 'blocked');
-    assert.equal(result.category, 'merge-request');
+    assert.equal(result.delivered, 'session-inbox');
     assert.equal(fetches, 0);
   } finally { console.error = originalError; }
 });
 
-test('discord-dm CLIはblockedでexit 3、明示例外なら送信する', async () => {
+test('discord-dm CLIはkim-inbox保存でexit 0、明示例外でもDMしない', async () => {
   const kim = { id: 'kim-id', label: '金功勇' };
   const originalLog = console.log;
   const originalError = console.error;
@@ -125,13 +124,13 @@ test('discord-dm CLIはblockedでexit 3、明示例外なら送信する', async
     const options = { home, token: 'test-token', resolve: async () => kim };
     assert.equal(await main(['金功勇', '--body', 'PR #943 をマージしてください'], {
       ...options, fetchImpl: async () => { throw new Error('unexpected fetch'); },
-    }), 3);
+    }), 0);
     const calls = [];
     assert.equal(await main(['金功勇', '--body', 'PR #943 をマージしてください', '--kim-action-required'], {
       ...options, allowlist: [{ category: 'test', pattern: '.' }],
       fetchImpl: async () => { calls.push(1); return calls.length === 1 ? response({ json: { id: 'dm' } }) : response(); },
     }), 0);
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 0);
   } finally { console.log = originalLog; console.error = originalError; }
 });
 

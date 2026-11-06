@@ -98,10 +98,13 @@ test('real wrapper retries SessionStart key client once, preserves env keys, and
  assert.equal(result.status,0,result.err);assert.equal(requests,1);assert.equal(result.out,'');assert.doesNotMatch(result.err,/mock-value|test-secret/);
  assert.match(fs.readFileSync(path.join(home,'.claude/example.env'),'utf8'),/LOCAL_ONLY=keep\nKEY=mock-value/);
 });
-test('許可カテゴリだけは配布済み cost webhook へ送れる',async t=>{
- const {notifyKim}=await import('./notify-kim.mjs');const home=temp(t);fs.mkdirSync(path.join(home,'.claude'),{recursive:true});fs.writeFileSync(path.join(home,'.claude/cost-reporter.env'),'DISCORD_COST_WEBHOOK=https://example.invalid/mock-only\n');
- let sent=0;const result=await notifyKim('gate status',{home,userId:'',token:'',allowlist:[{category:'test',pattern:'.'}],fleetFallback:true,fetchImpl:async(url,options)=>{sent++;assert.equal(url,'https://example.invalid/mock-only');assert.equal(JSON.parse(options.body).content,'gate status');return {ok:true};}});
- assert.equal(sent,1);assert.equal(result.delivered,'webhook');
+test('旧許可カテゴリとcost webhookがあってもkim宛報告は台帳だけに保存する',async t=>{
+ const {notifyKim}=await import('./notify-kim.mjs');const {listItems}=await import('./kim-inbox.mjs');
+ const home=temp(t);fs.mkdirSync(path.join(home,'.claude'),{recursive:true});
+ fs.writeFileSync(path.join(home,'.claude/cost-reporter.env'),'REPORTER_LABEL=kim-PC\nDISCORD_COST_WEBHOOK=https://example.invalid/mock-only\n');
+ let sent=0;const result=await notifyKim('gate status',{home,userId:'',token:'',plainJa:false,allowlist:[{category:'test',pattern:'.'}],fleetFallback:true,fetchImpl:async()=>{sent++;assert.fail('kim Discord transport forbidden');}});
+ assert.equal(sent,0);assert.equal(result.delivered,'session-inbox');
+ const items=listItems(home);assert.equal(items.length,1);assert.equal(items[0].id,result.id);assert.equal(items[0].text,'gate status');
 });
 test('Stop aggregate applies warning policy to each child and keeps its reason visible',async t=>{
  const {run}=await import('./stop-gate-runner.mjs');const {discoverGates}=await import('./gate-contracts.mjs');

@@ -1,3 +1,4 @@
+import { ensureKimEditor } from './kim-editor.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { searchGmail } from '../gmail-search.mjs';
@@ -41,8 +42,10 @@ export async function readDriveText(file, { user, request, dryRun }) {
     const copy = await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}/copy?ocrLanguage=ja&fields=id&ignoreDefaultVisibility=true`, { user, method: 'POST', body: { name: `deadline-ocr-${id}`, mimeType: 'application/vnd.google-apps.document', appProperties: { deadlineWatchOCR: '1' } } });
     if (!copy.id || copy.id === id) throw new Error('OCRコピーのIDが不正です');
     temporary = id = copy.id;
+
   }
-  try { return trimBytes(await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}/export?mimeType=text%2Fplain`, { user, text: true })); }
+  try { if (temporary) await ensureKimEditor(id, { actingUser: user, token: 'request-adapter', created: true, api: async (_token, url, options = {}) => { const value = await request(url, { user, method: options.method || 'GET', ...(options.body ? { body: JSON.parse(options.body) } : {}) }); return { json: async () => value }; } });
+    return trimBytes(await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}/export?mimeType=text%2Fplain`, { user, text: true })); }
   finally { if (temporary) await request(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(temporary)}`, { user, method: 'DELETE' }); }
 }
 export async function collectDrive({ user, state, now, request, dryRun = false }) {

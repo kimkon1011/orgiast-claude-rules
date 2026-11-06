@@ -2,6 +2,8 @@
   "version": 1,
   "entries": [
     {"path": "tools/register-morning-session-sweep.ps1", "scope": "fleet", "step": "task:morning-session-sweep", "reason": "全PCの未クローズセッションを毎朝06:30に回収する共通タスク"},
+    {"path": "tools/hook-dispatch.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "全PCの同期hookをイベント単位で1本に集約するディスパッチャ（PC過負荷対策 #1568）"},
+    {"path": "tools/hook-dispatch-benchmark.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "ディスパッチャの所要時間を各PCで計測するベンチマーク"},
     {"path": "tools/deadline-ledger.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
     {"path": "tools/deadline-detect.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
     {"path": "tools/deadline-watch.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
@@ -1233,6 +1235,15 @@
       "scope": "kim-only",
       "step": null,
       "reason": "freee 認可切れの監視タスクは keiri-hub 運用PC だけが登録・実行する（複数PCで動くと通知が重複し、Supabase env も運用PC にしか無い）"
-    }
+    },
+    {"path": "tools/kim-editor-sweep.mjs", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
+    {"path": "tools/kim-editor-posttool.mjs", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
+    {"path": "tools/lib/kim-editor.mjs", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
+    {"path": "tools/register-kim-editor-sweep.mjs", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
+    {"path": "tools/register-kim-editor-sweep.ps1", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
+    {"path": "tools/lib/pc-display.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox・返事待ち表示が使うPC表示名の実行時依存"},
+    {"path": "tools/lib/auto-progress-daily.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "全PCの自動進行に使う毎朝進捗通知の実行時依存"},
+    {"path": "tools/lib/drafts-auto-cleared.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "返事待ち表示・下書き整理が使う実行時依存"},
+    {"path": "tools/auto-progress-ledger.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "毎朝進捗通知・返事待ち表示の実行時依存"}
   ]
 }

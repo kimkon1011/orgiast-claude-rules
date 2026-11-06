@@ -7,6 +7,45 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 
+test('clean-profile registration satisfies required hook checks and repairs a missing PostToolUse hook', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-clean-profile-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const repo = path.resolve('.');
+  const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo, FLEET_BEACON: '0' };
+  const source = JSON.parse(fs.readFileSync(path.join(repo, 'tools/setup-manifest.json'), 'utf8'));
+  const checks = source.items.filter(item => item.severity === 'required' && item.spec.hookEvent && !item.scope);
+  for (const name of ['intra-turn-progress-reminder.mjs', 'kim-editor-posttool.mjs']) {
+    assert.ok(checks.some(item => item.spec.hookScript === name), name);
+  }
+  const manifestFile = path.join(home, 'required-hooks.json');
+  fs.writeFileSync(manifestFile, JSON.stringify({ version: 1, items: checks }));
+  const verify = () => spawnSync(process.execPath, ['tools/setup.mjs', '--verify', '--json', '--home', home, '--manifest', manifestFile], { env, encoding: 'utf8' });
+  const register = () => execFileSync(process.execPath, ['tools/register-hooks.mjs', '--hooks-only'], { env, encoding: 'utf8' });
+  assert.equal(verify().status, 1);
+  register();
+  const result = verify();
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.ok(JSON.parse(result.stdout).items.every(item => item.status === 'OK'));
+  const dispatchFile = path.join(home, '.claude/hook-dispatch-manifest.json');
+  const before = fs.readFileSync(dispatchFile, 'utf8');
+  const runtime = JSON.parse(before);
+  for (const name of ['intra-turn-progress-reminder.mjs', 'kim-editor-posttool.mjs']) {
+    assert.equal(runtime.events.PostToolUse.filter(h => h.name === name).length, 1);
+  }
+  assert.equal(runtime.events.PostToolUse.find(h => h.name === 'kim-editor-posttool.mjs').critical, true);
+  for (const name of ['intra-turn-progress-reminder.mjs', 'kim-editor-posttool.mjs']) {
+    const damaged = structuredClone(runtime);
+    damaged.events.PostToolUse = damaged.events.PostToolUse.filter(h => h.name !== name);
+    fs.writeFileSync(dispatchFile, JSON.stringify(damaged));
+    const failed = verify();
+    assert.equal(failed.status, 1, name);
+    assert.equal(JSON.parse(failed.stdout).items.find(item => item.id === `settings:${name.slice(0, -4)}`).status, 'NG');
+    register();
+    assert.equal(verify().status, 0);
+    assert.equal(fs.readFileSync(dispatchFile, 'utf8'), before);
+  }
+});
+
 test('setup converge timeout covers Node updates on new and existing PCs, idempotently', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-node-runtime-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -40,8 +79,8 @@ test('setup converge timeout covers Node updates on new and existing PCs, idempo
     const daytrip = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('daytrip-ask-hook.mjs'));
     assert.equal(daytrip.length, 1); assert.equal(daytrip[0].timeout, 5); assert.notEqual(daytrip[0].async, true);
   }
-  for (const [event, argument, timeout] of [['Stop', '', 15], ['SessionStart', ' --all', 30], ['UserPromptSubmit', ' --prompt-submit', 8]]) {
-    const titles = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('session-wait-title.mjs'));
+  for (const [event, argument, timeout] of [['Stop', '', 15], ['SessionStart', ' --all', 30], ['SessionStart', ' --prompt-submit', 8], ['UserPromptSubmit', ' --prompt-submit', 8]]) {
+    const titles = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('session-wait-title.mjs') && h.command.endsWith(`session-wait-title.mjs"${argument}`));
     assert.equal(titles.length, 1);
     assert.ok(titles[0].command.endsWith(`session-wait-title.mjs"${argument}`));
     assert.equal(titles[0].timeout, timeout);
@@ -399,15 +438,18 @@ test('automatic anchor prefers clean dedicated main, rejects dirty/feature/ahead
   const env = { ...process.env, ORGIAST_HOME: home }; delete env.ORGIAST_REPO;
   const run = () => spawnSync(process.execPath, ['tools/register-hooks.mjs', '--expected-json'], { env, encoding: 'utf8' });
   assert.ok(run().stdout.includes(JSON.stringify(nightly).slice(1, -1)));
+  fs.mkdirSync(path.join(nightly, '.task-evidence'));
+  fs.writeFileSync(path.join(nightly, '.task-evidence/session.json'), '{}');
+  assert.ok(run().stdout.includes(JSON.stringify(nightly).slice(1, -1)), 'untracked evidence on main does not reject the anchor');
   git('checkout', '--detach', 'origin/main');
   assert.equal(run().status, 0);
   assert.ok(run().stdout.includes(JSON.stringify(nightly).slice(1, -1)));
   fs.writeFileSync(path.join(nightly, 'dirty'), 'dirty');
-  assert.ok(run().stdout.includes(JSON.stringify(fallback).slice(1, -1)));
+  assert.ok(run().stdout.includes(JSON.stringify(nightly).slice(1, -1)), 'untracked files on detached HEAD do not reject the anchor');
   fs.unlinkSync(path.join(nightly, 'dirty'));
   fs.appendFileSync(path.join(nightly, 'tools/session-relaunch.mjs'), '\n// dirty\n');
   assert.ok(run().stdout.includes(JSON.stringify(fallback).slice(1, -1)));
-  git('add', '.');
+  git('add', 'tools/session-relaunch.mjs');
   assert.ok(run().stdout.includes(JSON.stringify(fallback).slice(1, -1)));
   git('reset', '--hard', 'HEAD'); git('switch', '-c', 'feature');
   assert.ok(run().stdout.includes(JSON.stringify(fallback).slice(1, -1)));
@@ -415,7 +457,7 @@ test('automatic anchor prefers clean dedicated main, rejects dirty/feature/ahead
   assert.ok(run().stdout.includes(JSON.stringify(fallback).slice(1, -1)));
   git('checkout', '--detach');
   assert.ok(run().stdout.includes(JSON.stringify(fallback).slice(1, -1)));
-  fs.writeFileSync(path.join(fallback, 'dirty'), 'dirty');
+  fs.appendFileSync(path.join(fallback, 'tools/session-relaunch.mjs'), '\n// tracked change\n');
   assert.equal(run().status, 1);
   assert.match(run().stderr, /onboarding-sync\.mjs" --force/);
   assert.equal(fs.existsSync(path.join(home, '.claude/settings.json')), false);

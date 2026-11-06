@@ -118,9 +118,10 @@ test('sheet provisioning uses shared account, literal cells, checkbox, sharing, 
   const previousClasp=process.env.ORGIAST_CLASP_JS;
   t.after(()=>{if(previousClasp===undefined)delete process.env.ORGIAST_CLASP_JS;else process.env.ORGIAST_CLASP_JS=previousClasp;});
   process.env.ORGIAST_CLASP_JS=clasp;
-  const items=[{company:'A社',to:'a@example.com',subject:'案内',body:'=literal'}];const payload=createSpreadsheetPayload(items);const calls=[];let runArgs;
+  const items=[{company:'A社',to:'a@example.com',subject:'案内',body:'=literal'}];const payload=createSpreadsheetPayload(items);const calls=[];let runArgs; let kimGranted = false;
   const api=async(token,url,opts)=>{
     calls.push({token,url,opts});let value={};
+    if (url.includes('/permissions')) { if (opts.method === 'POST') kimGranted = true; return { json: async () => ({ permissions: kimGranted ? [{ type: 'user', emailAddress: 'kim@orgiast.jp', role: 'writer' }] : [] }) }; }
     if(url.includes('/about?'))value={user:{emailAddress:'seisaku-team@orgiast.jp'}};
     else if(url.endsWith('/v4/spreadsheets')){const body=JSON.parse(opts.body);assert.deepEqual(body.sheets[0].data[0].rowData[1].values[4],{userEnteredValue:{stringValue:'=literal'}});value={spreadsheetId:'sheet1'};}
     else if(url.includes('/values/'))value={values:payload.rows};
@@ -133,7 +134,7 @@ test('sheet provisioning uses shared account, literal cells, checkbox, sharing, 
   assert.ok(runArgs[1].includes('push'));assert.ok(runArgs[1].includes('--force'));assert.equal(JSON.parse(fs.readFileSync(path.join(dir,'.clasp.json'))).scriptId,'script1');
   assert.equal(runArgs[0],process.execPath);assert.equal(runArgs[1][0],clasp);
   assert.equal(runArgs[1][runArgs[1].indexOf('--project')+1],path.join(dir,'.clasp.json'));assert.equal(runArgs[2].cwd,dir);
-  assert.ok(calls.some(c=>c.url.includes(':batchUpdate')&&c.opts.body.includes('BOOLEAN')));assert.ok(calls.some(c=>c.url.includes('/permissions')&&c.opts.body.includes('kim@orgiast.jp')));
+  assert.ok(calls.some(c=>c.url.includes(':batchUpdate')&&c.opts.body.includes('BOOLEAN')));assert.ok(calls.some(c=>c.url.includes('/permissions')&&c.opts.body?.includes('kim@orgiast.jp')));
 });
 test('wrong clasp identity stops before creating any sheet',async()=>{
   let calls=0;await assert.rejects(createBulkApproval([{company:'A',to:'a@example.com',subject:'s',body:'b'}],{projectDir:path.join(os.tmpdir(),'nonexistent-approval-project'),getClaspToken:async()=> 'oauth',api:async()=>{calls++;return {json:async()=>({user:{emailAddress:'kim@orgiast.jp'}})};},getToken:()=>{throw Error('must not reach');}}),/既存 clasp 認証/);assert.equal(calls,1);
@@ -144,7 +145,7 @@ test('setup creates installable onEdit once, protects receipts and keeps unrelat
   const sheet={getSheetId:()=>0,getLastRow:()=>3,getRange:(...args)=>({args,setNote:text=>notes.push(text)}),getProtections:()=>protection?[protection]:[],protect:()=>{protection={getDescription:()=> 'bulk-mail-approval',setDescription(){return this;},getEditors:()=>[],removeEditors(){},addEditor(email){assert.equal(email,'seisaku-team@orgiast.jp');},canDomainEdit:()=>true,setDomainEdit(value){assert.equal(value,false);},setUnprotectedRanges(ranges){assert.equal(ranges[0].args[1],6);}};return protection;}};
   const ss={getId:()=> 'sheet1',getSheetByName:name=>name==='送信承認'?sheet:null};
   const c={Session:{getEffectiveUser:()=>({getEmail:()=> 'seisaku-team@orgiast.jp'})},SpreadsheetApp:{getActiveSpreadsheet:()=>ss,ProtectionType:{SHEET:'sheet'},flush(){}},PropertiesService:{getScriptProperties:()=>({getProperty:k=>props.get(k),setProperty:(k,v)=>props.set(k,v)})},DriveApp:{createFolder:()=>({getId:()=> 'commands',addEditor:email=>assert.equal(email,'kim@orgiast.jp')})},Logger:{log(){}},ScriptApp:{getProjectTriggers:()=>triggers.map(name=>({getHandlerFunction:()=>name})),deleteTrigger:t=>{triggers=triggers.filter(n=>n!==t.getHandlerFunction());},newTrigger(name){const builder={forSpreadsheet:()=>builder,onEdit:()=>builder,timeBased:()=>builder,everyMinutes:n=>{assert.equal(n,1);return builder;},create:()=>triggers.push(name)};return builder;}}};
-  vm.createContext(c);vm.runInContext(generateGasScript(),c);c.setupOnce();c.setupOnce();
+  vm.createContext(c);vm.runInContext(generateGasScript(),c);c.ensureKimEditor_=file=>file;c.setupOnce();c.setupOnce();
   assert.deepEqual(triggers.sort(),['onApprovalEdit','processCommandQueue','unrelated']);assert.equal(props.get('CMD_FOLDER_ID'),'commands');
   assert.deepEqual(Object.keys(c._COMMANDS_()),['approvalStatus']);assert.equal(notes.length,2);
 });

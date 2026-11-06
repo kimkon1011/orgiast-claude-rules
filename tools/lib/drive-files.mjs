@@ -1,3 +1,4 @@
+import { ensureKimEditor } from './kim-editor.mjs';
 // drive-files.mjs — Shared Google Drive REST API utilities
 import { driveApi as api } from './drive-auth.mjs';
 
@@ -53,6 +54,8 @@ export async function uploadFileContent(token, { fileId, name, parentId, content
       headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
       body,
     });
-    return await res.json();
+    const created = await res.json();
+    await ensureKimEditor(created.id, { token, api: apiFn, created: true });
+    return created;
   }
 }

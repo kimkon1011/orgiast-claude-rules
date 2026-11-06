@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 社外の人を待たせている返信（受信の最後が社外）と、未送信のまま残った下書きを集めて状態ファイルへ書く。
-// Gmail は DWD の読み取り専用のみ。送信・下書き作成・ラベル変更はしない。
+// 走査は DWD 読み取り専用。削除は --delete-cleared --approved-by kim の明示承認時だけ。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,6 +11,8 @@ import { getDriveToken, defaultDriveKeyPath } from './lib/drive-auth.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
 import { headerValue, extractBody } from './gmail-search.mjs';
 import { isEntry } from './is-entry.mjs';
+import { displayPcNames } from './lib/pc-display.mjs';
+import { draftBody, nonHumanRecipient, mailboxDraftLabel, allPages, filterClearedDrafts, notifyClearedDrafts, deleteClearedDrafts } from './lib/drafts-auto-cleared.mjs';
 import { defaultHome, externalFile, stateDir, readJsonSafe, writeJsonAtomic, readSkips, isSkipped, addSkip } from './lib/external-waiting-state.mjs';
 
 export const MAILBOXES = ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'];
@@ -80,7 +82,7 @@ export function analyzeThread(thread, { mailbox, staff = new Set() }) {
   const last = messages.reduce((a, b) => (dateOf(b) >= dateOf(a) ? b : a));
   const headers = headersOf(last), sender = addressesOf(headers.from)[0] || '';
   if (!sender || sender === mailbox || isInternal(sender, staff) || (last.labelIds || []).includes('SENT')) return null;
-  if (isAutomated(headers)) return null;
+  if (isAutomated(headers) || nonHumanRecipient(sender)) return null;
   if (!addressesOf(headers.to).includes(mailbox)) return null;
   const snippet = clean(last.snippet);
   return {
@@ -91,16 +93,17 @@ export function analyzeThread(thread, { mailbox, staff = new Set() }) {
 }
 
 // 24時間を超えて残る、社外宛の下書き。
-export function analyzeDraft(draft, { mailbox, now = Date.now() }) {
+export function analyzeDraft(draft, { mailbox, now = Date.now(), includeNonHuman = false }) {
   const message = draft.message || {};
   const headers = headersOf(message), since = dateOf(message);
   // 受信側と同じ30日窓に限る（数年前に放置された下書きまで通知しない）。
   if (!since || now - since <= WAIT_LIMIT_MS || now - since > 30 * 24 * HOUR) return null;
-  const external = [headers.to, headers.cc, headers.bcc].flatMap(addressesOf).filter(address => !/@orgiast\.jp$/.test(address));
+  const external = [headers.to, headers.cc, headers.bcc].flatMap(addressesOf).filter(address => !/@orgiast\.jp$/.test(address) && (includeNonHuman || !nonHumanRecipient(address)));
   if (!external.length) return null;
   return {
     id: makeId(mailbox, draft.id), kind: 'draft', group: mailbox === KIM ? 'kim' : 'window', mailbox, who: external[0], sender: external[0],
-    subject: clean(headers.subject), since: new Date(since).toISOString(), ask: '送信するか決める', threadId: String(message.threadId || ''), lastMessageId: String(message.id || draft.id), messageIdHeader: '',
+    draftId: String(draft.id), draftMessage: message,
+    subject: clean(headers.subject) || Array.from(draftBody(message)).slice(0, 20).join(''), since: new Date(since).toISOString(), ask: '送信するか決める', threadId: String(message.threadId || ''), lastMessageId: String(message.id || draft.id), messageIdHeader: '',
   };
 }
 
@@ -156,9 +159,9 @@ export async function scanMailbox(mailbox, { fetchImpl = gwsFetch, getToken = ge
     item.shortBody = text && text.length <= SHORT_BODY_MAX ? text : null;
   });
   items.splice(0, items.length, ...items.filter(item => !answered.has(item.id)));
-  const drafts = (await get('/drafts?maxResults=100')).drafts || [];
-  const detailed = await mapLimit(drafts, 5, stub => get(`/drafts/${stub.id}?format=metadata&${META}`, { optional: true }));
-  items.push(...detailed.filter(Boolean).map(draft => analyzeDraft(draft, { mailbox, now })).filter(Boolean));
+  const drafts = await allPages(get, '/drafts?maxResults=100', 'drafts');
+  const detailed = await mapLimit(drafts, 5, stub => get(`/drafts/${stub.id}?format=full`, { optional: true }));
+  items.push(...detailed.filter(Boolean).map(draft => analyzeDraft(draft, { mailbox, now, includeNonHuman: true })).filter(Boolean));
   return items;
 }
 
@@ -188,10 +191,10 @@ export function askLlm(item, { spawnImpl = spawnSync, tmpDir = os.tmpdir() } = {
 export function notifyText(items, now) {
   const mask = text => text.replace(/failed|failure|失敗|停止|異常|エラー|timeout|timed out|タイムアウト|未計測|取得不可/gi, '○');
   const lines = items.slice(0, 10).map(item => {
-    const label = item.kind === 'draft' ? `下書きのまま未送信: ${item.who}` : item.who;
+    const label = item.kind === 'draft' ? `下書きのまま未送信: ${item.who}${mailboxDraftLabel(item.mailbox)}` : item.who;
     return `・${mask(`${label}「${item.subject.slice(0, 40)}」`)}（${Math.floor((now - Date.parse(item.since)) / HOUR)}時間待ち・${item.group === 'kim' ? 'kim宛' : '制作チーム窓口'}）`;
   });
-  return `【社外返信待ち】24時間以上お待たせしている社外の方が ${items.length} 件あります。\n${lines.join('\n')}${items.length > 10 ? `\nほか ${items.length - 10} 件` : ''}\n次のセッションの冒頭で返信下書きを用意します。`;
+  return displayPcNames(`【社外返信待ち】24時間以上お待たせしている社外の方が ${items.length} 件あります。\n${lines.join('\n')}${items.length > 10 ? `\nほか ${items.length - 10} 件` : ''}\n次のセッションの冒頭で返信下書きを用意します。`);
 }
 
 export async function scan({ home = defaultHome(), now = Date.now(), mailboxes = MAILBOXES, push = true, deps = {}, staff = loadStaff(), notify, classify = askLlm } = {}) {
@@ -206,8 +209,9 @@ export async function scan({ home = defaultHome(), now = Date.now(), mailboxes =
       collected.push(...(previous.items || []).filter(item => item.mailbox === mailbox)); // 取得失敗を 0 件扱いにしない
     }
   }
+  const verified = await filterClearedDrafts(collected, { home, now, deps, stats });
   const skips = readSkips(home), kept = [];
-  for (const item of dedupe(collected)) {
+  for (const item of dedupe(verified)) {
     if (isSkipped(skips, item)) continue;
     const { shortBody, ...rest } = item;
     if (shortBody) {
@@ -242,6 +246,8 @@ export async function scan({ home = defaultHome(), now = Date.now(), mailboxes =
   }
   const state = { generatedAt: new Date(now).toISOString(), sources, stats, items: kept, pushed };
   writeJsonAtomic(externalFile(home), state);
+  // 通知失敗でも、照合済みの一覧は保存して次回に通知だけ再試行する。
+  if (push) await notifyClearedDrafts(home, { now, add: deps.addKimInboxItem });
   return { state, notified };
 }
 
@@ -253,7 +259,11 @@ export function summarize(state) {
 if (isEntry(import.meta.url)) {
   try {
     const args = process.argv.slice(2), value = flag => args[args.indexOf(flag) + 1];
-    if (args.includes('--skip')) {
+    if (args.includes('--delete-cleared')) {
+      const result = await deleteClearedDrafts({ home: defaultHome(), approvedBy: value('--approved-by') });
+      console.log(JSON.stringify(result));
+      if (result.failed) process.exitCode = 1;
+    } else if (args.includes('--skip')) {
       if (!value('--reason')) throw new Error('--reason required');
       addSkip(defaultHome(), value('--skip'), value('--reason'));
     } else if (args.includes('--scan')) {

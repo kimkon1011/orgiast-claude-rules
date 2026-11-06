@@ -15,13 +15,15 @@ import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { notifyOwner, resolveOwner, sendOwnerToast } from './notify-owner.mjs';
 import { escalateKimDecisions } from './auto-progress-escalate.mjs';
 import { isQuietHours, kimAction } from './auto-progress-digest.mjs';
+import { completionActions } from './lib/auto-progress-artifact.mjs';
+import { reportCheckProgress } from './lib/auto-progress-heartbeat.mjs';
 import { checkPromise, checkProgressSummary, executeCheck, isTimeOnlyCheck, queueCheckFollowup, pendingAction } from './auto-progress-check.mjs';
 import { addItem } from './kim-inbox.mjs';
 import { appendInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { BLOCKER, readJson as readFleetJson, saveJson as saveFleetJson } from './lib/fleet-chase-ledger.mjs';
 import { errorKind, findUnansweredRequest } from './lib/unanswered-request.mjs';
-import { deliverDoneInbox, hasDoneInboxReceipt, usesKimDoneInbox } from './lib/auto-progress-done-inbox.mjs';
+import { refreshDoneApprovals, deliverDoneInbox, hasDoneInboxReceipt, usesKimDoneInbox } from './lib/auto-progress-done-inbox.mjs';
 
 export const GRACE_MS = 1 * 3600 * 1000;
 export const RESUME_INTERVAL_MS = 2 * 3600 * 1000;
@@ -270,7 +272,7 @@ export async function resumeSession(row, { timeoutMs = 20 * 60000, home = os.hom
     : apiErrorResume
     ? `API エラーで返答できなかった user の依頼に、最初から通常どおり応えてください。依頼: ${row.requestText || row.promise.replace(/^API エラー（.*?）で返答できなかった依頼:\s*/, '')}`
     : `以前このセッションで宣言した「この後の自動進行」が止まっています。宣言: 「${row.promise}」。`;
-  const prompt = `${promptLead}${row.kimAnswer ? `\nkim の返事: 「${row.kimAnswer}」。これを前提に続きを進めてください。` : ''}${reason === 'check-overdue' ? `\n期限超過の最終確認です。確認出力全文:\n${row.checkText || ''}\n確認エラー:\n${row.checkStderr || ''}` : ''}${row.nextClaude ? `\nやること: ${row.nextClaude}` : ''}\n元の会話は ${row.transcriptPath} にあります。${apiErrorResume ? '依頼を完了まで進めてください。' : '宣言の最終成果まで進めてください。'}user の判断・承認が必要な地点では、判断材料を揃えて止まり needs_user を返してください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"成果物パスと検証結果、または進めない理由","artifact":"成果物パス（任意）","nextKim":"本人だけができる具体的な判断・操作。返信待ちや自動調査なら空文字"}`;
+  const prompt = `${promptLead}${row.kimAnswer ? `\nkim の返事: 「${row.kimAnswer}」。これを前提に続きを進めてください。` : ''}${reason === 'check-overdue' ? `\n期限超過の最終確認です。確認出力全文:\n${row.checkText || ''}\n確認エラー:\n${row.checkStderr || ''}` : ''}${row.nextClaude ? `\nやること: ${row.nextClaude}` : ''}\n元の会話は ${row.transcriptPath} にあります。${apiErrorResume ? '依頼を完了まで進めてください。' : '宣言の最終成果まで進めてください。'}止まる前に、取り消せる作業（調査・資料作成・下書き作成・比較表・社内向け準備）は全部先に済ませてください。needs_user で止まってよいのは、支払い・社外への送信・削除・本人の同意・本人にしかできない物理操作が残ったときだけです。evidence には先に済ませた作業と成果物を書いてください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"先に済ませた作業と成果物パス・検証結果、残った操作と進めない理由","artifact":"成果物パス（任意）","nextKim":"本人だけができる具体的な判断・操作。返信待ちや自動調査なら空文字"}`;
   const rateLimited = apiErrorResume && /rate.?limit|usage.?credits?|429/i.test([row.error, row.apiError, row.apiErrorStatus].join(' '));
   const runOptions = { resumeSessionId: row.sessionId, ...(rateLimited ? { model: process.env.AUTO_PROGRESS_RESUME_MODEL || 'opus' } : {}) };
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, row.cwd, row.cwd, timeoutMs, runOptions);
@@ -304,9 +306,9 @@ export function formatDoneMessage(row, { reason = '', artifact = '', home = proc
     origin,
     '✅ 自動進行が完了しました',
     formatDoneLine(row, { reason, artifact, home }),
-    'kim がすること: なし',
+    completionActions({ ...row, artifact: artifact || row.artifact }, { home }).text,
   ];
-  return lines.join('\n').slice(0, 1900);
+  return lines.join('\n').slice(0, 4000);
 }
 
 export function logDoneDm(home, row, delivery, message, now = Date.now(), io = {}, toastResult = null) {
@@ -678,9 +680,10 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       const message = formatDoneMessage(row, { reason, artifact, home, io, ownerOf });
       let delivery = null;
       try {
-        delivery = await deliverDoneInbox(home, [row], message, { now, io });
+        delivery = await deliverDoneInbox(home, [{ ...row, artifact: artifact || row.artifact }], message, { now, io });
         return patch(rowKey(row), delivery.receipt);
       } catch (error) {
+        patch(rowKey(row), { doneNotifyPending: true, doneNotifyArtifact: artifact || row.artifact || '' });
         summary.errors.push(`notify-done: ${String(error?.message ?? error).slice(0, 120)}`);
         return false;
       } finally { logDoneDm(home, row, delivery, message, now, io); }
@@ -712,6 +715,10 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     return ['dm', 'session-inbox', 'toast', 'inbox'].includes(delivery?.delivered);
   };
   const rows = readLedger(file);
+  if (!dryRun) {
+    try { await refreshDoneApprovals(home, rows, { now, io, patch }); }
+    catch (error) { summary.errors.push(`done-approvals: ${String(error.message).slice(0, 200)}`); }
+  }
   await registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io, persist);
   let candidates = latestOpenPromises(rows);
   // check 付き行は sessionId + label ごとに1件選ばれるため、別 label の自動チェックはすべて残る。
@@ -877,7 +884,8 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       if (row.status !== 'scheduled' || isUnattendedRow(row, home)) continue;
       const result = await (io.executeCheck ?? executeCheck)({ ...row, check: row.startWhen }, { home });
       summary.checked++;
-      if (!patch(key, { lastCheckedAt: at })) continue;
+      if (!patch(key, { lastCheckedAt: at, checkResult: result.code === 1 ? 'unmet' : result.code === 0 ? 'ready' : 'error', checkText: result.text })) continue;
+      if (result.code !== 0) await reportCheckProgress(home, { ...row, lastCheckedAt: at }, result, { now, patch, io });
       if (result.code !== 0) {
         if (result.code !== 1) summary.errors.push(`start-when: ${result.text}`);
         continue;

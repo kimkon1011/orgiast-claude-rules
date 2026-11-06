@@ -81,7 +81,8 @@ export async function notifyKim(text, options = {}) {
     const policy = classifyKimDm(text);
     if (!policy.allowed) {
       console.error(`kim への Discord DM を止めました（${policy.reason}）。PR のマージ・他PCへの依頼は fleet-mail --to kim-PC で送ってください`);
-      return { delivered: 'blocked', category: policy.category, reason: policy.reason };
+      const delivery = await persistKim(options.home || process.env.ORGIAST_HOME || os.homedir(), { ...options, priority: 'high', kind: options.kind === 'ask' ? 'ask' : 'info', text: redactSecrets(String(text ?? '')), source: options.source || 'notify-kim-blocked' });
+      return { ...delivery, discordBlocked: true, category: policy.category, reason: delivery.reason || policy.reason };
     }
   }
   options = { ...options, kind: options.kimActionRequired === true || options.kind === 'ask' ? 'ask' : 'info' };

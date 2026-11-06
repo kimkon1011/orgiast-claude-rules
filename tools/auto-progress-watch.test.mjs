@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { legacyAddCheckMigrationRows, formatDoneLine, formatDoneMessage, formatDoneBacklogMessages, gatherEvidence, deterministicVerdict, judge, evidenceSummary, logDoneDm, run as runWatch } from './auto-progress-watch.mjs';
+import { resumeSession, legacyAddCheckMigrationRows, formatDoneLine, formatDoneMessage, formatDoneBacklogMessages, gatherEvidence, deterministicVerdict, judge, evidenceSummary, logDoneDm, run as runWatch } from './auto-progress-watch.mjs';
 import { cleanupOldLedgerTemps, ledgerFile, readLedger, writeLedger } from './auto-progress-ledger.mjs';
 import { listItems } from './kim-inbox.mjs';
 
@@ -490,4 +490,22 @@ test('レシート済み完了は legacy add-check 移行で復活させない',
   const noReceipt = { ...base, ts: '2026-11-05T10:10:00.000Z', doneInboxId: '', doneInboxVerifiedAt: '', doneNotifiedAt: '' };
   const rows = [withReceipt, notifiedOnly, noReceipt];
   assert.deepEqual(legacyAddCheckMigrationRows(rows), [noReceipt]);
+});
+
+test('再開指示は取り消せる作業を先に済ませ、支払い等だけでneeds_userにする', async t => {
+  const home = progressHome('resume-reversible-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  let prompt;
+  await resumeSession({ sessionId: 'reversible-test', promise: '問い合わせの準備', transcriptPath: 'session.jsonl', cwd: home }, {
+    home, io: { executable: 'test-executor', runChild: async (_exe, text) => {
+      prompt = text;
+      return { status: 'success' };
+    } },
+  });
+  assert.match(prompt, /取り消せる作業/);
+  assert.match(prompt, /支払い・社外への送信・削除・本人の同意・本人にしかできない物理操作/);
+  assert.match(prompt, /evidence には先に済ませた作業と成果物/);
+  assert.match(prompt, /推測で目的を広げず/);
+  assert.match(prompt, /権限や確認待ちを迂回しない/);
+  assert.doesNotMatch(prompt, /判断材料を揃えて止まり/);
 });

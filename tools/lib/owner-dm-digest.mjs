@@ -1,3 +1,5 @@
+import { isKimHumanProgress } from './human-progress-row.mjs';
+import { checkProgressSummary } from './check-progress-summary.mjs';
 import { decisionOwnerOf } from '../auto-progress-decision-owner.mjs';
 import { notificationKind } from './owner-dm-policy.mjs';
 const day = 86400000;
@@ -59,12 +61,16 @@ export function compactDigest(rows, deferred, now, { home, owner = '' } = {}) {
   if (!unique.length) lines.push('なし');
   else if (recent.length > included.length) extra.push(`ほか返事待ち ${recent.length - included.length}件（次のまとめでお知らせします）`);
   if (extra.length) lines.push(extra.join(' ／ '));
-  const humanRows = rows.filter(r => notificationKind('', { kind: 'done-requested', session: r, home }) === 'done-requested');
+  const humanRows = rows.filter(r => isKimHumanProgress(r) || notificationKind('', { kind: 'done-requested', session: r, home }) === 'done-requested');
   const human = [...humanRows, ...deferred.filter(r => r.kind === 'done-requested' && !humanRows.some(h => h.sessionId && h.sessionId === r.session?.sessionId)).map(r => ({ ...r.session, status: 'done', label: r.session?.label || r.session?.requestText || r.text }))];
-  const names = list => list.map(r => plain(r.label || r.requestText || r.promise)).filter(Boolean).slice(0, 2).join('・').slice(0, 120);
   const done = human.filter(r => r.status === 'done');
   const ongoing = human.filter(r => r.status !== 'done');
-  lines.push('あなたが頼んだこと', `完了 ${done.length}件: ${names(done) || 'なし'}`, `進行中 ${ongoing.length}件: ${names(ongoing) || 'なし'}${ongoing.some(r => ['stalled', 'waiting_user'].includes(r.status)) ? `（止まっている ${ongoing.filter(r => ['stalled', 'waiting_user'].includes(r.status)).length}件）` : ''}`);
+  lines.push('あなたが頼んだこと', `完了 ${done.length}件 / 進行中 ${ongoing.length}件（止まっている ${ongoing.filter(r => ['stalled', 'waiting_user'].includes(r.status)).length}件）`);
+  for (const row of [...ongoing, ...done].slice(0, 10)) {
+    const summary = checkProgressSummary(row.checkText).split(/\r?\n/)[0];
+    lines.push(`・${plain(row.label || row.requestText || row.promise).slice(0, 60)} ／ ${summary} ／ nextKim: ${plain(row.nextKim) || 'なし'}`);
+  }
+  if (human.length > 10) lines.push(`ほか ${human.length - 10}件`);
   const automatic = rows.filter(r => !humanRows.includes(r));
   lines.push('自動作業', `完了 ${automatic.filter(r => r.status === 'done').length + deferred.filter(r => r.kind === 'automatic' && r.status === 'done').length}件・止まっている ${automatic.filter(r => ['stalled', 'waiting_user'].includes(r.status)).length + deferred.filter(r => r.kind === 'automatic' && r.status === 'stalled').length}件`);
   const shown = new Set([...included, ...old].map(a => a.text));

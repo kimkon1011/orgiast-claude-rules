@@ -463,3 +463,34 @@ test('急ぎは上限超過でも600字を保ち、未表示優先・最大5件�
   assert.equal(urgent[6].shownCount, 1);
   assert.ok(context.includes(`■ ask ${base.id}`));
 });
+
+
+test('現在セッションの承認待ちは完了・進捗通知より先に一度だけ表示する', async t => {
+  const home = seat(t);
+  const own = await addItem(home, { kind: 'ask', sessionId: 'abcdef12-3456', priority: 'high', source: 'auto-progress-done', text: '承認依頼\n判断に必要な詳細' });
+  const done = await addItem(home, { source: 'auto-progress-done', text: '完了通知', dedupeKey: 'merge:done' });
+  const progress = await addItem(home, { source: 'auto-progress-heartbeat', text: '進捗通知\n進捗詳細', dedupeKey: 'merge:progress' });
+  const approval = await addItem(home, { kind: 'ask', priority: 'high', text: '別件の承認依頼' });
+  const items = listItems(home);
+  assert.equal(items.find(i => i.id === own.id).priority, 'high');
+  for (let n = 1; n <= 2; n++) {
+    const context = selectContext(items, { sessionId: 'abcdef12-3456' });
+    assert.ok(context.startsWith(`■ ask ${own.id}`));
+    assert.equal(context.split(`■ ask ${own.id}`).length - 1, 1);
+    assert.match(context, /判断に必要な詳細/);
+    assert.match(context, /別件の承認依頼/);
+    if (n === 1) {
+      assert.match(context, /完了通知/);
+      assert.match(context, /進捗詳細/);
+      for (const item of [done, progress]) assert.ok(context.indexOf(own.id) < context.indexOf(item.id));
+    }
+    for (const item of [own, approval]) assert.equal(items.find(i => i.id === item.id).shownCount, n);
+  }
+});
+test('通常枠が空でも完了・進捗・承認待ちを表示する', async t => {
+  const home = seat(t);
+  await addItem(home, { source: 'auto-progress-done', text: '完了だけの通知' });
+  const context = selectContext(listItems(home));
+  assert.match(context, /kim-inbox 完了・進捗・承認待ち/);
+  assert.match(context, /完了だけの通知/);
+});

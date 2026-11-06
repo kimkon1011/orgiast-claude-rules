@@ -73,19 +73,26 @@ export function loadKey(home = homedir()) {
 const mime = (p) => (p.endsWith('.png') ? 'image/png' : p.endsWith('.webp') ? 'image/webp' : 'image/jpeg');
 const imagePart = (p) => ({ type: 'image_url', image_url: { url: `data:${mime(p)};base64,${readFileSync(p).toString('base64')}` } });
 
-async function generate({ key, text, refs, out, model }) {
-  const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+export async function generate({ key, text, refs, out, model, fetchImpl = fetch }) {
+  // OpenAI image models use the dedicated Image API; never silently change providers.
+  const imageApi = model.startsWith('openai/');
+  const body = imageApi
+    ? { model, prompt: text, input_references: refs.map(imagePart), aspect_ratio: '16:9', quality: 'high', output_format: 'png', n: 1 }
+    : { model, modalities: ['image', 'text'], image_config: { aspect_ratio: '16:9' },
+      messages: [{ role: 'user', content: [{ type: 'text', text }, ...refs.map(imagePart)] }] };
+  const r = await fetchImpl(`https://openrouter.ai/api/v1/${imageApi ? 'images' : 'chat/completions'}`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, modalities: ['image', 'text'], image_config: { aspect_ratio: '16:9' },
-      messages: [{ role: 'user', content: [{ type: 'text', text }, ...refs.map(imagePart)] }] }),
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(300_000),
   });
+  if (!r.ok) throw new Error(`HTTP ${r.status} ${await r.text()}`);
   const j = await r.json();
-  if (!r.ok) throw new Error(`HTTP ${r.status} ${JSON.stringify(j).slice(0, 300)}`);
   const url = j.choices?.[0]?.message?.images?.[0]?.image_url?.url;
-  if (!url) throw new Error(`画像が返らなかった: ${JSON.stringify(j).slice(0, 300)}`);
-  writeFileSync(out, Buffer.from(url.split(',')[1], 'base64'));
-  return { model: j.model, cost: j.usage?.cost ?? null };
+  const data = imageApi ? j.data?.[0]?.b64_json : url?.match(/^data:image\/[\w.+-]+;base64,(.+)$/s)?.[1];
+  if (!data) throw new Error(`画像が返らなかった: ${JSON.stringify(j).slice(0, 300)}`);
+  writeFileSync(out, Buffer.from(data, 'base64'));
+  return { model: j.model || model, cost: j.usage?.cost ?? null, endpoint: imageApi ? 'images' : 'chat/completions' };
 }
 
 async function main() {

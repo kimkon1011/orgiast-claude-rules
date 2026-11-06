@@ -1,3 +1,5 @@
+import { checkProgressSummary } from './lib/check-progress-summary.mjs';
+import { isKimHumanProgress, deliverHumanProgress } from './lib/auto-progress-human-inbox.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -5,7 +7,8 @@ import { createHash } from 'node:crypto';
 import { isUnattendedRow, rowKey, originLine } from './auto-progress-ledger.mjs';
 import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
-import { deliverDoneInbox, hasDoneInboxReceipt } from './lib/auto-progress-done-inbox.mjs';
+import { reportCheckProgress } from './lib/auto-progress-heartbeat.mjs';
+import { deliverDoneInbox, hasDoneInboxReceipt, usesKimDoneInbox } from './lib/auto-progress-done-inbox.mjs';
 
 export const CHECK_ERROR_PATTERNS = [
   /Cannot find path/i,
@@ -39,6 +42,17 @@ export function hasCheckError(stderr) {
   return CHECK_ERROR_PATTERNS.some(pattern => pattern.test(stderr));
 }
 
+// Rewrite drive-rooted path tokens only, preserving shell escapes elsewhere.
+export function normalizeCheckForBash(command) {
+  return String(command).replace(/(["'])([A-Za-z]:\\[^\r\n]*?)\1|\b[A-Za-z]:\\[^\s"';&|<>]*/g,
+    (match, quote, quotedPath) => quote
+      ? quote + quotedPath.replace(/\\(?!["'])/g, '/') + quote
+      : match.replace(/\\/g, '/'));
+}
+export function hasCheckCrash(stderr) {
+  return /^node:internal|^\s*throw err;|^Error: Cannot find module|MODULE_NOT_FOUND|^\w*Error: .*\r?\n\s+at |No such file or directory|command not found/m.test(stderr);
+}
+
 /** 二重引用符内の $env: を bash が展開する問題の静的検査 */
 export function hasBashEnvExpansion(command) {
   return /(?<!\\)\$env:/i.test(command);
@@ -55,7 +69,12 @@ export function hasBashEnvExpansion(command) {
  *   preflight=static_error → $env: 展開を検出
  *   preflight=stderr_error → stderr にエラー印を検出
  */
+export function checkPatternWarnings(command) {
+  return /(?<!\\)\$(?=[/'"])/.test(String(command || '')) && /readFile|Get-Content|grep|Select-String|\.log/i.test(command)
+    ? ['末尾の $ は CRLF や exit=0 rounds=1 の追加フィールドで不一致になり得ます。実際の成功行を使って検証し、改行を正規化するか exit=0(?:\\s|$) のように境界を指定してください。'] : [];
+}
 export function preflightCheck(row, { home, forceCheck = false } = {}) {
+  for (const warning of checkPatternWarnings(row.check)) console.error(`check preflight 警告: ${warning}`);
   // 静的検査
   if (!forceCheck && hasBashEnvExpansion(row.check)) {
     const msg = [
@@ -72,10 +91,9 @@ export function preflightCheck(row, { home, forceCheck = false } = {}) {
   if (result.code === 0) {
     return { ok: true, code: 0, text: result.text, stderr: result.stderr, preflight: 'already_met' };
   }
-  if (result.code === null) {
+  if (result.code !== 1) {
     const msg = `check が実行できませんでした: ${result.text}`;
-    if (!forceCheck) return { ok: false, code: null, text: msg, stderr: result.stderr, preflight: 'exec_error' };
-    return { ok: true, code: null, text: msg, stderr: result.stderr, preflight: 'overridden' };
+    return { ok: false, code: null, text: msg, stderr: result.stderr, preflight: 'exec_error' };
   }
   // 非ゼロ終了
   if (!forceCheck && hasCheckError(result.stderr || '')) {
@@ -114,24 +132,17 @@ export function executeCheck(row, { home, spawnImpl = spawnSync, shellPath = res
   const options = { cwd: row.checkCwd || row.cwd, encoding: 'utf8',
     timeout: resolveCheckTimeout(row), maxBuffer: 64 * 1024, windowsHide: true,
     env: { ...process.env, ORGIAST_HOME: home, ORGIAST_CHECK_TIMEOUT_MS: String(resolveCheckTimeout(row)) } };
-  const result = shellPath ? spawnImpl(shellPath, ['-c', row.check], options)
+  const result = shellPath ? spawnImpl(shellPath, ['-c', normalizeCheckForBash(row.check)], options)
     : spawnImpl(row.check, { ...options, shell: true });
-  const code = result.error || result.signal ? null : result.status;
   const gotStderr = String(result.stderr || '');
+  const code = result.error || result.signal || (result.status !== 0 && hasCheckCrash(gotStderr)) ? null : result.status;
   // spawnSync の生メッセージ（… bash.exe ETIMEDOUT）はシェル故障に見えるため、上限超過と延長方法を書く。
   const failure = result.error?.code === 'ETIMEDOUT'
     ? `check が ${options.timeout / 1000} 秒の上限を超えました（遅い check は --add-check --timeout <秒> で延長・最大 ${MAX_CHECK_TIMEOUT_MS / 1000} 秒）`
     : oneLine(result.error?.message || gotStderr) || code;
-  return { code, text: String(result.stdout || '').trim() || (code === 0 ? '達成を確認' : code === 1 ? '未達' : `check エラー: ${failure}`), stderr: gotStderr };
+  return { code, text: code === null ? `check エラー: ${failure}` : String(result.stdout || '').trim() || (code === 0 ? '達成を確認' : code === 1 ? '未達' : `check エラー: ${failure}`), stderr: gotStderr };
 }
-// Count each nonempty evidence line once; negative markers take precedence over 完了/達成.
-export function checkProgressSummary(text) {
-  const lines = String(text || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-  const unmet = lines.filter(s => /未達|未完|なし|失敗|エラー|停止|不足|未配布|NG|✗|❌|pending|unmet|failed/i.test(s));
-  const done = lines.filter(s => !unmet.includes(s) && /達成|完了|済|成功|あり|OK|✅|done|passed/i.test(s));
-  const unknown = lines.filter(s => !unmet.includes(s) && !done.includes(s));
-  return `達成 ${done.length}件 / 未達 ${unmet.length}件${unknown.length ? ` / 判定不明 ${unknown.length}件` : ''}\n達成: ${done.join(' ／ ').slice(0, 450) || '確認なし'}\n未達: ${unmet.join(' ／ ').slice(0, 650) || '確認なし'}${unknown.length ? `\nその他: ${unknown.join(' ／ ').slice(0, 250)}` : ''}`;
-}
+export { checkProgressSummary } from './lib/check-progress-summary.mjs';
 export function pendingAction(row) {
   const human = !String(row.nextClaude || '').trim() && /待ち|受け取ったら|返信|貼|承認/.test([row.label, row.promise, row.nextKim].join(' '));
   if (human) return `あなたの作業待ち: ${row.label || row.promise}\n${row.ask || row.promise || ''}`;
@@ -157,8 +168,20 @@ export async function checkPromise(row, { home, now, patch, io = {}, suppressNot
   const overdue = now >= Date.parse(row.deadlineAt);
   const changes = { checkResult: state, checkText: String(result.text || ''), checkStderr: String(result.stderr || ''), lastCheckedAt: new Date(now).toISOString(),
     verdict: state === 'done' ? 'done' : state === 'error' ? 'check_error' : overdue ? 'unmet' : 'in_progress',
-    ...(state === 'done' ? { status: 'done', doneAt: row.doneAt || new Date(now).toISOString() } : {}) };
+    ...(state === 'done' ? { status: 'done', ...(!hasDoneInboxReceipt(row) ? { doneNotifyPending: true } : {}), doneAt: row.doneAt || new Date(now).toISOString() } : {}) };
   if (patch(rowKey(row), changes) === false) return 'ledger_error';
+  if (isKimHumanProgress(row) && (!suppressNotices || state === 'done')) {
+    Object.assign(row, changes);
+    if (state === 'error' || (state === 'unmet' && overdue)) (io.queueCheckFollowup ?? queueCheckFollowup)(home, row, result);
+    const delivery = await deliverHumanProgress(home, row, { now, io });
+    const receipt = { checkNotifiedResult: state, ...(state === 'done' ? {
+      doneInboxId: delivery.id, doneInboxVerifiedAt: new Date(now).toISOString(),
+      doneNotifiedAt: new Date(now).toISOString(), doneNotifyPending: false,
+    } : {}) };
+    if (patch(rowKey(row), receipt) === false) return 'ledger_error';
+    Object.assign(row, receipt);
+    return state;
+  }
   if (state === 'done') {
     if (hasDoneInboxReceipt(row)) return state;
     const next = String(row.nextClaude || '').trim();
@@ -171,7 +194,8 @@ export async function checkPromise(row, { home, now, patch, io = {}, suppressNot
     return state;
   }
   Object.assign(row, changes);
-  if (suppressNotices) return state;
+  await reportCheckProgress(home, row, result, { now, patch, io });
+  if (suppressNotices || (state === 'unmet' && usesKimDoneInbox(row, home) && !pendingAction(row).startsWith('あなたの作業待ち:'))) return state;
   if (state === 'unmet') {
     const lastNotified = Date.parse(row.lastUnmetNotifiedAt || (!overdue ? row.ts : '')) || 0;
     if ((!overdue || row.checkNotifiedResult === 'unmet') && now - lastNotified < (overdue ? 24 * 3600000 : UNMET_INTERVAL_MS)) return state;
@@ -189,7 +213,7 @@ export async function checkPromise(row, { home, now, patch, io = {}, suppressNot
   if (state !== 'done') (io.queueCheckFollowup ?? queueCheckFollowup)(home, row, result);
   // State, not volatile stdout/count/timestamps, determines duplicate delivery.
   if (row.checkNotifiedResult === state) return state;
-  const message = `${state === 'done' ? '完了' : '確認エラー'}: ${oneLine(row.label || row.promise, 80)}\n${changes.checkText}${state === 'done' ? '' : `\n${pendingAction(row)}（next-session.md に起票）`}`;
+  const message = `確認処理エラー: ${oneLine(row.label || row.promise, 80)} ${oneLine(result.stderr || changes.checkText)}\n${pendingAction(row)}（next-session.md に起票）`;
   const owner = row.owner || resolveOwner({ home });
   const origin = originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: owner, home });
   const delivery = await (io.notifyOwner ?? notifyOwner)(owner, `${origin}\n${message}`, { home, now, kind: state === 'done' && !isUnattendedRow(row, home) ? 'done-requested' : pendingAction(row).startsWith('あなたの作業待ち:') ? 'action' : 'automatic', session: row });

@@ -432,7 +432,7 @@ test('watch: nextKimが空/なしを優先して古い順に最大4件を再開'
   assert.deepEqual(resumed, ['direct-old', 'direct-mid', 'direct-new', 'waiting-old']);
 });
 
-test('digest: 大量の完了も全件を名前で出し、次回へ回さない', async () => {
+test('digest: 完了総数と最大10件の状況を表示し、残りは件数で出す', async () => {
   // 2026-11-04 仕様変更: 朝夕1通・3区分の要約に合わせ、保留・重複防止・匿名化の検査意図を維持する。
   const now = Date.now(), home = tmp();
   const rows = Array.from({ length: MAX_ITEMS + 2 }, (_, i) => ({ sessionId: `s${i}`, status: 'done', promise: `作業${i}`, ts: new Date(now - WINDOW_MS).toISOString(), doneAt: new Date(now - H).toISOString() }));
@@ -441,11 +441,12 @@ test('digest: 大量の完了も全件を名前で出し、次回へ回さない
   const first = await digest({ home, slot: '朝', now, io });
   assert.equal(first.count, MAX_ITEMS + 2);
   assert.match(messages[0], /完了 12/);
-  // 2026-11-04 仕様変更: 完了総数を残し、名前は2件までで1通にまとめる。
+  // 2026-11-06: 最大10件に要約とnextKimを付け、超過分は件数を示す。
   assert.equal(messages.length, 1);
-  assert.match(messages[0], /作業0・作業1/);
+  assert.match(messages[0], /作業0[\s\S]*作業1/);
   assert.doesNotMatch(messages[0], /作業11/);
-  assert.ok(messages[0].split('\n').length <= 10);
+  assert.equal((messages[0].match(/nextKim:/g) || []).length, 10);
+  assert.match(messages[0], /ほか 2件/);
   assert.equal((await digest({ home, slot: '朝', now: now + WINDOW_MS, io })).count, 0);
   assert.deepEqual(await digest({ home, slot: '朝', now: now + WINDOW_MS * 2, io }), { sent: false, count: 0 });
   assert.ok(messages.every(message => message.length <= 1800));
@@ -595,7 +596,7 @@ test('digest: 長文でも件の途中で切らず、成功した宛先を失敗
   assert.deepEqual(calls, ['a', 'b', 'b']);
 });
 
-test('digest: 長文でも全件を名前で出し、1800字を超えたら分割して届ける', async () => {
+test('digest: 最大10件の長文の次の操作を保持し、同じ枠は再送しない', async () => {
   // 2026-11-04 仕様変更: 朝夕1通・3区分の要約に合わせ、保留・重複防止・匿名化の検査意図を維持する。
   const home = tmp(), now = Date.parse('2026-10-15T09:00:00+09:00'), messages = [];
   const rows = Array.from({ length: MAX_ITEMS, needsDm, verdictOf }, (_, i) => ({ sessionId: `long-${i}`, status: 'stalled', ts: new Date(now - H).toISOString(), promise: '確認'.repeat(100), reason: '理由'.repeat(100), nextKim: '選択'.repeat(100) }));
@@ -606,10 +607,11 @@ test('digest: 長文でも全件を名前で出し、1800字を超えたら分�
   assert.equal(second.sent, false);
   const body = messages.join('\n');
   assert.equal(messages.length, 1);
-  assert.ok(body.split('\n').length <= 10);
+  assert.equal((body.match(/nextKim:/g) || []).length, 10);
+  assert.doesNotMatch(body, /ほか \d+件/);
   assert.match(body, /あなたの返事待ち/);
   assert.match(body, /選択/);
-  assert.ok(body.length <= 1800);
+  assert.ok(body.includes('選択'.repeat(100)), 'nextKimを保持する');
 });
 
 test('digest: 予定の日付と固有名詞を壊さず、対応不要もなしにまとめる', () => {
@@ -848,7 +850,7 @@ test('digest: 朝枠の定時報告（朝枠・変化0件・進行中1件→sent
   // 朝枠・変化0件・進行中1件 → dryRun の text に項目名が入る
   const dry = await digest({ home, now: morning, slot: '朝', dryRun: true, io: morningIo });
   assert.equal(dry.sent, false);
-  assert.match(dry.text, /進行中 1件.*進行中の案件確認/);
+  assert.match(dry.text, /進行中 1件[\s\S]*進行中の案件確認/);
   assert.match(dry.text, /進行中/);
 
   // 朝枠・変化0件・進行中1件 → sent: true

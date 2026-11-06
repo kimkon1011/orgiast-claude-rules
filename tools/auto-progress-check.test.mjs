@@ -151,8 +151,8 @@ test('digest: hundreds of rows across three categories are all delivered in 1800
   assert.equal(messages.length, 1);
   assert.match(messages[0], /完了 67件/);
   assert.match(messages[0], /あなたの返事待ち/);
-  assert.ok(messages[0].split('\n').length <= 10);
-  assert.ok(messages[0].length <= 1800);
+  assert.match(messages[0], /ほか 190件/);
+  assert.equal((messages[0].match(/nextKim:/g) || []).length, 10);
   assert.equal((await digest({ home, now: now + 3600000, slot: '朝', io })).sent, false);
 });
 

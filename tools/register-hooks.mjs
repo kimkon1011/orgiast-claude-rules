@@ -204,7 +204,8 @@ try {
     if (!Array.isArray(groups)) continue;
     for (const [name, timeout] of permanentTimeouts) added += setTimeoutFor(groups, name, timeout);
   }
-  // 全PC・全アカウントの全セッションで Remote Control を自動開始する(kim 2026-10-09)。CLI と VS Code 拡張の両方がこのキーを読む。
+  // 全PC・全アカウントの全「新規インタラクティブ」セッションで Remote Control を自動開始する(kim 2026-10-09)。CLI と VS Code 拡張の両方がこのキーを読む。
+  // 注意: このキーは Claude Code 仕様上、新規の対話セッション起動時にのみ効く。ヘッドレス(claude -p)と既に起動済みのセッションは対象外(2026-11-06 実測: seisaku-team@ 作業用014 は稼働 14/14 が -p で RC 非対象)。
   if (settings.remoteControlAtStartup !== true) { settings.remoteControlAtStartup = true; added += 1; }
   // 全PC・全アカウントの応答・セッション名を日本語に固定する。途中で英語に切り替わった事故の再発防止(cr 2026-10-18)。
   if (settings.language !== 'japanese') { settings.language = 'japanese'; added += 1; }

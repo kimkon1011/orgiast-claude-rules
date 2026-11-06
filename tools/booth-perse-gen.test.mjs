@@ -1,9 +1,49 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { parseArgs, loadKey, buildPrompt } from './booth-perse-gen.mjs';
+import { parseArgs, loadKey, buildPrompt, generate } from './booth-perse-gen.mjs';
+
+test('OpenAI Image API preserves reference order and records requested model when response omits it', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'perse-image-'));
+  const refs = ['base.png', 'previous.png'].map((name) => path.join(dir, name));
+  refs.forEach((file, i) => writeFileSync(file, `reference-${i}`));
+  const out = path.join(dir, 'result.png');
+  const result = await generate({ key: 'test', text: 'keep geometry', refs, out, model: 'openai/gpt-5.4-image-2',
+    fetchImpl: async (url, options) => {
+      assert.equal(url, 'https://openrouter.ai/api/v1/images');
+      const body = JSON.parse(options.body);
+      assert.equal(body.prompt, 'keep geometry');
+      assert.equal(body.output_format, 'png');
+      assert.equal(body.messages, undefined);
+      assert.deepEqual(body.input_references.map(r => Buffer.from(r.image_url.url.split(',')[1], 'base64').toString()), ['reference-0', 'reference-1']);
+      return new Response(JSON.stringify({ data: [{ b64_json: Buffer.from('image bytes').toString('base64') }], usage: { cost: .15 } }));
+    } });
+  assert.equal(readFileSync(out, 'utf8'), 'image bytes');
+  assert.deepEqual(result, { model: 'openai/gpt-5.4-image-2', cost: .15, endpoint: 'images' });
+});
+
+test('HTTP failure retains full error and never falls back to another provider', async () => {
+  const out = path.join(mkdtempSync(path.join(tmpdir(), 'perse-fail-')), 'result.png');
+  const errorBody = JSON.stringify({ error: { message: `Complexity 'none' is not supported ${'detail '.repeat(60)}` } });
+  let calls = 0;
+  await assert.rejects(generate({ key: 'test', text: 'test', refs: [], out, model: 'openai/gpt-5.4-image-2', fetchImpl: async () => {
+    calls += 1;
+    return new Response(errorBody, { status: 502 });
+  } }), error => error.message === `HTTP 502 ${errorBody}`);
+  assert.equal(calls, 1);
+  assert.equal(existsSync(out), false);
+});
+
+test('explicit non-OpenAI model keeps chat image response compatibility', async () => {
+  const out = path.join(mkdtempSync(path.join(tmpdir(), 'perse-chat-')), 'result.png');
+  await generate({ key: 'test', text: 'test', refs: [], out, model: 'google/gemini-2.5-flash-image', fetchImpl: async (url) => {
+    assert.equal(url, 'https://openrouter.ai/api/v1/chat/completions');
+    return new Response(JSON.stringify({ choices: [{ message: { images: [{ image_url: { url: 'data:image/png;base64,aW1hZ2U=' } }] } }] }));
+  } });
+  assert.equal(readFileSync(out, 'utf8'), 'image');
+});
 
 test('buildPrompt: どの案にも高さ3.6mと明るさの指示が必ず入る', () => {
   const t = buildPrompt('BRIEF', { add: 'PLAN SIMPLE: white panels about 2.7 m high' });

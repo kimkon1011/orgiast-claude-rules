@@ -1,3 +1,4 @@
+import { isKimHumanProgress } from './human-progress-row.mjs';
 import fs from 'node:fs';
 import { isUnattendedRow } from './unattended-session.mjs';
 import path from 'node:path';
@@ -18,6 +19,8 @@ export function notificationKind(text, options = {}) {
 }
 // Lock covers reservation and append, so simultaneous processes cannot claim a ninth slot.
 export async function routeOwnerDm(owner, text, options) {
+  // Human progress is delivered by notifyOwner directly to kim-inbox.
+  if (isKimHumanProgress({ ...options.session, owner }) && options.kind !== 'digest') return null;
   const { home } = options;
   const now = new Date(options.now ?? Date.now());
   const kind = notificationKind(text, options);

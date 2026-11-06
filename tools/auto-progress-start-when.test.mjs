@@ -226,7 +226,7 @@ test('定期digestに開始予約と期限超過が出る', async t => {
     const messages = [];
     await digest({ home, now: now + i * 86400000, slot: '朝', io: { localOwner: 'owner', notifyOwner: async (_, message) => { messages.push(message); return { delivered: 'dm' }; } } });
     // 2026-11-04 仕様変更: 予約も依頼された進行中の作業として朝夕1通に集約する。
-    assert.ok(messages.some(message => /進行中 1件.*予約作業/.test(message)));
+    assert.ok(messages.some(message => /進行中 1件[\s\S]*予約作業/.test(message)));
     assert.equal(messages.length, 1);
   }
 });

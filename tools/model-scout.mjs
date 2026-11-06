@@ -250,10 +250,12 @@ export async function runScout({ home = process.env.ORGIAST_HOME || userHome(), 
       log(dm);
     }
     return { ok: true, candidates, frontierCandidates, changes, report, dm, action, proposed };
-  } catch {
+  } catch (e) {
     // 外部例外や資格情報をログに流さない。失敗も必ず観測可能にする。
     const message = '本日の新AI候補 0 件\n偵察失敗（取得・設定・保存・通知のいずれか）。状態を進めず次回再試行します。';
     log(message);
+    const safe = String(e?.message ?? e).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF\r\n\t]/g, ' ').slice(0, 300);
+    console.error(`model-scout error: ${safe}`);
     if (!dryRun && !notifyAttempted) {
       try { await notify(message, { home, webhookFallback: false }); } catch {}
     }

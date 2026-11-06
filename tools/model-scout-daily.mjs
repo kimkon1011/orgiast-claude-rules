@@ -76,7 +76,18 @@ export async function runDailyScout({ home = process.env.ORGIAST_HOME || userHom
     const scout = run([path.join(HERE, 'model-scout.mjs'), '--once']);
     const state = readJson(stateFile, null);
     // scout の従来CLIは障害でも exit 0。保存成功を確認して沈黙失敗を検出する。
-    if (scout.error || scout.status !== 0 || !state?.updatedAt || state.updatedAt === before) throw new Error('scout failed');
+    if (scout.error || scout.status !== 0 || !state?.updatedAt || state.updatedAt === before) {
+      const parts = [];
+      if (scout.error) parts.push(`error_code=${scout.error.code || ''}`);
+      if (scout.status !== undefined && scout.status !== null) parts.push(`exit=${scout.status}`);
+      if (scout.signal) parts.push(`signal=${scout.signal}`);
+      if (!state?.updatedAt || state.updatedAt === before) parts.push(`state_未更新(before=${before})`);
+      if (scout.stderr) {
+        const tail = scout.stderr.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFE\uFFFF]/g, '').slice(-500);
+        parts.push(`stderr_tail=${tail}`);
+      }
+      throw new Error(`scout failed: ${parts.join(' | ')}`);
+    }
     const resultsFile = path.join(dir, 'eval-results.jsonl');
     const configFile = path.join(dir, 'eval', 'providers.local.json');
     const pending = state.pendingCandidates || [];

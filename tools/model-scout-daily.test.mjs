@@ -110,13 +110,17 @@ test('exit0でもscout保存なし・eval結果なしは成功扱いせず再試
   const f = fixture(t), opts = { home: f.home, now, log: () => {}, propose: async () => {} };
   assert.equal((await runDailyScout({ ...opts, spawnImpl: () => ({ status: 0, stdout: 'SECRET' }) })).ok, false);
   assert.equal(fs.existsSync(path.join(f.dir, 'model-scout-daily.json')), false);
+  let log = fs.readFileSync(path.join(f.dir, 'logs', 'model-scout.log'), 'utf8');
+  assert.match(log, /exit=0.*state_未更新/);
+  assert.doesNotMatch(log, /SECRET/);
   assert.equal((await runDailyScout({ ...opts, spawnImpl: (_exe, args) => {
     if (args[0].endsWith('model-scout.mjs')) fs.writeFileSync(path.join(f.dir, 'model-scout-state.json'), JSON.stringify({ updatedAt: now.toISOString(), pendingCandidates: f.pending }));
     return { status: 0, stderr: 'SECRET' };
   } })).ok, false);
   assert.equal(fs.existsSync(path.join(f.dir, 'model-scout-daily.json')), false);
   assert.equal(fs.existsSync(path.join(f.dir, 'model-scout-daily.lock')), false);
-  assert.doesNotMatch(fs.readFileSync(path.join(f.dir, 'logs', 'model-scout.log'), 'utf8'), /SECRET/);
+  log = fs.readFileSync(path.join(f.dir, 'logs', 'model-scout.log'), 'utf8');
+  assert.doesNotMatch(log, /SECRET/);
 });
 
 test('生存中のロックは二重起動を防ぎ、他実行のロックを消さない', async t => {

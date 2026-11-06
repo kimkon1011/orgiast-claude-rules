@@ -33,6 +33,14 @@ export function options(argv = [], env = process.env) {
   return out;
 }
 
+async function readSanitizedJson(file, fallback) {
+  try {
+    const raw = await fs.readFile(file, 'utf8');
+    const cleaned = raw.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+    return JSON.parse(cleaned);
+  } catch { return fallback; }
+}
+
 async function readJson(file, fallback) {
   try { return JSON.parse(await fs.readFile(file, 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return fallback; throw error; }
@@ -142,14 +150,17 @@ export async function execute(record, { timeoutMs, resultFile, previous = [] }, 
 const timedOut = result.status === 'timeout';
   if (result.status !== 'success' && !timedOut) return { outcome: 'error', reason: result.status };
   // deepseek-v4-flash が結果JSONに制御文字を混入することがある（2026-11-06 実測）.
-  // 無害化後に parse し、失敗時は null として no-progress 扱いにする（error にすると
-  // state.errors が増えて「連続3件エラー→今晩中止」のトリガーになる）。
-  let report;
-  try {
-    const raw = await fs.readFile(resultFile, 'utf8');
-    const cleaned = raw.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-    report = JSON.parse(cleaned);
-  } catch { report = null; }
+  // io.readReport が指定されていればそれを使い、無ければファイルから制御文字無害化後に parse する。
+  // parse 失敗時は null として no-progress 扱いにする（error にすると state.errors が増えて
+  // 「連続3件エラー→今晩中止」のトリガーになる）。
+  const rawReport = await (io.readReport ?? readSanitizedJson)(resultFile, null);
+  let report = rawReport;
+  if (typeof rawReport === 'string') {
+    try {
+      const cleaned = rawReport.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+      report = JSON.parse(cleaned);
+    } catch { report = null; }
+  }
   const progressed = report?.progressed === true && typeof report.evidence === 'string' && report.evidence.trim();
   // 時間切れはセッション側の制限超過であって失敗ではない。ただし時間切れ直前に成果 JSON を
   // 保存できていれば「進んだ」として数える（2026-11-06 実測: 20分 timeout 4件が error 扱いで

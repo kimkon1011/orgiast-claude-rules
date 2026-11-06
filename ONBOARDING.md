@@ -1128,6 +1128,19 @@ Claude Code・Codex・安いLLMは**APIがあるものしか触れない**。だ
 - **禁止**: 認証情報を Bot に渡す判断を Claude が勝手に進めないこと。どのサービスに何の権限でログインさせるかは必ず user に明示して合意を取る（§1.1 の「安全機構の解除誘導・説明なしの一括設定は禁止」に該当）。
 - Growi 追記はハブへ `node tools/fleet-mail.mjs --send --to <ハブ> --kind note --why "[growi-append] <要約>" --body-file <json>` で中継し、user に貼り付けを頼まない。
 
+### 1.18.4 着手前のレーン生存確認と「体制不備を先に直す」原則（kim 2026-10-12 決定・全PC全アカウント）
+
+- Fable 5.1（および Opus）の担当は設計・タスク分解・指示・レビュー・検証だけ。実装は Codex、
+  量産・分類・要約・下書きは Gemini／Kimi／Groq／DeepSeek、サブエージェントは Sonnet／Haiku に委譲する。
+- 依頼を受けたら、着手前に SessionStart の生存行（lane-health.json）を見る。主レーン（codex）か
+  必要な連携（Gmail／Calendar／Discord／LINE／GAS の権限）が落ちていれば、**その修復または代替レーンの確定を
+  最初のタスクにする**。Fable が実装を肩代わりして先に進めることは禁止。
+- 修復が Claude 側で完結しない場合は、人にしかできない操作を 1 件ずつ「何を・どこで・なぜ」で手渡し、
+  待つ間は別案件を進める。
+- win32 かつ WSL 無しの PC では codex-do に `--allow-native` を付ける。lane-doctor の probe も同じ条件で付ける。
+- 違反の検知は pretooluse-lane-guard（Fable 本体の直接ツール実行回数）と stop-gate の委譲判定行で行う。
+- 詳細: rules-extracted/lane-preflight.md
+
 ## 他AIは「積極的に使う」のが既定（kim 2026-10-09 厳命・全PC全アカウント）
 
 **🔴 他AI（Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM）は使うのが既定、Claudeだけは理由が必要。残高切れは入金（オートチャージON）、キー失効/403は再発行、429は別の他AIへ。「外す／やめる／縮小」を選択肢にせず、障害は別の他AIで吸収し復旧後に戻す。割り振りは先に具体名で書く（要約=Gemini、下書き=Kimi、実装=Codex、Claude=verify）。「必要なら使う」は禁止。**

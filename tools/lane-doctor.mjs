@@ -155,6 +155,20 @@ export function listWslDistros() {
   const r = spawnSync('wsl', ['-l', '-q'], { encoding: 'utf16le', windowsHide: true, timeout: 15000 });
   return r.status === 0 ? String(r.stdout || '').replace(/\0/g, '').trim() : null;
 }
+// win32 かつ WSL ディストリが 0 件の PC では codex-do の WSL 経路が使えない。この場合に
+// --allow-native を付けないと probe が必ず abort し、lane-health が ok にならない（§1.18.4）。
+// 実機の distro 有無でテストが非決定的にならないよう、codex-do と同じ流儀で env 注入できる。
+export function needsNativeCodexProbe({ platform = process.platform, env = process.env, spawn = spawnSync } = {}) {
+  if (platform !== 'win32') return false;
+  const fake = env.LANE_DOCTOR_WSL_PROBE;
+  if (fake) return fake === 'absent';
+  try {
+    const listed = spawn('wsl', ['-l', '-q'], { windowsHide: true, encoding: 'utf16le', timeout: 15000 });
+    if (listed.status !== 0) return true;
+    const distros = String(listed.stdout || '').split(/\r?\n/).map(x => x.replace(/\0/g, '').trim()).filter(Boolean);
+    return distros.length === 0;
+  } catch { return true; }
+}
 export function nativeWriteProbeArgs({ repo, cwd, timeoutMs, instruction }) {
   // --kind を明示しないと codex-do が investigate と判定し llm-ask へ流れ、書き込み不能でレーン死亡と誤判定する（2026-10-22 実測）。
   return [path.join(repo, 'tools/codex-do.mjs'), instruction, '--cwd', cwd, '--kind', 'implement', '--force-native', '--no-fallback', '--no-escalate', '--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))];
@@ -174,7 +188,7 @@ export async function runNativeWriteProbe({ home, timeoutMs }) {
 }
 export function runProbe(provider, { home, timeoutMs, dryRun = false } = {}) {
   const args = provider === 'codex'
-    ? [path.join(repo, 'tools/codex-do.mjs'), 'Reply with exactly: PONG. Do not modify any files.', '--cwd', repo, '--no-fallback', '--no-escalate', ...(dryRun ? ['--dry-run'] : ['--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))])]
+    ? [path.join(repo, 'tools/codex-do.mjs'), 'Reply with exactly: PONG. Do not modify any files.', '--cwd', repo, '--no-fallback', '--no-escalate', ...(needsNativeCodexProbe() ? ['--allow-native'] : []), ...(dryRun ? ['--dry-run'] : ['--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))])]
     : [path.join(repo, 'tools/llm-ask.mjs'), '--provider', provider, 'Reply with exactly: PONG', '--max', '10', '--no-fallback'];
   return new Promise(resolve => execFile(process.execPath, args, { cwd: repo, env: { ...process.env, ORGIAST_HOME: home }, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 256 * 1024, windowsHide: true }, (e, stdout, stderr) => resolve({ code: e ? e.code || 1 : 0, text: redactAll(`${stdout}\n${stderr}`) })));
 }

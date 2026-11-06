@@ -165,6 +165,14 @@ test('文字列の成功statusを失敗にしない', () => {
   for (const status of ['ok', 'success', 'fallback', 'cooldown', '0', null]) assert.equal(detectFailedJob([{ taskName: 'a', t: ago(4), status }], now).length, 0);
   for (const status of ['error', 'http_429', 'no-cheap-executor']) assert.equal(detectFailedJob([{ taskName: 'a', t: ago(4), status }], now).length, 1);
 });
+test('ジョブ付帯なしLLM行の直近http_429はレート上限で失敗扱いしない', () => {
+  // groq:不明 アーティファクト: provider単位の呼び出し行(cwd/taskName/job無し)はRPD 429の検出元。
+  // レート上限はフォールバックチェーンが吸収するため失敗扱いしない(2026-11-07)。
+  assert.equal(detectFailedJob([{ provider: 'groq', t: ago(4), status: 'http_429' }], now).length, 0);
+  assert.equal(detectFailedJob([{ provider: 'groq', t: ago(4), status: 'error' }], now).length, 1);
+  // 実ジョブ付帯の http_429 は従来どおり失敗として拾う。
+  assert.equal(detectFailedJob([{ taskName: 'a', t: ago(4), status: 'http_429', cwd: 'C:/x' }], now).length, 1);
+});
 test('日々再生成されるTODOは初回観測を保持する', () => {
   const f = { file: '/next-actions.md', mtimeMs: now, text: '## 推奨アクション\n1. 作業を直す\n' };
   const observed = detectOpenTodo([f], now, {}, 0);

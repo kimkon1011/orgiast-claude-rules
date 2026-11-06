@@ -15,9 +15,13 @@ export function human(e) {
 }
 export function approved(text, kind) {
   const s = text.trim();
-  if (/送らないで|送信しないで|消さないで|削除しないで|まだ送らない|待って|やめて|取り消し|取消|禁止|不可|ダメ|駄目|\bNG\b|(?:よい|いい)か(?:[?？]?$|確認)|[?？]$|ません|(?:OK|はい|承認)(?:では|じゃ)?ない|\b(?:not|no|don't|stop)\b/i.test(s)) return false;
+  if (/送らないで|送信しないで|消さないで|削除しないで|まだ送らない|待って|やめて|取り消し|取消|禁止|不可|ダメ|駄目|\bNG\b|(?:よい|いい)か(?:[?？]?$|確認)|ません|(?:OK|はい|承認)(?:では|じゃ)?ない|\b(?:not|no|don't|stop)\b/i.test(s)) return false;
+  if (kind === 'mail' && /おくらないで|まだおくらない/.test(s)) return false;
+  // Reaffirming a send instruction may be a question; revocations above still win.
+  if (kind === 'mail' && /(?:送って|おくって|送信して)(?:と|って)(?:言|い)っ(?:た|ている|てる)(?:のに|よね|でしょ|じゃん|はず|んだけど|んですが|けど|[、。！]|？?$)/.test(s)) return true;
+  if (/[?？]$/.test(s)) return false;
   if (/(?:^|[^a-z])OK\s*(?:です)?[!！。\s]*$/i.test(s) || /^(?:はい|YES|承認します)[!！。\s]*$/i.test(s)) return true;
-  return kind === 'mail' ? /送って(?:よい|いい|ください|下さい)?|送信して(?:よい|いい|ください|下さい)?|送信を許可/.test(s)
+  return kind === 'mail' ? /(?:送って|おくって|送っといて|おくっといて|送信して)(?:よい|いい|ください|下さい)?|送信を許可/.test(s)
     : /削除して(?:よい|いい|ください|下さい)?|消して(?:よい|いい|ください|下さい)?|削除を許可/.test(s);
 }
 export function approvedAfter(rows, matches, kind) {

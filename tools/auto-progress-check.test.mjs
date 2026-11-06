@@ -43,48 +43,21 @@ test('watch: before deadline stays open; overdue closes and retries final DM; a 
   addCheck({ home, now: later + 1, session: 'session', check: 'node check.mjs', label: '着信再確認', deadline: '+24h' });
   await watch({ home, now: later, io }); await watch({ home, now: later, io });
   assert.equal(deliveries, 2);
-  assert.equal(listItems(home).length, 1);
+  assert.equal(listItems(home).filter(i => i.source === 'auto-progress-done').length, 1);
   const row = readLedger(ledgerFile(home)).at(-1);
   assert.equal(row.status, 'done'); assert.equal(row.checkText, '確認結果\n本文は捨てる');
   assert.equal((await digest({ home, now: later, io: { notify: () => assert.fail('duplicate digest') } })).sent, false);
   });
-  test('watch: 未達（code=1）でも6時間ごとに owner へ定期的に状況を DM する', async () => {
-  const home = tmp();
-  addCheck({ home, now, session: 'unmet-session', check: 'node check.mjs', label: '着信確認', deadline: '+24h' });
-  const messages = [];
-  const io = {
-    ...baseIo,
-    executeCheck: () => ({ code: 1, text: '未達: まだ届いていません' }),
-    notifyOwner: async (_, text) => {
-      messages.push(text);
-      return { delivered: 'dm' };
-    },
-  };
-  // 登録直後（0h）: 6時間未満なのでDMしない
-  await watch({ home, now, io });
-  assert.equal(messages.length, 0);
-
-  // 1時間後: 6時間未満なのでDMしない
-  await watch({ home, now: now + 3600000, io });
-  assert.equal(messages.length, 0);
-
-  // 6時間後: 1回目の定期DMが送信される
+  test('watch: 未達は6時間ごとにkim-inboxを更新し、owner通知と二重にしない', async () => {
+  const home = tmp(); register(home);
+  let notices = 0;
+  const io = { ...baseIo, executeCheck: () => ({ code: 1, text: '未達: 到着待ち' }), notifyOwner: async () => { notices++; return { delivered: 'dm' }; } };
+  await watch({ home, now, io }); assert.equal(listItems(home).length, 0);
   await watch({ home, now: now + 6 * 3600000, io });
-  assert.equal(messages.length, 1);
-  assert.match(messages[0], /未達: 着信確認\n達成 0件 \/ 未達 1件/);
-
-  // 7時間後: 前回DMから1時間なので再送しない
-  await watch({ home, now: now + 7 * 3600000, io });
-  assert.equal(messages.length, 1);
-
-  // 12時間後: 前回DMから6時間経過で2回目の定期DM
+  const [first] = listItems(home); assert.equal(first.priority, 'high'); assert.match(first.text, /到着待ち/);
   await watch({ home, now: now + 12 * 3600000, io });
-  assert.equal(messages.length, 2);
-
-  // 24時間後（期限切れ）: overdue の未達（期限超過）通知
-  await watch({ home, now: now + 24 * 3600000, io });
-  assert.equal(messages.length, 3);
-  assert.match(messages[2], /期限切れ（/);
+  assert.equal(listItems(home).length, 1); assert.equal(listItems(home)[0].id, first.id);
+  assert.match(listItems(home)[0].text, /変化なし/); assert.equal(notices, 0);
   });
   test('watch: failed completion delivery retries without running check again; dry run has no side effects', async () => {
   const home = tmp(); register(home); let checks = 0, sends = 0;
@@ -101,7 +74,7 @@ test('check errors do not mark done; repeated errors notify once', async () => {
   const home = tmp(); register(home); const messages = [];
   const io = { ...baseIo, executeCheck: () => ({ code: 2, text: '実行エラー' }), notifyOwner: async (_, text) => { messages.push(text); return { delivered: 'dm' }; } };
   await watch({ home, now, io }); await watch({ home, now, io });
-  assert.equal(messages.length, 1); assert.match(messages[0], /確認エラー/);
+  assert.equal(messages.length, 1); assert.match(messages[0], /確認処理エラー: 着信確認 実行エラー/);
   assert.equal(readLedger(ledgerFile(home))[0].status, 'open');
 });
 test('executeCheck honors exit contract, full output and bounded execution', () => {
@@ -178,8 +151,8 @@ test('digest: hundreds of rows across three categories are all delivered in 1800
   assert.equal(messages.length, 1);
   assert.match(messages[0], /完了 67件/);
   assert.match(messages[0], /あなたの返事待ち/);
-  assert.ok(messages[0].split('\n').length <= 10);
-  assert.ok(messages[0].length <= 1800);
+  assert.match(messages[0], /ほか 190件/);
+  assert.equal((messages[0].match(/nextKim:/g) || []).length, 10);
   assert.equal((await digest({ home, now: now + 3600000, slot: '朝', io })).sent, false);
 });
 

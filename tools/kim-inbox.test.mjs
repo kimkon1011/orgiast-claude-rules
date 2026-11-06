@@ -85,12 +85,13 @@ test('許可リストは追加マージし壊れた正規表現では許可し�
   assert.equal(discordAllowed('追加本文', { home, repoRoot }).category, '追加');
   assert.equal(discordAllowed('未許可', { home, repoRoot }).allowed, false);
 });
-test('通知は fetch ゼロで台帳に ask を保存し24時間抑制も維持する', async t => {
-  const home = seat(t); const options = { home, plainJa: false, fetchImpl: async () => assert.fail('Discord を呼ばない'), kind: 'ask' };
+test('通知は fetch ゼロで台帳に ask と sessionId を保存し24時間抑制も維持する', async t => {
+  const home = seat(t); const options = { home, plainJa: false, fetchImpl: async () => assert.fail('Discord を呼ばない'), kind: 'ask', sessionId: 'abcdef12-3456' };
   const a = await notifyKim('自動進行が判断待ちです: 判断してください', options);
   assert.equal(a.delivered, 'session-inbox'); assert.equal(a.kind, 'ask');
   assert.equal((await notifyKim('自動進行が判断待ちです: 判断してください', options)).delivered, 'suppressed');
   assert.equal(listItems(home).length, 1);
+  assert.equal(listItems(home)[0].sessionId, options.sessionId);
 });
 test('hook は無関係なイベント・不正な入力でセッションを止めない', async t => {
   const home = seat(t); const output = [], errors = [];
@@ -187,6 +188,92 @@ test('hook の session_id と一致する作業IDの info を ask より先に�
   const context = output[0].hookSpecificOutput.additionalContext;
   assert.equal(context.match(/■ info (ki-[\d-]+[a-f0-9]+)/)[1], own.id);
   assert.ok(context.indexOf(own.id) < context.indexOf('■ ask'));
+});
+test('100番目の現在セッション ask を別枠の先頭に全文で表示する', async t => {
+  const home = seat(t);
+  const base = await addItem(home, { kind: 'ask', text: '基準' });
+  const old = Array.from({ length: 100 }, (_, n) => ({ ...base, id: `old-${n}`, text: `既表示 ${n}`, shownCount: 400,
+    createdAt: `2026-01-${String((n % 28) + 1).padStart(2, '0')}T00:00:00Z`, shownSessions: [] }));
+  const detail = '現在セッションの判断依頼\n' + '詳'.repeat(500) + '全文末尾';
+  const ownAsk = { ...base, id: 'own-ask', text: `セッション abcdef12 ${detail}`, createdAt: '2026-11-06T00:00:00Z', shownCount: 0, shownSessions: [] };
+  const context = selectContext([...old, ownAsk], { sessionId: 'abcdef12-3456', now: Date.parse('2026-11-06T09:00:00Z') });
+  assert.ok(context.startsWith('■ ask own-ask'));
+  assert.match(context, /全文末尾/);
+  assert.equal(ownAsk.shownCount, 1);
+});
+test('別セッションでは未表示 ask を400回表示済み ask より先にする', async t => {
+  const home = seat(t);
+  const base = await addItem(home, { kind: 'ask', text: '基準' });
+  const shown = Array.from({ length: 100 }, (_, n) => ({ ...base, id: `shown-${n}`, text: `既表示 ${n}`, shownCount: 400,
+    createdAt: '2026-11-06T00:00:00Z', shownSessions: [] }));
+  const unseen = { ...base, id: 'unseen', text: 'セッション abcdef12 未表示の判断依頼', createdAt: '2026-11-01T00:00:00Z', shownCount: 0, shownSessions: [] };
+  const context = selectContext([...shown, unseen], { sessionId: '99999999-0000', now: Date.parse('2026-11-06T09:00:00Z') });
+  assert.ok(context.indexOf('■ ask unseen') < context.indexOf('■ ask shown-'));
+  assert.match(context, /⚠未表示5日/);
+});
+test('ask は表示回数の少ない順、同数なら新しい順で、表示するたびに順番が回る', async t => {
+  const base = await addItem(seat(t), { kind: 'ask', text: '判断' });
+  const items = [400, 2, 1, 1].map((shownCount, n) => ({ ...base, id: `rotation-${n}`, shownCount,
+    createdAt: `2026-11-0${n + 1}T00:00:00Z`, shownSessions: [], text: `${n}\n${'詳'.repeat(599)}` }));
+  const first = selectContext(items, { now: Date.parse('2026-11-06T09:00:00Z') });
+  assert.equal(first.match(/■ ask (rotation-\d)/)[1], 'rotation-3');
+  assert.ok(first.indexOf('rotation-3') < first.indexOf('rotation-2'));
+  const rotation = Array.from({ length: 10 }, (_, n) => ({ ...base, id: `fair-${n}`, shownCount: 1,
+    createdAt: '2026-11-06T00:00:00Z', shownSessions: [] }));
+  selectContext(rotation, { sessionId: 'other' });
+  selectContext(rotation, { sessionId: 'other' });
+  assert.ok(rotation.every(item => item.shownCount === 2));
+});
+test('3日超の未表示 ask を新しい未表示 ask より優先し、境界と既表示を区別する', async t => {
+  const base = await addItem(seat(t), { kind: 'ask', text: '判断' });
+  const now = Date.parse('2026-11-06T09:00:00Z');
+  const items = [
+    { ...base, id: 'recent', createdAt: new Date(now).toISOString() },
+    { ...base, id: 'boundary', createdAt: new Date(now - 3 * 86400000).toISOString() },
+    { ...base, id: 'stale', createdAt: new Date(now - 3 * 86400000 - 1).toISOString() },
+    { ...base, id: 'seen', createdAt: new Date(now - 10 * 86400000).toISOString(), shownCount: 1 },
+  ];
+  const context = selectContext(items, { now });
+  assert.equal(context.match(/■ ask (\w+)/)[1], 'stale');
+  assert.match(context, /■ ask stale ⚠未表示3日/);
+  assert.equal((context.match(/⚠未表示/g) || []).length, 1);
+});
+test('現在セッション ask は各形式で特定し、急ぎ・期限より先に600字を再提示する', async t => {
+  const base = await addItem(seat(t), { kind: 'ask', text: '判断' });
+  const own = [
+    { ...base, id: 'own-text', text: `作業ID: ABCDEF12\n${'詳'.repeat(700)}` },
+    { ...base, id: 'own-session', text: `セッション abcdef12\n${'詳'.repeat(700)}` },
+    { ...base, id: 'own-field', sessionId: 'abcdef12-5678', urgent: true, text: '詳'.repeat(700) },
+  ].map(item => ({ ...item, createdAt: '2026-11-01T00:00:00Z', shownSessions: [] }));
+  const urgent = { ...base, id: 'other-urgent', urgent: true };
+  const deadline = { ...base, id: 'other-deadline', kind: 'deadline', text: '期限本文', remainingDays: -1 };
+  const sessionId = 'abcdef12-3456', now = Date.parse('2026-11-06T09:00:00Z');
+  for (let n = 1; n <= 2; n++) {
+    const context = selectContext([...own, urgent, deadline], { sessionId, now });
+    assert.ok(context.startsWith('■ ask own-'));
+    assert.ok(context.length > CONTEXT_LIMIT);
+    for (const item of own) {
+      assert.ok(context.includes(item.text.slice(0, 600)));
+      assert.ok(!context.includes(item.text.slice(0, 601)));
+      assert.ok(context.indexOf(item.id) < context.indexOf('■ 🔴急ぎ'));
+      assert.ok(context.indexOf(item.id) < context.indexOf('期限本文'));
+      assert.equal(context.split(`■ ask ${item.id}`).length - 1, 1);
+      assert.equal(item.shownCount, n);
+      assert.deepEqual(item.shownSessions, [sessionId]);
+    }
+    assert.equal((context.match(/⚠未表示5日/g) || []).length, n === 1 ? 3 : 0);
+  }
+});
+test('セッション判定は8桁の境界を守り、期限にも適用する', async t => {
+  const base = await addItem(seat(t), { kind: 'deadline', key: 'D-test', text: '期限' });
+  const items = [
+    { ...base, id: 'false-match', text: 'セッション abcdef123 別件', remainingDays: -10 },
+    { ...base, id: 'own-deadline', text: 'セッション abcdef12 現在の期限', remainingDays: 30 },
+    { ...base, id: 'field-deadline', sessionId: 'abcdef12-3456', text: 'フィールド一致の期限', remainingDays: 7 },
+  ];
+  const context = selectContext(items, { sessionId: 'abcdef12-5678' });
+  assert.ok(context.indexOf('フィールド一致の期限') < context.indexOf('現在の期限'));
+  assert.ok(context.indexOf('現在の期限') < context.indexOf('別件'));
 });
 test('未表示 high を既表示 high とその他より優先し、表示上限後もその他で追い越さない', async t => {
   const home = seat(t);
@@ -298,10 +385,11 @@ test('notify CLI exits 1 when both inbox and spool writes fail', async t => {
 test('context imports spooled notifications before selecting what to show', async t => {
   const { spoolItem } = await import('./kim-inbox.mjs');
   const home = seat(t), output = [];
-  spoolItem(home, { kind: 'ask', text: '退避していた判断依頼' });
+  spoolItem(home, { kind: 'ask', text: '退避していた判断依頼', sessionId: 'abcdef12-3456' });
   assert.equal(await main(['--context'], { home, stdout: line => output.push(line), readStdin: async () => '{"hook_event_name":"UserPromptSubmit","session_id":"spool-context"}' }), 0);
   assert.match(output[0], /退避していた判断依頼/);
   assert.equal(listItems(home)[0].shownCount, 1);
+  assert.equal(listItems(home)[0].sessionId, 'abcdef12-3456');
 });
 
 test('concurrent spool consumers preserve a single forwarding attempt and retry failed forwarding', async t => {
@@ -361,7 +449,7 @@ test('急ぎは上限超過でも600字を保ち、未表示優先・最大5件�
     createdAt: `2026-11-0${n + 1}T00:00:00Z`, text: `${n}` + 'あ'.repeat(599) + '切り捨て部分',
     shownCount: n === 6 ? 1 : 0, shownSessions: [] }));
   const closed = { ...base, id: 'closed-urgent', urgent: true, status: 'answered', text: '回答済み' };
-  const context = selectContext([base, ...urgent, closed], { sessionId: 's' });
+  const context = selectContext([base, ...urgent, closed], { sessionId: 's', now: Date.parse('2026-11-11T00:00:00Z') });
   assert.ok(context.length > CONTEXT_LIMIT);
   assert.ok(context.startsWith('■ 🔴急ぎ ask urgent-5'));
   for (const item of urgent.slice(1, 6)) {
@@ -374,4 +462,35 @@ test('急ぎは上限超過でも600字を保ち、未表示優先・最大5件�
   assert.equal(urgent[0].shownCount, 0);
   assert.equal(urgent[6].shownCount, 1);
   assert.ok(context.includes(`■ ask ${base.id}`));
+});
+
+
+test('現在セッションの承認待ちは完了・進捗通知より先に一度だけ表示する', async t => {
+  const home = seat(t);
+  const own = await addItem(home, { kind: 'ask', sessionId: 'abcdef12-3456', priority: 'high', source: 'auto-progress-done', text: '承認依頼\n判断に必要な詳細' });
+  const done = await addItem(home, { source: 'auto-progress-done', text: '完了通知', dedupeKey: 'merge:done' });
+  const progress = await addItem(home, { source: 'auto-progress-heartbeat', text: '進捗通知\n進捗詳細', dedupeKey: 'merge:progress' });
+  const approval = await addItem(home, { kind: 'ask', priority: 'high', text: '別件の承認依頼' });
+  const items = listItems(home);
+  assert.equal(items.find(i => i.id === own.id).priority, 'high');
+  for (let n = 1; n <= 2; n++) {
+    const context = selectContext(items, { sessionId: 'abcdef12-3456' });
+    assert.ok(context.startsWith(`■ ask ${own.id}`));
+    assert.equal(context.split(`■ ask ${own.id}`).length - 1, 1);
+    assert.match(context, /判断に必要な詳細/);
+    assert.match(context, /別件の承認依頼/);
+    if (n === 1) {
+      assert.match(context, /完了通知/);
+      assert.match(context, /進捗詳細/);
+      for (const item of [done, progress]) assert.ok(context.indexOf(own.id) < context.indexOf(item.id));
+    }
+    for (const item of [own, approval]) assert.equal(items.find(i => i.id === item.id).shownCount, n);
+  }
+});
+test('通常枠が空でも完了・進捗・承認待ちを表示する', async t => {
+  const home = seat(t);
+  await addItem(home, { source: 'auto-progress-done', text: '完了だけの通知' });
+  const context = selectContext(listItems(home));
+  assert.match(context, /kim-inbox 完了・進捗・承認待ち/);
+  assert.match(context, /完了だけの通知/);
 });

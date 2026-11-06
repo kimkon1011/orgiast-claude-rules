@@ -122,7 +122,7 @@ test('予約登録とprobe、必須引数、Stop更新で予約を保持する',
     assert.equal(main(['--start-when', 'exit 0', '--session', 'cli', '--label', 'CLI予約', '--deadline', '+24h', '--next-claude', '作業する']).status, 'scheduled');
   } finally { if (previous === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = previous; }
 });
-test('開始条件未達はlastCheckedAtだけ更新し、条件達成だけでは完了しない', async t => {
+test('開始条件未達は確認時刻と判定を更新し、条件達成だけでは完了しない', async t => {
   for (const code of [1, 0]) {
     const { options, home } = setup(t); const original = addCheck(options); let resumes = 0;
     await run({ home, now, io: { ...ioBase, executeCheck: () => ({ code }),
@@ -133,7 +133,7 @@ test('開始条件未達はlastCheckedAtだけ更新し、条件達成だけで�
     const row = readLedger(ledgerFile(home))[0];
     assert.equal(resumes, code === 0 ? 1 : 0);
     assert.equal(row.status, code === 0 ? 'open' : 'scheduled');
-    if (code === 1) assert.deepEqual(row, { ...original, lastCheckedAt: new Date(now).toISOString() });
+    if (code === 1) assert.deepEqual(row, { ...original, lastCheckedAt: new Date(now).toISOString(), checkResult: 'unmet' });
   }
 });
 test('deferredは回数を消費せず次回再試行、doneで完了通知は一度だけ', async t => {
@@ -226,7 +226,7 @@ test('定期digestに開始予約と期限超過が出る', async t => {
     const messages = [];
     await digest({ home, now: now + i * 86400000, slot: '朝', io: { localOwner: 'owner', notifyOwner: async (_, message) => { messages.push(message); return { delivered: 'dm' }; } } });
     // 2026-11-04 仕様変更: 予約も依頼された進行中の作業として朝夕1通に集約する。
-    assert.ok(messages.some(message => /進行中 1件.*予約作業/.test(message)));
+    assert.ok(messages.some(message => /進行中 1件[\s\S]*予約作業/.test(message)));
     assert.equal(messages.length, 1);
   }
 });

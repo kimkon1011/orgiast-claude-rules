@@ -2,13 +2,18 @@
 export const GATE_CONTRACT = {"name":"mail-send-approval-gate","remedies":[{"kind":"repo-file","ref":"tools/gate-remedies.md","section":"mail-send-approval-gate"}]};
 import fs from 'node:fs';
 import path from 'node:path';
-import { readEvidence, approvedAfter, shellSegments, option, outputDecision } from './lib/approval-evidence.mjs';
+import { readEvidence, approved, approvedAfter, human, textOf, shellSegments, option, outputDecision } from './lib/approval-evidence.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
 export const HOOK_MATCHER = 'mcp__claude_ai_Gmail(?:_\\d+)?__(send_message|reply|forward)|Bash|PowerShell';
 export const BLOCK_REASON = '本文の全文をチャットに表示し、kim の『送ってよい』を得てから送信してください（組織指示11）。多数宛は mail-bulk-approve を使う';
-const normalize = s => typeof s === 'string' ? s.replace(/\r\n/g, '\n').trim() : '';
-const block = () => ({ decision: 'block', reason: BLOCK_REASON });
+export const APPROVAL_MISSING_REASON = 'kim の最新の発言が送信承認として読めません（例: 送って／おくって／OK）。本文の全文を表示したうえで送信承認を得てください。';
+export const BODY_NOT_SHOWN_REASON = '下書き本文の全文が、kim の最新の承認の前の Claude の発言に見つかりません。本文を記号なし（コードブロック可）で全文表示してから承認を得てください。';
+const normalize = s => typeof s === 'string' ? s.replace(/\r\n/g, '\n')
+  .split('\n').map(line => line.replace(/^(?:>[ \t]?)+/, '').trimEnd())
+  .filter(line => !/^[ \t]*```[^`]*$/.test(line)).join('\n')
+  .replace(/\n{3,}/g, '\n\n').trim() : '';
+const block = (reason = BLOCK_REASON) => ({ decision: 'block', reason });
 export function sendTargets(input) {
   if (/^mcp__claude_ai_Gmail(?:_\d+)?__(send_message|reply|forward)$/.test(input?.tool_name)) {
     const a = input.tool_input ?? {};
@@ -33,10 +38,12 @@ export function judge(input, { targets } = {}) {
     targets ??= sendTargets(input);
     if (!targets.length) return { decision: 'pass' };
     const rows = readEvidence(input);
+    const latestHuman = rows.findLast(human);
+    if (!latestHuman || !approved(textOf(latestHuman), 'mail')) return block(APPROVAL_MISSING_REASON);
     for (const target of targets) {
       const body = normalize(target.body);
       // Exact containment also catches edits in the middle of a long message.
-      if (!body || !approvedAfter(rows, text => normalize(text).includes(body), 'mail')) return block();
+      if (!body || !approvedAfter(rows, text => normalize(text).includes(body), 'mail')) return block(BODY_NOT_SHOWN_REASON);
     }
     return { decision: 'pass' };
   } catch { return block(); }

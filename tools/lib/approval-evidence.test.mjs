@@ -56,3 +56,23 @@ for (const [text, expected, kinds] of consentCases) {
     });
   }
 }
+
+const mailForms = ['おくって', 'おくってよい', 'おくっていい', 'おくってください', '送っといて', 'おくっといて', '送信して'];
+for (const text of mailForms) {
+  test(`mail consent accepts ${text}`, () => assert.equal(approved(text, 'mail'), true));
+}
+const reaffirmations = ['送ってといったのに、送られない理由はなに？', '送ってって言ったよね？', 'おくってと言ったのに送られてない', '送ってと言っている。', '送信してと言っているのに？', 'おくってっていってるのに？'];
+for (const text of reaffirmations) {
+  test(`mail reaffirmation accepts ${text}`, () => {
+    assert.equal(approved(text, 'mail'), true);
+    assert.equal(approved(text, 'delete'), false);
+  });
+}
+for (const text of ['おくらないで', 'まだおくらない', 'OK、おくらないで', 'OK、まだおくらない', '送ってといったけど、やっぱり待って', '送っていいですか？', 'おくっていいですか？', '送ってと言ったらどうなる？', '送ってと言ったっけ？']) {
+  test(`mail consent rejects ${text}`, () => assert.equal(approved(text, 'mail'), false));
+}
+for (const text of ['送らないで', 'おくらないで', 'まだおくらない', '待って', 'やめて', 'ダメ', 'NG']) {
+  test(`revocation overrides reaffirmation: ${text}`, () => {
+    assert.equal(approved(`送ってって言ったよね？ でも${text}？`, 'mail'), false);
+  });
+}

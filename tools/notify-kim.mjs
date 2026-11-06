@@ -81,7 +81,8 @@ export async function notifyKim(text, options = {}) {
     const policy = classifyKimDm(text);
     if (!policy.allowed) {
       console.error(`kim への Discord DM を止めました（${policy.reason}）。PR のマージ・他PCへの依頼は fleet-mail --to kim-PC で送ってください`);
-      return { delivered: 'blocked', category: policy.category, reason: policy.reason };
+      const delivery = await persistKim(options.home || process.env.ORGIAST_HOME || os.homedir(), { ...options, priority: 'high', kind: options.kind === 'ask' ? 'ask' : 'info', text: redactSecrets(String(text ?? '')), source: options.source || 'notify-kim-blocked' });
+      return { ...delivery, discordBlocked: true, category: policy.category, reason: delivery.reason || policy.reason };
     }
   }
   options = { ...options, kind: options.kimActionRequired === true || options.kind === 'ask' ? 'ask' : 'info' };
@@ -213,7 +214,7 @@ export async function deliverKim(text, {
   plainJaImpl = toPlainJa,
   suffix = '',
   allowHumanRequest = false,
-  kind = 'info', source = '', allowlist, repoRoot,
+  kind = 'info', source = '', sessionId = '', allowlist, repoRoot,
 } = {}) {
   if (isInboxNoise({ kind, source, text: String(text ?? '') })) return { delivered: 'suppressed', reason: 'fleet-ledger-or-gate-statistics' };
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
@@ -230,7 +231,7 @@ export async function deliverKim(text, {
   const allowedForKim = discordAllowed(String(text ?? '') + suffix, { home, allowlist, repoRoot }).allowed
     || discordAllowed(String(body) + suffix, { home, allowlist, repoRoot }).allowed;
   if ((userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID) && !allowedForKim) {
-    return persistKim(home, { kind, text: String(body) + suffix, source, signal });
+    return persistKim(home, { kind, text: String(body) + suffix, source, sessionId, signal });
   }
   const content = suffix ? String(body).slice(0, Math.max(0, MAX_CONTENT - suffix.length)) + suffix : clipDiscordContent(body);
   let dmReason = '';
@@ -281,7 +282,7 @@ export async function deliverKim(text, {
   // Discord/webhook が使えない kim 宛通知は kim-inbox に保存する（2026-11-04）
   // これにより Discord Bot トークンが無い PC でも通知が失われない。
   if (resolvedUserId === KIM_DISCORD_USER_ID || String(userId) === KIM_DISCORD_USER_ID) {
-    return persistKim(home, { kind, text: String(body) + suffix, source, signal });
+    return persistKim(home, { kind, text: String(body) + suffix, source, sessionId, signal });
   }
   console.error(`notify-kim: 通知先を解決できず送信しません (${dmReason})`);
   return { delivered: 'none', reason: dmReason };

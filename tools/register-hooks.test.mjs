@@ -40,8 +40,8 @@ test('setup converge timeout covers Node updates on new and existing PCs, idempo
     const daytrip = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('daytrip-ask-hook.mjs'));
     assert.equal(daytrip.length, 1); assert.equal(daytrip[0].timeout, 5); assert.notEqual(daytrip[0].async, true);
   }
-  for (const [event, argument, timeout] of [['Stop', '', 15], ['SessionStart', ' --all', 30], ['UserPromptSubmit', ' --prompt-submit', 8]]) {
-    const titles = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('session-wait-title.mjs'));
+  for (const [event, argument, timeout] of [['Stop', '', 15], ['SessionStart', ' --all', 30], ['SessionStart', ' --prompt-submit', 8], ['UserPromptSubmit', ' --prompt-submit', 8]]) {
+    const titles = settings.hooks[event].flatMap(g => g.hooks).filter(h => h.command.includes('session-wait-title.mjs') && h.command.endsWith(`session-wait-title.mjs"${argument}`));
     assert.equal(titles.length, 1);
     assert.ok(titles[0].command.endsWith(`session-wait-title.mjs"${argument}`));
     assert.equal(titles[0].timeout, timeout);

@@ -19,6 +19,12 @@ export function notificationKind(text, options = {}) {
 }
 // Lock covers reservation and append, so simultaneous processes cannot claim a ninth slot.
 export async function routeOwnerDm(owner, text, options) {
+  if (String(owner).trim().toLowerCase() === 'kim@orgiast.jp' || String(options.userId) === '715210673642012733') {
+    const { deliverKim } = await import('../notify-kim.mjs');
+    const kind = options.kind === 'ask' || options.kimActionRequired === true || notificationKind(text, options) === 'action' ? 'ask' : 'info';
+    const result = await deliverKim(text, { ...options, userId: '715210673642012733', kind, plainJa: false });
+    return { ...result, channel: 'kim-inbox', ok: ['session-inbox', 'spooled'].includes(result.delivered) };
+  }
   // Human progress is delivered by notifyOwner directly to kim-inbox.
   if (isKimHumanProgress({ ...options.session, owner }) && options.kind !== 'digest') return null;
   const { home } = options;

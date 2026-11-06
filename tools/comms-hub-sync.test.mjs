@@ -27,7 +27,8 @@ function mockDrive() {
   const fetchImpl = async (url, init={}) => {
     const u = new URL(url), method=init.method || 'GET';
     assert.notEqual(u.hostname, 'docs.googleapis.com', 'Docs API must never be used');
-    if (u.pathname.includes('/permissions')) return json(method==='GET'?{permissions:[]}:{id:'permission'});
+    if (String(url).includes('/permissions')) return Response.json({ permissions: [{ type: 'user', emailAddress: 'kim@orgiast.jp', role: 'writer' }] });
+    if (init.method === 'PATCH' && String(init.body).includes('orgiastAutomation')) return Response.json({ id: 'marked' });
     if(method==='GET' && u.pathname.endsWith('/files')) {
       const q=u.searchParams.get('q'), name=/name='([^']+)'/.exec(q)?.[1];
       return json({files:[...files].filter(([,f])=>f.name===name).map(([id])=>({id}))});
@@ -232,7 +233,7 @@ test('case sheet resolves real I/J/K headers and deduplicates repeated case IDs'
 });
 
 test('init removes broad and unlisted access, downgrades readers, sends no notifications',async()=>{
- const permissions=[{id:'domain',type:'domain',role:'reader'},{id:'public',type:'anyone',role:'reader'},{id:'other',type:'user',emailAddress:'other@example.test',role:'reader'},{id:'owner',type:'user',role:'owner'},{id:'existing',type:'user',emailAddress:config.readers[0],role:'writer'}];
+ const permissions=[{id:'kim',type:'user',emailAddress:'kim@orgiast.jp',role:'writer'},{id:'domain',type:'domain',role:'reader'},{id:'public',type:'anyone',role:'reader'},{id:'other',type:'user',emailAddress:'other@example.test',role:'reader'},{id:'owner',type:'user',role:'owner'},{id:'existing',type:'user',emailAddress:config.readers[0],role:'writer'}];
  const calls=[];
  const sink=createDriveSink({token:'mock',state:{files:{root:'root',cases:'cases',daily:'daily',unassigned:'unassigned'}},save(){},fetchImpl:async(url,init)=>{calls.push({url,...init});return Response.json(init.method==='GET'?{permissions}:{id:'ok'});}});
  await sink.init(config.readers);

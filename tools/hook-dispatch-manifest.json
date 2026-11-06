@@ -525,6 +525,12 @@
         "type": "command",
         "command": "node \"${repo}/tools/gemini-mcp-usage-hook.mjs\"",
         "timeout": 10
+      },
+      {
+        "matcher": "mcp__.*(Google_Drive|google_drive|Google_Sheets|google_sheets|Google_Docs|google_docs|Google_Slides|google_slides).*",
+        "type": "command",
+        "command": "node \"${repo}/tools/kim-editor-posttool.mjs\"",
+        "timeout": 180
       }
     ],
     "Stop": [

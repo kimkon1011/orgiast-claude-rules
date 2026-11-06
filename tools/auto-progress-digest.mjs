@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readDigest as readDeadlineDigest } from './deadline-watch.mjs';
 import { addItem as addDeadlineDigest } from './kim-inbox.mjs';
-// 各PCのローカル台帳から、完了・進行中・停滞/再開・判断待ちを 持ち主の DM へ定期報告する。
+// kim 宛の朝のまとめは kim-inbox、他メンバー宛の配送は従来どおり。
 import fs from 'node:fs';
 import { readDeferred } from './lib/owner-dm-policy.mjs';
 import { compactDigest, kimAction, isHumanActionRequired, cleanText } from './lib/owner-dm-digest.mjs';
@@ -350,7 +350,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         } else result = await (io.notifyOwner ?? notifyOwner)(owner, text, options);
       }
       catch (e) { result = { delivered: 'none', reason: String(e?.message || e) }; }
-      const ok = ['dm', 'session-inbox', 'toast', 'inbox'].includes(result?.delivered);
+      const ok = ['dm', 'session-inbox', 'spooled', 'toast', 'inbox'].includes(result?.delivered);
       receipts.push({ owner, ...result, channel: result?.channel || result?.delivered, recipientId: result?.recipientId ?? result?.userId ?? null, messageId: result?.messageId ?? null, httpStatus: result?.httpStatus ?? result?.status ?? null });
       if (!ok) { error ||= result?.reason || 'DM not delivered'; continue; }
       deliveredOwners.add(owner);

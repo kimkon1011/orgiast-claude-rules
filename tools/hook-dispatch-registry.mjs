@@ -21,7 +21,7 @@ export function describeHook(hook, matcher = '*', repo = defaultRepo) {
   if (node) { try { source = fs.readFileSync(script, 'utf8'); contract = readContract(script); } catch {} }
   const name = node ? path.basename(script.replace(/\\/g, '/')) : String(hook.command);
   // Unknown custom commands are conservative: never shed a potential deny gate.
-  const critical = !!contract || /permissionDecision\s*:\s*['"]deny|decision\s*:\s*['"]block|exitCode\s*=\s*2\b/.test(source) || ['kim-inbox.mjs', 'api-billing-guard.mjs', 'exec-tree-edit-guard.mjs', 'stop-gate-runner.mjs'].includes(name)
+  const critical = !!contract || /permissionDecision\s*:\s*['"]deny|decision\s*:\s*['"]block|exitCode\s*=\s*2\b/.test(source) || ['kim-editor-posttool.mjs', 'kim-inbox.mjs', 'api-billing-guard.mjs', 'exec-tree-edit-guard.mjs', 'stop-gate-runner.mjs'].includes(name)
     || !node || !path.resolve(script).startsWith(path.resolve(repo) + path.sep);
   return { ...hook, matcher, name, node, script: node ? script : undefined,
     args: node ? words.slice(wrapped ? 3 : 2) : [], policy: wrapped, critical,

@@ -163,6 +163,11 @@ export async function notifyOwner(owner, text, options = {}) {
   if (isKimHumanProgress({ ...options.session, owner }) && options.kind !== 'digest') {
     return deliverHumanProgress(home, { ...options.session, owner }, { now: options.now, io: options });
   }
+  // A fleet seat can belong to another account while explicitly notifying kim.
+  const recipientId = options.userId ?? resolveOwnerDiscordId(owner, options);
+  if (owner.toLowerCase() === 'kim@orgiast.jp' || recipientId === KIM_DISCORD_USER_ID) {
+    return routeOwnerDm(owner, text, { ...options, userId: KIM_DISCORD_USER_ID });
+  }
   const deferred = await routeOwnerDm(owner, text, options);
   if (deferred) {
     // DM の保留とセッション受け箱への配達は独立（#1485）。

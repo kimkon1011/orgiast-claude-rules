@@ -1233,6 +1233,11 @@
       "scope": "kim-only",
       "step": null,
       "reason": "freee 認可切れの監視タスクは keiri-hub 運用PC だけが登録・実行する（複数PCで動くと通知が重複し、Supabase env も運用PC にしか無い）"
-    }
+    },
+    {"path": "tools/kim-editor-sweep.mjs", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
+    {"path": "tools/kim-editor-posttool.mjs", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
+    {"path": "tools/lib/kim-editor.mjs", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
+    {"path": "tools/register-kim-editor-sweep.mjs", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
+    {"path": "tools/register-kim-editor-sweep.ps1", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"}
   ]
 }

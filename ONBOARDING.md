@@ -110,8 +110,10 @@ nishi@・cr@・seisaku-team@・Genba の席も user=kim（2026-10-28 kim）。ki
 
 **🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PR は作った席が自分で着地させる。pr-land.mjs --title "<題>" --body-file <本文> でbaseへpushし着地させる（通常はautomerge、安全弁パスはCI合格後pr-merge、workflow変更は停止）。権限・鍵・マージを kim-PC に頼まない。不足時は `node tools/access-doctor.mjs --fix`。内部Gmail下書き禁止。**
 
-**🔴 kim 宛報告は Discord 禁止（全PC全アカウント）。kim-inbox（~/.claude/kim-inbox、node tools/kim-inbox.mjs）へ積みセッションで回収。ask は --answer まで毎プロンプト再提示、info は伝えたら --seen。クローズを止めず台帳を次セッションへ引き継ぐ。Discord MCP 直接送信はゲートが拒否し、例外は kim 登録の config/kim-discord-allowlist.json のカテゴリのみ。詳細 docs/kim-inbox.md。**
+**🔴 kim 宛 Discord DM は全廃・例外なし（緊急を含む・全PC全アカウント）。kim-inbox（~/.claude/kim-inbox、node tools/kim-inbox.mjs）へ積みセッションで回収。ask は --answer まで毎プロンプト再提示、info は伝えたら --seen。クローズを止めず台帳を次セッションへ引き継ぐ。Discord MCP 直接送信はゲートが拒否し、旧 config/kim-discord-allowlist.json のカテゴリも廃止。詳細 docs/kim-inbox.md。**
 送れなければチャットに完成形を表示。
+**🔴 社内ツールが Drive に作成・コピーするファイルには kim@orgiast.jp の編集権限を必ず付け、読み戻して確認する。失敗を握りつぶさない。作成 hook と毎日05:50のスイープで補完する。巡回は直近7日・共有制作アカウントと fleet の自動作成識別済みファイルだけを対象にし、社員個人の私物には付与しない。**
+
 kim の代わりに社員・外注へ Discord で送るときは Bot 代筆（`tools/discord-dm.mjs`、kim へ写し自動）で送る。冒頭に「金です（Claude が代筆しています）。」と元メッセージの日時・先頭行、末尾に毎回「このメッセージへの返答は、Bot ではなく金に直接お願いします。」を入れる。kim のユーザートークンで本人として書く方式（セルフボット）は規約違反・アカウント停止の危険があるため使わない（kim 2026-10-30 厳命・全アカウント全PC）。
 対象は、支払い・権限付与・OAuth 同意・物理操作・判断など kim 本人の対応が不可欠なもの、期限・障害・未対応の警告や督促、kim が定期的に依頼した日次・週次・月次レポートに限る。
 PR は作った席が `node tools/pr-land.mjs --title "<題>" --body-file <本文>` で base に push し、通常変更は automerge、鍵関連などの安全弁パスは CI 合格後に pr-merge の検証を通して自分でマージする。権限・鍵・招待の不足は `node tools/access-doctor.mjs --fix` で診断・修復する。kim-PC に頼まない。
@@ -166,7 +168,7 @@ PR は作った席が `node tools/pr-land.mjs --title "<題>" --body-file <本�
 
 **🔴 ラベル（B案・①・案A・選択肢2・前回の案・PR番号だけ等）で指さず、同じ文に中身を書く。**
 
-**🔴 kim が読むのは「本当に最後のメッセージ」（Stop ゲートの書き直しが終わった最後の1通）だけ。そこに【最終まとめ】（①報告 ②kim の確認事項＝全文 ③kim がやること）を全部載せ、途中のメッセージを参照させない。③で使うファイルは Drive の URL を同じ行に毎回書く。書き直しでは経緯を繰り返さない（2026-10-30 kim 厳命・全PC全アカウント）。**
+**🔴 kim が読むのは「本当に最後のメッセージ」（Stop ゲートの書き直しが終わった最後の1通）だけ。そこに【最終まとめ】（①報告 ②kim の確認事項＝全文 ③kim がやること）を全部載せ、途中に置いて遡らせない。途中のメッセージを参照させない。③で使うファイルは Drive の URL を同じ行に毎回書く。書き直しでは経緯を繰り返さない（2026-10-30 kim 厳命・全PC全アカウント）。**
 
 **🔴 応答末尾は必ず3行「次に kim がすること／この後の自動進行／このセッション」。完了結論は1〜3行、検証表と必要な確認全文を【最終まとめ】にそろえ、その直後を3行フッターにする。承認ブロック【kim 確認用の全文】は最後の節に置き、③・手間監査・恒久策はその前に書く。**
 1通で済む短い応答では見出し不要だが、内容は同じく自己完結させる。
@@ -714,7 +716,7 @@ kim の返事待ちは SessionStart と各セッションで「📌 kim の返�
 完了後も残TODO（commit・本番デプロイ・Layer2 e2e・memory等）を自動で進め、目的完了時は上記クローズ手順を実行する。設計判断・破壊的操作・未承認prod送信・大型リファクタだけAskUserQuestionで待つ。報告に残TODOを記す。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`
 
 進捗通知の宛先は `fleet-pc-map.json` またはローカルの `~/.claude/fleet-pc-map.json` の同名 PC 行の `notifyDiscordId`。未設定だとチャットに案内が出て、kim に1日1回警告が飛ぶ。
-kim 宛の定期ダイジェスト（朝/夜/urgent）・完了通知・配送異常の警告は `config/kim-discord-allowlist.json` の許可リストで Discord DM へ流す（kim 2026-11-04 指示「進捗は聞かれる前に届ける」）。許可判定は平易化前の原文でも行う。許可リストを空にする・この区分を消す変更は `tools/kim-discord-allowlist.test.mjs` が落とす。
+kim 宛の定期ダイジェスト（朝/夜/urgent）・完了通知・配送異常の警告はすべて kim-inbox へ保存する。Discord DM は全廃・例外なし（緊急を含む、kim 2026-11-06）。古いローカル許可リストも適用しない。
 
 **「この後の自動進行: <内容>」の宣言は台帳に記録され、止まれば自動で拾われる（2026-10-14 追加）**。Stop hook `tools/auto-progress-ledger.mjs` が宣言（「なし」以外）を `~/.claude/auto-progress-ledger.jsonl` に記録する（同一セッションは最新で置換）。各PCの定期タスク `OrgiastAutoProgressWatch` が毎時台帳を巡回し、宣言から1時間以降のものを判定する。stalled は前回から2時間以上空けて累計8回まで最終成果へ向けて自動再開し、共有 Sheet（タブ「自動進行」）へ行を足す。全PCが1日2回（朝枠＝定時報告・夕枠＝変化分のみ）自PC分をDiscord DMする。朝枠は変化0件でも進行中・判断待ち・完了を全件名前付きで送る。夕枠・枠外は変化分のみ。check の引き継ぎ: 新しい約束行に check が無く、直前の open 行に期限が未来の check があれば引き継ぐ（check が superseded で消える再発防止）。だから宣言は「実際に自動で進む内容」だけ書く。API エラー（利用上限など）で返答できずに終わった依頼も、毎時の巡回が transcript から見つけて台帳へ起票し、持ち主へ DM したうえで別モデルで自動再開する。Sheet 側の追加手順は `docs/auto-progress-gas-patch.gs.txt`。
 

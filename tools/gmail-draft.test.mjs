@@ -238,6 +238,41 @@ test('--from は sendAs 一致時に表示名付きエイリアスを From に�
   });
   assert.equal(result.code, 0);
   assert.equal(calls, 2);
+  assert.equal(JSON.parse(result.output[0]).fromVerifiedBy, 'sendAs');
+});
+
+test('--from は sendAs トークン失敗時に送信済み実績の表示名とアドレスで確認する', async () => {
+  const scopes = [];
+  const result = await cli([...args, '--from', 'SATOU@orgiast.jp', '--json'], {
+    getToken: async ({ scope }) => {
+      scopes.push(scope);
+      if (scope.endsWith('/gmail.settings.basic')) throw new Error('not delegated');
+      return 'readonly-or-compose-token';
+    },
+    fetchImpl: async (url, options = {}) => {
+      if (url.includes('/messages?q=')) return response({ messages: [{ id: 'sent_1' }] });
+      if (url.includes('/messages/sent_1?format=metadata')) return response({ payload: { headers: [
+        { name: 'From', value: `=?UTF-8?B?${Buffer.from('株式会社オージャスト 佐藤').toString('base64')}?= <satou@orgiast.jp>` },
+      ] } });
+      const mime = Buffer.from(JSON.parse(options.body).message.raw, 'base64url').toString('utf8');
+      assert.match(mime, /From: "=\?UTF-8\?B\?.+\?=" <satou@orgiast\.jp>/u);
+      return response({ id: 'draft' });
+    },
+  });
+  assert.equal(result.code, 0);
+  assert.equal(JSON.parse(result.output[0]).fromVerifiedBy, 'sent-history');
+  assert.ok(scopes.some(scope => scope.endsWith('/gmail.readonly')));
+});
+
+test('--from は sendAs トークンと送信済み実績の両方が失敗すると設定エラー2', async () => {
+  const result = await cli([...args, '--from', 'satou@orgiast.jp', '--json'], {
+    getToken: async ({ scope }) => scope.endsWith('/gmail.settings.basic') ? Promise.reject(new Error('not delegated')) : 'readonly',
+    fetchImpl: async url => url.includes('/messages?q=') ? response({ messages: [] }) : response({}),
+  });
+  assert.equal(result.code, 2);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.errorKind, 'configuration_error');
+  assert.match(report.error, /sendAs 一覧を読めず.*送信済み実績もありません/u);
 });
 
 test('--from が sendAs 不一致なら許可一覧付き設定エラー2', async () => {

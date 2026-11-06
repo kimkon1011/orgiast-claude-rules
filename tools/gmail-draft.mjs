@@ -86,7 +86,9 @@ export function buildRawMessage({ from, fromDisplayName, to, cc, subject, body, 
 }
 
 function decodeHeader(value = '') {
-  return value.replace(/=\?UTF-8\?B\?([^?]+)\?=/giu, (_m, data) => Buffer.from(data, 'base64').toString('utf8'));
+  return value.replace(/=\?UTF-8\?([BQ])\?([^?]+)\?=/giu, (_m, encoding, data) => encoding.toUpperCase() === 'B'
+    ? Buffer.from(data, 'base64').toString('utf8')
+    : Buffer.from(data.replace(/_/gu, ' ').replace(/=([0-9A-F]{2})/giu, (_q, hex) => String.fromCharCode(parseInt(hex, 16))), 'latin1').toString('utf8'));
 }
 function parseHeaders(text) {
   const unfolded = text.replace(/\r?\n[ \t]+/gu, ' ');
@@ -182,25 +184,66 @@ function safeFailure(error) {
   return { errorKind, error: error?.publicMessage ?? messages[errorKind] };
 }
 
+function sendAsFailure(stage, reason) {
+  return configError(`${stage}で失敗しました${reason ? `（${reason}）` : ''}。`);
+}
+
+async function verifyFromSentHistory({ user, requested, sendAsReason, fetchImpl, getToken }) {
+  let token;
+  try { token = await getToken({ user, scope: SCOPES[0] }); }
+  catch { throw sendAsFailure('送信済み検索のトークン発行', `sendAs 一覧を読めず（${sendAsReason}）`); }
+  const query = encodeURIComponent(`in:sent from:${requested}`);
+  let search;
+  try {
+    search = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${query}&maxResults=1`, {
+      method: 'GET', signal: AbortSignal.timeout(25000), headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch { throw sendAsFailure('送信済み検索', `sendAs 一覧を読めず（${sendAsReason}）`); }
+  if (!search.ok) throw sendAsFailure(`送信済み検索 API status ${search.status}`, `sendAs 一覧を読めず（${sendAsReason}）`);
+  const found = await search.json().catch(() => null);
+  const id = found?.messages?.[0]?.id;
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(id)) {
+    throw configError(`sendAs 一覧を読めず（${sendAsReason}）、送信済み実績もありません。`);
+  }
+  const metadata = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From`, {
+    method: 'GET', signal: AbortSignal.timeout(25000), headers: { Authorization: `Bearer ${token}` },
+  }).catch(() => null);
+  if (!metadata?.ok) throw sendAsFailure(`送信済み metadata API${metadata ? ` status ${metadata.status}` : ''}`, `sendAs 一覧を読めず（${sendAsReason}）`);
+  const message = await metadata.json().catch(() => null);
+  const fromHeader = message?.payload?.headers?.find(header => String(header?.name).toLowerCase() === 'from')?.value;
+  const actual = typeof fromHeader === 'string'
+    ? fromHeader.match(/[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+/iu)?.[0]
+    : undefined;
+  if (!actual || actual.toLowerCase() !== requested.toLowerCase()) {
+    throw configError(`sendAs 一覧を読めず（${sendAsReason}）、送信済み実績もありません。`);
+  }
+  const decoded = decodeHeader(fromHeader);
+  const angle = decoded.lastIndexOf('<');
+  const displayName = angle < 0 ? '' : decoded.slice(0, angle).trim().replace(/^"|"$/gu, '').trim();
+  return { address: actual, displayName, verifiedBy: 'sent-history' };
+}
+
 async function resolveSendAs({ user, from, fetchImpl, getToken }) {
   const requested = addresses(from, true);
   if (requested.length !== 1) throw configError();
-  const token = await getToken({ user, scope: GMAIL_SETTINGS_BASIC_SCOPE });
-  const res = await fetchImpl('https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs', {
-    method: 'GET', signal: AbortSignal.timeout(25000), headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw Object.assign(new Error('sendAs 一覧の取得に失敗しました。'), {
-      errorKind: res.status === 403 ? 'forbidden_no_access' : res.status === 401 ? 'unauthorized' : 'error',
-      publicMessage: `sendAs 一覧の取得に失敗しました (${res.status})${detail ? `: ${detail}` : ''}`,
+  let token;
+  try { token = await getToken({ user, scope: GMAIL_SETTINGS_BASIC_SCOPE }); }
+  catch { return verifyFromSentHistory({ user, requested: requested[0], sendAsReason: 'sendAs のトークン発行失敗', fetchImpl, getToken }); }
+  let res;
+  try {
+    res = await fetchImpl('https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs', {
+      method: 'GET', signal: AbortSignal.timeout(25000), headers: { Authorization: `Bearer ${token}` },
     });
+  } catch { throw sendAsFailure('sendAs API 通信'); }
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) return verifyFromSentHistory({ user, requested: requested[0], sendAsReason: `sendAs API status ${res.status}`, fetchImpl, getToken });
+    throw sendAsFailure(`sendAs API status ${res.status}`);
   }
   const json = await res.json();
   const list = Array.isArray(json?.sendAs) ? json.sendAs.filter(item => typeof item?.sendAsEmail === 'string') : [];
   const match = list.find(item => item.sendAsEmail.toLowerCase() === requested[0].toLowerCase());
   if (!match) throw configError(`--from ${requested[0]} は許可されていません。許可されている sendAs: ${list.map(item => item.sendAsEmail).join(', ') || '(なし)'}`);
-  return { address: match.sendAsEmail, displayName: typeof match.displayName === 'string' ? match.displayName : '' };
+  return { address: match.sendAsEmail, displayName: typeof match.displayName === 'string' ? match.displayName : '', verifiedBy: 'sendAs' };
 }
 
 function readKey(keyPath) {
@@ -233,7 +276,10 @@ export async function mintDwdToken({ user, keyPath = DEFAULT_KEY, scope, fetchIm
       throw Object.assign(new Error('トークン取得失敗'), { errorKind: classifyTokenError(json) });
     }
     return json.access_token;
-  } catch (error) { throw Object.assign(new Error(safeFailure(error).error), safeFailure(error)); }
+  } catch (error) {
+    if (process.env.GMAIL_DRAFT_DEBUG === '1') console.error('createDraft catch', error?.stack ?? error);
+    throw Object.assign(new Error(safeFailure(error).error), safeFailure(error));
+  }
 }
 
 export async function probeScopes({ user = DEFAULT_USER, keyPath = DEFAULT_KEY, scopes = SCOPES, mintToken = mintDwdToken, fetchImpl = gwsFetch }) {
@@ -277,13 +323,19 @@ export async function createDraft({ user = DEFAULT_USER, raw, threadId, fetchImp
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: { raw, ...(threadId ? { threadId } : {}) } }),
     });
-    if (!res.ok) throw Object.assign(new Error('Gmail API 失敗'), {
+    if (!res.ok) {
+      if (process.env.GMAIL_DRAFT_DEBUG === '1') console.error('createDraft', res.status, await res.clone().text());
+      throw Object.assign(new Error('Gmail API 失敗'), {
       errorKind: res.status === 403 ? 'forbidden_no_access' : res.status === 401 ? 'unauthorized' : 'error',
-    });
+      });
+    }
     const json = await res.json();
     if (typeof json?.id !== 'string' || !json.id) throw new Error('下書き ID がありません');
     return { id: json.id, messageId: json.message?.id, threadId: json.message?.threadId };
-  } catch (error) { throw Object.assign(new Error(safeFailure(error).error), safeFailure(error)); }
+  } catch (error) {
+    if (process.env.GMAIL_DRAFT_DEBUG === '1') console.error('createDraft catch', error?.stack ?? error);
+    throw Object.assign(new Error(safeFailure(error).error), safeFailure(error));
+  }
 }
 
 export async function deleteDraft({ user = DEFAULT_USER, id, fetchImpl = gwsFetch, getToken }) {
@@ -355,6 +407,7 @@ function parseArgs(argv) {
 /** deps: stdout(text), loadLedger(), readFile(path), mintToken(options), getToken(options), fetchImpl. */
 export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
   const stdout = deps.stdout ?? (text => console.log(text));
+  const stderr = deps.stderr ?? (text => console.error(text));
   const jsonMode = argv.includes('--json');
   let user = DEFAULT_USER;
   let action = argv.includes('--send') ? 'send' : argv.includes('--forward') ? 'forward' : argv.includes('--delete') ? 'delete' : argv.includes('--check') ? 'check' : argv.includes('--dry-run') ? 'dry-run' : 'create-draft';
@@ -443,10 +496,11 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     }
     if (args['thread-id'] !== undefined && !/^[A-Za-z0-9_-]+$/u.test(args['thread-id'])) throw configError();
     const attachments = (args.attach ?? []).map(file => { try { return { name: path.basename(file), data: (deps.readAttachment ?? fs.readFileSync)(file) }; } catch { throw configError(); } });
-    let from = { address: user, displayName: '' };
+    let from = { address: user, displayName: '', verifiedBy: undefined };
     if (args.from !== undefined) {
       const getToken = deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY }));
       from = await resolveSendAs({ user, from: args.from, fetchImpl, getToken });
+      if (!jsonMode) stderr(`From 確認経路: ${from.verifiedBy}`);
     }
     const input = { inReplyTo: args['in-reply-to'], from: from.address, fromDisplayName: from.displayName, to: args.to, cc: args.cc, subject: args.subject ?? 'Re: (取得予定)', body, attachments };
     const guard = guardRecipients(input, (deps.loadLedger ?? loadLedger)());
@@ -463,7 +517,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         headers = headers.replace(/\r\n(?:In-Reply-To|References):[^\r\n]*/gu, '');
         headers += '\r\nIn-Reply-To: (取得予定)\r\nReferences: (返信先の References を取得予定) (取得予定)';
       }
-      emit({ ok: true, raw, headers, ...(args['thread-id'] ? { threadId: args['thread-id'] } : {}) },
+      emit({ ok: true, raw, headers, ...(from.verifiedBy ? { fromVerifiedBy: from.verifiedBy } : {}), ...(args['thread-id'] ? { threadId: args['thread-id'] } : {}) },
         `${args['thread-id'] ? `threadId: ${args['thread-id']}\n` : ''}${headers}\n\nraw: ${raw}`);
       return 0;
     }
@@ -477,9 +531,10 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     const result = await createDraft({ user, raw, threadId: args['thread-id'], fetchImpl,
       getToken,
     });
-    emit({ ok: true, ...result }, `下書きを作成しました: ${result.id} (${user})`);
+    emit({ ok: true, ...result, ...(from.verifiedBy ? { fromVerifiedBy: from.verifiedBy } : {}) }, `下書きを作成しました: ${result.id} (${user})`);
     return 0;
   } catch (error) {
+    if (process.env.GMAIL_DRAFT_DEBUG === '1') console.error(error?.stack ?? error);
     if (error?.errorKind === 'internal_recipient') {
       emit({ ok: false, errorKind: error.errorKind, internal: error.internal }, error.message);
       return 3;

@@ -22,7 +22,10 @@ export async function channelRequest(route, { query, body, home = process.env.OR
     signal: signal || AbortSignal.timeout(30000),
     headers: { ...keyserveAuthHeaders(secret, Date.now(), requireKeyservePcId(home, env)), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  if (!response.ok) throw Error(`channel ${route}: HTTP ${response.status}`);
+  if (!response.ok) {
+    if (process.env.GMAIL_DRAFT_DEBUG === '1') console.error('channel error body', await response.clone().text());
+    throw Error(`channel ${route}: HTTP ${response.status}`);
+  }
   return response.json();
 }
 export function googleRoute(raw) {

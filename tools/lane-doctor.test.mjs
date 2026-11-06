@@ -220,6 +220,10 @@ test('ネイティブ修復失敗は操作を1件通知し24h抑止',async t=>{
   const r=await laneDoctorProbe(opts);assert.equal(r.deadNeedsUser.filter(x=>x.provider==='codex').length,1);assert.match(r.deadNeedsUser.find(x=>x.provider==='codex').fix,/wsl.exe --install --no-distribution/);
   await laneDoctorProbe({platform: 'linux',...opts,now:now+60000});assert.equal(calls,1);
 });
+test('ネイティブ書き込み probe の一過性失敗は再試行で吸収し通知しない(2026-11-07 誤通知)',async t=>{
+  const h=fixture(t);let calls=0;const opts={home:h,now,platform:'win32',listWsl:()=>'',nativeWriteProbe:async()=>{calls++;return calls===1?{code:1,text:'起動失敗'}:{code:0};},probe:async()=>({code:0,text:'PONG'}),notify:async()=>({delivered:'dm'})};
+  const r=await laneDoctorProbe(opts);assert.equal(calls,2);assert.equal(r.lanes.codex.alive,true);assert.equal(r.lanes.codex.reason,'native_ok');assert.equal(r.deadNeedsUser.filter(x=>x.provider==='codex').length,0);
+});
 test('glm cooldown and explicitly tagged legacy history cannot block healthy Codex', t => {
   const h = fixture(t), until = now + 3600000;
   write(h, 'provider-cooldown.json', { glm: { until, reason: 'usage_limit' } });

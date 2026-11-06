@@ -213,7 +213,8 @@ export function notificationText(item, home) {
 3. ${item.reason.includes('payment') ? '請求設定を開き支払い方法を確認し、オートチャージ ON を設定して保存する（手動チャージは禁止ルール）。' : 'Codex を開きログインを選択する。ブラウザーで同じアカウントを選び、OAuth の同意内容を確認して許可する。'}
 4. 完了後は Claude が lane-doctor --probe で復旧を確認します。`;
 }
-export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe, spawnImpl = spawnSync, providers = PROVIDERS } = {}) {
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe, spawnImpl = spawnSync, providers = PROVIDERS, probeRetries = 1 } = {}) {
   const started = Date.now(), dir = path.join(home, '.claude');
   const health = laneDoctorQuick({ home, now, save: false, platform, spawnImpl });
   const previous = readJson(path.join(dir, 'lane-health.json'));
@@ -224,9 +225,16 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
     if (health.lanes[p].reason === 'missing_key' || (p === 'codex' && !codexAuthStatusAny(home, { platform, spawnImpl }).login)) return [p, null];
     if (p === 'codex') {
       if (platform === 'win32' && await listWsl() === '') {
+        // 1回の起動失敗で即 down→kim 通知しない。一過性のスパウン失敗は短い再試行で吸収する（2026-11-07 実測: 06:57Z failure → 07:00Z same 経路で fixed。probeRetries=1 で合計2回実行）。
         let result;
-        try { result = await nativeWriteProbe({ home, timeoutMs: Math.max(1, probeBudget - (Date.now() - started)) }); }
-        catch { result = { code: 1, text: 'ネイティブ書き込み probe 起動失敗' }; }
+        const attempts = 1 + Number(probeRetries ?? 1);
+        for (let i = 0; i < attempts; i++) {
+          if (i) await sleep(1500);
+          try { result = await nativeWriteProbe({ home, timeoutMs: Math.max(1, probeBudget - (Date.now() - started)) }); }
+          catch { result = { code: 1, text: 'ネイティブ書き込み probe 起動失敗' }; }
+          if (result.code === 0) break;
+        }
+        if (result.code !== 0 && attempts > 1) result.text = `ネイティブ書き込み probe ${attempts}回失敗(最終) ${result.text || ''}`;
         return [p, { ...result, nativeRepair: true }];
       }
       const dry = await probe(p, { home, timeoutMs: Math.min(15000, probeBudget), dryRun: true });

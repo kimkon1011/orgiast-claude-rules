@@ -4,6 +4,7 @@ import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import { readEnvValue } from './env-kv.mjs';
 import { allowedForCategory, callWithFallback, FALLBACK_CHAIN, preferredForCategory } from './llm-fallback.mjs';
 import { geminiUsage, recordGeminiUsage } from './gemini-usage-ledger.mjs';
+import { isEntry } from './is-entry.mjs';
 
 const PROVIDERS = {
   // 実測で精度が高く、llama-3.3-70b より安価な共通既定モデル。
@@ -21,8 +22,9 @@ const PROVIDERS = {
   kimi: gatewayConfig('kimi'),
   mistral: gatewayConfig('mistral'),
 };
-export const OPENROUTER_GEMINI_MODEL = 'google/gemini-3.6-flash';
+export const OPENROUTER_GEMINI_MODEL = `google/${PROVIDERS.gemini.model}`;
 
+if (isEntry(import.meta.url)) {
 const args = process.argv.slice(2);
 function opt(name, def) { const i = args.indexOf(name); return (i >= 0 && args[i + 1]) ? args[i + 1] : def; }
 const provider = (opt('--provider', '') || '').toLowerCase();
@@ -144,4 +146,5 @@ try {
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;
+}
 }

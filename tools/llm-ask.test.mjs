@@ -6,6 +6,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { OPENROUTER_GEMINI_MODEL } from './llm-ask.mjs';
 
 const execute = promisify(execFile);
 test('LLM CLI reads a long UTF-8 prompt file verbatim without interpreting its contents as arguments', async t => {
@@ -106,19 +107,19 @@ test('missing Gemini key routes explicit Gemini request through OpenRouter Gemin
   fs.writeFileSync(mock, `globalThis.fetch = async (url, init) => { const body = JSON.parse(init.body); console.error('REQUEST ' + new URL(url).hostname + ' ' + body.model); return new Response(JSON.stringify({ choices: [{ message: { content: 'OK' } }], usage: {} })); };`);
   const { stdout, stderr } = await execute(process.execPath, ['--import', pathToFileURL(mock).href, fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', 'gemini', '--no-fallback', '--no-persist', '確認'], { env: { ...process.env, ORGIAST_HOME: dir, GEMINI_API_KEY: '', OPENROUTER_API_KEY: 'test-only' } });
   assert.equal(stdout.trim(), 'OK');
-  assert.match(stderr, /\[routing\] gemini 鍵なし → openrouter\/google\/gemini-3\.6-flash/);
-  assert.match(stderr, /REQUEST openrouter\.ai google\/gemini-3\.6-flash/);
+  assert.ok(stderr.includes(`[routing] gemini 鍵なし → openrouter/${OPENROUTER_GEMINI_MODEL}`));
+  assert.ok(stderr.includes(`REQUEST openrouter.ai ${OPENROUTER_GEMINI_MODEL}`));
 });
 
 test('fallback chain replaces keyless Gemini candidate with OpenRouter Gemini', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-ask-gemini-fallback-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const mock = path.join(dir, 'mock.mjs');
-  fs.writeFileSync(mock, `globalThis.fetch = async (url, init) => { const model = JSON.parse(init.body).model; console.error('MODEL ' + model); return model === 'google/gemini-3.6-flash' ? new Response(JSON.stringify({ choices: [{ message: { content: 'OK' } }], usage: {} })) : new Response('unavailable', { status: 400 }); };`);
+  fs.writeFileSync(mock, `globalThis.fetch = async (url, init) => { const model = JSON.parse(init.body).model; console.error('MODEL ' + model); return model === ${JSON.stringify(OPENROUTER_GEMINI_MODEL)} ? new Response(JSON.stringify({ choices: [{ message: { content: 'OK' } }], usage: {} })) : new Response('unavailable', { status: 400 }); };`);
   const { stdout, stderr } = await execute(process.execPath, ['--import', pathToFileURL(mock).href, fileURLToPath(new URL('./llm-ask.mjs', import.meta.url)), '--provider', 'groq', '--no-persist', '確認'], { env: { ...process.env, ORGIAST_HOME: dir, GEMINI_API_KEY: '', OPENROUTER_API_KEY: 'test-only' } });
   assert.equal(stdout.trim(), 'OK');
-  assert.match(stderr, /MODEL google\/gemini-3\.6-flash/);
-  assert.match(stderr, /\[openrouter:google\/gemini-3\.6-flash\]/);
+  assert.ok(stderr.includes(`MODEL ${OPENROUTER_GEMINI_MODEL}`));
+  assert.ok(stderr.includes(`[openrouter:${OPENROUTER_GEMINI_MODEL}]`));
 });
 
 test('print-key-status reports native Gemini key status without OpenRouter substitution', async t => {

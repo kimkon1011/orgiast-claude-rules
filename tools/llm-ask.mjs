@@ -21,7 +21,7 @@ const PROVIDERS = {
   kimi: gatewayConfig('kimi'),
   mistral: gatewayConfig('mistral'),
 };
-export const OPENROUTER_GEMINI_MODEL = 'google/gemini-2.5-flash';
+export const OPENROUTER_GEMINI_MODEL = 'google/gemini-3.6-flash';
 
 const args = process.argv.slice(2);
 function opt(name, def) { const i = args.indexOf(name); return (i >= 0 && args[i + 1]) ? args[i + 1] : def; }

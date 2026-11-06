@@ -141,7 +141,14 @@ export async function execute(record, { timeoutMs, resultFile, previous = [] }, 
   if (result.skippedNoExecutor) return { outcome: 'no-executor', reason: `実行役なし: ${String(result.stderr ?? '').trim().slice(-300) || result.executorUsed || 'cheap-code'}` };
   const timedOut = result.status === 'timeout';
   if (result.status !== 'success' && !timedOut) return { outcome: 'error', reason: result.status };
-  const report = await (io.readReport ?? readJson)(resultFile, null);
+  // 実行役が保存した結果JSONに制御文字が混入すると JSON.parse がスローする（deepseek-v4-flash
+  // 実測 2026-11-06: 制御文字・不正エスケープで error→連続3件エラー→今晩中止）。無害化後に再試行する。
+  let report;
+  try {
+    const raw = await fs.readFile(resultFile, 'utf8');
+    const cleaned = raw.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+    report = JSON.parse(cleaned);
+  } catch { report = null; }
   const progressed = report?.progressed === true && typeof report.evidence === 'string' && report.evidence.trim();
   // 時間切れはセッション側の制限超過であって失敗ではない。ただし時間切れ直前に成果 JSON を
   // 保存できていれば「進んだ」として数える（2026-11-06 実測: 20分 timeout 4件が error 扱いで

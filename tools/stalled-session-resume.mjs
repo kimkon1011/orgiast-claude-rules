@@ -141,7 +141,19 @@ export async function execute(record, { timeoutMs, resultFile, previous = [] }, 
   if (result.skippedNoExecutor) return { outcome: 'no-executor', reason: `実行役なし: ${String(result.stderr ?? '').trim().slice(-300) || result.executorUsed || 'cheap-code'}` };
   const timedOut = result.status === 'timeout';
   if (result.status !== 'success' && !timedOut) return { outcome: 'error', reason: result.status };
-  const report = await (io.readReport ?? readJson)(resultFile, null);
+  // 実行役が保存した結果JSONに制御文字が混入すると JSON.parse がスローする（deepseek-v4-flash
+  // 実測 2026-11-06: 制御文字・不正エスケープで error→連続3件エラー→今晩中止）。無害化後に再試行する。
+  // io.readReport が差し込まれている場合（テスト等）はそのまま使うが、実運用時は生ファイルを読んで無害化する。
+  const readReport = io.readReport
+    ? () => io.readReport(resultFile, null)
+    : async () => {
+        try {
+          const raw = await fs.readFile(resultFile, 'utf8');
+          const cleaned = raw.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+          return JSON.parse(cleaned);
+        } catch { return null; }
+      };
+  const report = await readReport();
   const progressed = report?.progressed === true && typeof report.evidence === 'string' && report.evidence.trim();
   // 時間切れはセッション側の制限超過であって失敗ではない。ただし時間切れ直前に成果 JSON を
   // 保存できていれば「進んだ」として数える（2026-11-06 実測: 20分 timeout 4件が error 扱いで

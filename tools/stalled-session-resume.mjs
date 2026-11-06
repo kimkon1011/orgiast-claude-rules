@@ -118,7 +118,15 @@ export async function execute(record, { timeoutMs, resultFile, previous = [] }, 
   // 2026-10-26 実測: deepseek payment_required で2件が1秒で error 扱い→「連続2件エラーで中止」の誤通知と noProgress 消費。
   if (result.skippedNoExecutor) return { outcome: 'no-executor', reason: `実行役なし: ${String(result.stderr ?? '').trim().slice(-300) || result.executorUsed || 'cheap-code'}` };
   if (result.status !== 'success') return { outcome: 'error', reason: result.status };
-  const report = await (io.readReport ?? readJson)(resultFile, null);
+  // deepseek-v4-flash が結果JSONに制御文字を混入することがある（2026-11-06 実測）.
+  // 無害化後に parse し、失敗時は null として no-progress 扱いにする（error にすると
+  // state.errors が増えて「連続3件エラー→今晩中止」のトリガーになる）。
+  let report;
+  try {
+    const raw = await fs.readFile(resultFile, 'utf8');
+    const cleaned = raw.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+    report = JSON.parse(cleaned);
+  } catch { report = null; }
   return { outcome: report?.progressed === true && typeof report.evidence === 'string' && report.evidence.trim() ? 'progressed' : 'no-progress', reason: report?.evidence || '成果記録なし', executor: result.executorUsed };
 }
 

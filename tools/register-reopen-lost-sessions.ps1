@@ -16,24 +16,47 @@ function Register-ReopenLostTask(
     [scriptblock]$GetTask = { param($Name) Get-ScheduledTask -TaskPath '\' | Where-Object TaskName -eq $Name },
     [scriptblock]$RegisterTask = { param($Name, $Task) Register-ScheduledTask -TaskName $Name -TaskPath '\' -InputObject $Task -Force | Out-Null }
 ) {
-    $name = 'OrgiastReopenLostSessions'
     $toolsDir = Resolve-RegisterToolsDir -Fallback $PSScriptRoot -RequiredLeaves @('reopen-lost-sessions.mjs')
     $file = Join-Path $toolsDir 'reopen-lost-sessions.mjs'
     $hidden = Join-Path $env:USERPROFILE '.claude\tools\run-hidden.vbs'
     $node = (Get-Command node.exe -ErrorAction Stop).Source
     foreach ($required in @($file, $hidden, $node)) { if (-not (Test-Path -LiteralPath $required)) { throw "Missing: $required" } }
     $user = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\wscript.exe') -Argument ('//nologo "{0}" "{1}" "{2}"' -f $hidden, $node, $file)
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
-    $trigger.Delay = 'PT3M'
-    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
-    # No 60-second task limit: only API acquisition has that limit.
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit ([timespan]::Zero)
-    $desired = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings
-    $current = & $GetTask $name
-    if ($current -and (Get-ReopenDefinition $current) -ceq (Get-ReopenDefinition $desired)) { return @{ changed = $false; taskName = $name } }
-    & $RegisterTask $name $desired
-    if ((Get-ReopenDefinition (& $GetTask $name)) -cne (Get-ReopenDefinition $desired)) { throw 'Task verification failed' }
-    return @{ changed = $true; taskName = $name }
+
+    $name1 = 'OrgiastReopenLostSessions'
+    $action1 = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\wscript.exe') -Argument ('//nologo "{0}" "{1}" "{2}"' -f $hidden, $node, $file)
+    $trigger1 = New-ScheduledTaskTrigger -AtLogOn -User $user
+    $trigger1.Delay = 'PT3M'
+    $principal1 = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+    $settings1 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit ([timespan]::Zero)
+    $desired1 = New-ScheduledTask -Action $action1 -Trigger $trigger1 -Principal $principal1 -Settings $settings1
+
+    $current1 = & $GetTask $name1
+    $changed1 = $false
+    if (-not $current1 -or (Get-ReopenDefinition $current1) -cne (Get-ReopenDefinition $desired1)) {
+        & $RegisterTask $name1 $desired1
+        if ((Get-ReopenDefinition (& $GetTask $name1)) -cne (Get-ReopenDefinition $desired1)) { throw "Task verification failed for $name1" }
+        $changed1 = $true
+    }
+
+    $name2 = 'OrgiastReopenLostSessionsWatch'
+    $action2 = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\wscript.exe') -Argument ('//nologo "{0}" "{1}" "{2}" "--watch"' -f $hidden, $node, $file)
+    $trigger2 = New-ScheduledTaskTrigger -AtLogOn -User $user
+    $trigger2.Delay = 'PT5M'
+    $repTemplate = New-ScheduledTaskTrigger -Once -At '00:00' -RepetitionInterval (New-TimeSpan -Minutes 15)
+    $trigger2.Repetition = $repTemplate.Repetition
+    $principal2 = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+    $settings2 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+    $desired2 = New-ScheduledTask -Action $action2 -Trigger $trigger2 -Principal $principal2 -Settings $settings2
+
+    $current2 = & $GetTask $name2
+    $changed2 = $false
+    if (-not $current2 -or (Get-ReopenDefinition $current2) -cne (Get-ReopenDefinition $desired2)) {
+        & $RegisterTask $name2 $desired2
+        if ((Get-ReopenDefinition (& $GetTask $name2)) -cne (Get-ReopenDefinition $desired2)) { throw "Task verification failed for $name2" }
+        $changed2 = $true
+    }
+
+    return @{ changed = ($changed1 -or $changed2); tasks = @{ $name1 = $changed1; $name2 = $changed2 } }
 }
 if (-not $FunctionsOnly) { Register-ReopenLostTask | ConvertTo-Json -Compress }

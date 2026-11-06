@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { hostExitArchive } from './lib/host-exit-archive.mjs';
 import { isEntry } from './is-entry.mjs';
 const BASE = 'https://api.anthropic.com/v1/code/sessions';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -84,22 +85,50 @@ function closedIds(base) {
   if (!Array.isArray(ledger.ids)) throw Error('Invalid closed ledger');
   return new Set(ledger.ids);
 }
+function reopenLoopCounts(base, nowFn = Date.now) {
+  const logFile = path.join(base, 'reopen-lost-sessions.log');
+  const counts = {};
+  try {
+    const raw = fs.readFileSync(logFile, 'utf8');
+    const nowTime = typeof nowFn === 'function' ? nowFn() : nowFn;
+    const cutoff = nowTime - 24 * 3600 * 1000;
+    for (const line of raw.split('\n').filter(Boolean)) {
+      try {
+        const entry = JSON.parse(line);
+        if (!entry.at || !Array.isArray(entry.reopened)) continue;
+        if (Date.parse(entry.at) < cutoff) continue;
+        for (const r of entry.reopened) {
+          const id = r?.id || r;
+          if (id) counts[id] = (counts[id] || 0) + 1;
+        }
+      } catch {}
+    }
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
+  return counts;
+}
 export function parseOptions(args, spawn = spawnSync) {
-  const options = { dryRun: false, max: 30, gapSec: 10 };
+  const options = { dryRun: false, max: 30, gapSec: 10, watch: false };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--dry-run') { options.dryRun = true; continue; }
+    if (arg === '--watch') { options.watch = true; continue; }
     const key = { '--since': 'since', '--until': 'until', '--max': 'max', '--gap-sec': 'gapSec' }[arg];
     if (!key || !args[i + 1]) throw Error(`Invalid option: ${arg}`);
+    if (key === 'max') options.maxSet = true;
     options[key] = ['max', 'gapSec'].includes(key) ? Number(args[++i]) : args[++i];
   }
+  if (options.watch && (options.since || options.until)) throw Error('--watch and --since/--until are mutually exclusive');
   if (!Number.isInteger(options.max) || options.max < 1 || !Number.isFinite(options.gapSec) || options.gapSec < 0) throw Error('Invalid max/gap');
-  if (!options.since || !options.until) {
-    const boot = Date.parse(ps('(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString("o")', spawn));
-    options.since ??= new Date(boot - 15 * 60000).toISOString();
-    options.until ??= new Date(boot + 15 * 60000).toISOString();
+  if (!options.watch) {
+    if (!options.since || !options.until) {
+      const boot = Date.parse(ps('(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString("o")', spawn));
+      options.since ??= new Date(boot - 15 * 60000).toISOString();
+      options.until ??= new Date(boot + 15 * 60000).toISOString();
+    }
+    if (!Number.isFinite(Date.parse(options.since)) || !Number.isFinite(Date.parse(options.until)) || Date.parse(options.since) > Date.parse(options.until)) throw Error('Invalid time range');
   }
-  if (!Number.isFinite(Date.parse(options.since)) || !Number.isFinite(Date.parse(options.until)) || Date.parse(options.since) > Date.parse(options.until)) throw Error('Invalid time range');
   return options;
 }
 export function acquireLock(file, now = Date.now()) {
@@ -114,7 +143,7 @@ export function acquireLock(file, now = Date.now()) {
 export async function reopenLost({ since, until, dryRun = false, max = 30, gapSec = 10,
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
   now = Date.now, windowReady, codeCli } = {}) {
-  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0 } };
+  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0 } };
   // Dry run is strictly read-only: no lock or log mutation on the user's PC.
   const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'));
   if (!release) return { ...result, error: 'locked' };
@@ -128,6 +157,7 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
     const alive = () => parseAgents(run(cli, ['agents', '--json'], spawn));
     const living = alive();
     const locals = localIndex(base), closed = closedIds(base);
+    const reopenCounts = reopenLoopCounts(base, now);
     const deadline = now() + 60000;
     const get = async url => {
       if (now() >= deadline) throw Error('API time limit');
@@ -155,7 +185,11 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
             const local = locals.get(session.id);
             const reason = exclusion(local, closed, living);
             if (reason) { result.skipped[reason]++; continue; }
-            if (seenIds.has(local.id)) continue;
+            // Skip user-archived sessions (closed via mobile etc.)
+            if (session.status === 'archived' && !hostExitArchive(events)) { result.skipped.archivedByUser++; continue; }
+            // Skip sessions reopened 3+ times in the last 24h (infinite reopen guard)
+            if (reopenCounts[local?.id] >= 3) { result.skipped.reopenLoop++; continue; }
+            if (!local || seenIds.has(local.id)) continue;
             seenIds.add(local.id);
             result.candidates.push({ id: local.id, cwd: local.cwd, title: session.title ?? '' });
           }
@@ -192,6 +226,19 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
         } catch (error) { (result.failed ??= []).push({ ...candidate, error: error.message }); }
         await wait(gapSec * 1000);
       }
+      // Post-reopen verification: wait 90s then check which sessions are actually connected
+      if (result.reopened.length) {
+        await wait(90000);
+        try {
+          const agents = alive();
+          result.verified = [];
+          result.unverified = [];
+          for (const r of result.reopened) {
+            if (agents.has(r.id)) result.verified.push(r.id);
+            else result.unverified.push(r.id);
+          }
+        } catch (e) { result.verifyError = e.message; }
+      }
     }
   } catch (error) { result.error = error.message; }
   finally {
@@ -200,10 +247,59 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
   }
   return result;
 }
+export async function watchReopen(opts = {}, maxParam) {
+  let base, max, dryRun, fetchImpl, spawn, wait, nowFn, codeCli;
+  if (typeof opts === 'string' || opts === undefined) {
+    base = opts ?? path.join(os.homedir(), '.claude');
+    max = maxParam ?? 10;
+    dryRun = false;
+    nowFn = Date.now;
+  } else {
+    base = opts.base ?? path.join(os.homedir(), '.claude');
+    max = opts.max ?? 10;
+    dryRun = opts.dryRun ?? false;
+    fetchImpl = opts.fetchImpl;
+    spawn = opts.spawn;
+    wait = opts.wait;
+    nowFn = opts.now ?? Date.now;
+    codeCli = opts.codeCli;
+  }
+  const stateFile = path.join(base, 'reopen-lost-sessions-state.json');
+  const state = readJson(stateFile, {});
+  const nowTime = nowFn();
+  const minSince = new Date(nowTime - 24 * 3600 * 1000).toISOString();
+  const defaultSince = new Date(nowTime - 30 * 60000).toISOString();
+  let since;
+  const wmTime = state.watermark ? Date.parse(state.watermark) : NaN;
+  if (Number.isFinite(wmTime)) {
+    since = wmTime < Date.parse(minSince) ? minSince : state.watermark;
+  } else {
+    since = defaultSince;
+  }
+  const until = new Date(nowTime - 60000).toISOString();
+  const result = await reopenLost({
+    since, until, max, dryRun, base, fetchImpl, spawn, wait, now: nowFn, codeCli
+  });
+  if (!result.error && !result.apiError && !dryRun) {
+    fs.writeFileSync(stateFile, JSON.stringify({ watermark: until }) + '\n');
+  }
+  return result;
+}
 if (isEntry(import.meta.url)) {
   try {
-    const result = await reopenLost(parseOptions(process.argv.slice(2)));
-    console.log(JSON.stringify(result));
-    if (result.error || result.apiError || result.failed?.length) process.exitCode = 1;
+    const opts = parseOptions(process.argv.slice(2));
+    if (opts.watch) {
+      const result = await watchReopen({
+        base: opts.base,
+        max: opts.maxSet ? opts.max : 10,
+        dryRun: opts.dryRun,
+      });
+      console.log(JSON.stringify(result));
+      if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
+    } else {
+      const result = await reopenLost(opts);
+      console.log(JSON.stringify(result));
+      if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
+    }
   } catch (error) { console.log(JSON.stringify({ error: error.message })); process.exitCode = 1; }
 }

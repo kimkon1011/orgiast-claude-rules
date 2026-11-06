@@ -1,0 +1,12 @@
+{
+  "sessionId": "87673d80-9329-4f9f-87f7-b269fbff4b6b",
+  "lastChecked": "2026-11-07T03:20:00Z",
+  "status": "permission_waiting",
+  "worktrees": {
+    "wt-perse": { "pr": "#1638 merged", "clean": true, "exists": true },
+    "wt-notify": { "pr": "#1639 merged", "clean": true, "exists": true }
+  },
+  "deletionPermissionGranted": false,
+  "autoProgressDeadline": "2026-11-13T08:18:07.836Z",
+  "progressed": false
+}

@@ -1132,7 +1132,8 @@ test('watch: 自動進行完了時に結果の中身つきDMを1通送り、2回
   assert.match(msg, /✅ 完了:/);
   assert.match(msg, /— テスト実行に成功し、全件パスしました。 詳細はログを確認。/);
   assert.match(msg, /成果物: reports\/summary\.md/);
-  assert.match(msg, /kim がすること: なし/);
+  assert.match(msg, /成果物の確認未了/);
+  assert.match(msg, /承認待ち: 未確認/);
 
   // 台帳に doneNotifiedAt が記録されていること
   const rowsAfterFirst = readLedger(ledgerFile(home));

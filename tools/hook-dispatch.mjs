@@ -27,7 +27,7 @@ export function mergeResults(event, results) {
   const reasons = [], contexts = [], messages = [];
   let permission, updatedInput, continueValue, stopReason, legacyBlock = false;
   for (const result of results) {
-    if (result.timedOut || result.skipped || ![0, 2].includes(result.status)) continue;
+    if ((result.timedOut && !(result.name === 'kim-inbox.mjs' && result.contextComplete)) || result.skipped || ![0, 2].includes(result.status)) continue;
     const out = parseOutput(result.stdout), specific = out?.hookSpecificOutput;
     if (result.status === 2) {
       reasons.push(String(result.stderr || out?.reason || 'Hook blocked the operation').trim());
@@ -118,14 +118,18 @@ function workerHook(hook, raw, timeoutMs, options) {
       if (message.result) result = message.result;
     });
     worker.once('error', error => { stderr += error.message; });
-    worker.once('exit', status => finish(timedOut ? { status: 0, stdout: '', stderr: '', timedOut: true } : result || { status, stdout, stderr }));
+    const timeoutResult = () => {
+      const contextComplete = hook.name === 'kim-inbox.mjs' && Boolean(parseOutput(stdout)?.hookSpecificOutput?.additionalContext);
+      return { status: 0, stdout: contextComplete ? stdout : '', stderr: '', timedOut: true, contextComplete };
+    };
+    worker.once('exit', status => finish(timedOut ? timeoutResult() : result || { status, stdout, stderr }));
     const expire = () => {
-      // Ignore any partial deny/context on a timed-out hook, as the legacy runner did.
+      // Preserve only a complete inbox context emitted before bookkeeping; partial gate outputs remain discarded.
       timedOut = true;
       for (const pid of children) { try { process.kill(pid, 'SIGKILL'); } catch {} }
       worker.unref();
       void worker.terminate();
-      finish({ status: 0, stdout: '', stderr: '', timedOut: true });
+      finish(timeoutResult());
     };
     const timer = setTimeout(expire, timeoutMs);
   });
@@ -173,7 +177,9 @@ export async function dispatch(event, raw, options = {}) {
   const overloaded = options.overloaded ?? lease.overloaded;
   const selected = (manifest.events[event] || []).filter(h => matches(h.matcher, event, input));
   const results = new Array(selected.length);
-  const queue = selected.map((hook, i) => ({ hook, i })).sort((a, b) => Number(b.hook.critical) - Number(a.hook.critical));
+  // Durable inbox delivery must not be shed or expire while waiting for other hooks.
+  for (const hook of selected) if (hook.name === 'kim-inbox.mjs') hook.critical = true;
+  const queue = selected.map((hook, i) => ({ hook, i })).sort((a, b) => Number(b.hook.name === 'kim-inbox.mjs') - Number(a.hook.name === 'kim-inbox.mjs') || Number(b.hook.critical) - Number(a.hook.critical));
   let childProcesses = 0;
   const execute = options.execute || ((hook, body, timeout) => hook.node ? workerHook(hook, body, timeout, { ...options, onWorkerSpawn: (...args) => { childProcesses++; options.onWorkerSpawn?.(...args); } })
     : externalHook(hook, body, timeout, { ...options, onSpawn: (...args) => { childProcesses++; options.onSpawn?.(...args); } }));
@@ -183,7 +189,7 @@ export async function dispatch(event, raw, options = {}) {
       let result;
       if (overloaded && !hook.critical) result = { status: 0, skipped: 'load-shed' };
       else {
-        const remaining = (Number(hook.timeout) || 10) * 1000 - (began - start);
+        const remaining = (Number(hook.timeout) || 10) * 1000 - (hook.name === 'kim-inbox.mjs' ? 0 : began - start);
         if (remaining <= 0) result = { status: 0, timedOut: true, queued: true };
         else { try { result = await execute(hook, raw, remaining); } catch (e) { result = { status: 1, error: e.message }; } }
       }

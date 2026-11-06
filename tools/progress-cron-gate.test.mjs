@@ -111,3 +111,59 @@ test('new nonpilot PC enforces immediately and runner evaluates the registered g
 //   // The standalone entry may be preserved or dispatched; the runner itself handles internal gate evaluation.
 //   assert.ok(hooks.length >= 0);
 // });
+
+const stamped = (row, timestamp) => ({ ...row, timestamp });
+const resumed = (timestamp = '2026-11-06T00:24:40.606Z', type = 'hook_success') => ({
+  type: 'attachment', timestamp,
+  attachment: { type, hookEvent: 'SessionStart', hookName: 'SessionStart:resume' },
+});
+test('observed SessionStart attachments invalidate earlier CronCreate', t => {
+  for (const type of ['hook_success', 'hook_additional_context', 'async_hook_response', 'hook_cancelled']) {
+    const boundary = resumed(undefined, type);
+    assert.equal(fixture(t, [cron, boundary, message(footer())]).judge().decision, 'block');
+    assert.equal(fixture(t, [cron, boundary, cron, message(footer())]).judge().reason, 'cron-created');
+  }
+});
+test('system subtype/content and attachment hookName identify the latest start', t => {
+  for (const row of [
+    { type: 'system', subtype: 'SessionStart' },
+    { type: 'system', content: 'SessionStart: resume' },
+    { type: 'attachment', attachment: { type: 'hook_success', hookName: 'SessionStart:resume' } },
+    { type: 'attachment', attachment: { type: 'hook_additional_context', hookEvent: 'SessionStart' } },
+  ]) {
+    const boundary = stamped(row, '2026-11-06T01:00:00Z');
+    assert.equal(fixture(t, [resumed(), cron, boundary, message(footer())]).judge().decision, 'block');
+    assert.equal(fixture(t, [boundary, cron, message(footer())]).judge().reason, 'cron-created');
+  }
+});
+test('each boundary blocks once, including after a legacy block', t => {
+  const f = fixture(t);
+  assert.equal(f.judge().decision, 'block');
+  for (const time of ['2026-11-06T01:00:00Z', '2026-11-06T02:00:00Z']) {
+    fs.appendFileSync(f.input.transcript_path, '\n' + [resumed(time), message(footer())].map(JSON.stringify).join('\n'));
+    assert.equal(f.judge().decision, 'block');
+    assert.equal(f.judge().reason, 'already-blocked');
+  }
+});
+test('without explicit starts, the last gap over 30 minutes invalidates old cron', t => {
+  const f = fixture(t, [stamped(cron, '2026-11-06T00:00:00Z'), stamped(message(footer()), '2026-11-06T00:30:01Z')]);
+  assert.equal(f.judge().decision, 'block');
+  assert.equal(f.judge().reason, 'already-blocked');
+  fs.appendFileSync(f.input.transcript_path, '\n' + JSON.stringify(stamped(message(footer()), '2026-11-06T01:01:00Z')));
+  assert.equal(f.judge().decision, 'block');
+  // The first row after a gap belongs to the resumed process, including CronCreate.
+  assert.equal(fixture(t, [stamped(message('old'), '2026-11-06T00:00:00Z'), stamped(cron, '2026-11-06T01:00:00Z'), message(footer())]).judge().reason, 'cron-created');
+});
+test('30 minutes exactly, missing/invalid timestamps and ordinary mentions keep legacy behavior', t => {
+  for (const row of [
+    stamped(message('ok'), '2026-11-06T00:30:00Z'),
+    stamped(message('ok'), 'invalid'),
+    message('SessionStart'),
+    { type: 'attachment', attachment: { type: 'instructions', hookEvent: 'SessionStart' } },
+    { type: 'system', subtype: 'stop_hook_summary' },
+    null,
+  ]) assert.equal(fixture(t, [stamped(cron, '2026-11-06T00:00:00Z'), row, message(footer())]).judge().reason, 'cron-created');
+});
+test('explicit start takes precedence over later timestamp gaps', t => {
+  assert.equal(fixture(t, [resumed(), stamped(cron, '2026-11-06T01:00:00Z'), stamped(message(footer()), '2026-11-06T03:00:00Z')]).judge().reason, 'cron-created');
+});

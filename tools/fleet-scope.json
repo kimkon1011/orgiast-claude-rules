@@ -2,6 +2,8 @@
   "version": 1,
   "entries": [
     {"path": "tools/register-morning-session-sweep.ps1", "scope": "fleet", "step": "task:morning-session-sweep", "reason": "全PCの未クローズセッションを毎朝06:30に回収する共通タスク"},
+    {"path": "tools/hook-dispatch.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "全PCの同期hookをイベント単位で1本に集約するディスパッチャ（PC過負荷対策 #1568）"},
+    {"path": "tools/hook-dispatch-benchmark.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "ディスパッチャの所要時間を各PCで計測するベンチマーク"},
     {"path": "tools/deadline-ledger.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
     {"path": "tools/deadline-detect.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
     {"path": "tools/deadline-watch.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},

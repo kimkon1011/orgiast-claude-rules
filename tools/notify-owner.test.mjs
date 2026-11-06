@@ -452,7 +452,7 @@ test('宛先未解決の inbox fallback は戻り値と台帳に劣化を記録�
 });
 
 for (const label of ['DESKTOP-BDOAK99', 'user-PC']) {
-  test(`共用席 ${label} はローカルの別人宛先を無視して kim へ送る`, async t => {
+  test(`共用席 ${label} はローカルの別人宛先を無視して kim-inbox へ積む`, async t => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-shared-'));
     t.after(() => fs.rmSync(home, { recursive: true, force: true }));
     fs.mkdirSync(path.join(home, '.claude'));
@@ -463,13 +463,18 @@ for (const label of ['DESKTOP-BDOAK99', 'user-PC']) {
     assert.equal(resolveOwnerDiscordId(owner, options), KIM_DISCORD_USER_ID);
     assert.equal(resolveOwnerDiscordId(' SEISAKU-TEAM@ORGIAST.JP ', options), KIM_DISCORD_USER_ID);
     let calls = 0;
-    const result = await notifyOwner(owner, '共用席の進捗', { ...options, notify: async (_, opts) => {
-      calls++; assert.equal(opts.userId, KIM_DISCORD_USER_ID); return { delivered: 'dm', messageId: 'receipt' };
-    }, toast: () => assert.fail('kim へ配達済み') });
-    assert.equal(calls, 1);
-    assert.equal(result.channel, 'discord');
+    const result = await notifyOwner(owner, '共用席の進捗', { ...options, notify: async () => {
+      calls++; assert.fail('kim 宛は Discord へ送らない');
+    }, toast: () => assert.fail('kim-inbox へ配達済み') });
+    assert.equal(calls, 0);
+    assert.equal(result.delivered, 'session-inbox');
+    assert.equal(result.channel, 'kim-inbox');
     assert.equal(result.ok, true);
-    assert.ok(result.attempts.every(a => a.reason !== 'owner Discord recipient unresolved or mismatched'));
+    const items = listItems(home);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].id, result.id);
+    assert.equal(items[0].kind, 'info');
+    assert.equal(items[0].text, '共用席の進捗');
     const rejected = await notifyOwner(owner, '誤宛先', { ...options, userId: wrongId, notify: () => assert.fail('別人へ送らない'), toast: () => false });
     assert.equal(rejected.degraded, 'no-recipient');
   });

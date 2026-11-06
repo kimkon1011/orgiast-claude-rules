@@ -376,7 +376,7 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
   };
   const pending = items.filter(i => (i.status === 'open' || (i.dailyProgress && i.status === 'seen')) && !finished(i) && !required.includes(i)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const allAsks = pending.filter(i => i.kind === 'ask');
-  const asks = allAsks.filter(i => !i.urgent), infos = pending.filter(i => i.kind === 'info' && !i.dailyProgress);
+  const infos = pending.filter(i => i.kind === 'info' && !i.dailyProgress);
   if (!pending.length) return requiredText ? redactSecrets(displayPcNames(`[kim-inbox 完了・進捗・承認待ち] kim に次の内容を伝え、ask は返答後 --answer、info は報告後 --seen で記録する。\n${requiredText}`, { home })) : '';
 
   const deadlines = pending.filter(i => i.kind === 'deadline').sort((a, b) => Number(own(b)) - Number(own(a))

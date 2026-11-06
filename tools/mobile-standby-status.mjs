@@ -21,6 +21,7 @@ export const FRESH_HOURS = 6;
 export const COOLDOWN = HOUR; // 補充の起動間隔（purge-sessions.mjs 側の間引きも同じ 1 時間）
 export const NOTIFY_COOLDOWN = 6 * HOUR; // 同じ不足を DM で何度も知らせない
 export const STANDBY_TITLE = /^remote-control-/;
+export const PLACEHOLDER_TITLE = /^\d{3}｜待機中$/;
 // 現在の自動名は <ホスト名スラッグ>-<形容詞>-<名詞>（例 011-prancy-dusk）。
 export const AUTO_TITLE = /^[a-z0-9]+(?:-[a-z0-9]+)*-[a-z]+-[a-z]+$/;
 
@@ -57,7 +58,7 @@ export function isStandby(session, { localIds, freshHours = FRESH_HOURS, now = D
   if (!Number.isFinite(createdAt) || createdAt > now || now - createdAt > freshHours * HOUR) return false;
   if (session?.status !== 'active' || session?.connection_status !== 'connected') return false;
   const title = titleOf(session);
-  if (!STANDBY_TITLE.test(title) && !AUTO_TITLE.test(title)) return false;
+  if (!STANDBY_TITLE.test(title) && !AUTO_TITLE.test(title) && !PLACEHOLDER_TITLE.test(title)) return false;
   if (Number(session?.external_metadata?.context_usage?.used_tokens ?? 0) > 0) return false;
   if (localIds && !localIds.has(stripId(session?.id))) return false;
   return true;

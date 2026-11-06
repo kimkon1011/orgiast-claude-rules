@@ -25,7 +25,7 @@ export function parseOutput(stdout) {
 }
 export function mergeResults(event, results) {
   const reasons = [], contexts = [], messages = [];
-  let permission, updatedInput, continueValue, stopReason, legacyBlock = false;
+  let permission, updatedInput, continueValue, stopReason, sessionTitle, legacyBlock = false;
   for (const result of results) {
     if ((result.timedOut && !(result.name === 'kim-inbox.mjs' && result.contextComplete)) || result.skipped || ![0, 2].includes(result.status)) continue;
     const out = parseOutput(result.stdout), specific = out?.hookSpecificOutput;
@@ -35,6 +35,7 @@ export function mergeResults(event, results) {
     } else {
       if (specific?.permissionDecision === 'deny' || out?.decision === 'block') reasons.push(specific?.permissionDecisionReason || out.reason || 'Hook blocked the operation');
       if (specific?.additionalContext) contexts.push(specific.additionalContext);
+      if (typeof specific?.sessionTitle === 'string' && specific.sessionTitle.trim() && ['SessionStart', 'UserPromptSubmit'].includes(event)) sessionTitle = specific.sessionTitle;
       if (!out && result.stdout?.trim() && ['SessionStart', 'UserPromptSubmit'].includes(event)) contexts.push(result.stdout.trim());
       if (out?.systemMessage) messages.push(out.systemMessage);
       if (specific?.permissionDecision === 'ask') permission = 'ask';
@@ -54,6 +55,7 @@ export function mergeResults(event, results) {
   } else {
     if (reasons.length && ['Stop', 'UserPromptSubmit', 'PostToolUse'].includes(event)) Object.assign(payload, { decision: 'block', reason: reasons.join('\n') });
     if (contexts.length && event !== 'Stop') payload.hookSpecificOutput = { hookEventName: event, additionalContext: contexts.join('\n') };
+    if (sessionTitle) payload.hookSpecificOutput = { ...payload.hookSpecificOutput, hookEventName: event, sessionTitle };
   }
   if (messages.length) payload.systemMessage = messages.join('\n');
   if (continueValue === false) Object.assign(payload, { continue: false, stopReason });

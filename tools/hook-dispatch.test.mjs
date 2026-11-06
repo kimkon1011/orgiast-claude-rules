@@ -48,6 +48,21 @@ test('deny beats allow/ask, combines reasons and contexts; Stop combines block/s
     assert.equal(mergeResults(event, [output({ additionalContext: 'a' }), output({ additionalContext: 'b' })]).payload.hookSpecificOutput.additionalContext, 'a\nb');
   }
 });
+test('SessionStart emits sessionTitle without additionalContext', () => {
+  const merged = mergeResults('SessionStart', [output({ sessionTitle: '999｜待機中' })]);
+  assert.deepEqual(JSON.parse(merged.stdout), { hookSpecificOutput: { hookEventName: 'SessionStart', sessionTitle: '999｜待機中' } });
+});
+test('UserPromptSubmit combines additionalContext and the last valid successful sessionTitle', () => {
+  const merged = mergeResults('UserPromptSubmit', [output({ additionalContext: 'context' }), output({ sessionTitle: 'first' }), output({ sessionTitle: '999｜待機中' }),
+    ...['', '   ', null, 123].map(sessionTitle => output({ sessionTitle })),
+    { ...output({ sessionTitle: 'failed' }), status: 1 }, { ...output({ sessionTitle: 'blocked' }), status: 2, stderr: 'blocked' }]);
+  assert.deepEqual(JSON.parse(merged.stdout), { decision: 'block', reason: 'blocked', hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: 'context', sessionTitle: '999｜待機中' } });
+});
+test('Stop and PreToolUse do not emit sessionTitle', () => {
+  for (const event of ['Stop', 'PreToolUse']) {
+    assert.equal(mergeResults(event, [output({ sessionTitle: '999｜待機中' })]).stdout, '');
+  }
+});
 test('a synchronous infinite loop is terminated without losing another hook result; same OS pid', async t => {
   const home = fixture(t);
   const slow = script(home, 'slow', 'export async function hookMain() { while (true) {} }', { timeout: 0.8 });

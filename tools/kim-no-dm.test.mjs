@@ -18,12 +18,13 @@ function home(t) {
 test('all old exception categories and emergency reports use inbox without transport', async t => {
   const dir = home(t);
   for (const [kind, text] of [['action', '判断してください'], ['digest', '【進捗まとめ】'], ['done-requested', '✅ 完了'], ['automatic', '緊急の障害']]) {
-    const result = await deliverKim(text, { home: dir, userId: KIM_DISCORD_USER_ID, kind, plainJa: false, token: 'unused',
+    const result = await deliverKim(text, { home: dir, userId: KIM_DISCORD_USER_ID, kind, plainJa: false, token: 'unused', sessionId: 'kim-no-dm-session',
       allowlist: [{ category: 'all', pattern: '.*' }], fetchImpl: () => assert.fail('kim transport forbidden') });
     assert.equal(result.delivered, 'session-inbox');
     assert.equal(result.kind, kind === 'action' ? 'ask' : 'info');
   }
   assert.equal(listItems(dir).length, 4);
+  assert.ok(listItems(dir).every(item => item.sessionId === 'kim-no-dm-session'));
 });
 test('kim has no eight-message quota and ID overrides another fleet account owner', async t => {
   const dir = home(t);

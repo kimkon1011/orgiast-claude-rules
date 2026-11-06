@@ -164,6 +164,12 @@
         "type": "command",
         "command": "node \"${repo}/tools/session-wait-title.mjs\" --all",
         "timeout": 30
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/session-wait-title.mjs\" --prompt-submit",
+        "timeout": 8
       }
     ],
     "UserPromptSubmit": [

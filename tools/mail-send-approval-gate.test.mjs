@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { judge } from './mail-send-approval-gate.mjs';
+import { judge, APPROVAL_MISSING_REASON, BODY_NOT_SHOWN_REASON } from './mail-send-approval-gate.mjs';
 
 function createFixture() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mail-gate-test-'));
@@ -51,7 +51,7 @@ test('mail-send-approval-gate: blocks send when body not displayed in assistant 
     });
 
     assert.equal(res.decision, 'block');
-    assert.match(res.reason, /本文の全文をチャットに表示/);
+    assert.equal(res.reason, BODY_NOT_SHOWN_REASON);
   } finally {
     fix.cleanup();
   }
@@ -133,4 +133,40 @@ test('live MIME body retains quotes and forwarding content, excludes attachments
   const data=s=>Buffer.from(s).toString('base64url');
   const body='ご確認ください\n\n> 引用された契約内容\n---------- Forwarded message ---------\n全文';
   assert.equal(draftBody({mimeType:'multipart/mixed',parts:[{mimeType:'text/plain',body:{data:data(body)}},{mimeType:'text/plain',filename:'secret.txt',body:{data:data('attachment')}}]}),body);
+});
+
+const multilineBody = '宛名\n\n本文の中間行\n末尾';
+function judgeShown(shown, approval = '送って', body = multilineBody) {
+  return judge({
+    tool_name: 'mcp__claude_ai_Gmail__send_message', tool_input: { body },
+    transcript: [{ type: 'assistant', content: shown }, { type: 'user', content: approval }]
+  });
+}
+for (const prefix of ['> ', '>> ', '> > ']) {
+  test(`body displayed with ${prefix} blockquote passes`, () => {
+    assert.equal(judgeShown(multilineBody.split('\n').map(line => prefix + line).join('\n')).decision, 'pass');
+  });
+}
+test('body displayed inside code fences passes', () => {
+  assert.equal(judgeShown('```text\n' + multilineBody + '\n```').decision, 'pass');
+});
+test('normalization applies to draft and assistant, including line endings and blank lines', () => {
+  const draft = '```text\r\n> > 宛名  \r\n> > \r\n> > \r\n> > 本文の中間行\t\r\n> > 末尾\r\n```';
+  assert.equal(judgeShown(multilineBody, 'おくって', draft).decision, 'pass');
+  assert.equal(judgeShown(draft).decision, 'pass');
+});
+test('changed middle line and partial body return body-not-shown reason', () => {
+  for (const shown of [multilineBody.replace('本文の中間行', '変更した中間行'), '宛名\n\n末尾']) {
+    assert.deepEqual(judgeShown(shown), { decision: 'block', reason: BODY_NOT_SHOWN_REASON });
+  }
+});
+test('ambiguous latest turn returns approval-missing reason', () => {
+  assert.deepEqual(judgeShown(multilineBody, '了解'), { decision: 'block', reason: APPROVAL_MISSING_REASON });
+});
+test('quoted draft and reaffirmation question pass together', () => {
+  assert.equal(judgeShown(multilineBody.split('\n').map(line => '> ' + line).join('\n'), '送ってといったのに、送られない理由はなに？').decision, 'pass');
+});
+test('body displayed before an intervening human turn does not authorize sending', () => {
+  const transcript = [...evidence(multilineBody), { type: 'user', content: '送って' }];
+  assert.deepEqual(judge({ tool_name: 'mcp__claude_ai_Gmail__send_message', tool_input: { body: multilineBody }, transcript }), { decision: 'block', reason: BODY_NOT_SHOWN_REASON });
 });

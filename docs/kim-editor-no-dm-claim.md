@@ -17,3 +17,4 @@
 - 原因: 旧 Discord 例外・kim の DM キューを前提とした4テスト、旧ルール移行条件と生成テンプレートの2テストが現行方針と不一致。clean-install は必須の intra-turn-progress-reminder が登録正本から欠落。
 - 修正: 旧例外は送信ゼロと台帳読み戻しで検証し、他メンバーの通知制限を維持。移行条件とテンプレートを正本に同期。進捗 hook の登録を復元し、kim-editor-posttool も setup の必須検証に追加。
 - 検証: 関連162件成功・失敗0・skip0。新規プロファイルの全必須 hook 検証と、2つの PostToolUse hook 欠落時の検出・再登録の回帰テストを追加。
+- main 追従: 通知関数の競合を解消し、例外なしの kim-inbox 送信と main の sessionId 保存を両立。sessionId 読み戻しの回帰検証も追加。

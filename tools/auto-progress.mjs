@@ -37,15 +37,27 @@ export function addCheck({ session, check, startWhen, deadline, label, nextClaud
     deadlineAt: new Date(deadlineMs).toISOString(), label: label.trim(), nextClaude: nextClaude || '', ...(doneFile ? { doneFile } : {}), ...(ask !== undefined || old?.ask ? { ask: ask ?? old.ask } : {}), ...timeoutFields };
   writeLedger(file, applyPromise(rows, row)); return row;
 }
+export function auditChecks({ home = process.env.ORGIAST_HOME || os.homedir(), execute = executeCheck } = {}) {
+  const rows = readLedger(ledgerFile(home)).filter(row => row.status === 'open' && row.check);
+  const errors = [];
+  for (const row of rows) {
+    let result;
+    try { result = execute(row, { home }); }
+    catch (error) { result = { code: null, stderr: error.message }; }
+    if (result.code !== 0 && result.code !== 1) errors.push({ label: row.label || row.promise || '', stderr: String(result.stderr || result.text || '').split(/\r?\n/, 1)[0] });
+  }
+  return { checked: rows.length, errorCount: errors.length, errors };
+}
 export function main(argv = process.argv.slice(2)) {
+  if (argv.length === 1 && argv[0] === '--audit-checks') return auditChecks();
   const { values } = parseArgs({ args: argv, options: { 'add-check': { type: 'boolean' }, 'ask-file': { type: 'string' }, 'done-file': { type: 'string' }, 'start-when': { type: 'string' }, 'allow-met': { type: 'boolean' }, 'force-check': { type: 'boolean' }, session: { type: 'string' }, check: { type: 'string' }, deadline: { type: 'string' }, label: { type: 'string' }, 'next-claude': { type: 'string' }, timeout: { type: 'string' } } });
-  if (!values['add-check'] && !values['start-when']) throw new Error('使用法: --start-when "<cmd>" --session <id> --label "<名前>" --deadline +24h --next-claude "<作業>" [--check "<完了判定>"] または --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" [--timeout <秒>] [--ask-file <path>] [--done-file <path>] [--allow-met] [--force-check]');
+  if (!values['add-check'] && !values['start-when']) throw new Error('使用法: --start-when "<cmd>" --session <id> --label "<名前>" --deadline +24h --next-claude "<作業>" [--check "<完了判定>"] または --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" [--timeout <秒>] [--ask-file <path>] [--done-file <path>] [--allow-met] [--force-check] または --audit-checks');
   const home = process.env.ORGIAST_HOME || os.homedir();
-  if (!values['start-when'] && !values['force-check']) {
+  if (!values['start-when']) {
     const timeoutSec = values.timeout === undefined || values.timeout === '' ? null : Number(values.timeout);
     const hasTimeout = timeoutSec !== null && timeoutSec > 0 && timeoutSec * 1000 <= MAX_CHECK_TIMEOUT_MS;
     const checkTimeoutMs = hasTimeout ? Math.round(timeoutSec * 1000) : undefined;
-    const pf = preflightCheck({ check: values.check, checkCwd: process.cwd(), cwd: process.cwd(), ...(checkTimeoutMs ? { checkTimeoutMs } : {}) }, { home });
+    const pf = preflightCheck({ check: values.check, checkCwd: process.cwd(), cwd: process.cwd(), ...(checkTimeoutMs ? { checkTimeoutMs } : {}) }, { home, forceCheck: values['force-check'] });
     if (!pf.ok) throw new Error(pf.text);
   }
   return addCheck({ ...values, home, askFile: values['ask-file'], doneFile: values['done-file'], startWhen: values['start-when'], nextClaude: values['next-claude'], allowMet: values['allow-met'], probe: row => executeCheck(row, { home }) });

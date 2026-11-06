@@ -46,6 +46,31 @@ function recipientWarning(options, now) {
 export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.homedir(), env = process.env, now = Date.now(), label = resolveFleetLabel(home), ...ownerOptions } = {}) {
   if (isUnattendedSession(input, { home, env })) return null;
   const sessionId = input?.session_id || input?.sessionId; if (!sessionId) return null;
+  
+  // Check for mobile push queue requests
+  let mobilePushContext = '';
+  try {
+    const { listPending } = await import('./mobile-push-queue.mjs');
+    const pending = listPending(home);
+    if (pending.length > 0) {
+      // Group by owner and display in a single message
+      const byOwner = {};
+      pending.forEach(item => {
+        if (!byOwner[item.owner]) byOwner[item.owner] = [];
+        byOwner[item.owner].push(item);
+      });
+      mobilePushContext = '【モバイルプッシュ通知】以下のプッシュ通知が未送信です。次のコマンドで送信してください:\n';
+      Object.entries(byOwner).forEach(([owner, items]) => {
+        mobilePushContext += `├─ 宛先: ${owner}\n`;
+        items.forEach(item => {
+          mobilePushContext += `│  ├─ ID: ${item.id}\n`;
+          mobilePushContext += `│  ├─ タイトル: ${item.title}\n`;
+          mobilePushContext += `│  └─ 本文: ${String(item.body).slice(0, 200)}\n`;
+        });
+        mobilePushContext += `└─ 総件数: ${items.length} 件。'node tools/mobile-push-queue.mjs --mark-sent <id>' で送信。\n\n`;
+      });
+    }
+  } catch { /* ignore if mobile-push-queue.mjs is not available */ }
   const ownerFile = inboxFile(home, '_owner');
   const sessionFile = inboxFile(home, sessionId);
   const sessionRows = readRows(sessionFile);

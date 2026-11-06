@@ -10,6 +10,7 @@ import { notifyKim, KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { isEntry } from './is-entry.mjs';
+import { enqueue } from './mobile-push-queue.mjs';
 // 所有者解決は lib/fleet-owner.mjs（kim-inbox と共用。ここに置くと notify-kim -> kim-inbox -> notify-owner の import が循環する）。
 import { ownerPcMap, resolveOwner, canonicalOwnerPcMap, isSharedOwner } from './lib/fleet-owner.mjs';
 export { resolveOwner };
@@ -203,6 +204,7 @@ export async function notifyOwner(owner, text, options = {}) {
   const configured = localPcEntry(options.pcMap ?? ownerPcMap(home), options.label ?? resolveFleetLabel(home));
   const channels = local && !kim && Array.isArray(configured?.notifyChannels) ? configured.notifyChannels : null;
   const discordEnabled = !channels || channels.includes('discord');
+  const mobilePushEnabled = !channels || channels.includes('mobile-push');
   let localInboxOk = false;
   if (local && !kim) {
     try { await prependInbox(home, safeText, at); localInboxOk = true; } catch { /* continue other delivery paths */ }
@@ -244,7 +246,23 @@ export async function notifyOwner(owner, text, options = {}) {
     attempts.push({ channel: 'toast', purpose, ...(receipt || {}), ok });
     return ok;
   };
+  
+  // Mobile push notification handling
+  const push = async (title, body) => {
+    if (!mobilePushEnabled) return false;
+    if (owner.toLowerCase() === 'kim@orgiast.jp' || owner.toLowerCase() === 'cr@orgiast.jp') {
+      try {
+        const id = enqueue({ owner, title, body, home });
+        attempts.push({ channel: 'mobile-push', ok: true, id });
+        return true;
+      } catch { /* recorded below */ }
+    }
+    attempts.push({ channel: 'mobile-push', ok: false, reason: 'channel disabled or owner not eligible' });
+    return false;
+  };
   const sent = (!channels || channels.includes('toast')) && await toast(fallbackText, 'progress');
+  // Send mobile push notification for cr@ and kim@ owners if enabled
+  const pushed = await push('進捗', safeText);
   if (!valid && discordEnabled) {
     const file = path.join(home, '.claude', 'logs', 'owner-recipient-notice.json');
     const day = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
@@ -263,7 +281,9 @@ export async function notifyOwner(owner, text, options = {}) {
   }
   const channel = sent ? 'toast' : inboxOk ? 'inbox' : 'none';
   const progressToast = attempts.find(a => a.purpose === 'progress');
-  return finish({ delivered: channel, channel, ok: channel !== 'none', ...degradation, reason, toastExitCode: progressToast?.exitCode ?? null });
+  const pushResult = attempts.find(a => a.channel === 'mobile-push');
+  const deliveredChannel = pushed ? 'mobile-push' : sent ? 'toast' : inboxOk ? 'inbox' : 'none';
+  return finish({ delivered: deliveredChannel, channel: deliveredChannel, ok: deliveredChannel !== 'none', ...degradation, reason, toastExitCode: progressToast?.exitCode ?? null, mobilePush: pushed ? { id: pushResult?.id, ok: pushResult?.ok } : null });
 }
 
 export async function main(args = process.argv.slice(2), options = {}) {

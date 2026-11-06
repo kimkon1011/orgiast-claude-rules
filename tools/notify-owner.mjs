@@ -11,7 +11,7 @@ import { redactSecrets } from './redact-secrets.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { isEntry } from './is-entry.mjs';
 // 所有者解決は lib/fleet-owner.mjs（kim-inbox と共用。ここに置くと notify-kim -> kim-inbox -> notify-owner の import が循環する）。
-import { ownerPcMap, resolveOwner } from './lib/fleet-owner.mjs';
+import { ownerPcMap, resolveOwner, canonicalOwnerPcMap, isSharedOwner } from './lib/fleet-owner.mjs';
 export { resolveOwner };
 
 const readJson = (file, fallback = {}) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } };
@@ -23,6 +23,8 @@ function localPcEntry(map, label) {
 }
 
 function explicitNotifyDiscordId(owner, { home = os.homedir(), label = resolveFleetLabel(home), pcMap } = {}) {
+  // 共用席は正本の宛先だけを信頼し、未登録席も kim が受け取る。
+  if (isSharedOwner(owner)) return String(localPcEntry(canonicalOwnerPcMap(), label)?.notifyDiscordId || '').trim() || KIM_DISCORD_USER_ID;
   const configured = localPcEntry(pcMap ?? ownerPcMap(home), label);
   const localOwner = String(configured?.account || configured?.owner || '').trim().toLowerCase();
   return localOwner && localOwner === String(owner || '').trim().toLowerCase()
@@ -39,6 +41,7 @@ function recipientMatchesOwner(owner, id, options = {}) {
   const { home = os.homedir(), directory, pcMap } = options;
   const wanted = String(owner || '').trim().toLowerCase();
   if (!wanted || !String(id || '').trim()) return false;
+  if (isSharedOwner(owner)) return String(id) === explicitNotifyDiscordId(owner, options);
   if (String(id) === explicitNotifyDiscordId(owner, options)) return true;
   if (String(id) === KIM_DISCORD_USER_ID && wanted !== 'kim@orgiast.jp') return false;
   const memberMismatch = directoryRows(home, directory).some(row => String(row.id) === String(id)

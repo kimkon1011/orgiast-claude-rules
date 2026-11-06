@@ -1298,11 +1298,23 @@ async function runMain(argv, deps) {
     out(`完了=${done} / 期限切れ=${expired}`); return 0;
   }
   if (options['--reply']?.startsWith('mail-reply-') && !options['--force']) { err('fleet-mail: 返信メールへの返信は拒否（意図的な返信のみ --force）'); return 3; }
-  if (!configured && !options['--dry-run'] && !options['--send']) { err('fleet-mail: fleet-sheet.env 未設定のためスキップ'); return 0; }
+  if (!configured && !options['--dry-run'] && !options['--send'] && !options['--sent-status']) { err('fleet-mail: fleet-sheet.env 未設定のためスキップ'); return 0; }
   if (options['--sent-status']) {
     // 読み取りのみ: 返信が相手の受信タスクに拾われたか（deliveredAt）と返信済みか（resultAt）を確認する。
     // 読み取りは10秒で打ち切り、busy再試行もしない。hub不達でも親の呼出制限（例: auto-progress check 30秒）を超えないようにする。
     const id = options['--sent-status'];
+    // 返信は元メールとは別便。既読・完了分も含め、hub より先にローカルで確認する。
+    const replies = readInbox(home, { unreadOnly: false }).filter(mail => mail.replyTo === id);
+    let history = '';
+    try { history = fs.readFileSync(path.join(dir, 'fleet-mail-replies.jsonl'), 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    for (const line of history.split('\n')) {
+      let row; try { row = JSON.parse(line); } catch { continue; }
+      if (row?.id === id && row.replyId && !replies.some(mail => mail.id === row.replyId)) replies.push({ id: row.replyId, from: row.from, createdAt: row.resultAt, body: row.resultBody });
+    }
+    if (replies.length) {
+      out(replies.map(mail => [`reply: ${mail.id}`, `replyFrom: ${mail.from || '(なし)'}`, `replyCreatedAt: ${mail.createdAt || '(なし)'}`, `replyBody:\n${redactSecrets(mail.body || '')}`].join('\n')).join('\n'));
+      return 0;
+    }
     let result;
     try { result = await request('mail-get', { id }, 10_000, { retries: 0 }); }
     catch (error) { err(`fleet-mail: 状態を取得できません（hub不達: ${error.message}）`); return 3; }

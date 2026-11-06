@@ -444,3 +444,35 @@ test('宛先未解決の inbox fallback は戻り値と台帳に劣化を記録�
   assert.equal(failedDm.degraded, undefined);
   assert.ok(failedDm.attempts.every(a => a.degraded === undefined));
 });
+
+for (const label of ['DESKTOP-BDOAK99', 'user-PC']) {
+  test(`共用席 ${label} はローカルの別人宛先を無視して kim へ送る`, async t => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-shared-'));
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(home, '.claude'));
+    const owner = 'seisaku-team@orgiast.jp', wrongId = '1423319951980232744';
+    fs.writeFileSync(path.join(home, '.claude', 'fleet-pc-map.json'), JSON.stringify({ [label]: { account: owner, notifyDiscordId: wrongId, discordId: wrongId } }));
+    fs.writeFileSync(path.join(home, '.claude', 'orgiast-discord-user-id.txt'), wrongId);
+    const options = { home, label, directory: [{ id: wrongId, emails: [owner] }, { id: KIM_DISCORD_USER_ID, emails: ['kim@orgiast.jp'] }] };
+    assert.equal(resolveOwnerDiscordId(owner, options), KIM_DISCORD_USER_ID);
+    assert.equal(resolveOwnerDiscordId(' SEISAKU-TEAM@ORGIAST.JP ', options), KIM_DISCORD_USER_ID);
+    let calls = 0;
+    const result = await notifyOwner(owner, '共用席の進捗', { ...options, notify: async (_, opts) => {
+      calls++; assert.equal(opts.userId, KIM_DISCORD_USER_ID); return { delivered: 'dm', messageId: 'receipt' };
+    }, toast: () => assert.fail('kim へ配達済み') });
+    assert.equal(calls, 1);
+    assert.equal(result.channel, 'discord');
+    assert.equal(result.ok, true);
+    assert.ok(result.attempts.every(a => a.reason !== 'owner Discord recipient unresolved or mismatched'));
+    const rejected = await notifyOwner(owner, '誤宛先', { ...options, userId: wrongId, notify: () => assert.fail('別人へ送らない'), toast: () => false });
+    assert.equal(rejected.degraded, 'no-recipient');
+  });
+}
+
+test('個人席はローカルの明示宛先を引き続き優先する', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-personal-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude', 'fleet-pc-map.json'), JSON.stringify({ 'nishi-PC': { account: 'nishi@orgiast.jp', notifyDiscordId: '123' } }));
+  assert.equal(resolveOwnerDiscordId('nishi@orgiast.jp', { home, label: 'nishi-PC', directory: [{ id: '456', emails: ['nishi@orgiast.jp'] }] }), '123');
+});

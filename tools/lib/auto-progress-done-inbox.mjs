@@ -3,6 +3,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { addItem, listItems, isKimSeat } from '../kim-inbox.mjs';
 import { rowKey } from '../auto-progress-ledger.mjs';
+import { discordAllowed } from './kim-discord-allowlist.mjs';
+import { notifyKim } from '../notify-kim.mjs';
+
+// kim 席の完了通知は inbox が受領の正本だが、許可リスト（progress-done）に合う本文は Discord DM にも流す。
+// 2026-11-05 の完了通知 25 件が全部 session-inbox 止まりで、kim が「進捗どう？」と聞く状態に戻っていた（11/06 実測）。
+async function mirrorToDiscord(home, text, io) {
+  if (!discordAllowed(text, { home }).allowed) return undefined;
+  try {
+    const result = await (io.notifyKim ?? notifyKim)(text, { home, kind: 'info', source: 'auto-progress-done' });
+    return { delivered: result?.delivered ?? 'none', messageId: result?.messageId };
+  } catch (error) {
+    return { delivered: 'none', reason: String(error?.message ?? error).slice(0, 200) };
+  }
+}
 
 export const usesKimDoneInbox = (row, home) => isKimSeat(home) || String(row.owner || '').toLowerCase() === 'kim@orgiast.jp';
 export const hasDoneInboxReceipt = row => Boolean(row.doneInboxId && row.doneInboxVerifiedAt);
@@ -21,6 +35,8 @@ export async function deliverDoneInbox(home, rows, text, { now = Date.now(), io 
     }
     delivery = { delivered: 'session-inbox', channel: 'kim-inbox', ok: true, id: stored.id,
       receipt: { doneInboxId: stored.id, doneInboxVerifiedAt: new Date(now).toISOString(), doneNotifiedAt: new Date(now).toISOString(), doneNotifyPending: false } };
+    const discord = await mirrorToDiscord(home, text, io);
+    if (discord) delivery.discord = discord;
     return delivery;
   } catch (error) {
     delivery.reason = String(error?.code || error?.message || error).slice(0, 200);

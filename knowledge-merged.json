@@ -1,4 +1,26 @@
-{
-  "description": "knowledge-inbox の統合済み台帳。/rules-sync (merge) が処理した投稿をここに記録する（Drive MCP に delete が無いため台帳方式）",
-  "processed": []
-}
+[
+  {
+    "fileId": "1U2RWJOEvSatFc5rJlxsWhdSKAVP_w-bs",
+    "title": "20261029-nishi-use-official-system-and-templates.md",
+    "target": "ONBOARDING §2.1/§2.10",
+    "date": "2026-11-07",
+    "status": "merged",
+    "note": "汎用版。ONBOARDING §2.1（相互参照追加）・§2.10（新設）に統合済み"
+  },
+  {
+    "fileId": "1QsEuehrVGEQVu8n6hw6BBAnzrzLeUsry",
+    "title": "20261029-nishi-rental-docs-use-official-pipeline.md",
+    "target": "REPLACED_BY generic version",
+    "date": "2026-11-07",
+    "status": "superseded",
+    "note": "個別版。汎用版 20261029-nishi-use-official-system-and-templates.md に置き換え。knowledge-inbox に残存（削除不可）"
+  },
+  {
+    "fileId": "1snSuWFZDxyu9fUtUnoqifvTylKurDTn2",
+    "title": "20261029-nishi-application-form-from-estimate-sheet.md",
+    "target": "ONBOARDING §2.7.1",
+    "date": "2026-11-07",
+    "status": "merged",
+    "note": "ONBOARDING §2.7.1 に「書類作成の事前確認と申込書の正しい作り方」として統合済み。PR #1664"
+  }
+]

@@ -15,13 +15,15 @@ import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { notifyOwner, resolveOwner, sendOwnerToast } from './notify-owner.mjs';
 import { escalateKimDecisions } from './auto-progress-escalate.mjs';
 import { isQuietHours, kimAction } from './auto-progress-digest.mjs';
+import { completionActions } from './lib/auto-progress-artifact.mjs';
+import { reportCheckProgress } from './lib/auto-progress-heartbeat.mjs';
 import { checkPromise, checkProgressSummary, executeCheck, isTimeOnlyCheck, queueCheckFollowup, pendingAction } from './auto-progress-check.mjs';
 import { addItem } from './kim-inbox.mjs';
 import { appendInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { BLOCKER, readJson as readFleetJson, saveJson as saveFleetJson } from './lib/fleet-chase-ledger.mjs';
 import { errorKind, findUnansweredRequest } from './lib/unanswered-request.mjs';
-import { deliverDoneInbox, hasDoneInboxReceipt, usesKimDoneInbox } from './lib/auto-progress-done-inbox.mjs';
+import { refreshDoneApprovals, deliverDoneInbox, hasDoneInboxReceipt, usesKimDoneInbox } from './lib/auto-progress-done-inbox.mjs';
 
 export const GRACE_MS = 1 * 3600 * 1000;
 export const RESUME_INTERVAL_MS = 2 * 3600 * 1000;
@@ -304,9 +306,9 @@ export function formatDoneMessage(row, { reason = '', artifact = '', home = proc
     origin,
     '✅ 自動進行が完了しました',
     formatDoneLine(row, { reason, artifact, home }),
-    'kim がすること: なし',
+    completionActions({ ...row, artifact: artifact || row.artifact }, { home }).text,
   ];
-  return lines.join('\n').slice(0, 1900);
+  return lines.join('\n').slice(0, 4000);
 }
 
 export function logDoneDm(home, row, delivery, message, now = Date.now(), io = {}, toastResult = null) {
@@ -678,9 +680,10 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       const message = formatDoneMessage(row, { reason, artifact, home, io, ownerOf });
       let delivery = null;
       try {
-        delivery = await deliverDoneInbox(home, [row], message, { now, io });
+        delivery = await deliverDoneInbox(home, [{ ...row, artifact: artifact || row.artifact }], message, { now, io });
         return patch(rowKey(row), delivery.receipt);
       } catch (error) {
+        patch(rowKey(row), { doneNotifyPending: true, doneNotifyArtifact: artifact || row.artifact || '' });
         summary.errors.push(`notify-done: ${String(error?.message ?? error).slice(0, 120)}`);
         return false;
       } finally { logDoneDm(home, row, delivery, message, now, io); }
@@ -712,6 +715,10 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     return ['dm', 'session-inbox', 'toast', 'inbox'].includes(delivery?.delivered);
   };
   const rows = readLedger(file);
+  if (!dryRun) {
+    try { await refreshDoneApprovals(home, rows, { now, io, patch }); }
+    catch (error) { summary.errors.push(`done-approvals: ${String(error.message).slice(0, 200)}`); }
+  }
   await registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io, persist);
   let candidates = latestOpenPromises(rows);
   // check 付き行は sessionId + label ごとに1件選ばれるため、別 label の自動チェックはすべて残る。
@@ -877,7 +884,8 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       if (row.status !== 'scheduled' || isUnattendedRow(row, home)) continue;
       const result = await (io.executeCheck ?? executeCheck)({ ...row, check: row.startWhen }, { home });
       summary.checked++;
-      if (!patch(key, { lastCheckedAt: at })) continue;
+      if (!patch(key, { lastCheckedAt: at, checkResult: result.code === 1 ? 'unmet' : result.code === 0 ? 'ready' : 'error', checkText: result.text })) continue;
+      if (result.code !== 0) await reportCheckProgress(home, { ...row, lastCheckedAt: at }, result, { now, patch, io });
       if (result.code !== 0) {
         if (result.code !== 1) summary.errors.push(`start-when: ${result.text}`);
         continue;

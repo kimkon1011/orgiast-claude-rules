@@ -283,28 +283,30 @@ test('起票しても次の1目的を作らない（目的の乗っ取り回帰�
   assert.doesNotMatch(planRotation(filed).text, /1\. 通知の原因調査と修復/);
 });
 
-test('PRマージ依頼は送信せずblockedを返す', async () => {
+test('PRマージ依頼はDiscordに送信せず同じ本文をinboxへ保存する', async () => {
   let fetches = 0;
   const originalError = console.error;
   let errorLine = '';
   console.error = value => { errorLine = value; };
   try {
-    const result = await realNotifyKim('PR #943 をマージしてください', {
+    const dir = home(); fs.mkdirSync(path.join(dir, '.claude')); fs.writeFileSync(path.join(dir, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+    const result = await realNotifyKim('PR #943 をマージしてください', { home: dir,
       fetchImpl: async () => { fetches += 1; throw new Error('unexpected fetch'); },
     });
-    assert.deepEqual(result, {
-      delivered: 'blocked', category: 'merge-request', reason: 'PR のマージ依頼は fleet-mail で扱います',
-    });
+    assert.equal(result.delivered, 'session-inbox'); assert.equal(result.discordBlocked, true);
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, '.claude/kim-inbox', result.id + '.json'), 'utf8'));
+    assert.equal(saved.text, 'PR #943 をマージしてください');
     assert.equal(fetches, 0);
     assert.match(errorLine, /fleet-mail --to kim-PC/);
   } finally { console.error = originalError; }
 });
 
-test('notify-kim CLIはblockedでexit 3、明示例外なら送信する', async () => {
+test('notify-kim CLIはinbox保存成功でexit 0、明示例外なら送信する', async () => {
   const originalError = console.error;
   console.error = () => {};
   try {
-    assert.equal(await main(['PR #943 をマージしてください']), 3);
+    const dir = home(); fs.mkdirSync(path.join(dir, '.claude')); fs.writeFileSync(path.join(dir, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+    assert.equal(await main(['PR #943 をマージしてください'], { home: dir }), 0);
     const calls = [];
     assert.equal(await main(['PR #943 をマージしてください', '--kim-action-required'], {
       // 送信枠の台帳も一時homeへ隔離し、実ユーザーの状態に触れない。

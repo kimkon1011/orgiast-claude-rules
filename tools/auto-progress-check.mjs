@@ -5,7 +5,8 @@ import { createHash } from 'node:crypto';
 import { isUnattendedRow, rowKey, originLine } from './auto-progress-ledger.mjs';
 import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
-import { deliverDoneInbox, hasDoneInboxReceipt } from './lib/auto-progress-done-inbox.mjs';
+import { reportCheckProgress } from './lib/auto-progress-heartbeat.mjs';
+import { deliverDoneInbox, hasDoneInboxReceipt, usesKimDoneInbox } from './lib/auto-progress-done-inbox.mjs';
 
 export const CHECK_ERROR_PATTERNS = [
   /Cannot find path/i,
@@ -55,7 +56,12 @@ export function hasBashEnvExpansion(command) {
  *   preflight=static_error → $env: 展開を検出
  *   preflight=stderr_error → stderr にエラー印を検出
  */
+export function checkPatternWarnings(command) {
+  return /(?<!\\)\$(?=[/'"])/.test(String(command || '')) && /readFile|Get-Content|grep|Select-String|\.log/i.test(command)
+    ? ['末尾の $ は CRLF や exit=0 rounds=1 の追加フィールドで不一致になり得ます。実際の成功行を使って検証し、改行を正規化するか exit=0(?:\\s|$) のように境界を指定してください。'] : [];
+}
 export function preflightCheck(row, { home, forceCheck = false } = {}) {
+  for (const warning of checkPatternWarnings(row.check)) console.error(`check preflight 警告: ${warning}`);
   // 静的検査
   if (!forceCheck && hasBashEnvExpansion(row.check)) {
     const msg = [
@@ -157,7 +163,7 @@ export async function checkPromise(row, { home, now, patch, io = {}, suppressNot
   const overdue = now >= Date.parse(row.deadlineAt);
   const changes = { checkResult: state, checkText: String(result.text || ''), checkStderr: String(result.stderr || ''), lastCheckedAt: new Date(now).toISOString(),
     verdict: state === 'done' ? 'done' : state === 'error' ? 'check_error' : overdue ? 'unmet' : 'in_progress',
-    ...(state === 'done' ? { status: 'done', doneAt: row.doneAt || new Date(now).toISOString() } : {}) };
+    ...(state === 'done' ? { status: 'done', ...(!hasDoneInboxReceipt(row) ? { doneNotifyPending: true } : {}), doneAt: row.doneAt || new Date(now).toISOString() } : {}) };
   if (patch(rowKey(row), changes) === false) return 'ledger_error';
   if (state === 'done') {
     if (hasDoneInboxReceipt(row)) return state;
@@ -171,7 +177,8 @@ export async function checkPromise(row, { home, now, patch, io = {}, suppressNot
     return state;
   }
   Object.assign(row, changes);
-  if (suppressNotices) return state;
+  await reportCheckProgress(home, row, result, { now, patch, io });
+  if (suppressNotices || (state === 'unmet' && usesKimDoneInbox(row, home) && !pendingAction(row).startsWith('あなたの作業待ち:'))) return state;
   if (state === 'unmet') {
     const lastNotified = Date.parse(row.lastUnmetNotifiedAt || (!overdue ? row.ts : '')) || 0;
     if ((!overdue || row.checkNotifiedResult === 'unmet') && now - lastNotified < (overdue ? 24 * 3600000 : UNMET_INTERVAL_MS)) return state;

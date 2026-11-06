@@ -64,7 +64,7 @@ function update(home, id, fn) {
     fn(item); save(home, item); return item;
   });
 }
-const isHighInfo = item => item.kind === 'info' && /完了:|✅|未達|確認エラー|判断待ち|自動進行|まとめ/.test(item.text);
+const isHighInfo = item => item.kind === 'info' && (item.priority === 'high' || /完了:|✅|未達|確認エラー|判断待ち|自動進行|まとめ/.test(item.text));
 const hasWorkId = item => /作業ID:\s*[a-f0-9]{8}(?![a-f0-9])/i.test(item.text);
 const newestFirst = (a, b) => (b.lastAt || b.createdAt).localeCompare(a.lastAt || a.createdAt) || b.id.localeCompare(a.id);
 function normalizationKey(text) {
@@ -89,6 +89,12 @@ function create(home, options) {
     // Keep distinct jobs separate even when their text normalizes to the same prefix.
     if (options.dedupeKey) {
       const existing = listItems(home).find(item => item.dedupeKey === clean(options.dedupeKey));
+      if (existing && options.refresh && (existing.source === 'auto-progress-heartbeat' || (existing.source === 'auto-progress-done' && existing.kind === 'info' && options.kind === 'ask' && ['open', 'seen'].includes(existing.status)))) return update(home, existing.id, current => {
+        if (current.source === 'auto-progress-done' && (current.kind !== 'info' || !['open', 'seen'].includes(current.status))) return;
+        current.text = text; current.kind = options.kind; current.status = 'open'; current.priority = 'high'; current.lastAt = new Date().toISOString();
+        current.shownCount = 0; current.shownSessions = []; current.lastShownAt = null;
+        current.forwardMailId = options.forwardMailId || null; current.forwardError = null;
+      });
       return existing || createNew(home, options);
     }
     if ((options.kind ?? 'info') === 'info') {
@@ -139,13 +145,13 @@ export function compactItems(home) {
     return result;
   });
 }
-function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false }) {
+function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, priority }) {
   if (!['ask', 'info', 'deadline'].includes(kind)) throw new Error('kind は ask / info / deadline');
   fs.mkdirSync(directory(home), { recursive: true });
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(urgent ? { urgent: true } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: clean(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(priority === 'high' ? { priority } : {}), ...(urgent ? { urgent: true } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: clean(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
   }
@@ -165,7 +171,7 @@ export function spoolItem(home, options) {
   fs.mkdirSync(dir, { recursive: true });
   const id = randomBytes(16).toString('hex');
   const file = path.join(dir, `${id}.json`), temp = `${file}.tmp`;
-  const record = { kind: options.kind || 'info', text: clean(options.text), source: clean(options.source),
+  const record = { ...(options.priority === 'high' ? { priority: 'high' } : {}), kind: options.kind || 'info', text: clean(options.text), source: clean(options.source),
     from: clean(options.from ?? resolveFleetLabel(home, { hostname: os.hostname() })),
     dedupeKey: options.dedupeKey ? clean(options.dedupeKey) : `spool:${id}` };
   try {
@@ -209,7 +215,7 @@ export async function addItem(home, options, { drain = true } = {}) {
   try {
     const file = path.join(temp, 'body.txt');
     fs.writeFileSync(file, item.text, { mode: 0o600 });
-    const { stdout } = await (options.execImpl ?? exec)(process.execPath, [fileURLToPath(new URL('./fleet-mail.mjs', import.meta.url)), '--send', '--to', 'kim-PC', '--kind', 'note', '--why', `[kim-inbox:${item.kind}] ${item.text.split(/\r?\n/)[0].slice(0, 60)}`, '--body-file', file], { encoding: 'utf8', windowsHide: true, timeout: 60000, signal: options.signal, env: { ...process.env, ORGIAST_HOME: home } });
+    const { stdout } = await (options.execImpl ?? exec)(process.execPath, [fileURLToPath(new URL('./fleet-mail.mjs', import.meta.url)), '--send', '--to', 'kim-PC', '--kind', 'note', '--why', `[kim-inbox:${item.kind}] ${/^auto-progress-(?:done|heartbeat)$/.test(item.source) ? `[source:${item.source}] ${item.dedupeKey ? `[key:${item.dedupeKey}] ` : ''}` : ''}${item.text.split(/\r?\n/)[0].slice(0, 60)}`, '--body-file', file], { encoding: 'utf8', windowsHide: true, timeout: 60000, signal: options.signal, env: { ...process.env, ORGIAST_HOME: home } });
     const id = stdout.trim().match(/^(?:送信済み: )?(mail-[A-Za-z0-9-]+)$/m)?.[1];
     if (!id) throw new Error('転送先のメールIDを取得できません');
     return update(home, item.id, current => { current.status = 'forwarded'; current.forwardMailId = id; current.forwardError = null; });
@@ -297,11 +303,13 @@ export async function ingestFleetMail(home) {
       try { fs.writeFileSync(path.join(skipped, id), '', { flag: 'wx', mode: 0o600 }); } catch { /* 既に記録済み */ }
       continue;
     }
+    const source = /\[source:(auto-progress-(?:done|heartbeat))\]/.exec(mail.why || '')?.[1] || 'fleet-mail';
+    const producerKey = source !== 'fleet-mail' ? /\[key:([a-zA-Z0-9:-]{1,160})\]/.exec(mail.why || '')?.[1] : undefined;
     const marker = path.join(directory(home), '.ingested', id);
     locked(home, 'ingest', () => {
       if (fs.existsSync(marker)) return;
       // 作成直後に終了しても forwardMailId から再発見し、二重起票を防ぐ。
-      const item = listItems(home).find(i => i.forwardMailId === id) ?? (isInboxNoise({ kind, text: mail.body }) ? { id: 'suppressed', status: 'suppressed' } : create(home, { kind, text: mail.body, from: mail.from, source: 'fleet-mail', forwardMailId: id }));
+      const item = listItems(home).find(i => i.forwardMailId === id) ?? (isInboxNoise({ kind, text: mail.body }) ? { id: 'suppressed', status: 'suppressed' } : create(home, { kind, text: mail.body, from: mail.from, source, ...(producerKey ? { dedupeKey: `fleet:${mail.from}:${producerKey}`, refresh: true } : {}), forwardMailId: id }));
       fs.mkdirSync(path.dirname(marker), { recursive: true });
       fs.writeFileSync(marker, item.id, { flag: 'wx', mode: 0o600 });
       imported.push(item);
@@ -320,10 +328,16 @@ function deadlineDays(item, now) {
   return /期限切れ/.test(item.text) ? -Infinity : Infinity;
 }
 export function selectContext(items, { sessionId = '', now = Date.now(), sheetUrl = '（未初期化）' } = {}) {
-  const pending = items.filter(i => i.status === 'open').sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const required = items.filter(i => i.status === 'open' && (i.source === 'auto-progress-done' || i.source === 'auto-progress-heartbeat' || i.priority === 'high') && (i.shownCount === 0 || i.kind === 'ask'));
+  let requiredText = '';
+  for (const item of required) {
+    requiredText += `■ ${item.kind} ${item.id} (${item.source})\n${item.kind === 'ask' || item.source === 'auto-progress-heartbeat' ? clean(item.text) : clean(item.text).split(/\r?\n/).slice(0, 2).join(' ').slice(0, 220)}\n`;
+    item.shownSessions = [...new Set([...item.shownSessions, sessionId])]; item.shownCount++; item.lastShownAt = new Date(now).toISOString();
+  }
+  const pending = items.filter(i => i.status === 'open' && !required.includes(i)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const allAsks = pending.filter(i => i.kind === 'ask');
   const asks = allAsks.filter(i => !i.urgent), infos = pending.filter(i => i.kind === 'info');
-  if (!pending.length) return '';
+  if (!pending.length) return requiredText ? `[kim-inbox 完了・進捗・承認待ち] kim に次の内容を伝え、ask は返答後 --answer、info は報告後 --seen で記録する。\n${requiredText}` : '';
   const deadlines = pending.filter(i => i.kind === 'deadline').sort((a, b) => deadlineDays(a, now) - deadlineDays(b, now) || String(a.key).localeCompare(String(b.key)));
   let text = `[kim-inbox 期限 ${deadlines.length} / 未回収 ask ${allAsks.length} / 未確認 info ${infos.length}] kim への報告は Discord ではなくこのセッションで行う（kim 2026-10-27）。ask は kim の返答を会話で受け取り記録するまで毎プロンプト再提示される。セッションを閉じても台帳に残り次セッションで再提示される。\n`;
   const footer = '一覧: node tools/kim-inbox.mjs --list --open';
@@ -367,7 +381,7 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
     item.shownSessions = [...new Set([...item.shownSessions, sessionId])];
     item.shownCount++; item.lastShownAt = new Date(now).toISOString();
   }
-  return redactSecrets(urgentText + text + footer);
+  return redactSecrets(requiredText + urgentText + text + footer);
 }
 export async function main(args = process.argv.slice(2), { home = process.env.ORGIAST_HOME || os.homedir(), stdout = console.log, stderr = console.error, readStdin = readStdinWithTimeout } = {}) {
   const value = flag => args[args.indexOf(flag) + 1];
@@ -383,10 +397,10 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       const items = listItems(home, { status: 'open' }).filter(i => kim || i.forwardError);
       const counts = new Map(items.map(i => [i.id, i.shownCount]));
       const context = selectContext(items, { sessionId: String(input.session_id ?? ''), sheetUrl: deadlineSheetUrl(home) });
+      if (context) stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }));
       for (const item of items.filter(i => i.shownCount !== counts.get(i.id))) update(home, item.id, current => {
         current.shownSessions = [...new Set([...current.shownSessions, ...item.shownSessions])]; current.shownCount++; current.lastShownAt = item.lastShownAt;
       });
-      if (context) stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }));
     } else if (args.includes('--add')) {
       const item = await addItem(home, { urgent: args.includes('--urgent'), text: fs.readFileSync(value('--body-file'), 'utf8'), kind: args.includes('--kind') ? value('--kind') : 'info', key: args.includes('--key') ? value('--key') : undefined, due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '' });
       stdout(JSON.stringify({ id: item.id, status: item.status, forwarded: item.status === 'forwarded' }));

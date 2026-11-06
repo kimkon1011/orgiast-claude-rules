@@ -12,7 +12,7 @@ import { proxyCredential, gwsFetch, GWS_MARKER } from './lib/gws-proxy.mjs';
  *   返信作成: --thread-id <threadId>（返信先ヘッダ・省略時の件名を自動取得）
  *   node tools/gmail-draft.mjs --delete <draftId> [--user <addr>] [--json]
  *   node tools/gmail-draft.mjs --to <addr> [--cc <addr>] --subject <件名>
- *     (--body <本文> | --body-file <path>) [--attach <path>]... [--thread-id <threadId>] [--user <addr>] [--dry-run] [--json]
+ *     (--body <本文> | --body-file <path>) [--from <sendAs addr>] [--attach <path>]... [--thread-id <threadId>] [--user <addr>] [--dry-run] [--json]
  *   宛先は裸のメールアドレス（複数はカンマ区切り、またはオプションを反復）。
  *   --check はトークン取得だけ。--send はスレッド全体との整合性を自動検査する。
  * 終了コード: 0 成功 / 3 内部宛 / 2 設定エラー / 1 その他。
@@ -27,12 +27,13 @@ import { loadLedger, isInternal, extractAddresses } from './internal-recipient-g
 import { bodyHash, checkConsistency, statePath, mimeText, render as renderConsistency } from './mail-consistency-check.mjs';
 
 export const GMAIL_COMPOSE_SCOPE = 'https://www.googleapis.com/auth/gmail.compose';
+export const GMAIL_SETTINGS_BASIC_SCOPE = 'https://www.googleapis.com/auth/gmail.settings.basic';
 export const DEFAULT_USER = 'seisaku-team@orgiast.jp';
 // 既定パスはハードコードしない（旧既定値はディレクトリ名の打ち間違いで鍵を見失っていた。2026-10-23 実測）。
 const DEFAULT_KEY = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath();
 const SCOPES = ['gmail.readonly', 'gmail.compose', 'gmail.send'].map(s => `https://www.googleapis.com/auth/${s}`);
 const b64url = value => Buffer.from(value).toString('base64url');
-const configError = () => Object.assign(new Error('設定を確認してください（引数・入力ファイル・SA キー）。'), { errorKind: 'configuration_error' });
+const configError = (message) => Object.assign(new Error(message ?? '設定を確認してください（引数・入力ファイル・SA キー）。'), { errorKind: 'configuration_error', ...(message ? { publicMessage: message } : {}) });
 
 function addresses(value, required = false) {
   const list = (Array.isArray(value) ? value : [value ?? '']).flatMap(v => {
@@ -46,7 +47,7 @@ function addresses(value, required = false) {
 
 const MIME_TYPES = { '.pdf':'application/pdf','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.csv':'text/csv','.txt':'text/plain','.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','.docx':'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
 function encodedWord(value) { return `=?UTF-8?B?${Buffer.from(value).toString('base64')}?=`; }
-export function buildRawMessage({ from, to, cc, subject, body, inReplyTo, references, attachments = [], extraHeaders = [] }) {
+export function buildRawMessage({ from, fromDisplayName, to, cc, subject, body, inReplyTo, references, attachments = [], extraHeaders = [] }) {
   if (inReplyTo !== undefined && (typeof inReplyTo !== 'string' || !/^<[^<>\s]+@[^<>\s]+>$/u.test(inReplyTo))) throw configError();
   if (references !== undefined && (typeof references !== 'string' || /[\r\n]/u.test(references))) throw configError();
   const sender = addresses(from, true);
@@ -62,7 +63,7 @@ export function buildRawMessage({ from, to, cc, subject, body, inReplyTo, refere
   const encodedSubject = chunks.map(s => `=?UTF-8?B?${Buffer.from(s).toString('base64')}?=`).join('\r\n ');
   const copy = addresses(cc);
   const headers = [
-    `From: ${sender[0]}`, `To: ${addresses(to, true).join(', ')}`,
+    `From: ${fromDisplayName ? `"${encodedWord(fromDisplayName)}" <${sender[0]}>` : sender[0]}`, `To: ${addresses(to, true).join(', ')}`,
     ...(copy.length ? [`Cc: ${copy.join(', ')}`] : []),
     `Subject: ${encodedSubject}`,
     ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`, `References: ${references || inReplyTo}`] : []),
@@ -178,7 +179,28 @@ function safeFailure(error) {
     too_large: '転送メールが25MBを超えています。',
     error: '処理に失敗しました（認証・通信・API 応答を確認してください）。',
   };
-  return { errorKind, error: messages[errorKind] };
+  return { errorKind, error: error?.publicMessage ?? messages[errorKind] };
+}
+
+async function resolveSendAs({ user, from, fetchImpl, getToken }) {
+  const requested = addresses(from, true);
+  if (requested.length !== 1) throw configError();
+  const token = await getToken({ user, scope: GMAIL_SETTINGS_BASIC_SCOPE });
+  const res = await fetchImpl('https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs', {
+    method: 'GET', signal: AbortSignal.timeout(25000), headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw Object.assign(new Error('sendAs 一覧の取得に失敗しました。'), {
+      errorKind: res.status === 403 ? 'forbidden_no_access' : res.status === 401 ? 'unauthorized' : 'error',
+      publicMessage: `sendAs 一覧の取得に失敗しました (${res.status})${detail ? `: ${detail}` : ''}`,
+    });
+  }
+  const json = await res.json();
+  const list = Array.isArray(json?.sendAs) ? json.sendAs.filter(item => typeof item?.sendAsEmail === 'string') : [];
+  const match = list.find(item => item.sendAsEmail.toLowerCase() === requested[0].toLowerCase());
+  if (!match) throw configError(`--from ${requested[0]} は許可されていません。許可されている sendAs: ${list.map(item => item.sendAsEmail).join(', ') || '(なし)'}`);
+  return { address: match.sendAsEmail, displayName: typeof match.displayName === 'string' ? match.displayName : '' };
 }
 
 function readKey(keyPath) {
@@ -321,7 +343,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const name = argv[i];
     if (['--check', '--json', '--dry-run'].includes(name)) { args[name.slice(2)] = true; continue; }
-    if (!['--to', '--cc', '--subject', '--body', '--body-file', '--user', '--delete', '--send', '--forward', '--thread-id', '--in-reply-to', '--attach', '--ack-consistency'].includes(name) || i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw configError();
+    if (!['--to', '--cc', '--subject', '--body', '--body-file', '--user', '--from', '--delete', '--send', '--forward', '--thread-id', '--in-reply-to', '--attach', '--ack-consistency'].includes(name) || i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw configError();
     const field = name.slice(2);
     const value = argv[++i];
     if (field === 'to' || field === 'cc' || field === 'attach') (args[field] ??= []).push(value);
@@ -347,7 +369,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     const fetchImpl = deps.fetchImpl ?? gwsFetch;
     const mintToken = deps.mintToken ?? (options => mintDwdToken({ ...options, fetchImpl }));
     if (Object.hasOwn(args, 'forward')) {
-      if (['send', 'delete', 'check', 'subject', 'thread-id', 'in-reply-to', 'attach', 'ack-consistency'].some(k => Object.hasOwn(args, k)) || !Object.hasOwn(args, 'to') || (Object.hasOwn(args, 'body') && Object.hasOwn(args, 'body-file'))) throw configError();
+      if (['send', 'delete', 'check', 'from', 'subject', 'thread-id', 'in-reply-to', 'attach', 'ack-consistency'].some(k => Object.hasOwn(args, k)) || !Object.hasOwn(args, 'to') || (Object.hasOwn(args, 'body') && Object.hasOwn(args, 'body-file'))) throw configError();
       let preface = args.body ?? '';
       if (args['body-file'] !== undefined) { try { preface = (deps.readFile ?? (p => fs.readFileSync(p, 'utf8')))(args['body-file']); } catch { throw configError(); } }
       const getToken = deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY }));
@@ -359,7 +381,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       return 0;
     }
     if (Object.hasOwn(args, 'send')) {
-      if (['delete', 'check', 'to', 'cc', 'subject', 'body', 'body-file', 'dry-run', 'thread-id', 'in-reply-to', 'attach'].some(k => Object.hasOwn(args, k))) throw configError();
+      if (['delete', 'check', 'from', 'to', 'cc', 'subject', 'body', 'body-file', 'dry-run', 'thread-id', 'in-reply-to', 'attach'].some(k => Object.hasOwn(args, k))) throw configError();
       if (!/^[A-Za-z0-9_-]+$/u.test(args.send)) throw configError();
       const getToken = deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY }));
       const token = await getToken({ user, scope: GMAIL_COMPOSE_SCOPE });
@@ -396,7 +418,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       return 0;
     }
     if (Object.hasOwn(args, 'delete')) {
-      if (['check', 'to', 'cc', 'subject', 'body', 'body-file', 'dry-run', 'thread-id', 'in-reply-to', 'attach', 'ack-consistency'].some(k => Object.hasOwn(args, k))) throw configError();
+      if (['check', 'from', 'to', 'cc', 'subject', 'body', 'body-file', 'dry-run', 'thread-id', 'in-reply-to', 'attach', 'ack-consistency'].some(k => Object.hasOwn(args, k))) throw configError();
       const result = await deleteDraft({ user, id: args.delete, fetchImpl,
         getToken: deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY })),
       });
@@ -406,7 +428,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       return 0;
     }
     if (args.check) {
-      if (['to', 'cc', 'subject', 'body', 'body-file', 'dry-run', 'thread-id', 'in-reply-to', 'attach', 'ack-consistency'].some(k => Object.hasOwn(args, k))) throw configError();
+      if (['from', 'to', 'cc', 'subject', 'body', 'body-file', 'dry-run', 'thread-id', 'in-reply-to', 'attach', 'ack-consistency'].some(k => Object.hasOwn(args, k))) throw configError();
       const results = await probeScopes({ user, keyPath: DEFAULT_KEY, scopes: SCOPES, mintToken, fetchImpl });
       const failed = results.filter(r => !r.ok);
       emit({ ok: !failed.length, results, ...(failed.length ? { errorKind: failed[0].errorKind } : {}) },
@@ -421,7 +443,12 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     }
     if (args['thread-id'] !== undefined && !/^[A-Za-z0-9_-]+$/u.test(args['thread-id'])) throw configError();
     const attachments = (args.attach ?? []).map(file => { try { return { name: path.basename(file), data: (deps.readAttachment ?? fs.readFileSync)(file) }; } catch { throw configError(); } });
-    const input = { inReplyTo: args['in-reply-to'], from: user, to: args.to, cc: args.cc, subject: args.subject ?? 'Re: (取得予定)', body, attachments };
+    let from = { address: user, displayName: '' };
+    if (args.from !== undefined) {
+      const getToken = deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY }));
+      from = await resolveSendAs({ user, from: args.from, fetchImpl, getToken });
+    }
+    const input = { inReplyTo: args['in-reply-to'], from: from.address, fromDisplayName: from.displayName, to: args.to, cc: args.cc, subject: args.subject ?? 'Re: (取得予定)', body, attachments };
     const guard = guardRecipients(input, (deps.loadLedger ?? loadLedger)());
     if (guard.blocked) {
       action = 'chat-display';

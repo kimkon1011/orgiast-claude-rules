@@ -1147,6 +1147,18 @@
       "reason": "webhook-health が fleet sheet への POST に使う実行時 import 依存（busy 再送の共通ヘルパ）"
     },
     {
+      "path": "tools/register-reopen-lost-sessions.ps1",
+      "scope": "fleet",
+      "step": "nightly-reload-vscode",
+      "reason": "全PCのログオン時に落ちた VS Code セッションを自動再オープンする scheduled task の登録（converge 経由）"
+    },
+    {
+      "path": "tools/reopen-lost-sessions.mjs",
+      "scope": "fleet",
+      "step": "nightly-reload-vscode",
+      "reason": "全PCのログオン時に起動し、RC API 経由で host_exit セッションを検出・再オープンする"
+    },
+    {
       "path": "tools/fleet-question-relay.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",

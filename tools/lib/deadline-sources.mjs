@@ -66,8 +66,17 @@ function timestamp(value) {
   const numeric = Number(value); return Number.isFinite(numeric) && numeric > 0 ? (numeric < 1e12 ? numeric * 1000 : numeric) : Date.parse(value);
 }
 export async function collectLine({ sheetId, state = {}, sheets, now }) {
-  const values = await sheets.get(sheetId, 'Messages!A:G');
-  const header = values[0] || [];
+  let values;
+  try {
+    values = await sheets.get(sheetId, 'Messages!A:H');
+  } catch (error) {
+    // The original LINE intake sheet predates the normalized Messages schema.
+    // Keep it readable without changing the external sheet or its permissions.
+    if (!/HTTP 400/.test(error.message)) throw error;
+    values = await sheets.get(sheetId, "'受信ログ'!A:H");
+  }
+  const aliases = { '受信日時(JST)': 'ts', '表示名': 'sender', '本文': 'text', 'メッセージID': 'id' };
+  const header = (values[0] || []).map(k => aliases[k] || k);
   if (!['id','ts','text'].every(k => header.includes(k))) throw new Error('LINE履歴の見出しが不足しています');
   const rows = values.slice(1).map(r => Object.fromEntries(header.map((k,i) => [k,r[i]])));
   const since = Date.parse(state.watermark || new Date(now.getTime() - 3 * 86400000).toISOString());

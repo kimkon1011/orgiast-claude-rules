@@ -1,3 +1,4 @@
+import { isKimHumanProgress } from './human-progress-row.mjs';
 import { checkProgressSummary } from './check-progress-summary.mjs';
 import { decisionOwnerOf } from '../auto-progress-decision-owner.mjs';
 import { notificationKind } from './owner-dm-policy.mjs';
@@ -60,7 +61,7 @@ export function compactDigest(rows, deferred, now, { home, owner = '' } = {}) {
   if (!unique.length) lines.push('なし');
   else if (recent.length > included.length) extra.push(`ほか返事待ち ${recent.length - included.length}件（次のまとめでお知らせします）`);
   if (extra.length) lines.push(extra.join(' ／ '));
-  const humanRows = rows.filter(r => notificationKind('', { kind: 'done-requested', session: r, home }) === 'done-requested');
+  const humanRows = rows.filter(r => isKimHumanProgress(r) || notificationKind('', { kind: 'done-requested', session: r, home }) === 'done-requested');
   const human = [...humanRows, ...deferred.filter(r => r.kind === 'done-requested' && !humanRows.some(h => h.sessionId && h.sessionId === r.session?.sessionId)).map(r => ({ ...r.session, status: 'done', label: r.session?.label || r.session?.requestText || r.text }))];
   const done = human.filter(r => r.status === 'done');
   const ongoing = human.filter(r => r.status !== 'done');

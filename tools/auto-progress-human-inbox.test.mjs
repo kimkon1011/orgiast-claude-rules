@@ -100,3 +100,9 @@ test('A JSON state changes notify even when summary and exit code stay the same'
   await deliverHumanProgress(dir, r); await deliverHumanProgress(dir, r);
   assert.equal(listItems(dir).length, 2);
 });
+
+test('C explicit kim human provenance stays in requested work when checked by an automatic worker', () => {
+  const text = compactDigest([{ ...row(), headless: true, checkText: '保存待ちです' }], [], now).text;
+  assert.match(text, /あなたが頼んだこと\n完了 0件 \/ 進行中 1件/);
+  assert.match(text, /保存待ちです ／ nextKim: なし/);
+});

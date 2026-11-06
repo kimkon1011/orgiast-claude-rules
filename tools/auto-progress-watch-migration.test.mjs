@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { progressHome } from '../tools/test-helpers/auto-progress-home.mjs';
-import { ledgerFile, writeLedger, readLedger, rowKey, OPEN_STATUSES } from '../tools/auto-progress-ledger.mjs';
-import { legacyAddCheckMigrationRows, timeOnlyMigrationRows, migrationClobberRestorationRows, restoreMigrationClobbers, legacyAddCheckReservation, timeOnlyReservation } from '../tools/auto-progress-watch.mjs';
+import { progressHome } from './test-helpers/auto-progress-home.mjs';
+import { ledgerFile, writeLedger, readLedger, rowKey, OPEN_STATUSES } from './auto-progress-ledger.mjs';
+import { legacyAddCheckMigrationRows, timeOnlyMigrationRows, migrationClobberRestorationRows, restoreMigrationClobbers, legacyAddCheckReservation, timeOnlyReservation } from './auto-progress-watch.mjs';
 const now = Date.parse('2026-11-06T00:00:00Z');
 const source = { pc: 'pc', user: 'user', sessionId: 'a644b252-test', ts: '2026-10-30T12:26:00Z', status: 'done', check: 'node check.mjs', nextClaude: 'continue', label: 'old' };
 const live = { ...source, ts: '2026-11-02T06:29:00Z', status: 'open', label: 'R640 部品の自動入札4件', deadlineAt: '2026-11-05T00:00:00Z' };

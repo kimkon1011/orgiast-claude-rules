@@ -74,7 +74,7 @@ test('check errors do not mark done; repeated errors notify once', async () => {
   const home = tmp(); register(home); const messages = [];
   const io = { ...baseIo, executeCheck: () => ({ code: 2, text: '実行エラー' }), notifyOwner: async (_, text) => { messages.push(text); return { delivered: 'dm' }; } };
   await watch({ home, now, io }); await watch({ home, now, io });
-  assert.equal(messages.length, 1); assert.match(messages[0], /確認エラー/);
+  assert.equal(messages.length, 1); assert.match(messages[0], /確認処理エラー: 着信確認 実行エラー/);
   assert.equal(readLedger(ledgerFile(home))[0].status, 'open');
 });
 test('executeCheck honors exit contract, full output and bounded execution', () => {

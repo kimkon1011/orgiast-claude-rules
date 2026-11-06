@@ -89,6 +89,11 @@ function create(home, options) {
     // Keep distinct jobs separate even when their text normalizes to the same prefix.
     if (options.dedupeKey) {
       const existing = listItems(home).find(item => item.dedupeKey === clean(options.dedupeKey));
+      if (existing && options.refresh && existing.source === 'morning-session-sweep' && options.source === existing.source && options.kind === 'info') return update(home, existing.id, current => {
+        current.text = text; current.lastAt = new Date().toISOString(); current.status = 'open';
+        current.shownCount = 0; current.shownSessions = []; current.lastShownAt = null;
+        current.forwardMailId = options.forwardMailId || null; current.forwardError = null;
+      });
       if (existing && options.refresh && (existing.source === 'auto-progress-heartbeat' || (existing.source === 'auto-progress-done' && existing.kind === 'info' && options.kind === 'ask' && ['open', 'seen'].includes(existing.status)))) return update(home, existing.id, current => {
         if (current.source === 'auto-progress-done' && (current.kind !== 'info' || !['open', 'seen'].includes(current.status))) return;
         current.text = text; current.kind = options.kind; current.status = 'open'; current.priority = 'high'; current.lastAt = new Date().toISOString();
@@ -215,7 +220,7 @@ export async function addItem(home, options, { drain = true } = {}) {
   try {
     const file = path.join(temp, 'body.txt');
     fs.writeFileSync(file, item.text, { mode: 0o600 });
-    const { stdout } = await (options.execImpl ?? exec)(process.execPath, [fileURLToPath(new URL('./fleet-mail.mjs', import.meta.url)), '--send', '--to', 'kim-PC', '--kind', 'note', '--why', `[kim-inbox:${item.kind}] ${/^auto-progress-(?:done|heartbeat)$/.test(item.source) ? `[source:${item.source}] ${item.dedupeKey ? `[key:${item.dedupeKey}] ` : ''}` : ''}${item.text.split(/\r?\n/)[0].slice(0, 60)}`, '--body-file', file], { encoding: 'utf8', windowsHide: true, timeout: 60000, signal: options.signal, env: { ...process.env, ORGIAST_HOME: home } });
+    const { stdout } = await (options.execImpl ?? exec)(process.execPath, [fileURLToPath(new URL('./fleet-mail.mjs', import.meta.url)), '--send', '--to', 'kim-PC', '--kind', 'note', '--why', `[kim-inbox:${item.kind}] ${/^(?:auto-progress-(?:done|heartbeat)|morning-session-sweep)$/.test(item.source) ? `[source:${item.source}] ${item.dedupeKey ? `[key:${item.dedupeKey}] ` : ''}` : ''}${item.source === 'morning-session-sweep' ? '[報告・返信不要] ' : ''}${item.text.split(/\r?\n/)[0].slice(0, 60)}`, '--body-file', file], { encoding: 'utf8', windowsHide: true, timeout: 60000, signal: options.signal, env: { ...process.env, ORGIAST_HOME: home } });
     const id = stdout.trim().match(/^(?:送信済み: )?(mail-[A-Za-z0-9-]+)$/m)?.[1];
     if (!id) throw new Error('転送先のメールIDを取得できません');
     return update(home, item.id, current => { current.status = 'forwarded'; current.forwardMailId = id; current.forwardError = null; });
@@ -303,8 +308,8 @@ export async function ingestFleetMail(home) {
       try { fs.writeFileSync(path.join(skipped, id), '', { flag: 'wx', mode: 0o600 }); } catch { /* 既に記録済み */ }
       continue;
     }
-    const source = /\[source:(auto-progress-(?:done|heartbeat))\]/.exec(mail.why || '')?.[1] || 'fleet-mail';
-    const producerKey = source !== 'fleet-mail' ? /\[key:([a-zA-Z0-9:-]{1,160})\]/.exec(mail.why || '')?.[1] : undefined;
+    const source = /\[source:(auto-progress-(?:done|heartbeat)|morning-session-sweep)\]/.exec(mail.why || '')?.[1] || 'fleet-mail';
+    const producerKey = source !== 'fleet-mail' ? /\[key:([^\]\r\n]{1,240})\]/.exec(mail.why || '')?.[1] : undefined;
     const marker = path.join(directory(home), '.ingested', id);
     locked(home, 'ingest', () => {
       if (fs.existsSync(marker)) return;

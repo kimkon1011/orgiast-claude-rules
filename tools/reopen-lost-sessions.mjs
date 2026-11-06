@@ -66,7 +66,7 @@ export function localIndex(base, onlyId) {
         .filter(row => row.type === 'bridge-session' && row.bridgeSessionId);
       if (!bridges.length) continue;
       let cwd;
-      for (let i = lines.length - 1; i >= 0; i--) {
+      for (let i = 0; i < lines.length; i++) {
         if (!lines[i].includes('"cwd"')) continue;
         const row = parse(lines[i]);
         if (typeof row.cwd === 'string' && row.cwd) { cwd = row.cwd; break; }

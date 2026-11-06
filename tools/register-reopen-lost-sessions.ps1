@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 function Get-ReopenDefinition($Task) {
     [ordered]@{
         Actions = @($Task.Actions | ForEach-Object { "$($_.Execute)|$($_.Arguments)" })
-        Triggers = @($Task.Triggers | ForEach-Object { "$($_.CimClass.CimClassName)|$($_.UserId)|$($_.Delay)|$($_.Enabled)" })
+        Triggers = @($Task.Triggers | ForEach-Object { "$($_.CimClass.CimClassName)|$($_.UserId)|$($_.Delay)|$($_.Enabled)|$($_.StartBoundary)|$($_.Repetition.Interval)|$($_.Repetition.Duration)" })
         User = $Task.Principal.UserId; Logon = [string]$Task.Principal.LogonType; Level = [string]$Task.Principal.RunLevel
         Enabled = $Task.Settings.Enabled; Instances = [string]$Task.Settings.MultipleInstances
         Limit = $Task.Settings.ExecutionTimeLimit; Battery = $Task.Settings.DisallowStartIfOnBatteries
@@ -41,13 +41,18 @@ function Register-ReopenLostTask(
 
     $name2 = 'OrgiastReopenLostSessionsWatch'
     $action2 = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\wscript.exe') -Argument ('//nologo "{0}" "{1}" "{2}" "--watch"' -f $hidden, $node, $file)
-    $trigger2 = New-ScheduledTaskTrigger -AtLogOn -User $user
-    $trigger2.Delay = 'PT5M'
-    $repTemplate = New-ScheduledTaskTrigger -Once -At '00:00' -RepetitionInterval (New-TimeSpan -Minutes 15)
-    $trigger2.Repetition = $repTemplate.Repetition
+    # Two triggers: (1) AtLogOn so it fires after every logon; (2) Once with
+    # a fixed start so it fires immediately after registration and then every
+    # 15 minutes indefinitely.  The fixed date '2026-01-01T00:00:00' ensures
+    # the definition is stable across converge calls.
+    $trigger2a = New-ScheduledTaskTrigger -AtLogOn -User $user
+    $trigger2a.Delay = 'PT5M'
+    $trigger2a.Repetition = (New-ScheduledTaskTrigger -Once -At '00:00' -RepetitionInterval (New-TimeSpan -Minutes 15)).Repetition
+    $trigger2b = New-ScheduledTaskTrigger -Once -At '2026-01-01T00:00:00' -RepetitionInterval (New-TimeSpan -Minutes 15)
+    $trigger2b.Repetition.Duration = ([timespan]::Zero)
     $principal2 = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
     $settings2 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
-    $desired2 = New-ScheduledTask -Action $action2 -Trigger $trigger2 -Principal $principal2 -Settings $settings2
+    $desired2 = New-ScheduledTask -Action $action2 -Trigger @($trigger2a, $trigger2b) -Principal $principal2 -Settings $settings2
 
     $current2 = & $GetTask $name2
     $changed2 = $false

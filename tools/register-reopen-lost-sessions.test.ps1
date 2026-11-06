@@ -19,9 +19,18 @@ Assert ($task1.Actions[0].Execute -like '*wscript.exe') 'task1 hidden action'
 Assert ($task1.Actions[0].Arguments -like '*run-hidden.vbs*node.exe*reopen-lost-sessions.mjs*') 'task1 hidden node invocation'
 
 $task2 = $script:stored['OrgiastReopenLostSessionsWatch']
+$fixedStart = '2026-01-01T00:00:00'
+# StartBoundary is normalized to UTC by the time/date conversion in New-ScheduledTaskTrigger,
+# so compare against the same conversion instead of a literal local-time string.
+$expectedStart = (New-ScheduledTaskTrigger -Once -At $fixedStart).StartBoundary
+Assert ($task2.Triggers.Count -eq 2) 'task2 has two triggers (logon + timed)'
 Assert ($task2.Triggers[0].Delay -eq 'PT5M') 'task2 five minute logon delay'
-Assert ($task2.Triggers[0].CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger') 'task2 logon trigger'
-Assert ($task2.Triggers[0].Repetition.Interval -eq 'PT15M') 'task2 15 minute repetition interval'
+Assert ($task2.Triggers[0].CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger') 'task2 first trigger is logon'
+Assert ($task2.Triggers[0].Repetition.Interval -eq 'PT15M') 'task2 first trigger has 15 minute repetition'
+Assert ($task2.Triggers[1].CimClass.CimClassName -eq 'MSFT_TaskTimeTrigger') 'task2 second trigger is time'
+Assert ($task2.Triggers[1].StartBoundary -eq $expectedStart) 'task2 second trigger fixed start (UTC-normalized)'
+Assert ($task2.Triggers[1].Repetition.Interval -eq 'PT15M') 'task2 second trigger has 15 minute repetition'
+Assert ($task2.Triggers[1].Repetition.Duration -eq ([timespan]::Zero)) 'task2 second trigger unlimited duration'
 Assert ($task2.Actions[0].Execute -like '*wscript.exe') 'task2 hidden action'
 Assert ($task2.Actions[0].Arguments -like '*--watch*') 'task2 --watch argument'
 

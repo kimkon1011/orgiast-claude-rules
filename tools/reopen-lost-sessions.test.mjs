@@ -59,6 +59,21 @@ function fixture(t) {
   return base;
 }
 
+test('localIndex uses first cwd when transcript has multiple cwd lines', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const projects = path.join(root, '.claude', 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  fs.writeFileSync(path.join(projects, 'multi.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_multi' },
+    { type: 'user', cwd: 'C:\\start\\cwd', message: { content: 'first' } },
+    { type: 'user', cwd: 'C:\\worktree\\later', message: { content: 'second' } },
+  ].map(JSON.stringify).join('\n'));
+  const idx = localIndex(path.join(root, '.claude'));
+  assert.equal(idx.size, 1);
+  assert.equal(idx.get('cse_multi').cwd, 'C:\\start\\cwd');
+});
+
 test('dry run uses real local mapping, paginates, never opens/writes', async t => {
   const base = fixture(t), calls = [];
   const fetchImpl = async url => { calls.push(url); return { ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : url.includes('cursor=next') ? { data: [] } : { data: [{ id: 'cse_one', title: 'Work' }], next_cursor: 'next' } }; };

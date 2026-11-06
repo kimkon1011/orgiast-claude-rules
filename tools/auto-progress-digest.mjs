@@ -1,6 +1,11 @@
 #!/usr/bin/env node
+import { readDigest as readDeadlineDigest } from './deadline-watch.mjs';
+import { addItem as addDeadlineDigest } from './kim-inbox.mjs';
 // 各PCのローカル台帳から、完了・進行中・停滞/再開・判断待ちを 持ち主の DM へ定期報告する。
 import fs from 'node:fs';
+import { readDeferred } from './lib/owner-dm-policy.mjs';
+import { compactDigest, kimAction, isHumanActionRequired, cleanText } from './lib/owner-dm-digest.mjs';
+export { compactDigest, kimAction, isHumanActionRequired, cleanText } from './lib/owner-dm-digest.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { acquireLock } from './lib/progress-file-lock.mjs';
@@ -10,7 +15,9 @@ import { ledgerFile, readLedger, latestOpenPromises, rowKey, isUnattendedRow, is
 export { isUnattendedRow } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { collectCaseProgress } from './case-progress-digest.mjs';
+import { checkProgressSummary } from './auto-progress-check.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
+import { decisionOwnerOf, isChoiceFormat } from './auto-progress-decision-owner.mjs';
 
 export const WINDOW_MS = 24 * 3600 * 1000;
 const stateFile = (home) => path.join(home, '.claude', 'state', 'auto-progress-digest.json');
@@ -48,90 +55,30 @@ export function selectRows(rows, now = Date.now(), since = now - WINDOW_MS) {
   const ledger = Array.isArray(rows) ? rows : [];
   const active = new Set(latestOpenPromises(ledger));
   return ledger.filter((row) => {
-    if (isNoopPromise(row.promise)) return false;
-    if (row.status === 'done') return Number.isFinite(Date.parse(row.doneAt)) && Date.parse(row.doneAt) > since;
+    if (row.kimAnswer || isNoopPromise(row.promise)) return false;
+    if (row.status === 'done') return !row.doneNotifiedAt && Number.isFinite(Date.parse(row.doneAt)) && Date.parse(row.doneAt) > since;
     return active.has(row);
   }).sort((a, b) => rowTime(a) - rowTime(b));
 }
 
 export const verdictOf = (row, now = Date.now()) => row.status === 'done' ? 'done' : row.status === 'waiting_user' ? 'waiting_user' : row.status === 'resumed' ? 'resumed' : row.verdict || (row.status === 'stalled' ? 'stalled' : deadlinePassed(row, now) ? 'open/期限超過' : row.lastCheckedAt ? 'in_progress' : 'open');
 export const MAX_ITEMS = 10;
-export const kimAction = row => {
-  const value = String(row.nextKim || '').trim();
-  // 「なし / 0件」「なし（…」のように補足付き・途中で切れた「なし」も人の操作は不要として扱う。
-  if (/^(?:特に)?(?:なし|無し|ナシ)/.test(value)) return 'なし';
-  const action = /^(?:(?:特に)?なし|無し|ナシ|(?:対応(?:は)?)?不要(?:です)?|(?:特に)?ありません|none|n\/a|[-—–－ー―])(?:[（(].*[）)])?[。．]?$/i.test(value) || !value ? 'なし' : value;
-  // 相手・別処理からの到着を待つ条件は kim の操作ではない。
-  return /(?:待機|待つ|返事待ち|返信待ち|確認待ち|判断待ち|(?:が|から).*来たら|(?:が|を).*したら)/.test(action) ? 'なし' : action;
-};
-
-export const isHumanActionRequired = (row) => {
-  if (row.status === 'done') return false;
-  if (kimAction(row) !== 'なし') return true;
-  // promise は Claude 自身が進める約束なので語句では判定しない（「判断」等を含むだけで誤って判断待ちになる）。
-  // 人の操作が要るのは「次に kim がすること」か、自動再開の結果が needs_user を返した時だけ。
-  return /^needs_user\b/.test(String(row.resumeOutcome || '').trim());
-};
 
 export function needsDm(row, now = Date.now()) {
-  if (isNoopPromise(row.promise)) return false;
+  if (row.kimAnswer || isNoopPromise(row.promise)) return false;
   const verdict = verdictOf(row, now);
   return isHumanActionRequired(row) || ['done', 'open/期限超過'].includes(verdict) ||
     (verdict === 'stalled' && (Number(row.resumeCount) >= MAX_RESUMES ||
       (/^(?:error|timeout|blocked)\b/i.test(String(row.resumeOutcome || '')) && Number(row.resumeFailureCount ?? row.resumeCount) >= 2)));
 }
 
-export function cleanText(text, row = {}) {
-  let s = String(text || '');
-  // 先頭の定型句
-  s = s.replace(/^[-*•\s]*(?:\*\*|__)?(?:この後の自動進行|自動進行|約束)(?:\*\*|__)?[:：\s]*/i, '');
-  // バッククォートの中身（コマンド・パス・ファイル名）は消さずに残し、記号のバッククォートだけ外す。
-  // 中身を消すと「マージ後に と で同期すれば」のように文へ穴が開く。平易化は送信時の notify-kim 側で行う。
-  const kept = [];
-  s = s.replace(/`([\s\S]*?)`/g, (_, inner) => { kept.push(inner); return `\u0000K${kept.length - 1}\u0000`; });
-  // 英語ステータス名を日本語へ
-  s = s.replace(/\bdone\b/gi, '完了');
-  s = s.replace(/\bstalled\b/gi, '止まっている');
-  s = s.replace(/\bin_progress\b/gi, '進行中');
-  s = s.replace(/\bwaiting_user\b/gi, '判断待ち');
-  s = s.replace(/\bneeds_user\b/gi, '判断待ち');
-  s = s.replace(/\bresumed\b/gi, '再開済み');
-  s = s.replace(/\bopen\/期限超過\b/gi, '期限超過');
-  s = s.replace(/\bprogressed\b/gi, '進行');
-  s = s.replace(/\bblocked\b/gi, '中断');
-  s = s.replace(/\bsuperseded\b/gi, '更新');
-
-  if (row.pc) s = s.split(row.pc).join('');
-  if (row.sessionId) s = s.split(row.sessionId).join('');
-
-  // ID、UUID、ハッシュ
-  s = s.replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '');
-  s = s.replace(/\b[0-9a-f]{16,64}\b/gi, '');
-  s = s.replace(/\b[0-9a-f]{8,12}\b/gi, '');
-  s = s.replace(/\bDESKTOP-[A-Z0-9]+\b/g, '');
-
-  // ファイルパス・ディレクトリパス
-  s = s.replace(/[a-zA-Z]:\\[^\s:：()（）「」\r\n]+/g, '');
-  s = s.replace(/(?:^|[\s(（])(?:\/[a-zA-Z0-9_.-]+){2,}/g, '');
-  s = s.replace(/~\/\.[a-zA-Z0-9_.-]+[^\s:：()（）「」\r\n]*/g, '');
-
-  // コマンド名（node / git 等）は文脈ごと消すと穴が開くので、ここでは削らない。
-
-  // 保護したバッククォートの中身を戻す
-  s = s.replace(/\u0000K(\d+)\u0000/g, (_, index) => kept[Number(index)] ?? '');
-
-  // 空白正規化
-  s = s.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
-  s = s.replace(/^[:：\-–—\s]+/, '').replace(/[:：\-–—\s]+$/, '');
-  return s;
-}
 
 const projectOf = row => { const name = String(row.cwd || '').split(/[\\/]+/).filter(Boolean).pop(); return name ? `［${name}］` : ''; };
 // 1行が長すぎると1通1800字に収まらないので、項目の本文だけを切る（見出し・件数は残す）。
 const brief = (text, max) => { const s = String(text || ''); return s.length > max ? `${s.slice(0, max - 1)}…` : s; };
 
 export const MAX_ITEM_CHARS = 80;
-// 1通の上限。超える時は件数を削らず run() 側で改行境界のまま複数DMに分割する（全件の名前を届けるため）。
+// 旧formatDigest/chunkMessage互換APIの上限。実配達run()はcompactDigestでownerごとに1通へ要約する。
 export const MESSAGE_MAX = 1800;
 // 分割DMの続きマーカー（（進捗DM 続き 12/12）等）が付いても上限を超えないように、分割は余裕を見て行う。
 export const PART_MARKER_MAX = 24;
@@ -217,7 +164,7 @@ export function formatDigest(rows, now = Date.now(), label = '', {
   owner = '',
   nightWaitingKeys = new Set(),
 } = {}) {
-  const filtered = (allRows || rows || []).filter(row => !isNoopPromise(row.promise));
+  const filtered = (allRows || rows || []).filter(row => !row.kimAnswer && !isNoopPromise(row.promise));
   if (!filtered.length && !(waitingRows?.length || doneRows?.length || stalledRows?.length || inProgressRows?.length)) return '';
 
   const scheduled = filtered.filter(row => ['scheduled', 'start_overdue'].includes(row.status));
@@ -246,7 +193,9 @@ export function formatDigest(rows, now = Date.now(), label = '', {
   }
 
   // 判断待ちは既に閉じた行だけ外し、古い行も含めて全件を名前つきで出す（件数だけにしない）。
-  const waiting = digestGroups(waitingAll.filter(row => !isClosedRow(row)), 'waiting');
+  const activeWaiting = waitingAll.filter(row => !isClosedRow(row));
+  const waiting = digestGroups(activeWaiting.filter(row => decisionOwnerOf(row) === 'owner'), 'waiting');
+  const kimWaiting = digestGroups(activeWaiting.filter(row => decisionOwnerOf(row) === 'kim'), 'waiting');
   stalled = digestGroups(stalled, 'stalled');
 
   // 進行中は最終判定が新しい順
@@ -257,26 +206,36 @@ export function formatDigest(rows, now = Date.now(), label = '', {
   const inProgressSorted = inProgressList.filter(row => !scheduled.includes(row)).sort((a, b) => checkedTime(b) - checkedTime(a));
 
   const pcLabel = label || 'このPC';
-  const header = `【${pcLabel} の自動進行】 完了 ${done.length}件・止まっている ${stalled.length}件・あなたの判断待ち ${waiting.length}件`;
+  const header = `【${pcLabel} の自動進行】 完了 ${done.length}件・止まっている ${stalled.length}件・あなたの判断待ち ${waiting.length}件・kim の判断待ち ${kimWaiting.length}件`;
   const footerParts = [];
   if (unattended > 0) footerParts.push(`無人処理: ${unattended}件`);
   const footer = footerParts.join(' ／ ');
 
-  // 全件を名前つきで並べる。1通1800字に収まらない時は分割指示（chunkMessage）を run() 側で行う。
+  // 旧フォーマッタの互換出力。実配達run()ではこの本文を使わずcompactDigestで要約する。
   const render = () => {
     const lines = [header];
     for (const row of scheduled) {
       lines.push(itemLine(`・開始予約${row.status === 'start_overdue' ? '（期限超過）' : ''}: `,
         cleanText(row.label || row.promise, row), `（開始条件の最終確認 ${row.lastCheckedAt || '未確認'}）`));
     }
-    // 1. あなたの判断待ち（古さに関係なく全件）
-    for (const { row, count } of waiting) {
-      const what = cleanText(row.label || row.promise || '約束した作業', row);
-      const night = nightWaitingKeys.has(waitingNotificationKey(row)) ? '夜間に出た判断待ち: ' : 'あなたの判断待ち: ';
-      const head = `・${night}${projectOf(row)}`;
-      const suffix = groupTail(count);
-      const action = count > 1 ? brief(actionOf(row), Math.max(0, MAX_ITEM_CHARS - head.length - suffix.length - 12)) : actionOf(row);
-      lines.push(itemLine(head, what, ` — ${action}${suffix}`));
+    // 判断内容を先に出す。従来の80字制限では依頼本文が切れるため別枠で表示する。
+    for (const [groups, heading] of [[waiting, 'あなたの判断待ち'], [kimWaiting, 'kim の判断待ち（あなたの操作は不要）']]) {
+      for (const { row, count } of groups) {
+        const action = String(row.nextKim || '').trim();
+        const warning = isChoiceFormat(action) ? '⚠ 選択肢形式（Claude が推奨案で決めるべき内容） ' : '';
+        const night = nightWaitingKeys.has(waitingNotificationKey(row)) ? '夜間に出た判断待ち: ' : '';
+        if (heading === 'あなたの判断待ち') {
+          // 判断の中身（nextKim）を必ず全文に近い形で出す。約束は短くして、改行の次行に判断内容を置く。
+          const shortPromise = cleanText(String(row.label || row.promise || '約束した作業').slice(0, 60), row);
+          const wanted = cleanText(String(action || row.reason || row.promise || '対応をお願いします').slice(0, 400), row);
+          lines.push(`・${heading}: ${night}${projectOf(row)}${warning}${shortPromise}${groupTail(count)}`);
+          lines.push(`  → 判断してほしいこと: ${wanted}`);
+          continue;
+        }
+        const what = action ? cleanText(action.slice(0, 120), row) : cleanText(row.promise || '約束した作業', row);
+        const promise = action ? `（約束: ${cleanText(String(row.promise || '').slice(0, 40), row)}）` : '';
+        lines.push(`・${heading}: ${night}${projectOf(row)}${warning}${what}${promise}${groupTail(count)}`);
+      }
     }
     // 2. 完了（各1行・80字以内）
     for (const row of done) {
@@ -332,237 +291,85 @@ export function slotOf(now = Date.now()) {
 }
 
 export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), dryRun = false, slot, io = {} } = {}) {
-  const label = io.label ?? resolveFleetLabel(home);
-  const state = (io.readState ?? readState)(home);
-
-  const currentSlot = slot !== undefined ? slot : slotOf(now);
-  const isOutside = !currentSlot;
-
-  const rawLedger = (io.readLedger ?? readLedger)(ledgerFile(home));
-  const ledger = Array.isArray(rawLedger) ? rawLedger : [];
-  const localOwner = io.localOwner ?? (() => { try { return resolveOwner({ home }); } catch { return ''; } })();
-  const ownerOf = row => row.owner || localOwner || '';
-
-  // 前回送信の瞬間に完了した行も「前回以降の変化」に含める（境界は前回送信時刻を含む）。
-  const since = state.lastSuccessAt ? Date.parse(state.lastSuccessAt) : now - WINDOW_MS;
-  const activeRows = selectRows(ledger, now, since - 1).filter(row => !isNoopPromise(row.promise));
-
-  const lastVerdicts = { ...(state.lastVerdicts || {}) };
-  const lastKim = { ...(state.lastKim || {}) };
-  const lastResumedAt = { ...(state.lastResumedAt || {}) };
-  const lastWaiting = { ...(state.lastWaiting || {}) };
-  const notifiedUrgentKeys = new Set(state.notifiedUrgentKeys || []);
-  const pendingNightKeys = new Set(state.pendingNightKeys || []);
-  const sentSlotOwners = new Set(state.sentSlotOwners || []);
-  const lastSuccessAt = state.lastSuccessAt ? Date.parse(state.lastSuccessAt) : 0;
-
-  const waitingRows = [];
-  const newlyWaitingRows = [];
-  const newlyDoneRows = [];
-  const newlyStalledRows = [];
-  const newlyResumedRows = [];
-  const inProgressRows = [];
-
-  for (const row of activeRows) {
-    if (isUnattendedRow(row, home)) continue;
-    const key = rowKey(row);
-    const v = verdictOf(row, now);
-    const isWait = isHumanActionRequired(row);
-    const prevVerdict = lastVerdicts[key];
-    const prevKim = lastKim[key];
-    const prevResumedAt = lastResumedAt[key];
-    const prevWait = lastWaiting[key];
-
-    if (['scheduled', 'start_overdue'].includes(row.status)) {
-      inProgressRows.push(row);
-    } else if (row.status === 'done' || v === 'done') {
-      const doneAtTime = Date.parse(row.doneAt || 0) || 0;
-      if (prevVerdict !== 'done' || (doneAtTime && doneAtTime > lastSuccessAt)) {
-        newlyDoneRows.push(row);
-      }
-    } else if (isWait) {
-      waitingRows.push(row);
-      // 枠内の「変化」は判断依頼の新規発生・内容変更と、まだ一度も知らせていない項目。
-      // 一度配信した項目のキーは notifiedUrgentKeys に入るので、再送にはならない。
-      if (!prevWait || prevKim !== kimAction(row) || !notifiedUrgentKeys.has(waitingNotificationKey(row))) {
-        newlyWaitingRows.push(row);
-      }
-    } else if (row.status === 'stalled' || v === 'stalled' || (row.status === 'resumed' && Number(row.resumeCount) >= MAX_RESUMES)) {
-      if (prevVerdict !== 'stalled') {
-        newlyStalledRows.push(row);
-      }
-    } else if (row.status === 'resumed' || Boolean(row.resumedAt)) {
-      if (!prevResumedAt || prevResumedAt !== row.resumedAt) {
-        newlyResumedRows.push(row);
-      }
-    } else {
-      inProgressRows.push(row);
+  const currentSlot = slot === undefined ? slotOf(now) : slot;
+  if (!currentSlot) return { sent: false, count: 0, skipped: 'outside-slot' };
+  const release = dryRun ? () => {} : acquireLock(path.join(home, '.claude/state/owner-compact-digest.lock'));
+  if (!release) return { sent: false, count: 0, skipped: 'locked' };
+  try {
+    let state = (io.readState ?? readState)(home);
+    const key = `${jstDate(now).toISOString().slice(0, 10)}|${currentSlot}`;
+    if ((state.sentKeys || []).includes(key)) return { sent: false, count: 0, skipped: 'already-sent' };
+    const localOwner = io.localOwner ?? resolveOwner({ home });
+    const label = io.label ?? resolveFleetLabel(home);
+    const consumed = new Set(state.deferredConsumed || []);
+    const pending = readDeferred(home).filter(r => !consumed.has(r.id));
+    const rows = selectRows((io.readLedger ?? readLedger)(ledgerFile(home)), now, state.lastSuccessAt ? Date.parse(state.lastSuccessAt) - 1 : now - WINDOW_MS)
+      .filter(row => row.status !== 'done' || state.lastVerdicts?.[rowKey(row)] !== 'done');
+    const cases = label === 'kim-PC' ? await collectCaseProgress({ home, now, previous: state.caseProgress, fetchResume: io.fetchCaseResume, dryRun }) : { text: '', checkpoints: {} };
+    let deadlineText = '';
+    if (currentSlot === '朝' && localOwner === 'kim@orgiast.jp') {
+      try { deadlineText = await (io.readDeadlineDigest || readDeadlineDigest)({ home, today: new Date(now + 9 * 3600000).toISOString().slice(0, 10) }); }
+      catch (e) { deadlineText = '今週の期限\n期限台帳を取得できません。再試行が必要です。'; (io.stderr || console.error)(`deadline digest: ${e.message}`); }
     }
-  }
-
-  // 枠外の判定: 新たに人の判断・操作が要る項目がある時だけ即時1通
-  const urgentItems = newlyWaitingRows.filter(r => !notifiedUrgentKeys.has(waitingNotificationKey(r)));
-  if (isOutside) {
-    if (!urgentItems.length) {
-      return { skipped: 'outside-slot', sent: false, count: 0 };
-    }
-    if (isQuietHours(now)) {
-      for (const row of urgentItems) pendingNightKeys.add(waitingNotificationKey(row));
-      if (!dryRun) (io.writeState ?? writeState)(home, { ...state, pendingNightKeys: [...pendingNightKeys] });
-      return { skipped: 'quiet-hours', sent: false, count: 0 };
-    }
-  }
-
-  // 重複判定キー
-  const dateStr = jstDate(now).toISOString().slice(0, 10);
-  const slotKey = currentSlot ? `${dateStr}|${currentSlot}` : null;
-  if (slotKey && (state.sentKeys || []).includes(slotKey)) {
-    return { skipped: 'already-sent', sent: false, count: 0 };
-  }
-
-  const caseDigest = !isOutside && label === 'kim-PC' && !sentSlotOwners.has(`${slotKey}|kim@orgiast.jp`)
-    ? await collectCaseProgress({ home, now, previous: state.caseProgress || {}, fetchResume: io.fetchCaseResume, dryRun })
-    : { text: '', checkpoints: {} };
-
-  // 変化0件なら送らない（ただし朝枠は進行中または判断待ちがあれば定時報告として送る）
-  const totalChanges = newlyDoneRows.length + newlyStalledRows.length + newlyResumedRows.length + newlyWaitingRows.length;
-  const isMorningHeartbeat = currentSlot === '朝' && (inProgressRows.length > 0 || waitingRows.length > 0);
-  if (!isOutside && totalChanges === 0 && !isMorningHeartbeat && !caseDigest.text) {
-    return { sent: false, count: 0 };
-  }
-
-  // 送信の宛先は「変化のあった行」の持ち主だけ。朝枠では進行中の行と判断待ちも定時報告の宛先に含める。
-  const changedRows = isOutside
-    ? [...new Set(urgentItems)]
-    : currentSlot === '朝'
-      ? [...new Set([...newlyWaitingRows, ...newlyDoneRows, ...newlyStalledRows, ...newlyResumedRows, ...inProgressRows, ...waitingRows])]
-      : [...new Set([...newlyWaitingRows, ...newlyDoneRows, ...newlyStalledRows, ...newlyResumedRows])];
-  const countedRows = isOutside
-    ? [...new Set(urgentItems)]
-    : [...new Set([...newlyWaitingRows, ...newlyDoneRows, ...newlyStalledRows, ...newlyResumedRows])];
-  const groups = new Map();
-  for (const row of changedRows) {
-    const owner = ownerOf(row);
-    if (!groups.has(owner)) groups.set(owner, []);
-    groups.get(owner).push(row);
-  }
-
-  const deliveries = [...groups]
-    .filter(([owner]) => owner.toLowerCase() !== 'kim@orgiast.jp')
-    .filter(([owner]) => !slotKey || !sentSlotOwners.has(`${slotKey}|${owner}`))
-    .map(([owner, rows]) => {
-    const owned = activeRows.filter(r => ownerOf(r) === owner);
-    const ownedWaiting = (isOutside ? rows : waitingRows).filter(r => ownerOf(r) === owner);
-    const ownedDone = isOutside ? [] : newlyDoneRows.filter(r => ownerOf(r) === owner);
-    const ownedStalled = isOutside ? [] : [...new Set([...newlyStalledRows, ...newlyResumedRows])].filter(r => ownerOf(r) === owner);
-    const ownedInProgress = isOutside ? [] : inProgressRows.filter(r => ownerOf(r) === owner);
-    const message = formatDigest(rows, now, label, {
-      allRows: owned.filter(r => !isUnattendedRow(r, home)),
-      waitingRows: ownedWaiting,
-      doneRows: ownedDone,
-      stalledRows: ownedStalled,
-      inProgressRows: ownedInProgress,
-      inProgressCount: ownedInProgress.length,
-      unattended: owned.filter(r => isUnattendedRow(r, home)).length,
-      owner,
-      nightWaitingKeys: isOutside ? new Set() : pendingNightKeys,
-    });
-    return { owner, rows, message };
-  }).filter(d => Boolean(d.message));
-
-  if (caseDigest.text) deliveries.push({ owner: 'kim@orgiast.jp', rows: [], message: caseDigest.text });
-  if (!deliveries.length) return { sent: false, count: 0, skipped: 'session-context-only' };
-  const messages = deliveries.map(d => d.message);
-  const text = messages.join('\n');
-  const count = countedRows.length;
-
-  if (dryRun) return { sent: false, count, text, messages };
-
-  let error = '';
-  const receipts = [];
-  const sentTexts = [];
-  let totalParts = 0;
-  for (const { owner, rows, message } of deliveries) {
-    // 1800字を超える本文は全件を載せたまま改行境界で分割し、続きマーカー付きの複数DMで届ける。
-    const parts = chunkMessage(message);
-    totalParts += Math.max(parts.length, 1);
-    const numbered = parts.length > 1 ? parts.map((part, i) => i === 0 ? part : `（進捗DM 続き ${i + 1}/${parts.length}）\n${part}`) : parts;
-    for (const part of numbered) {
+    // kim の通常の台帳まとめは会話内で回収する。案件ハブ・保留DMは朝夕の配達経路を使う。
+    if (label === 'kim-PC' && localOwner === 'kim@orgiast.jp' && !cases.text && !pending.length && !deadlineText && !rows.some(row => row.check && Date.parse(row.deadlineAt) - now >= 12 * 3600000)) return { sent: false, count: 0, skipped: 'session-context-only' };
+    const groups = new Map();
+    const group = owner => { const key = String(owner || localOwner).trim().toLowerCase(); if (!groups.has(key)) groups.set(key, { rows: [], pending: [] }); return groups.get(key); };
+    for (const row of rows) group(row.owner).rows.push(row);
+    for (const row of pending) group(row.owner).pending.push(row);
+    if (cases.text || deadlineText) group(localOwner);
+    const changed = rows.some(row => state.lastVerdicts?.[rowKey(row)] !== verdictOf(row, now) || state.lastKim?.[rowKey(row)] !== kimAction(row) || state.lastWaiting?.[rowKey(row)] !== isHumanActionRequired(row));
+    if (currentSlot === '夕' && !changed && !pending.length && !cases.text) return { sent: false, count: 0 };
+    const count = rows.length + pending.length + Object.keys(cases.checkpoints).length;
+    if (!groups.size) return { sent: false, count: 0 };
+    const deliveredOwners = new Set(state.slotOwners?.[key] || []);
+    const receipts = [], messages = [];
+    let error;
+    for (const [owner, items] of groups) {
+      if (deliveredOwners.has(owner)) continue;
+      const ownerCases = owner === String(localOwner).toLowerCase() ? cases : { text: '', checkpoints: {} };
+      const digest = compactDigest(items.rows, items.pending, now, { home, owner });
+      // 案件ID・更新席・生のハブ本文は外に出さず件数だけをまとめる。
+      const caseCount = Object.keys(ownerCases.checkpoints).length;
+      const caseUnchanged = caseCount && Object.entries(ownerCases.checkpoints).every(([id, cp]) => state.caseProgress?.[id]?.fingerprint === cp.fingerprint);
+      const deadlinePrefix = owner === 'kim@orgiast.jp' && deadlineText ? deadlineText + '\n\n' : '';
+      const longChecks = items.rows.filter(row => row.check && Date.parse(row.deadlineAt) - now >= 12 * 3600000 && !['done', 'overdue_reported'].includes(row.status));
+      const dailyChecks = currentSlot === '朝' && state.checkSummaryDays?.[owner] !== key.split('|')[0] ? longChecks : [];
+      // 見出し「【進捗まとめ】\n」は Discord 許可リストの照合対象なので形を変えない。
+      const progressText = dailyChecks.length ? '日次進捗\n' + dailyChecks.map(row => `${row.label || row.promise}\n${checkProgressSummary(row.checkText || 'まだ確認結果がありません')}`).join('\n') + '\n' : '';
+      const text = redactSecrets(deadlinePrefix + `【進捗まとめ】\n${progressText}${digest.text}${ownerCases.text ? `（案件 ${caseCount}件${caseUnchanged ? '・変化なし' : ''}）` : ''}`);
+      messages.push(text);
+      if (dryRun) continue;
+      const options = { home, now, owner, kind: 'digest', source: 'auto-progress-digest', webhookFallback: false };
       let result;
       try {
-        result = io.notify ? await io.notify(part, { home, webhookFallback: false, owner }) : await (io.notifyOwner ?? notifyOwner)(owner, part, { home });
-      } catch (cause) { result = { reason: cause?.message || String(cause) }; }
-      result ??= {};
-      const delivered = ['dm', 'session-inbox', 'toast', 'inbox'].includes(result.delivered);
-      receipts.push({ owner, ok: delivered, attempts: result.attempts, toastExitCode: result.toastExitCode, channel: result.channel ?? (result.delivered === 'dm' ? 'discord' : result.delivered || 'none'), recipientId: result.recipientId, httpStatus: result.httpStatus, messageId: result.messageId, channelId: result.channelId });
-      sentTexts.push(part);
-      if (!delivered) { error = result.reason || 'DM not delivered'; break; }
-    }
-    if (error) break;
-    if (owner === 'kim@orgiast.jp' && caseDigest.text) state.caseProgress = { ...state.caseProgress, ...caseDigest.checkpoints };
-    if (slotKey) sentSlotOwners.add(`${slotKey}|${owner}`);
-    for (const row of rows) {
-      const key = rowKey(row);
-      lastVerdicts[key] = verdictOf(row, now);
-      lastKim[key] = kimAction(row);
-      lastWaiting[key] = isHumanActionRequired(row);
-      if (row.resumedAt) lastResumedAt[key] = row.resumedAt;
-    }
-    // 判断待ちは枠内・枠外を問わず、一度知らせた項目を二度送らない（枠外の即時通知は新規のみ）。
-    for (const row of (isOutside ? rows : waitingRows)) {
-      if (ownerOf(row) === owner) {
-        const notificationKey = waitingNotificationKey(row);
-        notifiedUrgentKeys.add(notificationKey);
-        pendingNightKeys.delete(notificationKey);
+        if (io.notify) result = await io.notify(text, options);
+        else if (deadlinePrefix) {
+          const item = await addDeadlineDigest(home, { kind: 'info', source: 'deadline-digest', text, dedupeKey: `deadline-digest:${key}` });
+          result = { delivered: 'session-inbox', id: item.id };
+        } else result = await (io.notifyOwner ?? notifyOwner)(owner, text, options);
       }
+      catch (e) { result = { delivered: 'none', reason: String(e?.message || e) }; }
+      const ok = ['dm', 'session-inbox', 'toast', 'inbox'].includes(result?.delivered);
+      receipts.push({ owner, ...result, channel: result?.channel || result?.delivered, recipientId: result?.recipientId ?? result?.userId ?? null, messageId: result?.messageId ?? null, httpStatus: result?.httpStatus ?? result?.status ?? null });
+      if (!ok) { error ||= result?.reason || 'DM not delivered'; continue; }
+      deliveredOwners.add(owner);
+      for (const row of items.pending) if (row.kind !== 'action' || digest.includedIds.includes(row.id)) consumed.add(row.id);
+      const lastVerdicts = { ...state.lastVerdicts }, lastKim = { ...state.lastKim }, lastWaiting = { ...state.lastWaiting };
+      for (const row of items.rows) { lastVerdicts[rowKey(row)] = verdictOf(row, now); lastKim[rowKey(row)] = kimAction(row); lastWaiting[rowKey(row)] = isHumanActionRequired(row); }
+      state = { ...state, ...(dailyChecks.length ? { checkSummaryDays: { ...state.checkSummaryDays, [owner]: key.split('|')[0] } } : {}), lastVerdicts, lastKim, lastWaiting, slotOwners: { ...state.slotOwners, [key]: [...deliveredOwners] }, deferredConsumed: [...consumed], ...(ownerCases.text ? { caseProgress: { ...state.caseProgress, ...ownerCases.checkpoints } } : {}) };
+      (io.writeState ?? writeState)(home, state);
     }
-    // 部分失敗後の再試行を防止するため各オーナー配信ごとに保存
-    (io.writeState ?? writeState)(home, {
-      ...state,
-      lastVerdicts,
-      lastKim,
-      lastWaiting,
-      lastResumedAt,
-      notifiedUrgentKeys: [...notifiedUrgentKeys],
-      pendingNightKeys: [...pendingNightKeys],
-      sentSlotOwners: [...sentSlotOwners],
-    });
-  }
-
-  if (error) {
-    appendLog(home, { at: now, label, slot: slotKey || 'urgent', sent: false, count, error, receipts }, io);
-    appendSentLog(home, { at: now, label, slot: slotKey || 'urgent', sent: false, count, parts: totalParts, receipts, text: redactSecrets(sentTexts.join('\n') || text) }, io);
-    return { sent: false, count, error };
-  }
-
-  // 成功時の状態保存
-  for (const row of activeRows) {
-    const key = rowKey(row);
-    lastVerdicts[key] = verdictOf(row, now);
-    lastKim[key] = kimAction(row);
-    lastWaiting[key] = isHumanActionRequired(row);
-    if (row.resumedAt) lastResumedAt[key] = row.resumedAt;
-  }
-
-  const nextSentKeys = slotKey ? [...(state.sentKeys || []), slotKey].slice(-60) : (state.sentKeys || []);
-  const next = {
-    ...state,
-    lastVerdicts,
-    lastKim,
-    lastWaiting,
-    lastResumedAt,
-    notifiedUrgentKeys: [...notifiedUrgentKeys],
-    pendingNightKeys: [...pendingNightKeys],
-    sentSlotOwners: [...sentSlotOwners].slice(-100),
-    lastSuccessAt: new Date(now).toISOString(),
-    sentKeys: nextSentKeys,
-  };
-  (io.writeState ?? writeState)(home, next);
-  appendLog(home, { at: now, label, slot: slotKey || 'urgent', sent: true, count, parts: totalParts, receipts }, io);
-  appendSentLog(home, { at: now, label, slot: slotKey || 'urgent', sent: true, count, parts: totalParts, receipts, text: redactSecrets(sentTexts.join('\n')) }, io);
-  return { sent: true, count, parts: totalParts };
+    if (dryRun) return { sent: false, count, text: messages.join('\n'), messages };
+    const sent = !error;
+    const entry = { at: now, slot: key, sent, count, parts: messages.length, text: messages.join('\n'), receipts, ...(error ? { error } : {}) };
+    appendSentLog(home, entry, io);
+    appendLog(home, entry, io);
+    if (!sent) return { sent: false, count, error };
+    (io.writeState ?? writeState)(home, { ...state, sentKeys: [...(state.sentKeys || []), key].slice(-60), lastSuccessAt: new Date(now).toISOString() });
+    return { sent: true, count, parts: messages.length };
+  } finally { release(); }
 }
-
 
 // kim-PC のセッション文脈専用。既存の定時通知とは状態を分離する。
 export function sessionDigest({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), dryRun = false, io = {} } = {}) {

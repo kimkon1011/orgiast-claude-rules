@@ -1,3 +1,4 @@
+import { readHookSettings } from './fixtures/read-hook-settings.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -42,7 +43,9 @@ test('expected registrar is read-only and matches real fresh per-user registrati
   const expected = JSON.parse(execFileSync(process.execPath, ['tools/register-hooks.mjs', '--expected-json'], { env, encoding: 'utf8' }));
   assert.equal(fs.existsSync(path.join(h, '.claude/settings.json')), false);
   execFileSync(process.execPath, ['tools/register-hooks.mjs', '--hooks-only'], { env });
-  const actual = JSON.parse(fs.readFileSync(path.join(h, '.claude/settings.json')));
+  const actual = readHookSettings(path.join(h, '.claude/settings.json'));
+  const receipt = collectConvergence({ home: h, repo, expectedHooks: expected, git: () => { throw Error(); } });
+  assert.equal(receipt.hookMissing, 0);
   assert.deepEqual(missingHooks(actual.hooks, expected.hooks), []);
 });
 test('24h main lag and 48h silence are independent; blank counts never mean healthy', () => {

@@ -3,9 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { main, notifyKim, deliverKim } from './notify-kim.mjs';
+import { main, notifyKim as realNotifyKim, deliverKim as realDeliverKim } from './notify-kim.mjs';
 import { parseHandoff, todoExclusionReason } from './auto-session.mjs';
 import { planRotation } from './next-session-rotate.mjs';
+
+// 2026-11-04 仕様変更: 通信・修復の検査は明示的な定時まとめとして配達し、未指定kindの保留と分離する。
+const notifyKim = (text, options) => realNotifyKim(text, { home: home(), kind: 'digest', ...options });
+const deliverKim = (text, options) => realDeliverKim(text, { home: home(), kind: 'digest', ...options });
 
 function home() { return fs.mkdtempSync(path.join(os.tmpdir(), 'notify-kim-')); }
 function response({ ok = true, status = 200, json = { id: 'message' } } = {}) { return { ok, status, json: async () => json }; }
@@ -132,10 +136,13 @@ test('起票失敗では未修復通知を送らない', async () => {
 });
 test('送信失敗後は再送可能、同時呼び出しでも1通知・1起票', async () => {
   const s = sender(home());
-  assert.equal((await notifyKim('失敗', { ...s.options, token: '', webhookFallback: false })).delivered, 'none');
+  // DM/webhook が使えない kim 宛通知は kim-inbox に保存される（2026-11-04 rescue）
+  const inboxResult = await notifyKim('失敗', { ...s.options, token: '', webhookFallback: false });
+  assert.equal(inboxResult.delivered, 'session-inbox');
+  // kim-inbox への保存も状態記録されるため、同一内容の再送は24時間抑制される
   const results = await Promise.all([notifyKim('失敗', s.options), notifyKim('失敗', s.options)]);
-  assert.deepEqual(results.map(r => r.delivered).sort(), ['dm', 'suppressed']);
-  assert.equal(s.messages.length, 1);
+  assert.deepEqual(results.map(r => r.delivered).sort(), ['suppressed', 'suppressed']);
+  assert.equal(s.messages.length, 0);
 });
 
 
@@ -276,31 +283,34 @@ test('起票しても次の1目的を作らない（目的の乗っ取り回帰�
   assert.doesNotMatch(planRotation(filed).text, /1\. 通知の原因調査と修復/);
 });
 
-test('PRマージ依頼は送信せずblockedを返す', async () => {
+test('PRマージ依頼はDiscordに送信せず同じ本文をinboxへ保存する', async () => {
   let fetches = 0;
   const originalError = console.error;
   let errorLine = '';
   console.error = value => { errorLine = value; };
   try {
-    const result = await notifyKim('PR #943 をマージしてください', {
+    const dir = home(); fs.mkdirSync(path.join(dir, '.claude')); fs.writeFileSync(path.join(dir, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+    const result = await realNotifyKim('PR #943 をマージしてください', { home: dir,
       fetchImpl: async () => { fetches += 1; throw new Error('unexpected fetch'); },
     });
-    assert.deepEqual(result, {
-      delivered: 'blocked', category: 'merge-request', reason: 'PR のマージ依頼は fleet-mail で扱います',
-    });
+    assert.equal(result.delivered, 'session-inbox'); assert.equal(result.discordBlocked, true);
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, '.claude/kim-inbox', result.id + '.json'), 'utf8'));
+    assert.equal(saved.text, 'PR #943 をマージしてください');
     assert.equal(fetches, 0);
     assert.match(errorLine, /fleet-mail --to kim-PC/);
   } finally { console.error = originalError; }
 });
 
-test('notify-kim CLIはblockedでexit 3、明示例外なら送信する', async () => {
+test('notify-kim CLIはinbox保存成功でexit 0、明示例外なら送信する', async () => {
   const originalError = console.error;
   console.error = () => {};
   try {
-    assert.equal(await main(['PR #943 をマージしてください']), 3);
+    const dir = home(); fs.mkdirSync(path.join(dir, '.claude')); fs.writeFileSync(path.join(dir, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+    assert.equal(await main(['PR #943 をマージしてください'], { home: dir }), 0);
     const calls = [];
     assert.equal(await main(['PR #943 をマージしてください', '--kim-action-required'], {
-      token: 'token', userId: 'user', plainJa: false,
+      // 送信枠の台帳も一時homeへ隔離し、実ユーザーの状態に触れない。
+      home: home(), token: 'token', userId: 'user', plainJa: false,
       fetchImpl: async () => { calls.push(1); return calls.length === 1 ? response({ json: { id: 'dm' } }) : response(); },
     }), 0);
     assert.equal(calls.length, 2);
@@ -313,6 +323,26 @@ test('HTTP success without message id is not a delivered DM', async () => {
  assert.equal(result.delivered, 'none');
  assert.match(result.reason, /メッセージID/);
 });
+
+// HTTP 200 でも本文が読めない応答（json 無し・解析失敗・null）は配達証跡にならない。
+// 例外を投げても投げなくても「未配達」に落ちることを固定する。
+for (const [label, sent] of [
+  ['json がない', { ok: true }],
+  ['JSON 解析が失敗する', { ok: true, json: async () => { throw new SyntaxError('invalid JSON'); } }],
+  ['JSON が null', response({ json: null })],
+]) {
+  test(`DM 送信応答に ${label}場合は配達済みにしない`, async () => {
+    let calls = 0;
+    const result = await deliverKim('進捗', {
+      userId: 'test-recipient', token: 'test-token', plainJa: false, webhookFallback: false,
+      fetchImpl: async () => ++calls === 1 ? response({ json: { id: 'channel' } }) : sent,
+    });
+    assert.equal(calls, 2);
+    assert.equal(result.delivered, 'none');
+    assert.equal(result.messageId, undefined);
+    assert.ok(result.reason);
+  });
+}
 
 test('silentはDMとwebhookでflagsを切り替え、環境変数の既定も反映する', async () => {
   const old = process.env.NOTIFY_DISCORD_SILENT;

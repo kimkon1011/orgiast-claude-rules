@@ -8,3 +8,4 @@
 | [DEC-0002](DEC-0002-r640-linux-guacamole.md) | 2026-10-15 | ACTIVE | 社員用リモート環境を Windows デスクトップ20台から R640 Linux + Guacamole へ集約する |
 | [DEC-0003](DEC-0003-memoryserve-split.md) | 2026-10-15 | ACTIVE | memory 配信口を keyserve から分離し、認証を /api/keys へ委譲する |
 | [DEC-0004](DEC-0004-warehouse-feedback-shared-form.md) | 2026-10-15 | ACTIVE | 倉庫アプリの不具合・要望は中継 secret 不要の方式B（共通フォームへのリンク）で通知を届ける |
+| [DEC-0005](DEC-0005-deadline-ledger.md) | 2026-11-03 | ACTIVE | 期限のある義務はスプレッドシートの期限台帳＋夜間自動検出＋毎朝追跡＋kim-inbox 期限レーンで届ける（カレンダーのみ・外部SaaSは不採用） |

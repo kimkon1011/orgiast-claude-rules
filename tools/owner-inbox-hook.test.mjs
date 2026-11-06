@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { consumeOwnerInbox, CHAT_RECIPIENT_NOTICE } from './owner-inbox-hook.mjs';
-import { notifyOwner } from './notify-owner.mjs';
+import { notifyOwner as realNotifyOwner } from './notify-owner.mjs';
 import { KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 
 function fixture(t) {
@@ -15,6 +15,8 @@ function fixture(t) {
 }
 const input = { session_id: 'session-a', hook_event_name: 'SessionStart' };
 const context = out => out?.hookSpecificOutput.additionalContext || '';
+// 2026-11-04 仕様変更: 宛先警告の配達テストは定時まとめを明示する。
+const notifyOwner = (owner, text, options) => realNotifyOwner(owner, text, { kind: 'digest', ...options });
 test('resolved recipient produces no notice', t => {
   assert.equal(consumeOwnerInbox(input, fixture(t)), null);
 });

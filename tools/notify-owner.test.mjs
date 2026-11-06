@@ -8,7 +8,8 @@ import assert from 'node:assert/strict';
 import { resolveOwner, resolveOwnerDiscordId, notifyOwner as realNotifyOwner, sendOwnerToast, RECIPIENT_NOTICE } from './notify-owner.mjs';
 import { KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 
-const notifyOwner = (owner, text, options = {}) => realNotifyOwner(owner, text, { notifyKim: async () => ({ delivered: 'session-inbox' }), ...options });
+// 2026-11-04 仕様変更: 配達・宛先検査は即時配信対象の定時まとめで行う。未指定kindは別の回帰テストで保留を検査する。
+const notifyOwner = (owner, text, options = {}) => realNotifyOwner(owner, text, { kind: 'digest', notifyKim: async () => ({ delivered: 'session-inbox' }), ...options });
 
 test('owner 解決は fleet account を使う', () => {
   assert.equal(resolveOwner({ label: 'cr-PC', pcMap: { 'cr-PC': { account: 'cr@orgiast.jp' } }, gitEmail: 'other@example.com' }), 'cr@orgiast.jp');
@@ -101,22 +102,38 @@ test('別PCのnotifyDiscordIdはローカルPCの宛先に使わない', async t
  assert.equal(result.channel, 'toast');
 });
 
-test('toast uses standard PowerShell AppId, encoded Unicode and 300 characters', () => {
+test('toast uses NotifyIcon ShowBalloonTip, encoded Unicode and 300 characters', () => {
  const text = "日本語<&>\n'quoted' ` $(); " + '長'.repeat(350);
- assert.equal(sendOwnerToast(text, { spawn: (file, args) => {
+ assert.equal(sendOwnerToast(text, { exe: 'powershell.exe', spawn: (file, args) => {
    assert.equal(file, 'powershell.exe');
    assert.deepEqual(args.slice(0, 3), ['-NoProfile', '-NonInteractive', '-EncodedCommand']);
    const script = Buffer.from(args[3], 'base64').toString('utf16le');
-   assert.ok(script.includes('<text>Claude 進捗</text>'));
-   assert.ok(script.includes('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe'));
-   assert.ok(script.includes('[Security.SecurityElement]::Escape($body)'));
+   assert.ok(script.includes('System.Windows.Forms.NotifyIcon'));
+   assert.ok(script.includes('ShowBalloonTip(5000)'));
+   assert.ok(script.includes('Claude 進捗'));
+   assert.ok(script.includes('Start-Sleep -Seconds 6'));
+   assert.ok(script.includes('.Dispose()'));
    assert.ok(script.includes(Buffer.from(Array.from(text).slice(0,300).join(''), 'utf8').toString('base64')));
    assert.ok(!script.includes('msg.exe'));
+   assert.ok(!script.includes('ToastNotificationManager'));
+   return { status: 0 };
+ } }), true);
+});
+
+test('sendOwnerToast accepts exe override for pwsh.exe', () => {
+ assert.equal(sendOwnerToast('test', { exe: 'pwsh.exe', spawn: (file) => {
+   assert.equal(file, 'pwsh.exe');
+   return { status: 0 };
+ } }), true);
+ assert.equal(sendOwnerToast('test', { exe: 'powershell.exe', spawn: (file) => {
+   assert.equal(file, 'powershell.exe');
    return { status: 0 };
  } }), true);
 });
 
 test('daily setup notice is suppressed on the same day and resets next day', async t => {
+ assert.match(RECIPIENT_NOTICE, /次回 Claude を開くと自動で登録を試みます/);
+ assert.match(RECIPIENT_NOTICE, /登録されない場合はチャットに『Discordユーザー名: xxx』/);
  const options = localOptions(t);
  const calls = [];
  Object.assign(options, { now: new Date(2026, 9, 28, 9).getTime(), toast: text => { calls.push(text); return true; } });
@@ -161,7 +178,7 @@ test('spawn errors and nonzero exits never count as toast delivery', () => {
  }
 });
 
-test('toast・none は伏字本文をowner inboxに保存しDM成功では保存しない', async t => {
+test('toast・none・DM成功すべて伏字本文をowner inboxに保存する', async t => {
  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-inbox-delivery-'));
  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
  const options = { home, label: 'nishi-PC', pcMap: { 'nishi-PC': { account: 'nishi@orgiast.jp' } }, directory: [], toast: () => true };
@@ -179,9 +196,11 @@ test('toast・none は伏字本文をowner inboxに保存しDM成功では保存
  await notifyOwner('nishi@orgiast.jp', 'token=example-secret', options);
  assert.equal(rows()[2].text, 'token=***REDACTED***');
  await notifyOwner('nishi@orgiast.jp', 'DM成功', { ...options, userId: '42', notify: async () => ({ delivered: 'dm', messageId: 'receipt' }) });
- assert.equal(rows().length, 3);
+ assert.equal(rows().length, 4);
+ assert.equal(rows()[3].text, 'DM成功');
+ assert.match(fs.readFileSync(path.join(options.home, '.claude', 'owner-inbox.md'), 'utf8'), /DM成功/);
  await notifyOwner('kim@orgiast.jp', '他の持ち主宛', options);
- assert.equal(rows().length, 3);
+ assert.equal(rows().length, 4);
 });
 
 test('owner inbox 書き込み失敗でも呼び出し元を壊さない', async t => {
@@ -250,6 +269,24 @@ test('DM result without message id falls back, including injected notify', async
  assert.equal(result.attempts[0].ok, false);
  assert.ok(fs.readFileSync(path.join(options.home, '.claude', 'owner-inbox.md'), 'utf8').includes('長'.repeat(500)));
 });
+
+// 実際の notify-kim 経路でも、HTTP 200 の本文が読めない DM 応答を配達成功にしない。
+for (const [label, sent] of [
+  ['json がない', { ok: true }],
+  ['JSON 解析が失敗する', { ok: true, json: async () => { throw new SyntaxError('invalid JSON'); } }],
+]) {
+  test(`DM 送信応答に ${label}場合は実際の通知経路でも未配達にする`, async t => {
+    const options = localOptions(t);
+    let calls = 0;
+    const result = await realNotifyOwner('nishi@orgiast.jp', '進捗', {
+      ...options, kind: 'digest', userId: '123', token: 'test-token', plainJa: false, toast: () => true,
+      fetchImpl: async () => ++calls === 1 ? { ok: true, json: async () => ({ id: 'channel' }) } : sent,
+    });
+    assert.equal(calls, 2);
+    assert.equal(result.delivered, 'toast');
+    assert.equal(result.attempts[0].ok, false);
+  });
+}
 
 test('kim names in directory reject alternate IDs for nishi', async t => {
  const options = localOptions(t);
@@ -321,18 +358,89 @@ test('w018-PC は fleet-pc-map に discordId と notifyDiscordId を持つ', () 
   assert.ok(entry, 'w018-PC が fleet-pc-map.json に存在すること');
   assert.ok(String(entry.discordId || '').trim(), 'w018-PC に discordId が設定されていること');
   assert.ok(String(entry.notifyDiscordId || '').trim(), 'w018-PC に notifyDiscordId が設定されていること');
-  const missing = [];
+  assertNotifyRecipients(map);
+});
+
+const KNOWN_MISSING_NOTIFY = {
+  'kimko-PC': '使用者の Discord 未特定・2026-11-03',
+  'HP': '使用者の Discord 未特定・2026-11-03',
+  'nishi-PC': '使用者の Discord 未特定・2026-11-03',
+};
+
+function assertNotifyRecipients(map) {
   for (const [label, entry] of Object.entries(map)) {
-    if (label.startsWith('_') || label === '_unverified' || label === 'w018-PC') continue;
-    if (!entry || typeof entry !== 'object') continue;
-    const hasAccount = String(entry.account || '').trim();
-    if (!hasAccount) continue;
-    if (!String(entry.discordId || '').trim() || !String(entry.notifyDiscordId || '').trim()) {
-      missing.push(label + ': discordId=' + (entry.discordId || '(なし)') + ', notifyDiscordId=' + (entry.notifyDiscordId || '(なし)'));
+    if (label.startsWith('_') || !entry || typeof entry !== 'object') continue;
+    const hasId = Boolean(String(entry.notifyDiscordId || '').trim());
+    if (Object.hasOwn(KNOWN_MISSING_NOTIFY, label)) {
+      assert.ok(!hasId, `${label}: notifyDiscordId 設定済み。KNOWN_MISSING_NOTIFY の許可リストから消せ`);
+      continue;
+    }
+    if (String(entry.account || entry.owner || '').trim()) {
+      assert.ok(hasId, `${label}: notifyDiscordId が未登録`);
     }
   }
-  if (missing.length) {
-    console.log('INFO: 以下の PC 行は discordId/notifyDiscordId が不足しています（要調査）:');
-    for (const m of missing) console.log('  ' + m);
+}
+
+test('許可リスト外の account/owner 行の宛先不足は失敗する', () => {
+  for (const field of ['account', 'owner']) {
+    for (const notifyDiscordId of [undefined, '', '   ']) {
+      assert.throws(() => assertNotifyRecipients({ 'new-PC': { [field]: 'user@example.com', notifyDiscordId } }), /new-PC: notifyDiscordId が未登録/);
+    }
+    assertNotifyRecipients({ 'new-PC': { [field]: 'user@example.com', notifyDiscordId: '42' } });
   }
+  assertNotifyRecipients(Object.fromEntries(Object.keys(KNOWN_MISSING_NOTIFY).map(label => [label, { account: 'user@example.com' }])));
+});
+
+test('既知の抜けに宛先を設定したら許可リストの削除を要求する', () => {
+  for (const label of Object.keys(KNOWN_MISSING_NOTIFY)) {
+    assert.throws(() => assertNotifyRecipients({ [label]: { account: 'user@example.com', notifyDiscordId: '42' } }), /許可リストから消せ/);
+  }
+});
+
+test('session/toast 設定は Discord と宛先設定依頼を送らない', async t => {
+ const options = localOptions(t);
+ options.pcMap['nishi-PC'].notifyChannels = ['session', 'toast'];
+ let toasted = 0;
+ const result = await notifyOwner('nishi@orgiast.jp', '本人への依頼', {
+   ...options, userId: '42', notify: () => assert.fail('Discord disabled'),
+   notifyKim: () => assert.fail('no setup alert'), toast: () => { toasted++; return true; },
+ });
+ assert.equal(result.channel, 'toast');
+ assert.equal(toasted, 1);
+ const file = path.join(options.home, '.claude', 'auto-progress-inbox', '_owner.jsonl');
+ assert.equal(fs.readFileSync(file, 'utf8').trim().split('\n').length, 1);
+ assert.match(fs.readFileSync(path.join(options.home, '.claude', 'owner-inbox.md'), 'utf8'), /本人への依頼/);
+});
+
+test('DMを保留してもローカル所有者のセッション受け箱へ保存する', async t => {
+ const options = localOptions(t);
+ const text = '自動作業の状況報告';
+ const result = await realNotifyOwner('nishi@orgiast.jp', text, {
+   ...options, kind: 'automatic',
+   notify: () => assert.fail('deferred DM must not send'),
+   notifyKim: () => assert.fail('deferred DM must not alert'),
+   toast: () => assert.fail('progress deferral must not trigger fallback toast'),
+ });
+ assert.equal(result.delivered, 'deferred');
+ assert.match(fs.readFileSync(path.join(options.home, '.claude', 'owner-inbox.md'), 'utf8'), /自動作業の状況報告/);
+ const rows = fs.readFileSync(path.join(options.home, '.claude', 'auto-progress-inbox', '_owner.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+ assert.equal(rows.length, 1);
+ assert.equal(rows[0].text, text);
+});
+
+test('宛先未解決の inbox fallback は戻り値と台帳に劣化を記録する', async t => {
+  const options = { ...localOptions(t), toast: () => false };
+  const result = await notifyOwner('nishi@orgiast.jp', '進捗', options);
+  assert.equal(result.ok, true);
+  assert.equal(result.channel, 'inbox');
+  assert.equal(result.degraded, 'no-recipient');
+  const ledger = JSON.parse(fs.readFileSync(path.join(options.home, '.claude', 'logs', 'owner-notify-fallback.jsonl'), 'utf8'));
+  assert.equal(ledger.degraded, 'no-recipient');
+  for (const receipt of [result, ledger]) {
+    assert.equal(receipt.attempts.find(a => a.channel === 'discord').degraded, 'no-recipient');
+    assert.equal(receipt.attempts.find(a => a.channel === 'inbox').degraded, 'no-recipient');
+  }
+  const failedDm = await notifyOwner('nishi@orgiast.jp', 'DM失敗', { ...options, userId: '42', notify: async () => { throw new Error('offline'); } });
+  assert.equal(failedDm.degraded, undefined);
+  assert.ok(failedDm.attempts.every(a => a.degraded === undefined));
 });

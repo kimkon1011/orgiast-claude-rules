@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { powerShellTestRuntime } from './fixtures/powershell-test-runtime.mjs';
 import { compareVersions, targetVersion, verifySha256, buildFallbackCmd, convergeNodeRuntimeSecurity } from './setup-node-runtime-security.mjs';
 
 const releases = ['v22.23.4', 'v24.9.0', 'v26.12.1', 'v24.22.1', 'v24.22.0', 'v24.23.0-rc.1'].map((version) => ({ version }));
@@ -238,9 +239,7 @@ test('fallback handles Japanese, spaces, apostrophes and cmd metacharacters as d
 test('Windows PowerShell 5.1 parses the launcher and executes its payload with mocked MSI/files/node', async (t) => {
   const powershell = process.platform === 'win32' ? 'powershell.exe'
     : '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe';
-  if (process.platform !== 'win32') {
-    try { await fs.access(powershell); } catch { t.skip('Windows PowerShell is unavailable'); return; }
-  }
+  if (!powerShellTestRuntime(powershell)) { t.skip('PowerShell script execution unavailable on this host'); return; }
   const cmd = buildFallbackCmd({ msi: "C:\\Temp\\O'Brien 日本語\\node.msi", log: 'C:\\Temp\\msi.log',
     resultLog: 'C:\\Users\\original\\.claude\\logs\\node-update.log', digest: hash, target: 'v24.22.1', node: 'ReadMockNode' });
   const bootstrap = cmd.split(/^# POWERSHELL\r?$/m)[1];
@@ -281,12 +280,17 @@ test('setup integration emits exactly one runtime result, skips verify and custo
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.mkdir(path.join(root, 'lib'));
   await fs.copyFile(new URL('./setup.mjs', import.meta.url), path.join(root, 'setup.mjs'));
+  for (const name of ['hook-dispatch-registry.mjs', 'gate-contracts.mjs']) {
+    await fs.copyFile(new URL(`./${name}`, import.meta.url), path.join(root, name));
+  }
   await fs.copyFile(new URL('./setup-task-hidden-actions.mjs', import.meta.url), path.join(root, 'setup-task-hidden-actions.mjs'));
   const files = {
     'setup-manifest.json': '{"version":1,"items":[]}',
     'lib/playbook-distribution.mjs': 'export const distributePlaybooks = () => 0;',
     'lib/fleet-label.mjs': 'export const resolveFleetLabel = () => "test";',
     'register-fleet-mail.mjs': 'export const fleetHubNeedsConfiguration = () => false;',
+	    'setup-nightly-reload.mjs': 'export const convergeNightlyReload = () => ({status: "OK", checked: true, repaired: false, description: "VS Code night restart"});',
+    'setup-deadline-watch.mjs': 'export const convergeDeadlineTasks = () => ({status: "NOTICE", checked: true, repaired: false, description: "Deadline tasks"});',
     'allow-rules.mjs': 'export const convergeAllowRules = () => false;',
     'mobile-standby.mjs': 'export const convergeMobileStandby = () => ({ok: true, lines: []});',
     'register-hooks.mjs': '',
@@ -296,6 +300,7 @@ test('setup integration emits exactly one runtime result, skips verify and custo
   const run = (args) => execFileSync(process.execPath, [path.join(root, 'setup.mjs'), '--home', root, '--no-beacon', ...args], { encoding: 'utf8' });
   const output = run(['--converge']);
   assert.equal(output.split('\n').filter(line => line.includes('task-hidden-actions')).length, 1);
+  assert.equal(output.split('\n').filter(line => line.includes('deadline-watch')).length, 1);
   assert.equal(output.split('\n').filter((line) => line.includes('node-runtime-security')).length, 1);
   assert.match(output, /^\[OK \] node-runtime-security - Windows v24\.22\.1 \/ WSL v22\.23\.4$/m);
   assert.equal(JSON.parse(run(['--converge', '--json'])).items.find((item) => item.id === 'node-runtime-security').status, 'OK');

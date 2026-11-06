@@ -1,3 +1,4 @@
+import { readHookSettings } from './fixtures/read-hook-settings.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -23,7 +24,7 @@ test('hook registration is kim-only and idempotent', async t => {
   fs.mkdirSync(path.join(home,'.claude'));
   const env={...process.env, ORGIAST_HOME:home, ORGIAST_REPO:repo};
   const run=()=>execFileSync(process.execPath,['tools/register-hooks.mjs','--hooks-only'],{env,stdio:'pipe'});
-  const hooks=()=>JSON.parse(fs.readFileSync(path.join(home,'.claude/settings.json'))).hooks.UserPromptSubmit.flatMap(g=>g.hooks).filter(h=>h.command.includes('discord-drafts-context'));
+  const hooks=()=>readHookSettings(path.join(home,'.claude/settings.json')).hooks.UserPromptSubmit.flatMap(g=>g.hooks).filter(h=>h.command.includes('discord-drafts-context'));
   run();assert.equal(hooks().length,0);
   fs.writeFileSync(path.join(home,'.claude/cost-reporter.env'),'REPORTER_LABEL=kim-PC\n');
   run();run();assert.equal(hooks().length,1);assert.equal(hooks()[0].timeout,5);

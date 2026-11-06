@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { routeOwnerDm } from './lib/owner-dm-policy.mjs';
+import { resolveOwner, resolveOwnerDiscordId } from './notify-owner.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -41,7 +43,13 @@ export function formatNag(items, sheetUrl, now = new Date()) {
   return lines.join('\n').slice(0, 1900);
 }
 
-export async function sendDiscordDm({ token, userId, content, fetchImpl = fetch }) {
+export async function sendDiscordDm({ token, userId, content, fetchImpl = fetch, home = userHome(), kind = 'automatic' }) {
+  const localOwner = resolveOwner({ home });
+  const owner = String(userId) === '715210673642012733' ? 'kim@orgiast.jp' : String(userId) === resolveOwnerDiscordId(localOwner, { home }) ? localOwner : '';
+  if (owner) {
+    const deferred = await routeOwnerDm(owner, content, { home, kind, source: 'feedback巡回' });
+    if (deferred) return deferred;
+  }
   const headers = { Authorization: `Bot ${token}`, 'Content-Type': 'application/json' };
   const channelResponse = await fetchImpl(`${DISCORD_API}/users/@me/channels`, { method: 'POST', headers, body: JSON.stringify({ recipient_id: userId }) });
   if (!channelResponse.ok) throw new Error(`Discord DM channel creation failed (${channelResponse.status})`);
@@ -81,7 +89,7 @@ export async function runNag({ args = process.argv.slice(2), home = userHome(), 
       const userId = nagEnv.FEEDBACK_NAG_DISCORD_USER_ID || DEFAULT_USER_ID;
       const token = process.env.DISCORD_BOT_TOKEN?.trim() || readText(path.join(home, '.claude', 'orgiast-discord-bot-token.txt'), io).trim();
       if (!token) throw new Error('Discord Bot トークンが見つかりません');
-      await sendDm({ token, userId, content, fetchImpl });
+      await sendDm({ token, userId, content, fetchImpl, home, kind: 'automatic' });
       sent = true;
     }
     output(json ? { ok: true, count: items.length, sent, items } : content);

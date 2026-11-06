@@ -13,12 +13,17 @@ import { ledgerFile, readLedger, writeLedger, cleanupOldLedgerTemps, OPEN_STATUS
 export { MAX_RESUMES } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { notifyOwner, resolveOwner, sendOwnerToast } from './notify-owner.mjs';
+import { escalateKimDecisions } from './auto-progress-escalate.mjs';
 import { isQuietHours, kimAction } from './auto-progress-digest.mjs';
-import { checkPromise, executeCheck, queueCheckFollowup } from './auto-progress-check.mjs';
+import { completionActions } from './lib/auto-progress-artifact.mjs';
+import { reportCheckProgress } from './lib/auto-progress-heartbeat.mjs';
+import { checkPromise, checkProgressSummary, executeCheck, isTimeOnlyCheck, queueCheckFollowup, pendingAction } from './auto-progress-check.mjs';
+import { addItem } from './kim-inbox.mjs';
 import { appendInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { BLOCKER, readJson as readFleetJson, saveJson as saveFleetJson } from './lib/fleet-chase-ledger.mjs';
 import { errorKind, findUnansweredRequest } from './lib/unanswered-request.mjs';
+import { refreshDoneApprovals, deliverDoneInbox, hasDoneInboxReceipt, usesKimDoneInbox } from './lib/auto-progress-done-inbox.mjs';
 
 export const GRACE_MS = 1 * 3600 * 1000;
 export const RESUME_INTERVAL_MS = 2 * 3600 * 1000;
@@ -27,6 +32,72 @@ export const MAX_RESUMES_PER_RUN = 4; // 1回の巡回あたり（4件 × 最大
 const WATCHED = OPEN_STATUSES;
 export const EXPIRE_UNATTENDED_MS = 48 * 3600 * 1000;
 export const FALLBACK_STALL_MS = 24 * 3600 * 1000;
+export const TIME_ONLY_REASON = '時刻だけの check は完了判定にできないため開始予約へ変換';
+export const LEGACY_ADD_CHECK_REASON = 'nextClaude 付き add-check の誤完了を開始予約へ変換';
+
+// 完了が本人に配達・検証済み（done inbox レシートまたは done 通知済み）の行は誤完了ではない。
+// レシートがあるのに移行で復活させると、完了済みの約束が偽の開始予約として何度も再開される（2026-11-05 17件実害）。
+export function doneConcludedWithReceipt(row) {
+  return Boolean((row.doneInboxId && row.doneInboxVerifiedAt) || row.doneNotifiedAt);
+}
+
+export function legacyAddCheckMigrationRows(rows) {
+  const migrated = new Set(rows.map(row => row.migratedFromLegacyAddCheck).filter(Boolean));
+  return rows.filter(row => row.status === 'done' && String(row.check || '').trim() &&
+    String(row.nextClaude || '').trim() && !isTimeOnlyCheck(row.check) && !row.resumedAt &&
+    !doneConcludedWithReceipt(row) && !migrated.has(rowKey(row)));
+}
+
+export function legacyAddCheckReservation(row, now = Date.now()) {
+  const reset = { ...row };
+  for (const key of ['check', 'checkRegisteredAt', 'checkResult', 'checkText', 'doneAt', 'doneNotifiedAt', 'doneInboxId',
+    'doneInboxVerifiedAt', 'checkNotifiedResult', 'lastCheckedAt', 'startedAt', 'startOverdueNotifiedAt']) delete reset[key];
+  return { ...reset, ts: new Date(now).toISOString(), status: 'scheduled', startWhen: row.check,
+    deadlineAt: new Date(now + 24 * 3600000).toISOString(), reason: LEGACY_ADD_CHECK_REASON,
+    migratedLegacyAddCheckAt: new Date(now).toISOString(), migratedFromLegacyAddCheck: rowKey(row) };
+}
+
+export async function migrateLegacyAddChecks({ home, now = Date.now(), dryRun = false, io = {} }) {
+  const file = ledgerFile(home), rows = readLedger(file), targets = legacyAddCheckMigrationRows(rows);
+  if (dryRun || !targets.length) return { targets, appended: 0 };
+  const additions = targets.map(row => legacyAddCheckReservation(row, now));
+  (io.writeLedger ?? writeLedger)(file, [...rows, ...additions], io.ledgerIo ?? {});
+  for (const row of additions) {
+    const text = `nextClaude 付き check を再開対象に戻しました: ${row.label || row.promise}`;
+    (io.stdout ?? console.log)(text);
+    await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-legacy-add-check-migration', text,
+      dedupeKey: `auto-progress-legacy-add-check-migration:${row.sessionId || rowKey(row)}` });
+  }
+  return { targets, appended: additions.length };
+}
+
+export function timeOnlyMigrationRows(rows) {
+  const migrated = new Set(rows.map(row => row.migratedFromTimeOnlyCheck).filter(Boolean));
+  return rows.filter(row => row.status === 'done' && isTimeOnlyCheck(row.check) && !migrated.has(rowKey(row)));
+}
+
+export function timeOnlyReservation(row, now = Date.now()) {
+  const reset = { ...row };
+  for (const key of ['check', 'checkResult', 'checkText', 'doneAt', 'doneNotifiedAt', 'doneInboxId', 'doneInboxVerifiedAt', 'checkNotifiedResult', 'lastCheckedAt', 'startedAt', 'startOverdueNotifiedAt']) delete reset[key];
+  return { ...reset, ts: new Date(now).toISOString(), status: 'scheduled', startWhen: row.check,
+    deadlineAt: new Date(now + 24 * 3600000).toISOString(), reason: TIME_ONLY_REASON,
+    nextClaude: String(row.nextClaude || '').trim() || `「${row.label || row.promise}」の作業を再開し、成果物を確認して完了まで進める`,
+    migratedTimeOnlyCheckAt: new Date(now).toISOString(), migratedFromTimeOnlyCheck: rowKey(row) };
+}
+
+export async function migrateTimeOnlyChecks({ home, now = Date.now(), dryRun = false, io = {} }) {
+  const file = ledgerFile(home), rows = readLedger(file), targets = timeOnlyMigrationRows(rows);
+  if (dryRun || !targets.length) return { targets, appended: 0 };
+  const additions = targets.map(row => timeOnlyReservation(row, now));
+  (io.writeLedger ?? writeLedger)(file, [...rows, ...additions], io.ledgerIo ?? {});
+  for (const row of additions) {
+    const text = `誤って達成扱いだった約束を再開しました: ${row.label || row.promise}`;
+    (io.stdout ?? console.log)(text);
+    await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-time-only-migration', text,
+      dedupeKey: `auto-progress-time-only-migration:${row.sessionId || rowKey(row)}` });
+  }
+  return { targets, appended: additions.length };
+}
 
 // ---- 証拠収集 -------------------------------------------------------------
 // transcript の promise 記録時刻以降の assistant/tool メッセージを要約する。
@@ -34,13 +105,25 @@ export function transcriptEvidence(transcriptPath, sinceMs, { readFile = (p) => 
   let text = '';
   try { text = readFile(transcriptPath); } catch { return { count: 0, lastAt: 0, snippets: [] }; }
   let count = 0, lastAt = 0; const snippets = [], touchedPaths = [];
+  let scheduledTurn = false, ignoredScheduledCount = 0;
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
     let entry; try { entry = JSON.parse(line); } catch { continue; }
+    const content = entry?.message?.content;
+    const toolResult = Array.isArray(content) && content.some(b => b?.type === 'tool_result');
+    // 時刻で絞る前に起点を追う。tool_result や meta 行は本人の次の発言ではない。
+    if (entry.type === 'user') {
+      // promptSource:'system' はバックグラウンド完了通知（turnOrigin:'task_notification'）にも付き、本物の進捗なので見ない。
+      if (entry.turnOrigin === 'scheduled' || entry.wakeupSource) scheduledTurn = true;
+      else if (!entry.isMeta && !toolResult) scheduledTurn = false;
+    }
     const at = Date.parse(entry?.timestamp);
     // 約束を書いたメッセージ自体（記録時刻の直前直後）は証拠に数えない。
     if (!Number.isFinite(at) || at <= sinceMs + graceMs) continue;
-    const content = entry?.message?.content;
+    if (scheduledTurn && (entry.type === 'user' || entry.type === 'assistant')) {
+      ignoredScheduledCount += 1;
+      continue;
+    }
     const parts = Array.isArray(content) ? content : [{ type: 'text', text: String(content ?? '') }];
     const body = parts.map((b) => b?.type === 'text' ? b.text : b?.type === 'tool_use' ? `[tool:${b.name}]` : '').filter(Boolean).join(' ').trim();
     if (entry.type !== 'assistant' && !(entry.type === 'user' && ((includeUser && !entry.isMeta) || (Array.isArray(content) && content.some((b) => b?.type === 'tool_result'))))) continue;
@@ -55,7 +138,7 @@ export function transcriptEvidence(transcriptPath, sinceMs, { readFile = (p) => 
       }
     }
   }
-  return { count, lastAt, snippets: snippets.slice(-4), touchedPaths: touchedPaths.slice(-50) };
+  return { count, lastAt, snippets: snippets.slice(-4), touchedPaths: touchedPaths.slice(-50), ignoredScheduledCount };
 }
 
 // この session の tool_use が明示したファイルだけを見る。他 session の cwd 更新は証拠にしない。
@@ -98,7 +181,7 @@ export function gatherEvidence(row, home, io = {}) {
   const cutoff = failedResumeEnd(row);
   const since = Math.max(Date.parse(row.ts), cutoff);
   let transcript = (io.transcriptEvidence ?? transcriptEvidence)(row.transcriptPath, since, { graceMs: cutoff ? 0 : 60000, includeUser: Boolean(cutoff) });
-  if (cutoff && transcript.lastAt <= cutoff) transcript = { count: 0, lastAt: 0, snippets: [], touchedPaths: [] };
+  if (cutoff && transcript.lastAt <= cutoff) transcript = { ...transcript, count: 0, lastAt: 0, snippets: [], touchedPaths: [] };
   const files = (io.recentFiles ?? recentFiles)(row.cwd, since, { paths: transcript.touchedPaths || [] });
   let runs = (io.autoSessionRuns ?? autoSessionRuns)(home, row, since);
   if (cutoff && runs.lastAt <= cutoff) runs = { lastAt: 0, names: [] };
@@ -112,6 +195,7 @@ export function evidenceSummary(row, evidence, now) {
   return [
     `約束: ${row.promise}`, `記録: ${row.ts}`,
     `記録後の会話/ツール動作: ${evidence.transcript.count}件（最後 ${hours(evidence.transcript.lastAt)}）`,
+    ...(evidence.transcript.ignoredScheduledCount ? ['定期確認のプロンプト・応答は進捗から除外'] : []),
     ...evidence.transcript.snippets.map((s) => `  - ${s}`),
     `記録後に更新されたファイル: ${evidence.files.names.join(', ') || 'なし'}（最後 ${hours(evidence.files.lastAt)}）`,
     `auto-session ログ: ${evidence.runs.names.join(', ') || 'なし'}`,
@@ -150,6 +234,15 @@ export function exhaustedResumeVerdict(row) {
 }
 
 export function judge(row, evidence, now, io = {}) {
+  const result = judgeEvidence(row, evidence, now, io);
+  // source は維持し、既存の reportKey による重複通知抑止を変えない。
+  if (result.verdict === 'stalled' && evidence.transcript?.ignoredScheduledCount) {
+    result.reason = `定期確認のみで進捗なし（${result.reason}）`;
+  }
+  return result;
+}
+
+function judgeEvidence(row, evidence, now, io) {
   // A failed resume writes transcript activity too; it must not reset the stall clock forever.
   const cutoff = failedResumeEnd(row);
   const freshActivity = cutoff && evidence.lastEvidenceAt > cutoff;
@@ -179,7 +272,7 @@ export async function resumeSession(row, { timeoutMs = 20 * 60000, home = os.hom
     : apiErrorResume
     ? `API エラーで返答できなかった user の依頼に、最初から通常どおり応えてください。依頼: ${row.requestText || row.promise.replace(/^API エラー（.*?）で返答できなかった依頼:\s*/, '')}`
     : `以前このセッションで宣言した「この後の自動進行」が止まっています。宣言: 「${row.promise}」。`;
-  const prompt = `${promptLead}${row.nextClaude ? `\nやること: ${row.nextClaude}` : ''}\n元の会話は ${row.transcriptPath} にあります。${apiErrorResume ? '依頼を完了まで進めてください。' : '宣言の最終成果まで進めてください。'}user の判断・承認が必要な地点では、判断材料を揃えて止まり needs_user を返してください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"成果物パスと検証結果、または進めない理由","artifact":"成果物パス（任意）","nextKim":"本人だけができる具体的な判断・操作。返信待ちや自動調査なら空文字"}`;
+  const prompt = `${promptLead}${row.kimAnswer ? `\nkim の返事: 「${row.kimAnswer}」。これを前提に続きを進めてください。` : ''}${reason === 'check-overdue' ? `\n期限超過の最終確認です。確認出力全文:\n${row.checkText || ''}\n確認エラー:\n${row.checkStderr || ''}` : ''}${row.nextClaude ? `\nやること: ${row.nextClaude}` : ''}\n元の会話は ${row.transcriptPath} にあります。${apiErrorResume ? '依頼を完了まで進めてください。' : '宣言の最終成果まで進めてください。'}止まる前に、取り消せる作業（調査・資料作成・下書き作成・比較表・社内向け準備）は全部先に済ませてください。needs_user で止まってよいのは、支払い・社外への送信・削除・本人の同意・本人にしかできない物理操作が残ったときだけです。evidence には先に済ませた作業と成果物を書いてください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"先に済ませた作業と成果物パス・検証結果、残った操作と進めない理由","artifact":"成果物パス（任意）","nextKim":"本人だけができる具体的な判断・操作。返信待ちや自動調査なら空文字"}`;
   const rateLimited = apiErrorResume && /rate.?limit|usage.?credits?|429/i.test([row.error, row.apiError, row.apiErrorStatus].join(' '));
   const runOptions = { resumeSessionId: row.sessionId, ...(rateLimited ? { model: process.env.AUTO_PROGRESS_RESUME_MODEL || 'opus' } : {}) };
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, row.cwd, row.cwd, timeoutMs, runOptions);
@@ -213,12 +306,12 @@ export function formatDoneMessage(row, { reason = '', artifact = '', home = proc
     origin,
     '✅ 自動進行が完了しました',
     formatDoneLine(row, { reason, artifact, home }),
-    'kim がすること: なし',
+    completionActions({ ...row, artifact: artifact || row.artifact }, { home }).text,
   ];
-  return lines.join('\n').slice(0, 1900);
+  return lines.join('\n').slice(0, 4000);
 }
 
-export function logDoneDm(home, row, delivery, message, now = Date.now(), io = {}) {
+export function logDoneDm(home, row, delivery, message, now = Date.now(), io = {}, toastResult = null) {
   const file = path.join(home, '.claude', 'logs', 'auto-progress-done-dm.sent.jsonl');
   try {
     (io.mkdirSync ?? fs.mkdirSync)(path.dirname(file), { recursive: true });
@@ -230,6 +323,7 @@ export function logDoneDm(home, row, delivery, message, now = Date.now(), io = {
       reason: delivery?.reason,
       httpStatus: delivery?.httpStatus, messageId: delivery?.messageId, recipientId: delivery?.recipientId,
       text: message.slice(0, 8000),
+      ...(toastResult ? { toast: { ok: toastResult.ok, exitCode: toastResult.exitCode } } : {}),
     });
     (io.appendFileSync ?? fs.appendFileSync)(file, `${payload}\n`);
   } catch (error) {
@@ -256,8 +350,9 @@ function doneWasAlreadyReportedByCheck(row) {
 }
 
 export function doneNoticeSweepRows(rows, home, now = Date.now()) {
-  const eligible = rows.filter(row => row.status === 'done' && !row.doneNotifiedAt && !row.doneNotifySkipped &&
-    !isUnattendedRow(row, home) && !doneWasAlreadyReportedByCheck(row));
+  const migrated = new Set(rows.flatMap(row => [row.migratedFromTimeOnlyCheck, row.migratedFromLegacyAddCheck]).filter(Boolean));
+  const eligible = rows.filter(row => row.status === 'done' && !(usesKimDoneInbox(row, home) ? hasDoneInboxReceipt(row) : row.doneNotifiedAt) && !row.doneNotifySkipped &&
+    !isUnattendedRow(row, home) && !doneWasAlreadyReportedByCheck(row) && !migrated.has(rowKey(row)));
   return {
     recent: eligible.filter(row => now - doneTime(row) <= DONE_NOTICE_RECENT_MS),
     backlog: eligible.filter(row => now - doneTime(row) > DONE_NOTICE_RECENT_MS),
@@ -378,8 +473,8 @@ async function registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io,
     if (isUnattendedRow(row, home)) continue;
     try {
       const message = `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: row.owner, home })}\nエラーで止まっていた依頼を見つけ、自動で再開します。\n依頼: ${requestText}`;
-      const delivery = await (io.notifyOwner ?? notifyOwner)(row.owner, message, { home });
-      if (!['dm', 'session-inbox', 'toast', 'inbox'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
+      const delivery = await (io.notifyOwner ?? notifyOwner)(row.owner, message, { home, now, kind: 'automatic', session: row });
+      if (!['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
     } catch (error) { summary.errors.push(`api-error-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
   }
 }
@@ -502,7 +597,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   const file = ledgerFile(home);
   const clock = io.clock ?? Date.now;
   const stopAt = clock() + 45 * 60000;
-  const summary = { checked: 0, done: 0, noop: 0, inProgress: 0, stalled: 0, resumed: 0, resumeDeferred: 0, reported: 0, expired: 0, graced: 0, superseded: 0, discovered: 0, errors: [] };
+  const summary = { checked: 0, done: 0, overdueReported: 0, noop: 0, inProgress: 0, stalled: 0, resumed: 0, resumeDeferred: 0, reported: 0, expired: 0, graced: 0, superseded: 0, discovered: 0, errors: [] };
   let notificationsStopped = false;
   const ledgerFailure = (error) => {
     notificationsStopped = true;
@@ -529,22 +624,76 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     try { (io.cleanupOldLedgerTemps ?? cleanupOldLedgerTemps)(file, { now, io: io.cleanupIo ?? {} }); }
     catch (error) { summary.errors.push(`ledger-temp-cleanup-failed: ${String(error?.message ?? error).slice(0, 120)}`); }
   }
+  try {
+    const migration = await migrateTimeOnlyChecks({ home, now, dryRun, io });
+    summary.timeOnlyMigration = { count: migration.targets.length, labels: migration.targets.map(row => row.label || row.promise), appended: migration.appended };
+  } catch (error) {
+    summary.errors.push(`time-only-migration: ${String(error?.message ?? error).slice(0, 120)}`);
+  }
+  try {
+    const migration = await migrateLegacyAddChecks({ home, now, dryRun, io });
+    summary.legacyAddCheckMigration = { count: migration.targets.length, labels: migration.targets.map(row => row.label || row.promise), appended: migration.appended };
+  } catch (error) {
+    summary.errors.push(`legacy-add-check-migration: ${String(error?.message ?? error).slice(0, 120)}`);
+  }
   try { Object.assign(summary, await watchFleetMail({ home, now, dryRun, io })); }
   catch { summary.fleetExpired ??= 0; summary.fleetBlocked ??= 0; summary.errors.push('fleet-mail monitoring failed'); }
   const config = (io.sheetConfig ?? sheetConfig)(home);
   // owner 未記録の行は自PCの持ち主へ。空のまま渡すと「宛先: 不明（DM 未解決）」だけになり出どころが分からない（2026-10-23 実測）。
   let localOwner;
   const ownerOf = row => row.owner || (localOwner ??= io.localOwner ?? (() => { try { return resolveOwner({ home }); } catch { return ''; } })());
+  const deferredNotices = new Map();
+  const queueDeferredNotice = (row, reason) => {
+    if (dryRun || notificationsStopped || isQuietHours(now) || isUnattendedRow(row, home)) return;
+    const previousAt = Date.parse(row.resumeDeferredNotifiedAt || 0) || 0;
+    if (row.resumeDeferredNotifiedReason === reason && now - previousAt < 24 * 3600000) return;
+    const owner = ownerOf(row);
+    const group = deferredNotices.get(owner) ?? [];
+    group.push({ row, reason });
+    deferredNotices.set(owner, group);
+  };
+  const sendDeferredNotices = async () => {
+    for (const [owner, items] of deferredNotices) {
+      if (notificationsStopped) break;
+      const reasons = [...new Set(items.map(item => item.reason))].join(' / ');
+      const targets = items.map(({ row }) => {
+        const purpose = row.label || row.promise || '目的未記録';
+        const next = row.nextClaude || pendingAction(row);
+        return `・対象: ${purpose}\n  次の手: ${next}`;
+      }).join('\n');
+      const message = `自動再開を見送りました。理由: ${reasons}。次回の枠回復後に自動で再試行します。\n${targets}`;
+      try {
+        const delivery = await (io.notifyOwner ?? notifyOwner)(owner, message, { home, now, kind: 'automatic', session: items[0].row });
+        if (!['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
+        for (const { row, reason } of items) patch(rowKey(row), {
+          resumeDeferredNotifiedAt: new Date(now).toISOString(), resumeDeferredNotifiedReason: reason,
+        });
+      } catch (error) { summary.errors.push(`deferred-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
+    }
+  };
   const askKim = (row, reason) => (io.notifyOwner ?? notifyOwner)(ownerOf(row),
-    `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf(row), home })}\n自動進行が判断待ちです: ${row.promise}\n${reason || ''}`, { home });
+    `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf(row), home })}\n自動進行が判断待ちです: ${row.promise}\n${reason || ''}\n${pendingAction(row)}`, { home, now, kind: 'action', session: row });
   const notifyDone = async (row, reason, artifact) => {
     if (notificationsStopped) return false;
+    if (usesKimDoneInbox(row, home)) {
+      if (hasDoneInboxReceipt(row)) return false;
+      const message = formatDoneMessage(row, { reason, artifact, home, io, ownerOf });
+      let delivery = null;
+      try {
+        delivery = await deliverDoneInbox(home, [{ ...row, artifact: artifact || row.artifact }], message, { now, io });
+        return patch(rowKey(row), delivery.receipt);
+      } catch (error) {
+        patch(rowKey(row), { doneNotifyPending: true, doneNotifyArtifact: artifact || row.artifact || '' });
+        summary.errors.push(`notify-done: ${String(error?.message ?? error).slice(0, 120)}`);
+        return false;
+      } finally { logDoneDm(home, row, delivery, message, now, io); }
+    }
     if (row.doneNotifiedAt) return false;
     if (isQuietHours(now)) return false;
     const message = formatDoneMessage(row, { reason, artifact, home, io, ownerOf });
     let delivery = null;
     try {
-      delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(row), message, { home });
+      delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(row), message, { home, now, kind: row.status === 'done' && !isUnattendedRow(row, home) ? 'done-requested' : 'automatic', session: row });
       if (!['dm', 'session-inbox', 'toast', 'inbox'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
       patch(rowKey(row), { doneNotifiedAt: new Date(now).toISOString(), doneNotifyPending: false });
     } catch (error) {
@@ -552,23 +701,31 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       patch(rowKey(row), { doneNotifyPending: true, doneNotifyArtifact: artifact ? String(artifact) : '' });
       summary.errors.push(`notify-done: ${String(error?.message ?? error).slice(0, 120)}`);
     }
-    logDoneDm(home, row, delivery, message, now, io);
-    // 完了通知は DM の成否に関係なく、owner がこの PC のローカル user ならトーストも毎回出す
+    // 完了通知は DM の成否に関係なく、owner ��この PC のローカル user ならトーストも毎回出す
+    let toastResult = null;
     try {
       const rowOwner = ownerOf(row);
       const pcOwner = io.localOwner ?? (() => { try { return resolveOwner({ home }); } catch { return ''; } })();
       if (delivery?.delivered !== 'toast' && rowOwner && pcOwner && rowOwner.toLowerCase() === pcOwner.toLowerCase()) {
         const toastText = `✅ 自動進行が完了: ${String(row.promise ?? '').slice(0, 120)}`;
-        (io.sendOwnerToast ?? sendOwnerToast)(toastText, { home });
+        (io.sendOwnerToast ?? sendOwnerToast)(toastText, { home, onToastResult: value => { toastResult = value; } });
       }
     } catch { /* トースト失敗は DM の成否判定に影響しない */ }
+    logDoneDm(home, row, delivery, message, now, io, toastResult);
     return ['dm', 'session-inbox', 'toast', 'inbox'].includes(delivery?.delivered);
   };
   const rows = readLedger(file);
+  if (!dryRun) {
+    try { await refreshDoneApprovals(home, rows, { now, io, patch }); }
+    catch (error) { summary.errors.push(`done-approvals: ${String(error.message).slice(0, 200)}`); }
+  }
   await registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io, persist);
   let candidates = latestOpenPromises(rows);
+  // check 付き行は sessionId + label ごとに1件選ばれるため、別 label の自動チェックはすべて残る。
   const selected = new Set(candidates);
-  const pendingChecks = rows.filter(row => row.check && row.status === 'done' && row.checkResult === 'done' && row.checkNotifiedResult !== 'done');
+  const migratedSourceKeys = new Set(rows.flatMap(row => [row.migratedFromTimeOnlyCheck, row.migratedFromLegacyAddCheck]).filter(Boolean));
+  const pendingChecks = rows.filter(row => row.check && row.status === 'done' && row.checkResult === 'done' &&
+    !hasDoneInboxReceipt(row) && !migratedSourceKeys.has(rowKey(row)));
   // 完了した経路に依存せず未通知を拾う。古い完了は個別DMを大量送信せず一覧にまとめる。
   const doneSweep = doneNoticeSweepRows(rows, home, now);
   summary.doneNotifications = { recent: doneSweep.recent.length, backlog: doneSweep.backlog.length };
@@ -582,7 +739,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   if (!dryRun && summary.superseded) persist(normalized);
   // Expiration is cheap maintenance: never let checks/resumes exhaust its time budget.
   const reservation = row => row.startWhen && ['scheduled', 'starting', 'start_overdue'].includes(row.status);
-  const expired = new Set(candidates.filter(row => !reservation(row) && isUnattendedRow(row, home) &&
+  const expired = new Set(candidates.filter(row => !reservation(row) && !row.check && isUnattendedRow(row, home) &&
     Number.isFinite(Date.parse(row.ts)) && now - Date.parse(row.ts) >= EXPIRE_UNATTENDED_MS));
   for (const row of expired) patch(rowKey(row), { status: 'expired' });
   summary.expired += expired.size;
@@ -595,15 +752,70 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   };
   const needsKim = row => !['', 'なし'].includes(String(row.nextKim ?? '').trim());
   candidates.sort((a, b) => Number(needsKim(a)) - Number(needsKim(b)) || Date.parse(a.ts) - Date.parse(b.ts));
+  let executorUnavailable = false;
+  const reportOverdue = async row => {
+    const text = row.overdueReportText;
+    const delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(row), text,
+      { home, now, kind: 'automatic', session: row });
+    if (!['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'final report not delivered');
+    patch(rowKey(row), { overdueReportedAt: new Date(now).toISOString() });
+  };
+  // Retry delivery only, never the check or resume, after a transport failure.
+  for (const row of rows.filter(r => r.status === 'overdue_reported' && !r.overdueReportedAt)) {
+    if (dryRun || notificationsStopped) break;
+    try { await reportOverdue(row); } catch (error) { summary.errors.push(`overdue-report: ${error.message}`); }
+  }
   // Checks run first, before the potentially lengthy legacy resume lane.
   const executable = [...candidates.filter(row => row.check && !reservation(row)), ...pendingChecks];
   executable.sort((a, b) => (Date.parse(a.lastCheckedAt) || 0) - (Date.parse(b.lastCheckedAt) || 0));
   for (const row of executable) {
-    if (clock() + 60000 >= stopAt) break;
+    if (notificationsStopped || clock() + 60000 >= stopAt) break;
     if (dryRun) continue; // --dry-run must never execute arbitrary commands.
     summary.checked++;
     try {
-      const state = await checkPromise(row, { home, now, patch, io });
+      const overdue = now >= Date.parse(row.deadlineAt);
+      let state = await checkPromise(row, { home, now, patch, io, suppressNotices: overdue });
+      if (overdue && ['unmet', 'error'].includes(state)) {
+        const at = new Date(now).toISOString();
+        let outcome = { reason: '再開上限・実行時間・作業場所の条件により再開できません' };
+        const eligible = !executorUnavailable && summary.resumed < MAX_RESUMES_PER_RUN &&
+          (row.resumeCount ?? 0) < MAX_RESUMES && now - (Date.parse(row.resumedAt || '') || 0) >= RESUME_INTERVAL_MS &&
+          clock() + 22 * 60000 < stopAt && row.cwd && (io.cwdExists ?? fs.existsSync)(row.cwd) && !isUnattendedRow(row, home);
+        if (eligible) {
+          if (!patch(rowKey(row), { status: 'resumed', resumedAt: at, resumeCount: (row.resumeCount ?? 0) + 1, resumeOutcome: 'attempting' })) continue;
+          try { outcome = await (io.resume ?? resumeSession)(row, { home, reason: 'check-overdue' }); }
+          catch (error) { outcome = { outcome: 'error', reason: String(error.message || error) }; }
+          if (outcome.deferred || outcome.outcome === 'deferred') {
+            executorUnavailable = true;
+            summary.resumeDeferred++;
+            if (!patch(rowKey(row), { resumedAt: row.resumedAt || '', resumeCount: row.resumeCount ?? 0, resumeDeferredAt: at, resumeOutcome: `deferred: ${outcome.reason}` })) continue;
+          } else {
+            summary.resumed++;
+            if (!patch(rowKey(row), { resumeOutcome: `${outcome.state || outcome.outcome}: ${outcome.reason}`, resumeFinishedAt: new Date(clock()).toISOString(), nextKim: outcome.nextKim ?? row.nextKim })) continue;
+            row.nextKim = outcome.nextKim ?? row.nextKim;
+            // A resume report alone cannot establish that an explicit check has passed.
+            state = await checkPromise(row, { home, now, patch, io, suppressNotices: true });
+          }
+        }
+        if (state !== 'done' && state !== 'ledger_error') {
+          const report = `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf(row), home })}\n最終報告（期限超過・未完了）: ${row.label || row.promise}\n期限切れ（${row.deadlineAt}）\n約束: ${row.promise}\n${checkProgressSummary(row.checkText)}\n再開結果: ${outcome.reason}\n次の一手: ${kimAction(row) !== 'なし' ? `${ownerOf(row)} が ${kimAction(row)}` : pendingAction(row)}`;
+          if (!patch(rowKey(row), { status: 'overdue_reported', verdict: 'unmet', overdueClosedAt: at, overdueReportText: redactSecrets(report) })) continue;
+          summary.overdueReported++;
+          state = 'overdue_reported';
+          (io.queueCheckFollowup ?? queueCheckFollowup)(home, row, { text: row.checkText });
+          await reportOverdue({ ...row, overdueReportText: redactSecrets(report) });
+        }
+      }
+      if (state === 'time_only') {
+        const reservationRow = timeOnlyReservation(row, now);
+        if (!dryRun && persist([...readLedger(file), reservationRow])) {
+          const text = `誤って達成扱いだった約束を再開しました: ${row.label || row.promise}`;
+          (io.stdout ?? console.log)(text);
+          await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-time-only-migration', text,
+            dedupeKey: `auto-progress-time-only-migration:${row.sessionId || rowKey(row)}` });
+        }
+        continue;
+      }
       if (state === 'done') summary.done++;
       else if (state === 'unmet') summary.inProgress++;
     } catch (error) { summary.errors.push(`check: ${String(error?.message ?? error).slice(0, 120)}`); }
@@ -612,29 +824,47 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     if (dryRun || notificationsStopped || clock() + 60000 >= stopAt) break;
     await notifyDone(row, row.reason || '', row.doneNotifyArtifact || '');
   }
-  if (!dryRun && !notificationsStopped && !isQuietHours(now) && clock() + 60000 < stopAt) {
-    for (const group of formatDoneBacklogMessages(doneSweep.backlog, { home })) {
+  if (!dryRun && !notificationsStopped && clock() + 60000 < stopAt) {
+    // Never put a kim notice into a staff DM group on a non-kim PC.
+    const inboxBacklog = doneSweep.backlog.filter(row => usesKimDoneInbox(row, home));
+    const ownerBacklog = doneSweep.backlog.filter(row => !usesKimDoneInbox(row, home));
+    const groups = [...formatDoneBacklogMessages(inboxBacklog, { home }), ...formatDoneBacklogMessages(ownerBacklog, { home })];
+    for (const group of groups) {
+      // Inbox persistence must not depend on DM quiet hours or daily quotas.
+      if (usesKimDoneInbox(group.rows[0], home)) {
+        let delivery = null;
+        try {
+          delivery = await deliverDoneInbox(home, group.rows, group.text, { now, io });
+          for (const row of group.rows) {
+            if (!patch(rowKey(row), { ...delivery.receipt, doneNotifyMode: 'backlog' })) break;
+          }
+        } catch (error) { summary.errors.push(`notify-done-backlog: ${String(error?.message ?? error).slice(0, 120)}`); }
+        logDoneDm(home, group.rows[0], delivery, group.text, now, io);
+        if (notificationsStopped) break;
+        continue;
+      }
+      if (isQuietHours(now)) continue;
       let delivery = null;
       try {
-        delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(group.rows[0]), group.text, { home });
+        delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(group.rows[0]), group.text, { home, now, kind: 'automatic' });
         if (!['dm', 'session-inbox', 'toast', 'inbox'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
         for (const row of group.rows) patch(rowKey(row), { doneNotifiedAt: new Date(now).toISOString(), doneNotifyMode: 'backlog', doneNotifyPending: false });
       } catch (error) {
         summary.errors.push(`notify-done-backlog: ${String(error?.message ?? error).slice(0, 120)}`);
       }
-      logDoneDm(home, group.rows[0], delivery, group.text, now, io);
       // バックログ完了通知もローカル user にはトーストを出す
+      let toastResult = null;
       try {
         const rowOwner = ownerOf(group.rows[0]);
         const pcOwner = io.localOwner ?? (() => { try { return resolveOwner({ home }); } catch { return ''; } })();
         if (delivery?.delivered !== 'toast' && rowOwner && pcOwner && rowOwner.toLowerCase() === pcOwner.toLowerCase()) {
           const toastText = `✅ 自動進行が完了 (ほか ${group.rows.length - 1}件): ${String(group.rows[0].promise ?? '').slice(0, 80)}`;
-          (io.sendOwnerToast ?? sendOwnerToast)(toastText, { home });
+          (io.sendOwnerToast ?? sendOwnerToast)(toastText, { home, onToastResult: value => { toastResult = value; } });
         }
       } catch { /* トースト失敗は無視 */ }
+      logDoneDm(home, group.rows[0], delivery, group.text, now, io, toastResult);
     }
   }
-  let executorUnavailable = false;
   for (const row of candidates.filter(reservation)) {
     if (dryRun || notificationsStopped || clock() + 22 * 60000 >= stopAt) continue;
     if (row.startedAt || row.status === 'starting') continue; // 起動済みの予約は二重起動しない。
@@ -645,7 +875,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         if (!patch(key, { status: 'start_overdue', reason: result.text })) continue;
         (io.queueCheckFollowup ?? queueCheckFollowup)(home, row, result);
         if (!row.startOverdueNotifiedAt && !isQuietHours(now) && !isUnattendedRow(row, home)) {
-          const delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(row), `${result.text}\nClaude の次の手: ${row.nextClaude}（next-session.md に起票）`, { home });
+          const delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(row), `${result.text}\nClaude の次の手: ${row.nextClaude}（next-session.md に起票）`, { home, now, kind: 'automatic', session: row });
           if (['dm', 'toast', 'inbox'].includes(delivery?.delivered)) patch(key, { startOverdueNotifiedAt: at });
         }
         continue;
@@ -654,7 +884,8 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       if (row.status !== 'scheduled' || isUnattendedRow(row, home)) continue;
       const result = await (io.executeCheck ?? executeCheck)({ ...row, check: row.startWhen }, { home });
       summary.checked++;
-      if (!patch(key, { lastCheckedAt: at })) continue;
+      if (!patch(key, { lastCheckedAt: at, checkResult: result.code === 1 ? 'unmet' : result.code === 0 ? 'ready' : 'error', checkText: result.text })) continue;
+      if (result.code !== 0) await reportCheckProgress(home, { ...row, lastCheckedAt: at }, result, { now, patch, io });
       if (result.code !== 0) {
         if (result.code !== 1) summary.errors.push(`start-when: ${result.text}`);
         continue;
@@ -662,7 +893,11 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       if (summary.resumed >= MAX_RESUMES_PER_RUN || (row.resumeCount ?? 0) >= MAX_RESUMES ||
           now - (Date.parse(row.resumedAt || 0) || 0) < RESUME_INTERVAL_MS ||
           !row.cwd || !(io.cwdExists ?? fs.existsSync)(row.cwd)) continue;
-      if (executorUnavailable) { summary.resumeDeferred++; continue; }
+      if (executorUnavailable) {
+        summary.resumeDeferred++;
+        queueDeferredNotice(row, summary.resumeDeferredReason || '実行者が利用できません');
+        continue;
+      }
       const attempt = { status: 'starting', startedAt: at, resumedAt: at, resumeCount: (row.resumeCount ?? 0) + 1 };
       if (!patch(key, attempt)) continue;
       let outcome;
@@ -674,6 +909,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         executorUnavailable = true;
         summary.resumeDeferred++;
         summary.resumeDeferredReason ??= outcome.reason;
+        queueDeferredNotice(row, outcome.reason);
         continue;
       }
       summary.resumed++;
@@ -702,6 +938,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       summary.noop += 1;
       continue;
     }
+    const answered = Boolean(row.kimAnswer && !row.resumedAt);
     const recorded = Date.parse(row.ts);
     if (!Number.isFinite(recorded)) continue;
     const unattended = isUnattendedRow(row, home);
@@ -709,22 +946,22 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       if (kimAction(row) !== 'なし' && !unattended && !dryRun && !notificationsStopped && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
         try {
           const delivery = await askKim(row, row.reason);
-          if (!['dm', 'session-inbox', 'toast', 'inbox'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
+          if (!['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
           patch(rowKey(row), { ownerNotifiedAt: new Date(now).toISOString() });
         } catch (error) { summary.errors.push(`notify-owner: ${String(error?.message ?? error).slice(0, 120)}`); }
       } else if (kimAction(row) === 'なし' && !unattended && !dryRun && !notificationsStopped && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
         try {
           const message = `⏳ 待ち状況（自動確認）\n約束: ${String(row.promise || '').slice(0, 160)}\n待っている理由: ${String(row.reason || '').slice(0, 240)}\n最終確認: ${row.lastCheckedAt || '不明'}\nuser の操作は不要です。進展があれば自動で再開します。`;
-          const delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(row), message, { home });
-          if (!['dm', 'session-inbox', 'toast', 'inbox'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
+          const delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(row), message, { home, now, kind: row.status === 'done' && !isUnattendedRow(row, home) ? 'done-requested' : 'automatic', session: row });
+          if (!['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
           patch(rowKey(row), { ownerNotifiedAt: new Date(now).toISOString() });
         } catch (error) { summary.errors.push(`notify-owner: ${String(error?.message ?? error).slice(0, 120)}`); }
       }
       summary.inProgress += 1;
       continue;
     }
-    if (now - recorded < GRACE_MS) { summary.graced += 1; continue; }
-    if (now - recorded >= EXPIRE_MS) { patch(rowKey(row), { status: 'expired' }); summary.expired += 1; continue; }
+    if (!answered && now - recorded < GRACE_MS) { summary.graced += 1; continue; }
+    if (!answered && now - recorded >= EXPIRE_MS) { patch(rowKey(row), { status: 'expired' }); summary.expired += 1; continue; }
     summary.checked += 1;
     // Freeze the legacy boundary before lastCheckedAt advances on subsequent polls.
     if (failedResumeEnd(row) && !row.resumeFinishedAt) {
@@ -732,7 +969,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       patch(rowKey(row), { resumeFinishedAt: row.resumeFinishedAt });
     }
     const evidence = gatherEvidence(row, home, io);
-    let verdict = judge(row, evidence, now, io);
+    let verdict = answered ? { verdict: 'stalled', reason: 'kim の返事を受領' } : judge(row, evidence, now, io);
     if (verdict.verdict === 'done') {
       patch(rowKey(row), { status: 'done', verdict: 'done', doneAt: new Date(now).toISOString(), reason: verdict.reason });
       summary.done += 1;
@@ -745,10 +982,13 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     summary.stalled += 1;
     patch(rowKey(row), { ...((row.resumeCount ?? 0) >= MAX_RESUMES || verdict.source === 'resume-failed' ? { status: 'stalled' } : {}), verdict: 'stalled', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason });
     let current = { ...row, ...((row.resumeCount ?? 0) >= MAX_RESUMES || verdict.source === 'resume-failed' ? { status: 'stalled' } : {}), verdict: verdict.verdict, reason: verdict.reason };
-    const resumeEligible = !unattended && !dryRun && summary.resumed < MAX_RESUMES_PER_RUN &&(row.resumeCount ?? 0) < MAX_RESUMES && now - (Date.parse(row.resumedAt || 0) || 0) >= RESUME_INTERVAL_MS
+    const resumeEligible = !unattended && !dryRun && summary.resumed < MAX_RESUMES_PER_RUN && (answered || (row.resumeCount ?? 0) < MAX_RESUMES) && now - (Date.parse(row.resumedAt || 0) || 0) >= RESUME_INTERVAL_MS
       && row.cwd && (io.cwdExists ?? fs.existsSync)(row.cwd);
     const canResume = resumeEligible && !executorUnavailable;
-    if (resumeEligible && executorUnavailable) summary.resumeDeferred += 1;
+    if (resumeEligible && executorUnavailable) {
+      summary.resumeDeferred += 1;
+      queueDeferredNotice(row, summary.resumeDeferredReason || '実行者が利用できません');
+    }
     if (canResume) {
       // Persist the attempt before launching: crashes must not allow another same-day resume.
       current = { ...row, status: 'resumed', resumedAt: new Date(now).toISOString(), resumeCount: (row.resumeCount ?? 0) + 1, resumeOutcome: 'attempting' };
@@ -763,6 +1003,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         executorUnavailable = true;
         summary.resumeDeferred += 1;
         summary.resumeDeferredReason ??= outcome.reason;
+        queueDeferredNotice(row, outcome.reason);
       } else {
         const state = outcome.state || outcome.outcome;
         const nextKim = outcome.nextKim ?? row.nextKim;
@@ -790,7 +1031,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         if (state === 'needs_user' && !notificationsStopped && kimAction(current) !== 'なし' && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
           try {
             const delivery = await askKim(row, outcome.reason);
-            if (!['dm', 'session-inbox', 'toast', 'inbox'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
+            if (!['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
             patch(rowKey(row), { ownerNotifiedAt: new Date(now).toISOString() });
           } catch (error) { summary.errors.push(`notify-owner: ${String(error?.message ?? error).slice(0, 120)}`); }
         }
@@ -803,6 +1044,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       catch (error) { summary.errors.push(`sheet: ${String(error?.message ?? error).slice(0, 120)}`); } // 次回巡回で再送する
     }
   }
+  await sendDeferredNotices();
   if (!dryRun) {
     const log = path.join(home, '.claude', 'logs', 'auto-progress-watch.summary.log');
     try {
@@ -814,6 +1056,11 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       const digest = io.digest ?? (await import('./auto-progress-digest.mjs')).run;
       summary.digest = await digest({ home, now, io: io.digestIo ?? {} });
     } catch (error) { summary.errors.push(`digest: ${String(error?.message ?? error).slice(0, 120)}`); }
+  }
+  if (!notificationsStopped) {
+    try {
+      summary.escalation = await (io.escalateKimDecisions ?? escalateKimDecisions)({ home, now, dryRun, io: io.escalationIo ?? {} });
+    } catch (error) { summary.errors.push(`escalate: ${String(error?.message ?? error).slice(0, 120)}`); }
   }
   return summary;
 }

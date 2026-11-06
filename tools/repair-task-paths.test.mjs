@@ -4,15 +4,13 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, realpathSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { powerShellTestRuntime } from './fixtures/powershell-test-runtime.mjs';
 
 const script = resolve('tools/repair-task-paths.ps1');
 const powershell = process.platform === 'win32'
   ? 'powershell.exe'
   : '/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe';
-const hasPowerShell = (() => {
-  const probe = spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0']);
-  return !probe.error && probe.status === 0;
-})();
+const hasPowerShell = powerShellTestRuntime(powershell);
 let root;
 
 function toWindowsPath(path) {
@@ -123,7 +121,11 @@ test('actions already pointing at the synced repo produce no changes', { skip: !
 });
 
 
-test('real git worktree origin is discovered without root injection', { skip: !hasPowerShell }, () => {
+// Windows Git rejects Linux-owned repositories exposed through the WSL UNC
+// share. This real-Git fixture needs a native drive; the mocked task cases above
+// still run over UNC, and Windows CI always exercises the worktree case.
+const hasNativeGitFixture = hasPowerShell && (process.platform === 'win32' || /^[A-Za-z]:[\\/]/.test(toWindowsPath(process.cwd())));
+test('real git worktree origin is discovered without root injection', { skip: !hasNativeGitFixture && 'Windows Git fixture requires a native drive path' }, () => {
   const { result, plan, synced } = runPlan('worktree', {
     inject: false,
     presentTools: ['worker.mjs', 'nightly-bootstrap.ps1'],

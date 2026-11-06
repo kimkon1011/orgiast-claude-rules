@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
@@ -94,5 +95,5 @@ export function recordGeminiMcpEvent(event, { recordImpl = recordGeminiUsage, ho
   } catch { return null; }
 }
 if (isEntry(import.meta.url)) {
-  try { recordGeminiMcpEvent(JSON.parse(fs.readFileSync(0, 'utf8'))); } catch {}
+  try { recordGeminiMcpEvent(JSON.parse(await readStdinWithTimeout())); } catch {}
 }

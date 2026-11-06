@@ -62,7 +62,8 @@ export async function main({ home = process.env.ORGIAST_HOME || os.homedir(), no
   readStdin = readStdinWithTimeout, stdout = console.log, stderr = console.error } = {}) {
   try {
     if (resolveFleetLabel(home) !== 'kim-PC') return;
-    const input = JSON.parse(await readStdin(100));
+    // 100ms では混雑時に入力を読み切れず、表示が抜ける（kim-inbox と同じ 2026-11-04 実測）。
+    const input = JSON.parse(await readStdin(2000));
     const event = input.hook_event_name;
     if (!['SessionStart', 'UserPromptSubmit'].includes(event)) return;
     const session = String(input.session_id || '');

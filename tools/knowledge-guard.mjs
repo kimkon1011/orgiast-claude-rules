@@ -6,6 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { main as knowledgeLock, verifyVerdict } from './knowledge-lock.mjs';
@@ -136,7 +137,7 @@ export async function sessionStart(deps = {}) {
       save(file, { day, email: decision.email });
       const message = `契約外 Claude アカウントの起動を検知: PC=${os.hostname()} アカウント=${decision.email} 理由=${decision.reason}。蓄積の読み出しはフックで拒否中`;
       let child;
-      try { child = ctx.spawn(process.execPath, [path.join(ctx.toolsDir, 'notify-kim.mjs'), message], { stdio: 'ignore', windowsHide: true, detached: true }); }
+      try { child = ctx.spawn(process.execPath, [path.join(ctx.toolsDir, 'notify-kim.mjs'), message], { ...backgroundSpawnOptions(), stdio: 'ignore' }); }
       catch { fs.unlinkSync(file); return; }
       child.on('error', () => { try { fs.unlinkSync(file); } catch {} });
       child.unref?.();

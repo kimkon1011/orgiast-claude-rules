@@ -215,7 +215,7 @@ test('新しい絶対ルール行はmakeIndexの出力に全文残る', () => {
   const rule = body.split(/\r?\n/).find((line) => line.startsWith(prefix));
   assert.ok(rule);
   assert.ok(index.includes(rule));
-  assert.match(rule, /kim宛報告=kim-inbox.*PRマージ\/他PC依頼=fleet-mail/);
+  assert.match(rule, /kim宛報告=kim-inbox.*PR は作った席が自分で着地させる.*access-doctor\.mjs --fix/);
 });
 
 test('kim 宛 dry-run は台帳にも Discord にも書き込まない', async () => {

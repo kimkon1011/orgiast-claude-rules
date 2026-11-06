@@ -141,11 +141,16 @@ export function isVscodeClaude(processInfo) {
 }
 
 // 純粋関数: opts.readSession(pid) -> sessions JSON か null、opts.transcriptMtime(sessionId) -> ms か null。
+export function readHygieneConfig(home) {
+  try { return JSON.parse(fs.readFileSync(path.join(home, '.claude', 'process-hygiene.json'), 'utf8')) ?? {}; }
+  catch { return {}; }
+}
+
 export function classifyVscodeIdle(processes, now = Date.now(), opts = {}) {
   const idleMin = opts.idleMin ?? 720;
   const max = opts.max ?? VSCODE_IDLE_MAX_KILLS;
   const rows = Array.isArray(processes) ? processes : processes ? [processes] : [];
-  if (opts.batchLockActive) return [];
+  if (opts.batchLockActive || opts.vscodeIdleKill === false) return [];
   const found = [];
   for (const processInfo of rows) {
     if (!isVscodeClaude(processInfo)) continue;
@@ -459,6 +464,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     console.log(`process-hygiene: vscode-claude-idle cpu-gate load=${cpu.loads?.length === 2 ? cpu.loads.map((v) => Number.isFinite(v) ? v : '不明').join(',') : '不明'} ${policy.cpuGate ? '>=' : '未成立 閾値='}${opts.vscodeIdleCpuLoad} → 閾値 ${policy.idleMin}分`);
     const idleClaude = classifyVscodeIdle(processes, now, {
       ...policy,
+      vscodeIdleKill: readHygieneConfig(home).vscodeIdleKill,
       cpu5sByPid: cpu.cpu5sByPid,
       readSession: deps.readSession ?? ((pid) => readSessionFile(home, pid)),
       transcriptMtime: deps.transcriptMtime ?? ((id) => findTranscriptMtime(home, id)),

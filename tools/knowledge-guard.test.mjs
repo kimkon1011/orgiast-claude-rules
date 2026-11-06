@@ -119,6 +119,12 @@ test('SessionStart 契約外通知は同日1回、翌日は再通知、stdout空
   assert.equal(f.notifications.length, 1);
   assert.match(f.notifications[0][1][1], /契約外 Claude アカウントの起動を検知/);
   assert.equal(f.notifications[0][2].stdio, 'ignore');
+  if (process.platform === 'win32') {
+    assert.equal(f.notifications[0][2].windowsHide, true);
+    assert.notEqual(f.notifications[0][2].detached, true);
+  } else {
+    assert.equal(f.notifications[0][2].detached, true);
+  }
   f.deps.now = () => now + 86400000;
   await sessionStart(f.deps);
   assert.equal(f.notifications.length, 2);

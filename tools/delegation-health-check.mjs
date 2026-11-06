@@ -411,9 +411,8 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
   // Claude セッションを待たず夜間で判定する。判定器は台帳全体（配備前を含む）を見る必要が
   // あるため、24時間窓の usageRows ではなく executor-usage.jsonl を全件読む。
   // (2026-10-20: 判定器が CLI 専用で、台帳が伸びても人手で実行するまで判定が止まっていた)
-  // 予算は試行ごとに判定する: フォールバック試行は与えた budgetSecs（無い旧行は 900 秒）、
-  // 主経路は与えた --timeout の timeoutSecs（無い旧行は 1800 秒）。900 秒固定で主経路を見ると
-  // 既定 1800 秒を使い切っただけの行を回帰と誤検出する（2026-10-20 実測 / 2026-10-22 修正）。
+  // 予算は試行ごとに判定する。主経路を含む全バックエンドが共通の 900 秒 cap 対象。
+  // timeoutSecs=1800/1200 の旧行も cap 適用漏れの実証なので、記録値と cap の小さい方で見る。
   const timeoutWaste = judgeTimeoutRows(readJsonl(path.join(claudeDir, 'executor-usage.jsonl')));
   if (timeoutWaste.verdict === 'waste-exceeds-cap') {
     const overCap = (timeoutWaste.overCapAttempts || []).map((a) => {

@@ -26,9 +26,9 @@ test('chain がある行は timeout した試行だけを捨てた秒数とし�
 });
 
 test('chain が無い timeout 行は行そのものの secs を 1 試行として扱う', () => {
-  // 予算は主経路の既定（--timeout 1800 秒）。旧行に timeoutSecs が無いときの後方互換。
+  // 主経路も全体 cap 900 秒を超えてはならない。
   assert.deepEqual(timeoutAttempts({ provider: 'codex', secs: 540.621 }),
-    [{ backend: 'codex', model: null, secs: 540.621, budgetSecs: 1800, path: 'primary' }]);
+    [{ backend: 'codex', model: null, secs: 540.621, budgetSecs: 900, path: 'primary' }]);
 });
 
 test('基準時刻より前しか無ければ「未確認（再発なし）」', () => {
@@ -127,23 +127,35 @@ test('締切後の kill 猶予（既定5秒）は予算超過として数えな�
   assert.equal(over.overCapAttempts[0].path, 'primary');
 });
 
-test('2026-10-20 の実例（主経路 codex / 1800.28 秒 / chain 無し）は上限超過ではない', () => {
+test('主経路 codex / 1800.28 秒 / chain 無しも共通上限の超過として扱う', () => {
   const report = judgeTimeoutRows([
     { t: '2026-10-20T10:30:41.198Z', provider: 'codex', model: 'codex-cli/gpt-5.6-sol', lane: 'default_sol', timedOut: true, status: 'timeout', exitCode: 124, secs: 1800.28 },
   ], { since: SINCE });
-  assert.equal(report.verdict, 'waste-within-cap');
-  assert.equal(report.overCapRows, 0);
-  assert.deepEqual(report.overCapAttempts, []);
-  assert.equal(report.events[0].attempts[0].budgetSecs, 1800);
+  assert.equal(report.verdict, 'waste-exceeds-cap');
+  assert.equal(report.overCapRows, 1);
+  assert.equal(report.events[0].attempts[0].budgetSecs, 900);
   assert.equal(report.events[0].attempts[0].path, 'primary');
 });
 
-test('主経路は記録された --timeout を予算に使う', () => {
+test('主経路は記録された --timeout と共通 cap の小さい方を予算に使う', () => {
   const report = judgeTimeoutRows([
     { t: '2026-10-21T00:00:00Z', provider: 'codex', timedOut: true, secs: 1800.28, timeoutSecs: 1800 },
   ], { since: SINCE });
-  assert.equal(report.verdict, 'waste-within-cap');
-  assert.equal(report.events[0].attempts[0].budgetSecs, 1800);
+  assert.equal(report.verdict, 'waste-exceeds-cap');
+  assert.equal(report.events[0].attempts[0].budgetSecs, 900);
+});
+
+test('実データ3件の chain 相当試行秒数 1805.822/1807.824/1207.037 を主経路の cap 漏れとして検出する', () => {
+  const rows = [
+    ['2026-10-29T17:13:19.694Z', 1805.822, 1800],
+    ['2026-11-01T11:15:17.321Z', 1807.824, 1800],
+    ['2026-11-01T15:51:11.399Z', 1207.037, 1200],
+  ].map(([t, secs, timeoutSecs]) => ({ t, provider: 'codex', model: 'codex-cli/gpt-5.6-sol', status: 'timeout', timedOut: true, secs, timeoutSecs }));
+  const report = judgeTimeoutRows(rows, { since: '2026-10-29T00:00:00Z' });
+  assert.equal(report.verdict, 'waste-exceeds-cap');
+  assert.equal(report.overCapRows, 3);
+  assert.deepEqual(report.overCapAttempts.map((a) => a.secs), [1805.822, 1807.824, 1207.037]);
+  assert.ok(report.overCapAttempts.every((a) => a.path === 'primary' && a.budgetSecs === 900));
 });
 
 test('主経路でも与えた予算を超えたら上限超過としてバックエンドを残す', () => {
@@ -154,7 +166,7 @@ test('主経路でも与えた予算を超えたら上限超過としてバッ�
   assert.equal(report.overCapRows, 1);
   assert.deepEqual(report.overCapBackends, ['codex']);
   assert.equal(report.overCapAttempts[0].path, 'primary');
-  assert.equal(report.overCapAttempts[0].budgetSecs, 1800);
+  assert.equal(report.overCapAttempts[0].budgetSecs, 900);
 });
 
 test('チェーン試行は記録された budgetSecs を予算に使う', () => {

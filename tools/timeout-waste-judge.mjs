@@ -20,8 +20,7 @@ export const TIMEOUT_FIX_MERGED_AT = '2026-10-16T18:50:03Z'; // #773（600→900
 // 2026-11-01T16:18Z の主経路 codex 226.786秒/予算210秒（sync taskkill の待ち 10 秒 + 猶予 5 秒）は
 // この修正より前の行なので回帰に数えない。
 export const TIMEOUT_KILL_FIX_MERGED_AT = '2026-11-03T15:38:52Z';
-// フォールバック試行に与える既定予算。--cap で上書きできる。
-// 主経路（chain 無し）はこれではなく、その実行に与えた --timeout（既定 1800 秒）で判定する。
+// 全バックエンド共通の許容上限。--cap で上書きできる。
 export const DEFAULT_CAP_SECS = 900;
 export const DEFAULT_PRIMARY_TIMEOUT_SECS = 1800; // codex-do の --timeout 既定
 export const DEFAULT_TOLERANCE_SECS = 5;
@@ -44,9 +43,8 @@ function attemptBudgetSecs(value, fallback) {
 // chain があれば timeout した試行だけを返し、無い旧形式・単一バックエンドの行は
 // 行そのもの（secs / timeoutSecs）を 1 試行として扱う。
 // 予算は chain 試行なら budgetSecs（#773 以降の codex-do が記録）、無い旧行は --cap（900）。
-// chain の無い主経路は timeoutSecs（--timeout 実値）、無い旧行は 1800 秒。
-// 900 秒固定で主経路を見ると、既定 1800 秒を予定どおり使い切った行を上限破りと誤検出する
-// （2026-10-20 実測: provider=codex / secs=1800.28 / chain 無し）。
+// chain の無い主経路も timeoutSecs と共通 cap の小さい方を使う。#773 の実装が fallback
+// だけに cap を掛けていた欠陥により、主経路へ 1800/1200 秒が渡った行こそ検出対象である。
 export function timeoutAttempts(row, { fallbackBudgetSecs = DEFAULT_CAP_SECS } = {}) {
   const chain = Array.isArray(row?.chain) ? row.chain.filter((a) => a && a.outcome === 'timeout') : [];
   if (chain.length > 0) {
@@ -62,7 +60,7 @@ export function timeoutAttempts(row, { fallbackBudgetSecs = DEFAULT_CAP_SECS } =
     backend: row?.provider ?? row?.model ?? null,
     model: row?.model ?? null,
     secs: Number(row?.secs),
-    budgetSecs: attemptBudgetSecs(row?.timeoutSecs, DEFAULT_PRIMARY_TIMEOUT_SECS),
+    budgetSecs: Math.min(attemptBudgetSecs(row?.timeoutSecs, DEFAULT_PRIMARY_TIMEOUT_SECS), fallbackBudgetSecs),
     path: 'primary',
   }];
 }

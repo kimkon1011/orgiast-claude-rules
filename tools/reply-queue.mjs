@@ -487,7 +487,9 @@ async function replyQueueCli(args = process.argv.slice(2), { home = process.env.
       stdout(JSON.stringify(result));
     } else if (item.channel === 'discord') {
       const { readToken } = await import('./discord-task-digest.mjs');
-      const auth = readToken(home);
+      // 一時 home（ORGIAST_HOME）で検証するときもトークンは実 home から読めるようにする。
+      let auth = readToken(home);
+      if (!auth.token && home !== os.homedir()) auth = readToken(os.homedir());
       if (!auth.token) throw new Error('Discord Bot トークンが設定されていません');
       const after = item.draft?.basedOnMessageId || item.message;
       const response = await fetch(`https://discord.com/api/v10/channels/${encodeURIComponent(item.thread)}/messages?after=${encodeURIComponent(after)}&limit=50`, {

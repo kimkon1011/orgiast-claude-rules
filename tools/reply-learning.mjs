@@ -795,7 +795,7 @@ if (isEntry(import.meta.url)) {
     };
     const hasOpt = (name) => args.includes(name);
 
-    const home = parseOpt('--home') ?? undefined;
+    const home = parseOpt('--home') ?? process.env.ORGIAST_HOME ?? os.homedir();
     const from = parseOpt('--from') ?? undefined;
     const category = parseOpt('--category') ?? undefined;
     const channel = parseOpt('--channel') ?? undefined;

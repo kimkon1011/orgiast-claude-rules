@@ -221,6 +221,55 @@ test('CLI 通常実行は共有アカウントで下書き作成し JSON を1個
   assert.equal(JSON.parse(result.output[0]).id, 'd');
 });
 
+test('--from は sendAs 一致時に表示名付きエイリアスを From にする', async () => {
+  let calls = 0;
+  const result = await cli([...args, '--from', 'SATOU@orgiast.jp', '--json'], {
+    getToken: async () => 't',
+    fetchImpl: async (url, options = {}) => {
+      calls++;
+      if (url.endsWith('/settings/sendAs')) return response({ sendAs: [{ sendAsEmail: 'satou@orgiast.jp', displayName: '株式会社オージャスト 佐藤' }] });
+      const mime = Buffer.from(JSON.parse(options.body).message.raw, 'base64url').toString('utf8');
+      assert.match(mime, /From: "=\?UTF-8\?B\?.+\?=" <satou@orgiast\.jp>/u);
+      return response({ id: 'draft' });
+    },
+  });
+  assert.equal(result.code, 0); assert.equal(calls, 2);
+  assert.equal(JSON.parse(result.output[0]).fromVerifiedBy, 'sendAs');
+});
+
+test('--from は sendAs トークン失敗時に送信済み実績の表示名とアドレスで確認する', async () => {
+  const scopes = [];
+  const result = await cli([...args, '--from', 'SATOU@orgiast.jp', '--json'], {
+    getToken: async ({ scope }) => { scopes.push(scope); if (scope.endsWith('/gmail.settings.basic')) throw new Error('not delegated'); return 'token'; },
+    fetchImpl: async (url, options = {}) => {
+      if (url.includes('/messages?q=')) return response({ messages: [{ id: 'sent_1' }] });
+      if (url.includes('/messages/sent_1?format=metadata')) return response({ payload: { headers: [{ name: 'From', value: `=?UTF-8?B?${Buffer.from('株式会社オージャスト 佐藤').toString('base64')}?= <satou@orgiast.jp>` }] } });
+      const mime = Buffer.from(JSON.parse(options.body).message.raw, 'base64url').toString('utf8');
+      assert.match(mime, /satou@orgiast\.jp/u); return response({ id: 'draft' });
+    },
+  });
+  assert.equal(result.code, 0); assert.equal(JSON.parse(result.output[0]).fromVerifiedBy, 'sent-history');
+  assert.ok(scopes.some(scope => scope.endsWith('/gmail.readonly')));
+});
+
+test('--from は sendAs トークンと送信済み実績の両方が失敗すると設定エラー2', async () => {
+  const result = await cli([...args, '--from', 'satou@orgiast.jp', '--json'], {
+    getToken: async ({ scope }) => scope.endsWith('/gmail.settings.basic') ? Promise.reject(new Error('not delegated')) : 'readonly',
+    fetchImpl: async url => url.includes('/messages?q=') ? response({ messages: [] }) : response({}),
+  });
+  assert.equal(result.code, 2); assert.match(JSON.parse(result.output[0]).error, /送信済み実績もありません/u);
+});
+
+test('--from が sendAs 不一致なら許可一覧付き設定エラー2', async () => {
+  const result = await cli([...args, '--from', 'unknown@orgiast.jp', '--json'], { getToken: async () => 't', fetchImpl: async () => response({ sendAs: [{ sendAsEmail: 'satou@orgiast.jp' }] }) });
+  assert.equal(result.code, 2); assert.match(result.output[0], /satou@orgiast\.jp/u);
+});
+
+test('--send と --from の併用は認証前の設定エラー2', async () => {
+  const result = await cli(['--send', 'draft', '--from', 'satou@orgiast.jp', '--json']);
+  assert.equal(result.code, 2); assert.equal(result.calls + result.tokens, 0);
+});
+
 test('引数・body-file の設定エラーは2、内容を漏らさず無通信', async () => {
   for (const argv of [[], [...args, '--body-file', 'missing'], [...args, '--unknown'], [...args, '--user'], ['--check', ...args], ['--to', input.to, '--subject', 'x', '--body-file', 'missing']]) {
     const result = await cli([...argv, '--json'], { readFile: () => { throw new Error('SECRET'); } });

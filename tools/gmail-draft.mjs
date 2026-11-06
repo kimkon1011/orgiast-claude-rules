@@ -27,12 +27,13 @@ import { loadLedger, isInternal, extractAddresses } from './internal-recipient-g
 import { bodyHash, checkConsistency, statePath, mimeText, render as renderConsistency } from './mail-consistency-check.mjs';
 
 export const GMAIL_COMPOSE_SCOPE = 'https://www.googleapis.com/auth/gmail.compose';
+export const GMAIL_SETTINGS_BASIC_SCOPE = 'https://www.googleapis.com/auth/gmail.settings.basic';
 export const DEFAULT_USER = 'seisaku-team@orgiast.jp';
 // 既定パスはハードコードしない（旧既定値はディレクトリ名の打ち間違いで鍵を見失っていた。2026-10-23 実測）。
 const DEFAULT_KEY = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath();
 const SCOPES = ['gmail.readonly', 'gmail.compose', 'gmail.send'].map(s => `https://www.googleapis.com/auth/${s}`);
 const b64url = value => Buffer.from(value).toString('base64url');
-const configError = () => Object.assign(new Error('設定を確認してください（引数・入力ファイル・SA キー）。'), { errorKind: 'configuration_error' });
+const configError = (message) => Object.assign(new Error(message ?? '設定を確認してください（引数・入力ファイル・SA キー）。'), { errorKind: 'configuration_error', ...(message ? { publicMessage: message } : {}) });
 
 function addresses(value, required = false) {
   const list = (Array.isArray(value) ? value : [value ?? '']).flatMap(v => {
@@ -46,7 +47,7 @@ function addresses(value, required = false) {
 
 const MIME_TYPES = { '.pdf':'application/pdf','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.csv':'text/csv','.txt':'text/plain','.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','.docx':'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
 function encodedWord(value) { return `=?UTF-8?B?${Buffer.from(value).toString('base64')}?=`; }
-export function buildRawMessage({ from, to, cc, subject, body, inReplyTo, references, attachments = [], extraHeaders = [] }) {
+export function buildRawMessage({ from, fromDisplayName, to, cc, subject, body, inReplyTo, references, attachments = [], extraHeaders = [] }) {
   if (inReplyTo !== undefined && (typeof inReplyTo !== 'string' || !/^<[^<>\s]+@[^<>\s]+>$/u.test(inReplyTo))) throw configError();
   if (references !== undefined && (typeof references !== 'string' || /[\r\n]/u.test(references))) throw configError();
   const sender = addresses(from, true);
@@ -62,7 +63,7 @@ export function buildRawMessage({ from, to, cc, subject, body, inReplyTo, refere
   const encodedSubject = chunks.map(s => `=?UTF-8?B?${Buffer.from(s).toString('base64')}?=`).join('\r\n ');
   const copy = addresses(cc);
   const headers = [
-    `From: ${sender[0]}`, `To: ${addresses(to, true).join(', ')}`,
+    `From: ${fromDisplayName ? `"${encodedWord(fromDisplayName)}" <${sender[0]}>` : sender[0]}`, `To: ${addresses(to, true).join(', ')}`,
     ...(copy.length ? [`Cc: ${copy.join(', ')}`] : []),
     `Subject: ${encodedSubject}`,
     ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`, `References: ${references || inReplyTo}`] : []),
@@ -85,7 +86,9 @@ export function buildRawMessage({ from, to, cc, subject, body, inReplyTo, refere
 }
 
 function decodeHeader(value = '') {
-  return value.replace(/=\?UTF-8\?B\?([^?]+)\?=/giu, (_m, data) => Buffer.from(data, 'base64').toString('utf8'));
+  return value.replace(/=\?UTF-8\?([BQ])\?([^?]+)\?=/giu, (_m, encoding, data) => encoding.toUpperCase() === 'B'
+    ? Buffer.from(data, 'base64').toString('utf8')
+    : Buffer.from(data.replace(/_/gu, ' ').replace(/=([0-9A-F]{2})/giu, (_q, hex) => String.fromCharCode(parseInt(hex, 16))), 'latin1').toString('utf8'));
 }
 function parseHeaders(text) {
   const unfolded = text.replace(/\r?\n[ \t]+/gu, ' ');
@@ -178,7 +181,68 @@ function safeFailure(error) {
     too_large: '転送メールが25MBを超えています。',
     error: '処理に失敗しました（認証・通信・API 応答を確認してください）。',
   };
-  return { errorKind, error: messages[errorKind] };
+  return { errorKind, error: error?.publicMessage ?? messages[errorKind] };
+}
+
+function sendAsFailure(stage, reason) {
+  return configError(`${stage}で失敗しました${reason ? `（${reason}）` : ''}。`);
+}
+
+function apiStageFailure(stage, status) {
+  const errorKind = status === 403 ? 'forbidden_no_access' : status === 401 ? 'unauthorized' : 'error';
+  return Object.assign(new Error(`${stage}で失敗しました。`), { errorKind, publicMessage: `${stage}で失敗しました${status ? `（API status ${status}）` : ''}。` });
+}
+
+async function verifyFromSentHistory({ user, requested, sendAsReason, fetchImpl, getToken }) {
+  let token;
+  try { token = await getToken({ user, scope: SCOPES[0] }); }
+  catch { throw sendAsFailure('送信済み検索のトークン発行', `sendAs 一覧を読めず（${sendAsReason}）`); }
+  const query = encodeURIComponent(`in:sent from:${requested}`);
+  let search;
+  try {
+    search = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${query}&maxResults=1`, {
+      method: 'GET', signal: AbortSignal.timeout(25000), headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch { throw sendAsFailure('送信済み検索', `sendAs 一覧を読めず（${sendAsReason}）`); }
+  if (!search.ok) throw sendAsFailure(`送信済み検索 API status ${search.status}`, `sendAs 一覧を読めず（${sendAsReason}）`);
+  const found = await search.json().catch(() => null);
+  const id = found?.messages?.[0]?.id;
+  if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(id)) throw configError(`sendAs 一覧を読めず（${sendAsReason}）、送信済み実績もありません。`);
+  const metadata = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From`, {
+    method: 'GET', signal: AbortSignal.timeout(25000), headers: { Authorization: `Bearer ${token}` },
+  }).catch(() => null);
+  if (!metadata?.ok) throw sendAsFailure(`送信済み metadata API${metadata ? ` status ${metadata.status}` : ''}`, `sendAs 一覧を読めず（${sendAsReason}）`);
+  const message = await metadata.json().catch(() => null);
+  const fromHeader = message?.payload?.headers?.find(header => String(header?.name).toLowerCase() === 'from')?.value;
+  const actual = typeof fromHeader === 'string' ? fromHeader.match(/[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+/iu)?.[0] : undefined;
+  if (!actual || actual.toLowerCase() !== requested.toLowerCase()) throw configError(`sendAs 一覧を読めず（${sendAsReason}）、送信済み実績もありません。`);
+  const decoded = decodeHeader(fromHeader);
+  const angle = decoded.lastIndexOf('<');
+  const displayName = angle < 0 ? '' : decoded.slice(0, angle).trim().replace(/^"|"$/gu, '').trim();
+  return { address: actual, displayName, verifiedBy: 'sent-history' };
+}
+
+async function resolveSendAs({ user, from, fetchImpl, getToken }) {
+  const requested = addresses(from, true);
+  if (requested.length !== 1) throw configError();
+  let token;
+  try { token = await getToken({ user, scope: GMAIL_SETTINGS_BASIC_SCOPE }); }
+  catch { return verifyFromSentHistory({ user, requested: requested[0], sendAsReason: 'sendAs のトークン発行失敗', fetchImpl, getToken }); }
+  let res;
+  try {
+    res = await fetchImpl('https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs', {
+      method: 'GET', signal: AbortSignal.timeout(25000), headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch { throw sendAsFailure('sendAs API 通信'); }
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) return verifyFromSentHistory({ user, requested: requested[0], sendAsReason: `sendAs API status ${res.status}`, fetchImpl, getToken });
+    throw sendAsFailure(`sendAs API status ${res.status}`);
+  }
+  const json = await res.json();
+  const list = Array.isArray(json?.sendAs) ? json.sendAs.filter(item => typeof item?.sendAsEmail === 'string') : [];
+  const match = list.find(item => item.sendAsEmail.toLowerCase() === requested[0].toLowerCase());
+  if (!match) throw configError(`--from ${requested[0]} は許可されていません。許可されている sendAs: ${list.map(item => item.sendAsEmail).join(', ') || '(なし)'}`);
+  return { address: match.sendAsEmail, displayName: typeof match.displayName === 'string' ? match.displayName : '', verifiedBy: 'sendAs' };
 }
 
 function readKey(keyPath) {
@@ -229,7 +293,7 @@ export async function probeScopes({ user = DEFAULT_USER, keyPath = DEFAULT_KEY, 
 async function getReplyHeaders({ user, threadId, fetchImpl, getToken }) {
   let token;
   try { token = await getToken({ user, scope: SCOPES[0] }); }
-  catch { throw sendAsFailure('返信元スレッド取得のトークン発行'); }
+  catch { throw apiStageFailure('返信元スレッド取得のトークン発行'); }
   const query = new URLSearchParams({ format: 'metadata' });
   for (const name of ['Message-ID', 'References', 'Subject']) query.append('metadataHeaders', name);
   let res;
@@ -237,8 +301,8 @@ async function getReplyHeaders({ user, threadId, fetchImpl, getToken }) {
     res = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${threadId}?${query}`, {
       method: 'GET', signal: AbortSignal.timeout(25000), headers: { Authorization: `Bearer ${token}` },
     });
-  } catch { throw sendAsFailure('返信元スレッド取得 API 通信'); }
-  if (!res.ok) throw sendAsFailure(`返信元スレッド取得 API status ${res.status}`);
+  } catch { throw apiStageFailure('返信元スレッド取得 API 通信'); }
+  if (!res.ok) throw apiStageFailure('返信元スレッド取得 API', res.status);
   const thread = await res.json();
   const parent = thread.messages?.findLast(message => !message.labelIds?.includes('DRAFT'));
   const headers = parent?.payload?.headers;
@@ -258,13 +322,13 @@ export async function createDraft({ user = DEFAULT_USER, raw, threadId, fetchImp
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: { raw, ...(threadId ? { threadId } : {}) } }),
     });
-    if (!res.ok) throw sendAsFailure(`下書き作成 API status ${res.status}`);
+    if (!res.ok) throw apiStageFailure('下書き作成 API', res.status);
     const json = await res.json();
     if (typeof json?.id !== 'string' || !json.id) throw new Error('下書き ID がありません');
     return { id: json.id, messageId: json.message?.id, threadId: json.message?.threadId };
   } catch (error) {
     if (error?.publicMessage) throw error;
-    throw sendAsFailure('下書き作成 API 通信');
+    throw apiStageFailure('下書き作成 API 通信');
   }
 }
 
@@ -325,7 +389,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const name = argv[i];
     if (['--check', '--json', '--dry-run'].includes(name)) { args[name.slice(2)] = true; continue; }
-    if (!['--to', '--cc', '--subject', '--body', '--body-file', '--user', '--delete', '--send', '--forward', '--thread-id', '--in-reply-to', '--attach', '--ack-consistency'].includes(name) || i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw configError();
+    if (!['--to', '--cc', '--subject', '--body', '--body-file', '--user', '--from', '--delete', '--send', '--forward', '--thread-id', '--in-reply-to', '--attach', '--ack-consistency'].includes(name) || i + 1 >= argv.length || argv[i + 1].startsWith('--')) throw configError();
     const field = name.slice(2);
     const value = argv[++i];
     if (field === 'to' || field === 'cc' || field === 'attach') (args[field] ??= []).push(value);
@@ -337,6 +401,7 @@ function parseArgs(argv) {
 /** deps: stdout(text), loadLedger(), readFile(path), mintToken(options), getToken(options), fetchImpl. */
 export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
   const stdout = deps.stdout ?? (text => console.log(text));
+  const stderr = deps.stderr ?? (text => console.error(text));
   const jsonMode = argv.includes('--json');
   let user = DEFAULT_USER;
   let action = argv.includes('--send') ? 'send' : argv.includes('--forward') ? 'forward' : argv.includes('--delete') ? 'delete' : argv.includes('--check') ? 'check' : argv.includes('--dry-run') ? 'dry-run' : 'create-draft';
@@ -351,7 +416,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     const fetchImpl = deps.fetchImpl ?? gwsFetch;
     const mintToken = deps.mintToken ?? (options => mintDwdToken({ ...options, fetchImpl }));
     if (Object.hasOwn(args, 'forward')) {
-      if (['send', 'delete', 'check', 'subject', 'thread-id', 'in-reply-to', 'attach', 'ack-consistency'].some(k => Object.hasOwn(args, k)) || !Object.hasOwn(args, 'to') || (Object.hasOwn(args, 'body') && Object.hasOwn(args, 'body-file'))) throw configError();
+      if (['send', 'delete', 'check', 'from', 'subject', 'thread-id', 'in-reply-to', 'attach', 'ack-consistency'].some(k => Object.hasOwn(args, k)) || !Object.hasOwn(args, 'to') || (Object.hasOwn(args, 'body') && Object.hasOwn(args, 'body-file'))) throw configError();
       let preface = args.body ?? '';
       if (args['body-file'] !== undefined) { try { preface = (deps.readFile ?? (p => fs.readFileSync(p, 'utf8')))(args['body-file']); } catch { throw configError(); } }
       const getToken = deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY }));
@@ -363,7 +428,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       return 0;
     }
     if (Object.hasOwn(args, 'send')) {
-      if (['delete', 'check', 'to', 'cc', 'subject', 'body', 'body-file', 'dry-run', 'thread-id', 'in-reply-to', 'attach'].some(k => Object.hasOwn(args, k))) throw configError();
+      if (['delete', 'check', 'from', 'to', 'cc', 'subject', 'body', 'body-file', 'dry-run', 'thread-id', 'in-reply-to', 'attach'].some(k => Object.hasOwn(args, k))) throw configError();
       if (!/^[A-Za-z0-9_-]+$/u.test(args.send)) throw configError();
       const getToken = deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY }));
       const token = await getToken({ user, scope: GMAIL_COMPOSE_SCOPE });
@@ -400,7 +465,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       return 0;
     }
     if (Object.hasOwn(args, 'delete')) {
-      if (['check', 'to', 'cc', 'subject', 'body', 'body-file', 'dry-run', 'thread-id', 'in-reply-to', 'attach', 'ack-consistency'].some(k => Object.hasOwn(args, k))) throw configError();
+      if (['check', 'from', 'to', 'cc', 'subject', 'body', 'body-file', 'dry-run', 'thread-id', 'in-reply-to', 'attach', 'ack-consistency'].some(k => Object.hasOwn(args, k))) throw configError();
       const result = await deleteDraft({ user, id: args.delete, fetchImpl,
         getToken: deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY })),
       });
@@ -410,7 +475,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       return 0;
     }
     if (args.check) {
-      if (['to', 'cc', 'subject', 'body', 'body-file', 'dry-run', 'thread-id', 'in-reply-to', 'attach', 'ack-consistency'].some(k => Object.hasOwn(args, k))) throw configError();
+      if (['from', 'to', 'cc', 'subject', 'body', 'body-file', 'dry-run', 'thread-id', 'in-reply-to', 'attach', 'ack-consistency'].some(k => Object.hasOwn(args, k))) throw configError();
       const results = await probeScopes({ user, keyPath: DEFAULT_KEY, scopes: SCOPES, mintToken, fetchImpl });
       const failed = results.filter(r => !r.ok);
       emit({ ok: !failed.length, results, ...(failed.length ? { errorKind: failed[0].errorKind } : {}) },
@@ -425,7 +490,13 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     }
     if (args['thread-id'] !== undefined && !/^[A-Za-z0-9_-]+$/u.test(args['thread-id'])) throw configError();
     const attachments = (args.attach ?? []).map(file => { try { return { name: path.basename(file), data: (deps.readAttachment ?? fs.readFileSync)(file) }; } catch { throw configError(); } });
-    const input = { inReplyTo: args['in-reply-to'], from: user, to: args.to, cc: args.cc, subject: args.subject ?? 'Re: (取得予定)', body, attachments };
+    let from = { address: user, displayName: '', verifiedBy: undefined };
+    if (args.from !== undefined) {
+      const getToken = deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY }));
+      from = await resolveSendAs({ user, from: args.from, fetchImpl, getToken });
+      if (!jsonMode) stderr(`From 確認経路: ${from.verifiedBy}`);
+    }
+    const input = { inReplyTo: args['in-reply-to'], from: from.address, fromDisplayName: from.displayName, to: args.to, cc: args.cc, subject: args.subject ?? 'Re: (取得予定)', body, attachments };
     const guard = guardRecipients(input, (deps.loadLedger ?? loadLedger)());
     if (guard.blocked) {
       action = 'chat-display';
@@ -440,7 +511,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         headers = headers.replace(/\r\n(?:In-Reply-To|References):[^\r\n]*/gu, '');
         headers += '\r\nIn-Reply-To: (取得予定)\r\nReferences: (返信先の References を取得予定) (取得予定)';
       }
-      emit({ ok: true, raw, headers, ...(args['thread-id'] ? { threadId: args['thread-id'] } : {}) },
+      emit({ ok: true, raw, headers, ...(from.verifiedBy ? { fromVerifiedBy: from.verifiedBy } : {}), ...(args['thread-id'] ? { threadId: args['thread-id'] } : {}) },
         `${args['thread-id'] ? `threadId: ${args['thread-id']}\n` : ''}${headers}\n\nraw: ${raw}`);
       return 0;
     }
@@ -454,7 +525,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
     const result = await createDraft({ user, raw, threadId: args['thread-id'], fetchImpl,
       getToken,
     });
-    emit({ ok: true, ...result }, `下書きを作成しました: ${result.id} (${user})`);
+    emit({ ok: true, ...result, ...(from.verifiedBy ? { fromVerifiedBy: from.verifiedBy } : {}) }, `下書きを作成しました: ${result.id} (${user})`);
     return 0;
   } catch (error) {
     if (error?.errorKind === 'internal_recipient') {

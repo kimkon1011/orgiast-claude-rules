@@ -93,6 +93,7 @@ function create(home, options) {
         if (current.source === 'auto-progress-done' && (current.kind !== 'info' || !['open', 'seen'].includes(current.status))) return;
         current.text = text; current.kind = options.kind; current.status = 'open'; current.priority = 'high'; current.lastAt = new Date().toISOString();
         current.shownCount = 0; current.shownSessions = []; current.lastShownAt = null;
+        current.forwardMailId = null; current.forwardError = null;
       });
       return existing || createNew(home, options);
     }
@@ -214,7 +215,7 @@ export async function addItem(home, options, { drain = true } = {}) {
   try {
     const file = path.join(temp, 'body.txt');
     fs.writeFileSync(file, item.text, { mode: 0o600 });
-    const { stdout } = await (options.execImpl ?? exec)(process.execPath, [fileURLToPath(new URL('./fleet-mail.mjs', import.meta.url)), '--send', '--to', 'kim-PC', '--kind', 'note', '--why', `[kim-inbox:${item.kind}] ${item.text.split(/\r?\n/)[0].slice(0, 60)}`, '--body-file', file], { encoding: 'utf8', windowsHide: true, timeout: 60000, signal: options.signal, env: { ...process.env, ORGIAST_HOME: home } });
+    const { stdout } = await (options.execImpl ?? exec)(process.execPath, [fileURLToPath(new URL('./fleet-mail.mjs', import.meta.url)), '--send', '--to', 'kim-PC', '--kind', 'note', '--why', `[kim-inbox:${item.kind}] ${/^auto-progress-(?:done|heartbeat)$/.test(item.source) ? `[source:${item.source}] ` : ''}${item.text.split(/\r?\n/)[0].slice(0, 60)}`, '--body-file', file], { encoding: 'utf8', windowsHide: true, timeout: 60000, signal: options.signal, env: { ...process.env, ORGIAST_HOME: home } });
     const id = stdout.trim().match(/^(?:送信済み: )?(mail-[A-Za-z0-9-]+)$/m)?.[1];
     if (!id) throw new Error('転送先のメールIDを取得できません');
     return update(home, item.id, current => { current.status = 'forwarded'; current.forwardMailId = id; current.forwardError = null; });
@@ -306,7 +307,7 @@ export async function ingestFleetMail(home) {
     locked(home, 'ingest', () => {
       if (fs.existsSync(marker)) return;
       // 作成直後に終了しても forwardMailId から再発見し、二重起票を防ぐ。
-      const item = listItems(home).find(i => i.forwardMailId === id) ?? (isInboxNoise({ kind, text: mail.body }) ? { id: 'suppressed', status: 'suppressed' } : create(home, { kind, text: mail.body, from: mail.from, source: 'fleet-mail', forwardMailId: id }));
+      const item = listItems(home).find(i => i.forwardMailId === id) ?? (isInboxNoise({ kind, text: mail.body }) ? { id: 'suppressed', status: 'suppressed' } : create(home, { kind, text: mail.body, from: mail.from, source: /\[source:(auto-progress-(?:done|heartbeat))\]/.exec(mail.why || '')?.[1] || 'fleet-mail', forwardMailId: id }));
       fs.mkdirSync(path.dirname(marker), { recursive: true });
       fs.writeFileSync(marker, item.id, { flag: 'wx', mode: 0o600 });
       imported.push(item);

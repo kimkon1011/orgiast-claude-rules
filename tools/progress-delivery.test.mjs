@@ -107,3 +107,11 @@ test('scheduled check emits heartbeat without starting a job when its condition 
  await run({home:h,now:at+HEARTBEAT_MS,io:{clock:()=>at+HEARTBEAT_MS,sheetConfig:()=>null,digest:async()=>({}),executeCheck:()=>({code:1,text:'not arrived'}),resume:()=>assert.fail('not ready')}});
  const [item]=listItems(h);assert.equal(item.source,'auto-progress-heartbeat');assert.match(item.text,/not arrived/);
 });
+test('heartbeat refresh forwards its new body again on a non-kim PC',async t=>{
+ const h=home(t);fs.writeFileSync(path.join(h,'.claude/cost-reporter.env'),'REPORTER_LABEL=other-PC');
+ fs.writeFileSync(path.join(h,'.claude/fleet-pc-map.json'),JSON.stringify({'other-PC':{account:'other@example.test'}}));
+ let calls=0;const execImpl=async(_file,args)=>{calls++;assert.match(args[args.indexOf('--why')+1],/source:auto-progress-heartbeat/);return {stdout:`mail-refresh-${calls}`}};
+ const options={kind:'info',source:'auto-progress-heartbeat',priority:'high',dedupeKey:'heartbeat:remote',refresh:true,execImpl};
+ const first=await addItem(h,{...options,text:'途中経過: 1'});const second=await addItem(h,{...options,text:'途中経過: 変化なし'});
+ assert.equal(first.id,second.id);assert.equal(calls,2);assert.equal(second.status,'forwarded');
+});

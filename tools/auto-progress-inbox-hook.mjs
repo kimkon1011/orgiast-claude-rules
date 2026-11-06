@@ -55,16 +55,17 @@ export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.home
   const unreadOwner = ownerRows.filter(row => !row.shown && !ids.has(row.id))
     .sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0));
   const lines = unreadSession.map(row => displayText(inboxText(row)));
-  lines.push(...unreadOwner.slice(0, 5).map(row => String(inboxText(row)).replace(/\s+/g, ' ').slice(0, 120)));
+  lines.push(...unreadOwner.slice(0, 5).map(row => {
+    const text = String(inboxText(row)).replace(/\s+/g, ' ');
+    return text.slice(0, row.state === 'needs_user' || text.includes('判断待ち') ? 600 : 120);
+  }));
   if (unreadOwner.length > 5) lines.push(`ほか ${unreadOwner.length - 5} 件`);
   // Overflow remains unread so its contents can be delivered on the next prompt.
   const selected = [...unreadSession, ...unreadOwner.slice(0, 5)];
   const selectedIds = new Set(selected.map(row => row.id).filter(Boolean));
   const shownAt = new Date().toISOString();
   const files = new Set([sessionFile, ownerFile]);
-  for (const row of selected) {
-    if (row.sessionId) files.add(inboxFile(home, row.sessionId));
-  }
+  // Owner summaries must leave other sessions' full notifications unread.
   for (const file of files) {
     const rows = file === sessionFile ? sessionRows : file === ownerFile ? ownerRows : readRows(file);
     let changed = false;

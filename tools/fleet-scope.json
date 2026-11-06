@@ -1238,6 +1238,10 @@
     {"path": "tools/kim-editor-posttool.mjs", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
     {"path": "tools/lib/kim-editor.mjs", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
     {"path": "tools/register-kim-editor-sweep.mjs", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
-    {"path": "tools/register-kim-editor-sweep.ps1", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"}
+    {"path": "tools/register-kim-editor-sweep.ps1", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
+    {"path": "tools/lib/pc-display.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox・返事待ち表示が使うPC表示名の実行時依存"},
+    {"path": "tools/lib/auto-progress-daily.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "全PCの自動進行に使う毎朝進捗通知の実行時依存"},
+    {"path": "tools/lib/drafts-auto-cleared.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "返事待ち表示・下書き整理が使う実行時依存"},
+    {"path": "tools/auto-progress-ledger.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "毎朝進捗通知・返事待ち表示の実行時依存"}
   ]
 }

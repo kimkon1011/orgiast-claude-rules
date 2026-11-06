@@ -12,7 +12,7 @@ import { createSheetsClient } from './lib/sheets-dwd.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
 import { reportHeartbeat } from './lib/heartbeat.mjs';
 import { listItems } from './kim-inbox.mjs';
-import { DEFAULT_CONFIG, createLedger, loadConfig, defaultHome, dataPath, readJson, saveJson, sheetUrl, googleClient, withLedgerLock, parseSheetDate, jstDate, daysUntil, isDuplicate } from './deadline-ledger.mjs';
+import { DEFAULT_CONFIG, createLedger, loadConfig, defaultHome, dataPath, readJson, saveJson, sheetUrl, googleClient, withLedgerLock, parseSheetDate, jstDate, daysUntil, isDuplicate, initialize } from './deadline-ledger.mjs';
 const exec = promisify(execFile);
 const inboxScript = fileURLToPath(new URL('./kim-inbox.mjs', import.meta.url));
 export const STAGES = { default: [30,14,7,3,1,0], '訴訟・法務': [30,14,7,3,2,1,0], '契約更新': [60,30,14,7,1,0], '支払': [7,3,1,0], '回答・返信': [3,1,0] };
@@ -202,7 +202,12 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     const fixture = args.fixture ? readJson(args.fixture) : null;
     if (args.fixture && (!fixture || !Array.isArray(fixture.rows))) throw new Error('fixture の台帳JSONがありません、または形式が不正です');
     const config = fixture ? { ...DEFAULT_CONFIG, ...fixture.config, calendar: { enabled: false } } : deps.config || loadConfig(home);
-    if (!config.sheetId) throw new Error('先に node tools/deadline-ledger.mjs --init を実行してください');
+    if (!config.sheetId) {
+      stderr('deadline-watch: deadline-ledger 未初期化のため自動初期化します');
+      const result = await initialize({ home, sheets: deps.sheets || createSheetsClient({ fetchImpl: gwsFetch }), request: deps.request || googleClient() });
+      config.sheetId = result.sheetId;
+      saveJson(dataPath(home, 'config.json'), config);
+    }
     const sheets = deps.sheets || createSheetsClient({ fetchImpl: gwsFetch });
     const ledger = deps.ledger || (fixture ? { read: async tab => (tab === '候補' ? fixture.candidates || [] : fixture.rows).map((r, i) => ({ ...r, rowNumber: i + 2 })) } : createLedger({ sheets, config }));
     const rows = fixture ? [...fixture.rows, ...(fixture.vehicles || [])] : undefined;

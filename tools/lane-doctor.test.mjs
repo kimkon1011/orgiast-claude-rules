@@ -328,3 +328,30 @@ test('WSL Codex recovery stays healthy despite eleven pre-login failures', async
   assert.equal(result.lanes.codex.reason, 'auth_ok:probe_ok');
   assert.equal(laneDoctorQuick({ ...options, now: now + 1000, save: false }).lanes.codex.alive, true);
 });
+
+test('codex dry-probe timeout falls through to full probe instead of probe_failed', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  const calls = [];
+  const result = await laneDoctorProbe({ home, now, platform: 'win32', providers: ['codex'],
+    spawnImpl: (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: 'fixture-token' } }) }),
+    listWsl: () => 'Ubuntu', probe: async (provider, options) => {
+      if (provider === 'codex') calls.push(options.dryRun === true);
+      // dry は15秒上限のタイムアウト(code 1)。本番 probe は残り予算で PONG を返す（2026-11-06 実測と同じ形）。
+      return provider === 'codex' && options.dryRun ? { code: 1, text: '' } : { code: 0, text: 'PONG' };
+    }, notify: async () => ({ delivered: 'test' }) });
+  assert.deepEqual(calls, [true, false]);
+  assert.equal(result.lanes.codex.alive, true);
+  assert.equal(result.lanes.codex.reason, 'auth_ok:probe_ok');
+});
+
+test('codex dry failure with real 401 still classifies oauth_consent', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  const result = await laneDoctorProbe({ home, now, platform: 'win32', providers: ['codex'],
+    spawnImpl: (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: 'fixture-token' } }) }),
+    listWsl: () => 'Ubuntu', probe: async (provider, options) => provider === 'codex' && options.dryRun ? { code: 1, text: '' } : { code: 1, text: 'HTTP 401 unauthorized' },
+    notify: async () => ({ delivered: 'test' }) });
+  assert.equal(result.lanes.codex.alive, false);
+  assert.equal(result.lanes.codex.reason, 'dead:oauth_consent');
+});

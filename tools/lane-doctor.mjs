@@ -223,6 +223,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
   const probeProviders = providers.length ? providers : [...PROVIDERS, ...OPTIONAL_PROVIDERS.filter(o => health.lanes[o])];
   const results = await Promise.all(probeProviders.map(async p => {
     if (health.lanes[p].reason === 'missing_key' || (p === 'codex' && !codexAuthStatusAny(home, { platform, spawnImpl }).login)) return [p, null];
+    let dryOk = true;
     if (p === 'codex') {
       if (platform === 'win32' && await listWsl() === '') {
         // 1回の起動失敗で即 down→kim 通知しない。一過性のスパウン失敗は短い再試行で吸収する（2026-11-07 実測: 06:57Z failure → 07:00Z same 経路で fixed。probeRetries=1 で合計2回実行）。
@@ -238,11 +239,13 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
         return [p, { ...result, nativeRepair: true }];
       }
       const dry = await probe(p, { home, timeoutMs: Math.min(15000, probeBudget), dryRun: true });
-      if (dry.code !== 0) return [p, dry];
+      dryOk = dry.code === 0;
       // 再利用は成功結果だけ。失敗を30分使い回すと直後に直ったレーンが停止のまま残る（2026-10-25 実測: 直接実行は PONG なのに probe_failed）。
-      if (previous.lanes?.codex?.alive && freshProbe(previous.lanes.codex.probedAt, now)) return [p, { cached: previous.lanes.codex }];
+      if (dryOk && previous.lanes?.codex?.alive && freshProbe(previous.lanes.codex.probedAt, now)) return [p, { cached: previous.lanes.codex }];
     }
-    return [p, { ...await probe(p, { home, timeoutMs: Math.max(1, probeBudget - (Date.now() - started)) }), ...(p === 'codex' ? { authOk: true } : {}) }];
+    // dry 失敗（コールド起動が15秒上限を超える等）で即 probe_failed にしない。残り予算の本番 probe で判定する
+    // （2026-11-06/07 連日再発: 直接実行は PONG・24h実績0失敗のレーンが dry タイムアウトで停止扱いになった）。
+    return [p, { ...await probe(p, { home, timeoutMs: Math.max(1, probeBudget - (Date.now() - started)) }), ...(p === 'codex' && dryOk ? { authOk: true } : {}) }];
   }));
   // probe subprocess が cooldown を更新することがあるため、完了後に再読込する。
   const cooldown = readJson(path.join(dir, 'provider-cooldown.json')), routing = readJson(path.join(dir, 'routing-overrides.json'));

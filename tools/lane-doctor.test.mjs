@@ -250,6 +250,29 @@ test('all live lanes do not require repair or add a stop line', t => {
   assert.doesNotMatch(summarize(r), /🛑/);
 });
 
+test('missing Gemini key uses live OpenRouter without requiring repair', t => {
+  const h = fixture(t);
+  fs.unlinkSync(path.join(h, '.claude/gemini.env'));
+  const r = laneDoctorQuick({ home: h, now, save: false });
+  assert.deepEqual(r.substituted, [{ provider: 'gemini', via: 'openrouter' }]);
+  assert.equal(r.lanes.gemini.via, 'openrouter');
+  assert.ok(r.askOrder.includes('gemini'));
+  assert.equal(r.repairFirst.required, false);
+  assert.doesNotMatch(summarize(r), /🛑/);
+  assert.match(summarize(r), /gemini ✅\(OpenRouter経由\)/);
+});
+
+test('missing Gemini key remains a repair stop when OpenRouter is dead', t => {
+  const h = fixture(t);
+  fs.unlinkSync(path.join(h, '.claude/gemini.env'));
+  fs.unlinkSync(path.join(h, '.claude/openrouter.env'));
+  const r = laneDoctorQuick({ home: h, now, save: false });
+  assert.ok(!r.substituted.some(({ provider }) => provider === 'gemini'));
+  assert.ok(r.repairFirst.reasons.some(reason => reason.split(':')[1]?.split(',').includes('gemini')));
+  assert.equal(r.repairFirst.required, true);
+  assert.match(summarize(r), /🛑/);
+});
+
 test('WSL-only auth configures Codex, probes it, and supplies notification account', async t => {
   const home = fixture(t);
   fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');

@@ -7,6 +7,45 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 
+test('clean-profile registration satisfies required hook checks and repairs a missing PostToolUse hook', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-clean-profile-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const repo = path.resolve('.');
+  const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo, FLEET_BEACON: '0' };
+  const source = JSON.parse(fs.readFileSync(path.join(repo, 'tools/setup-manifest.json'), 'utf8'));
+  const checks = source.items.filter(item => item.severity === 'required' && item.spec.hookEvent && !item.scope);
+  for (const name of ['intra-turn-progress-reminder.mjs', 'kim-editor-posttool.mjs']) {
+    assert.ok(checks.some(item => item.spec.hookScript === name), name);
+  }
+  const manifestFile = path.join(home, 'required-hooks.json');
+  fs.writeFileSync(manifestFile, JSON.stringify({ version: 1, items: checks }));
+  const verify = () => spawnSync(process.execPath, ['tools/setup.mjs', '--verify', '--json', '--home', home, '--manifest', manifestFile], { env, encoding: 'utf8' });
+  const register = () => execFileSync(process.execPath, ['tools/register-hooks.mjs', '--hooks-only'], { env, encoding: 'utf8' });
+  assert.equal(verify().status, 1);
+  register();
+  const result = verify();
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.ok(JSON.parse(result.stdout).items.every(item => item.status === 'OK'));
+  const dispatchFile = path.join(home, '.claude/hook-dispatch-manifest.json');
+  const before = fs.readFileSync(dispatchFile, 'utf8');
+  const runtime = JSON.parse(before);
+  for (const name of ['intra-turn-progress-reminder.mjs', 'kim-editor-posttool.mjs']) {
+    assert.equal(runtime.events.PostToolUse.filter(h => h.name === name).length, 1);
+  }
+  assert.equal(runtime.events.PostToolUse.find(h => h.name === 'kim-editor-posttool.mjs').critical, true);
+  for (const name of ['intra-turn-progress-reminder.mjs', 'kim-editor-posttool.mjs']) {
+    const damaged = structuredClone(runtime);
+    damaged.events.PostToolUse = damaged.events.PostToolUse.filter(h => h.name !== name);
+    fs.writeFileSync(dispatchFile, JSON.stringify(damaged));
+    const failed = verify();
+    assert.equal(failed.status, 1, name);
+    assert.equal(JSON.parse(failed.stdout).items.find(item => item.id === `settings:${name.slice(0, -4)}`).status, 'NG');
+    register();
+    assert.equal(verify().status, 0);
+    assert.equal(fs.readFileSync(dispatchFile, 'utf8'), before);
+  }
+});
+
 test('setup converge timeout covers Node updates on new and existing PCs, idempotently', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-hooks-node-runtime-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

@@ -531,6 +531,12 @@
         "type": "command",
         "command": "node \"${repo}/tools/kim-editor-posttool.mjs\"",
         "timeout": 180
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/intra-turn-progress-reminder.mjs\"",
+        "timeout": 5
       }
     ],
     "Stop": [

@@ -106,17 +106,59 @@ test('日次はscout --once→上限付きモデル別eval→保存済み提案�
   assert.match(fs.readFileSync(path.join(f.dir, 'logs', 'model-scout.log'), 'utf8'), /model-scout 完了/);
 });
 
-test('exit0でもscout保存なし・eval結果なしは成功扱いせず再試行、秘密をログに出さない', async t => {
+test('exit0でもscout保存なし・eval結果なしは成功扱いせず再試行', async t => {
   const f = fixture(t), opts = { home: f.home, now, log: () => {}, propose: async () => {} };
-  assert.equal((await runDailyScout({ ...opts, spawnImpl: () => ({ status: 0, stdout: 'SECRET' }) })).ok, false);
+  assert.equal((await runDailyScout({ ...opts, spawnImpl: () => ({ status: 0, stdout: 'scout-output' }) })).ok, false);
   assert.equal(fs.existsSync(path.join(f.dir, 'model-scout-daily.json')), false);
   assert.equal((await runDailyScout({ ...opts, spawnImpl: (_exe, args) => {
     if (args[0].endsWith('model-scout.mjs')) fs.writeFileSync(path.join(f.dir, 'model-scout-state.json'), JSON.stringify({ updatedAt: now.toISOString(), pendingCandidates: f.pending }));
-    return { status: 0, stderr: 'SECRET' };
+    return { status: 0, stderr: 'eval-output' };
   } })).ok, false);
   assert.equal(fs.existsSync(path.join(f.dir, 'model-scout-daily.json')), false);
   assert.equal(fs.existsSync(path.join(f.dir, 'model-scout-daily.lock')), false);
-  assert.doesNotMatch(fs.readFileSync(path.join(f.dir, 'logs', 'model-scout.log'), 'utf8'), /SECRET/);
+});
+
+test('子プロセスが status 非0 かつ stderr を出した場合、エラーメッセージに status と stderr 末尾が含まれる', async t => {
+  const f = fixture(t);
+  const opts = {
+    home: f.home,
+    now,
+    log: () => {},
+    propose: async () => {},
+    spawnImpl: (_exe, args) => {
+      if (args[0].endsWith('model-scout.mjs')) {
+        return { status: 1, signal: null, stderr: 'Error: OpenRouter API timeout\n' };
+      }
+      return { status: 0 };
+    }
+  };
+  const result = await runDailyScout(opts);
+  assert.equal(result.ok, false);
+  const logContent = fs.readFileSync(path.join(f.dir, 'logs', 'model-scout.log'), 'utf8');
+  assert.match(logContent, /scout failed: status=1/);
+  assert.match(logContent, /stderrTail=Error: OpenRouter API timeout/);
+});
+
+test('exit 0 だが state 未更新の場合、stateUpdated=no と before が含まれる', async t => {
+  const f = fixture(t);
+  const stateFile = path.join(f.dir, 'model-scout-state.json');
+  const beforeTime = '2026-10-10T00:00:00Z';
+  fs.writeFileSync(stateFile, JSON.stringify({ updatedAt: beforeTime, pendingCandidates: f.pending }));
+
+  const opts = {
+    home: f.home,
+    now,
+    log: () => {},
+    propose: async () => {},
+    spawnImpl: (_exe, args) => {
+      return { status: 0, signal: null, stdout: 'ok' };
+    }
+  };
+  const result = await runDailyScout(opts);
+  assert.equal(result.ok, false);
+  const logContent = fs.readFileSync(path.join(f.dir, 'logs', 'model-scout.log'), 'utf8');
+  assert.match(logContent, /stateUpdated=no/);
+  assert.match(logContent, new RegExp(`before=${beforeTime}`));
 });
 
 test('生存中のロックは二重起動を防ぎ、他実行のロックを消さない', async t => {

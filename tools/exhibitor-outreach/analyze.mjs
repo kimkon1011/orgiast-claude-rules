@@ -6,7 +6,7 @@ function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
-export async function analyzeSite(company, deps) {
+async function analyzeCompany(company, deps) {
   if (typeof deps?.fetchSite !== 'function') throw new TypeError('deps.fetchSite is required');
   if (typeof deps?.extract !== 'function') throw new TypeError('deps.extract is required');
 
@@ -33,6 +33,38 @@ export async function analyzeSite(company, deps) {
   } catch (error) {
     return { ...base, error: `extract failed: ${errorMessage(error)}` };
   }
+}
+
+/**
+ * Analyze plain site text using only the caller-provided extractor.
+ *
+ * The object form is retained for the earlier pipeline contract. New callers
+ * pass a string (or null) and receive the three normalized insight fields.
+ */
+export function analyzeSite(siteText, deps) {
+  if (typeof siteText === 'object' && siteText !== null && !Array.isArray(siteText)) {
+    return analyzeCompany(siteText, deps);
+  }
+  if (typeof deps?.extractInsights !== 'function') {
+    throw new TypeError('deps.extractInsights is required');
+  }
+  if (typeof siteText !== 'string' || siteText.trim() === '') {
+    return { sellsTo: null, buyer: null, reason: null };
+  }
+
+  const extracted = deps.extractInsights(siteText);
+  return {
+    sellsTo: nullable(extracted?.sellsTo),
+    buyer: nullable(extracted?.buyer),
+    reason: nullable(extracted?.reason),
+  };
+}
+
+export function composeDraft(analysis, recipientTitle, deps) {
+  if (typeof deps?.generateDraft !== 'function') {
+    throw new TypeError('deps.generateDraft is required');
+  }
+  return deps.generateDraft(analysis, recipientTitle);
 }
 
 const ROLE_OPENINGS = new Map([

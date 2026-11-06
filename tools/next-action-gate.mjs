@@ -8,6 +8,7 @@ import { currentTurnEntries, blocks } from './state-claim-evidence.mjs';
 import { isLandingDeferral } from './permanent-fix-deferral-scan.mjs';
 import { ledgerFile, readLedger, latestOpenPromises } from './auto-progress-ledger.mjs';
 import { classifyHandoff } from './lib/handoff-kind.mjs';
+import { judgeBgTurnReport } from './bg-turn-report-gate.mjs';
 
 export const MIN_ENFORCED_LENGTH = 200;
 const FOOTER_PATTERN = /(?:^|\n)次に kim がすること:[ \t]*([^\r\n]*)\r?\n(?:[ \t]*\r?\n)?この後の自動進行:[ \t]*([^\r\n]*)\r?\n(?:[ \t]*\r?\n)?このセッション:[ \t]*([^\r\n]*)$/;
@@ -185,11 +186,14 @@ export function reportsCloseSteps(text) {
   return numbered('1') && numbered('2') && numbered('3');
 }
 
-function hasOpenSessionCheck(input) {
+export function hasOpenSessionCheck(input, home) {
   if (!input.session_id) return false;
   try {
-    return latestOpenPromises(readLedger(ledgerFile()))
-      .some(row => row.sessionId === input.session_id && row.status === 'open' && typeof row.check === 'string' && row.check.trim());
+    return latestOpenPromises(readLedger(ledgerFile(home)))
+      .some(row => row.sessionId === input.session_id && (
+        (row.status === 'open' && ((typeof row.check === 'string' && row.check.trim()) || row.autoRegisteredCheck === true)) ||
+        (row.status === 'scheduled' && typeof row.startWhen === 'string' && row.startWhen.trim())
+      ));
   } catch { return false; }
 }
 
@@ -224,11 +228,73 @@ export function hasSessionWakeup(raw, input = {}) {
   if (!autoProgress && input.session_id) {
     try {
       autoProgress = latestOpenPromises(readLedger(ledgerFile()))
-        .some(row => row.sessionId === input.session_id && row.status === 'open' && typeof row.check === 'string' && row.check.trim());
+        .some(row => row.sessionId === input.session_id && row.status === 'open' && ((typeof row.check === 'string' && row.check.trim()) || row.autoRegisteredCheck === true));
     } catch { /* A missing or unreadable ledger is not wakeup evidence. */ }
   }
   const persistent = sessionWakeupEvidence(raw, input.now ?? Date.now());
   return { autoProgress, background: background || persistent.background, scheduled: persistent.scheduled, cron: persistent.cron === true };
+}
+
+export const WAIT_CHECK_CODES = new Set([
+  'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK', 'SESSION-OPEN-NEEDS-IN-SESSION-CHECK',
+  'AUTOPILOT-NO-SESSION-WAKEUP', 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK',
+]);
+
+export const WATCH_REGISTRATION_CODES = WAIT_CHECK_CODES;
+
+function waitingCheckIssues(source, transcriptRaw, input, turnSource) {
+  if (!enabled()) return [];
+  const issues = [];
+  const footer = footerValues(source);
+  if (!footer) {
+    const launched = blocks(currentTurnEntries(transcriptRaw), 'tool_use').some(tool =>
+      (/^(?:Bash|PowerShell|Agent)$/.test(tool.name || '') && tool.input?.run_in_background === true)
+      || /(?:^|__)codex(?:$|__)/i.test(tool.name || '')
+      || (/^(?:Bash|PowerShell)$/.test(tool.name || '')
+        && /(?:^|[;&|\n]\s*|\s)(?:codex(?:\.exe)?|(?:node\s+\S*[\\/])?codex[^\s]*\.mjs)\s+(?!--(?:help|version)\b)/i.test(String(tool.input?.command || tool.input?.script || ''))));
+    const wakeup = hasSessionWakeup(transcriptRaw, input);
+    if (launched && !hasOpenSessionCheck(input) && !wakeup.cron && !wakeup.scheduled) {
+      issues.push({ decision: 'block', code: 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK', reason: 'バックグラウンド処理を起動したターンです。同じセッションの永続チェック（auto-progress --add-check）またはセッション内の定期確認を登録してから応答を終えてください。' });
+    }
+    return issues;
+  }
+  const body = source.slice(0, source.lastIndexOf('次に kim がすること:'));
+  const sessionState = SESSION_STATES.find(([, pattern]) => pattern.test(footer.session))?.[0];
+  const hasAutopilot = !!footer.autopilot && !NO_ACTION_PATTERN.test(footer.autopilot);
+  const wakeup = hasSessionWakeup(transcriptRaw, input);
+  const noAutocheck = [...turnSource.matchAll(/\[NO-AUTOCHECK-OK:[ \t]*([^\]\r\n]*)\]/g)]
+    .some(([, reason]) => reason.trim().length > 0);
+  // チャットで答えるだけの返信待ち（reply-only）は会話に戻ってくるので台帳は要らない。それ以外の人待ちは載せる。
+  const userHandoff = /\[手渡し判定\]|お願いする操作|^手間監査:/m.test(body);
+  if ((userHandoff || !NO_ACTION_PATTERN.test(footer.nextAction)) && classifyHandoff(source) !== 'reply-only'
+    && !hasOpenSessionCheck(input) && !noAutocheck) {
+    issues.push({ decision: 'block', code: 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', reason: (userHandoff ? 'user 本人への手渡し（[手渡し判定]／お願いする操作）も人待ちです。' : '') + '人待ちの自動進行は台帳の定期チェックに載せる: node tools/auto-progress.mjs --add-check --session <id> --check "<exit0=達成/1=未達のコマンド>" --deadline +7d --label "<名前>" --next-claude "<次の手>"。自動進行が「なし」でも同じセッションの open 行が必要です。自動確認できない場合だけ [NO-AUTOCHECK-OK: <理由>] を記載してください。' });
+  }
+  if ((userHandoff || !NO_ACTION_PATTERN.test(footer.nextAction)) && classifyHandoff(source) !== 'reply-only'
+    && !noAutocheck && input.session_id) {
+    const openRows = latestOpenPromises(readLedger(ledgerFile()))
+      .filter(row => row.sessionId === input.session_id && row.status === 'open');
+    if (openRows.length && !openRows.some(row => typeof row.ask === 'string' && row.ask.trim())) {
+      issues.push({ decision: 'block', code: 'NEXT-ACTION-USER-WAIT-NEEDS-ASK', reason: '本人待ちの open 台帳行に頼みごとの全文（ask）がありません。node tools/auto-progress.mjs --add-check --session <id> --check "<達成判定>" --deadline +7d --label "<名前>" --next-claude "<次の手>" --ask-file <頼みごとの全文ファイル> で登録し直してください。通知だけで持ち主が操作できる全文を保存してください。例外は [NO-AUTOCHECK-OK: <理由>]。' });
+    }
+  }
+  // Monitor / 起床通知はセッション終了で消える。実際の永続台帳を必須にする。
+  if (WAIT_STATES.has(sessionState) && !hasOpenSessionCheck(input)) {
+    issues.push({ decision: 'block', code: 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK', reason: '作業中のまま応答を終える前に、同じセッションの永続チェックを登録してください: node tools/auto-progress.mjs --add-check --session <id> --check "<達成判定>" --deadline +3d --label "<作業名>" --next-claude "<次の手>"。自動進行が「なし」でも必要です。バックグラウンド完了通知や登録コマンドへの言及だけでは代替できません。' });
+  }
+  // 台帳は Discord へ通知するだけでセッション内には何も報告しない。対話セッションで「まだ閉じない」
+  // なら、セッション自身を起こす CronCreate（台帳と同じく両方要る）を必須にする（nishi 2026-10-29・11-04）。
+  const noSessionCron = [...turnSource.matchAll(/\[NO-SESSION-CRON-OK:[ \t]*([^\]\r\n]*)\]/g)]
+    .some(([, reason]) => [...reason.trim()].length >= 5);
+  const interactive = process.env.CLAUDE_HEADLESS !== '1' && !/subagents/i.test(input.transcript_path || '');
+  if (WAIT_STATES.has(sessionState) && interactive && !wakeup.cron && !wakeup.scheduled && !noSessionCron) {
+    issues.push({ decision: 'block', code: 'SESSION-OPEN-NEEDS-IN-SESSION-CHECK', reason: SESSION_CRON_REASON });
+  }
+  if (hasAutopilot && process.env.CLAUDE_HEADLESS !== '1'
+    && !/subagents/i.test(input.transcript_path || '') && !wakeup.autoProgress && !wakeup.background && !wakeup.scheduled && !wakeup.cron) {
+    issues.push({ decision: 'block', code: 'AUTOPILOT-NO-SESSION-WAKEUP', reason: '「この後の自動進行」が残っていますが、このセッションを定期的に起こす仕組みがありません。/loop で自走するか、Monitor か ScheduleWakeup を実際に呼ぶか、node tools/auto-progress.mjs --add-check … で定期チェックを登録してから終えてください（「夜に着手」など開始の予約は --start-when "<開始条件>" --next-claude "<やること>"。--check は完了判定なので時刻を入れない）。『次ターンで』『次回起きたら』は起床手段にならない。自動進行が無いなら「この後の自動進行: なし」と書いてください。' });
+  }
+  return issues;
 }
 
 function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {}) {
@@ -327,45 +393,31 @@ function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {
   if (footer.nextAction !== 'なし' && (DEFERRAL_PATTERN.test(footer.nextAction) || isLandingDeferral(footer.nextAction) || (IMPLEMENTATION_PATTERN.test(footer.nextAction) && DELIVERY_PATTERN.test(body)))) {
     return { decision: 'block', code: 'NEXT-ACTION-DEFERRAL', reason: DEFERRAL_REASON };
   }
-  const wakeup = hasSessionWakeup(transcriptRaw, input);
-  const noAutocheck = [...turnSource.matchAll(/\[NO-AUTOCHECK-OK:[ \t]*([^\]\r\n]*)\]/g)]
-    .some(([, reason]) => reason.trim().length > 0);
-  // チャットで答えるだけの返信待ち（reply-only）は会話に戻ってくるので台帳は要らない。それ以外の人待ちは載せる。
-  const userHandoff = /\[手渡し判定\]|お願いする操作|^手間監査:/m.test(body);
-  if (!permanentFix && (userHandoff || !NO_ACTION_PATTERN.test(footer.nextAction)) && classifyHandoff(source) !== 'reply-only'
-    && !hasOpenSessionCheck(input) && !noAutocheck) {
-    return { decision: 'block', code: 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', reason: (userHandoff ? 'user 本人への手渡し（[手渡し判定]／お願いする操作）も人待ちです。' : '') + '人待ちの自動進行は台帳の定期チェックに載せる: node tools/auto-progress.mjs --add-check --session <id> --check "<exit0=達成/1=未達のコマンド>" --deadline +7d --label "<名前>" --next-claude "<次の手>"。自動進行が「なし」でも同じセッションの open 行が必要です。自動確認できない場合だけ [NO-AUTOCHECK-OK: <理由>] を記載してください。' };
-  }
-  // Monitor / 起床通知はセッション終了で消える。実際の永続台帳を必須にする。
-  if (WAIT_STATES.has(sessionState) && !hasOpenSessionCheck(input)) {
-    return { decision: 'block', code: 'AUTOPILOT-IN-PROGRESS-NEEDS-CHECK', reason: '作業中のまま応答を終える前に、同じセッションの永続チェックを登録してください: node tools/auto-progress.mjs --add-check --session <id> --check "<達成判定>" --deadline +3d --label "<作業名>" --next-claude "<次の手>"。自動進行が「なし」でも必要です。バックグラウンド完了通知や登録コマンドへの言及だけでは代替できません。' };
-  }
-  // 台帳は Discord へ通知するだけでセッション内には何も報告しない。対話セッションで「まだ閉じない」
-  // なら、セッション自身を起こす CronCreate（台帳と同じく両方要る）を必須にする（nishi 2026-10-29・11-04）。
-  const noSessionCron = [...turnSource.matchAll(/\[NO-SESSION-CRON-OK:[ \t]*([^\]\r\n]*)\]/g)]
-    .some(([, reason]) => [...reason.trim()].length >= 5);
-  const interactive = process.env.CLAUDE_HEADLESS !== '1' && !/subagents/i.test(input.transcript_path || '');
-  if (!permanentFix && WAIT_STATES.has(sessionState) && interactive && !wakeup.cron && !wakeup.scheduled && !noSessionCron) {
-    return { decision: 'block', code: 'SESSION-OPEN-NEEDS-IN-SESSION-CHECK', reason: SESSION_CRON_REASON };
-  }
-  if (!permanentFix && hasAutopilot && process.env.CLAUDE_HEADLESS !== '1'
-    && !/subagents/i.test(input.transcript_path || '') && !wakeup.autoProgress && !wakeup.background && !wakeup.scheduled) {
-    return { decision: 'block', code: 'AUTOPILOT-NO-SESSION-WAKEUP', reason: '「この後の自動進行」が残っていますが、このセッションを定期的に起こす仕組みがありません。/loop で自走するか、Monitor か ScheduleWakeup を実際に呼ぶか、node tools/auto-progress.mjs --add-check … で定期チェックを登録してから終えてください（「夜に着手」など開始の予約は --start-when "<開始条件>" --next-claude "<やること>"。--check は完了判定なので時刻を入れない）。『次ターンで』『次回起きたら』は起床手段にならない。自動進行が無いなら「この後の自動進行: なし」と書いてください。' };
-  }
+  const watchIssue = waitingCheckIssues(source, transcriptRaw, input, turnSource)[0];
+  if (!permanentFix && watchIssue) return watchIssue;
   return permanentFix || { decision: 'pass', reason: 'valid-footer' };
 }
 
 // Report independent footer defects together. The single evaluator remains the source of truth
-// for ordered/stateful checks; this supplement prevents label/back-reference/approval/open-action
-// defects from being revealed one Stop retry at a time.
+// for ordered checks; the supplement reports waiting checks and independent footer
+// defects together, including launches hidden by a missing footer.
 export function judgeNextAction(text, transcriptRaw = '', input = {}, options = {}) {
+  if (input.stop_hook_active) return { decision: 'pass', reason: 'stop-hook-active' };
+  if (enabled()) {
+    const background = judgeBgTurnReport(transcriptRaw, input);
+    if (background.decision === 'block') return background;
+  }
   const primary = judgeNextActionSingle(text, transcriptRaw, input, options);
-  if (primary.decision !== 'block') return primary;
+  if (!enabled() || reportsCloseSteps(text)) return primary;
   const source = String(text || '').trimEnd();
   const turnSource = String(options.turnText || source).trimEnd();
   const footer = footerValues(source);
-  if (!footer) return primary;
-  const issues = new Map([[primary.code, primary.reason]]);
+  const waiting = waitingCheckIssues(source, transcriptRaw, input, turnSource);
+  if (primary.decision !== 'block' && !waiting.length) return primary;
+  const issues = new Map(primary.decision === 'block' ? [[primary.code, primary.reason]] : []);
+  for (const issue of waiting) issues.set(issue.code, issue.reason);
+  const combined = () => ({ decision: 'block', code: primary.code || waiting[0].code, reasonCodes: [...issues.keys()], reason: issues.size === 1 ? [...issues.values()][0] : [...issues].map(([code, reason]) => String(reason).startsWith(`[${code}]`) ? reason : `[${code}] ${reason}`).join('\n') });
+  if (!footer) return combined();
   const add = (code, reason) => issues.set(code, reason);
   const permanent = permanentFixViolation(turnSource, transcriptRaw);
   if (permanent) add(permanent.code, permanent.reason);
@@ -378,8 +430,7 @@ export function judgeNextAction(text, transcriptRaw = '', input = {}, options = 
   if (footer.nextAction !== 'なし' && APPROVAL_PATTERN.test(footer.nextAction) && placement === 'missing' && !override('NEXT-ACTION-APPROVAL-INLINE-OK')) add('NEXT-ACTION-APPROVAL-INLINE', APPROVAL_INLINE_REASON);
   if (footer.nextAction !== 'なし' && APPROVAL_PATTERN.test(footer.nextAction) && placement === 'not-last' && !override('NEXT-ACTION-APPROVAL-NOT-LAST-OK')) add('NEXT-ACTION-APPROVAL-NOT-LAST', APPROVAL_NOT_LAST_REASON);
   if (footer.nextAction !== 'なし' && OPEN_ACTION_PATTERN.test(footer.nextAction) && !HUMAN_ONLY_PATTERN.test(footer.nextAction) && !override('NEXT-ACTION-OPEN-OK')) add('NEXT-ACTION-OPEN', OPEN_ACTION_REASON);
-  if (issues.size === 1) return primary;
-  return { ...primary, reason: [...issues].map(([code, reason]) => String(reason).startsWith(`[${code}]`) ? reason : `[${code}] ${reason}`).join('\n') };
+  return combined();
 }
 
 async function main() {
@@ -391,7 +442,6 @@ async function main() {
     if (input?.stop_hook_active) return;
     const context = readTranscriptContext(input?.transcript_path);
     const assistantText = input?.assistant_text || context.assistantText;
-    if (!assistantText) return;
     const result = judgeNextAction(assistantText, context.raw, input);
     if (result.decision === 'block') process.stdout.write(`${JSON.stringify({ decision: 'block', reason: result.reason })}\n`);
   } catch { /* ゲート自身の失敗で応答を止めない。 */ }

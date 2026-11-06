@@ -1,3 +1,4 @@
+import { readHookSettings } from './fixtures/read-hook-settings.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -65,7 +66,7 @@ test('new and existing registration migrate to wrapper idempotently, unrelated h
   if(existing) fs.writeFileSync(file,JSON.stringify({hooks:{PreToolUse:[{matcher:'Bash|PowerShell',hooks:[{type:'command',command:'node "C:/old/tools/feedback-form-gate.mjs"',timeout:10}]}]}}));
   const run=()=>spawnSync(process.execPath,[path.join(toolsDir,'register-hooks.mjs'),'--hooks-only'],{env:{...process.env,ORGIAST_HOME:home,ORGIAST_REPO:repoDir},encoding:'utf8'});
   assert.equal(run().status,0);const before=fs.readFileSync(file,'utf8');assert.equal(run().status,0);assert.equal(fs.readFileSync(file,'utf8'),before);
-  const settings=JSON.parse(before);const hook=settings.hooks.PreToolUse.flatMap(g=>g.hooks).find(h=>h.command.includes('feedback-form-gate.mjs'));
+  const settings=readHookSettings(file);const hook=settings.hooks.PreToolUse.flatMap(g=>g.hooks).find(h=>h.command.includes('feedback-form-gate.mjs'));
   assert.match(hook.command,/gate-hook-runner\.mjs/);assert.ok(hook.command.includes(toolsDir));
  }
  const custom={hooks:{Stop:[{hooks:[{type:'command',command:'node "/unrelated/custom.mjs"'}]}]}};
@@ -97,10 +98,13 @@ test('real wrapper retries SessionStart key client once, preserves env keys, and
  assert.equal(result.status,0,result.err);assert.equal(requests,1);assert.equal(result.out,'');assert.doesNotMatch(result.err,/mock-value|test-secret/);
  assert.match(fs.readFileSync(path.join(home,'.claude/example.env'),'utf8'),/LOCAL_ONLY=keep\nKEY=mock-value/);
 });
-test('許可カテゴリだけは配布済み cost webhook へ送れる',async t=>{
- const {notifyKim}=await import('./notify-kim.mjs');const home=temp(t);fs.mkdirSync(path.join(home,'.claude'),{recursive:true});fs.writeFileSync(path.join(home,'.claude/cost-reporter.env'),'DISCORD_COST_WEBHOOK=https://example.invalid/mock-only\n');
- let sent=0;const result=await notifyKim('gate status',{home,userId:'',token:'',allowlist:[{category:'test',pattern:'.'}],fleetFallback:true,fetchImpl:async(url,options)=>{sent++;assert.equal(url,'https://example.invalid/mock-only');assert.equal(JSON.parse(options.body).content,'gate status');return {ok:true};}});
- assert.equal(sent,1);assert.equal(result.delivered,'webhook');
+test('旧許可カテゴリとcost webhookがあってもkim宛報告は台帳だけに保存する',async t=>{
+ const {notifyKim}=await import('./notify-kim.mjs');const {listItems}=await import('./kim-inbox.mjs');
+ const home=temp(t);fs.mkdirSync(path.join(home,'.claude'),{recursive:true});
+ fs.writeFileSync(path.join(home,'.claude/cost-reporter.env'),'REPORTER_LABEL=kim-PC\nDISCORD_COST_WEBHOOK=https://example.invalid/mock-only\n');
+ let sent=0;const result=await notifyKim('gate status',{home,userId:'',token:'',plainJa:false,allowlist:[{category:'test',pattern:'.'}],fleetFallback:true,fetchImpl:async()=>{sent++;assert.fail('kim Discord transport forbidden');}});
+ assert.equal(sent,0);assert.equal(result.delivered,'session-inbox');
+ const items=listItems(home);assert.equal(items.length,1);assert.equal(items[0].id,result.id);assert.equal(items[0].text,'gate status');
 });
 test('Stop aggregate applies warning policy to each child and keeps its reason visible',async t=>{
  const {run}=await import('./stop-gate-runner.mjs');const {discoverGates}=await import('./gate-contracts.mjs');
@@ -165,5 +169,17 @@ test('app-llm gates deny immediately on a first-seen non-pilot PC under the 2026
     assert.equal(rolloutMode(name, { manifest, home, hostname: 'new-pc', now: Date.parse('2026-11-02T12:00:00Z') }), 'deny');
     manifest.gates[name].immediatePolicy = 'other';
     assert.equal(rolloutMode(name, { manifest, home, hostname: 'new-pc', now: Date.parse('2026-11-02T12:00:00Z') }), 'warn');
+  }
+});
+
+test('2026-11-05 mail/delete policies deny immediately through real runner on first-seen PCs', async t => {
+  const home = temp(t);
+  for (const [name, input] of [
+    ['mail-send-approval-gate', {tool_name:'mcp__claude_ai_Gmail__send_message',tool_input:{body:'unapproved'}}],
+    ['delete-approval-gate', {tool_name:'mcp__claude_ai_Google_Drive__trash_file',tool_input:{file_id:'unapproved'}}],
+  ]) {
+    assert.equal(rolloutMode(name,{home,hostname:'new-pc'}),'deny');
+    const result = await runHook(path.join(toolsDir,name+'.mjs'),JSON.stringify(input),{env:{...process.env,ORGIAST_HOME:home},policyOptions:{home,hostname:'new-pc',notify:async()=>({delivered:'mock'})}});
+    assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision,'deny');
   }
 });

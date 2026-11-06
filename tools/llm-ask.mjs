@@ -4,6 +4,7 @@ import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import { readEnvValue } from './env-kv.mjs';
 import { allowedForCategory, callWithFallback, FALLBACK_CHAIN, preferredForCategory } from './llm-fallback.mjs';
 import { geminiUsage, recordGeminiUsage } from './gemini-usage-ledger.mjs';
+import { isEntry } from './is-entry.mjs';
 
 const PROVIDERS = {
   // 実測で精度が高く、llama-3.3-70b より安価な共通既定モデル。
@@ -21,7 +22,9 @@ const PROVIDERS = {
   kimi: gatewayConfig('kimi'),
   mistral: gatewayConfig('mistral'),
 };
+export const OPENROUTER_GEMINI_MODEL = `google/${PROVIDERS.gemini.model}`;
 
+if (isEntry(import.meta.url)) {
 const args = process.argv.slice(2);
 function opt(name, def) { const i = args.indexOf(name); return (i >= 0 && args[i + 1]) ? args[i + 1] : def; }
 const provider = (opt('--provider', '') || '').toLowerCase();
@@ -73,6 +76,14 @@ const selectedKey = loadKey(provider);
 if (args.includes('--print-key-status')) { console.log(selectedKey ? `${selected.keyEnv}: 設定済み` : `${selected.keyEnv}: 未設定`); process.exit(selectedKey ? 0 : 2); }
 if (!prompt) { console.error('指示テキストがありません'); process.exit(2); }
 
+const routeMissingGemini = candidate => candidate.provider === 'gemini' && !loadKey('gemini') && loadKey('openrouter')
+  ? { provider: 'openrouter', model: OPENROUTER_GEMINI_MODEL }
+  : candidate;
+const routedGeminiStart = start.provider === 'gemini' && routeMissingGemini(start).provider === 'openrouter';
+const effectiveStart = routeMissingGemini(start);
+const effectiveChain = FALLBACK_CHAIN.map(routeMissingGemini);
+if (routedGeminiStart) console.error(`[routing] gemini 鍵なし → openrouter/${OPENROUTER_GEMINI_MODEL}`);
+
 const messages = [];
 if (system) messages.push({ role: 'system', content: system });
 messages.push({ role: 'user', content: prompt });
@@ -104,10 +115,10 @@ function appendAttempt(info, usage = {}) {
 try {
   const result = await callWithFallback({
     persistState: !args.includes('--no-persist'),
-    start,
+    start: effectiveStart,
     category,
     perProviderTimeoutMs,
-    chain: args.includes('--no-fallback') ? [] : FALLBACK_CHAIN,
+    chain: args.includes('--no-fallback') ? [] : effectiveChain,
     allowGatewayFallback: !args.includes('--no-fallback'),
     payloadFor(candidate) {
       const P = PROVIDERS[candidate.provider]; const key = loadKey(candidate.provider);
@@ -135,4 +146,5 @@ try {
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;
+}
 }

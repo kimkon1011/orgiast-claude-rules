@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readDigest as readDeadlineDigest } from './deadline-watch.mjs';
 import { addItem as addDeadlineDigest } from './kim-inbox.mjs';
-// 各PCのローカル台帳から、完了・進行中・停滞/再開・判断待ちを 持ち主の DM へ定期報告する。
+// kim 宛の朝のまとめは kim-inbox、他メンバー宛の配送は従来どおり。
 import fs from 'node:fs';
 import { readDeferred } from './lib/owner-dm-policy.mjs';
 import { compactDigest, kimAction, isHumanActionRequired, cleanText } from './lib/owner-dm-digest.mjs';
@@ -15,6 +15,7 @@ import { ledgerFile, readLedger, latestOpenPromises, rowKey, isUnattendedRow, is
 export { isUnattendedRow } from './auto-progress-ledger.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { collectCaseProgress } from './case-progress-digest.mjs';
+import { checkProgressSummary } from './auto-progress-check.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { decisionOwnerOf, isChoiceFormat } from './auto-progress-decision-owner.mjs';
 
@@ -311,7 +312,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       catch (e) { deadlineText = '今週の期限\n期限台帳を取得できません。再試行が必要です。'; (io.stderr || console.error)(`deadline digest: ${e.message}`); }
     }
     // kim の通常の台帳まとめは会話内で回収する。案件ハブ・保留DMは朝夕の配達経路を使う。
-    if (label === 'kim-PC' && localOwner === 'kim@orgiast.jp' && !cases.text && !pending.length && !deadlineText) return { sent: false, count: 0, skipped: 'session-context-only' };
+    if (label === 'kim-PC' && localOwner === 'kim@orgiast.jp' && !cases.text && !pending.length && !deadlineText && !rows.some(row => row.check && Date.parse(row.deadlineAt) - now >= 12 * 3600000)) return { sent: false, count: 0, skipped: 'session-context-only' };
     const groups = new Map();
     const group = owner => { const key = String(owner || localOwner).trim().toLowerCase(); if (!groups.has(key)) groups.set(key, { rows: [], pending: [] }); return groups.get(key); };
     for (const row of rows) group(row.owner).rows.push(row);
@@ -332,7 +333,11 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       const caseCount = Object.keys(ownerCases.checkpoints).length;
       const caseUnchanged = caseCount && Object.entries(ownerCases.checkpoints).every(([id, cp]) => state.caseProgress?.[id]?.fingerprint === cp.fingerprint);
       const deadlinePrefix = owner === 'kim@orgiast.jp' && deadlineText ? deadlineText + '\n\n' : '';
-      const text = redactSecrets(deadlinePrefix + `【進捗まとめ】\n${digest.text}${ownerCases.text ? `（案件 ${caseCount}件${caseUnchanged ? '・変化なし' : ''}）` : ''}`);
+      const longChecks = items.rows.filter(row => row.check && Date.parse(row.deadlineAt) - now >= 12 * 3600000 && !['done', 'overdue_reported'].includes(row.status));
+      const dailyChecks = currentSlot === '朝' && state.checkSummaryDays?.[owner] !== key.split('|')[0] ? longChecks : [];
+      // 見出し「【進捗まとめ】\n」は Discord 許可リストの照合対象なので形を変えない。
+      const progressText = dailyChecks.length ? '日次進捗\n' + dailyChecks.map(row => `${row.label || row.promise}\n${checkProgressSummary(row.checkText || 'まだ確認結果がありません')}`).join('\n') + '\n' : '';
+      const text = redactSecrets(deadlinePrefix + `【進捗まとめ】\n${progressText}${digest.text}${ownerCases.text ? `（案件 ${caseCount}件${caseUnchanged ? '・変化なし' : ''}）` : ''}`);
       messages.push(text);
       if (dryRun) continue;
       const options = { home, now, owner, kind: 'digest', source: 'auto-progress-digest', webhookFallback: false };
@@ -345,14 +350,14 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         } else result = await (io.notifyOwner ?? notifyOwner)(owner, text, options);
       }
       catch (e) { result = { delivered: 'none', reason: String(e?.message || e) }; }
-      const ok = ['dm', 'session-inbox', 'toast', 'inbox'].includes(result?.delivered);
+      const ok = ['dm', 'session-inbox', 'spooled', 'toast', 'inbox'].includes(result?.delivered);
       receipts.push({ owner, ...result, channel: result?.channel || result?.delivered, recipientId: result?.recipientId ?? result?.userId ?? null, messageId: result?.messageId ?? null, httpStatus: result?.httpStatus ?? result?.status ?? null });
       if (!ok) { error ||= result?.reason || 'DM not delivered'; continue; }
       deliveredOwners.add(owner);
       for (const row of items.pending) if (row.kind !== 'action' || digest.includedIds.includes(row.id)) consumed.add(row.id);
       const lastVerdicts = { ...state.lastVerdicts }, lastKim = { ...state.lastKim }, lastWaiting = { ...state.lastWaiting };
       for (const row of items.rows) { lastVerdicts[rowKey(row)] = verdictOf(row, now); lastKim[rowKey(row)] = kimAction(row); lastWaiting[rowKey(row)] = isHumanActionRequired(row); }
-      state = { ...state, lastVerdicts, lastKim, lastWaiting, slotOwners: { ...state.slotOwners, [key]: [...deliveredOwners] }, deferredConsumed: [...consumed], ...(ownerCases.text ? { caseProgress: { ...state.caseProgress, ...ownerCases.checkpoints } } : {}) };
+      state = { ...state, ...(dailyChecks.length ? { checkSummaryDays: { ...state.checkSummaryDays, [owner]: key.split('|')[0] } } : {}), lastVerdicts, lastKim, lastWaiting, slotOwners: { ...state.slotOwners, [key]: [...deliveredOwners] }, deferredConsumed: [...consumed], ...(ownerCases.text ? { caseProgress: { ...state.caseProgress, ...ownerCases.checkpoints } } : {}) };
       (io.writeState ?? writeState)(home, state);
     }
     if (dryRun) return { sent: false, count, text: messages.join('\n'), messages };

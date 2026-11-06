@@ -7,6 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveOwner, resolveOwnerDiscordId, notifyOwner as realNotifyOwner, sendOwnerToast, RECIPIENT_NOTICE } from './notify-owner.mjs';
 import { KIM_DISCORD_USER_ID } from './notify-kim.mjs';
+import { listItems } from './kim-inbox.mjs';
 
 // 2026-11-04 仕様変更: 配達・宛先検査は即時配信対象の定時まとめで行う。未指定kindは別の回帰テストで保留を検査する。
 const notifyOwner = (owner, text, options = {}) => realNotifyOwner(owner, text, { kind: 'digest', notifyKim: async () => ({ delivered: 'session-inbox' }), ...options });
@@ -40,16 +41,19 @@ test('owner directory reads queries cache and refuses ambiguous email matches', 
 test('owner空の旧行はローカル持ち主を解決して通知する', async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-empty-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  let call;
-  await notifyOwner('', '自動進行', { home, label: 'kim-PC', pcMap: { 'kim-PC': { account: 'kim@orgiast.jp' } }, directory: [{ id: KIM_DISCORD_USER_ID, emails: ['kim@orgiast.jp'] }], notify: async (text, options) => { call = { text, options }; return { delivered: 'dm', messageId: 'receipt' }; } });
-  assert.equal(call.text, '自動進行');
-  assert.equal(call.options.userId, KIM_DISCORD_USER_ID);
+  const result = await notifyOwner('', '自動進行', { home, label: 'kim-PC', pcMap: { 'kim-PC': { account: 'kim@orgiast.jp' } }, directory: [{ id: KIM_DISCORD_USER_ID, emails: ['kim@orgiast.jp'] }], notify: () => assert.fail('kim DM forbidden') });
+  assert.equal(result.channel, 'kim-inbox');
+  assert.equal(listItems(home).length, 1);
+  assert.match(JSON.stringify(listItems(home)), /自動進行/);
 });
 
-test('持ち主未設定・別ownerへのkim ID流用はいずれも未達', async () => {
+test('持ち主未設定・別ownerでも明示kim宛はDMせず受け箱へ保存する', async t => {
   for (const owner of ['', 'nishi@orgiast.jp']) {
-    const result = await notifyOwner(owner, '自動進行', { home: fs.mkdtempSync(path.join(os.tmpdir(), 'notify-owner-')), label: 'DESKTOP-X', pcMap: {}, gitEmail: '', userId: KIM_DISCORD_USER_ID, notify: async () => { assert.fail('must not send'); } });
-    assert.equal(result.delivered, 'none');
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'notify-owner-'));
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    const result = await notifyOwner(owner, '自動進行', { home, label: 'DESKTOP-X', pcMap: {}, gitEmail: '', userId: KIM_DISCORD_USER_ID, notify: async () => { assert.fail('must not send'); } });
+    assert.equal(result.delivered, 'session-inbox');
+    assert.equal(listItems(home).length, 1);
   }
 });
 
@@ -70,7 +74,7 @@ test('nishi のローカルkim IDを拒否しtoastとログへ送る', async t =
  assert.equal((await notifyOwner('nishi@orgiast.jp', '別の進捗', options)).channel, 'inbox');
 });
 
-test('ローカルPCの明示notifyDiscordIdはownerがcrでもkimへDMする', async t => {
+test('ローカルPCの明示notifyDiscordIdはownerがcrでもkim受け箱へ保存する', async t => {
  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-explicit-'));
  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
  let sentTo = '';
@@ -83,8 +87,9 @@ test('ローカルPCの明示notifyDiscordIdはownerがcrでもkimへDMする', 
    toast: () => assert.fail('must not fall back'),
  };
  assert.equal(resolveOwnerDiscordId('cr@orgiast.jp', options), KIM_DISCORD_USER_ID);
- assert.equal((await notifyOwner('cr@orgiast.jp', '進捗', options)).channel, 'discord');
- assert.equal(sentTo, KIM_DISCORD_USER_ID);
+ assert.equal((await notifyOwner('cr@orgiast.jp', '進捗', options)).channel, 'kim-inbox');
+ assert.equal(sentTo, '');
+ assert.equal(listItems(home).length, 1);
 });
 
 test('notifyDiscordIdなしでIDファイルがkimなら従来どおりtoastへ送る', async t => {
@@ -132,6 +137,8 @@ test('sendOwnerToast accepts exe override for pwsh.exe', () => {
 });
 
 test('daily setup notice is suppressed on the same day and resets next day', async t => {
+ assert.match(RECIPIENT_NOTICE, /次回 Claude を開くと自動で登録を試みます/);
+ assert.match(RECIPIENT_NOTICE, /登録されない場合はチャットに『Discordユーザー名: xxx』/);
  const options = localOptions(t);
  const calls = [];
  Object.assign(options, { now: new Date(2026, 9, 28, 9).getTime(), toast: text => { calls.push(text); return true; } });
@@ -346,7 +353,8 @@ test('kim 所有者は台帳配達を成功とし toast に重複通知しない
   const result = await notifyOwner('kim@orgiast.jp', '報告', { home, label: 'kim-PC', pcMap: { 'kim-PC': { account: 'kim@orgiast.jp' } }, directory: [], notify: async (_text, options) => {
     calls++; assert.equal(options.userId, KIM_DISCORD_USER_ID); return { delivered: 'session-inbox', id: '項目' };
   }, toast: () => assert.fail('二重通知禁止') });
-  assert.equal(calls, 1); assert.equal(result.channel, 'session-inbox'); assert.equal(result.ok, true);
+  assert.equal(calls, 0); assert.equal(result.channel, 'kim-inbox'); assert.equal(result.ok, true);
+  assert.equal(listItems(home).length, 1);
 });
 
 test('w018-PC は fleet-pc-map に discordId と notifyDiscordId を持つ', () => {
@@ -441,4 +449,41 @@ test('宛先未解決の inbox fallback は戻り値と台帳に劣化を記録�
   const failedDm = await notifyOwner('nishi@orgiast.jp', 'DM失敗', { ...options, userId: '42', notify: async () => { throw new Error('offline'); } });
   assert.equal(failedDm.degraded, undefined);
   assert.ok(failedDm.attempts.every(a => a.degraded === undefined));
+});
+
+for (const label of ['DESKTOP-BDOAK99', 'user-PC']) {
+  test(`共用席 ${label} はローカルの別人宛先を無視して kim-inbox へ積む`, async t => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-shared-'));
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(home, '.claude'));
+    const owner = 'seisaku-team@orgiast.jp', wrongId = '1423319951980232744';
+    fs.writeFileSync(path.join(home, '.claude', 'fleet-pc-map.json'), JSON.stringify({ [label]: { account: owner, notifyDiscordId: wrongId, discordId: wrongId } }));
+    fs.writeFileSync(path.join(home, '.claude', 'orgiast-discord-user-id.txt'), wrongId);
+    const options = { home, label, directory: [{ id: wrongId, emails: [owner] }, { id: KIM_DISCORD_USER_ID, emails: ['kim@orgiast.jp'] }] };
+    assert.equal(resolveOwnerDiscordId(owner, options), KIM_DISCORD_USER_ID);
+    assert.equal(resolveOwnerDiscordId(' SEISAKU-TEAM@ORGIAST.JP ', options), KIM_DISCORD_USER_ID);
+    let calls = 0;
+    const result = await notifyOwner(owner, '共用席の進捗', { ...options, notify: async () => {
+      calls++; assert.fail('kim 宛は Discord へ送らない');
+    }, toast: () => assert.fail('kim-inbox へ配達済み') });
+    assert.equal(calls, 0);
+    assert.equal(result.delivered, 'session-inbox');
+    assert.equal(result.channel, 'kim-inbox');
+    assert.equal(result.ok, true);
+    const items = listItems(home);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].id, result.id);
+    assert.equal(items[0].kind, 'info');
+    assert.equal(items[0].text, '共用席の進捗');
+    const rejected = await notifyOwner(owner, '誤宛先', { ...options, userId: wrongId, notify: () => assert.fail('別人へ送らない'), toast: () => false });
+    assert.equal(rejected.degraded, 'no-recipient');
+  });
+}
+
+test('個人席はローカルの明示宛先を引き続き優先する', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-personal-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude', 'fleet-pc-map.json'), JSON.stringify({ 'nishi-PC': { account: 'nishi@orgiast.jp', notifyDiscordId: '123' } }));
+  assert.equal(resolveOwnerDiscordId('nishi@orgiast.jp', { home, label: 'nishi-PC', directory: [{ id: '456', emails: ['nishi@orgiast.jp'] }] }), '123');
 });

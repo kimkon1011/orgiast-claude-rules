@@ -17,6 +17,7 @@ import { installKnowledge } from './knowledge-pack.mjs';
 import { resolveConvergenceRepo } from './fleet-convergence.mjs';
 import { gitBlobSha } from './version-drift.mjs';
 import { isKimOperated } from './lib/kim-operated.mjs';
+import { dedupePreferences } from './claude-md-dedupe.mjs';
 
 const args = process.argv.slice(2);
 const force = args.includes('--force');
@@ -641,6 +642,8 @@ function save(hash, now) {
   if (dryRun) return;
   try { fs.mkdirSync(path.dirname(statePath), { recursive: true }); fs.writeFileSync(statePath, `${JSON.stringify({ lastCheck: now.toISOString(), hash }, null, 2)}\n`, 'utf8'); } catch {}
 }
+// Only optional navigation (headings/previews) consumes this budget. Mandatory
+// rules are distributed in full and have a separate size guard in the tests.
 export const INDEX_BUDGET_BYTES = 8000;
 export const INDEX_PROTECTED = [
   /副作用・影響は報告で終わらせず、その場で直す/,
@@ -648,6 +651,19 @@ export const INDEX_PROTECTED = [
   /planIncluded.*監督.*全用途禁止/,
   /setup --converge.*allow/,
 ];
+
+export function isMandatoryIndexLine(line) {
+  return /^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(line)
+    || INDEX_PROTECTED.some(pattern => pattern.test(line));
+}
+
+export function measureIndexBytes(index) {
+  const totalBytes = Buffer.byteLength(index);
+  const optionalBytes = Buffer.byteLength(index.split('\n').filter(line => !isMandatoryIndexLine(line)).join('\n'));
+  // Charge separators removed with mandatory lines to the mandatory allocation,
+  // so the two allocations sum exactly to the distributed UTF-8 size.
+  return { optionalBytes, mandatoryBytes: totalBytes - optionalBytes, totalBytes };
+}
 
 export function makeIndex(body) {
   let fence = null;
@@ -680,9 +696,13 @@ export function makeIndex(body) {
       for (let j = i + 1; /^###\s/.test(line) && j < lines.length && !/^#{1,3}(?:\s|$)/.test(lines[j]); j++) {
         const candidate = lines[j].trim();
         if (!candidate) continue;
+        // Absolute rules are emitted in full by the outer loop. A first-sentence
+        // preview would duplicate (and sometimes truncate) the same obligation.
+        if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(candidate)) break;
         const end = candidate.indexOf('。');
         // 結論文の日付付き由来も見出しと同じく全文へ委ねる(予算の常時の余裕を作る)。
-        const conclusion = (end >= 0 ? candidate.slice(0, end + 1) : candidate).replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, '');
+        const conclusion = isMandatoryIndexLine(candidate) ? candidate
+          : (end >= 0 ? candidate.slice(0, end + 1) : candidate).replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, '');
         // 結論として拾った絶対ルール・太字小見出しも短縮対象にしない。
         if (!/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(candidate)
           && !/^\*\*\d+(?:\.\d+)+\s+.+\*\*$/.test(candidate)
@@ -703,7 +723,7 @@ export function makeIndex(body) {
     }
   }
   const original = kept.join('\n');
-  if (Buffer.byteLength(original) <= INDEX_BUDGET_BYTES || !conclusions.size) return original;
+  if (measureIndexBytes(original).optionalBytes <= INDEX_BUDGET_BYTES || !conclusions.size) return original;
   // 文書内の位置ではなく結論の長さ順に、必要な件数だけ短縮する。
   for (const [i, chars] of [...conclusions].sort((a, b) => b[1].length - a[1].length)) {
     const comma = chars.indexOf('、');
@@ -711,7 +731,7 @@ export function makeIndex(body) {
     if (Buffer.byteLength(shortened) >= Buffer.byteLength(kept[i])) continue;
     kept[i] = shortened;
     const result = kept.join('\n');
-    if (Buffer.byteLength(result) <= INDEX_BUDGET_BYTES) return result;
+    if (measureIndexBytes(result).optionalBytes <= INDEX_BUDGET_BYTES) return result;
   }
   // 読点までの短縮だけでは、新しい規約が数件入ると予算を超える。
   // 見出し・絶対ルールを維持したまま通常の結論だけをさらに短縮する。
@@ -720,11 +740,14 @@ export function makeIndex(body) {
     if (Buffer.byteLength(shortened) >= Buffer.byteLength(kept[i])) continue;
     kept[i] = shortened;
     const result = kept.join('\n');
-    if (Buffer.byteLength(result) <= INDEX_BUDGET_BYTES) return result;
+    if (measureIndexBytes(result).optionalBytes <= INDEX_BUDGET_BYTES) return result;
   }
+  // Preserve the existing all-or-nothing fallback for optional navigation that
+  // cannot fit (e.g. an oversized heading). Mandatory size never affects it.
   return original;
 }
 export function build(current, body, label) {
+  current = dedupePreferences(current, body);
   const block = `${beginPrefix} (自動同期 ${label}) -->\n${body}\n- 全社共有の知見（kim-PC の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る\n- 制作・営業・見積・案件の着手前: ~/.claude/knowledge/production-sales/00_INDEX.md を読み、必要な節だけ Grep。全文を丸読みしない。\n${endMarker}`;
   if (current === null) return { updated: block, action: '新規作成' };
   // 行全体が開始マーカー形式そのものである場合だけ対象にする(部分一致は自己言及文書に誤爆する)。

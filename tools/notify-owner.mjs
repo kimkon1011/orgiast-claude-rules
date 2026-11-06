@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimHumanProgress, deliverHumanProgress } from './lib/auto-progress-human-inbox.mjs';
 import fs from 'node:fs';
 import { notificationKind, routeOwnerDm } from './lib/owner-dm-policy.mjs';
 import os from 'node:os';
@@ -10,7 +11,7 @@ import { redactSecrets } from './redact-secrets.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { isEntry } from './is-entry.mjs';
 // 所有者解決は lib/fleet-owner.mjs（kim-inbox と共用。ここに置くと notify-kim -> kim-inbox -> notify-owner の import が循環する）。
-import { ownerPcMap, resolveOwner } from './lib/fleet-owner.mjs';
+import { ownerPcMap, resolveOwner, canonicalOwnerPcMap, isSharedOwner } from './lib/fleet-owner.mjs';
 export { resolveOwner };
 
 const readJson = (file, fallback = {}) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } };
@@ -22,6 +23,8 @@ function localPcEntry(map, label) {
 }
 
 function explicitNotifyDiscordId(owner, { home = os.homedir(), label = resolveFleetLabel(home), pcMap } = {}) {
+  // 共用席は正本の宛先だけを信頼し、未登録席も kim が受け取る。
+  if (isSharedOwner(owner)) return String(localPcEntry(canonicalOwnerPcMap(), label)?.notifyDiscordId || '').trim() || KIM_DISCORD_USER_ID;
   const configured = localPcEntry(pcMap ?? ownerPcMap(home), label);
   const localOwner = String(configured?.account || configured?.owner || '').trim().toLowerCase();
   return localOwner && localOwner === String(owner || '').trim().toLowerCase()
@@ -38,6 +41,7 @@ function recipientMatchesOwner(owner, id, options = {}) {
   const { home = os.homedir(), directory, pcMap } = options;
   const wanted = String(owner || '').trim().toLowerCase();
   if (!wanted || !String(id || '').trim()) return false;
+  if (isSharedOwner(owner)) return String(id) === explicitNotifyDiscordId(owner, options);
   if (String(id) === explicitNotifyDiscordId(owner, options)) return true;
   if (String(id) === KIM_DISCORD_USER_ID && wanted !== 'kim@orgiast.jp') return false;
   const memberMismatch = directoryRows(home, directory).some(row => String(row.id) === String(id)
@@ -106,7 +110,7 @@ function resolvePowerShellExe() {
   return 'powershell.exe';
 }
 
-export const RECIPIENT_NOTICE = 'Discord の宛先が未設定です。Claude のチャットに『Discordユーザー名: xxx』と送れば設定されます';
+export const RECIPIENT_NOTICE = 'Discord の宛先が未設定です。次回 Claude を開くと自動で登録を試みます。登録されない場合はチャットに『Discordユーザー名: xxx』と送ってください';
 
 async function prependInbox(home, text, at) {
   const file = path.join(home, '.claude', 'owner-inbox.md');
@@ -159,6 +163,14 @@ export async function notifyOwner(owner, text, options = {}) {
   const home = options.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   options = { ...options, home };
   owner = String(owner || resolveOwner(options)).trim();
+  if (isKimHumanProgress({ ...options.session, owner }) && options.kind !== 'digest') {
+    return deliverHumanProgress(home, { ...options.session, owner }, { now: options.now, io: options });
+  }
+  // A fleet seat can belong to another account while explicitly notifying kim.
+  const recipientId = options.userId ?? resolveOwnerDiscordId(owner, options);
+  if (owner.toLowerCase() === 'kim@orgiast.jp' || recipientId === KIM_DISCORD_USER_ID) {
+    return routeOwnerDm(owner, text, { ...options, userId: KIM_DISCORD_USER_ID });
+  }
   const deferred = await routeOwnerDm(owner, text, options);
   if (deferred) {
     // DM の保留とセッション受け箱への配達は独立（#1485）。

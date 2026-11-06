@@ -34,6 +34,11 @@ test('counts only active, connected, unused auto-named sessions', () => {
   assert.equal(isStandby(null), false);
 });
 
+test('counts Japanese placeholder titles but not Japanese conversation titles', () => {
+  assert.equal(isStandby(standby('999｜待機中')), true);
+  assert.equal(isStandby(standby('999｜スマホの件')), false);
+});
+
 test('treats a session that has already been used as not standby', () => {
   const used = standby('011-imperative-stearns', { external_metadata: { context_usage: { used_tokens: 200625 } } });
   assert.equal(isStandby(used), false);

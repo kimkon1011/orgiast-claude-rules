@@ -1039,3 +1039,35 @@ for (const age of [0, 3 * LOCK_MS + 1000]) {
     assert.equal(fs.readFileSync(lock, 'utf8'), 'abandoned');
   });
 }
+
+for (const source of ['inbox', 'history', 'both']) {
+  test(`--sent-status は ${source} の返信全文を hub 照会なしで返す`, async t => {
+    const f = fixture(t, source !== 'history');
+    const reply = mail({ id: 'mail-reply-local', replyTo: 'mail-original', status: 'done', body: '返信の先頭\n' + '全文'.repeat(5000) + '\n返信の末尾' });
+    fs.mkdirSync(path.join(f.dir, 'fleet-inbox'));
+    fs.writeFileSync(path.join(f.dir, 'fleet-inbox', 'mail-broken.json'), '{');
+    fs.writeFileSync(path.join(f.dir, 'fleet-inbox', 'mail-unrelated.json'), JSON.stringify(mail({ replyTo: 'mail-other' })));
+    if (source !== 'history') fs.writeFileSync(path.join(f.dir, 'fleet-inbox', `${reply.id}.json`), JSON.stringify(reply));
+    fs.writeFileSync(path.join(f.dir, 'fleet-mail-replies.jsonl'), 'broken\nnull\n' + JSON.stringify({ id: 'mail-other', replyId: 'mail-reply-other' }) + '\n');
+    if (source !== 'inbox') fs.appendFileSync(path.join(f.dir, 'fleet-mail-replies.jsonl'), JSON.stringify({ id: reply.replyTo, replyId: reply.id, from: reply.from, resultAt: reply.createdAt, resultBody: reply.body }) + '\n');
+    f.deps.request = async () => assert.fail('hub を呼ばない');
+    assert.equal(await main(['--sent-status', reply.replyTo], f.deps), 0);
+    assert.deepEqual(f.output, [`reply: ${reply.id}\nreplyFrom: ${reply.from}\nreplyCreatedAt: ${reply.createdAt}\nreplyBody:\n${reply.body}`]);
+    assert.deepEqual(f.errors, []);
+  });
+}
+
+test('--sent-status は別メールへの返信しかなく hub がタイムアウトなら exit 3', async t => {
+  const f = fixture(t);
+  fs.mkdirSync(path.join(f.dir, 'fleet-inbox'));
+  fs.writeFileSync(path.join(f.dir, 'fleet-inbox', 'mail-reply-other.json'), JSON.stringify(mail({ id: 'mail-reply-other', replyTo: 'mail-other' })));
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-replies.jsonl'), JSON.stringify({ id: 'mail-other', replyId: 'mail-reply-other' }) + '\n');
+  f.deps.request = async (kind, payload, timeoutMs, opts) => {
+    f.calls.push({ kind, payload, timeoutMs, opts });
+    throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+  };
+  assert.equal(await main(['--sent-status', 'mail-original'], f.deps), 3);
+  assert.deepEqual(f.calls, [{ kind: 'mail-get', payload: { id: 'mail-original' }, timeoutMs: 10_000, opts: { retries: 0 } }]);
+  assert.deepEqual(f.output, []);
+  assert.match(f.errors[0], /hub不達: The operation was aborted due to timeout/);
+});

@@ -11,6 +11,7 @@ const {
   readFallbackBackendHistory,
   coolingBackendNames,
   skipCoolingBackends,
+  deprioritizeUnreliableBackends,
 } = await import('./fallback-backend-health.mjs');
 
 function tmpHome() {
@@ -90,4 +91,88 @@ test('backend が空のとき recordFallbackBackendOutcome は false を返し�
   assert.equal(recordFallbackBackendOutcome(home, { backend: undefined, outcome: 'timeout' }), false);
   assert.equal(fs.existsSync(fallbackBackendHistoryFile(home)), false);
   assert.equal(fs.existsSync(path.join(home, '.claude')), false);
+});
+
+test('deprioritizeUnreliableBackends: gemini-cli(3/15) と cheap-code:deepseek(17/24) で低成功率の gemini が末尾へ移る', () => {
+  const now = 1_000_000_000;
+  const history = [];
+  for (let i = 0; i < 15; i++) {
+    history.push({ t: now - 3600 * 1000, backend: 'gemini-cli', outcome: i < 3 ? 'ok' : 'timeout' });
+  }
+  for (let i = 0; i < 24; i++) {
+    history.push({ t: now - 3600 * 1000, backend: 'cheap-code:deepseek', outcome: i < 17 ? 'ok' : 'timeout' });
+  }
+  const backends = [{ name: 'gemini-cli' }, { name: 'cheap-code:deepseek' }, { name: 'openrouter-free' }];
+  const result = deprioritizeUnreliableBackends(backends, history, { now, windowMs: 7 * 24 * 3600 * 1000, minRuns: 10, minSuccessRate: 0.4 });
+  assert.deepEqual(result.map((b) => b.name), ['cheap-code:deepseek', 'openrouter-free', 'gemini-cli']);
+  assert.equal(result.length, 3);
+});
+
+test('deprioritizeUnreliableBackends: runs<minRuns (9回で全部timeout) なら順序不変', () => {
+  const now = 1_000_000_000;
+  const history = [];
+  for (let i = 0; i < 9; i++) {
+    history.push({ t: now - 3600 * 1000, backend: 'gemini-cli', outcome: 'timeout' });
+  }
+  const backends = [{ name: 'gemini-cli' }, { name: 'cheap-code:deepseek' }];
+  const result = deprioritizeUnreliableBackends(backends, history, { now, windowMs: 7 * 24 * 3600 * 1000, minRuns: 10, minSuccessRate: 0.4 });
+  assert.deepEqual(result.map((b) => b.name), ['gemini-cli', 'cheap-code:deepseek']);
+});
+
+test('deprioritizeUnreliableBackends: windowMs より古い行は数えない', () => {
+  const now = 1_000_000_000;
+  // 14日前→古くてカウントされないはず
+  const history = [
+    { t: now - 14 * 24 * 3600 * 1000, backend: 'gemini-cli', outcome: 'ok' },
+    { t: now - 14 * 24 * 3600 * 1000, backend: 'gemini-cli', outcome: 'timeout' },
+  ];
+  // 10日前→window 7日なので古い
+  const backends = [{ name: 'gemini-cli' }, { name: 'openrouter-free' }];
+  const result = deprioritizeUnreliableBackends(backends, history, { now, windowMs: 7 * 24 * 3600 * 1000, minRuns: 10, minSuccessRate: 0.4 });
+  // runs=2 < minRuns=10 かつ古いので順序不変
+  assert.deepEqual(result.map((b) => b.name), ['gemini-cli', 'openrouter-free']);
+});
+
+test('deprioritizeUnreliableBackends: 全 backend が低成功率なら元の相対順のまま', () => {
+  const now = 1_000_000_000;
+  const history = [
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'b', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'b', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'b', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'b', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'b', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'b', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'b', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'b', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'b', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'b', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'b', outcome: 'timeout' },
+  ];
+  const backends = [{ name: 'a' }, { name: 'b' }];
+  const result = deprioritizeUnreliableBackends(backends, history, { now, windowMs: 7 * 24 * 3600 * 1000, minRuns: 10, minSuccessRate: 0.4 });
+  assert.deepEqual(result.map((b) => b.name), ['a', 'b']);
+});
+
+test('deprioritizeUnreliableBackends: 入力配列を破壊しない', () => {
+  const now = 1_000_000_000;
+  const history = [];
+  for (let i = 0; i < 15; i++) {
+    history.push({ t: now - 3600 * 1000, backend: 'gemini-cli', outcome: i < 3 ? 'ok' : 'timeout' });
+  }
+  const original = [{ name: 'gemini-cli' }, { name: 'cheap-code:deepseek' }];
+  const copy = [...original];
+  const result = deprioritizeUnreliableBackends(original, history, { now, windowMs: 7 * 24 * 3600 * 1000, minRuns: 10, minSuccessRate: 0.4 });
+  assert.deepEqual(original.map((b) => b.name), copy.map((b) => b.name), '入力配列は変更されていない');
+  assert.notEqual(result, original, '新しい配列を返している');
 });

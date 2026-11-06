@@ -263,6 +263,8 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 
 ## unregistered-promise-gate
 
+「この後の自動進行」に Claude の残作業がある場合は、同じセッションでこのターン中に `node tools/auto-progress.mjs --add-check --session <id> --check "<達成判定>" --deadline +2d --label "<作業名>" --next-claude "<次の作業>"` を実行する。宣言だけ、過去ターンの登録、バックグラウンド起動だけでは通らない。登録時刻 `checkRegisteredAt` は Stop の台帳更新でも引き継ぎ、現在ターンの開始以降かを照合する。memory の5回目の注意: check を時刻判定にしない。成果物があるときだけ exit 0。例外は `[AUTOPROGRESS-CHECK-OK: <理由>]`。
+
 本文で Claude 自身が今後行う作業を約束した場合は、そのターンで実行して結果を報告するか、末尾の「この後の自動進行」に具体的な作業を登録する。「なし」のまま約束を残さない。user の返事待ちを条件にせず、返事がなくても進む形へ直す。
 
 コードブロック・引用ブロック・かぎ括弧内の引用、過去形・完了報告は対象外。「この後の自動進行」の装飾・最終行・「なし」表記は台帳の判定を共用する。既存 Stop runner の同一ターン2回までの差し戻し上限を利用する。Stop hook 設定の追加登録は不要。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
@@ -306,14 +308,33 @@ PR のマージを人に頼む文（本文の「次に kim がすること」・
 ## lane-repair-first-gate
 
 全PC・全アカウントで修復可能なレーン故障を最初に直す。`node tools/lane-doctor.mjs --probe` で診断する。Codex の probe_failed は直接 `wsl -d Ubuntu -u root -- codex exec --skip-git-repo-check "ping"` の終了コードでも切り分け、probe 経路だけの故障をレーン停止と断定しない。
-修復を試し、成功を実測したら `node tools/lane-repair-log.mjs --lane <名> --tried "<試した手段と実測>" --result fixed`。直せなければ同コマンドの `--result unfixable` で6時間だけ解除する。同一故障で3回連続修復不可なら notify-kim に1回通知する。429/usage_limit で reset が判明している quota_wait は修復対象外で、SessionStart に出る代替の安いレーンへ回す。gate 自体の例外は gate-errors.jsonl に記録して fail-open。
+修復を試し、成功を実測したら `node tools/lane-repair-log.mjs --lane <名> --tried "<試した手段と実測>" --result fixed`。`unfixable` は lane-health の reason が `billing` / `dead:oauth_consent` / `dead:physical_operation` / `quota_wait` の場合だけ受理する。原因未分類や修復可能な失敗では、分類修正と別キー・OAuth無料枠・OpenRouter 等を試す。同一故障で3回連続修復不可なら notify-kim に1回通知する。429/usage_limit で reset が判明している quota_wait は修復対象外で、SessionStart に出る代替の安いレーンへ回す。gate 自体の例外は gate-errors.jsonl に記録して fail-open。
 
 ## deliverable-drive-link-gate
 
 成果物は Drive にアップロードし、最終メッセージに異なるファイル数以上の Drive / Docs URL を載せる。③でファイルの利用を依頼する場合は③にも必要数の URL を載せ、authuser に開く人のメールを付ける。
+② と ③ で見てもらう成果物は、その箇条書きと同じ単位に Drive / Docs URL を書く（例: `- チラシ初稿 PDF https://drive.google.com/file/d/…/view`）。
 
 - `node tools/drive-upload.mjs --file <path> --folder <folderId> --authuser <開く人のメール>`
 - 鍵が無い PC: `rclone copyto <file> <remote>:<name> --drive-root-folder-id <folderId>`（drive リモート）、または Drive MCP。
 - 全手段が失敗した場合は `[DRIVE-UPLOAD-FAILED: <20字以上の実際のエラー本文>]` を記載する。
 
 SendUserFile、コードブロック内のローカルパス、チャット添付だけでは完了しない。形式ゲートの降格・一般 retry cap・close-steps より先に判定する。専用状態ファイルでセッションごとの連続 block を数え、3回後の4回目だけ警告付き pass（台帳 verdict: `deliverable-cap`）とする。合格または上限通過で連続数をリセットする。
+
+## bg-turn-report-gate
+
+バックグラウンド完了通知の後は、成功／失敗とその証拠、次の自動進行を本文に書く。同じ通知ターン内で `node tools/notify-kim.mjs --kind info "<結果・証拠・次の自動進行>"` を実行し、`delivered: "session-inbox"`・`id`・`kind: "info"` の成功応答を確認する。直前の人の入力から10分以内は inbox 保存のみ免除される。`stop_hook_active` が真なら再ブロックしない。
+
+`setup --converge` は既存の `stop-gate-runner.mjs` を登録し、その `next-action-gate.mjs` から本ゲートを呼ぶため、独立した Stop フックは登録しない。実体は tools ディレクトリの配布に含まれる。
+
+## mail-send-approval-gate
+
+本文の全文をチャットに表示し、その後の kim の明示承認を得る。本文を変えたら再表示・再承認する。gmail-draft --send は現在の下書きを読み戻して照合する。多数宛は `node tools/mail-bulk-approve.mjs --input <JSON> --project-dir <新規clasp管理dir>` で1社ずつチェックする承認シートを作る。下書き作成・更新は止めない。
+
+## delete-approval-gate
+
+削除対象のパス/IDを全件チャットに列挙し、その後の kim の明示許可を得る。globや変数は実際の対象を展開して列挙し、具体的なパスで実行する。OS一時フォルダ・指定生成物・同ターンに新規作成成功を確認できたファイルは対象外。
+
+## progress-cron-gate
+
+自動進行・待機を約束した対話セッションでは CronCreate で定期進捗を登録する。例: cron `17 9-19/2 * * *`、prompt は「約束した対象を実測して変化だけ5行以内で報告。kim に操作は求めない」。期限付きの待ちは one-shot も登録する。同一セッションの block は1回まで。headless・非対話 entrypoint・サブエージェントは対象外。状態は `~/.claude/progress-cron-gate-state/` に保存。

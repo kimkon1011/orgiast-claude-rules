@@ -16,6 +16,8 @@ export function repairCommand(command) {
   const tokens = [];
   let rest = String(command || '').trim();
   if (!rest || /[`$\r\n]/.test(rest)) return false;
+  // PowerShell の呼び出し演算子 `& <exe> ...`。単独の & のみ許容し、&& は連結なので許容しない。
+  if (rest.startsWith('&') && !rest.startsWith('&&')) rest = rest.slice(1).trimStart();
   let base = repo;
   while (true) {
     const prefix = rest.match(/^cd(?:\s+[\/|-][a-zA-Z]+)*\s+(?:"([^"\n]*)"|'([^'\n]*)'|([^\s"';&|<>]+))\s*(?:&&|;)\s*/i);
@@ -32,7 +34,7 @@ export function repairCommand(command) {
     rest = rest.slice(match[0].length);
   }
   const [cmd, ...args] = tokens;
-  if (/^(?:node|node.exe)$/.test(cmd)) {
+  if (/(?:^|[\\/])node(?:\.exe)?$/i.test(cmd)) {
     const allowed = ['lane-doctor.mjs', 'lane-repair-log.mjs', 'llm-ask.mjs', 'codex-do.mjs', 'env-kv.mjs', 'keyserve-status.mjs'];
     return allowed.some(file => path.resolve(base, args[0] || '') === path.join(repo, 'tools', file));
   }

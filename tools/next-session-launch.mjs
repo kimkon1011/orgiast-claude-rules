@@ -111,8 +111,26 @@ export function resolveClaudeBinary(io) {
     const binary = path.join(extensionsDir, extension, 'resources', 'native-binary', 'claude.exe');
     return exists(binary) ? binary : '';
   } catch {
-    return '';
+    /* VS Code 拡張が無い機体では黙って次へ */
   }
+
+  // WinGet Packages (Windows only) — winget 版は PATH に .cmd しか登録されず
+  // 実体 exe を直接探す（PR #1674 と同型修正）。
+  if (process.platform === 'win32') {
+    const localAppData = env.LOCALAPPDATA || path.join(homedir, 'AppData', 'Local');
+    const winGetDir = path.join(localAppData, 'Microsoft', 'WinGet', 'Packages');
+    try {
+      const entries = readdir(winGetDir);
+      for (const entry of entries) {
+        if (/^Anthropic\.ClaudeCode_/i.test(entry)) {
+          const exe = path.join(winGetDir, entry, 'claude.exe');
+          if (exists(exe)) return exe;
+        }
+      }
+    } catch { /* ディレクトリが無い機体では黙って次へ */ }
+  }
+
+  return '';
 }
 
 // Windows Terminal(wt.exe)は WindowsApps の実行エイリアス(reparse point)なので、

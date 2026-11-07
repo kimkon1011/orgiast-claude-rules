@@ -1,5 +1,26 @@
 {
   "version": 1,
-  "note": "kim 2026-11-06: DM は全廃・例外なし。緊急を含め kim-inbox へ。",
-  "entries": []
+  "note": "kim 宛の自動進行定期ダイジェスト・完了通知を Discord へ配送するための許可リスト。編集権限は kim のセッションのみ。",
+  "entries": [
+    {
+      "category": "progress-digest",
+      "pattern": "^【[^】]+ の自動進行】|^【進捗まとめ】",
+      "reason": "kim 2026-11-04 指示（進捗は聞かれる前に Discord へ）"
+    },
+    {
+      "category": "progress-done",
+      "pattern": "✅\\s*(?:自動進行が完了|完了)|📋\\s*未通知だった自動進行の完了一覧",
+      "reason": "kim 2026-11-04 指示（進捗は聞かれる前に Discord へ）"
+    },
+    {
+      "category": "progress-health",
+      "pattern": "⚠️\\s*進捗ダイジェストが Discord に届いていません",
+      "reason": "kim 2026-11-04 指示（進捗は聞かれる前に Discord へ）"
+    },
+    {
+      "category": "external-waiting",
+      "pattern": "^【社外返信待ち】",
+      "reason": "kim 2026-11-04 指示"
+    }
+  ]
 }

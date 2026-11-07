@@ -1,4 +1,4 @@
-# SEO最適化 × AI Overview引用獲得 [X-0001]
+# SEO最適化 × AI Overview引用獲得 [X-0001 / X-0003]
 
 ## 目的
 オージャストの展示会ブース制作サイトをSEO最適化し、Google AI Overviewからの引用獲得を目指す。
@@ -24,12 +24,29 @@
 
 ## 解消条件
 1. kim@orgiast.jp でSearch Consoleへログインし該当サイトを確認
-2. SA鍵 (`sheets-sa.json`) をこのPCに配置 または Search Consoleスコープ対応のGWS proxy設定
+2. GSCのBigQuery一括エクスポートを設定（推奨）、またはSA鍵 (`sheets-sa.json`) をこのPCに配置
 3. 対象サイトのリポジトリ・公開URLを特定
-4. 上記充足後、`seo/export-search-console.mjs` を実行してデータエクスポート
+4. BigQuery設定後、`seo/gsc-bq-weekly-analysis.sql` のプレースホルダーを置換して週次クエリを登録
+
+## X-0003: GSC BigQuery週次分析（推奨経路）
+
+GSCの継続的な分析には、従来のSearch Console APIベースの `seo/export-search-console.mjs` よりも、GSC公式のBulk Data Export（一括エクスポート）を推奨する。APIの行数制限を前提にした分割取得が不要で、エクスポート開始後のデータをBigQueryに保持し、定期SQLで週次分析できる。
+
+- 完全設定ガイド: [`docs/gsc-bigquery-weekly-seo-analysis.md`](../docs/gsc-bigquery-weekly-seo-analysis.md)
+- 週次分析SQL: [`seo/gsc-bq-weekly-analysis.sql`](./gsc-bq-weekly-analysis.sql)
+- 分析内容:
+  - 前週比クリック減ページ（URL×クエリ）
+  - 表示増なのにCTR低下したキーワード
+  - 順位上昇なのに流入が伸びないページ
+
+実行前にSQL内の `your-project-id` を実際のGCPプロジェクトIDへ置換し、GSC側でデータセット名を変えた場合は `searchconsole` も置換する。`your_dataset` はScheduled Queryの結果保存先を示す説明用プレースホルダーである。GSCデータセット、定期クエリ、結果保存先は同じBigQueryロケーションにそろえること。設定前の過去データは遡及取得できない。
+
+`seo/export-search-console.mjs` は単発取得や既存フローの互換用途として残すが、新規の継続運用はBigQuery経路を使う。
 
 ## 参考
 - Search Console API: `https://searchconsole.googleapis.com/webmasters/v3/`
+- GSC一括エクスポート: `https://support.google.com/webmasters/answer/12918484`
+- BigQuery定期クエリ: `https://cloud.google.com/bigquery/docs/scheduling-queries`
 - Google Property Check: `tools/google-property-check.mjs`（プロパティ一覧確認用）
 
 ## 進行管理

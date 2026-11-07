@@ -304,5 +304,17 @@
     "route": "完了報告の検証表の「確かめ方」欄や本文で外部状態を断定するときは、その当ターンで直接照会した実応答を根拠に書く。①Google スプレッドシートのタブ・設定の読み戻しは、DWD（kim impersonate / drive スコープ）か SA 直 JWT（`aujust-sales-automation/.gcp/sheets-sa.json`、scope=`https://www.googleapis.com/auth/spreadsheets.readonly`）で Sheets API を直接叩いて行い、`GET /v4/spreadsheets/{id}?fields=properties.title,sheets.properties`（タブ名/gid/行列数）と `GET /v4/spreadsheets/{id}/values/{tab}!A1:BZ400`（全行）の実応答を確認してから「読み戻した」と書く（詳細は knowledge entry「Google スプレッドシートの書き込み結果検証」の検証4点）。SA 鍵の無い PC（DESKTOP-PPD5V8I 等）では exit 2 で終わるため、対象シートを呼べた実測が無いまま「読み戻し」と書かない。②keyserve の登録有無（「このPCが未登録」等）は断定せず、`node tools/keyserve-status.mjs --json`（読み取り専用・認証経路/HTTP status/配布ファイル一覧を出力）で直接照会し、照会できない場合や status 非2xx は実際の error 本文を添えて「未確認」と書く。照会していない不在・未登録を確率付きで否定しない。実例: 2026-11-05 session 2415dbb8 は「Sheets API でタブ・設定を読み戻し」（対象シート呼び出しの実測なし）と「フォームのリンク先URLは keyserve から取得できず（このPCが未登録）」（keyserve 未照会）を断定し rule 4 で検出された。",
     "confidence": "high",
     "source": "handoff-audit-candidates.jsonl tool-name-route（route=Sheets API）: 7ef2fd3f94f75a307f8d76af10d9b681cb79018cf0d06ea21a515d13f033728a / 2026-11-07 route を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "公開価格の改定判断を kim に投げる",
+    "route": "価格変更の可否は rule 3（OAuth/支払い/アカウント/物理作業）の4理由に該当しない。kim に選択を投げず Claude が決定し、変更実装・反映・読み戻しまで当ターンで完了する。経営判断として明確な選択肢（複数パターンの金額と影響範囲）を示して kim に委ねる必要がある場合も、判断項目を1つに絞り、根拠となるデータを併記した上で依頼する。codex-do.mjs では価格改定の判断を代替できない。",
+    "confidence": "medium",
+    "source": "2026-11-02 手動補完（元: codex-do.mjs 道具名のみ→手順文に書換）"
+  },
+  {
+    "pattern": "セッション終了時のタブ起動・タブ閉じを kim に頼む",
+    "route": "セッション終了時のタブ起動は close-session.mjs / auto-session 再入の仕組みで自動化する。kim にタブ操作・Enter を頼まない。タブを閉じる操作は OS 操作であり Claude が自動化できないが、閉じる必要が本当にあるかを再判定する（/clear で代替できる場合がある）。やむを得ず kim に依頼する場合も、閉じるタブの種類（ブラウザ/VSCode のどちらか・セッションID）と成功の見え方を明記する。codex-do.mjs ではこのOS操作を代替できない。",
+    "confidence": "medium",
+    "source": "2026-11-02 手動補完（元: codex-do.mjs 道具名のみ→手順文に書換）"
   }
 ]

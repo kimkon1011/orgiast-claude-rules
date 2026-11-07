@@ -61,7 +61,7 @@ export function detectChanges(models, previous, now = new Date()) {
 
 export function selectFrontierCandidates(changes, { max = frontierLimit() } = {}) {
   return changes.filter(m => m.reason === '新規モデル' && FRONTIER_VENDORS.includes(m.id.split('/')[0]) &&
-    !m.id.startsWith('~') && !/:(batch|free)$/.test(m.id) &&
+    !m.id.startsWith('~') && !/:batch$/.test(m.id) && // :batch はバッチ専用エンドポイントのため同期評価不可
     m.modality.split('->')[0]?.split('+').includes('text') && m.modality.split('->')[1] === 'text' &&
     validNumber(m.pricing?.prompt) && validNumber(m.pricing?.completion))
     .sort((a, b) => (b.created || 0) - (a.created || 0) || a.id.localeCompare(b.id))
@@ -82,7 +82,7 @@ export function selectCandidates(changes, models, routing, { includeQuality = fa
     if (!price || (!includeQuality && !context)) { warnings.push(`${category}: ${route.provider}/${route.model} の単価または文脈長が不明のため比較保留。`); continue; }
     baselines.push({ category, route, price, context });
   }
-  const candidates = changes.filter((m) => !/:(batch|free)$/.test(m.id) && m.modality.split('->')[0]?.split('+').includes('text') && m.modality.split('->')[1] === 'text')
+  const candidates = changes.filter((m) => !/:batch$/.test(m.id) && m.modality.split('->')[0]?.split('+').includes('text') && m.modality.split('->')[1] === 'text') // :batch はバッチ専用エンドポイントのため同期評価不可
     .map((model) => ({ ...model, replacements: baselines.filter(({ route, price, context }) =>
       !(route.provider === 'openrouter' && route.model === model.id) &&
       (includeQuality || (model.context_length >= context && model.pricing.prompt * 1e6 <= price[0] && model.pricing.completion * 1e6 <= price[1] &&

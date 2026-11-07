@@ -65,13 +65,14 @@ test('両単価が同額以下かつ片方が安く、文脈が同等以上のte
   assert.deepEqual(result.candidates.map((m) => m.id), ['cheap']);
   assert.equal(result.warnings.length, 1);
 });
-test('selectCandidates は :batch と :free サフィックスを安価候補から除外する', () => {
+test('selectCandidates は :batch サフィックスを安価候補から除外する（:free は同期 chat/completions 可なので含める）', () => {
   const base = model('base', 30), cheap = model('cheap', 1, 0.0000005, 0.000001);
   const batch = { ...cheap, id: 'vendor/cheap:batch' }, free = { ...cheap, id: 'vendor/cheap:free' };
   const routing = { categories: { code: { provider: 'openrouter', model: 'base' } } };
   const result = selectCandidates([cheap, batch, free], [base], routing);
-  // cheap only: batch and free must be filtered out
-  assert.deepEqual(result.candidates.map((m) => m.id), ['cheap']);
+  // :free は除外せず、:batch のみ除外
+  assert.deepEqual(result.candidates.map((m) => m.id), ['cheap', 'vendor/cheap:free']);
+  assert.equal(result.candidates.find(m => m.id === 'vendor/cheap:batch'), undefined);
 });
 test('候補ゼロでも notifyKim 経由で DM を1通送る（fetchモック）', async (t) => {
   const f = fixture(t), posts = [];
@@ -217,13 +218,14 @@ test('既知のoverlay候補はeval完了後に提案し、skip上書きとdry-r
 test('フロンティアは価格に依存せず新規textモデルを新しい順に上限まで選ぶ', () => {
   assert.deepEqual(FRONTIER_VENDORS, ['anthropic','openai','google','meta','meta-llama','x-ai','deepseek','moonshotai','qwen','mistralai','z-ai','xiaomi','minimax','stepfun','bytedance-seed','tencent','inclusionai','meituan']);
   const wonder = { ...model('meta/muse-wonder', 1, 4e-6, 20e-6), reason: '新規モデル' };
-  const excluded = ['meta/muse-wonder:batch', 'meta/muse-wonder:free', '~meta/muse-wonder', 'other/new']
+  const excluded = ['meta/muse-wonder:batch', '~meta/muse-wonder', 'other/new']
     .map(id => ({ ...wonder, id }));
   excluded.push({ ...wonder, pricing: { prompt: -1000000, completion: 1 } },
     { ...wonder, pricing: { prompt: 1, completion: Infinity } },
     { ...wonder, modality: 'text->image' }, { ...wonder, modality: 'image->text' }, { ...wonder, reason: '値下げ（20%以上）' });
-  const selected = selectFrontierCandidates([wonder, ...excluded]);
-  assert.deepEqual(selected.map(x => x.id), [wonder.id]);
+  const selected = selectFrontierCandidates([wonder, { ...wonder, id: 'meta/muse-wonder:free' }, ...excluded]);
+  // :free は同期呼出可なので除外せず、:batch のみ除外
+  assert.deepEqual(selected.map(x => x.id), [wonder.id, 'meta/muse-wonder:free']);
   assert.equal(selected[0].tier, 'frontier');
   assert.deepEqual(selected[0].costPerMillion, [4, 20]);
   const many = Array.from({ length: 8 }, (_, i) => ({ ...wonder, id: `meta/new-${i}`, created: wonder.created + i }));

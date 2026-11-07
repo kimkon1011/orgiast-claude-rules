@@ -456,6 +456,45 @@ export async function main(argv = process.argv.slice(2), options = {}) {
       }
       print({ ok: true, paused: command === 'pause', dryRun }); return 0;
     }
+    if (command === 'gap-check') {
+      const days = Number(argv[argv.indexOf('--days') + 1]) || 7;
+      const auth = (options.readTokenImpl ?? readToken)(home);
+      if (!auth.token) throw new Error('Discord Bot トークンが設定されていません');
+      const api = createDiscord({ token: auth.token, fetchImpl: options.fetchImpl, sleepImpl: options.sleepImpl });
+      const kimId = read(path.join(home, '.claude', 'orgiast-discord-user-id.txt')).trim() || '715210673642012733';
+      const guildId = (options.env ?? process.env).DISCORD_DEFAULT_GUILD_ID || '715211007307284530';
+      const now = typeof options.now === 'function' ? options.now() : (typeof options.now === 'number' ? options.now : Date.now());
+
+      const pages = [];
+      for (let offset = 0; offset < 125; offset += 25) {
+        const page = await api(`/guilds/${guildId}/messages/search?mentions=${kimId}&author_type=user&limit=25${offset ? `&offset=${offset}` : ''}`);
+        if (!Array.isArray(page.messages)) throw new Error('Discord search response invalid');
+        pages.push(...page.messages);
+        const cutoff = now - days * 86400000;
+        const hits = page.messages.flat().filter(m => m.hit !== false && Date.parse(m.timestamp) >= cutoff);
+        if (page.messages.length < 25 || hits.length < 25) break;
+      }
+      const mentions = [...new Map(pages.flat().filter(m => m.hit !== false).map(m => [m.id, m])).values()];
+      const cutoff = now - days * 86400000;
+      const targets = mentions.filter(m => Date.parse(m.timestamp) >= cutoff).length;
+
+      // Check reply queue for enqueued items
+      let enqueued = 0;
+      try {
+        const queuePath = path.join(home, '.claude', 'reply-queue', 'queue.json');
+        if (fs.existsSync(queuePath)) {
+          const queue = JSON.parse(fs.readFileSync(queuePath, 'utf8'));
+          const queueItems = Object.values(queue.items || {});
+          const queueKeys = new Set(queueItems.map(i => i.key));
+          enqueued = mentions.filter(m => {
+            const key = `discord:${m.channel_id}:${m.id}`;
+            return queueKeys.has(key) && Date.parse(m.timestamp) >= cutoff;
+          }).length;
+        }
+      } catch { /* queue 未初期化 */ }
+      print({ targets, enqueued });
+      return 0;
+    }
     if (!['once', 'loop'].includes(command)) throw new Error(`Unknown command: ${command}`);
     const number = (flag, fallback) => {
       const i = argv.indexOf(flag), value = i < 0 ? fallback : Number(argv[i + 1]);

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, reopenLost, watchReopen } from './reopen-lost-sessions.mjs';
+import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath } from './reopen-lost-sessions.mjs';
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
 const exit = { event_type: 'system', payload: { reason: 'host_exit' }, created_at: since };
@@ -227,4 +227,176 @@ test('post-reopen verification records verified and unverified', async t => {
   assert.equal(result.reopened.length, 1);
   assert.deepEqual(result.verified, []);
   assert.deepEqual(result.unverified, ['one']);
+});
+
+test('findWorkspaceForCwd resolves workspace file for folder itself, relative subfolders, env var, storage.json, and handles comments/broken JSON', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-resolve-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const claudeMdDir = path.join(root, 'CLAUDE.md配布');
+  const claudeWorktreeX = path.join(root, '.claude', 'worktrees', 'x');
+  const unrelatedDir = path.join(root, 'unrelated');
+
+  fs.mkdirSync(claudeMdDir, { recursive: true });
+  fs.mkdirSync(claudeWorktreeX, { recursive: true });
+  fs.mkdirSync(unrelatedDir, { recursive: true });
+
+  const wsFile = path.join(claudeMdDir, 'orgiast.code-workspace');
+  const wsContent = `{
+    // Workspace definition
+    "folders": [
+      { "path": "." }, /* root folder */
+      { "path": "../.claude" }, // claude folder
+    ],
+  }`;
+  fs.writeFileSync(wsFile, wsContent, 'utf8');
+
+  const appDataDir = path.join(root, 'AppData', 'Roaming');
+  const storageJsonPath = path.join(appDataDir, 'Code', 'User', 'globalStorage', 'storage.json');
+  fs.mkdirSync(path.dirname(storageJsonPath), { recursive: true });
+  const storageContent = JSON.stringify({
+    windowsState: {
+      openedWindows: [
+        { workspaceIdentifier: { configURIPath: `file:///${wsFile.replace(/\\/g, '/')}` } }
+      ]
+    }
+  });
+  fs.writeFileSync(storageJsonPath, storageContent, 'utf8');
+
+  const env = { APPDATA: appDataDir };
+
+  // Case 1: CLAUDE.md配布 itself matches orgiast.code-workspace
+  const match1 = findWorkspaceForCwd(claudeMdDir, { env });
+  assert.ok(match1);
+  assert.equal(match1.workspaceFile, path.resolve(wsFile));
+  assert.equal(match1.workspaceName, 'orgiast');
+
+  // Case 2: .claude/worktrees/x (subfolder of ../.claude) matches orgiast.code-workspace
+  const match2 = findWorkspaceForCwd(claudeWorktreeX, { env });
+  assert.ok(match2);
+  assert.equal(match2.workspaceFile, path.resolve(wsFile));
+  assert.equal(match2.workspaceName, 'orgiast');
+
+  // Case 3: Unrelated folder returns null
+  const match3 = findWorkspaceForCwd(unrelatedDir, { env });
+  assert.equal(match3, null);
+
+  // Case 4: ORGIAST_VSCODE_WORKSPACE environment variable takes priority
+  const customWsFile = path.join(root, 'custom.code-workspace');
+  fs.writeFileSync(customWsFile, JSON.stringify({ folders: [{ path: unrelatedDir }] }), 'utf8');
+  const envWithCustom = { ...env, ORGIAST_VSCODE_WORKSPACE: customWsFile };
+
+  const matchCustom = findWorkspaceForCwd(unrelatedDir, { env: envWithCustom });
+  assert.ok(matchCustom);
+  assert.equal(matchCustom.workspaceFile, path.resolve(customWsFile));
+  assert.equal(matchCustom.workspaceName, 'custom');
+
+  // Case 5: Broken JSON workspace is ignored without crashing
+  fs.rmSync(customWsFile, { force: true });
+  const brokenWsFile = path.join(unrelatedDir, 'broken.code-workspace');
+  fs.writeFileSync(brokenWsFile, '{ "folders": [ broken json structure', 'utf8');
+  const envBroken = { ...env, ORGIAST_VSCODE_WORKSPACE: brokenWsFile };
+
+  const matchBroken = findWorkspaceForCwd(unrelatedDir, { env: envBroken });
+  assert.equal(matchBroken, null);
+});
+
+test('reopenLost reuses workspace file and does not call code <cwd> when workspace matches', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-ws-cmd-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const base = path.join(root, '.claude');
+  const wsDir = path.join(root, 'myproject');
+  const wsSubDir = path.join(root, 'myproject', 'sub');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.mkdirSync(wsSubDir, { recursive: true });
+
+  const wsFile = path.join(wsDir, 'myproject.code-workspace');
+  fs.writeFileSync(wsFile, JSON.stringify({ folders: [{ path: '.' }] }), 'utf8');
+
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: wsDir, message: { content: 'session 1' } },
+  ].map(JSON.stringify).join('\n'));
+
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'two.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_two' },
+    { type: 'user', cwd: wsSubDir, message: { content: 'session 2' } },
+  ].map(JSON.stringify).join('\n'));
+
+  const psCalls = [];
+  const fetchImpl = async url => ({
+    ok: true,
+    json: async () => url.includes('/events?')
+      ? { data: [exit] }
+      : { data: [{ id: 'cse_one' }, { id: 'cse_two' }] }
+  });
+
+  const env = { ORGIAST_VSCODE_WORKSPACE: wsFile };
+
+  const result = await reopenLost({
+    base, since, until, codeCli: 'C:\\code.cmd', fetchImpl, env,
+    spawn: (cmd, args) => {
+      if (args[0] !== 'agents') psCalls.push(args[args.length - 1]);
+      return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
+    },
+    windowReady: () => true,
+    wait: async () => {},
+  });
+
+  assert.equal(result.reopened.length, 2);
+
+  for (const call of psCalls) {
+    assert.ok(!call.includes(wsSubDir), `Command should not open cwd directly: ${call}`);
+    if (!call.includes('--open-url')) {
+      assert.ok(call.includes(wsFile), `Command should target workspace file: ${call}`);
+    }
+  }
+
+  assert.equal(result.reopened[0].openedWith, 'workspace');
+  assert.equal(result.reopened[0].target, path.resolve(wsFile));
+  assert.equal(result.reopened[1].openedWith, 'workspace');
+  assert.equal(result.reopened[1].target, path.resolve(wsFile));
+});
+
+test('parseJsonTolerant preserves // inside string literals (file URIs etc.)', t => {
+  const input = '{"a":"file:///C:/x//y", // c\n "b":[1,2,],}';
+  const result = parseJsonTolerant(input);
+  assert.deepEqual(result, { a: 'file:///C:/x//y', b: [1, 2] });
+});
+
+test('parseJsonTolerant handles plain valid JSON (fast path)', t => {
+  const result = parseJsonTolerant('{"x":1}');
+  assert.deepEqual(result, { x: 1 });
+});
+
+test('parseJsonTolerant handles block comments, escaping, BOM', t => {
+  const input = '\uFEFF{"a":"str\\\"ing/*notcomment*/","b":/*block*/[1,2],}';
+  const result = parseJsonTolerant(input);
+  assert.deepEqual(result, { a: 'str"ing/*notcomment*/', b: [1, 2] });
+});
+
+test('reopenLost falls back to code <cwd> with openedWith: folder when no workspace matches', async t => {
+  const base = fixture(t), psCalls = [];
+  const result = await reopenLost({
+    base, since, until, codeCli: 'C:\\code.cmd',
+    fetchImpl: async url => ({
+      ok: true,
+      json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] }
+    }),
+    spawn: (cmd, args) => {
+      if (args[0] !== 'agents') psCalls.push(args[args.length - 1]);
+      return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
+    },
+    windowReady: () => true,
+    wait: async () => {},
+  });
+
+  assert.equal(result.reopened.length, 1);
+  assert.equal(result.reopened[0].openedWith, 'folder');
+  assert.equal(result.reopened[0].target, 'C:\\work');
+  assert.ok(psCalls[0].includes('C:\\work'));
 });

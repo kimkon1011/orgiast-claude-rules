@@ -245,6 +245,26 @@ test('emptyOutputReason は U+2019 と U+0027 の両方の usage limit 行を us
   assert.equal(emptyOutputReason({ secs: 0 }), 'no_output');
 });
 
+// 2026-11-07 実測: codex escalation(gpt-6-astra)が exitCode=143(SIGTERM)・status='error'・fastFail=true で kill され、
+// catch-all の 'no_output' に分類されていた。プロセス kill は出力異常ではない。
+test('exitCode=143(SIGTERM) は killed に分類する', () => {
+  assert.equal(emptyOutputReason({
+    status: 'error', exitCode: 143, launched: true, timedOut: false, secs: 39, stderrTail: '',
+  }), 'killed');
+});
+
+test('fastFail=true は fast_fail に分類する（SIGTERM 以外の kill も含む）', () => {
+  assert.equal(emptyOutputReason({
+    status: 'error', exitCode: 1, fastFail: true, launched: true, timedOut: false, secs: 10, stderrTail: 'unknown error',
+  }), 'fast_fail');
+});
+
+test('fastFail=true でも既知のパターン（usage_limit）は先に分類される', () => {
+  assert.equal(emptyOutputReason({
+    status: 'error', exitCode: 1, fastFail: true, launched: true, timedOut: false, secs: 39, stderrTail: 'You have hit your usage limit',
+  }), 'usage_limit');
+});
+
 // 2026-10-21T00:32Z 実測: stderrTail は末尾200字の切り詰め(codex-do.mjs の slice(-200))なので、
 // "You've hit" の先頭が欠けて "t your usage limit." から始まる行が2件出た。旧パターンは
 // 先頭を要求していたため一致せず、no_output(2件) として codex_empty_output が起票された。

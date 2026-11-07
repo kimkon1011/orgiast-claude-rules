@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { userHome, readConfig } from './lib/eval-config.mjs';
-import { frontierLimit, proposeSavedEvaluations } from './model-scout.mjs';
+import { frontierLimit } from './model-scout.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -54,7 +54,7 @@ export function unevaluatedScoutModels(pending, config, rows, { max = frontierLi
   const evaluated = new Set(rows.filter(r => r.provider === 'openrouter' && (r.graded || 0) > 0).map(r => r.model));
   const enabled = new Set(config.filter(x => x.provider === 'openrouter' && !x.skip).map(x => x.model));
   return [...new Map(pending.map(x => [x.id, x])).values()]
-    .filter(x => enabled.has(x.id) && !evaluated.has(x.id))
+    .filter(x => !/:(batch|free)$/.test(x.id) && enabled.has(x.id) && !evaluated.has(x.id))
     .sort((a, b) => Number(b.tier === 'frontier') - Number(a.tier === 'frontier') || (b.created || 0) - (a.created || 0))
     .slice(0, max);
 }
@@ -144,7 +144,8 @@ export async function runDailyScout({ home = process.env.ORGIAST_HOME || userHom
       } else if (remaining.length) record(`model-scout 評価打ち切り（計測不能2回）: ${candidateClean}`);
       else record(`model-scout eval 完了: ${candidateClean}`);
     }
-    await propose({ home, resultsFile, configFile, log: record });
+    // propose は runScout (model-scout.mjs --once) が既に実行済み。
+    // ここで重複して呼ぶと提案ログが2重に出力される（2026-11-07 実測）。
     if (failed) throw new Error('未評価候補が残ったため未完了（次回1回だけ再試行）');
     const temp = `${dailyFile}.${process.pid}.tmp`;
     fs.writeFileSync(temp, JSON.stringify({ completedAt: now.toISOString(), evaluated: targets.length }) + '\n');

@@ -137,6 +137,21 @@ export function candidateClaudeExecutables({ platform, home, localAppData, appDa
     }
   }
 
+  // 8. WinGet Packages (Windows only) — winget 版は PATH に .cmd しか登録されず
+  // isUnspawnable ではねられるので実体 exe を直接探す。
+  if (platform === 'win32' && localAppData) {
+    const winGetDir = path.join(localAppData, 'Microsoft', 'WinGet', 'Packages');
+    try {
+      const entries = listDir(winGetDir);
+      for (const entry of entries) {
+        const name = typeof entry === 'string' ? entry : entry.name;
+        if (/^Anthropic\.ClaudeCode_/i.test(name)) {
+          addUnique(path.join(winGetDir, name, bin));
+        }
+      }
+    } catch { /* ディレクトリが無い機体では黙って次へ */ }
+  }
+
   return candidates;
 }
 

@@ -1,0 +1,67 @@
+# Phase 0 Baseline
+# Generated: 2026-11-07T19:43:53.230Z
+# PC: DELL/作業用014
+
+[metadata]
+date=2026-11-07
+pc=DELL/作業用014
+
+[daily]
+date	input_tokens	output_tokens	cache_creation	cache_read
+2026-05-26	353	230287	484095	11380286
+2026-10-29	752	304150	1516251	24695125
+2026-10-30	112	81475	1030373	8484228
+2026-10-31	986	323168	1748613	28369511
+2026-11-01	378	120211	1401377	9048202
+2026-11-02	1163	911505	5575197	62553164
+2026-11-04	2322	1661910	18452820	159042419
+2026-11-05	1094	1199850	6354934	167495988
+2026-11-06	3680	1635080	17317502	274191744
+2026-11-07	562	161298	2907892	28480881
+
+[model]
+model	input_tokens	output_tokens	cache_read	est_sonnet_usd	est_opus_usd
+claude-opus-4-8	4326	4181232	449097174	197.46	987.30
+claude-sonnet-5-5	3998	1264596	112407413	52.70	263.52
+claude-opus-5-5	2228	630011	154096956	55.69	278.43
+claude-opus-4-7	662	504934	53454010	23.61	118.06
+claude-sonnet-5	78	35468	3761931	1.66	8.30
+claude-haiku-5-5	32	9271	648098	0.33	1.67
+claude-haiku-4-5-20251001	78	3422	275966	0.13	0.67
+
+[project]
+project	input_tokens	output_tokens	sessions
+d--CLAUDE-md--	7396	5363202	24
+C--Users-USER--claude-quota-sweep-repo	3998	1264596	94
+C--windows-system32-driverstore-filerepository-ntprint-inf-amd64-960be97e68cd127d-amd64	8	1136	2
+
+[top-sessions]
+session	model	project	output_tokens
+6e5fd284-c4c	claude-opus-4-8	d--CLAUDE-md--	738414
+c8d99e2b-e35	claude-opus-4-8	d--CLAUDE-md--	692988
+d7ee3295-253	claude-opus-4-8	d--CLAUDE-md--	680741
+def0b2d6-eef	claude-opus-4-8	d--CLAUDE-md--	638328
+18cdc51d-5da	claude-opus-4-7	d--CLAUDE-md--	504934
+ed66ec62-ba1	claude-opus-4-8	d--CLAUDE-md--	384018
+d1513f05-68d	claude-opus-4-8	d--CLAUDE-md--	368359
+2276036b-fc5	claude-opus-4-8	d--CLAUDE-md--	233991
+b65f3ab6-174	claude-opus-4-8	d--CLAUDE-md--	211828
+16930ded-ed5	claude-opus-5-5	d--CLAUDE-md--	137289
+09977dce-113	claude-opus-4-8	d--CLAUDE-md--	134845
+7a72130e-803	claude-opus-5-5	d--CLAUDE-md--	120017
+37a87c55-56d	claude-opus-4-8	d--CLAUDE-md--	97720
+4e0a0aa2-fb1	claude-opus-5-5	d--CLAUDE-md--	86954
+4cf7cfa7-cd8	claude-sonnet-5-5	C--Users-USER--claude-quota-sweep-repo	86434
+4a233cdd-575	claude-sonnet-5-5	C--Users-USER--claude-quota-sweep-repo	82640
+bedbd515-a48	claude-sonnet-5-5	C--Users-USER--claude-quota-sweep-repo	81766
+29820d1b-cce	claude-sonnet-5-5	C--Users-USER--claude-quota-sweep-repo	73883
+76b59c96-23e	claude-opus-5-5	d--CLAUDE-md--	65424
+7a69dd13-eef	claude-sonnet-5-5	C--Users-USER--claude-quota-sweep-repo	55914
+
+[totals]
+input_tokens	11402
+output_tokens	6628934
+cache_creation	56789054
+cache_read	773741548
+est_cost_sonnet	331.59
+est_cost_opus	1657.95

@@ -202,7 +202,25 @@ export function findClaude(home) {
   const candidates = process.platform === 'win32'
     ? [path.join(home, '.local', 'bin', 'claude.exe'), path.join(home, '.local', 'bin', 'claude.cmd')]
     : [path.join(home, '.local', 'bin', 'claude')];
-  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+  const found = candidates.find((candidate) => fs.existsSync(candidate));
+  if (found) return found;
+
+  // WinGet Packages (Windows only) — winget 版は PATH に .cmd しか登録されず
+  // 実体 exe を直接探す（PR #1674 と同型修正）。
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    const winGetDir = path.join(localAppData, 'Microsoft', 'WinGet', 'Packages');
+    try {
+      const entries = fs.readdirSync(winGetDir);
+      for (const entry of entries) {
+        if (/^Anthropic\.ClaudeCode_/i.test(entry) && fs.existsSync(path.join(winGetDir, entry, 'claude.exe'))) {
+          return path.join(winGetDir, entry, 'claude.exe');
+        }
+      }
+    } catch { /* ディレクトリが無い機体では黙って次へ */ }
+  }
+
+  return null;
 }
 
 export async function main(argv = process.argv.slice(2)) {

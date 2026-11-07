@@ -1172,6 +1172,11 @@ export function forgiveNoExecutorResumes({ home, now = Date.now(), dryRun = fals
 
 export async function main(argv = process.argv.slice(2)) {
   const dryRun = argv.includes('--dry-run');
+  if (argv.includes('--repair-reopened-done')) {
+    const result = repairReopenedDoneLedger({ home: process.env.ORGIAST_HOME || os.homedir(), dryRun });
+    console.log(JSON.stringify({ repaired: result.repaired.length, sessions: result.repaired.map(row => row.sessionId) }));
+    return 0;
+  }
   if (argv.includes('--forgive-no-executor')) {
     console.log(JSON.stringify(forgiveNoExecutorResumes({ home: process.env.ORGIAST_HOME || os.homedir(), dryRun })));
     return 0;

@@ -1,5 +1,34 @@
 const { targetCount, readConfig, readSnapshot, readRefreshConfig, readLastRefreshAt, inRefreshHours } = require('./mobile-state.cjs');
 const { newRetryState, canAttemptMobileOpen, recordMobileOpenAttempt } = require('./route');
+const fs = require('node:fs');
+const path = require('node:path');
+
+// git worktree 判定（tools/reopen-lost-sessions.mjs の resolveReopenFolder と同じ基準。
+// 拡張ホストでは git を呼ばず fs だけで判定する）。フォルダ自身か祖先に `.git` ファイルが
+// あり内容の gitdir: が `...worktrees/...` を含む、または正規化パスが `\.claude\worktrees\`
+// を含む場合に worktree。`.git` ディレクトリ（メイン checkout）に到達したら打ち切って false。
+function isWorktreeFolder(folder, fsImpl = fs) {
+  if (typeof folder !== 'string' || !folder) return false;
+  const norm = folder.replace(/\//g, '\\').toLowerCase();
+  if (norm.includes('\\.claude\\worktrees\\')) return true;
+  let dir = path.resolve(folder);
+  while (true) {
+    const gitPath = path.join(dir, '.git');
+    try {
+      const stat = fsImpl.statSync(gitPath);
+      if (stat.isFile()) {
+        const content = fsImpl.readFileSync(gitPath, 'utf8');
+        if (/gitdir\s*:\s*[^\r\n]*worktrees/i.test(content)) return true;
+        return false; // 通常の gitdir ファイル（サブモジュール等）は worktree ではない
+      }
+      if (stat.isDirectory()) return false; // メイン checkout 配下。worktree ではない
+    } catch { /* この階層に .git は無い: 親へ */ }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return false;
+}
 
 // A loopback socket is an OS-owned mutex shared by all VS Code windows. A dead
 // host releases it automatically; there is no stale-file deletion race.
@@ -75,7 +104,20 @@ function decideRefresh({ now, minutes, hoursOk, lastRefreshAt, target, tabs, for
   const tab = candidates.reduce((oldest, current) => (current.appearedAt < oldest.appearedAt ? current : oldest));
   return { refresh: true, reason: 'ok', tab, waiting: waiting.length, ageMinutes: Math.floor((now - tab.appearedAt) / 60000) };
 }
+// --- worktree ウィンドウの待機タブ掃除（純粋関数） ---
+// git worktree 専用ウィンドウは待機タブの補充を担わないが、過去にリーズを取って作った
+// 未使用待機タブは閉じて通常ウィンドウの補充に任せる。閉じるのは待機タブ（ラベル 'Claude Code'）
+// かつ非アクティブなものだけ。会話が始まったタブ（ラベルが変わった・アクティブ）は絶対に閉じない。
+// startup=true（ウィンドウ起動直後）は古さ不問で 1 本。それ以外は decideRefresh と同じ 10 分以上。
+// tabs: [{ label, appearedAt, isActive, tab }]。閉じるタブが無ければ null。
+function decideWorktreeCleanup({ tabs, now = Date.now(), startup = false }) {
+  const waiting = tabs.filter(isWaitingTab);
+  const candidates = waiting.filter((tab) => !tab.isActive && (startup || now - (tab.appearedAt ?? 0) >= REFRESH_MIN_AGE_MS));
+  if (!candidates.length) return null;
+  return candidates.reduce((oldest, current) => ((current.appearedAt ?? 0) < (oldest.appearedAt ?? 0) ? current : oldest));
+}
 module.exports = {
   targetCount, readConfig, readSnapshot, createOwnershipLease, isWaitingTab, createPool,
   REFRESH_MIN_AGE_MS, decideRefresh, readRefreshConfig, readLastRefreshAt, inRefreshHours,
+  isWorktreeFolder, decideWorktreeCleanup,
 };

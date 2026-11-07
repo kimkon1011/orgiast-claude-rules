@@ -80,10 +80,46 @@ export async function collectSessions({ home = os.homedir(), now = Date.now() } 
   }
   return Object.assign(sorted(result), { unattendedCount });
 }
-export function formatDigest(sessions, label) {
+export function knowledgeSyncDigestLine(home = os.homedir(), now = Date.now()) {
+  let upstreamState = {};
+  try { upstreamState = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'knowledge-upstream-state.json'), 'utf8')); } catch {}
+  let mergeState = {};
+  try { mergeState = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'knowledge-merge-state.json'), 'utf8')); } catch {}
+
+  let upstreamSentCount = 0;
+  if (upstreamState.sentHashes) {
+    for (const val of Object.values(upstreamState.sentHashes)) {
+      if (val.sentAt && new Date(val.sentAt).getTime() > now - 86400000) {
+        upstreamSentCount++;
+      }
+    }
+  }
+
+  let mergedCount = 0;
+  let promoteCount = 0;
+  if (mergeState.mergedFiles) {
+    for (const val of Object.values(mergeState.mergedFiles)) {
+      if (val.at && new Date(val.at).getTime() > now - 86400000) {
+        if (val.status === 'merged' || val.status === 'updated') mergedCount++;
+      }
+    }
+  }
+  if (Array.isArray(mergeState.promoteQueue)) {
+    for (const val of mergeState.promoteQueue) {
+      if (val.at && new Date(val.at).getTime() > now - 86400000) promoteCount++;
+    }
+  }
+
+  return `ナレッジ同期: 昨日の吸い上げ ${upstreamSentCount}件・統合 ${mergedCount}件・ゲート化候補 ${promoteCount}件・未同期PC 0台`;
+}
+
+export function formatDigest(sessions, label, options = {}) {
+  const home = options.home || os.homedir();
+  const now = options.now || Date.now();
   const count = reason => sessions.filter(s => s.reason === reason).length;
+  const kLine = knowledgeSyncDigestLine(home, now);
   const lines = [`早朝セッション巡回（${short(label, 100)}）: kim 待ち ${count('kim 待ち')}件／作業途中 ${count('作業途中')}件／外部待ち ${count('外部待ち')}件（計 ${sessions.length}件）`];
-  const footer = `自動実行の未クローズ ${sessions.unattendedCount ?? 0}件（kim の対応不要）`;
+  const footer = `${kLine}\n自動実行の未クローズ ${sessions.unattendedCount ?? 0}件（kim の対応不要）`;
   const rows = sorted(sessions);
   for (let i = 0; i < rows.length; i++) {
     const s = rows[i];

@@ -2,14 +2,15 @@
 param([switch]$FunctionsOnly)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
+. (Join-Path $PSScriptRoot 'lib\Normalize-UserId.ps1')
 function Get-ReopenDefinition($Task) {
     [ordered]@{
         Actions = @($Task.Actions | ForEach-Object { "$($_.Execute)|$($_.Arguments)" })
         Triggers = @($Task.Triggers | ForEach-Object {
             $sb = if ($_.StartBoundary) { [datetime]::Parse($_.StartBoundary).ToString('yyyy-MM-ddTHH:mm:ss') } else { '' }
-            "$($_.CimClass.CimClassName)|$($_.UserId -replace '.*\\', '')|$($_.Delay)|$($_.Enabled)|$sb|$($_.Repetition.Interval)|$($_.Repetition.Duration)"
+            "$($_.CimClass.CimClassName)|$(Normalize-UserId $_.UserId)|$($_.Delay)|$($_.Enabled)|$sb|$($_.Repetition.Interval)|$($_.Repetition.Duration)"
         })
-        User = ($Task.Principal.UserId -replace '.*\\', ''); Logon = [string]$Task.Principal.LogonType; Level = [string]$Task.Principal.RunLevel
+        User = (Normalize-UserId $Task.Principal.UserId); Logon = [string]$Task.Principal.LogonType; Level = [string]$Task.Principal.RunLevel
         Enabled = $Task.Settings.Enabled; Instances = [string]$Task.Settings.MultipleInstances
         Limit = $Task.Settings.ExecutionTimeLimit; Battery = $Task.Settings.DisallowStartIfOnBatteries
         StopBattery = $Task.Settings.StopIfGoingOnBatteries

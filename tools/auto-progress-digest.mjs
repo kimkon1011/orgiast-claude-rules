@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { readDigest as readDeadlineDigest } from './deadline-watch.mjs';
-import { addItem as addDeadlineDigest } from './kim-inbox.mjs';
+import { addItem as addDeadlineDigest, listItems as listKimInboxItems, markSeen as markKimInboxSeen } from './kim-inbox.mjs';
 // kim 宛の朝のまとめは kim-inbox、他メンバー宛の配送は従来どおり。
+// 各PCのローカル台帳から、完了・進行中・停滞/再開・判断待ちを 持ち主の DM へ定期報告する。
 import fs from 'node:fs';
 import { readDeferred } from './lib/owner-dm-policy.mjs';
 import { compactDigest, kimAction, isHumanActionRequired, cleanText } from './lib/owner-dm-digest.mjs';
@@ -311,16 +312,20 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       try { deadlineText = await (io.readDeadlineDigest || readDeadlineDigest)({ home, today: new Date(now + 9 * 3600000).toISOString().slice(0, 10) }); }
       catch (e) { deadlineText = '今週の期限\n期限台帳を取得できません。再試行が必要です。'; (io.stderr || console.error)(`deadline digest: ${e.message}`); }
     }
-    // kim の通常の台帳まとめは会話内で回収する。案件ハブ・保留DMは朝夕の配達経路を使う。
-    if (label === 'kim-PC' && localOwner === 'kim@orgiast.jp' && !cases.text && !pending.length && !deadlineText && !rows.some(row => row.check && Date.parse(row.deadlineAt) - now >= 12 * 3600000)) return { sent: false, count: 0, skipped: 'session-context-only' };
+        const inboxSince = state.lastSuccessAt ? Date.parse(state.lastSuccessAt) : now - WINDOW_MS;
+    const doneInbox = (io.listKimInboxItems ?? listKimInboxItems)(home, { status: 'open' }).filter(item =>
+      item.source === 'auto-progress-done' && (Date.parse(item.createdAt || item.lastAt) || 0) > inboxSince);
+    // kim の通常台帳も許可済み progress-digest 経路へ push する。会話開始待ちに戻さない。
+    if (label === 'kim-PC' && localOwner === 'kim@orgiast.jp' && !cases.text && !pending.length && !doneInbox.length && !deadlineText && !rows.some(row => row.check && Date.parse(row.deadlineAt) - now >= 12 * 3600000)) return { sent: false, count: 0, skipped: 'session-context-only' };
     const groups = new Map();
-    const group = owner => { const key = String(owner || localOwner).trim().toLowerCase(); if (!groups.has(key)) groups.set(key, { rows: [], pending: [] }); return groups.get(key); };
+    const group = owner => { const key = String(owner || localOwner).trim().toLowerCase(); if (!groups.has(key)) groups.set(key, { rows: [], pending: [], inbox: [] }); return groups.get(key); };
     for (const row of rows) group(row.owner).rows.push(row);
     for (const row of pending) group(row.owner).pending.push(row);
+    for (const item of doneInbox) group(localOwner).inbox.push(item);
     if (cases.text || deadlineText) group(localOwner);
     const changed = rows.some(row => state.lastVerdicts?.[rowKey(row)] !== verdictOf(row, now) || state.lastKim?.[rowKey(row)] !== kimAction(row) || state.lastWaiting?.[rowKey(row)] !== isHumanActionRequired(row));
-    if (currentSlot === '夕' && !changed && !pending.length && !cases.text) return { sent: false, count: 0 };
-    const count = rows.length + pending.length + Object.keys(cases.checkpoints).length;
+    if (currentSlot === '夕' && !changed && !pending.length && !doneInbox.length && !cases.text) return { sent: false, count: 0 };
+    const count = rows.length + pending.length + doneInbox.length + Object.keys(cases.checkpoints).length;
     if (!groups.size) return { sent: false, count: 0 };
     const deliveredOwners = new Set(state.slotOwners?.[key] || []);
     const receipts = [], messages = [];
@@ -344,10 +349,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       let result;
       try {
         if (io.notify) result = await io.notify(text, options);
-        else if (deadlinePrefix) {
-          const item = await addDeadlineDigest(home, { kind: 'info', source: 'deadline-digest', text, dedupeKey: `deadline-digest:${key}` });
-          result = { delivered: 'session-inbox', id: item.id };
-        } else result = await (io.notifyOwner ?? notifyOwner)(owner, text, options);
+        else result = await (io.notifyOwner ?? notifyOwner)(owner, text, options);
       }
       catch (e) { result = { delivered: 'none', reason: String(e?.message || e) }; }
       const ok = ['dm', 'session-inbox', 'spooled', 'toast', 'inbox'].includes(result?.delivered);

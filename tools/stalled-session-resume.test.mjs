@@ -301,12 +301,15 @@ test('fair order uses oldest last night then score and age', async t => {
 });
 
 test('parallel execution excludes shared cwd and persists attempts before launch', async t => {
-  const f = await fixture(t, 4); f.records[2].cwd = path.join(f.io.home, 'other');
+  const f = await fixture(t, 4);
+  const otherDir = path.join(f.io.home, 'other');
+  await fs.mkdir(otherDir, { recursive: true });
+  f.records[2].cwd = otherDir;
   const active = new Set(); let max = 0;
   f.io.execute = async record => {
     assert.ok(!active.has(record.cwd)); active.add(record.cwd); max = Math.max(max, active.size);
     assert.equal((await f.ledger()).sessions[record.sessionId].attempts.at(-1).outcome, 'interrupted');
-    await new Promise(resolve => setTimeout(resolve, 20)); active.delete(record.cwd);
+    await new Promise(resolve => setTimeout(resolve, 200)); active.delete(record.cwd);
     return { outcome: 'progressed' };
   };
   const r = await run(options([], {}), f.io);

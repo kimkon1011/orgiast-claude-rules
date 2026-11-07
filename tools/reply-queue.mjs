@@ -245,22 +245,14 @@ export async function decide(home, id, { verdict, finalText, reason, now = new D
 }
 
 async function recordLearningLine(home, { now, id, item, verdict, final, ratio }) {
+  // 動的importによる循環（reply-learning.mjs → reply-queue.mjs → reply-learning.mjs）を避けるため、
+  // inline実装のみを使う（import-cycle.test.mjs の検査を通す）。
+  const learningPath = path.join(home, '.claude', 'reply-learning', 'corrections.jsonl');
   try {
-    // Try dynamic import for the learning module
-    try {
-      const { recordDecision } = await import('./reply-learning.mjs');
-      recordDecision(home, item, { now, source: 'chat' });
-      return;
-    } catch (error) {
-      if (error.code !== 'ENOENT' && error.code !== 'ERR_MODULE_NOT_FOUND') throw error;
-      // Fall through to legacy implementation
-    }
-
-    const learningPath = path.join(home, '.claude', 'reply-learning', 'corrections.jsonl');
     fs.mkdirSync(path.dirname(learningPath), { recursive: true });
     const rec = {
       ts: now.toISOString(), itemId: id, key: item.key,
-      channel: item.channel, from: { name: item.from.name, id: item.from.id, external: item.from.external },
+      channel: item.channel, from: item.from ? { name: item.from.name, id: item.from.id, external: item.from.external } : { name: null, id: null, external: null },
       category: item.category, received: item.body,
       draft: item.draft ? item.draft.text : null,
       final, verdict, reason: item.decision?.reason || null,

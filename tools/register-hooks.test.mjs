@@ -313,7 +313,7 @@ test('staleツリーパス・雑matcherのgemini MCP 使用量hookをrepo実フ�
 test('既存hookの恒久timeoutをイベント・パス表記を問わず収束する', () => {
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'register-timeouts-')), repo=path.resolve('.');
   const file=path.join(home,'.claude','settings.json'); fs.mkdirSync(path.dirname(file),{recursive:true});
-  const wanted=[['pretooluse-delegation-warn.mjs',5],['model-agent-guard.mjs',5],['pretooluse-serial-investigation.mjs',5],['current-session.mjs',5],['cost-loop.mjs',5],['rule-compliance-report.mjs',10],['next-actions-notice.mjs',10],['plaud-renewal-notice.mjs',5],['clear-ack.mjs',5],['verify-before-done-detector.ps1',10]];
+  const wanted=[['pretooluse-delegation-warn.mjs',5],['model-agent-guard.mjs',5],['pretooluse-serial-investigation.mjs',5],['current-session.mjs',5],['cost-loop.mjs',5],['rule-compliance-report.mjs',10],['next-actions-notice.mjs',10],['plaud-renewal-notice.mjs',300],['clear-ack.mjs',5],['verify-before-done-detector.ps1',10]];
   fs.writeFileSync(file,JSON.stringify({hooks:{Stop:wanted.map(([name])=>({hooks:[{type:'command',command:`pwsh -File "C:\\\\Users\\\\uers\\\\.claude\\\\hooks\\\\${name}"`}]}))}}));
   execFileSync(process.execPath,[path.join(repo,'tools','register-hooks.mjs'),'--hooks-only'],{env:{...process.env,ORGIAST_HOME:home,ORGIAST_REPO:repo}});
   const hooks=readHookSettings(file).hooks.Stop.flatMap((g)=>g.hooks||[]);

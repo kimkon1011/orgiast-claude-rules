@@ -2,6 +2,7 @@
 param([switch]$FunctionsOnly)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
+. (Join-Path $PSScriptRoot 'lib\Normalize-UserId.ps1')
 function Get-NightlyTaskDefinition($Task) {
     $triggers = @($Task.Triggers | ForEach-Object {
         [ordered]@{ Type = $_.CimClass.CimClassName; Time = ([datetime]$_.StartBoundary).ToString('HH:mm:ss');
@@ -11,7 +12,7 @@ function Get-NightlyTaskDefinition($Task) {
     [ordered]@{
         Actions = @($Task.Actions | ForEach-Object { [ordered]@{ Execute = $_.Execute; Arguments = $_.Arguments; WorkingDirectory = $_.WorkingDirectory } })
         Triggers = $triggers
-        User = $Task.Principal.UserId; Logon = [string]$Task.Principal.LogonType; RunLevel = [string]$Task.Principal.RunLevel
+        User = (Normalize-UserId $Task.Principal.UserId); Logon = [string]$Task.Principal.LogonType; RunLevel = [string]$Task.Principal.RunLevel
         Enabled = $Task.Settings.Enabled; Instances = [string]$Task.Settings.MultipleInstances
         Battery = $Task.Settings.DisallowStartIfOnBatteries; StopBattery = $Task.Settings.StopIfGoingOnBatteries
         StartWhenAvailable = $Task.Settings.StartWhenAvailable; Wake = $Task.Settings.WakeToRun

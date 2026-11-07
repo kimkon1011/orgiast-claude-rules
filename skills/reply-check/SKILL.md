@@ -13,7 +13,7 @@ description: 合言葉「返信チェック」。kim 宛で未返信の Messenge
 
 ## 0. Discord は自動（kim の承認なし・2026-11-06 kim 指示）
 
-※ この節の自動送信は `tools/discord-autoreply.mjs` の改修（段階 E）がマージされてから有効になる。マージ前は従来どおり @メンションへの【Claude自動返信】だけが動く。
+※ PR #1685 にて段階 E（Discord 全件代理回答）はマージ済み。この節の内容が有効。
 
 kim 宛の Discord（@メンション・kim の発言への返信・「金さん／キムさん／kim さん」の呼びかけ・Bot 代筆 DM への相手の返信・Bot が参加しているグループ DM）は、`tools/discord-autoreply.mjs`（定期タスク OrgiastDiscordAutoReply、5 分ごと）が **全件をキューへ積み、08:00〜21:00 JST に承認なしで自動送信**する。
 

@@ -82,7 +82,7 @@ test('kim-PC以外・未知PCは副作用なし、既存ラベル設定で主PC�
   assert.equal(fs.existsSync(path.join(f.dir, 'logs')), false);
 });
 
-test('日次はscout --once→上限付きモデル別eval→保存済み提案、同日二重実行なし・翌日繰越', async t => {
+test('日次はscout --once→上限付きモデル別eval（提案は子プロセス内で完結）、同日二重実行なし・翌日繰越', async t => {
   const f = fixture(t), calls = [];
   let tick = 0, proposed = 0;
   const opts = { home: f.home, now, max: 2, log: () => {}, propose: async () => { proposed++; }, spawnImpl: (_exe, args, options) => {
@@ -98,7 +98,8 @@ test('日次はscout --once→上限付きモデル別eval→保存済み提案�
     return { status: 0 };
   } };
   assert.equal((await runDailyScout(opts)).evaluated, 2);
-  assert.equal(proposed, 1);
+  // propose は runDailyScout からは呼ばれず（子プロセスの runScout 内で処理される）
+  assert.equal(proposed, 0);
   assert.equal((await runDailyScout(opts)).skipped, 'already-completed');
   assert.equal(calls.length, 3);
   assert.equal((await runDailyScout({ ...opts, now: new Date('2026-10-16T18:00:00Z') })).evaluated, 2);

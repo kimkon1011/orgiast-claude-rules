@@ -65,6 +65,14 @@ test('両単価が同額以下かつ片方が安く、文脈が同等以上のte
   assert.deepEqual(result.candidates.map((m) => m.id), ['cheap']);
   assert.equal(result.warnings.length, 1);
 });
+test('selectCandidates は :batch と :free サフィックスを安価候補から除外する', () => {
+  const base = model('base', 30), cheap = model('cheap', 1, 0.0000005, 0.000001);
+  const batch = { ...cheap, id: 'vendor/cheap:batch' }, free = { ...cheap, id: 'vendor/cheap:free' };
+  const routing = { categories: { code: { provider: 'openrouter', model: 'base' } } };
+  const result = selectCandidates([cheap, batch, free], [base], routing);
+  // cheap only: batch and free must be filtered out
+  assert.deepEqual(result.candidates.map((m) => m.id), ['cheap']);
+});
 test('候補ゼロでも notifyKim 経由で DM を1通送る（fetchモック）', async (t) => {
   const f = fixture(t), posts = [];
   const result = await runScout({ ...f.options, fetchImpl: async () => ({ ok: true, json: async () => catalog([f.baseline]) }),

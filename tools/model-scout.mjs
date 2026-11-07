@@ -82,7 +82,7 @@ export function selectCandidates(changes, models, routing, { includeQuality = fa
     if (!price || (!includeQuality && !context)) { warnings.push(`${category}: ${route.provider}/${route.model} の単価または文脈長が不明のため比較保留。`); continue; }
     baselines.push({ category, route, price, context });
   }
-  const candidates = changes.filter((m) => m.modality.split('->')[0]?.split('+').includes('text') && m.modality.split('->')[1] === 'text')
+  const candidates = changes.filter((m) => !/:(batch|free)$/.test(m.id) && m.modality.split('->')[0]?.split('+').includes('text') && m.modality.split('->')[1] === 'text')
     .map((model) => ({ ...model, replacements: baselines.filter(({ route, price, context }) =>
       !(route.provider === 'openrouter' && route.model === model.id) &&
       (includeQuality || (model.context_length >= context && model.pricing.prompt * 1e6 <= price[0] && model.pricing.completion * 1e6 <= price[1] &&

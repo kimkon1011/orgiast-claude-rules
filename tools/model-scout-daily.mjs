@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { userHome, readConfig } from './lib/eval-config.mjs';
-import { frontierLimit, proposeSavedEvaluations } from './model-scout.mjs';
+import { frontierLimit } from './model-scout.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -72,7 +72,7 @@ export function unmeasuredGiveUpIds(rows, { now = new Date(), days = 14, limit =
   return new Set([...counts.entries()].filter(([, count]) => count >= limit).map(([id]) => id));
 }
 export async function runDailyScout({ home = process.env.ORGIAST_HOME || userHome(), now = new Date(),
-  label, spawnImpl = spawnSync, propose = proposeSavedEvaluations, max = frontierLimit(), log = console.log } = {}) {
+  label, spawnImpl = spawnSync, max = frontierLimit(), log = console.log } = {}) {
   // auto-progress-digest と同じ1台限定判定。未設定・未知のPCでは実行しない。
   if ((label ?? resolveFleetLabel(home)) !== 'kim-PC') return { ok: true, skipped: 'not-kim-pc' };
   const dir = path.join(home, '.claude'), logs = path.join(dir, 'logs');
@@ -144,7 +144,7 @@ export async function runDailyScout({ home = process.env.ORGIAST_HOME || userHom
       } else if (remaining.length) record(`model-scout 評価打ち切り（計測不能2回）: ${candidateClean}`);
       else record(`model-scout eval 完了: ${candidateClean}`);
     }
-    await propose({ home, resultsFile, configFile, log: record });
+    // 提案は子プロセス(model-scout.mjs --once)の runScout 内で既に行われている。ここでは二重提案を防ぐため呼ばない。
     if (failed) throw new Error('未評価候補が残ったため未完了（次回1回だけ再試行）');
     const temp = `${dailyFile}.${process.pid}.tmp`;
     fs.writeFileSync(temp, JSON.stringify({ completedAt: now.toISOString(), evaluated: targets.length }) + '\n');

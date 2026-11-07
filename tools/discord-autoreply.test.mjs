@@ -494,3 +494,29 @@ test('権限喪失でもdry-runは通知・state更新をしない', async t => 
   assert.equal(f.notifications.length, 0);
   assert.equal(fs.readFileSync(f.file('state.json'), 'utf8'), before);
 });
+
+test('gap-check: 対象メッセージ数とキュー登録数を返す', async t => {
+  const f = fixture(t, { messages: [
+    message({ id: '101', content: `<@${KIM}> 質問1`, timestamp: new Date(NOW - 1000).toISOString() }),
+    message({ id: '102', content: `<@${KIM}> 質問2`, timestamp: new Date(NOW - 2000).toISOString() }),
+    message({ id: '103', content: `<@${KIM}> 質問3`, timestamp: new Date(NOW - 10 * 86400000).toISOString() }),
+  ] });
+  const queueDir = path.join(f.home, '.claude', 'reply-queue');
+  fs.mkdirSync(queueDir, { recursive: true });
+  const queueItems = {};
+  for (const id of ['101', '102']) {
+    queueItems[`rq-${id}`] = {
+      id: `rq-${id}`, key: `discord:channel:${id}`,
+      channel: 'discord', thread: 'channel', message: id,
+      from: { name: '田中', id: 'member', external: false },
+      body: 'test', state: 'queued',
+    };
+  }
+  fs.writeFileSync(path.join(queueDir, 'queue.json'), JSON.stringify({ version: 1, items: queueItems }, null, 2));
+
+  const out = [];
+  await main(['gap-check', '--days', '7'], { ...f.options, print: v => out.push(v) });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].targets, 2);
+  assert.equal(out[0].enqueued, 2);
+});

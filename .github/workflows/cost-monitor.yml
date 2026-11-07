@@ -3,9 +3,12 @@ on:
   schedule:
     - cron: '0 23 * * *'   # 毎日 23:00 UTC = 08:00 JST
   workflow_dispatch: {}     # 手動発火(検証用)
+permissions:
+  contents: read
 jobs:
   report:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -16,6 +16,42 @@ test('AI Studio の手渡しはアカウントが必須', () => {
   assert.deepEqual(judge(`こちらを開いてください: ${studio}${account}`), { triggered: true, missing: [], urls: [studio] });
 });
 
+test('名簿にないログイン画面もアカウントが必須（2026-11-01 Codex・LINE で素通り）', () => {
+  for (const url of ['https://auth.openai.com/codex/device', 'https://manager.line.biz/', 'https://accounts.google.com/', 'https://example.com/oauth/authorize?x=1']) {
+    assert.deepEqual(judge(`[画面](${url})`).missing, [url], url);
+    assert.deepEqual(judge(`**nishi@orgiast.jp** で開く: [画面](${url})`).missing, [], url);
+  }
+});
+
+test('手順で開かせる URL はドメインを問わずアカウントが必須、出典行は対象外', () => {
+  const url = 'https://example.com/settings-page';
+  assert.deepEqual(judge(`1. このリンクを開く → [設定](${url})`).missing, [url]);
+  assert.deepEqual(judge(`手順: 次を開いてください。\n[設定](${url})`).missing, [url]);
+  assert.deepEqual(judge(`**nishi@orgiast.jp** で開いてください。\n[設定](${url})`).missing, []);
+  assert.deepEqual(judge(`出典: [料金ページ](https://www.lycbiz.com/jp/service/line-official-account/plan/) を開いて確認`).missing, []);
+  assert.deepEqual(judge(`[料金ページ](https://www.lycbiz.com/jp/service/line-official-account/plan/)`).triggered, false);
+});
+
+test('誤検知しない: 表の説明中の参考記事・ログイン不要の明記・インラインコードの URL', () => {
+  assert.deepEqual(judge('| ① ログインしてもらい、私が送る | ¥0 | チャットから送れるとする解説記事あり（[ligla](https://ligla.jp/blog/line-official/filesend/)） |').missing, []);
+  assert.deepEqual(judge('どのアカウントでも可（ログイン不要）で開く: [商品ページ](https://shop.tsukumo.co.jp/goods/4580333595696/)').missing, []);
+  assert.deepEqual(judge('- アクセスしたところ `302 → https://account.line.biz/oauth2/authorize?x` に移動しました').missing, []);
+});
+
+test('誤検知しない: 解説サイトの /oauth2 パス・「参考:」の次の行の URL（2026-11-01 レビュー指摘）', () => {
+  assert.equal(judge('[OAuth 2.0 の解説](https://developers.google.com/identity/protocols/oauth2)').triggered, false);
+  assert.deepEqual(judge('参考:\nhttps://example.com/oauth/authorize').missing, []);
+  assert.deepEqual(judge('https://example.com/oauth/authorize').missing, ['https://example.com/oauth/authorize']);
+  assert.deepEqual(judge('出典: [ログイン画面](https://auth.openai.com/codex/device)').missing, []);
+  assert.deepEqual(judge('[ログイン画面](https://auth.openai.com/codex/device)').missing, ['https://auth.openai.com/codex/device']);
+});
+
+test('開いた後の行にアカウントを書いても通さない', () => {
+  const url = 'https://auth.openai.com/codex/device';
+  const text = `1. ブラウザで ${url} が開きます。\n2. コードを貼ります。\n3. nishi@orgiast.jp で「Google で続行」を押します。`;
+  assert.deepEqual(judge(text).missing, [url]);
+});
+
 test('全体宣言は離れた複数 URL にも適用', () => {
   for (const phrase of ['すべて', '全部', 'いずれも', 'どの URL も', '以下の URL は']) {
     assert.deepEqual(judge(`${phrase} **seisaku-team@orgiast.jp** で開く\n\n\n\nhttps://github.com/org/a\nhttps://github.com/org/b`).missing, []);
@@ -55,11 +91,10 @@ test('Workspace は明示アカウントのある URL のみ免除', () => {
   }
 });
 
-test('前後2行は許可、3行離れたアカウントは不可', () => {
+test('同じ行か直前の行だけ許可、後ろの行や2行以上前のアカウントは不可', () => {
   for (const distance of [0, 1, 2, 3]) {
-    for (const lines of [[studio, account], [account, studio]]) {
-      assert.deepEqual(judge(lines.join('\n'.repeat(distance))).missing, distance <= 2 ? [] : [studio]);
-    }
+    assert.deepEqual(judge([studio, account].join('\n'.repeat(distance))).missing, distance === 0 ? [] : [studio]);
+    assert.deepEqual(judge([account, studio].join('\n'.repeat(distance))).missing, distance <= 1 ? [] : [studio]);
   }
   assert.deepEqual(judge(`${studio}\n\n\nhttps://github.com/org/repo ${account}`).missing, [studio]);
 });

@@ -1,3 +1,4 @@
+import { loadAllowlist } from './kim-discord-allowlist.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveDiscordBotToken } from '../notify-kim.mjs';
@@ -15,7 +16,8 @@ export async function postToChannel(token, channelId, content, fetchImpl = globa
   });
   if (!response.ok) throw new Error(`Discord HTTP ${response.status}`);
 }
-export async function notifyArrival(mail, { home, label, category, fetchImpl = globalThis.fetch, stderr = console.error, token = resolveDiscordBotToken(home), signal = AbortSignal.timeout(ARRIVAL_TIMEOUT_MS) } = {}) {
+export async function notifyArrival(mail, { home, label, category, allowlist, fetchImpl = globalThis.fetch, stderr = console.error, token = resolveDiscordBotToken(home), signal = AbortSignal.timeout(ARRIVAL_TIMEOUT_MS) } = {}) {
+  if (!(allowlist ?? loadAllowlist({ home })).some(entry => entry.category === 'fleet-arrival')) { stderr('fleet-mail: 到着通知は kim-inbox 方針で停止'); return false; }
   const kind = category === 0 ? '[判断依頼]' : /\[作業依頼\]/.test(mail.why || '') || /^\s*\[作業依頼\]/.test(mail.body || '') ? '[作業依頼]' : 'urgent';
   const oneLine = value => redactSecrets(String(value || '')).replace(/\s+/g, ' ');
   const content = `${oneLine(label)} 宛 ${kind} 到着: ${oneLine(mail.why).slice(0, 60)} / ${oneLine(mail.id)} [fleet-arrival]`;

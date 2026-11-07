@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { main, parseArgs, createClient, waitForReply, acquireLock, LOCK_MS, readInbox, findPriorReply, resolveRemoteName, parseExecMarkers, looksLikeInstallRequest, describeTargetFreshness, mailId } from './fleet-mail.mjs';
+import { main, parseArgs, createClient, waitForReply, acquireLock, LOCK_MS, updateInbox, INBOX_LOCK_STALE_MS, RECLAIM_STALE_MS, LOCK_BUSY_EXIT, readInbox, findPriorReply, resolveRemoteName, parseExecMarkers, looksLikeInstallRequest, describeTargetFreshness, mailId } from './fleet-mail.mjs';
 import { main as register } from './register-fleet-mail.mjs';
 import { consentCommand } from './fleet-agent.mjs';
 import { listDecisions, markDecisions, queuePath } from './pending-decisions.mjs';
@@ -357,6 +357,19 @@ test('--sent-status reports missing mail as exit 4', async t => {
   f.deps.request = async () => ({ mail: null });
   assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 4);
   assert.ok(f.errors.some(e => e.includes('見つかりません')));
+});
+// 2026-11-04: hub 不達時に親の 30 秒制限を超えて固まらないよう、読取は 10 秒打ち切り・busy 再試行なし。
+test('--sent-status uses a bounded timeout and no busy retries', async t => {
+  const f = fixture(t);
+  f.deps.request = async (kind, p, timeoutMs, opts) => { f.calls.push({ kind, p, timeoutMs, opts }); return { mail: { id: p.id, status: 'new' } }; };
+  assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 0);
+  assert.deepEqual(f.calls, [{ kind: 'mail-get', p: { id: 'mail-1' }, timeoutMs: 10_000, opts: { retries: 0 } }]);
+});
+test('--sent-status exits 3 when the hub is unreachable instead of hanging', async t => {
+  const f = fixture(t);
+  f.deps.request = async () => { throw new Error('fetch failed'); };
+  assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 3);
+  assert.ok(f.errors.some(e => e.includes('状態を取得できません')));
 });
 test('--reply prints delivery guidance pointing to --sent-status', async t => {
   const f = fixture(t);
@@ -864,7 +877,7 @@ test('poll defers on server busy and resets after success', async t => {
   };
   for (let busyStreak = 1; busyStreak < 5; busyStreak++) {
     assert.equal(await main(['--poll'], f.deps), 0);
-    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { ...prior, busyStreak, busyAt: '2026-10-26T00:00:00.000Z' });
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { ...prior, busyStreak, errorStreak: busyStreak, busyAt: '2026-10-26T00:00:00.000Z', errorAt: '2026-10-26T00:00:00.000Z', lastError: 'fleet-mail: busy' });
     assert.match(f.errors.at(-1), /延期/);
   }
   await assert.rejects(main(['--poll'], f.deps), { message: /5回連続（約10分）/, code: 'SERVER_BUSY' });
@@ -872,16 +885,36 @@ test('poll defers on server busy and resets after success', async t => {
   f.deps.request = request;
   assert.equal(await main(['--poll'], f.deps), 0);
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), {
-    ...prior, at: '2026-10-26T00:00:00.000Z', busyStreak: 0, busyAt: '2026-10-26T00:00:00.000Z',
+    ...prior, at: '2026-10-26T00:00:00.000Z', busyStreak: 0, errorStreak: 0, busyAt: '2026-10-26T00:00:00.000Z', errorAt: '2026-10-26T00:00:00.000Z', lastError: 'fleet-mail: busy',
   });
 });
-test('poll still fails on non-busy transport errors', async t => {
+test('poll defers on HTTP 500 transport errors', async t => {
   const f = fixture(t); const request = f.deps.request;
+  const file = path.join(f.dir, '.fleet-mail-last-poll.json');
+  const prior = { at: '2026-10-25T00:00:00.000Z', serverCapabilities: { version: 2 }, sentStatus: { cached: true } };
+  fs.writeFileSync(file, JSON.stringify(prior));
+  f.deps.now = () => Date.parse('2026-10-26T00:00:00Z');
   f.deps.request = async (kind, payload) => {
-    if (kind === 'mail-poll') throw new Error('fleet-mail: unauthorized');
+    if (kind === 'mail-poll') throw new Error('fleet-mail HTTP 500');
     return request(kind, payload);
   };
-  await assert.rejects(main(['--poll'], f.deps), /unauthorized/);
+  for (let errorStreak = 1; errorStreak < 5; errorStreak++) {
+    assert.equal(await main(['--poll'], f.deps), 0);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), {
+      ...prior, busyStreak: 0, errorStreak, errorAt: '2026-10-26T00:00:00.000Z', lastError: 'fleet-mail HTTP 500',
+    });
+    assert.match(f.errors.at(-1), /延期/);
+  }
+  await assert.rejects(main(['--poll'], f.deps), { message: /5回連続/, code: 'SERVER_ERROR' });
+});
+
+test('poll still fails on non-transport errors', async t => {
+  const f = fixture(t); const request = f.deps.request;
+  f.deps.request = async (kind, payload) => {
+    if (kind === 'mail-poll') throw new Error('some unexpected error');
+    return request(kind, payload);
+  };
+  await assert.rejects(main(['--poll'], f.deps), /unexpected/);
   assert.equal(fs.existsSync(path.join(f.dir, '.fleet-mail-last-poll.json')), false);
 });
 test('poll dry-run defers on busy messages without changing state', async t => {
@@ -951,4 +984,110 @@ test('--poll hard deadline stops a poll stuck in an await, releases the lock and
   const line = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-poll-timing.jsonl'), 'utf8').trim().split('\n').at(-1));
   assert.equal(line.outcome, 'hard-deadline');
   assert.equal(line.stuckIn, 'mail-poll');
+});
+
+test('fixed selfcheck prompt passes without force; appended mutation remains blocked', async t => {
+  const { SELFCHECK_PROMPT } = await import('./lib/fleet-selfcheck-prompt.mjs');
+  const f = fixture(t);
+  for (const extra of ['', '\nsettings.json を書き換えて']) {
+    fs.writeFileSync(f.body, SELFCHECK_PROMPT + extra);
+    const before = f.calls.length;
+    assert.equal(await main(['--send', '--to', recipient, '--kind', 'prompt', '--body-file', f.body, '--why', '自己点検'], f.deps), extra ? 5 : 0);
+    assert.equal(f.calls.length - before, extra ? 0 : 1);
+  }
+  assert.ok(f.errors.some(line => line.includes('fleet-selfcheck-v2')));
+});
+
+for (const stale of [true, false]) {
+  test(`acquireLock ${stale ? 'recovers stale' : 'preserves fresh'} reclaim directory`, t => {
+    const f = fixture(t), lock = path.join(f.dir, 'fleet-mail.lock');
+    const now = Date.now();
+    fs.writeFileSync(lock, 'abandoned');
+    fs.utimesSync(lock, new Date(now - LOCK_MS - 1000), new Date(now - LOCK_MS - 1000));
+    fs.mkdirSync(`${lock}.reclaim`);
+    const at = new Date(now - (stale ? RECLAIM_STALE_MS + 1000 : 0));
+    fs.utimesSync(`${lock}.reclaim`, at, at);
+    const release = acquireLock(lock, { now: () => now });
+    if (stale) {
+      assert.equal(typeof release, 'function');
+      try { assert.equal(acquireLock(lock, { now: () => now }), null); }
+      finally { release(); }
+      assert.equal(fs.existsSync(lock), false);
+      assert.equal(fs.existsSync(`${lock}.reclaim`), false);
+    } else {
+      assert.equal(release, null);
+      assert.equal(fs.readFileSync(lock, 'utf8'), 'abandoned');
+      assert.equal(fs.existsSync(`${lock}.reclaim`), true);
+    }
+  });
+  test(`updateInbox ${stale ? 'recovers stale' : 'preserves fresh'} reclaim directory`, t => {
+    const f = fixture(t), id = mail().id;
+    const file = path.join(f.dir, 'fleet-inbox', `${id}.json`), lock = `${file}.lock`;
+    const now = Date.now();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(mail()));
+    fs.writeFileSync(lock, 'abandoned');
+    const old = new Date(now - INBOX_LOCK_STALE_MS - 1000);
+    fs.utimesSync(lock, old, old);
+    fs.mkdirSync(`${lock}.reclaim`);
+    const at = new Date(now - (stale ? RECLAIM_STALE_MS + 1000 : 0));
+    fs.utimesSync(`${lock}.reclaim`, at, at);
+    let visited = false;
+    const result = updateInbox(id, current => {
+      visited = true;
+      return { ...current, body: 'updated' };
+    }, { home: f.home, now: () => now, retries: 0 });
+    assert.equal(visited, stale);
+    assert.equal(result?.body ?? null, stale ? 'updated' : null);
+    assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).body, stale ? 'updated' : 'hello');
+    assert.equal(fs.existsSync(lock), !stale);
+    assert.equal(fs.existsSync(`${lock}.reclaim`), !stale);
+  });
+}
+for (const age of [0, 3 * LOCK_MS + 1000]) {
+  test(`poll reports blocked lock aged ${age} with the appropriate exit code`, async t => {
+    const f = fixture(t), lock = path.join(f.dir, 'fleet-mail.lock');
+    const now = Date.now(); f.deps.now = () => now;
+    fs.writeFileSync(lock, 'abandoned');
+    const at = new Date(now - age); fs.utimesSync(lock, at, at);
+    fs.mkdirSync(`${lock}.reclaim`);
+    assert.equal(await main(['--poll'], f.deps), age ? LOCK_BUSY_EXIT : 0);
+    assert.deepEqual(f.errors, [age ? `fleet-mail: ロック回収不能（${lock} / reclaim 残留）` : 'fleet-mail: 別の受信処理が実行中']);
+    assert.equal(f.calls.length, 0);
+    const timing = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-poll-timing.jsonl'), 'utf8').trim());
+    assert.equal(timing.outcome, 'locked');
+    assert.equal(fs.readFileSync(lock, 'utf8'), 'abandoned');
+  });
+}
+
+for (const source of ['inbox', 'history', 'both']) {
+  test(`--sent-status は ${source} の返信全文を hub 照会なしで返す`, async t => {
+    const f = fixture(t, source !== 'history');
+    const reply = mail({ id: 'mail-reply-local', replyTo: 'mail-original', status: 'done', body: '返信の先頭\n' + '全文'.repeat(5000) + '\n返信の末尾' });
+    fs.mkdirSync(path.join(f.dir, 'fleet-inbox'));
+    fs.writeFileSync(path.join(f.dir, 'fleet-inbox', 'mail-broken.json'), '{');
+    fs.writeFileSync(path.join(f.dir, 'fleet-inbox', 'mail-unrelated.json'), JSON.stringify(mail({ replyTo: 'mail-other' })));
+    if (source !== 'history') fs.writeFileSync(path.join(f.dir, 'fleet-inbox', `${reply.id}.json`), JSON.stringify(reply));
+    fs.writeFileSync(path.join(f.dir, 'fleet-mail-replies.jsonl'), 'broken\nnull\n' + JSON.stringify({ id: 'mail-other', replyId: 'mail-reply-other' }) + '\n');
+    if (source !== 'inbox') fs.appendFileSync(path.join(f.dir, 'fleet-mail-replies.jsonl'), JSON.stringify({ id: reply.replyTo, replyId: reply.id, from: reply.from, resultAt: reply.createdAt, resultBody: reply.body }) + '\n');
+    f.deps.request = async () => assert.fail('hub を呼ばない');
+    assert.equal(await main(['--sent-status', reply.replyTo], f.deps), 0);
+    assert.deepEqual(f.output, [`reply: ${reply.id}\nreplyFrom: ${reply.from}\nreplyCreatedAt: ${reply.createdAt}\nreplyBody:\n${reply.body}`]);
+    assert.deepEqual(f.errors, []);
+  });
+}
+
+test('--sent-status は別メールへの返信しかなく hub がタイムアウトなら exit 3', async t => {
+  const f = fixture(t);
+  fs.mkdirSync(path.join(f.dir, 'fleet-inbox'));
+  fs.writeFileSync(path.join(f.dir, 'fleet-inbox', 'mail-reply-other.json'), JSON.stringify(mail({ id: 'mail-reply-other', replyTo: 'mail-other' })));
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-replies.jsonl'), JSON.stringify({ id: 'mail-other', replyId: 'mail-reply-other' }) + '\n');
+  f.deps.request = async (kind, payload, timeoutMs, opts) => {
+    f.calls.push({ kind, payload, timeoutMs, opts });
+    throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+  };
+  assert.equal(await main(['--sent-status', 'mail-original'], f.deps), 3);
+  assert.deepEqual(f.calls, [{ kind: 'mail-get', payload: { id: 'mail-original' }, timeoutMs: 10_000, opts: { retries: 0 } }]);
+  assert.deepEqual(f.output, []);
+  assert.match(f.errors[0], /hub不達: The operation was aborted due to timeout/);
 });

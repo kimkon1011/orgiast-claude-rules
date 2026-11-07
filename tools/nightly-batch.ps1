@@ -20,10 +20,23 @@ function Format-NightlyDetail($Output) {
 # ステップの出力を捕捉し、失敗時は理由を1行でログに残す。
 # $Output は呼び出し側が @(& ... 2>&1) で受け取った配列。
 function Write-NightlyStepResult([string]$Step, [int]$ExitCode, $Output, [string]$Note = '') {
-    if ($ExitCode -eq 0) { Write-NightlyLog $Step 'ok'; return }
+    if ($ExitCode -eq 0) {
+        # fleet sheet の busy 再送を使い切ったジョブは exit 0 で戻る（夜間バッチは止めない）。
+        # ただし「ok」と書くと台帳へ届いていないのに成功したように見えるので警告として残す。
+        $busy = Get-NightlyBusyWarning $Output
+        if ($busy) { Write-NightlyLog $Step ('警告:' + $busy); return }
+        Write-NightlyLog $Step 'ok'; return
+    }
     $reason = Format-NightlyDetail $Output
     Write-NightlyLog $Step ('error:終了コード' + $ExitCode + $Note + ': ' + $reason)
     Write-Warning ("nightly-batch: " + $Step + " exited " + $ExitCode + ': ' + ($reason))
+}
+# tools/lib/fleet-sheet-post.mjs が出す busy_exhausted 行を拾う。
+function Get-NightlyBusyWarning($Output) {
+    if (-not $Output) { return '' }
+    $line = @($Output | ForEach-Object { "$_" } | Where-Object { $_ -match 'busy_exhausted' } | Select-Object -Last 1)
+    if ($line.Count -eq 0) { return '' }
+    return ([string]$line[0]).Trim()
 }
 function Finish-Nightly([int]$Code) {
     # Run once after the nightly jobs, including empty-queue and error exits.
@@ -140,12 +153,8 @@ try {
         $triageOutput = @(& $node.Source (Join-Path $PSScriptRoot 'session-triage.mjs') --md (Join-Path $HOME '.claude/session-triage.md') 2>&1)
         $triageExit = $LASTEXITCODE
         Write-NightlyStepResult 'session-triage' $triageExit $triageOutput
-        if ($triageExit -eq 0) {
-            $resumeOutput = @(& $node.Source (Join-Path $PSScriptRoot 'stalled-session-resume.mjs') 2>&1)
-            $resumeExit = $LASTEXITCODE
-            Write-NightlyStepResult 'stalled-session-resume' $resumeExit $resumeOutput
-        } else { Write-NightlyLog 'stalled-session-resume' 'skip:triage failed' }
-    } catch { Write-NightlyLog 'stalled-session-resume' ('error:' + $_.Exception.Message) }
+    } catch { Write-NightlyLog 'session-triage' ('error:' + $_.Exception.Message) }
+    Write-NightlyLog 'stalled-session-resume' 'moved:OrgiastStalledSessionSweep'
 
     $memoryIndexCompact = $null
     foreach ($repo in $repos) {
@@ -609,9 +618,15 @@ try {
             $keyserveOutput = @(& $node.Source $keyserveStatus --json 2>$null | Select-Object -Last 1)
             if ($keyserveOutput.Count -eq 0) { throw 'JSON出力なし' }
             $env:ORGIAST_KEYSERVE_STATUS_JSON = [string]$keyserveOutput[0]
-            try { & $node.Source $fleetSheetReport --no-jitter *> $null } finally { Remove-Item Env:ORGIAST_KEYSERVE_STATUS_JSON -ErrorAction SilentlyContinue }
-            if ($LASTEXITCODE -ne 0) { throw ('fleet-sheet-report 終了コード' + $LASTEXITCODE) }
-            Write-NightlyLog 'keyserve-status' 'ok'
+            $fleetSheetOutput = $null
+            $fleetSheetExit = 1
+            try {
+                $fleetSheetOutput = @(& $node.Source $fleetSheetReport --no-jitter 2>&1)
+                $fleetSheetExit = $LASTEXITCODE
+            } finally { Remove-Item Env:ORGIAST_KEYSERVE_STATUS_JSON -ErrorAction SilentlyContinue }
+            if ($fleetSheetExit -ne 0) { throw ('fleet-sheet-report 終了コード' + $fleetSheetExit) }
+            $busy = Get-NightlyBusyWarning $fleetSheetOutput
+            if ($busy) { Write-NightlyLog 'keyserve-status' ('警告:' + $busy) } else { Write-NightlyLog 'keyserve-status' 'ok' }
         } catch {
             Remove-Item Env:ORGIAST_KEYSERVE_STATUS_JSON -ErrorAction SilentlyContinue
             Write-NightlyLog 'keyserve-status' ('error:' + $_.Exception.Message)
@@ -704,6 +719,32 @@ try {
             Write-Warning ("nightly-batch: cafe-digest-deliver: " + $_.Exception.Message)
         }
     } else { $summary['cafe-digest-deliver'] = 'skip:ファイルなし'; Write-NightlyLog 'cafe-digest-deliver' 'skip:ファイルなし' }
+
+    $xTips = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\x-ai-tips-collect.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $xTips = $candidate; break }
+    }
+    if ($xTips) {
+        try {
+            $xTipsOutput = @(& $node.Source $xTips '--limit' '8' 2>&1)
+            $xTipsExitCode = $LASTEXITCODE
+            if ($xTipsExitCode -ne 0) {
+                $xTipsResult = 'error:終了コード' + $xTipsExitCode + ': ' + (Format-NightlyDetail $xTipsOutput)
+            } else {
+                $xTipsResult = @($xTipsOutput | Where-Object { $_ -match '^(ok:取得\d+件 追加\d+件 重複\d+件 費用\$[0-9.]+|skip:.+|error:.+)$' } | Select-Object -Last 1)
+                if ($xTipsResult.Count -eq 0) { $xTipsResult = 'error:状態不明' } else { $xTipsResult = [string]$xTipsResult[0] }
+            }
+            $summary['x-ai-tips-collect'] = $xTipsResult
+            Write-NightlyLog 'x-ai-tips-collect' $xTipsResult
+        } catch {
+            $summary['x-ai-tips-collect'] = ("error:" + $_.Exception.Message); Write-NightlyLog 'x-ai-tips-collect' $summary['x-ai-tips-collect']
+            Write-Warning ("nightly-batch: x-ai-tips-collect: " + $_.Exception.Message)
+        }
+    } else {
+        $summary['x-ai-tips-collect'] = 'skip:ファイルなし'
+        Write-NightlyLog 'x-ai-tips-collect' 'skip:ファイルなし'
+    }
 
     $triage = $null
     foreach ($repo in $repos) {

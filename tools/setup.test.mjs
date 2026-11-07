@@ -1,9 +1,10 @@
+import { readHookSettings } from './fixtures/read-hook-settings.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
@@ -98,14 +99,63 @@ test('win32: command type resolves .cmd shims (npm-installed CLIs like codex)', 
   assert.equal(JSON.parse(result.stdout).items[0].status, 'OK');
 });
 
+test('git-origin: 未配置はNOTICE・届かないURL/認証エラーはNG・ネットワーク断はNOTICE・ローカルリモートはOK', (t) => {
+  const home = temp('setup-git-origin-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([item('repo:rules-origin', 'git-origin', { path: '.claude/nightly-repo' }, 'required', { repair: ['access-doctor.mjs', '--origin-repair', '.claude/nightly-repo'] })])));
+  const status = (env = {}) => JSON.parse(run(['--json', '--home', home, '--manifest', mf], env).stdout).items[0].status;
+  // 未配置: 検査しない（bootstrap 後に評価される）
+  assert.equal(status(), 'NOTICE');
+  const bare = path.join(home, 'remote.git');
+  execFileSync('git', ['init', '--bare', bare], { stdio: 'pipe' });
+  const repo = path.join(home, '.claude', 'nightly-repo');
+  execFileSync('git', ['init', '-q', repo], { stdio: 'pipe' });
+  // 存在しないパスを origin に: not-found 扱い → NG（repair が向け替え対象になる）
+  execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', path.join(home, 'no-such-remote.git')], { stdio: 'pipe' });
+  assert.equal(status(), 'NG');
+  // 認証エラー（未認証が返す "could not read Username" は not-found と区別できない）→ NG
+  // ネットワークも認証UIも使わせないため、GIT_SSH_COMMAND に node のシムを渡す（OS 非依存）。
+  const sshDir = path.join(home, 'ssh');
+  fs.mkdirSync(sshDir, { recursive: true });
+  const denySsh = path.join(sshDir, 'deny-ssh.mjs');
+  const silentSsh = path.join(sshDir, 'silent-ssh.mjs');
+  write(denySsh, "import fs from 'node:fs';\nfs.writeSync(2, 'fatal: Permission denied (publickey).\\n');\nprocess.exit(255);\n");
+  write(silentSsh, 'process.exit(255);\n');
+  execFileSync('git', ['-C', repo, 'remote', 'set-url', 'origin', 'ssh://git@example.invalid/orgiast/nightly-repo.git'], { stdio: 'pipe' });
+  assert.equal(status({ GIT_SSH_COMMAND: `"${process.execPath}" "${denySsh}"` }), 'NG');
+  // ssh が空のまま失敗（= 接続不能相当）→ network 扱い → NOTICE
+  assert.equal(status({ GIT_SSH_COMMAND: `"${process.execPath}" "${silentSsh}"` }), 'NOTICE');
+  // ローカル bare リモートに届く → OK（ネットワーク不要）
+  execFileSync('git', ['-C', repo, 'remote', 'set-url', 'origin', bare], { stdio: 'pipe' });
+  assert.equal(status(), 'OK');
+});
+
 test('project manifest has unique known item types and severities', () => {
   const parsed = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8'));
   const ids = parsed.items.map((entry) => entry.id);
   assert.equal(new Set(ids).size, ids.length);
-  assert(parsed.items.every((entry) => ['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task'].includes(entry.type)));
+  assert(parsed.items.every((entry) => ['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task', 'git-origin'].includes(entry.type)));
   assert(parsed.items.every((entry) => ['required', 'optional', 'manual'].includes(entry.severity)));
   const outbound = parsed.items.find(entry => entry.id === 'settings:outbound-claim-evidence-gate');
-  assert.deepEqual(outbound.spec, { path: '.claude/settings.json', hookEvent: 'PreToolUse', hookScript: 'outbound-claim-evidence-gate.mjs', hookArgs: '', async: false, timeout: 10 });
+  assert.deepEqual(outbound.spec, { path: '.claude/settings.json', hookEvent: 'PreToolUse', hookScript: 'outbound-claim-evidence-gate.mjs', hookRunner: 'gate-hook-runner.mjs', hookArgs: '', async: false, timeout: 15 });
+});
+
+test('hook 検証は既知のリポ tools のどのパスでも通る', (t) => {
+  const home = temp('setup-known-tools-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const spec = { path: '.claude/settings.json', hookEvent: 'PreToolUse', hookScript: 'sample-gate.mjs', hookRunner: 'gate-hook-runner.mjs', hookArgs: '', async: false, timeout: 15 };
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([item('known-hook', 'json-valid', spec)])));
+  for (const toolsPath of [
+    path.join(home, 'orgiast-claude-rules', 'tools'),
+    path.join(home, '.claude', 'nightly-repo', 'tools'),
+    path.join(home, 'Downloads', 'orgiast-claude-rules', 'tools'),
+  ]) {
+    const command = `node "${path.join(toolsPath, spec.hookRunner)}" "${path.join(toolsPath, spec.hookScript)}"`;
+    write(path.join(home, spec.path), JSON.stringify({ hooks: { PreToolUse: [{ hooks: [{ type: 'command', command, timeout: 15 }] }] } }));
+    assert.equal(run(['--verify', '--home', home, '--manifest', mf]).status, 0);
+  }
 });
 
 test('converge実経路がhook登録・旧通知削除・allow反映を行い再実行で不変', (t) => {
@@ -120,7 +170,7 @@ test('converge実経路がhook登録・旧通知削除・allow反映を行い再
   const args = ['--converge', '--json', '--home', home, '--manifest', mf];
   const first = run(args);
   assert.equal(first.status, 0, first.stdout + first.stderr);
-  const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const settings = readHookSettings(file);
   assert(settings.permissions.allow.includes('Bash(gh pr:*)'));
   assert(settings.permissions.allow.includes('Bash(custom:*)'));
   assert(settings.permissions.deny.includes('Bash(git push -f*)'));
@@ -133,7 +183,7 @@ test('converge実経路がhook登録・旧通知削除・allow反映を行い再
   assert.match(hooks, /custom\.mjs/);
   assert.match(hooks, /setup\.mjs.*--converge/);
   assert.equal(run(args).status, 0);
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), settings);
+  assert.deepEqual(readHookSettings(file), settings);
 });
 
 test('fleet mail scheduled task is skipped until its transport config exists', () => {
@@ -292,7 +342,7 @@ test('E task:fleet-mail converge adds hub configuration even with the v2 migrati
   const result = run(['--converge', '--json', '--home', home, '--manifest', mf]);
   assert.equal(result.status, 0);
   assert.match(fs.readFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'utf8'), /FLEET_HUB=kim-PC/);
-  const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
+  const settings = readHookSettings(path.join(home, '.claude', 'settings.json'));
   assert.ok(settings.hooks.Stop.some(g => g.hooks.some(h => h.command.includes('fleet-question-relay.mjs') && h.timeout === 5)));
 });
 
@@ -370,3 +420,61 @@ for (const [name, change, expected] of [
     assert.equal(JSON.parse(result.stdout).items[0].status, expected);
   });
 }
+
+test('rule compliance missing task reaches manifest registrar on converge', async t => {
+  const home = temp('setup-rule-task-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const entry = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8')).items.find(x => x.id === 'task:rule-compliance');
+  assert.deepEqual(entry.repair, ['register-rule-compliance-task.mjs']);
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([entry])));
+  const fixture = path.join(home, 'tasks.json');
+  write(fixture, '{}');
+  const result = run(['--converge', '--json', '--home', home, '--manifest', mf], { ORGIAST_SETUP_TASK_INFO_FIXTURE: fixture });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).items[0].repaired, true);
+  const { main } = await import('./register-rule-compliance-task.mjs');
+  let called = false;
+  main({ platform: 'win32', spawnImpl(command, args) {
+    called = true;
+    assert.equal(command, 'powershell.exe');
+    assert.ok(args.at(-1).endsWith('register-rule-compliance-task.ps1'));
+    return { status: 0, stdout: '' };
+  } });
+  assert.equal(called, true);
+});
+
+
+test('outbound gate verifier accepts the actual registered wrapper and still rejects a missing hook', t => {
+  const home = temp('setup-outbound-wrapper-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const parsed = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8'));
+  const outbound = parsed.items.find(entry => entry.id === 'settings:outbound-claim-evidence-gate');
+  assert.equal(outbound.severity, 'required');
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([outbound])));
+  const registered = spawnSync(process.execPath, [path.join(toolsDir, 'register-hooks.mjs'), '--hooks-only'], {
+    encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: path.dirname(toolsDir) },
+  });
+  assert.equal(registered.status, 0, registered.stderr);
+  const verified = run(['--verify', '--home', home, '--manifest', mf]);
+  assert.equal(verified.status, 0, verified.stdout + verified.stderr);
+  write(path.join(home, '.claude/settings.json'), '{}');
+  assert.equal(run(['--verify', '--home', home, '--manifest', mf]).status, 1);
+});
+
+test('owner recipient verifier accepts the actual SessionStart dispatch command', t => {
+  const home = temp('setup-owner-recipient-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const parsed = JSON.parse(fs.readFileSync(path.join(toolsDir, 'setup-manifest.json'), 'utf8'));
+  const ownerRecipient = parsed.items.find(entry => entry.id === 'settings:owner-recipient-SessionStart');
+  assert.equal(ownerRecipient.severity, 'required');
+  const mf = path.join(home, 'manifest.json');
+  write(mf, JSON.stringify(manifest([ownerRecipient])));
+  const registered = spawnSync(process.execPath, [path.join(toolsDir, 'register-hooks.mjs'), '--hooks-only'], {
+    encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: path.dirname(toolsDir) },
+  });
+  assert.equal(registered.status, 0, registered.stderr);
+  const verified = run(['--verify', '--home', home, '--manifest', mf]);
+  assert.equal(verified.status, 0, verified.stdout + verified.stderr);
+});

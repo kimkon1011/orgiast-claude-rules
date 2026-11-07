@@ -7,6 +7,7 @@ import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
 import { redactAll } from './lib/redact.mjs';
+import { BUSY_POLICY, defaultBudgetPath, formatBusyExhausted, postFleetSheet } from './lib/fleet-sheet-post.mjs';
 
 export const WEBHOOK_RE = /https:\/\/discord\.com\/api\/webhooks\/(\d{15,})\/([A-Za-z0-9_-]{40,})/g;
 const USER_AGENT = 'DiscordBot (https://orgiast.jp, 1.0) orgiast-webhook-health';
@@ -164,31 +165,29 @@ async function postSheet(result, checkedAt, fetchImpl) {
   const resolved = resolveReporterLabel({ envText, hostname: os.hostname() });
   if (resolved.nextEnvText !== envText) await fs.writeFile(envFile, resolved.nextEnvText, 'utf8');
   const payload = buildWebhookSheetPayload(result, { label: resolved.label, checkedAt: checkedAt.slice(0, 10) });
-  return postWebhookSheet(env.FLEET_SHEET_URL, { token:env.FLEET_SHEET_TOKEN, kind:'webhooks', ...payload }, { fetchImpl });
+  return postWebhookSheet(env.FLEET_SHEET_URL, { token:env.FLEET_SHEET_TOKEN, kind:'webhooks', ...payload }, {
+    fetchImpl,
+    budgetPath: defaultBudgetPath(),
+    logFile: path.join(os.homedir(), '.claude', 'logs', 'fleet-sheet-report.log'),
+  });
 }
 
+// busy の再送方針は tools/lib/fleet-sheet-post.mjs に集約している。
+// 成功時は GAS の応答本文を返し、再送を使い切ったときは
+// { ok:false, busyExhausted:true, attempts, waitedMs } を返す（throw しない）。
 export async function postWebhookSheet(url, payload, {
   fetchImpl = fetch,
   sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  random = Math.random,
+  now = () => Date.now(),
+  policy = BUSY_POLICY,
+  budgetPath = null,
+  logFile = null,
 } = {}) {
-  const request = { method:'POST', redirect:'follow', headers:{'content-type':'application/json'}, body:JSON.stringify(payload) };
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const response = await fetchImpl(url, request);
-    const text = await response.text();
-    let body; try { body = JSON.parse(text); } catch {
-      if (!response.ok) throw new Error(`fleet sheet HTTP ${response.status}`);
-      throw new Error('fleet sheet returned invalid JSON');
-    }
-    // GAS returns busy in JSON (normally HTTP 200) before modifying the sheet
-    // when its shared script lock cannot be acquired within 20 seconds.
-    if (body?.ok === false && body.error === 'busy' && (response.ok || response.status === 503) && attempt < 2) {
-      await sleepImpl(1_000 * 2 ** attempt);
-      continue;
-    }
-    if (!response.ok) throw new Error(`fleet sheet HTTP ${response.status}`);
-    if (!body?.ok) throw new Error(`fleet sheet rejected request: ${redactSecrets(body?.error || 'unknown error')}`);
-    return body;
-  }
+  const posted = await postFleetSheet(url, payload, {
+    fetchImpl, sleepImpl, random, now, policy, budgetPath, logFile, kind: 'webhooks',
+  });
+  return posted.ok ? posted.body : posted;
 }
 
 async function notify(target, deadResults, fetchImpl) {
@@ -275,6 +274,9 @@ export async function run(argv = process.argv.slice(2), { fetchImpl = fetch } = 
   if (options.postSheet) {
     const posted = await postSheet(result, checkedAt, fetchImpl);
     if (posted.skipped) console.error(`Webhook台帳送信 skip:${posted.reason}`);
+    // 台帳へ書けなくても webhook 自体の生存確認は成立している。夜間バッチを
+    // 落とさず、翌朝のサマリに警告として残す（成功したようには出さない）。
+    else if (posted.busyExhausted) console.error(formatBusyExhausted(posted, 'webhooks'));
   }
   if (options.json) console.log(JSON.stringify(result));
   else {

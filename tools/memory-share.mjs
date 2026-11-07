@@ -7,24 +7,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { machineIdentity } from './machine-identity.mjs';
-import { redactSecrets } from './redact-secrets.mjs';
+import { redactForShare, findSharedSecret, parseMemoryFrontmatter } from './lib/share-content.mjs';
 import { readEnvValue } from './env-kv.mjs';
 import { keyserveAuthHeaders, requireKeyservePcId, keyserveSecret } from './keyserve-auth.mjs';
 import { isKimOperated } from './lib/kim-operated.mjs';
+import { getDriveToken } from './lib/drive-auth.mjs';
+import { findOrCreateFolder, listFiles, downloadFileContent } from './lib/drive-files.mjs';
 
 const DEFAULT_MEMORY_URL = 'https://orgiast-memoryserve.vercel.app/api/memory';
-// 伏字化した後の本文に対して判定する。伏字で消せない秘密が残るファイルだけを丸ごと除外する。
-const SECRET_PATTERNS = [
-  ['Discord webhook URL', /discord\.com\/api\/webhooks\/\d/i],
-  ['OpenAI API key', /sk-[A-Za-z0-9]{20,}/],
-  ['Groq API key', /gsk_[A-Za-z0-9]{20,}/],
-  ['GitHub token', /ghp_[A-Za-z0-9]{20,}/],
-  ['Slack bot token', /xoxb-(?!\*\*\*REDACTED\*\*\*)/],
-  ['Google API key', /AIza[A-Za-z0-9_-]{20,}/],
-  ['private key', /-----BEGIN .*PRIVATE KEY-----/],
-  ['40文字以上のhex', /[A-Fa-f0-9]{40,}/],
-  ['ORGIAST_SHARED_SECRET', /ORGIAST_SHARED_SECRET\s*=\s*\S/],
-];
 const CUSTOMER_PATTERNS = [
   ['案件ID', /C0\d{3,}/],
   ['法人名', /株式会社|有限会社|合同会社/],
@@ -32,7 +22,6 @@ const CUSTOMER_PATTERNS = [
 const EXCLUDED_FILE = 'EXCLUDED.md';
 // user 型は kim 本人が操作する席にだけ入れる。受信側は本文を読まずに名前で判別する。
 const isUserMemory = name => /^user_[^/]*\.md$/.test(String(name));
-const redactForShare = text => redactSecrets(text).replace(/[A-Fa-f0-9]{40,}/g, '***REDACTED***');
 
 function isNonMemoryFile(name) {
   return name.startsWith('.') || name.includes('-bak-') || name.includes('.bak') || name.endsWith('~');
@@ -57,22 +46,7 @@ function sha256(buffer) { return crypto.createHash('sha256').update(buffer).dige
 function sameFile(file, bytes) { try { return fs.readFileSync(file).equals(bytes); } catch { return false; } }
 function safeReadJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); } catch { return null; } }
 
-export function parseMemoryFrontmatter(text) {
-  const match = /^(?:\uFEFF)?---\s*\r?\n([\s\S]*?)\r?\n---(?:\s*\r?\n|$)/.exec(String(text));
-  if (!match) return {};
-  let inMetadata = false;
-  const result = {};
-  for (const line of match[1].split(/\r?\n/)) {
-    const metadata = /^metadata\s*:\s*(?:#.*)?$/.exec(line);
-    if (metadata) { inMetadata = true; continue; }
-    const nested = /^\s+([A-Za-z][\w-]*)\s*:\s*(.*?)\s*$/.exec(line);
-    if (inMetadata && nested) { result[`metadata.${nested[1]}`] = nested[2].replace(/^(['"])(.*)\1$/, '$2'); continue; }
-    if (/^\S/.test(line)) inMetadata = false;
-    const top = /^([A-Za-z][\w-]*)\s*:\s*(.*?)\s*$/.exec(line);
-    if (top) result[top[1]] = top[2].replace(/^(['"])(.*)\1$/, '$2');
-  }
-  return result;
-}
+export { parseMemoryFrontmatter } from './lib/share-content.mjs';
 
 function memoryFiles(home, emit, channel) {
   const root = path.join(home, '.claude', 'projects');
@@ -135,7 +109,7 @@ export function exportMemories(options = {}) {
         continue;
       }
       const redacted = redactForShare(original);
-      const secret = SECRET_PATTERNS.find(([, pattern]) => pattern.test(redacted));
+      const secret = findSharedSecret(redacted);
       if (secret) {
         exclusions.push({ name, category: 'secret' });
         emit(`除外(資格情報): ${name} — 秘密パターン ${secret[0]} に一致`);
@@ -238,6 +212,79 @@ function annotation(manifest, kimOperated) {
 
 `;
 }
+export async function installFromDriveMaster(options = {}) {
+  const home = options.home || process.env.ORGIAST_HOME || os.homedir();
+  const dir = options.sharedDir || path.join(home, '.claude', 'shared-memory');
+  const emit = options.emit || console.log;
+
+  const getDriveTokenFn = options.getDriveTokenFn || getDriveToken;
+  const findOrCreateFolderFn = options.findOrCreateFolderFn || findOrCreateFolder;
+  const listFilesFn = options.listFilesFn || listFiles;
+  const downloadFileContentFn = options.downloadFileContentFn || downloadFileContent;
+
+  let token;
+  try {
+    token = await getDriveTokenFn({ home });
+  } catch (err) {
+    emit(`[shared-memory] Drive auth failed: ${err.message}`);
+    return null;
+  }
+
+  let masterFiles = [];
+  try {
+    const masterFolder = await findOrCreateFolderFn(token, 'knowledge', '1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw');
+    masterFiles = await listFilesFn(token, masterFolder.id);
+  } catch (err) {
+    emit(`[shared-memory] Drive folder list failed: ${err.message}`);
+    return null;
+  }
+
+  if (!masterFiles || masterFiles.length === 0) {
+    return null;
+  }
+
+  let installed = 0, updated = 0, unchanged = 0;
+  fs.mkdirSync(dir, { recursive: true });
+
+  for (const file of masterFiles) {
+    if (!file.name.endsWith('.md')) continue;
+    const dest = path.join(dir, file.name);
+
+    if (fs.existsSync(dest)) {
+      const localStat = fs.statSync(dest);
+      const remoteMtime = new Date(file.modifiedTime).getTime();
+      // Guard: do not overwrite newer local file with older remote file
+      if (localStat.mtimeMs > remoteMtime + 5000) {
+        unchanged++;
+        continue;
+      }
+    }
+
+    try {
+      const contentBuf = await downloadFileContentFn(token, file.id);
+      const content = contentBuf.toString('utf8');
+      const existing = fs.existsSync(dest) ? fs.readFileSync(dest, 'utf8') : null;
+
+      if (existing === content) {
+        unchanged++;
+      } else {
+        if (existing !== null) updated++; else installed++;
+        if (!options.dryRun) fs.writeFileSync(dest, content, 'utf8');
+      }
+    } catch {}
+  }
+
+  return {
+    source: 'drive-master',
+    generatedAt: new Date().toISOString(),
+    installed,
+    updated,
+    unchanged,
+    skipped: 0,
+    dir,
+  };
+}
+
 export async function installSharedMemories(options = {}) {
   const home = options.home || process.env.ORGIAST_HOME || os.homedir();
   const env = options.env || process.env;
@@ -256,6 +303,21 @@ export async function installSharedMemories(options = {}) {
       return { ...result, reason };
     }
   }
+
+
+  // Try Drive master first if not offline/fromDir
+  if (!options.fromDir && !options.preferHttpOnly) {
+    try {
+      const driveRes = await installFromDriveMaster({ home, sharedDir: dir, emit, ...options });
+      if (driveRes) {
+        emit(`[shared-memory] synced from Drive master: installed=${driveRes.installed} updated=${driveRes.updated} unchanged=${driveRes.unchanged}`);
+        return driveRes;
+      }
+    } catch (e) {
+      emit(`[shared-memory] Drive master sync failed (${e.message}), falling back to memoryserve HTTP`);
+    }
+  }
+
   try {
     const request = async (query) => {
       const url = new URL(options.memoryUrl || env.ORGIAST_MEMORY_URL || DEFAULT_MEMORY_URL);

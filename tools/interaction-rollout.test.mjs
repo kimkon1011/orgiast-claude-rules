@@ -304,7 +304,8 @@ test('停滞投稿が成功した時だけ lastStallNotifiedAt を保存する',
   fs.mkdirSync(claudeDir);
   fs.writeFileSync(path.join(claudeDir, 'interaction-rollout-watch'), '');
   fs.writeFileSync(path.join(claudeDir, 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.invalid/fleet\nFLEET_SHEET_TOKEN=test\n');
-  fs.writeFileSync(path.join(claudeDir, 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK=https://example.invalid/webhook\n');
+  // kim 席: 停滞通知は Discord webhook ではなく kim-inbox 台帳へ入る（2026-10-27）。
+  fs.writeFileSync(path.join(claudeDir, 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK=https://example.invalid/webhook\nREPORTER_LABEL=kim-PC\n');
   fs.writeFileSync(path.join(claudeDir, 'interaction-rollout-state.json'), `${JSON.stringify({
     ...stalledCounts, firstSeenAt: '2026-08-28T00:00:00.000Z', notifiedAt: '2026-08-28T00:00:00.000Z',
   })}\n`);
@@ -325,7 +326,11 @@ test('停滞投稿が成功した時だけ lastStallNotifiedAt を保存する',
     },
   });
   const state = JSON.parse(fs.readFileSync(path.join(claudeDir, 'interaction-rollout-state.json'), 'utf8'));
-  assert.match(postedContent, /^⚠ 対話ループの展開が12時間進んでいません/);
+  assert.equal(postedContent, '');
+  const inboxDir = path.join(claudeDir, 'kim-inbox');
+  const items = fs.readdirSync(inboxDir).filter(f => f.endsWith('.json')).map(f => JSON.parse(fs.readFileSync(path.join(inboxDir, f), 'utf8')));
+  assert.equal(items.length, 1);
+  assert.match(items[0].text, /^⚠ 対話ループの展開が12時間進んでいません/);
   assert.equal(state.lastStallNotifiedAt, '2026-08-30T00:00:00.000Z');
   assert.equal(state.notifiedAt, '2026-08-30T00:00:00.000Z');
 });

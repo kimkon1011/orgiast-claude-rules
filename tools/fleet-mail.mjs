@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { createReclaimDirectory, removeReclaimDirectory } from './lib/reclaim-lock.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -16,10 +17,20 @@ import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { LANE_HEALTH_KIM_PC, parseLaneDoctorOutput, deadLanes, repairAdvice, laneHealthSignature, buildLaneHealthMail } from './lib/lane-health.mjs';
 import { dailyRuleCompliance } from './fleet-rule-compliance-daily.mjs';
 import { appendAfterFromEnv } from './growi-manual.mjs';
+import { fetchMailTargets } from './fleet-mail-targets.mjs';
+import { allowedReadonlyPrompt } from './lib/fleet-selfcheck-prompt.mjs';
+import { isKimOperated } from './lib/kim-operated.mjs';
 export { resolveFleetLabel, dailyRuleCompliance };
+export { RECLAIM_STALE_MS } from './lib/reclaim-lock.mjs';
 
 export function isFleetHub(label, config) {
   return label === (config.FLEET_HUB || HUB_LABEL);
+}
+
+export function seatSendGate({ to, kimOperated, subject = '', why = '', body = '', reason = '' }) {
+  const matches = /マージ|merge|push\s*権限|権限|招待|鍵|キー|token|トークン|DWD|Vercel|Supabase|kim-PC\s*(?:にしか|でしか|でないと)/i;
+  const blocked = /^kim-PC(?:$|[/:@])/i.test(String(to).trim()) && kimOperated && matches.test(`${subject}\n${why}\n${body}`);
+  return { allowed: !blocked || !!reason.trim(), exception: blocked && !!reason.trim() };
 }
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -293,10 +304,11 @@ const nextHop = mail => Number(mail.hop || 0) + 1;
 export function mailId(now = Date.now, random = randomBytes) {
   return `mail-${now()}-${random(4).toString('hex')}`;
 }
-export function resolveMailTarget(to, pcMap = {}, beacons = []) {
+export function resolveMailTarget(to, pcMap = {}, beacons = [], serverPolls = {}) {
   const remote = resolveRemoteName(to, pcMap);
   const entries = Object.entries(pcMap || {}).filter(([key, value]) => !key.startsWith('_') && value && typeof value === 'object' && !Array.isArray(value));
-  const known = [...entries.map(([label, entry]) => ({ ...entry, label })), ...(Array.isArray(beacons) ? beacons : []).filter(b => typeof b?.label === 'string')];
+  const polled = Object.entries(serverPolls || {}).filter(([, at]) => typeof at === 'string' && Number.isFinite(Date.parse(at))).map(([label]) => ({ label }));
+  const known = [...entries.map(([label, entry]) => ({ ...entry, label })), ...(Array.isArray(beacons) ? beacons : []).filter(b => typeof b?.label === 'string'), ...polled];
   const exact = remote.resolved ? remote.to : known.find(b => b.label === to)?.label
     ?? known.find(b => b.hostname?.toLowerCase() === to?.toLowerCase())?.label;
   if (exact || to === 'all') return { to: exact || 'all', resolved: true };
@@ -324,6 +336,7 @@ export const LOCK_BUSY_EXIT = 6;
 export const ACK_BATCH_LIMIT = 100;
 export const SENT_STATUS_MAX_LOOKUP_FAILURES = 5;
 export const FLEET_POLL_BUSY_STREAK_LIMIT = 5;
+export const FLEET_POLL_ERROR_STREAK_LIMIT = 5;
 export const CAPABILITY_BACKOFF_MS = 3600000;
 export const SERVER_MAX_ATTEMPTS = 5;
 export const INTERRUPTED_PROMPT_MS = 35 * 60000;
@@ -348,10 +361,10 @@ export function updateInbox(id, fn, { home = process.env.ORGIAST_HOME || os.home
       // Only EEXIST permits stale inspection; sharing conflicts use the same
       // bounded wait without touching another worker's lock.
       if (error.code === 'EEXIST') try {
-        fs.mkdirSync(reclaim); ownsReclaim = true;
+        createReclaimDirectory(reclaim, { now }); ownsReclaim = true;
         if (now() - fs.statSync(lock).mtimeMs > INBOX_LOCK_STALE_MS) { fs.unlinkSync(lock); reclaimed = true; }
       } catch (error) { if (!['EEXIST', 'ENOENT'].includes(error.code) && !windowsLockBusy(error)) throw error; }
-      finally { if (ownsReclaim) fs.rmdirSync(reclaim); }
+      finally { if (ownsReclaim) removeReclaimDirectory(reclaim); }
       if (reclaimed) { attempt--; continue; }
       if (attempt === retries) return null;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
@@ -455,6 +468,7 @@ function validateMailResponse(kind, payload, result) {
   checked(result);
   const valid = kind === 'mail-poll' ? Array.isArray(result?.messages)
     : kind === 'mail-alerts' ? Array.isArray(result?.alerts)
+    : kind === 'mail-trace' ? Array.isArray(result?.mails)
     : kind === 'mail-ack' && payload.ids ? Array.isArray(result?.results)
     : result && Object.hasOwn(result, 'mail');
   if (!valid) throw Object.assign(new Error('fleet-mail: GAS mail handlers are not deployed'), { code: 'UNSUPPORTED_ACTION' });
@@ -635,13 +649,13 @@ export function acquireLock(file, { now = Date.now, pid = process.pid, hardCapMs
     } catch (e) {
       if (e.code !== 'EEXIST') throw e;
       const reclaim = `${file}.reclaim`;
-      try { fs.mkdirSync(reclaim); } catch (error) { if (error.code === 'EEXIST') return null; throw error; }
+      try { createReclaimDirectory(reclaim, { now }); } catch (error) { if (error.code === 'EEXIST') return null; throw error; }
       try {
         const stat = fs.statSync(file);
         if (now() - stat.mtimeMs < LOCK_MS) return null;
         fs.unlinkSync(file);
       } catch (error) { if (error.code !== 'ENOENT') throw error; }
-      finally { fs.rmdirSync(reclaim); }
+      finally { removeReclaimDirectory(reclaim); }
     }
   }
   return null;
@@ -674,7 +688,7 @@ export function findPriorReply(dir, id) {
 export function parseArgs(argv) {
   const options = {};
   const flags = new Set(['--send', '--poll', '--no-exec', '--dry-run', '--json', '--inbox', '--force', '--sweep', '--unseen', '--all-seen', '--sync-pending']);
-  const values = new Set(['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--reply', '--ack', '--sent-status', '--exec', '--exec-cwd', '--priority', '--wait-for', '--answer', '--resume']);
+  const values = new Set(['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--reply', '--ack', '--sent-status', '--exec', '--exec-cwd', '--priority', '--wait-for', '--answer', '--resume', '--kim-pc-only-resource']);
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
     if (Object.hasOwn(options, key)) throw new Error(`duplicate option: ${key}`);
@@ -686,13 +700,14 @@ export function parseArgs(argv) {
   const actions = ['--send', '--poll', '--inbox', '--reply', '--ack', '--sent-status', '--sweep', '--sync-pending', '--answer'].filter(k => options[k]);
   if (actions.length !== 1) throw new Error('指定は --send / --poll / --reply / --inbox / --ack / --sent-status のいずれか1つ');
   const allowed = {
-    '--send': ['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--exec', '--exec-cwd', '--force', '--priority', '--wait-for', '--dry-run', '--resume'],
+    '--send': ['--to', '--kind', '--body-file', '--why', '--expires-hours', '--wait', '--exec', '--exec-cwd', '--force', '--priority', '--wait-for', '--dry-run', '--resume', '--kim-pc-only-resource'],
     '--answer': ['--body-file', '--force'],
     '--poll': ['--dry-run', '--json', '--no-exec'], '--inbox': ['--json', '--unseen'], '--reply': ['--body-file', '--force'], '--ack': ['--all-seen'], '--sweep': [],
     '--sent-status': [], '--sync-pending': []
   };
   for (const key of Object.keys(options)) if (key !== actions[0] && !allowed[actions[0]].includes(key)) throw new Error(`option not applicable: ${key}`);
   if (options['--send']) {
+    if (options['--kim-pc-only-resource'] !== undefined && (!options['--kim-pc-only-resource'].trim() || options['--kim-pc-only-resource'].length > 1000)) throw new Error('--kim-pc-only-resource には具体的理由（1〜1000文字）が必要');
     for (const key of ['--to', '--kind', '--body-file', '--why']) if (!options[key]?.trim()) throw new Error(`${key} 必須`);
     if (!['prompt', 'note'].includes(options['--kind'])) throw new Error('--kind must be prompt or note');
     if (options['--kind'] === 'note' && /^\s*\[作業依頼\]/.test(options['--why'])) throw new Error('[作業依頼] は受信側で実行されるよう --kind prompt で送ってください（note は表示のみで実行されません）');
@@ -718,8 +733,9 @@ export function parseArgs(argv) {
   return options;
 }
 export function createClient({ url, token, fetchImpl = fetch, sleepImpl = sleep }) {
-  return async (kind, payload, timeoutMs = 60_000) => {
-    for (let attempt = 0; attempt < 3; attempt++) {
+  return async (kind, payload, timeoutMs = 60_000, opts = {}) => {
+    const retries = opts.retries ?? (kind === 'mail-send' ? COMMAND_LOCK_RETRIES : 2);
+    for (let attempt = 0; attempt <= retries; attempt++) {
       const response = await fetchImpl(url, {
         method: 'POST', headers: { 'content-type': 'application/json' }, redirect: 'follow',
         body: JSON.stringify({ ...payload, kind, token }), signal: AbortSignal.timeout(Math.max(1, Math.ceil(timeoutMs)))
@@ -732,8 +748,8 @@ export function createClient({ url, token, fetchImpl = fetch, sleepImpl = sleep 
         throw error;
       }
       if (result?.ok === false && result.error === 'busy') {
-        if (attempt === 2) throw Object.assign(new Error('fleet-mail: busy'), { code: 'SERVER_BUSY' });
-        await sleepImpl(1_000 * 2 ** attempt);
+        if (attempt === retries) throw Object.assign(new Error('fleet-mail: busy'), { code: 'SERVER_BUSY' });
+        await sleepImpl(kind === 'mail-send' ? COMMAND_LOCK_DELAY_MS : 1_000 * 2 ** attempt);
         continue;
       }
       if (!response.ok) throw new Error(`fleet-mail HTTP ${response.status}`);
@@ -867,7 +883,19 @@ export async function pollOnce(deps = {}) {
     const label = deps.label ?? resolveFleetLabel(home, identity);
     const request = deps.request ?? createClient({ url: config.FLEET_SHEET_URL, token: config.FLEET_SHEET_TOKEN, fetchImpl: deps.fetch, sleepImpl: deps.sleep });
     release = dryRun ? () => {} : acquireLock(path.join(dir, 'fleet-mail.lock'), { now });
-    if (!release) { outcome = 'locked'; err('fleet-mail: 別の受信処理が実行中'); return { skipped: 'locked' }; }
+    if (!release) {
+      outcome = 'locked';
+      const lock = path.join(dir, 'fleet-mail.lock');
+      let unrecoverable = false;
+      try { unrecoverable = now() - fs.statSync(lock).mtimeMs >= 3 * LOCK_MS; }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (unrecoverable) {
+        err(`fleet-mail: ロック回収不能（${lock} / reclaim 残留）`);
+        return { skipped: 'locked', exitCode: LOCK_BUSY_EXIT };
+      }
+      err('fleet-mail: 別の受信処理が実行中');
+      return { skipped: 'locked' };
+    }
     deps.onLock?.(release, () => ({ startedAt, phases: { ...phases }, stuckIn: activePhase?.name ?? null }));
     const fileOf = id => inboxPath(home, id);
     const log = (name, value) => fs.appendFileSync(path.join(dir, `fleet-mail-${name}.jsonl`), `${JSON.stringify({ at: new Date(now()).toISOString(), ...value })}\n`, { mode: 0o600 });
@@ -950,16 +978,28 @@ export async function pollOnce(deps = {}) {
         // Broadcast remains pending for presentation; the inbox itself is the durable delivery receipt.
         processedIds: readInbox(home, { unreadOnly: false }).filter(m => m.to === 'all' && Date.parse(m.expiresAt) > now()).map(m => m.id) })));
     } catch (error) {
-      if (error.code !== 'SERVER_BUSY' && !/^(?:fleet-mail: )?busy$/.test(error.message)) throw error;
+      // HTTP 5xx / timeout / unauthorized も busy と同様に回数制限つきで延期する（2026-11-07）。
+      // 即座に exit 1 にせず、連続 FLEET_POLL_ERROR_STREAK_LIMIT 回で初めて SERVER_ERROR を throw する。
+      // 該当するエラー種別: createClient（line 742）の "fleet-mail HTTP 5xx/401/403/429" と AbortError。
+      const isBusy = error.code === 'SERVER_BUSY' || /^(?:fleet-mail: )?busy$/.test(error.message);
+      const isServerError = isBusy
+        || /^fleet-mail HTTP (5\d\d|401|403|429)$/.test(error.message)
+        || error.name === 'AbortError' || error.code === 'ABORT_ERR';
+      if (!isServerError) throw error;
       const previous = readJson(lastPollFile, {});
-      const busyStreak = (previous.busyStreak || 0) + 1;
-      if (!dryRun) writeJson(lastPollFile, { ...previous, busyStreak, busyAt: new Date(now()).toISOString() });
+      const busyStreak = isBusy ? (previous.busyStreak || 0) + 1 : 0;
+      const errorStreak = (previous.errorStreak || 0) + 1;
+      if (!dryRun) writeJson(lastPollFile, { ...previous, busyStreak, errorStreak, busyAt: isBusy ? new Date(now()).toISOString() : previous.busyAt, errorAt: new Date(now()).toISOString(), lastError: error.message.slice(0, 200) });
       if (busyStreak >= FLEET_POLL_BUSY_STREAK_LIMIT) {
         throw Object.assign(new Error(`fleet-mail: サーバ混雑が${busyStreak}回連続（約${busyStreak * 2}分）。GAS のロック競合を確認`), { code: 'SERVER_BUSY' });
       }
-      err(`fleet-mail: サーバ混雑のため受信を次回へ延期=1 (連続${busyStreak})`);
-      outcome = 'busy';
-      return { skipped: 'busy', busyStreak };
+      if (errorStreak >= FLEET_POLL_ERROR_STREAK_LIMIT) {
+        throw Object.assign(new Error(`fleet-mail: サーバエラーが${errorStreak}回連続（最終: ${error.message}）`), { code: 'SERVER_ERROR' });
+      }
+      const errorKind = isBusy ? 'busy' : 'http';
+      err(`fleet-mail: サーバエラー（${error.message}）のため受信を次回へ延期=1 (連続: ${errorKind}=${isBusy ? busyStreak : errorStreak})`);
+      outcome = isBusy ? 'busy' : 'error';
+      return { skipped: outcome, busyStreak, errorStreak };
     }
     if (dryRun) {
       const messages = response.messages.map(m => ({ ...m, from: redactSecrets(m.from), why: redactSecrets(m.why), body: redactSecrets(m.body), resultBody: redactSecrets(m.resultBody) }));
@@ -993,7 +1033,14 @@ export async function pollOnce(deps = {}) {
           return terminal(raw) && !terminal(existing) ? { ...existing, ...raw, body: redactSecrets(raw.body), resultBody: redactSecrets(raw.resultBody) } : existing;
         }, { home });
         if (!saved) { undurable++; continue; }
-        if (created) { fresh.add(raw.id); log('received', { count: 1 }); if (legacyTo) legacy++; }
+        if (created) {
+          fresh.add(raw.id); if (legacyTo) legacy++;
+          // Durable receipt metadata survives inbox processing/archival; never log body or credentials.
+          log('received', { count: 1,
+            id: saved.id, from: saved.from, to: saved.to, kind: saved.kind, why: saved.why,
+            createdAt: saved.createdAt, receivedAt: saved.receivedAt
+          });
+        }
         joinReply(home, saved);
         received.push(raw.id);
         batch.successfulIds = [...new Set([...(batch.successfulIds || []), raw.id])];
@@ -1009,7 +1056,7 @@ export async function pollOnce(deps = {}) {
     if (!undurable) fs.unlinkSync(pollFile);
     else err(`fleet-mail: 保存再試行待ち=${undurable}`);
     if (legacy) err(`fleet-mail: 旧形式宛先受信=${legacy}`);
-    writeJson(lastPollFile, { ...readJson(lastPollFile, {}), at: new Date(now()).toISOString(), busyStreak: 0 });
+    writeJson(lastPollFile, { ...readJson(lastPollFile, {}), at: new Date(now()).toISOString(), busyStreak: 0, errorStreak: 0 });
     endPhase();
     let promptHandled = false;
     let growiAppendHandled = false;
@@ -1264,11 +1311,26 @@ async function runMain(argv, deps) {
     out(`完了=${done} / 期限切れ=${expired}`); return 0;
   }
   if (options['--reply']?.startsWith('mail-reply-') && !options['--force']) { err('fleet-mail: 返信メールへの返信は拒否（意図的な返信のみ --force）'); return 3; }
-  if (!configured && !options['--dry-run'] && !options['--send']) { err('fleet-mail: fleet-sheet.env 未設定のためスキップ'); return 0; }
+  if (!configured && !options['--dry-run'] && !options['--send'] && !options['--sent-status']) { err('fleet-mail: fleet-sheet.env 未設定のためスキップ'); return 0; }
   if (options['--sent-status']) {
     // 読み取りのみ: 返信が相手の受信タスクに拾われたか（deliveredAt）と返信済みか（resultAt）を確認する。
+    // 読み取りは10秒で打ち切り、busy再試行もしない。hub不達でも親の呼出制限（例: auto-progress check 30秒）を超えないようにする。
     const id = options['--sent-status'];
-    const result = await request('mail-get', { id });
+    // 返信は元メールとは別便。既読・完了分も含め、hub より先にローカルで確認する。
+    const replies = readInbox(home, { unreadOnly: false }).filter(mail => mail.replyTo === id);
+    let history = '';
+    try { history = fs.readFileSync(path.join(dir, 'fleet-mail-replies.jsonl'), 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    for (const line of history.split('\n')) {
+      let row; try { row = JSON.parse(line); } catch { continue; }
+      if (row?.id === id && row.replyId && !replies.some(mail => mail.id === row.replyId)) replies.push({ id: row.replyId, from: row.from, createdAt: row.resultAt, body: row.resultBody });
+    }
+    if (replies.length) {
+      out(replies.map(mail => [`reply: ${mail.id}`, `replyFrom: ${mail.from || '(なし)'}`, `replyCreatedAt: ${mail.createdAt || '(なし)'}`, `replyBody:\n${redactSecrets(mail.body || '')}`].join('\n')).join('\n'));
+      return 0;
+    }
+    let result;
+    try { result = await request('mail-get', { id }, 10_000, { retries: 0 }); }
+    catch (error) { err(`fleet-mail: 状態を取得できません（hub不達: ${error.message}）`); return 3; }
     const mail = result?.mail;
     if (!mail) { err(`fleet-mail: ${id} はサーバーに見つかりません`); return 4; }
     out([`id: ${mail.id}`, ...['status', 'createdAt', 'expiresAt', 'deliveredAt', 'deliveredBy', 'seenAt', 'seenBy', 'resultAt', 'ackAt', 'failedAt', 'failReason'].map(key => `${key}: ${mail[key] || '(なし)'}`)].join('\n'));
@@ -1329,23 +1391,38 @@ async function runMain(argv, deps) {
     } finally { release(); }
   }
   if (options['--send']) {
+    const rawBody = fs.readFileSync(options['--body-file'], 'utf8');
+    const exceptionReason = redactSecrets(options['--kim-pc-only-resource'] || '').trim();
+    const gate = to => seatSendGate({ to, kimOperated: isKimOperated(home), why: options['--why'], body: rawBody, reason: exceptionReason });
+    const denied = to => {
+      if (gate(to).allowed) return false;
+      err('fleet-mail: 権限・鍵・マージはこの席で解決してください。node tools/access-doctor.mjs --fix');
+      return true;
+    };
+    if (denied(options['--to'])) return 2;
     let pcMap = deps.pcMap;
     if (pcMap === undefined) {
       try { pcMap = readJson(new URL('../fleet-pc-map.json', import.meta.url)); }
       catch { /* Beacon labels can still resolve exact targets when the roster is unavailable. */ }
     }
 
-    // ビーコン取得は1回だけ（解決と鮮度表示で共有）。
+    // 再試行・キャッシュを含む同じスナップショットを解決と鮮度表示で共有する。
     let beaconPromise;
     const sharedBeacons = async args => {
-      if (options['--dry-run'] && !deps.fetchBeacons) return { ok: false, beacons: [] };
-      beaconPromise ??= Promise.resolve().then(async () => (deps.fetchBeacons ?? (await import('./fleet-beacon.mjs')).fetchBeacons)(args));
+      beaconPromise ??= fetchMailTargets({ ...args, now, fetchBeacons: deps.fetchBeacons, sleepImpl: deps.sleep,
+        offline: options['--dry-run'] && !deps.fetchBeacons });
       return beaconPromise;
     };
-    let beacons = [];
-    try { beacons = (await sharedBeacons({ home })).beacons || []; } catch {}
-    const target = resolveMailTarget(options['--to'], pcMap, beacons);
-    if (!target.resolved) { err(`fleet-mail: 宛先 ${options['--to']} は完全一致しません。候補: ${target.candidates.join(', ') || '(なし)'}`); return 4; }
+    const directory = await sharedBeacons({ home });
+    const target = resolveMailTarget(options['--to'], pcMap, directory.beacons, directory.serverPolls);
+    if (!target.resolved) {
+      const reason = directory.ok ? 'は完全一致しません（取得済みの名簿・beacons・poll 記録に該当なし）'
+        : `は beacons 取得失敗のため存在を確認できません（${directory.reason || '不明'}）`;
+      err(`fleet-mail: 宛先 ${options['--to']} ${reason}。候補: ${target.candidates.join(', ') || '(なし)'}`);
+      return 4;
+    }
+    if (denied(target.to)) return 2;
+    if (directory.cached) err('fleet-mail: beacons 取得失敗。24時間以内の宛先キャッシュを使用（最新の poll 状況は不明）');
     if (!configured && !options['--dry-run']) { err('fleet-mail: fleet-sheet.env 未設定のためスキップ'); return 0; }
     if (target.to !== options['--to']) err(`${options['--to']} → ${target.to}`);
     const deliverable = await resolveDeliverableTarget({ to: target.to, home, now, fetchBeacons: sharedBeacons, pcMap });
@@ -1354,9 +1431,10 @@ async function runMain(argv, deps) {
       err(`fleet-mail: 宛先 ${target.to} には poll 実績が無く、同一実機のラベルにも無いため送信しません（未配達になる）。poll 実績のあるラベル: ${deliverable.labels.join(', ') || '(なし)'}。意図的に送るときだけ --force`);
       return 6;
     }
+    if (denied(target.to)) return 2;
     let id = mailId(now, deps.randomBytes);
     // --exec: 本文先頭にマーカー行を挿入して受信側に実行モードを伝える（本文ファイル自体は変更しない）。
-    let body = redactSecrets(fs.readFileSync(options['--body-file'], 'utf8')).slice(0, 20000);
+    let body = redactSecrets(rawBody).slice(0, 20000);
     if (options['--exec']) {
       const markers = [`<!-- fleet-exec: ${options['--exec']} -->`];
       if (options['--exec-cwd'] !== undefined) markers.push(`<!-- fleet-exec-cwd: ${options['--exec-cwd']} -->`);
@@ -1365,10 +1443,12 @@ async function runMain(argv, deps) {
     }
     // 全PCの設定変更・インストール・ファイル書き込みの依頼は fleet-mail で配らず setup --converge に載せる。
     // 相談・確認（--kind note）や、意図的な再送（--force）は通す。
-    if (options['--kind'] === 'prompt' && !options['--force'] && looksLikeInstallRequest(parseExecMarkers(body).body)) {
+    const readonlyPrompt = allowedReadonlyPrompt(parseExecMarkers(body).body);
+    if (options['--kind'] === 'prompt' && !options['--force'] && !readonlyPrompt && looksLikeInstallRequest(parseExecMarkers(body).body)) {
       err('全PCの設定変更は setup --converge 経由。fleet-mail は相談・確認用。');
       return 5;
     }
+    if (options['--kind'] === 'prompt' && readonlyPrompt) err(`読み取り専用許可: ${readonlyPrompt.id}（${readonlyPrompt.reason}）`);
     // 宛先が受信できているかを送信前に見せる（2026-10-10 事故: 受信タスク停止で返事が永遠に届かない）。
     // 取得失敗・未設定でも送信は続行する（fail-open）。
     try {
@@ -1383,6 +1463,7 @@ async function runMain(argv, deps) {
     const payload = { id, from: label, to: target.to, messageKind: options['--kind'],
       ...(options['--exec'] ? { exec: options['--exec'], execCwd: options['--exec-cwd'], resumeSessionId: options['--resume'] } : {}),
       body, why: redactSecrets(options['--why']), auto: false, hop: 0,
+      ...(exceptionReason ? { kimPcOnlyResource: exceptionReason } : {}),
       priority: options['--priority'] === 'urgent' || /\[(判断依頼|作業依頼)\]/.test(options['--why']) || /^\s*\[(判断依頼|作業依頼)\]/.test(parseExecMarkers(body).body) ? 'urgent' : 'normal',
       expiresAt: new Date(now() + Number(options['--expires-hours'] ?? defaultExpiresHours) * 3600000).toISOString() };
     if (options['--dry-run']) { out(JSON.stringify(payload)); return 0; }
@@ -1406,7 +1487,7 @@ async function runMain(argv, deps) {
       if (attempt === 1) { err('fleet-mail: ID 重複（再送上限）'); return 1; }
       id = mailId(now, deps.randomBytes);
     }
-    log('sent', { action: 'sent', id, to: payload.to, ...(options['--exec'] ? { exec: options['--exec'] } : {}) });
+    log('sent', { action: 'sent', id, to: payload.to, ...(exceptionReason ? { kimPcOnlyResource: exceptionReason } : {}), ...(options['--exec'] ? { exec: options['--exec'] } : {}) });
     err(`状態確認: node tools/fleet-mail.mjs --sent-status ${id}`);
     if (options['--wait'] !== undefined) {
       err(`送信済み: ${id}`);
@@ -1457,10 +1538,10 @@ async function runMain(argv, deps) {
   }, deps.pollHardDeadlineMs ?? POLL_HARD_DEADLINE_MS);
   hardStop?.unref();
   try {
-    await pollOnce({ ...deps, executePrompts: options['--no-exec'] ? false : deps.executePrompts, dryRun: !!options['--dry-run'], json: !!options['--json'],
+    const result = await pollOnce({ ...deps, executePrompts: options['--no-exec'] ? false : deps.executePrompts, dryRun: !!options['--dry-run'], json: !!options['--json'],
       onLock: (release, snap) => { releaseOnStop = release; snapshot = snap; } });
+    return result?.exitCode ?? 0;
   } finally { if (hardStop) clearTimeout(hardStop); }
-  return 0;
 }
 if (isEntry(import.meta.url)) {
   try { process.exitCode = await main(); }

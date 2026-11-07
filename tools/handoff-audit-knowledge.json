@@ -196,5 +196,125 @@
     "route": "Gmail MCP は本環境に無い（mcpServers=gemini-cli のみ）が、下書きの削除は DWD 経路で Claude 側が完結する。削除は `node tools/gmail-draft.mjs --delete <draftId> [--user <addr>] [--json]`（DWD で seisaku-team@orgiast.jp を impersonate・scope=gmail.compose、SA 鍵は GOOGLE_SA_KEY または既定パス aujust-sales-automation/.gcp/sheets-sa.json）。削除は `DELETE /gmail/v1/users/me/drafts/{id}` で、応答は 204=削除成功 / 404=既に無い（ツールが `{deleted:true}` / `{deleted:false,errorKind:'not_found'}` を返す）。検証結果の報告はこの実応答を読み戻して行い、kim に下書き削除の画面操作・目視確認を依頼しない。Gmail 下書きの削除が不要な用件ではそもそも手渡ししない。",
     "confidence": "high",
     "source": "handoff-audit-nightly:4f579eb3fc37b478cef737816a253d53bce15d7739e071d3aa51d4e76f799c40 / 2026-10-29 tool-name-route レビューで route を手順化（route が道具名だけの `Gmail MCP` だったため手順文に置換）"
+  },
+  {
+    "pattern": "ループ固有制約を理由にPRマージをkimへ手渡す",
+    "route": "PR の作成とマージは、ループ契約に「push/PR/merge は行わない」と書かれていても監督（非ループ）セッションが当ターンに実行し、ループ固有の制約を kim への手渡し理由にしない。ループが作った枝は `git push -u origin <branch>` → PR は `gh pr create --label automerge`。gh が無い PC は GCM の `git credential fill` で得たトークンで REST API を叩く（作成 `POST /repos/{owner}/{repo}/pulls`、ラベル `POST /issues/{n}/labels`、自前マージ `PUT /repos/{owner}/{repo}/pulls/{n}/merge` の merge_method=squash）。squash マージ後は `node tools/commit-landed.mjs <sha>` で着地を判定する（`git merge-base --is-ancestor` は squash では偽になり、逆に推測で着地扱いにすると偽陽性になる）。MERGED を read-back するまで「kim がマージする」と書かない。実例: 2026-10-23 の session fbc40d75 は「このループで push・PR・merge が禁止されている」と書いて rule 2/12 で差し戻された。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:5e9ab6b5e0bf001805d06cb4c851ab2986f316bc0aa867367a35c31ff915a4b4 / 2026-11-04 tool-name-route レビューで route（`gh pr create`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "ループ契約の保存と起動をClaude側で行う",
+    "route": "ループは Claude 側で保存して起動する。契約は `tools/quota-sweep-contract.tmpl.md` を元に `.loop/<slug>.md`、状態は `.loop/<slug>-state.md`（ゴール・要求別証跡・累積試行・失敗仮説・次の1手・停止理由）に書く。`.loop/` は .gitignore 済みのローカル状態なのでコミットしない（コードの変更だけ `git commit -F <msg> -- <paths>`）。起動は `node tools/quota-sweep.mjs --provider claude`（事前に `--dry-run` / `--status` で窓・停止状態を確認し、失敗停止は `--resume claude` で解除）。1ティックの指示文は同ツールの tickPrompt が生成し、`.loop/<slug>.md` を1イテレーションだけ辿って FINAL まで ITERATING を返す。着地判定は `node tools/commit-landed.mjs <sha>` を使う（squash マージのため `git merge-base --is-ancestor` は偽になる）。",
+    "confidence": "medium",
+    "source": "handoff-audit-nightly:8e62823031d40ff96253f1dc9fd5b521217cbfe88a7be874ad8b3c015e7e5d0a / 2026-11-04 tool-name-route レビューで route（`codex-do.mjs`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "他AIレーン修復を hook 拒否で断念する",
+    "route": "レーン修復は「hook に拒否されたので直せない」で終わらせない。①実測は `node tools/lane-doctor.mjs --probe`（レーン別の疎通・鍵・残量を測る）、修復手順の正本は `tools/gate-remedies.md` の lane-repair-first-gate 節と GATE_CONTRACT の remedies。②修復不能と記録するのは `node tools/lane-repair-log.mjs --lane <名> --tried \"<試した手段>\" --result unfixable` で、拒否の生ログ（error 文字列・exit コード）を添える。③Bash が hook に拒否されたら、同じ処理を `node tools/*.mjs`・`tools/llm-ask.mjs`・`tools/fleet-mail.mjs --exec codex`（生きている受信 PC）など別経路で当ターンに試す。試行記録が無い状態で「全コマンドが hook に止められている」「修復不可」と断定しない（未試行は「未確認」と書く）。",
+    "confidence": "medium",
+    "source": "handoff-audit-nightly:15504fceda6d8166a9289547db496a5a39e6343ebd51b7ef04081dea8ce85843 / 2026-11-04 tool-name-route レビューで route（`codex-do.mjs`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "社外・顧客宛チラシ案の選択と送信",
+    "route": "案の選択は Claude が決める（おすすめ案を既定にし、kim に「どの案にするか」を返させない）。社外へ送る前に、宛先・件名・本文・添付（画像は Drive か添付）を完成形で1回提示し、送信可否の承認だけを取る（feedback-confirm-before-external-send）。承認後は Claude が送信まで実行する: メールは `node tools/gmail-draft.mjs --to <addr> --subject <件名> --body-file <本文.txt> [--attach <file>]` で seisaku-team@orgiast.jp の下書きを作り、`node tools/gmail-draft.mjs --send <draftId>`（スレッド整合性を自動検査）で送る。LINE グループは `node tools/line-group-send.mjs --group <group|名前> --text-file <本文.txt> [--image <jpg>]`（画像は1MB以下）。送信後は返り値（messageId/threadId・HTTP status・sentMessages 件数）を読み戻して報告し、kim に送信操作を求めない。案を見せる時は選択肢ラベルだけでなく中身（本文・画像）を同じ文に書く。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:63678278063c518091b8f1116c79b741c1e44215e61499cbf587a5e282dbc1e6 / 2026-11-04 tool-name-route レビューで route（`チャット表示`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "LINE グループへの送信（公式LINE経由）",
+    "route": "その場の Claude Code から直接送る（kim-PC への中継をしない）。`node tools/line-group-send.mjs --group <groupId|グループ名> --text-file <本文.txt> [--image <png/jpg> ...] [--retry-key <uuid>] [--dry-run]`。送信者は公式「オージャスト金(読取専用)」@458zwuhb で、参加済みグループにだけ送れる（group 名は Supabase `channel_messages` の subject=`LINE: <名前>` で解決）。画像は Supabase `line-media/outbound/` に上がり1年有効の署名URLで送るため1MB以下へ JPEG 化する。鍵は env → `~/.claude/line-send.env` → 営業アプリ Vercel の development env の順で解決。完了は push の HTTP 200 と sentMessages 件数・quota consumption の増分（グループは人数ぶん消費、無料枠 月200通）で読み戻す。同じ `--retry-key` で再実行すれば二重送信しない。社外グループは本文全文を kim に1回見せて承認を取ってから送る。チャットに本文を貼って終わりにしない。",
+    "confidence": "medium",
+    "source": "handoff-audit-nightly:551d30db529f1c5ff7634cb1877a612c8ce1230fa138de8da6ecfc070e3618c2 / 2026-11-04 tool-name-route レビューで route（`チャットに本文`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "他AIレーン(coze/gemini/deepseek)が枠切れ・タイムアウトで失敗し、Sonnet 禁止を理由に未実装で終える",
+    "route": "禁止されているのは Claude(Sonnet/Opus) を既定モデルにすることであって実装の停止ではない。`node tools/codex-do.mjs \"<指示>\" --cwd <path> --timeout <秒> --origin unattended` は内蔵フォールバックを持ち、`--no-fallback` を付けない限り codex が枠切れ・タイムアウトなら別レーン（gemini-cli / cheap-code:deepseek 等）へ自動で落ちる。落ちたレーンは `node tools/lane-doctor.mjs --probe --json` で provider ごとの ok/errorKind と `providerResetUntil`（復帰時刻）を read-back して報告に書く。フォールバックも全滅したら Claude 本体で当ターン内に実装まで終え、『Sonnet 禁止だから未実装』『レーン上限だから保留』で handoff しない（exit 75 の保留は無人割当超過のときだけ）。",
+    "confidence": "high",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=codex-do.mjs）/ 2026-11-04 route を手順化"
+  },
+  {
+    "pattern": "AIレーン停止の表示・復帰予定・検知ゲートの実装（lane-doctor 経由の復旧）",
+    "route": "レーンの停止・復帰予定は記憶や推測で書かず `node tools/lane-doctor.mjs --probe --json` の実測から作る（provider ごとの ok/errorKind、`providerResetUntil` の復帰時刻、cooldown 残り、キー有無）。読み取り専用で状態だけ見たいときは `--read-only`、状態を保存して通知まで行うのは `--probe` を付けない通常実行。復旧は停止レーンを避けて `node tools/codex-do.mjs ... --timeout <秒>` を前景・単発で回し、`--no-fallback` を付けない（自動フォールバックに任せる）。『復帰予定』を書くときは必ず lane-doctor の実測値か cooldown の retryAt を引用する。",
+    "confidence": "medium",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=codex-do.mjs）/ 2026-11-04 route を手順化"
+  },
+  {
+    "pattern": "他AIレーン停止中の通知送信",
+    "route": "通知は `node tools/notify-kim.mjs \"<本文>\" [--kind info]`（`--kind ask` は kim の判断が要るときだけ／`--kim-action-required` は人が1アクション必要ときだけ）。Discord bot トークンが無い PC では送信されず受信箱（`tools/kim-inbox.mjs` の addItem）に積まれる＝それが正常経路なので、通知できなかったことを理由に作業を止めない。exit 3 は『配信ブロック（判断は受信箱へ）』であって失敗ではない。外部（社外 Discord・メール・SNS）への送信は行わない。",
+    "confidence": "medium",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=codex-do.mjs）/ 2026-11-04 route を手順化"
+  },
+  {
+    "pattern": "VS Code タブへの Enter 送信・古いタブの ✕ を user に依頼",
+    "route": "VS Code のタブ操作（Enter 押下でのセッション起動・古いタブの ✕・入力欄への貼り付け）を user に依頼しない。次セッションの起動は `node tools/next-session-launch.mjs`（runner が次セッションを起動する経路）で行い、claude.exe の更新可否は `tools/claude-exe.mjs` の `findClaudeInVersionedDir` で実体パスとバージョンを read-back して判定する。起動に失敗したら exit コードと stderr を報告し、user の手作業には戻さない。",
+    "confidence": "medium",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=codex-do.mjs 4件を統合）/ 2026-11-04 route を手順化"
+  },
+  {
+    "pattern": "セッション締めでの TODO 一覧確認",
+    "route": "残TODOは transcript の grep ではなく `~/.claude/next-session.md` の `## 残TODO` ブロックを直接読む（ローテーション・退避は `node tools/next-session-rotate.mjs` が行うので、古いスナップショットは archive/ 側を見る）。締めでは next-session.md の該当 TODO 行だけを行単位で置換し、全文を上書きしない。transcript grep は『その発言が本当にあったか』の証拠確認にだけ使い、TODO 一覧の正本にはしない。",
+    "confidence": "medium",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=transcript grep）/ 2026-11-04 route を手順化"
+  },
+  {
+    "pattern": "freee等SaaSのログインをパスワード入力理由でuserに手渡す",
+    "route": "ログイン画面が要る操作でも、まず Claude 側の認証済み経路を当ターンで試す。freee の API 操作は `node tools/freee-query.mjs`（トークンは購買部アプリの Neon DB `freee_tokens` にあり、期限切れは refresh_token を回して書き戻す＝user のパスワード入力は不要）。Web 画面でしかできない操作（明細の無視・ファイルボックス等）は内蔵ブラウザ/Playwright で、保存済みセッション（storageState・Chrome プロファイル）を再利用して Claude が操作する。ログインが切れていた場合も①API/refresh トークン経路 ②保存済みセッション ③画面の代替 API を順に実試し、失敗の error / HTTP ステータスをそのまま記録してから初めて「本人の操作が要る」と書く。パスワード入力の代行不可・スクショ送付を理由に手渡さない。実例: 2026-10-20 keiri2@ の freee 権限変更で『パスワード入力が要るので代行できません』と書き rule 3/12 で差し戻された。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:17608b57a284a9603d6e6b68f30870545d5e323d19a3c215b6faeccf81215a93 / 2026-11-04 tool-name-route レビューで route（`vercel env`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "Webアプリの定期集計・承認フローを経理担当の画面操作に手渡す",
+    "route": "定期集計・承認・freee 登録は Claude が API で実行する。keiri-hub の立替アプリは管理 API を持ち、集計は `POST /api/tatekae/admin/batches`（body に settlement_date）、freee 登録は `POST /api/tatekae/admin/batches/<id>/register`。認証は Supabase の @orgiast.jp セッションで、ログインリンクは Gmail DWD（`node tools/gmail-search.mjs`）で読めるため Claude が自分のセッションを作れる。承認・差戻の判断だけを kim/経理に結果として提示し、画面操作の手順を書かない。実行できなかった場合は叩いたエンドポイントと HTTP ステータスを記録し、「Claude では不可能」「経理の方が操作するだけで完結」と断定しない。実例: 2026-10-21 に『経理の方が管理画面を開いて操作するだけで完結します』と書き rule 2/3/12 で差し戻された。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:2126335fd3db14d9cc506619c8662aad5b893053825e5569effa3540322ee566 / 2026-11-04 tool-name-route レビューで route（`vercel env`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "外部送信を伴うテスト実行の可否を user に確認依頼",
+    "route": "送信を伴うテストの可否は Claude が判断して実行する。①送信先がテスト用（自分宛メール・テストギルド/チャンネル・テスト事業所）なら同意を取らずに実行し、送信ログ/API の読み戻しで確認する。②本番の社内チャンネルへの通知はテスト投稿先か dry-run を用意し、実測済みの既存経路（2026-10-22 の #経理チーム 投稿）で Claude が実行し、投稿 ID を読み戻す。③社外・顧客宛だけは送信前に1回だけ全文を見せて同意を取り、実行は Claude が `node tools/gmail-draft.mjs --send` / `node tools/line-group-send.mjs` 等で行う。「送ってよいか確認してから」で handoff せず、本物の通知を飛ばしたくない場合は宛先をテスト用に差し替える。実例: 2026-10-23 に『実際の送信は #経理チームに本物の通知が飛ぶので、テストで送ってよいかを確認してから』と書き rule 2 で差し戻された。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:25e3c6106928cc635de26df38db0d4d0f0aa698d5c0f021df5688e7148aa0bae / 2026-11-04 tool-name-route レビューで route（`チャット表示`）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "経営数値（口座・送料・納期）の復元",
+    "route": "経営数値の復元では口座・送料・納期の欠落項目を特定する。不足値ごとに次の順で既存情報を確認する。(1) Drive DWD（kim impersonate / drive スコープ）で Drive API v3 files.list を使い、振込先・口座・送料・納期・返品の文書を検索する。検索結果の本文は通常ファイルなら files.get（alt=media）、Google Docs/Sheets なら Docs/Sheets API または files.export で読む。権限エラーは実応答を記録し、DWD 委任済み・読取可能とは断定しない。(2) Vercel の対象プロジェクトで vercel env ls production により変数の有無を確認する。ls は値の取得ではないため、必要な値は vercel env pull <一時ファイル> --environment=production で確認し、本番との対応を確認できた .env.local とアプリ DB/Supabase 設定テーブルも調べる。(3) node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query '振込先 OR 口座 OR 送料 OR 納期 OR 返品' --body で既存通知を検索する。(1)〜(3)をすべて試しても不足する値だけ「未確認」と書き、不足値の名前・探した経路・各結果（未発見または実際のエラー）を1回の手渡しにまとめる。出典と更新日を確認し、値が食い違えば推測で確定しない。API キー/接続文字列/ID が要る場合と同様、経路を試す前に user に聞き直さない。",
+    "confidence": "medium",
+    "source": "2026-11-04 handoff-audit-candidates tool-name-route レビュー（元 pattern: 経営数値（口座・送料・納期）の復元 / route が .env.local だけだったため手順文に置換） / 2026-11-05 PR #1457 レビュー: Drive → Vercel env/DB → Gmail → 未確認の順を明示し、権限・真因の未実測の断定を除去"
+  },
+  {
+    "pattern": "事業条件（振込先・送料・納期・返品条件）をkimに聞き直す",
+    "route": "事業条件の聞き直しを防ぐため、振込先・送料・納期・返品条件を対象とする。不足値ごとに次の順で既存情報を確認する。(1) Drive DWD（kim impersonate / drive スコープ）で Drive API v3 files.list を使い、振込先・口座・送料・納期・返品の文書を検索する。検索結果の本文は通常ファイルなら files.get（alt=media）、Google Docs/Sheets なら Docs/Sheets API または files.export で読む。権限エラーは実応答を記録し、DWD 委任済み・読取可能とは断定しない。(2) Vercel の対象プロジェクトで vercel env ls production により変数の有無を確認する。ls は値の取得ではないため、必要な値は vercel env pull <一時ファイル> --environment=production で確認し、本番との対応を確認できた .env.local とアプリ DB/Supabase 設定テーブルも調べる。(3) node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query '振込先 OR 口座 OR 送料 OR 納期 OR 返品' --body で既存通知を検索する。(1)〜(3)をすべて試しても不足する値だけ「未確認」と書き、不足値の名前・探した経路・各結果（未発見または実際のエラー）を1回の手渡しにまとめる。出典と更新日を確認し、値が食い違えば推測で確定しない。API キー/接続文字列/ID が要る場合と同様、経路を試す前に user に聞き直さない。",
+    "confidence": "high",
+    "source": "2026-11-04 handoff-audit-candidates tool-name-route レビュー（元 pattern: 事業条件（振込先・送料・納期・返品条件）をkinに聞き直す / route が Drive MCP だけだったため手順文に置換）/ knowledge entry「API キー/接続文字列/ID が要る」の原則を事業条件に拡張 / 2026-11-05 PR #1457 レビュー: Drive → Vercel env/DB → Gmail → 未確認の順を明示し、権限・真因の未実測の断定を除去"
+  },
+  {
+    "pattern": "見積確認の依頼",
+    "route": "見積の金額確認・送信可否は Claude 側で判断する。見積の金額・数量・諸条件は、既存データ（案件シート・見積履歴・社内規程の粗利ルール）と突合して Claude 自身で検証し、kim に「合っているか」をチャットで確認させない。値引きの可否や価格設定は社内規程（30%ルール等）と原価データに基づいて Claude が判断する——粗利がルール内ならそのまま進める。見積PDFの生成は Drive DWD（kim impersonate / drive スコープ）でテンプレートを検索し、files.export?mimeType=application/pdf で出力する（Drive MCP は不要）。送信まで行う場合は、宛先・件名・本文・添付PDFを完成形で1回提示し、送信可否の承認だけを取る（feedback-confirm-before-external-send）。承認後は Claude が送信まで実行する: メールは `node tools/gmail-draft.mjs --to <addr> --subject <件名> --body-file <本文.txt> --attach <PDF>` で seisaku-team@orgiast.jp の下書きを作り、`node tools/gmail-draft.mjs --send <draftId>` で送る。送信後は返り値（messageId/threadId・HTTP status）を読み戻して報告し、kim に送信操作を求めない。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:f8e76d7286ebc8e3bf7902fcd7bb744aff78af1007c0521b512ff5b4a84bfbfd / 2026-11-06 tool-name-route レビューで route（）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "ループ報告で外部状態を直接API照会せずに断定",
+    "route": "ループ・自動進行の報告で、外部システム（GitHub の PR/CI/マージ状態、Drive のファイル、Vercel の本番、Gmail 等）の状態を、自分側のログや記憶だけで「完了した／無い／マージ済み」と断定しない。報告前に当ターンで直接照会して読み戻す。GitHub は `gh pr view <番号> -R <owner/repo> --json state,mergedAt,mergeCommit,statusCheckRollup`、`gh pr checks <番号> -R <owner/repo>`、`gh run list -R <owner/repo> --limit 10 --json status,conclusion,headSha,name`、任意の API は `gh api repos/<owner>/<repo>/<path>`。Drive は DWD（kim impersonate / drive スコープ）で files.get / files.list の実応答を読む。Vercel は `vercel inspect <url>` で Ready を確認する。コミットの取込判定は squash マージで is-ancestor が偽になるため `node tools/commit-landed.mjs <sha>` を使う。照会に失敗した項目は実際のエラー本文を貼り「未確認」と書き、確率付きの否定や「user が確認して」への丸投げをしない。報告は「要素 × 照会コマンド × 実データ」の表にし、状態が変わるまで待つだけの項目も最後に再照会した結果を載せる。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:8ccfb76e6a69329b0f49d1810e9006178f22fbd0ff1bd4a6b6b1b2747be19211 / 2026-11-06 tool-name-route レビューで route（`gh api`）を手順文へ書き直して採用 / 組織指示「外部状態は直接照会だけで判定し、未照会は未確認と書く」と commit-landed.mjs の運用に整合"
+  },
+  {
+    "pattern": "外部状態の断定は直接API照会で根拠を示す",
+    "route": "完了報告の検証表の「確かめ方」欄や本文で外部状態を断定するときは、その当ターンで直接照会した実応答を根拠に書く。①Google スプレッドシートのタブ・設定の読み戻しは、DWD（kim impersonate / drive スコープ）か SA 直 JWT（`aujust-sales-automation/.gcp/sheets-sa.json`、scope=`https://www.googleapis.com/auth/spreadsheets.readonly`）で Sheets API を直接叩いて行い、`GET /v4/spreadsheets/{id}?fields=properties.title,sheets.properties`（タブ名/gid/行列数）と `GET /v4/spreadsheets/{id}/values/{tab}!A1:BZ400`（全行）の実応答を確認してから「読み戻した」と書く（詳細は knowledge entry「Google スプレッドシートの書き込み結果検証」の検証4点）。SA 鍵の無い PC（DESKTOP-PPD5V8I 等）では exit 2 で終わるため、対象シートを呼べた実測が無いまま「読み戻し」と書かない。②keyserve の登録有無（「このPCが未登録」等）は断定せず、`node tools/keyserve-status.mjs --json`（読み取り専用・認証経路/HTTP status/配布ファイル一覧を出力）で直接照会し、照会できない場合や status 非2xx は実際の error 本文を添えて「未確認」と書く。照会していない不在・未登録を確率付きで否定しない。実例: 2026-11-05 session 2415dbb8 は「Sheets API でタブ・設定を読み戻し」（対象シート呼び出しの実測なし）と「フォームのリンク先URLは keyserve から取得できず（このPCが未登録）」（keyserve 未照会）を断定し rule 4 で検出された。",
+    "confidence": "high",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=Sheets API）: 7ef2fd3f94f75a307f8d76af10d9b681cb79018cf0d06ea21a515d13f033728a / 2026-11-07 route を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "公開価格の改定判断を kim に投げる",
+    "route": "価格変更の可否は rule 3（OAuth/支払い/アカウント/物理作業）の4理由に該当しない。kim に選択を投げず Claude が決定し、変更実装・反映・読み戻しまで当ターンで完了する。経営判断として明確な選択肢（複数パターンの金額と影響範囲）を示して kim に委ねる必要がある場合も、判断項目を1つに絞り、根拠となるデータを併記した上で依頼する。codex-do.mjs では価格改定の判断を代替できない。",
+    "confidence": "medium",
+    "source": "2026-11-02 手動補完（元: codex-do.mjs 道具名のみ→手順文に書換）"
+  },
+  {
+    "pattern": "セッション終了時のタブ起動・タブ閉じを kim に頼む",
+    "route": "セッション終了時のタブ起動は close-session.mjs / auto-session 再入の仕組みで自動化する。kim にタブ操作・Enter を頼まない。タブを閉じる操作は OS 操作であり Claude が自動化できないが、閉じる必要が本当にあるかを再判定する（/clear で代替できる場合がある）。やむを得ず kim に依頼する場合も、閉じるタブの種類（ブラウザ/VSCode のどちらか・セッションID）と成功の見え方を明記する。codex-do.mjs ではこのOS操作を代替できない。",
+    "confidence": "medium",
+    "source": "2026-11-02 手動補完（元: codex-do.mjs 道具名のみ→手順文に書換）"
   }
 ]

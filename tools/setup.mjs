@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { distributePlaybooks } from './lib/playbook-distribution.mjs';
 import fs from 'node:fs';
+import { effectiveHooks, runtimeManifestPath, dispatcherProblems } from './hook-dispatch-registry.mjs';
 import os from 'node:os';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import path from 'node:path';
@@ -11,9 +12,28 @@ import { convergeAllowRules } from './allow-rules.mjs';
 import { convergeMobileStandby } from './mobile-standby.mjs';
 export { classifyTaskActions } from './setup-task-hidden-actions.mjs';
 import { inspectTaskHiddenActions } from './setup-task-hidden-actions.mjs';
+import { convergeDeadlineTasks } from './setup-deadline-watch.mjs';
+import { convergeNightlyReload } from './setup-nightly-reload.mjs';
 import { convergeNodeRuntimeSecurity } from './setup-node-runtime-security.mjs';
 
-const TYPES = new Set(['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task']);
+// git 呼び出しを非対話にする（GIT_TERMINAL_PROMPT=0 / GCM_INTERACTIVE=never）。
+// setup.mjs はテストで単体コピーされて実行されるため ./lib/seat-github.mjs を静的 import しない。
+// 判定は seat-github.mjs の同名関数と一致させること（access-doctor.test.mjs が両方を固定する）。
+function nonInteractiveGitEnv(extra = {}) {
+  return { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', ...extra };
+}
+// ls-remote 等の git 失敗を、修復対象（届かない URL）と対象外（認証・ネットワーク断）に分ける。
+// 単なる "not found"（command not found 等）は network に倒し、GitHub の実メッセージ
+// "Repository not found" / "fatal: repository '...' not found" とローカル git の
+// "does not appear to be a git repository" だけを not-found にする。
+function originFailureKind(error) {
+  const stderr = String(error?.stderr ?? '') || String(error?.message ?? '');
+  if (/could not read Username|authentication failed|permission denied|publickey|terminal prompts disabled/i.test(stderr)) return 'auth';
+  if (/Repository not found|repository '[^']*' not found|does not appear to be a git repository/i.test(stderr)) return 'not-found';
+  return 'network';
+}
+
+const TYPES = new Set(['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task', 'git-origin']);
 const SEVERITIES = new Set(['required', 'optional', 'manual']);
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -106,20 +126,47 @@ function check(item) {
       if (spec.ifPresent && !candidates.some(fs.existsSync)) return null;
       return candidates.some((target) => readNonempty(target, spec.kind));
     }
+    if (item.type === 'git-origin') {
+      // 配布元リポの origin が届くかを確かめる。届かない URL（not-found・未認証で認証エラーに見える auth）は
+      // NG（repair が向け替えを試みる）、ネットワーク断だけ NOTICE。未配置は NOTICE。
+      const target = resolveHome(spec.path);
+      if (!fs.existsSync(target) || !fs.existsSync(path.join(target, '.git'))) return null;
+      try {
+        execFileSync('git', ['-C', target, 'ls-remote', 'origin', 'HEAD'], {
+          encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: nonInteractiveGitEnv(),
+        });
+        return true;
+      } catch (error) {
+        const kind = originFailureKind(error);
+        return kind === 'not-found' || kind === 'auth' ? false : null;
+      }
+    }
     if (item.type === 'file-contains') {
-      const raw = fs.readFileSync(resolveHome(spec.path), 'utf8');
+      let raw = fs.readFileSync(resolveHome(spec.path), 'utf8');
+      if (spec.path === '.claude/settings.json') {
+        const settings = JSON.parse(raw.replace(/^\uFEFF/, ''));
+        try { raw += JSON.stringify(effectiveHooks(settings, JSON.parse(fs.readFileSync(runtimeManifestPath(home), 'utf8')))); } catch {}
+      }
       return spec.regex ? new RegExp(spec.regex).test(raw) : raw.includes(spec.contains);
     }
     if (item.type === 'json-valid') {
       const raw = fs.readFileSync(resolveHome(spec.path), 'utf8');
       if (spec.bom === false && raw.startsWith('\uFEFF')) return false;
       const parsed = JSON.parse(raw);
+      if (spec.dispatchers) return dispatcherProblems(parsed, path.dirname(scriptDir)).length === 0 && fs.existsSync(runtimeManifestPath(home));
       if (spec.hookEvent) {
+        try { parsed.hooks = effectiveHooks(parsed, JSON.parse(fs.readFileSync(runtimeManifestPath(home), 'utf8'))); } catch {}
         const hooks = parsed.hooks?.[spec.hookEvent]?.flatMap(group => group.hooks || []) || [];
-        const expected = spec.hookRunner
-          ? `node "${path.join(scriptDir, spec.hookRunner)}" "${path.join(scriptDir, spec.hookScript)}"${spec.hookArgs ?? ''}`
-          : `node "${path.join(scriptDir, spec.hookScript)}"${spec.hookArgs ?? ' --hook'}`;
-        return hooks.some(hook => hook.type === 'command' && hook.command === expected
+        const knownToolsDirs = [
+          path.join(home, 'orgiast-claude-rules', 'tools'),
+          path.join(home, '.claude', 'nightly-repo', 'tools'),
+          path.join(home, 'Downloads', 'orgiast-claude-rules', 'tools'),
+          scriptDir,
+        ];
+        const expectedCommands = new Set(knownToolsDirs.map(toolsDir => spec.hookRunner
+          ? `node "${path.join(toolsDir, spec.hookRunner)}" "${path.join(toolsDir, spec.hookScript)}"${spec.hookArgs ?? ''}`
+          : `node "${path.join(toolsDir, spec.hookScript)}"${spec.hookArgs ?? ' --hook'}`));
+        return hooks.some(hook => hook.type === 'command' && expectedCommands.has(hook.command)
           && (spec.async !== false ? hook.async === true : hook.async === undefined || hook.async === false)
           && hook.timeout === (spec.timeout ?? 5));
       }
@@ -185,7 +232,9 @@ if (manifest) {
       // Let the registrar select the dedicated main anchor unless explicitly overridden.
       execFileSync(process.execPath, [path.join(scriptDir, 'register-hooks.mjs'), '--hooks-only'], {
         env: { ...process.env, ORGIAST_HOME: home },
-        timeout: 30_000, stdio: 'pipe', windowsHide: true,
+        // Registration also computes the expected hook set in a child process.
+        // Match other repairs on slow Windows/WSL filesystems.
+        timeout: 120_000, stdio: 'pipe', windowsHide: true,
       });
       const repaired = convergeAllowRules(home);
       settingsMigration = { item, status: 'OK', checked: true, repaired };
@@ -232,7 +281,16 @@ if (manifest) {
   }
   if (converge && !valueAfter('--manifest')) {
     const { description, ...outcome } = inspectTaskHiddenActions({ converge });
-    results.push({ item: { id: 'task-hidden-actions', severity: 'optional', description }, ...outcome });
+    // reason は fleet beacon に載る。NG のときにタスク名をリモートから特定できるようにする。
+    results.push({ item: { id: 'task-hidden-actions', severity: 'optional', description }, ...outcome, reason: outcome.status === 'OK' ? '' : description });
+  }
+  if (converge && !valueAfter('--manifest')) {
+    const { description, ...outcome } = convergeNightlyReload();
+    results.push({ item: { id: 'nightly-reload-vscode', severity: 'required', description }, ...outcome });
+  }
+  if (converge && !valueAfter('--manifest')) {
+    const { description, ...outcome } = convergeDeadlineTasks({ home });
+    results.push({ item: { id: 'deadline-watch', severity: 'required', description }, ...outcome });
   }
   emit(results);
   // fleet ビーコン: converge の結果を GAS へ送る。fail-open（exit code に一切影響させない）。

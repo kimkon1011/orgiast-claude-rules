@@ -27,6 +27,29 @@ test('new rollout entries must declare the seven day window; legacy inventory is
       assert.equal(row.rollout, 'deny');
       assert.equal(row.immediatePolicy, '2026-10-29 user 指示: 公開鍵有効化後は契約外アカウントの蓄積アクセスを拒否');
       continue; // Direct synchronous account policy, activated by public key installation.
+
+}
+    if (name === 'mail-send-approval-gate') { assert.equal(row.rollout, 'deny'); assert.equal(row.immediatePolicy, '2026-11-05 kim 承認: 組織指示11 メール送信は本文確認＋明示承認後のみ'); continue; }
+    if (name === 'delete-approval-gate') { assert.equal(row.rollout, 'deny'); assert.equal(row.immediatePolicy, '2026-11-05 kim 承認: 組織指示12 削除は user 許可後のみ'); continue; }
+    if (name === 'seat-name-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-11-04 kim 厳命: 席番号呼称と Drive 引き渡し (§1.5.0.2/§1.5.0.3)');
+      continue;
+    }
+    if (name === 'progress-cron-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-11-04 user 指示: 定期進捗の CronCreate を Stop で強制');
+      continue;
+    }
+    if (name === 'kim-discord-report-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-27 kim 厳命: kim 宛 Discord 報告を全PCで停止');
+      continue; // kim の明示指示で初受信のPCにも即時適用。
+    }
+    if (name === 'lane-repair-first-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-29 user 指示: 全PC・全アカウントで故障レーン修復を最優先');
+      continue; // Explicit repair-first policy applies immediately on every PC.
     }
     if (name === 'exec-tree-edit-guard') {
       assert.equal(row.rollout, 'deny');
@@ -63,10 +86,20 @@ test('new rollout entries must declare the seven day window; legacy inventory is
       assert.equal(row.immediatePolicy, '2026-10-27 TimeRex 実害: 社外送信の完了主張に読み戻し証拠を要求');
       continue; // External communication cannot be undone, immediate on all PCs.
     }
+    if (name === 'deliverable-drive-link-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-11-04 nishi 指示: 渡すファイルが見つからず往復が発生した実害の再発防止');
+      continue; // Explicit recurrence-prevention policy applies immediately.
+    }
     if (name === 'bihin-kcol-gate') {
       assert.equal(row.rollout, 'deny');
       assert.equal(row.immediatePolicy, '2026-10-23 古川さん依頼: 備品管理表K列のデータ破損防止');
       continue; // Explicit data-corruption prevention policy, immediate on all PCs.
+    }
+    if (name === 'cmd-ascii-guard') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-11-04 kim 指示: .cmd の文字化け（日本語行で全行失敗）を全PC全アカウント全プロジェクトで再発防止');
+      continue; // .cmd/.bat non-ASCII corruption prevention, immediate on all PCs.
     }
     if (!row.legacy) {
       assert.ok(Number.isFinite(Date.parse(row.distributedAt)));

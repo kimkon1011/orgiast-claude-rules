@@ -4,6 +4,7 @@ import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import { readEnvValue } from './env-kv.mjs';
 import { allowedForCategory, callWithFallback, FALLBACK_CHAIN, preferredForCategory } from './llm-fallback.mjs';
 import { geminiUsage, recordGeminiUsage } from './gemini-usage-ledger.mjs';
+import { isEntry } from './is-entry.mjs';
 
 const PROVIDERS = {
   // 実測で精度が高く、llama-3.3-70b より安価な共通既定モデル。
@@ -15,13 +16,15 @@ const PROVIDERS = {
   cerebras: { base: 'https://api.cerebras.ai/v1/chat/completions', keyEnv: 'CEREBRAS_API_KEY', keyFile: 'cerebras.env', model: 'zai-glm-4.7' },
   // Genspark Pro の前払いクレジット枠。OpenAI 互換の LLM proxy で claude-opus-5 等36モデルが1キーで叩ける。
   genspark: { base: 'https://www.genspark.ai/api/llm_proxy/v1/chat/completions', keyEnv: 'GSK_PROXY_KEY', keyFile: 'genspark-proxy.env', model: 'gpt-5.6-luna' },
-  gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', keyEnv: 'GEMINI_API_KEY', keyFile: 'gemini.env', model: 'gemini-3.7-flash' },
+  gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', keyEnv: 'GEMINI_API_KEY', keyFile: 'gemini.env', model: 'gemini-3.6-flash' },
   deepseek: gatewayConfig('deepseek'),
   grok: { base: 'https://api.x.ai/v1/chat/completions', keyEnv: 'XAI_API_KEY', keyFile: 'xai.env', model: 'grok-3' },
   kimi: gatewayConfig('kimi'),
-  mistral: { base: 'https://api.mistral.ai/v1/chat/completions', keyEnv: 'MISTRAL_API_KEY', keyFile: 'mistral.env', model: 'mistral-large-latest' },
+  mistral: gatewayConfig('mistral'),
 };
+export const OPENROUTER_GEMINI_MODEL = `google/${PROVIDERS.gemini.model}`;
 
+if (isEntry(import.meta.url)) {
 const args = process.argv.slice(2);
 function opt(name, def) { const i = args.indexOf(name); return (i >= 0 && args[i + 1]) ? args[i + 1] : def; }
 const provider = (opt('--provider', '') || '').toLowerCase();
@@ -73,9 +76,18 @@ const selectedKey = loadKey(provider);
 if (args.includes('--print-key-status')) { console.log(selectedKey ? `${selected.keyEnv}: 設定済み` : `${selected.keyEnv}: 未設定`); process.exit(selectedKey ? 0 : 2); }
 if (!prompt) { console.error('指示テキストがありません'); process.exit(2); }
 
+const routeMissingGemini = candidate => candidate.provider === 'gemini' && !loadKey('gemini') && loadKey('openrouter')
+  ? { provider: 'openrouter', model: OPENROUTER_GEMINI_MODEL }
+  : candidate;
+const routedGeminiStart = start.provider === 'gemini' && routeMissingGemini(start).provider === 'openrouter';
+const effectiveStart = routeMissingGemini(start);
+const effectiveChain = FALLBACK_CHAIN.map(routeMissingGemini);
+if (routedGeminiStart) console.error(`[routing] gemini 鍵なし → openrouter/${OPENROUTER_GEMINI_MODEL}`);
+
 const messages = [];
 if (system) messages.push({ role: 'system', content: system });
 messages.push({ role: 'user', content: prompt });
+const GEMINI_MIN_MAX_TOKENS = 256;
 const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
 function appendAttempt(info, usage = {}) {
   if (args.includes('--no-persist')) return;
@@ -103,20 +115,23 @@ function appendAttempt(info, usage = {}) {
 try {
   const result = await callWithFallback({
     persistState: !args.includes('--no-persist'),
-    start,
+    start: effectiveStart,
     category,
     perProviderTimeoutMs,
-    chain: args.includes('--no-fallback') ? [] : FALLBACK_CHAIN,
+    chain: args.includes('--no-fallback') ? [] : effectiveChain,
     allowGatewayFallback: !args.includes('--no-fallback'),
     payloadFor(candidate) {
       const P = PROVIDERS[candidate.provider]; const key = loadKey(candidate.provider);
       if (!P || !key) return null;
-      const payload = { model: candidate.model || P.model, messages, max_tokens: maxTok, stream: false };
+      // gemini の思考トークンは max_tokens から差し引かれる。--max 10 のプローブは本文が空・out=0 の ok 行になり、
+      // delegation-health が lane_outage_unrepaired(gemini) と判定していた（2026-10-30〜11-01 実測）。
+      const payload = { model: candidate.model || P.model, messages, max_tokens: candidate.provider === 'gemini' ? Math.max(maxTok, GEMINI_MIN_MAX_TOKENS) : maxTok, stream: false };
       Object.assign(payload, gatewayParams(payload.model));
       if (P.special === 'kimi') Object.assign(payload, { reasoning_effort: 'none', temperature: 0.6 });
       return { url: P.base, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(P.extraHeaders || {}) }, body: JSON.stringify(payload) } };
     },
     async onAttempt(info) {
+      if (args.includes('--no-persist')) return;
       let usage = {};
       if (info.status === 'ok') usage = (await info.response.clone().json().catch(() => ({}))).usage || {};
       appendAttempt(info, usage);
@@ -131,4 +146,5 @@ try {
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;
+}
 }

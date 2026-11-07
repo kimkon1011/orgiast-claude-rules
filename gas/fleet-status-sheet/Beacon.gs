@@ -1,6 +1,6 @@
 // fleet ビーコン: 各PCの converge 結果（ステップの ok/skip/fail）と最終 poll を1行に集約する。
 // Mail.gs とは独立にロードできるよう、関数は _fleetBeacon... 接頭辞で名前空間を分ける。
-const FLEET_BEACON_HEADERS_ = ['label', 'account', 'reportedAt', 'steps', 'failing', 'pollAt', 'serverPollAt'];
+const FLEET_BEACON_HEADERS_ = ['label', 'account', 'reportedAt', 'steps', 'failing', 'pollAt', 'serverPollAt', 'reporterLabel', 'hostname'];
 const FLEET_BEACON_STEPS_LIMIT_ = 6000;
 const FLEET_LAST_POLL_KEY_ = 'FLEET_LAST_POLL';
 const FLEET_LAST_POLL_LIMIT_ = 8500;
@@ -22,9 +22,11 @@ function _fleetBeaconSheet_() {
   if (!id) throw new Error('SHEET_ID is not configured');
   const book = SpreadsheetApp.openById(id);
   const sheet = book.getSheetByName('fleet-beacon') || book.insertSheet('fleet-beacon');
+  if (typeof sheet.getMaxColumns === 'function' && sheet.getMaxColumns() < FLEET_BEACON_HEADERS_.length) sheet.insertColumnsAfter(sheet.getMaxColumns(), FLEET_BEACON_HEADERS_.length - sheet.getMaxColumns());
   if (sheet.getLastRow() === 0) _fleetBeaconWrite_(sheet, 1, FLEET_BEACON_HEADERS_);
   const headers = sheet.getRange(1, 1, 1, FLEET_BEACON_HEADERS_.length).getValues()[0];
-  if (JSON.stringify(headers) !== JSON.stringify(FLEET_BEACON_HEADERS_)) throw new Error('fleet-beacon header mismatch');
+  if (headers.some(function(key, i) { return key && key !== FLEET_BEACON_HEADERS_[i]; })) throw new Error('fleet-beacon header mismatch');
+  if (JSON.stringify(headers) !== JSON.stringify(FLEET_BEACON_HEADERS_)) _fleetBeaconWrite_(sheet, 1, FLEET_BEACON_HEADERS_);
   sheet.setFrozenRows(1);
   return sheet;
 }
@@ -66,6 +68,8 @@ function upsertFleetBeacon(payload) {
     const beacon = {
       label: label,
       account: String(payload.account || '').slice(0, 128),
+      reporterLabel: String(payload.reporterLabel || '').slice(0, 128),
+      hostname: String(payload.hostname || '').slice(0, 128),
       reportedAt: reportedAt,
       steps: _fleetBeaconSteps_(payload.steps),
       failing: _fleetBeaconFailing_(payload.failing),
@@ -83,12 +87,12 @@ function listFleetBeacons() {
     const serverPolls = _fleetBeaconServerPolls_();
     const beacons = rows.map(function(row) {
       const beacon = {
-        label: row.label, account: row.account, reportedAt: row.reportedAt, steps: row.steps,
+        label: row.label, account: row.account, reporterLabel: row.reporterLabel, hostname: row.hostname, reportedAt: row.reportedAt, steps: row.steps,
         failing: row.failing, pollAt: row.pollAt, serverPollAt: row.serverPollAt
       };
       if (serverPolls[beacon.label]) beacon.serverPollAt = String(serverPolls[beacon.label]);
       return beacon;
     });
-    return { ok: true, beacons: beacons, serverPolls: serverPolls };
+    return { ok: true, beacons: beacons, serverPolls: serverPolls, capabilities: ['mail-trace-v1'] };
   });
 }

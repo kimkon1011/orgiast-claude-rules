@@ -22,6 +22,9 @@ tools/.ps.tmp.ps1
 # $env:LOCALAPPDATA が未設定のまま PowerShell を起動すると repo 直下に掘られるキャッシュ
 /Microsoft/
 
+# AWS CLI/SDK が cwd=repo で起動されたときに掘る空の既定設定ディレクトリ（機械ローカル）
+/.aws/
+
 # Genspark Tool CLI の自動生成スキル (gsk init-skills)。ベンダー成果物なのでコミットしない
 .gsk/
 
@@ -30,6 +33,12 @@ tools/.ps.tmp.ps1
 
 # quota-sweep ループのローカル状態（tools/quota-sweep.mjs が「コミット対象外」と設計）
 .loop/
+
+# headless autopilot tick が作る作業証跡ディレクトリ（コミット対象外）
+/.task-evidence/
+
+# Windows デバイス名が誤作成される場合のガード
+nul
 
 # 夜間 eval-harness が ~/.claude/eval-results.jsonl から再生成するマシンローカル生成物。
 # 追跡すると毎晩 dirty になり dirty-worktree-guard が rescue ブランチを作るため追跡しない。
@@ -75,3 +84,12 @@ FEEDBACK_KIT_REPORT.md
 /evidence/internal-audit-v13/
 
 /evidence/internal-audit-v14/
+
+# brandcard-print-pdf.mjs が qrcode.min.js を実行時に tools/.cache/ へ落とすキャッシュ先。
+# 追跡しないため dirty-worktree-guard の救済対象にしない（2026-11-02 に rescue が拾った実測）。
+tools/.cache/
+
+# CodeGraph (colbymchenry/codegraph) 索引成果物。WSL /mnt/ は .codegraph-wsl/
+/.codegraph/
+/.codegraph-wsl/
+/.codegraph-npm-cache/

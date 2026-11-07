@@ -100,6 +100,34 @@ export function classifyOrphanConsoleWindows(processes) {
   });
 }
 
+// Claude の Bash ツールが起動したシェル（shell-snapshots を source する）で、until/while＋sleep の待機ループだけを対象にする。
+// 起動元 Claude が終了すると待機先が永久に来ず回り続け、反復ごとに可視コンソール窓を出す（2026-10-29: 10/20 の待機ループが9日間窓を出し続けた）。
+const CLAUDE_SHELL_MARKER = /[\\/]\.claude[\\/]shell-snapshots[\\/]snapshot-bash-/i;
+const WAIT_LOOP = /\beval\s+'[^]*\b(?:until|while)\b[^]*\bsleep\b/;
+
+export function classifyOrphanClaudeWaitLoops(processes, now = Date.now(), opts = {}) {
+  const maxAgeMin = opts.maxAgeMin ?? 120;
+  const rows = Array.isArray(processes) ? processes : processes ? [processes] : [];
+  const byPid = new Map(rows.map((row) => [Number(row.ProcessId ?? row.pid), row]));
+  const isClaudeShell = (row) => String(row?.Name ?? row?.name ?? '').toLowerCase() === 'bash.exe'
+    && CLAUDE_SHELL_MARKER.test(String(row?.CommandLine ?? row?.commandLine ?? ''));
+  return rows.flatMap((row) => {
+    if (!isClaudeShell(row)) return [];
+    const commandLine = String(row.CommandLine ?? row.commandLine ?? '');
+    const parent = byPid.get(Number(row.ParentProcessId ?? row.parentPid));
+    // Git\bin\bash.exe → usr\bin\bash.exe の多段は最上位だけを返し、ツリーごと止める。
+    if (isClaudeShell(parent)) return [];
+    if (!WAIT_LOOP.test(commandLine)) return [];
+    const createdAt = creationTime(row.CreationDate ?? row.creationDate);
+    const ageMin = (now - createdAt) / MINUTE;
+    if (!Number.isFinite(ageMin) || ageMin <= maxAgeMin) return [];
+    // 親が生存し子より先に起動していれば起動元 Claude は健在（PID 再利用は起動時刻で見分ける）。
+    if (parent && creationTime(parent.CreationDate ?? parent.creationDate) <= createdAt) return [];
+    const bytes = Number(row.WorkingSetSize ?? row.workingSetSize ?? 0);
+    return [{ pid: Number(row.ProcessId ?? row.pid), name: 'bash.exe', commandLine, kind: 'orphan-claude-wait-loop', ageMin, mb: Number.isFinite(bytes) ? bytes / 1024 / 1024 : 0 }];
+  });
+}
+
 const VSCODE_IDLE_MAX_KILLS = 15;
 const START_TIME_TOLERANCE_MS = 2 * MINUTE;
 
@@ -113,11 +141,16 @@ export function isVscodeClaude(processInfo) {
 }
 
 // 純粋関数: opts.readSession(pid) -> sessions JSON か null、opts.transcriptMtime(sessionId) -> ms か null。
+export function readHygieneConfig(home) {
+  try { return JSON.parse(fs.readFileSync(path.join(home, '.claude', 'process-hygiene.json'), 'utf8')) ?? {}; }
+  catch { return {}; }
+}
+
 export function classifyVscodeIdle(processes, now = Date.now(), opts = {}) {
   const idleMin = opts.idleMin ?? 720;
   const max = opts.max ?? VSCODE_IDLE_MAX_KILLS;
   const rows = Array.isArray(processes) ? processes : processes ? [processes] : [];
-  if (opts.batchLockActive) return [];
+  if (opts.batchLockActive || opts.vscodeIdleKill === false) return [];
   const found = [];
   for (const processInfo of rows) {
     if (!isVscodeClaude(processInfo)) continue;
@@ -416,6 +449,13 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     for (const item of stale) console.log(`pid=${item.pid} age=${item.ageMin.toFixed(0)}min mb=${item.mb.toFixed(1)} ${item.commandLine}`);
     console.log(`process-hygiene: orphan-console-windows ${opts.kill ? 'kill' : 'dry-run'} ${summary(orphanWindows)}`);
     for (const item of orphanWindows) console.log(`terminal-pid=${item.pid} mb=${item.mb.toFixed(1)} ${item.commandLine}`);
+    const waitLoops = classifyOrphanClaudeWaitLoops(processes, now, opts);
+    console.log(`process-hygiene: orphan-claude-wait-loops ${opts.kill ? 'kill' : 'dry-run'} ${summary(waitLoops)}`);
+    for (const item of waitLoops) console.log(`pid=${item.pid} age=${item.ageMin.toFixed(0)}min ${item.commandLine.slice(0, 300)}`);
+    if (opts.kill && waitLoops.length) {
+      const failedLoops = (deps.stopOrphanShells ?? ((items) => stopProcessTrees(items, deps.spawnImpl)))(waitLoops);
+      console.log(`process-hygiene: orphan-claude-wait-loops stopped=${waitLoops.length - failedLoops.length} failed=${failedLoops.length}`);
+    }
     const freeGb = deps.commitFreeGb !== undefined ? Number(deps.commitFreeGb) : commitFreeGb(deps.spawnImpl);
     const idleGate = shouldKillVscodeIdle(freeGb, opts.vscodeIdleMinFreeGb);
     console.log(`process-hygiene: vscode-claude-idle gate コミット空き=${Number.isFinite(freeGb) ? freeGb.toFixed(1) : '不明'}GB 閾値=${opts.vscodeIdleMinFreeGb}GB → ${idleGate.kill ? 'kill有効' : 'skip'} (${idleGate.reason})`);
@@ -424,6 +464,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     console.log(`process-hygiene: vscode-claude-idle cpu-gate load=${cpu.loads?.length === 2 ? cpu.loads.map((v) => Number.isFinite(v) ? v : '不明').join(',') : '不明'} ${policy.cpuGate ? '>=' : '未成立 閾値='}${opts.vscodeIdleCpuLoad} → 閾値 ${policy.idleMin}分`);
     const idleClaude = classifyVscodeIdle(processes, now, {
       ...policy,
+      vscodeIdleKill: readHygieneConfig(home).vscodeIdleKill,
       cpu5sByPid: cpu.cpu5sByPid,
       readSession: deps.readSession ?? ((pid) => readSessionFile(home, pid)),
       transcriptMtime: deps.transcriptMtime ?? ((id) => findTranscriptMtime(home, id)),

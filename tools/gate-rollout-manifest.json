@@ -5,7 +5,16 @@
     "DESKTOP-2D0R4LI"
   ],
   "gates": {
+<<<<<<< HEAD
     "knowledge-guard": { "rollout": "deny", "immediatePolicy": "2026-10-29 user 指示: 公開鍵有効化後は契約外アカウントの蓄積アクセスを拒否" },
+=======
+    "bg-turn-report-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-05T00:00:00Z", "denyAfter": "2026-11-12T00:00:00Z" },
+    "seat-name-gate": {"rollout":"deny","immediatePolicy":"2026-11-04 kim 厳命: 席番号呼称と Drive 引き渡し (§1.5.0.2/§1.5.0.3)"},
+    "deliverable-drive-link-gate": { "rollout": "deny", "immediatePolicy": "2026-11-04 nishi 指示: 渡すファイルが見つからず往復が発生した実害の再発防止" },
+    "progress-cron-gate": { "rollout": "deny", "immediatePolicy": "2026-11-04 user 指示: 定期進捗の CronCreate を Stop で強制" },
+    "kim-discord-report-gate": { "rollout": "deny", "immediatePolicy": "2026-10-27 kim 厳命: kim 宛 Discord 報告を全PCで停止" },
+    "lane-repair-first-gate": { "rollout": "deny", "immediatePolicy": "2026-10-29 user 指示: 全PC・全アカウントで故障レーン修復を最優先" },
+>>>>>>> origin/main
     "exec-tree-edit-guard": { "rollout": "deny", "immediatePolicy": "2026-10-26 user 指示: 実行ツリーの直接編集を即時拒否" },
     "mail-consistency-gate": { "rollout": "deny", "immediatePolicy": "2026-10-26 博展見積: 合意済み『設営スタッフ不要』が見積に反映されないまま請求へ進みかけた", "distributedAt": "2026-10-26T00:00:00Z", "denyAfter": "2026-11-02T00:00:00Z" },
     "mail-draft-account-gate": { "rollout": "deny", "immediatePolicy": "2026-10-25 kim 指示: 全PCのメール下書きは seisaku-team@orgiast.jp に統一" },
@@ -14,8 +23,10 @@
     "pretooluse-line-broadcast-guard": { "rollout": "deny", "immediatePolicy": "2026-10-23 kim 指示: LINE broadcast による宛先違い誤送信の再発防止" },
     "share-before-send-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-10-17T00:00:00Z", "denyAfter": "2026-10-24T00:00:00Z" },
     "message-locator-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-10-26T00:00:00Z", "denyAfter": "2026-11-02T00:00:00Z" },
-    "gmail-connector-url-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-10-18T00:00:00Z", "denyAfter": "2026-10-25T00:00:00Z" },
+    "gmail-connector-url-gate": { "rollout": "deny", "pilotDeny": true, "immediatePolicy": "2026-10-30 user-PC で社外宛返信の URL が google.com/url?q= に書き換わった実害", "distributedAt": "2026-10-18T00:00:00Z", "denyAfter": "2026-10-25T00:00:00Z" },
+    "cmd-ascii-guard": { "rollout": "deny", "immediatePolicy": "2026-11-04 kim 指示: .cmd の文字化け（日本語行で全行失敗）を全PC全アカウント全プロジェクトで再発防止" },
     "api-billing-guard": { "rollout": "deny", "immediatePolicy": "2026-10-17 kim 厳命: 従量課金停止", "distributedAt": "2026-10-17T00:00:00Z" },
+    "app-llm-cost-gate": { "immediatePolicy": "2026-11-02 kim 指示: アプリからの Claude API 利用を全PC全アカウント全プロジェクトで禁止", "mode": "block", "rollout": "deny", "distributedAt": "2026-10-17T00:00:00Z", "denyAfter": "2026-10-24T00:00:00Z" },
     "askuser-selfcheck-gate": {
       "rollout": "deny",
       "legacy": true
@@ -37,6 +48,7 @@
       "rollout": "deny",
       "legacy": true
     },
+    "claude-fallback-report-gate": { "immediatePolicy": "2026-11-02 kim 指示: アプリからの Claude API 利用を全PC全アカウント全プロジェクトで禁止", "rollout": "deny", "distributedAt": "2026-10-18T00:00:00Z", "denyAfter": "2026-10-25T00:00:00Z" },
     "external-state-claim-gate": {
       "rollout": "deny",
       "legacy": true
@@ -217,18 +229,33 @@
       "denyAfter": "2026-10-24T00:00:00Z",
       "pilotDeny": true
     },
+    "answer-canonical-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-29T00:00:00Z",
+      "denyAfter": "2026-11-05T00:00:00Z",
+      "pilotDeny": true
+    },
     "deferral-wait-gate": {
       "rollout": "deny",
       "distributedAt": "2026-10-20T00:00:00Z",
       "denyAfter": "2026-10-27T00:00:00Z",
       "pilotDeny": true
     },
+    "third-party-nudge-gate": { "rollout": "deny", "distributedAt": "2026-11-02T00:00:00Z", "denyAfter": "2026-11-09T00:00:00Z", "pilotDeny": true },
     "past-log-search-gate": {
       "rollout": "deny",
       "distributedAt": "2026-10-17T00:00:00Z",
       "denyAfter": "2026-10-24T00:00:00Z",
       "pilotDeny": true
-    }
+    },
+    "unregistered-promise-gate": {
+      "rollout": "deny",
+      "distributedAt": "2026-10-26T00:00:00Z",
+      "denyAfter": "2026-11-02T00:00:00Z",
+      "pilotDeny": true
+    },
+    "mail-send-approval-gate": {"rollout": "deny", "distributedAt": "2026-11-05T00:00:00Z", "immediatePolicy": "2026-11-05 kim 承認: 組織指示11 メール送信は本文確認＋明示承認後のみ"},
+    "delete-approval-gate": {"rollout": "deny", "distributedAt": "2026-11-05T00:00:00Z", "immediatePolicy": "2026-11-05 kim 承認: 組織指示12 削除は user 許可後のみ"}
   },
   "pilotHostsEvidence": "fleet-pc-map.json: kim-PC.hostname (2026-08-27 recorded observation)"
 }

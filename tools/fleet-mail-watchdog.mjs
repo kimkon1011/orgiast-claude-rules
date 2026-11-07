@@ -1,17 +1,20 @@
 #!/usr/bin/env node
+import { discordAllowed } from './lib/kim-discord-allowlist.mjs';
 // Server-side sweep owns SLA detection; this is its Discord/DM fallback.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { parseEnvText } from './env-kv.mjs';
-import { createClient, capabilityClient, readInbox, syncMailState } from './fleet-mail.mjs';
+import { createClient, acquireLock, capabilityClient, readInbox, syncMailState } from './fleet-mail.mjs';
 import { parseLaneHealthMail } from './lib/lane-health.mjs';
 import { redactSecrets } from './fleet-agent.mjs';
 import { notifyKim, resolveDiscordBotToken } from './notify-kim.mjs';
 import { CHANNEL, KIM_USER_ID, postToChannel } from './lib/fleet-mail-discord.mjs';
 import { runLaneHealthWatch } from './fleet-lane-health-report.mjs';
+import { loadLedger, ledgerPath, saveJson } from './lib/fleet-chase-ledger.mjs';
 import { formatKimNotice } from './lib/kim-notice.mjs';
+import { drainSpool } from './kim-inbox.mjs';
 export { CHANNEL, postToChannel };
 export function formatAlert(entry) {
   const clean = value => redactSecrets(String(value || '')).replace(/\s+/g, ' ');
@@ -31,11 +34,30 @@ export async function markLaneHealthSeen({ home, request, readInboxImpl = readIn
   }
   return marked;
 }
+export function recordDeliveryAlert(home, entry) {
+  const release = acquireLock(path.join(home, '.claude/fleet-chase/.lock'));
+  if (!release) throw new Error('fleet-chase ledger locked');
+  try {
+    const ledger = loadLedger(home);
+    ledger.deliveryAlerts ||= {};
+    ledger.deliveryAlerts[entry.id] = { ...entry, recordedAt: new Date().toISOString() };
+    saveJson(ledgerPath(home), ledger);
+  } finally { release(); }
+}
 export async function main(argv = process.argv.slice(2), deps = {}) {
+  if (argv.includes('--dry-run')) return runOnce(argv, deps);
+  const home = deps.home ?? process.env.ORGIAST_HOME ?? os.homedir();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  const release = acquireLock(path.join(home, '.claude/fleet-mail-watchdog.lock'));
+  if (!release) { (deps.stderr ?? console.error)('fleet-mail-watchdog: already running=1'); return 0; }
+  try { return await runOnce(argv, deps); } finally { release(); }
+}
+async function runOnce(argv, deps) {
   const home = deps.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   const out = deps.stdout ?? console.log, err = deps.stderr ?? console.error;
   const dryRun = argv.includes('--dry-run');
   for (const arg of argv) if (!['--dry-run', '--json'].includes(arg)) throw new Error('unknown option');
+  if (!dryRun) await (deps.drainSpool ?? drainSpool)(home, { stderr: err });
   // 各PCの AI レーン健全性（[lane-health] note）の集計と新規 dead の DM。fleet-sheet 設定の有無とは独立（受信済み note を読むだけ）。
   try {
     const lane = await (deps.laneHealthWatch ?? runLaneHealthWatch)({ home, now: deps.now, dryRun, notify: (text, opts) => (deps.notifyKim ?? notifyKim)(text, { ...opts, token: deps.token ?? resolveDiscordBotToken(home), userId: KIM_USER_ID, fetchImpl: deps.fetch }), stderr: err });
@@ -62,20 +84,12 @@ ${lane.table}`);
     const token = deps.token ?? resolveDiscordBotToken(home);
     for (const entry of pending) {
       try {
-        const message = formatAlert(entry);
-        let channel = false, dm = false;
-        try { if (token) { await (deps.postChannel ?? postToChannel)(token, CHANNEL, message, deps.fetch); channel = true; } }
-        catch { err('fleet-mail-watchdog: チャンネル通知失敗=1'); }
-        try {
-          const result = await (deps.notifyKim ?? notifyKim)(message, { home, token, userId: KIM_USER_ID, fetchImpl: deps.fetch, webhookFallback: false });
-          dm = result?.delivered === 'dm';
-        } catch { err('fleet-mail-watchdog: DM通知失敗=1'); }
-        // Only actual Discord delivery counts; notifyKim's {delivered:'none'} is not success.
-        if (channel || dm) {
-          const ack = await request('mail-alerts', { notifiedIds: [entry.id] });
-          if (ack?.ok === false) throw new Error('fleet-mail-watchdog: 通知確認失敗=1');
-          notified++;
-        } else failed++;
+        // Delivery SLA is machine work. Persist evidence in the chase ledger; only
+        // fleet-chase's decision classification may escalate to kim.
+        await (deps.recordAlert ?? recordDeliveryAlert)(home, entry);
+        const ack = await request('mail-alerts', { notifiedIds: [entry.id] });
+        if (ack?.ok === false) throw new Error('fleet-mail-watchdog: 記録確認失敗=1');
+        notified++;
       } catch { failed++; err('fleet-mail-watchdog: 通知確認失敗=1'); }
     }
   }
@@ -84,6 +98,12 @@ ${lane.table}`);
   return 0;
 }
 if (isEntry(import.meta.url)) {
+  // The scheduler launches once per hour, not a daemon. Bound hung network work
+  // even when the scheduler's PowerShell parent has already exited.
+  const deadline = setTimeout(() => { console.error('fleet-mail-watchdog: 15 minute deadline exceeded=1'); process.exit(1); }, 15 * 60_000);
+  deadline.unref();
   try { process.exitCode = await main(); }
   catch { console.error('fleet-mail-watchdog: 監視失敗=1'); process.exitCode = 1; }
+  // Keep the unref'ed deadline armed: leaked handles after main returns must
+  // also stop, while normal runs exit immediately without waiting for it.
 }

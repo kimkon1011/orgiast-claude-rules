@@ -1,3 +1,4 @@
+import { ensureKimEditor } from '../kim-editor.mjs';
 import { getDriveToken, driveApi } from '../drive-auth.mjs';
 import { upload } from '../../drive-upload.mjs';
 import { auditError } from './common.mjs';
@@ -16,6 +17,7 @@ export async function uploadReport(file, { getToken = getDriveToken, api = drive
       body: JSON.stringify({ name: '内部監査レポート', mimeType: 'application/vnd.google-apps.folder', parents: ['root'] }),
     })).json();
     folder = created.id;
+    await ensureKimEditor(folder, { actingUser: as, token, api, created: true });
   }
   if (!folder) throw auditError('レポートフォルダID未取得');
   return uploadFile({ file, folder, as, keyPath, name });

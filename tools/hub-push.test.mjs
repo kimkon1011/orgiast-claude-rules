@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { normalizeLf, sha1Lf, isUnchanged, buildManifest, pushHub, collectTargets, tokyoDate } from './hub-push.mjs';
+import { normalizeLf, sha1Lf, isUnchanged, buildManifest, pushHub, collectTargets, tokyoDate, runNightlyHub } from './hub-push.mjs';
 
 const prev = { version: 7, updatedAt: '2026-09-01', note: 'preserve', files: [
   { title: 'CLAUDE.md.template', in: 'hub', localTarget: '~/.claude/CLAUDE.md', extra: true },
@@ -49,6 +49,7 @@ function fakeDrive({ content = 'old\n', missing = false, duplicates = false, fai
     assert.equal(token, 'test-token');
     calls.push({ url, ...opts });
     const u = new URL(url);
+    if (u.pathname.endsWith('/permissions') && opts.method === 'GET') return { json: async () => ({ permissions: [{ type: 'user', emailAddress: 'kim@orgiast.jp', role: 'writer' }] }) };
     if (opts.method) {
       if (fail && u.pathname.includes(fail)) throw new Error('simulated write failure');
       return { json: async () => ({ id: 'created-id' }) };
@@ -73,7 +74,7 @@ async function run(options = {}, overrides = {}) {
   const logs = [], warnings = [];
   const stats = await pushHub({ targets: [target], token: 'test-token', apiFn: fake.apiFn,
     today: '2026-10-01', log: (line) => logs.push(line), warn: (line) => warnings.push(line), ...overrides });
-  return { ...fake, logs, warnings, stats, writes: fake.calls.filter((call) => call.method) };
+  return { ...fake, logs, warnings, stats, writes: fake.calls.filter((call) => call.method && call.method !== 'GET') };
 }
 
 test('regression: CRLF-only differences are unchanged and do not rotate manifest', async () => {
@@ -167,4 +168,20 @@ test('registration preserves the deployed hidden task, working directory and sch
   assert.match(script, /-TaskName 'OrgiastHubPush'.*-Force/);
   assert.match(script, /-Daily -At '02:40'/);
   assert.match(script, /Resolve-RegisterRepoRoot/);
+});
+
+
+test('nightly hub runs push→knowledge→portable, preserves dry-run and propagates failures', async () => {
+  const calls = [];
+  const portable = async () => calls.push('portable');
+  await runNightlyHub({ push: async () => calls.push('hub'), knowledge: async () => calls.push('knowledge'), portable });
+  assert.deepEqual(calls, ['hub', 'knowledge', 'portable']);
+  calls.length = 0;
+  await runNightlyHub({ dryRun: true, push: async () => calls.push('hub'), knowledge: async () => calls.push('knowledge'), portable });
+  assert.deepEqual(calls, ['hub']);
+  await assert.rejects(runNightlyHub({ push: async () => {}, knowledge: async () => { throw Error('knowledge failed'); }, portable: async () => {} }), /knowledge failed/);
+  await assert.rejects(runNightlyHub({ push: async () => {}, knowledge: async () => {}, portable: async () => { throw Error('portable failed'); } }), /portable failed/);
+  calls.length = 0;
+  await runNightlyHub({ dryRun: true, push: async () => calls.push('hub'), knowledge: async () => calls.push('knowledge'), portable: async () => calls.push('portable') });
+  assert.deepEqual(calls, ['hub']);
 });

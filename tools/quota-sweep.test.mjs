@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { normalizeLandedChecks, filterWindowsForCurrentAuth, isTransientWindowReadError, claudeWindowReader, commandRunner, queueRepeatedFailure, queueRepeatedDeferral, writeWorktreePointer, prepareTree, preserveDirtyTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer, createPullRequest } from './quota-sweep.mjs';
+import { normalizeLandedChecks, filterWindowsForCurrentAuth, isTransientWindowReadError, claudeWindowReader, commandRunner, indexLockPath, tryRemoveStaleIndexLock, queueRepeatedFailure, queueRepeatedDeferral, writeWorktreePointer, prepareTree, preserveDirtyTree, DEFAULT_GOAL, MAX_TICKS, selectGoal, tickPrompt, contractPrompt, canRunWindow, interactiveClaude, main, makeLedger, runSweep, parseOutput, acquireLock, readWorktreePointer, createPullRequest } from './quota-sweep.mjs';
 import { runBounded, killTree } from './lib/quota-sweep-process.mjs';
 import { interactiveCodex, wslPath } from './lib/quota-sweep-host.mjs';
 import { decideSweep, resetKey, sameReset } from './lib/quota-windows.mjs';
@@ -83,6 +83,27 @@ test('deadline kills process tree, never spawns after deadline', async () => {
   let args; killTree(123, { platform: 'win32', spawnImpl: (exe, argv) => { assert.equal(exe, 'taskkill'); args = argv; return { status: 0 }; } });
   assert.deepEqual(args, ['/PID', '123', '/T', '/F']);
 });
+// 2026-10-26T20:17Z 実測: 期限到達時に watchdog と親のタイマーが同時に taskkill し、後勝ち側は
+// 「プロセスが見つかりません」exit 128 になる（子は既に終了済み = 正常な二重 kill）。
+// 2026-11-02 実測: Node.js spawnSync 経由だと taskkill は exit 255 を返す（native Windows API）。
+// 128/255 は POSIX 分岐の ESRCH と同様に無視し、stderr / ledger の reason を汚さないこと。
+// 0 ・ 128 ・ 255 以外（例: 1 = アクセス拒否）は子が残るため従来どおり投げること。
+test('killTree tolerates taskkill 128 (process already exited)', () => {
+  killTree(123, { platform: 'win32', spawnImpl: () => ({ status: 128 }) }); // must not throw
+  assert.throws(() => killTree(123, { platform: 'win32', spawnImpl: () => ({ status: 1 }) }), /taskkill failed: 1/);
+  assert.throws(() => killTree(123, { platform: 'win32', spawnImpl: () => ({ error: new Error('ENOENT') }) }), /ENOENT/);
+});
+test('killTree tolerates taskkill 255 (spawnSync native Windows path)', () => {
+  // Node.js spawnSync 経由で taskkill を呼ぶと、プロセス不在時に 255 が返る（Git Bash の 128 に相当）。
+  killTree(123, { platform: 'win32', spawnImpl: () => ({ status: 255 }) }); // must not throw
+});
+test('killTree tolerates taskkill ETIMEDOUT (kill timed out)', () => {
+  // ETIMEDOUT from spawnSync means taskkill didn't finish within the 10s timeout.
+  // This is normal at deadline (race: watchdog and parent both try to kill).
+  killTree(123, { platform: 'win32', spawnImpl: () => ({ status: null, error: Object.assign(new Error('spawnSync taskkill ETIMEDOUT'), { code: 'ETIMEDOUT' }) }) }); // must not throw
+  // Other error codes should still throw
+  assert.throws(() => killTree(123, { platform: 'win32', spawnImpl: () => ({ status: null, error: Object.assign(new Error('spawnSync taskkill ENOENT'), { code: 'ENOENT' }) }) }), /ENOENT/);
+});
 test('FINAL only from final structured message, never quoted tool text', () => {
   assert.equal(parseOutput(JSON.stringify({ result: 'ITERATING: FINAL is not proven' })).final, false);
   assert.equal(parseOutput(JSON.stringify({ result: 'FINAL\nall evidence recorded', usage: { input_tokens: 4, output_tokens: 5 } })).final, true);
@@ -119,7 +140,8 @@ test('prepareTree は dirty を commit・push してから新ブランチへ進�
   assert.ok(verbs.indexOf('commit') >= 0);
   assert.ok(verbs.indexOf('commit') < verbs.indexOf('push'));
   assert.ok(verbs.indexOf('push') < verbs.indexOf('checkout'));
-  assert.equal(statuses, 2);
+  // :!.loop の status（2回）＋ .loop/ の status（1回）＝3回
+  assert.equal(statuses, 3);
   // :!.loop を付けると git 2.55 は exit 1 で拒否し救済 commit が作られない（2026-10-24 実測）。
   assert.deepEqual(calls.find(args => args[0] === 'add'), ['add', '-A', '--', '.']);
 });
@@ -147,7 +169,7 @@ test('prepareTree は救済 commit 後も dirty なら従来メッセージで�
 });
 test('preserveDirtyTree は push 失敗を warning にしてローカル commit を保持する', t => {
   const { tree } = worktreeFixture(t); const logs = [];
-  const result = preserveDirtyTree({ tree, now: () => Date.UTC(2026, 9, 24, 1, 2, 3), log: text => logs.push(text), run: (_exe, args) => {
+  const result = preserveDirtyTree({ home: os.tmpdir(), tree, now: () => Date.UTC(2026, 9, 24, 1, 2, 3), log: text => logs.push(text), run: (_exe, args) => {
     if (args[0] === 'branch') return 'quota-sweep/prior';
     if (args[0] === 'push') throw new Error('offline');
     return '';
@@ -157,7 +179,7 @@ test('preserveDirtyTree は push 失敗を warning にしてローカル commit 
 });
 test('preserveDirtyTree は detached HEAD に rescue ブランチを作る', t => {
   const { tree } = worktreeFixture(t); const calls = [];
-  const result = preserveDirtyTree({ tree, now: () => Date.UTC(2026, 9, 24, 1, 2, 3), run: (_exe, args) => { calls.push(args); return ''; } });
+  const result = preserveDirtyTree({ home: os.tmpdir(), tree, now: () => Date.UTC(2026, 9, 24, 1, 2, 3), run: (_exe, args) => { calls.push(args); return ''; } });
   assert.equal(result.branch, 'quota-sweep/rescue-20261024-010203');
   assert.deepEqual(calls[1], ['switch', '-c', result.branch]);
   assert.equal(result.pushed, true);
@@ -191,6 +213,35 @@ test('prepareTree は書き込み不能でも native git なら落とさず、WS
   // 読み取りが EPERM のままなら、native でも worktree は使えないので落とす。
   assert.throws(() => prepareTree({ home, provider: 'codex', run, previous: null, io: { readFile: () => { throw eperm(); }, chmod: () => {} } }), /EPERM/);
 });
+// 2026-11-02 実測: quota-sweep-repo に追跡された .loop/quota-sweep-claude-state.md があり、
+// ローカル変更があると git checkout --detach origin/main が「Your local changes to the following files
+// would be overwritten by checkout: .loop/quota-sweep-claude-state.md」で失敗する。
+// prepareTree は .loop/ の追跡ファイルを復元してから checkout する。
+test('prepareTree は追跡された .loop/ ファイルのローカル変更を復元してから checkout する', t => {
+  const { home, tree } = worktreeFixture(t); const commands = [];
+  const run = (_exe, args) => {
+    commands.push(args);
+    if (args[0] === 'status' && args[1] === '--porcelain') {
+      // 通常の作業ファイルは clean、.loop/ にのみ変更がある状態
+      if (args[2] === '--') {
+        if (args[3] === '.loop/') return ' M .loop/quota-sweep-claude-state.md';
+        return ''; // :!.loop では clean
+      }
+      return '';
+    }
+    if (args[0] === 'rev-parse') return 'base';
+    if (args[0] === 'branch') return '';
+    return '';
+  };
+  assert.doesNotThrow(() => prepareTree({ home, provider: 'claude', run, previous: null }));
+  // .loop/ の status → checkout --quiet -- .loop/ の順が確認できる
+  const statusIdx = commands.findIndex(a => a[0] === 'status' && a[3] === '.loop/');
+  assert.ok(statusIdx >= 0, '.loop/ status を確認した');
+  const resetIdx = commands.findIndex(a => a[0] === 'checkout' && a[1] === 'HEAD' && a[2] === '--' && a[3] === '.loop/');
+  assert.ok(resetIdx >= 0, '.loop/ ファイルを復元した');
+  assert.ok(resetIdx < commands.findIndex(a => a[0] === 'checkout' && a[1] === '--detach' && a[2] === 'origin/main'),
+    '.loop/ の復元はチェックアウトより前');
+});
 function context(t, child) {
   const home = temp(t), tree = path.join(home, 'tree'); fs.mkdirSync(path.join(home, '.claude')); fs.mkdirSync(tree);
   fs.writeFileSync(path.join(home, '.claude/quota-sweep-goals.md'), `- [ ] ${DEFAULT_GOAL}\n`);
@@ -219,6 +270,14 @@ test('runSweep は FINAL の未コミット作業を救済して同じ実行で�
   assert.ok(calls.findIndex(args => args.includes('commit')) < calls.findIndex(args => args[0] === 'rev-list'));
   assert.deepEqual(calls.find(args => args[0] === 'push'), ['push', '-u', 'origin', 'quota-sweep/test']);
   assert.ok(logs.some(message => message.includes('preserved final uncommitted work')));
+});
+test('runSweep は親 env の非 Claude 経路・モデル指定を claude child へ渡さない', async t => {
+  let seen;
+  const ctx = context(t, async (_exe, args, opts) => { seen = { args, env: opts.env }; return { code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }; });
+  ctx.env = { ANTHROPIC_BASE_URL: 'https://openrouter.ai/api', ANTHROPIC_MODEL: 'deepseek/deepseek-v4-flash', ANTHROPIC_DEFAULT_SONNET_MODEL: 'deepseek/x', CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000', ORGIAST_QUOTA_SWEEP_MODEL: 'deepseek/deepseek-v4-flash' };
+  await runSweep(decision, ctx);
+  for (const k of ['ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'CLAUDE_CODE_MAX_CONTEXT_TOKENS']) assert.equal(seen.env[k], undefined, k);
+  assert.ok(!seen.args.some(a => String(a).includes('deepseek')), 'モデル引数に非 Claude 名を使わない');
 });
 test('runSweep は終了時の救済失敗をログに残し outcome を変えない', async t => {
   const ctx = context(t, async () => ({ code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }));
@@ -312,15 +371,27 @@ test('一時障害の判定は 429/5xx/network だけで、認証・形式不一
   for (const reason of ['HTTP 429', 'HTTP 503', 'HTTP 408', 'network: TimeoutError']) assert.equal(isTransientWindowReadError(reason), true);
   for (const reason of ['HTTP 401', 'HTTP 403', 'accessToken 未設定', 'credentials: ENOENT', 'usage response の形式が未対応', '', undefined]) assert.equal(isTransientWindowReadError(reason), false);
 });
-test('new reset archives old state and starts again, same-window retry keeps cumulative budget', async t => {
+test('new reset preserves completed contract and cumulative budget', async t => {
   let calls = 0; const ctx = context(t, async () => { calls++; return { code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }; });
   await runSweep(decision, ctx);
   const firstCalls = calls;
   const nextDecision = { ...decision, resetsAt: decision.resetsAt + minute, deadline: decision.deadline + minute };
   ctx.windows = async () => windows.map(w => w.window === '5h' ? { ...w, resetsAt: nextDecision.resetsAt } : w);
   await runSweep(nextDecision, ctx);
-  assert.equal(calls, firstCalls + 1); // contract reused; one new tick
-  assert.equal(ctx.state.lastRun.claude[nextDecision.resetsAt].outcome, 'final');
+  assert.equal(calls, firstCalls); // replenished quota cannot restart a completed goal
+  assert.equal(ctx.state.lastRun.claude[nextDecision.resetsAt].outcome, 'no-goal');
+  assert.ok(!fs.readdirSync(path.join(ctx.tree, '.loop')).some(n => n.startsWith('archive-')));
+});
+test('a different goal archives the prior contract and gets a new attempt budget', async t => {
+  let calls = 0; const ctx = context(t, async () => { calls++; return { code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }; });
+  await runSweep(decision, ctx);
+  const firstCalls = calls;
+  fs.writeFileSync(path.join(ctx.home, '.claude/quota-sweep-goals.md'), '- [ ] a different repair goal\n');
+  const next = { ...decision, resetsAt: decision.resetsAt + minute, deadline: decision.deadline + minute };
+  ctx.windows = async () => windows.map(w => w.window === '5h' ? { ...w, resetsAt: next.resetsAt } : w);
+  await runSweep(next, ctx);
+  assert.equal(calls, firstCalls + 2); // new contract generation and one tick
+  assert.equal(ctx.state.lastRun.claude[next.resetsAt].outcome, 'final');
   assert.ok(fs.readdirSync(path.join(ctx.tree, '.loop')).some(n => n.startsWith('archive-')));
 });
 test('eight ticks is hard cap and a retry cannot reset it', async t => {
@@ -330,6 +401,10 @@ test('eight ticks is hard cap and a retry cannot reset it', async t => {
   assert.equal(calls, MAX_TICKS + 1); // generation + ticks
   await runSweep(decision, ctx);
   assert.equal(calls, MAX_TICKS + 1);
+  const next = { ...decision, resetsAt: decision.resetsAt + minute, deadline: decision.deadline + minute };
+  ctx.windows = async () => windows.map(w => w.window === '5h' ? { ...w, resetsAt: next.resetsAt } : w);
+  await runSweep(next, ctx);
+  assert.equal(calls, MAX_TICKS + 1); // the next quota window also cannot reset the cap
 });
 test('PR only for new commits; notification failure is nonfatal', async t => {
   const commands = []; const ctx = context(t, async () => ({ code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }));
@@ -344,12 +419,12 @@ test('PR only for new commits; notification failure is nonfatal', async t => {
   await runSweep(decision, ctx);
   assert.ok(commands.some(c => c[1] === 'push'));
   assert.deepEqual(commands.find(c => c[1] === 'pr' && c[2] === 'create'),
-    ['gh', 'pr', 'create', '--base', 'main', '--head', 'quota-sweep/test', '--fill', '--label', 'automerge']);
+    ['gh', 'pr', 'create', '--base', 'main', '--head', 'quota-sweep/test', '--fill']);
   assert.equal(commands.some(c => c.includes('merge')), false);
   assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'final');
 });
-test('label create failure with no PR retries without label and records URL', async t => {
-  const commands = [], logs = [];
+test('create failure with no PR retries and records URL', async t => {
+  const commands = [], logs = []; let attempts = 0;
   const ctx = context(t, async () => ({ code: 0, stdout: JSON.stringify({ result: 'FINAL' }) }));
   ctx.log = message => logs.push(message);
   ctx.command = (exe, args) => {
@@ -357,7 +432,7 @@ test('label create failure with no PR retries without label and records URL', as
     if (args[0] === 'branch') return 'quota-sweep/test';
     if (args[0] === 'rev-list') return '1';
     if (args[0] === 'pr' && args[1] === 'create') {
-      if (args.includes('--label')) throw new Error('label unavailable');
+      if (++attempts === 1) throw new Error('temporary failure');
       return 'https://github.com/example/repo/pull/2';
     }
     return '';
@@ -365,13 +440,13 @@ test('label create failure with no PR retries without label and records URL', as
   await runSweep(decision, ctx);
   assert.deepEqual(commands.filter(c => c[1] === 'pr'), [
     ['gh', 'pr', 'list', '--head', 'quota-sweep/test', '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'],
-    ['gh', 'pr', 'create', '--base', 'main', '--head', 'quota-sweep/test', '--fill', '--label', 'automerge'],
+    ['gh', 'pr', 'create', '--base', 'main', '--head', 'quota-sweep/test', '--fill'],
     ['gh', 'pr', 'list', '--head', 'quota-sweep/test', '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'],
     ['gh', 'pr', 'create', '--base', 'main', '--head', 'quota-sweep/test', '--fill'],
   ]);
   assert.equal(ctx.state.lastRun.claude[decision.resetsAt].prUrl, 'https://github.com/example/repo/pull/2');
   assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'final');
-  assert.ok(logs.includes('quota-sweep: automerge label unavailable; retrying pr create without label: label unavailable'));
+  assert.ok(logs.includes('quota-sweep: PR create failed; retrying without duplicate PR: temporary failure'));
 });
 test('label create failure with existing PR reuses URL without another create', async t => {
   const commands = [], logs = []; let created = false;
@@ -391,12 +466,12 @@ test('label create failure with existing PR reuses URL without another create', 
   await runSweep(decision, ctx);
   assert.deepEqual(commands.filter(c => c[1] === 'pr'), [
     ['gh', 'pr', 'list', '--head', 'quota-sweep/test', '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'],
-    ['gh', 'pr', 'create', '--base', 'main', '--head', 'quota-sweep/test', '--fill', '--label', 'automerge'],
+    ['gh', 'pr', 'create', '--base', 'main', '--head', 'quota-sweep/test', '--fill'],
     ['gh', 'pr', 'list', '--head', 'quota-sweep/test', '--state', 'all', '--json', 'url', '--jq', '.[0].url // empty'],
   ]);
   assert.equal(ctx.state.lastRun.claude[decision.resetsAt].prUrl, 'https://github.com/example/repo/pull/3');
   assert.equal(ctx.state.lastRun.claude[decision.resetsAt].outcome, 'final');
-  assert.ok(logs.includes('quota-sweep: automerge label failed; PR created without label: label failed'));
+  assert.ok(logs.includes('quota-sweep: PR create response failed; existing PR recovered: label failed'));
 });
 test('disable guard precedes observation and locking', async t => {
   const home = temp(t); fs.mkdirSync(path.join(home, '.claude'));
@@ -513,7 +588,7 @@ test('fetch and push get a longer timeout and exactly one retry', () => {
   let calls = 0;
   assert.equal(commandRunner(() => ++calls === 1 ? { status: 1 } : { status: 0, stdout: 'ok' })('git', ['fetch']), 'ok');
 });
-test('index.lock 競合で失敗した git コマンドは1回だけ再試行し、lock は削除しない', () => {
+test('index.lock 競合で失敗した git コマンドは1回だけ再試行し、若い lock は削除しない', () => {
   const lockStderr = "fatal: Unable to create 'C:/repo/.git/worktrees/sweep/index.lock': File exists.\n\nAnother git process seems to be running in this repository, or the lock file may be stale\n";
   let calls = 0;
   const run = commandRunner(() => ++calls === 1 ? { status: 128, stderr: lockStderr } : { status: 0, stdout: 'ok' });
@@ -529,6 +604,50 @@ test('index.lock 競合で失敗した git コマンドは1回だけ再試行し
   const run3 = commandRunner(() => { calls++; return { status: 128, stderr: 'fatal: not a git repository\n' }; });
   assert.throws(() => run3('git', ['status'], '/tmp'), /git status:/);
   assert.equal(calls, 1);
+});
+test('stale index.lock（生成から5分超）は削除してから再試行し、若い lock は残す', t => {
+  const dir = temp(t), lock = path.join(dir, 'index.lock');
+  const lockStderr = () => `fatal: Unable to create '${lock}': File exists.\n\nAnother git process seems to be running in this repository, or the lock file may be stale\n`;
+  // 生成から 60 秒以上経過した stale lock → 削除して再試行し成功する
+  fs.writeFileSync(lock, ''); fs.utimesSync(lock, new Date(Date.now() - 360_000), new Date(Date.now() - 360_000));
+  let calls = 0;
+  const run = commandRunner(() => ++calls === 1 ? { status: 128, stderr: lockStderr() } : { status: 0, stdout: 'ok' });
+  assert.equal(run('git', ['checkout', '--detach', 'origin/main'], dir), 'ok');
+  assert.equal(calls, 2);
+  assert.equal(fs.existsSync(lock), false, 'stale index.lock は削除される');
+  // 生成直後の若い lock（稼働中 git の競合相当）→ 削除せず、再試行しても失敗したら throws
+  fs.writeFileSync(lock, '');
+  calls = 0;
+  const run2 = commandRunner(() => { calls++; return { status: 128, stderr: lockStderr() }; });
+  assert.throws(() => run2('git', ['checkout', '--detach', 'origin/main'], dir), /git checkout:.*index\.lock/s);
+  assert.equal(calls, 2);
+  assert.equal(fs.existsSync(lock), true, '若い index.lock は削除されない');
+  // stale lock を削除しても再試行が失敗する場合は従来どおり failed（handoff 起票を壊さない）
+  fs.utimesSync(lock, new Date(Date.now() - 360_000), new Date(Date.now() - 360_000));
+  calls = 0;
+  const run3 = commandRunner(() => { calls++; return { status: 128, stderr: lockStderr() }; });
+  assert.throws(() => run3('git', ['checkout', '--detach', 'origin/main'], dir), /git checkout:.*index\.lock/s);
+  assert.equal(calls, 2);
+  assert.equal(fs.existsSync(lock), false, 'stale lock は削除の上で再試行し、それでも失敗したら failed');
+});
+test('indexLockPath / tryRemoveStaleIndexLock は相対パスを cwd 基準で解決し、Missing/young は触らない', t => {
+  const dir = temp(t);
+  assert.equal(indexLockPath(`Unable to create '${path.join(dir, 'index.lock')}': File exists.`), path.join(dir, 'index.lock'));
+  assert.equal(indexLockPath("Unable to create 'relative/.git/index.lock': File exists.", { cwd: dir }), path.join(dir, 'relative', '.git', 'index.lock'));
+  assert.equal(indexLockPath('fatal: not a git repository'), null);
+  const lock = path.join(dir, 'index.lock');
+  fs.writeFileSync(lock, '');
+  // 若い lock は削除しない
+  assert.equal(tryRemoveStaleIndexLock(`Unable to create '${lock}': File exists.`), false);
+  assert.equal(fs.existsSync(lock), true);
+  // 5分超の stale lock は削除する（mtime 注入で判定）
+  fs.utimesSync(lock, new Date(Date.now() - 360_000), new Date(Date.now() - 360_000));
+  assert.equal(tryRemoveStaleIndexLock(`Unable to create '${lock}': File exists.`), true);
+  assert.equal(fs.existsSync(lock), false);
+  // 既に消えている lock は false（削除不要だがエラーにもしない）
+  assert.equal(tryRemoveStaleIndexLock(`Unable to create '${lock}': File exists.`), false);
+  // 読めない/存在しない lock（テストのフェイクパス）は false
+  assert.equal(tryRemoveStaleIndexLock("Unable to create 'C:/repo/no-such/index.lock': File exists."), false);
 });
 test('filtering current windows keeps provider read reasons', () => {
   const all = Object.assign([{ provider: 'claude', window: '5h', usedPercent: 0, resetsAt: null }, { provider: 'codex', observedAt: 2, window: 'primary' }], { reasons: { claude: 'HTTP 401', codex: null } });
@@ -670,16 +789,16 @@ test('gh 不在時に createPullRequestViaApi が credential fill + GitHub REST 
     }
     return { error: Object.assign(new Error('spawnSync gh ENOENT'), { code: 'ENOENT' }) };
   };
-  const result = await createPullRequest({ run, tree, branch: 'quota-sweep/test-branch', log: msg => logs.push(msg), spawnImpl, fetchImpl });
+  const result = await createPullRequest({ home: os.tmpdir(), run, tree, branch: 'quota-sweep/test-branch', log: msg => logs.push(msg), spawnImpl, fetchImpl });
   assert.equal(result, 'https://github.com/example/repo/pull/api-1');
   assert.ok(commands.some(c => c[1] === 'remote' && c[2] === 'get-url'), 'remote URL query called');
-  assert.equal(fetchCalls, 3, 'PR list + create + label');
+  assert.equal(fetchCalls, 2, '非kim席: PR list + create、ラベルなし');
   assert.ok(logs.some(msg => /gh not found/.test(msg)), 'fallback log');
 });
 test('createPullRequestViaApi は credential fill 失敗時にエラーを throw する', async t => {
   const run = (exe) => { if (exe === 'gh') throw Object.assign(new Error('spawnSync gh ENOENT'), { code: 'ENOENT' }); return ''; };
   const spawnImpl = () => ({ error: Object.assign(new Error('spawnSync git ENOENT'), { code: 'ENOENT' }), status: null });
-  await assert.rejects(() => createPullRequest({ run, tree: '/tmp', branch: 'test', log: () => {}, spawnImpl, fetchImpl: async () => ({ ok: false }) }), /credential fill failed/);
+  await assert.rejects(() => createPullRequest({ home: os.tmpdir(), run, tree: '/tmp', branch: 'test', log: () => {}, spawnImpl, fetchImpl: async () => ({ ok: false }) }), /credential fill failed/);
 });
 test('createPullRequestViaApi は既存 PR を検出して再利用する', async t => {
   const home = temp(t), tree = path.join(home, 'tree');
@@ -698,7 +817,7 @@ test('createPullRequestViaApi は既存 PR を検出して再利用する', asyn
     return { ok: false, status: 404, text: async () => 'unexpected' };
   };
   const spawnImpl = () => ({ status: 0, stdout: 'password=gho_test_token_abc\n' });
-  const result = await createPullRequest({ run, tree, branch: 'quota-sweep/existing', log: msg => logs.push(msg), spawnImpl, fetchImpl });
+  const result = await createPullRequest({ home: os.tmpdir(), run, tree, branch: 'quota-sweep/existing', log: msg => logs.push(msg), spawnImpl, fetchImpl });
   assert.equal(result, 'https://github.com/example/repo/pull/existing-42');
   assert.ok(logs.some(msg => /existing PR/.test(msg)));
   assert.equal(commands.filter(c => c[1] === 'remote').length, 1);

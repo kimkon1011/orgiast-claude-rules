@@ -1,0 +1,14 @@
+feat(x-0008): implement C1 exhibitor normalization and C2 contact filter (iter-1)
+
+C1: normalizeExhibitors — extract {name, booth, description, website} from raw
+exhibitor JSON, trim whitespace, null for missing/empty, case-insensitive
+duplicate merge with first-occurrence field preservation.
+
+C2: filterContacts — filter by target titles (VP Sales, BD責任者, CRO, etc.),
+company size 25–250 employees, max 3 contacts per company, case-insensitive
+title matching.
+
+All 10 tests pass (C1: 4, C2: 6), including boundary values (24/25/250/251),
+holdout fixture, empty input, and non-target roles.
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>

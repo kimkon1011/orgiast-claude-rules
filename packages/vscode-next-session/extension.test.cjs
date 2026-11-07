@@ -1,8 +1,65 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const vm = require('node:vm');
 const path = require('node:path');
+
+test('worktree ウィンドウ: 補充せず、起動時に未使用待機タブだけ閉じる（使用中は残す）', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-wt-win-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const wtDir = path.join(root, '.claude', 'worktrees', 'mail-approval-gate-fix');
+  fs.mkdirSync(wtDir, { recursive: true });
+  fs.writeFileSync(path.join(wtDir, '.git'), 'gitdir: C:/x/.git/worktrees/mail-approval-gate-fix\n', 'utf8');
+
+  const tabs = [];
+  const commands = [];
+  const snapshots = [];
+  let handler;
+  class TabInputWebview { viewType = 'claudeVSCodePanel'; }
+  tabs.push(
+    { input: new TabInputWebview(), label: 'Claude Code', isActive: false },
+    { input: new TabInputWebview(), label: '仕事中', isActive: false },
+  );
+  const vscode = {
+    TabInputWebview,
+    window: {
+      tabGroups: {
+        all: [{ tabs }],
+        onDidChangeTabs() { return { dispose() {} }; },
+        async close(tab) { const i = tabs.indexOf(tab); if (i >= 0) tabs.splice(i, 1); return true; },
+      },
+      createOutputChannel() { return { appendLine() {} }; },
+      registerUriHandler(value) { handler = value; return { dispose() {} }; },
+      showErrorMessage(message) { assert.fail(message); },
+    },
+    workspace: {
+      getConfiguration() { return { get() { return 0; } }; },
+      workspaceFolders: [{ uri: { fsPath: wtDir } }],
+    },
+    commands: { async executeCommand(command) { commands.push(command); } },
+  };
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'extension.js'), 'utf8'), {
+    module, process, URLSearchParams, console, clearInterval, setTimeout,
+    setInterval(fn, ms) { return ms === 5000 ? null : setInterval(fn, ms); },
+    require(name) {
+      if (name === 'vscode') return vscode;
+      if (name === 'node:fs') return { mkdirSync() {}, writeFileSync(_file, data) { snapshots.push(JSON.parse(data)); } };
+      if (name === './mobile-pool') return { ...require('./mobile-pool'), createOwnershipLease: () => ({ acquire: async () => true, release() {} }) };
+      return require(name);
+    },
+  });
+  module.exports.activate({ subscriptions: [] });
+  // 起動時 cleanup: 未使用待機タブ（Claude Code）だけ閉じ、会話中タブは残す
+  assert.equal(tabs.length, 1);
+  assert.equal(tabs[0].label, '仕事中');
+  // /mobile URI が届いても補充コマンドは実行せず、状態ファイルも書かない（リーズを使わない）
+  await handler.handleUri({ path: '/mobile', query: 'count=3' });
+  assert.deepEqual(commands, []);
+  assert.deepEqual(snapshots, []);
+  assert.equal(tabs.length, 1);
+});
 
 test('URI concurrency and tab title events replenish one without interactive rename', async () => {
   const tabs = [];

@@ -753,6 +753,11 @@
       "reason": "task:quota-sweep ステップの登録スクリプト（枠リセット直前の残枠消化・15分ごと判定）"
     },
     {
+      "path": "tools/register-reply-learning-nightly.ps1",
+      "scope": "kim-only",
+      "reason": "task:reply-learning-nightly（kim-only）の登録スクリプト。返信代行の学習ループは kim 宛の返信だけを扱うため kim-PC だけに登録する"
+    },
+    {
       "path": "tools/register-auto-progress-task.ps1",
       "scope": "fleet",
       "step": "task:auto-progress-watch",
@@ -1149,6 +1154,18 @@
       "reason": "webhook-health が fleet sheet への POST に使う実行時 import 依存（busy 再送の共通ヘルパ）"
     },
     {
+      "path": "tools/register-reopen-lost-sessions.ps1",
+      "scope": "fleet",
+      "step": "nightly-reload-vscode",
+      "reason": "全PCのログオン時に落ちた VS Code セッションを自動再オープンする scheduled task の登録（converge 経由）"
+    },
+    {
+      "path": "tools/reopen-lost-sessions.mjs",
+      "scope": "fleet",
+      "step": "nightly-reload-vscode",
+      "reason": "全PCのログオン時に起動し、RC API 経由で host_exit セッションを検出・再オープンする"
+    },
+    {
       "path": "tools/fleet-question-relay.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",
@@ -1244,6 +1261,7 @@
     {"path": "tools/lib/pc-display.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox・返事待ち表示が使うPC表示名の実行時依存"},
     {"path": "tools/lib/auto-progress-daily.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "全PCの自動進行に使う毎朝進捗通知の実行時依存"},
     {"path": "tools/lib/drafts-auto-cleared.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "返事待ち表示・下書き整理が使う実行時依存"},
-    {"path": "tools/auto-progress-ledger.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "毎朝進捗通知・返事待ち表示の実行時依存"}
+    {"path": "tools/auto-progress-ledger.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "毎朝進捗通知・返事待ち表示の実行時依存"},
+    {"path": "tools/register-gakkai-phone-digest.ps1", "scope": "kim-only", "step": null, "reason": "cr-PC（作業用011）だけで動かす学会スマホ所在Digestの毎朝09:07登録"}
   ]
 }

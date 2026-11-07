@@ -1,0 +1,22 @@
+{
+  "exhibitors": [
+    { "name": "Amber Kite Systems", "booth": "A-1", "description": "Factory software", "website": "https://amber-kite.invalid" },
+    { "name": "amber kite systems", "description": "duplicate" },
+    { "name": "Moss Lantern Robotics", "booth": "B-2", "description": "Warehouse robots", "website": "https://moss-lantern.invalid" },
+    { "name": "Paper Harbor Media", "booth": "C-3", "description": "Industry media", "website": "https://paper-harbor.invalid" },
+    { "name": "Tiny Cobalt Works", "booth": "D-4", "description": "Sensors", "website": "https://tiny-cobalt.invalid" }
+  ],
+  "employees": { "Amber Kite Systems": 80, "Moss Lantern Robotics": 140, "Tiny Cobalt Works": 12 },
+  "contacts": {
+    "Amber Kite Systems": [{ "name": "Ada Fiction", "title": "VP Sales" }, { "name": "Ben Fiction", "title": "CRO" }],
+    "Moss Lantern Robotics": [{ "name": "Chika Fiction", "title": "BD責任者" }],
+    "Tiny Cobalt Works": [{ "name": "Drew Fiction", "title": "Founder" }]
+  },
+  "posts": {
+    "Ada Fiction": [{ "date": "2026-02-20" }],
+    "Ben Fiction": [{ "date": "2025-10-01" }],
+    "Chika Fiction": [{ "date": "2026-01-15" }],
+    "Drew Fiction": [{ "date": "2026-02-28" }]
+  },
+  "referenceDate": "2026-03-01"
+}

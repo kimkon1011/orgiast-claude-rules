@@ -229,10 +229,22 @@ export function context(home, { itemId, from, category, channel, limit = 5, now 
   };
 }
 
+// reply-queue の正本 queue.json を読み取り専用で参照する（ロック不要の読み取り。書き込みは reply-queue.mjs だけ）。
+export function readQueueItems(home, filter = {}) {
+  const file = path.join(home ?? process.env.ORGIAST_HOME ?? os.homedir(), '.claude', 'reply-queue', 'queue.json');
+  let data;
+  try { data = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  let items = Object.values(data.items || {});
+  if (filter.channel) items = items.filter(it => it.channel === filter.channel);
+  if (filter.state) items = items.filter(it => it.state === filter.state);
+  return items;
+}
+
 // gmail-draft.mjs は下書き作成時の台帳を持たない（送信時の ack-ledger のみ）ため、下書きの出所 (b) は未接続
 export async function gmailSync(home, { days = 7, dryRun = false, now = new Date(), users = ['seisaku-team@orgiast.jp', 'kim@orgiast.jp'], deps = {} } = {}) {
   const searchGmailFn = deps.searchGmail ?? (await import('./gmail-search.mjs')).searchGmail;
-  const listItemsFn = deps.listItems ?? (await import('./reply-queue.mjs')).listItems;
+  // reply-queue.mjs は本ファイルを動的 import するため、こちらからは import せず queue.json を直接読む（循環回避）。
+  const listItemsFn = deps.listItems ?? readQueueItems;
 
   const items = await listItemsFn(home, { channel: 'email' });
   const targetItems = items.filter(it => it.channel === 'email' && it.draft && it.draft.text);
@@ -752,16 +764,14 @@ export async function nightly(home, { dryRun = false, now = new Date(), deps = {
     if (deps.gapCheck) {
       steps.gapCheck = await deps.gapCheck({ home, days: 7 });
     } else {
-      try {
-        const mod = await import('./discord-autoreply.mjs');
-        if (typeof mod.gapCheck === 'function') {
-          steps.gapCheck = await mod.gapCheck({ home, days: 7 });
-        } else {
-          steps.gapCheck = 'unavailable';
-        }
-      } catch {
-        steps.gapCheck = 'unavailable';
-      }
+      // discord-autoreply.mjs は本ファイルを import する側なので、循環を避けて CLI を子プロセスで呼ぶ。
+      const res = spawnSync(process.execPath, [path.join(__dirname, 'discord-autoreply.mjs'), 'gap-check', '--days', '7'],
+        { encoding: 'utf8', windowsHide: true, timeout: 10 * 60 * 1000 });
+      const out = String(res.stdout || '');
+      const start = out.indexOf('{'), end = out.lastIndexOf('}');
+      let parsed = null;
+      if (res.status === 0 && start !== -1 && end > start) { try { parsed = JSON.parse(out.slice(start, end + 1)); } catch {} }
+      steps.gapCheck = parsed ?? 'unavailable';
     }
   } catch (err) {
     ok = false;

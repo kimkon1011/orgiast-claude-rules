@@ -42,9 +42,22 @@ export function doneConcludedWithReceipt(row) {
   return Boolean((row.doneInboxId && row.doneInboxVerifiedAt) || row.doneNotifiedAt);
 }
 
+// rowKey のセッション部分を使い、別 PC / user の同名セッションを混同しない。
+const migrationSessionKey = row => rowKey(row).slice(0, rowKey(row).lastIndexOf('|'));
+const rowTime = row => Date.parse(row.ts) || 0;
+function latestMigrationSessionRows(rows) {
+  const latest = new Map();
+  for (const row of rows) {
+    const key = migrationSessionKey(row), previous = latest.get(key);
+    if (!previous || rowTime(row) >= rowTime(previous)) latest.set(key, row);
+  }
+  return new Set(latest.values());
+}
+
 export function legacyAddCheckMigrationRows(rows) {
+  const latest = latestMigrationSessionRows(rows);
   const migrated = new Set(rows.map(row => row.migratedFromLegacyAddCheck).filter(Boolean));
-  return rows.filter(row => row.status === 'done' && String(row.check || '').trim() &&
+  return rows.filter(row => latest.has(row) && row.status === 'done' && String(row.check || '').trim() &&
     String(row.nextClaude || '').trim() && !isTimeOnlyCheck(row.check) && !row.resumedAt &&
     !doneConcludedWithReceipt(row) && !migrated.has(rowKey(row)));
 }
@@ -73,8 +86,9 @@ export async function migrateLegacyAddChecks({ home, now = Date.now(), dryRun = 
 }
 
 export function timeOnlyMigrationRows(rows) {
+  const latest = latestMigrationSessionRows(rows);
   const migrated = new Set(rows.map(row => row.migratedFromTimeOnlyCheck).filter(Boolean));
-  return rows.filter(row => row.status === 'done' && isTimeOnlyCheck(row.check) && !migrated.has(rowKey(row)));
+  return rows.filter(row => latest.has(row) && row.status === 'done' && isTimeOnlyCheck(row.check) && !migrated.has(rowKey(row)));
 }
 
 export function timeOnlyReservation(row, now = Date.now()) {
@@ -96,6 +110,62 @@ export async function migrateTimeOnlyChecks({ home, now = Date.now(), dryRun = f
     (io.stdout ?? console.log)(text);
     await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-time-only-migration', text,
       dedupeKey: `auto-progress-time-only-migration:${row.sessionId || rowKey(row)}` });
+  }
+  return { targets, appended: additions.length };
+}
+
+const migrationSourceKey = row => row.migratedFromLegacyAddCheck || row.migratedFromTimeOnlyCheck;
+const isMigrationRow = row => Boolean(migrationSourceKey(row) || row.repairedFromLegacyReopen);
+
+export function migrationClobberRestorationRows(rows) {
+  const groups = new Map(), byKey = new Map(rows.map(row => [rowKey(row), row]));
+  const restored = new Set(rows.map(row => row.restoredFromMigrationClobber).filter(Boolean));
+  for (const row of rows) {
+    const key = migrationSessionKey(row);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  const targets = [];
+  for (const group of groups.values()) {
+    group.sort((a, b) => rowTime(a) - rowTime(b)); // stable: 同時刻は後の行が最新
+    // 正当な後続更新・復元済みの行があれば、その意思決定を巻き戻さない。
+    let end = group.length - 1;
+    while (end >= 0 && isMigrationRow(group[end]) && !group[end].restoredFromMigrationClobberAt) end--;
+    const candidate = group[end];
+    if (!candidate || end === group.length - 1 || restored.has(rowKey(candidate))) continue;
+    const clobber = group[end + 1];
+    let source = byKey.get(migrationSourceKey(clobber) || clobber.repairedFromLegacyReopen);
+    // 旧修復は参照キーではなく true だけを保存した。同一セッションの一意な
+    // 元 done 行を照合できる場合だけ救済し、曖昧な修復元は推測しない。
+    if (!source && clobber.repairedFromLegacyReopen === true) {
+      const originals = group.filter(row => !isMigrationRow(row) && row.status === 'done' &&
+        rowTime(row) < rowTime(candidate) && row.label === clobber.label &&
+        row.check === clobber.check && row.nextClaude === clobber.nextClaude);
+      if (originals.length === 1) source = originals[0];
+    }
+    if (!source || migrationSessionKey(source) !== migrationSessionKey(candidate) || rowTime(source) >= rowTime(candidate)) continue;
+    if (!OPEN_STATUSES.has(candidate.status) && candidate.status !== 'superseded') continue;
+    if (candidate.status === 'superseded' && candidate.supersededFromStatus && !OPEN_STATUSES.has(candidate.supersededFromStatus)) continue;
+    // 古い台帳は superseded 前の status を保存していない。記録済みの状態を優先し、
+    // 判別不能な旧行は open に戻す。今後は supersededFromStatus で正確に保存する。
+    const status = OPEN_STATUSES.has(candidate.status) ? candidate.status :
+      OPEN_STATUSES.has(candidate.supersededFromStatus) ? candidate.supersededFromStatus : 'open';
+    targets.push({ ...candidate, status });
+  }
+  return targets;
+}
+
+export async function restoreMigrationClobbers({ home, now = Date.now(), dryRun = false, io = {} }) {
+  const file = ledgerFile(home), rows = readLedger(file), targets = migrationClobberRestorationRows(rows);
+  if (dryRun || !targets.length) return { targets, appended: 0 };
+  const additions = targets.map(row => ({ ...row, ts: new Date(now).toISOString(),
+    ...(Date.parse(row.deadlineAt) < now ? { deadlineAt: new Date(now + 24 * 3600000).toISOString() } : {}),
+    restoredFromMigrationClobber: rowKey(row), restoredFromMigrationClobberAt: new Date(now).toISOString() }));
+  (io.writeLedger ?? writeLedger)(file, [...rows, ...additions], io.ledgerIo ?? {});
+  for (const row of additions) {
+    const text = `移行で上書きされた約束を復元しました: ${String(row.sessionId).slice(0, 8)} ${row.label || row.promise}`;
+    await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-migration-clobber-restore', text,
+      dedupeKey: `auto-progress-migration-clobber-restore:${row.restoredFromMigrationClobber}` });
   }
   return { targets, appended: additions.length };
 }
@@ -626,6 +696,12 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     catch (error) { summary.errors.push(`ledger-temp-cleanup-failed: ${String(error?.message ?? error).slice(0, 120)}`); }
   }
   try {
+    const restoration = await restoreMigrationClobbers({ home, now, dryRun, io });
+    summary.migrationClobberRestore = { count: restoration.targets.length, labels: restoration.targets.map(row => row.label || row.promise), appended: restoration.appended };
+  } catch (error) {
+    summary.errors.push(`migration-clobber-restore: ${String(error?.message ?? error).slice(0, 120)}`);
+  }
+  try {
     const migration = await migrateTimeOnlyChecks({ home, now, dryRun, io });
     summary.timeOnlyMigration = { count: migration.targets.length, labels: migration.targets.map(row => row.label || row.promise), appended: migration.appended };
   } catch (error) {
@@ -733,7 +809,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   const normalized = rows.map((row) => {
     if (!WATCHED.has(row.status) || selected.has(row)) return row;
     summary.superseded += 1;
-    return { ...row, status: 'superseded' };
+    return { ...row, supersededFromStatus: row.status, status: 'superseded' };
   });
   // Update by row identity: equal timestamps share rowKey, so patch(key) would
   // also supersede the selected latest row. No await occurs between read/write.

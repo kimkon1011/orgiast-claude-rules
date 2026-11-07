@@ -16,7 +16,24 @@ import { convergeDeadlineTasks } from './setup-deadline-watch.mjs';
 import { convergeNightlyReload } from './setup-nightly-reload.mjs';
 import { convergeNodeRuntimeSecurity } from './setup-node-runtime-security.mjs';
 
-const TYPES = new Set(['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task']);
+// git 呼び出しを非対話にする（GIT_TERMINAL_PROMPT=0 / GCM_INTERACTIVE=never）。
+// setup.mjs はテストで単体コピーされて実行されるため ./lib/seat-github.mjs を静的 import しない。
+// 判定は seat-github.mjs の同名関数と一致させること（access-doctor.test.mjs が両方を固定する）。
+function nonInteractiveGitEnv(extra = {}) {
+  return { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', ...extra };
+}
+// ls-remote 等の git 失敗を、修復対象（届かない URL）と対象外（認証・ネットワーク断）に分ける。
+// 単なる "not found"（command not found 等）は network に倒し、GitHub の実メッセージ
+// "Repository not found" / "fatal: repository '...' not found" とローカル git の
+// "does not appear to be a git repository" だけを not-found にする。
+function originFailureKind(error) {
+  const stderr = String(error?.stderr ?? '') || String(error?.message ?? '');
+  if (/could not read Username|authentication failed|permission denied|publickey|terminal prompts disabled/i.test(stderr)) return 'auth';
+  if (/Repository not found|repository '[^']*' not found|does not appear to be a git repository/i.test(stderr)) return 'not-found';
+  return 'network';
+}
+
+const TYPES = new Set(['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task', 'git-origin']);
 const SEVERITIES = new Set(['required', 'optional', 'manual']);
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -108,6 +125,21 @@ function check(item) {
       const candidates = (spec.paths || [spec.path]).map(resolveHome);
       if (spec.ifPresent && !candidates.some(fs.existsSync)) return null;
       return candidates.some((target) => readNonempty(target, spec.kind));
+    }
+    if (item.type === 'git-origin') {
+      // 配布元リポの origin が届くかを確かめる。届かない URL（not-found・未認証で認証エラーに見える auth）は
+      // NG（repair が向け替えを試みる）、ネットワーク断だけ NOTICE。未配置は NOTICE。
+      const target = resolveHome(spec.path);
+      if (!fs.existsSync(target) || !fs.existsSync(path.join(target, '.git'))) return null;
+      try {
+        execFileSync('git', ['-C', target, 'ls-remote', 'origin', 'HEAD'], {
+          encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: nonInteractiveGitEnv(),
+        });
+        return true;
+      } catch (error) {
+        const kind = originFailureKind(error);
+        return kind === 'not-found' || kind === 'auth' ? false : null;
+      }
     }
     if (item.type === 'file-contains') {
       let raw = fs.readFileSync(resolveHome(spec.path), 'utf8');

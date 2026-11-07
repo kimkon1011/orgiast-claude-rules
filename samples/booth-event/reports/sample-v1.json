@@ -1,0 +1,32 @@
+{
+  "sample": "sample-v1",
+  "findings": [
+    {
+      "area": "layout",
+      "status": "observation",
+      "claim": "⚠ 背面が見える。ロゴ・社名・訴求コピーを早期提案する。",
+      "source": "skills/case-consult-sources/references/booth-event-sample.md sample-v1 M1",
+      "next": "見積と入稿物への反映を確認する。"
+    },
+    {
+      "area": "event",
+      "status": "observation",
+      "claim": "10:08–10:10に2分重複。",
+      "source": "同サンプル T1",
+      "next": "主催者へ順序と転換時間を確認する。"
+    },
+    {
+      "area": "event",
+      "status": "proposal",
+      "claim": "障害時アナログ運営: 準備未完了。紙台本と予備端末、切替判断者とリハを準備する（未承認）。",
+      "source": "同サンプル T1・T2",
+      "next": "担当・切替条件・持込品・リハを確定する。"
+    }
+  ],
+  "unconfirmed": [
+    "寸法・高さ・避難動線",
+    "背面提案の実施",
+    "代替運営の承認",
+    "外部事例調査未実施"
+  ]
+}

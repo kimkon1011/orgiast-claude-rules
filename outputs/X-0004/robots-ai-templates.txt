@@ -1,0 +1,46 @@
+# robots.txt 設定案
+# 設置先: web/public/robots.txt
+
+User-agent: *
+Allow: /
+
+# AIクローラー — すべて許可
+User-agent: GPTBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Claude-Web
+Allow: /
+
+Sitemap: https://tetsuko.co.jp/sitemap.xml
+
+---
+
+# ai.txt 設定案
+# 設置先: web/public/ai.txt
+# 参考: https://ai-txt.info
+
+# AIにサイトの利用を許可する範囲
+許可する:
+  - 検索結果での引用
+  - 回答文への情報提供
+  - データセットへの学習利用
+
+許可しない:
+  - ユーザー個人情報の収集
+  - 価格情報の自動転載
+
+# 著作権
+本文・価格情報・商品データの著作権は東邦鋼業株式会社に帰属します。
+AIによる引用の際は出典（https://tetsuko.co.jp）を明示してください。
+
+# 連絡先
+contact@toho-kogyo.com

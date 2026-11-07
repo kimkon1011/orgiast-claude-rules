@@ -54,8 +54,9 @@ Windows 専用の項目で失敗したものは、エラー1行を結果表に�
 
 ### 手順5〜7 の前提: `~/.claude/fleet-sheet.env`
 ビーコンと fleet-mail は `~/.claude/fleet-sheet.env`（FLEET_SHEET_URL / FLEET_SHEET_TOKEN）が無いと `unconfigured` でスキップする。
-このファイルは kim の承認後に kim-PC 側から VM 専用の値で配る。**自分で作らない・他から探して持ち込まない。**
-無い間は 5〜7 を「承認待ち（unconfigured）」と結果表に書き、cron 登録（6）だけは済ませておく（値が届けば自動で動き出す）。
+値は **kim が依頼文の中で渡す**（2026-11-07 kim 承認: 全PC共通の値を VM にも入れる）。
+- 依頼文に `FLEET_SHEET_URL=` / `FLEET_SHEET_TOKEN=` / `REPORTER_HOST=` の行があれば、手順5の前にその行だけを `~/.claude/fleet-sheet.env` に書き、`chmod 600` にする。値は画面・結果表・fleet-mail 本文に再表示しない
+- 依頼文に無ければ**自分で作らない・他から探して持ち込まない**。5〜7 を「値待ち（unconfigured）」と結果表に書き、cron 登録（6）だけ済ませる（値が届けば自動で動き出す）
 
 ### 8. 結果表を出す
 | 項目 | 結果（OK/NG/不要） | 証拠（出力1行） |

@@ -1,0 +1,24 @@
+name: cost-by-apikey
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: '取得する日数（既定 21）'
+        default: '21'
+        required: false
+permissions:
+  contents: read
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run cost-by-apikey report
+        run: node tools/cost-by-apikey.mjs
+        env:
+          ANTHROPIC_ADMIN_KEY: ${{ secrets.ANTHROPIC_ADMIN_KEY }}
+          DAYS: ${{ inputs.days }}

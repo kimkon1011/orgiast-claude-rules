@@ -359,7 +359,7 @@ function defaultAsk(promptText) {
         '--prompt-file', tmpFile,
         '--max', '800',
       ],
-      { encoding: 'utf8' }
+      { encoding: 'utf8', windowsHide: true }
     );
 
     const stdout = res.stdout || '';

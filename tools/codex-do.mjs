@@ -824,6 +824,9 @@ export function buildUsageRow({
     attempts,
     ...(Array.isArray(chain) && chain.length ? { chain } : {}),
     ...(Number.isFinite(timeoutSecs) && timeoutSecs > 0 ? { timeoutSecs } : {}),
+    ...(Number.isFinite(result?.timeoutTimerDelaySecs) && result.timeoutTimerDelaySecs > 0
+      ? { timeoutTimerDelaySecs: Number(result.timeoutTimerDelaySecs.toFixed(3)) }
+      : {}),
     secs: Number(seconds.toFixed(3))
   };
 }
@@ -1090,14 +1093,19 @@ function execute(command, commandArgs, options = {}) {
     // stdio を全て pipe にして TTY を渡さない。TTY 付きで起動すると codex が端末入力を
     // 待ったまま眠り続ける(2026-08-26 に 1日00:57 hang した実害)。
     const child = spawn(command, commandArgs, { ...spawnOptions, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
-    let settled = false, forceTimer = null;
+    let settled = false, forceTimer = null, timeoutTimerDelaySecs = 0;
     const settle = (value) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer); clearTimeout(forceTimer); clearInterval(stallTimer);
       resolve(value);
     };
+    const timeoutDeadline = callStarted + callTimeoutSeconds * 1000;
     const timer = setTimeout(() => {
+      // Windows の休止・スリープ中は setTimeout も止まる。復帰後に締切が発火した場合、
+      // Date.now() の壁時計差には PC が動いていなかった時間まで含まれるため、台帳へ
+      // 発火遅延を別記して timeout waste の実効秒数から除外できるようにする。
+      timeoutTimerDelaySecs = Math.max(0, (Date.now() - timeoutDeadline) / 1000);
       timedOut = true;
       // 予算が停滞判定の閾値秒（300秒）以下だと、締切タイマーが周期判定より先に発火し続け、
       // ポリシー拒否で停滞した試行が outcome=timeout として記録される（2026-11-02 実測: gemini-cli 301秒/予算300秒 out0）。
@@ -1115,7 +1123,7 @@ function execute(command, commandArgs, options = {}) {
       // (2026-10-28 実測: 予算600秒の gemini-cli 試行が 1044 秒)。猶予後は close を待たず打ち切る。
       forceTimer = setTimeout(() => {
         for (const stream of [child.stdin, child.stdout, child.stderr]) { try { stream?.destroy(); } catch { /* 既に閉じている */ } }
-        settle({ status: 124, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null });
+        settle({ status: 124, outputChars, output, stderr, timedOut, timeoutTimerDelaySecs, aborted: abortedPolicyStall ? 'policy_stall' : null });
       }, timeoutKillGraceMs(process.env));
       forceTimer.unref?.();
       killProcessTree(child);
@@ -1146,8 +1154,8 @@ function execute(command, commandArgs, options = {}) {
       process.stderr.write(chunk);
       checkPolicyStall();
     });
-    child.on('error', (error) => settle({ status: null, error, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }));
-    child.on('close', (status) => settle({ status: timedOut ? 124 : status, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }));
+    child.on('error', (error) => settle({ status: null, error, outputChars, output, stderr, timedOut, timeoutTimerDelaySecs, aborted: abortedPolicyStall ? 'policy_stall' : null }));
+    child.on('close', (status) => settle({ status: timedOut ? 124 : status, outputChars, output, stderr, timedOut, timeoutTimerDelaySecs, aborted: abortedPolicyStall ? 'policy_stall' : null }));
     // 指示は stdin で渡し、必ず閉じる。閉じないと codex が
     // "Reading additional input from stdin..." のまま永久に待つ。
     child.stdin.end(prompt);
@@ -1488,6 +1496,9 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
           model: backend.model,
           status: result.status ?? null,
           timedOut: result.timedOut === true,
+          ...(Number.isFinite(result.timeoutTimerDelaySecs) && result.timeoutTimerDelaySecs > 0
+            ? { timeoutTimerDelaySecs: Number(result.timeoutTimerDelaySecs.toFixed(3)) }
+            : {}),
           spawnFailed,
           out: Math.ceil((result.outputChars || 0) / 4),
           // stderrTail は末尾200字のため拒否回数が欠ける。打ち切り判定と同じ実測値（全 stderr の拒否回数・出力文字数）を残す。

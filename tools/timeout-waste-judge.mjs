@@ -16,10 +16,10 @@ import { isEntry } from './is-entry.mjs';
 export const TIMEOUT_FIX_MERGED_AT = '2026-10-16T18:50:03Z'; // #773（600→900秒＋連鎖予算）
 // 孫プロセスが pipe を握って close が来ず予算を超えた問題の修正（#1260 / 13005ed の commit 日）。
 // 2026-10-28T09:31Z の gemini-cli 1044秒/予算600秒はこの修正より前の行。以後の超過だけを回帰として扱う。
-// 2026-11-04: 締切後の kill を非同期化し猶予タイマーを kill より先に張る修正の commit 時刻へ進めた。
-// 2026-11-01T16:18Z の主経路 codex 226.786秒/予算210秒（sync taskkill の待ち 10 秒 + 猶予 5 秒）は
-// この修正より前の行なので回帰に数えない。
-export const TIMEOUT_KILL_FIX_MERGED_AT = '2026-11-03T15:38:52Z';
+// 2026-11-07: Windows の休止中に timeout タイマーも止まり、復帰時の壁時計差約80,000秒を
+// waste と誤計上した。発火遅延を台帳へ別記して実効秒数から除く修正の導入時刻へ進めた。
+// それ以前の行には timeoutTimerDelaySecs が無く、休止時間と実行時間を事後分離できない。
+export const TIMEOUT_KILL_FIX_MERGED_AT = '2026-11-07T01:47:48Z';
 // フォールバック試行に与える既定予算。--cap で上書きできる。
 // 主経路（chain 無し）はこれではなく、その実行に与えた --timeout（既定 1800 秒）で判定する。
 export const DEFAULT_CAP_SECS = 900;
@@ -40,6 +40,16 @@ function attemptBudgetSecs(value, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+function measuredAttempt(a, fallbackSecs) {
+  const wallSecs = Number(a?.secs ?? fallbackSecs);
+  const timerDelaySecs = Number(a?.timeoutTimerDelaySecs);
+  const sleepDelay = Number.isFinite(timerDelaySecs) && timerDelaySecs > 0 ? timerDelaySecs : 0;
+  return {
+    secs: Number.isFinite(wallSecs) ? Math.max(0, wallSecs - sleepDelay) : wallSecs,
+    ...(sleepDelay > 0 ? { wallSecs, timeoutTimerDelaySecs: sleepDelay } : {}),
+  };
+}
+
 // timeout した試行ごとの秒数と、その試行に実際に与えた予算。
 // chain があれば timeout した試行だけを返し、無い旧形式・単一バックエンドの行は
 // 行そのもの（secs / timeoutSecs）を 1 試行として扱う。
@@ -53,7 +63,7 @@ export function timeoutAttempts(row, { fallbackBudgetSecs = DEFAULT_CAP_SECS } =
     return chain.map((a) => ({
       backend: a.backend ?? a.model ?? null,
       model: a.model ?? row?.model ?? null,
-      secs: Number(a.secs),
+      ...measuredAttempt(a),
       budgetSecs: attemptBudgetSecs(a.budgetSecs, fallbackBudgetSecs),
       path: 'fallback',
     }));
@@ -61,7 +71,7 @@ export function timeoutAttempts(row, { fallbackBudgetSecs = DEFAULT_CAP_SECS } =
   return [{
     backend: row?.provider ?? row?.model ?? null,
     model: row?.model ?? null,
-    secs: Number(row?.secs),
+    ...measuredAttempt(row),
     budgetSecs: attemptBudgetSecs(row?.timeoutSecs, DEFAULT_PRIMARY_TIMEOUT_SECS),
     path: 'primary',
   }];

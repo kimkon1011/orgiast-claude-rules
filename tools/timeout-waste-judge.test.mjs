@@ -187,3 +187,28 @@ test('チェーン試行は budgetSecs が記録されていれば既定より�
   assert.equal(report.verdict, 'waste-within-cap');
   assert.equal(report.events[0].attempts[0].budgetSecs, 1200);
 });
+
+// 2026-11-07 実測: PC 休止中に setTimeout も停止し、復帰時に主経路2本が同時に発火した。
+// 壁時計では約80,000秒だが、休止時間はバックエンドが実行資源を消費した秒数ではない。
+test('休止で timeout タイマーが遅れた秒数を除外し、壁時計秒数は証拠として残す', () => {
+  const report = judgeTimeoutRows([{
+    t: AFTER_BASELINE(), provider: 'codex', model: 'codex-cli/gpt-6-astra',
+    timedOut: true, status: 'timeout', secs: 80_638.755, timeoutSecs: 700,
+    timeoutTimerDelaySecs: 79_933.755,
+  }]);
+  assert.equal(report.verdict, 'waste-within-cap');
+  const attempt = report.events[0].attempts[0];
+  assert.equal(attempt.secs, 705);
+  assert.equal(attempt.wallSecs, 80_638.755);
+  assert.equal(attempt.timeoutTimerDelaySecs, 79_933.755);
+});
+
+test('フォールバック chain でも休止によるタイマー遅延を実効秒数から除外する', () => {
+  const report = judgeTimeoutRows([{
+    t: AFTER_BASELINE(), provider: 'fallback', timedOut: true, status: 'timeout', secs: 50_505,
+    chain: [{ backend: 'gemini-cli', outcome: 'timeout', secs: 50_505, budgetSecs: 500, timeoutTimerDelaySecs: 50_000 }],
+  }]);
+  assert.equal(report.verdict, 'waste-within-cap');
+  assert.equal(report.events[0].attempts[0].secs, 505);
+  assert.equal(report.events[0].attempts[0].wallSecs, 50_505);
+});

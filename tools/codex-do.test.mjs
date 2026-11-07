@@ -2066,6 +2066,16 @@ test('buildUsageRow は timeoutSecs が無ければ行に生やさない（旧�
   assert.equal(row.status, 'ok');
 });
 
+test('buildUsageRow は休止中に遅れた timeout タイマーの秒数を壁時計秒数と別に残す', () => {
+  const row = buildUsageRow({
+    result: { status: 124, timedOut: true, outputChars: 0, timeoutTimerDelaySecs: 78_838.7554 },
+    model: 'codex-cli/gpt-6-astra', seconds: 80_638.755, timeoutSecs: 700,
+    now: new Date('2026-11-07T01:35:39.091Z'),
+  });
+  assert.equal(row.secs, 80_638.755);
+  assert.equal(row.timeoutTimerDelaySecs, 78_838.755);
+});
+
 // 2026-10-23 実測: gemini が拒否を3回出して以後無音のまま600秒 timeout になった（打ち切り未発火3件）。
 // chunk 到着時だけの判定では再評価されないため、周期タイマーで無音停滞も打ち切る。
 function fakeGeminiEnv(body) {

@@ -222,6 +222,47 @@ export function hasConversation(rows, bytes = 0) {
     return typeof c === 'string' && !!c.trim() && (row.type === 'assistant' || !/<local-command-caveat>|<command-name>|<command-message>/.test(c));
   });
 }
+// git worktree 判定。フォルダ（または祖先）に `.git` ファイルがあり内容の gitdir: が
+// `...worktrees/...` を含む、または正規化パスが `\.claude\worktrees\` を含む場合に worktree。
+// `.git` ディレクトリ（メイン checkout）に到達したらそこで打ち切って false。
+function isWorktreeFolder(cwd, fsImpl) {
+  if (!cwd) return false;
+  const norm = normalizePath(cwd);
+  if (norm.includes('\\.claude\\worktrees\\')) return true;
+  let dir = path.resolve(cwd);
+  while (true) {
+    const gitPath = path.join(dir, '.git');
+    try {
+      const stat = fsImpl.statSync(gitPath);
+      if (stat.isFile()) {
+        const content = fsImpl.readFileSync(gitPath, 'utf8');
+        if (/gitdir\s*:\s*[^\r\n]*worktrees/i.test(content)) return true;
+        return false; // 通常の gitdir ファイル（サブモジュール等）は worktree ではない
+      }
+      if (stat.isDirectory()) return false; // メイン checkout 配下。worktree ではない
+    } catch { /* この階層に .git は無い: 親へ */ }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return false;
+}
+// 再接続で開くフォルダを決める。cwd が worktree のときは、transcript の cwd 履歴のうち
+// worktree でない最初の cwd → 無ければ git worktree list のメイン worktree。
+// どちらも無い場合は null（開かずスキップ。新しい worktree ウィンドウは絶対に開かない）。
+export function resolveReopenFolder(cwd, transcriptCwds = [], { fsImpl = fs, spawn = spawnSync } = {}) {
+  if (!cwd) return null;
+  if (!isWorktreeFolder(cwd, fsImpl)) return cwd;
+  for (const candidate of transcriptCwds) {
+    if (candidate && !isWorktreeFolder(candidate, fsImpl)) return candidate;
+  }
+  try {
+    const list = run('git', ['-C', cwd, 'worktree', 'list', '--porcelain'], spawn);
+    const first = String(list).split('\n')[0];
+    if (first.startsWith('worktree ')) return first.slice('worktree '.length).trim();
+  } catch { /* git 不可: null へ */ }
+  return null;
+}
 export function hasHostExit(events, since, until) {
   return events.some(e => e.event_type === 'system' && e.payload?.reason === 'host_exit'
     && Date.parse(e.created_at) >= Date.parse(since) && Date.parse(e.created_at) <= Date.parse(until));
@@ -267,16 +308,22 @@ export function localIndex(base, onlyId) {
       const bridges = lines.filter(line => /"type"\s*:\s*"bridge-session"/.test(line)).map(parse)
         .filter(row => row.type === 'bridge-session' && row.bridgeSessionId);
       if (!bridges.length) continue;
-      let cwd;
+      // cwd 履歴（大小文字無視で重複除去、出現順）。先頭が仕事の起点（worktree 移動前）。
+      const cwds = [];
+      const seenCwds = new Set();
       for (let i = 0; i < lines.length; i++) {
         if (!lines[i].includes('"cwd"')) continue;
         const row = parse(lines[i]);
-        if (typeof row.cwd === 'string' && row.cwd) { cwd = row.cwd; break; }
+        if (typeof row.cwd !== 'string' || !row.cwd) continue;
+        const norm = normalizePath(row.cwd);
+        if (!norm || seenCwds.has(norm)) continue;
+        seenCwds.add(norm);
+        cwds.push(row.cwd);
       }
       const bytes = Buffer.byteLength(raw);
       const conversation = bytes > 200 * 1024 || hasConversation(lines.map(parse), bytes);
       for (const bridge of bridges) {
-        index.set(bridge.bridgeSessionId, { id: file.slice(0, -6), cwd, hasConversation: conversation });
+        index.set(bridge.bridgeSessionId, { id: file.slice(0, -6), cwd: cwds[0], cwds, hasConversation: conversation });
       }
     }
   }
@@ -386,7 +433,7 @@ export function resolveClaudeCli({ env = process.env, exists = fs.existsSync, re
 export async function reopenLost({ since, until, dryRun = false, max = 30, gapSec = 10,
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
   now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs } = {}) {
-  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0 } };
+  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0 } };
   // Dry run is strictly read-only: no lock or log mutation on the user's PC.
   const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'));
   if (!release) return { ...result, error: 'locked' };
@@ -434,7 +481,7 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
             if (reopenCounts[local?.id] >= 3) { result.skipped.reopenLoop++; continue; }
             if (!local || seenIds.has(local.id)) continue;
             seenIds.add(local.id);
-            result.candidates.push({ id: local.id, cwd: local.cwd, title: session.title ?? '' });
+            result.candidates.push({ id: local.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '' });
           }
           const failed = batch.find(item => item.status === 'rejected');
           if (failed) throw failed.reason;
@@ -452,9 +499,12 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
         const reason = exclusion(refreshed, closedIds(base), alive());
         if (reason) { result.skipped[reason]++; continue; }
         try {
-          const wsInfo = findWorkspaceForCwd(candidate.cwd, { env, fsImpl });
-          const targetPath = wsInfo ? wsInfo.workspaceFile : candidate.cwd;
-          const titlePattern = wsInfo ? wsInfo.workspaceName : path.win32.basename(candidate.cwd);
+          const folder = resolveReopenFolder(candidate.cwd, candidate.cwds, { fsImpl, spawn });
+          // worktree のまま開く候補が無いときは開かずスキップ（新しい worktree ウィンドウは作らない）。
+          if (!folder) { result.skipped.worktree++; continue; }
+          const wsInfo = findWorkspaceForCwd(folder, { env, fsImpl });
+          const targetPath = wsInfo ? wsInfo.workspaceFile : folder;
+          const titlePattern = wsInfo ? wsInfo.workspaceName : path.win32.basename(folder);
           const openedWith = wsInfo ? 'workspace' : 'folder';
 
           ps(`& ${quotePS(code)} ${quotePS(targetPath)}; exit $LASTEXITCODE`, spawn);
@@ -470,7 +520,7 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
           if (lateReason) { result.skipped[lateReason]++; continue; }
           // Focus again immediately before URI dispatch to reduce focus races.
           ps(`& ${quotePS(code)} ${quotePS(targetPath)}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & ${quotePS(code)} --open-url ${quotePS('vscode://anthropic.claude-code/open?session=' + encodeURIComponent(candidate.id))}; exit $LASTEXITCODE`, spawn);
-          result.reopened.push({ ...candidate, openedWith, target: targetPath });
+          result.reopened.push({ ...candidate, openedWith, folder, target: targetPath });
         } catch (error) { (result.failed ??= []).push({ ...candidate, error: error.message }); }
         await wait(gapSec * 1000);
       }

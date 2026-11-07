@@ -3,10 +3,133 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath } from './reopen-lost-sessions.mjs';
+import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder } from './reopen-lost-sessions.mjs';
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
 const exit = { event_type: 'system', payload: { reason: 'host_exit' }, created_at: since };
+
+// git worktree を模した一時フォルダ（.git ファイルが gitdir: .../worktrees/... を指す）
+function makeWorktreeFixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'worktree-det-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const mainDir = path.join(root, 'repo-main');
+  const wtDir = path.join(root, '.claude', 'worktrees', 'mail-approval-gate-fix');
+  fs.mkdirSync(wtDir, { recursive: true });
+  fs.writeFileSync(path.join(wtDir, '.git'),
+    `gitdir: ${path.join(mainDir, '.git', 'worktrees', 'mail-approval-gate-fix').replace(/\\/g, '/')}\n`, 'utf8');
+  return { root, mainDir, wtDir };
+}
+
+test('resolveReopenFolder: worktree でない cwd はそのまま返す', () => {
+  assert.equal(resolveReopenFolder('C:\\Users\\uers\\Downloads\\CLAUDE.md配布', [], { fsImpl: fs }), 'C:\\Users\\uers\\Downloads\\CLAUDE.md配布');
+});
+
+test('resolveReopenFolder: worktree cwd は cwd 履歴の最初の非 worktree を開く（\.claude\worktrees\ 検出）', () => {
+  const wt = 'C:\\Users\\uers\\.claude\\worktrees\\mail-approval-gate-fix';
+  const history = ['C:\\Users\\uers\\Downloads\\CLAUDE.md配布', 'C:\\Users\\uers\\.claude\\worktrees\\other'];
+  assert.equal(resolveReopenFolder(wt, history, { fsImpl: fs }), history[0]);
+  assert.equal(resolveReopenFolder(wt, [], { fsImpl: fs, spawn: () => ({ status: 1 }) }), null);
+});
+
+test('resolveReopenFolder: .git ファイルで worktree を検出し、履歴・メイン worktree・スキップへ', t => {
+  const { mainDir, wtDir } = makeWorktreeFixture(t);
+  const normal = path.join(mainDir, '.claude');
+  fs.mkdirSync(normal, { recursive: true });
+  // 履歴に非 worktree があればそれを使う
+  assert.equal(resolveReopenFolder(wtDir, [normal, path.join(mainDir, 'other')], { fsImpl: fs }), normal);
+  // 履歴が全て worktree なら git worktree list のメイン worktree（git は / 区切りで返す）
+  const wt2 = path.join(mainDir, '.claude\\worktrees', 'another');
+  const porcelain = `worktree ${mainDir.replace(/\\/g, '/')}\nHEAD 0123abcd\n\nworktree ${wt2.replace(/\\/g, '/')}\nHEAD deadbeef\n`;
+  assert.equal(resolveReopenFolder(wtDir, [wt2], { fsImpl: fs, spawn: () => ({ status: 0, stdout: porcelain }) }), mainDir.replace(/\\/g, '/'));
+  // worktree のサブディレクトリでも祖先を遡って検出する
+  const sub = path.join(wtDir, 'src', 'deep');
+  fs.mkdirSync(sub, { recursive: true });
+  assert.equal(resolveReopenFolder(sub, [normal], { fsImpl: fs }), normal);
+  // どちらも無ければ null（スキップ）
+  assert.equal(resolveReopenFolder(wtDir, [wt2], { fsImpl: fs, spawn: () => ({ status: 1 }) }), null);
+});
+
+test('localIndex は cwd 履歴を出現順・大小文字無視の重複除去で保持する', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const projects = path.join(root, '.claude', 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  fs.writeFileSync(path.join(projects, 'hist.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_hist' },
+    { type: 'user', cwd: 'C:\\Start\\Dir', message: { content: 'first' } },
+    { type: 'user', cwd: 'c:\\start\\dir', message: { content: 'dup' } },
+    { type: 'user', cwd: 'C:\\Users\\uers\\.claude\\worktrees\\mail-approval-gate-fix', message: { content: 'second' } },
+  ].map(JSON.stringify).join('\n'));
+  const idx = localIndex(path.join(root, '.claude'));
+  const local = idx.get('cse_hist');
+  assert.equal(local.cwd, 'C:\\Start\\Dir');
+  assert.deepEqual(local.cwds, ['C:\\Start\\Dir', 'C:\\Users\\uers\\.claude\\worktrees\\mail-approval-gate-fix']);
+});
+
+test('reopenLost: worktree cwd のセッションは最初の非 worktree cwd を開き、folder をログに残す', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-wt-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  const normalDir = path.join(root, 'normal-work');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.mkdirSync(normalDir, { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  const wtDir = path.join(root, '.claude', 'worktrees', 'mail-approval-gate-fix');
+  fs.mkdirSync(wtDir, { recursive: true });
+  fs.writeFileSync(path.join(wtDir, '.git'), `gitdir: ${path.join(root, 'main', '.git', 'worktrees', 'mail-approval-gate-fix').replace(/\\/g, '/')}\n`, 'utf8');
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: normalDir, message: { content: 'started here' } },
+    { type: 'user', cwd: wtDir, message: { content: 'moved to worktree' } },
+  ].map(JSON.stringify).join('\n'));
+  const psCalls = [];
+  const result = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd',
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: (cmd, args) => {
+      if (args[0] !== 'agents') psCalls.push(args[args.length - 1]);
+      return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
+    },
+    windowReady: () => true,
+    wait: async () => {},
+  });
+  assert.equal(result.reopened.length, 1);
+  assert.equal(result.reopened[0].folder, normalDir);
+  assert.equal(result.reopened[0].target, normalDir);
+  assert.equal(result.reopened[0].openedWith, 'folder');
+  assert.ok(psCalls[0].includes(normalDir), `should open the non-worktree folder: ${psCalls[0]}`);
+  assert.ok(!psCalls[0].includes(wtDir.split(path.sep).pop()), `should not open the worktree folder: ${psCalls[0]}`);
+});
+
+test('reopenLost: worktree 履歴だけ・メイン worktree も取れない場合は skipped.worktree になる', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-wt-skip-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  const wtDir = path.join(root, '.claude', 'worktrees', 'mail-approval-gate-fix');
+  fs.mkdirSync(wtDir, { recursive: true });
+  fs.writeFileSync(path.join(wtDir, '.git'), 'gitdir: C:/x/.git/worktrees/mail-approval-gate-fix\n', 'utf8');
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: wtDir, message: { content: 'only worktree' } },
+  ].map(JSON.stringify).join('\n'));
+  const result = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd',
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: (cmd, args) => {
+      if (args[0] === 'git') return { status: 1 };
+      return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
+    },
+    windowReady: () => true,
+    wait: async () => {},
+  });
+  assert.equal(result.reopened.length, 0);
+  assert.equal(result.skipped.worktree, 1);
+  assert.equal(result.skipped.closed, 0);
+});
 
 test('host exit interval inclusive; excludes wrong reason/type/time', () => {
   assert.equal(hasHostExit([exit], since, until), true);

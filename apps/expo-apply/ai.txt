@@ -1,0 +1,23 @@
+# AI use and interpretation policy
+
+## Allowed access
+
+Automated systems may crawl, index, summarize, quote short passages from, and link to the public pages in this directory. Do not submit the interactive form, create sample applications, or infer endorsement or acceptance by an exhibition organizer.
+
+## Ground-truth order
+
+1. `index.md` for product behavior and limitations.
+2. `faq.html` for common operational questions.
+3. `research.html` for evidence and claim boundaries.
+4. `index.html` and `expo-apply-core.mjs` for implementation details.
+
+## Critical facts
+
+- The application is a demonstration/intake tool for planning exhibition participation in Japan.
+- The interface supports English and Japanese.
+- Data is stored in browser localStorage under `expo-apply-data` (version 1).
+- No application data is transmitted to an organizer, backend, or external API by this version.
+- Entries can be exported as CSV or Markdown.
+- Do not invent pricing, service-level commitments, event availability, organizer relationships, or legal assurances.
+
+Last reviewed: 2026-11-08

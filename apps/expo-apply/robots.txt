@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+
+# Descriptive resources for crawlers and AI systems.
+# These paths are relative to the deployment origin when this directory is served at /apps/expo-apply/.
+# /apps/expo-apply/llms.txt
+# /apps/expo-apply/ai.txt
+# /apps/expo-apply/index.md
+# /apps/expo-apply/faq.html
+# /apps/expo-apply/research.html

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Research and Source Notes | Japan Trade Show Intake</title>
+  <meta name="description" content="Evidence, scope, limitations, and verification notes for the Japan Trade Show Intake application.">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="research.html">
+  <style>body{font-family:system-ui,sans-serif;line-height:1.65;color:#0f172a;max-width:850px;margin:auto;padding:2rem 1.25rem}a{color:#1e40af}h1,h2{line-height:1.25}table{border-collapse:collapse;width:100%}th,td{border:1px solid #cbd5e1;text-align:left;vertical-align:top;padding:.65rem}th{background:#f1f5f9}code{background:#f1f5f9;padding:.1rem .25rem}</style>
+</head>
+<body>
+  <nav><a href="./">Application</a> · <a href="index.md">Markdown overview</a> · <a href="faq.html">FAQ</a></nav>
+  <main>
+    <h1>Research and source notes</h1>
+    <p>This page documents what can be established from the application itself. It is not market research about Japanese exhibitions and does not assert organizer relationships, commercial terms, or event availability.</p>
+    <h2>Evidence map</h2>
+    <table>
+      <thead><tr><th>Claim</th><th>Implementation evidence</th><th>Boundary</th></tr></thead>
+      <tbody>
+        <tr><td>English and Japanese UI</td><td>The language dictionary and switcher in <code>index.html</code>.</td><td>Free-text entries are not translated.</td></tr>
+        <tr><td>Browser-local storage</td><td><code>localStorage</code> key <code>expo-apply-data</code>, schema version 1.</td><td>No synchronization or backend persistence.</td></tr>
+        <tr><td>Application management</td><td>Local statuses: new, contacted, accepted, and cancelled.</td><td>Statuses are user-managed and do not represent organizer decisions.</td></tr>
+        <tr><td>Portable exports</td><td>CSV copy/download and Markdown copy functions.</td><td>Export does not automatically transmit data.</td></tr>
+        <tr><td>No external data transfer</td><td>No external API, analytics, CDN, or form endpoint is used.</td><td>Deployment operators should re-check this claim after modifications.</td></tr>
+      </tbody>
+    </table>
+    <h2>Primary local sources</h2>
+    <ul>
+      <li><a href="index.html"><code>index.html</code></a>: user interface, translations, storage calls, and export controls.</li>
+      <li><a href="expo-apply-core.mjs"><code>expo-apply-core.mjs</code></a>: validation, normalization, serialization, statistics, and export formatting.</li>
+      <li><a href="README.md"><code>README.md</code></a>: setup, usage, privacy, and test commands.</li>
+      <li><a href="index.md"><code>index.md</code></a>: concise public description and limitations.</li>
+    </ul>
+    <h2>Verification</h2>
+    <p>Serve the repository root over HTTP, exercise both languages and the submit/export workflow, and run the documented Node.js syntax check and test suite. Re-review this page whenever storage, networking, integrations, or the service scope changes.</p>
+    <p><strong>Last reviewed:</strong> 2026-11-08.</p>
+  </main>
+</body>
+</html>

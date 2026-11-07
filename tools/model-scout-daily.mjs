@@ -19,13 +19,30 @@ function evaluations(file) {
     try { return [JSON.parse(line)]; } catch { return []; }
   }); } catch (e) { if (e.code === 'ENOENT') return []; throw e; }
 }
+function maskSecrets(s) {
+  if (!s) return s;
+  let result = String(s);
+  // (1) 接頭辞ベースの鍵トークン（16文字以上）
+  result = result.replace(/\b(?:sk-or-[A-Za-z0-9_-]{10,}|sk-ant-[A-Za-z0-9_-]{9,}|sk-[A-Za-z0-9_-]{13,}|gsk_[A-Za-z0-9_-]{12,}|AIza[A-Za-z0-9_-]{12,}|xai-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_-]{12,}|github_pat_[A-Za-z0-9_-]{5,}|ya29\.[A-Za-z0-9_-]{11,})\b/g, '[masked]');
+  // (2) Bearer トークン
+  result = result.replace(/\bbearer\s+\S+/gi, m => m.replace(/\S+$/, '[masked]'));
+  // (3) 既知パラメータ名の値
+  result = result.replace(/\b(api_key|apikey|key|token|authorization|x-api-key)\s*([:=])\s*([^\s&"'<>]+)/gi, (_, name, sep) => `${name}${sep}[masked]`);
+  // (4) _KEY/_TOKEN/_SECRET で終わる環境変数名=値
+  result = result.replace(/\b([A-Za-z_]+_(?:KEY|TOKEN|SECRET))\s*=\s*([^\s&"'<>]+)/gi, (_, name) => `${name}=[masked]`);
+  // (5) 32文字以上の連続した英数字等（hex/base64風）
+  result = result.replace(/[A-Za-z0-9+/=_-]{32,}/g, '[masked]');
+  return result;
+}
+
 function formatTail(str, maxLen) {
   if (!str) return '(empty)';
   const s = String(str);
   const rawTail = s.length > maxLen * 4 ? s.slice(-maxLen * 4) : s;
   const cleaned = rawTail.replace(/[\r\n\t\x00-\x1F\x7F]+/g, ' ').trim();
   if (!cleaned) return '(empty)';
-  return cleaned.length > maxLen ? cleaned.slice(-maxLen) : cleaned;
+  const tailed = cleaned.length > maxLen ? cleaned.slice(-maxLen) : cleaned;
+  return maskSecrets(tailed);
 }
 
 export function unevaluatedScoutModels(pending, config, rows, { max = frontierLimit() } = {}) {

@@ -52,7 +52,7 @@ scratch/
 .stall-sweeper/
 
 # Codex のサブクローン作業ツリーと internal-audit の検証証跡（機械ローカル）
-.wt/
+# .wt/
 /evidence/internal-audit-v11/
 
 # IG 投稿用の機械ローカル作業ディレクトリ。未登録だったため rescue が

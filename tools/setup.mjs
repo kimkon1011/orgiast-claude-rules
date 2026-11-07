@@ -15,8 +15,9 @@ import { inspectTaskHiddenActions } from './setup-task-hidden-actions.mjs';
 import { convergeDeadlineTasks } from './setup-deadline-watch.mjs';
 import { convergeNightlyReload } from './setup-nightly-reload.mjs';
 import { convergeNodeRuntimeSecurity } from './setup-node-runtime-security.mjs';
+import { originFailureKind, nonInteractiveGitEnv } from './lib/seat-github.mjs';
 
-const TYPES = new Set(['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task']);
+const TYPES = new Set(['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task', 'git-origin']);
 const SEVERITIES = new Set(['required', 'optional', 'manual']);
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -108,6 +109,20 @@ function check(item) {
       const candidates = (spec.paths || [spec.path]).map(resolveHome);
       if (spec.ifPresent && !candidates.some(fs.existsSync)) return null;
       return candidates.some((target) => readNonempty(target, spec.kind));
+    }
+    if (item.type === 'git-origin') {
+      // 配布元リポの origin が届くかを確かめる。届かない URL（not-found）だけが修復対象で、
+      // 認証失敗・ネットワーク断は NOTICE（access-doctor 側も向け替えない）。未配置は NOTICE。
+      const target = resolveHome(spec.path);
+      if (!fs.existsSync(target) || !fs.existsSync(path.join(target, '.git'))) return null;
+      try {
+        execFileSync('git', ['-C', target, 'ls-remote', 'origin', 'HEAD'], {
+          encoding: 'utf8', timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: nonInteractiveGitEnv(),
+        });
+        return true;
+      } catch (error) {
+        return originFailureKind(error) === 'not-found' ? false : null;
+      }
     }
     if (item.type === 'file-contains') {
       let raw = fs.readFileSync(resolveHome(spec.path), 'utf8');

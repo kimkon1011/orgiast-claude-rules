@@ -214,7 +214,7 @@ export async function deliverKim(text, {
   plainJaImpl = toPlainJa,
   suffix = '',
   allowHumanRequest = false,
-  kind = 'info', source = '', sessionId = '',
+  kind = 'info', source = '', sessionId = '', discordAllowed: discordAllowedOption,
 } = {}) {
   if (isInboxNoise({ kind, source, text: String(text ?? '') })) return { delivered: 'suppressed', reason: 'fleet-ledger-or-gate-statistics' };
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
@@ -230,7 +230,7 @@ export async function deliverKim(text, {
   let inboxResult = null;
   if (isKimRecipient) {
     inboxResult = await persistKim(home, { kind: ['ask', 'action'].includes(kind) ? 'ask' : 'info', text: String(body) + suffix, source, sessionId, signal });
-    const checkAllowed = options.discordAllowed ?? discordAllowed;
+    const checkAllowed = discordAllowedOption ?? discordAllowed;
     const allowed = checkAllowed(text, { home }).allowed || checkAllowed(body, { home }).allowed;
     if (!allowed) {
       return { ...inboxResult, channel: 'kim-inbox' };

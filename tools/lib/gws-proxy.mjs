@@ -30,6 +30,7 @@ export function googleRoute(raw) {
   if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hash) throw Error('invalid Google URL');
   if (url.hostname === 'gmail.googleapis.com') return { service: 'gmail', path: url.pathname + url.search };
   if (url.hostname === 'www.googleapis.com' && /^\/(?:upload\/)?drive\//.test(url.pathname)) return { service: 'drive', path: url.pathname + url.search };
+  if (url.hostname === 'sheets.googleapis.com') return { service: 'drive', path: url.pathname + url.search };
   throw Error('GWS proxy: unsupported Google endpoint');
 }
 export async function gwsFetch(url, options = {}, dependencies = {}) {

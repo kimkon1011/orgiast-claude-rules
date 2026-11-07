@@ -3,6 +3,12 @@
   "events": {
     "SessionStart": [
       {
+        "type": "command",
+        "command": "node \"${repo}/tools/knowledge-guard.mjs\" --session-start",
+        "timeout": 6,
+        "matcher": "*"
+      },
+      {
         "matcher": "*",
         "type": "command",
         "command": "node \"${repo}/tools/case-handoff.mjs\" hook",
@@ -332,6 +338,12 @@
       }
     ],
     "PreToolUse": [
+      {
+        "type": "command",
+        "command": "node \"${repo}/tools/knowledge-guard.mjs\"",
+        "timeout": 6,
+        "matcher": "Read|Grep|Glob|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit"
+      },
       {
         "matcher": "Bash|PowerShell|Edit|Write|MultiEdit",
         "type": "command",

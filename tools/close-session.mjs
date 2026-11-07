@@ -1,4 +1,5 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { writeHandoff, handoffLockEnabled } from './lib/handoff-store.mjs';
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { launchPurge } from "./purge-sessions.mjs";
@@ -50,6 +51,10 @@ if (!sessionId) {
 }
 
 rotate(join(claudeDir, "next-session.md"));
+const handoffFile = join(claudeDir, "next-session.md");
+if (handoffLockEnabled() && existsSync(handoffFile)) {
+  writeHandoff(handoffFile, readFileSync(handoffFile, 'utf8'));
+}
 
 const recorded = recordClosed(sessionId, closedPath, {
   onError: (e) => console.error(`closed-sessions.json に書けませんでした: ${e.message}`),

@@ -5,6 +5,7 @@
     "DESKTOP-2D0R4LI"
   ],
   "gates": {
+    "knowledge-guard": { "rollout": "deny", "immediatePolicy": "2026-10-29 user 指示: 公開鍵有効化後は契約外アカウントの蓄積アクセスを拒否" },
     "bg-turn-report-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-05T00:00:00Z", "denyAfter": "2026-11-12T00:00:00Z" },
     "seat-name-gate": {"rollout":"deny","immediatePolicy":"2026-11-04 kim 厳命: 席番号呼称と Drive 引き渡し (§1.5.0.2/§1.5.0.3)"},
     "deliverable-drive-link-gate": { "rollout": "deny", "immediatePolicy": "2026-11-04 nishi 指示: 渡すファイルが見つからず往復が発生した実害の再発防止" },

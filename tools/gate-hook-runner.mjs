@@ -56,9 +56,9 @@ export function wrapRegisteredGates(settings, repo) {
     const match = String(hook.command || '').match(/^node\s+"([^"]+\.mjs)"(.*)$/);
     if (!match) continue;
     const script = path.basename(match[1].replace(/\\/g, '/'));
-    // Billing and execution-tree edit policies are immediate, never downgraded by rollout.
+    // Billing, knowledge access and execution-tree edit policies are immediate, never downgraded by rollout.
     // case-handoff persists a queue; it is an observer, not a decision gate.
-    if (['hook-dispatch.mjs', 'stop-gate-runner.mjs', 'fleet-question-relay.mjs', 'case-handoff.mjs', 'api-billing-guard.mjs', 'exec-tree-edit-guard.mjs'].includes(script) || !fs.existsSync(path.join(repo, 'tools', script))) continue;
+    if (['hook-dispatch.mjs', 'stop-gate-runner.mjs', 'fleet-question-relay.mjs', 'case-handoff.mjs', 'api-billing-guard.mjs', 'knowledge-guard.mjs', 'exec-tree-edit-guard.mjs'].includes(script) || !fs.existsSync(path.join(repo, 'tools', script))) continue;
     // Migrate stale paths as well as new installations. Leave unrelated hooks alone.
     if (path.resolve(match[1]) !== path.resolve(repo, 'tools', script) && !readContract(path.join(repo, 'tools', script))) continue;
     hook.command = `node "${path.join(repo, 'tools', 'gate-hook-runner.mjs')}" "${path.join(repo, 'tools', script)}"${match[2]}`;

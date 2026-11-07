@@ -150,7 +150,9 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   finally {
     if (valid && !dryRun) {
       await (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineDetect', startedAt, finishedAt: new Date().toISOString(), ok, summary: ok ? '期限検出完了' : '期限検出失敗', cycleMinutes: 1440 }, { homeDir: home, localOnly: true });
-      const log = path.join(home, '.claude/logs/deadline-detect.log'); fs.mkdirSync(path.dirname(log), { recursive: true }); fs.appendFileSync(log, `${new Date().toISOString()} deadline-detect ${ok ? 'ok' : 'failed'}\n`);
+      const log = path.join(home, '.claude/logs/deadline-detect.log'); fs.mkdirSync(path.dirname(log), { recursive: true });
+      try { fs.appendFileSync(log, `${new Date().toISOString()} deadline-detect ${ok ? 'ok' : 'failed'}\n`); }
+      catch (error) { if (error.code !== 'EBUSY') throw error; }
     }
   }
 }

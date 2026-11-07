@@ -66,10 +66,23 @@ function timestamp(value) {
   const numeric = Number(value); return Number.isFinite(numeric) && numeric > 0 ? (numeric < 1e12 ? numeric * 1000 : numeric) : Date.parse(value);
 }
 export async function collectLine({ sheetId, state = {}, sheets, now }) {
-  const values = await sheets.get(sheetId, 'Messages!A:G');
+  let values, legacy = false;
+  try { values = await sheets.get(sheetId, 'Messages!A:G'); }
+  catch (error) {
+    if (!/HTTP 400/.test(error.message)) throw error;
+    values = await sheets.get(sheetId, 'A:G');
+    legacy = true;
+  }
   const header = values[0] || [];
-  if (!['id','ts','text'].every(k => header.includes(k))) throw new Error('LINE履歴の見出しが不足しています');
-  const rows = values.slice(1).map(r => Object.fromEntries(header.map((k,i) => [k,r[i]])));
+  const expected = legacy ? ['受信日時(JST)','スレッドID','本文'] : ['id','ts','text'];
+  if (!expected.every(k => header.includes(k))) throw new Error('LINE履歴の見出しが不足しています');
+  const rows = values.slice(1).map((r, index) => {
+    const row = Object.fromEntries(header.map((k,i) => [k,r[i]]));
+    if (!legacy) return row;
+    const ts = String(row['受信日時(JST)'] || '').replace(' ', 'T') + '+09:00';
+    return { id: `${row['スレッドID'] || 'unknown'}:${timestamp(ts) || index}`, ts,
+      sender: row['表示名'] || row['グループ名'] || '', text: row['本文'] || '' };
+  });
   const since = Date.parse(state.watermark || new Date(now.getTime() - 3 * 86400000).toISOString());
   const documents = rows.filter(r => timestamp(r.ts) > since && timestamp(r.ts) <= now.getTime()).map(r => ({
     source: 'LINE', sourceRef: `line:${sheetId}:${r.id}`, date: new Date(timestamp(r.ts)).toISOString(), text: trimBytes(`${r.sender || ''}: ${r.text || ''}`), url: `https://docs.google.com/spreadsheets/d/${sheetId}/edit`,

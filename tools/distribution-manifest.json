@@ -18,6 +18,7 @@
     "knowledge-merged.json": { "reason": "rules-sync merge の作業物。実行時参照なし" },
     "README.md": { "reason": "GitHub 表示用" },
     "STANDARD-PC-SETUP.md": { "reason": "人間向け手順書（gdoc-update の入力）" },
+    "VM-SETUP.md": { "reason": "クラウドVM(Muse/Grok Bot)の Claude Code が raw URL で読む参加手順。各PCへは配らない" },
     "autopilot-nightly-kpi-report-20261029.md": { "reason": "autopilot 夜間KPI調査のレポート。配布先PCの実行時参照なし" },
     "report.md": { "reason": "作業レポート" },
     "result-A.md": { "reason": "今回作業の検証結果レポート。配布先PCの実行時参照なし" },

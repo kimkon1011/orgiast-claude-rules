@@ -43,11 +43,10 @@ export function diagnose({ fix = false, home = process.env.ORGIAST_HOME || os.ho
     if (fs.existsSync(repoDir)) {
       const originRun = makeRepoRun(repoDir);
       let verdict = originReachability({ repoDir, run: originRun });
-      if (verdict.kind === 'not-found' && fix) verdict = repairUnreachableOrigin({ repoDir, home, run: originRun });
+      if ((verdict.kind === 'not-found' || verdict.kind === 'auth') && fix) verdict = repairUnreachableOrigin({ repoDir, home, run: originRun });
       const ok = verdict.kind === 'ok';
       const hint = ok ? '正しいリポジトリへ届く'
-        : verdict.kind === 'not-found' ? 'node tools/access-doctor.mjs --fix（origin を正しいリポジトリへ戻す）'
-        : verdict.kind === 'auth' ? '認証失敗（gh auth status / 鍵を確認。自動向け替えはしない）'
+        : verdict.kind === 'not-found' || verdict.kind === 'auth' ? 'node tools/access-doctor.mjs --fix（origin を正しいリポジトリへ戻す・履歴一致のみ）'
         : verdict.kind === 'no-repo' ? 'git リポジトリではない（再配置を確認）'
         : 'ネットワーク断（再試行。自動向け替えはしない）';
       add(`配布元 origin（${path.basename(repoDir)}）`, ok, hint);

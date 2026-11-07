@@ -137,13 +137,58 @@ test('not-found かつ履歴が一致（HEAD 祖先/逆）なら正しいリポ�
   const log = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'logs', 'access-doctor-origin-repair.jsonl'), 'utf8').trim().split(/\r?\n/).at(-1));
   assert.equal(log.oldUrl, 'https://github.com/orgiast/nightly-repo.git'); assert.equal(log.newUrl, RULES_ORIGIN_URL); assert.ok(log.repairedAt);
 });
-test('認証失敗・ネットワーク断は向け替えない（別リポジトリを誤って指さない）', () => {
-  for (const failure of [gitError("fatal: could not read Username for 'https://github.com': terminal prompts disabled"), gitError('fatal: unable to access ... Failed to connect to github.com port 443')]) {
-    const { run, calls } = mockGit({ 'remote get-url origin': 'https://github.com/orgiast/nightly-repo.git', 'ls-remote origin HEAD': failure });
-    const note = repairUnreachableOrigin({ repoDir: 'x', home: os.tmpdir(), run });
-    assert.equal(note.repaired, false); assert(!changedOrigin([note]));
-    assert(!calls.some(parts => parts[1] === 'set-url'));
-  }
+test('ネットワーク断は向け替えない（別リポジトリを誤って指さない）', () => {
+  const failure = gitError('fatal: unable to access ... Failed to connect to github.com port 443');
+  const { run, calls } = mockGit({ 'remote get-url origin': 'https://github.com/orgiast/nightly-repo.git', 'ls-remote origin HEAD': failure });
+  const note = repairUnreachableOrigin({ repoDir: 'x', home: os.tmpdir(), run });
+  assert.equal(note.repaired, false); assert(!changedOrigin([note]));
+  assert(!calls.some(parts => parts[1] === 'set-url'));
+});
+test('認証エラー（could not read Username）でも正しい URL が届き履歴が一致すれば向け替え、ログを書く', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-repair-auth-fix-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const origins = { origin: 'https://github.com/orgiast/nightly-repo.git' };
+  const { run, calls } = mockGit({
+    'remote get-url origin': () => origins.origin,
+    'ls-remote origin HEAD': gitError("fatal: could not read Username for 'https://github.com': terminal prompts disabled"),
+    [`ls-remote ${RULES_ORIGIN_URL} HEAD`]: '7a64280f93f005e5155354c17dd3767ae44356f6\tHEAD',
+    [`fetch ${RULES_ORIGIN_URL} HEAD:refs/remotes/nightly-origin-probe/rules`]: '',
+    'rev-parse --verify --quiet HEAD': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'rev-parse --verify --quiet refs/remotes/origin/main': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    'merge-base --is-ancestor HEAD refs/remotes/nightly-origin-probe/rules': '',
+    'update-ref -d refs/remotes/nightly-origin-probe/rules': '',
+    [setUrlKey]: () => { origins.origin = RULES_ORIGIN_URL; return ''; },
+  });
+  const note = repairUnreachableOrigin({ repoDir: 'x', home, run });
+  assert.equal(note.repaired, true); assert.equal(note.kind, 'ok'); assert.equal(note.originUrl, 'https://github.com/orgiast/nightly-repo.git');
+  assert(calls.some(parts => parts.slice(1).join(' ').includes('remote set-url') && parts.at(-1) === RULES_ORIGIN_URL));
+  const log = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'logs', 'access-doctor-origin-repair.jsonl'), 'utf8').trim().split(/\r?\n/).at(-1));
+  assert.equal(log.oldUrl, 'https://github.com/orgiast/nightly-repo.git'); assert.equal(log.newUrl, RULES_ORIGIN_URL);
+});
+test('認証エラーでも履歴が無関係なら向け替えず、probe は掃除する', () => {
+  const { run, calls } = mockGit({
+    'remote get-url origin': 'https://github.com/orgiast/nightly-repo.git',
+    'ls-remote origin HEAD': gitError("fatal: could not read Username for 'https://github.com': terminal prompts disabled"),
+    [`ls-remote ${RULES_ORIGIN_URL} HEAD`]: '7a64280f93f005e5155354c17dd3767ae44356f6\tHEAD',
+    [`fetch ${RULES_ORIGIN_URL} HEAD:refs/remotes/nightly-origin-probe/rules`]: '',
+    'rev-parse --verify --quiet HEAD': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'merge-base --is-ancestor HEAD refs/remotes/nightly-origin-probe/rules': gitError('exit 1'),
+    'merge-base --is-ancestor refs/remotes/nightly-origin-probe/rules HEAD': gitError('exit 1'),
+    'update-ref -d refs/remotes/nightly-origin-probe/rules': '',
+  });
+  const note = repairUnreachableOrigin({ repoDir: 'x', home: os.tmpdir(), run });
+  assert.equal(note.kind, 'unrelated-history'); assert.equal(note.repaired, false);
+  assert(!calls.some(parts => parts[1] === 'set-url'));
+  assert(calls.some(parts => parts.includes('-d')));
+});
+test('認証エラーで正しい URL も届かないときは向け替えない', () => {
+  const { run, calls } = mockGit({
+    'remote get-url origin': 'https://github.com/orgiast/nightly-repo.git',
+    'ls-remote origin HEAD': gitError("fatal: could not read Username for 'https://github.com': terminal prompts disabled"),
+    [`ls-remote ${RULES_ORIGIN_URL} HEAD`]: gitError('fatal: unable to access ... Failed to connect'),
+  });
+  const note = repairUnreachableOrigin({ repoDir: 'x', home: os.tmpdir(), run });
+  assert.equal(note.kind, 'correct-url-unreachable'); assert.equal(note.repaired, false);
+  assert(!calls.some(parts => parts[1] === 'set-url'));
 });
 test('正しい URL も届かないときは向け替えない', () => {
   const { run, calls } = mockGit({

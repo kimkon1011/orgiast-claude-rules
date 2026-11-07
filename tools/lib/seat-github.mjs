@@ -87,13 +87,15 @@ function sharesHistory(run, ref, probe) {
   try { run('git', ['merge-base', '--is-ancestor', probe, ref]); return true; } catch { return false; }
 }
 // origin が「届かない URL」になっていたら、履歴が一致するときに限り正しいリポジトリへ向け替える。
-// 条件: (a) git ls-remote origin HEAD が not-found 系で失敗 (b) 正しい URL への ls-remote が通る
-//       (c) ローカル HEAD か origin/main が正しいリポジトリの履歴に含まれる（fetch 後 merge-base で確認）
-// 認証失敗・ネットワーク断・履歴不一致では向け替えない（別リポジトリを誤って指さない）。
+// 条件: (a) git ls-remote origin HEAD が not-found、または未認証で認証エラーに見える auth で失敗
+//       (b) 正しい URL への ls-remote が通る (c) ローカル HEAD か origin/main が正しいリポジトリの履歴に含まれる
+// GitHub は未認証の相手に存在しない／見えないリポジトリを認証エラーとして返すため、auth と not-found は区別できない
+// （PC004 実測: "could not read Username ... terminal prompts disabled"）。ネットワーク断・履歴不一致では
+// 向け替えない（(b) が失敗する・別リポジトリを誤って指さない）。
 export function repairUnreachableOrigin({ repoDir, home = os.homedir(), run = makeRepoRun(repoDir), log = appendOriginRepairLog }) {
   const state = originReachability({ repoDir, run });
   if (state.kind === 'ok') return { ...state, repaired: false };
-  if (state.kind !== 'not-found') return { ...state, repaired: false };
+  if (state.kind !== 'not-found' && state.kind !== 'auth') return { ...state, repaired: false };
   // (b) 正しい URL が届く
   let correctHead = '';
   try { correctHead = String(run('git', ['ls-remote', RULES_ORIGIN_URL, 'HEAD'])).trim().split(/\s+/)[0] || ''; }

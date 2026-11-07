@@ -111,8 +111,8 @@ function check(item) {
       return candidates.some((target) => readNonempty(target, spec.kind));
     }
     if (item.type === 'git-origin') {
-      // 配布元リポの origin が届くかを確かめる。届かない URL（not-found）だけが修復対象で、
-      // 認証失敗・ネットワーク断は NOTICE（access-doctor 側も向け替えない）。未配置は NOTICE。
+      // 配布元リポの origin が届くかを確かめる。届かない URL（not-found・未認証で認証エラーに見える auth）は
+      // NG（repair が向け替えを試みる）、ネットワーク断だけ NOTICE。未配置は NOTICE。
       const target = resolveHome(spec.path);
       if (!fs.existsSync(target) || !fs.existsSync(path.join(target, '.git'))) return null;
       try {
@@ -121,7 +121,8 @@ function check(item) {
         });
         return true;
       } catch (error) {
-        return originFailureKind(error) === 'not-found' ? false : null;
+        const kind = originFailureKind(error);
+        return kind === 'not-found' || kind === 'auth' ? false : null;
       }
     }
     if (item.type === 'file-contains') {

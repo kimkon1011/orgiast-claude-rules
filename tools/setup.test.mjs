@@ -99,12 +99,12 @@ test('win32: command type resolves .cmd shims (npm-installed CLIs like codex)', 
   assert.equal(JSON.parse(result.stdout).items[0].status, 'OK');
 });
 
-test('git-origin: 未配置は NOTICE・届かないURLはNG・ローカルリモートに届けばOK', (t) => {
+test('git-origin: 未配置はNOTICE・届かないURL/認証エラーはNG・ネットワーク断はNOTICE・ローカルリモートはOK', (t) => {
   const home = temp('setup-git-origin-');
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const mf = path.join(home, 'manifest.json');
   write(mf, JSON.stringify(manifest([item('repo:rules-origin', 'git-origin', { path: '.claude/nightly-repo' }, 'required', { repair: ['access-doctor.mjs', '--origin-repair', '.claude/nightly-repo'] })])));
-  const status = () => JSON.parse(run(['--json', '--home', home, '--manifest', mf]).stdout).items[0].status;
+  const status = (env = {}) => JSON.parse(run(['--json', '--home', home, '--manifest', mf], env).stdout).items[0].status;
   // 未配置: 検査しない（bootstrap 後に評価される）
   assert.equal(status(), 'NOTICE');
   const bare = path.join(home, 'remote.git');
@@ -114,6 +114,23 @@ test('git-origin: 未配置は NOTICE・届かないURLはNG・ローカルリ�
   // 存在しないパスを origin に: not-found 扱い → NG（repair が向け替え対象になる）
   execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', path.join(home, 'no-such-remote.git')], { stdio: 'pipe' });
   assert.equal(status(), 'NG');
+  // 認証エラー（未認証が返す "could not read Username" は not-found と区別できない）→ NG
+  // ネットワークも認証UIも使わせないため、GIT_SSH_COMMAND に publickey 拒否を返すシムを渡す。
+  const sshDir = path.join(home, 'ssh');
+  fs.mkdirSync(sshDir, { recursive: true });
+  const denySsh = path.join(sshDir, process.platform === 'win32' ? 'deny-ssh.cmd' : 'deny-ssh');
+  const silentSsh = path.join(sshDir, process.platform === 'win32' ? 'silent-ssh.cmd' : 'silent-ssh');
+  if (process.platform === 'win32') {
+    write(denySsh, '@echo off\r\necho fatal: Permission denied (publickey). 1>&2\r\nexit /b 255\r\n');
+    write(silentSsh, '@echo off\r\nexit /b 255\r\n');
+  } else {
+    write(denySsh, '#!/bin/sh\necho "fatal: Permission denied (publickey)." >&2\nexit 255\n');
+    write(silentSsh, '#!/bin/sh\nexit 255\n');
+  }
+  execFileSync('git', ['-C', repo, 'remote', 'set-url', 'origin', 'ssh://git@example.invalid/orgiast/nightly-repo.git'], { stdio: 'pipe' });
+  assert.equal(status({ GIT_SSH_COMMAND: `"${denySsh}"` }), 'NG');
+  // ssh が空のまま失敗（= 接続不能相当）→ network 扱い → NOTICE
+  assert.equal(status({ GIT_SSH_COMMAND: `"${silentSsh}"` }), 'NOTICE');
   // ローカル bare リモートに届く → OK（ネットワーク不要）
   execFileSync('git', ['-C', repo, 'remote', 'set-url', 'origin', bare], { stdio: 'pipe' });
   assert.equal(status(), 'OK');

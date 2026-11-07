@@ -15,7 +15,23 @@ import { inspectTaskHiddenActions } from './setup-task-hidden-actions.mjs';
 import { convergeDeadlineTasks } from './setup-deadline-watch.mjs';
 import { convergeNightlyReload } from './setup-nightly-reload.mjs';
 import { convergeNodeRuntimeSecurity } from './setup-node-runtime-security.mjs';
-import { originFailureKind, nonInteractiveGitEnv } from './lib/seat-github.mjs';
+
+// git 呼び出しを非対話にする（GIT_TERMINAL_PROMPT=0 / GCM_INTERACTIVE=never）。
+// setup.mjs はテストで単体コピーされて実行されるため ./lib/seat-github.mjs を静的 import しない。
+// 判定は seat-github.mjs の同名関数と一致させること（access-doctor.test.mjs が両方を固定する）。
+function nonInteractiveGitEnv(extra = {}) {
+  return { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', ...extra };
+}
+// ls-remote 等の git 失敗を、修復対象（届かない URL）と対象外（認証・ネットワーク断）に分ける。
+// 単なる "not found"（command not found 等）は network に倒し、GitHub の実メッセージ
+// "Repository not found" / "fatal: repository '...' not found" とローカル git の
+// "does not appear to be a git repository" だけを not-found にする。
+function originFailureKind(error) {
+  const stderr = String(error?.stderr ?? '') || String(error?.message ?? '');
+  if (/could not read Username|authentication failed|permission denied|publickey|terminal prompts disabled/i.test(stderr)) return 'auth';
+  if (/Repository not found|repository '[^']*' not found|does not appear to be a git repository/i.test(stderr)) return 'not-found';
+  return 'network';
+}
 
 const TYPES = new Set(['command', 'file-contains', 'file-nonempty', 'json-valid', 'scheduled-task', 'git-origin']);
 const SEVERITIES = new Set(['required', 'optional', 'manual']);

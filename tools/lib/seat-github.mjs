@@ -70,7 +70,7 @@ export function makeRepoRun(repoDir) {
 export function originFailureKind(error) {
   const stderr = String(error?.stderr ?? '') || String(error?.message ?? '');
   if (/could not read Username|authentication failed|permission denied|publickey|terminal prompts disabled/i.test(stderr)) return 'auth';
-  if (/Repository not found|not found|does not appear to be a git repository/i.test(stderr)) return 'not-found';
+  if (/Repository not found|repository '[^']*' not found|does not appear to be a git repository/i.test(stderr)) return 'not-found';
   return 'network';
 }
 // リポジトリ origin の到達性。kind: ok / not-found / auth / network / no-repo。

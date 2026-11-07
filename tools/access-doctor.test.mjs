@@ -101,12 +101,16 @@ const setUrlKey = `remote set-url origin ${RULES_ORIGIN_URL}`;
 function changedOrigin(notes) { return notes.some(note => note.kind === 'ok' && note.repaired === true); }
 test('git 失敗を not-found / auth / network に分類する', () => {
   assert.equal(originFailureKind(gitError('fatal: Repository not found.')), 'not-found');
+  assert.equal(originFailureKind(gitError("fatal: repository 'https://github.com/x/y.git/' not found")), 'not-found');
   assert.equal(originFailureKind(gitError("fatal: 'C:/x' does not appear to be a git repository")), 'not-found');
   assert.equal(originFailureKind(gitError("fatal: could not read Username for 'https://github.com': terminal prompts disabled")), 'auth');
   assert.equal(originFailureKind(gitError("fatal: Authentication failed for 'https://github.com/x/y.git/'")), 'auth');
   assert.equal(originFailureKind(gitError('fatal: Permission denied (publickey).')), 'auth');
   assert.equal(originFailureKind(gitError("fatal: unable to access 'https://github.com/x/y.git/': Failed to connect to github.com port 443")), 'network');
   assert.equal(originFailureKind(gitError('fatal: unable to access ... Could not resolve host: github.com')), 'network');
+  // 単なる "not found"（command not found 等のシム起動失敗）は not-found 扱いにしない。
+  assert.equal(originFailureKind(gitError('sh: /tmp/deny-ssh: not found')), 'network');
+  assert.equal(originFailureKind(gitError('/tmp/deny-ssh: line 1: not found')), 'network');
 });
 test('origin が既に届くなら何もしない（set-url もログも書かない）', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'origin-repair-ok-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));

@@ -115,22 +115,17 @@ test('git-origin: 未配置はNOTICE・届かないURL/認証エラーはNG・�
   execFileSync('git', ['-C', repo, 'remote', 'add', 'origin', path.join(home, 'no-such-remote.git')], { stdio: 'pipe' });
   assert.equal(status(), 'NG');
   // 認証エラー（未認証が返す "could not read Username" は not-found と区別できない）→ NG
-  // ネットワークも認証UIも使わせないため、GIT_SSH_COMMAND に publickey 拒否を返すシムを渡す。
+  // ネットワークも認証UIも使わせないため、GIT_SSH_COMMAND に node のシムを渡す（OS 非依存）。
   const sshDir = path.join(home, 'ssh');
   fs.mkdirSync(sshDir, { recursive: true });
-  const denySsh = path.join(sshDir, process.platform === 'win32' ? 'deny-ssh.cmd' : 'deny-ssh');
-  const silentSsh = path.join(sshDir, process.platform === 'win32' ? 'silent-ssh.cmd' : 'silent-ssh');
-  if (process.platform === 'win32') {
-    write(denySsh, '@echo off\r\necho fatal: Permission denied (publickey). 1>&2\r\nexit /b 255\r\n');
-    write(silentSsh, '@echo off\r\nexit /b 255\r\n');
-  } else {
-    write(denySsh, '#!/bin/sh\necho "fatal: Permission denied (publickey)." >&2\nexit 255\n');
-    write(silentSsh, '#!/bin/sh\nexit 255\n');
-  }
+  const denySsh = path.join(sshDir, 'deny-ssh.mjs');
+  const silentSsh = path.join(sshDir, 'silent-ssh.mjs');
+  write(denySsh, "import fs from 'node:fs';\nfs.writeSync(2, 'fatal: Permission denied (publickey).\\n');\nprocess.exit(255);\n");
+  write(silentSsh, 'process.exit(255);\n');
   execFileSync('git', ['-C', repo, 'remote', 'set-url', 'origin', 'ssh://git@example.invalid/orgiast/nightly-repo.git'], { stdio: 'pipe' });
-  assert.equal(status({ GIT_SSH_COMMAND: `"${denySsh}"` }), 'NG');
+  assert.equal(status({ GIT_SSH_COMMAND: `"${process.execPath}" "${denySsh}"` }), 'NG');
   // ssh が空のまま失敗（= 接続不能相当）→ network 扱い → NOTICE
-  assert.equal(status({ GIT_SSH_COMMAND: `"${silentSsh}"` }), 'NOTICE');
+  assert.equal(status({ GIT_SSH_COMMAND: `"${process.execPath}" "${silentSsh}"` }), 'NOTICE');
   // ローカル bare リモートに届く → OK（ネットワーク不要）
   execFileSync('git', ['-C', repo, 'remote', 'set-url', 'origin', bare], { stdio: 'pipe' });
   assert.equal(status(), 'OK');

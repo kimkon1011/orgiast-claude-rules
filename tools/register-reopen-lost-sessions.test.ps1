@@ -4,19 +4,48 @@ function Assert($Condition, $Message) { if (-not $Condition) { throw "FAIL: $Mes
 # Inject scheduler calls; use local source and mock file checks to avoid dependency on installed deployment.
 function Resolve-RegisterToolsDir { $PSScriptRoot }
 function Test-Path { param($LiteralPath); return $true }
-$script:stored = $null
+$script:stored = @{}
 $script:writes = 0
-$get = { param($Name) $script:stored }
-$register = { param($Name, $Task) $script:stored = $Task; $script:writes++ }
+$get = { param($Name) $script:stored[$Name] }
+$register = { param($Name, $Task) $script:stored[$Name] = $Task; $script:writes++ }
+
 $r = Register-ReopenLostTask -GetTask $get -RegisterTask $register
-Assert ($r.changed -and $script:writes -eq 1) 'initial registration'
-Assert ($script:stored.Triggers[0].Delay -eq 'PT3M') 'three minute logon delay'
-Assert ($script:stored.Triggers[0].CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger') 'logon trigger'
-Assert ($script:stored.Actions[0].Execute -like '*wscript.exe') 'hidden action'
-Assert ($script:stored.Actions[0].Arguments -like '*run-hidden.vbs*node.exe*reopen-lost-sessions.mjs*') 'hidden node invocation'
-$r = Register-ReopenLostTask -GetTask $get -RegisterTask $register
-Assert (-not $r.changed -and $script:writes -eq 1) 'idempotent'
-$script:stored.Triggers[0].Delay = 'PT1M'
-$r = Register-ReopenLostTask -GetTask $get -RegisterTask $register
-Assert ($r.changed -and $script:writes -eq 2) 'repair drift'
-Write-Output 'PASS: reopen task registration (7 cases, mocked scheduler)'
+Assert ($r.changed -and $script:writes -eq 2) 'initial registration of two tasks'
+
+$task1 = $script:stored['OrgiastReopenLostSessions']
+Assert ($task1.Triggers[0].Delay -eq 'PT3M') 'task1 three minute logon delay'
+Assert ($task1.Triggers[0].CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger') 'task1 logon trigger'
+Assert ($task1.Actions[0].Execute -like '*wscript.exe') 'task1 hidden action'
+Assert ($task1.Actions[0].Arguments -like '*run-hidden.vbs*node.exe*reopen-lost-sessions.mjs*') 'task1 hidden node invocation'
+
+$task2 = $script:stored['OrgiastReopenLostSessionsWatch']
+$fixedStart = '2026-01-01T00:00:00'
+# StartBoundary is normalized to UTC by the time/date conversion in New-ScheduledTaskTrigger,
+# so compare against the same conversion instead of a literal local-time string.
+$expectedStart = (New-ScheduledTaskTrigger -Once -At $fixedStart).StartBoundary
+Assert ($task2.Triggers.Count -eq 2) 'task2 has two triggers (logon + timed)'
+Assert ($task2.Triggers[0].Delay -eq 'PT5M') 'task2 five minute logon delay'
+Assert ($task2.Triggers[0].CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger') 'task2 first trigger is logon'
+Assert ($task2.Triggers[0].Repetition.Interval -eq 'PT15M') 'task2 first trigger has 15 minute repetition'
+Assert ($task2.Triggers[1].CimClass.CimClassName -eq 'MSFT_TaskTimeTrigger') 'task2 second trigger is time'
+Assert ($task2.Triggers[1].StartBoundary -eq $expectedStart) 'task2 second trigger fixed start (UTC-normalized)'
+Assert ($task2.Triggers[1].Repetition.Interval -eq 'PT15M') 'task2 second trigger has 15 minute repetition'
+Assert ($task2.Actions[0].Execute -like '*wscript.exe') 'task2 hidden action'
+Assert ($task2.Actions[0].Arguments -like '*--watch*') 'task2 --watch argument'
+
+$r2 = Register-ReopenLostTask -GetTask $get -RegisterTask $register
+Assert (-not $r2.changed -and $script:writes -eq 2) 'idempotent registration'
+
+# Verify that DOMAIN\user / bare user / SID differences are normalized and match as identical
+$script:stored['OrgiastReopenLostSessions'].Principal.UserId = 'DOMAIN\uers'
+$script:stored['OrgiastReopenLostSessions'].Triggers[0].UserId = 'DESKTOP-2D0R4LI\uers'
+$script:stored['OrgiastReopenLostSessionsWatch'].Principal.UserId = ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+$script:stored['OrgiastReopenLostSessionsWatch'].Triggers[0].UserId = 'uers'
+$rNorm = Register-ReopenLostTask -GetTask $get -RegisterTask $register
+Assert (-not $rNorm.changed -and $script:writes -eq 2) 'UserId normalization handles DOMAIN\user, bare user, and SID as identical'
+
+$script:stored['OrgiastReopenLostSessionsWatch'].Triggers[0].Delay = 'PT1M'
+$r3 = Register-ReopenLostTask -GetTask $get -RegisterTask $register
+Assert ($r3.changed -and $script:writes -eq 3) 'repair drift on watch task'
+
+Write-Output 'PASS: reopen task registration (both logon and watch tasks, mocked scheduler)'

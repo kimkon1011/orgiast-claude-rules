@@ -1,0 +1,35 @@
+{
+  "reviewedAt": "2026-11-02T19:23:54.301239+00:00",
+  "scope": "reason=tool-name-route の現存候補のみ",
+  "candidate": {
+    "pattern": "GitHub トークンのスコープ不足（workflow 追加）を OAuth 再承認として手渡し",
+    "route": "gh secret",
+    "confidence": "high",
+    "observation": "37fa136b9e5ea7084bbbb5a48ca9285decf053eb81b0789d99458758b1783b24",
+    "reason": "tool-name-route"
+  },
+  "decision": "rejected",
+  "reason": "gh secret は GitHub Actions 等の Secrets を管理するコマンドであり、認証トークンの workflow スコープ不足を解消する経路ではない。原監査の learned と照合したが、この経路の有効性を裏づける実行証拠はないため knowledge へ採用しない。",
+  "sources": [
+    {
+      "url": "https://cli.github.com/manual/gh_secret",
+      "finding": "Secrets の set/list/delete を提供する。"
+    },
+    {
+      "url": "https://cli.github.com/manual/gh_auth_refresh",
+      "finding": "保存済み認証情報のスコープ変更は gh auth refresh の機能。今回は権限変更を実施しない。"
+    }
+  ],
+  "auditSource": {
+    "file": "/mnt/c/Users/user/.claude/handoff-audit-nightly-ledger.jsonl",
+    "observation": "37fa136b9e5ea7084bbbb5a48ca9285decf053eb81b0789d99458758b1783b24",
+    "sessionId": "430557cb-06d7-489c-b94a-7ce109eb37d8",
+    "ts": "2026-11-02T18:03:04.187Z"
+  },
+  "limits": [
+    "本件は候補経路の棄却であり、元セッションの全監査違反や現時点の認証状態を判定するものではない。",
+    "ローカルに棄却決定を保存。元候補台帳・TODOを保持し、削除や外部送信を行わない。",
+    "gh はこのシェルで command not found。コマンド仕様は公式マニュアルで照合。"
+  ],
+  "reviewedCandidates": 1
+}

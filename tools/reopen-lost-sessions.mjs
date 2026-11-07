@@ -3,13 +3,216 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import process from 'node:process';
 import { spawnSync } from 'node:child_process';
+import { hostExitArchive } from './lib/host-exit-archive.mjs';
 import { isEntry } from './is-entry.mjs';
 const BASE = 'https://api.anthropic.com/v1/code/sessions';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
   catch (e) { if (e.code === 'ENOENT' && fallback !== undefined) return fallback; throw e; }
+}
+export function parseJsonTolerant(raw) {
+  if (typeof raw !== 'string') return raw;
+  const noBom = raw.replace(/^\uFEFF/, '');
+  try { return JSON.parse(noBom); } catch {}
+
+  let result = '';
+  let inString = false;
+  let escape = false;
+  const N = noBom.length;
+
+  for (let i = 0; i < N; i++) {
+    const ch = noBom[i];
+
+    if (inString) {
+      result += ch;
+      if (escape) {
+        escape = false;
+      } else if (ch === '\\') {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      result += ch;
+      inString = true;
+      continue;
+    }
+
+    // Line comment //
+    if (ch === '/' && noBom[i + 1] === '/') {
+      i += 2;
+      while (i < N && noBom[i] !== '\n' && noBom[i] !== '\r') {
+        i++;
+      }
+      i--;
+      continue;
+    }
+
+    // Block comment /* */
+    if (ch === '/' && noBom[i + 1] === '*') {
+      i += 2;
+      while (i < N && !(noBom[i] === '*' && noBom[i + 1] === '/')) {
+        i++;
+      }
+      if (i < N) {
+        i += 1;
+      }
+      continue;
+    }
+
+    // Trailing comma before ] or }
+    if (ch === ',') {
+      let j = i + 1;
+      while (j < N) {
+        if (noBom[j] === ' ' || noBom[j] === '\t' || noBom[j] === '\n' || noBom[j] === '\r') {
+          j++;
+          continue;
+        }
+        if (noBom[j] === '/' && noBom[j + 1] === '/') {
+          j += 2;
+          while (j < N && noBom[j] !== '\n' && noBom[j] !== '\r') {
+            j++;
+          }
+          continue;
+        }
+        if (noBom[j] === '/' && noBom[j + 1] === '*') {
+          j += 2;
+          while (j < N && !(noBom[j] === '*' && noBom[j + 1] === '/')) {
+            j++;
+          }
+          if (j < N) j += 2;
+          continue;
+        }
+        break;
+      }
+      if (j < N && (noBom[j] === ']' || noBom[j] === '}')) {
+        continue;
+      }
+    }
+
+    result += ch;
+  }
+
+  return JSON.parse(result);
+}
+export function uriToPath(uri) {
+  if (typeof uri !== 'string' || !uri.startsWith('file://')) return null;
+  try {
+    return fileURLToPath(uri);
+  } catch {
+    try {
+      let raw = uri.replace(/^file:\/\/\/?/, '');
+      raw = decodeURIComponent(raw);
+      if (/^[a-zA-Z]:/.test(raw)) {
+        return path.win32.normalize(raw);
+      }
+      return path.normalize(raw);
+    } catch {
+      return null;
+    }
+  }
+}
+function normalizePath(p) {
+  if (!p) return '';
+  const resolved = path.resolve(p);
+  return resolved.replace(/\//g, '\\').toLowerCase();
+}
+function isCwdInWorkspace(workspaceFilePath, cwd, fsImpl) {
+  try {
+    if (!fsImpl.existsSync(workspaceFilePath)) return false;
+    const raw = fsImpl.readFileSync(workspaceFilePath, 'utf8');
+    const parsed = parseJsonTolerant(raw);
+    if (!parsed || !Array.isArray(parsed.folders)) return false;
+    const workspaceDir = path.dirname(path.resolve(workspaceFilePath));
+    const normCwd = normalizePath(cwd);
+    for (const folder of parsed.folders) {
+      let folderPath = null;
+      if (typeof folder?.path === 'string') {
+        folderPath = folder.path;
+      } else if (typeof folder?.uri === 'string') {
+        folderPath = uriToPath(folder.uri);
+      }
+      if (!folderPath) continue;
+      const folderAbs = path.resolve(workspaceDir, folderPath);
+      const normFolder = normalizePath(folderAbs);
+      if (normCwd === normFolder) return true;
+      const prefix = normFolder.endsWith('\\') ? normFolder : normFolder + '\\';
+      if (normCwd.startsWith(prefix)) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+export function findWorkspaceForCwd(cwd, { env = process.env, fsImpl = fs } = {}) {
+  if (!cwd) return null;
+  const candidates = [];
+  if (env.ORGIAST_VSCODE_WORKSPACE && typeof env.ORGIAST_VSCODE_WORKSPACE === 'string') {
+    candidates.push(env.ORGIAST_VSCODE_WORKSPACE);
+  }
+  const appData = env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  const storagePath = path.join(appData, 'Code', 'User', 'globalStorage', 'storage.json');
+  if (fsImpl.existsSync(storagePath)) {
+    try {
+      const content = fsImpl.readFileSync(storagePath, 'utf8');
+      const data = parseJsonTolerant(content);
+      const uris = [];
+      const lastActive = data?.windowsState?.lastActiveWindow?.workspaceIdentifier?.configURIPath;
+      if (typeof lastActive === 'string') uris.push(lastActive);
+      const opened = data?.windowsState?.openedWindows;
+      if (Array.isArray(opened)) {
+        for (const win of opened) {
+          const uri = win?.workspaceIdentifier?.configURIPath;
+          if (typeof uri === 'string') uris.push(uri);
+        }
+      }
+      for (const uri of uris) {
+        const p = uriToPath(uri);
+        if (p && p.endsWith('.code-workspace')) {
+          candidates.push(p);
+        }
+      }
+    } catch {}
+  }
+  try {
+    let currentDir = path.resolve(cwd);
+    while (true) {
+      if (fsImpl.existsSync(currentDir)) {
+        try {
+          const entries = fsImpl.readdirSync(currentDir);
+          for (const entry of entries) {
+            const name = typeof entry === 'string' ? entry : entry.name;
+            if (name && name.endsWith('.code-workspace')) {
+              candidates.push(path.join(currentDir, name));
+            }
+          }
+        } catch {}
+      }
+      const parentDir = path.dirname(currentDir);
+      if (parentDir === currentDir) break;
+      currentDir = parentDir;
+    }
+  } catch {}
+  const seenNorm = new Set();
+  for (const candPath of candidates) {
+    const norm = normalizePath(candPath);
+    if (!norm || seenNorm.has(norm)) continue;
+    seenNorm.add(norm);
+    if (isCwdInWorkspace(candPath, cwd, fsImpl)) {
+      const resolvedFile = path.resolve(candPath);
+      const ext = path.extname(resolvedFile);
+      const workspaceName = path.basename(resolvedFile, ext);
+      return { workspaceFile: resolvedFile, workspaceName };
+    }
+  }
+  return null;
 }
 export function hasConversation(rows, bytes = 0) {
   return bytes > 200 * 1024 || rows.some(row => {
@@ -65,7 +268,7 @@ export function localIndex(base, onlyId) {
         .filter(row => row.type === 'bridge-session' && row.bridgeSessionId);
       if (!bridges.length) continue;
       let cwd;
-      for (let i = lines.length - 1; i >= 0; i--) {
+      for (let i = 0; i < lines.length; i++) {
         if (!lines[i].includes('"cwd"')) continue;
         const row = parse(lines[i]);
         if (typeof row.cwd === 'string' && row.cwd) { cwd = row.cwd; break; }
@@ -84,22 +287,50 @@ function closedIds(base) {
   if (!Array.isArray(ledger.ids)) throw Error('Invalid closed ledger');
   return new Set(ledger.ids);
 }
+function reopenLoopCounts(base, nowFn = Date.now) {
+  const logFile = path.join(base, 'reopen-lost-sessions.log');
+  const counts = {};
+  try {
+    const raw = fs.readFileSync(logFile, 'utf8');
+    const nowTime = typeof nowFn === 'function' ? nowFn() : nowFn;
+    const cutoff = nowTime - 24 * 3600 * 1000;
+    for (const line of raw.split('\n').filter(Boolean)) {
+      try {
+        const entry = JSON.parse(line);
+        if (!entry.at || !Array.isArray(entry.reopened)) continue;
+        if (Date.parse(entry.at) < cutoff) continue;
+        for (const r of entry.reopened) {
+          const id = r?.id || r;
+          if (id) counts[id] = (counts[id] || 0) + 1;
+        }
+      } catch {}
+    }
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
+  return counts;
+}
 export function parseOptions(args, spawn = spawnSync) {
-  const options = { dryRun: false, max: 30, gapSec: 10 };
+  const options = { dryRun: false, max: 30, gapSec: 10, watch: false };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--dry-run') { options.dryRun = true; continue; }
+    if (arg === '--watch') { options.watch = true; continue; }
     const key = { '--since': 'since', '--until': 'until', '--max': 'max', '--gap-sec': 'gapSec' }[arg];
     if (!key || !args[i + 1]) throw Error(`Invalid option: ${arg}`);
+    if (key === 'max') options.maxSet = true;
     options[key] = ['max', 'gapSec'].includes(key) ? Number(args[++i]) : args[++i];
   }
+  if (options.watch && (options.since || options.until)) throw Error('--watch and --since/--until are mutually exclusive');
   if (!Number.isInteger(options.max) || options.max < 1 || !Number.isFinite(options.gapSec) || options.gapSec < 0) throw Error('Invalid max/gap');
-  if (!options.since || !options.until) {
-    const boot = Date.parse(ps('(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString("o")', spawn));
-    options.since ??= new Date(boot - 15 * 60000).toISOString();
-    options.until ??= new Date(boot + 15 * 60000).toISOString();
+  if (!options.watch) {
+    if (!options.since || !options.until) {
+      const boot = Date.parse(ps('(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString("o")', spawn));
+      options.since ??= new Date(boot - 15 * 60000).toISOString();
+      options.until ??= new Date(boot + 15 * 60000).toISOString();
+    }
+    if (!Number.isFinite(Date.parse(options.since)) || !Number.isFinite(Date.parse(options.until)) || Date.parse(options.since) > Date.parse(options.until)) throw Error('Invalid time range');
   }
-  if (!Number.isFinite(Date.parse(options.since)) || !Number.isFinite(Date.parse(options.until)) || Date.parse(options.since) > Date.parse(options.until)) throw Error('Invalid time range');
   return options;
 }
 export function acquireLock(file, now = Date.now()) {
@@ -111,10 +342,51 @@ export function acquireLock(file, now = Date.now()) {
   timer.unref();
   return () => { clearInterval(timer); fs.closeSync(fd); fs.unlinkSync(file); };
 }
+export function resolveClaudeCli({ env = process.env, exists = fs.existsSync, readdir = fs.readdirSync, spawn = spawnSync } = {}) {
+  // (a) env CLAUDE_CLI / CLAUDE_CLI_PATH / CLAUDE_BIN
+  const fromEnv = env.CLAUDE_CLI || env.CLAUDE_CLI_PATH || env.CLAUDE_BIN;
+  if (fromEnv && exists(fromEnv)) return fromEnv;
+
+  const home = os.homedir();
+
+  // (b) ~/.local/bin/claude.exe (or claude on non-win32)
+  const binName = process.platform === 'win32' ? 'claude.exe' : 'claude';
+  const localBin = path.join(home, '.local', 'bin', binName);
+  if (exists(localBin)) return localBin;
+
+  // (c) where.exe / which
+  try {
+    const cmd = process.platform === 'win32' ? 'where.exe' : 'which';
+    const result = spawn(cmd, ['claude'], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+    if (result.status === 0) {
+      const first = String(result.stdout ?? '').split('\n')[0].trim();
+      if (first && exists(first)) return first;
+    }
+  } catch { /* not available or not found */ }
+
+  // (d) winget Packages glob (Windows only)
+  try {
+    const localAppData = env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    const pkgsDir = path.join(localAppData, 'Microsoft', 'WinGet', 'Packages');
+    try {
+      const entries = readdir(pkgsDir);
+      for (const entry of entries) {
+        const name = typeof entry === 'string' ? entry : entry.name;
+        if (/^Anthropic\.ClaudeCode_/i.test(name)) {
+          const exe = path.join(pkgsDir, name, binName);
+          if (exists(exe)) return exe;
+        }
+      }
+    } catch { /* directory not found */ }
+  } catch { /* path construction error */ }
+
+  throw new Error('claude CLI not found');
+}
+
 export async function reopenLost({ since, until, dryRun = false, max = 30, gapSec = 10,
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
-  now = Date.now, windowReady, codeCli } = {}) {
-  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0 } };
+  now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs } = {}) {
+  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0 } };
   // Dry run is strictly read-only: no lock or log mutation on the user's PC.
   const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'));
   if (!release) return { ...result, error: 'locked' };
@@ -124,10 +396,11 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
     if (!token || !org) throw Error('Missing RC credentials');
     const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01',
       'anthropic-beta': 'ccr-byoc-2025-07-29', 'x-organization-uuid': org };
-    const cli = path.join(base, '..', '.local', 'bin', 'claude.exe');
+    const cli = claudeCli || resolveClaudeCli({ env, exists: fsImpl.existsSync, readdir: fsImpl.readdirSync, spawn });
     const alive = () => parseAgents(run(cli, ['agents', '--json'], spawn));
     const living = alive();
     const locals = localIndex(base), closed = closedIds(base);
+    const reopenCounts = reopenLoopCounts(base, now);
     const deadline = now() + 60000;
     const get = async url => {
       if (now() >= deadline) throw Error('API time limit');
@@ -155,7 +428,11 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
             const local = locals.get(session.id);
             const reason = exclusion(local, closed, living);
             if (reason) { result.skipped[reason]++; continue; }
-            if (seenIds.has(local.id)) continue;
+            // Skip user-archived sessions (closed via mobile etc.)
+            if (session.status === 'archived' && !hostExitArchive(events)) { result.skipped.archivedByUser++; continue; }
+            // Skip sessions reopened 3+ times in the last 24h (infinite reopen guard)
+            if (reopenCounts[local?.id] >= 3) { result.skipped.reopenLoop++; continue; }
+            if (!local || seenIds.has(local.id)) continue;
             seenIds.add(local.id);
             result.candidates.push({ id: local.id, cwd: local.cwd, title: session.title ?? '' });
           }
@@ -168,18 +445,23 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
       } while (cursor);
     } catch (error) { result.apiError = error.message; }
     if (!dryRun && result.candidates.length) {
-      const code = codeCli || resolveCodeCli();
+      const code = codeCli || resolveCodeCli(env, fsImpl.existsSync);
       for (const candidate of result.candidates.slice(0, max)) {
         // Recheck after fetching and between opens: close/purge may have happened meanwhile.
         const refreshed = [...localIndex(base, candidate.id).values()].find(l => l.id === candidate.id);
         const reason = exclusion(refreshed, closedIds(base), alive());
         if (reason) { result.skipped[reason]++; continue; }
         try {
-          ps(`& ${quotePS(code)} ${quotePS(candidate.cwd)}; exit $LASTEXITCODE`, spawn);
-          const ready = windowReady || (() => ps(`$w = @(Get-Process Code -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle.Contains(${quotePS(path.win32.basename(candidate.cwd))}) }); if ($w.Count) { 'ready' }`, spawn) === 'ready');
+          const wsInfo = findWorkspaceForCwd(candidate.cwd, { env, fsImpl });
+          const targetPath = wsInfo ? wsInfo.workspaceFile : candidate.cwd;
+          const titlePattern = wsInfo ? wsInfo.workspaceName : path.win32.basename(candidate.cwd);
+          const openedWith = wsInfo ? 'workspace' : 'folder';
+
+          ps(`& ${quotePS(code)} ${quotePS(targetPath)}; exit $LASTEXITCODE`, spawn);
+          const ready = windowReady || (() => ps(`$w = @(Get-Process Code -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle.Contains(${quotePS(titlePattern)}) }); if ($w.Count) { 'ready' }`, spawn) === 'ready');
           let found = false;
           for (let elapsed = 0; elapsed <= 60; elapsed++) {
-            if (await ready(candidate.cwd)) { found = true; break; }
+            if (await ready(candidate.cwd, targetPath, titlePattern)) { found = true; break; }
             if (elapsed < 60) await wait(1000);
           }
           if (!found) throw Error('VS Code window timeout');
@@ -187,10 +469,23 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
           const lateReason = exclusion(current, closedIds(base), alive());
           if (lateReason) { result.skipped[lateReason]++; continue; }
           // Focus again immediately before URI dispatch to reduce focus races.
-          ps(`& ${quotePS(code)} ${quotePS(candidate.cwd)}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & ${quotePS(code)} --open-url ${quotePS('vscode://anthropic.claude-code/open?session=' + encodeURIComponent(candidate.id))}; exit $LASTEXITCODE`, spawn);
-          result.reopened.push(candidate);
+          ps(`& ${quotePS(code)} ${quotePS(targetPath)}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & ${quotePS(code)} --open-url ${quotePS('vscode://anthropic.claude-code/open?session=' + encodeURIComponent(candidate.id))}; exit $LASTEXITCODE`, spawn);
+          result.reopened.push({ ...candidate, openedWith, target: targetPath });
         } catch (error) { (result.failed ??= []).push({ ...candidate, error: error.message }); }
         await wait(gapSec * 1000);
+      }
+      // Post-reopen verification: wait 90s then check which sessions are actually connected
+      if (result.reopened.length) {
+        await wait(90000);
+        try {
+          const agents = alive();
+          result.verified = [];
+          result.unverified = [];
+          for (const r of result.reopened) {
+            if (agents.has(r.id)) result.verified.push(r.id);
+            else result.unverified.push(r.id);
+          }
+        } catch (e) { result.verifyError = e.message; }
       }
     }
   } catch (error) { result.error = error.message; }
@@ -200,10 +495,63 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
   }
   return result;
 }
+export async function watchReopen(opts = {}, maxParam) {
+  let base, max, dryRun, fetchImpl, spawn, wait, nowFn, claudeCli, codeCli, env, fsImpl, windowReady;
+  if (typeof opts === 'string' || opts === undefined) {
+    base = opts ?? path.join(os.homedir(), '.claude');
+    max = maxParam ?? 10;
+    dryRun = false;
+    nowFn = Date.now;
+  } else {
+    base = opts.base ?? path.join(os.homedir(), '.claude');
+    max = opts.max ?? 10;
+    dryRun = opts.dryRun ?? false;
+    fetchImpl = opts.fetchImpl;
+    spawn = opts.spawn;
+    wait = opts.wait;
+    nowFn = opts.now ?? Date.now;
+    claudeCli = opts.claudeCli;
+    codeCli = opts.codeCli;
+    env = opts.env;
+    fsImpl = opts.fsImpl;
+    windowReady = opts.windowReady;
+  }
+  const stateFile = path.join(base, 'reopen-lost-sessions-state.json');
+  const state = readJson(stateFile, {});
+  const nowTime = nowFn();
+  const minSince = new Date(nowTime - 24 * 3600 * 1000).toISOString();
+  const defaultSince = new Date(nowTime - 30 * 60000).toISOString();
+  let since;
+  const wmTime = state.watermark ? Date.parse(state.watermark) : NaN;
+  if (Number.isFinite(wmTime)) {
+    since = wmTime < Date.parse(minSince) ? minSince : state.watermark;
+  } else {
+    since = defaultSince;
+  }
+  const until = new Date(nowTime - 60000).toISOString();
+  const result = await reopenLost({
+    since, until, max, dryRun, base, fetchImpl, spawn, wait, now: nowFn, claudeCli, codeCli, env, fsImpl, windowReady
+  });
+  if (!result.error && !result.apiError && !dryRun) {
+    fs.writeFileSync(stateFile, JSON.stringify({ watermark: until }) + '\n');
+  }
+  return result;
+}
 if (isEntry(import.meta.url)) {
   try {
-    const result = await reopenLost(parseOptions(process.argv.slice(2)));
-    console.log(JSON.stringify(result));
-    if (result.error || result.apiError || result.failed?.length) process.exitCode = 1;
+    const opts = parseOptions(process.argv.slice(2));
+    if (opts.watch) {
+      const result = await watchReopen({
+        base: opts.base,
+        max: opts.maxSet ? opts.max : 10,
+        dryRun: opts.dryRun,
+      });
+      console.log(JSON.stringify(result));
+      if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
+    } else {
+      const result = await reopenLost(opts);
+      console.log(JSON.stringify(result));
+      if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
+    }
   } catch (error) { console.log(JSON.stringify({ error: error.message })); process.exitCode = 1; }
 }

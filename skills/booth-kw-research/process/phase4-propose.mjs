@@ -4,7 +4,9 @@
  *
  * 優先キーワードリストからコンテンツギャップ分析と最適化提案を生成する。
  *
- * 使用法: node process/phase4-propose.mjs
+ * 使用法:
+ *   node process/phase4-propose.mjs
+ *   node process/phase4-propose.mjs --dry-run <outdir>
  *
  * TODO(codex): 以下の実装が必要
  * - 優先キーワードと自社サイトのトピックカバレッジ比較
@@ -21,16 +23,34 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-function generateProposal(keywords, crawlResults) {
-  // 実装予定: コンテンツギャップ分析と提案書生成
+function generateProposal(keywords, crawlData) {
   const sections = [];
-  // 現状はテンプレート出力
+  for (const kw of keywords) {
+    const parts = kw.split(',');
+    const keywordText = parts[1] || '';
+    sections.push({ keyword: keywordText, proposal: 'コラム' });
+  }
   return sections;
 }
 
 async function main() {
-  const kwPath = path.join(__dirname, '..', 'output', 'keywords-priority.csv');
-  const crawlPath = path.join(__dirname, '..', 'output', 'crawl-results.json');
+  const isDryRun = process.argv.includes('--dry-run');
+  const dryRunIndex = process.argv.indexOf('--dry-run');
+  const outdir = isDryRun && dryRunIndex + 1 < process.argv.length
+    ? path.resolve(process.argv[dryRunIndex + 1])
+    : null;
+  if (isDryRun && !outdir) {
+    console.error('Usage: node process/phase4-propose.mjs --dry-run <outdir>');
+    process.exit(1);
+  }
+
+  const kwPath = isDryRun
+    ? path.join(outdir, 'keywords-priority.csv')
+    : path.join(__dirname, '..', 'output', 'keywords-priority.csv');
+  const crawlPath = isDryRun
+    ? path.join(outdir, 'crawl-results.json')
+    : path.join(__dirname, '..', 'output', 'crawl-results.json');
+
   const keywords = fs.readFileSync(kwPath, 'utf-8').split('\n').slice(1).filter(Boolean);
   const crawlData = JSON.parse(fs.readFileSync(crawlPath, 'utf-8'));
 
@@ -57,11 +77,11 @@ async function main() {
     '',
     '## 優先キーワード TOP20',
     '',
-    '| 順位 | キーワード | 意図 | スコア | 推奨ページ種別 |',
-    '|---|---|---|---|---|',
+    '| 順位 | キーワード | 意図 | スコア | 推奨アクション | 推奨ページ種別 |',
+    '|---|---|---|---|---|---|',
     ...keywords.slice(0, 20).map((kw, i) => {
       const parts = kw.split(',');
-      return `| ${i + 1} | ${parts[1] || ''} | ${parts[2] || ''} | ${parts[7] || ''} | コラム |`;
+      return `| ${i + 1} | ${parts[1] || ''} | ${parts[2] || ''} | ${parts[7] || ''} | ${parts[8] || ''} | コラム |`;
     }),
     '',
     '## コンテンツギャップ（未カバーの需要キーワード）',
@@ -84,7 +104,11 @@ async function main() {
     '> 本提案はAIエージェントが自動生成したものです。実装前にSEO担当者のレビューを推奨します。',
   ].join('\n');
 
-  const outPath = path.join(__dirname, '..', 'output', 'content-gaps.md');
+  const outPath = isDryRun
+    ? path.join(outdir, 'content-gaps.md')
+    : path.join(__dirname, '..', 'output', 'content-gaps.md');
+
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
   fs.writeFileSync(outPath, md);
   console.log(`Phase 4 complete → ${outPath}`);
 }

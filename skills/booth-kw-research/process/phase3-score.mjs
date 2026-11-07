@@ -3,8 +3,11 @@
  * Phase 3: キーワード評価と優先順位付け
  *
  * 収集したキーワードを検索意図で分類し、ビジネス価値を考慮して優先順位付けする。
+ * スコアに基づいて推奨アクション（新規記事作成 / 既存ページ改善 / 監視）を割り当てる。
  *
- * 使用法: node process/phase3-score.mjs
+ * 使用法:
+ *   node process/phase3-score.mjs
+ *   node process/phase3-score.mjs --dry-run <outdir>
  *
  * TODO(codex): 以下の実装が必要
  * - tools/llm-ask.mjs を呼び出して検索意図分類（Informational/Commercial/Transactional）
@@ -17,7 +20,6 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -38,8 +40,31 @@ function calculateScore(kw, bizValue) {
   return Math.round((volume * businessValue) / Math.max(difficulty, 1));
 }
 
+function getRecommendedAction(score, allScores) {
+  // スコアのパーセンタイルに基づいて推奨アクションを割り当て
+  if (allScores.length === 0) return '監視';
+  const sorted = [...allScores].sort((a, b) => b - a);
+  const topThreshold = sorted[Math.min(Math.floor(sorted.length * 0.3), sorted.length - 1)];
+  const midThreshold = sorted[Math.min(Math.floor(sorted.length * 0.6), sorted.length - 1)];
+  if (score >= topThreshold) return '新規記事作成';
+  if (score >= midThreshold) return '既存ページ改善';
+  return '監視';
+}
+
 async function main() {
-  const kwPath = path.join(__dirname, '..', 'output', 'raw-keywords.json');
+  const isDryRun = process.argv.includes('--dry-run');
+  const dryRunIndex = process.argv.indexOf('--dry-run');
+  const outdir = isDryRun && dryRunIndex + 1 < process.argv.length
+    ? path.resolve(process.argv[dryRunIndex + 1])
+    : null;
+  if (isDryRun && !outdir) {
+    console.error('Usage: node process/phase3-score.mjs --dry-run <outdir>');
+    process.exit(1);
+  }
+
+  const kwPath = isDryRun
+    ? path.join(outdir, 'raw-keywords.json')
+    : path.join(__dirname, '..', 'output', 'raw-keywords.json');
   const keywords = JSON.parse(fs.readFileSync(kwPath, 'utf-8'));
   const bizValuePath = path.join(__dirname, '..', 'data', 'business-value.json');
   const bizValue = JSON.parse(fs.readFileSync(bizValuePath, 'utf-8'));
@@ -61,13 +86,24 @@ async function main() {
 
   scored.sort((a, b) => b.score - a.score);
 
-  const csvPath = path.join(__dirname, '..', 'output', 'keywords-priority.csv');
-  const header = 'priority,keyword,intent,category,volume,difficulty,business_value,score';
-  const rows = scored.map((kw, i) =>
-    `${i + 1},${kw.keyword},${kw.intent},${kw.category},${kw.volume},${kw.difficulty},${kw.business_value},${kw.score}`
+  // 推奨アクション割り当て
+  const allScores = scored.map(k => k.score);
+  const withAction = scored.map(kw => ({
+    ...kw,
+    recommended_action: getRecommendedAction(kw.score, allScores),
+  }));
+
+  const outPath = isDryRun
+    ? path.join(outdir, 'keywords-priority.csv')
+    : path.join(__dirname, '..', 'output', 'keywords-priority.csv');
+
+  const header = 'priority,keyword,intent,category,volume,difficulty,business_value,score,recommended_action';
+  const rows = withAction.map((kw, i) =>
+    `${i + 1},${kw.keyword},${kw.intent},${kw.category},${kw.volume},${kw.difficulty},${kw.business_value},${kw.score},${kw.recommended_action}`
   );
-  fs.writeFileSync(csvPath, [header, ...rows].join('\n'));
-  console.log(`Phase 3 complete: ${scored.length} keywords scored → ${csvPath}`);
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  fs.writeFileSync(outPath, [header, ...rows].join('\n'));
+  console.log(`Phase 3 complete: ${scored.length} keywords scored → ${outPath}`);
 }
 
 main().catch(e => {

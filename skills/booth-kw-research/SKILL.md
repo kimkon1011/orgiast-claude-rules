@@ -50,7 +50,7 @@ description: 展示会ブース制作のキーワードリサーチを自動実�
 |---|---|
 | `output/crawl-results.json` | 全サイトのクロール結果 |
 | `output/raw-keywords.json` | 抽出・統合済みキーワード一覧 |
-| `output/keywords-priority.csv` | 優先度順キーワードリスト（priority, keyword, intent, category, volume, difficulty, business_value, score） |
+| `output/keywords-priority.csv` | 優先度順キーワードリスト（priority, keyword, intent, category, volume, difficulty, business_value, score, recommended_action） |
 | `output/content-gaps.md` | コンテンツギャップ分析＋最適化提案書 |
 
 ## 制約

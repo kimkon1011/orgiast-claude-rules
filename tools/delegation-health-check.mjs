@@ -328,6 +328,10 @@ export function emptyOutputReason(row) {
   // out=0 になったが HTTP 応答は正常で status:"ok"。これを no_output と判定すると
   // lane_outage_unrepaired になる)。
   if (String(row?.status ?? '') === 'ok') return 'ok';
+  // exitCode=143 (SIGTERM) はプロセスが kill されたことを示し、出力異常ではない。
+  // codex-do は timedOut=false かつ SIGTERM での kill を fastFail=true として記録する。
+  if (Number(row?.exitCode) === 143) return 'killed';
+  if (row?.fastFail === true) return 'fast_fail';
   const status = Number(row?.status);
   if (Number.isFinite(status) && status !== 0) return `exit_${status}`;
   return 'no_output';

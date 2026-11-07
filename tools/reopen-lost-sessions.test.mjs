@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath } from './reopen-lost-sessions.mjs';
+import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath } from './reopen-lost-sessions.mjs';
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
 const exit = { event_type: 'system', payload: { reason: 'host_exit' }, created_at: since };
@@ -77,7 +77,7 @@ test('localIndex uses first cwd when transcript has multiple cwd lines', t => {
 test('dry run uses real local mapping, paginates, never opens/writes', async t => {
   const base = fixture(t), calls = [];
   const fetchImpl = async url => { calls.push(url); return { ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : url.includes('cursor=next') ? { data: [] } : { data: [{ id: 'cse_one', title: 'Work' }], next_cursor: 'next' } }; };
-  const result = await reopenLost({ base, since, until, dryRun: true, fetchImpl, spawn: (cmd, args) => {
+  const result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', fetchImpl, spawn: (cmd, args) => {
     assert.deepEqual(args, ['agents', '--json']); return { status: 0, stdout: '[]' };
   } });
   assert.equal(result.candidates.length, 1);
@@ -91,7 +91,7 @@ test('dry run uses real local mapping, paginates, never opens/writes', async t =
 
 test('opening continues after API deadline; focus precedes URI; lock released and log written', async t => {
   const base = fixture(t), calls = []; let clock = 0;
-  const result = await reopenLost({ base, since, until, codeCli: 'C:\\code.cmd', now: () => clock,
+  const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock,
     fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
     spawn: (cmd, args) => { calls.push(args); return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' }; },
     windowReady: () => { clock = 120000; return true; }, wait: async () => {},
@@ -106,7 +106,7 @@ test('opening continues after API deadline; focus precedes URI; lock released an
 
 test('unknown agents prevents API/open; concurrent lock and stale lock', async t => {
   const base = fixture(t);
-  const result = await reopenLost({ base, since, until, dryRun: true, spawn: () => ({ status: 1 }), fetchImpl: () => assert.fail() });
+  const result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', spawn: () => ({ status: 1 }), fetchImpl: () => assert.fail() });
   assert.match(result.error, /failed/);
   const file = path.join(base, 'test.lock'), release = acquireLock(file);
   assert.equal(acquireLock(file), null); release();
@@ -116,7 +116,7 @@ test('unknown agents prevents API/open; concurrent lock and stale lock', async t
 
 test('API failure is explicit and partial candidates survive API-only deadline', async t => {
   const base = fixture(t); let clock = 0;
-  const result = await reopenLost({ base, since, until, dryRun: true, now: () => clock,
+  const result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => clock,
     spawn: () => ({ status: 0, stdout: '[]' }), fetchImpl: async url => ({ ok: true, json: async () => {
       if (url.includes('/events?')) { clock = 61000; return { data: [exit] }; }
       assert.equal(new URL(url).searchParams.has('cursor'), false);
@@ -129,7 +129,7 @@ test('API failure is explicit and partial candidates survive API-only deadline',
 
 test('closed during fetch is excluded at dispatch time', async t => {
   const base = fixture(t);
-  const result = await reopenLost({ base, since, until, codeCli: 'mock',
+  const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'mock',
     spawn: (cmd, args) => { assert.equal(args[0], 'agents'); return { status: 0, stdout: '[]' }; },
     fetchImpl: async url => ({ ok: true, json: async () => {
       if (url.includes('/events?')) { fs.writeFileSync(path.join(base, 'closed-sessions.json'), JSON.stringify({ ids: ['one'] })); return { data: [exit] }; }
@@ -150,31 +150,31 @@ test('watchReopen since/until calculation and watermark behavior', async t => {
   const spawnNoOp = () => ({ status: 0, stdout: '[]' });
 
   // Case A: No state file -> defaultSince = now - 30m, until = now - 60s
-  let result = await watchReopen({ base, fetchImpl: fetchImplNoOp, spawn: spawnNoOp, now });
+  let result = await watchReopen({ base, claudeCli: 'claude.exe', fetchImpl: fetchImplNoOp, spawn: spawnNoOp, now });
   assert.equal(result.since, '2026-11-07T11:30:00.000Z');
   assert.equal(result.until, '2026-11-07T11:59:00.000Z');
   assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).watermark, '2026-11-07T11:59:00.000Z');
 
   // Case B: Watermark exists and is recent -> since = watermark
   fs.writeFileSync(stateFile, JSON.stringify({ watermark: '2026-11-07T10:00:00.000Z' }) + '\n');
-  result = await watchReopen({ base, fetchImpl: fetchImplNoOp, spawn: spawnNoOp, now });
+  result = await watchReopen({ base, claudeCli: 'claude.exe', fetchImpl: fetchImplNoOp, spawn: spawnNoOp, now });
   assert.equal(result.since, '2026-11-07T10:00:00.000Z');
   assert.equal(result.until, '2026-11-07T11:59:00.000Z');
 
   // Case C: Watermark exists but is older than 24h -> truncated to now - 24h
   fs.writeFileSync(stateFile, JSON.stringify({ watermark: '2026-11-05T10:00:00.000Z' }) + '\n');
-  result = await watchReopen({ base, fetchImpl: fetchImplNoOp, spawn: spawnNoOp, now });
+  result = await watchReopen({ base, claudeCli: 'claude.exe', fetchImpl: fetchImplNoOp, spawn: spawnNoOp, now });
   assert.equal(result.since, '2026-11-06T12:00:00.000Z');
   assert.equal(result.until, '2026-11-07T11:59:00.000Z');
 
   // Case D: Dry run -> state watermark not changed
   fs.writeFileSync(stateFile, JSON.stringify({ watermark: '2026-11-07T11:00:00.000Z' }) + '\n');
-  result = await watchReopen({ base, dryRun: true, fetchImpl: fetchImplNoOp, spawn: spawnNoOp, now });
+  result = await watchReopen({ base, claudeCli: 'claude.exe', dryRun: true, fetchImpl: fetchImplNoOp, spawn: spawnNoOp, now });
   assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).watermark, '2026-11-07T11:00:00.000Z');
 
   // Case E: Error / API error -> state watermark not changed
   const fetchImplError = async () => ({ ok: false, status: 500 });
-  result = await watchReopen({ base, fetchImpl: fetchImplError, spawn: spawnNoOp, now });
+  result = await watchReopen({ base, claudeCli: 'claude.exe', fetchImpl: fetchImplError, spawn: spawnNoOp, now });
   assert.ok(result.apiError);
   assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).watermark, '2026-11-07T11:00:00.000Z');
 });
@@ -187,7 +187,7 @@ test('exclusions for archivedByUser and reopenLoop', async t => {
   const userArchivedEvent = { event_type: 'user', payload: { request: { subtype: 'end_session', reason: 'archived' } }, created_at: '2026-11-07T11:00:00Z' };
   const fetchImplArchived = async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit, userArchivedEvent] } : { data: [{ id: 'cse_one', status: 'archived' }] } });
 
-  let result = await reopenLost({ base, since, until, dryRun: true, now, fetchImpl: fetchImplArchived, spawn: () => ({ status: 0, stdout: '[]' }) });
+  let result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl: fetchImplArchived, spawn: () => ({ status: 0, stdout: '[]' }) });
   assert.equal(result.skipped.archivedByUser, 1);
 
   // reopenLoop test: session reopened 3 times in reopen-lost-sessions.log in last 24h
@@ -200,7 +200,7 @@ test('exclusions for archivedByUser and reopenLoop', async t => {
   fs.writeFileSync(logFile, logEntries.map(e => JSON.stringify(e)).join('\n') + '\n');
 
   const fetchImplNormal = async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } });
-  result = await reopenLost({ base, since, until, dryRun: true, now, fetchImpl: fetchImplNormal, spawn: () => ({ status: 0, stdout: '[]' }) });
+  result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl: fetchImplNormal, spawn: () => ({ status: 0, stdout: '[]' }) });
   assert.equal(result.skipped.reopenLoop, 1);
 });
 
@@ -210,7 +210,7 @@ test('post-reopen verification records verified and unverified', async t => {
   let agentCheckCount = 0;
 
   const result = await reopenLost({
-    base, since, until, codeCli: 'C:\\code.cmd', now: () => clock,
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock,
     fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
     spawn: (cmd, args) => {
       if (args[0] === 'agents') {
@@ -338,7 +338,7 @@ test('reopenLost reuses workspace file and does not call code <cwd> when workspa
   const env = { ORGIAST_VSCODE_WORKSPACE: wsFile };
 
   const result = await reopenLost({
-    base, since, until, codeCli: 'C:\\code.cmd', fetchImpl, env,
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, env,
     spawn: (cmd, args) => {
       if (args[0] !== 'agents') psCalls.push(args[args.length - 1]);
       return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
@@ -382,7 +382,7 @@ test('parseJsonTolerant handles block comments, escaping, BOM', t => {
 test('reopenLost falls back to code <cwd> with openedWith: folder when no workspace matches', async t => {
   const base = fixture(t), psCalls = [];
   const result = await reopenLost({
-    base, since, until, codeCli: 'C:\\code.cmd',
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd',
     fetchImpl: async url => ({
       ok: true,
       json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] }
@@ -399,4 +399,51 @@ test('reopenLost falls back to code <cwd> with openedWith: folder when no worksp
   assert.equal(result.reopened[0].openedWith, 'folder');
   assert.equal(result.reopened[0].target, 'C:\\work');
   assert.ok(psCalls[0].includes('C:\\work'));
+});
+
+test('resolveClaudeCli: env var takes precedence', t => {
+  const exe = resolveClaudeCli({ env: { CLAUDE_CLI: 'C:\\custom\\claude.exe' }, exists: p => p === 'C:\\custom\\claude.exe' });
+  assert.equal(exe, 'C:\\custom\\claude.exe');
+});
+
+test('resolveClaudeCli: CLAUDE_CLI_PATH also accepted', t => {
+  const exe = resolveClaudeCli({ env: { CLAUDE_CLI_PATH: 'C:\\path\\claude.exe' }, exists: p => p === 'C:\\path\\claude.exe' });
+  assert.equal(exe, 'C:\\path\\claude.exe');
+});
+
+const cliBinName = process.platform === 'win32' ? 'claude.exe' : 'claude';
+const whichCmd = process.platform === 'win32' ? 'where.exe' : 'which';
+
+test('resolveClaudeCli: ~/.local/bin/claude fallback (platform-aware)', t => {
+  const home = os.homedir();
+  const expected = path.join(home, '.local', 'bin', cliBinName);
+  const exe = resolveClaudeCli({ env: {}, exists: p => p === expected });
+  assert.equal(exe, expected);
+});
+
+test('resolveClaudeCli: which/where fallback (platform-aware)', t => {
+  const home = os.homedir();
+  const binPath = path.join(home, '.local', 'bin', cliBinName);
+  const exe = resolveClaudeCli({
+    env: {}, exists: p => p === binPath,
+    spawn: (cmd, args) => cmd === whichCmd ? { status: 0, stdout: binPath + '\n' } : { status: 1 },
+  });
+  assert.equal(exe, binPath);
+});
+
+test('resolveClaudeCli: winget Packages glob (Windows only)', { skip: process.platform !== 'win32' }, t => {
+  const home = os.homedir();
+  const localAppData = path.join(home, 'AppData', 'Local');
+  const pkgsDir = path.join(localAppData, 'Microsoft', 'WinGet', 'Packages');
+  const wingetExe = path.join(pkgsDir, 'Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe', cliBinName);
+  const exe = resolveClaudeCli({
+    env: {}, exists: p => p === wingetExe,
+    readdir: dir => dir === pkgsDir ? ['Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe'] : [],
+    spawn: () => ({ status: 1 }),
+  });
+  assert.equal(exe, wingetExe);
+});
+
+test('resolveClaudeCli: throws when nothing found', t => {
+  assert.throws(() => resolveClaudeCli({ env: {}, exists: () => false, readdir: () => [], spawn: () => ({ status: 1 }) }));
 });

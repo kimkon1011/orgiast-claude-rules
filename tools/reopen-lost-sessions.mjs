@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { hostExitArchive } from './lib/host-exit-archive.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -341,9 +342,50 @@ export function acquireLock(file, now = Date.now()) {
   timer.unref();
   return () => { clearInterval(timer); fs.closeSync(fd); fs.unlinkSync(file); };
 }
+export function resolveClaudeCli({ env = process.env, exists = fs.existsSync, readdir = fs.readdirSync, spawn = spawnSync } = {}) {
+  // (a) env CLAUDE_CLI / CLAUDE_CLI_PATH / CLAUDE_BIN
+  const fromEnv = env.CLAUDE_CLI || env.CLAUDE_CLI_PATH || env.CLAUDE_BIN;
+  if (fromEnv && exists(fromEnv)) return fromEnv;
+
+  const home = os.homedir();
+
+  // (b) ~/.local/bin/claude.exe (or claude on non-win32)
+  const binName = process.platform === 'win32' ? 'claude.exe' : 'claude';
+  const localBin = path.join(home, '.local', 'bin', binName);
+  if (exists(localBin)) return localBin;
+
+  // (c) where.exe / which
+  try {
+    const cmd = process.platform === 'win32' ? 'where.exe' : 'which';
+    const result = spawn(cmd, ['claude'], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+    if (result.status === 0) {
+      const first = String(result.stdout ?? '').split('\n')[0].trim();
+      if (first && exists(first)) return first;
+    }
+  } catch { /* not available or not found */ }
+
+  // (d) winget Packages glob (Windows only)
+  try {
+    const localAppData = env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    const pkgsDir = path.join(localAppData, 'Microsoft', 'WinGet', 'Packages');
+    try {
+      const entries = readdir(pkgsDir);
+      for (const entry of entries) {
+        const name = typeof entry === 'string' ? entry : entry.name;
+        if (/^Anthropic\.ClaudeCode_/i.test(name)) {
+          const exe = path.join(pkgsDir, name, binName);
+          if (exists(exe)) return exe;
+        }
+      }
+    } catch { /* directory not found */ }
+  } catch { /* path construction error */ }
+
+  throw new Error('claude CLI not found');
+}
+
 export async function reopenLost({ since, until, dryRun = false, max = 30, gapSec = 10,
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
-  now = Date.now, windowReady, codeCli, env = process.env, fsImpl = fs } = {}) {
+  now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs } = {}) {
   const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0 } };
   // Dry run is strictly read-only: no lock or log mutation on the user's PC.
   const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'));
@@ -354,7 +396,7 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
     if (!token || !org) throw Error('Missing RC credentials');
     const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01',
       'anthropic-beta': 'ccr-byoc-2025-07-29', 'x-organization-uuid': org };
-    const cli = path.join(base, '..', '.local', 'bin', 'claude.exe');
+    const cli = claudeCli || resolveClaudeCli({ env, exists: fsImpl.existsSync, readdir: fsImpl.readdirSync, spawn });
     const alive = () => parseAgents(run(cli, ['agents', '--json'], spawn));
     const living = alive();
     const locals = localIndex(base), closed = closedIds(base);
@@ -454,7 +496,7 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
   return result;
 }
 export async function watchReopen(opts = {}, maxParam) {
-  let base, max, dryRun, fetchImpl, spawn, wait, nowFn, codeCli, env, fsImpl, windowReady;
+  let base, max, dryRun, fetchImpl, spawn, wait, nowFn, claudeCli, codeCli, env, fsImpl, windowReady;
   if (typeof opts === 'string' || opts === undefined) {
     base = opts ?? path.join(os.homedir(), '.claude');
     max = maxParam ?? 10;
@@ -468,6 +510,7 @@ export async function watchReopen(opts = {}, maxParam) {
     spawn = opts.spawn;
     wait = opts.wait;
     nowFn = opts.now ?? Date.now;
+    claudeCli = opts.claudeCli;
     codeCli = opts.codeCli;
     env = opts.env;
     fsImpl = opts.fsImpl;
@@ -487,7 +530,7 @@ export async function watchReopen(opts = {}, maxParam) {
   }
   const until = new Date(nowTime - 60000).toISOString();
   const result = await reopenLost({
-    since, until, max, dryRun, base, fetchImpl, spawn, wait, now: nowFn, codeCli, env, fsImpl, windowReady
+    since, until, max, dryRun, base, fetchImpl, spawn, wait, now: nowFn, claudeCli, codeCli, env, fsImpl, windowReady
   });
   if (!result.error && !result.apiError && !dryRun) {
     fs.writeFileSync(stateFile, JSON.stringify({ watermark: until }) + '\n');

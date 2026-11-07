@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 // Local normalized evidence only. This does not call or authorize a provider.
 export function selectContacts(input) {
@@ -39,7 +39,7 @@ export function selectContacts(input) {
   });
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntry(import.meta.url)) {
   try {
     const [, , source, output] = process.argv;
     if (!source || !output) throw new Error('Usage: node tools/exhibitor-contacts.mjs input.json output.json');

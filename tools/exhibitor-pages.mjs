@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 // Local normalized capture format; no claim about a provider's response schema.
 export function extractPages(input) {
@@ -48,7 +48,7 @@ export function extractPages(input) {
   return { complete: issues.length === 0, total: input.total, uniqueIds: ids.size, rows, issues };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntry(import.meta.url)) {
   try {
     const [, , input, output] = process.argv;
     if (!input || !output) throw new Error('Usage: node tools/exhibitor-pages.mjs capture.json report.json');

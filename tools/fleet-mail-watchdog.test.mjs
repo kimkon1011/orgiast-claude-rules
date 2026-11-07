@@ -130,3 +130,50 @@ test('空の許可リストでは到着投稿せず台帳への配達を成功�
   await main([], { ...f.deps, allowlist: [], notifyKim: async () => ({ delivered: 'session-inbox' }) });
   assert.equal(f.posts.length, 0); assert.equal(f.calls.length, 2);
 });
+
+test('watchdog drains spool even without fleet configuration and dry-run leaves it intact', async t => {
+  const { spoolItem, listItems } = await import('./kim-inbox.mjs');
+  const f = fixture(t);
+  fs.unlinkSync(path.join(f.home, '.claude/fleet-sheet.env'));
+  fs.writeFileSync(path.join(f.home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+  spoolItem(f.home, { text: 'watchdog で回収する進捗' });
+  await main(['--dry-run'], f.deps);
+  assert.equal(listItems(f.home).length, 0);
+  await main([], f.deps);
+  assert.equal(listItems(f.home).length, 1);
+});
+
+test('overlapping watchdog runs skip work and release their instance lock', async t => {
+  const f = fixture(t);
+  let finish, entered;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const first = main([], { ...f.deps, laneHealthWatch: async () => {
+    entered(); await new Promise(resolve => { finish = resolve; }); return { rows: [], notified: [] };
+  } });
+  await ready;
+  let ran = false;
+  assert.equal(await main([], { ...f.deps, laneHealthWatch: async () => { ran = true; return { rows: [], notified: [] }; } }), 0);
+  assert.equal(ran, false);
+  finish(); await first;
+  assert.equal(fs.existsSync(path.join(f.home, '.claude/fleet-mail-watchdog.lock')), false);
+});
+
+test('watchdog CLI deadline also terminates handles left alive after main completes', async t => {
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath, pathToFileURL } = await import('node:url');
+  const f = fixture(t);
+  fs.unlinkSync(path.join(f.home, '.claude/fleet-sheet.env'));
+  const preload = path.join(f.home, 'deadline-preload.mjs');
+  fs.writeFileSync(preload, `
+    const original = globalThis.setTimeout;
+    globalThis.setTimeout = (fn, ms, ...args) => original(fn, ms === 15 * 60_000 ? 100 : ms, ...args);
+    setInterval(() => {}, 1000);
+  `);
+  const result = spawnSync(process.execPath, ['--import', pathToFileURL(preload).href, fileURLToPath(new URL('./fleet-mail-watchdog.mjs', import.meta.url))], {
+    env: { ...process.env, ORGIAST_HOME: f.home }, encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /未設定=1/);
+  assert.match(result.stderr, /deadline exceeded=1/);
+  assert.equal(fs.existsSync(path.join(f.home, '.claude/fleet-mail-watchdog.lock')), false);
+});

@@ -42,7 +42,7 @@ export async function escalateKimDecisions({ home = process.env.ORGIAST_HOME || 
       targets.push({ rowKey: key, text });
       if (dryRun) continue;
       try {
-        const result = await (io.notifyKim ?? notifyKim)(text, { kind: 'ask', kimActionRequired: true, home, now });
+        const result = await (io.notifyKim ?? notifyKim)(text, { kind: 'ask', kimActionRequired: true, sessionId: row.sessionId || '', home, now });
         if (!['dm', 'webhook', 'session-inbox'].includes(result?.delivered)) {
           (io.stderr ?? console.error)(`auto-progress-escalate: ${key}: ${result?.delivered || 'none'}: ${result?.reason || 'not delivered'}`);
           continue;

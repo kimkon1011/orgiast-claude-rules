@@ -127,6 +127,27 @@ test('groq 429 with billing prose is quota without reset; 402 is billing', t => 
     assert.equal(health.lanes.groq.real24h.failures, 0);
   }
 });
+test('underscored and compact HTTP statuses classify 402 as billing and 429 as quota', t => {
+  for (const status of ['http_402', 'HTTP 402', 'HTTP402', 'status 402']) {
+    const home = fixture(t, [{ provider: 'gemini', status, stderr: 'Your prepayment credits are depleted RESOURCE_EXHAUSTED' }]);
+    const stats = realLaneStats(home, now).gemini;
+    assert.equal(stats.billingCalls, 1, status);
+    assert.equal(stats.quotaCalls, 0, status);
+  }
+  for (const status of ['http_429', 'HTTP 429', 'HTTP429', 'status 429']) {
+    const home = fixture(t, [{ provider: 'gemini', status }]);
+    assert.equal(realLaneStats(home, now).gemini.quotaCalls, 1, status);
+  }
+  const home = fixture(t, [{ provider: 'gemini', status: 'http_14025', stderr: 'error' }]);
+  assert.equal(realLaneStats(home, now).gemini.billingCalls, 0);
+  assert.equal(realLaneStats(home, now).gemini.quotaCalls, 0);
+});
+test('a row containing both 402 and 429 remains quota', t => {
+  const home = fixture(t, [{ provider: 'gemini', status: 'http_402', stderr: 'HTTP429 prepayment credits are depleted RESOURCE_EXHAUSTED' }]);
+  const stats = realLaneStats(home, now).gemini;
+  assert.equal(stats.billingCalls, 0);
+  assert.equal(stats.quotaCalls, 1);
+});
 test('three server errors out of five still block implementation', async t => {
   const { evaluateRepairFirst } = await import('./lane-repair-first-gate.mjs');
   const home = fixture(t, [{ status: '500' }, { status: '502' }, { status: '503' }, { status: '429' }, { status: '429' }]);

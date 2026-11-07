@@ -7,7 +7,10 @@ import { judgeDeliverableDriveLink, registerDeliverableCheck } from './deliverab
 import { evaluateInvitePermissions } from './hooks/discord-invite-permission-gate.mjs';
 import { applyNamedGatePolicy } from './gate-runtime.mjs';
 import os from 'node:os';
+import { evaluateProgressCron } from './progress-cron-gate.mjs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { addCheck } from './auto-progress.mjs';
 import { isEntry } from './is-entry.mjs';
 import { currentTurnAssistantText, readTranscriptContext } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
@@ -29,7 +32,7 @@ import { evaluateLaneAbandonment } from './lane-abandonment-gate.mjs';
 import { evaluateCourseCorrections } from './course-correction-gate.mjs';
 import { evaluateAudit } from './handoff-audit-gate.mjs';
 import { enabled as reportLengthEnabled, judgeReportLengthWithLlm } from './report-length-gate.mjs';
-import { hasRequiredFooter, judgeNextAction, reportsCloseSteps } from './next-action-gate.mjs';
+import { hasRequiredFooter, judgeNextAction, reportsCloseSteps, hasOpenSessionCheck, hasSessionWakeup, WATCH_REGISTRATION_CODES, footerValues, openDeadline, WAIT_CHECK_CODES } from './next-action-gate.mjs';
 import { judgeSubstituteCapability } from './substitute-capability-gate.mjs';
 import { judgeUserBurden, desktopLauncherPattern } from './user-burden-gate.mjs';
 import { findOutsourcedInvestigation, formatViolationMessage as formatSelfCheck, scanToolUsesFromRaw } from './self-check-before-asking-guard.mjs';
@@ -49,6 +52,8 @@ import { evaluateUnregisteredPromise } from './unregistered-promise-gate.mjs';
 import { appendStopLedger, registerStopViolation, CAP_CONTEXT } from './lib/stop-recheck.mjs';
 import { STOP_RETRY_INSTRUCTION, withStopRetryInstruction } from './lib/stop-retry-message.mjs';
 import { evaluateClaudeFallbackReport } from './claude-fallback-report-gate.mjs';
+import { buildRecord, extractPromise, ledgerFile as progressLedgerFile, readLedger, writeLedger, applyPromise } from './auto-progress-ledger.mjs';
+import { appendInbox } from './lib/auto-progress-inbox.mjs';
 import { isUnchangedPeriodicReport } from './lib/unchanged-periodic-report.mjs';
 
 
@@ -105,8 +110,9 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['answer-canonical-gate', () => judgeAnswerCanonical(ctx.assistantText)],
     ['deferral-wait-gate', () => judgeDeferralWait(ctx.assistantText)],
     ['third-party-nudge-gate', () => judgeThirdPartyNudge(ctx.assistantText)],
-    ['unregistered-promise-gate', () => evaluateUnregisteredPromise(ctx.assistantText)],
-    ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw, ctx.input, { turnText: ctx.turnText })],
+    ['unregistered-promise-gate', () => evaluateUnregisteredPromise(ctx.assistantText, { sessionId: ctx.sessionId, transcriptRaw: ctx.transcriptRaw, home: home() })],
+    ['progress-cron-gate', () => evaluateProgressCron(ctx.input, { home: home() })],
+    ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw, { ...ctx.input, session_id: ctx.sessionId }, { turnText: ctx.turnText })],
     ['user-burden-gate', () => judgeUserBurden(ctx.assistantText, ctx.humanText)],
     ['substitute-capability-gate', () => judgeSubstituteCapability(ctx.assistantText)],
     ['doc-link-drive-guard', () => { const hits = findLocalDocLinks(ctx.assistantText); if (hits.length) return { decision: 'block', reason: formatDocLink(hits), code: 'DOC-LINK' }; const bare = findBareLocalDocPaths(ctx.assistantText); return bare.length ? { decision: 'block', reason: formatBarePathMessage(bare), code: 'DOC-LINK' } : { decision: 'pass' }; }],
@@ -130,8 +136,36 @@ function ledger(record) {
   appendStopLedger(record, home());
 }
 
+// No invented shell predicate: auto-progress-watch evaluates evidence for open rows without check.
+export function ensureAutopilotCheck(input, assistantText, transcriptRaw, now = Date.now()) {
+  const promise = extractPromise(assistantText);
+  if (!promise || hasOpenSessionCheck(input, home())) return false;
+  const wakeup = hasSessionWakeup(transcriptRaw, input);
+  if (wakeup.cron || wakeup.scheduled) return false;
+  const row = buildRecord(input, assistantText, { now });
+  if (!row) throw new Error('自動進行の登録に session_id が必要です');
+  Object.assign(row, { autoRegisteredCheck: true, label: [...promise].slice(0, 60).join(''),
+    nextClaude: promise, deadlineAt: new Date(now + 2 * 86400000).toISOString() });
+  const file = progressLedgerFile(home());
+  writeLedger(file, applyPromise(readLedger(file), row));
+  appendInbox(home(), row.sessionId, { source: 'stop-gate-runner',
+    text: `自動進行の見張りを自動登録した: ${row.label}（期限: ${row.deadlineAt}）` });
+  return true;
+}
+
+function protectAutopilot(input, text, raw, record) {
+  try { record.autoRegisteredCheck = ensureAutopilotCheck(input, text, raw); }
+  catch (error) {
+    record.verdict = 'block'; record.reasonCodes.push('AUTOPILOT-REGISTRATION-FAILED');
+    ledger(record);
+    return { decision: 'block', reason: `自動進行の見張り登録に失敗しました: ${error.message}`, record };
+  }
+  return null;
+}
+
 export async function run(input, context, auditOptions = {}) {
   const sessionId = input?.session_id || input?.sessionId || path.basename(input?.transcript_path || '', '.jsonl');
+  input = { ...input, session_id: sessionId };
   const assistantText = input?.last_assistant_message ?? input?.assistant_text ?? context.assistantText;
   // Deterministic permission guard: enforce before retry/close bypasses and rollout demotion.
   const invite = evaluateInvitePermissions(assistantText);
@@ -141,6 +175,10 @@ export async function run(input, context, auditOptions = {}) {
   const streak = registerDeliverableCheck({ home: home(), sessionId, blocked: deliverable.decision === 'block' });
   if (deliverable.decision === 'block') {
     const record = { ...base, verdict: streak.capped ? 'pass_cap' : 'block', blockedBy: ['deliverable-drive-link-gate'], reasonCodes: [deliverable.code], sameTextRetries: streak.count };
+    if (streak.capped) {
+      const failure = protectAutopilot(input, assistantText, context.raw, record);
+      if (failure) return failure;
+    }
     ledger(streak.capped ? { ...record, verdict: 'deliverable-cap' } : record);
     return streak.capped
       ? { record, systemMessage: 'deliverable-drive-link-gate: 3回書き直しても Drive URL がありません' }
@@ -153,6 +191,8 @@ export async function run(input, context, auditOptions = {}) {
   // （[[feedback-close-session-then-keep-talking-recreates-jsonl]]）。
   if (reportsCloseSteps(assistantText)) {
     const record = { ...base, verdict: 'pass', reasonCodes: ['close-steps'], auditEvidence: 'close-steps' };
+    const failure = protectAutopilot(input, assistantText, context.raw, record);
+    if (failure) return failure;
     ledger(record);
     return { record };
   }
@@ -177,16 +217,47 @@ export async function run(input, context, auditOptions = {}) {
   }
   const systemMessage = warnings.length ? warnings.join('\n') : undefined;
   const blockedBy = evaluated.results.map(({ name }) => name);
-  const reasonCodes = [...evaluated.results.map(({ code, name }) => code || name), ...evaluated.errors];
-  const cap = blockedBy.length ? registerStopViolation({ input, assistantText, blockedBy, reasonCodes, home: home() }) : { retryCap: false, sameTextRetries: 0 };
+  const codesFor = ({ reasonCodes, code, name }) => reasonCodes || [code || name];
+  const reasonCodes = [...new Set(evaluated.results.flatMap(codesFor)), ...evaluated.errors];
+  // Watch registration is repaired by the runner, never charged to the rewrite budget.
+  const retryResults = evaluated.results.filter(result => codesFor(result).some(code => !WATCH_REGISTRATION_CODES.has(code)));
+  const retryBlockedBy = retryResults.map(({ name }) => name);
+  const retryReasonCodes = retryResults.flatMap(codesFor).filter(code => !WATCH_REGISTRATION_CODES.has(code));
+  const cap = retryBlockedBy.length ? registerStopViolation({ input, assistantText, blockedBy: retryBlockedBy, reasonCodes: retryReasonCodes, home: home() }) : { retryCap: false, sameTextRetries: 0 };
   // Keep the caller-facing verdict compatible; the ledger records the new
   // operational outcome separately so nightly metrics can count it.
-  const verdict = cap.retryCap ? 'retry-cap' : blockedBy.length ? 'block' : 'pass';
-  const capMessage = cap.retryCap ? `${CAP_CONTEXT} 残存コード: ${reasonCodes.join(', ')}` : undefined;
+  let verdict = cap.retryCap ? 'retry-cap' : retryBlockedBy.length ? 'block' : 'pass';
+  let autoRegisterError;
+  if (cap.retryCap && reasonCodes.some(code => WAIT_CHECK_CODES.has(code))) {
+    try {
+      const purpose = String(assistantText).match(/^\s*(?:\*\*)?\[本セッションの目的\](?:\*\*)?[ \t]*([^\r\n]+)(?:\r?\n|$)/)?.[1]?.trim();
+      const label = purpose || [...String(context.lastUserPrompt || context.humanText || '')].slice(0, 60).join('');
+      const deadline = openDeadline(footerValues(assistantText)?.session)?.toISOString() || '+24h';
+      const script = fileURLToPath(new URL('./session-progress-check.mjs', import.meta.url)).replaceAll('\\', '/');
+      // Double quotes work in both cmd.exe and the check executor's Bash shell.
+      // Reject shell metacharacters that still expand within double quotes.
+      if (/["$`%!\r\n]/.test(script) || !/^[a-zA-Z0-9_-]+$/.test(sessionId)) throw new Error('台帳チェックのパスまたは session ID が不正です');
+      await (auditOptions.addCheck || addCheck)({
+        session: sessionId, label: `自動登録: ${label || sessionId}`, deadline,
+        check: `node "${script}" --session "${sessionId}"`,
+        nextClaude: 'このセッションの未完了の約束（この後の自動進行の行）を進め、結果を kim に報告する',
+        home: home(), cwd: input.cwd || path.dirname(path.dirname(script)),
+      });
+      verdict = 'pass_after_autoregister';
+    } catch (error) {
+      verdict = 'block';
+      autoRegisterError = `待機チェックの台帳への自動登録に失敗しました: ${error.message}`;
+    }
+  }
+  const capMessage = verdict === 'pass_after_autoregister' ? '待機チェックを台帳へ自動登録しました。' : cap.retryCap && verdict !== 'block' ? `${CAP_CONTEXT} 残存コード: ${reasonCodes.join(', ')}` : undefined;
   const record = { ...base, verdict, blockedBy, reasonCodes, demoted, handoffKind, unchangedPeriodicReport: evaluated.unchangedPeriodicReport, retryCap: cap.retryCap, sameTextRetries: cap.sameTextRetries ?? 0, auditEvidence: audit.record.evidence };
-  ledger(cap.retryCap ? { ...record, verdict: 'pass_after_cap', runnerVerdict: verdict } : record);
+  if (verdict !== 'block') {
+    const failure = protectAutopilot(input, assistantText, context.raw, record);
+    if (failure) return failure;
+  }
+  ledger(verdict === 'retry-cap' ? { ...record, verdict: 'pass_after_cap', runnerVerdict: verdict } : { ...record, ...(autoRegisterError ? { autoRegisterError } : {}) });
   if (verdict !== 'block') return { record, ...((capMessage || systemMessage) ? { systemMessage: [capMessage, systemMessage].filter(Boolean).join('\n') } : {}) };
-  const sections = [];
+  const sections = autoRegisterError ? [autoRegisterError] : [];
   let formAdded = false;
   for (const { name, reason } of evaluated.results) {
     if (!FORM_GATES.includes(name)) { sections.push(`### ${name}\n- ${reason}`); continue; }

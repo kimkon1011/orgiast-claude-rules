@@ -3,8 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+import { isEntry } from './is-entry.mjs';
 
-const raw = await readStdinWithTimeout();
+export async function hookMain(raw) {
+
+
 
 const stopWords = new Set(['して', 'する', 'します', 'ください', 'お願い', 'それ', 'これ', 'あの', 'the', 'and', 'for', 'with', 'this', 'that']);
 // ASCII 語は単語境界で判定する(/OK/i が "hook" に誤マッチして継続扱いになるのを防ぐ)。
@@ -28,7 +31,7 @@ function output(event, additionalContext) {
 }
 
 try {
-  if (!raw) process.exit(0);
+  if (!raw) return;
   const j = JSON.parse(raw);
   const event = j.hook_event_name || (Object.hasOwn(j, 'prompt') ? 'UserPromptSubmit' : 'SessionStart');
   const home = process.env.ORGIAST_HOME || os.homedir();
@@ -57,14 +60,14 @@ try {
     let ctx = '【1セッション=1目的 §1.18】このセッションの目的は1件だけ。最初の依頼を受けたら応答の冒頭で `**[本セッションの目的]** <目的>` を1行宣言し、以後その目的から外れる依頼が来たら着手前に「ここで区切って /session-close → 続きは新セッションで」と1行提案せよ(userが「このまま続けて」と言えば継続)。目的が完了したら（最終の応答では）提案も確認もせず、Claude が自分で /session-close を実行する（2026-11-04 kim 厳命・全PC全アカウント）。継続性は memory が担保するので区切って良い。';
     if (state.promptCount >= 1) ctx += `\n本セッションの目的は「${state.purpose}」。この目的に沿った作業だけを続け、別目的なら新セッションを提案せよ。`;
     output('SessionStart', ctx);
-    process.exit(0);
+    return;
   }
-  if (event !== 'UserPromptSubmit') process.exit(0);
+  if (event !== 'UserPromptSubmit') return;
 
   const prompt = String(j.prompt || '');
-  if (prompt.trimStart().startsWith('/')) process.exit(0);
+  if (prompt.trimStart().startsWith('/')) return;
   state.promptCount += 1;
-  if (!prompt || prompt.length < 4) { save(); process.exit(0); }
+  if (!prompt || prompt.length < 4) { save(); return; }
   const current = tokens(prompt);
 
   if (state.promptCount === 1 || !state.purpose) {
@@ -72,7 +75,7 @@ try {
     state.purposeTokens = [...current].slice(0, 200);
     save();
     output('UserPromptSubmit', '【本セッションの目的を宣言せよ】この依頼が本セッションの唯一の目的。応答冒頭に `**[本セッションの目的]** <目的>` を出せ。以後この目的以外の依頼は着手前に区切り提案。');
-    process.exit(0);
+    return;
   }
 
   const base = new Set(state.purposeTokens || []);
@@ -100,4 +103,7 @@ try {
   save();
   if (ctx) output('UserPromptSubmit', ctx);
 } catch {}
-process.exit(0);
+return;
+
+}
+if (isEntry(import.meta.url)) await hookMain(await readStdinWithTimeout());

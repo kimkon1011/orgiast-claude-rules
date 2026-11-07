@@ -11,6 +11,8 @@ export const TARGET = new RegExp(`^(?:${HOOK_MATCHER})$`);
 const OVERRIDE_FILE = 'gmail-connector-url-gate-override';
 const GOOGLE_REDIRECT = /https?:\/\/(?:www\.)?google\.com\/url\?q=/i;
 const WEB_URL = /https?:\/\/[^\s<>"']+/i;
+const EMAIL_ADDRESS = /[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}/gi;
+const BARE_DOMAIN = /(?:\bwww\.(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.?)+|\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:co\.jp|ne\.jp|or\.jp|lg\.jp|ac\.jp|go\.jp|jp|com|net|org|io))\b/i;
 
 export function overrideActive(home, now = Date.now()) {
   let raw;
@@ -25,9 +27,10 @@ export function judge(input, { home = process.env.ORGIAST_HOME || os.homedir(), 
   const args = input?.tool_input || {};
   const text = `${args.subject ?? ''}\n${args.body ?? ''}\n${args.htmlBody ?? ''}`;
   const redirected = GOOGLE_REDIRECT.test(text);
-  if (!redirected && !WEB_URL.test(text)) return { decision: 'pass' };
+  const bareDomain = BARE_DOMAIN.test(text.replace(EMAIL_ADDRESS, ''));
+  if (!redirected && !WEB_URL.test(text) && !bareDomain) return { decision: 'pass' };
   if (overrideActive(home, now)) return { decision: 'pass', override: true };
-  const reason = `[GMAIL-CONNECTOR-URL-GATE] ${redirected ? 'Google 転送 URL（google.com/url?q=）の貼り戻しを検出しました。' : 'メールに http:// または https:// の URL が含まれています。'}\nclaude.ai の Gmail コネクタは保存時に URL を https://www.google.com/url?q=… に書き換える（2026-10-18 実測。body・htmlBody の a href とも、生 MIME まで書き換わる）。URL を含む社外宛メールは \`node tools/gmail-draft.mjs --to … --subject … --body-file …\` で作る。SA 鍵の無い PC は aujust リポジトリの GitHub Actions 経由（memory: project-cr-pc-gmail-read-via-gha-secret）で同じ Gmail API を使う。`;
+  const reason = `[GMAIL-CONNECTOR-URL-GATE] ${redirected ? 'Google 転送 URL（google.com/url?q=）の貼り戻しを検出しました。' : bareDomain && !WEB_URL.test(text) ? 'メールにスキーム無しのドメインが含まれています。' : 'メールに http:// または https:// の URL が含まれています。'}\nclaude.ai の Gmail コネクタは保存時に URL を https://www.google.com/url?q=… に書き換える（2026-10-18 実測。body・htmlBody の a href とも、生 MIME まで書き換わる）。\nスキーム無しの www.〜 やドメインも書き換わる（2026-11-03 実測）。URL を含む社外宛メールは \`node tools/gmail-draft.mjs --to … --subject … --body-file …\` で作る。SA 鍵の無い PC は aujust リポジトリの GitHub Actions 経由（memory: project-cr-pc-gmail-read-via-gha-secret）で同じ Gmail API を使う。`;
   return { decision: 'block', reason };
 }
 

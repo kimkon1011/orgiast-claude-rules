@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readHookSettings } from './fixtures/read-hook-settings.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -103,7 +104,7 @@ test('register-hooks: 旧PCを .mjs へ移行し、独自設定を保ったま�
   assert(selfcheck.status === 0 && selfcheck.stdout.includes('SessionStart/onboarding-sync.mjs') && selfcheck.stdout.includes('欠落していたため自動登録'), selfcheck.stdout || selfcheck.stderr);
   const first = run('register-hooks.mjs', undefined, ['--hooks-only'], { ORGIAST_HOME: temp, ORGIAST_REPO: repo });
   assert(first.status === 0, first.stdout || first.stderr);
-  const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const after = readHookSettings(file);
   const sessionCommands = (after.hooks?.SessionStart || []).flatMap((group) => (group.hooks || []).map((hook) => String(hook.command || '')));
   assert(sessionCommands.filter((command) => command.includes('onboarding-sync.mjs')).length === 1, JSON.stringify(sessionCommands));
   assert(!sessionCommands.some((command) => command.includes('onboarding-sync.ps1')), JSON.stringify(sessionCommands));
@@ -319,7 +320,7 @@ test('hook-selfcheck: 偽HOMEで欠落を自動修復', () => {
   const claude = path.join(temp, '.claude'); fs.mkdirSync(claude, { recursive: true });
   fs.writeFileSync(path.join(claude, 'settings.json'), '{}\n');
   const r = run('hook-selfcheck.mjs', undefined, [], { ORGIAST_HOME: temp, ORGIAST_REPO: repo });
-  const settings = JSON.parse(fs.readFileSync(path.join(claude, 'settings.json'), 'utf8'));
+  const settings = readHookSettings(path.join(claude, 'settings.json'));
   assert(r.stdout.includes('欠落していたため自動登録'), r.stdout || r.stderr);
   assert(JSON.stringify(settings).includes('model-agent-guard.mjs') && JSON.stringify(settings).includes('cost-routing-gate.mjs'), '必須hookが登録されていない');
 });
@@ -490,7 +491,7 @@ test('hook-selfcheck: makimono-gate の欠落を自動登録する', () => {
   fs.writeFileSync(path.join(claude, 'settings.json'), JSON.stringify({ hooks }));
   const r = run('hook-selfcheck.mjs', undefined, [], { ORGIAST_HOME: home, ORGIAST_REPO: repo });
   assert(r.stdout.includes('makimono-gate.mjs'), `自動登録メッセージなし stdout=${JSON.stringify(r.stdout)} stderr=${r.stderr}`);
-  const after = JSON.parse(fs.readFileSync(path.join(claude, 'settings.json'), 'utf8'));
+  const after = readHookSettings(path.join(claude, 'settings.json'));
   const commands = (after.hooks?.UserPromptSubmit || []).flatMap((g) => (g.hooks || []).map((h) => String(h.command || '')));
   assert(commands.some((c) => c.includes('makimono-gate.mjs')), JSON.stringify(commands));
 });

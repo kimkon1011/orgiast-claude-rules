@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const QUESTIONS = [
@@ -197,11 +198,11 @@ function printHuman(summary) {
   for (const failure of summary.failures) console.log(`- ${failure.variant} / 群${failure.group} / ${failure.question}: ${failure.error}`);
 }
 
-function findClaude(home) {
+export function findClaude(home) {
   const candidates = process.platform === 'win32'
     ? [path.join(home, '.local', 'bin', 'claude.exe'), path.join(home, '.local', 'bin', 'claude.cmd')]
-    : [path.join(home, '.local', 'bin', 'claude'), 'claude'];
-  return candidates.find((candidate) => candidate === 'claude' || fs.existsSync(candidate)) || candidates[0];
+    : [path.join(home, '.local', 'bin', 'claude')];
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -230,7 +231,8 @@ export async function main(argv = process.argv.slice(2)) {
       current.projects[variant.cwd] = { ...(current.projects[variant.cwd] || {}), hasTrustDialogAccepted: true };
     }
     atomicWriteJson(configPath, current);
-    const executable = findClaude(home);
+    const { executable: resolvedExe } = await resolveClaudeExecutableFromDisk(process);
+    const executable = resolvedExe === 'claude' ? (findClaude(home) || 'claude') : resolvedExe;
     const jobs = ['v1', 'v2'].flatMap((variant) => QUESTIONS.map((question, index) => ({ variant, question, index })));
     const jobResults = await mapLimit(jobs, CONCURRENCY, async (job) => ({ ...job, result: await runClaude(executable, variants[job.variant].cwd, job.question.q) }));
     const rows = QUESTIONS.map((question, index) => {

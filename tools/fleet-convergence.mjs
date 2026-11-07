@@ -1,5 +1,6 @@
 // Non-secret, per-host/per-OS-user distribution receipt.
 import fs from 'node:fs';
+import { effectiveHooks, runtimeManifestPath, dispatcherProblems } from './hook-dispatch-registry.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -20,7 +21,7 @@ export function identityId(hostname, username) {
 export function convergenceAddress(row) { return `converge-${identityId(row.hostname, row.username)}`; }
 export function hookEntries(hooks) {
   return Object.entries(hooks || {}).flatMap(([event, groups]) => (Array.isArray(groups) ? groups : []).flatMap(group =>
-    (group.hooks || []).map(hook => ({ event, matcher: group.matcher || '', ...hook }))));
+    (group.hooks || []).map(hook => ({ event, matcher: group.matcher || '*', ...hook }))));
 }
 export function missingHooks(actual, expected) {
   const entries = hookEntries(actual);
@@ -81,7 +82,8 @@ export function collectConvergence({ home, repo, hostname = os.hostname(), usern
     const actual = readJson(path.join(home, '.claude/settings.json'));
     row.hookMissingNames = actual.disableAllHooks === true
       ? hookEntries(expected.hooks).map(h => `${h.event}:${h.command.match(/[\w-]+\.mjs/g)?.at(-1) || 'unknown'}`)
-      : missingHooks(actual.hooks, expected.hooks);
+      : missingHooks(effectiveHooks(actual, readJson(runtimeManifestPath(home))), expected.hooks);
+    if (!expectedHooks || fs.existsSync(runtimeManifestPath(home))) row.hookMissingNames.push(...dispatcherProblems(actual, repo).map(event => `${event}:hook-dispatch.mjs`));
     row.hookMissingNames.push(...(expected.skippedNames || []).map(name => `unavailable:${name}`));
     row.hookMissing = row.hookMissingNames.length;
   } catch { /* failed expected-set generation remains unknown */ }

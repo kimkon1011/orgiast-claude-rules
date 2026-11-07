@@ -1,3 +1,4 @@
+import { readHookSettings } from './fixtures/read-hook-settings.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -139,7 +140,7 @@ test('required hook registration is idempotent and all new runtime files have fl
   for(const file of ['tools/inquiry-lookup.mjs','tools/inquiry-lookup-hint.mjs','tools/lib/inquiry-sheet.mjs','tools/lib/mail-groups.mjs','config/mail-groups.json'])assert.equal(scope.entries.find(e=>e.path===file).scope,'fleet');
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'inquiry-hook-'));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
   for(let i=0;i<2;i++)execFileSync(process.execPath,['tools/register-hooks.mjs','--hooks-only'],{env:{...process.env,ORGIAST_HOME:home,ORGIAST_REPO:process.cwd()},stdio:'pipe'});
-  const settings=JSON.parse(fs.readFileSync(path.join(home,'.claude/settings.json')));
+  const settings=readHookSettings(path.join(home,'.claude/settings.json'));
   const hooks=settings.hooks.UserPromptSubmit.flatMap(g=>g.hooks).filter(h=>h.command.includes('inquiry-lookup-hint.mjs'));
   assert.equal(hooks.length,1);assert.equal(hooks[0].timeout,5);
   const out=execFileSync(process.execPath,['tools/inquiry-lookup-hint.mjs'],{input:JSON.stringify({prompt:'明日10時の打合せ'}),encoding:'utf8'});

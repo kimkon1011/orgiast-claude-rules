@@ -4,7 +4,7 @@ function Assert($Condition, $Message) { if (-not $Condition) { throw "FAIL: $Mes
 # Real CIM task constructors, in-memory scheduler injected as scriptblocks: never register or start a real task.
 $script:storedTask = $null
 $script:registrations = 0
-$get = { param($TaskName) $script:storedTask }
+$get = { param($TaskName) if ($TaskName -eq 'ClaudeNightlyReloadVSCode') { return $null }; $script:storedTask }
 $register = {
     param($TaskName, $InputObject)
     $script:registrations++
@@ -18,6 +18,14 @@ $times = @($script:storedTask.Triggers | ForEach-Object { ([datetime]$_.StartBou
 Assert (($times -join ',') -eq '04:40,05:00,05:20,05:40,06:00') 'night schedule'
 $result = Invoke-Register
 Assert (-not $result.changed -and $script:registrations -eq 1) 'identical task is not rewritten'
+
+# Registered task has DOMAIN\user or bare user while desired task uses SID
+$script:storedTask.Principal.UserId = 'DOMAIN\uers'
+$result = Invoke-Register
+Assert (-not $result.changed -and $script:registrations -eq 1) 'registered task with DOMAIN\user matches desired task with SID'
+$script:storedTask.Principal.UserId = 'uers'
+$result = Invoke-Register
+Assert (-not $result.changed -and $script:registrations -eq 1) 'registered task with bare user matches desired task with SID'
 $script:storedTask.Settings.Enabled = $false
 $result = Invoke-Register
 Assert ($result.changed -and $script:registrations -eq 2) 'disabled task repaired'
@@ -32,3 +40,13 @@ $failed = $false
 try { Invoke-Register } catch { $failed = $true }
 Assert ($failed -and $script:registrations -eq 4) 'query failure is not treated as absence'
 Write-Output 'PASS: nightly task registration (7 cases)'
+
+$script:legacy = [pscustomobject]@{ Settings = [pscustomobject]@{ Enabled = $true } }
+$script:disabled = 0
+$get = { param($TaskName) if ($TaskName -eq 'ClaudeNightlyReloadVSCode') { return $script:legacy }; $script:storedTask }
+$disable = { param($TaskName) $script:disabled++; $script:legacy.Settings.Enabled = $false }
+$result = Register-NightlyReloadTask -GetTask $get -RegisterTask $register -DisableTask $disable
+Assert ($result.changed -and $script:disabled -eq 1) 'legacy task disabled'
+$result = Register-NightlyReloadTask -GetTask $get -RegisterTask $register -DisableTask $disable
+Assert (-not $result.changed -and $script:disabled -eq 1) 'legacy disable is idempotent'
+Write-Output 'PASS: legacy task disabled, never deleted'

@@ -5,8 +5,6 @@ import { getDiscordMembers, matchMember } from './discord-member-directory.mjs';
 import { isEntry } from './is-entry.mjs';
 import { clipDiscordContent, KIM_DISCORD_USER_ID, resolveDiscordBotToken } from './notify-kim.mjs';
 import { addItem, isKimSeat } from './kim-inbox.mjs';
-import { discordAllowed } from './lib/kim-discord-allowlist.mjs';
-import { classifyKimDm } from './lib/kim-dm-policy.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 
 const API = 'https://discord.com/api/v10';
@@ -50,20 +48,13 @@ export async function sendDiscordDm(target, body, options = {}) {
   let copyToKim = 'skipped';
   const recipientName = recipient.displayName ?? recipient.label ?? recipient.username ?? '';
   const isKim = String(recipient.id) === KIM_DISCORD_USER_ID || ['金功勇', 'kim'].includes(recipientName.toLowerCase());
-  if (isKim && options.kimActionRequired !== true) {
-    const policy = classifyKimDm(body);
-    if (!policy.allowed) {
-      console.error(`kim への Discord DM を止めました（${policy.reason}）。PR のマージ・他PCへの依頼は fleet-mail --to kim-PC で送ってください`);
-      return { delivered: 'blocked', category: policy.category, reason: policy.reason };
-    }
-  }
-  const inbox = isKim && !discordAllowed(body, { home, allowlist: options.allowlist }).allowed;
+  const inbox = isKim;
   if (!options.noCopyKim && !isKim) copyToKim = isKimSeat(home) ? 'in-session' : 'session-inbox';
   const finalBody = isKim ? String(body ?? '') : withReplyToKimFooter(body);
   const content = safeContent(finalBody);
   if (options.dryRun) return { dryRun: true, recipient, content, copyToKim, ...(inbox ? { delivered: 'session-inbox' } : {}) };
   if (inbox) {
-    const item = await addItem(home, { kind: options.kimActionRequired ? 'ask' : 'info', text: body, source: 'discord-dm' });
+    const item = await addItem(home, { kind: options.kimActionRequired || ['action', 'ask'].includes(options.kind) ? 'ask' : 'info', text: body, source: 'discord-dm' });
     return { delivered: 'session-inbox', id: item.id, copyToKim };
   }
 

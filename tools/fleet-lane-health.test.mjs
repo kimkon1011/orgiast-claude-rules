@@ -142,3 +142,16 @@ test('同日でもstaleがあればprobeを再実行する', async t => {
   assert.equal(r.spawns.length, 2);
   assert.equal(r.spawns[1].opts.env.ORGIAST_HOME, path.dirname(r.dir));
 });
+
+test('watchdog notification batch is bounded and resumes unnotified rows next run', async t => {
+  const home = tmp(t); fs.mkdirSync(path.join(home, '.claude'));
+  const now = () => Date.parse('2026-10-15T13:00:00Z');
+  const mails = Array.from({ length: 12 }, (_, n) => mailFor(`batch-${n}-PC`, [{ lane: 'codex', reason: 'dead:oauth_consent' }], '2026-10-15T10:00:00Z'));
+  const calls = [];
+  const opts = { home, now, selfLabel: 'kim-PC', pcMap: {}, readInboxImpl: () => mails,
+    notify: async text => { calls.push(text); return { delivered: 'spooled' }; } };
+  assert.equal((await runLaneHealthWatch(opts)).notified.length, 10);
+  assert.equal((await runLaneHealthWatch(opts)).notified.length, 2);
+  assert.equal((await runLaneHealthWatch(opts)).notified.length, 0);
+  assert.equal(new Set(calls).size, 12);
+});

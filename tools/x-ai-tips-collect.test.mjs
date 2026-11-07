@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runCollect, runCli, parseArgs, estimateCost, canonicalUrl, weeklySummary } from './x-ai-tips-collect.mjs';
+import { runCollect, runCli, parseArgs, estimateCost, canonicalUrl, weeklySummary, validateConfig } from './x-ai-tips-collect.mjs';
 const defaults = JSON.parse(fs.readFileSync(new URL('../config/x-ai-tips-topics.json', import.meta.url)));
 const now = new Date('2026-11-03T12:00:00Z');
 const item = { url: 'https://x.com/test/status/123?s=20', author: '@test', title: 'キャッシュを使う', summary: '固定部分を共通化', steps: '共通の指示を先頭に置き、usageを比較する', purpose: 'cost', category: 'cost', postedAt: '2026-11-03T10:00:00Z', likes: 20 };
@@ -76,7 +76,7 @@ test('実費が上限超過したら提案保存せず打ち切り、費用は�
   const result = await runCollect(ctx.options); assert.match(result.status, /error:夜間費用上限超過/); assert.equal(result.added, 0);
   assert.equal(JSON.parse(fs.readFileSync(ctx.file('x-ai-tips/state.json'))).night.costUsd, 3);
 });
-for (const status of [401, 429, 500, 503]) test(`HTTP ${status} 即時打ち切り・予約維持・再試行なし`, async t => {
+for (const status of [401, 429]) test(`HTTP ${status} 即時打ち切り・予約維持・再試行なし`, async t => {
   const ctx = setup(t); ctx.options.config.topics = defaults.topics;
   ctx.options.fetchFn = async () => ({ ok: false, status });
   const result = await runCollect(ctx.options); assert.equal(result.calls, 1); assert.equal(result.status, `error:API HTTP ${status}`);
@@ -138,4 +138,96 @@ test('--limit は呼び出し数を制限し、最終行は必ずサマリー', 
   let calls = 0; ctx.options.fetchFn = async () => { calls++; return response(); };
   assert.equal(await runCli(['--dry-run', '--limit', '1'], ctx.options), 0);
   assert.equal(calls, 1); assert.match(logs.at(-1), /^ok:取得1件 追加1件 重複0件 費用\$0.01$/);
+});
+
+const readState = ctx => JSON.parse(fs.readFileSync(ctx.file('x-ai-tips/state.json')));
+const readRuns = ctx => fs.readFileSync(ctx.file('x-ai-tips/runs.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+const requestQuery = init => JSON.parse(init.body).input[0].content.split('\n')[0].replace('Search X for: ', '');
+
+for (const name of ['TimeoutError', 'AbortError']) test(`${name} 後も次テーマへ進み失敗ログと予約費用を残す`, async t => {
+  const ctx = setup(t); ctx.options.config.topics = defaults.topics.slice(0, 2);
+  let calls = 0;
+  ctx.options.fetchFn = async () => {
+    if (++calls === 1) throw new DOMException('The operation was aborted', name);
+    return response([]);
+  };
+  const result = await runCollect(ctx.options);
+  assert.equal(calls, 2); assert.equal(result.calls, 2); assert.match(result.status, /^error:テーマ失敗1件/);
+  const runs = readRuns(ctx);
+  assert.match(runs[0].status, /^error:The operation was aborted/); assert.equal(runs[0].reserved, true);
+  assert.equal(runs[0].costUsd, defaults.reservePerCallUsd); assert.equal(runs[1].status, 'ok');
+  assert.equal(readState(ctx).night.costUsd, defaults.reservePerCallUsd + .01);
+  assert.equal(result.cost, defaults.reservePerCallUsd + .01);
+});
+for (const status of [500, 503, 599]) test(`HTTP ${status} 後も次テーマへ進み予約を維持`, async t => {
+  const ctx = setup(t); ctx.options.config.topics = defaults.topics.slice(0, 2);
+  let calls = 0;
+  ctx.options.fetchFn = async () => ++calls === 1 ? { ok: false, status } : response([]);
+  const result = await runCollect(ctx.options);
+  assert.equal(calls, 2); assert.match(result.status, /^error:テーマ失敗1件/);
+  const runs = readRuns(ctx);
+  assert.equal(runs[0].status, `error:API HTTP ${status}`); assert.equal(runs[0].reserved, true);
+  assert.equal(runs[1].status, 'ok'); assert.equal(readState(ctx).night.costUsd, defaults.reservePerCallUsd + .01);
+});
+test('timeoutMs は未指定時300000、設定値をsignalに渡し、不正値は拒否', async t => {
+  const config = { ...defaults }; delete config.timeoutMs;
+  assert.equal(validateConfig(config).timeoutMs, 300000);
+  for (const timeoutMs of [0, -1, 1.5, null, '300000', 2147483648]) assert.throws(() => validateConfig({ ...config, timeoutMs }), /timeoutMs/);
+  const durations = [];
+  t.mock.method(AbortSignal, 'timeout', ms => { durations.push(ms); return new AbortController().signal; });
+  const ctx = setup(t); ctx.options.config.timeoutMs = 12345;
+  await runCollect(ctx.options);
+  delete ctx.options.config.timeoutMs;
+  await runCollect(ctx.options);
+  assert.deepEqual(durations, [12345, 300000]);
+});
+test('全テーマを回った翌夜も開始テーマが1つずれる', async t => {
+  const ctx = setup(t); ctx.options.config.topics = defaults.topics;
+  const queries = [];
+  ctx.options.fetchFn = async (_url, init) => { queries.push(requestQuery(init)); return response([]); };
+  await runCollect(ctx.options);
+  assert.equal(readState(ctx).nextTopicIndex, 1);
+  ctx.options.now = new Date(+now + 86400000);
+  await runCollect(ctx.options);
+  const expected = defaults.topics.map(t => t.query);
+  assert.deepEqual(queries, [...expected, ...expected.slice(1), expected[0]]);
+  assert.equal(readState(ctx).nextTopicIndex, 2);
+});
+test('回数上限で未実行のテーマから翌夜再開し、2晩で全テーマを回る', async t => {
+  const ctx = setup(t); ctx.options.config.topics = defaults.topics; ctx.options.config.maxCalls = 3;
+  const queries = [];
+  ctx.options.fetchFn = async (_url, init) => { queries.push(requestQuery(init)); return response([]); };
+  await runCollect(ctx.options);
+  assert.equal(readState(ctx).nextTopicIndex, 3);
+  ctx.options.now = new Date(+now + 86400000);
+  await runCollect(ctx.options);
+  assert.deepEqual(queries, defaults.topics.map(t => t.query));
+  assert.equal(readState(ctx).nextTopicIndex, 0);
+});
+test('429 で打ち切った翌夜は次の未実行テーマから再開', async t => {
+  const ctx = setup(t); ctx.options.config.topics = defaults.topics;
+  ctx.options.fetchFn = async () => ({ ok: false, status: 429 });
+  assert.equal((await runCollect(ctx.options)).calls, 1);
+  assert.equal(readState(ctx).nextTopicIndex, 1);
+  ctx.options.now = new Date(+now + 86400000); ctx.options.limit = 1;
+  ctx.options.fetchFn = async (_url, init) => { assert.equal(requestQuery(init), defaults.topics[1].query); return response([]); };
+  assert.equal((await runCollect(ctx.options)).calls, 1);
+});
+test('失敗時の予約費用でも上限を守り未実行テーマの位置を維持', async t => {
+  const ctx = setup(t); ctx.options.config.topics = defaults.topics; ctx.options.config.maxCostUsd = defaults.reservePerCallUsd;
+  ctx.options.fetchFn = async () => ({ ok: false, status: 503 });
+  const result = await runCollect(ctx.options);
+  assert.equal(result.calls, 1); assert.match(result.status, /error:夜間費用上限/);
+  assert.equal(readState(ctx).night.costUsd, defaults.reservePerCallUsd);
+  assert.equal(readState(ctx).nextTopicIndex, 1);
+});
+test('nextTopicIndex が範囲外・欠落・不正型なら0から再開', async t => {
+  for (const nextTopicIndex of [-1, defaults.topics.length, 999, 1.5, '2', null, undefined]) {
+    const ctx = setup(t); ctx.options.config.topics = defaults.topics; ctx.options.limit = 1;
+    fs.mkdirSync(ctx.file('x-ai-tips'), { recursive: true });
+    fs.writeFileSync(ctx.file('x-ai-tips/state.json'), JSON.stringify({ nextTopicIndex }));
+    ctx.options.fetchFn = async (_url, init) => { assert.equal(requestQuery(init), defaults.topics[0].query); return response([]); };
+    assert.equal((await runCollect(ctx.options)).calls, 1);
+    assert.equal(readState(ctx).nextTopicIndex, 1);
+  }
 });

@@ -1,0 +1,8 @@
+{
+  "siteText": "Silver Orchard builds fictional inspection tools for imaginary factories.",
+  "expected": {
+    "sellsTo": "imaginary factories",
+    "buyer": "quality leaders",
+    "reason": "shorter inspections"
+  }
+}

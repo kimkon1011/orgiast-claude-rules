@@ -12,7 +12,7 @@ test('inbox を hook に注入して既読化する', t => {
   assert.equal(JSON.parse(fs.readFileSync(inboxFile(home, 's1'), 'utf8')).shown, true);
 });
 
-test('owner inbox は別セッションで最大120字の各通知を表示し一度だけ既読化する', t => {
+test('owner inbox は判断待ちを最大600字で表示し一度だけ既読化する', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-inbox-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   appendOwnerInbox(home, { source: 'notify-owner', text: '古い通知' });
@@ -23,7 +23,7 @@ test('owner inbox は別セッションで最大120字の各通知を表示し�
   assert.equal(out.hookSpecificOutput.hookEventName, 'SessionStart');
   assert.match(context, /📲 自動進行の結果（聞かれる前にお知らせ）/);
   assert.equal(context.match(/あなたの判断待ち/g).length, 2);
-  assert.ok(context.includes(('あなたの判断待ち あなたの判断待ち ' + '長'.repeat(1600)).slice(0, 120)));
+  assert.ok(context.includes(('あなたの判断待ち あなたの判断待ち ' + '長'.repeat(1600)).slice(0, 600)));
   assert.ok(!context.includes('長'.repeat(1500)));
   assert.match(context, /古い通知/);
   assert.equal(consumeInbox({ session_id: 'third' }, { home, env: {} }), null);
@@ -46,7 +46,7 @@ test('owner inbox の24時間抑止は未表示同文だけに適用する', t =
 });
 
 for (const state of ['done', 'needs_user', 'blocked']) {
-  for (const first of ['original', 'other']) test(`${state}: ${first}で表示すると両方既読`, t => {
+  for (const first of ['original', 'other']) test(`${state}: ${first}で表示しても元会話で全文を届ける`, t => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'mirror-'));
     t.after(() => fs.rmSync(home, { recursive: true, force: true }));
     appendInbox(home, 'original', { state, evidence: '固有通知本文' });
@@ -54,9 +54,15 @@ for (const state of ['done', 'needs_user', 'blocked']) {
     assert.equal(read('original').id, read('_owner').id);
     const context = consumeInbox({ session_id: first }, { home, env: {} }).hookSpecificOutput.additionalContext;
     assert.equal(context.match(/固有通知本文/g).length, 1);
-    assert.equal(read('original').shown, true);
+    assert.equal(read('original').shown, first === 'original');
     assert.equal(read('_owner').shown, true);
-    assert.equal(consumeInbox({ session_id: first === 'original' ? 'other' : 'original' }, { home, env: {} }), null);
+    if (first === 'other') {
+      assert.equal(consumeInbox({ session_id: 'other' }, { home, env: {} }), null);
+      const original = consumeInbox({ session_id: 'original' }, { home, env: {} });
+      assert.match(original.hookSpecificOutput.additionalContext, /固有通知本文/);
+      assert.equal(read('original').shown, true);
+    }
+    assert.equal(consumeInbox({ session_id: 'other' }, { home, env: {} }), null);
   });
 }
 for (const input of [
@@ -131,4 +137,19 @@ test('無人・session IDなしでは警告の表示済み時刻を記録しな�
   assert.equal(consumeInbox({ session_id: 's1' }, { ...options, env: { CLAUDE_HEADLESS: '1' } }), null);
   assert.equal(fs.existsSync(path.join(options.home, '.claude', 'auto-progress-inbox', '_recipient-warning.json')), false);
   assert.match(consumeInbox({ session_id: 's1' }, options).hookSpecificOutput.additionalContext, /^⚠ 進捗DM/);
+});
+
+for (const item of [
+  { state: 'needs_user', evidence: '長'.repeat(700) },
+  { text: '判断待ち' + '長'.repeat(700) },
+]) test(`owner 判断待ちの600文字境界と元会話の全文: ${item.state || '本文'}`, t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-limit-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  appendInbox(home, 'original', { state: item.state || 'blocked', ...item });
+  const text = item.text || `needs_user: ${item.evidence}`;
+  const context = consumeInbox({ session_id: 'other' }, { home, env: {} }).hookSpecificOutput.additionalContext;
+  assert.ok(context.endsWith(text.slice(0, 600)));
+  assert.ok(!context.includes(text.slice(0, 601)));
+  const original = consumeInbox({ session_id: 'original' }, { home, env: {} });
+  assert.ok(original.hookSpecificOutput.additionalContext.endsWith(text));
 });

@@ -96,7 +96,7 @@ function entryText(entry) {
     : typeof content === 'string' ? content : '';
 }
 
-function isRealHumanEntry(entry) {
+export function isRealHumanEntry(entry) {
   if (entry?.isSidechain === true || entry?.isMeta === true || (entry?.type !== 'user' && entry?.message?.role !== 'user')) return false;
   const content = entry?.message?.content;
   if (Array.isArray(content) && content.some(block => block?.type === 'tool_result')) return false;

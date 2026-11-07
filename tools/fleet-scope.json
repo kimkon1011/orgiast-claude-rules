@@ -1,6 +1,9 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/register-morning-session-sweep.ps1", "scope": "fleet", "step": "task:morning-session-sweep", "reason": "全PCの未クローズセッションを毎朝06:30に回収する共通タスク"},
+    {"path": "tools/hook-dispatch.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "全PCの同期hookをイベント単位で1本に集約するディスパッチャ（PC過負荷対策 #1568）"},
+    {"path": "tools/hook-dispatch-benchmark.mjs", "scope": "fleet", "step": "classifier-settings", "reason": "ディスパッチャの所要時間を各PCで計測するベンチマーク"},
     {"path": "tools/deadline-ledger.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
     {"path": "tools/deadline-detect.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
     {"path": "tools/deadline-watch.mjs", "scope": "fleet", "step": "deadline-watch", "reason": "期限台帳の共通実装。タスク登録はkim操作席だけで実行"},
@@ -25,6 +28,7 @@
     {"path": "tools/lib/fleet-chase-policy.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "hook の軽量な台帳判定依存"},
     {"path": "tools/kim-awaiting.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "kim の返事待ちの集約と回答配送"},
     {"path": "tools/kim-awaiting-context.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "kim の返事待ちの集約と回答配送"},
+    {"path": "tools/lib/external-waiting-state.mjs", "scope": "fleet", "step": "hook:auto-progress-inbox", "reason": "kim-awaiting が読む社外返信待ちの状態ファイル入出力"},
 
     {"path":"tools/lib/reclaim-lock.mjs","scope":"fleet","step":"task:fleet-mail","reason":"fleet-mail / 質問中継が使う、残った .reclaim の自動回収"},
     {"path":"tools/lib/gws-proxy.mjs","scope":"fleet","step":"task:fleet-mail","reason":"全PCの鍵なしGmail・Drive・LINE APIと自己点検の共通認証経路"},
@@ -443,6 +447,12 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/claude-md-legacy.json",
+      "scope": "fleet",
+      "step": "hook:onboarding-sync",
+      "reason": "onboarding-sync が使う既知の配布文と移行先規則の完全一致照合"
+    },
+    {
       "path": "tools/onboarding-sync.mjs",
       "scope": "fleet",
       "step": "hook:onboarding-sync",
@@ -551,10 +561,22 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/register-external-waiting.ps1",
+      "scope": "fleet",
+      "step": "task:external-waiting",
+      "reason": "task:external-waiting ステップの登録スクリプト"
+    },
+    {
       "path": "tools/register-decision-watch.ps1",
       "scope": "fleet",
       "step": "task:decision-watch",
       "reason": "task:decision-watch ステップの登録スクリプト"
+    },
+    {
+      "path": "tools/register-nightly-tools.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "nightly-health/morning-batch タスクの登録管理。既存タスクを持つPC（主にkim-PC）で実効"
     },
     {
       "path": "tools/register-discord-autoreply.ps1",
@@ -729,6 +751,11 @@
       "scope": "fleet",
       "step": "task:quota-sweep",
       "reason": "task:quota-sweep ステップの登録スクリプト（枠リセット直前の残枠消化・15分ごと判定）"
+    },
+    {
+      "path": "tools/register-reply-learning-nightly.ps1",
+      "scope": "kim-only",
+      "reason": "task:reply-learning-nightly（kim-only）の登録スクリプト。返信代行の学習ループは kim 宛の返信だけを扱うため kim-PC だけに登録する"
     },
     {
       "path": "tools/register-auto-progress-task.ps1",
@@ -1127,6 +1154,18 @@
       "reason": "webhook-health が fleet sheet への POST に使う実行時 import 依存（busy 再送の共通ヘルパ）"
     },
     {
+      "path": "tools/register-reopen-lost-sessions.ps1",
+      "scope": "fleet",
+      "step": "nightly-reload-vscode",
+      "reason": "全PCのログオン時に落ちた VS Code セッションを自動再オープンする scheduled task の登録（converge 経由）"
+    },
+    {
+      "path": "tools/reopen-lost-sessions.mjs",
+      "scope": "fleet",
+      "step": "nightly-reload-vscode",
+      "reason": "全PCのログオン時に起動し、RC API 経由で host_exit セッションを検出・再オープンする"
+    },
+    {
       "path": "tools/fleet-question-relay.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",
@@ -1207,6 +1246,22 @@
       "path": "tools/rescue-review-findings.md",
       "scope": "kim-only",
       "reason": "ドキュメントで実行体なし（~/.claude 設定名の記載による誤検出を許容）"
-    }
+    },
+    {
+      "path": "tools/register-freee-token-health.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "freee 認可切れの監視タスクは keiri-hub 運用PC だけが登録・実行する（複数PCで動くと通知が重複し、Supabase env も運用PC にしか無い）"
+    },
+    {"path": "tools/kim-editor-sweep.mjs", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
+    {"path": "tools/kim-editor-posttool.mjs", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
+    {"path": "tools/lib/kim-editor.mjs", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
+    {"path": "tools/register-kim-editor-sweep.mjs", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
+    {"path": "tools/register-kim-editor-sweep.ps1", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
+    {"path": "tools/lib/pc-display.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox・返事待ち表示が使うPC表示名の実行時依存"},
+    {"path": "tools/lib/auto-progress-daily.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "全PCの自動進行に使う毎朝進捗通知の実行時依存"},
+    {"path": "tools/lib/drafts-auto-cleared.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "返事待ち表示・下書き整理が使う実行時依存"},
+    {"path": "tools/auto-progress-ledger.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "毎朝進捗通知・返事待ち表示の実行時依存"},
+    {"path": "tools/register-gakkai-phone-digest.ps1", "scope": "kim-only", "step": null, "reason": "cr-PC（作業用011）だけで動かす学会スマホ所在Digestの毎朝09:07登録"}
   ]
 }

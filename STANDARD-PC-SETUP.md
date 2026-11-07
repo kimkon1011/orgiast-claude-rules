@@ -97,7 +97,14 @@ keyserve の鍵が無いと、案件の自動引き継ぎ（case-handoff）や�
 
 （パスワード・トークンはチャットで絶対に聞かない）。`node <repo>/tools/make-desktop-launcher.mjs --name "オージャスト ログイン4件" --ps-file <repo>/tools/login-services.ps1` でデスクトップに置き、Claude 自身が `Start-Process` で起動する。利用者にコマンドを貼らせない。
 
-起動前にツールと同じ案内（全て `seisaku-team@orgiast.jp`）を示す。GitHub は「Y/n → Enter」、コード表示後 Enter、ブラウザで Ctrl+V → Continue → Authorize GitHub CLI。Google (clasp) は自動で開いた Google 画面を承認。Vercel は表示URLと確認コードを承認。Codex は ChatGPT の会社アカウントを承認。localhost の Windows Defender 警告は「キャンセル」でよい（PC内通信のみ）。残った AI Studio ・ localhost エラーのタブは閉じてよい。
+起動前にツールと同じ案内（全て `seisaku-team@orgiast.jp`）を示す。**本人がやるのは、Claude が開いたブラウザで会社アカウントを選んで承認することだけ**（端末へのコマンド入力・コードの手コピーは不要）。各ログインは Claude が `Start-Process` で起動し、ブラウザは自動で開く。
+
+- **GitHub**：`gh auth login`（web browser 方式）。ワンタイムコードは端末からコピーできない個体があるため、**Claude が端末出力を捕捉して 8桁コード（`XXXX-XXXX`）をチャットに明示**する。本人は自動で開いた `github.com/login/device` にそれを入力 → Continue → Authorize GitHub CLI。端末からのコピーを本人に強いない（2026-10-30 user-PC でコード不可・差し戻し）。
+- **Google (clasp)**：自動で開く Google 画面で orgiast.jp アカウントを承認するだけ。
+- **Vercel**：プロバイダ選択メニューが出たら「Continue with GitHub」を選び、開いたブラウザで承認。
+- **Codex**：自動で開く ChatGPT 画面で会社アカウントを承認するだけ（コード入力なし）。
+
+localhost の Windows Defender 警告は「キャンセル」でよい（PC内通信のみ）。残った AI Studio ・ localhost エラーのタブは閉じてよい。
 
 Claude は5秒ごとに `gh auth status` / `~/.clasprc.json` / `npx -y vercel whoami` / `~/.codex/auth.json` の tokens を判定し、4件すべて完了するまで待つ。
 

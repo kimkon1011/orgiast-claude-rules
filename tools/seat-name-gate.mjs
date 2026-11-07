@@ -32,10 +32,14 @@ export function judge(text, pcMap = readPcMap()) {
     for (const line of body.split(/\r?\n/)) {
       const candidates = new Set([...names, ...(line.match(/(?<![A-Za-z0-9])DESKTOP-[A-Z0-9]{7}(?![A-Za-z0-9])/g) || [])]);
       for (const name of candidates) {
-        const suffix = name === 'DELL' ? '(?=[ \\t]*(?:席|PC|機|のPC|側))' : '';
+        const suffix = name === 'DELL' ? '(?=[ \\t]*(?:席|ＰＣ|PC|機|のPC|側|の|で|（|\\(|：|:|、|，|。|$))' : '';
         if (!new RegExp(`(?<![A-Za-z0-9])${escape(name)}(?![A-Za-z0-9])${suffix}`).test(line)) continue;
         const resolved = resolveSeat(name, pcMap);
-        if (line.includes('番号未登録の席') || (resolved.registered && new RegExp(`${escape(resolved.seat)}(?![A-Za-z0-9])`).test(line))) continue;
+        const seatMentioned = resolved.registered && new RegExp(`${escape(resolved.seat)}(?![A-Za-z0-9])`).test(line);
+        // DELL は「作業用014（DELL 席）」等の括弧注記でのみ席ラベル併記を許す。散文の「作業用014 は DELL です」等は
+        // hostname 表記（human 向け文は席ラベルで呼ぶ・2026-11-05 実害）なので検出する。他の名前は従来通り席ラベル併記で救済。
+        const seatAnnotation = seatMentioned && (name !== 'DELL' || new RegExp(`${escape(resolved.seat)}[^\\r\\n]*[（(][^\\r\\n]*${escape(name)}`).test(line));
+        if (line.includes('番号未登録の席') || seatAnnotation) continue;
         reasons.push(`${name} → ${resolved.seat} と書く（ONBOARDING §1.5.0.2）。`);
       }
     }

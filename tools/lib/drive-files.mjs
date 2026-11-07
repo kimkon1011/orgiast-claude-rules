@@ -37,18 +37,18 @@ export async function downloadFileContent(token, fileId, { apiFn = api } = {}) {
  * If fileId is provided, performs a PATCH (update/in-place).
  * If fileId is null/undefined, performs a multipart POST (create) in parentId.
  */
-export async function uploadFileContent(token, { fileId, name, parentId, content, apiFn = api } = {}) {
+export async function uploadFileContent(token, { fileId, name, parentId, content, apiFn = api, mimeType = 'text/plain', contentType = 'text/plain; charset=utf-8' } = {}) {
   if (fileId) {
     const res = await apiFn(token, `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      headers: { 'Content-Type': contentType },
       body: content,
     });
     return { id: fileId };
   } else {
-    const meta = JSON.stringify({ name, parents: [parentId], mimeType: 'text/plain' });
+    const meta = JSON.stringify({ name, parents: [parentId], mimeType });
     const boundary = 'x-claude-hub-sync';
-    const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${content.toString('utf8')}\r\n--${boundary}--`;
+    const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: ${contentType}\r\n\r\n${content.toString('utf8')}\r\n--${boundary}--`;
     const res = await apiFn(token, 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
       method: 'POST',
       headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },

@@ -171,12 +171,17 @@ test('registration preserves the deployed hidden task, working directory and sch
 });
 
 
-test('nightly knowledge runs after hub, preserves dry-run and propagates failure to the task', async () => {
+test('nightly hub runs push→knowledge→portable, preserves dry-run and propagates failures', async () => {
   const calls = [];
-  await runNightlyHub({ push: async () => calls.push('hub'), knowledge: async () => calls.push('knowledge') });
-  assert.deepEqual(calls, ['hub', 'knowledge']);
+  const portable = async () => calls.push('portable');
+  await runNightlyHub({ push: async () => calls.push('hub'), knowledge: async () => calls.push('knowledge'), portable });
+  assert.deepEqual(calls, ['hub', 'knowledge', 'portable']);
   calls.length = 0;
-  await runNightlyHub({ dryRun: true, push: async () => calls.push('hub'), knowledge: async () => calls.push('knowledge') });
+  await runNightlyHub({ dryRun: true, push: async () => calls.push('hub'), knowledge: async () => calls.push('knowledge'), portable });
   assert.deepEqual(calls, ['hub']);
-  await assert.rejects(runNightlyHub({ push: async () => {}, knowledge: async () => { throw Error('knowledge failed'); } }), /knowledge failed/);
+  await assert.rejects(runNightlyHub({ push: async () => {}, knowledge: async () => { throw Error('knowledge failed'); }, portable: async () => {} }), /knowledge failed/);
+  await assert.rejects(runNightlyHub({ push: async () => {}, knowledge: async () => {}, portable: async () => { throw Error('portable failed'); } }), /portable failed/);
+  calls.length = 0;
+  await runNightlyHub({ dryRun: true, push: async () => calls.push('hub'), knowledge: async () => calls.push('knowledge'), portable: async () => calls.push('portable') });
+  assert.deepEqual(calls, ['hub']);
 });

@@ -52,7 +52,13 @@
       "pagePathInclude": [
         "/dashboard",
         "/customers/",
-        "/deals/"
+        "/customers",
+        "/deals/",
+        "/deals",
+        "/exhibitions",
+        "/inbox",
+        "/kpi",
+        "/settings"
       ],
       "pagePathExclude": [
         "/cases/",

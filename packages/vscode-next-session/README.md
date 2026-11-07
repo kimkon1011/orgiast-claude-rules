@@ -48,6 +48,9 @@ URI、起動時、タブ変更、5秒ごとの補充は同じ処理で直列化�
 
 URI は外部プロセスやブラウザからも開けるため、`claude` パラメータは実在する絶対パスかつファイル名が `claude` / `claude.exe` の場合だけ実行します。
 
+## 0.3.10
+VS Code 再起動時に「アーカイブ済み・クローズ済み」の Claude Code タブが大量復元される問題を修正します。起動 15 秒後・5 分ごとに VS Code 状態 DB を読み取り、アーカイブ（`hiddenSessionIds`）またはクローズ（`closed-sessions.json`）のセッション ID を持つ Claude タブを自動で閉じます。アクティブ・ピン留め・未保存タブは絶対に閉じません。設定 `orgiast.nextSession.closeArchivedTabs`（既定 true）で無効化できます。VS Code 内蔵 Node に sqlite が無い前提で外部 `node` プロセス経由で DB を読みます。
+
 ## アンインストール
 
 ```sh

@@ -41,7 +41,7 @@ test('worktree ウィンドウ: 補充せず、起動時に未使用待機タブ
   };
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'extension.js'), 'utf8'), {
-    module, process, URLSearchParams, console, clearInterval, setTimeout,
+    module, process, URLSearchParams, console, clearInterval, clearTimeout, setTimeout,
     setInterval(fn, ms) { return ms === 5000 ? null : setInterval(fn, ms); },
     require(name) {
       if (name === 'vscode') return vscode;
@@ -84,7 +84,7 @@ test('URI concurrency and tab title events replenish one without interactive ren
   const module = { exports: {} };
   const snapshots = [];
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'extension.js'), 'utf8'), {
-    module, process, URLSearchParams, console, clearInterval, setTimeout,
+    module, process, URLSearchParams, console, clearInterval, clearTimeout, setTimeout,
     setInterval(fn, ms) { return ms === 5000 ? null : setInterval(fn, ms); },
     require(name) {
       if (name === 'vscode') return vscode;
@@ -128,7 +128,7 @@ function loadExtension({ onCommand, onExternal }) {
   };
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'extension.js'), 'utf8'), {
-    module, process, URLSearchParams, console, clearInterval, setTimeout, Date,
+    module, process, URLSearchParams, console, clearInterval, clearTimeout, setTimeout, Date,
     setInterval(fn, ms) { return ms === 5000 ? null : setInterval(fn, ms); },
     require(name) {
       if (name === 'vscode') return vscode;

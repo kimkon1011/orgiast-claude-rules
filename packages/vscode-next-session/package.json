@@ -2,7 +2,7 @@
   "name": "next-session",
   "displayName": "Orgiast Next Session",
   "description": "Starts the next Claude session and prepares mobile Remote Control tabs from a URI.",
-  "version": "0.3.9",
+  "version": "0.3.10",
   "publisher": "orgiast",
   "license": "MIT",
   "repository": {
@@ -45,6 +45,11 @@
           "type": "string",
           "default": "06-24",
           "description": "リフレッシュを行うローカル時刻の時間帯（開始時-終了時、終了は排他）。例: 06-24"
+        },
+        "orgiast.nextSession.closeArchivedTabs": {
+          "type": "boolean",
+          "default": true,
+          "description": "VS Code 再起動時・定期チェックでアーカイブ済み・クローズ済みの Claude Code タブを自動で閉じる。"
         }
       }
     }
@@ -59,6 +64,8 @@
     "README.md",
     "LICENSE",
     "archive-tab-match.js",
-    "archive-tabs.js"
+    "archive-tabs.js",
+    "tab-sessions.cjs",
+    "read-tab-state.mjs"
   ]
 }

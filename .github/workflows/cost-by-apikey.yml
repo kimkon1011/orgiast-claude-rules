@@ -1,5 +1,7 @@
 name: cost-by-apikey
 on:
+  push:
+    branches: [diag/cost-by-apikey]
   workflow_dispatch:
     inputs:
       days:

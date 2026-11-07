@@ -1,0 +1,86 @@
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "鋼材は1枚から買えますか？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "はい、1枚からご注文いただけます。小ロット・端材サイズも対応しています。法人・個人を問いません。"
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "送料はいくらですか？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "送料は配送先・数量・サイズにより異なります。ご注文後に確定金額をお知らせします。"
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "見積もりは有料ですか？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "無料です。サイズ指定見積ページからリアルタイムに価格を確認いただけます。"
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "最短でどのくらいで届きますか？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "在庫品はご注文確認後、最短で即日出荷可能です。加工が必要な場合は1〜3営業日いただきます。"
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "取扱っている材質は？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "ステンレス、アルミニウム、鉄板、真鍮、銅、亜鉛めっき鋼板など23種の材質を取り扱っています。"
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "サイズカットは可能ですか？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "はい、ご指定の寸法に切断してお届けします。シャーリング、穴あけ、曲げ加工にも対応しています。"
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "鋼材をネットで買うのは初めてですが、何から始めればいいですか？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "材質を選び、厚み・幅・長さを決めて、カタログまたはサイズ指定見積で価格を確認しご注文ください。不明な点はお問い合わせください。"
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "ホームセンターより安いですか？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "鋼材専門の仕入れネットワークにより、ホームセンターより割安な価格を提供しています。特にまとめ買いや定番サイズでは大きな差があります。"
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "DIY・個人利用でも大丈夫ですか？",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "もちろんです。1枚からの販売、サイズカット対応で、個人の工作・修理・日曜大工にも最適です。"
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "製造業での利用例を教えてください",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "製造業のお客様には、試作部品用の小ロット鋼材から量産部品用の定番サイズまで幅広くご利用いただいています。"
+      }
+    }
+  ]
+}

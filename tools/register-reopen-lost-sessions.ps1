@@ -5,8 +5,11 @@ $ErrorActionPreference = 'Stop'
 function Get-ReopenDefinition($Task) {
     [ordered]@{
         Actions = @($Task.Actions | ForEach-Object { "$($_.Execute)|$($_.Arguments)" })
-        Triggers = @($Task.Triggers | ForEach-Object { "$($_.CimClass.CimClassName)|$($_.UserId)|$($_.Delay)|$($_.Enabled)|$($_.StartBoundary)|$($_.Repetition.Interval)|$($_.Repetition.Duration)" })
-        User = $Task.Principal.UserId; Logon = [string]$Task.Principal.LogonType; Level = [string]$Task.Principal.RunLevel
+        Triggers = @($Task.Triggers | ForEach-Object {
+            $sb = if ($_.StartBoundary) { [datetime]::Parse($_.StartBoundary).ToString('yyyy-MM-ddTHH:mm:ss') } else { '' }
+            "$($_.CimClass.CimClassName)|$($_.UserId -replace '.*\\', '')|$($_.Delay)|$($_.Enabled)|$sb|$($_.Repetition.Interval)|$($_.Repetition.Duration)"
+        })
+        User = ($Task.Principal.UserId -replace '.*\\', ''); Logon = [string]$Task.Principal.LogonType; Level = [string]$Task.Principal.RunLevel
         Enabled = $Task.Settings.Enabled; Instances = [string]$Task.Settings.MultipleInstances
         Limit = $Task.Settings.ExecutionTimeLimit; Battery = $Task.Settings.DisallowStartIfOnBatteries
         StopBattery = $Task.Settings.StopIfGoingOnBatteries
@@ -21,7 +24,7 @@ function Register-ReopenLostTask(
     $hidden = Join-Path $env:USERPROFILE '.claude\tools\run-hidden.vbs'
     $node = (Get-Command node.exe -ErrorAction Stop).Source
     foreach ($required in @($file, $hidden, $node)) { if (-not (Test-Path -LiteralPath $required)) { throw "Missing: $required" } }
-    $user = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $user = $env:USERNAME
 
     $name1 = 'OrgiastReopenLostSessions'
     $action1 = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\wscript.exe') -Argument ('//nologo "{0}" "{1}" "{2}"' -f $hidden, $node, $file)
@@ -49,7 +52,6 @@ function Register-ReopenLostTask(
     $trigger2a.Delay = 'PT5M'
     $trigger2a.Repetition = (New-ScheduledTaskTrigger -Once -At '00:00' -RepetitionInterval (New-TimeSpan -Minutes 15)).Repetition
     $trigger2b = New-ScheduledTaskTrigger -Once -At '2026-01-01T00:00:00' -RepetitionInterval (New-TimeSpan -Minutes 15)
-    $trigger2b.Repetition.Duration = ([timespan]::Zero)
     $principal2 = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
     $settings2 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
     $desired2 = New-ScheduledTask -Action $action2 -Trigger @($trigger2a, $trigger2b) -Principal $principal2 -Settings $settings2

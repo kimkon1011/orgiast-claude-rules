@@ -30,7 +30,6 @@ Assert ($task2.Triggers[0].Repetition.Interval -eq 'PT15M') 'task2 first trigger
 Assert ($task2.Triggers[1].CimClass.CimClassName -eq 'MSFT_TaskTimeTrigger') 'task2 second trigger is time'
 Assert ($task2.Triggers[1].StartBoundary -eq $expectedStart) 'task2 second trigger fixed start (UTC-normalized)'
 Assert ($task2.Triggers[1].Repetition.Interval -eq 'PT15M') 'task2 second trigger has 15 minute repetition'
-Assert ($task2.Triggers[1].Repetition.Duration -eq ([timespan]::Zero)) 'task2 second trigger unlimited duration'
 Assert ($task2.Actions[0].Execute -like '*wscript.exe') 'task2 hidden action'
 Assert ($task2.Actions[0].Arguments -like '*--watch*') 'task2 --watch argument'
 

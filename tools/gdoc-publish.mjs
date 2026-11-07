@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * kim 向け Doc を作成/同一 ID で置換し、リンクを Docs API から読み戻して検証する。
- * node tools/gdoc-publish.mjs --title "題名" --file 本文.md [--folder ID] [--update ID]
+ * node tools/gdoc-publish.mjs --title "題名" --file 本文.md [--folder ID] [--update ID] [--private]
  * --authuser <開く人のメール> は必須。他人宛は --share <相手のメール> を付ける（--share-role で権限指定）。
+ * --private を付けるとマイドライブ直下に作成し、共有権限がないことを確認する。
  * 認証は lib/drive-auth.mjs の既存 DWD 鍵 (GOOGLE_SA_KEY) と drive scope を再利用。
  * 本文は ■ / 1. 等の通常テキスト。Markdown の見出し・リンク・太字・コードは表示文字に変換。
  * --update は単一タブの本文を置換。folder 省略時は既存の配置を保持する。
@@ -16,20 +17,43 @@ import { ensureKimEditor } from './lib/kim-editor.mjs';
 import { randomUUID } from 'node:crypto';
 
 export const DEFAULT_FOLDER = '1uA0J3kPfL7O5t0Ro1jSfi2xDEJE-Y0si';
+
+export function containsSecret(text) {
+  if (typeof text !== 'string') return false;
+  return /^[ \t]*[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|ACCESS_KEY|CLIENT_SECRET)[A-Z0-9_]*\s*=\s*\S{8,}/m.test(text) ||
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(text) ||
+    /sk-[A-Za-z0-9_-]{20,}/.test(text) ||
+    /ghp_[A-Za-z0-9]{20,}/.test(text) ||
+    /xox[bp]-[A-Za-z0-9-]{10,}/.test(text) ||
+    /AIza[0-9A-Za-z_-]{30,}/.test(text);
+}
+
 const DOCS = 'https://docs.googleapis.com/v1/documents';
 const DRIVE = 'https://www.googleapis.com/drive/v3/files';
 
 export function parseArgs(argv) {
   const args = {};
-  for (let i = 0; i < argv.length; i += 2) {
+  for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
+    if (flag === '--private') {
+      if (args.private) throw new Error(`不正な引数: ${flag}`);
+      args.private = true;
+      continue;
+    }
+    const val = argv[i + 1];
     if (!['--title', '--file', '--folder', '--update', '--authuser', '--share', '--share-role'].includes(flag) ||
-        !argv[i + 1]?.trim() || argv[i + 1].startsWith('--') || flag.slice(2) in args) {
+        !val?.trim() || val.startsWith('--') || flag.slice(2) in args) {
       throw new Error(`不正な引数: ${flag}`);
     }
-    args[flag.slice(2)] = argv[i + 1];
+    args[flag.slice(2)] = val;
+    i++;
   }
   if (!args.title || !args.file) throw new Error('--title と --file は必須です');
+  if (args.private && args.share) {
+    const err = new Error('--private と --share は併用できません');
+    err.exitCode = 2;
+    throw err;
+  }
   return args;
 }
 
@@ -139,9 +163,14 @@ export function renderHtml(rendered) {
   return `<!doctype html><html><head><meta charset="UTF-8"></head><body><pre>${html}</pre></body></html>`;
 }
 
-export async function publishDocument({ title, source, folder, update, authuser, share, 'share-role': shareRole }, {
+export async function publishDocument({ title, source, folder, update, authuser, share, 'share-role': shareRole, private: isPrivate }, {
   getToken = getDriveToken, api = driveApi, ensure = ensureKimEditor, stderr = console.error,
 } = {}) {
+  if (containsSecret(source) && !isPrivate) {
+    const err = new Error('秘密らしい行を含むため共有フォルダに置けません。--private を付けてください');
+    err.exitCode = 3;
+    throw err;
+  }
   workspaceUrl('https://docs.google.com/', authuser);
   if (share) shareRecipients(share, shareRole);
   const rendered = renderDocument(source);
@@ -157,8 +186,8 @@ export async function publishDocument({ title, source, folder, update, authuser,
       throw error;
     }
   };
-  const parent = folder ?? (update ? undefined : DEFAULT_FOLDER);
-  if (parent) {
+  const parent = isPrivate ? 'root' : (folder ?? (update ? undefined : DEFAULT_FOLDER));
+  if (parent && parent !== 'root') {
     const meta = await request(`${DRIVE}/${encodeURIComponent(parent)}?fields=mimeType,capabilities&supportsAllDrives=true`);
     if (meta.mimeType !== 'application/vnd.google-apps.folder' || !meta.capabilities?.canAddChildren) {
       throw new Error('指定フォルダに Doc を追加できません');
@@ -213,7 +242,16 @@ export async function publishDocument({ title, source, folder, update, authuser,
     const after = await request(`${DOCS}/${encodeURIComponent(id)}?includeTabsContent=true`);
     verified = verifyReadBack(rendered, after);
   }
-  return { id, url: workspaceUrl(`https://docs.google.com/document/d/${id}/edit`, authuser), ...verified };
+  if (isPrivate) {
+    const perms = await request(`${DRIVE}/${encodeURIComponent(id)}/permissions?supportsAllDrives=true&fields=permissions(id,role)`);
+    const nonOwner = (perms.permissions ?? []).filter(p => p.role !== 'owner');
+    if (nonOwner.length > 0) {
+      const err = new Error('owner 以外の権限が存在します');
+      err.exitCode = 4;
+      throw err;
+    }
+  }
+  return { id, url: workspaceUrl(`https://docs.google.com/document/d/${id}/edit`, authuser), ...verified, private: isPrivate };
 }
 
 export async function main(argv = process.argv.slice(2), dependencies = {}) {
@@ -222,11 +260,14 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     const args = parseArgs(argv);
     const result = await publishDocument({ ...args, source: readFileSync(args.file, 'utf8') }, { ...publishDependencies, stderr });
     stderr(result.verification === 'drive-text-export' ? `read-back: 本文一致（Drive export）/ HTML リンク ${result.linkCount} 件を設定` : `read-back: 本文一致 / リンク ${result.linkCount}/${result.linkCount} 件 OK`);
+    if (result.private) {
+      stderr('read-back: 共有先は owner のみ');
+    }
     stdout(`${args.authuser} で開いてください: ${result.url}`);
     return 0;
   } catch (error) {
     stderr(`gdoc-publish: ${error.message}`);
-    return 1;
+    return error.exitCode ?? 1;
   }
 }
 

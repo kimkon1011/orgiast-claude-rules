@@ -4,7 +4,7 @@ function Assert($Condition, $Message) { if (-not $Condition) { throw "FAIL: $Mes
 # Real CIM task constructors, in-memory scheduler injected as scriptblocks: never register or start a real task.
 $script:storedTask = $null
 $script:registrations = 0
-$get = { param($TaskName) $script:storedTask }
+$get = { param($TaskName) if ($TaskName -eq 'ClaudeNightlyReloadVSCode') { return $null }; $script:storedTask }
 $register = {
     param($TaskName, $InputObject)
     $script:registrations++
@@ -32,3 +32,13 @@ $failed = $false
 try { Invoke-Register } catch { $failed = $true }
 Assert ($failed -and $script:registrations -eq 4) 'query failure is not treated as absence'
 Write-Output 'PASS: nightly task registration (7 cases)'
+
+$script:legacy = [pscustomobject]@{ Settings = [pscustomobject]@{ Enabled = $true } }
+$script:disabled = 0
+$get = { param($TaskName) if ($TaskName -eq 'ClaudeNightlyReloadVSCode') { return $script:legacy }; $script:storedTask }
+$disable = { param($TaskName) $script:disabled++; $script:legacy.Settings.Enabled = $false }
+$result = Register-NightlyReloadTask -GetTask $get -RegisterTask $register -DisableTask $disable
+Assert ($result.changed -and $script:disabled -eq 1) 'legacy task disabled'
+$result = Register-NightlyReloadTask -GetTask $get -RegisterTask $register -DisableTask $disable
+Assert (-not $result.changed -and $script:disabled -eq 1) 'legacy disable is idempotent'
+Write-Output 'PASS: legacy task disabled, never deleted'

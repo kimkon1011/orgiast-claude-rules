@@ -31,6 +31,7 @@
     ".gitignore": { "reason": "git 管理用" },
     ".gitattributes": { "reason": "git 管理用" },
     ".codex-result-fleet-mail.md": { "reason": "Codex 実行結果の残骸（実行時参照なし）" },
+    "loop-iter1-msg.txt": { "reason": "autopilot loop の反復メッセージファイル。実行時参照なし" },
     "auto-progress-resume-*.json": { "reason": "保全されたセッション再開結果。PC固有の作業記録で配布先PCの実行時参照なし" },
     "auto-progress-resume-*-evidence.md": { "reason": "セッション再開結果の検証証跡。配布先PCの実行時参照なし" },
     "PROMPT-*.md": { "reason": "kim が他セッションへ貼る指示文。実行時参照なし" }

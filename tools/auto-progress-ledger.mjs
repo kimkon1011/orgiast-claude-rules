@@ -163,7 +163,7 @@ export function applyPromise(rows, record) {
     if (row.check) return Boolean(toAdd.check) && row.label === toAdd.label;
     return true;
   };
-  const next = rows.map((row) => (replaces(row) ? { ...row, status: 'superseded' } : row));
+  const next = rows.map((row) => (replaces(row) ? { ...row, supersededFromStatus: row.status, status: 'superseded' } : row));
   next.push(toAdd);
   return next;
 }

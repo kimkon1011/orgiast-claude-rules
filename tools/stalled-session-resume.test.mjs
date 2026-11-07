@@ -182,6 +182,24 @@ test('adapter forwards deadline/resume and requires progress evidence', async ()
   assert.equal(lane.outcome, 'no-executor'); assert.match(lane.reason, /payment_required/);
   assert.ok(buildClaudeHeadlessArgs({ repoCwd: '/fixture', historyCwd: '/fixture', resumeSessionId: 'abc' }).includes('--resume'));
 });
+test('execute sanitizes control characters and handles invalid JSON in result file', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'stalled-json-test-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const resultFile = path.join(dir, 'result.json');
+  const r = { sessionId: 'abc', cwd: dir, file: path.join(dir, 'transcript') };
+  const io = { executable: 'fixture', runChild: async () => ({ status: 'success' }) };
+
+  // Control characters stripped and successfully parsed
+  await fs.writeFile(resultFile, '{\x00"progressed":\x01 true, \x1F"evidence": "Fixed\x02 bug"}');
+  const res1 = await execute(r, { timeoutMs: 1000, resultFile }, io);
+  assert.equal(res1.outcome, 'progressed');
+  assert.equal(res1.reason, 'Fixed bug');
+
+  // Invalid JSON handled gracefully as no-progress
+  await fs.writeFile(resultFile, 'invalid json {');
+  const res2 = await execute(r, { timeoutMs: 1000, resultFile }, io);
+  assert.equal(res2.outcome, 'no-progress');
+});
 test('invalid CLI/env values rejected', () => {
   for (const args of [['--limit'], ['--limit', '-1'], ['--limit', '1.5'], ['--unknown']]) assert.throws(() => options(args, {}));
   assert.throws(() => options([], { STALLED_SESSION_TIMEOUT_MIN: 'NaN' }));

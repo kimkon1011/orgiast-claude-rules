@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, nativeWriteProbeArgs } from './lane-doctor.mjs';
+import { laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, needsNativeCodexProbe, nativeWriteProbeArgs } from './lane-doctor.mjs';
 import { classifyTaskKind } from './lib/task-kind.mjs';
 const now = Date.parse('2026-10-08T06:00:00Z');
 function fixture(t) {
@@ -204,6 +204,18 @@ test('Gemini billing notification includes official steps, account, outcome and 
   for (const expected of ['https://aistudio.google.com/billing','seisaku-team@orgiast.jp','TrackPlanner','個人 Gmail','シークレットウィンドウ','右上アバター','前払いクレジットが 0','Setup auto-reload（上限付き）','Available credits','Manage auto-reload','支払い方法・補充額・最低残高しきい値','monthly auto-charge limit','保存','0 より大きく','03:00','次セッション開始','gemini ✅','キー所有アカウントが別','Gemini まだ 402']) assert.ok(text.includes(expected), expected);
   assert.match(text,/\n根拠: https:\/\/ai.google.dev\/gemini-api\/docs\/billing$/);
 });
+test('needsNativeCodexProbe is win32-only and follows the WSL distro listing', () => {
+  // 非 win32 は常に false（WSL 経路があるので --allow-native は不要）。
+  assert.equal(needsNativeCodexProbe({ platform: 'linux', env: {}, spawn: () => { throw new Error('must not spawn'); } }), false);
+  // 注入値は実機を見ずに分岐を固定できる（テストを非決定的にしない）。
+  assert.equal(needsNativeCodexProbe({ platform: 'win32', env: { LANE_DOCTOR_WSL_PROBE: 'absent' } }), true);
+  assert.equal(needsNativeCodexProbe({ platform: 'win32', env: { LANE_DOCTOR_WSL_PROBE: 'present' } }), false);
+  // wsl -l -q の status!=0（WSL 無効）または distro 0 件は native 経路。
+  assert.equal(needsNativeCodexProbe({ platform: 'win32', env: {}, spawn: () => ({ status: 1, stdout: '' }) }), true);
+  assert.equal(needsNativeCodexProbe({ platform: 'win32', env: {}, spawn: () => ({ status: 0, stdout: '\u0000\r\n' }) }), true);
+  assert.equal(needsNativeCodexProbe({ platform: 'win32', env: {}, spawn: () => ({ status: 0, stdout: 'Ubuntu\r\n' }) }), false);
+});
+
 
 test('最新 probe 失敗は過去の成功で復活しない', t => {
   const h=fixture(t), stamp=new Date(now-4*86400000).toISOString();
@@ -327,4 +339,31 @@ test('WSL Codex recovery stays healthy despite eleven pre-login failures', async
   assert.equal(result.lanes.codex.alive, true);
   assert.equal(result.lanes.codex.reason, 'auth_ok:probe_ok');
   assert.equal(laneDoctorQuick({ ...options, now: now + 1000, save: false }).lanes.codex.alive, true);
+});
+
+test('codex dry-probe timeout falls through to full probe instead of probe_failed', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  const calls = [];
+  const result = await laneDoctorProbe({ home, now, platform: 'win32', providers: ['codex'],
+    spawnImpl: (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: 'fixture-token' } }) }),
+    listWsl: () => 'Ubuntu', probe: async (provider, options) => {
+      if (provider === 'codex') calls.push(options.dryRun === true);
+      // dry は15秒上限のタイムアウト(code 1)。本番 probe は残り予算で PONG を返す（2026-11-06 実測と同じ形）。
+      return provider === 'codex' && options.dryRun ? { code: 1, text: '' } : { code: 0, text: 'PONG' };
+    }, notify: async () => ({ delivered: 'test' }) });
+  assert.deepEqual(calls, [true, false]);
+  assert.equal(result.lanes.codex.alive, true);
+  assert.equal(result.lanes.codex.reason, 'auth_ok:probe_ok');
+});
+
+test('codex dry failure with real 401 still classifies oauth_consent', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  const result = await laneDoctorProbe({ home, now, platform: 'win32', providers: ['codex'],
+    spawnImpl: (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: 'fixture-token' } }) }),
+    listWsl: () => 'Ubuntu', probe: async (provider, options) => provider === 'codex' && options.dryRun ? { code: 1, text: '' } : { code: 1, text: 'HTTP 401 unauthorized' },
+    notify: async () => ({ delivered: 'test' }) });
+  assert.equal(result.lanes.codex.alive, false);
+  assert.equal(result.lanes.codex.reason, 'dead:oauth_consent');
 });

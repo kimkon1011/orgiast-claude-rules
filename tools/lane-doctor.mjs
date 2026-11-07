@@ -155,6 +155,20 @@ export function listWslDistros() {
   const r = spawnSync('wsl', ['-l', '-q'], { encoding: 'utf16le', windowsHide: true, timeout: 15000 });
   return r.status === 0 ? String(r.stdout || '').replace(/\0/g, '').trim() : null;
 }
+// win32 かつ WSL ディストリが 0 件の PC では codex-do の WSL 経路が使えない。この場合に
+// --allow-native を付けないと probe が必ず abort し、lane-health が ok にならない（§1.18.4）。
+// 実機の distro 有無でテストが非決定的にならないよう、codex-do と同じ流儀で env 注入できる。
+export function needsNativeCodexProbe({ platform = process.platform, env = process.env, spawn = spawnSync } = {}) {
+  if (platform !== 'win32') return false;
+  const fake = env.LANE_DOCTOR_WSL_PROBE;
+  if (fake) return fake === 'absent';
+  try {
+    const listed = spawn('wsl', ['-l', '-q'], { windowsHide: true, encoding: 'utf16le', timeout: 15000 });
+    if (listed.status !== 0) return true;
+    const distros = String(listed.stdout || '').split(/\r?\n/).map(x => x.replace(/\0/g, '').trim()).filter(Boolean);
+    return distros.length === 0;
+  } catch { return true; }
+}
 export function nativeWriteProbeArgs({ repo, cwd, timeoutMs, instruction }) {
   // --kind を明示しないと codex-do が investigate と判定し llm-ask へ流れ、書き込み不能でレーン死亡と誤判定する（2026-10-22 実測）。
   return [path.join(repo, 'tools/codex-do.mjs'), instruction, '--cwd', cwd, '--kind', 'implement', '--force-native', '--no-fallback', '--no-escalate', '--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))];
@@ -174,7 +188,7 @@ export async function runNativeWriteProbe({ home, timeoutMs }) {
 }
 export function runProbe(provider, { home, timeoutMs, dryRun = false } = {}) {
   const args = provider === 'codex'
-    ? [path.join(repo, 'tools/codex-do.mjs'), 'Reply with exactly: PONG. Do not modify any files.', '--cwd', repo, '--no-fallback', '--no-escalate', ...(dryRun ? ['--dry-run'] : ['--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))])]
+    ? [path.join(repo, 'tools/codex-do.mjs'), 'Reply with exactly: PONG. Do not modify any files.', '--cwd', repo, '--no-fallback', '--no-escalate', ...(needsNativeCodexProbe() ? ['--allow-native'] : []), ...(dryRun ? ['--dry-run'] : ['--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))])]
     : [path.join(repo, 'tools/llm-ask.mjs'), '--provider', provider, 'Reply with exactly: PONG', '--max', '10', '--no-fallback'];
   return new Promise(resolve => execFile(process.execPath, args, { cwd: repo, env: { ...process.env, ORGIAST_HOME: home }, timeout: timeoutMs, killSignal: 'SIGKILL', maxBuffer: 256 * 1024, windowsHide: true }, (e, stdout, stderr) => resolve({ code: e ? e.code || 1 : 0, text: redactAll(`${stdout}\n${stderr}`) })));
 }
@@ -223,6 +237,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
   const probeProviders = providers.length ? providers : [...PROVIDERS, ...OPTIONAL_PROVIDERS.filter(o => health.lanes[o])];
   const results = await Promise.all(probeProviders.map(async p => {
     if (health.lanes[p].reason === 'missing_key' || (p === 'codex' && !codexAuthStatusAny(home, { platform, spawnImpl }).login)) return [p, null];
+    let dryOk = true;
     if (p === 'codex') {
       if (platform === 'win32' && await listWsl() === '') {
         // 1回の起動失敗で即 down→kim 通知しない。一過性のスパウン失敗は短い再試行で吸収する（2026-11-07 実測: 06:57Z failure → 07:00Z same 経路で fixed。probeRetries=1 で合計2回実行）。
@@ -238,11 +253,13 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
         return [p, { ...result, nativeRepair: true }];
       }
       const dry = await probe(p, { home, timeoutMs: Math.min(15000, probeBudget), dryRun: true });
-      if (dry.code !== 0) return [p, dry];
+      dryOk = dry.code === 0;
       // 再利用は成功結果だけ。失敗を30分使い回すと直後に直ったレーンが停止のまま残る（2026-10-25 実測: 直接実行は PONG なのに probe_failed）。
-      if (previous.lanes?.codex?.alive && freshProbe(previous.lanes.codex.probedAt, now)) return [p, { cached: previous.lanes.codex }];
+      if (dryOk && previous.lanes?.codex?.alive && freshProbe(previous.lanes.codex.probedAt, now)) return [p, { cached: previous.lanes.codex }];
     }
-    return [p, { ...await probe(p, { home, timeoutMs: Math.max(1, probeBudget - (Date.now() - started)) }), ...(p === 'codex' ? { authOk: true } : {}) }];
+    // dry 失敗（コールド起動が15秒上限を超える等）で即 probe_failed にしない。残り予算の本番 probe で判定する
+    // （2026-11-06/07 連日再発: 直接実行は PONG・24h実績0失敗のレーンが dry タイムアウトで停止扱いになった）。
+    return [p, { ...await probe(p, { home, timeoutMs: Math.max(1, probeBudget - (Date.now() - started)) }), ...(p === 'codex' && dryOk ? { authOk: true } : {}) }];
   }));
   // probe subprocess が cooldown を更新することがあるため、完了後に再読込する。
   const cooldown = readJson(path.join(dir, 'provider-cooldown.json')), routing = readJson(path.join(dir, 'routing-overrides.json'));

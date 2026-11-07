@@ -24,8 +24,16 @@ function Get-NightlyTaskDefinition($Task) {
 function Register-NightlyReloadTask(
     # Enumerating (not -TaskName) distinguishes a missing task from a scheduler/access failure.
     [scriptblock]$GetTask = { param($TaskName) Get-ScheduledTask -TaskPath '\' | Where-Object TaskName -eq $TaskName },
+    [scriptblock]$DisableTask = { param($TaskName) Disable-ScheduledTask -TaskName $TaskName -TaskPath '\' | Out-Null },
     [scriptblock]$RegisterTask = { param($TaskName, $InputObject) Register-ScheduledTask -TaskName $TaskName -TaskPath '\' -InputObject $InputObject -Force | Out-Null }
 ) {
+    $legacyChanged = $false
+    $legacy = & $GetTask 'ClaudeNightlyReloadVSCode'
+    if ($legacy -and $legacy.Settings.Enabled) {
+        & $DisableTask 'ClaudeNightlyReloadVSCode'
+        if ((& $GetTask 'ClaudeNightlyReloadVSCode').Settings.Enabled) { throw 'Legacy task still enabled' }
+        $legacyChanged = $true
+    }
     $name = 'OrgiastNightlyReloadVSCode'
     $toolsDir = Resolve-RegisterToolsDir -Fallback $PSScriptRoot
     $scriptFile = Join-Path $toolsDir 'nightly-reload-vscode.ps1'
@@ -40,7 +48,7 @@ function Register-NightlyReloadTask(
     $desired = New-ScheduledTask -Action $action -Trigger $triggers -Principal $principal -Settings $settings
     $current = & $GetTask $name
     if ($current -and (Get-NightlyTaskDefinition $current) -ceq (Get-NightlyTaskDefinition $desired)) {
-        return @{ changed = $false; taskName = $name }
+        return @{ changed = $legacyChanged; taskName = $name }
     }
     & $RegisterTask $name $desired
     $actual = & $GetTask $name

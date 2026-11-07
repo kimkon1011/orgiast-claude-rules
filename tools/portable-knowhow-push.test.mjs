@@ -77,8 +77,11 @@ function fakeDrive(overrides = {}) {
     if (method === 'PATCH') {
       const meta = JSON.parse(opts.body || '{}');
       const entry = store.get(id);
+      if (entry && meta.appProperties) {
+        entry.appProperties = { ...(entry.appProperties || {}), ...meta.appProperties };
+      }
       if (entry && meta.properties) {
-        entry.appProperties = { ...(entry.appProperties || {}), ...meta.properties };
+        entry.properties = { ...(entry.properties || {}), ...meta.properties };
       }
       if (entry && meta.mimeType) entry.mimeType = meta.mimeType;
       return Response.json({ id });
@@ -368,4 +371,31 @@ test('同名ドキュメントが2つあれば古い方を使う', async () => {
   // old-doc が PATCH 更新された（bytes が変わっている）
   const oldDocEntry = drive.store.get('old-doc');
   assert.ok(oldDocEntry.bytes.toString().includes('updated'));
+});
+
+test('1回目で appProperties.pkSha が保存され、2回目は全件 unchanged でアップロードしない', async () => {
+  const drive = fakeDrive();
+  const files = [{ name: '01_カレンダー空き日程の出し方', content: '# テストノウハウ\n\n本文' }];
+
+  const res1 = await runPortableKnowhow({
+    files, token: 'test-token', apiFn: drive.apiFn, emit: () => {},
+  });
+  assert.equal(res1.updated, 2);
+  assert.equal(res1.unchanged, 0);
+
+  const docEntry = [...drive.store.values()].find(x => x.name === '01_カレンダー空き日程の出し方');
+  assert.ok(docEntry?.appProperties?.pkSha, 'appProperties.pkSha should be set');
+  const indexEntry = [...drive.store.values()].find(x => x.name === '00_目次・使い方（まずこれを読む）');
+  assert.ok(indexEntry?.appProperties?.pkSha, 'index appProperties.pkSha should be set');
+
+  const writeCountAfterRun1 = drive.writes.filter(w => w.method !== 'GET').length;
+
+  const res2 = await runPortableKnowhow({
+    files, token: 'test-token', apiFn: drive.apiFn, emit: () => {},
+  });
+  assert.equal(res2.updated, 0);
+  assert.equal(res2.unchanged, 2);
+
+  const writeCountAfterRun2 = drive.writes.filter(w => w.method !== 'GET').length;
+  assert.equal(writeCountAfterRun2, writeCountAfterRun1, '2nd run should not perform any writes');
 });

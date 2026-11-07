@@ -207,7 +207,7 @@ export async function runPortableKnowhow({ files, token, dryRun = false, emit = 
 
     await apiFn(token, `https://www.googleapis.com/drive/v3/files/${newId}?supportsAllDrives=true`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ properties: { pkSha: sha } }),
+      body: JSON.stringify({ appProperties: { pkSha: sha } }),
     });
 
     // 検証: pkSha が正しく書き込まれたことを確認
@@ -256,7 +256,7 @@ export async function runPortableKnowhow({ files, token, dryRun = false, emit = 
 
       await apiFn(token, `https://www.googleapis.com/drive/v3/files/${newIndexId}?supportsAllDrives=true`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ properties: { pkSha: indexSha } }),
+        body: JSON.stringify({ appProperties: { pkSha: indexSha } }),
       });
 
       // 検証: pkSha

@@ -22,13 +22,14 @@ function tailLines(file, maxLines, maxBytes) {
 }
 
 export function readTranscriptContext(transcriptPath, options = {}) {
-  if (!transcriptPath) return { assistantText: '', humanText: '', raw: '', reason: 'no-path', scannedLines: 0 };
+  if (!transcriptPath) return { assistantText: '', humanText: '', lastUserPrompt: '', raw: '', reason: 'no-path', scannedLines: 0 };
   let lines;
   try { lines = tailLines(transcriptPath, options.maxLines ?? DEFAULT_MAX_LINES, options.maxBytes ?? DEFAULT_MAX_BYTES); }
-  catch { return { assistantText: '', humanText: '', raw: '', reason: 'unreadable', scannedLines: 0 }; }
+  catch { return { assistantText: '', humanText: '', lastUserPrompt: '', raw: '', reason: 'unreadable', scannedLines: 0 }; }
   let assistantText = '';
   let humanText = '';
-  for (let index = lines.length - 1; index >= 0 && (!assistantText || !humanText); index--) {
+  let lastUserPrompt;
+  for (let index = lines.length - 1; index >= 0 && (!assistantText || !humanText || lastUserPrompt === undefined); index--) {
     let entry; try { entry = JSON.parse(lines[index]); } catch { continue; }
     if (entry?.isSidechain === true) continue;
     const content = entry?.message?.content;
@@ -36,12 +37,17 @@ export function readTranscriptContext(transcriptPath, options = {}) {
       ? content.filter((block) => block?.type === 'text' && typeof block.text === 'string').map((block) => block.text).join('\n')
       : typeof content === 'string' ? content : '';
     if (!assistantText && (entry?.type === 'assistant' || entry?.message?.role === 'assistant') && text.trim()) assistantText = text;
-    if (!humanText && entry?.type === 'user' && !(Array.isArray(content) && content.some((block) => block?.type === 'tool_result'))) {
+    if ((entry?.type === 'user' || entry?.message?.role === 'user') && !(Array.isArray(content) && content.some((block) => block?.type === 'tool_result'))) {
       const trimmed = text.trimStart();
-      if (trimmed && !MACHINE_USER_PREFIXES.some((prefix) => trimmed.startsWith(prefix))) humanText = text;
+      const machine = MACHINE_USER_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
+      if (!machine || trimmed.startsWith('[Image:')) {
+        // An image-only user turn must not inherit an older periodic prompt.
+        if (lastUserPrompt === undefined) lastUserPrompt = text;
+      }
+      if (!humanText && trimmed && !machine) humanText = text;
     }
   }
-  return { assistantText, humanText, raw: lines.join('\n'), reason: assistantText ? 'ok' : 'no-assistant-text', scannedLines: lines.length };
+  return { assistantText, humanText, lastUserPrompt: lastUserPrompt ?? '', raw: lines.join('\n'), reason: assistantText ? 'ok' : 'no-assistant-text', scannedLines: lines.length };
 }
 
 export function readAssistantText(transcriptPath, options = {}) {
@@ -82,6 +88,38 @@ const MACHINE_USER_PREFIXES = [
   '<task-notification', '<system-reminder', '<local-command-stdout', '[Image:',
   'Stop hook feedback:',
 ];
+
+function entryText(entry) {
+  const content = entry?.message?.content;
+  return Array.isArray(content)
+    ? content.filter(block => block?.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n')
+    : typeof content === 'string' ? content : '';
+}
+
+export function isRealHumanEntry(entry) {
+  if (entry?.isSidechain === true || entry?.isMeta === true || (entry?.type !== 'user' && entry?.message?.role !== 'user')) return false;
+  const content = entry?.message?.content;
+  if (Array.isArray(content) && content.some(block => block?.type === 'tool_result')) return false;
+  const text = entryText(entry).trimStart();
+  return !!text && !MACHINE_USER_PREFIXES.some(prefix => text.startsWith(prefix));
+}
+
+// Stop hook feedback is encoded as a user entry, but it does not start a new conversational
+// turn. Keep every assistant text since the last real user request so a retry can add only the
+// missing lines instead of repeating the preceding response.
+export function currentTurnAssistantTexts(raw) {
+  const entries = String(raw || '').split(/\r?\n/).flatMap(line => {
+    try { return [JSON.parse(line)]; } catch { return []; }
+  });
+  let start = 0;
+  entries.forEach((entry, index) => { if (isRealHumanEntry(entry)) start = index + 1; });
+  return entries.slice(start).filter(entry => entry?.isSidechain !== true && (entry?.type === 'assistant' || entry?.message?.role === 'assistant'))
+    .map(entryText).filter(text => text.trim());
+}
+
+export function currentTurnAssistantText(raw) {
+  return currentTurnAssistantTexts(raw).join('\n\n');
+}
 
 export function readLastHumanText(transcriptPath, options = {}) {
   if (!transcriptPath) return { text: '', reason: 'no-path', scannedLines: 0 };

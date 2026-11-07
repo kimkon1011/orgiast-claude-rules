@@ -3,7 +3,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
 import { readEnvValue } from './env-kv.mjs';
+import { maintainSession, failureToday, readReauthState } from './plaud-reauth-auto.mjs';
 import { isEntry } from './is-entry.mjs';
 
 export const REGION_BASES = Object.freeze({
@@ -146,11 +148,12 @@ export function shouldNotify(state, reason, now = Date.now(), intervalMs = 24 * 
 const CONSOLE_SNIPPET = "fetch('https://api-apne1.plaud.ai/auth/refresh-user-token',{method:'POST',credentials:'include',headers:{'content-type':'application/json'},body:'{}'}).then(r=>r.json()).then(j=>console.log('COPY:'+JSON.stringify({a:j.access_token,r:j.refresh_token})))";
 
 /** 取り直しが必要な時の通知本文。手順を本文に全部入れる(リンクを辿らせない)。 */
-export function renewalMessage(kind, daysLeft) {
+export function renewalMessage(kind, daysLeft, failure = failureToday(readReauthState())) {
+  if (!failure) return '';
   const head = kind === 'expired'
     ? '🚨 **Plaud→tl;dv の自動取り込みが停止しました**（接続トークンが失効）'
     : `⚠️ **Plaud→tl;dv の接続トークンが残り ${daysLeft} 日です**（切れると自動取り込みが止まります）`;
-  return [head, '',
+  return [head, `本日の自動再認証に失敗: ${failure}`, '',
     '復旧手順（1回だけ・2分）:',
     '1. https://web.plaud.ai を開く（ログイン済みの状態で）',
     '2. F12 → Console タブ',
@@ -167,12 +170,14 @@ export function renewalMessage(kind, daysLeft) {
  * 健全になったら消す。ここが実際の復旧作業をする場所でもある。
  */
 export function renewalNoticePath() {
-  return path.join(os.homedir(), '.claude', 'plaud-renewal-needed.md');
+  return path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'plaud-renewal-needed.md');
 }
 
 export function writeRenewalNotice(kind, daysLeft) {
   try {
-    fs.writeFileSync(renewalNoticePath(), renewalMessage(kind, daysLeft) + '\n', 'utf8');
+    const message = renewalMessage(kind, daysLeft);
+    if (!message) { clearRenewalNotice(); return; }
+    fs.writeFileSync(renewalNoticePath(), message + '\n', 'utf8');
   } catch { /* 通知は best-effort。本処理は止めない */ }
 }
 
@@ -182,7 +187,7 @@ export function clearRenewalNotice() {
 
 /** Discord へ送る。webhook が無ければ黙って諦める(通知が無いだけで本処理は止めない)。 */
 async function notifyDiscord(webhook, content, fetchImpl = fetch) {
-  if (!webhook) return false;
+  if (!webhook || !content) return false;
   try {
     const res = await fetchImpl(webhook, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content: content.slice(0, 1900) }) });
     return res.ok || res.status === 204;
@@ -496,7 +501,7 @@ async function tldvRequest(apiKey, endpoint, init = {}, fetchImpl = fetch) {
 }
 
 function bootstrapValues() {
-  const claudeDir = path.join(os.homedir(), '.claude');
+  const claudeDir = path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude');
   const plaudFile = path.join(claudeDir, 'plaud.env');
   return {
     apiKey: process.env.TLDV_API_KEY || readEnvValue(path.join(claudeDir, 'tldv.env'), 'TLDV_API_KEY'),
@@ -532,9 +537,6 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
     const loaded = readState(statePath, config.session);
     const state = loaded.state;
     if (loaded.corruptPath) log.warn(`壊れた state を ${loaded.corruptPath} に退避しました`);
-    if (!state.session.ut) {
-      console.error('PLAUD_UT がありません。web.plaud.ai にログインし、Cookie の pld_ut を ~/.claude/plaud.env に保存してください。'); return 2;
-    }
     // JWT の region クレームが最も確実な接続先。-302 リダイレクトを待たずに合わせる。
     if (!state.session.utExp) state.session.utExp = jwtExp(state.session.ut);
     const tokenRegion = regionFromToken(state.session.ut);
@@ -553,15 +555,14 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
         log.warn(`Plaud トークンの前倒し更新に失敗しました(次回再試行): ${error?.message || error}`);
       }
     }
-    // URT が切れると自力更新できず、ブラウザからの取り直しが必要になる。
-    // 黙って止まらないよう、余裕のあるうちから警告を出す。
-    const urtDaysLeft = state.session.urtExp ? (Number(state.session.urtExp) * 1000 - Date.now()) / 86400000 : 0;
-    if (state.session.urt && urtDaysLeft >= 7) clearRenewalNotice();
-    if (state.session.urt && urtDaysLeft > 0 && urtDaysLeft < 7) {
-      log.warn(`Plaud の更新トークンの残り ${Math.floor(urtDaysLeft)} 日。切れる前に web.plaud.ai から取り直しが必要です`);
-      writeRenewalNotice('warning', Math.floor(urtDaysLeft));
+    const failure = await maintainSession(state.session, persist, dependencies.maintenance);
+    const urtDaysLeft = (Number(state.session.urtExp || 0) * 1000 - Date.now()) / 86400000;
+    if (!failure) clearRenewalNotice();
+    else {
+      const kind = urtDaysLeft > 0 ? 'warning' : 'expired';
+      writeRenewalNotice(kind, Math.floor(urtDaysLeft));
       if (shouldNotify(state, 'renewal')) {
-        const sent = await notifyDiscord(config.webhook, renewalMessage('warning', Math.floor(urtDaysLeft)), fetchImpl);
+        const sent = await notifyDiscord(config.webhook, renewalMessage(kind, Math.floor(urtDaysLeft), failure), fetchImpl);
         if (sent) { state.notifiedAt.renewal = Date.now(); persist(); }
       }
     }
@@ -645,6 +646,7 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
     if (error?.status === 401) {
       console.error('Plaud 認証が失効しました。web.plaud.ai で取り直しが必要です。');
       // 15分ごとに無音で失敗し続けるのが最悪なので Discord に出す。
+      if (notifyCtx) await maintainSession(notifyCtx.state.session, notifyCtx.persist, { ...dependencies.maintenance, force: true });
       writeRenewalNotice('expired');
       if (notifyCtx && shouldNotify(notifyCtx.state, 'expired')) {
         const sent = await notifyDiscord(config.webhook, renewalMessage('expired'), dependencies.fetch || fetch);
@@ -657,4 +659,58 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
 
 if (isEntry(import.meta.url)) {
   process.exitCode = await run();
+}
+
+// Read-only hub adapter: reuse authentication, never import audio, notify, or
+// persist the existing Plaud session from this collector.
+export async function collectPlaudForHub({ home, since, until, cursor = {}, config, fetchImpl, state: sourceState = {} }) {
+  const file = path.join(home, '.claude', 'plaud-to-tldv-state.json');
+  let raw = {};
+  try { raw = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
+  catch (e) { if (e.code !== 'ENOENT') throw e; }
+  const envFile = path.join(home, '.claude', 'plaud.env');
+  const state = mergeState(raw);
+  state.session.ut ||= process.env.PLAUD_UT || readEnvValue(envFile, 'PLAUD_UT');
+  state.session.urt ||= process.env.PLAUD_URT || readEnvValue(envFile, 'PLAUD_URT');
+  if (!state.session.ut) throw new Error('Plaud session missing');
+  state.session.region = regionFromToken(state.session.ut) || state.session.region;
+  // Let the existing owner task refresh UT/URT; do not rotate its refresh token.
+  if (needsRefresh(jwtExp(state.session.ut))) throw new Error('Plaud session expired; owner plaud-to-tldv refresh required');
+  const persist = () => {};
+  const client = makePlaudClient(state, persist, { warn() {}, info() {} }, fetchImpl);
+  await ensureWorkspace(state, client, persist);
+  const skip = cursor.skip || 0, limit = config.maxPerSource;
+  const { body } = await client.call(`/file/simple/web?skip=${skip}&limit=${limit}&is_trash=2&sort_by=start_time&is_desc=true`, { headers: authHeaders(state.session.wt) }, 'hub recordings');
+  if (!Array.isArray(body.data_file_list)) throw new Error('Plaud invalid listing');
+  const rows = body.data_file_list, messages = [];
+  const end = cursor.end || until;
+  const pending = Object.values(sourceState.transcriptFailures || {}).sort((a, b) => (a.lastAttempt || '').localeCompare(b.lastAttempt || '')).slice(0, Math.max(1, Math.floor(limit / 2)));
+  const records = new Map(pending.map(r => [r.id, { id: r.id, filename: r.title, start_time: Date.parse(r.ts) / 1000 }]));
+  for (const r of rows) {
+    const ts = epochToIso(r.start_time);
+    if (ts && Date.parse(ts) >= since && Date.parse(ts) <= end) records.set(r.id, r);
+  }
+  for (const r of records.values()) {
+    const m = { source: 'plaud', id: r.id, ts: epochToIso(r.start_time), subject: r.filename || '', sender: 'Plaud', text: '', url: 'https://web.plaud.ai/' };
+    try {
+      // Only read existing artifacts. Never request transcription or audio import.
+      const { body: detail } = await client.call(`/file/detail/${encodeURIComponent(r.id)}`, { headers: authHeaders(state.session.wt) }, 'hub detail');
+      const link = detail.data?.content_list?.find(x => x.data_type === 'transaction' && x.data_link)?.data_link;
+      if (!link || !/^https:\/\//.test(link)) throw new Error('Plaud transcript not ready (artifact missing)');
+      const response = await fetchImpl(link); // Never attach bearer tokens to signed links.
+      if (!response.ok) throw new Error(`Plaud transcript download HTTP ${response.status}`);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      let raw;
+      try { raw = gunzipSync(buffer, { maxOutputLength: 10000000 }).toString('utf8'); } catch { raw = buffer.toString('utf8'); }
+      let decoded;
+      try { decoded = JSON.parse(raw); } catch { throw new Error('Plaud transcript invalid JSON'); }
+      const segments = Array.isArray(decoded) ? decoded : decoded && typeof decoded === 'object' ? Object.values(decoded) : [];
+      const usable = segments.filter(x => x && typeof (x.content || x.text) === 'string' && (x.content || x.text).trim());
+      if (!usable.length) throw new Error('Plaud transcript not ready or unsupported schema');
+      m.text = usable.map(x => `${x.speaker || x.original_speaker || ''}: ${x.content || x.text}`).join('\n');
+    } catch (e) { m.transcriptError = String(e.message).slice(0, 300); }
+    messages.push(m);
+  }
+  const more = rows.length === limit && skip + rows.length < Number(body.data_file_total || Infinity) && !rows.some(r => Date.parse(epochToIso(r.start_time)) < since);
+  return { messages, cursor: more ? { since, end, skip: skip + rows.length } : { since: end } };
 }

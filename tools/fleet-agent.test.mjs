@@ -4,7 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { collectStatus, main, processDirective, targetMatches } from './fleet-agent.mjs';
+import { collectStatus as realCollectStatus, main as realMain, processDirective, targetMatches, redactSecrets } from './fleet-agent.mjs';
+
+const collectStatus = options => realCollectStatus({ auditLaunch: () => false, ...options });
+const main = (argv, options) => realMain(argv, { platform: 'linux', auditLaunch: () => false, ...options });
 
 function tempHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-agent-'));
@@ -147,18 +150,18 @@ test('status は ConvertTo-Json の単一オブジェクトも扱う', () => {
   assert.match(result.text, /ClaudeOnlyFailure\(result=1\)/);
 });
 
-function memoryHome({ shared, indexed } = {}) {
+const memoryGeneration = '2026-10-28T10:35:45.982Z';
+
+function memoryHome({ shared = [], indexed = false, note = 'kim 本人が操作', kimOperated = true } = {}) {
   const home = tempHome();
-  const memoryDir = path.join(home, '.claude', 'projects', 'proj1', 'memory');
+  const memoryDir = path.join(home, '.claude', 'shared-memory');
   fs.mkdirSync(memoryDir, { recursive: true });
-  fs.writeFileSync(path.join(memoryDir, 'MEMORY.md'), indexed
-    ? '# MEMORY\n\n## ドメイン索引\n- [他PCからの共有知見](index/shared.md)\n'
-    : '# MEMORY\n\n## ドメイン索引\n- [別の索引](index/other.md)\n');
-  if (shared && shared.length) {
-    const sharedDir = path.join(memoryDir, 'shared');
-    fs.mkdirSync(sharedDir, { recursive: true });
-    for (const name of shared) fs.writeFileSync(path.join(sharedDir, name), `# ${name}\n`);
-  }
+  fs.writeFileSync(path.join(memoryDir, '.state.json'), JSON.stringify({
+    generatedAt: memoryGeneration, source: { pc: 'kim-PC' }, kimOperated,
+    files: Object.fromEntries(shared.map(name => [name, 'fixture-sha256'])),
+  }));
+  fs.writeFileSync(path.join(memoryDir, 'MEMORY.md'), note);
+  if (indexed) fs.writeFileSync(path.join(home, '.claude', 'CLAUDE.md'), '@~/.claude/shared-memory/MEMORY.md');
   return home;
 }
 
@@ -239,25 +242,57 @@ test('status は Codex JWT デコード失敗や email 欠落でもログイン�
   }
 });
 
-test('status は共有memoryの件数とMEMORY.md参照有無を表示する(届いている)', () => {
+test('status は共有memoryの件数・世代・kim注記・CLAUDE.md参照を表示する', () => {
   const home = memoryHome({ shared: ['a.md', 'b.md', 'c.md'], indexed: true });
   const result = statusForHome(home);
-  assert.match(result.text, /memory=共有3件 \/ MEMORY\.md参照=yes/);
-  assert.deepEqual(result.data.sharedMemory, { found: true, count: 3, indexed: true });
+  assert.equal(result.text.split('\n').find(line => line.startsWith('memory=')),
+    'memory=共有3件 / 世代=2026-10-28T10:35:45.982Z / user=kim注記=yes / CLAUDE.md参照=yes / knowledge=なし');
+  assert.deepEqual(result.data.sharedMemory, { found: true, count: 3, generatedAt: memoryGeneration, kimOperated: true, kimNote: true, referenced: true });
 });
 
-test('status は共有memoryが未着地・未参照だと0件/noを表示する(届いていない)', () => {
-  const home = memoryHome({ indexed: false });
-  const result = statusForHome(home);
-  assert.match(result.text, /memory=共有0件 \/ MEMORY\.md参照=no/);
-  assert.deepEqual(result.data.sharedMemory, { found: true, count: 0, indexed: false });
+test('status は別人注記をnoとして報告する', () => {
+  const result = statusForHome(memoryHome({ note: 'このPCの user は別人', kimOperated: false }));
+  assert.match(result.text, /user=kim注記=no \/ CLAUDE\.md参照=no/);
+  assert.equal(result.data.sharedMemory.kimOperated, false);
+  assert.equal(result.data.sharedMemory.kimNote, false);
 });
 
-test('status はmemoryディレクトリ自体が無いと memory=なし を表示する', () => {
+test('status はstate無しなら旧配布先があっても未受信を表示する', () => {
   const home = tempHome();
+  const oldDir = path.join(home, '.claude', 'projects', 'proj1', 'memory', 'shared');
+  fs.mkdirSync(oldDir, { recursive: true });
+  fs.writeFileSync(path.join(oldDir, 'a.md'), 'old memory');
   const result = statusForHome(home);
-  assert.match(result.text, /memory=なし/);
-  assert.deepEqual(result.data.sharedMemory, { found: false, count: 0, indexed: false });
+  assert.ok(result.text.includes('memory=未受信（~/.claude/shared-memory/.state.json なし）'));
+  assert.deepEqual(result.data.sharedMemory, { found: false, count: 0, generatedAt: null, kimOperated: null, kimNote: null, referenced: false });
+});
+
+test('status は注記なし・1200文字より後の注記を不明として報告する', () => {
+  for (const note of ['', 'x'.repeat(1200) + 'kim 本人が操作']) {
+    const home = memoryHome({ note });
+    const statePath = path.join(home, '.claude', 'shared-memory', '.state.json');
+    fs.writeFileSync(statePath, JSON.stringify({ generatedAt: memoryGeneration, files: {} }));
+    const result = statusForHome(home);
+    assert.match(result.text, /user=kim注記=不明/);
+    assert.equal(result.data.sharedMemory.kimNote, null);
+    assert.equal(result.data.sharedMemory.kimOperated, null);
+  }
+});
+
+test('status は環境変数の配布先を優先し壊れたstateは未受信とする', t => {
+  const home = memoryHome({ shared: ['default.md'] });
+  const other = memoryHome({ shared: ['a.md', 'b.md'], indexed: true });
+  const dir = path.join(other, '.claude', 'shared-memory');
+  const previous = process.env.ORGIAST_SHARED_MEMORY_DIR;
+  t.after(() => {
+    if (previous === undefined) delete process.env.ORGIAST_SHARED_MEMORY_DIR;
+    else process.env.ORGIAST_SHARED_MEMORY_DIR = previous;
+  });
+  process.env.ORGIAST_SHARED_MEMORY_DIR = dir;
+  assert.equal(statusForHome(home).data.sharedMemory.count, 2);
+  assert.equal(statusForHome(home).data.sharedMemory.referenced, false);
+  fs.writeFileSync(path.join(dir, '.state.json'), '{broken');
+  assert.equal(statusForHome(home).data.sharedMemory.found, false);
 });
 
 test('status はmemory行を追加しても大量の夜間ジョブ失敗込みで1800字以内に収まる(予算回帰)', () => {
@@ -273,7 +308,7 @@ test('status はmemory行を追加しても大量の夜間ジョブ失敗込み�
   };
   const result = collectStatus({ home, repo: process.cwd(), label: 'kim-PC', hostname: 'DESKTOP-2D0R4LI', run, platform: 'win32' });
   assert.ok(result.text.length <= 1800, `length=${result.text.length}`);
-  assert.match(result.text, /memory=共有250件 \/ MEMORY\.md参照=yes/);
+  assert.ok(result.text.includes(`memory=共有250件 / 世代=${memoryGeneration} / user=kim注記=yes / CLAUDE.md参照=yes`));
   assert.match(result.text, /codex=codex@example.com \/ plan=prolite/);
   assert.match(result.text, /…\(他\d+件を省略\)/);
 });
@@ -346,4 +381,34 @@ test('processDirective は解決済みの claude 実行ファイルで起動す�
   assert.equal(result.action, 'prompt');
   assert.equal(invocation.exe, 'C:/resolved/claude.exe');
   assert.equal(resolved.length, 1, '解決は spawn の直前に1回だけ');
+});
+
+test('redactSecrets preserves missing environment diagnostics and redacts assigned or spaced secrets', () => {
+  assert.equal(redactSecrets('process.env.EXTERNAL_API_TOKEN not set'), 'process.env.EXTERNAL_API_TOKEN not set');
+  for (const [input, secret] of [['GITHUB_TOKEN=ghp_abcdef123', 'ghp_abcdef123'], ['token abc123xyz', 'abc123xyz'], ['api_key: sk-xxx', 'sk-xxx']]) {
+    assert.ok(!redactSecrets(input).includes(secret));
+    assert.match(redactSecrets(input), /\[REDACTED\]/);
+  }
+});
+
+test('fleet status invokes daily unattended audit after task measurement', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-audit-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  let measured = false, launched;
+  collectStatus({ home, repo: process.cwd(), label: 'PC', hostname: 'host', platform: 'win32',
+    run: (exe) => { if (exe === 'powershell') measured = true; return { status: 0, stdout: '[]' }; },
+    auditLaunch: options => { assert.equal(measured, true); launched = options; }
+  });
+  assert.equal(launched.intervalHours, 24); assert.equal(launched.home, home);
+});
+
+test('headless fleet poll audits even when hub fetch fails; dry-run does not launch', async t => {
+  const home = tempHome(); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const old = process.env.ORGIAST_HOME; process.env.ORGIAST_HOME = home;
+  t.after(() => { if (old === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = old; });
+  const calls = [];
+  const dependencies = { platform: 'win32', run: () => ({ status: 0, stdout: '[]' }),
+    fetch: async () => { throw Error('offline'); }, auditLaunch: options => calls.push(options) };
+  await main([], dependencies); await main(['--dry-run'], dependencies);
+  assert.equal(calls.length, 1); assert.equal(calls[0].intervalHours, 24);
 });

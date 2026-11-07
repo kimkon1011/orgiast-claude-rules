@@ -1,3 +1,4 @@
+import { readHookSettings, copyDispatchRegistration } from './fixtures/read-hook-settings.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -46,9 +47,15 @@ test('ドメインは完全一致で照合する', () => {
 });
 test('全対象操作と番号付きアカウントを判定する', () => {
   for (const action of GMAIL_WRITE_ACTIONS) {
-    for (const account of ['', '_2', '_12']) assert.equal(judge(hook({ bcc: 'keiri.orgiast@gmail.com' }, action, account), ledger).decision, 'block');
+    for (const account of ['', '_2', '_12']) assert.equal(judge(hook({ bcc: 'keiri.orgiast@gmail.com' }, action, account), ledger).decision, action === 'forward' ? 'pass' : 'block');
   }
   assert.equal(judge(hook({ to: 'keiri.orgiast@gmail.com' }, 'read_message'), ledger).decision, 'pass');
+});
+test('MCP forward の内部宛は pass、create_draft と reply は block のまま', () => {
+  assert.equal(judge(hook({ to: 'staff@orgiast.jp' }, 'forward'), ledger).decision, 'pass');
+  assert.equal(judge(hook({ to: 'staff@orgiast.jp' }, 'create_draft'), ledger).decision, 'block');
+  assert.equal(judge(hook({ to: 'staff@orgiast.jp' }, 'reply'), ledger).decision, 'block');
+  assert.match(judge(hook({ to: 'staff@orgiast.jp' }, 'reply'), ledger).reason, /gmail-draft\.mjs --forward/u);
 });
 test('guard の対象 tool 名と hook matcher が一致する', () => {
   const matcher = new RegExp(`^(?:${HOOK_MATCHER})$`);
@@ -104,19 +111,20 @@ test('既存配布処理は指定 matcher・timeout で登録し、再実行で�
   const repo = path.join(home, 'repo');
   fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
   fs.copyFileSync(script, path.join(repo, 'tools', path.basename(script)));
+  copyDispatchRegistration(repo);
   const settingsFile = path.join(home, '.claude', 'settings.json');
   const existing = { matcher: 'Example', hooks: [{ type: 'command', command: 'node existing.mjs' }] };
   fs.writeFileSync(settingsFile, JSON.stringify({ custom: true, hooks: { PreToolUse: [existing] } }));
   for (let i = 0; i < 2; i++) {
     const result = spawnSync(process.execPath, [fileURLToPath(new URL('./register-hooks.mjs', import.meta.url)), '--hooks-only'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo }, timeout: 5000 });
     assert.equal(result.status, 0, result.stderr);
-    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    const settings = readHookSettings(settingsFile);
     assert.equal(settings.custom, true);
     assert.deepEqual(settings.hooks.PreToolUse[0], existing);
     const groups = settings.hooks.PreToolUse.filter((group) => group.hooks.some((h) => h.command.includes('internal-recipient-gmail-guard')));
     assert.equal(groups.length, 1);
     assert.equal(groups[0].matcher, HOOK_MATCHER);
-    assert.deepEqual(groups[0].hooks, [{ type: 'command', command: `node "${path.join(repo, 'tools', path.basename(script))}"`, timeout: 5 }]);
+    assert.deepEqual(groups[0].hooks, [{ type: 'command', command: `node "${path.join(repo, 'tools', 'gate-hook-runner.mjs')}" "${path.join(repo, 'tools', path.basename(script))}"`, timeout: 15 }]);
   }
 });
 test('既存の古い matcher を重複なしで昇格し、再実行しても変わらない', (t) => {
@@ -124,6 +132,7 @@ test('既存の古い matcher を重複なしで昇格し、再実行しても�
   const repo = path.join(home, 'repo');
   fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
   fs.copyFileSync(script, path.join(repo, 'tools', path.basename(script)));
+  copyDispatchRegistration(repo);
   const settingsFile = path.join(home, '.claude', 'settings.json');
   const oldMatcher = 'mcp__claude_ai_Gmail__create_draft|mcp__claude_ai_Gmail__send_message|mcp__claude_ai_Gmail__update_draft|mcp__claude_ai_Gmail__reply|mcp__claude_ai_Gmail__forward|mcp__claude_ai_Gmail_2__create_draft|mcp__claude_ai_Gmail_2__send_message';
   const command = `node "${path.join(repo, 'tools', path.basename(script))}"`;
@@ -133,14 +142,14 @@ test('既存の古い matcher を重複なしで昇格し、再実行しても�
   const execute = () => spawnSync(process.execPath, [register, '--hooks-only'], { encoding: 'utf8', env, timeout: 5000 });
   const first = execute();
   assert.equal(first.status, 0, first.stderr);
-  const promoted = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const promoted = readHookSettings(settingsFile);
   const groups = promoted.hooks.PreToolUse.filter((group) => group.hooks.some((item) => item.command.includes('internal-recipient-gmail-guard')));
   assert.equal(groups.length, 1);
   assert.equal(groups[0].matcher, HOOK_MATCHER);
   const serialized = JSON.stringify(promoted);
   const second = execute();
   assert.equal(second.status, 0, second.stderr);
-  assert.equal(JSON.stringify(JSON.parse(fs.readFileSync(settingsFile, 'utf8'))), serialized);
+  assert.equal(JSON.stringify(readHookSettings(settingsFile)), serialized);
   // このrepoにはguard1本しか無い=他hookは全てskip。無言skip廃止により
   // 「変更なし」単独の正常表示にはならず、[注意]とskip行が出る(2026-09-14 実害の再発防止)。
   assert.match(second.stdout, /ただし \d+ 本は repo に無く未登録/);
@@ -150,6 +159,34 @@ test('既存の古い matcher を重複なしで昇格し、再実行しても�
 
 // --- GitHub @メンション（gh の書き込み系を Bash/PowerShell 経由で叩く経路） ---
 const shellHook = (command, tool = 'Bash') => ({ tool_name: tool, tool_input: { command } });
+
+// --- Gmail REST API（Bash/PowerShell 経由の ad-hoc 書き込み） ---
+test('curl POST drafts の内部アドレスを拒否する', () => {
+  const command = `curl -s -X POST https://gmail.googleapis.com/gmail/v1/users/me/drafts -d '{"message":{"raw":"To: keiri.orgiast@gmail.com"}}'`;
+  const result = judgeBash(shellHook(command), ledger);
+  assert.equal(result.decision, 'block');
+  assert.deepEqual(result.internal, ['keiri.orgiast@gmail.com']);
+  assert.match(result.reason, /\[INTERNAL-RECIPIENT\].*台帳: ~\/\.claude\/internal-recipients\.json$/);
+});
+test('curl POST drafts の外部アドレスは実プロセスでも無出力で通す', (t) => {
+  const home = homeFor(t);
+  const input = shellHook(`curl -X POST https://gmail.googleapis.com/gmail/v1/users/me/drafts -d 'To: customer@example.com'`);
+  assert.equal(judgeBash(input, ledger).decision, 'pass');
+  const result = run(input, home);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, '');
+  assert.equal(result.stderr, '');
+});
+test('GET drafts の読み取りは通す', () => {
+  assert.equal(judgeBash(shellHook('curl https://gmail.googleapis.com/gmail/v1/users/me/drafts/abc123'), ledger).decision, 'pass');
+});
+test('node fetch messages/send の内部アドレスを拒否する', () => {
+  const command = `node -e 'fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {body:"to=keiri.orgiast@gmail.com"})'`;
+  assert.equal(judgeBash(shellHook(command), ledger).decision, 'block');
+});
+test('Gmail endpoint の無い Bash は内部アドレス文字列だけでは拒否しない', () => {
+  assert.equal(judgeBash(shellHook('echo keiri.orgiast@gmail.com'), ledger).decision, 'pass');
+});
 
 test('gh pr comment の内部ハンドル @メンションを拒否する', () => {
   const result = judgeBash(shellHook("gh pr comment 529 --body 'LGTM @kimkon1011 確認お願いします'"), ledger);

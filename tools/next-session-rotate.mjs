@@ -16,6 +16,7 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
   let date = '';
   let cwd = '';
   let active = false;
+  let purposeSection = false;
   let current;
   let fence = false;
   const flush = () => { if (current) items.push(current); current = undefined; };
@@ -37,13 +38,19 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
       flush();
       active = heading[1] === '##'
         && /^##\s+(?:残TODO|次の1目的|未決|朝バッチ取り込み|🔁)/.test(line);
+      // `## 次の1目的` の本文は目的の説明であって TODO ではない。2026-10-25 実測:
+      // notify-kim が追記したブロックの目的文「通知の原因調査と修復」が自由文フォールバックで
+      // 項目化され、内容の無い TODO として残TODOへ入り、情報の無い自動セッションを1回消費した
+      // (next-session.md の「12. 通知の原因調査と修復」が実物)。目的節では明示タスクだけを拾い、
+      // 素の散文は項目化しない。番号なしの散文項目を受けていたのは旧形式の残TODOのための規則。
+      purposeSection = /^##[ \t]+次の1目的(?=[ \t（(]|$)/.test(line);
       continue;
     }
     if (!active) continue;
     const task = line.match(/^(?:\d+[.)、]|[-*](?:\s+\[[ xX]\])?)\s+(.+)/);
     if (task) { flush(); current = { lines: [line], date, cwd }; }
     else if (current && (/^\s+\S/.test(line) || !line.trim())) current.lines.push(line);
-    else if (line.trim() && !/^(?:<!--|---|>)/.test(line)) { flush(); current = { lines: [line], date, cwd }; }
+    else if (line.trim() && !purposeSection && !/^(?:<!--|---|>)/.test(line)) { flush(); current = { lines: [line], date, cwd }; }
   }
   flush();
   const stats = { completed: 0, duplicate: 0, old: 0, context: 0, pending: 0, overflow: 0, stale: 0 };

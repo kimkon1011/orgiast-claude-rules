@@ -144,12 +144,23 @@ test('dry-run deploy/verify writes nothing and invokes neither process nor netwo
 });
 test('failed deployment or verification does not save successful state', async () => {
   for (const failure of ['deploy', 'verify']) {
-    const f = fixture();
-    await assert.rejects(publishMemories({ home: f.home, keyserveRepo: f.keyserveRepo, deploy: true, verify: true, platform: 'linux', emit: () => {},
-      spawnSyncImpl: () => ({ status: failure === 'deploy' ? 1 : 0, stdout: 'https://deployment.example.invalid' }),
-      fetchImpl: async () => new Response(JSON.stringify({ version: 2, generatedAt: 'wrong' })) }), /NG:/);
+    const f = fixture(); let spawns = 0, fetches = 0;
+    await assert.rejects(publishMemories({ home: f.home, keyserveRepo: f.keyserveRepo, deploy: true, verify: true, platform: 'linux', emit: () => {}, retryDelayMs: 0,
+      spawnSyncImpl: () => { spawns++; return { status: failure === 'deploy' ? 1 : 0, stdout: 'https://deployment.example.invalid' }; },
+      fetchImpl: async () => { fetches++; return new Response(JSON.stringify({ version: 2, generatedAt: 'wrong' })); } }), /NG:/);
     assert.equal(fs.existsSync(path.join(f.home, '.claude/memory-publish-state.json')), false);
+    assert.deepEqual([spawns, fetches], failure === 'deploy' ? [3, 0] : [1, 3]);
   }
+});
+test('transient deploy timeout and verify failure recover within the retry budget', async () => {
+  const f = fixture(); const logs = []; let spawns = 0, fetches = 0;
+  const result = await publishMemories({ home: f.home, keyserveRepo: f.keyserveRepo, env: { ORGIAST_KEYSERVE_PC: 'publisher' }, deploy: true, verify: true, platform: 'linux', retryDelayMs: 0, emit: line => logs.push(line),
+    spawnSyncImpl: () => ++spawns === 1 ? { error: { code: 'ETIMEDOUT' } } : { status: 0, stdout: 'https://deployment.example.invalid' },
+    fetchImpl: async () => ++fetches === 1 ? Promise.reject(new Error('The operation was aborted due to timeout'))
+      : new Response(JSON.stringify(loadGenerated(f.keyserveRepo).bundle)) });
+  assert.equal(result.deploy, 'yes'); assert.deepEqual([spawns, fetches], [2, 2]);
+  assert.match(logs.join('\n'), /deploy 再試行 1\/2: NG:vercel deploy failed \(ETIMEDOUT\)/);
+  assert.equal(fs.existsSync(path.join(f.home, '.claude/memory-publish-state.json')), true);
 });
 
 test('nightly CLI deploy skips PCs other than kim-PC without any writes', async () => {

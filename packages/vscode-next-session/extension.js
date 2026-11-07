@@ -4,10 +4,12 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   readConfig, createOwnershipLease, createPool, isWaitingTab, decideRefresh,
-  readRefreshConfig, readLastRefreshAt, inRefreshHours,
+  readRefreshConfig, readLastRefreshAt, inRefreshHours, isWorktreeFolder, decideWorktreeCleanup,
 } = require('./mobile-pool');
 const { resolveClaudeShellPath } = require('./shell-path');
 const { decideAction, orderMobileOpenMethods } = require('./route');
+
+const { readRows, createToolRunner, createArchiveWatcher } = require('./archive-tabs');
 
 const PROBE_TEXT = 'ORGIAST_NEXT_SESSION_PROBE_OK';
 
@@ -77,6 +79,7 @@ const mobileHome = process.env.ORGIAST_HOME || os.homedir();
 const mobileLease = createOwnershipLease();
 let mobileTarget = 1;
 let mobileEnabled = false;
+let worktreeWindow = false; // workspaceFolders が全て git worktree のウィンドウ（待機タブを担わない）
 let lastGoodMethod;
 let lastLoggedState = '';
 const EXTERNAL_OPEN_URI = 'vscode://Anthropic.claude-code/open';
@@ -100,6 +103,7 @@ function syncTabTimes(now = Date.now()) {
 }
 // リフレッシュ判定（ownership lease を持つウィンドウだけ）。force=true は URI の refresh=1。
 async function refreshWaitingTab({ force = false } = {}) {
+  if (worktreeWindow) return false; // worktree ウィンドウはリーズを取らない
   if (!mobileEnabled || !await mobileLease.acquire()) return false;
   const now = Date.now();
   const current = syncTabTimes(now);
@@ -164,6 +168,7 @@ const pool = createPool({
   open: openMobileTab,
 });
 async function ensureMobileTabs({ count = readConfig(mobileHome, process.env, vscodeMobileTabs()) } = {}) {
+  if (worktreeWindow) return; // worktree ウィンドウは補充しない（通常ウィンドウの 5 秒タイマーが担う）
   mobileTarget = count;
   mobileEnabled = true;
   return pool.ensure(count);
@@ -214,10 +219,43 @@ function activate(context) {
   });
   context.subscriptions.push(handler);
 
+  const archiveWatcher = createArchiveWatcher({
+    tabs: claudeTabs, close: tab => vscode.window.tabGroups.close(tab),
+    read: () => readRows(path.join(mobileHome, '.claude')),
+    run: createToolRunner(mobileHome, log), log,
+  });
+  const archiveTimer = setInterval(() => void archiveWatcher.check(), 30000);
+  archiveTimer?.unref?.();
+  context.subscriptions.push({ dispose() { clearInterval(archiveTimer); archiveWatcher.dispose(); } });
+  const folders = vscode.workspace.workspaceFolders || [];
+  worktreeWindow = folders.length > 0 && folders.every((folder) => isWorktreeFolder(folder.uri?.fsPath));
+  if (worktreeWindow) {
+    // git worktree 専用ウィンドウは待機タブのリーズ・補充を担わない。過去にこのウィンドウが
+    // 作った未使用待機タブ（ラベル 'Claude Code' で非アクティブ）は閉じて通常ウィンドウに任せる。
+    // 会話が始まったタブ（ラベルが変わった・アクティブ）は絶対に閉じない。
+    syncTabTimes();
+    const cleanup = (startup) => {
+      if (!vscode.window.tabGroups.close) return;
+      const current = syncTabTimes();
+      const decision = decideWorktreeCleanup({
+        tabs: current.map((tab) => ({ label: String(tab.label), appearedAt: tabAppearedAt.get(tab), isActive: Boolean(tab.isActive), tab })),
+        startup,
+      });
+      if (!decision) return;
+      log(`mobile worktree cleanup closed=${decision.tab.label} startup=${startup}`);
+      vscode.window.tabGroups.close(decision.tab).catch((error) => log(`mobile worktree cleanup failed: ${error instanceof Error ? error.message : String(error)}`));
+    };
+    cleanup(true);
+    const cleanupTimer = setInterval(() => cleanup(false), 60000);
+    cleanupTimer?.unref?.();
+    context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(event => { archiveWatcher.change(event); syncTabTimes(); cleanup(false); }));
+    context.subscriptions.push({ dispose() { clearInterval(cleanupTimer); } });
+    return;
+  }
   const refill = () => {
     if (mobileEnabled) pool.ensure(mobileTarget).catch((error) => log(`mobile refill failed: ${error.message}`));
   };
-  context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(() => { syncTabTimes(); refill(); }));
+  context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(event => { archiveWatcher.change(event); syncTabTimes(); refill(); }));
   const timer = setInterval(refill, 5000);
   // 起動時に既存タブの出現時刻を初期化し、以後 opened は onDidChangeTabs 経由の sync で記録する。
   syncTabTimes();

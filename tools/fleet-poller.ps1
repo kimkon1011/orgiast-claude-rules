@@ -19,6 +19,40 @@ if ($PSScriptRoot) { $repoCandidates += (Split-Path -Parent $PSScriptRoot) }
 $repoCandidates += @("$H\orgiast-claude-rules", "$H\Downloads\orgiast-claude-rules")
 $repo = @($repoCandidates | Select-Object -Unique) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
+# Existing LINE receiver hosts also acquire new tasks without reinstallation.
+try {
+  $scheduleInstaller = Join-Path $repo 'tools\register-schedule-sync-task.ps1'
+  if ($repo -and (Test-Path -LiteralPath $scheduleInstaller)) {
+    if ($Dry) { DrySkip 'register-schedule-sync-task.ps1 -Ensure (LINE receiver host only)' }
+    else {
+      & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $scheduleInstaller -Ensure
+      if ($LASTEXITCODE -ne 0) { throw "register-schedule-sync-task.ps1 exit $LASTEXITCODE" }
+    }
+  }
+} catch { Write-Warning ("schedule-sync self-repair failed: " + $_.Exception.Message) }
+
+try {
+  $commsHubInstaller = Join-Path $repo 'tools\register-comms-hub-sync.ps1'
+  if ($repo -and (Test-Path -LiteralPath $commsHubInstaller)) {
+    if ($Dry) { DrySkip 'register-comms-hub-sync.ps1 -Ensure (DWD key host only)' }
+    else {
+      & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $commsHubInstaller -Ensure
+      if ($LASTEXITCODE -ne 0) { throw "register-comms-hub-sync.ps1 exit $LASTEXITCODE" }
+    }
+  }
+} catch { Write-Warning ("comms-hub-sync self-repair failed: " + $_.Exception.Message) }
+
+try {
+  $daytripInstaller = Join-Path $repo 'tools\register-daytrip-detect-task.ps1'
+  if ($repo -and (Test-Path -LiteralPath $daytripInstaller)) {
+    if ($Dry) { DrySkip 'register-daytrip-detect-task.ps1 -Ensure (LINE receiver host only)' }
+    else {
+      & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $daytripInstaller -Ensure
+      if ($LASTEXITCODE -ne 0) { throw "register-daytrip-detect-task.ps1 exit $LASTEXITCODE" }
+    }
+  }
+} catch { Write-Warning ("daytrip-detect self-repair failed: " + $_.Exception.Message) }
+
 # 自己修復: 対話セッションのGUI監視を既存PCにも導入する。
 try {
   $dialogInstaller = Join-Path $repo 'tools\register-stuck-dialog-task.mjs'
@@ -63,6 +97,18 @@ try {
     [IO.File]::AppendAllText($fleetLog, $line + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
   } catch {}
 }
+
+# Existing controller PCs also register the inbound expectation patrol without reinstalling.
+try {
+  $fleetChaseInstaller = Join-Path $repo 'tools\register-fleet-chase.mjs'
+  if ($repo -and (Test-Path -LiteralPath $fleetChaseInstaller)) {
+    if ($Dry) { DrySkip 'register-fleet-chase.mjs --ensure (kim-PC only)' }
+    else {
+      & $(if (($fleetChaseNode = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $fleetChaseNode } else { "$env:ProgramFiles\nodejs\node.exe" }) $fleetChaseInstaller '--ensure'
+      if ($LASTEXITCODE -ne 0) { throw "fleet-chase registration exit $LASTEXITCODE" }
+    }
+  }
+} catch { Write-Warning ("fleet-chase self-repair failed: " + $_.Exception.Message) }
 
 # Refresh auto-progress tasks daily so existing PCs receive schedule changes too.
 try {

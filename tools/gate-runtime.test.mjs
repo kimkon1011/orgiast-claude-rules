@@ -1,3 +1,4 @@
+import { readHookSettings } from './fixtures/read-hook-settings.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -65,7 +66,7 @@ test('new and existing registration migrate to wrapper idempotently, unrelated h
   if(existing) fs.writeFileSync(file,JSON.stringify({hooks:{PreToolUse:[{matcher:'Bash|PowerShell',hooks:[{type:'command',command:'node "C:/old/tools/feedback-form-gate.mjs"',timeout:10}]}]}}));
   const run=()=>spawnSync(process.execPath,[path.join(toolsDir,'register-hooks.mjs'),'--hooks-only'],{env:{...process.env,ORGIAST_HOME:home,ORGIAST_REPO:repoDir},encoding:'utf8'});
   assert.equal(run().status,0);const before=fs.readFileSync(file,'utf8');assert.equal(run().status,0);assert.equal(fs.readFileSync(file,'utf8'),before);
-  const settings=JSON.parse(before);const hook=settings.hooks.PreToolUse.flatMap(g=>g.hooks).find(h=>h.command.includes('feedback-form-gate.mjs'));
+  const settings=readHookSettings(file);const hook=settings.hooks.PreToolUse.flatMap(g=>g.hooks).find(h=>h.command.includes('feedback-form-gate.mjs'));
   assert.match(hook.command,/gate-hook-runner\.mjs/);assert.ok(hook.command.includes(toolsDir));
  }
  const custom={hooks:{Stop:[{hooks:[{type:'command',command:'node "/unrelated/custom.mjs"'}]}]}};
@@ -97,10 +98,13 @@ test('real wrapper retries SessionStart key client once, preserves env keys, and
  assert.equal(result.status,0,result.err);assert.equal(requests,1);assert.equal(result.out,'');assert.doesNotMatch(result.err,/mock-value|test-secret/);
  assert.match(fs.readFileSync(path.join(home,'.claude/example.env'),'utf8'),/LOCAL_ONLY=keep\nKEY=mock-value/);
 });
-test('fleet notification uses the already distributed cost webhook without a DM token',async t=>{
- const {notifyKim}=await import('./notify-kim.mjs');const home=temp(t);fs.mkdirSync(path.join(home,'.claude'),{recursive:true});fs.writeFileSync(path.join(home,'.claude/cost-reporter.env'),'DISCORD_COST_WEBHOOK=https://example.invalid/mock-only\n');
- let sent=0;const result=await notifyKim('gate status',{home,userId:'',token:'',fleetFallback:true,fetchImpl:async(url,options)=>{sent++;assert.equal(url,'https://example.invalid/mock-only');assert.equal(JSON.parse(options.body).content,'gate status');return {ok:true};}});
- assert.equal(sent,1);assert.equal(result.delivered,'webhook');
+test('旧許可カテゴリとcost webhookがあってもkim宛報告は台帳だけに保存する',async t=>{
+ const {notifyKim}=await import('./notify-kim.mjs');const {listItems}=await import('./kim-inbox.mjs');
+ const home=temp(t);fs.mkdirSync(path.join(home,'.claude'),{recursive:true});
+ fs.writeFileSync(path.join(home,'.claude/cost-reporter.env'),'REPORTER_LABEL=kim-PC\nDISCORD_COST_WEBHOOK=https://example.invalid/mock-only\n');
+ let sent=0;const result=await notifyKim('gate status',{home,userId:'',token:'',plainJa:false,allowlist:[{category:'test',pattern:'.'}],fleetFallback:true,fetchImpl:async()=>{sent++;assert.fail('kim Discord transport forbidden');}});
+ assert.equal(sent,0);assert.equal(result.delivered,'session-inbox');
+ const items=listItems(home);assert.equal(items.length,1);assert.equal(items[0].id,result.id);assert.equal(items[0].text,'gate status');
 });
 test('Stop aggregate applies warning policy to each child and keeps its reason visible',async t=>{
  const {run}=await import('./stop-gate-runner.mjs');const {discoverGates}=await import('./gate-contracts.mjs');
@@ -109,11 +113,16 @@ test('Stop aggregate applies warning policy to each child and keeps its reason v
  const result=await run({session_id:'warn-stop',assistant_text:text},{assistantText:text,humanText:'',raw:''},{mode:'off',policyOptions:{home,manifest:{gates:Object.fromEntries(discoverGates().map(n=>[n,{rollout:'warn'}]))},notify:async line=>{notifications.push(line);return {delivered:'dm'};}}});
  assert.notEqual(result.decision,'block');assert.match(result.systemMessage,/pr-handoff-gate/);assert.ok(notifications.some(line=>line.includes('name=pr-handoff-gate verdict=warn')));
 });
-test('member report reaches central webhook rather than the member Discord ID',async t=>{
+test('他メンバーPCのgate報告はkim-inboxへ入れず統計だけに残す',async t=>{
  const {notifyKim}=await import('./notify-kim.mjs');const home=temp(t);fs.mkdirSync(path.join(home,'.claude'),{recursive:true});
  for(const [file,value] of Object.entries({'orgiast-discord-user-id.txt':'member-id','orgiast-discord-bot-token.txt':'mock-bot-token','orgiast-discord-webhook.txt':'https://example.invalid/member','cost-reporter.env':'DISCORD_COST_WEBHOOK=https://example.invalid/central\n'}))fs.writeFileSync(path.join(home,'.claude',file),value);
+ fs.writeFileSync(path.join(home,'.claude/fleet-pc-map.json'),JSON.stringify({'test-member':{account:'test@example.test'}}));
+ fs.appendFileSync(path.join(home,'.claude/cost-reporter.env'),'REPORTER_LABEL=test-member\n');
  const targets=[];const result=await reportGate(contract,'warn',[],{home,notify:(line,options)=>notifyKim(line,{...options,fetchImpl:async url=>{targets.push(url);return {ok:true};}})});
- assert.equal(result.delivered,'webhook');assert.deepEqual(targets,['https://example.invalid/central']);
+ assert.equal(result.delivered,'suppressed');assert.deepEqual(targets,[]);
+ assert.equal(fs.existsSync(path.join(home,'.claude/kim-inbox')),false);
+ const reports=fs.readdirSync(path.join(home,'.claude/gate-reports'));
+ assert.equal(JSON.parse(fs.readFileSync(path.join(home,'.claude/gate-reports',reports[0]))).delivery,'suppressed');
 });
 
 test('pilotDenyはpilotだけ即denyとし他PCは観測期間を守る', t => {
@@ -124,4 +133,53 @@ test('pilotDenyはpilotだけ即denyとし他PCは観測期間を守る', t => {
   assert.equal(rolloutMode('past-log-search-gate', { ...opts, hostname: 'other', now: opts.now + 7 * DAY }), 'deny');
   manifest.gates['past-log-search-gate'].rollout = 'warn';
   assert.equal(rolloutMode('past-log-search-gate', { ...opts, hostname: 'kim-PC' }), 'deny');
+});
+
+test('mail account policy denies immediately on a new non-pilot PC', t => {
+  const home = temp(t);
+  assert.equal(rolloutMode('mail-draft-account-gate', { home, hostname: 'new-pc' }), 'deny');
+});
+
+test('gmail connector URL rewrite policy denies immediately on a new non-pilot PC', t => {
+  const home = temp(t);
+  assert.equal(rolloutMode('gmail-connector-url-gate', { home, hostname: 'new-pc' }), 'deny');
+});
+
+test('registered mail gate retains deny through the common runner', async t => {
+  const home = temp(t);
+  const result = await runHook(path.join(toolsDir, 'mail-draft-account-gate.mjs'), JSON.stringify({ tool_name: 'mcp__claude_ai_Gmail_2__send_message', tool_input: { draftId: 'd' } }), {
+    env: { ...process.env, ORGIAST_MAIL_ACCOUNT_GATE: '', ORGIAST_CLAUDE_ACCOUNT_EMAIL: 'kim@orgiast.jp' },
+    policyOptions: { home, hostname: 'new-pc', notify: async () => ({ delivered: 'mock' }) },
+  });
+  assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('kim 宛 Discord 停止は初受信の非 pilot PC でも即時拒否する', async t => {
+  const home = temp(t);
+  assert.equal(rolloutMode('kim-discord-report-gate', { home, hostname: '作業用011' }), 'deny');
+  const output = await runHook(path.join(toolsDir, 'kim-discord-report-gate.mjs'), JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'mcp__claude_ai_Discord__send_dm', tool_input: { user_id: '715210673642012733', content: '報告' } }), { env: { ...process.env, ORGIAST_HOME: home }, policyOptions: { home, hostname: '作業用011' } });
+  assert.equal(JSON.parse(output.stdout).hookSpecificOutput.permissionDecision, 'deny');
+});
+
+test('app-llm gates deny immediately on a first-seen non-pilot PC under the 2026-11-02 kim policy', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'app-llm-immediate-'));
+  const policy = '2026-11-02 kim 指示: アプリからの Claude API 利用を全PC全アカウント全プロジェクトで禁止';
+  for (const name of ['app-llm-cost-gate', 'claude-fallback-report-gate']) {
+    const manifest = { pilotHosts: [], gates: { [name]: { rollout: 'deny', immediatePolicy: policy, distributedAt: '2026-11-02T00:00:00Z', denyAfter: '2026-11-09T00:00:00Z' } } };
+    assert.equal(rolloutMode(name, { manifest, home, hostname: 'new-pc', now: Date.parse('2026-11-02T12:00:00Z') }), 'deny');
+    manifest.gates[name].immediatePolicy = 'other';
+    assert.equal(rolloutMode(name, { manifest, home, hostname: 'new-pc', now: Date.parse('2026-11-02T12:00:00Z') }), 'warn');
+  }
+});
+
+test('2026-11-05 mail/delete policies deny immediately through real runner on first-seen PCs', async t => {
+  const home = temp(t);
+  for (const [name, input] of [
+    ['mail-send-approval-gate', {tool_name:'mcp__claude_ai_Gmail__send_message',tool_input:{body:'unapproved'}}],
+    ['delete-approval-gate', {tool_name:'mcp__claude_ai_Google_Drive__trash_file',tool_input:{file_id:'unapproved'}}],
+  ]) {
+    assert.equal(rolloutMode(name,{home,hostname:'new-pc'}),'deny');
+    const result = await runHook(path.join(toolsDir,name+'.mjs'),JSON.stringify(input),{env:{...process.env,ORGIAST_HOME:home},policyOptions:{home,hostname:'new-pc',notify:async()=>({delivered:'mock'})}});
+    assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision,'deny');
+  }
 });

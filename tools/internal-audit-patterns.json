@@ -39,6 +39,8 @@
     ]
   },
   "allowlist_partners": [],
+  "non_payee_tokens": ["WEB総振", "総合振込", "手数料", "振込料金", "カード", "ATM"],
+  "kana_vendor_aliases": {},
   "holidays_jp": [
     "2026-01-01",
     "2026-01-12",

@@ -67,13 +67,21 @@ export function isReadOnlyCommand(command) {
   return parts.length > 0 && parts.every(readOnlySegment);
 }
 
+// 手渡し判定は assistant が user に出すもの。注入された索引・system-reminder・
+// user の貼り付け本文まで走査すると、その中の角括弧マーカーを手渡しと誤認する
+// （2026-10-17 cr-PC で毎ターン誤ブロック）。判定対象は assistant 発の entry に限る。
+function isAssistantEntry(entry) {
+  if (entry?.isSidechain === true) return false;
+  return entry?.type === 'assistant' || entry?.message?.role === 'assistant';
+}
+
 export function evaluateHandoffRegret(transcriptRaw, finalText = '') {
   const entries = String(transcriptRaw).split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
   const handedOff = new Map();
   const uses = new Map();
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index];
-    const block = handoffBlock(textOf(entry));
+    const block = isAssistantEntry(entry) ? handoffBlock(textOf(entry)) : '';
     if (block) for (const target of absolutePaths(block)) if (!handedOff.has(target)) handedOff.set(target, index);
     for (const use of blocks(entry, 'tool_use')) {
       if (!TOOL_NAMES.has(use.name) || !use.id) continue;

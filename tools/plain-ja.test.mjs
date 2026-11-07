@@ -178,3 +178,10 @@ test('文中の全角括弧・バッククォート内は保護する', async ()
   const output = await toPlainJa(mixed, { ask: async () => '[1] 夜間の処理です' });
   for (const token of ['（DESKTOP-2D0R4LI）', '`mail-abcdef12`', '（2026-10-20 CI abcdef12）']) assert.ok(output.includes(token));
 });
+
+test('領収書の宛先アドレスは平易化で削除・書換されない', async () => {
+  const text = 'Gmail エラー: kim@orgiast.jp、seisaku-team@orgiast.jp';
+  const result = await toPlainJa(text, { ask: async () => '[1] 受信できませんでした' });
+  assert.match(result, /kim@orgiast\.jp/);
+  assert.match(result, /seisaku-team@orgiast\.jp/);
+});

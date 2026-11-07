@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { EventEmitter } from 'node:events';
 import {
+  countClaudeProcesses,
   accountConfigPath,
   accountLabel,
   applyTrust,
@@ -311,6 +312,7 @@ function fakeIo(overrides = {}) {
     calls,
     io: {
       env: { CLAUDE_CLI_PATH: claude },
+      countClaudeProcesses: () => null,
       homedir: () => home,
       exists: (file) => file === claude || file === 'C:\\work',
       readdir: () => [],
@@ -1126,7 +1128,7 @@ test('headless は glm 失敗後に deepseek の代替レーンで成功する',
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orgiast-nsl-alternate-'));
   try {
     fs.mkdirSync(path.join(tempDir, '.claude'), { recursive: true });
-    fs.writeFileSync(path.join(tempDir, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY=test-key\n', 'utf8');
+    fs.writeFileSync(path.join(tempDir, '.claude', 'openrouter.env'), 'OPENROUTER_API_KEY=test-key\n', 'utf8');
     const { calls, spawnImpl } = headlessSpawnRecorder([3, 0]);
     const result = await runHeadlessNextSession({
       env: { ORGIAST_AUTO_SESSION_EXECUTOR: 'cheap-code', ORGIAST_AUTO_SESSION_PROVIDER: 'glm' },
@@ -1147,4 +1149,39 @@ test('headless は glm 失敗後に deepseek の代替レーンで成功する',
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+
+test('注入したプロセス数が 12 なら起動をスキップし過負荷をログに出す', async () => {
+  const { io, calls } = fakeIo({ countClaudeProcesses: () => 12 });
+  assert.equal(await launchNextSession(['--target', 'terminal'], io), 0);
+  assert.equal(calls.spawn.length, 0);
+  assert.match(calls.logs.join('\n'), /スキップ:.*過負荷/);
+});
+
+test('過負荷ガードは上限・環境設定・force・取得不能を扱う', () => {
+  const base = { state: {}, now: Date.now(), env: {}, force: false, pendingTab: false };
+  const blocked = shouldLaunch({ ...base, claudeProcesses: 12 });
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.reason, /過負荷/);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: 11 }).ok, true);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: 12, force: true }).ok, true);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: 12, env: { ORGIAST_NEXT_SESSION_MAX_CLAUDE: '20' } }).ok, true);
+  assert.equal(shouldLaunch({ ...base, claudeProcesses: null }).ok, true);
+});
+
+test('tasklist CSV の Claude 行を数え、実行失敗なら null を返す', () => {
+  const fakeExec = (command, args, options) => {
+    assert.equal(command, 'tasklist');
+    assert.deepEqual(args, ['/FI', 'IMAGENAME eq claude.exe', '/FO', 'CSV', '/NH']);
+    assert.equal(options.timeout, 10_000);
+    assert.equal(options.windowsHide, true);
+    return ['"claude.exe","1234","Console","1","100 K"',
+      '"claude.exe","2345","Console","1","100 K"',
+      '"CLAUDE.EXE","3456","Console","1","100 K"',
+      '情報: 指定された条件に一致するタスクはありません。'].join('\r\n');
+  };
+  assert.equal(countClaudeProcesses(fakeExec), 3);
+  assert.equal(countClaudeProcesses(() => { throw new Error('tasklist failed'); }), null);
+  if (process.platform !== 'win32') assert.equal(countClaudeProcesses(), null);
 });

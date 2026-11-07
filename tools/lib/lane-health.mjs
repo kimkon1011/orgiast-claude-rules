@@ -40,6 +40,8 @@ export function repairAdvice(lane, reason) {
     return { fixNow: true, auto: false, human: '原因未分類。fleet-fix-now を試行したうえで lane-doctor --probe の結果を確認する' };
   }
   if (/auth_invalid/.test(r)) return { fixNow: false, auto: false, human: `${lane} の API キーが無効。キーを更新する` };
+  // 2026-10-23: 回線の一時断で HTTP レーン4本が同時に probe_failed:stale となり、人の操作として DM された。次回 probe で自動再判定する。
+  if (/^probe_failed(?::stale)?$/.test(r)) return { fixNow: false, auto: true, silent: true, human: null, note: '一時的な probe 失敗。次回 lane-doctor --probe で自動再判定する' };
   return { fixNow: false, auto: false, human: '原因未分類。lane-doctor --probe の結果を確認する' };
 }
 
@@ -84,7 +86,7 @@ export function laneHealthRows(reports, { account = () => '' } = {}) {
       rows.push({
         pc: report.pc, lane: d.lane, state: 'dead', reason: d.reason, at: report.at,
         action: fixed || `人の操作が要る: ${advice.human}`,
-        auto: !!advice.auto, human: advice.human, fixNow: advice.fixNow, account: account(report.pc),
+        auto: !!advice.auto, silent: !!advice.silent, human: advice.human, fixNow: advice.fixNow, account: account(report.pc),
         key: `${report.pc}|${d.lane}|${d.reason}`,
       });
     }

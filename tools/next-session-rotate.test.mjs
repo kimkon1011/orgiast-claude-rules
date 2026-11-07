@@ -85,6 +85,23 @@ test('lower-level headings end the active section instead of becoming items',()=
  assert.equal(r.stats.pending,1);
  assert.match(r.text,/\n1\. 本物のTODO/);
 });
+// 2026-10-25 実測の再現。notify-kim が追記した `## 次の1目的\n通知の原因調査と修復` の自由文が
+// 散文フォールバックで項目化され、next-session.md の残TODOに内容の無い `12. 通知の原因調査と修復`
+// が残った。auto-session はそれを次の1目的に採用し、何を直すか分からない回を1回消費した。
+test('purpose prose is not collected as a TODO item',()=>{
+ const source=`<!-- NEXT-SESSION v1 -->\n## 次の1目的\n通知の原因調査と修復\n## 残TODO\n1. [ ] 通知の原因調査・修復: 収集失敗\n<!-- NEXT-SESSION v1 -->\n## 次の1目的\n未定\n## 残TODO\n1. 本物のTODO\n`;
+ const r=planRotation(source,{now});
+ assert.equal(r.stats.pending,2);
+ assert.doesNotMatch(r.text,/^\d+\. 通知の原因調査と修復$/m);
+ assert.match(r.text,/通知の原因調査・修復: 収集失敗/);
+ assert.match(r.text,/本物のTODO/);
+});
+test('explicit numbered tasks under 次の1目的 are still collected',()=>{
+ const source=`<!-- NEXT-SESSION v1 -->\n## 次の1目的\n1. 目的内の明示タスク\n## 残TODO\n1. 本物\n`;
+ const r=planRotation(source,{now});
+ assert.equal(r.stats.pending,2);
+ assert.match(r.text,/目的内の明示タスク/);
+});
 test('a level-2 heading still activates its own section',()=>{
  const source=`<!-- NEXT-SESSION v1 -->\n<!-- 更新: 2026-09-26 -->\n## 未決（kim の判断待ち）\n1. 見出し境界の確認\n`;
  const r=planRotation(source,{now});

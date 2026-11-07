@@ -75,6 +75,9 @@ test('FLEET_NO_SELF_HEAL=1 で無効、kim-PC 自身は mail を送らない、�
 test('repairAdvice: 自動修復と人の操作の区別', () => {
   assert.equal(repairAdvice('codex', 'native_failed:wsl').auto, true);
   assert.equal(repairAdvice('codex', 'dead:oauth_consent').auto, false);
+  assert.equal(repairAdvice('gemini', 'probe_failed:stale').silent, true);
+  assert.equal(repairAdvice('gemini', 'probe_failed:stale').human, null);
+  assert.equal(repairAdvice('gemini', 'auth_invalid').auto, false);
   assert.equal(repairAdvice('codex', 'dead:oauth_consent').fixNow, true);
   assert.match(repairAdvice('codex', 'dead:physical_operation').human, /wsl/);
   assert.equal(repairAdvice('deepseek', 'dead:payment_required').fixNow, false);
@@ -123,4 +126,32 @@ test('配信失敗(delivered:none)は未通知のまま残り次回再試行す�
   const notify = async () => ({ delivered: n++ ? 'dm' : 'none' });
   assert.equal((await runLaneHealthWatch({ home, now, notify, selfLabel: 'kim-PC', pcMap: {}, readInboxImpl })).notified.length, 0);
   assert.equal((await runLaneHealthWatch({ home, now, notify, selfLabel: 'kim-PC', pcMap: {}, readInboxImpl })).notified.length, 1);
+});
+
+test('probe起動失敗は当日済みにせず次回再試行する', async t => {
+  const r = run(t, { codex: alive });
+  assert.deepEqual(await r.call({ spawnSyncImpl: () => ({ status: null, error: new Error('timeout'), stdout: '' }) }), { skipped: 'probe-failed' });
+  assert.equal(fs.existsSync(path.join(r.dir, '.fleet-lane-health-day')), false);
+  assert.deepEqual(await r.call(), { healthy: true });
+});
+test('同日でもstaleがあればprobeを再実行する', async t => {
+  const r = run(t, { codex: alive });
+  await r.call();
+  fs.writeFileSync(path.join(r.dir, 'lane-health.json'), JSON.stringify({ lanes: { codex: { alive: false, reason: 'probe_failed:stale' } } }));
+  assert.deepEqual(await r.call(), { healthy: true });
+  assert.equal(r.spawns.length, 2);
+  assert.equal(r.spawns[1].opts.env.ORGIAST_HOME, path.dirname(r.dir));
+});
+
+test('watchdog notification batch is bounded and resumes unnotified rows next run', async t => {
+  const home = tmp(t); fs.mkdirSync(path.join(home, '.claude'));
+  const now = () => Date.parse('2026-10-15T13:00:00Z');
+  const mails = Array.from({ length: 12 }, (_, n) => mailFor(`batch-${n}-PC`, [{ lane: 'codex', reason: 'dead:oauth_consent' }], '2026-10-15T10:00:00Z'));
+  const calls = [];
+  const opts = { home, now, selfLabel: 'kim-PC', pcMap: {}, readInboxImpl: () => mails,
+    notify: async text => { calls.push(text); return { delivered: 'spooled' }; } };
+  assert.equal((await runLaneHealthWatch(opts)).notified.length, 10);
+  assert.equal((await runLaneHealthWatch(opts)).notified.length, 2);
+  assert.equal((await runLaneHealthWatch(opts)).notified.length, 0);
+  assert.equal(new Set(calls).size, 12);
 });

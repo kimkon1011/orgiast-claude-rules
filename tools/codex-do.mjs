@@ -3,6 +3,7 @@
 // 通常実装は Sol、長時間・高難度・auto の失敗時は Astra（既定 effort high）。
 // --lane sol|astra|auto / --model astra|sol|<slug> / --effort で指定する。
 // 先頭40行の <!-- lane: astra --> でも指定可。Astra 上限時は Sol へ退避する。
+import { GATEWAY_MODELS, OPENROUTER_BASE } from './provider-routing.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,7 +16,8 @@ import { parseCodexResetUntil, providerCooldownMs, writeCodexCooldown } from './
 import { classifyTaskKind, CODEX_KINDS, TASK_KINDS } from './lib/task-kind.mjs';
 import { syncWslCodexAuth } from './lib/codex-wsl-auth-sync.mjs';
 import { EX_TEMPFAIL, budgetSummary, claudeFile, decideCodexGate, deferredPayload, isUsageLimitText, parseUsageLimitUntil, providerLimitedUntil, writeCodexCooldownFile } from './lib/executor-gate.mjs';
-import { coolingBackendNames, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
+import { coolingBackendNames, deprioritizeUnreliableBackends, readFallbackBackendHistory, recordFallbackBackendOutcome, skipCoolingBackends } from './fallback-backend-health.mjs';
+import { scanDiffForClaudeApi } from './app-llm-cost-gate.mjs';
 
 // Windows の shell 経由起動では引数がクォートされないため、この値に空白を入れると
 // -p の値が割れて Gemini が使い方(ヘルプ)を出して終わる。空白を入れないこと。
@@ -25,6 +27,22 @@ const ASTRA = 'gpt-6-astra';
 const SOL = 'gpt-5.6-sol';
 export function normalizeCodexModel(model) {
   return model === 'astra' ? ASTRA : model === 'sol' ? SOL : model;
+}
+
+export function validateCwd(rawArg, {
+  processCwd = process.cwd(),
+  resolveImpl = path.resolve,
+  existsImpl = fs.existsSync,
+  statImpl = fs.statSync,
+  platform = process.platform,
+} = {}) {
+  const rawCwd = rawArg || processCwd;
+  const cwd = resolveImpl(rawCwd);
+  try {
+    if (existsImpl(cwd) && statImpl(cwd).isDirectory()) return { cwd, ok: true };
+  } catch {}
+  const mangled = platform === 'win32' && /^[A-Za-z]:(?![\\/])/.test(rawCwd);
+  return { cwd, ok: false, reason: mangled ? 'cwd_mangled' : 'cwd_not_found' };
 }
 
 // gpt-5.6-sol / gpt-6-astra は API キー認証の環境向けの独自モデル名で、ChatGPT アカウント
@@ -40,6 +58,21 @@ export function detectChatGptAuth(authJsonText) {
   if (parsed.OPENAI_API_KEY || parsed.api_key) return false;
   if (parsed.tokens && (parsed.tokens.id_token || parsed.tokens.access_token)) return true;
   return null;
+}
+
+// Codex/cheap-code の出力を解析し、空出力/JSONパース失敗/正常JSONを分類する。
+// delegation-health の codex_empty_output 診断で使う。
+export function parseCodexOutput(output) {
+  const raw = String(output ?? '');
+  if (!raw.trim()) return { status: 'no_output', raw };
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed === undefined || parsed === null) return { status: 'no_output', raw };
+    if (typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length === 0) return { status: 'no_output', raw };
+    return { status: 'ok', data: parsed, raw };
+  } catch {
+    return { status: 'parse_error', raw };
+  }
 }
 
 // 実機の auth.json を覗く側。CODEX_DO_WSL_PROBE と同じ流儀で CODEX_DO_AUTH_MODE
@@ -97,8 +130,12 @@ export function decideCodexLane({ lane = 'auto', model, promptText = '', timeout
   return { slug, effort, reason };
 }
 
+// makeloop plugin is distributed for quota-sweep; for delegated tasks it hijacks the run into "contract only" (2026-10-23).
+// -c splits keys on dots, so a quoted "makeloop@makeloop" key is not addressable; override the table as TOML.
+export const DISABLE_MAKELOOP = ['-c', 'plugins={"makeloop@makeloop"={enabled=false}}'];
+
 export function buildCodexExecArgs({ slug, effort, review = false } = {}) {
-  return ['exec', ...(slug ? ['-m', slug] : []), ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []), '-s', review ? 'read-only' : 'workspace-write', '-'];
+  return ['exec', ...(slug ? ['-m', slug] : []), ...(effort ? ['-c', `model_reasoning_effort="${effort}"`] : []), ...DISABLE_MAKELOOP, '-s', review ? 'read-only' : 'workspace-write', '-'];
 }
 
 // Windows ネイティブの codex は `-s workspace-write` を渡しても必ず read-only に倒れ、
@@ -193,6 +230,8 @@ export function detectQuotaLimit(stdout, stderr, exitStatus = null, promptText =
   void exitStatus;
   const stdoutText = normalizeQuotes(stdout);
   const prompt = normalizeQuotes(promptText);
+  // 出力の空/パース状態を分類。codex_empty_output 診断で使う。
+  void parseCodexOutput(stdoutText);
   const sources = [
     { text: stdoutText, offset: 0 },
     { text: normalizeQuotes(stderr), offset: stdoutText.length + 1 },
@@ -349,7 +388,7 @@ export function shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut
 // 併用すると run_shell_command ごと消え、代替実行者が「編集はできるがテストも git も一切
 // 実行できない」状態になる(未検証の編集だけ残して 80 呼び出しで停止。2026-10-10 実害)。
 // Codex クールダウン中の代替は実装レーンなので、シェルは塞がない。
-export function buildQwenArgs({ model = 'deepseek-chat', timeoutSecs = 1800, maxToolCalls = 80, marker = 'Follow-the-instructions-provided-on-stdin.' } = {}) {
+export function buildQwenArgs({ model = GATEWAY_MODELS.deepseek, timeoutSecs = 1800, maxToolCalls = 80, marker = 'Follow-the-instructions-provided-on-stdin.' } = {}) {
   return [
     '--auth-type', 'openai',
     '-m', model,
@@ -364,7 +403,7 @@ export function buildQwenArgs({ model = 'deepseek-chat', timeoutSecs = 1800, max
 // シェル実行ツールは非対話では承認できず使えない。2026-10-12 実測: auto_edit だと
 // 「I do not have access to a shell or terminal tool in this environment」と回答し、
 // echo 1つ実行できない（qwen の --exclude-tools と同じ実害。代替実行者はテスト・git を回す必要がある）。
-export function buildGeminiArgs({ model = 'gemini-3.7-flash', marker = 'Follow-the-instructions-provided-on-stdin.' } = {}) {
+export function buildGeminiArgs({ model = 'gemini-3.6-flash', marker = 'Follow-the-instructions-provided-on-stdin.' } = {}) {
   return ['-m', model, '--approval-mode', 'yolo', '--skip-trust', '-p', marker];
 }
 
@@ -391,23 +430,63 @@ export function fallbackBackendTimeoutSecs(timeoutSeconds, env = process.env) {
   return Math.max(60, Math.min(timeoutSeconds, wanted));
 }
 
-// gemini-cli だけ既定 600 秒。実測: 成功 37 件の max 559 秒 / timeout 13 件の min 638 秒。
-// 900 秒まで待っても成功した例は無く、待つほど捨てる秒数だけ増える。
+// 2026-10-30 以降の生産的成功（executor-usage.jsonl）の最大所要時間は、
+// gemini-cli が 241.1 秒、cheap-code:deepseek が 464.5 秒。
+// 成功実績を切らない余裕を残しつつ、既定をそれぞれ 250 秒 / 500 秒にする。
+// 旧既定（300 秒 / 600 秒）より失敗時の廃棄を 50 秒 / 100 秒短縮し、
+// 両方が timeout しても最大廃棄を従来の 900 秒から 750 秒に収める。
 export function backendSpecificTimeoutSecs(backendName, env = process.env) {
-  if (backendName !== 'gemini-cli') return null;
-  const raw = Number(env.CODEX_DO_GEMINI_TIMEOUT_SECS);
-  return Number.isFinite(raw) && raw > 0 ? raw : 600;
+  if (backendName === 'gemini-cli') {
+    const raw = Number(env.CODEX_DO_GEMINI_TIMEOUT_SECS);
+    return Number.isFinite(raw) && raw > 0 ? raw : 250;
+  }
+  // cheap-code:deepseek と qwen 直結の deepseek は同じ upstream（OpenRouter の deepseek model）なので同一扱い。
+  if (backendName === 'cheap-code:deepseek' || backendName === 'deepseek') {
+    const raw = Number(env.CODEX_DO_DEEPSEEK_TIMEOUT_SECS);
+    return Number.isFinite(raw) && raw > 0 ? raw : 500;
+  }
+  return null;
+}
+
+// 冷却中(直近6時間に timeout/blocked)の backend を keepAtLeastOne でチェーンへ戻したときだけ使う
+// 「探り」の予算。全 backend が冷却中だと候補ゼロを避けるため元の配列がそのまま復活するが、
+// 同じ上限（gemini-cli 300秒 + deepseek 600秒）を再び与えると同じ 900 秒を毎回捨てる。
+// 2026-11-02 実測: 10:00/10:03/10:05 に gemini-cli が3連続 timeout し、12:23 には
+// gemini-cli 300秒 + cheap-code:deepseek 600秒 が両方 timeout（900秒を丸ごと廃棄）。
+// 末尾以外は短い探り予算で次へ進む。末尾には通常予算を与え、短すぎる試行が
+// timeout を再記録し続けて冷却から復帰できなくなる循環を防ぐ。
+export const COOLING_PROBE_TIMEOUT_SECS = 120;
+
+// 1試行に実際に与える秒数。冷却中でなければ従来どおり
+// min(連鎖の残り予算, backend 固有の上限)。冷却中でも末尾の試行は通常予算を使う。
+export function effectiveBackendTimeoutSecs(backendName, { chainBudget, cooling = false, env = process.env, isLastBackend = false } = {}) {
+  const base = Math.min(Number(chainBudget), backendSpecificTimeoutSecs(backendName, env) ?? Infinity);
+  if (!Number.isFinite(base)) return base;
+  if (!cooling || isLastBackend) return base;
+  return Math.max(60, Math.min(base, COOLING_PROBE_TIMEOUT_SECS));
 }
 
 // タイムアウト時にプロセス木ごと殺す。Windows で shell:true のとき直接の子は cmd.exe なので、
 // child.kill() は cmd.exe だけを終わらせ、孫(gemini 等)が残る。孫が stdout パイプを握ったままだと
 // 'close' が発火せず、タイムアウトが実効しない
 // (2026-10-14 実測: 上限 600 秒の gemini-cli 試行が 4953 秒動き、1 回でチェーン全体 6153 秒を捨てた)。
-export function killProcessTree(child, { spawnImpl = spawnSync, platform = process.platform } = {}) {
+//
+// 🔴 2026-11-04 修正: taskkill を spawnSync で待つとイベントループが最大10秒止まり、締切後の猶予
+// タイマーがその分だけ後ろへずれる（＝予算を超えて秒数を捨てる）。実測 2026-11-01T16:18Z の
+// 主経路 codex-cli/gpt-5.6-sol は --timeout 210 秒に対し 226.786 秒＝締切+16.8 秒まで伸びた
+// （sync taskkill の待ち 10 秒 + 猶予 5 秒 + 起動分）。非同期 spawn にして即座に戻す。
+export function killProcessTree(child, { spawnImpl = spawn, platform = process.platform, killTimeoutMs = 10_000 } = {}) {
   if (!child || !child.pid) return;
   if (platform === 'win32') {
     try {
-      spawnImpl('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 10_000 });
+      const killer = spawnImpl('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      // taskkill 自体がハングしても子プロセスを残さない。呼び出し側は待たない。
+      const timeout = Number(killTimeoutMs);
+      if (killer && typeof killer.kill === 'function' && Number.isFinite(timeout) && timeout > 0) {
+        const killerTimer = setTimeout(() => { try { killer.kill('SIGKILL'); } catch { /* 既に終了している */ } }, timeout);
+        killerTimer.unref?.();
+      }
+      killer?.unref?.();
     } catch { /* 既に終了している */ }
     return;
   }
@@ -424,7 +503,7 @@ export function chainBackendBudgetSecs(timeoutSeconds, elapsedSecs, env = proces
   return Math.min(fallbackBackendTimeoutSecs(timeoutSeconds, env), remaining);
 }
 
-export function buildQwenEnv(baseEnv, apiKey, { model = 'deepseek-chat', baseUrl = 'https://api.deepseek.com/v1' } = {}) {
+export function buildQwenEnv(baseEnv, apiKey, { model = GATEWAY_MODELS.deepseek, baseUrl = OPENROUTER_BASE } = {}) {
   const env = { ...baseEnv };
   env.OPENAI_API_KEY = apiKey;
   env.OPENAI_BASE_URL = baseUrl;
@@ -459,7 +538,7 @@ export function loadEnvKey(homeDir, fileName, varName) {
 }
 
 export function loadDeepseekKey(homeDir) {
-  return loadEnvKey(homeDir, 'deepseek.env', 'DEEPSEEK_API_KEY');
+  return loadEnvKey(homeDir, 'openrouter.env', 'OPENROUTER_API_KEY');
 }
 
 export function loadGeminiKey(homeDir) {
@@ -485,9 +564,9 @@ export function loadGeminiKey(homeDir) {
 }
 
 // 2026-09-03 実測: Gemini Flash 5/5、DeepSeek 5/5、OpenRouter free 1/5。
-// 同品質なら正規の承認モードを持つ Gemini を第1候補にする（2026-10-12: auto_edit は
-// 非対話でシェル不可のため yolo へ変更。順位の根拠は下の実測値を参照）。
-// 費用ゼロを優先するときだけ CODEX_DO_PREFER_FREE=1 で free を先頭へ移す。
+// 順位の根拠は resolveFallbackBackends のコメント（2026-10-29 更新）を参照。
+// 2026-10-29 から既定が「cheap-code → gemini-cli(最終手段)」になったため、
+// CODEX_DO_PREFER_FREE の読取は廃止した（後方互換: 環境変数を設定しても順序は変わらない）。
 export function codexFallbackOrderFile(homeDir) {
   return path.join(homeDir, '.claude', 'codex-fallback-order.json');
 }
@@ -513,19 +592,26 @@ function cheapCodeBackend(name, homeDir) {
   const cooldownFile = path.join(homeDir, '.claude', 'provider-cooldown.json');
   // 仕様C2b: 定額レーン glm が usage_limit でクールダウン中のときは、同じ位置を deepseek へ自動差し替えする。
   // provider-limit-history.jsonl で until が未来の provider は候補から外す(glm は deepseek へ差し替え、deepseek は除外)。
+  // 🔴 deepseek は provider-cooldown.json の billing provider(openrouter)の cooldown も見る。
+  //    HTTP 402 残高切れが provider-cooldown.json に openrouter キーで書かれるのに、
+  //    history.jsonl だけ見ていると恒久課金切れの deepseek が毎回フォールバック候補に戻る
+  //    (2026-10-29 実測: delegation-health lane_outage_unrepaired が毎日再起票)。
   const historyFile = path.join(homeDir, '.claude', 'provider-limit-history.jsonl');
-  const limitedByHistory = providerLimitedUntil(historyFile, provider) > 0;
-  if (provider === 'deepseek' && limitedByHistory) return null;
+  const billingName = provider === 'deepseek' ? 'openrouter' : provider;
+  const limitedByHistory = providerLimitedUntil(historyFile, billingName) > 0;
+  const inCooldown = provider === 'deepseek' && providerCooldownMs(billingName, Date.now(), cooldownFile) > 0;
+  if (provider === 'deepseek' && (limitedByHistory || inCooldown)) return null;
   if (provider === 'glm' && (limitedByHistory || providerCooldownMs('glm', Date.now(), cooldownFile) > 0)) {
-    if (!loadEnvKey(homeDir, 'deepseek.env', 'DEEPSEEK_API_KEY')) return null;
-    if (providerLimitedUntil(historyFile, 'deepseek') > 0) return null;
+    if (!loadDeepseekKey(homeDir)) return null;
+    if (providerLimitedUntil(historyFile, 'openrouter') > 0) return null;
+    if (providerCooldownMs('openrouter', Date.now(), cooldownFile) > 0) return null;
     console.error('[codex-do] cheap-code:glm は usage_limit クールダウン中のため cheap-code:deepseek へフォールバックします');
-    return { kind: 'cheap-code', name: 'cheap-code:deepseek', provider: 'deepseek', model: 'deepseek-v4-flash' };
+    return { kind: 'cheap-code', name: 'cheap-code:deepseek', provider: 'deepseek', model: GATEWAY_MODELS.deepseek };
   }
-  const keyFile = provider === 'glm' ? 'zai.env' : 'deepseek.env';
-  const keyEnv = provider === 'glm' ? 'ZAI_API_KEY' : 'DEEPSEEK_API_KEY';
+  const keyFile = provider === 'glm' ? 'zai.env' : 'openrouter.env';
+  const keyEnv = provider === 'glm' ? 'ZAI_API_KEY' : 'OPENROUTER_API_KEY';
   if (!loadEnvKey(homeDir, keyFile, keyEnv)) return null;
-  return { kind: 'cheap-code', name, provider, model: provider === 'glm' ? 'glm-5.3' : 'deepseek-v4-flash' };
+  return { kind: 'cheap-code', name, provider, model: provider === 'glm' ? 'glm-5.3' : GATEWAY_MODELS.deepseek };
 }
 
 export function findExecutable(name, { env = process.env, platform = process.platform, existsImpl = fs.existsSync } = {}) {
@@ -551,14 +637,13 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   const geminiKey = loadGeminiKey(homeDir);
   const openrouterKey = loadEnvKey(homeDir, 'openrouter.env', 'OPENROUTER_API_KEY');
   const deepseekKey = loadDeepseekKey(homeDir);
-  const preferFree = process.env.CODEX_DO_PREFER_FREE === '1';
   const geminiAvailable = !geminiKey || executableAvailable('gemini');
   const qwenAvailable = !(deepseekKey || openrouterKey) || executableAvailable('qwen');
   if (geminiKey && !geminiAvailable) console.error('[codex-do] gemini-cli の CLI(gemini) が見つからないため候補から外します');
   if (deepseekKey && !qwenAvailable) console.error('[codex-do] deepseek の CLI(qwen) が見つからないため候補から外します');
   if (openrouterKey && !qwenAvailable) console.error('[codex-do] openrouter-free の CLI(qwen) が見つからないため候補から外します');
-  const gemini = geminiKey && geminiAvailable && { kind: 'gemini', name: 'gemini-cli', model: process.env.CODEX_DO_GEMINI_MODEL || 'gemini-3.7-flash', apiKey: geminiKey };
-  const deepseek = deepseekKey && qwenAvailable && { kind: 'qwen', name: 'deepseek', model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com/v1', apiKey: deepseekKey };
+  const gemini = geminiKey && geminiAvailable && { kind: 'gemini', name: 'gemini-cli', model: process.env.CODEX_DO_GEMINI_MODEL || 'gemini-3.6-flash', apiKey: geminiKey };
+  const deepseek = deepseekKey && qwenAvailable && { kind: 'qwen', name: 'deepseek', model: GATEWAY_MODELS.deepseek, baseUrl: OPENROUTER_BASE, apiKey: deepseekKey };
   const openrouter = openrouterKey && qwenAvailable && { kind: 'qwen', name: 'openrouter-free', model: process.env.CODEX_DO_FREE_MODEL || 'cohere/north-mini-code:free', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
   const byName = {
     'gemini-cli': () => gemini,
@@ -573,13 +658,25 @@ export function resolveFallbackBackends(homeDir, options = {}) {
       if (backend) backends.push(backend);
       else console.error(`[codex-do] codex-fallback-order.json の ${name} はキー未設定か未知の名前のためスキップ`);
     }
-    if (backends.length) return backends;
+    if (backends.length) return uniqueBackendsByName(backends);
     console.error('[codex-do] codex-fallback-order.json に使えるバックエンドが無いため従来順へ戻します');
   }
   const ccDeepseek = cheapCodeBackend('cheap-code:deepseek', homeDir);
   const ccGlm = cheapCodeBackend('cheap-code:glm', homeDir);
-  const ordered = preferFree ? [ccDeepseek, ccGlm, gemini] : [gemini, ccDeepseek, ccGlm];
-  return ordered.filter(Boolean);
+  // 2026-10-29 実測: gemini-cli を既定の先頭にした根拠（2026-09-03 の「Gemini Flash 5/5」品質実測）は、
+  // gemini CLI 側の sandbox 不調（run_shell_command のポリシー拒否・workspace 解決失敗で無音停滞）により
+  // 10-23〜10-28 のフォールバックで 15/15 が最大600秒を廃棄してタイムアウトした。同時期に
+  // cheap-code:deepseek は 141〜482 秒で成功しており、品質も 2026-09-03 実測で同率(5/5 対 5/5)。
+  // cost-improve-loop の writeCodexFallbackOrder も gemini-cli を最後に置くため、既定を
+  // 「成功が速く確実な cheap-code → 最終手段の gemini-cli」に揃える
+  // （delegation-health:fallback_chain_timeout 2026-10-27 起票の対処）。
+  const ordered = [ccDeepseek, ccGlm, gemini];
+  return uniqueBackendsByName(ordered.filter(Boolean));
+}
+
+// cheap-code:glm が cooldown で cheap-code:deepseek へ差し替わると同名が連鎖に2回入り、timeout した backend を再投入して時間を捨てる。
+function uniqueBackendsByName(backends) {
+  return backends.filter((backend, index) => backends.findIndex((other) => other.name === backend.name) === index);
 }
 
 export function resolveQwenBackends(homeDir, options = {}) {
@@ -601,7 +698,7 @@ function isHttpStatusCodeLine(line, code) {
 export function isBackendExhausted(output, stderr) {
   const merged = `${output || ''}\n${stderr || ''}`;
   const lower = merged.toLowerCase();
-  const patterns = ['rate limit', 'rate-limited', 'quota', 'insufficient', 'request too large'];
+  const patterns = ['rate limit', 'rate-limited', 'quota', 'insufficient', 'request too large', 'クールダウン中', 'cooldown'];
   if (patterns.some((p) => lower.includes(p))) return true;
   return merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '429') || isHttpStatusCodeLine(line, '413'));
 }
@@ -618,11 +715,24 @@ export function isBackendCliMissing(output, stderr) {
 export const POLICY_STALL_MIN_ELAPSED_SECS = 300;
 export const POLICY_STALL_MIN_OUTPUT_CHARS = 400;
 export const POLICY_STALL_MIN_DENIALS = 3;
-export const POLICY_DENIAL_PATTERN = /tool execution denied by policy/gi;
+// gemini-cli は許可ワークスペース外のパス・ignore パターンの読み取り拒否を別文言で出し、それも
+// 『tool execution denied by policy』と同じ停滞を生む（2026-10-27/28 実測: 3件が拒否文言0回扱いで 600 秒 timeout）。
+export const POLICY_DENIAL_PATTERN = /tool execution denied by policy|resolves outside the allowed workspace directories|ignored by configured ignore patterns/gi;
 
 export function countPolicyDenials(text) {
   return typeof text === 'string' ? (text.match(POLICY_DENIAL_PATTERN) || []).length : 0;
 }
+
+// 実時間待ちのテストを避けるため、閾値秒と再評価間隔は環境変数で注入できる（正の数だけ採用）。
+const positiveEnv = (value, fallback) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : fallback;
+export const policyStallMinElapsedSecs = (env = {}) => positiveEnv(env.CODEX_DO_POLICY_STALL_MIN_ELAPSED_SECS, POLICY_STALL_MIN_ELAPSED_SECS);
+// タイムアウトで kill してから 'close' を待つ猶予。超えたら pipe を破棄して打ち切る。
+export const timeoutKillGraceMs = (env = {}) => positiveEnv(env.CODEX_DO_TIMEOUT_KILL_GRACE_MS, 5000);
+
+export function remainingPrimaryBudgetSecs(budgetSecs, elapsedSecs) {
+  return Math.max(1, budgetSecs - elapsedSecs);
+}
+export const policyStallCheckMs = (env = {}) => positiveEnv(env.CODEX_DO_POLICY_STALL_CHECK_MS, 5000);
 
 export function shouldAbortPolicyStall({
   elapsedSecs,
@@ -661,8 +771,18 @@ export function recordLaneMode(mode, sandbox, { home = process.env.ORGIAST_HOME 
   try { state = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = file + '.' + process.pid + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify({ ...state, codex: { mode, sandbox, verifiedAt: now.toISOString() } }, null, 2) + '\n');
-  fs.renameSync(tmp, file);
+  const body = JSON.stringify({ ...state, codex: { mode, sandbox, verifiedAt: now.toISOString() } }, null, 2) + '\n';
+  fs.writeFileSync(tmp, body);
+  // Windows では他プロセス(並行 codex-do・ウイルス対策)が開いていると rename が EPERM/EBUSY になる。
+  // ただの記録なので短く再試行し、駄目なら直接上書きし、それも駄目なら諦めて起動を止めない(2026-10-24 実測)。
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try { fs.renameSync(tmp, file); return; } catch (e) {
+      if (!['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50 * (attempt + 1));
+    }
+  }
+  try { fs.writeFileSync(file, body); } catch (e) { console.error(`[codex-do] lane-mode.json を記録できませんでした(${e.code})。起動は続けます`); }
+  try { fs.unlinkSync(tmp); } catch {}
 }
 
 export function wslCodexLaunchPlan({ distroFound, codexPresent, versionOk, installAttempted, retried, nativeAvailable = false, requireWsl = false, allowNative = false }) {
@@ -708,6 +828,15 @@ export function buildUsageRow({
   };
 }
 
+// 再確認で Codex 自体が正常終了した時だけ古い封鎖を解除する。
+export function clearCooldownAfterRecheck({ home, recheck, result, quotaMatched, log = console.error }) {
+  if (!recheck || result?.status !== 0 || result.timedOut || result.launched === false || quotaMatched
+    || isUsageLimitText(`${result.output || ''}\n${result.stderr || ''}`)) return false;
+  fs.rmSync(claudeFile(home, 'codex-cooldown.json'), { force: true });
+  log('[codex-do] cooldown を期限前の生存確認で解除');
+  return true;
+}
+
 if (isEntry(import.meta.url)) {
 
 const args = process.argv.slice(2);
@@ -742,7 +871,17 @@ const lane = laneIndex >= 0 ? args[laneIndex + 1] : 'auto';
 const cwdIndex = args.indexOf('--cwd');
 const promptFileIndex = args.indexOf('--prompt-file');
 const timeoutIndex = args.indexOf('--timeout');
-const cwd = path.resolve(cwdIndex >= 0 && args[cwdIndex + 1] ? args[cwdIndex + 1] : process.cwd());
+const cwdValidation = validateCwd(cwdIndex >= 0 ? args[cwdIndex + 1] : undefined);
+const cwd = cwdValidation.cwd;
+if (!cwdValidation.ok) {
+  console.error(`[codex-do] --cwd 検証失敗: ${cwd} (reason=${cwdValidation.reason})`);
+  if (cwdValidation.reason === 'cwd_mangled') {
+    console.error('バックスラッシュが消えています。ダブルクォートで囲んでください: --cwd "C:\\Users\\..."');
+  } else {
+    console.error('--cwd のディレクトリが存在しません');
+  }
+  process.exit(2);
+}
 // cwdIndex が -1 のとき cwdIndex+1 が 0 になり、指示文(第1引数)を捨ててしまうので条件付きで除外する。
 const omitted = new Set();
 if (dryRun) omitted.add(args.indexOf('--dry-run'));
@@ -845,7 +984,11 @@ if (mainMemory || related.length || claudeMd) {
   for (const item of related.slice(0, 3)) context.push(`\n## 関連 memory: ${item.name}\n${item.body}`);
   if (claudeMd) context.push(`\n## 対象プロジェクト CLAUDE.md\n${claudeMd}`);
 }
-const prompt = `${context.join('\n')}\n\n## 実装指示\n${instruction}`.trim();
+// Codex / cheap-code に渡す指示には、context の有無に関係なく Claude API 禁止の固定ブロックを
+// 必ず先頭に付ける（app-llm-cost-gate は Claude Code の PreToolUse でしか効かないため、
+// 委譲先の指示としてここで強制する。ONBOARDING §2.8.0）。
+const GLOBAL_PROHIBITION = '## 全プロジェクト共通の禁止事項\n- アプリ（デプロイ済み・GitHub Actions・cron・GAS・スクリプト）が呼ぶ LLM/検索に Claude API（@anthropic-ai/sdk・api.anthropic.com・claude-* モデル）を新しく使わない。他AI（Gemini・Groq・DeepSeek・OpenRouter・Perplexity・Grok・Kimi 等）を既定にし、Claude へ自動フォールバックする分岐も書かない（ONBOARDING §2.8.0）。';
+const prompt = `${GLOBAL_PROHIBITION}\n\n${context.join('\n')}\n\n## 実装指示\n${instruction}`.trim();
 // WSL 実機に触るのは auto かつ明示指定が無い時だけ。--dry-run も実際の実行計画を見せる
 // ものなので probe 自体はする(モデルだけ変わって中身は実行しないので副作用は無い)。
 const chatgptAuth = (!model && lane === 'auto') ? probeChatGptAuth({ forceNative }) : null;
@@ -876,8 +1019,10 @@ if (useCodex && !forceNative && !process.env.NODE_TEST_CONTEXT && process.env.CO
     syncWslCodexAuth({ clearCooldown: () => fs.rmSync(claudeFile(home, 'codex-cooldown.json'), { force: true }), log: m => console.error(m) });
   } catch (e) { console.error(`[codex-do] WSL の Codex ログイン照合に失敗（続行）: ${e.message}`); }
 }
+let cooldownRecheck = false;
 if (useCodex) {
   const gate = decideCodexGate({ home, origin });
+  cooldownRecheck = gate.recheck === true;
   if (gate.deferred && ['codex_cooldown', 'unattended_budget'].includes(gate.reason) && !noFallback && resolveFallbackBackends(home).length > 0) {
     cooldownSkipCodex = true;
     skipCodexReason = gate.reason;
@@ -915,7 +1060,8 @@ function execute(command, commandArgs, options = {}) {
       const mocks = JSON.parse(process.env.CODEX_DO_MOCK_RESULTS);
       const mock = mocks[mockIndex++];
       if (!mock) throw new Error('CODEX_DO_MOCK_RESULTS exhausted');
-      if (mock) {
+      // real:true は mock を使わず実プロセスを起動する（偽 CLI で実行ループ自体を検証するテスト用）。
+      if (mock && !mock.real) {
         if (mock.output) process.stdout.write(mock.output);
         if (mock.stderr) process.stderr.write(mock.stderr);
         return Promise.resolve({
@@ -944,27 +1090,64 @@ function execute(command, commandArgs, options = {}) {
     // stdio を全て pipe にして TTY を渡さない。TTY 付きで起動すると codex が端末入力を
     // 待ったまま眠り続ける(2026-08-26 に 1日00:57 hang した実害)。
     const child = spawn(command, commandArgs, { ...spawnOptions, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    let settled = false, forceTimer = null;
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer); clearTimeout(forceTimer); clearInterval(stallTimer);
+      resolve(value);
+    };
     const timer = setTimeout(() => {
       timedOut = true;
+      // 予算が停滞判定の閾値秒（300秒）以下だと、締切タイマーが周期判定より先に発火し続け、
+      // ポリシー拒否で停滞した試行が outcome=timeout として記録される（2026-11-02 実測: gemini-cli 301秒/予算300秒 out0）。
+      // 締切到達時点で経過秒は予算に達しているので、秒数条件だけ外して拒否回数・出力字数で同じ判定を行う。
+      if (!abortedPolicyStall
+        && options.abortPolicyStall === true
+        && process.env.CODEX_DO_POLICY_STALL_ABORT !== '0'
+        && shouldAbortPolicyStall({ elapsedSecs: callTimeoutSeconds, outputChars, stderr, minElapsedSecs: 0 })) {
+        abortedPolicyStall = true;
+      }
       console.error(`\n⏱ ${command} が ${callTimeoutSeconds} 秒で応答を終えなかったので停止しました。--timeout で延長できます`);
+      // 猶予タイマーは kill より先に張る。kill が同期で固まっても（旧実装の taskkill は最大10秒）
+      // 猶予の起点を締切時刻に固定し、打ち切りが予算+猶予を超えないようにする（2026-11-04 修正）。
+      // 親が先に終わって孫が pipe を握ったままだと taskkill /T の木から外れ 'close' が来ない
+      // (2026-10-28 実測: 予算600秒の gemini-cli 試行が 1044 秒)。猶予後は close を待たず打ち切る。
+      forceTimer = setTimeout(() => {
+        for (const stream of [child.stdin, child.stdout, child.stderr]) { try { stream?.destroy(); } catch { /* 既に閉じている */ } }
+        settle({ status: 124, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null });
+      }, timeoutKillGraceMs(process.env));
+      forceTimer.unref?.();
       killProcessTree(child);
     }, callTimeoutSeconds * 1000);
     timer.unref?.();
+    // 拒否が閾値秒より前に出尽くして以後 stderr が静かになる停滞（2026-10-23 実測: gemini が拒否3回後に
+    // 無音で600秒）は chunk 到着時の判定では再評価されないため、周期タイマーでも同じ判定を回す。
+    const checkPolicyStall = () => {
+      if (abortedPolicyStall
+        || options.abortPolicyStall !== true
+        || process.env.CODEX_DO_POLICY_STALL_ABORT === '0'
+        || !shouldAbortPolicyStall({
+          elapsedSecs: (Date.now() - callStarted) / 1000,
+          outputChars,
+          stderr,
+          minElapsedSecs: policyStallMinElapsedSecs(process.env)
+        })) return;
+      abortedPolicyStall = true;
+      console.error(`
+[codex-do] ${command} はポリシー拒否が続き、出力 ${outputChars} 文字のまま停滞したため停止します`);
+      killProcessTree(child);
+    };
+    const stallTimer = setInterval(checkPolicyStall, policyStallCheckMs(process.env));
+    stallTimer.unref?.();
     child.stdout.on('data', (chunk) => { outputChars += chunk.length; output += chunk.toString(); process.stdout.write(chunk); });
     child.stderr.on('data', (chunk) => {
       stderr += chunk.toString();
       process.stderr.write(chunk);
-      if (!abortedPolicyStall
-        && options.abortPolicyStall === true
-        && process.env.CODEX_DO_POLICY_STALL_ABORT !== '0'
-        && shouldAbortPolicyStall({ elapsedSecs: (Date.now() - callStarted) / 1000, outputChars, stderr })) {
-        abortedPolicyStall = true;
-        console.error(`\n[codex-do] ${command} はポリシー拒否が続き、出力 ${outputChars} 文字のまま停滞したため停止します`);
-        killProcessTree(child);
-      }
+      checkPolicyStall();
     });
-    child.on('error', (error) => { clearTimeout(timer); resolve({ status: null, error, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }); });
-    child.on('close', (status) => { clearTimeout(timer); resolve({ status: timedOut ? 124 : status, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }); });
+    child.on('error', (error) => settle({ status: null, error, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }));
+    child.on('close', (status) => settle({ status: timedOut ? 124 : status, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }));
     // 指示は stdin で渡し、必ず閉じる。閉じないと codex が
     // "Reading additional input from stdin..." のまま永久に待つ。
     child.stdin.end(prompt);
@@ -1025,16 +1208,24 @@ async function runLlmAsk() {
   return { result: last || { status: 1, outputChars: 0, output: '', stderr: '' }, provider: null, chain };
 }
 if (!useCodex) {
+  const llmAskWarning = '[codex-do] 注意: llm-ask 経路のためコマンドは実行していません。出力中の「実行結果」は検証されていません';
+  console.log(llmAskWarning);
   const started2 = Date.now();
   const routed = await runLlmAsk();
   recordUsage({ ...routed.result, status: routed.provider ? 0 : (routed.result.status || 1) }, `llm-ask/${routed.provider || 'none'}`, (Date.now() - started2) / 1000, 'llm-ask', routed.chain.length, routed.chain);
   if (!routed.provider) console.error(`[codex-do] llm-ask(gemini/deepseek/groq)がすべて失敗しました。Codex が必要な作業なら --kind implement を付けて再実行してください`);
   console.log(`[codex-do] executor=llm-ask${routed.provider ? `:${routed.provider}` : ''} kind=${taskKind}`);
+  console.log(llmAskWarning);
   process.exit(routed.provider ? 0 : (routed.result.status || 1));
 }
 
-async function launchCodex(codexArgs) {
+async function launchCodex(codexArgs, primaryStarted = Date.now()) {
   let result;
+
+  const remainingTimeoutSecs = () => remainingPrimaryBudgetSecs(
+    timeoutSeconds,
+    (Date.now() - primaryStarted) / 1000,
+  );
 
   if (process.platform === 'win32' && !forceNative) {
     // 実機の distro 有無で分岐が変わると abort 経路のテストが非決定的になるため、
@@ -1091,7 +1282,7 @@ async function launchCodex(codexArgs) {
         if (error?.code !== 'ENOENT') console.error(`⚠️ worktree の gitdir 確認に失敗しました（処理は続行します）: ${error?.message ?? error}`);
       }
       recordLaneMode('wsl', review ? 'read-only' : 'workspace-write');
-      result = await execute('wsl', wslCodexArgs({ distro, cwd, codexArgs, inGitRepo: isInsideGitRepo(cwd) }));
+      result = await execute('wsl', wslCodexArgs({ distro, cwd, codexArgs, inGitRepo: isInsideGitRepo(cwd) }), { timeoutSecs: remainingTimeoutSecs() });
     }
     else {
       if (finalStep !== 'native') console.error(`🚨 ${failureReason}`);
@@ -1113,7 +1304,7 @@ async function launchCodex(codexArgs) {
       const native = resolveNativeCodex();
       const nativeArgs = applyNativeSandbox(codexArgs, { review });
       if (!isInsideGitRepo(cwd)) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
-      result = await execute(native.command, [...native.prefixArgs, ...nativeArgs], { cwd });
+      result = await execute(native.command, [...native.prefixArgs, ...nativeArgs], { cwd, timeoutSecs: remainingTimeoutSecs() });
     }
   } else {
     if (process.platform === 'win32') console.error('⚠️ --force-native によりネイティブ Windows codex で実行します');
@@ -1121,7 +1312,7 @@ async function launchCodex(codexArgs) {
     const native = resolveNativeCodex();
     const nativeArgs = process.platform === 'win32' ? applyNativeSandbox(codexArgs, { review }) : [...codexArgs];
     if (!isInsideGitRepo(cwd)) nativeArgs.splice(-1, 0, '--skip-git-repo-check');
-    result = await execute(native.command, [...native.prefixArgs, ...nativeArgs], { cwd });
+    result = await execute(native.command, [...native.prefixArgs, ...nativeArgs], { cwd, timeoutSecs: remainingTimeoutSecs() });
   }
 
   return result;
@@ -1142,10 +1333,11 @@ async function executeCodex() {
   }
   const codexArgs = buildCodexExecArgs({ ...selectedLane, review });
   let result = null, attempts = 0, seconds = 0;
+  const primaryStarted = Date.now();
   for (let attempt = 1; attempt <= 2; attempt++) {
     const attemptStarted = Date.now();
     logCodex();
-    result = await launchCodex(codexArgs);
+    result = await launchCodex(codexArgs, primaryStarted);
     const elapsed = (Date.now() - attemptStarted) / 1000;
     seconds += elapsed;
     attempts = attempt;
@@ -1184,6 +1376,7 @@ let astraRetreated = false;
 while (true) {
   result = await executeCodex();
   quotaCheck = detectQuotaLimit(result?.output, result?.stderr, result?.status, prompt);
+  if (clearCooldownAfterRecheck({ home, recheck: cooldownRecheck, result, quotaMatched: quotaCheck.matched })) cooldownRecheck = false;
   if (quotaCheck.matched && selectedLane.slug === ASTRA && !astraRetreated) {
     const resetUntil = parseCodexResetUntil(`${result.output || ''}\n${result.stderr || ''}`);
     try { writeCodexCooldown(resetUntil, 'codex-astra', 'usage_limit'); } catch {}
@@ -1240,18 +1433,21 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
     console.error(`[codex-do] Falling back to an agentic CLI...`);
 
     const resolvedBackends = resolveFallbackBackends(home);
-    const backends = skipCoolingBackends(resolvedBackends, coolingBackendNames(home));
+    const cooling = coolingBackendNames(home);
+    const backends = deprioritizeUnreliableBackends(skipCoolingBackends(resolvedBackends, cooling), readFallbackBackendHistory(home));
     if (backends.length === 0) {
-      console.error('GEMINI_API_KEY、DEEPSEEK_API_KEY、OPENROUTER_API_KEY が無いためフォールバックを実行できません');
+      console.error('GEMINI_API_KEY、OPENROUTER_API_KEY、ZAI_API_KEY が無いためフォールバックを実行できません');
       result.status = 1;
     } else {
       const chainStarted = Date.now();
       fallbackChain = [];
-      for (const backend of backends) {
-        const backendTimeout = Math.min(
-          chainBackendBudgetSecs(timeoutSeconds, (Date.now() - chainStarted) / 1000),
-          backendSpecificTimeoutSecs(backend.name) ?? Infinity
-        );
+      for (const [backendIndex, backend] of backends.entries()) {
+        // 全冷却で戻されたチェーンも末尾には通常予算を残す（1件だけの場合も同じ）。
+        const backendTimeout = effectiveBackendTimeoutSecs(backend.name, {
+          chainBudget: chainBackendBudgetSecs(timeoutSeconds, (Date.now() - chainStarted) / 1000),
+          cooling: cooling.has(backend.name),
+          isLastBackend: backendIndex === backends.length - 1
+        });
         if (backendTimeout <= 0) {
           console.error(`[codex-do] フォールバック全体の時間枠(${timeoutSeconds}秒)を使い切ったため、残りのバックエンドは実行しません`);
           break;
@@ -1282,7 +1478,8 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
         }
         const spawnFailed = originalStatus === null;
         const cliMissing = isBackendCliMissing(result.output, `${result.stderr || ''}\n${result.error?.message || ''}`);
-        const exhausted = isBackendExhausted(result.output, result.stderr);
+        const exhausted = isBackendExhausted(result.output, result.stderr)
+          || (backend.kind === 'cheap-code' && result.status === 3);
         const decision = shouldAdvanceToNextBackend({ timedOut: result.timedOut === true, status: result.status, exhausted, cliMissing, aborted: result.aborted === 'policy_stall' });
         const outcome = decision.outcome;
 
@@ -1293,6 +1490,9 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
           timedOut: result.timedOut === true,
           spawnFailed,
           out: Math.ceil((result.outputChars || 0) / 4),
+          // stderrTail は末尾200字のため拒否回数が欠ける。打ち切り判定と同じ実測値（全 stderr の拒否回数・出力文字数）を残す。
+          policyDenials: countPolicyDenials(result.stderr),
+          outChars: result.outputChars || 0,
           secs: Number(((Date.now() - attemptStarted) / 1000).toFixed(3)),
           // この試行に実際に与えた予算。delegation-health の timeout 判定が
           // 「900 秒固定」ではなく与えた予算で判定できるようにする（2026-10-22）。
@@ -1301,7 +1501,12 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
           outcome
         });
 
-        if (outcome === 'timeout' || outcome === 'cli_missing' || outcome === 'blocked') recordFallbackBackendOutcome(home, { backend: backend.name, outcome });
+        // ok も記録する。以前は失敗だけを追記していたため、timeout のあとに成功しても
+        // 「最後の outcome」が timeout のままで6時間冷却が解けず、全 backend が冷却中になって
+        // keepAtLeastOne が死んだ組み合わせを丸ごと復活させていた（2026-11-02 実測:
+        // deepseek は 10:13:40 に 568秒で成功しているのに、その後の 12:23 も timeout 扱いで
+        // 300秒+600秒を再試行）。成功を残せば冷却は実績どおり即座に解ける。
+        if (outcome === 'ok' || outcome === 'timeout' || outcome === 'cli_missing' || outcome === 'blocked') recordFallbackBackendOutcome(home, { backend: backend.name, outcome });
         if (outcome === 'blocked') {
           console.error(`[codex-do] backend=${backend.name} がポリシー拒否で停滞しているため ${fallbackChain.at(-1).secs} 秒で打ち切って次へ`);
         } else if (outcome === 'timeout') {
@@ -1320,6 +1525,21 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
       }
     }
   }
+}
+
+// 実行後の作業ツリー（git diff HEAD ＋ 未追跡ファイル全行）を unified diff 文字列へ合成する。
+// 未追跡ファイルは `--- /dev/null\n+++ b/<path>` の疑似 hunk として scanDiffForClaudeApi に渡す。
+function collectWorktreeDiffForScan(cwd) {
+  const tracked = spawnSync('git', ['-C', cwd, 'diff', 'HEAD'], { windowsHide: true, encoding: 'utf8' });
+  const parts = [String(tracked.stdout || '')];
+  const untracked = spawnSync('git', ['-C', cwd, 'ls-files', '--others', '--exclude-standard'], { windowsHide: true, encoding: 'utf8' });
+  for (const file of String(untracked.stdout || '').split(/\r?\n/)) {
+    if (!file.trim()) continue;
+    let content = '';
+    try { content = fs.readFileSync(path.join(cwd, file), 'utf8'); } catch { continue; }
+    parts.push(`--- /dev/null\n+++ b/${file}\n${content.split(/\r?\n/).map(line => `+${line}`).join('\n')}`);
+  }
+  return parts.join('\n');
 }
 
 const secs = (Date.now() - started) / 1000;
@@ -1353,6 +1573,22 @@ if (executorName === 'fallback') {
   recordUsage(result, `${reportedFallbackBackend?.name ?? 'unknown'}/${reportedFallbackBackend?.model ?? 'unknown'}`, secs, 'fallback', 1, fallbackChain);
 }
 
+// 実行後スキャン: Codex / cheap-code が書いたコードにも Claude API 禁止を効かせる。
+// app-llm-cost-gate は Claude Code の PreToolUse でしか動かないため、委譲先の出力をここで検査する。
+// 違反があれば終了コード 3（deferred=75 はそのまま）。--review / --kind investigate / --dry-run では実行しない。
+let gateBlocked = false;
+if (!review && !dryRun && taskKind !== 'investigate' && isInsideGitRepo(cwd) && result) {
+  try {
+    const violations = scanDiffForClaudeApi(collectWorktreeDiffForScan(cwd));
+    if (violations.length) {
+      gateBlocked = true;
+      console.error('[codex-do] ⛔ app-llm-cost-gate: アプリに Claude API の呼び出しが追加されました（ONBOARDING §2.8.0）。他AIに置き換えてください:');
+      for (const violation of violations) console.error(`  ${violation.file}: ${violation.line}`);
+    }
+  } catch (error) {
+    console.error(`[codex-do] app-llm-cost-gate スキャン失敗（続行）: ${error?.message ?? error}`);
+  }
+}
 console.log(`[codex-do] executor=${executorName}${executorName === 'fallback' ? `:${reportedFallbackBackend?.name ?? 'unknown'} (理由: ${fallbackReason})` : ''}`);
-process.exit(result?.status ?? 1);
+process.exit(gateBlocked ? (result?.status === EX_TEMPFAIL ? EX_TEMPFAIL : 3) : (result?.status ?? 1));
 }

@@ -6,6 +6,7 @@ import { recordClosed } from "./closed-sessions-ledger.mjs";
 import { launchNextSession } from "./next-session-launch.mjs";
 
 import { rotate } from "./next-session-rotate.mjs";
+import { runKnowledgeUpstream } from "./knowledge-upstream.mjs";
 
 const claudeDir = join(homedir(), ".claude");
 const currentPath = join(claudeDir, "current-session.json");
@@ -58,6 +59,8 @@ if (!recorded) {
   console.error(`未完了: ${sessionId} を closed-sessions.json に記録できませんでした（一覧から消えません）`);
   process.exit(1);
 }
+
+try { await runKnowledgeUpstream({ emit: () => {} }); } catch {}
 
 launchPurge();
 

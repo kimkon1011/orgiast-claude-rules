@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { appendUsageLedger, autoProvider, buildChildEnv, cooldownUntilFromText, detectBillingFailure, detectUsageLimitText, readInstruction, resolveProvider, writeProviderCooldown } from './cheap-code.mjs';
+import { DEFAULT_CHILD_API_TIMEOUT_MS, appendUsageLedger, autoProvider, buildChildEnv, cooldownUntilFromText, detectBillingFailure, detectUsageLimitText, readInstruction, resolveChildApiTimeoutMs, resolveProvider, writeProviderCooldown } from './cheap-code.mjs';
 import { prepareWorkerConfigDir } from './claude-exe.mjs';
 
 const tool = fileURLToPath(new URL('./cheap-code.mjs', import.meta.url));
@@ -21,7 +21,7 @@ function run(args) {
 test('provider 未指定では DeepSeek の base を選ぶ', () => {
   const result = run(['--dry-run', '確認する']);
   assert.equal(result.status, 0);
-  assert.equal(JSON.parse(result.stdout).base, 'https://api.deepseek.com/anthropic');
+  assert.equal(JSON.parse(result.stdout).base, 'https://openrouter.ai/api');
 });
 
 test('--provider glm では Z.ai の base を選ぶ', () => {
@@ -39,7 +39,7 @@ test('不正な provider 名はエラーになる', () => {
 test('--model が provider の既定モデルを上書きする', () => {
   const result = run(['--dry-run', '--model', 'custom-model', '確認する']);
   assert.equal(result.status, 0);
-  assert.equal(JSON.parse(result.stdout).model, 'custom-model');
+  assert.equal(JSON.parse(result.stdout).model, 'deepseek/custom-model');
 });
 
 test('--prompt-file から指示を読める', () => {
@@ -82,7 +82,7 @@ test('子 env だけに Anthropic 接続設定を追加し process.env を汚染
   const beforeToken = process.env.ANTHROPIC_AUTH_TOKEN;
   const config = resolveProvider('deepseek');
   const childEnv = buildChildEnv(config, 'test-secret', { SAFE_PARENT: 'yes' });
-  assert.equal(childEnv.ANTHROPIC_BASE_URL, 'https://api.deepseek.com/anthropic');
+  assert.equal(childEnv.ANTHROPIC_BASE_URL, 'https://openrouter.ai/api');
   assert.equal(childEnv.ANTHROPIC_AUTH_TOKEN, 'test-secret');
   assert.equal(childEnv.SAFE_PARENT, 'yes');
   assert.equal(process.env.ANTHROPIC_BASE_URL, beforeBase);
@@ -107,9 +107,9 @@ test('buildChildEnv は親 env を浄化してから provider 値を入れ、wor
     CLAUDE_CODE_GIT_BASH_PATH: 'C:\\Program Files\\Git\\bin\\bash.exe',
   }, { configDir: 'C:\\worker\\dir' });
 
-  assert.equal(childEnv.ANTHROPIC_BASE_URL, 'https://api.deepseek.com/anthropic');
+  assert.equal(childEnv.ANTHROPIC_BASE_URL, 'https://openrouter.ai/api');
   assert.equal(childEnv.ANTHROPIC_AUTH_TOKEN, 'provider-key');
-  assert.equal(childEnv.ANTHROPIC_API_KEY, undefined);
+  assert.equal(childEnv.ANTHROPIC_API_KEY, '');
   assert.equal(childEnv.CLAUDECODE, undefined);
   assert.equal(childEnv.MCP_SERVER, undefined);
   assert.equal(childEnv.SAFE_PARENT, 'yes');
@@ -117,6 +117,28 @@ test('buildChildEnv は親 env を浄化してから provider 値を入れ、wor
   assert.equal(childEnv.CLAUDE_CONFIG_DIR, 'C:\\worker\\dir');
   // 親の 200000 は浄化で消え、provider の実窓に置き換わる。
   assert.equal(childEnv.CLAUDE_CODE_MAX_CONTEXT_TOKENS, '1000000');
+});
+
+// API 無応答ハングが既定 600s だと 900s cap 内で再試行に入れない(fallback_chain_timeout)。
+test('buildChildEnv は子の API_TIMEOUT_MS を 600s 既定より短く注入し env で上書きできる', () => {
+  const config = resolveProvider('deepseek');
+  assert.equal(DEFAULT_CHILD_API_TIMEOUT_MS < 600000, true);
+  // 900s の cap 内で最低 3 回は試行できる値にしておく(1 回のハングで cap を使い切らない)。
+  assert.equal(DEFAULT_CHILD_API_TIMEOUT_MS * 3 <= 900000, true);
+  assert.equal(buildChildEnv(config, 'k', {}).API_TIMEOUT_MS, String(DEFAULT_CHILD_API_TIMEOUT_MS));
+  // 親が API_TIMEOUT_MS=600000 を持っていても短縮値で置き換える。
+  assert.equal(buildChildEnv(config, 'k', { API_TIMEOUT_MS: '600000' }).API_TIMEOUT_MS, String(DEFAULT_CHILD_API_TIMEOUT_MS));
+  assert.equal(buildChildEnv(config, 'k', { CHEAP_CODE_API_TIMEOUT_MS: '90000' }).API_TIMEOUT_MS, '90000');
+  assert.equal(resolveChildApiTimeoutMs({ CHEAP_CODE_API_TIMEOUT_MS: 'abc' }), DEFAULT_CHILD_API_TIMEOUT_MS);
+  assert.equal(resolveChildApiTimeoutMs({ CHEAP_CODE_API_TIMEOUT_MS: '-5' }), DEFAULT_CHILD_API_TIMEOUT_MS);
+});
+
+// 契約 RULES「他バックエンドの挙動を変えない」: glm は既定のまま(注入しない)。
+test('buildChildEnv は glm へ API_TIMEOUT_MS を注入しない', () => {
+  const glm = resolveProvider('glm');
+  assert.equal(buildChildEnv(glm, 'k', {}).API_TIMEOUT_MS, undefined);
+  // 親が明示的に持っている値は従来どおり継承する(挙動を変えない)。
+  assert.equal(buildChildEnv(glm, 'k', { API_TIMEOUT_MS: '600000' }).API_TIMEOUT_MS, '600000');
 });
 
 test('prepareWorkerConfigDir は hooks を書かず deny を引き継ぎ disableAllHooks を立てる', () => {
@@ -257,3 +279,9 @@ test('明示 provider が cooldown 中なら claude を起動せず exit 3 で�
   }
 });
 
+
+test('OpenRouter pins coding model slots and leaves GLM model selection alone', () => {
+  const env = buildChildEnv({ ...resolveProvider('deepseek'), defaultModel: 'deepseek/deepseek-v4-pro' }, 'test', {});
+  for (const key of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL']) assert.equal(env[key], 'deepseek/deepseek-v4-pro');
+  assert.equal(buildChildEnv(resolveProvider('glm'), 'test', {}).ANTHROPIC_DEFAULT_HAIKU_MODEL, undefined);
+});

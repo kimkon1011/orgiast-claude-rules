@@ -1,0 +1,18 @@
+{
+  "sessions": [
+    {
+      "sessionId": "83f25ef2-1ccb-40c8-8097-1a6ad74cd000",
+      "projectId": "c--Users-uers-Downloads-CLAUDE-md--",
+      "reason": "remote-archived",
+      "title": "繰り返し出てくる内容",
+      "at": "2026-11-02T06:31:15.607Z",
+      "bridgeSessionId": "cse_01Q9uE1m2C8VMTyhoDt6VDEY",
+      "archivedAt": "2026-10-29T10:17:33.249421Z"
+    }
+  ],
+  "scanned": 12,
+  "limited": true,
+  "protected": 7,
+  "nextCursor": "c--Users-uers-Downloads-CLAUDE-md--/87ad3090-22a4-4400-b42a-b6c97ec3ba75.jsonl",
+  "otherCandidateCount": 0
+}

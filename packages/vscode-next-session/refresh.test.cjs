@@ -26,7 +26,7 @@ test('時間帯: 06-24 は終了排他、22-06 は日跨ぎ、不正値は null'
 
 test('設定の決定順: env -> json -> VS Code 設定 -> 既定', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'refresh-cfg-'));
-  assert.deepEqual(readRefreshConfig(home, {}, {}), { minutes: 60, hours: '06-24' });
+  assert.deepEqual(readRefreshConfig(home, {}, {}), { minutes: 0, hours: '06-24' });
   assert.deepEqual(readRefreshConfig(home, {}, { minutes: 30, hours: '08-20' }), { minutes: 30, hours: '08-20' });
   fs.mkdirSync(path.join(home, '.claude'));
   fs.writeFileSync(path.join(home, '.claude', 'mobile-sessions.json'), JSON.stringify({ refreshMinutes: 15, refreshHours: '09-18' }));

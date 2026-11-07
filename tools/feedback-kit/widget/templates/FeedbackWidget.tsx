@@ -62,7 +62,7 @@ export function FeedbackWidget({ appName = "{{APP_NAME}}", hideFloatingButton = 
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.ok) throw new Error(data.error || `送信に失敗しました (${response.status})`);
       form.reset(); clearImages(); setOpen(false); setToast(true);
-      window.setTimeout(() => setToast(false), 3000);
+      // 閲覧リンクを操作できるよう、完了表示は利用者が閉じるまで残す。
     } catch (cause) { setError(cause instanceof Error ? cause.message : "送信に失敗しました"); }
     finally { sendingRef.current = false; setSending(false); }
   }
@@ -94,10 +94,11 @@ export function FeedbackWidget({ appName = "{{APP_NAME}}", hideFloatingButton = 
           </div>)}</div>
           {error && <p role="alert" style={{ padding: 9, borderRadius: 6, background: "#fef2f2", color: "#b91c1c", fontSize: 13 }}>{error}</p>}
           <button disabled={sending} type="submit" style={{ width: "100%", marginTop: 16, border: 0, borderRadius: 8, padding: 11, background: sending ? "#9ca3af" : "#f59e0b", color: "white", fontWeight: 700, cursor: sending ? "wait" : "pointer" }}>{sending ? "送信中…" : "送信"}</button>
+          <p><a href="/feedback/mine" data-feedback-history-link>送信した内容・対応状況を見る</a></p>
         </form>
       </div>
     </div>}
     {!hideFloatingButton && <button type="button" aria-expanded={open} onClick={() => { setError(""); setOpen(true); }} style={{ position: "fixed", right: 20, bottom: 20, zIndex: z - 1, border: 0, borderRadius: 999, padding: "12px 18px", background: "#f59e0b", color: "white", fontWeight: 700, boxShadow: "0 6px 20px rgba(0,0,0,.25)", cursor: "pointer" }}>🐛 不具合・要望</button>}
-    {toast && <div role="status" style={{ position: "fixed", left: "50%", bottom: 30, zIndex: z + 1, transform: "translateX(-50%)", borderRadius: 8, padding: "12px 18px", background: "#166534", color: "white", boxShadow: "0 6px 20px rgba(0,0,0,.25)" }}>送信しました。ありがとうございます！</div>}
+    {toast && <div role="status" style={{ position: "fixed", left: "50%", bottom: 30, zIndex: z + 1, transform: "translateX(-50%)", borderRadius: 8, padding: "12px 18px", background: "#166534", color: "white", boxShadow: "0 6px 20px rgba(0,0,0,.25)" }}>送信しました。ありがとうございます！<p><a href="/feedback/mine" data-feedback-history-link style={{ color: "white" }}>送信した内容・対応状況を見る</a></p><button type="button" onClick={() => setToast(false)}>閉じる</button></div>}
   </>;
 }

@@ -76,13 +76,13 @@ const LLM_PROVIDERS = {
   ...PROVIDERS,
   glm: { url: 'https://api.z.ai/api/coding/paas/v4/chat/completions', env: 'ZAI_API_KEY', file: 'zai.env', model: 'glm-5.3' },
   genspark: { url: 'https://www.genspark.ai/api/llm_proxy/v1/chat/completions', env: 'GSK_PROXY_KEY', file: 'genspark-proxy.env', model: 'gpt-5.6-luna' },
-  mistral: { url: 'https://api.mistral.ai/v1/chat/completions', env: 'MISTRAL_API_KEY', file: 'mistral.env', model: 'mistral-large-latest' },
+  mistral: { url: 'https://api.mistral.ai/v1/chat/completions', env: 'MISTRAL_API_KEY', file: 'mistral.env', model: 'open-mistral-nemo' },
 };
 // 返信文は日本語品質が要る。routing-table の jp_reply(llama-3.3-70b)は文が崩れ・質問を鸚鵡返しした
 // (2026-10-09 実測)ので、返信だけは日本語に強いモデルの連鎖に固定する。DISCORD_AUTOREPLY_PROVIDER で先頭を差し替え可。
 export const REPLY_CHAIN = Object.freeze([
-  { provider: 'gemini', model: 'gemini-3.7-flash' },
-  { provider: 'deepseek', model: 'deepseek-chat' },
+  { provider: 'gemini', model: 'gemini-3.6-flash' },
+  { provider: 'deepseek', model: 'deepseek-flash' },
   { provider: 'kimi', model: 'kimi-k3' },
   { provider: 'genspark', model: 'gpt-5.6-luna' },
 ]);
@@ -108,6 +108,7 @@ export function createLlm({ home, fetchImpl, sleepImpl = sleep, env = process.en
         if (!key) return null;
         const body = { model: candidate.model || p.model, stream: false, max_tokens: 6000,
           messages: [{ role: 'system', content: system }, { role: 'user', content: JSON.stringify(input) }] };
+        if (candidate.provider === 'deepseek' && body.model === 'deepseek-flash') body.thinking = { type: 'disabled' };
         if (p.special === 'kimi') Object.assign(body, { reasoning_effort: 'none', temperature: 0.6 });
         return { url: p.url, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...p.extraHeaders }, body: JSON.stringify(body), signal: AbortSignal.timeout(60000) } };
       },
@@ -203,7 +204,7 @@ export async function runOnce(options = {}) {
       home, token, userId: read(path.join(home, '.claude', 'orgiast-discord-user-id.txt')).trim() || '715210673642012733',
       fetchImpl: options.fetchImpl ?? fetch, plainJa: false, webhookFallback: false,
     });
-    if (sent?.delivered !== 'dm') throw new Error('kim health notification failed');
+    if (!['dm', 'session-inbox'].includes(sent?.delivered)) throw new Error('kim health notification failed');
   };
   const errorText = e => String(e.message || e).replaceAll(token || '\0', '[redacted]').slice(0, 1000);
   try {
@@ -454,6 +455,45 @@ export async function main(argv = process.argv.slice(2), options = {}) {
         else fs.rmSync(path.join(dir, 'PAUSE'), { force: true });
       }
       print({ ok: true, paused: command === 'pause', dryRun }); return 0;
+    }
+    if (command === 'gap-check') {
+      const days = Number(argv[argv.indexOf('--days') + 1]) || 7;
+      const auth = (options.readTokenImpl ?? readToken)(home);
+      if (!auth.token) throw new Error('Discord Bot トークンが設定されていません');
+      const api = createDiscord({ token: auth.token, fetchImpl: options.fetchImpl, sleepImpl: options.sleepImpl });
+      const kimId = read(path.join(home, '.claude', 'orgiast-discord-user-id.txt')).trim() || '715210673642012733';
+      const guildId = (options.env ?? process.env).DISCORD_DEFAULT_GUILD_ID || '715211007307284530';
+      const now = typeof options.now === 'function' ? options.now() : (typeof options.now === 'number' ? options.now : Date.now());
+
+      const pages = [];
+      for (let offset = 0; offset < 125; offset += 25) {
+        const page = await api(`/guilds/${guildId}/messages/search?mentions=${kimId}&author_type=user&limit=25${offset ? `&offset=${offset}` : ''}`);
+        if (!Array.isArray(page.messages)) throw new Error('Discord search response invalid');
+        pages.push(...page.messages);
+        const cutoff = now - days * 86400000;
+        const hits = page.messages.flat().filter(m => m.hit !== false && Date.parse(m.timestamp) >= cutoff);
+        if (page.messages.length < 25 || hits.length < 25) break;
+      }
+      const mentions = [...new Map(pages.flat().filter(m => m.hit !== false).map(m => [m.id, m])).values()];
+      const cutoff = now - days * 86400000;
+      const targets = mentions.filter(m => Date.parse(m.timestamp) >= cutoff).length;
+
+      // Check reply queue for enqueued items
+      let enqueued = 0;
+      try {
+        const queuePath = path.join(home, '.claude', 'reply-queue', 'queue.json');
+        if (fs.existsSync(queuePath)) {
+          const queue = JSON.parse(fs.readFileSync(queuePath, 'utf8'));
+          const queueItems = Object.values(queue.items || {});
+          const queueKeys = new Set(queueItems.map(i => i.key));
+          enqueued = mentions.filter(m => {
+            const key = `discord:${m.channel_id}:${m.id}`;
+            return queueKeys.has(key) && Date.parse(m.timestamp) >= cutoff;
+          }).length;
+        }
+      } catch { /* queue 未初期化 */ }
+      print({ targets, enqueued });
+      return 0;
     }
     if (!['once', 'loop'].includes(command)) throw new Error(`Unknown command: ${command}`);
     const number = (flag, fallback) => {

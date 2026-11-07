@@ -34,6 +34,12 @@ GitHub にログイン済みの Claude Code で:
 | rules | `rules/gas.md` | GAS 開発の絶対ルール（`~/.claude/rules/` にコピーすると .gs 編集時に自動適用） |
 | doc | `ONBOARDING.md` | 全社共通の絶対ルール全文（詳細版） |
 
+## 設計文書
+
+| 文書 | 説明 |
+|---|---|---|
+| [c4-operationalization-design.md](c4-operationalization-design.md) | C4（fallback_chain_timeout 監視）実運用化の設計判断。巡回型スイープ統合・閾値・通知先を確定 |
+
 ## CLAUDE.md に足すもの（手動コピー、plugin では配布されない）
 
 各自の `~/.claude/CLAUDE.md` に最低限:
@@ -52,3 +58,12 @@ node <repo>/tools/onboarding-sync.mjs --force
 この経路は既存PCのリポ更新後に `deploySkills` で `skills/` を再帰配置し、`ONBOARDING.md` から圧縮索引を生成して `~/.claude/CLAUDE.md` に反映する。`setup.mjs --converge` は検出した不足を修復するため、全チェック成功だけで最新版スキルが届いたとは判定しない。
 
 配置後は `~/.claude/skills/design-deck/SKILL.md` の「ハイブリッド企画書モデル」、同フォルダ内 `pipeline/` の補助ファイルを含む全ファイル、`~/.claude/CLAUDE.md` の要約行をread-backで確認する。Windowsの通常ホームとWSLのホームを混同しない。新規PCはplugin install、既存PCはplugin updateまたは上記再帰配布でパイプラインも届く。Driveの旧manifestによるSKILL.md単体配布だけでは補助ファイルは届かない。
+
+## テスト
+
+<!-- テスト実行についての注意: 単体テストは Node.js 組み込みテストランナーを使用 -->
+ツール群の単体テストは Node.js 組み込みのテストランナーで実行できます。
+
+```sh
+node --test tools/*.test.mjs
+```

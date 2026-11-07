@@ -6,13 +6,15 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { spawnSync } from 'node:child_process';
 import { runAutopilot, sendNotice, autopilotPaths, parseControl, capReason, dateKey, acquireLock } from './autopilot-tick.mjs';
+import { readDeferred } from './lib/owner-dm-policy.mjs';
+import { toastSummary } from './autopilot-local-notice.mjs';
 
 const NOW = new Date('2026-09-21T01:00:00Z');
 const snow = (offset) => String((BigInt(NOW.getTime() - 1420070400000 + offset) << 22n));
 function fixture(t, overrides = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-test-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const opts = { home, dir: path.join(home, 'state'), now: NOW, token: '', userId: '', hostname: 'test-pc', fetchImpl: async () => { throw new Error('unexpected network'); }, ...overrides };
+  const opts = { home, askJevImpl: async () => ({ ok: false, reason: 'test_offline' }), platform: 'linux', dir: path.join(home, 'state'), now: NOW, token: '', userId: '', hostname: 'test-pc', fetchImpl: async () => { throw new Error('unexpected network'); }, ...overrides };
   const call = (command, args = {}, extra = {}) => runAutopilot(command, args, { ...opts, ...extra });
   return { opts, call, paths: autopilotPaths(opts) };
 }
@@ -21,6 +23,9 @@ function discord(t, overrides = {}) {
   const f = fixture(t, { token: 'test-token', userId: 'kim', ...overrides });
   fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(f.opts.home, '.claude', 'orgiast-autopilot-channel-id.txt'), 'control');
+  // owner DM ルーティングに必要なテスト用PC所有者を明示し、実機のgit設定に依存しない。
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'cost-reporter.env'), 'REPORTER_LABEL=autopilot-test-PC\n');
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'fleet-pc-map.json'), JSON.stringify({ 'autopilot-test-PC': { account: 'test@example.com', discordId: 'kim' } }));
   const unavailable = new Set();
   f.opts.fetchImpl = async (url, init = {}) => {
     calls.push({ url, init });
@@ -28,7 +33,7 @@ function discord(t, overrides = {}) {
     if (url.endsWith('/users/@me/channels')) return { ok: true, json: async () => ({ id: 'dm' }) };
     const parsed = new URL(url), channel = parsed.pathname.split('/')[4];
     if (unavailable.has(channel)) return { ok: false, status: 503 };
-    if (init.method === 'POST') { sent.push(JSON.parse(init.body).content); return { ok: true }; }
+    if (init.method === 'POST') { sent.push(JSON.parse(init.body).content); return { ok: true, status: 200, json: async () => ({ id: snow(sent.length), channel_id: channel }) }; }
     const after = BigInt(parsed.searchParams.get('after'));
     return { ok: true, json: async () => channels[channel].filter((m) => BigInt(m.id) > after).sort((a, b) => BigInt(a.id) < BigInt(b.id) ? -1 : 1).slice(0, 100).reverse() };
   };
@@ -149,7 +154,7 @@ test('a dead login still resumes when the deepseek key can carry the child', asy
   fs.mkdirSync(path.dirname(creds), { recursive: true });
   fs.writeFileSync(creds, JSON.stringify({ claudeAiOauth: { accessToken: '', refreshToken: '' } }));
   fs.utimesSync(creds, new Date('2026-09-21T00:00:00Z'), new Date('2026-09-21T00:00:00Z'));
-  fs.writeFileSync(path.join(f.opts.home, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY="sk-test"\n');
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'openrouter.env'), 'OPENROUTER_API_KEY="sk-test"\n');
   await f.call('start', { objective: 'test' });
   for (let i = 0; i < 3; i += 1) await f.call('pause', { reason: 'runner_error', detail: 'OAuth session expired' });
   // Right after the pause nothing relaunches: a broken key must not spawn the child every tick.
@@ -172,7 +177,7 @@ test('without a deepseek key a dead login keeps the 3-strike pause', async (t) =
 test('the deepseek fallback does not wipe an unanswered question', async (t) => {
   const f = fixture(t);
   fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(f.opts.home, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY=sk-test\n');
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'openrouter.env'), 'OPENROUTER_API_KEY=sk-test\n');
   await f.call('start', { objective: 'test' });
   for (let i = 0; i < 3; i += 1) await f.call('pause', { reason: 'runner_error', detail: 'OAuth session expired' });
   await f.call('pause', { reason: 'runner_error', question: 'このまま進めますか？' });
@@ -191,18 +196,24 @@ test('an invalid question deadline is ignored', async (t) => {
 
 test('hours cap uses the range of today log timestamps and fires immediately on post', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: 'test', 'max-hours-per-day': 1 });
   await f.call('post', { summary: 'first', progress: 10 });
   const result = await f.call('post', { summary: 'second', progress: 20 }, { now: new Date(NOW.getTime() + 3_600_000) });
   assert.equal(result.status, 'paused');
   assert.equal(result.watchdog.reason, 'daily_hours_cap');
-  assert.match(f.sent[0], /⚠️ 止まりました: test/);
-  assert.match(f.sent[0], /今日の作業時間の上限になりました。明日また続けます。/);
-  assert.doesNotMatch(f.sent[0], /daily_hours_cap/);
+  assert.match(deferredTexts()[0], /⚠️ 止まりました: test/);
+  assert.match(deferredTexts()[0], /今日の作業時間の上限になりました。明日また続けます。/);
+  assert.doesNotMatch(deferredTexts()[0], /daily_hours_cap/);
 });
 
 test('consecutiveNoop resets on progress, unchanged progress is noop, watchdog only notifies on transition', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: 'test', 'max-noop': 2 });
   await f.call('pre');
   await f.call('post', { summary: 'blocked', progress: 0, noop: true });
@@ -215,9 +226,9 @@ test('consecutiveNoop resets on progress, unchanged progress is noop, watchdog o
   const fired = await f.call('post', { summary: 'blocked', progress: 10 });
   assert.deepEqual(fired.watchdog, { reason: 'noop_streak' });
   await f.call('pre');
-  assert.equal(f.sent.filter((s) => s.includes('止まりました')).length, 1);
-  assert.match(f.sent[0], /3回続けて進みませんでした。いったん止めています。/);
-  assert.doesNotMatch(f.sent[0], /noop_streak/);
+  assert.equal(deferredTexts().filter((s) => s.includes('止まりました')).length, 1);
+  assert.match(deferredTexts()[0], /3回続けて進みませんでした。いったん止めています。/);
+  assert.doesNotMatch(deferredTexts()[0], /noop_streak/);
   assert.equal((await f.call('resume')).status, 'running');
   assert.equal((await f.call('status')).state.consecutiveNoop, 0);
 });
@@ -295,29 +306,33 @@ test('running pre/post and day rollover never send progress DMs; logs retain wor
 });
 
 test('digest records the real delivery result and never re-sends the same slot', async (t) => {
+  // 2026-11-04 仕様変更: 定期報告は保留台帳への保存を記録し、同枠の再登録を防ぐ。
   const f = discord(t);
   await f.call('start', { objective: 'digest goal' });
   const noon = { now: new Date('2026-09-21T03:00:00Z') };
   const sent = await f.call('digest', {}, noon);
   assert.equal(sent.ok, true);
   assert.equal(sent.slot, '2026-09-21-12');
-  assert.equal(sent.delivered, 'dm');
-  assert.equal((await f.call('status', {}, noon)).state.lastDigestDelivered, 'dm');
+  assert.equal(sent.delivered, 'deferred');
+  assert.equal((await f.call('status', {}, noon)).state.lastDigestDelivered, 'deferred');
   assert.equal((await f.call('digest', {}, noon)).skipped, 'not_due_or_already_sent');
-  f.unavailable.add('dm');
+  f.unavailable.add('deferred');
   const evening = { now: new Date('2026-09-21T12:00:00Z') };
   const failed = await f.call('digest', {}, evening);
-  assert.equal(failed.delivered, 'none');
-  assert.equal((await f.call('status', {}, evening)).state.lastDigestDelivered, 'none');
-  assert.equal(f.sent.length, 1); // 未達の分は送れた扱いにしない
+  assert.equal(failed.delivered, 'deferred');
+  assert.equal((await f.call('status', {}, evening)).state.lastDigestDelivered, 'deferred');
+  assert.equal(f.sent.length, 0); // 未達の分は送れた扱いにしない
 });
 
 test('done is durable, notifies once, and handoff contains the seven session-close headings', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: 'test', done: 'pass tests' });
   assert.equal((await f.call('post', { summary: 'verified', progress: 100, evidence: 'テストが全部通った' })).status, 'done');
-  assert.match(f.sent[0], /✅ 終わりました: test/);
-  assert.match(f.sent[0], /確かめたこと: テストが全部通った/);
+  assert.match(deferredTexts()[0], /✅ 終わりました: test/);
+  assert.match(deferredTexts()[0], /確かめたこと: テストが全部通った/);
   assert.equal((await f.call('post', { summary: 'duplicate', progress: 100 })).error, 'not_running');
   assert.equal((await f.call('resume')).error, 'already_done');
   f.channels.dm.push(f.message('continue', 1));
@@ -401,15 +416,18 @@ test('crash after appending log does not lose a charged iteration or allow bypas
 
 function candidates(f, body) {
   fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(f.opts.home, '.claude', 'next-actions.md'), body);
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'business-goals.md'), body);
 }
 
 test('done pre replenishes in priority order, skips human work and previous objective, sends once', async (t) => {
   const asked = [];
   const f = discord(t, { askImpl: async (candidate) => { asked.push(candidate); return candidate.objective === '電話する' ? 'No' : 'Yes'; } });
+  // 2026-11-04 仕様変更: 無人の次作業の予告は即送信せず保留台帳で重複を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: '前の目的' });
   await f.call('post', { summary: 'verified', progress: 100, evidence: '完了を確認' });
-  f.sent.length = 0;
+  deferredOffset = readDeferred(f.opts.home).length;
   candidates(f, '## 明日の推奨アクション（今日）\n1. 前の目的\n2. 電話する\n   - first_step: 顧客へ電話\n3. テスト修正\n   - first_step: テストを実行\n4. 後回し\n');
   const pre = await f.call('pre');
   assert.equal(pre.verdict, 'run');
@@ -420,12 +438,27 @@ test('done pre replenishes in priority order, skips human work and previous obje
   assert.match(asked[0].context, /顧客へ電話/);
   assert.deepEqual(pre.recentLog, []);
   await f.call('pre');
-  assert.deepEqual(f.sent, ['▶ 次はこれをやります: テスト修正\nやめてほしいときは「止めて」と返信してください。（test-pc）']);
+  assert.deepEqual(deferredTexts(), ['▶ 次はこれをやります: テスト修正\nやめてほしいときは「止めて」と返信してください。（test-pc）']);
   const state = (await f.call('status')).state;
   assert.equal(state.objectiveHistory.at(-1).objective, '前の目的');
   assert.equal(state.iterationsToday, 1);
   assert.equal(state.totalIterations, 1);
   assert.equal((await f.call('post', { summary: 'new work', progress: 10 })).noop, false);
+});
+
+test('done pre falls back to next-actions.md when business-goals.md is absent', async (t) => {
+  const asked = [];
+  const f = discord(t, { askImpl: async (candidate) => { asked.push(candidate.objective); return 'Yes'; } });
+  await f.call('start', { objective: '前の目的' });
+  await f.call('post', { summary: 'verified', progress: 100, evidence: '完了を確認' });
+  fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(f.opts.home, '.claude', 'next-actions.md'),
+    '<!-- NEXT-ACTIONS:BEGIN -->\n## 明日の推奨アクション（今日）\n1. テスト修正\n   - first_step: テストを実行\n## 別アカウント/他PCへの依頼（台帳）\n- 台帳項目\n<!-- NEXT-ACTIONS:END -->\n');
+  const pre = await f.call('pre');
+  assert.equal(pre.verdict, 'run');
+  assert.equal(pre.objective.objective, 'テスト修正');
+  assert.match(pre.objective.context, /テストを実行/);
+  assert.deepEqual(asked, ['テスト修正']);
 });
 
 test('refill skips every objective already closed in history, not just the most recent', async (t) => {
@@ -462,7 +495,7 @@ test('refill with only the current objective in history still picks the first el
 test('never-started pre starts a candidate with mocked classifier and notifier', async (t) => {
   const sent = [];
   const f = fixture(t, { askImpl: async () => 'Yes', notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; } });
-  candidates(f, '## 推奨アクション\n- 自動テスト修正\n');
+  candidates(f, '## 売上・利益レバー（上から優先。1セッション=1件）\n- 自動テスト修正\n');
   assert.equal((await f.call('pre')).verdict, 'run');
   assert.equal((await f.call('status')).objective.objective, '自動テスト修正');
   assert.equal(sent.length, 1);
@@ -546,17 +579,23 @@ test('classifier errors or uncertain answers never authorize work', async (t) =>
 
 test('progress 100 without evidence or unverified is rejected and does not change state', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: 'test' });
   const before = fs.readFileSync(f.paths.state, 'utf8');
   assert.equal((await f.call('post', { summary: 'done', progress: 100 })).error, 'evidence_required');
   assert.equal(fs.readFileSync(f.paths.state, 'utf8'), before);
   assert.equal((await f.call('status')).state.status, 'running');
   assert.equal((await f.call('status')).state.totalIterations, 0);
-  assert.deepEqual(f.sent, []);
+  assert.deepEqual(deferredTexts(), []);
 });
 
 test('progress 100 with unverified completes and registers a watch', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: '返信を送る' });
   const post = await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
   assert.equal(post.status, 'done');
@@ -564,53 +603,62 @@ test('progress 100 with unverified completes and registers a watch', async (t) =
   const state = (await f.call('status')).state;
   assert.equal(state.watches.length, 1);
   assert.deepEqual({ ...state.watches[0], since: undefined }, { id: 'w1', objective: '返信を送る', unverified: '相手に届いたか', evidence: '', since: undefined, lastCheckAt: null, checks: 0, ng: 0 });
-  assert.match(f.sent[0], /🟡 だいたい終わりました: 返信を送る/);
-  assert.match(f.sent[0], /まだ確かめられていないこと: 相手に届いたか/);
-  assert.match(f.sent[0], /毎日たしかめて、結果をまた知らせます。/);
+  assert.match(deferredTexts()[0], /🟡 だいたい終わりました: 返信を送る/);
+  assert.match(deferredTexts()[0], /まだ確かめられていないこと: 相手に届いたか/);
+  assert.match(deferredTexts()[0], /毎日たしかめて、結果をまた知らせます。/);
 });
 
 test('watch ok removes the watch and notifies once', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: '返信を送る' });
   await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
-  f.sent.length = 0;
+  deferredOffset = readDeferred(f.opts.home).length;
   const result = await f.call('watch', { id: 'w1', result: 'ok', note: '相手から返事が来た' });
   assert.equal(result.status, 'ok');
   assert.equal((await f.call('status')).state.watches.length, 0);
-  assert.equal(f.sent.length, 1);
-  assert.match(f.sent[0], /✅ 確かめられました: 返信を送る/);
-  assert.match(f.sent[0], /相手から返事が来た/);
+  assert.equal(deferredTexts().length, 1);
+  assert.match(deferredTexts()[0], /✅ 確かめられました: 返信を送る/);
+  assert.match(deferredTexts()[0], /相手から返事が来た/);
 });
 
 test('watch ng three times fails the check, notifies once and records history', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: '返信を送る' });
   await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
-  f.sent.length = 0;
+  deferredOffset = readDeferred(f.opts.home).length;
   assert.equal((await f.call('watch', { id: 'w1', result: 'ng', note: 'まだ届いていない' })).status, 'ng');
   assert.equal((await f.call('watch', { id: 'w1', result: 'ng', note: 'まだ届いていない' })).status, 'ng');
-  assert.deepEqual(f.sent, []);
+  assert.deepEqual(deferredTexts(), []);
   const third = await f.call('watch', { id: 'w1', result: 'ng', note: 'まだ届いていない' });
   assert.equal(third.status, 'failed_check');
   assert.equal((await f.call('status')).state.watches.length, 0);
   assert.equal((await f.call('status')).state.objectiveHistory.at(-1).status, 'failed_check');
-  assert.equal(f.sent.length, 1);
-  assert.match(f.sent[0], /⚠️ うまくいっていません: 返信を送る/);
-  assert.match(f.sent[0], /わかったこと: まだ届いていない/);
-  assert.match(f.sent[0], /直すなら「直して」、やめるなら「止めて」と返信してください。/);
+  assert.equal(deferredTexts().length, 1);
+  assert.match(deferredTexts()[0], /⚠️ うまくいっていません: 返信を送る/);
+  assert.match(deferredTexts()[0], /わかったこと: まだ届いていない/);
+  assert.match(deferredTexts()[0], /直すなら「直して」、やめるなら「止めて」と返信してください。/);
 });
 
 test('watch expires after seven days and notifies once', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: '返信を送る' });
   await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
-  f.sent.length = 0;
+  deferredOffset = readDeferred(f.opts.home).length;
   const later = { now: new Date(NOW.getTime() + 8 * 24 * 3600 * 1000) };
   const result = await f.call('watch', { id: 'w1', result: 'ng', note: 'まだ届いていない' }, later);
   assert.equal(result.status, 'failed_check');
   assert.equal((await f.call('status', {}, later)).state.watches.length, 0);
-  assert.equal(f.sent.length, 1);
-  assert.match(f.sent[0], /⚠️ うまくいっていません: 返信を送る/);
+  assert.equal(deferredTexts().length, 1);
+  assert.match(deferredTexts()[0], /⚠️ うまくいっていません: 返信を送る/);
 });
 
 test('watch validates input and reports unknown ids', async (t) => {
@@ -637,6 +685,9 @@ test('watchesDue lists never-checked and stale watches only', async (t) => {
 
 test('Discord notices never leak internal codes, commands or ids', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: '[P1タスク] 返信を送る' });
   await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
   await f.call('watch', { id: 'w1', result: 'ng', note: 'まだ届いていない' });
@@ -646,8 +697,9 @@ test('Discord notices never leak internal codes, commands or ids', async (t) => 
   await f.call('post', { summary: 'blocked', progress: 0, noop: true });
   await f.call('post', { summary: 'blocked', progress: 0, noop: true });
   await f.call('pause', { question: 'この変更を適用しますか？' });
-  assert.ok(f.sent.length >= 4);
-  for (const text of f.sent) {
+  assert.ok(deferredTexts().length >= 3);
+  assert.equal(f.sent.length, 1);
+  for (const text of [...deferredTexts(), ...f.sent]) {
     assert.doesNotMatch(text, /_cap|runner_error|noop|P1|gh |FB-fb-|daily_iter|daily_hours|total_cap/);
     assert.doesNotMatch(text, /\[P1タスク\]/);
     assert.ok(text.split('\n').length <= 4, text);
@@ -662,21 +714,24 @@ test('直して resumes like 続けて', () => {
 
 test('a watch never checked for seven days is closed by pre with one plain notice', async (t) => {
   const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
   await f.call('start', { objective: '[P1タスク] 返信を送る' });
   await f.call('post', { summary: 'sent', progress: 100, unverified: '相手に届いたか' });
-  f.sent.length = 0;
+  deferredOffset = readDeferred(f.opts.home).length;
   const later = { now: new Date(NOW.getTime() + 8 * 24 * 3600 * 1000) };
   const pre = await f.call('pre', {}, later);
   assert.deepEqual(pre.watchesDue, []);
   const state = (await f.call('status', {}, later)).state;
   assert.equal(state.watches.length, 0);
   assert.equal(state.objectiveHistory.at(-1).status, 'failed_check');
-  assert.equal(f.sent.length, 1);
-  assert.match(f.sent[0], /⚠️ うまくいっていません: 返信を送る/);
-  assert.match(f.sent[0], /7日間、確かめられませんでした/);
-  assert.doesNotMatch(f.sent[0], /P1|w1|watch/);
+  assert.equal(deferredTexts().length, 1);
+  assert.match(deferredTexts()[0], /⚠️ うまくいっていません: 返信を送る/);
+  assert.match(deferredTexts()[0], /7日間、確かめられませんでした/);
+  assert.doesNotMatch(deferredTexts()[0], /P1|w1|watch/);
   await f.call('pre', {}, later);
-  assert.equal(f.sent.length, 1);
+  assert.equal(deferredTexts().length, 1);
 });
 
 function mirrorConfig(f, command = ['node', 'mirror.mjs']) {
@@ -704,7 +759,8 @@ function mirrorSpawn(calls, outcome = 0) {
 test('no mirror config never spawns a child', async t => {
   const f = fixture(t), calls = [], sent = [];
   const result = await sendNotice('本文', { ...f.opts, spawnImpl: mirrorSpawn(calls), notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; } });
-  assert.deepEqual(result, { delivered: 'dm' });
+  assert.equal(result.delivered, 'dm');
+  assert.equal(result.channels.file.status, 'written');
   assert.deepEqual(calls, []);
   assert.deepEqual(sent, ['本文']);
 });
@@ -725,7 +781,7 @@ for (const outcome of [2, 'timeout', 'error', 'stdin']) {
     const f = fixture(t), calls = [], dmResult = { delivered: 'dm' };
     mirrorConfig(f);
     const result = await sendNotice('本文', { ...f.opts, mirrorTimeoutMs: 10, spawnImpl: mirrorSpawn(calls, outcome), notifyImpl: async () => dmResult });
-    assert.strictEqual(result, dmResult);
+    assert.equal(result.delivered, dmResult.delivered);
     assert.equal(calls.length, 1);
     const log = JSON.parse(fs.readFileSync(path.join(f.paths.dir, 'run.log'), 'utf8'));
     assert.match(log.mirrorError, /mirror_exit:2|mirror_timeout|spawn_failed|broken_pipe/);
@@ -736,7 +792,8 @@ test('DM exception still attempts mirror and returns none', async t => {
   const f = fixture(t), calls = [];
   mirrorConfig(f);
   const result = await sendNotice('本文', { ...f.opts, spawnImpl: mirrorSpawn(calls), notifyImpl: async () => { throw new Error('offline'); } });
-  assert.deepEqual(result, { delivered: 'none' });
+  assert.equal(result.delivered, 'none');
+  assert.equal(result.channels.dm.reason, 'offline');
   assert.equal(calls.length, 1);
 });
 test('asking a question does not override manual, control, cap or runner-error pauses', async t => {
@@ -749,4 +806,254 @@ test('asking a question does not override manual, control, cap or runner-error p
     assert.equal(state.status, 'paused');
     assert.equal(state.pausedReason, reason);
   }
+});
+
+function ownerConfig(f, owner) {
+  fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(f.opts.home, '.claude/autopilot-owner.json'), JSON.stringify(owner));
+}
+test('missing nishi Discord ID skips DM; unknown and kim owners retain legacy result', async t => {
+  const f = fixture(t), kim = '715210673642012733';
+  let sent = 0;
+  const ctx = { ...f.opts, userId: kim, notifyImpl: async () => { sent++; return { delivered: 'dm' }; } };
+  assert.equal((await sendNotice('本文', ctx)).delivered, 'dm');
+  ownerConfig(f, { email: 'nishi@orgiast.jp', discordUserId: null });
+  const result = await sendNotice('本文', ctx);
+  assert.equal(result.delivered, 'no-owner-dm');
+  assert.equal(result.reason, 'owner_discord_id_missing');
+  assert.deepEqual(result.channels.dm, { status: 'no-owner-dm', reason: 'owner_discord_id_missing' });
+  assert.equal(sent, 1);
+  ownerConfig(f, { email: 'kim@orgiast.jp', discordUserId: null });
+  assert.equal((await sendNotice('本文', ctx)).delivered, 'dm');
+  assert.equal(sent, 2);
+});
+test('owner without Discord ID keeps digest file and toast without calling notifier', async t => {
+  const f = fixture(t);
+  ownerConfig(f, { email: ' NISHI@orgiast.jp ' });
+  fs.writeFileSync(path.join(f.opts.home, '.claude/orgiast-discord-user-id.txt'), '715210673642012733');
+  let sent = 0, toasts = 0;
+  await f.call('start', { objective: '進捗' });
+  const result = await f.call('digest', {}, {
+    now: new Date('2026-10-23T03:00:00Z'), platform: 'win32',
+    notifyImpl: async () => { sent++; return { delivered: 'dm' }; },
+    execFileImpl: async () => { toasts++; return { stdout: 'submitted' }; },
+  });
+  assert.equal(result.delivered, 'no-owner-dm');
+  assert.equal(result.channels.dm.reason, 'owner_discord_id_missing');
+  assert.equal(sent, 0);
+  assert.equal(toasts, 1);
+  assert.equal(result.channels.toast.status, 'submitted');
+  assert.equal(result.channels.file.status, 'written');
+  assert.equal(fs.readFileSync(result.channels.file.path, 'utf8'), result.text);
+});
+test('owner discordUserId overrides legacy file and injected recipient', async t => {
+  const f = fixture(t), recipients = [];
+  ownerConfig(f, { email: 'nishi@orgiast.jp', discordUserId: '123456789' });
+  fs.writeFileSync(path.join(f.opts.home, '.claude/orgiast-discord-user-id.txt'), '715210673642012733');
+  const ctx = { ...f.opts, userId: '715210673642012733', notifyImpl: async (_text, options) => { recipients.push(options.userId); return { delivered: 'dm' }; } };
+  const direct = await sendNotice('本文', ctx);
+  await f.call('start', { objective: '進捗' });
+  const digest = await f.call('digest', {}, { ...ctx, now: new Date('2026-10-23T03:00:00Z') });
+  assert.equal(direct.delivered, 'dm');
+  assert.equal(digest.delivered, 'dm');
+  assert.deepEqual(recipients, ['123456789', '123456789']);
+});
+test('toast passes Japanese via UTF-8 file, cleans temporary payload, and file retains full text', async t => {
+  const f = fixture(t), calls = [];
+  const body = '一行目<&>\n二行目\n三行目\n四行目';
+  const result = await sendNotice(body, { ...f.opts, platform: 'win32', notifyImpl: async () => ({ delivered: 'dm' }), execFileImpl: async (executable, args, options) => {
+    const payloadPath = args.at(-1);
+    calls.push({ executable, args, options, payloadPath, payload: JSON.parse(fs.readFileSync(payloadPath, 'utf8')) });
+    return { stdout: 'submitted' };
+  } });
+  assert.equal(result.channels.toast.status, 'submitted');
+  assert.equal(result.channels.file.status, 'written');
+  assert.equal(fs.readFileSync(result.channels.file.path, 'utf8'), body);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].executable, 'powershell.exe');
+  assert.ok(calls[0].args.includes('-File'));
+  assert.equal(calls[0].args.some(arg => arg.includes('一行目')), false);
+  assert.deepEqual(calls[0].payload, { title: 'Claude 進捗（test-pc）', body: '一行目<&>\n二行目\n三行目' });
+  assert.equal(fs.existsSync(calls[0].payloadPath), false);
+  assert.equal(calls[0].options.timeout, 20_000);
+});
+test('toast failure is returned, Linux skips it, and file failure does not stop DM', async t => {
+  const f = fixture(t);
+  const ctx = { ...f.opts, notifyImpl: async () => ({ delivered: 'dm' }), execFileImpl: async () => { throw new Error('powershell_failed'); } };
+  const failed = await sendNotice('本文', { ...ctx, platform: 'win32' });
+  assert.deepEqual(failed.channels.toast, { status: 'failed', error: 'powershell_failed' });
+  const skipped = await sendNotice('本文', ctx);
+  assert.deepEqual(skipped.channels.toast, { status: 'skipped', reason: 'non-win32' });
+  fs.rmSync(path.join(f.opts.home, '.claude/autopilot'), { recursive: true });
+  fs.writeFileSync(path.join(f.opts.home, '.claude/autopilot'), 'blocked');
+  const fileFailure = await sendNotice('本文', ctx);
+  assert.equal(fileFailure.delivered, 'dm');
+  assert.equal(fileFailure.channels.file.status, 'failed');
+});
+test('digest dry-run includes waiting section without delivery or state/ledger consumption', async t => {
+  const f = fixture(t), sent = [];
+  await f.call('start', { objective: '進捗' });
+  const ledger = path.join(f.opts.home, '.claude/waiting-on-user.json');
+  fs.mkdirSync(path.dirname(ledger), { recursive: true });
+  fs.writeFileSync(ledger, JSON.stringify([{ id: 'token', title: 'トークン登録', since: '2026-10-10', nextStep: '登録する', check: { cmd: 'node check.mjs', doneWhenStdoutIncludes: 'complete' } }]));
+  const before = fs.readFileSync(f.paths.state, 'utf8'), ledgerBefore = fs.readFileSync(ledger, 'utf8');
+  const options = { now: new Date('2026-10-23T03:00:00Z'), notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; }, checkImpl: async () => ({ stdout: 'pending' }) };
+  const preview = await f.call('digest', { 'dry-run': true }, options);
+  assert.match(preview.text, /user 作業待ち\n待ち 13 日: トークン登録 — 次の一手: 登録する/);
+  assert.equal(fs.readFileSync(f.paths.state, 'utf8'), before);
+  assert.equal(fs.readFileSync(ledger, 'utf8'), ledgerBefore);
+  assert.deepEqual(sent, []);
+  assert.equal(fs.existsSync(path.join(f.opts.home, '.claude/autopilot/latest-digest.md')), false);
+  const completed = await f.call('digest', {}, { ...options, checkImpl: async () => ({ stdout: 'complete' }) });
+  const next = await f.call('digest', {}, { ...options, now: new Date('2026-10-23T12:00:00Z') });
+  assert.match(completed.text, /完了しました: トークン登録/);
+  assert.doesNotMatch(next.text, /user 作業待ち|トークン登録/);
+  assert.equal(sent.length, 2);
+});
+test('periodic DM preserves waiting action and days despite notify-kim handoff/failure rewriting', async t => {
+  const f = discord(t);
+  // 2026-11-04 仕様変更: 無人の完了・停止は保留台帳で内容と一度だけの記録を検査する。
+  let deferredOffset = 0;
+  const deferredTexts = () => readDeferred(f.opts.home).slice(deferredOffset).map(row => row.text);
+  await f.call('start', { objective: '報告' });
+  fs.writeFileSync(path.join(f.opts.home, '.claude/waiting-on-user.json'), JSON.stringify([{ id: 'a', title: '登録', since: '2026-10-10', nextStep: '接続して確認してください' }]));
+  const result = await f.call('digest', {}, { now: new Date('2026-10-23T03:00:00Z') });
+  assert.equal(deferredTexts()[0], result.text);
+  assert.match(deferredTexts()[0], /待ち 13 日.*接続して確認してください/);
+  assert.equal(fs.readFileSync(result.channels.file.path, 'utf8'), result.text);
+});
+test('corrupt waiting ledger never silences the digest and is recorded', async t => {
+  const f = fixture(t), sent = [];
+  await f.call('start', { objective: '報告' });
+  fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(f.opts.home, '.claude/waiting-on-user.json'), '{not json');
+  const result = await f.call('digest', {}, { now: new Date('2026-10-23T03:00:00Z'), notifyImpl: async text => { sent.push(text); return { delivered: 'dm' }; } });
+  assert.equal(result.ok, true);
+  assert.equal(result.delivered, 'dm');
+  assert.equal(sent.length, 1);
+  assert.doesNotMatch(result.text, /user 作業待ち/);
+  const log = fs.readFileSync(path.join(f.paths.dir, 'run.log'), 'utf8');
+  assert.match(log, /waitingError/);
+});
+test('invalid owner config falls back to legacy delivery instead of stopping autopilot', async t => {
+  const f = fixture(t);
+  fs.mkdirSync(path.join(f.opts.home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(f.opts.home, '.claude/autopilot-owner.json'), '{broken');
+  const result = await sendNotice('本文', { ...f.opts, userId: '715210673642012733', notifyImpl: async () => ({ delivered: 'dm' }) });
+  assert.equal(result.delivered, 'dm');
+  assert.equal(result.channels.file.status, 'written');
+});
+test('legacy notifier without return value is unknown; explicitly disabled DM remains disabled', async t => {
+  const f = fixture(t), recipients = [];
+  const result = await sendNotice('本文', { ...f.opts, userId: '', notifyImpl: async (_text, options) => { recipients.push(options.userId); } });
+  assert.equal(result.delivered, 'unknown');
+  assert.deepEqual(recipients, ['']);
+  assert.equal(result.channels.file.status, 'written');
+});
+
+test('toast summary puts owner actions before the long objective line', () => {
+  const text = `📢 定時進捗報告: ${'長い目的文'.repeat(60)}\n状態: 止まっています\n前回報告以降の周回: 0周\n判断待ち: 空室案内を送ってよいか\n\nuser 作業待ち\n待ち 13 日: ラハイナ Instagram トークン登録 — 次の一手: 貼る`;
+  const summary = toastSummary(text).split('\n');
+  assert.equal(summary.length, 3);
+  assert.match(summary[0], /^判断待ち/);
+  assert.match(summary[1], /^待ち 13 日/);
+  assert.match(summary[2], /^状態:/);
+  assert.ok(summary.every((line) => line.length <= 120));
+});
+
+test('toast summary falls back to the first three lines', () => {
+  assert.equal(toastSummary('a\nb\nc\nd'), 'a\nb\nc');
+});
+
+test('Jev 失敗・不正応答・未検証 COMPLETE は既存の続行に戻る', async t => {
+  for (const response of [{ ok: false, reason: 'timeout' }, { ok: true, answers: { action: { type: 'choice', choice: 'COMPLETE' } } }, { ok: true, answers: {} }, null]) {
+    const f = fixture(t, { askJevImpl: async () => response });
+    await f.call('start', { objective: 'test' });
+    const result = await f.call('post', { summary: 'work', progress: 10 });
+    assert.equal(result.status, 'running'); assert.equal(result.jevDecision, null);
+  }
+  const f = fixture(t, { askJevImpl: async () => { throw new Error('offline'); } });
+  await f.call('start', { objective: 'test' });
+  assert.equal((await f.call('post', { summary: 'work', progress: 10 })).status, 'running');
+});
+test('Jev の続行・やり直し・停止を保存して次の pre へ渡す', async t => {
+  for (const action of ['CONTINUE', 'RETRY', 'ESCALATE']) {
+    const f = fixture(t, { askJevImpl: async request => {
+      assert.equal(request.timeoutMs, 3000); assert.equal(request.label, 'autopilot');
+      assert.deepEqual(Object.keys(request.questions.action.criteria), ['CONTINUE', 'RETRY', 'ESCALATE', 'COMPLETE']);
+      return { ok: true, answers: { action: { type: 'choice', choice: action } } };
+    } });
+    await f.call('start', { objective: 'test' });
+    const result = await f.call('post', { summary: 'work', progress: 10 });
+    assert.equal(result.status, action === 'ESCALATE' ? 'paused' : 'running');
+    assert.equal((await f.call('pre')).jevDecision.action, action);
+  }
+});
+test('決定論的な完了・テスト失敗・noop・上限では Jev を呼ばない', async t => {
+  let calls = 0;
+  const f = fixture(t, { askJevImpl: async () => { calls++; return { ok: false }; } });
+  await f.call('start', { objective: 'test', 'max-iter-per-day': 3 });
+  assert.equal((await f.call('post', { summary: 'tests failed', progress: 100, tests: 'failed', evidence: 'bad' })).error, 'tests_failed');
+  assert.equal((await f.call('post', { summary: 'tests failed', progress: 10, tests: 'failed' })).status, 'running');
+  assert.equal((await f.call('post', { summary: 'no diff', progress: 10, noop: true })).status, 'running');
+  assert.equal((await f.call('post', { summary: 'work', progress: 20 })).watchdog.reason, 'daily_iter_cap');
+  const done = fixture(t, { askJevImpl: async () => { calls++; return { ok: false }; } });
+  await done.call('start', { objective: 'test' });
+  assert.equal((await done.call('post', { summary: 'done', progress: 100, evidence: 'verified' })).status, 'done');
+  assert.equal(calls, 0);
+});
+
+test('post with --artifact counts fresh file as progress, resets consecutiveNoop, and records artifacts', async (t) => {
+  const f = fixture(t);
+  await f.call('start', { objective: 'maintain 95% SLA', 'max-noop': 3 });
+  await f.call('post', { summary: 'first iter', progress: 99 });
+
+  const noopPost = await f.call('post', { summary: 'no artifact', progress: 99 });
+  assert.equal(noopPost.noop, true);
+  assert.equal((await f.call('status')).state.consecutiveNoop, 1);
+
+  const freshPath = path.join(f.opts.home, 'fresh-artifact.txt');
+  fs.writeFileSync(freshPath, 'new content');
+  const freshTime = new Date(NOW.getTime() + 10_000);
+  fs.utimesSync(freshPath, freshTime, freshTime);
+
+  const relativeFresh = path.relative(process.cwd(), freshPath);
+  const freshPost = await f.call('post', { summary: 'maintained with artifact', progress: 99, artifact: relativeFresh });
+  assert.equal(freshPost.noop, false);
+  assert.deepEqual(freshPost.artifacts, [path.resolve(freshPath)]);
+  assert.deepEqual(freshPost.staleArtifacts, []);
+  assert.equal((await f.call('status')).state.consecutiveNoop, 0);
+
+  const logLines = fs.readFileSync(f.paths.log, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(logLines.at(-1).artifacts, [path.resolve(freshPath)]);
+});
+
+test('post with stale or missing artifact is noop, records staleArtifacts, and explicit noop overrides fresh artifact', async (t) => {
+  const f = fixture(t);
+  await f.call('start', { objective: 'maintain SLA' });
+  await f.call('post', { summary: 'first iter', progress: 99 });
+
+  const stalePath = path.join(f.opts.home, 'stale-artifact.txt');
+  fs.writeFileSync(stalePath, 'old content');
+  const staleTime = new Date(NOW.getTime() - 10_000);
+  fs.utimesSync(stalePath, staleTime, staleTime);
+  const missingPath = path.join(f.opts.home, 'missing-artifact.txt');
+
+  const stalePost = await f.call('post', { summary: 'stale artifacts', progress: 99, artifact: `${stalePath}, ${missingPath}` });
+  assert.equal(stalePost.noop, true);
+  assert.deepEqual(stalePost.artifacts, []);
+  assert.deepEqual(stalePost.staleArtifacts, [path.resolve(stalePath), path.resolve(missingPath)]);
+
+  const logLines = fs.readFileSync(f.paths.log, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(logLines.at(-1).artifacts, undefined);
+
+  const freshPath = path.join(f.opts.home, 'fresh-again.txt');
+  fs.writeFileSync(freshPath, 'fresh');
+  const freshTime = new Date(NOW.getTime() + 10_000);
+  fs.utimesSync(freshPath, freshTime, freshTime);
+
+  const explicitNoop = await f.call('post', { summary: 'explicit noop', progress: 99, artifact: freshPath, noop: true });
+  assert.equal(explicitNoop.noop, true);
+  assert.deepEqual(explicitNoop.artifacts, [path.resolve(freshPath)]);
+  assert.deepEqual(explicitNoop.staleArtifacts, []);
 });

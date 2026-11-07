@@ -1,23 +1,30 @@
 {
   "version": 1,
   "_note": "配布対象の単一定義。stuck-dialog-watch / stall-scan と設定は tools、手順書は docs として既存PCへ配布する。onboarding-sync の zip フォールバックはここを読む。リポのトップレベル全項目は dirs / files / notDistributed のどれかに入れること（tools/distribution-coverage.test.mjs が検査）。",
-  "dirs": ["tools", "rules-extracted", "skills", "packages", "protocols", "rules", "docs", "decisions", "config", "scripts", "playbooks"],
-  "files": ["fleet-pc-map.json", "fleet-command.json", "fleet-directives.json", "manifest.json", "ONBOARDING.md", "CLAUDE.md.template"],
+  "dirs": ["tools", "rules-extracted", "skills", "packages", "protocols", "rules", "docs", "decisions", "config", "scripts", "playbooks", "templates", "seo", "portable-knowhow"],
+  "files": [
+    "HANDOVER.md","fleet-pc-map.json", "fleet-command.json", "fleet-directives.json", "manifest.json", "ONBOARDING.md", "CLAUDE.md.template"],
   "notDistributed": {
     ".agents": { "reason": "ローカルエージェント環境の管理領域。PC配布対象外" },
     ".codex": { "reason": "ローカルCodex環境の管理領域。PC配布対象外" },
     "gas": { "reason": "GAS ソース。clasp で kim-PC から push する作業用で配布先PCは実行時に読まない", "runtimeRefOk": true, "docRefOk": true },
     "apps": { "reason": "社内アプリのソース。配布先PCの実行時参照なし" },
     "analysis": { "reason": "分析メモ。実行時参照なし" },
+    "data": { "reason": "codex 可用性プローブ履歴等のデータ。実行時参照なし" },
     "evidence": { "reason": "証跡置き場。実行時参照なし" },
     "reports": { "reason": "レポート置き場。実行時参照なし" },
+    "results": { "reason": "PR作業の結果レポート。配布先PCの実行時参照なし" },
     "package.json": { "reason": "repo 自体の依存宣言。tools の参照は対象アプリ側の package.json" },
     "knowledge-merged.json": { "reason": "rules-sync merge の作業物。実行時参照なし" },
     "README.md": { "reason": "GitHub 表示用" },
     "STANDARD-PC-SETUP.md": { "reason": "人間向け手順書（gdoc-update の入力）" },
+    "VM-SETUP.md": { "reason": "クラウドVM(Muse/Grok Bot)の Claude Code が raw URL で読む参加手順。各PCへは配らない" },
+    "autopilot-nightly-kpi-report-20261029.md": { "reason": "autopilot 夜間KPI調査のレポート。配布先PCの実行時参照なし" },
     "report.md": { "reason": "作業レポート" },
+    "result-A.md": { "reason": "今回作業の検証結果レポート。配布先PCの実行時参照なし" },
     "SPEC-feedback-replies-consumer.md": { "reason": "仕様メモ" },
     "SPEC-rule-compliance-loop.md": { "reason": "仕様メモ" },
+    "c4-operationalization-design.md": { "reason": "C4 実運用化の設計メモ。配布先PCの実行時参照なし" },
     "codex-task-feedback-nag-local.md": { "reason": "作業メモ" },
     ".claude": { "reason": "repo 自身の Claude Code プロジェクト設定（kim 開発用）" },
     ".claude-plugin": { "reason": "プラグイン定義。zip 配布対象外" },
@@ -25,6 +32,9 @@
     ".gitignore": { "reason": "git 管理用" },
     ".gitattributes": { "reason": "git 管理用" },
     ".codex-result-fleet-mail.md": { "reason": "Codex 実行結果の残骸（実行時参照なし）" },
+    "loop-iter1-msg.txt": { "reason": "autopilot loop の反復メッセージファイル。実行時参照なし" },
+    "auto-progress-resume-*.json": { "reason": "保全されたセッション再開結果。PC固有の作業記録で配布先PCの実行時参照なし" },
+    "auto-progress-resume-*-evidence.md": { "reason": "セッション再開結果の検証証跡。配布先PCの実行時参照なし" },
     "PROMPT-*.md": { "reason": "kim が他セッションへ貼る指示文。実行時参照なし" }
   }
 }

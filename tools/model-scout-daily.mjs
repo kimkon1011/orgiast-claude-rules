@@ -19,6 +19,32 @@ function evaluations(file) {
     try { return [JSON.parse(line)]; } catch { return []; }
   }); } catch (e) { if (e.code === 'ENOENT') return []; throw e; }
 }
+function maskSecrets(s) {
+  if (!s) return s;
+  let result = String(s);
+  // (1) 接頭辞ベースの鍵トークン（16文字以上）
+  result = result.replace(/\b(?:sk-or-[A-Za-z0-9_-]{10,}|sk-ant-[A-Za-z0-9_-]{9,}|sk-[A-Za-z0-9_-]{13,}|gsk_[A-Za-z0-9_-]{12,}|AIza[A-Za-z0-9_-]{12,}|xai-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_-]{12,}|github_pat_[A-Za-z0-9_-]{5,}|ya29\.[A-Za-z0-9_-]{11,})\b/g, '[masked]');
+  // (2) Bearer トークン
+  result = result.replace(/\bbearer\s+\S+/gi, m => m.replace(/\S+$/, '[masked]'));
+  // (3) 既知パラメータ名の値
+  result = result.replace(/\b(api_key|apikey|key|token|authorization|x-api-key)\s*([:=])\s*([^\s&"'<>]+)/gi, (_, name, sep) => `${name}${sep}[masked]`);
+  // (4) _KEY/_TOKEN/_SECRET で終わる環境変数名=値
+  result = result.replace(/\b([A-Za-z_]+_(?:KEY|TOKEN|SECRET))\s*=\s*([^\s&"'<>]+)/gi, (_, name) => `${name}=[masked]`);
+  // (5) 32文字以上の連続した英数字等（hex/base64風）
+  result = result.replace(/[A-Za-z0-9+/=_-]{32,}/g, '[masked]');
+  return result;
+}
+
+function formatTail(str, maxLen) {
+  if (!str) return '(empty)';
+  const s = String(str);
+  const rawTail = s.length > maxLen * 4 ? s.slice(-maxLen * 4) : s;
+  const cleaned = rawTail.replace(/[\r\n\t\x00-\x1F\x7F]+/g, ' ').trim();
+  if (!cleaned) return '(empty)';
+  const tailed = cleaned.length > maxLen ? cleaned.slice(-maxLen) : cleaned;
+  return maskSecrets(tailed);
+}
+
 export function unevaluatedScoutModels(pending, config, rows, { max = frontierLimit() } = {}) {
   // 「評価済み」は計測が1件でも取れたか（graded>0）だけで判定する。切捨て（truncated）多発は
   // モデルの品質であって未評価ではなく、計測の安定性は提案側（aggregateMeasurements）が独自に弾く。
@@ -73,10 +99,29 @@ export async function runDailyScout({ home = process.env.ORGIAST_HOME || userHom
       timeout: 30 * 60 * 1000, maxBuffer: 4 * 1024 * 1024, windowsHide: true,
       env: { ...process.env, USERPROFILE: home, ORGIAST_HOME: home } });
     record('model-scout 開始');
+    const startMs = Date.now();
     const scout = run([path.join(HERE, 'model-scout.mjs'), '--once']);
+    const elapsedMs = Date.now() - startMs;
     const state = readJson(stateFile, null);
     // scout の従来CLIは障害でも exit 0。保存成功を確認して沈黙失敗を検出する。
-    if (scout.error || scout.status !== 0 || !state?.updatedAt || state.updatedAt === before) throw new Error('scout failed');
+    if (scout.error || scout.status !== 0 || !state?.updatedAt || state.updatedAt === before) {
+      const stateUpdated = Boolean(state?.updatedAt && state.updatedAt !== before);
+      const details = [
+        `status=${scout.status ?? 'null'}`,
+        `signal=${scout.signal ?? 'null'}`,
+        `errorCode=${scout.error?.code ?? 'undefined'}`,
+        `elapsedMs=${elapsedMs}`,
+        `stateUpdated=${stateUpdated ? 'yes' : 'no'}`,
+      ];
+      if (!stateUpdated) {
+        details.push(`before=${before ?? 'undefined'}`, `after=${state?.updatedAt ?? 'undefined'}`);
+      }
+      details.push(
+        `stderrTail=${formatTail(scout.stderr, 500)}`,
+        `stdoutTail=${formatTail(scout.stdout, 300)}`
+      );
+      throw new Error(`scout failed: ${details.join(' ')}`);
+    }
     const resultsFile = path.join(dir, 'eval-results.jsonl');
     const configFile = path.join(dir, 'eval', 'providers.local.json');
     const pending = state.pendingCandidates || [];
@@ -107,7 +152,7 @@ export async function runDailyScout({ home = process.env.ORGIAST_HOME || userHom
     record(`model-scout 完了: 評価 ${targets.length} 件`);
     return { ok: true, evaluated: targets.length };
   } catch (e) {
-    const reason = String(e?.message ?? e).replace(/[\r\n\t]/g, ' ').slice(0, 200);
+    const reason = String(e?.message ?? e).replace(/[\r\n\t]/g, ' ');
     record(`model-scout error: 日次処理失敗（${reason}）。次回再試行`);
     return { ok: false };
   } finally { if (owned) fs.rmSync(lock, { force: true }); }

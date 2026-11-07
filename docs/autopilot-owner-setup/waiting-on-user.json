@@ -1,0 +1,12 @@
+[
+  {
+    "id": "lahaina-instagram-token",
+    "title": "ラハイナ Instagram トークン登録",
+    "since": "2026-10-10",
+    "nextStep": "黒い窓（ラハイナInstagramトークン登録.cmd）で Meta のトークンを発行して貼る",
+    "check": {
+      "cmd": "node \"C:\\Users\\kimko\\nf-minpaku-automation\\tools\\instagram\\check-token.mjs\"",
+      "doneWhenStdoutIncludes": "lahaina_ushimado"
+    }
+  }
+]

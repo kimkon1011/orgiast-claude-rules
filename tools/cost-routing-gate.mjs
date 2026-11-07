@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { askJev } from './jev.mjs';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 
@@ -51,7 +52,8 @@ export function classifyRequest(prompt, options = {}) {
   const text = String(prompt || '').replace(/^\uFEFF/, '');
   const fixed = text.match(/\[レーン固定:\s*(consult|implement|edit-small|verify|bulk|mcp|design)\s*\]/i)?.[1]?.toLowerCase();
   let lane, reason;
-  if (fixed && LANE_NAMES.has(fixed)) { lane = fixed; reason = '明示的なレーン固定'; }
+  if (options.jevLane && LANE_NAMES.has(options.jevLane)) { lane = options.jevLane; reason = 'Jev による分類'; }
+  else if (fixed && LANE_NAMES.has(fixed)) { lane = fixed; reason = '明示的なレーン固定'; }
   else if (MCP.test(text) && !BUILD.test(text)) { lane = 'mcp'; reason = 'MCP コネクタ操作'; }
   else if (BULK.test(text) && !SMALL.test(text)) { lane = 'bulk'; reason = '量産・分類・抽出・生成'; }
   else if (/設計してから/.test(text)) { lane = 'design'; reason = '実装前の設計判断'; }
@@ -69,7 +71,26 @@ export function classifyRequest(prompt, options = {}) {
   return { lane, category, reason, ...advice };
 }
 
-if (isEntry(import.meta.url)) {
+export async function classifyWithJev(prompt, options = {}) {
+  const fallback = { ...classifyRequest(prompt, options), decision: 'rule' };
+  if (process.env.ORGIAST_JEV_ROUTING === '0' || fallback.reason === '明示的なレーン固定') return fallback;
+  try {
+    // 依頼文は外部 API へ出るので、先頭だけに絞り、鍵・トークンらしき長い英数字列は伏せてから送る。
+    const state = String(prompt).slice(0, 1500).replace(/\b(?:apikey_|sk-|ghp_|gho_|xox[bp]-|AIza)[A-Za-z0-9_\-]+|[A-Za-z0-9_\-]{40,}/g, '<redacted>');
+    const result = await (options.askJevImpl || askJev)({ state, timeoutMs: 3000, label: 'routing', home: options.home,
+      questions: { lane: { type: 'choice', instructions: '依頼の実行レーンを選ぶ。', criteria: Object.fromEntries([...LANE_NAMES].map(lane => [lane, {
+        consult: '質問・相談', implement: '実装・修正', 'edit-small': '軽微編集', verify: '検証・レビュー', bulk: '量産・分類・抽出・生成', mcp: 'MCP コネクタ操作', design: '設計判断',
+      }[lane]])) } } });
+    const answer = result?.answers?.lane;
+    if (result?.ok && answer?.type === 'choice' && LANE_NAMES.has(answer.choice) && Number.isFinite(answer.confidence) && answer.confidence >= 0.7 && answer.confidence <= 1) {
+      return { ...classifyRequest(prompt, { ...options, jevLane: answer.choice }), decision: `jev(conf ${answer.confidence.toFixed(2)})` };
+    }
+  } catch { /* Jev 障害は従来の分類に戻す。 */ }
+  return fallback;
+}
+
+if (isEntry(import.meta.url)) await runHook();
+async function runHook() {
 const raw = await readStdinWithTimeout();
 
 // ---- 仕様C: eval 実測のルーティング表(routing-table.json)を読み、分類・抽出・要約・返信の各タスクに
@@ -97,12 +118,12 @@ function measuredRoutingLines(prompt) {
   return lines;
 }
 try {
-  if (!raw) process.exit(0);
+  if (!raw) return;
   const input = JSON.parse(raw);
   const prompt = String(input.prompt || '');
-  if (prompt.length < 2) process.exit(0);
+  if (prompt.length < 2) return;
   const repo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-  const route = classifyRequest(prompt, { repoDir: repo });
+  const route = await classifyWithJev(prompt, { repoDir: repo });
   const userFacing = route.lane === 'consult' || isUserFacingPrompt(prompt);
   if (input.session_id) try {
     const home = process.env.ORGIAST_HOME || os.homedir(), dir = path.join(home, '.claude', 'session-lane');
@@ -112,7 +133,7 @@ try {
   const codex = `node "${path.join(repo, 'tools', 'codex-do.mjs')}" "指示"`;
   const ask = `node "${path.join(repo, 'tools', 'llm-ask.mjs')}"`;
   const enqueue = `node "${path.join(repo, 'tools', 'batch-enqueue.mjs')}"`;
-  const parts = userFacing ? [RESEARCH_FIRST_CONTEXT, `[実行レーン] ${route.lane}（理由: ${route.reason}）→ 主: ${route.lane === 'consult' ? 'Fable 本体' : route.primary} ／ 失敗時: ${route.lane === 'consult' ? '必要に応じて該当レーンへ委譲' : route.fallback}`] : [`[実行レーン] ${route.lane}（理由: ${route.reason}）→ 主: ${route.primary} ／ 失敗時: ${route.fallback} ／ Fable/Opus 本体は「判定・委譲・結果確認」の 3 ターン以内。Sonnet は非Claude が全部落ちた時だけ、Opus は設計判断だけ。${route.lane === 'consult' ? ' ツールを使わず、または Read/Grep 数回で答える。実装・調査に踏み込むなら委譲。' : ''}`];
+  const parts = userFacing ? [RESEARCH_FIRST_CONTEXT, `[実行レーン] ${route.lane}（理由: ${route.reason}、判定=${route.decision}）→ 主: ${route.lane === 'consult' ? 'Fable 本体' : route.primary} ／ 失敗時: ${route.lane === 'consult' ? '必要に応じて該当レーンへ委譲' : route.fallback}`] : [`[実行レーン] ${route.lane}（理由: ${route.reason}、判定=${route.decision}）→ 主: ${route.primary} ／ 失敗時: ${route.fallback} ／ Fable/Opus 本体は「判定・委譲・結果確認」の 3 ターン以内。Sonnet は非Claude が全部落ちた時だけ、Opus は設計判断だけ。${route.lane === 'consult' ? ' ツールを使わず、または Read/Grep 数回で答える。実装・調査に踏み込むなら委譲。' : ''}`];
   const fableExplicit = /fable\s*-?\s*5|fable5|claude-fable-5|fable\s*(?:で|を使)/i;
   const fableNegative = /(?:fable\s*-?\s*5|fable5|claude-fable-5|fable)\s*(?:は|を)?\s*(?:使うな|使わない|使わず|使わなく|使わん|使用しない|利用しない|禁止|使用中止|不可)/i;
   if (fableExplicit.test(prompt) && !fableNegative.test(prompt)) {
@@ -176,5 +197,4 @@ try {
   }
   console.log(JSON.stringify(output));
 } catch {}
-process.exit(0);
 }

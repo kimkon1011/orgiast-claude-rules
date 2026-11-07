@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { isEntry } from './is-entry.mjs';
+import { redactSecrets } from './redact-secrets.mjs';
 
 // アプリ名→リポの台帳。新アプリはここに1行足すと Issue 化と完了報告(feedback-done-notify)の対象に入る。
 // 追加漏れは feedback-form-gate.mjs が本番反映時に止める(§2.11)。
@@ -175,14 +176,23 @@ export function shellQuote(value) {
   return `'${text.replace(/'/g, `'"'"'`)}'`;
 }
 
-export function runGh(args, options = {}) {
-  // Windows の gh.cmd は直接 spawn できないため shell を使い、値はすべて個別に quote する。
+export function runGh(args, options = {}, spawn = spawnSync) {
+  // shell を通すと Windows で `"feedback-dm:x" in:body` の引用符が壊れ gh が unknown argument で落ちる(2026-10-23〜26 実害)。
+  // gh.exe は直接起動し、gh.cmd しか無い環境(ENOENT/EINVAL)だけ従来の quote 付き shell 経由に戻す。
+  const direct = spawn('gh', args, { ...options, encoding: 'utf8', windowsHide: true });
+  if (!['ENOENT', 'EINVAL'].includes(direct?.error?.code)) return direct;
   const command = ['gh', ...args].map(shellQuote).join(' ');
-  return spawnSync(command, { ...options, shell: true, encoding: 'utf8', windowsHide: true });
+  return spawn(command, { ...options, shell: true, encoding: 'utf8', windowsHide: true });
 }
 
 // 夜間巡回の一時的な 5xx / rate limit / ネットワーク断を吸収する。読み取り専用なので再試行してよい。
 export function defaultSleep(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+
+function lookupDiagnostic(...values) {
+  return redactSecrets(values.filter(Boolean).join(' | '))
+    .replace(/https?:\/\/[^\s<>"']+/gi, '[URL REDACTED]')
+    .replace(/\s+/g, ' ').trim().slice(0, 500);
+}
 
 export function lookupFeedbackIssue(messageId, repo, gh, { attempts = 3, delayMs = 2000, sleep = defaultSleep } = {}) {
   let detail = 'no attempt';
@@ -190,8 +200,13 @@ export function lookupFeedbackIssue(messageId, repo, gh, { attempts = 3, delayMs
     if (i > 0) sleep(delayMs * 2 ** (i - 1));
     let lookup;
     try { lookup = gh(['issue','list','--repo',repo,'--state','all','--search',`"feedback-dm:${messageId}" in:body`,'--json','number,url,body','--limit','100']); }
-    catch (error) { detail = error.message; continue; }
-    if (lookup?.error || lookup?.status !== 0) { detail = lookup?.error?.message || `status=${lookup?.status}`; continue; }
+    catch (error) { detail = lookupDiagnostic(error?.message || String(error)); continue; }
+    if (lookup?.error || lookup?.status !== 0) {
+      // Preserve the cause without copying credentials or unbounded CLI output into alerts.
+      const diagnostic = lookupDiagnostic(lookup?.error?.message, lookup?.stderr);
+      detail = `status=${lookup?.status}${diagnostic ? `: ${diagnostic}` : ''}`;
+      continue;
+    }
     try { return JSON.parse(lookup.stdout); } catch (error) { detail = `invalid JSON: ${error.message}`; }
   }
   throw new Error(`Issue lookup failed (${detail})`);
@@ -261,13 +276,40 @@ function increment(reasons, reason) {
   reasons[reason] = (reasons[reason] || 0) + 1;
 }
 
-export async function main(args = process.argv.slice(2)) {
+// Cache belongs to one invocation; duplicate app/host mappings share a single probe.
+export function precheckRepositories(repos, gh = runGh) {
+  const statuses = new Map();
+  for (const repo of new Set(repos)) {
+    let result;
+    try { result = gh(['api', `repos/${repo}`]); }
+    catch { statuses.set(repo, 'spawn-error'); continue; }
+    const http = String(result?.stderr || '').match(/HTTP\s+(\d{3})\b/i)?.[1];
+    statuses.set(repo, result?.error ? 'spawn-error'
+      : result?.status === 0 ? 'OK' : http || 'gh-error');
+  }
+  return statuses;
+}
+
+export function warnUnreachableRepositories(statuses, gh = runGh) {
+  const unreachableRepos = [...statuses].filter(([, status]) => status !== 'OK')
+    .map(([repo, status]) => ({ repo, status }));
+  if (!unreachableRepos.length) return;
+  let account = 'unknown';
+  try {
+    const result = gh(['api', 'user', '--jq', '.login']);
+    if (!result?.error && result?.status === 0) account = clean(result.stdout) || 'unknown';
+  } catch {}
+  console.warn(lookupDiagnostic(`[feedback-to-issues] 到達不能リポジトリ: ${unreachableRepos.map(({ repo, status }) => `${repo}(${status})`).join(', ')} / 実行アカウント: ${account} / 対処: 該当 repo に実行アカウントをコラボレーター招待するか feedback-apps.json を修正`));
+}
+
+export async function main(args = process.argv.slice(2), {
+  gh = runGh, request = relayRequest, config = loadRelayConfig(), home = os.homedir(),
+} = {}) {
   const dry = args.includes('--dry') || args.includes('--dry-run');
   const dismissId = parseDismissId(args);
   const limitIndex = args.indexOf('--limit');
   const requestedLimit = limitIndex >= 0 ? Number.parseInt(args[limitIndex + 1], 10) : 5;
   const limit = Number.isInteger(requestedLimit) && requestedLimit > 0 ? requestedLimit : 5;
-  const config = loadRelayConfig();
   if (!config.url || !config.secret) {
     console.log('feedback-to-issues: 中継が未設定なのでスキップ');
     return 0;
@@ -283,7 +325,7 @@ export async function main(args = process.argv.slice(2)) {
     }
     const urls = relayUrls(config.url);
     try {
-      const ack = await relayRequest(urls.ack, config.secret, {
+      const ack = await request(urls.ack, config.secret, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message_id: dismissId }),
@@ -296,27 +338,27 @@ export async function main(args = process.argv.slice(2)) {
     console.log(`feedback-to-issues: 対象外にしました message_id=${dismissId}`);
     return 0;
   }
-  const probe = runGh(['--version']);
-  if (probe.error || probe.status !== 0) {
-    console.log('feedback-to-issues: gh が無いのでスキップ');
-    return 0;
-  }
-
   const repoMapValue = process.env.FEEDBACK_REPO_MAP || '';
   const hostMapValue = process.env.FEEDBACK_HOST_MAP || '';
+  const statuses = precheckRepositories([
+    ...Object.values(DEFAULT_REPO_MAP), ...Object.values(parseRepoMap(repoMapValue)),
+    ...Object.values(parseHostMap(hostMapValue)),
+  ], gh);
   const reasons = {};
   let items;
   const urls = relayUrls(config.url);
   try {
-    const data = await relayRequest(urls.pending, config.secret);
+    const data = await request(urls.pending, config.secret);
     if (!Array.isArray(data.items)) throw new Error('items が配列ではない応答');
     items = data.items;
   } catch (error) {
     console.error(`feedback-to-issues: 中継からの取得に失敗 (${error.message})`);
+    warnUnreachableRepositories(statuses, gh);
     return 1;
   }
 
-  const { selected, remaining: overLimit } = selectCandidates(items, limit, repoMapValue, hostMapValue);
+  const reachableItems = items.filter((item) => statuses.get(resolveRepoForItem(item, repoMapValue, hostMapValue)) === 'OK');
+  const { selected, remaining: overLimit } = selectCandidates(reachableItems, limit, repoMapValue, hostMapValue);
   const selectedIds = new Set(selected.map((item) => String(item.message_id)));
   let created = 0;
   let acked = 0;
@@ -341,6 +383,10 @@ export async function main(args = process.argv.slice(2)) {
       increment(reasons, '未マッピング');
       continue;
     }
+    if (statuses.get(repo) !== 'OK') {
+      increment(reasons, '到達不能リポジトリ');
+      continue;
+    }
     if (!appRepo) {
       let hostname = '';
       try { hostname = new URL(clean(item?.source_url)).hostname; } catch {}
@@ -362,11 +408,11 @@ export async function main(args = process.argv.slice(2)) {
     }
 
     try {
-      ensureFeedbackIssue(item, repo);
+      ensureFeedbackIssue(item, repo, { gh, home });
       created += 1;
       console.log(`feedback-to-issues: 作成済み repo=${repo} title=${title} message_id=${messageId}`);
       try {
-        const ack = await relayRequest(urls.ack, config.secret, {
+        const ack = await request(urls.ack, config.secret, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message_id: item.message_id }),
@@ -389,6 +435,7 @@ export async function main(args = process.argv.slice(2)) {
   // dry-run と未 ack の項目はすべて中継に残るため、取得範囲内の残件として明示する。
   const remaining = dry ? items.length : items.length - acked;
   console.log(`作成: ${dry ? 0 : created}件 / スキップ: ${skipped}件（${details}）/ 残り: ${remaining}件`);
+  warnUnreachableRepositories(statuses, gh);
   return 0;
 }
 

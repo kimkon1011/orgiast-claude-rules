@@ -83,5 +83,28 @@ test('legacy snapshot estimates and generic cached hits become unverified', asyn
   normalizeSavedFootprint(snapshot, { generic_partner_names: ['その他'] }, sources);
   assert.equal(snapshot.footprint.a.gmail.count, null);
   assert.equal(snapshot.footprint.b.drive.count, null);
-  assert.equal(sources.gmail.status, 'unverified'); assert.equal(sources.gmail.count, 0);
+  assert.equal(sources.gmail.status, 'failed'); assert.equal(sources.gmail.count, 0);
+});
+
+test('completed partners are checkpointed before the remaining network requests finish', async t => {
+ const stateDir=await dir(t);let entered,release;
+ const started=new Promise(r=>{entered=r;});const pending=new Promise(r=>{release=r;});
+ let inspect;
+ const ready=new Promise(r=>{inspect=r;});
+ const work=buildFootprint([{id:'fast',name:'Fast'},{id:'slow',name:'Slow'}],{stateDir,sources:{gmail:async term=>{if(term==='Slow'){entered();await pending;}return{status:'ok',count:1};}},onProgress:()=>inspect()});
+ await started;await ready;
+ const cached=JSON.parse(await fs.readFile(path.join(stateDir,'footprint-cache.json')));
+ assert.ok(Object.keys(cached).some(k=>k.startsWith('fast+')));assert.ok(!Object.keys(cached).some(k=>k.startsWith('slow+')));
+ release();const result=await work;assert.equal(result.slow.gmail.status,'ok');
+});
+test('Gmail metadata concurrency is bounded and counts list entries even when a message disappears', async () => {
+ let active=0,max=0;
+ const fetchImpl=async url=>{
+   if(new URL(url).pathname.endsWith('/messages'))return{ok:true,json:async()=>({messages:Array.from({length:6},(_,i)=>({id:String(i)}))})};
+   active++;max=Math.max(max,active);await new Promise(r=>setTimeout(r,1));active--;
+   if(new URL(url).pathname.endsWith('/0'))return{ok:false,status:404};
+   return{ok:true,json:async()=>({payload:{headers:[{name:'Subject',value:'Alpha record'},{name:'Date',value:'2026-10-01'}]}})};
+ };
+ const result=await createGmailSource({google:{getToken:async()=> 'test'},fetchImpl})('Alpha',90);
+ assert.equal(result.count,18);assert.equal(result.status,'ok');assert.ok(max>1&&max<=3);assert.equal(result.representative,'Alpha record');
 });

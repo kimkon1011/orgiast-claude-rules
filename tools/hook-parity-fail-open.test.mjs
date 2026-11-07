@@ -16,6 +16,7 @@ const hooks = [
   'handoff-investigation-gate.mjs',
   'negative-claim-gate.mjs',
   'pretooluse-headless-background.mjs',
+  'pretooluse-line-broadcast-guard.mjs',
   'pretooluse-serial-investigation.mjs',
   'automation-first-reminder.mjs',
   'credentials-reminder.mjs',
@@ -25,6 +26,7 @@ const hooks = [
   'pipe-stage-permissions.mjs',
   'feedback-form-gate.mjs',
   'handover-doc-gate.mjs',
+  'bihin-kcol-gate.mjs',
 ];
 
 function run(name, input, home) {

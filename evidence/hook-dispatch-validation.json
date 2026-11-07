@@ -1,0 +1,322 @@
+{
+  "status": "implementation-validated; original-worktree-commit-blocked",
+  "baseCommit": "0c39292b49861808df0a7c42ce4fbea3428284f3",
+  "commit": null,
+  "commitFailure": {
+    "command": "git add -- <38 explicit paths>",
+    "exitCode": 128,
+    "message": "Unable to create /mnt/c/Users/uers/.claude/nightly-repo/.git/worktrees/hookfix/index.lock: Read-only file system"
+  },
+  "realSettingsChanged": false,
+  "pushed": false,
+  "validation": {
+    "sourceWorktree": "/mnt/c/Users/uers/AppData/Local/Temp/claude/c--Users-uers-Downloads-CLAUDE-md--/ed6eb629-d569-4bf8-b01f-059b584661cf/scratchpad/hookfix",
+    "testCheckout": "/tmp/hookfix-validation",
+    "changedFilesByteIdentical": true,
+    "nodeVersion": "v24.19.0",
+    "command": "node --test --test-concurrency=8",
+    "testResult": {
+      "tests": 8636,
+      "suites": 1,
+      "pass": 8572,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 62,
+      "todo": 2,
+      "duration_ms": 344271.291735,
+      "exitCode": 0,
+      "log": "/tmp/hookfix-final-results.log",
+      "logSha256": "77107ab952c18589a8b85c635082039bc7de9124489a5bfd1f539b3b043229a3"
+    },
+    "selftestGuards": {
+      "passed": 69,
+      "failed": 0,
+      "exitCode": 0,
+      "log": "/tmp/hookfix-guards-final.log"
+    },
+    "diffCheck": "passed",
+    "registrationParity": "original registrar and repository manifest match exactly for generic and kim-PC, including order",
+    "gateInventory": {
+      "before": 67,
+      "after": 67
+    },
+    "powerShellRuntimeProbe": {
+      "encodedCommand": "ETIMEDOUT after 5000ms",
+      "command": "ETIMEDOUT after 5000ms",
+      "linuxPwsh": "ENOENT",
+      "testPolicy": "Native Windows always runs integration tests; other hosts must return the encoded-command probe output.",
+      "uncGitFixture": "The Windows Git worktree fixture requires a Windows drive path; UNC WSL fixtures can fail ownership checks. Native Windows CI still runs it."
+    },
+    "regressionFixed": {
+      "test": "reported-symptom-distribution",
+      "reason": "Expected the old standalone Stop registration in settings.json; now verifies the dispatcher and effective manifest definitions.",
+      "targetedPassed": 2,
+      "targetedFailed": 0
+    }
+  },
+  "processBenchmark": {
+    "event": "PreToolUse",
+    "tool": "Bash",
+    "before": {
+      "nodeProcesses": 41,
+      "hooks": 21,
+      "serialMeasurementMs": 31485
+    },
+    "after": {
+      "nodeProcesses": 1,
+      "hooks": 21,
+      "childProcesses": 0,
+      "timedOut": 0,
+      "skipped": 0,
+      "durationMs": 10742
+    }
+  },
+  "settingsHooks": {
+    "PreToolUse": {
+      "sync": 1,
+      "async": 0,
+      "total": 1,
+      "dispatcherTimeoutSeconds": 45,
+      "matcher": "*"
+    },
+    "UserPromptSubmit": {
+      "sync": 1,
+      "async": 0,
+      "total": 1,
+      "dispatcherTimeoutSeconds": 70,
+      "matcher": "*"
+    },
+    "SessionStart": {
+      "sync": 1,
+      "async": 6,
+      "total": 7,
+      "dispatcherTimeoutSeconds": 70,
+      "matcher": "*"
+    },
+    "Stop": {
+      "sync": 1,
+      "async": 1,
+      "total": 2,
+      "dispatcherTimeoutSeconds": 70,
+      "matcher": "*"
+    },
+    "Notification": {
+      "sync": 1,
+      "async": 0,
+      "total": 1,
+      "dispatcherTimeoutSeconds": 15,
+      "matcher": "*"
+    },
+    "SessionEnd": {
+      "sync": 1,
+      "async": 0,
+      "total": 1,
+      "dispatcherTimeoutSeconds": 70,
+      "matcher": "*"
+    },
+    "PostToolUse": {
+      "sync": 1,
+      "async": 0,
+      "total": 1,
+      "dispatcherTimeoutSeconds": 20,
+      "matcher": "*"
+    }
+  },
+  "implementationNotes": [
+    "Node hooks run in Worker isolates in the same OS process; at most four workers/external commands are active.",
+    "Per-hook deadlines include time spent in the dispatch queue; timeout results pass and discard partial output.",
+    "The runtime manifest preserves custom synchronous hooks; asynchronous hooks remain individually registered.",
+    "Unknown external hooks are retained during load shedding to avoid dropping potential deny gates.",
+    "A credential-refresh retry may invoke the existing provisioner git helper; gate evaluation itself does not start another Node process.",
+    "Measurements are on Linux/WSL, not a Windows conhost/taskkill measurement. The PowerShell concurrency test uses a local pwsh protocol fixture.",
+    "node --test tools/ is not supported by this Node version; the final run uses the same discovery command as CI.",
+    "Test fixtures that copy setup.mjs include its new registry dependency. Interrupted PowerShell fixture directory was removed from the validation clone before the final full run."
+  ],
+  "changedFiles": [
+    {
+      "path": "tools/case-handoff.mjs",
+      "sha256": "ce87e54a144bf7e94b9d38e7f39f8eb9b9d94cc4d76b2b66e48468031aba850e"
+    },
+    {
+      "path": "tools/claude-cost-reporter.mjs",
+      "sha256": "447a86e3a2eebb08148d5f4d3089d80c976ec85fd2c6339177afc17bab67c3af"
+    },
+    {
+      "path": "tools/discord-dm-drafts.test.mjs",
+      "sha256": "39b657d14ca1057a8352d343c33cc30921a95d3ccf4bab6349d8adb6ab6ae701"
+    },
+    {
+      "path": "tools/fleet-convergence.mjs",
+      "sha256": "11265373fa70e7ff3dc76603dad5835f317213017418157f6455706621d846b6"
+    },
+    {
+      "path": "tools/fleet-convergence.test.mjs",
+      "sha256": "bb0e6d9d3beeca1ab435f7dcd8c1498b7b2662041932deb1031f906d53ed7b42"
+    },
+    {
+      "path": "tools/gate-contracts.mjs",
+      "sha256": "2422502839aff73ffc95d6162c12354035f86ae73a7b60b28cf323ab7a4d1893"
+    },
+    {
+      "path": "tools/gate-hook-runner.mjs",
+      "sha256": "f8085ae4dc5c54f6bd791074ecf777a460d973d4384cc4f45b14e659faefb23f"
+    },
+    {
+      "path": "tools/gate-runtime.test.mjs",
+      "sha256": "95269555a10ecbfe7f8bd2cd9937493c99455bbb13266ab3bc253b03b4936b67"
+    },
+    {
+      "path": "tools/gemini-mcp-usage-hook.mjs",
+      "sha256": "d4bf6a0da03fd9644ce61ca51f61a286af8ad6fc1dad4f70ec80569e7f57ab47"
+    },
+    {
+      "path": "tools/hook-budget-check.mjs",
+      "sha256": "e22061afe3f427dfbe5c6ee8cff1ecb632120740698f793b3acda3068b8ef3ed"
+    },
+    {
+      "path": "tools/hook-selfcheck.mjs",
+      "sha256": "0624ca45d75c7c536d5c219ecae0417bc39d80f7187881ba19b8aeb07c99a00b"
+    },
+    {
+      "path": "tools/inquiry-lookup.test.mjs",
+      "sha256": "66c3f9911914a68d3fedab369933ba51373b08bcab37baf837b928128a78d580"
+    },
+    {
+      "path": "tools/internal-recipient-gmail-guard.test.mjs",
+      "sha256": "c02baa8567ae56e09168bec245719a61e0a68b7878eab53d4575d9fab578c4a4"
+    },
+    {
+      "path": "tools/lane-repair-convergence.test.mjs",
+      "sha256": "600b1bf14b9c9e2f082494a6bfbd865bd497731f195fbc605148d4d4a571aaa6"
+    },
+    {
+      "path": "tools/lib/hook-stdin.mjs",
+      "sha256": "7a8eb0a87f87cfe40d6f631c85e3b2bee6f42f32c3fb192d25efaa790f076e37"
+    },
+    {
+      "path": "tools/live-artifact-read-gate.test.mjs",
+      "sha256": "2ee3d46002694a9e0c527df63efc942e4b0f6d4585b6c82900dc263c2f82eef0"
+    },
+    {
+      "path": "tools/model-agent-guard.mjs",
+      "sha256": "a976d21417d3b7f6432f3c8feb5872fd8763bdd15c249f90acab90b656d9d811"
+    },
+    {
+      "path": "tools/pretooluse-bash-delegation.mjs",
+      "sha256": "006d2914e02246accb86860a5018c3f495e2bd564383e57a649be6a3ec8df5c2"
+    },
+    {
+      "path": "tools/pretooluse-codex-invocation.mjs",
+      "sha256": "74934cb9670aac8c007b1ce6d751d03dd969d78f8d08b6d901c0d88577ad2dee"
+    },
+    {
+      "path": "tools/pretooluse-delegation-warn.mjs",
+      "sha256": "c1976f9af335e7e8ed2f9b20fd132a81b387233a246ca8f2dedc719d397c6e2f"
+    },
+    {
+      "path": "tools/pretooluse-headless-background.mjs",
+      "sha256": "f3bbbd507b50818bb7cffbc33ffa0cc6b0b274657ff9aa365407c9a91afd67e4"
+    },
+    {
+      "path": "tools/pretooluse-serial-investigation.mjs",
+      "sha256": "1a0b49960bd27c704d52686d2da2e93928868f69cfc82275ca1203a9f93f1b9e"
+    },
+    {
+      "path": "tools/purge-sessions.test.mjs",
+      "sha256": "34c0bba826f4de13708979f41b0baeb6bdfda0e1f6b4a52b75b536a3994d816a"
+    },
+    {
+      "path": "tools/register-hooks.mjs",
+      "sha256": "bab3639b08e62a2838c4bcc39034727cc01fd763a07c48089d71f1df3f988493"
+    },
+    {
+      "path": "tools/register-hooks.test.mjs",
+      "sha256": "65b43489f1f23081a9ae076238459eea9778d3a2530a3fbfd4658282fec6ec73"
+    },
+    {
+      "path": "tools/selftest-guards.mjs",
+      "sha256": "1ddee88ea487085886198db8162de4d289554af740cbd5d277a8f7880f77fcf5"
+    },
+    {
+      "path": "tools/session-purpose-gate.mjs",
+      "sha256": "5869538ef518f4cc6b5bee07f718269f0015f60b9e13f9b2cf4f36419daaf3ca"
+    },
+    {
+      "path": "tools/setup-manifest.json",
+      "sha256": "30e7ad4fa110d2b6ae037ef54ac85fcaef78b5317cf50bd038ab603e207c4cf6"
+    },
+    {
+      "path": "tools/setup.mjs",
+      "sha256": "ff32956b23370e8df0009744fd69de77879560489e4783204f1bd0be3cae0499"
+    },
+    {
+      "path": "tools/setup.test.mjs",
+      "sha256": "f099f074b8077f0430c45c2eea3c651678702e9847faef72f9501475b28d1494"
+    },
+    {
+      "path": "docs/hook-fanout-dispatcher-claim.md",
+      "sha256": "5d8beb34c5cc73e660d8725bd8880ac953c1a7dcae6b2a2dcb5c4a1ef4a432f6"
+    },
+    {
+      "path": "tools/fixtures/read-hook-settings.mjs",
+      "sha256": "f0be30e402c0648ac27b66976811e5223c0f46bbe48d3644791d1c4cab2945ee"
+    },
+    {
+      "path": "tools/hook-dispatch-benchmark.mjs",
+      "sha256": "e6b647c348d7bea7f92cc2a849c03ed32f0248aa58dc74576019702e8f8df110"
+    },
+    {
+      "path": "tools/hook-dispatch-manifest.json",
+      "sha256": "c6f09e1467b07ec77e3880a9d1d8886dbf73a6e5cceee1a2b49e96d8abe743d7"
+    },
+    {
+      "path": "tools/hook-dispatch-registry.mjs",
+      "sha256": "313229229ef6536fab198adda7ed5c2ceb2eb1777fbd2eb86016b1595e3e7928"
+    },
+    {
+      "path": "tools/hook-dispatch-worker.mjs",
+      "sha256": "160cb36834cf336903d93d7d47d5688626ad54eb47c2e84cc8203987414f4794"
+    },
+    {
+      "path": "tools/hook-dispatch.mjs",
+      "sha256": "cf64794f25ad5677259050d7d609a00556526c4a07ddd8fefc54f06d74dab41c"
+    },
+    {
+      "path": "tools/hook-dispatch.test.mjs",
+      "sha256": "f3d4192d3e3d1cb8109c598d4ce158dee55d58581b7a2c04130cf86caa3b4ba0"
+    },
+    {
+      "path": "tools/fixtures/powershell-test-runtime.mjs",
+      "sha256": "d17d71f0aff3da672702cdef4be704be8ccb5e795db3c81de1f18e377dcbde22"
+    },
+    {
+      "path": "tools/lib/powershell-test-runtime.test.mjs",
+      "sha256": "754f4e69db2e28c6b2ba3745c477fa97f2d4f90197d875b7d65a9e556304074f"
+    },
+    {
+      "path": "tools/lib/scheduled-task.test.mjs",
+      "sha256": "97835f1ed7cacea5cc3a518339e9d3c7496975bafc82922e39714246a10c63ca"
+    },
+    {
+      "path": "tools/nightly-lane-probe.test.mjs",
+      "sha256": "248582e1ecb82047155016488dd590d0441179a4fc4ee0662b440b58dc322052"
+    },
+    {
+      "path": "tools/repair-task-paths.test.mjs",
+      "sha256": "b13be68242d7b7eb23720248df90869e1bfff5391a69b210e371ced05fa20850"
+    },
+    {
+      "path": "tools/setup-node-runtime-security.test.mjs",
+      "sha256": "6e9282c33446569bff4e1f0f2a8460aa3c4a9c68aeb3f2f458805dd11def47c4"
+    },
+    {
+      "path": "tools/reported-symptom-distribution.test.mjs",
+      "sha256": "b6c34a71e05d0f3604e7e3ecd9eaf07c56f3e912061a4b153e3e90a431c7b6c5"
+    },
+    {
+      "path": "evidence/hook-dispatch-validation.json",
+      "role": "validation evidence (this file)"
+    }
+  ],
+  "validatedAt": "2026-11-04T17:51:25.607282+00:00"
+}

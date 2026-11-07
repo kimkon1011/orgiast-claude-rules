@@ -5,7 +5,18 @@ description: 新しいセッションを前セッションの引き継ぎから�
 
 # 前セッションの引き継ぎから作業を開始する
 
+SessionStart hook が kim-inbox の未回収 ask を注入する。目的を確定する前に、その ask を kim に提示して返答を回収し `node <repo>/tools/kim-inbox.mjs --answer <id> --body-file <f>` で記録する。
+
 「1セッション=1目的」を守るための入口。`/session-close` の出口とペアで使う。
+
+## 0. 最優先: イベント百貨店の問合せを拾う（引き継ぎより先）
+
+- 最初に `node ~/orgiast-claude-rules/tools/event-shop-inquiry-triage.mjs` を実行し、出力の表を**そのまま応答の先頭**に出す。
+  判定は管理画面のタブではなく seisaku-team@／kim@ のメール往復（`channel_messages`）で行う（管理画面の「対応が必要」は別経路の返信済み・開催済みが混ざる）。
+- **🔴 要返信が1件でもあれば、それを本セッションの目的候補の先頭にする**。引き継ぎの目的より優先するかは user に1問で聞く（顧客対応は日が経つほど失注する）。
+  返信文の作成は `case-consult-sources` スキルでスレッドを読んでから seisaku-team@ の下書きにする（送信は user の承認後）。
+- ⚪ 終了候補は表を見せるだけでよい。完了にするかは user の判断。
+- 認証情報が無い PC では「未確認」の1行が出る。そのまま手順1へ進む（このPCでは判定不能と1行書く）。
 
 ## 1. 引き継ぎを読む
 
@@ -26,18 +37,21 @@ description: 新しいセッションを前セッションの引き継ぎから�
 
 ## 2. 目的を1件に確定する
 
-- 引き継ぎに目的が書いてあればそれを採用し、着手前に1行で宣言する（`**[本セッションの目的]** …`）。
+- 候補を集める前に `~/.claude/business-goals.md` を必ず読む。「売上・利益レバー（上から優先）」の未完了レバー1件を候補の **1番目**にする（手順0・1.5の優先事項はそのまま）。候補源は次の順:
+  1. `~/.claude/business-goals.md` の最優先の未完了レバー
+  2. `~/.claude/next-session.md` の目的・残TODO
+  3. `~/.claude/session-handoffs.md`（放置セッションの再開一覧。`/session-triage` が生成）
+  4. 直近の memory の「未決」「次アクション」記述
+  5. `~/.claude/promotion-queue.md` のPROMOTE待ち
+- 基盤・ツール系の残TODOは、売上・利益レバーを止めているブロッカー、または期限付きの効果確認だけを候補に出す。
 - **候補を kim に見せる前に、着手済みを機械で落とす**（重複着手の防止・トークン増ゼロ）:
   候補を1行1件でスクラッチパッドのファイルに書き、
   `node ~/orgiast-claude-rules/tools/session-claims.mjs --filter --self <このセッションのid> --candidates <そのファイル>`
-  を通す。**stdout に残った候補だけ**を AskUserQuestion に出す。落ちた分は stderr に理由が出るが、kim には見せない。
+  を通す。**stdout に残った候補だけ**を対象にする。落ちた分は stderr に理由が出るが、kim には見せない。
   （このツールは他セッションの `**[本セッションの目的]**` 宣言を transcript から拾って突合する。
    着手印は自動で付くので、手で書く運用にしない）
-- 未定・複数ある場合は AskUserQuestion で**1件だけ**選ばせる。候補は次から集める:
-  - `~/.claude/next-session.md` の残TODO
-  - `~/.claude/session-handoffs.md`（放置セッションの再開一覧。`/session-triage` が生成）
-  - 直近の memory の「未決」「次アクション」記述
-  - `~/.claude/promotion-queue.md`のPROMOTE待ち
+- フィルタ後の候補が **1件だけなら AskUserQuestion を省略**し、`**[本セッションの目的]** …。違えば言ってください` と着手宣言して進める。**複数の時だけ** AskUserQuestion で1件を選ばせ、選ばれた目的を宣言する。
+- 候補が残らなければ着手済み項目を復活させず、未着手のレバー・候補源を確認する。
 - 選ばれなかった候補は `next-session.md` に残す（消さない）。
 
 ## 3. 完了条件を先に決める

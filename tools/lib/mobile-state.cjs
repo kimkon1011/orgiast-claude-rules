@@ -2,6 +2,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+function isMobileEnabled(home) {
+  try { return JSON.parse(fs.readFileSync(path.join(home, '.claude', 'mobile-sessions.json'), 'utf8')).enabled !== false; }
+  // 読めない・壊れている時は従来どおり有効（明示の enabled:false だけが停止スイッチ）。
+  catch { return true; }
+}
+
 function targetCount(value = 3) {
   const count = Number(value);
   if (!Number.isInteger(count) || count < 1 || count > 10) throw new Error('待機数は 1..10 の整数で指定してください');
@@ -22,7 +28,7 @@ function readSnapshot(home, now = Date.now()) {
   } catch { return null; }
 }
 // --- 定期リフレッシュ設定（古い待機タブを閉じて作り直し、スマホ一覧の上に出す） ---
-const DEFAULT_REFRESH_MINUTES = 60;
+const DEFAULT_REFRESH_MINUTES = 0;
 const DEFAULT_REFRESH_HOURS = '06-24';
 function refreshMinutes(value) {
   const minutes = Number(value);
@@ -64,6 +70,6 @@ function readLastRefreshAt(home) {
   } catch { return null; }
 }
 module.exports = {
-  targetCount, readConfig, readSnapshot,
+  isMobileEnabled, targetCount, readConfig, readSnapshot,
   DEFAULT_REFRESH_MINUTES, DEFAULT_REFRESH_HOURS, parseRefreshHours, inRefreshHours, readRefreshConfig, readLastRefreshAt,
 };

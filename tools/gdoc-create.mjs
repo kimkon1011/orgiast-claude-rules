@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { ensureKimEditor } from './lib/kim-editor.mjs';
 /**
  * gdoc-create.mjs — Markdown から新規 Google Doc を作成する。
  *
@@ -27,9 +28,10 @@ import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
+import { defaultDriveKeyPath } from './lib/drive-auth.mjs';
 
-const DEFAULT_KEY =
-  'C:/Users/uers/Downloads/CLAUDE.md配布/aujust-sales-automation/.gcp/sheets-sa.json';
+// 既定パスはハードコードしない（旧既定値はディレクトリ名の打ち間違いで鍵を見失っていた。2026-10-23 実測）。
+const DEFAULT_KEY = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath();
 const DEFAULT_SUBJECT = 'kim@orgiast.jp';
 
 export function parseArgs(argv) {
@@ -149,6 +151,7 @@ async function main() {
     )).json();
   }
 
+  await ensureKimEditor(doc.id, { actingUser: subject, token, api, created: !reused });
   if (args.share) await shareAndRecord({ fileId: doc.id, emails: args.share, role: args['share-role'], auth: token, name: doc.name });
 
   // 作成レスポンスだけで成功とせず、再利用時も実際の本文を取り直して確認する。

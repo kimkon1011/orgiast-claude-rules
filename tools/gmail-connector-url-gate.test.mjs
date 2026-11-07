@@ -18,6 +18,10 @@ function fixture(t) {
 
 test('URL なしの本文は通す', () => assert.equal(judge(gmail({ subject: 'ご連絡', body: 'お世話になっております。' })).decision, 'pass'));
 test('https URL 入りの body を止める', () => assert.equal(judge(gmail({ body: '詳細 https://example.com/path' })).decision, 'block'));
+test('www. で始まるスキーム無しドメインを止める', () => assert.equal(judge(gmail({ body: '詳細 www.orgiast.jp' })).decision, 'block'));
+test('パス付きのスキーム無しドメインを止める', () => assert.equal(judge(gmail({ body: '詳細 orgiast.jp/contact' })).decision, 'block'));
+test('メールアドレスのドメイン部だけなら通す', () => assert.equal(judge(gmail({ body: 'Mail：seisaku-team@orgiast.jp' })).decision, 'pass'));
+test('短い https URL も従来どおり止める', () => assert.equal(judge(gmail({ body: 'https://x.jp' })).decision, 'block'));
 test('htmlBody の a href だけでも止める', () => assert.equal(judge(gmail({ htmlBody: '<a href="https://example.com">詳細</a>' })).decision, 'block'));
 test('google.com/url?q= を常に止め、理由を明示する', () => {
   const result = judge(gmail({ subject: 'https://www.google.com/url?q=https://example.com&source=gmail' }));

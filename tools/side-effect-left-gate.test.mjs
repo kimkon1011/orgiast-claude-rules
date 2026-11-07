@@ -71,3 +71,31 @@ test('同ターンにツール実行があっても告知だけならblockする
   assert.equal(result.decision, 'block');
   assert.equal(result.toolUseCount, 1);
 });
+
+// 2026-10-23 実害: コネクタの accessRole=reader だけを理由に先方のカレンダー招待を残した（DWD 鍵では通った）
+const permissionBlocked = [
+  '先方をカレンダーの予定には招待していません。cr@ には営業部カレンダーの予定を編集する権限がないためです。',
+  '営業部のカレンダーへの cr@ の権限は reader なので、先方は招待していません。',
+  '閲覧のみの権限なので予定を更新できません。',
+  'シートに書き込めないため、結果は反映していません。',
+  '権限が足りないので招待しませんでした。',
+];
+for (const text of permissionBlocked) test(`block permission skip: ${JSON.stringify(text)}`, () => {
+  const result = judgeSideEffectLeft(text);
+  assert.equal(result.decision, 'block');
+  assert.equal(result.code, 'SIDE-EFFECT');
+  assert.match(result.reason, /DWD/);
+  assert.match(result.reason, /修正→検証→結果を書く/);
+});
+
+const permissionPassed = [
+  'コネクタの権限は reader だったので、DWD 鍵で招待しました。読み戻しで招待済みを確認。',
+  '権限が足りない時は DWD 鍵を試す。',
+  'cr@ の権限は reader と返った。\nDWD で招待し修正済み、読み戻しで確認しました。',
+  '権限がないので招待していません。[SIDE-EFFECT-OK] DWD 鍵は unauthorized_client、GAS は所有者が別で 403。',
+  '| 経路 | 権限 | 結果 |',
+  '> cr@ には編集する権限がないため招待していません。',
+];
+for (const text of permissionPassed) test(`pass permission: ${JSON.stringify(text)}`, () => {
+  assert.equal(judgeSideEffectLeft(text).decision, 'pass');
+});

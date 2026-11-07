@@ -121,3 +121,39 @@ test('parseDeferred: 75 以外は null、75 は stdout の JSON から retryAt �
   assert.equal(fallback.reason, 'deferred');
   assert.ok(fallback.retryAt > Date.now());
 });
+
+for (const [label, remaining, ago, allowed] of [
+  ['残り3h', 3 * HOUR, undefined, false],
+  ['残り5h境界', 5 * HOUR, undefined, false],
+  ['残り3日・記録なし', 3 * DAY_MS, undefined, true],
+  ['残り3日・2h前', 3 * DAY_MS, 2 * HOUR, false],
+  ['残り3日・6h前境界', 3 * DAY_MS, 6 * HOUR, true],
+  ['残り3日・7h前', 3 * DAY_MS, 7 * HOUR, true],
+]) {
+  test(`decideCodexGate recheck: ${label}`, (t) => {
+    const home = tmp(t), now = 1_800_000_000_000;
+    const file = path.join(home, '.claude', 'codex-cooldown-recheck.json');
+    fs.writeFileSync(path.join(home, '.claude', 'codex-cooldown.json'), JSON.stringify({ until: now + remaining }));
+    if (ago !== undefined) fs.writeFileSync(file, JSON.stringify({ at: now - ago }));
+    const gate = decideCodexGate({ home, now });
+    assert.deepEqual(gate, allowed ? { deferred: false, recheck: true }
+      : { deferred: true, reason: 'codex_cooldown', retryAt: now + remaining });
+    if (allowed) {
+      assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { at: now });
+      assert.equal(decideCodexGate({ home, now }).deferred, true);
+    } else if (ago !== undefined) {
+      assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { at: now - ago });
+    } else assert.equal(fs.existsSync(file), false);
+  });
+}
+
+test('recheck でも無人予算を適用し、予算超過なら確認時刻を記録しない', (t) => {
+  const home = tmp(t), now = Date.now();
+  fs.writeFileSync(path.join(home, '.claude', 'codex-cooldown.json'), JSON.stringify({ codex: { until: now + 3 * DAY_MS } }));
+  const budget = path.join(home, '.claude', 'executor-budget.json');
+  fs.writeFileSync(budget, JSON.stringify({ codex: { unattendedPerDay: 0 } }));
+  assert.equal(decideCodexGate({ home, origin: 'unattended', now }).reason, 'unattended_budget');
+  assert.equal(fs.existsSync(path.join(home, '.claude', 'codex-cooldown-recheck.json')), false);
+  fs.writeFileSync(budget, JSON.stringify({ codex: { unattendedPerDay: 1 } }));
+  assert.deepEqual(decideCodexGate({ home, origin: 'unattended', now }), { deferred: false, recheck: true });
+});

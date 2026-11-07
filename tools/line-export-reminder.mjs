@@ -2,12 +2,11 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { addItem } from './kim-inbox.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const DAY_MS = 86_400_000;
 const COOLDOWN_MS = 3 * DAY_MS;
-const KIM_USER_ID = '715210673642012733';
-const API = 'https://discord.com/api/v10';
 const SETUP_URL = 'https://claude-pc.tailc5d751.ts.net/line-setup';
 
 function latestLineTimestamp(dir) {
@@ -52,29 +51,9 @@ function readSentAt(file) {
   }
 }
 
-async function sendDiscordDm({ home, message, fetchImpl = fetch }) {
-  let token = process.env.DISCORD_BOT_TOKEN?.trim();
-  if (!token) {
-    try { token = fs.readFileSync(path.join(home, '.claude', 'orgiast-discord-bot-token.txt'), 'utf8').trim(); }
-    catch { token = ''; }
-  }
-  if (!token) throw new Error('Discord Bot トークンが見つかりません');
-
-  const headers = {
-    Authorization: `Bot ${token}`,
-    'Content-Type': 'application/json',
-    'User-Agent': 'orgiast-line-export-reminder/1.0',
-  };
-  const dm = await fetchImpl(`${API}/users/@me/channels`, {
-    method: 'POST', headers, body: JSON.stringify({ recipient_id: KIM_USER_ID }), signal: AbortSignal.timeout(20_000),
-  });
-  if (!dm.ok) throw new Error(`DMチャンネル作成が HTTP ${dm.status}`);
-  const channelId = (await dm.json()).id;
-  if (!channelId) throw new Error('DMチャンネルIDを取得できません');
-  const sent = await fetchImpl(`${API}/channels/${channelId}/messages`, {
-    method: 'POST', headers, body: JSON.stringify({ content: message }), signal: AbortSignal.timeout(20_000),
-  });
-  if (!sent.ok) throw new Error(`DM送信が HTTP ${sent.status}`);
+export async function sendDiscordDm({ home, message, kind = 'info' }) {
+  const item = await addItem(home, { kind: ['ask', 'action'].includes(kind) ? 'ask' : 'info', text: message, source: 'line-export-reminder' });
+  return { delivered: 'session-inbox', id: item.id };
 }
 
 export async function main(argv = process.argv.slice(2), options = {}) {
@@ -112,10 +91,10 @@ export async function main(argv = process.argv.slice(2), options = {}) {
       return 0;
     }
 
-    await (options.sendDm ?? sendDiscordDm)({ home, message });
+    await (options.sendDm ?? sendDiscordDm)({ home, message, kind: 'action' });
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(stateFile, `${JSON.stringify({ sentAt: now.toISOString() })}\n`, 'utf8');
-    process.stdout.write(`LINE催促: Discord DMを送信しました（${dataAgeDays === null ? '未取り込み' : `${dataAgeDays}日前`}）\n`);
+    process.stdout.write(`LINE催促: kim-inboxに保存しました（${dataAgeDays === null ? '未取り込み' : `${dataAgeDays}日前`}）\n`);
   } catch (error) {
     process.stdout.write(`LINE催促: 送信せず終了しました（${error.message}）\n`);
   }

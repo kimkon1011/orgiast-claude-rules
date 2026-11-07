@@ -43,8 +43,15 @@ test('ジョブ: 最新実行のみ、後続成功・実行中・未実行は失
 test('会話: 最後のassistantの実行予告のみ', () => {
   const s = { sessionId: 's1', file: '/log', mtime: ago(3), lastRole: 'assistant', lastAssistantText: 'これから修正します。' };
   assert.equal(detectStalledSession([s], now).length, 1);
-  for (const delta of [{ lastRole: 'user' }, { lastAssistantText: 'これから修正します。\n修正完了しました。' }, { mtime: ago(2) }])
+  for (const delta of [{ lastAssistantText: 'これから修正します。\n修正完了しました。' }, { mtime: ago(2) }])
     assert.equal(detectStalledSession([{ ...s, ...delta }], now).length, 0);
+});
+test('会話: エラー無しの末尾userは拾わない', () => {
+  assert.equal(detectStalledSession([{ sessionId: 's3', file: '/log', mtime: ago(3), lastRole: 'user', endedWithError: false, lastAssistantText: '' }], now).length, 0);
+});
+test('会話: 末尾user未応答をAPIエラー理由で拾う', () => {
+  const found = detectStalledSession([{ sessionId: 's2', file: '/log', mtime: ago(3), lastRole: 'user', endedWithError: true, lastAssistantText: '' }], now);
+  assert.equal(found.length, 1); assert.equal(found[0].reason, 'API エラーで未返答');
 });
 test('委譲: exit=0かつ対応コミットなしのみ。未確認は分ける', () => {
   const l = { file: '/codex.log', t: ago(2), exit: 0, commitVerified: false };
@@ -61,6 +68,20 @@ test('CLI: dryが既定、件数検証、モード競合拒否', () => {
   assert.equal(parseArgs([]).apply, false); assert.equal(parseArgs([]).max, 5);
   assert.throws(() => parseArgs(['--apply', '--dry-run']));
   for (const n of ['0', '-1', 'NaN', '1.5']) assert.throws(() => parseArgs(['--max', n]));
+});
+test('既定の確認先: ホーム配下から導き、特定PCのユーザー名を埋め込まない', () => {
+  const prev = process.env.ORGIAST_HOME;
+  const home = path.join(os.tmpdir(), 'stall-sweeper-home-test');
+  process.env.ORGIAST_HOME = home;
+  try {
+    const out = parseArgs([]);
+    assert.equal(out.repos.length, 5);
+    assert.ok(out.repos.includes(path.join(path.resolve(home), '.claude', 'nightly-repo')));
+    for (const repo of out.repos) assert.ok(repo.startsWith(path.resolve(home)), repo);
+    assert.ok(out.repos.every(repo => path.relative(path.resolve(home), repo).split(path.sep)[0] !== '..'));
+  } finally {
+    if (prev === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = prev;
+  }
 });
 test('排他: 同時実行を拒否、終了後に次世代を取得、削除不要', () => {
   const dir = temp(), fd = acquireLock(dir);
@@ -82,7 +103,7 @@ function fixture() {
 test('実git: 専用ブランチに1コミット・main不変・force/merge/deleteなし', async () => {
   const { repo, g, candidate } = fixture(), before = g('rev-parse', 'main'), commands = [], log = [];
   const run = (exe, args, opts) => { commands.push([exe, ...args]); if (exe === 'gh') return args[1] === 'list' ? '[]' : 'https://github.com/test/test/pull/1'; return command(exe, args, opts); };
-  const result = await advanceUncommitted(candidate, { run, log: r => log.push(r), plan: () => [[process.execPath, ['-e', 'process.exit(0)']]] });
+  const result = await advanceUncommitted(candidate, { home: os.tmpdir(), run, log: r => log.push(r), plan: () => [[process.execPath, ['-e', 'process.exit(0)']]] });
   assert.equal(g('rev-list', '--count', 'main..HEAD'), '1'); assert.equal(g('rev-parse', 'main'), before);
   assert.equal(g('log', '-1', '--format=%H'), result.commit); assert.equal(log[0].action, 'コミット保存');
   assert.ok(commands.some(c => c.includes('create'))); assert.ok(!commands.flat().some(a => ['--force', 'merge', '--delete'].includes(a)));
@@ -91,7 +112,7 @@ test('実git: 専用ブランチに1コミット・main不変・force/merge/dele
 });
 test('テスト失敗: コミット・push・PRなし', async () => {
   const { g, candidate } = fixture(), before = g('rev-parse', 'HEAD');
-  await assert.rejects(advanceUncommitted(candidate, { plan: () => [[process.execPath, ['-e', 'process.exit(1)']]] }));
+  await assert.rejects(advanceUncommitted(candidate, { home: os.tmpdir(), plan: () => [[process.execPath, ['-e', 'process.exit(1)']]] }));
   assert.equal(g('rev-parse', 'HEAD'), before);
 });
 test('他セッションによる更新: ステージ前に停止', async () => {
@@ -101,7 +122,7 @@ test('他セッションによる更新: ステージ前に停止', async () => 
 });
 test('テストでファイル更新: コミットを停止', async () => {
   const { g, candidate } = fixture(), before = g('rev-parse', 'HEAD');
-  await assert.rejects(advanceUncommitted(candidate, { plan: () => [[process.execPath, ['-e', "require('fs').writeFileSync('file.txt','changed')"]]] }));
+  await assert.rejects(advanceUncommitted(candidate, { home: os.tmpdir(), plan: () => [[process.execPath, ['-e', "require('fs').writeFileSync('file.txt','changed')"]]] }));
   assert.equal(g('rev-parse', 'HEAD'), before);
 });
 test('委譲exit=0でも完了証拠なしなら失敗', async () => {
@@ -144,6 +165,14 @@ test('文字列の成功statusを失敗にしない', () => {
   for (const status of ['ok', 'success', 'fallback', 'cooldown', '0', null]) assert.equal(detectFailedJob([{ taskName: 'a', t: ago(4), status }], now).length, 0);
   for (const status of ['error', 'http_429', 'no-cheap-executor']) assert.equal(detectFailedJob([{ taskName: 'a', t: ago(4), status }], now).length, 1);
 });
+test('ジョブ付帯なしLLM行の直近http_429はレート上限で失敗扱いしない', () => {
+  // groq:不明 アーティファクト: provider単位の呼び出し行(cwd/taskName/job無し)はRPD 429の検出元。
+  // レート上限はフォールバックチェーンが吸収するため失敗扱いしない(2026-11-07)。
+  assert.equal(detectFailedJob([{ provider: 'groq', t: ago(4), status: 'http_429' }], now).length, 0);
+  assert.equal(detectFailedJob([{ provider: 'groq', t: ago(4), status: 'error' }], now).length, 1);
+  // 実ジョブ付帯の http_429 は従来どおり失敗として拾う。
+  assert.equal(detectFailedJob([{ taskName: 'a', t: ago(4), status: 'http_429', cwd: 'C:/x' }], now).length, 1);
+});
 test('日々再生成されるTODOは初回観測を保持する', () => {
   const f = { file: '/next-actions.md', mtimeMs: now, text: '## 推奨アクション\n1. 作業を直す\n' };
   const observed = detectOpenTodo([f], now, {}, 0);
@@ -159,11 +188,11 @@ test('委譲ログのテスト出力中のexit=0は実行成功の証拠にし�
 });
 test('コミット後にpush失敗しても、保存済みコミットからPR作成を再開する', async () => {
   const { candidate, g } = fixture(), rows = [];
-  await assert.rejects(advanceUncommitted(candidate, { plan: () => [], log: r => rows.push(r), run: (exe, args, opts) => {
+  await assert.rejects(advanceUncommitted(candidate, { home: os.tmpdir(), plan: () => [], log: r => rows.push(r), run: (exe, args, opts) => {
     if (args.includes('push')) throw new Error('通信失敗'); return command(exe, args, opts);
   } }));
   assert.equal(rows.length, 1);
-  const result = await advanceUncommitted({ ...candidate, pending: rows[0] }, { run: (exe, args, opts) => {
+  const result = await advanceUncommitted({ ...candidate, pending: rows[0] }, { home: os.tmpdir(), run: (exe, args, opts) => {
     if (exe === 'gh') return args[1] === 'list' ? '[]' : 'https://github.com/test/test/pull/2'; return command(exe, args, opts);
   } });
   assert.equal(g('rev-list', '--count', 'main..HEAD'), '1'); assert.equal(result.commit, rows[0].commit);

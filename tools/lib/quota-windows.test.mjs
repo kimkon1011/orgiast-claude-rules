@@ -38,6 +38,21 @@ test('Claude API mapping and unavailable reason use isolated credentials', async
   const windows = await readClaudeWindows({ home, fetchImpl: async () => ({ ok: true, json: async () => ({ five_hour: { utilization: 60, resets_at: new Date(now + minute).toISOString() }, seven_day: { utilization: 70, resets_at: new Date(now + 2 * minute).toISOString() } }) }) });
   assert.deepEqual(windows.map(x => x.window), ['5h', '7d']); assert.equal(windows[0].resetsAt, now + minute);
 });
+test('Claude 429 は直近10分の成功読み取りを stale で返し、期限切れ・非一時障害では返さない', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'quota-cache-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.claude')); fs.writeFileSync(path.join(home, '.claude/.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'fixture' } }));
+  const ok = { ok: true, json: async () => ({ five_hour: { utilization: 40, resets_at: new Date(now + 60 * minute).toISOString() }, seven_day: { utilization: 20, resets_at: new Date(now + 500 * minute).toISOString() } }) };
+  const http = status => async () => ({ ok: false, status });
+  assert.equal((await readClaudeWindows({ home, fetchImpl: http(429), now: () => now })).length, 0, 'キャッシュ無しは従来どおり失敗');
+  assert.equal((await readClaudeWindows({ home, fetchImpl: async () => ok, now: () => now })).length, 2);
+  const cached = await readClaudeWindows({ home, fetchImpl: http(429), now: () => now + 5 * minute });
+  assert.deepEqual(cached.map(x => [x.window, x.usedPercent, x.stale]), [['5h', 40, true], ['7d', 20, true]]);
+  assert.equal(cached.reason, null); assert.match(cached.fromCache, /429/);
+  assert.equal((await readClaudeWindows({ home, fetchImpl: http(429), now: () => now + 11 * minute })).length, 0, '10分超は使わない');
+  assert.equal((await readClaudeWindows({ home, fetchImpl: http(429), now: () => now + 61 * minute, cacheMaxAgeMs: 999 * minute })).length, 0, 'resets_at が過去なら使わない');
+  const denied = await readClaudeWindows({ home, fetchImpl: http(401), now: () => now + minute });
+  assert.equal(denied.length, 0); assert.match(denied.reason, /401/);
+});
 test('decision boundary cases and concurrent ceilings', () => {
   assert.equal(decideSweep({ windows: claude(60, 30, 120), now }).length, 0);
   assert.equal(decideSweep({ windows: claude(), now })[0].window, '5h');

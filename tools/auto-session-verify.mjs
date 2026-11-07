@@ -118,7 +118,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
         const result = await register();
         repair = `OrgiastAutoSession を再登録（${result?.ok ? '成功' : `失敗 code=${result?.code ?? '?'}`}）`;
       }
-    } else if (!String(task.command ?? task.arguments ?? '').includes('--count all')) {
+    } else if (!String(task.command ?? task.arguments ?? '').replaceAll('"', '').includes('--count all')) {
       cause = 'task-args-drift';
       if (!dry) {
         const result = await register();

@@ -2,7 +2,7 @@
 
 ## 自動導入（推奨）
 
-正本リポジトリ（orgiast-claude-rules。各PCでは `tools/` が自動配布されています）で、kit install を実行します。`widget/install.mjs` によるファイル配置、`.feedback-kit.json` の書き込み、滞留ゼロ巡回台帳への登録までを1回で行い、`feedback-form-gate` の kit 検査（verify・版・必須6機能）を通る状態になります。
+正本リポジトリ（orgiast-claude-rules。各PCでは `tools/` が自動配布されています）で、kit install を実行します。`widget/install.mjs` によるファイル配置、`.feedback-kit.json` の書き込み、滞留ゼロ巡回台帳への登録までを1回で行い、`feedback-form-gate` の kit 検査（verify・版・必須7機能）を通る状態になります。
 
 ```sh
 node tools/feedback-kit/install.mjs --app <対象アプリのパス> --name "<アプリ名>"
@@ -82,3 +82,11 @@ node -e "fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rule
 ```
 
 API投稿、sinks、service role がローカルにあればDB read-backを確認し、テスト行を削除せず `rejected` に更新します。`--keep` なら更新もしません。管理画面で提出が見え、Discord本文と署名画像が開けることが完了判定です。
+
+## 送信内容・対応状況の閲覧（1.1.0以降の必須機能）
+
+フォームの送信ボタン付近と、閉じるまで残る送信完了表示に「送信した内容・対応状況を見る」リンクを表示します（`data-feedback-history-link`）。リンク先は `/feedback/mine` で、`feedback-mine-page.tsx` を `app/feedback/mine/page.tsx`（src構成なら `src/app/feedback/mine/page.tsx`）へ自動配置します。`--no-admin-page` でも配置します。
+
+投稿APIと同じ Supabase Cookie（分割・base64形式を含む）を Auth API で検証し、ログインユーザーのメールと `submitter_email` が一致する投稿だけをサーバーで取得します。種別・タイトル・本文・日時・状態（未対応／確認済み／対応中／完了／却下）の読み取り専用ページです。内部メモ・連絡先・添付URL・service roleキーは画面へ出しません。従来の `/feedback` は管理用です。
+
+未ログインの場合はログイン案内、通知のみの構成では担当者への問い合わせ案内を表示します。履歴を閲覧するには Supabase 保存と投稿時のログインが必要です。別の認証方式のアプリは検証済みユーザー情報に合わせてこのページを統合してください。既存導入は `--upgrade` で更新し、フォーム表示時・送信完了時のリンクと本人の一覧を確認してください。両 verify はマーカーが無ければ「フォームに送信内容を見るリンクがありません」で不合格にします。

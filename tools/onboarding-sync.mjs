@@ -13,7 +13,11 @@ import { isEntry } from './is-entry.mjs';
 import { buildKeyserveAlert, shouldAlert } from './keyserve-alert.mjs';
 import { keyserveAuthHeaders, requireKeyservePcId, isEnrollToken } from './keyserve-auth.mjs';
 import { installSharedMemories } from './memory-share.mjs';
+import { installKnowledge } from './knowledge-pack.mjs';
+import { resolveConvergenceRepo } from './fleet-convergence.mjs';
 import { gitBlobSha } from './version-drift.mjs';
+import { isKimOperated } from './lib/kim-operated.mjs';
+import { dedupePreferences } from './claude-md-dedupe.mjs';
 
 const args = process.argv.slice(2);
 const force = args.includes('--force');
@@ -33,7 +37,7 @@ const rawUrl = process.env.ORGIAST_ONBOARDING_URL || 'https://raw.githubusercont
 const keyserveUrl = process.env.ORGIAST_KEYSERVE_URL || 'https://orgiast-keyserve.vercel.app/api/keys';
 const beginPrefix = '<!-- BEGIN: オージャスト共通ルール';
 const endMarker = '<!-- END: オージャスト共通ルール -->';
-const indexLead = '全文は ~/.claude/orgiast-onboarding.md（および https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/ONBOARDING.md ）。このファイルは自動ロードされない。判断に迷ったら Read ツールで該当節を読むこと';
+const indexLead = '全文は ~/.claude/orgiast-onboarding.md。自動ロードされないため、判断に迷ったら Read ツールで該当節を読むこと';
 export const PRESERVE_LOCAL_KEYS = new Set(['REPORTER_LABEL', 'REPORTER_HOST']);
 export const KEYS_GUARD_MS = 20 * 60 * 60 * 1000;
 export const KEYS_ALERT_STALE_MS = 48 * 60 * 60 * 1000;
@@ -294,6 +298,29 @@ export async function updateRepositoryFiles(targetRepo, options = {}) {
   let oldDistribution = new Set();
   let untrackedOutput = new Set();
   const historyBlobCache = new Map();
+  const matchesMainHistory = (rel, current) => {
+    // HEAD との差ではなく main の過去版との一致で、zip が以前書いた配布物かを判定する。
+    // git の失敗や浅い履歴では一致扱いにせず、安全側で人の作業として保護する。
+    try {
+      const commits = String(git(
+        ['-C', targetRepo, 'rev-list', '-n', '50', 'origin/main', '--', rel],
+        { encoding: 'utf8', timeout: 60000 },
+      )).trim().split(/\s+/).filter(Boolean);
+      const content = fs.readFileSync(current);
+      const localShas = new Set([gitBlobSha(content)]);
+      if (!content.includes(0)) localShas.add(gitBlobSha(Buffer.from(content.toString('binary').replaceAll('\r\n', '\n'), 'binary')));
+      for (const commit of commits) {
+        const key = `${commit}\0${rel}`;
+        let blob = historyBlobCache.get(key);
+        if (blob === undefined) {
+          blob = String(git(['-C', targetRepo, 'rev-parse', `${commit}:${rel}`], { encoding: 'utf8', timeout: 60000 })).trim();
+          historyBlobCache.set(key, blob);
+        }
+        if (localShas.has(blob)) return true;
+      }
+    } catch {}
+    return false;
+  };
   if (hasGit) {
     try {
       // pull 失敗時だけ作業中ファイルを列挙し、zip がローカル作業を消さないよう個別に除外する。
@@ -306,30 +333,11 @@ export async function updateRepositoryFiles(targetRepo, options = {}) {
       for (const rel of changed) {
         const current = path.join(targetRepo, ...rel.split('/'));
         if (previous?.files?.[rel] && fs.existsSync(current) && sha256File(current) === previous.files[rel]) selfOutput.add(rel);
-        else if (untracked.has(rel) || !fs.existsSync(current)) excluded.add(rel);
+        else if (!fs.existsSync(current)) excluded.add(rel);
         else {
-          // HEAD との差ではなく main の過去版との一致で、zip が以前書いた配布物かを判定する。
-          // git の失敗や浅い履歴では一致扱いにせず、安全側で人の作業として保護する。
-          let matchesHistory = false;
-          try {
-            const commits = String(git(
-              ['-C', targetRepo, 'rev-list', '-n', '50', 'origin/main', '--', rel],
-              { encoding: 'utf8', timeout: 60000 },
-            )).trim().split(/\s+/).filter(Boolean);
-            const content = fs.readFileSync(current);
-            const localShas = new Set([gitBlobSha(content)]);
-            if (!content.includes(0)) localShas.add(gitBlobSha(Buffer.from(content.toString('binary').replaceAll('\r\n', '\n'), 'binary')));
-            for (const commit of commits) {
-              const key = `${commit}\0${rel}`;
-              let blob = historyBlobCache.get(key);
-              if (blob === undefined) {
-                blob = String(git(['-C', targetRepo, 'rev-parse', `${commit}:${rel}`], { encoding: 'utf8', timeout: 60000 })).trim();
-                historyBlobCache.set(key, blob);
-              }
-              if (localShas.has(blob)) { matchesHistory = true; break; }
-            }
-          } catch {}
-          if (matchesHistory) oldDistribution.add(rel);
+          // 未追跡でも main 過去版と一致すれば git から復元可能で、人の独自作業ではない。
+          // 保護すると hashes に載らず永久凍結するため、追跡済みと同じ履歴照合で更新する。
+          if (matchesMainHistory(rel, current)) oldDistribution.add(rel);
           else excluded.add(rel);
         }
       }
@@ -634,9 +642,43 @@ function save(hash, now) {
   if (dryRun) return;
   try { fs.mkdirSync(path.dirname(statePath), { recursive: true }); fs.writeFileSync(statePath, `${JSON.stringify({ lastCheck: now.toISOString(), hash }, null, 2)}\n`, 'utf8'); } catch {}
 }
+// Only optional navigation (headings/previews) consumes this budget. Mandatory
+// rules are distributed in full and have a separate size guard in the tests.
+export const INDEX_BUDGET_BYTES = 8000;
+export const INDEX_PROTECTED = [
+  /副作用・影響は報告で終わらせず、その場で直す/,
+  /effortLevel.*medium/,
+  /planIncluded.*監督.*全用途禁止/,
+  /setup --converge.*allow/,
+];
+
+export function isMandatoryIndexLine(line) {
+  return /^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(line)
+    || INDEX_PROTECTED.some(pattern => pattern.test(line));
+}
+
+export function measureIndexBytes(index) {
+  const totalBytes = Buffer.byteLength(index);
+  const optionalBytes = Buffer.byteLength(index.split('\n').filter(line => !isMandatoryIndexLine(line)).join('\n'));
+  // Charge separators removed with mandatory lines to the mandatory allocation,
+  // so the two allocations sum exactly to the distributed UTF-8 size.
+  return { optionalBytes, mandatoryBytes: totalBytes - optionalBytes, totalBytes };
+}
+
 export function makeIndex(body) {
-  const lines = body.replace(/\r\n/g, '\n').split('\n');
+  let fence = null;
+  const lines = body.replace(/\r\n/g, '\n').split('\n').filter(line => {
+    const marker = line.match(/^\s*(`{3,}|~{3,})(.*)$/);
+    if (fence) {
+      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
+      return false;
+    }
+    if (!marker) return true;
+    fence = marker[1];
+    return false;
+  });
   const kept = [indexLead];
+  const conclusions = new Map();
   let previousNonempty = '';
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -647,25 +689,66 @@ export function makeIndex(body) {
     }
     if (line.trim()) previousNonempty = line;
     if (/^#{1,3}(?:\s|$)/.test(line)) {
-      // 索引は規約の見出しを残し、日付・由来は全文へ委ねて配布上限内に収める。
-      kept.push(line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, ''));
+      // 実文書のタイトルと章見出しは全文へ委ね、参照先になる個別規約の見出しを優先する。
+      const broadOnboardingHeading = /^# オージャスト Claude Code 共通ルール/.test(line) || /^##(?:\s|$)/.test(line);
+      if (!broadOnboardingHeading) kept.push(line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, ''));
       // 大見出しは案内だけにし、個別規約（###）の結論と絶対ルールを優先する。
       for (let j = i + 1; /^###\s/.test(line) && j < lines.length && !/^#{1,3}(?:\s|$)/.test(lines[j]); j++) {
         const candidate = lines[j].trim();
         if (!candidate) continue;
+        // Absolute rules are emitted in full by the outer loop. A first-sentence
+        // preview would duplicate (and sometimes truncate) the same obligation.
+        if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(candidate)) break;
         const end = candidate.indexOf('。');
-        kept.push(end >= 0 ? candidate.slice(0, end + 1) : candidate);
+        // 結論文の日付付き由来も見出しと同じく全文へ委ねる(予算の常時の余裕を作る)。
+        const conclusion = isMandatoryIndexLine(candidate) ? candidate
+          : (end >= 0 ? candidate.slice(0, end + 1) : candidate).replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, '');
+        // 結論として拾った絶対ルール・太字小見出しも短縮対象にしない。
+        if (!/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(candidate)
+          && !/^\*\*\d+(?:\.\d+)+\s+.+\*\*$/.test(candidate)
+          && !INDEX_PROTECTED.some(pattern => pattern.test(conclusion))) {
+          conclusions.set(kept.length, [...conclusion]);
+        }
+        kept.push(conclusion);
         break;
       }
     }
     // 絶対ルール・上限規定の行は全文のまま残す。原文は `**🛑 上限…` のように強調記号が先に来るので
     // 先頭の `*` を許容する(ここを `**🔴` だけにすると 🛑/⚙️/🔁 の4行が索引から落ちる)。
-    if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(line) && kept.at(-1) !== line) kept.push(line);
+    // 通常は行末の由来を全文へ委ねる。判断軸は ONBOARDING と配布先で同じ一文を参照する要件のため原文を保つ。
+    if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(line) && kept.at(-1) !== line) {
+      kept.push(line.includes('判断軸はオージャストの長期的利益の最大化')
+        ? line
+        : line.replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）(?=。?\*\*$)/u, ''));
+    }
   }
-  return kept.join('\n');
+  const original = kept.join('\n');
+  if (measureIndexBytes(original).optionalBytes <= INDEX_BUDGET_BYTES || !conclusions.size) return original;
+  // 文書内の位置ではなく結論の長さ順に、必要な件数だけ短縮する。
+  for (const [i, chars] of [...conclusions].sort((a, b) => b[1].length - a[1].length)) {
+    const comma = chars.indexOf('、');
+    const shortened = chars.slice(0, comma >= 0 ? comma : 20).join('') + '…';
+    if (Buffer.byteLength(shortened) >= Buffer.byteLength(kept[i])) continue;
+    kept[i] = shortened;
+    const result = kept.join('\n');
+    if (measureIndexBytes(result).optionalBytes <= INDEX_BUDGET_BYTES) return result;
+  }
+  // 読点までの短縮だけでは、新しい規約が数件入ると予算を超える。
+  // 見出し・絶対ルールを維持したまま通常の結論だけをさらに短縮する。
+  for (const [i, chars] of [...conclusions].sort((a, b) => b[1].length - a[1].length)) {
+    const shortened = chars.slice(0, 12).join('') + '…';
+    if (Buffer.byteLength(shortened) >= Buffer.byteLength(kept[i])) continue;
+    kept[i] = shortened;
+    const result = kept.join('\n');
+    if (measureIndexBytes(result).optionalBytes <= INDEX_BUDGET_BYTES) return result;
+  }
+  // Preserve the existing all-or-nothing fallback for optional navigation that
+  // cannot fit (e.g. an oversized heading). Mandatory size never affects it.
+  return original;
 }
 export function build(current, body, label) {
-  const block = `${beginPrefix} (自動同期 ${label}) -->\n${body}\n- 全社共有の知見（kim-PC の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る\n${endMarker}`;
+  current = dedupePreferences(current, body);
+  const block = `${beginPrefix} (自動同期 ${label}) -->\n${body}\n- 全社共有の知見（kim-PC の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る\n- 制作・営業・見積・案件の着手前: ~/.claude/knowledge/production-sales/00_INDEX.md を読み、必要な節だけ Grep。全文を丸読みしない。\n${endMarker}`;
   if (current === null) return { updated: block, action: '新規作成' };
   // 行全体が開始マーカー形式そのものである場合だけ対象にする(部分一致は自己言及文書に誤爆する)。
   // ラベル部分の形式は縛らない: 日付形式を固定すると、別形式で導入されたPCで置換に失敗し
@@ -684,9 +767,48 @@ export function build(current, body, label) {
   return { updated: `${current.replace(/[\r\n]+$/, '')}\n\n${block}`, action: 'マーカーなし/不完全のため末尾へ追記' };
 }
 
+// Separate daily guard: a failed download is retried next session, not hidden by repo state.
+export async function syncKnowledge({ targetHome = home, forced = force, preview = dryRun,
+  receiver = args.includes('--knowledge-receiver'), now = new Date(), install = installKnowledge,
+  emit = console.log } = {}) {
+  if (preview) { emit('[dry-run] knowledge-pack: no download/write'); return; }
+  const stateFile = path.join(targetHome, '.claude', '.knowledge-sync-state.json');
+  let previous;
+  try { previous = JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch {}
+  if (!forced && previous?.last && fs.existsSync(path.join(targetHome, '.claude', 'knowledge', 'production-sales', '00_INDEX.md')) && now - new Date(previous.last) < 24 * 60 * 60 * 1000) return;
+  try {
+    const result = await install({ home: targetHome, ...(receiver ? { source: false } : {}), emit });
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+    fs.writeFileSync(stateFile, JSON.stringify({ last: now.toISOString() }) + '\n');
+    return result;
+  } catch (e) {
+    const message = `[onboarding-sync] knowledge-pack failed: ${oneLine(e)}`;
+    emit(message); log(message);
+    // Session hooks remain usable; the standalone verification route fails visibly.
+    if (args.includes('--knowledge-only')) throw e;
+  }
+}
+
+export function runSeatInvitations({ targetHome = home, targetRepo = repoPath, preview = dryRun,
+  onlyKeys = keysOnly, exec = execFileSync, emit = console.log } = {}) {
+  if (preview || onlyKeys || !isKimOperated(targetHome)) return false;
+  const seatRepo = resolveConvergenceRepo({ home: targetHome, repo: targetRepo });
+  const inviteTool = path.join(seatRepo || targetRepo, 'tools/gh-accept-invites.mjs');
+  if (!fs.existsSync(inviteTool)) return false;
+  emit(exec(process.execPath, [inviteTool, '--daily'], {
+    windowsHide: true, timeout: 60000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, ORGIAST_HOME: targetHome },
+  }).trim());
+  return true;
+}
+
 async function main() { try {
   const now = new Date();
+  if (args.includes('--knowledge-only')) { await syncKnowledge({ now }); return; }
   const plan = executionPlan(args);
+  // 既存の全PC SessionStart 経路。同期の間引き・失敗より前に日次招待承諾を実行する。
+  try { runSeatInvitations(); }
+  catch { log('招待: 日次確認を完了できません。node tools/gh-accept-invites.mjs で再試行'); }
   if (keysOnly) {
     await provisionKeys(now, { quiet: true });
     return;
@@ -704,6 +826,7 @@ async function main() { try {
   }
   if (plan.syncRepository) await syncRepository(now);
   if (plan.provisionKeys) await provisionKeys(now);
+  await syncKnowledge({ now });
   const oldState = state();
   // 間引きは「分」で持つ。20時間だと、片方のPCがルールへ書いた結論がもう片方へ最大20時間届かず、
   // その間 repo 側(tools/rules/skills)の更新ログだけ出るので**同期は成功したように見える**
@@ -740,7 +863,7 @@ async function main() { try {
     console.log(`[onboarding-sync] updated CLAUDE.md (hash ${hash.slice(0, 8)} / from ${source})`);
     log(`updated (hash ${hash.slice(0, 8)} / from ${source})`);
   }
-} catch (e) { log(`unexpected error: ${e.message}`); }
+} catch (e) { log(`unexpected error: ${e.message}`); if (args.includes('--knowledge-only')) { console.error(e.message); process.exitCode = 1; } }
 finally {
   // hook 登録（setup --converge）は CLAUDE.md を書き終えてから。早期 return した場合も必ず実行する。
   if (deferredHookRegistration) {
@@ -749,9 +872,10 @@ finally {
   }
   if (!dryRun && !keysOnly) {
     try {
-      const report = path.join(repoPath, 'tools/fleet-convergence-report.mjs');
+      const syncRepo = resolveConvergenceRepo({ home, repo: repoPath });
+      const report = path.join(syncRepo || repoPath, 'tools/fleet-convergence-report.mjs');
       if (fs.existsSync(report)) execFileSync(process.execPath, [report], { windowsHide: true, timeout: 90000,
-        stdio: 'pipe', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repoPath } });
+        stdio: 'pipe', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: syncRepo || '' } });
     } catch { log('convergence report failed (transport or receipt unavailable)'); }
   }
 } }

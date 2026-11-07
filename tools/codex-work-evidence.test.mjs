@@ -32,6 +32,94 @@ test('failure or timeout stays failed even when output mentions a PR', () => {
   assert.equal(verifyExternalWork({ output: '修正しました。PR を作成する予定です', started: Date.now(), status: 0 }), null);
 });
 
+test('Windows PR verification tolerates the observed 23s lookup without using the dirty cwd', () => {
+  const started = Date.now();
+  let clock = started;
+  const found = verifyExternalWork({ output: `修正済み ${url}`, cwd: 'C:/dirty/repo', started, status: 0 }, {
+    platform: 'win32', now: () => clock,
+    spawnImpl(command, args, options) {
+      assert.equal(command, 'gh');
+      assert.deepEqual(args, ['pr', 'view', url, '--json', 'url,createdAt']);
+      assert.equal(options.cwd, os.tmpdir());
+      assert.equal(options.shell, undefined);
+      clock += 23000;
+      if (options.timeout < 23000) return { status: null, error: { code: 'ETIMEDOUT' } };
+      return { status: 0, stdout: JSON.stringify({ url, createdAt: new Date(started).toISOString() }) };
+    },
+  });
+  assert.deepEqual(found, { kind: 'pull-request', url });
+});
+
+test('PR verification reaches a new PR after a slow stale reference', () => {
+  const started = Date.now();
+  let clock = started;
+  const oldUrl = url.replace('/12', '/11');
+  const calls = [];
+  const found = verifyExternalWork({ output: `${oldUrl}\n${url}`, started, status: 0 }, {
+    now: () => clock,
+    spawnImpl(command, args, options) {
+      calls.push(args[2]);
+      assert.equal(options.timeout, 30000);
+      clock += 23000;
+      return { status: 0, stdout: JSON.stringify({ url: args[2], createdAt: new Date(args[2] === url ? started : started - 60000).toISOString() }) };
+    },
+  });
+  assert.deepEqual(calls, [oldUrl, url]);
+  assert.equal(found?.url, url);
+});
+
+test('PR network probes stay bounded and reject timeouts, mismatched URLs and future dates', () => {
+  const started = Date.now();
+  let clock = started;
+  let calls = 0;
+  assert.equal(verifyExternalWork({ output: [12, 13, 14, 15].map(n => url.replace('/12', `/${n}`)).join('\n'), started, status: 0 }, {
+    now: () => clock,
+    spawnImpl(command, args, options) {
+      calls++;
+      assert.equal(options.timeout, 30000);
+      clock += options.timeout;
+      return { status: null, error: { code: 'ETIMEDOUT' } };
+    },
+  }), null);
+  assert.equal(calls, 2, 'network deadline is 60s total');
+  for (const pr of [
+    { url: `${url}3`, createdAt: new Date(started).toISOString() },
+    { url, createdAt: new Date(started + 60000).toISOString() },
+  ]) {
+    assert.equal(verifyExternalWork({ output: url, started, status: 0 }, {
+      now: () => started, spawnImpl: () => ({ status: 0, stdout: JSON.stringify(pr) }),
+    }), null);
+  }
+});
+
+test('CLI accepts a verified new PR with unchanged dirty cwd and a long transcript', { skip: process.platform === 'win32' }, t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-pr-cli-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const bin = path.join(home, 'bin'); fs.mkdirSync(bin);
+  const cwd = path.join(home, 'cwd'); fs.mkdirSync(cwd);
+  const git = args => {
+    const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  git(['init']); git(['config', 'user.name', 'Test']); git(['config', 'user.email', 'test@example.invalid']);
+  fs.writeFileSync(path.join(cwd, 'other-session.txt'), 'committed');
+  git(['add', '.']); git(['commit', '-m', 'initial']);
+  fs.writeFileSync(path.join(cwd, 'other-session.txt'), 'other session dirty work');
+  const before = snapshotWorkingTree(cwd);
+  fs.writeFileSync(path.join(bin, 'gh'), `#!/usr/bin/env node
+console.log(JSON.stringify({ url: ${JSON.stringify(url)}, createdAt: new Date().toISOString() }));
+`, { mode: 0o755 });
+  const env = { ...process.env, ORGIAST_HOME: home, CODEX_DO_AUTH_MODE: 'apikey',
+    CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 0, output: 'progress\\n'.repeat(10000) + '修正済み ' + url }]),
+    PATH: `${bin}${path.delimiter}${process.env.PATH}` };
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./codex-do.mjs', import.meta.url)), '--force-native', '--cwd', cwd, '--kind', 'implement', '修正して'], { env, encoding: 'utf8', timeout: 20000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /read-only サンドボックスの疑い|empty_diff/);
+  assert.equal(snapshotWorkingTree(cwd), before);
+  const rows = fs.readFileSync(path.join(home, '.claude/executor-usage.jsonl'), 'utf8').trim().split('\n');
+  assert.equal(rows.length, 1, 'verified PR does not trigger another executor');
+});
+
 test('real committed work in another clone is detected; unchanged cwd, old and missing commits are rejected', t => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-evidence-'));
   t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
@@ -61,7 +149,7 @@ test('Windows reads a WSL clone using argv, without shell interpolation', () => 
   const started = Date.now();
   const calls = [];
   const found = verifyExternalWork({ output: `/tmp/isolated\n[fix/work ${sha.slice(0, 7)}] 修正`, started, status: 0 }, {
-    platform: 'win32', spawnImpl(command, args, options) {
+    platform: 'win32', wslPresent: () => true, spawnImpl(command, args, options) {
       calls.push([command, args]);
       assert.equal(options.shell, undefined);
       return { status: 0, stdout: args.includes('show') ? `${sha}\n${Math.floor(started / 1000)}` : '' };

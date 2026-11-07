@@ -297,6 +297,8 @@ const FLEET_MAIL_SLA_ = { undelivered: 30 * 60 * 1000, urgent: 2 * 60 * 60 * 100
 function _fleetMailAlertKind_(mail, now) {
   if (Date.parse(mail.expiresAt) <= now) return '';
   if (mail.status === 'new' && !mail.deliveredAt && now - Date.parse(mail.createdAt) > FLEET_MAIL_SLA_.undelivered) return 'undelivered';
+  // auto=true は PC 間の機械報告（[lane-health] 等）。人が読む連絡ではないので未読 SLA の対象外（未配達の監視は残す）。
+  if (mail.auto === true || mail.auto === 'true') return '';
   if (mail.status === 'delivered' && !mail.seenAt && now - Date.parse(mail.deliveredAt) > FLEET_MAIL_SLA_[mail.priority === 'urgent' ? 'urgent' : 'normal']) return 'unseen';
   return '';
 }
@@ -347,7 +349,6 @@ function fleetMailSweep() {
     });
     const alertsSheet = _fleetMailAlertsSheet_();
     const alerts = _fleetMailAlertsRead_(alertsSheet);
-    const webhook = PropertiesService.getScriptProperties().getProperty('FLEET_MAIL_DISCORD_WEBHOOK');
     rows.forEach(function(mail) {
       try {
         const kind = _fleetMailAlertKind_(mail, now);
@@ -360,12 +361,8 @@ function fleetMailSweep() {
         // Count is per six-hour notification cycle; the last successful time is retained.
         if (_fleetMailAlertDue_(alert, now)) alert.notifiedCount = 0;
         _fleetMailAlertSave_(alertsSheet, index, alert); alerted++;
-        if (!webhook || alert.notifiedCount > 0) return;
-        const content = (kind === 'unseen' ? '未読 SLA 超過: ' : '未配達（受信タスク停止の疑い）: ') + alert.to + ' 宛 / ' + alert.why + ' / ' + alert.id;
-        const response = UrlFetchApp.fetch(webhook, { method: 'post', contentType: 'application/json', payload: JSON.stringify({ content: content, allowed_mentions: { parse: [] } }), muteHttpExceptions: true });
-        if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) return;
-        alert.lastNotifiedAt = new Date(now).toISOString(); alert.notifiedCount++;
-        _fleetMailAlertSave_(alertsSheet, index, alert); notified++;
+        // kim 宛 Discord 報告は停止（2026-10-27）。通知待ちは維持し、
+        // watchdog が kim-inbox / kim の許可リストに従って配達後に確認する。
       } catch (error) { console.warn('fleet-mail: alert failed=1'); }
     });
     return { ok: true, expired: expired, active: active, alerted: alerted, notified: notified };
@@ -395,5 +392,23 @@ function setupFleetMailTriggers() {
   ScriptApp.newTrigger('fleetMailSweep').timeBased().everyMinutes(FLEET_MAIL_SLA_.sweepMinutes).create();
   return ScriptApp.getProjectTriggers().map(function(trigger) {
     return { handler: trigger.getHandlerFunction(), eventType: String(trigger.getEventType()), source: String(trigger.getTriggerSource()) };
+  });
+}
+
+// Authenticated metadata-only investigation. Does not poll, deliver, expire, or prune mail.
+function traceFleetMail(payload) {
+  const matchWhy = fleetMailRequired(payload.matchWhy, 'matchWhy', 1000);
+  const since = Date.parse(payload.since);
+  if (!Number.isFinite(since)) throw new Error('invalid_since');
+  return _fleetMailLocked_(function(sheet, rows) {
+    const matched = rows.filter(function(mail) {
+      return Date.parse(mail.createdAt) >= since && mail.why.indexOf(matchWhy) >= 0;
+    }).sort(function(a, b) { return Date.parse(b.createdAt) - Date.parse(a.createdAt); });
+    const fields = ['id', 'from', 'to', 'kind', 'why', 'createdAt', 'status', 'deliveredAt', 'seenAt', 'failedAt', 'failReason'];
+    return { ok: true, total: matched.length, truncated: matched.length > 100, mails: matched.slice(0, 100).map(function(mail) {
+      const result = {};
+      fields.forEach(function(key) { result[key] = mail[key] || ''; });
+      return result;
+    }) };
   });
 }

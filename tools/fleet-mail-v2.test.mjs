@@ -8,6 +8,10 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { main, pollOnce, readInbox, syncMailState, resolveMailTarget, mailId, parseArgs, waitForReply, createClient, TERMINAL_STATUSES, hasDecisionRequest, updateInbox, presentMail, ACK_BATCH_LIMIT, SERVER_MAX_ATTEMPTS, CAPABILITY_BACKOFF_MS, INTERRUPTED_PROMPT_MS, INTERRUPTED_PROMPT_BODY, INBOX_LOCK_RETRIES, INBOX_LOCK_DELAY_MS, INBOX_LOCK_STALE_MS, COMMAND_LOCK_RETRIES, COMMAND_LOCK_DELAY_MS, LOCK_BUSY_EXIT, notifyPendingArrivals } from './fleet-mail.mjs';
+// --answer は headless 実行中（CLAUDE_HEADLESS=1 / ORGIAST_HEADLESS_JOB）に判断代行を拒否して 2 を返す。
+// このテストを headless セッション（夜間 auto-session / CI 外の手動実行）から回すと answer 系だけが
+// 環境依存で落ちるため、テストプロセス側で無効化する。本番の安全弁そのものは変更しない。
+for (const key of ['CLAUDE_HEADLESS', 'ORGIAST_HEADLESS_JOB']) delete process.env[key];
 const pcMap = JSON.parse(fs.readFileSync(new URL('../fleet-pc-map.json', import.meta.url), 'utf8'));
 const labels = Object.keys(pcMap).filter(key => !key.startsWith('_'));
 const receiver = labels[0], sender = labels.find(label => label !== receiver && pcMap[label].hostname);
@@ -24,7 +28,7 @@ function fixture(t) {
   const body = path.join(home, 'body.txt'); fs.writeFileSync(body, 'nonempty test body');
   const calls = [], output = [], errors = [], spawns = [];
   const deps = { home, pcMap, spawnImpl: (...args) => { spawns.push(args); return { on() {}, unref() {} }; }, identity: { hostname: pcMap[receiver].hostname }, now: () => now, stdout: s => output.push(s), stderr: s => errors.push(s),
-    fetchBeacons: async () => ({ ok: false, beacons: [] }), dailySelfHeal: () => {}, dailyLaneHealth: () => {}, autoRunFixNow: () => {}, dailyRuleCompliance: () => {},
+    fetchBeacons: async () => ({ ok: false, beacons: [], reason: 'unconfigured' }), dailySelfHeal: () => {}, dailyLaneHealth: () => {}, autoRunFixNow: () => {}, dailyRuleCompliance: () => {},
     request: async (kind, payload) => { calls.push({ kind, payload: structuredClone(payload) }); return kind === 'mail-poll' ? { ok: true, messages: [] } : kind === 'mail-ack' && payload.ids ? { ok: true, results: payload.ids.map(id => ({ id, ok: true, mail: { id } })) } : { ok: true, mail: payload }; } };
   const save = m => fs.writeFileSync(path.join(inbox, `${m.id}.json`), JSON.stringify(m));
   const read = id => JSON.parse(fs.readFileSync(path.join(inbox, `${id}.json`), 'utf8'));
@@ -105,6 +109,22 @@ test('Growi 中継はハブかつ growi.env ありなら処理して返信する
 });
 test('Growi 中継はハブでなければ処理しない', async t => {
   const f = growiFixture(t, { hub: false }); await pollOnce(f.deps);
+  assert.equal(f.calls.some(call => call.kind === 'mail-send'), false); assert.equal(f.read('mail-original').growiAppendDoneAt, undefined);
+});
+test('Growi 中継は FLEET_HUB 未設定でもハブ本体なら処理して返信する', async t => {
+  const f = growiFixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.invalid/mail\nFLEET_SHEET_TOKEN=fixture\n');
+  f.deps.label = 'kim-PC';
+  await pollOnce(f.deps);
+  const sent = f.calls.find(call => call.kind === 'mail-send');
+  assert.equal(sent.payload.replyTo, 'mail-original'); assert.match(sent.payload.body, /"ok":true/);
+  assert.ok(f.read('mail-original').growiAppendDoneAt);
+});
+test('Growi 中継は FLEET_HUB 未設定かつハブ本体以外なら処理しない', async t => {
+  const f = growiFixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.invalid/mail\nFLEET_SHEET_TOKEN=fixture\n');
+  f.deps.label = sender;
+  await pollOnce(f.deps);
   assert.equal(f.calls.some(call => call.kind === 'mail-send'), false); assert.equal(f.read('mail-original').growiAppendDoneAt, undefined);
 });
 test('Growi 中継は処理済みメールを二重処理しない', async t => {
@@ -979,6 +999,15 @@ for (const outcome of ['success', 'failure', 'timeout']) test(`G5 ${outcome} cle
   assert.equal(await relayQuestions({ home: f.home, hub: sender, label: receiver, request: f.deps.request, now: () => now + RELAY_WAIT_MS }), 1);
   assert.ok(readQuestion(f.home, q.sessionId).relayedAt);
 });
+test('G5b kim 本人の席の対話質問は kim-PC へ転送せず、kim-PC 起動の無人実行の質問だけ返す', async t => {
+  const f = fixture(t);
+  const interactive = questionFixture(f, { sessionId: 'kim-seat', question: 'どちら？', questionHash: 'a', askedAt: iso(0), relayedAt: null, drivenByHub: false });
+  const opts = { home: f.home, hub: sender, label: receiver, request: f.deps.request, now: () => now + RELAY_WAIT_MS, kimOperated: true };
+  assert.equal(await relayQuestions(opts), 0);
+  assert.equal(readQuestion(f.home, interactive.sessionId).relayedAt, null);
+  questionFixture(f, { sessionId: 'hub-run', question: '無人?', questionHash: 'b', askedAt: iso(0), relayedAt: null, drivenByHub: true });
+  assert.equal(await relayQuestions(opts), 1);
+});
 test('G6 poll detaches and releases lock within the hook deadline without waiting for the runner timeout', async t => {
   const f = fixture(t), m = hubPrompt(f); let unrefed = false;
   f.deps.spawnImpl = (...args) => { f.spawns.push(args); return { on() {}, unref() { unrefed = true; } }; };
@@ -1138,14 +1167,17 @@ for (const thrown of [false, true]) {
 
 for (const error of ['busy', 'fleet-mail read-back mismatch']) {
   test(`J real client ${error} retains send diagnostics and id`, async t => {
-    const f = fixture(t);
+    const f = fixture(t); const sleeps = [];
     delete f.deps.request;
+    f.deps.sleep = async ms => { sleeps.push(ms); };
     f.deps.fetch = async (_url, options) => {
       f.calls.push(JSON.parse(options.body));
       return { ok: true, json: async () => ({ ok: false, error }) };
     };
     assert.equal(await main(sendArgs(f), f.deps), 1);
-    assert.equal(f.calls.length, 1);
+    // GAS の busy は書込み前の拒否。送信は既存の command lock 定数で短く再試行し、他の拒否は再送しない。
+    assert.equal(f.calls.length, error === 'busy' ? COMMAND_LOCK_RETRIES + 1 : 1);
+    assert.deepEqual(sleeps, error === 'busy' ? Array(COMMAND_LOCK_RETRIES).fill(COMMAND_LOCK_DELAY_MS) : []);
     if (error === 'busy') assert.match(f.errors.at(-1), /送信されていない/);
     else assert.ok(f.errors.at(-1).includes(`--sent-status ${f.calls[0].id}`));
   });

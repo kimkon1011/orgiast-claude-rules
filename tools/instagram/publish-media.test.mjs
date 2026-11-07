@@ -94,12 +94,28 @@ test('publish-media.mjs CLI はトークン未設定で exit 1 を返し、API�
     return { ok: true, status: 200 };
   };
 
-  const code = await runCli(['--file', 'test.jpg'], {
-    stdout,
-    stderr,
-    fetchImpl: mockFetch,
-    githubToken: null,
-  });
+  // githubToken: null は ?? で env にフォールバックするため、実行環境の
+  // GH_TOKEN / GITHUB_TOKEN を退避して「トークン未設定」を再現する。
+  const saved = {
+    GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+    GH_TOKEN: process.env.GH_TOKEN,
+  };
+  delete process.env.GITHUB_TOKEN;
+  delete process.env.GH_TOKEN;
+  let code;
+  try {
+    code = await runCli(['--file', 'test.jpg'], {
+      stdout,
+      stderr,
+      fetchImpl: mockFetch,
+      githubToken: null,
+    });
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 
   assert.equal(code, 1);
   assert.equal(apiCalled, false);

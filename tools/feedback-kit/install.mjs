@@ -28,10 +28,25 @@ export function replaceLegacyModals(html) {
 }
 function integration(appName, hasOriginal) {
   return `// feedback-kit ${kit.version}: generated integration (no credentials)
+// 案内ボタンは HTML の画面にだけ足す。API の JSON 応答（ContentService.createTextOutput）にも
+// append メソッドがあるため、append の有無だけでは HTML と JSON を区別できず、JSON の末尾に
+// HTML が混ざって JSON.parse が失敗する。判定は getMimeType で行う。
+function FeedbackKit_isHtmlOutput_(output) {
+  if (!output || typeof output.append !== 'function') return false;
+  try {
+    if (typeof output.getMimeType === 'function') {
+      var mime = String(output.getMimeType() || '').toLowerCase();
+      if (mime) return mime.indexOf('text/html') === 0;
+    }
+  } catch (err) {}
+  // MIME を返さない実装では HtmlOutput 固有の setTitle で見分ける（TextOutput には無い）
+  return typeof output.setTitle === 'function';
+}
 function doGet(e) {
   var params = (e && e.parameter) || {};
+  if (params.view === 'mine') return FeedbackRelay_serveHistory();
   if (params.form === 'feedback') return FeedbackRelay_serveForm({app: ${JSON.stringify(appName)}, src: params.src || ''});
-  ${hasOriginal ? "var output = FeedbackKit_originalDoGet(e);\n  if (!output || typeof output.append !== 'function') return output;" : `var output = FeedbackRelay_serveForm({app: ${JSON.stringify(appName)}});`}
+  ${hasOriginal ? "var output = FeedbackKit_originalDoGet(e);\n  if (!FeedbackKit_isHtmlOutput_(output)) return output;" : `var output = FeedbackRelay_serveForm({app: ${JSON.stringify(appName)}});`}
   var template = HtmlService.createTemplateFromFile('FeedbackKitLauncher');
   template.feedbackHtml = FeedbackRelay_serveForm({app: ${JSON.stringify(appName)}}).getContent();
   output.append(template.evaluate().getContent());
@@ -89,7 +104,7 @@ export function installApp({ app, name, upgrade = false, dryRun = false, registr
     writes.set(path.join(base, 'FeedbackKitLauncher.html'), launcher);
   }
   const changes = [...writes].filter(([f, text]) => !fs.existsSync(f) || source(f) !== text);
-  const widgetFiles = kind === 'next' ? files(root).filter(f => /Feedback(Widget|TriggerButton)|[/\\](layout\.(tsx|jsx)|api[/\\]feedback[/\\].*|feedback[/\\]page\.tsx|list-feedback\.mjs)$/.test(f)) : [];
+  const widgetFiles = kind === 'next' ? files(root).filter(f => /Feedback(Widget|TriggerButton)|[/\\](layout\.(tsx|jsx)|api[/\\]feedback[/\\].*|feedback[/\\](?:mine[/\\])?page\.tsx|list-feedback\.mjs)$/.test(f)) : [];
   const overwrite = changes.some(([f]) => fs.existsSync(f) && /FeedbackForm|FeedbackRelay|\.html$/i.test(f)) || widgetFiles.some(f => /FeedbackWidget/.test(path.basename(f)));
   if (overwrite && !previous.kitVersion && !upgrade) throw new Error('既存フォームがあります。--upgrade を指定してください（変更前にバックアップします）');
   if (previous.kitVersion && previous.kitVersion !== kit.version && !upgrade) throw new Error('版の更新には --upgrade が必要です');

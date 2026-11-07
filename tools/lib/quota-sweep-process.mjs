@@ -5,8 +5,19 @@ export function killTree(pid, { platform = process.platform, spawnImpl = spawnSy
   if (!pid) return;
   if (platform === 'win32') {
     const r = spawnImpl('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: 10_000 });
+    // ETIMEDOUT: taskkill が 10 秒以内に完了しなかった。期限到達時は子が既に終了しているか
+    // 親プロセス終了時に Windows がクリーンアップするため、無視してよい。
+    if (r.error?.code === 'ETIMEDOUT') return;
     if (r.error) throw r.error;
-    if (r.status !== 0) throw new Error(`taskkill failed: ${r.status}`);
+    // taskkill は対象プロセスが既に終了していると以下のいずれかの exit code を返す。
+    // - 128: Git Bash / MSYS2 / Cygwin 環境（プロセスが見つかりません）
+    // - 255: Node.js の spawnSync が native Windows API 経由で taskkill を呼び出した場合
+    // 期限到達時は watchdog と親のタイマーが同時に taskkill するため、後勝ち側は必ず 128 または 255 になる
+    // （2026-10-26T20:17Z 実測: quota-sweep claude 13連続 failed の理由が "kill: taskkill failed: 128"
+    // に汚染され、kill 不能と誤読された。2026-11-02 実測: spawnSync 経由では 255 になる）。
+    // POSIX 分岐の ESRCH と同様に 128/255 は無視する。
+    // 0 ・ 128 ・ 255 以外（例: 1 = アクセス拒否）は子が残る可能性があるため失敗として投げる。
+    if (r.status !== 0 && r.status !== 128 && r.status !== 255) throw new Error(`taskkill failed: ${r.status}`);
   } else {
     try { killImpl(-pid, 'SIGKILL'); } catch (e) { if (e.code !== 'ESRCH') throw e; }
   }
@@ -19,9 +30,20 @@ export function runBounded(command, args, { cwd, input = '', env = process.env, 
   if (!Number.isFinite(stopAt) || stopAt <= now()) return Promise.resolve({ code: null, stdout: '', stderr: '', timedOut: true });
   return new Promise((resolve) => {
     let child, guard, timer, poll, done = false, timedOut = false, stopReason, stdout = '', stderr = '';
+    // 最初に決めた停止理由が勝つ。monitor が 'deferred'（対話セッション使用中・利用窓の一時的な
+    // 読み取り失敗）を返したあと、taskkill が効かず子が残ると期限タイマーが後から 'deadline' で
+    // 上書きし、理由が deferred なのに status=failed / failureKey=child-deadline の行ができていた
+    // （2026-10-24T14:59Z 実測: 40分待たされたうえレーン全滅として起票対象になった）。
     const stop = (reason) => {
+      if (stopReason) return;
       stopReason = reason;
       timedOut = reason === 'deadline';
+      try { kill(child.pid); } catch (error) { stderr += `\nkill: ${error.message}`; }
+    };
+    // 期限到達時、既に停止理由が決まっていても子が生き残っていれば再度 kill する。
+    // （理由は変えない。stop() は first-wins なので stopReason は保持される）
+    const rekillAtDeadline = () => {
+      if (!stopReason) { stop('deadline'); return; }
       try { kill(child.pid); } catch (error) { stderr += `\nkill: ${error.message}`; }
     };
     const finish = (code) => {
@@ -36,7 +58,7 @@ export function runBounded(command, args, { cwd, input = '', env = process.env, 
     };
     try {
       child = spawnImpl(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: platform !== 'win32' });
-      timer = setTimer(() => stop('deadline'), Math.max(0, stopAt - now()));
+      timer = setTimer(rekillAtDeadline, Math.max(0, stopAt - now()));
       // Independent watchdog survives a parent crash. WSL also has its own SIGKILL timeout.
       // Windows では detached にしない（新しいコンソールが可視化される。no-visible-console-window.test が禁止）。
       // Windows は親が死んでも子は生き残るので、attached のままでも watchdog は親クラッシュ後に動く。

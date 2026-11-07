@@ -108,15 +108,66 @@ test('日次はscout --once→上限付きモデル別eval→保存済み提案�
 
 test('exit0でもscout保存なし・eval結果なしは成功扱いせず再試行、秘密をログに出さない', async t => {
   const f = fixture(t), opts = { home: f.home, now, log: () => {}, propose: async () => {} };
-  assert.equal((await runDailyScout({ ...opts, spawnImpl: () => ({ status: 0, stdout: 'SECRET' }) })).ok, false);
+  // 秘密を含むstdoutでもログには[masked]だけ出る
+  assert.equal((await runDailyScout({ ...opts, spawnImpl: () => ({
+    status: 0,
+    stdout: 'api_key=sk-or-v1-0123456789abcdef0123456789abcdef Bearer ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+  }) })).ok, false);
+  const logFile = path.join(f.dir, 'logs', 'model-scout.log');
+  const logContent = fs.readFileSync(logFile, 'utf8');
+  assert.doesNotMatch(logContent, /sk-or-v1-0123456789abcdef0123456789abcdef/);
+  assert.doesNotMatch(logContent, /ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/);
+  assert.match(logContent, /\[masked\]/);
   assert.equal(fs.existsSync(path.join(f.dir, 'model-scout-daily.json')), false);
   assert.equal((await runDailyScout({ ...opts, spawnImpl: (_exe, args) => {
     if (args[0].endsWith('model-scout.mjs')) fs.writeFileSync(path.join(f.dir, 'model-scout-state.json'), JSON.stringify({ updatedAt: now.toISOString(), pendingCandidates: f.pending }));
-    return { status: 0, stderr: 'SECRET' };
+    return { status: 0, stderr: 'eval-output' };
   } })).ok, false);
   assert.equal(fs.existsSync(path.join(f.dir, 'model-scout-daily.json')), false);
   assert.equal(fs.existsSync(path.join(f.dir, 'model-scout-daily.lock')), false);
-  assert.doesNotMatch(fs.readFileSync(path.join(f.dir, 'logs', 'model-scout.log'), 'utf8'), /SECRET/);
+});
+
+test('子プロセスが status 非0 かつ stderr を出した場合、エラーメッセージに status と stderr 末尾が含まれる', async t => {
+  const f = fixture(t);
+  const opts = {
+    home: f.home,
+    now,
+    log: () => {},
+    propose: async () => {},
+    spawnImpl: (_exe, args) => {
+      if (args[0].endsWith('model-scout.mjs')) {
+        return { status: 1, signal: null, stderr: 'Error: OpenRouter API timeout\n' };
+      }
+      return { status: 0 };
+    }
+  };
+  const result = await runDailyScout(opts);
+  assert.equal(result.ok, false);
+  const logContent = fs.readFileSync(path.join(f.dir, 'logs', 'model-scout.log'), 'utf8');
+  assert.match(logContent, /scout failed: status=1/);
+  assert.match(logContent, /stderrTail=Error: OpenRouter API timeout/);
+});
+
+test('exit 0 だが state 未更新の場合、stateUpdated=no と before が含まれる', async t => {
+  const f = fixture(t);
+  const stateFile = path.join(f.dir, 'model-scout-state.json');
+  const beforeTime = '2026-10-10T00:00:00Z';
+  fs.writeFileSync(stateFile, JSON.stringify({ updatedAt: beforeTime, pendingCandidates: f.pending }));
+
+  const opts = {
+    home: f.home,
+    now,
+    log: () => {},
+    propose: async () => {},
+    spawnImpl: (_exe, args) => {
+      return { status: 0, signal: null, stdout: 'ok' };
+    }
+  };
+  const result = await runDailyScout(opts);
+  assert.equal(result.ok, false);
+  const logContent = fs.readFileSync(path.join(f.dir, 'logs', 'model-scout.log'), 'utf8');
+  assert.match(logContent, /stateUpdated=no/);
+  assert.match(logContent, new RegExp(`before=${beforeTime}`));
 });
 
 test('生存中のロックは二重起動を防ぎ、他実行のロックを消さない', async t => {
@@ -138,4 +189,20 @@ test('夜間バッチの実経路と30時間監視を登録し、他PCでは未�
   fs.writeFileSync(path.join(f.dir, 'cost-reporter.env'), 'REPORTER_LABEL=nishi-PC\n');
   result = await runNightlyHealth(opts);
   assert.ok(!result.anomalies.some(x => x.label === exp.label));
+});
+
+test('ログに鍵パターンが含まれても [masked] に置換され、API名等の通常テキストは維持される', async t => {
+  const f = fixture(t);
+  const opts = {
+    home: f.home,
+    now,
+    log: () => {},
+    propose: async () => {},
+    spawnImpl: () => ({ status: 0, stdout: 'Using key sk-or-v1-0123456789abcdef0123456789abcdef and model openai/gpt-oss-120b' }),
+  };
+  assert.equal((await runDailyScout(opts)).ok, false);
+  const logContent = fs.readFileSync(path.join(f.dir, 'logs', 'model-scout.log'), 'utf8');
+  assert.doesNotMatch(logContent, /sk-or-v1-0123456789abcdef0123456789abcdef/);
+  assert.match(logContent, /openai\/gpt-oss-120b/);
+  assert.match(logContent, /\[masked\]/);
 });

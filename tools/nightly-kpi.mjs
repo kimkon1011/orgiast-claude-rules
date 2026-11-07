@@ -275,7 +275,7 @@ const usd = (value) => value === null ? '不明' : `$${value.toFixed(2)}`;
 export function improvementTodos(kpi, previous = null) {
   const todos = [];
   if (!kpi.batchRan) todos.push(`P0: 夜間バッチが起動直後に死んでログを1行も書いていない（${kpi.date}）。OrgiastNightlyBatch と同時刻に走る他タスクとの競合を疑う`);
-  else if (!kpi.batchCompleted) todos.push(`P0: 夜間バッチが途中で停止（サマリ行なし）。最終ステップ = ${kpi.lastStep ?? '不明'}`);
+  else if (!kpi.batchCompleted) todos.push(`P0: 夜間バッチは集計時点で完了未確認（サマリ行なし・実行中の可能性あり）。最終ステップ = ${kpi.lastStep ?? '不明'}`);
   if (kpi.failedSteps.length) todos.push(`P1: 夜間バッチのステップ失敗: ${kpi.failedSteps.join('、')}`);
   if (kpi.noOpRate !== null && kpi.noOpRate > 0.3) todos.push(`P1: 空回り率 ${pct(kpi.noOpRate)}。完了済みTODOが引き継ぎ票に残り再配布されている。next-session.md の ✅ 済みブロックを刈る`);
   const lowPrYieldStreak = [kpi, previous].slice(0, PR_YIELD_LOW_STREAK_DAYS).every((day) => (

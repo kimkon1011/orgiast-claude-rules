@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { launchAudit } from './unattended-job-audit.mjs';
 import { codexAuthStatus } from './codex-auth-status.mjs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,7 +10,6 @@ import { machineIdentity, getClaudeAccountEmail } from './machine-identity.mjs';
 import { parseHandoff } from './auto-session.mjs';
 import { isEntry } from './is-entry.mjs';
 import { resolveClaudeExecutableFromDisk, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
-import { findLatestMemoryDir } from './memory-share.mjs';
 
 const ALLOWED_KINDS = new Set(['status', 'prompt', 'enable-auto-session', 'run']);
 const RUN_TASKS = Object.freeze({
@@ -17,7 +17,7 @@ const RUN_TASKS = Object.freeze({
   'cost-self-heal': [['node', ['tools/tool-adoption-check.mjs', '--fix']], ['node', ['tools/hook-selfcheck.mjs']], ['node', ['tools/onboarding-sync.mjs']]]
 });
 const DEFAULT_URL = 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/fleet-directives.json';
-const SECRET_PATTERN = /(https?:\/\/[^\s]*?(?:webhook|token|key)[^\s]*|(?:api[_-]?key|token|secret|webhook)[\s=:]+[^\s]+)/gi;
+const SECRET_PATTERN = /(https?:\/\/[^\s]*?(?:webhook|token|key)[^\s]*|[A-Za-z0-9_]*(?:api[_-]?key|token|secret|webhook)\s*[=:]\s*[^\s]+|(?<![A-Za-z0-9_])(?:api[_-]?key|token|secret|webhook)\s+[^\s]+)/gi;
 const STATUS_TEXT_LIMIT = 1800;
 const NON_FAILURE_TASK_RESULTS = new Set([0, 267009, 267011]);
 
@@ -97,26 +97,30 @@ function scheduledTaskStatus(run = runSync) {
   }
 }
 
-function sharedMemoryStatus(home) {
+export function sharedMemoryStatus(home) {
+  const dir = process.env.ORGIAST_SHARED_MEMORY_DIR || path.join(home, '.claude', 'shared-memory');
+  const result = { found: false, count: 0, generatedAt: null, kimOperated: null, kimNote: null, referenced: false };
   try {
-    const memoryDir = findLatestMemoryDir(home, () => {});
-    if (!memoryDir) return { found: false, count: 0, indexed: false };
-    let count = 0;
-    try {
-      count = fs.readdirSync(path.join(memoryDir, 'shared'), { withFileTypes: true })
-        .filter((entry) => entry.isFile() && entry.name.endsWith('.md')).length;
-    } catch {}
-    let indexed = false;
-    try { indexed = /index\/shared\.md/.test(fs.readFileSync(path.join(memoryDir, 'MEMORY.md'), 'utf8')); } catch {}
-    return { found: true, count, indexed };
-  } catch {
-    return { found: false, count: 0, indexed: false };
-  }
+    const state = JSON.parse(fs.readFileSync(path.join(dir, '.state.json'), 'utf8').replace(/^\uFEFF/, ''));
+    result.found = true;
+    result.count = Object.keys(state?.files ?? {}).length;
+    result.generatedAt = state?.generatedAt ?? null;
+    result.kimOperated = typeof state?.kimOperated === 'boolean' ? state.kimOperated : null;
+  } catch {}
+  try {
+    const note = fs.readFileSync(path.join(dir, 'MEMORY.md'), 'utf8').slice(0, 1200);
+    result.kimNote = note.includes('kim 本人が操作') ? true : note.includes('このPCの user は別人') ? false : null;
+  } catch {}
+  try {
+    result.referenced = fs.readFileSync(path.join(home, '.claude', 'CLAUDE.md'), 'utf8').includes('@~/.claude/shared-memory/MEMORY.md');
+  } catch {}
+  return result;
 }
 
 function formatMemoryLine(sharedMemory) {
-  if (!sharedMemory.found) return 'memory=なし';
-  return `memory=共有${sharedMemory.count}件 / MEMORY.md参照=${sharedMemory.indexed ? 'yes' : 'no'}`;
+  if (!sharedMemory.found) return 'memory=未受信（~/.claude/shared-memory/.state.json なし）';
+  const kimNote = sharedMemory.kimNote === null ? '不明' : sharedMemory.kimNote ? 'yes' : 'no';
+  return `memory=共有${sharedMemory.count}件 / 世代=${sharedMemory.generatedAt} / user=kim注記=${kimNote} / CLAUDE.md参照=${sharedMemory.referenced ? 'yes' : 'no'}`;
 }
 
 function fitStatusLines({ header, hostLine, codexLine, repoLine, memoryLine, jobStatus, syncLine, todoLine }) {
@@ -145,7 +149,7 @@ function fitStatusLines({ header, hostLine, codexLine, repoLine, memoryLine, job
   return [header, hostLine, codexLine, repoLine, memoryLine, jobLine, syncLine, todoLine];
 }
 
-export function collectStatus({ home, repo, label, hostname, run = runSync, platform = process.platform }) {
+export function collectStatus({ home, repo, label, hostname, run = runSync, platform = process.platform, auditLaunch = launchAudit }) {
   const account = getClaudeAccountEmail(home) || '未設定';
   const codex = codexAuthStatus(home);
   const git = repoInfo(repo, run);
@@ -163,21 +167,24 @@ export function collectStatus({ home, repo, label, hostname, run = runSync, plat
   } catch {}
   const accepts = loadOptin(path.join(home, '.claude', 'fleet-agent-optin.json'));
   const jobStatus = platform === 'win32' ? scheduledTaskStatus(run) : { tasks: [], failures: [] };
+  auditLaunch({ home, platform, intervalHours: 24 });
   const failures = jobStatus.failures ?? [];
   const sharedMemory = sharedMemoryStatus(home);
+  let knowledge = { present: false, bytes: 0 };
+  try { const stat=fs.statSync(path.join(home,'.claude','knowledge','production-sales','00_INDEX.md'));knowledge={present:stat.isFile()&&stat.size>0,bytes:stat.size}; } catch {}
   const lines = fitStatusLines({
     header: `📡 **[${label}]** status`,
     hostLine: `hostname=${hostname} / OS=${platform} ${os.release()} / account=${account}`,
     codexLine: !codex.login ? 'codex=未ログイン' : codex.email
       ? `codex=${codex.email} / plan=${codex.plan ?? '不明'}` : 'codex=ログイン済(詳細不明)',
     repoLine: `repo=${git.branch}, origin/mainより${git.behind}コミット遅れ`,
-    memoryLine: formatMemoryLine(sharedMemory),
+    memoryLine: `${formatMemoryLine(sharedMemory)} / knowledge=${knowledge.present ? `${knowledge.bytes}B` : 'なし'}`,
     jobStatus,
     syncLine: `onboarding-sync=${syncLast}`,
     todoLine: `残TODO=${todoCount} / mail 未読=${mailUnread} / prompt opt-in=${accepts.includes('prompt') ? 'yes' : 'no'} / codex opt-in=${accepts.includes('codex') ? 'yes' : 'no'}`,
   });
   const text = lines.join('\n');
-  return { text: redactSecrets(text), data: { label, hostname, platform, account, codex, git, syncLast, failures, todoCount, promptOptin: accepts.includes('prompt'), codexOptin: accepts.includes('codex'), sharedMemory, checkedAt: new Date().toISOString() } };
+  return { text: redactSecrets(text), data: { label, hostname, platform, account, codex, git, syncLast, failures, todoCount, promptOptin: accepts.includes('prompt'), codexOptin: accepts.includes('codex'), sharedMemory, knowledge, checkedAt: new Date().toISOString() } };
 }
 
 export async function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, spawnImpl = spawn, readOnly = false, onStart, resumeSessionId, resumeMailId, drivenByHub = false, home, setTimer = setTimeout, clearTimer = clearTimeout }) {
@@ -239,7 +246,7 @@ export async function processDirective(directive, context) {
     return { action: 'denied', message };
   }
   if (kind === 'status') {
-    const status = collectStatus({ home, repo, label, hostname, run });
+    const status = collectStatus({ home, repo, label, hostname, run, platform: context.platform, auditLaunch: dryRun ? () => false : context.auditLaunch });
     if (!dryRun) {
       fs.writeFileSync(path.join(home, '.claude', 'fleet-agent-last-status.json'), `${JSON.stringify(status.data, null, 2)}\n`);
       await post(status.text);
@@ -311,6 +318,12 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     if (!webhook) return;
     try { await fetch(webhook, { method: 'POST', headers: { 'content-type': 'application/json', 'user-agent': 'DiscordBot (https://github.com/kimkon1011/orgiast-claude-rules, 1.0) OrgiastFleetAgent' }, body: JSON.stringify({ content: message }), signal: AbortSignal.timeout(20_000) }); } catch {}
   });
+  // Polls without directives (or with an offline hub) must still audit local jobs.
+  const platform = dependencies.platform || process.platform;
+  if (!dryRun && platform === 'win32') {
+    scheduledTaskStatus(dependencies.run || runSync);
+    (dependencies.auditLaunch || launchAudit)({ home, platform, intervalHours: 24 });
+  }
   let payload;
   try {
     const base = process.env.ORGIAST_FLEET_DIRECTIVES_URL || DEFAULT_URL;
@@ -331,7 +344,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
       fs.appendFileSync(processedFile, `${id}\n`);
       processed.add(id);
     }
-    results.push({ id, ...(await processDirective(directive, { home, repo, label, hostname, dryRun, post, spawnImpl: dependencies.spawnImpl, run: dependencies.run })) });
+    results.push({ id, ...(await processDirective(directive, { home, repo, label, hostname, dryRun, post, spawnImpl: dependencies.spawnImpl, run: dependencies.run, platform, auditLaunch: dependencies.auditLaunch })) });
   }
   if (json) console.log(JSON.stringify(results));
   return results;

@@ -17,6 +17,16 @@ test('全滅かつ古いprobeはdeny',()=>{const h=setup('implement','claude-opu
 test('lane-doctor呼び出しは委譲扱い',()=>{const h=setup('implement','claude-opus-5',{toolCalls:100});assert.equal(run(h,{tool_name:'Bash',tool_input:{command:'node tools/lane-doctor.mjs --probe'}}),null);});
 test('autopilot-tick呼び出しは委譲扱い',()=>{const h=setup('implement','claude-opus-5',{toolCalls:100});assert.equal(run(h,{tool_name:'Bash',tool_input:{command:'node tools/autopilot-tick.mjs post --status running'}}),null);});
 
+test('gateRequired の auto-progress は上限超過後も通し、通常コマンドは deny', t => {
+  const h = setup('implement', 'claude-opus-5', { toolCalls: 9 });
+  t.after(() => fs.rmSync(h, { recursive: true, force: true }));
+  const allowed = 'node tools/auto-progress.mjs --add-check --session S --check "node x" --deadline +7d --label "L"';
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: allowed } }), null);
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: `cd "${h}" && ${allowed}` } }), null);
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: `${allowed}; node tools/foo.mjs` } }).hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: 'node tools/foo.mjs' } }).hookSpecificOutput.permissionDecision, 'deny');
+});
+
 test('Codex alive deny points directly to codex-do without unavailable wording',t=>{
   const h=setup('implement','claude-opus-5',{toolCalls:7});
   t.after(()=>fs.rmSync(h,{recursive:true,force:true}));
@@ -47,4 +57,46 @@ test('LANE-OK state cannot bypass with negative prompt or after 60 minutes', t =
     const h=setup('implement','claude-sonnet-5',{toolCalls:7,laneOk:true,...extra}); t.after(()=>fs.rmSync(h,{recursive:true,force:true}));
     assert.equal(run(h).hookSpecificOutput.permissionDecision,'deny');
   }
+});
+
+for (const tool_name of ['Bash', 'PowerShell']) {
+  test(`${tool_name}: operator scripts neither count nor warn/deny`, t => {
+    for (const toolCalls of [0, 3, 8, 100]) {
+      const h = setup('implement', 'claude-opus-5', { toolCalls });
+      t.after(() => fs.rmSync(h, { recursive: true, force: true }));
+      const commands = [
+        ...['click', 'paste', 'key', 'shot'].map(action => `powershell -STA -File ~/.claude/tools/line-pc-act.ps1 -Action ${action}`),
+        'powershell -File ~/.claude/tools/line-send.ps1',
+        ...['make-desktop-launcher', 'notify-kim', 'discord-dm', 'fleet-mail'].map(name => `node ~/.claude/tools/${name}.mjs`),
+      ];
+      for (const command of commands) {
+        assert.equal(run(h, { tool_name, tool_input: tool_name === 'Bash' ? { command } : { script: command } }), null, command);
+        assert.equal(JSON.parse(fs.readFileSync(path.join(h, '.claude/session-lane/s.json'))).toolCalls, toolCalls);
+      }
+    }
+  });
+  test(`${tool_name}: scratchpad LINE wrappers are exempt only for single invocations`, t => {
+    const h = setup('implement', 'claude-opus-5', { toolCalls: 100 });
+    t.after(() => fs.rmSync(h, { recursive: true, force: true }));
+    const dir = path.join(h, 'scratchpad'); fs.mkdirSync(dir);
+    const file = path.join(dir, 'gui sequence.ps1');
+    fs.writeFileSync(file, '& ~/.claude/tools/line-pc-act.ps1 -Action click');
+    for (const command of [`powershell -STA -File "${file}"`, `pwsh -NoProfile -ExecutionPolicy Bypass -File '${file}'`, `& "${file}"`, `"${file}"`]) {
+      assert.equal(run(h, { tool_name, tool_input: { command } }), null, command);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(h, '.claude/session-lane/s.json'))).toolCalls, 100);
+    }
+    const outside = path.join(h, 'outside.ps1'); fs.copyFileSync(file, outside);
+    const ordinary = path.join(dir, 'ordinary.ps1'); fs.writeFileSync(ordinary, 'Write-Output hello');
+    let expected = 100;
+    for (const command of [`powershell -File "${file}"; node build.mjs`, `powershell -File "${file}" && node build.mjs`, `powershell -File "${outside}"`, `powershell -File "${dir}/../outside.ps1"`, `powershell -File "${ordinary}"`, `powershell -File "${dir}/missing.ps1"`, 'node build.mjs']) {
+      assert.equal(run(h, { tool_name, tool_input: { command } }).hookSpecificOutput.permissionDecision, 'deny', command);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(h, '.claude/session-lane/s.json'))).toolCalls, ++expected);
+    }
+  });
+}
+
+test('repair log remains callable after lane guard limit in unattended session', t => {
+  const h = setup('implement', 'claude-sonnet-5', { toolCalls: 100 });
+  t.after(() => fs.rmSync(h, { recursive: true, force: true }));
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: 'node tools/lane-repair-log.mjs --lane deepseek --tried check --result unfixable' } }), null);
 });

@@ -1,0 +1,8 @@
+{
+  "job": "nightly-bootstrap",
+  "startedAt": "2026-10-29T04:42:01.5647976+09:00",
+  "finishedAt": "2026-10-29T04:42:32.2167325+09:00",
+  "ok": true,
+  "summary": "対象=fleet-mail.mjs 終了コード=0",
+  "cycleMinutes": 1440
+}

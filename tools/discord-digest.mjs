@@ -148,17 +148,17 @@ export function formatDigest(summary, opts = {}) {
   return truncateToBudget(lines.join('\n'), budget);
 }
 
-export async function fetchMessages({ channelId, limit = 100, since = null, token, fetchImpl = globalThis.fetch }) {
+export async function fetchMessages({ channelId, limit = 100, since = null, before: initialBefore = null, token, fetchImpl = globalThis.fetch }) {
   const wanted = Math.min(MAX_MESSAGES, Math.max(1, Number(limit) || 100));
   const messages = [];
-  let before = null, reachedSince = false;
+  let before = initialBefore, reachedSince = false;
   while (messages.length < wanted && !reachedSince) {
     const pageLimit = Math.min(100, wanted - messages.length);
     const url = new URL(`${API}/channels/${encodeURIComponent(channelId)}/messages`);
     url.searchParams.set('limit', String(pageLimit));
     if (before) url.searchParams.set('before', before);
     const response = await fetchImpl(url, { headers: { 'User-Agent': USER_AGENT, Authorization: `Bot ${token}` } });
-    if (!response.ok) throw new Error(`Discord API エラー: HTTP ${response.status}`);
+    if (!response.ok) throw Object.assign(new Error(`Discord API エラー: HTTP ${response.status}`), { status: response.status });
     const page = await response.json();
     if (!Array.isArray(page)) throw new Error('Discord API の応答が配列ではありません');
     for (const message of page) {

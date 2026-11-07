@@ -206,10 +206,14 @@ test('backendSpecificTimeoutSecs は gemini-cli に既定250秒・cheap-code:dee
   assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: '0' }), 500);
   // qwen 直結の deepseek は同じ upstream なので同一扱い
   assert.equal(backendSpecificTimeoutSecs('deepseek', {}), 500);
+  // openrouter-free は free モデルのため短めの既定値 300 秒（環境変数で上書き可）
+  assert.equal(backendSpecificTimeoutSecs('openrouter-free', {}), 300);
+  assert.equal(backendSpecificTimeoutSecs('openrouter-free', { CODEX_DO_OPENROUTER_FREE_TIMEOUT_SECS: '200' }), 200);
+  assert.equal(backendSpecificTimeoutSecs('openrouter-free', { CODEX_DO_OPENROUTER_FREE_TIMEOUT_SECS: 'garbage' }), 300);
+  assert.equal(backendSpecificTimeoutSecs('openrouter-free', { CODEX_DO_OPENROUTER_FREE_TIMEOUT_SECS: '0' }), 300);
   // 対象外のバックエンドは「バックエンド固有の頭打ちなし」＝null のまま
   assert.equal(backendSpecificTimeoutSecs('cheap-code:glm', {}), null);
   assert.equal(backendSpecificTimeoutSecs('qwen', {}), null);
-  assert.equal(backendSpecificTimeoutSecs('openrouter-free', {}), null);
 });
 
 // 2026-11-02 実測（delegation-health:fallback_chain_timeout 6件 / 捨てた秒数 合計3607秒）:
@@ -223,8 +227,8 @@ test('effectiveBackendTimeoutSecs は冷却中の backend を探り予算まで�
   // 冷却中: 探り予算(120秒)まで縮む＝同じ停滞を繰り返しても捨てる秒数が 3〜5 分の1になる
   assert.equal(effectiveBackendTimeoutSecs('gemini-cli', { chainBudget: 720, cooling: true }), COOLING_PROBE_TIMEOUT_SECS);
   assert.equal(effectiveBackendTimeoutSecs('cheap-code:deepseek', { chainBudget: 720, cooling: true }), COOLING_PROBE_TIMEOUT_SECS);
-  // 固有上限を持たない backend も冷却中は探り予算、通常時は連鎖の残り予算
-  assert.equal(effectiveBackendTimeoutSecs('openrouter-free', { chainBudget: 720, cooling: false }), 720);
+  // openrouter-free は固有上限 300 秒（free モデル用の短め設定）で打ち切られ、冷却中は探り予算
+  assert.equal(effectiveBackendTimeoutSecs('openrouter-free', { chainBudget: 720, cooling: false }), 300);
   assert.equal(effectiveBackendTimeoutSecs('openrouter-free', { chainBudget: 40, cooling: false }), 40);
   // 連鎖の残り予算が探り予算より小さいときは残り予算が優先（総予算を超えない）
   assert.equal(effectiveBackendTimeoutSecs('gemini-cli', { chainBudget: 90, cooling: true }), 90);
@@ -255,7 +259,7 @@ test('冷却なしの3 backend は末尾指定にかかわらず通常上限に�
     env: {},
     isLastBackend: index === backends.length - 1,
   }));
-  assert.deepEqual(budgets, [720, 250, 500]);
+  assert.deepEqual(budgets, [300, 250, 500]);
 });
 
 test('全冷却で1 backend だけなら通常上限・環境変数・残り予算を適用する', () => {
@@ -278,7 +282,7 @@ test('全冷却で1 backend だけなら通常上限・環境変数・残り予�
   }
   assert.equal(effectiveBackendTimeoutSecs('openrouter-free', {
     chainBudget: 720, cooling: true, env: {}, isLastBackend: true,
-  }), 720);
+  }), 300);
 });
 
 // 実測シナリオ（2026-11-04）: cheap-code:deepseek と gemini-cli の chain-timeout が3件発生。

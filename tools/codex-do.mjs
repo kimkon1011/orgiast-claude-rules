@@ -445,6 +445,15 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env) {
     const raw = Number(env.CODEX_DO_DEEPSEEK_TIMEOUT_SECS);
     return Number.isFinite(raw) && raw > 0 ? raw : 500;
   }
+  // openrouter-free（cohere/north-mini-code:free）は free モデルのため制限時間を短めに取る。
+  // 実測 2026-11-06 の成功所要時間: 31〜571 秒。失敗時の 900 秒丸ごと廃棄を防ぐため
+  // 300 秒で打ち切る（成功実績中央値 ~370 秒には届くが、上限値には切られる。
+  // delegation-health:fallback_chain_timeout 2026-11-05 起票: 3件中2件が openrouter-free
+  // の無制限 timeout を含む。環境変数 CODEX_DO_OPENROUTER_FREE_TIMEOUT_SECS で上書き可）。
+  if (backendName === 'openrouter-free') {
+    const raw = Number(env.CODEX_DO_OPENROUTER_FREE_TIMEOUT_SECS);
+    return Number.isFinite(raw) && raw > 0 ? raw : 300;
+  }
   return null;
 }
 

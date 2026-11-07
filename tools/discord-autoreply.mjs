@@ -21,9 +21,9 @@ export function combinePermissions(guildId, member, roles) {
   return roles.reduce((bits, role) => ids.has(role.id) ? bits | BigInt(role.permissions) : bits, 0n);
 }
 
-const PREFIX = '【Claude自動返信】';
-const CORRECTED = '【Claude自動返信・kimが訂正済み→下のkimの返信を参照】';
-const DISCLAIMER = '\n\n※kim本人の返答ではなく自動返信です。訂正があれば kim が追って返信します。';
+const PREFIX = '【kimのClaudeによる代理回答】';
+const CORRECTED = '【kimのClaudeによる代理回答・訂正済み】';
+const DISCLAIMER = '\n\nこのメッセージへの返答は、Bot ではなく金に直接お願いします。';
 const SEED = '<!-- 会社・kimについて人が自由に追記できます。 -->\nkim = 株式会社オージャスト 代表。関連会社: Reブース／NEXTForward／東邦鋼業。社内連絡は Discord、決着はメール。\n';
 const ADMIN_ERROR = 'admin token がありません。node tools/discord-admin-token-install.mjs を実行してください';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -307,7 +307,7 @@ export async function runOnce(options = {}) {
           const checkReplies = async () => {
             const after = await afterMessages(api, m.channel_id, m.id);
             if (after.some(x => x.author?.id === kimId)) { handled(m, 'kim_replied'); skip('kim_replied'); return true; }
-            if (after.some(x => x.author?.id === runtime.selfId && /^【Claude自動返信/.test(x.content))) { handled(m, 'already'); return true; }
+            if (after.some(x => x.author?.id === runtime.selfId && /^【kimのClaudeによる代理回答/.test(x.content))) { handled(m, 'already'); return true; }
             return false;
           };
           if (await checkReplies()) continue;

@@ -741,6 +741,30 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/register-rule-consistency-audit.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kim-PCの組織指示・基本理念監査タスク(週次)だけで登録・実行"
+    },
+    {
+      "path": "tools/register-rule-consistency-audit.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kim-PCの組織指示・基本理念監査タスク(週次)だけで登録・実行"
+    },
+    {
+      "path": "tools/rule-consistency-audit.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "kim-PCの組織指示・基本理念監査タスク(週次)だけで実行"
+    },
+    {
+      "path": "tools/rule-consistency.test.mjs",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "テストファイル（CIでのみ実行、配布対象外）"
+    },
+    {
       "path": "tools/register-stall-sweeper.ps1",
       "scope": "fleet",
       "step": "task:stall-sweeper",

@@ -97,7 +97,7 @@ export async function runAudit(options = {}) {
     const { stdout } = await exec(
       process.execPath,
       [llmAskScript, '--provider', 'gemini', '--category', 'classification', '--prompt-file', tempPromptFile],
-      { timeout: 120000, env: { ...process.env, ORGIAST_HOME: home } }
+      { timeout: 120000, windowsHide: true, env: { ...process.env, ORGIAST_HOME: home } }
     );
     rawOutput = stdout.trim();
   } catch (err) {

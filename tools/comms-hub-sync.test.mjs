@@ -464,3 +464,408 @@ test('Drive initialization failure still saves source cursors and exits zero',as
  assert.equal(report.exitCode,0);assert.match(saved.publishErrors[0].reason,/fetch failed/);
  for(const source of SOURCES)assert.equal(saved.sources[source].cursor.since,99);
 });
+
+test('line-chat: fetches LINE chats, filters non-business at chat level, ascending sort', async t => {
+ const { collectSource } = await import('./comms-hub-sync.mjs');
+ const now = Date.now();
+ const ctx = {
+   config, home: '.', since: 0, until: 2000000000000,
+   state: {}, beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([
+       { accountID: 'line.U9-aaa', network: 'LINE', bridge: { type: 'line' } },
+     ]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!work:beeper.local', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト連絡', type: 'single', lastActivity: new Date(now).toISOString() },
+       { id: '!social:beeper.local', accountID: 'other', network: 'twitter', title: 'Twitter DM', type: 'single', lastActivity: new Date(now).toISOString() },
+     ]});
+     if (u.includes('/messages')) {
+       // Return newest-first (Beeper API behavior)
+       return Response.json({ items: [
+         { id: 'm2', senderName: '後スタッフ', text: '確認しました', timestamp: new Date(now - 500).toISOString() },
+         { id: 'm1', senderName: '前スタッフ', text: '見積もり作成完了', timestamp: new Date(now - 1000).toISOString() },
+       ]});
+     }
+     return Response.json({});
+   }
+ };
+ const page = await collectSource('line-chat', ctx);
+ assert.equal(page.messages.length, 2);
+ // Must be sorted ascending by timestamp
+ assert.equal(page.messages[0].text, '見積もり作成完了');
+ assert.equal(page.messages[1].text, '確認しました');
+ assert.equal(page.messages[0].sender, '前スタッフ');
+ assert.equal(page.messages[1].sender, '後スタッフ');
+});
+
+test('line-chat: paginates backward across pages, stops at sinceMs, returns ascending', async t => {
+ const { collectSource } = await import('./comms-hub-sync.mjs');
+ const now = Date.now();
+ const ctx = {
+   config, home: '.', since: now - 2000, until: 2000000000000,
+   state: {}, beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE' }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!chat', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date(now).toISOString() },
+     ]});
+     if (u.includes('/messages')) {
+       const hasCursor = u.includes('cursor=');
+       if (!hasCursor) {
+         // Page 1: newest (timestamps now-100 to now-900)
+         return Response.json({
+           items: [
+             { id: 'm4', senderName: 'D', text: '最新', timestamp: new Date(now - 100).toISOString() },
+             { id: 'm3', senderName: 'C', text: '三つ目', timestamp: new Date(now - 500).toISOString() },
+             { id: 'm2', senderName: 'B', text: '二つ目', timestamp: new Date(now - 900).toISOString() },
+           ],
+           hasMore: true, oldestCursor: 'cursor1'
+         });
+       }
+       // Page 2: older (timestamps now-1300, now-1700, now-2100)
+       return Response.json({
+         items: [
+           { id: 'm1', senderName: 'A', text: '一つ目', timestamp: new Date(now - 1300).toISOString() },
+           { id: 'm0', senderName: 'Z', text: '範囲外古', timestamp: new Date(now - 2100).toISOString() },
+         ],
+         hasMore: true, oldestCursor: 'cursor2'
+       });
+     }
+     return Response.json({});
+   }
+ };
+ const page = await collectSource('line-chat', ctx);
+ // Should collect m4,m3,m2,m1 then stop (m0 is before sinceMs).
+ // After ascending sort: m2(now-900), m1(now-1300) are both before sinceMs(now-2000)? No wait...
+ // since = now-2000. m2 is now-900 (after since), m1 is now-1300 (after since). m0 is now-2100 (before since).
+ // Collected: m4(now-100), m3(now-500), m2(now-900), m1(now-1300). Stop because oldest on page 2 (m0 at now-2100) < sinceMs(now-2000).
+ // Ascending: m1, m2, m3, m4.
+ assert.equal(page.messages.length, 4);
+ assert.equal(page.messages[0].text, '一つ目');
+ assert.equal(page.messages[1].text, '二つ目');
+ assert.equal(page.messages[2].text, '三つ目');
+ assert.equal(page.messages[3].text, '最新');
+ assert.ok(page.messages[0].ts < page.messages[3].ts);
+});
+
+test('line-chat: limit reached mid-chat returns resumeTimestamp, next run skips past it', async t => {
+ const { collectSource, messageKey } = await import('./comms-hub-sync.mjs');
+ const now = Date.now();
+ const m1Key = messageKey({ source: 'line-chat', channelId: '!chat1', id: 'm1' });
+ const ctx = {
+   config: { ...config, sourceLimits: { 'line-chat': 2 }, maxPerSource: 2 },
+   home: '.', since: 0, until: 2000000000000,
+   state: {}, beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE' }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!chat1', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date(now).toISOString() },
+     ]});
+     if (u.includes('/messages')) return Response.json({
+       items: [
+         { id: 'm2', senderName: 'B', text: '二つ目', timestamp: new Date(now - 500).toISOString() },
+         { id: 'm1', senderName: 'A', text: '一つ目', timestamp: new Date(now - 1000).toISOString() },
+         { id: 'm0', senderName: 'Z', text: '古い', timestamp: new Date(now - 3000).toISOString() },
+       ],
+       hasMore: false
+     });
+     return Response.json({});
+   }
+ };
+ const page1 = await collectSource('line-chat', ctx);
+ // Collected m0,m1,m2, sorted asc -> m0,m1,m2. Limit 2: take m0,m1, return resumeTimestamp=m1.ts
+ assert.equal(page1.messages.length, 2);
+ assert.equal(page1.messages[0].text, '古い');
+ assert.equal(page1.messages[1].text, '一つ目');
+ assert.equal(page1.cursor.chatId, '!chat1');
+ assert.ok(page1.cursor.resumeTimestamp);
+
+ // Resume: same chat, m1 is in state.processed (dedup-skips), passes resumeTs (< now-1000),
+ // so only m2 is new
+ const page2 = await collectSource('line-chat', { ...ctx, cursor: page1.cursor, state: { processed: { [m1Key]: '2026-11-07T00:00:00.000Z' } } });
+ assert.equal(page2.messages.length, 1);
+ assert.equal(page2.messages[0].text, '二つ目');
+ assert.deepEqual(page2.cursor, { since: ctx.until });
+});
+
+test('line-chat: non-business chats never call messages API', async t => {
+ const { collectSource } = await import('./comms-hub-sync.mjs');
+ let messagesCalled = false;
+ const ctx = {
+   config, home: '.', since: 0, until: 2000000000000,
+   state: {}, beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE' }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!personal', accountID: 'line.U9-aaa', network: 'line', title: 'プライベート会話', lastActivity: new Date(Date.now()).toISOString() },
+       { id: '!work', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date(Date.now()).toISOString() },
+     ]});
+     if (u.includes('/messages')) {
+       messagesCalled = true;
+       return Response.json({ items: [{ id: 'm1', senderName: 'A', text: '業務連絡', timestamp: new Date().toISOString() }] });
+     }
+     return Response.json({});
+   }
+ };
+ const page = await collectSource('line-chat', ctx);
+ // プライベート会話 should be skipped as not-business (not matching businessPatterns)
+ // オージャスト matches businessPatterns via norm("オージャスト")
+ assert.equal(page.messages.length, 1);
+ assert.equal(page.messages[0].text, '業務連絡');
+ assert.ok(messagesCalled, 'messages API was called for business chat');
+});
+
+test('line-chat: half-width kana title matches business pattern', async t => {
+ const { collectSource } = await import('./comms-hub-sync.mjs');
+ const ctx = {
+   config, home: '.', since: 0, until: 2000000000000,
+   state: {}, beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE' }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!chat', accountID: 'line.U9-aaa', network: 'line', title: 'ｵｰｼﾞｬｽﾄ業務', lastActivity: new Date(Date.now()).toISOString() },
+     ]});
+     if (u.includes('/messages')) return Response.json({ items: [{ id: 'm1', senderName: 'A', text: '見積もり', timestamp: new Date().toISOString() }] });
+     return Response.json({});
+   }
+ };
+ const page = await collectSource('line-chat', ctx);
+ // norm('ｵｰｼﾞｬｽﾄ業務') => 'オージャスト業務' which matches businessPattern 'オージャスト'
+ assert.equal(page.messages.length, 1);
+ assert.equal(page.messages[0].text, '見積もり');
+});
+
+test('line-chat: isDeleted messages are discarded', async t => {
+ const { collectSource } = await import('./comms-hub-sync.mjs');
+ const ctx = {
+   config, home: '.', since: 0, until: 2000000000000,
+   state: {}, beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE' }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!chat', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date(Date.now()).toISOString() },
+     ]});
+     if (u.includes('/messages')) return Response.json({ items: [
+       { id: 'm1', senderName: 'A', text: '残るメッセージ', timestamp: new Date(Date.now() - 1000).toISOString() },
+       { id: 'm2', senderName: 'B', text: '削除済み', timestamp: new Date(Date.now() - 2000).toISOString(), isDeleted: true },
+       { id: 'm3', senderName: 'C', text: 'これも残る', timestamp: new Date(Date.now() - 3000).toISOString() },
+     ]});
+     return Response.json({});
+   }
+ };
+ const page = await collectSource('line-chat', ctx);
+ assert.equal(page.messages.length, 2);
+ assert.equal(page.messages[0].text, 'これも残る');
+ assert.equal(page.messages[1].text, '残るメッセージ');
+ assert.ok(!page.messages.some(m => m.id === 'm2'));
+});
+
+test('line-chat: exclusion rules apply through processPage', async t => {
+ const state = { sources: { 'line-chat': {} }, cases: {} };
+ const msg = { source: 'line-chat', id: 'm1', channelId: '!chat:beeper.local', chat: '仕事', ts: message.ts, sender: 'Staff', text: '見積もりです', url: null };
+ const r1 = await processPage({ source: 'line-chat', page: { messages: [msg], cursor: {} }, state, cases, config, live: false, sink: {} });
+ assert.equal(r1.accepted, 1);
+ const r2 = await processPage({ source: 'line-chat', page: { messages: [{ ...msg, id: 'm2', text: '診療予約の件' }], cursor: {} }, state, cases, config, live: false, sink: {} });
+ assert.equal(r2.excluded, 1);
+ const r3 = await processPage({ source: 'line-chat', page: { messages: [{ ...msg, id: 'm3', text: 'こんにちは' }], cursor: {} }, state, cases, config, live: false, sink: {} });
+ assert.equal(r3.excluded, 1);
+ const r4 = await processPage({ source: 'line-chat', page: { messages: [{ ...msg, id: 'm4', chat: '濱川様✖️オージャスト', text: '本日のご連絡' }], cursor: {} }, state, cases, config, live: false, sink: {} });
+ assert.equal(r4.accepted, 1);
+});
+
+test('line-chat: Beeper unavailable error does not affect other sources', async t => {
+ const state = { sources: {}, cases: {} };
+ const report = await run({ live: true }, {
+   config, cases, state, save() {},
+   sink: { createdDocs: 0, async init() {}, async append() {}, async finish() { return {}; } },
+   collect: async source => {
+     if (source === 'line-chat') throw Object.assign(new Error('Beeper Desktop API unavailable'), { status: 0 });
+     return { messages: [], cursor: { since: 99 } };
+   }
+ });
+ assert.equal(report.exitCode, 0);
+ assert.match(report.sources['line-chat'].error, /Beeper Desktop API unavailable/);
+ assert.ok(!report.sources['gmail-kim'].error);
+});
+
+test('line-chat: render shows LINE(Beeper) for url-less messages', async t => {
+ const { render } = await import('./comms-hub-sync.mjs');
+ const lineChat = render({ source: 'line-chat', ts: '2026-11-07T00:00:00.000Z', sender: 'A', text: 'こんにちは', chat: '仕事', url: null });
+ assert.match(lineChat, /LINE（Beeper）: 仕事/);
+ const line = render({ source: 'line', ts: '2026-11-07T00:00:00.000Z', sender: 'A', text: '通知', url: null });
+ assert.match(line, /元リンクなし（通知保存データ）/);
+});
+
+test('line-chat: excluded chats logged to local file as object keyed by id', async t => {
+ const os = await import('node:os');
+ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-linechat-excl-'));
+ t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+ const { collectSource } = await import('./comms-hub-sync.mjs');
+ const ctx = {
+   config: { ...config, lineChatExclude: ['プライベート', 'AI情報'] },
+   home, since: 0, until: 2000000000000,
+   state: {}, beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE', bridge: { type: 'line' } }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!a:beeper.local', accountID: 'line.U9-aaa', network: 'line', title: 'プライベート', type: 'single', lastActivity: new Date(Date.now()).toISOString() },
+       { id: '!b:beeper.local', accountID: 'line.U9-aaa', network: 'line', title: '仕事', type: 'single', lastActivity: new Date(Date.now()).toISOString() },
+     ]});
+     if (u.includes('/messages')) return Response.json({ items: [{ id: 'm1', timestamp: new Date().toISOString(), senderName: 'A', text: '業務' }] });
+     return Response.json({});
+   }
+ };
+ await collectSource('line-chat', ctx);
+ const logPath = path.join(home, '.claude', 'comms-hub', 'line-chat-excluded.json');
+ assert.ok(fs.existsSync(logPath));
+ const log = JSON.parse(fs.readFileSync(logPath, 'utf8'));
+ // Now keyed by chat id, not array indexed
+ assert.ok(log['!a:beeper.local']);
+ assert.equal(log['!a:beeper.local'].title, 'プライベート');
+ assert.equal(log['!a:beeper.local'].reason, 'config-exclude');
+ // "仕事" is not-business, should also be logged
+ assert.ok(log['!b:beeper.local']);
+ assert.equal(log['!b:beeper.local'].reason, 'not-business');
+});
+
+test('line-chat: messages with attachments appends attachment info', async t => {
+ const { collectSource } = await import('./comms-hub-sync.mjs');
+ const ctx = {
+   config, home: '.', since: 0, until: 2000000000000,
+   state: {}, beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE', bridge: { type: 'line' } }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!a:beeper.local', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date(Date.now()).toISOString() },
+     ]});
+     if (u.includes('/messages')) return Response.json({ items: [
+       { id: 'm2', senderName: 'Sender', text: '', timestamp: new Date(Date.now() - 500).toISOString(),
+         attachments: [{ type: 'image', file_name: 'stamp.png' }] },
+       { id: 'm1', senderName: 'Sender', text: '本文', timestamp: new Date(Date.now() - 1000).toISOString(),
+         attachments: [{ type: 'image', file_name: 'photo.jpg' }, { type: 'file', file_name: 'document.pdf' }] },
+     ]});
+     return Response.json({});
+   }
+ };
+ const page = await collectSource('line-chat', ctx);
+ assert.equal(page.messages.length, 2);
+ // Ascending: m1 first (now-1000)
+ assert.match(page.messages[0].text, /\[添付: image photo.jpg\]/);
+ assert.match(page.messages[0].text, /\[添付: file document.pdf\]/);
+ assert.match(page.messages[1].text, /\[添付: image stamp.png\]/);
+});
+
+test('line-chat: (g) state.processed with messageKey skips already-processed messages', async t => {
+ const { collectSource, messageKey } = await import('./comms-hub-sync.mjs');
+ const now = Date.now();
+ const m1Key = messageKey({ source: 'line-chat', channelId: '!a:beeper.local', id: 'm1' });
+ const ctx = {
+   config, home: '.', since: 0, until: 2000000000000,
+   state: { processed: { [m1Key]: '2026-11-07T00:00:00.000Z' } },
+   beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE' }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!a:beeper.local', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date(now + 1000).toISOString() },
+     ]});
+     if (u.includes('/messages')) return Response.json({ items: [
+       { id: 'm1', senderName: 'A', text: '既に処理済み', timestamp: new Date(now + 10).toISOString() },
+       { id: 'm2', senderName: 'B', text: '新しいメッセージ', timestamp: new Date(now + 20).toISOString() },
+     ]});
+     return Response.json({});
+   }
+ };
+ const page = await collectSource('line-chat', ctx);
+ assert.equal(page.messages.length, 1);
+ assert.equal(page.messages[0].id, 'm2');
+ assert.equal(page.messages[0].text, '新しいメッセージ');
+});
+
+test('line-chat: (h) early-return cursor includes end, subsequent calls use saved end', async t => {
+ const { collectSource } = await import('./comms-hub-sync.mjs');
+ const now = Date.now();
+ const until = now + 100000;
+ let msgCalls = 0;
+ const ctxBase = {
+   config: { ...config, sourceLimits: { 'line-chat': 2 } },
+   home: '.', since: 0, until,
+   state: {}, beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE' }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!a:beeper.local', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date(now + 1000).toISOString() },
+     ]});
+     if (u.includes('/messages')) {
+       msgCalls++;
+       return Response.json({ items: [
+         { id: 'm1', senderName: 'A', text: 'a', timestamp: new Date(now + 10).toISOString() },
+         { id: 'm2', senderName: 'A', text: 'b', timestamp: new Date(now + 20).toISOString() },
+         { id: 'm3', senderName: 'B', text: 'c', timestamp: new Date(now + 30).toISOString() },
+       ]});
+     }
+     return Response.json({});
+   }
+ };
+ // First call: limit 2, get m1 and m2, cursor has end
+ const page1 = await collectSource('line-chat', ctxBase);
+ assert.equal(page1.messages.length, 2);
+ assert.equal(page1.cursor.end, until);
+ assert.equal(page1.cursor.chatId, '!a:beeper.local');
+ assert.ok(page1.cursor.resumeTimestamp);
+
+ // Second call with cursor: m1 skipped (resumeTs < now+20), m2 skipped (resumeTs < now+20 is false
+ // but m2 is at resumeTs so < check passes; not in processed, so included), m3 included
+ // With 2 messages (m2,m3) and limit 2 → hits limit again, returns cursor
+ const page2 = await collectSource('line-chat', { ...ctxBase, cursor: page1.cursor });
+ assert.equal(page2.messages.length, 2);
+ assert.equal(page2.cursor.end, until);
+ assert.equal(page2.cursor.chatId, '!a:beeper.local');
+
+ // Third call: m1,m2 skipped by resumeTs (< now+30), m3 passes < and included
+ // Only 1 message, no limit hit → returns { since: end }
+ const page3 = await collectSource('line-chat', { ...ctxBase, cursor: page2.cursor });
+ assert.equal(page3.messages.length, 1);
+ assert.equal(page3.messages[0].id, 'm3');
+ assert.deepEqual(page3.cursor, { since: page2.cursor.end });
+});
+
+test('line-chat: (i) same-timestamp messages not lost with < comparison, dedup handles processed', async t => {
+ const { collectSource, messageKey } = await import('./comms-hub-sync.mjs');
+ const now = Date.now();
+ const ts = new Date(now + 10).toISOString();
+ const processedKey = messageKey({ source: 'line-chat', channelId: '!a:beeper.local', id: 'm1' });
+ const ctx = {
+   config, home: '.', since: 0, until: 2000000000000,
+   state: { processed: { [processedKey]: '2026-11-07T00:00:00.000Z' } },
+   beeperToken: 'mock', cases,
+   cursor: { chatId: '!a:beeper.local', resumeTimestamp: ts },
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE' }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!a:beeper.local', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date(now + 1000).toISOString() },
+     ]});
+     if (u.includes('/messages')) return Response.json({ items: [
+       { id: 'm1', senderName: 'A', text: '既に処理済み（同タイムスタンプ）', timestamp: ts },
+       { id: 'm2', senderName: 'B', text: '未処理（同タイムスタンプ）', timestamp: ts },
+     ]});
+     return Response.json({});
+   }
+ };
+ // With < comparison, neither message is skipped by resumeTs.
+ // m1 is skipped by state.processed dedup, m2 is included.
+ const page = await collectSource('line-chat', ctx);
+ assert.equal(page.messages.length, 1);
+ assert.equal(page.messages[0].id, 'm2');
+ assert.equal(page.messages[0].text, '未処理（同タイムスタンプ）');
+});

@@ -121,11 +121,15 @@ function Stop-DriveNotAvailable {
   }
   $notified = $false
   if ($notifyDue) {
-    $message = '📦 このPC（{0}）の Claude 環境バックアップは、Google Drive デスクトップが入っていないか、ログインされていないため動いていません。準備は1回だけ: ① https://www.google.com/drive/download/ から「パソコン版ドライブ」を入れる ② 会社の Google アカウントでログインする。翌日から自動でバックアップされます。' -f $hostname
+    $launcherHint = ''
+    $launcherPath = Join-Path ([Environment]::GetFolderPath('Desktop')) 'GoogleDriveインストール（ダブルクリック）.cmd'
+    if (Test-Path -LiteralPath $launcherPath) { $launcherHint = " デスクトップの「GoogleDriveインストール（ダブルクリック）」をダブルクリックして管理者インストールすると翌日から自動化されます。" }
+    $message = '📦 このPC（{0}）の Claude 環境バックアップは、Google Drive デスクトップが入っていないか、ログインされていないため動いていません。準備は1回だけ: ① https://www.google.com/drive/download/ から「パソコン版ドライブ」を入れる ② 会社の Google アカウントでログインする。翌日から自動でバックアップされます。{1}' -f $hostname, $launcherHint
     $notified = [bool](Send-Discord $message)
     if ($notified) { $state['lastDriveMissingNotifyUtc'] = $nowUtc.ToString('o'); Write-BackupState $state }
   }
-  Write-Event ('WARN drive-not-available notified={0}' -f $notified.ToString().ToLowerInvariant())
+  $notifiedStr = if ($notified) { 'true' } else { 'false' }
+  Write-Event ('WARN drive-not-available notified={0}. 対処: デスクトップの「GoogleDriveインストール（ダブルクリック）」を管理者実行するか、https://www.google.com/drive/download/ から手動インストール' -f $notifiedStr)
   exit 1
 }
 

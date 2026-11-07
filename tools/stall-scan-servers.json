@@ -1,0 +1,4 @@
+{
+  "servers": [],
+  "note": "常時稼働が必要なローカルサーバーのみ登録。PCごとの ~/.claude/stall-scan-servers.json で上書き。各項目: name, host (127.0.0.1 または ::1), port, fleetLabel (任意), repairHint (任意)。"
+}

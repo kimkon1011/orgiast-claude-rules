@@ -109,7 +109,7 @@ export function parseEnv(source) {
   return result;
 }
 
-function redact(text, secrets) {
+export function redact(text, secrets) {
   let result = String(text);
   const variants = secrets.filter(isSet).flatMap((secret) => [secret, encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1)]);
   for (const value of variants.sort((a, b) => b.length - a.length)) result = result.split(value).join('[REDACTED]');
@@ -150,7 +150,7 @@ export async function fetchSnapshot(env, fetchImpl = globalThis.fetch) {
   return { fetchedAt: new Date().toISOString(), deals, customers };
 }
 
-function cell(value) {
+export function cell(value) {
   return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\|/g, '&#124;').replace(/[\r\n]+/g, '<br>');
 }
 

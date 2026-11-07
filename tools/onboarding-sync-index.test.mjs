@@ -12,6 +12,21 @@ import { fileURLToPath } from 'node:url';
 
 const script = path.join(path.dirname(fileURLToPath(import.meta.url)), 'onboarding-sync.mjs');
 
+test('移管ルールの絶対ルール行と太字の節番号が実文書の索引に残る', async () => {
+  const { makeIndex } = await import('./onboarding-sync.mjs');
+  const body = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
+  const index = makeIndex(body);
+  const rule = body.split(/\r?\n/).find(line => line.includes('🔴 全プロジェクトは「後で別アカウント'));
+  assert.ok(rule);
+  assert.ok(index.split('\n').includes(rule));
+  assert.match(index, /^\*\*1\.12\.1 移管前提の設計ルール/m);
+  const fixture = makeIndex('# 親\r\n要約。\r\n**🔴 絶対ルール**\r\n\r\n**1.12.1 小見出し（kim 2026-10-22）**\r\n\r\n小見出しの詳細本文。\r\n**1.12.2 通常の詳細見出し**');
+  assert.ok(fixture.includes('**1.12.1 小見出し**'));
+  assert.ok(!fixture.includes('小見出しの詳細本文'));
+  assert.ok(!fixture.includes('通常の詳細見出し'));
+  assert.ok(!fixture.includes('要約。'));
+});
+
 const MARKS = ['🔴', '🛑', '⚙️', '🔁'];
 const bodyLines = [
   '# 見出し',
@@ -61,4 +76,25 @@ test('ラベル形式が日付でない既存マーカーでも置換され、�
   assert.ok(!output.includes('旧本文'), '旧ブロックが置換されていない');
   assert.ok(output.startsWith('個人ルール'), 'マーカー外の個人ルールが失われた');
   assert.ok(output.includes('末尾'), 'マーカー外の末尾が失われた');
+});
+
+test('管理ブロックが固定共有memoryを @ 参照する', async () => {
+  const { build } = await import('./onboarding-sync.mjs');
+  const { updated } = build(null, '# index', '2026-10-15');
+  assert.match(updated, /BEGIN: オージャスト共通ルール[\s\S]*@~\/\.claude\/shared-memory\/MEMORY\.md[\s\S]*END: オージャスト共通ルール/);
+  assert.match(updated, /index\/\*\.md/);
+});
+
+test('メールの共有アカウント必須見出しを圧縮索引にも保持する', async () => {
+  const { makeIndex } = await import('./onboarding-sync.mjs');
+  const body = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
+  assert.ok(makeIndex(body).includes('**🔴 メールの送信・下書きはすべて seisaku-team@orgiast.jp。送信指示時は重複・矛盾照会**'));
+});
+
+test('最後のメッセージにまとめる絶対ルールが実文書の索引に残る', async () => {
+  const { makeIndex } = await import('./onboarding-sync.mjs');
+  const body = fs.readFileSync(new URL('../ONBOARDING.md', import.meta.url), 'utf8');
+  const rule = body.split(/\r?\n/).find(line => line.startsWith('**🔴 kim が読むのは「本当に最後のメッセージ」'));
+  assert.ok(rule);
+  assert.ok(makeIndex(body).split('\n').includes(rule.replace('（2026-10-30 kim 厳命・全PC全アカウント）', '')));
 });

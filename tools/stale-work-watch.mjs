@@ -159,8 +159,8 @@ export async function runWatch({ home = os.homedir(), repo = ROOT, staleDays = 3
     if (dry) { item.action = 'マージ予定'; continue; }
     try {
       // Bind gh's implicit repository to the same repository used for collection.
-      const merged = await merge({ pr: item.number, repo, keepBranch: true }, {
-        exec: (file, args, opts) => exec(file, file === 'gh' ? ['-R', REPO, ...args] : args, { ...opts, windowsHide: true }),
+      const merged = await merge({ pr: item.number, repo, githubRepo: REPO, keepBranch: true }, {
+        exec: (file, args, opts) => exec(file, args, { ...opts, windowsHide: true }),
       });
       if (merged?.state !== 'MERGED' || !merged.mergedAt) throw new Error('Merge read-back not confirmed');
       item.action = 'merged';
@@ -179,7 +179,7 @@ export async function runWatch({ home = os.homedir(), repo = ROOT, staleDays = 3
   if (!dry && result.actionable.length) {
     try {
       result.notification = await notify(notificationText(result.items, result.reportPath, staleDays), { home, webhookFallback: false });
-      if (result.notification?.delivered !== 'dm') result.errors.push(`notification: ${result.notification?.reason || 'DM not delivered'}`);
+      if (!['dm', 'session-inbox'].includes(result.notification?.delivered)) result.errors.push(`notification: ${result.notification?.reason || 'DM not delivered'}`);
     } catch (e) { result.errors.push(`notification: ${e.message}`); }
     fs.writeFileSync(result.reportPath, renderReport(result));
   }

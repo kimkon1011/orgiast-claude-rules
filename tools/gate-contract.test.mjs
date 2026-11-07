@@ -1,0 +1,108 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { discoverGates, readContract, toolsDir, contractErrors } from './gate-contracts.mjs';
+
+for (const name of discoverGates()) test(`${name}: reachable remedy contract`, () => {
+  const contract = readContract(path.join(toolsDir, `${name}.mjs`));
+  assert.equal(contract?.name, name, 'deny hook has no contract');
+  assert.deepEqual(contractErrors(contract), []);
+});
+test('reject missing declaration, nonexistent repo file, undeployed key and unexplained consent', () => {
+  assert.ok(contractErrors(null).length);
+  for (const remedy of [{kind:'repo-file',ref:'nonexistent'}, {kind:'keyserve-key',ref:'unpublished.env#SECRET'}, {kind:'user-consent',ref:'bypass'}]) {
+    assert.ok(contractErrors({name:'test',remedies:[remedy]}).length);
+  }
+});
+test('new rollout entries must declare the seven day window; legacy inventory is frozen', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(toolsDir, 'gate-rollout-manifest.json')));
+  const baseline = JSON.parse(fs.readFileSync(path.join(toolsDir, 'fixtures/legacy-deny-gates.json')));
+  assert.deepEqual(Object.entries(manifest.gates).filter(([,v])=>v.legacy).map(([k])=>k).sort(), baseline);
+  for (const name of discoverGates()) {
+    const row = manifest.gates[name];
+    assert.ok(row, `${name}: missing rollout entry`);
+    assert.ok(['warn','deny'].includes(row.rollout));
+    if (name === 'mail-send-approval-gate') { assert.equal(row.rollout, 'deny'); assert.equal(row.immediatePolicy, '2026-11-05 kim 承認: 組織指示11 メール送信は本文確認＋明示承認後のみ'); continue; }
+    if (name === 'delete-approval-gate') { assert.equal(row.rollout, 'deny'); assert.equal(row.immediatePolicy, '2026-11-05 kim 承認: 組織指示12 削除は user 許可後のみ'); continue; }
+    if (name === 'seat-name-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-11-04 kim 厳命: 席番号呼称と Drive 引き渡し (§1.5.0.2/§1.5.0.3)');
+      continue;
+    }
+    if (name === 'progress-cron-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-11-04 user 指示: 定期進捗の CronCreate を Stop で強制');
+      continue;
+    }
+    if (name === 'kim-discord-report-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-27 kim 厳命: kim 宛 Discord 報告を全PCで停止');
+      continue; // kim の明示指示で初受信のPCにも即時適用。
+    }
+    if (name === 'lane-repair-first-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-29 user 指示: 全PC・全アカウントで故障レーン修復を最優先');
+      continue; // Explicit repair-first policy applies immediately on every PC.
+    }
+    if (name === 'exec-tree-edit-guard') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-26 user 指示: 実行ツリーの直接編集を即時拒否');
+      continue; // Direct synchronous policy hook, outside staged rollout.
+    }
+    if (name === 'mail-draft-account-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-25 kim 指示: 全PCのメール下書きは seisaku-team@orgiast.jp に統一');
+      continue; // Explicit account policy applies immediately on every PC.
+    }
+    if (name === 'response-language-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-26 cr 指示: Stop hook の書き直しで英語へ逸脱した実害');
+      continue; // Explicit response-language policy applies immediately on every PC.
+    }
+    if (name === 'api-billing-guard') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-17 kim 厳命: 従量課金停止');
+      continue; // Direct synchronous policy hook, outside staged rollout.
+    }
+    if (name === 'recipient-domain-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-23 名刺OCR誤読による不存在ドメイン送信防止');
+      continue;
+    }
+    if (name === 'pretooluse-line-broadcast-guard') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-23 kim 指示: LINE broadcast による宛先違い誤送信の再発防止');
+      continue; // Misdelivery to the wrong person cannot be undone, immediate on all PCs.
+    }
+    if (name === 'outbound-claim-evidence-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-27 TimeRex 実害: 社外送信の完了主張に読み戻し証拠を要求');
+      continue; // External communication cannot be undone, immediate on all PCs.
+    }
+    if (name === 'deliverable-drive-link-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-11-04 nishi 指示: 渡すファイルが見つからず往復が発生した実害の再発防止');
+      continue; // Explicit recurrence-prevention policy applies immediately.
+    }
+    if (name === 'bihin-kcol-gate') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-23 古川さん依頼: 備品管理表K列のデータ破損防止');
+      continue; // Explicit data-corruption prevention policy, immediate on all PCs.
+    }
+    if (name === 'cmd-ascii-guard') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-11-04 kim 指示: .cmd の文字化け（日本語行で全行失敗）を全PC全アカウント全プロジェクトで再発防止');
+      continue; // .cmd/.bat non-ASCII corruption prevention, immediate on all PCs.
+    }
+    if (!row.legacy) {
+      assert.ok(Number.isFinite(Date.parse(row.distributedAt)));
+      if (row.rollout === 'deny') assert.ok(Date.parse(row.denyAfter) >= Date.parse(row.distributedAt) + 7*86400000);
+    }
+  }
+});
+test('repo remedy sections accept Windows CRLF checkouts',async t=>{
+ const os=await import('node:os');const root=fs.mkdtempSync(path.join(os.tmpdir(),'gate-crlf-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+ fs.writeFileSync(path.join(root,'remedy.md'),'# remedies\r\n\r\n## example\r\n\r\nDo the documented step.\r\n');
+ assert.deepEqual(contractErrors({name:'example',remedies:[{kind:'repo-file',ref:'remedy.md',section:'example'}]},{root,manifest:{distributions:[]}}),[]);
+});

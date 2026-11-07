@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "live-artifact-read-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "live-artifact-read-gate"}, {"kind": "user-consent", "ref": "Google Drive/Sheets 読取権限", "reason": "対象ファイル所有者の共有設定と各人のOAuth認証が必要。共通秘密として配れない"}]};
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

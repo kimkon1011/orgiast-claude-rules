@@ -34,6 +34,7 @@ function runSync(home, keyserveUrl, onboardingUrl) {
 
 test('provisionKeys refreshes only changed keyserve.env through the real process path', async (t) => {
   const payloads = new Map([
+    ['/keys/feedback', { 'feedback-relay.env': 'FEEDBACK_SHARED_FORM_URL=https://script.google.com/macros/s/TEST_ONLY_NOT_A_DEPLOYMENT/exec\n' }],
     ['/keys/create', { 'keyserve.env': '\uFEFFORGIAST_KEYSERVE_SECRET=new-secret\n' }],
     ['/keys/refresh', { 'keyserve.env': '\uFEFFORGIAST_KEYSERVE_SECRET=new-secret\n' }],
     ['/keys/same', { 'keyserve.env': 'ORGIAST_KEYSERVE_SECRET=same-secret\n' }],
@@ -58,6 +59,24 @@ test('provisionKeys refreshes only changed keyserve.env through the real process
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const { port } = server.address();
   const baseUrl = `http://127.0.0.1:${port}`;
+
+  await t.test('feedback URL reaches both new and existing PCs without losing local relay settings', async () => {
+    for (const existing of [false, true]) {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'feedback-keyserve-'));
+      t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+      const file = path.join(home, '.claude', 'feedback-relay.env');
+      if (existing) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, 'FEEDBACK_RELAY_URL=https://example.invalid/private-relay\nFEEDBACK_SHARED_FORM_URL=https://example.invalid/old\n');
+      }
+      const result = await runSync(home, `${baseUrl}/keys/feedback`, `${baseUrl}/onboarding`);
+      assert.equal(result.status, 0, result.stderr);
+      const content = fs.readFileSync(file, 'utf8');
+      assert.match(content, /FEEDBACK_SHARED_FORM_URL=https:\/\/script\.google\.com\/macros\/s\/TEST_ONLY_NOT_A_DEPLOYMENT\/exec/);
+      if (existing) assert.match(content, /FEEDBACK_RELAY_URL=https:\/\/example\.invalid\/private-relay/);
+      assert.ok(!result.stdout.includes('TEST_ONLY_NOT_A_DEPLOYMENT'));
+    }
+  });
 
   await t.test('(a) creates keyserve.env when absent', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'keyserve-create-'));

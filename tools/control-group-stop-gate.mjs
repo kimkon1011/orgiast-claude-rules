@@ -1,3 +1,4 @@
+export const GATE_CONTRACT = {"name": "control-group-stop-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "control-group-stop-gate"}, {"kind": "command", "ref": "node tools/control-group-check.mjs --gate <gate>"}]};
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';

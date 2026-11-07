@@ -62,6 +62,53 @@ function discordObservations(discord) {
   return rows;
 }
 
+// 台帳(fleet-pc-map.json)に無いPC・台帳外アカウントで報告してきたPCを検出する。
+// 報告に出てきたラベル/hostname が、どのキー・sheetName・hostname・aliases にも一致しなければ未登録。
+// 機械報告の行(label/hostname あり)と Discord の観測だけが対象。手書き行(pcNameのみ)は見ない。
+export function detectLedgerGaps({ discord, sheet, pcMap = {}, installBeacons = [] }) {
+  // 台帳が読めていない(空)ときは全PCを「未登録」と誤報しないよう何も出さない。
+  if (!pcMapEntries(pcMap).length) return { unregistered: [], offLedgerAccounts: [], accountMismatches: [] };
+  const index = buildPcIdentityIndex(pcMap);
+  const unregistered = new Map();
+  const note = (names, claudeAccount) => {
+    const real = names.map(clean).filter(Boolean);
+    if (!real.length || real.some((name) => index.find(name))) return;
+    const id = key(real[0]);
+    const entry = unregistered.get(id) || { name: real[0], hostname: '', claudeAccount: '' };
+    entry.hostname ||= real.find((name) => name !== real[0]) || '';
+    entry.claudeAccount ||= clean(claudeAccount);
+    unregistered.set(id, entry);
+  };
+  for (const observation of discordObservations(discord)) note([observation.label, observation.hostname], '');
+  const reportedAccounts = [];
+  const observations = [...(Array.isArray(sheet) ? sheet : []), ...installBeacons.map(row => ({
+    label: row.hostname, hostname: row.hostname, reportedAt: row.lastSeenAt, claudeAccount: row.claudeAccount,
+  }))];
+  for (const row of observations) {
+    if (!clean(row?.label) && !clean(row?.hostname) && !clean(row?.reportedAt)) continue;
+    note([row?.label, row?.hostname], row?.claudeAccount);
+    const account = clean(row?.claudeAccount).toLocaleLowerCase('ja');
+    if (account) reportedAccounts.push({ account, name: clean(row?.label) || clean(row?.hostname), mappedLabel: index.find(row?.label)?.label || index.find(row?.hostname)?.label || null });
+  }
+  const ledgerAccounts = new Set(pcMapEntries(pcMap).map(([, mapped]) => key(mapped.account)).filter(Boolean));
+  const offLedgerAccounts = new Map();
+  const accountMismatches = [];
+  for (const reported of reportedAccounts) {
+    if (!ledgerAccounts.has(reported.account)) {
+      const list = offLedgerAccounts.get(reported.account) || [];
+      if (!list.includes(reported.name)) list.push(reported.name);
+      offLedgerAccounts.set(reported.account, list);
+    }
+    const expected = reported.mappedLabel ? key(pcMap[reported.mappedLabel]?.account) : '';
+    if (expected && expected !== reported.account) accountMismatches.push({ name: reported.name, expected, actual: reported.account });
+  }
+  return {
+    unregistered: [...unregistered.values()],
+    offLedgerAccounts: [...offLedgerAccounts].map(([account, pcs]) => ({ account, pcs })),
+    accountMismatches,
+  };
+}
+
 export function classifyFleet({ discord, sheet, pcMap = {}, now = new Date(), errors = {} }) {
   const nowMs = now instanceof Date ? now.getTime() : new Date(now).getTime();
   if (!Number.isFinite(nowMs)) throw new TypeError('now must be a valid date');
@@ -153,7 +200,7 @@ export function classifyFleet({ discord, sheet, pcMap = {}, now = new Date(), er
     rolloutCounts[state]++;
     if (manualRowMissing) rolloutCounts.manualRowMissing++;
   }
-  return { items, counts, warnings, unavailable: false, rolloutCounts, candidates: reconciliation.candidates, duplicateManualRows: reconciliation.duplicateManualRows };
+  return { items, counts, warnings, unavailable: false, rolloutCounts, candidates: reconciliation.candidates, duplicateManualRows: reconciliation.duplicateManualRows, ledgerGaps: detectLedgerGaps({ discord, sheet, pcMap }) };
 }
 
 export function formatLiveness(result) {
@@ -172,7 +219,12 @@ export function formatLiveness(result) {
   if (result.counts['legacy-manual']) lines.push('手入力データのみ: 対処不要');
   if (result.counts.uncertain) lines.push('ラベル対応未確定: kim の判断待ち');
   for (const candidate of result.candidates || []) lines.push(`${candidate.manual}↔${candidate.machine} の同一判定は kim の回答が必要（根拠: ${candidate.reason}）`);
-  if (!result.counts['discord-mute'] && !result.counts.broken && !result.counts.never && !result.counts['legacy-manual'] && !result.counts.uncertain) lines.push('対処不要');
+  const gaps = result.ledgerGaps || { unregistered: [], offLedgerAccounts: [], accountMismatches: [] };
+  for (const pc of gaps.unregistered) lines.push(`🆕 台帳未登録PC: ${maskEmailAddress(pc.name)}${pc.hostname ? `（hostname ${pc.hostname}）` : ''}${pc.claudeAccount ? ` / Claude=${maskEmailAddress(pc.claudeAccount)}` : ''} — fleet-pc-map.json / PC名簿に追記が必要`);
+  for (const item of gaps.offLedgerAccounts) lines.push(`🆕 台帳外アカウントで報告: Claude=${maskEmailAddress(item.account)}（${item.pcs.map(maskEmailAddress).join(', ')}）— fleet-pc-map.json の account に無い`);
+  for (const item of gaps.accountMismatches) lines.push(`⚠️ アカウント不一致: ${maskEmailAddress(item.name)} 台帳=${maskEmailAddress(item.expected)} / 実報告 Claude=${maskEmailAddress(item.actual)}`);
+  const hasGaps = gaps.unregistered.length || gaps.offLedgerAccounts.length || gaps.accountMismatches.length;
+  if (!result.counts['discord-mute'] && !result.counts.broken && !result.counts.never && !result.counts['legacy-manual'] && !result.counts.uncertain && !hasGaps) lines.push('対処不要');
   return lines.join('\n');
 }
 
@@ -199,6 +251,21 @@ export async function main(argv = process.argv.slice(2), now = new Date()) {
   const repoRoot = path.resolve(import.meta.dirname, '..');
   const pcMap = await loadPcMap(repoRoot);
   const result = classifyFleet({ discord, sheet, pcMap, now, errors });
+  let installBeacons = [];
+  try {
+    if (fleetEnv.FLEET_SHEET_URL && fleetEnv.FLEET_SHEET_TOKEN) {
+      const response = await fetch(fleetEnv.FLEET_SHEET_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, redirect: 'follow',
+        body: JSON.stringify({ kind: 'install-beacon-list', token: fleetEnv.FLEET_SHEET_TOKEN }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data?.ok && Array.isArray(data.rows)) installBeacons = data.rows;
+      }
+    }
+  } catch { /* Older/unavailable GAS does not block liveness reporting. */ }
+  result.ledgerGaps = detectLedgerGaps({ discord, sheet, pcMap, installBeacons });
   const output = argv.includes('--json') ? JSON.stringify(result, null, 2) : formatLiveness(result);
   process.stdout.write(`${output}\n`);
   if (argv.includes('--post')) {

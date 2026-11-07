@@ -1,31 +1,52 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { repositoryHooks, collapseHooks, effectiveHooks, runtimeManifestPath } from './hook-dispatch-registry.mjs';
+import { execFileSync } from 'node:child_process';
+let wrapRegisteredGates = () => 0;
+let gateRuntimeReady = false;
+try { ({ wrapRegisteredGates } = await import('./gate-hook-runner.mjs')); gateRuntimeReady = true; } catch { /* 同期途中でも既存登録を維持 */ }
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// matcher の正本は guard 側に置く（リテラルを2箇所に持つと、片方だけ直して
-// 「テストは緑なのに実機では hook が起動しない」ずれが再発する）。
-// ただし同期が途中のPCでは guard 本体がまだ無いことがあるため、静的に import すると
-// register-hooks 全体が ERR_MODULE_NOT_FOUND で落ちて hook が1本も登録されなくなる。
-// ここは fail-open とし、読めなければ現行と同じ matcher に退避する。
-let HOOK_MATCHER = 'mcp__claude_ai_Gmail(?:_\\d+)?__(create_draft|send_message|update_draft|reply|forward)|Bash|PowerShell';
-try {
-  ({ HOOK_MATCHER } = await import('./internal-recipient-gmail-guard.mjs'));
-} catch { /* guard が未同期でも登録処理は続行する */ }
-// live-artifact-read-gate も同じ Gmail 書き込み系 + Bash/PowerShell を対象にする。
-// matcher の正本は guard 側。未同期PCでは上の退避値と同じ形に倒す(fail-open)。
-let LIVE_ARTIFACT_MATCHER = HOOK_MATCHER;
-try {
-  ({ HOOK_MATCHER: LIVE_ARTIFACT_MATCHER } = await import('./live-artifact-read-gate.mjs'));
-} catch { /* guard が未同期でも登録処理は続行する */ }
-
 const hooksOnly = process.argv.includes('--hooks-only');
+const expectedJson = process.argv.includes('--expected-json');
 const home = process.env.ORGIAST_HOME || os.homedir();
 // 2026-09-14: ~/orgiast-claude-rules が stale で新 hook(hook-budget-check) が無言で未登録になった。
 // 実行中スクリプトのツリーを基準にし、実行した版の hook を同じ版のツリーから登録する。
 const scriptRepo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const repo = process.env.ORGIAST_REPO || scriptRepo;
+// Only dedicated, automatically refreshed checkouts are eligible by default.
+function selectAnchor() {
+  if (process.env.ORGIAST_REPO) return path.resolve(process.env.ORGIAST_REPO);
+  for (const candidate of [path.join(home, '.claude', 'nightly-repo'), path.join(home, 'orgiast-claude-rules')]) {
+    try {
+      const git = (...args) => execFileSync('git', ['-C', candidate, ...args], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+      const branch = git('branch', '--show-current');
+      if ((branch && branch !== 'main') || git('status', '--porcelain', '--untracked-files=no')) continue;
+      const head = git('rev-parse', 'HEAD');
+      const main = git('rev-parse', 'refs/remotes/origin/main');
+      if (head !== main) {
+        // nightly-bootstrap follows origin/main with a detached HEAD. Allow a
+        // short sync delay, but never a local/divergent commit or a stale tree.
+        git('merge-base', '--is-ancestor', head, main);
+        const age = Date.now() / 1000 - Number(git('show', '-s', '--format=%ct', head));
+        if (!Number.isFinite(age) || age < 0 || age > 86400) continue;
+      }
+      if (!fs.existsSync(path.join(candidate, 'tools/register-hooks.mjs'))) continue;
+      return candidate;
+    } catch { /* missing/ZIP/divergent checkout is not a clean main anchor */ }
+  }
+  throw new Error(`clean な main / detached HEAD の同期 checkout がありません。自己修復: node "${path.join(scriptRepo, 'tools/onboarding-sync.mjs')}" --force`);
+}
+let repo;
+try { repo = selectAnchor(); } catch (e) { console.error(e.message); process.exit(1); }
+// Definitions and runtime must come from the selected anchor too.
+if (!process.env.ORGIAST_REPO && path.resolve(repo) !== scriptRepo) {
+  const result = (await import('node:child_process')).spawnSync(process.execPath,
+    [path.join(repo, 'tools/register-hooks.mjs'), ...process.argv.slice(2)],
+    { stdio: 'inherit', env: { ...process.env, ORGIAST_REPO: repo } });
+  process.exit(result.status ?? 1);
+}
 const geminiKey = process.env.ORGIAST_GEMINI_KEY || readGeminiKey();
 const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
 const skippedNames = [];
@@ -40,7 +61,11 @@ function load(file) {
 function backup(file) { if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak.${stamp}-installer`); }
 function write(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  const pending = `${file}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(pending, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+    fs.renameSync(pending, file);
+  } finally { try { fs.unlinkSync(pending); } catch {} }
   // 配布設定は書けたつもりで終えず、直後にJSONとして同値か読み戻す。
   const written = load(file);
   if (JSON.stringify(written) !== JSON.stringify(value)) throw new Error(`${file} のread-back検査に失敗`);
@@ -64,52 +89,64 @@ function removeDailySessionHooks(settings) {
 }
 
 function commands(groups) { return groups.flatMap((g) => Array.isArray(g?.hooks) ? g.hooks : []).map((h) => String(h?.command || '')); }
+// kim 宛の Discord 報告を全PCで止める（kim 2026-10-27 厳命）。claude-watch-inbox の Stop hook は
+// 応答の末尾を毎回 claude-code チャンネルへ kim メンション付きで投稿しており、報告が洪水になった主因。
+// 対になる SessionStart の返信取得 hook も、投稿を止めれば用済みなので外す。
+const KIM_DISCORD_REPORT_HOOKS = {
+  Stop: /(?:^|[\\/\s"'])post-stop-to-(?:inbox|discord)\.ps1(?=[\s"']|$)/i,
+  SessionStart: /(?:^|[\\/\s"'])get-reply-(?:on-session-start|from-discord)\.ps1(?=[\s"']|$)/i,
+};
+export function removeKimDiscordReportHooks(settings) {
+  let removed = 0;
+  for (const [event, pattern] of Object.entries(KIM_DISCORD_REPORT_HOOKS)) {
+    const groups = settings.hooks?.[event];
+    if (!Array.isArray(groups)) continue;
+    for (let i = groups.length - 1; i >= 0; i--) {
+      if (!Array.isArray(groups[i]?.hooks)) continue;
+      const hooks = groups[i].hooks;
+      for (let j = hooks.length - 1; j >= 0; j--) {
+        if (pattern.test(String(hooks[j]?.command || ''))) { hooks.splice(j, 1); removed++; }
+      }
+      if (!hooks.length) groups.splice(i, 1);
+    }
+  }
+  return removed;
+}
 function add(groups, scriptName, group) {
   // リポの同期が遅れている環境で、存在しないスクリプトを登録して毎回 ENOENT を出すのを防ぐ。
   if (scriptName.endsWith('.mjs') && !fs.existsSync(path.join(repo, 'tools', scriptName))) {
     skippedNames.push(scriptName);
-    console.log(`  [skip] ${scriptName} — repo/tools に実ファイルが無いため未登録`);
+    if (!expectedJson) console.log(`  [skip] ${scriptName} — repo/tools に実ファイルが無いため未登録`);
     return false;
+  }
+  if (!gateRuntimeReady && scriptName.endsWith('.mjs')) {
+    // Do not introduce a new hard denial during a partially downloaded update.
+    const source = fs.readFileSync(path.join(repo, 'tools', scriptName), 'utf8');
+    if (/GATE_CONTRACT/.test(source)) {
+      let legacy = false;
+      try { legacy = JSON.parse(fs.readFileSync(path.join(repo, 'tools/gate-rollout-manifest.json'), 'utf8')).gates?.[scriptName.slice(0, -4)]?.legacy === true; } catch {}
+      if (!legacy) { skippedNames.push(scriptName); if (!expectedJson) console.log(`  [skip] ${scriptName} — gate runtime 同期待ち`); return false; }
+    }
   }
   // 既存PCは .ps1 版が登録済みのことがある(Windows install)。拡張子を無視して重複判定しないと
   // .mjs と .ps1 の二重登録になり、同じ context が2回注入される。
   const base = scriptName.replace(/\.(mjs|ps1)$/, '');
-  if (commands(groups).some((cmd) => cmd.includes(base))) return false;
+  // A worktree/directory may itself be named after the gate. Compare script
+  // filenames, not arbitrary path substrings, or every prior hook looks equal.
+  const fileBase = path.posix.basename(base.replace(/\\/g, '/'));
+  const escaped = fileBase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const scriptPattern = new RegExp(`(?:^|[\\\\/\\s"'])${escaped}\\.(?:mjs|ps1)(?=["'\\s]|$)`);
+  // タイトルの一括更新と同期命名は同じスクリプトを別引数で登録する。
+  const sameMode = cmd => fileBase !== 'session-wait-title'
+    || cmd.includes('--all') === group.hooks[0].command.includes('--all');
+  if (commands(groups).some((cmd) => scriptPattern.test(cmd) && sameMode(cmd))) return false;
   groups.push(group); return true;
-}
-function migrate(groups, oldName, newName, newCommand) {
-  let changed = 0;
-  for (const group of groups) for (const hook of (Array.isArray(group?.hooks) ? group.hooks : [])) {
-    if (String(hook.command || '').includes(oldName) && hook.command !== newCommand) { hook.command = newCommand; changed += 1; }
-  }
-  // 旧hookが複数あった環境でも、新hookは1本だけに正規化する。
-  let seen = false;
-  for (let i = groups.length - 1; i >= 0; i--) {
-    const hooks = Array.isArray(groups[i]?.hooks) ? groups[i].hooks : [];
-    for (let j = hooks.length - 1; j >= 0; j--) {
-      if (!String(hooks[j]?.command || '').includes(newName)) continue;
-      if (seen) { hooks.splice(j, 1); changed += 1; } else seen = true;
-    }
-    // 複数hookを同じgroupに入れている利用者の無関係なhookは残す。
-    if (hooks.length === 0) groups.splice(i, 1);
-  }
-  return changed;
 }
 function setTimeoutFor(groups, scriptName, timeout) {
   let changed = 0;
   for (const group of groups) for (const hook of (Array.isArray(group?.hooks) ? group.hooks : [])) {
-    if (String(hook.command || '').includes(scriptName) && hook.timeout !== timeout) { hook.timeout = timeout; changed += 1; }
-  }
-  return changed;
-}
-function syncMatcherFor(groups, scriptName, matcher) {
-  let changed = 0;
-  for (const group of groups) {
-    const hooks = Array.isArray(group?.hooks) ? group.hooks : [];
-    if (hooks.some((hook) => String(hook.command || '').includes(scriptName)) && group.matcher !== matcher) {
-      group.matcher = matcher;
-      changed += 1;
-    }
+    const expected = String(hook.command || '').includes('gate-hook-runner.mjs') ? Math.max(timeout, 10) + 5 : timeout;
+    if (String(hook.command || '').includes(scriptName) && hook.timeout !== expected) { hook.timeout = expected; changed += 1; }
   }
   return changed;
 }
@@ -132,171 +169,112 @@ export function repairPowerShellExecutionPolicy(hooks) {
 try {
   const settingsFile = path.join(home, '.claude', 'settings.json');
   const settingsHadBom = fs.existsSync(settingsFile) && fs.readFileSync(settingsFile, 'utf8').startsWith('\uFEFF');
-  const settings = load(settingsFile);
+  const settings = expectedJson ? {} : load(settingsFile);
+  const before = JSON.stringify(settings);
+  let previousManifest;
+  try { previousManifest = load(runtimeManifestPath(home)); } catch {}
+  const originalHooks = effectiveHooks(settings, previousManifest);
+  settings.hooks = structuredClone(originalHooks);
   let added = 0;
   let policyRepaired = 0;
   let costLoopMigrated = 0;
   if (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks)) settings.hooks = {};
-  for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']) if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
+  for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SessionEnd', 'Notification']) if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
   added += removeDailySessionHooks(settings);
-  const command = (name, extra = '') => `node "${path.join(repo, 'tools', name)}"${extra}`;
-  // 2026-09-06: 9本を別プロセスで動かすと304 Stop中198回が再Stopになったため、
-  // ファイル名で旧登録を拾い、PCごとに異なるrepoパスのrunner 1本へ収束させる。
-  const oldStopGates = [
-    'handoff-quality-gate.mjs', 'stop-gate.mjs', 'manual-request-fullsteps-gate.mjs',
-    'handoff-investigation-gate.mjs', 'handoff-info-guard.mjs', 'negative-claim-gate.mjs',
-    'report-length-gate.mjs', 'self-check-before-asking-guard.mjs', 'doc-link-drive-guard.mjs',
-  ];
-  if (fs.existsSync(path.join(repo, 'tools', 'stop-gate-runner.mjs'))) {
-    for (const oldName of oldStopGates) added += migrate(settings.hooks.Stop, oldName, 'stop-gate-runner.mjs', command('stop-gate-runner.mjs'));
-    if (add(settings.hooks.Stop, 'stop-gate-runner.mjs', { hooks: [{ type: 'command', command: command('stop-gate-runner.mjs'), timeout: 30 }] })) added += 1;
-    added += setTimeoutFor(settings.hooks.Stop, 'stop-gate-runner.mjs', 30);
-  }
-  const session = [
-    ['onboarding-sync.mjs', 20, true, ''],
-    // あるべき状態への収束(検査→修復→再検査)。onboarding-sync が repo を新しくした後に走る。
-    // リポジトリ直接参照・コピー配布なし = main を変えれば全PC追従(配り直し不要)。
-    ['setup.mjs', 60, true, ' --converge'],
-    ['claude-cost-reporter.mjs', 15, true, ''],
-    ['tool-adoption-check.mjs', 60, true, ' --fix'],
-    ['cost-loop.mjs', 15, false, ''],
-  ];
-  // Windows旧版はコピー済み .ps1 に固定されるため、リポに新実装が届いた時点で正本 .mjs へ移行する。
-  if (fs.existsSync(path.join(repo, 'tools', 'onboarding-sync.mjs'))) {
-    added += migrate(settings.hooks.SessionStart, 'onboarding-sync.ps1', 'onboarding-sync.mjs', command('onboarding-sync.mjs'));
-    for (const group of settings.hooks.SessionStart) for (const hook of (Array.isArray(group?.hooks) ? group.hooks : [])) {
-      if (String(hook.command || '').includes('onboarding-sync.mjs')) { hook.timeout = 20; hook.async = true; }
+  added += removeKimDiscordReportHooks(settings);
+  // Repository manifest is the canonical set, including matcher, args and budgets.
+  // PostToolUse Discord request registration is defined there for new and existing PCs.
+  // The old individual definitions are retained only in per-home migration input.
+  for (const [event, groups] of Object.entries(repositoryHooks(repo, home))) {
+    for (const group of groups) {
+      const hook = group.hooks[0];
+      const names = [...hook.command.matchAll(/"([^"\r\n]+\.mjs)"/g)];
+      const script = names.at(-1)?.[1];
+      if (!script) continue;
+      const name = path.relative(path.join(repo, 'tools'), script);
+      if (add(settings.hooks[event], name, group)) added++;
     }
   }
-  if (fs.existsSync(path.join(repo, 'tools', 'cost-loop.mjs'))) {
-    costLoopMigrated = migrate(settings.hooks.SessionStart, 'cost-loop.ps1', 'cost-loop.mjs', command('cost-loop.mjs'));
-    added += costLoopMigrated;
-  }
-  for (const [name, timeout, async, extra] of session) {
-    const hook = { type: 'command', command: command(name, extra), timeout };
-    if (async) hook.async = true;
-    if (add(settings.hooks.SessionStart, name, { hooks: [hook] })) added += 1;
-  }
-  added += setTimeoutFor(settings.hooks.SessionStart, 'tool-adoption-check', 60);
-  if (add(settings.hooks.SessionStart, 'sessionstart-lane-health.mjs', { hooks: [{ type: 'command', command: command('sessionstart-lane-health.mjs', ' --hook'), timeout: 5 }] })) added += 1;
-  if (add(settings.hooks.SessionStart, 'hook-selfcheck.mjs', { hooks: [{ type: 'command', command: command('hook-selfcheck.mjs'), timeout: 10 }] })) added += 1;
-  if (add(settings.hooks.SessionStart, 'hook-budget-check.mjs', { hooks: [{ type: 'command', command: command('hook-budget-check.mjs'), timeout: 10 }] })) added += 1;
-  if (add(settings.hooks.SessionStart, 'makimono-host-detect.mjs', { hooks: [{ type: 'command', command: command('makimono-host-detect.mjs'), timeout: 10 }] })) added += 1;
-  // 1セッション=1目的ゲート: SessionStart で目的宣言を要求し、UserPromptSubmit で目的ドリフト/肥大をナッジする(context注入のため async 禁止)
-  if (add(settings.hooks.SessionStart, 'session-purpose-gate.mjs', { hooks: [{ type: 'command', command: command('session-purpose-gate.mjs'), timeout: 5 }] })) added += 1;
-  if (add(settings.hooks.UserPromptSubmit, 'session-purpose-gate.mjs', { hooks: [{ type: 'command', command: command('session-purpose-gate.mjs'), timeout: 5 }] })) added += 1;
-  // 着手衝突検知: 直近8hの他セッションの目的宣言(transcriptのassistant行)と突き合わせ、同じ1目的の二重着手を警告する
-  if (add(settings.hooks.SessionStart, 'session-claim-collision.mjs', { hooks: [{ type: 'command', command: command('session-claim-collision.mjs'), timeout: 10 }] })) added += 1;
-  if (add(settings.hooks.UserPromptSubmit, 'session-claim-collision.mjs', { hooks: [{ type: 'command', command: command('session-claim-collision.mjs'), timeout: 10 }] })) added += 1;
-  // 目的宣言直後のターンは上記2イベントでは拾えないためPreToolUseにも置き、latchで1セッション1回に抑える
-  if (add(settings.hooks.PreToolUse, 'session-claim-collision.mjs', { matcher: 'Bash|PowerShell|Edit|Write|MultiEdit', hooks: [{ type: 'command', command: command('session-claim-collision.mjs'), timeout: 10 }] })) added += 1;
-  if (add(settings.hooks.SessionStart, 'fable-session-guard.mjs', { hooks: [{ type: 'command', command: command('fable-session-guard.mjs'), timeout: 5 }] })) added += 1;
-  if (add(settings.hooks.UserPromptSubmit, 'fable-session-guard.mjs', { hooks: [{ type: 'command', command: command('fable-session-guard.mjs'), timeout: 5 }] })) added += 1;
-  // Replace frozen Python/watcher hooks on existing PCs, including obsolete prompt hooks.
-  if (fs.existsSync(path.join(repo, 'tools', 'purge-sessions.mjs'))) {
-    for (const groups of Object.values(settings.hooks)) {
-      if (!Array.isArray(groups)) continue;
-      for (let i = groups.length - 1; i >= 0; i--) {
-        const hooks = groups[i]?.hooks;
-        if (!Array.isArray(hooks)) continue;
-        for (let j = hooks.length - 1; j >= 0; j--) {
-          if (/purge-hidden-sessions\.py|purge-closed-sessions\.mjs|session-list-tidy\.mjs/.test(String(hooks[j]?.command || ''))) { hooks.splice(j, 1); added++; }
-        }
-        if (!hooks.length) groups.splice(i, 1);
-      }
-    }
-    for (const event of ['SessionStart', 'Stop']) {
-      added += migrate(settings.hooks[event], 'purge-sessions.mjs', 'purge-sessions.mjs', command('purge-sessions.mjs', ' --hook'));
-      if (add(settings.hooks[event], 'purge-sessions.mjs', { hooks: [{ type: 'command', command: command('purge-sessions.mjs', ' --hook'), timeout: 5, async: true }] })) added++;
-      added += setTimeoutFor(settings.hooks[event], 'purge-sessions.mjs', 5);
-      for (const group of settings.hooks[event]) for (const hook of (group.hooks || [])) {
-        if (String(hook.command || '').includes('purge-sessions.mjs') && hook.async !== true) { hook.async = true; added++; }
-      }
-    }
-  }
-  // inline target の予約を次セッションへ同期注入するため async は付けない。
-  if (add(settings.hooks.SessionStart, 'session-relaunch.mjs', { hooks: [{ type: 'command', command: command('session-relaunch.mjs', ' --hook'), timeout: 10 }] })) added += 1;
-  // AIニュースとGoogleタスクの通知は nightly の daily-notice-digest に集約する。
-  added += migrate(settings.hooks.UserPromptSubmit, 'current-session.mjs', 'current-session.mjs', command('current-session.mjs'));
-  if (add(settings.hooks.UserPromptSubmit, 'current-session.mjs', { hooks: [{ type: 'command', command: command('current-session.mjs'), timeout: 5 }] })) added += 1;
-  added += migrate(settings.hooks.UserPromptSubmit, 'delegation-gate', 'cost-routing-gate.mjs', command('cost-routing-gate.mjs'));
-  if (add(settings.hooks.UserPromptSubmit, 'cost-routing-gate.mjs', { hooks: [{ type: 'command', command: command('cost-routing-gate.mjs') }] })) added += 1;
-  // additionalContext を返すため同期実行。高額モデル・肥大セッションを純ローカルで検知する。
-  if (add(settings.hooks.UserPromptSubmit, 'expensive-session-guard.mjs', { hooks: [{ type: 'command', command: command('expensive-session-guard.mjs'), timeout: 5 }] })) added += 1;
-  // 完成済み指示書の候補を同期注入するため async は付けない。
-  if (add(settings.hooks.UserPromptSubmit, 'makimono-gate.mjs', { hooks: [{ type: 'command', command: command('makimono-gate.mjs'), timeout: 6 }] })) added += 1;
-  // userへ頼む前に自動取得・復元・自動設定を毎プロンプトで先に検討させる。
-  if (add(settings.hooks.UserPromptSubmit, 'automation-first-reminder.mjs', { hooks: [{ type: 'command', command: command('automation-first-reminder.mjs'), timeout: 5 }] })) added += 1;
-  // 外部知見の取り込み報告を A軸(安全/手順)・B軸(コスパ/価値創出)の2軸で出させる。
-  added += migrate(settings.hooks.UserPromptSubmit, 'intake-two-axes-hook.mjs', 'intake-two-axes-hook.mjs', command('intake-two-axes-hook.mjs'));
-  if (add(settings.hooks.UserPromptSubmit, 'intake-two-axes-hook.mjs', { hooks: [{ type: 'command', command: command('intake-two-axes-hook.mjs'), timeout: 5 }] })) added += 1;
-  // 過去に受領済みのクレデンシャルをuserへ再質問する前に復元経路を注入する。
-  if (add(settings.hooks.UserPromptSubmit, 'fleet-inbox-context.mjs', { hooks: [{ type: 'command', command: command('fleet-inbox-context.mjs'), timeout: 5 }] })) added += 1;
-  if (add(settings.hooks.UserPromptSubmit, 'credentials-reminder.mjs', { hooks: [{ type: 'command', command: command('credentials-reminder.mjs'), timeout: 5 }] })) added += 1;
-  added += migrate(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.ps1', 'pretooluse-delegation-warn.mjs', command('pretooluse-delegation-warn.mjs'));
-  if (add(settings.hooks.PreToolUse, 'pretooluse-delegation-warn.mjs', { matcher: 'Write|Edit|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-delegation-warn.mjs') }] })) added += 1;
-  if (add(settings.hooks.PreToolUse, 'pretooluse-bash-delegation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-bash-delegation.mjs'), timeout: 5 }] })) added += 1;
-  if (add(settings.hooks.PreToolUse, 'pretooluse-lane-guard.mjs', { matcher: 'Bash|PowerShell|Edit|Write|MultiEdit', hooks: [{ type: 'command', command: command('pretooluse-lane-guard.mjs'), timeout: 5 }] })) added += 1;
-  if (add(settings.hooks.PreToolUse, 'pretooluse-codex-invocation.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('pretooluse-codex-invocation.mjs'), timeout: 5 }] })) added += 1;
-  if (add(settings.hooks.PreToolUse, 'model-agent-guard.mjs', { matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('model-agent-guard.mjs') }] })) added += 1;
-  if (add(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', { matcher: HOOK_MATCHER, hooks: [{ type: 'command', command: command('internal-recipient-gmail-guard.mjs'), timeout: 5 }] })) added += 1;
-  added += syncMatcherFor(settings.hooks.PreToolUse, 'internal-recipient-gmail-guard.mjs', HOOK_MATCHER);
-  // 社外宛メールで説明している Google ファイルを、直近に中身として読んだかを確かめる。
-  // 3.4MB の transcript で初回 18 秒かかった実測があるため 30 秒にする（5 秒だと時間切れで素通りする）。
-  if (add(settings.hooks.PreToolUse, 'live-artifact-read-gate.mjs', { matcher: LIVE_ARTIFACT_MATCHER, hooks: [{ type: 'command', command: command('live-artifact-read-gate.mjs'), timeout: 30 }] })) added += 1;
-  added += syncMatcherFor(settings.hooks.PreToolUse, 'live-artifact-read-gate.mjs', LIVE_ARTIFACT_MATCHER);
-  // ヘッドレス実行で消失するバックグラウンド処理を実行前に拒否する。
-  if (add(settings.hooks.PreToolUse, 'pretooluse-headless-background.mjs', { matcher: 'Bash|PowerShell|ScheduleWakeup', hooks: [{ type: 'command', command: command('pretooluse-headless-background.mjs'), timeout: 5 }] })) added += 1;
-  // read-only調査の逐次実行を検知し、まとめて調査するよう同期注入する。
-  if (add(settings.hooks.PreToolUse, 'pretooluse-serial-investigation.mjs', { hooks: [{ type: 'command', command: command('pretooluse-serial-investigation.mjs'), timeout: 5 }] })) added += 1;
-  // Gemini MCP(gemini-cli) の応答から実トークンを台帳(executor-usage.jsonl)へ記録する。
-  // 応答の structuredContent に usageMetadata が無ければ estimated として記録し、
-  // 「0円=無料」ではなく「0円=未計測」を予算ガードに明示させる(#443 の主旨)。
-  // 2026-09-18: 手動登録が stale なツリーパス(実ファイル無し)を指していると add() の
-  // バス名重複判定で「既に登録済み」となり、ENOENT のまま無音死する。
-  // repo 側実ファイルへ収束させ、matcher も broadcaster 全捕まりの .* から正規表現へ正規化する。
-  added += migrate(settings.hooks.PostToolUse, 'gemini-mcp-usage-hook.mjs', 'gemini-mcp-usage-hook.mjs', command('gemini-mcp-usage-hook.mjs'));
-  added += syncMatcherFor(settings.hooks.PostToolUse, 'gemini-mcp-usage-hook.mjs', 'mcp__gemini-cli__(?:ask-gemini|geminiChat|googleSearch)');
-  if (add(settings.hooks.PostToolUse, 'gemini-mcp-usage-hook.mjs', { matcher: 'mcp__gemini-cli__(?:ask-gemini|geminiChat|googleSearch)', hooks: [{ type: 'command', command: command('gemini-mcp-usage-hook.mjs'), timeout: 10 }] })) added += 1;
-  // パイプ等で連結された全ステージが許可済みBashプレフィックスなら自動承認する。
-  if (add(settings.hooks.PreToolUse, 'pipe-stage-permissions.mjs', { matcher: 'Bash', hooks: [{ type: 'command', command: command('pipe-stage-permissions.mjs'), timeout: 5 }] })) added += 1;
-  // 社内アプリを不具合・要望フォーム未搭載のまま本番反映させない(§2.11・2026-10-08 カフェアプリ事故の再発防止)。
-  if (add(settings.hooks.PreToolUse, 'feedback-form-gate.mjs', { matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: command('feedback-form-gate.mjs'), timeout: 10 }] })) added += 1;
-  // 人に手作業を頼むとき、初見の人でも実行できる手順になっているかを検査する(§1.5.1)。
-  if (add(settings.hooks.Stop, 'verify-before-done-detector.mjs', { hooks: [{ type: 'command', command: command('verify-before-done-detector.mjs') }] })) added += 1;
-  // kim が読む文書をローカルパスのリンクで渡す違反を止める(モバイルで1クリックで開けない・2026-08-07 kim確定ルール)
-  // 作業依頼だけを残して必要なURL・コマンドを省くと、kimが過去ログを探すため同期Stopで差し戻す。
-  // 自分で調べられることを user に「確認して教えてください」と外注する応答を止める(§1.1/§1.2)。
-  // 同じ判定を AskUserQuestion では *事前* に効かせる。Stop は応答を出したあとなので、
-  // user の目に触れる前に止められるのはここだけ(2026-09-01 user 厳命への対応)。
-  if (add(settings.hooks.PreToolUse, 'askuser-selfcheck-gate.mjs', { matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: command('askuser-selfcheck-gate.mjs'), timeout: 10 }] })) added += 1;
-  // 上記4本(handoff-info/quality/investigation/negative-claim)は stop-gate-runner に合流済みなので個別登録しない。
-  // コマンドの手渡しに非エンジニア向けの開き方・入力場所・完了確認を必須化する。
-  if (add(settings.hooks.Stop, 'handoff-detail-guard.mjs', { hooks: [{ type: 'command', command: command('handoff-detail-guard.mjs'), timeout: 10 }] })) added += 1;
-  // 生URLと日本語・全角文字の直接隣接によるリンク破損を差し戻す。
-  if (add(settings.hooks.Stop, 'url-format-guard.mjs', { hooks: [{ type: 'command', command: command('url-format-guard.mjs'), timeout: 8 }] })) added += 1;
-  // 完了報告にLayer 1/2・e2e等の検証記載がなければ同期警告する。
-  if (add(settings.hooks.Stop, 'check-e2e-before-stop.mjs', { hooks: [{ type: 'command', command: command('check-e2e-before-stop.mjs'), timeout: 8 }] })) added += 1;
+  costLoopMigrated = Object.values(originalHooks).flatMap(groups => groups.flatMap(g => g.hooks || [])).filter(h => /cost-loop\.ps1/.test(h.command || '')).length;
   const permanentTimeouts = [
     ['pretooluse-delegation-warn.mjs', 5], ['model-agent-guard.mjs', 5],
     ['pretooluse-serial-investigation.mjs', 5], ['current-session.mjs', 5],
     ['cost-loop.mjs', 5], ['rule-compliance-report.mjs', 10],
-    ['next-actions-notice.mjs', 10], ['plaud-renewal-notice.mjs', 5],
+    ['next-actions-notice.mjs', 10], ['plaud-renewal-notice.mjs', 300],
     ['clear-ack.mjs', 5], ['verify-before-done-detector.ps1', 10],
   ];
   for (const groups of Object.values(settings.hooks)) {
     if (!Array.isArray(groups)) continue;
     for (const [name, timeout] of permanentTimeouts) added += setTimeoutFor(groups, name, timeout);
   }
+  // 全PC・全アカウントの全「新規インタラクティブ」セッションで Remote Control を自動開始する(kim 2026-10-09)。CLI と VS Code 拡張の両方がこのキーを読む。
+  // 注意: このキーは Claude Code 仕様上、新規の対話セッション起動時にのみ効く。ヘッドレス(claude -p)と既に起動済みのセッションは対象外(2026-11-06 実測: seisaku-team@ 作業用014 は稼働 14/14 が -p で RC 非対象)。
+  if (settings.remoteControlAtStartup !== true) { settings.remoteControlAtStartup = true; added += 1; }
+  // 全PC・全アカウントの応答・セッション名を日本語に固定する。途中で英語に切り替わった事故の再発防止(cr 2026-10-18)。
+  if (settings.language !== 'japanese') { settings.language = 'japanese'; added += 1; }
   // 旧PCは hook が `powershell -NoProfile -File ...ps1` で登録され、実行ポリシーで無音死している。
   policyRepaired = repairPowerShellExecutionPolicy(settings.hooks);
   added += policyRepaired;
+  added += wrapRegisteredGates(settings, repo);
+  if (!expectedJson) {
+    const expected = JSON.parse(execFileSync(process.execPath, [fileURLToPath(import.meta.url), '--expected-json'], {
+      encoding: 'utf8', env: { ...process.env, ORGIAST_REPO: repo }, windowsHide: true,
+    }));
+    const known = new Set(fs.readdirSync(path.join(repo, 'tools')).map(name => name.replace(/\.(mjs|ps1)$/, '')));
+    known.add('discord-drafts-context'); // nested tools/hooks entry is also managed
+    const managed = command => {
+      const text = String(command || '').replace(/\\/g, '/');
+      return [...text.matchAll(/(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s"']+))/g)].some(match => {
+        const file = match[1] || match[2] || match[3];
+        const name = path.posix.basename(file).replace(/\.(mjs|ps1)$/, '');
+        return /\/tools\//.test(file) && (known.has(name) || /\/(?:orgiast-main|orgiast-claude-rules|nightly-repo)\/tools\//.test(file));
+      });
+    };
+    // Keep custom hooks from the original input: do not migrate, wrap or rewrite
+    // a user's script merely because its basename matches one of our tools.
+    const retained = {};
+    for (const [event, groups] of Object.entries(originalHooks)) {
+      if (!Array.isArray(groups)) continue;
+      retained[event] = groups.flatMap(group => {
+        // The old home copy blindly replayed F12 markdown; replace it with the repository hook.
+        const hooks = (group.hooks || []).filter(hook => !managed(hook.command) &&
+          !(event === 'SessionStart' && /(?:^|[\\/])plaud-renewal-notice\.mjs["']?(?:\s|$)/.test(hook.command || '')));
+        return hooks.length ? [{ ...group, hooks }] : [];
+      });
+    }
+    // Preserve supported legacy migrations outside tools/ (old installer copies).
+    for (const [event, groups] of Object.entries(retained)) {
+      for (const group of groups) group.hooks = group.hooks.filter(hook =>
+        !/(?:ai-news-inject|gtasks-pending-notice|purge-hidden-sessions|purge-closed-sessions|session-list-tidy)\.(?:mjs|ps1|py)(?:["'\s]|$)/.test(hook.command || '') && !/(?:cost-loop|onboarding-sync|verify-before-done-detector|check-e2e-before-stop)\.ps1(?:["'\s]|$)/.test(hook.command || ''));
+      retained[event] = groups.filter(group => group.hooks.length);
+    }
+    policyRepaired = repairPowerShellExecutionPolicy(retained);
+    // Retain historical timeout repair for copied hooks, without changing paths.
+    for (const groups of Object.values(retained)) for (const [name, timeout] of permanentTimeouts) setTimeoutFor(groups, name, timeout);
+    settings.hooks = retained;
+    for (const [event, groups] of Object.entries(expected.hooks)) settings.hooks[event] = [...(retained[event] || []), ...groups];
+    added = JSON.stringify(settings) === before ? 0 : 1;
+  }
+  added += removeKimDiscordReportHooks(settings);
+  // Reporting uses exactly the registrar's expected set without touching user files.
+  if (expectedJson) { console.log(JSON.stringify({ hooks: settings.hooks, skippedNames })); process.exit(0); }
+  // 初回配布で空の共有台帳を用意する。不在時 fail-open のまま恒常的に素通りさせない。
+  if (settings.hooks.PreToolUse.some(group => (group.hooks || []).some(hook => String(hook.command).includes('share-before-send-gate.mjs')))) {
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.closeSync(fs.openSync(path.join(home, '.claude', 'share-ledger.jsonl'), 'a'));
+  }
+  const collapsed = collapseHooks(settings.hooks, repo);
+  const manifestFile = runtimeManifestPath(home);
+  const manifestChanged = JSON.stringify(load(manifestFile)) !== JSON.stringify(collapsed.manifest);
+  if (manifestChanged) write(manifestFile, collapsed.manifest);
+  settings.hooks = collapsed.hooks;
+  added = JSON.stringify(settings) === before ? 0 : 1;
   // 差分が無い時は書かない(日次実行で .bak が積み上がるのを防ぐ)
   if (added || settingsHadBom) { backup(settingsFile); write(settingsFile, settings); }
   if (settingsHadBom) console.log('[register-hooks] settings.json の BOM を除去しました');
   if (policyRepaired || costLoopMigrated) console.log(`hook修復: 実行ポリシー${policyRepaired}件 / cost-loop移行${costLoopMigrated}件`);
   if (hooksOnly) {
-    if (added) console.log(`  [OK] settings.json に hook を ${added} 件追加(バックアップ済)`);
+    if (added) console.log(`  [OK] settings.json の hook を期待集合へ収束(バックアップ済)`);
     else if (skippedNames.length) console.log(`  [注意] 登録済み(変更なし)。ただし ${skippedNames.length} 本は repo に無く未登録`);
     else console.log('  [OK] hook は既に登録済み(変更なし)');
     if (skippedNames.length) console.log(`[注意] hook ${skippedNames.length} 本が repo に見つからず skip: ${skippedNames.join(', ')}`);

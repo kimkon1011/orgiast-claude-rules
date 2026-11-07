@@ -1,10 +1,14 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "pretooluse-headless-background", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "pretooluse-headless-background"}]};
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+import { isEntry } from './is-entry.mjs';
+
+export async function hookMain(raw) {
 
 try {
-  const raw = await readStdinWithTimeout();
 
-  if (process.env.CLAUDE_HEADLESS !== '1') process.exit(0);
+
+  if (process.env.CLAUDE_HEADLESS !== '1') return;
   const input = JSON.parse(raw);
   const tool = String(input.tool_name || '');
   let reason = '';
@@ -13,6 +17,9 @@ try {
   } else if (/^(Bash|PowerShell)$/.test(tool) && input.tool_input?.run_in_background === true) {
     reason = 'ヘッドレス自動セッション（CLAUDE_HEADLESS=1）では run_in_background は使えません。ターン終了でプロセスツリーごと kill され、起動しただけで終わります（2026-08-31 実害: Codex が23秒で kill され PR ゼロ）。`run_in_background` を外し、前景で `--timeout <秒>` を付けて実行してください。';
   }
-  if (!reason) process.exit(0);
+  if (!reason) return;
   console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } }));
 } catch {}
+
+}
+if (isEntry(import.meta.url)) await hookMain(await readStdinWithTimeout());

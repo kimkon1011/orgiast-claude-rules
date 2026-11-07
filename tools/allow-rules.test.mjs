@@ -23,7 +23,7 @@ test('別PCのホームからパスを生成し、既存ルールを保持して
       assert(result.permissions.allow.includes(`Bash(node "${posixHome}/Downloads/orgiast-claude-rules/tools/${file}" *)`));
       if (home.startsWith('C:')) assert(result.permissions.allow.includes(`Bash(node "${home}\\orgiast-main\\tools\\${file}" *)`));
     }
-    for (const rule of ['Edit(~/.claude/settings.json)', 'Edit(~/.claude/CLAUDE.md)', 'Edit(~/.claude/next-session.md)', 'Edit(~/.claude/projects/**/memory/**)', 'Write(~/.claude/projects/**/memory/**)', 'Write(~/.claude/next-session.md)']) assert(result.permissions.allow.includes(rule));
+    for (const rule of ['Edit(~/.claude/settings.json)', 'Edit(~/.claude/CLAUDE.md)', 'Edit(~/.claude/next-session.md)', 'Edit(~/.claude/projects/**/memory/**)']) assert(result.permissions.allow.includes(rule));
     for (const rule of ['Bash(git push --force origin*)', 'Bash(git push --force)', 'PowerShell(*git push --force origin*)', 'Bash(git push -f*)', 'Read(secret)', 'Bash(rm -rf *)', 'Read(**/.env)']) assert(result.permissions.deny.includes(rule));
     assert.equal(result.permissions.defaultMode, 'bypassPermissions');
     assert.deepEqual(result.permissions.ask, ['Write(*)']);
@@ -54,4 +54,14 @@ test('空設定を同期し再実行で書き換えず、壊れたJSONは保存�
   fs.writeFileSync(file, '{broken');
   assert.throws(() => convergeAllowRules(home));
   assert.equal(fs.readFileSync(file, 'utf8'), '{broken');
+});
+
+test('converge removes retired Write rules and preserves Edit and unrelated rules', () => {
+  const input = { permissions: { allow: ['Write(~/.claude/projects/**/memory/**)', 'Write(~/.claude/next-session.md)', 'Write(/custom)'] } };
+  const result = mergeAllowRules(input);
+  assert(!result.permissions.allow.includes(input.permissions.allow[0]));
+  assert(!result.permissions.allow.includes(input.permissions.allow[1]));
+  assert(result.permissions.allow.includes('Write(/custom)'));
+  assert(result.permissions.allow.includes('Edit(~/.claude/next-session.md)'));
+  assert.deepEqual(mergeAllowRules(result), result);
 });

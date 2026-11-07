@@ -22,18 +22,26 @@ description: '/autopilot start "<目的>" で自律ループ開始。/autopilot 
 3. `run` なら recentLog と objective から **次の1施策だけ** を選ぶ。前回の続きを優先し、同じことを2周続けない。実装・調査は必ず `tools/codex-do.mjs` に委譲する。指示を UTF-8 BOM なしのファイルに書き、目的・完了条件・対象 cwd・直近成果・今回の1施策・検証方法を含める。
 
    `node "<repo>/tools/codex-do.mjs" --prompt-file "<指示ファイル>" --cwd "<対象ディレクトリ>" --timeout 1200`
+   ヘッドレスでは <実行コンテキスト> の期限から逆算した値を使う。
 
    監督モデルが Fable / Opus のどちらでも自分で実装しない。Codex の結果を Claude 側でテスト実行と read-back により検証し、目的の完了条件に基づいて進捗 0〜100 を判定する。失敗・委譲不能も必ず post まで記録する。
-4. `node "<repo>/tools/autopilot-tick.mjs" post --summary "<何をしたか1〜2行>" --progress <0-100> --next-delay <秒> [--noop] [--codex]` を実行する。Codex を利用したら `--codex`。進捗が前周と同じ・後退・施策が実行できなかった周は必ず `--noop`。単にコマンドが成功したことを進捗として数えない。完了条件の検証に成功した場合だけ 100 とする。
+4. `node "<repo>/tools/autopilot-tick.mjs" post --summary "<何をしたか1〜2行>" --progress <0-100> --next-delay <秒> [--noop] [--codex] [--artifact "<この周に作成・更新したファイルのパス,...>"]` を実行する。Codex を利用したら `--codex`。進捗が前周と同じ・後退・施策が実行できなかった周は必ず `--noop`。単にコマンドが成功したことを進捗として数えない。目的が『維持』型で progress が頭打ちの周は、この周に作成・更新した成果物（コミットしたファイル・作成したドラフト等）を `--artifact` に渡す。実在し前回 post より後に更新されたファイルがあれば進捗ありと数える。コマンドが成功しただけの周や、成果物を作れなかった周は従来どおり `--noop`。
+
+   **progress 100 は、目的が意図した「実際の結果」を確認できた時だけ**にする（例: 実際に返信が1件出た、実際に相手に届いた、実際にデータが更新された）。テスト・CI・デプロイの成功だけでは 100 にしない。実際の結果がまだ起きていないなら `--progress 100 --unverified "<まだ確かめられていないこと>"` を付ける（`--evidence "<実際に起きた結果を確認した内容>"` は 100 の必須項目。どちらも無い 100 は `evidence_required` で拒否される）。`--unverified` を付けた目的は「見張り」に回り、毎日1回結果を確認して `watch` で報告する。
 5. post の status が paused / stopped / done なら、手順2と同様に handoff と停止を行う。running なら ScheduleWakeup の `prompt` は `/autopilot tick` 固定、`noop` は post が返した値、delay は post の `nextDelaySec` とする。通常 1200〜1800秒、Codex 待ちなど外部待ちは短くしてよいが、noop 周は必ず1800秒以上。
+6. 毎周の最初に `pre` の `watchesDue` を見る。あれば**1件だけ**実際の結果を確かめ、`node "<repo>/tools/autopilot-tick.mjs" watch --id <id> --result ok|ng --note "<確認内容>"` を呼ぶ。ok なら見張りは外れる。ng が3回、または開始から7日経つと「うまくいっていない」と1回だけ通知され、見張りから外れる。
 
 ## 自動補充と Discord 通知
 
 `pre` は未開始（not_started）・完了（done）時に `~/.claude/next-actions.md` の「推奨アクション」を上から確認する。`tools/llm-ask.mjs` の安価なモデルに候補ごとに1回 Yes/No を問い、Claude だけで完結できる候補を開始する。電話・物理作業・ピック作業などは除外。直近の done/stopped の目的は state の履歴に保持し、連続選択しない。候補なし・判定不能なら開始も通知もしない。停止・一時停止は自動補充しない。補充時も当日の回数・時間、累計回数と既存の上限を引き継ぐ。
 
-kim への DM は「完了」「判断待ち」「異常停止（上限・runner_error・noop 連続）」と、補充時の「次の目的: <目的>（止めるなら『止めて』と返信）」1通だけ。すべて3行以内とし、途中経過・日次ダイジェストは送らず log.jsonl / run.log に残す。通知は tick の既存 notify-kim 経路に任せ、別途重複送信しない。
+kim への DM は「完了」「見張り開始」「見張りの結果」「判断待ち」「異常停止（上限・runner_error・noop 連続）」と、補充時の「次の目的」1通だけ。すべて3行以内とし、途中経過・日次ダイジェストは送らず log.jsonl / run.log に残す。通知は tick の既存 notify-kim 経路に任せ、別途重複送信しない。
 
-判断が必要なら、はい／いいえで答えられる1問を `pause --question "<質問>"` に渡す。はいで実行してよい具体的な操作を質問に含め、保留した操作を handoff に記録する。DM の「はい」で再開、「いいえ」で停止する。
+**Discord への文言は、システムを知らない高校生でもわかる簡単な日本語**にする。専門用語・英語の内部コード（daily_iter_cap, runner_error, noop, P1, PR, iter など）・コマンド・ID を本文に出さない。1文は短く、最大3〜4行。PC名は末尾に「（<hostname>）」で小さく付ける程度は可。目的文の中の `[P1タスク]` のような角括弧タグは通知時に除去する。
+
+判断が必要なら、はい／いいえで答えられる1問を `pause --question "<質問>"` に渡す。はいで実行してよい具体的な操作を質問に含め、保留した操作を handoff に記録する。DM の「はい」で保留した施策を実行でき、「いいえ」で停止する。
+
+pendingQuestion がある間は、その質問の答えが必要な施策には触らず、巡回順の他の項目を進める。答え（Discord の返信）を受け取ったら pendingQuestion を消してその施策を進める（「いいえ」なら実行しない）。質問付きの pause は全体を停止しない。
 
 ## モデル規約
 
@@ -41,7 +49,7 @@ kim への DM は「完了」「判断待ち」「異常停止（上限・runner
 
 ## status / stop / pause / resume
 
-対応する `node "<repo>/tools/autopilot-tick.mjs" <サブコマンド>` を実行し、JSON の結果を1〜3行で報告する。status には `--pretty` を使える。stop / pause は handoff を書き、対話ループの ScheduleWakeup も stop にする。resume 成功時、対話セッションなら start と同じ `/loop` を再開する。日次・累計上限は resume でリセットされない。noop 連続数は kim の明示的な再開時に0に戻る。done は次回 pre で次の目的を自動補充する。
+対応する `node "<repo>/tools/autopilot-tick.mjs" <サブコマンド>` を実行し、JSON の結果を1〜3行で報告する。status には `--pretty` を使える。stop / 質問なしの pause は handoff を書き、対話ループの ScheduleWakeup も stop にする。resume 成功時、対話セッションなら start と同じ `/loop` を再開する。日次・累計上限は resume でリセットされない。noop 連続数は kim の明示的な再開時に0に戻る。done は次回 pre で次の目的を自動補充する。
 
 ## 実行経路と復帰
 
@@ -55,3 +63,7 @@ VSCode / CLI の `/loop` は画面を開いたままにし、PC をスリープ�
 次に kim がすること: <判断待ちなら判断内容。なければ「なし」>
 この後の自動進行: <次の1施策と予定、または停止理由>
 このセッション: <継続／停止／完了>
+
+## 制作アプリの本番反映と GitHub 同期
+
+- 制作アプリの本番 GAS へ clasp push したら同じターンで GitHub master へも push（ff 不可なら PR）。GitHub push 前に隔離ディレクトリで clasp pull し、本番と同期対象 src の差分 0 を確認する。`gas-overlay-push.mjs` は read-back 後に専用 clone で src を commit → `git push origin HEAD` → `git push origin HEAD:master`（force 禁止）を実行する。JSON の `gitSync.status` が `failed` なら GAS 成功と GitHub 未同期を分けて記録し、同期を完了するまで完了扱いにしない。共有ツリーの index は触らない。

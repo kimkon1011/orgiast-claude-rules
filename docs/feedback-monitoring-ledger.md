@@ -20,18 +20,20 @@ export const DEFAULT_REPO_MAP = {
 
 ## 2. アプリ別台帳
 
-| アプリ | 投稿窓口 | 原票 | 反映先 repo | 現状の監視 | 必要な修正 | 根拠 |
-|---|---|---|---|---|---|---|
-| 購買部管理アプリ | あり | Sheet `1t6eMvbPIu17m7hbv6foJcvd-fXrJkZqrePb8P6njxGI` | `kimkon1011/purchasing-management-app` | **監視あり**（REPO_MAP 登録） | なし（照合キー不一致のみ別途） | audit §1 / tools/feedback-to-issues.mjs |
-| ブース制作アプリ | あり（Sheet・フォーム） | 専用 Sheet | なし（GAS 専用経路） | 未監視（共通）。専用 intake あり | 専用経路として分類済み（本 PR の変更） | `booth-gas-prod-20260925/FeedbackApi.js` |
-| aujust／営業自動化 | あり（Widget・管理画面） | Supabase `app_feedback`＋Discord | `kimkon1011/aujust-sales-automation`（repo 実在確認済み） | 未監視（別経路で運用） | 共通監視に載せるか、別経路を正とするかの**判断が未決** | audit §1 / gh repo list |
-| イベントショップレンタル | あり（GAS フォーム入口） | 未確認 | 未確認 | 未監視。本番送信可否も未確認 | 原票・反映先の特定が先 | `event-shop-rental/gas/Code.js`（ローカル） |
-| 決算書リンク取込 | あり（GAS フォーム入口） | 未確認 | 未確認 | 未監視。本番送信可否も未確認 | 同上 | `kessan-link-importer/Code.gs`（ローカル） |
-| 稼働管理点検（orgiast-kado-inspect） | あり（doGet フォーム） | 未確認 | 未確認 | 未監視。本番送信可否も未確認 | 同上 | `orgiast-kado-inspect/Code.gs`（ローカル） |
-| トライアル合格審査アプリ | あり（報告フォームリンク） | 未確認 | 未確認 | 未監視。リンク先の稼働未確認 | 同上 | `トライアル合格審査アプリ/index.html`（ローカル） |
-| W列GAS（w-col-gas） | 報告メニューあり | 未確認 | 未確認 | 未監視。関数・遷移先の稼働未確認 | 導線の稼働確認が先 | `w-col-gas/コード.js`（ローカル） |
+`kit版` 列は `tools/feedback-kit/` の導入バージョン（各アプリ直下の `.feedback-kit.json` の `kitVersion`）。`—` は未導入（kit 管理外）。必須6機能の欠落は `node tools/feedback-kit/verify.mjs --app <dir>` で検出する。
 
-補足: 上記のうち GitHub repo が実在するのは `aujust-sales-automation` のみ（`gh repo list kimkon1011` 2026-09-29 実測。他はローカル GAS／静的ファイルで repo が無い）。
+| アプリ | 投稿窓口 | 原票 | 反映先 repo | kit版 | 現状の監視 | 必要な修正 | 根拠 |
+|---|---|---|---|---|---|---|---|
+| 購買部管理アプリ | あり | Sheet `1t6eMvbPIu17m7hbv6foJcvd-fXrJkZqrePb8P6njxGI` | `kimkon1011/purchasing-management-app` | — | **監視あり**（REPO_MAP 登録） | なし（照合キー不一致のみ別途） | audit §1 / tools/feedback-to-issues.mjs |
+| ブース制作アプリ | あり（Sheet・フォーム） | 専用 Sheet | なし（GAS 専用経路） | — | 未監視（共通）。専用 intake あり | 専用経路として分類済み（本 PR の変更） | `booth-gas-prod-20260925/FeedbackApi.js` |
+| aujust／営業自動化 | あり（Widget・管理画面） | Supabase `app_feedback`＋Discord | `kimkon1011/aujust-sales-automation`（repo 実在確認済み） | — | 未監視（別経路で運用） | 共通監視に載せるか、別経路を正とするかの**判断が未決** | audit §1 / gh repo list |
+| イベントショップレンタル | あり（GAS フォーム入口） | 未確認 | 未確認 | — | 未監視。本番送信可否も未確認 | 原票・反映先の特定が先 | `event-shop-rental/gas/Code.js`（ローカル） |
+| 決算書リンク取込 | あり（GAS フォーム入口） | 未確認 | 未確認 | — | 未監視。本番送信可否も未確認 | 同上 | `kessan-link-importer/Code.gs`（ローカル） |
+| 稼働管理点検（orgiast-kado-inspect） | あり（doGet フォーム） | 未確認 | 未確認 | — | 未監視。本番送信可否も未確認 | 同上 | `orgiast-kado-inspect/Code.gs`（ローカル） |
+| トライアル合格審査アプリ | あり（報告フォームリンク） | 未確認 | 未確認 | — | 未監視。リンク先の稼働未確認 | 同上 | `トライアル合格審査アプリ/index.html`（ローカル） |
+| W列GAS（w-col-gas） | 報告メニューあり | 未確認 | 未確認 | — | 未監視。関数・遷移先の稼働未確認 | 導線の稼働確認が先 | `w-col-gas/コード.js`（ローカル） |
+
+補足: 上記のうち GitHub repo が実在するのは `aujust-sales-automation` のみ（`gh repo list kimkon1011` 2026-09-29 実測。他はローカル GAS／静的ファイルで repo が無い）。`kit版` が `—` のアプリは `tools/feedback-kit/install.mjs --app <dir>` で導入し、`tools/feedback-zero-registry.json` へ登録すると滞留ゼロ巡回（`tools/feedback-zero-sweep.mjs`）の対象になる。
 
 ## 3. 監視対象の修正を実施可能な単位に落とす
 

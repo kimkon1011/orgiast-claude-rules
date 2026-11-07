@@ -3,7 +3,7 @@
 発行するPCには `~/.claude/keyserve.env` の primary が必要です。サーバの `/api/enroll` と、このクライアントを含む `main` の両方が配布済みになってから利用してください。発行CLIが表示する1行は `main/tools/install-orgiast.ps1` をダウンロードして実行します。
 
 ```powershell
-node tools/keyserve-enroll.mjs --pc "対象PC名" --ttl-hours 24 --dm
+node tools/keyserve-enroll.mjs --pc cr-PC --ttl-hours 24 --dm
 ```
 
 `--dm` は既存の `notify-kim.mjs` で kim に個別送信します。秘密を含むため webhook へのフォールバックは無効です。DM設定がない場合は送信失敗を明示し、画面に表示したコマンドを対象PCの人に個別に渡します。`--dry-run` はダミーのコマンドを作り、発行も送信もしません。`--json` は自動処理向けで、生トークンを含みます。
@@ -46,3 +46,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/keyserve-enroll-instal
 ```
 
 前者はfetchをモックして認証・自己昇格・トークン保持・CLI出力を検証します。後者はNode呼び出しをモックし、Windowsの実ACLとインストーラの成功／失敗分岐を検証します。後者はWindows CIにも登録しています。
+
+## 日本語 hostname のPCでの復帰
+
+発行時の `--pc` は ASCII の fleet ラベル（例: `cr-PC`）です。日本語名は `fleet-pc-map.json` の `sheetName` に書きます。表示された install 一行コマンドは PC 名を引き継ぎ、`-Enroll` 処理で `~/.claude/enroll.env` にトークンと PC 名を書きます。
+
+既存 clone を使う場合は、`~/.claude/enroll.env` に次の2行を保存します（`<token>` は受領したトークンに置換）。
+
+```dotenv
+ORGIAST_ENROLL_TOKEN=<token>
+ORGIAST_KEYSERVE_PC=cr-PC
+```
+
+その後 `node <clone>/tools/onboarding-sync.mjs --force` を実行し、`node <clone>/tools/keyserve-status.mjs` が primary / HTTP 200 と表示することを確認します。成功した PC 名は keyserve.env に保存され、enroll.env の削除後も使えます。
+
+`ORGIAST_KEYSERVE_SECRET` に `ORG1.` で始まるトークンを入れる旧手順は使いません。旧手順で実行された場合は stderr に正しい置き場所を案内し、互換処理で enroll 経路へ回します。通常の primary を持つ場合の primary 優先は維持します。
+
+PC 名は環境変数、既存 keyserve.env の明示設定を優先します。ASCII hostname はそのまま使い、日本語・空の hostname の場合は cost-reporter.env の REPORTER_LABEL、keyserve-pc.txt の順で有効な ASCII 名を探します。決定できなければ API 呼び出し前に明示エラーを出します。

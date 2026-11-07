@@ -19,17 +19,36 @@ export function parseUsageLimitUntil(text, now = Date.now()) {
 }
 
 export function isUsageLimitText(text) {
-  return /You(?:'ve| have) hit your usage limit/i.test(String(text || ''));
+  return /You(?:['’]ve| have) hit your usage limit/i.test(String(text || ''));
 }
 
+export const CODEX_GATE_MAX_COOLDOWN_MS = 5 * 60 * 60 * 1000;
+export const CODEX_RECHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+// codex-cooldown.json は decideCodexGate が「Codex を起動しない」判断にだけ使う。
+// 遠い until をそのまま書くと、枠が回復しても再試行されず、レーンが無音で死ぬ
+// (2026-10-11〜14: 週次リセットの 90.5 時間が入り、Codex 本体は健全なのに
+// 3 日間 fallback:gemini-cli を選び続けた)。上限を 5 時間に切り、
+// 少なくとも 5 時間ごとに 1 回は再probeできるようにする。
 export function writeCodexCooldownFile(file, until, now = Date.now()) {
+  const requested = Number(until);
+  const capped = !Number.isFinite(requested) || requested - now > CODEX_GATE_MAX_COOLDOWN_MS;
+  const savedUntil = capped ? now + CODEX_GATE_MAX_COOLDOWN_MS : requested;
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify({ until, reason: 'usage_limit', t: now })}\n`, 'utf8');
+  fs.writeFileSync(file, `${JSON.stringify({ until: savedUntil, reason: capped ? 'usage_limit:capped' : 'usage_limit', t: now })}\n`, 'utf8');
 }
 
+// codex-cooldown.json には2つの形がある。
+//   { codex: { until, reason, at } } … writeCodexCooldown()(tools/codex-cooldown.mjs)が書く形
+//   { until, reason, t }             … writeCodexCooldownFile() が書く旧形式
+// トップレベルの until しか読まないと、codex-do が自分で書いたクールダウンを一度も尊重しない
+// (2026-10-17 実測)。両方を読み、未来のうち最も遅い until を返す。
 export function readCodexCooldownUntil(file, now = Date.now()) {
-  const until = Number(readJson(file, null)?.until);
-  return Number.isFinite(until) && until > now ? until : 0;
+  const state = readJson(file, null);
+  const candidates = [Number(state?.codex?.until), Number(state?.until)].filter((value) => Number.isFinite(value));
+  if (candidates.length === 0) return 0;
+  const until = Math.max(...candidates);
+  return until > now ? until : 0;
 }
 
 // provider-limit-history.jsonl(provider, until, reason)の最新行で、until が未来の provider は候補から外す。
@@ -87,12 +106,22 @@ export function nextLocalMidnight(now = Date.now()) {
 // Codex を起動してよいか。deferred なら { deferred:true, reason, retryAt }。
 export function decideCodexGate({ home, origin = 'interactive', now = Date.now() }) {
   const cooldownUntil = readCodexCooldownUntil(claudeFile(home, 'codex-cooldown.json'), now);
-  if (cooldownUntil) return { deferred: true, reason: 'codex_cooldown', retryAt: cooldownUntil };
+  const recheckFile = claudeFile(home, 'codex-cooldown-recheck.json');
+  const lastRecheck = Number(readJson(recheckFile, null)?.at);
+  const recheck = cooldownUntil - now > CODEX_GATE_MAX_COOLDOWN_MS
+    && (!Number.isFinite(lastRecheck) || now - lastRecheck >= CODEX_RECHECK_INTERVAL_MS);
+  if (cooldownUntil && !recheck) return { deferred: true, reason: 'codex_cooldown', retryAt: cooldownUntil };
   if (origin === 'unattended') {
     const budget = loadBudget(claudeFile(home, 'executor-budget.json'));
     const limit = Number(budget.codex.unattendedPerDay);
     const used = countUnattendedToday(claudeFile(home, 'executor-usage.jsonl'), 'codex', now);
     if (Number.isFinite(limit) && used >= limit) return { deferred: true, reason: 'unattended_budget', retryAt: nextLocalMidnight(now), used, limit };
+  }
+  if (recheck) {
+    // 無人予算で止まった呼び出しは、生存確認を消費しない。
+    fs.mkdirSync(path.dirname(recheckFile), { recursive: true });
+    fs.writeFileSync(recheckFile, `${JSON.stringify({ at: now })}\n`, 'utf8');
+    return { deferred: false, recheck: true };
   }
   return { deferred: false };
 }

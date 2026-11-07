@@ -54,6 +54,23 @@ test('stateに計測値があればパーセント表記で送る', () => {
   assert.equal(payload.claudeUsd, 1.23);
 });
 
+test('委譲率セルは判定に使う行ベース比(#186)を優先し、無いときだけトークン比へフォールバックする', () => {
+  // #186: 強制判定は行ベース(linesRatio)。トークン比は上限約40%で目標50%に届かず併記専用。
+  // 主セルにトークン比を載せると cost-improve-loop が「低委譲」を誤検知し続けるため、
+  // 行ベース比が計測できていればそれを送る。
+  const withLines = reportPayload({
+    'cost-loop-state.json': { linesRatio: 0.564, nonClaudeDelegRatio: 0.381, delegRatio: 0.814, claudeUSD: 2 },
+  });
+  assert.equal(withLines.delegRatio, '56.4%');
+  assert.equal(withLines.delegRatioLegacy, '81.4%');
+
+  // 未計測(linesRatio 無し)は従来どおりトークン比へフォールバックし、後方互換を保つ。
+  const withoutLines = reportPayload({
+    'cost-loop-state.json': { nonClaudeDelegRatio: 0.381, delegRatio: 0.381, claudeUSD: 2 },
+  });
+  assert.equal(withoutLines.delegRatio, '38.1%');
+});
+
 test('keyserve status を既存 status payload に相乗りさせる', () => {
   const checkedAt = '2026-09-12T00:00:00.000Z';
   const old = process.env.ORGIAST_KEYSERVE_STATUS_JSON;
@@ -97,10 +114,11 @@ test('GAS upsertは空の計測値で既存セルを上書きせず、実測0は
 });
 
 const response = (body, status = 200) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
-test('HTTP 200 + ok:false は3回再送して失敗ログを残す', async () => {
+test('HTTP 200 + ok:false は5回再送して busy_exhausted を残す', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-post-')), logFile = path.join(dir, 'report.log'); let calls = 0;
-  const result = await post('secret-url', 'status', { token: 'secret' }, { fetchFn: async () => { calls++; return response({ ok: false, error: 'busy' }); }, sleepFn: async () => {}, random: () => 0, logFile });
-  assert.equal(result.ok, false); assert.equal(calls, 3); assert.match(fs.readFileSync(logFile, 'utf8'), /kind=status attempts=3 result=failed error=busy/);
+  const result = await post('secret-url', 'status', { token: 'secret' }, { fetchFn: async () => { calls++; return response({ ok: false, error: 'busy' }); }, sleepFn: async () => {}, random: () => 0.5, logFile, budgetPath: null });
+  assert.equal(result.ok, false); assert.equal(result.busyExhausted, true); assert.equal(calls, 5);
+  assert.match(fs.readFileSync(logFile, 'utf8'), /kind=status attempts=5 result=busy_exhausted/);
 });
-test('busy 後の成功は2回目で完了する', async () => { let calls = 0; const result = await post('u', 'status', {}, { fetchFn: async () => response(++calls === 1 ? { ok: false, error: 'busy' } : { ok: true }), sleepFn: async () => {}, logFile: path.join(os.tmpdir(), `fleet-${Date.now()}.log`) }); assert.equal(result.ok, true); assert.equal(calls, 2); });
-test('timeout は再送する', async () => { let calls = 0; const result = await post('u', 'status', {}, { fetchFn: async () => { calls++; if (calls === 1) throw Object.assign(new Error('timeout'), { name: 'TimeoutError' }); return response({ ok: true }); }, sleepFn: async () => {}, logFile: path.join(os.tmpdir(), `fleet-${Date.now()}-t.log`) }); assert.equal(result.ok, true); assert.equal(calls, 2); });
+test('busy 後の成功は2回目で完了する', async () => { let calls = 0; const result = await post('u', 'status', {}, { fetchFn: async () => response(++calls === 1 ? { ok: false, error: 'busy' } : { ok: true }), sleepFn: async () => {}, logFile: path.join(os.tmpdir(), `fleet-${Date.now()}.log`), budgetPath: null }); assert.equal(result.ok, true); assert.equal(calls, 2); });
+test('timeout は再送する', async () => { let calls = 0; const result = await post('u', 'status', {}, { fetchFn: async () => { calls++; if (calls === 1) throw Object.assign(new Error('timeout'), { name: 'TimeoutError' }); return response({ ok: true }); }, sleepFn: async () => {}, logFile: path.join(os.tmpdir(), `fleet-${Date.now()}-t.log`), budgetPath: null }); assert.equal(result.ok, true); assert.equal(calls, 2); });

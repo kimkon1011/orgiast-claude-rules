@@ -7,13 +7,49 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { judge, formatReason } from './url-account-gate.mjs';
 
-const studio = 'https://aistudio.google.com/prompts/new_chat';
+const studio = 'https://ai.studio/prompts/new_chat';
 const account = '（**kim@orgiast.jp** で開く）';
 const gate = fileURLToPath(new URL('./url-account-gate.mjs', import.meta.url));
 
 test('AI Studio の手渡しはアカウントが必須', () => {
   assert.deepEqual(judge(`こちらを開いてください: ${studio}`), { triggered: true, missing: [studio], urls: [studio] });
   assert.deepEqual(judge(`こちらを開いてください: ${studio}${account}`), { triggered: true, missing: [], urls: [studio] });
+});
+
+test('名簿にないログイン画面もアカウントが必須（2026-11-01 Codex・LINE で素通り）', () => {
+  for (const url of ['https://auth.openai.com/codex/device', 'https://manager.line.biz/', 'https://accounts.google.com/', 'https://example.com/oauth/authorize?x=1']) {
+    assert.deepEqual(judge(`[画面](${url})`).missing, [url], url);
+    assert.deepEqual(judge(`**nishi@orgiast.jp** で開く: [画面](${url})`).missing, [], url);
+  }
+});
+
+test('手順で開かせる URL はドメインを問わずアカウントが必須、出典行は対象外', () => {
+  const url = 'https://example.com/settings-page';
+  assert.deepEqual(judge(`1. このリンクを開く → [設定](${url})`).missing, [url]);
+  assert.deepEqual(judge(`手順: 次を開いてください。\n[設定](${url})`).missing, [url]);
+  assert.deepEqual(judge(`**nishi@orgiast.jp** で開いてください。\n[設定](${url})`).missing, []);
+  assert.deepEqual(judge(`出典: [料金ページ](https://www.lycbiz.com/jp/service/line-official-account/plan/) を開いて確認`).missing, []);
+  assert.deepEqual(judge(`[料金ページ](https://www.lycbiz.com/jp/service/line-official-account/plan/)`).triggered, false);
+});
+
+test('誤検知しない: 表の説明中の参考記事・ログイン不要の明記・インラインコードの URL', () => {
+  assert.deepEqual(judge('| ① ログインしてもらい、私が送る | ¥0 | チャットから送れるとする解説記事あり（[ligla](https://ligla.jp/blog/line-official/filesend/)） |').missing, []);
+  assert.deepEqual(judge('どのアカウントでも可（ログイン不要）で開く: [商品ページ](https://shop.tsukumo.co.jp/goods/4580333595696/)').missing, []);
+  assert.deepEqual(judge('- アクセスしたところ `302 → https://account.line.biz/oauth2/authorize?x` に移動しました').missing, []);
+});
+
+test('誤検知しない: 解説サイトの /oauth2 パス・「参考:」の次の行の URL（2026-11-01 レビュー指摘）', () => {
+  assert.equal(judge('[OAuth 2.0 の解説](https://developers.google.com/identity/protocols/oauth2)').triggered, false);
+  assert.deepEqual(judge('参考:\nhttps://example.com/oauth/authorize').missing, []);
+  assert.deepEqual(judge('https://example.com/oauth/authorize').missing, ['https://example.com/oauth/authorize']);
+  assert.deepEqual(judge('出典: [ログイン画面](https://auth.openai.com/codex/device)').missing, []);
+  assert.deepEqual(judge('[ログイン画面](https://auth.openai.com/codex/device)').missing, ['https://auth.openai.com/codex/device']);
+});
+
+test('開いた後の行にアカウントを書いても通さない', () => {
+  const url = 'https://auth.openai.com/codex/device';
+  const text = `1. ブラウザで ${url} が開きます。\n2. コードを貼ります。\n3. nishi@orgiast.jp で「Google で続行」を押します。`;
+  assert.deepEqual(judge(text).missing, [url]);
 });
 
 test('全体宣言は離れた複数 URL にも適用', () => {
@@ -46,20 +82,19 @@ test('管理パス・サービス限定パス', () => {
 });
 
 test('Workspace は明示アカウントのある URL のみ免除', () => {
-  for (const host of ['docs.google.com', 'drive.google.com', 'sheets.google.com', 'script.google.com']) {
+  for (const host of ['docs.google.com', 'drive.google.com', 'sheets.google.com', 'script.google.com', 'slides.google.com', 'forms.google.com']) {
     const url = `https://${host}/document/d/123`;
     assert.deepEqual(judge(url).missing, [url]);
-    assert.equal(judge(`${url}?authuser=1`).triggered, false);
-    assert.equal(judge(`https://${host}/a/orgiast.jp/document/d/123`).triggered, false);
+    assert.deepEqual(judge(`${url}?authuser=1`).missing, [`${url}?authuser=1`]);
+    assert.equal(judge(`https://${host}/a/orgiast.jp/document/d/123`).missing.length, 1);
     assert.deepEqual(judge(`${url}?q=authuser=1`).missing, [`${url}?q=authuser=1`]);
   }
 });
 
-test('前後2行は許可、3行離れたアカウントは不可', () => {
+test('同じ行か直前の行だけ許可、後ろの行や2行以上前のアカウントは不可', () => {
   for (const distance of [0, 1, 2, 3]) {
-    for (const lines of [[studio, account], [account, studio]]) {
-      assert.deepEqual(judge(lines.join('\n'.repeat(distance))).missing, distance <= 2 ? [] : [studio]);
-    }
+    assert.deepEqual(judge([studio, account].join('\n'.repeat(distance))).missing, distance === 0 ? [] : [studio]);
+    assert.deepEqual(judge([account, studio].join('\n'.repeat(distance))).missing, distance <= 1 ? [] : [studio]);
   }
   assert.deepEqual(judge(`${studio}\n\n\nhttps://github.com/org/repo ${account}`).missing, [studio]);
 });
@@ -69,6 +104,11 @@ test('メール・太字名・ランチャーでアカウントを指定', () =>
     assert.deepEqual(judge(`${studio} ${annotation}`).missing, []);
   }
   for (const annotation of ['**開いてください**', 'アカウントで開く', 'open-url-as.ps1']) assert.deepEqual(judge(`${studio} ${annotation}`).missing, [studio]);
+});
+
+test('未確認を含む曖昧な管理アカウント指定は不採用', () => {
+  assert.deepEqual(judge(`${studio} **OpenRouter の管理アカウント（ログインメールは未確認）** で開く`).missing, [studio]);
+  assert.deepEqual(judge(`${studio} **seisaku-team@orgiast.jp** で開く`).missing, []);
 });
 
 test('コードフェンスを無視し、例外もフェンス外のみ有効', () => {
@@ -109,14 +149,20 @@ test('CLI: 未指定なら stderr と exit 2', t => {
   assert.ok(result.stderr.includes(studio));
 });
 
-test('CLI: 明示・ループ防止・空本文は通過', t => {
-  for (const [text, input] of [[`${studio}${account}`, {}], [studio, { stop_hook_active: true }], ['', {}]]) {
+test('CLI: 明示・空本文は通過', t => {
+  for (const [text, input] of [[`${studio}${account}`, {}], ['', {}]]) {
     const result = invoke(t, text, { input });
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stderr, '');
     assert.equal(result.stdout, '');
   }
+});
+
+test('新しい推奨形式と前行アカウント＋単独Markdownリンクを許可', () => {
+  assert.deepEqual(judge(`**kim の Google アカウント** で開く: [AI Studio](${studio})`).missing, []);
+  assert.deepEqual(judge(`**kim の Google アカウント** で開く\n[AI Studio](${studio})`).missing, []);
+  assert.match(formatReason([studio]), /\*\*<アカウント>\*\* で開く: \[表示名\]\(URL\)/);
 });
 
 test('runner に登録され、アカウント追記で当該理由が消える', t => {
@@ -128,4 +174,72 @@ test('runner に登録され、アカウント追記で当該理由が消える'
     assert.equal((output.reason || '').includes('[URL-ACCOUNT]'), blocked);
     if (blocked) assert.equal(output.decision, 'block');
   }
+});
+
+for (const [label, account] of [['自分宛', 'operator@example.com'], ['相手宛', 'recipient@example.com']]) {
+  test(`Workspace 合格: ${label}`, () => {
+    const url = `https://docs.google.com/document/d/ID/edit?usp=sharing&authuser=${encodeURIComponent(account)}#heading=h`;
+    assert.deepEqual(judge(`${account} で開いてください\n${url}`).missing, []);
+    assert.deepEqual(judge(`${url}（${account} で開いてください）`).missing, []);
+  });
+}
+for (const [label, text] of [
+  ['ドメインパスのみ', 'a@example.com で開いてください https://docs.google.com/a/orgiast.jp/document/d/ID/edit'],
+  ['本文なし', 'https://docs.google.com/document/d/ID/edit?authuser=a@example.com'],
+  ['メール不一致', 'b@example.com で開いてください https://docs.google.com/document/d/ID/edit?authuser=a@example.com'],
+  ['他URL内のメール', 'https://docs.google.com/document/d/ID/edit?authuser=a@example.com https://example.com/?email=a@example.com'],
+  ['離れた全体宣言', '以下の URL はすべて a@example.com で開く\n\nhttps://docs.google.com/document/d/ID/edit?authuser=a@example.com'],
+  ['重複authuser', 'a@example.com で開いてください https://docs.google.com/document/d/ID/edit?authuser=a@example.com&authuser=b@example.com'],
+  ['部分一致', 'other-a@example.com で開いてください https://docs.google.com/document/d/ID/edit?authuser=a@example.com'],
+]) test(`Workspace 不合格: ${label}`, () => assert.ok(judge(text).missing.length));
+test('script /home/ 例外と境界', () => {
+  assert.equal(judge('https://script.google.com/home/usersettings').triggered, false);
+  assert.ok(judge('https://script.google.com/homeother').missing.length);
+});
+
+test('Workspace は前後1行に限定し、旧パスに authuser を足しても拒否する', () => {
+  const url = 'https://docs.google.com/document/d/ID/edit?authuser=reader%40example.com';
+  assert.deepEqual(judge(`${url}\nreader@example.com で開いてください`).missing, []);
+  assert.deepEqual(judge(`${url}\n\nreader@example.com で開いてください`).missing, [url]);
+  const legacy = url.replace('/document/', '/a/orgiast.jp/document/');
+  assert.deepEqual(judge(`${legacy} reader@example.com で開いてください`).missing, [legacy]);
+});
+
+test('カタログのアカウントは同じ行または直前行に完全一致が必要', () => {
+  const url = 'https://openrouter.ai/settings/credits';
+  const account = 'seisaku-team@orgiast.jp';
+  const services = [{ id: 'openrouter', account }];
+  for (const text of [`${url} ${account}`, `${account}\n${url}`]) assert.deepEqual(judge(text, { services }).missing, []);
+  for (const text of [url, `${url} ログインして開いてください`, `${url} kim@orgiast.jp`, `${url} other-${account}`, `${url}\n${account}`, `${account}\n\n${url}`]) {
+    assert.deepEqual(judge(text, { services }).missing, [url]);
+  }
+  assert.match(formatReason([url], { services }), /カタログ上のアカウント: seisaku-team@orgiast.jp/);
+});
+
+test('account が null または未定義なら同じ行の調査先タグのみ許可', () => {
+  const url = 'https://console.x.ai/';
+  for (const service of [{ id: 'grok', account: null }, { id: 'grok' }]) {
+    const options = { services: [service] };
+    assert.deepEqual(judge(`${url} [ACCOUNT-UNKNOWN] カタログ・認証設定を確認`, options).missing, []);
+    for (const text of [`${url} ログインして開いてください`, `${url} [ACCOUNT-UNKNOWN]`, `[ACCOUNT-UNKNOWN] カタログ確認\n${url}`]) assert.deepEqual(judge(text, options).missing, [url]);
+  }
+});
+
+test('内部 ID をアカウントと認めず、人が分かるメール/ラベルを要求', () => {
+  const url = 'https://github.com/org/repo';
+  for (const label of ['user_3HyaRyBEMrj8Bee8exsLo9cNFCI', 'ユーザーID kim', 'Abcdef1234567890']) {
+    assert.deepEqual(judge(`${url}（**${label}** で開く）`).missing, [url]);
+  }
+  assert.match(formatReason([url]), /アカウントは人が分かるメール\/ラベルで書く/);
+});
+
+test('差し戻し文の書式は URL の直後に文字を続けない（2026-10-18 実害）', async () => {
+  const { findBrokenRawUrl } = await import('./url-format-guard.mjs');
+  const pr = 'https://github.com/kimkon1011/orgiast-claude-rules/pull/864';
+  const reason = formatReason([pr]);
+  assert.doesNotMatch(reason, /<URL>（/);
+  assert.match(reason, /次の行に URL だけを置く/);
+  const answer = `**kimkon1011** で開いてください。\n${pr}`;
+  assert.deepEqual(judge(answer).missing, []);
+  assert.equal(findBrokenRawUrl(answer).decision, 'pass');
 });

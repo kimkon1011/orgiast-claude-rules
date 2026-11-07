@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize } from './lane-doctor.mjs';
+import { laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, needsNativeCodexProbe, nativeWriteProbeArgs } from './lane-doctor.mjs';
+import { classifyTaskKind } from './lib/task-kind.mjs';
 const now = Date.parse('2026-10-08T06:00:00Z');
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-doctor-'));
@@ -16,6 +17,17 @@ function fixture(t) {
 }
 const write = (h, f, s) => atomicJson(path.join(h, '.claude', f), s);
 const read = (h, f) => JSON.parse(fs.readFileSync(path.join(h, '.claude', f)));
+test('native write probe forces implement routing while preserving its arguments', () => {
+  const instruction = 'WRITE_OK.txt を作成し、内容を WRITE_OK にしてください。その後ファイルを読み返して確認してください。';
+  const args = nativeWriteProbeArgs({ repo: 'test-repo', cwd: 'test-cwd', timeoutMs: 90_999, instruction });
+  const kind = args.indexOf('--kind');
+  assert.equal(args[kind + 1], 'implement');
+  assert.ok(args.includes('--force-native'));
+  assert.ok(args.includes('--no-fallback'));
+  assert.ok(args.includes('--timeout'));
+  assert.ok(args.includes(instruction));
+  assert.equal(classifyTaskKind(instruction), 'investigate');
+});
 test('quick removes expired demote/cooldown atomically, preserves unrelated providers and reads history', t => {
   const h = fixture(t);
   write(h, 'routing-overrides.json', { extra: 7, demote: { codex: new Date(now - 1).toISOString(), groq: new Date(now + 1000).toISOString() } });
@@ -35,30 +47,81 @@ test('probe repairs healthy demotes, classifies payment and rate limits, caches 
     if(p==='codex' && !options.dryRun) codexTasks++;
     return p==='gemini' ? {code:1,text:'HTTP 402 prepayment credits are depleted'} : p==='glm' ? {code:1,text:'HTTP 429 retry in 10 minutes'} : {code:0,text:'PONG'};
   };
-  const notify = async text => { notifications++; assert.match(text,/kim@orgiast.jp/); assert.match(text,/Setup auto-reload/); return {delivered:'dm'}; };
-  const result = await laneDoctorProbe({home:h,now,probe,notify});
-  assert.equal(result.lanes.gemini.reason,'dead:payment_required'); assert.equal(result.lanes.codex.alive,true);
-  assert.deepEqual(read(h,'routing-overrides.json').demote,{}); assert.equal(result.lanes.glm.until,now+600000);
-  await laneDoctorProbe({home:h,now:now+60000,probe,notify}); assert.equal(codexTasks,1); assert.equal(notifications,1);
-  await laneDoctorProbe({home:h,now:now+86400001,probe,notify}); assert.equal(codexTasks,2); assert.equal(notifications,2);
+  const notify = async text => { notifications++; assert.match(text,/残高不足\(402\)/); return {delivered:'dm'}; };
+  const result = await laneDoctorProbe({platform: 'linux',home:h,now,probe,notify});
+  assert.equal(result.lanes.gemini.reason,'billing'); assert.equal(result.lanes.codex.alive,true);
+  assert.ok(read(h,'routing-overrides.json').demote.gemini); assert.equal(result.lanes.glm.until,now+600000);
+  await laneDoctorProbe({platform: 'linux',home:h,now:now+60000,probe,notify}); assert.equal(codexTasks,1); assert.equal(notifications,1);
+  await laneDoctorProbe({platform: 'linux',home:h,now:now+86400001,probe,notify}); assert.equal(codexTasks,2); assert.equal(notifications,2);
 });
 test('quick preserves payment failure and cannot refresh probe timestamp', async t => {
-  const h=fixture(t); write(h,'lane-health.json',{probedAt:new Date(now-3600000).toISOString(),lanes:{gemini:{alive:false,reason:'dead:payment_required'}}});
+  const h=fixture(t); write(h,'lane-health.json',{probedAt:new Date(now-3600000).toISOString(),lanes:{gemini:{alive:false,reason:'dead:payment_required',probedAt:new Date(now-3600000).toISOString()}}});
   const r=laneDoctorQuick({home:h,now}); assert.equal(r.lanes.gemini.alive,false); assert.equal(freshProbe(r.probedAt,now),false);
 });
+test('expired cooldown failure becomes configured:unprobed', t => {
+  const h=fixture(t), probedAt=new Date(now-3600000).toISOString();
+  write(h,'provider-cooldown.json',{codex:{until:now-1,reason:'usage_limit'}});
+  write(h,'lane-health.json',{lanes:{codex:{alive:false,reason:'cooldown',probeReason:'cooldown',probedAt,lastProbeOkAt:new Date(now-86400000).toISOString(),until:now-1}}});
+  const r=laneDoctorQuick({home:h,now});
+  assert.equal(r.lanes.codex.alive,false); assert.equal(r.lanes.codex.reason,'configured:unprobed');
+});
+test('payment_required is retained for 24h then becomes recheckable', t => {
+  const h=fixture(t), probedAt=new Date(now-86400000).toISOString();
+  write(h,'lane-health.json',{lanes:{deepseek:{alive:false,reason:'dead:payment_required',probeReason:'dead:payment_required',probedAt}}});
+  const r=laneDoctorQuick({home:h,now});
+  assert.equal(r.lanes.deepseek.alive,false); assert.equal(r.lanes.deepseek.reason,'configured:unprobed');
+});
 test('corrupt routing is not silently overwritten',t=>{const h=fixture(t);fs.writeFileSync(path.join(h,'.claude/routing-overrides.json'),'{broken');assert.throws(()=>laneDoctorQuick({home:h,now}));assert.equal(fs.readFileSync(path.join(h,'.claude/routing-overrides.json'),'utf8'),'{broken');});
+test('every lane stop notification names the account to open, and passes the URL account gate',async t=>{
+  const { judge, annotateAccounts } = await import('./url-account-gate.mjs');
+  const h=fixture(t);
+  const deepseek=notificationText({provider:'deepseek',reason:'dead:payment_required'},h);
+  assert.match(deepseek,/\*\*seisaku-team@orgiast\.jp\*\* で開く: https:\/\/platform\.deepseek\.com\/$/m);
+  assert.ok(!deepseek.includes('キー所有者は未確認'));
+  for (const provider of ['codex','deepseek','glm','groq','openrouter']) {
+    const text=notificationText({provider,reason:'dead:payment_required'},h);
+    // codex は保存認証のメールを出す（カタログ非依存）ため、送信時補正の不変性だけを見る。
+    if (provider!=='codex') assert.deepEqual(judge(text).missing,[],provider);
+    assert.equal(annotateAccounts(text),text,provider);
+  }
+});
+test('notify-time annotation adds the catalog account and splits a URL glued to Japanese',async()=>{
+  const { annotateAccounts } = await import('./url-account-gate.mjs');
+  const out=annotateAccounts('サービス停止。契約したアカウントで https://platform.deepseek.com/を開いて確認し、');
+  assert.match(out,/https:\/\/platform\.deepseek\.com\/ を開いて/);
+  assert.match(out,/開くアカウント: \*\*seisaku-team@orgiast\.jp\*\*/);
+  assert.equal(annotateAccounts('停止しました'),'停止しました');
+});
+test('billing is substituted and notified even without auto top-up',async t=>{
+  const h=fixture(t);const sent=[];
+  const probe=async p=>p==='deepseek'?{code:1,text:'HTTP 402 Insufficient Balance'}:{code:0,text:'PONG'};
+  const r=await laneDoctorProbe({home:h,now,probe,notify:async text=>{sent.push(text);return {delivered:'dm'};},listWsl:async()=>'Ubuntu'});
+  assert.equal(r.lanes.deepseek.reason,'billing');
+  assert.ok(!r.deadNeedsUser.some(x=>x.provider==='deepseek'));
+  assert.deepEqual(r.substituted,[{provider:'deepseek',via:'openrouter'}]);
+  assert.equal(sent.filter(text=>/deepseek/i.test(text)).length,1);
+  assert.equal(r.lanes.deepseek.via,'openrouter');
+  assert.match(summarize(r),/deepseek ✅\(OpenRouter経由\)/);
+});
+test('a fresh failed Codex probe is re-measured instead of being reused',async t=>{
+  const h=fixture(t);
+  write(h,'lane-health.json',{lanes:{codex:{alive:false,reason:'probe_failed',probedAt:new Date(now-60_000).toISOString()}}});
+  const probe=async()=>({code:0,text:'PONG'});
+  const r=await laneDoctorProbe({home:h,now,probe,notify:async()=>({delivered:'dm'}),listWsl:async()=>'Ubuntu'});
+  assert.equal(r.lanes.codex.alive,true);
+});
 test('notification reports key owner only from comments',t=>{const h=fixture(t);fs.appendFileSync(path.join(h,'.claude/gemini.env'),'# owner: owner@example.com\n');const text=notificationText({provider:'gemini',reason:'dead:payment_required'},h);assert.match(text,/owner@example.com/);assert.ok(!text.includes('test-fixture'));});
-test('successful probe supersedes older limit history; expired cooldown cache does not revive',t=>{
+test('successful probe supersedes older limit history; expired cooldown becomes recheckable',t=>{
   const h=fixture(t),stamp=new Date(now-1000).toISOString();
   fs.writeFileSync(path.join(h,'.claude/provider-limit-history.jsonl'),JSON.stringify({provider:'deepseek',t:new Date(now-2000).toISOString(),until:now+3600000})+'\n');
   write(h,'lane-health.json',{lanes:{deepseek:{alive:true,reason:'probe_ok',probedAt:stamp},glm:{alive:false,reason:'cooldown',until:now-1,probedAt:stamp}}});
-  const r=laneDoctorQuick({home:h,now});assert.equal(r.lanes.deepseek.alive,true);assert.equal(r.lanes.glm.alive,true);
+  const r=laneDoctorQuick({home:h,now});assert.equal(r.lanes.deepseek.alive,true);assert.equal(r.lanes.glm.alive,false);assert.equal(r.lanes.glm.reason,'configured:unprobed');
 });
 test('failed notification is retried, while successful delivery is deduped',async t=>{
   const h=fixture(t);let calls=0;
   const probe=async p=>p==='gemini'?{code:1,text:'HTTP 402'}:{code:0,text:'PONG'};
   const notify=async()=>{calls++;return {delivered:calls===1?'none':'dm'};};
-  for(let i=0;i<3;i++)await laneDoctorProbe({home:h,now:now+i*1000,probe,notify});
+  for(let i=0;i<3;i++)await laneDoctorProbe({platform: 'linux',home:h,now:now+i*1000,probe,notify});
   assert.equal(calls,2);
 });
 
@@ -66,7 +129,7 @@ for (const filename of ['provider-limit-history.jsonl', 'codex-limit-history.jso
   test(`successful probe survives two stale quick runs with older ${filename}`, async t => {
     const h = fixture(t), stamp = new Date(now).toISOString();
     fs.writeFileSync(path.join(h, '.claude', filename), JSON.stringify({ provider: 'codex', t: now - 1000, until: now + 86400000, reason: 'usage_limit_no_fallback' }) + '\n');
-    const probed = await laneDoctorProbe({ home: h, now, probe: async () => ({ code: 0, text: 'PONG' }) });
+    const probed = await laneDoctorProbe({platform: 'linux', home: h, now, probe: async () => ({ code: 0, text: 'PONG' }) });
     assert.equal(probed.lanes.codex.lastProbeOkAt, stamp);
     for (const minutes of [31, 49]) {
       const result = laneDoctorQuick({ home: h, now: now + minutes * 60000 });
@@ -88,12 +151,13 @@ for (const filename of ['provider-limit-history.jsonl', 'codex-limit-history.jso
 }
 test('newer limits block without erasing probe history across quick runs', async t => {
   const h = fixture(t), stamp = new Date(now).toISOString();
-  await laneDoctorProbe({ home: h, now, probe: async () => ({ code: 0, text: 'PONG' }) });
+  await laneDoctorProbe({platform: 'linux', home: h, now, probe: async () => ({ code: 0, text: 'PONG' }) });
   fs.writeFileSync(path.join(h, '.claude/codex-limit-history.jsonl'), JSON.stringify({ t: now + 1000, until: now + 86400000, reason: 'usage_limit_no_fallback' }) + '\n');
   for (const minutes of [31, 32]) {
     const result = laneDoctorQuick({ home: h, now: now + minutes * 60000 });
     assert.equal(result.lanes.codex.alive, false);
-    assert.equal(result.lanes.codex.reason, 'usage_limit_no_fallback');
+    assert.equal(result.lanes.codex.reason, 'quota_wait');
+    assert.equal(result.lanes.codex.until, now + 86400000);
     assert.equal(result.lanes.codex.lastProbeOkAt, stamp);
     assert.equal(result.lanes.codex.probedAt, stamp);
   }
@@ -113,11 +177,11 @@ test('migrates legacy successful probe and keeps seven-day boundary valid', t =>
 test('cached and failed probes retain the last real success time', async t => {
   const h = fixture(t), stamp = new Date(now).toISOString();
   const probe = async () => ({ code: 0, text: 'PONG' });
-  await laneDoctorProbe({ home: h, now, probe });
-  const cached = await laneDoctorProbe({ home: h, now: now + 60000, probe });
+  await laneDoctorProbe({platform: 'linux', home: h, now, probe });
+  const cached = await laneDoctorProbe({platform: 'linux', home: h, now: now + 60000, probe });
   assert.equal(cached.lanes.codex.lastProbeOkAt, stamp);
   assert.equal(cached.lanes.codex.probedAt, stamp);
-  const failed = await laneDoctorProbe({ home: h, now: now + 31 * 60000,
+  const failed = await laneDoctorProbe({platform: 'linux', home: h, now: now + 31 * 60000,
     probe: async () => ({ code: 1, text: 'HTTP 429 retry in 1 hour' }) });
   assert.equal(failed.lanes.codex.lastProbeOkAt, stamp);
   assert.equal(failed.lanes.codex.probeReason, 'cooldown');
@@ -136,7 +200,170 @@ test('unprobed configuration remains distinct and equal-time limits are supersed
 });
 
 test('Gemini billing notification includes official steps, account, outcome and fallback', t => {
-  const text = notificationText({provider:'gemini',reason:'dead:payment_required'},fixture(t));
-  for (const expected of ['https://aistudio.google.com/billing','kim@orgiast.jp','個人 Gmail','シークレットウィンドウ','右上アバター','Available credits','Setup auto-reload','Manage auto-reload','支払い方法・補充額・最低残高しきい値','monthly auto-charge limit','保存','0 より大きく','03:00','次セッション開始','gemini ✅','キー所有アカウントが別','Gemini まだ 402']) assert.ok(text.includes(expected), expected);
+  const text = notificationText({provider:'gemini',reason:'billing',error:'HTTP 402 Your prepayment credits are depleted'},fixture(t));
+  for (const expected of ['https://aistudio.google.com/billing','seisaku-team@orgiast.jp','TrackPlanner','個人 Gmail','シークレットウィンドウ','右上アバター','前払いクレジットが 0','Setup auto-reload（上限付き）','Available credits','Manage auto-reload','支払い方法・補充額・最低残高しきい値','monthly auto-charge limit','保存','0 より大きく','03:00','次セッション開始','gemini ✅','キー所有アカウントが別','Gemini まだ 402']) assert.ok(text.includes(expected), expected);
   assert.match(text,/\n根拠: https:\/\/ai.google.dev\/gemini-api\/docs\/billing$/);
+});
+test('needsNativeCodexProbe is win32-only and follows the WSL distro listing', () => {
+  // 非 win32 は常に false（WSL 経路があるので --allow-native は不要）。
+  assert.equal(needsNativeCodexProbe({ platform: 'linux', env: {}, spawn: () => { throw new Error('must not spawn'); } }), false);
+  // 注入値は実機を見ずに分岐を固定できる（テストを非決定的にしない）。
+  assert.equal(needsNativeCodexProbe({ platform: 'win32', env: { LANE_DOCTOR_WSL_PROBE: 'absent' } }), true);
+  assert.equal(needsNativeCodexProbe({ platform: 'win32', env: { LANE_DOCTOR_WSL_PROBE: 'present' } }), false);
+  // wsl -l -q の status!=0（WSL 無効）または distro 0 件は native 経路。
+  assert.equal(needsNativeCodexProbe({ platform: 'win32', env: {}, spawn: () => ({ status: 1, stdout: '' }) }), true);
+  assert.equal(needsNativeCodexProbe({ platform: 'win32', env: {}, spawn: () => ({ status: 0, stdout: '\u0000\r\n' }) }), true);
+  assert.equal(needsNativeCodexProbe({ platform: 'win32', env: {}, spawn: () => ({ status: 0, stdout: 'Ubuntu\r\n' }) }), false);
+});
+
+
+test('最新 probe 失敗は過去の成功で復活しない', t => {
+  const h=fixture(t), stamp=new Date(now-4*86400000).toISOString();
+  write(h,'lane-health.json',{lanes:{codex:{alive:false,reason:'probe_failed',probeReason:'probe_failed',probedAt:new Date(now-3600000).toISOString(),lastProbeOkAt:stamp}}});
+  const r=laneDoctorQuick({home:h,now});assert.equal(r.lanes.codex.alive,false);assert.equal(r.lanes.codex.reason,'probe_failed:stale');assert.match(summarize(r),/codex ❌\(probe_failed, 前回OK/);
+});
+test('WSL 不在の書き込み修復成功と quick 表示',async t=>{
+  const h=fixture(t);let calls=0;
+  const r=await laneDoctorProbe({platform: 'linux',home:h,now,platform:'win32',listWsl:()=>'',nativeWriteProbe:async()=>{calls++;return {code:0};},probe:async()=>({code:0,text:'PONG'}),notify:async()=>({delivered:'dm'})});
+  assert.equal(calls,1);assert.equal(r.lanes.codex.reason,'native_ok');assert.equal(r.lanes.codex.alive,true);assert.ok(r.repairs.some(r=>typeof r==='string'&&r.includes('ネイティブ')));assert.match(summarize(laneDoctorQuick({home:h,now:now+1000})),/修復:.*ネイティブ/);
+});
+test('ネイティブ修復失敗は操作を1件通知し24h抑止',async t=>{
+  const h=fixture(t);let calls=0;const opts={home:h,now,platform:'win32',listWsl:()=>'',nativeWriteProbe:async()=>({code:1}),probe:async()=>({code:0,text:'PONG'}),notify:async text=>{calls++;assert.match(text,/原因:.*試した修復:.*残る操作:/);return {delivered:'dm'};}};
+  const r=await laneDoctorProbe(opts);assert.equal(r.deadNeedsUser.filter(x=>x.provider==='codex').length,1);assert.match(r.deadNeedsUser.find(x=>x.provider==='codex').fix,/wsl.exe --install --no-distribution/);
+  await laneDoctorProbe({platform: 'linux',...opts,now:now+60000});assert.equal(calls,1);
+});
+test('ネイティブ書き込み probe の一過性失敗は再試行で吸収し通知しない(2026-11-07 誤通知)',async t=>{
+  const h=fixture(t);let calls=0;const opts={home:h,now,platform:'win32',listWsl:()=>'',nativeWriteProbe:async()=>{calls++;return calls===1?{code:1,text:'起動失敗'}:{code:0};},probe:async()=>({code:0,text:'PONG'}),notify:async()=>({delivered:'dm'})};
+  const r=await laneDoctorProbe(opts);assert.equal(calls,2);assert.equal(r.lanes.codex.alive,true);assert.equal(r.lanes.codex.reason,'native_ok');assert.equal(r.deadNeedsUser.filter(x=>x.provider==='codex').length,0);
+});
+test('glm cooldown and explicitly tagged legacy history cannot block healthy Codex', t => {
+  const h = fixture(t), until = now + 3600000;
+  write(h, 'provider-cooldown.json', { glm: { until, reason: 'usage_limit' } });
+  fs.writeFileSync(path.join(h, '.claude/codex-limit-history.jsonl'), JSON.stringify({ provider: 'glm', t: now - 1000, until, reason: 'usage_limit' }) + '\n');
+  write(h, 'lane-health.json', { lanes: { codex: { alive: false, reason: 'quota_wait', until, probedAt: new Date(now - 1000).toISOString(), probeReason: 'auth_ok:probe_ok' } } });
+  fs.writeFileSync(path.join(h, '.claude/executor-usage.jsonl'), JSON.stringify({ provider: 'codex', t: now - 500, status: 'ok' }) + '\n');
+  const r = laneDoctorQuick({ home: h, now, save: false });
+  assert.equal(r.lanes.codex.alive, true);
+  assert.notEqual(r.lanes.codex.reason, 'quota_wait');
+  assert.equal(r.lanes.codex.until, undefined);
+  assert.equal(r.lanes.glm.reason, 'quota_wait');
+});
+test('all missing-key lanes require immediate repair and keyserve enrollment notification', t => {
+  const h = fixture(t);
+  for (const file of ['gemini.env','deepseek.env','zai.env','groq.env','openrouter.env']) fs.unlinkSync(path.join(h, '.claude', file));
+  const r = laneDoctorQuick({ home: h, now, save: false });
+  assert.equal(r.repairFirst.required, true);
+  assert.ok(r.repairFirst.reasons.some(reason => reason.startsWith('missing_key:')));
+  assert.ok(r.repairFirst.reasons.includes('keyserve_unenrolled'));
+  assert.match(summarize(r), /\n🛑 安価AIレーン停止/);
+  assert.deepEqual(r.deadNeedsUser.filter(item => item.provider === 'keyserve').map(item => item.reason), ['keyserve_unenrolled']);
+});
+test('all live lanes do not require repair or add a stop line', t => {
+  const h = fixture(t), stamp = new Date(now).toISOString();
+  write(h, 'lane-health.json', { lanes: Object.fromEntries(['codex','gemini','deepseek','glm','groq','openrouter'].map(provider => [provider, { alive: true, reason: 'probe_ok', probedAt: stamp, lastProbeOkAt: stamp, probeReason: 'probe_ok' }])) });
+  const r = laneDoctorQuick({ home: h, now, save: false });
+  assert.equal(r.repairFirst.required, false);
+  assert.doesNotMatch(summarize(r), /🛑/);
+});
+
+test('missing Gemini key uses live OpenRouter without requiring repair', t => {
+  const h = fixture(t);
+  fs.unlinkSync(path.join(h, '.claude/gemini.env'));
+  const r = laneDoctorQuick({ home: h, now, save: false });
+  assert.deepEqual(r.substituted, [{ provider: 'gemini', via: 'openrouter' }]);
+  assert.equal(r.lanes.gemini.via, 'openrouter');
+  assert.ok(r.askOrder.includes('gemini'));
+  assert.equal(r.repairFirst.required, false);
+  assert.doesNotMatch(summarize(r), /🛑/);
+  assert.match(summarize(r), /gemini ✅\(OpenRouter経由\)/);
+});
+
+test('missing Gemini key remains a repair stop when OpenRouter is dead', t => {
+  const h = fixture(t);
+  fs.unlinkSync(path.join(h, '.claude/gemini.env'));
+  fs.unlinkSync(path.join(h, '.claude/openrouter.env'));
+  const r = laneDoctorQuick({ home: h, now, save: false });
+  assert.ok(!r.substituted.some(({ provider }) => provider === 'gemini'));
+  assert.ok(r.repairFirst.reasons.some(reason => reason.split(':')[1]?.split(',').includes('gemini')));
+  assert.equal(r.repairFirst.required, true);
+  assert.match(summarize(r), /🛑/);
+});
+
+test('WSL-only auth configures Codex, probes it, and supplies notification account', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  const token = `x.${Buffer.from(JSON.stringify({ email: 'wsl@example.com' })).toString('base64url')}.x`;
+  const spawnImpl = (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: token } }) });
+  const options = { home, now, platform: 'win32', spawnImpl };
+  assert.equal(laneDoctorQuick({ ...options, save: false }).lanes.codex.reason, 'configured:unprobed');
+  const calls = [], sent = [];
+  const result = await laneDoctorProbe({ ...options, listWsl: () => 'Ubuntu', probe: async (provider, opts) => {
+    if (provider === 'codex') calls.push(opts.dryRun === true);
+    return provider === 'codex' && !opts.dryRun ? { code: 1, text: 'HTTP 401' } : { code: 0, text: 'PONG' };
+  }, notify: async text => { sent.push(text); return { delivered: 'test' }; } });
+  assert.deepEqual(calls, [true, false]);
+  assert.equal(result.lanes.codex.reason, 'dead:oauth_consent');
+  assert.ok(sent.some(text => text.includes('**wsl@example.com**')));
+});
+
+test('provider selection probes only Codex using WSL-only auth', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  const calls = [];
+  const result = await laneDoctorProbe({ home, now, platform: 'win32', providers: ['codex'],
+    spawnImpl: (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: 'fixture-token' } }) }),
+    listWsl: () => 'Ubuntu', probe: async (provider, options) => {
+      calls.push([provider, options.dryRun === true]);
+      return { code: 0, text: 'PONG' };
+    }, notify: async () => ({ delivered: 'test' }) });
+  assert.deepEqual(calls, [['codex', true], ['codex', false]]);
+  assert.equal(result.lanes.codex.reason, 'auth_ok:probe_ok');
+  assert.equal(result.lanes.deepseek.reason, 'configured:unprobed');
+});
+
+test('missing Windows and WSL auth skips Codex probe with oauth_consent', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  const result = await laneDoctorProbe({ home, now, platform: 'win32', spawnImpl: () => ({ status: 1 }),
+    probe: async provider => { assert.notEqual(provider, 'codex'); return { code: 0, text: 'PONG' }; },
+    notify: async () => ({ delivered: 'test' }), listWsl: () => 'Ubuntu' });
+  assert.equal(result.lanes.codex.reason, 'dead:oauth_consent');
+});
+
+test('WSL Codex recovery stays healthy despite eleven pre-login failures', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  fs.writeFileSync(path.join(home, '.claude/executor-usage.jsonl'), Array.from({ length: 11 }, () => JSON.stringify({ provider: 'codex', t: now - 1000, status: 'error', reason: 'HTTP 401' })).join('\n'));
+  const options = { home, now, platform: 'win32', spawnImpl: (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: 'fixture-token' } }) }) };
+  const result = await laneDoctorProbe({ ...options, listWsl: () => 'Ubuntu', probe: async () => ({ code: 0, text: 'PONG' }), notify: async () => ({ delivered: 'test' }) });
+  assert.equal(result.lanes.codex.alive, true);
+  assert.equal(result.lanes.codex.reason, 'auth_ok:probe_ok');
+  assert.equal(laneDoctorQuick({ ...options, now: now + 1000, save: false }).lanes.codex.alive, true);
+});
+
+test('codex dry-probe timeout falls through to full probe instead of probe_failed', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  const calls = [];
+  const result = await laneDoctorProbe({ home, now, platform: 'win32', providers: ['codex'],
+    spawnImpl: (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: 'fixture-token' } }) }),
+    listWsl: () => 'Ubuntu', probe: async (provider, options) => {
+      if (provider === 'codex') calls.push(options.dryRun === true);
+      // dry は15秒上限のタイムアウト(code 1)。本番 probe は残り予算で PONG を返す（2026-11-06 実測と同じ形）。
+      return provider === 'codex' && options.dryRun ? { code: 1, text: '' } : { code: 0, text: 'PONG' };
+    }, notify: async () => ({ delivered: 'test' }) });
+  assert.deepEqual(calls, [true, false]);
+  assert.equal(result.lanes.codex.alive, true);
+  assert.equal(result.lanes.codex.reason, 'auth_ok:probe_ok');
+});
+
+test('codex dry failure with real 401 still classifies oauth_consent', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  const result = await laneDoctorProbe({ home, now, platform: 'win32', providers: ['codex'],
+    spawnImpl: (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: 'fixture-token' } }) }),
+    listWsl: () => 'Ubuntu', probe: async (provider, options) => provider === 'codex' && options.dryRun ? { code: 1, text: '' } : { code: 1, text: 'HTTP 401 unauthorized' },
+    notify: async () => ({ delivered: 'test' }) });
+  assert.equal(result.lanes.codex.alive, false);
+  assert.equal(result.lanes.codex.reason, 'dead:oauth_consent');
 });

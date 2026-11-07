@@ -86,3 +86,11 @@ test('aggregateMeasurements は直近2回までを集計する', () => {
 test('5カテゴリが表の対象', () => {
   assert.deepEqual(ROUTING_CATEGORIES, ['classification', 'extraction', 'summarize', 'jp_reply', 'code']);
 });
+
+
+test('単価不明の計測を無料にせず、自動費用ルーティングから除く', () => {
+  const rows = [{ t: '2026-10-15T00:00:00Z', provider: 'openrouter', model: 'unknown-price', msAvg: 10,
+    byCategory: { code: { n: 10, graded: 10, pass: 10, errors: 0, truncated: 0, costUsd: null } } }];
+  assert.equal(aggregateMeasurements(rows, 'code')[0].usdPerTask, null);
+  assert.equal(buildRoutingTable(rows).categories.code, undefined);
+});

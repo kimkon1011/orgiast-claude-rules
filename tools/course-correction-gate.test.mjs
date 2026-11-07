@@ -44,7 +44,7 @@ test('CC-002 evidence tools suppress warnings in this turn', t => {
   }
 });
 test('CC-002 excludes local, artifact, PR and Workspace URLs independently', t => {
-  for (const url of ['http://localhost:3000/path','https://claude.ai/artifact/abc','https://github.com/owner/repo/pull/123','https://docs.google.com/a/orgiast.jp/document/d/123','https://script.google.com/a/orgiast.jp/home','https://drive.google.com/drive/u/0?authuser=user@example.com','https://drive.google.com/file/d/123?usp=sharing&authuser=0']) {
+  for (const url of ['http://localhost:3000/path','https://claude.ai/artifact/abc','https://github.com/owner/repo/pull/123','https://docs.google.com/document/d/123?authuser=user@example.com','https://script.google.com/home/usersettings','https://drive.google.com/drive/u/0?authuser=user@example.com','https://drive.google.com/file/d/123?usp=sharing&authuser=user%40example.com']) {
     assertNoWarning({assistantText:url},{...opts(t),rules:[cc002]});
     assertWarn({assistantText:`${url}\nhttps://example.com`},{...opts(t),rules:[cc002]});
   }

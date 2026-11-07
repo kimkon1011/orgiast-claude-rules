@@ -1,6 +1,6 @@
 # Claude Code 標準設定書（全アカウント・全PC共通）
 
-版 v2.0／最終更新 2026-09-29／正本: この md（GitHub kimkon1011/orgiast-claude-rules の STANDARD-PC-SETUP.md）。Google Doc はこの md から自動生成（直接編集しない。編集は md → `node tools/gdoc-update.mjs --id 1p9_YkCIXDRbGrFsRDbtNxHVmZ7AglDOqBlamn2Ij4NA --file STANDARD-PC-SETUP.md`）。
+版 v2.3／最終更新 2026-11-04／正本: この md（GitHub kimkon1011/orgiast-claude-rules の STANDARD-PC-SETUP.md）。Google Doc はこの md から自動生成（直接編集しない。編集は md → `node tools/gdoc-update.mjs --id 1p9_YkCIXDRbGrFsRDbtNxHVmZ7AglDOqBlamn2Ij4NA --file STANDARD-PC-SETUP.md`）。
 
 この文書は今後、設定が増えるたびにこの1本を更新していく運用です。新しい設定を追加するときは、このページの該当章に追記し、末尾「根拠」に出典を1行足してください。別の文書を新設しないでください。
 
@@ -16,11 +16,21 @@
 4. 拡張を開くと自動でログイン画面が出るので、会社のアカウントでログインする。完了の見え方：チャット画面上部にログイン中のメールアドレスが表示される。
 5. 失敗したら：インストールが進まない場合は一度VS Codeを閉じて開き直してから再度検索する。それでも失敗する場合はスクリーンショットを金に送る。
 
-### (b) Claude Code のチャット欄に次を貼り付けてEnter
+### (b) Claude Code のチャット欄に次の**どちらか1つ**を貼り付けてEnter
+
+アプリ開発（GAS・Webアプリの本番反映）をする人:
 
 ```
-https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/STANDARD-PC-SETUP.md を読んで、「Claude Code 向け実行手順」の章どおりにこのPCを標準設定にしてください。本人の操作が必要な箇所では止まって、何を押せばよいか案内してください。
+https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/STANDARD-PC-SETUP.md を読んで、「Claude Code 向け実行手順」の章どおりにこのPCを標準設定にしてください。本番反映の許可ルール（Aグループ）は入れてください。質問せずに最後まで進め、私がするのはブラウザでのログイン承認だけにしてください。
 ```
+
+アプリ開発をしない人:
+
+```
+https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/STANDARD-PC-SETUP.md を読んで、「Claude Code 向け実行手順」の章どおりにこのPCを標準設定にしてください。本番反映の許可ルール（Aグループ）は入れないでください。質問せずに最後まで進め、私がするのはブラウザでのログイン承認だけにしてください。
+```
+
+本人がする操作は、途中で開くブラウザ画面でのログイン承認（GitHub・Google・Vercel・ChatGPT の4つ）だけ。それ以外はすべて Claude が行い、最後に結果の表を出す。
 
 ### (c) このURLは固定
 
@@ -30,15 +40,25 @@ https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/STANDARD-
 
 ## Claude Code 向け実行手順（上から順に実行）
 
-このPCで動いているClaude Codeが、この章を読んで自分で実行するための手順。エラーが出たら推測で回避せず、エラー文をそのまま示して止まること（「止まる条件」参照）。
+このPCで動いているClaude Codeが、この章を読んで自分で実行するための手順。
+
+### 手順0 進め方の原則（最初に読む）
+
+- **本人に頼むのはブラウザでのログイン承認だけ**。コマンド実行・設定ファイル編集・許可ルール追加・確認作業は、すべて Claude が行う。この文書のほかの章に「本人が操作」と書かれていても、まず Claude 側で最小単位を1回試し、できたらそのまま進める（2026-10-29 user-PC で許可ルール15行を本人に貼らせて差し戻された）。
+- **質問しない**。Aグループ（本番反映9行）の可否は貼り付け文に書いてある。書いていない古い貼り付け文のときだけ、最初の返答で1回だけ聞き、返事を待つ間も手順1〜6を止めずに進める。
+- **ログインは早く始める**。手順1が終わったらすぐ手順6のログイン画面を起動し、本人が承認している間に手順2〜5を並行して進める。
+- **既知の詰まりは自分で直して続行する**（下の「詰まり対処表」）。表にない未知のエラーだけ、エラー文をそのまま示して止まる。
+- **報告は最後に表1枚**。途中は1行の進捗だけにし、本人に確認を求めない。
 
 ### 手順1 復旧コマンドを実行する
 
 （git/Node.js/Claude Code/Codex CLIをまとめて自動導入・更新するインストーラ）。PowerShellで次を実行する。
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'install-orgiast.ps1'; Invoke-WebRequest -UseBasicParsing ('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/install-orgiast.ps1?cb='+[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -OutFile $p; & $p -NoOllama"
+$p = Join-Path $env:TEMP 'install-orgiast.ps1'; Invoke-WebRequest -UseBasicParsing ('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/install-orgiast.ps1?cb='+[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p -NoOllama -NoReboot -NonInteractive
 ```
+
+Claude Code からは自動再起動しない。ログインは手順6でまとめて行う。
 
 ### 手順2 導入確認
 
@@ -50,7 +70,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP '
 
 ### 手順4 `setup --converge` を実行する
 
-（共通の許可ルール・hookをあるべき状態へ収束させる）: `node "$HOME/orgiast-claude-rules/tools/setup.mjs" --converge`。「許可ルール・hookをN件反映しました」の趣旨の結果が出ることを確認する。
+（共通の許可ルール・hookをあるべき状態へ収束させる）: `~/.claude/settings.json` の SessionStart にある `setup.mjs --converge` のパスで実行する。登録が無ければ `node "$HOME/orgiast-claude-rules/tools/setup.mjs" --converge`。「許可ルール・hookをN件反映しました」の趣旨の結果が出ることを確認する。
 
 ### 手順5 4.3の3点チェックを行う
 
@@ -60,25 +80,61 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP '
 - `<ホームフォルダ>\.claude\settings.json` の `SessionStart` に `onboarding-sync.mjs` が登録されている
 いずれか欠けていたら手順1をもう一度実行する。
 
-### 手順6 各サービスへのログインは、ここで必ず止まって本人に案内する
+### 手順5.5 keyserve 鍵を配備する（案件同期・秘匿値取得に必須）
 
-（パスワード・トークンはチャットで絶対に聞かない）。
-- GitHub: `gh auth login` を実行し、表示された認証用URLをブラウザで開いて承認してもらう。完了の見え方: `gh auth status` が「Logged in to github.com」。
-- Google（clasp用）: `npx clasp login` を実行し、表示された認証用URLをブラウザで開いて会社のGoogleアカウントでログインしてもらう。完了の見え方: ターミナルに「You are logged in as ...」。
-- Vercel: `npx vercel login` を実行し、表示されたURL・確認コードでブラウザ承認してもらう。完了の見え方: ターミナルに「Success!」。
-- どの認証も、画面が開かない・エラーが出る場合は無理に繰り返さず、その場でエラーを提示して止まる。
+keyserve の鍵が無いと、案件の自動引き継ぎ（case-handoff）や秘匿値取得が **HTTP 401** で失敗する。鍵は primary を持つPC（kim-PC 等）だけが発行でき、**未登録のPC単独では取得できない**（設計上のセキュリティ境界）。新PCをセットアップしたら、Claude は黙って先へ進めず、ここで必ず配備状態を確認し、未登録なら鍵を取り寄せる。
 
-### 手順7 許可ルール15行（下記5.3）は、Claude Code自身が /permissions を編集しない
+1. `node <repo>\tools\keyserve-status.mjs` を実行する。
+2. 「認証経路: primary / HTTP 200」なら配備済み。手順6へ進む。
+3. 「未設定」ならこのPCは keyserve 未登録。次で鍵を取り寄せる（401 のまま放置・キュー溜めにしない）:
+   - primary を持つPC（kim-PC 等。`keyserve-status` が primary のPC）で、このPC名を指定して enroll トークンを発行してもらう: `node <repo>\tools\keyserve-enroll.mjs --pc "<このPC名>" --dm`。トークン入りの1行コマンドが kim の Discord DM に届く（秘密情報なので共有チャンネルに貼らない）。
+   - fleet-mail が使える席なら、primary を持つPCの Claude に発行を依頼し、1行コマンドを受け取ってもよい。
+   - 届いた1行コマンドをこのPCの PowerShell で実行する（`install-orgiast.ps1 -Enroll <token>` 相当。`enroll.env` 書き込み → onboarding-sync が派生鍵を取得 → `keyserve.env` 生成）。
+4. 再度 `node <repo>\tools\keyserve-status.mjs` を実行し、「primary / HTTP 200」を確認する。
+5. 日本語 hostname のPCは、1行コマンドが `~/.claude/keyserve.env` に `ORGIAST_KEYSERVE_PC=<ASCIIのPC名>` を自動設定する（手動で書く場合も同じ）。
 
-（安全上の関門のため）。次の順で進める。
-- まずAグループ（本番反映9行）を追加してよいか、一文で説明したうえで利用者本人に聞く（「アプリの本番反映コマンドを、毎回の確認なしで実行できるようにする設定です。開発をしない場合は不要です」）。
-- 回答に応じて、下記5.2の手順を人に案内する形で進行する（`/permissions` → 「Add rule…」→ 1行ずつ貼り付け → 「Add rule」）。Claude Code は画面遷移の案内だけを行い、ルールの追加・削除操作そのものは行わない。
+### 手順6 ログイン4件を1つの見える画面で行う
+
+（パスワード・トークンはチャットで絶対に聞かない）。`node <repo>/tools/make-desktop-launcher.mjs --name "オージャスト ログイン4件" --ps-file <repo>/tools/login-services.ps1` でデスクトップに置き、Claude 自身が `Start-Process` で起動する。利用者にコマンドを貼らせない。
+
+起動前にツールと同じ案内（全て `seisaku-team@orgiast.jp`）を示す。**本人がやるのは、Claude が開いたブラウザで会社アカウントを選んで承認することだけ**（端末へのコマンド入力・コードの手コピーは不要）。各ログインは Claude が `Start-Process` で起動し、ブラウザは自動で開く。
+
+- **GitHub**：`gh auth login`（web browser 方式）。ワンタイムコードは端末からコピーできない個体があるため、**Claude が端末出力を捕捉して 8桁コード（`XXXX-XXXX`）をチャットに明示**する。本人は自動で開いた `github.com/login/device` にそれを入力 → Continue → Authorize GitHub CLI。端末からのコピーを本人に強いない（2026-10-30 user-PC でコード不可・差し戻し）。
+- **Google (clasp)**：自動で開く Google 画面で orgiast.jp アカウントを承認するだけ。
+- **Vercel**：プロバイダ選択メニューが出たら「Continue with GitHub」を選び、開いたブラウザで承認。
+- **Codex**：自動で開く ChatGPT 画面で会社アカウントを承認するだけ（コード入力なし）。
+
+localhost の Windows Defender 警告は「キャンセル」でよい（PC内通信のみ）。残った AI Studio ・ localhost エラーのタブは閉じてよい。
+
+Claude は5秒ごとに `gh auth status` / `~/.clasprc.json` / `npx -y vercel whoami` / `~/.codex/auth.json` の tokens を判定し、4件すべて完了するまで待つ。
+
+**詰まり対処表**（2026-10-29 user-PC の実測。どれも Claude が自分で対処し、本人には頼まない）
+
+| 症状 | 対処 |
+|---|---|
+| インストーラが「見つかりません」を連発する | `orgiast-claude-rules\orgiast-claude-rules-main` が二重入れ子になっている。最新のインストーラは自動で修復するので、手順1を再実行する |
+| `gh` が見つからない（Claude の PowerShell/Bash から） | 導入直後で PATH が古い。`C:\Program Files\GitHub CLI\gh.exe` をフルパスで呼ぶ |
+| 手順4で json-valid の NG が十数件出る | hook の参照先と別のクローンで検証している。settings.json に登録されているパスの setup.mjs で再実行する |
+| Bash が LANE-REPAIR-FIRST の hook で止まる、または Codex 委譲ができない | Codex が未ログイン。手順6でログインが済めば解消するので、それまでは PowerShell ツールで進める |
+| clasp でブラウザが開かない、localhost が ERR_CONNECTION_REFUSED になる | login-services.ps1 が URL を抽出して開き直す。古いタブは閉じてよいと本人に1行で伝える |
+| 許可ルールを /permissions で入れるよう求められている気がする | 手順7のツールで Claude が入れる。本人には頼まない |
+| case-handoff（案件同期）や秘匿値取得が HTTP 401 になる／`keyserve-status` が「未設定」 | このPCが keyserve 未登録。手順5.5 で primary を持つPC（kim-PC 等）に enroll トークンを発行してもらい、1行コマンドで配備する。未登録PC単独では直せない（2026-11-04 DELL席で実測） |
+
+### 手順7 許可ルール15行（下記5.3）は Claude Code が追加する（本人に /permissions を操作させない）
+
+- Aグループ（本番反映9行）の可否は貼り付け文の指定に従う。指定のない古い貼り付け文のときだけ、手順0のとおり最初の返答で1回だけ聞く（「アプリの本番反映コマンドを、毎回の確認なしで実行できるようにする設定です。開発をしない場合は不要です」）。
+- 了承あり: `node <手順4と同じ tools>\add-permission-rules.mjs --with-prod`。了承なし: `--with-prod` を付けずに実行（Bの6行だけ）。settings.json のバックアップを取ってから追記し、最後に `N/N present` と表示されれば完了（exit 0）。
+- bypassPermissions 既定（5.4）では Claude が settings.json を編集できる。2026-10-29 user-PC で「Claude は編集しない」旧記述のまま本人に15回の貼り付けを頼み、差し戻された（他アカウントは Claude が追加済み）。5.2 の画面手順は、Claude Code が使えない場合の予備としてだけ使う。
 
 ### 手順8 最後に6章の最終チェックリスト（1〜6項目）を実行し、各項目をOK/NGで報告する
 
-NGがあれば、どの手順に戻ればよいかを添えて報告する。
+すべて Claude が自分で確認する（本人に画面を見せて確認させない）。項目3は `add-permission-rules.mjs --check`（Aの了承があれば `--with-prod --check`）、項目6は `~/.claude/.cost-reporter-state.json` の `lastRun` が24時間以内かで判定する。NGは、Claude が該当の手順に戻って直してから報告する。
 
-**止まる条件**: どの手順でもエラーが出たら、エラーメッセージをそのまま提示して次の手順へ進まず止まる。ログイン・許可ルール追加など本人の操作が必要な箇所は、必ず一度立ち止まって案内する。
+**止まる条件**: 詰まり対処表にない未知のエラーだけ、エラーメッセージをそのまま示して止まる。本人の操作はブラウザでのログイン承認だけ。
+
+### 手順9 今回詰まった点があれば、この文書を直す
+
+手順0の原則から外れて本人に操作や確認を頼んだり、詰まり対処表にない詰まりが出たりしたら、終了前に原因と対処をこの文書（手順0・詰まり対処表・該当手順）に追記して PR を出す。次の人が同じところで止まらないようにするため。
 
 ---
 
@@ -86,21 +142,21 @@ NGがあれば、どの手順に戻ればよいかを添えて報告する。
 
 オージャスト社内でClaude Codeを使う「全アカウント×全パソコン」が同じ状態になるよう、複数の文書・スクリプトに分かれていた設定手順を1本にまとめています。
 
-- **何を**：Claude Codeの共通設定（自動で入るもの＝ルール取り込み・自己更新・コスト監視 と、手作業が必要なもの＝許可ルール15行）をこの1文書にまとめる。
+- **何を**：Claude Codeの共通設定（ルール取り込み・自己更新・コスト監視・許可ルール15行）をこの1文書にまとめる。
 - **どこへ**：各パソコンのClaude Codeのユーザー設定（そのパソコン・そのアカウントだけに効く）。
-- **なぜ**：安全確認（classifier・承認プロンプト）は「人間の理解と同意のための正規の関門」であり、Claude自身やリモートからは解除できない。だからこの文書に沿って、パソコンの前で本人が最小限の操作を行う。それ以外はすべてClaude側で自動化されている。
+- **なぜ**：全PCを同じ状態にするため。本人の操作はログイン承認と、本番反映の許可ルール（Aグループ）を入れるかの意思表示（貼り付け文の選択）だけで、それ以外はすべてClaudeが行う。
 
 ## 2. 対象と所要時間
 
 - 対象：Claude Codeを使っている全パソコン × 全アカウント（1台に複数アカウントがある場合はアカウントごとに実施）
-- 所要時間：初回セットアップ（貼り付けプロンプト）約1分＋自動反映待ち。手作業が必要な許可ルール追加は1台あたり約5分。
+- 所要時間：貼り付け1回＋ログイン承認4件（約5分）。残りは Claude が自動で進める。
 - 準備物：この文書をパソコン上で開いておく（コピペで使う）
 
 ## 3. 全体の流れ
 
 1. 既にClaude Codeを使っているPCなら、通常は何もしなくても自動で最新状態になっている（下記4.2）。
 2. 初めて導入するPC・自動更新が届いていない疑いがあるPCは、上記「0. 新しいPCでやること」または下記4.1の復旧コマンドを実行する。
-3. 許可ルール15行（5章）だけは安全上の理由で自動化できないため、利用者本人が1回だけ手作業で追加する。
+3. 許可ルール15行（5章）は Claude が `tools/add-permission-rules.mjs` で追加する（Aグループは貼り付け文で了承した人だけ）。
 4. 6章の最終チェックリストで状態を確認し、8章の記録表に記入する。
 
 ## 4. 【自動で入るもの】
@@ -114,8 +170,10 @@ NGがあれば、どの手順に戻ればよいかを添えて報告する。
 PowerShell（推奨・Windows）：Windowsキー→「powershell」と入力→Enter→青い画面が開く→右クリックで貼り付け→Enter。所要1分。
 
 ```
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP 'install-orgiast.ps1'; Invoke-WebRequest -UseBasicParsing ('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/install-orgiast.ps1?cb='+[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -OutFile $p; & $p -NoOllama"
+powershell -NoProfile -ExecutionPolicy Bypass -Command '$p=Join-Path $env:TEMP ''install-orgiast.ps1''; Invoke-WebRequest -UseBasicParsing (''https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/tools/install-orgiast.ps1?cb=''+[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -OutFile $p; & $p -NoOllama'
 ```
+
+この1行は Windows PowerShell 5.1 / pwsh のどちらから貼っても、外側のシェルが `$p` を先に展開しない。
 
 これでリポジトリ取得・hook登録・初回取込までが自動で完了する。未コミットの作業がある開発機で実行しても、変更は消えず退避される（pullのみ）。
 
@@ -139,11 +197,54 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=Join-Path $env:TEMP '
 
 この3点のいずれかが欠けていたら「配布が届いていない端末」なので、4.1の復旧コマンドを実行する（Claude Codeに頼めば自動で確認・復旧する）。
 
-## 5. 【手作業が必要なもの】許可ルール15行の追加
+### 4.4 「いちいちYES/NOを聞かれる」を無くすための4点（2026-11-04〜11-05 追記）
 
-Claude Codeの一部の操作（本番反映・特定の確認コマンド）は、安全確認の仕組み上、Claude自身やリモートからは「常に許可」に設定できない。パソコンの前で本人が1回だけ設定する。
+Claude Code が勝手に動けないと、user の作業が「指示→Yes→指示→Yes…」の繰り返しになる。これを無くすため、新PCセットアップの段階で以下を**自動で入れ切る**（手作業ゼロ）。
 
-**必ず先に、そのパソコンの利用者に「この設定を入れてよいか」を確認すること。** 下記Aグループ（9行）はアプリの本番反映を確認なしで実行できるようにするもの。アプリ開発をしない方は入れなくてよい（記録表に「不要」と記入）。
+#### (1) Node.js を Claude Code の PowerShell から**即**使えるようにする
+
+`install-orgiast.ps1` は winget で Node.js LTS を入れるが、**セッションで有効な PATH を Claude Code プロセスに伝える経路が無い**ため、`node` コマンドが「`not recognized`」になるPCがある（2026-11-04 seisaku-team@DELL で確認。Node は `C:\Program Files\nodejs\node.exe` に存在するのに `Get-Command node` が失敗し、fleet-mail / register-fleet-mail など全 `.mjs` ツールが呼べなかった）。
+
+**対策**: `setup --converge` が `~/.claude/settings.json` の `env` または hook で以下を強制する。
+- `PATH` に `C:\Program Files\nodejs`（Windows）/ `/usr/local/bin`（Mac）を先頭追記
+- もしくは PowerShell セッション起動 hook で `$env:PATH = "C:\Program Files\nodejs;$env:PATH"` を自動実行
+
+これが入っていないと、fleet-mail / onboarding-sync 等の `.mjs` ツールが「node が見つかりません」で Claude から呼べず、user に手作業を依頼する羽目になる（本来 Claude で完結できるはずの用件まで user に回る）。
+
+#### (2) 既存GASプロジェクトも command queue パターンに retrofit する
+
+CLAUDE.md §1.4.1 の command queue パターン（1分トリガー + Drive フォルダ監視）は「全GASプロジェクトで導入する」が方針だが、**既存のプロジェクトに後付けする運用が無い**。結果、単発スクリプト（dumpDrafts 等）が残っているプロジェクトは、毎回 user に ▶実行 を押させている（2026-11-04 seisaku-team@ の下書き30通一括修正で判明）。
+
+**対策**: 新しい関数を既存プロジェクトに追加する際、合わせて以下も必ず仕込む（gas-project-setup skill の実装テンプレがそのまま流用できる）。
+- `setupOnce()` — エントリ関数。「今回やりたい処理」と「queue install」を同時に走らせる
+- `installCommandQueue()` — Drive フォルダ作成 + 1分トリガー登録（冪等）
+- `processCommandQueue()` — フォルダ内 `cmd_*.json` を順次実行
+- `COMMANDS` ホワイトリスト — 動的呼び出し禁止、明示登録のみ
+
+これで「1回 Run を押してもらう → 以後は Claude が cmd_*.json を Drive に投げるだけでゼロクリック」が実現する。
+
+#### (3) Gmail MCP が使えるセッションではそれを最優先にする
+
+Claude Code のコンテキスト再読込後に `mcp__claude_ai_Gmail__*` が利用可能になることがある（2026-11-05 seisaku-team@ 実測）。この時、GAS 経由より **直接 Gmail MCP を叩く方が圧倒的に速い**（下書き26通の書き換えが GAS では 1クリック＋トリガー1分、MCP なら数秒）。
+
+**対策**:
+- セッション開始時に `ToolSearch` で `mcp__claude_ai_Gmail__*` の存在確認を既定にする
+- 存在する場合は GAS スクリプト起草を飛ばし、Gmail MCP で直接書き換える
+- 存在しない場合のみ GAS フォールバック
+
+#### (4) ターン中の進捗報告を定着させる
+
+長時間ターン（画像OCR多数・ファイル多数処理など）で Claude が沈黙し、user が「進捗どう？」と尋ねる手間が繰り返されていた（2026-11-04 名刺30通チェック案件）。既存の `auto-progress-ledger.mjs` / `auto-progress-inbox-hook.mjs` は**ターン終了時**の「次にkimがすること」抽出用で、ターン中の経過報告ではない。
+
+**対策**:
+- memory `intra-turn-progress-updates.md` を全PCに配布（shared-memory 経路）。「2〜3ツール呼び出しごとに1行の進捗を出す」を Claude の既定行動にする
+- 将来的に PostToolUse hook でツール呼び出しカウンタ → 一定数ごとに system-reminder 挿入、で強制することも検討（現状は memory のみで様子見）
+
+## 5. 許可ルール15行の追加（Claude が行う）
+
+Claude Codeの一部の操作（本番反映・特定の確認コマンド）を「常に許可」にする設定。追加は Claude Code が `tools/add-permission-rules.mjs` で行う（手順7）。本人の操作は、Aグループを入れてよいかの返事1回だけ。下の5.2は Claude Code が使えない場合の予備手順。
+
+下記Aグループ（9行）はアプリの本番反映を確認なしで実行できるようにするもの。入れるかどうかは利用者が0(b)の貼り付け文を選ぶことで意思表示する。アプリ開発をしない方は入れなくてよい（記録表に「不要」と記入）。
 
 ### 5.1 各設定が何を変えるか（一文で）
 
@@ -218,6 +319,7 @@ PowerShell(Get-ScheduledTask -TaskName *)
 | 4 | permission modeがbypassPermissions | ~/.claude/settings.jsonのpermissions.defaultModeが"bypassPermissions" |
 | 5 | effortLevelがmedium | 同ファイルの"effortLevel": "medium" |
 | 6 | 日次コスト自己申告が届いている | Discordに当月コストの自己申告メッセージが日次で届く |
+| 7 | keyserve 鍵が配備されている（案件同期・秘匿値取得に必須） | `node <repo>\tools\keyserve-status.mjs` が「認証経路: primary / HTTP 200」。「未設定」なら手順5.5で配備する（未登録だと case-handoff が HTTP 401 になる） |
 
 ## 7. 困ったとき
 
@@ -251,6 +353,8 @@ PowerShell(Get-ScheduledTask -TaskName *)
 - winget導入コマンド・自動導入の実体：tools/install-orgiast.ps1・tools/bootstrap.ps1。
 - gh／clasp／vercelの位置づけ：rules-extracted/project-launch-playbook.md（ghのwinget導入コマンド）、および実機settings.jsonのpermissions.allowにnpx clasp *・npx vercel *系が多数登録されていること（個別インストールでなくnpx経由が実運用）。
 - VS Code拡張の前提：既存Doc「Claude Code 許可設定の追加手順」の手順文中の記述、および tools/RESTORE-claude-backup.md のVS Code拡張導入手順。
+- 2026-10-29 user-PC 実測：pwsh の `$p` 先行展開、自動再起動、Gemini 非対話入力、zip 二重入れ子、hook 誤NG、4サービス認証の迷いを再現し、v2.1 で是正。
+- 2026-11-04 DELL席（seisaku-team@）実測：keyserve 未登録のため case-handoff の案件同期が HTTP 401（`keyserve.env`/`enroll.env` とも不在、`keyserve-status` が「未設定」）。従来の手順1〜8に keyserve enroll の配備・確認が無く、トークン未配備の新PCが未登録のまま放置される構造だったため、手順5.5・6章#7・詰まり対処表を追加（v2.3）。enroll トークンは primary を持つPCだけが発行でき未登録PC単独では取得できない設計（tools/keyserve-enroll.mjs:64、keyserve-auth.mjs、onboarding-sync.mjs の provisionKeys）。
 
 ## 未確認事項
 

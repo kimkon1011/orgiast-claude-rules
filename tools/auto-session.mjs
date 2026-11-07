@@ -6,8 +6,10 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { DEFAULT_REPO_MAP, parseRepoMap } from './feedback-to-issues.mjs';
-import { runTaskLedger } from './task-ledger.mjs';
-import { alternateCheapProvider, autoSessionExecutor, buildClaudeHeadlessArgs, buildCheapCodeArgs, claudeFallbackEnabled, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
+import { ledgerRows, runTaskLedger } from './task-ledger.mjs';
+import { alternateCheapProvider, autoSessionExecutor, buildClaudeHeadlessArgs, buildCheapCodeArgs, buildCodexDoArgs, cheapProvidersAllCooling, codexDoLaneEnabled, claudeFallbackEnabled, prepareExecutorRoot, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
+import { findClaudeInVersionedDir, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
+import { sweepFile as sweepRescueTodoFile } from './rescue-todo-sweep.mjs';
 
 export { autoSessionExecutor } from './auto-session-executor.mjs';
 
@@ -208,10 +210,27 @@ export function todoExclusionReason(todo, today = new Date()) {
   // (生成側 next-session-rotate.mjs の見出し境界と二重の防御)。
   if (/^#{1,6}\s/.test(body)) return '見出しのみ（作業内容が無い）';
   const todayNumber = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate();
-  for (const match of text.matchAll(/(\d{4})-(\d{2})-(\d{2})\s*以降/g)) {
+  // 「2026-10-30 22:00 JST 以降」のような時刻付きゲートも拾う（2026-10-29 実測:
+  // 「【2026-10-30 22:00 JST 以降に着手・それより前は着手しない】」が時刻付きのため
+  // 日付だけの正規表現に一致せず、quota-sweep:codex が着手禁止の目標に8tick使い切って
+  // 4連続 exhausted で停止した）。日付だけは従来どおり dateNumber 比較、時刻付きは
+  // JST（UTC+9）表記を絶対時刻に変換して「現在より未来なら除外」で判定する。
+  for (const match of text.matchAll(/(\d{4})-(\d{2})-(\d{2})(?:\s(\d{1,2}):(\d{2})\s*JST)?\s*以降/g)) {
     const date = `${match[1]}-${match[2]}-${match[3]}`;
-    const dateNumber = Number(`${match[1]}${match[2]}${match[3]}`);
-    if (dateNumber > todayNumber) return `${date}以降`;
+    if (!match[4]) {
+      if (Number(`${match[1]}${match[2]}${match[3]}`) > todayNumber) return `${date}以降`;
+      continue;
+    }
+    const gated = Date.parse(`${date}T${match[4]}:${match[5]}+09:00`);
+    if (Number.isFinite(gated) && gated > today.getTime()) return `${date} ${match[4]}:${match[5]} JST以降`;
+  }
+  // 外部（kim・取引先・他PC）の操作待ちは、待っている間だけ寝かせる。TODO に
+  // 「（再確認: YYYY-MM-DD）」と書くと、その日が来るまで自動セッションに選ばれず、
+  // 日付を過ぎれば通常のTODOに戻る（2026-11-02〜04実測: 毎晩同じ確認でセッションを1本消費）。
+  // next-session-rotate はこの除外規則を使わないので、行自体はキューに残り続ける＝埋没しない。
+  for (const match of text.matchAll(/再確認\s*[:：]\s*(\d{4})-(\d{2})-(\d{2})/g)) {
+    const date = `${match[1]}-${match[2]}-${match[3]}`;
+    if (Number(`${match[1]}${match[2]}${match[3]}`) > todayNumber) return `${date}まで再確認待ち`;
   }
   if (/(契約が必要|契約待ち|原価待ち|入金|支払|kim相談|kim に相談|kim と話す|人間の作業|人間しか|人間専用|human-only|要東邦鋼業側で確認|個別写真|撮影|電話|郵送|捺印|OAuth初回同意|アカウント作成|kim待ち|kim の判断|kimの判断|kim の同意|kimの同意|判断を仰|同意を得てから|同意が必要|OS管理操作|管理者権限が必要)/.test(text)) return '人間の作業が前提';
   return '';
@@ -382,9 +401,27 @@ function compareVersion(a, b) {
   return 0;
 }
 
-export function resolveClaudeExe(entries = extensionExecutables(), claudeCli = process.env.CLAUDE_CLI) {
+// デスクトップ版の通常インストール先(%APPDATA%\Claude\claude-code\<版>\<ハッシュ>\claude.exe)。
+// VSCode 拡張しか見ていなかったため、デスクトップ版しか無い機体では 'claude' に落ちて
+// PATH の claude.cmd を掴み、shell 無し spawn で ENOENT になっていた(2026-10-17 実測)。
+function installedClaudeExe(env = process.env) {
+  const appData = env.APPDATA || (env.USERPROFILE ? path.join(env.USERPROFILE, 'AppData', 'Roaming') : '');
+  if (!appData) return '';
+  return findClaudeInVersionedDir(path.join(appData, 'Claude', 'claude-code'), {
+    listDir: (dir) => { try { return fs.readdirSync(dir); } catch { return []; } },
+    exists: (file) => { try { return fs.statSync(file).isFile(); } catch { return false; } },
+  }) || '';
+}
+
+export function resolveClaudeExe(entries, claudeCli = process.env.CLAUDE_CLI) {
   if (claudeCli) return claudeCli;
-  const candidates = entries
+  // 明示的に entries を渡されたときは既存の並び替えだけを行う(テスト・呼び出し元の指定を尊重)。
+  if (entries === undefined) {
+    const installed = installedClaudeExe();
+    if (installed) return installed;
+    entries = extensionExecutables();
+  }
+  const candidates = (entries || [])
     .map((entry) => ({ entry, version: numericVersion(entry) }))
     .filter(({ version }) => version);
   candidates.sort((a, b) => compareVersion(b.version, a.version));
@@ -424,11 +461,47 @@ export function markTodoDone(md, todoText, note) {
 export function isTodoAlreadyDone(md, todoText) {
   const firstLine = String(todoText).split(/\r?\n/, 1)[0];
   if (!firstLine.trim()) return false;
+  const source = String(md);
   const escaped = firstLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // 2026-09-28: 完了印の書き方が `~~…~~` 以外（`[完了 …] 本文`）でも「済み」と判定する。
   // 印の形が増えるたびに再実行保護が片方だけ効かなくなるのを避ける。
   const lineRe = new RegExp(`^\\s*\\d+[.)、]\\s+(?:~~${escaped}~~|\\[完了[^\\]]*\\]\\s+${escaped})`, 'm');
-  return lineRe.test(String(md));
+  if (lineRe.test(source)) return true;
+  // 2026-10-25 実測: バッチ選定（15:30Z）の後に別セッションが該当行の**行末**へ注記と
+  // 「→ ✅ 完了」を足したため、原文の完全一致では完了を見失い、既に片付いた TODO に
+  // セッションを1本消費した（runs/2026-10-25-manifest.json の selectedTodos[5]
+  // = notify-kim:961e… を run 2026-10-25-6 が実行）。番号を除いた本文を比べ、原文と
+  // ほぼ同一（注記の挿入分だけ差）で完了印のある行があれば起動しない。
+  // 40文字キーで比べると同文頭の別TODO（同夜の notify-kim 2件など）まで巻き込むため、
+  // 共通接頭辞の長さで判定する。
+  const normalize = value => String(value).replace(/[\*~`]/g, '').replace(/[\s　]+/g, '');
+  const original = normalize(firstLine);
+  if (!original) return false;
+  const hasDoneMark = body => /~~[^~]*~~/.test(body) || /^(?:\*\*)?\s*(?:\[完了|\[[xX]\]|✅)/.test(body);
+  return source.split(/\r?\n/).some((line) => {
+    const body = line.replace(/^\s*\d+[a-z]?[.)、]\s*/i, '');
+    if (body === line || !hasDoneMark(body)) return false; // 番号付きの TODO 行だけを対象にする
+    const current = normalize(body);
+    let shared = 0;
+    const limit = Math.min(original.length, current.length);
+    while (shared < limit && original[shared] === current[shared]) shared += 1;
+    return shared >= Math.min(original.length, 40) && shared >= original.length * 0.9;
+  });
+}
+
+// 台帳タスクも同じ穴が空く。選定（0:30）〜起動の間に、シート側の完了や
+// booth-feedback-intake の完了同期が「完了」へ変えた行を起動してしまうと、
+// 続く claim が 状態 を 作業中 へ戻し、済んだタスクが毎晩セッション枠を1本食い続ける
+// （2026-10-14 実測: 9/22 に納品済みの FB タスクが 10/14 深夜に1本消費し、行も 作業中 に戻った）。
+// 確認そのものに失敗したときは止めない（再確認の失敗で夜の仕事を落とさない）。
+export async function taskClosedBeforeLaunch(listTaskLedgerItems, taskId) {
+  try {
+    const rows = await listTaskLedgerItems({ taskId });
+    const row = ledgerRows(rows).find((entry) => String(entry?.taskId) === String(taskId));
+    return String(row?.状態 ?? '').trim() === '完了';
+  } catch {
+    return false;
+  }
 }
 
 export function writeTodoDone(nextFile, todoText, note, io = {}) {
@@ -447,6 +520,13 @@ export function writeTodoDone(nextFile, todoText, note, io = {}) {
   }
 }
 
+function buildLedgerPrompt(item, todo, repoCwd, summaryFile, timeoutMin) {
+  const references = ['次アクション', '成果物リンク', '備考']
+    .filter((key) => item[key]).map((key) => `${key}: ${item[key]}`).join('\n');
+  const sections = { 対象: `## 台帳の指示・参照\n${references}\n台帳に HANDOFF 指示書（~/.claude/auto-session/handoffs/*.md 等）の参照がある場合は、そのファイルを読み、実装を codex-do.mjs --prompt-file "<指示書のパス>" --cwd "${repoCwd}" --origin unattended で委譲する。参照先を読めない場合は完了扱いにせず、理由をサマリへ記録する。` };
+  return buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin);
+}
+
 export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 60, date = new Date()) {
   const attached = ['対象', '完了条件', '触る前に読む memory'].map((name) => sections[name]).filter(Boolean).join('\n\n');
   const day = localDate(date).replaceAll('-', '');
@@ -455,19 +535,21 @@ export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 6
     `## 目的\n${todo}`,
     attached,
     `## 固定の作業規約
-- セッションの作業ディレクトリは履歴を揃えるためのフォルダであり、実際の作業対象リポジトリは ${repoCwd} である。git は必ず \`git -C ${repoCwd}\` の形で実行し、codex-do.mjs は \`--cwd ${repoCwd}\` を付ける。裸の \`git status\` / \`git checkout\` は使わない。
-- 実装本体は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd} --origin unattended\` で Codex に委譲する（§1.18）。監督は設計・レビュー・検証だけ。調査・分類・要約だけの作業は \`--kind investigate|classify|summarize\` を付けて llm-ask(gemini/deepseek/groq)へ回し、Codex は実装・テスト実行だけに使う。終了コード75（stdout が \`{"status":"deferred"}\`）は失敗ではなく保留（Codex 上限中または無人割当超過）なので、\`retryAt\` 以降まで同じ項目を再試行せず、${summaryFile} に「保留」と記録して次の項目へ進む。
+- セッションの作業ディレクトリは履歴を揃えるためのフォルダであり、実際の作業対象リポジトリは ${repoCwd} である。git は必ず \`git -C "${repoCwd}"\` の形で実行し、codex-do.mjs は \`--cwd "${repoCwd}"\` を付ける。裸の \`git status\` / \`git checkout\` は使わない。
+- Windows パスをシェルに渡すときは必ずダブルクォートで囲む。bash はクォート無しの \\ を食うため、--cwd C:\\... は壊れた相対パスになる（2026-10-20 に spawn_failed 6件の実害）。
+- 実装本体は \`node tools/codex-do.mjs "<指示>" --cwd "${repoCwd}" --origin unattended\` で Codex に委譲する（§1.18）。監督は設計・レビュー・検証だけ。調査・分類・要約だけの作業は \`--kind investigate|classify|summarize\` を付けて llm-ask(gemini/deepseek/groq)へ回し、Codex は実装・テスト実行だけに使う。終了コード75（stdout が \`{"status":"deferred"}\`）は失敗ではなく保留（Codex 上限中または無人割当超過）なので、\`retryAt\` 以降まで同じ項目を再試行せず、${summaryFile} に「保留」と記録して次の項目へ進む。
 - このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。「バックグラウンドで走らせて完了を待つ」と書いてターンを終えてはいけない。
 - \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、作りかけのブランチを push して draft PR にするか、次回へ引き継いで終了する。
 - 他セッションと作業ツリーを共有している。\`git add -A\` / \`git commit -a\` / \`git stash\` / \`git checkout -- .\` は禁止。自分が作成・変更したファイルだけをパス指定で \`git add\` する。着手前とコミット直前に \`git status --porcelain\` を撮り、差分が自分の変更だけであることを確認する。
 - ブランチは必ず main から切る。ブランチ名は \`auto/${day}-<短いスラグ>\`。
 - \`node --test tools/*.test.mjs\` が緑になるまで直す。
-- PR を作り、CI green を確認してから \`gh pr merge --squash\` でマージする。CI が赤なら直し、3回直して赤のままならマージせず PR を残して理由を書いて終了する。
+- PR は作った席が \`node tools/pr-land.mjs --title "<題>" --body-file <本文>\` で base のブランチへ push し着地させる。kim 操作席の通常変更は \`automerge\` ラベル、鍵関連などの安全弁パスは CI 合格を待って \`pr-merge.mjs\` のレビュー・SHA 検証を通して自分で squash マージする。\`.github/workflows/*\` を含む PR は専用権限・レビュー経路で扱うため停止する。CI が赤なら直し、3回直して赤のままなら理由を記録する。権限・鍵・マージを kim-PC に頼まない。不足時は \`node tools/access-doctor.mjs --fix\` で自己診断・修復する。
 - マージ後、変更が実際に効いているかを実物で検証する。検証できていないものを「完了」と書かない。
 - 進捗は節目ごと（ブランチ作成 / PR 作成 / CI green / マージ / 検証結果 / 残ったこと）に ${summaryFile} へ追記する。このファイルだけは強制終了されても残るので、「やったことは必ずここに書く」。追記は \`>>\` 相当とし、全文を上書きしない。
 - 外部の定期実行（GitHub Actions の schedule など）の結果を待つ場合、5分を超えるポーリングをしてはいけない。待ちが必要なら ${summaryFile} に「検証は次回の自動セッションで行う」と追記し、~/.claude/next-session.md の残TODO先頭に検証だけの1行を追加して終了する。
 - 開始から ${Math.max(0, timeoutMin - 10)} 分でまとめに入り、サマリ追記と残TODO更新を先に済ませる。
 - 終了時は ~/.claude/next-session.md の該当 TODO 行だけを \`~~…~~ → ✅ <日付> 完了（PR #N）\` に行単位で置換し、ファイル全体を上書きしない。該当 TODO 行はどのブロックにあってもよく、成功時は runner 側でも印を付けるので、取り消し線が既に付いていたら何もしなくてよい。
+- fleet-mail の受信メールに \`[判断依頼]\` を含む依頼へは返信も判断も行わない。kim の判断待ちとして放置すること（ヘッドレスでは未読注入からも除外される）。自分が送った判断依頼への回答（[回答・返信不要] 付き）は読んで作業に使ってよいが、返信はしない。
 - 秘匿値を出力しない。
 - 外部への送信（メール、社外向け Discord、SNS、顧客連絡）は行わない。`,
     '## 完了報告\n最後に3行以内で「やったこと / 検証したこと / 残ったこと」を出力する。',
@@ -514,7 +596,7 @@ ${issue.body || '（本文なし）'}
 - 秘匿値をコード、PR、ログへ書かない。
 
 ## 実行環境
-- 実リポジトリは ${repoCwd}。git は \`git -C ${repoCwd}\`、実装委譲は \`node tools/codex-do.mjs "<指示>" --cwd ${repoCwd} --origin unattended\`（調査・分類・要約だけなら \`--kind investigate|classify|summarize\`）のように対象を明示する。終了コード75は失敗ではなく保留で、\`retryAt\` まで再試行しない。
+- 実リポジトリは ${repoCwd}。git は \`git -C "${repoCwd}"\`、実装委譲は \`node tools/codex-do.mjs "<指示>" --cwd "${repoCwd}" --origin unattended\`（調査・分類・要約だけなら \`--kind investigate|classify|summarize\`）のように対象を明示する。終了コード75は失敗ではなく保留で、\`retryAt\` まで再試行しない。
 - このセッションは \`claude -p\` の1回きりのヘッドレス実行である。ターンを終えた瞬間にプロセスごと終了し、起動中の子プロセスはすべて kill される。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止で、フックでも deny される。「バックグラウンドで走らせて完了を待つ」と書いてターンを終えてはいけない。
 - \`codex-do.mjs\` は必ず前景で実行し、\`--timeout <秒>\` にセッションの残り時間より短い秒数を渡す。時間内に終わらない見込みなら待たず、そこまでの状態を ${summaryFile} に書き、作りかけのブランチを push して draft PR にするか、次回へ引き継いで終了する。
 - 作業経過を ${summaryFile} に逐次追記する。PR URL・PRタイトル・CI結果を必ず最後に記録する。
@@ -533,9 +615,9 @@ export function buildRolePrompt(roleName, repoCwd, summaryFile, timeoutMin = 30,
   return `${roleBody}
 
 ## 実行環境
-- 実際の作業対象リポジトリは ${repoCwd}。git は必ず \`git -C ${repoCwd}\` の形で実行し、裸の \`git status\` / \`git log\` は使わない。
+- 実際の作業対象リポジトリは ${repoCwd}。git は必ず \`git -C "${repoCwd}"\` の形で実行し、裸の \`git status\` / \`git log\` は使わない。
 - このセッションは1回きりのヘッドレス実行である。\`run_in_background: true\` と \`ScheduleWakeup\` は使用禁止。ターンを終える前に必要な前景処理を完了する。
-- \`codex-do.mjs\` を使う場合は必ず前景で実行し、\`--cwd ${repoCwd}\` と \`--origin unattended\` とセッション残り時間より短い \`--timeout <秒>\` を付ける。終了コード75は失敗ではなく保留（\`retryAt\` まで再試行しない）。
+- \`codex-do.mjs\` を使う場合は必ず前景で実行し、\`--cwd "${repoCwd}"\` と \`--origin unattended\` とセッション残り時間より短い \`--timeout <秒>\` を付ける。終了コード75は失敗ではなく保留（\`retryAt\` まで再試行しない）。
 - 作業経過と結論は ${summaryFile} に追記する。追記は \`>>\` 相当とし、全文を上書きしない。
 - 外部処理を5分を超えてポーリングしない。待ちが必要なら未検証としてレポートと残TODOに記録して終了する。
 - 開始から ${Math.max(1, timeoutMin - 5)} 分でまとめに入り、結論をレポートと ${summaryFile} に書いて終了する。
@@ -664,24 +746,46 @@ function extensionExecutables() {
   } catch { return []; }
 }
 
-export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs, runOptions = {}) {
+export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs, runOptions = {}) {
+  // 実行役のコードは origin/main の専用 worktree から読む。pinned tree はセッションが作業ブランチを
+  // 切るため、夜間に main へ入った修正が同じ夜の後続セッションへ届かない(2026-10-25 実測)。
+  const executorRoot = runOptions.executorRoot ?? prepareExecutorRoot({ repoRoot: REPO_ROOT });
   return new Promise((resolve) => {
     const startedAt = new Date();
     const configuredChoice = autoSessionExecutor();
-    const choice = runOptions.executor === 'cheap-code'
+    const choice = runOptions.model
+      ? { ...configuredChoice, executor: 'claude' }
+      : runOptions.executor === 'cheap-code'
       ? { ...configuredChoice, executor: 'cheap-code' }
       : configuredChoice;
     let cheapProvider = choice.provider;
     let alternateTried = false;
+    let codexTried = false;
+    let activeLane = choice.executor === 'cheap-code' ? 'cheap-code' : 'claude';
+    const codexLane = codexDoLaneEnabled();
     const promptFile = path.join(os.tmpdir(), `orgiast-auto-session-${process.pid}-${Date.now()}.txt`);
     if (choice.executor === 'cheap-code') fs.writeFileSync(promptFile, `[headless:auto-session]\n${prompt}`, 'utf8');
-    const launch = (fallback = false) => {
-      const cheap = choice.executor === 'cheap-code' && !fallback;
+    const launch = (fallback = false, codex = false) => {
+      const cheap = choice.executor === 'cheap-code' && !fallback && !codex;
+      activeLane = codex ? 'codex-do' : cheap ? 'cheap-code' : 'claude';
+      if (codex) codexTried = true;
       let child;
-      try { child = spawn(cheap ? process.execPath : executable, cheap
-        ? buildCheapCodeArgs({ repoRoot: REPO_ROOT, provider: cheapProvider, promptFile, cwd: historyCwd })
-        : buildClaudeHeadlessArgs({ repoCwd, historyCwd, resumeSessionId: runOptions.resumeSessionId }), { detached: process.platform !== 'win32', cwd: historyCwd, env: { ...process.env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
-      catch (error) { finish(null, '', String(error?.message ?? error), true, fallback); return; }
+      try { child = spawn(cheap || codex ? process.execPath : executable, codex
+        ? buildCodexDoArgs({ repoRoot: executorRoot, promptFile, cwd: historyCwd })
+        : cheap
+        ? buildCheapCodeArgs({ repoRoot: executorRoot, provider: cheapProvider, promptFile, cwd: historyCwd })
+        : buildClaudeHeadlessArgs({ repoCwd, historyCwd, resumeSessionId: runOptions.resumeSessionId, ...(runOptions.model ? { model: runOptions.model } : {}) }), { detached: process.platform !== 'win32', cwd: historyCwd,
+        // cheap-code 側でも浄化するが、claude フォールバック(監督セッション)はここで
+        // デスクトップ由来の CLAUDECODE / CLAUDE_CODE_* / MCP_* を外しておく。
+        env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: codex ? 'auto-session:codex-do' : cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
+      catch (error) {
+        if (codex) {
+          const reason = `codex-do launch failed: ${error?.message ?? error}`;
+          if (claudeFallbackEnabled()) { recordFallbackToClaude({ reason }); launch(true); return; }
+          recordSkippedNoExecutor({ reason, provider: cheapProvider });
+        }
+        finish(null, '', String(error?.message ?? error), true, fallback, false, codex); return;
+      }
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -690,7 +794,7 @@ export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs, run
     child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
     child.on('error', (error) => { launchFailed = true; stderr += error.message; });
     child.stdin.on('error', () => {});
-    if (cheap) child.stdin.end(); else child.stdin.end(`[headless:auto-session]\n${prompt}`, 'utf8');
+    if (cheap || codex) child.stdin.end(); else child.stdin.end(`[headless:auto-session]\n${prompt}`, 'utf8');
     const timer = setTimeout(() => {
       timedOut = true;
       if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
@@ -698,22 +802,25 @@ export function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs, run
     }, Math.max(1, timeoutMs - (Date.now() - startedAt.getTime())));
     child.on('close', (code) => {
       clearTimeout(timer);
-      if (cheap && !timedOut && code !== 0) {
-        const reason = `cheap-code/${cheapProvider} exit ${code}`;
-        const alternate = alternateTried ? null : alternateCheapProvider(cheapProvider);
+      if ((cheap || codex) && !timedOut && code !== 0 && !(codex && code === 75)) {
+        const reason = `${codex ? 'codex-do' : `cheap-code/${cheapProvider}`} exit ${code}`;
+        const alternate = !cheap || alternateTried ? null : alternateCheapProvider(cheapProvider);
         if (alternate) { alternateTried = true; cheapProvider = alternate; launch(false); return; }
+        if (cheap && codexLane && !codexTried) { launch(false, true); return; }
         if (claudeFallbackEnabled()) { recordFallbackToClaude({ reason }); launch(true); return; }
-        recordSkippedNoExecutor({ reason, provider: cheapProvider });
+        recordSkippedNoExecutor({ reason, provider: cheapProvider, stderr });
         finish(code, stdout, stderr, launchFailed, false, false, true);
         return;
       }
       finish(timedOut ? null : code, stdout, stderr, launchFailed, fallback, timedOut);
     });
     };
-    const finish = (code, stdout, stderr, launchFailed, fallback, timedOut = false, skippedNoExecutor = false) => { try { fs.rmSync(promptFile, { force: true }); } catch {} resolve({ startedAt: startedAt.toISOString(), endedAt: new Date().toISOString(), exitCode: code, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure', launchFailed, fallbackToClaude: Boolean(fallback), skippedNoExecutor, executorUsed: fallback || choice.executor !== 'cheap-code' ? 'claude' : `cheap-code:${cheapProvider}`, stdout, stderr }); };
+    const finish = (code, stdout, stderr, launchFailed, fallback, timedOut = false, skippedNoExecutor = false) => { try { fs.rmSync(promptFile, { force: true }); } catch {} resolve({ startedAt: startedAt.toISOString(), endedAt: new Date().toISOString(), exitCode: code, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure', launchFailed, fallbackToClaude: Boolean(fallback), skippedNoExecutor, executorUsed: activeLane === 'cheap-code' ? `cheap-code:${cheapProvider}` : activeLane, ...(activeLane === 'codex-do' && code === 75 && !timedOut ? { deferred: true } : {}), stdout, stderr }); };
     // 既存の呼び出し契約: executable 自体が不正なら cheap-code の選択状態にかかわらず起動失敗として返す。
     if (String(executable).includes('\0')) { finish(null, '', 'The argument contains null bytes', true, false); return; }
-    launch(false);
+    // 2026-10-27 実測: deepseek 402 + glm 上限で2日連続 success 0。
+    // 両方冷却中なら無駄な起動を省き、codex-do 内蔵の代替経路へ進む。
+    launch(false, choice.executor === 'cheap-code' && codexLane && cheapProvidersAllCooling(cheapProvider));
   });
 }
 
@@ -958,7 +1065,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
   const home = homeDir();
   const listTaskLedgerItems = io.listTaskLedgerItems ?? (async (filters) => {
     const response = await runTaskLedger({ command: 'list', ...filters }, { homeDir: home });
-    return Array.isArray(response) ? response : response?.items ?? response?.tasks ?? [];
+    return response;
   });
   const updateTaskLedger = io.runTaskLedger ?? ((args) => runTaskLedger(args, { homeDir: home }));
   const claudeDir = path.join(home, '.claude');
@@ -1004,13 +1111,17 @@ export async function main(argv = process.argv.slice(2), io = {}) {
 
   const nextFile = path.join(claudeDir, 'next-session.md');
   if (!readOnly && fs.existsSync(nextFile) && fs.statSync(nextFile).size > MAX_BYTES) rotate(nextFile);
+  if (fs.existsSync(nextFile)) {
+    try { sweepRescueTodoFile(nextFile, { dryRun: readOnly }); }
+    catch (error) { console.error(`[rescue-todo-sweep] ${error?.message ?? error}`); }
+  }
   // フォーム報告は next-session.md と独立した入力源なので、片方が無くてももう片方を止めない。
   const parsed = fs.existsSync(nextFile) ? parseHandoff(fs.readFileSync(nextFile, 'utf8')) : { block: '', todos: [], todoBlocks: [], sections: {} };
   const feedbackIssues = await listIssues();
   let taskLedgerItems = [];
   try {
     const listed = await listTaskLedgerItems({ 状態: '未着手' });
-    taskLedgerItems = Array.isArray(listed) ? listed.filter((item) => item?.taskId) : [];
+    taskLedgerItems = ledgerRows(listed).filter((item) => item?.taskId);
   } catch (error) {
     console.warn(`auto-session: task-ledger の取得に失敗しました（既存処理は継続します）: ${error?.message ?? error}`);
   }
@@ -1054,7 +1165,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       const repoCwd = pickCwd(todo, fs.existsSync, config.repoByKeyword);
       const historyCwd = fs.existsSync(detectedHistoryCwd) ? detectedHistoryCwd : repoCwd;
       const summaryFile = path.join(autoDir, 'runs', `dry-task-ledger-${index + 1}.summary.md`);
-      console.log(`[task-ledger]\nTASK: ${todo}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildPrompt(todo, {}, repoCwd, summaryFile, options.timeoutMin)}`);
+      console.log(`[task-ledger]\nTASK: ${todo}\nREPO CWD: ${repoCwd}\nHISTORY CWD: ${historyCwd}\n\n${buildLedgerPrompt(item, todo, repoCwd, summaryFile, options.timeoutMin)}`);
     }
     if (!selectedTaskLedger.length) console.log('[task-ledger]\nDRY対象: 0件');
     return 0;
@@ -1208,6 +1319,13 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       if (!timing.run) break;
       const taskId = item.taskId;
       const todo = `[${taskId}] ${item.件名 || '無題'}${item.次アクション ? ` — ${item.次アクション}` : ''}`;
+      if (await taskClosedBeforeLaunch(listTaskLedgerItems, taskId)) {
+        completedChildren += 1;
+        const now = new Date().toISOString();
+        taskLedgerResults.push({ source: 'task-ledger', taskId, todo, status: 'skipped-already-done', startedAt: now, endedAt: now });
+        console.log(`auto-session: 台帳側で完了済みのため起動しません（選定後に完了）: ${taskId}`);
+        continue;
+      }
       try {
         try { await updateTaskLedger({ command: 'claim', taskId, 状態: '作業中' }); }
         catch (error) { console.warn(`auto-session: task-ledger claim 失敗 (${taskId}、実行は継続します): ${error?.message ?? error}`); }
@@ -1217,7 +1335,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
         const runFile = path.join(autoDir, 'runs', `${stamp}.json`);
         const summaryFile = path.join(autoDir, 'runs', `${stamp}.summary.md`);
         fs.writeFileSync(summaryFile, '', { flag: 'a' });
-        const result = await runSession(executable, buildPrompt(todo, {}, repoCwd, summaryFile, timing.timeoutMin), repoCwd, historyCwd, timing.timeoutMin * 60_000);
+        const result = await runSession(executable, buildLedgerPrompt(item, todo, repoCwd, summaryFile, timing.timeoutMin), repoCwd, historyCwd, timing.timeoutMin * 60_000);
         let summary = '';
         try { summary = fs.readFileSync(summaryFile, 'utf8'); } catch {}
         completedChildren += 1;

@@ -1,0 +1,10 @@
+nightly-kpi.log:624: notify-kim: DM/webhook のどちらにも送れません (The operation was aborted due to timeout; fetch failed)
+nightly-kpi.log:625: 夜間KPI 2026-10-28
+nightly-kpi.log:626: 主KPI: 消化率 0.0%（前日比 +0.0pt） / 空回り率 0.0%（前日比 +0.0pt） / 純削減 不明
+nightly-kpi.log:627: 消化: 0/20件 / 残 20件 / 純減 0件 / 日付不明完了 0件
+nightly-kpi.log:628: セッション: 2件（成功 0 / 失敗 0 / timeout 2 / 空回り 0）/ 成果 不明
+nightly-kpi.log:629: 夜間バッチ: ran=true / completed=false / ok=9/14 / 失敗=model-scout、hide-task-windows、session-auto-close、stalled-session-resume、memory-publish
+nightly-kpi.log:630: コスト: 夜間 不明 / 監督相当 不明 / モデル削減 不明 / 空回り $0.00 / 完了1件あたり 不明
+nightly-kpi.log:631: 参考: 無人消化実時間の中央値 36.9分 × 完了件数 = 0.0分
+nightly-kpi.log:632: 注記: すべて list 価格換算であり、実請求額ではありません。
+nightly-kpi.log:633: 改善起票: 2件

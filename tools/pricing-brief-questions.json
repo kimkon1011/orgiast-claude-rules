@@ -22,7 +22,7 @@
   {
     "id": "deepseek-pricing",
     "label": "DeepSeek の従量単価とオフピーク割引",
-    "query": "DeepSeek API pricing deepseek-chat deepseek-coder off-peak discount"
+    "query": "DeepSeek API pricing deepseek-flash deepseek-v4-pro off-peak discount"
   },
   {
     "id": "openrouter-pricing",

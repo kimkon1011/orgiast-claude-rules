@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "apps": [
+    {
+      "appName": "購買部管理アプリ",
+      "kind": "next",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "PURCHASING_REPO",
+        "appDir": "PURCHASING_APP_DIR"
+      }
+    },
+    {
+      "appName": "カフェ業務チェック",
+      "kind": "next",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "CAFE_REPO",
+        "appDir": "CAFE_APP_DIR"
+      }
+    },
+    {
+      "appName": "イベントショップ",
+      "kind": "gas",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "EVENT_SHOP_REPO",
+        "appDir": "EVENT_SHOP_APP_DIR"
+      }
+    },
+    {
+      "appName": "ブース制作アプリ",
+      "kind": "gas",
+      "intake": "booth-sheet",
+      "refs": {
+        "url": "BOOTH_FEEDBACK_URL",
+        "secret": "BOOTH_FEEDBACK_TOKEN",
+        "repo": "BOOTH_FEEDBACK_REPO",
+        "appDir": "BOOTH_FEEDBACK_APP_DIR"
+      }
+    },
+    {
+      "appName": "aujust／営業自動化",
+      "kind": "next",
+      "intake": "supabase",
+      "pagePathInclude": [
+        "/dashboard",
+        "/customers/",
+        "/deals/"
+      ],
+      "pagePathExclude": [
+        "/cases/",
+        "/help/【購買部】",
+        "/requests/self-purchase",
+        "/admin/inquiries"
+      ],
+      "refs": {
+        "url": [
+          "AUJUST_SUPABASE_URL",
+          "NEXT_PUBLIC_SUPABASE_URL"
+        ],
+        "secret": [
+          "AUJUST_SUPABASE_SERVICE_ROLE_KEY",
+          "SUPABASE_SERVICE_ROLE_KEY"
+        ],
+        "repo": "AUJUST_REPO",
+        "appDir": "AUJUST_APP_DIR"
+      }
+    },
+    {
+      "appName": "倉庫アプリ",
+      "kind": "gas",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "FEEDBACK_BBB271DAAB67_REPO",
+        "appDir": "FEEDBACK_BBB271DAAB67_APP_DIR"
+      }
+    },
+    {
+      "appName": "学会制作最終チェック",
+      "kind": "gas",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "FEEDBACK_53423A14CB08_REPO",
+        "appDir": "FEEDBACK_53423A14CB08_APP_DIR"
+      }
+    },
+    {
+      "appName": "construction-manual-app",
+      "kind": "next",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "FEEDBACK_F3898056D69F_REPO",
+        "appDir": "FEEDBACK_F3898056D69F_APP_DIR"
+      }
+    },
+    {
+      "appName": "wt-aujust-fbkit",
+      "kind": "next",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "FEEDBACK_A7682C4952D1_REPO",
+        "appDir": "FEEDBACK_A7682C4952D1_APP_DIR"
+      }
+    },
+    {
+      "appName": "aujust-sales-automation",
+      "kind": "next",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "FEEDBACK_695A36C282EA_REPO",
+        "appDir": "FEEDBACK_695A36C282EA_APP_DIR"
+      }
+    },
+    {
+      "appName": "展示会かぶりチェッカー",
+      "kind": "next",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "EXHIBITION_OVERLAP_REPO",
+        "appDir": "EXHIBITION_OVERLAP_APP_DIR"
+      }
+    }
+  ]
+}

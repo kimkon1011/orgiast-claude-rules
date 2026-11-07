@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readHookSettings } from './fixtures/read-hook-settings.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -88,7 +89,7 @@ test('register-hooks: BOM付き settings.json でも登録でき、BOM が除去
   const temp = makeTempHome('orgiast-settings-bom-test-'); const claude = path.join(temp, '.claude'); fs.mkdirSync(claude, { recursive: true });
   const file = path.join(claude, 'settings.json'); fs.writeFileSync(file, '\uFEFF{"hooks":{}}');
   const r = run('register-hooks.mjs', undefined, ['--hooks-only'], { ORGIAST_HOME: temp, ORGIAST_REPO: repo }); const data = fs.readFileSync(file);
-  assert(r.status === 0 && r.stdout.includes('追加'), r.stdout || r.stderr); assert(!data.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])), 'BOMが残っている'); JSON.parse(data.toString('utf8'));
+  assert(r.status === 0 && r.stdout.includes('期待集合へ収束'), r.stdout || r.stderr); assert(!data.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])), 'BOMが残っている'); JSON.parse(data.toString('utf8'));
 });
 test('register-hooks: 旧PCを .mjs へ移行し、独自設定を保ったまま冪等', () => {
   const temp = makeTempHome('orgiast-hooks-upgrade-test-'); const claude = path.join(temp, '.claude'); fs.mkdirSync(claude, { recursive: true });
@@ -103,7 +104,7 @@ test('register-hooks: 旧PCを .mjs へ移行し、独自設定を保ったま�
   assert(selfcheck.status === 0 && selfcheck.stdout.includes('SessionStart/onboarding-sync.mjs') && selfcheck.stdout.includes('欠落していたため自動登録'), selfcheck.stdout || selfcheck.stderr);
   const first = run('register-hooks.mjs', undefined, ['--hooks-only'], { ORGIAST_HOME: temp, ORGIAST_REPO: repo });
   assert(first.status === 0, first.stdout || first.stderr);
-  const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const after = readHookSettings(file);
   const sessionCommands = (after.hooks?.SessionStart || []).flatMap((group) => (group.hooks || []).map((hook) => String(hook.command || '')));
   assert(sessionCommands.filter((command) => command.includes('onboarding-sync.mjs')).length === 1, JSON.stringify(sessionCommands));
   assert(!sessionCommands.some((command) => command.includes('onboarding-sync.ps1')), JSON.stringify(sessionCommands));
@@ -221,12 +222,12 @@ test('fable-session-guard: process.exitを使わずisEntryで起動', () => {
   const source = fs.readFileSync(path.join(toolsDir, 'fable-session-guard.mjs'), 'utf8');
   assert(!/process\.exit\s*\(/.test(source) && /isEntry\(import\.meta\.url\)/.test(source), '安全なhookエントリ要件を満たしていない');
 });
-test('model-agent-guard: 実装は warn', () => {
+test('model-agent-guard: warn設定でも実装はdeny', () => {
   const temp = makeTempHome('orgiast-model-agent-warn-test-');
   writeCostEnforce(temp, 'warn');
   const r = run('model-agent-guard.mjs', { tool_name: 'Agent', tool_input: { model: 'sonnet', prompt: 'ログイン機能を実装して' } }, [], { ORGIAST_HOME: temp });
   const output = JSON.parse(r.stdout);
-  assert(output.hookSpecificOutput.additionalContext && !output.hookSpecificOutput.permissionDecision, r.stdout || r.stderr);
+  assert(output.hookSpecificOutput.permissionDecision === 'deny', r.stdout || r.stderr);
 });
 test('model-agent-guard: block昇格時は実装委譲を deny', () => {
   const temp = makeTempHome('orgiast-model-agent-block-test-');
@@ -319,7 +320,7 @@ test('hook-selfcheck: 偽HOMEで欠落を自動修復', () => {
   const claude = path.join(temp, '.claude'); fs.mkdirSync(claude, { recursive: true });
   fs.writeFileSync(path.join(claude, 'settings.json'), '{}\n');
   const r = run('hook-selfcheck.mjs', undefined, [], { ORGIAST_HOME: temp, ORGIAST_REPO: repo });
-  const settings = JSON.parse(fs.readFileSync(path.join(claude, 'settings.json'), 'utf8'));
+  const settings = readHookSettings(path.join(claude, 'settings.json'));
   assert(r.stdout.includes('欠落していたため自動登録'), r.stdout || r.stderr);
   assert(JSON.stringify(settings).includes('model-agent-guard.mjs') && JSON.stringify(settings).includes('cost-routing-gate.mjs'), '必須hookが登録されていない');
 });
@@ -490,7 +491,7 @@ test('hook-selfcheck: makimono-gate の欠落を自動登録する', () => {
   fs.writeFileSync(path.join(claude, 'settings.json'), JSON.stringify({ hooks }));
   const r = run('hook-selfcheck.mjs', undefined, [], { ORGIAST_HOME: home, ORGIAST_REPO: repo });
   assert(r.stdout.includes('makimono-gate.mjs'), `自動登録メッセージなし stdout=${JSON.stringify(r.stdout)} stderr=${r.stderr}`);
-  const after = JSON.parse(fs.readFileSync(path.join(claude, 'settings.json'), 'utf8'));
+  const after = readHookSettings(path.join(claude, 'settings.json'));
   const commands = (after.hooks?.UserPromptSubmit || []).flatMap((g) => (g.hooks || []).map((h) => String(h.command || '')));
   assert(commands.some((c) => c.includes('makimono-gate.mjs')), JSON.stringify(commands));
 });
@@ -529,12 +530,24 @@ test('install/verify: 配布する ~/.claude/*.env を両方の総合チェッ�
   ]) for (const name of [...distributed].sort()) if (!source.includes(name)) missing.push(`${name} -> ${checker}`);
   assert(missing.length === 0, `総合チェックに未掲載: ${missing.join(', ')}`);
 });
+test('notify-kim: Discord 設定不要で台帳へ保存し JSON を返す', () => {
+  const home = makeTempHome('orgiast-inbox-');
+  try {
+    fs.mkdirSync(path.join(home, '.claude'));
+    fs.writeFileSync(path.join(home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+    const r = run('notify-kim.mjs', undefined, ['--kind', 'ask', '判断してください'], { ORGIAST_HOME: home, NOTIFY_PLAIN_JA: '0' });
+    assert(r.status === 0, r.stderr);
+    const result = JSON.parse(r.stdout);
+    assert(result.delivered === 'session-inbox', '台帳へ振り分けていない');
+    const item = JSON.parse(fs.readFileSync(path.join(home, '.claude/kim-inbox', `${result.id}.json`), 'utf8'));
+    assert(item.kind === 'ask' && item.status === 'open', '未回収の依頼が保存されていない');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
 test('外部送受信ツール: 設定不足をstderr 1行以上で観測可能にしてexit 0', () => {
   // 第3要素 quietStdout: stdout が「呼び出し側が解釈する経路」のツールだけ true。
   // cost-work-loop は指示書本文を stdout に出すのが正常動作なので、そこを空だと要求すると
   // 本番側を黙らせる誤修正を誘発する(実際に一度そうなった)。観測点は stderr に統一する。
   const targets = [
-    ['notify-kim.mjs', [], true],
     ['fleet-sheet-report.mjs', ['--dry-run'], true],
     ['interaction-rollout.mjs', [], true],
     ['fleet-triage-report.mjs', [], true],

@@ -1,11 +1,18 @@
 #!/usr/bin/env node
+import { runStaleTaskHealth } from './stale-task-health.mjs';
+import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import fs from 'node:fs';
+import { runAudit } from './unattended-job-audit.mjs';
+import { scan as scanStalls, asAnomalies } from './stall-scan.mjs';
+import { expectationLog, logIsStale } from './lib/health-signals.mjs';
+import { runConvergenceWatch } from './fleet-convergence-watch.mjs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { getScheduledTaskInfo } from './lib/scheduled-task.mjs';
+import { checkGasMasterDrift } from './gas-master-drift.mjs';
 import { runAutoSessionStreakWatch } from './auto-session-streak-watch.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -31,6 +38,10 @@ export function evaluateScheduledTaskHealth(expectation, info, { now = new Date(
   const elapsedMs = now - lastRunMs;
   const anomalies = [];
   const anomaly = (type, message) => ({ type, label: expectation.label, message, expectation });
+
+  if (Number.isFinite(expectation.maxLastRunHours) && elapsedMs > expectation.maxLastRunHours * 3600000) {
+    anomalies.push(anomaly('task_stale', `最終起動 ${lastRunTime} が期待 ${expectation.maxLastRunHours} 時間を超えています`));
+  }
 
   if (info.state === 'Running' && elapsedMs / 3_600_000 > expectation.maxRunHours) {
     anomalies.push(anomaly('task_overrun', `実行が上限 ${expectation.maxRunHours} 時間を超えて継続中（開始: ${lastRunTime}）。前回インスタンスの長期生存は次回起動の拒否（0x800710E0）につながります`));
@@ -224,6 +235,12 @@ export function isFailureLine(line) {
 
   if (/^(?:HEAD is now at|From https:\/\/|From git@|\*\s+branch\b|Already up to date\b|Updating\s|Fast-forward\b)/i.test(cleanLine)) return false;
 
+  // robocopy /MIR のファイル列挙行（New File / Newer / *EXTRA File / *EXTRA Dir 等）は
+  // 「転送・削除する対象」の情報行であって失敗ではない。除外しないと、名前に error を
+  // 含むファイル（実測 2026-10-13: repo-backups\...\nightly-batch-error-detail.test.mjs）を
+  // 失敗と誤検知する（バックアップは complete で正常終了、robocopy exit=3＝コピー有+余剰有）。
+  if (/^(?:\*?EXTRA(?:\s+(?:File|Dir))?|New\s+(?:File|Dir)|Newer|Older|Changed|Same)\b/i.test(cleanLine)) return false;
+
   let remainder = line
     .replace(/\berror\s*[:= ]*\s*(?:[0-9]*[0]|-(?!\w))/gi, '')
     .replace(/失敗\s*[:：= ]*\s*0(?!\w)/g, '')
@@ -300,7 +317,12 @@ export async function runNightlyHealth({
   baselinePath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'nightly-health-baseline.json'),
   scheduledTaskInfo = getScheduledTaskInfo,
   streakWatch = runAutoSessionStreakWatch,
-  streakNotifyImpl
+  staleTaskHealth = runStaleTaskHealth,
+  streakNotifyImpl,
+  gasDrift = checkGasMasterDrift,
+  convergenceWatch = runConvergenceWatch,
+  unattendedAudit = runAudit,
+  stallScan = scanStalls
 } = {}) {
   const dirname = path.dirname(fileURLToPath(import.meta.url));
   expectations ??= readJson(path.join(dirname, 'nightly-health-expectations.json'), []);
@@ -310,6 +332,26 @@ export async function runNightlyHealth({
   const newOffsets = { ...oldOffsets };
   const anomalies = [];
   const dedicatedStreakAnomalies = new Set();
+  try { anomalies.push(...(await staleTaskHealth({ home, now, platform, dryRun: dryRun || prime })).anomalies); }
+  catch (error) { anomalies.push({ type: 'stale_task_error', label: '定期タスク参照先', message: error.message }); }
+  try {
+    const audit = await unattendedAudit({ home, now: now.getTime(), platform, dryRun: dryRun || prime });
+    for (const finding of audit.unresolved || []) {
+      const anomaly = { type: 'unattended_unresolved', label: '無人ジョブ監査', message: `未修復: ${finding.name}（${finding.reason}）` };
+      anomalies.push(anomaly);
+      dedicatedStreakAnomalies.add(anomaly);
+    }
+    if (audit.error) anomalies.push({ type: 'unattended_audit_error', label: '無人ジョブ監査', message: '計測不能' });
+  } catch { anomalies.push({ type: 'unattended_audit_error', label: '無人ジョブ監査', message: '計測不能' }); }
+  try { anomalies.push(...asAnomalies(await stallScan({ home, now: now.getTime(), platform, expectations, save: !dryRun }))); }
+  catch (error) { anomalies.push({ type: 'stall_scan_error', label: '停滞診断', message: error.message }); }
+  try {
+    await gasDrift({ home, now, dryRun: dryRun || prime, notify });
+  } catch (error) {
+    anomalies.push({ type: 'gas_master_drift_error', label: 'GAS/master 週次監査', message: error.message });
+  }
+  try { await convergenceWatch({ home, now: now.getTime(), dryRun: dryRun || prime }); }
+  catch { anomalies.push({ type: 'fleet_convergence', label: '配布収束監視', message: 'シート取得または送付に失敗（秘密情報省略）' }); }
   const registeredLogs = new Set();
   const scanTargets = [];
   const logFiles = fs.existsSync(logsDir)
@@ -331,6 +373,8 @@ export async function runNightlyHealth({
   }
 
   for (const exp of expectations) {
+    if (exp.platform && exp.platform !== platform) continue;
+    if (exp.fleetLabel && resolveFleetLabel(home) !== exp.fleetLabel) continue;
     let matches = [];
     if (exp.pattern) {
       const regex = new RegExp(exp.pattern);
@@ -341,7 +385,7 @@ export async function runNightlyHealth({
       registeredLogs.add(exp.log);
       if (logFiles.includes(exp.log)) matches = [exp.log];
     }
-    const logFile = matches[0];
+    const logFile = expectationLog(home, exp)?.file;
     if (!logFile) {
       const log = exp.log || exp.pattern;
       if (exp.ignore) continue;
@@ -356,7 +400,7 @@ export async function runNightlyHealth({
     }
     const logPath = path.join(logsDir, logFile);
     const stat = fs.statSync(logPath);
-    if ((now - stat.mtime) / 3_600_000 > exp.maxAgeHours) {
+    if (logIsStale(stat.mtimeMs, exp.maxAgeHours, now.getTime())) {
       anomalies.push({ type: 'stale', label: exp.label, log: logFile, message: `ログ更新が滞っています（最終更新: ${formatDate(stat.mtime)}、期待: ${exp.maxAgeHours}時間以内）`, expectation: exp });
     }
     if (exp.task) {
@@ -444,12 +488,12 @@ export async function runNightlyHealth({
   const visible = notificationAnomalies.slice(0, MAX_NOTIFICATION_ITEMS);
   let notificationText = `⚠️ 夜間ジョブ異常 ${notificationAnomalies.length}件\n`;
   for (const anomaly of visible) notificationText += `- ${anomaly.label}: ${anomaly.message}\n`;
-  if (notificationAnomalies.length > visible.length) notificationText += `…ほか ${notificationAnomalies.length - visible.length}件（node tools/nightly-health.mjs --dry-run で全件）\n`;
+  if (notificationAnomalies.length > visible.length) notificationText += `…ほか ${notificationAnomalies.length - visible.length}件（全件は Claude が点検ログで確認します）\n`;
   if (suppressedCount) notificationText += `（既知の赤 ${suppressedCount}件は baseline により抑制）\n`;
   if (unregisteredLogs.length) {
     notificationText += `（未登録のログ ${unregisteredLogs.length}件: ${unregisteredLogs.slice(0, 5).join(', ')}）\n`;
   }
-  notificationText += '確認コマンド: node tools/nightly-health.mjs';
+  notificationText += '確認: Claude が夜間点検ログを確認します';
 
   const hash = crypto.createHash('sha256').update(notificationText).digest('hex');
   const statePath = path.join(home, '.claude', '.nightly-health-state.json');

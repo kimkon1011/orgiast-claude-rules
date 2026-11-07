@@ -1,0 +1,32 @@
+# 事故型カタログ（INCIDENT TYPES）
+
+事故・手戻り・user に発見された不具合は、その場の修正に加えて「型」で直す（ONBOARDING §1.22）。
+着手時にこの表を検索し、同じ型があれば再利用する（原因調査と横展開の検索式を使い回せるのでコストが下がる）。
+
+## 手順（事故のたびに5点セット）
+1. **型で言語化**: 「何が起きたか」でなく「どの構造が壊れやすいか」を1語で（例: 配布漏れ型）。表に既存の型があればそれを使い、無ければ新設する。
+2. **横展開**: 同じ型の既存箇所をリポジトリ横断で検索し、見つかった分を同じ PR で直す。検索式は表の「横展開の検索」列に残す。
+3. **機械ゲート**: テスト＞hook／lint／converge チェック＞人の確認、の安い順に選び、再発を機械で止める。文書だけの対策は不可（§1.21 の昇格階層で 5 以上を選ぶ）。
+4. **全PC配布が要るなら converge へ**: 設定・拡張・スケジュールは `setup --converge`、ルールは onboarding-sync（§1.22 B）。
+5. **1行追記**: 下の表へ型・症状・横展開の検索・ゲートを1行足す。同型の再発は `count` を足して昇格を検討する（§1.21 / LEARNING-LEDGER）。
+
+完了報告には「型 / 横展開した箇所数 / 追加したゲート」を書く。ゲートを足せなかったときは理由と次アクションを書く。
+
+## カタログ
+| 型 | 症状（初出） | 横展開の検索 | ゲート |
+|---|---|---|---|
+| 配布漏れ型 | per-PC 機能が1台でだけ動き、converge に未登録。配布対象が手書き一覧で、新しいフォルダ（packages/）が漏れた（2026-10-11 スマホ用待機タブ） | 配布・コピー対象を手書きで列挙している箇所（onboarding-sync のフォルダ一覧、zip 経路、converge の登録表）。per-PC の機能を足す PR | 配布カバレッジのテスト、fleet-scope 宣言レジストリ（fleet か kim-only かの宣言必須）、converge ビーコンと fleet-status |
+| 見張りの沈黙故障型 | 自動進行の check（`node C:\Users\...`）が Git bash で `\` を失い MODULE_NOT_FOUND、node の exit 1 が「未達」と同じなので check_error にならず空振り。kim が「進捗どう？」と再度聞いた（2026-11-06）。同時期に Bot DM の依頼は返事待ちの追跡対象外だった（2026-10-26〜11-05） | 終了コードだけで成否を読む見張り（auto-progress check・health check・watchdog）。人への依頼を送る経路で返事待ち台帳に載らないもの | executeCheck のパス正規化＋クラッシュを check_error にして通知、登録時 preflight で拒否、`auto-progress.mjs --audit-checks`（#1622）。Discord 依頼の自動登録 hook と2日超のセッション注入（#1573） |
+| 経路取り違え型 | 全PCの設定変更を fleet-mail（相談用・受信側は実行しない設計）で依頼し、未配達・未実行のまま。組織指示「settings.json の変更は converge 経由」に反した（2026-10-11） | 「全PC」「他のPC」への変更依頼を fleet-mail／directive／手渡しで出している箇所と手順書 | fleet-mail 送信前の警告（変更依頼を検知）、受信側の「converge 化が必要」返信（§1.22 C） |
+| 観測不能型 | 他PCの状態を照会する手段がなく、未反映を user がスマホで発見した（2026-10-11） | 「全PCに反映した」と報告する箇所。状態を人に確認させている手順 | converge ビーコン、`tools/fleet-status.mjs`（未ビーコンの PC は「未確認」と書く） |
+| ログ不在＝不在型 | Claude 側ログに無いことを外部の状態の不在の証拠にした（2026-09-10）。ゲート: external-state-claim-gate | 外部状態を「無い」「未接続」と断定する文面 | external-state-claim-gate（既存） |
+| 単一指標の最適化による盲点型 | 費用だけで新AIを選び高性能モデルの品質改善を見逃した（2026-10-15） | selectCandidates / pendingCandidates / evaluationCost / nightly-batch | フロンティア検出・品質+5pt・単価不明・日次評価の回帰テスト。docs/incidents/2026-10-15-frontier-model-blind-spot.md |
+| 実行元ツリー固着型 | 定期タスクが同期されない worktree/別クローン/固定ブランチを実行し続け、移行済みの経路(DeepSeek→OpenRouter)を旧コードが本家直結で叩き HTTP 402。実プローブは全レーン正常で監視に映らなかった。同期側も未コミット1ファイル(rescue 済み)で 4日間 skip(2026-10-29 kim-PC・PR #1302) | Orgiast* タスクの Action に nightly-repo 以外のパス(worktree・auto-session-repo・orgiast-main 等)を持つもの。register-*.ps1 で作業ツリーのパスを焼き込む箇所。DIRTY_WORKTREE_SKIP が続く同期ログ | repair-task-paths の worktree/別クローン検出と日次自動実行(ブランチ fix/stale-task-tree-detect)、register-messenger-watch.ps1 -UpdateActionOnly |
+| セッション中間状態依存型 | 完了判定がセッション限定の中間状態に依存 → セッション停止で完了を検知できず kim が進捗を聞く羽目に（2026-11-06） | 完了判定スクリプトの scratchpad・nightly-repo/.scratch・/tmp 参照 | auto-progress --add-check の preflight で scratchpad・.scratch・/tmp 参照を拒否（2026-11-06） |
+| 配布元URL破損型 | 配布元リポジトリの接続先 URL が壊れ、そのPCだけ main の修正が無言で届かなくなる。fetch は定期処理が古い origin/main へ reset し続けエラーは表に出ない（2026-11-05 PC004） | 各PC の fetch を origin 依存で黙って止める配布経路（bootstrap・fleet-fix-now・.git/config の remote.origin.url を焼く箇所） | access-doctor の origin 自動修復（履歴一致確認後に向け替え・保存ログ）＋ setup-manifest の git-origin check（repo:rules-origin・converge 配布） |
+
+追記ルール: 型名は構造を表す語にする。症状は1行、日付と出典を付ける。ゲート列が空の行は未完了として扱い、埋まるまで消さない。
+
+- 型: 夜間メンテが待機中セッションを「作業中でない」と誤判定して殺す（活動時刻ベースの busy 判定） → 対策: 生存＋未クローズで保護、落ちたら host_exit から自動再オープン。
+- 型: 秘密入りの成果物を「既定の置き場」に出し、置き場の継承共有で広く見える（既定フォルダ＝社内全体・外部Gmail継承） → 対策: 本文の秘密検出で共有フォルダへの出力を拒否し --private（owner のみを読み戻し）を必須化。ゲート: gdoc-publish.mjs containsSecret（exit 3/4）。2026-11-07 PR #1682
+

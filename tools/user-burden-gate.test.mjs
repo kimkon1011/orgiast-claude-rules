@@ -28,3 +28,45 @@ test('path-only handoff still requires audit evidence', () => {
   assert.equal(judgeUserBurden(launcher).decision, 'block');
   assert.equal(judgeUserBurden(`${launcher}\n${audit}`).decision, 'pass');
 });
+
+test('手渡し内の未確認事項を block する', () => {
+  const result = judgeUserBurden(`次に kim がすること: OpenRouter の持ち主は未確認のまま開く\n${audit}`);
+  assert.equal(result.decision, 'block');
+  assert.match(result.reason, /^\[UNRESOLVED-IN-HANDOFF\]/);
+  const steps = judgeUserBurden(`次に kim がすること: 設定画面を開く\n1. 手順: リンクを開く\n2. 場所: 管理アカウントは要確認\nhttps://example.com/settings\n${audit}`);
+  assert.equal(steps.decision, 'block');
+  assert.match(steps.reason, /管理アカウントは要確認/);
+});
+
+test('手渡し外の未確認は対象外', () => {
+  assert.equal(judgeUserBurden(`調査報告: 契約日は未確認です。\n次に kim がすること: ダブルクリックする\n${launcher}\n${audit}`).decision, 'pass');
+});
+
+test('未確認事項のない手渡しは従来どおり通過', () => {
+  assert.equal(judgeUserBurden(`次に kim がすること: ダブルクリックする\n${launcher}\n${audit}`).decision, 'pass');
+});
+
+test('本番デプロイのターミナル手渡しは手順が揃っていても block する', () => {
+  const text = `本番に出したいので、PowerShell を開いて次を貼って実行してください。\n\`\`\`bash\ncd D:\\Claude\\event-shop\nnpx vercel deploy --prod --yes\n\`\`\`\n${audit}`;
+  const result = judgeUserBurden(text);
+  assert.equal(result.decision, 'block');
+  assert.equal(result.code, 'PROD-DEPLOY-HANDOFF');
+});
+
+test('本番反映の1クリック起爆ファイルも block する', () => {
+  const result = judgeUserBurden(`次に kim がすること: 本番反映（ダブルクリック）\nC:\\Users\\test\\Desktop\\本番反映.cmd\n${audit}`);
+  assert.equal(result.decision, 'block');
+  assert.equal(result.code, 'PROD-DEPLOY-HANDOFF');
+});
+
+test('コマンド無しの「本番反映を実行してください」も block する', () => {
+  const result = judgeUserBurden(`本番反映を実行してください。\n${audit}`);
+  assert.equal(result.decision, 'block');
+  assert.equal(result.code, 'PROD-DEPLOY-HANDOFF');
+});
+
+test('Claude が実行した報告と、user 自身が実行すると明示した場合だけ通す', () => {
+  assert.equal(judgeUserBurden('Claude 側で `npx vercel deploy --prod --yes` を実行しました。`vercel inspect` で新しい id と alias を確認済みです。\n次に kim がすること: なし').triggered, false);
+  const explicit = `user がご自身で実行すると仰ったので手順を再掲します。\n\`\`\`bash\nnpx vercel deploy --prod --yes\n\`\`\`\n実行してください。\n[PROD-DEPLOY-HANDOFF-OK] 「自分でデプロイしたい」と user が明示\n${audit}`;
+  assert.equal(judgeUserBurden(explicit, 'コマンドを教えて').decision, 'pass');
+});

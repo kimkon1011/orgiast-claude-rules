@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { readEnvValue } from './env-kv.mjs';
-import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
+import { prepareWorkerConfigDir, resolveClaudeExecutableFromDisk, sanitizeClaudeChildEnv } from './claude-exe.mjs';
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
@@ -13,11 +13,23 @@ const cwdIndex = args.indexOf('--cwd');
 const modelIndex = args.indexOf('--model');
 const cwd = path.resolve(cwdIndex >= 0 && args[cwdIndex + 1] ? args[cwdIndex + 1] : process.cwd());
 const model = modelIndex >= 0 && args[modelIndex + 1] ? args[modelIndex + 1] : 'glm-5.3';
+const USAGE = '使い方: node tools/glm-code.mjs "<指示>" [--cwd <path>] [--model <name>] [--dry-run]';
+const helpIndex = args.findIndex((arg) => arg === '-h' || arg === '--help');
 const omitted = new Set();
 if (dryRun) omitted.add(args.indexOf('--dry-run'));
+if (helpIndex >= 0) omitted.add(helpIndex);
 for (const index of [cwdIndex, modelIndex]) if (index >= 0) { omitted.add(index); omitted.add(index + 1); }
-const instruction = args.filter((_, index) => !omitted.has(index)).join(' ').trim();
-if (!instruction) { console.error('使い方: node tools/glm-code.mjs "<指示>" [--cwd <path>] [--model <name>] [--dry-run]'); process.exitCode = 2; }
+let instruction = args.filter((_, index) => !omitted.has(index)).join(' ').trim();
+if (!instruction) {
+  // --help 単独は正常な要求(exit 0 / stdout)。指示が空なだけならエラー(exit 2)。
+  (helpIndex >= 0 ? console.log : console.error)(USAGE);
+  process.exitCode = helpIndex >= 0 ? 0 : 2;
+} else if (instruction.startsWith('--')) {
+  // 未知のオプションを指示文として通すと、そのまま有料セッションの指示になり課金だけ発生する(2026-10-15 実測)。
+  console.error(`不明なオプションです: ${instruction.split(/\s+/)[0]}\n${USAGE}`);
+  instruction = '';
+  process.exitCode = 2;
+}
 
 if (instruction) {
   const home = process.env.ORGIAST_HOME || os.homedir();
@@ -73,10 +85,16 @@ if (instruction) {
       let outputChars = 0;
       // Windows の claude.bat は shell 無しで起動できない(cheap-code と同じ実測)。
       const { executable } = await resolveClaudeExecutableFromDisk(process);
+      const configDir = prepareWorkerConfigDir({ home });
       const child = spawn(executable, ['-p', prompt, '--model', model], { windowsHide: true,
         cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic', ANTHROPIC_AUTH_TOKEN: key },
+        env: {
+          ...sanitizeClaudeChildEnv(process.env),
+          ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic',
+          ANTHROPIC_AUTH_TOKEN: key,
+          CLAUDE_CONFIG_DIR: configDir,
+        },
       });
       child.stdout.on('data', (chunk) => { outputChars += chunk.length; process.stdout.write(chunk); });
       child.stderr.on('data', (chunk) => process.stderr.write(chunk));

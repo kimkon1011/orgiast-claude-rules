@@ -18,6 +18,7 @@ function _fleetEnsureIdentityHeaders_(sheet) {
   if (oldDelegation >= 0) { sheet.getRange(1, oldDelegation + 1).setValue(FLEET_HEADERS_.delegRatio); headers[oldDelegation] = FLEET_HEADERS_.delegRatio; }
   const planned = fleetPlanHeaders(headers);
   if (planned.length > headers.length) {
+    if (sheet.getMaxColumns() < planned.length) sheet.insertColumnsAfter(sheet.getMaxColumns(), planned.length - sheet.getMaxColumns());
     sheet.getRange(1, lastColumn + 1, 1, planned.length - headers.length).setValues([planned.slice(headers.length)]);
   }
 }
@@ -78,19 +79,34 @@ function doPost(e) {
   } catch (error) {
     return _fleetJson_({ ok: false, status: 400, error: 'invalid_json' });
   }
+  if (payload && payload.kind === 'install-beacon') return _fleetJson_(receiveInstallBeacon(e, payload));
   const expected = PropertiesService.getScriptProperties().getProperty('FLEET_TOKEN');
   if (!expected || payload.token !== expected) return _fleetJson_({ ok: false, status: 401, error: 'unauthorized' });
-  const labelRequiredKinds = { extensions: true, 'cloud-login': true, 'cost-improve-heartbeat': true };
+  const labelRequiredKinds = { 'plan-usage': true, extensions: true, 'cloud-login': true, 'cost-improve-heartbeat': true };
   if (labelRequiredKinds[payload.kind] && (typeof payload.label !== 'string' || payload.label.trim() === '')) {
     return _fleetJson_({ ok: false, status: 400, error: 'label_required' });
   }
 
   // 未知 kind は従来どおり通常点検として扱い、既存クライアントの挙動を変えない。
+  // auto-progress / auto-progress-list は tools/auto-progress-watch.mjs（停滞判定・自動再開）と
+  // tools/auto-progress-digest.mjs（朝 08:40 の DM）が使う。実体は AutoProgress.gs。
   const handlers = {
+    'auto-progress': upsertAutoProgress,
+    'auto-progress-list': listAutoProgress,
     'mail-send': sendFleetMail,
     'mail-poll': pollFleetMail,
     'mail-reply': replyFleetMail,
     'mail-get': getFleetMail,
+    'mail-trace': traceFleetMail,
+    'mail-sent-status': getFleetMail,
+    'mail-alerts': getFleetMailAlerts,
+    'mail-seen': seenFleetMail,
+    'mail-ack': ackFleetMail,
+    'mail-fail': failFleetMail,
+    'fleet-beacon': upsertFleetBeacon,
+    'fleet-beacon-list': listFleetBeacons,
+    'install-beacon-list': listInstallBeacons,
+    'plan-usage': upsertPlanUsage,
     'pc-spec': upsertPcInventory,
     'extensions-describe': describeExtensionAudit,
     extensions: replaceExtensionAudit,
@@ -136,10 +152,23 @@ function doGet(e) {
     const rows = values.map(function(row) {
       const value = function(key) { return columns[key] >= 0 ? (row[columns[key]] || '') : ''; };
       return {
+        username: value('osUser'),
+        convergenceId: value('convergenceId'),
+        platform: value('platform'),
+        claudeAccount: value('claudeAccount'),
+        syncRepo: value('syncRepo'),
+        syncHead: value('syncHead'),
+        mainHead: value('mainHead'),
+        behindMain: value('behindMain'),
+        missingSince: value('missingSince'),
+        hookMissing: value('hookMissing'),
+        keyMissing: value('keyMissing'),
+        convergenceReportedAt: value('convergenceReportedAt'),
         pcName: value('selfPc'), label: value('hostname'), hostname: value('realHostname'), reportedAt: value('reportedAt'), note: value('consistency'),
         interactionLoop: value('interactionLoop'), interactionSelftest: value('interactionSelftest'),
         claudeUsd: value('claudeUsd'), mainModel: value('mainModel'), delegRatio: value('delegRatio'), delegRatioLegacy: value('delegRatioLegacy'), cheapAiUse: value('cheapAiUse'),
         planSevenDayPct: value('planSevenDayPct'), planFiveHourPct: value('planFiveHourPct'), budgetPacePct: value('budgetPacePct'), settingsModel: value('settingsModel'),
+        stuckDialogs24h: value('stuckDialogs24h'),
         codexLogin: value('codexLogin'), fable5: value('fable5'), disciplineAlert: value('disciplineAlert'), livenessState: value('livenessState'),
         costLoopRanAt: value('costLoopRanAt'), costLoopStatus: value('costLoopStatus'),
         costWeeklyRanAt: value('costWeeklyRanAt'), costWeeklyStatus: value('costWeeklyStatus'),
@@ -205,12 +234,18 @@ function upsertFleetStatus(payload) {
     const rows = lastRow > 1 ? sheet.getRange(2, 1, lastRow - 1, lastColumn).getValues() : [];
     const plan = fleetPlanUpsert(headers, rows, payload);
     const targetRow = plan.rowIndex + 2;
+    if (payload.convergenceOnly && FLEET_CONVERGENCE_KEYS_.some(function(key) { return plan.columns[key] < 0; })) throw new Error('convergence headers missing');
 
     // 自動列だけを個別に書く。A〜Eは追記行でも一切触らない。
     Object.keys(plan.values).forEach(function(columnIndex) {
       sheet.getRange(targetRow, Number(columnIndex) + 1).setValue(plan.values[columnIndex]);
     });
-    return { ok: true, action: plan.action, row: targetRow };
+    SpreadsheetApp.flush();
+    if (payload.convergenceOnly) {
+      const receipt = sheet.getRange(targetRow, 1, 1, lastColumn).getValues()[0];
+      if (Object.keys(plan.values).some(function(key) { return String(receipt[Number(key)]) !== String(plan.values[key]); })) throw new Error('convergence read-back mismatch');
+    }
+    return { ok: true, action: plan.action, row: targetRow, convergence: payload.convergenceOnly ? payload.convergenceId : undefined };
   } finally {
     lock.releaseLock();
   }

@@ -46,10 +46,11 @@ test('block の reason は認証経路とコピー可能なコマンドを含む
   const result = evaluatePrHandoff('PR を作成してください');
   assert.equal(result.decision, 'block');
   assert.ok(result.reason.includes('`gh` 未認証は PR 作成を手渡す理由にならない'));
-  assert.ok(result.reason.includes(
-    'credential helper に PAT が入っているので、`git push` が通る機体なら必ず作れる',
-  ));
-  const command = "GH_TOKEN=$(printf 'protocol=https\\nhost=github.com\\n\\n' | git credential fill | sed -n 's/^password=//p') gh pr create --base main --head <branch> --title \"<題>\" --body-file <本文ファイル>";
+  assert.ok(result.reason.includes('gh auth status'));
+  assert.ok(result.reason.includes('gh auth login'));
+  assert.ok(!result.reason.includes('必ず作れる'));
+  const command = "GH_TOKEN=$(printf 'protocol=https\\nhost=github.com\\n\\n' | git credential fill | sed -n 's/^password=//p') gh pr create --base main --head <branch> --title \"<題>\" --body-file <本文ファイル> --label automerge";
   assert.ok(result.reason.split('\n').includes(command));
+  assert.ok(result.reason.split('\n').includes('automerge ラベルは作成時に同時に付ける（後から gh pr edit --add-label は classifier に拒否されうる。ラベル無しの PR は auto-merge.yml が eligible=false で着地しない）。'));
   assert.ok(!result.reason.includes('マージ'));
 });

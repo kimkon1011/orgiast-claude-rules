@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { publishSeatPr } from './pr-land.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -18,6 +19,31 @@ export function normalizeMessage(value) { return String(value || '').replace(/\d
 export function anomalyFingerprint(anomaly) { return crypto.createHash('sha256').update(`${anomaly.label}|${normalizeMessage(anomaly.message)}`).digest('hex').slice(0, 16); }
 export function slugify(value) { return String(value).normalize('NFKD').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase().slice(0, 40) || 'nightly-health'; }
 
+export function getTodayJstStartMs(nowDate = new Date()) {
+  const d = nowDate instanceof Date ? nowDate : new Date(nowDate);
+  if (Number.isNaN(d.getTime())) return NaN;
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Tokyo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  const parts = formatter.formatToParts(d);
+  const year = parts.find((p) => p.type === 'year').value;
+  const month = parts.find((p) => p.type === 'month').value;
+  const day = parts.find((p) => p.type === 'day').value;
+  return Date.parse(`${year}-${month}-${day}T00:00:00+09:00`);
+}
+
+export function isRanAtTodayJst(ranAtStr, nowDate = new Date()) {
+  if (!ranAtStr) return false;
+  const ranAtMs = Date.parse(ranAtStr);
+  if (Number.isNaN(ranAtMs)) return false;
+  const startMs = getTodayJstStartMs(nowDate);
+  if (Number.isNaN(startMs)) return false;
+  return ranAtMs >= startMs;
+}
+
 function readJson(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
 function readLedger(file) { try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).map(JSON.parse); } catch { return []; } }
 function redactValue(value) {
@@ -31,13 +57,96 @@ function ymd(now) { return now.toISOString().slice(0, 10).replaceAll('-', ''); }
 
 export async function runRemediation({
   home = process.env.ORGIAST_HOME || os.homedir(), now = new Date(), dryRun = false, json = false,
+  noWait = false, waitMin = process.env.NIGHTLY_REMEDIATE_WAIT_MIN, pollMs = process.env.NIGHTLY_REMEDIATE_WAIT_POLL_MS,
   repo = path.resolve(import.meta.dirname, '..'), playbooks = defaultPlaybooks, run = command,
   notify = notifyKim, decision = addDecision, maxCodex = 3, maxMinutes = 45,
+  clock = Date.now, budgetMinutes = process.env.NIGHTLY_REMEDIATE_BUDGET_MIN,
   taskApi = { get: getScheduledTaskInfo, start: startScheduledTask, stop: stopScheduledTask }
 } = {}) {
-  const input = readJson(path.join(home, '.claude', '.nightly-health-last.json'), { anomalies: [] });
+  const configuredBudget = Number(budgetMinutes);
+  maxMinutes = Math.min(maxMinutes, Number.isFinite(configuredBudget) && configuredBudget > 0 ? configuredBudget : 80);
+  const started = clock();
+  const remainingMs = () => maxMinutes * 60000 - (clock() - started);
+  const laneTimeout = () => {
+    if (remainingMs() < 5 * 60000) throw new Error('remediation-budget-deferred');
+    return Math.floor((remainingMs() - 3 * 60000) / 1000) * 1000;
+  };
+  const logFile = path.join(home, '.claude', 'logs', 'nightly-health-remediate.log');
+  // run-hidden.vbs redirects stdout to logFile and holds a Windows write handle.
+  // Retrying that handle cannot succeed until this process exits. Keep a durable
+  // sibling record and let the wrapper write the same line through stdout.
+  const eventsLogFile = logFile.replace(/\.log$/, '.events.log');
+  let wrapperOwnsLog = false;
+  const appendLog = async (line) => {
+    if (!wrapperOwnsLog) {
+      try { await appendLineWithRetry(logFile, line, { attempts: 1 }); return; }
+      catch (error) { if (error.code !== 'EBUSY') throw error; wrapperOwnsLog = true; }
+    }
+    console.log(line);
+    await appendLineWithRetry(eventsLogFile, line);
+  };
+  const appendEvent = async (eventObj, line) => {
+    const jsonl = typeof eventObj === 'string' ? eventObj : JSON.stringify(eventObj);
+    try { await appendLineWithRetry(eventsLogFile, jsonl); }
+    catch (error) { console.error(`WARN events.log追記失敗: ${redactAll(error?.message ?? error)}`); }
+    if (line) {
+      console.log(line);
+      if (!wrapperOwnsLog) {
+        try { await appendLineWithRetry(logFile, line, { attempts: 1 }); }
+        catch (error) { if (error.code === 'EBUSY') wrapperOwnsLog = true; else console.error(`WARN ログ追記失敗: ${redactAll(error?.message ?? error)}`); }
+      }
+    }
+  };
+
+  const healthFile = path.join(home, '.claude', '.nightly-health-last.json');
+  let input = readJson(healthFile, { anomalies: [] });
+
+  const parsedWaitMin = Number(waitMin);
+  const effectiveWaitMin = Number.isFinite(parsedWaitMin) && parsedWaitMin > 0 ? parsedWaitMin : 25;
+  const parsedPollMs = Number(pollMs);
+  const effectivePollMs = Number.isFinite(parsedPollMs) && parsedPollMs > 0 ? parsedPollMs : 30000;
+
+  if (!noWait && !isRanAtTodayJst(input.ranAt, now)) {
+    const startWaitIso = new Date(clock()).toISOString();
+    await appendEvent(
+      { event: 'remediate.wait_for_health', status: 'start', ranAt: startWaitIso, ranAtInput: input.ranAt || null, waitMin: effectiveWaitMin, pollMs: effectivePollMs },
+      `${startWaitIso} remediate.wait_for_health start (ranAt: ${input.ranAt || 'none'}, max ${effectiveWaitMin}m)`
+    );
+
+    const waitDeadline = clock() + effectiveWaitMin * 60000;
+    let fresh = false;
+    while (clock() < waitDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, effectivePollMs));
+      input = readJson(healthFile, { anomalies: [] });
+      if (isRanAtTodayJst(input.ranAt, now)) {
+        fresh = true;
+        break;
+      }
+    }
+
+    if (fresh) {
+      const endWaitIso = new Date(clock()).toISOString();
+      await appendEvent(
+        { event: 'remediate.wait_for_health', status: 'completed', ranAt: endWaitIso, ranAtInput: input.ranAt || null },
+        `${endWaitIso} remediate.wait_for_health completed (ranAt: ${input.ranAt || 'none'})`
+      );
+    } else {
+      const endWaitIso = new Date(clock()).toISOString();
+      await appendEvent(
+        { event: 'remediate.wait_for_health', status: 'timeout', stale_input: true, ranAt: endWaitIso, ranAtInput: input.ranAt || null },
+        `${endWaitIso} remediate.wait_for_health timeout stale_input (ranAt: ${input.ranAt || 'none'})`
+      );
+    }
+  }
+
   const anomalies = Array.isArray(input.anomalies) ? input.anomalies : [];
   if (!anomalies.length) {
+    // A healthy/no-op run must also advance the monitored heartbeat.
+    if (!dryRun) {
+      try { await appendLog(`${now.toISOString()} remediation started`); }
+      catch (error) { console.error(`WARN ログ追記失敗: ${redactAll(error?.message ?? error)}`); }
+    }
+
     const result = { exitCode: 0, fixed: [], prs: [], escalated: [], deferred: [], suppressed: [], skipped: [], plan: [] };
     const cacheTime = input.ranAt || 'キャッシュなし';
     if (json) console.log(JSON.stringify({ ...result, message: `ok:異常なし（${cacheTime}）` }, null, 2));
@@ -45,8 +154,7 @@ export async function runRemediation({
     return result;
   }
   const ledgerFile = path.join(home, '.claude', 'nightly-health-remediate-ledger.jsonl');
-  const logFile = path.join(home, '.claude', 'logs', 'nightly-health-remediate.log');
-  const prior = readLedger(ledgerFile), started = Date.now();
+  const prior = readLedger(ledgerFile);
   const result = { exitCode: 0, fixed: [], prs: [], escalated: [], deferred: [], suppressed: [], skipped: [], plan: [] };
   const tasks = { get: (name) => taskApi.get(name), start: (name) => taskApi.start(name), stop: (name) => taskApi.stop(name) };
   const record = async (anomaly, outcome, extra = {}) => {
@@ -55,7 +163,7 @@ export async function runRemediation({
       const line = `${row.ranAt} ${outcome} ${anomaly.label}${extra.playbook ? ` (${extra.playbook})` : ''}${extra.prUrl ? ` ${extra.prUrl}` : ''}`;
       try { await appendLineWithRetry(ledgerFile, JSON.stringify(row)); }
       catch (error) { console.error(`WARN 台帳追記失敗: ${redactAll(error?.message ?? error)}`); }
-      try { await appendLineWithRetry(logFile, line); }
+      try { await appendLog(line); }
       catch (error) { console.error(`WARN ログ追記失敗: ${redactAll(error?.message ?? error)}`); console.log(line); }
     }
     return row;
@@ -63,6 +171,18 @@ export async function runRemediation({
   const fileDecision = (text) => { try { decision({ source: 'nightly-health-remediate', text }, { home, now }); } catch (error) { console.error(`WARN decision記録失敗: ${redactAll(error?.message ?? error)}`); } };
   const context = {
     now, tasks, reranToday: false,
+    repairDialogWatcher: () => {
+      const result = run(process.execPath, [path.join(repo, 'tools', 'register-stuck-dialog-task.mjs')], { cwd: repo });
+      if (result.status !== 0) throw new Error(result.stderr || 'watcher registration failed');
+    },
+    async verifyDialogWatcher() {
+      for (let i = 0; i < 12; i++) {
+        const heartbeat = readJson(path.join(home, '.claude', 'heartbeat', 'stuck-dialog-watch.json'), {});
+        if (heartbeat.ok && Date.parse(heartbeat.finishedAt) >= now.getTime()) return true;
+        await new Promise(resolve => setTimeout(resolve, 2500));
+      }
+      return false;
+    },
     readRepoFile: (file) => fs.readFileSync(path.resolve(repo, file), 'utf8'),
     async waitForLogAdvance(log, minutes) {
       const file = path.join(home, '.claude', 'logs', log); const before = fs.existsSync(file) ? fs.statSync(file).mtimeMs : 0;
@@ -147,9 +267,9 @@ export async function runRemediation({
       continue;
     }
     const overCount = codexCount >= maxCodex;
-    const overTime = Date.now() - started >= maxMinutes * 60000;
+    const overTime = remainingMs() < 5 * 60000;
     if (overCount || overTime) {
-      const reason = overCount ? '1回3件の修理上限に到達' : '45分の全体上限に到達';
+      const reason = overCount ? '1回3件の修理上限に到達' : `${maxMinutes}分の全体予算: 残り5分未満`;
       if (dryRun) plan(anomaly, 'deferred', reason); else await defer(anomaly, reason);
       continue;
     }
@@ -167,24 +287,37 @@ export async function runRemediation({
       try {
         const added = run('git', ['worktree', 'add', worktree, '-b', branch, 'origin/main'], { cwd: repo });
         if (added.status !== 0) throw new Error(added.stderr || 'worktree add failed');
-        const codex = run(process.execPath, [path.join(repo, 'tools', 'codex-do.mjs'), '--prompt-file', promptFile, '--cwd', worktree, '--timeout', '1800', '--origin', 'unattended', '--kind', 'implement'], { cwd: repo, timeout: 31 * 60000 });
+        const timeout = laneTimeout();
+        const codex = run(process.execPath, [path.join(repo, 'tools', 'codex-do.mjs'), '--prompt-file', promptFile, '--cwd', worktree, '--timeout', String(timeout / 1000), '--origin', 'unattended', '--kind', 'implement'], { cwd: repo, timeout });
         let coded = codex;
         // 終了コード75は保留(上限中/無人割当超過)。失敗ではないので、retryAt を控えて cheap-code へ回す。
         const deferred = parseDeferred(codex.status, codex.stdout);
         if (deferred) { deferredInfo = deferred; console.error(`[nightly-health-remediate] codex 保留(${deferred.reason}): ${new Date(deferred.retryAt).toISOString()} 以降`); }
-        if (codex.status !== 0) coded = run(process.execPath, [path.join(repo, 'tools', 'cheap-code.mjs'), '--provider', 'auto', '--prompt-file', promptFile, '--cwd', worktree], { cwd: repo, timeout: 31 * 60000 });
+        if (codex.status !== 0) coded = run(process.execPath, [path.join(repo, 'tools', 'cheap-code.mjs'), '--provider', 'auto', '--prompt-file', promptFile, '--cwd', worktree], { cwd: repo, timeout: laneTimeout() });
         if (coded.status !== 0) throw new Error(`修理レーン失敗 codex exit ${codex.status}: ${redactAll(codex.stderr).slice(-200)} / cheap-code exit ${coded.status}: ${redactAll(coded.stderr).slice(-200)}`);
-        const tested = run(process.execPath, ['--test', 'tools/*.test.mjs', 'tools/lib/*.test.mjs'], { cwd: worktree, timeout: 20 * 60000 });
+        const testTimeout = laneTimeout();
+        const tested = run(process.execPath, ['--test', 'tools/*.test.mjs', 'tools/lib/*.test.mjs'], { cwd: worktree, timeout: Math.min(20 * 60000, testTimeout) });
         if (tested.status !== 0) throw new Error(`回帰テスト失敗: ${tested.stderr.slice(0, 300)}`);
-        const pushed = run('git', ['push', '-u', 'origin', branch], { cwd: worktree, timeout: 120000 }); if (pushed.status !== 0) throw new Error(pushed.stderr);
         const bodyFile = path.join(os.tmpdir(), `nightly-remediate-pr-${process.pid}.txt`);
         fs.writeFileSync(bodyFile, redactAll(`fingerprint: ${fingerprint}\n\n異常: ${anomaly.label}: ${anomaly.message}\n\n変更点: Codexによる最小修復\n検証: 全テスト成功\n`), 'utf8');
-        const pr = run('gh', ['pr', 'create', '--label', 'automerge', '--title', `fix(${slug}): ${anomaly.label} を自動修復`, '--body-file', bodyFile], { cwd: worktree });
+        const published = publishSeatPr({ cwd: worktree, home, branch, title: `fix(${slug}): ${anomaly.label} を自動修復`, bodyFile,
+          run: (file, args, options) => {
+            const value = run(file, args, { cwd: worktree, timeout: 120000, ...options });
+            if (value.error || value.status !== 0) throw new Error(`${file} ${args[0]} failed`);
+            return String(value.stdout || '').trim();
+          } });
+        if (published) { result.prs.push(await record(anomaly, 'pr', { prUrl: published.url })); handled = true; continue; }
+        const pushed = run('git', ['push', '-u', 'origin', branch], { cwd: worktree, timeout: 120000 }); if (pushed.status !== 0) throw new Error(pushed.stderr);
+        const pr = run('gh', ['pr', 'create', '--title', `fix(${slug}): ${anomaly.label} を自動修復`, '--body-file', bodyFile], { cwd: worktree });
         if (pr.status !== 0) throw new Error(pr.stderr); const prUrl = pr.stdout.trim();
         result.prs.push(await record(anomaly, 'pr', { prUrl })); handled = true;
       } catch (error) { laneReason = redactAll(error.message || error); }
       finally { run('git', ['worktree', 'remove', '--force', worktree], { cwd: repo }); try { fs.unlinkSync(promptFile); } catch {} }
       if (handled) continue;
+      if (laneReason === 'remediation-budget-deferred') {
+        await defer(anomaly, '残り予算不足のため次回へ持ち越し');
+        continue;
+      }
       if (deferredInfo) {
         result.deferred.push(await record(anomaly, 'quota_deferred', { reason: deferredInfo.reason, retryAt: deferredInfo.retryAt }));
         continue;
@@ -205,4 +338,4 @@ export async function runRemediation({
   return result;
 }
 
-if (isEntry(import.meta.url)) runRemediation({ dryRun: process.argv.includes('--dry-run'), json: process.argv.includes('--json') }).then((r) => { process.exitCode = r.exitCode; }).catch((e) => { console.error(redactAll(e.stack || e)); process.exitCode = 1; });
+if (isEntry(import.meta.url)) runRemediation({ dryRun: process.argv.includes('--dry-run'), json: process.argv.includes('--json'), noWait: process.argv.includes('--no-wait') }).then((r) => { process.exitCode = r.exitCode; }).catch((e) => { console.error(redactAll(e.stack || e)); process.exitCode = 1; });

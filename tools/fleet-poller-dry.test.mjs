@@ -41,3 +41,8 @@ test('-Dry は設定ファイルの BOM を書き戻さない / 日次ガード�
   assert.ok(guardedByDry('[System.IO.File]::WriteAllText($bf'), 'BOM書き戻しが $Dry ガードの外にある');
   assert.ok(guardedByDry('Set-Content -Path $g -Value'), '日次ガード更新が $Dry ガードの外にある');
 });
+
+
+test('-Dry は Claude上限へ書き込まない', () => {
+  assert.ok(guardedByDry("'tools\\plan-usage-report.mjs') '--force'"));
+});

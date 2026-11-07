@@ -44,6 +44,21 @@ test('parseCodexResetUntil は12 AM/PMと年省略時の直近の未来を解釈
   assert.equal(parseCodexResetUntil('try again at Sep 7th 11:27 AM', now), now + HOUR);
 });
 
+// 2026-10-20T19:15:41Z の実測メッセージ（末尾は "try again at 8:20 AM."）。日付が無いため
+// 解釈できず、同じ出力中の "2026-10-21T09:05:00.000Z" を採用して cooldown が 13.8 時間後になった。
+test('parseCodexResetUntil は日付なしの try again at H:MM AM/PM を次のローカル時刻にする', () => {
+  const now = new Date(2026, 9, 21, 4, 15, 0).getTime();
+  const until = parseCodexResetUntil("ERROR: You've hit your usage limit. or try again at 8:20 AM.", now);
+  assert.equal(until, new Date(2026, 9, 21, 8, 20, 0).getTime());
+});
+
+test('parseCodexResetUntil は出力中の無関係な ISO イベント時刻を再開時刻にしない', () => {
+  const now = Date.parse('2026-10-20T19:15:41.000Z');
+  const until = parseCodexResetUntil("ERROR: You've hit your usage limit. try again at 8:20 AM.\n{\"timestamp\":\"2026-10-21T09:05:00.000Z\"}", now);
+  assert.equal(until, new Date(2026, 9, 21, 8, 20, 0).getTime());
+  assert.notEqual(until, Date.parse('2026-10-21T09:05:00.000Z'));
+});
+
 test('parseCodexResetUntil は裸の相対時間と7日超を既定1時間へ戻す', () => {
   const now = new Date(2026, 8, 8, 20, 0).getTime();
   assert.equal(parseCodexResetUntil('details: 3365h 15m observed', now), now + HOUR);

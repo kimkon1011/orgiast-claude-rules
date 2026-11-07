@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { getDriveToken, driveApi as api } from './lib/drive-auth.mjs';
 import { uploadFileContent } from './lib/drive-files.mjs';
+import { runKnowledgePack } from './knowledge-pack.mjs';
+import { runPortableKnowhow } from './portable-knowhow-push.mjs';
 
 export const FOLDERS = {
   hub: '1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw',
@@ -39,10 +41,15 @@ export function buildManifest(prev, pushed, today) {
 }
 
 export function collectTargets(repo = resolve(dirname(fileURLToPath(import.meta.url)), '..'),
-  onboarding = process.platform === 'win32'
-    ? 'C:/Users/uers/Downloads/CLAUDE.md配布/ONBOARDING.md'
-    : '/mnt/c/Users/uers/Downloads/CLAUDE.md配布/ONBOARDING.md') {
-  const targets = [{ title: 'ONBOARDING.md', in: 'hub', path: onboarding }];
+  onboarding = join(repo, 'ONBOARDING.md')) {
+  let content;
+  try {
+    content = normalizeLf(readFileSync(onboarding));
+  } catch (error) {
+    if (error.code === 'ENOENT') throw new Error(`ONBOARDING.md not found: ${onboarding}`, { cause: error });
+    throw error;
+  }
+  const targets = [{ title: 'ONBOARDING.md', in: 'hub', path: onboarding, content }];
   for (const entry of readdirSync(join(repo, 'rules'), { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.isFile() && entry.name.endsWith('.md')) targets.push({ title: entry.name, in: 'rules', path: join(repo, 'rules', entry.name) });
   }
@@ -130,6 +137,20 @@ export async function pushHub({ targets, token, apiFn = api, dryRun = false,
   }
 }
 
+// A single task action preserves nonzero exit status for existing failure monitors.
+export async function runNightlyHub({ targets, token, dryRun = false, push = pushHub, knowledge = runKnowledgePack, portable = runPortableKnowhow } = {}) {
+  await push({ targets, token, dryRun });
+  if (!dryRun) {
+    await knowledge({ token });
+    try {
+      await portable({ token, dryRun, emit: console.log });
+    } catch (error) {
+      console.error(`portable-knowhow-push: ${error.message}`);
+      throw error;
+    }
+  }
+}
+
 if (isEntry(import.meta.url)) {
   let started = false;
   try {
@@ -137,7 +158,7 @@ if (isEntry(import.meta.url)) {
     const targets = collectTargets();
     const token = await getDriveToken();
     started = true;
-    await pushHub({ targets, token, dryRun: process.argv.includes('--dry-run') });
+    await runNightlyHub({ targets, token, dryRun: process.argv.includes('--dry-run') });
   } catch (error) {
     console.error(`hub-push: ${error.message}`);
     if (!started) console.log('hub-push: uploaded=0 unchanged=0 created=0 version=?->?');

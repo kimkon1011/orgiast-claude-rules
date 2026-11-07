@@ -38,3 +38,19 @@ test('Claude Code タブが無いときは Open、既にあれば New Conversati
   assert.equal(mobileTabOpenCommand(0), 'claude-vscode.editor.openLast');
   assert.equal(mobileTabOpenCommand(1), 'claude-vscode.newConversation');
 });
+
+const { orderMobileOpenMethods, newRetryState, canAttemptMobileOpen, recordMobileOpenAttempt } = require('./route');
+test('open methods are ordered with the last good one first', () => {
+  assert.deepEqual(orderMobileOpenMethods(undefined), ['newConversation', 'editorOpen', 'externalUri']);
+  assert.deepEqual(orderMobileOpenMethods('externalUri'), ['externalUri', 'newConversation', 'editorOpen']);
+});
+test('retry policy: cooldown, pause, success resets', () => {
+  let state = newRetryState();
+  assert.equal(canAttemptMobileOpen(state, 0), true);
+  state = recordMobileOpenAttempt(state, 100000, false);
+  assert.equal(canAttemptMobileOpen(state, 129999), false);
+  assert.equal(canAttemptMobileOpen(state, 130000), true);
+  state = recordMobileOpenAttempt(state, 130000, true);
+  assert.equal(state.consecutiveFailures, 0);
+  assert.equal(canAttemptMobileOpen(state, 130001), true);
+});

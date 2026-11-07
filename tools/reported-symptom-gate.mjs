@@ -1,3 +1,4 @@
+export const GATE_CONTRACT = {"name": "reported-symptom-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "reported-symptom-gate"}]};
 import { symptomDenials, unknown, corrections, meta, sentences, queriedVendorsFromRaw, claimVendors, reportedSymptoms, needsEvidenceRequest, evidenceRequest } from './state-claim-evidence.mjs';
 export function configuredMode() { return process.env.ORGIAST_REPORTED_SYMPTOM_GATE === 'warn' ? 'warn' : 'block'; }
 export function evaluateReportedSymptomFromRaw({ text, transcriptRaw }) {

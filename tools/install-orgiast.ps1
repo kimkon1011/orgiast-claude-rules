@@ -86,17 +86,88 @@ Say @"
 Say "上記の内容で自動セットアップを始めます(入力は不要)。途中でブラウザが開いたら会社共有アカウント(seisaku-team@orgiast.jp)を選んでください。" 'Gray'
 
 # --- 前提ツール(git/node)を用意 ---
-Step "必要なツールの確認 (git / Node.js)"
+Step "必要なツールの確認 (git / Node.js / GitHub CLI)"
 function Have($c){ $null -ne (Get-Command $c -ErrorAction SilentlyContinue) }
 if (-not (Have git)) { Warn "git が無いので導入します"; try { winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements | Out-Null } catch {} ; $env:Path += ';C:\Program Files\Git\cmd' }
 if (Have git) { OK "git あり" } else { Warn "git が入りませんでした。会社担当(kim)に連絡してください" }
-if (-not (Have node)) { Warn "Node.js が無いので導入します"; try { winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-package-agreements --accept-source-agreements | Out-Null } catch {} ; $env:Path += ';C:\Program Files\nodejs' }
+# Node.js の MSI(winget)は管理者昇格(UAC)を要求するため、Claude 代理実行など
+# 非対話/非昇格のコンテキストでは黙って失敗する。winget が入らなかった場合は
+# 公式zipをユーザー領域へ展開して昇格なしで導入する(フォールバック)。
+function Install-NodeUserScope {
+  $zip = $null
+  $tmp = $null
+  try {
+    $dstRoot = Join-Path $env:LOCALAPPDATA 'Programs\nodejs'
+    # 前回の実行で展開済みならダウンロードし直さずPATHだけ直す(冪等)。
+    if (-not (Test-Path (Join-Path $dstRoot 'node.exe'))) {
+      $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') { 'arm64' } elseif ([Environment]::Is64BitOperatingSystem) { 'x64' } else { 'x86' }
+      $idx = Invoke-RestMethod -UseBasicParsing 'https://nodejs.org/dist/index.json'
+      $lts = ($idx | Where-Object { $_.lts } | Select-Object -First 1).version
+      if (-not $lts) { return $false }
+      $url = "https://nodejs.org/dist/$lts/node-$lts-win-$arch.zip"
+      $zip = Join-Path $env:TEMP ("node-" + $lts + "-" + $arch + ".zip")
+      $tmp = Join-Path $env:TEMP ('node-ext-' + [guid]::NewGuid().ToString('N'))
+      Invoke-WebRequest -UseBasicParsing $url -OutFile $zip
+      Expand-Archive -Path $zip -DestinationPath $tmp -Force
+      $inner = Join-Path $tmp ("node-$lts-win-$arch")
+      if (-not (Test-Path $inner)) { return $false }
+      if (-not (Test-Path $dstRoot)) { New-Item -ItemType Directory -Force -Path $dstRoot | Out-Null }
+      Copy-Item (Join-Path $inner '*') $dstRoot -Recurse -Force
+    }
+    # ユーザーPATHへ恒久追加 + 現セッション(と以降の子プロセス)へ反映。
+    # ユーザーPATHが未設定(null)でも落ちないよう、要素を組み立ててから join する。
+    # (null のまま TrimEnd すると catch に握り潰され、node は入ったのに失敗扱いになる)
+    $parts = @()
+    $userPath = [Environment]::GetEnvironmentVariable('Path','User')
+    if ($userPath) { $parts = @($userPath -split ';' | Where-Object { $_ }) }
+    if ($parts -notcontains $dstRoot) {
+      $parts += $dstRoot
+      [Environment]::SetEnvironmentVariable('Path', ($parts -join ';'), 'User')
+    }
+    if (($env:Path -split ';') -notcontains $dstRoot) { $env:Path += ";$dstRoot" }
+    return (Have node)
+  } catch { return $false }
+  finally {
+    # 早期 return / 例外でも一時ファイルを残さない。
+    if ($zip) { Remove-Item $zip -Force -ErrorAction SilentlyContinue }
+    if ($tmp) { Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+}
+if (-not (Have node)) {
+  Warn "Node.js が無いので導入します"
+  try { winget install --id OpenJS.NodeJS.LTS -e --source winget --accept-package-agreements --accept-source-agreements | Out-Null } catch {}
+  $env:Path += ';C:\Program Files\nodejs'
+  if (-not (Have node)) {
+    Warn "winget(MSI)が昇格なしで入らなかったため、ユーザー領域zipで導入します(UAC不要)"
+    [void](Install-NodeUserScope)
+  }
+}
 if (Have node) { OK ("Node.js あり (" + (node -v) + ")") } else { Warn "Node.js が入りませんでした。会社担当(kim)に連絡してください" }
+function Update-InstallerPath {
+  try {
+    $installerPaths = @([Environment]::GetEnvironmentVariable('Path','Machine'), [Environment]::GetEnvironmentVariable('Path','User'), 'C:\Program Files\GitHub CLI') | Where-Object { $_ }
+    $env:Path = ($installerPaths -join ';')
+  } catch {}
+}
+# 導入済みの gh を見落とさないよう、判定前に PATH を読み直す。
+Update-InstallerPath
+if (-not (Have gh)) { Warn "GitHub CLI が無いので導入します"; try { winget install --id GitHub.cli -e --source winget --accept-package-agreements --accept-source-agreements | Out-Null } catch {}; Update-InstallerPath }
+if (Have gh) { OK "GitHub CLI あり" } else { Warn "GitHub CLI が入りませんでした。最後の総合チェックで確認してください" }
 
 # --- リポ取得(ZIP優先: git の pack ロック/Defender 干渉を回避) ---
 Step "共通ルール一式のダウンロード"
 $gotRepo = $false
 $preserveRepo = $false
+# 配布対象の単一定義は tools/distribution-manifest.json（壊れていれば既定）。distribution-coverage.test.mjs が一致を検査する。
+function Get-OrgiastDistribution($root) {
+  $dirs = @('tools', 'rules-extracted', 'skills', 'packages', 'protocols'); $files = @()
+  try {
+    $m = Get-Content -LiteralPath (Join-Path $root 'tools/distribution-manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $d = @($m.dirs); $f = @($m.files)
+    if ($m.version -eq 1 -and $d.Count -gt 0 -and -not @($d + $f | Where-Object { $_ -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$' })) { $dirs = $d; $files = $f }
+  } catch {}
+  return @{ dirs = $dirs; files = $files }
+}
 function Update-DirtyRepoFromZip($repo) {
   $zip = Join-Path $env:TEMP ('orgiast-rules-' + [guid]::NewGuid().ToString('N') + '.zip')
   $ext = Join-Path $env:TEMP ('orgiast-rules-ext-' + [guid]::NewGuid().ToString('N'))
@@ -121,7 +192,8 @@ function Update-DirtyRepoFromZip($repo) {
 
     # 汚れたPCを救える唯一の配布経路なので、repo自体は決して削除しない。
     # 未コミット作業を守りつつ、配布対象のうち変更されていないファイルだけを更新する。
-    foreach ($dir in @('tools', 'rules-extracted', 'skills')) {
+    $distribution = Get-OrgiastDistribution $src
+    foreach ($dir in $distribution.dirs) {
       $sourceDir = Join-Path $src $dir
       if (-not (Test-Path $sourceDir)) { continue }
       foreach ($sourceFile in @(Get-ChildItem $sourceDir -File -Recurse)) {
@@ -133,6 +205,11 @@ function Update-DirtyRepoFromZip($repo) {
         Copy-Item $sourceFile.FullName $destination -Force
       }
     }
+    foreach ($name in $distribution.files) {
+      $sourceFile = Join-Path $src $name
+      if (-not (Test-Path -LiteralPath $sourceFile -PathType Leaf) -or $protected.Contains($name)) { continue }
+      Copy-Item -LiteralPath $sourceFile (Join-Path $repo $name) -Force
+    }
     Warn ("pull できないため zip で tools を更新しました(ローカル変更 " + $currentStatus.Count + " 件は保護)")
     return $true
   } catch {
@@ -142,6 +219,17 @@ function Update-DirtyRepoFromZip($repo) {
     Remove-Item $zip -Force -ErrorAction SilentlyContinue
     Remove-Item $ext -Recurse -Force -ErrorAction SilentlyContinue
   }
+}
+# 前回の削除失敗でできた二重入れ子を先に戻す。robocopy 0〜7 は成功。
+function Copy-OrgiastTree($source, $destination) {
+  if (-not (Test-Path $destination)) { New-Item -ItemType Directory -Force -Path $destination | Out-Null }
+  & robocopy $source $destination /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+  if ($LASTEXITCODE -gt 7) { throw "robocopy 失敗 (exit $LASTEXITCODE)" }
+}
+$nestedRepo = Join-Path $REPO 'orgiast-claude-rules-main'
+if (Test-Path $nestedRepo) {
+  try { Copy-OrgiastTree $nestedRepo $REPO; Remove-Item $nestedRepo -Recurse -Force -ErrorAction SilentlyContinue; OK "二重入れ子のリポを修復" }
+  catch { Warn ("二重入れ子の修復に失敗: " + $_.Exception.Message) }
 }
 if ((Have git) -and (Test-Path (Join-Path $REPO '.git'))) {
   try {
@@ -169,8 +257,9 @@ if (-not $gotRepo -and -not $preserveRepo) { try {
   $src = Join-Path $ext 'orgiast-claude-rules-main'
   if (Test-Path $src) {
     if (Test-Path $REPO) { Remove-Item $REPO -Recurse -Force -ErrorAction SilentlyContinue }
-    Move-Item $src $REPO -Force
-    if (Test-Path (Join-Path $REPO 'tools')) { $gotRepo = $true; OK "ダウンロード完了(zip)" }
+    # 削除後に常駐タスクがフォルダを残しても、子フォルダに Move しない。
+    Copy-OrgiastTree $src $REPO
+    if (Test-Path (Join-Path $REPO 'tools\onboarding-sync.mjs')) { $gotRepo = $true; OK "ダウンロード完了(zip)" }
   }
   Remove-Item $zip -Force -ErrorAction SilentlyContinue
   Remove-Item $ext -Recurse -Force -ErrorAction SilentlyContinue
@@ -185,7 +274,7 @@ if (-not $gotRepo -and -not $preserveRepo) {
     catch { Warn ("git clone 失敗 (試行 " + $i + "/3)"); if (Test-Path $REPO) { Remove-Item $REPO -Recurse -Force -ErrorAction SilentlyContinue } }
   }
 }
-if (-not $gotRepo) { Warn "共通ルールの取得に失敗。ネット接続を確認して、青い画面を閉じてもう一度コマンドを貼り付けてください(それでも駄目なら kim に連絡)" }
+if (-not $gotRepo -or -not (Test-Path (Join-Path $REPO 'tools\onboarding-sync.mjs'))) { Warn "共通ルールの取得に失敗。tools\onboarding-sync.mjs が無いため、ネット接続を確認してもう一度実行してください"; $gotRepo = $false }
 
 # 新PCと既存PCの復帰の両方で、鍵を先に取得してから従来の導入を続ける。
 if ($Enroll) {
@@ -389,7 +478,7 @@ OK "settings.json 更新(バックアップ済)"
 try {
   $env:ORGIAST_HOME = $HOMEDIR
   $env:ORGIAST_REPO = $REPO
-  & node (Join-Path $REPO 'tools\register-hooks.mjs') --hooks-only
+  & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $REPO 'tools\register-hooks.mjs') --hooks-only
   if ($LASTEXITCODE -eq 0) { OK "必須コスト規律hookを登録/自己修復" } else { Warn "必須hook登録に失敗(既存hookは維持)" }
 } catch { Warn ("必須hook登録に失敗(既存hookは維持): " + $_.Exception.Message) }
 
@@ -451,6 +540,17 @@ try {
   } else { Warn "register-fleet-poller.ps1 未取得=スキップ(他機能は動作)" }
 } catch { Warn ("フリート点検の登録に失敗(他機能は動作): " + $_.Exception.Message) }
 
+# --- Auto-progress: new installs and daily fleet repair use the same registrar. ---
+Step "Auto-progress watch/digest registration"
+try {
+  $autoProgressInstaller = Join-Path $REPO 'tools\register-auto-progress-task.ps1'
+  if (Test-Path $autoProgressInstaller) {
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $autoProgressInstaller
+    if ($LASTEXITCODE -ne 0) { throw "register-auto-progress-task.ps1 exit $LASTEXITCODE" }
+    OK "Auto-progress watch/digest registered"
+  } else { Warn "register-auto-progress-task.ps1 missing" }
+} catch { Warn ("Auto-progress registration failed: " + $_.Exception.Message) }
+
 # --- Claude 環境の Google Drive バックアップ(毎日03:40) ---
 Step "Claude 環境バックアップを登録 (毎日03:40)"
 try {
@@ -461,6 +561,31 @@ try {
     OK "Claude 環境バックアップ 登録完了(毎日03:40 ClaudeDailyDriveBackup)"
   } else { Warn "register-claude-backup-task.ps1 未取得=スキップ(他機能は動作)" }
 } catch { Warn ("Claude 環境バックアップの登録に失敗(他機能は動作): " + $_.Exception.Message) }
+
+# Schedule sync is personal to the LINE receiver host; -Ensure skips other PCs.
+try {
+  $scheduleInstaller = Join-Path $REPO 'tools\register-schedule-sync-task.ps1'
+  if (Test-Path -LiteralPath $scheduleInstaller) {
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $scheduleInstaller -Ensure
+    if ($LASTEXITCODE -ne 0) { throw "register-schedule-sync-task.ps1 exit $LASTEXITCODE" }
+  }
+} catch { Warn ("schedule-sync registration failed: " + $_.Exception.Message) }
+
+try {
+  $commsHubInstaller = Join-Path $REPO 'tools\register-comms-hub-sync.ps1'
+  if (Test-Path -LiteralPath $commsHubInstaller) {
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $commsHubInstaller -Ensure
+    if ($LASTEXITCODE -ne 0) { throw "register-comms-hub-sync.ps1 exit $LASTEXITCODE" }
+  }
+} catch { Warn ("comms-hub-sync registration failed: " + $_.Exception.Message) }
+
+try {
+  $daytripInstaller = Join-Path $REPO 'tools\register-daytrip-detect-task.ps1'
+  if (Test-Path -LiteralPath $daytripInstaller) {
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $daytripInstaller -Ensure
+    if ($LASTEXITCODE -ne 0) { throw "register-daytrip-detect-task.ps1 exit $LASTEXITCODE" }
+  }
+} catch { Warn ("daytrip-detect registration failed: " + $_.Exception.Message) }
 
 # --- フリート管制エージェントの定時起動(15分ごと) ---
 Step "フリート管制エージェントを登録 (15分ごと)"
@@ -575,7 +700,7 @@ Step "共通ルールの初回取込(動作確認)"
 try {
   if ((Have node) -and (Test-Path (Join-Path $REPO 'tools\onboarding-sync.mjs'))) {
     $env:ORGIAST_HOME = $HOMEDIR
-    & node (Join-Path $REPO 'tools\onboarding-sync.mjs') --force | Out-Null
+    & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $REPO 'tools\onboarding-sync.mjs') --force | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "onboarding-sync.mjs exit $LASTEXITCODE" }
     OK "共通ルールを取り込みました"
     OK "会社共通AIキーを設定"
@@ -600,14 +725,15 @@ if (-not $geminiKey -and $embedKey) {
   OK "Gemini APIキー(会社共有)を設定しました(鍵作成の操作は不要)"
 }
 if ($geminiKey) { OK "Gemini APIキーは設定済み(スキップ)" }
-elseif ($NonInteractive) {
-  Warn "Gemini APIキー入力は CI のためスキップ"
+elseif ($NonInteractive -or [Console]::IsInputRedirected -or -not [Environment]::UserInteractive) {
+  Warn "Gemini APIキーは非対話実行のためスキップ"
 }
 else {
   Say "  これから APIキー作成ページをブラウザで開きます。会社のGoogle(orgiast.jp)でログインしてください。" 'Gray'
   Say "  ページで『APIキーを作成 / Create API key』を押し、出てきた文字(AIza... か AQ...)をコピー。" 'Gray'
   try { Start-Process 'https://aistudio.google.com/apikey' } catch { Say "  手動で開いてください: https://aistudio.google.com/apikey" 'Yellow' }
-  $geminiKey = (Read-Host "  コピーしたAPIキーをここに貼り付けて Enter (今やらない場合は空Enterでスキップ)").Trim()
+  try { $geminiInput = Read-Host "  コピーしたAPIキーをここに貼り付けて Enter (今やらない場合は空Enterでスキップ)" } catch { $geminiInput = '' }
+  $geminiKey = if ($null -eq $geminiInput) { '' } else { $geminiInput.Trim() }
   if ($geminiKey) {
     New-Item -ItemType Directory -Force -Path (Split-Path $gEnv) | Out-Null
     "GEMINI_API_KEY=$geminiKey`r`nGEMINI_CLI_TRUST_WORKSPACE=true" | Set-Content $gEnv -Encoding UTF8
@@ -652,6 +778,16 @@ try {
 # --- 設定ファイルのBOM除去(PS5.1のSet-Content -Encoding UTF8はBOMを付ける。node/Claude CodeのJSON.parse・env読取がBOMで壊れるため全部no-BOM化) ---
 $bomFix = @((Join-Path $HOMEDIR '.claude\settings.json'), (Join-Path $HOMEDIR '.claude.json'), (Join-Path $HOMEDIR '.gemini\.env'), $envPath, $manusEnv, $dsEnv, $xaiEnv, $orEnv, $grqEnv, $cbEnv, $zaiEnv, $msEnv, $kimiEnv, (Join-Path $HOMEDIR '.claude\ollama.env'))
 foreach ($bf in $bomFix) { try { if ($bf -and (Test-Path $bf)) { $bc = [System.IO.File]::ReadAllText($bf); if ($bc.Length -gt 0 -and $bc[0] -eq [char]0xFEFF) { [System.IO.File]::WriteAllText($bf, $bc.TrimStart([char]0xFEFF), (New-Object System.Text.UTF8Encoding($false))) } } } catch {} }
+
+# 再起動やログイン待ちに入る前に、認証不要の初報告を一度だけ送る。
+try {
+  if (Have node) {
+    $env:ORGIAST_HOME = $HOMEDIR
+    node (Join-Path $REPO 'tools\fleet-beacon.mjs') --install-beacon --installer ps1-1 *> $null
+    if ($LASTEXITCODE -eq 0) { OK 'インストール結果を送信しました' }
+    else { Warn 'ビーコン送信に失敗しました(インストールは完了しています)' }
+  } else { Warn 'node が見つからないためビーコン送信をスキップしました' }
+} catch { Warn 'ビーコン送信に失敗しました(インストールは完了しています)' }
 
 # --- Codex ログイン(Codex導入済みの時だけ・未導入なら待たずにスキップ) ---
 Say "`n============================================================" 'Green'

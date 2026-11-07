@@ -1,8 +1,9 @@
+export const GATE_CONTRACT = {"name": "gh-handoff-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "gh-handoff-gate"}]};
 import { latestAssistantText } from './lib/assistant-text.mjs';
 import { isEntry } from './is-entry.mjs';
 
 export function formatReason() {
-  return `[GH-HANDOFF] gh が未認証であることを理由に GitHub 操作を人に頼んでいますが、git credential fill を試した結果が書かれていません。GitHub のデバイス認証・gh auth login を人に頼む前にも、同じ経路を先に試してください。gh 未認証は手渡しの理由になりません（ONBOARDING §1.1）。\n\n  printf "protocol=https\\nhost=github.com\\n\\n" | git credential fill\n\nの password を GH_TOKEN に入れて gh / gh api で自分で作ってください。試して失敗した場合は、実行したコマンドと結果（exit code・エラー文）を本文に書けば通過します。どうしても不要なときだけ [GH-HANDOFF-OK] と書いてください。`;
+  return `[GH-HANDOFF] gh が未認証であることを理由に GitHub 操作を人に頼んでいますが、実行経路を確認した結果が書かれていません。まず command -v gh（Windows は where gh）で gh の有無を確認してください。gh が無ければ gh / gh api を前提にした手順は存在しないため、その文面を書いてはいけません。git credential fill は GCM の対話 UI 待ちで無期限にハングし得るため、必ずタイムアウト付き（例: timeout 15 ...）で実行してください。ハング（exit 124）は資格情報なしの証拠として扱います。試して失敗した場合は、実行したコマンドと結果（exit code・エラー文）を本文に書けば通過します。gh が無い PC で gh auth login を人に頼む文面は書かず、どちらの経路も通らなければ、検証結果を記録して Codex が生きている受信先（例: w018-PC）へ fleet-mail の --exec codex 便で移送してください。どうしても不要なときだけ [GH-HANDOFF-OK] と書いてください。`;
 }
 
 export function judge(text) {

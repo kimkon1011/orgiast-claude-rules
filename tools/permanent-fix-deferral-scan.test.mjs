@@ -103,6 +103,29 @@ test('手渡しなし・進捗報告・修正完了は検出しない', () => {
     '修正が完了しました'
   ]) assert.deepEqual(detect(quote), [], quote);
 });
+test('太字ラベル直後の「特になし」はP3と誤検出しない', () => {
+  const excerpt = '**次に kim がすること:** 特になし（実装・テスト・check.py 実行まで完了）。';
+  assert.deepEqual(detect(excerpt), []);
+});
+test('太字ラベル直後の恒久修正の先送りは引き続きP3で検出する', () => {
+  const excerpt = '**次に kim がすること:** 自動修復の恒久化を次回に回す';
+  assert.equal(detect(excerpt)[0].pattern, 'P3');
+});
+test('具体的なcommitまたはbranchのmain着地承認をkimに渡す文はP3で検出する', () => {
+  for (const excerpt of [
+    '次に kim がすること: `f94ee7a` を main にマージするか判断して承認する（承認が出るまでこのループは進まない）。',
+    '次に kim がすること: `f94ee7a`（ブランチ `quota-sweep/20261023-0202-claude-mvkbrycs`）を main に着地させるか承認してください。それまでは据え置きです。',
+    '次に kim がすること: f94ee7a を main にマージするかどうかを判断してください。'
+  ]) assert.equal(detect(excerpt)[0].pattern, 'P3', excerpt);
+});
+test('着地承認ではない手渡しとなし表記はP3で検出しない', () => {
+  for (const excerpt of [
+    '次に kim がすること: PR #14 を確認（マージ判断のみ）。Vercel Previewでの動作確認も可能です',
+    '次に kim がすること: なし（f94ee7a の main マージ承認は、次のループ周回で別途確認します）',
+    '次に kim がすること: デスクトップの『GitHub認証（1回だけ）（ダブルクリック）.cmd』を1回実行してください',
+    '次に kim がすること: f94ee7a の内容を確認して記録する'
+  ]) assert.ok(!detect(excerpt).some(found => found.pattern === 'P3'), excerpt);
+});
 test('先送りを名詞句で説明した自己言及はP1と誤検出しない', () => {
   for (const quote of [
     '**[本セッションの目的]** handoff-audit が検出した「恒久修正の先送り文」が再発していないかを実物で検証し、結果を記録する。',
@@ -130,6 +153,115 @@ test('括弧で閉じていても直後が検証・記録でなければP1で検
 test('委譲の完了待ちはW(待機)であって先送り(P1-P4)ではない', () => {
   const quote = 'Codex の2本の完了を待っています。';
   assert.deepEqual(detect(quote).map(found => found.pattern), ['W']);
+});
+test('裸の待機文は夜間監査のWとして残す（Stopゲートは後続作業が無ければpass＝二段構え）', () => {
+  // handoff-audit:6ac1c04694d4dc1c（2026-10-21T06:00:01.905Z / b822034d）の原文。
+  // nightly は候補として surface し、deferral-wait-gate は後続作業の近接を条件に block する。
+  const quote = 'Codex の修正完了を待っています。';
+  assert.deepEqual(detect(quote).map(found => found.pattern), ['W']);
+});
+test('実測の名詞化した待機・完了通知待ちをWとして検出する', () => {
+  for (const quote of [
+    '事故の記録を memory に残しました。修復の書き込みが終わるのを待っています（終わると知らせが届きます）。',
+    '今動いているのは2つで、どちらも終わると知らせが届きます。',
+    'memory への記録は済みました。Codex の実装（ゲート3本・ルール本文・テスト・PR 作成）が終わるのを待っています。終わったら差分…',
+    '書き込みを投入しました（42マス、終わったら5か所を読み戻します）。完了すると知らせが届くので、その時点で読み戻し結果を確認して報告します。'
+  ]) assert.deepEqual(detect(quote).map(found => found.pattern), ['W'], quote);
+});
+test('他レーンの言い換えた完了待ちもWとして検出する（38fe8917 / 4d7e4383）', () => {
+  // handoff-audit:38fe891783fc6ce2（05:14:03.146Z）の原文と、同じセッションが以後に閉じた 7 ターン。
+  // 「完了待ちです」は旧 W で拾えていたが、「完了はまだです」「〜しているところです」
+  // 「結果を待っています」は拾えず、8 ターン連続で待機したままターンを閉じていた。
+  for (const quote of [
+    'アプリ作りのセッションでは、Codex がアプリの実装を始めました。完了はまだです。',
+    'アプリ作りのセッションは、実データを使って画面操作を確かめている最中です。承認 → 試し送り → PDF の取得、の順に見ています。完了はまだです。',
+    'アプリ作りのセッションは、画面操作の確認を Edge ブラウザでやり直しているところです。まだ完了していません。',
+    'アプリ作りのセッションは、アプリが作る金さん送付用画像の見た目を直し、もう一度実行しているところです。完了はまだです。',
+    'アプリ作りのセッションは、PDF の修正を終えたあとの通し確認を、もう一度実行しているところです。完了はまだです。',
+    'アプリ作りのセッションは、本番環境での動作確認の結果を待っています。確認が通ったら切り替える予定です。完了はまだです。',
+    'アプリ作りのセッションは、本番で確認していて見つかった点を、Codex に直させているところです。'
+  ]) assert.deepEqual(detect(quote).map(found => found.pattern), ['W'], quote);
+});
+test('完了通知の到着待ちはレーン名・「完了」が無くてもWとして検出する（05b1b5a6 / 017b465e の言い換え）', () => {
+  // 原文（2026-10-23T06:54:05.630Z）は `Codex`＋`完了` で偶然 LANE_STATUS_WAIT に当たっていた。
+  // 同じ文からレーン名・「完了」・「のを待って」を落とした言い換えが素通りしていたため、
+  // 到着待ち（通知が来る／届く／来るまで待つ／届き次第）とマージ待ちを W に含めた。
+  for (const quote of [
+    'ルール側の PR のマージと、Codex の実装完了の両方を待っています。どちらも終わると通知が来るので、届き次第検証に入ります。',
+    'PR のマージを待っています。終わると通知が来るので、届き次第検証に入ります。',
+    'マージ完了の通知が来るまで待ちます。',
+    'ルール側の PR のマージを待っています。',
+    '取り込みが終わったら連絡が届くので、その時点で確認します。'
+  ]) assert.deepEqual(detect(quote).map(found => found.pattern), ['W'], quote);
+});
+test('自動チェック・ビルド等の完了を待つ宣言もWとして検出する（3dc61863 / efe02524 の同セッション再発）', () => {
+  // handoff-audit:3dc61863786fe1a0 の同セッション（2026-11-01T15:24〜15:50Z）が
+  // 「〜の完了を待ちます」でターンを閉じていたが、W は「完了を待って」しか持たず素通りしていた。
+  for (const quote of [
+    'PR #192 を作成しました。自動チェック（型検査・テスト・ビルド）の完了を待ち、通ったらマージして本番にデプロイします。',
+    '作業フォルダの作成に2分以上かかっているため、バックグラウンドで完了を待ちます。',
+    '修正を PR #192 に反映しました。ビルドを含む自動チェックの完了を待ちます。'
+  ]) assert.deepEqual(detect(quote).map(found => found.pattern), ['W'], quote);
+});
+test('判断の返事待ちはレーン名の語順に依存せずWとして検出する（5a993ac7 / 91cd4fa3）', () => {
+  // 2026-11-01T18:02:06.670Z の原文は `セッション:` が待機語より前にあったため LANE_STATUS_WAIT で
+  // 偶然拾えていた。同じセッションの 03:47:46.105Z「価格改定の返事を待っているセッションも」は
+  // 語順が逆で素通りしており、レーン名を落とした言い換えも全部 pass していた。
+  for (const quote of [
+    '「下記みつもりつくって」のセッション: event-shop.jp の価格を変えるかどうかの返事を待っています。',
+    'event-shop.jp の価格を変えるかどうかの返事を待っています。',
+    '価格改定の返事を待っているセッションも、まだ止まったままです。',
+    'どちらの案にするか、nishi さんの返答を待っています。'
+  ]) assert.deepEqual(detect(quote).map(found => found.pattern), ['W'], quote);
+});
+test('外部・子エージェントの返事待ちはWと誤検出しない', () => {
+  // 顧客や取引先の返事は Claude が実装で解消できない正当な待機。サブエージェントも自分の子の待ち。
+  for (const quote of [
+    'お客様からの返事を待っています。',
+    '取引先に確認して、返答を待っています。',
+    'サブエージェントの返事を待っています。'
+  ]) assert.deepEqual(detect(quote), [], quote);
+});
+test('返信待ち・結果待ちはWと誤検出しない', () => {
+  for (const quote of [
+    'ご返信をお待ちしています。',
+    'サブエージェントの結果を待っています。'
+  ]) assert.deepEqual(detect(quote), [], quote);
+});
+test('社内データ（給与・勤怠）の取込待ちの言い換えはWとして検出する（9b11ce35 / 6b41b59b）', () => {
+  // 原文は「…取り込まれるのを待っている状態です」で拾えたが、同じセッションの言い換えは全て
+  // 素通りしていた（04:08「10月分の賃金が入れられず途中で止めています」/ 04:30「まだ未登録でした」）。
+  for (const quote of [
+    '雇保の喪失届は、10月度の給与データの取込待ちです。',
+    '10月度の給与データが取り込まれたら再開します。',
+    '10月度の給与データが入るまで、雇保の喪失届は止めています。',
+    '給与データが揃うのを待って、賃金表を埋めます。',
+    '雇保の喪失届は、10月度の給与データが未登録のため、そこで止まっています。',
+    '10月度の給与データが登録され次第、続きをやります。',
+    '10月分の賃金が入れられず途中で止めています。'
+  ]) assert.deepEqual(detect(quote).map(found => found.pattern), ['W'], quote);
+});
+test('データ取込の完了報告・外部の入金待ちはWと誤検出しない', () => {
+  for (const quote of [
+    '10月度の給与データを取り込みました。',
+    '給与データの取込は完了しました。',
+    '10月度の給与データが取り込まれたことを確認しました。',
+    'お客様からの入金を待っています。',
+    '取引先の支払いデータの取込待ちです。'
+  ]) assert.deepEqual(detect(quote), [], quote);
+});
+test('handoff-audit TODO の引用内にある待機・修正語を再検出しない', () => {
+  const todos = [
+    '16. [handoff-audit:655fbad73a29c865] 恒久修正の先送り文を検出（2026-10-12T11:08:57.526Z / a4c12da7 / W）「ィブ Codex が書き込みタスクで exit_null になる原因診断（Sonnet）の完了待ちです。 次に kim がすること: なし（Discord DM」 — この handoff が再発していないかを実物で検証し結果を記録する（再発防止の経路: 違反セッションの先送りを当ターン内に実装まで終える（例: 2026-10-12T11:08:57.526Z / a4c12da7-a178-44cb-af93-3cbb39caaee7））。kimへのDMなし。',
+    '17. [handoff-audit:ed21f8915eaaf823] 恒久修正の先送り文を検出（2026-10-12T10:44:41.681Z / 98dbc140 / P3）「次に kim がすること: ISSUES 1（`MailApproval_proposeFromLatest` に `attachmentIds` を接続）を修」 — この handoff が再発していないかを実物で検証し結果を記録する（再発防止の経路: 違反セッションの先送りを当ターン内に実装まで終える（例: 2026-10-12T10:44:41.681Z / 98dbc140-9999-4123-b486-7725c1b90363））。kimへのDMなし。'
+  ];
+  for (const todo of todos) assert.deepEqual(detect(todo), [], todo);
+});
+test('監査引用ガードは素の待機文と引用外の待機文を抑制しない', () => {
+  for (const quote of [
+    'Codex の2本の完了を待っています。',
+    '[handoff-audit:655fbad73a29c865] 恒久修正の先送り文を検出（W）「引用」検証の結果、Codex の2本の完了を待っています。'
+  ]) assert.deepEqual(detect(quote).map(found => found.pattern), ['W'], quote);
 });
 test('全台帳で最初の一致だけをパターン別に集計する', t => {
   const home = fixture(t);
@@ -178,4 +310,98 @@ test('handoff行自体に修正語がある場合は引き続き検出する', t
     assert.equal(source.hits, 1);
     assert.equal(source.byPattern.P3, 1);
   }
+});
+
+test('実現可能性の名詞「〜可否」はP4と誤検出しない', () => {
+  for (const quote of [
+    'Codex のネイティブ実行可否（スモーク・書き込みテスト）と写真収集エージェントの結果待ちです。結果が揃い次第、実装を Codex か Sonnet エージェントのどちらかに投入します。',
+    'cr@orgiast.jp の Fable 利用可否をローカル記録で確認し、実装の投入先を決めます。',
+    'WSL 復旧の可否と codex レーンの生存を実測してから修正します。'
+  ]) assert.deepEqual(detect(quote).map(found => found.pattern), [], quote);
+});
+
+test('検出結果そのものを引用した検証 handoff は再検出しない', () => {
+  // 実測原文（stop-gate-runner-ledger.jsonl / 2026-10-13T18:04:42.788Z / セッション 599d5772）。
+  // 先送りを実行した文ではなく、検出器の出力（パターン名 `W` と一致語 "完了待ちで"）を引いた検証報告。
+  const quote = '**やったこと:** 該当 handoff の原文再現と全台帳走査で再発の有無を実測し、検出器が自分の監査 TODO を引用文ごと再検出する経路を Codex レーンで塞いだ（記録 + PR #767）。\n**検証したこと:** 原文は `W`/`"完了待ちで"` で再現、以降のヒットは 3 件。';
+  assert.deepEqual(detect(quote), []);
+});
+
+test('パターン名を伴わない引用文の待機語は引き続き検出する', () => {
+  for (const quote of [
+    '「納品の完了を待って」とだけ返事が来ました。',
+    'pattern=W の一致語は "完了待ちで" です。' // pattern= 形式も引用として扱う
+  ]) assert.deepEqual(detect(quote).map(found => found.pattern), quote.startsWith('pattern=') ? [] : ['W'], quote);
+});
+
+test('疑問節つきの「可否」は引き続きP4で検出する', () => {
+  for (const quote of [
+    '次に kim がすること: 自動修復を付けてよいかの可否。',
+    'この修正を進めてよいか可否を判断してください。'
+  ]) assert.ok(detect(quote).some(found => found.pattern === 'P4'), quote);
+});
+
+test('検証報告が監査IDを参照して引用した待機文は再検出しない', () => {
+  const excerpt = "**やったこと**: handoff-audit:3677714a0b69aad0（W / TJP-09「Codex の完了を待っています」）を実物検証し、runs/2026-10-14-2.summary.md に記録。**再発なし、かつ W ヒット自体が偽陽性**と確定 — 当該行は `verdict=skipped/reasonCodes=['stop_hook_active']`（Stop";
+  assert.deepEqual(detect(excerpt), [], excerpt);
+});
+test('角括弧なしの off-audit 参照でも引用を監査引用とみなす', () => {
+  const quote = 'off-audit:0123456789abcdef（W / TJP-09「Codex の完了を待っています」）を実物検証した。';
+  assert.deepEqual(detect(quote), [], quote);
+});
+test('監査参照を知らない素の待機文・引用外の待機文は引き続きWとして検出する', () => {
+  for (const quote of [
+    'TJP-09 はまだ実装中です。Codex（DeepSeek 経由）の完了を待っています。 次に kim がすること: なし（待つだけで大丈夫です）',
+    '今日の報告で「Codex の完了を待っています」と書いてしまった。'
+  ]) assert.deepEqual(detect(quote).map(found => found.pattern), ['W'], quote);
+});
+// handoff-audit:c1e05b232e9e04c9（2026-10-21T05:13:52.790Z / b822034d）の原文。
+// Stop ゲートは後続作業が無ければ pass するが、nightly は候補として W で拾う（二段構え）。
+test('裸の待機文（c1e05b23 の原文）をWとして検出する', () => {
+  assert.deepEqual(detect('Codex の完了を待っています。').map(found => found.pattern), ['W']);
+});
+// 91cd4fa3 の再監査: 待機語を使わず「結果が出たら報告します」と約束する言い換えが素通りした。
+test('結果到着後の報告約束（待機語なしの言い換え）をWとして検出する', () => {
+  for (const text of [
+    '検証は Codex に任せています。結果が出たらここに報告します。',
+    '実行は別レーンに渡しました。完了が出たらお知らせします。',
+    '実行結果が戻ったら連絡します。'
+  ]) assert.deepEqual(detect(text).map(found => found.pattern), ['W'], text);
+});
+test('完了済み報告・結果到着の約束でない文はWと誤検出しない', () => {
+  for (const text of [
+    'Codex の検証は終わり、全件パスしました。PR を作成済みです。',
+    'テスト結果が出たのでログに記録しました。次の作業はありません。',
+    '結果が出たらログに残す設計にしました（実装済み）。'
+  ]) assert.deepEqual(detect(text), [], text);
+});
+test('監査引用された「結果が出たら報告します」は再検出しない', () => {
+  const quote = '[handoff-audit:bfc2418509a26c29] 恒久修正の先送り文を検出（W）「検証は Codex に任せています。結果が出たらここに報告します。」';
+  assert.deepEqual(detect(quote), [], quote);
+});
+// 91cd4fa3 の再監査（累積試行5）: 「まだ実行中」「終わり次第報告」「届いたら報告」の言い換えも W で拾う。
+test('まだ実行中・終わり次第の報告約束・届いたら報告の言い換えをWとして検出する', () => {
+  for (const text of [
+    'テストは Codex が走らせていて、まだ実行中です。',
+    'Codex の検証が終わり次第、結果をお伝えします。',
+    '結果が届いたら確認して報告します。'
+  ]) assert.deepEqual(detect(text).map(found => found.pattern), ['W'], text);
+});
+test('完了報告・検出器の説明文は言い換え拡張でWと誤検出しない', () => {
+  for (const text of [
+    '検証は完了し、全件 pass を確認しました。',
+    '「まだ実行中です」という文言を検出器の陽性例として追加しました。',
+    '作業は終わり次第ではなく、今ターンで完了しました。'
+  ]) assert.deepEqual(detect(text).map(found => found.pattern), [], text);
+});
+
+// 116827928ab09de7 の原セッション行1320で再テストを後続へ残した言い換え。
+test('他レーンが修正中のため未検証という先送りを検出する', () => {
+  assert.deepEqual(detect('[NO-TEST-OK: tools/notify-kim.mjs の kim 宛て経路への巻き添えを Codex が修正中で、まだ確かめられる状態にないため]').map(hit => hit.pattern), ['W']);
+  for (const text of [
+    'Codex が修正中に見つけた問題も解消し、関連テストは全件合格しました。',
+    'Codex の修正は完了し、検証できる状態です。',
+    '修正中で、まだ確かめられる状態にないという表現を調査した。',
+    '[handoff-audit:116827928ab09de7] 恒久修正の先送り文を検出（W）「Codex が修正中で、まだ確かめられる状態にないため」'
+  ]) assert.deepEqual(detect(text), [], text);
 });

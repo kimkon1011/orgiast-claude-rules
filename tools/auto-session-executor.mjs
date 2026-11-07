@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 
 function claudeDirFor(home) { return path.join(home, '.claude'); }
@@ -33,15 +34,30 @@ export function claudeFallbackEnabled(env = process.env, home = env.ORGIAST_HOME
   return /^(?:1|true|on)$/i.test(String({ ...env, ...fileEnv }.ORGIAST_AUTO_SESSION_CLAUDE_FALLBACK || '').trim());
 }
 
+export function codexDoLaneEnabled(env = process.env, home = env.ORGIAST_HOME || os.homedir()) {
+  let fileEnv = {};
+  try { fileEnv = parseAutoSessionEnvText(fs.readFileSync(path.join(home, '.claude', 'auto-session.env'), 'utf8')); } catch {}
+  return !/^(?:0|false|off)$/i.test(String({ ...env, ...fileEnv }.ORGIAST_AUTO_SESSION_CODEX_LANE ?? '').trim());
+}
+
+export function cheapProvidersAllCooling(provider, home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now()) {
+  const alternate = provider === 'glm' ? 'deepseek' : provider === 'deepseek' ? 'glm' : null;
+  if (!alternate) return false;
+  try {
+    const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'provider-cooldown.json'), 'utf8'));
+    return Number(state?.[provider === 'deepseek' ? 'openrouter' : provider]?.until) > now && Number(state?.[alternate === 'deepseek' ? 'openrouter' : alternate]?.until) > now;
+  } catch { return false; }
+}
+
 export function alternateCheapProvider(provider, home = process.env.ORGIAST_HOME || os.homedir()) {
   const alternate = provider === 'glm' ? 'deepseek' : provider === 'deepseek' ? 'glm' : null;
   if (!alternate) return null;
-  const keyFile = path.join(home, '.claude', alternate === 'glm' ? 'zai.env' : 'deepseek.env');
-  const keyName = alternate === 'glm' ? 'ZAI_API_KEY' : 'DEEPSEEK_API_KEY';
+  const keyFile = path.join(home, '.claude', alternate === 'glm' ? 'zai.env' : 'openrouter.env');
+  const keyName = alternate === 'glm' ? 'ZAI_API_KEY' : 'OPENROUTER_API_KEY';
   try {
     if (!parseAutoSessionEnvText(fs.readFileSync(keyFile, 'utf8'))[keyName]) return null;
     const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'provider-cooldown.json'), 'utf8'));
-    if (Number(state?.[alternate]?.until) > Date.now()) return null;
+    if (Number(state?.[alternate === 'deepseek' ? 'openrouter' : alternate]?.until) > Date.now()) return null;
   } catch (error) {
     if (error?.code !== 'ENOENT' && error instanceof SyntaxError) return null;
     try { if (!parseAutoSessionEnvText(fs.readFileSync(keyFile, 'utf8'))[keyName]) return null; } catch { return null; }
@@ -49,11 +65,86 @@ export function alternateCheapProvider(provider, home = process.env.ORGIAST_HOME
   return alternate;
 }
 
+// 実行役(cheap-code.mjs)を「セッションが作業ブランチを切る tree」から読むと、夜間に origin/main へ
+// 入った修正が同じ夜の後続セッションへ届かない。2026-10-25 実測: PR #1091(deepseek の
+// API_TIMEOUT_MS=240s)が 02:07 JST に main へ入った後も auto-session-repo は未マージ枝のままで、
+// 後続セッションは修正前の cheap-code で走っていた(= 修正済み通知の再起票)。
+// 専用の detached worktree を origin/main に同期し、セッション開始ごとに更新する。
+export const EXECUTOR_SYNC_TTL_MS = 5 * 60 * 1000;
+
+export function executorWorktreePath(home = process.env.ORGIAST_HOME || os.homedir()) {
+  return path.join(home, '.claude', 'auto-session-executor');
+}
+
+export function planExecutorWorktreeSync({ repoRoot, executorRoot, hasTree }) {
+  return hasTree
+    ? [
+        // worktree は同じ repo の ref を共有するので、fetch は repoRoot 側で1回でよい。
+        { label: 'fetch executor origin/main', cwd: repoRoot, args: ['fetch', 'origin', 'main', '--quiet'] },
+        { label: 'reset executor', cwd: executorRoot, args: ['reset', '--hard', 'origin/main', '--quiet'] },
+        { label: 'clean executor', cwd: executorRoot, args: ['clean', '-fd', '--quiet'] },
+      ]
+    : [{ label: 'create executor worktree', cwd: repoRoot, args: ['worktree', 'add', '--detach', executorRoot, 'origin/main'] }];
+}
+
+const defaultExecutorState = { root: '', at: 0 };
+
+// 返り値は「実際に cheap-code.mjs を読み込む tree」。同期に失敗した時は呼び出し元の tree に戻す
+// (無人実行を止めない)。state はテスト用に差し替え可能。
+export function prepareExecutorRoot(options = {}) {
+  const {
+    repoRoot,
+    home = process.env.ORGIAST_HOME || os.homedir(),
+    env = process.env,
+    now = Date.now(),
+    ttlMs = EXECUTOR_SYNC_TTL_MS,
+    run = (command, args, runOptions) => spawnSync(command, args, {
+      encoding: 'utf8', windowsHide: true, timeout: 60_000,
+      // 認証待ちで無人セッションを止めない。fetch は既存の資格情報だけで行う。
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      ...runOptions,
+    }),
+    exists = fs.existsSync,
+    log = () => {},
+    state = defaultExecutorState,
+  } = options;
+  if (env.ORGIAST_EXECUTOR_ROOT) return env.ORGIAST_EXECUTOR_ROOT;
+  if (state.root && now - state.at < ttlMs) return state.root;
+  const executorRoot = executorWorktreePath(home);
+  try {
+    const commands = planExecutorWorktreeSync({
+      repoRoot,
+      executorRoot,
+      hasTree: exists(path.join(executorRoot, 'tools', 'cheap-code.mjs')),
+    });
+    for (const command of commands) {
+      const result = run('git', command.args, { cwd: command.cwd });
+      if (result?.error || result?.status !== 0) {
+        const detail = String(result?.stderr || result?.error?.message || `exit ${result?.status}`).trim();
+        throw new Error(`${command.label} が失敗: ${detail}`);
+      }
+    }
+    if (!exists(path.join(executorRoot, 'tools', 'cheap-code.mjs'))) throw new Error('cheap-code.mjs が見つかりません');
+    state.root = executorRoot;
+    state.at = now;
+    return executorRoot;
+  } catch (error) {
+    log(`[executor] origin/main の実行役を用意できないため ${repoRoot} のコードで続行します: ${error?.message ?? error}`);
+    return repoRoot;
+  }
+}
+
 // cheap-code 子プロセスの引数。指示は argv でなく prompt-file 経由(§1.17 argv経由の指示破壊防止)。
 export function buildCheapCodeArgs({ repoRoot, provider, promptFile, cwd }) {
   const cheapCode = path.join(repoRoot, 'tools', 'cheap-code.mjs');
   if (!fs.existsSync(cheapCode)) throw new Error(`cheap-code.mjs が見つかりません: ${cheapCode}`);
   return [cheapCode, '--provider', provider, '--prompt-file', promptFile, '--cwd', cwd];
+}
+
+export function buildCodexDoArgs({ repoRoot, promptFile, cwd }) {
+  const codexDo = path.join(repoRoot, 'tools', 'codex-do.mjs');
+  if (!fs.existsSync(codexDo)) throw new Error(`codex-do.mjs が見つかりません: ${codexDo}`);
+  return [codexDo, '--prompt-file', promptFile, '--cwd', cwd, '--origin', 'unattended'];
 }
 
 // cheap-code が失敗した時の最終手段: claude -p(headless) 。無人の残TODO消化に Opus は過剰なので Sonnet。
@@ -101,9 +192,11 @@ export function recordFallbackToClaude({ home = process.env.ORGIAST_HOME || os.h
   } catch {}
 }
 
-export function recordSkippedNoExecutor({ home = process.env.ORGIAST_HOME || os.homedir(), reason, provider, appendImpl = null, now = new Date() } = {}) {
+export function recordSkippedNoExecutor({ home = process.env.ORGIAST_HOME || os.homedir(), reason, provider, stderr = '', appendImpl = null, now = new Date() } = {}) {
   try {
-    const row = `${JSON.stringify({ t: now.toISOString(), provider: 'skipped', category: 'unrouted', model: 'none', status: 'no-cheap-executor', reason: String(reason || provider || 'unknown') })}\n`;
+    // 原因（上限・残高・無人枠）が台帳に残らないと delegation-health が外部要因の停止を全滅と誤診する。末尾200字だけ残す。
+    const tail = String(stderr || '').trim().slice(-200);
+    const row = `${JSON.stringify({ t: now.toISOString(), provider: 'skipped', category: 'unrouted', model: 'none', status: 'no-cheap-executor', reason: String(reason || provider || 'unknown'), ...(tail ? { stderrTail: tail } : {}) })}\n`;
     const file = path.join(home, '.claude', 'executor-usage.jsonl');
     if (appendImpl) appendImpl(file, row, 'utf8');
     else { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.appendFileSync(file, row, 'utf8'); }

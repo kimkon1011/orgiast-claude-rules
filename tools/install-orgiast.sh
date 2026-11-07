@@ -185,3 +185,8 @@ fi
 step "適用状況の総合チェック"
 [ -f "$REPO/tools/selftest-install.sh" ] && ORGIAST_HOME="$ORGIAST_USER_HOME" /bin/bash "$REPO/tools/selftest-install.sh"
 echo; echo "Claude Code を開き直してください(設定は次回起動時に自動で有効になります)"
+
+# 認証情報が未設定でも、インストーラから一度だけ初報告する。
+if have node && [ -f "$REPO/tools/fleet-beacon.mjs" ]; then
+  ORGIAST_HOME="$ORGIAST_USER_HOME" node "$REPO/tools/fleet-beacon.mjs" --install-beacon --installer sh-1 >/dev/null 2>&1 && ok "インストール結果を送信しました" || warn "ビーコン送信に失敗しました(インストールは完了しています)"
+fi

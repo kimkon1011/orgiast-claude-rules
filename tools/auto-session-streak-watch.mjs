@@ -63,17 +63,15 @@ export function evaluateRun(run, runFile, stat, options) {
 
 export function formatDecisionRequest(item) {
   const severity = item.streak >= 3 ? '重大' : '異常';
-  const stderr = String(item.latest.run.stderr || '（stderr なし）').slice(0, 300);
+  const run = item.latest.run;
+  const stderr = String(run.stderr || run.error || run.reason || `実行結果: status=${run.status}, exitCode=${run.exitCode ?? '未記録'}; 詳細は run JSON を調査`).slice(0, 300);
   return [
     `【auto-session ${severity}】${item.jobKey} が ${item.streak} 日連続失敗しています。`,
     `最新エラー: ${stderr}`,
     `最初の失敗日: ${item.firstFailureDate}`,
     `最後の成功日: ${item.lastSuccessDate || '成功記録なし'}`,
     '',
-    'kim に選んでほしい対応:',
-    '1. 原因調査を自動で始める（セッションを起票する）',
-    '2. このジョブを一時停止する',
-    '3. 無視する（既知・対応中）',
+    '原因調査と修復を自動起票します。',
     '',
     `run JSON: ${item.latest.runFile}`,
     `summary: ${item.latest.summaryPath || item.latest.runFile.replace(/\.json$/, '.summary.md') + '（summaryFile 指定なし）'}`
@@ -83,7 +81,7 @@ export function formatDecisionRequest(item) {
 async function defaultNotifyImpl(text, { home }) {
   const { notifyKim } = await import('./notify-kim.mjs');
   const result = await notifyKim(text, { home, webhookFallback: false });
-  if (result.delivered !== 'dm') throw new Error(`kim への DM 送信失敗: ${result.reason || '不明な理由'}`);
+  if (!['dm', 'session-inbox'].includes(result.delivered)) throw new Error(`kim への DM 送信失敗: ${result.reason || '不明な理由'}`);
   return result;
 }
 
@@ -104,6 +102,8 @@ export async function runAutoSessionStreakWatch({
       const runFile = path.resolve(runsDir, name);
       const run = readJson(runFile);
       if (!run || typeof run !== 'object' || Array.isArray(run) || name === path.basename(stateFile)) continue;
+      // Gmail/Tasks dumps and plan metadata are not executor results.
+      if (!('status' in run) || !('summaryFile' in run || 'exitCode' in run)) continue;
       const evaluated = evaluateRun(run, runFile, fs.statSync(runFile), { home });
       const key = jobKeyFor(run, runFile);
       if (!groups.has(key)) groups.set(key, []);
@@ -152,7 +152,7 @@ export async function runAutoSessionStreakWatch({
     if (!dryRun) {
       try {
         const result = await notifyImpl(item.message, { home, item });
-        if (result?.delivered && result.delivered !== 'dm') throw new Error(`DM 未送信: ${result.reason || result.delivered}`);
+        if (result?.delivered && !['dm', 'session-inbox'].includes(result.delivered)) throw new Error(`DM 未送信: ${result.reason || result.delivered}`);
         state[item.jobKey] = { lastNotifiedDate: today, lastNotifiedStreak: item.streak };
         writeJsonAtomic(stateFile, state);
       } catch (error) {

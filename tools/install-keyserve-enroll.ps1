@@ -21,7 +21,7 @@ $success = $false
 $reason = '鍵の導入を開始できませんでした。'
 $stage = 'prepare'
 function Get-PrimaryStatus {
-  $raw = & node (Join-Path $Repo 'tools\keyserve-status.mjs') --json
+  $raw = & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $Repo 'tools\keyserve-status.mjs') --json
   if ($LASTEXITCODE -ne 0) { throw 'status-command-failed' }
   return ($raw -join "`n" | ConvertFrom-Json)
 }
@@ -44,7 +44,12 @@ try {
   $rule = New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'Allow')
   $acl.AddAccessRule($rule)
   Set-Acl -LiteralPath $enrollFile -AclObject $acl
-  [IO.File]::WriteAllText($enrollFile, "ORGIAST_ENROLL_TOKEN=$Enroll`n", [Text.UTF8Encoding]::new($false))
+  $enrollContents = "ORGIAST_ENROLL_TOKEN=$Enroll`n"
+  if ($env:ORGIAST_KEYSERVE_PC) {
+    if ($env:ORGIAST_KEYSERVE_PC -cnotmatch '^[A-Za-z0-9._-]{1,64}$') { throw 'invalid-pc-name' }
+    $enrollContents += "ORGIAST_KEYSERVE_PC=$env:ORGIAST_KEYSERVE_PC`n"
+  }
+  [IO.File]::WriteAllText($enrollFile, $enrollContents, [Text.UTF8Encoding]::new($false))
   $stage = 'sync'
   # Preserve primary-first semantics; only quarantine a file proven to be rejected.
   # A network outage must never cause a working primary to be replaced.
@@ -54,7 +59,7 @@ try {
     Write-Host '既存の primary は HTTP 401 のため退避しました。enroll で再取得します。'
   }
   Remove-Item -LiteralPath $resultFile -Force -ErrorAction SilentlyContinue
-  & node (Join-Path $Repo 'tools\onboarding-sync.mjs') --keys-only --force | Out-Null
+  & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $Repo 'tools\onboarding-sync.mjs') --keys-only --force | Out-Null
   $syncExit = $LASTEXITCODE
   $attempt = $null
   if (Test-Path -LiteralPath $resultFile) { $attempt = Get-Content -LiteralPath $resultFile -Raw -Encoding UTF8 | ConvertFrom-Json }
@@ -85,9 +90,9 @@ try {
   } elseif ($attempt -and $attempt.kind -eq 'write') {
     $reason = '鍵の応答は届きましたが、primary を含む鍵一式を保存できません。配布内容・フォルダー権限・空き容量を確認してください。'
   } elseif ($attempt -and $attempt.kind -eq 'invalid-response') {
-    $reason = 'keyserve の応答形式が不正です。サーバのデプロイ状態を kim に確認してください。'
+    $reason = 'keyserve の応答形式が不正です。node tools/keyserve-status.mjs --json で応答と登録状態を取得してください。'
   } elseif ($httpStatus) {
-    $reason = "HTTP $httpStatus：primary 認証を確認できませんでした。サーバの稼働状況を kim に確認してください。"
+    $reason = "HTTP $httpStatus：primary 認証を確認できませんでした。node tools/keyserve-status.mjs --json で認証状態を取得してください。"
   } else {
     $reason = 'primary が保存されていません。鍵同期クライアントとサーバが enroll 対応版か確認してください。'
   }
@@ -102,7 +107,7 @@ try {
   $outcome = if ($success) { '成功' } else { '失敗' }
   try {
     $message = "keyserve 導入結果: PC=$env:COMPUTERNAME / authVia=$authVia / HTTP=$httpText / $outcome"
-    & node (Join-Path $Repo 'tools\notify-kim.mjs') $message | Out-Null
+    & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $Repo 'tools\notify-kim.mjs') $message | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Host 'Discord 自己報告に失敗しました。導入結果は変わりません。' -ForegroundColor Yellow }
   } catch { Write-Host 'Discord 自己報告に失敗しました。導入結果は変わりません。' -ForegroundColor Yellow }
   $env:ORGIAST_HOME = $previousHome

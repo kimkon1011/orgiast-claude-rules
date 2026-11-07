@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "handoff-regret-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "handoff-regret-gate"}]};
 
 const TOOL_NAMES = new Set(['Edit', 'Write', 'Bash', 'PowerShell']);
 const FAILURE = /(?:permission[^\n]*denied|denied|拒否|self-modification|\berror\b|失敗)/i;
@@ -23,7 +24,7 @@ export function absolutePaths(text) {
   const value = String(text);
   const matches = [];
   for (const match of value.matchAll(/[`"']((?:~\/\.claude\/|[A-Za-z]:\\|\/)[^`"'\r\n]+)[`"']/g)) matches.push(match[1]);
-  matches.push(...(value.match(/(?:~\/\.claude\/[^\s`"'<>）】]+|[A-Za-z]:\\[^\s`"'<>）】]+|\/(?!\/)[^\s`"'<>）】]+)/g) || []));
+  matches.push(...(value.match(/(?:~\/\.claude\/[^\s`"'<>）】]+|[A-Za-z]:\\[^\s`"'<>）】]+|(?<![\w.])\/(?!\/)[^\s`"'<>）】]+)/g) || []));
   return [...new Set(matches.map(path => path.replace(/[.,;:、。]+$/, '')))];
 }
 
@@ -40,16 +41,51 @@ function inputContainsTarget(input, target) {
   return false;
 }
 
+const READ_ONLY_SEGMENTS = [
+  /^gh\s+pr\s+(?:view|checks|diff|list|status)\b/,
+  /^gh\s+(?:issue\s+(?:view|list)|run\s+(?:list|view)|workflow\s+(?:list|view)|repo\s+view|release\s+(?:view|list)|auth\s+status)\b/,
+  /^git\s+(?:-C\s+\S+\s+)?(?:status|log|diff|show|rev-parse|ls-files|grep|merge-base|blame|describe)\b/,
+  /^git\s+(?:-C\s+\S+\s+)?branch(?!.*\s(?:-[dDmMcC]|--delete|--move|--copy|--force)\b)(?:\s+(?:-a|-r|-v|-vv|--list|--show-current|--contains|--merged)\b[^;|&]*)?$/,
+  /^git\s+(?:-C\s+\S+\s+)?remote(?:\s+(?:-v|show|get-url)\b[^;|&]*)?$/,
+  /^vercel\s+(?:inspect|ls|whoami|logs)\b/,
+  /^(?:cat|head|tail|ls|wc|grep|rg|jq|file|stat|type|dir|Get-Content|Select-String)\b/,
+  /^(?:gh\s+api|curl)\b/,
+];
+const WRITE_FLAGS = /(?:-X\s+|--method[=\s]|--raw-field|--input|-f\s+|-F\s+|--field\s+|--form\b|-d\s+|--data\b|-T\s+|--upload\b)/;
+
+function readOnlySegment(segment) {
+  const stripped = segment.replace(/^(?:[A-Za-z_]\w*=(?:"[^"]*"|'[^']*'|\S+)\s+)+/, '').trim();
+  if (!stripped || /\$\(|`/.test(stripped)) return false;
+  const bare = stripped.replace(/2>&1|2>\s*(?:\/dev\/null|\$null|NUL)\b/g, ' ');
+  if (/>|\btee\b/.test(bare)) return false;
+  if (/^(?:gh\s+api|curl)\b/.test(bare) && WRITE_FLAGS.test(bare)) return false;
+  return READ_ONLY_SEGMENTS.some(pattern => pattern.test(bare));
+}
+
+export function isReadOnlyCommand(command) {
+  const parts = String(command ?? '').split(/\r?\n|&&|\|\||[;|&]/).map(part => part.trim()).filter(Boolean);
+  return parts.length > 0 && parts.every(readOnlySegment);
+}
+
+// 手渡し判定は assistant が user に出すもの。注入された索引・system-reminder・
+// user の貼り付け本文まで走査すると、その中の角括弧マーカーを手渡しと誤認する
+// （2026-10-17 cr-PC で毎ターン誤ブロック）。判定対象は assistant 発の entry に限る。
+function isAssistantEntry(entry) {
+  if (entry?.isSidechain === true) return false;
+  return entry?.type === 'assistant' || entry?.message?.role === 'assistant';
+}
+
 export function evaluateHandoffRegret(transcriptRaw, finalText = '') {
   const entries = String(transcriptRaw).split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
   const handedOff = new Map();
   const uses = new Map();
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index];
-    const block = handoffBlock(textOf(entry));
+    const block = isAssistantEntry(entry) ? handoffBlock(textOf(entry)) : '';
     if (block) for (const target of absolutePaths(block)) if (!handedOff.has(target)) handedOff.set(target, index);
     for (const use of blocks(entry, 'tool_use')) {
       if (!TOOL_NAMES.has(use.name) || !use.id) continue;
+      if ((use.name === 'Bash' || use.name === 'PowerShell') && isReadOnlyCommand(use.input?.command)) continue;
       const targets = [...handedOff].filter(([target, handoffIndex]) => handoffIndex < index && inputContainsTarget(use.input, target)).map(([target]) => target);
       if (targets.length) uses.set(use.id, { targets, index });
     }

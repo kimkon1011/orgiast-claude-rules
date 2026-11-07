@@ -23,6 +23,17 @@ function run(entries, { stopHookActive = false } = {}) {
 const userLine = (text) => ({ type: 'user', message: { content: text } });
 const asstLine = (text) => ({ type: 'assistant', message: { content: [{ type: 'text', text }] } });
 
+test('formatReason は gh 不在と credential fill のハング時に exec codex 便へ誘導する', () => {
+  const reason = formatReason();
+  assert.ok(reason.includes('command -v gh'));
+  assert.ok(reason.includes('where gh'));
+  assert.ok(reason.includes('timeout 15'));
+  assert.ok(reason.includes('exit 124'));
+  assert.ok(reason.includes('gh auth login を人に頼む文面は書かず'));
+  assert.ok(reason.includes('w018-PC'));
+  assert.ok(reason.includes('--exec codex'));
+});
+
 // --- Unit tests for judge ---
 test('judge unit test - block case', () => {
   const text = 'gh が未認証なので、PR の作成をお願いします';

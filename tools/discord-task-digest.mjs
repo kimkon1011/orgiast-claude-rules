@@ -10,7 +10,7 @@ import { isEntry } from './is-entry.mjs';
 
 const API = 'https://discord.com/api/v10';
 const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
-const DEFAULT_GUILD_ID = '715211007307284530';
+export const DEFAULT_GUILD_ID = '715211007307284530';
 const DEFAULT_SHEET_ID = '1WtsSiDlId8EgyzA15pJbeCGfvMHUgBqrUMmucax4A24';
 const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
 const ACTIVE_STATES = new Set(['未着手', '進行中', '保留']);
@@ -262,7 +262,7 @@ export function readToken(home) {
   return { token: '', source: 'none', admin: false };
 }
 
-async function discordChannels(guildId, token, fetchImpl) {
+export async function discordChannels(guildId, token, fetchImpl) {
   const response = await fetchImpl(`${API}/guilds/${encodeURIComponent(guildId)}/channels`, { headers: { Authorization: `Bot ${token}` } });
   if (!response.ok) throw new Error(`Discord チャンネル一覧の取得に失敗しました: HTTP ${response.status}`);
   const value = await response.json();

@@ -29,3 +29,11 @@ test('対話ループ列があれば両方へ値を入れる', () => {
   assert.equal(plan.values[headers.indexOf(context.FLEET_HEADERS_.interactionLoop)], payload().interactionLoop);
   assert.equal(plan.values[headers.indexOf(context.FLEET_HEADERS_.interactionSelftest)], payload().interactionSelftest);
 });
+
+test('画面停止件数は任意列に0を含めて保存する', () => {
+  const headers = Object.values(context.FLEET_HEADERS_);
+  for (const count of [0, 22]) {
+    const plan = context.fleetPlanUpsert(headers, [], { ...payload(), stuckDialogs24h: count });
+    assert.equal(plan.values[headers.indexOf(context.FLEET_HEADERS_.stuckDialogs24h)], count);
+  }
+});

@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { appendUsageLedger, autoProvider, buildChildEnv, cooldownUntilFromText, detectBillingFailure, detectUsageLimitText, readInstruction, resolveClaudeBin, resolveProvider, writeProviderCooldown } from './cheap-code.mjs';
+import { DEFAULT_CHILD_API_TIMEOUT_MS, appendUsageLedger, autoProvider, buildChildEnv, cooldownUntilFromText, detectBillingFailure, detectUsageLimitText, readInstruction, resolveChildApiTimeoutMs, resolveProvider, writeProviderCooldown } from './cheap-code.mjs';
+import { prepareWorkerConfigDir } from './claude-exe.mjs';
 
 const tool = fileURLToPath(new URL('./cheap-code.mjs', import.meta.url));
 
@@ -20,7 +21,7 @@ function run(args) {
 test('provider 未指定では DeepSeek の base を選ぶ', () => {
   const result = run(['--dry-run', '確認する']);
   assert.equal(result.status, 0);
-  assert.equal(JSON.parse(result.stdout).base, 'https://api.deepseek.com/anthropic');
+  assert.equal(JSON.parse(result.stdout).base, 'https://openrouter.ai/api');
 });
 
 test('--provider glm では Z.ai の base を選ぶ', () => {
@@ -38,7 +39,7 @@ test('不正な provider 名はエラーになる', () => {
 test('--model が provider の既定モデルを上書きする', () => {
   const result = run(['--dry-run', '--model', 'custom-model', '確認する']);
   assert.equal(result.status, 0);
-  assert.equal(JSON.parse(result.stdout).model, 'custom-model');
+  assert.equal(JSON.parse(result.stdout).model, 'deepseek/custom-model');
 });
 
 test('--prompt-file から指示を読める', () => {
@@ -81,11 +82,102 @@ test('子 env だけに Anthropic 接続設定を追加し process.env を汚染
   const beforeToken = process.env.ANTHROPIC_AUTH_TOKEN;
   const config = resolveProvider('deepseek');
   const childEnv = buildChildEnv(config, 'test-secret', { SAFE_PARENT: 'yes' });
-  assert.equal(childEnv.ANTHROPIC_BASE_URL, 'https://api.deepseek.com/anthropic');
+  assert.equal(childEnv.ANTHROPIC_BASE_URL, 'https://openrouter.ai/api');
   assert.equal(childEnv.ANTHROPIC_AUTH_TOKEN, 'test-secret');
   assert.equal(childEnv.SAFE_PARENT, 'yes');
   assert.equal(process.env.ANTHROPIC_BASE_URL, beforeBase);
   assert.equal(process.env.ANTHROPIC_AUTH_TOKEN, beforeToken);
+});
+
+// デスクトップ版 Claude から呼ばれると CLAUDECODE / CLAUDE_CODE_* / MCP_* / ANTHROPIC_* が
+// 子へ漏れ、DeepSeek が `400 Invalid schema for function 'Artifact'` を返す(2026-10-17 実測)。
+// 浄化 → provider 値注入の順であること、CLAUDE_CODE_GIT_BASH_PATH は残ることを固定する。
+test('buildChildEnv は親 env を浄化してから provider 値を入れ、worker config dir を渡す', () => {
+  const config = resolveProvider('deepseek');
+  const childEnv = buildChildEnv(config, 'provider-key', {
+    PATH: 'C:\\bin',
+    SAFE_PARENT: 'yes',
+    CLAUDECODE: '1',
+    CLAUDE_CODE_ENTRYPOINT: 'cli',
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: '200000',
+    MCP_SERVER: 'x',
+    ANTHROPIC_BASE_URL: 'https://parent.example',
+    ANTHROPIC_API_KEY: 'parent-key',
+    CLAUDE_CONFIG_DIR: 'C:\\parent-config',
+    CLAUDE_CODE_GIT_BASH_PATH: 'C:\\Program Files\\Git\\bin\\bash.exe',
+  }, { configDir: 'C:\\worker\\dir' });
+
+  assert.equal(childEnv.ANTHROPIC_BASE_URL, 'https://openrouter.ai/api');
+  assert.equal(childEnv.ANTHROPIC_AUTH_TOKEN, 'provider-key');
+  assert.equal(childEnv.ANTHROPIC_API_KEY, '');
+  assert.equal(childEnv.CLAUDECODE, undefined);
+  assert.equal(childEnv.MCP_SERVER, undefined);
+  assert.equal(childEnv.SAFE_PARENT, 'yes');
+  assert.equal(childEnv.CLAUDE_CODE_GIT_BASH_PATH, 'C:\\Program Files\\Git\\bin\\bash.exe');
+  assert.equal(childEnv.CLAUDE_CONFIG_DIR, 'C:\\worker\\dir');
+  // 親の 200000 は浄化で消え、provider の実窓に置き換わる。
+  assert.equal(childEnv.CLAUDE_CODE_MAX_CONTEXT_TOKENS, '1000000');
+});
+
+// API 無応答ハングが既定 600s だと 900s cap 内で再試行に入れない(fallback_chain_timeout)。
+test('buildChildEnv は子の API_TIMEOUT_MS を 600s 既定より短く注入し env で上書きできる', () => {
+  const config = resolveProvider('deepseek');
+  assert.equal(DEFAULT_CHILD_API_TIMEOUT_MS < 600000, true);
+  // 900s の cap 内で最低 3 回は試行できる値にしておく(1 回のハングで cap を使い切らない)。
+  assert.equal(DEFAULT_CHILD_API_TIMEOUT_MS * 3 <= 900000, true);
+  assert.equal(buildChildEnv(config, 'k', {}).API_TIMEOUT_MS, String(DEFAULT_CHILD_API_TIMEOUT_MS));
+  // 親が API_TIMEOUT_MS=600000 を持っていても短縮値で置き換える。
+  assert.equal(buildChildEnv(config, 'k', { API_TIMEOUT_MS: '600000' }).API_TIMEOUT_MS, String(DEFAULT_CHILD_API_TIMEOUT_MS));
+  assert.equal(buildChildEnv(config, 'k', { CHEAP_CODE_API_TIMEOUT_MS: '90000' }).API_TIMEOUT_MS, '90000');
+  assert.equal(resolveChildApiTimeoutMs({ CHEAP_CODE_API_TIMEOUT_MS: 'abc' }), DEFAULT_CHILD_API_TIMEOUT_MS);
+  assert.equal(resolveChildApiTimeoutMs({ CHEAP_CODE_API_TIMEOUT_MS: '-5' }), DEFAULT_CHILD_API_TIMEOUT_MS);
+});
+
+// 契約 RULES「他バックエンドの挙動を変えない」: glm は既定のまま(注入しない)。
+test('buildChildEnv は glm へ API_TIMEOUT_MS を注入しない', () => {
+  const glm = resolveProvider('glm');
+  assert.equal(buildChildEnv(glm, 'k', {}).API_TIMEOUT_MS, undefined);
+  // 親が明示的に持っている値は従来どおり継承する(挙動を変えない)。
+  assert.equal(buildChildEnv(glm, 'k', { API_TIMEOUT_MS: '600000' }).API_TIMEOUT_MS, '600000');
+});
+
+test('prepareWorkerConfigDir は hooks を書かず deny を引き継ぎ disableAllHooks を立てる', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-worker-'));
+  try {
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({
+      hooks: { PreToolUse: [{ matcher: '*', hooks: [] }] },
+      permissions: { defaultMode: 'auto', deny: ['Bash(rm -rf:*)'] },
+    }), 'utf8');
+    const dir = prepareWorkerConfigDir({ home });
+    assert.equal(dir, path.join(home, '.claude', 'cheap-code-worker'));
+    const settings = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
+    assert.deepEqual(settings.permissions.deny, ['Bash(rm -rf:*)']);
+    assert.equal(settings.permissions.defaultMode, 'bypassPermissions');
+    assert.equal(settings.disableAllHooks, true);
+    assert.equal(settings.hooks, undefined);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('prepareWorkerConfigDir はユーザー設定が無くても deny: [] で動く', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cheap-code-worker-empty-'));
+  try {
+    const dir = prepareWorkerConfigDir({ home });
+    const settings = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8'));
+    assert.deepEqual(settings.permissions.deny, []);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('--dry-run は configDir と strippedEnv を出す', () => {
+  const result = run(['--provider', 'deepseek', '--dry-run', 'x']);
+  assert.equal(result.status, 0);
+  const dryRun = JSON.parse(result.stdout);
+  assert.match(dryRun.configDir, /cheap-code-worker$/);
+  assert.ok(Array.isArray(dryRun.strippedEnv));
 });
 
 test('usage-limit 本文(429 [1308])から provider 再開時刻をパースする', () => {
@@ -187,55 +279,9 @@ test('明示 provider が cooldown 中なら claude を起動せず exit 3 で�
   }
 });
 
-// --- resolveClaudeBin: Windows の npm グローバルは claude.cmd しか置かず spawn が ENOENT になるため、
-// --- 実体の claude.exe を明示解決する。exists を注入してファイルシステム非依存で検証する。
-function fakeExists(paths) {
-  const set = new Set(paths);
-  return (target) => set.has(target);
-}
 
-const npmClaudeExe = (...segments) => path.join(...segments, 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
-const localClaudeExe = (...segments) => path.join(...segments, 'Programs', 'claude', 'claude.exe');
-
-test('CLAUDE_BIN が設定されていて存在する場合はそれを返す', () => {
-  const bin = path.join('C:', 'tools', 'claude.exe');
-  assert.equal(resolveClaudeBin({ CLAUDE_BIN: bin }, fakeExists([bin])), bin);
-});
-
-test('CLAUDE_BIN が設定されていても存在しない場合は候補探索へフォールバックする', () => {
-  const appData = path.join('C:', 'Users', 'user', 'AppData', 'Roaming');
-  const expected = npmClaudeExe(appData);
-  const env = { CLAUDE_BIN: path.join('C:', 'missing', 'claude.exe'), APPDATA: appData };
-  assert.equal(resolveClaudeBin(env, fakeExists([expected])), expected);
-});
-
-test('APPDATA 配下の npm グローバル claude.exe を返す', () => {
-  const appData = path.join('C:', 'Users', 'user', 'AppData', 'Roaming');
-  const expected = npmClaudeExe(appData);
-  assert.equal(resolveClaudeBin({ APPDATA: appData }, fakeExists([expected])), expected);
-});
-
-test('APPDATA が無くても USERPROFILE から AppData/Roaming を組み立てて同じ候補を探す', () => {
-  const userProfile = path.join('C:', 'Users', 'user');
-  const expected = npmClaudeExe(userProfile, 'AppData', 'Roaming');
-  assert.equal(resolveClaudeBin({ USERPROFILE: userProfile }, fakeExists([expected])), expected);
-});
-
-test('APPDATA 側が無いときは LOCALAPPDATA 配下の claude.exe へフォールバックする', () => {
-  const localAppData = path.join('C:', 'Users', 'user', 'AppData', 'Local');
-  const expected = localClaudeExe(localAppData);
-  const env = { APPDATA: path.join('C:', 'Users', 'user', 'AppData', 'Roaming'), LOCALAPPDATA: localAppData };
-  assert.equal(resolveClaudeBin(env, fakeExists([expected])), expected);
-});
-
-test('どの候補も存在しなければ PATH 依存の最終手段 claude を返す', () => {
-  const env = {
-    APPDATA: path.join('C:', 'Users', 'user', 'AppData', 'Roaming'),
-    LOCALAPPDATA: path.join('C:', 'Users', 'user', 'AppData', 'Local'),
-  };
-  assert.equal(resolveClaudeBin(env, fakeExists([])), 'claude');
-});
-
-test('APPDATA も USERPROFILE も無い環境でも例外を投げず claude を返す', () => {
-  assert.equal(resolveClaudeBin({}, fakeExists([])), 'claude');
+test('OpenRouter pins coding model slots and leaves GLM model selection alone', () => {
+  const env = buildChildEnv({ ...resolveProvider('deepseek'), defaultModel: 'deepseek/deepseek-v4-pro' }, 'test', {});
+  for (const key of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL']) assert.equal(env[key], 'deepseek/deepseek-v4-pro');
+  assert.equal(buildChildEnv(resolveProvider('glm'), 'test', {}).ANTHROPIC_DEFAULT_HAIKU_MODEL, undefined);
 });

@@ -2,10 +2,11 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { armToFile } from './session-relaunch.mjs';
 import { alternateCheapProvider, autoSessionExecutor, buildCheapCodeArgs, buildClaudeHeadlessArgs, claudeFallbackEnabled, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
+import { findClaudeInVersionedDir, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 
@@ -92,13 +93,15 @@ export function resolveClaudeBinary(io) {
     if (exists(candidate)) return candidate;
   }
 
+  // デスクトップ版は <版>\<ハッシュ>\claude.exe に置かれる。版直下だけ見ていると
+  // 実体を取り逃がし、PATH の claude.cmd を掴んで shell 無し spawn が ENOENT になる。
   const installedDir = path.join(homedir, 'AppData', 'Roaming', 'Claude', 'claude-code');
   try {
-    const version = pickNewestVersionDir(readdir(installedDir));
-    if (version) {
-      const binary = path.join(installedDir, version, 'claude.exe');
-      if (exists(binary)) return binary;
-    }
+    const found = findClaudeInVersionedDir(installedDir, {
+      listDir: (dir) => { try { return readdir(dir); } catch { return []; } },
+      exists,
+    });
+    if (found) return found;
   } catch { /* インストール版が無い機体では黙って次へ */ }
 
   const extensionsDir = path.join(homedir, '.vscode', 'extensions');
@@ -128,16 +131,69 @@ export function resolveWt(io) {
   }
 }
 
-export function resolveVscodeCli(io) {
-  const { env, exists } = io;
+// reg query <key> /s の出力から、DisplayName が VS Code のブロックの InstallLocation を取り出す。
+export function parseUninstallInstallLocations(text) {
+  const found = [];
+  let name = '';
+  let location = '';
+  const flush = () => {
+    if (/^Microsoft Visual Studio Code/i.test(name) && location) found.push(location);
+    name = ''; location = '';
+  };
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    if (/^HKEY_/i.test(raw)) { flush(); continue; }
+    const m = raw.match(/^\s+(DisplayName|InstallLocation)\s+REG_(?:EXPAND_)?SZ\s+(.*?)\s*$/i);
+    if (!m) continue;
+    if (m[1].toLowerCase() === 'displayname') name = m[2]; else location = m[2];
+  }
+  flush();
+  return found;
+}
+
+const UNINSTALL_KEYS = [
+  'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+  'HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+  'HKLM\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall',
+];
+
+function defaultRegQuery(key) {
+  if (process.platform !== 'win32') return '';
+  try {
+    return execFileSync('reg.exe', ['query', key, '/s'], { encoding: 'utf8', timeout: 8000, windowsHide: true, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch { return ''; }
+}
+
+// code.cmd の探索候補（優先順・重複なし）。見つからなかった時に「何を探したか」を報告できるよう、列挙だけを分離。
+export function vscodeCliCandidates(io) {
+  const { env } = io;
   const homedir = typeof io.homedir === 'function' ? io.homedir() : io.homedir;
-  const candidates = [
+  const regQuery = io.regQuery ?? defaultRegQuery;
+  const list = [
     env.VSCODE_CLI_PATH,
     path.join(homedir, 'AppData', 'Local', 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'),
     'C:\\Program Files\\Microsoft VS Code\\bin\\code.cmd',
     'C:\\Program Files (x86)\\Microsoft VS Code\\bin\\code.cmd',
   ];
-  return candidates.find((candidate) => candidate && exists(candidate)) ?? '';
+  // PATH 上の code.cmd
+  for (const dir of String(env.PATH ?? env.Path ?? '').split(';')) if (dir.trim()) list.push(path.win32.join(dir.trim().replace(/^"|"$/g, ''), 'code.cmd'));
+  // 実行中(VS Code 内ターミナル等)/既知の Code.exe の隣の bin\code.cmd
+  for (const exe of [env.VSCODE_GIT_ASKPASS_NODE, env.VSCODE_EXE, env.VSCODE_CWD_EXE]) {
+    if (exe && /code(?: - insiders)?\.exe$/i.test(exe)) list.push(path.win32.join(path.win32.dirname(exe), 'bin', 'code.cmd'));
+  }
+  // アンインストール情報の InstallLocation
+  for (const key of UNINSTALL_KEYS) {
+    try { for (const loc of parseUninstallInstallLocations(regQuery(key))) list.push(path.win32.join(loc, 'bin', 'code.cmd')); } catch { /* 取れなければ次へ */ }
+  }
+  // 他ドライブの一般的な場所
+  for (const drive of 'DEFGHIJKLMNOPQRSTUVWXYZ') {
+    for (const dir of ['Microsoft VS Code', 'Program Files\\Microsoft VS Code', 'Programs\\Microsoft VS Code', 'Apps\\Microsoft VS Code']) list.push(`${drive}:\\${dir}\\bin\\code.cmd`);
+  }
+  return [...new Set(list.filter(Boolean))];
+}
+
+export function resolveVscodeCli(io) {
+  const { exists } = io;
+  return vscodeCliCandidates(io).find((candidate) => exists(candidate)) ?? '';
 }
 
 export function buildVscodeUri(prompt) {
@@ -267,6 +323,9 @@ export function buildHeadlessPrompt(prompt) {
 
 export async function runHeadlessNextSession({ env, hostname, home, cwd, prompt, executable, spawnImpl = spawn, timeoutMs = HEADLESS_TIMEOUT_MS, appendLog = null, now = () => new Date() }) {
   const choice = autoSessionExecutor(env, hostname, home);
+  // 監督セッションの env は hook を効かせたまま、デスクトップ由来の漏れだけ外す。
+  // CLAUDE_CONFIG_DIR はアカウント切替のため childEnv() が意図的に設定しており、浄化でも残る。
+  const childBaseEnv = sanitizeClaudeSupervisorEnv(env);
   const fullPrompt = buildHeadlessPrompt(prompt);
   const promptFile = path.join(os.tmpdir(), `orgiast-next-session-${process.pid}-${Date.now()}.txt`);
   let cheapProvider = choice.provider;
@@ -282,7 +341,7 @@ export async function runHeadlessNextSession({ env, hostname, home, cwd, prompt,
         ? buildCheapCodeArgs({ repoRoot: REPO_ROOT, provider: cheapProvider, promptFile, cwd })
         : buildClaudeHeadlessArgs({ repoCwd: cwd, historyCwd: cwd }), {
         cwd,
-        env: { ...env, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `next-session-launch:cheap-code:${cheapProvider}` : 'next-session-launch:fallback-claude' },
+        env: { ...childBaseEnv, CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: cheap ? `next-session-launch:cheap-code:${cheapProvider}` : 'next-session-launch:fallback-claude' },
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       });
@@ -314,7 +373,7 @@ export async function runHeadlessNextSession({ env, hostname, home, cwd, prompt,
           resolve({ ...retried, firstExecutor: `cheap-code:${choice.provider}`, fallbackToClaude: true });
           return;
         }
-        recordSkippedNoExecutor({ home, reason, provider: cheapProvider });
+        recordSkippedNoExecutor({ home, reason, provider: cheapProvider, stderr });
         resolve({ executor: `cheap-code:${cheapProvider}`, exitCode: code, status: 'failure', stdout, stderr, fallbackToClaude: false, skippedNoExecutor: true });
         return;
       }
@@ -443,7 +502,19 @@ export function hasUnsentVscodeTab({ state, now, promptConsumed, windowMs = 6 * 
   return promptConsumed === false;
 }
 
-export function shouldLaunch({ state, now, env, force, pendingTab }) {
+// 2026-11-04 kim-PC: 並行セッションの hook 爆発で PC が操作不能になった最中にも新しいタブを開き続け、
+// VSCode が応答せず「Another instance of Code is running but not responding」が4回出た。
+export const DEFAULT_MAX_CLAUDE_PROCESSES = 12;
+
+export function countClaudeProcesses(exec = execFileSync) {
+  if (process.platform !== 'win32' && exec === execFileSync) return null;
+  try {
+    const out = exec('tasklist', ['/FI', 'IMAGENAME eq claude.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
+    return String(out).split(/\r?\n/).filter(line => /^"claude\.exe"/i.test(line)).length;
+  } catch { return null; }
+}
+
+export function shouldLaunch({ state, now, env, force, pendingTab, claudeProcesses = null }) {
   if (state.enabled === false) {
     return { ok: false, reason: '設定で無効化されています (~/.claude/next-session-launch.json の enabled:false)' };
   }
@@ -456,6 +527,10 @@ export function shouldLaunch({ state, now, env, force, pendingTab }) {
   const lastLaunch = Date.parse(state.lastLaunchAt);
   if (!force && !Number.isNaN(lastLaunch) && now - lastLaunch < 120_000) {
     return { ok: false, reason: '120秒以内に起動済みなので二重起動を防ぎます' };
+  }
+  const maxClaude = Number(env.ORGIAST_NEXT_SESSION_MAX_CLAUDE) || DEFAULT_MAX_CLAUDE_PROCESSES;
+  if (!force && Number.isFinite(claudeProcesses) && claudeProcesses >= maxClaude) {
+    return { ok: false, reason: `claude.exe が ${claudeProcesses} 個動いていて PC が過負荷になるため起動しません（上限 ${maxClaude}、ORGIAST_NEXT_SESSION_MAX_CLAUDE で変更可）` };
   }
   if (!force && pendingTab === true) {
     return { ok: false, reason: '前回開いた VSCode タブがまだ未送信です。タブバー右端のタブ（タブ名 Claude Code）で Enter を押すと始まります。新しく開き直すには --force-launch' };
@@ -504,6 +579,7 @@ export async function launchNextSession(argv = [], io = {}) {
   const writeFile = io.writeFile ?? fs.promises.writeFile;
   const rename = io.rename ?? fs.promises.rename;
   const spawnProcess = io.spawn ?? spawn;
+  const countClaude = io.countClaudeProcesses ?? countClaudeProcesses;
   const wait = io.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const log = io.log ?? console.log;
   const arm = io.armToFile ?? armToFile;
@@ -608,7 +684,7 @@ export async function launchNextSession(argv = [], io = {}) {
     }
     const launchEnv = { ...childEnv({ env, configDir, source: configDirSource }), ORGIAST_HEADLESS_JOB: 'next-session-launch' };
     const pendingTab = hasUnsentVscodeTab({ state, now, promptConsumed });
-    const decision = shouldLaunch({ state, now, env, force: flags.force, pendingTab: route === 'inline' || route === 'headless' ? false : pendingTab });
+    const decision = shouldLaunch({ state, now, env, force: flags.force, pendingTab: route === 'inline' || route === 'headless' ? false : pendingTab, claudeProcesses: countClaude() });
     if (!decision.ok) {
       log(`[next-session] スキップ: ${decision.reason}`);
       return 0;

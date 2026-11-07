@@ -262,7 +262,7 @@ try {
   Write-Event ('plan structure={0}<=~/.claude; {1}<=home files/directories/tasks/repo/npm/manifest; {2}<=~/.codex' -f $stagingClaudeDir, $stagingHomeDir, $stagingCodexDir)
 
   if ($DryRun) {
-    Write-Event 'plan robocopy=.claude:/MIR .codex:/MIR excludedDirs=cache,shell-snapshots,statsig,__pycache__,ide,node_modules,.git,sessions,tmp,logs excludedFiles=*.tmp,*.lock,*.tmp[0-9]*,*.heartbeat,.fleet-mail-poll.json codexExcludedFiles=logs_*.sqlite*'
+    Write-Event 'plan robocopy=.claude:/MIR .codex:/MIR excludedDirs=cache,shell-snapshots,statsig,__pycache__,ide,node_modules,.git,Network,Sessions,Sessions_Encrypted,GPUPersistentCache,GPUCache,Code Cache,DawnGraphiteCache,DawnWebGPUCache,ShaderCache,GrShaderCache codexExtraExcludedDirs=sessions,tmp,logs excludedFiles=*.tmp,*.lock,*.tmp[0-9]*,*.heartbeat,.fleet-mail-poll.json codexExcludedFiles=logs_*.sqlite*'
     Write-Event 'plan home-files=.claude.json(retry=2,warn-only),.claude.json.backup(optional); excludes=.claude.json.tmp.*,.bak*'
     Write-Event 'plan extras=.gitconfig,.clasprc.json,.ssh,.gemini,AppData/gh,orgiast-claude-rules,scheduled-tasks,npm-global-packages.json,backup-manifest.json'
     Write-Event 'plan restore-set=RESTORE-claude-backup.md,restore-claude-from-drive.ps1,復元する.bat'
@@ -281,7 +281,10 @@ try {
   foreach ($legacyItem in @(Get-ChildItem -LiteralPath $stagingDir -Force)) {
     if ($legacyItem.Name -notin @('.claude', 'home')) { Remove-Item -LiteralPath $legacyItem.FullName -Recurse -Force }
   }
-  $excludeDirs = @('cache', 'shell-snapshots', 'statsig', '__pycache__', 'ide', 'node_modules', '.git')
+  # Chrome 系プロファイルがブラウザ起動中に排他ロックする揮発ディレクトリ。Cookies は復元時に再ログインが必要。
+  $excludeDirs = @('cache', 'shell-snapshots', 'statsig', '__pycache__', 'ide', 'node_modules', '.git',
+    'Network', 'Sessions', 'Sessions_Encrypted', 'GPUPersistentCache', 'GPUCache', 'Code Cache',
+    'DawnGraphiteCache', 'DawnWebGPUCache', 'ShaderCache', 'GrShaderCache')
   # fleet-mail removes its transient request file after each poll; copying it races with that removal.
   $excludeFiles = @('*.tmp', '*.lock', '*.tmp[0-9]*', '*.heartbeat', '.fleet-mail-poll.json')
   $roboArgs = @($claudeDir, $stagingClaudeDir, '/MIR', '/R:2', '/W:2', '/XJ', '/NP', '/NFL', '/NDL', '/NJH', '/NJS', '/XD') + $excludeDirs + @('/XF') + $excludeFiles
@@ -342,7 +345,7 @@ try {
       $npmPackages | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stagingHomeDir 'npm-global-packages.json') -Encoding UTF8
     } catch { Write-Event ('WARN npm-global-list=skipped reason={0}' -f $_.Exception.Message) }
   } else { Write-Event 'WARN npm-global-list=skipped reason=npm-not-found' }
-  $nodeVersion = if (Get-Command node -ErrorAction SilentlyContinue) { [string](& node --version 2>$null) } else { $null }
+  $nodeVersion = if (Get-Command node -ErrorAction SilentlyContinue) { [string](& $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) --version 2>$null) } else { $null }
   $claudeVersion = if (Get-Command claude -ErrorAction SilentlyContinue) { try { [string](& claude --version 2>$null) } catch { $null } } else { $null }
   [ordered]@{ hostname=$hostname; userName=$env:USERNAME; userProfile=$env:USERPROFILE; createdAt=(Get-Date).ToString('o'); nodeVersion=$nodeVersion; claudeVersion=$claudeVersion; pwshVersion=$PSVersionTable.PSVersion.ToString(); taskCount=$taskCount; npmGlobalCount=$npmPackages.Count; scriptVersion='2' } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stagingHomeDir 'backup-manifest.json') -Encoding UTF8
   $stagedCount = @(Get-ChildItem -LiteralPath $stagingDir -File -Recurse -Force).Count

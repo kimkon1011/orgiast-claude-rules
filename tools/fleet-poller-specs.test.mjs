@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { probeScript, HEALTHY_TASK_RESULTS } from './register-fleet-mail.mjs';
 
 // 回帰テスト: 夜間ジョブが --specs を渡さないと、どのPCもハードウェアスペックを
 // 一度も送らない。実際に PC管理表 が「手で叩いた1台」だけの状態で止まっていた
@@ -71,4 +72,42 @@ test('fleet-poller.mjs の既存5タスクが許可リストに残っている',
 test('install-orgiast.ps1 は register-fleet-agent.ps1 を呼ぶ', () => {
   assert.match(installerSource, /& powershell\.exe[^\r\n]*-File \$fa/);
   assert.match(installerSource, /register-fleet-agent\.ps1/);
+});
+
+// --- 2026-10-10 事故: 受信タスク(OrgiastFleetMail)の自己修復とウォッチドッグ登録 ---
+test('fleet-poller.ps1 は日次で register-fleet-mail.mjs --ensure を呼ぶ（未登録/Disabled/失敗/受信停止なら再登録）', () => {
+  const line = pollerPs1Source.split(/\r?\n/).find(l => l.includes('register-fleet-mail.mjs') && l.includes('--ensure') && !l.trim().startsWith('#'));
+  assert.ok(line, 'register-fleet-mail.mjs --ensure の呼び出しが見つからない');
+});
+test('register-fleet-mail.mjs --ensure は Disabled と LastTaskResult と poll 時刻を健康判定に含む', () => {
+  const source = fs.readFileSync(path.join(dir, 'register-fleet-mail.mjs'), 'utf8');
+  assert.match(source, /'Disabled'\) \{ 'disabled'/);
+  const accepted = probeScript('OrgiastFleetMail').match(/LastTaskResult -notin @\(([^)]+)\)/)[1].split(',').map(Number);
+  assert.deepEqual(accepted, HEALTHY_TASK_RESULTS);
+  assert.match(source, /pollIsFresh\(home, now\)/);
+});
+test('register-fleet-mail.ps1 は FLEET_MAIL_WATCHDOG=1 のときだけ OrgiastFleetMailWatchdog を登録し、Unregister でも削除する', () => {
+  const source = fs.readFileSync(path.join(dir, 'register-fleet-mail.ps1'), 'utf8');
+  assert.match(source, /FLEET_MAIL_WATCHDOG=1/);
+  assert.match(source, /'OrgiastFleetMailWatchdog'/);
+  const registerLine = source.split(/\r?\n/).find(l => l.includes("Register-ScheduledTask -TaskName $watchdogTask"));
+  assert.ok(registerLine, 'ウォッチドッグタスクの Register-ScheduledTask が見つからない');
+  const unregisterBlock = source.slice(source.indexOf('$Unregister'), source.indexOf('exit 0'));
+  assert.match(unregisterBlock, /OrgiastFleetMailWatchdog/);
+});
+
+test('両pollerは日次でClaude上限を--force送信する', () => {
+  assert.match(pollerSource, /plan-usage-report\.mjs'\), '--force'/);
+  assert.match(pollerPs1Source, /tools\\plan-usage-report\.mjs'\) '--force'/);
+  const daily = pollerSource.slice(pollerSource.indexOf('if (dueDaily && repo)'), pollerSource.indexOf('// B)'));
+  assert.match(daily, /if \(!dry\) \{\s+runFleetSheetReport\(\);\s+run\(process.execPath, \[path.join\(repo, 'tools', 'plan-usage-report\.mjs'\), '--force'\]\);\s+\}/);
+});
+
+
+test('existing controller gets fleet-chase through daily PS1; fresh install uses converge manifest', () => {
+  assert.match(pollerPs1Source, /register-fleet-chase\.mjs/);
+  assert.match(pollerPs1Source, /if \(\$Dry\) \{ DrySkip 'register-fleet-chase/);
+  assert.match(pollerPs1Source, /\$fleetChaseInstaller '--ensure'/);
+  const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'setup-manifest.json'), 'utf8'));
+  assert.match(JSON.stringify(manifest), /task:fleet-chase.*register-fleet-chase\.mjs/);
 });

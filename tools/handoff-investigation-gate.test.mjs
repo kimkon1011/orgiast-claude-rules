@@ -43,6 +43,12 @@ test('classifier 拒否の手渡しは最小単位の再試行結果がなけれ
   assert.match(result.stderr, /\[MINIMAL-RETRY\]/);
 });
 test('classifier 言及なしは従来どおり pass', () => assert.equal(run(complete).status, 0));
+test('返事待ちを理由にした手渡しは WAIT-STALL で block', () => {
+  const result = run(`${complete}\nkim-PC は未返信`);
+  assert.notEqual(result.status, 0); assert.match(result.stderr, /\[WAIT-STALL\]/);
+});
+test('返事待ちでも恒久経路の実装結果があれば pass', () => assert.equal(run(`${complete}\nnot-hub で停止\n恒久経路: growi 中継 PR を実装 → テスト成功`).status, 0));
+test('待ち語が無い手渡しは従来どおり pass', () => assert.equal(run(`${complete}\n別経路も確認済み`).status, 0));
 test('[INVESTIGATION-OK] は pass し ledger に免除を記録', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'investigation-bypass-'));
   const result = spawnSync(process.execPath, [gate], {

@@ -74,3 +74,29 @@ SessionStart フックに登録。作り置きが**30時間以内なら**3件を
   他セッションの進行中作業なので触っていない。`nightly-health` は毎朝これを報告する。
 - `~/.claude/logs` に未登録のログが21件ある。重要なもの（`auto-session-verify.log` 等）は
   `tools/nightly-health-expectations.json` に追加する余地がある。
+
+## 朝バッチから自動修復を分離（2026-10-20）
+
+`OrgiastMorningBatch` の15分制限に、既定45分の自動修復が同居していたため、
+267014で打ち切られていた。修復は `OrgiastNightlyRemediate`（毎日07:20、上限90分）へ分離する。
+`NIGHTLY_REMEDIATE_BUDGET_MIN` は既定80分で、既存の `maxMinutes=45` と小さい方を採用する。
+修理レーンは毎回残り予算から3分を引いた timeout を使い、残り5分未満なら持ち越す。
+フォールバックと回帰テストも残り予算を再確認する。
+
+converge 経路: 該当なし（手動登録が必要）。fleet-convergence の再同期は
+onboarding-sync → setup --converge を実行するが、朝バッチ関連登録はその対象外。
+マージ・同期後、対象Windows PCで次を各1回実行する（どちらも再実行可能）。
+
+1. `powershell -NoProfile -ExecutionPolicy Bypass -File tools/register-nightly-remediate-task.ps1`
+2. `powershell -NoProfile -ExecutionPolicy Bypass -File tools/register-nightly-tools.ps1`
+
+新タスクを先に登録し、後者で既存の朝バッチから修復Actionを取り除く。
+`Get-ScheduledTask` で朝バッチのActionに `nightly-health-remediate.mjs` が無いこと、
+新タスクが07:20・90分であることを確認する。翌朝の実行結果と
+`~/.claude/logs/nightly-health-remediate.log` の更新を確認する。
+この変更の開発・検証では実タスクの登録・変更は行っていない。
+
+feedback-zero-sweep は dry-run でも、Issue未作成の原票について反映先repo未設定を
+errors/unknown に計上する。ブースの設定値はkimが確定する。
+候補はブース制作アプリの実ソース（`src/Feedback.js` 等）があるローカルリポジトリの
+`git remote -v` とGitHub上の内容を照合して探す。類似名だけでは選ばない。

@@ -1,14 +1,14 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 const script = resolve('tools/nightly-bootstrap.ps1');
 const hiddenRunner = resolve('tools/run-hidden.vbs');
 const powershell = process.platform === 'win32'
   ? 'powershell.exe'
-  : '/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe';
+  : '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe';
 let root;
 let launcherSequence = 0;
 
@@ -40,6 +40,7 @@ function runBootstrap(fix, target, args = [], extraEnv = {}, shell, bootstrap = 
     `$env:ORGIAST_NIGHTLY_REPO = ${psQuote(toWindowsPath(fix.repo))}`,
     `$env:PATH = ${psQuote(windowsPowerShellDir)}`,
     "$env:ORGIAST_NIGHTLY_NO_SELF_UPDATE = '1'",
+    "$env:ORGIAST_NIGHTLY_NO_GIT_FALLBACK = '1'",
     ...extraEnvLines,
     `& ${psQuote(bootstrapPath)} -Target ${psQuote(targetPath)}${shellArgument} -TargetArguments $args`,
     'exit $LASTEXITCODE',
@@ -55,6 +56,7 @@ function runBootstrap(fix, target, args = [], extraEnv = {}, shell, bootstrap = 
       HOME: toWindowsPath(fix.home),
       USERPROFILE: toWindowsPath(fix.home),
       PATH: windowsPowerShellDir,
+      ORGIAST_NIGHTLY_NO_GIT_FALLBACK: '1',
       ...extraEnv,
     },
   });
@@ -71,6 +73,7 @@ function runBootstrapAsync(fix, target, args = [], extraEnv = {}) {
     `$env:ORGIAST_NIGHTLY_REPO = ${psQuote(toWindowsPath(fix.repo))}`,
     `$env:PATH = ${psQuote(windowsPowerShellDir)}`,
     "$env:ORGIAST_NIGHTLY_NO_SELF_UPDATE = '1'",
+    "$env:ORGIAST_NIGHTLY_NO_GIT_FALLBACK = '1'",
     ...extraEnvLines,
     `& ${psQuote(toWindowsPath(script))} -Target ${psQuote(target)} -TargetArguments $args`,
     'exit $LASTEXITCODE',
@@ -87,6 +90,7 @@ function runBootstrapAsync(fix, target, args = [], extraEnv = {}) {
         HOME: toWindowsPath(fix.home),
         USERPROFILE: toWindowsPath(fix.home),
         PATH: windowsPowerShellDir,
+        ORGIAST_NIGHTLY_NO_GIT_FALLBACK: '1',
         ...extraEnv,
       },
     });
@@ -127,10 +131,11 @@ function gitShimPath(fix, headSha, remoteSha) {
     'exit /b 0',
     '',
   ].join('\r\n'), 'utf8');
-  return `${toWindowsPath(shim)};${String.raw`C:\Windows\System32\WindowsPowerShell\v1.0`}`;
+  return `${toWindowsPath(shim)};${toWindowsPath(dirname(process.execPath))};${String.raw`C:\Windows\System32\WindowsPowerShell\v1.0`}`;
 }
 
 const hasPowerShell = (() => {
+  if (process.platform !== 'win32' && (!existsSync(powershell) || !/^[A-Za-z]:[\\/]/.test(toWindowsPath(script)))) return false;
   const probe = spawnSync(powershell, ['-NoProfile', '-Command', 'exit 0']);
   return !probe.error && probe.status === 0;
 })();
@@ -349,12 +354,38 @@ test('heartbeat is fail-open and runs before target extension dispatch', () => {
   assert.match(source.slice(source.lastIndexOf('try {', heartbeat), dispatch), /catch \{ \}/);
 });
 
+test('finish heartbeat reports completion after target dispatch', () => {
+  const source = readFileSync(script, 'utf8');
+  const dispatch = source.indexOf("$extension = [IO.Path]::GetExtension($targetPath)");
+  const finish = source.indexOf('Send-NightlyHeartbeat -StartedAt $nightlyStartedAt -Ok $true', dispatch);
+  assert.ok(dispatch > 0, 'target dispatch was not found');
+  assert.ok(finish > dispatch, 'finish heartbeat call must run after target dispatch');
+  const fnStart = source.indexOf('function Send-NightlyHeartbeat');
+  const fnEnd = source.indexOf('function ', fnStart + 1);
+  assert.ok(fnStart > 0 && fnEnd > fnStart, 'Send-NightlyHeartbeat definition was not found');
+  const fn = source.slice(fnStart, fnEnd);
+  assert.match(fn, /--finishedAt/);
+  assert.match(fn, /'--cycleMinutes', '1440'/);
+  // 空の --startedAt を渡すと後続の --finishedAt を値として食う(実測)。空のときは組み立てないこと。
+  assert.match(fn, /IsNullOrEmpty\(\$StartedAt\)/);
+});
+
+test('Stop-Nightly reports a failed heartbeat', () => {
+  const source = readFileSync(script, 'utf8');
+  const stopStart = source.indexOf('function Stop-Nightly');
+  const stopEnd = source.indexOf('function ', stopStart + 1);
+  assert.ok(stopStart > 0 && stopEnd > stopStart, 'Stop-Nightly definition was not found');
+  const stop = source.slice(stopStart, stopEnd);
+  assert.match(stop, /Send-NightlyHeartbeat[^\r\n]*-Ok \$false/);
+});
+
 test('missing target exits 1 and writes readable Japanese log', { skip: !hasPowerShell }, () => {
   const fix = fixture('missing');
-  const result = runBootstrap(fix, join(fix.dir, 'missing.ps1'));
+  // git 不在を再現する: 既定の設置先からの補完も止める（CI ランナーには C:\Program Files\Git がある）
+  const result = runBootstrap(fix, join(fix.dir, 'missing.ps1'), [], { ORGIAST_NIGHTLY_NO_GIT_FALLBACK: '1' });
   assert.equal(result.status, 1, result.stderr);
   const log = logText(fix);
-  assert.match(log, /対象が見つからない/);
+  assert.match(log, /対象確認 \/ error:対象が見つからない .* pid=\d+/);
   assert.match(log, /gitが見つからない/);
   assert.doesNotMatch(log, /�/);
 });
@@ -377,7 +408,13 @@ test('propagates PowerShell target exit code 7', { skip: !hasPowerShell }, () =>
   writeFileSync(target, 'exit 7\r\n', 'utf8');
   const result = runBootstrap(fix, target);
   assert.equal(result.status, 7, result.stderr);
-  assert.match(logText(fix), /ok:exit-seven\.ps1 終了コード=7/);
+  const log = logText(fix);
+  const start = log.match(/nightly-bootstrap \/ ok:開始 pid=(\d+) target=([^\r\n]+)/);
+  assert.ok(start, log);
+  assert.equal(start[2], toWindowsPath(target));
+  assert.match(log, new RegExp(`排他制御 / ok:取得 pid=${start[1]} 待ち=\\d+\\.\\d{3}`));
+  assert.match(log, new RegExp(`対象開始 / ok:exit-seven\\.ps1 pid=${start[1]}`));
+  assert.match(log, new RegExp(`対象実行 / ok:exit-seven\\.ps1 終了コード=7 pid=${start[1]} 所要=\\d+\\.\\d{3}`));
 });
 
 test('forwards all target arguments and discards leading separator', { skip: !hasPowerShell }, () => {
@@ -477,7 +514,41 @@ test('mutex timeout logs a warning and continues with the existing target', { sk
   });
   assert.equal(contender.status, 0, contender.stderr);
   await holder;
-  assert.match(allLogText(fix), /warn:他のタスクが同期中のためタイムアウト。既存版で続行/);
+  assert.match(allLogText(fix), /warn:他のタスクが同期中のためタイムアウト。既存版で続行 pid=\d+ 待ち=\d+\.\d{3}/);
+});
+
+test('stale index.lock cleanup runs after fetch and before checkout with a strict ten-minute threshold', () => {
+  const source = readFileSync(script, 'utf8');
+  const fetch = source.indexOf('& $git.Source -C $repo fetch origin main');
+  const cleanup = source.indexOf("$indexLock = Join-Path $gitDir 'index.lock'", fetch);
+  const checkout = source.indexOf('& $git.Source -C $repo checkout --detach origin/main', fetch);
+  assert.ok(fetch >= 0 && cleanup > fetch && checkout > cleanup);
+  const block = source.slice(cleanup, checkout);
+  assert.match(block, /Test-Path -LiteralPath \$indexLock -PathType Leaf/);
+  assert.match(block, /if \(\$indexLockInfo.LastWriteTime -lt \(Get-Date\).AddMinutes\(-10\)\) \{\s*Remove-Item -LiteralPath \$indexLock -Force -ErrorAction Stop/);
+  assert.match(block, /catch \{\s*Write-NightlyLog 'リポ同期' \("warn:index.lock の削除失敗 "/);
+});
+
+for (const ageMinutes of [11, 9]) test(`index.lock cleanup respects LastWriteTime: age=${ageMinutes} minutes`, { skip: !hasPowerShell }, () => {
+  const fix = fixture(`index-lock-${ageMinutes}`);
+  mkdirSync(join(fix.repo, '.git'), { recursive: true });
+  const lock = join(fix.repo, '.git', 'index.lock');
+  writeFileSync(lock, 'git lock');
+  const modified = new Date(Date.now() - ageMinutes * 60_000);
+  utimesSync(lock, modified, modified);
+  const target = join(fix.dir, 'target.ps1');
+  writeFileSync(target, 'exit 0\r\n', 'utf8');
+  const sha = '1111111111111111111111111111111111111111';
+
+  const result = runBootstrap(fix, target, [], { PATH: gitShimPath(fix, sha, sha) });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(existsSync(lock), ageMinutes <= 10);
+  if (ageMinutes > 10) assert.match(logText(fix), /warn:古い index.lock を削除 \d{4}-/);
+  else {
+    assert.equal(readFileSync(lock, 'utf8'), 'git lock');
+    assert.doesNotMatch(logText(fix), /古い index.lock を削除/);
+  }
 });
 
 test('logs ok:origin/main only when HEAD matches origin/main', { skip: !hasPowerShell }, () => {
@@ -550,11 +621,13 @@ for (const dirty of [true, false]) test(`real git bootstrap preserves dirty tree
     `"C:\\Program Files\\Git\\cmd\\git.exe" %*`,
     'exit /b %errorlevel%', '',
   ].join('\r\n'));
-  const result = runBootstrap(fix, target, [], { PATH: `${toWindowsPath(shim)};C:\\Windows\\System32\\WindowsPowerShell\\v1.0` });
+  const result = runBootstrap(fix, target, [], { PATH: `${toWindowsPath(shim)};${toWindowsPath(dirname(process.execPath))};C:\\Program Files\\Git\\cmd;C:\\Windows\\System32\\WindowsPowerShell\\v1.0` });
   assert.equal(result.status, 0, result.stderr);
   const commands = readFileSync(trace, 'utf8');
   if (dirty) {
     assert.doesNotMatch(commands, /reset --hard|clean -qfd|checkout --detach/);
+    assert.match(logText(fix), /skip:dirty worktree preserved/);
+    assert.doesNotMatch(logText(fix), /ok:origin\/main/);
     assert.equal(readFileSync(join(fix.repo, 'untracked'), 'utf8'), 'precious');
     const branch = git(fix.repo, ['branch', '--show-current']).trim();
     assert.match(branch, /^rescue\/auto-session-/);
@@ -566,4 +639,22 @@ for (const dirty of [true, false]) test(`real git bootstrap preserves dirty tree
     assert.match(commands, /clean -qfd/);
     assert.equal(git(fix.repo, ['rev-parse', 'HEAD']), git(fix.repo, ['rev-parse', 'origin/main']));
   }
+});
+
+for (const enabled of [true, false]) test(`hourly sync installed script follows verified main: enabled=${enabled}`, { skip: !hasPowerShell }, () => {
+  const fix = fixture(`sync-self-update-${enabled}`);
+  mkdirSync(join(fix.repo, '.git'));
+  mkdirSync(join(fix.repo, 'tools'));
+  const source = join(fix.repo, 'tools', 'sync-orgiast-main.ps1');
+  const installed = join(fix.home, '.claude', 'tools', 'sync-orgiast-main.ps1');
+  mkdirSync(dirname(installed), { recursive: true });
+  writeFileSync(source, 'new sync script'); writeFileSync(installed, 'old sync script');
+  const target = join(fix.dir, 'target.ps1'); writeFileSync(target, 'exit 0');
+  const sha = '1111111111111111111111111111111111111111';
+  const result = runBootstrap(fix, target, [], {
+    PATH: gitShimPath(fix, sha, sha), ORGIAST_NIGHTLY_NO_SELF_UPDATE: enabled ? '0' : '1',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readFileSync(installed, 'utf8'), enabled ? 'new sync script' : 'old sync script');
+  if (enabled) assert.match(logText(fix), /SYNC_SELF_UPDATE \/ sync-orgiast-main.ps1 updated 1111111/);
 });

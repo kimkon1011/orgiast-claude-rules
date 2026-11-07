@@ -83,7 +83,7 @@ fetch と DM 送信は注入（`fetchImpl` 等）でモックし、**実際に�
 
 `FeedbackRelay_nagPending()` の「未対応」判定を上記と同じにする。
 1. `C:/Users/uers/Downloads/ブース制作アプリ/src/FeedbackRelay.js`
-2. `packages/feedback-gas/templates/FeedbackRelay.js`
+2. `tools/feedback-kit/gas/templates/FeedbackRelay.js`
 
 現状は「状態が done 系でない **かつ** 対応メモが空」になっている。これを
 **「状態が done 系でない」だけ**に変え、行の表示に `未返答` / `返答済・未完了` を付ける。

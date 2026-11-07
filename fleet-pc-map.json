@@ -1,32 +1,125 @@
 {
   "_note": "Discordラベル → シートD列表記 / hostname / 担当者 の対応表。fleet-liveness.mjs が同一PCの二重計上を防ぐために使う。証拠のあるものだけを書く（推測でマージすると他PCのシート行を奪う）。証拠 = ①報告本文の `🖥 hostname=…` ②ラベル名がシートD列と一致 ③申告日と同日のラベル初登場 ④kim の明示回答。aliases は同じPCを指す別表記（1台が手入力行と機械書き込み行に分かれているため）。",
+  "_codexAccountDefault": "seisaku-team@orgiast.jp",
+  "_codexAccountNote": "Codex(ChatGPT)は担当者ごとに分担（kim 2026-10-12 最終決定）: kim@=kim-PC(Pro)、nishi@=nishi-PC・kimko-PC、cr@=cr-PC・w018-PC（各自で有料プラン契約）、未指定の作業用999・カフェ用015 は _codexAccountDefault=seisaku-team@。Auto top-up はオフ。account は Claude の担当席で別物。",
   "kim-PC": {
     "hostname": "DESKTOP-2D0R4LI",
     "person": "金功勇",
-    "aliases": ["DESKTOP-2D0R4LI", "kim-PC(開発機/kim)"],
-    "_evidence": "報告本文の 🖥 hostname=DESKTOP-2D0R4LI / user=uers / git=kim@orgiast.jp（2026-08-27 実測）。kim 明示回答『18行目(kim-PC)と22行目(DESKTOP-2D0R4LI)は同じパソコン』（2026-08-27）。kim が DESKTOP-2D0R4LI を『作業用004民泊用』行から独立行へ移動済み＝作業用004民泊用 は開発機ではないことが確定"
+    "aliases": [
+      "DESKTOP-2D0R4LI",
+      "kim-PC(開発機/kim)"
+    ],
+    "_evidence": "報告本文の 🖥 hostname=DESKTOP-2D0R4LI / user=uers / git=kim@orgiast.jp（2026-08-27 実測）。kim 明示回答『18行目(kim-PC)と22行目(DESKTOP-2D0R4LI)は同じパソコン』（2026-08-27）。kim が DESKTOP-2D0R4LI を『作業用004民泊用』行から独立行へ移動済み＝作業用004民泊用 は開発機ではないことが確定",
+    "codexAccount": "kim@orgiast.jp"
   },
   "kimko-PC": {
-    "sheetName": "作業用011",
+    "sheetName": "作業用004民泊用",
+    "remoteName": "作業用004民泊用",
+    "account": "nishi@orgiast.jp",
     "hostname": "DESKTOP-PPD5V8I",
+    "deviceId": "3BF4B9EF-B428-450D-9AC2-C59AF0D1C9B3",
+    "_correction": "2026-10-09 kim のスクリーンショット2枚で確定: Chrome リモートデスクトップ『作業用004 民泊』の接続先のデバイス名＝DESKTOP-PPD5V8I（デバイスID 上記）。『作業用011』の接続先のデバイス名は『作業用011』（HP EliteDesk 800 G3 SFF、デバイスID B79CA602-6163-4252-B2A0-2A96C61F6767）で別のPC。よって kimko-PC の実体は作業用004民泊用で、シート行『作業用011(=DESKTOP-PPD5V8I)』の紐付けは誤り。sheetName と aliases は fleet-liveness がシート行の統合に使うため、シート側の表記を直すまで残す。アカウント nishi@ は kim 回答(2026-10-08)",
     "person": "金功勇",
-    "aliases": ["作業用011(=DESKTOP-PPD5V8I)"],
-    "_evidence": "2026-08-27 20:0x に Discord へ初報告し 🖥 hostname=DESKTOP-PPD5V8I を送ってきた（webhook 復旧の実証）。シート行『作業用011(=DESKTOP-PPD5V8I)』と hostname 一致"
+    "aliases": [
+      "作業用011(=DESKTOP-PPD5V8I)",
+      "作業用004民泊用"
+    ],
+    "_evidence": "【訂正 2026-10-09】kim スクリーンショット 2026-10-09 で DESKTOP-PPD5V8I=作業用004民泊用 と確定。旧記載『作業用011(=DESKTOP-PPD5V8I)』は誤り。【以下は旧証拠・残置】2026-08-27 20:0x に Discord へ初報告し 🖥 hostname=DESKTOP-PPD5V8I を送ってきた（webhook 復旧の実証）。シート行『作業用011(=DESKTOP-PPD5V8I)』と hostname 一致。remoteName 根拠(2026-10-08): 台帳『PC稼働状況』D列=作業用011 の行(担当 金功勇)の fleet-mail疎通の根拠に『kimko-PCが送信/返信8通…紐付け=fleet-pc-map(作業用011)』とあり、作業用011=kimko-PC を台帳側が明示",
+    "codexAccount": "nishi@orgiast.jp"
   },
   "HP": {
     "sheetName": "東邦2階HP",
     "person": "木下真弓",
-    "_evidence": "ラベル名がシートD列『東邦2階HP』と一致。8/17申告と同日にラベル初登場。2026-08-18 を最後に停止（webhook削除と同時期）"
+    "account": "cr@orgiast.jp",
+    "_evidence": "ラベル名がシートD列『東邦2階HP』と一致。8/17申告と同日にラベル初登場。2026-08-18 を最後に停止（webhook削除と同時期）。account は 2026-10-29 追加: 本PCの ~/.claude.json oauthAccount emailAddress=cr@orgiast.jp・memory codex-on-this-pc「このPC(cr@orgiast.jp / リモートデスクトップ)」より。これが無いと resolveOwner が空になり notify-owner の !owner で完了通知が全て破棄される（2026-10-18〜10-23 の未通知13件の原因）"
   },
   "nishi-PC": {
+    "notifyChannels": ["session", "toast"],
+    "remoteName": "作業用019",
+    "account": "nishi@orgiast.jp",
+    "_evidenceRemoteName": "kim のスクリーンショット(2026-10-09): Chrome リモートデスクトップ『作業用019/nishi』の接続先の設定→詳細情報でデバイス名 DESKTOP-04U31RG（Precision T3610、デバイスID 9D75ACC5-EB0D-48FB-B27E-D60113A9417B）。nishi-PC 自己申告の hostname=DESKTOP-04U31RG(2026-10-08 fleet-mail 返信)と一致。アカウント nishi@ は kim 回答(2026-10-08)",
     "hostname": "DESKTOP-04U31RG",
-    "aliases": ["DESKTOP-04U31RG"],
+    "aliases": [
+      "DESKTOP-04U31RG"
+    ],
     "_gap": "手書き行が無い(PC稼働状況シートに追加が必要)",
-    "_evidence": "2026-08-28/29 に Discord へ hostname=DESKTOP-04U31RG / user=user / git=seisaku-team@orgiast.jp を含む報告を送信（rules-resync runId=rules-resync-2026-08-28-nightly-cost-fix 実行報告 および 日次トークン報告、いずれも実測）"
+    "_evidence": "2026-08-28/29 に Discord へ hostname=DESKTOP-04U31RG / user=user / git=seisaku-team@orgiast.jp を含む報告を送信（rules-resync runId=rules-resync-2026-08-28-nightly-cost-fix 実行報告 および 日次トークン報告、いずれも実測）",
+    "codexAccount": "nishi@orgiast.jp"
   },
-  "作業用999": {
-    "sheetName": "作業用999",
-    "installedAt": "2026-09-03",
-    "_evidence": "配布インストーラ完走(結果 OK 29 / NG 3)と claude --version 2.1.258 を kim のスクリーンショットで実機確認(2026-09-03)。hostname は未報告のため未記入。fleet-sheet.env 未取得で未報告 → PR #285 の自己修復待ち"
+  "作業用011": {
+    "remoteName": "作業用011",
+    "sheetName": "作業用011",
+    "hostname": "作業用011",
+    "deviceId": "B79CA602-6163-4252-B2A0-2A96C61F6767",
+    "account": "cr@orgiast.jp",
+    "person": "金功勇",
+    "notifyDiscordId": "715210673642012733",
+    "notifyTo": "kim@orgiast.jp（金功勇）",
+    "_notifyEvidence": "2026-10-23 本人が『進捗 DM の宛先は kim で正しい』と回答。PR #1227 後の 2026-10-27〜11-01、auto-progress-done-dm.sent.jsonl 44件がすべて delivered=toast、Discord DM 0件で、owner-inbox.md に229件が未読滞留したことを 2026-11-01 に作業用011で実測。",
+    "aliases": [
+      "cr-PC"
+    ],
+    "_mergedFrom": "cr-PC（2026-10-13 統合。同一実機が2キーに分かれ、cr-PC 宛メールが未配達だった）。cr-PC の旧エントリ: sheetName=作業用011, hostname=作業用011, aliases=[作業用011], account=cr@orgiast.jp",
+    "_evidenceCrPC": "cr-PC の Claude Code が Discord #claude-code（msg 1558060797459169290, 2026-10-09）で hostname『作業用011』を自己申告。kim 回答 2026-10-08: cr@orgiast.jp 担当。HANDOVER-cr-2026-10-09 の『作業用018』表記は誤りで実機は 011。enroll は PC名 cr-PC で 2026-10-09 発行",
+    "_evidence": "kim のスクリーンショット(2026-10-09): Chrome リモートデスクトップ『作業用011』の接続先で 設定→システム→バージョン情報 のデバイス名『作業用011』（HP EliteDesk 800 G3 SFF、i7-7700、デバイスID 上記、Windows 11 Pro 22H2、Windows のサインインは 金功勇 / kimkongyong@gmail.com）。Claude Code の導入と REPORTER_LABEL は未確認。ラベルが未設定なら hostname『作業用011』で受信するため、キー名＝hostname で照合できる",
+    "codexAccount": "cr@orgiast.jp"
+  },
+  "_unverified": {
+    "_note": "証拠が弱く確定できない対応。fleet-mail の宛先解決(remoteName 照合)には使わない。確定したらトップレベルのエントリへ remoteName 付きで移す。",
+    "作業用018": {
+      "remoteName": "作業用018",
+      "account": "cr@orgiast.jp",
+      "_evidence": "kim 明示回答『018 は cr@orgiast.jp』(2026-10-08)＝アカウントは確定。hostname・Claude Code 導入状況・報告実績は未確認"
+    },
+    "増田MacBookAir": {
+      "account": "cr@orgiast.jp",
+      "person": "増田裕子",
+      "model": "MacBook Air 13\"",
+      "os": "macOS 14.8.9",
+      "serial": "C02YK73PJK77",
+      "_evidence": "kim 申告 2026-10-13: このMacは cr@orgiast.jp の Claude Code を使用、使用者は増田裕子さん。機種・OS・シリアルは kim のスクリーンショット（デバイス情報画面、Macを探す=オフ）。hostname・REPORTER_LABEL は未報告のため宛先解決には使わない。フリートシートの『MacBook-Air』『macBook』行のどちらかの可能性があるが未照合"
+    }
+  },
+  "w018-PC": {
+    "remoteName": "作業用018",
+    "hostname": "DESKTOP-N429M3V",
+    "account": "cr@orgiast.jp",
+    "discordId": "1557228267566665729",
+    "notifyDiscordId": "1557228267566665729",
+    "aliases": [
+      "DESKTOP-N429M3V"
+    ],
+    "_evidence": "2026-10-10 fleet-fix-now の自己申告 hostname=DESKTOP-N429M3V・label=w018-PC。kim 回答(2026-10-08)で 018=cr@。2026-11-02 Discord search_members で claudecode0850 / Claudecode(cr@) = 1557228267566665729 を実測。未設定のため owner-notify が Discord を毎回 skip していた",
+    "codexAccount": "cr@orgiast.jp"
+  },
+  "DESKTOP-BDOAK99": {
+    "hostname": "DESKTOP-BDOAK99",
+    "account": "seisaku-team@orgiast.jp",
+    "remoteName": "作業用999",
+    "notifyDiscordId": "715210673642012733",
+    "notifyTo": "kim@orgiast.jp（金功勇）",
+    "_notifyEvidence": "2026-11-04 kim 指摘: このPCの進捗DM（【DESKTOP-BDOAK99 の自動進行】TETSUKO・Amazon 等）が佐藤優奈さん（satou1319 / 1423319951980232744）に届いていた。seisaku-team@ は共用アカウントで、名簿にメールが無いため宛先がPCローカルの orgiast-discord-user-id.txt 等に落ちていた。全席は kim が操作している（feedback_kim_operates_all_seats）ため kim に固定。",
+    "_identityConflict": "2026-11-04 kim 回答「作業用008ではテツコのことはやっていない。作業用999で genbateam.toho@gmail.com で行っているはず」。このPCは TETSUKO（genbateamtoho-ctrl/tetsuko-unified、Vercel genbateamtoho-ctrl）の作業を報告している（mail-reply-886024345b357f27 / mail-1793177348234-daa327dd）。remoteName=作業用008 は 10/30 の受信者の自己申告由来で誤りの可能性が高い。作業用999 の実機照合が済むまで remoteName は変えない。",
+    "aliases": [
+      "DESKTOP-BDOAK99",
+      "作業用008"
+    ],
+    "_evidence": "2026-11-04 利用者申告「このパソコンは999」で作業用999に訂正。旧登録(PR #1401)の作業用008は、kim-PC が 008 前提で送った引継ぎメールに本PCの Claude が「作業用008で受け取りました」と返した自己申告が根拠で、作業用番号はローカルで検証不能だった（誤登録）。作業用008 宛の既存経路（鹿沼案件引継ぎ・meeting-prep-routing）を切らないため aliases に残す。実在の作業用008 が別にあるかは kim 確認待ち。旧 作業用999 行の記録: remoteName 根拠: 既存 sheetName=作業用999(シートD列表記)。ただし hostname 未報告のため fleet-mail では照合値=キー名『作業用999』になり、実機の label/hostname と一致する保証なし。配布インストーラ完走(結果 OK 29 / NG 3)と claude --version 2.1.258 を kim のスクリーンショットで実機確認(2026-09-03)。hostname は未報告のため未記入。fleet-sheet.env 未取得で未報告 → PR #285 の自己修復待ち",
+    "sheetName": "作業用999"
+  },
+  "DELL": {
+    "hostname": "DELL",
+    "account": "seisaku-team@orgiast.jp",
+    "remoteName": "作業用014",
+    "notifyDiscordId": "715210673642012733",
+    "notifyTo": "kim@orgiast.jp（金功勇）",
+    "aliases": [
+      "DELL",
+      "作業用014",
+      "白川専用014"
+    ],
+    "_evidence": "2026-11-04 本PCの Claude（seisaku-team@、sessionId 756c1d8b-c9d7-456f-8807-becae5cc2210）が #claude-code（message_id 1567434426311385209）と kim 経由の依頼で hostname=DELL / OS user=USER を実測申告し、L&B 案件の担当席と名乗った。同日 kim 回答「白川専用014 が seisaku-team@orgiast.jp。DELL 席は白川専用014 のことでは」。L&B 案件は 10/30 に白川専用014 へ割当済みで担当が一致するため 作業用014 として登録（memory: 作業用014 は未登録・hostname 不明だった）。",
+    "_identityConflict": "本PCの Claude は自席ラベルを『作業用999』と申告した。作業用999 は DESKTOP-BDOAK99 行にも利用者申告がある。kim 回答と L&B 担当の一致を優先して 014 とし、999 は aliases に入れない（DESKTOP-BDOAK99 宛の経路を奪わないため）。実機の Chrome リモートデスクトップ名で確定したら更新する。",
+    "_keyserve": "2026-11-04 kim-PC（primary）で keyserve-enroll --pc DELL --ttl-hours 48 を発行（指紋 09a392e44d）。受信側で実行し keyserve-status が primary / HTTP 200 になるまで fleet-sheet.env は未配布。"
   }
 }

@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { injectFeedbackTodos, immediateThrottleReason, runIntake, webhookFrom } from './booth-feedback-intake.mjs';
-import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
+import { injectFeedbackTodos, immediateThrottleReason, planFeedbackLedgerSync, runIntake, syncCompletedFeedback, webhookFrom } from './booth-feedback-intake.mjs';
 import { firstBlockBounds, sectionFrom, parseHandoff, todoExclusionReason } from './auto-session.mjs';
 
 // path.sep 始まりにして Windows/POSIX どちらでも io スタブのキーと一致させる
@@ -74,11 +73,13 @@ test('不具合の新規注入は detached launcher を起動し台帳へ記録�
   const h = harness({ next: original, fetchImpl: async () => response({ ...api, items: [bug] }) });
   assert.equal(await runIntake({ home: HOME, io: h.io, fetchImpl: h.fetchImpl }), 0);
   assert.equal(h.spawns.length, 1);
-  // detached は Windows 以外。Windows では windowsHide で隠しコンソールを根絶つ(lib/background-spawn)。
-  assert.deepEqual(
-    { detached: h.spawns[0][2].detached, windowsHide: h.spawns[0][2].windowsHide },
-    { detached: backgroundSpawnOptions().detached, windowsHide: backgroundSpawnOptions().windowsHide },
-  );
+  // #422: win32 は detached が CREATE_NO_WINDOW を無効化するため windowsHide のみ。
+  if (process.platform === 'win32') {
+    assert.equal(h.spawns[0][2].windowsHide, true);
+    assert.notEqual(h.spawns[0][2].detached, true);
+  } else {
+    assert.equal(h.spawns[0][2].detached, true);
+  }
   assert.equal(h.spawns[0][2].stdio, 'ignore');
   const saved = JSON.parse(h.files.get(HOME_FILE('booth-feedback-ledger.json')));
   assert.equal(saved.items['fb-123'].immediateLaunchedAt, '2026-08-28T03:00:00.000Z');
@@ -192,7 +193,7 @@ test('新規注入を task-ledger に upsert する', async () => {
   const h = harness({ next: original });
   const calls = [];
   assert.equal(await runIntake({ home: HOME, io: h.io, fetchImpl: h.fetchImpl, taskLedger: async (args) => calls.push(args) }), 0);
-  assert.deepEqual(calls, [{ command: 'upsert', taskId: 'FB-fb-123', 起票元: 'booth-feedback', 件名: item.title, 依頼元: item.source, 状態: '未着手', 次アクション: '当日夜に実行', 期限: '' }]);
+  assert.deepEqual(calls.filter((call) => call.command === 'upsert'), [{ command: 'upsert', taskId: 'FB-fb-123', 起票元: 'booth-feedback', 件名: item.title, 依頼元: item.source, 状態: '未着手', 次アクション: '当日夜に実行', 期限: '' }]);
 });
 
 test('task-ledger upsert 失敗でも next-session とローカル台帳を更新する', async () => {
@@ -229,6 +230,36 @@ test('--resolve 成功時だけ台帳に resolvedAt を記録する', async () =
   assert.equal(saved.items['fb-123'].resolvedAt, '2026-08-28T03:00:00.000Z');
 });
 
+test('シート側で閉じられた行を台帳へ書き戻し、タスク台帳の行も閉じる', async () => {
+  const ledger = JSON.stringify({ version: 1, items: { 'fb-123': { lastStatus: 'new', title: '古い項目', injectedAt: '2026-08-27T03:00:00.000Z' } } });
+  const fetchImpl = async (url) => String(url).includes('status=all')
+    ? response({ ...api, items: [{ ...item, status: 'done' }] })
+    : response({ ...api, items: [] });
+  const h = harness({ next: original, ledger, fetchImpl });
+  const calls = [];
+  const taskLedger = async (args) => {
+    calls.push(args);
+    if (args.command === 'list') return { ok: true, rows: [{ taskId: 'FB-fb-123', 件名: '古い項目', 状態: '未着手' }] };
+    return { ok: true };
+  };
+  assert.equal(await runIntake({ home: HOME, io: h.io, fetchImpl: h.fetchImpl, taskLedger }), 0);
+  const saved = JSON.parse(h.files.get(HOME_FILE('booth-feedback-ledger.json')));
+  assert.equal(saved.items['fb-123'].lastStatus, 'done');
+  assert.equal(saved.items['fb-123'].resolvedAt, '2026-08-28T03:00:00.000Z');
+  assert.equal(saved.items['fb-123'].closedOnSheet, true);
+  assert.ok(calls.some((call) => call.command === 'done' && call.taskId === 'FB-fb-123'));
+});
+
+test('全件取得が失敗しても取得・注入は続行する', async () => {
+  const fetchImpl = async (url) => String(url).includes('status=all')
+    ? response('boom', { ok: false, status: 500 })
+    : response(api);
+  const h = harness({ next: original, fetchImpl });
+  assert.equal(await runIntake({ home: HOME, io: h.io, fetchImpl: h.fetchImpl, taskLedger: async () => {} }), 0);
+  assert.match(h.files.get(HOME_FILE('next-session.md')), /\[FB:fb-123\]/);
+  assert.match(h.stderr.join('\n'), /全件取得に失敗/);
+});
+
 test('不具合通知の webhook は明示キーだけを拾う（無関係 channel への誤爆防止）', () => {
   assert.equal(webhookFrom({ BOOTH_FEEDBACK_WEBHOOK: 'https://x/booth' }, {}), 'https://x/booth');
   assert.equal(webhookFrom({}, { DISCORD_FEEDBACK_WEBHOOK: 'https://x/fb' }), 'https://x/fb');
@@ -242,4 +273,95 @@ test('archived feedback markers prevent reinjection after queue rotation', async
   h.files.set(HOME_FILE('archive/next-session-feedback.json'), JSON.stringify(['fb-123']));
   assert.equal(await runIntake({ home: HOME, io: h.io, fetchImpl: h.fetchImpl, taskLedger: async () => {} }), 0);
   assert.equal(h.files.get(HOME_FILE('next-session.md')), original);
+});
+
+const ledgerWith = (items) => ({ version: 1, items });
+
+test('planFeedbackLedgerSync はローカルdoneかつ台帳未完了の行だけを対象にする', () => {
+  const ledger = ledgerWith({
+    'fb-done': { lastStatus: 'done', resolvedAt: '2026-09-05T02:53:22.552Z', title: '直した件' },
+    'fb-open': { lastStatus: 'new' },
+    'fb-resolved': { resolvedAt: '2026-09-06T00:00:00.000Z' },
+  });
+  const rows = [
+    { taskId: 'FB-fb-done', 件名: '直した件', 状態: '未着手' },
+    { taskId: 'FB-fb-open', 件名: 'まだ', 状態: '未着手' },
+    { taskId: 'FB-fb-resolved', 件名: '解決済み', 状態: '対応中' },
+    { taskId: 'FB-fb-done', 件名: '重複行', 状態: '未着手' },
+    { taskId: 'FB-fb-done', 件名: '既に完了', 状態: '完了' },
+    { taskId: 'T-OTHER', 件名: '台帳タスク', 状態: '未着手' },
+  ];
+  assert.deepEqual(planFeedbackLedgerSync(ledger, rows), [
+    { taskId: 'FB-fb-done', key: 'fb-done', 件名: '直した件', doneAt: '2026-09-05T02:53:22.552Z' },
+    { taskId: 'FB-fb-resolved', key: 'fb-resolved', 件名: '解決済み', doneAt: '2026-09-06T00:00:00.000Z' },
+  ]);
+});
+
+test('planFeedbackLedgerSync は実形 {ok, rows, count} を読む', () => {
+  const ledger = ledgerWith({ 'fb-done': { lastStatus: 'done' } });
+  const plan = planFeedbackLedgerSync(ledger, { ok: true, rows: [{ taskId: 'FB-fb-done', 件名: 'x', 状態: '未着手' }], count: 1 });
+  assert.equal(plan.length, 1);
+});
+
+test('syncCompletedFeedback は done 操作を送り、冪等（2回目は0件）', async () => {
+  const ledger = ledgerWith({ 'fb-done': { lastStatus: 'done', resolvedAt: '2026-09-05T02:53:22.552Z' } });
+  const rows = [{ taskId: 'FB-fb-done', 件名: '直した件', 状態: '未着手' }];
+  const calls = [];
+  const taskLedger = async (args) => { calls.push(args); if (args.command === 'list') return { ok: true, rows, count: rows.length }; };
+  const first = await syncCompletedFeedback({ ledger, taskLedger, home: HOME });
+  assert.deepEqual(first.closed.map((entry) => entry.taskId), ['FB-fb-done']);
+  assert.deepEqual(calls[1], { command: 'done', taskId: 'FB-fb-done', 備考: 'ローカル完了記録と同期（2026-09-05T02:53:22.552Z）' });
+  // 台帳が完了になったら2回目は対象0件
+  rows[0].状態 = '完了';
+  const second = await syncCompletedFeedback({ ledger, taskLedger, home: HOME });
+  assert.deepEqual(second.planned, []);
+  assert.deepEqual(second.closed, []);
+});
+
+test('syncCompletedFeedback の dry-run は done を送らない', async () => {
+  const ledger = ledgerWith({ 'fb-done': { lastStatus: 'done', resolvedAt: '2026-09-05T02:53:22.552Z' } });
+  const calls = [];
+  const taskLedger = async (args) => { calls.push(args); return { ok: true, rows: [{ taskId: 'FB-fb-done', 件名: '直した件', 状態: '未着手' }] }; };
+  const result = await syncCompletedFeedback({ ledger, taskLedger, home: HOME, dryRun: true });
+  assert.equal(result.planned.length, 1);
+  assert.deepEqual(result.closed, []);
+  assert.deepEqual(calls.map((call) => call.command), ['list']);
+});
+
+test('syncCompletedFeedback は1件の done 失敗でも残りを続ける', async () => {
+  const ledger = ledgerWith({ a: { lastStatus: 'done' }, b: { lastStatus: 'done' } });
+  const rows = [{ taskId: 'FB-a', 件名: 'A', 状態: '未着手' }, { taskId: 'FB-b', 件名: 'B', 状態: '未着手' }];
+  const logs = [];
+  const taskLedger = async (args) => {
+    if (args.command === 'list') return { ok: true, rows };
+    if (args.taskId === 'FB-a') throw new Error('boom');
+  };
+  const result = await syncCompletedFeedback({ ledger, taskLedger, home: HOME, log: (line) => logs.push(line) });
+  assert.deepEqual(result.closed.map((entry) => entry.taskId), ['FB-b']);
+  assert.ok(logs.some((line) => /FB-a.*boom/.test(line)));
+});
+
+test('intake 実行時にローカルdoneの台帳行を閉じる', async () => {
+  const ledger = JSON.stringify({ version: 1, items: { 'fb-123': { lastStatus: 'done', resolvedAt: '2026-09-05T02:53:22.552Z' } } });
+  const h = harness({ next: original, ledger });
+  const calls = [];
+  const taskLedger = async (args) => {
+    calls.push(args);
+    if (args.command === 'list') return { ok: true, rows: [{ taskId: 'FB-fb-123', 件名: '直した件', 状態: '未着手' }], count: 1 };
+  };
+  assert.equal(await runIntake({ home: HOME, io: h.io, fetchImpl: h.fetchImpl, taskLedger }), 0);
+  assert.ok(calls.some((call) => call.command === 'done' && call.taskId === 'FB-fb-123'));
+  assert.match(h.stdout[0], /ledger-synced=1/);
+});
+
+test('--sync-done --dry-run は対象一覧を出し done を送らない', async () => {
+  const ledger = JSON.stringify({ version: 1, items: { 'fb-123': { lastStatus: 'done', resolvedAt: '2026-09-05T02:53:22.552Z' } } });
+  const h = harness({ next: original, ledger });
+  const calls = [];
+  const taskLedger = async (args) => { calls.push(args); return { ok: true, rows: [{ taskId: 'FB-fb-123', 件名: '直した件', 状態: '未着手' }] }; };
+  assert.equal(await runIntake({ args: ['--sync-done', '--dry-run', '--json'], home: HOME, io: h.io, fetchImpl: h.fetchImpl, taskLedger }), 0);
+  const report = JSON.parse(h.stdout[0]);
+  assert.equal(report.dryRun, true);
+  assert.deepEqual(report.planned.map((entry) => entry.taskId), ['FB-fb-123']);
+  assert.deepEqual(calls.map((call) => call.command), ['list']);
 });

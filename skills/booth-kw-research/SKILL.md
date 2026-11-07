@@ -50,7 +50,7 @@ description: 展示会ブース制作のキーワードリサーチを自動実�
 |---|---|
 | `output/crawl-results.json` | 全サイトのクロール結果 |
 | `output/raw-keywords.json` | 抽出・統合済みキーワード一覧 |
-| `output/keywords-priority.csv` | 優先度順キーワードリスト（優先度, キーワード, 意図, ビジネス価値, スコア, 推奨アクション） |
+| `output/keywords-priority.csv` | 優先度順キーワードリスト（priority, keyword, intent, category, volume, difficulty, business_value, score） |
 | `output/content-gaps.md` | コンテンツギャップ分析＋最適化提案書 |
 
 ## 制約
@@ -60,5 +60,4 @@ description: 展示会ブース制作のキーワードリサーチを自動実�
 - 出力のキーワードはすべて日本語
 
 ## 関連スキル
-- `make-blog`: 提案されたコンテンツを実際に執筆
 - `design-deck`: 可視化資料作成（提案書のスライド化）

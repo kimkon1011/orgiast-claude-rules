@@ -1,0 +1,524 @@
+{
+  "observedAt": "2026-11-07T19:11:45.895176+00:00",
+  "windowStart": "2026-10-31T19:11:45.895176+00:00",
+  "originalTodo": "19. **AIニュース提案 [X-0001]: トークン削減コンサルの即効手順** — 最初にAIワークフローリストを作る。棚卸しして意味なく動いているワークフロー（作った人が異動した、試しに作ったまま止め忘れたもの）を見つけ停止する。プロンプトキャッシュの修正とバッチ処理への切り替えを行う。株式会社オージャストでは展示会ブース制作・イベント企画のAIワークフローをリスト化し未使用のものを停止してコスト削減を試す。",
+  "completed": false,
+  "sources": [
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-08-30.jsonl",
+      "sha256": "942ef80b9509dfe74147855b3a1ddde1b057af12174dd19ec61d01101ffd583c",
+      "bytes": 4049
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-08-31.jsonl",
+      "sha256": "2ef8ad781797ba4516f7c04ab75159f1c01f33dc272f04be6d60d3bb34afdbd4",
+      "bytes": 9152
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-01.jsonl",
+      "sha256": "b7992c0ecddc20f64ae65c306a58ebf4dfc13e23c7ef6d9843c0b932dea056da",
+      "bytes": 8343
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-02.jsonl",
+      "sha256": "c71d9072d3c2ed4844c04949c4c68ce4f90bfeafd2eab54804f3e9eccb3cd72b",
+      "bytes": 8729
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-03.jsonl",
+      "sha256": "9a4b8b4a2f8ae68f9bc705420eb4c7e76f8d52194676d7e1286b2aba2ab12387",
+      "bytes": 9284
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-04.jsonl",
+      "sha256": "eb2fffaf90708b120da0b3c47e71f509076b7a7c0b16645daa9014846e07e060",
+      "bytes": 12283
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-05.jsonl",
+      "sha256": "5916642f620774501817c3418016a62821c335b2ab9c5f10eb6534220caad76c",
+      "bytes": 11724
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-06.jsonl",
+      "sha256": "e59e7ead039551e9e85ab3bbfef64564d21b1ce150bb82d585f7dbed4804c2f2",
+      "bytes": 9982
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-07.jsonl",
+      "sha256": "db1f147d24a4dadf3f93aaf95c2d1f77194d78de3552eef39a3d501b206e5192",
+      "bytes": 15068
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-08.jsonl",
+      "sha256": "647eeed3ac43df7981d7c6e3c41900a0dea890638d8884b057181758c003376c",
+      "bytes": 14741
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-10.jsonl",
+      "sha256": "dda08d84bb1797b389151e2cffdee36654cc120b16f425cce39bd4821fd6d16a",
+      "bytes": 11516
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-11.jsonl",
+      "sha256": "0068ab2c6e842d3353128c7d46a34e9548f8152e5323adcdd94d28cb9a249685",
+      "bytes": 44555
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-12.jsonl",
+      "sha256": "3541bb2c59bfe4a3be75f2d488284d22d0a43b57e1f245bdc4341e5a1d2f9a60",
+      "bytes": 10074
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-13.jsonl",
+      "sha256": "99a66abe2cc91becb71fb49475cdd2667b85cb2cd7eb2ca1ff15a2ebb583539c",
+      "bytes": 8845
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-14.jsonl",
+      "sha256": "65ef8c0a9a8b5829572b676ce301551ee519cdb056244c842e1cd81993e9961d",
+      "bytes": 10010
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-15.jsonl",
+      "sha256": "8bce1436518129e718f5e89dddd184864331d7bba503cce80c2ec1cb188716e5",
+      "bytes": 10443
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-16.jsonl",
+      "sha256": "926f6be9660cc91eba1b053feffcd335eb36808af1e7c9eba25cec7bed286c60",
+      "bytes": 10443
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-17.jsonl",
+      "sha256": "da9ddfd971c4b0a3b679df722fb55680e3bafa5de893c59e4c3ffb741f6835ce",
+      "bytes": 11580
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-18.jsonl",
+      "sha256": "23cefc09d09cd10f079b658dd41e8e22f86fccae757e3a92a4605ef06e4a45a0",
+      "bytes": 11773
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-19.jsonl",
+      "sha256": "7c8882d059d5f9b40052fcca5d6d2e0db4d98875dfd8ac1c62e62b9132796f6f",
+      "bytes": 13100
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-20.jsonl",
+      "sha256": "7010b18672f98a96b60483fd42f96f8026ee2260250244472666ccbb636199a1",
+      "bytes": 12070
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-21.jsonl",
+      "sha256": "d02cf1a0efcebc6322892716a429df2a493b78f87e02d4ee81e730ef0d309c81",
+      "bytes": 10807
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-22.jsonl",
+      "sha256": "84434e68557ebf41b310ff0d376eb81c8ba16949d9528b7a143191ca27382d21",
+      "bytes": 12483
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-23.jsonl",
+      "sha256": "2edddbacd556810fcfab1cb0162e83a00f7ebb1dd1a55eb42d358603faa13b3b",
+      "bytes": 15275
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-24.jsonl",
+      "sha256": "d7ff99fd2ddfc8c0355115e7ce24d3976cd261c75ba00165f6e1a0ee4b46367c",
+      "bytes": 16096
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-25.jsonl",
+      "sha256": "9fe77a4096e74fe95db268c2ab2969cbb96f13957ad90abd07ce89823918cc98",
+      "bytes": 14210
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-26.jsonl",
+      "sha256": "85d50f8d5ca888df89dba27d624e957e8afaf330c1391f4744da188fe5e9e510",
+      "bytes": 14743
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-27.jsonl",
+      "sha256": "274bf2a5ac713d7b87523623716299010c88a85a5bf600264f52a1ff9c82380a",
+      "bytes": 13228
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-28.jsonl",
+      "sha256": "0a760245f080e8d070e0319c009ef43bc96dbaf209aea358b66b97e6022cbb2f",
+      "bytes": 13245
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-29.jsonl",
+      "sha256": "047d08844e94544759f43119f111904c6e8edb331efb4bc8fc535460b7a59eca",
+      "bytes": 12016
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-09-30.jsonl",
+      "sha256": "c5e0b08202c0f82eabb86a2fd756e9c24dcbe20a1d70d6903dfd17cc36446f4c",
+      "bytes": 14365
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-01.jsonl",
+      "sha256": "e9519f6c2392b2b035ebd9c9b4fa12ea9c3e6d1e08e44c5f11359e8e64a25274",
+      "bytes": 14995
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-02.jsonl",
+      "sha256": "e8553b4cd66eb353c53e87b03179e19988dec4515b7c155a41839e6e3995709f",
+      "bytes": 6233
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-03.jsonl",
+      "sha256": "c265c7756e514d728da16b5950fe8670822c47a78dc292e6232b6ff596dd5858",
+      "bytes": 10302
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-04.jsonl",
+      "sha256": "826f24963c9d990a8bc2e4c95757605724b1d343616e4d8c24128f52d0485a4f",
+      "bytes": 13809
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-05.jsonl",
+      "sha256": "1bfabfb1525bc8041cb57436fa689cb5eb209992e00e27a05fc4a328630d69e5",
+      "bytes": 12047
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-06.jsonl",
+      "sha256": "cfb434e11eac6cd0d08728b831d6621b91e43c15ee77d0ab4224486862662556",
+      "bytes": 11908
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-07.jsonl",
+      "sha256": "42963e2770d75e60620f2df95c8fdb4754e2cf96626fb75660cff020b833995b",
+      "bytes": 11883
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-08.jsonl",
+      "sha256": "25e17f73b9c8c0717c639b35f4bb763a2a43425771c555f5eb5645c03510bec0",
+      "bytes": 12297
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-09.jsonl",
+      "sha256": "e3ee2ea8e84a3b4e6e4e7f48ea0dff5822ff16da14853b8c5cfe894456f7fa09",
+      "bytes": 15397
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-10.jsonl",
+      "sha256": "af27bb8de597d8cb30396c29439cc71ba47dd2ad1d0991c3fbce809e2d8aeafb",
+      "bytes": 11482
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-11.jsonl",
+      "sha256": "c21f43485ce38f54b7103d24507dc1b5722b1adecdf1733ea863b494003ab3c8",
+      "bytes": 15143
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-12.jsonl",
+      "sha256": "89581d2667393ec11a6eb43285cd404fa26f761d010e4ee2a57f23f223a62e88",
+      "bytes": 15607
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-13.jsonl",
+      "sha256": "b1e3f2064cb1b935bec44d134dade05d5c41d2375e7e549fb67bb047fae54965",
+      "bytes": 15750
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-14.jsonl",
+      "sha256": "4f3e7570f40ed166ea7b69dc9d0eed9c3c4fea5bef17f2159bad692199945fa9",
+      "bytes": 14718
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-15.jsonl",
+      "sha256": "6e6617bc584f9faae3d417155a13a4adad31d40b88a31aaff91617da791a73c4",
+      "bytes": 10584
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-16.jsonl",
+      "sha256": "7f444cceaedc5156c38a28f176671010bb03a1f67d6c8d64790ed20996d01632",
+      "bytes": 11128
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-17.jsonl",
+      "sha256": "ee615498a0554e68e0c3bd347a78fe8d535d5da03bb97bcc641e0bfd38569c60",
+      "bytes": 17118
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-18.jsonl",
+      "sha256": "b85ad0a88432fd8fda91515f294e4cb714a87ad13b079092ec2cd4845398af19",
+      "bytes": 13533
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-19.jsonl",
+      "sha256": "17ac91d0a566cfaf0b4b7d2f4f155d51ff71b68b2029bf05988f129c2f4520a7",
+      "bytes": 13152
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-20.jsonl",
+      "sha256": "ba91b648bce10872840252ad44624a653b59667577b67432054e92867ab72f7b",
+      "bytes": 13143
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-21.jsonl",
+      "sha256": "8d165b2a5737378086b43952125ae87d11a901832970c98fc0807869b68313d1",
+      "bytes": 15714
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-22.jsonl",
+      "sha256": "e354b8ea0365ffb2ddca7fb36cb695e40b69711846018a929db2e247bbcc4b78",
+      "bytes": 15751
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-23.jsonl",
+      "sha256": "2877c7df4370fd12a61d0ba9779228da90fca3327a7d068512f935ffb5e80a4f",
+      "bytes": 12463
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-24.jsonl",
+      "sha256": "52bf6828db278a6a2129e74590d457f0ef5c7d7749af6dc08bfb6f97e0fd27ed",
+      "bytes": 11980
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-25.jsonl",
+      "sha256": "fb014912e9e29cb0773c255be7900d9fc19ad8632404831235a90726e2346567",
+      "bytes": 9705
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-26.jsonl",
+      "sha256": "bfe25ff25cc332a0f8426c0f6d73806c56a0ef0ded6f3bc4b25d6035ec0a806e",
+      "bytes": 8559
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-27.jsonl",
+      "sha256": "4f4f5866f37e27af923ee7b19212716f36f2aab563b608ab45c2f66b04ebaaaf",
+      "bytes": 9089
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-28.jsonl",
+      "sha256": "f90da1bfcac9502ee12bfce498e01729111334f29f1e059e88d204bdf4b3a691",
+      "bytes": 11066
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-29.jsonl",
+      "sha256": "f53db1ca68fd10d8184e996f9df002734612698ca727ee04a22084d95d0cf23f",
+      "bytes": 10748
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-30.jsonl",
+      "sha256": "95bbb6a5f898a30c3fb011acf9dd510aab32ddb639719b4f204c5531dfc00830",
+      "bytes": 15602
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-10-31.jsonl",
+      "sha256": "adafd80ffc79d0ee9969a8cef505572885206d4f4a748d039b722ae55ec9f48e",
+      "bytes": 12581
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-11-01.jsonl",
+      "sha256": "97c13106266ccfc03936e7b72ebbfceeb8983a8fad4b96168d681791d2d59ff4",
+      "bytes": 13017
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-11-02.jsonl",
+      "sha256": "db802ad3300e5997b05eca578f09ae76a7075092bff0cb0daf1e5c47a3ca4f68",
+      "bytes": 9949
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-11-03.jsonl",
+      "sha256": "ed7a5036a002abc7661e8cb284f69d0fcac2a8d3dcb24c46b8ada6a1988fb4ab",
+      "bytes": 12379
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-11-04.jsonl",
+      "sha256": "45aa243d459c12b11e8e39b0b3d047476a43faca7d5b77b29d7b0b4378266a31",
+      "bytes": 10633
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-11-05.jsonl",
+      "sha256": "055905a1308d1655fb85d0915148a68938fc36796f8959f895b9731f0b142ba7",
+      "bytes": 11413
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-11-06.jsonl",
+      "sha256": "21ad1d127fbad4f0da298893a084e509c39daa8138b63993e2e4e170cc9abf26",
+      "bytes": 12651
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/results-2026-11-07.jsonl",
+      "sha256": "b495fdcb78937efd39fd2f1aea8d14c3a091815eba3b2cf9f04a9b7c779a119d",
+      "bytes": 12559
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/batch-queue/pending.jsonl",
+      "sha256": "ffad64b03002647d06b661f13b6339c9dc8afdb61075b8ffdb4bedae1d89bb34",
+      "bytes": 5432
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/executor-usage.jsonl",
+      "sha256": "732989cbd1d8f590be748dea46a8cc839fffdc2fb5fa551fd74a686503c9b9c0",
+      "bytes": 5595638
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/nightly-repo/docs/ai-workflow-inventory-x0001.md",
+      "sha256": "d4fd52bee79c06944ddf667eb922f9515acab69bb5f335f985e808652cf874ca",
+      "bytes": 4334
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/nightly-repo/tools/batch-producer.mjs",
+      "sha256": "9bbaf64dc1b42e97d4cf37ffa7f9942eac0115eb903f2d7400c04753dec1c1b6",
+      "bytes": 9380
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/nightly-repo/tools/batch-run.mjs",
+      "sha256": "405ab97b919139849ba8932b62f1fd3e9ff71ce9180c22120bef29a4bee5c5da",
+      "bytes": 19908
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/nightly-repo/tools/nightly-batch.ps1",
+      "sha256": "3d9ea2908c43e97e2778bcf9eebf30efc357a5e48f6f37397f73d47198327f75",
+      "bytes": 51858
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/nightly-repo/tools/unattended-jobs.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "bytes": 3
+    },
+    {
+      "file": "/mnt/c/Users/user/.claude/next-session.md",
+      "sha256": "393251ae6cb985ba696482deb37c435bda809ea8e3892d823b81bb55731d7ea7",
+      "bytes": 23202
+    }
+  ],
+  "parseErrors": [],
+  "batchResultsLast7Days": {
+    "unknown | groq | openai/gpt-oss-120b | eval-harness": {
+      "count": 5,
+      "withText": 5,
+      "latest": "2026-11-06T18:41:56.336Z"
+    },
+    "executor-usage-digest | openrouter | deepseek/deepseek-v4-flash | standard": {
+      "count": 7,
+      "withText": 7,
+      "latest": "2026-11-07T18:54:14.030Z"
+    },
+    "auto-session-digest | openrouter | deepseek/deepseek-v4-flash | standard": {
+      "count": 6,
+      "withText": 6,
+      "latest": "2026-11-07T18:54:21.445Z"
+    },
+    "next-session-todo-triage | openrouter | openai/gpt-oss-120b | standard-failover": {
+      "count": 7,
+      "withText": 7,
+      "latest": "2026-11-07T18:54:37.258Z"
+    },
+    "results-daily-digest | openrouter | deepseek/deepseek-v4-flash | standard": {
+      "count": 7,
+      "withText": 7,
+      "latest": "2026-11-07T18:54:53.173Z"
+    }
+  },
+  "pendingByJobType": {
+    "unknown": 28
+  },
+  "usageLast7Days": {
+    "codex | codex-cli/default": {
+      "calls": 585,
+      "ok": 585,
+      "inputTokens": 945492,
+      "outputTokens": 13156
+    },
+    "openrouter | moonshotai/kimi-k3": {
+      "calls": 641,
+      "ok": 641,
+      "inputTokens": 154622,
+      "outputTokens": 93608
+    },
+    "groq | openai/gpt-oss-120b": {
+      "calls": 1824,
+      "ok": 728,
+      "inputTokens": 120933,
+      "outputTokens": 35550
+    },
+    "glm | glm-5.3": {
+      "calls": 4262,
+      "ok": 408,
+      "inputTokens": 583922,
+      "outputTokens": 22305
+    },
+    "gemini | gemini-3.7-flash": {
+      "calls": 386,
+      "ok": 386,
+      "inputTokens": 2702,
+      "outputTokens": 757
+    },
+    "openrouter | deepseek/deepseek-v4-flash": {
+      "calls": 1847,
+      "ok": 1726,
+      "inputTokens": 2772148,
+      "outputTokens": 111161
+    },
+    "openrouter | openai/gpt-oss-120b": {
+      "calls": 1890,
+      "ok": 1890,
+      "inputTokens": 495417,
+      "outputTokens": 77605
+    },
+    "openrouter | mistralai/mistral-medium-3.1": {
+      "calls": 18,
+      "ok": 18,
+      "inputTokens": 376,
+      "outputTokens": 54
+    },
+    "grok | grok-3": {
+      "calls": 104,
+      "ok": 101,
+      "inputTokens": 79361,
+      "outputTokens": 1844
+    },
+    "quota-sweep:claude | sonnet": {
+      "calls": 11,
+      "ok": 0,
+      "inputTokens": 314,
+      "outputTokens": 90972
+    },
+    "openrouter | xiaomi/mimo-v2.6-flash": {
+      "calls": 156,
+      "ok": 156,
+      "inputTokens": 87256,
+      "outputTokens": 13476
+    },
+    "quota-sweep:codex | codex": {
+      "calls": 29,
+      "ok": 0,
+      "inputTokens": 60342259,
+      "outputTokens": 452339
+    },
+    "gemini | gemini-3.6-flash": {
+      "calls": 1261,
+      "ok": 1246,
+      "inputTokens": 17104,
+      "outputTokens": 28330
+    },
+    "llm-ask | llm-ask/gemini": {
+      "calls": 1,
+      "ok": 1,
+      "inputTokens": 1808,
+      "outputTokens": 4
+    }
+  },
+  "limitations": [
+    "ローカル台帳のみ。全社・本番の網羅性、実担当者、案件との対応、請求額は未確認。",
+    "結果textの存在は品質・業務利用の証明ではない。",
+    "usage台帳はworkflow IDがなくワークフロー別の費用に帰属不能。",
+    "pendingは観測時点の待機。失敗や不要の証拠ではない。",
+    "キャッシュ適合・削減率・Batch割引は未検証。送信・課金なしでは代表入力による比較未実施。"
+  ],
+  "actions": {
+    "stopped": 0,
+    "enqueued": 0,
+    "retried": 0,
+    "apiCalls": 0,
+    "productionChanges": 0
+  }
+}

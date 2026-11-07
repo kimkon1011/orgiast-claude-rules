@@ -122,7 +122,7 @@ test('予約登録とprobe、必須引数、Stop更新で予約を保持する',
     assert.equal(main(['--start-when', 'exit 0', '--session', 'cli', '--label', 'CLI予約', '--deadline', '+24h', '--next-claude', '作業する']).status, 'scheduled');
   } finally { if (previous === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = previous; }
 });
-test('開始条件未達はlastCheckedAtだけ更新し、条件達成だけでは完了しない', async t => {
+test('開始条件未達は確認時刻と判定を更新し、条件達成だけでは完了しない', async t => {
   for (const code of [1, 0]) {
     const { options, home } = setup(t); const original = addCheck(options); let resumes = 0;
     await run({ home, now, io: { ...ioBase, executeCheck: () => ({ code }),
@@ -133,20 +133,24 @@ test('開始条件未達はlastCheckedAtだけ更新し、条件達成だけで�
     const row = readLedger(ledgerFile(home))[0];
     assert.equal(resumes, code === 0 ? 1 : 0);
     assert.equal(row.status, code === 0 ? 'open' : 'scheduled');
-    if (code === 1) assert.deepEqual(row, { ...original, lastCheckedAt: new Date(now).toISOString() });
+    if (code === 1) assert.deepEqual(row, { ...original, lastCheckedAt: new Date(now).toISOString(), checkResult: 'unmet' });
   }
 });
 test('deferredは回数を消費せず次回再試行、doneで完了通知は一度だけ', async t => {
   const { options, home } = setup(t); addCheck(options);
-  let outcome = 'deferred', calls = 0, notices = 0;
+  let outcome = 'deferred', calls = 0; const notices = [];
   const io = { ...ioBase, executeCheck: () => ({ code: 0 }), resume: async () => { calls++; return { outcome, reason: outcome }; },
-    notifyOwner: async () => { notices++; return { delivered: 'dm' }; } };
+    notifyOwner: async (_owner, text) => { notices.push(text); return { delivered: 'dm' }; } };
   await run({ home, now, io });
   let row = readLedger(ledgerFile(home))[0];
-  assert.equal(row.status, 'scheduled'); assert.equal(row.resumeCount, 0); assert.ok(row.resumeDeferredAt); assert.equal(notices, 0);
+  assert.equal(row.status, 'scheduled'); assert.equal(row.resumeCount, 0); assert.ok(row.resumeDeferredAt); assert.equal(notices.length, 1);
+  assert.match(notices[0], /自動再開を見送りました。理由: deferred。次回の枠回復後に自動で再試行します。/);
+  assert.match(notices[0], new RegExp(options.label)); assert.match(notices[0], new RegExp(options.nextClaude));
   outcome = 'done'; await run({ home, now, io }); await run({ home, now, io });
   row = readLedger(ledgerFile(home))[0];
-  assert.equal(row.status, 'done'); assert.equal(calls, 2); assert.equal(notices, 1);
+  assert.equal(row.status, 'done'); assert.equal(calls, 2); assert.equal(notices.length, 2);
+  assert.equal(notices.filter(text => /自動再開を見送りました/.test(text)).length, 1);
+  assert.equal(notices.filter(text => /完了/.test(text)).length, 1);
 });
 test('完了check併用は成果確認がexit 0のときだけdone', async t => {
   for (const code of [0, 1, 2]) {
@@ -222,7 +226,7 @@ test('定期digestに開始予約と期限超過が出る', async t => {
     const messages = [];
     await digest({ home, now: now + i * 86400000, slot: '朝', io: { localOwner: 'owner', notifyOwner: async (_, message) => { messages.push(message); return { delivered: 'dm' }; } } });
     // 2026-11-04 仕様変更: 予約も依頼された進行中の作業として朝夕1通に集約する。
-    assert.ok(messages.some(message => /進行中 1件.*予約作業/.test(message)));
+    assert.ok(messages.some(message => /進行中 1件[\s\S]*予約作業/.test(message)));
     assert.equal(messages.length, 1);
   }
 });

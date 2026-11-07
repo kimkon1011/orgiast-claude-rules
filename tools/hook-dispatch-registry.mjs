@@ -21,7 +21,7 @@ export function describeHook(hook, matcher = '*', repo = defaultRepo) {
   if (node) { try { source = fs.readFileSync(script, 'utf8'); contract = readContract(script); } catch {} }
   const name = node ? path.basename(script.replace(/\\/g, '/')) : String(hook.command);
   // Unknown custom commands are conservative: never shed a potential deny gate.
-  const critical = !!contract || /permissionDecision\s*:\s*['"]deny|decision\s*:\s*['"]block|exitCode\s*=\s*2\b/.test(source) || ['api-billing-guard.mjs', 'exec-tree-edit-guard.mjs', 'stop-gate-runner.mjs'].includes(name)
+  const critical = !!contract || /permissionDecision\s*:\s*['"]deny|decision\s*:\s*['"]block|exitCode\s*=\s*2\b/.test(source) || ['kim-editor-posttool.mjs', 'kim-inbox.mjs', 'api-billing-guard.mjs', 'exec-tree-edit-guard.mjs', 'stop-gate-runner.mjs'].includes(name)
     || !node || !path.resolve(script).startsWith(path.resolve(repo) + path.sep);
   return { ...hook, matcher, name, node, script: node ? script : undefined,
     args: node ? words.slice(wrapped ? 3 : 2) : [], policy: wrapped, critical,
@@ -54,8 +54,8 @@ export function collapseHooks(hooks, repo = defaultRepo) {
       }
       if (asynchronous.length) asyncGroups.push({ ...group, hooks: asynchronous });
     }
-    // All hook deadlines start at dispatch admission, including queue time. The
-    // OS never needs to kill the entire dispatcher just to stop one slow hook.
+    // Each hook gets its own execution budget; the dispatcher separately enforces
+    // this event timeout with a margin for output and Worker shutdown.
     const timeout = Math.max(1, ...events[event].map(h => Number(h.timeout) || 10)) + 10;
     settingsHooks[event] = [{ matcher: '*', hooks: [{ type: 'command', command: `node "${path.join(repo, 'tools/hook-dispatch.mjs')}" ${event}`, timeout }] }, ...asyncGroups];
   }

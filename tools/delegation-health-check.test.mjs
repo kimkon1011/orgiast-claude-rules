@@ -140,6 +140,8 @@ test('emptyOutputReason は timeout・終了コード・原因不明を分類す
   assert.equal(emptyOutputReason({ secs: 300 }), 'timeout');
   assert.equal(emptyOutputReason({ secs: 600, timedOut: false, status: 1 }), 'exit_1');
   assert.equal(emptyOutputReason({ status: 1, stderrTail: 'failed to lookup address information' }), 'infra_transient');
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 1, launched: true, stderrTail: 'ERROR codex_core::session: failed to record rollout items: thread 01a1aaf4-bef7-7242-9948-2769e20f460a not found tokens used 59,591' }), 'infra_transient');
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 1, launched: true, stderrTail: 'failed to record rollout items: thread abc-def not found' }), 'infra_transient');
   assert.equal(emptyOutputReason({ status: 1, stderrTail: 'Not inside a trusted directory and --skip-git-repo-check was not specified.' }), 'untrusted_cwd');
   assert.equal(emptyOutputReason({ status: 1 }), 'exit_1');
   // 起動失敗は「出力ゼロ」ではなく「そもそも走っていない」。exit_3 に埋もれさせない。
@@ -573,6 +575,25 @@ test('インフラ起因だけの出力ゼロは codex_empty_output に数えな
   const dir = home();
   write(dir, 'executor-usage.jsonl', row({ t: '2026-09-09T10:00:00Z', provider: 'codex', out: 0, secs: 5, timedOut: false, status: 1, stderrTail: 'failed to lookup address information' }));
   assert.equal(collectFindings({ home: dir, now: NOW, codexUsedPercent: null })[0].id, 'healthy');
+});
+
+test('rollout items 記録失敗の出力ゼロは codex_empty_output に数えない（2026-11-05 実測の再現）', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl',
+    row({ t: '2026-09-09T09:11:47Z', provider: 'codex', out: 0, secs: 379, timedOut: false, status: 'error', exitCode: 1, launched: true,
+      stderrTail: 'ERROR codex_core::session: failed to record rollout items: thread 01a1aaf4-bef7-7242-9948-2769e20f460a not found tokens used 59,591' }));
+  assert.equal(collectFindings({ home: dir, now: NOW, codexUsedPercent: null })[0].id, 'healthy');
+});
+
+test('rollout items 記録失敗と本物の出力ゼロが混在したら codex_empty_output は本物だけを数える', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl',
+    row({ t: '2026-09-09T09:11:47Z', provider: 'codex', out: 0, secs: 379, timedOut: false, status: 'error', exitCode: 1, launched: true,
+      stderrTail: 'ERROR codex_core::session: failed to record rollout items: thread 01a1aaf4-bef7-7242-9948-2769e20f460a not found tokens used 59,591' })
+    + row({ t: '2026-09-09T09:12:00Z', provider: 'codex', out: 0, secs: 5, timedOut: false, status: 1 }));
+  const finding = collectFindings({ home: dir, now: NOW, codexUsedPercent: null }).find(f => f.id === 'codex_empty_output');
+  assert.ok(finding, 'codex_empty_output should exist');
+  assert.deepEqual(finding.evidence, ['1件', 'exit_1(1件)', 'インフラ/起動失敗で除外 1件']);
 });
 
 test('実障害を起票し、同時に除外したインフラ起因件数も evidence に出す', () => {

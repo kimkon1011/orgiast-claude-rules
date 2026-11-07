@@ -9,13 +9,15 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { addItem } from './kim-inbox.mjs';
 import { EVENTS } from './hook-dispatch-registry.mjs';
 
-export function summarizeDispatchMetrics(records, { now = Date.now(), cutoff = 50, averageMs = 3000 } = {}) {
-  const events = Object.fromEntries(EVENTS.map(event => [event, { calls: 0, truncationsPerHour: 0, totalDurationMs: 0, totalHookMs: 0, skipped: 0 }]));
+export function summarizeDispatchMetrics(records, { now = Date.now(), cutoff = 50, averageMs = 3000, criticalCutoff = 5 } = {}) {
+  const events = Object.fromEntries(EVENTS.map(event => [event, { calls: 0, truncationsPerHour: 0, criticalUnfinishedPerHour: 0, totalDurationMs: 0, totalHookMs: 0, skipped: 0 }]));
   for (const record of records) {
     const at = Date.parse(record.at);
     if (!Number.isFinite(at) || at > now || at <= now - 3600000 || !events[record.event]) continue;
     const item = events[record.event];
     item.calls++;
+    item.criticalUnfinishedPerHour += (record.hooks || []).filter(h =>
+      ['hook-timeout', 'hook-error', 'dispatch-budget'].includes(h.criticalUnfinished)).length;
     item.truncationsPerHour += Number(record.timedOut) || 0;
     item.totalDurationMs += Number(record.durationMs) || 0;
     item.totalHookMs += (record.hooks || []).reduce((sum, h) => sum + (Number(h.durationMs) || 0), 0);
@@ -26,7 +28,8 @@ export function summarizeDispatchMetrics(records, { now = Date.now(), cutoff = 5
     item.averageHookMsPerCall = item.calls ? item.totalHookMs / item.calls : 0;
     item.over = item.truncationsPerHour >= cutoff || item.averageHookMsPerCall > averageMs;
   }
-  return { events, over: Object.values(events).some(item => item.over) };
+  const criticalUnfinishedPerHour = Object.values(events).reduce((sum, item) => sum + item.criticalUnfinishedPerHour, 0);
+  return { events, criticalUnfinishedPerHour, over: criticalUnfinishedPerHour >= criticalCutoff || Object.values(events).some(item => item.over) };
 }
 export async function readDispatchMetrics(home, now = Date.now()) {
   const records = [];
@@ -51,8 +54,8 @@ export async function checkDispatchBudget(home, { now = Date.now(), notify = add
   const marker = path.join(dir, `alert-${new Date(now).toISOString().slice(0, 10)}.json`);
   try { fs.writeFileSync(marker, JSON.stringify({ at: new Date(now).toISOString(), pending: true }), { flag: 'wx' }); }
   catch (error) { if (error.code === 'EEXIST') return summary; throw error; }
-  const text = ['hook 過負荷を検知しました（直近1時間）。', ...Object.entries(summary.events).filter(([, item]) => item.over)
-    .map(([event, item]) => `${event}: 打ち切り ${item.truncationsPerHour}回/時、1呼出あたりhook合計平均 ${(item.averageHookMsPerCall / 1000).toFixed(2)}秒、間引き ${item.skipped}本`)].join('\n');
+  const text = ['hook 過負荷・未完了を検知しました（直近1時間）。', `critical 未完了 合計 ${summary.criticalUnfinishedPerHour}件/時（閾値 ${thresholds.criticalCutoff ?? 5}件）`, ...Object.entries(summary.events).filter(([, item]) => item.over || item.criticalUnfinishedPerHour)
+    .map(([event, item]) => `${event}: critical 未完了 ${item.criticalUnfinishedPerHour}件/時、打ち切り ${item.truncationsPerHour}回/時、1呼出あたりhook合計平均 ${(item.averageHookMsPerCall / 1000).toFixed(2)}秒、間引き ${item.skipped}本`)].join('\n');
   try {
     const item = await notify(home, { kind: 'info', source: 'hook-budget-check', from: 'hook-dispatch', text, signal: AbortSignal.timeout(2000) });
     fs.writeFileSync(marker, JSON.stringify({ at: new Date(now).toISOString(), itemId: item?.id }));

@@ -93,6 +93,7 @@ try {
     $script:restartCount = 0
     function Get-InteractiveSessionCount { return 0 }
     function Invoke-VSCodeRestart { param($CodeCli, [string[]]$RestoreTargets); $script:restartCount++; return $true }
+    function Get-ProtectedSessionIds { return @() }
     $result = Confirm-VSCodeResume 1 'code.cmd' @()
     Assert ($script:restartCount -eq 1) '0 件が続く場合も再起動は 1 回だけ'
     $retryIndex = [array]::IndexOf($script:testLog, 'RESUME-RETRY: 起動失敗を検知、再起動を 1 回やり直す')
@@ -118,3 +119,57 @@ Assert ((Get-RestartPolicy @($now.AddDays(-11), $now.AddHours(-1)) $now).Overdue
 Assert (-not (Get-RestartPolicy @($now.AddMinutes(-20)) $now).Due) 'later nightly trigger does not restart again'
 Assert ((Get-RestartPolicy @($now.AddDays(-1)) $now).Due) 'daily restart independent of extension updates'
 Write-Output 'PASS: restart age policy (6 cases)'
+
+Assert (@(Get-ValidatedInteractiveIds '[]').Count -eq 0) 'valid empty inventory'
+foreach ($invalid in @('', 'oops', '{}', '[{}]', '[{"kind":"interactive"}]')) {
+    $threw = $false
+    try { Get-ValidatedInteractiveIds $invalid } catch { $threw = $true }
+    Assert $threw 'invalid inventory must fail closed'
+}
+Assert (-not (Test-TranscriptHasConversation @('{"type":"user","message":{"content":"<command-name>/clear</command-name>"}}'))) 'command only is empty'
+Assert (Test-TranscriptHasConversation @('{"type":"assistant","message":{"content":[{"text":"reply"}]}}')) 'assistant text counts'
+$transcripts = @(@{Id='live';HasConversation=$true}, @{Id='empty';HasConversation=$false})
+Assert (@(Select-ProtectedSessionIds @('live','empty','missing') @() $transcripts).Count -eq 1) 'protect idle conversation only'
+Assert (@(Select-ProtectedSessionIds @('live','empty') @('live') $transcripts).Count -eq 0) 'closed and empty allow existing flow'
+& {
+    function Get-ProtectedSessionIds { 'live' }
+    Assert (Test-RemoteControlProtection) 'protected => skip'
+    Assert ((Get-RestartPolicy @((Get-Date).AddHours(-100))).Overdue) 'overdue fixture'
+    Assert (Test-RemoteControlProtection) 'overdue cannot bypass protection'
+    function Wait-InteractiveSessions { return 0 }
+    function Invoke-VSCodeRestart { throw 'must not restart' }
+    Assert ((Confirm-VSCodeResume 1 'code.cmd' @()) -eq 0) 'retry guard protects new session'
+    function Get-ProtectedSessionIds { throw 'agents failed' }
+    Assert (Test-RemoteControlProtection) 'unknown => skip'
+    function Get-ProtectedSessionIds { @() }
+    Assert (-not (Test-RemoteControlProtection)) 'zero => proceed'
+}
+Write-Output 'PASS: Remote Control protection guards'
+& {
+    # Exercise the real inventory/filesystem integration using an isolated profile.
+    $profileBefore = $env:USERPROFILE
+    $fixture = Join-Path ([IO.Path]::GetTempPath()) ('rc-guard-' + [guid]::NewGuid())
+    New-Item -ItemType Directory -Path (Join-Path $fixture '.claude\projects\proj') -Force | Out-Null
+    $env:USERPROFILE = $fixture
+    function Get-Command { [pscustomobject]@{ Source = 'Invoke-TestAgents' } }
+    function Invoke-TestAgents { $global:LASTEXITCODE = 0; '[{"kind":"interactive","sessionId":"live"}]' }
+    try {
+        '{"type":"user","message":{"content":"hello"}}' | Set-Content -Encoding utf8 (Join-Path $fixture '.claude\projects\proj\live.jsonl')
+        # Restore the production function, shadowed earlier by resume-test mocks.
+        . (Join-Path $PSScriptRoot 'nightly-reload-vscode.ps1') -FunctionsOnly
+        Assert (@(Get-ProtectedSessionIds).Count -eq 1) 'actual inventory plus transcript protects conversation'
+        '{"ids":["live"]}' | Set-Content -Encoding utf8 (Join-Path $fixture '.claude\closed-sessions.json')
+        Assert (@(Get-ProtectedSessionIds).Count -eq 0) 'actual closed ledger excludes session'
+        '{"ids":[]}' | Set-Content -Encoding utf8 (Join-Path $fixture '.claude\closed-sessions.json')
+        Remove-Item (Join-Path $fixture '.claude\projects\proj\live.jsonl')
+        Assert (@(Get-ProtectedSessionIds).Count -eq 0) 'missing transcript excluded'
+        function Invoke-TestAgents { $global:LASTEXITCODE = 1; '[]' }
+        $failed = $false
+        try { Get-ProtectedSessionIds } catch { $failed = $true }
+        Assert $failed 'nonzero agents status is unknown even with valid JSON'
+    } finally {
+        $env:USERPROFILE = $profileBefore
+        Remove-Item $fixture -Force -Recurse
+    }
+}
+Write-Output 'PASS: inventory / ledger / transcript integration'

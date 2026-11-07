@@ -3,7 +3,7 @@
     "kind": "paragraph",
     "text": "**🔴 kim への報告は Discord 禁止（kim 2026-10-27 厳命・全PC全アカウント）。kim 宛は kim-inbox（~/.claude/kim-inbox、`node tools/kim-inbox.mjs`）に積みセッションで回収。ask は返答を --answer で記録するまで毎プロンプト再提示、info は伝えたら --seen。セッションを閉じても台帳に残り次セッションで再提示（クローズは止めない）。Discord MCP の直接送信はゲートが拒否。例外は config/kim-discord-allowlist.json に kim が登録したカテゴリのみ。詳細 docs/kim-inbox.md**",
     "requires": [
-      "**🔴 kim 宛報告は Discord 禁止（全PC全アカウント）。kim-inbox（~/.claude/kim-inbox、node tools/kim-inbox.mjs）へ積みセッションで回収。ask は --answer まで毎プロンプト再提示、info は伝えたら --seen。クローズを止めず台帳を次セッションへ引き継ぐ。Discord MCP 直接送信はゲートが拒否し、例外は kim 登録の config/kim-discord-allowlist.json のカテゴリのみ。詳細 docs/kim-inbox.md。**"
+      "**🔴 kim 宛 Discord DM は全廃・例外なし（緊急を含む・全PC全アカウント）。kim-inbox（~/.claude/kim-inbox、node tools/kim-inbox.mjs）へ積みセッションで回収。ask は --answer まで毎プロンプト再提示、info は伝えたら --seen。クローズを止めず台帳を次セッションへ引き継ぐ。Discord MCP 直接送信はゲートが拒否し、旧 config/kim-discord-allowlist.json のカテゴリも廃止。詳細 docs/kim-inbox.md。**"
     ]
   },
   {

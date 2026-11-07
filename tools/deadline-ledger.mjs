@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { ensureKimEditor } from './lib/kim-editor.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -125,8 +126,10 @@ export async function initialize({ home = defaultHome(), sheets = createSheetsCl
     } });
     if (!created.spreadsheetId) throw new Error('期限台帳の作成応答にIDがありません');
     config.sheetId = created.spreadsheetId;
+
     // Persist immediately: partial sharing/header failure must reuse the same book.
     saveJson(dataPath(home, 'config.json'), config);
+    await ensureKimEditor(config.sheetId, { token: 'request-adapter', created: true, api: async (_token, url, options = {}) => { const value = await request(url, { method: options.method || 'GET', ...(options.body ? { body: JSON.parse(options.body) } : {}) }); return { json: async () => value }; } });
   }
   for (const tab of ['期限台帳','候補','使い方']) {
     const meta = await sheets.metadata(config.sheetId);

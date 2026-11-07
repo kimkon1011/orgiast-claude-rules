@@ -15,13 +15,16 @@ import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { notifyOwner, resolveOwner, sendOwnerToast } from './notify-owner.mjs';
 import { escalateKimDecisions } from './auto-progress-escalate.mjs';
 import { isQuietHours, kimAction } from './auto-progress-digest.mjs';
+import { completionActions } from './lib/auto-progress-artifact.mjs';
+import { reportCheckProgress } from './lib/auto-progress-heartbeat.mjs';
 import { checkPromise, checkProgressSummary, executeCheck, isTimeOnlyCheck, queueCheckFollowup, pendingAction } from './auto-progress-check.mjs';
 import { addItem } from './kim-inbox.mjs';
+import { pushDailyProgress } from './lib/auto-progress-daily.mjs';
 import { appendInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { BLOCKER, readJson as readFleetJson, saveJson as saveFleetJson } from './lib/fleet-chase-ledger.mjs';
 import { errorKind, findUnansweredRequest } from './lib/unanswered-request.mjs';
-import { deliverDoneInbox, hasDoneInboxReceipt, usesKimDoneInbox } from './lib/auto-progress-done-inbox.mjs';
+import { refreshDoneApprovals, deliverDoneInbox, hasDoneInboxReceipt, usesKimDoneInbox } from './lib/auto-progress-done-inbox.mjs';
 
 export const GRACE_MS = 1 * 3600 * 1000;
 export const RESUME_INTERVAL_MS = 2 * 3600 * 1000;
@@ -39,9 +42,22 @@ export function doneConcludedWithReceipt(row) {
   return Boolean((row.doneInboxId && row.doneInboxVerifiedAt) || row.doneNotifiedAt);
 }
 
+// rowKey のセッション部分を使い、別 PC / user の同名セッションを混同しない。
+const migrationSessionKey = row => rowKey(row).slice(0, rowKey(row).lastIndexOf('|'));
+const rowTime = row => Date.parse(row.ts) || 0;
+function latestMigrationSessionRows(rows) {
+  const latest = new Map();
+  for (const row of rows) {
+    const key = migrationSessionKey(row), previous = latest.get(key);
+    if (!previous || rowTime(row) >= rowTime(previous)) latest.set(key, row);
+  }
+  return new Set(latest.values());
+}
+
 export function legacyAddCheckMigrationRows(rows) {
+  const latest = latestMigrationSessionRows(rows);
   const migrated = new Set(rows.map(row => row.migratedFromLegacyAddCheck).filter(Boolean));
-  return rows.filter(row => row.status === 'done' && String(row.check || '').trim() &&
+  return rows.filter(row => latest.has(row) && row.status === 'done' && String(row.check || '').trim() &&
     String(row.nextClaude || '').trim() && !isTimeOnlyCheck(row.check) && !row.resumedAt &&
     !doneConcludedWithReceipt(row) && !migrated.has(rowKey(row)));
 }
@@ -70,8 +86,9 @@ export async function migrateLegacyAddChecks({ home, now = Date.now(), dryRun = 
 }
 
 export function timeOnlyMigrationRows(rows) {
+  const latest = latestMigrationSessionRows(rows);
   const migrated = new Set(rows.map(row => row.migratedFromTimeOnlyCheck).filter(Boolean));
-  return rows.filter(row => row.status === 'done' && isTimeOnlyCheck(row.check) && !migrated.has(rowKey(row)));
+  return rows.filter(row => latest.has(row) && row.status === 'done' && isTimeOnlyCheck(row.check) && !migrated.has(rowKey(row)));
 }
 
 export function timeOnlyReservation(row, now = Date.now()) {
@@ -93,6 +110,62 @@ export async function migrateTimeOnlyChecks({ home, now = Date.now(), dryRun = f
     (io.stdout ?? console.log)(text);
     await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-time-only-migration', text,
       dedupeKey: `auto-progress-time-only-migration:${row.sessionId || rowKey(row)}` });
+  }
+  return { targets, appended: additions.length };
+}
+
+const migrationSourceKey = row => row.migratedFromLegacyAddCheck || row.migratedFromTimeOnlyCheck;
+const isMigrationRow = row => Boolean(migrationSourceKey(row) || row.repairedFromLegacyReopen);
+
+export function migrationClobberRestorationRows(rows) {
+  const groups = new Map(), byKey = new Map(rows.map(row => [rowKey(row), row]));
+  const restored = new Set(rows.map(row => row.restoredFromMigrationClobber).filter(Boolean));
+  for (const row of rows) {
+    const key = migrationSessionKey(row);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  const targets = [];
+  for (const group of groups.values()) {
+    group.sort((a, b) => rowTime(a) - rowTime(b)); // stable: 同時刻は後の行が最新
+    // 正当な後続更新・復元済みの行があれば、その意思決定を巻き戻さない。
+    let end = group.length - 1;
+    while (end >= 0 && isMigrationRow(group[end]) && !group[end].restoredFromMigrationClobberAt) end--;
+    const candidate = group[end];
+    if (!candidate || end === group.length - 1 || restored.has(rowKey(candidate))) continue;
+    const clobber = group[end + 1];
+    let source = byKey.get(migrationSourceKey(clobber) || clobber.repairedFromLegacyReopen);
+    // 旧修復は参照キーではなく true だけを保存した。同一セッションの一意な
+    // 元 done 行を照合できる場合だけ救済し、曖昧な修復元は推測しない。
+    if (!source && clobber.repairedFromLegacyReopen === true) {
+      const originals = group.filter(row => !isMigrationRow(row) && row.status === 'done' &&
+        rowTime(row) < rowTime(candidate) && row.label === clobber.label &&
+        row.check === clobber.check && row.nextClaude === clobber.nextClaude);
+      if (originals.length === 1) source = originals[0];
+    }
+    if (!source || migrationSessionKey(source) !== migrationSessionKey(candidate) || rowTime(source) >= rowTime(candidate)) continue;
+    if (!OPEN_STATUSES.has(candidate.status) && candidate.status !== 'superseded') continue;
+    if (candidate.status === 'superseded' && candidate.supersededFromStatus && !OPEN_STATUSES.has(candidate.supersededFromStatus)) continue;
+    // 古い台帳は superseded 前の status を保存していない。記録済みの状態を優先し、
+    // 判別不能な旧行は open に戻す。今後は supersededFromStatus で正確に保存する。
+    const status = OPEN_STATUSES.has(candidate.status) ? candidate.status :
+      OPEN_STATUSES.has(candidate.supersededFromStatus) ? candidate.supersededFromStatus : 'open';
+    targets.push({ ...candidate, status });
+  }
+  return targets;
+}
+
+export async function restoreMigrationClobbers({ home, now = Date.now(), dryRun = false, io = {} }) {
+  const file = ledgerFile(home), rows = readLedger(file), targets = migrationClobberRestorationRows(rows);
+  if (dryRun || !targets.length) return { targets, appended: 0 };
+  const additions = targets.map(row => ({ ...row, ts: new Date(now).toISOString(),
+    ...(Date.parse(row.deadlineAt) < now ? { deadlineAt: new Date(now + 24 * 3600000).toISOString() } : {}),
+    restoredFromMigrationClobber: rowKey(row), restoredFromMigrationClobberAt: new Date(now).toISOString() }));
+  (io.writeLedger ?? writeLedger)(file, [...rows, ...additions], io.ledgerIo ?? {});
+  for (const row of additions) {
+    const text = `移行で上書きされた約束を復元しました: ${String(row.sessionId).slice(0, 8)} ${row.label || row.promise}`;
+    await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-migration-clobber-restore', text,
+      dedupeKey: `auto-progress-migration-clobber-restore:${row.restoredFromMigrationClobber}` });
   }
   return { targets, appended: additions.length };
 }
@@ -270,7 +343,7 @@ export async function resumeSession(row, { timeoutMs = 20 * 60000, home = os.hom
     : apiErrorResume
     ? `API エラーで返答できなかった user の依頼に、最初から通常どおり応えてください。依頼: ${row.requestText || row.promise.replace(/^API エラー（.*?）で返答できなかった依頼:\s*/, '')}`
     : `以前このセッションで宣言した「この後の自動進行」が止まっています。宣言: 「${row.promise}」。`;
-  const prompt = `${promptLead}${row.kimAnswer ? `\nkim の返事: 「${row.kimAnswer}」。これを前提に続きを進めてください。` : ''}${reason === 'check-overdue' ? `\n期限超過の最終確認です。確認出力全文:\n${row.checkText || ''}\n確認エラー:\n${row.checkStderr || ''}` : ''}${row.nextClaude ? `\nやること: ${row.nextClaude}` : ''}\n元の会話は ${row.transcriptPath} にあります。${apiErrorResume ? '依頼を完了まで進めてください。' : '宣言の最終成果まで進めてください。'}user の判断・承認が必要な地点では、判断材料を揃えて止まり needs_user を返してください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"成果物パスと検証結果、または進めない理由","artifact":"成果物パス（任意）","nextKim":"本人だけができる具体的な判断・操作。返信待ちや自動調査なら空文字"}`;
+  const prompt = `${promptLead}${row.kimAnswer ? `\nkim の返事: 「${row.kimAnswer}」。これを前提に続きを進めてください。` : ''}${reason === 'check-overdue' ? `\n期限超過の最終確認です。確認出力全文:\n${row.checkText || ''}\n確認エラー:\n${row.checkStderr || ''}` : ''}${row.nextClaude ? `\nやること: ${row.nextClaude}` : ''}\n元の会話は ${row.transcriptPath} にあります。${apiErrorResume ? '依頼を完了まで進めてください。' : '宣言の最終成果まで進めてください。'}止まる前に、取り消せる作業（調査・資料作成・下書き作成・比較表・社内向け準備）は全部先に済ませてください。needs_user で止まってよいのは、支払い・社外への送信・削除・本人の同意・本人にしかできない物理操作が残ったときだけです。evidence には先に済ませた作業と成果物を書いてください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"先に済ませた作業と成果物パス・検証結果、残った操作と進めない理由","artifact":"成果物パス（任意）","nextKim":"本人だけができる具体的な判断・操作。返信待ちや自動調査なら空文字"}`;
   const rateLimited = apiErrorResume && /rate.?limit|usage.?credits?|429/i.test([row.error, row.apiError, row.apiErrorStatus].join(' '));
   const runOptions = { resumeSessionId: row.sessionId, ...(rateLimited ? { model: process.env.AUTO_PROGRESS_RESUME_MODEL || 'opus' } : {}) };
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, row.cwd, row.cwd, timeoutMs, runOptions);
@@ -304,9 +377,9 @@ export function formatDoneMessage(row, { reason = '', artifact = '', home = proc
     origin,
     '✅ 自動進行が完了しました',
     formatDoneLine(row, { reason, artifact, home }),
-    'kim がすること: なし',
+    completionActions({ ...row, artifact: artifact || row.artifact }, { home }).text,
   ];
-  return lines.join('\n').slice(0, 1900);
+  return lines.join('\n').slice(0, 4000);
 }
 
 export function logDoneDm(home, row, delivery, message, now = Date.now(), io = {}, toastResult = null) {
@@ -623,6 +696,12 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     catch (error) { summary.errors.push(`ledger-temp-cleanup-failed: ${String(error?.message ?? error).slice(0, 120)}`); }
   }
   try {
+    const restoration = await restoreMigrationClobbers({ home, now, dryRun, io });
+    summary.migrationClobberRestore = { count: restoration.targets.length, labels: restoration.targets.map(row => row.label || row.promise), appended: restoration.appended };
+  } catch (error) {
+    summary.errors.push(`migration-clobber-restore: ${String(error?.message ?? error).slice(0, 120)}`);
+  }
+  try {
     const migration = await migrateTimeOnlyChecks({ home, now, dryRun, io });
     summary.timeOnlyMigration = { count: migration.targets.length, labels: migration.targets.map(row => row.label || row.promise), appended: migration.appended };
   } catch (error) {
@@ -640,6 +719,35 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   // owner 未記録の行は自PCの持ち主へ。空のまま渡すと「宛先: 不明（DM 未解決）」だけになり出どころが分からない（2026-10-23 実測）。
   let localOwner;
   const ownerOf = row => row.owner || (localOwner ??= io.localOwner ?? (() => { try { return resolveOwner({ home }); } catch { return ''; } })());
+  const deferredNotices = new Map();
+  const queueDeferredNotice = (row, reason) => {
+    if (dryRun || notificationsStopped || isQuietHours(now) || isUnattendedRow(row, home)) return;
+    const previousAt = Date.parse(row.resumeDeferredNotifiedAt || 0) || 0;
+    if (row.resumeDeferredNotifiedReason === reason && now - previousAt < 24 * 3600000) return;
+    const owner = ownerOf(row);
+    const group = deferredNotices.get(owner) ?? [];
+    group.push({ row, reason });
+    deferredNotices.set(owner, group);
+  };
+  const sendDeferredNotices = async () => {
+    for (const [owner, items] of deferredNotices) {
+      if (notificationsStopped) break;
+      const reasons = [...new Set(items.map(item => item.reason))].join(' / ');
+      const targets = items.map(({ row }) => {
+        const purpose = row.label || row.promise || '目的未記録';
+        const next = row.nextClaude || pendingAction(row);
+        return `・対象: ${purpose}\n  次の手: ${next}`;
+      }).join('\n');
+      const message = `自動再開を見送りました。理由: ${reasons}。次回の枠回復後に自動で再試行します。\n${targets}`;
+      try {
+        const delivery = await (io.notifyOwner ?? notifyOwner)(owner, message, { home, now, kind: 'automatic', session: items[0].row });
+        if (!['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
+        for (const { row, reason } of items) patch(rowKey(row), {
+          resumeDeferredNotifiedAt: new Date(now).toISOString(), resumeDeferredNotifiedReason: reason,
+        });
+      } catch (error) { summary.errors.push(`deferred-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
+    }
+  };
   const askKim = (row, reason) => (io.notifyOwner ?? notifyOwner)(ownerOf(row),
     `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf(row), home })}\n自動進行が判断待ちです: ${row.promise}\n${reason || ''}\n${pendingAction(row)}`, { home, now, kind: 'action', session: row });
   const notifyDone = async (row, reason, artifact) => {
@@ -649,9 +757,10 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       const message = formatDoneMessage(row, { reason, artifact, home, io, ownerOf });
       let delivery = null;
       try {
-        delivery = await deliverDoneInbox(home, [row], message, { now, io });
+        delivery = await deliverDoneInbox(home, [{ ...row, artifact: artifact || row.artifact }], message, { now, io });
         return patch(rowKey(row), delivery.receipt);
       } catch (error) {
+        patch(rowKey(row), { doneNotifyPending: true, doneNotifyArtifact: artifact || row.artifact || '' });
         summary.errors.push(`notify-done: ${String(error?.message ?? error).slice(0, 120)}`);
         return false;
       } finally { logDoneDm(home, row, delivery, message, now, io); }
@@ -683,8 +792,13 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     return ['dm', 'session-inbox', 'toast', 'inbox'].includes(delivery?.delivered);
   };
   const rows = readLedger(file);
+  if (!dryRun) {
+    try { await refreshDoneApprovals(home, rows, { now, io, patch }); }
+    catch (error) { summary.errors.push(`done-approvals: ${String(error.message).slice(0, 200)}`); }
+  }
   await registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io, persist);
   let candidates = latestOpenPromises(rows);
+  // check 付き行は sessionId + label ごとに1件選ばれるため、別 label の自動チェックはすべて残る。
   const selected = new Set(candidates);
   const migratedSourceKeys = new Set(rows.flatMap(row => [row.migratedFromTimeOnlyCheck, row.migratedFromLegacyAddCheck]).filter(Boolean));
   const pendingChecks = rows.filter(row => row.check && row.status === 'done' && row.checkResult === 'done' &&
@@ -695,7 +809,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   const normalized = rows.map((row) => {
     if (!WATCHED.has(row.status) || selected.has(row)) return row;
     summary.superseded += 1;
-    return { ...row, status: 'superseded' };
+    return { ...row, supersededFromStatus: row.status, status: 'superseded' };
   });
   // Update by row identity: equal timestamps share rowKey, so patch(key) would
   // also supersede the selected latest row. No await occurs between read/write.
@@ -847,7 +961,8 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       if (row.status !== 'scheduled' || isUnattendedRow(row, home)) continue;
       const result = await (io.executeCheck ?? executeCheck)({ ...row, check: row.startWhen }, { home });
       summary.checked++;
-      if (!patch(key, { lastCheckedAt: at })) continue;
+      if (!patch(key, { lastCheckedAt: at, checkResult: result.code === 1 ? 'unmet' : result.code === 0 ? 'ready' : 'error', checkText: result.text })) continue;
+      if (result.code !== 0) await reportCheckProgress(home, { ...row, lastCheckedAt: at }, result, { now, patch, io });
       if (result.code !== 0) {
         if (result.code !== 1) summary.errors.push(`start-when: ${result.text}`);
         continue;
@@ -855,7 +970,11 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       if (summary.resumed >= MAX_RESUMES_PER_RUN || (row.resumeCount ?? 0) >= MAX_RESUMES ||
           now - (Date.parse(row.resumedAt || 0) || 0) < RESUME_INTERVAL_MS ||
           !row.cwd || !(io.cwdExists ?? fs.existsSync)(row.cwd)) continue;
-      if (executorUnavailable) { summary.resumeDeferred++; continue; }
+      if (executorUnavailable) {
+        summary.resumeDeferred++;
+        queueDeferredNotice(row, summary.resumeDeferredReason || '実行者が利用できません');
+        continue;
+      }
       const attempt = { status: 'starting', startedAt: at, resumedAt: at, resumeCount: (row.resumeCount ?? 0) + 1 };
       if (!patch(key, attempt)) continue;
       let outcome;
@@ -867,6 +986,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         executorUnavailable = true;
         summary.resumeDeferred++;
         summary.resumeDeferredReason ??= outcome.reason;
+        queueDeferredNotice(row, outcome.reason);
         continue;
       }
       summary.resumed++;
@@ -935,14 +1055,25 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       }
       continue;
     }
-    if (verdict.verdict === 'in_progress') { patch(rowKey(row), { ...(row.status === 'stalled' ? { status: 'open' } : {}), verdict: 'in_progress', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason }); summary.inProgress += 1; continue; }
+    if (verdict.verdict === 'in_progress') {
+      const changes = { ...(row.status === 'stalled' ? { status: 'open' } : {}), verdict: 'in_progress', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason };
+      if (patch(rowKey(row), changes) !== false && !dryRun && !notificationsStopped) {
+        Object.assign(row, changes);
+        try { await pushDailyProgress(home, row, { now, patch, io }); }
+        catch (error) { summary.errors.push(`daily-progress: ${error.message}`); }
+      }
+      summary.inProgress += 1; continue;
+    }
     summary.stalled += 1;
     patch(rowKey(row), { ...((row.resumeCount ?? 0) >= MAX_RESUMES || verdict.source === 'resume-failed' ? { status: 'stalled' } : {}), verdict: 'stalled', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason });
     let current = { ...row, ...((row.resumeCount ?? 0) >= MAX_RESUMES || verdict.source === 'resume-failed' ? { status: 'stalled' } : {}), verdict: verdict.verdict, reason: verdict.reason };
     const resumeEligible = !unattended && !dryRun && summary.resumed < MAX_RESUMES_PER_RUN && (answered || (row.resumeCount ?? 0) < MAX_RESUMES) && now - (Date.parse(row.resumedAt || 0) || 0) >= RESUME_INTERVAL_MS
       && row.cwd && (io.cwdExists ?? fs.existsSync)(row.cwd);
     const canResume = resumeEligible && !executorUnavailable;
-    if (resumeEligible && executorUnavailable) summary.resumeDeferred += 1;
+    if (resumeEligible && executorUnavailable) {
+      summary.resumeDeferred += 1;
+      queueDeferredNotice(row, summary.resumeDeferredReason || '実行者が利用できません');
+    }
     if (canResume) {
       // Persist the attempt before launching: crashes must not allow another same-day resume.
       current = { ...row, status: 'resumed', resumedAt: new Date(now).toISOString(), resumeCount: (row.resumeCount ?? 0) + 1, resumeOutcome: 'attempting' };
@@ -957,6 +1088,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         executorUnavailable = true;
         summary.resumeDeferred += 1;
         summary.resumeDeferredReason ??= outcome.reason;
+        queueDeferredNotice(row, outcome.reason);
       } else {
         const state = outcome.state || outcome.outcome;
         const nextKim = outcome.nextKim ?? row.nextKim;
@@ -997,6 +1129,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       catch (error) { summary.errors.push(`sheet: ${String(error?.message ?? error).slice(0, 120)}`); } // 次回巡回で再送する
     }
   }
+  await sendDeferredNotices();
   if (!dryRun) {
     const log = path.join(home, '.claude', 'logs', 'auto-progress-watch.summary.log');
     try {

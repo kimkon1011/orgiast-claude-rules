@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { ensureKimEditor } from './lib/kim-editor.mjs';
 // Byte-preserving Drive publication and installation. Never commit generated content.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -174,7 +175,9 @@ async function folder(token, apiFn, create = false) {
   }
   if (!create) throw new Error('production-sales-knowledge が未公開');
   const res = await apiFn(token, 'https://www.googleapis.com/drive/v3/files?fields=id', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: FOLDER_NAME, parents: [HUB_ID], mimeType: 'application/vnd.google-apps.folder' }) });
-  return (await res.json()).id;
+  const created = await res.json();
+  await ensureKimEditor(created.id, { token, api: apiFn, created: true });
+  return created.id;
 }
 export async function publishKnowledge({ contents, token, apiFn = boundedDriveApi, emit = console.log } = {}) {
   const folderId = await folder(token, apiFn, true);

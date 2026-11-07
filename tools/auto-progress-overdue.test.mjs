@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { progressHome } from './test-helpers/auto-progress-home.mjs';
 import { run, resumeSession } from './auto-progress-watch.mjs';
 import { run as digest } from './auto-progress-digest.mjs';
+import { listItems } from './kim-inbox.mjs';
 import { executeCheck } from './auto-progress-check.mjs';
 import { ledgerFile, readLedger, writeLedger } from './auto-progress-ledger.mjs';
 const now = Date.parse('2026-11-05T00:00:00Z');
@@ -80,8 +81,10 @@ test('before deadline notification includes label and counts', async t => {
   await run({ home: f.home, now, io: f.io });
   assert.equal(f.read().status, 'open');
   assert.equal(f.resumes.length, 0);
-  assert.ok(f.messages[0].includes(f.row.label));
-  assert.match(f.messages[0], /達成 2件 \/ 未達 1件/);
+  const [item] = listItems(f.home);
+  assert.ok(item.text.includes(f.row.label));
+  assert.match(item.text, /PC-B: gate配布=なし/);
+  assert.equal(f.messages.length, 0);
 });
 test('long promise summary goes through existing digest once per JST day', async t => {
   const f = fixture(t, { deadlineAt: '2026-11-09T03:00:00Z', checkText: output });

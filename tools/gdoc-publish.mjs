@@ -12,6 +12,8 @@ import { workspaceUrl } from './lib/workspace-url.mjs';
 import { readFileSync } from 'node:fs';
 import { getDriveToken, driveApi } from './lib/drive-auth.mjs';
 import { isEntry } from './is-entry.mjs';
+import { ensureKimEditor } from './lib/kim-editor.mjs';
+import { randomUUID } from 'node:crypto';
 
 export const DEFAULT_FOLDER = '1uA0J3kPfL7O5t0Ro1jSfi2xDEJE-Y0si';
 const DOCS = 'https://docs.googleapis.com/v1/documents';
@@ -125,17 +127,36 @@ export function verifyReadBack(rendered, doc) {
   return { linkCount: rendered.links.length };
 }
 
+export function renderHtml(rendered) {
+  const escape = s => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+  let html = '', cursor = 0;
+  for (const link of rendered.links) {
+    html += escape(rendered.text.slice(cursor, link.startIndex - 1));
+    html += `<a href="${escape(link.url)}">${escape(rendered.text.slice(link.startIndex - 1, link.endIndex - 1))}</a>`;
+    cursor = link.endIndex - 1;
+  }
+  html += escape(rendered.text.slice(cursor));
+  return `<!doctype html><html><head><meta charset="UTF-8"></head><body><pre>${html}</pre></body></html>`;
+}
+
 export async function publishDocument({ title, source, folder, update, authuser, share, 'share-role': shareRole }, {
-  getToken = getDriveToken, api = driveApi,
+  getToken = getDriveToken, api = driveApi, ensure = ensureKimEditor, stderr = console.error,
 } = {}) {
   workspaceUrl('https://docs.google.com/', authuser);
   if (share) shareRecipients(share, shareRole);
   const rendered = renderDocument(source);
   const token = await getToken({ impersonate: 'kim@orgiast.jp' });
-  const request = async (url, method = 'GET', body) => (await api(token, url, {
-    method, signal: AbortSignal.timeout(60_000),
-    ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
-  })).json();
+  const request = async (url, method = 'GET', body) => {
+    try {
+      return await (await api(token, url, {
+        method, signal: AbortSignal.timeout(60_000),
+        ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+      })).json();
+    } catch (error) {
+      if (url.startsWith(DOCS) && /\b403\b/.test(error.message) && /SERVICE_DISABLED|PERMISSION_DENIED/.test(error.message)) error.docsUnavailable = true;
+      throw error;
+    }
+  };
   const parent = folder ?? (update ? undefined : DEFAULT_FOLDER);
   if (parent) {
     const meta = await request(`${DRIVE}/${encodeURIComponent(parent)}?fields=mimeType,capabilities&supportsAllDrives=true`);
@@ -144,16 +165,35 @@ export async function publishDocument({ title, source, folder, update, authuser,
     }
   }
   let id = update;
-  if (!id) id = (await request(DOCS, 'POST', { title })).documentId;
-  if (!id) throw new Error('作成レスポンスに documentId がありません');
+  let fallback = false;
+  try {
+    if (!id) {
+      id = (await request(DOCS, 'POST', { title })).documentId;
+      if (!id) throw new Error('作成レスポンスに documentId がありません');
+      await ensure(id, { actingUser: 'kim@orgiast.jp', token, api, created: !update });
+    }
+    const docEndpoint = `${DOCS}/${encodeURIComponent(id)}`;
+    const doc = await request(`${docEndpoint}?includeTabsContent=true`);
+    const requests = buildRequests(rendered, doc);
+    if (!doc.revisionId) throw new Error('Doc の revisionId を取得できません');
+    await request(`${docEndpoint}:batchUpdate`, 'POST', {
+      requests, writeControl: { requiredRevisionId: doc.revisionId },
+    });
+  } catch (error) {
+    if (!error.docsUnavailable) throw error;
+    fallback = true;
+    stderr('gdoc-publish: Docs API の 403 のため Drive 変換アップロードにフォールバックします');
+    const boundary = `gdoc-${randomUUID()}`;
+    const metadata = { name: title, mimeType: 'application/vnd.google-apps.document', appProperties: { orgiastAutomation: 'true' }, ...(!id && parent ? { parents: [parent] } : {}) };
+    const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n${renderHtml(rendered)}\r\n--${boundary}--\r\n`;
+    const created = await (await api(token, `https://www.googleapis.com/upload/drive/v3/files${id ? '/' + encodeURIComponent(id) : ''}?uploadType=multipart&supportsAllDrives=true&fields=id`, {
+      method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body, signal: AbortSignal.timeout(60_000),
+    })).json();
+    if (!created.id || (id && created.id !== id)) throw new Error('Drive 変換結果の ID が不正です');
+    id = created.id;
+    await ensure(id, { actingUser: 'kim@orgiast.jp', token, api, created: !update });
+  }
   if (share) await shareAndRecord({ fileId: id, emails: share, role: shareRole, auth: token, name: title });
-  const docEndpoint = `${DOCS}/${encodeURIComponent(id)}`;
-  const doc = await request(`${docEndpoint}?includeTabsContent=true`);
-  const requests = buildRequests(rendered, doc);
-  if (!doc.revisionId) throw new Error('Doc の revisionId を取得できません');
-  await request(`${docEndpoint}:batchUpdate`, 'POST', {
-    requests, writeControl: { requiredRevisionId: doc.revisionId },
-  });
   // Docs API は親フォルダ/既存タイトル変更を扱わないため、Drive API で設定する。
   const params = new URLSearchParams({ fields: 'id', supportsAllDrives: 'true' });
   if (parent) {
@@ -163,8 +203,16 @@ export async function publishDocument({ title, source, folder, update, authuser,
     if (remove.length) params.set('removeParents', remove.join(','));
   }
   if (parent || update) await request(`${DRIVE}/${encodeURIComponent(id)}?${params}`, 'PATCH', { name: title });
-  const after = await request(`${docEndpoint}?includeTabsContent=true`);
-  const verified = verifyReadBack(rendered, after);
+  let verified;
+  if (fallback) {
+    const after = await (await api(token, `${DRIVE}/${encodeURIComponent(id)}/export?mimeType=text%2Fplain`, { signal: AbortSignal.timeout(60_000) })).text();
+    const normalize = text => text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').replace(/\n$/, '');
+    if (normalize(after) !== normalize(rendered.text)) throw new Error('read-back: 本文が一致しません');
+    verified = { linkCount: rendered.links.length, verification: 'drive-text-export' };
+  } else {
+    const after = await request(`${DOCS}/${encodeURIComponent(id)}?includeTabsContent=true`);
+    verified = verifyReadBack(rendered, after);
+  }
   return { id, url: workspaceUrl(`https://docs.google.com/document/d/${id}/edit`, authuser), ...verified };
 }
 
@@ -172,8 +220,8 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
   const { stdout = console.log, stderr = console.error, ...publishDependencies } = dependencies;
   try {
     const args = parseArgs(argv);
-    const result = await publishDocument({ ...args, source: readFileSync(args.file, 'utf8') }, publishDependencies);
-    stderr(`read-back: 本文一致 / リンク ${result.linkCount}/${result.linkCount} 件 OK`);
+    const result = await publishDocument({ ...args, source: readFileSync(args.file, 'utf8') }, { ...publishDependencies, stderr });
+    stderr(result.verification === 'drive-text-export' ? `read-back: 本文一致（Drive export）/ HTML リンク ${result.linkCount} 件を設定` : `read-back: 本文一致 / リンク ${result.linkCount}/${result.linkCount} 件 OK`);
     stdout(`${args.authuser} で開いてください: ${result.url}`);
     return 0;
   } catch (error) {

@@ -8,6 +8,7 @@ import { notifyKim, resolveDiscordBotToken, KIM_DISCORD_USER_ID } from './notify
 import { fetchMessages } from './discord-digest.mjs';
 import { upload } from './drive-upload.mjs';
 import { runRegisterPs1 } from './lib/run-register-ps1.mjs';
+import { deliverKim } from './notify-kim.mjs';
 import { isEntry } from './is-entry.mjs';
 
 export const SPREADSHEET_ID = '1E-MFGU8MSYiWf8BmXXdgIFdlFQuYLa4P9zmlLKd8o6w';
@@ -18,7 +19,7 @@ export const SETTINGS_ROWS = [
   ['原価 科目', '仕入・外注', '粗利 = 売上高 − これらの科目。複数は「;」区切り'],
   ['売上 科目', '売上高', '複数は「;」区切り'],
   ['販管費から除外する科目', '', '貸借科目・営業外は自動除外。ここは追加の除外用'],
-  ['週次レポート 通知先', 'Discord DM（kim）', 'tools/notify-kim.mjs の経路'],
+  ['週次レポート 通知先', 'kim-inbox', 'tools/notify-kim.mjs の経路'],
 ];
 export const jstDay = (now = Date.now()) => new Date(Number(now) + 9 * 3600000).toISOString().slice(0, 10);
 export const yen = value => `¥${Math.round(value).toLocaleString('ja-JP')}`;
@@ -308,7 +309,10 @@ export function createAutopilot(deps = {}) {
       } catch { text = '読み取れなかったので、形式『支出 内容 金額』で送り直してください'; }
       // 返信前に記録し、送信応答を失っても同じ受信へ二度返信しません。
       state.lastMessageId = message.id; delete state.inFlight; await stateSave(state);
-      if (text) await request(`/channels/${channel.id}/messages`, { content: text.slice(0, 2000), message_reference: { message_id: message.id }, allowed_mentions: { parse: [] } });
+      if (text) {
+        if (userId === KIM_DISCORD_USER_ID) await (deps.deliverKim || deliverKim)(text, { home, plainJa: false, source: 'sga-autopilot' });
+        else await request(`/channels/${channel.id}/messages`, { content: text.slice(0, 2000), message_reference: { message_id: message.id }, allowed_mentions: { parse: [] } });
+      }
       results.push({ id: message.id, text });
     }
     // Bot の通知だけでも読み取り位置を進めます。進めないと未読が溜まり、取得上限で毎回止まります。

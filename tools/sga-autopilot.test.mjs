@@ -85,15 +85,15 @@ test('Drive：既定スコープ・最新 CSV・8日超過警告', async t => {
   const f = await fixture(t, { getToken: async options => { assert.equal(options.scope, undefined); return '非公開'; }, driveApi: async (_token, url) => { calls++; if (url.includes('alt=media')) return new Response(csv()); assert.match(url, /orderBy=modifiedTime\+desc/); return Response.json({ files: [{ id: 'test', name: 'freee_journals_20260101_20261017_20261012-0501.csv', modifiedTime: '2026-10-18T00:00Z' }] }); } });
   const result = await f.app.execute('sync', { 'dry-run': true }); assert.equal(calls, 2); assert.equal(result.warnings.length, 1); assert.equal(result.months[0].assistant, 100); assert.equal(f.writes.length, 0);
 });
-test('DM：本人のみ・同じチャンネルへ返信・再実行で重複なし', async t => {
+test('DM：本人のみ・kim-inboxへ回答・再実行で重複なし', async t => {
   const replies = [], message = { id: '1420000000000000000', author: { id: '715210673642012733' }, content: '備品に1000円' };
-  const f = await fixture(t, { discordToken: '非公開', fetchMessages: async () => ({ messages: [message, { ...message, id: '1420000000000000001', author: { id: 'bot', bot: true } }], truncated: false }), fetchImpl: async (url, opts) => { if (url.endsWith('/users/@me/channels')) return Response.json({ id: 'dm' }); replies.push({ url, body: JSON.parse(opts.body) }); return Response.json({ id: 'reply' }); } });
-  await f.app.execute('watch-dm'); await f.app.execute('watch-dm'); assert.equal(replies.length, 1); assert.match(replies[0].url, /channels\/dm\/messages/); assert.match(replies[0].body.content, /台帳 3行目/); assert.equal(f.writes.length, 1);
+  const f = await fixture(t, { deliverKim: async text => { replies.push(text); return { delivered: 'session-inbox' }; }, discordToken: '非公開', fetchMessages: async () => ({ messages: [message, { ...message, id: '1420000000000000001', author: { id: 'bot', bot: true } }], truncated: false }), fetchImpl: async (url, opts) => { if (url.endsWith('/users/@me/channels')) return Response.json({ id: 'dm' }); replies.push({ url, body: JSON.parse(opts.body) }); return Response.json({ id: 'reply' }); } });
+  await f.app.execute('watch-dm'); await f.app.execute('watch-dm'); assert.equal(replies.length, 1); assert.match(replies[0], /台帳 3行目/); assert.equal(f.writes.length, 1);
   assert.equal(JSON.parse(await readFile(join(f.home, '.claude/state/sga-autopilot.json'), 'utf8')).lastMessageId, '1420000000000000001');
 });
 test('DM：Bot の通知だけでも読み取り位置を進め、dry-run は進めない', async t => {
   const bot = { id: '1420000000000000005', author: { id: 'bot', bot: true }, content: '通知' };
-  const f = await fixture(t, { discordToken: '非公開', fetchMessages: async () => ({ messages: [bot], truncated: false }), fetchImpl: async url => url.endsWith('/users/@me/channels') ? Response.json([{ id: 'dm', type: 1, recipients: [{ id: '715210673642012733' }] }]) : Response.json({ id: 'reply' }) });
+  const f = await fixture(t, { deliverKim: async text => { replies.push(text); return { delivered: 'session-inbox' }; }, discordToken: '非公開', fetchMessages: async () => ({ messages: [bot], truncated: false }), fetchImpl: async url => url.endsWith('/users/@me/channels') ? Response.json([{ id: 'dm', type: 1, recipients: [{ id: '715210673642012733' }] }]) : Response.json({ id: 'reply' }) });
   await f.app.execute('watch-dm', { 'dry-run': true });
   await assert.rejects(readFile(join(f.home, '.claude/state/sga-autopilot.json')), { code: 'ENOENT' });
   await f.app.execute('watch-dm');
@@ -124,7 +124,7 @@ test('打合せメモ：マイドライブ直下の Markdown・再読込・通�
 });
 test('DM：照合失敗の返信は一度だけ・dry-run は書込も返信もしない', async t => {
   const replies = [], message = { id: '1420000000000000000', author: { id: '715210673642012733' }, content: '備品に1000円' };
-  const f = await fixture(t, { discordToken: '非公開', fetchMessages: async () => ({ messages: [message], truncated: false }), fetchImpl: async (url, opts) => {
+  const f = await fixture(t, { deliverKim: async text => { replies.push(text); return { delivered: 'session-inbox' }; }, discordToken: '非公開', fetchMessages: async () => ({ messages: [message], truncated: false }), fetchImpl: async (url, opts) => {
     if (opts.method !== 'POST') return Response.json([{ id: 'dm', type: 1, recipients: [{ id: message.author.id }] }]);
     if (url.endsWith('/users/@me/channels')) return Response.json({ id: 'dm' });
     replies.push(JSON.parse(opts.body).content); return Response.json({ id: 'reply' });

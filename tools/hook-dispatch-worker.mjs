@@ -1,26 +1,52 @@
-// A Worker is an isolate inside the dispatcher OS process, not another node.exe.
-// Legacy argv/stdin/stdout remain local to this isolate. CPU loops can be terminated
-// without discarding the results of other hooks or using Windows taskkill /T.
+// Reusable isolates stay inside the single dispatcher OS process. Each isolate
+// runs one hook at a time; a stuck isolate is retired, never replaced in this call.
 import { workerData, parentPort } from 'node:worker_threads';
 import { pathToFileURL } from 'node:url';
 import fs from 'node:fs';
 import { Readable } from 'node:stream';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
+import { AsyncLocalStorage, createHook } from 'node:async_hooks';
+import timers from 'node:timers';
 import { runHook } from './gate-hook-runner.mjs';
-const { hook, raw, deadline } = workerData;
-// Count actual calls, including helpers spawned inside a hook (not just dispatch
-// fallbacks). Named ESM imports receive these wrappers before the hook is loaded.
+
+const tasks = new AsyncLocalStorage();
+let activeTask;
+// Native lifecycle events (notably beforeExit) have no AsyncLocalStorage store.
+// A late callback with an old store still uses that closed task, never this one.
+const context = () => tasks.getStore() || activeTask;
+const baseEnv = { ...process.env };
+const send = message => {
+  const task = context();
+  if (task && !task.closed) parentPort.postMessage({ id: task.id, ...message });
+};
+// Track native timer resources too: timers/promises bypasses global setTimeout.
+// Cancel unref timers at completion just as standalone process exit would, so
+// an old callback cannot change the next hook's exitCode or environment.
+const timerOwners = new Map();
+createHook({
+  init(id, type, _trigger, resource) {
+    if (type !== 'Timeout' && type !== 'Immediate') return;
+    const task = context();
+    if (!task || task.closed) return;
+    task.timers.set(resource, type === 'Immediate' ? timers.clearImmediate : timers.clearTimeout);
+    timerOwners.set(id, { task, resource });
+  },
+  destroy(id) {
+    const owner = timerOwners.get(id);
+    if (owner) { owner.task.timers.delete(owner.resource); timerOwners.delete(id); }
+  },
+}).enable();
 for (const method of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']) {
   const original = childProcess[method];
   childProcess[method] = function (...args) {
+    const task = context();
+    if (!task || task.closed) throw new Error('hook is no longer active');
     let deadlineLimited = false;
-    // A Worker cannot interrupt an arbitrary native wait. Clamp synchronous
-    // subprocess waits to the same deadline and use a non-catchable kill signal.
     if (method.endsWith('Sync')) {
-      const remaining = deadline - Date.now();
+      const remaining = task.deadline - Date.now();
       if (remaining <= 0) {
-        parentPort.postMessage({ deadlineHit: true });
+        send({ deadlineHit: true, stdout: task.stdout || '' });
         throw new Error('hook deadline expired');
       }
       const index = method === 'execSync' ? 1 : Array.isArray(args[1]) ? 2 : 1;
@@ -28,37 +54,43 @@ for (const method of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'exe
       deadlineLimited = !Number(options.timeout) || Number(options.timeout) >= remaining;
       args[index] = { ...options, timeout: Math.max(1, Math.min(Number(options.timeout) || remaining, remaining)), killSignal: 'SIGKILL', windowsHide: true };
     }
-    parentPort.postMessage({ childSpawn: { method, executable: String(args[0]) } });
+    send({ childSpawn: { method, executable: String(args[0]) } });
     let child;
-    try {
-      child = original.apply(this, args);
-    } catch (error) {
-      if (deadlineLimited && error.code === 'ETIMEDOUT') parentPort.postMessage({ deadlineHit: true });
+    try { child = original.apply(this, args); }
+    catch (error) {
+      if (deadlineLimited && error.code === 'ETIMEDOUT') send({ deadlineHit: true, stdout: task.stdout || '' });
       throw error;
     }
-    if (deadlineLimited && child?.error?.code === 'ETIMEDOUT') parentPort.postMessage({ deadlineHit: true });
+    if (deadlineLimited && child?.error?.code === 'ETIMEDOUT') send({ deadlineHit: true, stdout: task.stdout || '' });
     if (child?.pid && typeof child.on === 'function') {
-      parentPort.postMessage({ childPid: child.pid });
-      child.once('exit', () => parentPort.postMessage({ childClosed: child.pid }));
+      send({ childPid: child.pid });
+      child.once('exit', () => send({ childClosed: child.pid }));
     }
     return child;
   };
 }
-syncBuiltinESMExports();
-let stdout = '', stderr = '';
 process.stdout.write = (chunk, encoding, callback) => {
-  stdout = (stdout + String(chunk)).slice(-4 * 1024 * 1024); parentPort.postMessage({ stream: 'stdout', text: String(chunk) });
+  const task = context();
+  if (task && !task.closed) {
+    task.stdout = (task.stdout + String(chunk)).slice(-4 * 1024 * 1024);
+    // Mirror the active task's output to the dispatcher so a stall (CPU loop /
+    // native wait) can still be judged: a completed kim-inbox context survives
+    // an otherwise-lossy timeout instead of being discarded with the isolate.
+    send({ stream: 'stdout', text: String(chunk) });
+  }
   (typeof encoding === 'function' ? encoding : callback)?.(); return true;
 };
 process.stderr.write = (chunk, encoding, callback) => {
-  stderr = (stderr + String(chunk)).slice(-65536); parentPort.postMessage({ stream: 'stderr', text: String(chunk) });
+  const task = context();
+  if (task && !task.closed) task.stderr = (task.stderr + String(chunk)).slice(-65536);
   (typeof encoding === 'function' ? encoding : callback)?.(); return true;
 };
-// A few legacy hooks use fd 0/1 directly. Keep those descriptors isolated too;
-// otherwise a worker could write an unmerged JSON object to the CLI's stdout.
 const readFileSync = fs.readFileSync, writeSync = fs.writeSync;
 fs.readFileSync = function (file, ...args) {
-  if (file === 0) return args[0] ? raw : Buffer.from(raw);
+  if (file === 0) {
+    const raw = context()?.raw || '';
+    return args[0] ? raw : Buffer.from(raw);
+  }
   return readFileSync.call(this, file, ...args);
 };
 fs.writeSync = function (fd, data, ...args) {
@@ -70,23 +102,55 @@ fs.writeSync = function (fd, data, ...args) {
   return writeSync.call(this, fd, data, ...args);
 };
 syncBuiltinESMExports();
-// readStdinWithTimeout uses this only in the worker. Repeated policy evaluations
-// see exactly the same input instead of an already-consumed stream.
-globalThis[Symbol.for('orgiast.hook.raw')] = raw;
+// Legacy entrypoints may launch async work without awaiting it. Let their
+// referenced handles drain just as with a standalone process before reusing the
+// isolate. Unref timers do not postpone completion, also as in a standalone hook.
+const idle = () => new Promise(resolve => {
+  process.once('beforeExit', () => { parentPort.ref(); resolve(); });
+  parentPort.unref();
+});
 let iteration = 0;
-const execute = async () => {
-  stdout = ''; stderr = ''; process.exitCode = 0;
-  Object.defineProperty(process, 'stdin', { value: Readable.from([raw]), configurable: true });
-  const adapter = /export\s+async\s+function\s+hookMain\b/.test(fs.readFileSync(hook.script, 'utf8'));
-  process.argv = [process.execPath, adapter ? '' : hook.script, ...hook.args];
-  const module = await import(`${pathToFileURL(hook.script).href}?dispatch=${iteration++}`);
-  if (adapter) await module.hookMain(raw);
-  return { status: process.exitCode || 0, stdout, stderr };
-};
-try {
-  const result = hook.policy ? await runHook(hook.script, raw, { executeImpl: execute }) : await execute();
-  parentPort.postMessage({ result });
-} catch (error) {
-  parentPort.postMessage({ result: { status: 1, stdout: '', stderr: String(error.message) } });
+async function run(task) {
+  task.timers = new Map();
+  activeTask = task;
+  await tasks.run(task, async () => {
+    for (const key of Object.keys(process.env)) if (!(key in baseEnv)) delete process.env[key];
+    Object.assign(process.env, baseEnv);
+    const listeners = new Map(process.eventNames().map(name => [name, process.rawListeners(name)]));
+    const { hook, raw } = task;
+    globalThis[Symbol.for('orgiast.hook.raw')] = raw;
+    const execute = async () => {
+      task.stdout = ''; task.stderr = ''; process.exitCode = 0;
+      Object.defineProperty(process, 'stdin', { value: Readable.from([raw]), configurable: true });
+      const adapter = /export\s+async\s+function\s+hookMain\b/.test(fs.readFileSync(hook.script, 'utf8'));
+      process.argv = [process.execPath, adapter ? '' : hook.script, ...(hook.args || [])];
+      const module = await import(`${pathToFileURL(hook.script).href}?dispatch=${iteration++}`);
+      if (adapter) await module.hookMain(raw);
+      await idle();
+      return { status: process.exitCode || 0, stdout: task.stdout, stderr: task.stderr };
+    };
+    try {
+      const result = hook.policy ? await runHook(hook.script, raw, { executeImpl: execute }) : await execute();
+      send({ result });
+    } catch (error) {
+      // Drain pending work even on an exception before accepting another task.
+      await idle();
+      send({ result: { status: 1, stdout: '', stderr: String(error.message) } });
+    } finally {
+      task.closed = true;
+      activeTask = null;
+      for (const [handle, cancel] of task.timers) cancel(handle);
+      task.timers.clear();
+      for (const name of process.eventNames()) for (const listener of process.rawListeners(name)) {
+        if (!listeners.get(name)?.includes(listener)) process.removeListener(name, listener);
+      }
+    }
+  });
 }
-parentPort.close();
+if (workerData?.pool) {
+  parentPort.on('message', task => { void run(task); });
+} else {
+  // One-shot protocol retained for native-wait regression probes.
+  await run(workerData);
+  parentPort.close();
+}

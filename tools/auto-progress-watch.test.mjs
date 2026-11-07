@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { legacyAddCheckMigrationRows, formatDoneLine, formatDoneMessage, formatDoneBacklogMessages, gatherEvidence, deterministicVerdict, judge, evidenceSummary, logDoneDm, run as runWatch } from './auto-progress-watch.mjs';
+import { resumeSession, legacyAddCheckMigrationRows, formatDoneLine, formatDoneMessage, formatDoneBacklogMessages, gatherEvidence, deterministicVerdict, judge, evidenceSummary, logDoneDm, run as runWatch } from './auto-progress-watch.mjs';
 import { cleanupOldLedgerTemps, ledgerFile, readLedger, writeLedger } from './auto-progress-ledger.mjs';
 import { listItems } from './kim-inbox.mjs';
 
@@ -460,6 +460,28 @@ test('定期ターン中でもcheckが達成なら従来どおりdoneにする',
   assert.equal(readLedger(ledgerFile(f.home))[0].status, 'done');
 });
 
+test('同一セッションの異なる label の check を両方評価する', async t => {
+  const home = progressHome('multi-check-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'kim@orgiast.jp' } }));
+  const now = Date.parse('2026-10-29T11:00:00.000Z');
+  const base = { pc: 'test-pc', user: 'test', owner: 'kim@orgiast.jp', sessionId: 'session-1', cwd: home,
+    promise: '機器設定を確認する', status: 'open', check: 'mock check', deadlineAt: new Date(now + 3600000).toISOString() };
+  writeLedger(ledgerFile(home), [
+    { ...base, label: 'NVIDIAドライバー582.78更新', ts: '2026-10-29T10:00:00.000Z' },
+    { ...base, label: 'HDMIダミープラグ取り付け', ts: '2026-10-29T10:00:02.000Z' },
+  ]);
+  const evaluated = [];
+  const summary = await run({ home, now, io: {
+    clock: () => now, transcriptFiles: [], sheetConfig: () => null,
+    executeCheck: row => { evaluated.push(row.label); return { code: 1, text: '未達成' }; },
+    digest: async () => ({}), escalateKimDecisions: async () => ({}),
+  } });
+  assert.deepEqual(evaluated, ['NVIDIAドライバー582.78更新', 'HDMIダミープラグ取り付け']);
+  assert.equal(summary.checked, 2);
+  assert.deepEqual(readLedger(ledgerFile(home)).map(row => row.status), ['open', 'open']);
+});
+
 test('レシート済み完了は legacy add-check 移行で復活させない', () => {
   const base = { pc: 'PC1', user: 'user', sessionId: 's-receipt', ts: '2026-11-05T10:00:00.000Z',
     status: 'done', check: 'node check.mjs', nextClaude: 'x' };
@@ -468,4 +490,22 @@ test('レシート済み完了は legacy add-check 移行で復活させない',
   const noReceipt = { ...base, ts: '2026-11-05T10:10:00.000Z', doneInboxId: '', doneInboxVerifiedAt: '', doneNotifiedAt: '' };
   const rows = [withReceipt, notifiedOnly, noReceipt];
   assert.deepEqual(legacyAddCheckMigrationRows(rows), [noReceipt]);
+});
+
+test('再開指示は取り消せる作業を先に済ませ、支払い等だけでneeds_userにする', async t => {
+  const home = progressHome('resume-reversible-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  let prompt;
+  await resumeSession({ sessionId: 'reversible-test', promise: '問い合わせの準備', transcriptPath: 'session.jsonl', cwd: home }, {
+    home, io: { executable: 'test-executor', runChild: async (_exe, text) => {
+      prompt = text;
+      return { status: 'success' };
+    } },
+  });
+  assert.match(prompt, /取り消せる作業/);
+  assert.match(prompt, /支払い・社外への送信・削除・本人の同意・本人にしかできない物理操作/);
+  assert.match(prompt, /evidence には先に済ませた作業と成果物/);
+  assert.match(prompt, /推測で目的を広げず/);
+  assert.match(prompt, /権限や確認待ちを迂回しない/);
+  assert.doesNotMatch(prompt, /判断材料を揃えて止まり/);
 });

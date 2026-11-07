@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
+import { candidateClaudeExecutables, resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const QUESTIONS = [
@@ -199,10 +199,22 @@ function printHuman(summary) {
 }
 
 export function findClaude(home) {
-  const candidates = process.platform === 'win32'
+  // claude-exe.mjs の共有探索ロジックを優先。
+  // 元は ~/.local/bin 固定だったが winget 版ではそこに exe が無い（PR #1674 と同型修正）。
+  const { platform, env } = process;
+  const appData = env.APPDATA || path.join(home, 'AppData', 'Roaming');
+  const localAppData = env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+  const pathEntries = (env.PATH || env.Path || '').split(platform === 'win32' ? ';' : ':').filter(Boolean);
+  const listDir = (dir) => { try { return fs.readdirSync(dir); } catch { return []; } };
+  const exists = (file) => { try { return fs.statSync(file).isFile(); } catch { return false; } };
+  const candidates = candidateClaudeExecutables({ platform, home, localAppData, appData, pathEntries, listDir, exists });
+  if (candidates.length > 0) return candidates[0];
+
+  // 旧来の固定候補もフォールバックとして残す（後方互換）
+  const legacyCandidates = process.platform === 'win32'
     ? [path.join(home, '.local', 'bin', 'claude.exe'), path.join(home, '.local', 'bin', 'claude.cmd')]
     : [path.join(home, '.local', 'bin', 'claude')];
-  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+  return legacyCandidates.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
 export async function main(argv = process.argv.slice(2)) {

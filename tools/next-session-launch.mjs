@@ -6,7 +6,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { armToFile } from './session-relaunch.mjs';
 import { alternateCheapProvider, autoSessionExecutor, buildCheapCodeArgs, buildClaudeHeadlessArgs, claudeFallbackEnabled, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
-import { findClaudeInVersionedDir, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
+import { candidateClaudeExecutables, defaultResolveArgs, findClaudeInVersionedDir, resolveClaudeExecutable, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 
@@ -81,38 +81,28 @@ export function pickNewestVersionDir(names) {
 
 export function resolveClaudeBinary(io) {
   const { env, exists, readdir } = io;
-  const homedir = typeof io.homedir === 'function' ? io.homedir() : io.homedir;
-  if (env.CLAUDE_CLI_PATH && exists(env.CLAUDE_CLI_PATH)) return env.CLAUDE_CLI_PATH;
+  // CLAUDE_CLI / CLAUDE_CLI_PATH / CLAUDE_BIN → 環境変数が最優先
+  const fromEnv = env.CLAUDE_CLI || env.CLAUDE_CLI_PATH || env.CLAUDE_BIN;
+  if (fromEnv && exists(fromEnv)) return fromEnv;
 
-  const candidates = [
-    path.join(homedir, 'AppData', 'Roaming', 'npm', 'claude.cmd'),
-    path.join(homedir, '.local', 'bin', 'claude.exe'),
-    path.join(homedir, '.local', 'bin', 'claude'),
+  // claude-exe.mjs の共有探索ロジックを呼ぶ。
+  // この関数は呼び出し元の慣例で空文字列を返す場合がある。
+  const home = typeof io.homedir === 'function' ? io.homedir() : io.homedir;
+  const { platform } = process;
+  const args = { ...defaultResolveArgs({ platform, env, ...(home ? { USERPROFILE: home } : {}) }), exists, listDir: readdir };
+  const candidates = candidateClaudeExecutables(args);
+  if (candidates.length > 0) return candidates[0];
+
+  // 旧来の固定候補もフォールバックとして残す（後方互換）
+  const legacyCandidates = [
+    path.join(home, 'AppData', 'Roaming', 'npm', 'claude.cmd'),
+    path.join(home, '.local', 'bin', 'claude.exe'),
+    path.join(home, '.local', 'bin', 'claude'),
   ];
-  for (const candidate of candidates) {
+  for (const candidate of legacyCandidates) {
     if (exists(candidate)) return candidate;
   }
-
-  // デスクトップ版は <版>\<ハッシュ>\claude.exe に置かれる。版直下だけ見ていると
-  // 実体を取り逃がし、PATH の claude.cmd を掴んで shell 無し spawn が ENOENT になる。
-  const installedDir = path.join(homedir, 'AppData', 'Roaming', 'Claude', 'claude-code');
-  try {
-    const found = findClaudeInVersionedDir(installedDir, {
-      listDir: (dir) => { try { return readdir(dir); } catch { return []; } },
-      exists,
-    });
-    if (found) return found;
-  } catch { /* インストール版が無い機体では黙って次へ */ }
-
-  const extensionsDir = path.join(homedir, '.vscode', 'extensions');
-  try {
-    const extension = pickNewestExtensionBinary(readdir(extensionsDir));
-    if (!extension) return '';
-    const binary = path.join(extensionsDir, extension, 'resources', 'native-binary', 'claude.exe');
-    return exists(binary) ? binary : '';
-  } catch {
-    return '';
-  }
+  return '';
 }
 
 // Windows Terminal(wt.exe)は WindowsApps の実行エイリアス(reparse point)なので、

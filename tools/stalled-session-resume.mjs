@@ -33,6 +33,14 @@ export function options(argv = [], env = process.env) {
   return out;
 }
 
+async function readSanitizedJson(file, fallback) {
+  try {
+    const raw = await fs.readFile(file, 'utf8');
+    const cleaned = raw.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+    return JSON.parse(cleaned);
+  } catch { return fallback; }
+}
+
 async function readJson(file, fallback) {
   try { return JSON.parse(await fs.readFile(file, 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return fallback; throw error; }
@@ -139,9 +147,26 @@ export async function execute(record, { timeoutMs, resultFile, previous = [] }, 
   // 実行役が1つも起動できない(cheap-code 全レーン停止・Claude フォールバック無効)のはセッションの失敗ではない。
   // 2026-10-26 実測: deepseek payment_required で2件が1秒で error 扱い→「連続2件エラーで中止」の誤通知と noProgress 消費。
   if (result.skippedNoExecutor) return { outcome: 'no-executor', reason: `実行役なし: ${String(result.stderr ?? '').trim().slice(-300) || result.executorUsed || 'cheap-code'}` };
-  if (result.status !== 'success') return { outcome: 'error', reason: result.status };
-  const report = await (io.readReport ?? readJson)(resultFile, null);
-  return { outcome: report?.progressed === true && typeof report.evidence === 'string' && report.evidence.trim() ? 'progressed' : 'no-progress', reason: report?.evidence || '成果記録なし', executor: result.executorUsed };
+const timedOut = result.status === 'timeout';
+  if (result.status !== 'success' && !timedOut) return { outcome: 'error', reason: result.status };
+  // deepseek-v4-flash が結果JSONに制御文字を混入することがある（2026-11-06 実測）.
+  // io.readReport が指定されていればそれを使い、無ければファイルから制御文字無害化後に parse する。
+  // parse 失敗時は null として no-progress 扱いにする（error にすると state.errors が増えて
+  // 「連続3件エラー→今晩中止」のトリガーになる）。
+  const rawReport = await (io.readReport ?? readSanitizedJson)(resultFile, null);
+  let report = rawReport;
+  if (typeof rawReport === 'string') {
+    try {
+      const cleaned = rawReport.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+      report = JSON.parse(cleaned);
+    } catch { report = null; }
+  }
+  const progressed = report?.progressed === true && typeof report.evidence === 'string' && report.evidence.trim();
+  // 時間切れはセッション側の制限超過であって失敗ではない。ただし時間切れ直前に成果 JSON を
+  // 保存できていれば「進んだ」として数える（2026-11-06 実測: 20分 timeout 4件が error 扱いで
+  // 連続3件エラー→今晩中止になり、残り約86件が未確認で終わった）。
+  if (timedOut) return { outcome: progressed ? 'progressed' : 'timeout', reason: progressed ? report.evidence : result.status, executor: result.executorUsed };
+  return { outcome: progressed ? 'progressed' : 'no-progress', reason: report?.evidence || '成果記録なし', executor: result.executorUsed };
 }
 
 export async function run(config = options(), io = {}) {
@@ -244,7 +269,7 @@ export async function run(config = options(), io = {}) {
               return;
             }
             result = await (io.execute ?? execute)(record, { timeoutMs: config.timeoutMs, resultFile, previous: entry.attempts.slice(-4, -1) });
-            if (!['progressed', 'no-progress', 'error', 'no-executor'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
+            if (!['progressed', 'no-progress', 'timeout', 'error', 'no-executor'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
           } catch (error) { result = { outcome: 'error', reason: String(error.message) }; }
           if (result.outcome === 'no-executor') {
             // 起動前に消費した試行を戻す(このセッションは何も試されていない)。レーン停止の通知は
@@ -270,7 +295,9 @@ export async function run(config = options(), io = {}) {
             }
           }
           if (entry.noProgress >= 3) entry.skipReason = '3回進捗なし';
-          state.errors = result.outcome === 'error' ? state.errors + 1 : 0;
+          // 時間切れは今晩中止の判定対象外: 連続エラーに加算もリセットもしない（noProgress は no-progress 同様に加算済み）。
+          if (result.outcome === 'error') state.errors += 1;
+          else if (result.outcome !== 'timeout') state.errors = 0;
           state.aborted ||= state.errors >= 3;
           results.push({ title: record.displayTitle, sessionId: record.sessionId, ...attempt });
           await save(ledger);
@@ -288,7 +315,7 @@ export async function run(config = options(), io = {}) {
       const closed = await loadClosed();
       const retired = Object.entries(ledger.sessions).filter(([id, entry]) => entry.noProgress >= 3 && !closed.sessions[id]);
       const count = outcome => results.filter(r => r.outcome === outcome).length;
-      const summary = `確認 ${results.length}件 / 進んだ ${count('progressed')} / 進まず ${count('no-progress')} / エラー ${count('error')} / 締切で翌晩へ ${rows.filter(r => r.skip === '締切超過(翌晩へ)').length} / 3回進捗なしで停止中 ${retired.length}`;
+      const summary = `確認 ${results.length}件 / 進んだ ${count('progressed')} / 進まず ${count('no-progress')} / 時間切れ ${count('timeout')} / エラー ${count('error')} / 締切で翌晩へ ${rows.filter(r => r.skip === '締切超過(翌晩へ)').length} / 3回進捗なしで停止中 ${retired.length}`;
       const waiting = retired.length ? '\n自動では進められないので kim の判断待ち\n' + retired.slice(0, 20).map(([id, entry]) => `${entry.title ?? id} (${id})`).join('\n') : '';
       const message = redactSecrets(`${summary}\n夜間セッション再開 (${os.hostname()})\n${results.map(r => `${r.title} (${r.sessionId}): ${r.outcome}`).join('\n')}${state.aborted ? '\n連続3件エラーのため今晩は中止' : ''}${waiting}`);
       state.notification = await (io.notify ?? notifyKim)(message, { home });

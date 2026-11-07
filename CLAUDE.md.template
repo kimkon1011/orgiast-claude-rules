@@ -88,6 +88,8 @@ Codex実装、Claude設計・指示・レビュー・検証、追加費用ゼロ
 **🔴 Claudeだけで実装しない・従量課金でClaude Codeを動かさない。直接実装・大きなインラインプログラム・実装サブエージェントはモデルを問わずdeny。解除はuserの [CLAUDE-IMPL-OK]（または [LANE-OK]）のセッション限定60分だけ、overrideファイル・自動解除は廃止。APIキー/Consoleログインは api-billing-guard が全ツールを止める。全アカウントGmail領収書を毎日集計（§2.8.5）、通知は §1.1 の許可リスト規定。必須hook欠落は hook-selfcheck が修復。**
 ### 1.18.2 Grok Bot にブラウザ実操作を委譲
 Claude Code・Codex・安いLLMは**APIがあるものしか触れない**。
+### 1.18.4 着手前のレーン生存確認と「体制不備を先に直す」原則
+- Fable 5.1（および Opus）の担当は設計・タスク分解・指示・レビュー・検証だけ。
 **🔴 他AI（Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM）は使うのが既定、Claudeだけは理由が必要。残高切れは入金（オートチャージON）、キー失効/403は再発行、429は別の他AIへ。「外す／やめる／縮小」を選択肢にせず、障害は別の他AIで吸収し復旧後に戻す。割り振りは先に具体名で書く（要約=Gemini、下書き=Kimi、実装=Codex、Claude=verify）。「必要なら使う」は禁止。**
 **🔴 故障レーンは全PC・全アカウント・無人でも同じセッションで最優先修復。SessionStart の 🛑 に従い、他PCの同アカウント・SendMessage・CLI・API の使える経路を当ターンで尽くす。返事待ちで放置せず、人にしかできない操作はこのPCの操作者（kim）へ直接頼み、実呼び出し成功まで確認する。lane-repair-first-gate が未修復の通常作業を止める。node tools/lane-doctor.mjs --probe、または lane-repair-log.mjs --lane <名> --tried "<試行>" --result fixed|unfixable（6時間有効）で記録し、応答に [LANE-REPAIR] を書く。reset 既知の429/usage_limitは quota_wait として別の安いレーンへ。Codex probe失敗は直接WSL終了コードでも切り分け、「生存 ✅」だけを信用しない。**
 ### 1.19 マキモノとハイブリッド企画書

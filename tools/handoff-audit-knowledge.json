@@ -298,5 +298,11 @@
     "route": "ループ・自動進行の報告で、外部システム（GitHub の PR/CI/マージ状態、Drive のファイル、Vercel の本番、Gmail 等）の状態を、自分側のログや記憶だけで「完了した／無い／マージ済み」と断定しない。報告前に当ターンで直接照会して読み戻す。GitHub は `gh pr view <番号> -R <owner/repo> --json state,mergedAt,mergeCommit,statusCheckRollup`、`gh pr checks <番号> -R <owner/repo>`、`gh run list -R <owner/repo> --limit 10 --json status,conclusion,headSha,name`、任意の API は `gh api repos/<owner>/<repo>/<path>`。Drive は DWD（kim impersonate / drive スコープ）で files.get / files.list の実応答を読む。Vercel は `vercel inspect <url>` で Ready を確認する。コミットの取込判定は squash マージで is-ancestor が偽になるため `node tools/commit-landed.mjs <sha>` を使う。照会に失敗した項目は実際のエラー本文を貼り「未確認」と書き、確率付きの否定や「user が確認して」への丸投げをしない。報告は「要素 × 照会コマンド × 実データ」の表にし、状態が変わるまで待つだけの項目も最後に再照会した結果を載せる。",
     "confidence": "high",
     "source": "handoff-audit-nightly:8ccfb76e6a69329b0f49d1810e9006178f22fbd0ff1bd4a6b6b1b2747be19211 / 2026-11-06 tool-name-route レビューで route（`gh api`）を手順文へ書き直して採用 / 組織指示「外部状態は直接照会だけで判定し、未照会は未確認と書く」と commit-landed.mjs の運用に整合"
+  },
+  {
+    "pattern": "外部状態の断定は直接API照会で根拠を示す",
+    "route": "完了報告の検証表の「確かめ方」欄や本文で外部状態を断定するときは、その当ターンで直接照会した実応答を根拠に書く。①Google スプレッドシートのタブ・設定の読み戻しは、DWD（kim impersonate / drive スコープ）か SA 直 JWT（`aujust-sales-automation/.gcp/sheets-sa.json`、scope=`https://www.googleapis.com/auth/spreadsheets.readonly`）で Sheets API を直接叩いて行い、`GET /v4/spreadsheets/{id}?fields=properties.title,sheets.properties`（タブ名/gid/行列数）と `GET /v4/spreadsheets/{id}/values/{tab}!A1:BZ400`（全行）の実応答を確認してから「読み戻した」と書く（詳細は knowledge entry「Google スプレッドシートの書き込み結果検証」の検証4点）。SA 鍵の無い PC（DESKTOP-PPD5V8I 等）では exit 2 で終わるため、対象シートを呼べた実測が無いまま「読み戻し」と書かない。②keyserve の登録有無（「このPCが未登録」等）は断定せず、`node tools/keyserve-status.mjs --json`（読み取り専用・認証経路/HTTP status/配布ファイル一覧を出力）で直接照会し、照会できない場合や status 非2xx は実際の error 本文を添えて「未確認」と書く。照会していない不在・未登録を確率付きで否定しない。実例: 2026-11-05 session 2415dbb8 は「Sheets API でタブ・設定を読み戻し」（対象シート呼び出しの実測なし）と「フォームのリンク先URLは keyserve から取得できず（このPCが未登録）」（keyserve 未照会）を断定し rule 4 で検出された。",
+    "confidence": "high",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=Sheets API）: 7ef2fd3f94f75a307f8d76af10d9b681cb79018cf0d06ea21a515d13f033728a / 2026-11-07 route を手順文へ書き直して採用"
   }
 ]

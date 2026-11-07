@@ -336,6 +336,7 @@ export const LOCK_BUSY_EXIT = 6;
 export const ACK_BATCH_LIMIT = 100;
 export const SENT_STATUS_MAX_LOOKUP_FAILURES = 5;
 export const FLEET_POLL_BUSY_STREAK_LIMIT = 5;
+export const FLEET_POLL_ERROR_STREAK_LIMIT = 5;
 export const CAPABILITY_BACKOFF_MS = 3600000;
 export const SERVER_MAX_ATTEMPTS = 5;
 export const INTERRUPTED_PROMPT_MS = 35 * 60000;
@@ -977,16 +978,28 @@ export async function pollOnce(deps = {}) {
         // Broadcast remains pending for presentation; the inbox itself is the durable delivery receipt.
         processedIds: readInbox(home, { unreadOnly: false }).filter(m => m.to === 'all' && Date.parse(m.expiresAt) > now()).map(m => m.id) })));
     } catch (error) {
-      if (error.code !== 'SERVER_BUSY' && !/^(?:fleet-mail: )?busy$/.test(error.message)) throw error;
+      // HTTP 5xx / timeout / unauthorized も busy と同様に回数制限つきで延期する（2026-11-07）。
+      // 即座に exit 1 にせず、連続 FLEET_POLL_ERROR_STREAK_LIMIT 回で初めて SERVER_ERROR を throw する。
+      // 該当するエラー種別: createClient（line 742）の "fleet-mail HTTP 5xx/401/403/429" と AbortError。
+      const isBusy = error.code === 'SERVER_BUSY' || /^(?:fleet-mail: )?busy$/.test(error.message);
+      const isServerError = isBusy
+        || /^fleet-mail HTTP (5\d\d|401|403|429)$/.test(error.message)
+        || error.name === 'AbortError' || error.code === 'ABORT_ERR';
+      if (!isServerError) throw error;
       const previous = readJson(lastPollFile, {});
-      const busyStreak = (previous.busyStreak || 0) + 1;
-      if (!dryRun) writeJson(lastPollFile, { ...previous, busyStreak, busyAt: new Date(now()).toISOString() });
+      const busyStreak = isBusy ? (previous.busyStreak || 0) + 1 : 0;
+      const errorStreak = (previous.errorStreak || 0) + 1;
+      if (!dryRun) writeJson(lastPollFile, { ...previous, busyStreak, errorStreak, busyAt: isBusy ? new Date(now()).toISOString() : previous.busyAt, errorAt: new Date(now()).toISOString(), lastError: error.message.slice(0, 200) });
       if (busyStreak >= FLEET_POLL_BUSY_STREAK_LIMIT) {
         throw Object.assign(new Error(`fleet-mail: サーバ混雑が${busyStreak}回連続（約${busyStreak * 2}分）。GAS のロック競合を確認`), { code: 'SERVER_BUSY' });
       }
-      err(`fleet-mail: サーバ混雑のため受信を次回へ延期=1 (連続${busyStreak})`);
-      outcome = 'busy';
-      return { skipped: 'busy', busyStreak };
+      if (errorStreak >= FLEET_POLL_ERROR_STREAK_LIMIT) {
+        throw Object.assign(new Error(`fleet-mail: サーバエラーが${errorStreak}回連続（最終: ${error.message}）`), { code: 'SERVER_ERROR' });
+      }
+      const errorKind = isBusy ? 'busy' : 'http';
+      err(`fleet-mail: サーバエラー（${error.message}）のため受信を次回へ延期=1 (連続: ${errorKind}=${isBusy ? busyStreak : errorStreak})`);
+      outcome = isBusy ? 'busy' : 'error';
+      return { skipped: outcome, busyStreak, errorStreak };
     }
     if (dryRun) {
       const messages = response.messages.map(m => ({ ...m, from: redactSecrets(m.from), why: redactSecrets(m.why), body: redactSecrets(m.body), resultBody: redactSecrets(m.resultBody) }));
@@ -1043,7 +1056,7 @@ export async function pollOnce(deps = {}) {
     if (!undurable) fs.unlinkSync(pollFile);
     else err(`fleet-mail: 保存再試行待ち=${undurable}`);
     if (legacy) err(`fleet-mail: 旧形式宛先受信=${legacy}`);
-    writeJson(lastPollFile, { ...readJson(lastPollFile, {}), at: new Date(now()).toISOString(), busyStreak: 0 });
+    writeJson(lastPollFile, { ...readJson(lastPollFile, {}), at: new Date(now()).toISOString(), busyStreak: 0, errorStreak: 0 });
     endPhase();
     let promptHandled = false;
     let growiAppendHandled = false;

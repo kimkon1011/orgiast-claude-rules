@@ -1,0 +1,17 @@
+{
+  "exhibitors": [
+    { "name": "Velvet Orbit", "description": "Aerospace components", "website": "https://velvet-orbit.invalid" },
+    { "name": "Quartz Trade", "description": "Wholesale distributor", "website": "https://quartz-trade.invalid" },
+    { "name": "Ivory Current", "description": "Energy controls", "website": null }
+  ],
+  "employees": { "Velvet Orbit": 250, "Ivory Current": 25 },
+  "contacts": {
+    "Velvet Orbit": [{ "name": "Eva Example", "title": "営業ディレクター" }],
+    "Ivory Current": [{ "name": "Finn Example", "title": "創業者" }]
+  },
+  "posts": {
+    "Eva Example": [{ "date": "2026-04-01" }],
+    "Finn Example": [{ "date": "2026-03-31" }]
+  },
+  "referenceDate": "2026-04-02"
+}

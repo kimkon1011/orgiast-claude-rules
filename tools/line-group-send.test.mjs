@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseArgs, buildMessages, loadSecrets, resolveGroup, assertSendableText } from './line-group-send.mjs';
+import { parseArgs, buildMessages, loadSecrets, resolveGroup, assertSendableText, strToUUID } from './line-group-send.mjs';
 
 test('assertSendableText: 文字化けとプレースホルダ残りは送らない', () => {
   assert.doesNotThrow(() => assertSendableText('皆さん、お疲れさまです。'));
@@ -40,6 +40,19 @@ test('loadSecrets: env と line-send.env が揃えば Vercel に行かない', a
   const s = await loadSecrets({ env: { LINE_CHANNEL_ACCESS_TOKEN: 't' }, home });
   assert.equal(s.LINE_CHANNEL_ACCESS_TOKEN, 't');
   assert.equal(s.SUPABASE_URL, 'https://x.supabase.co');
+});
+
+test('strToUUID: 任意文字列を決定論的UUID(v5)に変換する', () => {
+  const uuid = strToUUID('lahaina-gmail-password-20261102');
+  assert.match(uuid, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  // v5: 13文字目が 5、20文字目が 8 または 9 または a または b
+  assert.equal(uuid[14], '5');
+  // 決定論的: 同じ入力→同じ出力
+  assert.equal(strToUUID('lahaina-gmail-password-20261102'), uuid);
+  // 異なる入力→異なる出力
+  assert.notEqual(strToUUID('key-a'), strToUUID('key-b'));
+  // 空文字列も処理できる
+  assert.match(strToUUID(''), /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
 });
 
 test('resolveGroup: groupId はそのまま、名前は Supabase 無しならエラー', async () => {

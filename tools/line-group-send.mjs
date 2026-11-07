@@ -9,8 +9,18 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { isEntry } from './is-entry.mjs';
+
+/** 任意の文字列を UUID v5 形式（SHA-256 ベース・決定論的）に変換する。同じ文字列→同じUUID。
+ *  LINE API の X-Line-Retry-Key は UUID 形式が必要だが、人間が覚えやすい任意文字列を指定できるようにするため。 */
+export function strToUUID(s) {
+  const h = createHash('sha256');
+  h.update(s);
+  const hex = Buffer.from(h.digest()).toString('hex');
+  // UUID v5 形式: version=5 (0101), variant=8 (10xx)
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-5${hex.slice(13,16)}-8${hex.slice(17,20)}-${hex.slice(20,32)}`;
+}
 
 const USAGE = '使い方: node tools/line-group-send.mjs --group <groupId|グループ名> --text-file <本文.txt> [--image <画像> ...] [--retry-key <uuid>] [--dry-run]';
 const SALES_PROJECT = 'aujust-sales-automation';
@@ -129,7 +139,9 @@ async function main() {
   const urls = [];
   for (const f of o.images) urls.push(await uploadImage(s, f));
   const chunks = buildMessages(text, urls);
-  const baseKey = o.retryKey || randomUUID();
+  const rawKey = o.retryKey || randomUUID();
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const baseKey = UUID_RE.test(rawKey) ? rawKey : strToUUID(rawKey);
   for (const [i, messages] of chunks.entries()) {
     const retryKey = i === 0 ? baseKey : randomUUID();
     const r = await fetch('https://api.line.me/v2/bot/message/push', {

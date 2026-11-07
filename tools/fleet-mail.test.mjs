@@ -877,7 +877,7 @@ test('poll defers on server busy and resets after success', async t => {
   };
   for (let busyStreak = 1; busyStreak < 5; busyStreak++) {
     assert.equal(await main(['--poll'], f.deps), 0);
-    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { ...prior, busyStreak, busyAt: '2026-10-26T00:00:00.000Z' });
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { ...prior, busyStreak, errorStreak: busyStreak, busyAt: '2026-10-26T00:00:00.000Z', errorAt: '2026-10-26T00:00:00.000Z', lastError: 'fleet-mail: busy' });
     assert.match(f.errors.at(-1), /延期/);
   }
   await assert.rejects(main(['--poll'], f.deps), { message: /5回連続（約10分）/, code: 'SERVER_BUSY' });
@@ -885,16 +885,36 @@ test('poll defers on server busy and resets after success', async t => {
   f.deps.request = request;
   assert.equal(await main(['--poll'], f.deps), 0);
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), {
-    ...prior, at: '2026-10-26T00:00:00.000Z', busyStreak: 0, busyAt: '2026-10-26T00:00:00.000Z',
+    ...prior, at: '2026-10-26T00:00:00.000Z', busyStreak: 0, errorStreak: 0, busyAt: '2026-10-26T00:00:00.000Z', errorAt: '2026-10-26T00:00:00.000Z', lastError: 'fleet-mail: busy',
   });
 });
-test('poll still fails on non-busy transport errors', async t => {
+test('poll defers on HTTP 500 transport errors', async t => {
   const f = fixture(t); const request = f.deps.request;
+  const file = path.join(f.dir, '.fleet-mail-last-poll.json');
+  const prior = { at: '2026-10-25T00:00:00.000Z', serverCapabilities: { version: 2 }, sentStatus: { cached: true } };
+  fs.writeFileSync(file, JSON.stringify(prior));
+  f.deps.now = () => Date.parse('2026-10-26T00:00:00Z');
   f.deps.request = async (kind, payload) => {
-    if (kind === 'mail-poll') throw new Error('fleet-mail: unauthorized');
+    if (kind === 'mail-poll') throw new Error('fleet-mail HTTP 500');
     return request(kind, payload);
   };
-  await assert.rejects(main(['--poll'], f.deps), /unauthorized/);
+  for (let errorStreak = 1; errorStreak < 5; errorStreak++) {
+    assert.equal(await main(['--poll'], f.deps), 0);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), {
+      ...prior, busyStreak: 0, errorStreak, errorAt: '2026-10-26T00:00:00.000Z', lastError: 'fleet-mail HTTP 500',
+    });
+    assert.match(f.errors.at(-1), /延期/);
+  }
+  await assert.rejects(main(['--poll'], f.deps), { message: /5回連続/, code: 'SERVER_ERROR' });
+});
+
+test('poll still fails on non-transport errors', async t => {
+  const f = fixture(t); const request = f.deps.request;
+  f.deps.request = async (kind, payload) => {
+    if (kind === 'mail-poll') throw new Error('some unexpected error');
+    return request(kind, payload);
+  };
+  await assert.rejects(main(['--poll'], f.deps), /unexpected/);
   assert.equal(fs.existsSync(path.join(f.dir, '.fleet-mail-last-poll.json')), false);
 });
 test('poll dry-run defers on busy messages without changing state', async t => {

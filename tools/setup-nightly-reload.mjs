@@ -36,12 +36,16 @@ export function convergeNightlyReload({ platform = process.platform, run = execF
   if (platform !== 'win32') return { ...result, status: 'NOTICE' };
   try {
     const settingsChanged = restore(settingsPath);
-    const output = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-      '-File', path.join(toolsDir, 'register-nightly-reload-vscode.ps1')],
-    { encoding: 'utf8', windowsHide: true, timeout: 30000 });
-    const registration = JSON.parse(String(output).replace(/^\uFEFF/, '').trim());
-    if (typeof registration.changed !== 'boolean') throw new Error('Invalid task registration result');
-    return { ...result, status: 'OK', repaired: settingsChanged || registration.changed };
+    let tasksChanged = false;
+    for (const script of ['register-nightly-reload-vscode.ps1', 'register-reopen-lost-sessions.ps1']) {
+      const output = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-File', path.join(toolsDir, script)],
+      { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+      const registration = JSON.parse(String(output).replace(/^\uFEFF/, '').trim());
+      if (typeof registration.changed !== 'boolean') throw new Error('Invalid task registration result');
+      tasksChanged ||= registration.changed;
+    }
+    return { ...result, status: 'OK', repaired: settingsChanged || tasksChanged };
   } catch (error) { return { ...result, status: 'NG', reason: error.message }; }
 }
 if (isEntry(import.meta.url)) {

@@ -3,6 +3,7 @@
 // Usage: node tools/schema-audit.mjs [url]
 
 import process from 'node:process';
+import { isEntry } from './is-entry.mjs';
 
 const DEFAULT_URL = 'https://www.orgiast.jp';
 
@@ -136,7 +137,7 @@ async function main() {
   process.stdout.write(report);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isEntry(import.meta.url)) {
   main().catch(e => { process.stderr.write(`Error: ${e.message}\n`); process.exit(1); });
 }
 

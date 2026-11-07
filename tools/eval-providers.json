@@ -1,4 +1,5 @@
 [
+  {"_comment":"X-0006（AI生成コード性能・アーキテクチャ最適化チェック / 第18契約）は 2026-11-08 に close。PR #1493（fleet-sheet-report 並列化）のみ適用して終了。再起動禁止。"},
   {"provider":"groq","model":"openai/gpt-oss-120b","params":{"reasoning_effort":"low"}},
   {"provider":"openrouter","model":"meta-llama/llama-3.3-70b-instruct"},
   {"provider":"openrouter","model":"meta/muse-wonder","costPerMillion":[4,20]},

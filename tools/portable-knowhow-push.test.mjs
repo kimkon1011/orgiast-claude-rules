@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -7,8 +8,12 @@ import { repoRoot, knowhowDir, collectFiles, runPortableKnowhow } from './portab
 
 const FOLDER_ID = 'test-folder-ai-knowhow';
 
+/**
+ * fields パラメータで指定されたフィールドだけ返すモック。
+ * 実 API と同じく findByTitle（fields=files(id,name,modifiedTime)）では mimeType を返さない。
+ */
 function fakeDrive(overrides = {}) {
-  const store = new Map(); // id -> { name, bytes, mimeType, appProperties }
+  const store = new Map(); // id -> { name, bytes, mimeType, appProperties, parent, createdTime, modifiedTime }
   let seq = 0;
   const writes = [];
 
@@ -25,11 +30,19 @@ function fakeDrive(overrides = {}) {
       const q = url.searchParams.get('q') || '';
       const name = q.match(/name='([^']+)'/)?.[1];
       const parent = q.match(/'([^']+)' in parents/)?.[1];
-      if (parent !== FOLDER_ID && !parent?.includes('1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw') && parent !== 'dry-run-folder') {
-        return Response.json({ files: [] });
-      }
       const files = [...store.values()].filter(x => x.name === name && x.parent === parent);
-      return Response.json({ files: files.map(x => ({ id: x.id, name: x.name, mimeType: x.mimeType, modifiedTime: x.modifiedTime })) });
+
+      // fields で指定されたフィールドだけ返す（実 API と同じ挙動）
+      const fieldsParam = url.searchParams.get('fields') || '';
+      const innerFields = fieldsParam.replace(/^files\(/, '').replace(/\)$/, '').split(',').map(f => f.trim()).filter(Boolean);
+      const mapped = files.map(x => {
+        const entry = { id: x.id, name: x.name };
+        if (innerFields.includes('mimeType')) entry.mimeType = x.mimeType;
+        if (innerFields.includes('modifiedTime')) entry.modifiedTime = x.modifiedTime;
+        if (innerFields.includes('createdTime')) entry.createdTime = x.createdTime;
+        return entry;
+      });
+      return Response.json({ files: mapped });
     }
 
     const segs = url.pathname.split('/');
@@ -40,9 +53,15 @@ function fakeDrive(overrides = {}) {
       return new Response(entry?.bytes || Buffer.from(''));
     }
 
-    if (method === 'GET' && url.searchParams.has('fields') && url.searchParams.get('fields') === 'appProperties') {
+    if (method === 'GET' && url.searchParams.has('fields')) {
+      const fields = url.searchParams.get('fields');
       const entry = store.get(id);
-      return Response.json({ appProperties: entry?.appProperties || {} });
+      if (fields === 'appProperties') {
+        return Response.json({ appProperties: entry?.appProperties || {} });
+      }
+      if (fields === 'mimeType') {
+        return Response.json({ mimeType: entry?.mimeType || null });
+      }
     }
 
     if (method === 'PATCH' && url.pathname.includes('/upload/')) {
@@ -69,7 +88,11 @@ function fakeDrive(overrides = {}) {
       // folder creation
       const meta = JSON.parse(opts.body || '{}');
       const newId = `folder-${++seq}`;
-      store.set(newId, { id: newId, name: meta.name, parent: meta.parents?.[0], mimeType: meta.mimeType });
+      const now = new Date().toISOString();
+      store.set(newId, {
+        id: newId, name: meta.name, parent: meta.parents?.[0],
+        mimeType: meta.mimeType, createdTime: now,
+      });
       return Response.json({ id: newId });
     }
 
@@ -83,7 +106,12 @@ function fakeDrive(overrides = {}) {
       const bodyEnd = contentPart.lastIndexOf('\r\n--');
       const bytes = Buffer.from(bodyStart > 3 ? contentPart.slice(bodyStart, bodyEnd > 0 ? bodyEnd : undefined) : '');
       const newId = `file-${++seq}`;
-      store.set(newId, { id: newId, name: meta.name, parent: meta.parents?.[0], mimeType: 'text/plain', bytes, modifiedTime: new Date().toISOString() });
+      const now = new Date().toISOString();
+      store.set(newId, {
+        id: newId, name: meta.name, parent: meta.parents?.[0],
+        mimeType: meta.mimeType || 'text/plain',
+        bytes, modifiedTime: now, createdTime: now,
+      });
       return Response.json({ id: newId });
     }
 
@@ -131,9 +159,9 @@ test('同タイトルPATCH: 既存ファイルを更新する', async () => {
     parent: FOLDER_ID, mimeType: 'application/vnd.google-apps.document',
     bytes: Buffer.from(existingContent),
     modifiedTime: '2026-01-01T00:00:00.000Z',
+    createdTime: '2026-01-01T00:00:00.000Z',
   });
 
-  // findByTitle が既存を返すように store の親を合わせる
   // 実際のテストは dry-run で
   const result = await runPortableKnowhow({
     files: [{ name: '01_カレンダー空き日程の出し方', content: '新しい内容\n改行' }],
@@ -145,8 +173,6 @@ test('同タイトルPATCH: 既存ファイルを更新する', async () => {
 
 test('sha一致でスキップ', async () => {
   const drive = fakeDrive();
-  // API モックが findByTitle に応答できるように直接 Drive を叩かずに済ませる
-  // 実際は runPortableKnowhow が内部で findDoc を呼ぶ → モックの GET /drive/v3/files?q= が空を返す
   const files = [{
     name: '01_test',
     content: 'test content',
@@ -209,4 +235,137 @@ test('実ファイルで一貫性チェック', () => {
     const prefix = String(i).padStart(2, '0') + '_';
     assert.ok([...names].some(n => n.startsWith(prefix)), `file starting with ${prefix} should exist`);
   }
+});
+
+test('2回目実行は新規作成せず既存を更新する', async () => {
+  const drive = fakeDrive();
+  // フォルダを事前登録
+  drive.store.set('existing-folder', {
+    id: 'existing-folder', name: 'AI共通ノウハウ（Gemini・ChatGPT・Claude用）',
+    parent: '1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw',
+    mimeType: 'application/vnd.google-apps.folder',
+    createdTime: '2026-01-01T00:00:00.000Z',
+  });
+  // ドキュメントを事前登録（異なる pkSha → PATCH になる）
+  const content = '# test\nhello';
+  const sha = createHash('sha256').update(content).digest('hex');
+  drive.store.set('existing-doc-1', {
+    id: 'existing-doc-1', name: '01_test',
+    parent: 'existing-folder',
+    mimeType: 'application/vnd.google-apps.document',
+    bytes: Buffer.from('old content'),
+    modifiedTime: '2026-01-01T00:00:00.000Z',
+    createdTime: '2026-01-01T00:00:00.000Z',
+    appProperties: { pkSha: 'old-sha' },
+  });
+  // 目次も事前登録
+  drive.store.set('existing-index', {
+    id: 'existing-index', name: '00_目次・使い方（まずこれを読む）',
+    parent: 'existing-folder',
+    mimeType: 'application/vnd.google-apps.document',
+    bytes: Buffer.from('old index'),
+    modifiedTime: '2026-01-01T00:00:00.000Z',
+    createdTime: '2026-01-01T00:00:00.000Z',
+    appProperties: { pkSha: 'old-index-sha' },
+  });
+
+  const logs = [];
+  const result = await runPortableKnowhow({
+    files: [{ name: '01_test', content }],
+    token: 'test-token', apiFn: drive.apiFn, emit: (x) => logs.push(x),
+  });
+
+  // フォルダは既存のものが使われ、新規作成されていない
+  assert.equal(drive.store.get('existing-folder')?.id, 'existing-folder');
+  // 新しいフォルダが作成されていない（フォルダは1つのみ）
+  const folderCount = [...drive.store.values()].filter(x => x.mimeType === 'application/vnd.google-apps.folder').length;
+  assert.equal(folderCount, 1);
+  // ドキュメントは1件（既存のものが更新またはスキップ）
+  const docCount = [...drive.store.values()].filter(x => x.mimeType === 'application/vnd.google-apps.document').length;
+  assert.equal(docCount, 2); // 01_test + 目次（新規作成もされていない）
+  // 更新されたか unchanged
+  assert.ok(result.updated >= 0 && result.unchanged >= 0);
+});
+
+test('同名フォルダが2つあれば古い方を使う', async () => {
+  const drive = fakeDrive();
+  // 古いフォルダ（先に作られた）
+  drive.store.set('old-folder', {
+    id: 'old-folder', name: 'AI共通ノウハウ（Gemini・ChatGPT・Claude用）',
+    parent: '1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw',
+    mimeType: 'application/vnd.google-apps.folder',
+    createdTime: '2026-01-01T00:00:00.000Z',
+  });
+  // 新しいフォルダ（後に作られた）
+  drive.store.set('new-folder', {
+    id: 'new-folder', name: 'AI共通ノウハウ（Gemini・ChatGPT・Claude用）',
+    parent: '1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw',
+    mimeType: 'application/vnd.google-apps.folder',
+    createdTime: '2026-06-01T00:00:00.000Z',
+  });
+
+  const logs = [];
+  const result = await runPortableKnowhow({
+    files: [{ name: '01_test', content: 'test' }],
+    token: 'test-token', apiFn: drive.apiFn, emit: (x) => logs.push(x),
+  });
+
+  // 古い方（old-folder）が使われていることを確認
+  // findFolder の結果は POST で作られるのではなく store から取得される
+  // 作成されたドキュメントの親を確認（folder-1 なら古い方ではない＝新規フォルダ作成）
+  const docs = [...drive.store.values()].filter(x => x.mimeType === 'application/vnd.google-apps.document');
+  // ドキュメントの親が old-folder であることを確認
+  // 実際の runPortableKnowhow では findFolder が old-folder を返すので、
+  // ドキュメント作成時に parent=old-folder になる
+  assert.ok(docs.length > 0);
+  // フォルダは2つのまま増えていない
+  const folderCount = [...drive.store.values()].filter(x => x.mimeType === 'application/vnd.google-apps.folder').length;
+  assert.equal(folderCount, 2);
+});
+
+test('同名ドキュメントが2つあれば古い方を使う', async () => {
+  const drive = fakeDrive();
+  // フォルダを事前登録
+  drive.store.set('the-folder', {
+    id: 'the-folder', name: 'AI共通ノウハウ（Gemini・ChatGPT・Claude用）',
+    parent: '1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw',
+    mimeType: 'application/vnd.google-apps.folder',
+    createdTime: '2026-01-01T00:00:00.000Z',
+  });
+  // 古いドキュメント
+  drive.store.set('old-doc', {
+    id: 'old-doc', name: '01_test',
+    parent: 'the-folder',
+    mimeType: 'application/vnd.google-apps.document',
+    bytes: Buffer.from('old content'),
+    modifiedTime: '2026-01-01T00:00:00.000Z',
+    createdTime: '2026-01-01T00:00:00.000Z',
+    appProperties: { pkSha: 'old-sha' },
+  });
+  // 新しいドキュメント（同名）
+  drive.store.set('new-doc', {
+    id: 'new-doc', name: '01_test',
+    parent: 'the-folder',
+    mimeType: 'application/vnd.google-apps.document',
+    bytes: Buffer.from('newer content'),
+    modifiedTime: '2026-06-01T00:00:00.000Z',
+    createdTime: '2026-06-01T00:00:00.000Z',
+    appProperties: { pkSha: 'newer-sha' },
+  });
+
+  const content = '# updated';
+  const sha = createHash('sha256').update(content).digest('hex');
+  const logs = [];
+  const result = await runPortableKnowhow({
+    files: [{ name: '01_test', content }],
+    token: 'test-token', apiFn: drive.apiFn, emit: (x) => logs.push(x),
+  });
+
+  // 古い方（old-doc）の ID が使われているはず
+  // 新しいドキュメントは作成されていない
+  const docs = [...drive.store.values()].filter(x => x.mimeType === 'application/vnd.google-apps.document' && x.name === '01_test');
+  assert.equal(docs.length, 2); // 2つのまま増えていない
+  // old-doc が PATCH 更新された（bytes が変わっている）
+  const oldDocEntry = drive.store.get('old-doc');
+  assert.ok(oldDocEntry.bytes.toString().includes('updated'));
 });

@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { getDriveToken, driveApi as defaultApi } from './lib/drive-auth.mjs';
-import { uploadFileContent, findByTitle } from './lib/drive-files.mjs';
+import { uploadFileContent } from './lib/drive-files.mjs';
 import { redactForShare, findSharedSecret } from './lib/share-content.mjs';
 import { ensureKimEditor } from './lib/kim-editor.mjs';
 
@@ -41,23 +41,39 @@ export function collectFiles(root) {
 const sha256 = buf => createHash('sha256').update(buf.toString()).digest('hex');
 
 async function findFolder(token, apiFn) {
-  const existing = await findByTitle(token, FOLDER_NAME, HUB_ID, { apiFn });
-  const folder = existing.find(f => f.mimeType === 'application/vnd.google-apps.folder');
-  if (folder) return folder.id;
-  const res = await apiFn(token, 'https://www.googleapis.com/drive/v3/files?fields=id', {
+  const q = encodeURIComponent(
+    `name='${FOLDER_NAME.replace(/'/g, "\\'")}' and '${HUB_ID}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`
+  );
+  const res = await apiFn(token, `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,createdTime)&orderBy=createdTime`);
+  const json = await res.json();
+  const folders = json.files ?? [];
+  if (folders.length > 0) {
+    if (folders.length > 1) {
+      console.warn(`WARN: ${FOLDER_NAME}: ${folders.length} duplicates; using oldest ${folders[0].id}`);
+    }
+    return folders[0].id;
+  }
+  const res2 = await apiFn(token, 'https://www.googleapis.com/drive/v3/files?fields=id', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: FOLDER_NAME, parents: [HUB_ID], mimeType: 'application/vnd.google-apps.folder' }),
   });
-  const created = await res.json();
+  const created = await res2.json();
   await ensureKimEditor(created.id, { token, api: apiFn, created: true });
   return created.id;
 }
 
 async function findDoc(token, name, folderId, apiFn) {
-  const existing = await findByTitle(token, name, folderId, { apiFn });
-  existing.sort((a, b) => (b.modifiedTime || '').localeCompare(a.modifiedTime || ''));
-  return existing[0];
+  const q = encodeURIComponent(
+    `name='${name.replace(/'/g, "\\'")}' and '${folderId}' in parents and mimeType='application/vnd.google-apps.document' and trashed=false`
+  );
+  const res = await apiFn(token, `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,createdTime)&orderBy=createdTime`);
+  const json = await res.json();
+  const docs = json.files ?? [];
+  if (docs.length > 1) {
+    console.warn(`WARN: ${name}: ${docs.length} duplicates; using oldest ${docs[0].id}`);
+  }
+  return docs[0];
 }
 
 const DESCS = {
@@ -182,10 +198,25 @@ export async function runPortableKnowhow({ files, token, dryRun = false, emit = 
     });
     const newId = uploadResult.id;
 
+    // 検証: mimeType が Google ドキュメントであることを確認
+    const mimeRes = await apiFn(token, `https://www.googleapis.com/drive/v3/files/${newId}?fields=mimeType`);
+    const mimeData = await mimeRes.json();
+    if (mimeData.mimeType !== GDOC_MIME) {
+      throw new Error(`portable-knowhow: ${file.name} — expected ${GDOC_MIME}, got ${mimeData.mimeType}`);
+    }
+
     await apiFn(token, `https://www.googleapis.com/drive/v3/files/${newId}?supportsAllDrives=true`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ properties: { pkSha: sha } }),
     });
+
+    // 検証: pkSha が正しく書き込まれたことを確認
+    const propsRes = await apiFn(token, `https://www.googleapis.com/drive/v3/files/${newId}?fields=appProperties`);
+    const propsData = await propsRes.json();
+    if (propsData?.appProperties?.pkSha !== sha) {
+      throw new Error(`portable-knowhow: ${file.name} — pkSha mismatch after update`);
+    }
+
     await ensureKimEditor(newId, { token, api: apiFn });
     emit(`published: ${file.name} (${newId})`);
     stats.updated++;
@@ -215,10 +246,26 @@ export async function runPortableKnowhow({ files, token, dryRun = false, emit = 
         mimeType: GDOC_MIME, contentType: 'text/markdown; charset=utf-8', apiFn,
       });
       const newIndexId = uploadResult.id;
+
+      // 検証: mimeType
+      const idxMimeRes = await apiFn(token, `https://www.googleapis.com/drive/v3/files/${newIndexId}?fields=mimeType`);
+      const idxMimeData = await idxMimeRes.json();
+      if (idxMimeData.mimeType !== GDOC_MIME) {
+        throw new Error(`portable-knowhow: ${INDEX_FILE} — expected ${GDOC_MIME}, got ${idxMimeData.mimeType}`);
+      }
+
       await apiFn(token, `https://www.googleapis.com/drive/v3/files/${newIndexId}?supportsAllDrives=true`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ properties: { pkSha: indexSha } }),
       });
+
+      // 検証: pkSha
+      const idxPropsRes = await apiFn(token, `https://www.googleapis.com/drive/v3/files/${newIndexId}?fields=appProperties`);
+      const idxPropsData = await idxPropsRes.json();
+      if (idxPropsData?.appProperties?.pkSha !== indexSha) {
+        throw new Error(`portable-knowhow: ${INDEX_FILE} — pkSha mismatch after update`);
+      }
+
       await ensureKimEditor(newIndexId, { token, api: apiFn });
       emit(`published: ${INDEX_FILE} (${newIndexId})`);
       stats.updated++;

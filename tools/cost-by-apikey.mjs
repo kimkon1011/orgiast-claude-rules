@@ -132,7 +132,7 @@ async function main() {
     process.exit(1);
   }
 
-  const days = parseInt(process.env.DAYS ?? '21', 10);
+  const days = parseInt(process.env.DAYS || '21', 10);
   const now = new Date();
   const startingAt = new Date(now.getTime() - days * 86400_000);
   // 00:00 UTC に揃える

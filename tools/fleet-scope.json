@@ -753,6 +753,11 @@
       "reason": "task:quota-sweep ステップの登録スクリプト（枠リセット直前の残枠消化・15分ごと判定）"
     },
     {
+      "path": "tools/register-reply-learning-nightly.ps1",
+      "scope": "kim-only",
+      "reason": "task:reply-learning-nightly（kim-only）の登録スクリプト。返信代行の学習ループは kim 宛の返信だけを扱うため kim-PC だけに登録する"
+    },
+    {
       "path": "tools/register-auto-progress-task.ps1",
       "scope": "fleet",
       "step": "task:auto-progress-watch",

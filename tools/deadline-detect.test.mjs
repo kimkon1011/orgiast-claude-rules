@@ -106,6 +106,17 @@ test('旧LINE台帳は先頭シートの日本語見出しから読み込む', a
   assert.equal(line.documents[0].text, '担当者: 11月5日までに回答');
 });
 
+test('Driveの旧ページトークンが無効なら固定条件の先頭から再開する', async () => {
+  const urls = [];
+  const result = await collectDrive({ user: 'kim@orgiast.jp',
+    state: { day: '2026-11-03', used: 50, until: '2026-11-03T02:00:00Z', pageToken: 'expired' }, now,
+    request: async url => { urls.push(url); if (urls.length === 1) throw new Error('Google GET HTTP 400'); return { files: [], nextPageToken: 'next' }; } });
+  assert.match(urls[0], /pageToken=expired/);
+  assert.doesNotMatch(urls[1], /pageToken=/);
+  assert.equal(result.next.pageToken, 'next');
+  assert.match(result.next.query, /modifiedTime/);
+});
+
 test('不存在のfixtureで本番ソースへfallbackしない', async t => {
   const home=homeFor(t), errors=[];
   assert.equal(await main(['--dry-run','--fixture',home],{home,config:{...DEFAULT_CONFIG,sheetId:'live'},stderr:e=>errors.push(e),search:()=>assert.fail('live read')}),1);

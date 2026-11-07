@@ -52,9 +52,19 @@ export async function collectDrive({ user, state, now, request, dryRun = false }
   const current = windowState(state, now, 50), max = 50 - current.used;
   if (max <= 0) return { documents: [], next: state };
   const since = current.watermark || new Date(now.getTime() - 3 * 86400000).toISOString();
-  const q = `trashed = false and modifiedTime > '${since}' and modifiedTime <= '${current.until}' and (mimeType = 'application/vnd.google-apps.document' or mimeType = 'application/pdf' or mimeType contains 'image/') and not appProperties has { key='deadlineWatchOCR' and value='1' }`;
-  const params = new URLSearchParams({ q, orderBy: 'modifiedTime', pageSize: String(max), fields: 'nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)', ...(current.pageToken ? { pageToken: current.pageToken } : {}) });
-  const result = await request(`https://www.googleapis.com/drive/v3/files?${params}`, { user });
+  const q = current.query || `trashed = false and modifiedTime > '${since}' and modifiedTime <= '${current.until}' and (mimeType = 'application/vnd.google-apps.document' or mimeType = 'application/pdf' or mimeType contains 'image/') and not appProperties has { key='deadlineWatchOCR' and value='1' }`;
+  current.query = q;
+  const makeUrl = pageToken => {
+    const params = new URLSearchParams({ q, orderBy: 'modifiedTime', pageSize: String(max), fields: 'nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)', ...(pageToken ? { pageToken } : {}) });
+    return `https://www.googleapis.com/drive/v3/files?${params}`;
+  };
+  let result;
+  try { result = await request(makeUrl(current.pageToken), { user }); }
+  catch (error) {
+    if (!current.pageToken || !/HTTP 400/.test(error.message)) throw error;
+    delete current.pageToken;
+    result = await request(makeUrl(), { user });
+  }
   const documents = [];
   for (const file of result.files || []) {
     const text = await readDriveText(file, { user, request, dryRun });

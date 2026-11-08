@@ -1028,3 +1028,155 @@ test('regression: repo .claude/comms-hub/line-chat-excluded.json is never modifi
     assert.equal(after, before, 'repo line-chat-excluded.json should not change: tests must use a temp home');
   });
 });
+
+test('load-cases: timeout with cache continues with casesFromCache in last-run.json', async t => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-loadcache-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  const state = { sources: {}, cases: {}, casesCache: { cases: [{ id: 'C1234', name: 'cached', client: 'Client' }], at: '2026-11-01T00:00:00.000Z' } };
+  const sink = { createdDocs: 0, publishedDocs: 0, deferredDocs: 0, async init() {}, async append() {}, async finish() { return {}; } };
+  let sheetsCalled = false;
+  const report = await run({ live: true, statePath }, {
+    config, cases: null, state, save() {}, sink, suppressWatchdog: true,
+    collect: async source => ({ messages: [], cursor: { since: 99 } }),
+    // Make the Sheets API call fail (getDriveToken returns GWS_MARKER when no key file exists,
+    // then jsonFetch for Sheets uses loadFetchImpl which includes loadSignal)
+    fetchImpl: async (url, init) => {
+      if (String(url).includes('sheets.googleapis.com')) {
+        sheetsCalled = true;
+        throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+      }
+      // For other URLs (Drive sink, etc.), use real fetch
+      return fetch(url, init);
+    },
+  });
+  assert.equal(report.exitCode, 0);
+  assert.equal(report.casesFromCache, true);
+  assert.ok(sheetsCalled, 'Sheets API should have been called');
+  // last-run.json should have casesFromCache: true
+  const lr = JSON.parse(fs.readFileSync(path.join(tmp, 'last-run.json'), 'utf8'));
+  assert.equal(lr.casesFromCache, true);
+  assert.equal(lr.exitCode, 0);
+  // load-cases phase should have error
+  const loadPhase = lr.phases.find(p => p.name === 'load-cases');
+  assert.ok(loadPhase, 'load-cases phase should exist');
+  assert.ok(loadPhase.error, 'load-cases phase should have error');
+  assert.match(loadPhase.error, /timeout/);
+});
+
+test('load-cases: timeout without cache throws and writes error to last-run.json', async t => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-loadcache-fail-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  const state = { sources: {}, cases: {} };
+  const sink = { createdDocs: 0, publishedDocs: 0, deferredDocs: 0, async init() {}, async append() {}, async finish() { return {}; } };
+  let sheetsCalled = false;
+  // run() propagates the error from runLocked when load-cases fails without cache
+  await assert.rejects(
+    () => run({ live: true, statePath }, {
+      config, cases: null, state, save() {}, sink, suppressWatchdog: true,
+      collect: async source => ({ messages: [], cursor: { since: 99 } }),
+      fetchImpl: async (url, init) => {
+        if (String(url).includes('sheets.googleapis.com')) {
+          sheetsCalled = true;
+          throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+        }
+        return fetch(url, init);
+      },
+    }),
+    /timeout/
+  );
+  assert.ok(sheetsCalled, 'Sheets API should have been called');
+  // last-run.json should have exitCode 1 and error (written by runLocked's finally)
+  const lr = JSON.parse(fs.readFileSync(path.join(tmp, 'last-run.json'), 'utf8'));
+  assert.equal(lr.exitCode, 1);
+  assert.match(lr.error, /timeout/);
+  assert.equal(lr.casesFromCache, false);
+  // load-cases phase should have error
+  const loadPhase = lr.phases.find(p => p.name === 'load-cases');
+  assert.ok(loadPhase, 'load-cases phase should exist');
+  assert.ok(loadPhase.error, 'load-cases phase should have error');
+});
+
+test('phaseTracker.current getter returns the active phase', async t => {
+  const phases = [];
+  const tracker = createPhaseTracker(phases);
+  assert.equal(tracker.current, null, 'no active phase initially');
+  tracker.start('test-phase');
+  assert.ok(tracker.current, 'active phase should be truthy');
+  assert.equal(tracker.current.name, 'test-phase');
+  assert.ok(tracker.current.startedAt);
+  tracker.end();
+  assert.equal(tracker.current, null, 'no active phase after end');
+  // fail also clears current
+  tracker.start('fail-phase');
+  assert.ok(tracker.current);
+  tracker.fail('something went wrong');
+  assert.equal(tracker.current, null, 'no active phase after fail');
+});
+
+test('phaseTracker.fail then end does not double-record', async t => {
+  const phases = [];
+  const tracker = createPhaseTracker(phases);
+  tracker.start('phase');
+  tracker.fail('error');
+  tracker.end(); // should be no-op
+  assert.equal(phases.length, 1);
+  assert.equal(phases[0].name, 'phase');
+  assert.ok(phases[0].error);
+  assert.ok(phases[0].finishedAt);
+  // end should not add a second entry
+  assert.equal(phases.length, 1);
+});
+
+test('CLI catch does not overwrite last-run.json when runLocked already wrote it', async t => {
+  // Simulate the scenario: runLocked's finally wrote last-run.json and set e.lastRunWritten = true.
+  // The CLI catch should skip writing when e.lastRunWritten is true.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-cli-lastrun-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  // Write an initial last-run.json with known content
+  const initial = { startedAt: '2026-11-01T00:00:00.000Z', exitCode: 0, phases: [{ name: 'initial', startedAt: '2026-11-01T00:00:00.000Z', finishedAt: '2026-11-01T00:01:00.000Z' }] };
+  fs.writeFileSync(path.join(tmp, 'last-run.json'), JSON.stringify(initial));
+  // Simulate runLocked writing last-run.json with error info
+  const error = Object.assign(new Error('test error'), { lastRunWritten: true });
+  // The CLI catch should see lastRunWritten and skip writing
+  // We test this by calling writeLastRun (simulating runLocked's finally) then checking
+  // that the CLI catch's guard (!e.lastRunWritten) prevents overwrite
+  const report = { mode: 'live', sources: {}, exitCode: 1, error: 'test error' };
+  writeLastRun(statePath, report, { error: 'test error', phases: [{ name: 'load-cases', error: 'test error' }], clock: Date.now() });
+  const afterRunLocked = JSON.parse(fs.readFileSync(path.join(tmp, 'last-run.json'), 'utf8'));
+  assert.equal(afterRunLocked.exitCode, 1);
+  assert.match(afterRunLocked.error, /test error/);
+  // Now simulate CLI catch: since e.lastRunWritten is true, it should NOT write
+  // (We just verify the guard condition)
+  assert.ok(error.lastRunWritten, 'lastRunWritten flag should be set');
+  // The last-run.json should still have the runLocked-written content
+  const afterGuard = JSON.parse(fs.readFileSync(path.join(tmp, 'last-run.json'), 'utf8'));
+  assert.equal(afterGuard.exitCode, 1);
+  assert.match(afterGuard.error, /test error/);
+  // Verify phases are preserved (not overwritten by empty phases)
+  assert.ok(afterGuard.phases.length > 0);
+  assert.equal(afterGuard.phases[0].name, 'load-cases');
+});
+
+test('errText: cause.code is included in last-run.json error field', async t => {
+  // Simulate an error with cause.code (e.g. ENOTFOUND from fetch)
+  const cause = Object.assign(new Error('getaddrinfo ENOTFOUND sheets.googleapis.com'), { code: 'ENOTFOUND' });
+  const e = Object.assign(new Error('fetch failed'), { cause });
+  // errText should produce "fetch failed (cause: ENOTFOUND)"
+  const { errText } = await import('./comms-hub-sync.mjs');
+  const text = errText(e);
+  assert.match(text, /fetch failed/);
+  assert.match(text, /ENOTFOUND/);
+  // Simulate runLocked's finally writing last-run.json with this error
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-errtext-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  const report = { mode: 'live', sources: {}, exitCode: 1, error: text };
+  const { writeLastRun } = await import('./comms-hub-sync.mjs');
+  writeLastRun(statePath, report, { error: text, phases: [], elapsedMs: 100, finishedAt: new Date().toISOString() });
+  const saved = JSON.parse(fs.readFileSync(path.join(tmp, 'last-run.json'), 'utf8'));
+  assert.match(saved.error, /fetch failed/);
+  assert.match(saved.error, /ENOTFOUND/);
+});

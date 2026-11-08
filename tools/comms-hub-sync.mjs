@@ -19,6 +19,11 @@ const DAY = 86400000;
 const iso = n => new Date(n).toISOString();
 const digest = v => crypto.createHash('sha256').update(v).digest('hex');
 const norm = v => String(v || '').normalize('NFKC').toLowerCase();
+export const errText = e => {
+  const base = String(e.message).slice(0, 200);
+  const cause = e.cause?.code || (e.cause?.message ? String(e.cause.message).slice(0, 80) : '');
+  return cause ? `${base} (cause: ${cause})` : base;
+};
 const read = (p, fallback) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
 const atomicText = (p, text) => { fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 }); fs.writeFileSync(p + '.tmp', text, { mode: 0o600 }); fs.renameSync(p + '.tmp', p); };
 const atomic = (p, v) => atomicText(p, JSON.stringify(v, null, 2));
@@ -49,6 +54,7 @@ export function createPhaseTracker(phases) {
       }
       current = null;
     },
+    get current() { return current; },
   };
 }
 
@@ -59,6 +65,7 @@ export function writeLastRun(statePath, report, { error, phases, clock, elapsedM
   const startedAt = report._startedAt || (clock ? new Date(clock).toISOString() : new Date().toISOString());
   const entry = {
     startedAt,
+    processStartedAt: report._processStartedAt || null,
     finishedAt: finishedAt || new Date().toISOString(),
     elapsedMs: elapsedMs !== undefined ? elapsedMs : (clock ? Math.max(0, Date.now() - clock) : 0),
     mode: report.mode || 'live',
@@ -76,6 +83,7 @@ export function writeLastRun(statePath, report, { error, phases, clock, elapsedM
       return [k, r];
     })),
     budgetExhausted: !!report.budgetExhausted,
+    casesFromCache: !!report.casesFromCache,
     publishError: report.publishError || null,
     publishedDocs: report.publishedDocs ?? 0,
     createdDocs: report.createdDocs ?? 0,
@@ -719,7 +727,8 @@ export async function run(options = {}, deps = {}) {
     }, 600000);
     watchdog.unref();
   }
-  try { return await runLocked({ ...options, statePath, phases, startedAt }, deps); }
+  const processStartedAt = new Date(Date.now() - Math.round(process.uptime() * 1000)).toISOString();
+  try { return await runLocked({ ...options, statePath, phases, startedAt, processStartedAt }, deps); }
   finally { if (watchdog) clearTimeout(watchdog); release(); }
 }
 
@@ -746,14 +755,31 @@ async function runLocked(options = {}, deps = {}) {
   const phases = options.phases || [];
   const phaseTracker = createPhaseTracker(phases);
   report._startedAt = options.startedAt ? new Date(options.startedAt).toISOString() : new Date(started).toISOString();
+  report._processStartedAt = options.processStartedAt;
+  let runError = null;
   try {
     const fetchImpl = boundedFetch(globalSignal);
     let cases = deps.cases, sink = deps.sink;
     phaseTracker.start('load-cases');
     if (!cases) {
-      const token = await getDriveToken({ scope: 'https://www.googleapis.com/auth/spreadsheets.readonly', signal: globalSignal, fetchImpl });
-      const data = await jsonFetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.casesSheet}/values/${encodeURIComponent('案件一覧!A1:L')}`, { headers: { Authorization: `Bearer ${token}` } }, fetchImpl);
-      cases = parseCaseRows(data.values || []);
+      const loadSignal = AbortSignal.timeout(60000);
+      const loadFetchImpl = (url, init = {}) => fetchImpl(url, { ...init, signal: AbortSignal.any([globalSignal, loadSignal, init.signal || AbortSignal.timeout(20000)]) });
+      try {
+        const token = await getDriveToken({ scope: 'https://www.googleapis.com/auth/spreadsheets.readonly', signal: AbortSignal.any([globalSignal, loadSignal]), fetchImpl: loadFetchImpl });
+        const data = await jsonFetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.casesSheet}/values/${encodeURIComponent('案件一覧!A1:L')}`, { headers: { Authorization: `Bearer ${token}` } }, loadFetchImpl);
+        cases = parseCaseRows(data.values || []);
+        state.casesCache = { cases, at: iso(now) };
+        save();
+      } catch (e) {
+        if (state.casesCache && Array.isArray(state.casesCache.cases)) {
+          cases = state.casesCache.cases;
+          report.casesFromCache = true;
+          phaseTracker.fail(`load-cases failed, using cache: ${errText(e)}`);
+        } else {
+          phaseTracker.fail(errText(e));
+          throw e;
+        }
+      }
     }
     phaseTracker.end();
     phaseTracker.start('sink-init');
@@ -822,13 +848,21 @@ async function runLocked(options = {}, deps = {}) {
     report.elapsedMs = clock() - started;
     return report;
   } catch (e) {
-    if (clock() < deadline && !globalSignal.aborted && e.code !== 'HUB_BUDGET') throw e;
+    if (clock() < deadline && !globalSignal.aborted && e.code !== 'HUB_BUDGET') { runError = e; throw e; }
     report.budgetExhausted = true; report.exitCode = 0;
     for (const source of SOURCES) report.sources[source] ||= { skipped: 'process budget exhausted' };
     save(); return report;
   } finally {
+    if (runError) {
+      report.error = errText(runError);
+      report.exitCode = 1;
+      if (phaseTracker.current) phaseTracker.fail(errText(runError));
+    }
     save();
-    if (live) writeLastRun(statePath, report, { phases, elapsedMs: clock() - started, finishedAt: iso(clock()) });
+    if (live) {
+      writeLastRun(statePath, report, { error: report.error, phases, elapsedMs: clock() - started, finishedAt: iso(clock()) });
+      if (runError) runError.lastRunWritten = true;
+    }
   }
 }
 export function parseArgs(args) {
@@ -855,9 +889,14 @@ if (isEntry(import.meta.url)) {
   try { const report = await run(parseArgs(process.argv.slice(2))); console.log(JSON.stringify(report, null, 2)); process.exitCode = report.exitCode; }
   catch (e) {
     console.error(e.message); process.exitCode = 1;
-    try {
-      const home = process.env.ORGIAST_HOME || os.homedir();
-      writeLastRun(path.join(home, '.claude', 'comms-hub', 'state.json'), { mode: 'live', sources: {}, exitCode: 1 }, { error: e.message, elapsedMs: 0, finishedAt: new Date().toISOString() });
-    } catch (_) { /* best-effort */ }
+    // runLocked's finally already wrote last-run.json with error info when the
+    // exception escaped from it (flag `e.lastRunWritten` is set). Only write here
+    // when runLocked was never entered (e.g. parseArgs error before run()).
+    if (!e.lastRunWritten) {
+      try {
+        const home = process.env.ORGIAST_HOME || os.homedir();
+        writeLastRun(path.join(home, '.claude', 'comms-hub', 'state.json'), { mode: 'live', sources: {}, exitCode: 1 }, { error: e.message, elapsedMs: 0, finishedAt: new Date().toISOString() });
+      } catch (_) { /* best-effort */ }
+    }
   }
 }

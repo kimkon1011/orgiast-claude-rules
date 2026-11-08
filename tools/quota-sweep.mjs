@@ -277,6 +277,32 @@ export function commandRunner(spawnImpl = spawnSync, log = () => {}) {
 const pointerFile = tree => path.join(tree, '.git');
 const accessDenied = error => error && (error.code === 'EPERM' || error.code === 'EACCES');
 
+// 2026-11-04 実測: shared repo の .git/HEAD が41バイトすべて NUL になり、prepareTree の
+// 最初の git fetch が「not a git repository」exit 128 で2回連続失敗した。共有 repo は main の
+// checkout として管理しているため、main ref が実在すると確認できる場合だけ壊れた HEAD を復元する。
+// local main が無い clone では origin/main の確認済み commit へ detached HEAD として復元する。
+// ref の裏付けがない状態では推測で書き換えず、従来どおり失敗させる。
+export function repairSharedHead(shared, { readFile = fs.readFileSync, writeFile = fs.writeFileSync } = {}) {
+  const gitDir = path.join(shared, '.git'), headFile = path.join(gitDir, 'HEAD');
+  const head = String(readFile(headFile, 'utf8'));
+  if (/^(?:ref: refs\/[^\0\r\n]+|[0-9a-f]{40,64})\s*$/i.test(head)) return false;
+  const looseMain = path.join(gitDir, 'refs', 'heads', 'main');
+  let main = '';
+  try { main = String(readFile(looseMain, 'utf8')).trim(); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  let packed = '';
+  if (!/^[0-9a-f]{40,64}$/i.test(main)) {
+    try { packed = String(readFile(path.join(gitDir, 'packed-refs'), 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    main = packed.match(/^([0-9a-f]{40,64}) refs\/heads\/main$/im)?.[1] || '';
+  }
+  if (main) writeFile(headFile, 'ref: refs/heads/main\n');
+  else {
+    const originMain = packed.match(/^([0-9a-f]{40,64}) refs\/remotes\/origin\/main$/im)?.[1] || '';
+    if (!originMain) throw new Error('Shared repository HEAD is invalid and no verified main ref is available');
+    writeFile(headFile, `${originMain}\n`);
+  }
+  return true;
+}
+
 // 2026-10-21 実測: worktree の `.git` がウイルス対策/索引サービスに掴まれると fs の open が
 // EPERM になり、prepareTree が毎回ここで落ちて quota-sweep:codex が12時間ぶん6連続 failed
 // (ticks=0) になった。EPERM は読み取り属性や一時ロックで起きるので、chmod で解除して再試行する。
@@ -335,6 +361,7 @@ export function preserveDirtyTree({ tree, run, log = () => {}, now = Date.now, h
 
 export function prepareTree({ home, provider, run, previous, needRelativePointer = false, io = {}, log = () => {} }) {
   const shared = path.join(home, '.claude', 'nightly-repo'), tree = path.join(home, '.claude', 'quota-sweep-repo');
+  if (repairSharedHead(shared, io)) log('quota-sweep: repaired invalid shared repository HEAD to refs/heads/main');
   run('git', ['fetch', 'origin', 'main', '--quiet'], shared);
   if (!fs.existsSync(tree)) run('git', ['worktree', 'add', '--detach', tree, 'origin/main'], shared);
   // Relative worktree pointer is usable by both Windows git and WSL git.

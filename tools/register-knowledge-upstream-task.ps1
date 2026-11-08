@@ -25,9 +25,9 @@ $node = (Get-Command node -CommandType Application -ErrorAction Stop | Where-Obj
 if (-not $node) { throw 'node.exe not found' }
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, '--sync-down') -WorkingDirectory $repo
 # Run every hour at :17 to spread load vs other hourly tasks
-$trigger = New-ScheduledTaskTrigger -Daily -At '00:17'
-$trigger.RepetitionInterval = (New-TimeSpan -Hours 1)
-$trigger.RepetitionDuration = (New-TimeSpan -Days 365)
+$next = (Get-Date).Date.AddHours((Get-Date).Hour).AddMinutes(17)
+if ($next -le (Get-Date)) { $next = $next.AddHours(1) }
+$trigger = New-ScheduledTaskTrigger -Once -At $next -RepetitionInterval (New-TimeSpan -Hours 1)
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 try {
   $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
@@ -37,5 +37,9 @@ try {
 }
 Write-Host "OK: task $taskName registered (hourly at :17, limit 15 min)"
 $registered = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+if ($registered.Triggers[0].Repetition.Interval -ne 'PT1H') {
+  Write-Error "Task $taskName read-back failed: Repetition.Interval is '$($registered.Triggers[0].Repetition.Interval)', expected 'PT1H'"
+  exit 1
+}
 $registered | Select-Object TaskName, State
 $registered.Actions | Select-Object Execute, Arguments, WorkingDirectory

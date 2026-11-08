@@ -408,7 +408,7 @@ test('settings dispatcher timeout bounds the whole event and reports unstarted c
   const budgets = [];
   const out = await dispatch('PreToolUse', '{}', { home, concurrency: 1, overloaded: false,
     manifest: { events: { PreToolUse: [hook, hook, hook] } },
-    async execute(_hook, _raw, timeout) { budgets.push(timeout); await new Promise(r => setTimeout(r, timeout)); return { status: 0 }; },
+    async execute(_hook, _raw, timeout) { budgets.push(timeout); await new Promise(r => setTimeout(r, timeout + 100)); return { status: 0 }; },
   });
   assert.equal(budgets.length, 1);
   assert.ok(budgets[0] > 0 && budgets[0] <= 3000);

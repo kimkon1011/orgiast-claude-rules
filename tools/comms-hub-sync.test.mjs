@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { matchCase, exclusion, processPage, run, SOURCES, createDriveSink, parseArgs, publishedText, parseEntries, collectSource, render, parseCaseRows } from './comms-hub-sync.mjs';
+import { matchCase, exclusion, processPage, run, SOURCES, createDriveSink, parseArgs, publishedText, parseEntries, collectSource, render, parseCaseRows, writeLastRun, createPhaseTracker } from './comms-hub-sync.mjs';
 const config = JSON.parse(fs.readFileSync(new URL('../config/comms-hub.json', import.meta.url)));
 const cases = [{ id: '261101ABC', name: '展示会Alpha', client: '共通顧客' }, { id: 'C1234', name: '制作Beta', client: '共通顧客' }];
 const message = { source: 'gmail-kim', id: 'same', ts: '2026-11-01T02:00:00.000Z', subject: '261101ABC 見積', text: '業務連絡', sender: 'staff@example.test' };
@@ -868,4 +868,116 @@ test('line-chat: (i) same-timestamp messages not lost with < comparison, dedup h
  assert.equal(page.messages.length, 1);
  assert.equal(page.messages[0].id, 'm2');
  assert.equal(page.messages[0].text, '未処理（同タイムスタンプ）');
+});
+
+test('last-run.json: live run writes file with phases and source names, no tokens', async t => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-lastrun-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  const sink = { createdDocs: 0, publishedDocs: 0, deferredDocs: 0, async init() {}, async append() {}, async finish() { return {}; } };
+  const report = await run({ live: true, statePath }, {
+    config, cases,
+    state: { sources: {}, cases: {} },
+    save() {},
+    sink,
+    suppressWatchdog: true,
+    collect: async source => ({ messages: [], cursor: { since: 99 } }),
+  });
+  const lrPath = path.join(tmp, 'last-run.json');
+  assert.ok(fs.existsSync(lrPath), 'last-run.json should exist');
+  const lr = JSON.parse(fs.readFileSync(lrPath, 'utf8'));
+  assert.equal(lr.mode, 'live');
+  assert.equal(lr.exitCode, 0);
+  assert.ok(lr.startedAt);
+  assert.ok(lr.finishedAt);
+  assert.ok(lr.elapsedMs > 0);
+  assert.ok(Array.isArray(lr.phases));
+  // Each source name should appear in phases
+  for (const s of SOURCES) assert.ok(lr.phases.some(p => p.name === `collect:${s}`), `phase for ${s} missing`);
+  assert.ok(lr.phases.some(p => p.name === 'publish'), 'publish phase missing');
+  assert.ok(lr.phases.every(p => p.startedAt && p.finishedAt), 'all phases have start/finish');
+  // No tokens, emails, or message bodies
+  const raw = fs.readFileSync(lrPath, 'utf8');
+  assert.ok(!raw.includes('mock'), 'no token string');
+  assert.ok(!raw.includes('@'), 'no email addresses');
+  assert.ok(!raw.includes('業務連絡'), 'no message bodies');
+  // JSONL file exists and has at least one entry
+  const jsonlPath = path.join(tmp, 'last-runs.jsonl');
+  assert.ok(fs.existsSync(jsonlPath));
+  const lines = fs.readFileSync(jsonlPath, 'utf8').trim().split('\n').filter(Boolean);
+  assert.equal(lines.length, 1);
+  const parsed = JSON.parse(lines[0]);
+  assert.equal(parsed.mode, 'live');
+  assert.equal(parsed.exitCode, 0);
+});
+
+test('last-run.json: error in run still writes last-run.json with error (via sink failure)', async t => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-lastrun-err-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  // Make sink.finish throw an unexpected error inside runLocked
+  const sink = {
+    createdDocs: 0, publishedDocs: 0, deferredDocs: 0,
+    async init() {},
+    async append() {},
+    async finish() { throw new Error('Drive API HTTP 500 something-went-wrong'); }
+  };
+  const report = await run({ live: true, statePath }, {
+    config, cases,
+    state: { sources: {}, cases: {} },
+    save() {},
+    sink,
+    suppressWatchdog: true,
+    collect: async source => ({ messages: [], cursor: { since: 99 } }),
+  });
+  const lrPath = path.join(tmp, 'last-run.json');
+  assert.ok(fs.existsSync(lrPath));
+  const lr = JSON.parse(fs.readFileSync(lrPath, 'utf8'));
+  assert.equal(lr.mode, 'live');
+  assert.ok(lr.publishError);
+  assert.match(String(lr.publishError), /something-went-wrong/);
+  // JSONL also has the error entry
+  const jsonlPath = path.join(tmp, 'last-runs.jsonl');
+  assert.ok(fs.existsSync(jsonlPath));
+  const lines = fs.readFileSync(jsonlPath, 'utf8').trim().split('\n').filter(Boolean);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /something-went-wrong/);
+});
+
+test('last-run.json: no token/body in error run output', async t => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-lastrun-nosec-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  const phases = [];
+  const tracker = createPhaseTracker(phases);
+  tracker.start('test-phase');
+  tracker.end();
+  const report = { mode: 'live', sources: {}, exitCode: 1 };
+  writeLastRun(statePath, report, { error: 'something failed', phases, clock: Date.now() });
+  const raw = fs.readFileSync(path.join(tmp, 'last-run.json'), 'utf8');
+  assert.ok(!raw.includes('@'));
+  assert.match(raw, /something failed/);
+  const jsonlRaw = fs.readFileSync(path.join(tmp, 'last-runs.jsonl'), 'utf8');
+  assert.match(jsonlRaw, /something failed/);
+});
+
+test('last-runs.jsonl: caps at 20 entries', async t => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-jsonl-cap-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  const timestamps = [];
+  for (let i = 0; i < 25; i++) {
+    const ts = new Date(Date.now() + i * 1000).toISOString();
+    timestamps.push({ startedAt: ts, clock: Date.now() + i * 1000 });
+    writeLastRun(statePath, { mode: 'live', sources: {}, exitCode: 0, _startedAt: ts }, { clock: timestamps[i].clock });
+  }
+  const jsonlPath = path.join(tmp, 'last-runs.jsonl');
+  const lines = fs.readFileSync(jsonlPath, 'utf8').trim().split('\n').filter(Boolean);
+  assert.equal(lines.length, 20, 'should have exactly 20 lines');
+  const parsed = lines.map(l => JSON.parse(l));
+  assert.ok(parsed.every(e => e.mode === 'live'));
+  assert.equal(parsed.length, new Set(parsed.map(e => e.startedAt)).size, 'all entries should have unique startedAt');
+  // The kept lines should be the last 20 of 25, i.e. entries 5 through 24
+  assert.equal(parsed[0].startedAt, timestamps[5].startedAt, 'first kept entry should be the 6th written');
+  assert.equal(parsed[19].startedAt, timestamps[24].startedAt, 'last kept entry should be the 25th written');
 });

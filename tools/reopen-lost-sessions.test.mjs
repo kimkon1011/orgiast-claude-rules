@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry } from './reopen-lost-sessions.mjs';
+import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress } from './reopen-lost-sessions.mjs';
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
 const exit = { event_type: 'system', payload: { reason: 'host_exit' }, created_at: since };
@@ -963,4 +963,102 @@ test('reopenLost: 再オープン後の検証も aliveSource を正しく記録�
   assert.equal(result.reopened.length, 1);
   assert.deepEqual(result.verified, []);
   assert.deepEqual(result.unverified, ['one']);
+});
+
+// ── writeProgress ───────────────────────────────────────
+
+test('writeProgress creates progress file with correct content', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wp-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  const fixedNow = Date.parse('2026-11-09T00:00:00.000Z');
+  writeProgress(base, 'lock', 'acquired', () => fixedNow);
+  const progressPath = path.join(base, 'reopen-lost-sessions-progress.json');
+  assert.ok(fs.existsSync(progressPath));
+  const data = JSON.parse(fs.readFileSync(progressPath, 'utf8'));
+  assert.equal(data.pid, process.pid);
+  assert.equal(data.stage, 'lock');
+  assert.equal(data.detail, 'acquired');
+  assert.equal(data.at, new Date(fixedNow).toISOString());
+});
+
+test('writeProgress default base uses homedir', t => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'wp-home-'));
+  t.after(() => fs.rmSync(tmpHome, { recursive: true, force: true }));
+  const origHome = os.homedir;
+  os.homedir = () => tmpHome;
+  fs.mkdirSync(path.join(tmpHome, '.claude'), { recursive: true });
+  try {
+    const fixedNow = Date.parse('2026-11-09T00:00:01.000Z');
+    writeProgress(undefined, 'auth', 'credentials loaded', () => fixedNow);
+    const progressPath = path.join(tmpHome, '.claude', 'reopen-lost-sessions-progress.json');
+    assert.ok(fs.existsSync(progressPath));
+    const data = JSON.parse(fs.readFileSync(progressPath, 'utf8'));
+    assert.equal(data.stage, 'auth');
+    assert.equal(data.detail, 'credentials loaded');
+  } finally {
+    os.homedir = origHome;
+  }
+});
+
+test('writeProgress overwrites previous content', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wp-over-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  const fixedNow = Date.parse('2026-11-09T00:00:02.000Z');
+  writeProgress(base, 'lock', 'acquired', () => fixedNow);
+  writeProgress(base, 'alive', 'source=agents', () => fixedNow + 1000);
+  const data = JSON.parse(fs.readFileSync(path.join(base, 'reopen-lost-sessions-progress.json'), 'utf8'));
+  assert.equal(data.stage, 'alive');
+  assert.equal(data.detail, 'source=agents');
+});
+
+// ── acquireLock dual update ─────────────────────────────
+
+test('acquireLock dual update: futimesSync and utimesSync run without error', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lock-dual-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const lockFile = path.join(root, 'test.lock');
+  const release = acquireLock(lockFile);
+  assert.ok(release, 'lock should be acquired');
+  // Verify the file exists and has pid content
+  assert.ok(fs.existsSync(lockFile));
+  const content = fs.readFileSync(lockFile, 'utf8');
+  assert.equal(content, String(process.pid));
+  // mtime should be set (writeSync + futimesSync both set it)
+  const stat = fs.statSync(lockFile);
+  assert.ok(stat.mtimeMs > 0, `mtime should be positive, got ${stat.mtimeMs}`);
+  // Release properly removes the lock
+  release();
+  assert.equal(fs.existsSync(lockFile), false, 'lock should be released');
+});
+
+// ── reopenLost writes progress at key stages ────────────
+
+test('reopenLost writes progress during dry run', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-progress-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+  ].map(JSON.stringify).join('\n'));
+
+  await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe',
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+
+  // Progress file should exist with at least 'done' stage
+  const progressPath = path.join(base, 'reopen-lost-sessions-progress.json');
+  assert.ok(fs.existsSync(progressPath), 'progress file should exist');
+  const data = JSON.parse(fs.readFileSync(progressPath, 'utf8'));
+  assert.equal(data.stage, 'done');
+  assert.equal(data.detail, 'log written');
 });

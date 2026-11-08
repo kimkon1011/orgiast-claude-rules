@@ -1,10 +1,31 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { matchCase, exclusion, processPage, run, SOURCES, createDriveSink, parseArgs, publishedText, parseEntries, collectSource, render, parseCaseRows } from './comms-hub-sync.mjs';
+import { matchCase, exclusion, processPage, run, SOURCES, createDriveSink, parseArgs, publishedText, parseEntries, collectSource, render, parseCaseRows, writeLastRun, createPhaseTracker } from './comms-hub-sync.mjs';
+
+// All tests must use a temp ORGIAST_HOME so no run() call writes to ~/.claude
+const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-test-home-'));
+const priorOrgHome = process.env.ORGIAST_HOME;
+process.env.ORGIAST_HOME = testHome;
+const homedirLastRunPath = path.join(os.homedir(), '.claude', 'comms-hub', 'last-run.json');
+let homedirLastRunBefore = null;
+try { homedirLastRunBefore = { exists: true, mtimeMs: fs.statSync(homedirLastRunPath).mtimeMs }; }
+catch (e) { if (e.code === 'ENOENT') homedirLastRunBefore = { exists: false }; else throw e; }
+after(() => {
+  process.env.ORGIAST_HOME = priorOrgHome;
+  try { const s = fs.statSync(homedirLastRunPath); assert.equal(s.mtimeMs, homedirLastRunBefore.mtimeMs, 'homedir last-run.json mtime changed'); }
+  catch (e) { if (e.code === 'ENOENT') assert.ok(!homedirLastRunBefore.exists, 'homedir last-run.json was created'); else throw e; }
+  fs.rmSync(testHome, { recursive: true, force: true });
+});
+// Helper: create a temp dir for test home (used by collectSource) and clean up on test finish
+function makeTestHome(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'comms-hub-test-'));
+  t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} });
+  return dir;
+}
 const config = JSON.parse(fs.readFileSync(new URL('../config/comms-hub.json', import.meta.url)));
 const cases = [{ id: '261101ABC', name: '展示会Alpha', client: '共通顧客' }, { id: 'C1234', name: '制作Beta', client: '共通顧客' }];
 const message = { source: 'gmail-kim', id: 'same', ts: '2026-11-01T02:00:00.000Z', subject: '261101ABC 見積', text: '業務連絡', sender: 'staff@example.test' };
@@ -135,17 +156,19 @@ test('source cursor advances only after all destinations commit', async () => {
   await assert.rejects(processPage({source:'gmail-kim',page:{messages:[message],cursor:{since:20,next:'p2'}},state,cases,config,live:true,sink:{async append(){throw Error('drive denied');}}}));
   assert.deepEqual(state.sources['gmail-kim'].cursor,{since:10});
 });
-test('Gmail pagination preserves original upper boundary and account', async () => {
+test('Gmail pagination preserves original upper boundary and account', async t => {
   const {collectSource}=await import('./comms-hub-sync.mjs');
-  const ctx={config,home:'.',since:100000,until:300000,cursor:{end:200000,next:'p1'},state:{},gmailSearch:async args=>{
+  const home=makeTestHome(t);
+  const ctx={config,home,since:100000,until:300000,cursor:{end:200000,next:'p1'},state:{},gmailSearch:async args=>{
     assert.equal(args.user,config.mailboxes['gmail-seisaku']); assert.equal(args.pageToken,'p1'); assert.match(args.query,/before:201/);
     return {messages:[],nextPageToken:'p2'};
   }};
   assert.deepEqual((await collectSource('gmail-seisaku',ctx)).cursor,{since:100000,end:200000,next:'p2'});
 });
-test('Discord resumes a full page even when legacy truncated flag is false', async()=>{
+test('Discord resumes a full page even when legacy truncated flag is false', async t=>{
   const {collectSource}=await import('./comms-hub-sync.mjs');
-  const ctx={config:{...config,maxPerSource:1},home:'.',since:0,until:Date.now(),state:{},discordToken:'mock',listChannels:async()=>[{id:'a',type:0,name:'work'}],discordFetch:async()=>({truncated:false,messages:[{id:'m',timestamp:message.ts,content:'見積',author:{username:'staff'}}]})};
+  const home=makeTestHome(t);
+  const ctx={config:{...config,maxPerSource:1},home,since:0,until:Date.now(),state:{},discordToken:'mock',listChannels:async()=>[{id:'a',type:0,name:'work'}],discordFetch:async()=>({truncated:false,messages:[{id:'m',timestamp:message.ts,content:'見積',author:{username:'staff'}}]})};
   const page=await collectSource('discord',ctx);
   assert.equal(page.cursor.before,'m'); assert.equal(page.cursor.channel,'a');
 });
@@ -352,7 +375,8 @@ test('Gmail timeout commits each completed message and resumes only pending IDs 
   await processPage({source:message.source,page:{messages:[m],cursor:state.sources[message.source].cursor},state,cases,config,sink,live:true});
   if(!resume)controller.abort(new DOMException('source deadline','TimeoutError'));
  };
- const ctx={config,home:'.',since:1,until:2000000000000,state:state.sources[message.source],signal:controller.signal,fetchImpl,commitMessage,
+ const home=makeTestHome(t);
+ const ctx={config,home,since:1,until:2000000000000,state:state.sources[message.source],signal:controller.signal,fetchImpl,commitMessage,
   gmailSearch:args=>searchGmail({...args,getToken:async()=> 'mock'})};
  const page=await collectSource(message.source,ctx);
  assert.equal(page.partial,true);assert.deepEqual(page.cursor.pendingIds,['pending']);
@@ -367,9 +391,10 @@ test('Gmail timeout commits each completed message and resumes only pending IDs 
  assert.equal(Object.keys(state.sources[message.source].processed).length,2);
 });
 
-test('Gmail metadata filters automated mail and caps concurrent requests at five',async()=>{
+test('Gmail metadata filters automated mail and caps concurrent requests at five',async t=>{
  const {searchGmail}=await import('./gmail-search.mjs');let active=0,peak=0;const full=[];
- const page=await collectSource('gmail-kim',{config,home:'.',since:1,until:2000000000000,state:{},
+ const home=makeTestHome(t);
+ const page=await collectSource('gmail-kim',{config,home,since:1,until:2000000000000,state:{},
   gmailSearch:args=>searchGmail({...args,getToken:async()=> 'mock'}),fetchImpl:async url=>{
    const u=new URL(url);if(u.pathname.endsWith('/messages'))return Response.json({messages:Array.from({length:12},(_,i)=>({id:String(i)}))});
    active++;peak=Math.max(peak,active);await new Promise(r=>setTimeout(r,2));active--;
@@ -468,8 +493,9 @@ test('Drive initialization failure still saves source cursors and exits zero',as
 test('line-chat: fetches LINE chats, filters non-business at chat level, ascending sort', async t => {
  const { collectSource } = await import('./comms-hub-sync.mjs');
  const now = Date.now();
+ const home=makeTestHome(t);
  const ctx = {
-   config, home: '.', since: 0, until: 2000000000000,
+   config, home, since: 0, until: 2000000000000,
    state: {}, beeperToken: 'mock', cases,
    fetchImpl: async url => {
      const u = String(url);
@@ -502,8 +528,9 @@ test('line-chat: fetches LINE chats, filters non-business at chat level, ascendi
 test('line-chat: paginates backward across pages, stops at sinceMs, returns ascending', async t => {
  const { collectSource } = await import('./comms-hub-sync.mjs');
  const now = Date.now();
+ const home=makeTestHome(t);
  const ctx = {
-   config, home: '.', since: now - 2000, until: 2000000000000,
+   config, home, since: now - 2000, until: 2000000000000,
    state: {}, beeperToken: 'mock', cases,
    fetchImpl: async url => {
      const u = String(url);
@@ -554,9 +581,10 @@ test('line-chat: limit reached mid-chat returns resumeTimestamp, next run skips 
  const { collectSource, messageKey } = await import('./comms-hub-sync.mjs');
  const now = Date.now();
  const m1Key = messageKey({ source: 'line-chat', channelId: '!chat1', id: 'm1' });
+ const home=makeTestHome(t);
  const ctx = {
    config: { ...config, sourceLimits: { 'line-chat': 2 }, maxPerSource: 2 },
-   home: '.', since: 0, until: 2000000000000,
+   home, since: 0, until: 2000000000000,
    state: {}, beeperToken: 'mock', cases,
    fetchImpl: async url => {
      const u = String(url);
@@ -594,8 +622,9 @@ test('line-chat: limit reached mid-chat returns resumeTimestamp, next run skips 
 test('line-chat: non-business chats never call messages API', async t => {
  const { collectSource } = await import('./comms-hub-sync.mjs');
  let messagesCalled = false;
+ const home=makeTestHome(t);
  const ctx = {
-   config, home: '.', since: 0, until: 2000000000000,
+   config, home, since: 0, until: 2000000000000,
    state: {}, beeperToken: 'mock', cases,
    fetchImpl: async url => {
      const u = String(url);
@@ -621,8 +650,9 @@ test('line-chat: non-business chats never call messages API', async t => {
 
 test('line-chat: half-width kana title matches business pattern', async t => {
  const { collectSource } = await import('./comms-hub-sync.mjs');
+ const home=makeTestHome(t);
  const ctx = {
-   config, home: '.', since: 0, until: 2000000000000,
+   config, home, since: 0, until: 2000000000000,
    state: {}, beeperToken: 'mock', cases,
    fetchImpl: async url => {
      const u = String(url);
@@ -642,8 +672,9 @@ test('line-chat: half-width kana title matches business pattern', async t => {
 
 test('line-chat: isDeleted messages are discarded', async t => {
  const { collectSource } = await import('./comms-hub-sync.mjs');
+ const home=makeTestHome(t);
  const ctx = {
-   config, home: '.', since: 0, until: 2000000000000,
+   config, home, since: 0, until: 2000000000000,
    state: {}, beeperToken: 'mock', cases,
    fetchImpl: async url => {
      const u = String(url);
@@ -737,8 +768,9 @@ test('line-chat: excluded chats logged to local file as object keyed by id', asy
 
 test('line-chat: messages with attachments appends attachment info', async t => {
  const { collectSource } = await import('./comms-hub-sync.mjs');
+ const home=makeTestHome(t);
  const ctx = {
-   config, home: '.', since: 0, until: 2000000000000,
+   config, home, since: 0, until: 2000000000000,
    state: {}, beeperToken: 'mock', cases,
    fetchImpl: async url => {
      const u = String(url);
@@ -767,8 +799,9 @@ test('line-chat: (g) state.processed with messageKey skips already-processed mes
  const { collectSource, messageKey } = await import('./comms-hub-sync.mjs');
  const now = Date.now();
  const m1Key = messageKey({ source: 'line-chat', channelId: '!a:beeper.local', id: 'm1' });
+ const home=makeTestHome(t);
  const ctx = {
-   config, home: '.', since: 0, until: 2000000000000,
+   config, home, since: 0, until: 2000000000000,
    state: { processed: { [m1Key]: '2026-11-07T00:00:00.000Z' } },
    beeperToken: 'mock', cases,
    fetchImpl: async url => {
@@ -795,9 +828,10 @@ test('line-chat: (h) early-return cursor includes end, subsequent calls use save
  const now = Date.now();
  const until = now + 100000;
  let msgCalls = 0;
+ const home=makeTestHome(t);
  const ctxBase = {
    config: { ...config, sourceLimits: { 'line-chat': 2 } },
-   home: '.', since: 0, until,
+   home, since: 0, until,
    state: {}, beeperToken: 'mock', cases,
    fetchImpl: async url => {
      const u = String(url);
@@ -844,8 +878,9 @@ test('line-chat: (i) same-timestamp messages not lost with < comparison, dedup h
  const now = Date.now();
  const ts = new Date(now + 10).toISOString();
  const processedKey = messageKey({ source: 'line-chat', channelId: '!a:beeper.local', id: 'm1' });
+ const home=makeTestHome(t);
  const ctx = {
-   config, home: '.', since: 0, until: 2000000000000,
+   config, home, since: 0, until: 2000000000000,
    state: { processed: { [processedKey]: '2026-11-07T00:00:00.000Z' } },
    beeperToken: 'mock', cases,
    cursor: { chatId: '!a:beeper.local', resumeTimestamp: ts },
@@ -868,4 +903,128 @@ test('line-chat: (i) same-timestamp messages not lost with < comparison, dedup h
  assert.equal(page.messages.length, 1);
  assert.equal(page.messages[0].id, 'm2');
  assert.equal(page.messages[0].text, '未処理（同タイムスタンプ）');
+});
+
+test('last-run.json: live run writes file with phases and source names, no tokens', async t => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-lastrun-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  const sink = { createdDocs: 0, publishedDocs: 0, deferredDocs: 0, async init() {}, async append() {}, async finish() { return {}; } };
+  const report = await run({ live: true, statePath }, {
+    config, cases,
+    state: { sources: {}, cases: {} },
+    save() {},
+    sink,
+    suppressWatchdog: true,
+    collect: async source => ({ messages: [], cursor: { since: 99 } }),
+  });
+  const lrPath = path.join(tmp, 'last-run.json');
+  assert.ok(fs.existsSync(lrPath), 'last-run.json should exist');
+  const lr = JSON.parse(fs.readFileSync(lrPath, 'utf8'));
+  assert.equal(lr.mode, 'live');
+  assert.equal(lr.exitCode, 0);
+  assert.ok(lr.startedAt);
+  assert.ok(lr.finishedAt);
+  assert.ok(typeof lr.elapsedMs === 'number' && lr.elapsedMs >= 0);
+  assert.ok(Array.isArray(lr.phases));
+  // Each source name should appear in phases
+  for (const s of SOURCES) assert.ok(lr.phases.some(p => p.name === `collect:${s}`), `phase for ${s} missing`);
+  assert.ok(lr.phases.some(p => p.name === 'publish'), 'publish phase missing');
+  assert.ok(lr.phases.every(p => p.startedAt && p.finishedAt), 'all phases have start/finish');
+  // No tokens, emails, or message bodies
+  const raw = fs.readFileSync(lrPath, 'utf8');
+  assert.ok(!raw.includes('mock'), 'no token string');
+  assert.ok(!raw.includes('@'), 'no email addresses');
+  assert.ok(!raw.includes('業務連絡'), 'no message bodies');
+  // JSONL file exists and has at least one entry
+  const jsonlPath = path.join(tmp, 'last-runs.jsonl');
+  assert.ok(fs.existsSync(jsonlPath));
+  const lines = fs.readFileSync(jsonlPath, 'utf8').trim().split('\n').filter(Boolean);
+  assert.equal(lines.length, 1);
+  const parsed = JSON.parse(lines[0]);
+  assert.equal(parsed.mode, 'live');
+  assert.equal(parsed.exitCode, 0);
+});
+
+test('last-run.json: error in run still writes last-run.json with error (via sink failure)', async t => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-lastrun-err-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  // Make sink.finish throw an unexpected error inside runLocked
+  const sink = {
+    createdDocs: 0, publishedDocs: 0, deferredDocs: 0,
+    async init() {},
+    async append() {},
+    async finish() { throw new Error('Drive API HTTP 500 something-went-wrong'); }
+  };
+  const report = await run({ live: true, statePath }, {
+    config, cases,
+    state: { sources: {}, cases: {} },
+    save() {},
+    sink,
+    suppressWatchdog: true,
+    collect: async source => ({ messages: [], cursor: { since: 99 } }),
+  });
+  const lrPath = path.join(tmp, 'last-run.json');
+  assert.ok(fs.existsSync(lrPath));
+  const lr = JSON.parse(fs.readFileSync(lrPath, 'utf8'));
+  assert.equal(lr.mode, 'live');
+  assert.ok(lr.publishError);
+  assert.match(String(lr.publishError), /something-went-wrong/);
+  // JSONL also has the error entry
+  const jsonlPath = path.join(tmp, 'last-runs.jsonl');
+  assert.ok(fs.existsSync(jsonlPath));
+  const lines = fs.readFileSync(jsonlPath, 'utf8').trim().split('\n').filter(Boolean);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /something-went-wrong/);
+});
+
+test('last-run.json: no token/body in error run output', async t => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-lastrun-nosec-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  const phases = [];
+  const tracker = createPhaseTracker(phases);
+  tracker.start('test-phase');
+  tracker.end();
+  const report = { mode: 'live', sources: {}, exitCode: 1 };
+  writeLastRun(statePath, report, { error: 'something failed', phases, clock: Date.now() });
+  const raw = fs.readFileSync(path.join(tmp, 'last-run.json'), 'utf8');
+  assert.ok(!raw.includes('@'));
+  assert.match(raw, /something failed/);
+  const jsonlRaw = fs.readFileSync(path.join(tmp, 'last-runs.jsonl'), 'utf8');
+  assert.match(jsonlRaw, /something failed/);
+});
+
+test('last-runs.jsonl: caps at 20 entries', async t => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-jsonl-cap-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  const timestamps = [];
+  for (let i = 0; i < 25; i++) {
+    const ts = new Date(Date.now() + i * 1000).toISOString();
+    timestamps.push({ startedAt: ts, clock: Date.now() + i * 1000 });
+    writeLastRun(statePath, { mode: 'live', sources: {}, exitCode: 0, _startedAt: ts }, { clock: timestamps[i].clock });
+  }
+  const jsonlPath = path.join(tmp, 'last-runs.jsonl');
+  const lines = fs.readFileSync(jsonlPath, 'utf8').trim().split('\n').filter(Boolean);
+  assert.equal(lines.length, 20, 'should have exactly 20 lines');
+  const parsed = lines.map(l => JSON.parse(l));
+  assert.ok(parsed.every(e => e.mode === 'live'));
+  assert.equal(parsed.length, new Set(parsed.map(e => e.startedAt)).size, 'all entries should have unique startedAt');
+  // The kept lines should be the last 20 of 25, i.e. entries 5 through 24
+  assert.equal(parsed[0].startedAt, timestamps[5].startedAt, 'first kept entry should be the 6th written');
+  assert.equal(parsed[19].startedAt, timestamps[24].startedAt, 'last kept entry should be the 25th written');
+});
+
+test('regression: repo .claude/comms-hub/line-chat-excluded.json is never modified by tests', async t => {
+  const repoExcludedPath = path.join(new URL('..', import.meta.url).pathname, '.claude', 'comms-hub', 'line-chat-excluded.json');
+  // Read content before any test (the `after` hook on the last-run.json test may have run;
+  // this test runs in parallel, but we compare contents deterministically — any in-test write
+  // to this path would have produced a git-dirty state or test pollution.)
+  const before = (() => { try { return fs.readFileSync(repoExcludedPath, 'utf8'); } catch { return null; } })();
+  t.after(() => {
+    const after = (() => { try { return fs.readFileSync(repoExcludedPath, 'utf8'); } catch { return null; } })();
+    assert.equal(after, before, 'repo line-chat-excluded.json should not change: tests must use a temp home');
+  });
 });

@@ -176,4 +176,22 @@ describe('booth-kw-research dry-run pipeline', () => {
     }
     assert.ok(!fs.existsSync(outdir));
   });
+
+  it('run.mjs --dry-run should execute all 4 phases', () => {
+    const runOutdir = mkdtempSync(path.join(os.tmpdir(), 'kw-run-test-'));
+    try {
+      const stdout = execSync(`node "${path.join(ROOT, 'run.mjs')}" --dry-run "${runOutdir}"`, {
+        cwd: ROOT,
+        encoding: 'utf-8',
+        timeout: 60000,
+      });
+      assert.ok(stdout.includes('Phase 1'), 'should include Phase 1 output');
+      assert.ok(stdout.includes('Phase 2'), 'should include Phase 2 output');
+      assert.ok(stdout.includes('Phase 3'), 'should include Phase 3 output');
+      assert.ok(stdout.includes('Phase 4'), 'should include Phase 4 output');
+      assert.ok(stdout.includes('全 Phase 完了'), 'should confirm completion');
+    } finally {
+      fs.rmSync(runOutdir, { recursive: true, force: true });
+    }
+  });
 });

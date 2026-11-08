@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { evaluate, effectiveDue, formatDigest, syncCalendar, hasSentReply, manualOperation, runWatch, main, parseArgs, vehicleRows } from './deadline-watch.mjs';
-import { DEFAULT_CONFIG, googleClient } from './deadline-ledger.mjs';
+import { DEFAULT_CONFIG } from './deadline-ledger.mjs';
 const config = { ...DEFAULT_CONFIG, sheetId: 'test', vehicleSheetId: '', calendar: { enabled: false } };
 const base = { id: 'D-001', title: '回答', due: '2026-11-06', kind: '回答・返信', status: '未着手', assignee: 'kim' };
 function homeFor(t) { const home = fs.mkdtempSync(path.join(os.tmpdir(), 'deadline-watch-')); t.after(() => fs.rmSync(home, { recursive: true, force: true })); return home; }
@@ -106,21 +106,11 @@ test('不存在のfixtureで本番の読取へfallbackしない', async t => {
   assert.match(errors[0],/fixture/); assert.deepEqual(fs.readdirSync(home),[]);
 });
 
-test('鍵なし経路ではkim用トークン失敗後にseisaku-teamのdrive scopeへ切り替える', async () => {
-  const tokenCalls = [], fetchCalls = [];
-  const request = googleClient({
-    getToken: async options => {
-      tokenCalls.push(options);
-      if (options.impersonate === 'kim@orgiast.jp') throw new Error('鍵なし経路は seisaku-team@orgiast.jp 固定です');
-      return 'proxy-token';
-    },
-    fetchImpl: async (url, options) => {
-      fetchCalls.push([url, options]);
-      return new Response(JSON.stringify({ spreadsheetId: 'created' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-    },
-  });
-  assert.deepEqual(await request('https://sheets.googleapis.com/v4/spreadsheets', { scope: 'https://www.googleapis.com/auth/spreadsheets', method: 'POST', body: { properties: { title: '期限台帳' } } }), { spreadsheetId: 'created' });
-  assert.equal(tokenCalls[1].impersonate, 'seisaku-team@orgiast.jp');
-  assert.equal(tokenCalls[1].scope, 'https://www.googleapis.com/auth/drive');
-  assert.equal(fetchCalls[0][1].headers.Authorization, 'Bearer proxy-token');
+test('未初期化かつSheets資格情報がない席は失敗を繰り返さずskipする', async t => {
+  const home = homeFor(t), errors = [], heartbeats = [];
+  const code = await main([], { home, env: {}, stderr: value => errors.push(value), heartbeat: async value => heartbeats.push(value) });
+  assert.equal(code, 0);
+  assert.deepEqual(errors, ['deadline-watch: Sheets資格情報がないためこの席ではスキップします']);
+  assert.equal(heartbeats[0].ok, true);
+  assert.equal(fs.existsSync(path.join(home, '.claude/deadline-watch/config.json')), false);
 });

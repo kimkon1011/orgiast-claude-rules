@@ -199,6 +199,17 @@ test('execute sanitizes control characters and handles invalid JSON in result fi
   await fs.writeFile(resultFile, 'invalid json {');
   const res2 = await execute(r, { timeoutMs: 1000, resultFile }, io);
   assert.equal(res2.outcome, 'no-progress');
+
+  // Structured object evidence should count as progressed
+  await fs.writeFile(resultFile, JSON.stringify({ progressed: true, evidence: { findings: ['Fixed bug A', 'Verified B'], changes: ['Updated state file'] } }));
+  const res3 = await execute(r, { timeoutMs: 1000, resultFile }, io);
+  assert.equal(res3.outcome, 'progressed');
+  assert.match(res3.reason, /Fixed bug A/);
+
+  // Object evidence with progressed=false should be no-progress
+  await fs.writeFile(resultFile, JSON.stringify({ progressed: false, evidence: { reason: 'Waiting for external input' } }));
+  const res4 = await execute(r, { timeoutMs: 1000, resultFile }, io);
+  assert.equal(res4.outcome, 'no-progress');
 });
 test('invalid CLI/env values rejected', () => {
   for (const args of [['--limit'], ['--limit', '-1'], ['--limit', '1.5'], ['--unknown']]) assert.throws(() => options(args, {}));

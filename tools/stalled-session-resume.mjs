@@ -181,9 +181,14 @@ ${wait ? `このセッションの待機期限 ${wait.label} を過ぎました�
       report = JSON.parse(cleaned);
     }
   } catch (error) { return { ...execution, outcome: 'error', reason: String(error.message) }; }
-  const progressed = report?.progressed === true && typeof report.evidence === 'string' && report.evidence.trim();
-  if (timedOut) return { outcome: progressed ? 'progressed' : 'timeout', reason: progressed ? report.evidence : result.status, ...execution };
-  return { outcome: progressed ? 'progressed' : 'no-progress', reason: report?.evidence || '成果記録なし', ...execution };
+  const evidenceOk = report?.evidence && (
+    (typeof report.evidence === 'string' && report.evidence.trim()) ||
+    (typeof report.evidence === 'object' && report.evidence !== null && Object.keys(report.evidence).length > 0)
+  );
+  const progressed = report?.progressed === true && evidenceOk;
+  const reason = typeof report?.evidence === 'string' ? report.evidence : JSON.stringify(report?.evidence, null, 2) || '成果記録なし';
+  if (timedOut) return { outcome: progressed ? 'progressed' : 'timeout', reason: progressed ? reason : result.status, ...execution };
+  return { outcome: progressed ? 'progressed' : 'no-progress', reason, ...execution };
 }
 
 export async function run(config = options(), io = {}) {

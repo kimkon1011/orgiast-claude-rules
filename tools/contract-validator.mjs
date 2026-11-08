@@ -57,24 +57,21 @@ export function validateContract(contract, evidenceResults = [], options = {}) {
 }
 
 function evaluateCriterion(criterion, evidenceResults, requiredEvidence) {
-  const matchingEvidence = evidenceResults.filter(e => {
-    const text = `${e.type || ''} ${e.description || ''} ${e.detail || ''}`.toLowerCase();
-    const keywords = criterion.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-    return keywords.length === 0 || keywords.some(k => text.includes(k));
-  });
-
-  const hasPassedEvidence = matchingEvidence.some(e => e.passed);
-  const hasFailedEvidence = matchingEvidence.some(e => e.passed === false);
-  const hasRelevantType = requiredEvidence.some(t => matchingEvidence.some(e => e.type === t));
+  // Directly check if any evidence of a required type exists and passed
+  const evidenceMatch = evidenceResults.filter(e => requiredEvidence.includes(e.type));
+  const hasPassingRequiredEvidence = evidenceMatch.some(e => e.passed);
+  const hasFailingRequiredEvidence = evidenceMatch.some(e => e.passed === false);
 
   return {
     criterion,
-    verdict: hasFailedEvidence ? VERDICT_FAIL
-      : hasPassedEvidence && hasRelevantType ? VERDICT_PASS
-      : hasPassedEvidence ? VERDICT_PASS
-      : hasRelevantType ? VERDICT_PASS
+    verdict: hasFailingRequiredEvidence ? VERDICT_FAIL
+      : hasPassingRequiredEvidence ? VERDICT_PASS
       : VERDICT_PENDING,
-    evidenceUsed: matchingEvidence,
+    evidenceUsed: evidenceResults.filter(e => {
+      const text = `${e.type || ''} ${e.description || ''} ${e.detail || ''}`.toLowerCase();
+      const keywords = criterion.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+      return keywords.length === 0 || keywords.some(k => text.includes(k));
+    }),
   };
 }
 

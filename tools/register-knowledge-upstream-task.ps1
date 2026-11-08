@@ -27,9 +27,7 @@ if (-not $node) { $node = (Get-Command node -ErrorAction SilentlyContinue).Sourc
 if (-not $node) { throw 'node.exe not found' }
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, '--sync-down') -WorkingDirectory $repo
 # Run every hour at :17 to spread load vs other hourly tasks
-$trigger = New-ScheduledTaskTrigger -Daily -At '00:17'
-$trigger.RepetitionInterval = (New-TimeSpan -Hours 1)
-$trigger.RepetitionDuration = (New-TimeSpan -Days 365)
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Hours 1)
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
 try {
   $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited

@@ -54,13 +54,13 @@ export function createPhaseTracker(phases) {
 
 // Write or update last-run.json and append to last-runs.jsonl (max 20 lines).
 // No tokens, email addresses, or message bodies are included.
-export function writeLastRun(statePath, report, { error, phases, clock } = {}) {
+export function writeLastRun(statePath, report, { error, phases, clock, elapsedMs, finishedAt } = {}) {
   const dir = path.dirname(statePath);
   const startedAt = report._startedAt || (clock ? new Date(clock).toISOString() : new Date().toISOString());
   const entry = {
     startedAt,
-    finishedAt: new Date().toISOString(),
-    elapsedMs: clock ? (Date.now() - clock) : 0,
+    finishedAt: finishedAt || new Date().toISOString(),
+    elapsedMs: elapsedMs !== undefined ? elapsedMs : (clock ? Math.max(0, Date.now() - clock) : 0),
     mode: report.mode || 'live',
     exitCode: (report.exitCode !== undefined && report.exitCode !== null) ? report.exitCode : error ? 1 : 0,
     error: error ? String(error).slice(0, 300) : (report.error || null),
@@ -713,7 +713,7 @@ export async function run(options = {}, deps = {}) {
   if (options.live && !deps.suppressWatchdog) {
     watchdog = setTimeout(() => {
       try {
-        writeLastRun(statePath, { mode: 'live', sources: {}, exitCode: 2, _startedAt: new Date(startedAt).toISOString(), error: 'watchdog: exceeded 600s' }, { phases, clock: startedAt });
+        writeLastRun(statePath, { mode: 'live', sources: {}, exitCode: 2, _startedAt: new Date(startedAt).toISOString(), error: 'watchdog: exceeded 600s' }, { phases, elapsedMs: Date.now() - startedAt, finishedAt: new Date().toISOString() });
       } catch (_) { /* best-effort */ }
       process.exit(2);
     }, 600000);
@@ -828,7 +828,7 @@ async function runLocked(options = {}, deps = {}) {
     save(); return report;
   } finally {
     save();
-    if (live) writeLastRun(statePath, report, { phases, clock: options.startedAt || started });
+    if (live) writeLastRun(statePath, report, { phases, elapsedMs: clock() - started, finishedAt: iso(clock()) });
   }
 }
 export function parseArgs(args) {
@@ -857,7 +857,7 @@ if (isEntry(import.meta.url)) {
     console.error(e.message); process.exitCode = 1;
     try {
       const home = process.env.ORGIAST_HOME || os.homedir();
-      writeLastRun(path.join(home, '.claude', 'comms-hub', 'state.json'), { mode: 'live', sources: {}, exitCode: 1 }, { error: e.message, clock: Date.now() });
+      writeLastRun(path.join(home, '.claude', 'comms-hub', 'state.json'), { mode: 'live', sources: {}, exitCode: 1 }, { error: e.message, elapsedMs: 0, finishedAt: new Date().toISOString() });
     } catch (_) { /* best-effort */ }
   }
 }

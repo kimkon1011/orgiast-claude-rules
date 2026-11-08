@@ -1,10 +1,25 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { matchCase, exclusion, processPage, run, SOURCES, createDriveSink, parseArgs, publishedText, parseEntries, collectSource, render, parseCaseRows, writeLastRun, createPhaseTracker } from './comms-hub-sync.mjs';
+
+// All tests must use a temp ORGIAST_HOME so no run() call writes to ~/.claude
+const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-test-home-'));
+const priorOrgHome = process.env.ORGIAST_HOME;
+process.env.ORGIAST_HOME = testHome;
+const homedirLastRunPath = path.join(os.homedir(), '.claude', 'comms-hub', 'last-run.json');
+let homedirLastRunBefore = null;
+try { homedirLastRunBefore = { exists: true, mtimeMs: fs.statSync(homedirLastRunPath).mtimeMs }; }
+catch (e) { if (e.code === 'ENOENT') homedirLastRunBefore = { exists: false }; else throw e; }
+after(() => {
+  process.env.ORGIAST_HOME = priorOrgHome;
+  try { const s = fs.statSync(homedirLastRunPath); assert.equal(s.mtimeMs, homedirLastRunBefore.mtimeMs, 'homedir last-run.json mtime changed'); }
+  catch (e) { if (e.code === 'ENOENT') assert.ok(!homedirLastRunBefore.exists, 'homedir last-run.json was created'); else throw e; }
+  fs.rmSync(testHome, { recursive: true, force: true });
+});
 const config = JSON.parse(fs.readFileSync(new URL('../config/comms-hub.json', import.meta.url)));
 const cases = [{ id: '261101ABC', name: '展示会Alpha', client: '共通顧客' }, { id: 'C1234', name: '制作Beta', client: '共通顧客' }];
 const message = { source: 'gmail-kim', id: 'same', ts: '2026-11-01T02:00:00.000Z', subject: '261101ABC 見積', text: '業務連絡', sender: 'staff@example.test' };
@@ -890,7 +905,7 @@ test('last-run.json: live run writes file with phases and source names, no token
   assert.equal(lr.exitCode, 0);
   assert.ok(lr.startedAt);
   assert.ok(lr.finishedAt);
-  assert.ok(lr.elapsedMs > 0);
+  assert.ok(typeof lr.elapsedMs === 'number' && lr.elapsedMs >= 0);
   assert.ok(Array.isArray(lr.phases));
   // Each source name should appear in phases
   for (const s of SOURCES) assert.ok(lr.phases.some(p => p.name === `collect:${s}`), `phase for ${s} missing`);

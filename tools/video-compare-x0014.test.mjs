@@ -34,10 +34,9 @@ test('unreachable は理由付きで費用 null になる', () => {
   assert.equal(estimateCost('gemini-omni-1.2-flash', 10).costUsd, 0.69504);
 });
 
-test('画像未指定の dry-run CLI は exit 0 で JSON を出す', async () => {
-  const { stdout, stderr } = await execFileAsync(process.execPath, ['tools/video-compare-x0014.mjs', '--dry-run']);
+test('デフォルト画像指定の dry-run CLI は exit 0 で JSON を出す', async () => {
+  const { stdout } = await execFileAsync(process.execPath, ['tools/video-compare-x0014.mjs', '--dry-run']);
   const output = JSON.parse(stdout);
-  assert.equal(output.imageSha256, '未指定');
+  assert.equal(output.imageSha256, 'f3d08cd590f67cd194c8f28a8f7335b7891c490b65997dd3075bcfb991572ce4');
   assert.equal(output.models.length, 4);
-  assert.match(stderr, /警告/);
 });

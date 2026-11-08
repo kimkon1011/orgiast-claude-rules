@@ -1039,8 +1039,9 @@ test('load-cases: timeout with cache continues with casesFromCache in last-run.j
   const report = await run({ live: true, statePath }, {
     config, cases: null, state, save() {}, sink, suppressWatchdog: true,
     collect: async source => ({ messages: [], cursor: { since: 99 } }),
-    // Make the Sheets API call fail (getDriveToken returns GWS_MARKER when no key file exists,
-    // then jsonFetch for Sheets uses loadFetchImpl which includes loadSignal)
+    // Inject the token so load-cases does not depend on a local DWD key being
+    // present; the Sheets call then fails on the mocked fetch below.
+    getDriveToken: async () => 'test-token',
     fetchImpl: async (url, init) => {
       if (String(url).includes('sheets.googleapis.com')) {
         sheetsCalled = true;
@@ -1076,6 +1077,9 @@ test('load-cases: timeout without cache throws and writes error to last-run.json
     () => run({ live: true, statePath }, {
       config, cases: null, state, save() {}, sink, suppressWatchdog: true,
       collect: async source => ({ messages: [], cursor: { since: 99 } }),
+      // Inject the token so load-cases does not depend on a local DWD key being
+      // present; the Sheets call then fails on the mocked fetch below.
+      getDriveToken: async () => 'test-token',
       fetchImpl: async (url, init) => {
         if (String(url).includes('sheets.googleapis.com')) {
           sheetsCalled = true;

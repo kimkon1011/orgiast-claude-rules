@@ -756,6 +756,7 @@ async function runLocked(options = {}, deps = {}) {
   const phaseTracker = createPhaseTracker(phases);
   report._startedAt = options.startedAt ? new Date(options.startedAt).toISOString() : new Date(started).toISOString();
   report._processStartedAt = options.processStartedAt;
+  const getToken = deps.getDriveToken || getDriveToken;
   let runError = null;
   try {
     const fetchImpl = boundedFetch(globalSignal);
@@ -765,7 +766,7 @@ async function runLocked(options = {}, deps = {}) {
       const loadSignal = AbortSignal.timeout(60000);
       const loadFetchImpl = (url, init = {}) => fetchImpl(url, { ...init, signal: AbortSignal.any([globalSignal, loadSignal, init.signal || AbortSignal.timeout(20000)]) });
       try {
-        const token = await getDriveToken({ scope: 'https://www.googleapis.com/auth/spreadsheets.readonly', signal: AbortSignal.any([globalSignal, loadSignal]), fetchImpl: loadFetchImpl });
+        const token = await getToken({ scope: 'https://www.googleapis.com/auth/spreadsheets.readonly', signal: AbortSignal.any([globalSignal, loadSignal]), fetchImpl: loadFetchImpl });
         const data = await jsonFetch(`https://sheets.googleapis.com/v4/spreadsheets/${config.casesSheet}/values/${encodeURIComponent('案件一覧!A1:L')}`, { headers: { Authorization: `Bearer ${token}` } }, loadFetchImpl);
         cases = parseCaseRows(data.values || []);
         state.casesCache = { cases, at: iso(now) };
@@ -783,7 +784,7 @@ async function runLocked(options = {}, deps = {}) {
     }
     phaseTracker.end();
     phaseTracker.start('sink-init');
-    if (live && !sink) sink = createDriveSink({ token: await getDriveToken({ signal: globalSignal, fetchImpl }), config, state, save, fetchImpl, now, checkBudget, storeDir: options.storeDir || path.join(path.dirname(statePath), 'store') });
+    if (live && !sink) sink = createDriveSink({ token: await getToken({ signal: globalSignal, fetchImpl }), config, state, save, fetchImpl, now, checkBudget, storeDir: options.storeDir || path.join(path.dirname(statePath), 'store') });
     let initError;
     if (live) { try { await sink.init(config.readers); } catch (e) { initError = e; } }
     phaseTracker.end();

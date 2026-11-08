@@ -17,6 +17,10 @@ const exec = promisify(execFile);
 const inboxScript = fileURLToPath(new URL('./kim-inbox.mjs', import.meta.url));
 export const STAGES = { default: [30,14,7,3,1,0], '訴訟・法務': [30,14,7,3,2,1,0], '契約更新': [60,30,14,7,1,0], '支払': [7,3,1,0], '回答・返信': [3,1,0] };
 export const closed = row => ['完了','不要'].includes(row.status);
+export function hasSheetsCredential(home, env = process.env) {
+  const key = env.GOOGLE_SA_KEY || path.join(home, 'Downloads', 'CLAUDE.md配布', 'aujust-sales-automation', '.gcp', 'sheets-sa.json');
+  return fs.existsSync(key);
+}
 export function effectiveDue(row) {
   if (row.status === '延期') return parseSheetDate(String(row.notes || '').match(/(?:延期先|延期|until)\s*[:：=]?\s*(\d{4}-\d{2}-\d{2})/)?.[1]);
   return parseSheetDate(row.due);
@@ -203,6 +207,10 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     if (args.fixture && (!fixture || !Array.isArray(fixture.rows))) throw new Error('fixture の台帳JSONがありません、または形式が不正です');
     const config = fixture ? { ...DEFAULT_CONFIG, ...fixture.config, calendar: { enabled: false } } : deps.config || loadConfig(home);
     if (!config.sheetId) {
+      if (!hasSheetsCredential(home, deps.env || process.env)) {
+        stderr('deadline-watch: Sheets資格情報がないためこの席ではスキップします');
+        ok = true; return 0;
+      }
       stderr('deadline-watch: deadline-ledger 未初期化のため自動初期化します');
       const result = await initialize({ home, sheets: deps.sheets || createSheetsClient({ fetchImpl: gwsFetch }), request: deps.request || googleClient() });
       config.sheetId = result.sheetId;
@@ -226,7 +234,6 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   finally {
     if (args && !args['dry-run'] && !args.digest) {
       await (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineWatch', startedAt, finishedAt: new Date().toISOString(), ok, summary: ok ? '期限追跡完了' : '期限追跡失敗', cycleMinutes: 1440 }, { homeDir: home, localOnly: true });
-      const log = path.join(home, '.claude/logs/deadline-watch.log'); fs.mkdirSync(path.dirname(log), { recursive: true }); fs.appendFileSync(log, `${new Date().toISOString()} deadline-watch ${ok ? 'ok' : 'failed'}\n`);
     }
   }
 }

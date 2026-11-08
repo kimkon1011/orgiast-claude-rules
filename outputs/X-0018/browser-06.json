@@ -1,0 +1,135 @@
+{
+  "attempt": "X-0018-06",
+  "time": "2026-11-08T19:55:09.405Z",
+  "revision": "9d0dd65a4a19110c8d34a4e3b483561243548f5c",
+  "node": "v22.23.4",
+  "command": "LD_LIBRARY_PATH=/tmp/x0018-libs/root/usr/lib/x86_64-linux-gnu PLAYWRIGHT_BROWSERS_PATH=/tmp/x0018-browsers node outputs/X-0018/browser-06.mjs",
+  "scope": "公開ギャラリーのGETナビゲーションのみ。vibe-testingではない。フォーム入力・送信なし。",
+  "observations": [
+    {
+      "name": "gallery-list-06",
+      "url": "https://rebooth.co.jp/works-top/",
+      "title": "実績 | Reブース｜再利用可能な展示会ブース",
+      "bodyLength": 1824,
+      "screenshot": "gallery-list-06.png"
+    },
+    {
+      "name": "gallery-detail-06",
+      "url": "https://rebooth.co.jp/works/1538/",
+      "title": "株式会社グリーンエナジー＆カンパニー 展示会ブース/26年9月/サステナブル経営WEEK | Reブース｜再利用可能な展示会ブース",
+      "bodyLength": 623,
+      "screenshot": "gallery-detail-06.png"
+    },
+    {
+      "name": "gallery-back-06",
+      "url": "https://rebooth.co.jp/works-top/",
+      "title": "実績 | Reブース｜再利用可能な展示会ブース",
+      "bodyLength": 1824,
+      "screenshot": "gallery-back-06.png"
+    }
+  ],
+  "blocked": [
+    {
+      "method": "POST",
+      "url": "https://rebooth.co.jp/wp-admin/admin-ajax.php?action=get_works_count"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google-analytics.com/g/collect?v=2&tid=G-8VLQW8NKXC&gtm=45je6b41v9263390426za20ozb9263390197zd9263390197xf1&_p=1794167711021&gcd=13l3l3l3l1l1&npa=0&dma=0&cid=299670376.1794167712&frm=0&ngs=1&pscdl=noapi&rcb=8&sr=1280x900&uaa=x86&uab=64&uafvl=Not%253AA-Brand%3B8.0.0.0%7CChromium%3B156.0.8078.4%7CHeadlessChrome%3B156.0.8078.4&uam=&uamb=0&uap=Linux&uapv=&uaw=0&ul=en-us&_s=1&tag_exp=115938466~115938468~118897920~118897930~120213116~120385423~120412528~120420416~120469145~120469153~121246026~121246034~123814185&sid=1794167712&sct=1&seg=0&dl=https%3A%2F%2Frebooth.co.jp%2Fworks-top%2F&dt=%E5%AE%9F%E7%B8%BE%20%7C%20Re%E3%83%96%E3%83%BC%E3%82%B9%EF%BD%9C%E5%86%8D%E5%88%A9%E7%94%A8%E5%8F%AF%E8%83%BD%E3%81%AA%E5%B1%95%E7%A4%BA%E4%BC%9A%E3%83%96%E3%83%BC%E3%82%B9&en=page_view&_fv=1&_nsi=1&_ss=1&tfd=2462"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/g/collect?v=2&tid=G-8VLQW8NKXC&gtm=45je6b41v9263390426za20ozb9263390197zd9263390197xf1&_p=1794167711021&gcd=13l3l3l3l1l1&npa=0&dma=0&cid=299670376.1794167712&frm=0&ngs=1&pscdl=noapi&rcb=8&sr=1280x900&uaa=x86&uab=64&uafvl=Not%253AA-Brand%3B8.0.0.0%7CChromium%3B156.0.8078.4%7CHeadlessChrome%3B156.0.8078.4&uam=&uamb=0&uap=Linux&uapv=&uaw=0&ul=en-us&_s=1&tag_exp=115938466~115938468~118897920~118897930~120213116~120385423~120412528~120420416~120469145~120469153~121246026~121246034~123814185&sid=1794167712&sct=1&seg=0&dl=https%3A%2F%2Frebooth.co.jp%2Fworks-top%2F&dt=%E5%AE%9F%E7%B8%BE%20%7C%20Re%E3%83%96%E3%83%BC%E3%82%B9%EF%BD%9C%E5%86%8D%E5%88%A9%E7%94%A8%E5%8F%AF%E8%83%BD%E3%81%AA%E5%B1%95%E7%A4%BA%E4%BC%9A%E3%83%96%E3%83%BC%E3%82%B9&en=page_view&_fv=1&_nsi=1&_ss=1&tfd=2462&gaf=1"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/recaptcha/api2/reload?k=6LcfdmwtAAAAAIFHC70swkWuPOX3T6nS7LbKtCnt"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/recaptcha/api2/clr?k=6LcfdmwtAAAAAIFHC70swkWuPOX3T6nS7LbKtCnt"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/recaptcha/api2/clr?k=6LcfdmwtAAAAAIFHC70swkWuPOX3T6nS7LbKtCnt"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/recaptcha/api2/clr?k=6LcfdmwtAAAAAIFHC70swkWuPOX3T6nS7LbKtCnt"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/recaptcha/api2/clr?k=6LcfdmwtAAAAAIFHC70swkWuPOX3T6nS7LbKtCnt"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/recaptcha/api2/reload?k=6LcfdmwtAAAAAIFHC70swkWuPOX3T6nS7LbKtCnt"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/recaptcha/api2/clr?k=6LcfdmwtAAAAAIFHC70swkWuPOX3T6nS7LbKtCnt"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/recaptcha/api2/clr?k=6LcfdmwtAAAAAIFHC70swkWuPOX3T6nS7LbKtCnt"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/recaptcha/api2/clr?k=6LcfdmwtAAAAAIFHC70swkWuPOX3T6nS7LbKtCnt"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/recaptcha/api2/clr?k=6LcfdmwtAAAAAIFHC70swkWuPOX3T6nS7LbKtCnt"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google-analytics.com/g/collect?v=2&tid=G-8VLQW8NKXC&gtm=45je6b41v9263390426za20ozb9263390197zd9263390197xf1&_p=1794167721030&gcd=13l3l3l3l1l1&npa=0&dma=0&_eu=AAAAAAQ&cid=299670376.1794167712&frm=0&ngs=1&pscdl=noapi&rcb=0&sr=1280x900&uaa=x86&uab=64&uafvl=Not%253AA-Brand%3B8.0.0.0%7CChromium%3B156.0.8078.4%7CHeadlessChrome%3B156.0.8078.4&uam=&uamb=0&uap=Linux&uapv=&uaw=0&ul=en-us&_s=1&tag_exp=115616985~115938466~115938469~118897920~118897930~120213116~120385423~120412528~120420414~120469145~120469153~121246026~121246034~123814183&sid=1794167712&sct=1&seg=1&dl=https%3A%2F%2Frebooth.co.jp%2Fworks%2F1538%2F&dr=https%3A%2F%2Frebooth.co.jp%2Fworks-top%2F&dt=%E6%A0%AA%E5%BC%8F%E4%BC%9A%E7%A4%BE%E3%82%B0%E3%83%AA%E3%83%BC%E3%83%B3%E3%82%A8%E3%83%8A%E3%82%B8%E3%83%BC%EF%BC%86%E3%82%AB%E3%83%B3%E3%83%91%E3%83%8B%E3%83%BC%20%E5%B1%95%E7%A4%BA%E4%BC%9A%E3%83%96%E3%83%BC%E3%82%B9%2F26%E5%B9%B49%E6%9C%88%2F%E3%82%B5%E3%82%B9%E3%83%86%E3%83%8A%E3%83%96%E3%83%AB%E7%B5%8C%E5%96%B6WEEK%20%7C%20Re%E3%83%96%E3%83%BC%E3%82%B9%EF%BD%9C%E5%86%8D%E5%88%A9%E7%94%A8%E5%8F%AF%E8%83%BD%E3%81%AA%E5%B1%95%E7%A4%BA%E4%BC%9A%E3%83%96%E3%83%BC%E3%82%B9&en=page_view&gap.plf=5&tfd=6437"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/g/collect?v=2&tid=G-8VLQW8NKXC&gtm=45je6b41v9263390426za20ozb9263390197zd9263390197xf1&_p=1794167721030&gcd=13l3l3l3l1l1&npa=0&dma=0&_eu=AAAAAAQ&cid=299670376.1794167712&frm=0&ngs=1&pscdl=noapi&rcb=0&sr=1280x900&uaa=x86&uab=64&uafvl=Not%253AA-Brand%3B8.0.0.0%7CChromium%3B156.0.8078.4%7CHeadlessChrome%3B156.0.8078.4&uam=&uamb=0&uap=Linux&uapv=&uaw=0&ul=en-us&_s=1&tag_exp=115616985~115938466~115938469~118897920~118897930~120213116~120385423~120412528~120420414~120469145~120469153~121246026~121246034~123814183&sid=1794167712&sct=1&seg=1&dl=https%3A%2F%2Frebooth.co.jp%2Fworks%2F1538%2F&dr=https%3A%2F%2Frebooth.co.jp%2Fworks-top%2F&dt=%E6%A0%AA%E5%BC%8F%E4%BC%9A%E7%A4%BE%E3%82%B0%E3%83%AA%E3%83%BC%E3%83%B3%E3%82%A8%E3%83%8A%E3%82%B8%E3%83%BC%EF%BC%86%E3%82%AB%E3%83%B3%E3%83%91%E3%83%8B%E3%83%BC%20%E5%B1%95%E7%A4%BA%E4%BC%9A%E3%83%96%E3%83%BC%E3%82%B9%2F26%E5%B9%B49%E6%9C%88%2F%E3%82%B5%E3%82%B9%E3%83%86%E3%83%8A%E3%83%96%E3%83%AB%E7%B5%8C%E5%96%B6WEEK%20%7C%20Re%E3%83%96%E3%83%BC%E3%82%B9%EF%BD%9C%E5%86%8D%E5%88%A9%E7%94%A8%E5%8F%AF%E8%83%BD%E3%81%AA%E5%B1%95%E7%A4%BA%E4%BC%9A%E3%83%96%E3%83%BC%E3%82%B9&en=page_view&gap.plf=5&tfd=6437&gaf=1"
+    },
+    {
+      "method": "POST",
+      "url": "https://rebooth.co.jp/wp-admin/admin-ajax.php?action=get_works_count"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/recaptcha/api2/reload?k=6LcfdmwtAAAAAIFHC70swkWuPOX3T6nS7LbKtCnt"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/recaptcha/api2/clr?k=6LcfdmwtAAAAAIFHC70swkWuPOX3T6nS7LbKtCnt"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/recaptcha/api2/clr?k=6LcfdmwtAAAAAIFHC70swkWuPOX3T6nS7LbKtCnt"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/recaptcha/api2/clr?k=6LcfdmwtAAAAAIFHC70swkWuPOX3T6nS7LbKtCnt"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/recaptcha/api2/clr?k=6LcfdmwtAAAAAIFHC70swkWuPOX3T6nS7LbKtCnt"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google-analytics.com/g/collect?v=2&tid=G-8VLQW8NKXC&gtm=45je6b41v9263390426za20ozb9263390197zd9263390197xf1&_p=1794167731355&gcd=13l3l3l3l1l1&npa=0&dma=0&_eu=AAAAAAQ&cid=299670376.1794167712&frm=0&ngs=1&pscdl=noapi&rcb=0&sr=1280x900&uaa=x86&uab=64&uafvl=Not%253AA-Brand%3B8.0.0.0%7CChromium%3B156.0.8078.4%7CHeadlessChrome%3B156.0.8078.4&uam=&uamb=0&uap=Linux&uapv=&uaw=0&ul=en-us&_s=1&tag_exp=115616986~115938466~115938468~118897920~118897930~120213116~120385423~120412526~120420414~120469145~120469153~121246026~121246034~123814185~124013662&sid=1794167712&sct=1&seg=1&dl=https%3A%2F%2Frebooth.co.jp%2Fworks-top%2F&dt=%E5%AE%9F%E7%B8%BE%20%7C%20Re%E3%83%96%E3%83%BC%E3%82%B9%EF%BD%9C%E5%86%8D%E5%88%A9%E7%94%A8%E5%8F%AF%E8%83%BD%E3%81%AA%E5%B1%95%E7%A4%BA%E4%BC%9A%E3%83%96%E3%83%BC%E3%82%B9&en=page_view&tfd=7248"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/g/collect?v=2&tid=G-8VLQW8NKXC&gtm=45je6b41v9263390426za20ozb9263390197zd9263390197xf1&_p=1794167731355&gcd=13l3l3l3l1l1&npa=0&dma=0&_eu=AAAAAAQ&cid=299670376.1794167712&frm=0&ngs=1&pscdl=noapi&rcb=0&sr=1280x900&uaa=x86&uab=64&uafvl=Not%253AA-Brand%3B8.0.0.0%7CChromium%3B156.0.8078.4%7CHeadlessChrome%3B156.0.8078.4&uam=&uamb=0&uap=Linux&uapv=&uaw=0&ul=en-us&_s=1&tag_exp=115616986~115938466~115938468~118897920~118897930~120213116~120385423~120412526~120420414~120469145~120469153~121246026~121246034~123814185~124013662&sid=1794167712&sct=1&seg=1&dl=https%3A%2F%2Frebooth.co.jp%2Fworks-top%2F&dt=%E5%AE%9F%E7%B8%BE%20%7C%20Re%E3%83%96%E3%83%BC%E3%82%B9%EF%BD%9C%E5%86%8D%E5%88%A9%E7%94%A8%E5%8F%AF%E8%83%BD%E3%81%AA%E5%B1%95%E7%A4%BA%E4%BC%9A%E3%83%96%E3%83%BC%E3%82%B9&en=page_view&tfd=7248&gaf=1"
+    }
+  ],
+  "browser": "156.0.8078.4",
+  "detailLink": "https://rebooth.co.jp/works/1538/",
+  "status": "partial_pass",
+  "unexecuted": [
+    "メニュー遷移",
+    "問い合わせ必須/不正/正常入力/安全な送信完了",
+    "vibe-testing init",
+    "正式ソース照合",
+    "C5"
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "attempt": "X-0018-01",
+  "time": "2026-11-09T04:42:48.418996+09:00",
+  "revision": "9d0dd65a4a19110c8d34a4e3b483561243548f5c",
+  "results": [
+    {
+      "command": [
+        "rg",
+        "-n",
+        "X-0018|vibe-testing",
+        "docs",
+        "outputs",
+        "config",
+        "apps",
+        ".agents",
+        ".codex",
+        "-g",
+        "*.md",
+        "-g",
+        "*.json",
+        "-g",
+        "*.yml",
+        "-g",
+        "*.yaml"
+      ],
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "rg",
+        "--files",
+        "apps",
+        "packages",
+        "config",
+        "seo"
+      ],
+      "exit_code": 0,
+      "stdout": "config/ai-key-owners.json\nconfig/meeting-prep-routing.json\nconfig/mail-groups.json\nconfig/kim-discord-allowlist.json\nconfig/gemini-pricing.default.json\nconfig/comms-hub.json\nconfig/staff-addresses.json\nconfig/schedule-sync-exclude.json\nconfig/stuck-pr-sweeper.json\nconfig/x-ai-tips-topics.json\nseo/gsc-bq-weekly-analysis.sql\nseo/export-search-console.mjs\nseo/README.md\napps/expo-apply/faq.html\napps/expo-apply/expo-apply-core.mjs\napps/expo-apply/ai.txt\napps/expo-apply/llms.txt\napps/expo-apply/index.md\napps/expo-apply/index.html\npackages/vscode-next-session/orgiast-next-session-0.3.5.vsix\napps/expo-apply/research.html\npackages/vscode-next-session/orgiast-next-session-0.3.4.vsix\npackages/vscode-next-session/orgiast-next-session-0.3.2.vsix\npackages/vscode-next-session/orgiast-next-session-0.3.10.vsix\napps/kaizen/kaizen-core.mjs\npackages/vscode-next-session/mobile-state.cjs\npackages/vscode-next-session/mobile-pool.test.cjs\npackages/vscode-next-session/mobile-pool.js\npackages/vscode-next-session/LICENSE\npackages/vscode-next-session/fixtures-editor-memento.json\npackages/vscode-next-session/extension.test.cjs\npackages/vscode-next-session/extension.js\npackages/vscode-next-session/archive-tabs.test.cjs\npackages/vscode-next-session/archive-tabs.js\npackages/vscode-next-session/archive-tab-match.test.cjs\npackages/vscode-next-session/archive-tab-match.js\npackages/vscode-next-session/README.md\npackages/vscode-next-session/read-tab-state.mjs\npackages/vscode-next-session/package.json\npackages/vscode-next-session/orgiast-next-session-0.3.9.vsix\npackages/vscode-next-session/orgiast-next-session-0.3.8.vsix\npackages/vscode-next-session/orgiast-next-session-0.3.7.vsix\npackages/vscode-next-session/orgiast-next-session-0.3.6.vsix\npackages/vscode-next-session/shell-path.js\npackages/vscode-next-session/route.test.cjs\npackages/vscode-next-session/route.js\npackages/vscode-next-session/refresh.test.cjs\npackages/vscode-next-session/tab-sessions.cjs\npackages/vscode-next-session/shell-path.test.cjs\npackages/vscode-next-session/tab-sessions.test.cjs\napps/kaizen/index.html\napps/kaizen/README.md\napps/my-page/my-page-core.mjs\napps/my-page/index.html\napps/my-page/README.md\napps/expo-apply/README.md\napps/expo-apply/robots.txt\npackages/feedback-widget/install.mjs\npackages/feedback-widget/verify.mjs\napps/cafe-ops/index.html\napps/cafe-ops/checklist-data.mjs\napps/cafe-ops/app.mjs\napps/cafe-ops/README.md\napps/evaluation-ai/README.md\npackages/feedback-kit/verify.mjs\napps/evaluation-ai/nl-input.mjs\napps/evaluation-ai/store.mjs\napps/evaluation-ai/sheet-import.mjs\napps/evaluation-ai/index.html\napps/evaluation-ai/eval-engine.mjs\npackages/feedback-kit/install.mjs\napps/expo-apply/test/expo-apply.test.mjs\napps/expo-apply/freebies/booth-readiness-diagnostic.md\napps/expo-apply/freebies/booth-preparation-checklist.md\napps/expo-apply/freebies/exhibition-planning-template.md\napps/expo-apply/freebies/index.md\napps/kaizen/test/kaizen.test.mjs\napps/evaluation-ai/test/evaluation-ai.test.mjs\napps/my-page/test/my-page.test.mjs\napps/cafe-ops/test/cafe-ops.test.mjs\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "node",
+        "--version"
+      ],
+      "exit_code": 0,
+      "stdout": "v22.23.4\n",
+      "stderr": ""
+    }
+  ]
+}

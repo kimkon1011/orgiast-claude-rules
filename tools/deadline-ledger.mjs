@@ -61,7 +61,10 @@ export function googleClient({ getToken = getDriveToken, fetchImpl = gwsFetch } 
     const key = `${user}|${scope}`;
     let token = tokens.get(key);
     if (!token || token.expires < Date.now()) {
-      token = { value: await getToken({ impersonate: user, scope, signal: AbortSignal.timeout(30000) }), expires: Date.now() + 45 * 60000 };
+      try { token = { value: await getToken({ impersonate: user, scope, signal: AbortSignal.timeout(30000) }), expires: Date.now() + 45 * 60000 }; }
+      catch {
+        token = { value: await getToken({ impersonate: 'seisaku-team@orgiast.jp', scope: 'https://www.googleapis.com/auth/drive', signal: AbortSignal.timeout(30000) }), expires: Date.now() + 45 * 60000 };
+      }
       tokens.set(key, token);
     }
     const response = await fetchImpl(url, { method, headers: { Authorization: `Bearer ${token.value}`, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30000) });

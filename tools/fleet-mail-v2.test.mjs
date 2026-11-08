@@ -7,6 +7,7 @@ import { Worker } from 'node:worker_threads';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
+import { writeJson, windowsLockBusy, WRITE_JSON_RENAME_RETRIES } from './fleet-mail.mjs';
 import { main, pollOnce, readInbox, syncMailState, resolveMailTarget, mailId, parseArgs, waitForReply, createClient, TERMINAL_STATUSES, hasDecisionRequest, updateInbox, presentMail, ACK_BATCH_LIMIT, SERVER_MAX_ATTEMPTS, CAPABILITY_BACKOFF_MS, INTERRUPTED_PROMPT_MS, INTERRUPTED_PROMPT_BODY, INBOX_LOCK_RETRIES, INBOX_LOCK_DELAY_MS, INBOX_LOCK_STALE_MS, COMMAND_LOCK_RETRIES, COMMAND_LOCK_DELAY_MS, LOCK_BUSY_EXIT, notifyPendingArrivals } from './fleet-mail.mjs';
 // --answer は headless 実行中（CLAUDE_HEADLESS=1 / ORGIAST_HEADLESS_JOB）に判断代行を拒否して 2 を返す。
 // このテストを headless セッション（夜間 auto-session / CI 外の手動実行）から回すと answer 系だけが
@@ -35,6 +36,49 @@ function fixture(t) {
   return { home, dir, inbox, body, deps, calls, output, errors, spawns, save, read };
 }
 const sendArgs = (f, to = sender, extra = []) => ['--send', '--to', to, '--kind', 'note', '--body-file', f.body, '--why', 'test', ...extra];
+
+test('writeJson writes JSON and removes its temporary file', t => {
+  const f = fixture(t), dir = path.join(f.home, 'json'), file = path.join(dir, 'state.json');
+  writeJson(file, { count: 1 });
+  writeJson(file, { count: 2 });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { count: 2 });
+  assert.deepEqual(fs.readdirSync(dir), ['state.json']);
+});
+
+for (const code of ['EPERM', 'EBUSY']) {
+  test(`writeJson retries transient ${code} on Windows`, { skip: process.platform !== 'win32' }, t => {
+    const f = fixture(t), file = path.join(f.home, 'state.json');
+    const original = fs.renameSync;
+    let calls = 0;
+    try {
+      fs.renameSync = (...args) => {
+        if (++calls === 1) throw Object.assign(new Error('sharing conflict'), { code });
+        return original(...args);
+      };
+      writeJson(file, { ok: true });
+      assert.equal(calls, 2);
+      assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { ok: true });
+      assert.equal(fs.readdirSync(f.home).some(name => name.endsWith('.tmp')), false);
+    } finally { fs.renameSync = original; }
+  });
+}
+
+for (const code of ['EPERM', 'EBUSY', 'EACCES']) {
+  test(`writeJson propagates persistent ${code} and cleans up after bounded attempts`, t => {
+    const f = fixture(t), file = path.join(f.home, 'state.json');
+    writeJson(file, { original: true });
+    const original = fs.renameSync, error = Object.assign(new Error('rename failed'), { code });
+    let calls = 0;
+    try {
+      fs.renameSync = () => { calls++; throw error; };
+      assert.throws(() => writeJson(file, { replaced: true }), thrown => thrown === error);
+      assert.equal(windowsLockBusy(error), process.platform === 'win32' && code !== 'EACCES');
+      assert.equal(calls, process.platform === 'win32' && code !== 'EACCES' ? WRITE_JSON_RENAME_RETRIES + 1 : 1);
+      assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { original: true });
+      assert.equal(fs.readdirSync(f.home).some(name => name.endsWith('.tmp')), false);
+    } finally { fs.renameSync = original; }
+  });
+}
 
 test('partial kim is exit 4 with roster candidates on the real dry-run send path and no writes', async t => {
   const f = fixture(t), before = fs.readdirSync(f.dir);

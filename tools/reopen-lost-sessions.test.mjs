@@ -654,6 +654,65 @@ test('state-based: archived/connected/72h超/closed/alive/reopenLoop は候補�
   assert.equal(result.skipped.reopenLoop, 1);
 });
 
+test('state-based: updated_at が since より古くても候補になる（updated_at フィルタを適用しない）', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-updated-at-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, { cse_stale: 'C:\\work' });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  // updated_at は since（'2026-11-05T19:40:00Z'）より古いが、last_event_at は 72h 以内
+  const staleSession = { id: 'cse_stale', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T10:00:00.000Z', title: 'Stale', updated_at: '2026-11-04T10:00:00.000Z' };
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, stateBased: true,
+    fetchImpl: async url => ({ ok: true, json: async () => ({ data: [staleSession] }) }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  // state-based では updated_at >= since フィルタを適用しないので、updated_at が古くても候補になる
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].id, 'cse_stale');
+  assert.equal(result.candidates[0].source, 'state');
+});
+
+test('state-based: 72 時間より古いページで打ち切る（降順の場合）', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-paging-cutoff-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, {
+    cse_recent: 'C:\\work',
+    cse_old: 'C:\\old',
+    cse_older: 'C:\\older',
+  });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  const page1 = [
+    { id: 'cse_recent', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T10:00:00.000Z', title: 'Recent', updated_at: '2026-11-07T10:00:00.000Z' },
+  ];
+  const page2 = [
+    { id: 'cse_old', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-01T10:00:00.000Z', title: 'Old', updated_at: '2026-11-01T10:00:00.000Z' },
+    { id: 'cse_older', status: 'active', connection_status: 'disconnected', last_event_at: '2026-10-30T10:00:00.000Z', title: 'Older', updated_at: '2026-10-30T10:00:00.000Z' },
+  ];
+  let callCount = 0;
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, stateBased: true,
+    fetchImpl: async url => {
+      if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [] }) };
+      callCount++;
+      if (callCount === 1) return { ok: true, json: async () => ({ data: page1, next_cursor: 'page2' }) };
+      if (callCount === 2) return { ok: true, json: async () => ({ data: page2 }) };
+      return { ok: true, json: async () => ({ data: [] }) };
+    },
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].id, 'cse_recent');
+  // page2 の全セッションが 72h より古いので打ち切られる。page3 は呼ばれない
+  assert.equal(callCount, 2);
+  assert.ok(!result.apiError, `unexpected apiError: ${result.apiError ?? ''}`);
+});
+
 test('state-based と host_exit の重複は1件にまとまる', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-dedup-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

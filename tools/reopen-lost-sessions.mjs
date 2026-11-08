@@ -461,7 +461,7 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
     const living = alive();
     const locals = localIndex(base), closed = closedIds(base);
     const reopenCounts = reopenLoopCounts(base, now);
-    const deadline = now() + 60000;
+    const deadline = now() + (stateBased ? 180000 : 60000);
     const get = async url => {
       if (now() >= deadline) throw Error('API time limit');
       const response = await fetchImpl(url, { headers, signal: AbortSignal.timeout(Math.max(1, deadline - now())) });
@@ -474,7 +474,7 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
       do {
         const body = await get(`${BASE}?${new URLSearchParams({ limit: '100', ...(cursor && { cursor }) })}`);
         if (!Array.isArray(body.data)) throw Error('Invalid sessions response');
-        const sessions = body.data.filter(session => !Number.isFinite(Date.parse(session.updated_at)) || Date.parse(session.updated_at) >= Date.parse(since));
+        const sessions = stateBased ? body.data : body.data.filter(session => !Number.isFinite(Date.parse(session.updated_at)) || Date.parse(session.updated_at) >= Date.parse(since));
 
         // 状態ベースの候補（--watch 専用、events API 不要）
         if (stateBased) {
@@ -492,6 +492,16 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
             if (reopenCounts[local.id] >= 3) { result.skipped.reopenLoop++; continue; }
             seenIds.add(local.id);
             result.candidates.push({ id: local.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '', source: 'state' });
+          }
+          // 降順の場合: 全セッションの last_event_at/updated_at が 72h より古ければそれ以上ページングしない
+          const cutoff = Date.parse(stateSince);
+          if (sessions.length > 0 && sessions.every(s => {
+            const le = Date.parse(s.last_event_at);
+            if (Number.isFinite(le) && le >= cutoff) return false;
+            const ua = Date.parse(s.updated_at);
+            return !Number.isFinite(ua) || ua < cutoff;
+          })) {
+            cursor = '';
           }
         }
 

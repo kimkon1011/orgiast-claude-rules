@@ -8,6 +8,7 @@ import { PROVIDERS, parseEnvText } from './line-digest.mjs';
 import { callWithFallback, FALLBACK_CHAIN, preferredForCategory } from './llm-fallback.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { isEntry } from './is-entry.mjs';
+import { spawnSync } from 'node:child_process';
 
 const HOUR = 3600000;
 const REAUTHORIZE_URL = 'https://discord.com/oauth2/authorize?client_id=1511684767546871818&scope=bot&permissions=8';
@@ -21,8 +22,8 @@ export function combinePermissions(guildId, member, roles) {
   return roles.reduce((bits, role) => ids.has(role.id) ? bits | BigInt(role.permissions) : bits, 0n);
 }
 
-const PREFIX = '【Claude自動返信】';
-const CORRECTED = '【Claude自動返信・kimが訂正済み→下のkimの返信を参照】';
+const PREFIX = '【kimのClaudeによる代理回答】';
+const CORRECTED = '【kimのClaudeによる代理回答・kimが訂正済み→下のkimの返信を参照】';
 const DISCLAIMER = '\n\n※kim本人の返答ではなく自動返信です。訂正があれば kim が追って返信します。';
 const SEED = '<!-- 会社・kimについて人が自由に追記できます。 -->\nkim = 株式会社オージャスト 代表。関連会社: Reブース／NEXTForward／東邦鋼業。社内連絡は Discord、決着はメール。\n';
 const ADMIN_ERROR = 'admin token がありません。node tools/discord-admin-token-install.mjs を実行してください';
@@ -69,6 +70,91 @@ export function contentFor(answer, corrected = false) {
   let body = '';
   for (const ch of answer) { if (head.length + body.length + ch.length + DISCLAIMER.length > 2000) break; body += ch; }
   return head + body + DISCLAIMER;
+}
+
+/** 送信する content が正しい見出しで始まることを確認。違えば例外を投げる。 */
+function validateContent(content) {
+  if (!content.startsWith('【kimのClaudeによる代理回答')) throw new Error(`content header invalid: ${content.slice(0, 40)}`);
+}
+function discordUrl(guildId, channelId, messageId) {
+  return `https://discord.com/channels/${guildId}/${channelId}/${messageId}`;
+}
+
+// sent-log.jsonl に1行追記。1MB超でローテーション。
+function appendSentLog(dir, entry) {
+  appendLog(path.join(dir, 'sent-log.jsonl'), JSON.stringify(entry) + '\n');
+}
+// 一時ファイルに本文を書き kim-inbox.mjs CLI を呼んで info を積む。
+function reportToKimInbox(home, body, key) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kim-inbox-'));
+  try {
+    const file = path.join(tempDir, 'body.txt');
+    fs.writeFileSync(file, body);
+    const result = spawnSync(process.execPath, [
+      path.join(path.dirname(new URL(import.meta.url).pathname), 'kim-inbox.mjs'),
+      '--add', '--kind', 'info', '--key', key,
+      '--source', 'discord-autoreply', '--body-file', file,
+    ], { encoding: 'utf8', windowsHide: true, timeout: 30000,
+      env: { ...process.env, ORGIAST_HOME: home } });
+    return result.status === 0;
+  } catch { return false; }
+  finally { fs.rmSync(tempDir, { recursive: true, force: true }); }
+}
+// 時間帯外（21:00〜08:00 JST）なら送らない。
+function outsideJstWindow(now) {
+  const jst = now + 9 * 3600000;
+  const h = new Date(jst).getUTCHours();
+  return h < 8 || h >= 21;
+}
+// sent-log から同じ authorId の直近1時間の送信件数が3以上なら true。
+function rateLimited(dir, authorId, now) {
+  const file = path.join(dir, 'sent-log.jsonl');
+  let text;
+  try { text = fs.readFileSync(file, 'utf8'); }
+  catch (e) { if (e.code === 'ENOENT') return false; throw e; }
+  const cutoff = now - HOUR;
+  let count = 0;
+  for (const line of text.split('\n').filter(Boolean)) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.authorId === authorId && entry.ts >= cutoff) count++;
+      if (count >= 3) return true;
+    } catch { /* skip corrupt lines */ }
+  }
+  return false;
+}
+// 前回の kim-inbox 報告に失敗した（reported:false）エントリーを再試行する。
+async function retryKimInboxReports({ state, home, dir, save, guildId }) {
+  const file = path.join(dir, 'sent-log.jsonl');
+  let text;
+  try { text = fs.readFileSync(file, 'utf8'); }
+  catch { return; }
+  const lines = text.split('\n');
+  let changed = false;
+  const updated = lines.map(line => {
+    if (!line.trim()) return line;
+    try {
+      const entry = JSON.parse(line);
+      if (entry.reported === false && entry.kind === 'sent') {
+        const key = `discord-autoreply:${entry.replyId}`;
+        const body = [
+          `Discord 代理回答を送信しました（承認なし・kim 2026-11-06 指示）`,
+          `日時: ${new Date(entry.ts + 9 * 3600000).toISOString().slice(0, 16).replace('T', ' ')}`,
+          `相手: ${entry.authorName} ／ 場所: #${entry.channelName}`,
+          `元のメッセージ（先頭200字）: ${(entry.question || '').slice(0, 200)}`,
+          `送った全文:`,
+          entry.content,
+          `リンク: ${entry.url || discordUrl(guildId, entry.channelId, entry.replyId)}`,
+        ].join('\n');
+        if (reportToKimInbox(home, body, key)) {
+          entry.reported = true;
+          changed = true;
+        }
+      }
+      return JSON.stringify(entry);
+    } catch { return line; }
+  });
+  if (changed) atomic(file, updated.join('\n'));
 }
 
 // line-digest exports the common providers; supplement the CLI-only entries from llm-ask.
@@ -128,10 +214,18 @@ export function createLlm({ home, fetchImpl, sleepImpl = sleep, env = process.en
 export function createDiscord({ token, fetchImpl = fetch, sleepImpl = sleep }) {
   return async (route, { method = 'GET', body } = {}) => {
     for (let attempt = 0; attempt < 2; attempt++) {
-      const res = await fetchImpl(`https://discord.com/api/v10${route}`, {
-        method, headers: { Authorization: `Bot ${token}`, 'User-Agent': 'DiscordBot (orgiast-autoreply, 1.0)', 'Content-Type': 'application/json' },
-        ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30000),
-      });
+      let res;
+      try {
+        res = await fetchImpl(`https://discord.com/api/v10${route}`, {
+          method, headers: { Authorization: `Bot ${token}`, 'User-Agent': 'DiscordBot (orgiast-autoreply, 1.0)', 'Content-Type': 'application/json' },
+          ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30000),
+        });
+      } catch (e) {
+        if (e.name === 'AbortError' || e.message?.includes('aborted') || e.message?.includes('timeout')) {
+          throw new Error(`Discord ${method} ${route} timeout`);
+        }
+        throw e;
+      }
       if (res.status === 429 && attempt === 0) {
         const retry = Number((await res.json()).retry_after);
         if (!Number.isFinite(retry) || retry < 0) throw new Error('Discord invalid retry_after');
@@ -307,7 +401,7 @@ export async function runOnce(options = {}) {
           const checkReplies = async () => {
             const after = await afterMessages(api, m.channel_id, m.id);
             if (after.some(x => x.author?.id === kimId)) { handled(m, 'kim_replied'); skip('kim_replied'); return true; }
-            if (after.some(x => x.author?.id === runtime.selfId && /^【Claude自動返信/.test(x.content))) { handled(m, 'already'); return true; }
+            if (after.some(x => x.author?.id === runtime.selfId && /^【kimのClaudeによる代理回答/.test(x.content))) { handled(m, 'already'); return true; }
             return false;
           };
           if (await checkReplies()) continue;
@@ -328,7 +422,12 @@ export async function runOnce(options = {}) {
           if (!decision.needs_reply) { handled(m, 'fyi'); skip('fyi'); continue; }
           if (await checkReplies()) continue; // kim may have replied during LLM generation.
           if (fs.existsSync(file('PAUSE')) || await emergency()) { result.paused = true; break; }
+          // 時間帯制限（21:00〜08:00 JST は送らない）
+          if (outsideJstWindow(now)) { result.errors.push(`${m.id}: outside JST window`); handled(m, 'outside_jst_window'); continue; }
+          // 同じ相手へのレート制限（1時間3通まで）
+          if (rateLimited(dir, m.author.id, now)) { result.errors.push(`${m.id}: rate limited for author ${m.author.id}`); handled(m, 'rate_limited'); continue; }
           const content = contentFor(decision.answer);
+          validateContent(content); // 見出しが強制通りでなければ例外
           if (dryRun) { result.wouldSend.push({ msgId: m.id, channelId: m.channel_id, content }); continue; }
           const sent = await api(`/channels/${m.channel_id}/messages`, { method: 'POST', body: {
             content, message_reference: { message_id: m.id }, allowed_mentions: { parse: [], replied_user: true },
@@ -340,6 +439,42 @@ export async function runOnce(options = {}) {
             needsKimDecision: decision.needs_kim_decision, learned: false, outcome: null });
           state.hourly.push(options.now?.() ?? Date.now());
           handled(m, 'replied'); result.replied++;
+          // sent-log に記録
+          const sentEntry = { ts: now, kind: 'sent', guildId, channelId: m.channel_id, channelName: channel.name,
+            msgId: m.id, replyId: sent.id, authorId: m.author.id, authorName: m.author.global_name || m.author.username || m.author.id,
+            question: m.content, content, url: discordUrl(guildId, m.channel_id, sent.id), reported: false };
+          appendSentLog(dir, sentEntry);
+          // kim-inbox へ報告（失敗時は reported:false のまま残り、次ループで retryKimInboxReports が再試行）
+          const inboxKey = `discord-autoreply:${sent.id}`;
+          const inboxBody = [
+            `Discord 代理回答を送信しました（承認なし・kim 2026-11-06 指示）`,
+            `日時: ${new Date(now + 9 * 3600000).toISOString().slice(0, 16).replace('T', ' ')}`,
+            `相手: ${m.author.global_name || m.author.username || m.author.id} ／ 場所: #${channel.name}`,
+            `元のメッセージ（先頭200字）: ${(m.content || '').slice(0, 200)}`,
+            `送った全文:`,
+            content,
+            `リンク: ${discordUrl(guildId, m.channel_id, sent.id)}`,
+          ].join('\n');
+          const reportResult = (options.reportToKimInboxImpl ?? reportToKimInbox)(home, inboxBody, inboxKey);
+          if (reportResult) {
+            // reported を true に書き換える（sent-log.jsonl を読み直して更新）
+            const logFile = file('sent-log.jsonl');
+            let logText;
+            try { logText = fs.readFileSync(logFile, 'utf8'); } catch { /* skip */ }
+            if (logText) {
+              const updated = logText.split('\n').map(line => {
+                if (!line.trim()) return line;
+                try {
+                  const e = JSON.parse(line);
+                  if (e.replyId === sent.id) { e.reported = true; return JSON.stringify(e); }
+                } catch { /* keep */ }
+                return line;
+              }).join('\n');
+              atomic(logFile, updated);
+            }
+          } else {
+            result.errors.push(`${m.id}: kim-inbox report failed (will retry)`);
+          }
           if (decision.needs_kim_decision) await notify(`判断待ち: #${channel.name} ${m.author.global_name || m.author.username || m.author.id}「${m.content.slice(0, 60)}」 https://discord.com/channels/${guildId}/${m.channel_id}/${m.id}`);
           if (await emergency()) break;
         } catch (e) { result.errors.push(`${m.id}: ${errorText(e)}`); }
@@ -380,8 +515,16 @@ export async function runOnce(options = {}) {
             }
             reply.outcome = outcome; reply.learned = true; save();
             if (reply.pendingEdit) {
-              await api(`/channels/${reply.channelId}/messages/${reply.replyId}`, { method: 'PATCH', body: { content: contentFor(reply.answer, true), allowed_mentions: { parse: [], replied_user: false } } });
+              const correctedContent = contentFor(reply.answer, true);
+              validateContent(correctedContent);
+              await api(`/channels/${reply.channelId}/messages/${reply.replyId}`, { method: 'PATCH', body: { content: correctedContent, allowed_mentions: { parse: [], replied_user: false } } });
               delete reply.pendingEdit; save();
+              // sent-log に訂正を記録（guildId は state の replies から再計算不要）
+              appendSentLog(dir, { ts: now, kind: 'corrected', guildId, channelId: reply.channelId,
+                channelName: reply.channelName, msgId: reply.msgId, replyId: reply.replyId,
+                authorId: reply.authorId, authorName: reply.authorName,
+                question: reply.question, content: correctedContent,
+                url: discordUrl(guildId, reply.channelId, reply.replyId), reported: true });
             }
           }
           break;
@@ -407,6 +550,10 @@ export async function runOnce(options = {}) {
   finally {
     if (result.errors.length > 0) result.ok = false;
     if (release) {
+      if (state && !dryRun) {
+        try { await retryKimInboxReports({ state, home, dir, save: () => {}, guildId }); }
+        catch (e) { result.errors.push(`retry-reports: ${errorText(e)}`); }
+      }
       if (state) {
         try {
           state.consecutiveErrorCycles = result.errors.length > 0 ? (state.consecutiveErrorCycles || 0) + 1 : 0;
@@ -493,6 +640,27 @@ export async function main(argv = process.argv.slice(2), options = {}) {
         }
       } catch { /* queue 未初期化 */ }
       print({ targets, enqueued });
+      return 0;
+    }
+    if (command === 'sent') {
+      const since = argv[argv.indexOf('--since') + 1];
+      let cutoff = 0;
+      if (since) {
+        if (since === '24h') cutoff = Date.now() - 24 * HOUR;
+        else if (since === '7d') cutoff = Date.now() - 7 * 24 * HOUR;
+        else cutoff = Date.parse(since);
+        if (!Number.isFinite(cutoff)) { print({ ok: false, error: `invalid --since: ${since}` }); return 1; }
+      }
+      const logFile = path.join(dir, 'sent-log.jsonl');
+      let text;
+      try { text = fs.readFileSync(logFile, 'utf8'); } catch (e) {
+        if (e.code === 'ENOENT') { print({ ok: true, entries: [] }); return 0; }
+        throw e;
+      }
+      const entries = text.split('\n').filter(Boolean).map(line => { try { return JSON.parse(line); } catch { return null; } })
+        .filter(Boolean).filter(e => !cutoff || e.ts >= cutoff)
+        .sort((a, b) => a.ts - b.ts);
+      print({ ok: true, entries });
       return 0;
     }
     if (!['once', 'loop'].includes(command)) throw new Error(`Unknown command: ${command}`);

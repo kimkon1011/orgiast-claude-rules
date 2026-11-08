@@ -16,7 +16,7 @@ export async function execute(file, args, { timeout = 25000, maxBuffer = 1024 * 
   const out = fs.openSync(stdoutFile, 'w'), err = fs.openSync(stderrFile, 'w');
   try {
     await new Promise((resolve, reject) => {
-      const child = spawn(file, args, { ...options, stdio: ['ignore', out, err] });
+      const child = spawn(file, args, { ...options, windowsHide: true, stdio: ['ignore', out, err] });
       const timer = setTimeout(() => { child.kill('SIGKILL'); }, timeout);
       child.once('error', error => { clearTimeout(timer); reject(error); });
       child.once('close', (code, signal) => {
@@ -75,7 +75,7 @@ export function createCaller({ outputDir = OUTPUT, runId = randomUUID(), exec = 
         '--category', 'classification', '--prefer-provider', '--no-fallback', '--no-persist',
         '--usage-file', ledger, '--per-provider-timeout-ms', '20000', '--max', '1500',
         '--system', SYSTEM, '--prompt-file', prompt,
-      ], { timeout: 25000, maxBuffer: 1024 * 1024, cwd: ROOT });
+      ], { timeout: 25000, maxBuffer: 1024 * 1024, cwd: ROOT, windowsHide: true });
     } catch (error) { failure = error; }
     try {
       const rows = jsonl(ledger);

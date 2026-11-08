@@ -12,7 +12,7 @@ $principal = try { New-ScheduledTaskPrincipal -UserId $user -LogonType Interacti
 $logon = try { New-ScheduledTaskTrigger -AtLogOn -User $user } catch { New-ScheduledTaskTrigger -AtLogOn }
 $logon.Delay = 'PT1M'
 $repeat = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 30)
-$action = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $tools 'task-hide-guard.ps1'))
+$action = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $tools 'task-hide-guard.ps1')) -WorkingDirectory (Join-Path $env:USERPROFILE '.claude')
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
 if ($principal) {
   try {
@@ -23,7 +23,7 @@ if ($principal) {
 } else {
   Register-ScheduledTask -TaskName 'Claude-TaskHideGuard' -Action $action -Trigger @($logon, $repeat) -Settings $settings -Force | Out-Null
 }
-$action = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $tools 'window-spawn-watch.ps1'))
+$action = New-HiddenScheduledTaskAction -Execute 'powershell.exe' -ChildArgument @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $tools 'window-spawn-watch.ps1')) -WorkingDirectory (Join-Path $env:USERPROFILE '.claude')
 $logon = try { New-ScheduledTaskTrigger -AtLogOn -User $user } catch { New-ScheduledTaskTrigger -AtLogOn }
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
 if ($principal) {

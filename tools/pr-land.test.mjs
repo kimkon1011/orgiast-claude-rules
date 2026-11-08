@@ -44,14 +44,16 @@ test('fork起点でもbaseへpush→PR→automergeラベル→read-back', t => {
   assert(create >= 0 && label > create);
   assert(!f.calls.some(c => c[2] === 'merge'));
 });
-test('鍵関連はラベルを外しCIを待ち既存pr-mergeの検証とSHA固定を通す', t => {
+test('鍵関連はラベル除去＋auto-merge無効化の後CIを待ち既存pr-mergeの検証とSHA固定を通す', t => {
   for (const file of ['tools/keyserve-auth.mjs', 'data/secrets.json', '.env.example']) {
     const f = fixture(t, { files: [file] });
     assert.equal(publishSeatPr(f).route, 'self-merge');
     assert(!f.calls.some(c => c.includes('--add-label')));
+    assert(f.calls.some(c => c.includes('--disable-auto')));
+    assert(f.calls.some(c => c.includes('--remove-label')));
     assert(f.calls.some(c => c.includes('statusCheckRollup')));
-    const merge = f.calls.find(c => c[2] === 'merge');
-    assert(merge.includes('--squash')); assert(merge.includes('--match-head-commit')); assert(merge.includes('kimkon1011/repo'));
+    const merge = f.calls.find(c => c.includes('--match-head-commit'));
+    assert(merge?.includes('--squash')); assert(merge?.includes('kimkon1011/repo'));
     assert(f.calls.some(c => c.includes('state,mergedAt')));
   }
 });
@@ -75,7 +77,7 @@ test('再実行は既存PRにラベルを補い、CI失敗・レビュー拒否�
       if (failedStage === 'review' && args.some(arg => arg.includes('reviewDecision'))) return JSON.stringify({ ...JSON.parse(value), reviewDecision: 'CHANGES_REQUESTED' });
       return value;
     };
-    assert.throws(() => publishSeatPr(g)); assert(!g.calls.some(c => c[2] === 'merge'));
+    assert.throws(() => publishSeatPr(g)); assert(!g.calls.some(c => c.includes('--match-head-commit')));
   }
 });
 

@@ -39,7 +39,11 @@ $trigger = New-ScheduledTaskTrigger -Daily -At '03:50'
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'ルール遵守監査ループを毎日実行し rule-compliance.md / rule-compliance-state.json を更新' -Force | Out-Null
+try {
+  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'ルール遵守監査ループを毎日実行し rule-compliance.md / rule-compliance-state.json を更新' -Force | Out-Null
+} catch {
+  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description 'ルール遵守監査ループを毎日実行し rule-compliance.md / rule-compliance-state.json を更新' -Force | Out-Null
+}
 Write-Host "OK: task $taskName registered (daily 03:50, limit 30 min)"
 $registered = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
 $registered | Select-Object TaskName, State

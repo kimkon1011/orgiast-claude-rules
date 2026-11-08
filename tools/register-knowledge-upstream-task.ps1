@@ -29,8 +29,12 @@ $trigger = New-ScheduledTaskTrigger -Daily -At '00:17'
 $trigger.RepetitionInterval = (New-TimeSpan -Hours 1)
 $trigger.RepetitionDuration = (New-TimeSpan -Days 365)
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
-$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'Auto-send local memory/playbook/incident knowledge to Drive inbox and sync Drive master knowledge down (hourly, all PCs)' -Force | Out-Null
+try {
+  $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
+  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'Auto-send local memory/playbook/incident knowledge to Drive inbox and sync Drive master knowledge down (hourly, all PCs)' -Force | Out-Null
+} catch {
+  Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description 'Auto-send local memory/playbook/incident knowledge to Drive inbox and sync Drive master knowledge down (hourly, all PCs)' -Force | Out-Null
+}
 Write-Host "OK: task $taskName registered (hourly at :17, limit 15 min)"
 $registered = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
 $registered | Select-Object TaskName, State

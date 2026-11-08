@@ -14,14 +14,16 @@ $repo = Resolve-RegisterRepoRoot -Fallback (Split-Path -Parent $PSScriptRoot) -R
 $script = Join-Path $repo 'tools\knowledge-upstream.mjs'
 if (-not (Test-Path -LiteralPath $script)) { throw "missing: $script" }
 if ($ValidateOnly) {
-  $node = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source
+  $node = (Get-Command node.exe -ErrorAction SilentlyContinue).Source
+  if (-not $node) { $node = (Get-Command node -ErrorAction SilentlyContinue).Source }
   if (-not $node) { throw 'node.exe not found' }
   & $node --check $script
   if ($LASTEXITCODE -ne 0) { throw "node --check failed: $script" }
   Write-Host 'validate only: OK (no registration)'
   return
 }
-$node = (Get-Command node -CommandType Application -ErrorAction Stop | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source
+$node = (Get-Command node.exe -ErrorAction SilentlyContinue).Source
+if (-not $node) { $node = (Get-Command node -ErrorAction SilentlyContinue).Source }
 if (-not $node) { throw 'node.exe not found' }
 $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument @($script, '--sync-down') -WorkingDirectory $repo
 # Run every hour at :17 to spread load vs other hourly tasks

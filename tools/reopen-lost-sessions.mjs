@@ -290,6 +290,36 @@ export function agentsWithRetry(cli, spawn) {
   try { return go(); }
   catch (e) { return go(); }
 }
+export function agentsFromRegistry(sessionsDir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(sessionsDir);
+  } catch (e) {
+    if (e.code === 'ENOENT') throw e;
+    return new Set();
+  }
+  const result = new Set();
+  for (const entry of entries) {
+    if (!entry.endsWith('.json')) continue;
+    const filePath = path.join(sessionsDir, entry);
+    let data;
+    try {
+      data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch {
+      continue;
+    }
+    if (data.kind !== 'interactive' || !data.sessionId) continue;
+    if (data.pid) {
+      try {
+        process.kill(data.pid, 0);
+      } catch (e) {
+        if (e.code === 'ESRCH') continue;
+      }
+    }
+    result.add(data.sessionId);
+  }
+  return result;
+}
 export function measureCpu(spawn) {
   try {
     const val = ps('(Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average', spawn);
@@ -446,7 +476,7 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
   now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs, stateBased = false,
   checkCpu = true } = {}) {
-  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0 } };
+  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0 }, aliveSource: null, agentsError: null, agentsDiag: null };
   // Dry run is strictly read-only: no lock or log mutation on the user's PC.
   const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'));
   if (!release) return { ...result, error: 'locked' };
@@ -457,7 +487,42 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
     const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01',
       'anthropic-beta': 'ccr-byoc-2025-07-29', 'x-organization-uuid': org };
     const cli = claudeCli || resolveClaudeCli({ env, exists: fsImpl.existsSync, readdir: fsImpl.readdirSync, spawn });
-    const alive = () => agentsWithRetry(cli, spawn);
+    const alive = () => {
+      // Stage 1: claude agents --json with 30s timeout, no retry
+      try {
+        const start = Date.now();
+        const res = spawn(cli, ['agents', '--json'], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+        const elapsed = Date.now() - start;
+        if (res.error || res.status !== 0) {
+          const msg = res.error?.message ?? `exit code ${res.status}`;
+          result.aliveSource = 'registry';
+          result.agentsError = msg;
+          result.agentsDiag = {
+            elapsedMs: elapsed,
+            stderr: (res.stderr || '').slice(0, 300) || null,
+            signal: res.signal || null,
+            cwd: process.cwd(),
+            claudeEnvKeys: Object.keys(process.env).filter(k => k.includes('CLAUDE')),
+          };
+          return agentsFromRegistry(path.join(base, 'sessions'));
+        }
+        result.aliveSource = 'agents';
+        result.agentsError = null;
+        result.agentsDiag = null;
+        return parseAgents(res.stdout.trim());
+      } catch (e) {
+        result.aliveSource = 'registry';
+        result.agentsError = e.message;
+        result.agentsDiag = {
+          elapsedMs: null,
+          stderr: null,
+          signal: null,
+          cwd: process.cwd(),
+          claudeEnvKeys: Object.keys(process.env).filter(k => k.includes('CLAUDE')),
+        };
+        throw e;
+      }
+    };
     const living = alive();
     const locals = localIndex(base), closed = closedIds(base);
     const reopenCounts = reopenLoopCounts(base, now);

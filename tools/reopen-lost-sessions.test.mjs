@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder } from './reopen-lost-sessions.mjs';
+import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry } from './reopen-lost-sessions.mjs';
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
 const exit = { event_type: 'system', payload: { reason: 'host_exit' }, created_at: since };
@@ -230,7 +230,8 @@ test('opening continues after API deadline; focus precedes URI; lock released an
 test('unknown agents prevents API/open; concurrent lock and stale lock', async t => {
   const base = fixture(t);
   const result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', spawn: () => ({ status: 1 }), fetchImpl: () => assert.fail() });
-  assert.match(result.error, /failed/);
+  // agents 失敗→registry fallback→sessions ディレクトリ無しで ENOENT
+  assert.ok(result.error, 'should propagate ENOENT from registry');
   const file = path.join(base, 'test.lock'), release = acquireLock(file);
   assert.equal(acquireLock(file), null); release();
   fs.writeFileSync(file, 'stale'); fs.utimesSync(file, new Date(0), new Date(0));
@@ -764,12 +765,16 @@ test('CPU 85%以上で開き直しを defer、watermark を進めない', async 
   assert.equal(fs.existsSync(stateFile), false);
 });
 
-test('claude agents 呼び出しが失敗したら1回再試行する', async t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-retry-'));
+test('claude agents 呼び出しが失敗したら registry 代替に移行（再試行なし）', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-no-retry-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const base = mkLocalIdx(t, root, {});
   fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
   fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  // registry に session を仕込む（alive に process.pid を使う）
+  const sessionsDir = path.join(base, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionsDir, 'alive.json'), JSON.stringify({ pid: process.pid, sessionId: 'sid_001', kind: 'interactive' }));
 
   let attempts = 0;
   const err = new Error('spawnSync ETIMEDOUT');
@@ -779,10 +784,183 @@ test('claude agents 呼び出しが失敗したら1回再試行する', async t 
     fetchImpl: async url => ({ ok: true, json: async () => ({ data: [] }) }),
     spawn: () => {
       attempts++;
-      if (attempts === 1) return { error: err, status: null, stdout: '' };
-      return { status: 0, stdout: '[]' };
+      return { error: err, status: null, stdout: '' };
     },
   });
-  assert.equal(attempts, 2);
-  assert.ok(!result.error, `unexpected error: ${result.error ?? ''}`);
+  // 再試行なし（1回のみ）
+  assert.equal(attempts, 1);
+  // registry 代替で aliveSource='registry'
+  assert.equal(result.aliveSource, 'registry');
+  assert.ok(result.agentsError, 'agentsError に失敗理由が残る');
+});
+
+// ── agentsFromRegistry ──────────────────────────────────
+
+test('agentsFromRegistry: 有効なセッションを sessionId 集合で返す', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-test-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const sessionsDir = path.join(dir, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  // process.pid は生きているので process.kill(pid, 0) が成功する
+  fs.writeFileSync(path.join(sessionsDir, 'a.json'), JSON.stringify({ pid: process.pid, sessionId: 'sid_001', kind: 'interactive', status: 'busy' }));
+  fs.writeFileSync(path.join(sessionsDir, 'b.json'), JSON.stringify({ pid: process.pid, sessionId: 'sid_002', kind: 'interactive', status: 'idle' }));
+  const result = agentsFromRegistry(sessionsDir);
+  assert.equal(result.size, 2);
+  assert.ok(result.has('sid_001'));
+  assert.ok(result.has('sid_002'));
+});
+
+test('agentsFromRegistry: kind !== interactive は除外', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-kind-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const sessionsDir = path.join(dir, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionsDir, 'a.json'), JSON.stringify({ pid: process.pid, sessionId: 's1', kind: 'interactive' }));
+  fs.writeFileSync(path.join(sessionsDir, 'b.json'), JSON.stringify({ pid: process.pid, sessionId: 's2', kind: 'agent' }));
+  fs.writeFileSync(path.join(sessionsDir, 'c.json'), JSON.stringify({ pid: process.pid, sessionId: 's3', kind: 'background' }));
+  assert.equal(agentsFromRegistry(sessionsDir).size, 1);
+});
+
+test('agentsFromRegistry: sessionId が無いエントリは除外', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-noid-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const sessionsDir = path.join(dir, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionsDir, 'a.json'), JSON.stringify({ pid: process.pid, kind: 'interactive' })); // no sessionId
+  fs.writeFileSync(path.join(sessionsDir, 'b.json'), JSON.stringify({ pid: process.pid, sessionId: '', kind: 'interactive' })); // empty sessionId
+  assert.equal(agentsFromRegistry(sessionsDir).size, 0);
+});
+
+test('agentsFromRegistry: 壊れた JSON は読み飛ばす', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-broken-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const sessionsDir = path.join(dir, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionsDir, 'good.json'), JSON.stringify({ pid: process.pid, sessionId: 's1', kind: 'interactive' }));
+  fs.writeFileSync(path.join(sessionsDir, 'bad.json'), '{ broken json', 'utf8');
+  fs.writeFileSync(path.join(sessionsDir, 'empty.json'), '', 'utf8');
+  assert.equal(agentsFromRegistry(sessionsDir).size, 1);
+  assert.ok(agentsFromRegistry(sessionsDir).has('s1'));
+});
+
+test('agentsFromRegistry: 死んだ pid は除外される（ESRCH）', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-dead-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const sessionsDir = path.join(dir, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  // 既に終了した子プロセスの pid は dead（ESRCH になるはず）
+  const { spawnSync } = await import('node:child_process');
+  const child = spawnSync(process.execPath, ['-e', 'process.exit(0)'], { timeout: 5000 });
+  const deadPid = child.pid;
+  fs.writeFileSync(path.join(sessionsDir, 'dead.json'), JSON.stringify({ pid: deadPid, sessionId: 's_dead', kind: 'interactive' }));
+  fs.writeFileSync(path.join(sessionsDir, 'alive.json'), JSON.stringify({ pid: process.pid, sessionId: 's_alive', kind: 'interactive' }));
+  const result = agentsFromRegistry(sessionsDir);
+  assert.equal(result.size, 1);
+  assert.ok(result.has('s_alive'));
+  assert.ok(!result.has('s_dead'));
+});
+
+test('agentsFromRegistry: sessions ディレクトリが無ければ例外を投げる', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-no-dir-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  assert.throws(() => agentsFromRegistry(path.join(dir, 'sessions')), { code: 'ENOENT' });
+});
+
+// ── alive() 2段構え ─────────────────────────────────────
+
+test('alive: agents 成功 → aliveSource agents', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alive-agents-success-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+  ].map(JSON.stringify).join('\n'));
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', stateBased: true,
+    fetchImpl: async url => ({ ok: true, json: async () => ({ data: [] }) }),
+    spawn: () => ({ status: 0, stdout: JSON.stringify([{ kind: 'interactive', sessionId: 'sid_001' }]) }),
+  });
+  assert.equal(result.aliveSource, 'agents');
+  assert.equal(result.agentsError, null);
+  assert.equal(result.agentsDiag, null);
+});
+
+test('alive: agents ETIMEDOUT → registry で代替 → aliveSource registry', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alive-registry-fallback-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  // レジストリに session を仕込む
+  const sessionsDir = path.join(base, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionsDir, 'reg.json'), JSON.stringify({ pid: 999999999, sessionId: 'sid_reg', kind: 'interactive' }));
+  const err = new Error('spawnSync ETIMEDOUT');
+  err.code = 'ETIMEDOUT';
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', stateBased: true,
+    fetchImpl: async url => ({ ok: true, json: async () => ({ data: [] }) }),
+    spawn: () => ({ error: err, status: null, stdout: '', stderr: 'timeout' }),
+  });
+  assert.equal(result.aliveSource, 'registry');
+  assert.ok(result.agentsError);
+  assert.ok(result.agentsDiag);
+  assert.equal(typeof result.agentsDiag.elapsedMs, 'number');
+  assert.ok(Array.isArray(result.agentsDiag.claudeEnvKeys));
+});
+
+test('alive: agents 失敗でも registry に無ければ空集合、エラーは記録', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alive-registry-empty-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  // sessions ディレクトリは作らない → agentsFromRegistry が ENOENT で例外 → alive() は catch して空 Set
+  const err = new Error('spawnSync ETIMEDOUT');
+  err.code = 'ETIMEDOUT';
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', stateBased: true,
+    fetchImpl: async url => ({ ok: true, json: async () => ({ data: [] }) }),
+    spawn: () => ({ error: err, status: null, stdout: '', stderr: 'timeout' }),
+  });
+  assert.equal(result.aliveSource, 'registry');
+  assert.ok(result.agentsError);
+  // sessions ディレクトリ無しでも例外が上に伝播せず、alive() の catch で空 Set が返る
+  assert.equal(result.skipped.closed, 0);
+});
+
+test('reopenLost: 再オープン後の検証も aliveSource を正しく記録する', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alive-verify-source-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+  ].map(JSON.stringify).join('\n'));
+  const sessionsDir = path.join(base, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  // agents は空を返す → aliveSource agents、verified=[] unverified=['cse_one']
+  const result = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false,
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: (cmd, args) => {
+      if (args[0] === 'agents') return { status: 0, stdout: '[]' };
+      return { status: 0, stdout: '' };
+    },
+    windowReady: () => true,
+    wait: async () => {},
+  });
+  assert.equal(result.aliveSource, 'agents');
+  assert.equal(result.reopened.length, 1);
+  assert.deepEqual(result.verified, []);
+  assert.deepEqual(result.unverified, ['one']);
 });

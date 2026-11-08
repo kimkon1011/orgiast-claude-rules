@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { skipCoolingBackends } from './fallback-backend-health.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, BoundedOutputCapture } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -31,6 +31,7 @@ function run(args, options = {}) {
     // CLI tests own their working tree; do not scan the checkout or other tests' fixtures.
     cwd: home,
     timeout: 45000,
+    maxBuffer: options.maxBuffer,
     env: {
       ...process.env,
       ORGIAST_HOME: home,
@@ -2270,6 +2271,35 @@ if (!fs.existsSync(marker)) {
   assert.ok(timeouts.length >= 1, `timeout 発火が見えない: ${result.stderr}`);
   // 1 回目が約 4 秒使うので、2 回目の timer は 8 秒ではなく残り約 4 秒でなければならない。
   assert.ok(timeouts[0] <= 5, `再試行の timer が残り予算でなく ${timeouts[0]} 秒だった`);
+});
+
+test('BoundedOutputCapture は先頭と末尾を残し、中間の省略バイト数を数える', () => {
+  const capture = new BoundedOutputCapture(4, 5);
+  capture.append(Buffer.from('HEAD-middle-TAIL'));
+  assert.equal(capture.omittedBytes, 7);
+  assert.match(capture.toString(), /^HEAD\n\[codex-do\] 7 バイト省略\n-TAIL$/);
+});
+
+test('10MB 超の stderr は末尾を保持して省略量を報告し、codex-do 自体は完走する', () => {
+  const marker = 'STDERR_TAIL_MARKER';
+  const home = workDir();
+  const env = fakeNativeCodexEnv(`
+process.stderr.write('stderr head\\n');
+const block = Buffer.alloc(1024 * 1024, 0x78);
+for (let i = 0; i < 11; i += 1) process.stderr.write(block);
+process.stderr.write('\\n${marker}\\n');
+process.stdout.write('done\\n');
+`);
+  const result = run(['--force-native', '--kind', 'implement', '--cwd', workDir(), '--no-fallback', '結果を報告する'], {
+    home,
+    env,
+    maxBuffer: 16 * 1024 * 1024
+  });
+  assert.equal(result.status, 0, result.stderr.slice(-2000));
+  assert.match(result.stderr, /\[codex-do\] stderr を \d+ バイト省略/);
+  assert.match(result.stdout, /done/);
+  const rows = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split(/\r?\n/).map(JSON.parse);
+  assert.match(rows.at(-1).stderrTail, new RegExp(marker), '内部判定へ渡る保持済み stderr に末尾が残る');
 });
 
 // ── parseCodexOutput ──────────────────────────────────────────────

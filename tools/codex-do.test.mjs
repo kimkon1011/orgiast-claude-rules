@@ -31,6 +31,7 @@ function run(args, options = {}) {
     // CLI tests own their working tree; do not scan the checkout or other tests' fixtures.
     cwd: home,
     timeout: 45000,
+    maxBuffer: options.maxBuffer,
     env: {
       ...process.env,
       ORGIAST_HOME: home,
@@ -2270,6 +2271,25 @@ if (!fs.existsSync(marker)) {
   assert.ok(timeouts.length >= 1, `timeout 発火が見えない: ${result.stderr}`);
   // 1 回目が約 4 秒使うので、2 回目の timer は 8 秒ではなく残り約 4 秒でなければならない。
   assert.ok(timeouts[0] <= 5, `再試行の timer が残り予算でなく ${timeouts[0]} 秒だった`);
+});
+
+test('10MB 超の stderr は末尾を保持して省略量を報告し、codex-do 自体は完走する', () => {
+  const marker = 'STDERR_TAIL_MARKER';
+  const env = fakeNativeCodexEnv(`
+process.stderr.write('先頭の usage limit ではない情報\\n');
+const block = Buffer.alloc(1024 * 1024, 0x78);
+for (let i = 0; i < 11; i += 1) process.stderr.write(block);
+process.stderr.write('\\n${marker}\\n');
+process.stdout.write('done\\n');
+`);
+  const result = run(['--force-native', '--cwd', workDir(), '--no-fallback', '調査して報告する'], {
+    env,
+    maxBuffer: 16 * 1024 * 1024
+  });
+  assert.equal(result.status, 0, result.stderr.slice(-2000));
+  assert.match(result.stderr, new RegExp(marker));
+  assert.match(result.stderr, /\[codex-do\] stderr を \d+ バイト省略/);
+  assert.match(result.stdout, /done/);
 });
 
 // ── parseCodexOutput ──────────────────────────────────────────────

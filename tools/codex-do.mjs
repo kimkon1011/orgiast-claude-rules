@@ -837,6 +837,54 @@ export function clearCooldownAfterRecheck({ home, recheck, result, quotaMatched,
   return true;
 }
 
+const CAPTURE_HEAD_BYTES = 64 * 1024;
+const CAPTURE_TAIL_BYTES = 4 * 1024 * 1024;
+
+// 子プロセスの出力は端末へそのまま流す一方、終了判定用には先頭と末尾だけを保持する。
+// Buffer の配列で末尾を持ち、巨大出力のたびに 4MB 全体をコピーし直さない。
+export class BoundedOutputCapture {
+  constructor(headBytes = CAPTURE_HEAD_BYTES, tailBytes = CAPTURE_TAIL_BYTES) {
+    this.headBytes = headBytes;
+    this.tailBytes = tailBytes;
+    this.head = Buffer.alloc(0);
+    this.tail = [];
+    this.tailLength = 0;
+    this.totalBytes = 0;
+  }
+
+  append(chunk) {
+    let buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    this.totalBytes += buffer.length;
+    if (this.head.length < this.headBytes) {
+      const take = Math.min(this.headBytes - this.head.length, buffer.length);
+      this.head = Buffer.concat([this.head, buffer.subarray(0, take)]);
+      buffer = buffer.subarray(take);
+    }
+    if (buffer.length === 0 || this.tailBytes === 0) return;
+    this.tail.push(buffer);
+    this.tailLength += buffer.length;
+    while (this.tailLength > this.tailBytes && this.tail.length > 0) {
+      const excess = this.tailLength - this.tailBytes;
+      const first = this.tail[0];
+      if (first.length <= excess) {
+        this.tail.shift();
+        this.tailLength -= first.length;
+      } else {
+        this.tail[0] = first.subarray(excess);
+        this.tailLength -= excess;
+      }
+    }
+  }
+
+  get omittedBytes() { return Math.max(0, this.totalBytes - this.head.length - this.tailLength); }
+
+  toString() {
+    const tail = this.tailLength > 0 ? Buffer.concat(this.tail, this.tailLength).toString() : '';
+    if (this.omittedBytes === 0) return this.head.toString() + tail;
+    return `${this.head.toString()}\n[codex-do] ${this.omittedBytes} バイト省略\n${tail}`;
+  }
+}
+
 if (isEntry(import.meta.url)) {
 
 const args = process.argv.slice(2);
@@ -1079,7 +1127,9 @@ function execute(command, commandArgs, options = {}) {
     }
   }
   return new Promise((resolve) => {
-    let outputChars = 0, output = '', stderr = '', timedOut = false, abortedPolicyStall = false;
+    let outputChars = 0, timedOut = false, abortedPolicyStall = false;
+    const outputCapture = new BoundedOutputCapture();
+    const stderrCapture = new BoundedOutputCapture();
     const callStarted = Date.now();
     const callTimeoutSeconds = Number.isFinite(options.timeoutSecs) && options.timeoutSecs > 0
       ? options.timeoutSecs
@@ -1095,7 +1145,9 @@ function execute(command, commandArgs, options = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(timer); clearTimeout(forceTimer); clearInterval(stallTimer);
-      resolve(value);
+      if (outputCapture.omittedBytes > 0) console.error(`[codex-do] stdout を ${outputCapture.omittedBytes} バイト省略`);
+      if (stderrCapture.omittedBytes > 0) console.error(`[codex-do] stderr を ${stderrCapture.omittedBytes} バイト省略`);
+      resolve({ ...value, output: outputCapture.toString(), stderr: stderrCapture.toString() });
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -1105,7 +1157,7 @@ function execute(command, commandArgs, options = {}) {
       if (!abortedPolicyStall
         && options.abortPolicyStall === true
         && process.env.CODEX_DO_POLICY_STALL_ABORT !== '0'
-        && shouldAbortPolicyStall({ elapsedSecs: callTimeoutSeconds, outputChars, stderr, minElapsedSecs: 0 })) {
+        && shouldAbortPolicyStall({ elapsedSecs: callTimeoutSeconds, outputChars, stderr: stderrCapture.toString(), minElapsedSecs: 0 })) {
         abortedPolicyStall = true;
       }
       console.error(`\n⏱ ${command} が ${callTimeoutSeconds} 秒で応答を終えなかったので停止しました。--timeout で延長できます`);
@@ -1115,7 +1167,7 @@ function execute(command, commandArgs, options = {}) {
       // (2026-10-28 実測: 予算600秒の gemini-cli 試行が 1044 秒)。猶予後は close を待たず打ち切る。
       forceTimer = setTimeout(() => {
         for (const stream of [child.stdin, child.stdout, child.stderr]) { try { stream?.destroy(); } catch { /* 既に閉じている */ } }
-        settle({ status: 124, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null });
+        settle({ status: 124, outputChars, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null });
       }, timeoutKillGraceMs(process.env));
       forceTimer.unref?.();
       killProcessTree(child);
@@ -1130,7 +1182,7 @@ function execute(command, commandArgs, options = {}) {
         || !shouldAbortPolicyStall({
           elapsedSecs: (Date.now() - callStarted) / 1000,
           outputChars,
-          stderr,
+          stderr: stderrCapture.toString(),
           minElapsedSecs: policyStallMinElapsedSecs(process.env)
         })) return;
       abortedPolicyStall = true;
@@ -1140,14 +1192,14 @@ function execute(command, commandArgs, options = {}) {
     };
     const stallTimer = setInterval(checkPolicyStall, policyStallCheckMs(process.env));
     stallTimer.unref?.();
-    child.stdout.on('data', (chunk) => { outputChars += chunk.length; output += chunk.toString(); process.stdout.write(chunk); });
+    child.stdout.on('data', (chunk) => { outputChars += chunk.length; outputCapture.append(chunk); process.stdout.write(chunk); });
     child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
+      stderrCapture.append(chunk);
       process.stderr.write(chunk);
       checkPolicyStall();
     });
-    child.on('error', (error) => settle({ status: null, error, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }));
-    child.on('close', (status) => settle({ status: timedOut ? 124 : status, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }));
+    child.on('error', (error) => settle({ status: null, error, outputChars, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }));
+    child.on('close', (status) => settle({ status: timedOut ? 124 : status, outputChars, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }));
     // 指示は stdin で渡し、必ず閉じる。閉じないと codex が
     // "Reading additional input from stdin..." のまま永久に待つ。
     child.stdin.end(prompt);

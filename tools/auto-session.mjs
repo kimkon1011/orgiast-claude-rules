@@ -821,7 +821,7 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
       // inherited pipes to close before advancing. Its /T cleanup continues independently.
       if (child.pid) {
         if (process.platform === 'win32') {
-          // Even async spawn() can block during Windows process creation. Run that
+          // Even async process creation can block during Windows process creation. Run that
           // OS call off the event loop so cleanup cannot consume the next lane's slice.
           const killer = new Worker(`
             const { parentPort, workerData } = require('node:worker_threads');

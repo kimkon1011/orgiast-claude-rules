@@ -2277,6 +2277,7 @@ test('BoundedOutputCapture は先頭と末尾を残し、中間の省略バイ�
   const capture = new BoundedOutputCapture(4, 5);
   capture.append(Buffer.from('HEAD-middle-TAIL'));
   assert.equal(capture.omittedBytes, 7);
+  assert.equal(capture.toStringForCheck(3), 'HEADAIL');
   assert.match(capture.toString(), /^HEAD\n\[codex-do\] 7 バイト省略\n-TAIL$/);
 });
 
@@ -2290,12 +2291,15 @@ for (let i = 0; i < 11; i += 1) process.stderr.write(block);
 process.stderr.write('\\n${marker}\\n');
 process.stdout.write('done\\n');
 `);
+  const started = Date.now();
   const result = run(['--force-native', '--kind', 'implement', '--cwd', workDir(), '--no-fallback', '結果を報告する'], {
     home,
     env,
     maxBuffer: 16 * 1024 * 1024
   });
+  const elapsedMs = Date.now() - started;
   assert.equal(result.status, 0, result.stderr.slice(-2000));
+  assert.ok(elapsedMs < 5000, `11MB stderr の処理に ${elapsedMs}ms かかった`);
   assert.match(result.stderr, /\[codex-do\] stderr を \d+ バイト省略/);
   assert.match(result.stdout, /done/);
   const rows = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split(/\r?\n/).map(JSON.parse);

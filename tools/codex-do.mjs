@@ -839,6 +839,7 @@ export function clearCooldownAfterRecheck({ home, recheck, result, quotaMatched,
 
 const CAPTURE_HEAD_BYTES = 64 * 1024;
 const CAPTURE_TAIL_BYTES = 4 * 1024 * 1024;
+const POLICY_CHECK_TAIL_BYTES = 256 * 1024;
 
 // 子プロセスの出力は端末へそのまま流す一方、終了判定用には先頭と末尾だけを保持する。
 // Buffer の配列で末尾を持ち、巨大出力のたびに 4MB 全体をコピーし直さない。
@@ -877,6 +878,23 @@ export class BoundedOutputCapture {
   }
 
   get omittedBytes() { return Math.max(0, this.totalBytes - this.head.length - this.tailLength); }
+
+  // 停滞判定は拒否文言の回数だけを見るため、終了時に返す末尾 4MB 全体は不要。
+  // 後方から必要な chunk だけを集め、stderr の chunk 到着ごとに 4MB を連結しない。
+  toStringForCheck(tailBytes = POLICY_CHECK_TAIL_BYTES) {
+    const wanted = Math.min(this.tailLength, Math.max(0, tailBytes));
+    const parts = [];
+    let remaining = wanted;
+    for (let index = this.tail.length - 1; index >= 0 && remaining > 0; index -= 1) {
+      const chunk = this.tail[index];
+      const take = Math.min(chunk.length, remaining);
+      parts.push(chunk.subarray(chunk.length - take));
+      remaining -= take;
+    }
+    parts.reverse();
+    const tail = wanted > 0 ? Buffer.concat(parts, wanted).toString() : '';
+    return this.head.toString() + tail;
+  }
 
   toString() {
     const tail = this.tailLength > 0 ? Buffer.concat(this.tail, this.tailLength).toString() : '';
@@ -1176,14 +1194,18 @@ function execute(command, commandArgs, options = {}) {
     // 拒否が閾値秒より前に出尽くして以後 stderr が静かになる停滞（2026-10-23 実測: gemini が拒否3回後に
     // 無音で600秒）は chunk 到着時の判定では再評価されないため、周期タイマーでも同じ判定を回す。
     const checkPolicyStall = () => {
+      const elapsedSecs = (Date.now() - callStarted) / 1000;
+      const minElapsedSecs = policyStallMinElapsedSecs(process.env);
       if (abortedPolicyStall
         || options.abortPolicyStall !== true
         || process.env.CODEX_DO_POLICY_STALL_ABORT === '0'
+        || elapsedSecs < minElapsedSecs
+        || outputChars >= POLICY_STALL_MIN_OUTPUT_CHARS
         || !shouldAbortPolicyStall({
-          elapsedSecs: (Date.now() - callStarted) / 1000,
+          elapsedSecs,
           outputChars,
-          stderr: stderrCapture.toString(),
-          minElapsedSecs: policyStallMinElapsedSecs(process.env)
+          stderr: stderrCapture.toStringForCheck(),
+          minElapsedSecs
         })) return;
       abortedPolicyStall = true;
       console.error(`

@@ -27,7 +27,7 @@ function lastMatch(re, text) {
 // 完了宣言に続く説明を、新しい自動進行の約束として扱わない。
 export function isNoopPromise(text) {
   const value = cleanValue(text);
-  const first = value.split('。', 1)[0].replace(/[.．\s]+$/g, '').replace(/\s*[（(].*[）)]$/, '').trim();
+  const first = value.replace(/\s*[（(].*[）)]$/, '').split('。', 1)[0].replace(/[.．\s]+$/g, '').trim();
   return NONE.test(first) || first === '特にありません' ||
     /^完了済み。\s*追加の自動進行なし(?:[。\s]|$)/.test(value) ||
     /(?:作業|自動進行|自動処理|進行|対応)(?:は|が)?(?:ありません|無い|ない|なし)$/.test(first);

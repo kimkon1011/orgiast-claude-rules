@@ -73,8 +73,9 @@ export function listContracts({ contractsDir = path.join(repoDir, '.claude', 'co
 // --- Private helpers ---
 
 function extractTitle(text) {
+  if (!text || !text.trim()) return 'Untitled Task';
   const match = text.match(/^###?\s+(.+)$/m);
-  return match ? match[1].trim() : text.split('\n')[0].slice(0, 80).trim();
+  return match ? match[1].trim() : text.split('\n')[0].slice(0, 80).trim() || 'Untitled Task';
 }
 
 function extractDeliverable(text) {
@@ -115,7 +116,7 @@ function extractEvidenceTypes(text) {
   const evidence = [];
   const lower = text.toLowerCase();
   if (/\btest(s|ing)?\b/.test(lower)) evidence.push('test-pass');
-  if (/\b(typecheck|type.check|typescript)\b/.test(lower)) evidence.push('type-check');
+  if (/\btype\s*check(?:ing)?\b/.test(lower) || /\btypescript\b/.test(lower)) evidence.push('type-check');
   if (/\blog(s)?\b/.test(lower)) evidence.push('log');
   if (/\b(screenshot|スクショ)\b/.test(lower)) evidence.push('screenshot');
   if (/\blint\b/.test(lower)) evidence.push('lint-pass');

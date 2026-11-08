@@ -41,9 +41,11 @@ test('spend updates budget and detects exhaustion', () => {
   const b = new CostBudget({ contractId: 'spend-test', limit: 10, spent: 0 });
   assert.ok(spend(b, 5, { ledgerDir }));
   assert.equal(b.spent, 5);
-  assert.ok(spend(b, 5, { ledgerDir }));
+  // Second spend brings to exactly limit → exhausted, spend returns false
+  assert.ok(!spend(b, 5, { ledgerDir }));
   assert.ok(b.exhausted);
-  assert.ok(!spend(b, 1, { ledgerDir })); // already exhausted but still records
+  // Already exhausted, spend returns false
+  assert.ok(!spend(b, 1, { ledgerDir }));
 });
 
 test('wouldExceedBudget predicts overage', () => {

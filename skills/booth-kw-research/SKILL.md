@@ -12,15 +12,27 @@ description: 展示会ブース制作のキーワードリサーチを自動実�
 - `/booth-kw-research` で起動
 - または `claude -p "展示会ブース制作のキーワードリサーチを実行"`
 
+## 使用方法
+
+全Phaseはマスターオーケストレータから実行する。
+
+```bash
+node skills/booth-kw-research/run.mjs
+node skills/booth-kw-research/run.mjs --gsc-csv <GSCエクスポートCSV>
+node skills/booth-kw-research/run.mjs --dry-run <出力先ディレクトリ>
+```
+
+`--dry-run` はネットワークとLLMを使わず、同じ出力先をPhase 1から4へ引き継ぐ。通常実行の成果物は `output/` に生成する。
+
 ## 使用条件
 - `node -e "require('node:http');require('node:https')"` が正常終了すること
 - `tools/llm-ask.mjs` が利用可能であること（LLM分類用）
 - 競合サイトのURLリストが `data/competitors.json` に設定されていること
 
-## 手順
+## 処理内容
 
 ### Phase 1: 現状把握（サイトクロール）
-1. `process/phase1-crawl.mjs` を実行し、自社サイト + 競合サイトをクロール
+1. `run.mjs` が `process/phase1-crawl.mjs` を実行し、自社サイト + 競合サイトをクロール
 2. 各ページのURL、タイトル、H1、メタディスクリプション、主要見出しを抽出
 3. 結果を `output/crawl-results.json` に保存
 4. ページ数・エラー数・取得失敗数をサマリ出力
@@ -70,7 +82,7 @@ description: 展示会ブース制作のキーワードリサーチを自動実�
 | 分類の一貫性 | 同一キーワードを2回分類 | 一致率95%以上 |
 | 提案の採用率 | 制作チームが採用した提案の割合 | 60%以上 |
 | テスト合格率 | `node --test skills/booth-kw-research/test/*.test.mjs` | 全件PASS |
-| Codex スタブ完了率 | `grep -r 'TODO(codex)' skills/booth-kw-research/ \| wc -l` | 0件 |
+| 未実装スタブ | process配下を検索 | 0件 |
 
 ### 改善サイクル
 
@@ -84,7 +96,7 @@ description: 展示会ブース制作のキーワードリサーチを自動実�
 - GSC API/Keyword Plannerへのアクセスがない場合、検索ボリュームデータは代替手段に頼る
 - クロールは`robots.txt`を遵守するが、サイト側の変更により取得不能になる可能性がある
 - LLM分類はバイアスを含む可能性があるため、重要なキーワードは人間のレビューを推奨
-- 全スクリプトに`TODO(codex)`が残存：実クロール・GSC統合・類似度マージ・内部リンク案・週次レポートは未実装
+- 標準ライブラリのみの簡易HTML解析・日本語キーワード抽出であり、完全なDOM解析や形態素解析ではない
 
 ## 関連スキル
 - `design-deck`: 可視化資料作成（提案書のスライド化）

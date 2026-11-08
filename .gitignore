@@ -19,6 +19,10 @@ tools/.nightly-bootstrap-test-*/
 # PowerShell を repo 直下で走らせたときの一時スクリプト
 tools/.ps.tmp.ps1
 
+# テスト用一時ディレクトリ
+tmp-test-*/
+tmp-*/
+
 # $env:LOCALAPPDATA が未設定のまま PowerShell を起動すると repo 直下に掘られるキャッシュ
 /Microsoft/
 

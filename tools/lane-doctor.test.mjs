@@ -228,13 +228,39 @@ test('WSL 不在の書き込み修復成功と quick 表示',async t=>{
   assert.equal(calls,1);assert.equal(r.lanes.codex.reason,'native_ok');assert.equal(r.lanes.codex.alive,true);assert.ok(r.repairs.some(r=>typeof r==='string'&&r.includes('ネイティブ')));assert.match(summarize(laneDoctorQuick({home:h,now:now+1000})),/修復:.*ネイティブ/);
 });
 test('ネイティブ修復失敗は操作を1件通知し24h抑止',async t=>{
-  const h=fixture(t);let calls=0;const opts={home:h,now,platform:'win32',listWsl:()=>'',nativeWriteProbe:async()=>({code:1}),probe:async()=>({code:0,text:'PONG'}),notify:async text=>{calls++;assert.match(text,/原因:.*試した修復:.*残る操作:/);return {delivered:'dm'};}};
+  const h=fixture(t);let calls=0;const opts={home:h,now,platform:'win32',listWsl:()=>'',nativeWriteProbe:async()=>({code:1,text:'writing is blocked by read-only sandbox'}),probe:async()=>({code:0,text:'PONG'}),notify:async text=>{calls++;assert.match(text,/原因:.*試した修復:.*残る操作:/);return {delivered:'dm'};}};
   const r=await laneDoctorProbe(opts);assert.equal(r.deadNeedsUser.filter(x=>x.provider==='codex').length,1);assert.match(r.deadNeedsUser.find(x=>x.provider==='codex').fix,/wsl.exe --install --no-distribution/);
   await laneDoctorProbe({platform: 'linux',...opts,now:now+60000});assert.equal(calls,1);
 });
 test('ネイティブ書き込み probe の一過性失敗は再試行で吸収し通知しない(2026-11-07 誤通知)',async t=>{
   const h=fixture(t);let calls=0;const opts={home:h,now,platform:'win32',listWsl:()=>'',nativeWriteProbe:async()=>{calls++;return calls===1?{code:1,text:'起動失敗'}:{code:0};},probe:async()=>({code:0,text:'PONG'}),notify:async()=>({delivered:'dm'})};
   const r=await laneDoctorProbe(opts);assert.equal(calls,2);assert.equal(r.lanes.codex.alive,true);assert.equal(r.lanes.codex.reason,'native_ok');assert.equal(r.deadNeedsUser.filter(x=>x.provider==='codex').length,0);
+});
+test('ネイティブ書き込み probe のタイムアウトは再試行せず物理操作を通知しない',async t=>{
+  const h=fixture(t);let calls=0;const sent=[];
+  const r=await laneDoctorProbe({home:h,now,platform:'win32',providers:['codex'],listWsl:()=>'',nativeWriteProbe:async()=>{calls++;return {code:1,timedOut:true,text:'タイムアウト(180s)'};},probe:async()=>({code:0,text:'PONG'}),notify:async text=>{sent.push(text);return {delivered:'dm'};}});
+  assert.equal(calls,1);assert.equal(r.lanes.codex.reason,'probe_failed:timeout');assert.equal(r.lanes.codex.userFix,undefined);assert.ok(sent.every(text=>!text.includes('wsl')));
+});
+test('ネイティブ書き込み probe は全失敗本文を残す',async t=>{
+  const h=fixture(t);let calls=0;
+  const r=await laneDoctorProbe({home:h,now,platform:'win32',providers:['codex'],listWsl:()=>'',nativeWriteProbe:async()=>({code:1,text:++calls===1?'A':'B'}),probe:async()=>({code:0,text:'PONG'}),notify:async()=>({delivered:'dm'})});
+  assert.equal(calls,2);assert.match(r.lanes.codex.error,/1回目: A/);assert.match(r.lanes.codex.error,/2回目: B/);
+});
+test('ネイティブ書き込み probe の各試行は共有予算でなく専用 timeout を使う',async t=>{
+  const h=fixture(t),timeouts=[];
+  await laneDoctorProbe({home:h,now,platform:'win32',providers:['codex'],budgetMs:10,nativeTimeoutMs:12345,listWsl:()=>'',nativeWriteProbe:async({timeoutMs})=>{timeouts.push(timeoutMs);return {code:1,text:'A'};},probe:async()=>({code:0,text:'PONG'}),notify:async()=>({delivered:'dm'})});
+  assert.deepEqual(timeouts,[12345,12345]);
+});
+test('read-only sandbox の native 失敗だけは physical_operation に分類する',async t=>{
+  const h=fixture(t);
+  const r=await laneDoctorProbe({home:h,now,platform:'win32',providers:['codex'],listWsl:()=>'',nativeWriteProbe:async()=>({code:1,text:'writing is blocked by read-only sandbox'}),probe:async()=>({code:0,text:'PONG'}),notify:async()=>({delivered:'dm'})});
+  assert.equal(r.lanes.codex.reason,'dead:physical_operation');
+});
+test('danger-full-access のログを含む一般失敗は physical_operation に分類しない',async t=>{
+  const h=fixture(t);
+  const r=await laneDoctorProbe({home:h,now,platform:'win32',providers:['codex'],listWsl:()=>'',nativeWriteProbe:async()=>({code:1,text:'sandbox: danger-full-access\nsome other error'}),probe:async()=>({code:0,text:'PONG'}),notify:async()=>({delivered:'dm'})});
+  assert.equal(r.lanes.codex.reason,'probe_failed');
+  assert.equal(r.lanes.codex.tried,undefined);
 });
 test('glm cooldown and explicitly tagged legacy history cannot block healthy Codex', t => {
   const h = fixture(t), until = now + 3600000;

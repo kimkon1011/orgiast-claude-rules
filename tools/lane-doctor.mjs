@@ -173,12 +173,17 @@ export function nativeWriteProbeArgs({ repo, cwd, timeoutMs, instruction }) {
   // --kind を明示しないと codex-do が investigate と判定し llm-ask へ流れ、書き込み不能でレーン死亡と誤判定する（2026-10-22 実測）。
   return [path.join(repo, 'tools/codex-do.mjs'), instruction, '--cwd', cwd, '--kind', 'implement', '--force-native', '--no-fallback', '--no-escalate', '--timeout', String(Math.max(1, Math.floor(timeoutMs / 1000)))];
 }
+export const NATIVE_WRITE_PROBE_TIMEOUT_MS = 180_000;
 export async function runNativeWriteProbe({ home, timeoutMs }) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-codex-write-'));
-  const run = (cmd, args) => new Promise(resolve => execFile(cmd, args, { cwd, env: { ...process.env, ORGIAST_HOME: home }, timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 }, (e, stdout, stderr) => resolve({ code: e ? 1 : 0, text: `${stdout}\n${stderr}` })));
+  const run = (cmd, args) => new Promise(resolve => execFile(cmd, args, { cwd, env: { ...process.env, ORGIAST_HOME: home }, timeout: timeoutMs, windowsHide: true, maxBuffer: 256 * 1024 }, (e, stdout, stderr) => {
+    const output = `${stdout || ''}\n${stderr || ''}`.trim();
+    if (e?.killed || e?.signal) return resolve({ code: 1, timedOut: true, text: `タイムアウト(${Math.ceil(timeoutMs / 1000)}s) ${output}`.trim() });
+    resolve({ code: e ? 1 : 0, text: output });
+  }));
   try {
     const init = await run('git', ['init', '--quiet']);
-    if (init.code) return init;
+    if (init.code) return { ...init, text: `git init 失敗 ${init.text || ''}`.trim() };
     const instruction = 'WRITE_OK.txt を作成し、内容を WRITE_OK にしてください。その後ファイルを読み返して確認してください。';
     const result = await run(process.execPath, nativeWriteProbeArgs({ repo, cwd, timeoutMs, instruction }));
     let ok = false;
@@ -228,7 +233,7 @@ export function notificationText(item, home) {
 4. 完了後は Claude が lane-doctor --probe で復旧を確認します。`;
 }
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe, spawnImpl = spawnSync, providers = PROVIDERS, probeRetries = 1 } = {}) {
+export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe, nativeTimeoutMs = NATIVE_WRITE_PROBE_TIMEOUT_MS, spawnImpl = spawnSync, providers = PROVIDERS, probeRetries = 1 } = {}) {
   const started = Date.now(), dir = path.join(home, '.claude');
   const health = laneDoctorQuick({ home, now, save: false, platform, spawnImpl });
   const previous = readJson(path.join(dir, 'lane-health.json'));
@@ -242,14 +247,17 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       if (platform === 'win32' && await listWsl() === '') {
         // 1回の起動失敗で即 down→kim 通知しない。一過性のスパウン失敗は短い再試行で吸収する（2026-11-07 実測: 06:57Z failure → 07:00Z same 経路で fixed。probeRetries=1 で合計2回実行）。
         let result;
+        const failures = [];
         const attempts = 1 + Number(probeRetries ?? 1);
         for (let i = 0; i < attempts; i++) {
           if (i) await sleep(1500);
-          try { result = await nativeWriteProbe({ home, timeoutMs: Math.max(1, probeBudget - (Date.now() - started)) }); }
+          try { result = await nativeWriteProbe({ home, timeoutMs: nativeTimeoutMs }); }
           catch { result = { code: 1, text: 'ネイティブ書き込み probe 起動失敗' }; }
           if (result.code === 0) break;
+          failures.push(result.text || '(出力なし)');
+          if (result.timedOut) break;
         }
-        if (result.code !== 0 && attempts > 1) result.text = `ネイティブ書き込み probe ${attempts}回失敗(最終) ${result.text || ''}`;
+        if (result.code !== 0) result.text = `ネイティブ書き込み probe ${failures.length}回失敗(最終) ${failures.map((text, i) => `${i + 1}回目: ${text}`).join(' / ')}`;
         return [p, { ...result, nativeRepair: true }];
       }
       const dry = await probe(p, { home, timeoutMs: Math.min(15000, probeBudget), dryRun: true });
@@ -285,7 +293,10 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       // 失敗の中身を必ず残す（2026-10-15 作業用011: 理由が記録されず原因を追えなかった）
       health.lanes[p].error = String(text || '').replace(/(sk-|eyJ)[A-Za-z0-9._-]{8,}/g, '$1***').replace(/\s+/g, ' ').trim().slice(-400);
       // native の失敗でも、認証・上限・課金が原因なら physical_operation（再起動が要る）と誤判定しない
-      if (result.nativeRepair && health.lanes[p].reason === 'probe_failed') Object.assign(health.lanes[p], { reason: 'dead:physical_operation', tried: 'Windows ネイティブ(danger-full-access)でファイル作成・read-back', userFix: '管理者 PowerShell で wsl.exe --install --no-distribution を実行して Windows を再起動する。' });
+      if (result.nativeRepair && health.lanes[p].reason === 'probe_failed') {
+        if (result.timedOut) health.lanes[p].reason = 'probe_failed:timeout';
+        else if (/blocked by read-only sandbox|sandbox:\s*read-only|Read-only file system|EROFS/i.test(text) || /spawn .*ENOENT|codex.*not found|is not recognized/i.test(text)) Object.assign(health.lanes[p], { reason: 'dead:physical_operation', tried: 'Windows ネイティブ(danger-full-access)でファイル作成・read-back', userFix: '管理者 PowerShell で wsl.exe --install --no-distribution を実行して Windows を再起動する。' });
+      }
       health.lanes[p].probeReason = health.lanes[p].reason;
       if (deferred && cooldown[p]?.until) health.lanes[p].until = cooldown[p].until;
       if (limited && !payment) { const until = providerResetUntil(text, now); cooldown[p] = { until, at: now, reason: 'lane_doctor_usage_limit' }; cooldownChanged = true; health.lanes[p].until = until; }

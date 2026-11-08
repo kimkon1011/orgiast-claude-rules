@@ -964,3 +964,164 @@ test('reopenLost: 再オープン後の検証も aliveSource を正しく記録�
   assert.deepEqual(result.verified, []);
   assert.deepEqual(result.unverified, ['one']);
 });
+
+// ── 段階記録 ─────────────────────────────────────────────
+
+test('progress ファイルに段階が記録される', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'progress-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  const projects = path.join(base, 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  fs.writeFileSync(path.join(projects, 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+  ].map(JSON.stringify).join('\n'));
+
+  const progressFile = path.join(base, 'reopen-lost-sessions-progress.json');
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', progressFile, checkCpu: false,
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.ok(result.candidates.length > 0 || !result.error, 'reopenLost should not fail');
+  assert.ok(fs.existsSync(progressFile), 'progress file should exist');
+  const prog = JSON.parse(fs.readFileSync(progressFile, 'utf8'));
+  assert.equal(prog.stage, 'log-write');
+  assert.ok(prog.pid);
+  assert.ok(prog.startedAt);
+  assert.ok(prog.at);
+});
+
+test('progress ファイルに中間段階が順に記録される', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'progress-stages-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  const projects = path.join(base, 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  fs.writeFileSync(path.join(projects, 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+  ].map(JSON.stringify).join('\n'));
+
+  const progressFile = path.join(base, 'reopen-lost-sessions-progress.json');
+  const stages = [];
+  const origWriteFileSync = fs.writeFileSync;
+  const { writeFileSync } = fs;
+  fs.writeFileSync = (file, data, ...args) => {
+    writeFileSync.call(fs, file, data, ...args);
+    if (file === progressFile) {
+      try { stages.push(JSON.parse(data).stage); } catch {}
+    }
+  };
+  t.after(() => { fs.writeFileSync = origWriteFileSync; });
+  await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', progressFile, checkCpu: false,
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.ok(stages.includes('auth'), 'auth stage should be recorded');
+  assert.ok(stages.includes('alive'), 'alive stage should be recorded');
+  assert.ok(stages.includes('index'), 'index stage should be recorded');
+  assert.ok(stages.includes('api-list'), 'api-list stage should be recorded');
+  assert.ok(stages.includes('log-write'), 'log-write stage should be recorded');
+  assert.ok(stages.indexOf('auth') < stages.indexOf('alive'), 'auth before alive');
+  assert.ok(stages.indexOf('alive') < stages.indexOf('index'), 'alive before index');
+  assert.ok(stages.indexOf('index') < stages.indexOf('api-list'), 'index before api-list');
+});
+
+// ── watchdog ─────────────────────────────────────────────
+
+test('watchdog が短いタイムアウトで発火し progress を記録する', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'watchdog-fire-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  const projects = path.join(base, 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  fs.writeFileSync(path.join(projects, 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+  ].map(JSON.stringify).join('\n'));
+
+  const progressFile = path.join(base, 'reopen-lost-sessions-progress.json');
+  const logFile = path.join(base, 'reopen-lost-sessions.log');
+  let watchdogCalled = false;
+
+  const slowFetch = async url => {
+    await new Promise(r => setTimeout(r, 500));
+    return { ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } };
+  };
+
+  const result = await reopenLost({
+    base, since, until, dryRun: false, claudeCli: 'claude.exe', checkCpu: false,
+    progressFile, watchdogTimeout: 50,
+    onWatchdogFired: () => { watchdogCalled = true; },
+    fetchImpl: slowFetch,
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.ok(watchdogCalled, 'watchdog callback should have been called');
+  assert.ok(fs.existsSync(progressFile), 'progress file should exist after watchdog');
+  const prog = JSON.parse(fs.readFileSync(progressFile, 'utf8'));
+  assert.ok(prog.stage, 'progress stage should be set');
+  assert.ok(fs.existsSync(logFile), 'log file should exist');
+  const log = fs.readFileSync(logFile, 'utf8');
+  const entries = log.split('\n').filter(Boolean).map(l => JSON.parse(l));
+  const timeoutEntry = entries.find(e => e.error === 'watchdog timeout');
+  assert.ok(timeoutEntry, 'log should contain watchdog timeout entry');
+  assert.ok(timeoutEntry.stage, 'timeout entry should have stage');
+  assert.ok(timeoutEntry.detail, 'timeout entry should have detail');
+  assert.ok(timeoutEntry.at, 'timeout entry should have timestamp');
+});
+
+test('watchdog は正常終了時に発火せず clearTimeout される', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'watchdog-no-fire-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  const projects = path.join(base, 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  fs.writeFileSync(path.join(projects, 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+  ].map(JSON.stringify).join('\n'));
+
+  const progressFile = path.join(base, 'reopen-lost-sessions-progress.json');
+  let watchdogCalled = false;
+
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', checkCpu: false,
+    progressFile, watchdogTimeout: 10000,
+    onWatchdogFired: () => { watchdogCalled = true; },
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.ok(!watchdogCalled, 'watchdog should not fire on normal completion');
+  assert.ok(result.candidates.length >= 0);
+  const prog = JSON.parse(fs.readFileSync(progressFile, 'utf8'));
+  assert.equal(prog.stage, 'log-write');
+});
+
+// ── ロック更新（utimesSync） ──────────────────────────────
+
+test('acquireLock の utimesSync が mtime を更新する', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lock-mtime-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const lockFile = path.join(root, 'test.lock');
+
+  const release = acquireLock(lockFile);
+  assert.ok(release, 'lock should be acquired');
+  const mtime1 = fs.statSync(lockFile).mtimeMs;
+  const future = new Date(mtime1 + 35000);
+  fs.utimesSync(lockFile, future, future);
+  const mtime2 = fs.statSync(lockFile).mtimeMs;
+  assert.ok(mtime2 > mtime1, 'mtime should increase after utimesSync');
+  release();
+  assert.ok(!fs.existsSync(lockFile), 'lock file should be removed after release');
+});

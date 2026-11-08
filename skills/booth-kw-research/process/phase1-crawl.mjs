@@ -8,12 +8,11 @@
  *   node process/phase1-crawl.mjs
  *   node process/phase1-crawl.mjs --dry-run <outdir>   (dry-run: test/fixtures から固定サンプルを読んで出力)
  *
- * TODO(codex): 以下の実装が必要
+ * TODO(codex): 残実装（実クロール）
  * - node-html-parser または regex でのHTML解析
  * - robots.txt のパースと遵守
  * - 同一ドメイン内リンクの再帰的クロール（depth制御）
- * - タイムアウト・リトライ処理
- * - クロール間隔の制御（delay_s）
+ * - タイムアウト・リトライ処理・クロール間隔の制御（delay_s）
  */
 
 import fs from 'node:fs';
@@ -85,7 +84,10 @@ async function main() {
   console.log(`Phase 1 complete: ${results.length} sites → ${outPath}`);
 }
 
-main().catch(e => {
-  console.error('Phase 1 failed:', e.message);
-  process.exit(1);
-});
+// 直接実行時のみ main() を走らせる（テストから import された場合は実行しない）
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch(e => {
+    console.error('Phase 1 failed:', e.message);
+    process.exit(1);
+  });
+}

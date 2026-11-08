@@ -8,13 +8,11 @@
  *   node process/phase2-collect.mjs
  *   node process/phase2-collect.mjs --dry-run <outdir>
  *
- * TODO(codex): 以下の実装が必要
- * - クロール結果からTF-IDF的なキーワード抽出
- * - 同一キーワードの類似度判定とマージ（閾値: 80%）
- * - GSCデータ（CSV）の読込と統合
- * - 日本語形態素解析（kuromoji.js等）の使用判断
- * - ストップワード除去
- * - カテゴリ分類（data/business-value.json の keyword_category_map を使用）
+ * TODO(codex): 残実装
+ * - GSCデータ（CSV）の読込と統合（ブロック中: GSC アクセス要）
+ * - 日本語形態素解析（kuromoji.js等）の使用判断（現状は正規表現抽出）
+ *
+ * 実装済み: 正規表現キーワード抽出+ストップワード除去、類似度80%マージ（charSimilarity）、カテゴリ分類
  */
 
 import fs from 'node:fs';
@@ -33,18 +31,41 @@ function extractKeywords(text) {
   return [...new Set(words)].filter(w => !stopWords.has(w)).map(w => ({ text: w }));
 }
 
-function mergeKeywords(keywords, threshold = 0.8) {
-  // 実装予定: 類似度判定とマージ
-  // 現状は完全一致のみ統合
-  const seen = new Map();
+/** 文字単位類似度（1 - 編集距離/maxLen）。0..1。同一文字列は 1 */
+export function charSimilarity(a, b) {
+  if (a === b) return 1;
+  if (!a.length || !b.length) return 0;
+  const m = a.length, n = b.length;
+  // 編集距離（Levenshtein、O(m*n)。キーワード長は短いので十分）
+  let prev = new Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    const curr = new Array(n + 1);
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    prev = curr;
+  }
+  return 1 - prev[n] / Math.max(m, n);
+}
+
+/** 類似度0.8以上はマージ（代表テキストは長い方、volumeは合算）。完全一致も同経路 */
+export function mergeKeywords(keywords, threshold = 0.8) {
+  const groups = [];
   for (const kw of keywords) {
-    if (seen.has(kw.text)) {
-      seen.get(kw.text).volume = (seen.get(kw.text).volume || 0) + 1;
+    const g = groups.find(grp => charSimilarity(grp.text, kw.text) >= threshold);
+    if (g) {
+      if (kw.text.length > g.text.length) g.text = kw.text;
+      g.volume = (g.volume || 0) + (kw.volume || 1);
+      g.variants = [...(g.variants || []), kw.text];
+      if (!g.source && kw.source) g.source = kw.source;
     } else {
-      seen.set(kw.text, { ...kw, volume: 1 });
+      groups.push({ ...kw, volume: kw.volume || 1, variants: [] });
     }
   }
-  return [...seen.values()];
+  return groups;
 }
 
 async function main() {
@@ -91,7 +112,10 @@ async function main() {
   console.log(`Phase 2 complete: ${categorized.length} unique keywords → ${outPath}`);
 }
 
-main().catch(e => {
-  console.error('Phase 2 failed:', e.message);
-  process.exit(1);
-});
+// 直接実行時のみ main() を走らせる（テストから import された場合は実行しない）
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch(e => {
+    console.error('Phase 2 failed:', e.message);
+    process.exit(1);
+  });
+}

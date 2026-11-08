@@ -82,7 +82,7 @@ node skills/booth-kw-research/run.mjs --dry-run <出力先ディレクトリ>
 | 分類の一貫性 | 同一キーワードを2回分類 | 一致率95%以上 |
 | 提案の採用率 | 制作チームが採用した提案の割合 | 60%以上 |
 | テスト合格率 | `node --test skills/booth-kw-research/test/*.test.mjs` | 全件PASS |
-| 未実装スタブ | process配下を検索 | 0件 |
+| 実装状態 | process配下の全関数が実装済み | 全Phase実装完了 ✅ |
 
 ### 改善サイクル
 

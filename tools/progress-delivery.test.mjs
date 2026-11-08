@@ -74,9 +74,9 @@ test('legacy info receipt is upgraded in place to ask, then stays answered on fu
  const {refreshDoneApprovals}=await import('./lib/auto-progress-done-inbox.mjs');
  const {answerItem}=await import('./kim-inbox.mjs');
  const h=home(t),row={sessionId:'old-job',ts:'2026-11-01T00:00:00Z',status:'done',nextKim:'なし'};
- const first=await deliverDoneInbox(h,[row],'✅ 完了: old');Object.assign(row,first.receipt);
+ const first=await deliverDoneInbox(h,[row],'✅ 完了: old',{io:{discordAllowed:()=>({allowed:false})}});Object.assign(row,first.receipt);
  const file=path.join(h,'done.md');fs.writeFileSync(file,report);row.doneFile=file;
- await refreshDoneApprovals(h,[row],{now:Date.now(),patch:(_,p)=>Object.assign(row,p)});
+ await refreshDoneApprovals(h,[row],{now:Date.now(),patch:(_,p)=>Object.assign(row,p),io:{discordAllowed:()=>({allowed:false})}});
  const [item]=listItems(h);assert.equal(item.id,first.id);assert.equal(item.kind,'ask');assert.match(item.text,/承認項目8/);
  answerItem(h,item.id,'確認済み');await refreshDoneApprovals(h,[row],{now:Date.now(),patch:()=>true});
  assert.equal(listItems(h).length,1);assert.equal(listItems(h)[0].status,'answered');

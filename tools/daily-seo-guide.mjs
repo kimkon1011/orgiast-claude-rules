@@ -173,8 +173,8 @@ async function main() {
     console.error('\n🔍 Step 1: GSCから高IMP低CTRキーワードを取得...');
     try {
       const gscResult = execSync(
-        `node "${CONFIG.codexDoPath}" "GSC高IMP低CTRキーワード分析を実行" --kind investigate --cwd "${REPO_ROOT}" --origin unattended`,
-        { encoding: 'utf8', timeout: 120000 }
+        `process.execPath "${CONFIG.codexDoPath}" "GSC高IMP低CTRキーワード分析を実行" --kind investigate --cwd "${REPO_ROOT}" --origin unattended`,
+        { encoding: 'utf8', timeout: 120000, windowsHide: true }
       );
       console.error('   GSC結果:', gscResult.slice(0, 500));
     } catch (e) {
@@ -204,8 +204,8 @@ async function main() {
   let guideContent;
   try {
     const result = execSync(
-      `node "${CONFIG.codexDoPath}" "${prompt.replace(/"/g, '\\"')}" --kind implement --cwd "${REPO_ROOT}" --origin unattended`,
-      { encoding: 'utf8', timeout: 300000 }
+      `process.execPath "${CONFIG.codexDoPath}" "${prompt.replace(/"/g, '\\"')}" --kind implement --cwd "${REPO_ROOT}" --origin unattended`,
+      { encoding: 'utf8', timeout: 300000, windowsHide: true }
     );
     guideContent = result;
   } catch (e) {

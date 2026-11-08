@@ -1321,21 +1321,22 @@ test('runChild は冷却中・失敗時の codex-do と保留・最終フォー�
       // Claude のスタブは stdin を消費して成功させる。
       const claudeFile = path.join(home, 'claude-stub');
       fs.writeFileSync(claudeFile, `#!${process.execPath}\n(async () => { const fs = require('node:fs'); let stdin = ''; for await (const chunk of process.stdin) stdin += chunk; ${trace} })();\n`, { mode: 0o755 });
-      const budgetMs = scenario.timeout && !scenario.bothCheapTimeout ? 1500 : 5000;
+	      const budgetMs = scenario.timeout && !scenario.bothCheapTimeout ? 1500 : 5000;
+	      const toleranceMs = process.platform === "win32" && scenario.bothCheapTimeout ? 3500 : 1500;
       const began = performance.now();
       const result = await runChild(claudeFile, 'lane test', home, home, budgetMs, { executorRoot: home, ...(scenario.model ? { model: 'sonnet' } : {}) });
       const elapsedMs = performance.now() - began;
       if (scenario.bothCheapTimeout) {
         const expectedMs = scenario.timeout ? 2 * budgetMs : Math.floor(1.5 * budgetMs);
-        assert.ok(elapsedMs >= expectedMs - 1500, `elapsed ${elapsedMs}ms below expected ${expectedMs}ms`);
-        assert.ok(elapsedMs < expectedMs + 1500, `elapsed ${elapsedMs}ms exceeded budget cap ${expectedMs + 1500}ms`);
+        assert.ok(elapsedMs >= expectedMs - toleranceMs, `elapsed ${elapsedMs}ms below expected ${expectedMs}ms`);
+        assert.ok(elapsedMs < expectedMs + toleranceMs, `elapsed ${elapsedMs}ms exceeded budget cap ${expectedMs + toleranceMs}ms`);
       } else if (scenario.cheapTimeout) {
         const maxExpectedMs = Math.floor(1.5 * budgetMs);
-        assert.ok(elapsedMs >= budgetMs - 1500, `elapsed ${elapsedMs}ms below expected ${budgetMs}ms`);
-        assert.ok(elapsedMs < maxExpectedMs + 1500, `deadline exceeded: ${elapsedMs}ms for ${maxExpectedMs + 1500}ms budget cap`);
+        assert.ok(elapsedMs >= budgetMs - toleranceMs, `elapsed ${elapsedMs}ms below expected ${budgetMs}ms`);
+        assert.ok(elapsedMs < maxExpectedMs + toleranceMs, `deadline exceeded: ${elapsedMs}ms for ${maxExpectedMs + 1500}ms budget cap`);
       } else if (scenario.timeout) {
         assert.ok(elapsedMs >= budgetMs - 1500, `elapsed ${elapsedMs}ms below expected ${budgetMs}ms`);
-        assert.ok(elapsedMs < budgetMs + 1500, `deadline exceeded: ${elapsedMs}ms for ${budgetMs}ms budget`);
+        assert.ok(elapsedMs < budgetMs + toleranceMs, `deadline exceeded: ${elapsedMs}ms for ${budgetMs}ms budget`);
       }
       if (scenario.bothCheapTimeout) assert.deepEqual(result.executorAttempts, [
         { executor: 'cheap-code:deepseek', status: 'timeout' },

@@ -109,6 +109,9 @@ jobs:
           node '.\tools\register-hooks.mjs' --hooks-only 2>&1 |
             Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'clean-install-logs\register-detached.log')
           if ($LASTEXITCODE -ne 0) { throw 'detached nightly registration failed' }
+          node "$nightly\tools\setup.mjs" --converge --home $env:USERPROFILE 2>&1 |
+            Tee-Object -FilePath (Join-Path $env:RUNNER_TEMP 'clean-install-logs\converge-detached.log')
+          if ($LASTEXITCODE -ne 0) { throw 'detached setup converge failed' }
           $settings = Get-Content (Join-Path $env:USERPROFILE '.claude\settings.json') -Raw | ConvertFrom-Json
           $commands = @($settings.hooks.SessionStart) | ForEach-Object { @($_.hooks) } | ForEach-Object { $_.command }
           $expected = Join-Path $nightly 'tools\onboarding-sync.mjs'

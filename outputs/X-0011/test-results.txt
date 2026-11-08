@@ -1,0 +1,19 @@
+✔ confidence boundary 0.9 (17.635403ms)
+✔ confidence boundary 0.899 (1.3258ms)
+✔ confidence boundary 0.3 (0.8892ms)
+✔ confidence boundary 0.299 (0.9551ms)
+✔ minimum dimension confidence and uncertain trigger escalation (2.090201ms)
+✔ invalid cheap response falls back to DeepSeek (11.245001ms)
+✔ medium outage or low confidence upgrades to high; unresolved result needs review (1.804801ms)
+✔ total outage is an error, not a fabricated classification (2.534ms)
+✔ sample dates, labels and four variants per project are reproducible (15.996102ms)
+✔ evaluation counts errors, all dimensions and only this run costs (20.783503ms)
+✔ real llm-ask subprocess with mock transport writes isolated usage and preserves prompt (640.06759ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 11
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 919.59473

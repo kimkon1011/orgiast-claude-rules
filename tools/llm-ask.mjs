@@ -29,7 +29,7 @@ const args = process.argv.slice(2);
 function opt(name, def) { const i = args.indexOf(name); return (i >= 0 && args[i + 1]) ? args[i + 1] : def; }
 const provider = (opt('--provider', '') || '').toLowerCase();
 const selected = PROVIDERS[provider];
-if (!selected) { console.error('使い方: node llm-ask.mjs --provider <openrouter|groq|glm|cerebras|genspark|gemini|deepseek|grok|kimi|mistral> "指示" [--model X] [--system S] [--max N] [--category <classification|extraction|summarize|jp_reply|code|transcript>] [--prompt-file PATH] [--no-fallback] [--prefer-provider] [--per-provider-timeout-ms N]'); process.exit(2); }
+if (!selected) { console.error('使い方: node llm-ask.mjs --provider <openrouter|groq|glm|cerebras|genspark|gemini|deepseek|grok|kimi|mistral> "指示" [--model X] [--system S] [--max N] [--category <classification|extraction|summarize|jp_reply|code|transcript>] [--prompt-file PATH] [--usage-file PATH] [--no-fallback] [--prefer-provider] [--per-provider-timeout-ms N]'); process.exit(2); }
 const model = opt('--model', selected.model);
 // claude-fable-5 系は別課金枠のため組織ルールで全用途禁止。
 if (/fable/i.test(model)) { console.error('fable を含むモデルは組織ルールにより使用できません'); process.exit(2); }
@@ -40,7 +40,7 @@ const timeoutArg = opt('--per-provider-timeout-ms', '');
 const perProviderTimeoutMs = args.includes('--per-provider-timeout-ms') ? Number(timeoutArg) : undefined;
 if (perProviderTimeoutMs !== undefined && (!Number.isSafeInteger(perProviderTimeoutMs) || perProviderTimeoutMs <= 0 || perProviderTimeoutMs > 2147483647)) { console.error('--per-provider-timeout-ms requires a positive timer-safe integer'); process.exit(2); }
 const skip = new Set();
-['--provider', '--model', '--system', '--max', '--category', '--prompt-file', '--per-provider-timeout-ms'].forEach((flag) => { const i = args.indexOf(flag); if (i >= 0) { skip.add(i); skip.add(i + 1); } });
+['--provider', '--model', '--system', '--max', '--category', '--prompt-file', '--per-provider-timeout-ms', '--usage-file'].forEach((flag) => { const i = args.indexOf(flag); if (i >= 0) { skip.add(i); skip.add(i + 1); } });
 const promptFile = opt('--prompt-file', '');
 if (args.includes('--prompt-file') && (!promptFile || promptFile.startsWith('--'))) { console.error('--prompt-file requires a path'); process.exit(2); }
 const prompt = promptFile ? fs.readFileSync(promptFile, 'utf8') : args.filter((arg, i) => !arg.startsWith('--') && !skip.has(i)).join(' ').trim();
@@ -88,9 +88,11 @@ const messages = [];
 if (system) messages.push({ role: 'system', content: system });
 messages.push({ role: 'user', content: prompt });
 const GEMINI_MIN_MAX_TOKENS = 256;
-const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
+const usageFile = opt('--usage-file', '');
+if (args.includes('--usage-file') && (!usageFile || usageFile.startsWith('--'))) { console.error('--usage-file requires a path'); process.exit(2); }
+const ledger = usageFile || path.join(home, '.claude', 'executor-usage.jsonl');
 function appendAttempt(info, usage = {}) {
-  if (args.includes('--no-persist')) return;
+  if (args.includes('--no-persist') && !usageFile) return;
   if (info.candidate.provider === 'gemini') {
     const measured = geminiUsage({ usage });
     try {
@@ -131,7 +133,7 @@ try {
       return { url: P.base, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(P.extraHeaders || {}) }, body: JSON.stringify(payload) } };
     },
     async onAttempt(info) {
-      if (args.includes('--no-persist')) return;
+      if (args.includes('--no-persist') && !usageFile) return;
       let usage = {};
       if (info.status === 'ok') usage = (await info.response.clone().json().catch(() => ({}))).usage || {};
       appendAttempt(info, usage);

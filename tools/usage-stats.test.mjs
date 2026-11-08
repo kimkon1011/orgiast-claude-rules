@@ -7,7 +7,10 @@ import { calculateDelegation, calculateLinesDelegation, classifyBashCommand, cla
 
 test('non-Claude models count in the non-Claude delegation numerator', () => {
   assert.equal(modelTier('glm-5.3'), 'nonclaude');
+  // 過去ログの旧名も新名も同じ区分で集計する。
   assert.equal(modelTier('deepseek-v4-flash'), 'nonclaude');
+  assert.equal(modelTier('deepseek-chat'), 'nonclaude');
+  assert.equal(modelTier('deepseek-flash'), 'nonclaude');
   const value = calculateDelegation({ byModel: { nonclaude: 40, opus: 60 } });
   assert.equal(value.execOut, 40); assert.equal(value.nonClaudeDelegRatio, .4);
 });
@@ -24,6 +27,30 @@ test('parse cache hits unchanged files and reparses size/mtime changes', () => {
   fs.writeFileSync(file, `${row(3)}\n${row(5)}`); fs.utimesSync(file, new Date(now + 1000), new Date(now + 1000));
   resetParseCacheForTests();
   assert.equal(collectClaudeStats({ home, now }).totals.outputTokens, 8); assert.equal(parseCacheStats(home).misses, 1);
+});
+test('parse cache retention keeps the 30-day boundary and expires older files', (t) => {
+  const { home, file } = fixture(), now = Date.parse('2026-08-23T00:00:00Z');
+  let wallTime = now + 30 * 864e5;
+  t.mock.method(Date, 'now', () => wallTime);
+  t.after(() => { resetParseCacheForTests(); fs.rmSync(home, { recursive: true, force: true }); });
+  fs.writeFileSync(file, JSON.stringify({ timestamp: new Date(now).toISOString(), message: { model: 'opus', usage: { output_tokens: 3 }, content: [] } }));
+  fs.utimesSync(file, new Date(now), new Date(now));
+  const cache = path.join(home, '.claude', 'cost-loop-parse-cache.json');
+  const readCache = () => JSON.parse(fs.readFileSync(cache, 'utf8')).files;
+  resetParseCacheForTests();
+  assert.equal(collectClaudeStats({ home, now }).totals.outputTokens, 3);
+  assert.ok(readCache()[file]);
+  resetParseCacheForTests();
+  assert.equal(collectClaudeStats({ home, now }).totals.outputTokens, 3);
+  assert.deepEqual(parseCacheStats(home), { hits: 1, misses: 0 });
+
+  // Start a fresh cache write one millisecond past the retention boundary.
+  fs.unlinkSync(cache); resetParseCacheForTests(); wallTime++;
+  assert.equal(collectClaudeStats({ home, now }).totals.outputTokens, 3);
+  assert.equal(readCache()[file], undefined);
+  resetParseCacheForTests();
+  assert.equal(collectClaudeStats({ home, now }).totals.outputTokens, 3);
+  assert.deepEqual(parseCacheStats(home), { hits: 0, misses: 1 });
 });
 test('corrupt parse cache is ignored and rebuilt', () => {
   const { home, file } = fixture(), now = Date.now(), cache = path.join(home, '.claude', 'cost-loop-parse-cache.json');
@@ -91,6 +118,17 @@ test('spec-authoring tokens use Bash and PowerShell character share and tolerate
   assert.equal(estimateSpecAuthoringTokens({ blocks: { tools: { Bash: 80, PowerShell: 20 } }, profile: { totalChars: 200, byCategory: { 'spec-authoring': { chars: 50 } } } }), 25);
   assert.equal(estimateSpecAuthoringTokens({ blocks: { tools: { Bash: 100 } }, profile: { totalChars: 0, byCategory: { 'spec-authoring': { chars: 1 } } } }), 0);
 });
+test('deleg CLI reports spec-authoring preparation instead of collapsing it into delegRatio', () => {
+  const blocks = { tools: { Bash: 100 } };
+  const profile = { totalChars: 200, byCategory: { 'spec-authoring': { chars: 100 } } };
+  const specAuthoringOut = estimateSpecAuthoringTokens({ blocks, profile });
+  assert.equal(specAuthoringOut, 50);
+  const wired = calculateDelegation({ codexOut: 10, byModel: { opus: 90, sonnet: 10 }, specAuthoringOut });
+  const unwired = calculateDelegation({ codexOut: 10, byModel: { opus: 90, sonnet: 10 } });
+  assert.equal(unwired.delegRatioWithPrep, unwired.delegRatio);
+  assert.ok(wired.delegRatioWithPrep > wired.delegRatio);
+  assert.equal(wired.delegRatioWithPrep, (wired.delegated + specAuthoringOut) / wired.total);
+});
 test('deleg command source counts latest cumulative Codex usage per session', () => { const { home } = fixture(), dir = path.join(home, '.codex', 'sessions'), previous = process.env.CODEX_SESSIONS_DIRS; fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'x.jsonl'), '{"total_token_usage":{"output_tokens":3}}\n{"total_token_usage":{"output_tokens":8}}'); process.env.CODEX_SESSIONS_DIRS = dir; try { assert.deepEqual(collectCodexOutput({ home }), { outputTokens: 8, sessions: 1, byModel: { unknown: { sessions: 1, outputTokens: 8 } } }); } finally { if (previous === undefined) delete process.env.CODEX_SESSIONS_DIRS; else process.env.CODEX_SESSIONS_DIRS = previous; } });
 test('countPatchLines counts patch changes but not headers or non-apply_patch commands', () => {
   const patch = '*** Begin Patch\n--- old/file\n+++ new/file\n@@ -1 +1 @@\n-old\n+new\n+added\n*** End Patch';
@@ -152,4 +190,29 @@ test('Codex byModel counts cumulative deltas, model switches, multiple sessions 
   resetParseCacheForTests();
   assert.deepEqual(collectCodexOutput({ home }), expected);
   assert.deepEqual(collectCodexOutput({ home, includePatchLines: true }), { ...expected, added: 0, deleted: 0, patchFiles: 3 });
+});
+
+test('legacy codex 37/150 and gemini missing status exclude unrouted without rewriting logs', (t) => {
+  const { home } = fixture(), now = Date.now();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const rows = [
+    ...Array.from({ length: 113 }, () => ({ provider: 'codex' })),
+    ...Array.from({ length: 32 }, () => ({ provider: 'codex', status: '1' })),
+    ...Array.from({ length: 5 }, () => ({ provider: 'codex', status: '124' })),
+    ...Array.from({ length: 1455 }, () => ({ provider: 'gemini' })),
+    ...Array.from({ length: 11 }, () => ({ provider: 'gemini', status: 'ok' })),
+    ...Array.from({ length: 4 }, () => ({ provider: 'gemini', status: 'error' })),
+    ...Array.from({ length: 23 }, () => ({ provider: 'skipped', status: 'no-cheap-executor' })),
+    { provider: 'groq', status: 'no-cheap-executor', category: 'unrouted' },
+  ].map((row) => ({ ...row, t: new Date(now).toISOString() }));
+  const file = path.join(home, '.claude', 'executor-usage.jsonl'), text = rows.map(JSON.stringify).join('\n');
+  fs.writeFileSync(file, text);
+  const result = collectProviderHealth({ home, now });
+  assert.equal(result.providers.codex.calls, 150);
+  assert.equal(result.providers.codex.failRate, 37 / 150);
+  assert.equal(result.providers.gemini.failRate, 4 / 1470);
+  assert.equal(result.providers.skipped, undefined);
+  assert.equal(result.providers.groq, undefined);
+  assert.deepEqual(result.unrouted, { calls: 24, reasons: { 'no-cheap-executor': 24 } });
+  assert.equal(fs.readFileSync(file, 'utf8'), text);
 });

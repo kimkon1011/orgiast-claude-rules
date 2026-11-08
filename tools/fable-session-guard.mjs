@@ -31,6 +31,11 @@ export function inspectTranscript(transcriptPath) {
   }
   let lines = buffer.toString('utf8').split(/\r?\n/);
   if (start > 0) lines = lines.slice(1);
+  return inspectTranscriptRaw(lines.join('\n'));
+}
+
+export function inspectTranscriptRaw(raw) {
+  const lines = String(raw).split(/\r?\n/);
   let currentModel = '';
   let fableResponses = 0;
   let fableOutputTokens = 0;

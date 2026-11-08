@@ -36,10 +36,13 @@ export function parsePart(text, part) {
     const title = lines[i].text.slice('### ページタイトル: '.length);
     const pathLine = lines[i + 1]?.text ?? '';
     const match = pathLine.match(/^--- 内部パス: (.*) ---$/);
-    if (!match || lines[i + 3]?.text !== BODY_MARKER) continue;
-    const byteStart = lines[i + 3].next;
+    // Drive の Google ドキュメントを text/plain で書き出すと、パス行と本文マーカーの間の空行が増える
+    let marker = i + 2;
+    while (marker < i + 6 && lines[marker]?.text === '') marker++;
+    if (!match || marker === i + 2 || lines[marker]?.text !== BODY_MARKER) continue;
+    const byteStart = lines[marker].next;
     let byteEnd = buffer.length;
-    for (let j = i + 4; j < lines.length; j++) {
+    for (let j = marker + 1; j < lines.length; j++) {
       if (/^=+\s*次のページ\s*=+\s*$/.test(lines[j].text)) { byteEnd = lines[j].start; break; }
     }
     pages.push({ part, byteStart, byteEnd, title: cleanField(title), path: cleanField(match[1]) });
@@ -508,6 +511,12 @@ export function ingestFiles(files, cacheDir = CACHE_DIR) {
   }
   if (fs.existsSync(path.join(cacheDir, 'index.tsv')) && fs.existsSync(path.join(cacheDir, 'meta.json'))) {
     const meta = loadPreviousMeta(cacheDir);
+    for (const item of meta.parts ?? []) {
+      const file = path.join(cacheDir, partName(item.part));
+      if (!fs.existsSync(file)) continue;
+      const updatedAt = parsePart(fs.readFileSync(file, 'utf8').slice(0, 1000), item.part).updatedAt;
+      if (updatedAt && item.更新日時 && updatedAt !== item.更新日時) console.error(`警告: Part ${item.part} の本文（${updatedAt}）が索引（${item.更新日時}）と別の版です。get は内部パスで本文を引き直しますが、Part 間で移動したページは install-index で索引を更新するまで見つからないことがあります。`);
+    }
     return { ingested, parts: meta.parts.length, pages: readIndex(cacheDir).length };
   }
   return { ingested, ...buildIndex(cacheDir) };
@@ -557,6 +566,18 @@ export function searchEntries(query, options = {}, cacheDir = CACHE_DIR) {
 }
 
 function formatEntry(entry) { return `${entry.id}\t${entry.part}\t${entry.title}\t${entry.path}`; }
+// 索引と本文の版がずれるとバイト位置が別ページを指すため、内部パスで本文側から引き直す
+export function locateBody(entry, cacheDir = CACHE_DIR) {
+  const parts = fs.readdirSync(cacheDir).map((name) => Number(name.match(/^part(\d+)\.txt$/)?.[1])).filter(Number.isInteger);
+  for (const part of [entry.part, ...parts.filter((part) => part !== entry.part)]) {
+    const file = path.join(cacheDir, partName(part));
+    if (!fs.existsSync(file)) continue;
+    const parsed = parsePart(fs.readFileSync(file, 'utf8'), part);
+    const page = parsed.pages.find((item) => item.path === entry.path);
+    if (page) return Buffer.from(parsed.normalized, 'utf8').subarray(page.byteStart, page.byteEnd);
+  }
+  return null;
+}
 function readBody(fd, entry) {
   const length = entry.byteEnd - entry.byteStart;
   const buffer = Buffer.alloc(length);
@@ -583,8 +604,117 @@ export function resolveGet(value, cacheDir = CACHE_DIR) {
   return [];
 }
 
+export function extractBodyCsrf(html) {
+  const match = String(html).match(/<body[^>]*\sdata-csrftoken="([^"]+)"/i);
+  if (!match) throw new Error('Growi ページから CSRF (body[data-csrftoken]) を取得できません');
+  return match[1];
+}
+
+export async function growiApiCsrf(baseUrl, http) {
+  const response = await http(`${String(baseUrl).replace(/\/$/, '')}/`);
+  if (!response.ok) throw new Error(`Growi ページの取得に失敗しました (${response.status})`);
+  return extractBodyCsrf(await response.text());
+}
+
+// 実測: GET /_api/pages.get?path= → {page:{...}}（存在）or {ok:false}（不在）
+export async function resolveGrowiPage(baseUrl, http, pagePath) {
+  const json = await growiJson(http, `${String(baseUrl).replace(/\/$/, '')}/_api/pages.get?path=${encodeURIComponent(pagePath)}`);
+  return json?.page && typeof json.page === 'object' ? json.page : null;
+}
+
+// 実測: 現行revisionは revisions/list の docs[0] ではなく pages.get の page.revision ポインタが正
+export function currentRevisionOf(page) {
+  const revision = page?.revision;
+  const revisionId = typeof revision === 'object' ? revision?._id : revision;
+  if (!revisionId) throw new Error('ページの現行リビジョンを特定できません');
+  return String(revisionId);
+}
+
+function pageBodyOf(page) {
+  const body = page?.revision?.body ?? page?.body;
+  if (typeof body !== 'string') throw new Error('ページの現行本文を取得できません');
+  return body;
+}
+
+export function insertLinesAfterAnchor(body, anchor, insertedText) {
+  const lines = String(body).split('\n');
+  const insertLines = normalizeText(String(insertedText)).replace(/\n+$/, '').split('\n');
+  const matches = lines.flatMap((line, index) => line.includes(anchor) ? [index] : []);
+  if (matches.length !== 1) {
+    const candidateIndexes = matches.length ? matches.flatMap(index => Array.from({ length: 10 }, (_, offset) => index - 4 + offset)) : Array.from({ length: 10 }, (_, index) => index);
+    const nearby = [...new Set(candidateIndexes)]
+      .filter(index => index >= 0 && index < lines.length).slice(0, 10)
+      .map(index => ({ line: index + 1, text: lines[index] }));
+    const error = new Error(`アンカーを含む行は1行である必要があります（該当 ${matches.length} 行）`);
+    error.exitCode = 3;
+    error.details = { matches: matches.map(index => index + 1), nearby };
+    throw error;
+  }
+  const position = matches[0] + 1;
+  const unchanged = insertLines.every((line, offset) => lines[position + offset] === line);
+  if (unchanged) return { body: String(body), unchanged: true, insertedLines: insertLines.length, anchorLine: position };
+  return { body: [...lines.slice(0, position), ...insertLines, ...lines.slice(position)].join('\n'), unchanged: false, insertedLines: insertLines.length, anchorLine: position };
+}
+
+export async function appendAfterGrowi({ baseUrl, http, csrf, pagePath, anchor, lines, dryRun = false }) {
+  const base = String(baseUrl).replace(/\/$/, '');
+  const before = await resolveGrowiPage(base, http, pagePath);
+  if (!before) throw Object.assign(new Error(`Growi ページが見つかりません: ${pagePath}`), { exitCode: 3 });
+  const revisionBefore = currentRevisionOf(before);
+  const insertion = insertLinesAfterAnchor(pageBodyOf(before), anchor, lines);
+  const common = { ok: true, path: pagePath, pageId: before._id ?? '', url: `${base}${pagePath}`, revisionBefore,
+    revisionAfter: revisionBefore, insertedLines: insertion.unchanged ? 0 : insertion.insertedLines, diffLinesOtherThanInsert: 0 };
+  if (insertion.unchanged) return { ...common, unchanged: true };
+  if (dryRun) return { ...common, dryRun: true };
+  await createGrowiPage({ baseUrl: base, http, csrf, pagePath, body: insertion.body, overwrite: true });
+  const after = await resolveGrowiPage(base, http, pagePath);
+  const actual = pageBodyOf(after);
+  if (actual !== insertion.body) throw new Error('保存後の Growi 本文が期待本文と一致しません');
+  return { ...common, revisionAfter: currentRevisionOf(after) };
+}
+
+export async function appendAfterFromEnv({ pagePath, anchor, lines, dryRun = false, envFile = path.join(os.homedir(), '.claude', 'growi.env'), timeoutMs }) {
+  const env = readEnvFile(envFile);
+  if (!env?.GROWI_BASE_URL || !env.GROWI_USER || !env.GROWI_PASS) throw new Error('Growi 認証情報が不足しています');
+  const signal = timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined;
+  const timedFetch = signal ? (url, options = {}) => fetch(url, { ...options, signal }) : fetch;
+  const http = await loginGrowi({ baseUrl: env.GROWI_BASE_URL, user: env.GROWI_USER, password: env.GROWI_PASS, http: timedFetch });
+  const csrf = await growiApiCsrf(env.GROWI_BASE_URL, http);
+  return appendAfterGrowi({ baseUrl: env.GROWI_BASE_URL, http, csrf, pagePath, anchor, lines, dryRun });
+}
+
+// 戻り値: { status: 'created' | 'updated' | 'exists', url, pageId, chars }
+export async function createGrowiPage({ baseUrl, http, csrf, pagePath, body, overwrite = false }) {
+  const base = String(baseUrl).replace(/\/$/, '');
+  const result = { status: 'created', url: `${base}${pagePath}`, pageId: '', chars: body.length };
+  const existing = await resolveGrowiPage(base, http, pagePath);
+  if (existing) {
+    if (!overwrite) return { ...result, status: 'exists', pageId: existing._id ?? '' };
+    const revisionId = currentRevisionOf(existing);
+    const response = await http(`${base}/_api/pages.update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ page_id: String(existing._id), revision_id: revisionId, body, _csrf: csrf }),
+    });
+    if (!response.ok) throw new Error(`Growi ページ更新に失敗しました (HTTP ${response.status})`);
+    return { ...result, status: 'updated', pageId: existing._id ?? '' };
+  }
+  const response = await http(`${base}/_api/v3/pages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: pagePath, body, grant: 1, _csrf: csrf }),
+  });
+  if (response.status === 500) {
+    const json = await response.json().catch(() => null);
+    if (json?.errors?.some((item) => item.code === 'page_exists')) return { ...result, status: 'exists' };
+  }
+  if (!response.ok) throw new Error(`Growi ページ作成に失敗しました (HTTP ${response.status})`);
+  result.pageId = (await response.json())?.data?.page?._id ?? '';
+  return result;
+}
+
 function usage() {
-  console.error('usage: growi-manual.mjs sync-growi [--full] | sync | publish-index | install-index <file>... | ingest <file>... | index | search <query> [--limit N] [--path <prefix>] [--body] | get <id|title|path> | status');
+  console.error('usage: growi-manual.mjs sync-growi [--full] | sync | publish-index | install-index <file>... | ingest <file>... | index | search <query> [--limit N] [--path <prefix>] [--body] | get <id|title|path> | create-page --path <パス> --file <ファイル> [--overwrite] | append-after --path <パス> --anchor <文字列> --file <ファイル> [--dry-run] | status');
 }
 
 export async function main(args = process.argv.slice(2)) {
@@ -628,6 +758,49 @@ export async function main(args = process.argv.slice(2)) {
     console.log(matches.length ? matches.map(formatEntry).join('\n') : 'no match');
     return 0;
   }
+  if (command === 'create-page') {
+    const options = { overwrite: false };
+    while (rest.length) {
+      const option = rest.shift();
+      if (option === '--overwrite') options.overwrite = true;
+      else if (option === '--path') { options.path = rest.shift(); if (options.path === undefined) throw new Error('--path に値が必要です'); }
+      else if (option === '--file') { options.file = rest.shift(); if (options.file === undefined) throw new Error('--file に値が必要です'); }
+      else throw new Error(`不明なオプション: ${option}`);
+    }
+    if (!options.path?.startsWith('/') || !options.file) { usage(); return 2; }
+    const body = normalizeText(fs.readFileSync(options.file, 'utf8'));
+    const env = readEnvFile(path.join(os.homedir(), '.claude', 'growi.env'));
+    if (!env) { console.error('Growi 認証情報がありません'); return 2; }
+    if (!env.GROWI_BASE_URL || !env.GROWI_USER || !env.GROWI_PASS) { console.error('Growi 認証情報が不足しています'); return 2; }
+    const http = await loginGrowi({ baseUrl: env.GROWI_BASE_URL, user: env.GROWI_USER, password: env.GROWI_PASS });
+    const csrf = await growiApiCsrf(env.GROWI_BASE_URL, http);
+    const result = await createGrowiPage({ baseUrl: env.GROWI_BASE_URL, http, csrf, pagePath: options.path, body, overwrite: options.overwrite });
+    if (result.status === 'exists') { console.error(`既に存在します: ${result.url}（--overwrite で更新）`); return 1; }
+    console.log(result.url);
+    console.error(`文字数: ${result.chars}（${result.status === 'updated' ? '更新' : '作成'}）`);
+    return 0;
+  }
+  if (command === 'append-after') {
+    const options = { dryRun: false };
+    while (rest.length) {
+      const option = rest.shift();
+      if (option === '--dry-run') options.dryRun = true;
+      else if (option === '--path') options.path = rest.shift();
+      else if (option === '--anchor') options.anchor = rest.shift();
+      else if (option === '--file') options.file = rest.shift();
+      else { usage(); return 2; }
+    }
+    if (!options.path?.startsWith('/') || !options.anchor || !options.file) { usage(); return 2; }
+    try {
+      const lines = fs.readFileSync(options.file, 'utf8').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').replace(/\n+$/, '');
+      const result = await appendAfterFromEnv({ pagePath: options.path, anchor: options.anchor, lines, dryRun: options.dryRun });
+      console.log(JSON.stringify(result));
+      return 0;
+    } catch (error) {
+      console.error(JSON.stringify({ ok: false, error: error.message, ...(error.details ?? {}) }));
+      return error.exitCode ?? 1;
+    }
+  }
   if (command === 'get') {
     if (rest.length !== 1) { usage(); return 2; }
     const matches = resolveGet(rest[0]);
@@ -641,11 +814,16 @@ export async function main(args = process.argv.slice(2)) {
       console.error(`このページは Part ${entry.part} にありますが、本文がまだ取得されていません。\n\n  1) Drive MCP で download_file_content を呼ぶ\n     fileId: ${item.fileId ?? 'meta.json に fileId がありません'}\n     exportMimeType: text/plain\n     （サイズが大きいためローカルに保存されます。その保存パスを控える）\n  2) node ${process.argv[1]} ingest <保存パス>\n\n取り込むと Part ${entry.part} の ${item.pages ?? '不明な'} ページすべてが get できるようになります。`);
       return 3;
     }
-    const fd = fs.openSync(bodyFile, 'r');
-    try {
-      process.stdout.write(`### ページタイトル: ${entry.title}\n--- 内部パス: ${entry.path} ---\n\n`);
-      process.stdout.write(readBody(fd, entry));
-    } finally { fs.closeSync(fd); }
+    const body = locateBody(entry);
+    if (!body) {
+      const meta = loadPreviousMeta(CACHE_DIR);
+      const item = (meta.parts ?? []).find((part) => part.part === entry.part) ?? {};
+      const bodyUpdatedAt = parsePart(fs.readFileSync(bodyFile, 'utf8').slice(0, 1000), entry.part).updatedAt;
+      console.error(`索引が本文と合っていません: ${entry.path} が取得済みの本文に見つかりません（索引の Part ${entry.part} 更新日時 ${item.更新日時 ?? '不明'} / 本文 ${bodyUpdatedAt || '不明'}）。\n別ページの本文を出さないため中断します。共通ハブの growi-manual-index.tsv と growi-manual-meta.json を Drive MCP で取得し、node ${process.argv[1]} install-index <2ファイル> で索引を更新してください。`);
+      return 4;
+    }
+    process.stdout.write(`### ページタイトル: ${entry.title}\n--- 内部パス: ${entry.path} ---\n\n`);
+    process.stdout.write(body);
     return 0;
   }
   if (command === 'status') {

@@ -5,7 +5,18 @@ description: 新しいセッションを前セッションの引き継ぎから�
 
 # 前セッションの引き継ぎから作業を開始する
 
+SessionStart hook が kim-inbox の未回収 ask を注入する。目的を確定する前に、その ask を kim に提示して返答を回収し `node <repo>/tools/kim-inbox.mjs --answer <id> --body-file <f>` で記録する。
+
 「1セッション=1目的」を守るための入口。`/session-close` の出口とペアで使う。
+
+## 0. 最優先: イベント百貨店の問合せを拾う（引き継ぎより先）
+
+- 最初に `node ~/orgiast-claude-rules/tools/event-shop-inquiry-triage.mjs` を実行し、出力の表を**そのまま応答の先頭**に出す。
+  判定は管理画面のタブではなく seisaku-team@／kim@ のメール往復（`channel_messages`）で行う（管理画面の「対応が必要」は別経路の返信済み・開催済みが混ざる）。
+- **🔴 要返信が1件でもあれば、それを本セッションの目的候補の先頭にする**。引き継ぎの目的より優先するかは user に1問で聞く（顧客対応は日が経つほど失注する）。
+  返信文の作成は `case-consult-sources` スキルでスレッドを読んでから seisaku-team@ の下書きにする（送信は user の承認後）。
+- ⚪ 終了候補は表を見せるだけでよい。完了にするかは user の判断。
+- 認証情報が無い PC では「未確認」の1行が出る。そのまま手順1へ進む（このPCでは判定不能と1行書く）。
 
 ## 1. 引き継ぎを読む
 
@@ -14,20 +25,33 @@ description: 新しいセッションを前セッションの引き継ぎから�
 - `## 触る前に読む memory` に挙がっているファイルを実際に読む（`MEMORY.md` の索引ではなく本体）。**ここを飛ばすと前セッションの失敗を繰り返す。**
 - `~/.claude/promotion-queue.md`を読む。PROMOTE待ちがあれば手順2の目的候補へ`仕組み化: <name>`として含める。
 
+## 1.5 実装提案が先頭にある場合
+
+`next-session.md` の先頭が `<!-- PROPOSAL-SESSION START -->` なら、この提案1件の判断を本セッションの目的にする。後ろの別目的・後続キューはこのセッションで実行しない。
+
+1. `~/.claude/proposals/<id>.json` と同名 `.md` を読み、提案・根拠・変更内容・費用効果・リスク・承認/却下後の動作を提示する。「承認なら『承認』、却下なら『却下 <理由>』」と案内し、回答前は Codex や autopilot を起動しない。提案IDと `revision` を控える。
+2. kim がこの提案を「承認」したら JSON を再読し、提示した `revision` と一致することを確認する。追記で変わっていれば更新差分を提示して改めて判断を受ける。`onApprove.kind` が `codex-task` であることと指示書の実在・内容を確認し、配布元リポジトリの `node tools/codex-do.mjs --prompt-file "<onApprove.promptFile>" --cwd "<対象repo>"` を実行する。別目的への包括承認として扱わない。
+3. Codex の結果を read-back し、関連テストと `git diff --check` を監督も実行する。生成doc型の変更なら `--write` → `--check` → 関連テスト。PR を作成（既存があれば再利用）して URL を提案 JSON に記録し、再開時は同じ PR を使う。CI と差分を確認後 `node tools/pr-merge.mjs <PR番号>` を実行し、GitHub の `state=MERGED`・`mergedAt` を確認する。失敗中・CI待ちは提案を未処理のまま保持する。
+4. マージ確認後 `node tools/proposal-session.mjs --complete "<id>" --revision "<提示時の番号>" --decision approved --pr "<PR URL>"`。却下なら実装をせず `node tools/proposal-session.mjs --complete "<id>" --revision "<提示時の番号>" --decision rejected --reason "<理由>"`。シェル引数を適切に引用する。完了メッセージだけでなく `proposals/done/<id>.json` の status・理由・PR と次の引き継ぎを read-back する。
+5. 完了処理は `.json`・`.md`・生成指示書を `done/` へ移し、キューの次の1件を先頭に登録する。元の引き継ぎは残る。次の提案は次セッションで扱う。`next-session.md` の提案ブロックを手で削除しない。
+
 ## 2. 目的を1件に確定する
 
-- 引き継ぎに目的が書いてあればそれを採用し、着手前に1行で宣言する（`**[本セッションの目的]** …`）。
+- 候補を集める前に `~/.claude/business-goals.md` を必ず読む。「売上・利益レバー（上から優先）」の未完了レバー1件を候補の **1番目**にする（手順0・1.5の優先事項はそのまま）。候補源は次の順:
+  1. `~/.claude/business-goals.md` の最優先の未完了レバー
+  2. `~/.claude/next-session.md` の目的・残TODO
+  3. `~/.claude/session-handoffs.md`（放置セッションの再開一覧。`/session-triage` が生成）
+  4. 直近の memory の「未決」「次アクション」記述
+  5. `~/.claude/promotion-queue.md` のPROMOTE待ち
+- 基盤・ツール系の残TODOは、売上・利益レバーを止めているブロッカー、または期限付きの効果確認だけを候補に出す。
 - **候補を kim に見せる前に、着手済みを機械で落とす**（重複着手の防止・トークン増ゼロ）:
   候補を1行1件でスクラッチパッドのファイルに書き、
   `node ~/orgiast-claude-rules/tools/session-claims.mjs --filter --self <このセッションのid> --candidates <そのファイル>`
-  を通す。**stdout に残った候補だけ**を AskUserQuestion に出す。落ちた分は stderr に理由が出るが、kim には見せない。
+  を通す。**stdout に残った候補だけ**を対象にする。落ちた分は stderr に理由が出るが、kim には見せない。
   （このツールは他セッションの `**[本セッションの目的]**` 宣言を transcript から拾って突合する。
    着手印は自動で付くので、手で書く運用にしない）
-- 未定・複数ある場合は AskUserQuestion で**1件だけ**選ばせる。候補は次から集める:
-  - `~/.claude/next-session.md` の残TODO
-  - `~/.claude/session-handoffs.md`（放置セッションの再開一覧。`/session-triage` が生成）
-  - 直近の memory の「未決」「次アクション」記述
-  - `~/.claude/promotion-queue.md`のPROMOTE待ち
+- フィルタ後の候補が **1件だけなら AskUserQuestion を省略**し、`**[本セッションの目的]** …。違えば言ってください` と着手宣言して進める。**複数の時だけ** AskUserQuestion で1件を選ばせ、選ばれた目的を宣言する。
+- 候補が残らなければ着手済み項目を復活させず、未着手のレバー・候補源を確認する。
 - 選ばれなかった候補は `next-session.md` に残す（消さない）。
 
 ## 3. 完了条件を先に決める

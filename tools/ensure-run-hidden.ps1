@@ -8,7 +8,12 @@ function Ensure-RunHidden {
   $destinationDirectory = Join-Path $env:USERPROFILE '.claude\tools'
   $destination = Join-Path $destinationDirectory 'run-hidden.vbs'
   New-Item -ItemType Directory -Force -Path $destinationDirectory | Out-Null
-  Copy-Item -LiteralPath $source -Destination $destination -Force
+  # Running tasks may hold the installed runner open. Identical bytes need no copy.
+  $copyRequired = -not (Test-Path -LiteralPath $destination -PathType Leaf)
+  if (-not $copyRequired) {
+    $copyRequired = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
+  }
+  if ($copyRequired) { Copy-Item -LiteralPath $source -Destination $destination -Force }
   return $destination
 }
 

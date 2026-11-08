@@ -1,4 +1,5 @@
-import { symptomDenials, unknown, corrections, meta, sentences, currentTurnEntries, blocks, queriedVendorsFromRaw, claimVendor, claimVendors, needsEvidenceRequest, evidenceRequest } from './state-claim-evidence.mjs';
+export const GATE_CONTRACT = {"name": "external-state-claim-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "external-state-claim-gate"}]};
+import { symptomDenials, unknown, corrections, meta, sentences, currentTurnEntries, blocks, queriedVendorsFromRaw, claimVendor, claimVendors, needsEvidenceRequest, evidenceRequest, vendors } from './state-claim-evidence.mjs';
 export { queriedVendorsFromRaw, claimVendor } from './state-claim-evidence.mjs';
 const subjects = /残高|クレジット|請求|支払い|カード|課金|Billing|自動チャージ|オートチャージ|Anthropic|OpenAI|Console|API キー|レート制限|Usage Limits|プロパティ|アカウント|権限|オーナー|所有|設定|環境変数|env|シークレット|Secret|レコード|シート|ドキュメント|フォルダ|ファイル|ドメイン|DNS|プロジェクト|リポジトリ|デプロイ|コンテナ|測定ID|GA4|Search Console|GTM|タグマネージャー|Vercel|Supabase|GitHub|Drive|Gmail|Calendar|Workspace|Cloudflare|freee|Stripe|Discord|Notion|Slack/i;
 const negatives = /存在しない|存在しません|(?:が|は|も)\s*(?:無い|ない)|ありません|見つからない|見つかりません|見つからなかった|作られていない|作成されていない|登録されていない|設定されていない|入っていない|紐づ(?:いて|かて|かれて)いない|痕跡(?:が|は)?(?:ない|無い|ありません)|履歴に(?:は)?(?:無い|ない|残っていない)|記録(?:が|は)?(?:ない|無い|ありません)|所有していない|持っていない|ゼロです|0件です/g;
@@ -13,7 +14,7 @@ const denial = /denied by the Claude Code auto mode classifier|Permission for th
 
 export function findExternalStateClaim(text) {
   for (const sentence of sentences(text)) {
-    if (!subjects.test(sentence) || corrections.test(sentence) || meta.test(sentence)) continue;
+    if (!subjects.test(sentence) || corrections.test(sentence) || meta.test(sentence) || /過去ログ検索/.test(sentence)) continue;
     if (unknown.test(sentence) && !probability.test(sentence) && !symptomDenials.test(sentence)) continue;
     if (symptomDenials.test(sentence)) return sentence;
     for (const match of sentence.matchAll(negatives)) {
@@ -45,6 +46,12 @@ export function configuredMode() {
 
 export function evaluateExternalStateClaimFromRaw({ text, transcriptRaw }) {
   const queried = queriedVendorsFromRaw(transcriptRaw);
+  // Treat [直接照会: vendor-name] markers in the text as direct-query evidence for those vendors.
+  for (const [, marker] of String(text).matchAll(/\[直接照会:([^\]]+)\]/g)) {
+    for (const [name, pattern] of vendors) {
+      if (pattern.test(marker.trim())) queried.add(name);
+    }
+  }
   const claim = sentences(text).filter(s => findExternalStateClaim(s)).find(s => {
     const vendors = claimVendors(s);
     return !vendors.size || [...vendors].some(v => !queried.has(v));
@@ -53,7 +60,7 @@ export function evaluateExternalStateClaimFromRaw({ text, transcriptRaw }) {
   const direct = hasDirectQueryEvidenceFromRaw(transcriptRaw);
   const decision = configuredMode() === 'warn' ? 'pass' : 'block';
   if (claim) return { decision, code: 'EXTERNAL-STATE', claim,
-    reason: `[EXTERNAL-STATE] 「${claim}」は ${missingVendor || "対象 vendor 不明"} を照会せずに ${[...queried].join(", ") || "照会なし"} の証拠で断定している、対象システムを直接照会していない外部状態の否定断定です。Claude 側の履歴・memory に無いことは証拠になりません（人が Web UI で作ったものは残らない）。vendor MCP / API / 公式 CLI で直接照会してから断定するか、確率表現を使わず「未確認」と書き、user に確認作業を頼まないこと。` };
+    reason: `[EXTERNAL-STATE] 「${claim}」は ${missingVendor || "対象 vendor 不明"} を照会せずに ${[...queried].join(", ") || "照会なし"} の証拠で断定している、対象システムを直接照会していない外部状態の否定断定です。Claude 側の履歴・memory に無いことは証拠になりません（人が Web UI で作ったものは残らない）。まず vendor MCP / API / 公式 CLI で直接照会してください。「未確認」と書いてよいのは user が行動しない事実だけです。手渡しの手順・場所・アカウント・値に関わる事実は必ず照会して特定し、user に確認作業を頼まないこと。` };
   // R3 explicitly requires a concrete request when the reported evidence is unreachable.
   const outsourced = needsEvidenceRequest(text, transcriptRaw) && evidenceRequest(text) ? "" : findOutsourcedVerification(text);
   if (outsourced && (!direct || !hasPermissionDenialFromRaw(transcriptRaw) || !String(text).includes('[手渡し判定]'))) {

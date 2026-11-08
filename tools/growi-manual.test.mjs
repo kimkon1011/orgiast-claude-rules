@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { buildIndex, extractGrowiCsrf, fetchGrowiBodies, generateGrowiParts, ingestFiles, installIndexFiles, listGrowiPages, loginGrowi, parsePart, publishIndex, syncGrowi } from './growi-manual.mjs';
+import { appendAfterGrowi, buildIndex, createGrowiPage, currentRevisionOf, extractBodyCsrf, extractGrowiCsrf, fetchGrowiBodies, generateGrowiParts, ingestFiles, insertLinesAfterAnchor, installIndexFiles, listGrowiPages, loginGrowi, parsePart, publishIndex, syncGrowi } from './growi-manual.mjs';
 
 const tool = fileURLToPath(new URL('./growi-manual.mjs', import.meta.url));
 const delimiter = '================================================== 次のページ ==================================================';
@@ -438,4 +438,160 @@ test('page listing retries transient failures but does not retry authentication 
   calls = 0;
   await assert.rejects(growiJson(async () => { calls++; return { ok: false, status: 401 }; }, 'https://example.invalid', { attempts: 3, retryDelay: async () => {} }), /401/);
   assert.equal(calls, 1);
+});
+
+test('extractBodyCsrf は body タグの data-csrftoken を取り出す', () => {
+  assert.equal(extractBodyCsrf('<html><body class="editor" data-csrftoken="TOKEN123">本文</body></html>'), 'TOKEN123');
+  assert.throws(() => extractBodyCsrf('<body>csrfなし</body>'), /data-csrftoken/);
+});
+
+test('currentRevisionOf は文字列とオブジェクト両方の revision ポインタを正規化する', () => {
+  assert.equal(currentRevisionOf({ revision: 'r1' }), 'r1');
+  assert.equal(currentRevisionOf({ revision: { _id: 'r2' } }), 'r2');
+  assert.throws(() => currentRevisionOf({ revision: null }), /現行リビジョン/);
+  assert.throws(() => currentRevisionOf({}), /現行リビジョン/);
+});
+
+test('insertLinesAfterAnchor は唯一のアンカー直後だけへ挿入し冪等', () => {
+  const first = insertLinesAfterAnchor('前\nアンカーです\n後', 'アンカー', '追加1\n追加2\n');
+  assert.equal(first.body, '前\nアンカーです\n追加1\n追加2\n後');
+  assert.equal(first.unchanged, false);
+  assert.equal(insertLinesAfterAnchor(first.body, 'アンカー', '追加1\n追加2').unchanged, true);
+});
+
+test('insertLinesAfterAnchor はアンカー0件・複数件を exit 3 相当で拒否する', () => {
+  for (const body of ['前\n後', 'アンカー1\n中\nアンカー2']) {
+    assert.throws(() => insertLinesAfterAnchor(body, 'アンカー', '追加'), error => error.exitCode === 3 && Array.isArray(error.details.nearby));
+  }
+});
+
+test('appendAfterGrowi は revision 付き更新後に本文を再取得検証する', async () => {
+  let current = { _id: 'p1', revision: { _id: 'r1', body: '前\n目印\n後' } };
+  const http = async (url, options = {}) => {
+    if (url.includes('pages.get')) return { ok: true, headers: { get: () => 'application/json' }, json: async () => ({ page: current }) };
+    assert.match(url, /pages\.update$/); const params = options.body;
+    assert.equal(params.get('revision_id'), 'r1'); assert.equal(params.get('body'), '前\n目印\n追記\n後');
+    current = { _id: 'p1', revision: { _id: 'r2', body: params.get('body') } };
+    return { ok: true };
+  };
+  const result = await appendAfterGrowi({ baseUrl: 'https://growi.example', http, csrf: 'csrf', pagePath: '/手順', anchor: '目印', lines: '追記' });
+  assert.deepEqual({ before: result.revisionBefore, after: result.revisionAfter, inserted: result.insertedLines, other: result.diffLinesOtherThanInsert }, { before: 'r1', after: 'r2', inserted: 1, other: 0 });
+});
+
+test('createGrowiPage は新規パスを v3 API で作成する', async () => {
+  const calls = [];
+  const http = async (url, options = {}) => {
+    calls.push({ url, options });
+    const pathname = new URL(url).pathname;
+    if (pathname === '/_api/pages.get') return Response.json({ ok: false });
+    if (pathname === '/_api/v3/pages') return Response.json({ data: { page: { _id: 'p1', path: '/新規/手順' } } }, { status: 201 });
+    throw new Error(`想定外の HTTP 呼び出し: ${url}`);
+  };
+  const result = await createGrowiPage({ baseUrl: 'https://growi.example/', http, csrf: 'tok', pagePath: '/新規/手順', body: '本文' });
+  assert.equal(result.status, 'created');
+  assert.equal(result.pageId, 'p1');
+  assert.equal(result.url, 'https://growi.example/新規/手順');
+  assert.equal(result.chars, 2);
+  const post = calls.find((call) => call.options.method === 'POST');
+  const sent = JSON.parse(post.options.body);
+  assert.equal(sent.path, '/新規/手順');
+  assert.equal(sent.grant, 1);
+  assert.equal(sent._csrf, 'tok');
+});
+
+test('createGrowiPage は既存パスを overwrite 無しでは上書きしない', async () => {
+  const posts = [];
+  const http = async (url, options = {}) => {
+    if (options.method === 'POST') posts.push(url);
+    return Response.json({ page: { _id: 'p9', path: '/既存' } });
+  };
+  const result = await createGrowiPage({ baseUrl: 'https://growi.example', http, csrf: 'tok', pagePath: '/既存', body: '本文' });
+  assert.equal(result.status, 'exists');
+  assert.equal(result.pageId, 'p9');
+  assert.deepEqual(posts, []);
+});
+
+test('createGrowiPage は overwrite で page.revision ポインタを指定して pages.update する', async () => {
+  const posts = [];
+  const http = async (url, options = {}) => {
+    const pathname = new URL(url).pathname;
+    if (pathname === '/_api/pages.get') return Response.json({ page: { _id: 'p9', path: '/既存', revision: 'r7' } });
+    if (pathname === '/_api/pages.update') { posts.push(String(options.body)); return Response.json({ page: { _id: 'p9' } }); }
+    throw new Error(`想定外の HTTP 呼び出し: ${url}`);
+  };
+  const result = await createGrowiPage({ baseUrl: 'https://growi.example', http, csrf: 'tok', pagePath: '/既存', body: '更新本文', overwrite: true });
+  assert.equal(result.status, 'updated');
+  assert.equal(posts.length, 1);
+  const params = new URLSearchParams(posts[0]);
+  assert.equal(params.get('page_id'), 'p9');
+  assert.equal(params.get('revision_id'), 'r7');
+  assert.equal(params.get('body'), '更新本文');
+  assert.equal(params.get('_csrf'), 'tok');
+});
+
+test('createGrowiPage は作成時の page_exists を exists 扱いにする', async () => {
+  const http = async (url) => {
+    const pathname = new URL(url).pathname;
+    if (pathname === '/_api/pages.get') return Response.json({ ok: false });
+    if (pathname === '/_api/v3/pages') return new Response(JSON.stringify({ errors: [{ message: 'Failed to post page', code: 'page_exists' }] }), { status: 500 });
+    throw new Error(`想定外の HTTP 呼び出し: ${url}`);
+  };
+  const result = await createGrowiPage({ baseUrl: 'https://growi.example', http, csrf: 'tok', pagePath: '/競合', body: '本文' });
+  assert.equal(result.status, 'exists');
+});
+
+test('create-page は引数が不正なら usage で exit 2（ネットワーク不使用）', (t) => {
+  const cache = temporaryCache(t);
+  const noSlash = run(cache, ['create-page', '--path', 'prefix-only', '--file', 'x.md']);
+  assert.equal(noSlash.status, 2);
+  const noFile = run(cache, ['create-page', '--path', '/ok/path']);
+  assert.equal(noFile.status, 2);
+});
+
+function shiftedPart(part, total, pages) {
+  return `﻿【社内マニュアル - Part ${part}/${total}】\r\n更新日時: 2026/10/29 04:18:33\r\n文字数: 456 文字\r\n================================================================================\r\n\r\n${pages.map(([title, pagePath, body]) => `### ページタイトル: ${title}\r\n--- 内部パス: ${pagePath} ---\r\n\r\n---------- マニュアル本文 ----------\r\n${body}`).join(`\r\n${delimiter}\r\n\r\n`)}`;
+}
+
+test('get は索引より新しい版の本文でも内部パスで正しいページを引き、移動先 Part も探す', (t) => {
+  const cache = temporaryCache(t);
+  indexFixtures(cache);
+  fs.writeFileSync(path.join(cache, 'part01.txt'), shiftedPart(1, 2, [['新規ページ', '/00:新規/先頭', '先頭に増えた長い本文'.repeat(20)], ['採用 手順A', '/13:人事部/採用/A', '新版の本文A'], ['経理処理', '/14:経理部/処理', '新版の本文C']]));
+  fs.writeFileSync(path.join(cache, 'part02.txt'), shiftedPart(2, 2, [['採用 手順B', '/13:人事部/採用/B', '移動した本文B']]));
+  const a = run(cache, ['get', 'p0001']);
+  assert.equal(a.status, 0);
+  assert.match(a.stdout, /新版の本文A/);
+  assert.doesNotMatch(a.stdout, /先頭に増えた|本文C/);
+  const b = run(cache, ['get', 'p0002']);
+  assert.equal(b.status, 0);
+  assert.match(b.stdout, /移動した本文B/);
+});
+
+test('get は本文に見つからないページを別ページの本文で埋めず exit 4 で止める', (t) => {
+  const cache = temporaryCache(t);
+  indexFixtures(cache);
+  fs.writeFileSync(path.join(cache, 'part01.txt'), shiftedPart(1, 2, [['無関係', '/99:別/ページ', 'Reブースの営業文'.repeat(30)]]));
+  fs.rmSync(path.join(cache, 'part02.txt'));
+  const result = run(cache, ['get', 'p0003']);
+  assert.equal(result.status, 4);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /索引が本文と合っていません: \/14:経理部\/処理/);
+  assert.match(result.stderr, /install-index/);
+});
+
+test('ingest は索引と版が違う Part を警告する', (t) => {
+  const cache = temporaryCache(t);
+  indexFixtures(cache);
+  const input = temporaryCache(t);
+  const file = path.join(input, 'part1.txt');
+  fs.writeFileSync(file, shiftedPart(1, 2, [['採用 手順A', '/13:人事部/採用/A', '新版']]));
+  const result = run(cache, ['ingest', file]);
+  assert.equal(result.status, 0);
+  assert.match(result.stderr, /警告: Part 1 の本文（2026\/10\/29 04:18:33）が索引（2026\/08\/26 02:27:43）と別の版です/);
+});
+
+test('Drive 書き出しでパス行と本文マーカーの間の空行が2行でも分割できる', () => {
+  const text = sample().replaceAll('---\r\n\r\n---------- マニュアル本文', '---\r\n\r\n\r\n---------- マニュアル本文');
+  const parsed = parsePart(text, 1);
+  assert.equal(parsed.pages.length, 3);
+  assert.equal(Buffer.from(parsed.normalized).subarray(parsed.pages[2].byteStart, parsed.pages[2].byteEnd).toString(), '末尾本文C');
 });

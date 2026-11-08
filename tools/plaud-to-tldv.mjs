@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 
@@ -20,6 +21,7 @@ const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/
 // 取り込めることを実測で確認した(2026-08-19、21分の .ogg が正常に処理された)。
 const SUPPORTED_EXTENSIONS = new Set(['.mp3', '.mp4', '.wav', '.m4a', '.mkv', '.mov', '.avi', '.wma', '.flac', '.ogg', '.opus']);
 const FIVE_MINUTES = 5 * 60;
+const RENEW_AHEAD = 7 * 24 * 60 * 60;
 const THREE_HOURS = 3 * 60 * 60;
 
 export function selectPlaudCookies(setCookies, current = {}) {
@@ -383,6 +385,18 @@ function makePlaudClient(state, persist, log, fetchImpl = fetch) {
 
 function needsRefresh(exp) { return !Number(exp) || Number(exp) <= Math.floor(Date.now() / 1000) + FIVE_MINUTES; }
 
+/**
+ * UT をいつ更新するか。Plaud は UT と URT を同じ期限で発行するので、UT の残り
+ * 5分を待つと URT も同時に切れて自力更新できない(毎時実行では5分の窓にまず当たらない。
+ * 2026-10-12 実害)。残り7日を切ったら前倒しで更新し、失敗しても有効な UT で続行する。
+ */
+export function userTokenRefreshMode(utExp, nowSec = Math.floor(Date.now() / 1000)) {
+  const exp = Number(utExp);
+  if (!exp || exp <= nowSec + FIVE_MINUTES) return 'required';
+  if (exp <= nowSec + RENEW_AHEAD) return 'proactive';
+  return 'none';
+}
+
 function plainDateName(name) {
   return !name || /^\s*(?:\d{4}[-_.年]\d{1,2}[-_.月]\d{1,2}日?)[ T_-]*(?:\d{1,2}[:時]\d{2}(?::\d{2})?分?)?\s*(?:\.[^.]+)?$/i.test(name);
 }
@@ -530,6 +544,16 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
     notifyCtx = { state, persist };
     const fetchImpl = dependencies.fetch || fetch;
     const client = makePlaudClient(state, persist, log, fetchImpl);
+    // 期限前の前倒し更新。成功すれば UT/URT とも延びて下の警告も出ない。
+    // 失敗しても UT はまだ有効なので本処理は続け、次回また試す。
+    if (state.session.urt && userTokenRefreshMode(state.session.utExp) === 'proactive') {
+      try {
+        await refreshTokens(state, client, persist, fetchImpl);
+        log.info(`Plaud トークンを前倒し更新しました(新しい期限 ${epochToIso(state.session.urtExp)})`);
+      } catch (error) {
+        log.warn(`Plaud トークンの前倒し更新に失敗しました(次回再試行): ${error?.message || error}`);
+      }
+    }
     // URT が切れると自力更新できず、ブラウザからの取り直しが必要になる。
     // 黙って止まらないよう、余裕のあるうちから警告を出す。
     const urtDaysLeft = state.session.urtExp ? (Number(state.session.urtExp) * 1000 - Date.now()) / 86400000 : 0;
@@ -634,4 +658,58 @@ export async function run(argv = process.argv.slice(2), dependencies = {}) {
 
 if (isEntry(import.meta.url)) {
   process.exitCode = await run();
+}
+
+// Read-only hub adapter: reuse authentication, never import audio, notify, or
+// persist the existing Plaud session from this collector.
+export async function collectPlaudForHub({ home, since, until, cursor = {}, config, fetchImpl, state: sourceState = {} }) {
+  const file = path.join(home, '.claude', 'plaud-to-tldv-state.json');
+  let raw = {};
+  try { raw = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
+  catch (e) { if (e.code !== 'ENOENT') throw e; }
+  const envFile = path.join(home, '.claude', 'plaud.env');
+  const state = mergeState(raw);
+  state.session.ut ||= process.env.PLAUD_UT || readEnvValue(envFile, 'PLAUD_UT');
+  state.session.urt ||= process.env.PLAUD_URT || readEnvValue(envFile, 'PLAUD_URT');
+  if (!state.session.ut) throw new Error('Plaud session missing');
+  state.session.region = regionFromToken(state.session.ut) || state.session.region;
+  // Let the existing owner task refresh UT/URT; do not rotate its refresh token.
+  if (needsRefresh(jwtExp(state.session.ut))) throw new Error('Plaud session expired; owner plaud-to-tldv refresh required');
+  const persist = () => {};
+  const client = makePlaudClient(state, persist, { warn() {}, info() {} }, fetchImpl);
+  await ensureWorkspace(state, client, persist);
+  const skip = cursor.skip || 0, limit = config.maxPerSource;
+  const { body } = await client.call(`/file/simple/web?skip=${skip}&limit=${limit}&is_trash=2&sort_by=start_time&is_desc=true`, { headers: authHeaders(state.session.wt) }, 'hub recordings');
+  if (!Array.isArray(body.data_file_list)) throw new Error('Plaud invalid listing');
+  const rows = body.data_file_list, messages = [];
+  const end = cursor.end || until;
+  const pending = Object.values(sourceState.transcriptFailures || {}).sort((a, b) => (a.lastAttempt || '').localeCompare(b.lastAttempt || '')).slice(0, Math.max(1, Math.floor(limit / 2)));
+  const records = new Map(pending.map(r => [r.id, { id: r.id, filename: r.title, start_time: Date.parse(r.ts) / 1000 }]));
+  for (const r of rows) {
+    const ts = epochToIso(r.start_time);
+    if (ts && Date.parse(ts) >= since && Date.parse(ts) <= end) records.set(r.id, r);
+  }
+  for (const r of records.values()) {
+    const m = { source: 'plaud', id: r.id, ts: epochToIso(r.start_time), subject: r.filename || '', sender: 'Plaud', text: '', url: 'https://web.plaud.ai/' };
+    try {
+      // Only read existing artifacts. Never request transcription or audio import.
+      const { body: detail } = await client.call(`/file/detail/${encodeURIComponent(r.id)}`, { headers: authHeaders(state.session.wt) }, 'hub detail');
+      const link = detail.data?.content_list?.find(x => x.data_type === 'transaction' && x.data_link)?.data_link;
+      if (!link || !/^https:\/\//.test(link)) throw new Error('Plaud transcript not ready (artifact missing)');
+      const response = await fetchImpl(link); // Never attach bearer tokens to signed links.
+      if (!response.ok) throw new Error(`Plaud transcript download HTTP ${response.status}`);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      let raw;
+      try { raw = gunzipSync(buffer, { maxOutputLength: 10000000 }).toString('utf8'); } catch { raw = buffer.toString('utf8'); }
+      let decoded;
+      try { decoded = JSON.parse(raw); } catch { throw new Error('Plaud transcript invalid JSON'); }
+      const segments = Array.isArray(decoded) ? decoded : decoded && typeof decoded === 'object' ? Object.values(decoded) : [];
+      const usable = segments.filter(x => x && typeof (x.content || x.text) === 'string' && (x.content || x.text).trim());
+      if (!usable.length) throw new Error('Plaud transcript not ready or unsupported schema');
+      m.text = usable.map(x => `${x.speaker || x.original_speaker || ''}: ${x.content || x.text}`).join('\n');
+    } catch (e) { m.transcriptError = String(e.message).slice(0, 300); }
+    messages.push(m);
+  }
+  const more = rows.length === limit && skip + rows.length < Number(body.data_file_total || Infinity) && !rows.some(r => Date.parse(epochToIso(r.start_time)) < since);
+  return { messages, cursor: more ? { since, end, skip: skip + rows.length } : { since: end } };
 }

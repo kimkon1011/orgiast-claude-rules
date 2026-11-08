@@ -4,6 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  ensureFeedbackIssue,
+  main,
+  precheckRepositories,
+  warnUnreachableRepositories,
+  lookupFeedbackIssue,
   appendFeedbackIssueLedger,
   buildIssueBody,
   chainBoothFeedbackIntake,
@@ -15,8 +20,34 @@ import {
   resolveRepo,
   resolveRepoForItem,
   resolveRepoFromUrl,
+  runGh,
   selectCandidates,
 } from './feedback-to-issues.mjs';
+
+test('runGh は gh を shell なしで起動し、検索語の引用符と空白をそのまま渡す', () => {
+  const calls = [];
+  const search = '"feedback-dm:123" in:body';
+  const result = runGh(['issue', 'list', '--search', search], {}, (cmd, args, opts) => {
+    calls.push({ cmd, args, opts });
+    return { status: 0, stdout: '[]' };
+  });
+  assert.equal(result.stdout, '[]');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].cmd, 'gh');
+  assert.deepEqual(calls[0].args, ['issue', 'list', '--search', search]);
+  assert.notEqual(calls[0].opts.shell, true);
+});
+
+test('runGh は gh を直接起動できない環境だけ shell 経由に戻す', () => {
+  const calls = [];
+  runGh(['--version'], {}, (cmd, argsOrOpts, opts) => {
+    calls.push({ cmd, opts: opts ?? argsOrOpts });
+    return calls.length === 1 ? { error: Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' }) } : { status: 0 };
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].opts.shell, true);
+  assert.match(calls[1].cmd, /gh.+--version/);
+});
 
 test('Issue 台帳は同じ message_id を重複追記しない', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'feedback-ledger-test-'));
@@ -154,7 +185,13 @@ test('booth-feedback-intake を 10分タスクから相乗り起動する', asyn
   assert.equal(await chainBoothFeedbackIntake({ argv: [], spawnImpl: fakeSpawn }), 'spawned');
   assert.equal(calls.length, 1);
   assert.match(calls[0][1][0], /booth-feedback-intake\.mjs$/);
-  assert.equal(calls[0][2].detached, true);
+  // #422: win32 は detached が CREATE_NO_WINDOW を無効化するため windowsHide のみ。
+  if (process.platform === 'win32') {
+    assert.equal(calls[0][2].windowsHide, true);
+    assert.notEqual(calls[0][2].detached, true);
+  } else {
+    assert.equal(calls[0][2].detached, true);
+  }
 });
 
 test('--dry-run と --no-chain では相乗り起動しない', async () => {
@@ -170,10 +207,186 @@ test('相乗り起動の失敗はこのタスクを落とさない', async () =>
   assert.equal(await chainBoothFeedbackIntake({ argv: [], spawnImpl: boom }), 'failed');
 });
 
+test('ensureFeedbackIssue は作成→台帳記録し、2回目は gh を呼ばず台帳から返す', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fti-home-'));
+  const calls = [];
+  const gh = (args) => {
+    calls.push(args);
+    if (args[0] === 'issue' && args[1] === 'list') return { status: 0, stdout: '[]' };
+    if (args[0] === 'issue' && args[1] === 'create') return { status: 0, stdout: 'https://github.com/o/r/issues/7\n' };
+    return { status: 0, stdout: '' };
+  };
+  try {
+    const item = { message_id: 'm-1', app_name: 'a', kind: 'bug', title: 't', body: 'b' };
+    const first = ensureFeedbackIssue(item, 'o/r', { home, gh });
+    assert.equal(first.number, 7);
+    const before = calls.length;
+    const second = ensureFeedbackIssue(item, 'o/r', { home, gh });
+    assert.equal(second.number, 7);
+    assert.equal(calls.length, before);
+    assert.throws(() => ensureFeedbackIssue({ ...item, message_id: 'x"y' }, 'o/r', { home, gh }), /Invalid/);
+    assert.throws(() => ensureFeedbackIssue(item, 'bad repo', { home, gh }), /Invalid/);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('ensureFeedbackIssue は既存 Issue（marker 一致）を再利用し、新規作成しない', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fti-home-'));
+  const created = [];
+  const gh = (args) => {
+    if (args[1] === 'list') return { status: 0, stdout: JSON.stringify([{ number: 3, url: 'https://github.com/o/r/issues/3', body: '<!-- feedback-dm:m-2 -->' }]) };
+    if (args[1] === 'create') created.push(args);
+    return { status: 0, stdout: '' };
+  };
+  try {
+    assert.equal(ensureFeedbackIssue({ message_id: 'm-2', kind: 'bug', title: 't' }, 'o/r', { home, gh }).number, 3);
+    assert.equal(created.length, 0);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
 test('submitterマーカーはJSONで復元でき、コメント終端をエスケープする', () => {
   const submitter = '山田 --> <test@example.com>';
   const body = buildIssueBody({ submitter, submitter_discord_id: '42' });
   const marker = body.match(/<!-- feedback-submitter: (.*?) -->/)[1];
   assert.deepEqual(JSON.parse(marker), { submitter, submitter_discord_id: '42' });
   assert.ok(!marker.includes('-->'));
+});
+
+test('ensureFeedbackIssue は Issue lookup の一時失敗を再試行して成功する', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fti-home-'));
+  const calls = [];
+  const gh = (args) => {
+    calls.push(args);
+    if (args[0] === 'issue' && args[1] === 'list') {
+      if (calls.filter((a) => a[1] === 'list').length === 1) return { status: 1, stderr: 'HTTP 502' };
+      return { status: 0, stdout: '[]' };
+    }
+    if (args[0] === 'issue' && args[1] === 'create') return { status: 0, stdout: 'https://github.com/o/r/issues/9\n' };
+    return { status: 0, stdout: '' };
+  };
+  try {
+    const item = { message_id: 'm-retry', kind: 'bug', title: 't' };
+    assert.equal(ensureFeedbackIssue(item, 'o/r', { home, gh, sleep: () => {} }).number, 9);
+    assert.equal(calls.filter((a) => a[1] === 'list').length, 2);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('ensureFeedbackIssue は Issue lookup が連続失敗すると理由付きで失敗する', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fti-home-'));
+  let listCalls = 0;
+  const gh = (args) => {
+    if (args[1] === 'list') { listCalls++; return { status: 1, stderr: 'HTTP 502' }; }
+    return { status: 0, stdout: '' };
+  };
+  try {
+    assert.throws(
+      () => ensureFeedbackIssue({ message_id: 'm-fail', kind: 'bug', title: 't' }, 'o/r', { home, gh, sleep: () => {} }),
+      /Issue lookup failed \(status=1: HTTP 502\)/,
+    );
+    assert.equal(listCalls, 3);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+
+test('Issue lookup diagnostics redact secrets and URLs before limiting output', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fti-diagnostic-'));
+  const secret = 'ghp_' + 'a'.repeat(36);
+  const gh = () => ({ status: 1, stderr: `HTTP 401\n${secret} https://example.test/?credential=private ${'x'.repeat(800)}` });
+  try {
+    assert.throws(() => ensureFeedbackIssue({ message_id: 'm-diagnostic', title: 't' }, 'o/r', {
+      home, gh, sleep: () => {},
+    }), (error) => {
+      assert.match(error.message, /status=1: HTTP 401/);
+      assert.doesNotMatch(error.message, /private|a{36}|\n/);
+      assert.ok(error.message.length < 550);
+      return true;
+    });
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+ test('Issue lookup preserves stderr alongside spawn errors and sanitizes thrown errors', () => {
+  assert.throws(() => lookupFeedbackIssue('id', 'o/r', () => ({
+    status: null, error: new Error('spawn ETIMEDOUT'), stderr: 'HTTP 502 upstream unavailable',
+  }), { attempts: 1 }), /status=null: spawn ETIMEDOUT \| HTTP 502 upstream unavailable/);
+  const secret = 'ghp_' + 'z'.repeat(36);
+  assert.throws(() => lookupFeedbackIssue('id', 'o/r', () => {
+    throw new Error(`network failure ${secret} https://example.test/private\n${'x'.repeat(800)}`);
+  }, { attempts: 1 }), error => {
+    assert.match(error.message, /network failure/);
+    assert.doesNotMatch(error.message, /z{36}|private|\n/);
+    assert.ok(error.message.length < 550);
+    return true;
+  });
+});
+
+for (const failure of ['404', '403', 'spawn-error', 'throw']) {
+  test(`main skips unreachable feedback (${failure}), warns once and preserves reachable quota`, async (t) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fti-precheck-'));
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    const logs = [], warnings = [], errors = [], calls = [], acks = [];
+    t.mock.method(console, 'log', (line) => logs.push(line));
+    t.mock.method(console, 'warn', (line) => warnings.push(line));
+    t.mock.method(console, 'error', (line) => errors.push(line));
+    const inaccessible = new Set(['cr568/warehouse-app', 'seisaku-team-org/event-shop']);
+    const gh = (args) => {
+      calls.push(args);
+      if (args[0] === 'api' && args[1] === 'user') return { status: 0, stdout: 'kimkon1011\n' };
+      if (args[0] === 'api') {
+        if (inaccessible.has(args[1].slice(6))) {
+          if (failure === 'throw') throw new Error('spawn failed');
+          return failure === 'spawn-error' ? { error: new Error('spawn failed'), status: null }
+            : { status: 1, stderr: `gh: unavailable (HTTP ${failure})` };
+        }
+        return { status: 0, stdout: '{}' };
+      }
+      assert.deepEqual(args.slice(0, 4), ['issue', 'list', '--repo', 'kimkon1011/purchasing-management-app']);
+      return { status: 0, stdout: JSON.stringify([{ number: 7, url: 'https://github.com/kimkon1011/purchasing-management-app/issues/7', body: '<!-- feedback-dm:ok -->' }]) };
+    };
+    const items = ['倉庫アプリ', '倉庫アプリ', 'イベントショップ', '購買部管理アプリ'].map((app_name, i) => ({
+      message_id: i === 3 ? 'ok' : `skip-${i}`, app_name, parse_ok: true, kind: 'bug', title: 'test',
+    }));
+    const request = async (_url, _secret, options) => {
+      if (!options) return { items };
+      acks.push(JSON.parse(options.body).message_id);
+      return { acked: true };
+    };
+    assert.equal(await main(['--limit', '1'], { home, gh, request, config: { url: 'https://relay.test', secret: 'test' } }), 0);
+    assert.deepEqual(acks, ['ok']);
+    assert.deepEqual(errors, []);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /cr568\/warehouse-app/);
+    assert.match(warnings[0], /seisaku-team-org\/event-shop/);
+    assert.match(warnings[0], /実行アカウント: kimkon1011/);
+    assert.doesNotMatch(warnings[0], /\n/);
+    assert.ok(warnings[0].length <= 500);
+    assert.ok(logs.some(line => /スキップ: 3件（到達不能リポジトリ:3）/.test(line)));
+    assert.ok(logs.every(line => !line.includes('skip-') && !line.includes('上限')));
+    const probes = calls.filter(args => args[0] === 'api' && args[1].startsWith('repos/'));
+    assert.equal(probes.length, 8);
+    assert.equal(new Set(probes.map(args => args[1])).size, 8);
+    assert.equal(calls.filter(args => args[0] === 'issue').length, 1);
+  });
+}
+
+test('precheck deduplicates repositories and starts a fresh cache per run', () => {
+  const calls = [];
+  const gh = args => { calls.push(args); return { status: 0 }; };
+  assert.deepEqual([...precheckRepositories(['o/r', 'o/r', 'o/s'], gh)], [['o/r', 'OK'], ['o/s', 'OK']]);
+  assert.equal(calls.length, 2);
+  precheckRepositories(['o/r'], gh);
+  assert.equal(calls.length, 3);
+});
+
+test('reachability warning masks secrets, caps one line and falls back to unknown account', (t) => {
+  const warnings = [];
+  t.mock.method(console, 'warn', line => warnings.push(line));
+  const statuses = new Map([['o/r', '403']]);
+  warnUnreachableRepositories(new Map([['o/r', 'OK']]), () => assert.fail('no user lookup needed'));
+  assert.equal(warnings.length, 0);
+  warnUnreachableRepositories(statuses, () => { throw new Error('unavailable'); });
+  assert.match(warnings[0], /実行アカウント: unknown/);
+  warnUnreachableRepositories(statuses, () => ({ status: 1, stdout: 'wrong' }));
+  assert.match(warnings[1], /実行アカウント: unknown/);
+  warnUnreachableRepositories(statuses, () => ({ status: 0, stdout: `ghp_${'a'.repeat(36)}\nhttps://example.test/private ${'x'.repeat(800)}` }));
+  assert.ok(warnings[2].length <= 500);
+  assert.doesNotMatch(warnings[2], /a{36}|private|\n/);
 });

@@ -19,6 +19,52 @@ if ($PSScriptRoot) { $repoCandidates += (Split-Path -Parent $PSScriptRoot) }
 $repoCandidates += @("$H\orgiast-claude-rules", "$H\Downloads\orgiast-claude-rules")
 $repo = @($repoCandidates | Select-Object -Unique) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
+# Existing LINE receiver hosts also acquire new tasks without reinstallation.
+try {
+  $scheduleInstaller = Join-Path $repo 'tools\register-schedule-sync-task.ps1'
+  if ($repo -and (Test-Path -LiteralPath $scheduleInstaller)) {
+    if ($Dry) { DrySkip 'register-schedule-sync-task.ps1 -Ensure (LINE receiver host only)' }
+    else {
+      & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $scheduleInstaller -Ensure
+      if ($LASTEXITCODE -ne 0) { throw "register-schedule-sync-task.ps1 exit $LASTEXITCODE" }
+    }
+  }
+} catch { Write-Warning ("schedule-sync self-repair failed: " + $_.Exception.Message) }
+
+try {
+  $commsHubInstaller = Join-Path $repo 'tools\register-comms-hub-sync.ps1'
+  if ($repo -and (Test-Path -LiteralPath $commsHubInstaller)) {
+    if ($Dry) { DrySkip 'register-comms-hub-sync.ps1 -Ensure (DWD key host only)' }
+    else {
+      & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $commsHubInstaller -Ensure
+      if ($LASTEXITCODE -ne 0) { throw "register-comms-hub-sync.ps1 exit $LASTEXITCODE" }
+    }
+  }
+} catch { Write-Warning ("comms-hub-sync self-repair failed: " + $_.Exception.Message) }
+
+try {
+  $daytripInstaller = Join-Path $repo 'tools\register-daytrip-detect-task.ps1'
+  if ($repo -and (Test-Path -LiteralPath $daytripInstaller)) {
+    if ($Dry) { DrySkip 'register-daytrip-detect-task.ps1 -Ensure (LINE receiver host only)' }
+    else {
+      & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $daytripInstaller -Ensure
+      if ($LASTEXITCODE -ne 0) { throw "register-daytrip-detect-task.ps1 exit $LASTEXITCODE" }
+    }
+  }
+} catch { Write-Warning ("daytrip-detect self-repair failed: " + $_.Exception.Message) }
+
+# 自己修復: 対話セッションのGUI監視を既存PCにも導入する。
+try {
+  $dialogInstaller = Join-Path $repo 'tools\register-stuck-dialog-task.mjs'
+  if ($repo -and (Test-Path $dialogInstaller)) {
+    if ($Dry) { DrySkip 'register-stuck-dialog-task.mjs --ensure' }
+    else {
+      & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) $dialogInstaller '--ensure' *> $null
+      if ($LASTEXITCODE -ne 0) { throw "stuck-dialog-watch registration exit $LASTEXITCODE" }
+    }
+  }
+} catch { Write-Warning "stuck-dialog-watch self-repair: $($_.Exception.Message)" }
+
 # 自己修復: 既存PCにも fleet-agent の15分タスクを登録し、中央ディレクティブへ応答できるようにする
 try {
   if ($repo -and -not (Get-ScheduledTask -TaskName 'OrgiastFleetAgent' -ErrorAction SilentlyContinue)) {
@@ -29,6 +75,54 @@ try {
     }
   }
 } catch {}
+
+# 自己修復: fleet-mail 受信タスク(OrgiastFleetMail)が未登録/Disabled/最終実行が24時間以上前なら再登録する。
+# 2026-10-10 事故: cr-PC の受信タスクが止まり、返信4通が deliveredAt 空きのまま届かなかった。
+# register-fleet-mail.mjs --ensure が側で健康判定するので、ここは冪等に毎日呼ぶだけでよい。
+try {
+  $fleetMailRepair = Join-Path $repo 'tools\register-fleet-mail.mjs'
+  if ($repo -and (Test-Path $fleetMailRepair -PathType Leaf)) {
+    if ($Dry) { DrySkip 'register-fleet-mail.mjs --ensure (OrgiastFleetMail 未登録/無効/24h未実行なら本番なら再登録する)' }
+    else {
+      & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) $fleetMailRepair '--ensure' *> $null
+      if ($LASTEXITCODE -ne 0) { throw "register-fleet-mail.mjs --ensure exit $LASTEXITCODE" }
+    }
+  }
+} catch {
+  try {
+    $fleetLogDir = Join-Path $H '.claude\logs'
+    if (-not (Test-Path -LiteralPath $fleetLogDir)) { New-Item -ItemType Directory -Path $fleetLogDir -Force | Out-Null }
+    $fleetLog = Join-Path $fleetLogDir 'fleet-poller.log'
+    $line = '{0} WARN fleet-mail-self-repair-failed reason={1}' -f (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssK'), ($_.Exception.Message -replace "[\r\n]+", ' ')
+    [IO.File]::AppendAllText($fleetLog, $line + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
+  } catch {}
+}
+
+# Existing controller PCs also register the inbound expectation patrol without reinstalling.
+try {
+  $fleetChaseInstaller = Join-Path $repo 'tools\register-fleet-chase.mjs'
+  if ($repo -and (Test-Path -LiteralPath $fleetChaseInstaller)) {
+    if ($Dry) { DrySkip 'register-fleet-chase.mjs --ensure (kim-PC only)' }
+    else {
+      & $(if (($fleetChaseNode = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $fleetChaseNode } else { "$env:ProgramFiles\nodejs\node.exe" }) $fleetChaseInstaller '--ensure'
+      if ($LASTEXITCODE -ne 0) { throw "fleet-chase registration exit $LASTEXITCODE" }
+    }
+  }
+} catch { Write-Warning ("fleet-chase self-repair failed: " + $_.Exception.Message) }
+
+# Refresh auto-progress tasks daily so existing PCs receive schedule changes too.
+try {
+  $autoProgressInstaller = Join-Path $repo 'tools\register-auto-progress-task.ps1'
+  if ($repo -and (Test-Path -LiteralPath $autoProgressInstaller -PathType Leaf)) {
+    if ($Dry) { DrySkip 'register-auto-progress-task.ps1 (refresh watch/digest schedules)' }
+    else {
+      & powershell -NoProfile -ExecutionPolicy Bypass -File $autoProgressInstaller *> $null
+      if ($LASTEXITCODE -ne 0) { throw "register-auto-progress-task.ps1 exit $LASTEXITCODE" }
+    }
+  }
+} catch {
+  Write-Warning ("auto-progress-self-repair-failed: {0}" -f $_.Exception.Message)
+}
 
 # 自己修復: 全PCで Claude 環境の Google Drive 日次バックアップを登録する
 try {
@@ -118,19 +212,25 @@ if ($dueDaily -and $repo) {
     $emoji = if ($ng -eq 0) { [char]0x2705 } else { [char]0x26A0 }
     $tail = ''; if ($ng -gt 0) { $tail = " … NG: $ngItems" }
     Post "$emoji **[$label]** 日次設定チェック: OK $ok / NG $ng$tail"
-    # --specs を必ず付ける。付けないとハードウェアスペックを一度も送らず、
-    # PC管理表 が「手で叩いた1台」だけの状態から永久に増えない(2026-08-28 実測)。
-    try {
-      $fleetLogDir = Join-Path $H '.claude\logs'; New-Item -ItemType Directory -Path $fleetLogDir -Force | Out-Null
-      $fleetLog = Join-Path $fleetLogDir 'fleet-poller.log'
-      $stamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssK')
-      if ($Dry) { DrySkip 'fleet-sheet-report.mjs --specs --cloud (PC管理表へ書き込む)' }
-      else {
-        & node (Join-Path $repo 'tools\fleet-sheet-report.mjs') '--specs' '--cloud' 2>&1 | ForEach-Object { Add-Content -LiteralPath $fleetLog -Value "$stamp $_" -Encoding UTF8 }
-        if ($LASTEXITCODE -ne 0) { Add-Content -LiteralPath $fleetLog -Value "$stamp WARN fleet-sheet-report exit=$LASTEXITCODE" -Encoding UTF8 }
-      }
-    } catch {}
   }
+  # --specs を必ず付ける。付けないとハードウェアスペックを一度も送らず、
+  # PC管理表 が「手で叩いた1台」だけの状態から永久に増えない(2026-08-28 実測)。
+  try {
+    $fleetLogDir = Join-Path $H '.claude\logs'; New-Item -ItemType Directory -Path $fleetLogDir -Force | Out-Null
+    $fleetLog = Join-Path $fleetLogDir 'fleet-poller.log'
+    $stamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ssK')
+    if ($Dry) { DrySkip 'fleet-sheet-report.mjs --specs --cloud (PC管理表へ書き込む)' }
+    else {
+      & $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $repo 'tools\fleet-sheet-report.mjs') '--specs' '--cloud' 2>&1 | ForEach-Object { Add-Content -LiteralPath $fleetLog -Value "$stamp $_" -Encoding UTF8 }
+      if ($LASTEXITCODE -ne 0) { Add-Content -LiteralPath $fleetLog -Value "$stamp WARN fleet-sheet-report exit=$LASTEXITCODE" -Encoding UTF8 }
+    }
+  } catch {}
+  try {
+    if ($Dry) { DrySkip 'plan-usage-report.mjs --force (Claude上限へ書き込む)' }
+    else {
+      & $(if ($orgiastNodeExe) { $orgiastNodeExe } else { (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source }) (Join-Path $repo 'tools\plan-usage-report.mjs') '--force' *> $null
+    }
+  } catch {}
   # 熱の日次サマリ。thermal-guard が未導入(=サンプルが無い)なら何も送らないので、
   # 導入済みのPCだけが1日1回 直近24hの要約を返す。
   try { RunPs (Join-Path $repo 'tools\thermal-guard.ps1') @('-Report') | Out-Null } catch {}
@@ -148,16 +248,16 @@ $WL = @{
   # スケジュールタスクが実際に実行するのはこの .ps1 なので取り残されていた。
   'rules-resync' = {
     $mjs = Join-Path $repo 'tools\onboarding-sync.mjs'
-    if (Test-Path $mjs) { (& node $mjs '--force' 2>&1 | Out-String) }
+    if (Test-Path $mjs) { (& $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) $mjs '--force' 2>&1 | Out-String) }
     else { RunPs (Join-Path $H '.claude\hooks\onboarding-sync.ps1') @('-Force') }
   }
-  'cost-report'  = { if (Test-Path (Join-Path $repo 'tools\claude-cost-reporter.mjs')) { (& node (Join-Path $repo 'tools\claude-cost-reporter.mjs') 2>&1 | Out-String) } else { '' } }
+  'cost-report'  = { if (Test-Path (Join-Path $repo 'tools\claude-cost-reporter.mjs')) { (& $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $repo 'tools\claude-cost-reporter.mjs') 2>&1 | Out-String) } else { '' } }
   # 熱監視を5分ごとの常駐タスクとして登録する(管理者権限不要)。CPU温度が取れない機体では
   # クロック比の低下と異常停止イベントで代替監視する。
   'thermal-guard' = { RunPs (Join-Path $repo 'tools\thermal-guard.ps1') @('-Install') }
   # CPU電力上限を絞って発熱と電気代を同時に下げる。画面OFFには触らない
   # (物理画面をキャプチャするリモート操作ソフトが黒画面になる事故を避けるため)。
-  'power-save'   = { if (Test-Path (Join-Path $repo 'tools\power-save.mjs')) { (& node (Join-Path $repo 'tools\power-save.mjs') '--apply' '--post' 2>&1 | Out-String) } else { '' } }
+  'power-save'   = { if (Test-Path (Join-Path $repo 'tools\power-save.mjs')) { (& $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) (Join-Path $repo 'tools\power-save.mjs') '--apply' '--post' 2>&1 | Out-String) } else { '' } }
 }
 try {
   $cmdRaw = Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/fleet-command.json' -TimeoutSec 20

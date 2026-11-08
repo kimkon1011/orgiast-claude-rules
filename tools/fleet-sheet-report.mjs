@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { safeDialogMetrics as dialogMetrics } from './lib/stuck-dialog-state.mjs';
+import { collectConvergence } from './fleet-convergence.mjs';
 import { isEntry } from './is-entry.mjs';
 import fs from 'node:fs';
 import { codexAuthStatus, formatCodexLogin } from './codex-auth-status.mjs';
@@ -7,7 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEnvText } from './env-kv.mjs';
 import { scanBrowserExtensions } from './browser-extension-audit.mjs';
-import { machineIdentity } from './machine-identity.mjs';
+import { machineIdentity, reportExtras } from './machine-identity.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
 import { buildSpecPayload, collectHardwareSpec } from './hardware-spec.mjs';
 import { collectProjectInventory, formatArtifactsCell, formatLastCommitCell, formatProjectsCell } from './project-inventory.mjs';
@@ -15,6 +17,7 @@ import { buildCloudLoginPayload, collectCloudInventory } from './cloud-inventory
 import { collectInteractionAdoption } from './interaction-adoption.mjs';
 import { fetchClaudePlanUsage } from './claude-plan-usage.mjs';
 import { collectBudgetStatus } from './budget-status.mjs';
+import { BUSY_POLICY, defaultBudgetPath, formatBusyExhausted, postFleetSheet } from './lib/fleet-sheet-post.mjs';
 
 const dryRun = process.argv.includes('--dry-run');
 const noJitter = process.argv.includes('--no-jitter');
@@ -91,6 +94,12 @@ async function main() {
     console.error('fleet-sheet: FLEET_SHEET_URL/TOKEN 未設定のため送信しません(~/.claude/fleet-sheet.env)');
     return;
   }
+  // Both Windows and POSIX scheduled pollers call this reporter. The lightweight
+  // post-sync reporter is separate, so a received sync cannot recurse here.
+  if (!dryRun) {
+    try { const { receiveConvergence } = await import('./fleet-convergence-sync.mjs'); await receiveConvergence({ home, repo }); }
+    catch { console.error('fleet-sheet: convergence mail check failed (secrets omitted)'); }
+  }
   const reporterEnvPath = path.join(claudeDir, 'cost-reporter.env');
   const reporterEnvText = readText(reporterEnvPath);
   const labelResolution = resolveReporterLabel({ envText: reporterEnvText, hostname: os.hostname() });
@@ -119,24 +128,36 @@ async function main() {
   // 判定できないのに合格扱いにするのは「timeout を未導入と誤報告」と同じ誤り。
   const fableKnown = reporter.fable5Detected !== undefined || adoption.fable5OutTok !== undefined;
   const fableDetected = Boolean(reporter.fable5Detected || Number(adoption.fable5OutTok || 0) > 0);
-  const planUsage = await fetchClaudePlanUsage({ home });
-  const budget = await collectBudgetStatus({ home });
+  // 独立した2つの外部照会(別エンドポイント・共有状態なし)は並列に待つ。
+  const [planUsage, budget] = await Promise.all([fetchClaudePlanUsage({ home }), collectBudgetStatus({ home })]);
   const settings = readJson(path.join(claudeDir, 'settings.json'));
   const nonClaudeRatio = firstFiniteNumber(cost.nonClaudeDelegRatio, enforce.nonClaudeDelegRatio);
   const legacyRatio = firstFiniteNumber(cost.delegRatio, enforce.delegRatio);
+  // 委譲率セルは「判定に使う値」を載せる。#186 で強制判定は行ベース(linesRatio)へ切り替わり、
+  // トークン比は監査のthinkingが監督出力の約7割を占めるため上限が約40%で目標50%に構造的に届かない
+  // （= トークン比は併記専用）。ところが本セルは nonClaudeDelegRatio(トークン比) を載せており、
+  // cost-improve-loop がこれを平坦50%と比較して「低委譲」を誤検知し、成功し得ない自動改善を
+  // 空振りさせ続けていた（実測: low_delegation の自動改善は17件全滅・人間エスカレーション多発）。
+  // 判定に使う行ベース比を主セルに載せ、未計測のときだけ従来のトークン比へフォールバックする。
+  const linesRatio = firstFiniteNumber(cost.linesRatio, enforce.linesRatio);
   const claudeUsd = firstFiniteNumber(cost.claudeUSD, reporter.mtdUsd);
   const payload = {
     token: fleetEnv.FLEET_SHEET_TOKEN,
+    ...dialogMetrics(home),
     label,
     mappedName,
     hostname: identity.hostname,
     username: identity.username,
     gitEmail: identity.gitEmail,
-    reportedAt: toJst(cost.t || adoption.last || reporter.lastRun),
+    reportedAt: toJst(),
+    ...collectConvergence({ home, repo: process.env.ORGIAST_REPO || repo, hostname: identity.hostname, username: identity.username }),
+    // 追加識別(Claude ログインアカウント・OS・Macシリアル)。受け側GASが未知フィールドを無視しても壊れない加算のみ。
+    ...reportExtras(home),
     claudeUsd: claudeUsd === null ? '' : Math.round(claudeUsd * 100) / 100,
     mainModel: topModel,
     // 既存行が "0%" 表記なので、人が読む列で表記が混ざらないようパーセント文字列にする。
-    delegRatio: formatRatio(nonClaudeRatio),
+    // 主セルは判定に使う行ベース比(#186)。未計測なら従来どおりトークン比へフォールバック。
+    delegRatio: formatRatio(linesRatio === null ? nonClaudeRatio : linesRatio),
     delegRatioLegacy: formatRatio(legacyRatio),
     planFiveHourPct: planUsage.available ? planUsage.fiveHour.utilization : null,
     planSevenDayPct: planUsage.available ? planUsage.sevenDay.utilization : null,
@@ -180,10 +201,16 @@ async function main() {
   // 2本は独立して送る。1本目が落ちたら2本目も送られない(かつ main の catch が
   // 握り潰す)と、拡張監査が「一度も届いていないのに誰も気付かない」状態になる。
   const status = await post(fleetEnv.FLEET_SHEET_URL, 'status', payload);
-  if (specPayload) await post(fleetEnv.FLEET_SHEET_URL, 'pc-spec', specPayload);
-  await post(fleetEnv.FLEET_SHEET_URL, 'extensions', extensionPayload);
-  if (cloudPayload) await post(fleetEnv.FLEET_SHEET_URL, 'cloud-login', cloudPayload);
-  if (!status.ok) process.exitCode = 1;
+  if (status.busyExhausted) {
+    // ロックが取れないまま再送予算を使い切った。後続の kind も同じロックで
+    // 落ちるだけなので、ここで打ち切って夜間バッチを遅らせない。
+    console.error(formatBusyExhausted(status, 'status'));
+  } else {
+    if (specPayload) await post(fleetEnv.FLEET_SHEET_URL, 'pc-spec', specPayload);
+    await post(fleetEnv.FLEET_SHEET_URL, 'extensions', extensionPayload);
+    if (cloudPayload) await post(fleetEnv.FLEET_SHEET_URL, 'cloud-login', cloudPayload);
+  }
+  if (!status.ok && !status.busyExhausted) process.exitCode = 1;
 }
 
 // GAS Web App はリダイレクト＋コールドスタートで数十秒かかることがある。
@@ -202,27 +229,34 @@ function safeError(error) {
   return String(error?.message || error?.name || 'error').replace(/https?:\/\/\S+/gi, '<url>').replace(/[\r\n]+/g, ' ').slice(0, 160);
 }
 export async function post(url, kind, body, options = {}) {
-  const fetchFn = options.fetchFn || fetch, wait = options.sleepFn || sleep, random = options.random || Math.random;
   const logFile = options.logFile || path.join(home, '.claude', 'logs', 'fleet-sheet-report.log');
-  let lastError = '';
-  for (let attempt = 1; attempt <= 3; attempt++) try {
-    const response = await fetchFn(url, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(POST_TIMEOUT_MS), redirect: 'follow',
+  try {
+    const posted = await postFleetSheet(url, body, {
+      fetchImpl: options.fetchFn || fetch,
+      sleepImpl: options.sleepFn || sleep,
+      random: options.random || Math.random,
+      now: options.now,
+      policy: options.policy || BUSY_POLICY,
+      timeoutMs: POST_TIMEOUT_MS,
+      // 3 ジョブで 1 夜の再送予算を共有する。テストは null を渡して隔離する。
+      // ORGIAST_HOME を使う PC では予算ファイルもそこへ置く（実ホームを汚さない）。
+      budgetPath: options.budgetPath === undefined ? defaultBudgetPath(home) : options.budgetPath,
+      logFile,
+      kind,
+      // 従来どおり timeout / 通信断も再送する（busy と同じバックオフ）。
+      retryOnNetwork: true,
     });
-    const text = await response.text();
-    let parsed = null; try { parsed = text ? JSON.parse(text) : null; } catch {}
-    if (!response.ok || parsed?.ok === false) throw new Error(parsed?.error || `HTTP ${response.status}`);
-    fs.mkdirSync(path.dirname(logFile), { recursive: true });
-    fs.appendFileSync(logFile, `${new Date().toISOString()} kind=${kind} attempts=${attempt} result=ok error=-\n`);
-    return { ok: true, attempts: attempt };
+    if (posted.ok) return { ok: true, attempts: posted.attempts };
+    console.error(`fleet-sheet: ${kind} の送信を断念 (${formatBusyExhausted(posted, kind)})`);
+    return { ok: false, busyExhausted: true, attempts: posted.attempts, waitedMs: posted.waitedMs, error: 'busy' };
   } catch (error) {
-    lastError = safeError(error);
-    if (attempt < 3) await wait(Math.round([5000, 15000][attempt - 1] * (0.8 + random() * 0.4)));
+    const lastError = safeError(error);
+    const attempts = Number.isFinite(error?.attempts) ? error.attempts : 0;
+    fs.mkdirSync(path.dirname(logFile), { recursive: true });
+    fs.appendFileSync(logFile, `${new Date().toISOString()} kind=${kind} attempts=${attempts} result=failed error=${lastError}\n`);
+    console.error(`fleet-sheet: ${kind} の送信に失敗 (${lastError})`);
+    return { ok: false, attempts, error: lastError };
   }
-  fs.mkdirSync(path.dirname(logFile), { recursive: true });
-  fs.appendFileSync(logFile, `${new Date().toISOString()} kind=${kind} attempts=3 result=failed error=${lastError}\n`);
-  console.error(`fleet-sheet: ${kind} の送信に失敗 (${lastError})`);
-  return { ok: false, attempts: 3, error: lastError };
 }
 
 if (isEntry(import.meta.url)) main().catch(error => { console.error(`fleet-sheet: fatal (${safeError(error)})`); process.exitCode = 1; });

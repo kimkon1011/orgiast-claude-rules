@@ -1,0 +1,8 @@
+Installed plugins:
+
+  ❯ makeloop@makeloop
+    Version: 0.12.0
+    Scope: user
+    Status: ✔ enabled
+
+WSL cache exists: /home/kim/.codex/plugins/cache/makeloop

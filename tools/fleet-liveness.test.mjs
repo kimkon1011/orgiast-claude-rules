@@ -121,3 +121,37 @@ test('名字/person一致は未確定候補として出し、state別の次ア�
   assert.match(text, /手書き行なし \d+台: 機械報告はあるが手書き一覧に行が無い/);
   assert.match(text, /古川PC↔古川龍慶のノートブックコンピュータ の同一判定は kim の回答が必要/);
 });
+
+test('台帳に無いPCと台帳外アカウント・アカウント不一致を検出する', async () => {
+  const { detectLedgerGaps } = await import('./fleet-liveness.mjs');
+  const pcMap = { 'kim-PC': { hostname: 'DESKTOP-1', account: 'kim@orgiast.jp', aliases: ['kim-alias'] } };
+  const sheet = [
+    { label: 'kim-PC', hostname: 'DESKTOP-1', reportedAt: '2026-10-13 09:00', claudeAccount: 'cr@orgiast.jp' },
+    { label: 'Yuko-MacBook-Air', hostname: 'Yukos-MacBook-Air.local', reportedAt: '2026-10-13 09:00', claudeAccount: 'cr@orgiast.jp' },
+    { pcName: '手書きだけ' },
+  ];
+  const gaps = detectLedgerGaps({ discord: null, sheet, pcMap });
+  assert.deepEqual(gaps.unregistered.map((pc) => pc.name), ['Yuko-MacBook-Air']);
+  assert.equal(gaps.unregistered[0].claudeAccount, 'cr@orgiast.jp');
+  assert.equal(gaps.offLedgerAccounts[0].account, 'cr@orgiast.jp');
+  assert.deepEqual(gaps.accountMismatches.map((m) => m.name), ['kim-PC']);
+  assert.deepEqual(detectLedgerGaps({ sheet, pcMap: {} }).unregistered, []);
+});
+
+test('インストーラ初報告は台帳照合だけに含め、空の台帳では警告しない', async () => {
+  const { detectLedgerGaps } = await import('./fleet-liveness.mjs');
+  const pcMap = { known: { hostname: 'known-PC', account: 'known@example.com' } };
+  const installBeacons = [
+    { hostname: 'new-PC', claudeAccount: 'new@example.com', lastSeenAt: '2026-10-15T00:00:00Z' },
+    { hostname: 'known-PC', claudeAccount: 'new@example.com', lastSeenAt: '2026-10-15T00:00:00Z' },
+  ];
+  const gaps = detectLedgerGaps({ discord: null, sheet: [], pcMap, installBeacons });
+  assert.deepEqual(gaps.unregistered.map(row => row.name), ['new-PC']);
+  assert.deepEqual(gaps.offLedgerAccounts[0].pcs, ['new-PC', 'known-PC']);
+  assert.equal(gaps.accountMismatches[0].name, 'known-PC');
+  assert.deepEqual(detectLedgerGaps({ pcMap: {}, installBeacons }), { unregistered: [], offLedgerAccounts: [], accountMismatches: [] });
+  const base = classifyFleet({ discord: [], sheet: [], pcMap, now });
+  const withBeacons = classifyFleet({ discord: [], sheet: [], pcMap, now, installBeacons });
+  assert.deepEqual(withBeacons.items, base.items);
+  assert.deepEqual(withBeacons.counts, base.counts);
+});

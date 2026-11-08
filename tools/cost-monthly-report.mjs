@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { COST_PER_MILLION } from './llm-fallback.mjs';
+import { executorCostUsd } from './llm-fallback.mjs';
 import { summarizeGeminiMonth } from './cost-work-loop.mjs';
 import { collectClaudeStats } from './usage-stats.mjs';
 
@@ -34,7 +34,7 @@ function prevMonthBounds(now) {
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
-function readLedger(home) {
+export function readLedger(home) {
   try {
     return fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8').split(/\r?\n/).flatMap((line) => { try { return [JSON.parse(line)]; } catch { return []; } });
   } catch { return []; }
@@ -49,8 +49,7 @@ export function previousMonthBudget({ home, now = new Date(), configFile = DEFAU
   let variableUsd = 0;
   for (const row of rows) {
     if (row.provider === 'gemini') continue;
-    const price = COST_PER_MILLION[row.provider];
-    if (price) variableUsd += ((Number(row.in) || 0) * price[0] + (Number(row.out) || 0) * price[1]) / 1e6;
+    variableUsd += executorCostUsd(row) ?? 0;
   }
   const gemini = summarizeGeminiMonth(rows, { now: bounds.end, usdJpy });
   const config = readJson(configFile, { fixed: [] });
@@ -156,7 +155,7 @@ export async function main(argv = process.argv.slice(2)) {
     const { notifyKim } = await import('./notify-kim.mjs');
     try {
       const result = await notifyKim(text, { home, webhookFallback: false });
-      if (result?.delivered === 'dm') { await markMonthlyReportSent({ home, now, claudeDir }); console.log('kim へ DM 送信OK'); }
+      if (['dm', 'session-inbox'].includes(result?.delivered)) { await markMonthlyReportSent({ home, now, claudeDir }); console.log('kim へ DM 送信OK'); }
       else throw new Error(result?.reason || 'DM に配信されませんでした');
     } catch (error) {
       console.error(`月次レポートDM送信失敗: ${String(error?.message ?? error)}`);

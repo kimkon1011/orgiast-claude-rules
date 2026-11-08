@@ -6,5 +6,6 @@
     "atsuoast3@gmail.com",
     "kimkongyong@gmail.com"
   ],
-  "note": "内部（社内・グループ会社・スタッフ）宛先。Gmail 下書き/送信を禁止しチャット表示に切り替える。追加は addresses に1行足すだけ。"
+  "githubHandles": ["kimkon1011"],
+  "note": "内部（社内・グループ会社・スタッフ）宛先。Gmail 下書き/送信を禁止しチャット表示に切り替える。githubHandles は GitHub のコメント/PR本文で @メンションしてはいけない内部アカウント。追加は addresses / githubHandles に1行足すだけ。"
 }

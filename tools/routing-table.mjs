@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // routing-table.mjs — eval-harness の実測(~/.claude/eval-results.jsonl)から、カテゴリ別に
+// 出力は追跡外(gitignore)のマシンローカル生成物。コミットしない(夜間 eval が再生成する)。
 // 「成功率≥90% を満たす中で最安(同率なら最速)」のプロバイダ/モデルを選び tools/routing-table.json に書く。
 // 1回しか計測が無いカテゴリは provisional:true で載せる(成功可否の信頼度が低いため、文言を「暫定」にする)。
 // cost-routing-gate.mjs / llm-fallback.mjs(経由 llm-ask.mjs) がこの表を読み、実測値付きでルーティングを出す。
@@ -50,7 +51,7 @@ export function aggregateMeasurements(rows, category) {
       pass: Number(cat.pass) || 0,
       graded,
       n,
-      costUsd: Number(cat.costUsd) || 0,
+      costUsd: cat.costUsd === null ? null : Number(cat.costUsd) || 0,
       msAvg: Number(record.msAvg) || 0,
     });
   }
@@ -69,7 +70,7 @@ export function aggregateMeasurements(rows, category) {
       model,
       samples,
       rate,
-      usdPerTask: totalN ? latest.reduce((s, x) => s + x.costUsd, 0) / totalN : null,
+      usdPerTask: totalN && latest.every(x => x.costUsd !== null) ? latest.reduce((s, x) => s + x.costUsd, 0) / totalN : null,
       msAvg: totalN ? latest.reduce((s, x) => s + x.msAvg * x.n, 0) / totalN : null,
       measuredAt: latest[samples - 1].t,
     });

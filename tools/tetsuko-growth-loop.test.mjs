@@ -14,8 +14,10 @@ import {
   commitAndPush,
   extractBriefBullet,
   extractPastCategoryLabels,
+  ensureMainWorktree,
   extractPastTags,
   localDate,
+  resolveMainWorktreePath,
   nextCycleNumber,
   splitDraftItems,
 } from './tetsuko-growth-loop.mjs';
@@ -220,4 +222,72 @@ test('commitAndPush: push失敗後のrebaseと再pushが成功すればokにな�
 
 test('localDate: YYYY-MM-DD形式を返す', () => {
   assert.equal(localDate(new Date(2026, 8, 14)), '2026-09-14');
+});
+
+// ---- main worktree の準備(2026-09-25: サイクルが main に届かない件の恒久対策) ----
+
+function gitStub(handlers = []) {
+  const calls = [];
+  const spawn = (cmd, args) => {
+    const key = args.join(' ');
+    calls.push(key);
+    const hit = handlers.find(([re]) => re.test(key));
+    return hit ? hit[1]() : { status: 0, stdout: '', stderr: '' };
+  };
+  spawn.calls = calls;
+  return spawn;
+}
+
+function wtFixture() {
+  const dir = path.join(tmpDir(), 'wt');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, '.git'), 'gitdir: /nowhere\n');
+  return dir;
+}
+
+test('ensureMainWorktree: 未作成なら worktree add で作る', () => {
+  const spawn = gitStub();
+  const target = path.join(tmpDir(), 'new-wt');
+  const result = ensureMainWorktree('C:\repo', target, spawn);
+  assert.equal(result.ok, true);
+  assert.equal(result.created, true);
+  assert.equal(spawn.calls[0].startsWith('worktree add'), true);
+});
+
+test('ensureMainWorktree: 既存かつ main なら pull --ff-only だけ行う', () => {
+  const dir = wtFixture();
+  const spawn = gitStub([[/(^| )rev-parse --abbrev-ref HEAD/, () => ({ status: 0, stdout: 'main\n', stderr: '' })]]);
+  const result = ensureMainWorktree('C:\repo', dir, spawn);
+  assert.equal(result.ok, true);
+  assert.equal(spawn.calls.includes('pull --ff-only'), true);
+  assert.equal(spawn.calls.some((c) => c.startsWith('checkout')), false);
+});
+
+test('ensureMainWorktree: 別ブランチでもクリーンなら main へ作り直す', () => {
+  const dir = wtFixture();
+  const spawn = gitStub([
+    [/(^| )rev-parse --abbrev-ref HEAD/, () => ({ status: 0, stdout: 'feat/order-intake\n', stderr: '' })],
+    [/(^| )status --porcelain/, () => ({ status: 0, stdout: '', stderr: '' })],
+  ]);
+  const result = ensureMainWorktree('C:\repo', dir, spawn);
+  assert.equal(result.ok, true);
+  assert.equal(result.repaired, true);
+  assert.equal(spawn.calls.includes('checkout -f main'), true);
+});
+
+test('ensureMainWorktree: 別ブランチかつ未コミット変更がある時は何も書き換えない', () => {
+  const dir = wtFixture();
+  const spawn = gitStub([
+    [/(^| )rev-parse --abbrev-ref HEAD/, () => ({ status: 0, stdout: 'feat/order-intake\n', stderr: '' })],
+    [/(^| )status --porcelain/, () => ({ status: 0, stdout: ' M data/growth-loop-log.md\n', stderr: '' })],
+  ]);
+  const result = ensureMainWorktree('C:\repo', dir, spawn);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'worktree_dirty_wrong_branch');
+  assert.equal(spawn.calls.some((c) => c.startsWith('checkout') || c.startsWith('reset')), false);
+});
+
+test('resolveMainWorktreePath: 既定は home 配下の専用ディレクトリ', () => {
+  assert.equal(resolveMainWorktreePath('C:/Users/user', {}), path.join('C:/Users/user', '.claude', 'tetsuko-growth-main'));
+  assert.equal(resolveMainWorktreePath('C:/Users/user', { TETSUKO_GROWTH_WORKTREE: 'D:/wt' }), 'D:/wt');
 });

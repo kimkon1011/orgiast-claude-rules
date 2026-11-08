@@ -53,6 +53,18 @@ try {
   }
 } catch {}
 
+// 夜間タスクが止まった場合も、次回 SessionStart で領収書の空白を埋める。
+try {
+  const guard = path.join(home, '.claude', '.receipt-scan-guard');
+  const scan = firstFile('ai-receipt-scan.mjs');
+  const due = !fs.existsSync(guard) || Date.now() - fs.statSync(guard).mtimeMs >= 20 * 60 * 60 * 1000;
+  if (due && scan) {
+    fs.mkdirSync(path.dirname(guard), { recursive: true });
+    fs.writeFileSync(guard, new Date().toISOString(), 'utf8');
+    background(scan, ['--if-stale', '30', '--notify']);
+  }
+} catch {}
+
 // Discord webhook の死活監視。webhook は Discord 側で消されると 404 になり、
 // .env が古いURLを指したまま通知が無言で止まる(実測: 2026-08-19 に死んで 6日間気付かず
 // 日次コスト自己申告が停止)。1日1回チェックし、同一チャンネルの生存webhookがあれば自動修復する。
@@ -71,7 +83,7 @@ try {
   const directive = path.join(home, '.claude', 'cost-directive.md');
   if (fs.existsSync(directive)) {
     const txt = fs.readFileSync(directive, 'utf8');
-    const ctx = `【コスト×作業量ループ｜監督への自己指示】前回計測の結果は下記。Claude以外への委譲率が低い/コスト効率が悪化している時は、作業前に必ず: 実装→Codex(定額) / 量産・分類→Groq / 汎用の安い推論→OpenRouter / 長文脈→Gemini / 別課金へ逃がす→Kimi、へ回す。監督(Opus)は最小限にとどめ大きな実装を抱えない(§1.18)。\n\n${txt}`;
+    const ctx = `【監督への自己指示】最優先は user の手間（往復回数・同じ指摘の繰り返し・差し戻しで長くなった応答）を減らすこと。トークン・委譲率はその次。user に手作業や手順を渡す前の調査（過去ログ・memory・playbook）は回数無制限。実装→Codex(定額) / 量産・分類→Groq / 長文脈→Gemini への委譲は、調査の深さを削らない範囲で行う。\n\n${txt}`;
     process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: ctx } })}\n`);
   }
 } catch {}

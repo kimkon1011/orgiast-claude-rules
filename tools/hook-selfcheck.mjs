@@ -9,9 +9,18 @@ import { isEntry } from './is-entry.mjs';
 import { deploySkills } from './onboarding-sync.mjs';
 
 export const REQUIRED_HOOKS = [
+  ['UserPromptSubmit', 'plan-usage-report.mjs'],
+  ['SessionStart', 'api-billing-guard.mjs'],
+  ['UserPromptSubmit', 'api-billing-guard.mjs'],
+  ['PreToolUse', 'api-billing-guard.mjs'],
+  ['UserPromptSubmit', 'claude-impl-approval.mjs'],
+  ['PreToolUse', 'pretooluse-lane-guard.mjs'],
+  ['PreToolUse', 'pretooluse-delegation-warn.mjs'],
   ['PreToolUse', 'pretooluse-bash-delegation.mjs'],
   ['PreToolUse', 'pretooluse-codex-invocation.mjs'],
   ['PreToolUse', 'model-agent-guard.mjs'],
+  ['PreToolUse', 'handover-doc-gate.mjs'],
+  ['PreToolUse', 'bihin-kcol-gate.mjs'],
   ['UserPromptSubmit', 'cost-routing-gate.mjs'],
   ['UserPromptSubmit', 'expensive-session-guard.mjs'],
   ['UserPromptSubmit', 'session-purpose-gate.mjs'],
@@ -119,7 +128,7 @@ if (isMain) try {
   try { settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8').replace(/^\uFEFF/, '')); } catch {}
   const missing = missingRequiredHooks(settings);
   if (missing.length) {
-    spawnSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { windowsHide: true, encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } });
+    spawnSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { windowsHide: true, encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } });
     console.log(`🚨 コスト規律hookが ${missing.length} 本欠落していたため自動登録しました: ${missing.map(([event, script]) => `${event}/${script}`).join(', ')}（次回セッションから有効）`);
   }
   const skills = missingSkills({ home, repo });

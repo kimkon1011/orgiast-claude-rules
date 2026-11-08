@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { readEnvValue } from './env-kv.mjs';
-import { keyserveAuthHeaders, keyservePcId } from './keyserve-auth.mjs';
+import { keyserveAuthHeaders, requireKeyservePcId, isEnrollToken } from './keyserve-auth.mjs';
 
 const jsonOutput = process.argv.slice(2).includes('--json');
 const home = process.env.ORGIAST_HOME || os.homedir();
@@ -11,7 +11,7 @@ const keyserveUrl = process.env.ORGIAST_KEYSERVE_URL || 'https://orgiast-keyserv
 
 
 function resolveSecret() {
-  if (process.env.ORGIAST_KEYSERVE_SECRET) return { source: 'primary', secret: process.env.ORGIAST_KEYSERVE_SECRET };
+  if (process.env.ORGIAST_KEYSERVE_SECRET && !isEnrollToken(process.env.ORGIAST_KEYSERVE_SECRET)) return { source: 'primary', secret: process.env.ORGIAST_KEYSERVE_SECRET };
   const primary = readEnvValue(path.join(home, '.claude', 'keyserve.env'), 'ORGIAST_KEYSERVE_SECRET');
   if (primary) return { source: 'primary', secret: primary };
   const legacy = readEnvValue(path.join(home, '.claude', 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK');
@@ -26,7 +26,7 @@ if (resolved.secret) {
   try {
     const response = await fetch(keyserveUrl, {
       method: 'POST',
-      headers: keyserveAuthHeaders(resolved.secret, Date.now(), keyservePcId(home)),
+      headers: keyserveAuthHeaders(resolved.secret, Date.now(), requireKeyservePcId(home)),
       signal: AbortSignal.timeout(15000),
     });
     result.status = response.status;

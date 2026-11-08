@@ -1,9 +1,11 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "doc-link-drive-guard", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "doc-link-drive-guard"}, {"kind": "command", "ref": "node tools/gdoc-publish.mjs --title <題名> --file <本文.md> --authuser <開く人のメール>"}, {"kind": "user-consent", "ref": "GOOGLE_SA_KEY / Google Docs connector", "reason": "文書作成権限は接続済みアカウントまたは組織管理者が認可するDWD鍵が必要。秘密鍵を全PCへ一括配布しない"}]};
 import fs from 'node:fs';
 import { isEntry } from './is-entry.mjs';
 import { lastAssistantText, readStdin } from './transcript-tail.mjs';
 
 const DOC_EXTENSIONS = new Set(['.md', '.pdf', '.docx', '.xlsx', '.pptx', '.csv', '.txt']);
+const BARE_EXTENSIONS = new Set(['.pdf', '.docx', '.xlsx', '.pptx', '.csv', '.png', '.jpg', '.jpeg', '.zip']);
 const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs', '.ps1', '.py', '.gs', '.json', '.yml', '.yaml', '.sql', '.sh', '.cmd']);
 const INTERNAL_DIRECTORY_SEGMENTS = new Set(['memory', 'projects', 'shell-snapshots', 'todos', 'skills', 'agents', 'commands', 'plugins']);
 const INTERNAL_FILENAMES = new Set(['claude.md', 'next-session.md']);
@@ -44,10 +46,40 @@ export function findLocalDocLinks(text) {
   return hits;
 }
 
+const FENCE = /```[^\n]*\n[\s\S]*?```|~~~[^\n]*\n[\s\S]*?~~~/g;
+const TEMP_PATH = /(?:^|[\\/])(?:scratchpad|temp|tmp)(?:[\\/]|$)|AppData[\\/]Local[\\/]Temp/i;
+
+// バッククォートや裸の絶対パス（Desktop 等）で渡された成果物ファイルを検出する。
+export function findBareLocalDocPaths(text) {
+  const body = String(text || '');
+  if (body.includes('[LOCAL-PATH-OK]')) return [];
+  const prose = body.replace(FENCE, '');
+  const found = new Set();
+  const accept = (raw) => {
+    const candidate = raw.trim().replace(/[。、，,.;:）)」』]+$/, '');
+    if (!/^(?:[A-Za-z]:[\\/]|\\\\|~[\\/])/.test(candidate)) return;
+    if (/^https?:/i.test(candidate)) return;
+    if (!BARE_EXTENSIONS.has(destinationExtension(candidate))) return;
+    if (TEMP_PATH.test(candidate)) return;
+    if (isInternalClaudePath(candidate)) return;
+    found.add(candidate);
+  };
+  for (const match of prose.matchAll(/`([^`\r\n]+)`/g)) accept(match[1]);
+  const bare = new RegExp(String.raw`(?:[A-Za-z]:[\\/]|\\\\)[^\s` + '`' + String.raw`"'<>|*?（）()「」]+?\.(?:pdf|docx|xlsx|pptx|csv|png|jpe?g|zip)(?![A-Za-z0-9])`, 'gi');
+  for (const match of prose.matchAll(bare)) accept(match[0]);
+  return [...found].map((destination) => ({ destination }));
+}
+
+export function formatBarePathMessage(hits) {
+  if (!Array.isArray(hits) || hits.length === 0) return '';
+  const detected = hits.slice(0, 3).map(({ destination }) => `  - ${destination}`).join('\n');
+  return `[DOC-LINK-DRIVE-GUARD] 成果物ファイルのローカルパス（Desktop 等）を渡そうとしています。\n\n検出したパス（最大3件）:\n${detected}\n\nユーザー・他人に渡す成果物は Google Drive にアップして URL で渡してください（ローカルパス・SendUserFile・チャット添付だけは未完了）。\n  - 案件のデータはその案件の制作フォルダ、案件外は「作業ファイル」(1uA0J3kPfL7O5t0Ro1jSfi2xDEJE-Y0si)\n  - アップロード: Drive MCP create_file、または node tools/drive-upload.mjs --file <path> --folder <folderId>\n  - 内部作業用でユーザーに渡さないパスなら本文に [LOCAL-PATH-OK] を入れてください。`;
+}
+
 export function formatViolationMessage(hits) {
   if (!Array.isArray(hits) || hits.length === 0) return '';
   const detected = hits.slice(0, 3).map(({ label, destination }) => `  - ${label} → ${destination}`).join('\n');
-  return `[DOC-LINK-DRIVE-GUARD] kim が読む文書へのローカルパスリンクを検出しました。\n\n検出したリンク（最大3件）:\n${detected}\n\nkim が読む文書は Google Drive に上げて docs.google.com/a/orgiast.jp/document/d/{ID}/edit の URL で渡してください。\n\n作成方法:\n  - Drive MCP create_file の parentId: 1uA0J3kPfL7O5t0Ro1jSfi2xDEJE-Y0si（標準フォルダ「作業ファイル」）\n  - contentMimeType: text/plain\n  - Markdown 記号（# - *）は Doc 変換でエスケープされて \\#\\# と表示されるため、本文はプレーン整形（■・など）で作る\n  - アップ後は read_file_content で read-back 検証する\n\n開発上の位置指定（ソース行を指す）なら path#L42 形式にするか、本文に [LOCAL-PATH-OK] を入れてください。`;
+  return `[DOC-LINK-DRIVE-GUARD] kim が読む文書へのローカルパスリンクを検出しました。\n\n検出したリンク（最大3件）:\n${detected}\n\nkim が読む文書は Google Drive に上げて docs.google.com/document/d/{ID}/edit?authuser={userEmail} の URL で渡してください。開く人に合わせた authuser（自分宛は userEmail、他人宛は共有済みの相手メール）を指定し、本文に「<メール> で開いてください」を書く。\n\n作成方法:\n  - Drive MCP create_file の parentId: 1uA0J3kPfL7O5t0Ro1jSfi2xDEJE-Y0si（標準フォルダ「作業ファイル」）\n  - contentMimeType: text/plain\n  - Markdown 記号（# - *）は Doc 変換でエスケープされて \\#\\# と表示されるため、本文はプレーン整形（■・など）で作る\n  - アップ後は read_file_content で read-back 検証する\n\n開発上の位置指定（ソース行を指す）なら path#L42 形式にするか、本文に [LOCAL-PATH-OK] を入れてください。`;
 }
 
 async function main() {
@@ -56,8 +88,8 @@ async function main() {
     if (!raw.trim()) return;
     const input = JSON.parse(raw);
     if (input.stop_hook_active || !input.transcript_path || !fs.existsSync(input.transcript_path)) return;
-    const hits = findLocalDocLinks(lastAssistantText(input.transcript_path));
-    const message = formatViolationMessage(hits);
+    const text = lastAssistantText(input.transcript_path);
+    const message = formatViolationMessage(findLocalDocLinks(text)) || formatBarePathMessage(findBareLocalDocPaths(text));
     if (message) {
       console.error(message);
       process.exitCode = 2;

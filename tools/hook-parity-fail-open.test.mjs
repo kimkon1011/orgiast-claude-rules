@@ -8,10 +8,15 @@ import { evaluateHandoffDetail } from './handoff-detail-guard.mjs';
 
 const repo = path.resolve('.');
 const hooks = [
+  'gmail-connector-url-gate.mjs',
+  'share-before-send-gate.mjs',
+  'playbook-inject.mjs',
+  'past-log-search-gate.mjs',
   'handoff-quality-gate.mjs',
   'handoff-investigation-gate.mjs',
   'negative-claim-gate.mjs',
   'pretooluse-headless-background.mjs',
+  'pretooluse-line-broadcast-guard.mjs',
   'pretooluse-serial-investigation.mjs',
   'automation-first-reminder.mjs',
   'credentials-reminder.mjs',
@@ -19,6 +24,9 @@ const hooks = [
   'url-format-guard.mjs',
   'check-e2e-before-stop.mjs',
   'pipe-stage-permissions.mjs',
+  'feedback-form-gate.mjs',
+  'handover-doc-gate.mjs',
+  'bihin-kcol-gate.mjs',
 ];
 
 function run(name, input, home) {

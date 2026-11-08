@@ -22,7 +22,7 @@ export function main(argv = process.argv.slice(2), deps = {}) {
   const installedHidden = path.join(installedDir, 'run-hidden.vbs');
   const dryRun = argv.includes('--dry-run');
   if (dryRun) {
-    const plan = registerHourlyTask('OrgiastProcessHygiene', path.join(repo, 'tools', 'process-hygiene.mjs'), { home, dryRun: true });
+    const plan = registerHourlyTask('OrgiastProcessHygiene', path.join(repo, 'tools', 'process-hygiene.mjs'), { home, dryRun: true, wakeTrigger: true });
     // どのツリーを焼き込むかを出さない dry-run は、今回の不具合をそのまま見逃す。
     console.log(`PLAN: ${plan.taskName} hourly via run-hidden.vbs: node tools/process-hygiene.mjs --kill`);
     console.log(`PLAN: repo=${repo}`);
@@ -31,7 +31,7 @@ export function main(argv = process.argv.slice(2), deps = {}) {
   if (process.platform !== 'win32') { console.log('OrgiastProcessHygiene: Windows以外では登録しません'); return null; }
   fs.mkdirSync(installedDir, { recursive: true });
   fs.copyFileSync(sourceHidden, installedHidden);
-  registerHourlyTask('OrgiastProcessHygiene', path.join(repo, 'tools', 'process-hygiene.mjs'), { home, spawnImpl: deps.spawnImpl });
+  registerHourlyTask('OrgiastProcessHygiene', path.join(repo, 'tools', 'process-hygiene.mjs'), { home, spawnImpl: deps.spawnImpl, wakeTrigger: true });
   console.log('OK: OrgiastProcessHygiene registered (hourly)');
   return true;
 }

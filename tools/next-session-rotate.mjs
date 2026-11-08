@@ -16,6 +16,7 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
   let date = '';
   let cwd = '';
   let active = false;
+  let purposeSection = false;
   let current;
   let fence = false;
   const flush = () => { if (current) items.push(current); current = undefined; };
@@ -27,14 +28,29 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
     if (stamp) date = stamp[1];
     const location = line.match(/^<!--.*cwd:\s*(.*?)(?:\s*\/\s*model:|\s*-->)/);
     if (location) cwd = location[1].trim();
-    if (/^##\s/.test(line)) {
-      flush(); active = /^##\s+(?:残TODO|次の1目的|未決|朝バッチ取り込み|🔁)/.test(line); continue;
+    // 2026-09-27実測: `## 次の1目的` の直後に置かれた `### 触る前に読む memory`(H3) と
+    // その下の memory 箇条書きが「次の1目的」セクションの続きとして項目化され、
+    // 回転後の next-session.md 先頭に `1. ### 触る前に読む memory` として並んだ。auto-session は
+    // それを次の1目的に採用し、実作業ゼロの回を1回消費した(runs/2026-09-27-manifest.json が実物)。
+    // 見出しはレベルを問わずセクション境界として扱い、下位見出し配下の箇条書きを巻き込まない。
+    const heading = line.match(/^(#{1,6})\s/);
+    if (heading) {
+      flush();
+      active = heading[1] === '##'
+        && /^##\s+(?:残TODO|次の1目的|未決|朝バッチ取り込み|🔁)/.test(line);
+      // `## 次の1目的` の本文は目的の説明であって TODO ではない。2026-10-25 実測:
+      // notify-kim が追記したブロックの目的文「通知の原因調査と修復」が自由文フォールバックで
+      // 項目化され、内容の無い TODO として残TODOへ入り、情報の無い自動セッションを1回消費した
+      // (next-session.md の「12. 通知の原因調査と修復」が実物)。目的節では明示タスクだけを拾い、
+      // 素の散文は項目化しない。番号なしの散文項目を受けていたのは旧形式の残TODOのための規則。
+      purposeSection = /^##[ \t]+次の1目的(?=[ \t（(]|$)/.test(line);
+      continue;
     }
     if (!active) continue;
     const task = line.match(/^(?:\d+[.)、]|[-*](?:\s+\[[ xX]\])?)\s+(.+)/);
     if (task) { flush(); current = { lines: [line], date, cwd }; }
     else if (current && (/^\s+\S/.test(line) || !line.trim())) current.lines.push(line);
-    else if (line.trim() && !/^(?:<!--|---|>)/.test(line)) { flush(); current = { lines: [line], date, cwd }; }
+    else if (line.trim() && !purposeSection && !/^(?:<!--|---|>)/.test(line)) { flush(); current = { lines: [line], date, cwd }; }
   }
   flush();
   const stats = { completed: 0, duplicate: 0, old: 0, context: 0, pending: 0, overflow: 0, stale: 0 };
@@ -43,7 +59,10 @@ export function planRotation(source, { now = new Date(), maxBytes = MAX_BYTES, a
     const text = item.lines.join('\n').trim();
     const first = item.lines[0].replace(/^(?:\d+[.)、]|[-*])\s+/, '');
     // Only explicit completion on the task's first line counts; a completed substep is not the task.
-    if (/^(?:~~|\[[xX]\]|✅)|~~\s*(?:→\s*)?✅/.test(first)) { stats.completed++; continue; }
+    // 2026-09-28実測: 完了の印が `~~…~~` 以外に `[完了 2026-09-27 #584] …` の形で書かれた項目があり、
+    // 完了と認識されずに毎回の回転で次代へ持ち越されていた(残TODO 41件中13件がこの形)。
+    // auto-session 側の除外規則(todoExclusionReason)と二重に塞ぐ。
+    if (/^(?:~~|\[[xX]\]|\[完了|✅)|~~\s*(?:→\s*)?✅/.test(first)) { stats.completed++; continue; }
     if (/^(?:未定|なし|（なし|以下は既存|上の「|下の既存)/.test(first)) { stats.context++; continue; }
     const explicit = [...first.matchAll(/(?:起票|更新)\s*[:：]?\s*(\d{4}-\d{2}-\d{2})/g)].at(-1)?.[1];
     const age = now - Date.parse(explicit || item.date);

@@ -1,10 +1,13 @@
 #!/usr/bin/env node
+import { wslInstalled } from './lib/wsl-present.mjs';
+import { isReadonlyCommand } from './readonly-command.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { normalizeExecutorStatus } from './executor-status.mjs';
 import { extractInlineProgram, isExcludedInlineProgramCommand } from './inline-program.mjs';
 export { extractInlineProgram } from './inline-program.mjs';
 
@@ -136,16 +139,17 @@ export function collectClaudeActivityDays({ home = process.env.ORGIAST_HOME || o
   for (const { st } of claudeFiles(home, cutoff)) if (st.mtimeMs >= cutoff) active.add(new Date(st.mtimeMs).toDateString());
   saveCache(home); return active.size;
 }
-export function collectClaudeStats({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, now = Date.now() } = {}) {
+export function collectClaudeStats({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, now = Date.now(), monthKey = null } = {}) {
+  const months = {};
   const cutoff = now - days * DAY, sessions = [], byModel = {}, blocks = { thinking: 0, text: 0, tool_use: 0, unattributed: 0, tools: {} }; let authoredLines = 0;
   for (const { file, st, parsed } of claudeFiles(home, cutoff)) {
     if (st.mtimeMs < cutoff) continue;
     let outputTokens = 0, sideOutput = 0, mainOutput = 0, claudeOutput = 0; const messages = new Map();
     for (const row of parsed.records) {
-      if (row.ts < cutoff) continue; authoredLines += row.authoredLines || 0;
+      if (row.ts < cutoff || (monthKey && row.ts > now)) continue; authoredLines += row.authoredLines || 0;
       if (row.out === undefined) continue;
       const message = messages.get(row.msgId) || { out: 0, tier: row.tier, side: row.side, text: 0, tool_use: 0, tools: {} };
-      if ((row.out || 0) >= message.out) { message.out = row.out || 0; message.tier = row.tier; message.side = row.side; }
+      if ((row.out || 0) >= message.out) { message.out = row.out || 0; message.tier = row.tier; message.side = row.side; message.ts = row.ts; }
       message.text += row.blocks?.text || 0; message.tool_use += row.blocks?.tool_use || 0;
       for (const [name, amount] of Object.entries(row.blocks?.tools || {})) message.tools[name] = (message.tools[name] || 0) + amount;
       messages.set(row.msgId, message);
@@ -157,7 +161,10 @@ export function collectClaudeStats({ home = process.env.ORGIAST_HOME || os.homed
       // headless ジョブの内訳用: Claude 課金 tier(opus/sonnet/haiku/default)の出力だけを分離する。
       // cheap-code 経由(zai/deepseek)の無人ジョブも同じ projects に transcript を残すため、
       // tier 無視で足すと「全部 cheap-code に寄せた健全状態」まで headlessClaudeOut>0 になり誤報になる。
-      if (message.tier !== 'nonclaude') claudeOutput += out;
+      if (message.tier !== 'nonclaude') {
+        claudeOutput += out;
+        if (monthKey && message.ts) { const key = monthKey(message.ts); const entry = months[key] ||= { outputTokens: 0, calls: 0 }; entry.outputTokens += out; entry.calls++; }
+      }
       blocks.thinking += Math.max(0, out - visibleEst); blocks.text += message.text * scale; blocks.tool_use += message.tool_use * scale;
       for (const [name, amount] of Object.entries(message.tools)) blocks.tools[name] = (blocks.tools[name] || 0) + amount * scale;
     }
@@ -167,7 +174,7 @@ export function collectClaudeStats({ home = process.env.ORGIAST_HOME || os.homed
   const total = sessions.reduce((s, x) => s + x.outputTokens, 0), main = sessions.reduce((s, x) => s + x.mainOutput, 0), sub = sessions.reduce((s, x) => s + x.subOutput, 0);
   const headless = sessions.filter((x) => x.headless), headlessClaudeOut = headless.reduce((s, x) => s + x.claudeOutput, 0), headlessJobs = {};
   for (const session of headless) headlessJobs[session.job] = (headlessJobs[session.job] || 0) + session.outputTokens;
-  saveCache(home); return { sessions, totals: { outputTokens: total, main, sub }, byModel, blocks, authoredLines, headlessClaudeOut, headlessJobs };
+  saveCache(home); return { sessions, totals: { outputTokens: total, main, sub }, byModel, blocks, authoredLines, headlessClaudeOut, headlessJobs, ...(monthKey ? { months } : {}) };
 }
 export function classifyBashCommand(command) {
   command = String(command || '');
@@ -176,6 +183,7 @@ export function classifyBashCommand(command) {
   if (extractInlineProgram(command)) return 'inline-program';
   if (heredoc.test(command) || /(?:^|\s)(?:>|>>)(?![>&])\s*[^\s;&|]+/.test(command)) return 'spec-authoring';
   if (/^\s*git(?:\s|$)/i.test(command)) return 'git';
+  if (isReadonlyCommand(command)) return 'read-only';
   if (/^\s*(?:cat|head|tail|sed\s+-n|grep|ls|wc|find)(?:\s|$)/i.test(command) && !/(?:^|[^<])>{1,2}/.test(command)) return 'read-only';
   return 'other';
 }
@@ -183,6 +191,7 @@ export function isReadOnlyToolUse(name, input = {}) {
   if (['Read', 'Grep', 'Glob'].includes(name)) return true;
   if (!['Bash', 'PowerShell'].includes(name)) return false;
   const command = String(input?.command || '');
+  if (isReadonlyCommand(command)) return true;
   if (/(?:^|[^<])>{1,2}|\brm\s|\bmv\s|\bcp\s|\bmkdir\s|\binstall\b|\bpush\b|\bdeploy\b|\bcodex\b|\bnpm\s|\bgit\s+commit\b|\bgit\s+push\b|\bclasp\b/i.test(command)) return false;
   const allowed = /^(?:cat|head|tail|sed|grep|rg|ls|find|wc|stat|jq|awk|cut|sort|uniq|echo|which|type)(?:\s|$)|^node\s+--test(?:\s|$)|^git\s+(?:status|log|diff|show|rev-parse|branch)(?:\s|$)/i;
   const segments = command.split(/&&|\|\||;|\|(?!\|)/).map((x) => x.trim()).filter(Boolean);
@@ -252,7 +261,10 @@ export function collectLedger({ home = process.env.ORGIAST_HOME || os.homedir(),
 }
 export function codexSessionDirs(home = process.env.ORGIAST_HOME || os.homedir()) {
   if (process.env.CODEX_SESSIONS_DIRS !== undefined) return process.env.CODEX_SESSIONS_DIRS.split(path.delimiter).filter(Boolean);
+  if (process.env.CODEX_HOME) return [path.join(process.env.CODEX_HOME, 'sessions')];
   const dirs = [path.join(home, '.codex', 'sessions')];
+  // Native WSL runs commonly use root, even when reporting uses USERPROFILE.
+  if (process.platform === 'linux' && /^\/mnt\/[a-z]\/Users\//i.test(home)) dirs.push(path.join(os.homedir(), '.codex', 'sessions'));
   const addUsers = (root) => {
     let users = []; try { users = fs.readdirSync(root, { withFileTypes: true }); } catch { return; }
     for (const user of users) if (user.isDirectory()) dirs.push(path.join(root, user.name, '.codex', 'sessions'));
@@ -260,14 +272,19 @@ export function codexSessionDirs(home = process.env.ORGIAST_HOME || os.homedir()
   // `//wsl.localhost/` itself cannot be enumerated, so ask wsl.exe for distro names.
   if (process.platform === 'win32') {
     let distros = [];
-    try { distros = execSync('wsl.exe -l -q', { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }).toString('utf16le').split(/\r?\n/).map((s) => s.trim()).filter(Boolean); } catch {}
-    for (const distro of distros) { addUsers(`//wsl.localhost/${distro}/home`); addUsers(`//wsl$/${distro}/home`); }
+    try { if (wslInstalled()) distros = execSync('wsl.exe -l -q', { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }).toString('utf16le').split(/\r?\n/).map((s) => s.trim()).filter(Boolean); } catch {}
+    for (const distro of distros) {
+      // Use one UNC alias per distro so the same session is never counted twice.
+      const root = `//wsl.localhost/${distro}`;
+      dirs.push(`${root}/root/.codex/sessions`);
+      addUsers(`${root}/home`);
+    }
   }
   if (process.platform === 'linux') addUsers('/home');
   return [...new Set(dirs)];
 }
 function parseCodexUsage(raw) {
-  const patches = countPatchLines(raw), byModel = {};
+  const patches = countPatchLines(raw), byModel = {}, events = [];
   let model = 'unknown', last = null;
   for (const line of raw.split(/\r?\n/)) {
     let row; try { row = JSON.parse(line); } catch { continue; }
@@ -278,22 +295,31 @@ function parseCodexUsage(raw) {
     const total = Number(match[1]);
     const usage = byModel[model] ||= { sessions: 1, outputTokens: 0 };
     // token_count はセッション累積値。重複イベントを加算せず、モデル切替時も増分だけ割り当てる。
-    usage.outputTokens += Math.max(0, total - (last ?? 0));
+    const delta = Math.max(0, total - (last ?? 0));
+    usage.outputTokens += delta;
+    const ts = Date.parse(row.timestamp || '');
+    if (Number.isFinite(ts)) events.push({ ts, outputTokens: delta });
     last = total;
   }
-  return { last, byModel, added: patches.added, deleted: patches.deleted };
+  return { last, byModel, events, added: patches.added, deleted: patches.deleted };
 }
-export function collectCodexUsage({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, now = Date.now(), includePatchLines = false } = {}) {
+export function collectCodexUsage({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, now = Date.now(), includePatchLines = false, monthKey = null } = {}) {
+  const months = {};
   const cutoff = now - days * DAY; let outputTokens = 0, sessions = 0, added = 0, deleted = 0, patchFiles = 0;
   const files = [], byModel = {};
   for (const dir of codexSessionDirs(home)) files.push(...cachedWalk(home, dir));
   const uniqueFiles = [...new Set(files)], stats = bulkStat(uniqueFiles);
   for (let i = 0; i < uniqueFiles.length; i++) {
     const file = uniqueFiles[i], st = stats[i]; if (!st || st.mtimeMs < cutoff) continue;
-    const parsed = cachedFile(home, file, 'codex', st, () => {
+    const parsed = cachedFile(home, file, monthKey ? 'codex-monthly-v1' : 'codex', st, () => {
       try { return parseCodexUsage(fs.readFileSync(file, 'utf8')); } catch { return null; }
     });
     if (!parsed) continue;
+    if (monthKey) for (const event of parsed.events || []) {
+      if (event.ts < cutoff || event.ts > now || !event.outputTokens) continue;
+      const key = monthKey(event.ts); const entry = months[key] ||= { outputTokens: 0, calls: 0 };
+      entry.outputTokens += event.outputTokens; entry.calls++;
+    }
     if (includePatchLines) { added += parsed.added; deleted += parsed.deleted; patchFiles++; }
     if (parsed.last !== null) { outputTokens += parsed.last; sessions++; }
     for (const [slug, usage] of Object.entries(parsed.byModel)) {
@@ -301,7 +327,7 @@ export function collectCodexUsage({ home = process.env.ORGIAST_HOME || os.homedi
       total.sessions += usage.sessions; total.outputTokens += usage.outputTokens;
     }
   }
-  saveCache(home); return includePatchLines ? { outputTokens, sessions, byModel, added, deleted, patchFiles } : { outputTokens, sessions, byModel };
+  saveCache(home); return { outputTokens, sessions, byModel, ...(includePatchLines ? { added, deleted, patchFiles } : {}), ...(monthKey ? { months } : {}) };
 }
 export const collectCodexOutput = collectCodexUsage;
 export function countPatchLines(text) {
@@ -402,12 +428,20 @@ export function calculateDelegation({ codexOut = 0, execOut = 0, byModel = {}, s
 
 export function collectProviderHealth({ home = process.env.ORGIAST_HOME || os.homedir(), days = 7, now = Date.now() } = {}) {
   const cutoff = now - days * DAY, providers = {}; let raw = '';
+  const unrouted = { calls: 0, reasons: {} };
   try { raw = fs.readFileSync(path.join(home, '.claude', 'executor-usage.jsonl'), 'utf8'); } catch {}
   for (const line of raw.split(/\r?\n/)) {
     let row; try { row = JSON.parse(line); } catch { continue; }
     if (Date.parse(row.t || '') < cutoff) continue;
+    const normalized = normalizeExecutorStatus(row);
+    if (normalized === 'unrouted') {
+      unrouted.calls++;
+      const reason = String(row.status || 'no-cheap-executor');
+      unrouted.reasons[reason] = (unrouted.reasons[reason] || 0) + 1;
+      continue;
+    }
     const name = String(row.provider || 'unknown'), p = providers[name] ||= { calls: 0, fail: 0, failRate: 0, http429: 0, http413: 0, averageSeconds: 0, rescuedByFailover: 0, _seconds: 0 };
-    p.calls++; const ok = row.ok !== false && (row.status == null || row.status === 'ok'); if (!ok) p.fail++;
+    p.calls++; const ok = normalized === 'ok'; if (!ok) p.fail++;
     const status = String(row.status ?? ''); if (status === '429' || /(?:http[_ ]?|HTTP)429/i.test(status)) p.http429++; if (status === '413' || /(?:http[_ ]?|HTTP)413/i.test(status)) p.http413++;
     p._seconds += Number(row.secs ?? row.seconds ?? (Number(row.ms) / 1000)) || 0;
     if (ok && row.failover === true) p.rescuedByFailover++;
@@ -415,7 +449,7 @@ export function collectProviderHealth({ home = process.env.ORGIAST_HOME || os.ho
   let cooldowns = {}; try { cooldowns = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'provider-cooldown.json'), 'utf8')); } catch {}
   for (const [name, p] of Object.entries(providers)) { p.failRate = p.calls ? p.fail / p.calls : 0; p.averageSeconds = p.calls ? p._seconds / p.calls : 0; delete p._seconds; const state = cooldowns?.[name]; p.cooldown = Number(state?.until) > now ? { until: state.until, reason: state.reason || '' } : null; }
   for (const [name, state] of Object.entries(cooldowns || {})) if (Number(state?.until) > now && !providers[name]) providers[name] = { calls: 0, fail: 0, failRate: 0, http429: 0, http413: 0, averageSeconds: 0, rescuedByFailover: 0, cooldown: { until: state.until, reason: state.reason || '' } };
-  return { days, providers };
+  return { days, providers, unrouted };
 }
 /**
  * Estimate spec-authoring output tokens by apportioning Bash/PowerShell tool-use
@@ -465,7 +499,13 @@ if (isEntry(import.meta.url)) {
   else if (sub === 'blocks') result = claude.blocks;
   else if (sub === 'bash') result = collectBashProfile({ home, days });
   else if (sub === 'ledger') result = collectLedger({ home, days });
-  else if (sub === 'deleg') { const ledger = collectLedger({ home, days }), codex = collectCodexUsage({ home, days }); result = { ...calculateDelegation({ codexOut: codex.outputTokens, execOut: ledger.totals.outputTokens, byModel: claude.byModel }), headlessClaudeOut: claude.headlessClaudeOut, headlessJobs: claude.headlessJobs }; }
+  else if (sub === 'deleg') {
+    const ledger = collectLedger({ home, days }), codex = collectCodexUsage({ home, days });
+    // cost-work-loop と同じ入力で算出する。specAuthoringOut を渡さないと delegRatioWithPrep が
+    // delegRatio と同値になり、「委譲の準備(仕様書執筆)」という最大の漏れ口が調査から見えなくなる。
+    const specAuthoringOut = estimateSpecAuthoringTokens({ blocks: claude.blocks, profile: collectBashProfile({ home, days }) });
+    result = { ...calculateDelegation({ codexOut: codex.outputTokens, execOut: ledger.totals.outputTokens, byModel: claude.byModel, specAuthoringOut }), headlessClaudeOut: claude.headlessClaudeOut, headlessJobs: claude.headlessJobs };
+  }
   else if (sub === 'health') result = collectProviderHealth({ home, days });
   else if (sub === 'turns') result = collectTurnStats({ home, days });
   else { console.error('usage: node tools/usage-stats.mjs <sessions|blocks|bash|ledger|deleg|health|turns> [--days 7] [--json]'); process.exitCode = 2; }

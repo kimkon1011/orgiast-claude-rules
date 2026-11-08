@@ -21,7 +21,7 @@ try {
   if ($PSScriptRoot) { $batchCandidates += (Join-Path (Split-Path -Parent $PSScriptRoot) 'tools\batch-run.mjs') }
   $batchCandidates += @((Join-Path $H 'orgiast-claude-rules\tools\batch-run.mjs'), (Join-Path $H 'Downloads\orgiast-claude-rules\tools\batch-run.mjs'))
   foreach ($c in @($batchCandidates | Select-Object -Unique)) { if (Test-Path $c) { $nb = $c; break } }
-  if ($offpeak -and $nb -and (Test-Path $pend) -and ((Get-Item $pend).Length -gt 0)) { Start-Process -FilePath 'node' -ArgumentList @($nb) -WindowStyle Hidden | Out-Null }
+  if ($offpeak -and $nb -and (Test-Path $pend) -and ((Get-Item $pend).Length -gt 0)) { Start-Process -FilePath $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) -ArgumentList @($nb) -WindowStyle Hidden | Out-Null }
 } catch {}
 # 1日1回だけ計測。ガードは実行前に先に書く(並行SessionStartの二重起動防止)。
 $due = $true
@@ -29,7 +29,7 @@ if (Test-Path $guard) { if (((Get-Date) - (Get-Item $guard).LastWriteTime) -lt [
 if ($due -and (Test-Path $loop)) {
   Set-Content -Path $guard -Value (Get-Date -Format o) -Encoding UTF8
   # 裏で計測+Discord日次送信(session起動をブロックしない)
-  try { Start-Process -FilePath 'node' -ArgumentList @($loop, '--days=7', '--post') -WindowStyle Hidden | Out-Null } catch {}
+  try { Start-Process -FilePath $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) -ArgumentList @($loop, '--days=7', '--post') -WindowStyle Hidden | Out-Null } catch {}
 }
 # 前回の指示書を毎回コンテキストへ注入(監督が見て委譲を修正する)
 $dir = Join-Path $H '.claude\cost-directive.md'

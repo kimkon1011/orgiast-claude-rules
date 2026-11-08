@@ -88,7 +88,7 @@ test('register-hooks: BOM付き settings.json でも登録でき、BOM が除去
   const temp = makeTempHome('orgiast-settings-bom-test-'); const claude = path.join(temp, '.claude'); fs.mkdirSync(claude, { recursive: true });
   const file = path.join(claude, 'settings.json'); fs.writeFileSync(file, '\uFEFF{"hooks":{}}');
   const r = run('register-hooks.mjs', undefined, ['--hooks-only'], { ORGIAST_HOME: temp, ORGIAST_REPO: repo }); const data = fs.readFileSync(file);
-  assert(r.status === 0 && r.stdout.includes('追加'), r.stdout || r.stderr); assert(!data.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])), 'BOMが残っている'); JSON.parse(data.toString('utf8'));
+  assert(r.status === 0 && r.stdout.includes('期待集合へ収束'), r.stdout || r.stderr); assert(!data.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])), 'BOMが残っている'); JSON.parse(data.toString('utf8'));
 });
 test('register-hooks: 旧PCを .mjs へ移行し、独自設定を保ったまま冪等', () => {
   const temp = makeTempHome('orgiast-hooks-upgrade-test-'); const claude = path.join(temp, '.claude'); fs.mkdirSync(claude, { recursive: true });
@@ -221,12 +221,12 @@ test('fable-session-guard: process.exitを使わずisEntryで起動', () => {
   const source = fs.readFileSync(path.join(toolsDir, 'fable-session-guard.mjs'), 'utf8');
   assert(!/process\.exit\s*\(/.test(source) && /isEntry\(import\.meta\.url\)/.test(source), '安全なhookエントリ要件を満たしていない');
 });
-test('model-agent-guard: 実装は warn', () => {
+test('model-agent-guard: warn設定でも実装はdeny', () => {
   const temp = makeTempHome('orgiast-model-agent-warn-test-');
   writeCostEnforce(temp, 'warn');
   const r = run('model-agent-guard.mjs', { tool_name: 'Agent', tool_input: { model: 'sonnet', prompt: 'ログイン機能を実装して' } }, [], { ORGIAST_HOME: temp });
   const output = JSON.parse(r.stdout);
-  assert(output.hookSpecificOutput.additionalContext && !output.hookSpecificOutput.permissionDecision, r.stdout || r.stderr);
+  assert(output.hookSpecificOutput.permissionDecision === 'deny', r.stdout || r.stderr);
 });
 test('model-agent-guard: block昇格時は実装委譲を deny', () => {
   const temp = makeTempHome('orgiast-model-agent-block-test-');
@@ -529,12 +529,24 @@ test('install/verify: 配布する ~/.claude/*.env を両方の総合チェッ�
   ]) for (const name of [...distributed].sort()) if (!source.includes(name)) missing.push(`${name} -> ${checker}`);
   assert(missing.length === 0, `総合チェックに未掲載: ${missing.join(', ')}`);
 });
+test('notify-kim: Discord 設定不要で台帳へ保存し JSON を返す', () => {
+  const home = makeTempHome('orgiast-inbox-');
+  try {
+    fs.mkdirSync(path.join(home, '.claude'));
+    fs.writeFileSync(path.join(home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+    const r = run('notify-kim.mjs', undefined, ['--kind', 'ask', '判断してください'], { ORGIAST_HOME: home, NOTIFY_PLAIN_JA: '0' });
+    assert(r.status === 0, r.stderr);
+    const result = JSON.parse(r.stdout);
+    assert(result.delivered === 'session-inbox', '台帳へ振り分けていない');
+    const item = JSON.parse(fs.readFileSync(path.join(home, '.claude/kim-inbox', `${result.id}.json`), 'utf8'));
+    assert(item.kind === 'ask' && item.status === 'open', '未回収の依頼が保存されていない');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
 test('外部送受信ツール: 設定不足をstderr 1行以上で観測可能にしてexit 0', () => {
   // 第3要素 quietStdout: stdout が「呼び出し側が解釈する経路」のツールだけ true。
   // cost-work-loop は指示書本文を stdout に出すのが正常動作なので、そこを空だと要求すると
   // 本番側を黙らせる誤修正を誘発する(実際に一度そうなった)。観測点は stderr に統一する。
   const targets = [
-    ['notify-kim.mjs', [], true],
     ['fleet-sheet-report.mjs', ['--dry-run'], true],
     ['interaction-rollout.mjs', [], true],
     ['fleet-triage-report.mjs', [], true],

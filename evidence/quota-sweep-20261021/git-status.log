@@ -1,0 +1,17 @@
+ M tools/lib/scheduled-task.mjs
+ M tools/lib/scheduled-task.test.mjs
+ M tools/setup-manifest.json
+?? docs/quota-sweep.md
+?? evidence/quota-sweep-20261021/
+?? tools/install-makeloop.mjs
+?? tools/install-makeloop.test.mjs
+?? tools/lib/quota-sweep-host.mjs
+?? tools/lib/quota-sweep-process.mjs
+?? tools/lib/quota-sweep-watchdog.mjs
+?? tools/lib/quota-windows.mjs
+?? tools/lib/quota-windows.test.mjs
+?? tools/quota-sweep-contract.tmpl.md
+?? tools/quota-sweep.mjs
+?? tools/quota-sweep.test.mjs
+?? tools/register-quota-sweep.mjs
+?? tools/register-quota-sweep.ps1

@@ -3,7 +3,7 @@
 // 「今どのセッションが生きているか」を記録する最小 hook。
 //  - /session-close skill から close-session.mjs が session_id を知るために使う
 //    （モデル側は session_id を直接持てないので、hook が渡す唯一の経路）
-//  - purge-hidden-sessions.py が「稼働中セッションを誤退避しない」ガードに使う
+//  - purge-sessions.mjs が「稼働中セッションを誤退避しない」ガードに使う
 // /session-close 系のプロンプト時だけ session_id を stdout へ渡す。失敗しても常に exit 0。
 import fs from "node:fs";
 import os from "node:os";

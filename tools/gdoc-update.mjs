@@ -10,22 +10,29 @@
  *       Drive v3 files.update に Markdown を media アップロード → Google Doc に変換して上書き。
  *       依存パッケージなし（Node 18+ の fetch と標準 crypto で JWT を自己署名）。
  *
+ * --authuser <開く人のメール> を指定。他人宛は事前にその相手へ共有する。
  * 使い方:
  *   node <このファイル> --id <docId> --file <本文.md>
  *   node <このファイル> --id <docId> --file <本文.md> --dry     # 認証と権限だけ確認して書き込まない
  *   node <このファイル> --id <docId> --check                    # 現在の本文の先頭を表示（読み取りのみ）
+ *
+ * 常用例（標準設定書: 正本はリポジトリ直下の STANDARD-PC-SETUP.md。md を直したら必ずこれで Doc を揃える）:
+ *   node tools/gdoc-update.mjs --id 1p9_YkCIXDRbGrFsRDbtNxHVmZ7AglDOqBlamn2Ij4NA --file STANDARD-PC-SETUP.md
  *
  * オプション:
  *   --key <path>      サービスアカウント JSON（既定: 下記 DEFAULT_KEY）
  *   --subject <mail>  代理するユーザー（既定: kim@orgiast.jp）
  */
 
+import { workspaceUrl } from './lib/workspace-url.mjs';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
+import { isEntry } from './is-entry.mjs';
+import { defaultDriveKeyPath } from './lib/drive-auth.mjs';
 
-const DEFAULT_KEY =
-  'C:/Users/uers/Downloads/CLAUDE.md配布/aujust-sales-automation/.gcp/sheets-sa.json';
+// 既定パスはハードコードしない（旧既定値はディレクトリ名の打ち間違いで鍵を見失っていた。2026-10-23 実測）。
+const DEFAULT_KEY = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath();
 const DEFAULT_SUBJECT = 'kim@orgiast.jp';
 const SCOPE = 'https://www.googleapis.com/auth/drive';
 
@@ -90,6 +97,28 @@ async function api(token, url, init = {}) {
   return res;
 }
 
+export function normalizeMarkdownText(text) {
+  return String(text)
+    .replace(/ {2}$/gm, '')
+    .replace(/\\(.)/g, '$1')
+    .split(/\r?\n/)
+    .map((line) => line
+      .replace(/^\s*(?:>\s*)+/, '')
+      .replace(/^\s*#{1,6}\s*/, '')
+      .replace(/^\s*[-+*]\s+/, '')
+      .replace(/[|*_`]/g, ' '))
+    .join('\n')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function verifyReadback(markdownBody, exportedText) {
+  const expected = normalizeMarkdownText(markdownBody).slice(0, 40);
+  const actual = normalizeMarkdownText(exportedText);
+  return expected ? actual.includes(expected) : actual.length > 0;
+}
+
+async function main() {
 const args = parseArgs(process.argv.slice(2));
 const docId = args.id;
 if (!docId) {
@@ -105,6 +134,7 @@ if (!fs.existsSync(keyPath)) {
 const key = JSON.parse(fs.readFileSync(keyPath, 'utf8'));
 const subject = args.subject || DEFAULT_SUBJECT;
 
+const authuser = args.authuser || args.subject || process.env.GOOGLE_IMPERSONATE;
 const token = await getAccessToken(key, subject);
 console.log(`auth OK (sa=${key.client_email} → ${subject})`);
 
@@ -143,6 +173,7 @@ if (!args.file) {
   console.error('--file <本文.md> は必須です（--check / --dry を除く）。');
   process.exit(2);
 }
+const outputUrl = workspaceUrl(`https://docs.google.com/document/d/${docId}/edit`, authuser);
 const md = fs.readFileSync(path.resolve(args.file), 'utf8');
 
 await api(
@@ -155,10 +186,12 @@ await api(
 const after = await (
   await api(token, `https://www.googleapis.com/drive/v3/files/${docId}/export?mimeType=text/plain`)
 ).text();
-const firstLine = md.split('\n').find((l) => l.trim())?.replace(/^#+\s*/, '').trim() || '';
-const ok = firstLine ? after.includes(firstLine.slice(0, 30)) : after.length > 0;
+const ok = verifyReadback(md, after);
 
 console.log(`updated: ${meta.name}`);
 console.log(`read-back: ${after.length} 字 / 先頭行の一致 = ${ok ? 'OK' : 'NG'}`);
-console.log(`https://docs.google.com/a/orgiast.jp/document/d/${docId}/edit`);
+console.log(`${authuser} で開いてください: ${outputUrl}`);
 if (!ok) process.exit(1);
+}
+
+if (isEntry(import.meta.url)) await main();

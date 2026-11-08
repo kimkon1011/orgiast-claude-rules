@@ -1,0 +1,17 @@
+{
+    "ObservedAt":  "2026-10-29T04:42:16.7023659+09:00",
+    "OperationalEnabled":  false,
+    "OperationalRecordCount":  null,
+    "LastRunTime":  "2026-10-28T07:06:49.0000000+09:00",
+    "LastTaskResult":  267014,
+    "ExecutionTimeLimit":  "PT15M",
+    "MultipleInstances":  "IgnoreNew",
+    "Actions":  [
+                    {
+                        "Execute":  "C:\\WINDOWS\\System32\\wscript.exe",
+                        "Arguments":  "//nologo \"C:\\Users\\uers\\.claude\\tools\\run-hidden.vbs\" \"powershell.exe\" \"-NoProfile\" \"-NonInteractive\" \"-ExecutionPolicy\" \"Bypass\" \"-File\" \"C:\\Users\\uers\\.claude\\tools\\nightly-bootstrap.ps1\" \"-Target\" \"tools\\nightly-kpi.mjs\"",
+                        "WorkingDirectory":  "C:\\Users\\uers\\.claude\\nightly-repo"
+                    }
+                ],
+    "KpiLastWriteTime":  "2026-10-28T07:33:47.8711010+09:00"
+}

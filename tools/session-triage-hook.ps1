@@ -22,7 +22,7 @@ if ($hasPrevious) { $stale = ((Get-Date) - (Get-Item $md).LastWriteTime) -ge [Ti
 
 # 作り置きが無い/古い場合は裏で更新。古い内容はこの回の提示には使う。
 if ($stale -and $triage) {
-  try { Start-Process -FilePath 'node' -ArgumentList @($triage, '--llm', '--top', '20', '--md', $md) -WindowStyle Hidden | Out-Null } catch {}
+  try { Start-Process -FilePath $(if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }) -ArgumentList @($triage, '--llm', '--top', '20', '--md', $md) -WindowStyle Hidden | Out-Null } catch {}
 }
 if (-not $hasPrevious) { return }
 

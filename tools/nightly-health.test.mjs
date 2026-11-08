@@ -3,7 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runNightlyHealth, defaultRunTests, formatDate, extractFailCount, isFailureLine, extractHookToolPaths, nativePath, getPlatform, evaluateScheduledTaskHealth } from './nightly-health.mjs';
+import { runNightlyHealth as realRunNightlyHealth, defaultRunTests, formatDate, extractFailCount, isFailureLine, extractHookToolPaths, nativePath, getPlatform, evaluateScheduledTaskHealth } from './nightly-health.mjs';
+
+const runNightlyHealth = options => realRunNightlyHealth({ staleTaskHealth: async () => ({ anomalies: [] }), unattendedAudit: async () => ({ unresolved: [] }), stallScan: async () => ({ rows: [] }), ...options });
 
 function createTempHome() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'nightly-health-test-'));
@@ -53,6 +55,29 @@ function writeSettings(home, commands) {
 
 function healthyTests() { return { status: 0, stdout: 'ok', stderr: '' }; }
 
+test('auto-session の streak 検出を既存 anomaly 型へ追加する', async () => {
+  const home = createTempHome();
+  try {
+    const result = await runNightlyHealth({
+      home,
+      expectations: [],
+      dryRun: true,
+      runTests: async () => healthyTests(),
+      streakWatch: async () => ({
+        detected: [{ jobKey: 'feedback:kimkon1011/app#13', message: '2 日連続失敗。判断してください' }],
+        notified: [],
+        suppressed: []
+      })
+    });
+    assert.deepEqual(result.anomalies[0], {
+      type: 'auto_session_streak',
+      label: 'feedback:kimkon1011/app#13',
+      message: '2 日連続失敗。判断してください',
+      expectation: null
+    });
+  } finally { removeDir(home); }
+});
+
 test('scheduled task の起動拒否・時間超過・ログ未生成を判定する', () => {
   const now = new Date('2026-09-10T12:00:00.000Z');
   const expectation = { task: 'OrgiastNightlyBatch', maxRunHours: 5, label: '夜間バッチ' };
@@ -75,7 +100,14 @@ test('scheduled task の起動拒否・時間超過・ログ未生成を判定�
   assert.deepEqual(types(info({ lastTaskResult: 2147946720, lastRunTime: '2026-09-08T23:00:00.000Z' })), ['task_started_no_log']);
   assert.deepEqual(types(info({ state: 'Running', lastRunTime: '2026-09-10T06:00:00.000Z' }), { logMtimeMs: now.getTime() }), ['task_overrun']);
   assert.deepEqual(types(info({ state: 'Running', lastRunTime: '2026-09-10T10:00:00.000Z' }), { logMtimeMs: now.getTime() }), []);
-  assert.deepEqual(types(info(), { logMtimeMs: new Date('2026-09-10T08:00:00.000Z').getTime() }), ['task_started_no_log']);
+  // 多段アクションのタスクが正常完走（lastTaskResult=0）した場合、LastRunTime は最終アクションの
+  // 開始時刻に更新されるため先頭アクションのログ最終書込より後ろになる。これは異常ではないので黙る
+  // （2026-09-26 の実状態: 03:00:43 起動・全アクション正常終了なのに LastRunTime=03:37:57 で誤報した）
+  assert.deepEqual(types(info(), { logMtimeMs: new Date('2026-09-10T08:00:00.000Z').getTime() }), []);
+  // 完走の積極証拠が無い（lastTaskResult≠0）うえ、ログが LastRunTime から1行も動いていなければ鳴る
+  assert.deepEqual(types(info({ lastTaskResult: 1 }), { logMtimeMs: new Date('2026-09-10T08:00:00.000Z').getTime() }), ['task_started_no_log']);
+  // 実行中（267009）のままログが動かなくても鳴る（ハング起動の検知を弱めない）
+  assert.deepEqual(types(info({ state: 'Running', lastTaskResult: 267009 }), { logMtimeMs: new Date('2026-09-10T08:00:00.000Z').getTime() }), ['task_started_no_log']);
   assert.deepEqual(types(info(), { logMtimeMs: new Date('2026-09-10T11:50:00.000Z').getTime() }), []);
   assert.deepEqual(types(info()), ['task_started_no_log']);
   assert.deepEqual(types(info({ lastRunTime: '2026-09-10T11:30:00.000Z' })), []);
@@ -305,6 +337,22 @@ test('Windows 形式パスは win32 では維持し linux で WSL パスへ変�
 
 test('/ サマリ / 行は失敗を含んでも除外する', () => {
   assert.equal(isFailureLine('2026-09-05 / サマリ / step1 NG: failed'), false);
+});
+
+test('robocopy の列挙行はファイル名に error を含んでも失敗扱いしない', () => {
+  // 2026-10-13 実測: Drive バックアップの robocopy /MIR 出力に含まれる *EXTRA File 行を
+  // ファイル名の "error" で誤検知し、正常終了したバックアップが夜間ジョブ異常として通知された。
+  const robocopyLines = [
+    '\t  *EXTRA File \t\t    1532\tC:\\Users\\uers\\AppData\\Local\\claude-backup-staging\\.claude\\repo-backups\\tools.bak-2026-10-09\\nightly-batch-error-detail.test.mjs',
+    '\t  *EXTRA File \t\t     790\tC:\\Users\\uers\\AppData\\Local\\claude-backup-staging\\.claude\\repo-backups\\lib\\redact.test.mjs',
+    '\t  *EXTRA Dir        -1\tC:\\Users\\uers\\AppData\\Local\\claude-backup-staging\\.claude\\repo-backups\\tools.bak-2026-10-09\\lib\\internal-audit\\',
+    '\t   New File  \t\t     257\tC:\\Users\\uers\\AppData\\Local\\claude-backup-staging\\.claude\\lib\\error-detail.mjs',
+    '\t   Newer     \t\t    4910\tC:\\Users\\uers\\AppData\\Local\\claude-backup-staging\\.claude\\lib\\leak-search.mjs',
+    '\t   Same      \t\t     189\tC:\\Users\\uers\\AppData\\Local\\claude-backup-staging\\.claude\\session-purpose\\error.json'
+  ];
+  for (const line of robocopyLines) assert.equal(isFailureLine(line), false, line);
+  // 実際の失敗行（バックアップ script の ERROR 行）は引き続き検知する。
+  assert.equal(isFailureLine('2026-10-13T03:40:00+09:00 ERROR failed reason=read-back 不合格'), true);
 });
 
 test('前回オフセット以降に追記された行だけを検知する', async () => {
@@ -671,4 +719,174 @@ test('booth feedback uses the registered Intake task name', async () => {
   const booth = expectations.find((entry) => entry.log === 'booth-feedback-intake.log');
   assert.equal(booth.task, 'OrgiastBoothFeedbackIntake');
   assert.equal(expectations.some((entry) => entry.task === 'OrgiastBoothFeedback'), false);
+});
+
+test('毎日09:00実行の feedback-nag.log は翌朝のヘルスで stale 誤検知しない', async () => {
+  const expectations = JSON.parse(fs.readFileSync(new URL('./nightly-health-expectations.json', import.meta.url), 'utf8'));
+  const nag = expectations.filter((entry) => entry.log === 'feedback-nag.log');
+  assert.equal(nag.length, 1);
+  // OrgiastFeedbackNag は毎日09:00の1回だけで、-RepetitionInterval を持たない。
+  // 3時間の陳腐化許容は funnel-probe / plaud-to-tldv のような毎時繰り返しジョブ用で、
+  // 日次ジョブに当てると 12:00 以降に毎日必ず stale になる（2026-10-11 実害）。
+  const register = fs.readFileSync(new URL('./register-feedback-nag-task.ps1', import.meta.url), 'utf8');
+  assert.match(register, /-Daily\b/);
+  assert.doesNotMatch(register, /-RepetitionInterval\b/);
+  assert.ok(nag[0].maxAgeHours >= 24, `日次実行のため maxAgeHours は24以上が必要（現在: ${nag[0].maxAgeHours}）`);
+
+  const home = createTempHome();
+  try {
+    const now = new Date('2026-10-12T07:00:00+09:00');     // 翌朝のヘルス実行（前日09:00から22時間後）
+    const lastRun = new Date('2026-10-11T09:00:14+09:00'); // 直前の成功実行
+    const logPath = path.join(home, '.claude', 'logs', 'feedback-nag.log');
+    fs.writeFileSync(logPath, `${formatDate(lastRun)} 10 件を送信\n`, 'utf8');
+    fs.utimesSync(logPath, lastRun, lastRun);
+
+    const result = await runNightlyHealth({
+      home, now, expectations: nag,
+      runTests: healthyTests, notify: async () => {}
+    });
+    assert.equal(result.anomalies.filter((item) => item.type === 'stale').length, 0);
+  } finally { removeDir(home); }
+});
+
+function createStreakFixture(home) {
+  const runsDir = path.join(home, '.claude', 'auto-session', 'runs');
+  fs.mkdirSync(runsDir, { recursive: true });
+  for (const day of ['17', '18']) {
+    const stem = `2026-09-${day}-feedback-app-13`;
+    const summaryFile = path.join(runsDir, `${stem}.summary.md`);
+    fs.writeFileSync(summaryFile, '');
+    fs.writeFileSync(path.join(runsDir, `${stem}.json`), JSON.stringify({
+      source: 'feedback', issue: { repo: 'kimkon1011/app', number: 13 },
+      startedAt: `2026-09-${day}T03:00:00Z`, status: 'failure', exitCode: 1,
+      summary: '', summaryFile, stderr: 'integration failure'
+    }));
+  }
+}
+
+test('streak 専用 DM は1回だけ送り、通常通知は他の anomaly のみ送る', async (t) => {
+  const home = createTempHome(); t.after(() => removeDir(home));
+  createStreakFixture(home);
+  const messages = []; const dms = [];
+  const opts = {
+    home, now: new Date('2026-09-19T03:00:00Z'),
+    expectations: [{ log: 'missing.log', label: '別ジョブ', maxAgeHours: 26 }],
+    runTests: async () => healthyTests(),
+    streakNotifyImpl: async (text) => { dms.push(text); },
+    notify: async (text) => { messages.push(text); }
+  };
+  await runNightlyHealth(opts);
+  const second = await runNightlyHealth(opts);
+  assert.equal(dms.length, 1); assert.equal(messages.length, 1);
+  assert.match(dms[0], /2 日連続失敗/);
+  assert.match(messages[0], /別ジョブ/); assert.doesNotMatch(messages[0], /feedback:|integration failure/);
+  assert.equal(second.anomalies.filter((a) => a.type === 'auto_session_streak').length, 1);
+  const cache = JSON.parse(fs.readFileSync(path.join(home, '.claude', '.nightly-health-last.json')));
+  assert.ok(cache.anomalies.some((a) => a.type === 'auto_session_streak'));
+});
+
+test('streak のみなら通常通知を呼ばず anomaly は返す', async (t) => {
+  const home = createTempHome(); t.after(() => removeDir(home)); createStreakFixture(home);
+  let dms = 0;
+  const result = await runNightlyHealth({
+    home, expectations: [], runTests: async () => healthyTests(),
+    streakNotifyImpl: async () => { dms++; },
+    notify: async () => { assert.fail('通常経路で二重通知してはいけない'); }
+  });
+  assert.equal(dms, 1); assert.equal(result.anomalies.length, 1);
+  assert.equal(result.exitCode, 0);
+});
+
+test('dry-run と prime は実 watcher でも DM を送らず streak state を更新しない', async (t) => {
+  for (const mode of ['dryRun', 'prime']) {
+    const home = createTempHome(); t.after(() => removeDir(home)); createStreakFixture(home);
+    const result = await runNightlyHealth({
+      home, expectations: [], [mode]: true, runTests: async () => healthyTests(),
+      streakNotifyImpl: async () => { assert.fail(`${mode} で DM を送信`); },
+      notify: async () => { assert.fail(`${mode} で通常通知を送信`); }
+    });
+    assert.equal(result.anomalies.length, 1);
+    assert.equal(fs.existsSync(path.join(home, '.claude/auto-session/streak-watch-state.json')), false);
+  }
+});
+
+test('DM 失敗でも検出したジョブと他の監視結果を失わず通常経路で通知障害を報告する', async (t) => {
+  const home = createTempHome(); t.after(() => removeDir(home)); createStreakFixture(home);
+  let message = '';
+  const result = await runNightlyHealth({
+    home, expectations: [{ log: 'missing.log', label: '別ジョブ', maxAgeHours: 26 }],
+    runTests: async () => healthyTests(),
+    streakNotifyImpl: async () => { throw new Error('DM offline'); },
+    notify: async (text) => { message = text; }
+  });
+  assert.equal(result.anomalies.filter((a) => a.type === 'auto_session_streak').length, 2);
+  assert.match(message, /DM 通知に失敗: DM offline/); assert.match(message, /別ジョブ/);
+  assert.equal(fs.existsSync(path.join(home, '.claude/auto-session/streak-watch-state.json')), false);
+});
+
+test('GAS 週次監査は夜間経路から呼ばれ、prime/dry-run と notifier を引き継ぐ', async t => {
+  const home = createTempHome(); t.after(() => removeDir(home));
+  const notify = async () => { throw new Error('unexpected DM'); };
+  let seen;
+  await runNightlyHealth({ home, prime: true, expectations: [], notify,
+    runTests: async () => healthyTests(), streakWatch: async () => ({ detected: [] }),
+    gasDrift: async options => { seen = options; return { status: 'dry-run' }; },
+  });
+  assert.equal(seen.home, home); assert.equal(seen.dryRun, true); assert.equal(seen.notify, notify);
+});
+
+test('GAS 監査エラーを異常として残し、他の夜間チェックは継続する', async t => {
+  const home = createTempHome(); t.after(() => removeDir(home)); let tested = false;
+  const result = await runNightlyHealth({ home, dryRun: true, expectations: [],
+    runTests: async () => { tested = true; return healthyTests(); },
+    streakWatch: async () => ({ detected: [] }), gasDrift: async () => { throw new Error('pull failed'); },
+  });
+  assert.equal(tested, true); assert.equal(result.anomalies[0].type, 'gas_master_drift_error');
+});
+
+test('daily stall scan findings reach remediation input and suppress normal cooldowns', async () => {
+  const home = createTempHome();
+  try {
+    let scanned = false;
+    const result = await runNightlyHealth({ home, expectations: [], prime: true,
+      runTests: async () => ({ status: 0, stdout: '# fail 0' }), gasDrift: async () => {}, convergenceWatch: async () => {}, streakWatch: async () => ({ detected: [] }),
+      stallScan: async options => { scanned = options.save; return { rows: [
+        { kind: 'watcher_dead', symptom: '監視停止', evidence: 'heartbeat=未作成', cause: '未登録', nextAction: '再登録' },
+        { kind: 'cooldown', symptom: '利用待ち', remediate: false }
+      ] }; }
+    });
+    assert.equal(scanned, true);
+    assert.ok(result.anomalies.some(a => a.type === 'watcher_dead'));
+    const input = JSON.parse(fs.readFileSync(path.join(home, '.claude', '.nightly-health-last.json'), 'utf8'));
+    assert.ok(input.anomalies.some(a => a.type === 'watcher_dead'));
+    assert.ok(!input.anomalies.some(a => a.type === 'cooldown'));
+  } finally { removeDir(home); }
+});
+
+test('nightly audit passes prime/dry-run and saves unresolved in existing report', async t => {
+  const home = createTempHome(); t.after(() => removeDir(home)); let seen;
+  const result = await runNightlyHealth({ home, prime: true, expectations: [], runTests: async () => healthyTests(),
+    unattendedAudit: async options => { seen = options; return { unresolved: [{ name: 'OrgiastTest', reason: 'missed' }] }; },
+    stallScan: async () => ({ rows: [] }), gasDrift: async () => {}, convergenceWatch: async () => {}, streakWatch: async () => ({ detected: [] })
+  });
+  assert.equal(seen.dryRun, true); assert.equal(seen.home, home);
+  assert.ok(result.anomalies.some(a => a.type === 'unattended_unresolved'));
+  assert.match(fs.readFileSync(path.join(home, '.claude/.nightly-health-last.json'), 'utf8'), /OrgiastTest/);
+});
+
+
+test('stale task repair results use the existing nightly notification', async () => {
+  const home = createTempHome();
+  let sent;
+  try {
+    const result = await runNightlyHealth({ home, expectations: [], runTests: async () => healthyTests(),
+      gasDrift: async () => {}, convergenceWatch: async () => {},
+      streakWatch: async () => ({ detected: [] }),
+      staleTaskHealth: async options => {
+        assert.equal(options.dryRun, false);
+        return { anomalies: [{ type: 'stale_task_paths', label: 'task paths', message: 'detected 1 repaired 1' }] };
+      }, notify: async text => { sent = text; } });
+    assert.equal(result.exitCode, 0);
+    assert.match(sent, /detected 1 repaired 1/);
+  } finally { removeDir(home); }
 });

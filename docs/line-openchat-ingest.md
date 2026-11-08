@@ -76,3 +76,13 @@ Windows の「タスク スケジューラ」で毎晩1回、`node` を実行す
 - AI利用実績: `~/.claude/executor-usage.jsonl`。401/403 はAPIキー、402は残高、429は利用上限を確認します。Groqが失敗するとDeepSeekへ切り替わります。
 - `LINE_INGEST_TOKEN not configured` はパソコン側の専用トークン未設定、`Unauthorized` は端末とパソコンのトークン不一致です。
 - `not-allowed` は `LINE_INGEST_ALLOW_CHATS` に通知タイトルと一致する名前がない状態です。
+
+## プロファイル（ai / cafe）と cafe015-PC への配達
+- 既定の `--profile ai` は「レンスペ民の集い」を除外し、従来の ai-news-* と state.json を使います。
+- `node tools/line-digest.mjs --profile cafe` は「レンスペ民の集い」だけをカフェ運営の観点で処理します。
+- カフェ成果物は ~/.claude/ の cafe-digest.md、cafe-proposals.jsonl、cafe-topics.jsonl、処理履歴は line-openchat/state-cafe.json です。
+- `node tools/cafe-digest-deliver.mjs` は変更のある CAFE-DIGEST 区間を fleet-mail の note として cafe015-PC に配達します。
+- `--dry-run` で本文と宛先を確認、`--to <label>` で宛先変更、`--force` で変更がなくても再送できます。
+- 配達履歴は ~/.claude/line-openchat/cafe-deliver-state.json に保存し、同一内容の再送を防ぎます。
+- nightly-batch は AI ダイジェスト → カフェダイジェスト → カフェ配達 → AI 提案検証の順で実行します。
+- cafe015-PC の Claude Code は次のプロンプトで受信し、未検証の改善候補として提案を扱います。

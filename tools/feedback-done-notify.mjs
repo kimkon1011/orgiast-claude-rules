@@ -27,7 +27,7 @@ export function buildDonePayload(ledgerItem, issue, overrides = {}) {
     title: clean(ledgerItem?.title || issue?.title),
     summary: clean(overrides.summary) || `対応が完了しました（GitHub Issue #${number} クローズ）`,
     url: clean(overrides.url) || clean(issue?.url) || clean(ledgerItem?.url),
-    notify_kim: true,
+    notify_kim: overrides.notify_kim !== false,
   };
 }
 
@@ -70,6 +70,8 @@ function parseArgs(args) {
   const parsedLimit = Number.parseInt(valueAfter('--limit'), 10);
   return {
     dry: args.includes('--dry'),
+    recipientOnly: args.includes('--recipient-only'),
+    stateHome: valueAfter('--state-home'),
     limit: Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : DEFAULT_LIMIT,
     messageId: valueAfter('--message-id'), summary: valueAfter('--summary'), url: valueAfter('--url'),
   };
@@ -100,8 +102,9 @@ export async function main(args = process.argv.slice(2), { home = os.homedir(), 
   if (args.includes('--message-id') && !options.messageId) { console.error('feedback-done-notify: --message-id には値を指定してください'); return 1; }
   const config = loadRelayConfig(home);
   if (!config.url || !config.secret) { console.log('feedback-done-notify: 中継が未設定なのでスキップ'); return 0; }
-  const ledgerFile = path.join(home, '.claude', 'feedback-issue-ledger.json');
-  const notifiedFile = path.join(home, '.claude', 'feedback-done-notified.json');
+  const stateHome = options.stateHome || home;
+  const ledgerFile = path.join(stateHome, '.claude', 'feedback-issue-ledger.json');
+  const notifiedFile = path.join(stateHome, '.claude', 'feedback-done-notified.json');
   const ledgerItems = readItems(ledgerFile);
   if (!ledgerItems.length) return 0;
   const notified = readItems(notifiedFile);
@@ -126,7 +129,7 @@ export async function main(args = process.argv.slice(2), { home = os.homedir(), 
   const loadMembers = async (query) => {
     if (membersByQuery.has(query)) return membersByQuery.get(query);
     let members;
-    try { members = await getDiscordMembers({ query, home, fetchImpl }); }
+    try { members = await getDiscordMembers({ query, home, fetchImpl, persistCache: stateHome === home }); }
     catch (error) { console.warn(`feedback-done-notify: Discord 名簿の取得に失敗 (${error.message})`); members = []; }
     membersByQuery.set(query, members || []);
     return members || [];
@@ -139,8 +142,8 @@ export async function main(args = process.argv.slice(2), { home = os.homedir(), 
     let recipient = pickRecipient(ledgerItem, []);
     if (!recipient) recipient = pickRecipient(ledgerItem, await loadMembers(ledgerItem?.submitter));
     if (!recipient) { undeliverable.push(candidate); console.log(`feedback-done-notify: 未達 message_id=${ledgerItem.message_id}`); continue; }
-    const payload = buildDonePayload(ledgerItem, issue, { submitter_discord_id: recipient.id, summary: options.summary, url: options.url });
-    if (options.dry) { console.log(`feedback-done-notify: dry message_id=${ledgerItem.message_id} recipient=${recipient.id} url=${payload.url}`); continue; }
+    const payload = buildDonePayload(ledgerItem, issue, { submitter_discord_id: recipient.id, summary: options.summary, url: options.url, notify_kim: !options.recipientOnly });
+    if (options.dry) { console.log(`feedback-done-notify: dry message_id=${ledgerItem.message_id} payload=${JSON.stringify(payload)}`); continue; }
     if (readItems(notifiedFile).some((item) => String(item?.message_id) === String(ledgerItem.message_id))) {
       console.log(`feedback-done-notify: 通知済みのためスキップ message_id=${ledgerItem.message_id}`);
       continue;
@@ -154,12 +157,12 @@ export async function main(args = process.argv.slice(2), { home = os.homedir(), 
         continue;
       }
       consecutiveServerFailures = 0;
-      appendNotified(notifiedFile, { message_id: ledgerItem.message_id, submitter_discord_id: recipient.id, notified_at: new Date().toISOString(), url: payload.url });
+      appendNotified(notifiedFile, { message_id: ledgerItem.message_id, submitter_discord_id: recipient.id, notified_at: new Date().toISOString(), url: payload.url, dm_message_id: response.data?.dm_message_id, kim_delivered: response.data?.kim_delivered, owner_delivered: response.data?.owner_delivered });
       console.log(`feedback-done-notify: 通知済み message_id=${ledgerItem.message_id}`);
     } catch (error) { consecutiveServerFailures = 0; console.warn(`feedback-done-notify: 送信失敗 message_id=${ledgerItem.message_id} (${error.message})`); }
   }
   const body = formatUndeliverable(undeliverable);
-  if (body && !options.dry) {
+  if (body && !options.dry && !options.recipientOnly) {
     try {
       const response = await postJson(relayEndpoint(config.url, '/api/notify'), config.secret, { title: '完了報告の未達リスト', body, url: '' }, fetchImpl);
       if (!response.ok) console.warn(`feedback-done-notify: 未達リスト通知失敗 (HTTP ${response.status})`);

@@ -186,3 +186,21 @@ test('全滅したら既定アクション1件を出す', async () => {
   assert.match(fs.readFileSync(result.outputFile, 'utf8'), /新しい依頼と未処理事項を確認/);
   assert.deepEqual(views, [297]);
 });
+
+test('台帳の依頼中・対応中を1行ずつ表示し再生成で重複しない', async () => {
+  const root = home();
+  const options = { home: root, now: NOW, execImpl: gh(), llm: good, log() {}, listLedger: async () => ({ ok: true, rows: ['依頼中', '対応中', '未着手', '完了'].map((状態, i) => ({ taskId: `ledger-${i}`, 状態, 件名: '他PCへ\n依頼', 担当PC: 'cr568', 最終更新: new Date(NOW.getTime() - 51 * 3600000).toISOString(), 成果物リンク: 'https://example.test/pr/1' })) }) };
+  await runNextActions(options);
+  const result = await runNextActions(options);
+  const actual = fs.readFileSync(result.outputFile, 'utf8');
+  assert.equal(actual.split('## 別アカウント/他PCへの依頼（台帳）').length - 1, 1);
+  assert.match(actual, /\[ledger-0\] 他PCへ 依頼 \/ 担当PC: cr568 \/ 停滞: 2日3時間 \/ https:\/\/example.test\/pr\/1/);
+  assert.match(actual, /ledger-1/);
+  assert.doesNotMatch(actual, /ledger-2|ledger-3/);
+});
+
+test('台帳取得失敗でも理由を1行出して推奨アクションを保存する', async () => {
+  const result = await runNextActions({ home: home(), now: NOW, execImpl: gh(), llm: good, log() {}, listLedger: async () => { throw new Error('API\ndown'); } });
+  assert.match(fs.readFileSync(result.outputFile, 'utf8'), /台帳取得失敗: API down/);
+  assert.equal(result.actions.length, 1);
+});

@@ -1,0 +1,10 @@
+{
+  "sessionId": "22222222-2222-4222-8222-222222222222",
+  "startedAt": "2026-09-01T00:00:00.000Z",
+  "promptCount": 1,
+  "purpose": "制作シートの同期が止まっているので確認してほしい",
+  "purposeTokens": [],
+  "lastNudgeAt": 0,
+  "nudgeCount": 0,
+  "nudgedAtCount": 0
+}

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // 安い provider の設定は spawn する子プロセスだけに注入する。process.env や Claude の設定ファイルは変更しない。
+import { OPENROUTER_ANTHROPIC_BASE, GATEWAY_MODELS, gatewayModel } from './provider-routing.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,37 +8,31 @@ import { spawn } from 'node:child_process';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 import { providerResetUntil, providerInCooldown } from './codex-cooldown.mjs';
-import { isUnspawnable, resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
+import {
+  isUnspawnable,
+  listStrippedClaudeChildEnvKeys,
+  prepareWorkerConfigDir,
+  resolveClaudeExecutableFromDisk,
+  sanitizeClaudeChildEnv,
+} from './claude-exe.mjs';
 
 const FIVE_HOURS = 5 * 60 * 60 * 1000;
 
-// Windows の npm グローバルは claude.cmd / claude.ps1 しか置かず、Node の spawn は
-// shell 無しで .cmd を実行できない(CVE-2024-27980 以降)。結果 ENOENT で「claude CLI を
-// 起動できません」になり、cheap-code が全く動かない(実測 2026-09-10)。
-// PATH 依存をやめ、実体の claude.exe を明示的に解決する。
-export function resolveClaudeBin(env = process.env, exists = fs.existsSync) {
-  if (env.CLAUDE_BIN && exists(env.CLAUDE_BIN)) return env.CLAUDE_BIN;
-  const appData = env.APPDATA || (env.USERPROFILE ? path.join(env.USERPROFILE, 'AppData', 'Roaming') : '');
-  const candidates = [
-    appData && path.join(appData, 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'),
-    env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Programs', 'claude', 'claude.exe')
-  ].filter(Boolean);
-  for (const candidate of candidates) {
-    if (exists(candidate)) return candidate;
-  }
-  return 'claude';
-}
+// claude.exe の解決は claude-exe.mjs に一本化する。以前はここに探索の重複実装
+// (resolveClaudeBin) があり、%APPDATA%\Claude\claude-code を見落として
+// 「claude.exe が見つかりません」で止まっていた(2026-10-17 実測)。
 const COOLDOWN_FILE = () => path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'provider-cooldown.json');
 
 const PROVIDERS = Object.freeze({
   deepseek: Object.freeze({
     provider: 'deepseek',
-    base: 'https://api.deepseek.com/anthropic',
-    envFile: 'deepseek.env',
-    keyName: 'DEEPSEEK_API_KEY',
-    // 別名 deepseek-chat ではなく実モデル名を既定にする(別名は将来どの世代に張り替わるか読めない)。
+    base: OPENROUTER_ANTHROPIC_BASE,
+    envFile: 'openrouter.env',
+    keyName: 'OPENROUTER_API_KEY',
+    // OpenRouter のモデル名を使い、既定の推論ありを維持する。
     // 高品質が要るときだけ --model deepseek-v4-pro。
-    defaultModel: 'deepseek-v4-flash',
+    defaultModel: GATEWAY_MODELS.deepseek,
+    billingProvider: 'openrouter',
     // Claude Code のモデルカタログに無い名前だと窓を 200k と仮定して早期に auto-compact する。
     // DeepSeek v4 系は実測 1M なので明示する(公式 pricing: context 1M / max output 384K)。
     maxContextTokens: 1000000,
@@ -60,12 +55,37 @@ export function resolveProvider(name = 'deepseek') {
   return config;
 }
 
-export function buildChildEnv(config, key, parentEnv = process.env) {
-  const env = { ...parentEnv, ANTHROPIC_BASE_URL: config.base, ANTHROPIC_AUTH_TOKEN: key };
+// 子 CLI の API 応答ヘッダ待ちの上限。既定の 600s だと API が無応答のまま 600s ハングし、
+// 900s の cap 内で再試行に入れず timeout になる(delegation-health fallback_chain_timeout)。
+// 短縮するとハング時に SDK 再試行へ早く回れる(識別実験: 5000ms 指定で 5s ごとに再送を確認)。
+export const DEFAULT_CHILD_API_TIMEOUT_MS = 240000;
+
+export function resolveChildApiTimeoutMs(parentEnv = process.env) {
+  const value = Number(parentEnv.CHEAP_CODE_API_TIMEOUT_MS);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : DEFAULT_CHILD_API_TIMEOUT_MS;
+}
+
+export function buildChildEnv(config, key, parentEnv = process.env, { configDir } = {}) {
+  // 先に親 env を浄化する。デスクトップ版 Claude から呼ばれると CLAUDECODE / CLAUDE_CODE_* /
+  // CLAUDE_AGENT_SDK_* / MCP_* / ANTHROPIC_* が子へ漏れ、DeepSeek の Anthropic 互換 API が
+  // `400 Invalid schema for function 'Artifact'` で落ちる(2026-10-17 実測)。
+  const env = sanitizeClaudeChildEnv(parentEnv);
+  // 浄化した後に provider の接続値を入れる(順序を逆にすると親の ANTHROPIC_* が残る)。
+  env.ANTHROPIC_BASE_URL = config.base;
+  env.ANTHROPIC_AUTH_TOKEN = key;
   // 親から継承した Anthropic の鍵は安いレーンの子に渡さない(認証が二重に立ち、
   // 子が「connectors を無効化した」と警告する。2026-09-10 実測)。
-  delete env.ANTHROPIC_API_KEY;
+  if (config.billingProvider === 'openrouter') {
+    env.ANTHROPIC_API_KEY = '';
+    for (const name of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL']) env[name] = config.defaultModel;
+  }
+  else delete env.ANTHROPIC_API_KEY;
   if (config.maxContextTokens) env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(config.maxContextTokens);
+  // 契約 RULES「他バックエンドの挙動を変えない」に従い、delegation-health が観測した
+  // backend=cheap-code:deepseek に限定する(glm は既定のまま。必要になったら別途実測して広げる)。
+  if (config.provider === 'deepseek') env.API_TIMEOUT_MS = String(resolveChildApiTimeoutMs(parentEnv));
+  // 委譲先は監督ではなく実行役なので、全社 hook を読まない専用の設定ディレクトリを渡す。
+  if (configDir) env.CLAUDE_CONFIG_DIR = configDir;
   return env;
 }
 
@@ -139,11 +159,14 @@ export function autoProvider({ home = process.env.ORGIAST_HOME || os.homedir(), 
 }
 
 function parseArgs(args) {
-  const options = { provider: 'deepseek', model: '', cwd: process.cwd(), promptFile: '', dryRun: false };
+  const options = { provider: 'deepseek', model: '', cwd: process.cwd(), promptFile: '', dryRun: false, help: false };
   const positional = [];
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === '--dry-run') { options.dryRun = true; continue; }
+    // --help は「使い方を見たい」という正常な要求。不明オプションとして弾くと exit 2 になり、
+    // 指示文として解釈させると有料セッションが起動する(2026-10-15 実測)。
+    if (arg === '-h' || arg === '--help') { options.help = true; continue; }
     if (['--provider', '--model', '--cwd', '--prompt-file'].includes(arg)) {
       const value = args[index + 1];
       if (!value || value.startsWith('--')) throw new Error(`${arg} に値が必要です`);
@@ -215,7 +238,12 @@ async function main(args) {
     console.error(`${error.message}\n${usage}`);
     return 2;
   }
-  if (!instruction) { console.error(usage); return 2; }
+  if (!instruction) {
+    // --help 単独なら正常終了(0)として使い方を stdout に出す。指示文が併記されているときは
+    // help を無視して通常実行する(「--help を実装して」等の指示を乗っ取らないため)。
+    (parsed.help ? console.log : console.error)(usage);
+    return parsed.help ? 0 : 2;
+  }
 
   const cwd = path.resolve(parsed.cwd);
   const home = process.env.ORGIAST_HOME || os.homedir();
@@ -230,13 +258,26 @@ async function main(args) {
     console.error(`${error.message}\n${usage}`);
     return 2;
   }
-  const model = parsed.model || config.defaultModel;
-  const key = readEnvValue(path.join(home, '.claude', config.envFile), config.keyName);
+  const model = gatewayModel(providerName, parsed.model || config.defaultModel);
+  const billingProvider = config.billingProvider || config.provider;
+  const key = process.env[config.keyName] || readEnvValue(path.join(home, '.claude', config.envFile), config.keyName);
   const prompt = `[headless:cheap-code]\n${buildPrompt(instruction, cwd, home)}`;
+  // 実行役の子に渡す専用設定ディレクトリ。settings.json は毎回作り直す(古い deny を残さない)。
+  const configDir = prepareWorkerConfigDir({ home });
   // プロンプトは stdin で渡す。CLI 引数だと Windows のコマンドライン長上限で spawn ENAMETOOLONG になる (2026-09-21 実測)。
   const childArgs = ['-p', '--model', model];
   if (parsed.dryRun) {
-    console.log(JSON.stringify({ provider: config.provider, base: config.base, model, keyPresent: Boolean(key), argv: ['claude', ...childArgs], promptVia: 'stdin', promptChars: prompt.length }, null, 2));
+    console.log(JSON.stringify({
+      provider: config.provider,
+      base: config.base,
+      model,
+      keyPresent: Boolean(key),
+      argv: ['claude', ...childArgs],
+      promptVia: 'stdin',
+      promptChars: prompt.length,
+      configDir,
+      strippedEnv: listStrippedClaudeChildEnvKeys(process.env),
+    }, null, 2));
     return 0;
   }
   if (!key) {
@@ -244,9 +285,9 @@ async function main(args) {
     return 3;
   }
   const cooldownFile = path.join(home, '.claude', 'provider-cooldown.json');
-  if (providerInCooldown(config.provider, Date.now(), cooldownFile)) {
-    try { appendUsageLedger({ home, provider: config.provider, model, promptChars: prompt.length, outputChars: 0, secs: 0, ok: false, status: 'cooldown' }); } catch {}
-    const until = readProviderCooldown(path.join(home, '.claude'))[config.provider]?.until;
+  if (providerInCooldown(billingProvider, Date.now(), cooldownFile)) {
+    try { appendUsageLedger({ home, provider: billingProvider, model, promptChars: prompt.length, outputChars: 0, secs: 0, ok: false, status: 'cooldown' }); } catch {}
+    const until = readProviderCooldown(path.join(home, '.claude'))[billingProvider]?.until;
     const untilText = Number.isFinite(Number(until)) ? `(${new Date(Number(until)).toISOString()}まで)` : '';
     console.error(`[cheap-code] ${config.provider} はクールダウン中です${untilText}。起動を省略しました。`);
     return 3;
@@ -264,6 +305,7 @@ async function main(args) {
     return 4;
   }
 
+  console.error(`[${billingProvider}:${model}]`);
   const started = Date.now();
   let outputChars = 0;
   let stdoutText = '';
@@ -272,7 +314,7 @@ async function main(args) {
     const child = spawn(executable, childArgs, { windowsHide: true,
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...buildChildEnv(config, key), ORGIAST_HEADLESS_JOB: `cheap-code:${config.provider}` },
+      env: { ...buildChildEnv({ ...config, defaultModel: model }, key, process.env, { configDir }), ORGIAST_HEADLESS_JOB: `cheap-code:${config.provider}` },
     });
     child.stdin.on('error', () => {});   // 子が先に死んだときの EPIPE で親を落とさない
     child.stdin.end(prompt);
@@ -289,8 +331,8 @@ async function main(args) {
   if (failureCode) {
     const until = failureCode === 402 ? Date.now() + 24 * 60 * 60 * 1000 : cooldownUntilFromText(`${stdoutText}\n${stderrText}`, Date.now());
     try {
-      appendUsageLedger({ home, provider: config.provider, model, promptChars: prompt.length, outputChars, secs, ok: false, status: failureCode });
-      writeProviderCooldown({ claudeDir: path.join(home, '.claude'), provider: config.provider, until, reason: failureCode === 402 ? 'http_402' : 'usage_limit' });
+      appendUsageLedger({ home, provider: billingProvider, model, promptChars: prompt.length, outputChars, secs, ok: false, status: failureCode });
+      writeProviderCooldown({ claudeDir: path.join(home, '.claude'), provider: billingProvider, until, reason: failureCode === 402 ? 'http_402' : 'usage_limit' });
       console.error(`[cheap-code] ${config.provider} は利用不可(${failureCode})。provider-cooldown.json に ${new Date(until).toISOString()} まで記録しました。`);
     } catch (error) {
       console.error(`[cheap-code] cooldown 記録に失敗: ${String(error?.message ?? error)}`);
@@ -298,7 +340,7 @@ async function main(args) {
     return 3;
   }
   try {
-    appendUsageLedger({ home, provider: config.provider, model, promptChars: prompt.length, outputChars, secs, ok: status === 0, status: status === 0 ? null : status });
+    appendUsageLedger({ home, provider: billingProvider, model, promptChars: prompt.length, outputChars, secs, ok: status === 0, status: status === 0 ? null : status });
   } catch {}
   return status;
 }

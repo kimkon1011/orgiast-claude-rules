@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { machineIdentity } from './machine-identity.mjs';
-import { parseLedgerArgs, runTaskLedger } from './task-ledger.mjs';
+import { ledgerRows, parseLedgerArgs, runTaskLedger } from './task-ledger.mjs';
 
 async function fixture() {
   const homeDir = await mkdtemp(path.join(os.tmpdir(), 'ledger-test-'));
@@ -75,4 +75,68 @@ test('empty token fails explicitly without fetching', async () => {
   await writeFile(path.join(f.homeDir, '.claude', 'task-sheet.env'), 'TASK_SHEET_WEBAPP_URL=https://example.test/exec\nTASK_SHEET_TOKEN=\n');
   await assert.rejects(runTaskLedger(parseLedgerArgs(['list']), f), /TASK_SHEET_TOKEN is empty/);
   assert.equal(f.calls.length, 0);
+});
+
+test('list は一時的な 404 を5秒後に1回だけ再試行する', async () => {
+  const f = await fixture();
+  const sleeps = [];
+  let count = 0;
+  f.fetchImpl = async (...call) => {
+    f.calls.push(call);
+    count += 1;
+    return { ok: count === 1 ? false : true, status: count === 1 ? 404 : 200, json: async () => ({ ok: true, rows: [] }) };
+  };
+  await runTaskLedger(parseLedgerArgs(['list']), { ...f, sleep: async (ms) => { sleeps.push(ms); } });
+  assert.equal(f.calls.length, 2);
+  assert.deepEqual(sleeps, [5000]);
+});
+
+test('404 が続くときは2回で諦め、一時的でない 403 は再試行しない', async () => {
+  const failTwice = await fixture();
+  failTwice.fetchImpl = async (...call) => {
+    failTwice.calls.push(call);
+    return { ok: false, status: 404, json: async () => ({}) };
+  };
+  await assert.rejects(
+    runTaskLedger(parseLedgerArgs(['list']), { ...failTwice, sleep: async () => {} }),
+    /HTTP 404/,
+  );
+  assert.equal(failTwice.calls.length, 2);
+  const forbidden = await fixture();
+  forbidden.fetchImpl = async (...call) => {
+    forbidden.calls.push(call);
+    return { ok: false, status: 403, json: async () => ({}) };
+  };
+  await assert.rejects(
+    runTaskLedger(parseLedgerArgs(['list']), { ...forbidden, sleep: async () => { throw new Error('403 must not be retried'); } }),
+    /HTTP 403/,
+  );
+  assert.equal(forbidden.calls.length, 1);
+});
+
+test('upsert の一時的な 500 も1回だけ再試行する（taskId 冪等のため再送安全）', async () => {
+  const f = await fixture();
+  let count = 0;
+  f.fetchImpl = async (...call) => {
+    f.calls.push(call);
+    count += 1;
+    return { ok: count === 1 ? false : true, status: count === 1 ? 500 : 200, json: async () => ({ ok: true, value: 'result' }) };
+  };
+  await runTaskLedger(parseLedgerArgs(['upsert', '--taskId', 'T1', '--件名', '件名']), { ...f, sleep: async () => {} });
+  assert.equal(f.calls.length, 2);
+  assert.equal(f.calls.every(([, init]) => init.method === 'POST'), true);
+});
+
+test('ledgerRows は実形 {ok, rows, count} を読む', () => {
+  const rows = [{ taskId: 'T1' }];
+  assert.deepEqual(ledgerRows({ ok: true, rows, count: 1 }), rows);
+});
+
+test('ledgerRows は items/tasks/配列も受け、未知の形は空配列にする', () => {
+  assert.deepEqual(ledgerRows({ items: [1] }), [1]);
+  assert.deepEqual(ledgerRows({ tasks: [2] }), [2]);
+  assert.deepEqual(ledgerRows([3]), [3]);
+  assert.deepEqual(ledgerRows({ ok: true, count: 0 }), []);
+  assert.deepEqual(ledgerRows(null), []);
+  assert.deepEqual(ledgerRows(undefined), []);
 });

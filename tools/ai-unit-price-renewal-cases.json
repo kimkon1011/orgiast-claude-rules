@@ -1,0 +1,6 @@
+{
+  "dataStatus": "not-connected",
+  "source": "",
+  "sourceNote": "案件台帳の出所（スプレッドシート名 / シート名 / 抽出日）をここに書く。空のままなら未接続として扱う。",
+  "cases": []
+}

@@ -20,10 +20,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: full Node suite (contracts, acquisition, readonly corpus and rollout included)
+        run: node --test
       - name: selftest-guards (Windows)
         run: node tools/selftest-guards.mjs
-      - name: reported symptom gates and distribution read-back
-        run: node --test "tools/reported-symptom*.test.mjs" tools/state-claim-evidence.test.mjs tools/external-state-claim-gate.test.mjs tools/no-undistributed-imports.test.mjs
 
       - name: keyserve enrollment installer (mock network, real ACL)
         shell: powershell
@@ -47,7 +47,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: full Node suite (contracts, acquisition, readonly corpus and rollout included)
+        run: node --test
       - name: selftest-guards (Linux/macOS 相当)
         run: node tools/selftest-guards.mjs
-      - name: reported symptom gates and distribution read-back
-        run: node --test "tools/reported-symptom*.test.mjs" tools/state-claim-evidence.test.mjs tools/external-state-claim-gate.test.mjs tools/no-undistributed-imports.test.mjs

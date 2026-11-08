@@ -19,6 +19,8 @@ GitHub にログイン済みの Claude Code で:
 
 以後の更新は `/plugin` から update するだけで全スキルが同期されます。
 
+- [経費漏れチェック](tools/expense-leak-check.README.md): freee登録待ち明細とメール証跡を週次照合し、専用SheetタブとkimのDMへ報告。
+
 ## 含まれるもの
 
 | 種類 | 名前 | 用途 |
@@ -32,11 +34,17 @@ GitHub にログイン済みの Claude Code で:
 | rules | `rules/gas.md` | GAS 開発の絶対ルール（`~/.claude/rules/` にコピーすると .gs 編集時に自動適用） |
 | doc | `ONBOARDING.md` | 全社共通の絶対ルール全文（詳細版） |
 
+## 設計文書
+
+| 文書 | 説明 |
+|---|---|---|
+| [c4-operationalization-design.md](c4-operationalization-design.md) | C4（fallback_chain_timeout 監視）実運用化の設計判断。巡回型スイープ統合・閾値・通知先を確定 |
+
 ## CLAUDE.md に足すもの（手動コピー、plugin では配布されない）
 
 各自の `~/.claude/CLAUDE.md` に最低限:
 
-- Google Workspace URL は `/a/orgiast.jp/` を必ず挟む（ONBOARDING 参照）
+- Google Workspace URL は authuser=開く人のメール を付け、本文に開くアカウントを書く（ONBOARDING 参照）
 - プロジェクト CLAUDE.md 冒頭に ONBOARDING.md への参照を1行入れる
 
 ## 既存PCへの同期と配置確認

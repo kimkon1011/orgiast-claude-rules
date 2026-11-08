@@ -1,0 +1,79 @@
+lane-doctor / course-correction 実装報告 (2026-10-08)
+
+作業場所: /mnt/c/Users/uers/orgiast-main/.lane-doctor-src
+ブランチ: feat/lane-doctor-course-correction
+元の worktree の .git は書込不可の外部ディレクトリを参照していたため、workdir 配下のクローンで実装。
+
+変更ファイル一覧:
+  tools/course-correction-add.mjs
+  tools/course-correction-add.test.mjs
+  tools/course-correction-gate.mjs
+  tools/course-correction-gate.test.mjs
+  tools/course-corrections.json
+  tools/course-corrections.md
+  tools/fable-session-guard.mjs
+  tools/fable-session-guard.test.mjs
+  tools/handoff-audit-gate.mjs
+  tools/handoff-audit-gate.test.mjs
+  tools/handoff-audit-rules.md
+  tools/lane-abandonment-gate.mjs
+  tools/lane-abandonment-gate.test.mjs
+  tools/lane-doctor.mjs
+  tools/lane-doctor.test.mjs
+  tools/llm-ask.mjs
+  tools/llm-fallback.mjs
+  tools/llm-fallback.test.mjs
+  tools/notify-kim.mjs
+  tools/pretooluse-lane-guard.mjs
+  tools/pretooluse-lane-guard.test.mjs
+  tools/register-hooks.mjs
+  tools/register-hooks.test.mjs
+  tools/sessionstart-lane-health.mjs
+  tools/sessionstart-lane-health.test.mjs
+  tools/setup-manifest.json
+  tools/stop-gate-runner.mjs
+  evidence/lane-doctor/report.txt
+
+検証:
+node --test tools/*.test.mjs
+ℹ JSON raw 20981 chars -> digest 2366 chars
+ℹ tests 3748
+ℹ suites 1
+ℹ pass 3736
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 12
+ℹ todo 0
+ℹ duration_ms 57411.919321
+node tools/selftest-guards.mjs: ALL PASS
+変更した .mjs の node --check と git diff --check: 成功
+lane-doctor --quick: import を含め実測308ms。ネットワーク呼出しなし。
+初回テストで検出した rule 13 の期待値・通知重複は修正済み。最終実行の失敗は0件。
+
+最終probe:
+node tools/lane-doctor.mjs --probe --home /mnt/c/Users/uers
+生存: deepseek ✅ glm ✅ groq ✅ openrouter ✅ ／ 停止: codex ❌(execution_unavailable:read_only) gemini ❌(dead:payment_required) gemini-cli ❌(dead:payment_required) ／ 修復: なし ／ 保存エラー: routing-overrides.json: EROFS, lane-doctor-notified.json: EROFS, lane-health.json: EROFS
+{"ts":"2026-10-08T06:19:11.729Z","probedAt":"2026-10-08T06:19:11.729Z","lanes":{"codex":{"alive":false,"reason":"execution_unavailable:read_only","probedAt":"2026-10-08T06:19:11.729Z","authOk":true},"gemini":{"alive":false,"reason":"dead:payment_required","probedAt":"2026-10-08T06:19:11.729Z"},"deepseek":{"alive":true,"reason":"probe_ok","probedAt":"2026-10-08T06:19:11.729Z"},"glm":{"alive":true,"reason":"probe_ok","probedAt":"2026-10-08T06:19:11.729Z"},"groq":{"alive":true,"reason":"probe_ok","probedAt":"2026-10-08T06:19:11.729Z"},"openrouter":{"alive":true,"reason":"probe_ok","probedAt":"2026-10-08T06:19:11.729Z"},"gemini-cli":{"alive":false,"reason":"dead:payment_required","probedAt":"2026-10-08T06:19:11.729Z"}},"implementOrder":["deepseek","glm"],"askOrder":["deepseek","groq","openrouter"],"repairs":[],"deadNeedsUser":[{"provider":"gemini","reason":"dead:payment_required","fix":"請求設定でオートチャージ ON。手動チャージは禁止ルール。"}],"errors":["routing-overrides.json: EROFS","lane-doctor-notified.json: EROFS","lane-health.json: EROFS"],"notifications":[{"provider":"gemini","delivered":"none","reason":"dedupe_write_failed"}]}
+
+制約と未完了:
+実環境の /mnt/c/Users/uers/.claude はsandboxの書込許可範囲外。
+routing-overrides.json、lane-health.json、通知重複防止ファイルの書込が EROFS。
+したがって実環境のcodex/groq demote解除・Gemini停止状態の保存は未完了。DMは未送信。
+Codexは認証確認とdry-runに成功。実タスクはapp-server初期化時の読取専用エラーで失敗。
+Codexアカウント障害とは判定していない。DeepSeek/GLM/Groq/OpenRouterは各providerへの直接probeで成功。
+修復機能と24時間dedupeは隔離homeを用いたテストで検証済み。
+通知文はGeminiのkim@orgiast.jp、AI Studio URL、所有アカウントの確認有無、オートチャージONの手順を含む。
+
+hook定義元:
+tools/register-hooks.mjs: SessionStart に sessionstart-lane-health.mjs (同期command、timeout:5秒)を追加。
+tools/setup-manifest.json: settings:lane-health-SessionStart を required のjson-validとして追加。
+repairは register-hooks.mjs --hooks-only。setup --converge により登録対象となる。
+参照元は C:/Users/uers/Downloads/orgiast-claude-rules/tools/register-hooks.mjs でも確認。
+settings.json直接編集・実環境setup --convergeは未実行。隔離homeへの登録・再実行で1本に収束することをテスト済み。
+
+実装上の補足:
+当ターン抽出はhandoff-auditの共通turnEntriesを使用。旧ターン・引用本文・行番号の誤検知をテスト。
+course-correctionのdetectText/detectEvidenceはいずれかの一致で適用し、レーン固有の免責も尊重。
+llm-ask --no-fallback ではDeepSeekからOpenRouterへの暗黙のgateway迂回も無効化し、probeの帰属を保証。
+実環境ファイルの修復を権限外の手段で迂回していない。
+PRは作成しない。

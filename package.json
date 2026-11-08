@@ -1,0 +1,9 @@
+{
+  "name": "orgiast-claude-rules",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "^1.49.0",
+    "postgres": "^3.4.9"
+  }
+}

@@ -1,0 +1,30 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { parseMessages, candidates, scan, readRows, append, edit, send } from './discord-dm-drafts.mjs';
+import { context } from './hooks/discord-drafts-context.mjs';
+const raw = '# Discord: A\n\n- Alice が 金功勇 に返信中 , 確認してください\n詳細です？ , 2026/10/17 9:01\n- 金功勇 , はい？ , 2026/10/17 9:02\n- Alice , ありがとう , 2026/10/17 9:03';
+const messages = parseMessages(raw, 'A');
+function fixture(t) { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'draft-test-')); t.after(() => fs.rmSync(d, { recursive:true, force:true })); return path.join(d,'ledger.jsonl'); }
+test('UIA sender, reply attribution, multiline body, JST and questions', () => { assert.equal(messages.length,3); assert.equal(messages[0].from,'Alice'); assert.equal(messages[0].ts,'2026-10-17T09:01:00+09:00'); assert.deepEqual(candidates(messages,[]), [messages[0]]); });
+test('deduplication and per-chat high water mark, same-minute new messages retained', () => { assert.equal(candidates(messages,[messages[0]]).length,0); assert.equal(candidates(messages,[{status:'checkpoint',chat:'A',ts:messages[2].ts}]).length,0); assert.equal(candidates(messages,[{status:'checkpoint',chat:'A',ts:messages[0].ts}]).length,1); });
+test('idle skip and dry-run never switch, generate or save', async t => { const file=fixture(t); const ui={state:()=>({idleMs:100})}; assert.match(await scan({ui,file}),/SKIP/); ui.state=()=>({idleMs:400000,original:'home',unread:['A']}); assert.match(await scan({ui,file,dryRun:true}),/DRY-RUN/); assert.equal(fs.existsSync(file),false); });
+test('scan restores original before generation and does not duplicate', async t => { const file=fixture(t), calls=[]; const ui={state:()=>({idleMs:400000,original:'home',unread:['A']}),idle:()=>400000,read:()=>{calls.push('read');return messages;},restore:c=>calls.push(c)}; const generate=()=>{assert.deepEqual(calls.slice(-2),['read','home']);return '【確認について（10/17・確認）】要kim判断';}; await scan({ui,generate,file}); await scan({ui,generate,file}); assert.equal(readRows(file).filter(r=>r.status==='pending').length,1); });
+test('restore executes after read failure; no checkpoint on generation failure', async t => {const file=fixture(t);let restored=false;const ui={state:()=>({idleMs:400000,original:'home',unread:['A']}),idle:()=>400000,read:()=>{throw Error('UI');},restore:()=>{restored=true;}};await assert.rejects(scan({ui,file}),/UI/);assert.ok(restored);ui.read=()=>messages;await assert.rejects(scan({ui,file,generate:()=>{throw Error('LLM');}}),/LLM/);assert.deepEqual(readRows(file),[]);});
+test('pending edit, verified send, and sent cannot resend/edit', async t => { const file=fixture(t); append({...messages[0],draft:'old',status:'pending'},file);edit(messages[0].id,'new reply',file);let posted=false;const ui={read:()=>posted?[{id:'reply',from:'金功勇',question:'new reply'}]:[],post:()=>{posted=true;}};await send(messages[0].id,ui,file);assert.equal(readRows(file)[0].status,'sent');await assert.rejects(send(messages[0].id,ui,file),/pending/);assert.throws(()=>edit(messages[0].id,'x',file),/pending/); });
+test('unverified send remains uncertain and cannot automatically retry', async t => {const file=fixture(t);append({...messages[0],draft:'reply',status:'pending'},file);const ui={read:()=>[],post:()=>{}};await assert.rejects(send(messages[0].id,ui,file),/確認/);assert.equal(readRows(file)[0].status,'uncertain');await assert.rejects(send(messages[0].id,ui,file),/pending/);});
+test('old identical own message is not proof of new send',async t=>{const file=fixture(t);append({...messages[0],draft:'reply',status:'pending'},file);await assert.rejects(send(messages[0].id,{read:()=>[{id:'old',from:'kim',question:'reply'}],post:()=>{}},file),/確認/);});
+test('context includes pending drafts and treats them as quoted data',()=>{assert.equal(context([]),'');assert.match(context([{id:'1',chat:'A',from:'Alice',draft:'【確認】要kim判断',status:'pending'}]),/返信案 1件/);});
+test('hook registration is kim-only and idempotent', async t => {
+  const { execFileSync } = await import('node:child_process');
+  const file = fixture(t), home = path.dirname(file), repo = path.resolve('.');
+  fs.mkdirSync(path.join(home,'.claude'));
+  const env={...process.env, ORGIAST_HOME:home, ORGIAST_REPO:repo};
+  const run=()=>execFileSync(process.execPath,['tools/register-hooks.mjs','--hooks-only'],{env,stdio:'pipe'});
+  const hooks=()=>JSON.parse(fs.readFileSync(path.join(home,'.claude/settings.json'))).hooks.UserPromptSubmit.flatMap(g=>g.hooks).filter(h=>h.command.includes('discord-drafts-context'));
+  run();assert.equal(hooks().length,0);
+  fs.writeFileSync(path.join(home,'.claude/cost-reporter.env'),'REPORTER_LABEL=kim-PC\n');
+  run();run();assert.equal(hooks().length,1);assert.equal(hooks()[0].timeout,5);
+});

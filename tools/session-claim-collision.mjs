@@ -28,6 +28,8 @@ function purposeFromTranscript(file) {
   let raw;
   try { raw = fs.readFileSync(file, 'utf8'); } catch { return ''; }
   for (const line of raw.split(/\r?\n/)) {
+    // 2026-09-30: 全行 JSON.parse は活動中 transcript 合計100MB級で6秒超かかるため、マーカー行だけ解析する。
+    if (!line.includes(PURPOSE_MARKER)) continue;
     let record;
     try { record = JSON.parse(line); } catch { continue; }
     if (record?.type !== 'assistant') continue;
@@ -55,16 +57,23 @@ function persistClaimsQuietly() {
   try { syncClaims(path.join(os.homedir(), '.claude')); } catch { /* fail-open */ }
 }
 
+function latchFile(home, sessionId) {
+  return path.join(home, '.claude', 'session-claim-latch', sessionId.replace(/[^\w-]/g, '_'));
+}
+
 async function main() {
-  persistClaimsQuietly();
   try {
     if (process.argv.includes('--help')) return;
     const raw = await readStdinWithTimeout();
     let input = {};
     try { if (raw) input = JSON.parse(raw); } catch { return; }
     const sessionId = String(argValue('--session-id') || process.env.CLAUDE_SESSION_ID || input.session_id || '');
-    if (!sessionId) return;
     const home = process.env.ORGIAST_HOME || os.homedir();
+    // PreToolUse はツール呼び出しのたびに走るため、目的確認が済んだセッションでは即終了する（latch）。
+    const preToolUse = input.hook_event_name === 'PreToolUse';
+    if (preToolUse && sessionId && fs.existsSync(latchFile(home, sessionId))) return;
+    persistClaimsQuietly();
+    if (!sessionId) return;
     const projectsDir = process.env.CLAUDE_PROJECTS_DIR || path.join(home, '.claude', 'projects');
     const now = Date.now();
     let slugs;
@@ -88,6 +97,9 @@ async function main() {
 
     const own = sessions.filter((entry) => entry.sessionId === sessionId).sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
     if (!own) return;
+    if (preToolUse) {
+      try { fs.mkdirSync(path.dirname(latchFile(home, sessionId)), { recursive: true }); fs.writeFileSync(latchFile(home, sessionId), own.purpose); } catch { /* fail-open */ }
+    }
     const collisions = [];
     for (const candidate of sessions) {
       if (candidate.sessionId === sessionId) continue;

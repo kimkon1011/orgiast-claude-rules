@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { launchAudit } from './unattended-job-audit.mjs';
 import { codexAuthStatus } from './codex-auth-status.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { machineIdentity } from './machine-identity.mjs';
+import { machineIdentity, getClaudeAccountEmail } from './machine-identity.mjs';
 import { parseHandoff } from './auto-session.mjs';
 import { isEntry } from './is-entry.mjs';
-import { findLatestMemoryDir } from './memory-share.mjs';
+import { resolveClaudeExecutableFromDisk, sanitizeClaudeSupervisorEnv } from './claude-exe.mjs';
 
 const ALLOWED_KINDS = new Set(['status', 'prompt', 'enable-auto-session', 'run']);
 const RUN_TASKS = Object.freeze({
@@ -16,7 +17,7 @@ const RUN_TASKS = Object.freeze({
   'cost-self-heal': [['node', ['tools/tool-adoption-check.mjs', '--fix']], ['node', ['tools/hook-selfcheck.mjs']], ['node', ['tools/onboarding-sync.mjs']]]
 });
 const DEFAULT_URL = 'https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/fleet-directives.json';
-const SECRET_PATTERN = /(https?:\/\/[^\s]*?(?:webhook|token|key)[^\s]*|(?:api[_-]?key|token|secret|webhook)[\s=:]+[^\s]+)/gi;
+const SECRET_PATTERN = /(https?:\/\/[^\s]*?(?:webhook|token|key)[^\s]*|[A-Za-z0-9_]*(?:api[_-]?key|token|secret|webhook)\s*[=:]\s*[^\s]+|(?<![A-Za-z0-9_])(?:api[_-]?key|token|secret|webhook)\s+[^\s]+)/gi;
 const STATUS_TEXT_LIMIT = 1800;
 const NON_FAILURE_TASK_RESULTS = new Set([0, 267009, 267011]);
 
@@ -33,6 +34,12 @@ export function readEnv(file, io = fs) {
 
 export function redactSecrets(value) {
   return String(value ?? '').replace(SECRET_PATTERN, '[REDACTED]').replace(/https:\/\/discord(?:app)?\.com\/api\/webhooks\/\S+/gi, '[REDACTED]');
+}
+
+// Keep both the opening answer and the conclusion when stdout exceeds the budget.
+export function truncateAnswer(value) {
+  const text = String(value ?? '');
+  return text.length <= 8000 ? text : `${text.slice(0, 6000)}…(中略 ${text.length - 7500} 字)…${text.slice(-1500)}`;
 }
 
 export function targetMatches(targets, label, hostname) {
@@ -90,26 +97,30 @@ function scheduledTaskStatus(run = runSync) {
   }
 }
 
-function sharedMemoryStatus(home) {
+export function sharedMemoryStatus(home) {
+  const dir = process.env.ORGIAST_SHARED_MEMORY_DIR || path.join(home, '.claude', 'shared-memory');
+  const result = { found: false, count: 0, generatedAt: null, kimOperated: null, kimNote: null, referenced: false };
   try {
-    const memoryDir = findLatestMemoryDir(home, () => {});
-    if (!memoryDir) return { found: false, count: 0, indexed: false };
-    let count = 0;
-    try {
-      count = fs.readdirSync(path.join(memoryDir, 'shared'), { withFileTypes: true })
-        .filter((entry) => entry.isFile() && entry.name.endsWith('.md')).length;
-    } catch {}
-    let indexed = false;
-    try { indexed = /index\/shared\.md/.test(fs.readFileSync(path.join(memoryDir, 'MEMORY.md'), 'utf8')); } catch {}
-    return { found: true, count, indexed };
-  } catch {
-    return { found: false, count: 0, indexed: false };
-  }
+    const state = JSON.parse(fs.readFileSync(path.join(dir, '.state.json'), 'utf8').replace(/^\uFEFF/, ''));
+    result.found = true;
+    result.count = Object.keys(state?.files ?? {}).length;
+    result.generatedAt = state?.generatedAt ?? null;
+    result.kimOperated = typeof state?.kimOperated === 'boolean' ? state.kimOperated : null;
+  } catch {}
+  try {
+    const note = fs.readFileSync(path.join(dir, 'MEMORY.md'), 'utf8').slice(0, 1200);
+    result.kimNote = note.includes('kim 本人が操作') ? true : note.includes('このPCの user は別人') ? false : null;
+  } catch {}
+  try {
+    result.referenced = fs.readFileSync(path.join(home, '.claude', 'CLAUDE.md'), 'utf8').includes('@~/.claude/shared-memory/MEMORY.md');
+  } catch {}
+  return result;
 }
 
 function formatMemoryLine(sharedMemory) {
-  if (!sharedMemory.found) return 'memory=なし';
-  return `memory=共有${sharedMemory.count}件 / MEMORY.md参照=${sharedMemory.indexed ? 'yes' : 'no'}`;
+  if (!sharedMemory.found) return 'memory=未受信（~/.claude/shared-memory/.state.json なし）';
+  const kimNote = sharedMemory.kimNote === null ? '不明' : sharedMemory.kimNote ? 'yes' : 'no';
+  return `memory=共有${sharedMemory.count}件 / 世代=${sharedMemory.generatedAt} / user=kim注記=${kimNote} / CLAUDE.md参照=${sharedMemory.referenced ? 'yes' : 'no'}`;
 }
 
 function fitStatusLines({ header, hostLine, codexLine, repoLine, memoryLine, jobStatus, syncLine, todoLine }) {
@@ -138,8 +149,8 @@ function fitStatusLines({ header, hostLine, codexLine, repoLine, memoryLine, job
   return [header, hostLine, codexLine, repoLine, memoryLine, jobLine, syncLine, todoLine];
 }
 
-export function collectStatus({ home, repo, label, hostname, run = runSync, platform = process.platform }) {
-  const account = readJson(path.join(home, '.claude.json'))?.oauthAccount?.emailAddress || '未設定';
+export function collectStatus({ home, repo, label, hostname, run = runSync, platform = process.platform, auditLaunch = launchAudit }) {
+  const account = getClaudeAccountEmail(home) || '未設定';
   const codex = codexAuthStatus(home);
   const git = repoInfo(repo, run);
   let syncLast = 'なし';
@@ -156,47 +167,66 @@ export function collectStatus({ home, repo, label, hostname, run = runSync, plat
   } catch {}
   const accepts = loadOptin(path.join(home, '.claude', 'fleet-agent-optin.json'));
   const jobStatus = platform === 'win32' ? scheduledTaskStatus(run) : { tasks: [], failures: [] };
+  auditLaunch({ home, platform, intervalHours: 24 });
   const failures = jobStatus.failures ?? [];
   const sharedMemory = sharedMemoryStatus(home);
+  let knowledge = { present: false, bytes: 0 };
+  try { const stat=fs.statSync(path.join(home,'.claude','knowledge','production-sales','00_INDEX.md'));knowledge={present:stat.isFile()&&stat.size>0,bytes:stat.size}; } catch {}
   const lines = fitStatusLines({
     header: `📡 **[${label}]** status`,
     hostLine: `hostname=${hostname} / OS=${platform} ${os.release()} / account=${account}`,
     codexLine: !codex.login ? 'codex=未ログイン' : codex.email
       ? `codex=${codex.email} / plan=${codex.plan ?? '不明'}` : 'codex=ログイン済(詳細不明)',
     repoLine: `repo=${git.branch}, origin/mainより${git.behind}コミット遅れ`,
-    memoryLine: formatMemoryLine(sharedMemory),
+    memoryLine: `${formatMemoryLine(sharedMemory)} / knowledge=${knowledge.present ? `${knowledge.bytes}B` : 'なし'}`,
     jobStatus,
     syncLine: `onboarding-sync=${syncLast}`,
-    todoLine: `残TODO=${todoCount} / mail 未読=${mailUnread} / prompt opt-in=${accepts.includes('prompt') ? 'yes' : 'no'}`,
+    todoLine: `残TODO=${todoCount} / mail 未読=${mailUnread} / prompt opt-in=${accepts.includes('prompt') ? 'yes' : 'no'} / codex opt-in=${accepts.includes('codex') ? 'yes' : 'no'}`,
   });
   const text = lines.join('\n');
-  return { text: redactSecrets(text), data: { label, hostname, platform, account, codex, git, syncLast, failures, todoCount, promptOptin: accepts.includes('prompt'), sharedMemory, checkedAt: new Date().toISOString() } };
+  return { text: redactSecrets(text), data: { label, hostname, platform, account, codex, git, syncLast, failures, todoCount, promptOptin: accepts.includes('prompt'), codexOptin: accepts.includes('codex'), sharedMemory, knowledge, checkedAt: new Date().toISOString() } };
 }
 
-export function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, spawnImpl = spawn, readOnly = false }) {
+export async function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, spawnImpl = spawn, readOnly = false, onStart, resumeSessionId, resumeMailId, drivenByHub = false, home, setTimer = setTimeout, clearTimer = clearTimeout }) {
+  // Fleet mail supplies a durable mail-seen callback; directives have no mail id.
+  if (onStart) await onStart();
   return new Promise((resolve) => {
     const started = Date.now();
     let stdout = '';
     let stderr = '';
     let settled = false;
-    const args = ['-p', String(body ?? '')];
+    const args = ['-p', ...(resumeSessionId ? ['--resume', resumeSessionId] : [])];
     // Fleet mail is answer-only; existing directives retain their original behavior.
     if (readOnly) args.push('--tools', 'Read,Glob,Grep', '--allowedTools', 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--settings', '{"disableAllHooks":true}', '--model', 'sonnet');
+    args.push('--', String(body ?? ''));
     const child = spawnImpl(claudeExe, args, {
-      cwd, env: { ...process.env, CLAUDE_HEADLESS: '1', CI: '1' }, stdio: ['pipe', 'pipe', 'pipe'], shell: false, windowsHide: true,
+      cwd, env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', CI: '1', ...(home ? { ORGIAST_HOME: home } : {}), FLEET_DRIVEN_BY_HUB: drivenByHub ? '1' : '0', FLEET_RESUME_MAIL_ID: resumeMailId || '' }, stdio: ['pipe', 'pipe', 'pipe'], shell: false, windowsHide: true,
     });
     child.stdin.end();
-    child.stdout.on('data', (chunk) => { stdout += chunk; if (stdout.length > 100_000) stdout = stdout.slice(-100_000); });
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
     child.stderr.on('data', (chunk) => { stderr += chunk; if (stderr.length > 100_000) stderr = stderr.slice(-100_000); });
-    const finish = (result) => { if (settled) return; settled = true; clearTimeout(timer); resolve({ ...result, durationSeconds: Math.round((Date.now() - started) / 100) / 10, outputTail: `${stdout}${stderr}`.slice(-10_000) }); };
+    let timer;
+    const finish = (result) => { if (settled) return; settled = true; clearTimer(timer); resolve({ ...result, durationSeconds: Math.round((Date.now() - started) / 100) / 10, stdoutTail: truncateAnswer(redactSecrets(stdout)), stderrTail: redactSecrets(stderr).slice(-4000), outputTail: `${stdout}${stderr}`.slice(-10_000) }); };
     child.on('error', (error) => finish({ exitCode: null, error: String(error?.message ?? error), timedOut: false }));
     child.on('close', (code) => finish({ exitCode: code, timedOut: false }));
-    const timer = setTimeout(() => { child.kill('SIGKILL'); finish({ exitCode: null, timedOut: true, error: 'タイムアウトで停止' }); }, Math.max(1, Number(timeoutSeconds)) * 1000);
+    timer = setTimer(() => { finish({ exitCode: null, timedOut: true, error: 'タイムアウトで停止' }); child.kill('SIGKILL'); }, Math.max(1, Number(timeoutSeconds)) * 1000);
   });
 }
 
 export function consentCommand(kind) {
+  if (!['prompt', 'codex', 'claude-resume', 'enable-auto-session', 'run'].includes(kind)) throw new Error('invalid consent kind');
   return `node -e "const f=require('fs'),o=require('os'),p=require('path').join(o.homedir(),'.claude','fleet-agent-optin.json');let a=[];try{a=JSON.parse(f.readFileSync(p,'utf8')).accept||[]}catch{};f.writeFileSync(p,JSON.stringify({accept:[...new Set([...a,'${kind}'])],acceptedAt:new Date().toISOString(),acceptedBy:o.userInfo().username},null,2))"`;
+}
+
+export function validExecCwd(cwd) {
+  try { return typeof cwd === 'string' && !!cwd.trim() && fs.statSync(cwd).isDirectory() && fs.existsSync(path.join(cwd, '.git')); }
+  catch { return false; }
+}
+
+export function hubReport(result) {
+  if (result.hubReport) return result;
+  const detail = result.stdoutTail || (result.exitCode !== 0 && result.stderrTail) || result.outputTail || result.error || '(出力なし)';
+  return { ...result, hubReport: true, outputTail: `[報告・返信不要]${result.timedOut ? ' 実行失敗: 30分上限でタイムアウト' : result.exitCode !== 0 ? ' 実行失敗' : ''}\n${redactSecrets(detail).slice(-4000)}` };
 }
 
 function warningFromResult(result) {
@@ -205,7 +235,7 @@ function warningFromResult(result) {
 }
 
 export async function processDirective(directive, context) {
-  const { home, repo, label, hostname, dryRun, post, spawnImpl = spawn, run = runSync } = context;
+  const { home, repo, label, hostname, dryRun, post, spawnImpl = spawn, resolveClaudeExe, run = runSync } = context;
   const id = String(directive.id ?? '');
   const kind = String(directive.kind ?? '');
   if (!id || !targetMatches(directive.targets, label, hostname)) return { action: 'skipped' };
@@ -216,7 +246,7 @@ export async function processDirective(directive, context) {
     return { action: 'denied', message };
   }
   if (kind === 'status') {
-    const status = collectStatus({ home, repo, label, hostname, run });
+    const status = collectStatus({ home, repo, label, hostname, run, platform: context.platform, auditLaunch: dryRun ? () => false : context.auditLaunch });
     if (!dryRun) {
       fs.writeFileSync(path.join(home, '.claude', 'fleet-agent-last-status.json'), `${JSON.stringify(status.data, null, 2)}\n`);
       await post(status.text);
@@ -254,7 +284,14 @@ export async function processDirective(directive, context) {
   }
   const cwd = directive.cwd ? path.resolve(String(directive.cwd)) : repo;
   if (!cwd || !fs.existsSync(cwd)) { const message = `⚠ **[${label}]** cwd が存在しないため実行しません: ${cwd} (id=${id})`; await post(message); return { action: 'bad-cwd', message }; }
-  const result = await runPrompt({ claudeExe: process.env.CLAUDE_CLI_PATH || 'claude', body: directive.body, cwd, timeoutSeconds: directive.timeoutSeconds ?? 1800, spawnImpl });
+  // PATH 上の claude は Windows では claude.cmd で、shell 無しの spawn では ENOENT になる
+  // (2026-10-10: 受信タスクの runPrompt が spawn claude ENOENT で毎回失敗した)。実行ファイルは
+  // 受信側PCが決める（指示側からは選べない）ので、spawn の直前に1回だけ解決する。
+  const resolveExe = resolveClaudeExe
+    ?? (() => resolveClaudeExecutableFromDisk({ platform: process.platform, env: process.env }));
+  const resolved = await resolveExe();
+  const claudeExe = (typeof resolved === 'string' ? resolved : resolved?.executable) || 'claude';
+  const result = await runPrompt({ claudeExe, body: directive.body, cwd, timeoutSeconds: directive.timeoutSeconds ?? 1800, spawnImpl });
   const resultsDir = path.join(home, '.claude', 'fleet-agent-results');
   fs.mkdirSync(resultsDir, { recursive: true });
   fs.writeFileSync(path.join(resultsDir, `${id}.json`), `${JSON.stringify(result, null, 2)}\n`);
@@ -281,6 +318,12 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
     if (!webhook) return;
     try { await fetch(webhook, { method: 'POST', headers: { 'content-type': 'application/json', 'user-agent': 'DiscordBot (https://github.com/kimkon1011/orgiast-claude-rules, 1.0) OrgiastFleetAgent' }, body: JSON.stringify({ content: message }), signal: AbortSignal.timeout(20_000) }); } catch {}
   });
+  // Polls without directives (or with an offline hub) must still audit local jobs.
+  const platform = dependencies.platform || process.platform;
+  if (!dryRun && platform === 'win32') {
+    scheduledTaskStatus(dependencies.run || runSync);
+    (dependencies.auditLaunch || launchAudit)({ home, platform, intervalHours: 24 });
+  }
   let payload;
   try {
     const base = process.env.ORGIAST_FLEET_DIRECTIVES_URL || DEFAULT_URL;
@@ -301,7 +344,7 @@ export async function main(argv = process.argv.slice(2), dependencies = {}) {
       fs.appendFileSync(processedFile, `${id}\n`);
       processed.add(id);
     }
-    results.push({ id, ...(await processDirective(directive, { home, repo, label, hostname, dryRun, post, spawnImpl: dependencies.spawnImpl, run: dependencies.run })) });
+    results.push({ id, ...(await processDirective(directive, { home, repo, label, hostname, dryRun, post, spawnImpl: dependencies.spawnImpl, run: dependencies.run, platform, auditLaunch: dependencies.auditLaunch })) });
   }
   if (json) console.log(JSON.stringify(results));
   return results;

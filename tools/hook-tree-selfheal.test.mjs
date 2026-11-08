@@ -107,7 +107,7 @@ test('統合: clean な旧版を origin/main へ更新し updated を記録す�
     const records = fs.readFileSync(f.ledger, 'utf8').trim().split('\n').map(JSON.parse);
     assert.equal(records.length, 1);
     assert.equal(records[0].action, 'updated');
-    assert.equal(records[0].tree, fs.realpathSync(f.repo));
+    assert.equal(records[0].tree, fs.realpathSync.native(f.repo));
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 

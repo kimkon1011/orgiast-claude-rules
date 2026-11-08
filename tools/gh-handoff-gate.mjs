@@ -1,8 +1,9 @@
+export const GATE_CONTRACT = {"name": "gh-handoff-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "gh-handoff-gate"}]};
 import { latestAssistantText } from './lib/assistant-text.mjs';
 import { isEntry } from './is-entry.mjs';
 
 export function formatReason() {
-  return `[GH-HANDOFF] gh が未認証であることを理由に GitHub 操作を人に頼んでいますが、git credential fill を試した結果が書かれていません。gh 未認証は手渡しの理由になりません（ONBOARDING §1.1）。\n\n  printf "protocol=https\\nhost=github.com\\n\\n" | git credential fill\n\nの password を GH_TOKEN に入れて gh / gh api で自分で作ってください。試して失敗した場合は、実行したコマンドと結果（exit code・エラー文）を本文に書けば通過します。どうしても不要なときだけ [GH-HANDOFF-OK] と書いてください。`;
+  return `[GH-HANDOFF] gh が未認証であることを理由に GitHub 操作を人に頼んでいますが、実行経路を確認した結果が書かれていません。まず command -v gh（Windows は where gh）で gh の有無を確認してください。gh が無ければ gh / gh api を前提にした手順は存在しないため、その文面を書いてはいけません。git credential fill は GCM の対話 UI 待ちで無期限にハングし得るため、必ずタイムアウト付き（例: timeout 15 ...）で実行してください。ハング（exit 124）は資格情報なしの証拠として扱います。試して失敗した場合は、実行したコマンドと結果（exit code・エラー文）を本文に書けば通過します。gh が無い PC で gh auth login を人に頼む文面は書かず、どちらの経路も通らなければ、検証結果を記録して Codex が生きている受信先（例: w018-PC）へ fleet-mail の --exec codex 便で移送してください。どうしても不要なときだけ [GH-HANDOFF-OK] と書いてください。`;
 }
 
 export function judge(text) {
@@ -22,7 +23,17 @@ export function judge(text) {
   const hasRequest = requestRegex.test(textWithoutCodeFences);
   const hasReason = reasonRegex.test(textWithoutCodeFences);
 
-  if (!hasRequest || !hasReason) {
+  // 2b. トリガー (c) GitHub 認証そのものの操作依頼
+  // 「gh 未認証だから PR を作って」型（(a)&(b)）とは別に、
+  // 「デバイス認証のコードを入力して承認してください」型の手渡しも止める。
+  // GitHub 認証の目印と人への操作依頼が同じ本文にあれば発火する（改行をまたいでよい）。
+  const ghAuthMarkerRegex = /(github\.com\/login\/device|gh\s+auth\s+login|gh-device-login|GitHub\s*の\s*デバイス\s*認証|GitHub\s*の\s*OAuth)/i;
+  const handoffRequestRegex = /(入力して|承認して|開いて|押して|してください|して下さい|お願いします|お願い)/;
+
+  const isAuthHandoff = ghAuthMarkerRegex.test(textWithoutCodeFences)
+    && handoffRequestRegex.test(textWithoutCodeFences);
+
+  if ((!hasRequest || !hasReason) && !isAuthHandoff) {
     return { triggered: false, missing: [] };
   }
 

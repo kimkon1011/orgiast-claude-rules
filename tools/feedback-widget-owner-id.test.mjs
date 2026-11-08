@@ -5,12 +5,11 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-// onboarding-sync が配るのは tools/ だけなので、packages/ を静的 import すると
-// 配布先PCで tools/*.test.mjs が丸ごと落ちる(no-undistributed-imports.test.mjs が禁止している)。
-// このリポジトリでだけ実物を読み込み、packages/ が無い環境では skip する。
+// インストーラ・テンプレは tools/feedback-kit/ 配下（onboarding-sync の配布対象）にある。
+// 動的 import にして、万一欠けた環境では skip する。
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const installerPath = path.join(repoRoot, 'packages', 'feedback-widget', 'install.mjs');
-const gasRelayPath = path.join(repoRoot, 'packages', 'feedback-gas', 'templates', 'FeedbackRelay.js');
+const installerPath = path.join(repoRoot, 'tools', 'feedback-kit', 'widget', 'install.mjs');
+const gasRelayPath = path.join(repoRoot, 'tools', 'feedback-kit', 'gas', 'templates', 'FeedbackRelay.js');
 const hasPackages = fs.existsSync(installerPath) && fs.existsSync(gasRelayPath);
 
 test('インストーラは有効な Discord user ID だけを開発者IDとして採用する', { skip: hasPackages ? false : 'packages/ が無い配布環境' }, async () => {

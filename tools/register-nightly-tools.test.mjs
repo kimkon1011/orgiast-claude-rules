@@ -28,3 +28,16 @@ test('changes are read back and machine-specific paths are absent', () => {
   assert.match(source, /\$PSScriptRoot/);
   assert.doesNotMatch(source, /C:\\Users\\uers/i);
 });
+
+test('remediation is removed from morning specs and has a separate hidden 90-minute task', () => {
+  const specs = source.slice(source.indexOf('$specs = @('), source.indexOf(". (Join-Path $PSScriptRoot"));
+  assert.doesNotMatch(specs, /nightly-health-remediate/);
+  assert.match(source, /legacyPattern/);
+  assert.match(source, /if \(-not \$DryRun\) \{\s+Set-ScheduledTask -TaskName 'OrgiastMorningBatch' -Action \$kept/);
+  const registration = fs.readFileSync(new URL('./register-nightly-remediate-task.ps1', import.meta.url), 'utf8');
+  assert.match(registration, /-At 7:20am/);
+  assert.match(registration, /-Minutes 90/);
+  assert.match(registration, /New-HiddenScheduledTaskAction/);
+  assert.match(registration, /OrgiastNightlyRemediate/);
+  assert.doesNotMatch(registration, /[^\x00-\x7f]/);
+});

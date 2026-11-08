@@ -5,28 +5,30 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { isDailyLimit, isUnmeasurable, JUDGE_CHAIN, paretoClassification, recommendations, resolveJudgeChain, resultRecord, retryDelay, suspiciousTasks } from './eval-harness.mjs';
+import { createEvaluationCostResolver, formatEvaluationCost, readConfig, isDailyLimit, isUnmeasurable, JUDGE_CHAIN, paretoClassification, recommendations, resolveJudgeChain, resultRecord, retryDelay, suspiciousTasks } from './eval-harness.mjs';
 
 // Run the real CLI with isolated home/config/results and a fetch stub; --all also
 // writes a routing table, so copy its modules rather than touching the checkout.
-function runHarness(t, { cooldown = {}, tasks, responses = [], args = ['--provider', 'openrouter'] } = {}) {
+function runHarness(t, { cooldown = {}, tasks, config, overlay, responses = [], args = ['--provider', 'openrouter'], catalog = null } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'eval-cooldown-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const tools = path.join(home, 'tools'), evalDir = path.join(home, '.claude', 'eval');
   fs.mkdirSync(path.join(tools, 'lib'), { recursive: true });
   fs.mkdirSync(evalDir, { recursive: true });
-  for (const file of ['eval-harness.mjs', 'eval-exec-checks.mjs', 'is-entry.mjs', 'routing-table.mjs', 'llm-fallback.mjs', 'lib/provider-daily-cooldown.mjs']) {
+  for (const file of ['eval-harness.mjs', 'eval-exec-checks.mjs', 'is-entry.mjs', 'routing-table.mjs', 'llm-fallback.mjs', 'provider-routing.mjs', 'rate-budget.mjs', 'lib/provider-daily-cooldown.mjs', 'lib/eval-config.mjs']) {
     fs.copyFileSync(new URL(file, import.meta.url), path.join(tools, file));
   }
   const seed = tasks || [{ id: 'one', category: 'classification', prompt: 'test', expect: { type: 'contains', value: 'ok' } }];
   fs.writeFileSync(path.join(tools, 'eval-tasks.seed.jsonl'), seed.map(JSON.stringify).join('\n') + '\n');
-  fs.writeFileSync(path.join(tools, 'eval-providers.json'), JSON.stringify([{ provider: 'groq', model: 'test' }, { provider: 'openrouter', model: 'test' }]));
+  fs.writeFileSync(path.join(tools, 'eval-providers.json'), JSON.stringify(config || [{ provider: 'groq', model: 'test' }, { provider: 'openrouter', model: 'test' }]));
+  if (overlay !== undefined) fs.writeFileSync(path.join(evalDir, 'providers.local.json'), typeof overlay === 'string' ? overlay : JSON.stringify(overlay));
   fs.writeFileSync(path.join(home, '.claude', 'provider-cooldown.json'), JSON.stringify(cooldown));
   const preload = path.join(home, 'mock-fetch.mjs');
   fs.writeFileSync(preload, `
     import fs from 'node:fs';
     const responses = ${JSON.stringify(responses)};
     globalThis.fetch = async (url) => {
+      if (String(url).endsWith('/api/v1/models')) return new Response(JSON.stringify(${JSON.stringify(catalog)}), { status: 200 });
       fs.appendFileSync(${JSON.stringify(path.join(home, 'fetch.jsonl'))}, JSON.stringify(String(url)) + '\\n');
       const response = responses.shift();
       if (!response) throw new Error('unexpected fetch');
@@ -60,7 +62,7 @@ test('judge はクールダウン中の候補をスキップし次の候補へ�
   });
   assert.equal(result.calls.length, 2);
   assert.ok(result.calls.every((url) => /openrouter/.test(url)));
-  assert.match(result.stderr, /JUDGE切替 groq → openrouter \(日次上限\)/);
+  assert.match(result.stderr, /JUDGE切替 groq → deepseek \(日次上限\)/);
   assert.equal(result.results[0].pass, 1);
   assert.equal(result.results[0].errors, 0);
   assert.doesNotMatch(result.stderr, /ERROR judge/);
@@ -187,4 +189,101 @@ test('resolveJudgeChain は --judge-provider を先頭に置き重複除去す�
   assert.deepEqual(resolveJudgeChain('deepseek'), ['deepseek', 'groq', 'openrouter', 'gemini', 'anthropic']);
   assert.deepEqual(resolveJudgeChain(''), JUDGE_CHAIN);
   assert.equal(new Set(resolveJudgeChain('gemini')).size, JUDGE_CHAIN.length);
+});
+
+// 同一providerの複数モデルを実際のCLIで走らせ、候補ごとの単価が結果へ届くことを検証。
+test('scout candidates run through --all with model-specific prices', (t) => {
+  const config = [
+    { provider: 'openrouter', model: 'existing', costPerMillion: [1, 2] },
+    { provider: 'openrouter', model: 'scouted', costPerMillion: [0.1, 0.2] },
+  ];
+  const response = { body: JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 1000, completion_tokens: 1000 } }) };
+  const all = runHarness(t, { config: config.slice(0, 1), overlay: config.slice(1), responses: [response, response], args: ['--all'] });
+  assert.deepEqual(all.results.map((r) => [r.model, r.costUsd]), [['existing', 0.003], ['scouted', 0.0003]]);
+  const selected = runHarness(t, { config: config.slice(0, 1), overlay: config.slice(1), responses: [response], args: ['--provider', 'openrouter', '--model', 'scouted'] });
+  assert.equal(selected.results[0].costUsd, 0.0003);
+  const unknown = runHarness(t, { config, responses: [response], args: ['--provider', 'openrouter', '--model', 'unconfigured'] });
+  assert.equal(unknown.results[0].costUsd, null);
+});
+
+test('readConfig merges by provider+model with overlay precedence, including skip', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'eval-config-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const configFile = path.join(dir, 'repo.json'), overlayFile = path.join(dir, 'local.json');
+  const repo = [{ provider: 'openrouter', model: 'same', costPerMillion: [1, 2] },
+    { provider: 'groq', model: 'same' }, { provider: 'mistral', model: 'blocked', skip: true }];
+  const overlay = [{ provider: 'openrouter', model: 'same', costPerMillion: [0, 0], skip: true },
+    { provider: 'openrouter', model: 'new' }];
+  fs.writeFileSync(configFile, JSON.stringify(repo));
+  fs.writeFileSync(overlayFile, JSON.stringify(overlay));
+  assert.deepEqual(readConfig({ configFile, overlayFile }), [overlay[0], repo[1], repo[2], overlay[1]]);
+  for (const invalid of ['broken', '{}', 'null', '[null]', '[{"provider":"openrouter"}]']) {
+    fs.writeFileSync(overlayFile, invalid);
+    assert.deepEqual(readConfig({ configFile, overlayFile }), repo);
+  }
+  fs.unlinkSync(overlayFile);
+  assert.deepEqual(readConfig({ configFile, overlayFile }), repo);
+  fs.mkdirSync(overlayFile); // unreadable as a regular file on Windows and Linux
+  assert.deepEqual(readConfig({ configFile, overlayFile }), repo);
+  fs.rmdirSync(overlayFile);
+  fs.writeFileSync(overlayFile, JSON.stringify(overlay));
+  fs.writeFileSync(configFile, 'broken');
+  assert.deepEqual(readConfig({ configFile, overlayFile }), overlay);
+});
+
+test('--all honors overlay skip and replacement price without duplicate execution', (t) => {
+  const result = runHarness(t, {
+    config: [{ provider: 'groq', model: 'blocked' }, { provider: 'openrouter', model: 'same', costPerMillion: [1, 2] }],
+    overlay: [{ provider: 'groq', model: 'blocked', skip: true },
+      { provider: 'openrouter', model: 'same', costPerMillion: [0, 0] },
+      { provider: 'openrouter', model: 'new', costPerMillion: [0, 0] }],
+    responses: [success, success], args: ['--all', '--limit', '1', '--category', 'classification'],
+  });
+  assert.match(result.stdout, /SKIP groq/);
+  assert.equal(result.calls.length, 2);
+  assert.deepEqual(result.results.map((r) => [r.model, r.costUsd]), [['same', 0], ['new', 0]]);
+});
+
+test('OpenRouter カタログ単価をモデル別に計算し、並行呼出も1回取得', async () => {
+  let calls = 0;
+  const resolve = createEvaluationCostResolver({ fetchImpl: async url => {
+    calls++; assert.equal(url, 'https://openrouter.ai/api/v1/models');
+    return { ok: true, json: async () => ({ data: [{ id: 'meta/muse-wonder', pricing: { prompt: '0.000004', completion: '0.000020' } }] }) };
+  } });
+  const usage = { inTok: 10000, outTok: 4500 };
+  assert.deepEqual(await Promise.all(Array.from({ length: 3 }, () => resolve('openrouter', 'meta/muse-wonder', usage))), [0.13, 0.13, 0.13]);
+  assert.equal(await resolve('openrouter', 'missing', usage), null);
+  assert.equal(calls, 1);
+});
+
+test('カタログ失敗は再取得せず null を集計・表示まで保持し、無料推薦にしない', async () => {
+  let calls = 0;
+  const resolve = createEvaluationCostResolver({ fetchImpl: async () => { calls++; throw new Error('SECRET'); } });
+  for (const id of ['one', 'two']) assert.equal(await resolve('openrouter', id, { inTok: 100, outTok: 200 }), null);
+  assert.equal(calls, 1);
+  const record = resultRecord('openrouter', 'unknown', [task('a', 'code', 'pass', { costUsd: null }), task('b', 'code', 'pass')]);
+  assert.equal(record.costUsd, null);
+  assert.equal(record.byCategory.code.costUsd, null);
+  assert.equal(formatEvaluationCost(record.costUsd), '単価不明');
+  assert.match(recommendations([record]).join(), /単価不明/);
+});
+
+test('CLI でも未設定モデルの単価をカタログから補い、取得不能なら単価不明', t => {
+  const response = { body: JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 10000, completion_tokens: 4500 } }) };
+  const opts = { config: [{ provider: 'openrouter', model: 'meta/muse-wonder' }], args: ['--provider', 'openrouter', '--model', 'meta/muse-wonder'], responses: [response] };
+  const known = runHarness(t, { ...opts, catalog: { data: [{ id: 'meta/muse-wonder', pricing: { prompt: '0.000004', completion: '0.000020' } }] } });
+  assert.equal(known.results[0].costUsd, 0.13);
+  const unknown = runHarness(t, opts);
+  assert.equal(unknown.results[0].costUsd, null);
+  assert.match(unknown.stdout, /単価不明/);
+});
+
+test('DeepSeek evaluation ignores native cooldown and obeys OpenRouter cooldown', t => {
+  const config = [{ provider: 'deepseek', model: 'deepseek-flash' }];
+  const args = ['--provider', 'deepseek'];
+  const live = runHarness(t, { config, args, cooldown: { deepseek: activeCooldown() }, responses: [success] });
+  assert.equal(live.calls.length, 1);
+  assert.match(live.calls[0], /openrouter\.ai/);
+  const blocked = runHarness(t, { config, args, cooldown: { openrouter: activeCooldown() } });
+  assert.equal(blocked.calls.length, 0);
 });

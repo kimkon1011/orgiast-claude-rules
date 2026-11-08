@@ -1,8 +1,10 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "handoff-detail-guard", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "handoff-detail-guard"}]};
 import fs from 'node:fs';
 import { isEntry } from './is-entry.mjs';
 import { latestAssistantText } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+import { appendStopLedger, registerStopViolation, stopGateOutput } from './lib/stop-recheck.mjs';
 
 
 export function evaluateHandoffDetail(text) {
@@ -21,10 +23,14 @@ async function main() {
     const raw = await readStdinWithTimeout();
     if (!raw.trim()) return;
     const input = JSON.parse(raw);
-    if (input?.stop_hook_active || !input?.transcript_path || !fs.existsSync(input.transcript_path)) return;
-    const text = latestAssistantText(input.transcript_path); if (!text) return;
+    if (!input?.transcript_path || !fs.existsSync(input.transcript_path)) return;
+    const text = input.last_assistant_message ?? input.assistant_text ?? latestAssistantText(input.transcript_path); if (!text) return;
     const result = evaluateHandoffDetail(text);
-    if (result.decision === 'block') console.log(JSON.stringify(result));
+    if (result.decision === 'block') {
+      const recheck = registerStopViolation({ input, assistantText: text, blockedBy: ['handoff-detail-guard'], reasonCodes: ['HANDOFF-DETAIL'] });
+      appendStopLedger({ sessionId: recheck.sessionId, verdict: recheck.verdict, blockedBy: recheck.blockedBy, reasonCodes: recheck.reasonCodes, retryCap: recheck.retryCap, excerpt: text.slice(0, 200) });
+      console.log(JSON.stringify(stopGateOutput(recheck, result.reason)));
+    }
   } catch {}
 }
 

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { extractExecutedToolUrls, loadOpenRouterApiKey, parseArgs, requestGskCrawl, requestGskSearch, runCli, search } from './web-search.mjs';
+import { loadDeepseekApiKey, requestDeepseekSearch, requestDeepseekFetch, extractExecutedToolUrls, loadOpenRouterApiKey, parseArgs, requestGskCrawl, requestGskSearch, runCli, search } from './web-search.mjs';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'web-search-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
@@ -327,9 +327,10 @@ test('OpenRouter キーが無い auto は APIキーなしとしてスキップ�
     env: {}, homeDir: '/存在しないテスト用パス', geminiApiKey: 'gemini-test', groqApiKey: 'groq-test',
     fetchImpl: async () => response({ error: 'down' }, 500), appendUsage() {},
   }), (error) => {
-    assert.equal(error.failures.length, 4);
+    assert.equal(error.failures.length, 5);
     assert.equal(error.failures[2], 'openrouter: APIキーなし');
-    assert.equal(error.failures[3], 'gsk: APIキーなし');
+    assert.equal(error.failures[3], 'deepseek: APIキーなし');
+    assert.equal(error.failures[4], 'gsk: APIキーなし');
     return true;
   });
 });
@@ -341,7 +342,7 @@ test('parseArgs は openrouter を受け付け未知の provider を拒否する
 
 test('parseArgs は gsk を受け付け bogus provider を拒否する', () => {
   assert.equal(parseArgs(['q', '--provider', 'gsk']).provider, 'gsk');
-  assert.throws(() => parseArgs(['q', '--provider', 'bogus']), /auto\|gemini\|groq\|openrouter\|gsk/);
+  assert.throws(() => parseArgs(['q', '--provider', 'bogus']), /auto\|gemini\|groq\|openrouter\|deepseek\|gsk/);
 });
 
 test('search は fake spawn で gsk 検索結果を返す', async () => {
@@ -411,4 +412,95 @@ test('loadOpenRouterApiKey は env を優先し openrouter.env へフォール�
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }
+});
+
+test('DeepSeek Search は count 8 で問い合わせ、スコア降順に整形する', async () => {
+  const raw = { results: [
+    { rerank_score: 0.9, title: '低', summary: '概要2', url: 'https://example.com/low' },
+    { rerank_score: 1.9, title: '高', summary: '概要1', url: 'https://example.com/high', date: '2026-10-23' },
+  ] };
+  const result = await requestDeepseekSearch({ query: '調査', apiKey: 'test', fetchImpl: async (url, init) => {
+    assert.equal(url, 'https://api.deepseek.com/v1/tools/search');
+    assert.equal(init.method, 'POST');
+    assert.equal(init.headers.Authorization, 'Bearer test');
+    assert.deepEqual(JSON.parse(init.body), { query: '調査', count: 8, need_content: false });
+    return response(raw);
+  } });
+  assert.equal(result.answer, '1. 高\n概要1\nhttps://example.com/high\n日付: 2026-10-23\n\n2. 低\n概要2\nhttps://example.com/low');
+  assert.deepEqual(result.urls, [{ title: '高', url: 'https://example.com/high' }, { title: '低', url: 'https://example.com/low' }]);
+  assert.equal(result.raw, raw);
+  assert.equal(raw.results[0].title, '低');
+  assert.ok(result.elapsedMs >= 0);
+});
+
+test('auto は gemini→groq→openrouter→deepseek→gsk、空 results もフォールバックする', async () => {
+  const calls = [];
+  const result = await search('q', {
+    env: {}, homeDir: isolatedHome,
+    geminiApiKey: 'g', groqApiKey: 'g', openrouterApiKey: 'o', deepseekApiKey: 'd', gskApiKey: 's', appendUsage() {},
+    fetchImpl: async url => { calls.push(new URL(url).hostname); return url.includes('deepseek') ? response({ results: [] }) : response({}, 403); },
+    spawnImpl: fakeSpawnWith({ stdout: gskSuccess }, 0, () => calls.push('gsk')),
+  });
+  assert.deepEqual(calls, ['generativelanguage.googleapis.com', 'api.groq.com', 'openrouter.ai', 'api.deepseek.com', 'gsk']);
+  assert.equal(result.provider, 'gsk');
+  assert.match(result.failures.at(-1), /results が空/);
+});
+
+test('crawl は DeepSeek→gsk、空 content もフォールバックする', async () => {
+  const calls = [];
+  const result = await search('', {
+    crawlUrl: 'https://example.com/page', env: {}, homeDir: isolatedHome,
+    deepseekApiKey: 'd', gskApiKey: 's', appendUsage() {},
+    fetchImpl: async (url, init) => {
+      calls.push(url);
+      assert.deepEqual(JSON.parse(init.body), { url: 'https://example.com/page' });
+      return response({ content: ' ' });
+    },
+    spawnImpl: fakeSpawnWith({ stdout: '{"status":"ok","data":{"content":"本文"}}' }, 0, () => calls.push('gsk')),
+  });
+  assert.deepEqual(calls, ['https://api.deepseek.com/v1/tools/fetch', 'gsk']);
+  assert.equal(result.provider, 'gsk');
+  assert.equal(result.answer, '本文');
+});
+
+for (const crawl of [false, true]) {
+  test(`DeepSeek ${crawl ? 'Fetch' : 'Search'} の CLI 出力と固定料金台帳`, async t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deepseek-search-usage-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const out = outputSink(); const err = outputSink();
+    const code = await runCli(crawl ? ['--crawl', 'https://example.com/page', '--json'] : ['q', '--provider', 'deepseek', '--json'], {
+      env: {}, homeDir: dir, deepseekApiKey: 'test', stdout: out.stream, stderr: err.stream,
+      fetchImpl: async () => response(crawl ? { title: 'ページ', content: '# 本文' } : { results: [{ title: '検索', summary: '本文', url: 'https://example.com/page' }] }),
+      spawnImpl: () => assert.fail('DeepSeek 成功時に gsk を起動しない'),
+    });
+    assert.equal(code, 0, err.read());
+    const output = JSON.parse(out.read());
+    assert.equal(output.provider, 'deepseek');
+    assert.equal(output.model, crawl ? 'fetch-api' : 'search-api');
+    assert.match(output.answer, /本文/);
+    const rows = fs.readFileSync(path.join(dir, '.claude', 'executor-usage.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(rows.length, 1);
+    const row = rows[0];
+    assert.deepEqual(row, { t: row.t, provider: 'deepseek', model: crawl ? 'fetch-api' : 'search-api', calls: 1, usd: 0.00075, secs: row.secs });
+    assert.ok(Number.isFinite(Date.parse(row.t)));
+    assert.ok(row.secs >= 0);
+  });
+}
+
+test('DeepSeek 単独指定は失敗時に他providerを呼ばない', async () => {
+  await assert.rejects(search('q', { provider: 'deepseek', deepseekApiKey: 'test', gskApiKey: 'test', env: {}, homeDir: isolatedHome,
+    fetchImpl: async () => response({ results: [] }), spawnImpl: () => assert.fail('単独指定'), appendUsage: () => assert.fail('失敗した応答は成功台帳に書かない'),
+  }), /results が空/);
+  await assert.rejects(requestDeepseekFetch({ url: 'file:///etc/passwd', apiKey: 'test', fetchImpl: () => assert.fail('不正URL') }), /http\/https/);
+  await assert.rejects(requestDeepseekFetch({ url: 'https://example.com', apiKey: 'test', fetchImpl: async () => response({}, 429) }), /HTTP 429/);
+});
+
+test('DeepSeek キーは環境変数優先、deepseek.env にフォールバック', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deepseek-key-test-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, '.claude'));
+  fs.writeFileSync(path.join(dir, '.claude', 'deepseek.env'), 'DEEPSEEK_API_KEY=file-key\n');
+  assert.equal(loadDeepseekApiKey({ env: { DEEPSEEK_API_KEY: 'env-key' }, homeDir: dir }), 'env-key');
+  assert.equal(loadDeepseekApiKey({ env: {}, homeDir: dir }), 'file-key');
+  assert.equal(parseArgs(['--provider', 'deepseek', 'q']).provider, 'deepseek');
 });

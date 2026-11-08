@@ -6,29 +6,31 @@ import { spawn } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { resolveVscodeCli } from './next-session-launch.mjs';
 
-export function parseMobileArgs(argv, defaultCount = 1) {
+export function parseMobileArgs(argv, defaultCount = 3) {
   let count = defaultCount;
   let dryRun = false;
+  let refresh = false;
   let name = 'スマホ用セッション';
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === '--count') count = Number(argv[++index]);
     else if (value === '--dry-run') dryRun = true;
+    else if (value === '--refresh') refresh = true;
     else if (value === '--name') name = argv[++index];
     else throw new Error(`不明な引数です: ${value}`);
   }
   if (!Number.isInteger(count) || count < 1 || count > 10) throw new Error('--count は 1..10 の整数で指定してください');
   if (!name) throw new Error('--name は空にできません');
-  return { count, name, ...(dryRun ? { dryRun } : {}) };
+  return { count, name, ...(dryRun ? { dryRun } : {}), ...(refresh ? { refresh } : {}) };
 }
 
-export function buildMobileSessionsUri({ count, name }) {
-  return `vscode://orgiast.next-session/mobile?count=${count}&name=${encodeURIComponent(name)}`;
+export function buildMobileSessionsUri({ count, name, refresh }) {
+  return `vscode://orgiast.next-session/mobile?count=${count}&name=${encodeURIComponent(name)}${refresh ? '&refresh=1' : ''}`;
 }
 
-export function planMobileSessionsLaunch({ codeCli, count, name }) {
+export function planMobileSessionsLaunch({ codeCli, count, name, refresh }) {
   if (!codeCli) return null;
-  const uri = buildMobileSessionsUri({ count, name });
+  const uri = buildMobileSessionsUri({ count, name, refresh });
   return {
     command: 'cmd.exe',
     args: ['/c', `""${codeCli}" --open-url "${uri}""`],
@@ -44,6 +46,7 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     return 0;
   }
   const home = io.homedir ?? env.ORGIAST_HOME ?? os.homedir();
+  if (!pool.isMobileEnabled(home)) return 0;
   let options;
   try { options = parseMobileArgs(argv, pool.readConfig(home, env)); } catch (error) {
     log(`[mobile-sessions] ${error.message}`);
@@ -55,6 +58,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     const waiting = state?.waiting ?? '不明（拡張の状態未取得・期限切れ）';
     const missing = state ? Math.max(0, options.count - state.waiting) : '不明';
     log(`[mobile-sessions] 現在の待機数: ${waiting} / 目標: ${options.count} / 起動する本数: ${missing} (dry-run: 起動なし)`);
+    const lastRefreshAt = pool.readLastRefreshAt(home);
+    log(`[mobile-sessions] 最終リフレッシュ: ${lastRefreshAt ? new Date(lastRefreshAt).toISOString() : 'なし'}`);
     return 0;
   }
   const codeCli = resolveVscodeCli({ env, exists, homedir: home });

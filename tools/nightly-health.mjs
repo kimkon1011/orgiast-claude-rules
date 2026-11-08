@@ -1,11 +1,19 @@
 #!/usr/bin/env node
+import { runStaleTaskHealth } from './stale-task-health.mjs';
+import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import fs from 'node:fs';
+import { runAudit } from './unattended-job-audit.mjs';
+import { scan as scanStalls, asAnomalies } from './stall-scan.mjs';
+import { expectationLog, logIsStale } from './lib/health-signals.mjs';
+import { runConvergenceWatch } from './fleet-convergence-watch.mjs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { getScheduledTaskInfo } from './lib/scheduled-task.mjs';
+import { checkGasMasterDrift } from './gas-master-drift.mjs';
+import { runAutoSessionStreakWatch } from './auto-session-streak-watch.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_NOTIFICATION_ITEMS = 12;
@@ -37,7 +45,14 @@ export function evaluateScheduledTaskHealth(expectation, info, { now = new Date(
   // 「起動したのにログが1行も動いていない」ときだけ鳴らす。0x800710E0 は
   // 前回インスタンスが生存していた証拠なので原因として併記するが、**ログが動いている回は黙る**
   // （実測 2026-09-13: 起動拒否の記録が残っていても当日のログは正常に伸びていた＝拒否だけでは異常と言えない）。
-  const lostRun = elapsedMs > 3_600_000 && (logMtimeMs === null || logMtimeMs < lastRunMs);
+  // 多段アクションのタスクでは LastRunTime が最終アクションの開始時刻に更新される
+  // （実測 2026-09-26: OrgiastNightlyBatch = nightly-batch.ps1→ai-news-triage→pricing-brief の3アクション。
+  // 03:00:43 起動のインスタンスが全アクション正常終了したのに LastRunTime=03:37:57（=最終アクション開始、
+  // ai-news-triage.log の最終書込 03:37:57 と一致）となり、先頭アクションのログ最終書込 03:36:34 より後ろと
+  // 判定されて毎回誤報した）。lastTaskResult=0 は全アクション正常終了の積極証拠なので mtime 比較から除外する。
+  // ログファイル自体が無い場合だけは result=0 でも鳴らす（成功したならログがあるはずだから）。
+  const completedOk = Number(info.lastTaskResult) === 0;
+  const lostRun = elapsedMs > 3_600_000 && (logMtimeMs === null || (logMtimeMs < lastRunMs && !completedOk));
   if (lostRun) {
     const where = logMtimeMs === null
       ? '対応するログファイルが 1 つも作られていません'
@@ -216,6 +231,12 @@ export function isFailureLine(line) {
 
   if (/^(?:HEAD is now at|From https:\/\/|From git@|\*\s+branch\b|Already up to date\b|Updating\s|Fast-forward\b)/i.test(cleanLine)) return false;
 
+  // robocopy /MIR のファイル列挙行（New File / Newer / *EXTRA File / *EXTRA Dir 等）は
+  // 「転送・削除する対象」の情報行であって失敗ではない。除外しないと、名前に error を
+  // 含むファイル（実測 2026-10-13: repo-backups\...\nightly-batch-error-detail.test.mjs）を
+  // 失敗と誤検知する（バックアップは complete で正常終了、robocopy exit=3＝コピー有+余剰有）。
+  if (/^(?:\*?EXTRA(?:\s+(?:File|Dir))?|New\s+(?:File|Dir)|Newer|Older|Changed|Same)\b/i.test(cleanLine)) return false;
+
   let remainder = line
     .replace(/\berror\s*[:= ]*\s*(?:[0-9]*[0]|-(?!\w))/gi, '')
     .replace(/失敗\s*[:：= ]*\s*0(?!\w)/g, '')
@@ -290,7 +311,14 @@ export async function runNightlyHealth({
   platform = getPlatform(),
   settingsPath = path.join(home, '.claude', 'settings.json'),
   baselinePath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'nightly-health-baseline.json'),
-  scheduledTaskInfo = getScheduledTaskInfo
+  scheduledTaskInfo = getScheduledTaskInfo,
+  streakWatch = runAutoSessionStreakWatch,
+  staleTaskHealth = runStaleTaskHealth,
+  streakNotifyImpl,
+  gasDrift = checkGasMasterDrift,
+  convergenceWatch = runConvergenceWatch,
+  unattendedAudit = runAudit,
+  stallScan = scanStalls
 } = {}) {
   const dirname = path.dirname(fileURLToPath(import.meta.url));
   expectations ??= readJson(path.join(dirname, 'nightly-health-expectations.json'), []);
@@ -299,13 +327,50 @@ export async function runNightlyHealth({
   const oldOffsets = readJson(offsetsPath, {});
   const newOffsets = { ...oldOffsets };
   const anomalies = [];
+  const dedicatedStreakAnomalies = new Set();
+  try { anomalies.push(...(await staleTaskHealth({ home, now, platform, dryRun: dryRun || prime })).anomalies); }
+  catch (error) { anomalies.push({ type: 'stale_task_error', label: '定期タスク参照先', message: error.message }); }
+  try {
+    const audit = await unattendedAudit({ home, now: now.getTime(), platform, dryRun: dryRun || prime });
+    for (const finding of audit.unresolved || []) {
+      const anomaly = { type: 'unattended_unresolved', label: '無人ジョブ監査', message: `未修復: ${finding.name}（${finding.reason}）` };
+      anomalies.push(anomaly);
+      dedicatedStreakAnomalies.add(anomaly);
+    }
+    if (audit.error) anomalies.push({ type: 'unattended_audit_error', label: '無人ジョブ監査', message: '計測不能' });
+  } catch { anomalies.push({ type: 'unattended_audit_error', label: '無人ジョブ監査', message: '計測不能' }); }
+  try { anomalies.push(...asAnomalies(await stallScan({ home, now: now.getTime(), platform, expectations, save: !dryRun }))); }
+  catch (error) { anomalies.push({ type: 'stall_scan_error', label: '停滞診断', message: error.message }); }
+  try {
+    await gasDrift({ home, now, dryRun: dryRun || prime, notify });
+  } catch (error) {
+    anomalies.push({ type: 'gas_master_drift_error', label: 'GAS/master 週次監査', message: error.message });
+  }
+  try { await convergenceWatch({ home, now: now.getTime(), dryRun: dryRun || prime }); }
+  catch { anomalies.push({ type: 'fleet_convergence', label: '配布収束監視', message: 'シート取得または送付に失敗（秘密情報省略）' }); }
   const registeredLogs = new Set();
   const scanTargets = [];
   const logFiles = fs.existsSync(logsDir)
     ? fs.readdirSync(logsDir).filter((file) => file.endsWith('.log'))
     : [];
 
+  try {
+    const streakResult = await streakWatch({ home, now, dryRun: dryRun || prime, notifyImpl: streakNotifyImpl });
+    for (const item of streakResult.detected) {
+      const anomaly = { type: 'auto_session_streak', label: item.jobKey, message: item.message };
+      anomalies.push(anomaly);
+      dedicatedStreakAnomalies.add(anomaly);
+    }
+    for (const error of streakResult.errors || []) {
+      anomalies.push({ type: 'auto_session_streak', label: error.jobKey, message: `連続失敗の DM 通知に失敗: ${error.message}` });
+    }
+  } catch (error) {
+    anomalies.push({ type: 'auto_session_streak', label: 'auto-session 連続失敗監視', message: `監視処理に失敗: ${error.message || error}` });
+  }
+
   for (const exp of expectations) {
+    if (exp.platform && exp.platform !== platform) continue;
+    if (exp.fleetLabel && resolveFleetLabel(home) !== exp.fleetLabel) continue;
     let matches = [];
     if (exp.pattern) {
       const regex = new RegExp(exp.pattern);
@@ -316,7 +381,7 @@ export async function runNightlyHealth({
       registeredLogs.add(exp.log);
       if (logFiles.includes(exp.log)) matches = [exp.log];
     }
-    const logFile = matches[0];
+    const logFile = expectationLog(home, exp)?.file;
     if (!logFile) {
       const log = exp.log || exp.pattern;
       if (exp.ignore) continue;
@@ -331,7 +396,7 @@ export async function runNightlyHealth({
     }
     const logPath = path.join(logsDir, logFile);
     const stat = fs.statSync(logPath);
-    if ((now - stat.mtime) / 3_600_000 > exp.maxAgeHours) {
+    if (logIsStale(stat.mtimeMs, exp.maxAgeHours, now.getTime())) {
       anomalies.push({ type: 'stale', label: exp.label, log: logFile, message: `ログ更新が滞っています（最終更新: ${formatDate(stat.mtime)}、期待: ${exp.maxAgeHours}時間以内）`, expectation: exp });
     }
     if (exp.task) {
@@ -405,22 +470,26 @@ export async function runNightlyHealth({
 
   // 未登録ログ・baseline抑制は「異常」ではなく注記なので、それ単独では通知しない。
   // これらで通知が飛ぶと、平穏な夜も毎日DMが来て通知そのものが読まれなくなる。
-  if (anomalies.length === 0) {
-    const message = 'ok:異常なし';
-    if (json) console.log(JSON.stringify({ status: 'ok', anomaliesCount: 0, anomalies: [], message }, null, 2));
+  // Keep all detections in the report, but never send a second DM through the
+  // general health notifier (or bypass the watcher's per-job daily suppression).
+  const notificationAnomalies = dryRun || prime
+    ? anomalies : anomalies.filter((item) => !dedicatedStreakAnomalies.has(item));
+  if (notificationAnomalies.length === 0) {
+    const message = anomalies.length ? 'auto-session:専用 DM 経路で通知・重複抑制済み' : 'ok:異常なし';
+    if (json) console.log(JSON.stringify({ status: anomalies.length ? 'anomaly' : 'ok', anomaliesCount: anomalies.length, anomalies, message }, null, 2));
     else console.log(message);
-    return { exitCode: 0, anomalies: [], message };
+    return { exitCode: 0, anomalies, message };
   }
 
-  const visible = anomalies.slice(0, MAX_NOTIFICATION_ITEMS);
-  let notificationText = anomalies.length ? `⚠️ 夜間ジョブ異常 ${anomalies.length}件\n` : 'ℹ️ 夜間ジョブ異常 0件\n';
+  const visible = notificationAnomalies.slice(0, MAX_NOTIFICATION_ITEMS);
+  let notificationText = `⚠️ 夜間ジョブ異常 ${notificationAnomalies.length}件\n`;
   for (const anomaly of visible) notificationText += `- ${anomaly.label}: ${anomaly.message}\n`;
-  if (anomalies.length > visible.length) notificationText += `…ほか ${anomalies.length - visible.length}件（node tools/nightly-health.mjs --dry-run で全件）\n`;
+  if (notificationAnomalies.length > visible.length) notificationText += `…ほか ${notificationAnomalies.length - visible.length}件（全件は Claude が点検ログで確認します）\n`;
   if (suppressedCount) notificationText += `（既知の赤 ${suppressedCount}件は baseline により抑制）\n`;
   if (unregisteredLogs.length) {
     notificationText += `（未登録のログ ${unregisteredLogs.length}件: ${unregisteredLogs.slice(0, 5).join(', ')}）\n`;
   }
-  notificationText += '確認コマンド: node tools/nightly-health.mjs';
+  notificationText += '確認: Claude が夜間点検ログを確認します';
 
   const hash = crypto.createHash('sha256').update(notificationText).digest('hex');
   const statePath = path.join(home, '.claude', '.nightly-health-state.json');

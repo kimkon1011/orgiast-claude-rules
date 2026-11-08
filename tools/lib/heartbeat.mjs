@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from '../is-entry.mjs';
@@ -16,15 +16,19 @@ function parseEnv(text) {
 }
 
 export async function reportHeartbeat(
-  { job, startedAt, finishedAt, ok, summary },
-  { homeDir = os.homedir(), fetchImpl = globalThis.fetch } = {},
+  { job, startedAt, finishedAt, ok, summary, cycleMinutes },
+  { homeDir = os.homedir(), fetchImpl = globalThis.fetch, localOnly = false } = {},
 ) {
   if (!job) throw new Error('job is required');
-  const record = { job, startedAt, finishedAt, ok, summary };
+  const record = { job, startedAt, finishedAt, ok, summary, cycleMinutes };
   const heartbeatDir = path.join(homeDir, '.claude', 'heartbeat');
   const filePath = path.join(heartbeatDir, `${job}.json`);
   await mkdir(heartbeatDir, { recursive: true });
-  await writeFile(filePath, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+  const temporary = `${filePath}.${process.pid}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+  await rename(temporary, filePath);
+
+  if (localOnly) return { written: true, sent: false };
 
   let env;
   try {
@@ -76,6 +80,7 @@ export async function heartbeatCli(argv = process.argv.slice(2)) {
     finishedAt: args.finishedAt,
     ok: args.ok === undefined ? undefined : args.ok === 'true',
     summary: args.summary,
+    cycleMinutes: args.cycleMinutes === undefined ? undefined : Number(args.cycleMinutes),
   };
   if (args.dryRun) {
     process.stdout.write(`${JSON.stringify({ dryRun: true, record })}\n`);

@@ -1,19 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert';
-import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { runMirror } from './drive-hub-mirror.mjs';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-// Helper to set up a temporary test repository directory structure
+// Helper to set up a temporary test repository directory structure.
+// The fixture lives outside the repo (os.tmpdir): a fixture under tools/ is
+// seen by concurrently-running tests that walk the repo (e.g.
+// distribution-coverage.test.mjs) and races their readdir with our cleanup.
 function setupTestRepo(name) {
-  const repoPath = join(__dirname, `drive_mirror_test_repo_${name}`);
-  if (existsSync(repoPath)) {
-    rmSync(repoPath, { recursive: true, force: true });
-  }
+  const repoPath = mkdtempSync(join(tmpdir(), `drive_mirror_test_repo_${name}-`));
 
   mkdirSync(repoPath, { recursive: true });
   mkdirSync(join(repoPath, 'rules'), { recursive: true });

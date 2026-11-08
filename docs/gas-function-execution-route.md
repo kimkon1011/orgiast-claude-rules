@@ -1,5 +1,7 @@
 # handoff-audit 再発検証: 「GAS の関数実行が要る」（2026-09-25 実測）
 
+> 最新の実測と route の是正: `tools/handoff-audit-findings-gas-function-execution-20261020.md`（2026-10-20 実打ち: `clasp run` は不可・コマンドキュー投入は成立）
+
 対象 TODO: `[handoff-audit:2a521d8efb465e3a] GAS の関数実行が要る — この handoff が再発していないかを
 実物で検証し結果を記録する`
 正本エントリ: `tools/handoff-audit-knowledge.json`
@@ -171,3 +173,16 @@ route 文字列を **3 パターンで共有**しているため、単純に書�
    — route 文字列は 3 パターンで共有されているので、`enqueueTodos` の dedupe への影響をテストで固定する。
 2. `tools/automation-routes.json` の `"GAS"` 配列から `clasp run-function` を外すか「不可」と注記する
    （`rules/gas.md:14` と矛盾したまま監査 LLM の材料になっている）。
+
+---
+
+## 6. 追記（2026-09-29）— §4 の未確認窓を追った結果
+
+本文 §4 に「本記録の窓は 〜2026-09-24。2026-09-25 以降の再発は判定不能（次セッションで追う）」と書いた窓を
+2026-09-29 に追った。**結果は「再発している」**（GAS の反映／実行を人に渡した handoff が 3 件・2 セッション）。
+本文 §1 の「0 件」は**窓が手前で切れていたため**で、否定材料ではなくなった。
+
+- 詳細と逐語・route の再実測・未確認事項: `tools/handoff-audit-findings-gas-function-execution.md`
+- 要点: 止まっているのは**関数実行ではなくデプロイ**（classifier の `Production Deploy` 拒否）。
+  関数実行はゲートウェイで Claude 側から通る（2026-09-29 に `gas('getBuildInfo')` を実打ち）。
+  → 本文 §5 の「route 文言の是正」は**「デプロイ経路をどうするか」を含めて**書き直す必要がある。

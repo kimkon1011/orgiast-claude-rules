@@ -5,6 +5,7 @@ import path from 'node:path';
 import { execFile as nodeExecFile } from 'node:child_process';
 import { createLlmClient } from './line-digest.mjs';
 import { isEntry } from './is-entry.mjs';
+import { runTaskLedger } from './task-ledger.mjs';
 
 const BEGIN = '<!-- NEXT-ACTIONS:BEGIN -->';
 const END = '<!-- NEXT-ACTIONS:END -->';
@@ -217,7 +218,19 @@ export async function runNextActions(options = {}) {
       source: 'TODO'
     }];
   }
-  const body = render(actions, now), outputFile = path.join(base, 'next-actions.md');
+  const ledgerLines = ['## 別アカウント/他PCへの依頼（台帳）'];
+  const oneLine = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+  try {
+    const ledger = await (options.listLedger || runTaskLedger)({ command: 'list' }, { homeDir: home });
+    if (!ledger?.ok || !Array.isArray(ledger.rows)) throw new Error('台帳の応答が不正です');
+    for (const row of ledger.rows.filter((row) => ['依頼中', '対応中'].includes(row.状態))) {
+      const hours = Math.max(0, Math.floor((now.getTime() - Date.parse(row.最終更新)) / 3600000));
+      const elapsed = Number.isFinite(hours) ? `${Math.floor(hours / 24)}日${hours % 24}時間` : '不明';
+      ledgerLines.push(`- [${oneLine(row.taskId)}] ${oneLine(row.件名)} / 担当PC: ${oneLine(row.担当PC)} / 停滞: ${elapsed} / ${oneLine(row.成果物リンク)}`);
+    }
+    if (ledgerLines.length === 1) ledgerLines.push('該当なし');
+  } catch (error) { ledgerLines.push(`台帳取得失敗: ${oneLine(error.message)}`); }
+  const body = `${render(actions, now)}\n\n${ledgerLines.join('\n')}`, outputFile = path.join(base, 'next-actions.md');
   if (!cli.dryRun) { fs.mkdirSync(base, { recursive: true }); fs.writeFileSync(outputFile, replaceNextActionsSection(readFile(outputFile), body), 'utf8'); }
   if (cli.json) log(JSON.stringify({ actions }, null, 2));
   else if (cli.dryRun) log(body);

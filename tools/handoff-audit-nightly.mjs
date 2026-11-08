@@ -3,22 +3,55 @@ import fs from 'node:fs';
 import { writeHandoff } from './next-session-rotate.mjs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { auditHome, loadResources, buildPrompt, requestAudit, appendJsonl, fired } from './handoff-audit-gate.mjs';
+import { scan } from './permanent-fix-deferral-scan.mjs';
+import { summarizeStopRechecks } from './lib/stop-recheck.mjs';
 
 export function readJsonl(file) {
   try { return fs.readFileSync(file, 'utf8').split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } }); }
   catch (e) { if (e.code === 'ENOENT') return []; throw e; }
 }
+export function promotionFile(home) {
+  return path.join(home, '.claude', 'handoff-audit-promotions.jsonl');
+}
+// 先送り検出器はこのファイルの隣のコピー（＝nightly-batch.ps1 が起動するデプロイ済みツリー）で走る。
+// 夜間バッチは実行前に自己更新しないため、修正が origin/main に入ってもその夜は1日古い検出器で回り、
+// 検証セッション自身の報告文（パターン名「恒久修正の先送り文」の引用）を P1 と誤検出して
+// 余計な handoff を積んだ（2026-10-06 03:00:03 JST / session d401053d。検出器の更新は 03:02 着）。
+// git クローン（nightly-bootstrap が origin/main を保つ）の方が新しいときはそちらを読む。
+export function deferralDetectorFile(home, env = process.env) {
+  const local = fileURLToPath(new URL('./permanent-fix-deferral-scan.mjs', import.meta.url));
+  const root = env.ORGIAST_NIGHTLY_REPO || path.join(home, '.claude', 'nightly-repo');
+  const clone = path.join(root, 'tools', 'permanent-fix-deferral-scan.mjs');
+  // 改行コード差だけで「別物」と判定しないよう正規化してから比べる。
+  const read = file => { try { return fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n'); } catch { return null; } };
+  const cloneText = read(clone);
+  if (cloneText === null || cloneText === read(local)) return { file: local, source: 'local', differs: false };
+  return { file: clone, source: 'clone', differs: true };
+}
 const key = value => String(value).normalize('NFKC').trim().replace(/\s+/g, ' ');
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-export function mergeKnowledge(knowledge, learned, candidates, observation) {
+export function isToolNameRoute(route, toolRoutes = []) {
+  return toolRoutes.some(toolRoute => key(toolRoute) === key(route));
+}
+// automation-routes の道具名だけを昇格すると、監査対象が pattern でなく道具になり空回りする。
+// 確信度や観測回数によらず候補に保留し、人が手順文に書き直してから採用する。
+export function mergeKnowledge(knowledge, learned, candidates, observation, toolRoutes = []) {
   const next = [...knowledge];
   const pending = [...candidates];
   const promoted = [];
   for (const item of learned) {
+    if (isToolNameRoute(item.route, toolRoutes)) {
+      if (!pending.some(c => key(c.pattern) === key(item.pattern) && key(c.route) === key(item.route) && c.observation === observation)) pending.push({ ...item, observation, reason: 'tool-name-route' });
+      continue;
+    }
     if (next.some(k => key(k.pattern) === key(item.pattern))) continue;
+    // 同じ経路を別ラベルで再学習すると route 重複エントリが毎晩増え、knowledge.json が dirty になって
+    // rescue 枝が量産される（2026-10-22 実測: 3d8c172 は route が既存 entry と完全一致）。
+    // enqueueTodos も route 正規化キーで重複を落としているので、昇格側も同じ規則に揃える。
+    if (next.some(k => key(k.route) === key(item.route))) continue;
     const prior = pending.find(c => key(c.pattern) === key(item.pattern) && key(c.route) === key(item.route) && c.observation !== observation);
     if (item.confidence === 'high' || prior) {
       const entry = { ...item, confidence: 'high', source: `handoff-audit-nightly:${observation}` };
@@ -27,9 +60,9 @@ export function mergeKnowledge(knowledge, learned, candidates, observation) {
   }
   return { knowledge: next, candidates: pending, promoted };
 }
-export function enqueueTodos(markdown, items) {
+export function enqueueTodos(markdown, items, knownRoutes = []) {
   let output = markdown;
-  const routes = new Set();
+  const routes = new Set((knownRoutes || []).map(key));
   for (const line of output.split(/\r?\n/)) {
     const body = line.match(/^\s*\d+\. \[handoff-audit:[^\]]+\] (.*)$/)?.[1];
     if (!body) continue;
@@ -49,6 +82,27 @@ export function enqueueTodos(markdown, items) {
     routes.add(key(item.route));
   }
   return output;
+}
+// 道具名 route は自動昇格しないので、候補に積むだけだと誰も読まず腐る。見直し TODO を1本だけ常設する。
+export function enqueueToolRouteReview(markdown, held) {
+  if (!held || /\[handoff-audit:tool-name-route\]/.test(markdown)) return markdown;
+  const todo = `1. [handoff-audit:tool-name-route] handoff-audit-candidates.jsonl に route が道具名だけの候補（reason=tool-name-route）が保留されている — pattern ごとに route を手順文へ書き直して tools/handoff-audit-knowledge.json へ PR で採用するか、棄却する（2026-10-26 PR #1151 と同じ扱い）。kimへのDMなし。`;
+  const heading = /^## 残TODO[^\r\n]*(?:\r?\n|$)/m;
+  if (heading.test(markdown)) return markdown.replace(heading, m => `${m.endsWith('\n') ? m : m + '\n'}${todo}\n\n`);
+  return `${markdown}\n<!-- NEXT-SESSION v1 -->\n## 残TODO\n${todo}\n`;
+}
+export function deferralLedgerFile(home) {
+  return path.join(home, '.claude', 'handoff-audit-deferral-ledger.jsonl');
+}
+export function deferralObservation(row) {
+  return hash([row.ts, row.sessionId, row.pattern, row.match]);
+}
+export function deferralTodo(row) {
+  const quote = String(row.match ?? '').replace(/[\r\n]+/g, ' ').trim().slice(0, 80);
+  return {
+    pattern: `恒久修正の先送り文を検出（${row.ts} / ${String(row.sessionId).slice(0, 8)} / ${row.pattern}）「${quote}」`,
+    route: `違反セッションの先送りを当ターン内に実装まで終える（例: ${row.ts} / ${row.sessionId}）。検出は handoff-audit-nightly が毎晩自動実行する（tools/permanent-fix-deferral-scan.mjs）`
+  };
 }
 export function selectTargets(audits, runners, since, until) {
   const inDay = r => Date.parse(r.ts) >= since && Date.parse(r.ts) < until;
@@ -88,9 +142,14 @@ export async function runNightly(options = {}) {
     const processedFile = path.join(dir, 'handoff-audit-nightly-ledger.jsonl');
     let candidates = readJsonl(candidateFile);
     const done = new Set(readJsonl(processedFile).filter(r => r.verdict !== 'audit-unavailable').map(r => r.observation));
-    const targets = selectTargets(readJsonl(path.join(dir, 'handoff-audit-ledger.jsonl')), readJsonl(path.join(dir, 'stop-gate-runner-ledger.jsonl')), +since, +until);
-    const knownRoutes = new Set([...knowledge.map(k => k.route), ...Object.values(resources.routes).flat()]);
-    let reviewed = 0, added = 0;
+    const stopRows = readJsonl(path.join(dir, 'stop-gate-runner-ledger.jsonl'));
+    const targets = selectTargets(readJsonl(path.join(dir, 'handoff-audit-ledger.jsonl')), stopRows, +since, +until);
+    const stopRechecks = summarizeStopRechecks(stopRows, { since: +since });
+    const stopRecheckWarnings = stopRechecks.skippedStopHookActive > 0
+      ? [`stop_hook_active の素通りが ${stopRechecks.skippedStopHookActive} 件残っています`] : [];
+    const toolRoutes = Object.values(resources.routes).flat();
+    const knownRoutes = new Set([...knowledge.map(k => k.route), ...toolRoutes]);
+    let reviewed = 0, added = 0, promoted = 0;
     for (const target of targets) {
       const observation = hash([target.sessionId, target.evidence]);
       if (done.has(observation)) continue;
@@ -98,18 +157,78 @@ export async function runNightly(options = {}) {
       reviewed++;
       // 既知経路にない生成文を自動実行キューへ流さない。
       const learned = result.learned.filter(l => knownRoutes.has(l.route));
-      const merged = mergeKnowledge(knowledge, learned, candidates, observation);
+      const priorRoutes = knowledge.map(k => k.route);
+      const merged = mergeKnowledge(knowledge, learned, candidates, observation, toolRoutes);
       if (merged.knowledge.length !== knowledge.length) fs.writeFileSync(knowledgeFile, JSON.stringify(merged.knowledge, null, 2) + '\n');
+      // nightly-bootstrap が毎回 reset --hard する tree の外に置く。reset で route 文が消えないようにするため。
+      for (const entry of merged.promoted) {
+        appendJsonl(promotionFile(home), { ts: new Date().toISOString(), observation, ...entry });
+        promoted++;
+      }
       for (const candidate of merged.candidates.slice(candidates.length)) appendJsonl(candidateFile, candidate);
       const nextFile = path.join(dir, 'next-session.md');
       let previous = ''; try { previous = fs.readFileSync(nextFile, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-      const updated = enqueueTodos(previous, learned.filter(l => l.confidence === 'high' || merged.promoted.some(p => key(p.pattern) === key(l.pattern))));
+      const held = merged.candidates.slice(candidates.length).filter(c => c.reason === 'tool-name-route').length;
+      const updated = enqueueToolRouteReview(enqueueTodos(previous, learned.filter(l => !isToolNameRoute(l.route, toolRoutes) && (l.confidence === 'high' || merged.promoted.some(p => key(p.pattern) === key(l.pattern)))), priorRoutes), held);
       if (updated !== previous) writeHandoff(nextFile, updated);
       added += merged.promoted.length;
       knowledge = merged.knowledge; candidates = merged.candidates;
       appendJsonl(processedFile, { ts: new Date().toISOString(), observation, sessionId: target.sessionId, ...result });
     }
-    return { targets: targets.length, reviewed, added };
+    // 先送り検出器（恒久修正を設計のみで次セッションへ送る型）を夜間監査に載せる。
+    // ここで失敗しても監査本体は落とさない（fail-open）。ただし黙らず deferral.error に残す。
+    let deferral = { total: 0, hits: 0, byPattern: {}, enqueued: 0 };
+    try {
+      const from = since.toISOString(), to = until.toISOString();
+      const detector = deferralDetectorFile(home, options.env || process.env);
+      let usedDetector = detector.source;
+      let detect = scan;
+      if (detector.source === 'clone') {
+        // クローン側が読めなければローカルの検出器で続行する（夜間監査を落とさない）。
+        try {
+          const module = await import(pathToFileURL(detector.file).href);
+          if (typeof module.scan !== 'function') throw new Error('scan が無い検出器');
+          detect = module.scan;
+        } catch { detect = scan; usedDetector = 'local'; }
+      }
+      const report = detect({ home, since: from, until: to });
+      const rows = report.sources.flatMap(source => (source.rows || []).map(row => ({ ...row, source: source.name })));
+      const byPattern = {};
+      let total = 0;
+      for (const source of report.sources) {
+        total += source.total || 0;
+        for (const [pattern, count] of Object.entries(source.byPattern || {})) byPattern[pattern] = (byPattern[pattern] || 0) + count;
+      }
+      const ledgerFile = deferralLedgerFile(home);
+      const seen = new Set(readJsonl(ledgerFile).filter(r => r.kind === 'hit').map(r => r.observation));
+      const fresh = rows.filter(row => !seen.has(deferralObservation(row)));
+      const ts = new Date().toISOString();
+      // hits が 0 でも必ず書く（「0 は測った 0」を後から証明できるようにする）。
+      appendJsonl(ledgerFile, { ts, kind: 'window', since: from, until: to, total, hits: rows.length, byPattern, detector: usedDetector, detectorDiffers: detector.differs });
+      for (const row of fresh) appendJsonl(ledgerFile, { ts, kind: 'hit', observation: deferralObservation(row), ...row });
+      // 同じ違反セッションの同じパターンは1つの窓で何度も検出される（ループがイテレーションごとに
+      // 同じ先送り文を書き続ける）。検出行ごとに別IDの監査TODOが積まれると、1つの先送りが
+      // 8本の「検証の検証」セッションに増殖した（2026-10-23T07:23 の session 9310953f が実例:
+      // 07:23:09〜07:23:19 の4行が別TODOになり、e2de84a9 の検証ループが8周した）。
+      // 台帳には全検出行を残し、TODOは (sessionId, pattern) ごとに窓内の先頭1件だけ積む。
+      const enqueueRows = [];
+      const enqueuedKeys = new Set();
+      for (const row of fresh) {
+        const groupKey = `${row.sessionId ?? ''}\u0000${row.pattern}`;
+        if (enqueuedKeys.has(groupKey)) continue;
+        enqueuedKeys.add(groupKey);
+        enqueueRows.push(row);
+      }
+      let enqueued = 0;
+      if (enqueueRows.length > 0) {
+        const nextFile = path.join(dir, 'next-session.md');
+        let previous = ''; try { previous = fs.readFileSync(nextFile, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+        const updated = enqueueTodos(previous, enqueueRows.map(deferralTodo));
+        if (updated !== previous) { writeHandoff(nextFile, updated); enqueued = enqueueRows.length; }
+      }
+      deferral = { total, hits: rows.length, byPattern, enqueued, detector: usedDetector, detectorDiffers: detector.differs };
+    } catch (error) { deferral = { ...deferral, error: error.message }; }
+    return { targets: targets.length, reviewed, added, promoted, deferral, stopRechecks, stopRecheckWarnings };
   } finally { fs.closeSync(fd); fs.unlinkSync(lock); }
 }
 if (isEntry(import.meta.url)) {

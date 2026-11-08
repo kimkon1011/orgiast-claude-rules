@@ -1,23 +1,37 @@
 #!/usr/bin/env node
+export const GATE_CONTRACT = {"name": "handoff-investigation-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "handoff-investigation-gate"}]};
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { latestAssistantText } from './lib/assistant-text.mjs';
 import { hasManualRequest } from './manual-request-fullsteps-gate.mjs';
+import { findUnbackedExternalHandoff, formatHandoffActionReason } from './handoff-action-evidence.mjs';
 
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
 
-export function evaluateInvestigation(text) {
+export function evaluateInvestigation(text, options = {}) {
   const value = String(text || '');
   if (!hasManualRequest(value)) return { decision: 'pass', reason: '手作業依頼なし', exempt: false };
   if (value.includes('[INVESTIGATION-OK]')) return { decision: 'pass', reason: 'INVESTIGATION-OK', exempt: true };
+
+  const rawTranscript = typeof options === 'string' ? options : options?.transcriptRaw;
+  if (rawTranscript) {
+    const violation = findUnbackedExternalHandoff(value, rawTranscript);
+    if (violation) {
+      return { decision: 'block', missing: [], reason: formatHandoffActionReason(), code: 'HANDOFF-ACTION', exempt: false };
+    }
+  }
 
   const missing = [];
   const marker = value.search(/\[手渡し判定\]/);
   if (marker < 0) missing.push('[手渡し判定] ブロック');
 
   const block = marker < 0 ? '' : value.slice(marker);
+  const waitStall = /返事が(?:来ない|ない|返ってこない)|応答(?:が)?ない|反応(?:が)?ない|未返信|読まれたまま|結果が(?:返って|来)ない|タイムアウト|not-hub|待ち続け|止まっている/i;
+  if (waitStall.test(block) && !/^恒久経路:.*(?:→|⇒).+$/m.test(block)) {
+    return { decision: 'block', missing: [], reason: '[WAIT-STALL] 他PC・他人・他レーンの返事待ちや停滞は、user に手作業を回す理由になりません（§1.1）。待っている間は Claude が催促し、別経路（§1.18.2 Grok Bot・ハブ中継・資格の正規配布）を試し、詰まった経路そのものを直す実装か PR を進めてください。user には状況の報告だけをし、手作業は頼まないこと。どうしても残る場合は「恒久経路: <進めた実装/PR> → <結果>」を書いてください。（2026-10-19 cr 指摘）', code: 'WAIT-STALL', exempt: false };
+  }
   if (/(?:classifier|拒否|denied|Self-Modification)/i.test(block) && !/^最小単位で再試行:/m.test(block)) {
     return { decision: 'block', missing: [], reason: '[MINIMAL-RETRY] classifier 拒否を理由に手渡しています。手渡し前に、目的の変更だけを最小単位で1回試した結果を `最小単位で再試行: <試した操作> → <結果>` で書いてください。一括操作や緩める方向の操作の拒否から、未試行の個別操作を不可と推定するのは禁止（2026-09-17 実害）。' };
   }
@@ -36,7 +50,8 @@ export function evaluateInvestigation(text) {
   return missing.length ? { decision: 'block', missing, exempt: false } : { decision: 'pass', reason: '調査証拠あり', missing: [], exempt: false };
 }
 
-export function failureReason(missing) {
+export function failureReason(missing, actionReason) {
+  if (actionReason) return actionReason;
   if (!missing?.length) return '[MINIMAL-RETRY] classifier 拒否を理由に手渡しています。手渡し前に、目的の変更だけを最小単位で1回試した結果を `最小単位で再試行: <試した操作> → <結果>` で書いてください。一括操作や緩める方向の操作の拒否から、未試行の個別操作を不可と推定するのは禁止（2026-09-17 実害）。';
   return `[INVESTIGATION] user に依頼していますが、事前調査の証拠がありません。\n不足: ${missing.join(', ')}\n\n[手渡し判定] ブロックに次を書いてください:\n  試したこと:\n    ① <実際に叩いた/検索した内容> → <結果>\n    ② <別経路> → <結果>\n  user でないと無理な理由: <OAuth初回同意 / 支払い / アカウント作成・ログイン / 物理操作 のどれか>\n\n「たぶん要る」は不可。手を動かして確かめた結果だけを書くこと。\n受け取っても使えないものを頼んでいないか(=受領後に機能する確証)も先に確かめること。`;
 }
@@ -67,10 +82,11 @@ async function main() {
     const input = JSON.parse(raw);
     const text = input.assistant_text || latestAssistantText(input.transcript_path);
     if (!text) return;
-    const result = evaluateInvestigation(text);
+    const rawTranscript = input.transcript_raw || (input.transcript_path && fs.existsSync(input.transcript_path) ? fs.readFileSync(input.transcript_path, 'utf8') : '');
+    const result = evaluateInvestigation(text, rawTranscript);
     record(input, result, text);
     if (input.stop_hook_active || result.decision === 'pass') return;
-    console.error(failureReason(result.missing));
+    console.error(failureReason(result.missing, result.reason));
     process.exitCode = 2;
   } catch {
     // 想定外エラーは既存ゲートと同じく fail-open。

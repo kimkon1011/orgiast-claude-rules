@@ -123,7 +123,7 @@ ONBOARDING.compressed.md §3.0 / §3.0.1 の詳細（貼り付けプロンプト
 1. レポーター本体の存在確認: <ホーム>\orgiast-claude-rules\tools\claude-cost-reporter.mjs があるか確認（無ければ git clone https://github.com/kimkon1011/orgiast-claude-rules.git を実行、既存なら git pull で最新化）。
 
 2. ~/.claude/cost-reporter.env を作成/確認する（無ければ作る。既にあれば上書きしない）:
-   DISCORD_COST_WEBHOOK=<kim から私的に共有された #claude-code webhook。公開リポジトリには無い。分からなければここで user 経由で kim に確認し、値を勝手に作らない>
+   DISCORD_COST_WEBHOOK=<kim から私的に共有された #claude-code webhook。公開リポジトリには無い。未取得なら node tools/onboarding-sync.mjs --keys-only --force で取得し、値を勝手に作らない>
    REPORTER_LABEL=<このPCが誰のものか分かる名前。例: kim-PC / eigyo-nishi など。省略時はOSホスト名>
 
 3. 動作確認(送信しない): <shell> で node "<ホーム>\orgiast-claude-rules\tools\claude-cost-reporter.mjs" --dry-run を実行し、PC名・MTD$・モデル別内訳が表示されることを確認（--dry-run はDiscordに送らない）。

@@ -1,0 +1,193 @@
+#!/usr/bin/env node
+// Stop hook: 応答末尾の「このセッション: まだ閉じない（…YYYY-MM-DD HH:MM まで待つ）」の期限を、
+// セッション一覧のタイトルの頭に【11/02/20:11まで】の形（年なし）で付ける（2026-10-27 nishi 指示・全PC全アカウント）。
+// 一覧を見ただけで、どのタブをいつまで開けておくかが分かるようにする。
+// 閉じてよい定型文になったら頭の期限を外し、「次に kim がすること」が無い（なし等）か閉じる操作だけなら【閉じて可】を付ける
+// （2026-11-02 kim 指示・全PC全アカウント。kim のやることが残るセッションは閉じてよい定型文でも付けない）。
+// フッターが無い応答では頭の印を保持し、PC番号だけを付ける。fail-open・出力なし。
+// 本体はノイズを除外し、手動の命名を最優先、その次に assistant が最初に宣言した目的を使う。
+// --prompt-submit: 既存タイトルにPC番号を付けてサーバーへ同期する（transcript は読み取り専用）。
+// --all: 既存の全セッション（直近 RECENT_DAYS 日）にも同じ規則を当てる。SessionStart から1時間に1回だけ走る。
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { isEntry } from './is-entry.mjs';
+import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+import { resolvePcNumber } from './lib/pc-number.mjs';
+import { footerValues, NO_ACTION_PATTERN, openDeadline, SESSION_PHRASES } from './next-action-gate.mjs';
+
+const MAX_BYTES = 256 * 1024 * 1024;
+const RECENT_DAYS = 30;
+const SWEEP_COOLDOWN_MS = 60 * 60 * 1000;
+export const CLOSABLE_PREFIX = '【閉じて可】';
+// 旧形式【26/11/02/20:11まで】（年あり）も外して新形式へ付け替える。期限と【閉じて可】は排他で、どちらも付け替え対象。
+const PREFIX = /^(?:(?:【(?:\d{2}\/)?\d{2}\/\d{2}\/\d{2}:\d{2}まで】|【閉じて可】)\s*)+/;
+
+// 任意の作業を巻き込まないよう、各片を許可した閉じる操作の全文と照合する。
+export function isCloseRitualOnly(nextAction) {
+  if (typeof nextAction !== 'string') return false;
+  const tab = '(?:(?:タブバーの)?(?:一番右|右端)(?:にある|の))?(?:新しい|この|古い)?タブ';
+  const start = new RegExp(`^${tab}で\\s*(?:Enter\\s*を\\s*(?:1回\\s*)?押(?:す|し)|/session-start\\s*を\\s*送(?:る|り))$`);
+  const close = /^(?:(?:この)?(?:古い)?タブを\s*(?:✕\s*で\s*)?|(?:この)?セッションを\s*)閉じ(?:る|て|ます)$/;
+  return nextAction.split(/[、。→，]/).every(part => {
+    const text = part.trim();
+    return !text || start.test(text) || close.test(text);
+  });
+}
+
+// 閉じてよい定型文（closed / delete）で、かつ kim のやることが無いか閉じる操作だけなら true。
+export function isClosable(footer) {
+  return !!footer && [SESSION_PHRASES.closed, SESSION_PHRASES.delete].includes(footer.session)
+    && (NO_ACTION_PATTERN.test(footer.nextAction) || isCloseRitualOnly(footer.nextAction));
+}
+
+export function waitPrefix(date) {
+  const p = n => String(n).padStart(2, '0');
+  return `【${p(date.getMonth() + 1)}/${p(date.getDate())}/${p(date.getHours())}:${p(date.getMinutes())}まで】`;
+}
+
+function isNoiseText(text) {
+  return /^(?:<|Base directory for this skill:|Stop hook feedback:|\[SYSTEM NOTIFICATION|Caveat:)/.test(text.trim());
+}
+
+// transcript から現在のタイトルと、最初の依頼・宣言目的を拾う。
+export function currentTitles(raw) {
+  let custom = '', ai = '', firstPrompt = '', autoAi = '', customSource = '', declaredPurpose = '';
+  for (const line of String(raw || '').split('\n')) {
+    if (line.includes('"custom-title"')) { try { const e = JSON.parse(line); if (e.type === 'custom-title' && typeof e.customTitle === 'string') { custom = e.customTitle; customSource = e.source || ''; autoAi = ''; } } catch {} }
+    else if (line.includes('"ai-title"')) { try { const e = JSON.parse(line); if (e.type === 'ai-title' && typeof e.aiTitle === 'string') { ai = e.aiTitle; if (customSource === 'orgiast-auto') autoAi = ai; } } catch {} }
+    else if (!firstPrompt && line.includes('"type":"user"')) {
+      try {
+        const c = JSON.parse(line).message?.content;
+        const text = typeof c === 'string' ? c : Array.isArray(c) ? c.find(b => b?.type === 'text')?.text : '';
+        if (text && !isNoiseText(text)) firstPrompt = text.replace(/\s+/g, ' ').trim().slice(0, 40);
+      } catch {}
+    }
+    else if (!declaredPurpose && line.includes('"assistant"')) {
+      try {
+        const e = JSON.parse(line);
+        if (e.type !== 'assistant') continue;
+        const c = e.message?.content;
+        const text = typeof c === 'string' ? c : Array.isArray(c) ? c.filter(b => b?.type === 'text').map(b => b.text).join('\n') : '';
+        const purpose = text.match(/(?:\*\*)?\[本セッションの目的\](?:\*\*)?[ \t]*([^\r\n]+)/)?.[1];
+        if (purpose) declaredPurpose = purpose.replace(/\s+/g, ' ').trim().slice(0, 40);
+      } catch {}
+    }
+  }
+  return { custom, ai, firstPrompt, autoAi, customSource, declaredPurpose };
+}
+
+export function lastAssistantText(raw) {
+  const lines = String(raw || '').split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (!lines[i].includes('"type":"assistant"')) continue;
+    try {
+      const c = JSON.parse(lines[i]).message?.content;
+      const text = Array.isArray(c) ? c.filter(b => b?.type === 'text').map(b => b.text).join('\n') : '';
+      if (text.trim()) return text;
+    } catch {}
+  }
+  return '';
+}
+
+// 書くべき custom-title を返す。変更不要なら null。
+export function desiredTitle(text, raw, pc = '') {
+  const footer = footerValues(text);
+  if (!footer && !pc) return null;
+  const { custom, ai, firstPrompt, autoAi, customSource, declaredPurpose } = currentTitles(raw);
+  const withoutPc = title => title.replace(/^\d{3}｜/, '');
+  const existingPrefix = withoutPc(custom).match(PREFIX)?.[0] || '';
+  const titleBody = title => {
+    const body = withoutPc(title.trim()).replace(PREFIX, '').trim();
+    return isNoiseText(body) ? '' : body;
+  };
+  const base = (customSource !== 'orgiast-auto' ? titleBody(custom) : '')
+    || declaredPurpose || titleBody(autoAi) || titleBody(custom) || titleBody(ai) || firstPrompt || 'セッション';
+  const deadline = footer ? openDeadline(footer.session) : null;
+  const prefix = deadline ? waitPrefix(deadline) : isClosable(footer) ? CLOSABLE_PREFIX : !footer ? existingPrefix : '';
+  // Without a PC number, keep the existing footer-driven behavior.
+  if (!pc && !prefix && !existingPrefix) return null;
+  const next = `${pc ? pc + '｜' : ''}${prefix}${base}`;
+  return next === custom ? null : next;
+}
+
+// 初回のAI命名を待ってから、UserPromptSubmit の rename 経路へタイトルを渡す。
+export function promptSubmit(input, { readFile = fs.readFileSync, statSize = p => fs.statSync(p).size, resolvePcNumber: resolveNumber = resolvePcNumber } = {}) {
+  try {
+    const pc = resolveNumber();
+    const file = input?.transcript_path || input?.transcriptPath || '';
+    const sessionId = input?.session_id || input?.sessionId || '';
+    if (!pc || !file || !sessionId || /subagents/i.test(file)) return null;
+    if (statSize(file) > MAX_BYTES) return null;
+    const raw = readFile(file, 'utf8');
+    const { custom, ai, customSource } = currentTitles(raw);
+    if (!custom && !ai) return null;
+    // 人の /rename は番号以外を保持し、自動命名だけ期限フッターを反映する。
+    let title = custom && customSource !== 'orgiast-auto'
+      ? custom : desiredTitle(lastAssistantText(raw), raw, pc) ?? custom;
+    if (!/^\d{3}｜/.test(title)) title = `${pc}｜${title}`;
+    return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', sessionTitle: title } };
+  } catch { return null; }
+}
+
+export function apply(input, { readFile = fs.readFileSync, appendFile = fs.appendFileSync, statSize = p => fs.statSync(p).size, resolvePcNumber: resolveNumber = resolvePcNumber } = {}) {
+  const file = input?.transcript_path || input?.transcriptPath || '';
+  const sessionId = input?.session_id || input?.sessionId || '';
+  if (!file || !sessionId || /subagents/i.test(file)) return null;
+  if (statSize(file) > MAX_BYTES) return null;
+  const raw = readFile(file, 'utf8');
+  const text = typeof input?.last_assistant_message === 'string' && input.last_assistant_message.trim() ? input.last_assistant_message : lastAssistantText(raw);
+  const title = desiredTitle(text, raw, resolveNumber());
+  if (!title) return null;
+  appendFile(file, `${raw.endsWith('\n') ? '' : '\n'}${JSON.stringify({ type: 'custom-title', customTitle: title, sessionId, source: 'orgiast-auto' })}\n`);
+  return title;
+}
+
+// 全プロジェクトの transcript に apply を当てる。subagent・古いもの・巨大なものは飛ばす。
+export function sweepAll({ base = path.join(os.homedir(), '.claude'), now = Date.now(), force = false, resolvePcNumber: resolveNumber = resolvePcNumber } = {}) {
+  const stateFile = path.join(base, 'session-wait-title-state.json');
+  try { if (!force && now - JSON.parse(fs.readFileSync(stateFile, 'utf8')).at < SWEEP_COOLDOWN_MS) return { skipped: 'cooldown' }; } catch {}
+  try { fs.writeFileSync(stateFile, JSON.stringify({ at: now })); } catch {}
+  const result = { scanned: 0, titled: [] };
+  const projects = path.join(base, 'projects');
+  let dirs = [];
+  try { dirs = fs.readdirSync(projects, { withFileTypes: true }).filter(d => d.isDirectory()); } catch { return result; }
+  for (const dir of dirs) {
+    let names = [];
+    try { names = fs.readdirSync(path.join(projects, dir.name)); } catch { continue; }
+    for (const name of names) {
+      if (!name.endsWith('.jsonl')) continue;
+      const file = path.join(projects, dir.name, name);
+      try {
+        const stat = fs.statSync(file);
+        if (now - stat.mtimeMs > RECENT_DAYS * 86400_000) continue;
+        result.scanned += 1;
+        const title = apply({ transcript_path: file, session_id: name.slice(0, -'.jsonl'.length) }, { resolvePcNumber: resolveNumber });
+        // PC番号の一括付与で全 transcript の更新日時が今になり、履歴の並び順が崩れるのを防ぐ。
+        if (title) { fs.utimesSync(file, stat.atime, stat.mtime); result.titled.push({ session: name.slice(0, 8), title }); }
+      } catch { /* 1件の失敗で止めない */ }
+    }
+  }
+  return result;
+}
+
+async function main() {
+  try {
+    if (process.argv.includes('--all')) {
+      const result = sweepAll({ force: process.argv.includes('--force') });
+      if (process.argv.includes('--verbose')) console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    const raw = await readStdinWithTimeout();
+    if (!raw.trim()) return;
+    const input = JSON.parse(raw);
+    if (process.argv.includes('--prompt-submit')) {
+      const output = promptSubmit(input);
+      if (output) console.log(JSON.stringify(output));
+      return;
+    }
+    apply(input);
+  } catch { /* fail-open */ }
+}
+
+if (isEntry(import.meta.url)) { await main(); process.exitCode = 0; }

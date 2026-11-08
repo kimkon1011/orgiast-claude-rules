@@ -23,3 +23,17 @@ test('machineIdentity returns 未設定 without throwing when global git email i
   assert.equal(typeof identity.hostname, 'string');
   assert.equal(typeof identity.username, 'string');
 });
+
+test('getClaudeAccountEmail は oauthAccount を読み、失敗時は null', async (t) => {
+  const { getClaudeAccountEmail, macSerial } = await import('./machine-identity.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'machine-identity-acct-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  assert.equal(getClaudeAccountEmail(home), null);
+  fs.writeFileSync(path.join(home, '.claude.json'), '﻿' + JSON.stringify({ oauthAccount: { emailAddress: 'cr@orgiast.jp' } }));
+  assert.equal(getClaudeAccountEmail(home), 'cr@orgiast.jp');
+  fs.writeFileSync(path.join(home, '.claude.json'), '{broken');
+  assert.equal(getClaudeAccountEmail(home), null);
+  assert.equal(macSerial(() => ({ status: 0, stdout: '"IOPlatformSerialNumber" = "C02ABC"' }), 'darwin'), 'C02ABC');
+  assert.equal(macSerial(() => { throw new Error('x'); }, 'darwin'), null);
+  assert.equal(macSerial(undefined, 'win32'), null);
+});

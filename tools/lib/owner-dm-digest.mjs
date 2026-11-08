@@ -1,0 +1,112 @@
+import { decisionOwnerOf } from '../auto-progress-decision-owner.mjs';
+import { notificationKind } from './owner-dm-policy.mjs';
+const day = 86400000;
+const plain = value => cleanText(value).replace(/(?:作業ID|セッションの目的|プロジェクト)[:：][^\n]*/g, '').replace(/(?:[A-Za-z]:\\|~?\/)[^\s、。]+/g, '').replace(/\b(?:autopilot|headless|quota-sweep|nightly-repo|unattended)\b[^\s、。]*/gi, '').replace(/\s+/g, ' ').trim();
+export function compactDigest(rows, deferred, now, { home, owner = '' } = {}) {
+  const actions = deferred.filter(r => r.kind === 'action');
+  for (const row of rows) if (isHumanActionRequired(row)) {
+    const kimWaiting = decisionOwnerOf(row) === 'kim' && owner.toLowerCase() !== 'kim@orgiast.jp';
+    const action = kimAction(row);
+    actions.push({ text: `${kimWaiting ? 'kim の判断待ち: ' : ''}${[plain(row.label || row.promise).slice(0, 60), action === 'なし' ? '' : plain(action)].filter(Boolean).join(' — ')}`, reply: !kimWaiting, at: row.changedAt || row.ts });
+  }
+  const byText = new Map();
+  for (const action of actions) {
+    const previous = byText.get(action.text);
+    if (!previous || Date.parse(action.at) < Date.parse(previous.at)) byText.set(action.text, { ...action });
+    if (action.reason === 'daily-limit') byText.get(action.text).reason = 'daily-limit';
+  }
+  const unique = [...byText.values()];
+  const old = unique.filter(a => a.reason !== 'daily-limit' && now - Date.parse(a.changedAt || a.at) >= 7 * day);
+  const recent = unique.filter(a => !old.includes(a)).sort((a, b) => Number(b.reason === 'daily-limit') - Number(a.reason === 'daily-limit'));
+  const lines = ['あなたの返事待ち'];
+  // Never truncate a question: oversized questions remain in the queue for a later digest.
+  const included = [];
+  let chars = 0;
+  for (const a of recent) {
+    const text = plain(a.text);
+    if (included.length >= 2 || chars + text.length > 1350) continue;
+    included.push(a); chars += text.length;
+    lines.push(`・${text}${a.reply === false ? '（あなたの操作は不要）' : '（このDMに返信してください）'}`);
+  }
+  const extra = [];
+  if (old.length) extra.push(`古い待ち ${old.length}件（7日以上動きなし）`);
+  if (!unique.length) lines.push('なし');
+  else if (recent.length > included.length) extra.push(`ほか返事待ち ${recent.length - included.length}件（次のまとめでお知らせします）`);
+  if (extra.length) lines.push(extra.join(' ／ '));
+  const humanRows = rows.filter(r => notificationKind('', { kind: 'done-requested', session: r, home }) === 'done-requested');
+  const human = [...humanRows, ...deferred.filter(r => r.kind === 'done-requested' && !humanRows.some(h => h.sessionId && h.sessionId === r.session?.sessionId)).map(r => ({ ...r.session, status: 'done', label: r.session?.label || r.session?.requestText || r.text }))];
+  const names = list => list.map(r => plain(r.label || r.requestText || r.promise)).filter(Boolean).slice(0, 2).join('・').slice(0, 120);
+  const done = human.filter(r => r.status === 'done');
+  const ongoing = human.filter(r => r.status !== 'done');
+  lines.push('あなたが頼んだこと', `完了 ${done.length}件: ${names(done) || 'なし'}`, `進行中 ${ongoing.length}件: ${names(ongoing) || 'なし'}${ongoing.some(r => ['stalled', 'waiting_user'].includes(r.status)) ? `（止まっている ${ongoing.filter(r => ['stalled', 'waiting_user'].includes(r.status)).length}件）` : ''}`);
+  const automatic = rows.filter(r => !humanRows.includes(r));
+  lines.push('自動作業', `完了 ${automatic.filter(r => r.status === 'done').length + deferred.filter(r => r.kind === 'automatic' && r.status === 'done').length}件・止まっている ${automatic.filter(r => ['stalled', 'waiting_user'].includes(r.status)).length + deferred.filter(r => r.kind === 'automatic' && r.status === 'stalled').length}件`);
+  const shown = new Set([...included, ...old].map(a => a.text));
+  return { text: lines.join('\n'), includedIds: actions.filter(a => shown.has(a.text)).map(a => a.id).filter(Boolean) };
+}
+
+// Shared by the compact digest and the legacy formatter without importing the CLI.
+export const kimAction = row => {
+  const value = String(row.nextKim || '').trim();
+  // 「なし / 0件」「なし（…」のように補足付き・途中で切れた「なし」も人の操作は不要として扱う。
+  if (/^(?:特に)?(?:なし|無し|ナシ)/.test(value)) return 'なし';
+  const action = /^(?:(?:特に)?なし|無し|ナシ|(?:対応(?:は)?)?不要(?:です)?|(?:特に)?ありません|none|n\/a|[-—–－ー―])(?:[（(].*[）)])?[。．]?$/i.test(value) || !value ? 'なし' : value;
+  // 相手・別処理からの到着を待つ条件は kim の操作ではない。
+  return /(?:待機|待つ|返事待ち|返信待ち|確認待ち|判断待ち|(?:が|から).*来たら|(?:が|を).*したら)/.test(action) ? 'なし' : action;
+};
+
+export const isHumanActionRequired = (row) => {
+  if (row.status === 'done') return false;
+  // main: 依頼本文がない明示的な判断待ちも取りこぼさない。
+  if (row.status === 'waiting_user' && !String(row.nextKim || '').trim()) return true;
+  if (kimAction(row) !== 'なし') return true;
+  // promise は Claude 自身が進める約束なので語句では判定しない（「判断」等を含むだけで誤って判断待ちになる）。
+  // 人の操作が要るのは「次に kim がすること」か、自動再開の結果が needs_user を返した時だけ。
+  return /^needs_user\b/.test(String(row.resumeOutcome || '').trim());
+};
+
+
+export function cleanText(text, row = {}) {
+  let s = String(text || '');
+  // 先頭の定型句
+  s = s.replace(/^[-*•\s]*(?:\*\*|__)?(?:この後の自動進行|自動進行|約束)(?:\*\*|__)?[:：\s]*/i, '');
+  // バッククォートの中身（コマンド・パス・ファイル名）は消さずに残し、記号のバッククォートだけ外す。
+  // 中身を消すと「マージ後に と で同期すれば」のように文へ穴が開く。平易化は送信時の notify-kim 側で行う。
+  const kept = [];
+  s = s.replace(/`([\s\S]*?)`/g, (_, inner) => { kept.push(inner); return `\u0000K${kept.length - 1}\u0000`; });
+  // 英語ステータス名を日本語へ
+  s = s.replace(/\bdone\b/gi, '完了');
+  s = s.replace(/\bstalled\b/gi, '止まっている');
+  s = s.replace(/\bin_progress\b/gi, '進行中');
+  s = s.replace(/\bwaiting_user\b/gi, '判断待ち');
+  s = s.replace(/\bneeds_user\b/gi, '判断待ち');
+  s = s.replace(/\bresumed\b/gi, '再開済み');
+  s = s.replace(/\bopen\/期限超過\b/gi, '期限超過');
+  s = s.replace(/\bprogressed\b/gi, '進行');
+  s = s.replace(/\bblocked\b/gi, '中断');
+  s = s.replace(/\bsuperseded\b/gi, '更新');
+
+  if (row.pc) s = s.split(row.pc).join('');
+  if (row.sessionId) s = s.split(row.sessionId).join('');
+
+  // ID、UUID、ハッシュ
+  s = s.replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '');
+  s = s.replace(/\b[0-9a-f]{16,64}\b/gi, '');
+  s = s.replace(/\b[0-9a-f]{8,12}\b/gi, '');
+  s = s.replace(/\bDESKTOP-[A-Z0-9]+\b/g, '');
+
+  // ファイルパス・ディレクトリパス
+  s = s.replace(/[a-zA-Z]:\\[^\s:：()（）「」\r\n]+/g, '');
+  s = s.replace(/(?:^|[\s(（])(?:\/[a-zA-Z0-9_.-]+){2,}/g, '');
+  s = s.replace(/~\/\.[a-zA-Z0-9_.-]+[^\s:：()（）「」\r\n]*/g, '');
+
+  // コマンド名（node / git 等）は文脈ごと消すと穴が開くので、ここでは削らない。
+
+  // 保護したバッククォートの中身を戻す
+  s = s.replace(/\u0000K(\d+)\u0000/g, (_, index) => kept[Number(index)] ?? '');
+
+  // 空白正規化
+  s = s.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+  s = s.replace(/^[:：\-–—\s]+/, '').replace(/[:：\-–—\s]+$/, '');
+  return s;
+}

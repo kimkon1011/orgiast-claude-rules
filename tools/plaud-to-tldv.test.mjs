@@ -5,8 +5,21 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   apiBaseFor, regionFromToken, isWorkspaceTokenExpired, buildProxyUrl, proxyExtensionFor, tokensFromRefresh, shouldNotify, renewalMessage, renewalNoticePath, durationToSeconds, epochToIso, extensionFromUrl, isTldvSupportedUrl, meetsMinimumDuration,
-  mergeState, readState, redactSecret, regionFromRedirect, selectPlaudCookies, shouldImport,
+  mergeState, readState, redactSecret, regionFromRedirect, selectPlaudCookies, shouldImport, userTokenRefreshMode,
 } from './plaud-to-tldv.mjs';
+
+test('UT は残り7日で前倒し更新する(UT と URT が同時に切れるため、5分前では毎時実行が間に合わない)', () => {
+  const now = 1_800_000_000;
+  const day = 86400;
+  assert.equal(userTokenRefreshMode(0, now), 'required');
+  assert.equal(userTokenRefreshMode(now + 60, now), 'required');
+  // 2026-10-12 の失効: 期限55分前の実行は旧ロジックでは更新せず、次の実行では URT も失効済みだった
+  assert.equal(userTokenRefreshMode(now + 55 * 60, now), 'proactive');
+  assert.equal(userTokenRefreshMode(now + 6 * day, now), 'proactive');
+  assert.equal(userTokenRefreshMode(now + 7 * day, now), 'proactive');
+  assert.equal(userTokenRefreshMode(now + 8 * day, now), 'none');
+  assert.equal(userTokenRefreshMode(now + 30 * day, now), 'none');
+});
 
 test('Set-Cookie は削除用を無視し、最後の実値を採用する', () => {
   const cookies = [

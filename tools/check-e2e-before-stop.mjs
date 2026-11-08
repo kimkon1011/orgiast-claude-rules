@@ -34,7 +34,7 @@ async function main() {
     const raw = await readStdinWithTimeout();
     if (!raw.trim()) return;
     const input = JSON.parse(raw);
-    if (input?.stop_hook_active || !input?.transcript_path || !fs.existsSync(input.transcript_path)) return;
+    if (!input?.transcript_path || !fs.existsSync(input.transcript_path)) return;
     const text = latestAssistantText(input.transcript_path); if (!text) return;
     const result = checkE2eBeforeStop(text);
     if (result.decision === 'warn') console.log(JSON.stringify({ systemMessage: result.message }));

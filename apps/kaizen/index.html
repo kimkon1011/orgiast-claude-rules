@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>改善アプリ</title>
+  <style>
+    * { box-sizing: border-box; } body { margin: 0; color: #20312e; background: #f1f5f3; font: 16px/1.65 system-ui, sans-serif; }
+    main { max-width: 1000px; margin: auto; padding: 24px; } h1, h2, h3 { line-height: 1.4; } h1 { margin-bottom: 8px; }
+    section, article { background: white; border: 1px solid #ccd9d3; border-radius: 12px; padding: 22px; margin: 20px 0; }
+    article { background: #fafcfb; } label { display: block; margin: 12px 0; font-weight: 600; }
+    input, textarea, select, button { font: inherit; } input, textarea, select { display: block; width: 100%; padding: 9px; border: 1px solid #798d85; border-radius: 6px; background: white; color: inherit; }
+    textarea { min-height: 90px; resize: vertical; } button { cursor: pointer; padding: 9px 16px; margin: 8px 8px 0 0; border: 1px solid #176749; border-radius: 6px; background: #176749; color: white; }
+    button:hover { background: #104a35; } :focus-visible { outline: 3px solid #c07a13; outline-offset: 3px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 16px; }
+    .detail { white-space: pre-wrap; overflow-wrap: anywhere; } .status { color: #176749; } #message:not(:empty), #warning:not(:empty) { padding: 12px; border-radius: 6px; background: #fff0ce; color: #633d00; }
+    #output { min-height: 240px; font-family: ui-monospace, monospace; } summary { cursor: pointer; font-weight: 600; } ul { padding-left: 24px; }
+    @media (max-width: 500px) { main { padding: 12px; } section, article { padding: 14px; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>改善アプリ</h1>
+  <p>事象の登録 → 改善会で対策を決定 → 実施計画書への反映を記録</p>
+  <p>データはこのブラウザだけに保存します。外部サービスへの送信はありません。</p>
+  <p id="warning" role="status"></p><p id="message" role="status" aria-live="polite"></p>
+  <section aria-labelledby="registration-heading">
+    <h2 id="registration-heading">1. 登録フォーム</h2>
+    <form id="registration">
+      <div class="grid">
+        <label>記入日<input name="occurredOn" type="date" required></label>
+        <label>記入担当者名<input name="reporter" required></label>
+      </div>
+      <label>クライアント+案件名<input name="client" required></label>
+      <label>事象<textarea name="event" required></textarea></label>
+      <label>解決策（任意）<textarea name="solution"></textarea></label>
+      <button type="submit">改善項目を登録</button>
+    </form>
+  </section>
+  <section aria-labelledby="list-heading">
+    <h2 id="list-heading">2. 改善項目一覧</h2>
+    <label>状態フィルタ<select id="filter"><option value="">すべて</option></select></label>
+    <div id="items"></div>
+  </section>
+  <section aria-labelledby="summary-heading">
+    <h2 id="summary-heading">3. 集計と書き出し</h2>
+    <p>集計と書き出しはフィルタに関係なく全件を対象にします。</p>
+    <div id="summary"></div>
+    <label>改善会・報告用 Markdown<textarea id="output" readonly></textarea></label>
+    <button type="button" id="copy">Markdownをコピー</button>
+  </section>
+</main>
+<script type="module">
+  import { createState, validateItem, addItem, decideItem, reflectItem, completeItem, summarize, toMarkdown, STATUS_LABELS } from './kaizen-core.mjs';
+  const $ = id => document.getElementById(id);
+  const key = 'kaizen-items';
+  let state = createState();
+  function showError(error) { $('message').textContent = `エラー: ${error.message}`; }
+  function node(tag, value, className) {
+    const element = document.createElement(tag);
+    if (value !== undefined) element.textContent = value;
+    if (className) element.className = className;
+    return element;
+  }
+  function today() {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  }
+  // 保存データも検証し、不正な形や重複IDを画面に持ち込まない。
+  try {
+    const saved = localStorage.getItem(key);
+    if (saved !== null) {
+      const parsed = JSON.parse(saved);
+      if (!parsed || !Array.isArray(parsed.items)) throw new TypeError('保存形式が不正です。');
+      const ids = new Set();
+      state = { items: parsed.items.map(item => {
+        const normalized = validateItem(item);
+        if (typeof item.id !== 'string' || !/^kz-\d+$/.test(item.id) || ids.has(item.id) || !Object.hasOwn(STATUS_LABELS, item.status)) throw new TypeError('保存されたIDまたは状態が不正です。');
+        ids.add(item.id);
+        let restored = { ...normalized, id: item.id, status: item.status };
+        if (item.status === 'decided' || item.countermeasure !== undefined || item.owner !== undefined || item.due !== undefined) {
+          restored = { ...decideItem({ items: [restored] }, item.id, item).items[0], status: item.status };
+        }
+        if (item.planUrl !== undefined) restored = { ...reflectItem({ items: [restored] }, item.id, item).items[0], status: item.status };
+        return restored;
+      }) };
+    }
+  } catch (error) {
+    state = createState();
+    $('warning').textContent = `保存データを読み込めないため空の一覧で開始します。次の保存で置き換わります。理由: ${error.message}`;
+  }
+  function commit(next, message) {
+    localStorage.setItem(key, JSON.stringify(next));
+    state = next;
+    render();
+    $('message').textContent = message;
+    $('warning').textContent = '';
+  }
+  function field(form, title, name, value = '', type = 'text', required = false) {
+    const label = node('label', title);
+    const input = node(type === 'textarea' ? 'textarea' : 'input');
+    if (type !== 'textarea') input.type = type;
+    input.name = name; input.value = value; input.required = required;
+    label.append(input); form.append(label);
+  }
+  function action(form, label, handler) {
+    const button = node('button', label); button.type = 'submit'; form.append(button);
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      try { handler(Object.fromEntries(new FormData(form))); } catch (error) { showError(error); }
+    });
+  }
+  function render() {
+    $('items').replaceChildren();
+    const visible = state.items.filter(item => !$('filter').value || item.status === $('filter').value);
+    if (!visible.length) $('items').append(node('p', '該当する改善項目はありません。'));
+    for (const item of visible) {
+      const card = node('article');
+      card.append(node('h3', `${item.client}｜${item.event}`, 'detail'), node('h4', `状態: ${STATUS_LABELS[item.status]}`, 'status'));
+      card.append(node('p', `記入日: ${item.occurredOn} / 記入担当: ${item.reporter}`, 'detail'));
+      card.append(node('p', `解決策（提案）: ${item.solution || '（未記入）'}\n対策: ${item.countermeasure || '（未定）'}\n担当: ${item.owner || '（未定）'} / 期限: ${item.due || '（未定）'}\n反映先: ${item.planUrl || '（未記入）'}`, 'detail'));
+      const details = node('details'); details.append(node('summary', '対策を決める'));
+      const decision = node('form');
+      field(decision, '対策', 'countermeasure', item.countermeasure || '', 'textarea', true);
+      field(decision, '担当', 'owner', item.owner || '', 'text', true);
+      field(decision, '期限（任意）', 'due', item.due || '', 'date');
+      action(decision, '対策を決定して保存', values => commit(decideItem(state, item.id, values), '対策を決定しました。'));
+      details.append(decision); card.append(details);
+      const reflection = node('form');
+      field(reflection, '反映先URL（任意）', 'planUrl', item.planUrl || '');
+      reflection.append(node('p', '実施計画書を編集した後に押してください。このボタンは反映済みの記録のみを保存します。'));
+      action(reflection, '計画書に反映', values => commit(reflectItem(state, item.id, values), '実施計画書への反映を記録しました。'));
+      card.append(reflection);
+      const completion = node('form');
+      action(completion, '完了', () => commit(completeItem(state, item.id), '完了を記録しました。'));
+      card.append(completion); $('items').append(card);
+    }
+    const counts = summarize(state);
+    $('summary').replaceChildren(node('p', `全 ${counts.total} 件`));
+    for (const [title, values] of [['状態別', counts.byStatus], ['案件別', counts.byClient], ['担当別（担当設定済み）', counts.byOwner]]) {
+      $('summary').append(node('h3', title));
+      const list = node('ul');
+      for (const [name, count] of Object.entries(values)) list.append(node('li', `${title === '状態別' ? STATUS_LABELS[name] : name}: ${count} 件`));
+      if (!list.children.length) list.append(node('li', '該当なし'));
+      $('summary').append(list);
+    }
+    $('output').value = toMarkdown(state);
+  }
+  for (const [value, label] of Object.entries(STATUS_LABELS)) {
+    const option = node('option', label); option.value = value; $('filter').append(option);
+  }
+  $('filter').addEventListener('change', render);
+  $('registration').elements.occurredOn.value = today();
+  $('registration').addEventListener('submit', event => {
+    event.preventDefault();
+    try {
+      commit(addItem(state, Object.fromEntries(new FormData(event.currentTarget))), '改善項目を登録しました。');
+      event.currentTarget.reset(); event.currentTarget.elements.occurredOn.value = today();
+    } catch (error) { showError(error); }
+  });
+  $('copy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText($('output').value);
+      $('message').textContent = 'Markdownをコピーしました。';
+    } catch (error) {
+      $('output').focus(); $('output').select();
+      $('message').textContent = `自動コピーできませんでした。選択済みの本文をCtrl+C（MacはCommand+C）でコピーしてください。理由: ${error.message}`;
+    }
+  });
+  render();
+</script>
+</body>
+</html>

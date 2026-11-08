@@ -1,7 +1,33 @@
 #!/usr/bin/env node
 import { isEntry } from './is-entry.mjs';
 
-export async function fetchAdminCostReport({ startingAt, adminKey, fetchImpl = fetch } = {}) {
+export async function fetchAdminCostReport({ startingAt, adminKey, adminKeys, fetchImpl = fetch } = {}) {
+  if (Array.isArray(adminKeys)) {
+    const aggregate = { available: false, totalUsd: 0, byModel: {}, byDay: {}, byOrg: {}, errors: [] };
+    const seenOrgs = new Set();
+    for (const { label, key } of adminKeys) {
+      if (!key) continue;
+      try {
+        const response = await fetchImpl('https://api.anthropic.com/v1/organizations/me', { headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' } });
+        if (!response.ok) { aggregate.errors.push({ label, reason: `organizations/me HTTP ${response.status}` }); continue; }
+        const org = await response.json(), name = org.name || label || org.id;
+        if (!name) { aggregate.errors.push({ label, reason: 'organization name missing' }); continue; }
+        const identity = org.id || name;
+        if (seenOrgs.has(identity)) continue;
+        const report = await fetchAdminCostReport({ startingAt, adminKey: key, fetchImpl });
+        if (!report.available) { aggregate.errors.push({ label, reason: report.reason }); continue; }
+        seenOrgs.add(identity);
+        aggregate.available = true;
+        aggregate.totalUsd += report.totalUsd;
+        const entry = aggregate.byOrg[name] ||= { totalUsd: 0, byDay: {} };
+        entry.totalUsd += report.totalUsd;
+        for (const [day, usd] of Object.entries(report.byDay)) entry.byDay[day] = (entry.byDay[day] || 0) + usd;
+        for (const field of ['byModel', 'byDay']) for (const [key, usd] of Object.entries(report[field])) aggregate[field][key] = (aggregate[field][key] || 0) + usd;
+      } catch { aggregate.errors.push({ label, reason: 'organization network error' }); }
+    }
+    if (!aggregate.available) aggregate.reason = aggregate.errors.length ? '全組織の取得失敗' : 'Admin key 未設定';
+    return aggregate;
+  }
   if (!adminKey) return { available: false, reason: 'Admin key 未設定' };
   const buckets = []; let page = null;
   try {

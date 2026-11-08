@@ -1,31 +1,54 @@
 # User-global preferences (kim@orgiast.jp)
 
+**🔴 kim への報告は Discord 禁止（kim 2026-10-27 厳命・全PC全アカウント）。kim 宛は kim-inbox（~/.claude/kim-inbox、`node tools/kim-inbox.mjs`）に積みセッションで回収。ask は返答を --answer で記録するまで毎プロンプト再提示、info は伝えたら --seen。セッションを閉じても台帳に残り次セッションで再提示（クローズは止めない）。Discord MCP の直接送信はゲートが拒否。例外は config/kim-discord-allowlist.json に kim が登録したカテゴリのみ。詳細 docs/kim-inbox.md**
+
 ユーザーグローバルの恒久ルール集。全プロジェクトでロード。手続き系の詳細は rules/ と skills/ に分離済み（2026-07-03 再編、旧版: backups/CLAUDE.md.bak-20260703）。
 
 ---
 
-## Google Workspace URL は `/a/orgiast.jp/` を必ず挟む
+## Google Workspace URL は開くアカウントを URL と本文の両方で指定
 
-Workspace のリンク提示時は必ず `/a/orgiast.jp/` パスを入れる。素の URL 禁止（Chrome デフォルトが個人 Gmail のメンバーが多く、「アクセス権が必要です」→毎回アカウント切替になるため。ドメインベースなので他の orgiast.jp メンバーにもそのまま渡せる）。
+Workspace の URL は authuser=開く人のメール を付け、本文に開くアカウントを書く。自分宛はその Claude 環境の userEmail、他人宛は共有済みの相手メールを使い、特定個人をハードコードしない。既存クエリには &authuser= を追加し、#gid 等のフラグメントより前に置く。本文の同じ行か直前に「<メール> で開いてください」と書く。script.google.com の /home/ 系だけは素URL＋アカウント切替案内の例外を維持する。
 
-| サービス | 形式 |
+**🔴 seisaku-team@ のメール送信は `gmail-draft.mjs --send` の自動チェックを通す。矛盾照会は最新メールだけでなくスレッド全体の合意×見積明細（金額・数量・人件費・納品形態・日程等）。block は修正し、生の Gmail API 送信は禁止。**
+
+**🔴 安価AIレーン（Codex・Gemini・DeepSeek 等）が停止していたら、最優先でその場で修復する。放置して Claude 本体を使い続けない。SessionStart の 🛑 行が出たら通常タスクより先に lane-doctor の手順を実行し、誰かへ依頼して返事を待つのは解決ではない。同アカウントの他PCセッションへの SendMessage・CLI・API など、その場で取れる経路を当ターンで全部試して復旧まで終える（kim 2026-10-29 厳命・全PC全アカウント全プロジェクト）。人にしかできない操作は、このPCを操作している人（kim）へその場で直接頼み、復旧の実測まで同じセッションで終える。「生存 ✅」表示は信用せず各レーンを実呼び出しで確かめる（2026-10-29: mistral 既定モデルの 403 が ✅ 表示のまま放置されていた）。**
+
+2026-10-10、nishi@orgiast.jp が `/a/orgiast.jp/` 形式の Doc を開けなかった。ブラウザの既定アカウントが別だとドメイン指定だけでは解決しないため、nishi の原文「リンクを出すときは必ずどのアカウントで開くかを明記して、ブラウザもそのアカウントで開くように設定して」に従い、URL と本文の両方で受け手を指定する。
+
+`/a/orgiast.jp/` を使わない。authuser は権限付与ではないため、他人に渡す前に相手へ共有する。
+
+| サービス | URL（本文にも同じメールを明記） |
 |---|---|
-| Apps Script エディタ | `script.google.com/a/orgiast.jp/d/{ID}/edit` |
-| Apps Script マクロ実行 | `script.google.com/a/macros/orgiast.jp/d/{ID}/...` |
-| Sheets / Docs / Slides / Forms | `docs.google.com/a/orgiast.jp/{spreadsheets|document|presentation|forms}/d/{ID}/edit` |
-| Drive **file** (view) | `drive.google.com/a/orgiast.jp/file/d/{ID}/view` |
-| Drive **folder** | `drive.google.com/drive/folders/{ID}`（**素URL。`/a/orgiast.jp/` を付けると404**） |
+| Apps Script エディタ | `https://script.google.com/d/{ID}/edit?authuser={開く人のメール}` |
+| Apps Script マクロ | `https://script.google.com/macros/s/{ID}/exec?authuser={開く人のメール}` |
+| Sheets | `https://docs.google.com/spreadsheets/d/{ID}/edit?authuser={開く人のメール}` |
+| Docs | `https://docs.google.com/document/d/{ID}/edit?authuser={開く人のメール}` |
+| Slides | `https://docs.google.com/presentation/d/{ID}/edit?authuser={開く人のメール}` |
+| Forms | `https://docs.google.com/forms/d/{ID}/edit?authuser={開く人のメール}` |
+| Drive file | `https://drive.google.com/file/d/{ID}/view?authuser={開く人のメール}` |
+| Drive folder | `https://drive.google.com/drive/folders/{ID}?authuser={開く人のメール}` |
 
-- **Drive folder だけは `/a/orgiast.jp/` 非対応**: `drive.google.com/a/orgiast.jp/drive/folders/{ID}` は Google が **404** を返す（`/a/{domain}/` 形式が生きているのは docs.google.com / script.google.com のエディタ系ホストと drive.google.com の `/file/d/` のみ。`/drive/folders/` パスには存在しない）。folder は素URLで渡し、フォルダを orgiast.jp ドメイン共有にした上で、個人Gmailデフォルトの相手には「右上アバターで orgiast.jp に切替」を併記。2026-06-12 / 2026-07-06 に404実測。
-- `?authuser=kim@orgiast.jp` は付けない（他メンバーが踏めなくなる）
-- 例外: `script.google.com/home/usersettings` 等の `/home/...` 系は素URL + 「右上アバターで kim@orgiast.jp に切替」を併記
+例: 追記（nishi@orgiast.jp で開いてください）: https://docs.google.com/document/d/{ID}/edit?authuser=nishi@orgiast.jp
+
+kim が読む Doc は `tools/gdoc-publish.mjs --authuser <開く人のメール>`（リンク化・read-back 検証）で作る。
+
 
 ---
+
+## 備品管理表の関数列（ONBOARDING §2.1）
+
+- 「備品在庫管理表」の K列は関数列。K には書かず在庫数は E列へ。K を跨ぐ範囲は分ける（bihin-kcol-gate、2026-10-23 古川さん依頼）。
 
 ## GAS 開発
 
 - `.gs` / `appsscript.json` を触ると **rules/gas.md** が自動適用される（clasp 統一・コマンドキュー絶対ルール・read-back verify）
 - 新規 GAS 立ち上げは **/gas-project-setup** skill（kim の手作業 = setupOnce 1クリックのみ）
+
+## Next.js 開発
+
+- `next.config.*` / `app/**/layout.tsx` を触ると **rules/nextjs.md** が自動適用される（不具合・要望フォーム必須・read-back verify）
+- 社内アプリの投稿窓口は **`tools/feedback-kit/`** を1コマンド導入（`node tools/feedback-kit/install.mjs --app . --name "<アプリ名>"`）。必須6機能の欠落は `verify.mjs` が検出し、`feedback-form-gate.mjs` がデプロイを deny する
 
 ## Growi 社内マニュアル取り込み
 
@@ -34,10 +57,21 @@ Workspace のリンク提示時は必ず `/a/orgiast.jp/` パスを入れる。�
 ## 変更後の検証
 
 デプロイ・UI・cron 等の変更は **/deploy-verify** skill の2段検証（Layer1 ロジック再現 + Layer2 Playwright 実描画）を通してから完了報告。
+委譲・マージした変更も、本番経路で実行し、送信・通知・外部反映はAPIで読み戻すまで完了報告しない。
 
 見せる資料はハイブリッド企画書モデル（Claude組版×Gemini写真×Genspark参照）で作り、**/design-deck** skill を使う。
 
 ---
+
+**🔴 承認待ちの文面・選択肢は毎回「【kim 確認用の全文】」として3行フッター直前に全文再掲。「次に kim がすること」はその行とブロックだけで判断・操作が終わる形にし、前の応答への遡り参照は禁止（nishi 2026-10-27 厳命・全PC全アカウント。NEXT-ACTION-BACKREF / NEXT-ACTION-APPROVAL-INLINE）。**
+
+**🔴 Claude が決められる判断（過去の決定あり・支払い/同意不要・取り消せる）は聞かずに進めて報告。ラベル（B案・①）だけで指さず中身を書く。**
+
+## 副作用・影響は報告で終わらせず、その場で直す（kim 2026-10-17 厳命・全PC全アカウント・絶対） — ONBOARDING §1.1 参照
+
+## 事故は型で直す（全PC・全アカウント。詳細は ONBOARDING §1.22 と protocols/INCIDENT-TYPES.md）
+
+事故・手戻り・user に発見された不具合は、その場の修正に加え ①原因を型で言語化 ②同型を横断検索して一緒に直す ③機械ゲートで再発を止める（文書だけは不可）④全PC配布は converge ⑤カタログに1行追記。完了報告に「型／横展開した箇所数／追加したゲート」を書く。全PC・全アカウントの変更は converge のみ。fleet-mail は相談・状態照会用で変更依頼に使わない。全PC反映の報告は fleet-status の実データで出し、未ビーコンは「未確認」。
 
 ## トークン効率
 
@@ -45,3 +79,18 @@ Workspace のリンク提示時は必ず `/a/orgiast.jp/` パスを入れる。�
 - **キャッシュ保護**: CLAUDE.md には恒久ルールだけ。実行中タスク・今日の数字・進行中障害は書かない（毎回キャッシュを壊す）。上部ほど静的に。セッション中のモデル切替を乱発しない
 - **モデルルーティング**: 単純編集/grep/確認系 → Sonnet/Haiku、設計/横断調査/複数仮説 → Opus/Fable。迷ったら Auto
 - **重い探索はサブエージェント委譲**: 「配下を全部読んで○○」型は Explore/general-purpose に投げ、「結果を200字以内・コード本体は含めない」と指定して親コンテキストを守る
+
+## 他AIは「積極的に使う」のが既定（kim 2026-10-09 厳命・全PC全アカウント）
+
+**他AIが使えなくなったら、その場で直す（全PC・全アカウント・無人も同じ）**。失敗の原因を調べ、修復を試し、成功を実測する。`lane-repair-first-gate` が未修復での本体編集・通常作業を block する。`node tools/lane-doctor.mjs --probe` で健全化するか、`node tools/lane-repair-log.mjs --lane <名> --tried "<試した手段>" --result fixed|unfixable` で記録（6時間有効）。応答にも `[LANE-REPAIR]` を明記する。reset が判明した429/usage_limitは quota_wait とし、代替の安いレーンへ回す。Codex の probe 失敗は直接 WSL 実行の終了コードでも切り分ける（ONBOARDING §1.18）。
+
+Codex／Gemini／DeepSeek／Groq／Kimi／Mistral／OpenRouter／GLM などの他AIは**使うのが既定**。Claude だけで済ませる方が例外で、例外には理由の明記が要る。
+- 残高切れ → 「入金する（オートチャージ ON）」が既定。キー失効・403 → 「再発行する」が既定。429 → 別の他AIへ自動切替。**「外す／やめる／縮小」を kim への選択肢に並べない。**
+- 他AIの障害は Claude で代替せず、別の他AIで吸収し、復旧したら戻す。Claude（監督）へ逆流させるのが最も高くつく。
+- 作業の割り振りは他AIレーン名を**先に・具体的に**書く（例: 要約=Gemini、下書き=Kimi、実装=Codex、Claude=verify のみ）。「必要なら他AIも使う」のような弱い表現は禁止。
+- **Claude だけで実装しない・従量課金で Claude Code を動かさない（kim 2026-10-17 厳命・絶対）**: 実装コードの直接書き込み・大きなインラインプログラム・実装サブエージェントは hook がモデルを問わず deny する。解除は user がプロンプトに `[CLAUDE-IMPL-OK]` と書いた60分だけ（override ファイル・クールダウン自動解除は廃止）。APIキー／Console ログインの Claude Code は `api-billing-guard` が全ツールを止める。AI の従量課金は全アカウントの Gmail 領収書を毎日集計して kim に DM する（ONBOARDING §2.8.5）。
+- **🔴 最優先: アプリ（デプロイ済み・GitHub Actions・cron・GAS）が呼ぶ LLM/検索も他AIが既定（kim 2026-10-17 厳命・全PC全アカウント）。** Web検索付き収集=Gemini Flash グラウンディング、分類・抽出・要約=Groq/DeepSeek/Gemini Flash。Claude API は代替不可の理由を `LLM-PROVIDER-REASON:` で書いた時だけ。**1社だけ試して Claude に戻すのは禁止**: 他AIを3社以上、同じ評価セットで比較した表（取れた項目数・一致率・1件あたり実費）を示してから。**Claude への自動フォールバックも禁止**: 他AIのキー欠如・残高切れ・障害時は別の他AIへ落とし、全滅なら止めて通知。「当面は Claude で動きます」「入金は必須ではない」で済ませず、キー登録・デプロイ・入金依頼までその場で直す（§2.8.0 5〜7）。既存アプリを触る時も呼び先を確認し、Claude API なら他AIへの置き換えを先に出す。**有料 LLM の一括実行（20件超）は、1〜10件で1件あたり実費を実測 → `[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z]` を提示 → コード側の予算上限（超えたら自動停止）を入れてから。** オートチャージは予算上限ではない。app-llm-cost-gate が block する（ONBOARDING §2.8.0）。
+
+安いAIの利用状況（PC×Claudeアカウント×AI×契約アカウント）は台帳の「PCログイン」「クラウド契約」タブが正本で、`fleet-sheet-report` が全PCから自動記録する。鍵を新しく入れた／差し替えたら `config/ai-key-owners.json` に末尾4文字→契約アカウントを1行足す（kim 2026-10-30 指示・全PC全アカウント）。
+
+案件の引き継ぎ: kim 操作アカウントの案件作業は case-sessions に自動保存。別席では `/case-resume <案件ID/案件名>`（初回6KB以内）、明示紐付けは `/case <案件ID>`。全文は必要箇所だけ同期して Grep。閉じる前に case-handoff.mjs flush で STATE 更新を確認。

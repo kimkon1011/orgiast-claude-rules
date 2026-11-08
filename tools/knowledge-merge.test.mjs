@@ -89,3 +89,11 @@ test('runKnowledgeMerge processes inbox files, quarantines secrets, and merges m
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('register-knowledge-merge-task.ps1 uses -RepetitionInterval parameter and verifies read-back', () => {
+  const script = fs.readFileSync(new URL('./register-knowledge-merge-task.ps1', import.meta.url), 'utf8');
+  assert.doesNotMatch(script, /\.RepetitionInterval\s*=/);
+  assert.match(script, /-RepetitionInterval \(New-TimeSpan -Hours 1\)/);
+  assert.match(script, /Get-ScheduledTask -TaskName \$taskName/);
+  assert.match(script, /Repetition\.Interval/);
+});

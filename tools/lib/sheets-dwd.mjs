@@ -11,7 +11,10 @@ export function createSheetsClient({ fetchImpl = fetch, getToken = getDriveToken
   async function request(id, suffix = '', method = 'GET', body) {
     if (!token || Date.now() >= expires) {
       try { token = await getToken({ scope: SCOPE, impersonate: 'kim@orgiast.jp', signal: AbortSignal.timeout(30_000) }); }
-      catch { throw new Error('Sheets authentication failed'); }
+      catch {
+        // Fallback: use 'drive' scope (supported by DWD proxy) instead of 'spreadsheets'
+        token = await getToken({ scope: 'https://www.googleapis.com/auth/drive', impersonate: 'seisaku-team@orgiast.jp', signal: AbortSignal.timeout(30_000) });
+      }
       expires = Date.now() + 50 * 60_000;
     }
     const response = await fetchImpl(`${API}/${encodeURIComponent(id)}${suffix}`, {

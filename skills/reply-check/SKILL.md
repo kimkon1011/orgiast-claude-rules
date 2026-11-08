@@ -33,12 +33,15 @@ kim 宛の Discord（@メンション・kim の発言への返信・「金さん
 |---|---|---|
 | メール | Gmail MCP（kim@orgiast.jp）で直近7日の受信トレイ。人間が書いたもののみ | スレッドの最後が kim 以外 |
 | Discord | 自動（§0）。`node tools/reply-queue.mjs list --channel discord --state queued` で積み残しを見る。kim 本人の DM は DISCORD_USER_TOKEN が無いため読めない | `discord-autoreply.mjs` が判定 |
-| Messenger | `node C:/Users/uers/.claude/nightly-repo/tools/messenger-watch.mjs --dry-run`（作業ツリー版は playwright-core が無く exit 4 になる） | 未読の1対1のみ。グループは kim 宛の時だけ |
-| LINE | `powershell -STA -File C:/Users/uers/.claude/tools/line-pc-act.ps1 -Action shot/click` で PC 版 LINE を撮影。一覧の未読バッジ付きの1対1と「メンションされました」を開いて読む | 最後が相手の発言 |
+| Messenger | `node tools/beeper-unreplied.mjs --since 7d --networks messenger --out <tmp.json>`（Beeper Desktop API 経由） | Beeper の isSender で判定 |
+| LINE | `node tools/beeper-unreplied.mjs --since 7d --networks line --out <tmp.json>`（Beeper Desktop API 経由） | Beeper の isSender で判定 |
+| WhatsApp | `node tools/beeper-unreplied.mjs --since 7d --networks whatsapp --out <tmp.json>` | Beeper の isSender で判定 |
+| SMS（Google Messages） | `node tools/beeper-unreplied.mjs --since 7d --networks sms --out <tmp.json>` | Beeper の isSender で判定 |
 
+- 1回で全部集めるなら `node tools/beeper-unreplied.mjs --since 7d --out <tmp.json>`（既定で4チャネル: LINE・Messenger・WhatsApp・SMS）。
 - 集めたら JSON（`[{channel, thread, message, from:{id,name,external}, body, receivedAt, context?, link?}]`）を一時ファイルに書き `node tools/reply-queue.mjs enqueue --file <json>` に通す。`duplicates` に入ったものは前回提示済みなので `list --brief` で状態を確かめ、`presented` のままなら kim の返事待ちとして再掲する。
-- LINE は開くと既読が付く。それを承知のうえで読む。
-- LINE は検索語が残っていることがある。検索欄の × (443,89) をクリックし、別途 shot を撮る（click 直後の画像は描画前のことがある）。
+- Beeper Desktop API は読み取り専用で既読を付けない。Beeper Desktop が起動していない場合は従来の `line-pc-act.ps1` / `messenger-watch.mjs` をフォールバックとして使う。
+- LINE（旧方式）は開くと既読が付くことを承知のうえで読む。LINE（旧方式）は検索語が残っていることがある。検索欄の × (443,89) をクリックし、別途 shot を撮る（click 直後の画像は描画前のことがある）。
 - 取れなかったチャネルは「未確認（理由）」と書く。0件と書かない。
 
 ## 2. 返信案の作成と提示（チャットに表で出す）
@@ -73,7 +76,7 @@ kim 宛の Discord（@メンション・kim の発言への返信・「金さん
 
 ## 4. 送信（kim が OK と言った番号だけ）
 
-送る直前に必ず `node tools/reply-queue.mjs receipt <id>` を実行する（Discord は Bot トークンでスレッドを取り直す。メール・LINE・Messenger は `--latest-file <json>` に「案を作った後に届いた相手の発言」の配列を渡す。無ければ `[]`）。
+送る直前に必ず `node tools/reply-queue.mjs receipt <id>` を実行する（Discord は Bot トークンでスレッドを取り直す。メールは `--latest-file <json>` に「案を作った後に届いた相手の発言」の配列を渡す。Beeper チャネル（LINE・Messenger・WhatsApp・SMS）は `beeper-send.mjs` が内部で receipt 検証と読み戻しを行い、**送信直前に新着を読み、あれば exit 4（context_changed）で送らない**ため `--latest-file` 不要。無ければ `[]`）。
 - `context_changed`（exit 3）で拒否されたら**送らない**。新着を読んで案を作り直し、再提示する。
 - 発行された receipt は 60 秒だけ有効。失効したら `receipt` から取り直す。
 - 送ったら `mark-sent <id> --receipt <rid> --message-id <送信後の id>`。送信結果が分からない（タイムアウト・応答なし）ときは **再送せず** `mark-uncertain <id> --reason "<状況>"` にし、送信済みフォルダ等で読み戻せたら `reconcile <id> --message-id <id>`。
@@ -81,11 +84,14 @@ kim 宛の Discord（@メンション・kim の発言への返信・「金さん
 | チャネル | 送信方法 |
 |---|---|
 | Discord | 自動送信（§0）。手動時は `node C:/Users/uers/orgiast-main/tools/discord-dm.mjs <名前> --body-file <file>`（見出し・引用・末尾つき）か `mcp__claude_ai_Discord__reply_message`。送信後に message_id を `mark-sent` に渡す |
-| LINE | `powershell -STA -File ~/.claude/tools/line-send.ps1 -SearchFile <検索語.txt> -BodyFile <本文.txt>` を1回実行する（検索→トークを開く→貼り付け→撮影。送信はしない）。line.png で**トーク名**と本文を一字一句確かめてから `line-pc-act.ps1 -Action key -Keys "{ENTER}"` で送る。検索で別のトークが開くことがある（2026-10-23、AI代行堂が開いた）。トーク名が違ったら送らず、入力欄を消して一覧から開き直す。本文は必ず -TextFile で渡す |
-| Messenger | 送信ツールが未実装。返信案をそのまま貼れる形で出し、送信ツールの実装を提案する |
+| LINE | `node tools/beeper-send.mjs --chat <chatID> --body-file <本文.txt> --queue-id <id> --receipt <rid>`（receipt 必須・読み戻し）。出力の messageID を `mark-sent` に渡す |
+| Messenger | `node tools/beeper-send.mjs --chat <chatID> --body-file <本文.txt> --queue-id <id> --receipt <rid>`（receipt 必須・読み戻し） |
+| WhatsApp | `node tools/beeper-send.mjs --chat <chatID> --body-file <本文.txt> --queue-id <id> --receipt <rid>`（receipt 必須・読み戻し） |
+| SMS（Google Messages） | `node tools/beeper-send.mjs --chat <chatID> --body-file <本文.txt> --queue-id <id> --receipt <rid>`（receipt 必須・読み戻し） |
 | メール | 既定は `create_draft` まで。kim が「送って」と明示した番号だけ `send_message`（draftId 指定）で送る。送信直前に、重複（`in:sent` と同スレッド）と矛盾（過去の送信本文・相手の最新メール・カレンダー）を照会する。送信後は送信済みフォルダで読み戻す。正本は ONBOARDING「外部へのメールは下書きまでが既定」（2026-10-25 kim） |
 
 - OK の出ていないものは送らない。文面を直す指示が出たら直した案を再提示し、改めて OK をもらう。
+- LINE/Meta（Messenger・WhatsApp）は大量送信でアカウント停止の恐れがある。`beeper-send.mjs` は同じ相手に1時間3通まで、全体で1時間20通までのレート制限を強制する（`~/.claude/reply-queue/beeper-send-log.jsonl` で記録）。
 - 送信後は、送れた件と失敗した件（エラー文つき）を表で報告する。
 - 未完了の作業（先方の返信待ち、資料の修正、GUI が空くのを待つ など）が残ったら、**CronCreate で毎時の進捗チェックを登録してから止まる**。kim に「進捗どう？」と聞かせない。変化があった時だけ報告し、全部終わったら CronDelete する。
 

@@ -300,16 +300,16 @@ test('fair order uses oldest last night then score and age', async t => {
   assert.deepEqual(r.rows.map(r => r.sessionId), ['session-3', 'session-2', 'session-1', 'session-0']);
 });
 
-test('parallel execution excludes shared cwd and persists attempts before launch', async t => {
-  const f = await fixture(t, 4);
-  const otherDir = path.join(f.io.home, 'other');
-  await fs.mkdir(otherDir, { recursive: true });
-  f.records[2].cwd = otherDir;
-  const active = new Set(); let max = 0;
+test('parallel execution excludes shared cwd and persists attempts before launch', { timeout: 30000 }, async t => {
+  const f = await fixture(t, 4); f.records[2].cwd = path.join(f.io.home, 'other');
+  const active = new Set(); let max = 0, entered = 0, release;
+  const bothStarted = new Promise(resolve => { release = resolve; });
   f.io.execute = async record => {
     assert.ok(!active.has(record.cwd)); active.add(record.cwd); max = Math.max(max, active.size);
     assert.equal((await f.ledger()).sessions[record.sessionId].attempts.at(-1).outcome, 'interrupted');
-    await new Promise(resolve => setTimeout(resolve, 200)); active.delete(record.cwd);
+    // Disk persistence on Windows can exceed 20ms; synchronize actual launches.
+    if (++entered === 2) release();
+    await bothStarted; active.delete(record.cwd);
     return { outcome: 'progressed' };
   };
   const r = await run(options([], {}), f.io);
@@ -381,4 +381,117 @@ test('three errors in completion order stop launches even if an in-flight child 
   const result = await running;
   assert.equal(result.aborted, true); assert.equal(started.length, 4);
   assert.deepEqual(result.results.map(r => r.sessionId), ['session-2', 'session-1', 'session-0', 'session-3']);
+});
+
+test('overdue selects only expired waits, excludes closed/closable/active and ignores nightly deadline', async t => {
+  const f = await fixture(t, 6);
+  f.io.now = () => new Date(2026, 8, 24, 14).getTime();
+  f.records.forEach(r => { r.displayTitle = '008｜【09/24/12:00まで】' + r.displayTitle; });
+  f.records[0].status = '参考';
+  f.records[1].displayTitle = '【09/24/15:00まで】Future';
+  f.records[2].displayTitle = 'Ordinary';
+  f.records[3].displayTitle = '【閉じて可】Done';
+  f.io.loadClosed = async () => ({ sessions: { 'session-4': {} } });
+  f.io.stat = async file => ({ mtimeMs: f.io.now() - (file === 'file-5' ? 1000 : 86400000) });
+  const r = await run(options(['--overdue'], {}), f.io);
+  assert.deepEqual(r.results.map(r => r.sessionId), ['session-0']);
+  assert.equal(f.notices(), 1);
+  assert.deepEqual((await f.ledger()).nights, {});
+  assert.deepEqual((await f.ledger()).sessions, {});
+});
+test('overdue defaults, per-invocation cap, dedupe and changed deadline', async t => {
+  const f = await fixture(t, 3);
+  f.records.forEach(r => { r.displayTitle = '【09/23/12:00まで】' + r.displayTitle; });
+  const config = options([], { STALLED_SESSION_MODE: 'overdue', STALLED_SESSION_CONCURRENCY: '9' });
+  assert.equal(config.limit, 2); assert.equal(config.concurrency, 1);
+  assert.equal((await run(config, f.io)).results.length, 2);
+  assert.equal((await run(config, f.io)).results.length, 1);
+  assert.equal((await run(config, f.io)).results.length, 0);
+  assert.equal(f.notices(), 2);
+  f.records[0].displayTitle = '【09/23/13:00まで】New deadline';
+  assert.deepEqual((await run(config, f.io)).results.map(r => r.sessionId), ['session-0']);
+});
+test('overdue errors back off for 30 minutes, stop at three, and never affect nights', async t => {
+  const f = await fixture(t, 1); let time = f.io.now();
+  f.io.now = () => time;
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  f.io.execute = async () => ({ outcome: 'error', executor: 'cheap-code:glm', reason: 'timeout' });
+  const config = options(['--overdue'], {});
+  await run(config, f.io);
+  time += 30 * 60000 - 1;
+  assert.equal((await run(config, f.io)).results.length, 0);
+  time++;
+  assert.equal((await run(config, f.io)).results.length, 1);
+  time += 30 * 60000;
+  assert.equal((await run(config, f.io)).results.length, 1);
+  time += 30 * 60000;
+  assert.equal((await run(config, f.io)).rows[0].skip, '同一期限3回エラー');
+  assert.deepEqual((await f.ledger()).nights, {});
+  assert.deepEqual((await f.ledger()).sessions, {});
+  f.io.execute = async () => ({ outcome: 'progressed' });
+  assert.equal((await run(options([], {}), f.io)).results.length, 1);
+});
+test('overdue dry-run preserves ledger and does not notify or execute', async t => {
+  const f = await fixture(t, 1);
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  await run(options(['--overdue', '--dry-run'], {}), f.io);
+  await assert.rejects(fs.access(f.file), { code: 'ENOENT' });
+  assert.equal(f.calls(), 0); assert.equal(f.notices(), 0);
+});
+test('nightly prioritizes overdue titles over score', async t => {
+  const f = await fixture(t, 2);
+  f.records[1].displayTitle = '【09/23/12:00まで】Urgent';
+  const r = await run(options(['--limit', '1'], {}), f.io);
+  assert.equal(r.results[0].sessionId, 'session-1');
+});
+test('executor metadata survives timeout/failure/success and overdue prompt carries action context', async () => {
+  for (const status of ['timeout', 'failure', 'success']) {
+    let prompt;
+    const executorAttempts = [{ executor: 'cheap-code:deepseek', status: 'timeout' }, { executor: 'cheap-code:glm', status }];
+    const result = await execute({ sessionId: 'test', cwd: '/fixture' }, { timeoutMs: 1000, wait: { label: '09/23 12:00' } }, {
+      executable: 'fixture', runChild: async (_, text) => { prompt = text; return { status, executorUsed: 'cheap-code:glm', executorAttempts }; }, readReport: async () => null
+    });
+    assert.equal(result.executor, 'cheap-code:glm'); assert.deepEqual(result.executorAttempts, executorAttempts);
+    assert.match(prompt, /待機期限 09\/23 12:00/); assert.match(prompt, /node tools\/kim-inbox.mjs/); assert.match(prompt, /期限を書き換えるだけで終えない/);
+  }
+});
+test('exceptions retain explicit not-started executor in persisted attempt', async t => {
+  const f = await fixture(t, 1); f.io.execute = async () => { throw new Error('launch failed'); };
+  await run(options([], {}), f.io);
+  assert.equal((await f.ledger()).sessions['session-0'].attempts[0].executor, 'not-started');
+});
+test('overdue task uses hidden runner, 15 minute trigger and verified settings with required repair', async () => {
+  const ps = await fs.readFile(new URL('./register-stalled-session-nightly.ps1', import.meta.url), 'utf8');
+  assert.match(ps, /New-HiddenScheduledTaskAction -Execute \$node -ChildArgument @\(\$sweepScript, '--overdue'\)/);
+  assert.match(ps, /-RepetitionInterval \(New-TimeSpan -Minutes 15\)/);
+  assert.match(ps, /-MultipleInstances IgnoreNew -ExecutionTimeLimit \(New-TimeSpan -Hours 2\)/);
+  assert.match(ps, /Get-ScheduledTask -TaskName 'OrgiastWaitDeadlineResume'/);
+  assert.match(ps, /\$waitTask.Actions.Arguments -ne \$waitAction.Arguments/);
+  assert.match(ps, /\$waitTask.Triggers\[0\].Repetition.Interval -ne 'PT15M'/);
+  assert.match(ps, /\$waitTask.Settings.StartWhenAvailable/);
+  const manifest = JSON.parse(await fs.readFile(new URL('./setup-manifest.json', import.meta.url), 'utf8'));
+  const item = manifest.items.find(i => i.id === 'task:wait-deadline-resume');
+  assert.equal(item.severity, 'required'); assert.equal(item.spec.name, 'OrgiastWaitDeadlineResume');
+  assert.deepEqual(item.repair, ['register-stalled-session-nightly.mjs']);
+});
+
+test('report parse failure keeps the actual executor', async () => {
+  const result = await execute({ sessionId: 'test', cwd: '/fixture' }, { timeoutMs: 1000 }, {
+    executable: 'fixture', runChild: async () => ({ status: 'success', executorUsed: 'cheap-code:deepseek' }),
+    readReport: async () => { throw new Error('invalid JSON'); }
+  });
+  assert.equal(result.outcome, 'error'); assert.equal(result.executor, 'cheap-code:deepseek');
+});
+test('nightly abort and retired budget do not prevent overdue; interrupted attempt is not replayed', async t => {
+  const f = await fixture(t, 1);
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  const nights = { '2026-09-24': { count: 3, errors: 3, aborted: true } };
+  await fs.writeFile(f.file, JSON.stringify({ version: 1, nights, sessions: { 'session-0': { noProgress: 3, attempts: [] } } }));
+  await run(options(['--overdue'], {}), f.io);
+  const ledger = await f.ledger();
+  assert.equal(f.calls(), 1); assert.deepEqual(ledger.nights, nights);
+  Object.values(ledger.overdue)[0].attempts[0].outcome = 'interrupted';
+  await fs.writeFile(f.file, JSON.stringify(ledger));
+  assert.equal((await run(options(['--overdue'], {}), f.io)).rows[0].skip, '同一期限処理済み');
 });

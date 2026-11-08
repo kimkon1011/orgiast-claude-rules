@@ -10,7 +10,7 @@ import { createSheetsClient } from './lib/sheets-dwd.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
 import { reportHeartbeat } from './lib/heartbeat.mjs';
 import { addItem } from './kim-inbox.mjs';
-import { DEFAULT_CONFIG, KINDS, createLedger, loadConfig, defaultHome, dataPath, readJson, saveJson, googleClient, withLedgerLock, parseSheetDate, jstDate, isDuplicate, nextId, sheetUrl } from './deadline-ledger.mjs';
+import { DEFAULT_CONFIG, KINDS, createLedger, loadConfig, defaultHome, dataPath, readJson, saveJson, googleClient, withLedgerLock, parseSheetDate, jstDate, isDuplicate, nextId, sheetUrl, initialize } from './deadline-ledger.mjs';
 import { sourceLoaders, fixtureLoaders } from './lib/deadline-sources.mjs';
 const exec = promisify(execFile);
 const HIGH_RISK = new Set(['訴訟・法務','行政・消防','補助金・申請']);
@@ -132,7 +132,12 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     const fixture = opts.fixture ? readJson(path.join(opts.fixture, 'ledger.json'), {}) : null;
     if (opts.fixture && (!fixture || !Array.isArray(fixture.rows))) throw new Error('fixture の台帳JSONがありません、または形式が不正です');
     const config = fixture ? { ...DEFAULT_CONFIG, ...fixture.config } : deps.config || loadConfig(home);
-    if (!config.sheetId) throw new Error('先に node tools/deadline-ledger.mjs --init を実行してください');
+    if (!config.sheetId) {
+      stderr('deadline-detect: deadline-ledger 未初期化のため自動初期化します');
+      const result = await initialize({ home, sheets: deps.sheets || createSheetsClient({ fetchImpl: gwsFetch }), request: deps.request || googleClient() });
+      config.sheetId = result.sheetId;
+      saveJson(dataPath(home, 'config.json'), config);
+    }
     const sheets = deps.sheets || createSheetsClient({ fetchImpl: gwsFetch });
     const ledger = deps.ledger || (fixture ? { read: async tab => tab === '候補' ? fixture.candidates || [] : fixture.rows || [] } : createLedger({ config, sheets }));
     const work = async () => {
@@ -150,7 +155,9 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   finally {
     if (valid && !dryRun) {
       await (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineDetect', startedAt, finishedAt: new Date().toISOString(), ok, summary: ok ? '期限検出完了' : '期限検出失敗', cycleMinutes: 1440 }, { homeDir: home, localOnly: true });
-      const log = path.join(home, '.claude/logs/deadline-detect.log'); fs.mkdirSync(path.dirname(log), { recursive: true }); fs.appendFileSync(log, `${new Date().toISOString()} deadline-detect ${ok ? 'ok' : 'failed'}\n`);
+      const log = path.join(home, '.claude/logs/deadline-detect.log'); fs.mkdirSync(path.dirname(log), { recursive: true });
+      try { fs.appendFileSync(log, `${new Date().toISOString()} deadline-detect ${ok ? 'ok' : 'failed'}\n`); }
+      catch (error) { if (error.code !== 'EBUSY') throw error; }
     }
   }
 }

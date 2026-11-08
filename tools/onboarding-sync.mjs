@@ -746,9 +746,32 @@ export function makeIndex(body) {
   // cannot fit (e.g. an oversized heading). Mandatory size never affects it.
   return original;
 }
+export async function syncMission({ repoDir = repoPath, targetHome = home, isDryRun = dryRun } = {}) {
+  const missionSource = path.join(repoDir, 'docs', 'mission.md');
+  const missionTarget = path.join(targetHome, '.claude', 'orgiast-mission.md');
+  let content = null;
+  if (fs.existsSync(missionSource)) {
+    try { content = fs.readFileSync(missionSource, 'utf8'); } catch {}
+  }
+  if (!content) {
+    try {
+      const response = await fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/docs/mission.md', { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+      if (response.ok) content = await response.text();
+    } catch {}
+  }
+  if (!content) return false;
+  const current = fs.existsSync(missionTarget) ? fs.readFileSync(missionTarget, 'utf8') : null;
+  if (current === content) return false;
+  if (!isDryRun) {
+    fs.mkdirSync(path.dirname(missionTarget), { recursive: true });
+    fs.writeFileSync(missionTarget, content, 'utf8');
+  }
+  return true;
+}
+
 export function build(current, body, label) {
   current = dedupePreferences(current, body);
-  const block = `${beginPrefix} (自動同期 ${label}) -->\n${body}\n- 全社共有の知見（kim-PC の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る\n- 制作・営業・見積・案件の着手前: ~/.claude/knowledge/production-sales/00_INDEX.md を読み、必要な節だけ Grep。全文を丸読みしない。\n${endMarker}`;
+  const block = `${beginPrefix} (自動同期 ${label}) -->\n- 基本理念・判断基準（毎セッション読み込み・迷ったらここに戻る）: @~/.claude/orgiast-mission.md\n${body}\n- 全社共有の知見（kim-PC の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る\n- 制作・営業・見積・案件の着手前: ~/.claude/knowledge/production-sales/00_INDEX.md を読み、必要な節だけ Grep。全文を丸読みしない。\n${endMarker}`;
   if (current === null) return { updated: block, action: '新規作成' };
   // 行全体が開始マーカー形式そのものである場合だけ対象にする(部分一致は自己言及文書に誤爆する)。
   // ラベル部分の形式は縛らない: 日付形式を固定すると、別形式で導入されたPCで置換に失敗し
@@ -824,6 +847,7 @@ async function main() { try {
       else { fs.mkdirSync(path.dirname(rulesPath), { recursive: true }); fs.renameSync(oldRulesPath, rulesPath); }
     } catch {}
   }
+  try { await syncMission(); } catch (e) { log(`mission sync failed: ${oneLine(e)}`); }
   if (plan.syncRepository) await syncRepository(now);
   if (plan.provisionKeys) await provisionKeys(now);
   await syncKnowledge({ now });

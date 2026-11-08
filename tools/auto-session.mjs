@@ -4,6 +4,7 @@ import { rotate, MAX_BYTES } from './next-session-rotate.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { Worker } from 'node:worker_threads';
 import { isEntry } from './is-entry.mjs';
 import { DEFAULT_REPO_MAP, parseRepoMap } from './feedback-to-issues.mjs';
 import { ledgerRows, runTaskLedger } from './task-ledger.mjs';
@@ -752,6 +753,7 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
   const executorRoot = runOptions.executorRoot ?? prepareExecutorRoot({ repoRoot: REPO_ROOT });
   return new Promise((resolve) => {
     const startedAt = new Date();
+    const deadline = performance.now() + 2 * timeoutMs;
     const configuredChoice = autoSessionExecutor();
     const choice = runOptions.model
       ? { ...configuredChoice, executor: 'claude' }
@@ -759,14 +761,18 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
       ? { ...configuredChoice, executor: 'cheap-code' }
       : configuredChoice;
     let cheapProvider = choice.provider;
+    const executorAttempts = [];
     let alternateTried = false;
     let codexTried = false;
+    let laneCount = 0;
     let activeLane = choice.executor === 'cheap-code' ? 'cheap-code' : 'claude';
     const codexLane = codexDoLaneEnabled();
     const promptFile = path.join(os.tmpdir(), `orgiast-auto-session-${process.pid}-${Date.now()}.txt`);
     if (choice.executor === 'cheap-code') fs.writeFileSync(promptFile, `[headless:auto-session]\n${prompt}`, 'utf8');
     const launch = (fallback = false, codex = false) => {
+      if (performance.now() >= deadline) { finish(null, '', '', false, fallback, true); return; }
       const cheap = choice.executor === 'cheap-code' && !fallback && !codex;
+      const alternate = cheap && !alternateTried ? alternateCheapProvider(cheapProvider) : null;
       activeLane = codex ? 'codex-do' : cheap ? 'cheap-code' : 'claude';
       if (codex) codexTried = true;
       let child;
@@ -777,7 +783,7 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
         : buildClaudeHeadlessArgs({ repoCwd, historyCwd, resumeSessionId: runOptions.resumeSessionId, ...(runOptions.model ? { model: runOptions.model } : {}) }), { detached: process.platform !== 'win32', cwd: historyCwd,
         // cheap-code 側でも浄化するが、claude フォールバック(監督セッション)はここで
         // デスクトップ由来の CLAUDECODE / CLAUDE_CODE_* / MCP_* を外しておく。
-        env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: codex ? 'auto-session:codex-do' : cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
+        env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: codex ? 'auto-session:codex-do' : cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude' }, stdio: [cheap || codex ? 'ignore' : 'pipe', 'pipe', 'pipe'], windowsHide: true }); }
       catch (error) {
         if (codex) {
           const reason = `codex-do launch failed: ${error?.message ?? error}`;
@@ -793,18 +799,64 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
     child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
     child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
     child.on('error', (error) => { launchFailed = true; stderr += error.message; });
-    child.stdin.on('error', () => {});
-    if (cheap || codex) child.stdin.end(); else child.stdin.end(`[headless:auto-session]\n${prompt}`, 'utf8');
+    child.stdin?.on('error', () => {});
+    if (!cheap && !codex) child.stdin.end(`[headless:auto-session]\n${prompt}`, 'utf8');
+    const remainingMs = Math.max(1, deadline - performance.now());
+    const maxLaneMs = laneCount === 0 ? timeoutMs : Math.floor(timeoutMs / 2);
+    laneCount++;
+    const laneTimeoutMs = Math.max(1, Math.min(maxLaneMs, remainingMs));
+    let settled = false;
     const timer = setTimeout(() => {
+      // The process may have exited while Windows is still closing its pipes.
+      // Keep its real exit status instead of turning a completed failure into timeout.
+      if (child.exitCode !== null) {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        child.unref();
+        complete(child.exitCode);
+        return;
+      }
       timedOut = true;
-      if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
-      else { try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} } }
-    }, Math.max(1, timeoutMs - (Date.now() - startedAt.getTime())));
-    child.on('close', (code) => {
+      // taskkill can take seconds on Windows. Do not block the deadline or wait for
+      // inherited pipes to close before advancing. Its /T cleanup continues independently.
+      if (child.pid) {
+        if (process.platform === 'win32') {
+          // Even async process creation can block during Windows process creation. Run that
+          // OS call off the event loop so cleanup cannot consume the next lane's slice.
+          const killer = new Worker(`
+            const { parentPort, workerData } = require('node:worker_threads');
+            const { spawn } = require('node:child_process');
+            const child = spawn('taskkill', ['/PID', String(workerData), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+            child.on('spawn', () => parentPort.postMessage('started'));
+            child.on('error', () => parentPort.postMessage('failed'));
+            child.on('exit', code => { if (code !== 0) parentPort.postMessage('failed'); });
+          `, { eval: true, workerData: child.pid });
+          const killRoot = () => { try { child.kill('SIGKILL'); } catch {} };
+          killer.on('error', killRoot);
+          killer.on('message', message => {
+            if (message === 'failed') killRoot();
+            // Keep the worker alive until taskkill has actually started.
+            if (message === 'started') killer.unref();
+          });
+        } else { try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} } }
+      }
+      child.stdin?.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.unref();
+      complete(null);
+    }, laneTimeoutMs);
+    const complete = (code) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      executorAttempts.push({ executor: activeLane === 'cheap-code' ? `cheap-code:${cheapProvider}` : activeLane, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure' });
+      if (cheap && timedOut && performance.now() < deadline) {
+        if (alternate) { alternateTried = true; cheapProvider = alternate; launch(false); return; }
+        if (codexLane && !codexTried) { launch(false, true); return; }
+      }
       if ((cheap || codex) && !timedOut && code !== 0 && !(codex && code === 75)) {
         const reason = `${codex ? 'codex-do' : `cheap-code/${cheapProvider}`} exit ${code}`;
-        const alternate = !cheap || alternateTried ? null : alternateCheapProvider(cheapProvider);
         if (alternate) { alternateTried = true; cheapProvider = alternate; launch(false); return; }
         if (cheap && codexLane && !codexTried) { launch(false, true); return; }
         if (claudeFallbackEnabled()) { recordFallbackToClaude({ reason }); launch(true); return; }
@@ -813,9 +865,10 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
         return;
       }
       finish(timedOut ? null : code, stdout, stderr, launchFailed, fallback, timedOut);
-    });
     };
-    const finish = (code, stdout, stderr, launchFailed, fallback, timedOut = false, skippedNoExecutor = false) => { try { fs.rmSync(promptFile, { force: true }); } catch {} resolve({ startedAt: startedAt.toISOString(), endedAt: new Date().toISOString(), exitCode: code, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure', launchFailed, fallbackToClaude: Boolean(fallback), skippedNoExecutor, executorUsed: activeLane === 'cheap-code' ? `cheap-code:${cheapProvider}` : activeLane, ...(activeLane === 'codex-do' && code === 75 && !timedOut ? { deferred: true } : {}), stdout, stderr }); };
+    child.on('close', complete);
+    };
+    const finish = (code, stdout, stderr, launchFailed, fallback, timedOut = false, skippedNoExecutor = false) => { try { fs.rmSync(promptFile, { force: true }); } catch {} resolve({ startedAt: startedAt.toISOString(), endedAt: new Date().toISOString(), exitCode: code, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure', launchFailed, fallbackToClaude: Boolean(fallback), skippedNoExecutor, executorAttempts, executorUsed: activeLane === 'cheap-code' ? `cheap-code:${cheapProvider}` : activeLane, ...(activeLane === 'codex-do' && code === 75 && !timedOut ? { deferred: true } : {}), stdout, stderr }); };
     // 既存の呼び出し契約: executable 自体が不正なら cheap-code の選択状態にかかわらず起動失敗として返す。
     if (String(executable).includes('\0')) { finish(null, '', 'The argument contains null bytes', true, false); return; }
     // 2026-10-27 実測: deepseek 402 + glm 上限で2日連続 success 0。

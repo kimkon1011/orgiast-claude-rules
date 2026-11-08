@@ -1289,9 +1289,12 @@ test('runChild は冷却中・失敗時の codex-do と保留・最終フォー�
   fs.mkdirSync(toolsDir);
   const traceFile = path.join(home, 'trace.jsonl');
   const trace = `fs.appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ lane: process.env.ORGIAST_HEADLESS_JOB, args: process.argv.slice(2), stdin, prompt: process.argv.includes('--prompt-file') ? fs.readFileSync(process.argv[process.argv.indexOf('--prompt-file') + 1], 'utf8') : '' }) + '\\n');`;
-  const script = (code) => `import fs from 'node:fs'; let stdin = ''; for await (const chunk of process.stdin) stdin += chunk; ${trace} ${code}`;
+  const script = (code) => `import fs from 'node:fs'; const stdin = fs.readFileSync(0, 'utf8'); ${trace} ${code}`;
   try {
     const scenarios = [
+      { name: 'cheap timeout retries alternate within total budget', cheapTimeout: true, alternate: true, lanes: ['cheap-code:deepseek', 'cheap-code:glm'], status: 'success' },
+      { name: 'both cheap timeouts reserve budget for codex-do', bothCheapTimeout: true, alternate: true, code: 0, lanes: ['cheap-code:deepseek', 'cheap-code:glm', 'codex-do'], status: 'success' },
+      { name: 'all executors timeout within total budget', bothCheapTimeout: true, alternate: true, timeout: true, lanes: ['cheap-code:deepseek', 'cheap-code:glm', 'codex-do'], status: 'timeout' },
       { name: '両方冷却中は cheap-code を起動しない', cooling: true, code: 0, lanes: ['codex-do'], status: 'success' },
       { name: 'cheap-code と alternate 失敗後は1回だけ codex-do', alternate: true, code: 0, lanes: ['cheap-code:deepseek', 'cheap-code:glm', 'codex-do'], status: 'success' },
       { name: '75 は Claude 有効でも保留する', cooling: true, code: 75, claude: true, lanes: ['codex-do'], status: 'failure', deferred: true },
@@ -1311,17 +1314,38 @@ test('runChild は冷却中・失敗時の codex-do と保留・最終フォー�
       // DeepSeek の推論先は OpenRouter なので、冷却状態も OpenRouter に記録される。
       fs.writeFileSync(path.join(configDir, 'provider-cooldown.json'), JSON.stringify(scenario.cooling ? { openrouter: { until: Date.now() + 60000 }, glm: { until: Date.now() + 60000 } } : {}));
       fs.writeFileSync(path.join(configDir, 'zai.env'), scenario.alternate ? 'ZAI_API_KEY=test' : '');
-      fs.writeFileSync(path.join(toolsDir, 'cheap-code.mjs'), script('process.exitCode = 1;'));
+      fs.writeFileSync(path.join(toolsDir, 'cheap-code.mjs'), script(scenario.bothCheapTimeout ? 'setInterval(() => {}, 1000);' : scenario.cheapTimeout ? "if (process.env.ORGIAST_HEADLESS_JOB.endsWith(':deepseek')) setInterval(() => {}, 1000);" : 'process.exitCode = 1;'));
       const codexFile = path.join(toolsDir, 'codex-do.mjs');
       fs.writeFileSync(codexFile, script(scenario.timeout ? 'setInterval(() => {}, 1000);' : `process.exitCode = ${scenario.code ?? 1};`));
       if (scenario.missing) fs.rmSync(codexFile);
       // Claude のスタブは stdin を消費して成功させる。
       const claudeFile = path.join(home, 'claude-stub');
       fs.writeFileSync(claudeFile, `#!${process.execPath}\n(async () => { const fs = require('node:fs'); let stdin = ''; for await (const chunk of process.stdin) stdin += chunk; ${trace} })();\n`, { mode: 0o755 });
-      const result = await runChild(claudeFile, 'lane test', home, home, scenario.timeout ? 1500 : 5000, { executorRoot: home, ...(scenario.model ? { model: 'sonnet' } : {}) });
+      const budgetMs = scenario.timeout && !scenario.bothCheapTimeout ? 1500 : 5000;
+      const began = performance.now();
+      const result = await runChild(claudeFile, 'lane test', home, home, budgetMs, { executorRoot: home, ...(scenario.model ? { model: 'sonnet' } : {}) });
+      const elapsedMs = performance.now() - began;
+      if (scenario.bothCheapTimeout) {
+        const expectedMs = scenario.timeout ? 2 * budgetMs : Math.floor(1.5 * budgetMs);
+        assert.ok(elapsedMs >= expectedMs - 1500, `elapsed ${elapsedMs}ms below expected ${expectedMs}ms`);
+        assert.ok(elapsedMs < expectedMs + 1500, `elapsed ${elapsedMs}ms exceeded budget cap ${expectedMs + 1500}ms`);
+      } else if (scenario.cheapTimeout) {
+        const maxExpectedMs = Math.floor(1.5 * budgetMs);
+        assert.ok(elapsedMs >= budgetMs - 1500, `elapsed ${elapsedMs}ms below expected ${budgetMs}ms`);
+        assert.ok(elapsedMs < maxExpectedMs + 1500, `deadline exceeded: ${elapsedMs}ms for ${maxExpectedMs + 1500}ms budget cap`);
+      } else if (scenario.timeout) {
+        assert.ok(elapsedMs >= budgetMs - 1500, `elapsed ${elapsedMs}ms below expected ${budgetMs}ms`);
+        assert.ok(elapsedMs < budgetMs + 1500, `deadline exceeded: ${elapsedMs}ms for ${budgetMs}ms budget`);
+      }
+      if (scenario.bothCheapTimeout) assert.deepEqual(result.executorAttempts, [
+        { executor: 'cheap-code:deepseek', status: 'timeout' },
+        { executor: 'cheap-code:glm', status: 'timeout' },
+        { executor: 'codex-do', status: scenario.status },
+      ]);
       const rows = fs.readFileSync(traceFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
       assert.deepEqual(rows.map((row) => row.lane.replace('auto-session:', '')), scenario.lanes);
       assert.equal(result.status, scenario.status);
+      if (scenario.cheapTimeout) assert.deepEqual(result.executorAttempts, [{ executor: 'cheap-code:deepseek', status: 'timeout' }, { executor: 'cheap-code:glm', status: 'success' }]);
       assert.equal(result.deferred === true, scenario.deferred === true);
       assert.equal(result.skippedNoExecutor, scenario.skipped === true);
       assert.equal(result.executorUsed, scenario.lanes.at(-1) === 'fallback-claude' ? 'claude' : scenario.lanes.at(-1) ?? 'codex-do');
@@ -1336,6 +1360,7 @@ test('runChild は冷却中・失敗時の codex-do と保留・最終フォー�
   } finally {
     if (previousHome === undefined) delete process.env.ORGIAST_HOME;
     else process.env.ORGIAST_HOME = previousHome;
-    fs.rmSync(home, { recursive: true, force: true });
+    // Windows taskkill /T releases cwd handles asynchronously after the deadline.
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
 });

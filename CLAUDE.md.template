@@ -10,8 +10,10 @@
 **/growi-fetch** skill を使う（一次ソース = Drive `社内マニュアル_NotebookLM連携` 13分割 Docs、WebFetch 禁止、鮮度チェック必須）。
 
 <!-- BEGIN: オージャスト共通ルール (自動同期 ONBOARDING.md) -->
+- 基本理念・判断基準（毎セッション読み込み・迷ったらここに戻る）: @~/.claude/orgiast-mission.md
 全文は ~/.claude/orgiast-onboarding.md。自動ロードされないため、判断に迷ったら Read ツールで該当節を読むこと
 ### 1.1 自動化・手渡しの原則
+**🔴 全ての判断の土台は基本理念（docs/mission.md → @~/.claude/orgiast-mission.md、毎セッション自動読み込み）。目的は user の究極の生産性、長期的利益が最優先。個別ルールと食い違って見える時は理念に沿って解釈し、食い違いを rules repo の修正として提案する。承認必須事項（送信・削除・課金等）は理念を理由に飛ばさない。**
 **🔴 応答は常に日本語（コード・識別子は原文可）。Stop hook の書き直しも日本語を保つ。response-language-gate が検査し、setup --converge が language: japanese を配布する。**
 **🔴 user の操作はゼロが原則。手間は全員の手作業・再送・再入力・確認を含む最上位コスト。①Claude が実行 → ②MCP・CLI・定期ジョブ・fleet 等の別経路 → ③実行不能を実測したものだけ make-desktop-launcher.mjs でダブルクリック1個にする。PowerShell 貼り付けを頼まない。試した経路・結果・操作回数を「手間監査:」に書き、準備は全て先に済ませる。人の理解・同意は省かない（§1.1.0／§1.1.1）。**
 ### 削減していいのは Claude のコストだけ。user の往復は削減の対価にしない

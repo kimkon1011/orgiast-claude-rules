@@ -1,0 +1,10 @@
+[
+  { "text": "展示会ブース制作", "source": "https://orgiast.jp", "volume": 80, "difficulty": 45, "category": "展示会ブース制作" },
+  { "text": "SDGs展示ブース", "source": "https://rebooth.co.jp", "volume": 40, "difficulty": 30, "category": "SDGs展示ブース" },
+  { "text": "イベント企画", "source": "https://orgiast.jp", "volume": 60, "difficulty": 35, "category": "イベントプロデュース" },
+  { "text": "リユースブース", "source": "https://rebooth.co.jp", "volume": 25, "difficulty": 20, "category": "Reブース" },
+  { "text": "ブースデザイン", "source": "https://orgiast.jp", "volume": 55, "difficulty": 40, "category": "展示会ブース制作" },
+  { "text": "クリエイティブ制作", "source": "https://orgiast.jp", "volume": 30, "difficulty": 50, "category": "クリエイティブ制作" },
+  { "text": "周年記念イベント", "source": "https://orgiast.jp", "volume": 20, "difficulty": 25, "category": "周年記念イベント" },
+  { "text": "株主総会運営", "source": "https://orgiast.jp", "volume": 15, "difficulty": 60, "category": "株主総会" }
+]

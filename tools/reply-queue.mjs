@@ -6,7 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { isEntry } from './is-entry.mjs';
 
-const VALID_CHANNELS = new Set(['discord', 'email', 'line', 'messenger']);
+const VALID_CHANNELS = new Set(['discord', 'email', 'line', 'messenger', 'whatsapp', 'sms']);
 
 // 状態遷移表: { from → [to, ...] }
 const TRANSITIONS = {

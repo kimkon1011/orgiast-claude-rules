@@ -15,7 +15,7 @@ function fixture(t) {
   put('.claude.json', JSON.stringify({ oauthAccount: { emailAddress: 'seisaku-team@orgiast.jp' } }));
   put('.claude/cost-reporter.env', 'REPORTER_LABEL=DESKTOP-BDOAK99\n');
   put('.claude/keyserve.env', 'ORGIAST_KEYSERVE_SECRET=secret-hmac\nORGIAST_KEYSERVE_PC=DESKTOP-BDOAK99\n');
-  for (const name of ['shared-memory/MEMORY.md', 'knowledge/production-sales/00_INDEX.md', 'skills/case/SKILL.md', 'skills/case-resume/SKILL.md']) put(`.claude/${name}`, 'content');
+  for (const name of ['orgiast-mission.md', 'shared-memory/MEMORY.md', 'knowledge/production-sales/00_INDEX.md', 'skills/case/SKILL.md', 'skills/case-resume/SKILL.md']) put(`.claude/${name}`, 'content');
   put('.claude/CLAUDE.md', '# 制作・営業ナレッジ\n');
   put('.claude/orgiast-discord-bot-token.txt', 'secret-discord');
   put('.claude/line-openchat/2026-11.jsonl', JSON.stringify({ text: 'private chat', ts: 1793577600000 }));
@@ -53,7 +53,7 @@ test('complete selfcheck performs only GET reads, preserves files and reports by
   const result = await runSelfcheck({ ...f, hostname: 'DESKTOP-BDOAK99', fetchImpl: network(calls), getToken: async args => {
     tokenCalls.push(args); assert.ok(['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/drive'].includes(args.scope)); assert.equal(args.impersonate, 'seisaku-team@orgiast.jp'); return 'secret-google';
   } });
-  assert.equal(result.rows.length, 14);
+  assert.equal(result.rows.length, 15);
   assert.ok(result.rows.every(row => row.status === '読めた'), result.markdown);
   assert.match(result.markdown, /鹿沼案件.*C0039.*bytes/);
   assert.match(result.markdown, /ライブ受信.*未検証/);

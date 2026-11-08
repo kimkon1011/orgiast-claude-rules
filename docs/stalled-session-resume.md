@@ -37,3 +37,21 @@
 - PowerShell 5.1 の構文解析、隔離 transcript での実CLI dry-run、Git diff whitespace check も成功。
 - 全体テストは Windows ドライブ上の隔離チェックアウトで実行し、変更したコード9ファイルが作業ツリーとバイト単位で一致することを確認後にコピーを削除した。元ツリーでのGit読み取りの45秒制限とCRLF依存の既存テスト失敗、一時Linux領域のUNCパスによるPowerShell結合テスト失敗を避けるため。既存テストのアサーションや本体は変更していない。
 - 本番のタスク登録・実セッション再開・Discord送信は実施していない。
+
+## 待機期限切れ専用モード（--overdue）
+
+`node tools/stalled-session-resume.mjs --overdue` または `STALLED_SESSION_MODE=overdue` で、タイトル頭の待機期限が現在以前のセッションだけを扱う。既定は1回2件、並列1。件数は既存の `--limit` / `STALLED_SESSION_LIMIT` で変更でき、夜間07:30の締切は適用しない。closed ledger・閉じて可・直近10分activeを除外し、既存の共有ロックとcwd排他を使う。夜間も期限切れタイトルを最優先にする。
+
+台帳の `overdue` に `(sessionId, 期限文字列)` 別の試行履歴を保存する。エラー以外（中断含む）は同一期限で再実行せず、エラーだけ終了から30分後に最大3回まで再試行する。期限が更新されれば新しいキーで対象になる。夜間の `sessions` / `nights`・連続エラー中止とは独立。実行した結果がある場合だけ既存 `notifyKim`（session-inbox）へ1回まとめる。個別のDiscord送信は追加しない。
+
+再開時は元会話と前回成果に加えて期限文脈を渡し、待っていた事項の直接照会、作業と検証、kim-inboxへのaskと新期限、完了時の/session-closeを指示する。期限の書換えだけでは終えない。
+
+必須タスク `OrgiastWaitDeadlineResume` は既存登録スクリプトで登録・action/trigger/settingsを読戻し検証する。15分ごと、hidden runner、StartWhenAvailable、バッテリー可、IgnoreNew、最大2時間。`setup --converge` の既存修復経路で全Windows PC・アカウントへ配布する。既存sweepはnightly-health-expectations / cron-watchに登録されていないため、その形式の架空ログ監視は追加せず、setupの必須タスク監視（最終実行2時間以内）で検出する。
+
+実行時間の実測値は progressed n=61 median 6.2分 / p80 10.1 / max 16.1、error n=21 median 21.3 であった。正常進行セッションは 16.1分以内で完了する一方、エラー時は複数プロバイダのタイムアウトやフォールバック試行で20分超を要するため、タスク上限を PT2H に設定し、`runChild` は最初レーンに満額 timeoutMs、フォールバックに Math.floor(timeoutMs/2)（全体上限 2*timeoutMs）を配分して切り替え時間を確保する。
+
+### timeout / executor欠落の根本原因
+
+`runChild` は実行者を `executorUsed` として返していたが、`execute` のtimeout/failure早期returnがそれを捨て、台帳にexecutorが残らなかった。また `runChild` の代替分岐は `!timedOut` 条件付きで、最初のプロバイダが総時間を使い切ると再試行できなかった。全結果でexecutorと各レーンの履歴を引き継ぎ、起動前・例外は実行していないことを表す `not-started` と記録する。利用可能な代替cheapプロバイダがあれば最初のレーンに残時間の半分を割り当て、timeoutでも残予算内で既存代替プロバイダを1回試す。timeoutからClaudeへ切り替える経路は追加しない。
+
+`node tools/stalled-session-resume.mjs --overdue --dry-run` は台帳・ロック・通知・実再開を変更せず候補を確認する。

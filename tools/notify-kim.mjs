@@ -10,6 +10,7 @@ import { classifyKimDm } from './lib/kim-dm-policy.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { addItem, spoolItem, isInboxNoise } from './kim-inbox.mjs';
 import { annotateAccounts } from './url-account-gate.mjs';
+import { discordAllowed } from './lib/kim-discord-allowlist.mjs';
 
 const API = 'https://discord.com/api/v10';
 const MAX_CONTENT = 2_000;
@@ -213,7 +214,7 @@ export async function deliverKim(text, {
   plainJaImpl = toPlainJa,
   suffix = '',
   allowHumanRequest = false,
-  kind = 'info', source = '', sessionId = '',
+  kind = 'info', source = '', sessionId = '', discordAllowed: discordAllowedOption,
 } = {}) {
   if (isInboxNoise({ kind, source, text: String(text ?? '') })) return { delivered: 'suppressed', reason: 'fleet-ledger-or-gate-statistics' };
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
@@ -225,9 +226,15 @@ export async function deliverKim(text, {
   // 平易化の書き換えでアカウント表記が落ちることがあるため、書き換え後の本文で補う。
   const translated = annotateAccounts(plainJa ? await plainJaImpl(String(text ?? '')) : text);
   const body = suffix && !allowHumanRequest && kind !== 'ask' ? String(translated).split('\n').filter(line => !HANDOFF.test(line)).join('\n') : translated;
-  // 2026-11-06: kim は緊急・定期まとめを含め常に kim-inbox。旧許可リストは適用しない。
-  if (userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID) {
-    return persistKim(home, { kind: ['ask', 'action'].includes(kind) ? 'ask' : 'info', text: String(body) + suffix, source, sessionId, signal });
+  const isKimRecipient = userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID;
+  let inboxResult = null;
+  if (isKimRecipient) {
+    inboxResult = await persistKim(home, { kind: ['ask', 'action'].includes(kind) ? 'ask' : 'info', text: String(body) + suffix, source, sessionId, signal });
+    const checkAllowed = discordAllowedOption ?? discordAllowed;
+    const allowed = checkAllowed(text, { home }).allowed || checkAllowed(body, { home }).allowed;
+    if (!allowed) {
+      return { ...inboxResult, channel: 'kim-inbox' };
+    }
   }
   const content = suffix ? String(body).slice(0, Math.max(0, MAX_CONTENT - suffix.length)) + suffix : clipDiscordContent(body);
   let dmReason = '';
@@ -251,7 +258,7 @@ export async function deliverKim(text, {
       if (!sent.ok) throw new Error(`DM送信が HTTP ${sent.status}`);
       const messageId = (await sent.json()).id;
       if (typeof messageId !== 'string' || !messageId.trim()) throw new Error('DMメッセージIDを取得できません');
-      return { delivered: 'dm', messageId, channelId, recipientId: resolvedUserId, httpStatus: sent.status };
+      return { delivered: 'dm', messageId, channelId, recipientId: resolvedUserId, httpStatus: sent.status, ...(inboxResult?.id ? { id: inboxResult.id } : {}), channel: 'discord' };
     } catch (error) {
       dmReason = redactSecrets(error?.message ?? error);
     }

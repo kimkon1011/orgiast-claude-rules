@@ -48,12 +48,13 @@ flowchart LR
 - **オージャスト評価**: ブース提案のような長文回答より、コード編集・設定変更のような実務で有用。SessionStart でのデフォルト指示に caveman レベル 2（短文＋コード）を組み込むと良い
 - **導入優先度**: P2（ccusage で出力トークンが多い場合）
 
-### 04: token-optimizer-mcp — ツール出力圧縮＋キャッシュ
-- **リンク**: <https://github.com/benzhuangqi/token-optimizer-mcp>
-- **目的**: ツール（ls, cat, grep 等）の出力を圧縮し、キャッシュして再読込を減らす MCP サーバ
-- **仕組み**: ファイル内容のハッシュを保持し、同一内容の再送を抑制。大きな出力は要約してから渡す
-- **オージャスト評価**: 同じ案件フォルダを複数セッションで開くオージャストの利用パターンに適合。過去案件資料の再読込が大幅に減る可能性
-- **導入優先度**: P1（ccusage でキャッシュヒット率が低い場合）
+### 04: token-optimizer-mcp → @ooples/token-optimizer-mcp — ツール出力圧縮＋キャッシュ
+- **旧リンク**: <https://github.com/benzhuangqi/token-optimizer-mcp>（**DEPRECATED**、`@ooples/token-optimizer-mcp@7.9.0` が後継）
+- **現行リポジトリ**: <https://github.com/ooples/token-optimizer-mcp>
+- **目的**: ツール（ls, cat, grep 等）の出力を圧縮し、キャッシュして再読込を減らす MCP サーバ＋プラグイン
+- **仕組み**: ファイル内容のハッシュを保持し、同一内容の再送を抑制。大きな出力は要約してから渡す。Claude Code 向けにはプラグイン（hooks）が推奨され、SessionStart・PreToolUse・PostToolUse・PreCompact・Stop の各タイミングでツール出力を事前圧縮する
+- **オージャスト評価**: 同じ案件フォルダを複数セッションで開くオージャストの利用パターンに適合。過去案件資料の再読込が大幅に減る可能性。hooks 方式は CLI 環境で追加プロセス不要。実測: 18/19 doctor checks pass（DELL/作業用014, 2026-11-09）
+- **導入優先度**: P1（ccusage でキャッシュヒット率が低い場合 → 実測で cache_read 773M / 5ヶ月 = 最大費目）
 
 ### 05: context-mode — 会話詰込回避
 - **リンク**: <https://github.com/ahmetkca/context-mode>
@@ -115,31 +116,44 @@ ccusage --top-sessions 20
 - **オージャスト評価**: ccusage の補完として使えるが、既存の Discord 通知（`claude-cost-reporter.mjs`）が十分に機能している
 - **導入優先度**: P3（ダッシュボードが必要になった場合のみ）
 
-## オージャスト導入ロードマップ
+## オージャスト導入ロードマップ（実測ベース改訂 2026-11-08）
 
-### Phase 0: ccusage で現状計測（今週）
-- [ ] `npm install -g ccusage` or `npx ccusage --summary daily`
-- [ ] この PC の日別トークン使用量を記録（基準値）
-- [ ] モデル別内訳（Anthropic Claude / OpenAI GPT 等）を確認
-- [ ] セッション別コスト TOP20 を確認し、浪費パターンを特定
-- [ ] 結果を `docs/ai-news-x0002-baseline-<date>.csv` として保存
+> **Phase 0 実測結果（DELL/作業用014, ~5ヶ月分）**: output 6.6M (23.0%), cache_read 773M (67.5%), Opus 80% 偏重
+> → 優先度改訂: **P1=token-optimizer-mcp（cache_read削減）＞ P2=caveman（出力短縮）＞ P3=model-switch（Opus→Sonnet）**
 
-### Phase 1: 読込過多対策（ccusage で読込トークンが多い場合）
-- [ ] **token-savior** を導入（`~/.claude/settings.json` にツール登録）
-- [ ] 導入後のトークン変化を ccusage で検証（1週間）
-- [ ] 効果大なら **serena** も追加（VSCode 環境のみ）
+### Phase 0 ✅ 完了（2026-11-08）
+- [x] `npm install -g ccusage` or `npx ccusage --summary daily`
+- [x] この PC の日別トークン使用量を記録（基準値）
+- [x] モデル別内訳（Anthropic Claude / OpenAI GPT 等）を確認
+- [x] セッション別コスト TOP20 を確認し、浪費パターンを特定
+- [x] 結果を `docs/ai-news-x0002-baseline-<date>.csv` として保存
+- **結果**: output 6.6M (23.0%), cache_read 773M (67.5%), cache_creation 0.9M, input 2.2M
+  - **最大費目**: cache_read（全トークンの67.5%）
+  - **モデル偏重**: Opus 80%（最も高価なモデルが大半）
+  - **ccusage**: Node.js v26 DLL 非互換で不可 → 代替スクリプトで代用
 
-### Phase 2: 回答長大対策（ccusage で出力トークンが多い場合）
+### Phase 1: ツール出力圧縮で cache_read 削減（実測に基づき P1 に昇格）✅ 導入済み（2026-11-09）
+- [x] **`@ooples/token-optimizer-mcp`** をグローバルインストール
+  - `npm install -g --allow-scripts=@ooples/token-optimizer-mcp @ooples/token-optimizer-mcp`
+- [x] `token-optimizer-install` で hooks を `~/.claude/settings.json` に配線
+  - 配線した hook: SessionStart / PreToolUse (2 matchers) / PostToolUse / PreCompact / Stop
+  - 設定された autoCompactWindow: 400000
+- [x] `~/.claude/settings.json` に MCP server エントリを追加（全セッションで利用可能に）
+- [x] `token-optimizer-doctor` 検証: 18/19 checks 通過（proxy routing は proxy モード時のみ）
+- [ ] **caution**: 旧 `token-optimizer-mcp@2.17.0` は deprecate 済み。`@ooples/token-optimizer-mcp@7.9.0` を使用
+- [ ] 導入後のトークン変化を実測ベースラインとの比較で検証（1週間の使用後）
+
+### Phase 2: 出力短縮対策（ccusage で出力トークン 6.6M / 5ヶ月）
 - [ ] **caveman** のレベル設定を SessionStart に組み込む
 - [ ] 導入後の出力トークン変化を ccusage で検証（1週間）
 
-### Phase 3: 再読込対策（ccusage でキャッシュヒット率低い場合）
-- [ ] **token-optimizer-mcp** を MCP として追加
-- [ ] 導入後、同案件フォルダの再読込が減ったか ccusage で確認
+### Phase 3: モデル切替で費用削減（Opus 80% → Sonnet 主体）
+- [ ] `--advisor opus --model sonnet` 起動オプションをデフォルト設定化
+- [ ] 導入後の Opus 割合を実測（目標: 80% → 20% 以下）
 
-### Phase 4: 長期セッション対策（ccusage で長期セッションの急増確認時）
+### Phase 4: 長期セッション対策（必要時）
 - [ ] **context-mode** または **claude-context** を導入判断
-- [ ] 長期セッションのトークン推移を ccusage で監視
+- [ ] 長期セッションのトークン推移を監視
 
 ## 既存オージャストツールとの棲み分け
 
@@ -156,16 +170,22 @@ ccusage --top-sessions 20
 ## 受け入れ条件
 
 1. [ ] ccusage がこの PC の Claude Code JSONL を読めて、日別サマリが出力できる
-2. [ ] Phase 0 の計測結果が `docs/ai-news-x0002-baseline-*.csv` に保存されている
+2. [x] Phase 0 の計測結果が `docs/ai-news-x0002-baseline-*.tsv` に保存されている（代替スクリプト）
 3. [ ] 導入各ツールの効果が ccusage の計測値（導入前vs導入後）で確認できる
 4. [ ] トークン使用量が導入前比で 20% 以上削減している（全 Phase 完了時）
 5. [ ] 各 Phase の導入判断は ccusage の実測値に基づき、推測で導入しない
+6. [x] Phase 1: `@ooples/token-optimizer-mcp@7.9.0` がグローバルインストール済み
+7. [x] Phase 1: `token-optimizer-doctor` 18/19 通過
+8. [x] Phase 1: MCP サーバエントリが `~/.claude/settings.json` に追加済み
 
 ## 制約事項
 
 - ccusage は推定コスト（list 価格換算）であり、実際の Anthropic 請求額とは異なる
 - 各ツールは GitHub 公開リポジトリであり、メンテナンスが継続しているかの確認が必要
 - serena は VSCode 拡張のため、headless 自動セッションでは使用不可
-- token-optimizer-mcp は MCP サーバのため、MCP ランチャー設定が必要
+- token-optimizer-mcp の旧パッケージ（`token-optimizer-mcp@2.17.0`）は **DEPRECATED**。`@ooples/token-optimizer-mcp@7.9.0`（2026-11-04 公開）を使用すること
+- token-optimizer-mcp は Claude Code 向けには hooks インストール（`token-optimizer-install`）が推奨。追加プロセス不要で全 ToolUse を圧縮。MCP サーバ + グローバル設定は追加機能（smart_read/smart_grep/smart_glob/wiki 等）の提供用
+- `@ooples/token-optimizer-mcp` の postinstall スクリプトは `--allow-scripts` が必要（npm の制限ポリシー対策）
 
-観測日: 2026-11-08
+初回観測日: 2026-11-08
+最終更新: 2026-11-09（Phase 1 実装反映）

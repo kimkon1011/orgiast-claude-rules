@@ -18,9 +18,11 @@ function parseLimit(value) {
 }
 
 export function options(argv = [], env = process.env) {
-  const out = { limit: parseLimit(env.STALLED_SESSION_LIMIT ?? 'all'), timeoutMs: Number(env.STALLED_SESSION_TIMEOUT_MIN ?? 20) * 60000,
-    activeMs: Number(env.STALLED_SESSION_ACTIVE_MIN ?? 10) * 60000, concurrency: Number(env.STALLED_SESSION_CONCURRENCY ?? 2), deadline: env.STALLED_SESSION_DEADLINE ?? '07:30', dryRun: false, list: false };
+  const overdue = argv.includes('--overdue') || env.STALLED_SESSION_MODE === 'overdue';
+  const out = { overdue, limit: parseLimit(env.STALLED_SESSION_LIMIT ?? (overdue ? '2' : 'all')), timeoutMs: Number(env.STALLED_SESSION_TIMEOUT_MIN ?? 20) * 60000,
+    activeMs: Number(env.STALLED_SESSION_ACTIVE_MIN ?? 10) * 60000, concurrency: Number(overdue ? 1 : (env.STALLED_SESSION_CONCURRENCY ?? 2)), deadline: env.STALLED_SESSION_DEADLINE ?? '07:30', dryRun: false, list: false };
   for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--overdue') continue;
     if (argv[i] === '--limit') out.limit = parseLimit(argv[++i]);
     else if (argv[i] === '--deadline') out.deadline = argv[++i];
     else if (argv[i] === '--concurrency') out.concurrency = Number(argv[++i]);
@@ -30,6 +32,7 @@ export function options(argv = [], env = process.env) {
   }
   if ((out.limit !== Infinity && !Number.isSafeInteger(out.limit)) || out.limit < 0 || !Number.isFinite(out.timeoutMs) || out.timeoutMs <= 0 || !Number.isFinite(out.activeMs) || out.activeMs < 0) throw new Error('Invalid limit/timeout/active minutes');
   if (!Number.isSafeInteger(out.concurrency) || out.concurrency < 1 || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(out.deadline)) throw new Error('Invalid concurrency/deadline');
+  if (overdue) out.concurrency = 1;
   return out;
 }
 
@@ -111,18 +114,30 @@ const CLOSABLE_TITLE = /(?:^|｜)【閉じて可】/;
 // 新形式【MM/DD/HH:MMまで】と旧形式【YY/MM/DD/HH:MMまで】の両方を受ける。
 const WAIT_TITLE = /^(?:\d{3}｜)?【(?:(\d{2})\/)?(\d{2})\/(\d{2})\/(\d{2}):(\d{2})まで】/;
 
-export function titleSkipReason(displayTitle, now) {
-  const title = String(displayTitle ?? '');
-  if (CLOSABLE_TITLE.test(title)) return '閉じて可';
-  const match = WAIT_TITLE.exec(title);
-  if (!match) return '';
+export function waitDeadline(displayTitle, now) {
+  const match = WAIT_TITLE.exec(String(displayTitle ?? ''));
+  if (!match) return null;
   const [, yy, month, day, hour, minute] = match;
-  const at = (year) => new Date(year, Number(month) - 1, Number(day), Number(hour), Number(minute)).getTime();
+  const at = year => new Date(year, Number(month) - 1, Number(day), Number(hour), Number(minute)).getTime();
   let deadline = yy ? at(2000 + Number(yy)) : at(new Date(now).getFullYear());
-  // 年なし形式は年跨ぎで過去日になり得る。半年以上先なら前年の日付とみなす。
   if (!yy && deadline - now > 180 * 86400000) deadline = at(new Date(now).getFullYear() - 1);
-  // 期限切れの待機は解除済みとして再開対象に戻す（永久に無視しない）。
-  return now < deadline ? '待機期限前' : '';
+  return { key: match[0].replace(/^\d{3}｜/, ''), label: `${month}/${day} ${hour}:${minute}`, at: deadline };
+}
+export function titleSkipReason(displayTitle, now) {
+  if (CLOSABLE_TITLE.test(String(displayTitle ?? ''))) return '閉じて可';
+  const wait = waitDeadline(displayTitle, now);
+  return wait && now < wait.at ? '待機期限前' : '';
+}
+export function overdueSkipReason(record, entry, closed, mtimeMs, now, activeMs) {
+  const common = skipReason(record, {}, '', closed, mtimeMs, now, activeMs);
+  if (common) return common;
+  const wait = waitDeadline(record.displayTitle, now);
+  if (!wait || wait.at > now) return '期限切れ待機ではない';
+  const attempts = entry.attempts ?? [];
+  if (attempts.some(a => a.outcome !== 'error')) return '同一期限処理済み';
+  if (attempts.length >= 3) return '同一期限3回エラー';
+  if (attempts.length && now - Date.parse(attempts.at(-1).endedAt ?? attempts.at(-1).startedAt) < 30 * 60000) return 'エラー後30分待機';
+  return '';
 }
 
 export function skipReason(record, entry, night, closed, mtimeMs, now, activeMs) {
@@ -135,8 +150,9 @@ export function skipReason(record, entry, night, closed, mtimeMs, now, activeMs)
   return '';
 }
 
-export async function execute(record, { timeoutMs, resultFile, previous = [] }, io = {}) {
+export async function execute(record, { timeoutMs, resultFile, previous = [], wait = null }, io = {}) {
   const prompt = `停滞セッション「${record.displayTitle}」(${record.sessionId})の承認済みの目的を1歩進めてください。
+${wait ? `このセッションの待機期限 ${wait.label} を過ぎました。待っていた事項（相手の返信・外部の状態・自動チェック）を直接照会し、(a) 進められるなら最後まで進めて検証する (b) 人の判断や操作が必要なら kim-inbox に ask を積み（node tools/kim-inbox.mjs）、応答の「このセッション」行に新しい期限を書く (c) 目的が完了していれば /session-close を実行する。期限を書き換えるだけで終えない。` : ''}
 元の会話全文を ${record.file} から読み、依頼・制約・成果物を確認して続行してください。推測で目的を広げないでください。
 共有作業ツリーの他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。個別の通知は不要です。
 前回までの再開結果: ${JSON.stringify(previous)}。済んだ作業を繰り返さず、成果物の現状を検証してください。
@@ -144,32 +160,34 @@ export async function execute(record, { timeoutMs, resultFile, previous = [] }, 
 実行した成果を ${resultFile} にJSONで保存してください: {"progressed":true/false,"evidence":"変更した成果物と検証結果、または進めない理由"}。
 単なる進捗確認・計画・終了コード0は成果に含めません。\n当初依頼: ${record.firstPrompt}\n直近: ${record.lastAssistantText}`;
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, record.cwd, record.cwd, timeoutMs, { resumeSessionId: record.sessionId });
+  const execution = { executor: result.executorUsed || 'not-started', executorAttempts: result.executorAttempts ?? [] };
   // 実行役が1つも起動できない(cheap-code 全レーン停止・Claude フォールバック無効)のはセッションの失敗ではない。
   // 2026-10-26 実測: deepseek payment_required で2件が1秒で error 扱い→「連続2件エラーで中止」の誤通知と noProgress 消費。
-  if (result.skippedNoExecutor) return { outcome: 'no-executor', reason: `実行役なし: ${String(result.stderr ?? '').trim().slice(-300) || result.executorUsed || 'cheap-code'}` };
-const timedOut = result.status === 'timeout';
-  if (result.status !== 'success' && !timedOut) return { outcome: 'error', reason: result.status };
+  // 実行役記録を常に伝播させる（executorAttempts）
+  if (result.skippedNoExecutor) return { ...execution, outcome: 'no-executor', reason: `実行役なし: ${String(result.stderr ?? '').trim().slice(-300) || result.executorUsed || 'cheap-code'}` };
+  const timedOut = result.status === 'timeout';
+  if (result.status !== 'success' && !timedOut) return { ...execution, outcome: 'error', reason: result.status };
   // deepseek-v4-flash が結果JSONに制御文字を混入することがある（2026-11-06 実測）.
   // io.readReport が指定されていればそれを使い、無ければファイルから制御文字無害化後に parse する。
   // parse 失敗時は null として no-progress 扱いにする（error にすると state.errors が増えて
-  // 「連続3件エラー→今晩中止」のトリガーになる）。
-  const rawReport = await (io.readReport ?? readSanitizedJson)(resultFile, null);
-  let report = rawReport;
-  if (typeof rawReport === 'string') {
-    try {
+  // 「連続3件エラー→今晩中止」のトリガーになる）。io.readReport の例外は結果ファイルが読めない
+  // ことを意味し error 扱いにする。
+  let report;
+  try {
+    const rawReport = await (io.readReport ?? readSanitizedJson)(resultFile, null);
+    report = rawReport;
+    if (typeof rawReport === 'string') {
       const cleaned = rawReport.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
       report = JSON.parse(cleaned);
-    } catch { report = null; }
-  }
+    }
+  } catch (error) { return { ...execution, outcome: 'error', reason: String(error.message) }; }
   const progressed = report?.progressed === true && typeof report.evidence === 'string' && report.evidence.trim();
-  // 時間切れはセッション側の制限超過であって失敗ではない。ただし時間切れ直前に成果 JSON を
-  // 保存できていれば「進んだ」として数える（2026-11-06 実測: 20分 timeout 4件が error 扱いで
-  // 連続3件エラー→今晩中止になり、残り約86件が未確認で終わった）。
-  if (timedOut) return { outcome: progressed ? 'progressed' : 'timeout', reason: progressed ? report.evidence : result.status, executor: result.executorUsed };
-  return { outcome: progressed ? 'progressed' : 'no-progress', reason: report?.evidence || '成果記録なし', executor: result.executorUsed };
+  if (timedOut) return { outcome: progressed ? 'progressed' : 'timeout', reason: progressed ? report.evidence : result.status, ...execution };
+  return { outcome: progressed ? 'progressed' : 'no-progress', reason: report?.evidence || '成果記録なし', ...execution };
 }
 
 export async function run(config = options(), io = {}) {
+  const overdue = config.overdue === true;
   const home = io.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   const dir = path.join(home, '.claude');
   const ledgerFile = path.join(dir, 'stalled-session-resume.json');
@@ -195,12 +213,21 @@ export async function run(config = options(), io = {}) {
   try {
     const ledger = await readJson(ledgerFile, { version: 1, sessions: {}, nights: {} });
     if (ledger.version !== 1 || !ledger.sessions || !ledger.nights) throw new Error('Invalid resume ledger');
+    if (overdue) ledger.overdue ??= {};
     const loadClosed = io.loadClosed ?? (() => readJson(path.join(dir, 'session-closed-ledger.json'), { sessions: {} }));
     const stat = io.stat ?? fs.stat;
-    const records = (await (io.detect ?? detect)()).filter(r => ['要対応', '要確認'].includes(r.status)).sort((a, b) => (ledger.sessions[a.sessionId]?.attempts?.at(-1)?.night ?? '').localeCompare(ledger.sessions[b.sessionId]?.attempts?.at(-1)?.night ?? '') || b.score - a.score || a.ageDays - b.ageDays);
+    const overdueTitle = record => {
+      const wait = waitDeadline(record.displayTitle, now());
+      return !!wait && wait.at <= now();
+    };
+    const records = (await (io.detect ?? detect)())
+      .filter(r => overdue ? !!waitDeadline(r.displayTitle, now()) : ['要対応', '要確認'].includes(r.status))
+      .sort((a, b) => Number(overdueTitle(b)) - Number(overdueTitle(a))
+        || (ledger.sessions[a.sessionId]?.attempts?.at(-1)?.night ?? '').localeCompare(ledger.sessions[b.sessionId]?.attempts?.at(-1)?.night ?? '')
+        || b.score - a.score || a.ageDays - b.ageDays);
     const rows = [], results = [];
-    const state = ledger.nights[night] ?? { count: 0, errors: 0, aborted: false };
-    if (!readonly) { delete state.noExecutor; ledger.nights[night] = state; }
+    const state = (overdue ? null : ledger.nights[night]) ?? { count: 0, errors: 0, aborted: false };
+    if (!readonly && !overdue) { delete state.noExecutor; ledger.nights[night] = state; }
     let fatal;
     const pending = [...records], running = new Set(), busy = new Set();
     const cwdKeys = new Map();
@@ -218,8 +245,12 @@ export async function run(config = options(), io = {}) {
         const parentId = resumedParentId(record.firstPrompt);
         // 連鎖の子は、祖先が積んだ noProgress を引き継いでから数える（夜ごとに id が変わっても
         // 「同じ目的への挑戦」として合計3回で retire させる）。
-        const entry = ledger.sessions[record.sessionId] ?? { attempts: [], noProgress: chainNoProgress(ledger, parentId) };
-        if (parentId && !entry.parentSessionId) entry.parentSessionId = parentId;
+        const wait = waitDeadline(record.displayTitle, now());
+        const overdueKey = JSON.stringify([record.sessionId, wait?.key]);
+        const entries = overdue ? ledger.overdue : ledger.sessions;
+        const entryKey = overdue ? overdueKey : record.sessionId;
+        const entry = entries[entryKey] ?? { attempts: [], noProgress: (overdue ? 0 : chainNoProgress(ledger, parentId)) };
+        if (!overdue && parentId && !entry.parentSessionId) entry.parentSessionId = parentId;
         entry.title = record.displayTitle;
         const closed = await loadClosed();
         let mtimeMs;
@@ -228,26 +259,26 @@ export async function run(config = options(), io = {}) {
         } catch (error) {
           if (error.code !== 'ENOENT') throw error;
           rows.push({ sessionId: record.sessionId, title: record.displayTitle, attempts: entry.attempts.length, skip: '会話ファイル欠損' });
-          if (!readonly) { entry.skipReason = '会話ファイル欠損'; ledger.sessions[record.sessionId] = entry; }
+          if (!readonly) { entry.skipReason = '会話ファイル欠損'; entries[entryKey] = entry; }
           continue;
         }
-        let reason = skipReason(record, entry, night, closed, mtimeMs, now(), config.activeMs);
+        let reason = overdue ? overdueSkipReason(record, entry, closed, mtimeMs, now(), config.activeMs) : skipReason(record, entry, night, closed, mtimeMs, now(), config.activeMs);
         if (!reason && state.aborted) reason = '連続3件エラーで今晩中止';
         if (!reason && state.noExecutor) reason = '実行役なし';
-        if (!reason && now() >= deadline.getTime()) reason = '締切超過(翌晩へ)';
-        if (!reason && state.count >= config.limit) reason = '今晩の件数上限';
+        if (!reason && !overdue && now() >= deadline.getTime()) reason = '締切超過(翌晩へ)';
+        if (!reason && state.count >= config.limit) reason = overdue ? '今回の件数上限' : '今晩の件数上限';
         rows.push({ sessionId: record.sessionId, title: record.displayTitle, attempts: entry.attempts.length, skip: reason });
         if (reason) {
-          if (!readonly) { entry.skipReason = reason; ledger.sessions[record.sessionId] = entry; }
+          if (!readonly) { entry.skipReason = reason; entries[entryKey] = entry; }
           continue;
         }
         state.count++;
         if (readonly) continue;
-        ledger.nights[night] = state;
-        ledger.sessions[record.sessionId] = entry;
+        if (!overdue) ledger.nights[night] = state;
+        entries[entryKey] = entry;
         delete entry.skipReason;
         // 起動前に消費を確定し、親が落ちても同じ晩に二重実行しない。
-        const attempt = { night, startedAt: new Date(now()).toISOString(), outcome: 'interrupted' };
+        const attempt = { night, startedAt: new Date(now()).toISOString(), outcome: 'interrupted', executor: 'not-started' };
         entry.attempts.push(attempt);
         entry.noProgress++;
         await save(ledger);
@@ -260,7 +291,7 @@ export async function run(config = options(), io = {}) {
             if (!record.cwd) throw new Error('cwd missing');
             const resultFile = path.join(dir, `stalled-result-${record.sessionId}-${night}.json`);
             await fs.rm(resultFile, { force: true });
-            const stop = state.noExecutor ? '実行役なし' : state.aborted ? '連続3件エラーで今晩中止' : now() >= deadline.getTime() ? '締切超過(翌晩へ)' : '';
+            const stop = state.noExecutor ? '実行役なし' : state.aborted ? '連続3件エラーで今晩中止' : !overdue && now() >= deadline.getTime() ? '締切超過(翌晩へ)' : '';
             if (stop) {
               entry.attempts.pop(); entry.noProgress = Math.max(0, entry.noProgress - 1); state.count--;
               entry.skipReason = stop;
@@ -268,9 +299,10 @@ export async function run(config = options(), io = {}) {
               await save(ledger);
               return;
             }
-            result = await (io.execute ?? execute)(record, { timeoutMs: config.timeoutMs, resultFile, previous: entry.attempts.slice(-4, -1) });
+            result = await (io.execute ?? execute)(record, { timeoutMs: config.timeoutMs, resultFile, previous: entry.attempts.slice(-4, -1), wait: overdue ? wait : null });
             if (!['progressed', 'no-progress', 'timeout', 'error', 'no-executor'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
           } catch (error) { result = { outcome: 'error', reason: String(error.message) }; }
+          if (overdue && result.outcome === 'no-executor') result = { ...result, outcome: 'error' };
           if (result.outcome === 'no-executor') {
             // 起動前に消費した試行を戻す(このセッションは何も試されていない)。レーン停止の通知は
             // delegation-health が障害詳細を通知する。ここでは集計だけ送り、新規起動を打ち切る。
@@ -281,8 +313,8 @@ export async function run(config = options(), io = {}) {
             await save(ledger);
             return;
           }
-          Object.assign(attempt, result, { reason: redactSecrets(String(result.reason ?? '')).slice(0, 2000), endedAt: new Date(now()).toISOString() });
-          const ancestors = chainAncestors(ledger, entry.parentSessionId);
+          Object.assign(attempt, result, { executor: result.executor || 'not-started', reason: redactSecrets(String(result.reason ?? '')).slice(0, 2000), endedAt: new Date(now()).toISOString() });
+          const ancestors = overdue ? [] : chainAncestors(ledger, entry.parentSessionId);
           if (result.outcome === 'progressed') {
             entry.noProgress = 0;
             for (const ancestor of ancestors) { ancestor.noProgress = 0; delete ancestor.skipReason; }
@@ -294,11 +326,13 @@ export async function run(config = options(), io = {}) {
               if (ancestor.noProgress >= 3) ancestor.skipReason = '3回進捗なし';
             }
           }
-          if (entry.noProgress >= 3) entry.skipReason = '3回進捗なし';
-          // 時間切れは今晩中止の判定対象外: 連続エラーに加算もリセットもしない（noProgress は no-progress 同様に加算済み）。
-          if (result.outcome === 'error') state.errors += 1;
-          else if (result.outcome !== 'timeout') state.errors = 0;
-          state.aborted ||= state.errors >= 3;
+          if (!overdue) {
+            if (entry.noProgress >= 3) entry.skipReason = '3回進捗なし';
+            // 時間切れは今晩中止の判定対象外: 連続エラーに加算もリセットもしない（noProgress は no-progress 同様に加算済み）。
+            if (result.outcome === 'error') state.errors += 1;
+            else if (result.outcome !== 'timeout') state.errors = 0;
+            state.aborted ||= state.errors >= 3;
+          }
           results.push({ title: record.displayTitle, sessionId: record.sessionId, ...attempt });
           await save(ledger);
         })();
@@ -311,13 +345,13 @@ export async function run(config = options(), io = {}) {
     if (fatal) throw fatal;
 
     if (!readonly && records.length) await save(ledger);
-    if (!readonly && records.length) {
+    if (!readonly && records.length && (!overdue || results.length)) {
       const closed = await loadClosed();
-      const retired = Object.entries(ledger.sessions).filter(([id, entry]) => entry.noProgress >= 3 && !closed.sessions[id]);
+      const retired = Object.entries(overdue ? {} : ledger.sessions).filter(([id, entry]) => entry.noProgress >= 3 && !closed.sessions[id]);
       const count = outcome => results.filter(r => r.outcome === outcome).length;
       const summary = `確認 ${results.length}件 / 進んだ ${count('progressed')} / 進まず ${count('no-progress')} / 時間切れ ${count('timeout')} / エラー ${count('error')} / 締切で翌晩へ ${rows.filter(r => r.skip === '締切超過(翌晩へ)').length} / 3回進捗なしで停止中 ${retired.length}`;
       const waiting = retired.length ? '\n自動では進められないので kim の判断待ち\n' + retired.slice(0, 20).map(([id, entry]) => `${entry.title ?? id} (${id})`).join('\n') : '';
-      const message = redactSecrets(`${summary}\n夜間セッション再開 (${os.hostname()})\n${results.map(r => `${r.title} (${r.sessionId}): ${r.outcome}`).join('\n')}${state.aborted ? '\n連続3件エラーのため今晩は中止' : ''}${waiting}`);
+      const message = redactSecrets(`${summary}\n${overdue ? '待機期限切れセッション再開' : '夜間セッション再開'} (${os.hostname()})\n${results.map(r => `${r.title} (${r.sessionId}): ${r.outcome}`).join('\n')}${state.aborted ? '\n連続3件エラーのため今晩は中止' : ''}${waiting}`);
       state.notification = await (io.notify ?? notifyKim)(message, { home });
       await save(ledger);
     }

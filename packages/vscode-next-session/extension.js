@@ -10,6 +10,9 @@ const { resolveClaudeShellPath } = require('./shell-path');
 const { decideAction, orderMobileOpenMethods } = require('./route');
 
 const { readRows, createToolRunner, createArchiveWatcher } = require('./archive-tabs');
+const { parseEditorMemento, selectTabsToClose, planClose } = require('./tab-sessions.cjs');
+const { titleMatches } = require('./archive-tab-match');
+const { execFile } = require('node:child_process');
 
 const PROBE_TEXT = 'ORGIAST_NEXT_SESSION_PROBE_OK';
 
@@ -86,6 +89,65 @@ const EXTERNAL_OPEN_URI = 'vscode://Anthropic.claude-code/open';
 function log(message) { getOutputChannel().appendLine(`${new Date().toISOString()} ${message}`); }
 let lastRefreshAt = null;
 try { lastRefreshAt = readLastRefreshAt(mobileHome); } catch { lastRefreshAt = null; }
+// --- アーカイブ済み・クローズ済みタブ自動クローズ ---
+function matchMementoTitle(vscodeLabel, mementoTtitle) {
+  return titleMatches(vscodeLabel, mementoTtitle);
+}
+
+function runReadTabState(workspaceStorageDir, globalStorageDir, homeDir) {
+  return new Promise((resolve) => {
+    const script = path.join(path.dirname(__filename), 'read-tab-state.mjs');
+    execFile('node', [script, workspaceStorageDir, globalStorageDir, homeDir], {
+      windowsHide: true, timeout: 15000, maxBuffer: 512 * 1024,
+    }, (error, stdout) => {
+      if (error) { log(`read-tab-state failed: ${error.message}`); resolve(null); return; }
+      try { resolve(JSON.parse(stdout)); } catch (e) { log(`read-tab-state parse error: ${e.message}`); resolve(null); }
+    });
+  });
+}
+
+function isClaudeTab(tab) {
+  return tab.input instanceof vscode.TabInputWebview && String(tab.input.viewType).includes('claudeVSCode');
+}
+
+async function closeArchivedTabs(context) {
+  if (worktreeWindow) return;
+  const config = vscode.workspace.getConfiguration('orgiast.nextSession');
+  if (!config.get('closeArchivedTabs', true)) return;
+  const apData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  const globalStorageDir = path.join(apData, 'Code', 'User', 'globalStorage');
+  let workspaceStorageDir = null;
+  if (context.storageUri) {
+    workspaceStorageDir = path.dirname(context.storageUri.fsPath);
+  }
+  if (!workspaceStorageDir) { log('closeArchivedTabs: no workspace storage URI, skipping'); return; }
+  const state = await runReadTabState(workspaceStorageDir, globalStorageDir, mobileHome);
+  if (!state) return;
+  const { tabs, hiddenSessionIds, closedSessionIds } = state;
+  if (!tabs.length && !hiddenSessionIds.length && !closedSessionIds.length) return;
+
+  const keepEmpty = typeof config.get('mobileTabs') === 'number' && config.get('mobileTabs') >= 0
+    ? config.get('mobileTabs') : 3;
+  const liveTabsByGroup = vscode.window.tabGroups.all.map(g => g.tabs || []);
+  const plan = planClose({
+    mementoTabs: tabs,
+    liveTabsByGroup,
+    hiddenIds: hiddenSessionIds,
+    closedIds: closedSessionIds,
+    keepEmpty,
+  });
+
+  if (plan.toClose.length > 0) {
+    await vscode.window.tabGroups.close(plan.toClose);
+  }
+  const parts = [];
+  if (plan.hidden > 0) parts.push(`hidden=${plan.hidden}`);
+  if (plan.closed > 0) parts.push(`closed=${plan.closed}`);
+  if (plan.emptyExtra > 0) parts.push(`empty-extra=${plan.emptyExtra}`);
+  if (plan.skipped > 0) parts.push(`skipped=${plan.skipped}`);
+  if (parts.length) log(`closeArchivedTabs: ${parts.join(' ')}`);
+}
+
 function vscodeRefreshConfig() {
   const config = vscode.workspace.getConfiguration('orgiast.nextSession');
   return { minutes: config.get('mobileRefreshMinutes'), hours: config.get('mobileRefreshHours') };
@@ -282,6 +344,16 @@ function activate(context) {
         .catch((error) => getOutputChannel().appendLine(`${new Date().toISOString()} mobile tabs activation failed: ${error instanceof Error ? error.message : String(error)}`));
     }
   }
+  // アーカイブ済み・クローズ済みタブの自動クローズ（起動 15 秒後、以後 5 分ごと）
+  const closeTimerStart = setTimeout(() => {
+    closeArchivedTabs(context).catch((error) => log(`closeArchivedTabs startup: ${error.message}`));
+  }, 15000);
+  closeTimerStart?.unref?.();
+  const closeTimerInterval = setInterval(() => {
+    closeArchivedTabs(context).catch((error) => log(`closeArchivedTabs interval: ${error.message}`));
+  }, 300000);
+  closeTimerInterval?.unref?.();
+  context.subscriptions.push({ dispose() { clearTimeout(closeTimerStart); clearInterval(closeTimerInterval); } });
 }
 
 function deactivate() { mobileLease.release(); }

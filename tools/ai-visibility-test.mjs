@@ -1,11 +1,11 @@
 // AI Visibility Test Tool — PHASE1 Hack for X-0007
 // Tests orgiast.jp against 100 buyer-intent prompts via LLM API
-// Usage: node tools/ai-visibility-test.mjs [--limit N] [--sample 1,2,3]
+// Usage: node tools/ai-visibility-test.mjs [--from N] [--to N] [--skip-existing] [--limit N] [--sample 1,2,3]
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
-const REPO = 'C:/Users/kimko/.claude/auto-session-repo-fallback-20261108-003012';
+const REPO = 'C:/Users/kimko/.claude/auto-session-repo';
 const PROMPTS_CSV = path.join(REPO, 'ai-visibility', 'prompts-100.csv');
 const DEFAULT_OUT = path.join(REPO, 'ai-visibility', 'results-20261108.csv');
 
@@ -49,16 +49,46 @@ async function queryLlm(prompt) {
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  let limit = 0; let sample = null;
+  let limit = 0; let sample = null; let fromId = 0; let toId = 0; let skipExisting = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--limit' && i + 1 < args.length) limit = parseInt(args[++i], 10);
     if (args[i] === '--sample' && i + 1 < args.length) sample = args[++i].split(',').map(Number);
+    if (args[i] === '--from' && i + 1 < args.length) fromId = parseInt(args[++i], 10);
+    if (args[i] === '--to' && i + 1 < args.length) toId = parseInt(args[++i], 10);
+    if (args[i] === '--skip-existing') skipExisting = true;
   }
-  return { limit, sample };
+  return { limit, sample, fromId, toId, skipExisting };
+}
+
+// Append one row to CSV, deduplicating by ID on write
+function appendResult(id, category, prompt, cited, urls, error, response_length, preview) {
+  const escPrompt = prompt.replace(/"/g, '""');
+  const escPreview = preview.replace(/"/g, "'");
+  const row = `"${id}","${category}","${escPrompt}","${cited}","${urls}","${error}",${response_length},"${escPreview}"`;
+  if (!fs.existsSync(DEFAULT_OUT)) {
+    const h = 'id,category,prompt,cited,urls,error,response_length,preview';
+    fs.writeFileSync(DEFAULT_OUT, '\uFEFF' + h + '\n' + row + '\n', 'utf8');
+  } else {
+    // Append and deduplicate
+    fs.appendFileSync(DEFAULT_OUT, row + '\n', 'utf8');
+    const raw = fs.readFileSync(DEFAULT_OUT, 'utf8');
+    const lines = raw.split('\n').filter(Boolean);
+    if (lines.length < 2) return;
+    const header = lines[0];
+    const seen = new Set();
+    const deduped = [header];
+    for (let i = 1; i < lines.length; i++) {
+      const m = lines[i].match(/^"(\d+)"/);
+      if (!m || seen.has(m[1])) continue;
+      seen.add(m[1]);
+      deduped.push(lines[i]);
+    }
+    fs.writeFileSync(DEFAULT_OUT, deduped.join('\n') + '\n', 'utf8');
+  }
 }
 
 async function main() {
-  const { limit, sample } = parseArgs();
+  const { limit, sample, fromId, toId, skipExisting } = parseArgs();
 
   // Read prompts CSV (BOM-aware)
   let raw = fs.readFileSync(PROMPTS_CSV, 'utf8').trim();
@@ -85,13 +115,27 @@ async function main() {
   });
 
   if (sample) rows = rows.filter(r => sample.includes(r.id));
-  else if (limit > 0 && limit < rows.length) rows = rows.slice(0, limit);
+  else {
+    if (fromId > 0) rows = rows.filter(r => r.id >= fromId);
+    if (toId > 0) rows = rows.filter(r => r.id <= toId);
+    if (limit > 0 && limit < rows.length) rows = rows.slice(0, limit);
+  }
+
+  // Skip already-tested prompts
+  if (skipExisting && fs.existsSync(DEFAULT_OUT)) {
+    const existingRaw = fs.readFileSync(DEFAULT_OUT, 'utf8');
+    const existingIds = new Set(existingRaw.split('\n').slice(1).filter(Boolean).map(l => {
+      const m = l.match(/^"(\d+)"/); return m ? parseInt(m[1], 10) : null;
+    }).filter(Boolean));
+    const before = rows.length;
+    rows = rows.filter(r => !existingIds.has(r.id));
+    console.log(`Skipping ${before - rows.length} already-tested prompts. Remaining: ${rows.length}`);
+  }
 
   console.log(`Testing ${rows.length} prompts against LLM (openrouter/openai/gpt-oss-120b)`);
   console.log(`Target: orgiast.jp`);
   console.log('---');
 
-  const results = [];
   let cited = 0;
 
   for (let i = 0; i < rows.length; i++) {
@@ -103,37 +147,26 @@ async function main() {
     const urls = extractUrls(text);
     if (hasOrgiast) cited++;
 
-    results.push({
-      id: row.id, category: row.category, prompt: row.prompt,
-      cited: hasOrgiast ? 'Y' : 'N',
-      urls: urls.join('; ').slice(0, 200),
-      error: error || '',
-      response_length: text.length,
-      preview: text.slice(0, 150).replace(/"/g, "'").replace(/\n/g, ' '),
-    });
+    // Save incrementally
+    appendResult(
+      row.id, row.category, row.prompt,
+      hasOrgiast ? 'Y' : 'N',
+      urls.join('; ').slice(0, 200),
+      error || '',
+      text.length,
+      text.slice(0, 150).replace(/"/g, "'").replace(/\n/g, ' '));
+
     console.log(hasOrgiast ? '✅' : '❌');
   }
 
-  // Write CSV
-  const h = 'id,category,prompt,cited,urls,error,response_length,preview';
-  const outRows = results.map(r =>
-    `"${r.id}","${r.category}","${r.prompt.replace(/"/g,'""')}","${r.cited}","${r.urls}","${r.error}",${r.response_length},"${r.preview}"`);
-  fs.writeFileSync(DEFAULT_OUT, '\uFEFF' + h + '\n' + outRows.join('\n'), 'utf8');
-
   // Summary
-  const pct = results.length > 0 ? (cited / results.length * 100).toFixed(1) : '0.0';
   console.log(`\n=== SUMMARY ===`);
-  console.log(`Tested: ${results.length} prompts`);
-  console.log(`Orgiast cited in: ${cited}/${results.length} (${pct}%)`);
+  console.log(`Tested: rows processed`);
+  console.log(`Orgiast cited in: ${cited}/${rows.length} (${rows.length > 0 ? (cited / rows.length * 100).toFixed(1) : '0.0'}%)`);
 
-  const cats = {};
-  for (const r of results) {
-    cats[r.category] = cats[r.category] || { t:0, c:0 };
-    cats[r.category].t++; if (r.cited === 'Y') cats[r.category].c++;
-  }
-  for (const [cat, s] of Object.entries(cats)) {
-    console.log(`  ${cat}: ${s.c}/${s.t} (${(s.c/s.t*100).toFixed(1)}%)`);
-  }
+  const totalResults = fs.existsSync(DEFAULT_OUT)
+    ? fs.readFileSync(DEFAULT_OUT, 'utf8').split('\n').slice(1).filter(Boolean).length : 0;
+  console.log(`Total results in CSV: ${totalResults}`);
   console.log(`\nResults saved: ${DEFAULT_OUT}`);
 }
 

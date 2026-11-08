@@ -11,13 +11,15 @@ const DEFAULT_OUT = path.join(REPO, 'ai-visibility', 'results-20261108.csv');
 
 const ORGIAST_IDS = ['オージャスト','orgiast','Orgiast','tetsuko.co.jp','orgiast.jp','event-shop.jp','rebooth.co.jp','orgiast-product.jp'];
 
+const CSV_HEADER = '﻿id,category,prompt,cited,urls,error,response_length,preview';
+
 function containsOrgiast(text) {
   const lower = text.toLowerCase();
   return ORGIAST_IDS.some(id => lower.includes(id.toLowerCase()));
 }
 
 function extractUrls(text) {
-  return [...text.matchAll(/https?:\/\/[^\s"'）\)、,.\u3000!?;:>]+/g)].map(m => m[0]).filter(u => u.length > 10);
+  return [...text.matchAll(/https?:\/\/[^\s"'）\)、,.　!?;:>]+/g)].map(m => m[0]).filter(u => u.length > 10);
 }
 
 async function queryLlm(prompt) {
@@ -58,6 +60,31 @@ function parseArgs() {
   return { limit, sample, offset };
 }
 
+function saveResult(r) {
+  // Read existing file
+  let lines = [];
+  if (fs.existsSync(DEFAULT_OUT)) {
+    lines = fs.readFileSync(DEFAULT_OUT, 'utf8').split('\n');
+  }
+  if (lines.length === 0 || lines[0].trim() === '') {
+    lines = [CSV_HEADER];
+  }
+  const line = `"${r.id}","${r.category}","${r.prompt.replace(/"/g,'""')}","${r.cited}","${r.urls}","${r.error}",${r.response_length},"${r.preview}"`;
+  const idStr = `"${r.id}"`;
+  let found = false;
+  for (let li = 1; li < lines.length; li++) {
+    if (lines[li].startsWith(idStr)) {
+      lines[li] = line;
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    lines.push(line);
+  }
+  fs.writeFileSync(DEFAULT_OUT, lines.join('\n'), 'utf8');
+}
+
 async function main() {
   const { limit, sample, offset } = parseArgs();
 
@@ -85,15 +112,26 @@ async function main() {
     };
   });
 
+  // Load existing results to skip already-tested prompts
+  let existingIds = new Set();
+  if (fs.existsSync(DEFAULT_OUT)) {
+    const rawExisting = fs.readFileSync(DEFAULT_OUT, 'utf8');
+    const existingLines = rawExisting.split('\n').slice(1).filter(Boolean);
+    for (const line of existingLines) {
+      const match = line.match(/^"(\d+)"/);
+      if (match) existingIds.add(parseInt(match[1], 10));
+    }
+  }
+
   if (sample) rows = rows.filter(r => sample.includes(r.id));
   else if (offset > 0) rows = rows.filter(r => r.id > offset);
+  rows = rows.filter(r => !existingIds.has(r.id));
   if (limit > 0 && limit < rows.length) rows = rows.slice(0, limit);
 
   console.log(`Testing ${rows.length} prompts against LLM (openrouter/openai/gpt-oss-120b)`);
   console.log(`Target: orgiast.jp`);
   console.log('---');
 
-  const results = [];
   let cited = 0;
 
   for (let i = 0; i < rows.length; i++) {
@@ -105,38 +143,43 @@ async function main() {
     const urls = extractUrls(text);
     if (hasOrgiast) cited++;
 
-    results.push({
+    const result = {
       id: row.id, category: row.category, prompt: row.prompt,
       cited: hasOrgiast ? 'Y' : 'N',
       urls: urls.join('; ').slice(0, 200),
       error: error || '',
       response_length: text.length,
       preview: text.slice(0, 150).replace(/"/g, "'").replace(/\n/g, ' '),
-    });
+    };
     console.log(hasOrgiast ? '✅' : '❌');
+    // Incremental save
+    saveResult(result);
   }
 
-  // Write CSV
-  const h = 'id,category,prompt,cited,urls,error,response_length,preview';
-  const outRows = results.map(r =>
-    `"${r.id}","${r.category}","${r.prompt.replace(/"/g,'""')}","${r.cited}","${r.urls}","${r.error}",${r.response_length},"${r.preview}"`);
-  fs.writeFileSync(DEFAULT_OUT, '\uFEFF' + h + '\n' + outRows.join('\n'), 'utf8');
+  // Final count from file
+  const finalLines = fs.readFileSync(DEFAULT_OUT, 'utf8').split('\n').slice(1).filter(Boolean);
+  const totalCited = finalLines.filter(l => l.match(/"Y"/)).length;
+  const totalTested = finalLines.length;
+  const pct = totalTested > 0 ? (totalCited / totalTested * 100).toFixed(1) : '0.0';
 
-  // Summary
-  const pct = results.length > 0 ? (cited / results.length * 100).toFixed(1) : '0.0';
-  console.log(`\n=== SUMMARY ===`);
-  console.log(`Tested: ${results.length} prompts`);
-  console.log(`Orgiast cited in: ${cited}/${results.length} (${pct}%)`);
+  console.log(`\n=== FINAL SUMMARY ===`);
+  console.log(`Tested: ${totalTested} prompts total`);
+  console.log(`Orgiast cited in: ${totalCited}/${totalTested} (${pct}%)`);
+  console.log(`File: ${DEFAULT_OUT}`);
 
+  // By category
   const cats = {};
-  for (const r of results) {
-    cats[r.category] = cats[r.category] || { t:0, c:0 };
-    cats[r.category].t++; if (r.cited === 'Y') cats[r.category].c++;
+  for (const line of finalLines) {
+    const parts = line.match(/^"(\d+)","([^"]*)"/);
+    if (!parts) continue;
+    const cat = parts[2];
+    cats[cat] = cats[cat] || { t: 0, c: 0 };
+    cats[cat].t++;
+    if (line.includes('"Y"')) cats[cat].c++;
   }
   for (const [cat, s] of Object.entries(cats)) {
     console.log(`  ${cat}: ${s.c}/${s.t} (${(s.c/s.t*100).toFixed(1)}%)`);
   }
-  console.log(`\nResults saved: ${DEFAULT_OUT}`);
 }
 
 main().catch(e => { console.error('Fatal:', e.message); process.exit(1); });

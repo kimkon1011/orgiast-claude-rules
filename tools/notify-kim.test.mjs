@@ -222,6 +222,14 @@ test('夜間セッション再開は目的文に失敗を含んでも全行 prog
   assert.equal(s.messages[0], report);
 });
 
+test('待機期限切れセッション再開（overdue）は夜間セッション再開と同様に起票しない', async () => {
+  const dir = home(), s = sender(dir);
+  const report = '確認 2件 / 進んだ 1 / 進まず 1 / 時間切れ 0 / エラー 0 / 締切で翌晩へ 0 / 3回進捗なしで停止中 0\n待機期限切れセッション再開 (DELL)\nX-0008 quota-sweep (d9166d37-61ae-466a-ac0b-cde67ba87e9a): no-progress\nquota-sweep (148282f8-321b-490a-82ad-3b68eb906f4a): progressed';
+  assert.equal((await notifyKim(report, s.options)).delivered, 'dm');
+  assert.equal(fs.existsSync(path.join(dir, '.claude/next-session.md')), false);
+  assert.equal(s.messages[0], report);
+});
+
 test('夜間セッション再開に1行でも error があれば目的文の失敗語によらず起票する', async () => {
   for (const title of ['quota-sweep:claude が直近 4 件すべて失敗している', '通常の作業']) {
     const dir = home(), s = sender(dir);

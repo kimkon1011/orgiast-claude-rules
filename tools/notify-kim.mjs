@@ -63,7 +63,7 @@ export function stripOwnerAddress(text) {
 const JUDGMENT_REQUEST = /^自動進行が判断待ちです[:：]/m;
 // auto-progress が API エラーで止まった依頼を自動再開したときの案内。修復対象ではない。
 const AUTO_RESUME_NOTICE = /^エラーで止まっていた依頼を見つけ、自動で再開します。?$/m;
-const RESUME_REPORT = /^夜間セッション再開 \([^\n)]*\)$/m;
+const RESUME_REPORT = /^(?:夜間セッション再開|待機期限切れセッション再開) \([^\n)]*\)$/m;
 const RESUME_ROW = /\([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\): (?:progressed|no-progress|error)$/mi;
 const RESUME_ERROR = /\([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\): error$/mi;
 // 目的文に引用された過去の失敗ではなく、今回の結果と中止の有無で判定する。

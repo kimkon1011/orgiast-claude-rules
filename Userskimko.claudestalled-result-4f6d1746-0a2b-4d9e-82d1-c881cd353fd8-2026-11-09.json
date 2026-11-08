@@ -1,0 +1,40 @@
+{
+  "progressed": true,
+  "evidence": {
+    "investigation_target": "cafe015-PC (DESKTOP-63MQR3L) の Discord「(オージャスト 自動応答)」Bot 旧系統調査",
+    "findings": [
+      {
+        "item": "現在の自動応答コード",
+        "path": "tools/discord-autoreply.mjs",
+        "detail": "register-discord-autoreply.ps1 で Windows Scheduled Task OrgiastDiscordAutoReply として登録する構成。5分間隔で kim 宛メンションを全チャンネル検索し、LLMで自動返信。guuild ID 715211007307284530（トライアル生チャンネルとは別サーバー）を監視。"
+      },
+      {
+        "item": "Windows Scheduled Task 状態",
+        "detail": "schtasks /query を全件検索したが OrgiastDiscordAutoReply は未登録（または削除済み）。このPCには Orgiast 関連のタスクが0件。自動応答は現在このPCでは動作していない可能性が高い。"
+      },
+      {
+        "item": "claude.ai RemoteTrigger 照会",
+        "detail": "node tools/remote-trigger.mjs list を実行したが、子 claude プロセスが Not logged in で認証不能。RemoteTrigger 一覧の直接照会は不可。"
+      },
+      {
+        "item": "チャンネルID探索",
+        "detail": "Grep ch ID 1382597125757735023 → 該当なし。この codebase にトライアル生チャンネルに関する記述は0件。"
+      },
+      {
+        "item": "旧系統の痕跡",
+        "detail": "git log やコメントで「旧」「legacy」「old system」などに該当する記述なし。discord-autoreply.mjs が本件の「現在の系統」であり、旧系統は claude.ai RemoteTrigger ベースだった可能性があるが認証不能で未確認。"
+      }
+    ],
+    "unconfirmed": [
+      "claude.ai Routines 上の RemoteTrigger タスク一覧（認証不足）",
+      "旧系統が RemoteTrigger だったか、別の仕組み（GAS cron、Vercel cron 等）だったか"
+    ],
+    "next_steps": [
+      "kim-PC で claude.ai Routines 画面を開き、RemoteTrigger / Scheduled タスク一覧を目視確認する",
+      "Discord Developer Portal (discord.com/developers/applications) で Bot アプリ「オージャスト 自動応答」の設定を確認する",
+      "cafe015-PC で claude /login を実行し OAuth 認証を通した後、再度 remote-trigger list を試す"
+    ],
+    "searched_at": "2026-11-08T18:23:54.333Z",
+    "searched_from_pc": "cafe015-PC (DESKTOP-63MQR3L)"
+  }
+}

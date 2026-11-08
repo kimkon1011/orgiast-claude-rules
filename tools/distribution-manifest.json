@@ -7,6 +7,8 @@
   "notDistributed": {
     ".agents": { "reason": "ローカルエージェント環境の管理領域。PC配布対象外" },
     ".codex": { "reason": "ローカルCodex環境の管理領域。PC配布対象外" },
+    ".codex-instructions": { "reason": "codex-do 用指示ファイル。PC配布対象外（各PCが独自管理）" },
+    "outputs": { "reason": "自動セッション生成物。実行時参照なし" },
     "gas": { "reason": "GAS ソース。clasp で kim-PC から push する作業用で配布先PCは実行時に読まない", "runtimeRefOk": true, "docRefOk": true },
     "apps": { "reason": "社内アプリのソース。配布先PCの実行時参照なし" },
     "analysis": { "reason": "分析メモ。実行時参照なし" },

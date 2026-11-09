@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'register-reopen-lost-sessions.ps1') -FunctionsOnly
 function Assert($Condition, $Message) { if (-not $Condition) { throw "FAIL: $Message" } }
 # Inject scheduler calls; use local source and mock file checks to avoid dependency on installed deployment.

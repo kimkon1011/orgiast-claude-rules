@@ -376,12 +376,28 @@ export function summarizeEvidence(value) {
   const text = String(value ?? '')
     .replace(/\[CLAIM-EVIDENCE:[\s\S]*?\]/gi, '')
     .replace(/^\s*[a-z][a-z_ -]*[:：]\s*/i, '')
-    .replace(/https?:\/\/[^\s<>「」]+/gi, '')
+    .replace(/https?:\/\/[^\s<>「」（）()]+/gi, '')
+    // 番号付き手順は、番号を括弧ごと消す前に後半を落とす。
+    .split(/[(（]\s*[0-9０-９]+\s*[)）]/, 1)[0]
     .replace(/(?:[A-Za-z]:)?[\w./\\-]+\.[a-z][a-z0-9]*(?:\b)/gi, '')
     .replace(/\bidx\d+\b/gi, '')
     .replace(/\baria-[a-z-]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s。]+))?/gi, '')
     .replace(/\s+/g, ' ').trim();
-  return (text.match(/[^。！？.!?]+[。！？.!?]?/g) || []).slice(0, 2).join('').slice(0, 160).trim();
+  // 入れ子を含む括弧内の説明は表示しない。閉じ括弧のない説明も末尾まで落とす。
+  let plain = '';
+  let depth = 0;
+  for (const char of text) {
+    if (char === '(' || char === '（') depth += 1;
+    else if (char === ')' || char === '）') depth = Math.max(0, depth - 1);
+    else if (depth === 0) plain += char;
+  }
+  const sentences = (plain.match(/[^。！？.!?]+[。！？.!?]?/g) || [])
+    .map(sentence => sentence.split(/[、,;；:：]/)
+      .map(clause => clause.trim())
+      .filter(clause => clause && !/[A-Za-z]{3,}|[A-Za-z0-9]{8,}|[^\s@]+@[^\s@]*/.test(clause))
+      .join('、'))
+    .filter(sentence => /[^。！？.!?\s]/.test(sentence));
+  return sentences.slice(0, 2).join('').slice(0, 160).trim() || '取り消せる準備は済んでいます';
 }
 
 export function formatDoneMessage(row, { reason = '', artifact = '', home = process.env.ORGIAST_HOME || os.homedir(), io = {}, ownerOf } = {}) {

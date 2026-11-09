@@ -136,7 +136,8 @@ export async function sessionStart(deps = {}) {
       save(file, { day, email: decision.email });
       const message = `契約外 Claude アカウントの起動を検知: PC=${os.hostname()} アカウント=${decision.email} 理由=${decision.reason}。蓄積の読み出しはフックで拒否中`;
       let child;
-      try { child = ctx.spawn(process.execPath, [path.join(ctx.toolsDir, 'notify-kim.mjs'), message], { stdio: 'ignore', windowsHide: true, detached: true }); }
+      // Windows では detached にすると可視コンソールが出る（no-visible-console-window の規約）ため、非Windowsだけ detached にする
+      try { child = ctx.spawn(process.execPath, [path.join(ctx.toolsDir, 'notify-kim.mjs'), message], process.platform === 'win32' ? { stdio: 'ignore', windowsHide: true } : { detached: true, stdio: 'ignore' }); }
       catch { fs.unlinkSync(file); return; }
       child.on('error', () => { try { fs.unlinkSync(file); } catch {} });
       child.unref?.();

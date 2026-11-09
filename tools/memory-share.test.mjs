@@ -176,7 +176,9 @@ function receiver(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'memory-receiver-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const dir = path.join(home, '.claude', 'shared-memory');
-  return { home, dir, options: { home, env: { ORGIAST_KEYSERVE_PC: 'receiver' }, emit: () => {} } };
+  // 公開鍵が配布された実リポを見ると knowledge-lock の契約判定が走るため、鍵の無い空の toolsDir を指して従来どおりの取り込みを検証する
+  const noLockTools = path.join(home, 'no-lock-tools'); fs.mkdirSync(noLockTools, { recursive: true });
+  return { home, dir, options: { home, env: { ORGIAST_KEYSERVE_PC: 'receiver' }, emit: () => {}, knowledgeDeps: { toolsDir: noLockTools } } };
 }
 test('new PC installs manifest/parts, annotates index, fetches only changed parts and prunes files', async t => {
   const f = receiver(t);

@@ -11,6 +11,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { isEntry } from './is-entry.mjs';
+import { assertContextApproved, latestOf, readOutbound, recordOutbound } from './lib/send-context.mjs';
 
 /** 任意の文字列を UUID v5 形式（SHA-256 ベース・決定論的）に変換する。同じ文字列→同じUUID。
  *  LINE API の X-Line-Retry-Key は UUID 形式が必要だが、人間が覚えやすい任意文字列を指定できるようにするため。 */
@@ -169,6 +170,13 @@ async function main() {
   assertSendableText(text);
   console.log(`送信先: ${summary.groupName} (${groupId}) / 本文 ${text.length} 字 / 画像 ${o.images.length} 枚`);
   if (o.dryRun) { console.log('[dry-run] 送信しない'); return; }
+  await assertContextApproved({ channel: 'line', target: groupId, text, getLatest: async () => {
+    const url = `${s.SUPABASE_URL}/rest/v1/channel_messages?select=id,created_at,external_message_id&channel=eq.line&external_thread_id=eq.${encodeURIComponent(groupId)}&order=created_at.desc&limit=1`;
+    const rows = await (await fetch(url, { headers: sbHeaders(s) })).json();
+    const received = (rows || []).map(x => ({ id: x.external_message_id || x.id, at: x.created_at }));
+    const sent = readOutbound(groupId).map(x => ({ id: x.messageId, at: x.at }));
+    return latestOf([...received, ...sent]);
+  }});
   const urls = [];
   for (const f of o.images) urls.push(await uploadImage(s, f));
   const chunks = buildMessages(text, urls);
@@ -184,6 +192,7 @@ async function main() {
     const body = await r.text();
     if (!r.ok) throw new Error(`push 失敗 ${r.status} ${body}`);
     const sent = JSON.parse(body).sentMessages || [];
+    for (const message of sent) recordOutbound({ channel: 'line', target: groupId, text: messages.find(m => m.type === 'text')?.text ?? '', messageId: message.id });
     console.log(`push ${i + 1}/${chunks.length}: HTTP ${r.status} sentMessages=${sent.length} ids=${sent.map((m) => m.id).join(',')} retryKey=${retryKey}`);
   }
 }

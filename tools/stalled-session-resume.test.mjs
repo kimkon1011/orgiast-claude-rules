@@ -91,6 +91,16 @@ test('timeout neither adds to nor resets the error streak', async t => {
   assert.equal(r.aborted, true); assert.equal(r.results.length, 4);
   assert.match(message, /連続3件エラー/); assert.match(message, /時間切れ 1/);
 });
+test('timeout exception is treated as timeout not error', async t => {
+  const f = await fixture(t, 3); let calls = 0, message;
+  f.io.execute = async () => { calls++; throw new Error('timeout'); };
+  f.io.notify = async s => { message = s; };
+  const r = await run(options([], {}), f.io);
+  assert.equal(calls, 3); assert.equal(r.aborted, false);
+  assert.match(message, /時間切れ 3/);
+  assert.doesNotMatch(message, /連続3件エラー/);
+});
+
 test('no executor stops the night without error or consuming budget', async t => {
   const f = await fixture(t); let calls = 0;
   f.io.execute = async () => { calls++; return { outcome: 'no-executor', reason: '実行役なし: cheap-code/deepseek exit 3' }; };

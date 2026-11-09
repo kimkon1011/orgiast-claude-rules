@@ -27,6 +27,19 @@ test('gateRequired の auto-progress は上限超過後も通し、通常コマ�
   assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: 'node tools/foo.mjs' } }).hookSpecificOutput.permissionDecision, 'deny');
 });
 
+test('gateRequired matches quoted paths', t => {
+  const h = setup('implement', 'claude-opus-5', { toolCalls: 9 });
+  t.after(() => fs.rmSync(h, { recursive: true, force: true }));
+  const doubleQuote = 'node "C:/Users/uers/.claude/nightly-repo/tools/auto-progress.mjs" --help';
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: doubleQuote } }), null);
+  const singleQuote = "node 'C:/Users/uers/.claude/nightly-repo/tools/auto-progress.mjs' --help";
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: singleQuote } }), null);
+  const unquoted = 'node C:/Users/uers/.claude/nightly-repo/tools/auto-progress.mjs --help';
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: unquoted } }), null);
+  const compound = 'node "x/auto-progress.mjs"; rm -rf x';
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: compound } }).hookSpecificOutput.permissionDecision, 'deny');
+});
+
 test('Codex alive deny points directly to codex-do without unavailable wording',t=>{
   const h=setup('implement','claude-opus-5',{toolCalls:7});
   t.after(()=>fs.rmSync(h,{recursive:true,force:true}));

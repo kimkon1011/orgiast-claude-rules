@@ -58,7 +58,7 @@ test('buildPrompt: どの案にも高さ3.6mと明るさの指示が必ず入る
   assert.match(t, /BRIGHT/);
   assert.match(t, /multiple people about 1\.7 m tall/);
   assert.match(t, /only about twice a person's height \(3\.6 m\)/);
-  assert.match(t, /6 m width is about 1\.7 times its 3\.6 m height/);
+  assert.match(t, /use the exact booth footprint dimensions stated in the brief/);
   assert.match(t, /wider than tall/);
   assert.match(t, /hall ceiling is more than 10 m high/);
   assert.match(t, /Adjacent exhibition booths are only about 2\.7-3\.6 m high/);
@@ -168,8 +168,10 @@ test('parseArgs: --only で再生成する案を1件に絞れる', () => {
   assert.equal(o.only, 'premium');
 });
 
-test('buildPrompt: 下絵の外形と人物スケールを固定し日本語文字を禁止する', () => {
-  const t = buildPrompt('BRIEF', { add: 'PLAN' });
+test('buildPrompt: 下絵がある時だけ外形を固定し日本語文字を禁止する', () => {
+  const withoutBase = buildPrompt('BRIEF', { add: 'PLAN' });
+  assert.doesNotMatch(withoutBase, /BASE-IMAGE FIDELITY/);
+  const t = buildPrompt('BRIEF', { add: 'PLAN' }, 3.6, [], true);
   assert.match(t, /FIRST reference image is a dimensionally accurate 3D underlay/);
   assert.match(t, /all four column positions/);
   assert.match(t, /person's size and position EXACTLY/);

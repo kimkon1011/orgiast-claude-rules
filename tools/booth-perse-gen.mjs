@@ -70,12 +70,14 @@ MANDATORY PROPORTIONS: use the exact booth footprint dimensions stated in the br
 MANDATORY HALL SCALE: the exhibition hall ceiling is more than 10 m high and must appear far above the booth. Adjacent exhibition booths are only about 2.7-3.6 m high, similar in height to this booth. Preserve a large visible vertical gap between every booth and the hall ceiling.`;
 }
 
-export function buildPrompt(common, plan, maxHeight = DEFAULT_MAX_HEIGHT, texts = []) {
+export function buildPrompt(common, plan, maxHeight = DEFAULT_MAX_HEIGHT, texts = [], hasBase = false) {
   const textRule = texts.length
     ? `The only readable text allowed anywhere is: ${texts.map((text) => `"${text.replaceAll('"', '\\"')}"`).join(', ')}.`
     : 'The only readable text allowed is the text explicitly quoted in the brief above. Do not invent brand names or logos.';
-  return `${common}\n${plan.add}\n${heightLightClause(maxHeight)}\n
-MANDATORY BASE-IMAGE FIDELITY: The FIRST reference image is a dimensionally accurate 3D underlay. Preserve its composition, camera position and perspective, booth outer envelope, truss top edge, all four column positions, wall position, and every person's size and position EXACTLY. Paint in materials, lighting and brand treatment only. Do NOT make the booth envelope, canopy, columns, signs, or infinity feature taller or larger than the underlay. Keep the three open sides open.
+  const baseRule = hasBase ? `
+MANDATORY BASE-IMAGE FIDELITY: The FIRST reference image is a dimensionally accurate 3D underlay. Preserve its composition, camera position and perspective, booth outer envelope, truss top edge, all four column positions, wall position, and every person's size and position EXACTLY. Paint in materials, lighting and brand treatment only. Do NOT make the booth envelope, canopy, columns, signs, or infinity feature taller or larger than the underlay. Keep the open sides specified by the plan open.
+` : '';
+  return `${common}\n${plan.add}\n${heightLightClause(maxHeight)}\n${baseRule}
 
 MANDATORY TEXT: Do not draw Japanese text or Japanese signs. ${textRule} No invented words, numbers, prices, or pseudo-lettering.\n`;
 }
@@ -113,7 +115,7 @@ export async function generate({ key, text, refs, out, model, fetchImpl = fetch 
   return { model: j.model || model, cost: j.usage?.cost ?? null, endpoint: imageApi ? 'images' : 'chat/completions' };
 }
 
-export async function runAll({ plans, providers = DEFAULT_PROVIDERS, model, key, common, texts = [], refs = [], maxHeight = DEFAULT_MAX_HEIGHT, outDir, fetchImpl = fetch }) {
+export async function runAll({ plans, providers = DEFAULT_PROVIDERS, model, key, common, texts = [], refs = [], maxHeight = DEFAULT_MAX_HEIGHT, hasBase = false, outDir, fetchImpl = fetch }) {
   const jobs = model
     ? plans.map((plan) => ({ plan, provider: null, model }))
     : plans.flatMap((plan) => providers.map((provider) => ({ plan, provider, model: PROVIDER_MODELS[provider] })));
@@ -121,7 +123,7 @@ export async function runAll({ plans, providers = DEFAULT_PROVIDERS, model, key,
     const suffix = provider ? `-${provider}` : '';
     const out = path.join(outDir, `perse-${plan.id}${suffix}.png`);
     try {
-      const generated = await generate({ key, text: buildPrompt(common, plan, maxHeight, texts), refs, out, model: jobModel, fetchImpl });
+      const generated = await generate({ key, text: buildPrompt(common, plan, maxHeight, texts, hasBase), refs, out, model: jobModel, fetchImpl });
       return { id: plan.id, label: plan.label, provider, model: generated.model, endpoint: generated.endpoint, cost: generated.cost, out, ok: true, error: null };
     } catch (e) {
       return { id: plan.id, label: plan.label, provider, model: jobModel, endpoint: jobModel.startsWith('openai/') ? 'images' : 'chat/completions', cost: null, out, ok: false, error: String(e.message || e) };
@@ -174,7 +176,7 @@ async function main() {
   if (opts.base) opts.refs.unshift(opts.base);
   const key = loadKey();
   mkdirSync(opts.out, { recursive: true });
-  const results = await runAll({ plans, providers: opts.providers, model: opts.model, key, common, texts: opts.texts, refs: opts.refs, maxHeight: opts.maxHeight, outDir: opts.out });
+  const results = await runAll({ plans, providers: opts.providers, model: opts.model, key, common, texts: opts.texts, refs: opts.refs, maxHeight: opts.maxHeight, hasBase: Boolean(opts.base), outDir: opts.out });
   writeFileSync(path.join(opts.out, 'perse-result.json'), JSON.stringify(results, null, 2));
   for (const r of results) {
     if (r.ok) console.log(`saved ${r.out} cost ${r.cost}`);

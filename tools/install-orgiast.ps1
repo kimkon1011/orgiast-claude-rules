@@ -587,6 +587,14 @@ try {
   }
 } catch { Warn ("daytrip-detect registration failed: " + $_.Exception.Message) }
 
+try {
+  $meetRecorderInstaller = Join-Path $REPO 'tools\register-meet-recorder-invite-task.ps1'
+  if (Test-Path -LiteralPath $meetRecorderInstaller) {
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $meetRecorderInstaller -Ensure
+    if ($LASTEXITCODE -ne 0) { throw "register-meet-recorder-invite-task.ps1 exit $LASTEXITCODE" }
+  }
+} catch { Warn ("meet-recorder-invite registration failed: " + $_.Exception.Message) }
+
 # --- フリート管制エージェントの定時起動(15分ごと) ---
 Step "フリート管制エージェントを登録 (15分ごと)"
 try {

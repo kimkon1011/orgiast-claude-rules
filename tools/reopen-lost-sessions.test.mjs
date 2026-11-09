@@ -1315,3 +1315,26 @@ test('localIndex: 巨大ファイルでも先頭の cwd と末尾の bridge-sess
   assert.equal(idx.indexed, 1);
   assert.ok(typeof idx.indexMs === 'number' && idx.indexMs >= 0);
 });
+
+test('localIndex: 既定の閾値が 8MB/512KB/4MB である', () => {
+  // デフォルト引数を直接テスト（引数無しで呼び出したときの値）
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-defaults-'));
+  try {
+    fs.mkdirSync(path.join(base, '.claude', 'projects', 'proj'), { recursive: true });
+    fs.writeFileSync(path.join(base, '.claude', 'projects', 'proj', 'dummy.jsonl'), '{}', 'utf8');
+    // 引数無しで呼び出し、内部で使われる既定値を確認するため、
+    // 関数のソースから既定値を直接検証
+    const src = fs.readFileSync(new URL('./reopen-lost-sessions.mjs', import.meta.url), 'utf8');
+    const match = src.match(/largeFileThreshold\s*=\s*(\d+)\s*\*\s*1024\s*\*\s*1024/);
+    assert.ok(match, 'largeFileThreshold の既定値が見つかる');
+    assert.equal(eval(match[0].split('=')[1].trim()), 8 * 1024 * 1024, 'largeFileThreshold 既定値は 8MB');
+    const headMatch = src.match(/largeFileHead\s*=\s*(\d+)\s*\*\s*1024/);
+    assert.ok(headMatch, 'largeFileHead の既定値が見つかる');
+    assert.equal(eval(headMatch[0].split('=')[1].trim()), 512 * 1024, 'largeFileHead 既定値は 512KB');
+    const tailMatch = src.match(/largeFileTail\s*=\s*(\d+)\s*\*\s*1024\s*\*\s*1024/);
+    assert.ok(tailMatch, 'largeFileTail の既定値が見つかる');
+    assert.equal(eval(tailMatch[0].split('=')[1].trim()), 4 * 1024 * 1024, 'largeFileTail 既定値は 4MB');
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});

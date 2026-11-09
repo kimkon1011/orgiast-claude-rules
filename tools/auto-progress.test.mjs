@@ -1012,8 +1012,8 @@ test('digest: 進行中も件数だけでなく名前で出す（最終判定が
   ];
   const text = formatDigest([], now, 'PC', { waitingRows: [], doneRows: [], stalledRows: [], inProgressRows });
   assert.deepEqual(text.split('\n').filter(line => line.startsWith('・進行中')), [
-    '・進行中: 新しい作業',
-    '・進行中: 古い作業',
+    '・進行中: 新しい作業 — 状態未確認',
+    '・進行中: 古い作業 — 状態未確認',
   ]);
   assert.doesNotMatch(text, /・進行中: \d+件/);
 });

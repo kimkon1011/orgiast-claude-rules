@@ -23,7 +23,7 @@ export function addCheck({ session, check, startWhen, deadline, label, nextClaud
   if (probe) {
     const { code, text } = probe({ check: startWhen || check, checkCwd: cwd, cwd, ...timeoutFields });
     if (code === 0 && !startWhen && !allowMet) throw new Error(`check が登録時点で既に達成(exit 0)と判定されました: ${text}。達成時だけ exit 0 になる形か確認してください（例: … | grep -q MERGED）。本当に達成済みなら登録は不要です`);
-    if (code !== 1 && code !== 0) throw new Error(`check がこの PC で実行できません(exit ${code}): ${text}`);
+    if (code !== 1 && code !== 0 && (code !== 3 || startWhen)) throw new Error(`check がこの PC で実行できません(exit ${code}): ${text}`);
   }
   const ask = askFile === undefined ? undefined : fs.readFileSync(askFile, 'utf8');
   const file = ledgerFile(home), rows = readLedger(file);
@@ -44,14 +44,14 @@ export function auditChecks({ home = process.env.ORGIAST_HOME || os.homedir(), e
     let result;
     try { result = execute(row, { home }); }
     catch (error) { result = { code: null, stderr: error.message }; }
-    if (result.code !== 0 && result.code !== 1) errors.push({ label: row.label || row.promise || '', stderr: String(result.stderr || result.text || '').split(/\r?\n/, 1)[0] });
+    if (result.code !== 0 && result.code !== 1 && result.code !== 3) errors.push({ label: row.label || row.promise || '', stderr: String(result.stderr || result.text || '').split(/\r?\n/, 1)[0] });
   }
   return { checked: rows.length, errorCount: errors.length, errors };
 }
 export function main(argv = process.argv.slice(2)) {
   if (argv.length === 1 && argv[0] === '--audit-checks') return auditChecks();
   const { values } = parseArgs({ args: argv, options: { 'add-check': { type: 'boolean' }, 'ask-file': { type: 'string' }, 'done-file': { type: 'string' }, 'start-when': { type: 'string' }, 'allow-met': { type: 'boolean' }, 'force-check': { type: 'boolean' }, 'allow-session-state': { type: 'boolean' }, session: { type: 'string' }, check: { type: 'string' }, deadline: { type: 'string' }, label: { type: 'string' }, 'next-claude': { type: 'string' }, timeout: { type: 'string' } } });
-  if (!values['add-check'] && !values['start-when']) throw new Error('使用法: --start-when "<cmd>" --session <id> --label "<名前>" --deadline +24h --next-claude "<作業>" [--check "<完了判定>"] または --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" [--timeout <秒>] [--ask-file <path>] [--done-file <path>] [--allow-met] [--force-check] [--allow-session-state] または --audit-checks');
+  if (!values['add-check'] && !values['start-when']) throw new Error('使用法: --start-when "<cmd>" --session <id> --label "<名前>" --deadline +24h --next-claude "<作業>" [--check "<完了判定>"] または --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" [--timeout <秒>] [--ask-file <path>] [--done-file <path>] [--allow-met] [--force-check] [--allow-session-state] または --audit-checks。check: exit 0=完了 / 1=未達 / 3=停滞（stdout 最終行が理由）/ その他=エラー');
   const home = process.env.ORGIAST_HOME || os.homedir();
   if (!values['start-when'] && !values['allow-session-state']
       && sessionStateReference({ check: values.check, checkCwd: process.cwd() }, { home })) {

@@ -843,6 +843,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     try { await reportOverdue(row); } catch (error) { summary.errors.push(`overdue-report: ${error.message}`); }
   }
   // Checks run first, before the potentially lengthy legacy resume lane.
+  const stalledChecks = new Set();
   const executable = [...candidates.filter(row => row.check && !reservation(row)), ...pendingChecks];
   executable.sort((a, b) => (Date.parse(a.lastCheckedAt) || 0) - (Date.parse(b.lastCheckedAt) || 0));
   for (const row of executable) {
@@ -895,6 +896,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       }
       if (state === 'done') summary.done++;
       else if (state === 'unmet') summary.inProgress++;
+      else if (state === 'stalled') stalledChecks.add(row);
     } catch (error) { summary.errors.push(`check: ${String(error?.message ?? error).slice(0, 120)}`); }
   }
   for (const row of doneSweep.recent) {
@@ -1037,10 +1039,10 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       }
     } catch (error) { summary.errors.push(`scheduled-start: ${String(error?.message ?? error).slice(0, 200)}`); }
   }
-  for (const row of candidates.filter(row => !row.check && !reservation(row))) {
+  for (const row of candidates.filter(row => (!row.check || stalledChecks.has(row)) && !reservation(row))) {
     // Reserve time for a 20-minute resume plus classification and reporting.
     if (clock() + 22 * 60000 >= stopAt) break;
-    if (isNoopPromise(row.promise)) {
+    if (!stalledChecks.has(row) && isNoopPromise(row.promise)) {
       patch(rowKey(row), { status: 'done', verdict: 'done', doneAt: new Date(now).toISOString(), reason: '自動進行の宣言なし' });
       summary.noop += 1;
       continue;
@@ -1067,16 +1069,16 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       summary.inProgress += 1;
       continue;
     }
-    if (!answered && now - recorded < GRACE_MS) { summary.graced += 1; continue; }
-    if (!answered && now - recorded >= EXPIRE_MS) { patch(rowKey(row), { status: 'expired' }); summary.expired += 1; continue; }
-    summary.checked += 1;
+    if (!stalledChecks.has(row) && !answered && now - recorded < GRACE_MS) { summary.graced += 1; continue; }
+    if (!stalledChecks.has(row) && !answered && now - recorded >= EXPIRE_MS) { patch(rowKey(row), { status: 'expired' }); summary.expired += 1; continue; }
+    if (!stalledChecks.has(row)) summary.checked += 1;
     // Freeze the legacy boundary before lastCheckedAt advances on subsequent polls.
     if (failedResumeEnd(row) && !row.resumeFinishedAt) {
       row.resumeFinishedAt = new Date(failedResumeEnd(row)).toISOString();
       patch(rowKey(row), { resumeFinishedAt: row.resumeFinishedAt });
     }
     const evidence = gatherEvidence(row, home, io);
-    let verdict = answered ? { verdict: 'stalled', reason: 'kim の返事を受領' } : judge(row, evidence, now, io);
+    let verdict = stalledChecks.has(row) ? { verdict: 'stalled', reason: row.checkText, source: 'check-stalled' } : answered ? { verdict: 'stalled', reason: 'kim の返事を受領' } : judge(row, evidence, now, io);
     if (verdict.verdict === 'done') {
       patch(rowKey(row), { status: 'done', verdict: 'done', doneAt: new Date(now).toISOString(), reason: verdict.reason });
       summary.done += 1;
@@ -1113,7 +1115,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       if (outcome.deferred) {
         patch(rowKey(row), { status: row.status, resumedAt: row.resumedAt ?? '', resumeCount: row.resumeCount ?? 0,
           resumeOutcome: failedResume(row) ? row.resumeOutcome : 'deferred: ' + outcome.reason, resumeDeferredAt: new Date(now).toISOString(),
-          lastCheckedAt: new Date(now).toISOString(), reason: outcome.reason });
+          lastCheckedAt: new Date(now).toISOString(), reason: row.check ? row.checkText : outcome.reason });
         current = { ...row };
         executorUnavailable = true;
         summary.resumeDeferred += 1;
@@ -1122,7 +1124,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       } else {
         const state = outcome.state || outcome.outcome;
         const nextKim = outcome.nextKim ?? row.nextKim;
-        const status = state === 'done' ? 'done' : state === 'needs_user' ? 'waiting_user' : 'resumed';
+        const status = state === 'done' && !row.check ? 'done' : state === 'needs_user' ? 'waiting_user' : 'resumed';
         current = { ...row, status, nextKim, resumedAt: new Date(now).toISOString(), resumeCount: (row.resumeCount ?? 0) + 1, resumeOutcome: `${state}: ${outcome.reason}` };
         current.resumeFinishedAt = new Date(clock()).toISOString();
         current.resumeFailureCount = failedResume(current) ? failedResumeCount(row) + 1 : 0;
@@ -1138,9 +1140,9 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         patch(rowKey(row), { status: current.status, nextKim,
           resumeFinishedAt: current.resumeFinishedAt, resumeFailureCount: current.resumeFailureCount,
           ...(!failedResume(current) ? { reportedKey: '' } : {}),
-          verdict: current.status === 'stalled' ? 'stalled' : state, ...(state === 'done' ? { doneAt: new Date(now).toISOString() } : {}), resumedAt: current.resumedAt, resumeCount: current.resumeCount, resumeOutcome: current.resumeOutcome, lastCheckedAt: current.resumeFinishedAt, reason: current.status === 'stalled' ? verdict.reason : outcome.reason });
-        (io.appendInbox ?? appendInbox)(home, row.sessionId, { at: new Date(now).toISOString(), state, evidence: outcome.reason, artifact: outcome.artifact || '' });
-        if (state === 'done' && !unattended && !dryRun && !row.doneNotifiedAt) {
+          verdict: row.check ? 'stalled' : current.status === 'stalled' ? 'stalled' : state, ...(state === 'done' && !row.check ? { doneAt: new Date(now).toISOString() } : {}), resumedAt: current.resumedAt, resumeCount: current.resumeCount, resumeOutcome: current.resumeOutcome, lastCheckedAt: current.resumeFinishedAt, reason: row.check ? row.checkText : current.status === 'stalled' ? verdict.reason : outcome.reason });
+        (io.appendInbox ?? appendInbox)(home, row.sessionId, { at: new Date(now).toISOString(), state: row.check && state === 'done' ? 'progressed' : state, evidence: outcome.reason, artifact: outcome.artifact || '' });
+        if (state === 'done' && !row.check && !unattended && !dryRun && !row.doneNotifiedAt) {
           await notifyDone(row, outcome.reason, outcome.artifact || '');
         }
         if (state === 'needs_user' && !notificationsStopped && kimAction(current) !== 'なし' && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {

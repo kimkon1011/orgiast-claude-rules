@@ -52,6 +52,7 @@ test('send uses file body, reporter identity, reason, expiry and mail-send envel
   delete f.deps.request;
   f.deps.fetch = async (url, opts) => { transport.push({ url, payload: JSON.parse(opts.body) }); return { ok: true, json: async () => ({ ok: true, mail: {} }) }; };
   assert.equal(await main(['--send', '--to', recipient, '--kind', 'prompt', '--body-file', f.body, '--why', '調査'], f.deps), 0);
+  assert.ok(f.errors.some(line => line.includes('待つなら: node tools/auto-progress.mjs --add-check --session ') && line.includes(`--mail ${mailId(f.deps.now, f.deps.randomBytes)}`)));
   assert.deepEqual(transport[0].payload, { id: mailId(f.deps.now, f.deps.randomBytes), from: 'kim-PC', to: recipient, auto: false, hop: 0, priority: 'normal', messageKind: 'prompt', body: '質問 $() `literal`', why: '調査', expiresAt: '2026-09-22T00:00:00.000Z', kind: 'mail-send', token: 'test-token' });
   assert.match(fs.readFileSync(path.join(f.dir, 'fleet-mail-sent.jsonl'), 'utf8'), /send-attempt/);
 });
@@ -345,9 +346,10 @@ test('decision storage failure is logged without stopping receipt of the batch',
 // --- 2026-10-10 事故の再発防止: --sent-status / 返信ガイド / 受領確認自動返信 / 判断依頼ガード ---
 test('--sent-status shows status, deliveredAt and resultAt without side effects', async t => {
   const f = fixture(t);
-  f.deps.request = async (kind, p) => { f.calls.push({ kind, p }); return { mail: { id: p.id, status: 'done', deliveredAt: '2026-10-10T01:00:00Z', resultAt: '2026-10-10T02:00:00Z' } }; };
+  f.deps.request = async (kind, p) => { f.calls.push({ kind, p }); return { mail: { id: p.id, to: recipient, status: 'done', deliveredAt: '2026-10-10T01:00:00Z', resultAt: '2026-10-10T02:00:00Z' } }; };
   assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 0);
   assert.deepEqual(f.calls, [{ kind: 'mail-get', p: { id: 'mail-1' } }]);
+  assert.ok(f.output[0].includes(`to: ${recipient}`));
   assert.match(f.output[0], /status: done/);
   assert.match(f.output[0], /deliveredAt: 2026-10-10T01:00:00Z/);
   assert.match(f.output[0], /resultAt: 2026-10-10T02:00:00Z/);

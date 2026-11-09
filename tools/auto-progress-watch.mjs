@@ -371,6 +371,19 @@ export function readableReason(value, row, limit = 1200) {
   return text.slice(0, limit);
 }
 
+// 判断に不要な作業ログを落として、準備できた内容だけを短く伝える。
+export function summarizeEvidence(value) {
+  const text = String(value ?? '')
+    .replace(/\[CLAIM-EVIDENCE:[\s\S]*?\]/gi, '')
+    .replace(/^\s*[a-z][a-z_ -]*[:：]\s*/i, '')
+    .replace(/https?:\/\/[^\s<>「」]+/gi, '')
+    .replace(/(?:[A-Za-z]:)?[\w./\\-]+\.[a-z][a-z0-9]*(?:\b)/gi, '')
+    .replace(/\bidx\d+\b/gi, '')
+    .replace(/\baria-[a-z-]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s。]+))?/gi, '')
+    .replace(/\s+/g, ' ').trim();
+  return (text.match(/[^。！？.!?]+[。！？.!?]?/g) || []).slice(0, 2).join('').slice(0, 160).trim();
+}
+
 export function formatDoneMessage(row, { reason = '', artifact = '', home = process.env.ORGIAST_HOME || os.homedir(), io = {}, ownerOf } = {}) {
   const origin = originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf ? ownerOf(row) : row.owner, home });
   const lines = [
@@ -748,8 +761,19 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       } catch (error) { summary.errors.push(`deferred-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
     }
   };
-  const askKim = (row, reason) => (io.notifyOwner ?? notifyOwner)(ownerOf(row),
-    `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf(row), home })}\n自動進行が判断待ちです: ${row.promise}\n${reason || ''}\n${pendingAction(row)}`, { home, now, kind: 'action', session: row });
+  const askKim = (row, reason, artifact = '') => {
+    const action = kimAction(row) !== 'なし' ? kimAction(row) : pendingAction(row).replace(/^[^:：\n]+[:：]\s*/, '');
+    const url = String(artifact || row.artifact || '').match(/https?:\/\/[^\s<>]+/)?.[0]
+      || String(reason || '').match(/https?:\/\/[^\s<>「」]+/)?.[0];
+    const lines = [
+      originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: ownerOf(row), home }),
+      `自動進行が判断待ちです: ${row.label || row.promise}`,
+      `あなたの返事待ち: ${action.replace(/\s+/g, ' ').trim()}`,
+      `準備済み: ${summarizeEvidence(reason) || '準備内容の記録なし'}`,
+    ];
+    if (url) lines.push(`成果物: ${url}`);
+    return (io.notifyOwner ?? notifyOwner)(ownerOf(row), lines.join('\n'), { home, now, kind: 'action', session: row });
+  };
   const notifyDone = async (row, reason, artifact) => {
     if (notificationsStopped) return false;
     if (usesKimDoneInbox(row, home)) {
@@ -1032,7 +1056,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         summary.done++;
         await notifyDone(current, outcome.reason, outcome.artifact || '');
       } else if (status === 'waiting_user' && kimAction(current) !== 'なし') {
-        const delivery = await askKim(current, outcome.reason);
+        const delivery = await askKim(current, outcome.reason, outcome.artifact);
         if (['dm', 'toast', 'inbox'].includes(delivery?.delivered)) patch(key, { ownerNotifiedAt: at });
       }
     } catch (error) { summary.errors.push(`scheduled-start: ${String(error?.message ?? error).slice(0, 200)}`); }
@@ -1145,7 +1169,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         }
         if (state === 'needs_user' && !notificationsStopped && kimAction(current) !== 'なし' && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
           try {
-            const delivery = await askKim(row, outcome.reason);
+            const delivery = await askKim({ ...current, nextKim }, outcome.reason, outcome.artifact);
             if (!['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
             patch(rowKey(row), { ownerNotifiedAt: new Date(now).toISOString() });
           } catch (error) { summary.errors.push(`notify-owner: ${String(error?.message ?? error).slice(0, 120)}`); }

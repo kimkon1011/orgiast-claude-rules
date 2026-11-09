@@ -1091,7 +1091,7 @@ test('watch: 判断待ち通知に出どころ行が付き、owner 空なら自P
   assert.equal(sent.length, 1);
   assert.equal(sent[0].owner, 'cr@orgiast.jp');
   assert.match(sent[0].text, /^【作業用001（PC）・cr@orgiast\.jp の Claude Code】プロジェクト: 案件A/);
-  assert.match(sent[0].text, /自動進行が判断待ちです: 62社へ送信\nOK 待ち/);
+  assert.match(sent[0].text, /自動進行が判断待ちです: 62社へ送信\nあなたの返事待ち: 62社への送信を承認\n準備済み: OK 待ち/);
 });
 
 test('watch: 自動進行完了時に結果の中身つきDMを1通送り、2回目は送らない（doneNotifiedAtで重複防止）', async () => {

@@ -133,9 +133,17 @@ export async function sendBeacon(beacon, { home, fetchImpl = fetch, timeoutMs = 
   }
 }
 // 戻り値の形は固定（fleet-mail.mjs / fleet-status.mjs が依存する）。失敗時も beacons/serverPolls を必ず返す。
-export async function fetchBeacons({ home, fetchImpl = fetch, timeoutMs = 15000 } = {}) {
+// タイムアウト（AbortError）またはネットワークエラーの時だけ retries 回まで再試行する。HTTP 4xx や JSON 不正では再試行しない。
+// GAS の busy 応答（{ ok:false, error:'busy' }）も再試行する。その時だけ retryDelayMs 待つ。
+export async function fetchBeacons({ home, fetchImpl = fetch, timeoutMs, retries = 0, retryDelayMs = 3000 } = {}) {
   const empty = { ok: false, beacons: [], serverPolls: {} };
-  try {
+  // 環境変数 FLEET_BEACON_FETCH_TIMEOUT_MS があればそれを既定値に使う（数値でなければ無視）
+  if (timeoutMs === undefined) {
+    const envVal = process.env.FLEET_BEACON_FETCH_TIMEOUT_MS;
+    const parsed = envVal ? Number(envVal) : NaN;
+    timeoutMs = Number.isInteger(parsed) && parsed > 0 ? parsed : 15000;
+  }
+  const attempt = async () => {
     const config = envFile(path.join(home, '.claude', 'fleet-sheet.env'));
     if (!config.FLEET_SHEET_URL || !config.FLEET_SHEET_TOKEN) return { ...empty, reason: 'unconfigured' };
     const response = await fetchImpl(config.FLEET_SHEET_URL, {
@@ -144,8 +152,15 @@ export async function fetchBeacons({ home, fetchImpl = fetch, timeoutMs = 15000 
       signal: AbortSignal.timeout(Math.max(1, Math.ceil(timeoutMs)))
     });
     if (!response.ok) return { ...empty, reason: `HTTP ${response.status}` };
-    const result = await response.json();
-    if (result?.ok !== true) return { ...empty, reason: String(result?.error || 'invalid response') };
+    let result;
+    try { result = await response.json(); } catch (jsonError) {
+      return { ...empty, reason: sanitizeReason(jsonError?.message || jsonError) };
+    }
+    if (result?.ok !== true) {
+      // busy 応答は再試行可能なエラーとして throw する
+      if (String(result?.error) === 'busy') throw new BusyError(sanitizeReason(result.error));
+      return { ...empty, reason: String(result?.error || 'invalid response') };
+    }
     if (!Array.isArray(result.beacons)) return { ...empty, reason: 'GAS 未デプロイ(beacon handler なし)' };
     const beacons = result.beacons.map((beacon) => {
       let steps = beacon?.steps;
@@ -163,10 +178,23 @@ export async function fetchBeacons({ home, fetchImpl = fetch, timeoutMs = 15000 
     });
     const serverPolls = result.serverPolls && typeof result.serverPolls === 'object' && !Array.isArray(result.serverPolls) ? result.serverPolls : {};
     return { ok: true, beacons, serverPolls, capabilities: Array.isArray(result.capabilities) ? result.capabilities : [] };
-  } catch (error) {
-    return { ...empty, reason: sanitizeReason(error?.message || error) };
+  };
+  // タイムアウト（AbortError）・ネットワークエラー・busy 応答の時だけ retries 回まで再試行。
+  // HTTP エラー・JSON 不正・busy 以外のエラー応答では再試行しない。
+  for (let i = 0; i <= retries; i++) {
+    try { return await attempt(); } catch (error) {
+      if (i < retries) {
+        // busy の時だけ待ってから再試行。タイムアウト/ネットワークエラーは待たない。
+        if (error instanceof BusyError && retryDelayMs > 0) await sleep(retryDelayMs);
+        continue;
+      }
+      return { ...empty, reason: sanitizeReason(error?.message || error) };
+    }
   }
+  return { ...empty, reason: 'unreachable' };
 }
+class BusyError extends Error { constructor(reason) { super(reason); this.name = 'BusyError'; } }
+function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const home = deps.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   const out = deps.stdout ?? console.log;

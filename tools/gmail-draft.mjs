@@ -155,9 +155,11 @@ export function renderChatDisplay({ to, cc, subject = '', body = '' }) {
 }
 
 export function guardRecipients(input, ledger) {
-  const internal = [...new Set([...addresses(input.to, true), ...addresses(input.cc)].map(s => s.toLowerCase()))]
-    .filter(addr => isInternal(addr, ledger));
-  return internal.length ? { blocked: true, internal, chatDisplay: renderChatDisplay(input) } : { blocked: false, internal: [] };
+  const recipients = [...new Set([...addresses(input.to, true), ...addresses(input.cc)].map(s => s.toLowerCase()))];
+  const internal = recipients.filter(addr => isInternal(addr, ledger));
+  return recipients.length && internal.length === recipients.length
+    ? { blocked: true, internal, chatDisplay: renderChatDisplay(input) }
+    : { blocked: false, internal: [] };
 }
 
 export function classifyTokenError(json) {
@@ -308,7 +310,7 @@ export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger()
   if (!recipients.length) throw new Error('下書きの宛先がありません');
   const internal = recipients.filter(addr => isInternal(addr, ledger));
   const isForward = values('x-orgiast-forward').some(value => /^[A-Za-z0-9_-]+$/u.test(value));
-  if (internal.length && !isForward) throw Object.assign(new Error('内部宛は Discord で連絡してください。'), { errorKind: 'internal_recipient', internal });
+  if (internal.length === recipients.length && !isForward) throw Object.assign(new Error('内部宛は Discord で連絡してください。'), { errorKind: 'internal_recipient', internal });
   const sent = await request('https://gmail.googleapis.com/gmail/v1/users/me/drafts/send', {
     method: 'POST', body: JSON.stringify({ id }),
   });

@@ -61,7 +61,7 @@ export function judge(hookInput, ledger) {
   if (/__forward$/u.test(hookInput.tool_name)) return { decision: 'pass', addresses: extractAddresses(hookInput.tool_input), internal: [] };
   const addresses = extractAddresses(hookInput.tool_input);
   const internal = addresses.filter((addr) => isInternal(addr, ledger));
-  if (!internal.length) return { decision: 'pass', addresses, internal };
+  if (!addresses.length || internal.length !== addresses.length) return { decision: 'pass', addresses, internal };
   const reason = `[INTERNAL-RECIPIENT] ${internal.join(', ')} は内部（社内・グループ会社・スタッフ）宛です。Claude が Discord の DM で送り、Gmail の下書き・送信は作らないでください。既存メールの転送は node tools/gmail-draft.mjs --forward <messageId> --to <宛先> で可能です。Discord で送れない時だけ、チャット本文に「宛先／用件／本文」をコピペできる完成形で表示してください。Gmail 下書きは顧客・取引先・外部の人宛だけ有効です。台帳: ~/.claude/internal-recipients.json`;
   return { decision: 'block', addresses, internal, reason };
 }
@@ -171,7 +171,7 @@ export function judgeBash(hookInput, ledger) {
   if (isGmailRestWriteCommand(command)) {
     const addresses = extractCommandAddresses(command);
     const internal = addresses.filter((addr) => isInternal(addr, ledger));
-    if (internal.length) {
+    if (addresses.length && internal.length === addresses.length) {
       const reason = `[INTERNAL-RECIPIENT] ${internal.join(', ')} は内部（社内・グループ会社・スタッフ）宛です。Gmail REST API を使った下書き・送信は行わず、Claude が Discord の DM で送ってください。Discord で送れない時だけ、チャット本文に「宛先／用件／本文」をコピペできる完成形で表示してください。台帳: ~/.claude/internal-recipients.json`;
       return { decision: 'block', addresses, internal, reason };
     }

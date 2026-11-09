@@ -11,7 +11,7 @@
 - `tools/send-context-check.test.mjs` ほか関連テスト。
 
 ## PR
-PR URL: pr-land 実行後に確定
+PR URL: https://github.com/kimkon1011/orgiast-claude-rules/pull/1838
 
 ## テスト結果
 - `node --test tools/send-context-check.test.mjs tools/mail-send-approval-gate.test.mjs tools/gmail-draft.test.mjs tools/line-group-send.test.mjs`: 78件成功、失敗0件。

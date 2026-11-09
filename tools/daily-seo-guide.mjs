@@ -1,272 +1,84 @@
 #!/usr/bin/env node
-/**
- * daily-seo-guide.mjs — 毎朝1本SEOガイド生成ワークフロー
- *
- * X-0011: gumツールで毎朝1本のSEOガイド作成
- *
- * 流れ:
- * 1. GSC Keyword Finder で高IMP低CTRキーワードを取得
- * 2. 展示会ブース関連キーワードを優先選択
- * 3. codex-do 経由でLLMにSEOガイドを生成させる
- * 4. 内部リンクを追加
- * 5. WordPress 下書きとして保存
- *
- * 使い方:
- *   node tools/daily-seo-guide.mjs [--dry-run] [--keyword "自由記入"]
- *     [--site https://www.orgiast.jp] [--publish-draft]
- */
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
-import { execSync } from 'child_process';
-import { existsSync, writeFileSync, mkdirSync, readFileSync } from 'fs';
-import { resolve, dirname } from 'path';
-import { fileURLToPath } from 'url';
+const toolsDir = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_OUTPUT_DIR = path.resolve(toolsDir, '..', 'outputs', 'X-0008');
+export const PROVIDERS = ['gemini', 'deepseek', 'groq'];
+export const DEFAULT_SERVICE_PAGES = [
+  { title: '展示会ブース制作 サービス一覧', url: 'https://www.orgiast.jp/booth/', description: 'ブース制作サービスの全体像を確認できます。' },
+  { title: 'ブース制作の料金プラン', url: 'https://www.orgiast.jp/booth/pricing/', description: '規模や予算に応じた料金プランを紹介します。' },
+  { title: '施工事例一覧', url: 'https://www.orgiast.jp/case-studies/', description: '展示会ブースの施工事例を掲載しています。' },
+  { title: 'お問い合わせ', url: 'https://www.orgiast.jp/contact/', description: 'ブース制作について無料で相談できます。' },
+  { title: '小規模ブース制作のポイント', url: 'https://www.orgiast.jp/booth/small-booth/', description: '1小間など小規模ブースの設計ポイントを解説します。' },
+  { title: 'ブースデザインの考え方', url: 'https://www.orgiast.jp/booth/design/', description: '集客につながるデザインの考え方を紹介します。' },
+];
+export const SYSTEM_PROMPT = `あなたは展示会ブース制作のSEO専門家です。
+以下のキーワードに対して、読者が知りたいこと・検索意図を満たす高品質なSEOガイドを1本書いてください。
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(__dirname, '..');
+【ガイドの構成】
+1. タイトル（キーワードを含み、クリックしたくなるもの）
+2. 導入文（100-150字。読者の課題に共感し、この記事がその解決になることを示す）
+3. 見出し（H2）で区切られた本文（合計800-1200字）
+4. 箇条書き・表を適宜使って読みやすく
+5. まとめ（30-50字の結論＋次のアクション提示）
 
-// ===== 設定 =====
-const CONFIG = {
-  siteUrl: 'https://www.orgiast.jp',
-  outputDir: resolve(REPO_ROOT, 'outputs', 'X-0011', 'guides'),
-  codexDoPath: resolve(REPO_ROOT, 'tools', 'codex-do.mjs'),
-  guideTemplatePath: resolve(REPO_ROOT, 'outputs', 'X-0011', 'guide-template.md'),
-};
+【SEO要件】
+- タイトル・H2・導入文にキーワードを自然に含める
+- 関連する共起語（類義語・周辺語）も使う
+- 具体例・数字を入れる（信頼性向上）
+- 専門用語を使う場合は簡単な説明を添える
 
-// ===== ガイド生成プロンプト =====
-function buildGuidePrompt(keyword, siteUrl) {
-  return `あなたは展示会ブース制作の専門SEOライターです。
-以下のキーワードで、株式会社オージャスト（https://www.orgiast.jp）のサイトに掲載する
-SEOガイド記事を1本作成してください。
+【絶対禁止】
+- 「まずは」「この記事では〜していきます」「最後までお読みいただき」などのブログ定型句
+- AIらしい抽象的な表現（「多岐にわたる」「重要なポイント」などの中身のない言い回し）
+- 長すぎる文章（1文60字以内を推奨）
+- 事実と異なる数字・データの捏造`;
 
-## ターゲットキーワード
-「${keyword}」
-
-## 記事の要件
-1. タイトル: キーワードを含む30〜50字のSEOタイトル
-2. meta description: 120字以内
-3. 本文: 2,000〜3,000字（マークダウン形式）
-4. 構成: h2見出しを3〜5個、h3見出しを適宜
-5. CTA: 最後に「まずはお気軽にご相談ください」系のCTAを自然に配置
-6. 内部リンク: 以下のプレースホルダを含める
-   - [実績事例への内部リンク: /event/XXXX]
-   - [制作ガイドへの内部リンク: /topics/XXXX]
-   - [サービス案内への内部リンク: /event]
-7. 専門性: 展示会ブース業界の実践的アドバイスを含める
-8. オリジナリティ: 一般的なSEO記事の焼き直しではなく、施工会社ならではの知見を前面に
-
-## 出力形式
-最初に --- で区切ったYAML frontmatter、その後に本文。
----
-title: "記事タイトル"
-description: "meta description"
-keyword: "${keyword}"
-target_audience: "展示会出展を検討中の企業マーケ担当者"
-word_count: 2500
----
-
-[ここに本文]`;
+const number = (value, fallback = 0) => { const n = Number(String(value ?? '').replace(/[,%\s]/g, '')); return Number.isFinite(n) ? n : fallback; };
+export function parseCsvRows(text) {
+  const rows = []; let row = []; let field = ''; let quoted = false; const source = String(text).replace(/^\uFEFF/, '');
+  for (let i = 0; i < source.length; i++) { const ch = source[i];
+    if (quoted) { if (ch === '"' && source[i + 1] === '"') { field += '"'; i++; } else if (ch === '"') quoted = false; else field += ch; }
+    else if (ch === '"') quoted = true; else if (ch === ',') { row.push(field); field = ''; }
+    else if (ch === '\n') { row.push(field.replace(/\r$/, '')); rows.push(row); row = []; field = ''; } else field += ch;
+  }
+  if (field || row.length) { row.push(field.replace(/\r$/, '')); rows.push(row); }
+  return rows.filter((r) => r.some((v) => v.trim()));
 }
-
-// ===== 内部リンク解決 =====
-async function resolveInternalLinks(markdownBody, siteUrl) {
-  // sitemap.xml から内部リンク候補を取得
-  let sitemapUrls = [];
-  try {
-    const resp = await fetch(`${siteUrl}/sitemap.xml`);
-    const xml = await resp.text();
-    // 簡易パース: <loc> タグからURL抽出
-    const locs = xml.match(/<loc>(.*?)<\/loc>/g) || [];
-    sitemapUrls = locs.map(l => l.replace(/<\/?loc>/g, '').trim());
-  } catch (e) {
-    console.error('⚠ sitemap.xml 取得失敗:', e.message);
-    return markdownBody;
-  }
-
-  // プレースホルダを実際のURLに置換
-  let result = markdownBody;
-
-  // 実績事例リンク
-  const eventUrls = sitemapUrls.filter(u => u.includes('/event/'));
-  if (eventUrls.length > 0 && result.includes('[実績事例への内部リンク')) {
-    const pick = eventUrls[Math.floor(Math.random() * eventUrls.length)];
-    result = result.replace(/\[実績事例への内部リンク:.*?\]/, `[施工実績](${pick})`);
-  }
-
-  // 制作ガイドリンク
-  const topicUrls = sitemapUrls.filter(u => u.includes('/topics/'));
-  if (topicUrls.length > 0 && result.includes('[制作ガイドへの内部リンク')) {
-    const pick = topicUrls[Math.floor(Math.random() * topicUrls.length)];
-    result = result.replace(/\[制作ガイドへの内部リンク:.*?\]/, `[制作ノウハウ](${pick})`);
-  }
-
-  // サービス案内リンク
-  if (result.includes('[サービス案内への内部リンク')) {
-    result = result.replace(/\[サービス案内への内部リンク:.*?\]/, `[ブース制作サービス](${siteUrl}/event)`);
-  }
-
-  return result;
+export function parseGscCsv(text) {
+  const rows = parseCsvRows(text); if (!rows.length) return [];
+  const aliases = { query: ['query', 'クエリ'], impressions: ['impressions', '表示回数'], clicks: ['clicks', 'クリック数'], ctr: ['ctr'], position: ['position', '掲載順位'] };
+  const headers = rows[0].map((h) => h.trim().toLowerCase());
+  const index = Object.fromEntries(Object.entries(aliases).map(([k, names]) => [k, headers.findIndex((h) => names.includes(h))]));
+  if (index.query < 0) throw new Error('CSVに query（またはクエリ）ヘッダーがありません');
+  return rows.slice(1).map((v) => { const impressions = number(v[index.impressions]); const clicks = number(v[index.clicks]); const raw = index.ctr >= 0 ? String(v[index.ctr] ?? '') : ''; return { query: String(v[index.query] ?? '').trim(), impressions, clicks, ctr: raw ? number(raw) / (raw.includes('%') ? 100 : 1) : (impressions ? clicks / impressions : 0), position: number(v[index.position]) }; }).filter((v) => v.query);
 }
-
-// ===== WordPress 下書き投稿 =====
-async function publishDraft(title, content) {
-  // WordPress REST API で下書き保存
-  const wpApiUrl = `${CONFIG.siteUrl}/wp-json/wp/v2/posts`;
-  const wpUser = process.env.WP_USER;
-  const wpAppPassword = process.env.WP_APP_PASSWORD;
-
-  if (!wpUser || !wpAppPassword) {
-    console.error('⚠ WordPress 認証情報なし (WP_USER / WP_APP_PASSWORD) — 下書き保存スキップ');
-    console.log('   下書き内容:', CONFIG.outputDir);
-    return null;
-  }
-
-  const auth = Buffer.from(`${wpUser}:${wpAppPassword}`).toString('base64');
-
-  try {
-    const resp = await fetch(wpApiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Basic ${auth}`,
-      },
-      body: JSON.stringify({
-        title,
-        content,
-        status: 'draft',
-      }),
-    });
-
-    if (!resp.ok) {
-      const errBody = await resp.text();
-      throw new Error(`WordPress API error ${resp.status}: ${errBody}`);
-    }
-
-    const post = await resp.json();
-    console.error(`✅ 下書き保存完了: ${post.link}`);
-    return post;
-  } catch (e) {
-    console.error('❌ WordPress投稿失敗:', e.message);
-    return null;
-  }
+export function parseGscJson(value) {
+  const data = typeof value === 'string' ? JSON.parse(value) : value; const rows = Array.isArray(data) ? data : data?.candidates ?? data?.keywords ?? data?.rows ?? data?.results;
+  if (!Array.isArray(rows)) throw new Error('GSC JSONに候補配列（candidates等）がありません');
+  return rows.map((v) => { const impressions = number(v.impressions); const clicks = number(v.clicks); let ctr = number(v.ctr); if (String(v.ctr ?? '').includes('%') || ctr > 1) ctr /= 100; if (v.ctr == null && impressions) ctr = clicks / impressions; return { query: String(v.query ?? v.keyword ?? v.keys?.[0] ?? '').trim(), impressions, clicks, ctr, position: number(v.position) }; }).filter((v) => v.query);
 }
+export const emptyLedger = (now = new Date()) => ({ version: 1, lastUpdated: now.toISOString(), guides: [], coveredKeywords: [] });
+export function loadLedger(file, { warn = console.warn } = {}) { if (!fs.existsSync(file)) return emptyLedger(); try { const text = fs.readFileSync(file, 'utf8').trim(); if (!text) throw Error(); const v = JSON.parse(text); return { version: 1, ...v, guides: Array.isArray(v.guides) ? v.guides : [], coveredKeywords: Array.isArray(v.coveredKeywords) ? v.coveredKeywords : [] }; } catch { warn(`警告: レジャーが空または破損しているため新規初期化します: ${file}`); return emptyLedger(); } }
+export function saveLedger(file, data) { fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true }); data.lastUpdated = new Date().toISOString(); fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`, 'utf8'); }
+const normalize = (v) => String(v ?? '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+export function isKeywordCovered(ledger, keyword) { const target = normalize(keyword); return (ledger.coveredKeywords ?? []).some((v) => { const current = normalize(v); return current && (current.includes(target) || target.includes(current)); }); }
+export function addGuideEntry(ledger, entry) { ledger.guides ??= []; ledger.coveredKeywords ??= []; ledger.guides.push(entry); if (!ledger.coveredKeywords.some((v) => normalize(v) === normalize(entry.keyword))) ledger.coveredKeywords.push(entry.keyword); ledger.lastUpdated = new Date().toISOString(); return ledger; }
+export function selectKeyword(candidates, ledger, { force = false, random = Math.random } = {}) { const available = force ? candidates : candidates.filter((v) => !isKeywordCovered(ledger, v.query)); if (!available.length) return null; const relevant = available.filter((v) => /展示会|ブース|イベント|出展|小間|装飾|設営|施工/.test(v.query)); const pool = (relevant.length ? relevant : available).map((v) => ({ ...v, score: v.impressions * (1 - Math.max(0, Math.min(1, v.ctr))) * (Math.max(30, 100 - v.position) / 100) })).sort((a, b) => b.score - a.score).slice(0, 3); return pool[Math.min(pool.length - 1, Math.floor(random() * pool.length))]; }
 
-// ===== メイン =====
-async function main() {
-  const args = process.argv.slice(2);
-  const isDryRun = args.includes('--dry-run');
-  const shouldPublish = args.includes('--publish-draft');
-  const forceKeyword = args.includes('--keyword') ? args[args.indexOf('--keyword') + 1] : null;
+const SLUG_WORDS = new Map([['おすすめ', 'recommended'], ['展示会', 'exhibition'], ['デザイン', 'design'], ['ブース', 'booth'], ['小間', 'koma'], ['制作', 'production'], ['施工', 'construction'], ['予算', 'budget'], ['費用', 'cost'], ['事例', 'case'], ['業界', 'industry']]);
+export function generateSlug(keyword) { let value = String(keyword).normalize('NFKC').toLowerCase(); for (const [jp, en] of SLUG_WORDS) value = value.replaceAll(jp, `-${en}-`); return value.replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 40).replace(/-+$/g, '') || 'seo-guide'; }
+function scorePage(page, keyword) { const rules = [['デザイン', 'design'], ['予算', 'pricing'], ['費用', 'pricing'], ['料金', 'pricing'], ['価格', 'pricing'], ['事例', 'case-studies'], ['実績', 'case-studies'], ['施工', 'case-studies'], ['小間', 'small-booth'], ['小規模', 'small-booth']]; return rules.reduce((s, [word, fragment]) => s + (keyword.includes(word) && page.url.includes(fragment) ? 10 : 0), page.url.includes('/booth/') ? 1 : 0); }
+export function appendInternalLinks(content, servicePages, keyword, siteName = '株式会社オージャスト') { const contact = servicePages.find((v) => /contact/.test(v.url)) ?? DEFAULT_SERVICE_PAGES[3]; const pages = servicePages.filter((v) => v !== contact).map((page, index) => ({ page, index, score: scorePage(page, keyword) })).sort((a, b) => b.score - a.score || a.index - b.index).slice(0, 3).map((v) => v.page); const links = pages.map((v) => `- [${v.title}](${v.url}) — ${v.description || '詳しい情報をご覧いただけます。'}`).join('\n'); return `${String(content).trim()}\n\n---\n\n## 関連サービス\n\n${links}\n\n---\n\n### この記事を書いた人\n\n${siteName}は、展示会ブースの設計・制作・施工を一貫して手がける専門企業です。金属加工の技術を活かしたオリジナルブースから、リユース可能なシステムブースまで、予算や規模に合わせた最適な提案をいたします。\n\n**まずは無料相談から** — お気軽にお問い合わせください。\n\n[→ お問い合わせはこちら](${contact.url})\n`; }
 
-  const siteUrl = args.includes('--site') ? args[args.indexOf('--site') + 1] : CONFIG.siteUrl;
-
-  console.error('='.repeat(50));
-  console.error(`📅 日次SEOガイド生成ワークフロー`);
-  console.error(`   日付: ${new Date().toISOString().split('T')[0]}`);
-  console.error(`   サイト: ${siteUrl}`);
-  console.error(`   Dry-run: ${isDryRun}`);
-  console.error(`   公開: ${shouldPublish}`);
-  console.error('='.repeat(50));
-
-  // Step 1: キーワード取得
-  let keyword = forceKeyword;
-  if (!keyword) {
-    console.error('\n🔍 Step 1: GSCから高IMP低CTRキーワードを取得...');
-    try {
-      const gscResult = execSync(
-        `process.execPath "${CONFIG.codexDoPath}" "GSC高IMP低CTRキーワード分析を実行" --kind investigate --cwd "${REPO_ROOT}" --origin unattended`,
-        { encoding: 'utf8', timeout: 120000, windowsHide: true }
-      );
-      console.error('   GSC結果:', gscResult.slice(0, 500));
-    } catch (e) {
-      console.error('   GSC取得失敗:', e.message);
-      console.error('   フォールバック: 汎用キーワードを使用');
-    }
-  }
-
-  // Step 2: キーワード決定
-  if (!keyword) {
-    // フォールバック: 展示会ブース関連の汎用キーワード
-    const fallbackKeywords = [
-      '展示会ブース制作 費用 相場',
-      '大阪 展示会ブース デザイン',
-      '初めての展示会出展 準備ガイド',
-      '小規模ブース 集客 レイアウト',
-      '展示会 施工会社 選び方',
-    ];
-    keyword = fallbackKeywords[new Date().getDate() % fallbackKeywords.length];
-  }
-  console.error(`\n🎯 Step 2: 選定キーワード = "${keyword}"`);
-
-  // Step 3: SEOガイド生成
-  console.error('\n✍️  Step 3: SEOガイド生成中...');
-  const prompt = buildGuidePrompt(keyword, siteUrl);
-
-  let guideContent;
-  try {
-    const result = execSync(
-      `process.execPath "${CONFIG.codexDoPath}" "${prompt.replace(/"/g, '\\"')}" --kind implement --cwd "${REPO_ROOT}" --origin unattended`,
-      { encoding: 'utf8', timeout: 300000, windowsHide: true }
-    );
-    guideContent = result;
-  } catch (e) {
-    console.error('   codex-do 実行失敗:', e.message);
-    // フォールバック: 簡易ガイド生成
-    guideContent = `---
-title: "${keyword}の完全ガイド"
-description: "${keyword}について詳しく解説します。"
-keyword: "${keyword}"
----
-# ${keyword}
-
-## はじめに
-
-${keyword}について、展示会ブース制作の専門会社が詳しく解説します。
-
-## ${keyword}の基礎知識
-
-展示会出展を成功させるには、${keyword}の理解が不可欠です。
-
-[まずはお気軽にご相談ください](https://www.orgiast.jp/contact)
-`;
-  }
-
-  // Step 4: 内部リンク解決
-  console.error('\n🔗 Step 4: 内部リンク解決中...');
-  const finalContent = await resolveInternalLinks(guideContent, siteUrl);
-
-  // Step 5: 保存
-  console.error('\n💾 Step 5: 保存中...');
-  mkdirSync(CONFIG.outputDir, { recursive: true });
-
-  const dateStr = new Date().toISOString().split('T')[0];
-  const slug = keyword.replace(/[\s　]+/g, '-').replace(/[^\w-]/g, '').slice(0, 50);
-  const outputPath = resolve(CONFIG.outputDir, `${dateStr}-${slug}.md`);
-  writeFileSync(outputPath, finalContent, 'utf8');
-  console.error(`   保存先: ${outputPath}`);
-
-  // Step 6: WordPress 公開（任意）
-  if (shouldPublish && !isDryRun) {
-    console.error('\n🚀 Step 6: WordPress 下書き保存...');
-    const titleMatch = finalContent.match(/^title:\s*"(.*)"/m);
-    const title = titleMatch ? titleMatch[1] : keyword;
-    const bodyMatch = finalContent.match(/---\n[\s\S]*?---\n([\s\S]*)/);
-    const body = bodyMatch ? bodyMatch[1] : finalContent;
-
-    await publishDraft(title, body);
-  }
-
-  // サマリ
-  console.error('\n' + '='.repeat(50));
-  console.error(`✅ 完了`);
-  console.error(`   キーワード: ${keyword}`);
-  console.error(`   出力: ${outputPath}`);
-  console.error(`   文字数: ${finalContent.length}`);
-  if (isDryRun) console.error('   モード: Dry Run（保存のみ）');
-  if (forceKeyword) console.error('   キーワード: 指定値');
-  console.error('='.repeat(50));
-}
-
-main().catch(err => {
-  console.error('❌ 致命的エラー:', err.message);
-  process.exit(1);
-});
+export function parseArgs(argv) { const o = { outputDir: DEFAULT_OUTPUT_DIR, ledger: null, siteName: '株式会社オージャスト', servicePages: null, dryRun: false, force: false, initLedger: false }; const valued = new Set(['--gsc-json', '--gsc-csv', '--keyword', '--output-dir', '--ledger', '--site-name', '--service-pages']); const keys = { '--gsc-json': 'gscJson', '--gsc-csv': 'gscCsv', '--keyword': 'keyword', '--output-dir': 'outputDir', '--ledger': 'ledger', '--site-name': 'siteName', '--service-pages': 'servicePages' }; for (let i = 0; i < argv.length; i++) { const arg = argv[i]; if (valued.has(arg)) { if (!argv[i + 1] || argv[i + 1].startsWith('--')) throw new Error(`${arg} には値が必要です`); o[keys[arg]] = argv[++i]; } else if (arg === '--dry-run') o.dryRun = true; else if (arg === '--force') o.force = true; else if (arg === '--init-ledger') o.initLedger = true; else throw new Error(`不明なオプション: ${arg}`); } o.outputDir = path.resolve(o.outputDir); o.ledger = path.resolve(o.ledger || path.join(o.outputDir, 'ledger.json')); if (o.gscJson && o.gscCsv) throw new Error('--gsc-json と --gsc-csv は同時に指定できません'); if (!o.initLedger && !o.gscJson && !o.gscCsv && !o.keyword) throw new Error('--gsc-json、--gsc-csv、--keyword のいずれかを指定してください'); return o; }
+export const buildUserPrompt = (keyword) => `キーワード: "${keyword}"\nターゲット読者: 展示会への出展を検討している企業の担当者\n目的: このキーワードで検索している人の疑問・課題を解消し、具体的で役立つ情報を提供する\n\n以下の形式でガイドを生成してください：\n\n# {タイトル}\n\n{導入文（100-150字）}\n\n## {H2見出し1}\n{本文}\n\n## {H2見出し2}\n{本文}\n\n...\n\n## まとめ\n{結論＋次のアクション}`;
+export function generateContent(provider, system, prompt) { const output = execFileSync(process.execPath, [path.join(toolsDir, 'llm-ask.mjs'), '--provider', provider, '--prefer-provider', '--no-fallback', '--system', system, '--max', '2200', prompt], { encoding: 'utf8', timeout: 120000, windowsHide: true }).trim(); if (!output || output === '(出力なし)') throw new Error(`${provider} returned empty content`); return output; }
+export function generateWithFallback(system, prompt, generator = generateContent) { const errors = []; for (const provider of PROVIDERS) { try { return { content: generator(provider, system, prompt), provider }; } catch (e) { errors.push(`${provider}: ${e.message}`); } } throw new Error(`すべてのプロバイダで生成に失敗しました: ${errors.join(' / ')}`); }
+const frontmatter = (item, date, provider) => `---\ndate: ${date}\nkeyword: ${JSON.stringify(item.query)}\nimpressions: ${item.impressions}\nposition: ${item.position}\nctr: ${(item.ctr * 100).toFixed(1)}%\ngenerated_by: daily-seo-guide (provider: ${provider})\ntopic_category: 展示会ブース\n---\n\n`;
+export async function run(argv = process.argv.slice(2), deps = {}) { const o = parseArgs(argv); if (o.initLedger) { const ledger = emptyLedger(); saveLedger(o.ledger, ledger); console.log(`レジャーを初期化しました: ${o.ledger}`); return { ledger }; } const ledger = loadLedger(o.ledger); let candidates; if (o.keyword) candidates = [{ query: o.keyword, impressions: 0, clicks: 0, ctr: 0, position: 0 }]; else if (o.gscCsv) candidates = parseGscCsv(fs.readFileSync(path.resolve(o.gscCsv), 'utf8')); else candidates = parseGscJson(fs.readFileSync(path.resolve(o.gscJson), 'utf8')); const selected = selectKeyword(candidates, ledger, { force: o.force, random: deps.random ?? Math.random }); if (!selected) { console.log('すべての候補をカバー済みです。--force で強制生成できます。'); return { covered: true }; } console.log(`選択キーワード: ${selected.query}`); if (o.dryRun) { console.log(`優先度スコア: ${selected.score.toFixed(2)}`); return { selected, dryRun: true }; } const pages = o.servicePages ? JSON.parse(fs.readFileSync(path.resolve(o.servicePages), 'utf8')) : DEFAULT_SERVICE_PAGES; if (!Array.isArray(pages)) throw new Error('--service-pages はJSON配列で指定してください'); const generated = (deps.generateWithFallback ?? generateWithFallback)(SYSTEM_PROMPT, buildUserPrompt(selected.query)); const date = (deps.now ?? new Date()).toISOString().slice(0, 10); const slug = generateSlug(selected.query); const guideDir = path.join(o.outputDir, 'guides'); const outputPath = path.join(guideDir, `${date}-${slug}.md`); fs.mkdirSync(guideDir, { recursive: true }); fs.writeFileSync(outputPath, frontmatter(selected, date, generated.provider) + appendInternalLinks(generated.content, pages, selected.query, o.siteName), 'utf8'); addGuideEntry(ledger, { date, keyword: selected.query, slug, file: path.relative(process.cwd(), outputPath).replaceAll('\\', '/'), impressions: selected.impressions, position: selected.position, ctr: selected.ctr, provider: generated.provider }); saveLedger(o.ledger, ledger); console.log(`ガイドを生成しました: ${outputPath}`); return { selected, outputPath, provider: generated.provider }; }
+if (isEntry(import.meta.url)) run().catch((e) => { console.error(`エラー: ${e.message}`); process.exitCode = 1; });

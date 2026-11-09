@@ -175,7 +175,18 @@ async function main() {
   const key = loadKey();
   mkdirSync(opts.out, { recursive: true });
   const results = await runAll({ plans, providers: opts.providers, model: opts.model, key, common, texts: opts.texts, refs: opts.refs, maxHeight: opts.maxHeight, outDir: opts.out });
-  writeFileSync(path.join(opts.out, 'perse-result.json'), JSON.stringify(results, null, 2));
+  const resultPath = path.join(opts.out, 'perse-result.json');
+  let mergedResults = results;
+  if (opts.only) {
+    try {
+      const previous = JSON.parse(readFileSync(resultPath, 'utf8'));
+      if (Array.isArray(previous)) {
+        const replaced = new Set(results.map((r) => `${r.id}\0${r.provider ?? r.model}`));
+        mergedResults = [...previous.filter((r) => !replaced.has(`${r.id}\0${r.provider ?? r.model}`)), ...results];
+      }
+    } catch { /* First run or unreadable prior result: write this retry result only. */ }
+  }
+  writeFileSync(resultPath, JSON.stringify(mergedResults, null, 2));
   for (const r of results) {
     if (r.ok) console.log(`saved ${r.out} cost ${r.cost}`);
     else {

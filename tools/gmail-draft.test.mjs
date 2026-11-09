@@ -105,8 +105,14 @@ test('添付は multipart/mixed、RFC 2047 ファイル名、推定 MIME type �
   assert.match(decoded, /JVBERg==/u);
 });
 
-test('内部ドメイン・個人 Gmail・Cc を既存の内部判定でブロック', () => {
-  for (const fields of [{ to: 'STAFF@ORGIAST.JP' }, { to: 'staff@toho-kogyo.com' }, { to: 'staff@gmail.com' }, { cc: 'staff@orgiast.jp' }]) {
+test('宛先が全員内部のときだけブロックする', () => {
+  assert.deepEqual(guardRecipients({ ...input, cc: 'staff@orgiast.jp' }, ledger), { blocked: false, internal: [] });
+  for (const fields of [
+    { to: 'STAFF@ORGIAST.JP' },
+    { to: 'staff@toho-kogyo.com' },
+    { to: 'staff@gmail.com' },
+    { to: 'staff@orgiast.jp', cc: 'other@toho-kogyo.com' },
+  ]) {
     const result = guardRecipients({ ...input, ...fields }, ledger);
     assert.equal(result.blocked, true);
     assert.ok(result.internal.length);
@@ -160,8 +166,9 @@ test('下書き POST の URL・認証・raw・戻り値', async () => {
 });
 
 test('CLI の内部宛は通常・dry-run・JSON すべて認証も fetch もゼロ', async () => {
+  const internalArgs = ['--to', 'staff@orgiast.jp', '--subject', input.subject, '--body', input.body];
   for (const flags of [[], ['--dry-run'], ['--json'], ['--json', '--dry-run']]) {
-    const result = await cli([...args, '--cc', 'staff@gmail.com', ...flags]);
+    const result = await cli([...internalArgs, '--cc', 'staff@gmail.com', ...flags]);
     assert.equal(result.code, 3);
     assert.equal(result.calls, 0);
     assert.equal(result.tokens, 0);
@@ -170,7 +177,7 @@ test('CLI の内部宛は通常・dry-run・JSON すべて認証も fetch もゼ
       const report = JSON.parse(result.output[0]);
       assert.equal(report.action, 'chat-display');
       assert.equal(report.user, DEFAULT_USER);
-      assert.deepEqual(report.internal, ['staff@gmail.com']);
+      assert.deepEqual(report.internal, ['staff@orgiast.jp', 'staff@gmail.com']);
       assert.ok(report.chatDisplay.includes(input.body));
     } else assert.ok(result.output[0].includes(input.body));
   }
@@ -428,18 +435,31 @@ test('送信は指定アカウントの下書きを取得後 compose で送信�
   assert.equal(requests.length, 2);
   assert.deepEqual(JSON.parse(result.output[0]), { action: 'send', user: 'shared@orgiast.jp', ok: true, sentMessageId: 'sent', threadId: 'thread', to: 'Customer <customer@example.com>', subject: '確認' });
 });
-test('送信前に To/Cc/Bcc の内部宛を拒否する（表示名・大小文字・台帳アドレス）', async () => {
+test('送信前は To/Cc/Bcc が全員内部のときだけ拒否する（表示名・大小文字・台帳アドレス）', async () => {
   for (const name of ['To', 'cC', 'BCC']) {
     for (const value of ['Staff <STAFF@ORGIAST.JP>', 'staff@gmail.com']) {
       let calls = 0;
       const result = await cli(['--send', 'draft', '--json'], { getToken: async () => 't', fetchImpl: async () => {
-        calls++; return response(draftHeaders([{ name, value }]));
+        calls++; return response({ message: { payload: { headers: [{ name, value }, { name: 'Subject', value: '確認' }] } } });
       } });
       assert.equal(result.code, 3);
       assert.equal(calls, 1);
       assert.equal(JSON.parse(result.output[0]).errorKind, 'internal_recipient');
     }
   }
+});
+test('送信前に外部 To と内部 Cc が混在しても通す', async () => {
+  let calls = 0;
+  const result = await cli(['--send', 'draft', '--json'], {
+    inspectDraft: async () => ({ ok: true, findings: [], llm: {} }),
+    readState: () => { throw new Error('no cache'); },
+    getToken: async () => 't',
+    fetchImpl: async () => ++calls === 1
+      ? response(draftHeaders([{ name: 'Cc', value: 'staff@orgiast.jp' }]))
+      : response({ id: 'sent', threadId: 'thread' }),
+  });
+  assert.equal(result.code, 0);
+  assert.equal(calls, 2);
 });
 test('X-Orgiast-Forward 付き下書きだけ内部宛へ送信できる', async () => {
   let calls = 0;

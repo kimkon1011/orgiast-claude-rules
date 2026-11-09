@@ -1243,3 +1243,75 @@ test('watchdogRecord: logs previous stage and updates progress stage to watchdog
   assert.equal(updatedProgress.stage, 'watchdog');
   assert.equal(updatedProgress.detail, 'timeout');
 });
+
+test('localIndex: sinceMs より古い mtime のファイルは読まれず skippedOld に計上される', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-mtime-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const projects = path.join(root, '.claude', 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  // 古いファイル（mtime を過去に設定）
+  const oldFile = path.join(projects, 'old.jsonl');
+  fs.writeFileSync(oldFile, [
+    { type: 'bridge-session', bridgeSessionId: 'cse_old' },
+    { type: 'user', cwd: 'C:\\old', message: { content: 'old' } },
+  ].map(JSON.stringify).join('\n'));
+  const past = new Date('2020-01-01').getTime();
+  fs.utimesSync(oldFile, past / 1000, past / 1000);
+  // 新しいファイル
+  const newFile = path.join(projects, 'new.jsonl');
+  fs.writeFileSync(newFile, [
+    { type: 'bridge-session', bridgeSessionId: 'cse_new' },
+    { type: 'user', cwd: 'C:\\new', message: { content: 'new' } },
+  ].map(JSON.stringify).join('\n'));
+  const idx = localIndex(path.join(root, '.claude'), undefined, { sinceMs: Date.now() - 3600000 });
+  assert.equal(idx.size, 1, '古いファイルは index に入らない');
+  assert.ok(idx.has('cse_new'), '新しいファイルだけが index にある');
+  assert.equal(idx.skippedOld, 1, 'skippedOld に 1 が計上される');
+  assert.equal(idx.indexed, 1, 'indexed に 1 が計上される');
+  assert.ok(typeof idx.indexMs === 'number' && idx.indexMs >= 0, 'indexMs が数値');
+});
+
+test('localIndex: onlyId 指定時は sinceMs より古くても読む', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-onlyid-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const projects = path.join(root, '.claude', 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  const oldFile = path.join(projects, 'old.jsonl');
+  fs.writeFileSync(oldFile, [
+    { type: 'bridge-session', bridgeSessionId: 'cse_old' },
+    { type: 'user', cwd: 'C:\\old', message: { content: 'old' } },
+  ].map(JSON.stringify).join('\n'));
+  const past = new Date('2020-01-01').getTime();
+  fs.utimesSync(oldFile, past / 1000, past / 1000);
+  // onlyId で古いファイルを指定（ファイル名ステム = 'old'）→ mtime に関係なく読める
+  const idx = localIndex(path.join(root, '.claude'), 'old', { sinceMs: Date.now() - 1000 });
+  assert.equal(idx.size, 1, 'onlyId 指定で古いファイルも読める');
+  assert.ok(idx.has('cse_old'));
+  assert.equal(idx.skippedOld, 0, 'onlyId 時は skippedOld に計上されない');
+  assert.equal(idx.indexed, 1);
+});
+
+test('localIndex: 巨大ファイルでも先頭の cwd と末尾の bridge-session が取れる', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-large-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const projects = path.join(root, '.claude', 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  const largeFile = path.join(projects, 'large.jsonl');
+  // 先頭行: cwd 情報
+  const headLine = JSON.stringify({ type: 'user', cwd: 'C:\\head-cwd', message: { content: 'start' } });
+  // 末尾行: bridge-session
+  const tailLine = JSON.stringify({ type: 'bridge-session', bridgeSessionId: 'cse_large' });
+  // 中間に 100KB のパディング（テスト用閾値 5000 bytes より大きい）
+  const padding = 'x'.repeat(100 * 1024);
+  const content = headLine + '\n' + padding + '\n' + tailLine + '\n';
+  fs.writeFileSync(largeFile, content, 'utf8');
+  // テスト用に閾値を小さく（5000 bytes）して largeFileThreshold を超えさせる
+  const idx = localIndex(path.join(root, '.claude'), undefined, { largeFileThreshold: 5000, largeFileHead: 200, largeFileTail: 200 });
+  assert.equal(idx.size, 1, '巨大ファイルからも bridge-session が取れる');
+  assert.ok(idx.has('cse_large'), '末尾の bridge-session ID が取れる');
+  const entry = idx.get('cse_large');
+  assert.equal(entry.cwd, 'C:\\head-cwd', '先頭の cwd が取れる');
+  assert.equal(entry.id, 'large');
+  assert.equal(idx.indexed, 1);
+  assert.ok(typeof idx.indexMs === 'number' && idx.indexMs >= 0);
+});

@@ -410,14 +410,37 @@ export function resolveCodeCli(env = process.env, exists = fs.existsSync) {
   if (!cli) throw Error('code.cmd not found');
   return cli;
 }
-export function localIndex(base, onlyId) {
+export function localIndex(base, onlyId, { sinceMs, largeFileThreshold = 64 * 1024 * 1024, largeFileHead = 8 * 1024 * 1024, largeFileTail = 8 * 1024 * 1024 } = {}) {
   const index = new Map();
   const projects = path.join(base, 'projects');
+  let indexed = 0, skippedOld = 0;
+  const startMs = Date.now();
   for (const dir of fs.readdirSync(projects, { withFileTypes: true })) {
     if (!dir.isDirectory() || dir.name === '_deleted-backup') continue;
     for (const file of fs.readdirSync(path.join(projects, dir.name))) {
       if (!file.endsWith('.jsonl') || (onlyId && file !== `${onlyId}.jsonl`)) continue;
-      const raw = fs.readFileSync(path.join(projects, dir.name, file), 'utf8');
+      const filePath = path.join(projects, dir.name, file);
+      // mtime フィルタ: sinceMs が指定され、onlyId が無い場合、古いファイルは飛ばす
+      if (!onlyId && sinceMs !== undefined) {
+        try {
+          const stat = fs.statSync(filePath);
+          if (stat.mtimeMs < sinceMs) { skippedOld++; continue; }
+        } catch { /* stat 不可なら読む */ }
+      }
+      let raw;
+      const stat = fs.statSync(filePath);
+      if (stat.size > largeFileThreshold) {
+        // 巨大ファイル: 先頭 largeFileHead + 末尾 largeFileTail だけ読む
+        const fd = fs.openSync(filePath, 'r');
+        const bufHead = Buffer.alloc(largeFileHead);
+        const bytesHead = fs.readSync(fd, bufHead, 0, largeFileHead, 0);
+        const bufTail = Buffer.alloc(Math.min(largeFileTail, stat.size));
+        const bytesTail = fs.readSync(fd, bufTail, 0, bufTail.length, Math.max(0, stat.size - bufTail.length));
+        fs.closeSync(fd);
+        raw = bufHead.toString('utf8', 0, bytesHead) + bufTail.toString('utf8', 0, bytesTail);
+      } else {
+        raw = fs.readFileSync(filePath, 'utf8');
+      }
       // Most archived transcripts have no bridge. Avoid parsing gigabytes of tool output.
       if (!raw.includes('"bridge-session"')) continue;
       const lines = raw.split('\n');
@@ -437,14 +460,16 @@ export function localIndex(base, onlyId) {
         seenCwds.add(norm);
         cwds.push(row.cwd);
       }
-      const bytes = Buffer.byteLength(raw);
+      const bytes = stat.size;
       const conversation = bytes > 200 * 1024 || hasConversation(lines.map(parse), bytes);
+      indexed++;
       for (const bridge of bridges) {
         index.set(bridge.bridgeSessionId, { id: file.slice(0, -6), cwd: cwds[0], cwds, hasConversation: conversation });
       }
     }
   }
-  return index;
+  const indexMs = Date.now() - startMs;
+  return Object.assign(index, { indexed, skippedOld, indexMs });
 }
 function closedIds(base) {
   const ledger = readJson(path.join(base, 'closed-sessions.json'), { ids: [] });
@@ -608,8 +633,15 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
     };
     const living = alive();
     writeProgress(base, 'alive', `source=${result.aliveSource}, count=${living.size}`);
-    const locals = localIndex(base), closed = closedIds(base);
-    writeProgress(base, 'index', `local=${locals.size}, closed=${closed.size}`);
+    const indexSinceMs = stateBased
+      ? now() - 72 * 3600 * 1000
+      : Date.parse(since) - 24 * 3600 * 1000;
+    const locals = localIndex(base, undefined, { sinceMs: Number.isFinite(indexSinceMs) ? indexSinceMs : now() - 72 * 3600 * 1000 });
+    const closed = closedIds(base);
+    writeProgress(base, 'index', `local=${locals.size}, closed=${closed.size}, skippedOld=${locals.skippedOld}, indexMs=${locals.indexMs}`);
+    result.indexed = locals.indexed;
+    result.indexSkippedOld = locals.skippedOld;
+    result.indexMs = locals.indexMs;
     const reopenCounts = reopenLoopCounts(base, now);
     const deadline = now() + (stateBased ? 180000 : 60000);
     const get = async url => {

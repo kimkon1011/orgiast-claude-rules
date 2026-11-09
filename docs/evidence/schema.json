@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Evidence Ledger Entry Schema",
+  "description": "検証可能な再現ワークフローの証拠台帳エントリ。各フェーズの入出力・検証結果・判断根拠を構造化して保存する。",
+  "type": "object",
+  "required": ["workflowId", "timestamp", "phase", "component", "verdict"],
+  "properties": {
+    "workflowId": {
+      "type": "string",
+      "description": "ワークフロー実行の一意識別子。wf-YYYYMMDD-<slug>-<seq>",
+      "pattern": "^wf-[0-9]{8}-[a-z0-9-]+-[0-9]{3}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "このフェーズの完了時刻（ISO 8601）"
+    },
+    "phase": {
+      "type": "string",
+      "enum": ["plan", "implement", "verify", "recover"],
+      "description": "ワークフローのフェーズ"
+    },
+    "component": {
+      "type": "string",
+      "enum": ["planner", "worker", "verifier", "recovery"],
+      "description": "実行したコンポーネント"
+    },
+    "input": {
+      "type": "object",
+      "description": "このフェーズへの入力（指示・仕様・コード等）",
+      "properties": {
+        "description": { "type": "string" },
+        "refs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "入力元のファイルパスやURL"
+        },
+        "hash": { "type": "string", "description": "入力のSHA-256ハッシュ（任意）" }
+      }
+    },
+    "output": {
+      "type": "object",
+      "description": "このフェーズの成果物",
+      "properties": {
+        "description": { "type": "string" },
+        "files": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "生成・変更したファイルのパス"
+        },
+        "hash": { "type": "string", "description": "出力のSHA-256ハッシュ（任意）" }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "description": "検証証拠のリスト",
+      "items": {
+        "type": "object",
+        "required": ["type", "description"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["screenshot", "log", "test_result", "diff", "console_output", "har", "video"]
+          },
+          "path": { "type": "string", "description": "証拠ファイルのパス" },
+          "hash": { "type": "string", "description": "証拠ファイルのSHA-256" },
+          "description": { "type": "string", "description": "証拠の説明" }
+        }
+      }
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["pass", "fail", "deferred"],
+      "description": "このフェーズの判定結果"
+    },
+    "error": {
+      "type": "object",
+      "description": "失敗時のエラー情報",
+      "properties": {
+        "message": { "type": "string" },
+        "stack": { "type": "string" },
+        "retryCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "cost": {
+      "type": "object",
+      "description": "コスト計測",
+      "properties": {
+        "tokens": { "type": "integer", "description": "消費トークン数" },
+        "duration_ms": { "type": "integer", "description": "実行時間（ms）" },
+        "api_calls": { "type": "integer", "description": "API呼び出し回数" }
+      }
+    }
+  }
+}

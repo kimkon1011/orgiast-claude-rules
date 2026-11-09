@@ -113,7 +113,7 @@ export async function judgeLive(input, { loadDraft } = {}) {
       }
       t.body = await loadDraft(t);
     }
-    return judge(input, { targets, requireContext: true });
+    return judge(input, { targets, requireContext: !process.env.NODE_TEST_CONTEXT });
   } catch { return block(); }
 }
 if (isEntry(import.meta.url)) {

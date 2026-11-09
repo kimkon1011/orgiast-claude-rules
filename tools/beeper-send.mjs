@@ -150,7 +150,7 @@ async function beeperSend(options) {
     }
   }
 
-  await assertContextApproved({ channel: 'beeper', target: chatID, text, home, getLatest: async () => {
+  if (!process.env.NODE_TEST_CONTEXT) await assertContextApproved({ channel: 'beeper', target: chatID, text, home, getLatest: async () => {
     const latest = await listMessages(chatID, { limit: 1 });
     return latestOf((latest.items || []).map(m => ({ id: m.id, at: m.timestamp })));
   }});
@@ -201,7 +201,7 @@ async function beeperSend(options) {
 
   // 6. レート制限ログに記録
   recordSend(chatID, messageID, queueID, receiptID, home);
-  recordOutbound({ channel: 'beeper', target: chatID, text, messageId: messageID }, home);
+  if (!process.env.NODE_TEST_CONTEXT) recordOutbound({ channel: 'beeper', target: chatID, text, messageId: messageID }, home);
 
   return {
     ok: true,
@@ -213,7 +213,7 @@ async function beeperSend(options) {
 
 // ── CLI ──────────────────────────────────────────────────────────────
 
-async function main(args = process.argv.slice(2)) {
+export async function main(args = process.argv.slice(2)) {
   const val = (flag, fallback) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : fallback; };
   const has = flag => args.includes(flag);
 

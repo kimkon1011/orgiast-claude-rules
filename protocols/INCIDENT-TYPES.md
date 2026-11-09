@@ -27,6 +27,7 @@
 | 配布元URL破損型 | 配布元リポジトリの接続先 URL が壊れ、そのPCだけ main の修正が無言で届かなくなる。fetch は定期処理が古い origin/main へ reset し続けエラーは表に出ない（2026-11-05 PC004） | 各PC の fetch を origin 依存で黙って止める配布経路（bootstrap・fleet-fix-now・.git/config の remote.origin.url を焼く箇所） | access-doctor の origin 自動修復（履歴一致確認後に向け替え・保存ログ）＋ setup-manifest の git-origin check（repo:rules-origin・converge 配布） |
 | 過剰ブロック型 | 内部宛ガードが、社外宛のメールに内部 Cc が混在する通常業務まで止めた（2026-11-09） | `internal_recipient` / `isInternal` / To・Cc・Bcc のいずれか1件で block する Gmail 書き込みガード | 宛先が全員内部のときだけ止め、外部To＋内部Cc・内部のみ・外部のみの回帰テスト |
 | 無音停止見落とし型 | ツール実行中にセッションが終了したケース（プロセスkill・PC再起動など）を自動進行の巡回が検知できず、kimが「進捗どう？」と聞く羽目になった（2026-11-06〜11-09 11回目）。APIエラー経由だけが検出対象だった | `findUnansweredRequest` の呼出元で silent-stop 非対応の箇所（auto-progress-watch.mjs 以外からの呼出） | transcript末尾の未完了tool_use/mtime45分以上を silent-stop として検出（PR #1802）。watchのregisterUnansweredで通知・再開 |
+| 送信前履歴未読型 | 送信前に相手との履歴を読まず、回答済みの質問を再送し、相手の未回答要望を放置した（2026-11-10 C0039） | Gmail・LINE・Discord・Beeper の送信CLIと直接API送信経路。自社送信が受信履歴に残らない経路 | `send-context-check.mjs` の本文ハッシュ＋30分＋最新メッセージID/時刻マーカーを各送信CLIが直前に再検証 |
 
 追記ルール: 型名は構造を表す語にする。症状は1行、日付と出典を付ける。ゲート列が空の行は未完了として扱い、埋まるまで消さない。
 

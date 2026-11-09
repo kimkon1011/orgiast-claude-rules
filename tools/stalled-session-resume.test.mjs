@@ -82,6 +82,26 @@ test('three consecutive timeouts do not abort the night', async t => {
   // 集計行に時間切れが入る（朝の通知: 確認 N件 / … / 時間切れ t / エラー c / …）。
   assert.match(message, /時間切れ 5/); assert.doesNotMatch(message, /連続3件エラー/);
 });
+test('timeout exception in execute does not abort the night', async t => {
+  const f = await fixture(t); let calls = 0, message;
+  f.io.execute = async () => { calls++; throw new Error('timeout'); };
+  f.io.notify = async s => { message = s; };
+  const r = await run(options([], {}), f.io);
+  assert.equal(calls, 5); assert.equal(r.aborted, false);
+  assert.match(message, /時間切れ 5/); assert.doesNotMatch(message, /連続3件エラー/);
+});
+test('timeout exception with various timeout messages all classified as timeout', async t => {
+  const f = await fixture(t, 4); let i = 0, message;
+  const messages = ['timeout', 'timed out', 'ETIMEDOUT', 'aborted due to timeout'];
+  f.io.execute = async () => { const msg = messages[i++]; throw new Error(msg); };
+  f.io.notify = async s => { message = s; };
+  const r = await run(options([], {}), f.io);
+  assert.equal(r.aborted, false);
+  assert.match(message, /時間切れ 4/);
+  assert.doesNotMatch(message, /連続3件エラー/);
+  assert.equal(r.results.every(r => r.outcome === 'timeout'), true);
+});
+
 test('timeout neither adds to nor resets the error streak', async t => {
   const f = await fixture(t); const outcomes = ['error', 'error', 'timeout', 'error', 'progressed']; let i = 0, message;
   f.io.execute = async () => { const outcome = outcomes[i++]; return { outcome, reason: outcome }; };

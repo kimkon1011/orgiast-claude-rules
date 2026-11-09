@@ -27,6 +27,20 @@ test('gateRequired の auto-progress は上限超過後も通し、通常コマ�
   assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: 'node tools/foo.mjs' } }).hookSpecificOutput.permissionDecision, 'deny');
 });
 
+test('gateRequired matches auto-progress with quoted paths', t => {
+  const h = setup('implement', 'claude-opus-5', { toolCalls: 9 });
+  t.after(() => fs.rmSync(h, { recursive: true, force: true }));
+  // 二重引用符
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: 'node "C:/Users/uers/.claude/nightly-repo/tools/auto-progress.mjs" --help' } }), null);
+  // 一重引用符
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: "node 'C:/Users/uers/.claude/nightly-repo/tools/auto-progress.mjs' --help" } }), null);
+  // 引用符なし（既存の動作）
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: 'node C:/Users/uers/.claude/nightly-repo/tools/auto-progress.mjs --help' } }), null);
+  // 複合コマンドは拒否のまま
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: 'node "x/auto-progress.mjs"; rm -rf x' } }).hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(run(h, { tool_name: 'Bash', tool_input: { command: "node 'x/auto-progress.mjs'; rm -rf x" } }).hookSpecificOutput.permissionDecision, 'deny');
+});
+
 test('Codex alive deny points directly to codex-do without unavailable wording',t=>{
   const h=setup('implement','claude-opus-5',{toolCalls:7});
   t.after(()=>fs.rmSync(h,{recursive:true,force:true}));

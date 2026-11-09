@@ -700,6 +700,9 @@ export function isBackendExhausted(output, stderr) {
   const lower = merged.toLowerCase();
   const patterns = ['rate limit', 'rate-limited', 'quota', 'insufficient', 'request too large', 'クールダウン中', 'cooldown'];
   if (patterns.some((p) => lower.includes(p))) return true;
+  // claude-code CLI が OpenRouter のモデルIDを認識できず即死するパターン。
+  // タイムアウト待ち（120秒）をせず即 exhausted で次のバックエンドへ進む。
+  if (/unrecognized_model/i.test(merged)) return true;
   return merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '429') || isHttpStatusCodeLine(line, '413'));
 }
 
@@ -1009,7 +1012,8 @@ function recordDeferred(gate) {
   try {
     const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
-    fs.appendFileSync(ledger, `${JSON.stringify({ t: new Date().toISOString(), provider: 'codex', model: `codex-cli/${selectedLane.slug || 'default'}`, status: 'deferred', reason: gate.reason, retryAt: gate.retryAt, origin, kind: taskKind, launched: false, cwd })}\n`, 'utf8');
+    const fallbackSkipped = noFallback ? 'no_fallback_flag' : resolveFallbackBackends(home).length === 0 ? 'no_backends' : undefined;
+    fs.appendFileSync(ledger, `${JSON.stringify({ t: new Date().toISOString(), provider: 'codex', model: `codex-cli/${selectedLane.slug || 'default'}`, status: 'deferred', reason: gate.reason, retryAt: gate.retryAt, origin, kind: taskKind, launched: false, cwd, ...(fallbackSkipped ? { fallbackSkipped } : {}) })}\n`, 'utf8');
   } catch {}
 }
 // WSL 側の Codex ログインが Windows 側と別アカウントなら揃える（揃えたら古いアカウントの上限待ちも消す）。

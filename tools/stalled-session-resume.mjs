@@ -306,7 +306,12 @@ export async function run(config = options(), io = {}) {
             }
             result = await (io.execute ?? execute)(record, { timeoutMs: config.timeoutMs, resultFile, previous: entry.attempts.slice(-4, -1), wait: overdue ? wait : null });
             if (!['progressed', 'no-progress', 'timeout', 'error', 'no-executor'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
-          } catch (error) { result = { outcome: 'error', reason: String(error.message) }; }
+          } catch (error) {
+            const msg = String(error.message);
+            result = /timeout|timed\s*out|ETIMEDOUT|aborted due to timeout/i.test(msg)
+              ? { outcome: 'timeout', reason: msg }
+              : { outcome: 'error', reason: msg };
+          }
           if (overdue && result.outcome === 'no-executor') result = { ...result, outcome: 'error' };
           if (result.outcome === 'no-executor') {
             // 起動前に消費した試行を戻す(このセッションは何も試されていない)。レーン停止の通知は

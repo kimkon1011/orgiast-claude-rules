@@ -20,7 +20,8 @@ AIニュース提案 X-0016「プレフィックスキャッシュによるKV共
 ```
 outputs/X-0016/
 ├── README.md                 # 本解説（X-0009との関係・差分・検証結果）
-└── memory-metric-analysis.md # KVキャッシュメモリ定量分析（1GiB/16GiB の検算・共有効果の表）
+├── memory-metric-analysis.md # KVキャッシュメモリ定量分析（1GiB/16GiB の検算・共有効果の表）
+└── seo-agent-3step-pricing.md # SEOエージェント価格設定（3ステップ定義・買い手の言葉・外注比較・価格帯）
 ```
 
 本体の設計・実装は X-0009 の `docs/ai-news-x0009-kv-cache-prefix-sharing.md` と

@@ -3,6 +3,8 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { listFiles, inspect } from './session-triage.mjs';
 import { runChild, resolveClaudeExe, localDate } from './auto-session.mjs';
 import { autoSessionExecutor } from './auto-session-executor.mjs';
@@ -10,6 +12,33 @@ import { acquireLock } from './autopilot-tick.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { isEntry } from './is-entry.mjs';
+
+const execFileAsync = promisify(execFile);
+
+// 実行ログ: ~/.claude/logs/stalled-session-sweep.jsonl に1行追記
+async function writeLog(home, entry) {
+  const dir = path.join(home, '.claude', 'logs');
+  await fs.mkdir(dir, { recursive: true });
+  const line = redactSecrets(JSON.stringify(entry)) + '\n';
+  await fs.appendFile(path.join(dir, 'stalled-session-sweep.jsonl'), line, 'utf8');
+}
+
+// Windows: PowerShell でコマンドライン取得。他OS: /proc/<pid>/cmdline。
+// io.processCommandLine で注入可能。
+async function defaultProcessCommandLine(pid) {
+  if (process.platform === 'win32') {
+    try {
+      const { stdout } = await execFileAsync('powershell', [
+        '-NoProfile', '-Command',
+        `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`
+      ], { timeout: 5000 });
+      return (stdout || '').trim();
+    } catch { return ''; }
+  }
+  try {
+    return (await fs.readFile(`/proc/${pid}/cmdline`, 'utf8')).replace(/\0/g, ' ').trim();
+  } catch { return ''; }
+}
 
 function parseLimit(value) {
   if (value === 'all') return Infinity;
@@ -220,12 +249,40 @@ export async function run(config = options(), io = {}) {
     return saves;
   };
   const readonly = config.dryRun || config.list;
-  let lock;
+  const startedAt = new Date(now()).toISOString();
+  let lock, lockInfo;
   if (!readonly) {
     await fs.mkdir(dir, { recursive: true });
     lock = acquireLock(lockFile);
-    if (!lock) return { skipped: 'locked', rows: [], results: [] };
+    if (!lock) {
+      // pid 再利用対策: lock ファイルの pid のコマンドラインを確認する
+      let pid;
+      try { pid = Number(await fs.readFile(lockFile, 'utf8')); } catch { pid = 0; }
+      let cmdline = '', mtime = 0;
+      if (pid > 0) {
+        cmdline = await (io.processCommandLine ?? defaultProcessCommandLine)(pid);
+        try { mtime = (await fs.stat(lockFile)).mtimeMs; } catch { mtime = 0; }
+      }
+      const alive = cmdline.includes('stalled-session-resume');
+      lockInfo = { pid, alive, cmdline: cmdline.slice(0, 80), mtime };
+      if (!alive && (cmdline || (mtime > 0 && now() - mtime > 6 * 3600000))) {
+        // 古い lock とみなして削除し、1回だけ取り直す
+        await fs.unlink(lockFile).catch(() => {});
+        lock = acquireLock(lockFile);
+      }
+      if (!lock) {
+        const logEntry = { ts: startedAt, endedAt: new Date(now()).toISOString(), host: os.hostname(), pid: process.pid, night, mode: config.dryRun ? 'dry' : config.list ? 'list' : 'run', outcome: 'locked', lockOwner: lockInfo };
+        await writeLog(home, logEntry);
+        if (!readonly && !config.dryRun && !config.list) {
+          const msg = redactSecrets(`停滞セッション全件確認: 今晩は未実行（理由: locked by pid ${pid} ${cmdline.slice(0, 80)}）。翌晩に再試行します。`);
+          await (io.notify ?? notifyKim)(msg, { home });
+          process.exitCode = 3;
+        }
+        return { skipped: 'locked', rows: [], results: [], lockOwner: lockInfo };
+      }
+    }
   }
+  let rows = [], results = [], fatal, thrown;
   try {
     const ledger = await readJson(ledgerFile, { version: 1, sessions: {}, nights: {} });
     if (ledger.version !== 1 || !ledger.sessions || !ledger.nights) throw new Error('Invalid resume ledger');
@@ -251,10 +308,9 @@ export async function run(config = options(), io = {}) {
       .sort((a, b) => Number(overdueTitle(b)) - Number(overdueTitle(a))
         || (ledger.sessions[a.sessionId]?.attempts?.at(-1)?.night ?? '').localeCompare(ledger.sessions[b.sessionId]?.attempts?.at(-1)?.night ?? '')
         || b.score - a.score || a.ageDays - b.ageDays);
-    const rows = [], results = [];
+    rows = []; results = [];
     const state = (overdue ? null : ledger.nights[night]) ?? { count: 0, errors: 0, aborted: false };
     if (!readonly && !overdue) { delete state.noExecutor; ledger.nights[night] = state; }
-    let fatal;
     const pending = [...records], running = new Set(), busy = new Set();
     const cwdKeys = new Map();
     for (const record of records) {
@@ -390,8 +446,33 @@ export async function run(config = options(), io = {}) {
       await save(ledger);
     }
     return { rows, results, aborted: state.aborted, ...(state.noExecutor ? { noExecutor: state.noExecutor } : {}) };
-  } finally {
+  } catch (error) { thrown = error; throw error; } finally {
     if (lock) lock();
+    // 実行ログ: 例外で落ちる場合も finally で書く
+    if (!readonly) {
+      const outcome = thrown || fatal ? 'error' : 'ran';
+      const counts = {};
+      for (const r of results) {
+        const key = r.outcome || 'unknown';
+        counts[key] = (counts[key] ?? 0) + 1;
+      }
+      for (const r of rows) {
+        if (r.skip) { counts[`skipped:${r.skip}`] = (counts[`skipped:${r.skip}`] ?? 0) + 1; }
+      }
+      const logEntry = {
+        ts: startedAt, endedAt: new Date(now()).toISOString(), host: os.hostname(), pid: process.pid,
+        night, mode: config.dryRun ? 'dry' : config.list ? 'list' : 'run', outcome, counts,
+        ...(lockInfo ? { reclaimedLock: lockInfo } : {}),
+        ...(fatal || thrown ? { error: redactSecrets(String((thrown?.message ?? thrown) || (fatal?.message ?? fatal))).slice(0, 2000) } : {})
+      };
+      await writeLog(home, logEntry).catch(() => {});
+      if (outcome === 'error' && !config.dryRun && !config.list) {
+        const reason = redactSecrets(String(thrown?.message ?? thrown ?? fatal?.message ?? fatal ?? '')).slice(0, 200);
+        const msg = `停滞セッション全件確認: 今晩は途中で失敗（理由: ${reason}）。翌晩に再試行します。`;
+        await (io.notify ?? notifyKim)(msg, { home }).catch(() => {});
+        process.exitCode = 3;
+      }
+    }
   }
 }
 export async function main(argv = process.argv.slice(2), io = {}) {

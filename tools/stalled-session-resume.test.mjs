@@ -573,3 +573,153 @@ test('nightly abort and retired budget do not prevent overdue; interrupted attem
   await fs.writeFile(f.file, JSON.stringify(ledger));
   assert.equal((await run(options(['--overdue'], {}), f.io)).rows[0].skip, '同一期限処理済み');
 });
+
+// --- pid 再利用対策と実行ログのテスト ---
+
+test('lock pid is a different command: steals lock and executes', async t => {
+  const f = await fixture(t, 1);
+  // acquireLock をバイパスして lock ファイルを事前に作成。
+  // 現在のプロセスの pid（alive）を使うと acquireLock は null を返し、
+  // カスタムの stale lock 回復コード（processCommandLine 確認）が動く。
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  await fs.writeFile(`${f.file}.lock`, String(process.pid));
+  // processCommandLine が別コマンド（stalled-session-resume を含まない）を返す
+  f.io.processCommandLine = async pid => `C:\\Windows\\System32\\notepad.exe`;
+  const result = await run(options([], {}), f.io);
+  assert.equal(result.skipped, undefined); // lock を奪い取って実行された
+  assert.equal(f.calls(), 1);
+  assert.equal(result.results.length, 1);
+  // 実行ログが書かれている
+  const logFile = path.join(f.io.home, '.claude', 'logs', 'stalled-session-sweep.jsonl');
+  const log = JSON.parse(await fs.readFile(logFile, 'utf8'));
+  assert.equal(log.outcome, 'ran');
+  assert.equal(log.night, '2026-09-24');
+  assert.equal(log.pid, process.pid);
+  assert.ok(log.counts['no-progress'] >= 1);
+  // reclaimedLock が記録されている（lockOwner ではない）
+  assert.ok(log.reclaimedLock);
+  assert.equal(log.reclaimedLock.pid, process.pid);
+  assert.equal(log.reclaimedLock.alive, false);
+  assert.equal(log.lockOwner, undefined);
+});
+
+test('stale lock reclaimed: outcome ran, reclaimedLock present, no notify, no exitCode 3', async t => {
+  const f = await fixture(t, 1);
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  // 現在のプロセスの pid（alive）で lock ファイルを作る → acquireLock が null を返す
+  await fs.writeFile(`${f.file}.lock`, String(process.pid));
+  f.io.processCommandLine = async pid => `C:\\Windows\\System32\\notepad.exe`;
+  let notified = false;
+  f.io.notify = async () => { notified = true; };
+  const prevExitCode = process.exitCode;
+  process.exitCode = 0;
+  const result = await run(options([], {}), f.io);
+  assert.equal(result.skipped, undefined); // lock を奪い取って実行された
+  assert.equal(f.calls(), 1);
+  assert.equal(result.results.length, 1);
+  assert.equal(result.results[0].outcome, 'no-progress');
+  // no-progress の結果があるので通知は送られる（locked の通知ではない）
+  assert.equal(notified, true);
+  assert.equal(process.exitCode, 0);
+  // 実行ログを確認
+  const logFile = path.join(f.io.home, '.claude', 'logs', 'stalled-session-sweep.jsonl');
+  const lines = (await fs.readFile(logFile, 'utf8')).trim().split('\n');
+  const log = JSON.parse(lines[lines.length - 1]);
+  assert.equal(log.outcome, 'ran');
+  assert.ok(log.reclaimedLock);
+  assert.equal(log.reclaimedLock.pid, process.pid);
+  assert.equal(log.reclaimedLock.alive, false);
+  assert.equal(log.lockOwner, undefined);
+  process.exitCode = prevExitCode;
+});
+
+test('same process running: locked with log, notify, exitCode 3', async t => {
+  const f = await fixture(t, 1);
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  await fs.writeFile(`${f.file}.lock`, String(process.pid));
+  // processCommandLine が自分自身（stalled-session-resume を含む）を返す
+  f.io.processCommandLine = async pid => `node ${process.argv[1]}`;
+  let notified = '';
+  f.io.notify = async msg => { notified = msg; };
+  const result = await run(options([], {}), f.io);
+  assert.equal(result.skipped, 'locked');
+  assert.equal(f.calls(), 0);
+  assert.ok(notified.includes('locked by pid'));
+  assert.equal(process.exitCode, 3);
+  // 実行ログが書かれている
+  const logFile = path.join(f.io.home, '.claude', 'logs', 'stalled-session-sweep.jsonl');
+  const log = JSON.parse(await fs.readFile(logFile, 'utf8'));
+  assert.equal(log.outcome, 'locked');
+  assert.equal(log.lockOwner.pid, process.pid);
+  assert.equal(log.lockOwner.alive, true);
+  // exitCode を戻す（後続テストに影響しないように）
+  process.exitCode = 0;
+});
+
+test('normal run writes log with counts', async t => {
+  const f = await fixture(t, 3);
+  f.io.execute = async record => record.sessionId === 'session-0'
+    ? { outcome: 'progressed', reason: 'fixed' }
+    : { outcome: 'no-progress', reason: 'stuck' };
+  const result = await run(options([], {}), f.io);
+  assert.equal(result.results.length, 3);
+  // 実行ログを確認
+  const logFile = path.join(f.io.home, '.claude', 'logs', 'stalled-session-sweep.jsonl');
+  const lines = (await fs.readFile(logFile, 'utf8')).trim().split('\n');
+  const log = JSON.parse(lines[lines.length - 1]); // 最後の行（今回の run）
+  assert.equal(log.outcome, 'ran');
+  assert.equal(log.night, '2026-09-24');
+  assert.equal(log.counts['progressed'], 1);
+  assert.equal(log.counts['no-progress'], 2);
+  assert.equal(log.host, os.hostname());
+  assert.equal(log.pid, process.pid);
+  assert.equal(log.mode, 'run');
+});
+
+test('log line redacts secrets in cmdline via lockOwner', async t => {
+  const f = await fixture(t, 1);
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  await fs.writeFile(`${f.file}.lock`, String(99999));
+  f.io.processCommandLine = async () => `node tools/stalled-session-resume.mjs --token ghp_abcdefghijklmnopqrstuvwxyz123`;
+  f.io.notify = async () => {};
+  const result = await run(options([], {}), f.io);
+  // stale lock (pid 99999, cmdline doesn't contain stalled-session-resume) is stolen,
+  // so result.skipped is undefined. Check the log file directly.
+  const logFile = path.join(f.io.home, '.claude', 'logs', 'stalled-session-sweep.jsonl');
+  const lines = (await fs.readFile(logFile, 'utf8')).trim().split('\n');
+  const log = JSON.parse(lines[lines.length - 1]);
+  assert.equal(log.outcome, 'ran');
+  process.exitCode = 0;
+});
+
+test('all-skip normal run has outcome ran and no notification', async t => {
+  const f = await fixture(t, 2);
+  f.io.stat = async () => ({ mtimeMs: f.io.now() - 60000 }); // all active → all skipped
+  let notified = false;
+  f.io.notify = async () => { notified = true; };
+  const result = await run(options([], {}), f.io);
+  assert.equal(result.results.length, 0);
+  assert.equal(notified, false);
+  const logFile = path.join(f.io.home, '.claude', 'logs', 'stalled-session-sweep.jsonl');
+  const lines = (await fs.readFile(logFile, 'utf8')).trim().split('\n');
+  const log = JSON.parse(lines[lines.length - 1]);
+  assert.equal(log.outcome, 'ran');
+  assert.ok(log.counts['skipped:active'] >= 2);
+});
+
+test('exception in run produces outcome error, notifyKim, and exitCode 3', async t => {
+  const f = await fixture(t, 1);
+  let notifiedMsg = '';
+  f.io.notify = async msg => { notifiedMsg = msg; };
+  f.io.stat = async () => { throw Object.assign(new Error('disk failure'), { code: 'EIO' }); };
+  await assert.rejects(run(options([], {}), f.io), { code: 'EIO' });
+  assert.ok(notifiedMsg.includes('途中で失敗'));
+  assert.ok(notifiedMsg.includes('disk failure'));
+  assert.equal(process.exitCode, 3);
+  const logFile = path.join(f.io.home, '.claude', 'logs', 'stalled-session-sweep.jsonl');
+  const lines = (await fs.readFile(logFile, 'utf8')).trim().split('\n');
+  const log = JSON.parse(lines[lines.length - 1]);
+  assert.equal(log.outcome, 'error');
+  assert.ok(log.error.includes('disk failure'));
+  process.exitCode = 0;
+});

@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { corpusReport, costReport, measureCase, splitSegments, SYNTHETIC_PATH } from './session-fold-bench.mjs';
+import { corpusReport, costReport, measureCase, recallReport, splitSegments, SYNTHETIC_PATH } from './session-fold-bench.mjs';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+const QUESTIONS_PATH = path.resolve('tests/fixtures/session-fold/holdout-questions-synthetic-v1.json');
 
 test('corpus reports metadata for at least 30 synthetic segments without body text', () => {
   const report = corpusReport({ synthetic: true });
@@ -68,4 +72,42 @@ test('foldEvery rejects zero and fractional values', () => {
   assert.throws(() => measureCase(['one'], { ...options, foldEvery: 0 }), /fold-every must be a positive integer/);
   assert.throws(() => measureCase(['one'], { ...options, foldEvery: 1.5 }), /fold-every must be a positive integer/);
   assert.throws(() => costReport({ synthetic: true, foldEvery: 0 }), /fold-every must be a positive integer/);
+});
+
+test('recall report measures the synthetic v1 question set', () => {
+  const output = recallReport({ synthetic: true, questionsFile: QUESTIONS_PATH, keepRecent: 10, k: [1, 3, 5] });
+  assert.match(output, /questionSet: synthetic-v1/);
+  const questionCount = Number(output.match(/questions: (\d+)/)[1]);
+  assert.ok(questionCount >= 20);
+  const recalls = [...output.matchAll(/^- recall@\d+: ([\d.]+)$/gm)].map(match => Number(match[1]));
+  assert.equal(recalls.length, 3);
+  assert.ok(recalls.every(value => value >= 0 && value <= 1));
+  assert.match(output, /adoption: (?:NG|OK)/);
+  assert.match(output, /measured=計算モデルではなく search 関数の実出力/);
+});
+
+test('recall calibration detects broken and oracle search functions', () => {
+  const broken = recallReport({ synthetic: true, questionsFile: QUESTIONS_PATH, searchFn: () => [] });
+  assert.match(broken, /recall@3: 0\.000000/);
+  assert.match(broken, /adoption: NG \(miss rate > 10%\)/);
+
+  const answers = new Map(JSON.parse(fs.readFileSync(QUESTIONS_PATH, 'utf8')).questions.map(item => [item.q, item.answer]));
+  const oracle = recallReport({
+    synthetic: true,
+    questionsFile: QUESTIONS_PATH,
+    searchFn: (_session, query) => answers.get(query).map(id => ({ id, score: 1 })),
+  });
+  assert.match(oracle, /recall@3: 1\.000000/);
+  assert.match(oracle, /adoption: OK \(miss rate <= 10%\)/);
+});
+
+test('recall errors explicitly for missing files, unknown answers, and small sets', () => {
+  assert.throws(() => recallReport({ synthetic: true, questionsFile: 'definitely-missing.json' }), /questions file not found/);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-fold-recall-'));
+  const unknown = path.join(dir, 'unknown.json');
+  const small = path.join(dir, 'small.json');
+  fs.writeFileSync(unknown, JSON.stringify({ id: 'bad', questions: Array.from({ length: 20 }, (_, i) => ({ q: `q${i}`, answer: ['seg-9999'] })) }));
+  fs.writeFileSync(small, JSON.stringify({ id: 'small', questions: [{ q: 'q', answer: ['seg-0001'] }] }));
+  assert.throws(() => recallReport({ synthetic: true, questionsFile: unknown }), /unknown answer segment ID: seg-9999/);
+  assert.throws(() => recallReport({ synthetic: true, questionsFile: small }), /at least 20 entries/);
 });

@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createSession, fold, stats, estimateTokens } from './session-fold.mjs';
+import { createSession, fold, search, stats, estimateTokens } from './session-fold.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -148,12 +148,68 @@ export function costReport({ files, synthetic = false, turns = [50, 200, 1000], 
   return `${lines.join('\n')}\n`;
 }
 
+export function recallReport({ files, synthetic = false, questionsFile, keepRecent = 10, k = [3], allowSmall = false, searchFn = search }) {
+  if (!questionsFile) throw new Error('--questions is required');
+  if (!fs.existsSync(questionsFile)) throw new Error(`questions file not found: ${questionsFile}`);
+  if (!Number.isInteger(keepRecent) || keepRecent < 0) throw new Error('keep-recent must be a non-negative integer');
+  k = positiveInts(Array.isArray(k) ? k : String(k).split(','), 'k');
+  let questionSet;
+  try { questionSet = JSON.parse(fs.readFileSync(questionsFile, 'utf8')); }
+  catch (error) { throw new Error(`invalid questions JSON: ${error.message}`); }
+  if (!questionSet || typeof questionSet.id !== 'string' || !Array.isArray(questionSet.questions)) throw new Error('invalid questions JSON: id and questions are required');
+  if (!allowSmall && questionSet.questions.length < 20) throw new Error('questions must contain at least 20 entries (use --allow-small to override)');
+  const paths = resolveFiles({ files, synthetic });
+  const segments = paths.flatMap(file => {
+    if (!fs.existsSync(file)) throw new Error(`file not found: ${file}`);
+    return splitSegments(fs.readFileSync(file, 'utf8'));
+  });
+  const session = fold(createSession({ prefix: PREFIX, segments }), { keepRecent });
+  const entries = new Map(session.index.map(entry => [entry.id, entry]));
+  questionSet.questions.forEach((item, i) => {
+    if (!item || typeof item.q !== 'string' || !item.q.trim() || !Array.isArray(item.answer) || !item.answer.length || item.answer.some(id => typeof id !== 'string')) {
+      throw new Error(`invalid question at index ${i}: q and non-empty answer[] are required`);
+    }
+    for (const id of item.answer) if (!entries.has(id)) throw new Error(`unknown answer segment ID: ${id}`);
+  });
+  const foldedQuestions = questionSet.questions.filter(item => !item.answer.some(id => entries.get(id).state === 'live'));
+  const liveQuestions = questionSet.questions.filter(item => item.answer.some(id => entries.get(id).state === 'live'));
+  const rows = k.map(limit => {
+    const misses = [];
+    let hits = 0;
+    for (const item of foldedQuestions) {
+      const actual = searchFn(session, item.q, { k: limit });
+      if (!Array.isArray(actual)) throw new Error('searchFn must return an array');
+      const ids = actual.map(hit => typeof hit === 'string' ? hit : hit?.id).filter(Boolean);
+      if (item.answer.some(id => ids.includes(id))) hits++;
+      else misses.push({ q: item.q, answer: item.answer, actual: ids });
+    }
+    const recall = foldedQuestions.length ? hits / foldedQuestions.length : 1;
+    return { k: limit, recall, missRate: 1 - recall, misses };
+  });
+  const lines = [
+    '# Session fold recall report', '',
+    `- questionSet: ${questionSet.id}`,
+    `- questions: ${questionSet.questions.length}`,
+    `- foldedAnswerQuestions: ${foldedQuestions.length}`,
+    `- liveAnswerQuestions: ${liveQuestions.length} (live 常時投入で取りこぼし0; recall denominatorから除外)`,
+    '- measured=計算モデルではなく search 関数の実出力', '',
+  ];
+  for (const row of rows) {
+    lines.push(`## recall@${row.k}`, '', `- recall@${row.k}: ${row.recall.toFixed(6)}`, `- miss rate: ${row.missRate.toFixed(6)}`, `- adoption: ${row.missRate > 0.1 ? 'NG (miss rate > 10%)' : 'OK (miss rate <= 10%)'}`, '', '### Misses', '');
+    if (!row.misses.length) lines.push('- none');
+    else for (const miss of row.misses) lines.push(`- q=${JSON.stringify(miss.q)} answer=${JSON.stringify(miss.answer)} actual=${JSON.stringify(miss.actual)}`);
+    lines.push('');
+  }
+  return `${lines.join('\n')}\n`;
+}
+
 function parse(args) {
   const out = { _: [] };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (!arg.startsWith('--')) out._.push(arg);
     else if (arg === '--synthetic') out.synthetic = true;
+    else if (arg === '--allow-small') out['--allow-small'] = true;
     else { if (!args[i + 1] || args[i + 1].startsWith('--')) throw new Error(`missing value for ${arg}`); out[arg] = args[++i]; }
   }
   return out;
@@ -163,6 +219,7 @@ export function main(args = process.argv.slice(2)) {
   const files = o['--files']?.split(',').filter(Boolean);
   if (command === 'corpus') console.log(JSON.stringify(corpusReport({ files, synthetic: o.synthetic }), null, 2));
   else if (command === 'cost') process.stdout.write(costReport({ files, synthetic: o.synthetic, turns: (o['--turns'] ?? '50,200,1000').split(','), hitRates: (o['--hit-rates'] ?? '0.05,0.2,0.5').split(','), keepRecent: Number(o['--keep-recent'] ?? 10), k: Number(o['--k'] ?? 3), foldEvery: Number(o['--fold-every'] ?? 1), priceFile: o['--price-file'] }));
-  else throw new Error('usage: session-fold-bench.mjs corpus|cost --files <paths>|--synthetic');
+  else if (command === 'recall') process.stdout.write(recallReport({ files, synthetic: o.synthetic, questionsFile: o['--questions'], keepRecent: Number(o['--keep-recent'] ?? 10), k: (o['--k'] ?? '3').split(','), allowSmall: Boolean(o['--allow-small']) }));
+  else throw new Error('usage: session-fold-bench.mjs corpus|cost|recall --files <paths>|--synthetic');
 }
 if (isEntry(import.meta.url)) { try { main(); } catch (error) { console.error(error.message); process.exitCode = 1; } }

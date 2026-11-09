@@ -50,7 +50,7 @@ export async function fetchHistory(channel, target, { home = process.env.ORGIAST
 export function parseVerdict(raw) { const m=String(raw).match(/\{[\s\S]*\}/); if(!m) throw new Error('LLM判定がJSONではありません'); const j=JSON.parse(m[0]); return { ok:j.verdict==='OK', reason:String(j.reason||''), warnings:Array.isArray(j.warnings)?j.warnings:[] }; }
 export function runLlm(history, text, { spawn = spawnSync } = {}) {
   const prompt = `次の宛先履歴と送信予定本文を検査し、JSONだけを返す。形式: {"verdict":"OK|NG","reason":"理由","warnings":["警告"]}。①回答済み質問の聞き直し ②相手の未回答質問・要望への未回答 ③日付・金額・数量・手配状況・呼び方の食い違い ④自社既送信との重複・矛盾、のどれかがあればNG。\n履歴:\n${JSON.stringify(history)}\n送信予定:\n${text}`;
-  const tool = path.join(path.dirname(fileURLToPath(import.meta.url)), 'llm-ask.mjs'); const r=spawn(process.execPath,[tool,'--provider','gemini','--category','classification','--max','800','--no-persist',prompt],{encoding:'utf8'});
+  const tool = path.join(path.dirname(fileURLToPath(import.meta.url)), 'llm-ask.mjs'); const r=spawn(process.execPath,[tool,'--provider','gemini','--category','classification','--max','800','--no-persist',prompt],{encoding:'utf8',windowsHide:true});
   if(r.status!==0) throw new Error(`安価LLM判定失敗: ${r.stderr||r.stdout}`); return parseVerdict(r.stdout);
 }
 

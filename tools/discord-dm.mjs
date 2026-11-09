@@ -77,7 +77,7 @@ export async function sendDiscordDm(target, body, options = {}) {
     if (!dm.ok) throw new Error(`DMチャンネル作成が HTTP ${dm.status}`);
     const channelId = (await dm.json()).id;
     if (!channelId) throw new Error('DMチャンネルIDを取得できません');
-    await assertContextApproved({ channel: 'discord', target: channelId, text: body, home, getLatest: async () => {
+    await (options.assertContextApproved ?? assertContextApproved)({ channel: 'discord', target: channelId, text: body, home, getLatest: async () => {
       const history = await fetchImpl(`${API}/channels/${channelId}/messages?limit=1`, { headers });
       if (!history.ok) throw new Error(`Discord 履歴取得が HTTP ${history.status}`);
       return latestOf((await history.json()).map(m => ({ id: m.id, at: m.timestamp })));

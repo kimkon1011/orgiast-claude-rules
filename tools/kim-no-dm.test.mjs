@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { deliverKim, KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 import { notifyOwner } from './notify-owner.mjs';
-import { sendDiscordDm } from './discord-dm.mjs';
+import { sendDiscordDm as realSendDiscordDm } from './discord-dm.mjs';
+const sendDiscordDm = (target, body, options={}) => realSendDiscordDm(target, body, { assertContextApproved: async () => ({ reason:'test' }), ...options });
 import { listItems } from './kim-inbox.mjs';
 
 function home(t) {

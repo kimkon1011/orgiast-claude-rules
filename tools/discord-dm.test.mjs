@@ -10,7 +10,10 @@ fs.writeFileSync(path.join(home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=k
 test.after(() => fs.rmSync(home, { recursive: true, force: true }));
 import { fileURLToPath } from 'node:url';
 import { makeIndex } from './onboarding-sync.mjs';
-import { main, REPLY_TO_KIM_FOOTER, sendDiscordDm } from './discord-dm.mjs';
+import { main as realMain, REPLY_TO_KIM_FOOTER, sendDiscordDm as realSendDiscordDm } from './discord-dm.mjs';
+const contextApproved = async () => ({ reason: 'test' });
+const sendDiscordDm = (target, body, options={}) => realSendDiscordDm(target, body, { assertContextApproved: contextApproved, ...options });
+const main = (args, options={}) => realMain(args, { assertContextApproved: contextApproved, ...options });
 
 const withFooter = text => `${text}\n\n${REPLY_TO_KIM_FOOTER}`;
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { latestWaitDeadline, waitPrefix } from './session-wait-title.mjs';
 import path from 'node:path';
 import os from 'node:os';
 import readline from 'node:readline';
@@ -62,7 +63,7 @@ export async function collectSessions({ home = os.homedir(), now = Date.now() } 
       if (!e.isFile() || !e.name.endsWith('.jsonl') || e.name.startsWith('agent-')) continue;
       const id = path.basename(e.name, '.jsonl');
       const stat = fs.statSync(file);
-      if (closed.has(id) || now - stat.mtimeMs > 7 * DAY || !stat.size) continue;
+      if (now - stat.mtimeMs > 7 * DAY || !stat.size) continue;
       if (!found.has(id) || found.get(id).mtimeMs < stat.mtimeMs) found.set(id, { path: file, size: stat.size, mtimeMs: stat.mtimeMs });
     }
   }
@@ -72,8 +73,10 @@ export async function collectSessions({ home = os.homedir(), now = Date.now() } 
   for (const [sessionId, file] of found) {
     const current = await latest(file.path, home);
     if (!current.seen) continue;
-    const name = current.title || short(current.request, 100);
-    if (name.includes('【閉じて可】') || /このセッション[：:]\s*【閉じて可】/.test(current.assistant.slice(-500))) continue;
+    const deadline = latestWaitDeadline(current.assistant);
+    if (closed.has(sessionId) && !deadline) continue;
+    const name = deadline ? `${waitPrefix(deadline)}${titleName(current.title) || short(current.request, 100)}` : current.title || short(current.request, 100);
+    if (!deadline && (name.includes('【閉じて可】') || /このセッション[：:]\s*【閉じて可】/.test(current.assistant.slice(-500)))) continue;
     if (current.unattended || unattendedText(name)) { unattendedCount++; continue; }
     if (!current.request) continue;
     result.push({ sessionId, name: titleName(name) || '名称未設定', request: short(current.request, 60), reason: waitingReason(name, current.assistant, current.lastRole), deadline: name.match(/【(\d{2}\/\d{2}\/\d{2}:\d{2})まで】/)?.[1] ?? 'なし', mtimeMs: file.mtimeMs });

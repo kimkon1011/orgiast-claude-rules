@@ -105,8 +105,8 @@ test('添付は multipart/mixed、RFC 2047 ファイル名、推定 MIME type �
   assert.match(decoded, /JVBERg==/u);
 });
 
-test('内部ドメイン・個人 Gmail・Cc を既存の内部判定でブロック', () => {
-  for (const fields of [{ to: 'STAFF@ORGIAST.JP' }, { to: 'staff@toho-kogyo.com' }, { to: 'staff@gmail.com' }, { cc: 'staff@orgiast.jp' }]) {
+test('宛先が全員内部のときだけブロック', () => {
+  for (const fields of [{ to: 'STAFF@ORGIAST.JP' }, { to: 'staff@toho-kogyo.com' }, { to: 'staff@gmail.com' }, { to: 'staff@orgiast.jp', cc: 'staff@gmail.com' }]) {
     const result = guardRecipients({ ...input, ...fields }, ledger);
     assert.equal(result.blocked, true);
     assert.ok(result.internal.length);
@@ -114,6 +114,9 @@ test('内部ドメイン・個人 Gmail・Cc を既存の内部判定でブロ�
     assert.ok(result.chatDisplay.includes(input.body));
   }
   assert.deepEqual(guardRecipients(input, ledger), { blocked: false, internal: [] });
+  assert.equal(guardRecipients({ ...input, cc: 'staff@orgiast.jp' }, ledger).blocked, false);
+  assert.equal(guardRecipients({ ...input, to: 'staff@orgiast.jp', cc: 'staff@gmail.com' }, ledger).blocked, true);
+  assert.equal(guardRecipients({ ...input, to: 'customer@example.com', cc: undefined }, ledger).blocked, false);
   assert.equal(renderChatDisplay(input), `宛先：${input.to}\n用件：${input.subject}\n本文：\n${input.body}`);
 });
 
@@ -161,7 +164,7 @@ test('下書き POST の URL・認証・raw・戻り値', async () => {
 
 test('CLI の内部宛は通常・dry-run・JSON すべて認証も fetch もゼロ', async () => {
   for (const flags of [[], ['--dry-run'], ['--json'], ['--json', '--dry-run']]) {
-    const result = await cli([...args, '--cc', 'staff@gmail.com', ...flags]);
+    const result = await cli(['--to', 'staff@orgiast.jp', '--cc', 'staff@gmail.com', '--subject', input.subject, '--body', input.body, ...flags]);
     assert.equal(result.code, 3);
     assert.equal(result.calls, 0);
     assert.equal(result.tokens, 0);
@@ -170,7 +173,7 @@ test('CLI の内部宛は通常・dry-run・JSON すべて認証も fetch もゼ
       const report = JSON.parse(result.output[0]);
       assert.equal(report.action, 'chat-display');
       assert.equal(report.user, DEFAULT_USER);
-      assert.deepEqual(report.internal, ['staff@gmail.com']);
+      assert.deepEqual(report.internal, ['staff@orgiast.jp', 'staff@gmail.com']);
       assert.ok(report.chatDisplay.includes(input.body));
     } else assert.ok(result.output[0].includes(input.body));
   }
@@ -380,8 +383,8 @@ test('返信ヘッダと threadId を作成 API に渡す・注入を拒否す�
     assert.equal(bad.calls + bad.tokens, 0);
   }
 });
-const draftHeaders = extra => ({ message: { payload: { headers: [
-  { name: 'To', value: 'Customer <customer@example.com>' }, { name: 'Subject', value: '確認' }, ...extra,
+const draftHeaders = (extra, to = 'Customer <customer@example.com>') => ({ message: { payload: { headers: [
+  { name: 'To', value: to }, { name: 'Subject', value: '確認' }, ...extra,
 ] } } });
 test('整合性 block は送信せず、ack 理由がある時だけ ledger に残して送る', async () => {
   const blocked = await cli(['--send','draft','--json'], { inspectDraft: async()=>({ok:false,findings:[{severity:'block'}],llm:{}}), getToken:async()=> 't', fetchImpl:async()=>response(draftHeaders([])) });
@@ -433,13 +436,22 @@ test('送信前に To/Cc/Bcc の内部宛を拒否する（表示名・大小文
     for (const value of ['Staff <STAFF@ORGIAST.JP>', 'staff@gmail.com']) {
       let calls = 0;
       const result = await cli(['--send', 'draft', '--json'], { getToken: async () => 't', fetchImpl: async () => {
-        calls++; return response(draftHeaders([{ name, value }]));
+        calls++; return response(draftHeaders([{ name, value }], name.toLowerCase() === 'to' ? value : 'staff@orgiast.jp'));
       } });
       assert.equal(result.code, 3);
       assert.equal(calls, 1);
       assert.equal(JSON.parse(result.output[0]).errorKind, 'internal_recipient');
     }
   }
+});
+test('送信前の再検査は外部 To + 内部 Cc を許可する', async () => {
+  let calls = 0;
+  const result = await cli(['--send', 'draft', '--json'], { getToken: async () => 't', fetchImpl: async () => {
+    calls++;
+    return calls === 1 ? response(draftHeaders([{ name: 'Cc', value: 'staff@orgiast.jp' }])) : response({ id: 'sent', threadId: 'thread' });
+  } });
+  assert.equal(result.code, 0);
+  assert.equal(calls, 2);
 });
 test('X-Orgiast-Forward 付き下書きだけ内部宛へ送信できる', async () => {
   let calls = 0;

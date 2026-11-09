@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { resumeSession, legacyAddCheckMigrationRows, formatDoneLine, formatDoneMessage, formatDoneBacklogMessages, gatherEvidence, deterministicVerdict, judge, evidenceSummary, logDoneDm, run as runWatch } from './auto-progress-watch.mjs';
+import { summarizeEvidence, resumeSession, legacyAddCheckMigrationRows, formatDoneLine, formatDoneMessage, formatDoneBacklogMessages, gatherEvidence, deterministicVerdict, judge, evidenceSummary, logDoneDm, run as runWatch } from './auto-progress-watch.mjs';
 import { cleanupOldLedgerTemps, ledgerFile, readLedger, writeLedger } from './auto-progress-ledger.mjs';
 import { listItems } from './kim-inbox.mjs';
 
@@ -508,4 +508,49 @@ test('再開指示は取り消せる作業を先に済ませ、支払い等だ�
   assert.match(prompt, /推測で目的を広げず/);
   assert.match(prompt, /権限や確認待ちを迂回しない/);
   assert.doesNotMatch(prompt, /判断材料を揃えて止まり/);
+});
+
+
+test('summarizeEvidence: 作業ログを除き、2文・160字以内にする', () => {
+  assert.equal(summarizeEvidence('needs_user: [CLAIM-EVIDENCE: idx763 drive-read.mjs] jsonl idx763 drive-read.mjs（DWD） aria-required="true" 案内を準備しました。宛先も確認しました。送信は承認後です。'), '宛先も確認しました。送信は承認後です。');
+  assert.equal(summarizeEvidence('blocked: ' + '準備'.repeat(120)).length, 160);
+  assert.equal(summarizeEvidence(null), '取り消せる準備は済んでいます');
+  assert.equal(summarizeEvidence('needs_user: report.jsonl config.json /tmp/check.mjs aria-label idx12 準備済み。'), '準備済み。');
+});
+
+test('判断待ち通知: 長い作業ログより先に具体的な返事を示し、成果物URLを末尾に残す', async t => {
+  const home = progressHome('judgment-summary-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const now = Date.parse('2026-11-09T03:00:00Z');
+  const reason = 'needs_user: [CLAIM-EVIDENCE: idx763 検証完了] drive-read.mjs report.jsonl aria-required="true" idx763 案内文を準備しました。宛先の確認も完了しました。' + '詳細な作業ログ。'.repeat(50);
+  assert.ok(reason.length >= 400);
+  writeLedger(ledgerFile(home), [{ sessionId: 'judgment', status: 'waiting_user', owner: 'cr@orgiast.jp', nextKim: '62社への案内送信にOKと返信してください', promise: '案内を送る', label: '62社への案内', reason, artifact: 'https://example.com/draft', ts: new Date(now - 3 * 3600000).toISOString() }]);
+  const sent = [];
+  await run({ home, now, io: { localOwner: 'cr@orgiast.jp', sheetConfig: () => null, digest: async () => ({}), notifyOwner: async (_owner, text) => { sent.push(text); return { delivered: 'dm' }; } } });
+  assert.equal(sent.length, 1);
+  const lines = sent[0].split('\n');
+  assert.equal(lines[1], '自動進行が判断待ちです: 62社への案内');
+  assert.equal(lines[2], 'あなたの返事待ち: 62社への案内送信にOKと返信してください');
+  assert.equal(lines[3], '準備済み: 案内文を準備しました。宛先の確認も完了しました。');
+  assert.equal(lines.at(-1), '成果物: https://example.com/draft');
+  assert.doesNotMatch(sent[0], /idx763|drive-read\.mjs|CLAIM-EVIDENCE|aria-required/);
+});
+
+
+test('summarizeEvidence: 実際の判断待ち通知に内部語や識別子を残さない', () => {
+  const evidence = fs.readFileSync(new URL('./fixtures-needs-user-real-evidence.txt', import.meta.url), 'utf8');
+  const summary = summarizeEvidence(evidence);
+  assert.ok(summary.length > 0);
+  assert.ok(summary.length <= 160);
+  assert.doesNotMatch(summary, /[A-Za-z]{3,}/);
+  assert.doesNotMatch(summary, /[0-9a-f]{8}/i);
+  assert.equal(summary, '承認返事は未着。取り消せる準備を全て完了');
+});
+
+test('summarizeEvidence: 文と節を選別し、括弧や手順列挙を残さない', () => {
+  assert.equal(summarizeEvidence('準備済み（内部(JSON 実測)説明）。docId abc12345 を確認、宛先も確認済み。送信待ち。'), '準備済み。宛先も確認済み。');
+  assert.equal(summarizeEvidence('準備済み。（１）内部の手順。'), '準備済み。');
+  for (const evidence of ['JSON を確認。', '番号12345678を確認。', '宛先 a@b を確認。', '（説明）', '']) {
+    assert.equal(summarizeEvidence(evidence), '取り消せる準備は済んでいます');
+  }
 });

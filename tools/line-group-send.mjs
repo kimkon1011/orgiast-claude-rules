@@ -81,13 +81,46 @@ export async function loadSecrets({ env = process.env, home = homedir() } = {}) 
 
 const sbHeaders = (s) => ({ apikey: s.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${s.SUPABASE_SERVICE_ROLE_KEY}` });
 
+export function normalizeGroupName(name) {
+  return name.normalize('NFKC')
+    .replace(/[×✕✖xX]/g, '×')
+    .replace(/[ \u3000]/g, '');
+}
+
+const groupNameFromSubject = (subject) => subject.replace(/^LINE:\s*/, '');
+
 export async function resolveGroup(s, group) {
   if (/^C[0-9a-f]{32}$/.test(group)) return group;
   if (!s.SUPABASE_URL) throw new Error('グループ名から ID を引くには SUPABASE_URL が必要。groupId（C で始まる33文字）で指定してください');
   const url = `${s.SUPABASE_URL}/rest/v1/channel_messages?select=external_thread_id,subject&channel=eq.line&subject=eq.${encodeURIComponent(`LINE: ${group}`)}&order=created_at.desc&limit=1`;
   const rows = await (await fetch(url, { headers: sbHeaders(s) })).json();
-  if (!Array.isArray(rows) || !rows[0]) throw new Error(`グループ「${group}」が受信記録（channel_messages）に無い。bot が未参加か名前違い`);
-  return rows[0].external_thread_id;
+  if (Array.isArray(rows) && rows[0]) {
+    console.error(`グループ名を『${groupNameFromSubject(rows[0].subject)}』に解決しました`);
+    return rows[0].external_thread_id;
+  }
+
+  const listUrl = `${s.SUPABASE_URL}/rest/v1/channel_messages?select=external_thread_id,subject&channel=eq.line&order=created_at.desc&limit=500`;
+  const recent = await (await fetch(listUrl, { headers: sbHeaders(s) })).json();
+  const unique = Array.isArray(recent)
+    ? [...new Map(recent.filter((row) => row.subject && row.external_thread_id)
+      .map((row) => [row.subject, row])).values()]
+    : [];
+  const wanted = normalizeGroupName(group);
+  const matched = unique.find((row) => normalizeGroupName(groupNameFromSubject(row.subject)) === wanted);
+  if (matched) {
+    console.error(`グループ名を『${groupNameFromSubject(matched.subject)}』に解決しました`);
+    return matched.external_thread_id;
+  }
+
+  const suggestions = unique
+    .filter((row) => {
+      const candidate = normalizeGroupName(groupNameFromSubject(row.subject));
+      return candidate.includes(wanted) || wanted.includes(candidate);
+    })
+    .slice(0, 5)
+    .map((row) => groupNameFromSubject(row.subject));
+  const hint = suggestions.length ? `\nもしかして: ${suggestions.join('、')}` : '';
+  throw new Error(`グループ「${group}」が受信記録（channel_messages）に無い。bot が未参加か名前違い${hint}`);
 }
 
 async function uploadImage(s, file) {

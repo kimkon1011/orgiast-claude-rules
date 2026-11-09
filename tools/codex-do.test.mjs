@@ -1220,6 +1220,12 @@ test('isBackendExhausted は 429/413 がファイル行番号(コロン隣接)�
   assert.equal(isBackendExhausted('src/CaseList.js:413:function foo()', ''), false);
 });
 
+test('isBackendExhausted は unrecognized_model で true を返す（cheap-code:deepseek の即死パターン）', () => {
+  assert.equal(isBackendExhausted('', '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}'), true);
+  assert.equal(isBackendExhausted('', 'unrecognized_model'), true);
+  assert.equal(isBackendExhausted('', 'Unrecognized_Model'), true);
+});
+
 test('loadEnvKey は process.env を最優先し、ファイルの export VAR="..." 形式も読める', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'export OPENROUTER_API_KEY="sk-or-file"\n' });
   const prev = process.env.OPENROUTER_API_KEY;
@@ -1840,6 +1846,10 @@ test('A: cooldown 中でも代替バックエンドがあれば deferred にせ�
   });
   assert.equal(strict.status, 75, strict.stderr);
   assert.equal(lastJson(strict.stdout).reason, 'codex_cooldown');
+  // deferred 行に fallbackSkipped が記録されていることを確認
+  const deferredRow = readLedger(home).at(-1);
+  assert.equal(deferredRow.status, 'deferred');
+  assert.equal(deferredRow.fallbackSkipped, 'no_fallback_flag');
 });
 
 test('A: 解析できない上限メッセージは24時間後を既定にしつつ writer が5時間へ丸める', (t) => {
@@ -1851,6 +1861,20 @@ test('A: 解析できない上限メッセージは24時間後を既定にしつ
   const cooldown = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-cooldown.json'), 'utf8'));
   assert.equal(cooldown.reason, 'usage_limit:capped');
   assert.ok(Math.abs(cooldown.until - (Date.now() + 5 * 3600 * 1000)) < 120000, '24時間既定も5時間へ丸める');
+});
+
+test('A: cooldown 中で代替バックエンドが無い場合、deferred 行に fallbackSkipped=no_backends が記録される', (t) => {
+  const home = tmpHome(t, 'codex-cooldown-no-backends');
+  fs.writeFileSync(path.join(home, '.claude', 'codex-cooldown.json'), JSON.stringify({ until: Date.now() + 4 * 86400000, reason: 'usage_limit', t: Date.now() }));
+  // recheck を抑制する（cooldown が 5h を超えると recheck=true になり cooldown をバイパスするため）
+  fs.writeFileSync(path.join(home, '.claude', 'codex-cooldown-recheck.json'), JSON.stringify({ at: Date.now() }));
+  // API キーを設定しない → resolveFallbackBackends が空
+  const result = run(['--force-native', '--cwd', home, '--kind', 'implement', '指示内容'], { home });
+  assert.equal(result.status, 75, result.stderr);
+  assert.equal(lastJson(result.stdout).reason, 'codex_cooldown');
+  const deferredRow = readLedger(home).at(-1);
+  assert.equal(deferredRow.status, 'deferred');
+  assert.equal(deferredRow.fallbackSkipped, 'no_backends');
 });
 
 test('A: cooldown が過去なら通常どおり Codex を起動する', (t) => {

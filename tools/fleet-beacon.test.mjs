@@ -23,7 +23,7 @@ test('knowledge beacon measures the actual delivered index',t=>{
  assert.equal(step.status,'ok');assert.equal(step.reason,'00_INDEX.md 6 bytes');
 });
 
-import { buildInstallBeacon, sendInstallBeacon, main, INSTALL_BEACON_URL } from './fleet-beacon.mjs';
+import { buildInstallBeacon, sendInstallBeacon, fetchBeacons, main, INSTALL_BEACON_URL } from './fleet-beacon.mjs';
 
 test('install beacon: fixed fields, account from home, no token, absent serial omitted', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'install-beacon-'));
@@ -78,5 +78,146 @@ test('install beacon CLI: one JSON line and proper exit code; environment URL ov
   } finally {
     if (old === undefined) delete process.env.FLEET_INSTALL_BEACON_URL;
     else process.env.FLEET_INSTALL_BEACON_URL = old;
+  }
+});
+
+test('fetchBeacons: retries once on timeout, succeeds on second attempt', async () => {
+  let attempts = 0;
+  const fetchImpl = async () => {
+    attempts++;
+    if (attempts === 1) throw new TypeError('The operation was aborted due to timeout');
+    return { ok: true, json: async () => ({ ok: true, beacons: [{ label: 'pc-1', steps: [], failing: [] }] }) };
+  };
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-retry-ok-'));
+  try {
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.com\nFLEET_SHEET_TOKEN=abc\n', 'utf8');
+    const result = await fetchBeacons({ home, fetchImpl, retries: 1 });
+    assert.equal(result.ok, true);
+    assert.equal(attempts, 2);
+    assert.equal(result.beacons.length, 1);
+    assert.equal(result.beacons[0].label, 'pc-1');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('fetchBeacons: both attempts timeout returns ok=false', async () => {
+  let attempts = 0;
+  const fetchImpl = async () => {
+    attempts++;
+    throw new TypeError('The operation was aborted due to timeout');
+  };
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-retry-fail-'));
+  try {
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.com\nFLEET_SHEET_TOKEN=abc\n', 'utf8');
+    const result = await fetchBeacons({ home, fetchImpl, retries: 1 });
+    assert.equal(result.ok, false);
+    assert.equal(attempts, 2);
+    assert.ok(result.reason);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('fetchBeacons: retries=0 (default) does not retry on timeout', async () => {
+  let attempts = 0;
+  const fetchImpl = async () => {
+    attempts++;
+    throw new TypeError('The operation was aborted due to timeout');
+  };
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-noretry-'));
+  try {
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.com\nFLEET_SHEET_TOKEN=abc\n', 'utf8');
+    const result = await fetchBeacons({ home, fetchImpl });
+    assert.equal(result.ok, false);
+    assert.equal(attempts, 1);
+    assert.ok(result.reason);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('fetchBeacons: HTTP 500 does not retry', async () => {
+  let attempts = 0;
+  const fetchImpl = async () => {
+    attempts++;
+    return { ok: false, status: 500 };
+  };
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-http-'));
+  try {
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.com\nFLEET_SHEET_TOKEN=abc\n', 'utf8');
+    const result = await fetchBeacons({ home, fetchImpl });
+    assert.equal(result.ok, false);
+    assert.equal(attempts, 1);
+    assert.match(result.reason, /HTTP 500/);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('fetchBeacons: retries=1 retryDelayMs=0, 1st busy → 2nd success returns ok=true attempts=2', async () => {
+  let attempts = 0;
+  const fetchImpl = async () => {
+    attempts++;
+    if (attempts === 1) return { ok: true, json: async () => ({ ok: false, error: 'busy' }) };
+    return { ok: true, json: async () => ({ ok: true, beacons: [{ label: 'pc-1', steps: [], failing: [] }] }) };
+  };
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-busy-ok-'));
+  try {
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.com\nFLEET_SHEET_TOKEN=abc\n', 'utf8');
+    const result = await fetchBeacons({ home, fetchImpl, retries: 1, retryDelayMs: 0 });
+    assert.equal(result.ok, true);
+    assert.equal(attempts, 2);
+    assert.equal(result.beacons.length, 1);
+    assert.equal(result.beacons[0].label, 'pc-1');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('fetchBeacons: retries=0, busy response returns ok=false with reason=busy, attempts=1', async () => {
+  let attempts = 0;
+  const fetchImpl = async () => {
+    attempts++;
+    return { ok: true, json: async () => ({ ok: false, error: 'busy' }) };
+  };
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-busy-noretry-'));
+  try {
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.com\nFLEET_SHEET_TOKEN=abc\n', 'utf8');
+    const result = await fetchBeacons({ home, fetchImpl, retries: 0 });
+    assert.equal(result.ok, false);
+    assert.equal(attempts, 1);
+    assert.match(result.reason, /busy/i);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('fetchBeacons: non-busy error response (error:denied) does NOT retry even with retries>0', async () => {
+  let attempts = 0;
+  const fetchImpl = async () => {
+    attempts++;
+    return { ok: true, json: async () => ({ ok: false, error: 'denied' }) };
+  };
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-denied-'));
+  try {
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.com\nFLEET_SHEET_TOKEN=abc\n', 'utf8');
+    const result = await fetchBeacons({ home, fetchImpl, retries: 2 });
+    assert.equal(result.ok, false);
+    assert.equal(attempts, 1);
+    assert.match(result.reason, /denied/);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('fetchBeacons: FLEET_BEACON_FETCH_TIMEOUT_MS env var is respected', async () => {
+  const old = process.env.FLEET_BEACON_FETCH_TIMEOUT_MS;
+  process.env.FLEET_BEACON_FETCH_TIMEOUT_MS = '99999';
+  try {
+    const fetchImpl = async () => ({ ok: true, json: async () => ({ ok: true, beacons: [] }) });
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-env-'));
+    try {
+      fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+      fs.writeFileSync(path.join(home, '.claude', 'fleet-sheet.env'), 'FLEET_SHEET_URL=https://example.com\nFLEET_SHEET_TOKEN=abc\n', 'utf8');
+      const result = await fetchBeacons({ home, fetchImpl });
+      assert.equal(result.ok, true);
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  } finally {
+    if (old === undefined) delete process.env.FLEET_BEACON_FETCH_TIMEOUT_MS;
+    else process.env.FLEET_BEACON_FETCH_TIMEOUT_MS = old;
   }
 });

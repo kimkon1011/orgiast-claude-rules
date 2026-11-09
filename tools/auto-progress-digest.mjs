@@ -253,7 +253,8 @@ export function formatDigest(rows, now = Date.now(), label = '', {
     // 4. 進行中（並びは最終判定が新しい順）
     for (const row of inProgressSorted) {
       const what = cleanText(row.label || row.promise || '約束した作業', row);
-      lines.push(itemLine(`・進行中: ${projectOf(row)}`, what));
+      const state = cleanText(String(row.checkText || '').trim().split(/\r?\n/).at(-1) || row.reason || '状態未確認', row);
+      lines.push(itemLine(`・進行中: ${projectOf(row)}`, what, ` — ${brief(state, 40)}`));
     }
     const totalProg = Math.max(inProgress, inProgressSorted.length);
     if (inProgressSorted.length === 0 && inProgress > 0) {

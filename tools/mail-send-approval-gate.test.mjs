@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { judge, APPROVAL_MISSING_REASON, BODY_NOT_SHOWN_REASON } from './mail-send-approval-gate.mjs';
+import { bodyHash } from './lib/send-approval.mjs';
 
 function createFixture() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mail-gate-test-'));
@@ -126,6 +127,35 @@ test('notifications do not exempt another send in the same shell', async () => {
 });
 test('draft creation and forward-draft creation stay allowed', () => {
   for (const command of ['node tools/gmail-draft.mjs --to a@b.com --body x','node tools/gmail-draft.mjs --forward msg --to a@b.com']) assert.equal(judge({tool_name:'Bash',tool_input:{command}}).decision,'pass');
+});
+
+test('headless LINE send blocks, matching marker passes, and dry-run passes', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'send-marker-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'line-body-'));
+  t.after(() => { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(cwd, { recursive: true, force: true }); });
+  fs.writeFileSync(path.join(cwd, 'body.txt'), '社外向け本文\n', 'utf8');
+  const input = { tool_name: 'Bash', cwd, tool_input: { command: 'node tools/line-group-send.mjs --group test --text-file body.txt' } };
+  const env = { CLAUDE_HEADLESS: '1', ORGIAST_HOME: home };
+  assert.equal(judge(input, { env, home }).decision, 'block');
+  const hash = bodyHash('社外向け本文\n');
+  fs.mkdirSync(path.join(home, '.claude', 'send-approvals'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'send-approvals', `${hash}.json`), JSON.stringify({ approvedAt: '2026-11-09T12:00:00Z', kimQuote: 'この本文で送って', bodyHash: hash }));
+  assert.equal(judge(input, { env, home }).decision, 'pass');
+  fs.writeFileSync(path.join(cwd, 'body.txt'), '改変本文', 'utf8');
+  assert.equal(judge(input, { env, home }).decision, 'block');
+  assert.equal(judge({ ...input, tool_input: { command: `${input.tool_input.command} --dry-run` } }, { env, home }).decision, 'pass');
+});
+
+test('other outbound send CLIs are covered in headless sessions', t => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'other-send-'));
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(cwd, 'body.txt'), '本文', 'utf8');
+  const options = { env: { ORGIAST_HEADLESS_JOB: 'auto-progress:scheduled-start' }, home: cwd };
+  for (const command of [
+    'node tools/line-channel.mjs --to C1 --body-file body.txt --send',
+    'node tools/beeper-send.mjs --chat c1 --body-file body.txt --queue-id q --receipt r',
+    'node tools/discord-dm.mjs vendor --body-file body.txt',
+  ]) assert.equal(judge({ tool_name: 'Bash', cwd, tool_input: { command } }, options).decision, 'block');
 });
 
 import { draftBody } from './mail-send-approval-gate.mjs';

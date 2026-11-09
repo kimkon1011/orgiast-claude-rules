@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { run, options, execute, main, resumedParentId, saveJson } from './stalled-session-resume.mjs';
+import { skipReason, run, options, execute, main, resumedParentId, saveJson } from './stalled-session-resume.mjs';
 import { buildClaudeHeadlessArgs } from './auto-session-executor.mjs';
 
 async function fixture(t, count = 5) {
@@ -560,7 +560,7 @@ test('report parse failure keeps the actual executor', async () => {
   });
   assert.equal(result.outcome, 'error'); assert.equal(result.executor, 'cheap-code:deepseek');
 });
-test('nightly abort and retired budget do not prevent overdue; interrupted attempt is not replayed', async t => {
+test('nightly abort and retired budget do not prevent overdue; old interrupted attempt is retried', async t => {
   const f = await fixture(t, 1);
   f.records[0].displayTitle = '【09/23/12:00まで】Task';
   await fs.mkdir(path.dirname(f.file), { recursive: true });
@@ -569,7 +569,304 @@ test('nightly abort and retired budget do not prevent overdue; interrupted attem
   await run(options(['--overdue'], {}), f.io);
   const ledger = await f.ledger();
   assert.equal(f.calls(), 1); assert.deepEqual(ledger.nights, nights);
-  Object.values(ledger.overdue)[0].attempts[0].outcome = 'interrupted';
+  // Old interrupted (30分超) は再試行対象
+  const overdueKey = Object.keys(ledger.overdue)[0];
+  ledger.overdue[overdueKey].attempts[0].outcome = 'interrupted';
+  const oldTime = new Date(f.io.now() - 40 * 60000).toISOString();
+  ledger.overdue[overdueKey].attempts[0].startedAt = oldTime;
+  ledger.overdue[overdueKey].attempts[0].endedAt = oldTime;
   await fs.writeFile(f.file, JSON.stringify(ledger));
-  assert.equal((await run(options(['--overdue'], {}), f.io)).rows[0].skip, '同一期限処理済み');
+  assert.equal((await run(options(['--overdue'], {}), f.io)).rows[0].skip, '');
+  assert.equal(f.calls(), 2);
+});
+test('recent interrupted overdue attempt is not replayed (30分以内)', async t => {
+  const f = await fixture(t, 1);
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  await fs.writeFile(f.file, JSON.stringify({ version: 1, nights: {}, sessions: {} }));
+  await run(options(['--overdue'], {}), f.io);
+  const ledger = await f.ledger();
+  const overdueKey = Object.keys(ledger.overdue)[0];
+  ledger.overdue[overdueKey].attempts[0].outcome = 'interrupted';
+  ledger.overdue[overdueKey].attempts[0].startedAt = new Date(f.io.now() - 10 * 60000).toISOString();
+  await fs.writeFile(f.file, JSON.stringify(ledger));
+  assert.equal((await run(options(['--overdue'], {}), f.io)).rows[0].skip, 'エラー後30分待機');
+  assert.equal(f.calls(), 1);
+});
+test('overdue timeout is retried (not treated as processed)', async t => {
+  const f = await fixture(t, 1); let time = f.io.now();
+  f.io.now = () => time;
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  let callCount = 0;
+  f.io.execute = async () => { callCount++; return { outcome: 'timeout', reason: 'timeout' }; };
+  const config = options(['--overdue'], {});
+  const r1 = await run(config, f.io);
+  assert.equal(r1.results[0].outcome, 'timeout');
+  assert.equal(callCount, 1);
+  // timeout は再試行対象（同一期限処理済みにならない）。30分バックオフ後に再試行される。
+  time += 31 * 60000;
+  const r2 = await run(config, f.io);
+  assert.equal(r2.results[0].outcome, 'timeout');
+  assert.equal(callCount, 2);
+});
+test('overdue timeout respects 30-minute backoff', async t => {
+  const f = await fixture(t, 1); let time = f.io.now(); let callCount = 0;
+  f.io.now = () => time;
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  f.io.execute = async () => { callCount++; return { outcome: 'timeout', reason: 'timeout' }; };
+  const config = options(['--overdue'], {});
+  await run(config, f.io);
+  assert.equal(callCount, 1);
+  time += 30 * 60000 - 1;
+  assert.equal((await run(config, f.io)).results.length, 0);
+  time++;
+  assert.equal((await run(config, f.io)).results.length, 1);
+  assert.equal(callCount, 2);
+});
+test('overdue timeout stops at 3 failures and notifies once', async t => {
+  const f = await fixture(t, 1); let time = f.io.now(); let notices = []; let callCount = 0;
+  f.io.now = () => time;
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  f.io.execute = async () => { callCount++; return { outcome: 'timeout', reason: 'timeout' }; };
+  f.io.notify = async msg => { notices.push(msg); return { delivered: 'dm' }; };
+  const config = options(['--overdue'], {});
+  // 1回目
+  await run(config, f.io); time += 31 * 60000;
+  // 2回目
+  await run(config, f.io); time += 31 * 60000;
+  // 3回目 → 3回目の実行（まだ attempts.length=2 なので実行される）
+  const r3 = await run(config, f.io);
+  assert.equal(r3.results.length, 1);
+  assert.equal(r3.results[0].outcome, 'timeout');
+  assert.equal(callCount, 3);
+  // 通知に3回失敗のメッセージが1回だけ含まれる
+  const failureNotices = notices.filter(n => n.includes('3回失敗'));
+  assert.equal(failureNotices.length, 1);
+  // 4回目 → attempts.length=3 で停止
+  time += 31 * 60000;
+  assert.equal((await run(config, f.io)).rows[0].skip, '同一期限3回エラー');
+  const failureNotices2 = notices.filter(n => n.includes('3回失敗'));
+  assert.equal(failureNotices2.length, 1); // 重複通知なし
+});
+test('overdue progressed and no-progress are not retried', async t => {
+  const f = await fixture(t, 2);
+  f.records.forEach(r => { r.displayTitle = '【09/23/12:00まで】' + r.displayTitle; });
+  let callCount = 0;
+  f.io.execute = async () => { callCount++; return { outcome: callCount === 1 ? 'progressed' : 'no-progress', reason: 'done' }; };
+  const config = options(['--overdue'], {});
+  await run(config, f.io);
+  assert.equal(callCount, 2);
+  // progressed と no-progress は再試行しない
+  assert.equal((await run(config, f.io)).results.length, 0);
+  assert.equal(callCount, 2);
+});
+test('old ledger timeout outcome is retried (treated as error)', async t => {
+  const f = await fixture(t, 1);
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  // 旧台帳に timeout が入っている状態を模擬（endedAt は 40分前 → 30分バックオフ超過）
+  const overdueKey = JSON.stringify(['session-0', '【09/23/12:00まで】']);
+  await fs.writeFile(f.file, JSON.stringify({ version: 1, nights: {}, sessions: {}, overdue: {
+    [overdueKey]: { attempts: [{ outcome: 'timeout', reason: 'timeout', startedAt: new Date(f.io.now() - 45 * 60000).toISOString(), endedAt: new Date(f.io.now() - 40 * 60000).toISOString() }], noProgress: 1 }
+  } }));
+  // timeout は再試行対象
+  assert.equal((await run(options(['--overdue'], {}), f.io)).rows[0].skip, '');
+  assert.equal(f.calls(), 1);
+});
+test('overdue 3rd attempt progressed does not notify and does not block retry', async t => {
+  const f = await fixture(t, 1); let time = f.io.now(); let notices = []; let callCount = 0;
+  f.io.now = () => time;
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  f.io.execute = async () => { callCount++; return { outcome: callCount === 3 ? 'progressed' : 'timeout', reason: 'timeout' }; };
+  f.io.notify = async msg => { notices.push(msg); return { delivered: 'dm' }; };
+  const config = options(['--overdue'], {});
+  // 1回目: timeout
+  await run(config, f.io); time += 31 * 60000;
+  // 2回目: timeout
+  await run(config, f.io); time += 31 * 60000;
+  // 3回目: progressed → 通知なし、同一期限処理済みになる
+  const r3 = await run(config, f.io);
+  assert.equal(r3.results[0].outcome, 'progressed');
+  assert.equal(callCount, 3);
+  const failureNotices = notices.filter(n => n.includes('3回失敗'));
+  assert.equal(failureNotices.length, 0);
+  // progressed なので再試行しない
+  time += 31 * 60000;
+  assert.equal((await run(config, f.io)).results.length, 0);
+});
+test('overdue 3rd attempt no-progress does not notify and does not block retry', async t => {
+  const f = await fixture(t, 1); let time = f.io.now(); let notices = []; let callCount = 0;
+  f.io.now = () => time;
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  f.io.execute = async () => { callCount++; return { outcome: callCount === 3 ? 'no-progress' : 'timeout', reason: 'done' }; };
+  f.io.notify = async msg => { notices.push(msg); return { delivered: 'dm' }; };
+  const config = options(['--overdue'], {});
+  await run(config, f.io); time += 31 * 60000;
+  await run(config, f.io); time += 31 * 60000;
+  const r3 = await run(config, f.io);
+  assert.equal(r3.results[0].outcome, 'no-progress');
+  assert.equal(callCount, 3);
+  const failureNotices = notices.filter(n => n.includes('3回失敗'));
+  assert.equal(failureNotices.length, 0);
+  // no-progress も成功扱いなので再試行しない
+  time += 31 * 60000;
+  assert.equal((await run(config, f.io)).results.length, 0);
+});
+
+// --- pid 再利用対策と実行ログのテスト ---
+
+test('lock pid is a different command: steals lock and executes', async t => {
+  const f = await fixture(t, 1);
+  // acquireLock をバイパスして lock ファイルを事前に作成。
+  // 現在のプロセスの pid（alive）を使うと acquireLock は null を返し、
+  // カスタムの stale lock 回復コード（processCommandLine 確認）が動く。
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  await fs.writeFile(`${f.file}.lock`, String(process.pid));
+  // processCommandLine が別コマンド（stalled-session-resume を含まない）を返す
+  f.io.processCommandLine = async pid => `C:\\Windows\\System32\\notepad.exe`;
+  const result = await run(options([], {}), f.io);
+  assert.equal(result.skipped, undefined); // lock を奪い取って実行された
+  assert.equal(f.calls(), 1);
+  assert.equal(result.results.length, 1);
+  // 実行ログが書かれている
+  const logFile = path.join(f.io.home, '.claude', 'logs', 'stalled-session-sweep.jsonl');
+  const log = JSON.parse(await fs.readFile(logFile, 'utf8'));
+  assert.equal(log.outcome, 'ran');
+  assert.equal(log.night, '2026-09-24');
+  assert.equal(log.pid, process.pid);
+  assert.ok(log.counts['no-progress'] >= 1);
+  // reclaimedLock が記録されている（lockOwner ではない）
+  assert.ok(log.reclaimedLock);
+  assert.equal(log.reclaimedLock.pid, process.pid);
+  assert.equal(log.reclaimedLock.alive, false);
+  assert.equal(log.lockOwner, undefined);
+});
+
+test('stale lock reclaimed: outcome ran, reclaimedLock present, no notify, no exitCode 3', async t => {
+  const f = await fixture(t, 1);
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  // 現在のプロセスの pid（alive）で lock ファイルを作る → acquireLock が null を返す
+  await fs.writeFile(`${f.file}.lock`, String(process.pid));
+  f.io.processCommandLine = async pid => `C:\\Windows\\System32\\notepad.exe`;
+  let notified = false;
+  f.io.notify = async () => { notified = true; };
+  const prevExitCode = process.exitCode;
+  process.exitCode = 0;
+  const result = await run(options([], {}), f.io);
+  assert.equal(result.skipped, undefined); // lock を奪い取って実行された
+  assert.equal(f.calls(), 1);
+  assert.equal(result.results.length, 1);
+  assert.equal(result.results[0].outcome, 'no-progress');
+  // no-progress の結果があるので通知は送られる（locked の通知ではない）
+  assert.equal(notified, true);
+  assert.equal(process.exitCode, 0);
+  // 実行ログを確認
+  const logFile = path.join(f.io.home, '.claude', 'logs', 'stalled-session-sweep.jsonl');
+  const lines = (await fs.readFile(logFile, 'utf8')).trim().split('\n');
+  const log = JSON.parse(lines[lines.length - 1]);
+  assert.equal(log.outcome, 'ran');
+  assert.ok(log.reclaimedLock);
+  assert.equal(log.reclaimedLock.pid, process.pid);
+  assert.equal(log.reclaimedLock.alive, false);
+  assert.equal(log.lockOwner, undefined);
+  process.exitCode = prevExitCode;
+});
+
+test('same process running: locked with log, notify, exitCode 3', async t => {
+  const f = await fixture(t, 1);
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  await fs.writeFile(`${f.file}.lock`, String(process.pid));
+  // processCommandLine が自分自身（stalled-session-resume を含む）を返す
+  f.io.processCommandLine = async pid => `node ${process.argv[1]}`;
+  let notified = '';
+  f.io.notify = async msg => { notified = msg; };
+  const result = await run(options([], {}), f.io);
+  assert.equal(result.skipped, 'locked');
+  assert.equal(f.calls(), 0);
+  assert.ok(notified.includes('locked by pid'));
+  assert.equal(process.exitCode, 3);
+  // 実行ログが書かれている
+  const logFile = path.join(f.io.home, '.claude', 'logs', 'stalled-session-sweep.jsonl');
+  const log = JSON.parse(await fs.readFile(logFile, 'utf8'));
+  assert.equal(log.outcome, 'locked');
+  assert.equal(log.lockOwner.pid, process.pid);
+  assert.equal(log.lockOwner.alive, true);
+  // exitCode を戻す（後続テストに影響しないように）
+  process.exitCode = 0;
+});
+
+test('normal run writes log with counts', async t => {
+  const f = await fixture(t, 3);
+  f.io.execute = async record => record.sessionId === 'session-0'
+    ? { outcome: 'progressed', reason: 'fixed' }
+    : { outcome: 'no-progress', reason: 'stuck' };
+  const result = await run(options([], {}), f.io);
+  assert.equal(result.results.length, 3);
+  // 実行ログを確認
+  const logFile = path.join(f.io.home, '.claude', 'logs', 'stalled-session-sweep.jsonl');
+  const lines = (await fs.readFile(logFile, 'utf8')).trim().split('\n');
+  const log = JSON.parse(lines[lines.length - 1]); // 最後の行（今回の run）
+  assert.equal(log.outcome, 'ran');
+  assert.equal(log.night, '2026-09-24');
+  assert.equal(log.counts['progressed'], 1);
+  assert.equal(log.counts['no-progress'], 2);
+  assert.equal(log.host, os.hostname());
+  assert.equal(log.pid, process.pid);
+  assert.equal(log.mode, 'run');
+});
+
+test('log line redacts secrets in cmdline via lockOwner', async t => {
+  const f = await fixture(t, 1);
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  await fs.writeFile(`${f.file}.lock`, String(99999));
+  f.io.processCommandLine = async () => `node tools/stalled-session-resume.mjs --token ghp_abcdefghijklmnopqrstuvwxyz123`;
+  f.io.notify = async () => {};
+  const result = await run(options([], {}), f.io);
+  // stale lock (pid 99999, cmdline doesn't contain stalled-session-resume) is stolen,
+  // so result.skipped is undefined. Check the log file directly.
+  const logFile = path.join(f.io.home, '.claude', 'logs', 'stalled-session-sweep.jsonl');
+  const lines = (await fs.readFile(logFile, 'utf8')).trim().split('\n');
+  const log = JSON.parse(lines[lines.length - 1]);
+  assert.equal(log.outcome, 'ran');
+  process.exitCode = 0;
+});
+
+test('all-skip normal run has outcome ran and no notification', async t => {
+  const f = await fixture(t, 2);
+  f.io.stat = async () => ({ mtimeMs: f.io.now() - 60000 }); // all active → all skipped
+  let notified = false;
+  f.io.notify = async () => { notified = true; };
+  const result = await run(options([], {}), f.io);
+  assert.equal(result.results.length, 0);
+  assert.equal(notified, false);
+  const logFile = path.join(f.io.home, '.claude', 'logs', 'stalled-session-sweep.jsonl');
+  const lines = (await fs.readFile(logFile, 'utf8')).trim().split('\n');
+  const log = JSON.parse(lines[lines.length - 1]);
+  assert.equal(log.outcome, 'ran');
+  assert.ok(log.counts['skipped:active'] >= 2);
+});
+
+test('exception in run produces outcome error, notifyKim, and exitCode 3', async t => {
+  const f = await fixture(t, 1);
+  let notifiedMsg = '';
+  f.io.notify = async msg => { notifiedMsg = msg; };
+  f.io.stat = async () => { throw Object.assign(new Error('disk failure'), { code: 'EIO' }); };
+  await assert.rejects(run(options([], {}), f.io), { code: 'EIO' });
+  assert.ok(notifiedMsg.includes('途中で失敗'));
+  assert.ok(notifiedMsg.includes('disk failure'));
+  assert.equal(process.exitCode, 3);
+  const logFile = path.join(f.io.home, '.claude', 'logs', 'stalled-session-sweep.jsonl');
+  const lines = (await fs.readFile(logFile, 'utf8')).trim().split('\n');
+  const log = JSON.parse(lines[lines.length - 1]);
+  assert.equal(log.outcome, 'error');
+  assert.ok(log.error.includes('disk failure'));
+  process.exitCode = 0;
+});
+
+test('closed ledger と古いタイトルより最新待機フッターを優先する', () => {
+  const record = { sessionId: 'reopened', displayTitle: '【閉じて可】案件', lastAssistantText: '次に kim がすること: なし\nこの後の自動進行: 毎時確認\nこのセッション: まだ閉じない（作業中・2026-11-10 18:00 まで待つ）' };
+  const closed = { sessions: { reopened: {} } };
+  assert.equal(skipReason(record, {}, '', closed, 0, new Date(2026, 10, 10, 19).getTime(), 1), '');
+  assert.notEqual(skipReason(record, {}, '', closed, 0, new Date(2026, 10, 10, 17).getTime(), 1), 'closed');
+  assert.equal(skipReason({ ...record, lastAssistantText: '' }, {}, '', closed, 0, Date.now(), 1), 'closed');
 });

@@ -29,17 +29,15 @@ foreach ($spec in $specs) {
     $current.Actions[0].Arguments -eq $expectedArgs -and
     $current.Actions[0].WorkingDirectory -eq $repo -and
     @($current.Triggers).Count -eq 1 -and
-    $current.Triggers[0].DaysInterval -eq 1 -and
-    $current.Triggers[0].RepetitionInterval -and
-    [int]($current.Triggers[0].RepetitionInterval.TotalMinutes) -eq 30 -and
+    $current.Triggers[0].Repetition.Interval -eq 'PT30M' -and
     $current.State -ne 'Disabled'
   if ($Ensure -and $matches) { Write-Host 'ok: OrgiastMeetRecorderInvite already registered'; continue }
   if ($DryRun) { Write-Host "[DRY] $($spec.TaskName): $scriptPath every 30 minutes"; continue }
   $action = New-HiddenScheduledTaskAction -Execute $node -ChildArgument (@($scriptPath) + $spec.ScriptArgs) -WorkingDirectory $repo
-  $trigger = New-ScheduledTaskTrigger -Daily -At '00:00' -RepetitionInterval (New-TimeSpan -Minutes 30) -RepetitionDuration ([TimeSpan]::MaxValue)
+  $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).Date.AddMinutes(5)) -RepetitionInterval (New-TimeSpan -Minutes 30)
   $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
   Register-ScheduledTask -TaskName $spec.TaskName -Action $action -Trigger $trigger -Settings $settings -Description 'Invite seisaku-team to kim Meet events for tl;dv recording every 30 minutes' -Force | Out-Null
   $actual = Get-ScheduledTask -TaskName $spec.TaskName -ErrorAction Stop
-  if ($actual.Actions[0].Arguments -ne $expectedArgs -or $actual.Triggers[0].DaysInterval -ne 1 -or $actual.Triggers[0].RepetitionInterval.TotalMinutes -ne 30) { throw 'meet-recorder-invite task read-back failed' }
+  if ($actual.Actions[0].Arguments -ne $expectedArgs -or $actual.Triggers[0].Repetition.Interval -ne 'PT30M') { throw 'meet-recorder-invite task read-back failed' }
   Write-Host 'ok: OrgiastMeetRecorderInvite registered (every 30 min, synced main)'
 }

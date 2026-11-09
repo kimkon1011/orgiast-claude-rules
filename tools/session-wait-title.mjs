@@ -4,11 +4,12 @@
 // 一覧を見ただけで、どのタブをいつまで開けておくかが分かるようにする。
 // 閉じてよい定型文になったら頭の期限を外し、「次に kim がすること」が無い（なし等）か閉じる操作だけなら【閉じて可】を付ける
 // （2026-11-02 kim 指示・全PC全アカウント。kim のやることが残るセッションは閉じてよい定型文でも付けない）。
-// 明示クローズ台帳にある場合はフッターに優先して【閉じて可】。それ以外でフッターが無い応答では印を保持。fail-open・出力なし。
+// 最新フッターの待機期限は過去のクローズ台帳より優先する。フッター無しでは台帳・既存の印を保持。fail-open・出力なし。
 // 本体はノイズを除外し、手動の命名を最優先、その次に assistant が最初に宣言した目的を使う。
 // --prompt-submit: 既存タイトルにPC番号を付けてサーバーへ同期する（transcript は読み取り専用）。
 // --all: 既存の全セッション（直近 RECENT_DAYS 日）にも同じ規則を当てる。SessionStart から1時間に1回だけ走る。
 import fs from 'node:fs';
+import { dropClosed } from './purge-sessions.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
@@ -62,6 +63,21 @@ export function isCloseRitualOnly(nextAction) {
 export function isClosable(footer) {
   return !!footer && [SESSION_PHRASES.closed, SESSION_PHRASES.delete].includes(footer.session)
     && (NO_ACTION_PATTERN.test(footer.nextAction) || isCloseRitualOnly(footer.nextAction));
+}
+
+export function latestWaitDeadline(text) {
+  const footer = footerValues(text);
+  return footer ? openDeadline(footer.session) : null;
+}
+
+function reopenRecordedSession(id) {
+  dropClosed(path.join(os.homedir(), '.claude'), new Set([id]));
+}
+
+function logReopen(message) {
+  const file = path.join(os.homedir(), '.claude', 'logs', 'session-wait-title.log');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, `${new Date().toISOString()} ${message}\n`);
 }
 
 export function waitPrefix(date) {
@@ -134,7 +150,7 @@ export function desiredTitle(text, raw, pc = '', closed = false) {
   const base = (customSource !== 'orgiast-auto' ? customBody : '')
     || declaredPurpose || titleBody(autoAi) || customBody || titleBody(ai) || firstPrompt || 'セッション';
   const deadline = footer ? openDeadline(footer.session) : null;
-  const prefix = closed ? CLOSABLE_PREFIX : deadline ? waitPrefix(deadline) : isClosable(footer) ? CLOSABLE_PREFIX : !footer ? existingPrefix : '';
+  const prefix = deadline ? waitPrefix(deadline) : isClosable(footer) || (closed && !footer) ? CLOSABLE_PREFIX : !footer ? existingPrefix : '';
   // Without a PC number, keep the existing footer-driven behavior.
   if (!pc && !prefix && !existingPrefix) return null;
   const next = `${pc ? pc + '｜' : ''}${prefix}${base}`;
@@ -191,7 +207,7 @@ export function promptSubmit(input, { readFile = fs.readFileSync, statSize = p =
   } catch (e) { logError('promptSubmit', e); return null; }
 }
 
-export function apply(input, { readFile = fs.readFileSync, appendFile = fs.appendFileSync, statSize = p => fs.statSync(p).size, resolvePcNumber: resolveNumber = resolvePcNumber, isClosed = isRecordedClosed } = {}) {
+export function apply(input, { readFile = fs.readFileSync, appendFile = fs.appendFileSync, statSize = p => fs.statSync(p).size, resolvePcNumber: resolveNumber = resolvePcNumber, isClosed = isRecordedClosed, reopen = reopenRecordedSession, log = logReopen } = {}) {
   try {
     const file = input?.transcript_path || input?.transcriptPath || '';
     const sessionId = input?.session_id || input?.sessionId || '';
@@ -199,7 +215,14 @@ export function apply(input, { readFile = fs.readFileSync, appendFile = fs.appen
     if (statSize(file) > MAX_BYTES) return null;
     const raw = readFile(file, 'utf8');
     const text = typeof input?.last_assistant_message === 'string' && input.last_assistant_message.trim() ? input.last_assistant_message : lastAssistantText(raw);
-    const title = desiredTitle(text, raw, resolveNumber(), isClosed(sessionId));
+    const closed = isClosed(sessionId);
+    if (closed && latestWaitDeadline(text)) {
+      try {
+        reopen(sessionId);
+        log(`reopened ${sessionId}: removed from closed-sessions.json (latest footer has wait deadline)`);
+      } catch { /* fail-open: the current wait title must still be applied */ }
+    }
+    const title = desiredTitle(text, raw, resolveNumber(), closed);
     if (!title) return null;
     appendFile(file, `${raw.endsWith('\n') ? '' : '\n'}${JSON.stringify({ type: 'custom-title', customTitle: title, sessionId, source: 'orgiast-auto' })}\n`);
     return title;

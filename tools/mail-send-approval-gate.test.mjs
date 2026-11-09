@@ -129,6 +129,23 @@ test('draft creation and forward-draft creation stay allowed', () => {
   for (const command of ['node tools/gmail-draft.mjs --to a@b.com --body x','node tools/gmail-draft.mjs --forward msg --to a@b.com']) assert.equal(judge({tool_name:'Bash',tool_input:{command}}).decision,'pass');
 });
 
+test('send CLI names used only as data do not trigger the approval gate', () => {
+  const heredocReadOnly = `cat <<'EOF' > /tmp/readline.mjs
+import { loadSecrets } from '/repo/tools/line-group-send.mjs';
+// Supabase channel_messages GET only
+EOF
+node /tmp/readline.mjs`;
+  const grepReadOnly = 'ls ~/.claude/*.env; grep -n "line-send.env|SUPABASE_URL" /c/Users/user/.claude/nightly-repo/tools/line-group-send.mjs';
+  for (const command of [heredocReadOnly, grepReadOnly]) {
+    assert.equal(judge({ tool_name: 'Bash', tool_input: { command } }).decision, 'pass');
+  }
+});
+
+test('executed LINE send still requires approval', () => {
+  const input = { tool_name: 'Bash', tool_input: { command: 'node tools/line-group-send.mjs --group X --text-file f' } };
+  assert.equal(judge(input).decision, 'block');
+});
+
 test('headless LINE send blocks, matching marker passes, and dry-run passes', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'send-marker-'));
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'line-body-'));

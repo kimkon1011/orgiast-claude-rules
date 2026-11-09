@@ -16,6 +16,15 @@ const normalize = s => typeof s === 'string' ? s.replace(/\r\n/g, '\n')
   .filter(line => !/^[ \t]*```[^`]*$/.test(line)).join('\n')
   .replace(/\n{3,}/g, '\n\n').trim() : '';
 const block = (reason = BLOCK_REASON) => ({ decision: 'block', reason });
+function executedScript(args, pattern) {
+  const base = value => String(value ?? '').split(/[\\/]/).at(-1).replace(/\.exe$/i, '');
+  if (pattern.test(base(args[0]))) return true;
+  if (!/^node(?:js)?$/i.test(base(args[0]))) return false;
+  // Only Node's entry script can send. A matching string in grep arguments,
+  // comments, heredoc contents, or an imported module is data, not execution.
+  const entry = args.slice(1).find(arg => arg === '--' || !arg.startsWith('-'));
+  return entry !== '--' && pattern.test(base(entry));
+}
 export function sendTargets(input) {
   if (/^mcp__claude_ai_Gmail(?:_\d+)?__(send_message|reply|forward)$/.test(input?.tool_name)) {
     const a = input.tool_input ?? {};
@@ -24,26 +33,25 @@ export function sendTargets(input) {
   if (!/^(Bash|PowerShell)$/.test(input?.tool_name)) return [];
   const targets = [];
   for (const args of shellSegments(input.tool_input?.command ?? '')) {
-    const script = args.find(a => /(?:^|[\\/])gmail-draft\.mjs$/.test(a));
-    if (script && option(args, '--send')) targets.push({ draftId: option(args, '--send'), user: option(args, '--user') ?? 'seisaku-team@orgiast.jp' });
-    else if (args.some(a => /(?:^|[\\/])line-group-send\.mjs$/.test(a))) {
+    if (executedScript(args, /^gmail-draft\.mjs$/i) && option(args, '--send')) targets.push({ draftId: option(args, '--send'), user: option(args, '--user') ?? 'seisaku-team@orgiast.jp' });
+    else if (executedScript(args, /^line-group-send\.mjs$/i)) {
       if (args.includes('--dry-run')) continue;
       const file = option(args, '--text-file');
       targets.push({ body: file ? fs.readFileSync(path.resolve(input.cwd ?? process.cwd(), file), 'utf8') : '', channel: 'line' });
     }
-    else if (args.some(a => /(?:^|[\\/])line-channel\.mjs$/.test(a)) && args.includes('--send')) {
+    else if (executedScript(args, /^line-channel\.mjs$/i) && args.includes('--send')) {
       if (args.includes('--dry-run')) continue;
       const file = option(args, '--body-file');
       targets.push({ body: file ? fs.readFileSync(path.resolve(input.cwd ?? process.cwd(), file), 'utf8') : '', channel: 'line' });
     }
-    else if (args.some(a => /(?:^|[\\/])(?:beeper-send|discord-dm)\.mjs$/.test(a))) {
+    else if (executedScript(args, /^(?:beeper-send|discord-dm)\.mjs$/i)) {
       if (args.includes('--dry-run')) continue;
       const file = option(args, '--body-file');
       targets.push({ body: file ? fs.readFileSync(path.resolve(input.cwd ?? process.cwd(), file), 'utf8') : option(args, '--body') ?? '', channel: 'message' });
     }
     // Repository inventory: gmail-draft --send is the sending CLI. Never exempt a
     // whole compound command just because a notification tool also appears in it.
-    else if (args.some(a => /(?:^|[\\/])gmail-send\.mjs$/.test(a))) {
+    else if (executedScript(args, /^gmail-send\.mjs$/i)) {
       const file = option(args, '--body-file');
       targets.push({ body: file ? fs.readFileSync(path.resolve(input.cwd ?? process.cwd(), file), 'utf8') : option(args, '--body') });
     }

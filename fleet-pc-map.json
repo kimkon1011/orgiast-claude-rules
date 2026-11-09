@@ -5,11 +5,12 @@
   "kim-PC": {
     "hostname": "DESKTOP-2D0R4LI",
     "person": "金功勇",
+    "remoteName": "作業用018",
     "aliases": [
       "DESKTOP-2D0R4LI",
       "kim-PC(開発機/kim)"
     ],
-    "_evidence": "報告本文の 🖥 hostname=DESKTOP-2D0R4LI / user=uers / git=kim@orgiast.jp（2026-08-27 実測）。kim 明示回答『18行目(kim-PC)と22行目(DESKTOP-2D0R4LI)は同じパソコン』（2026-08-27）。kim が DESKTOP-2D0R4LI を『作業用004民泊用』行から独立行へ移動済み＝作業用004民泊用 は開発機ではないことが確定",
+    "_evidence": "報告本文の 🖥 hostname=DESKTOP-2D0R4LI / user=uers / git=kim@orgiast.jp（2026-08-27 実測）。kim 明示回答『18行目(kim-PC)と22行目(DESKTOP-2D0R4LI)は同じパソコン』（2026-08-27）。kim が DESKTOP-2D0R4LI を『作業用004民泊用』行から独立行へ移動済み＝作業用004民泊用 は開発機ではないことが確定。remoteName は 2026-11-09 追加: session-wait-title.mjs の resolvePcNumber が kim-PC でも 018 を返すようにするため。kim 回答『018 は cr@orgiast.jp』(2026-10-08) と kim-PC のアカウント kim@orgiast.jp は異なるが、PC番号解決だけに使う（fleet-mail の宛先解決には使わない）。",
     "codexAccount": "kim@orgiast.jp"
   },
   "kimko-PC": {

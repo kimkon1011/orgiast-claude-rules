@@ -14,11 +14,28 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { resolvePcNumber } from './lib/pc-number.mjs';
-import { footerValues, NO_ACTION_PATTERN, openDeadline, SESSION_PHRASES } from './next-action-gate.mjs';
+import { footerValues as footerValuesStrict, NO_ACTION_PATTERN, openDeadline, SESSION_PHRASES } from './next-action-gate.mjs';
+
+// Lenient footer parser: normalizes full-width colons (：) to half-width (:) before matching.
+// The gate (next-action-gate.mjs) is strict and requires half-width colons, but the hook
+// must accept both variants because assistant messages sometimes use full-width colons.
+function footerValues(text) {
+  const normalized = String(text || '').replace(/：/g, ':');
+  return footerValuesStrict(normalized);
+}
 
 const MAX_BYTES = 256 * 1024 * 1024;
 const RECENT_DAYS = 30;
 const SWEEP_COOLDOWN_MS = 60 * 60 * 1000;
+const LOG_FILE = path.join(os.homedir(), '.claude', 'logs', 'session-wait-title.log');
+
+function logError(msg, err) {
+  try {
+    const dir = path.dirname(LOG_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(LOG_FILE, `${new Date().toISOString()} ${msg} ${err?.stack || err}\n`);
+  } catch { /* best-effort */ }
+}
 export const CLOSABLE_PREFIX = '【閉じて可】';
 // 旧形式【26/11/02/20:11まで】（年あり）も外して新形式へ付け替える。期限と【閉じて可】は排他で、どちらも付け替え対象。
 const PREFIX = /^(?:(?:【(?:\d{2}\/)?\d{2}\/\d{2}\/\d{2}:\d{2}まで】|【閉じて可】)\s*)+/;
@@ -138,7 +155,7 @@ export function sessionStart(input, { readFile = fs.readFileSync, statSize = p =
     const { custom, ai } = currentTitles(raw);
     if (custom || ai) return null;
     return { hookSpecificOutput: { hookEventName: 'SessionStart', sessionTitle: `${pc}｜待機中` } };
-  } catch { return null; }
+  } catch (e) { logError('sessionStart', e); return null; }
 }
 
 // 半角は0.5文字として、全角換算30文字までの冒頭を使う。
@@ -171,27 +188,29 @@ export function promptSubmit(input, { readFile = fs.readFileSync, statSize = p =
       ? custom : desiredTitle(lastAssistantText(raw), raw, pc, closed) ?? custom;
     if (!/^\d{3}｜/.test(title)) title = `${pc}｜${title}`;
     return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', sessionTitle: title } };
-  } catch { return null; }
+  } catch (e) { logError('promptSubmit', e); return null; }
 }
 
 export function apply(input, { readFile = fs.readFileSync, appendFile = fs.appendFileSync, statSize = p => fs.statSync(p).size, resolvePcNumber: resolveNumber = resolvePcNumber, isClosed = isRecordedClosed } = {}) {
-  const file = input?.transcript_path || input?.transcriptPath || '';
-  const sessionId = input?.session_id || input?.sessionId || '';
-  if (!file || !sessionId || /subagents/i.test(file)) return null;
-  if (statSize(file) > MAX_BYTES) return null;
-  const raw = readFile(file, 'utf8');
-  const text = typeof input?.last_assistant_message === 'string' && input.last_assistant_message.trim() ? input.last_assistant_message : lastAssistantText(raw);
-  const title = desiredTitle(text, raw, resolveNumber(), isClosed(sessionId));
-  if (!title) return null;
-  appendFile(file, `${raw.endsWith('\n') ? '' : '\n'}${JSON.stringify({ type: 'custom-title', customTitle: title, sessionId, source: 'orgiast-auto' })}\n`);
-  return title;
+  try {
+    const file = input?.transcript_path || input?.transcriptPath || '';
+    const sessionId = input?.session_id || input?.sessionId || '';
+    if (!file || !sessionId || /subagents/i.test(file)) return null;
+    if (statSize(file) > MAX_BYTES) return null;
+    const raw = readFile(file, 'utf8');
+    const text = typeof input?.last_assistant_message === 'string' && input.last_assistant_message.trim() ? input.last_assistant_message : lastAssistantText(raw);
+    const title = desiredTitle(text, raw, resolveNumber(), isClosed(sessionId));
+    if (!title) return null;
+    appendFile(file, `${raw.endsWith('\n') ? '' : '\n'}${JSON.stringify({ type: 'custom-title', customTitle: title, sessionId, source: 'orgiast-auto' })}\n`);
+    return title;
+  } catch (e) { logError('apply', e); return null; }
 }
 
 // 全プロジェクトの transcript に apply を当てる。subagent・古いもの・巨大なものは飛ばす。
 export function sweepAll({ base = path.join(os.homedir(), '.claude'), now = Date.now(), force = false, resolvePcNumber: resolveNumber = resolvePcNumber, isClosed = isRecordedClosed } = {}) {
   const stateFile = path.join(base, 'session-wait-title-state.json');
-  try { if (!force && now - JSON.parse(fs.readFileSync(stateFile, 'utf8')).at < SWEEP_COOLDOWN_MS) return { skipped: 'cooldown' }; } catch {}
-  try { fs.writeFileSync(stateFile, JSON.stringify({ at: now })); } catch {}
+  try { if (!force && now - JSON.parse(fs.readFileSync(stateFile, 'utf8')).at < SWEEP_COOLDOWN_MS) return { skipped: 'cooldown' }; } catch (e) { logError('sweepAll state read', e); }
+  try { fs.writeFileSync(stateFile, JSON.stringify({ at: now })); } catch (e) { logError('sweepAll state write', e); }
   const result = { scanned: 0, titled: [] };
   const projects = path.join(base, 'projects');
   let dirs = [];
@@ -209,7 +228,7 @@ export function sweepAll({ base = path.join(os.homedir(), '.claude'), now = Date
         const title = apply({ transcript_path: file, session_id: name.slice(0, -'.jsonl'.length) }, { resolvePcNumber: resolveNumber, isClosed });
         // PC番号の一括付与で全 transcript の更新日時が今になり、履歴の並び順が崩れるのを防ぐ。
         if (title) { fs.utimesSync(file, stat.atime, stat.mtime); result.titled.push({ session: name.slice(0, 8), title }); }
-      } catch { /* 1件の失敗で止めない */ }
+      } catch (e) { logError(`sweepAll apply ${file}`, e); }
     }
   }
   return result;
@@ -231,7 +250,7 @@ async function main() {
       return;
     }
     apply(input);
-  } catch { /* fail-open */ }
+  } catch (e) { logError('main', e); /* fail-open */ }
 }
 
 if (isEntry(import.meta.url)) { await main(); process.exitCode = 0; }

@@ -522,8 +522,11 @@ test('closed=true でフッター無しなら閉じて可', () => {
 test('closed=true で閉じてよい定型文なら閉じて可', () => {
   assert.equal(desiredTitle(footer('/session-close は終わっているので、このセッションを閉じてよい'), ai, '', true), '【閉じて可】トークン待ち');
 });
-test('closed=true でも人の作業が残るフッターを上書きしない', () => {
-  assert.equal(desiredTitle(withAction('返信する', CLOSED), custom('【閉じて可】案件'), '019', true), '019｜案件');
+test('closed=true で期限なしの非定型フッターでも閉じて可を維持する', () => {
+  assert.equal(desiredTitle(footer('作業を終えました'), custom('【閉じて可】案件'), '019', true), '019｜【閉じて可】案件');
+});
+test('closed=true で期限なしなら人の作業が残るフッターでも閉じて可を優先する', () => {
+  assert.equal(desiredTitle(withAction('返信する', CLOSED), custom('【閉じて可】案件'), '019', true), '019｜【閉じて可】案件');
 });
 test('apply: 再開時に sessionId を一度除外しログを一行記録する（題名変更不要でも除外）', () => {
   for (const raw of [ai, custom('【11/10/18:00まで】トークン待ち')]) {

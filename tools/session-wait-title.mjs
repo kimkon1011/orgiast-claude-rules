@@ -150,7 +150,7 @@ export function desiredTitle(text, raw, pc = '', closed = false) {
   const base = (customSource !== 'orgiast-auto' ? customBody : '')
     || declaredPurpose || titleBody(autoAi) || customBody || titleBody(ai) || firstPrompt || 'セッション';
   const deadline = footer ? openDeadline(footer.session) : null;
-  const prefix = deadline ? waitPrefix(deadline) : isClosable(footer) || (closed && !footer) ? CLOSABLE_PREFIX : !footer ? existingPrefix : '';
+  const prefix = deadline ? waitPrefix(deadline) : closed || isClosable(footer) ? CLOSABLE_PREFIX : !footer ? existingPrefix : '';
   // Without a PC number, keep the existing footer-driven behavior.
   if (!pc && !prefix && !existingPrefix) return null;
   const next = `${pc ? pc + '｜' : ''}${prefix}${base}`;

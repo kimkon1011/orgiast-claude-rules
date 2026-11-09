@@ -6,7 +6,7 @@ ONBOARDING.compressed.md §2.10 の詳細。
 
 kim@orgiast.jp / seisaku-team@orgiast.jp / 他アカウントの Claude Code で得たノウハウ・ルールを全アカウント共通で適用するための仕組み。やり取りはすべて Google Drive 上で行い、各マシンのローカルファイルはキャッシュ、GitHub repo はミラー（履歴・plugin 配布用）と位置付ける。
 
-ハブ（正本）: Drive `claude-common-rules`（作業ファイル配下、folder `1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw`、owner kim@orgiast.jp）
+ハブ（正本）: Drive `claude-common-rules`（kim マイドライブ直下、folder `1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw`、owner kim@orgiast.jp。2026-11-09 に「作業ファイル」配下から移動: 上位フォルダから継承していた個人 Gmail の編集権限を切るため。権限は orgiast.jp ドメイン共有＋owner のみ）
 
 ```
 claude-common-rules/

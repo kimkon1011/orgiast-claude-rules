@@ -34,6 +34,8 @@ export async function escalateKimDecisions({ home = process.env.ORGIAST_HOME || 
     const seen = new Set();
     for (const row of rows) {
       if (!OPEN_STATUSES.has(row.status) || decisionOwnerOf(row) !== 'kim' || !(decisionAge(row, now) >= 2 * DAY_MS)) continue;
+      const escalatedNextKim = String(row.nextKim ?? '').replace(/^[\s　]+|[\s　]+$/g, '');
+      if (!escalatedNextKim || ['なし', '無し', '特になし', '不要', '対応不要'].includes(escalatedNextKim)) continue;
       const key = escalationRowKey(row);
       const lastSent = Date.parse(state[key]);
       if (seen.has(key) || (Number.isFinite(lastSent) && now - lastSent < DAY_MS)) continue;

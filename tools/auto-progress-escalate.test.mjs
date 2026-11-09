@@ -52,6 +52,17 @@ test('dry-run never sends or modifies existing state', async t => {
   assert.equal(fs.readFileSync(file, 'utf8'), '{}\n');
   assert.equal(fs.existsSync(file + '.lock'), false);
 });
+test('nextKim が空または なし の行は owner が kim でも escalate 対象外', async t => {
+  const opts = setup(t, [
+    { ...row(60), owner: 'kim-PC', nextKim: '' },
+    { ...row(61), owner: 'kim-PC', nextKim: 'なし' },
+    { ...row(62), owner: 'kim-PC', nextKim: '　なし　' },
+    { ...row(63), owner: 'kim-PC', nextKim: 'kim の承認が必要' },
+  ]);
+  const result = await escalateKimDecisions({ ...opts, dryRun: true });
+  assert.equal(result.targets.length, 1);
+  assert.ok(result.targets[0].text.includes('kim の承認が必要'));
+});
 test('message preserves decision text and caps context lengths', () => {
   const text = escalationText(row(60, { nextKim: 'あ'.repeat(2001), promise: '約'.repeat(81) }), now);
   assert.match(text, /判断待ち 2日/);

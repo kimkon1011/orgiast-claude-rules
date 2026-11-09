@@ -1,86 +1,61 @@
-# X-0011: gumツールで毎朝1本のSEOガイド作成 — PHASE1 設計
+# X-0011 信頼度ベース分類器
 
-> 2026-11-09 初回設計。自動セッションによる設計・実装開始。
+展示会ブースへの問い合わせをリード資格・緊急度・標準/特別仕様の3次元で分類する。呼び出しは既存の tools/llm-ask.mjs 経由。Claude API と Claude モデルへの分岐は追加しない。
 
-## 概要
+## 実行
 
-Google Search Console の高インプレッション・低CTRキーワードを毎朝検出し、そのキーワードを狙った高品質SEOガイドを1日1本自動生成・公開するシステム。
-
-### 参照元
-
-元記事の「gum（オープンソース）」は [github.com/ehmo/gum](https://github.com/ehmo/gum) (v2.3.1) — Google API (Search Console・Keyword Planner等) へのCLI/MCPインターフェース。ただし Windows バイナリ未提供のため、本実装では同様の操作を Node.js Google API クライアントで代替する。
-
-## アーキテクチャ
-
-```
-[Google Search Console API] ← GSC Keyword Finder (gsc-keyword-finder.mjs)
-       ↓
-[高IMP低CTRキーワード一覧] → キーワード選定
-       ↓
-[Guide Generator (guide-generator.mjs)] → SEOガイド本文生成
-       ↓
-[Internal Link Manager (internal-linker.mjs)] → 内部リンク追加
-       ↓
-[WordPress Publisher (wp-publisher.mjs)] → 公開・スケジュール
+```sh
+node tools/confidence-classifier.mjs --mode generate-samples --count 12
+node tools/confidence-classifier.mjs --mode classify --input "展示会のブース制作の見積もりをお願いします。2026年12月開催の国際ロボット展に出展予定です。"
+node tools/confidence-classifier.mjs --mode evaluate --samples 12
+node --test tools/confidence-classifier.test.mjs tools/llm-ask.test.mjs
 ```
 
-### コンポーネント
+各モードの標準出力は JSON。エラーは標準エラー、終了コード1。evaluate は一部失敗でもレポートを保存して終了コード1を返す。成果物パスはカレントディレクトリに依存しない。
 
-| ツール | 役割 | 依存 |
-|--------|------|------|
-| `gsc-keyword-finder.mjs` | GSCから高IMP低CTRキーワードを抽出 | Google APIs OAuth |
-| `guide-generator.mjs` | キーワードからSEOガイド生成 | LLM (Claude/Gemini) |
-| `internal-linker.mjs` | 既存記事への内部リンク管理 | sitemap.xml |
-| `wp-publisher.mjs` | WordPressへの投稿 | XML-RPC / REST API |
-| `daily-seo-guide.mjs` | 日次ワークフロー統合 | 上記全ツール |
+## 判定と品質
 
-## PHASE1 実装計画
+Groq（openai/gpt-oss-120b）を優先し、失敗・不正JSONの場合だけDeepSeekへ切り替える。--prefer-provider と --no-fallback によりカテゴリ表や汎用フォールバックによるモデル変更を防ぐ。DeepSeekは既存設定のOpenRouter経由。GeminiキーがなくOpenRouterキーがある場合は既存ヘルパーが同じGeminiモデルへ転送する。
 
-### Step 1: GSC Keyword Finder（今回実装）
-- Google Search Console API 認証
-- 直近30日のクエリデータ取得
-- インプレッション数でフィルタ（例: >1,000）
-- CTR/平均掲載順位で低パフォーマンス判定
-- キーワード候補リスト出力
+最低信頼度0.9以上なら採用。0.3以上0.9未満なら Gemini Flash、0.3未満・cheap 全滅なら Genspark GPT に送る。Gemini の失敗・低信頼度も Genspark に送る。最終結果が0.9未満なら needs_review=true。全モデル失敗は分類結果を捏造せずエラーとする。
 
-### Step 2: Guide Generator
-- LLM (Claude/Gemini) によるSEOガイド生成
-- タイトル・meta description・本文構成の自動生成
-- 展示会ブース関連キーワードを優先
+JSONのラベル・型・信頼度の範囲を検証し、不正応答も呼び出し失敗として扱う。MarkdownのJSONフェンスは受理する。uncertain を含む応答は保守的に最低信頼度0として再判定する。
 
-### Step 3: WordPress 連携
-- 記事投稿・下書き保存
-- カテゴリ・タグ設定
-- 内部リンク追加
+classifications は dimension / value / confidence の配列。lead_qualified は boolean。confidence は最終結果の最低値、cheap_confidence は安価段階の最低値、escalated は上位段階への移行、attempts は呼び出し先と成否。
 
-### Step 4: 日次自動実行
-- 毎朝の定期実行設定
-- 進捗レポート生成
+緊急度は基準日から14日以内=high、15〜60日=medium、それ以外・過去・日付不明=low。月だけの場合は1日とする。単件分類の基準日は実行時のUTC日付。合成評価は2026-11-09を固定基準日とする。
 
-## 技術スタック
+## サンプルと評価
 
-- **ランタイム**: Node.js v24
-- **Google API**: googleapis (npm) — Search Console・Google Ads API
-- **認証**: OAuth 2.0 Desktop (aujust-sheets-reader.json を流用 or 新規クライアント)
-- **LLM**: codex-do 経由の Claude/Gemini
-- **CMS**: WordPress REST API (orgiast.jp)
+既定では data/booth-projects.json の3案件から各4件、合計12件の合成メールを作成。現在の samples.jsonl は並行作業で48件に増えており、今回の評価対象は先頭12件。会社名・イベント名・区画を使用し、見積もり・独自制作・資料質問・プレス掲載の4種を作る。開催日はseed=11の疑似乱数で設定し、文面とは別に正解ラベルを生成する。countを増やした場合は案件とテンプレートを反復するため、独立した実データにはならない。
 
-## ギャップ・リスク
+評価は全3次元一致の精度と各次元精度を計算する。分母は全件、呼び出し失敗は不正解。エスカレート率には上位モデル呼び出しが失敗した件も含む。自己申告信頼度は未校正。実問い合わせを使った独立評価と全高品質モデルとの比較は別途必要。
 
-| # | ギャップ | 対処 |
-|---|---------|------|
-| G1 | gum が Windows 非対応 | Node.js Google API クライアントで代替 |
-| G2 | Google Ads API (Keyword Planner) の認証スコープ追加 | 既存 OAuth クライアントのスコープ拡張 |
-| G3 | WordPress 管理者権限 | 既存の投稿者権限で下書き保存可能か確認要 |
-| G4 | GSC データの量的制限 | 日次クエリ制限に注意 (GSC API は 1日 2,000 クエリ) |
+## 費用と分離
 
-## 成果物
+llm-ask.mjs に --usage-file を追加。--no-persist との組み合わせは共有状態を変更せず、明示した使用量ファイルだけ記録する。既存の --no-persist 単独の挙動は維持する。子プロセスごとの executor-usage.jsonl を読み取り、run_id / call_id / sample_id を付けて cost-log.jsonl に追記する。並行実行の費用が混入しない。
 
-| ファイル | 状態 |
-|---------|------|
-| `tools/gsc-keyword-finder.mjs` | ✅ 実装完了 |
-| `outputs/X-0011/README.md` | ✅ 本ファイル |
-| `outputs/X-0011/gap-analysis.md` | ✅ 完了 |
-| `outputs/X-0011/guide-generator.mjs` | ⏳ 未着手 |
-| `outputs/X-0011/wp-publisher.mjs` | ⏳ 未着手 |
-| `outputs/X-0011/daily-seo-guide.mjs` | ⏳ 未着手 |
+各行に provider / model / tokens / usd を保存。APIや既存台帳が金額を返さない場合は usd=null、使用量ログ自体がない場合は tokens=null として失敗記録を残す。推測料金は補完しない。既存Gemini台帳のusdは設定済み単価による計算値であり、請求明細との照合値ではない。費用行に不明があれば総費用はnull、評価が全件成功しなければ1000件換算もnullとする。
+
+入力はJSONを一時ファイルへ書き、--prompt-file で渡す。シェル文字列の展開は行わない。一時プロンプト・使用量台帳・標準出力は終了時に削除。タイムアウトはモデル20秒、子プロセス25秒。標準出力のパイプ取得を制限する実行環境にも対応するため、一時ファイル経由で受け取る。
+
+## 今回の実行状況
+
+評価結果は evaluation-report.md、使用量・失敗記録は cost-log.jsonl を参照。必要なAPIキーがこの実行環境では未設定で、実モデルの精度・費用目標は検証できていない。98.8%、22%、$0.88/1000件、4.4倍は指示書の目標であり、達成を主張しない。
+
+## テスト結果（2026-11-09）
+
+- 分類器: 11/11 pass。0.3/0.9境界、各次元の最低値、uncertain、不正JSON、安価モデル障害、上位モデル障害、最終要レビュー、サンプル再現性、失敗を含む集計、実CLI＋模擬HTTPの結合を検証。
+- 既存 llm-ask: 9/9 pass（下記の環境用アダプターを使用）。
+- 通常の node --test は、この環境の子プロセスパイプ制約で出力を取得できず失敗した。子プロセスを省略する --test-isolation=none と、テスト用のファイル経由 stdio アダプターで再実行した。アダプターは実HTTPを模擬しない。HTTPの模擬は各既存テスト自身が行う。
+- 構文チェックと変更対象の git diff --check は成功。
+- 指定文面の実モデル classify は終了コード1。Groq / OpenRouter / Gemini / Genspark のキー未設定を確認。12件の評価も全件失敗し、終了コード1。モデルの精度0%と解釈せず、実評価不能として扱う。
+
+再現コマンド:
+
+```sh
+node --test --test-isolation=none tools/confidence-classifier.test.mjs
+node --import ./outputs/X-0011/test-stdio-adapter.mjs --test --test-isolation=none tools/llm-ask.test.mjs
+```
+
+生の出力: test-results.txt、llm-ask-test-results.txt、classify-smoke.txt。

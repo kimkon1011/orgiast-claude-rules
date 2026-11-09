@@ -14,6 +14,11 @@ function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); }
   catch (e) { if (e.code === 'ENOENT' && fallback !== undefined) return fallback; throw e; }
 }
+export function writeProgress(base, stage, detail, nowFn = Date.now) {
+  const progressPath = path.join(base || path.join(os.homedir(), '.claude'), 'reopen-lost-sessions-progress.json');
+  const data = { pid: process.pid, stage, detail, at: new Date(nowFn()).toISOString() };
+  fs.writeFileSync(progressPath, JSON.stringify(data) + '\n');
+}
 export function parseJsonTolerant(raw) {
   if (typeof raw !== 'string') return raw;
   const noBom = raw.replace(/^\uFEFF/, '');
@@ -320,11 +325,26 @@ export function agentsFromRegistry(sessionsDir) {
   }
   return result;
 }
-export function measureCpu(spawn) {
+export async function measureCpuAsync({ sampleMs = 1000, cpusImpl = os.cpus, wait = sleep } = {}) {
   try {
-    const val = ps('(Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average', spawn);
-    const n = Number(val);
-    return Number.isFinite(n) ? n : null;
+    const first = cpusImpl();
+    await wait(sampleMs);
+    const second = cpusImpl();
+    let totalIdle1 = 0, totalAll1 = 0;
+    let totalIdle2 = 0, totalAll2 = 0;
+    for (const cpu of first) {
+      const t = cpu.times;
+      totalAll1 += t.user + t.nice + t.system + t.idle + t.iowait + t.irq + t.softirq;
+      totalIdle1 += t.idle;
+    }
+    for (const cpu of second) {
+      const t = cpu.times;
+      totalAll2 += t.user + t.nice + t.system + t.idle + t.iowait + t.irq + t.softirq;
+      totalIdle2 += t.idle;
+    }
+    const idleDiff = totalIdle2 - totalIdle1;
+    const totalDiff = totalAll2 - totalAll1;
+    return totalDiff > 0 ? Math.round(100 * (1 - idleDiff / totalDiff)) : null;
   } catch { return null; }
 }
 const quotePS = s => "'" + s.replaceAll("'", "''") + "'";
@@ -427,7 +447,13 @@ export function acquireLock(file, now = Date.now()) {
   let fd;
   try { fd = fs.openSync(file, 'wx'); } catch (e) { if (e.code === 'EEXIST') return null; throw e; }
   fs.writeSync(fd, String(process.pid));
-  const timer = setInterval(() => { const date = new Date(); fs.futimesSync(fd, date, date); }, 30000);
+  const timer = setInterval(() => {
+    const date = new Date();
+    // Primary: fd-based futimesSync for mtime tracking
+    try { fs.futimesSync(fd, date, date); } catch {}
+    // Fallback: path-based utimesSync for Windows compatibility
+    try { fs.utimesSync(file, date, date); } catch {}
+  }, 30000);
   timer.unref();
   return () => { clearInterval(timer); fs.closeSync(fd); fs.unlinkSync(file); };
 }
@@ -475,15 +501,17 @@ export function resolveClaudeCli({ env = process.env, exists = fs.existsSync, re
 export async function reopenLost({ since, until, dryRun = false, max = 30, gapSec = 10,
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
   now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs, stateBased = false,
-  checkCpu = true } = {}) {
+  checkCpu = true, cpusImpl } = {}) {
   const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0 }, aliveSource: null, agentsError: null, agentsDiag: null };
   // Dry run is strictly read-only: no lock or log mutation on the user's PC.
   const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'));
   if (!release) return { ...result, error: 'locked' };
+  writeProgress(base, 'lock', 'acquired');
   try {
     const token = readJson(path.join(base, '.credentials.json')).claudeAiOauth?.accessToken;
     const org = readJson(path.join(base, '..', '.claude.json')).oauthAccount?.organizationUuid;
     if (!token || !org) throw Error('Missing RC credentials');
+    writeProgress(base, 'auth', 'credentials loaded');
     const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01',
       'anthropic-beta': 'ccr-byoc-2025-07-29', 'x-organization-uuid': org };
     const cli = claudeCli || resolveClaudeCli({ env, exists: fsImpl.existsSync, readdir: fsImpl.readdirSync, spawn });
@@ -524,7 +552,9 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
       }
     };
     const living = alive();
+    writeProgress(base, 'alive', `source=${result.aliveSource}, count=${living.size}`);
     const locals = localIndex(base), closed = closedIds(base);
+    writeProgress(base, 'index', `local=${locals.size}, closed=${closed.size}`);
     const reopenCounts = reopenLoopCounts(base, now);
     const deadline = now() + (stateBased ? 180000 : 60000);
     const get = async url => {
@@ -600,13 +630,15 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
       } while (cursor);
     } catch (error) { result.apiError = error.message; }
     if (!dryRun && result.candidates.length) {
+      writeProgress(base, 'fetch', `candidates=${result.candidates.length}`);
       // CPU 保護: 85% 以上なら開き直しを全部見送る
-      const cpuLoad = checkCpu ? measureCpu(spawn) : null;
+      const cpuLoad = checkCpu ? await measureCpuAsync({ cpusImpl }) : null;
       if (cpuLoad !== null && cpuLoad >= 85) {
         result.deferredCpu = cpuLoad;
       } else {
         const code = codeCli || resolveCodeCli(env, fsImpl.existsSync);
         for (const candidate of result.candidates.slice(0, max)) {
+          writeProgress(base, 'open', `id=${candidate.id}`);
           // Recheck after fetching and between opens: close/purge may have happened meanwhile.
           const refreshed = [...localIndex(base, candidate.id).values()].find(l => l.id === candidate.id);
           const reason = exclusion(refreshed, closedIds(base), alive());
@@ -639,6 +671,7 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
         }
         // Post-reopen verification: wait 90s then check which sessions are actually connected
         if (result.reopened.length) {
+          writeProgress(base, 'verify', `waiting 90s for ${result.reopened.length} reopened`);
           await wait(90000);
           try {
             const agents = alive();
@@ -655,12 +688,12 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
   } catch (error) { result.error = error.message; }
   finally {
     try { if (!dryRun) fs.appendFileSync(path.join(base, 'reopen-lost-sessions.log'), JSON.stringify(result) + '\n'); }
-    finally { release(); }
+    finally { writeProgress(base, 'done', 'log written'); release(); }
   }
   return result;
 }
 export async function watchReopen(opts = {}, maxParam) {
-  let base, max, dryRun, fetchImpl, spawn, wait, nowFn, claudeCli, codeCli, env, fsImpl, windowReady;
+  let base, max, dryRun, fetchImpl, spawn, wait, nowFn, claudeCli, codeCli, env, fsImpl, windowReady, cpusImpl;
   if (typeof opts === 'string' || opts === undefined) {
     base = opts ?? path.join(os.homedir(), '.claude');
     max = maxParam ?? 10;
@@ -679,6 +712,7 @@ export async function watchReopen(opts = {}, maxParam) {
     env = opts.env;
     fsImpl = opts.fsImpl;
     windowReady = opts.windowReady;
+    cpusImpl = opts.cpusImpl;
   }
   const stateFile = path.join(base, 'reopen-lost-sessions-state.json');
   const state = readJson(stateFile, {});
@@ -694,7 +728,7 @@ export async function watchReopen(opts = {}, maxParam) {
   }
   const until = new Date(nowTime - 60000).toISOString();
   const result = await reopenLost({
-    since, until, max, dryRun, base, fetchImpl, spawn, wait, now: nowFn, claudeCli, codeCli, env, fsImpl, windowReady,
+    since, until, max, dryRun, base, fetchImpl, spawn, wait, now: nowFn, claudeCli, codeCli, env, fsImpl, windowReady, cpusImpl,
     stateBased: true
   });
   if (!result.error && !result.apiError && !result.deferredCpu && !dryRun) {
@@ -706,11 +740,23 @@ if (isEntry(import.meta.url)) {
   try {
     const opts = parseOptions(process.argv.slice(2));
     if (opts.watch) {
+      const base = opts.base || path.join(os.homedir(), '.claude');
+      let watchdogTimer = setTimeout(() => {
+        writeProgress(base, 'watchdog', 'timeout');
+        const logPath = path.join(base, 'reopen-lost-sessions.log');
+        try {
+          const progress = readJson(path.join(base, 'reopen-lost-sessions-progress.json'), {});
+          fs.appendFileSync(logPath, JSON.stringify({ at: new Date().toISOString(), error: 'watchdog timeout', stage: progress.stage, detail: progress.detail }) + '\n');
+        } catch {}
+        try { fs.unlinkSync(path.join(base, 'reopen-lost-sessions.lock')); } catch {}
+        process.exit(2);
+      }, 20 * 60 * 1000);
       const result = await watchReopen({
         base: opts.base,
         max: opts.maxSet ? opts.max : 10,
         dryRun: opts.dryRun,
       });
+      clearTimeout(watchdogTimer);
       console.log(JSON.stringify(result));
       if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
     } else {

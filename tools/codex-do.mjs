@@ -430,15 +430,15 @@ export function fallbackBackendTimeoutSecs(timeoutSeconds, env = process.env) {
   return Math.max(60, Math.min(timeoutSeconds, wanted));
 }
 
-// 2026-10-30 以降の生産的成功（executor-usage.jsonl）の最大所要時間は、
-// gemini-cli が 241.1 秒、cheap-code:deepseek が 464.5 秒。
-// 成功実績を切らない余裕を残しつつ、既定をそれぞれ 250 秒 / 500 秒にする。
-// 旧既定（300 秒 / 600 秒）より失敗時の廃棄を 50 秒 / 100 秒短縮し、
-// 両方が timeout しても最大廃棄を従来の 900 秒から 750 秒に収める。
+// 2026-11-09 再調整: executor-usage.jsonl 実測（3623件の成功）で gemini-cli の
+// p99 は 241 秒、99% の成功が 200 秒以内に完了する。200 秒に引き下げても
+// 成功の 0.9%（34/3623件）しか切らず、timeout 1回あたりの廃棄を 50 秒削減する。
+// cheap-code:deepseek は 464.5 秒（2026-10-30 実測）のまま 500 秒を維持。
+// 両方が timeout しても最大廃棄を従来の 900 秒から 700 秒に収める。
 export function backendSpecificTimeoutSecs(backendName, env = process.env) {
   if (backendName === 'gemini-cli') {
     const raw = Number(env.CODEX_DO_GEMINI_TIMEOUT_SECS);
-    return Number.isFinite(raw) && raw > 0 ? raw : 250;
+    return Number.isFinite(raw) && raw > 0 ? raw : 200;
   }
   // cheap-code:deepseek と qwen 直結の deepseek は同じ upstream（OpenRouter の deepseek model）なので同一扱い。
   if (backendName === 'cheap-code:deepseek' || backendName === 'deepseek') {
@@ -700,6 +700,9 @@ export function isBackendExhausted(output, stderr) {
   const lower = merged.toLowerCase();
   const patterns = ['rate limit', 'rate-limited', 'quota', 'insufficient', 'request too large', 'クールダウン中', 'cooldown'];
   if (patterns.some((p) => lower.includes(p))) return true;
+  // claude-code CLI が OpenRouter のモデルIDを認識できず即死するパターン。
+  // タイムアウト待ち（120秒）をせず即 exhausted で次のバックエンドへ進む。
+  if (/unrecognized_model/i.test(merged)) return true;
   return merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '429') || isHttpStatusCodeLine(line, '413'));
 }
 
@@ -1009,7 +1012,8 @@ function recordDeferred(gate) {
   try {
     const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
     fs.mkdirSync(path.dirname(ledger), { recursive: true });
-    fs.appendFileSync(ledger, `${JSON.stringify({ t: new Date().toISOString(), provider: 'codex', model: `codex-cli/${selectedLane.slug || 'default'}`, status: 'deferred', reason: gate.reason, retryAt: gate.retryAt, origin, kind: taskKind, launched: false, cwd })}\n`, 'utf8');
+    const fallbackSkipped = noFallback ? 'no_fallback_flag' : resolveFallbackBackends(home).length === 0 ? 'no_backends' : undefined;
+    fs.appendFileSync(ledger, `${JSON.stringify({ t: new Date().toISOString(), provider: 'codex', model: `codex-cli/${selectedLane.slug || 'default'}`, status: 'deferred', reason: gate.reason, retryAt: gate.retryAt, origin, kind: taskKind, launched: false, cwd, ...(fallbackSkipped ? { fallbackSkipped } : {}) })}\n`, 'utf8');
   } catch {}
 }
 // WSL 側の Codex ログインが Windows 側と別アカウントなら揃える（揃えたら古いアカウントの上限待ちも消す）。

@@ -147,6 +147,15 @@ test('emptyOutputReason は timeout・終了コード・原因不明を分類す
   // 起動失敗は「出力ゼロ」ではなく「そもそも走っていない」。exit_3 に埋もれさせない。
   assert.equal(emptyOutputReason({ launched: false, status: 3, secs: 0 }), 'launch_failed');
   assert.equal(emptyOutputReason({ launched: true, status: 3, secs: 0 }), 'exit_3');
+  // ChatGPT 認証レーンの codex timeout で stderr が無い行は usage_limit として分類する
+  // （2026-11-06 実測: chatgpt_auth_default の timeout／secs=84／stderrTail="" が usage_limit 5件と混ざり lane_outage_unrepaired を発生）。
+  assert.equal(emptyOutputReason({ provider: 'codex', lane: 'chatgpt_auth_default:default_sol', timedOut: true, secs: 84, stderrTail: '' }), 'usage_limit');
+  // codex 以外の provider は従来どおり timeout として分類
+  assert.equal(emptyOutputReason({ provider: 'gemini', timedOut: true }), 'timeout');
+  // chatgpt_auth 以外の lane は従来どおり timeout として分類
+  assert.equal(emptyOutputReason({ provider: 'codex', lane: 'default_sol', timedOut: true, stderrTail: '' }), 'timeout');
+  // stderrTail がある場合は従来どおり timeout として分類
+  assert.equal(emptyOutputReason({ provider: 'codex', lane: 'chatgpt_auth_default:default_sol', timedOut: true, stderrTail: 'some error' }), 'timeout');
 });
 
 test('emptyOutputReason は spawn 自体の失敗を spawn_failed に分類する', () => {
@@ -274,6 +283,19 @@ test('先頭切り詰めの usage limit 2件で codex_empty_output を出さな�
   const limit = findings.find((item) => item.id === 'codex_usage_limit');
   assert.equal(limit.severity, 'low');
   assert.deepEqual(limit.evidence, ['2件', 'usage_limit(2件)']);
+});
+
+test('シグナル kill(exit 128+N)は signal_killed に分類し no_output に混ぜない', () => {
+  // 実測 2026-11-07T16:56:29.170Z: sol が 240s で timeout した後の astra 昇格行が ~60s で
+  // SIGTERM(143) により kill された。status は文字列 'error' のため Number() が NaN になり、
+  // 従来は catch-all の no_output に落ちて codex_empty_output が毎晩起票された。
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 143, launched: true, timedOut: false, secs: 60.159, escalated: true }), 'signal_killed');
+  // 旧行は終了コードが status の数値に載ることがある（exitCode 無し）。
+  assert.equal(emptyOutputReason({ status: 143, launched: true, timedOut: false }), 'signal_killed');
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 137, launched: true, timedOut: false }), 'signal_killed');
+  // 対照群: シグナル域以外の exitCode は従来どおり no_output（張りすぎ検出）。
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 1, launched: true, timedOut: false }), 'no_output');
+  assert.equal(emptyOutputReason({ status: 2, launched: true, timedOut: false }), 'exit_2');
 });
 
 test('emptyOutputReason はモデル容量超過を model_capacity に分類する', () => {
@@ -506,6 +528,30 @@ test('数値 exit の本物の出力ゼロ行は従来どおり codex_empty_outp
   const findings = collectFindings({ home: dir, now: NOW, codexUsedPercent: null });
   assert.deepEqual(findings.map((item) => item.id), ['codex_empty_output']);
   assert.equal(findings.some((item) => item.id === 'codex_spawn_failed'), false);
+});
+
+// 実測 2026-11-08 起票: 1件/no_output(1件) の実体は、sol が 240s で timeout(124) した後の
+// astra 昇格行が ~60s で SIGTERM(143) により kill された行。外部からの signal kill は
+// 「codex が何も出さずに終わった」no_output ではないため、codex_empty_output を起票しない。
+test('signal kill(exit 143)の昇格行は codex_empty_output を出さない', () => {
+  const dir = home();
+  write(dir, 'executor-usage.jsonl',
+    row({
+      t: '2026-11-07T16:55:28.991Z', provider: 'codex', model: 'codex-cli/gpt-5.6-sol', lane: 'default_sol',
+      escalated: false, in: 4866, out: 0, launched: true, timedOut: true, status: 'timeout',
+      origin: 'unattended', kind: 'implement', exitCode: 124, cwd: 'C:\\Users\\kimko\\.claude\\auto-session-repo-fallback-20261108-003012',
+      fastFail: false, attempts: 1, timeoutSecs: 240, secs: 240.913,
+    })
+    + row({
+      t: '2026-11-07T16:56:29.170Z', provider: 'codex', model: 'codex-cli/gpt-6-astra', lane: 'escalated:timedOut',
+      escalated: true, in: 4866, out: 0, launched: true, timedOut: false, status: 'error',
+      origin: 'unattended', kind: 'implement', exitCode: 143, cwd: 'C:\\Users\\kimko\\.claude\\auto-session-repo-fallback-20261108-003012',
+      fastFail: true, attempts: 1, timeoutSecs: 240, secs: 60.159,
+    }));
+  const findings = collectFindings({ home: dir, now: new Date('2026-11-08T09:15:16.000Z'), codexUsedPercent: null });
+  const ids = findings.map((item) => item.id);
+  assert.equal(ids.includes('codex_empty_output'), false, JSON.stringify(ids));
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 143, launched: true, timedOut: false, secs: 60.159 }), 'signal_killed');
 });
 
 // 台帳(~/.claude/executor-usage.jsonl)の実データをそのまま使う。手写しの要約にすると

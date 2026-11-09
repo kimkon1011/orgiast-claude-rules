@@ -24,7 +24,7 @@ $original = ''
 $unread = @()
 foreach ($e in $win.FindAll($Scope::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
  if ($e.Current.ControlType -eq [System.Windows.Automation.ControlType]::List -and $e.Current.Name -match 'のメッセージ$') { $original = $e.Current.Name -replace 'のメッセージ$', '' }
- if ($e.Current.ControlType -eq [System.Windows.Automation.ControlType]::Hyperlink -and $e.Current.Name -match '未読のメッセージ') {
+ if ($e.Current.ControlType -eq [System.Windows.Automation.ControlType]::Hyperlink -and $e.Current.Name -match '(件の未読|未読のメッセージ)') {
   # DM links expose their /channels/@me/ route as AutomationId in Chromium.
   # If absent, require an explicit DM label: never inspect unread server channels.
   $name = $e.Current.Name
@@ -35,7 +35,7 @@ foreach ($e in $win.FindAll($Scope::Descendants, [System.Windows.Automation.Cond
    $parent = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($parent)
   }
   if ($inDmList -or $e.Current.AutomationId -match '/channels/@me/' -or $name -match 'ダイレクトメッセージ|グループメッセージ|グループDM') {
-   $chat = ($name -replace '、?\s*未読のメッセージ.*$', '' -replace '[\s、,(（]*(ダイレクトメッセージ|グループメッセージ|グループDM).*$', '').Trim(' ', ',')
+   $chat = ($name -replace '^\s*\d*\s*件の未読、\s*', '' -replace '、?\s*\d*\s*件?の?未読のメッセージ.*$', '' -replace '[\s、,(（]*(ダイレクトメッセージ|グループメッセージ|グループDM).*$', '').Trim(' ', ',')
    if ($chat) { $unread += $chat }
   }
  }

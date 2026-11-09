@@ -52,9 +52,19 @@ export async function collectDrive({ user, state, now, request, dryRun = false }
   const current = windowState(state, now, 50), max = 50 - current.used;
   if (max <= 0) return { documents: [], next: state };
   const since = current.watermark || new Date(now.getTime() - 3 * 86400000).toISOString();
-  const q = `trashed = false and modifiedTime > '${since}' and modifiedTime <= '${current.until}' and (mimeType = 'application/vnd.google-apps.document' or mimeType = 'application/pdf' or mimeType contains 'image/') and not appProperties has { key='deadlineWatchOCR' and value='1' }`;
-  const params = new URLSearchParams({ q, orderBy: 'modifiedTime', pageSize: String(max), fields: 'nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)', ...(current.pageToken ? { pageToken: current.pageToken } : {}) });
-  const result = await request(`https://www.googleapis.com/drive/v3/files?${params}`, { user });
+  const q = current.query || `trashed = false and modifiedTime > '${since}' and modifiedTime <= '${current.until}' and (mimeType = 'application/vnd.google-apps.document' or mimeType = 'application/pdf' or mimeType contains 'image/') and not appProperties has { key='deadlineWatchOCR' and value='1' }`;
+  current.query = q;
+  const makeUrl = pageToken => {
+    const params = new URLSearchParams({ q, orderBy: 'modifiedTime', pageSize: String(max), fields: 'nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink)', ...(pageToken ? { pageToken } : {}) });
+    return `https://www.googleapis.com/drive/v3/files?${params}`;
+  };
+  let result;
+  try { result = await request(makeUrl(current.pageToken), { user }); }
+  catch (error) {
+    if (!current.pageToken || !/HTTP 400/.test(error.message)) throw error;
+    delete current.pageToken;
+    result = await request(makeUrl(), { user });
+  }
   const documents = [];
   for (const file of result.files || []) {
     const text = await readDriveText(file, { user, request, dryRun });
@@ -66,8 +76,17 @@ function timestamp(value) {
   const numeric = Number(value); return Number.isFinite(numeric) && numeric > 0 ? (numeric < 1e12 ? numeric * 1000 : numeric) : Date.parse(value);
 }
 export async function collectLine({ sheetId, state = {}, sheets, now }) {
-  const values = await sheets.get(sheetId, 'Messages!A:G');
-  const header = values[0] || [];
+  let values;
+  try {
+    values = await sheets.get(sheetId, 'Messages!A:H');
+  } catch (error) {
+    // The original LINE intake sheet predates the normalized Messages schema.
+    // Keep it readable without changing the external sheet or its permissions.
+    if (!/HTTP 400/.test(error.message)) throw error;
+    values = await sheets.get(sheetId, "'受信ログ'!A:H");
+  }
+  const aliases = { '受信日時(JST)': 'ts', '表示名': 'sender', '本文': 'text', 'メッセージID': 'id' };
+  const header = (values[0] || []).map(k => aliases[k] || k);
   if (!['id','ts','text'].every(k => header.includes(k))) throw new Error('LINE履歴の見出しが不足しています');
   const rows = values.slice(1).map(r => Object.fromEntries(header.map((k,i) => [k,r[i]])));
   const since = Date.parse(state.watermark || new Date(now.getTime() - 3 * 86400000).toISOString());
@@ -77,6 +96,7 @@ export async function collectLine({ sheetId, state = {}, sheets, now }) {
   // Timestamp watermark follows actual rows, not wall time: delayed sync remains eligible.
   return { documents, next: { watermark: documents.length ? new Date(Math.max(...documents.map(r => Date.parse(r.date)))).toISOString() : state.watermark || new Date(since).toISOString() } };
 }
+
 export async function collectDiscord({ home, state = {}, now }) {
   const intake = readJson(path.join(home, '.claude/discord-inbox-state.json'), null);
   if (!intake) return { documents: [], next: state };

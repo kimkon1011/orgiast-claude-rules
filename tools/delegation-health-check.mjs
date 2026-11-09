@@ -284,7 +284,15 @@ const CODEX_USAGE_LIMIT = /You(?:[’']ve| have) hit your usage limit|your usage
 const CODEX_MODEL_CAPACITY = /Selected model is at capacity\. Please try a different model\./i;
 
 export function emptyOutputReason(row) {
-  if (row?.timedOut === true) return 'timeout';
+  if (row?.timedOut === true) {
+    // ChatGPT 認証レーンの timeout で stderr が無い行は、同一クレジット枯渇(usage_limit)
+    // に起因するタイムアウト（API応答待ち中に制限時間到達）。これを timeout のまま残すと
+    // usage_limit 行と混ざって lane_outage_unrepaired(high/fixTask)になり、同じ原因から
+    // 毎晩修理タスクが積まれる（2026-11-06 実測: 時限到達の secs=84 / stderrTail="" の1件が
+    // usage_limit 5件と混ざって lane_outage_unrepaired を発生させた）。
+    if (row?.provider === 'codex' && String(row?.lane ?? '').includes('chatgpt_auth') && !String(row?.stderrTail ?? '').trim()) return 'usage_limit';
+    return 'timeout';
+  }
   // 旧行(timedOut 未記録)は経過秒数から推定する。codex の正常終了は実測で中央値~100秒、
   // 打ち切りは --timeout 到達時にのみ現れ、実測値は 300 秒以上だった。
   if (row?.timedOut == null && Number(row?.secs) >= 300) return 'timeout';
@@ -328,6 +336,16 @@ export function emptyOutputReason(row) {
   // out=0 になったが HTTP 応答は正常で status:"ok"。これを no_output と判定すると
   // lane_outage_unrepaired になる)。
   if (String(row?.status ?? '') === 'ok') return 'ok';
+  // 128+N（POSIX シグナル終了コード。SIGTERM=15→143 / SIGKILL=9→137 / SIGINT=2→130）は
+  // 外部からの kill であり、codex が「何も出さずに終わった」のではない。stdout へ最終メッセージを
+  // 書く前に殺されるため out=0 になる（INFRA_TRANSIENT のコメント、2026-09-11 実測と同じ）。
+  // 実測 2026-11-08: sol が 240s で timeout(124) した後の astra 昇格試行が ~60s で SIGTERM(143)
+  // により打ち切られた。この行は status:'error'（文字列）のため exit_N 判定へ進めず catch-all の
+  // no_output に埋もれて codex_empty_output が毎晩起票された。signal_killed として分離し、
+  // codex_empty_output の実空判定（realEmpty）から除く。
+  // 旧行は終了コードが status の数値に載り exitCode が無いことがあるため、両方を同じレンジで見る。
+  const signalCode = Number(row?.exitCode ?? row?.status);
+  if (Number.isFinite(signalCode) && signalCode >= 129 && signalCode <= 192) return 'signal_killed';
   const status = Number(row?.status);
   if (Number.isFinite(status) && status !== 0) return `exit_${status}`;
   return 'no_output';
@@ -501,7 +519,7 @@ export function collectFindings({ home, now = new Date(), codexUsedPercent = nul
     const lastFailureTime = Math.max(...failures.map((row) => Date.parse(row.t)));
     return codexSuccessTimes.some((time) => time > lastFailureTime);
   };
-  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed', 'usage_limit', 'model_capacity', 'cooldown_skipped'].includes(item.reason));
+  const realEmpty = empty.filter((item) => !['infra_transient', 'launch_failed', 'auth_failed', 'model_auth_mismatch', 'preflight_blocked', 'spawn_failed', 'usage_limit', 'model_capacity', 'cooldown_skipped', 'signal_killed'].includes(item.reason));
   const launchFailed = empty.filter((item) => item.reason === 'launch_failed');
   const authFailed = empty.filter((item) => item.reason === 'auth_failed');
   const modelAuthMismatch = empty.filter((item) => item.reason === 'model_auth_mismatch');

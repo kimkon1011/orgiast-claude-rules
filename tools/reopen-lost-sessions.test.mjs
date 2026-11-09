@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry } from './reopen-lost-sessions.mjs';
+import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync } from './reopen-lost-sessions.mjs';
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
 const exit = { event_type: 'system', payload: { reason: 'host_exit' }, created_at: since };
@@ -752,14 +752,20 @@ test('CPU 85%以上で開き直しを defer、watermark を進めない', async 
     return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
   };
   const spawn = (cmd, args) => {
-    if (cmd === 'powershell.exe' && args[0] === '-NoProfile' && args[3]?.includes('LoadPercentage')) return { status: 0, stdout: '93' };
     if (args[0] === 'agents') return { status: 0, stdout: '[]' };
     return { status: 0, stdout: '' };
   };
+  // Stub cpusImpl to return 92% usage: totalDiff=87, idleDiff=7 → 100*(1-7/87)=92
+  let cpuCallCount = 0;
+  const cpusImpl = () => {
+    cpuCallCount++;
+    if (cpuCallCount === 1) return [{ times: { user: 0, nice: 0, system: 0, idle: 0, iowait: 0, irq: 0, softirq: 0 } }];
+    return [{ times: { user: 50, nice: 0, system: 30, idle: 7, iowait: 0, irq: 0, softirq: 0 } }];
+  };
 
-  const result = await watchReopen({ base, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, now: () => nowTime,
+  const result = await watchReopen({ base, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, cpusImpl, now: () => nowTime,
     windowReady: () => true, wait: async () => {} });
-  assert.equal(result.deferredCpu, 93);
+  assert.equal(result.deferredCpu, 92);
   assert.equal(result.reopened.length, 0);
   // watermark は deferredCpu により進まない
   assert.equal(fs.existsSync(stateFile), false);
@@ -963,4 +969,166 @@ test('reopenLost: 再オープン後の検証も aliveSource を正しく記録�
   assert.equal(result.reopened.length, 1);
   assert.deepEqual(result.verified, []);
   assert.deepEqual(result.unverified, ['one']);
+});
+
+// ── writeProgress ───────────────────────────────────────
+
+test('writeProgress creates progress file with correct content', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wp-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  const fixedNow = Date.parse('2026-11-09T00:00:00.000Z');
+  writeProgress(base, 'lock', 'acquired', () => fixedNow);
+  const progressPath = path.join(base, 'reopen-lost-sessions-progress.json');
+  assert.ok(fs.existsSync(progressPath));
+  const data = JSON.parse(fs.readFileSync(progressPath, 'utf8'));
+  assert.equal(data.pid, process.pid);
+  assert.equal(data.stage, 'lock');
+  assert.equal(data.detail, 'acquired');
+  assert.equal(data.at, new Date(fixedNow).toISOString());
+});
+
+test('writeProgress default base uses homedir', t => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'wp-home-'));
+  t.after(() => fs.rmSync(tmpHome, { recursive: true, force: true }));
+  const origHome = os.homedir;
+  os.homedir = () => tmpHome;
+  fs.mkdirSync(path.join(tmpHome, '.claude'), { recursive: true });
+  try {
+    const fixedNow = Date.parse('2026-11-09T00:00:01.000Z');
+    writeProgress(undefined, 'auth', 'credentials loaded', () => fixedNow);
+    const progressPath = path.join(tmpHome, '.claude', 'reopen-lost-sessions-progress.json');
+    assert.ok(fs.existsSync(progressPath));
+    const data = JSON.parse(fs.readFileSync(progressPath, 'utf8'));
+    assert.equal(data.stage, 'auth');
+    assert.equal(data.detail, 'credentials loaded');
+  } finally {
+    os.homedir = origHome;
+  }
+});
+
+test('writeProgress overwrites previous content', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wp-over-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  const fixedNow = Date.parse('2026-11-09T00:00:02.000Z');
+  writeProgress(base, 'lock', 'acquired', () => fixedNow);
+  writeProgress(base, 'alive', 'source=agents', () => fixedNow + 1000);
+  const data = JSON.parse(fs.readFileSync(path.join(base, 'reopen-lost-sessions-progress.json'), 'utf8'));
+  assert.equal(data.stage, 'alive');
+  assert.equal(data.detail, 'source=agents');
+});
+
+// ── acquireLock dual update ─────────────────────────────
+
+test('acquireLock dual update: futimesSync and utimesSync run without error', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lock-dual-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const lockFile = path.join(root, 'test.lock');
+  const release = acquireLock(lockFile);
+  assert.ok(release, 'lock should be acquired');
+  // Verify the file exists and has pid content
+  assert.ok(fs.existsSync(lockFile));
+  const content = fs.readFileSync(lockFile, 'utf8');
+  assert.equal(content, String(process.pid));
+  // mtime should be set (writeSync + futimesSync both set it)
+  const stat = fs.statSync(lockFile);
+  assert.ok(stat.mtimeMs > 0, `mtime should be positive, got ${stat.mtimeMs}`);
+  // Release properly removes the lock
+  release();
+  assert.equal(fs.existsSync(lockFile), false, 'lock should be released');
+});
+
+// ── reopenLost writes progress at key stages ────────────
+
+test('reopenLost writes progress during dry run', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-progress-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+  ].map(JSON.stringify).join('\n'));
+
+  await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe',
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+
+  // Progress file should exist with at least 'done' stage
+  const progressPath = path.join(base, 'reopen-lost-sessions-progress.json');
+  assert.ok(fs.existsSync(progressPath), 'progress file should exist');
+  const data = JSON.parse(fs.readFileSync(progressPath, 'utf8'));
+  assert.equal(data.stage, 'done');
+  assert.equal(data.detail, 'log written');
+});
+
+test('measureCpuAsync: 50% usage from stubbed cpus', async () => {
+  const cpu1 = { times: { user: 100, nice: 0, system: 50, idle: 200, iowait: 0, irq: 0, softirq: 0 } };
+  const cpu2 = { times: { user: 150, nice: 0, system: 80, idle: 250, iowait: 0, irq: 0, softirq: 0 } };
+  // total1 = 350, total2 = 480, diff = 130
+  // idle1 = 200, idle2 = 250, diff = 50
+  // usage = 100 * (1 - 50/130) ≈ 62 → round to 62
+  let callCount = 0;
+  const cpusImpl = () => {
+    callCount++;
+    return callCount === 1 ? [cpu1] : [cpu2];
+  };
+  let waited = false;
+  const wait = async ms => { waited = true; };
+  const result = await measureCpuAsync({ sampleMs: 100, cpusImpl, wait });
+  assert.equal(result, 62);
+  assert.ok(waited);
+});
+
+test('measureCpuAsync: 0% usage when idle diff equals total diff', async () => {
+  const cpu1 = { times: { user: 100, nice: 0, system: 50, idle: 200, iowait: 0, irq: 0, softirq: 0 } };
+  const cpu2 = { times: { user: 100, nice: 0, system: 50, idle: 250, iowait: 0, irq: 0, softirq: 0 } };
+  // total1 = 350, total2 = 400, diff = 50
+  // idle1 = 200, idle2 = 250, diff = 50
+  // usage = 100 * (1 - 50/50) = 0
+  let callCount = 0;
+  const cpusImpl = () => {
+    callCount++;
+    return callCount === 1 ? [cpu1] : [cpu2];
+  };
+  const result = await measureCpuAsync({ sampleMs: 100, cpusImpl, wait: async () => {} });
+  assert.equal(result, 0);
+});
+
+test('measureCpuAsync: null when total diff is 0', async () => {
+  const cpu = { times: { user: 100, nice: 0, system: 50, idle: 200, iowait: 0, irq: 0, softirq: 0 } };
+  const cpusImpl = () => [cpu, cpu];
+  const result = await measureCpuAsync({ sampleMs: 100, cpusImpl, wait: async () => {} });
+  assert.equal(result, null);
+});
+
+test('measureCpuAsync: null when cpusImpl throws', async () => {
+  const cpusImpl = () => { throw new Error('no cpus'); };
+  const result = await measureCpuAsync({ sampleMs: 100, cpusImpl, wait: async () => {} });
+  assert.equal(result, null);
+});
+
+test('measureCpuAsync: multi-core aggregation', async () => {
+  const cpu1a = { times: { user: 100, nice: 0, system: 50, idle: 200, iowait: 0, irq: 0, softirq: 0 } };
+  const cpu1b = { times: { user: 200, nice: 0, system: 100, idle: 400, iowait: 0, irq: 0, softirq: 0 } };
+  const cpu2a = { times: { user: 50, nice: 0, system: 30, idle: 150, iowait: 0, irq: 0, softirq: 0 } };
+  const cpu2b = { times: { user: 80, nice: 0, system: 50, idle: 200, iowait: 0, irq: 0, softirq: 0 } };
+  // Core 0: total 350→700 diff=350, idle 200→400 diff=200
+  // Core 1: total 230→330 diff=100, idle 150→200 diff=50
+  // Aggregated: totalDiff=450, idleDiff=250
+  // usage = 100 * (1 - 250/450) ≈ 44.4 → round to 44
+  let callCount = 0;
+  const cpusImpl = () => {
+    callCount++;
+    return callCount === 1 ? [cpu1a, cpu2a] : [cpu1b, cpu2b];
+  };
+  const result = await measureCpuAsync({ sampleMs: 100, cpusImpl, wait: async () => {} });
+  assert.equal(result, 44);
 });

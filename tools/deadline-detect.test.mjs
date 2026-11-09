@@ -90,6 +90,34 @@ test('Driveの50件上限とLINE/Discordの新規行を読み込む', async t =>
   assert.equal((await collectDiscord({ home, now })).documents.length, 1);
 });
 
+test('旧LINE受信ログの日本語見出しも期限検出へ正規化する', async () => {
+  const now = new Date('2026-11-07T00:00:00Z');
+  const calls = [];
+  const sheets = { get: async (_id, range) => {
+    calls.push(range);
+    if (range.startsWith('Messages!')) throw new Error('Sheets GET HTTP 400');
+    return [
+      ['受信日時(JST)','グループ名','スレッドID','表示名','方向','本文','添付の保存パス','メッセージID'],
+      ['2026-11-06T12:00:00+09:00','','thread','担当者','受信','11月10日までに回答','','legacy-1'],
+    ];
+  } };
+  const result = await collectLine({ sheetId: 'legacy', state: { watermark: '2026-11-05T00:00:00Z' }, now, sheets });
+  assert.deepEqual(calls, ['Messages!A:H', "'受信ログ'!A:H"]);
+  assert.equal(result.documents[0].sourceRef, 'line:legacy:legacy-1');
+  assert.equal(result.documents[0].text, '担当者: 11月10日までに回答');
+})
+
+test('Driveの旧ページトークンが無効なら固定条件の先頭から再開する', async () => {
+  const urls = [];
+  const result = await collectDrive({ user: 'kim@orgiast.jp',
+    state: { day: '2026-11-03', used: 50, until: '2026-11-03T02:00:00Z', pageToken: 'expired' }, now,
+    request: async url => { urls.push(url); if (urls.length === 1) throw new Error('Google GET HTTP 400'); return { files: [], nextPageToken: 'next' }; } });
+  assert.match(urls[0], /pageToken=expired/);
+  assert.doesNotMatch(urls[1], /pageToken=/);
+  assert.equal(result.next.pageToken, 'next');
+  assert.match(result.next.query, /modifiedTime/);
+})
+
 test('不存在のfixtureで本番ソースへfallbackしない', async t => {
   const home=homeFor(t), errors=[];
   assert.equal(await main(['--dry-run','--fixture',home],{home,config:{...DEFAULT_CONFIG,sheetId:'live'},stderr:e=>errors.push(e),search:()=>assert.fail('live read')}),1);

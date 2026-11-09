@@ -12,9 +12,10 @@ function outputState(text) {
   return '';
 }
 export function humanProgressText(row) {
+  const nextKim = String(row.nextKim || '').trim();
+  const nextKimLine = nextKim && !/^(?:特に)?(?:なし|無し|ナシ)/.test(nextKim) ? `\nkim の次の1手: ${nextKim}` : '';
   return `依頼名: ${first(row.label || row.promise)}
-いまの状態: ${first(checkProgressSummary(row.checkText))}
-kim の次の1手: ${String(row.nextKim || '').trim() || 'なし'}
+いまの状態: ${first(checkProgressSummary(row.checkText))}${nextKimLine}
 Claude の次の手: ${String(row.nextClaude || '').trim() || 'check の実行ログと対象の受け口を確認し、次の進行を判断する'}`;
 }
 // Compare with the last delivered state, not the last check: failures must retry.

@@ -32,8 +32,14 @@ test('表示名付きの社内ドメインへの送信を拒否', () => {
 test('外部顧客への下書きは通す', () => {
   assert.deepEqual(judge(hook({ to: 'customer@example.co.jp' }), ledger), { decision: 'pass', addresses: ['customer@example.co.jp'], internal: [] });
 });
-test('to が外部でも cc に内部宛があれば拒否', () => {
-  assert.equal(judge(hook({ to: 'customer@example.co.jp', cc: ['keiri.orgiast@gmail.com'] }), ledger).decision, 'block');
+test('全員内部のときだけ拒否し、外部宛が1件でもあれば許可', () => {
+  assert.equal(judge(hook({ to: 'customer@example.co.jp', cc: ['keiri.orgiast@gmail.com'] }), ledger).decision, 'pass');
+  assert.equal(judge(hook({ to: 'nishi@orgiast.jp' }), ledger).decision, 'block');
+  assert.equal(judge(hook({ to: 'nishi@orgiast.jp', cc: ['keiri.orgiast@gmail.com'] }), ledger).decision, 'block');
+  assert.equal(judge(hook({ to: 'customer@example.co.jp' }), ledger).decision, 'pass');
+});
+test('reply で to/cc 未指定の場合は現行どおり pass', () => {
+  assert.equal(judge(hook({ message_id: 'message-1' }, 'reply'), ledger).decision, 'pass');
 });
 test('Drive など対象外は即 pass', () => {
   assert.deepEqual(judge({ tool_name: 'mcp__claude_ai_Google_Drive__create_file', tool_input: { to: 'nishi@orgiast.jp' } }, null), { decision: 'pass', addresses: [], internal: [] });
@@ -176,6 +182,10 @@ test('curl POST drafts の外部アドレスは実プロセスでも無出力で
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, '');
   assert.equal(result.stderr, '');
+});
+test('curl POST drafts の外部宛 + 内部 Cc は通す', () => {
+  const command = `curl -X POST https://gmail.googleapis.com/gmail/v1/users/me/drafts -d 'To: customer@example.com Cc: keiri.orgiast@gmail.com'`;
+  assert.equal(judgeBash(shellHook(command), ledger).decision, 'pass');
 });
 test('GET drafts の読み取りは通す', () => {
   assert.equal(judgeBash(shellHook('curl https://gmail.googleapis.com/gmail/v1/users/me/drafts/abc123'), ledger).decision, 'pass');

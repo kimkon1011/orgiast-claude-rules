@@ -948,6 +948,36 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     const key = rowKey(row), at = new Date(now).toISOString();
     try {
       if (now >= Date.parse(row.deadlineAt)) {
+        // 期限超過かつ nextKim が空/なし の予約行は再開を試みる
+        const nextKimClean = String(row.nextKim ?? '').replace(/^[\s　]+|[\s　]+$/g, '');
+        const resumeEligible = (nextKimClean === '' || nextKimClean === 'なし') &&
+          !executorUnavailable && summary.resumed < MAX_RESUMES_PER_RUN &&
+          (row.resumeCount ?? 0) < MAX_RESUMES &&
+          now - (Date.parse(row.resumedAt || '') || 0) >= RESUME_INTERVAL_MS &&
+          clock() + 22 * 60000 < stopAt && row.cwd &&
+          (io.cwdExists ?? fs.existsSync)(row.cwd) && !isUnattendedRow(row, home);
+        if (resumeEligible) {
+          const attempt = { status: 'resumed', resumedAt: at, resumeCount: (row.resumeCount ?? 0) + 1, resumeOutcome: 'attempting' };
+          if (patch(key, attempt)) {
+            let outcome;
+            try { outcome = await (io.resume ?? resumeSession)(row, { home, reason: 'start-overdue' }); }
+            catch (error) { outcome = { outcome: 'error', reason: String(error.message || error) }; }
+            if (outcome.deferred || outcome.outcome === 'deferred') {
+              executorUnavailable = true;
+              summary.resumeDeferred++;
+              patch(key, { resumedAt: row.resumedAt || '', resumeCount: row.resumeCount ?? 0, resumeDeferredAt: at, resumeOutcome: `deferred: ${outcome.reason}` });
+            } else {
+              summary.resumed++;
+              const state = outcome.state || outcome.outcome;
+              if (patch(key, { resumeOutcome: `${state}: ${outcome.reason}`, resumeFinishedAt: new Date(clock()).toISOString(), nextKim: outcome.nextKim ?? row.nextKim })) {
+                try {
+                  await (io.notifyOwner ?? notifyOwner)(ownerOf(row), `期限を過ぎた自動進行を再開しました: ${row.label || row.promise}\n結果: ${outcome.reason}`, { home, now, kind: 'automatic', session: row });
+                } catch (error) { summary.errors.push(`start-overdue-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
+                continue;
+              }
+            }
+          }
+        }
         const result = { text: `開始予約の期限を過ぎても未起動です: ${row.label || row.promise}` };
         if (!patch(key, { status: 'start_overdue', reason: result.text })) continue;
         (io.queueCheckFollowup ?? queueCheckFollowup)(home, row, result);

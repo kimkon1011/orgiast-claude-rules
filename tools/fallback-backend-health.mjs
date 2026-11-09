@@ -93,7 +93,36 @@ export function deprioritizeUnreliableBackends(backends, history, {
       console.error(`[codex-do] fallback backend=${name} は直近の成功率が低いため連鎖の後方へ回します (ok=${ok}/${runs})`);
     }
   }
-  if (lowReliability.size === 0 || lowReliability.size >= list.length) return [...list];
+  if (lowReliability.size === 0) return [...list];
+  // 全件が低信頼のときは、直近窓の成功率（ok/runs）で降順に安定ソートする。
+  // runs<minRuns の backend は成功率不明として元の順位を維持し、低信頼群の前に置く。
+  if (lowReliability.size >= list.length) {
+    const rateMap = new Map();
+    for (const backend of list) {
+      const name = backend && backend.name;
+      if (!name) continue;
+      let runs = 0, ok = 0;
+      for (const row of rows) {
+        const t = Number(row.t);
+        if (!Number.isFinite(t)) continue;
+        if (now - t >= windowMs) continue;
+        if (String(row.backend).trim() !== name) continue;
+        runs++;
+        if (row.outcome === 'ok') ok++;
+      }
+      rateMap.set(name, { runs, ok, rate: runs >= minRuns ? ok / runs : -1 });
+    }
+    const sorted = [...list].sort((a, b) => {
+      const ra = rateMap.get(a?.name) || { runs: 0, ok: 0, rate: -1 };
+      const rb = rateMap.get(b?.name) || { runs: 0, ok: 0, rate: -1 };
+      // 成功率不明（runs<minRuns）は元の順位を維持（sort は安定なので同値比較で元の順序が保たれる）
+      if (ra.rate < 0 && rb.rate < 0) return 0;
+      if (ra.rate < 0) return -1;
+      if (rb.rate < 0) return 1;
+      return rb.rate - ra.rate;
+    });
+    return sorted;
+  }
   const reliable = [], unreliable = [];
   for (const backend of list) {
     if (lowReliability.has(backend?.name)) {

@@ -87,8 +87,9 @@ export function waitPrefix(date) {
 }
 
 // この session_id に登録済みの auto-progress チェックのうち、未完了で最も早い deadline を返す。
+// ref（最後の assistant 応答時刻）より前の deadline は無視する。
 // チェックが無ければ null。
-export function earliestAutoProgressDeadline(sessionId, { home = process.env.ORGIAST_HOME || os.homedir(), ledgerRows } = {}) {
+export function earliestAutoProgressDeadline(sessionId, { home = process.env.ORGIAST_HOME || os.homedir(), ledgerRows, ref } = {}) {
   try {
     const rows = ledgerRows ?? readLedger(ledgerFile(home));
     const latestByKey = new Map();
@@ -102,6 +103,7 @@ export function earliestAutoProgressDeadline(sessionId, { home = process.env.ORG
         latestByKey.set(key, row);
       }
     }
+    const refMs = typeof ref === 'number' ? ref : (ref instanceof Date ? ref.getTime() : (Date.parse(ref) || 0));
     const matching = [];
     for (const row of latestByKey.values()) {
       if (row.sessionId !== sessionId) continue;
@@ -109,7 +111,9 @@ export function earliestAutoProgressDeadline(sessionId, { home = process.env.ORG
       if (!row.deadlineAt) continue;
       const d = new Date(row.deadlineAt);
       if (Number.isFinite(d.getTime())) {
-        matching.push(d);
+        if (!refMs || d.getTime() >= refMs) {
+          matching.push(d);
+        }
       }
     }
     if (!matching.length) return null;
@@ -169,18 +173,19 @@ export function extractDeadlineFromAutopilot(text, { ref, now } = {}) {
 }
 
 // 「まだ閉じない」系のセッション行で openDeadline が null のとき、期限を推定する。
-// 1. auto-progress チェックの deadline
-// 2. autopilot 本文からの日付抽出
-// 3. 既存の prefix を保持
+// 1. autopilot 本文からの日付抽出
+// 2. 1 が無い時だけ、auto-progress 台帳の open check の deadline。ただし ref より前の deadline は無視し、残りのうち最も早いもの。
+// 3. どちらも無ければ null（呼び出し側で既存 prefix 保持）。
 export function estimateWaitDeadline(sessionId, footer, { ref = Date.now(), home = process.env.ORGIAST_HOME || os.homedir(), ledgerRows } = {}) {
-  // auto-progress チェックの deadline を最優先
-  const apDeadline = earliestAutoProgressDeadline(sessionId, { home, ledgerRows });
-  if (apDeadline) return apDeadline;
-  // autopilot 本文から日付抽出
+  // 1. autopilot 本文から日付抽出（最優先）
   if (footer?.autopilot) {
     const extracted = extractDeadlineFromAutopilot(footer.autopilot, { ref });
     if (extracted) return extracted;
   }
+  // 2. auto-progress チェックの deadline（ref 以降のもの）
+  const apDeadline = earliestAutoProgressDeadline(sessionId, { home, ledgerRows, ref });
+  if (apDeadline) return apDeadline;
+
   return null;
 }
 

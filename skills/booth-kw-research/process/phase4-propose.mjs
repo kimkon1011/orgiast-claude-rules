@@ -1,15 +1,11 @@
 #!/usr/bin/env node
-/** Phase 4: コンテンツギャップ、既存ページ、内部リンクの改善提案 */
+/** Phase 4: コンテンツギャップ、既存ページ、内部リンクの改善提案（バッチ分類対応 X-0013） */
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const execute = promisify(execFile);
-const LLM_PATH = path.resolve(__dirname, '..', '..', '..', 'tools', 'llm-ask.mjs');
 
 function parseCsv(text) {
   const rows = [];
@@ -59,27 +55,6 @@ function ruleBasedPageType(keyword) {
   return 'コラム';
 }
 
-async function recommendPageType(keyword, useLlm) {
-  if (!useLlm) return ruleBasedPageType(keyword);
-  const prompt = `次のキーワードに最適なページ種別を1つ選んでください。選択肢: サービスページ（高意図・高ボリューム）/ 事例ページ（高意図・低ボリューム）/ コラム（低意図・高ボリューム）\nキーワード: ${keyword.keyword}\n意図: ${keyword.intent}\n検索ボリューム: ${keyword.volume}\n回答は「サービスページ」「事例ページ」「コラム」のいずれか。`;
-  try {
-    const { stdout } = await execute(process.execPath, [LLM_PATH, '--provider', 'groq', '--prefer-provider', '--category', 'classification', '--max', '80', prompt], { timeout: 60000, windowsHide: true, maxBuffer: 1024 * 1024 });
-    return ['サービスページ', '事例ページ', 'コラム'].find(type => stdout.includes(type)) || ruleBasedPageType(keyword);
-  } catch (error) {
-    console.error(`  LLMページ種別分類失敗: ${keyword.keyword}: ${error.message}`);
-    return ruleBasedPageType(keyword);
-  }
-}
-
-async function mapLimit(items, limit, mapper) {
-  const result = Array(items.length);
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) { const index = next; next += 1; result[index] = await mapper(items[index], index); }
-  }));
-  return result;
-}
-
 function normalizeUrl(value) {
   try { const url = new URL(value); url.hash = ''; return url.href.replace(/\/$/, ''); } catch { return value; }
 }
@@ -105,8 +80,29 @@ async function main() {
   const orgiastPages = crawlData.filter(site => site.domain === 'https://orgiast.jp' || site.domain === 'https://orgiast.jp/').flatMap(site => site.pages);
   const topics = orgiastPages.map(page => pageTopic(page));
   const gaps = keywords.filter(keyword => Math.max(0, ...topics.map(topic => jaroWinkler(keyword.keyword, topic))) < 0.3);
-  const gapTypes = await mapLimit(gaps, 5, keyword => recommendPageType(keyword, !isDryRun));
-  const typeByKeyword = new Map(gaps.map((keyword, index) => [keyword.keyword, gapTypes[index]]));
+
+  // バッチでページ種別推奨（1回のLLM呼出し）
+  let typeByKeyword = new Map();
+  if (gaps.length > 0) {
+    if (isDryRun) {
+      for (const keyword of gaps) {
+        typeByKeyword.set(keyword.keyword, ruleBasedPageType(keyword));
+      }
+    } else {
+      const { batchClassify, pageTypePrompt, parsePageTypeResponse } = await import('./batch-classify.mjs');
+      const results = await batchClassify({
+        items: gaps,
+        tasks: [{
+          key: 'pageType',
+          prompt: (items) => pageTypePrompt(items),
+          parse: (resp, items) => parsePageTypeResponse(resp, items),
+          defaultValue: 'コラム',
+        }],
+        dryRun: false,
+      });
+      gaps.forEach((keyword, index) => { typeByKeyword.set(keyword.keyword, results.pageType[index]); });
+    }
+  }
 
   const optimizations = [];
   for (const keyword of keywords.slice(0, 10)) {

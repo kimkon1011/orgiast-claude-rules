@@ -1,61 +1,17 @@
 #!/usr/bin/env node
-/** Phase 3: 検索意図分類、スコアリング、優先順位付け */
+/** Phase 3: 検索意図分類、スコアリング、優先順位付け（バッチ分類対応 X-0013） */
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const execute = promisify(execFile);
-const LLM_PATH = path.resolve(__dirname, '..', '..', '..', 'tools', 'llm-ask.mjs');
 
 function ruleBasedIntent(keyword) {
-  if (/費用|価格|料金/.test(keyword)) return 'Commercial';
+  if (/費用|価格|料金/.test(keyword)) return 'Transactional';
   if (/代行|依頼|申込|見積/.test(keyword)) return 'Transactional';
   if (/とは|意味|方法|違い/.test(keyword)) return 'Informational';
   return 'Commercial';
-}
-
-async function askLlm(prompt, max = '80') {
-  const { stdout } = await execute(process.execPath, [LLM_PATH, '--provider', 'groq', '--prefer-provider', '--category', 'classification', '--max', max, prompt], {
-    timeout: 60000, windowsHide: true, maxBuffer: 1024 * 1024,
-  });
-  return stdout.trim();
-}
-
-async function classifyIntent(keyword, useLlm) {
-  if (!useLlm) return ruleBasedIntent(keyword);
-  const prompt = `次のキーワードの検索意図を分類してください。選択肢: Informational（情報収集）/ Commercial（比較検討）/ Transactional（購入・申込）。\nキーワード: ${keyword}\n回答は選択肢の英語1単語のみでお願いします。`;
-  try {
-    const answer = await askLlm(prompt);
-    return ['Informational', 'Commercial', 'Transactional'].find(intent => new RegExp(`\\b${intent}\\b`, 'i').test(answer)) || ruleBasedIntent(keyword);
-  } catch (error) {
-    console.error(`  LLM検索意図分類失敗: ${keyword}: ${error.message}`);
-    return ruleBasedIntent(keyword);
-  }
-}
-
-async function classifyCategory(keyword, categories, useLlm) {
-  if (!useLlm) return '未分類';
-  const prompt = `次のキーワードを最も近いカテゴリに分類してください。\n選択肢: ${categories.join(' / ')}\nキーワード: ${keyword}\n回答は選択肢のカテゴリ名1つのみでお願いします。`;
-  try {
-    const answer = await askLlm(prompt);
-    return categories.find(category => answer.includes(category)) || '未分類';
-  } catch (error) {
-    console.error(`  LLMカテゴリ分類失敗: ${keyword}: ${error.message}`);
-    return '未分類';
-  }
-}
-
-async function mapLimit(items, limit, mapper) {
-  const result = Array(items.length);
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) { const index = next; next += 1; result[index] = await mapper(items[index], index); }
-  }));
-  return result;
 }
 
 function calculateScore(keyword, bizValue) {
@@ -91,23 +47,102 @@ async function main() {
   const keywords = JSON.parse(fs.readFileSync(path.join(root, 'raw-keywords.json'), 'utf-8'));
   const bizValue = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'data', 'business-value.json'), 'utf-8'));
   const categories = bizValue.services.map(service => service.category);
-  const classified = await mapLimit(keywords, 5, async keyword => {
-    const category = keyword.category === '未分類' ? await classifyCategory(keyword.text, categories, !isDryRun) : keyword.category;
-    const normalized = { ...keyword, category };
-    const intent = await classifyIntent(keyword.text, !isDryRun);
+
+  let classifiedKeywords = keywords;
+  if (isDryRun) {
+    // dry-run: ルールベースで分類
+    classifiedKeywords = keywords.map(keyword => ({
+      ...keyword,
+      intent: ruleBasedIntent(keyword.text),
+      category: keyword.category !== '未分類' ? keyword.category : '未分類',
+    }));
+  } else {
+    const { batchClassify, intentPrompt, parseIntentResponse, categoryPrompt, parseCategoryResponse } = await import('./batch-classify.mjs');
+
+    // バッチで意図分類（1回のLLM呼出し）
+    const unclassifiedForIntent = keywords.filter(kw => !kw.category || kw.category === '未分類');
+    const needsIntent = keywords.filter(kw => kw.category && kw.category !== '未分類');
+    let intentResults = {};
+    if (unclassifiedForIntent.length > 0) {
+      // カテゴリ未分類のキーワードも含めてまとめて意図分類
+      const allForIntent = keywords;
+      const r = await batchClassify({
+        items: allForIntent.map(kw => ({ text: kw.text })),
+        tasks: [{
+          key: 'intent',
+          prompt: (items) => intentPrompt(items),
+          parse: (resp, items) => parseIntentResponse(resp, items),
+          defaultValue: 'Commercial',
+        }],
+        dryRun: false,
+      });
+      intentResults = r;
+    } else {
+      const r = await batchClassify({
+        items: needsIntent.map(kw => ({ text: kw.text })),
+        tasks: [{
+          key: 'intent',
+          prompt: (items) => intentPrompt(items),
+          parse: (resp, items) => parseIntentResponse(resp, items),
+          defaultValue: 'Commercial',
+        }],
+        dryRun: false,
+      });
+      intentResults = r;
+    }
+
+    // カテゴリ未分類のものをバッチ分類（Phase 2 でも分類済みだが、ここで補完）
+    const unknownCat = keywords.filter((kw, i) => kw.category === '未分類');
+    let categoryResults = { category: keywords.map(kw => kw.category) };
+    if (unknownCat.length > 0) {
+      const r = await batchClassify({
+        items: unknownCat.map(kw => ({ text: kw.text })),
+        tasks: [{
+          key: 'category',
+          prompt: (items) => categoryPrompt(items, categories),
+          parse: (resp, items) => parseCategoryResponse(resp, items, categories),
+          defaultValue: '未分類',
+        }],
+        dryRun: false,
+      });
+      // 元の配列にマージ
+      let catIdx = 0;
+      categoryResults.category = keywords.map((kw) => {
+        if (kw.category === '未分類') {
+          return r.category[catIdx++];
+        }
+        return kw.category;
+      });
+    }
+
+    classifiedKeywords = keywords.map((keyword, i) => {
+      const intent = unclassifiedForIntent.length > 0
+        ? intentResults.intent[i]
+        : (intentResults.intent[needsIntent.indexOf(keyword)] || ruleBasedIntent(keyword.text));
+      return {
+        ...keyword,
+        intent,
+        category: categoryResults.category[i],
+      };
+    });
+  }
+
+  // スコア計算（ルールベース、非決定論的処理なし）
+  const scored = classifiedKeywords.map(keyword => {
+    const normalized = { ...keyword, category: keyword.category !== '未分類' ? keyword.category : 'Commercial' };
     return {
       keyword: keyword.text,
-      intent,
-      category,
+      intent: keyword.intent,
+      category: keyword.category,
       volume: keyword.volume || 50,
       difficulty: keyword.difficulty || 30,
-      business_value: bizValue.services.find(service => service.category === category)?.estimated_unit_price || 0,
+      business_value: bizValue.services.find(service => service.category === keyword.category)?.estimated_unit_price || 0,
       score: calculateScore(normalized, bizValue),
     };
   });
-  classified.sort((a, b) => b.score - a.score);
-  const allScores = classified.map(keyword => keyword.score);
-  const rows = classified.map((keyword, index) => ({ priority: index + 1, ...keyword, recommended_action: getRecommendedAction(keyword.score, allScores) }));
+  scored.sort((a, b) => b.score - a.score);
+  const allScores = scored.map(keyword => keyword.score);
+  const rows = scored.map((keyword, index) => ({ priority: index + 1, ...keyword, recommended_action: getRecommendedAction(keyword.score, allScores) }));
   const header = ['priority', 'keyword', 'intent', 'category', 'volume', 'difficulty', 'business_value', 'score', 'recommended_action'];
   const outPath = path.join(root, 'keywords-priority.csv');
   fs.mkdirSync(path.dirname(outPath), { recursive: true });

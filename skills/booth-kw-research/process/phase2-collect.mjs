@@ -1,14 +1,11 @@
 #!/usr/bin/env node
-/** Phase 2: クロール結果とGSC CSVからキーワードを収集・統合 */
+/** Phase 2: クロール結果とGSC CSVからキーワードを収集・統合（バッチ分類対応 X-0013） */
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const execute = promisify(execFile);
 const STOP_WORDS = new Set(['オージャスト', '一覧', '株式会社', '株式会社オージャスト', 'サービス', 'メニュー']);
 
 function extractKeywords(text) {
@@ -86,7 +83,7 @@ function parseCsv(text) {
 }
 
 function readGscKeywords(csvPath) {
-  const rows = parseCsv(fs.readFileSync(csvPath, 'utf-8').replace(/^\uFEFF/, ''));
+  const rows = parseCsv(fs.readFileSync(csvPath, 'utf-8').replace(/^﻿/, ''));
   if (!rows.length) return [];
   const header = rows[0].map(value => value.trim().toLowerCase());
   const queryIndex = header.findIndex(value => value === 'top queries' || value === 'queries' || value === 'query');
@@ -100,27 +97,6 @@ function readGscKeywords(csvPath) {
     const impressions = Number(String(row[impressionsIndex] || '').replace(/,/g, '')) || 0;
     return [{ text: query, volume: impressions || clicks || 1, clicks, impressions, source: 'GSC', gsc: true }];
   });
-}
-
-async function mapLimit(items, limit, mapper) {
-  const result = Array(items.length);
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) { const index = next; next += 1; result[index] = await mapper(items[index], index); }
-  }));
-  return result;
-}
-
-async function classifyCategory(keyword, categories) {
-  const prompt = `次のキーワードを最も近いカテゴリに分類してください。\n選択肢: ${categories.join(' / ')}\nキーワード: ${keyword}\n回答は選択肢のカテゴリ名1つのみでお願いします。`;
-  const llmPath = path.resolve(__dirname, '..', '..', '..', 'tools', 'llm-ask.mjs');
-  try {
-    const { stdout } = await execute(process.execPath, [llmPath, '--provider', 'groq', '--prefer-provider', '--category', 'classification', '--max', '80', prompt], { timeout: 60000, windowsHide: true, maxBuffer: 1024 * 1024 });
-    return categories.find(category => stdout.trim().includes(category)) || '未分類';
-  } catch (error) {
-    console.error(`  LLMカテゴリ分類失敗: ${keyword}: ${error.message}`);
-    return '未分類';
-  }
 }
 
 async function main() {
@@ -153,8 +129,20 @@ async function main() {
   }));
   if (!isDryRun) {
     const unknown = categorized.filter(keyword => keyword.category === '未分類');
-    const classified = await mapLimit(unknown, 5, keyword => classifyCategory(keyword.text, categories));
-    unknown.forEach((keyword, index) => { keyword.category = classified[index]; });
+    if (unknown.length > 0) {
+      const { batchClassify, categoryPrompt, parseCategoryResponse } = await import('./batch-classify.mjs');
+      const results = await batchClassify({
+        items: unknown,
+        tasks: [{
+          key: 'category',
+          prompt: (items) => categoryPrompt(items, categories),
+          parse: (resp, items) => parseCategoryResponse(resp, items, categories),
+          defaultValue: '未分類',
+        }],
+        dryRun: false,
+      });
+      unknown.forEach((keyword, index) => { keyword.category = results.category[index]; });
+    }
   }
   const outPath = path.join(root, 'raw-keywords.json');
   fs.mkdirSync(path.dirname(outPath), { recursive: true });

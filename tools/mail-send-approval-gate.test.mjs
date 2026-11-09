@@ -146,6 +146,18 @@ test('headless LINE send blocks, matching marker passes, and dry-run passes', t 
   assert.equal(judge({ ...input, tool_input: { command: `${input.tool_input.command} --dry-run` } }, { env, home }).decision, 'pass');
 });
 
+test('other outbound send CLIs are covered in headless sessions', t => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'other-send-'));
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(cwd, 'body.txt'), '本文', 'utf8');
+  const options = { env: { ORGIAST_HEADLESS_JOB: 'auto-progress:scheduled-start' }, home: cwd };
+  for (const command of [
+    'node tools/line-channel.mjs --to C1 --body-file body.txt --send',
+    'node tools/beeper-send.mjs --chat c1 --body-file body.txt --queue-id q --receipt r',
+    'node tools/discord-dm.mjs vendor --body-file body.txt',
+  ]) assert.equal(judge({ tool_name: 'Bash', cwd, tool_input: { command } }, options).decision, 'block');
+});
+
 import { draftBody } from './mail-send-approval-gate.mjs';
 test('live MIME body retains quotes and forwarding content, excludes attachments',()=>{
   const data=s=>Buffer.from(s).toString('base64url');

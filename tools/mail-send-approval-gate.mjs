@@ -31,6 +31,16 @@ export function sendTargets(input) {
       const file = option(args, '--text-file');
       targets.push({ body: file ? fs.readFileSync(path.resolve(input.cwd ?? process.cwd(), file), 'utf8') : '', channel: 'line' });
     }
+    else if (args.some(a => /(?:^|[\\/])line-channel\.mjs$/.test(a)) && args.includes('--send')) {
+      if (args.includes('--dry-run')) continue;
+      const file = option(args, '--body-file');
+      targets.push({ body: file ? fs.readFileSync(path.resolve(input.cwd ?? process.cwd(), file), 'utf8') : '', channel: 'line' });
+    }
+    else if (args.some(a => /(?:^|[\\/])(?:beeper-send|discord-dm)\.mjs$/.test(a))) {
+      if (args.includes('--dry-run')) continue;
+      const file = option(args, '--body-file');
+      targets.push({ body: file ? fs.readFileSync(path.resolve(input.cwd ?? process.cwd(), file), 'utf8') : option(args, '--body') ?? '', channel: 'message' });
+    }
     // Repository inventory: gmail-draft --send is the sending CLI. Never exempt a
     // whole compound command just because a notification tool also appears in it.
     else if (args.some(a => /(?:^|[\\/])gmail-send\.mjs$/.test(a))) {

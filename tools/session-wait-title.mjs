@@ -16,6 +16,7 @@ import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { resolvePcNumber } from './lib/pc-number.mjs';
 import { footerValues as footerValuesStrict, NO_ACTION_PATTERN, openDeadline, SESSION_PHRASES } from './next-action-gate.mjs';
+import { ledgerFile, readLedger, OPEN_STATUSES } from './auto-progress-ledger.mjs';
 
 // Lenient footer parser: normalizes full-width colons (：) to half-width (:) before matching.
 // The gate (next-action-gate.mjs) is strict and requires half-width colons, but the hook
@@ -85,6 +86,104 @@ export function waitPrefix(date) {
   return `【${p(date.getMonth() + 1)}/${p(date.getDate())}/${p(date.getHours())}:${p(date.getMinutes())}まで】`;
 }
 
+// この session_id に登録済みの auto-progress チェックのうち、未完了で最も早い deadline を返す。
+// チェックが無ければ null。
+export function earliestAutoProgressDeadline(sessionId, { home = process.env.ORGIAST_HOME || os.homedir(), ledgerRows } = {}) {
+  try {
+    const rows = ledgerRows ?? readLedger(ledgerFile(home));
+    const latestByKey = new Map();
+    for (const row of rows) {
+      if (!row || !row.sessionId) continue;
+      const key = row.check ? `${row.sessionId}\0${row.label ?? ''}` : row.sessionId;
+      const existing = latestByKey.get(key);
+      const rowTs = Date.parse(row.ts) || 0;
+      const existingTs = existing ? (Date.parse(existing.ts) || 0) : -1;
+      if (!existing || rowTs >= existingTs) {
+        latestByKey.set(key, row);
+      }
+    }
+    const matching = [];
+    for (const row of latestByKey.values()) {
+      if (row.sessionId !== sessionId) continue;
+      if (!OPEN_STATUSES.has(row.status)) continue;
+      if (!row.deadlineAt) continue;
+      const d = new Date(row.deadlineAt);
+      if (Number.isFinite(d.getTime())) {
+        matching.push(d);
+      }
+    }
+    if (!matching.length) return null;
+    return matching.reduce((a, b) => a.getTime() < b.getTime() ? a : b);
+  } catch { return null; }
+}
+
+// フッターの autopilot 本文から日時を抽出する。
+// 対応書式: M/D H:MM, M/D HH:MM, YYYY-MM-DD HH:MM, M月D日 H時
+// 時刻なしの M/D だけならその日の 23:59。年はセッション最終応答時点から見て未来になる年。
+// 複数あれば最も遅い日時を返す。1つも無ければ null。
+export function extractDeadlineFromAutopilot(text, { ref, now } = {}) {
+  if (!text) return null;
+  const refValue = ref ?? now ?? Date.now();
+  const refMs = typeof refValue === 'number' ? refValue : (refValue instanceof Date ? refValue.getTime() : Date.parse(refValue) || Date.now());
+  const refDate = new Date(refMs);
+  const baseYear = refDate.getFullYear();
+  const DAY_180_MS = 180 * 24 * 60 * 60 * 1000;
+  const candidates = [];
+
+  const adjustYear = (d) => {
+    if (refMs - d.getTime() >= DAY_180_MS) {
+      d.setFullYear(baseYear + 1);
+    }
+    return d;
+  };
+
+  // YYYY-MM-DD HH:MM
+  for (const m of text.matchAll(/(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{1,2})/g)) {
+    const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
+    if (Number.isFinite(d.getTime())) candidates.push(d);
+  }
+  // M/D H:MM or M/D HH:MM
+  for (const m of text.matchAll(/(?<![\d/])(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{1,2})(?!\d)/g)) {
+    const mo = Number(m[1]), day = Number(m[2]), h = Number(m[3]), mi = Number(m[4]);
+    if (mo < 1 || mo > 12 || day < 1 || day > 31 || h > 23 || mi > 59) continue;
+    const d = adjustYear(new Date(baseYear, mo - 1, day, h, mi));
+    if (Number.isFinite(d.getTime())) candidates.push(d);
+  }
+  // M月D日 H時 (e.g. "11月17日 9時")
+  for (const m of text.matchAll(/(\d{1,2})月(\d{1,2})日\s*(\d{1,2})時/g)) {
+    const mo = Number(m[1]), day = Number(m[2]), h = Number(m[3]);
+    if (mo < 1 || mo > 12 || day < 1 || day > 31 || h > 23) continue;
+    const d = adjustYear(new Date(baseYear, mo - 1, day, h, 0));
+    if (Number.isFinite(d.getTime())) candidates.push(d);
+  }
+  // M/D のみ（時刻なし）→ その日の 23:59
+  for (const m of text.matchAll(/(?<![\d/])(\d{1,2})\/(\d{1,2})(?![\d/:])(?!\s*\d{1,2}:\d)/g)) {
+    const mo = Number(m[1]), day = Number(m[2]);
+    if (mo < 1 || mo > 12 || day < 1 || day > 31) continue;
+    const d = adjustYear(new Date(baseYear, mo - 1, day, 23, 59));
+    if (Number.isFinite(d.getTime())) candidates.push(d);
+  }
+  if (!candidates.length) return null;
+  // 最も遅い日時（＝待ち終わり）を返す
+  return candidates.reduce((a, b) => a.getTime() > b.getTime() ? a : b);
+}
+
+// 「まだ閉じない」系のセッション行で openDeadline が null のとき、期限を推定する。
+// 1. auto-progress チェックの deadline
+// 2. autopilot 本文からの日付抽出
+// 3. 既存の prefix を保持
+export function estimateWaitDeadline(sessionId, footer, { ref = Date.now(), home = process.env.ORGIAST_HOME || os.homedir(), ledgerRows } = {}) {
+  // auto-progress チェックの deadline を最優先
+  const apDeadline = earliestAutoProgressDeadline(sessionId, { home, ledgerRows });
+  if (apDeadline) return apDeadline;
+  // autopilot 本文から日付抽出
+  if (footer?.autopilot) {
+    const extracted = extractDeadlineFromAutopilot(footer.autopilot, { ref });
+    if (extracted) return extracted;
+  }
+  return null;
+}
+
 function isNoiseText(text) {
   return /^(?:<|Base directory for this skill:|Stop hook feedback:|\[SYSTEM NOTIFICATION|Caveat:)/.test(text.trim());
 }
@@ -129,6 +228,23 @@ export function lastAssistantText(raw) {
   return '';
 }
 
+export function lastAssistantTimestamp(raw) {
+  const lines = String(raw || '').split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (!lines[i].includes('"type":"assistant"')) continue;
+    try {
+      const e = JSON.parse(lines[i]);
+      if (e.type !== 'assistant') continue;
+      const ts = e.timestamp || e.ts || e.message?.timestamp;
+      if (ts) {
+        const d = new Date(ts);
+        if (Number.isFinite(d.getTime())) return d.getTime();
+      }
+    } catch {}
+  }
+  return null;
+}
+
 const withoutPc = title => title.replace(/^\d{3}｜/, '');
 function titleBody(title) {
   const body = withoutPc(title.trim()).replace(PREFIX, '').trim();
@@ -141,7 +257,7 @@ function isPlaceholder(title) {
 }
 
 // 書くべき custom-title を返す。変更不要なら null。
-export function desiredTitle(text, raw, pc = '', closed = false) {
+export function desiredTitle(text, raw, pc = '', closed = false, sessionId = '', options = {}) {
   const footer = footerValues(text);
   if (!footer && !pc && !closed) return null;
   const { custom, ai, firstPrompt, autoAi, customSource, declaredPurpose } = currentTitles(raw);
@@ -150,7 +266,21 @@ export function desiredTitle(text, raw, pc = '', closed = false) {
   const base = (customSource !== 'orgiast-auto' ? customBody : '')
     || declaredPurpose || titleBody(autoAi) || customBody || titleBody(ai) || firstPrompt || 'セッション';
   const deadline = footer ? openDeadline(footer.session) : null;
-  const prefix = deadline ? waitPrefix(deadline) : closed || isClosable(footer) ? CLOSABLE_PREFIX : !footer ? existingPrefix : '';
+  let prefix;
+  if (deadline) {
+    prefix = waitPrefix(deadline);
+  } else if (closed || isClosable(footer)) {
+    prefix = CLOSABLE_PREFIX;
+  } else if (footer && !deadline && (footer.session.startsWith('まだ閉じない（作業中') || footer.session.startsWith('/session-close をして（まだ閉じない'))) {
+    // 期限なしの「まだ閉じない」→ auto-progress チェック or フッター本文から推定
+    const ref = options.ref ?? lastAssistantTimestamp(raw) ?? options.now ?? Date.now();
+    const estimated = estimateWaitDeadline(sessionId, footer, { ref, home: options.home, ledgerRows: options.ledgerRows });
+    prefix = estimated ? waitPrefix(estimated) : existingPrefix;
+  } else if (!footer) {
+    prefix = existingPrefix;
+  } else {
+    prefix = '';
+  }
   // Without a PC number, keep the existing footer-driven behavior.
   if (!pc && !prefix && !existingPrefix) return null;
   const next = `${pc ? pc + '｜' : ''}${prefix}${base}`;
@@ -201,7 +331,7 @@ export function promptSubmit(input, { readFile = fs.readFileSync, statSize = p =
     // 人の /rename は番号以外を保持し、自動命名だけ期限フッターを反映する。
     const closed = isClosed(sessionId);
     let title = !closed && hasCustom && customSource !== 'orgiast-auto'
-      ? custom : desiredTitle(lastAssistantText(raw), raw, pc, closed) ?? custom;
+      ? custom : desiredTitle(lastAssistantText(raw), raw, pc, closed, sessionId) ?? custom;
     if (!/^\d{3}｜/.test(title)) title = `${pc}｜${title}`;
     return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', sessionTitle: title } };
   } catch (e) { logError('promptSubmit', e); return null; }
@@ -222,7 +352,7 @@ export function apply(input, { readFile = fs.readFileSync, appendFile = fs.appen
         log(`reopened ${sessionId}: removed from closed-sessions.json (latest footer has wait deadline)`);
       } catch { /* fail-open: the current wait title must still be applied */ }
     }
-    const title = desiredTitle(text, raw, resolveNumber(), closed);
+    const title = desiredTitle(text, raw, resolveNumber(), closed, sessionId);
     if (!title) return null;
     appendFile(file, `${raw.endsWith('\n') ? '' : '\n'}${JSON.stringify({ type: 'custom-title', customTitle: title, sessionId, source: 'orgiast-auto' })}\n`);
     return title;

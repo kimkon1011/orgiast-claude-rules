@@ -6,11 +6,13 @@ import { readEvidence, approved, approvedAfter, human, textOf, shellSegments, op
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
 import { validApprovalMarker } from './lib/send-approval.mjs';
+import { readContextMarker, MAX_MARKER_AGE_MS } from './lib/send-context.mjs';
 export const HOOK_MATCHER = 'mcp__claude_ai_Gmail(?:_\\d+)?__(send_message|reply|forward)|Bash|PowerShell';
 export const BLOCK_REASON = '本文の全文をチャットに表示し、kim の『送ってよい』を得てから送信してください（組織指示11）。多数宛は mail-bulk-approve を使う';
 export const APPROVAL_MISSING_REASON = 'kim の最新の発言が送信承認として読めません（例: 送って／おくって／OK）。本文の全文を表示したうえで送信承認を得てください。';
 export const BODY_NOT_SHOWN_REASON = '下書き本文の全文が、kim の最新の承認の前の Claude の発言に見つかりません。本文を記号なし（コードブロック可）で全文表示してから承認を得てください。';
 export const HEADLESS_REASON = '無人の自動進行からの社外送信は拒否しました。本文ハッシュと一致する ~/.claude/send-approvals/<sha256>.json（approvedAt・kimQuote・bodyHash）が必要です。';
+export const CONTEXT_REASON = '送信前に宛先の履歴整合性チェックが必要です。node tools/send-context-check.mjs --channel <line|gmail|discord|beeper> --target <宛先> --text-file <送る本文> を実行してください。';
 const normalize = s => typeof s === 'string' ? s.replace(/\r\n/g, '\n')
   .split('\n').map(line => line.replace(/^(?:>[ \t]?)+/, '').trimEnd())
   .filter(line => !/^[ \t]*```[^`]*$/.test(line)).join('\n')
@@ -58,10 +60,14 @@ export function sendTargets(input) {
   }
   return targets;
 }
-export function judge(input, { targets, env = process.env, home = env.ORGIAST_HOME } = {}) {
+export function judge(input, { targets, env = process.env, home = env.ORGIAST_HOME, requireContext = false } = {}) {
   try {
     targets ??= sendTargets(input);
     if (!targets.length) return { decision: 'pass' };
+    if (requireContext) for (const target of targets) {
+        const marker = readContextMarker(normalize(target.body), home);
+        if (!marker || Date.now() - Date.parse(marker.checkedAt) > MAX_MARKER_AGE_MS) return block(CONTEXT_REASON);
+      }
     const unattended = env.CLAUDE_HEADLESS === '1' || /^(?:auto-progress|auto-session)(?::|$)/.test(String(env.ORGIAST_HEADLESS_JOB || ''));
     const markerResults = targets.map(target => validApprovalMarker(normalize(target.body), { ...(home ? { home } : {}) }));
     if (markerResults.every(result => result.ok)) return { decision: 'pass' };
@@ -107,7 +113,7 @@ export async function judgeLive(input, { loadDraft } = {}) {
       }
       t.body = await loadDraft(t);
     }
-    return judge(input, { targets });
+    return judge(input, { targets, requireContext: true });
   } catch { return block(); }
 }
 if (isEntry(import.meta.url)) {

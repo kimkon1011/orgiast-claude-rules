@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { hostExitArchive } from './lib/host-exit-archive.mjs';
+import { liveSessions } from './lib/process-hygiene.mjs';
 import { isEntry } from './is-entry.mjs';
 const BASE = 'https://api.anthropic.com/v1/code/sessions';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -279,8 +280,8 @@ export function parseAgents(output) {
   if (!Array.isArray(agents) || agents.some(a => !a?.kind || (a.kind === 'interactive' && !a.sessionId))) throw Error('Invalid agents inventory');
   return new Set(agents.filter(a => a.kind === 'interactive').map(a => a.sessionId));
 }
-function run(command, args, spawn = spawnSync) {
-  const result = spawn(command, args, { encoding: 'utf8', windowsHide: true, timeout: 65000 });
+function run(command, args, spawn = spawnSync, timeout = 65000) {
+  const result = spawn(command, args, { encoding: 'utf8', windowsHide: true, timeout });
   if (result.error || result.status !== 0) throw Error(`${path.basename(command)} failed: ${result.error?.message ?? result.status}`);
   return result.stdout.trim();
 }
@@ -329,7 +330,7 @@ export function localIndex(base, onlyId) {
   }
   return index;
 }
-function closedIds(base) {
+export function closedIds(base) {
   const ledger = readJson(path.join(base, 'closed-sessions.json'), { ids: [] });
   if (!Array.isArray(ledger.ids)) throw Error('Invalid closed ledger');
   return new Set(ledger.ids);
@@ -363,13 +364,15 @@ export function parseOptions(args, spawn = spawnSync) {
     const arg = args[i];
     if (arg === '--dry-run') { options.dryRun = true; continue; }
     if (arg === '--watch') { options.watch = true; continue; }
-    const key = { '--since': 'since', '--until': 'until', '--max': 'max', '--gap-sec': 'gapSec' }[arg];
+    const key = { '--since': 'since', '--until': 'until', '--max': 'max', '--gap-sec': 'gapSec', '--from-snapshot': 'fromSnapshot', '--save-snapshot': 'saveSnapshot' }[arg];
     if (!key || !args[i + 1]) throw Error(`Invalid option: ${arg}`);
     if (key === 'max') options.maxSet = true;
     options[key] = ['max', 'gapSec'].includes(key) ? Number(args[++i]) : args[++i];
   }
   if (options.watch && (options.since || options.until)) throw Error('--watch and --since/--until are mutually exclusive');
   if (!Number.isInteger(options.max) || options.max < 1 || !Number.isFinite(options.gapSec) || options.gapSec < 0) throw Error('Invalid max/gap');
+  if (options.fromSnapshot && options.saveSnapshot) throw Error('Choose one snapshot mode');
+  if (options.fromSnapshot || options.saveSnapshot) return options;
   if (!options.watch) {
     if (!options.since || !options.until) {
       const boot = Date.parse(ps('(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString("o")', spawn));
@@ -379,6 +382,129 @@ export function parseOptions(args, spawn = spawnSync) {
     if (!Number.isFinite(Date.parse(options.since)) || !Number.isFinite(Date.parse(options.until)) || Date.parse(options.since) > Date.parse(options.until)) throw Error('Invalid time range');
   }
   return options;
+}
+// VS Code stores multi-root windows under workspaceIdentifier, including lastActiveWindow.
+function uriPath(value) {
+  if (typeof value !== 'string') return null;
+  return value.startsWith('file:') ? decodeURIComponent(new URL(value).pathname).replace(/^\/(?=[a-z]:)/i, '').replaceAll('/', '\\') : value;
+}
+function jsonc(raw) {
+  const clean = raw.replace(/"(?:\\.|[^"\\])*"|\/\/[^\r\n]*|\/\*[\s\S]*?\*\//g, t => t.startsWith('"') ? t : ' ');
+  return JSON.parse(clean.replace(/^\uFEFF/, '').replace(/"(?:\\.|[^"\\])*"|,(?=\s*[}\]])/g, t => t === ',' ? '' : t));
+}
+export function windowTargets(storage, read = f => fs.readFileSync(f, 'utf8')) {
+  const targets = [];
+  for (const w of [storage.windowsState?.lastActiveWindow, ...(storage.windowsState?.openedWindows || [])]) {
+    if (!w) continue;
+    const target = uriPath(w.workspaceIdentifier?.configURIPath || w.workspace?.configPath || w.workspace || w.folderUri || w.folder?.folderUri || w.folder);
+    if (!target || targets.some(t => t.target.toLowerCase() === target.toLowerCase())) continue;
+    let roots = [target];
+    if (target.endsWith('.code-workspace')) {
+      const workspace = jsonc(read(target));
+      roots = (workspace.folders || []).map(f => f.uri ? uriPath(f.uri) : path.win32.resolve(path.win32.dirname(target), f.path));
+    }
+    targets.push({ target, roots });
+  }
+  return targets;
+}
+export function selectWindow(cwd, targets) {
+  const normalized = path.win32.resolve(cwd).toLowerCase();
+  const matching = targets.filter(t => t.roots.some(root => {
+    const relative = path.win32.relative(path.win32.resolve(root).toLowerCase(), normalized);
+    return !relative || (!relative.startsWith('..') && !path.win32.isAbsolute(relative));
+  }));
+  return (matching.find(t => t.target.toLowerCase().endsWith('.code-workspace')) || matching[0])?.target || cwd;
+}
+function getTargets() {
+  return windowTargets(readJson(path.join(process.env.APPDATA || '', 'Code', 'User', 'globalStorage', 'storage.json'), {}));
+}
+export function connection(base, candidate, agents) {
+  for (const agent of agents.filter(a => a.kind === 'interactive' && a.sessionId === candidate.id)) {
+    const metadata = readJson(path.join(base, 'sessions', `${agent.pid}.json`), {});
+    if (metadata.pid !== agent.pid || metadata.sessionId !== candidate.id || !metadata.bridgeSessionId) continue;
+    const canonical = id => id?.replace(/^(cse_|session_)/, '');
+    if (candidate.bridgeSessionId && canonical(candidate.bridgeSessionId) !== canonical(metadata.bridgeSessionId)) continue;
+    return { pid: agent.pid, bridgeSessionId: metadata.bridgeSessionId };
+  }
+  return null;
+}
+export function saveSnapshot(file, { base = path.join(os.homedir(), '.claude'), spawn = spawnSync, targets = getTargets() } = {}) {
+  // Primary: PID-file-based liveness. Fallback: claude agents --json (180s).
+  const pidAlive = liveSessions(base);
+  let aliveIds;
+  if (pidAlive.size > 0) {
+    aliveIds = new Set(pidAlive.keys());
+  } else {
+    const cli = path.join(base, '..', '.local', 'bin', 'claude.exe');
+    const inventory = run(cli, ['agents', '--json'], spawn, 180000);
+    aliveIds = parseAgents(inventory);
+  }
+  const closed = closedIds(base);
+  const locals = transcriptSessions(base, aliveIds);
+  const sessions = [...aliveIds].filter(id => !closed.has(id)).map(id => {
+    const local = locals.get(id);
+    if (!local) return null;
+    if (!local.hasConversation) return null;
+    if (!local.cwd) return null;
+    return { ...local, sessionId: id, target: selectWindow(local.cwd, targets) };
+  }).filter(Boolean);
+  const snapshot = { version: 1, at: new Date().toISOString(), sessions };
+  fs.writeFileSync(file + '.tmp', JSON.stringify(snapshot, null, 2));
+  fs.renameSync(file + '.tmp', file);
+  return snapshot;
+}
+export function transcriptSessions(base, onlyIds) {
+  const result = new Map();
+  const projects = path.join(base, 'projects');
+  let dirs = [];
+  try { dirs = fs.readdirSync(projects, { withFileTypes: true }); } catch { return result; }
+  for (const dir of dirs) {
+    if (!dir.isDirectory() || dir.name === '_deleted-backup') continue;
+    let names = [];
+    try { names = fs.readdirSync(path.join(projects, dir.name)); } catch { continue; }
+    for (const file of names) {
+      if (!file.endsWith('.jsonl') || (onlyIds && !onlyIds.has(file.slice(0, -6)))) continue;
+      const rows = fs.readFileSync(path.join(projects, dir.name, file), 'utf8').split('\n').flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+      const last = key => rows.findLast(row => row[key])?.[key];
+      const id = file.slice(0, -6);
+      result.set(id, {
+        id, transcriptPath: path.join(projects, dir.name, file),
+        cwd: last('cwd'),
+        title: last('customTitle') || last('aiTitle') || '',
+        bridgeSessionId: last('bridgeSessionId'),
+        hasConversation: hasConversation(rows),
+      });
+    }
+  }
+  return result;
+}
+export async function openAndVerify(candidate, { code, spawn, wait, check, targets, timeoutSec = 90, now = Date.now, assertOpen = () => {} }) {
+  const selected = selectWindow(candidate.cwd, targets);
+  const target = selected === candidate.cwd ? candidate.target || selected : selected;
+  const uri = 'vscode://anthropic.claude-code/open?session=' + encodeURIComponent(candidate.id);
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    assertOpen(candidate);
+    try {
+      ps(`& ${quotePS(code)} --reuse-window ${quotePS(target)}; exit $LASTEXITCODE`, spawn);
+      await wait(2000);
+      for (let reveal = 0; reveal < 2; reveal++) {
+        assertOpen(candidate);
+        ps(`& ${quotePS(code)} --reuse-window --open-url ${quotePS(uri)}; exit $LASTEXITCODE`, spawn);
+        await wait(1000);
+      }
+      const deadline = now() + timeoutSec * 1000;
+      for (let elapsed = 0; elapsed <= timeoutSec; elapsed += 3) {
+        assertOpen(candidate);
+        const remaining = deadline - now();
+        if (remaining <= 0) break;
+        const connected = await check(candidate, remaining);
+        if (connected) return { ...candidate, target, ...connected, attempt };
+        if (elapsed < timeoutSec) await wait(Math.max(0, Math.min(3000, deadline - now())));
+      }
+    } catch (error) { lastError = error.message; }
+  }
+  throw Error(`Claude process / matching bridgeSessionId timeout (2 attempts)${lastError ? ': ' + lastError : ''}`);
 }
 export function acquireLock(file, now = Date.now()) {
   try { if (now - fs.statSync(file).mtimeMs > 600000) fs.unlinkSync(file); } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -432,95 +558,133 @@ export function resolveClaudeCli({ env = process.env, exists = fs.existsSync, re
 
 export async function reopenLost({ since, until, dryRun = false, max = 30, gapSec = 10,
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
-  now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs } = {}) {
+  now = Date.now, claudeCli, codeCli, env = process.env, fsImpl = fs, fromSnapshot, targets, checkConnection } = {}) {
   const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0 } };
   // Dry run is strictly read-only: no lock or log mutation on the user's PC.
   const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'));
   if (!release) return { ...result, error: 'locked' };
   try {
-    const token = readJson(path.join(base, '.credentials.json')).claudeAiOauth?.accessToken;
-    const org = readJson(path.join(base, '..', '.claude.json')).oauthAccount?.organizationUuid;
-    if (!token || !org) throw Error('Missing RC credentials');
-    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01',
-      'anthropic-beta': 'ccr-byoc-2025-07-29', 'x-organization-uuid': org };
     const cli = claudeCli || resolveClaudeCli({ env, exists: fsImpl.existsSync, readdir: fsImpl.readdirSync, spawn });
-    const alive = () => parseAgents(run(cli, ['agents', '--json'], spawn));
-    const living = alive();
-    const locals = localIndex(base), closed = closedIds(base);
-    const reopenCounts = reopenLoopCounts(base, now);
-    const deadline = now() + 60000;
-    const get = async url => {
-      if (now() >= deadline) throw Error('API time limit');
-      const response = await fetchImpl(url, { headers, signal: AbortSignal.timeout(Math.max(1, deadline - now())) });
-      if (!response.ok) throw Error(`RC API HTTP ${response.status}`);
-      return response.json();
-    };
-    let cursor = '';
-    const seen = new Set(), seenIds = new Set();
-    try {
-      do {
-        const body = await get(`${BASE}?${new URLSearchParams({ limit: '100', ...(cursor && { cursor }) })}`);
-        if (!Array.isArray(body.data)) throw Error('Invalid sessions response');
-        const sessions = body.data.filter(session => !Number.isFinite(Date.parse(session.updated_at)) || Date.parse(session.updated_at) >= Date.parse(since));
-        for (let offset = 0; offset < sessions.length; offset += 6) {
-          const batch = await Promise.allSettled(sessions.slice(offset, offset + 6).map(async session => {
-            const events = await get(`${BASE}/${encodeURIComponent(session.id)}/events?limit=20`);
-            if (!Array.isArray(events.data)) throw Error('Invalid events response');
-            return { session, events: events.data };
-          }));
-          for (const item of batch) {
-            if (item.status !== 'fulfilled') continue;
-            const { session, events } = item.value;
-            if (!hasHostExit(events, since, until)) continue;
-            const local = locals.get(session.id);
-            const reason = exclusion(local, closed, living);
-            if (reason) { result.skipped[reason]++; continue; }
-            // Skip user-archived sessions (closed via mobile etc.)
-            if (session.status === 'archived' && !hostExitArchive(events)) { result.skipped.archivedByUser++; continue; }
-            // Skip sessions reopened 3+ times in the last 24h (infinite reopen guard)
-            if (reopenCounts[local?.id] >= 3) { result.skipped.reopenLoop++; continue; }
-            if (!local || seenIds.has(local.id)) continue;
-            seenIds.add(local.id);
-            result.candidates.push({ id: local.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '' });
+    if (fromSnapshot) {
+      const snapshot = readJson(fromSnapshot);
+      if (snapshot.version !== 1 || !Array.isArray(snapshot.sessions) || snapshot.sessions.some(s => !s || typeof (s.id || s.sessionId) !== 'string' || !(s.id || s.sessionId) || typeof s.cwd !== 'string' || !s.cwd)) throw Error('Invalid reload snapshot');
+      result.candidates = snapshot.sessions.map(s => ({ ...s, id: s.id || s.sessionId }));
+    } else {
+      const token = readJson(path.join(base, '.credentials.json')).claudeAiOauth?.accessToken;
+      const org = readJson(path.join(base, '..', '.claude.json')).oauthAccount?.organizationUuid;
+      if (!token || !org) throw Error('Missing RC credentials');
+      const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'ccr-byoc-2025-07-29', 'x-organization-uuid': org };
+      // Primary: PID-file-based liveness. Fallback: claude agents --json with 180s timeout.
+      const pidAliveSessions = liveSessions(base);
+      let living;
+      if (pidAliveSessions.size > 0) {
+        living = new Set(pidAliveSessions.keys());
+      } else {
+        try {
+          const inventory = JSON.parse(run(cli, ['agents', '--json'], spawn, 180000));
+          living = new Set(inventory.filter(a => a.kind === 'interactive').map(a => a.sessionId));
+        } catch { living = new Set(); }
+      }
+      const locals = localIndex(base), closed = closedIds(base);
+      const reopenCounts = reopenLoopCounts(base, now);
+      const deadline = now() + 60000;
+      const get = async url => {
+        if (now() >= deadline) throw Error('API time limit');
+        const response = await fetchImpl(url, { headers, signal: AbortSignal.timeout(Math.max(1, deadline - now())) });
+        if (!response.ok) throw Error(`RC API HTTP ${response.status}`);
+        return response.json();
+      };
+      let cursor = '';
+      const seen = new Set(), seenIds = new Set();
+      try {
+        do {
+          const body = await get(`${BASE}?${new URLSearchParams({ limit: '100', ...(cursor && { cursor }) })}`);
+          if (!Array.isArray(body.data)) throw Error('Invalid sessions response');
+          const sessions = body.data.filter(session => !Number.isFinite(Date.parse(session.updated_at)) || Date.parse(session.updated_at) >= Date.parse(since));
+          for (let offset = 0; offset < sessions.length; offset += 6) {
+            const batch = await Promise.allSettled(sessions.slice(offset, offset + 6).map(async session => {
+              const events = await get(`${BASE}/${encodeURIComponent(session.id)}/events?limit=20`);
+              if (!Array.isArray(events.data)) throw Error('Invalid events response');
+              return { session, events: events.data };
+            }));
+            for (const item of batch) {
+              if (item.status !== 'fulfilled') continue;
+              const { session, events } = item.value;
+              if (!hasHostExit(events, since, until)) continue;
+              const local = locals.get(session.id);
+              const reason = exclusion(local, closed, living);
+              if (reason) { result.skipped[reason]++; continue; }
+              // Skip user-archived sessions (closed via mobile etc.)
+              if (session.status === 'archived' && !hostExitArchive(events)) { result.skipped.archivedByUser++; continue; }
+              // Skip sessions reopened 3+ times in the last 24h (infinite reopen guard)
+              if (reopenCounts[local?.id] >= 3) { result.skipped.reopenLoop++; continue; }
+              if (!local || seenIds.has(local.id)) continue;
+              seenIds.add(local.id);
+              result.candidates.push({ id: local.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '' });
+            }
+            const failed = batch.find(item => item.status === 'rejected');
+            if (failed) throw failed.reason;
           }
-          const failed = batch.find(item => item.status === 'rejected');
-          if (failed) throw failed.reason;
-        }
-        cursor = body.next_cursor || '';
-        if (cursor && seen.has(cursor)) throw Error('Repeated API cursor');
-        seen.add(cursor);
-      } while (cursor);
-    } catch (error) { result.apiError = error.message; }
+          cursor = body.next_cursor || '';
+          if (cursor && seen.has(cursor)) throw Error('Repeated API cursor');
+          seen.add(cursor);
+        } while (cursor);
+      } catch (error) { result.apiError = error.message; }
+    }
     if (!dryRun && result.candidates.length) {
       const code = codeCli || resolveCodeCli(env, fsImpl.existsSync);
-      for (const candidate of result.candidates.slice(0, max)) {
-        // Recheck after fetching and between opens: close/purge may have happened meanwhile.
-        const refreshed = [...localIndex(base, candidate.id).values()].find(l => l.id === candidate.id);
-        const reason = exclusion(refreshed, closedIds(base), alive());
-        if (reason) { result.skipped[reason]++; continue; }
+      const windows = targets || getTargets();
+      const check = checkConnection || (candidate => {
+        try { const inv = JSON.parse(run(cli, ['agents', '--json'], spawn, 180000)); return connection(base, candidate, inv); }
+        catch { return null; }
+      });
+      const unique = [...new Map(result.candidates.map(c => [c.id, c])).values()];
+      for (const candidate of unique.slice(0, fromSnapshot ? undefined : max)) {
+        if (closedIds(base).has(candidate.id)) { result.skipped.closed++; continue; }
+        if (!fromSnapshot) {
+          // Non-snapshot mode: use main's existing reopen logic
+          const refreshed = [...localIndex(base, candidate.id).values()].find(l => l.id === candidate.id);
+          const reason = exclusion(refreshed, closedIds(base), (() => { try { return parseAgents(run(cli, ['agents', '--json'], spawn)); } catch { return new Set(); } })());
+          if (reason) { result.skipped[reason]++; continue; }
+        }
         try {
-          const folder = resolveReopenFolder(candidate.cwd, candidate.cwds, { fsImpl, spawn });
-          // worktree のまま開く候補が無いときは開かずスキップ（新しい worktree ウィンドウは作らない）。
-          if (!folder) { result.skipped.worktree++; continue; }
-          const wsInfo = findWorkspaceForCwd(folder, { env, fsImpl });
-          const targetPath = wsInfo ? wsInfo.workspaceFile : folder;
-          const titlePattern = wsInfo ? wsInfo.workspaceName : path.win32.basename(folder);
-          const openedWith = wsInfo ? 'workspace' : 'folder';
+          if (fromSnapshot) {
+            const existing = await check(candidate, 180000);
+            if (existing) { (result.alreadyConnected ??= []).push({ ...candidate, ...existing }); continue; }
+            result.reopened.push(await openAndVerify(candidate, {
+              code, spawn, wait, check,
+              assertOpen: c => {
+                if (closedIds(base).has(c.id)) throw Error('Session closed during recovery');
+                if (c.transcriptPath && !fsImpl.existsSync(c.transcriptPath)) throw Error('Transcript removed during recovery');
+              },
+              targets: windows,
+            }));
+          } else {
+            const folder = resolveReopenFolder(candidate.cwd, candidate.cwds, { fsImpl, spawn });
+            if (!folder) { result.skipped.worktree++; continue; }
+            const wsInfo = findWorkspaceForCwd(folder, { env, fsImpl });
+            const targetPath = wsInfo ? wsInfo.workspaceFile : folder;
+            const titlePattern = wsInfo ? wsInfo.workspaceName : path.win32.basename(folder);
+            const openedWith = wsInfo ? 'workspace' : 'folder';
 
-          ps(`& ${quotePS(code)} ${quotePS(targetPath)}; exit $LASTEXITCODE`, spawn);
-          const ready = windowReady || (() => ps(`$w = @(Get-Process Code -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle.Contains(${quotePS(titlePattern)}) }); if ($w.Count) { 'ready' }`, spawn) === 'ready');
-          let found = false;
-          for (let elapsed = 0; elapsed <= 60; elapsed++) {
-            if (await ready(candidate.cwd, targetPath, titlePattern)) { found = true; break; }
-            if (elapsed < 60) await wait(1000);
+            ps(`& ${quotePS(code)} ${quotePS(targetPath)}; exit $LASTEXITCODE`, spawn);
+            // Use checkConnection when explicitly provided (test injection), otherwise fall back to window title polling.
+            const ready = checkConnection
+              ? async () => { const c = await checkConnection(candidate, 180000); return !!c; }
+              : (() => ps(`$w = @(Get-Process Code -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle.Contains(${quotePS(titlePattern)}) }); if ($w.Count) { 'ready' }`, spawn) === 'ready');
+            let found = false;
+            for (let elapsed = 0; elapsed <= 60; elapsed++) {
+              if (await ready(candidate.cwd, targetPath, titlePattern)) { found = true; break; }
+              if (elapsed < 60) await wait(1000);
+            }
+            if (!found) throw Error('VS Code window timeout');
+            const current = [...localIndex(base, candidate.id).values()].find(l => l.id === candidate.id);
+            const lateReason = exclusion(current, closedIds(base), (() => { try { return parseAgents(run(cli, ['agents', '--json'], spawn)); } catch { return new Set(); } })());
+            if (lateReason) { result.skipped[lateReason]++; continue; }
+            ps(`& ${quotePS(code)} ${quotePS(targetPath)}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & ${quotePS(code)} --open-url ${quotePS('vscode://anthropic.claude-code/open?session=' + encodeURIComponent(candidate.id))}; exit $LASTEXITCODE`, spawn);
+            result.reopened.push({ ...candidate, openedWith, folder, target: targetPath });
           }
-          if (!found) throw Error('VS Code window timeout');
-          const current = [...localIndex(base, candidate.id).values()].find(l => l.id === candidate.id);
-          const lateReason = exclusion(current, closedIds(base), alive());
-          if (lateReason) { result.skipped[lateReason]++; continue; }
-          // Focus again immediately before URI dispatch to reduce focus races.
-          ps(`& ${quotePS(code)} ${quotePS(targetPath)}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & ${quotePS(code)} --open-url ${quotePS('vscode://anthropic.claude-code/open?session=' + encodeURIComponent(candidate.id))}; exit $LASTEXITCODE`, spawn);
-          result.reopened.push({ ...candidate, openedWith, folder, target: targetPath });
         } catch (error) { (result.failed ??= []).push({ ...candidate, error: error.message }); }
         await wait(gapSec * 1000);
       }
@@ -528,7 +692,7 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
       if (result.reopened.length) {
         await wait(90000);
         try {
-          const agents = alive();
+          const agents = (() => { try { return parseAgents(run(cli, ['agents', '--json'], spawn)); } catch { return new Set(); } })();
           result.verified = [];
           result.unverified = [];
           for (const r of result.reopened) {
@@ -540,7 +704,7 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
     }
   } catch (error) { result.error = error.message; }
   finally {
-    try { if (!dryRun) fs.appendFileSync(path.join(base, 'reopen-lost-sessions.log'), JSON.stringify(result) + '\n'); }
+    try { if (!dryRun) fsImpl.appendFileSync ? fsImpl.appendFileSync(path.join(base, 'reopen-lost-sessions.log'), JSON.stringify(result) + '\n') : fs.appendFileSync(path.join(base, 'reopen-lost-sessions.log'), JSON.stringify(result) + '\n'); }
     finally { release(); }
   }
   return result;
@@ -590,7 +754,11 @@ export async function watchReopen(opts = {}, maxParam) {
 if (isEntry(import.meta.url)) {
   try {
     const opts = parseOptions(process.argv.slice(2));
-    if (opts.watch) {
+    if (opts.saveSnapshot && opts.dryRun) throw Error('--save-snapshot cannot be combined with --dry-run');
+    if (opts.saveSnapshot) {
+      const result = saveSnapshot(opts.saveSnapshot);
+      console.log(JSON.stringify(result));
+    } else if (opts.watch) {
       const result = await watchReopen({
         base: opts.base,
         max: opts.maxSet ? opts.max : 10,

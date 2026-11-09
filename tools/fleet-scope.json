@@ -1268,6 +1268,11 @@
     {"path": "tools/register-gakkai-phone-digest.ps1", "scope": "kim-only", "step": null, "reason": "cr-PC（作業用011）だけで動かす学会スマホ所在Digestの毎朝09:07登録"},
     {"path": "tools/knowledge-upstream.mjs", "scope": "fleet", "step": "task:knowledge-upstream", "reason": "全PCのローカルmemory/playbook/incidentをDrive inboxへ吸い上げ、共有マスターを同期する"},
     {"path": "tools/register-knowledge-upstream-task.ps1", "scope": "fleet", "step": "task:knowledge-upstream", "reason": "全PCの知識吸い上げタスク OrgiastKnowledgeUpstream を登録する"},
-    {"path": "tools/register-knowledge-merge-task.ps1", "scope": "kim-only", "reason": "kim-PCだけがDrive inboxのナレッジをmasterに統合する（重複防止）"}
+    {"path": "tools/register-knowledge-merge-task.ps1", "scope": "kim-only", "reason": "kim-PCだけがDrive inboxのナレッジをmasterに統合する（重複防止）"},
+    {"path": "tools/lib/process-hygiene.mjs", "scope": "fleet", "step": "nightly-reload-vscode", "reason": "PIDファイルベースのセッション生存判定（claude.exe 起動不要）"},
+    {"path": "tools/lib/process-hygiene.test.mjs", "scope": "fleet", "step": "nightly-reload-vscode", "reason": "process-hygiene.mjs のテスト"},
+    {"path": "tools/nightly-reload-vscode.ps1", "scope": "fleet", "step": "nightly-reload-vscode", "reason": "VS Code 夜間再起動（v2: スナップショット保存→再起動→全セッション復元）"},
+    {"path": "tools/setup-nightly-reload.mjs", "scope": "fleet", "step": "nightly-reload-vscode", "reason": "夜間再起動タスクのセットアップ（converge 経由）"},
+    {"path": "tools/register-reopen-lost-sessions.test.ps1", "scope": "fleet", "step": "nightly-reload-vscode", "reason": "register-reopen-lost-sessions.ps1 のテスト"}
   ]
 }

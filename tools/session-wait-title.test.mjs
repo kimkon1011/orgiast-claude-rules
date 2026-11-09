@@ -346,6 +346,56 @@ test('promptSubmit: AI名が無ければ今回の冒頭を空白正規化・全�
   }
 });
 
+test('desiredTitle: closed-sessions.json に登録があれば【閉じて可】を優先する', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-closed-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const closedFile = path.join(os.homedir(), '.claude', 'closed-sessions.json');
+  const origExists = fs.existsSync(closedFile);
+  let origContent = '';
+  if (origExists) origContent = fs.readFileSync(closedFile, 'utf8');
+  try {
+    fs.mkdirSync(path.dirname(closedFile), { recursive: true });
+    fs.writeFileSync(closedFile, JSON.stringify({ ids: ['cse_closed-session'] }));
+    // Session is in closed ledger -> 【閉じて可】 even without footer
+    assert.equal(desiredTitle('本文', JSON.stringify({ type: 'ai-title', aiTitle: 'テスト' }), '008', true), '008｜【閉じて可】テスト');
+    // Session not in closed ledger -> no change without footer
+    assert.equal(desiredTitle('本文', JSON.stringify({ type: 'ai-title', aiTitle: 'テスト' }), '008', false), '008｜テスト');
+  } finally {
+    if (origExists) fs.writeFileSync(closedFile, origContent);
+    else if (fs.existsSync(closedFile)) fs.unlinkSync(closedFile);
+  }
+});
+
+test('promptSubmit: closed-sessions.json に登録があれば【閉じて可】を付ける', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-ps-closed-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 's.jsonl');
+  fs.writeFileSync(file, JSON.stringify({ type: 'ai-title', aiTitle: 'テスト', sessionId: 's' }));
+  const result = promptSubmit({ transcript_path: file, session_id: 's' }, {
+    readFile: () => fs.readFileSync(file, 'utf8'),
+    statSize: () => fs.statSync(file).size,
+    resolvePcNumber: () => '008',
+    isClosed: id => id === 's',
+  });
+  assert.ok(result);
+  assert.equal(result.hookSpecificOutput.sessionTitle, '008｜【閉じて可】テスト');
+});
+
+test('promptSubmit: closed-sessions.json に無ければ通常のフッター処理', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-ps-not-closed-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 's.jsonl');
+  fs.writeFileSync(file, JSON.stringify({ type: 'ai-title', aiTitle: 'テスト', sessionId: 's' }));
+  const result = promptSubmit({ transcript_path: file, session_id: 's' }, {
+    readFile: () => fs.readFileSync(file, 'utf8'),
+    statSize: () => fs.statSync(file).size,
+    resolvePcNumber: () => '008',
+    isClosed: id => false,
+  });
+  assert.ok(result);
+  assert.equal(result.hookSpecificOutput.sessionTitle, '008｜テスト');
+});
+
 test('CLI: hook_event_name で SessionStart と UserPromptSubmit を振り分ける', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-events-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

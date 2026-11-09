@@ -13,7 +13,7 @@
 # 通常は日付をまたいだ Code を毎晩再起動。72時間以上経過時は busy を無視し理由を記録。
 # 中止条件: 可視ウィンドウなし、VSCode 内の対話セッションが直近15分に活動中、
 #             当日再起動済みで退避も拡張更新待ちもなし、code.cmd なし、または穏やかに終了できない場合。
-# 未クローズの実会話は idle / Overdue にかかわらず保護。一覧不明もスキップ。
+# 再起動直前に生存中の未クローズ会話を記録し、再起動後に全件の RC 接続を検証する。
 # ログ: %USERPROFILE%\.claude\nightly-reload-vscode.log
 # 手動テスト: pwsh -NoProfile -File tools/nightly-reload-vscode.ps1 -DryRun
 
@@ -62,89 +62,6 @@ function Get-InteractiveSessionIdsFromJson($Json) {
         if ($agent.kind -eq 'interactive' -and $agent.sessionId) { $ids += [string]$agent.sessionId }
     }
     return @($ids | Select-Object -Unique)
-}
-
-# Throws on unknown state: callers must fail closed, including malformed inventories.
-function Get-ValidatedInteractiveIds($Json) {
-    if ([string]::IsNullOrWhiteSpace($Json) -or -not $Json.Trim().StartsWith('[')) { throw 'Invalid agents array' }
-    if ($Json -match '^\s*\[\s*\]\s*$') { return @() }
-    $agents = @($Json | ConvertFrom-Json -ErrorAction Stop)
-    foreach ($agent in $agents) {
-        if (-not $agent.kind -or ($agent.kind -eq 'interactive' -and -not $agent.sessionId)) { throw 'Invalid agent' }
-    }
-    return @(Get-InteractiveSessionIdsFromJson $Json)
-}
-
-function Test-TranscriptHasConversation($Lines, [long]$Length = 0) {
-    if ($Length -gt 200KB) { return $true }
-    foreach ($line in $Lines) {
-        try { $row = $line | ConvertFrom-Json -ErrorAction Stop } catch { continue }
-        if ($row.type -notin @('user', 'assistant')) { continue }
-        $content = $row.message.content
-        if ($content -is [array]) { $content = ($content | ForEach-Object { $_.text }) -join ' ' }
-        if ($content -isnot [string] -or [string]::IsNullOrWhiteSpace($content)) { continue }
-        if ($row.type -eq 'assistant' -or $content -notmatch '<local-command-caveat>|<command-name>|<command-message>') { return $true }
-    }
-    return $false
-}
-
-function Select-ProtectedSessionIds($InteractiveIds, $ClosedIds, $Transcripts) {
-    foreach ($id in @($InteractiveIds)) {
-        if ($id -notin @($ClosedIds) -and @($Transcripts | Where-Object { $_.Id -eq $id -and $_.HasConversation }).Count -gt 0) { $id }
-    }
-}
-
-function Get-ProtectedSessionIds {
-    $cli = (Get-Command claude -ErrorAction SilentlyContinue | Select-Object -First 1).Source
-    if (-not $cli) { $cli = Join-Path $env:USERPROFILE '.local\bin\claude.exe' }
-    $json = (& $cli agents --json 2>$null) -join "`n"
-    if ($LASTEXITCODE -ne 0) { throw 'agents failed' }
-    $ids = @(Get-ValidatedInteractiveIds $json)
-    if ($ids.Count -eq 0) { return @() }
-    $base = Join-Path $env:USERPROFILE '.claude'
-    $closed = @()
-    $ledger = Join-Path $base 'closed-sessions.json'
-    if (Test-Path -LiteralPath $ledger) {
-        $data = Get-Content -LiteralPath $ledger -Raw -Encoding utf8 | ConvertFrom-Json
-        if ($data.ids -isnot [array]) { throw 'Invalid closed ledger' }
-        $closed = @($data.ids)
-    }
-    $transcripts = @(Get-ChildItem -LiteralPath (Join-Path $base 'projects') -Directory | Where-Object { $_.Name -ne '_deleted-backup' } | ForEach-Object {
-        foreach ($file in @(Get-ChildItem -LiteralPath $_.FullName -Filter '*.jsonl' -File)) {
-            if ($file.BaseName -in $ids -and $file.BaseName -notin $closed) {
-                $hasConversation = $file.Length -gt 200KB
-                if (-not $hasConversation) { $hasConversation = Test-TranscriptHasConversation (Get-Content -LiteralPath $file.FullName -Encoding utf8) $file.Length }
-                @{ Id = $file.BaseName; HasConversation = $hasConversation }
-            }
-        }
-    })
-    return @(Select-ProtectedSessionIds $ids $closed $transcripts)
-}
-
-function Test-RemoteControlProtection {
-    try { $protected = @(Get-ProtectedSessionIds) } catch {
-        Write-Log 'SKIP: セッション一覧を取得できない（Remote Control 保護）' | Out-Host
-        return $true
-    }
-    if ($protected.Count -gt 0) {
-        Write-Log ("SKIP: 未クローズの稼働セッション {0} 件（Remote Control 保護）" -f $protected.Count) | Out-Host
-        return $true
-    }
-    Write-Log 'RC-GUARD: 保護対象 0 件' | Out-Host
-    return $false
-}
-
-function Get-InteractiveSessionCount {
-    try {
-        $claudeCli = (Get-Command claude -ErrorAction SilentlyContinue | Select-Object -First 1).Source
-        if (-not $claudeCli) {
-            $candidate = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
-            if (Test-Path -LiteralPath $candidate) { $claudeCli = $candidate }
-        }
-        if (-not $claudeCli) { return 0 }
-        $json = (& $claudeCli agents --json 2>$null) -join "`n"
-        return @(Get-InteractiveSessionIdsFromJson $json).Count
-    } catch { return 0 }
 }
 
 function Get-BusySessionFiles($ProjectsPath, [datetime]$Cutoff, [string[]]$InteractiveSessionIds, [bool]$AgentsUsable) {
@@ -254,7 +171,6 @@ function Wait-Until($Condition, [int]$TimeoutSeconds) {
 }
 
 function Invoke-VSCodeRestart($CodeCli, [string[]]$RestoreTargets) {
-    if (Test-RemoteControlProtection) { return $false }
     $handles = @(Get-VSCodeWindowHandles)
     foreach ($handle in $handles) { [void][NightlyReloadWin32]::PostMessage($handle, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }
     if (-not (Wait-Until { @(Get-Process Code -ErrorAction SilentlyContinue).Count -eq 0 } 60)) {
@@ -272,29 +188,26 @@ function Invoke-VSCodeRestart($CodeCli, [string[]]$RestoreTargets) {
     return $true
 }
 
-function Wait-InteractiveSessions([int]$Target, [int]$TimeoutSeconds, [int]$IntervalSeconds = 20) {
-    for ($elapsed = 0; $elapsed -le $TimeoutSeconds; $elapsed += $IntervalSeconds) {
-        $count = Get-InteractiveSessionCount
-        if ($count -ge $Target -and $count -ge 1) {
-            Write-Log ("RESUMED: interactive {0} 件 / 目標 {1} 件 / {2} 秒" -f $count, $Target, $elapsed) | Out-Host
-            return $count
-        }
-        if ($elapsed + $IntervalSeconds -le $TimeoutSeconds) { Start-Sleep -Seconds $IntervalSeconds }
-    }
-    return $count
+function Save-ReloadSnapshot($SnapshotPath) {
+    $output = (& node.exe (Join-Path $PSScriptRoot 'reopen-lost-sessions.mjs') --save-snapshot $SnapshotPath) -join "`n"
+    if ($LASTEXITCODE -ne 0) { throw "Snapshot failed: $output" }
+    $snapshot = $output | ConvertFrom-Json
+    Write-Log ("SNAPSHOT: {0} sessions / {1}" -f @($snapshot.sessions).Count, $SnapshotPath) | Out-Host
 }
 
-function Confirm-VSCodeResume([int]$Target, $CodeCli, [string[]]$RestoreTargets) {
-    $count = Wait-InteractiveSessions $Target 360 20
-    if ($count -eq 0) {
-        if (Test-RemoteControlProtection) { return $count }
-        Write-Log 'RESUME-RETRY: 起動失敗を検知、再起動を 1 回やり直す' | Out-Host
-        if (Invoke-VSCodeRestart $CodeCli $RestoreTargets) {
-            $count = Wait-InteractiveSessions $Target 240 20
-        }
-        if ($count -eq 0) { Write-Log 'RESUME-FAIL: interactive 0 件' | Out-Host }
+function Restore-ReloadSnapshot($SnapshotPath) {
+    $output = (& node.exe (Join-Path $PSScriptRoot 'reopen-lost-sessions.mjs') --from-snapshot $SnapshotPath) -join "`n"
+    $exitCode = $LASTEXITCODE
+    try { $result = $output | ConvertFrom-Json } catch { $result = @{ error = $output } }
+    $failures = @($result.failed | Where-Object { $_ })
+    $connected = @($result.reopened | Where-Object { $_ }).Count + @($result.alreadyConnected | Where-Object { $_ }).Count
+    $detail = ($failures | ForEach-Object { "{0} ({1}): {2}" -f $_.id, $_.title, $_.error }) -join '; '
+    $summary = "RC-RESTORE: connected=$connected failed=$($failures.Count) $detail $($result.error)"
+    Write-Log $summary | Out-Host
+    if ($exitCode -ne 0 -or $failures.Count -gt 0 -or $result.error) {
+        & node.exe (Join-Path $PSScriptRoot 'notify-kim.mjs') --kind info $summary | Out-Host
+        if ($LASTEXITCODE -ne 0) { Write-Log 'WARN: kim-inbox notification failed' | Out-Host }
     }
-    return $count
 }
 
 if ($FunctionsOnly) { return }
@@ -308,7 +221,7 @@ try {
     $windowHandles = @(Get-VSCodeWindowHandles)
     if ($windowHandles.Count -eq 0) { Write-Log 'SKIP: VSCode の表示中ウィンドウが無い'; exit 0 }
 
-    if (Test-RemoteControlProtection) { exit 0 }
+    $snapshotPath = Join-Path $claude 'reload-snapshot.json'
     $policy = Get-RestartPolicy @(Get-Process Code -ErrorAction SilentlyContinue | ForEach-Object { $_.StartTime })
     if ($policy.Overdue) { Write-Log ('FORCE-RESTART: Code age={0:N1}h >= 72h; bypass busy and URI reload' -f $policy.AgeHours) }
 
@@ -369,14 +282,18 @@ try {
     $uriEligible = -not $policy.Due -and $diskVersion -and $diskVersion -ge $requiredVersion -and $activatedVersion -and $activatedVersion -ge $requiredVersion
     $pathLabel = if ($uriEligible) { 'URI（未確認時はRestart）' } else { 'Restart' }
     if ($DryRun) {
-        Write-Log ("DRYRUN: ここで再起動する（{0} / {1} / 対象窓 {2}）" -f $pathLabel, $reason, $windowHandles.Count)
+        # Preview snapshot count without writing files
+        $previewOutput = (& node.exe (Join-Path $PSScriptRoot 'reopen-lost-sessions.mjs') --save-snapshot "$env:TEMP\nightly-reload-preview.json" 2>$null) -join "`n"
+        $preview = try { $previewOutput | ConvertFrom-Json } catch { $null }
+        $sessionCount = if ($preview) { @($preview.sessions).Count } else { '?' }
+        Write-Log ("DRYRUN: ここで再起動する（{0} / {1} / 対象窓 {2} / スナップショット {3}件）" -f $pathLabel, $reason, $windowHandles.Count, $sessionCount)
         Write-Log 'DRYRUN: 復帰確認をスキップ'
         exit 0
     }
 
     $useRestart = -not $uriEligible
     if ($uriEligible) {
-        if (Test-RemoteControlProtection) { exit 0 }
+        Save-ReloadSnapshot $snapshotPath
         $beforePids = @(Get-ExtensionHostPids)
         & $codeCli --open-url 'vscode://orgiast.next-session/reload?probe=1' | Out-Null
         Start-Sleep -Seconds 20
@@ -386,6 +303,7 @@ try {
             Set-Content -Path $marker -Value (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') -Encoding utf8
             if ($diskVersion) { Set-Content -Path $activatedMarker -Value $diskVersion.ToString() -Encoding utf8 }
             Write-Log ("RELOADED: 再読み込みを実行（URI / {0}）" -f $reason)
+            Restore-ReloadSnapshot $snapshotPath
         } else { Write-Log 'FALLBACK: URI 後も拡張ホスト PID が変わらないため Restart へ切替' }
     }
 
@@ -394,20 +312,13 @@ try {
         try {
             $storage = Join-Path $env:APPDATA 'Code\User\globalStorage\storage.json'
             $restoreTargets = @(Get-VSCodeRestoreTargets $storage)
-            $resumeTarget = [Math]::Min($interactiveIds.Count, 3)
-            if ($resumeTarget -lt 1) { $resumeTarget = [Math]::Min((Get-InteractiveSessionCount), 3) }
-            if ($resumeTarget -lt 1) { $resumeTarget = 1 }
-            $restartSince = (Get-Date).ToUniversalTime().ToString("o")
+            Save-ReloadSnapshot $snapshotPath
             if (-not (Invoke-VSCodeRestart $codeCli $restoreTargets)) { exit 0 }
             Set-Content -Path $marker -Value (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') -Encoding utf8
             if ($diskVersion) { Set-Content -Path $activatedMarker -Value $diskVersion.ToString() -Encoding utf8 }
             $updateLabel = if ($updatePending) { $diskVersion.ToString() } else { 'なし' }
             Write-Log ("RELOADED: 再起動を実行（Restart / 退避 {0} 件 / 更新待ち {1}）" -f $moved, $updateLabel)
-            [void](Confirm-VSCodeResume $resumeTarget $codeCli $restoreTargets)
-            $reopenScript = Join-Path $PSScriptRoot 'reopen-lost-sessions.mjs'
-            $reopenUntil = (Get-Date).ToUniversalTime().ToString('o')
-            Start-Process -FilePath (Get-Command node.exe -ErrorAction Stop).Source -ArgumentList @(('"{0}"' -f $reopenScript), '--since', $restartSince, '--until', $reopenUntil) -WindowStyle Hidden | Out-Null
-            Write-Log 'RECOVERY: host_exit の自動復旧をバックグラウンドで起動'
+            Restore-ReloadSnapshot $snapshotPath
         } finally {
             Disable-SleepInhibition
         }

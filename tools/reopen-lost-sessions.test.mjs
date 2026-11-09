@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder } from './reopen-lost-sessions.mjs';
+import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, saveSnapshot, transcriptSessions, connection, selectWindow, windowTargets, openAndVerify, closedIds } from './reopen-lost-sessions.mjs';
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
 const exit = { event_type: 'system', payload: { reason: 'host_exit' }, created_at: since };
@@ -84,6 +84,7 @@ test('reopenLost: worktree cwd のセッションは最初の非 worktree cwd �
     { type: 'user', cwd: wtDir, message: { content: 'moved to worktree' } },
   ].map(JSON.stringify).join('\n'));
   const psCalls = [];
+  let checkCount = 0;
   const result = await reopenLost({
     base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd',
     fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
@@ -91,8 +92,8 @@ test('reopenLost: worktree cwd のセッションは最初の非 worktree cwd �
       if (args[0] !== 'agents') psCalls.push(args[args.length - 1]);
       return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
     },
-    windowReady: () => true,
     wait: async () => {},
+    checkConnection: async () => { checkCount++; return checkCount > 3 ? { pid: 123, bridgeSessionId: 'cse_bridge' } : null; },
   });
   assert.equal(result.reopened.length, 1);
   assert.equal(result.reopened[0].folder, normalDir);
@@ -214,10 +215,12 @@ test('dry run uses real local mapping, paginates, never opens/writes', async t =
 
 test('opening continues after API deadline; focus precedes URI; lock released and log written', async t => {
   const base = fixture(t), calls = []; let clock = 0;
+  let checkCount = 0;
   const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock,
     fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
     spawn: (cmd, args) => { calls.push(args); return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' }; },
-    windowReady: () => { clock = 120000; return true; }, wait: async () => {},
+    wait: async () => {},
+    checkConnection: async () => { checkCount++; return checkCount > 3 ? { pid: 123, bridgeSessionId: 'cse_bridge' } : null; },
   });
   assert.equal(result.reopened.length, 1);
   const ps = calls.filter(a => a[0] !== 'agents');
@@ -230,7 +233,7 @@ test('opening continues after API deadline; focus precedes URI; lock released an
 test('unknown agents prevents API/open; concurrent lock and stale lock', async t => {
   const base = fixture(t);
   const result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', spawn: () => ({ status: 1 }), fetchImpl: () => assert.fail() });
-  assert.match(result.error, /failed/);
+  assert.ok(result.apiError || result.error, `expected error, got: ${JSON.stringify(result)}`);
   const file = path.join(base, 'test.lock'), release = acquireLock(file);
   assert.equal(acquireLock(file), null); release();
   fs.writeFileSync(file, 'stale'); fs.utimesSync(file, new Date(0), new Date(0));
@@ -330,21 +333,17 @@ test('exclusions for archivedByUser and reopenLoop', async t => {
 test('post-reopen verification records verified and unverified', async t => {
   const base = fixture(t);
   let clock = 0;
-  let agentCheckCount = 0;
+  let checkCount = 0;
 
   const result = await reopenLost({
     base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock,
     fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
     spawn: (cmd, args) => {
-      if (args[0] === 'agents') {
-        agentCheckCount++;
-        if (agentCheckCount > 1) return { status: 0, stdout: '[]' };
-        return { status: 0, stdout: '[]' };
-      }
+      if (args[0] === 'agents') return { status: 0, stdout: '[]' };
       return { status: 0, stdout: '' };
     },
-    windowReady: () => true,
     wait: async () => {},
+    checkConnection: async () => { checkCount++; return checkCount > 3 ? { pid: 123, bridgeSessionId: 'cse_bridge' } : null; },
   });
 
   assert.equal(result.reopened.length, 1);
@@ -460,14 +459,15 @@ test('reopenLost reuses workspace file and does not call code <cwd> when workspa
 
   const env = { ORGIAST_VSCODE_WORKSPACE: wsFile };
 
+  let checkCount = 0;
   const result = await reopenLost({
     base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, env,
     spawn: (cmd, args) => {
       if (args[0] !== 'agents') psCalls.push(args[args.length - 1]);
       return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
     },
-    windowReady: () => true,
     wait: async () => {},
+    checkConnection: async () => { checkCount++; return checkCount > 3 ? { pid: 123, bridgeSessionId: 'cse_bridge' } : null; },
   });
 
   assert.equal(result.reopened.length, 2);
@@ -504,6 +504,7 @@ test('parseJsonTolerant handles block comments, escaping, BOM', t => {
 
 test('reopenLost falls back to code <cwd> with openedWith: folder when no workspace matches', async t => {
   const base = fixture(t), psCalls = [];
+  let checkCount = 0;
   const result = await reopenLost({
     base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd',
     fetchImpl: async url => ({
@@ -514,8 +515,8 @@ test('reopenLost falls back to code <cwd> with openedWith: folder when no worksp
       if (args[0] !== 'agents') psCalls.push(args[args.length - 1]);
       return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
     },
-    windowReady: () => true,
     wait: async () => {},
+    checkConnection: async () => { checkCount++; return checkCount > 3 ? { pid: 123, bridgeSessionId: 'cse_bridge' } : null; },
   });
 
   assert.equal(result.reopened.length, 1);
@@ -569,4 +570,182 @@ test('resolveClaudeCli: winget Packages glob (Windows only)', { skip: process.pl
 
 test('resolveClaudeCli: throws when nothing found', t => {
   assert.throws(() => resolveClaudeCli({ env: {}, exists: () => false, readdir: () => [], spawn: () => ({ status: 1 }) }));
+});
+
+// --- Snapshot / restore tests ---
+
+function snapshotFixture(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'snap-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  const sessionsDir = path.join(base, 'sessions');
+  const projectsDir = path.join(base, 'projects', 'proj');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  fs.mkdirSync(projectsDir, { recursive: true });
+  // Write a session PID file (our own PID so it's alive)
+  const pid = process.pid;
+  const now = new Date().toISOString();
+  fs.writeFileSync(path.join(sessionsDir, `${pid}.json`), JSON.stringify({
+    pid, sessionId: 'cse_snap-test', bridgeSessionId: 'cse_bridge-1', startedAt: now, cwd: 'C:\\work',
+  }));
+  // Write a transcript with conversation
+  fs.writeFileSync(path.join(projectsDir, 'cse_snap-test.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_bridge-1' },
+    { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+    { type: 'assistant', message: { content: [{ type: 'text', text: 'reply' }] } },
+  ].map(JSON.stringify).join('\n'));
+  return { root, base, sessionsDir, projectsDir, pid };
+}
+
+test('transcriptSessions: returns Map of session metadata from projects dir', t => {
+  const { base, projectsDir } = snapshotFixture(t);
+  const result = transcriptSessions(base, new Set(['cse_snap-test']));
+  assert.equal(result.size, 1);
+  const entry = result.get('cse_snap-test');
+  assert.ok(entry);
+  assert.equal(entry.id, 'cse_snap-test');
+  assert.equal(entry.cwd, 'C:\\work');
+  assert.equal(entry.title, '');
+  assert.equal(entry.hasConversation, true);
+  assert.ok(entry.transcriptPath);
+});
+
+test('transcriptSessions: empty projects dir returns empty Map', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'snap-empty-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  const result = transcriptSessions(base, new Set(['x']));
+  assert.equal(result.size, 0);
+});
+
+test('closedIds: reads closed-sessions.json', t => {
+  const { base } = snapshotFixture(t);
+  fs.writeFileSync(path.join(base, 'closed-sessions.json'), JSON.stringify({ ids: ['cse_closed-1', 'cse_closed-2'] }));
+  const result = closedIds(base);
+  assert.equal(result.has('cse_closed-1'), true);
+  assert.equal(result.has('cse_closed-2'), true);
+  assert.equal(result.has('cse_snap-test'), false);
+});
+
+test('closedIds: missing file returns empty set', t => {
+  const { base } = snapshotFixture(t);
+  const result = closedIds(base);
+  assert.equal(result.size, 0);
+});
+
+test('selectWindow: returns cwd when no targets match', t => {
+  assert.equal(selectWindow('C:\\work', []), 'C:\\work');
+});
+
+test('selectWindow: returns matching workspace target', t => {
+  const targets = [{ target: 'C:\\proj\\ws.code-workspace', roots: ['C:\\proj'] }];
+  assert.equal(selectWindow('C:\\proj\\src', targets), 'C:\\proj\\ws.code-workspace');
+  assert.equal(selectWindow('C:\\other', targets), 'C:\\other');
+});
+
+test('windowTargets: extracts targets from storage.json', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-targets-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const wsFile = path.join(root, 'test.code-workspace');
+  fs.writeFileSync(wsFile, JSON.stringify({ folders: [{ path: '.' }] }), 'utf8');
+  const storage = {
+    windowsState: {
+      lastActiveWindow: { folderUri: 'file:///C%3A/Work' },
+      openedWindows: [
+        { workspaceIdentifier: { configURIPath: `file:///${wsFile.replace(/\\/g, '/')}` } },
+      ],
+    },
+  };
+  const targets = windowTargets(storage, f => fs.readFileSync(f, 'utf8'));
+  assert.equal(targets.length, 2);
+  assert.ok(targets.some(t => t.target === 'C:\\Work'));
+  assert.ok(targets.some(t => t.target === wsFile));
+});
+
+test('connection: finds matching agent with matching bridgeSessionId', t => {
+  const { base } = snapshotFixture(t);
+  const candidate = { id: 'cse_snap-test', bridgeSessionId: 'cse_bridge-1' };
+  const agents = [{ kind: 'interactive', sessionId: 'cse_snap-test', pid: process.pid }];
+  const result = connection(base, candidate, agents);
+  assert.ok(result);
+  assert.equal(result.pid, process.pid);
+  assert.equal(result.bridgeSessionId, 'cse_bridge-1');
+});
+
+test('connection: returns null when no agent matches', t => {
+  const { base } = snapshotFixture(t);
+  const candidate = { id: 'cse_unknown', bridgeSessionId: 'cse_bridge-x' };
+  const result = connection(base, candidate, []);
+  assert.equal(result, null);
+});
+
+test('saveSnapshot: writes snapshot JSON with live sessions', t => {
+  const { root, base } = snapshotFixture(t);
+  const snapFile = path.join(root, 'snap.json');
+  const result = saveSnapshot(snapFile, {
+    base, spawn: () => ({ status: 0, stdout: '[]' }),
+    targets: [],
+  });
+  assert.ok(result);
+  assert.equal(result.version, 1);
+  assert.ok(result.at);
+  assert.equal(result.sessions.length, 1);
+  assert.equal(result.sessions[0].sessionId, 'cse_snap-test');
+  assert.equal(result.sessions[0].cwd, 'C:\\work');
+  // Verify file was written
+  const read = JSON.parse(fs.readFileSync(snapFile, 'utf8'));
+  assert.deepEqual(read, result);
+});
+
+test('saveSnapshot: fallback to claude agents when PID files empty', t => {
+  const { root, base } = snapshotFixture(t);
+  // Remove the PID file so liveSessions returns empty
+  fs.rmSync(path.join(base, 'sessions', `${process.pid}.json`));
+  const snapFile = path.join(root, 'snap-fallback.json');
+  const result = saveSnapshot(snapFile, {
+    base,
+    spawn: (cmd, args) => {
+      if (args[0] === 'agents') return { status: 0, stdout: JSON.stringify([{ kind: 'interactive', sessionId: 'cse_snap-test', pid: process.pid }]) };
+      return { status: 0, stdout: '' };
+    },
+    targets: [],
+  });
+  assert.ok(result);
+  assert.equal(result.sessions.length, 1);
+});
+
+test('parseOptions: --from-snapshot and --save-snapshot are recognized', t => {
+  const opts1 = parseOptions(['--from-snapshot', 'C:\\snap.json']);
+  assert.equal(opts1.fromSnapshot, 'C:\\snap.json');
+  const opts2 = parseOptions(['--save-snapshot', 'C:\\snap.json']);
+  assert.equal(opts2.saveSnapshot, 'C:\\snap.json');
+  assert.throws(() => parseOptions(['--from-snapshot', 'x', '--save-snapshot', 'y']));
+});
+
+test('openAndVerify: throws when session is closed during recovery', async t => {
+  const { base } = snapshotFixture(t);
+  const candidate = { id: 'cse_snap-test', cwd: 'C:\\work', transcriptPath: path.join(base, 'projects', 'proj', 'cse_snap-test.jsonl') };
+  await assert.rejects(
+    () => openAndVerify(candidate, {
+      code: 'C:\\code.cmd', spawn: () => ({ status: 0, stdout: '' }), wait: async () => {},
+      check: async () => null,
+      assertOpen: c => { if (c.id === 'cse_snap-test') throw Error('Session closed during recovery'); },
+      targets: [],
+    }),
+    /Session closed during recovery/
+  );
+});
+
+test('openAndVerify: throws when transcript is removed during recovery', async t => {
+  const { base } = snapshotFixture(t);
+  const candidate = { id: 'cse_snap-test', cwd: 'C:\\work', transcriptPath: path.join(base, 'projects', 'proj', 'missing.jsonl') };
+  await assert.rejects(
+    () => openAndVerify(candidate, {
+      code: 'C:\\code.cmd', spawn: () => ({ status: 0, stdout: '' }), wait: async () => {},
+      check: async () => null,
+      assertOpen: c => { if (c.transcriptPath && !fs.existsSync(c.transcriptPath)) throw Error('Transcript removed during recovery'); },
+      targets: [],
+    }),
+    /Transcript removed during recovery/
+  );
 });

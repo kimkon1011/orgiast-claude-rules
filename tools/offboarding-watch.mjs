@@ -202,10 +202,10 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
         save(path.join(ctx.toolsDir, 'claude-account-ledger.json'), ledger);
         r.actions.push('ローカル失効PC台帳・退職者台帳を更新');
         await putEnv(ctx, 'ORGIAST_REVOKED_PCS', JSON.stringify(ids));
-        r.actions.push('失効PCを production/preview の環境変数へ反映');
+        r.actions.push('失効PCを production の環境変数へ反映');
         const code = await (deps.ledgerSync || knowledgeLock)(['ledger-sync', '--apply'], { ...ctx, stdout: () => {}, stderr: () => {} });
         if (code !== 0) throw Error();
-        r.actions.push('契約台帳を production/preview へ同期');
+        r.actions.push('契約台帳を production へ同期');
       } catch { r.actions.push('失効反映が未完了（部分更新の可能性あり・次回再試行）'); failed = true; }
       r.actions.push('keyserve 再デプロイで有効化。環境変数の変更自体は次回デプロイまで効きません。再デプロイは未実施');
     }
@@ -224,7 +224,8 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
       let state = {}; try { state = read(stateFile); } catch (e) { if (e.code !== 'ENOENT') throw e; }
       if (state.date !== date || !state.hashes?.includes(hash)) {
         const result = await ctx.notify(message, { home: ctx.home, fetchImpl: ctx.fetch, plainJa: false, kimActionRequired: true, webhookFallback: false });
-        if (result?.delivered !== 'dm') throw Error();
+        // kim 宛は組織指示16で Discord DM 禁止。deliverKim は kim-inbox（session-inbox）へ積むので、それも配信成功として扱う
+        if (!['dm', 'session-inbox'].includes(result?.delivered)) throw Error();
         save(stateFile, { date, hashes: [...(state.date === date ? state.hashes || [] : []), hash] });
         r.notification = { status: 'sent', body: message };
       } else r.notification = { status: 'suppressed' };

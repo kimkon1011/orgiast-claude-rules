@@ -94,17 +94,19 @@ test('apply: 正本と台帳更新・rm/add production/preview stdin・ledger-sy
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.home, 'knowledge-revoked-pcs.json'))), ['old-PC','retired-PC']);
   const member = JSON.parse(fs.readFileSync(path.join(f.home,'claude-account-ledger.json'))).members[0];
   assert.equal(member.status, 'retired'); assert.equal(member.retiredOn, '2026-10-29');
-  assert.equal(f.calls.length, 8);
-  for (const [i, name] of ['ORGIAST_REVOKED_PCS','KNOWLEDGE_LEDGER_JSON'].entries()) for (const [j,target] of ['production','preview'].entries()) {
-    const idx = i*4+j*2;
+  // Vercel CLI は preview への非対話書き込みを受け付けないため production のみ（2026-11-09）
+  assert.equal(f.calls.length, 4);
+  for (const [i, name] of ['ORGIAST_REVOKED_PCS','KNOWLEDGE_LEDGER_JSON'].entries()) {
+    const idx = i*2, target = 'production';
     assert.deepEqual(f.calls[idx].args, ['env','rm',name,target,'-y']);
     assert.deepEqual(f.calls[idx+1].args, ['env','add',name,target,'--sensitive']);
     assert.equal(f.calls[idx+1].opts.cwd, '/keyserve');
   }
+  assert.ok(f.calls.every(c => c.args[3] === 'production'), 'preview には書かない');
   assert.deepEqual(JSON.parse(f.calls[1].input), ['old-PC','retired-PC']);
-  assert.deepEqual(JSON.parse(f.calls[5].input).retiredEmails, ['alias@orgiast.jp','retired@orgiast.jp']);
+  assert.deepEqual(JSON.parse(f.calls[3].input).retiredEmails, ['alias@orgiast.jp','retired@orgiast.jp']);
   assert.match(result.actions.join(' '), /次回デプロイまで効きません/);
-  await f.run(['--apply-revoke']); assert.equal(f.calls.length, 16, '失敗からの復旧も含め毎回同期');
+  await f.run(['--apply-revoke']); assert.equal(f.calls.length, 8, '失敗からの復旧も含め毎回同期');
 });
 test('部分反映失敗は未完了と記録・秘密stdout非出力・壊れた正本を上書きしない', async t => {
   const f = fixture(t); f.deps.ledgerSync = async () => { throw Error('secret-token'); };
@@ -150,7 +152,7 @@ test('定期登録はkim-PC Windowsだけ', () => {
   assert.match(source, /07:10/); assert.match(source, /'--notify', '--apply-revoke'/); assert.match(source, /--is-controller/);
 });
 
-test('既存notify-kimのDM配信関数で本文・承認事項・未取得を保持する', async t => {
+test('既存notify-kimの配信関数は kim 宛 DM を送らず kim-inbox に本文・承認事項・未取得を積む', async t => {
   const f = fixture(t), sent = [];
   delete f.deps.notify;
   fs.mkdirSync(path.join(f.home, '.claude'), { recursive: true });
@@ -163,8 +165,12 @@ test('既存notify-kimのDM配信関数で本文・承認事項・未取得を�
   };
   const { result, code } = await f.run(['--notify']);
   assert.equal(code, 0); assert.equal(result.notification.status, 'sent');
-  assert.equal(sent.length, 2);
-  assert.match(sent[1].body.content, /未取得: workspace（HTTP 401 unauthorized_client）/);
-  assert.match(sent[1].body.content, /Claude 組織からの削除・Workspace 停止を承認/);
+  // 組織指示16: kim 宛 Discord DM は全面禁止。Discord API は1回も呼ばれない
+  assert.equal(sent.length, 0);
+  // 本文は kim-inbox（~/.claude/kim-inbox）に積まれる
+  const inboxDir = path.join(f.home, '.claude', 'kim-inbox');
+  const stored = fs.readdirSync(inboxDir).filter(n => n.endsWith('.json')).map(n => fs.readFileSync(path.join(inboxDir, n), 'utf8')).join('\n');
+  assert.match(stored, /未取得: workspace（HTTP 401 unauthorized_client）/);
+  assert.match(stored, /Claude 組織からの削除・Workspace 停止を承認/);
   assert.doesNotMatch(f.output, /secret-test-token/);
 });

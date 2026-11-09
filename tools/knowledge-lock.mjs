@@ -85,7 +85,7 @@ export async function vercelEnv(ctx, args, input = '') {
       cwd: ctx.serverDir, shell: ctx.platform === 'win32', stdio: ['pipe', 'pipe', 'pipe'],
     });
     let diagnostic = '';
-    child.stdout.on('data', () => {});
+    child.stdout.on('data', chunk => { diagnostic = (diagnostic + chunk).slice(-8192); });
     child.stderr.on('data', chunk => { diagnostic = (diagnostic + chunk).slice(-8192); });
     child.on('error', () => reject(new Error('Vercel CLI を起動できません')));
     child.stdin.on('error', () => reject(new Error('Vercel CLI への入力に失敗しました')));
@@ -98,10 +98,9 @@ export async function vercelEnv(ctx, args, input = '') {
 }
 
 export async function putEnv(ctx, name, value, replace = true) {
-  for (const target of ['production', 'preview']) {
-    if (replace) await vercelEnv(ctx, ['rm', name, target, '-y']);
-    await vercelEnv(ctx, ['add', name, target, '--sensitive'], value);
-  }
+  const target = 'production';
+  if (replace) await vercelEnv(ctx, ['rm', name, target, '-y']);
+  await vercelEnv(ctx, ['add', name, target, '--sensitive'], value);
 }
 
 function context(deps) {

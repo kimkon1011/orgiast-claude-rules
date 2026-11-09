@@ -27,7 +27,7 @@ node tools/knowledge-lock.mjs keygen --apply
 if ($LASTEXITCODE -ne 0) { throw '鍵生成未完了。後続を止める' }
 ```
 
-RSA 秘密鍵はプロセスメモリから Vercel CLI の stdin 経由で production/preview の Sensitive env `KNOWLEDGE_LOCK_PRIVATE_KEY` にだけ保存される。`KNOWLEDGE_LOCK_KID` と `KNOWLEDGE_GRANT_SECRET` も設定する。ローカルには公開鍵 `tools/knowledge-lock-pubkey.pem` と識別子 `tools/knowledge-lock-pubkey.json` のみ保存する。公開鍵が既にある場合は停止する。Sensitive 秘密鍵は読み戻せないため、障害時に安易な再生成・削除をしない。
+RSA 秘密鍵はプロセスメモリから Vercel CLI の stdin 経由で production の Sensitive env `KNOWLEDGE_LOCK_PRIVATE_KEY` にだけ保存される。`KNOWLEDGE_LOCK_KID` と `KNOWLEDGE_GRANT_SECRET` も設定する。ローカルには公開鍵 `tools/knowledge-lock-pubkey.pem` と識別子 `tools/knowledge-lock-pubkey.json` のみ保存する。公開鍵が既にある場合は停止する。Sensitive 秘密鍵は読み戻せないため、障害時に安易な再生成・削除をしない。preview デプロイには鍵が無いため、knowledge API は未設定として動く。
 
 ### ② 台帳を同期する
 
@@ -37,11 +37,11 @@ node tools/knowledge-lock.mjs ledger-sync --apply
 if ($LASTEXITCODE -ne 0) { throw '台帳同期未完了' }
 ```
 
-全台帳から導出した `KNOWLEDGE_LEDGER_JSON` を production/preview に同期する。差分はローカルの前回同期記録との比較であり、サーバ現在値との比較ではない。env 更新だけでは稼働中デプロイは変わらない。
+全台帳から導出した `KNOWLEDGE_LEDGER_JSON` を production に同期する。差分はローカルの前回同期記録との比較であり、サーバ現在値との比較ではない。env 更新だけでは稼働中デプロイは変わらない。
 
 ### ③ Discord と公開 URL を設定する
 
-値の取得元は [notify-kim.mjs](../tools/notify-kim.mjs) の `resolveDiscordBotToken()` の読み込み（`DISCORD_BOT_TOKEN`、なければ `~/.claude/orgiast-discord-bot-token.txt`）。kim の Discord ID は同ファイルの公開定数 `KIM_DISCORD_USER_ID`（kim: `715210673642012733`）。通知ツールには別ユーザー向け override もあるため、ここでは kim の定数を使う。
+値の取得元は [notify-kim.mjs](../tools/notify-kim.mjs) の `resolveDiscordBotToken()` の読み込み（`DISCORD_BOT_TOKEN`、なければ `~/.claude/orgiast-discord-bot-token.txt`）。通知先は kim への DM ではなく（組織指示16で kim 宛 DM は全面禁止）、Claude が読む通知チャンネル `KNOWLEDGE_NOTIFY_CHANNEL_ID`（orgiast-notify: `1508437329247862794`）。パスキー登録リンク・登録完了 blob・契約外アカウントの承認リンクはこのチャンネルに `[knowledge-lock]` 付きで投稿され、Claude が読んで kim-inbox に積む（2026-11-09 変更、keyserve PR #7）。
 
 公開 URL は [knowledge-lock.mjs](../tools/knowledge-lock.mjs) の既定 keyserve URL とサーバ `api/knowledge.js` の `baseUrl()` に基づく `https://orgiast-keyserve.vercel.app`。WebAuthn の origin に使うため、実際にスマホで開く固定 HTTPS origin を設定する。
 
@@ -51,14 +51,14 @@ if ($LASTEXITCODE -ne 0) { throw '台帳同期未完了' }
 @'
 import { spawn } from 'node:child_process';
 import { putEnv } from './tools/knowledge-lock.mjs';
-import { KIM_DISCORD_USER_ID, resolveDiscordBotToken } from './tools/notify-kim.mjs';
+import { resolveDiscordBotToken } from './tools/notify-kim.mjs';
 const token = resolveDiscordBotToken();
 if (!token) throw Error('既存 bot token が空です');
 const ctx = { spawn, platform: process.platform, serverDir: 'C:/Users/uers/Downloads/orgiast-keyserve' };
 await putEnv(ctx, 'DISCORD_BOT_TOKEN', token);
-await putEnv(ctx, 'KIM_DISCORD_USER_ID', KIM_DISCORD_USER_ID);
+await putEnv(ctx, 'KNOWLEDGE_NOTIFY_CHANNEL_ID', '1508437329247862794');
 await putEnv(ctx, 'KNOWLEDGE_PUBLIC_BASE_URL', 'https://orgiast-keyserve.vercel.app');
-console.log('production/preview 設定完了。再デプロイ待ち');
+console.log('production 設定完了。再デプロイ待ち');
 '@ | node --input-type=module
 if ($LASTEXITCODE -ne 0) { throw 'env 更新未完了' }
 ```

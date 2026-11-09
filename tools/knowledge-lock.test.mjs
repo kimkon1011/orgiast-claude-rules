@@ -158,11 +158,11 @@ test('keygen 計画は無変更、apply は RSA-3072 を stdin のみに渡す (
   assert.equal(fs.existsSync(pub), false); assert.equal(f.calls.length, 0);
   f.deps.platform = 'win32';
   assert.equal(await f.run(['keygen', '--kid', 'k2', '--apply']), 0);
-  assert.equal(f.calls.length, 6);
+  assert.equal(f.calls.length, 3);
   for (const call of f.calls) {
     assert.equal(call.command, 'vercel.cmd'); assert.equal(call.options.shell, true); assert.equal(call.options.cwd, f.root);
     assert.equal(call.args[0], 'env'); assert.equal(call.args[1], 'add'); assert.equal(call.args[4], '--sensitive');
-    assert.ok(['production', 'preview'].includes(call.args[3]));
+    assert.equal(call.args[3], 'production');
     assert.ok(!f.stdout.includes(call.input) || call.input === 'k2');
   }
   const privatePem = f.calls.find(c => c.args[2] === 'KNOWLEDGE_LOCK_PRIVATE_KEY').input;
@@ -186,13 +186,12 @@ test('passkey-install は形式を検査し公開情報全体を rm→add、計�
   fs.writeFileSync(file, JSON.stringify([first.value]));
   assert.equal(await f.run(['passkey-install', '--blob', second.text, '--apply']), 0);
   assert.deepEqual(JSON.parse(fs.readFileSync(file)), [first.value, second.value]);
-  assert.equal(f.calls.length, 4);
-  for (const target of ['production', 'preview']) {
-    const calls = f.calls.filter(c => c.args[3] === target);
-    assert.deepEqual(calls[0].args, ['env', 'rm', 'KIM_PASSKEY_CREDENTIALS', target, '-y']);
-    assert.deepEqual(calls[1].args, ['env', 'add', 'KIM_PASSKEY_CREDENTIALS', target, '--sensitive']);
-    assert.deepEqual(JSON.parse(calls[1].input), [first.value, second.value]);
-  }
+  assert.equal(f.calls.length, 2);
+  const target = 'production';
+  const pcalls = f.calls.filter(c => c.args[3] === target);
+  assert.deepEqual(pcalls[0].args, ['env', 'rm', 'KIM_PASSKEY_CREDENTIALS', target, '-y']);
+  assert.deepEqual(pcalls[1].args, ['env', 'add', 'KIM_PASSKEY_CREDENTIALS', target, '--sensitive']);
+  assert.deepEqual(JSON.parse(pcalls[1].input), [first.value, second.value]);
   assert.ok(!f.stdout.includes(second.text));
 });
 
@@ -200,14 +199,13 @@ test('ledger-sync は差分計画、apply は全投影を stdin に渡す', asyn
   const f = fixture(t);
   assert.equal(await f.run(['ledger-sync']), 0); assert.equal(f.calls.length, 0);
   assert.match(f.stdout, /追加=/);
-  assert.equal(await f.run(['ledger-sync', '--apply']), 0); assert.equal(f.calls.length, 4);
+  assert.equal(await f.run(['ledger-sync', '--apply']), 0); assert.equal(f.calls.length, 2);
   const calls = f.calls.filter(c => c.args[1] === 'add');
   assert.equal(calls[0].args[2], 'KNOWLEDGE_LEDGER_JSON');
   assert.deepEqual(JSON.parse(calls[0].input), {
     contractedOrgUuids: ['test-org'], activeEmails: ['alias@example.com', 'kim@orgiast.jp'],
     retiredEmails: ['retired@example.com'],
   });
-  assert.equal(calls[0].input, calls[1].input);
   f.stdout = '';
   assert.equal(await f.run(['ledger-sync']), 0); assert.match(f.stdout, /追加=\[\] 削除=\[\]/);
 });

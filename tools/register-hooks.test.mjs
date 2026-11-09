@@ -669,44 +669,43 @@ test('main の追加ゲートを critical な dispatcher 登録として保持�
   }
 });
 
-test('knowledge-guard converges matcher, session mode and six-second timeout idempotently', t => {
+test('knowledge-guard を dispatch manifest に登録し、matcher・session mode・timeout 6 を冪等に維持する', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'register-knowledge-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const repo = path.resolve('.'), file = path.join(home, '.claude/settings.json');
-  const run = () => execFileSync(process.execPath, [path.join(repo, 'tools/register-hooks.mjs'), '--hooks-only'], {
-    env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo }, stdio: 'pipe',
-  });
+  const repo = path.resolve('.');
+  const settingsFile = path.join(home, '.claude', 'settings.json');
+  const dispatchFile = path.join(home, '.claude', 'hook-dispatch-manifest.json');
+  const env = { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo };
+  const run = () => execFileSync(process.execPath, [path.join(repo, 'tools/register-hooks.mjs'), '--hooks-only'], { env, stdio: 'pipe' });
   run();
-  const settings = JSON.parse(fs.readFileSync(file));
-  for (const event of ['PreToolUse', 'SessionStart']) {
-    const groups = settings.hooks[event].filter(g => g.hooks.some(h => h.command.includes('knowledge-guard.mjs')));
-    assert.equal(groups.length, 1);
-    const hook = groups[0].hooks.find(h => h.command.includes('knowledge-guard.mjs'));
-    assert.equal(hook.timeout, 6);
-    assert.equal(hook.command.includes('--session-start'), event === 'SessionStart');
-    if (event === 'PreToolUse') {
-      assert.equal(groups[0].matcher, 'Read|Grep|Glob|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit');
-      groups[0].matcher = 'Read';
-    }
-    hook.timeout = 1;
-    hook.async = true;
+  const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  // settings.json にはイベントごとに1本のディスパッチャだけ
+  assert.deepEqual(dispatcherProblems(settings, repo), []);
+  // runtime dispatch manifest に knowledge-guard のエントリがある
+  const dispatch = JSON.parse(fs.readFileSync(dispatchFile, 'utf8'));
+  for (const [event, matcher, args] of [
+    ['SessionStart', '*', '--session-start'],
+    ['PreToolUse', 'Read|Grep|Glob|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit', ''],
+  ]) {
+    const hooks = dispatch.events[event].filter(h => h.name === 'knowledge-guard.mjs');
+    assert.equal(hooks.length, 1, `knowledge-guard.mjs in ${event}`);
+    assert.equal(hooks[0].matcher, matcher);
+    assert.equal(hooks[0].timeout, 6);
+    assert.equal(hooks[0].critical, true);
+    assert.notEqual(hooks[0].async, true);
+    assert.ok(hooks[0].command.includes(`knowledge-guard.mjs"${args ? ' ' + args : ''}`), `command includes ${JSON.stringify(args)} in ${hooks[0].command}`);
   }
-  fs.writeFileSync(file, JSON.stringify(settings));
+  // 2回実行しても重複しない
   run();
-  const repaired = JSON.parse(fs.readFileSync(file));
-  for (const event of ['PreToolUse', 'SessionStart']) {
-    const hook = repaired.hooks[event].flatMap(g => g.hooks).find(h => h.command.includes('knowledge-guard.mjs'));
-    assert.equal(hook.async, undefined);
-    assert.ok(!hook.command.includes('gate-hook-runner.mjs'), 'account rejection must not be downgraded by rollout');
-  }
-  for (const event of ['PreToolUse', 'SessionStart']) assert.equal(repaired.hooks[event].flatMap(g => g.hooks).find(h => h.command.includes('knowledge-guard.mjs')).timeout, 6);
-  assert.equal(repaired.hooks.PreToolUse.find(g => g.hooks.some(h => h.command.includes('knowledge-guard.mjs'))).matcher, 'Read|Grep|Glob|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit');
-  run();
-  assert.deepEqual(JSON.parse(fs.readFileSync(file)), repaired);
-  const manifest = JSON.parse(fs.readFileSync(path.join(repo, 'tools/setup-manifest.json')));
-  const manifestFile = path.join(home, 'knowledge-setup.json');
-  fs.writeFileSync(manifestFile, JSON.stringify({ version: 1, items: manifest.items.filter(item => item.id.startsWith('settings:knowledge-guard-')) }));
-  const checked = JSON.parse(execFileSync(process.execPath, [path.join(repo, 'tools/setup.mjs'), '--home', home, '--manifest', manifestFile, '--json'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } }));
+  const dispatch2 = JSON.parse(fs.readFileSync(dispatchFile, 'utf8'));
+  assert.deepEqual(dispatch2, dispatch);
+  // setup 検証でも OK
+  const source = JSON.parse(fs.readFileSync(path.join(repo, 'tools/setup-manifest.json'), 'utf8'));
+  const items = source.items.filter(item => item.id.startsWith('settings:knowledge-guard-'));
+  assert.equal(items.length, 2);
+  const setupManifest = path.join(home, 'knowledge-setup.json');
+  fs.writeFileSync(setupManifest, JSON.stringify({ version: 1, items }));
+  const checked = JSON.parse(execFileSync(process.execPath, [path.join(repo, 'tools/setup.mjs'), '--home', home, '--manifest', setupManifest, '--json'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } }));
   assert.equal(checked.items.length, 2);
   assert.ok(checked.items.every(item => item.status === 'OK'), JSON.stringify(checked));
 });

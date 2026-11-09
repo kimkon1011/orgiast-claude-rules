@@ -177,6 +177,12 @@
         "type": "command",
         "command": "node \"${repo}/tools/session-wait-title.mjs\" --prompt-submit",
         "timeout": 8
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/knowledge-guard.mjs\" --session-start",
+        "timeout": 6
       }
     ],
     "UserPromptSubmit": [
@@ -524,6 +530,12 @@
         "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/delete-approval-gate.mjs\"",
         "timeout": 15
+      },
+      {
+        "matcher": "Read|Grep|Glob|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit",
+        "type": "command",
+        "command": "node \"${repo}/tools/knowledge-guard.mjs\"",
+        "timeout": 6
       }
     ],
     "PostToolUse": [

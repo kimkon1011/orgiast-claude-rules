@@ -17,6 +17,7 @@
 |---|---|---|---|
 | 配布漏れ型 | per-PC 機能が1台でだけ動き、converge に未登録。配布対象が手書き一覧で、新しいフォルダ（packages/）が漏れた（2026-10-11 スマホ用待機タブ） | 配布・コピー対象を手書きで列挙している箇所（onboarding-sync のフォルダ一覧、zip 経路、converge の登録表）。per-PC の機能を足す PR | 配布カバレッジのテスト、fleet-scope 宣言レジストリ（fleet か kim-only かの宣言必須）、converge ビーコンと fleet-status |
 | 見張りの沈黙故障型 | 自動進行の check（`node C:\Users\...`）が Git bash で `\` を失い MODULE_NOT_FOUND、node の exit 1 が「未達」と同じなので check_error にならず空振り。kim が「進捗どう？」と再度聞いた（2026-11-06）。同時期に Bot DM の依頼は返事待ちの追跡対象外だった（2026-10-26〜11-05） | 終了コードだけで成否を読む見張り（auto-progress check・health check・watchdog）。人への依頼を送る経路で返事待ち台帳に載らないもの | executeCheck のパス正規化＋クラッシュを check_error にして通知、登録時 preflight で拒否、`auto-progress.mjs --audit-checks`（#1622）。Discord 依頼の自動登録 hook と2日超のセッション注入（#1573） |
+| 無人再開の古い送信約束実行型 | 無人の auto-progress が、既に人が実行済みの古い `nextClaude` を再開して社外 LINE を承認なしで再送した（2026-11-09） | ヘッドレス resume / start-when と社外送信 CLI。送信文面と現在の承認を結び付けない約束 | PreToolUse で本文 SHA-256 承認マーカーを必須化し、auto-progress 登録時にも送信約束を拒否 |
 | 経路取り違え型 | 全PCの設定変更を fleet-mail（相談用・受信側は実行しない設計）で依頼し、未配達・未実行のまま。組織指示「settings.json の変更は converge 経由」に反した（2026-10-11） | 「全PC」「他のPC」への変更依頼を fleet-mail／directive／手渡しで出している箇所と手順書 | fleet-mail 送信前の警告（変更依頼を検知）、受信側の「converge 化が必要」返信（§1.22 C） |
 | 観測不能型 | 他PCの状態を照会する手段がなく、未反映を user がスマホで発見した（2026-10-11） | 「全PCに反映した」と報告する箇所。状態を人に確認させている手順 | converge ビーコン、`tools/fleet-status.mjs`（未ビーコンの PC は「未確認」と書く） |
 | ログ不在＝不在型 | Claude 側ログに無いことを外部の状態の不在の証拠にした（2026-09-10）。ゲート: external-state-claim-gate | 外部状態を「無い」「未接続」と断定する文面 | external-state-claim-gate（既存） |

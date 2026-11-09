@@ -554,3 +554,35 @@ test('summarizeEvidence: 文と節を選別し、括弧や手順列挙を残さ�
     assert.equal(summarizeEvidence(evidence), '取り消せる準備は済んでいます');
   }
 });
+
+test('resumeSession は結果 JSON が無いとき error を返す（blocked ではない）', async t => {
+  const home = progressHome('resume-no-json-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = await resumeSession({ sessionId: 'no-json-test', promise: 'テスト', transcriptPath: 'session.jsonl', cwd: home }, {
+    home, io: { executable: 'test-executor', runChild: async (_exe, text) => {
+      return { status: 'success', exitCode: 0, executorUsed: 'claude' };
+    } },
+  });
+  // 結果 JSON が無い（runChild が成功を返したがファイルが書かれなかった）→ error
+  assert.equal(result.outcome, 'error');
+  assert.match(result.reason, /成果記録なし/);
+  assert.match(result.reason, /再開が元セッションに届かなかった/);
+});
+
+test('resumeSession は結果 JSON があるとき従来どおり state を返す', async t => {
+  const home = progressHome('resume-has-json-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = await resumeSession({ sessionId: 'has-json-test', promise: 'テスト', transcriptPath: 'session.jsonl', cwd: home }, {
+    home, io: { executable: 'test-executor', runChild: async (_exe, text) => {
+      // resumeSession が結果ファイルを削除した後、runChild が書くのを模倣
+      // sessionId 'has-json-test' → slice(0,8) = 'has-json'
+      const resultFile = path.join(home, '.claude', 'auto-progress-resume-has-json.json');
+      fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+      fs.writeFileSync(resultFile, JSON.stringify({ state: 'done', evidence: '作業完了', artifact: 'result.txt' }));
+      return { status: 'success', exitCode: 0, executorUsed: 'claude' };
+    } },
+  });
+  assert.equal(result.outcome, 'done');
+  assert.equal(result.reason, '作業完了');
+  assert.equal(result.artifact, 'result.txt');
+});

@@ -756,7 +756,13 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
     const startedAt = new Date();
     const deadline = performance.now() + 2 * timeoutMs;
     const configuredChoice = autoSessionExecutor();
-    const choice = runOptions.model
+    // resumeSessionId が指定されたときは claude レーン（--resume 付き）で起動する。
+    // cheap-code / codex は --resume 引数を捨てるため、元のセッションに再開が届かない
+    // （2026-11-09 実害: セッション 834dfc9c の再開が「成果記録なし」で終わった）。
+    const resumeForced = Boolean(runOptions.resumeSessionId);
+    const choice = resumeForced
+      ? { ...configuredChoice, executor: 'claude' }
+      : runOptions.model
       ? { ...configuredChoice, executor: 'claude' }
       : runOptions.executor === 'cheap-code'
       ? { ...configuredChoice, executor: 'cheap-code' }

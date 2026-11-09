@@ -357,8 +357,12 @@ export async function resumeSession(row, { timeoutMs = 20 * 60000, home = os.hom
     return { outcome: 'error', reason: clean(`${result.status} (${detail}): ${tail}`).slice(0, 300) };
   }
   let report = null; try { report = JSON.parse(fs.readFileSync(resultFile, 'utf8')); } catch { /* 成果記録なし */ }
-  const state = ['progressed', 'done', 'needs_user', 'blocked'].includes(report?.state) ? report.state : 'blocked';
-  return { outcome: state, state, reason: String(report?.evidence ?? '成果記録なし').slice(0, 500), artifact: String(report?.artifact ?? ''), nextKim: String(report?.nextKim ?? '') };
+  // 結果 JSON が無い（再開が元セッションに届かなかった）場合は error として返し、
+  // 呼び出し元の失敗カウント（failedResumeCount / MAX_RESUMES）に乗せて再試行させる。
+  // blocked のまま放置すると再試行されず stalled 扱いになる（2026-11-09 実害）。
+  if (!report) return { outcome: 'error', reason: '成果記録なし（再開が元セッションに届かなかった可能性）' };
+  const state = ['progressed', 'done', 'needs_user', 'blocked'].includes(report.state) ? report.state : 'blocked';
+  return { outcome: state, state, reason: String(report.evidence ?? '成果記録なし').slice(0, 500), artifact: String(report.artifact ?? ''), nextKim: String(report.nextKim ?? '') };
 }
 
 // ---- 完了通知 -----------------------------------------------------------

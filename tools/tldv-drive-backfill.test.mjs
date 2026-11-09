@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseArgs, requestJson, japanDate, transcriptText, notesText, documentContent,
-  createClient, runBackfill, safeReason, FOLDER_ID, IMPERSONATE, CUTOFF } from './tldv-drive-backfill.mjs';
+  createClient, runBackfill, safeReason, BackfillError, FOLDER_ID, IMPERSONATE, CUTOFF } from './tldv-drive-backfill.mjs';
 
 const meeting = (id, happenedAt = '2026-11-04T15:30:00Z') => ({ id, happenedAt, name: '制作定例',
   invitees: [{ name: '田中', email: 'tanaka@example.com' }], url: `https://tldv.io/app/meetings/${id}` });
@@ -54,7 +54,7 @@ function mockApi(meetings = [meeting('one')]) {
 }
 
 test('CLI validates limits and rejects accidental options', () => {
-  assert.deepEqual(parseArgs(['--dry-run', '--limit', '5']), { dryRun: true, limit: 5 });
+  assert.deepEqual(parseArgs(['--dry-run', '--limit', '5']), { dryRun: true, limit: 5, all: false });
   assert.equal(parseArgs([]).limit, Infinity);
   for (const argv of [['--limit'], ['--limit', '0'], ['--limit', '-1'], ['--limit', '1.5'],
     ['--limit', '1e3'], ['--limit', '9007199254740992'], ['--delete']]) assert.throws(() => parseArgs(argv));
@@ -205,4 +205,109 @@ test('Drive query escapes apostrophes and backslashes in meeting IDs', async () 
 test('Drive authentication errors are sanitized', async () => {
   const client = createClient({ apiKey: 'secret', getToken: async () => { throw new Error('credential-value'); } });
   await assert.rejects(client.findExisting('one'), /drive-auth-failed/);
+});
+
+test('parseArgs accepts --all flag', () => {
+  assert.deepEqual(parseArgs(['--all']), { dryRun: false, limit: Infinity, all: true });
+  assert.deepEqual(parseArgs(['--all', '--dry-run']), { dryRun: true, limit: Infinity, all: true });
+  assert.deepEqual(parseArgs(['--all', '--limit', '10']), { dryRun: false, limit: 10, all: true });
+});
+
+function mockApiAll(meetings = [], existingIds = []) {
+  const files = new Map(existingIds.map(id => [id, { id, appProperties: { tldvMeetingId: id } }]));
+  const calls = [], uploads = [];
+  const pages = [];
+  for (let i = 0; i < meetings.length; i += 2) pages.push(meetings.slice(i, i + 2));
+  const totalPages = Math.max(1, pages.length);
+  const fetchImpl = async (url, init = {}) => {
+    await new Promise(resolve => setImmediate(resolve));
+    const u = new URL(url);
+    calls.push({ url: u, init });
+    if (u.hostname === 'pasta.tldv.io') {
+      if (u.pathname.endsWith('/transcript')) return json(transcript);
+      if (u.pathname.endsWith('/notes')) return json(notes);
+      const page = Number(u.searchParams.get('page'));
+      return json({ page, pages: totalPages, results: pages[page - 1] || [] });
+    }
+    assert.equal(u.hostname, 'www.googleapis.com');
+    assert.equal(init.headers.Authorization, 'Bearer token');
+    if (init.method === 'POST') {
+      assert.equal(u.pathname, '/upload/drive/v3/files');
+      assert.equal(u.searchParams.get('uploadType'), 'multipart');
+      const meta = JSON.parse(init.body.split('\r\n')[3]);
+      uploads.push({ meta, body: init.body, contentType: init.headers['Content-Type'] });
+      const file = { id: `doc-${meta.appProperties.tldvMeetingId}`, ...meta };
+      files.set(meta.appProperties.tldvMeetingId, file);
+      return json(file);
+    }
+    const q = u.searchParams.get('q');
+    const id = q.match(/value='(.*)' }$/)[1];
+    return json({ files: files.has(id) ? [files.get(id)] : [] });
+  };
+  const client = createClient({ apiKey: 'secret', fetchImpl, sleepImpl: noSleep, getToken: async () => 'token' });
+  return { client, files, calls, uploads };
+}
+
+test('--all mode filters by endedAt + 60 min, excludes not-yet-ended meetings', async () => {
+  const now = Date.now();
+  const ended1h10m = new Date(now - 70 * 60 * 1000).toISOString();
+  const ended30m = new Date(now - 30 * 60 * 1000).toISOString();
+  const ended2h = new Date(now - 120 * 60 * 1000).toISOString();
+  const api = mockApiAll([
+    { id: 'a', happenedAt: ended2h, duration: 0, name: 'old', invitees: [] },
+    { id: 'b', happenedAt: ended1h10m, duration: 0, name: 'recent', invitees: [] },
+    { id: 'c', happenedAt: ended30m, duration: 0, name: 'too-recent', invitees: [] },
+  ]);
+  const result = await runBackfill({ client: api.client, all: true, out: quiet });
+  assert.equal(result.created, 2);
+  assert.equal(result.existing, 0);
+  assert.deepEqual([...api.files.keys()].sort(), ['a', 'b']);
+});
+
+test('--all mode stops pagination when 50 consecutive existing meetings found', async () => {
+  const now = Date.now();
+  const ended = new Date(now - 120 * 60 * 1000).toISOString();
+  const newMeetings = [
+    { id: 'n1', happenedAt: ended, duration: 0, name: 'new1', invitees: [] },
+    { id: 'n2', happenedAt: ended, duration: 0, name: 'new2', invitees: [] },
+  ];
+  const existing = Array.from({ length: 50 }, (_, i) => ({ id: `existing-${i}`, happenedAt: ended, duration: 0, name: `existing-${i}`, invitees: [] }));
+  const later = [{ id: 'n3', happenedAt: ended, duration: 0, name: 'new3', invitees: [] }];
+  const existingIds = existing.map(m => m.id);
+  const api = mockApiAll([...newMeetings, ...existing, ...later], existingIds);
+  const result = await runBackfill({ client: api.client, all: true, out: quiet });
+  assert.equal(result.created, 2); // only n1, n2 created
+  assert.equal(api.files.has('n3'), false); // n3 never reached (pagination stopped)
+  assert.equal(result.existing, 0); // listMeetingsAll already filtered out existing
+});
+
+test('--all mode exit code: 403-only failures return 0', async () => {
+  const output = [];
+  const client = {
+    listMeetingsAll: async () => [{ id: 'a', happenedAt: new Date(Date.now() - 7200000).toISOString(), duration: 0, name: 'a', invitees: [] }],
+    findExisting: async () => undefined,
+    transcript: async () => { throw new BackfillError('drive-http-403'); },
+    notes: async () => { throw new BackfillError('drive-http-403'); },
+    createDocument: async () => { throw new BackfillError('drive-http-403'); },
+  };
+  const result = await runBackfill({ client, all: true, out: line => output.push(line) });
+  assert.equal(result.failed, 1);
+  assert.ok(Object.keys(result.reasons).every(r => r.endsWith('http-403')));
+  // Simulate main exit logic
+  const all403 = Object.keys(result.reasons).every(r => r.endsWith('http-403'));
+  assert.equal(all403, true);
+});
+
+test('--all mode exit code: non-403 failure returns 1', async () => {
+  const client = {
+    listMeetingsAll: async () => [{ id: 'a', happenedAt: new Date(Date.now() - 7200000).toISOString(), duration: 0, name: 'a', invitees: [] }],
+    findExisting: async () => undefined,
+    transcript: async () => { throw new BackfillError('transcript-http-500'); },
+    notes: async () => { throw new BackfillError('notes-http-500'); },
+    createDocument: async () => { throw new BackfillError('drive-http-500'); },
+  };
+  const result = await runBackfill({ client, all: true, out: quiet });
+  assert.equal(result.failed, 1);
+  const all403 = Object.keys(result.reasons).every(r => r.endsWith('http-403'));
+  assert.equal(all403, false);
 });

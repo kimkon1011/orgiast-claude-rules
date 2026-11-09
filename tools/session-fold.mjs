@@ -88,13 +88,13 @@ export function unfold(session, ids) {
   return result;
 }
 
-function terms(text) {
+export function terms(text) {
   const normalized = text.normalize('NFKC').toLocaleLowerCase('und');
-  const runs = normalized.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー]+|[\p{L}\p{N}]+/gu) ?? [];
+  const runs = normalized.match(/[a-z0-9]+|[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー]+/gu) ?? [];
   return runs.flatMap(run => {
-    if (!/^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー]+$/u.test(run)) return [run];
+    if (/^[a-z0-9]+$/u.test(run)) return [run];
     const chars = [...run];
-    if (chars.length < 2) return chars;
+    if (chars.length < 2) return [];
     return chars.slice(0, -1).map((char, i) => char + chars[i + 1]);
   });
 }
@@ -104,9 +104,16 @@ export function search(session, query, { k } = {}) {
   if (typeof query !== 'string') throw new Error('query must be a string');
   if (!Number.isInteger(k) || k < 0) throw new Error('k must be a non-negative integer');
   const needles = [...new Set(terms(query))];
-  return session.index.filter(entry => entry.state === 'folded').map(entry => {
-    const haystack = `${entry.summary} ${session.store[entry.id]}`.normalize('NFKC').toLocaleLowerCase('und');
-    return { id: entry.id, score: needles.reduce((score, term) => score + (haystack.includes(term) ? 1 : 0), 0) };
+  const folded = session.index.filter(entry => entry.state === 'folded').map(entry => ({
+    entry,
+    haystack: `${entry.summary} ${session.store[entry.id]}`.normalize('NFKC').toLocaleLowerCase('und'),
+  }));
+  const weightedNeedles = needles.map(term => {
+    const df = folded.reduce((count, { haystack }) => count + (haystack.includes(term) ? 1 : 0), 0);
+    return { term, weight: df === 0 ? 0 : Math.log(1 + folded.length / (1 + df)) };
+  }).filter(({ weight }) => weight > 0);
+  return folded.map(({ entry, haystack }) => {
+    return { id: entry.id, score: weightedNeedles.reduce((score, { term, weight }) => score + (haystack.includes(term) ? weight : 0), 0) };
   }).filter(hit => hit.score > 0).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, k);
 }
 

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { createSession, fold, unfold, search, stats, saveSession, loadSession } from './session-fold.mjs';
+import { createSession, fold, unfold, search, stats, saveSession, loadSession, terms } from './session-fold.mjs';
 
 const prefix = '固定仕様 v1\n高さ上限: 3.5m\n🚧 安全第一';
 const prefixHash = crypto.createHash('sha256').update(Buffer.from(prefix)).digest('hex');
@@ -87,14 +87,48 @@ test('(f) calibrated checks accept real fold and reject three bad implementation
 
 test('(g) search finds folded synthetic segments and breaks ties by ID', () => {
   const session = fold(createSession({ prefix, segments: fixture }), { keepRecent: 0 });
-  assert.deepEqual(search(session, '青い カウンター', { k: 1 }), [{ id: 'seg-0001', score: 5 }]);
-  assert.deepEqual(search(session, '白い', { k: 2 }), [{ id: 'seg-0002', score: 1 }, { id: 'seg-0005', score: 1 }]);
+  const commonWeight = Math.log(1 + 10 / (1 + 2));
+  const rareWeight = Math.log(1 + 10 / (1 + 1));
+  assert.deepEqual(search(session, '青い カウンター', { k: 1 }), [{ id: 'seg-0001', score: 2 * commonWeight + 3 * rareWeight }]);
+  assert.deepEqual(search(session, '白い', { k: 2 }), [{ id: 'seg-0002', score: commonWeight }, { id: 'seg-0005', score: commonWeight }]);
 });
 
 test('search uses CJK bi-grams for unspaced Japanese queries', () => {
   const session = fold(createSession({ prefix, segments: fixture }), { keepRecent: 0 });
   const hits = search(session, '南壁に設置する大型画面', { k: 3 });
   assert.ok(hits.some(hit => hit.id === 'seg-0008'), hits);
+});
+
+test('terms keeps lowercase ASCII runs separate from CJK bi-grams', () => {
+  assert.deepEqual(terms('Reブース'), ['re', 'ブー', 'ース']);
+  assert.deepEqual(terms('AEOとGEO'), ['aeo', 'geo']);
+});
+
+test('search ranks one rare term above multiple ubiquitous terms with IDF', () => {
+  const segments = [
+    'common1 common2',
+    'rare',
+    ...Array.from({ length: 8 }, (_, i) => `common1 common2 filler${i}`),
+  ];
+  const session = fold(createSession({ prefix, segments }), { keepRecent: 0 });
+  const hits = search(session, 'common1 common2 rare', { k: 2 });
+  assert.equal(hits[0].id, 'seg-0002');
+  assert.ok(hits[0].score > hits[1].score);
+
+  const simpleScores = session.index.map(entry => ({
+    id: entry.id,
+    score: ['common1', 'common2', 'rare'].filter(term => session.store[entry.id].includes(term)).length,
+  })).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+  assert.equal(simpleScores[0].id, 'seg-0001');
+  assert.equal(simpleScores[0].score, 2);
+  assert.equal(simpleScores.find(hit => hit.id === 'seg-0002').score, 1);
+});
+
+test('search finds ASCII terms in mixed-script queries', () => {
+  const session = fold(createSession({ prefix, segments: ['通常ブースの説明', 'Reブースの設計'] }), { keepRecent: 0 });
+  const hits = search(session, 'Reブース', { k: 2 });
+  assert.equal(hits[0].id, 'seg-0002');
+  assert.ok(hits.some(hit => hit.id === 'seg-0002'));
 });
 
 test('save/load preserves fixed index key order and complete session', () => {

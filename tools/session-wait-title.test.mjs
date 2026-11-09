@@ -6,6 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { apply as applyReal, currentTitles, desiredTitle, isCloseRitualOnly, promptSubmit, sessionStart, sweepAll as sweepAllReal, waitPrefix } from './session-wait-title.mjs';
+import { recordClosed, recordReopened } from './closed-sessions-ledger.mjs';
 
 const apply = input => applyReal(input, { resolvePcNumber: () => '' });
 const sweepAll = options => sweepAllReal({ ...options, resolvePcNumber: () => '' });
@@ -366,19 +367,22 @@ test('desiredTitle: closed-sessions.json に登録があれば【閉じて可】
   }
 });
 
-test('promptSubmit: closed-sessions.json に登録があれば【閉じて可】を付ける', t => {
+test('promptSubmit: closed-sessions.json に登録があっても promptSubmit で reopen されタイトルから【閉じて可】が外れる', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-ps-closed-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 's.jsonl');
   fs.writeFileSync(file, JSON.stringify({ type: 'ai-title', aiTitle: 'テスト', sessionId: 's' }));
+  let reopened = false;
   const result = promptSubmit({ transcript_path: file, session_id: 's' }, {
     readFile: () => fs.readFileSync(file, 'utf8'),
     statSize: () => fs.statSync(file).size,
     resolvePcNumber: () => '008',
     isClosed: id => id === 's',
+    reopen: id => { reopened = true; return true; },
   });
   assert.ok(result);
-  assert.equal(result.hookSpecificOutput.sessionTitle, '008｜【閉じて可】テスト');
+  assert.equal(reopened, true);
+  assert.equal(result.hookSpecificOutput.sessionTitle, '008｜テスト');
 });
 
 test('promptSubmit: closed-sessions.json に無ければ通常のフッター処理', t => {
@@ -530,4 +534,113 @@ test('エラー時も fail-open で exit 0（ログファイルに記録）', t 
   assert.ifError(result.error);
   assert.equal(result.status, 0);
   // Should not crash; log file may or may not exist depending on write permissions
+});
+
+// --- 再開セッション（reopen）のテスト ---
+test('実害再現: closed=true でも未完フッターがあれば【閉じて可】にならず期限を優先し apply で reopen が呼ばれる', t => {
+  const waitFooter = footer('まだ閉じない（作業中・2026-11-06 16:30 まで待つ）');
+  // desiredTitle checks
+  assert.equal(desiredTitle(waitFooter, ai, '011', true), '011｜【11/06/16:30まで】トークン待ち');
+  assert.notEqual(desiredTitle(waitFooter, ai, '011', true), '011｜【閉じて可】トークン待ち');
+
+  // apply checks reopen call
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-reopen-app-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 's.jsonl');
+  fs.writeFileSync(file, `${ai}\n${assistant(waitFooter)}\n`);
+
+  let reopenCalled = 0;
+  const result = applyReal({ transcript_path: file, session_id: 's' }, {
+    readFile: () => fs.readFileSync(file, 'utf8'),
+    statSize: () => fs.statSync(file).size,
+    resolvePcNumber: () => '011',
+    isClosed: id => true,
+    reopen: id => { reopenCalled += 1; return true; },
+  });
+
+  assert.equal(reopenCalled, 1);
+  assert.equal(result, '011｜【11/06/16:30まで】トークン待ち');
+});
+
+test('closed=true、フッター無しなら【閉じて可】で reopen は呼ばれない', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-reopen-nofooter-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 's.jsonl');
+  fs.writeFileSync(file, `${ai}\n`);
+
+  let reopenCalled = 0;
+  const result = applyReal({ transcript_path: file, session_id: 's' }, {
+    readFile: () => fs.readFileSync(file, 'utf8'),
+    statSize: () => fs.statSync(file).size,
+    resolvePcNumber: () => '011',
+    isClosed: id => true,
+    reopen: id => { reopenCalled += 1; return true; },
+  });
+
+  assert.equal(reopenCalled, 0);
+  assert.equal(result, '011｜【閉じて可】トークン待ち');
+});
+
+test('closed=true、閉じてよい定型文フッターなら【閉じて可】で reopen は呼ばれない', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-reopen-closedfooter-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 's.jsonl');
+  const closedFooter = footer('/session-close は終わっているので、このセッションを閉じてよい');
+  fs.writeFileSync(file, `${ai}\n${assistant(closedFooter)}\n`);
+
+  let reopenCalled = 0;
+  const result = applyReal({ transcript_path: file, session_id: 's' }, {
+    readFile: () => fs.readFileSync(file, 'utf8'),
+    statSize: () => fs.statSync(file).size,
+    resolvePcNumber: () => '011',
+    isClosed: id => true,
+    reopen: id => { reopenCalled += 1; return true; },
+  });
+
+  assert.equal(reopenCalled, 0);
+  assert.equal(result, '011｜【閉じて可】トークン待ち');
+});
+
+test('promptSubmit: closed=true のセッションに prompt が来たら reopen が呼ばれ、タイトルは最終フッターに従う', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-reopen-prompt-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 's.jsonl');
+  const waitFooter = footer('まだ閉じない（作業中・2026-11-06 16:30 まで待つ）');
+  fs.writeFileSync(file, `${ai}\n${assistant(waitFooter)}\n`);
+
+  let reopenCalled = 0;
+  const result = promptSubmit({ transcript_path: file, session_id: 's', prompt: '作業再開' }, {
+    readFile: () => fs.readFileSync(file, 'utf8'),
+    statSize: () => fs.statSync(file).size,
+    resolvePcNumber: () => '011',
+    isClosed: id => true,
+    reopen: id => { reopenCalled += 1; return true; },
+  });
+
+  assert.equal(reopenCalled, 1);
+  assert.ok(result);
+  assert.equal(result.hookSpecificOutput.sessionTitle, '011｜【11/06/16:30まで】トークン待ち');
+});
+
+test('closed-sessions-ledger: recordReopened は他の ID と ids 以外のキーを残し、存在しない ID で true を返す', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'csl-reopen-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'closed-sessions.json');
+
+  // Initial state with multiple IDs and an extra key
+  fs.writeFileSync(file, JSON.stringify({ ids: ['id1', 'id2', 'id3'], version: 1 }), 'utf8');
+
+  // Reopen existing id2
+  const res1 = recordReopened('id2', file);
+  assert.equal(res1, true);
+  const content1 = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(content1.ids, ['id1', 'id3']);
+  assert.equal(content1.version, 1);
+
+  // Reopen non-existent id4
+  const res2 = recordReopened('id4', file);
+  assert.equal(res2, true);
+  const content2 = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(content2.ids, ['id1', 'id3']);
+  assert.equal(content2.version, 1);
 });

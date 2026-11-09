@@ -371,6 +371,7 @@ const KNOWN_MISSING_NOTIFY = {
   'kimko-PC': '使用者の Discord 未特定・2026-11-03',
   'HP': '使用者の Discord 未特定・2026-11-03',
   'nishi-PC': '使用者の Discord 未特定・2026-11-03',
+  'DESKTOP-63MQR3L': '使用者の Discord 未特定・2026-11-09',
 };
 
 function assertNotifyRecipients(map) {

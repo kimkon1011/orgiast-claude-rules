@@ -84,7 +84,7 @@ node tools/gmail-draft.mjs --delete <draftId>
 
 `tools/internal-recipient-gmail-guard.mjs` は PreToolUse フックで、MCP と Bash/PowerShell の書き込みを検査する。ツール自身も内部宛を検査する。
 `gmail-draft.mjs` は `loadLedger` / `isInternal` を **import して再利用**し、
-内部宛（`orgiast.jp` / `toho-kogyo.com` / 台帳のアドレス）が To/Cc に 1 件でもあれば
+宛先（To/Cc/Bcc）の全員が内部（`orgiast.jp` / `toho-kogyo.com` / 台帳のアドレス）のときだけ
 **Gmail API を一度も呼ばず**、「宛先／用件／本文」をコピペできる完成形を stdout に出して exit 3 で止まる。
 
 実測（`keiri.orgiast@gmail.com` 宛）:

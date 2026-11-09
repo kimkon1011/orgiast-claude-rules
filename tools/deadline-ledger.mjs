@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getDriveToken } from './lib/drive-auth.mjs';
-import { gwsFetch } from './lib/gws-proxy.mjs';
+import { GWS_USER, gwsFetch } from './lib/gws-proxy.mjs';
 import { createSheetsClient, quoteTab } from './lib/sheets-dwd.mjs';
 import { parseSheetDate, jstDate, daysUntil, columnLetter } from './vehicle-inspection-watch.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -57,12 +57,26 @@ export async function withLedgerLock(home, fn) {
 }
 export function googleClient({ getToken = getDriveToken, fetchImpl = gwsFetch } = {}) {
   const tokens = new Map();
+  const tokenRoutes = new Map();
   return async function request(url, { user = 'kim@orgiast.jp', scope = 'https://www.googleapis.com/auth/drive', method = 'GET', body, text = false } = {}) {
-    const key = `${user}|${scope}`;
+    const requestedKey = `${user}|${scope}`;
+    const key = tokenRoutes.get(requestedKey) || requestedKey;
     let token = tokens.get(key);
     if (!token || token.expires < Date.now()) {
-      token = { value: await getToken({ impersonate: user, scope, signal: AbortSignal.timeout(30000) }), expires: Date.now() + 45 * 60000 };
-      tokens.set(key, token);
+      let tokenUser = user;
+      let tokenScope = scope;
+      let value;
+      try { value = await getToken({ impersonate: tokenUser, scope: tokenScope, signal: AbortSignal.timeout(30000) }); }
+      catch (e) {
+        if (e.message !== `鍵なし経路は ${GWS_USER} 固定です`) throw e;
+        tokenUser = GWS_USER;
+        if (tokenScope === 'https://www.googleapis.com/auth/spreadsheets') tokenScope = 'https://www.googleapis.com/auth/drive';
+        value = await getToken({ impersonate: tokenUser, scope: tokenScope, signal: AbortSignal.timeout(30000) });
+      }
+      token = { value, expires: Date.now() + 45 * 60000 };
+      const tokenKey = `${tokenUser}|${tokenScope}`;
+      tokens.set(tokenKey, token);
+      tokenRoutes.set(requestedKey, tokenKey);
     }
     const response = await fetchImpl(url, { method, headers: { Authorization: `Bearer ${token.value}`, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30000) });
     if (!response.ok) { const e = new Error(`Google ${method} HTTP ${response.status}`); e.status = response.status; throw e; }

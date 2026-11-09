@@ -114,3 +114,15 @@ test('fleet forwarding preserves daily key and refreshes the receiving inbox', a
   const items = listItems(receiver.home); assert.equal(items.length, 1);
   assert.match(items[0].text, /計 2件/); assert.equal(items[0].source, 'morning-session-sweep');
 });
+
+test('closed ledger と古い閉じて可タイトルより最新待機フッターを優先する', async t => {
+  const f = fixture(t);
+  const footer = '次に kim がすること: なし\nこの後の自動進行: 毎時確認\nこのセッション: まだ閉じない（作業中・2026-11-10 18:00 まで待つ）';
+  f.put('reopened', '019｜【閉じて可】案件', footer);
+  f.put('closed', '終了', '完了');
+  fs.writeFileSync(path.join(f.home, '.claude', 'closed-sessions.json'), JSON.stringify({ ids: ['reopened', 'closed'] }));
+  const sessions = await collectSessions({ home: f.home });
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].sessionId, 'reopened');
+  assert.equal(sessions[0].deadline, '11/10/18:00');
+});

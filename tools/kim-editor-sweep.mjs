@@ -17,7 +17,8 @@ export function sweepQuery(account, now) {
   const since = new Date(new Date(now).getTime() - 7 * 86400000).toISOString();
   // A personal execution account may contain private files. Only files marked by our
   // creation paths are eligible there. The shared production account has no personal scope.
-  return `trashed=false and 'me' in owners and createdTime >= '${since}'`
+  // Shortcuts can't have permissions changed, so exclude them.
+  return `trashed=false and mimeType != 'application/vnd.google-apps.shortcut' and 'me' in owners and createdTime >= '${since}'`
     + (account === KIM_EMAIL ? " and properties has { key='orgiastKimInbox' and value='pending' }" : '')
     + (account === 'seisaku-team@orgiast.jp' ? '' : " and properties has { key='orgiastAutomation' and value='true' }");
 }

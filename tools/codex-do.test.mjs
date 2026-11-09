@@ -193,12 +193,12 @@ test('chainBackendBudgetSecs は連鎖の残り予算を超えない（全体枠
   assert.equal(chainBackendBudgetSecs(1800, 1500, { CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: '900' }), 300);
 });
 
-test('backendSpecificTimeoutSecs は gemini-cli に既定250秒・cheap-code:deepseek に既定500秒と正の上書きを適用する', () => {
-  // 2026-10-30 以降の生産的成功 max 241.1 秒を維持しつつ、失敗時は 250 秒で打ち切る
-  assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}), 250);
+test('backendSpecificTimeoutSecs は gemini-cli に既定200秒・cheap-code:deepseek に既定500秒と正の上書きを適用する', () => {
+  // 2026-11-09 実測: 3623件の成功の p99=241秒。200秒に設定して廃棄を削減。
+  assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}), 200);
   assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '450' }), 450);
-  assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: 'garbage' }), 250);
-  assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '0' }), 250);
+  assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: 'garbage' }), 200);
+  assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '0' }), 200);
   // 2026-10-30 以降の生産的成功 max 464.5 秒を維持しつつ、失敗時は 500 秒で打ち切る
   assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}), 500);
   assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: '450' }), 450);
@@ -218,7 +218,7 @@ test('backendSpecificTimeoutSecs は gemini-cli に既定250秒・cheap-code:dee
 // 3連続 timeout と 12:23 の 900 秒全捨て）。末尾以外は探り予算で復帰を確認する。
 test('effectiveBackendTimeoutSecs は冷却中の backend を探り予算まで縮め、通常時は従来どおりの上限を返す', () => {
   // 通常時: backend 固有の上限がそのまま効く
-  assert.equal(effectiveBackendTimeoutSecs('gemini-cli', { chainBudget: 720, cooling: false }), 250);
+  assert.equal(effectiveBackendTimeoutSecs('gemini-cli', { chainBudget: 720, cooling: false }), 200);
   assert.equal(effectiveBackendTimeoutSecs('cheap-code:deepseek', { chainBudget: 720, cooling: false }), 500);
   // 冷却中: 探り予算(120秒)まで縮む＝同じ停滞を繰り返しても捨てる秒数が 3〜5 分の1になる
   assert.equal(effectiveBackendTimeoutSecs('gemini-cli', { chainBudget: 720, cooling: true }), COOLING_PROBE_TIMEOUT_SECS);
@@ -255,7 +255,7 @@ test('冷却なしの3 backend は末尾指定にかかわらず通常上限に�
     env: {},
     isLastBackend: index === backends.length - 1,
   }));
-  assert.deepEqual(budgets, [720, 250, 500]);
+  assert.deepEqual(budgets, [720, 200, 500]);
 });
 
 test('全冷却で1 backend だけなら通常上限・環境変数・残り予算を適用する', () => {
@@ -267,7 +267,7 @@ test('全冷却で1 backend だけなら通常上限・環境変数・残り予�
     env: {},
     isLastBackend: index === backends.length - 1,
   }));
-  assert.deepEqual(budgets, [250]);
+  assert.deepEqual(budgets, [200]);
   assert.equal(effectiveBackendTimeoutSecs('gemini-cli', {
     chainBudget: 720, cooling: true, env: { CODEX_DO_GEMINI_TIMEOUT_SECS: '450' }, isLastBackend: true,
   }), 450);
@@ -282,12 +282,12 @@ test('全冷却で1 backend だけなら通常上限・環境変数・残り予�
 });
 
 // 実測シナリオ（2026-11-04）: cheap-code:deepseek と gemini-cli の chain-timeout が3件発生。
-// 2026-10-30 以降の生産的成功 max（464.5秒 / 241.1秒）を残しつつ、既定を500秒 / 250秒に短縮する。
-test('実測シナリオ: cheap-code:deepseek と gemini-cli の連鎖を500秒・250秒で頭打ちにする', () => {
+// 2026-11-09 実測の gemini p99=241s に基づき、既定を200秒に短縮して廃棄を削減。
+test('実測シナリオ: cheap-code:deepseek と gemini-cli の連鎖を500秒・200秒で頭打ちにする', () => {
   const chainBudget = () => chainBackendBudgetSecs(1800, 0, {});
   const geminiTimeout = Math.min(chainBudget(), backendSpecificTimeoutSecs('gemini-cli', {}));
   const deepseekTimeout = Math.min(chainBudget(), backendSpecificTimeoutSecs('cheap-code:deepseek', {}));
-  assert.equal(geminiTimeout, 250);
+  assert.equal(geminiTimeout, 200);
   assert.equal(deepseekTimeout, 500);
   // 従来（deepseek が null → 既定900秒）と比べて頭打ちが短くなっていることを示す
   assert.ok(backendSpecificTimeoutSecs('cheap-code:deepseek', {}) < fallbackBackendTimeoutSecs(1800, {}));
@@ -334,30 +334,43 @@ test('実測シナリオ: --timeout 900 の連鎖は1本600秒で打ち切られ
   assert.equal(chainBackendBudgetSecs(900, 120, {}), 780);
 });
 
-// delegation-health:fallback_chain_timeout 再発防止（2026-10-28起票、10-29 reorder・10-30/11-06 timeout短縮）
-// gemini-cli が既定順の最後にあっても到達時は backendSpecificTimeoutSecs(250) で廃棄を制限される。
-test('gemini-cli が連鎖の最後でタイムアウトしても廃棄は backendSpecificTimeoutSecs(250) に制限される', () => {
-  // gemini-cli が単独で全予算を使えるときも 250 秒で頭打ち
+// delegation-health:fallback_chain_timeout 再発防止（2026-10-28起票、10-29 reorder・10-30/11-06/11-09 timeout短縮）
+// gemini-cli が既定順の最後にあっても到達時は backendSpecificTimeoutSecs(200) で廃棄を制限される。
+test('gemini-cli が連鎖の最後でタイムアウトしても廃棄は backendSpecificTimeoutSecs(200) に制限される', () => {
+  // gemini-cli が単独で全予算を使えるときも 200 秒で頭打ち
   const chainBudgetFull = chainBackendBudgetSecs(1800, 0, {});
-  assert.equal(Math.min(chainBudgetFull, backendSpecificTimeoutSecs('gemini-cli', {}) ?? Infinity), 250);
-  // 残り予算が 250 未満ならそちらを優先（予算超過しない）
-  assert.equal(Math.min(chainBackendBudgetSecs(1800, 1600, {}), 250), 200);
+  assert.equal(Math.min(chainBudgetFull, backendSpecificTimeoutSecs('gemini-cli', {}) ?? Infinity), 200);
+  // 残り予算が 200 未満ならそちらを優先（予算超過しない）
+  assert.equal(Math.min(chainBackendBudgetSecs(1800, 1600, {}), 200), 200);
   // 残り0なら打ち切り（gemini-cli は試行されない）
-  assert.equal(Math.min(chainBackendBudgetSecs(1800, 1800, {}), 250), 0);
+  assert.equal(Math.min(chainBackendBudgetSecs(1800, 1800, {}), 200), 0);
   // 環境変数で gemini タイムアウトを個別短縮できる
   const short = backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '180' });
   assert.equal(short, 180);
+  // 既定 200 秒が既定 chainBudget 内で効くことの確認
+  assert.equal(effectiveBackendTimeoutSecs('gemini-cli', { chainBudget: 1800, cooling: false }), 200);
   // 既定順（cheap-code:deepseek → cheap-code:glm → gemini-cli）の確認
   // gemini-cli は最終手段なので遅延を生むとしても被害が最小
 });
 
-test('deepseek と gemini-cli が両方 timeout しても既定の最大廃棄は750秒に収まる', () => {
+test('deepseek と gemini-cli が両方 timeout しても既定の最大廃棄は700秒に収まる', () => {
   const chainBudget = chainBackendBudgetSecs(1800, 0, {});
   const wastedSecs = ['cheap-code:deepseek', 'gemini-cli']
     .map((backend) => Math.min(chainBudget, backendSpecificTimeoutSecs(backend, {}) ?? Infinity))
     .reduce((sum, seconds) => sum + seconds, 0);
-  assert.equal(wastedSecs, 750);
+  assert.equal(wastedSecs, 700);
   assert.ok(wastedSecs < 900);
+});
+
+// delegation-health:fallback_chain_timeout の再発防止（2026-11-07 起票）。
+// 実測 3件/621秒 の廃棄が、gemini 200s + deepseek 500s の上限で
+// 3件の timeout でも 3 × min(200, chainBudget) に抑えられることを確認する。
+test('3件の chain timeout でも gemini の timeout 廃棄は 200 秒/件に制限される', () => {
+  const chainBudget = chainBackendBudgetSecs(1800, 0, {});
+  const geminiPerTimeout = Math.min(chainBudget, backendSpecificTimeoutSecs('gemini-cli', {}) ?? Infinity);
+  assert.equal(geminiPerTimeout, 200);
+  // 3件の gemini timeout で 600 秒、旧 250 秒時代の 750 秒より 150 秒少ない
+  assert.ok(geminiPerTimeout * 3 < 750);
 });
 
 test('指示が空なら使い方を出して終了する', () => {
@@ -418,6 +431,20 @@ test('detectQuotaLimit: 実機の usage limit 行(U+2019/URL/AM PM)を検出す�
   // executor-usage.jsonl は stderr の末尾200字しか残さないため、先頭が切れた断片は検出できない。
   // 台帳の stderrTail だけを見て「検出漏れ」と誤診しないための記録。
   assert.equal(detectQuotaLimit('', `M. ${real}`, 1, '').matched, false);
+});
+
+// 2026-11-06〜07 に実測した ChatGPT Plus(cr@orgiast.jp) の月次上限到達メッセージ。
+// 月次リセット日(Nov 11)が明示されている。この検出により codex の全滅判定が混在
+// (timeout + usage_limit → lane_outage_unrepaired)になるのを防ぐ。
+test('detectQuotaLimit: 2026-11-06 実測の月次上限メッセージ（Nov 11 リセット）を検出する', () => {
+  const actualStderr = "ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/settings/usage to purchase more credits or try again at Nov 11th, 2026 5:00 PM.";
+  assert.equal(detectQuotaLimit('', actualStderr, 1, 'do something').matched, true);
+  // stderrTail（末尾200字）でも検出できることを確認（台帳の記録形式）
+  const tail200 = actualStderr.slice(-200);
+  assert.equal(detectQuotaLimit('', tail200, 1, '').matched, true);
+  // 行頭欠落した断片（M. が付く）は先頭のプレフィックス一致が必要なパターンには一致しない
+  //（既存 line 433 と同様の挙動: 末尾200字の先頭"mit."からは pattern が起動しない）
+  assert.equal(detectQuotaLimit('', `M. ${tail200}`, 1, '').matched, false);
 });
 
 // 2026-10-20 19:15Z の実測メッセージ全文。この検出自体は正しく（同セッションの rate_limits は
@@ -1193,6 +1220,12 @@ test('isBackendExhausted は 429/413 がファイル行番号(コロン隣接)�
   assert.equal(isBackendExhausted('src/CaseList.js:413:function foo()', ''), false);
 });
 
+test('isBackendExhausted は unrecognized_model で true を返す（cheap-code:deepseek の即死パターン）', () => {
+  assert.equal(isBackendExhausted('', '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}'), true);
+  assert.equal(isBackendExhausted('', 'unrecognized_model'), true);
+  assert.equal(isBackendExhausted('', 'Unrecognized_Model'), true);
+});
+
 test('loadEnvKey は process.env を最優先し、ファイルの export VAR="..." 形式も読める', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'export OPENROUTER_API_KEY="sk-or-file"\n' });
   const prev = process.env.OPENROUTER_API_KEY;
@@ -1813,6 +1846,10 @@ test('A: cooldown 中でも代替バックエンドがあれば deferred にせ�
   });
   assert.equal(strict.status, 75, strict.stderr);
   assert.equal(lastJson(strict.stdout).reason, 'codex_cooldown');
+  // deferred 行に fallbackSkipped が記録されていることを確認
+  const deferredRow = readLedger(home).at(-1);
+  assert.equal(deferredRow.status, 'deferred');
+  assert.equal(deferredRow.fallbackSkipped, 'no_fallback_flag');
 });
 
 test('A: 解析できない上限メッセージは24時間後を既定にしつつ writer が5時間へ丸める', (t) => {
@@ -1824,6 +1861,20 @@ test('A: 解析できない上限メッセージは24時間後を既定にしつ
   const cooldown = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'codex-cooldown.json'), 'utf8'));
   assert.equal(cooldown.reason, 'usage_limit:capped');
   assert.ok(Math.abs(cooldown.until - (Date.now() + 5 * 3600 * 1000)) < 120000, '24時間既定も5時間へ丸める');
+});
+
+test('A: cooldown 中で代替バックエンドが無い場合、deferred 行に fallbackSkipped=no_backends が記録される', (t) => {
+  const home = tmpHome(t, 'codex-cooldown-no-backends');
+  fs.writeFileSync(path.join(home, '.claude', 'codex-cooldown.json'), JSON.stringify({ until: Date.now() + 4 * 86400000, reason: 'usage_limit', t: Date.now() }));
+  // recheck を抑制する（cooldown が 5h を超えると recheck=true になり cooldown をバイパスするため）
+  fs.writeFileSync(path.join(home, '.claude', 'codex-cooldown-recheck.json'), JSON.stringify({ at: Date.now() }));
+  // API キーを設定しない → resolveFallbackBackends が空
+  const result = run(['--force-native', '--cwd', home, '--kind', 'implement', '指示内容'], { home });
+  assert.equal(result.status, 75, result.stderr);
+  assert.equal(lastJson(result.stdout).reason, 'codex_cooldown');
+  const deferredRow = readLedger(home).at(-1);
+  assert.equal(deferredRow.status, 'deferred');
+  assert.equal(deferredRow.fallbackSkipped, 'no_backends');
 });
 
 test('A: cooldown が過去なら通常どおり Codex を起動する', (t) => {

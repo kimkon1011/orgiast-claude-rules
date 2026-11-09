@@ -271,12 +271,18 @@ export function resolveRemoteName(to, pcMap) {
 function readJson(file, fallback = null) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; }
 }
-function writeJson(file, value) {
+export function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   try {
     fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-    fs.renameSync(tmp, file);
+    for (let attempt = 0; ; attempt++) {
+      try { fs.renameSync(tmp, file); break; }
+      catch (error) {
+        if (!windowsLockBusy(error) || attempt >= WRITE_JSON_RENAME_RETRIES) throw error;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, WRITE_JSON_RENAME_DELAY_MS);
+      }
+    }
   } finally {
     try { fs.unlinkSync(tmp); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
@@ -337,13 +343,15 @@ export const ACK_BATCH_LIMIT = 100;
 export const SENT_STATUS_MAX_LOOKUP_FAILURES = 5;
 export const FLEET_POLL_BUSY_STREAK_LIMIT = 5;
 export const FLEET_POLL_ERROR_STREAK_LIMIT = 5;
+export const WRITE_JSON_RENAME_RETRIES = 5;
+export const WRITE_JSON_RENAME_DELAY_MS = 50;
 export const CAPABILITY_BACKOFF_MS = 3600000;
 export const SERVER_MAX_ATTEMPTS = 5;
 export const INTERRUPTED_PROMPT_MS = 35 * 60000;
 export const INTERRUPTED_PROMPT_BODY = '実行が中断・タイムアウト（結果ファイル未生成）';
 // Windows can report a sharing/delete-pending conflict while a lock is released.
 // These errors do not establish ownership or prove that the lock is stale.
-function windowsLockBusy(error) {
+export function windowsLockBusy(error) {
   return process.platform === 'win32' && ['EPERM', 'EBUSY'].includes(error.code);
 }
 // The callback runs synchronously while this file's lock is held. Never hold it over I/O to GAS.

@@ -47,6 +47,7 @@ threadCases は `gmail-kim:<threadId>` / `gmail-seisaku:<threadId>` をキーに
 
 `register-comms-hub-sync.ps1` は `-Ensure` / `-DryRun` / `-Remove` を持つ。
 ローカルDWD鍵のあるPCだけ `OrgiastCommsHubSync` を毎時 :15、`--live`、非表示・多重起動禁止で登録。
+優先度は標準（4）。既定の 7 だと CPU 高負荷時に起動・通信が遅れタイムアウトする（2026-11-09 実測）。
 同期mainを実行元にし、未配布の開発ツリーへのフォールバックはしない。
 setup --converge の manifest と登録ラッパー、install-orgiast、fleet-poller の自己修復に接続している。
 本変更はpush/merge前なので配布先への登録はまだ行わない。

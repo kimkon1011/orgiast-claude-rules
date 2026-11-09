@@ -41,7 +41,7 @@ export function completionActions(row, { home, readFile = fs.readFileSync } = {}
     } catch (error) { errors.push(`${file}: ${error.code || error.message}`); }
   }
   const next = String(row.nextKim || '').trim();
-  if (next && !/^(?:なし|ありません|今夜はありません)[。.]?$/.test(next)) return { kind: 'ask', actions: [next], text: `kim がすること: ${next}` };
+  if (next && !/^(?:特に)?(?:なし|無し|ナシ)/.test(next)) return { kind: 'ask', actions: [next], text: `kim がすること: ${next}` };
   if (readable) return { kind: 'info', file: readable, actions: [], text: `成果物: ${readable}\nkim がすること: 成果物に承認待ちの列挙なし` };
   return { kind: 'info', actions: [], text: errors.length ? `成果物の確認未了: ${errors.join(' / ')}\nkim の承認待ち: 未確認` : 'kim がすること: なし（台帳上。成果物の指定なし）' };
 }

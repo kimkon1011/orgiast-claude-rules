@@ -44,6 +44,28 @@ test('Google client explicitly impersonates kim and preserves HTTP error status'
   await assert.rejects(client('https://example.invalid'), e => e.status === 403);
 });
 
+test('Google client retries with seisaku-team only for the keyless-route error', async () => {
+  const tokenRequests = [];
+  const client = googleClient({
+    getToken: async ({ impersonate, scope }) => {
+      tokenRequests.push({ impersonate, scope });
+      if (impersonate === 'kim@orgiast.jp') throw Error('鍵なし経路は seisaku-team@orgiast.jp 固定です');
+      return 'proxy-token';
+    },
+    fetchImpl: async (_, options) => {
+      assert.equal(options.headers.Authorization, 'Bearer proxy-token');
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    },
+  });
+  const scope = 'https://www.googleapis.com/auth/spreadsheets';
+  assert.deepEqual(await client('https://example.invalid', { scope }), { ok: true });
+  assert.deepEqual(await client('https://example.invalid', { scope }), { ok: true });
+  assert.deepEqual(tokenRequests, [
+    { impersonate: 'kim@orgiast.jp', scope },
+    { impersonate: 'seisaku-team@orgiast.jp', scope: 'https://www.googleapis.com/auth/drive' },
+  ]);
+});
+
 test('既存seedsのevidence/noteとgmail:メール箱形式を保持して正規化する', () => {
   const row=normalizeSeed({title:'協業回答',source:'gmail:seisaku-team@orgiast.jp',sourceId:'mail-one',due:'2026-11-06',kind:'回答・返信',evidence:'https://example.invalid/message',note:'確認メモ'});
   assert.equal(row.source,'Gmail'); assert.equal(row.sourceId,'gmail:seisaku-team@orgiast.jp:mail-one');

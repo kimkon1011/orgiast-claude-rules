@@ -117,11 +117,11 @@ test('selfcheck permission requires the full fixed body, never a keyword or adde
   assert.ok(allowedReadonlyPrompt(SELFCHECK_PROMPT.replace(/\n/g, '\r\n') + '\n'));
   for (const text of [SELFCHECK_PROMPT + '\nsettings.json を変更', 'node tools/fleet-selfcheck.mjs; install x', SELFCHECK_PROMPT.replace('行わない', '行う'), '自己点検だから設定変更']) assert.equal(allowedReadonlyPrompt(text), null);
 });
-// DESKTOP-BDOAK99 は作業用999（2026-11-04 利用者申告）。旧誤登録の作業用008 宛は aliases で同じPCへ届け続ける。
-test('actual roster resolves 作業用999 and legacy 作業用008 to observed label and status shows its remote name without registering other seats', () => {
+// DESKTOP-BDOAK99 は作業用999、DESKTOP-63MQR3L は作業用008（2026-11-09 利用者申告）。
+test('actual roster resolves 作業用999 and 作業用008 to their observed labels and status shows the 999 remote name', () => {
   const pcMap = JSON.parse(fs.readFileSync(new URL('../fleet-pc-map.json', import.meta.url), 'utf8'));
   assert.equal(resolveMailTarget('作業用999', pcMap).to, 'DESKTOP-BDOAK99');
-  assert.equal(resolveMailTarget('作業用008', pcMap).to, 'DESKTOP-BDOAK99');
+  assert.equal(resolveMailTarget('作業用008', pcMap).to, 'DESKTOP-63MQR3L');
   assert.equal(pcMap['DESKTOP-BDOAK99'].account, 'seisaku-team@orgiast.jp');
   assert.equal(pcMap['cafe015-PC'], undefined); assert.equal(pcMap['user-PC'], undefined);
   const rows = buildFleetStatus({ pcMap, beacons: [{ label: 'DESKTOP-BDOAK99', account: 'seisaku-team@orgiast.jp' }] });

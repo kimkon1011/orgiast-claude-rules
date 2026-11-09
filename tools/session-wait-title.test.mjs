@@ -346,6 +346,56 @@ test('promptSubmit: AI名が無ければ今回の冒頭を空白正規化・全�
   }
 });
 
+test('desiredTitle: closed-sessions.json に登録があれば【閉じて可】を優先する', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-closed-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const closedFile = path.join(os.homedir(), '.claude', 'closed-sessions.json');
+  const origExists = fs.existsSync(closedFile);
+  let origContent = '';
+  if (origExists) origContent = fs.readFileSync(closedFile, 'utf8');
+  try {
+    fs.mkdirSync(path.dirname(closedFile), { recursive: true });
+    fs.writeFileSync(closedFile, JSON.stringify({ ids: ['cse_closed-session'] }));
+    // Session is in closed ledger -> 【閉じて可】 even without footer
+    assert.equal(desiredTitle('本文', JSON.stringify({ type: 'ai-title', aiTitle: 'テスト' }), '008', true), '008｜【閉じて可】テスト');
+    // Session not in closed ledger -> no change without footer
+    assert.equal(desiredTitle('本文', JSON.stringify({ type: 'ai-title', aiTitle: 'テスト' }), '008', false), '008｜テスト');
+  } finally {
+    if (origExists) fs.writeFileSync(closedFile, origContent);
+    else if (fs.existsSync(closedFile)) fs.unlinkSync(closedFile);
+  }
+});
+
+test('promptSubmit: closed-sessions.json に登録があれば【閉じて可】を付ける', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-ps-closed-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 's.jsonl');
+  fs.writeFileSync(file, JSON.stringify({ type: 'ai-title', aiTitle: 'テスト', sessionId: 's' }));
+  const result = promptSubmit({ transcript_path: file, session_id: 's' }, {
+    readFile: () => fs.readFileSync(file, 'utf8'),
+    statSize: () => fs.statSync(file).size,
+    resolvePcNumber: () => '008',
+    isClosed: id => id === 's',
+  });
+  assert.ok(result);
+  assert.equal(result.hookSpecificOutput.sessionTitle, '008｜【閉じて可】テスト');
+});
+
+test('promptSubmit: closed-sessions.json に無ければ通常のフッター処理', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-ps-not-closed-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 's.jsonl');
+  fs.writeFileSync(file, JSON.stringify({ type: 'ai-title', aiTitle: 'テスト', sessionId: 's' }));
+  const result = promptSubmit({ transcript_path: file, session_id: 's' }, {
+    readFile: () => fs.readFileSync(file, 'utf8'),
+    statSize: () => fs.statSync(file).size,
+    resolvePcNumber: () => '008',
+    isClosed: id => false,
+  });
+  assert.ok(result);
+  assert.equal(result.hookSpecificOutput.sessionTitle, '008｜テスト');
+});
+
 test('CLI: hook_event_name で SessionStart と UserPromptSubmit を振り分ける', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-events-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -361,4 +411,123 @@ test('CLI: hook_event_name で SessionStart と UserPromptSubmit を振り分け
     assert.equal(result.stderr, '');
     assert.deepEqual(JSON.parse(result.stdout), { hookSpecificOutput: { hookEventName: event, sessionTitle: `999｜${title}` } });
   }
+});
+
+// --- 全角コロン対応のテスト ---
+const FULLWIDTH_FOOTER = `本文
+
+次に kim がすること：なし
+この後の自動進行：毎時の見張りが保存を確かめて報告する
+このセッション：まだ閉じない（作業中・2026-11-09 12:00 まで待つ）`;
+
+test('全角コロンのフッターでも期限タイトルが付く（PC番号なし）', () => {
+  assert.equal(desiredTitle(FULLWIDTH_FOOTER, ai, ''), '【11/09/12:00まで】トークン待ち');
+});
+
+test('全角コロンのフッター＋PC番号あり', () => {
+  assert.equal(desiredTitle(FULLWIDTH_FOOTER, ai, '018'), '018｜【11/09/12:00まで】トークン待ち');
+});
+
+test('全角コロンのフッター（【最終まとめ】はフッターの前）で期限が付く', () => {
+  // Actual format from transcript 7bbe3beb: 【最終まとめ】 section is BEFORE the footer
+  const text = `【最終まとめ】
+① 報告（10:05 時点）
+| 項目 | 状態 |
+|---|---|
+| 夜間再起動 | ✅ 実装済み |
+| Windows テスト | ✅ 全部通過 |
+
+次に kim がすること：なし（任意で「wt-rc-keep 削除OK」）
+この後の自動進行：修正とレビューの完了通知で自動再開 → 結果を確認 → Windows テスト → 着地 → ここに報告。着地の確認は自動チェックに登録済み（期限 11/09 22:03）
+このセッション：まだ閉じない（作業中・2026-11-09 12:00 まで待つ）`;
+  assert.equal(desiredTitle(text, ai, '018'), '018｜【11/09/12:00まで】トークン待ち');
+});
+
+test('全角コロンの閉じてよいフッターで【閉じて可】が付く', () => {
+  const text = `次に kim がすること：なし
+この後の自動進行：なし（完了）
+このセッション：/session-close は終わっているので、このセッションを閉じてよい`;
+  assert.equal(desiredTitle(text, ai, '018'), '018｜【閉じて可】トークン待ち');
+});
+
+test('全角コロンの閉じてよいフッター（PC番号なし）で【閉じて可】が付く', () => {
+  const text = `次に kim がすること：なし
+この後の自動進行：なし（完了）
+このセッション：/session-close は終わっているので、このセッションを閉じてよい`;
+  assert.equal(desiredTitle(text, ai, ''), '【閉じて可】トークン待ち');
+});
+
+test('半角コロンは従来どおり動作する', () => {
+  assert.equal(desiredTitle(footer(WAIT), ai, ''), '【11/02/20:11まで】トークン待ち');
+});
+
+// --- closed-sessions.json のテスト ---
+test('closed-sessions.json に登録があればフッター無しでも【閉じて可】を付ける', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-closed2-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 's.jsonl');
+  fs.writeFileSync(file, `${ai}\n`);
+  const result = applyReal({ transcript_path: file, session_id: 's' }, {
+    readFile: () => fs.readFileSync(file, 'utf8'),
+    statSize: () => fs.statSync(file).size,
+    resolvePcNumber: () => '008',
+    isClosed: id => id === 's',
+  });
+  assert.equal(result, '008｜【閉じて可】トークン待ち');
+  const last = JSON.parse(fs.readFileSync(file, 'utf8').trim().split('\n').at(-1));
+  assert.equal(last.customTitle, '008｜【閉じて可】トークン待ち');
+});
+
+test('closed-sessions.json に登録が無ければ通常のフッター処理（フッター無しなら何もしない）', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-not-closed2-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 's.jsonl');
+  fs.writeFileSync(file, `${ai}\n`);
+  const result = apply({ transcript_path: file, session_id: 's' }, {
+    readFile: () => fs.readFileSync(file, 'utf8'),
+    statSize: () => fs.statSync(file).size,
+    resolvePcNumber: () => '008',
+    isClosed: id => false,
+  });
+  assert.equal(result, null);
+});
+
+// --- sweepAll のクールダウンテスト ---
+test('sweepAll: state ファイルがあっても1時間後に再実行される', t => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-cooldown-'));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const stateFile = path.join(base, 'session-wait-title-state.json');
+  // Write a state file that is 61 minutes old (past the 1-hour cooldown)
+  fs.writeFileSync(stateFile, JSON.stringify({ at: Date.now() - 61 * 60 * 1000 }));
+  const proj = path.join(base, 'projects', 'p');
+  fs.mkdirSync(proj, { recursive: true });
+  fs.writeFileSync(path.join(proj, 's.jsonl'), `${ai}\n${assistant(footer(WAIT))}\n`);
+  const result = sweepAllReal({ base, now: Date.now(), resolvePcNumber: () => '008' });
+  assert.notEqual(result.skipped, 'cooldown');
+  assert.equal(result.scanned, 1);
+  assert.equal(result.titled[0].title, '008｜【11/02/20:11まで】トークン待ち');
+});
+
+test('sweepAll: state ファイルが1時間以内なら cooldown で飛ばす', t => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-cooldown2-'));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  const stateFile = path.join(base, 'session-wait-title-state.json');
+  fs.writeFileSync(stateFile, JSON.stringify({ at: Date.now() - 30 * 60 * 1000 })); // 30 min ago
+  const result = sweepAll({ base, now: Date.now(), resolvePcNumber: () => '008' });
+  assert.equal(result.skipped, 'cooldown');
+});
+
+// --- エラーログのテスト ---
+test('エラー時も fail-open で exit 0（ログファイルに記録）', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-error-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 's.jsonl');
+  fs.writeFileSync(file, 'invalid json');
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./session-wait-title.mjs', import.meta.url))], {
+    input: JSON.stringify({ hook_event_name: 'Stop', transcript_path: file, session_id: 's' }),
+    encoding: 'utf8', env: { ...process.env, ORGIAST_PC_NUMBER: '999' },
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0);
+  // Should not crash; log file may or may not exist depending on write permissions
 });

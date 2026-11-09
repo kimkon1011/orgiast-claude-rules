@@ -5,11 +5,13 @@ import { keyserveSecret, requireKeyservePcId, keyserveAuthHeaders } from '../key
 
 export const GWS_USER = 'seisaku-team@orgiast.jp';
 export const GWS_MARKER = 'orgiast-server-side-gws';
+export const GWS_KIM_MARKER = 'orgiast-server-side-gws-kim';
 export function proxyCredential({ keyPath, impersonate, scope }) {
   if (keyPath && fs.existsSync(keyPath)) return null;
-  if (impersonate !== GWS_USER) throw Error(`鍵なし経路は ${GWS_USER} 固定です`);
-  if (!String(scope).split(/\s+/).every(s => /^https:\/\/www\.googleapis\.com\/auth\/(drive|gmail\.(readonly|compose|send))$/.test(s))) throw Error('GWS proxy: unsupported scope');
-  return GWS_MARKER;
+  if (![GWS_USER,'kim@orgiast.jp'].includes(impersonate)) throw Error('GWS proxy: unsupported subject');
+  if (!String(scope).split(/\s+/).every(s => /^https:\/\/www\.googleapis\.com\/auth\/(drive|spreadsheets|calendar\.readonly|gmail\.(readonly|compose|send))$/.test(s))) throw Error('GWS proxy: unsupported scope');
+  if (impersonate === 'kim@orgiast.jp' && scope !== 'https://www.googleapis.com/auth/calendar.readonly') throw Error('GWS proxy: kim is calendar-only');
+  return impersonate === 'kim@orgiast.jp' ? GWS_KIM_MARKER : GWS_MARKER;
 }
 export async function channelRequest(route, { query, body, home = process.env.ORGIAST_HOME || os.homedir(), env = process.env, fetchImpl = globalThis.fetch, signal } = {}) {
   const secret = keyserveSecret(home, env);
@@ -25,18 +27,20 @@ export async function channelRequest(route, { query, body, home = process.env.OR
   if (!response.ok) throw Error(`channel ${route}: HTTP ${response.status}`);
   return response.json();
 }
-export function googleRoute(raw) {
+export function googleRoute(raw, marker = GWS_MARKER) {
   const url = new URL(raw);
   if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hash) throw Error('invalid Google URL');
   if (url.hostname === 'gmail.googleapis.com') return { service: 'gmail', path: url.pathname + url.search };
   if (url.hostname === 'www.googleapis.com' && /^\/(?:upload\/)?drive\//.test(url.pathname)) return { service: 'drive', path: url.pathname + url.search };
-  if (url.hostname === 'sheets.googleapis.com') return { service: 'drive', path: url.pathname + url.search };
+  if (url.hostname === 'sheets.googleapis.com') return { service: 'sheets', path: url.pathname + url.search };
+  if (url.hostname === 'www.googleapis.com' && url.pathname.startsWith('/calendar/v3/')) return { service: marker === GWS_KIM_MARKER ? 'calendar-kim' : 'calendar', path: url.pathname + url.search };
   throw Error('GWS proxy: unsupported Google endpoint');
 }
 export async function gwsFetch(url, options = {}, dependencies = {}) {
   const headers = new Headers(options.headers);
-  if (headers.get('authorization') !== `Bearer ${GWS_MARKER}`) return (dependencies.fetchImpl || globalThis.fetch)(url, options);
-  const route = googleRoute(url), method = options.method || 'GET';
+  const marker = headers.get('authorization')?.replace(/^Bearer /,'');
+  if (![GWS_MARKER,GWS_KIM_MARKER].includes(marker)) return (dependencies.fetchImpl || globalThis.fetch)(url, options);
+  const route = googleRoute(url, marker), method = options.method || 'GET';
   const request = dependencies.request || channelRequest;
   const result = await request('gws', { ...dependencies, signal: options.signal,
     ...(method === 'GET' ? { query: route } : { body: { ...route, method,

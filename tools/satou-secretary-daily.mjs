@@ -84,7 +84,7 @@ async function googleJson(url, { token, method='GET', body, fetchImpl=gwsFetch }
   if(!res.ok) throw new Error(`Google API ${res.status}: ${value?.error?.message || raw.slice(0,200)}`);
   return value;
 }
-async function driveToken() { return getDriveToken({scope:DRIVE_SCOPE,impersonate:USER,signal:AbortSignal.timeout(30000)}); }
+async function driveToken() { return getDriveToken({scope:'https://www.googleapis.com/auth/spreadsheets',impersonate:USER,signal:AbortSignal.timeout(30000)}); }
 async function readSheet(id, range, deps={}) {
   const token=await (deps.getToken||driveToken)();
   return (await googleJson(`https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent(range)}?valueRenderOption=UNFORMATTED_VALUE`,{token,fetchImpl:deps.fetchImpl})).values || [];

@@ -27,11 +27,16 @@ export async function ensureKimEditor(fileId, {
     return rows.some(p => !p.deleted && (!p.expirationTime || Date.parse(p.expirationTime) > Date.now()) && p.type === 'user' && p.emailAddress?.toLowerCase() === KIM_EMAIL && editable.has(p.role));
   }
   if (await list()) return { fileId, changed: false };
-  await api(token, `${endpoint}?supportsAllDrives=true&sendNotificationEmail=false`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ role: 'writer', type: 'user', emailAddress: KIM_EMAIL }),
-    signal: AbortSignal.timeout(30_000),
-  });
+  try {
+    await api(token, `${endpoint}?supportsAllDrives=true&sendNotificationEmail=false`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: 'writer', type: 'user', emailAddress: KIM_EMAIL }),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (error) {
+    if (/\bshortcut\b/i.test(error.message)) return { fileId, changed: false };
+    throw error;
+  }
   if (!await list()) throw new Error(`kim-editor: writer read-back failed (${fileId})`);
   return { fileId, changed: true };
 }

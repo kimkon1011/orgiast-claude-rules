@@ -59,7 +59,7 @@ test('0 stalled: no execution or notification', async t => {
   const f = await fixture(t, 0); await run(options([], {}), f.io); assert.equal(f.calls(), 0); assert.equal(f.notices(), 0);
 });
 test('nightly limit is enforced across repeated invocations', async t => {
-  const f = await fixture(t); await run(options(['--limit', '3'], {}), f.io); await run(options(['--limit', '3'], {}), f.io); assert.equal(f.calls(), 3); assert.equal(f.notices(), 2);
+  const f = await fixture(t); await run(options(['--limit', '3'], {}), f.io); await run(options(['--limit', '3'], {}), f.io); assert.equal(f.calls(), 3); assert.equal(f.notices(), 1);
 });
 test('three attempts without progress persist skip reason', async t => {
   const f = await fixture(t, 1);
@@ -177,7 +177,7 @@ test('adapter forwards deadline/resume and requires progress evidence', async ()
   let invocation;
   const io = { executable: 'fixture', runChild: async (...args) => { invocation = args; return { status: 'success' }; }, readReport: async () => null };
   const r = { sessionId: 'abc', cwd: '/fixture', file: '/fixture/transcript' };
-  assert.equal((await execute(r, { timeoutMs: 123, resultFile: '/fixture/result' }, io)).outcome, 'no-progress');
+  assert.equal((await execute(r, { timeoutMs: 123, resultFile: '/fixture/result' }, io)).outcome, 'no-report');
   assert.equal(invocation[4], 123); assert.equal(invocation[5].resumeSessionId, 'abc');
   io.readReport = async () => ({ progressed: true, evidence: 'Changed artifact; checks pass' });
   assert.equal((await execute(r, { timeoutMs: 123 }, io)).outcome, 'progressed');
@@ -205,10 +205,10 @@ test('execute sanitizes control characters and handles invalid JSON in result fi
   assert.equal(res1.outcome, 'progressed');
   assert.equal(res1.reason, 'Fixed bug');
 
-  // Invalid JSON handled gracefully as no-progress
+  // Invalid JSON handled gracefully as no-report
   await fs.writeFile(resultFile, 'invalid json {');
   const res2 = await execute(r, { timeoutMs: 1000, resultFile }, io);
-  assert.equal(res2.outcome, 'no-progress');
+  assert.equal(res2.outcome, 'no-report');
 
   // Structured object evidence should count as progressed
   await fs.writeFile(resultFile, JSON.stringify({ progressed: true, evidence: { findings: ['Fixed bug A', 'Verified B'], changes: ['Updated state file'] } }));
@@ -220,6 +220,63 @@ test('execute sanitizes control characters and handles invalid JSON in result fi
   await fs.writeFile(resultFile, JSON.stringify({ progressed: false, evidence: { reason: 'Waiting for external input' } }));
   const res4 = await execute(r, { timeoutMs: 1000, resultFile }, io);
   assert.equal(res4.outcome, 'no-progress');
+});
+test('execute recognizes four states, legacy reports, timeout priority and missing reports', async () => {
+  const record = { sessionId: 'abc', cwd: '/fixture' };
+  let status = 'success', report;
+  const io = { executable: 'fixture', runChild: async () => ({ status }), readReport: async () => report };
+  const outcome = async value => { report = value; return (await execute(record, { timeoutMs: 1000 }, io)).outcome; };
+  assert.equal(await outcome({ state: 'progressed', evidence: 'changed and verified' }), 'progressed');
+  assert.equal(await outcome({ state: 'done', evidence: 'completed elsewhere' }), 'done');
+  report = { state: 'waiting-human', evidence: 'approval is required', askId: 'ask-123' };
+  const waiting = await execute(record, { timeoutMs: 1000 }, io);
+  assert.equal(waiting.outcome, 'waiting-human'); assert.equal(waiting.askId, 'ask-123');
+  assert.equal(await outcome({ state: 'stuck', evidence: 'cannot proceed' }), 'no-progress');
+  assert.equal(await outcome({ progressed: true, evidence: 'legacy success' }), 'progressed');
+  assert.equal(await outcome({ progressed: false, evidence: 'legacy failure' }), 'no-progress');
+  assert.equal(await outcome({ state: 'waiting-human', evidence: 'approval is required' }), 'no-progress');
+  assert.equal(await outcome(null), 'no-report');
+  assert.equal(await outcome(''), 'no-report');
+  status = 'timeout';
+  assert.equal(await outcome({ state: 'done', evidence: 'saved before timeout' }), 'done');
+  assert.equal(await outcome({ state: 'waiting-human', evidence: 'asked before timeout', askId: 'ask-456' }), 'waiting-human');
+  assert.equal(await outcome({ state: 'progressed', evidence: 'saved before timeout' }), 'progressed');
+  assert.equal(await outcome({ state: 'stuck', evidence: 'timed out' }), 'timeout');
+});
+test('done closes a session without consuming budget and the next run skips it', async t => {
+  const f = await fixture(t, 1); const closed = { sessions: {} }; let closeCalls = 0;
+  f.io.loadClosed = async () => closed;
+  f.io.closeSession = async (sessionId, value) => { closeCalls++; closed.sessions[sessionId] ??= value; };
+  f.io.execute = async () => ({ outcome: 'done', reason: 'already completed' });
+  const first = await run(options([], {}), f.io);
+  assert.equal(first.results[0].outcome, 'done'); assert.equal(closeCalls, 1);
+  assert.equal((await f.ledger()).sessions['session-0'].noProgress, 0);
+  assert.deepEqual(closed.sessions['session-0'], {
+    closedAt: new Date(f.io.now()).toISOString(), reason: 'stalled-resume-done', status: '完了', title: 'Task 0', cwd: f.io.home, file: 'file-0'
+  });
+  f.next();
+  const second = await run(options([], {}), f.io);
+  assert.equal(second.rows[0].skip, 'closed'); assert.equal(second.results.length, 0); assert.equal(closeCalls, 1);
+});
+test('waiting-human saves ask and skips for seven days without consuming budget', async t => {
+  const f = await fixture(t, 1); let time = f.io.now(); f.io.now = () => time; let calls = 0;
+  f.io.execute = async () => { calls++; return { outcome: 'waiting-human', reason: 'approval pending', askId: 'ask-open' }; };
+  await run(options([], {}), f.io);
+  let entry = (await f.ledger()).sessions['session-0'];
+  assert.equal(entry.noProgress, 0); assert.deepEqual(entry.waitingHuman, { askId: 'ask-open', until: time + 7 * 86400000 });
+  time += 7 * 86400000 - 1;
+  assert.equal((await run(options([], {}), f.io)).rows[0].skip, '人の判断待ち'); assert.equal(calls, 1);
+  time += 1;
+  assert.equal((await run(options([], {}), f.io)).results[0].outcome, 'waiting-human'); assert.equal(calls, 2);
+});
+test('clean results do not notify and record all-clean', async t => {
+  const f = await fixture(t, 2);
+  f.io.execute = async record => record.sessionId === 'session-0'
+    ? { outcome: 'done', reason: 'complete' }
+    : { outcome: 'waiting-human', reason: 'approval pending', askId: 'ask-clean' };
+  const result = await run(options([], {}), f.io);
+  assert.deepEqual(result.results.map(r => r.outcome), ['done', 'waiting-human']); assert.equal(f.notices(), 0);
+  assert.deepEqual((await f.ledger()).nights['2026-09-24'].notification, { skipped: 'all-clean' });
 });
 test('invalid CLI/env values rejected', () => {
   for (const args of [['--limit'], ['--limit', '-1'], ['--limit', '1.5'], ['--unknown']]) assert.throws(() => options(args, {}));

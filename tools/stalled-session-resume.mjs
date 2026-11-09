@@ -129,6 +129,7 @@ export function titleSkipReason(displayTitle, now) {
   return wait && now < wait.at ? '待機期限前' : '';
 }
 export function overdueSkipReason(record, entry, closed, mtimeMs, now, activeMs) {
+  if (entry.waitingHuman?.until > now) return '人の判断待ち';
   const common = skipReason(record, {}, '', closed, mtimeMs, now, activeMs);
   if (common) return common;
   const wait = waitDeadline(record.displayTitle, now);
@@ -142,6 +143,7 @@ export function overdueSkipReason(record, entry, closed, mtimeMs, now, activeMs)
 
 export function skipReason(record, entry, night, closed, mtimeMs, now, activeMs) {
   if (closed.sessions[record.sessionId]) return 'closed';
+  if (entry.waitingHuman?.until > now) return '人の判断待ち';
   const titleSkip = titleSkipReason(record.displayTitle, now);
   if (titleSkip) return titleSkip;
   if (now - mtimeMs <= activeMs || record.sessionId === process.env.CLAUDE_SESSION_ID) return 'active';
@@ -157,7 +159,11 @@ ${wait ? `このセッションの待機期限 ${wait.label} を過ぎました�
 共有作業ツリーの他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。個別の通知は不要です。
 前回までの再開結果: ${JSON.stringify(previous)}。済んだ作業を繰り返さず、成果物の現状を検証してください。
 期限は${timeoutMs / 60000}分です。期限前に終了してください。
-実行した成果を ${resultFile} にJSONで保存してください: {"progressed":true/false,"evidence":"変更した成果物と検証結果、または進めない理由"}。
+実行結果を ${resultFile} にJSONで保存してください: {"state":"progressed"|"done"|"waiting-human"|"stuck","evidence":"変更した成果物と検証結果、または進めない理由","askId":"kim-inbox の ask ID（waiting-human の時は必須）"}。
+progressed=成果物を進めて検証した。
+done=目的が完了済み（後続セッションで完了した場合も含む）で、やることが残っていない。
+waiting-human=残りが人の判断・操作だけで、kim-inbox に ask を積んだ（既存の open ask でもよい）。
+stuck=それ以外で進められなかった。
 単なる進捗確認・計画・終了コード0は成果に含めません。\n当初依頼: ${record.firstPrompt}\n直近: ${record.lastAssistantText}`;
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, record.cwd, record.cwd, timeoutMs, { resumeSessionId: record.sessionId });
   const execution = { executor: result.executorUsed || 'not-started', executorAttempts: result.executorAttempts ?? [] };
@@ -178,17 +184,22 @@ ${wait ? `このセッションの待機期限 ${wait.label} を過ぎました�
     report = rawReport;
     if (typeof rawReport === 'string') {
       const cleaned = rawReport.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
-      report = JSON.parse(cleaned);
+      report = cleaned.trim() ? JSON.parse(cleaned) : null;
     }
   } catch (error) { return { ...execution, outcome: 'error', reason: String(error.message) }; }
   const evidenceOk = report?.evidence && (
     (typeof report.evidence === 'string' && report.evidence.trim()) ||
     (typeof report.evidence === 'object' && report.evidence !== null && Object.keys(report.evidence).length > 0)
   );
-  const progressed = report?.progressed === true && evidenceOk;
-  const reason = typeof report?.evidence === 'string' ? report.evidence : JSON.stringify(report?.evidence, null, 2) || '成果記録なし';
-  if (timedOut) return { outcome: progressed ? 'progressed' : 'timeout', reason: progressed ? reason : result.status, ...execution };
-  return { outcome: progressed ? 'progressed' : 'no-progress', reason, ...execution };
+  if (!report || (typeof report === 'object' && Object.keys(report).length === 0)) return { outcome: timedOut ? 'timeout' : 'no-report', reason: timedOut ? result.status : '結果ファイルなし', ...execution };
+  const state = report.state ?? (report.progressed === true ? 'progressed' : report.progressed === false ? 'stuck' : 'stuck');
+  const reason = typeof report.evidence === 'string' ? report.evidence : JSON.stringify(report.evidence, null, 2) || '成果記録なし';
+  let outcome = state === 'progressed' && evidenceOk ? 'progressed'
+    : state === 'done' && evidenceOk ? 'done'
+      : state === 'waiting-human' && evidenceOk && typeof report.askId === 'string' && report.askId.trim() ? 'waiting-human'
+        : 'no-progress';
+  if (timedOut && !['progressed', 'done', 'waiting-human'].includes(outcome)) outcome = 'timeout';
+  return { outcome, reason: outcome === 'timeout' ? result.status : reason, ...(outcome === 'waiting-human' ? { askId: report.askId.trim() } : {}), ...execution };
 }
 
 export async function run(config = options(), io = {}) {
@@ -220,6 +231,16 @@ export async function run(config = options(), io = {}) {
     if (ledger.version !== 1 || !ledger.sessions || !ledger.nights) throw new Error('Invalid resume ledger');
     if (overdue) ledger.overdue ??= {};
     const loadClosed = io.loadClosed ?? (() => readJson(path.join(dir, 'session-closed-ledger.json'), { sessions: {} }));
+    let closeSaves = Promise.resolve();
+    const closeSession = io.closeSession ?? (async (sessionId, value) => {
+      const file = path.join(dir, 'session-closed-ledger.json');
+      closeSaves = closeSaves.catch(() => {}).then(async () => {
+        const closed = await readJson(file, { sessions: {} });
+        closed.sessions ??= {};
+        if (!closed.sessions[sessionId]) { closed.sessions[sessionId] = value; await saveJson(file, closed); }
+      });
+      await closeSaves;
+    });
     const stat = io.stat ?? fs.stat;
     const overdueTitle = record => {
       const wait = waitDeadline(record.displayTitle, now());
@@ -305,7 +326,7 @@ export async function run(config = options(), io = {}) {
               return;
             }
             result = await (io.execute ?? execute)(record, { timeoutMs: config.timeoutMs, resultFile, previous: entry.attempts.slice(-4, -1), wait: overdue ? wait : null });
-            if (!['progressed', 'no-progress', 'timeout', 'error', 'no-executor'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
+            if (!['progressed', 'done', 'waiting-human', 'no-progress', 'no-report', 'timeout', 'error', 'no-executor'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
           } catch (error) { const msg = String(error.message ?? ''); result = { outcome: /timeout|timed out|ETIMEDOUT|aborted due to timeout/i.test(msg) ? 'timeout' : 'error', reason: msg }; }
           if (overdue && result.outcome === 'no-executor') result = { ...result, outcome: 'error' };
           if (result.outcome === 'no-executor') {
@@ -323,6 +344,13 @@ export async function run(config = options(), io = {}) {
           if (result.outcome === 'progressed') {
             entry.noProgress = 0;
             for (const ancestor of ancestors) { ancestor.noProgress = 0; delete ancestor.skipReason; }
+          } else if (result.outcome === 'done' || result.outcome === 'waiting-human') {
+            entry.noProgress = Math.max(0, entry.noProgress - 1);
+            if (result.outcome === 'done') {
+              await closeSession(record.sessionId, { closedAt: new Date(now()).toISOString(), reason: 'stalled-resume-done', status: '完了', title: record.displayTitle, cwd: record.cwd, file: record.file });
+            } else {
+              entry.waitingHuman = { askId: result.askId, until: now() + 7 * 86400000 };
+            }
           } else {
             // 子の不進捗は同じ目的を継ぐ祖先の予算にも加算する。これが無いと子の id が
             // 毎晩変わるだけで祖先の noProgress が増えず、連鎖が retire されない。
@@ -354,10 +382,11 @@ export async function run(config = options(), io = {}) {
       const closed = await loadClosed();
       const retired = Object.entries(overdue ? {} : ledger.sessions).filter(([id, entry]) => entry.noProgress >= 3 && !closed.sessions[id]);
       const count = outcome => results.filter(r => r.outcome === outcome).length;
-      const summary = `確認 ${results.length}件 / 進んだ ${count('progressed')} / 進まず ${count('no-progress')} / 時間切れ ${count('timeout')} / エラー ${count('error')} / 締切で翌晩へ ${rows.filter(r => r.skip === '締切超過(翌晩へ)').length} / 3回進捗なしで停止中 ${retired.length}`;
+      const summary = `確認 ${results.length}件 / 進んだ ${count('progressed')} / 完了確認 ${count('done')} / 人待ち ${count('waiting-human')} / 進まず ${count('no-progress')} / 記録なし ${count('no-report')} / 時間切れ ${count('timeout')} / エラー ${count('error')} / 締切で翌晩へ ${rows.filter(r => r.skip === '締切超過(翌晩へ)').length} / 3回進捗なしで停止中 ${retired.length}`;
       const waiting = retired.length ? '\n自動では進められないので kim の判断待ち\n' + retired.slice(0, 20).map(([id, entry]) => `${entry.title ?? id} (${id})`).join('\n') : '';
       const message = redactSecrets(`${summary}\n${overdue ? '待機期限切れセッション再開' : '夜間セッション再開'} (${os.hostname()})\n${results.map(r => `${r.title} (${r.sessionId}): ${r.outcome}`).join('\n')}${state.aborted ? '\n連続3件エラーのため今晩は中止' : ''}${waiting}`);
-      state.notification = await (io.notify ?? notifyKim)(message, { home });
+      const allClean = !state.aborted && !state.noExecutor && count('no-progress') === 0 && count('no-report') === 0 && count('timeout') === 0 && count('error') === 0 && retired.length === 0;
+      state.notification = allClean ? { skipped: 'all-clean' } : await (io.notify ?? notifyKim)(message, { home });
       await save(ledger);
     }
     return { rows, results, aborted: state.aborted, ...(state.noExecutor ? { noExecutor: state.noExecutor } : {}) };

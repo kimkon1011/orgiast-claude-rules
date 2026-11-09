@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { corpusReport, costReport, splitSegments, SYNTHETIC_PATH } from './session-fold-bench.mjs';
+import { corpusReport, costReport, measureCase, splitSegments, SYNTHETIC_PATH } from './session-fold-bench.mjs';
 import fs from 'node:fs';
 
 test('corpus reports metadata for at least 30 synthetic segments without body text', () => {
@@ -38,4 +38,34 @@ test('100 percent hit rate lowers savings monotonically', () => {
 test('missing files and negative turns fail explicitly', () => {
   assert.throws(() => corpusReport({ files: ['definitely-missing.md'] }), /file not found/);
   assert.throws(() => costReport({ synthetic: true, turns: [-1], hitRates: [.2] }), /turns must contain positive integers/);
+});
+
+test('foldEvery=1 preserves the previous default calculation', () => {
+  const segments = splitSegments(fs.readFileSync(SYNTHETIC_PATH, 'utf8'));
+  const options = { turns: 20, hitRate: .2, keepRecent: 4, k: 2 };
+  const previousResult = {
+    inputReduction: -0.12623763659477022,
+    costReduction: -5.47722658887576,
+    baselineInputTokens: 12128,
+    foldInputTokens: 13659.010056621373,
+    baselineCost: 0.0025353000000000003,
+    foldCost: 0.016421712570776716,
+  };
+  assert.deepEqual(measureCase(segments, options), previousResult);
+  assert.deepEqual(measureCase(segments, { ...options, foldEvery: 1 }), previousResult);
+});
+
+test('batching folds improves cost reduction for the synthetic corpus', () => {
+  const segments = splitSegments(fs.readFileSync(SYNTHETIC_PATH, 'utf8'));
+  const options = { turns: 100, hitRate: .05, keepRecent: 3, k: 1 };
+  const everyTurn = measureCase(segments, { ...options, foldEvery: 1 });
+  const batched = measureCase(segments, { ...options, foldEvery: 20 });
+  assert.ok(batched.costReduction > everyTurn.costReduction, { everyTurn, batched });
+});
+
+test('foldEvery rejects zero and fractional values', () => {
+  const options = { turns: 2, hitRate: 0, keepRecent: 0, k: 0 };
+  assert.throws(() => measureCase(['one'], { ...options, foldEvery: 0 }), /fold-every must be a positive integer/);
+  assert.throws(() => measureCase(['one'], { ...options, foldEvery: 1.5 }), /fold-every must be a positive integer/);
+  assert.throws(() => costReport({ synthetic: true, foldEvery: 0 }), /fold-every must be a positive integer/);
 });

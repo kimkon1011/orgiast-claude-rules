@@ -54,11 +54,14 @@ function stale(price) {
 }
 function money(tokens, coefficient, input) { return tokens / 1_000_000 * coefficient * input; }
 
-export function measureCase(segments, { turns, hitRate, keepRecent, k, price = DEFAULT_PRICE }) {
+export function measureCase(segments, { turns, hitRate, keepRecent, k, foldEvery = 1, price = DEFAULT_PRICE }) {
+  if (!Number.isInteger(foldEvery) || foldEvery < 1) throw new Error('fold-every must be a positive integer');
   const prefixTokens = estimateTokens(PREFIX);
   let aInput = 0, aCost = 0, bInput = 0, bCost = 0;
   let previousCount = 0;
   let previousFoldedCount = 0;
+  let lastFoldCount = 0;
+  let foldedIds = [];
   for (let turn = 1; turn <= turns; turn++) {
     const count = Math.floor(segments.length * turn / turns);
     const current = segments.slice(0, count);
@@ -69,7 +72,10 @@ export function measureCase(segments, { turns, hitRate, keepRecent, k, price = D
     aCost += money(baseTokens - incrementTokens, price.cacheRead, price.input) + money(incrementTokens, price.cacheWrite, price.input);
 
     const before = createSession({ prefix: PREFIX, segments: current });
-    const after = fold(before, { keepRecent });
+    const batchFold = foldEvery === 1 || count - lastFoldCount >= foldEvery;
+    const after = batchFold
+      ? fold(before, { keepRecent })
+      : fold(before, { keepRecent: 0, targetIds: foldedIds });
     const foldedStats = stats(after);
     const foldedEntries = after.index.filter(x => x.state === 'folded');
     // A hit-rate fraction of turns is expected to search, with at most k originals
@@ -77,9 +83,11 @@ export function measureCase(segments, { turns, hitRate, keepRecent, k, price = D
     const expectedHits = Math.min(foldedEntries.length, k) * hitRate;
     const averageOriginal = foldedEntries.length ? foldedEntries.reduce((n, x) => n + x.tokens, 0) / foldedEntries.length : 0;
     const unfoldTokens = expectedHits * averageOriginal;
-    const foldHappened = foldedEntries.length > previousFoldedCount;
-    // Replacing an old segment invalidates the suffix after the stable prefix. Charge that
-    // suffix as a write only on the turn where new stubs appear, never on later turns.
+    const foldHappened = foldEvery === 1
+      ? foldedEntries.length > previousFoldedCount
+      : batchFold;
+    // Replacing old segments invalidates the suffix after the stable prefix. Charge that
+    // suffix as a write only on a fold turn, never on later turns.
     const bodyTokens = foldedStats.totalTokens - prefixTokens;
     const foldRewrite = foldHappened ? bodyTokens : 0;
     const bTurnInput = foldedStats.totalTokens + unfoldTokens;
@@ -89,6 +97,10 @@ export function measureCase(segments, { turns, hitRate, keepRecent, k, price = D
       + money((foldHappened ? foldRewrite : incrementTokens) + unfoldTokens, price.cacheWrite, price.input);
     previousCount = count;
     previousFoldedCount = foldedEntries.length;
+    if (batchFold) {
+      lastFoldCount = count;
+      foldedIds = foldedEntries.map(x => x.id);
+    }
   }
   return {
     inputReduction: aInput ? (aInput - bInput) / aInput : 0,
@@ -98,10 +110,11 @@ export function measureCase(segments, { turns, hitRate, keepRecent, k, price = D
 }
 
 function pct(x) { return `${(x * 100).toFixed(1)}%`; }
-export function costReport({ files, synthetic = false, turns = [50, 200, 1000], hitRates = [0.05, 0.2, 0.5], keepRecent = 10, k = 3, priceFile }) {
+export function costReport({ files, synthetic = false, turns = [50, 200, 1000], hitRates = [0.05, 0.2, 0.5], keepRecent = 10, k = 3, foldEvery = 1, priceFile }) {
   turns = positiveInts(turns, 'turns'); hitRates = rates(hitRates);
   if (!Number.isInteger(keepRecent) || keepRecent < 0) throw new Error('keep-recent must be a non-negative integer');
   if (!Number.isInteger(k) || k < 0) throw new Error('k must be a non-negative integer');
+  if (!Number.isInteger(foldEvery) || foldEvery < 1) throw new Error('fold-every must be a positive integer');
   const paths = resolveFiles({ files, synthetic });
   const segments = paths.flatMap(file => {
     if (!fs.existsSync(file)) throw new Error(`file not found: ${file}`);
@@ -110,7 +123,7 @@ export function costReport({ files, synthetic = false, turns = [50, 200, 1000], 
   let price = DEFAULT_PRICE;
   if (priceFile) price = { ...DEFAULT_PRICE, ...JSON.parse(fs.readFileSync(priceFile, 'utf8')) };
   for (const field of ['input', 'cacheRead', 'cacheWrite']) if (!Number.isFinite(Number(price[field])) || Number(price[field]) < 0) throw new Error(`invalid price field: ${field}`);
-  const rows = turns.flatMap(t => hitRates.map(h => ({ turns: t, hitRate: h, ...measureCase(segments, { turns: t, hitRate: h, keepRecent, k, price }) })));
+  const rows = turns.flatMap(t => hitRates.map(h => ({ turns: t, hitRate: h, ...measureCase(segments, { turns: t, hitRate: h, keepRecent, k, foldEvery, price }) })));
   const lines = [
     '# Session fold cost sensitivity (measured calculation model; not an actual bill)', '',
     '## Assumptions', '',
@@ -120,16 +133,17 @@ export function costReport({ files, synthetic = false, turns = [50, 200, 1000], 
     `- Turns: ${turns.join(', ')}`,
     `- Hit rates: ${hitRates.map(pct).join(', ')}`,
     `- keep-recent: ${keepRecent}; k: ${k}`,
+    `- fold-every: ${foldEvery}`,
     '- Tokens: ceil(UTF-8 bytes / 3), not a model-specific tokenizer.',
     '- Baseline A: growing full history; prior content is cache read and increments are cache write.',
     '- Operation B: stable prefix is cache read; folded stubs replace old segments; expected search/unfold originals and fold rewrites are cache write.', '',
     '## Sensitivity table', '',
-    '| Turns | Hit rate | Input token reduction | Input cost reduction | Difference from posted 71.1% |',
-    '|---:|---:|---:|---:|---|',
+    '| Turns | Hit rate | Input token reduction | Input cost reduction | Difference from posted 71.1% | Fold every |',
+    '|---:|---:|---:|---:|---|---:|',
   ];
   for (const row of rows) {
     const relation = row.inputReduction > .711 ? 'higher' : row.inputReduction < .711 ? 'lower' : 'equal';
-    lines.push(`| ${row.turns} | ${pct(row.hitRate)} | ${pct(row.inputReduction)} | ${pct(row.costReduction)} | ${relation} than posted 71.1% because this local deterministic corpus/model has its stated fold, cache, and expected-unfold assumptions. |`);
+    lines.push(`| ${row.turns} | ${pct(row.hitRate)} | ${pct(row.inputReduction)} | ${pct(row.costReduction)} | ${relation} than posted 71.1% because this local deterministic corpus/model has its stated fold, cache, and expected-unfold assumptions. | ${foldEvery} |`);
   }
   return `${lines.join('\n')}\n`;
 }
@@ -148,7 +162,7 @@ export function main(args = process.argv.slice(2)) {
   const o = parse(args), command = o._[0];
   const files = o['--files']?.split(',').filter(Boolean);
   if (command === 'corpus') console.log(JSON.stringify(corpusReport({ files, synthetic: o.synthetic }), null, 2));
-  else if (command === 'cost') process.stdout.write(costReport({ files, synthetic: o.synthetic, turns: (o['--turns'] ?? '50,200,1000').split(','), hitRates: (o['--hit-rates'] ?? '0.05,0.2,0.5').split(','), keepRecent: Number(o['--keep-recent'] ?? 10), k: Number(o['--k'] ?? 3), priceFile: o['--price-file'] }));
+  else if (command === 'cost') process.stdout.write(costReport({ files, synthetic: o.synthetic, turns: (o['--turns'] ?? '50,200,1000').split(','), hitRates: (o['--hit-rates'] ?? '0.05,0.2,0.5').split(','), keepRecent: Number(o['--keep-recent'] ?? 10), k: Number(o['--k'] ?? 3), foldEvery: Number(o['--fold-every'] ?? 1), priceFile: o['--price-file'] }));
   else throw new Error('usage: session-fold-bench.mjs corpus|cost --files <paths>|--synthetic');
 }
 if (isEntry(import.meta.url)) { try { main(); } catch (error) { console.error(error.message); process.exitCode = 1; } }

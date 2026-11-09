@@ -233,7 +233,12 @@ stuck=それ以外で進められなかった。
   );
   if (!report || (typeof report === 'object' && Object.keys(report).length === 0)) return { outcome: timedOut ? 'timeout' : 'no-report', reason: timedOut ? result.status : '結果ファイルなし', ...execution };
   const state = report.state ?? (report.progressed === true ? 'progressed' : report.progressed === false ? 'stuck' : 'stuck');
-  const reason = typeof report.evidence === 'string' ? report.evidence : JSON.stringify(report.evidence, null, 2) || '成果記録なし';
+  let rawReason = typeof report.evidence === 'string' ? report.evidence : JSON.stringify(report.evidence, null, 2) || '成果記録なし';
+  // Guard: deepseek subagent が evidence を toString() で [object Object] として
+  // シリアライズした場合、情報が失われているので代替メッセージに置換する
+  if (rawReason === '[object Object]') rawReason = 'evidence serialization failed (deepseek toString())';
+  if (rawReason === '[object Promise]') rawReason = 'evidence serialization failed (deepseek toString())';
+  const reason = rawReason;
   let outcome = state === 'progressed' && evidenceOk ? 'progressed'
     : state === 'done' && evidenceOk ? 'done'
       : state === 'waiting-human' && evidenceOk && typeof report.askId === 'string' && report.askId.trim() ? 'waiting-human'

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // No LLM calls here; process execution, notification and file timestamps are injectable.
 import fs from 'node:fs/promises';
+import { latestWaitDeadline, waitPrefix } from './session-wait-title.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -180,9 +181,10 @@ export function overdueSkipReason(record, entry, closed, mtimeMs, now, activeMs)
 }
 
 export function skipReason(record, entry, night, closed, mtimeMs, now, activeMs) {
-  if (closed.sessions[record.sessionId]) return 'closed';
+  const deadline = latestWaitDeadline(record.lastAssistantText);
+  if (closed.sessions[record.sessionId] && !deadline) return 'closed';
   if (entry.waitingHuman?.until > now) return '人の判断待ち';
-  const titleSkip = titleSkipReason(record.displayTitle, now);
+  const titleSkip = titleSkipReason(deadline ? waitPrefix(deadline) : record.displayTitle, now);
   if (titleSkip) return titleSkip;
   if (now - mtimeMs <= activeMs || record.sessionId === process.env.CLAUDE_SESSION_ID) return 'active';
   if ((entry.noProgress ?? 0) >= 3) return '3回進捗なし';

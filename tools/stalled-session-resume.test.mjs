@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { run, options, execute, main, resumedParentId, saveJson } from './stalled-session-resume.mjs';
+import { skipReason, run, options, execute, main, resumedParentId, saveJson } from './stalled-session-resume.mjs';
 import { buildClaudeHeadlessArgs } from './auto-session-executor.mjs';
 
 async function fixture(t, count = 5) {
@@ -861,4 +861,12 @@ test('exception in run produces outcome error, notifyKim, and exitCode 3', async
   assert.equal(log.outcome, 'error');
   assert.ok(log.error.includes('disk failure'));
   process.exitCode = 0;
+});
+
+test('closed ledger と古いタイトルより最新待機フッターを優先する', () => {
+  const record = { sessionId: 'reopened', displayTitle: '【閉じて可】案件', lastAssistantText: '次に kim がすること: なし\nこの後の自動進行: 毎時確認\nこのセッション: まだ閉じない（作業中・2026-11-10 18:00 まで待つ）' };
+  const closed = { sessions: { reopened: {} } };
+  assert.equal(skipReason(record, {}, '', closed, 0, new Date(2026, 10, 10, 19).getTime(), 1), '');
+  assert.notEqual(skipReason(record, {}, '', closed, 0, new Date(2026, 10, 10, 17).getTime(), 1), 'closed');
+  assert.equal(skipReason({ ...record, lastAssistantText: '' }, {}, '', closed, 0, Date.now(), 1), 'closed');
 });

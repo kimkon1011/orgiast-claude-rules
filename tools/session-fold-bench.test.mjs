@@ -6,6 +6,16 @@ import os from 'node:os';
 import path from 'node:path';
 
 const QUESTIONS_PATH = path.resolve('tests/fixtures/session-fold/holdout-questions-synthetic-v1.json');
+const JA_FIXTURE_PATH = path.resolve('tests/fixtures/session-fold/synthetic-booth-spec-ja.md');
+const JA_QUESTIONS_PATH = path.resolve('tests/fixtures/session-fold/holdout-questions-synthetic-v2.json');
+
+function whitespaceOnlySearch(session, query, { k }) {
+  const needles = [...new Set(query.normalize('NFKC').toLocaleLowerCase('und').match(/[\p{L}\p{N}]+/gu) ?? [])];
+  return session.index.filter(entry => entry.state === 'folded').map(entry => {
+    const haystack = `${entry.summary} ${session.store[entry.id]}`.normalize('NFKC').toLocaleLowerCase('und');
+    return { id: entry.id, score: needles.reduce((score, term) => score + (haystack.includes(term) ? 1 : 0), 0) };
+  }).filter(hit => hit.score > 0).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, k);
+}
 
 test('corpus reports metadata for at least 30 synthetic segments without body text', () => {
   const report = corpusReport({ synthetic: true });
@@ -99,6 +109,16 @@ test('recall calibration detects broken and oracle search functions', () => {
   });
   assert.match(oracle, /recall@3: 1\.000000/);
   assert.match(oracle, /adoption: OK \(miss rate <= 10%\)/);
+});
+
+test('Japanese fixture recall passes with CJK bi-grams and rejects whitespace-only calibration', () => {
+  const options = { fixture: JA_FIXTURE_PATH, questionsFile: JA_QUESTIONS_PATH, keepRecent: 10, k: [3] };
+  const actual = recallReport(options);
+  assert.match(actual, /questionSet: synthetic-v2/);
+  assert.match(actual, /adoption: OK \(miss rate <= 10%\)/);
+
+  const broken = recallReport({ ...options, searchFn: whitespaceOnlySearch });
+  assert.match(broken, /adoption: NG \(miss rate > 10%\)/);
 });
 
 test('recall errors explicitly for missing files, unknown answers, and small sets', () => {

@@ -89,7 +89,14 @@ export function unfold(session, ids) {
 }
 
 function terms(text) {
-  return text.normalize('NFKC').toLocaleLowerCase('und').match(/[\p{L}\p{N}]+/gu) ?? [];
+  const normalized = text.normalize('NFKC').toLocaleLowerCase('und');
+  const runs = normalized.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー]+|[\p{L}\p{N}]+/gu) ?? [];
+  return runs.flatMap(run => {
+    if (!/^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}ー]+$/u.test(run)) return [run];
+    const chars = [...run];
+    if (chars.length < 2) return chars;
+    return chars.slice(0, -1).map((char, i) => char + chars[i + 1]);
+  });
 }
 
 export function search(session, query, { k } = {}) {

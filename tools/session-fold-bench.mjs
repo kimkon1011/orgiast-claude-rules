@@ -23,9 +23,9 @@ export function splitSegments(text) {
   });
 }
 
-function resolveFiles({ files, synthetic }) {
-  const selected = synthetic ? [SYNTHETIC_PATH] : files;
-  if (!selected?.length) throw new Error('one of --files or --synthetic is required');
+function resolveFiles({ files, fixture, synthetic }) {
+  const selected = synthetic ? [SYNTHETIC_PATH] : fixture ? [fixture] : files;
+  if (!selected?.length) throw new Error('one of --files, --fixture, or --synthetic is required');
   return selected.map(file => path.resolve(file));
 }
 
@@ -148,7 +148,7 @@ export function costReport({ files, synthetic = false, turns = [50, 200, 1000], 
   return `${lines.join('\n')}\n`;
 }
 
-export function recallReport({ files, synthetic = false, questionsFile, keepRecent = 10, k = [3], allowSmall = false, searchFn = search }) {
+export function recallReport({ files, fixture, synthetic = false, questionsFile, keepRecent = 10, k = [3], allowSmall = false, searchFn = search }) {
   if (!questionsFile) throw new Error('--questions is required');
   if (!fs.existsSync(questionsFile)) throw new Error(`questions file not found: ${questionsFile}`);
   if (!Number.isInteger(keepRecent) || keepRecent < 0) throw new Error('keep-recent must be a non-negative integer');
@@ -158,7 +158,7 @@ export function recallReport({ files, synthetic = false, questionsFile, keepRece
   catch (error) { throw new Error(`invalid questions JSON: ${error.message}`); }
   if (!questionSet || typeof questionSet.id !== 'string' || !Array.isArray(questionSet.questions)) throw new Error('invalid questions JSON: id and questions are required');
   if (!allowSmall && questionSet.questions.length < 20) throw new Error('questions must contain at least 20 entries (use --allow-small to override)');
-  const paths = resolveFiles({ files, synthetic });
+  const paths = resolveFiles({ files, fixture, synthetic });
   const segments = paths.flatMap(file => {
     if (!fs.existsSync(file)) throw new Error(`file not found: ${file}`);
     return splitSegments(fs.readFileSync(file, 'utf8'));
@@ -219,7 +219,7 @@ export function main(args = process.argv.slice(2)) {
   const files = o['--files']?.split(',').filter(Boolean);
   if (command === 'corpus') console.log(JSON.stringify(corpusReport({ files, synthetic: o.synthetic }), null, 2));
   else if (command === 'cost') process.stdout.write(costReport({ files, synthetic: o.synthetic, turns: (o['--turns'] ?? '50,200,1000').split(','), hitRates: (o['--hit-rates'] ?? '0.05,0.2,0.5').split(','), keepRecent: Number(o['--keep-recent'] ?? 10), k: Number(o['--k'] ?? 3), foldEvery: Number(o['--fold-every'] ?? 1), priceFile: o['--price-file'] }));
-  else if (command === 'recall') process.stdout.write(recallReport({ files, synthetic: o.synthetic, questionsFile: o['--questions'], keepRecent: Number(o['--keep-recent'] ?? 10), k: (o['--k'] ?? '3').split(','), allowSmall: Boolean(o['--allow-small']) }));
-  else throw new Error('usage: session-fold-bench.mjs corpus|cost|recall --files <paths>|--synthetic');
+  else if (command === 'recall') process.stdout.write(recallReport({ files, fixture: o['--fixture'], synthetic: o.synthetic, questionsFile: o['--questions'], keepRecent: Number(o['--keep-recent'] ?? 10), k: (o['--k'] ?? '3').split(','), allowSmall: Boolean(o['--allow-small']) }));
+  else throw new Error('usage: session-fold-bench.mjs corpus|cost|recall --files <paths>|--fixture <path>|--synthetic');
 }
 if (isEntry(import.meta.url)) { try { main(); } catch (error) { console.error(error.message); process.exitCode = 1; } }

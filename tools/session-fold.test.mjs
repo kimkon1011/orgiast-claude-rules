@@ -87,8 +87,14 @@ test('(f) calibrated checks accept real fold and reject three bad implementation
 
 test('(g) search finds folded synthetic segments and breaks ties by ID', () => {
   const session = fold(createSession({ prefix, segments: fixture }), { keepRecent: 0 });
-  assert.deepEqual(search(session, '青い カウンター', { k: 1 }), [{ id: 'seg-0001', score: 2 }]);
+  assert.deepEqual(search(session, '青い カウンター', { k: 1 }), [{ id: 'seg-0001', score: 5 }]);
   assert.deepEqual(search(session, '白い', { k: 2 }), [{ id: 'seg-0002', score: 1 }, { id: 'seg-0005', score: 1 }]);
+});
+
+test('search uses CJK bi-grams for unspaced Japanese queries', () => {
+  const session = fold(createSession({ prefix, segments: fixture }), { keepRecent: 0 });
+  const hits = search(session, '南壁に設置する大型画面', { k: 3 });
+  assert.ok(hits.some(hit => hit.id === 'seg-0008'), hits);
 });
 
 test('save/load preserves fixed index key order and complete session', () => {

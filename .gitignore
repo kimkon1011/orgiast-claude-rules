@@ -92,6 +92,8 @@ FEEDBACK_KIT_REPORT.md
 # booth-case-study-gen の生成物。サンプル入力のみ追跡する。
 /data/*
 !/data/booth-projects.json
+!/data/booth-specs/
+!/data/booth-specs/*.json
 /docs/case-studies/
 
 # brandcard-print-pdf.mjs が qrcode.min.js を実行時に tools/.cache/ へ落とすキャッシュ先。

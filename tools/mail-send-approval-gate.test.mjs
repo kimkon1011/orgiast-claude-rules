@@ -115,7 +115,7 @@ test('middle-only changes and revoked approval block', () => {
 test('real draft readback is used, not a shell-supplied substitute body', async () => {
   const input = {tool_name:'Bash',tool_input:{command:'node tools/gmail-draft.mjs --send draft123 --body "approved"'},transcript:evidence('approved')};
   let target;
-  assert.equal((await judgeLive(input,{loadDraft:async t => { target=t; return 'approved'; }})).decision,'pass');
+  assert.equal((await judgeLive(input,{loadDraft:async t => { target=t; return 'approved'; }, requireContext:false})).decision,'pass');
   assert.equal(target.draftId,'draft123');
   assert.equal(target.user,'seisaku-team@orgiast.jp');
   assert.equal((await judgeLive(input,{loadDraft:async () => 'changed'})).decision,'block');

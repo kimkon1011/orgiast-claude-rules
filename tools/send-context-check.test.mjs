@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { assertContextApproved, writeContextMarker } from './lib/send-context.mjs';
 import { main } from './send-context-check.mjs';
-import { main as beeperMain } from './beeper-send.mjs';
 
 const tmp = t => { const p=fs.mkdtempSync(path.join(os.tmpdir(),'send-context-')); t.after(()=>fs.rmSync(p,{recursive:true,force:true})); return p; };
 test('回答済み質問を再送する判定はNGでマーカーを書かない', async t => {
@@ -26,6 +27,6 @@ test('OKマーカーかつ最新一致なら許可', async t => {
 });
 test('beeper --dry-run はマーカー無しでも許可', async t => {
   const home=tmp(t), file=path.join(home,'body.txt'); fs.writeFileSync(file,'本文');
-  const old=process.env.ORGIAST_HOME; process.env.ORGIAST_HOME=home; t.after(()=>{if(old===undefined)delete process.env.ORGIAST_HOME;else process.env.ORGIAST_HOME=old});
-  assert.equal(await beeperMain(['--chat','c1','--body-file',file,'--dry-run']),0);
+  const cli=fileURLToPath(new URL('./beeper-send.mjs',import.meta.url));
+  assert.equal(spawnSync(process.execPath,[cli,'--chat','c1','--body-file',file,'--dry-run'],{env:{...process.env,ORGIAST_HOME:home}}).status,0);
 });

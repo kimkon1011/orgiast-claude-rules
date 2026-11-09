@@ -99,7 +99,7 @@ export function draftBody(payload) {
   walk(payload);
   return (plain.length ? plain : html).join('\n');
 }
-export async function judgeLive(input, { loadDraft } = {}) {
+export async function judgeLive(input, { loadDraft, requireContext = true } = {}) {
   try {
     const targets = sendTargets(input);
     for (const t of targets) if (t.draftId) {
@@ -113,7 +113,7 @@ export async function judgeLive(input, { loadDraft } = {}) {
       }
       t.body = await loadDraft(t);
     }
-    return judge(input, { targets, requireContext: !process.env.NODE_TEST_CONTEXT });
+    return judge(input, { targets, requireContext });
   } catch { return block(); }
 }
 if (isEntry(import.meta.url)) {

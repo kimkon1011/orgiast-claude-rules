@@ -1,0 +1,46 @@
+{
+  "completed": false,
+  "summary": "原文の未完了を確認。同題名X-0007の既存資料を監査し、100問CSVと引用率の測定手順を作成・読み戻し検証。実際のAI引用率と対象サイトの現況は外部送信禁止のため未測定。",
+  "audit": {
+    "source_todo": "18. **AIニュース提案 [X-0006]: 6ヶ月AEO 40ポイント実行チェックリスト** — PHASE1で既存可視性監査と100のバイヤーインテントプロンプトテスト、トップ10競合特定。PHASE2でクロール性・robots.txt・スキーマ実装。PHASE3でサービスページを質問中心に書き換えFAQ追加。株式会社オージャストのブース制作サイトでPHASE1の100プロンプトテストから開始し、イベント関連質問でのAI引用率を確認する手順を試す。",
+    "referenced_artifacts": {
+      "ai-visibility/prompts-100.csv": false,
+      "tools/ai-visibility-test.mjs": false,
+      "ai-visibility/results-20261108.csv": false,
+      "ai-visibility/report-20261108.md": false,
+      "ai-visibility/gap-analysis.md": false
+    },
+    "legacy_jsonl": {
+      "records": 15,
+      "brand_mentioned": 7,
+      "has_citation_url": 7,
+      "has_raw_response": 0
+    },
+    "target_urls_from_existing_materials": [
+      "https://www.orgiast.jp/",
+      "https://rebooth.co.jp/"
+    ],
+    "live_target_verified": false,
+    "reason": "外部送信禁止のためサイトへのHTTP照会・検索・LLM APIは未実行",
+    "prompt_count": 100,
+    "unique_prompt_count": 100,
+    "categories": {
+      "branded": 20,
+      "comparison": 20,
+      "cost": 20,
+      "process": 15,
+      "problem": 25
+    },
+    "all_prompts_not_run": true
+  },
+  "verification": {
+    "csv_readback_rows": 100,
+    "unique_ids": 100,
+    "unique_prompts": 100
+  },
+  "artifacts": {
+    "/mnt/c/Users/user/.claude/nightly-repo/outputs/X-0007/resume-20261110/local-audit.json": "69ab3193c0830506de2d97ffcc99ec57753b19bdc689b5c12a6450e40964e190",
+    "/mnt/c/Users/user/.claude/nightly-repo/outputs/X-0007/resume-20261110/measurement-protocol.md": "2591b12e79ef7b6116412369d44e90e235c0e6b3390eacc342aced1f556f2e5b",
+    "/mnt/c/Users/user/.claude/nightly-repo/outputs/X-0007/resume-20261110/prompts-100.csv": "b0b6d4d82521eafed5bd5bbee62765298eb30b27e445c674531e8e567af9811c"
+  }
+}

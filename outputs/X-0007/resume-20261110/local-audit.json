@@ -1,0 +1,32 @@
+{
+  "source_todo": "18. **AIニュース提案 [X-0006]: 6ヶ月AEO 40ポイント実行チェックリスト** — PHASE1で既存可視性監査と100のバイヤーインテントプロンプトテスト、トップ10競合特定。PHASE2でクロール性・robots.txt・スキーマ実装。PHASE3でサービスページを質問中心に書き換えFAQ追加。株式会社オージャストのブース制作サイトでPHASE1の100プロンプトテストから開始し、イベント関連質問でのAI引用率を確認する手順を試す。",
+  "referenced_artifacts": {
+    "ai-visibility/prompts-100.csv": false,
+    "tools/ai-visibility-test.mjs": false,
+    "ai-visibility/results-20261108.csv": false,
+    "ai-visibility/report-20261108.md": false,
+    "ai-visibility/gap-analysis.md": false
+  },
+  "legacy_jsonl": {
+    "records": 15,
+    "brand_mentioned": 7,
+    "has_citation_url": 7,
+    "has_raw_response": 0
+  },
+  "target_urls_from_existing_materials": [
+    "https://www.orgiast.jp/",
+    "https://rebooth.co.jp/"
+  ],
+  "live_target_verified": false,
+  "reason": "外部送信禁止のためサイトへのHTTP照会・検索・LLM APIは未実行",
+  "prompt_count": 100,
+  "unique_prompt_count": 100,
+  "categories": {
+    "branded": 20,
+    "comparison": 20,
+    "cost": 20,
+    "process": 15,
+    "problem": 25
+  },
+  "all_prompts_not_run": true
+}

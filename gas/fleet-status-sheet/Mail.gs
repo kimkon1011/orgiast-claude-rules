@@ -79,13 +79,21 @@ function _fleetMailWrite_(sheet, row, values) {
   SpreadsheetApp.flush();
   if (JSON.stringify(range.getValues()[0].map(_fleetMailCellText_)) !== JSON.stringify(expected)) throw new Error('fleet-mail read-back mismatch');
 }
-function _fleetMailLocked_(action) {
+function _fleetMailLocked_(action, lookupId) {
   const lock = LockService.getScriptLock();
   const alreadyLocked = typeof lock.hasLock === 'function' && lock.hasLock();
   if (!alreadyLocked && !lock.tryLock(20000)) return { ok: false, status: 503, error: 'busy' };
   try {
     const sheet = _fleetMailSheet_();
-    const rows = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, FLEET_MAIL_HEADERS_.length).getValues().map(fleetMailObject) : [];
+    let rows = [];
+    const count = sheet.getLastRow() - 1;
+    if (count > 0 && lookupId) {
+      // Read IDs only, then fetch one row; historical bodies can be very large.
+      const index = sheet.getRange(2, 1, count, 1).getValues().findIndex(function(row) { return row[0] === lookupId; });
+      if (index >= 0) rows = [fleetMailObject(sheet.getRange(index + 2, 1, 1, FLEET_MAIL_HEADERS_.length).getValues()[0])];
+    } else if (count > 0) {
+      rows = sheet.getRange(2, 1, count, FLEET_MAIL_HEADERS_.length).getValues().map(fleetMailObject);
+    }
     return action(sheet, rows, Date.now());
   } finally { if (!alreadyLocked) lock.releaseLock(); }
 }
@@ -234,7 +242,7 @@ function getFleetMail(payload) {
   fleetMailId(payload.id);
   return _fleetMailLocked_(function(sheet, rows) {
     return { ok: true, mail: rows.find(function(mail) { return mail.id === payload.id; }) || null };
-  });
+  }, payload.id);
 }
 
 const FLEET_MAIL_TERMINAL_STATUSES_ = Object.freeze(['done', 'failed', 'expired']);

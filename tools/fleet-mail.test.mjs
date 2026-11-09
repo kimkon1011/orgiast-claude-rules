@@ -360,12 +360,12 @@ test('--sent-status reports missing mail as exit 4', async t => {
   assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 4);
   assert.ok(f.errors.some(e => e.includes('見つかりません')));
 });
-// 2026-11-04: hub 不達時に親の 30 秒制限を超えて固まらないよう、読取は 10 秒打ち切り・busy 再試行なし。
-test('--sent-status uses a bounded timeout and no busy retries', async t => {
+// GAS lock wait alone may exceed 10 seconds.
+test('--sent-status uses the normal transport timeout and two retries', async t => {
   const f = fixture(t);
   f.deps.request = async (kind, p, timeoutMs, opts) => { f.calls.push({ kind, p, timeoutMs, opts }); return { mail: { id: p.id, status: 'new' } }; };
   assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 0);
-  assert.deepEqual(f.calls, [{ kind: 'mail-get', p: { id: 'mail-1' }, timeoutMs: 10_000, opts: { retries: 0 } }]);
+  assert.deepEqual(f.calls, [{ kind: 'mail-get', p: { id: 'mail-1' }, timeoutMs: 60_000, opts: { retries: 2 } }]);
 });
 test('--sent-status exits 3 when the hub is unreachable instead of hanging', async t => {
   const f = fixture(t);
@@ -1089,7 +1089,52 @@ test('--sent-status は別メールへの返信しかなく hub がタイムア�
     throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
   };
   assert.equal(await main(['--sent-status', 'mail-original'], f.deps), 3);
-  assert.deepEqual(f.calls, [{ kind: 'mail-get', payload: { id: 'mail-original' }, timeoutMs: 10_000, opts: { retries: 0 } }]);
+  assert.deepEqual(f.calls, [{ kind: 'mail-get', payload: { id: 'mail-original' }, timeoutMs: 60_000, opts: { retries: 2 } }]);
   assert.deepEqual(f.output, []);
   assert.match(f.errors[0], /hub不達: The operation was aborted due to timeout/);
+});
+
+test('mail-get retries timeouts twice with exponential backoff and then succeeds', async () => {
+  const delays = []; let calls = 0;
+  const request = createClient({ url: 'https://example.invalid', token: 'test', sleepImpl: async ms => delays.push(ms),
+    fetchImpl: async () => { if (++calls < 3) throw new DOMException('timeout', 'TimeoutError'); return { ok: true, json: async () => ({ ok: true, mail: { id: 'mail-1', status: 'new' } }) }; } });
+  assert.equal((await request('mail-get', { id: 'mail-1' })).mail.status, 'new');
+  assert.equal(calls, 3); assert.deepEqual(delays, [1000, 2000]);
+});
+test('mail-get stops after two timeout retries; sends never retry transport failures', async () => {
+  for (const kind of ['mail-get', 'mail-send']) {
+    let calls = 0; const delays = [];
+    const request = createClient({ url: 'https://example.invalid', token: 'test', sleepImpl: async ms => delays.push(ms),
+      fetchImpl: async () => { calls++; throw new DOMException('timeout', 'TimeoutError'); } });
+    await assert.rejects(request(kind, { id: 'mail-1' }), { name: 'TimeoutError' });
+    assert.equal(calls, kind === 'mail-get' ? 3 : 1);
+    assert.deepEqual(delays, kind === 'mail-get' ? [1000, 2000] : []);
+  }
+});
+test('--sent-status saves successful lookup and displays dated cache on failure with exit 3', async t => {
+  const f = fixture(t); f.deps.now = () => Date.parse('2026-11-09T01:02:03Z');
+  f.deps.request = async () => ({ mail: { id: 'mail-1', status: 'seen', seenBy: 'other-PC' } });
+  assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 0);
+  f.output.length = 0;
+  f.deps.request = async () => { throw new DOMException('timeout', 'TimeoutError'); };
+  assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 3);
+  assert.match(f.output.join('\n'), /（キャッシュ・2026-11-09T01:02:03.000Z）/);
+  assert.match(f.output.join('\n'), /status: seen/);
+  assert.match(f.output.join('\n'), /seenBy: other-PC/);
+});
+
+test('--sent-status does not present lookup-failure metadata as a cached mail', async t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.dir, 'fleet-mail-sent-status.json'), JSON.stringify({ 'mail-1': { checkedAt: Date.now(), lookupFailures: 3 } }));
+  f.deps.request = async () => { throw new DOMException('timeout', 'TimeoutError'); };
+  assert.equal(await main(['--sent-status', 'mail-1'], f.deps), 3);
+  assert.deepEqual(f.output, []);
+});
+
+test('mail-get retries a timeout while reading the response body', async () => {
+  let calls = 0; const delays = [];
+  const request = createClient({ url: 'https://example.invalid', token: 'test', sleepImpl: async ms => delays.push(ms),
+    fetchImpl: async () => ({ ok: true, json: async () => { if (++calls === 1) throw new DOMException('timeout', 'AbortError'); return { ok: true, mail: { id: 'mail-1', status: 'new' } }; } }) });
+  assert.equal((await request('mail-get', { id: 'mail-1' })).mail.status, 'new');
+  assert.equal(calls, 2); assert.deepEqual(delays, [1000]);
 });

@@ -614,7 +614,7 @@ export async function refreshSentStatus({ home, request, stderr = console.error 
     };
     try {
       const response = checked(await request('mail-get', { id }, Math.min(3000, deadline - Date.now())));
-      if (response.mail) cache[id] = { ...response.mail, checkedAt: Date.now() };
+      if (response.mail) cache[id] = { ...response.mail, checkedAt: Date.now(), fetchedAt: Date.now() };
       else failed();
     } catch { failed(); }
   }
@@ -744,16 +744,24 @@ export function createClient({ url, token, fetchImpl = fetch, sleepImpl = sleep 
   return async (kind, payload, timeoutMs = 60_000, opts = {}) => {
     const retries = opts.retries ?? (kind === 'mail-send' ? COMMAND_LOCK_RETRIES : 2);
     for (let attempt = 0; attempt <= retries; attempt++) {
-      const response = await fetchImpl(url, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, redirect: 'follow',
-        body: JSON.stringify({ ...payload, kind, token }), signal: AbortSignal.timeout(Math.max(1, Math.ceil(timeoutMs)))
-      });
-      if (!response.ok && response.status !== 503) throw new Error(`fleet-mail HTTP ${response.status}`);
-      let result;
-      try { result = await response.json(); }
-      catch (error) {
-        if (!response.ok) throw new Error(`fleet-mail HTTP ${response.status}`);
-        throw error;
+      let response, result;
+      try {
+        response = await fetchImpl(url, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, redirect: 'follow',
+          body: JSON.stringify({ ...payload, kind, token }), signal: AbortSignal.timeout(Math.max(1, Math.ceil(timeoutMs)))
+        });
+        if (!response.ok && response.status !== 503) throw new Error(`fleet-mail HTTP ${response.status}`);
+        try { result = await response.json(); }
+        catch (error) {
+          if (!response.ok) throw new Error(`fleet-mail HTTP ${response.status}`);
+          throw error;
+        }
+      } catch (error) {
+        // Retry only the explicit read-only lookup; mutations may have succeeded remotely.
+        const transient = ['TimeoutError', 'AbortError'].includes(error.name) || error instanceof TypeError;
+        if (kind !== 'mail-get' || !transient || attempt === retries) throw error;
+        await sleepImpl(1_000 * 2 ** attempt);
+        continue;
       }
       if (result?.ok === false && result.error === 'busy') {
         if (attempt === retries) throw Object.assign(new Error('fleet-mail: busy'), { code: 'SERVER_BUSY' });
@@ -1322,7 +1330,8 @@ async function runMain(argv, deps) {
   if (!configured && !options['--dry-run'] && !options['--send'] && !options['--sent-status']) { err('fleet-mail: fleet-sheet.env 未設定のためスキップ'); return 0; }
   if (options['--sent-status']) {
     // 読み取りのみ: 返信が相手の受信タスクに拾われたか（deliveredAt）と返信済みか（resultAt）を確認する。
-    // 読み取りは10秒で打ち切り、busy再試行もしない。hub不達でも親の呼出制限（例: auto-progress check 30秒）を超えないようにする。
+    // GAS のロック待ちは最大20秒。通常の transport と同じ60秒を確保する。
+    // 呼出側も最大183秒（60秒×3回＋バックオフ3秒）を許容する必要がある。
     const id = options['--sent-status'];
     // 返信は元メールとは別便。既読・完了分も含め、hub より先にローカルで確認する。
     const replies = readInbox(home, { unreadOnly: false }).filter(mail => mail.replyTo === id);
@@ -1336,12 +1345,27 @@ async function runMain(argv, deps) {
       out(replies.map(mail => [`reply: ${mail.id}`, `replyFrom: ${mail.from || '(なし)'}`, `replyCreatedAt: ${mail.createdAt || '(なし)'}`, `replyBody:\n${redactSecrets(mail.body || '')}`].join('\n')).join('\n'));
       return 0;
     }
+    const statusFile = path.join(dir, 'fleet-mail-sent-status.json');
+    const showStatus = mail => out([`id: ${mail.id || id}`, ...['to', 'status', 'createdAt', 'expiresAt', 'deliveredAt', 'deliveredBy', 'seenAt', 'seenBy', 'resultAt', 'ackAt', 'failedAt', 'failReason'].map(key => `${key}: ${redactSecrets(String(mail[key] || '(なし)'))}`)].join('\n'));
     let result;
-    try { result = await request('mail-get', { id }, 10_000, { retries: 0 }); }
-    catch (error) { err(`fleet-mail: 状態を取得できません（hub不達: ${error.message}）`); return 3; }
+    try { result = await request('mail-get', { id }, 60_000, { retries: 2 }); }
+    catch (error) {
+      err(`fleet-mail: 状態を取得できません（hub不達: ${error.message}）`);
+      const cached = readJson(statusFile, {})[id];
+      if (cached?.status) {
+        const timestamp = cached.fetchedAt || cached.checkedAt;
+        const date = new Date(timestamp);
+        out(`（キャッシュ・${timestamp && Number.isFinite(date.getTime()) ? date.toISOString() : '取得時刻不明'}）`);
+        showStatus(cached);
+      }
+      return 3;
+    }
     const mail = result?.mail;
     if (!mail) { err(`fleet-mail: ${id} はサーバーに見つかりません`); return 4; }
-    out([`id: ${mail.id}`, ...['to', 'status', 'createdAt', 'expiresAt', 'deliveredAt', 'deliveredBy', 'seenAt', 'seenBy', 'resultAt', 'ackAt', 'failedAt', 'failReason'].map(key => `${key}: ${mail[key] || '(なし)'}`)].join('\n'));
+    const cache = readJson(statusFile, {});
+    cache[id] = { ...mail, checkedAt: now(), fetchedAt: now() };
+    writeJson(statusFile, cache);
+    showStatus(mail);
     return 0;
   }
   if (options['--answer']) {

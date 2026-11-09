@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseArgs, buildMessages, loadSecrets, resolveGroup, assertSendableText, strToUUID } from './line-group-send.mjs';
+import { parseArgs, buildMessages, loadSecrets, resolveGroup, assertSendableText, strToUUID, normalizeGroupName } from './line-group-send.mjs';
 
 test('assertSendableText: 文字化けとプレースホルダ残りは送らない', () => {
   assert.doesNotThrow(() => assertSendableText('皆さん、お疲れさまです。'));
@@ -59,4 +59,43 @@ test('resolveGroup: groupId はそのまま、名前は Supabase 無しならエ
   const id = 'C812a1d8216456feca9043b9f8d3bd35d';
   assert.equal(await resolveGroup({}, id), id);
   await assert.rejects(() => resolveGroup({}, '株式会社ラハイナ'), /SUPABASE_URL/);
+});
+
+test('resolveGroup: ×/✕ と空白の表記ゆれを正規化して実名に解決する', async (t) => {
+  const originalFetch = globalThis.fetch;
+  const originalError = console.error;
+  const urls = [];
+  const errors = [];
+  t.after(() => { globalThis.fetch = originalFetch; console.error = originalError; });
+  console.error = (message) => errors.push(message);
+  globalThis.fetch = async (url) => {
+    urls.push(url);
+    return { json: async () => urls.length === 1 ? [] : [
+      { external_thread_id: 'C123', subject: 'LINE: 山之内さん✕オージャスト' },
+      { external_thread_id: 'C123', subject: 'LINE: 山之内さん✕オージャスト' },
+    ] };
+  };
+
+  assert.equal(normalizeGroupName('山之内 さん × オージャスト'), normalizeGroupName('山之内さん✕オージャスト'));
+  assert.equal(await resolveGroup({ SUPABASE_URL: 'https://example.test', SUPABASE_SERVICE_ROLE_KEY: 'key' }, '山之内 さん × オージャスト'), 'C123');
+  assert.match(urls[0], /subject=eq\./);
+  assert.match(urls[1], /limit=500/);
+  assert.deepEqual(errors, ['グループ名を『山之内さん✕オージャスト』に解決しました']);
+});
+
+test('resolveGroup: 見つからない場合は部分一致候補を最大5件提示する', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let calls = 0;
+  globalThis.fetch = async () => ({ json: async () => ++calls === 1 ? [] :
+    Array.from({ length: 7 }, (_, i) => ({ external_thread_id: `C${i}`, subject: `LINE: 山之内さん✕候補${i + 1}` })) });
+
+  await assert.rejects(
+    () => resolveGroup({ SUPABASE_URL: 'https://example.test', SUPABASE_SERVICE_ROLE_KEY: 'key' }, '山之内さん'),
+    (error) => {
+      assert.match(error.message, /もしかして: 山之内さん✕候補1、山之内さん✕候補2、山之内さん✕候補3、山之内さん✕候補4、山之内さん✕候補5/);
+      assert.doesNotMatch(error.message, /候補6/);
+      return true;
+    },
+  );
 });

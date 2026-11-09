@@ -135,7 +135,7 @@ PR は作った席が `node tools/pr-land.mjs --title "<題>" --body-file <本�
 
 **🔴 メールの送信・下書きはすべて seisaku-team@orgiast.jp。送信指示時は重複・矛盾照会**
 **🔴 メールは送信前に本文全文を提示し明示承認後のみ送る。多数宛は1社ずつ YES を得る。gmail-draft.mjs --send の自動チェック（スレッド全体の合意×見積明細：金額・数量・人件費・納品形態・日程等）を通し、block は修正する。生の Gmail API 送信は禁止。送信後は本文全文・添付の中身・送信日時/元/先/件名をチャットに表示する。**
-**🔴 社外・社内を問わず人へ送る前に、その宛先（スレッド・グループ・チャンネル）のこれまでのやり取りを自社送信分も含めて読み、聞き直し・未回答・事実の食い違い・重複がないかを send-context-check で確かめる。結果を承認依頼の全文と一緒に kim に見せる（2026-11-10 C0039 事故）。**
+**🔴 送信前、自社分も宛先全履歴を読み、聞き直し/未回答/矛盾・重複をsend-context-checkで確認結果を承認全文で提示（2026-11-10 C0039 事故）。**
 多数宛は `node tools/mail-bulk-approve.mjs --input <JSON> --project-dir <新規clasp管理dir>` で承認シートを作り、初回の setupOnce 設定後、kim が1社ずつ「送信」にチェックして送る（本文確認＋YES承認、二重送信防止）。
 2026-10-25 kim: 全アカウント・全PC共通。2026-10-28 nishi: 送信も含めて統一する。社外宛のメールは、Claude が作るものも人が送るものも、すべて seisaku-team@orgiast.jp 名義で送る（kim@・nishi@ など個人アカウントからは送らない）。GAS・アプリの自動送信メールを新しく作る時も、送信元は seisaku-team@ にする。SA 鍵（sheets-sa.json）の無い PC で gmail-draft.mjs が使えない時は、Chrome の seisaku-team@ プロファイルに作成画面を開く（`pwsh -NoProfile -File ~/.claude/open-url-as.ps1 -Account seisaku-team@orgiast.jp -Url "https://mail.google.com/mail/?authuser=seisaku-team%40orgiast.jp&view=cm&fs=1&to=…&su=…&body=…"`）。個人アカウントの作成画面リンクを渡して代わりに送らせない。Gmail MCP の create_draft／update_draft／send_message／reply／forward は個人アカウント名義になるので使わない（mail-draft-account-gate が止める）。作成 `node tools/gmail-draft.mjs --to … --subject … --body-file … --json`、返信は `--thread-id` `--in-reply-to` を付ける、読み戻し `node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query "in:drafts …"`、送信 `node tools/gmail-draft.mjs --send <draftId> --json`。重複照会（in:sent）も seisaku-team@ 側で行う。下書きのリンクは「seisaku-team@orgiast.jp で開く」と併記する。社内宛の新規作成・返信は従来どおり Discord。既存メールの社内宛転送だけは上記の専用経路で可。送信後は同アカウントの送信済みを読み戻す。
 - 鍵の無い席も、既存の enroll 認証で Gmail・Drive を利用する。`gmail-search.mjs` / `gmail-draft.mjs` / `drive-read.mjs` / `drive-upload.mjs` はサーバ経由へ自動切替する。SA鍵・Googleトークンは配らず、制作チーム名義に固定する。LINE共有履歴は `node tools/line-channel.mjs --history`、公式連携botの送信は同CLIの `--to <名前またはID> --body-file <本文> --send`。手動の接続や送信を頼む前にこの経路を実行する。詳細は `docs/w008-channel-parity.md`。
@@ -172,7 +172,7 @@ PR は作った席が `node tools/pr-land.mjs --title "<題>" --body-file <本�
 
 **🔴 ラベル（B案・①・案A・選択肢2・前回の案・PR番号だけ等）で指さず、同じ文に中身を書く。**
 
-**🔴 最後の1通に【最終まとめ】（①報告 ②kim確認事項の全文 ③kimがやること）を集約し、途中を参照させない。③のファイルは Drive URL を同じ行に書き、書き直しで経緯を繰り返さない（2026-10-30 kim）。**
+**🔴 kim が読むのは「本当に最後のメッセージ」（Stop ゲートの書き直しが終わった最後の1通）だけ。そこに【最終まとめ】（①報告 ②kim の確認事項＝全文 ③kim がやること）を全部載せ、途中に置いて遡らせない。途中のメッセージを参照させない。③で使うファイルは Drive の URL を同じ行に毎回書く。書き直しでは経緯を繰り返さない（2026-10-30 kim 厳命・全PC全アカウント）。**
 
 **🔴 応答末尾は必ず3行「次に kim がすること／この後の自動進行／このセッション」。完了結論は1〜3行、検証表と必要な確認全文を【最終まとめ】にそろえ、その直後を3行フッターにする。承認ブロック【kim 確認用の全文】は最後の節に置き、③・手間監査・恒久策はその前に書く。**
 1通で済む短い応答では見出し不要だが、内容は同じく自己完結させる。

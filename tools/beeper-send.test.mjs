@@ -400,6 +400,8 @@ test('11. 文脈変化なし: 相手の古いメッセージのみ → 従来通
   const { receiptId } = setupQueue(home, queueID);
   const bodyFile = path.join(home, 'body.txt');
   fs.writeFileSync(bodyFile, 'はい、承知しました', 'utf8');
+  const contextAt = new Date(Date.now()-60000).toISOString();
+  writeContextMarker({ channel:'beeper', target:'!chat1:localhost', text:'はい、承知しました', latest:{id:'old-msg',at:contextAt}, reason:'OK', home });
 
   let sendCount = 0;
   let sent = false;

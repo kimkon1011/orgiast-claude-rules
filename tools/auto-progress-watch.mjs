@@ -345,7 +345,7 @@ export async function resumeSession(row, { timeoutMs = 20 * 60000, home = os.hom
     : `以前このセッションで宣言した「この後の自動進行」が止まっています。宣言: 「${row.promise}」。`;
   const prompt = `${promptLead}${row.kimAnswer ? `\nkim の返事: 「${row.kimAnswer}」。これを前提に続きを進めてください。` : ''}${reason === 'check-overdue' ? `\n期限超過の最終確認です。確認出力全文:\n${row.checkText || ''}\n確認エラー:\n${row.checkStderr || ''}` : ''}${row.nextClaude ? `\nやること: ${row.nextClaude}` : ''}\n元の会話は ${row.transcriptPath} にあります。${apiErrorResume ? '依頼を完了まで進めてください。' : '宣言の最終成果まで進めてください。'}止まる前に、取り消せる作業（調査・資料作成・下書き作成・比較表・社内向け準備）は全部先に済ませてください。needs_user で止まってよいのは、支払い・社外への送信・削除・本人の同意・本人にしかできない物理操作が残ったときだけです。evidence には先に済ませた作業と成果物を書いてください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"先に済ませた作業と成果物パス・検証結果、残った操作と進めない理由","artifact":"成果物パス（任意）","nextKim":"本人だけができる具体的な判断・操作。返信待ちや自動調査なら空文字"}`;
   const rateLimited = apiErrorResume && /rate.?limit|usage.?credits?|429/i.test([row.error, row.apiError, row.apiErrorStatus].join(' '));
-  const runOptions = { resumeSessionId: row.sessionId, ...(rateLimited ? { model: process.env.AUTO_PROGRESS_RESUME_MODEL || 'opus' } : {}) };
+  const runOptions = { resumeSessionId: row.sessionId, headlessJob: `auto-progress:${reason || 'resume'}`, ...(rateLimited ? { model: process.env.AUTO_PROGRESS_RESUME_MODEL || 'opus' } : {}) };
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, row.cwd, row.cwd, timeoutMs, runOptions);
   if (result.status !== 'success') {
     const tail = String(result.stderr ?? '').split(/\r?\n/).filter(line => line.trim()).at(-1) || '';

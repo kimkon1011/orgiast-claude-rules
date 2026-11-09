@@ -6,6 +6,7 @@ import { isEntry } from './is-entry.mjs';
 import { ledgerFile, readLedger, writeLedger, latestOpenPromises, applyPromise } from './auto-progress-ledger.mjs';
 import { executeCheck, preflightCheck, sessionStateReference, MAX_CHECK_TIMEOUT_MS, isTimeOnlyCheck } from './auto-progress-check.mjs';
 import { resolveOwner } from './notify-owner.mjs';
+import { hasReferencedApproval } from './lib/send-approval.mjs';
 // 外部の成果を読まず、時計と定数だけで決まる典型的な判定を拒否する。
 export { isTimeOnlyCheck } from './auto-progress-check.mjs';
 export function addCheck({ session, check, startWhen, deadline, label, nextClaude, askFile, doneFile, timeout, cwd = process.cwd(), home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), probe, allowMet = false }) {
@@ -29,6 +30,10 @@ export function addCheck({ session, check, startWhen, deadline, label, nextClaud
   const file = ledgerFile(home), rows = readLedger(file);
   const old = latestOpenPromises(rows).find(row => row.sessionId === session)
     || rows.filter(row => row.sessionId === session).sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts))[0];
+  const promisedWork = [nextClaude, old?.promise, label].filter(Boolean).join('\n');
+  if (/(?:送信|送る|送って|send)/iu.test(promisedWork) && !hasReferencedApproval(promisedWork, { home })) {
+    throw new Error('auto-progress に社外送信は登録できません。下書き・kim-inbox の承認待ちまでにし、送信する場合は send-approval:<本文sha256> と有効な承認マーカーを付けてください');
+  }
   // A new revision keeps prior results auditable and resets notification state.
   const row = { ts: new Date(now).toISOString(), pc: old?.pc || os.hostname(), user: old?.user || os.userInfo().username,
     owner: old?.owner || resolveOwner({ home }), sessionId: session, cwd: old?.cwd || cwd, transcriptPath: old?.transcriptPath || '',

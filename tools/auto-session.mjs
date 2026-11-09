@@ -783,7 +783,7 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
         : buildClaudeHeadlessArgs({ repoCwd, historyCwd, resumeSessionId: runOptions.resumeSessionId, ...(runOptions.model ? { model: runOptions.model } : {}) }), { detached: process.platform !== 'win32', cwd: historyCwd,
         // cheap-code 側でも浄化するが、claude フォールバック(監督セッション)はここで
         // デスクトップ由来の CLAUDECODE / CLAUDE_CODE_* / MCP_* を外しておく。
-        env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: codex ? 'auto-session:codex-do' : cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude' }, stdio: [cheap || codex ? 'ignore' : 'pipe', 'pipe', 'pipe'], windowsHide: true }); }
+        env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: runOptions.headlessJob || (codex ? 'auto-session:codex-do' : cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude') }, stdio: [cheap || codex ? 'ignore' : 'pipe', 'pipe', 'pipe'], windowsHide: true }); }
       catch (error) {
         if (codex) {
           const reason = `codex-do launch failed: ${error?.message ?? error}`;

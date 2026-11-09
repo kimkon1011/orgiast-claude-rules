@@ -1,4 +1,5 @@
 {
+  "digestLeader": "作業用011",
   "_note": "Discordラベル → シートD列表記 / hostname / 担当者 の対応表。fleet-liveness.mjs が同一PCの二重計上を防ぐために使う。証拠のあるものだけを書く（推測でマージすると他PCのシート行を奪う）。証拠 = ①報告本文の `🖥 hostname=…` ②ラベル名がシートD列と一致 ③申告日と同日のラベル初登場 ④kim の明示回答。aliases は同じPCを指す別表記（1台が手入力行と機械書き込み行に分かれているため）。",
   "_codexAccountDefault": "seisaku-team@orgiast.jp",
   "_codexAccountNote": "Codex(ChatGPT)は担当者ごとに分担（kim 2026-10-12 最終決定）: kim@=kim-PC(Pro)、nishi@=nishi-PC・kimko-PC、cr@=cr-PC・w018-PC（各自で有料プラン契約）、未指定の作業用999・カフェ用015 は _codexAccountDefault=seisaku-team@。Auto top-up はオフ。account は Claude の担当席で別物。",

@@ -111,7 +111,7 @@ nishi@・cr@・seisaku-team@・Genba の席も user=kim（2026-10-28 kim）。ki
 
 **🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PR は作った席が自分で着地させる。pr-land.mjs --title "<題>" --body-file <本文> でbaseへpushし着地させる（通常はautomerge、安全弁パスはCI合格後pr-merge、workflow変更は停止）。権限・鍵・マージを kim-PC に頼まない。不足時は `node tools/access-doctor.mjs --fix`。内部Gmail下書き禁止。**
 
-**🔴 kim 宛 Discord DM は全廃・例外なし（緊急を含む・全PC全アカウント）。kim-inbox（~/.claude/kim-inbox、node tools/kim-inbox.mjs）へ積みセッションで回収。ask は --answer まで毎プロンプト再提示、info は伝えたら --seen。クローズを止めず台帳を次セッションへ引き継ぐ。Discord MCP 直接送信はゲートが拒否し、旧 config/kim-discord-allowlist.json のカテゴリも廃止。詳細 docs/kim-inbox.md。**
+**🔴 kim 宛の進捗の届け方は docs/kim-progress-channel.md を正本とし、毎朝 08:40 の 1 通統合まとめ（Discord DM + Drive Doc）＋ 1 画面の inbox 表示で届ける。席ご別の別送や無断の経路変更は禁止。**
 送れなければチャットに完成形を表示。
 **🔴 社内ツールが Drive に作成・コピーするファイルには kim@orgiast.jp の編集権限を必ず付け、読み戻して確認する。失敗を握りつぶさない。作成 hook と毎日05:50のスイープで補完する。巡回は直近7日・共有制作アカウントと fleet の自動作成識別済みファイルだけを対象にし、社員個人の私物には付与しない。**
 

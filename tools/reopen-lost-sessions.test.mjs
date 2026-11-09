@@ -503,7 +503,7 @@ test('reopenLost: ウィンドウ無し＋lastActiveWindow.workspaceIdentifier �
   assert.equal(result.reopened.length, 1);
   // ウィンドウ無し＋workspaceIdentifier → ワークスペースを開く
   assert.equal(result.reopened[0].openedWith, 'workspace');
-  assert.equal(result.reopened[0].target, path.resolve(wsFile));
+  assert.equal(result.reopened[0].target, uriToPath(`file:///${wsFile.replace(/\\/g, '/')}`));
   // code <cwd> ではなく code <workspace> が呼ばれる
   assert.ok(psCalls[0].includes(wsFile), `should open workspace file: ${psCalls[0]}`);
   assert.ok(!psCalls[0].includes(wsSubDir), `should not open cwd directly: ${psCalls[0]}`);

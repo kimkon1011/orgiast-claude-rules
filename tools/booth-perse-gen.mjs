@@ -65,7 +65,7 @@ export function heightLightClause(maxHeight = DEFAULT_MAX_HEIGHT) {
 
 MANDATORY HUMAN SCALE: show multiple people about 1.7 m tall in the foreground as explicit scale references. The highest point of the booth (top edge of any truss or upper logo sign) must be only about twice a person's height (${maxHeight} m) and never higher. The clear space from the people's heads to the ceiling truss should be about one person's height.
 
-MANDATORY PROPORTIONS: the booth footprint is 6 m wide by 6 m deep. Its 6 m width is about 1.7 times its ${maxHeight} m height. From the front, the overall silhouette must look distinctly wider than tall, never vertically elongated.
+MANDATORY PROPORTIONS: use the exact booth footprint dimensions stated in the brief. From the front, the overall silhouette must look distinctly wider than tall, never vertically elongated. Do not replace a wide multi-bay footprint with a square booth.
 
 MANDATORY HALL SCALE: the exhibition hall ceiling is more than 10 m high and must appear far above the booth. Adjacent exhibition booths are only about 2.7-3.6 m high, similar in height to this booth. Preserve a large visible vertical gap between every booth and the hall ceiling.`;
 }

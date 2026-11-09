@@ -128,6 +128,10 @@ export function titleSkipReason(displayTitle, now) {
   const wait = waitDeadline(displayTitle, now);
   return wait && now < wait.at ? '待機期限前' : '';
 }
+// overdue の「処理済み」判定は progressed / no-progress だけ。
+// error / timeout / interrupted / その他は再試行対象（30分バックオフ、同一期限で最大3回）。
+// interrupted は起動中ロックがない古いもの（30分超）だけ再試行対象にする。
+const OVERDUE_SUCCESS_OUTCOMES = new Set(['progressed', 'no-progress']);
 export function overdueSkipReason(record, entry, closed, mtimeMs, now, activeMs) {
   if (entry.waitingHuman?.until > now) return '人の判断待ち';
   const common = skipReason(record, {}, '', closed, mtimeMs, now, activeMs);
@@ -135,9 +139,14 @@ export function overdueSkipReason(record, entry, closed, mtimeMs, now, activeMs)
   const wait = waitDeadline(record.displayTitle, now);
   if (!wait || wait.at > now) return '期限切れ待機ではない';
   const attempts = entry.attempts ?? [];
-  if (attempts.some(a => a.outcome !== 'error')) return '同一期限処理済み';
-  if (attempts.length >= 3) return '同一期限3回エラー';
-  if (attempts.length && now - Date.parse(attempts.at(-1).endedAt ?? attempts.at(-1).startedAt) < 30 * 60000) return 'エラー後30分待機';
+  if (attempts.some(a => OVERDUE_SUCCESS_OUTCOMES.has(a.outcome))) return '同一期限処理済み';
+  if (attempts.length >= 3 && attempts.every(a => !OVERDUE_SUCCESS_OUTCOMES.has(a.outcome))) return '同一期限3回エラー';
+  if (attempts.length) {
+    const last = attempts.at(-1);
+    const elapsed = now - Date.parse(last.endedAt ?? last.startedAt);
+    if (elapsed < 30 * 60000) return 'エラー後30分待機';
+    // interrupted が30分以上経過していれば起動中ロックは切れているとみなし再試行対象
+  }
   return '';
 }
 
@@ -365,6 +374,14 @@ export async function run(config = options(), io = {}) {
             if (result.outcome === 'error') state.errors += 1;
             else if (result.outcome !== 'timeout') state.errors = 0;
             state.aborted ||= state.errors >= 3;
+          }
+          // overdue で同一期限3回失敗したら kim-inbox に info を1回だけ積む
+          // 今回の attempt が成功扱い（progressed/no-progress）の場合は通知しない
+          if (overdue && entry.attempts.length >= 3 && !entry.notified3Error && !OVERDUE_SUCCESS_OUTCOMES.has(attempt.outcome)) {
+            entry.notified3Error = true;
+            const overdueMsg = `【期限切れ再開 3回失敗】${record.displayTitle} (${record.sessionId})\n期限: ${wait?.label || ''}\n最終 executorAttempts: ${JSON.stringify(attempt.executorAttempts ?? [])}\n最終 outcome: ${attempt.outcome}\n最終 reason: ${attempt.reason || ''}`;
+            try { await (io.notify ?? notifyKim)(overdueMsg, { home }); }
+            catch { /* 通知失敗は再開に影響させない */ }
           }
           results.push({ title: record.displayTitle, sessionId: record.sessionId, ...attempt });
           await save(ledger);

@@ -560,7 +560,7 @@ test('report parse failure keeps the actual executor', async () => {
   });
   assert.equal(result.outcome, 'error'); assert.equal(result.executor, 'cheap-code:deepseek');
 });
-test('nightly abort and retired budget do not prevent overdue; interrupted attempt is not replayed', async t => {
+test('nightly abort and retired budget do not prevent overdue; old interrupted attempt is retried', async t => {
   const f = await fixture(t, 1);
   f.records[0].displayTitle = '【09/23/12:00まで】Task';
   await fs.mkdir(path.dirname(f.file), { recursive: true });
@@ -569,7 +569,146 @@ test('nightly abort and retired budget do not prevent overdue; interrupted attem
   await run(options(['--overdue'], {}), f.io);
   const ledger = await f.ledger();
   assert.equal(f.calls(), 1); assert.deepEqual(ledger.nights, nights);
-  Object.values(ledger.overdue)[0].attempts[0].outcome = 'interrupted';
+  // Old interrupted (30分超) は再試行対象
+  const overdueKey = Object.keys(ledger.overdue)[0];
+  ledger.overdue[overdueKey].attempts[0].outcome = 'interrupted';
+  const oldTime = new Date(f.io.now() - 40 * 60000).toISOString();
+  ledger.overdue[overdueKey].attempts[0].startedAt = oldTime;
+  ledger.overdue[overdueKey].attempts[0].endedAt = oldTime;
   await fs.writeFile(f.file, JSON.stringify(ledger));
-  assert.equal((await run(options(['--overdue'], {}), f.io)).rows[0].skip, '同一期限処理済み');
+  assert.equal((await run(options(['--overdue'], {}), f.io)).rows[0].skip, '');
+  assert.equal(f.calls(), 2);
+});
+test('recent interrupted overdue attempt is not replayed (30分以内)', async t => {
+  const f = await fixture(t, 1);
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  await fs.writeFile(f.file, JSON.stringify({ version: 1, nights: {}, sessions: {} }));
+  await run(options(['--overdue'], {}), f.io);
+  const ledger = await f.ledger();
+  const overdueKey = Object.keys(ledger.overdue)[0];
+  ledger.overdue[overdueKey].attempts[0].outcome = 'interrupted';
+  ledger.overdue[overdueKey].attempts[0].startedAt = new Date(f.io.now() - 10 * 60000).toISOString();
+  await fs.writeFile(f.file, JSON.stringify(ledger));
+  assert.equal((await run(options(['--overdue'], {}), f.io)).rows[0].skip, 'エラー後30分待機');
+  assert.equal(f.calls(), 1);
+});
+test('overdue timeout is retried (not treated as processed)', async t => {
+  const f = await fixture(t, 1); let time = f.io.now();
+  f.io.now = () => time;
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  let callCount = 0;
+  f.io.execute = async () => { callCount++; return { outcome: 'timeout', reason: 'timeout' }; };
+  const config = options(['--overdue'], {});
+  const r1 = await run(config, f.io);
+  assert.equal(r1.results[0].outcome, 'timeout');
+  assert.equal(callCount, 1);
+  // timeout は再試行対象（同一期限処理済みにならない）。30分バックオフ後に再試行される。
+  time += 31 * 60000;
+  const r2 = await run(config, f.io);
+  assert.equal(r2.results[0].outcome, 'timeout');
+  assert.equal(callCount, 2);
+});
+test('overdue timeout respects 30-minute backoff', async t => {
+  const f = await fixture(t, 1); let time = f.io.now(); let callCount = 0;
+  f.io.now = () => time;
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  f.io.execute = async () => { callCount++; return { outcome: 'timeout', reason: 'timeout' }; };
+  const config = options(['--overdue'], {});
+  await run(config, f.io);
+  assert.equal(callCount, 1);
+  time += 30 * 60000 - 1;
+  assert.equal((await run(config, f.io)).results.length, 0);
+  time++;
+  assert.equal((await run(config, f.io)).results.length, 1);
+  assert.equal(callCount, 2);
+});
+test('overdue timeout stops at 3 failures and notifies once', async t => {
+  const f = await fixture(t, 1); let time = f.io.now(); let notices = []; let callCount = 0;
+  f.io.now = () => time;
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  f.io.execute = async () => { callCount++; return { outcome: 'timeout', reason: 'timeout' }; };
+  f.io.notify = async msg => { notices.push(msg); return { delivered: 'dm' }; };
+  const config = options(['--overdue'], {});
+  // 1回目
+  await run(config, f.io); time += 31 * 60000;
+  // 2回目
+  await run(config, f.io); time += 31 * 60000;
+  // 3回目 → 3回目の実行（まだ attempts.length=2 なので実行される）
+  const r3 = await run(config, f.io);
+  assert.equal(r3.results.length, 1);
+  assert.equal(r3.results[0].outcome, 'timeout');
+  assert.equal(callCount, 3);
+  // 通知に3回失敗のメッセージが1回だけ含まれる
+  const failureNotices = notices.filter(n => n.includes('3回失敗'));
+  assert.equal(failureNotices.length, 1);
+  // 4回目 → attempts.length=3 で停止
+  time += 31 * 60000;
+  assert.equal((await run(config, f.io)).rows[0].skip, '同一期限3回エラー');
+  const failureNotices2 = notices.filter(n => n.includes('3回失敗'));
+  assert.equal(failureNotices2.length, 1); // 重複通知なし
+});
+test('overdue progressed and no-progress are not retried', async t => {
+  const f = await fixture(t, 2);
+  f.records.forEach(r => { r.displayTitle = '【09/23/12:00まで】' + r.displayTitle; });
+  let callCount = 0;
+  f.io.execute = async () => { callCount++; return { outcome: callCount === 1 ? 'progressed' : 'no-progress', reason: 'done' }; };
+  const config = options(['--overdue'], {});
+  await run(config, f.io);
+  assert.equal(callCount, 2);
+  // progressed と no-progress は再試行しない
+  assert.equal((await run(config, f.io)).results.length, 0);
+  assert.equal(callCount, 2);
+});
+test('old ledger timeout outcome is retried (treated as error)', async t => {
+  const f = await fixture(t, 1);
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  // 旧台帳に timeout が入っている状態を模擬（endedAt は 40分前 → 30分バックオフ超過）
+  const overdueKey = JSON.stringify(['session-0', '【09/23/12:00まで】']);
+  await fs.writeFile(f.file, JSON.stringify({ version: 1, nights: {}, sessions: {}, overdue: {
+    [overdueKey]: { attempts: [{ outcome: 'timeout', reason: 'timeout', startedAt: new Date(f.io.now() - 45 * 60000).toISOString(), endedAt: new Date(f.io.now() - 40 * 60000).toISOString() }], noProgress: 1 }
+  } }));
+  // timeout は再試行対象
+  assert.equal((await run(options(['--overdue'], {}), f.io)).rows[0].skip, '');
+  assert.equal(f.calls(), 1);
+});
+test('overdue 3rd attempt progressed does not notify and does not block retry', async t => {
+  const f = await fixture(t, 1); let time = f.io.now(); let notices = []; let callCount = 0;
+  f.io.now = () => time;
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  f.io.execute = async () => { callCount++; return { outcome: callCount === 3 ? 'progressed' : 'timeout', reason: 'timeout' }; };
+  f.io.notify = async msg => { notices.push(msg); return { delivered: 'dm' }; };
+  const config = options(['--overdue'], {});
+  // 1回目: timeout
+  await run(config, f.io); time += 31 * 60000;
+  // 2回目: timeout
+  await run(config, f.io); time += 31 * 60000;
+  // 3回目: progressed → 通知なし、同一期限処理済みになる
+  const r3 = await run(config, f.io);
+  assert.equal(r3.results[0].outcome, 'progressed');
+  assert.equal(callCount, 3);
+  const failureNotices = notices.filter(n => n.includes('3回失敗'));
+  assert.equal(failureNotices.length, 0);
+  // progressed なので再試行しない
+  time += 31 * 60000;
+  assert.equal((await run(config, f.io)).results.length, 0);
+});
+test('overdue 3rd attempt no-progress does not notify and does not block retry', async t => {
+  const f = await fixture(t, 1); let time = f.io.now(); let notices = []; let callCount = 0;
+  f.io.now = () => time;
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  f.io.execute = async () => { callCount++; return { outcome: callCount === 3 ? 'no-progress' : 'timeout', reason: 'done' }; };
+  f.io.notify = async msg => { notices.push(msg); return { delivered: 'dm' }; };
+  const config = options(['--overdue'], {});
+  await run(config, f.io); time += 31 * 60000;
+  await run(config, f.io); time += 31 * 60000;
+  const r3 = await run(config, f.io);
+  assert.equal(r3.results[0].outcome, 'no-progress');
+  assert.equal(callCount, 3);
+  const failureNotices = notices.filter(n => n.includes('3回失敗'));
+  assert.equal(failureNotices.length, 0);
+  // no-progress も成功扱いなので再試行しない
+  time += 31 * 60000;
+  assert.equal((await run(config, f.io)).results.length, 0);
 });

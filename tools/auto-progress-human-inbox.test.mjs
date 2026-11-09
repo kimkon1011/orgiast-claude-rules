@@ -30,7 +30,7 @@ test('A/B human changes bypass quota and digest-only, preserve deferred bytes, d
   await checkPromise(r, opts);
   let items = listItems(dir); assert.equal(items.length, 1);
   assert.equal(allInboxItems(dir).filter(item => item.dailyProgress).length, 1);
-  assert.equal(items[0].text, '依頼名: 保存の確認\nいまの状態: まだ保存されていません\nkim の次の1手: なし\nClaude の次の手: 権限を確認する');
+  assert.equal(items[0].text, '依頼名: 保存の確認\nいまの状態: まだ保存されていません\nClaude の次の手: 権限を確認する');
   markSeen(dir, items[0].id);
   text = 'まだ保存されていません\n変化する詳細';
   await checkPromise(r, { ...opts, now: now + 7 * 3600000 });

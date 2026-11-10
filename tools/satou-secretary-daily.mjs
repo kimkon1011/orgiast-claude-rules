@@ -52,6 +52,7 @@ const customerAddress = address => {
 };
 const emailAddress = value => sender(String(value || "")).email.toLowerCase();
 const emailDomain = value => emailAddress(value).split("@")[1] || "";
+const clientKey = value => norm(value).replace(/株式会社|合同会社|有限会社|一般社団法人|医療法人/g, "").replace(/㈱/g, "");
 export function isSatouCustomerMail(message = {}) {
   if (emailAddress(message.from) !== "satou@orgiast.jp") return false;
   if (/^\s*(?:Fwd?:)|\bLEAD\s*:/i.test(message.subject || "")) return false;
@@ -117,12 +118,12 @@ export function extractCases(rows, now = new Date(), emailEvidence = []) {
         const blob = norm(
           `${x.subject || ""} ${x.snippet || ""} ${x.from || ""} ${x.to || ""}`,
         ),
-          clientKey = norm(txt(r[i.client])).replace(/^(?:株式会社|合同会社|有限会社|一般社団法人|医療法人)|(?:株式会社|合同会社|有限会社)$/g, ""),
+          customerKey = clientKey(r[i.client]),
           codeKey = norm(txt(r[i.code])).replace(/_\d+$/, "");
-        if (!clientKey || /オージャスト/.test(clientKey)) return false;
+        if (!customerKey || /オージャスト/.test(customerKey)) return false;
         return (
           ((codeKey.length >= 5 && blob.includes(codeKey)) ||
-            (clientKey.length >= 4 && blob.includes(clientKey))) &&
+            (customerKey.length >= 4 && blob.includes(customerKey))) &&
           emailAddress(x.from) === "satou@orgiast.jp"
         );
       }),
@@ -473,12 +474,12 @@ export async function askReportLlm(prompt, deps = {}) {
   throw Error(`LLM全滅: ${fail.join(" | ")}`);
   } finally { fs.rmSync(promptDir, { recursive: true, force: true }); }
 }
-function caseForMessage(message, cases) {
+export function caseForMessage(message, cases) {
   const blob = norm(
-    `${message.subject || ""} ${message.snippet || ""} ${message.from || ""} ${message.to || ""}`,
+    `${message.subject || ""} ${message.snippet || ""} ${currentMessageBody(message)} ${message.from || ""} ${message.to || ""}`,
   );
   return cases.find((x) =>
-    [x.code, ...(/オージャスト/.test(x.client) ? [] : [x.name, x.client])]
+    [baseCode(x.code), ...(/オージャスト/.test(x.client) ? [] : [x.name, clientKey(x.client)])]
       .filter(Boolean)
       .some((v) => norm(v).length >= 3 && blob.includes(norm(v))),
   );
@@ -564,7 +565,7 @@ export async function buildDailyReport(
     try {
       summary = clip(
         await askReportLlm(
-          `次の案件メール群を日本語60字以内、事実のみ1行で要約。最終メッセージの送信者: ${g.messages.at(-1).latestSender || g.messages.at(-1).from}（${g.messages.at(-1).latestDirection || input.at(-1).direction}）。時系列順に読み、引用された過去メールを今回の発言と混同しない。確定・相談・依頼を厳密に区別し、推測で「確定」と書かない。誰が誰に頼んだかを逆転させない。送信者名を使い「先方が」のような曖昧な主語を避ける。スレッドごとの最新の動きに絞る。文を短く完結し、JSONや前置き不要。\n${JSON.stringify(input)}`,
+          `社長への報告本文を日本語60字以内、事実のみ1行で書く。顧客名は見出しにあるので繰り返さず、佐藤の実施内容と先方からの要望・返事を最大2点、短文で書く。人名は「小川様」など苗字+様。最終メッセージの送信者: ${g.messages.at(-1).latestSender || g.messages.at(-1).from}（${g.messages.at(-1).latestDirection || input.at(-1).direction}）。時系列順に読み、引用された過去メールを今回の発言と混同しない。確定・相談・依頼を厳密に区別し、推測で「確定」と書かない。希望日時は希望と書く。予定人数と氏名が確定した人数を区別し、未定・後日連絡は未定のまま書く。誰が誰に頼んだかを逆転させない。特に「自社で見積を更新する」と「先方へ更新を依頼する」を混同しない。スレッドごとの最新の動きを書き、写真送付と日程相談など別スレッドの要点も拾う。JSONや前置き不要。\n${JSON.stringify(input)}`,
           deps,
         ),
         72,

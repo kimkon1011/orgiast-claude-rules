@@ -19,6 +19,7 @@ import {
   capReportLines,
   shouldDeliver,
   currentMessageBody,
+  caseForMessage,
 } from "./satou-secretary-daily.mjs";
 const now = new Date("2026-11-09T06:30:00+09:00"),
   h = [
@@ -265,6 +266,11 @@ test("過去引用を今回の約束にせず、案件コード未採番は別�
   const c=aggregateActiveCases([{code:"",client:"未採番",state:"確定",reason:"営業"},{code:"C1",state:"確定",reason:"営業"},{code:"C1_2",state:"確定",reason:"担当者列"}]);
   assert.equal(c.total,1); assert.equal(c.unnumbered.length,1);
   assert.deepEqual(c.reasonCounts,{営業:1,担当者列:1});
+});
+test("顧客が法人格を省略した返信も案件に結び、引用だけの顧客名は使わない", () => {
+  const cases=[{code:"261219KNM",client:"鹿沼ケーブルテレビ株式会社"}];
+  assert.equal(caseForMessage({body:"鹿沼ケーブルテレビ 小川です。13日11時希望です"},cases)?.code,"261219KNM");
+  assert.equal(caseForMessage({body:"別の案件\nFrom: other\n鹿沼ケーブルテレビ株式会社"},cases),undefined);
 });
 test("要約入力は時系列、最終送信者と本文を含み、内部転送を他の節にも混ぜない", async () => {
   const prompts=[];

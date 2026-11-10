@@ -1,0 +1,27 @@
+{
+  "change_type": "text",
+  "target_url": "https://orgiast.jp/",
+  "target_file": "index.html",
+  "content": "トップページの実績セクションを更新。実績数を3件から5件に増やし、最新の実績「株式会社M（テスト自動化構築支援）」を追加する。",
+  "change_detail": {
+    "section": "実績紹介",
+    "action": "追加",
+    "items": [
+      {
+        "name": "株式会社M",
+        "description": "テスト自動化構築支援",
+        "year": "2026"
+      },
+      {
+        "name": "株式会社N",
+        "description": "Webサイトリニューアル",
+        "year": "2025"
+      }
+    ]
+  },
+  "required_suites": ["html-valid", "seo-meta", "links", "structure"],
+  "preview_required": true,
+  "deploy_on_approval": "confirm_only",
+  "source": "grok_app_smartphone",
+  "timestamp": "2026-11-11T05:00:00Z"
+}

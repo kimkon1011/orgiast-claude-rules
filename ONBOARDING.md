@@ -111,7 +111,7 @@ nishi@・cr@・seisaku-team@・Genba の席も user=kim（2026-10-28 kim）。ki
 
 **🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PR は作った席が自分で着地させる。pr-land.mjs --title "<題>" --body-file <本文> でbaseへpushし着地させる（通常はautomerge、安全弁パスはCI合格後pr-merge、workflow変更は停止）。権限・鍵・マージを kim-PC に頼まない。不足時は `node tools/access-doctor.mjs --fix`。内部Gmail下書き禁止。**
 
-**🔴 kim 宛 Discord DM は全廃・例外なし（緊急を含む・全PC全アカウント）。kim-inbox（~/.claude/kim-inbox、node tools/kim-inbox.mjs）へ積みセッションで回収。ask は --answer まで毎プロンプト再提示、info は伝えたら --seen。クローズを止めず台帳を次セッションへ引き継ぐ。Discord MCP 直接送信はゲートが拒否し、旧 config/kim-discord-allowlist.json のカテゴリも廃止。詳細 docs/kim-inbox.md。**
+**🔴 kim 宛 Discord DM は全廃・例外なし（緊急を含む・全PC全アカウント）。kim-inbox（~/.claude/kim-inbox、node tools/kim-inbox.mjs）へ積みセッションで回収。ask は --answer まで毎プロンプト再提示、info は伝えたら --seen。クローズを止めず台帳を次セッションへ引き継ぐ。Discord MCP 直接送信はゲートが拒否し、旧 config/kim-discord-allowlist.json のカテゴリも廃止。詳細 docs/kim-progress-channel.md。**
 送れなければチャットに完成形を表示。
 **🔴 社内ツールが Drive に作成・コピーするファイルには kim@orgiast.jp の編集権限を必ず付け、読み戻して確認する。失敗を握りつぶさない。作成 hook と毎日05:50のスイープで補完する。巡回は直近7日・共有制作アカウントと fleet の自動作成識別済みファイルだけを対象にし、社員個人の私物には付与しない。**
 
@@ -720,7 +720,7 @@ kim の返事待ちは SessionStart と各セッションで「📌 kim の返�
 完了後も残TODO（commit・本番デプロイ・Layer2 e2e・memory等）を自動で進め、目的完了時は上記クローズ手順を実行する。取り消せない操作（社外送信・支払い・削除・権限変更・未承認の本番送信）だけ AskUserQuestion で待つ。取り消せる設計判断・リファクタは基本理念5に従い進めて最後に報告する。報告に残TODOを記す。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`
 
 進捗通知の宛先は `fleet-pc-map.json` またはローカルの `~/.claude/fleet-pc-map.json` の同名 PC 行の `notifyDiscordId`。未設定だとチャットに案内が出て、kim に1日1回警告が飛ぶ。
-kim 宛の定期ダイジェスト（朝/夜/urgent）・完了通知・配送異常の警告はすべて kim-inbox へ保存する。Discord DM は全廃・例外なし（緊急を含む、kim 2026-11-06）。古いローカル許可リストも適用しない。
+kim 宛の定期ダイジェスト（朝/夜/urgent）・完了通知・配送異常の警告はすべて kim-inbox へ保存する。Discord DM は全廃・例外なし（緊急を含む、kim 2026-11-06）。古いローカル許可リストも適用しない。詳細: `docs/kim-progress-channel.md`。
 
 **「この後の自動進行: <内容>」の宣言は台帳に記録され、止まれば自動で拾われる（2026-10-14 追加）**。Stop hook `tools/auto-progress-ledger.mjs` が宣言（「なし」以外）を `~/.claude/auto-progress-ledger.jsonl` に記録する（同一セッションは最新で置換）。各PCの定期タスク `OrgiastAutoProgressWatch` が毎時台帳を巡回し、宣言から1時間以降のものを判定する。stalled は前回から2時間以上空けて累計8回まで最終成果へ向けて自動再開し、共有 Sheet（タブ「自動進行」）へ行を足す。全PCが1日2回（朝枠＝定時報告・夕枠＝変化分のみ）自PC分を kim-inbox に積む。朝枠は変化0件でも進行中・判断待ち・完了を全件名前付きで送る。夕枠・枠外は変化分のみ。check の引き継ぎ: 新しい約束行に check が無く、直前の open 行に期限が未来の check があれば引き継ぐ（check が superseded で消える再発防止）。だから宣言は「実際に自動で進む内容」だけ書く。API エラー（利用上限など）で返答できずに終わった依頼も、毎時の巡回が transcript から見つけて台帳へ起票し、持ち主へ DM したうえで別モデルで自動再開する。Sheet 側の追加手順は `docs/auto-progress-gas-patch.gs.txt`。
 

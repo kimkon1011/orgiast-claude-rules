@@ -20,3 +20,11 @@ PR URL: https://github.com/kimkon1011/orgiast-claude-rules/pull/1838
 
 ## 配布経路
 送信CLIとhookは rules repo の通常配布対象。`mail-send-approval-gate` は `tools/hook-dispatch-manifest.json` と `tools/setup-manifest.json` の既存 `settings:mail-send-approval-gate` 修復経路に載っている。ルールは onboarding-sync、hook登録は `setup --converge` で全PCへ反映される。
+
+## CI 修復と着地
+- `tools/beeper-send.test.mjs`: 「相手の古いメッセージのみ」のケースに `contextAt` と履歴チェックマーカーを追加し、未定義参照を解消。
+- `ONBOARDING.md` / `CLAUDE.md.template`: 既存の「kim が読むのは本当に最後のメッセージ」絶対ルールを復元。新しい送信前履歴ルールを意味を保って統合し、必須索引を 18,000 bytes 以内に維持。`node tools/render-claude-template.mjs` でテンプレートを再生成。
+- Windows 該当テスト: `node --test tools/beeper-send.test.mjs tools/onboarding-sync-index.test.mjs tools/onboarding-classifier.test.mjs` 成功。追加の再現性確認 `node --test tools/rule-dedupe.test.mjs tools/onboarding-classifier.test.mjs tools/onboarding-sync-index.test.mjs` も成功。
+- GitHub Actions: CI run `42723790759` の `test` 成功。test run `42723790474` の Windows `test`、`test-posix` とも成功。
+- PR #1838: squash merge commit `44034ad8de30f5bee27842907656e24a9abae9d2`。
+- mergedAt: `2026-11-10T00:02:34Z`（2026-11-10 09:02:34 JST）。

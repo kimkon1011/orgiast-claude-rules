@@ -486,14 +486,51 @@ export function caseForMessage(message, cases) {
   );
 }
 function fallbackMovement(messages) {
-  return clip(
-    messages
-      .map(
-        (x) =>
-          `${x.subject || "(件名なし)"}（${sender(x.from || "").name || sender(x.from || "").email || "送信者不明"}）`,
-      )
-      .join("／"),
-  );
+  return `${txt(messages.at(-1)?.subject) || "メールの更新あり"}。`;
+}
+const personToken = value => txt(value).replace(/^['"]|['"]$/g, "")
+  .replace(/(?:株式会社|合同会社|有限会社|一般社団法人|御中|ご担当者?|担当)$/g, "").trim()
+  .split(/[\s　]+/).at(-1)?.replace(/(?:様|氏|さん)$/g, "") || "";
+export function threadPersonNames(messages = []) {
+  const names = new Set();
+  for (const message of messages) {
+    for (const header of [message.from, message.to, message.cc])
+      for (const part of String(header || "").split(/[,;]/)) {
+        const display = part.match(/^\s*"?([^"<]+?)"?\s*</)?.[1];
+        if (display) {
+          const name = personToken(display);
+          if (/^[一-龯々ぁ-んァ-ヶー]{1,12}$/.test(name)) names.add(name);
+        }
+      }
+    for (const line of currentMessageBody(message).split(/\r?\n/).slice(-8)) {
+      const match = line.trim().match(/^(?:代表取締役|取締役|部長|課長|担当)?\s*([一-龯々ぁ-んァ-ヶー]{1,6}(?:[\s　]+[一-龯々ぁ-んァ-ヶー]{1,6})?)(?:様|氏|さん)?$/);
+      if (match) names.add(personToken(match[1]));
+    }
+  }
+  return names;
+}
+export function replaceUnknownPersonNames(value, allowedNames) {
+  return String(value || "").replace(/([一-龯々]{1,4}|[ァ-ヶー]{2,10})(様|氏|さん)/g, (all, name) =>
+    [...allowedNames].some(allowed => allowed === name || allowed.endsWith(name) || name.endsWith(allowed)) ? all : "先方");
+}
+export function completeReportSentence(value, maxLength) {
+  let line = txt(value).replace(/^[\s・*-]+/, "").replace(/\s+/g, " ").replace(/[.…]+$/g, "");
+  if (line.length <= maxLength) {
+    if (!/[。！？]$/.test(line)) line = line.length < maxLength ? `${line}。` : `${line.slice(0, maxLength - 1)}。`;
+    return line;
+  }
+  const sentences = line.match(/[^。！？]*[。！？]/g) || [];
+  let fitted = "";
+  for (const sentence of sentences) {
+    if ((fitted + sentence).length > maxLength) break;
+    fitted += sentence;
+  }
+  return fitted || `${line.slice(0, Math.max(0, maxLength - 1)).replace(/[.…]+$/g, "")}。`;
+}
+export function finalizeReportLine(value, maxLength = 70) {
+  const line = String(value || ""), match = line.match(/^(・|\d+\.\s+)/), prefix = match?.[0] || "";
+  if (line.length <= maxLength && !/[.…]+$/.test(line)) return line;
+  return `${prefix}${completeReportSentence(line.slice(prefix.length), Math.max(1, maxLength - prefix.length))}`;
 }
 export function capReportLines(lines, max = 25) {
   if (lines.length <= max) return lines;
@@ -563,7 +600,7 @@ export async function buildDailyReport(
       internalOnly = [...participants.matchAll(/[\w.+-]+@[\w.-]+/g)].every(x => /@orgiast\.jp$/i.test(x[0]));
     if (!c || internalOnly || /^\s*Fwd:/i.test(m.subject || "") || /\bLEAD\s*:/i.test(m.subject || "")) continue;
     const
-      key = baseCode(c?.code) || c?.client || m.threadId || m.id;
+      key = `${baseCode(c?.code) || c?.client || "case"}|${m.threadId || m.id}`;
     if (!groups.has(key)) groups.set(key, { caseItem: c, messages: [] });
     groups.get(key).messages.push(m);
   }
@@ -584,22 +621,21 @@ export async function buildDailyReport(
         ? "自社送信"
         : "先方送信",
     }));
+    const label = customerLabel(g.caseItem),
+      summaryLimit = Math.max(10, 70 - `・${label}：`.length),
+      allowedNames = threadPersonNames(g.messages),
+      prompt = `社長への報告本文を日本語${summaryLimit}字以内の完結した1文で書く。末尾を省略記号にしない。顧客名は見出しにあるので繰り返さず、佐藤の実施内容と先方からの要望・返事を最大2点、事実だけで書く。この入力は1案件の1スレッドだけであり、他の案件やスレッドの情報を補わない。人名はFrom／Toの表示名または本文の署名にある名前だけを使い、それ以外は「先方」と書く。使用可能な人名: ${[...allowedNames].join("、") || "なし"}。最終メッセージの送信者: ${g.messages.at(-1).latestSender || g.messages.at(-1).from}（${g.messages.at(-1).latestDirection || input.at(-1).direction}）。時系列順に読み、引用された過去メールを今回の発言と混同しない。確定・相談・依頼を厳密に区別し、推測で「確定」と書かない。希望日時は希望と書く。予定人数と氏名が確定した人数を区別し、未定・後日連絡は未定のまま書く。誰が誰に頼んだかを逆転させない。JSONや前置き不要。\n${JSON.stringify(input)}`;
     let summary;
     try {
-      summary = clip(
-        await askReportLlm(
-          `社長への報告本文を日本語60字以内、事実のみ1行で書く。顧客名は見出しにあるので繰り返さず、佐藤の実施内容と先方からの要望・返事を最大2点、短文で書く。人名は「小川様」など苗字+様。最終メッセージの送信者: ${g.messages.at(-1).latestSender || g.messages.at(-1).from}（${g.messages.at(-1).latestDirection || input.at(-1).direction}）。時系列順に読み、引用された過去メールを今回の発言と混同しない。確定・相談・依頼を厳密に区別し、推測で「確定」と書かない。希望日時は希望と書く。予定人数と氏名が確定した人数を区別し、未定・後日連絡は未定のまま書く。誰が誰に頼んだかを逆転させない。特に「自社で見積を更新する」と「先方へ更新を依頼する」を混同しない。スレッドごとの最新の動きを書き、写真送付と日程相談など別スレッドの要点も拾う。JSONや前置き不要。\n${JSON.stringify(input)}`,
-          deps,
-        ),
-        72,
-      );
+      let raw = replaceUnknownPersonNames(await askReportLlm(prompt, deps), allowedNames);
+      if (txt(raw).replace(/\s+/g, " ").length > summaryLimit)
+        raw = replaceUnknownPersonNames(await askReportLlm(`次の文を事実関係と使用可能な人名を変えず、日本語${summaryLimit}字以内の完結した1文に再要約する。末尾を「…」にしない。使用可能な人名: ${[...allowedNames].join("、") || "なし"}。前置き不要。\n${raw}`, deps), allowedNames);
+      summary = completeReportSentence(raw, summaryLimit);
     } catch (e) {
-      summary = fallbackMovement(g.messages);
+      summary = completeReportSentence(fallbackMovement(g.messages), summaryLimit);
       llmErrors.push(e.message);
     }
-    const label =
-        customerLabel(g.caseItem),
-      url = g.messages[0]?.url || gmailUrl(g.messages[0]?.threadId);
+    const url = g.messages[0]?.url || gmailUrl(g.messages[0]?.threadId);
     movements.push(`・${label}：${summary}`);
     details.push(["昨日の動き", summary, g.caseItem?.code || "", url]);
   }
@@ -726,7 +762,7 @@ export async function buildDailyReport(
         ? sorted.map((x, i) => `${i + 1}. ${clip(x[0] === "予定" ? calendarPriorityText(x) : `${x[3] && x[3] !== x[2] ? `${x[3]}：` : ""}${x[2]}`, 76)}`)
         : ["・なし"]),
     ],
-    capped = capReportLines(lines);
+    capped = capReportLines(lines).map(line => finalizeReportLine(line));
   for (const x of uniqueProblems)
     details.push(["問題点", x.text, x.code, x.url]);
   for (const x of judgment)

@@ -24,6 +24,10 @@ import {
   shouldDeliver,
   currentMessageBody,
   caseForMessage,
+  threadPersonNames,
+  replaceUnknownPersonNames,
+  completeReportSentence,
+  finalizeReportLine,
 } from "./satou-secretary-daily.mjs";
 const now = new Date("2026-11-09T06:30:00+09:00"),
   h = [
@@ -307,6 +311,35 @@ test("要約入力は時系列、最終送信者と本文を含み、内部転�
   assert.match(prompts[0],/最終メッセージの送信者: satou@orgiast.jp（自社送信）/);
   assert.ok(prompts[0].indexOf("発注します")<prompts[0].indexOf("申込書の返送"));
   assert.ok(prompts.every(p=>!p.includes("混ぜない転送本文")));
+});
+test("案件内でもスレッドを分離し、別スレッドの人名を報告に出さない", async () => {
+  const prompts = [], base = { internalDate: String(+new Date("2026-11-09T12:00:00+09:00")), to: "佐藤 優奈 <satou@orgiast.jp>", subject: "261125TUM 入館者", snippet: "確認" };
+  const report = await buildDailyReport({ now: new Date("2026-11-10T06:30:00+09:00"), cases: [{ code: "261125TUM", client: "株式会社TOKIUM", state: "確定" }], messages: [
+    { ...base, threadId: "tokium", from: "小形 <ogata@tokium.jp>", body: "入館者は稲沼です。\n\n小形" },
+    { ...base, threadId: "other", from: "小川 <ogawa@example.jp>", body: "別件です。\n\n小川" },
+  ], actions: [] }, { askLlm: async prompt => { prompts.push(prompt); if (prompt.includes("社長判断") || prompt.includes("問題候補")) return "なし"; return prompt.includes("ogata@tokium.jp") ? "稲沼氏の氏名を小川様に通知" : "小川様から別件の連絡を受領"; } });
+  assert.equal(prompts.filter(x => x.includes("社長への報告本文")).length, 2);
+  const tokiumLine = report.lines.find(line => line.includes("氏名を"));
+  assert.equal(tokiumLine, "・TOKIUM：先方の氏名を先方に通知。");
+  assert.doesNotMatch(tokiumLine, /小川様/);
+});
+test("報告行は70字以内の完結文で、省略記号では終わらない", async () => {
+  let movementCalls = 0;
+  const report = await buildDailyReport({ now: new Date("2026-11-10T06:30:00+09:00"), cases: [{ code: "261219KNM", client: "鹿沼ケーブルテレビ株式会社", state: "確定" }], messages: [
+    { threadId: "one", internalDate: String(+new Date("2026-11-09T12:00:00+09:00")), subject: "261219KNM", from: "小川 <ogawa@example.jp>", to: "satou@orgiast.jp", body: "確認事項です。\n\n小川" },
+  ], actions: [] }, { askLlm: async prompt => { if (prompt.includes("社長判断") || prompt.includes("問題候補")) return "なし"; movementCalls++; return movementCalls === 1 ? `小川様が${"確認事項を回答し".repeat(12)}…` : `小川様が${"確認事項を回答した。追加資料は後日送付する。".repeat(4)}`; } });
+  const movement = report.lines.find(line => line.startsWith("・鹿沼CATV："));
+  assert.equal(movementCalls, 2);
+  assert.ok(movement.length <= 70, movement);
+  assert.match(movement, /[。！？]$/);
+  assert.doesNotMatch(movement, /…$/);
+});
+test("人名検査と完結文への縮約", () => {
+  const names = threadPersonNames([{ from: "小形 <a@example.jp>", to: "佐藤 <satou@orgiast.jp>", body: "よろしくお願いします。\n小形" }]);
+  assert.equal(replaceUnknownPersonNames("小形様が小川様へ連絡", names), "小形様が先方へ連絡");
+  assert.equal(completeReportSentence("回答済み。追加説明が非常に長く続く。", 6), "回答済み。");
+  assert.doesNotMatch(completeReportSentence("回答内容が長すぎて途中で省略される…", 10), /…$/);
+  assert.equal(finalizeReportLine("・判断内容が途中で切れる…"), "・判断内容が途中で切れる。");
 });
 test("dry-runとno-deliverは配信しない", () => {
   assert.equal(shouldDeliver({dryRun:true}),false);

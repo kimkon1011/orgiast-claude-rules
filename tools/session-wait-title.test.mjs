@@ -6,7 +6,6 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { apply as applyReal, currentTitles, desiredTitle, isCloseRitualOnly, promptSubmit, sessionStart, sweepAll as sweepAllReal, waitPrefix } from './session-wait-title.mjs';
-import { recordClosed, recordReopened } from './closed-sessions-ledger.mjs';
 
 const apply = input => applyReal(input, { resolvePcNumber: () => '' });
 const sweepAll = options => sweepAllReal({ ...options, resolvePcNumber: () => '' });
@@ -50,6 +49,12 @@ test('閉じる儀式は各区切りの全文を照合して別作業を除外�
   ]) assert.equal(isCloseRitualOnly(action), false, action);
   assert.equal(isCloseRitualOnly(undefined), false);
   assert.equal(desiredTitle(withAction('このタブを閉じる', WAIT), ai), '【11/02/20:11まで】トークン待ち');
+});
+
+test('「1 回」（半角スペース入り）も閉じる操作と認識する', () => {
+  assert.equal(isCloseRitualOnly('新しいタブで Enter を 1 回押す'), true);
+  assert.equal(isCloseRitualOnly('新しいタブで Enter を1回押す'), true);
+  assert.equal(desiredTitle(withAction('新しいタブで Enter を 1 回押し、このタブを閉じる', CLOSED), ai), '【閉じて可】トークン待ち');
 });
 
 test('firstPrompt はスキル展開本文と command タグを飛ばして本当の依頼を拾う', () => {
@@ -347,42 +352,19 @@ test('promptSubmit: AI名が無ければ今回の冒頭を空白正規化・全�
   }
 });
 
-test('desiredTitle: closed-sessions.json に登録があれば【閉じて可】を優先する', t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-closed-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const closedFile = path.join(os.homedir(), '.claude', 'closed-sessions.json');
-  const origExists = fs.existsSync(closedFile);
-  let origContent = '';
-  if (origExists) origContent = fs.readFileSync(closedFile, 'utf8');
-  try {
-    fs.mkdirSync(path.dirname(closedFile), { recursive: true });
-    fs.writeFileSync(closedFile, JSON.stringify({ ids: ['cse_closed-session'] }));
-    // Session is in closed ledger -> 【閉じて可】 even without footer
-    assert.equal(desiredTitle('本文', JSON.stringify({ type: 'ai-title', aiTitle: 'テスト' }), '008', true), '008｜【閉じて可】テスト');
-    // Session not in closed ledger -> no change without footer
-    assert.equal(desiredTitle('本文', JSON.stringify({ type: 'ai-title', aiTitle: 'テスト' }), '008', false), '008｜テスト');
-  } finally {
-    if (origExists) fs.writeFileSync(closedFile, origContent);
-    else if (fs.existsSync(closedFile)) fs.unlinkSync(closedFile);
-  }
-});
-
-test('promptSubmit: closed-sessions.json に登録があっても promptSubmit で reopen されタイトルから【閉じて可】が外れる', t => {
+test('promptSubmit: closed-sessions.json に登録があれば【閉じて可】を付ける', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-ps-closed-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 's.jsonl');
   fs.writeFileSync(file, JSON.stringify({ type: 'ai-title', aiTitle: 'テスト', sessionId: 's' }));
-  let reopened = false;
   const result = promptSubmit({ transcript_path: file, session_id: 's' }, {
     readFile: () => fs.readFileSync(file, 'utf8'),
     statSize: () => fs.statSync(file).size,
     resolvePcNumber: () => '008',
     isClosed: id => id === 's',
-    reopen: id => { reopened = true; return true; },
   });
   assert.ok(result);
-  assert.equal(reopened, true);
-  assert.equal(result.hookSpecificOutput.sessionTitle, '008｜テスト');
+  assert.equal(result.hookSpecificOutput.sessionTitle, '008｜【閉じて可】テスト');
 });
 
 test('promptSubmit: closed-sessions.json に無ければ通常のフッター処理', t => {
@@ -536,111 +518,129 @@ test('エラー時も fail-open で exit 0（ログファイルに記録）', t 
   // Should not crash; log file may or may not exist depending on write permissions
 });
 
-// --- 再開セッション（reopen）のテスト ---
-test('実害再現: closed=true でも未完フッターがあれば【閉じて可】にならず期限を優先し apply で reopen が呼ばれる', t => {
-  const waitFooter = footer('まだ閉じない（作業中・2026-11-06 16:30 まで待つ）');
-  // desiredTitle checks
-  assert.equal(desiredTitle(waitFooter, ai, '011', true), '011｜【11/06/16:30まで】トークン待ち');
-  assert.notEqual(desiredTitle(waitFooter, ai, '011', true), '011｜【閉じて可】トークン待ち');
-
-  // apply checks reopen call
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-reopen-app-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const file = path.join(dir, 's.jsonl');
-  fs.writeFileSync(file, `${ai}\n${assistant(waitFooter)}\n`);
-
-  let reopenCalled = 0;
-  const result = applyReal({ transcript_path: file, session_id: 's' }, {
-    readFile: () => fs.readFileSync(file, 'utf8'),
-    statSize: () => fs.statSync(file).size,
-    resolvePcNumber: () => '011',
-    isClosed: id => true,
-    reopen: id => { reopenCalled += 1; return true; },
+const REOPEN_WAIT = 'まだ閉じない（作業中・2026-11-10 18:00 まで待つ）';
+test('closed=true でも最新フッターの待機期限を優先する', () => {
+  assert.equal(desiredTitle(footer(REOPEN_WAIT), custom('019｜【閉じて可】案件'), '019', true), '019｜【11/10/18:00まで】案件');
+});
+test('closed=true でフッター無しなら閉じて可', () => {
+  assert.equal(desiredTitle('本文', ai, '', true), '【閉じて可】トークン待ち');
+});
+test('closed=true で閉じてよい定型文なら閉じて可', () => {
+  assert.equal(desiredTitle(footer('/session-close は終わっているので、このセッションを閉じてよい'), ai, '', true), '【閉じて可】トークン待ち');
+});
+test('closed=true で期限なしの非定型フッターでも閉じて可を維持する', () => {
+  assert.equal(desiredTitle(footer('作業を終えました'), custom('【閉じて可】案件'), '019', true), '019｜【閉じて可】案件');
+});
+test('closed=true で期限なしなら人の作業が残るフッターでも閉じて可を優先する', () => {
+  assert.equal(desiredTitle(withAction('返信する', CLOSED), custom('【閉じて可】案件'), '019', true), '019｜【閉じて可】案件');
+});
+test('apply: 再開時に sessionId を一度除外しログを一行記録する（題名変更不要でも除外）', () => {
+  for (const raw of [ai, custom('【11/10/18:00まで】トークン待ち')]) {
+    const reopened = [], logs = [];
+    applyReal({ transcript_path: 's.jsonl', session_id: 'reopened', last_assistant_message: footer(REOPEN_WAIT) }, {
+      readFile: () => raw, statSize: () => 1, resolvePcNumber: () => '', isClosed: () => true,
+      appendFile: () => {}, reopen: id => reopened.push(id), log: message => logs.push(message),
+    });
+    assert.deepEqual(reopened, ['reopened']);
+    assert.equal(logs.length, 1);
+    assert.match(logs[0], /reopened.*closed-sessions.json/);
+  }
+});
+test('apply: reopen 失敗でも待機タイトルを反映する', () => {
+  const result = applyReal({ transcript_path: 's.jsonl', session_id: 'reopened', last_assistant_message: footer(REOPEN_WAIT) }, {
+    readFile: () => ai, statSize: () => 1, resolvePcNumber: () => '', isClosed: () => true,
+    appendFile: () => {}, reopen: () => { throw new Error('denied'); }, log: () => assert.fail('除外失敗を成功扱いにしない'),
   });
-
-  assert.equal(reopenCalled, 1);
-  assert.equal(result, '011｜【11/06/16:30まで】トークン待ち');
+  assert.equal(result, '【11/10/18:00まで】トークン待ち');
+});
+test('apply: 未閉鎖・フッター無し・閉じてよい宣言では reopen しない', () => {
+  for (const [closed, text] of [[false, footer(REOPEN_WAIT)], [true, '本文'], [true, footer(CLOSED)]]) {
+    applyReal({ transcript_path: 's.jsonl', session_id: 's', last_assistant_message: text }, {
+      readFile: () => ai, statSize: () => 1, resolvePcNumber: () => '', isClosed: () => closed,
+      appendFile: () => {}, reopen: () => assert.fail('再開対象外'),
+    });
+  }
 });
 
-test('closed=true、フッター無しなら【閉じて可】で reopen は呼ばれない', t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-reopen-nofooter-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const file = path.join(dir, 's.jsonl');
+test('CLI: 再開時は対象IDだけ台帳から外し transcript と他の台帳項目を保持する', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-reopen-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const base = path.join(home, '.claude');
+  fs.mkdirSync(base, { recursive: true });
+  const ledger = path.join(base, 'closed-sessions.json');
+  fs.writeFileSync(ledger, JSON.stringify({ ids: ['s', 'other'], note: 'preserve' }));
+  const file = path.join(home, 's.jsonl');
   fs.writeFileSync(file, `${ai}\n`);
-
-  let reopenCalled = 0;
-  const result = applyReal({ transcript_path: file, session_id: 's' }, {
-    readFile: () => fs.readFileSync(file, 'utf8'),
-    statSize: () => fs.statSync(file).size,
-    resolvePcNumber: () => '011',
-    isClosed: id => true,
-    reopen: id => { reopenCalled += 1; return true; },
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./session-wait-title.mjs', import.meta.url))], {
+    input: JSON.stringify({ transcript_path: file, session_id: 's', last_assistant_message: footer(REOPEN_WAIT) }),
+    encoding: 'utf8', env: { ...process.env, HOME: home, USERPROFILE: home, ORGIAST_PC_NUMBER: '019' },
   });
-
-  assert.equal(reopenCalled, 0);
-  assert.equal(result, '011｜【閉じて可】トークン待ち');
+  assert.ifError(result.error);
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, '');
+  assert.deepEqual(JSON.parse(fs.readFileSync(ledger, 'utf8')), { ids: ['other'], note: 'preserve' });
+  const rows = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(rows.at(-1).customTitle, '019｜【11/10/18:00まで】トークン待ち');
+  const logs = fs.readFileSync(path.join(base, 'logs', 'session-wait-title.log'), 'utf8').trim().split('\n');
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /reopened s:/);
 });
 
-test('closed=true、閉じてよい定型文フッターなら【閉じて可】で reopen は呼ばれない', t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-reopen-closedfooter-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const file = path.join(dir, 's.jsonl');
-  const closedFooter = footer('/session-close は終わっているので、このセッションを閉じてよい');
-  fs.writeFileSync(file, `${ai}\n${assistant(closedFooter)}\n`);
-
-  let reopenCalled = 0;
-  const result = applyReal({ transcript_path: file, session_id: 's' }, {
-    readFile: () => fs.readFileSync(file, 'utf8'),
-    statSize: () => fs.statSync(file).size,
-    resolvePcNumber: () => '011',
-    isClosed: id => true,
-    reopen: id => { reopenCalled += 1; return true; },
-  });
-
-  assert.equal(reopenCalled, 0);
-  assert.equal(result, '011｜【閉じて可】トークン待ち');
+test('フッター「11/17 9:00」から期限を抽出しタイトル先頭に【11/17/09:00まで】を付ける', () => {
+  const text = `本文\n\n次に kim がすること: なし\nこの後の自動進行: 6人からの返信を seisaku-team@ で確認し、11/17 9:00 までに返却の状況をまとめます。\nこのセッション: まだ閉じない（作業中）`;
+  const result = desiredTitle(text, ai, '', false, 's1', { ref: '2026-11-06T00:01:46Z' });
+  assert.equal(result.startsWith('【11/17/09:00まで】'), true, result);
 });
 
-test('promptSubmit: closed=true のセッションに prompt が来たら reopen が呼ばれ、タイトルは最終フッターに従う', t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-reopen-prompt-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const file = path.join(dir, 's.jsonl');
-  const waitFooter = footer('まだ閉じない（作業中・2026-11-06 16:30 まで待つ）');
-  fs.writeFileSync(file, `${ai}\n${assistant(waitFooter)}\n`);
-
-  let reopenCalled = 0;
-  const result = promptSubmit({ transcript_path: file, session_id: 's', prompt: '作業再開' }, {
-    readFile: () => fs.readFileSync(file, 'utf8'),
-    statSize: () => fs.statSync(file).size,
-    resolvePcNumber: () => '011',
-    isClosed: id => true,
-    reopen: id => { reopenCalled += 1; return true; },
-  });
-
-  assert.equal(reopenCalled, 1);
-  assert.ok(result);
-  assert.equal(result.hookSpecificOutput.sessionTitle, '011｜【11/06/16:30まで】トークン待ち');
+test('フッター「11/10 まで」から時刻なし期限を抽出しタイトル先頭に【11/10/23:59まで】を付ける', () => {
+  const text = `本文\n\n次に kim がすること: なし\nこの後の自動進行: 11/10 まで自動確認が seisaku-team@ への返信を見張ります。\nこのセッション: まだ閉じない（作業中）`;
+  const result = desiredTitle(text, ai, '', false, 's1', { ref: '2026-11-05T06:51:00Z' });
+  assert.equal(result.startsWith('【11/10/23:59まで】'), true, result);
 });
 
-test('closed-sessions-ledger: recordReopened は他の ID と ids 以外のキーを残し、存在しない ID で true を返す', t => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'csl-reopen-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const file = path.join(dir, 'closed-sessions.json');
+test('本文に「11/17 9:00」があり台帳に open check（deadlineAt=2026-11-07T07:25:00Z, ref=2026-11-06T00:01:46Z より後）があっても本文の【11/17/09:00まで】が優先される', () => {
+  const text = `本文\n\n次に kim がすること: なし\nこの後の自動進行: 6人からの返信を seisaku-team@ で確認し、11/17 9:00 までに返却の状況をまとめます。\nこのセッション: まだ閉じない（作業中）`;
+  const ledgerRows = [{ sessionId: 's1', label: 'chk', check: true, status: 'open', deadlineAt: '2026-11-07T07:25:00Z', ts: '2026-11-05T06:00:00Z' }];
+  const result = desiredTitle(text, ai, '', false, 's1', { ref: '2026-11-06T00:01:46Z', ledgerRows });
+  assert.equal(result.startsWith('【11/17/09:00まで】'), true, result);
+});
 
-  // Initial state with multiple IDs and an extra key
-  fs.writeFileSync(file, JSON.stringify({ ids: ['id1', 'id2', 'id3'], version: 1 }), 'utf8');
+test('本文に日付が無く、台帳に ref より後の open check があるならその check の期限を使う', () => {
+  const text = `本文\n\n次に kim がすること: なし\nこの後の自動進行: 手動で確認します\nこのセッション: まだ閉じない（作業中）`;
+  const d = new Date('2026-11-10T06:50:00Z');
+  const p = n => String(n).padStart(2, '0');
+  const expectedPrefix = `【${p(d.getMonth() + 1)}/${p(d.getDate())}/${p(d.getHours())}:${p(d.getMinutes())}まで】`;
+  const ledgerRows = [{ sessionId: 's1', label: 'chk', check: true, status: 'open', deadlineAt: '2026-11-10T06:50:00Z', ts: '2026-11-05T06:00:00Z' }];
+  const result = desiredTitle(text, ai, '', false, 's1', { ref: '2026-11-06T00:01:46Z', ledgerRows });
+  assert.equal(result.startsWith(expectedPrefix), true, result);
+});
 
-  // Reopen existing id2
-  const res1 = recordReopened('id2', file);
-  assert.equal(res1, true);
-  const content1 = JSON.parse(fs.readFileSync(file, 'utf8'));
-  assert.deepEqual(content1.ids, ['id1', 'id3']);
-  assert.equal(content1.version, 1);
+test('本文に日付が無く、台帳の open check が ref より前なら無視され、既存 prefix が保持される（無ければ prefix なし）', () => {
+  const text = `本文\n\n次に kim がすること: なし\nこの後の自動進行: 手動で確認します\nこのセッション: まだ閉じない（作業中）`;
+  const ledgerRows = [{ sessionId: 's1', label: 'chk', check: true, status: 'open', deadlineAt: '2026-11-05T07:25:00Z', ts: '2026-11-05T06:00:00Z' }];
+  // 既存 prefix あり
+  const rawWithCustom = `${ai}\n${custom('【11/12/12:00まで】トークン待ち')}`;
+  const resultWithCustom = desiredTitle(text, rawWithCustom, '', false, 's1', { ref: '2026-11-06T00:01:46Z', ledgerRows });
+  assert.equal(resultWithCustom, null);
 
-  // Reopen non-existent id4
-  const res2 = recordReopened('id4', file);
-  assert.equal(res2, true);
-  const content2 = JSON.parse(fs.readFileSync(file, 'utf8'));
-  assert.deepEqual(content2.ids, ['id1', 'id3']);
-  assert.equal(content2.version, 1);
+  // 既存 prefix なし (PC番号ありなら prefix なしのタイトル)
+  const resultWithPc = desiredTitle(text, ai, '008', false, 's1', { ref: '2026-11-06T00:01:46Z', ledgerRows });
+  assert.equal(resultWithPc, '008｜トークン待ち');
+});
+
+test('同じキーで後から status=done の行があるならその check は無視される', () => {
+  const text = `本文\n\n次に kim がすること: なし\nこの後の自動進行: 6人からの返信を seisaku-team@ で確認し、11/17 9:00 までに返却の状況をまとめます。\nこのセッション: まだ閉じない（作業中）`;
+  const ledgerRows = [
+    { sessionId: 's1', label: 'chk', check: true, status: 'open', deadlineAt: '2026-11-10T06:50:00Z', ts: '2026-11-05T06:00:00Z' },
+    { sessionId: 's1', label: 'chk', check: true, status: 'done', ts: '2026-11-06T06:00:00Z' },
+  ];
+  const result = desiredTitle(text, ai, '', false, 's1', { ref: '2026-11-06T00:01:46Z', ledgerRows });
+  assert.equal(result.startsWith('【11/17/09:00まで】'), true, result);
+});
+
+test('日付が無く既存 custom-title に【11/12/12:00まで】があるなら保持される', () => {
+  const text = `本文\n\n次に kim がすること: なし\nこの後の自動進行: 手動で確認します\nこのセッション: まだ閉じない（作業中）`;
+  const rawWithCustom = `${ai}\n${custom('【11/12/12:00まで】トークン待ち')}`;
+  const result = desiredTitle(text, rawWithCustom, '', false, 's1');
+  assert.equal(result, null);
 });

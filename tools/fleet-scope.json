@@ -1258,6 +1258,7 @@
       "step": null,
       "reason": "freee 認可切れの監視タスクは keiri-hub 運用PC だけが登録・実行する（複数PCで動くと通知が重複し、Supabase env も運用PC にしか無い）"
     },
+    {"path": "tools/satou-secretary-daily-register.mjs", "scope": "kim-only", "step": null, "reason": "佐藤さん秘書台帳の日次06:30タスク登録。Windows 定時タスク依存のため各PCで別途、kim による初回登録が必要"},
     {"path": "tools/kim-editor-sweep.mjs", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
     {"path": "tools/kim-editor-posttool.mjs", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
     {"path": "tools/lib/kim-editor.mjs", "scope": "fleet", "step": "task:kim-editor-sweep", "reason": "自動作成ファイルの kim 編集権限を全PCで保証"},
@@ -1270,6 +1271,7 @@
     {"path": "tools/register-gakkai-phone-digest.ps1", "scope": "kim-only", "step": null, "reason": "cr-PC（作業用011）だけで動かす学会スマホ所在Digestの毎朝09:07登録"},
     {"path": "tools/knowledge-upstream.mjs", "scope": "fleet", "step": "task:knowledge-upstream", "reason": "全PCのローカルmemory/playbook/incidentをDrive inboxへ吸い上げ、共有マスターを同期する"},
     {"path": "tools/register-knowledge-upstream-task.ps1", "scope": "fleet", "step": "task:knowledge-upstream", "reason": "全PCの知識吸い上げタスク OrgiastKnowledgeUpstream を登録する"},
-    {"path": "tools/register-knowledge-merge-task.ps1", "scope": "kim-only", "reason": "kim-PCだけがDrive inboxのナレッジをmasterに統合する（重複防止）"}
+    {"path": "tools/register-knowledge-merge-task.ps1", "scope": "kim-only", "reason": "kim-PCだけがDrive inboxのナレッジをmasterに統合する（重複防止）"},
+    {"path": "tools/register-tldv-drive-task.ps1", "scope": "kim-only", "reason": "seisaku-team の tl;dv 会議を Drive へ毎時保存するのは tldv.env と DWD 鍵を持つ kim-PC だけ（複数PCだと二重作成の競合）"}
   ]
 }

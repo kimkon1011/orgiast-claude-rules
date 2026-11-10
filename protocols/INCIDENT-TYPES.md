@@ -17,6 +17,7 @@
 |---|---|---|---|
 | 配布漏れ型 | per-PC 機能が1台でだけ動き、converge に未登録。配布対象が手書き一覧で、新しいフォルダ（packages/）が漏れた（2026-10-11 スマホ用待機タブ） | 配布・コピー対象を手書きで列挙している箇所（onboarding-sync のフォルダ一覧、zip 経路、converge の登録表）。per-PC の機能を足す PR | 配布カバレッジのテスト、fleet-scope 宣言レジストリ（fleet か kim-only かの宣言必須）、converge ビーコンと fleet-status |
 | 見張りの沈黙故障型 | 自動進行の check（`node C:\Users\...`）が Git bash で `\` を失い MODULE_NOT_FOUND、node の exit 1 が「未達」と同じなので check_error にならず空振り。kim が「進捗どう？」と再度聞いた（2026-11-06）。同時期に Bot DM の依頼は返事待ちの追跡対象外だった（2026-10-26〜11-05） | 終了コードだけで成否を読む見張り（auto-progress check・health check・watchdog）。人への依頼を送る経路で返事待ち台帳に載らないもの | executeCheck のパス正規化＋クラッシュを check_error にして通知、登録時 preflight で拒否、`auto-progress.mjs --audit-checks`（#1622）。Discord 依頼の自動登録 hook と2日超のセッション注入（#1573） |
+| 無人再開の古い送信約束実行型 | 無人の auto-progress が、既に人が実行済みの古い `nextClaude` を再開して社外 LINE を承認なしで再送した（2026-11-09） | ヘッドレス resume / start-when と社外送信 CLI。送信文面と現在の承認を結び付けない約束 | PreToolUse で本文 SHA-256 承認マーカーを必須化し、auto-progress 登録時にも送信約束を拒否 |
 | 経路取り違え型 | 全PCの設定変更を fleet-mail（相談用・受信側は実行しない設計）で依頼し、未配達・未実行のまま。組織指示「settings.json の変更は converge 経由」に反した（2026-10-11） | 「全PC」「他のPC」への変更依頼を fleet-mail／directive／手渡しで出している箇所と手順書 | fleet-mail 送信前の警告（変更依頼を検知）、受信側の「converge 化が必要」返信（§1.22 C） |
 | 観測不能型 | 他PCの状態を照会する手段がなく、未反映を user がスマホで発見した（2026-10-11） | 「全PCに反映した」と報告する箇所。状態を人に確認させている手順 | converge ビーコン、`tools/fleet-status.mjs`（未ビーコンの PC は「未確認」と書く） |
 | ログ不在＝不在型 | Claude 側ログに無いことを外部の状態の不在の証拠にした（2026-09-10）。ゲート: external-state-claim-gate | 外部状態を「無い」「未接続」と断定する文面 | external-state-claim-gate（既存） |
@@ -25,10 +26,13 @@
 | セッション中間状態依存型 | 完了判定がセッション限定の中間状態に依存 → セッション停止で完了を検知できず kim が進捗を聞く羽目に（2026-11-06） | 完了判定スクリプトの scratchpad・nightly-repo/.scratch・/tmp 参照 | auto-progress --add-check の preflight で scratchpad・.scratch・/tmp 参照を拒否（2026-11-06） |
 | 配布元URL破損型 | 配布元リポジトリの接続先 URL が壊れ、そのPCだけ main の修正が無言で届かなくなる。fetch は定期処理が古い origin/main へ reset し続けエラーは表に出ない（2026-11-05 PC004） | 各PC の fetch を origin 依存で黙って止める配布経路（bootstrap・fleet-fix-now・.git/config の remote.origin.url を焼く箇所） | access-doctor の origin 自動修復（履歴一致確認後に向け替え・保存ログ）＋ setup-manifest の git-origin check（repo:rules-origin・converge 配布） |
 | 過剰ブロック型 | 内部宛ガードが、社外宛のメールに内部 Cc が混在する通常業務まで止めた（2026-11-09） | `internal_recipient` / `isInternal` / To・Cc・Bcc のいずれか1件で block する Gmail 書き込みガード | 宛先が全員内部のときだけ止め、外部To＋内部Cc・内部のみ・外部のみの回帰テスト |
+| 無音停止見落とし型 | ツール実行中にセッションが終了したケース（プロセスkill・PC再起動など）を自動進行の巡回が検知できず、kimが「進捗どう？」と聞く羽目になった（2026-11-06〜11-09 11回目）。APIエラー経由だけが検出対象だった | `findUnansweredRequest` の呼出元で silent-stop 非対応の箇所（auto-progress-watch.mjs 以外からの呼出） | transcript末尾の未完了tool_use/mtime45分以上を silent-stop として検出（PR #1802）。watchのregisterUnansweredで通知・再開 |
+| 送信前履歴未読型 | 送信前に相手との履歴を読まず、回答済みの質問を再送し、相手の未回答要望を放置した（2026-11-10 C0039） | Gmail・LINE・Discord・Beeper の送信CLIと直接API送信経路。自社送信が受信履歴に残らない経路 | `send-context-check.mjs` の本文ハッシュ＋30分＋最新メッセージID/時刻マーカーを各送信CLIが直前に再検証 |
 
 追記ルール: 型名は構造を表す語にする。症状は1行、日付と出典を付ける。ゲート列が空の行は未完了として扱い、埋まるまで消さない。
 
 - 型: 夜間メンテが待機中セッションを「作業中でない」と誤判定して殺す（活動時刻ベースの busy 判定） → 対策: 生存＋未クローズで保護、落ちたら host_exit から自動再オープン。
 - 型: 秘密入りの成果物を「既定の置き場」に出し、置き場の継承共有で広く見える（既定フォルダ＝社内全体・外部Gmail継承） → 対策: 本文の秘密検出で共有フォルダへの出力を拒否し --private（owner のみを読み戻し）を必須化。ゲート: gdoc-publish.mjs containsSecret（exit 3/4）。2026-11-07 PR #1682
 - 型: 完了フラグの台帳が再開・新しい状態表明で失効しない → セッションが【閉じて可】のまま期限再開・朝確認から外れる（2026-11-09 4eb1d8a6）／対策: 最新フッター優先＋プロンプト受信・未完フッターで closed-sessions.json から自動除外（session-wait-title・closed-sessions-ledger）
+- 型: rescue/cherry-pick が全廃済みの経路を復活させる（2026-11-10 kim 宛 Discord DM 復活・PR #1688） → 横展開の検索: git log --all --oneline --grep="kim-discord-allowlist\|KIM_DISCORD_USER_ID" で該当箇所を特定し、kim 宛 Discord/webhook 送信経路を全て削除。ゲート: tools/kim-discord-dm-ban.test.mjs（静的走査 + discordAllowed 常時 false 確認）
 

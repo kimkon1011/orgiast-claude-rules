@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync } from './reopen-lost-sessions.mjs';
+import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord } from './reopen-lost-sessions.mjs';
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
 const exit = { event_type: 'system', payload: { reason: 'host_exit' }, created_at: since };
@@ -85,10 +85,17 @@ test('reopenLost: worktree cwd のセッションは最初の非 worktree cwd �
   ].map(JSON.stringify).join('\n'));
   const psCalls = [];
   const result = await reopenLost({
-    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false,
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, env: { APPDATA: path.join(root, 'no-appdata') },
     fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
     spawn: (cmd, args) => {
-      if (args[0] !== 'agents') psCalls.push(args[args.length - 1]);
+      if (args[0] !== 'agents') {
+        // hasCodeWindow の呼び出し（Get-Process Code + .Count）は psCalls に記録せず、ウィンドウ無し(0)を返す
+        const cmdStr = args[args.length - 1];
+        if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
+          return { status: 0, stdout: '0' };
+        }
+        psCalls.push(cmdStr);
+      }
       return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
     },
     windowReady: () => true,
@@ -214,9 +221,17 @@ test('dry run uses real local mapping, paginates, never opens/writes', async t =
 
 test('opening continues after API deadline; focus precedes URI; lock released and log written', async t => {
   const base = fixture(t), calls = []; let clock = 0;
-  const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock, checkCpu: false,
+  const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock, checkCpu: false, env: { APPDATA: path.join(base, 'no-appdata') },
     fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
-    spawn: (cmd, args) => { calls.push(args); return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' }; },
+    spawn: (cmd, args) => {
+      // hasCodeWindow の呼び出しはウィンドウ無し(0)を返し、calls に記録しない
+      const cmdStr = args[args.length - 1];
+      if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
+        return { status: 0, stdout: '0' };
+      }
+      calls.push(args);
+      return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
+    },
     windowReady: () => { clock = 120000; return true; }, wait: async () => {},
   });
   assert.equal(result.reopened.length, 1);
@@ -425,8 +440,8 @@ test('findWorkspaceForCwd resolves workspace file for folder itself, relative su
   assert.equal(matchBroken, null);
 });
 
-test('reopenLost reuses workspace file and does not call code <cwd> when workspace matches', async t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-ws-cmd-test-'));
+test('reopenLost: ウィンドウ無し＋lastActiveWindow.workspaceIdentifier があればワークスペースを開く', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-ws-lastactive-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
   const base = path.join(root, '.claude');
@@ -438,17 +453,24 @@ test('reopenLost reuses workspace file and does not call code <cwd> when workspa
   const wsFile = path.join(wsDir, 'myproject.code-workspace');
   fs.writeFileSync(wsFile, JSON.stringify({ folders: [{ path: '.' }] }), 'utf8');
 
+  // storage.json に lastActiveWindow.workspaceIdentifier を仕込む
+  const appDataDir = path.join(root, 'AppData', 'Roaming');
+  const storageJsonPath = path.join(appDataDir, 'Code', 'User', 'globalStorage', 'storage.json');
+  fs.mkdirSync(path.dirname(storageJsonPath), { recursive: true });
+  fs.writeFileSync(storageJsonPath, JSON.stringify({
+    windowsState: {
+      lastActiveWindow: {
+        workspaceIdentifier: { configURIPath: `file:///${wsFile.replace(/\\/g, '/')}` }
+      }
+    }
+  }), 'utf8');
+
   fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
   fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
 
   fs.writeFileSync(path.join(base, 'projects', 'proj', 'one.jsonl'), [
     { type: 'bridge-session', bridgeSessionId: 'cse_one' },
-    { type: 'user', cwd: wsDir, message: { content: 'session 1' } },
-  ].map(JSON.stringify).join('\n'));
-
-  fs.writeFileSync(path.join(base, 'projects', 'proj', 'two.jsonl'), [
-    { type: 'bridge-session', bridgeSessionId: 'cse_two' },
-    { type: 'user', cwd: wsSubDir, message: { content: 'session 2' } },
+    { type: 'user', cwd: wsSubDir, message: { content: 'session 1' } },
   ].map(JSON.stringify).join('\n'));
 
   const psCalls = [];
@@ -456,34 +478,35 @@ test('reopenLost reuses workspace file and does not call code <cwd> when workspa
     ok: true,
     json: async () => url.includes('/events?')
       ? { data: [exit] }
-      : { data: [{ id: 'cse_one' }, { id: 'cse_two' }] }
+      : { data: [{ id: 'cse_one' }] }
   });
 
-  const env = { ORGIAST_VSCODE_WORKSPACE: wsFile };
+  const env = { APPDATA: appDataDir };
 
   const result = await reopenLost({
     base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, fetchImpl, env,
     spawn: (cmd, args) => {
-      if (args[0] !== 'agents') psCalls.push(args[args.length - 1]);
+      if (args[0] !== 'agents') {
+        const cmdStr = args[args.length - 1];
+        // hasCodeWindow の呼び出しはウィンドウ無し(0)を返す
+        if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
+          return { status: 0, stdout: '0' };
+        }
+        psCalls.push(cmdStr);
+      }
       return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
     },
     windowReady: () => true,
     wait: async () => {},
   });
 
-  assert.equal(result.reopened.length, 2);
-
-  for (const call of psCalls) {
-    assert.ok(!call.includes(wsSubDir), `Command should not open cwd directly: ${call}`);
-    if (!call.includes('--open-url')) {
-      assert.ok(call.includes(wsFile), `Command should target workspace file: ${call}`);
-    }
-  }
-
+  assert.equal(result.reopened.length, 1);
+  // ウィンドウ無し＋workspaceIdentifier → ワークスペースを開く
   assert.equal(result.reopened[0].openedWith, 'workspace');
-  assert.equal(result.reopened[0].target, path.resolve(wsFile));
-  assert.equal(result.reopened[1].openedWith, 'workspace');
-  assert.equal(result.reopened[1].target, path.resolve(wsFile));
+  assert.equal(result.reopened[0].target, uriToPath(`file:///${wsFile.replace(/\\/g, '/')}`));
+  // code <cwd> ではなく code <workspace> が呼ばれる
+  assert.ok(psCalls[0].includes(wsFile), `should open workspace file: ${psCalls[0]}`);
+  assert.ok(!psCalls[0].includes(wsSubDir), `should not open cwd directly: ${psCalls[0]}`);
 });
 
 test('parseJsonTolerant preserves // inside string literals (file URIs etc.)', t => {
@@ -507,12 +530,19 @@ test('reopenLost falls back to code <cwd> with openedWith: folder when no worksp
   const base = fixture(t), psCalls = [];
   const result = await reopenLost({
     base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false,
+    env: { APPDATA: path.join(base, 'no-appdata') },
     fetchImpl: async url => ({
       ok: true,
       json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] }
     }),
     spawn: (cmd, args) => {
-      if (args[0] !== 'agents') psCalls.push(args[args.length - 1]);
+      if (args[0] !== 'agents') {
+        const cmdStr = args[args.length - 1];
+        if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
+          return { status: 0, stdout: '0' };
+        }
+        psCalls.push(cmdStr);
+      }
       return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
     },
     windowReady: () => true,
@@ -1131,4 +1161,180 @@ test('measureCpuAsync: multi-core aggregation', async () => {
   };
   const result = await measureCpuAsync({ sampleMs: 100, cpusImpl, wait: async () => {} });
   assert.equal(result, 44);
+});
+
+test('hasCodeWindow: spawn status/error/stdout behavior', () => {
+  assert.equal(hasCodeWindow(() => ({ status: 0, stdout: '2' })), true);
+  assert.equal(hasCodeWindow(() => ({ status: 0, stdout: '0' })), false);
+  assert.equal(hasCodeWindow(() => ({ error: new Error('ETIMEDOUT') })), true);
+  assert.equal(hasCodeWindow(() => ({ status: 1, stdout: '' })), true);
+});
+
+test('resolveLaunchTarget: resolves launch target based on window state and storage.json', () => {
+  // Case 1: Window exists -> uri-only, target null
+  const resWindow = resolveLaunchTarget({ spawn: () => ({ status: 0, stdout: '1' }) });
+  assert.deepEqual(resWindow, { launch: 'uri-only', target: null, openedWith: null });
+
+  // Case 2: No window + storage.json folder -> openedWith 'folder'
+  const appData = path.join(os.tmpdir(), 'mock-appdata-folder');
+  const storagePathFolder = path.join(appData, 'Code', 'User', 'globalStorage', 'storage.json');
+  const storageDataFolder = JSON.stringify({
+    windowsState: {
+      lastActiveWindow: { folder: 'file:///c%3A/Users/x/proj' }
+    }
+  });
+  const fsMockFolder = {
+    existsSync: p => p === storagePathFolder,
+    readFileSync: p => p === storagePathFolder ? storageDataFolder : ''
+  };
+  const resFolder = resolveLaunchTarget({
+    env: { APPDATA: appData },
+    fsImpl: fsMockFolder,
+    spawn: () => ({ status: 0, stdout: '0' })
+  });
+  assert.equal(resFolder.launch, 'opened-window');
+  assert.equal(resFolder.openedWith, 'folder');
+  assert.equal(resFolder.target, uriToPath('file:///c%3A/Users/x/proj'));
+
+  // Case 3: No window + storage.json workspaceIdentifier -> openedWith 'workspace'
+  const appDataWs = path.join(os.tmpdir(), 'mock-appdata-ws');
+  const storagePathWs = path.join(appDataWs, 'Code', 'User', 'globalStorage', 'storage.json');
+  const storageDataWs = JSON.stringify({
+    windowsState: {
+      lastActiveWindow: {
+        workspaceIdentifier: { configURIPath: 'file:///c%3A/Users/x/a.code-workspace' }
+      }
+    }
+  });
+  const fsMockWs = {
+    existsSync: p => p === storagePathWs,
+    readFileSync: p => p === storagePathWs ? storageDataWs : ''
+  };
+  const resWs = resolveLaunchTarget({
+    env: { APPDATA: appDataWs },
+    fsImpl: fsMockWs,
+    spawn: () => ({ status: 0, stdout: '0' })
+  });
+  assert.equal(resWs.launch, 'opened-window');
+  assert.equal(resWs.openedWith, 'workspace');
+  assert.equal(resWs.target, uriToPath('file:///c%3A/Users/x/a.code-workspace'));
+});
+
+test('watchdogRecord: logs previous stage and updates progress stage to watchdog', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'watchdog-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const progressPath = path.join(root, 'reopen-lost-sessions-progress.json');
+  fs.writeFileSync(progressPath, JSON.stringify({ stage: 'alive', detail: 'x', pid: 1 }) + '\n');
+
+  watchdogRecord(root, { exitImpl: () => {} });
+
+  const logPath = path.join(root, 'reopen-lost-sessions.log');
+  assert.ok(fs.existsSync(logPath));
+  const logLines = fs.readFileSync(logPath, 'utf8').trim().split('\n');
+  const lastLog = JSON.parse(logLines[logLines.length - 1]);
+
+  assert.equal(lastLog.error, 'watchdog timeout');
+  assert.equal(lastLog.stage, 'alive');
+  assert.equal(lastLog.detail, 'x');
+  assert.equal(lastLog.pid, 1);
+
+  const updatedProgress = JSON.parse(fs.readFileSync(progressPath, 'utf8'));
+  assert.equal(updatedProgress.stage, 'watchdog');
+  assert.equal(updatedProgress.detail, 'timeout');
+});
+
+test('localIndex: sinceMs より古い mtime のファイルは読まれず skippedOld に計上される', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-mtime-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const projects = path.join(root, '.claude', 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  // 古いファイル（mtime を過去に設定）
+  const oldFile = path.join(projects, 'old.jsonl');
+  fs.writeFileSync(oldFile, [
+    { type: 'bridge-session', bridgeSessionId: 'cse_old' },
+    { type: 'user', cwd: 'C:\\old', message: { content: 'old' } },
+  ].map(JSON.stringify).join('\n'));
+  const past = new Date('2020-01-01').getTime();
+  fs.utimesSync(oldFile, past / 1000, past / 1000);
+  // 新しいファイル
+  const newFile = path.join(projects, 'new.jsonl');
+  fs.writeFileSync(newFile, [
+    { type: 'bridge-session', bridgeSessionId: 'cse_new' },
+    { type: 'user', cwd: 'C:\\new', message: { content: 'new' } },
+  ].map(JSON.stringify).join('\n'));
+  const idx = localIndex(path.join(root, '.claude'), undefined, { sinceMs: Date.now() - 3600000 });
+  assert.equal(idx.size, 1, '古いファイルは index に入らない');
+  assert.ok(idx.has('cse_new'), '新しいファイルだけが index にある');
+  assert.equal(idx.skippedOld, 1, 'skippedOld に 1 が計上される');
+  assert.equal(idx.indexed, 1, 'indexed に 1 が計上される');
+  assert.ok(typeof idx.indexMs === 'number' && idx.indexMs >= 0, 'indexMs が数値');
+});
+
+test('localIndex: onlyId 指定時は sinceMs より古くても読む', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-onlyid-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const projects = path.join(root, '.claude', 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  const oldFile = path.join(projects, 'old.jsonl');
+  fs.writeFileSync(oldFile, [
+    { type: 'bridge-session', bridgeSessionId: 'cse_old' },
+    { type: 'user', cwd: 'C:\\old', message: { content: 'old' } },
+  ].map(JSON.stringify).join('\n'));
+  const past = new Date('2020-01-01').getTime();
+  fs.utimesSync(oldFile, past / 1000, past / 1000);
+  // onlyId で古いファイルを指定（ファイル名ステム = 'old'）→ mtime に関係なく読める
+  const idx = localIndex(path.join(root, '.claude'), 'old', { sinceMs: Date.now() - 1000 });
+  assert.equal(idx.size, 1, 'onlyId 指定で古いファイルも読める');
+  assert.ok(idx.has('cse_old'));
+  assert.equal(idx.skippedOld, 0, 'onlyId 時は skippedOld に計上されない');
+  assert.equal(idx.indexed, 1);
+});
+
+test('localIndex: 巨大ファイルでも先頭の cwd と末尾の bridge-session が取れる', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-large-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const projects = path.join(root, '.claude', 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  const largeFile = path.join(projects, 'large.jsonl');
+  // 先頭行: cwd 情報
+  const headLine = JSON.stringify({ type: 'user', cwd: 'C:\\head-cwd', message: { content: 'start' } });
+  // 末尾行: bridge-session
+  const tailLine = JSON.stringify({ type: 'bridge-session', bridgeSessionId: 'cse_large' });
+  // 中間に 100KB のパディング（テスト用閾値 5000 bytes より大きい）
+  const padding = 'x'.repeat(100 * 1024);
+  const content = headLine + '\n' + padding + '\n' + tailLine + '\n';
+  fs.writeFileSync(largeFile, content, 'utf8');
+  // テスト用に閾値を小さく（5000 bytes）して largeFileThreshold を超えさせる
+  const idx = localIndex(path.join(root, '.claude'), undefined, { largeFileThreshold: 5000, largeFileHead: 200, largeFileTail: 200 });
+  assert.equal(idx.size, 1, '巨大ファイルからも bridge-session が取れる');
+  assert.ok(idx.has('cse_large'), '末尾の bridge-session ID が取れる');
+  const entry = idx.get('cse_large');
+  assert.equal(entry.cwd, 'C:\\head-cwd', '先頭の cwd が取れる');
+  assert.equal(entry.id, 'large');
+  assert.equal(idx.indexed, 1);
+  assert.ok(typeof idx.indexMs === 'number' && idx.indexMs >= 0);
+});
+
+test('localIndex: 既定の閾値が 8MB/512KB/4MB である', () => {
+  // デフォルト引数を直接テスト（引数無しで呼び出したときの値）
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-defaults-'));
+  try {
+    fs.mkdirSync(path.join(base, '.claude', 'projects', 'proj'), { recursive: true });
+    fs.writeFileSync(path.join(base, '.claude', 'projects', 'proj', 'dummy.jsonl'), '{}', 'utf8');
+    // 引数無しで呼び出し、内部で使われる既定値を確認するため、
+    // 関数のソースから既定値を直接検証
+    const src = fs.readFileSync(new URL('./reopen-lost-sessions.mjs', import.meta.url), 'utf8');
+    const match = src.match(/largeFileThreshold\s*=\s*(\d+)\s*\*\s*1024\s*\*\s*1024/);
+    assert.ok(match, 'largeFileThreshold の既定値が見つかる');
+    assert.equal(eval(match[0].split('=')[1].trim()), 8 * 1024 * 1024, 'largeFileThreshold 既定値は 8MB');
+    const headMatch = src.match(/largeFileHead\s*=\s*(\d+)\s*\*\s*1024/);
+    assert.ok(headMatch, 'largeFileHead の既定値が見つかる');
+    assert.equal(eval(headMatch[0].split('=')[1].trim()), 512 * 1024, 'largeFileHead 既定値は 512KB');
+    const tailMatch = src.match(/largeFileTail\s*=\s*(\d+)\s*\*\s*1024\s*\*\s*1024/);
+    assert.ok(tailMatch, 'largeFileTail の既定値が見つかる');
+    assert.equal(eval(tailMatch[0].split('=')[1].trim()), 4 * 1024 * 1024, 'largeFileTail 既定値は 4MB');
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
 });

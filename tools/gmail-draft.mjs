@@ -25,6 +25,7 @@ import { isEntry } from './is-entry.mjs';
 import { defaultDriveKeyPath } from './lib/drive-auth.mjs';
 import { loadLedger, isInternal, extractAddresses } from './internal-recipient-gmail-guard.mjs';
 import { bodyHash, checkConsistency, statePath, mimeText, render as renderConsistency } from './mail-consistency-check.mjs';
+import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
 
 export const GMAIL_COMPOSE_SCOPE = 'https://www.googleapis.com/auth/gmail.compose';
 export const DEFAULT_USER = 'seisaku-team@orgiast.jp';
@@ -392,8 +393,28 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         (deps.appendLedger ?? ((p,s) => { fs.mkdirSync(path.dirname(p), {recursive:true}); fs.appendFileSync(p,s); }))(ledgerFile, JSON.stringify(record)+'\n');
         stdout(`整合性 block を理由付きで承認: ${args['ack-consistency']}`);
       }
+      const draftText = mimeText(draft?.message?.payload).text;
+      if (!deps.skipContextCheck) {
+        let contextThreadId = draft?.message?.threadId;
+        if (!contextThreadId) {
+        const draftHeaders = Object.fromEntries((draft?.message?.payload?.headers || []).map(h => [String(h.name).toLowerCase(), h.value]));
+        const recipient = extractAddresses({ to: [draftHeaders.to], cc: [draftHeaders.cc] })[0];
+        if (recipient) {
+          const search = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(`from:${recipient} OR to:${recipient}`)}&maxResults=1`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(25000) });
+          if (search.ok) contextThreadId = (await search.json()).messages?.[0]?.threadId;
+        }
+        }
+        if (!contextThreadId) throw Object.assign(new Error('送信前の履歴整合性チェック対象スレッドを特定できません'), { errorKind: 'send_context_required' });
+        await (deps.assertContextApproved ?? assertContextApproved)({ channel: 'gmail', target: contextThreadId, text: draftText, home: deps.home, getLatest: async () => {
+        const response = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(contextThreadId)}?format=minimal`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(25000) });
+        if (!response.ok) throw new Error('Gmail 最新履歴取得失敗');
+        const thread = await response.json();
+        return latestOf((thread.messages || []).map(m => ({ id: m.id, at: new Date(Number(m.internalDate)).toISOString() })));
+        }});
+      }
       const result = await sendDraft({ user, id: args.send, ledger: (deps.loadLedger ?? loadLedger)(), fetchImpl, getToken, draft,
       });
+      if (!deps.skipContextCheck) recordOutbound({ channel: 'gmail', target: result.threadId, text: draftText, messageId: result.sentMessageId }, deps.home);
       emit({ ok: true, ...(isForward ? { consistency } : {}), ...result }, `送信しました: ${result.sentMessageId} (${user})`);
       return 0;
     }

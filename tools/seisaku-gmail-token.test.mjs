@@ -38,7 +38,7 @@ for (const [name, override] of [['別ユーザー', { impersonate: 'other@exampl
   test(`鍵なし＋${name}: 旧リレーは対象外、新APIは固定アカウントを検証`, async t => {
     const options={ ...fixture(t), ...override, fetchImpl: () => assert.fail('通信禁止') };
     assert.equal(await tryRelayToken(options),null);
-    if(name==='別ユーザー') await assert.rejects(getDriveToken(options),/固定/);
+    if(name==='別ユーザー') await assert.rejects(getDriveToken(options),/subject/);
     else assert.equal(await getDriveToken(options),'orgiast-server-side-gws');
   });
 }

@@ -67,6 +67,7 @@ async function cli(argv, overrides = {}) {
     mintToken: async () => { tokens++; throw new Error('unexpected mint'); },
     readState: () => { throw new Error('no cached state'); },
     inspectDraft: async () => ({ ok: true, findings: [], llm: { provider: null, error: null } }),
+    skipContextCheck: true,
     ...overrides,
   } });
   return { code, output, calls, tokens };

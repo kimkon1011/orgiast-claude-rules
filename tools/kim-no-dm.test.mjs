@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { deliverKim, KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 import { notifyOwner } from './notify-owner.mjs';
-import { sendDiscordDm } from './discord-dm.mjs';
+import { sendDiscordDm as realSendDiscordDm } from './discord-dm.mjs';
+const sendDiscordDm = (target, body, options={}) => realSendDiscordDm(target, body, { assertContextApproved: async () => ({ reason:'test' }), ...options });
 import { listItems } from './kim-inbox.mjs';
 
 function home(t) {
@@ -15,20 +16,13 @@ function home(t) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
-test('non-allowlisted texts use inbox; allowlisted texts use DM when Discord works', async t => {
+test('kim 宛は常に inbox だけで Discord API を呼ばない', async t => {
   const dir = home(t);
-  // Non-allowlisted texts: should go to inbox without calling Discord
-  for (const [kind, text] of [['action', '判断してください'], ['automatic', '緊急の障害']]) {
+  for (const [kind, text] of [['action', '判断してください'], ['automatic', '緊急の障害'], ['digest', '【進捗まとめ】'], ['done-requested', '✅ 完了']]) {
     const calls = [];
     const result = await deliverKim(text, { home: dir, userId: KIM_DISCORD_USER_ID, kind, plainJa: false, token: 'unused', sessionId: 'kim-no-dm-session', fetchImpl: async () => { calls.push('called'); return Response.json({}); } });
-    assert.equal(result.delivered, 'session-inbox', `非許可テキスト「${text}」がDM配送されました`);
-    assert.equal(calls.length, 0, `非許可テキスト「${text}」でDiscordが呼ばれました`);
-  }
-  // Allowlisted texts: should try DM (and fall back to inbox on Discord failure)
-  for (const [kind, text] of [['digest', '【進捗まとめ】'], ['done-requested', '✅ 完了']]) {
-    const result = await deliverKim(text, { home: dir, userId: KIM_DISCORD_USER_ID, kind, plainJa: false, token: 'unused', sessionId: 'kim-no-dm-session', fetchImpl: () => { throw new Error('DM rate limited'); } });
-    // DM failed → falls back to inbox (persistKim returns 'spooled')
-    assert.ok(['session-inbox', 'spooled'].includes(result.delivered), `許可テキスト「${text}」のDM失敗→inboxに落ちません: ${result.delivered}`);
+    assert.equal(result.delivered, 'session-inbox', `テキスト「${text}」がDM配送されました`);
+    assert.equal(calls.length, 0, `テキスト「${text}」でDiscordが呼ばれました`);
   }
   assert.equal(listItems(dir).length, 4);
   assert.ok(listItems(dir).every(item => item.sessionId === 'kim-no-dm-session'));
@@ -63,6 +57,7 @@ test('raw DM channel transports are audited; new bypasses fail this inventory', 
   const audited = new Map([
     ['autopilot-tick.mjs', 'readControls'], // Opens channel only to read incoming commands.
     ['event-shop-reply-context.mjs', 'channels.push'], // Read-only context collection.
+    ['send-context-check.mjs', '/messages?limit=100'], // Opens DM only to read context; no message POST.
     ['kim-push-relay.mjs', 'messages?after='], // Reads old DMs; pushKim is a separate phone push.
     ['discord-dm.mjs', 'const inbox = isKim;'],
     ['feedback-nag.mjs', 'if (deferred) return deferred;'],

@@ -27,6 +27,11 @@ test('CLI validates deadline, preserves promise and registers a new revision', (
   assert.throws(() => addCheck({ home, session: 's', check: 'x', label: 'x', deadline: 'bad' }), /deadline/);
   assert.equal(readLedger(ledgerFile(home)).length, 2);
 });
+
+test('auto-progress refuses a send promise without a matching approval marker', t => {
+  const home = tmp();
+  assert.throws(() => addCheck({ session: 'send-without-approval', check: 'exit 1', deadline: '+1d', label: '準備完了', nextClaude: 'LINEへ送信する', home, probe: () => ({ code: 1 }) }), /社外送信は登録できません/);
+});
 test('watch: before deadline stays open; overdue closes and retries final DM; a new revision can complete', async () => {
   const home = tmp(); register(home); let code = 1, deliveries = 0, fail = true;
   const io = { ...baseIo, executeCheck: () => ({ code, text: '確認結果\n本文は捨てる' }), notifyOwner: async () => { deliveries++; return { delivered: fail ? 'none' : 'dm' }; } };

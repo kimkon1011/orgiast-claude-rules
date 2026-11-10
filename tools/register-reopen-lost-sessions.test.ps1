@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'register-reopen-lost-sessions.ps1') -FunctionsOnly
 function Assert($Condition, $Message) { if (-not $Condition) { throw "FAIL: $Message" } }
 # Inject scheduler calls; use local source and mock file checks to avoid dependency on installed deployment.
@@ -47,5 +47,14 @@ Assert (-not $rNorm.changed -and $script:writes -eq 2) 'UserId normalization han
 $script:stored['OrgiastReopenLostSessionsWatch'].Triggers[0].Delay = 'PT1M'
 $r3 = Register-ReopenLostTask -GetTask $get -RegisterTask $register
 Assert ($r3.changed -and $script:writes -eq 3) 'repair drift on watch task'
+
+# Priority 5 の確認
+Assert ($task1.Settings.Priority -eq 5) 'task1 has Priority 5'
+Assert ($task2.Settings.Priority -eq 5) 'task2 has Priority 5'
+
+# Priority が 5 でない既存タスクは再登録される
+$script:stored['OrgiastReopenLostSessions'].Settings.Priority = 7
+$r4 = Register-ReopenLostTask -GetTask $get -RegisterTask $register
+Assert ($r4.changed -and $script:writes -eq 4) 'Priority 7 の既存タスクは再登録される'
 
 Write-Output 'PASS: reopen task registration (both logon and watch tasks, mocked scheduler)'

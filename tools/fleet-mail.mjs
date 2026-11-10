@@ -1341,7 +1341,7 @@ async function runMain(argv, deps) {
     catch (error) { err(`fleet-mail: 状態を取得できません（hub不達: ${error.message}）`); return 3; }
     const mail = result?.mail;
     if (!mail) { err(`fleet-mail: ${id} はサーバーに見つかりません`); return 4; }
-    out([`id: ${mail.id}`, ...['status', 'createdAt', 'expiresAt', 'deliveredAt', 'deliveredBy', 'seenAt', 'seenBy', 'resultAt', 'ackAt', 'failedAt', 'failReason'].map(key => `${key}: ${mail[key] || '(なし)'}`)].join('\n'));
+    out([`id: ${mail.id}`, ...['to', 'status', 'createdAt', 'expiresAt', 'deliveredAt', 'deliveredBy', 'seenAt', 'seenBy', 'resultAt', 'ackAt', 'failedAt', 'failReason'].map(key => `${key}: ${mail[key] || '(なし)'}`)].join('\n'));
     return 0;
   }
   if (options['--answer']) {
@@ -1496,6 +1496,7 @@ async function runMain(argv, deps) {
       id = mailId(now, deps.randomBytes);
     }
     log('sent', { action: 'sent', id, to: payload.to, ...(exceptionReason ? { kimPcOnlyResource: exceptionReason } : {}), ...(options['--exec'] ? { exec: options['--exec'] } : {}) });
+    if (options['--kind'] === 'prompt') err(`待つなら: node tools/auto-progress.mjs --add-check --session ${process.env.CLAUDE_SESSION_ID || process.env.SESSION_ID || '<送信セッションID>'} --check "node tools/auto-progress-fleet-mail-check.mjs --mail ${id}" --deadline +7d --label "${payload.to} の返信"`);
     err(`状態確認: node tools/fleet-mail.mjs --sent-status ${id}`);
     if (options['--wait'] !== undefined) {
       err(`送信済み: ${id}`);

@@ -3,6 +3,7 @@ import { checkProgressSummary } from './check-progress-summary.mjs';
 import { decisionOwnerOf } from '../auto-progress-decision-owner.mjs';
 import { notificationKind } from './owner-dm-policy.mjs';
 const day = 86400000;
+const isStopped = row => ['stalled', 'waiting_user'].includes(row.status) || row.verdict === 'stalled';
 // まとめの1行を作る。2026-11-04 nishi: 届いたまとめが「【kimko-PC（）・… の Claude Code】（このDMに返信してください）」
 // 「新しいセッションが で引き継ぎ」「10 に成約率」と穴だらけで、結局「進捗どう？」と聞くしかなかった。
 // - 出どころの見出し行（【…の Claude Code】プロジェクト: … ／ 作業ID: …）は改行を潰す前に行ごと外す。
@@ -65,14 +66,14 @@ export function compactDigest(rows, deferred, now, { home, owner = '' } = {}) {
   const human = [...humanRows, ...deferred.filter(r => r.kind === 'done-requested' && !humanRows.some(h => h.sessionId && h.sessionId === r.session?.sessionId)).map(r => ({ ...r.session, status: 'done', label: r.session?.label || r.session?.requestText || r.text }))];
   const done = human.filter(r => r.status === 'done');
   const ongoing = human.filter(r => r.status !== 'done');
-  lines.push('あなたが頼んだこと', `完了 ${done.length}件 / 進行中 ${ongoing.length}件（止まっている ${ongoing.filter(r => ['stalled', 'waiting_user'].includes(r.status)).length}件）`);
+  lines.push('あなたが頼んだこと', `完了 ${done.length}件 / 進行中 ${ongoing.length}件（止まっている ${ongoing.filter(r => isStopped(r)).length}件）`);
   for (const row of [...ongoing, ...done].slice(0, 10)) {
     const summary = checkProgressSummary(row.checkText).split(/\r?\n/)[0];
     lines.push(`・${plain(row.label || row.requestText || row.promise).slice(0, 60)} ／ ${summary} ／ nextKim: ${plain(row.nextKim) || 'なし'}`);
   }
   if (human.length > 10) lines.push(`ほか ${human.length - 10}件`);
   const automatic = rows.filter(r => !humanRows.includes(r));
-  lines.push('自動作業', `完了 ${automatic.filter(r => r.status === 'done').length + deferred.filter(r => r.kind === 'automatic' && r.status === 'done').length}件・止まっている ${automatic.filter(r => ['stalled', 'waiting_user'].includes(r.status)).length + deferred.filter(r => r.kind === 'automatic' && r.status === 'stalled').length}件`);
+  lines.push('自動作業', `完了 ${automatic.filter(r => r.status === 'done').length + deferred.filter(r => r.kind === 'automatic' && r.status === 'done').length}件・止まっている ${automatic.filter(r => isStopped(r)).length + deferred.filter(r => r.kind === 'automatic' && r.status === 'stalled').length}件`);
   const shown = new Set([...included, ...old].map(a => a.text));
   return { text: lines.join('\n'), includedIds: actions.filter(a => shown.has(a.text)).map(a => a.id).filter(Boolean) };
 }

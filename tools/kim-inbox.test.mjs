@@ -76,20 +76,19 @@ test('本文上限・秘匿・表示予算と ask 優先を守り、表示した
   assert.match(context, /■ ask/); assert.ok(items.filter(i => i.shownCount > 0).length <= 8);
   const shown = items.filter(i => i.shownCount > 0); assert.ok(shown.every(i => context.includes(i.id)));
 });
-test('旧許可リストはrepo・home両方から読み込まれ、パターンマッチで許可判定される', t => {
+test('kim-discord-allowlist は常に空で discordAllowed は常に false（2026-11-10 全廃）', t => {
   const home = seat(t); const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ki-repo-')); t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
   fs.mkdirSync(path.join(repoRoot, 'config'));
   fs.writeFileSync(path.join(repoRoot, 'config/kim-discord-allowlist.json'), JSON.stringify({ entries: [{ category: '定時', pattern: '^定時' }] }));
   fs.writeFileSync(path.join(home, '.claude/kim-discord-allowlist.json'), JSON.stringify({ entries: [{ category: '追加', pattern: '^追加' }] }));
   const loaded = loadAllowlist({ home, repoRoot });
-  assert.ok(Array.isArray(loaded) && loaded.length >= 2, `許可リストの読み込み失敗: ${loaded.length}`);
-  // パターンマッチ
-  assert.ok(discordAllowed('定時本文', { home, repoRoot }).allowed, '「定時本文」が許可されていません');
-  assert.ok(discordAllowed('追加本文', { home, repoRoot }).allowed, '「追加本文」が許可されていません');
-  assert.equal(discordAllowed('未許可', { home, repoRoot }).allowed, false, '「未許可」が許可されています');
-  assert.equal(discordAllowed('緊急の障害', { home, repoRoot }).allowed, false, '「緊急の障害」が許可されています');
-  // 直接指定の allowlist も尊重される
-  assert.ok(discordAllowed('未許可', { allowlist: [{ category: '全件', pattern: '.*' }] }).allowed, '明示allowlistが無視されています');
+  assert.ok(Array.isArray(loaded) && loaded.length === 0, `許可リストは空になっているべき: ${loaded.length}`);
+  // ファイルが存在しても discordAllowed は常に false
+  for (const text of ['定時本文', '追加本文', '未許可', '緊急の障害', '【進捗まとめ】']) {
+    assert.equal(discordAllowed(text, { home, repoRoot }).allowed, false, `「${text}」が許可されています`);
+  }
+  // 明示 allowlist を渡しても常に false
+  assert.equal(discordAllowed('未許可', { allowlist: [{ category: '全件', pattern: '.*' }] }).allowed, false, '明示allowlistが許可を返しています');
 });
 test('通知は fetch ゼロで台帳に ask と sessionId を保存し24時間抑制も維持する', async t => {
   const home = seat(t); const options = { home, plainJa: false, fetchImpl: async () => assert.fail('Discord を呼ばない'), kind: 'ask', sessionId: 'abcdef12-3456' };

@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 export const GATE_CONTRACT = {"name": "next-action-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "next-action-gate"}]};
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { sessionWakeupEvidence } from './session-wakeup-evidence.mjs';
 import { isEntry } from './is-entry.mjs';
 import { readTranscriptContext } from './lib/assistant-text.mjs';
@@ -401,8 +404,64 @@ function judgeNextActionSingle(text, transcriptRaw = '', input = {}, options = {
 // Report independent footer defects together. The single evaluator remains the source of truth
 // for ordered checks; the supplement reports waiting checks and independent footer
 // defects together, including launches hidden by a missing footer.
+// stop_hook_active 中の SESSION-OPEN-NO-DEADLINE 連続ブロック回数を管理する。
+// 同じ session_id で連続2回まで block、3回目以降は pass する（無限ループ防止）。
+const NO_DEADLINE_COUNTER_FILE = () => path.join(process.env.ORGIAST_HOME || os.homedir(), '.claude', 'next-action-no-deadline-counter.json');
+
+function readNoDeadlineCounter() {
+  try { return JSON.parse(fs.readFileSync(NO_DEADLINE_COUNTER_FILE(), 'utf8')); } catch { return {}; }
+}
+
+function writeNoDeadlineCounter(data) {
+  try {
+    fs.mkdirSync(path.dirname(NO_DEADLINE_COUNTER_FILE()), { recursive: true });
+    fs.writeFileSync(NO_DEADLINE_COUNTER_FILE(), JSON.stringify(data));
+  } catch { /* fail-open */ }
+}
+
+// stop_hook_active 中でも SESSION-OPEN-NO-DEADLINE だけは検査する。
+// 連続2回まで block、3回目以降は pass。
+function checkNoDeadlineDuringStopHook(text, input) {
+  const source = String(text || '').trimEnd();
+  const footer = footerValues(source);
+  if (!footer) return null;
+  const sessionState = SESSION_STATES.find(([, pattern]) => pattern.test(footer.session))?.[0];
+  if (sessionState) return null; // 有効な定型文（期限あり含む）なら pass
+  if (!footer.session.startsWith('まだ閉じない（作業中') && !footer.session.startsWith('/session-close をして（まだ閉じない')) return null;
+  // 期限なしの「まだ閉じない」
+  const sessionId = input?.session_id || input?.sessionId || '';
+  const counter = readNoDeadlineCounter();
+  const count = (counter[sessionId] || 0) + 1;
+  if (count >= 3) {
+    // 3回目以降は pass（カウンターをリセットしない）
+    return null;
+  }
+  counter[sessionId] = count;
+  writeNoDeadlineCounter(counter);
+  const state = footer.session.startsWith('/session-close') ? 'pending' : 'open';
+  return {
+    decision: 'block',
+    code: 'SESSION-OPEN-NO-DEADLINE',
+    reason: `[SESSION-OPEN-NO-DEADLINE] 「まだ閉じない」のときは、何日の何時まで待つかを入れてください。書式: 「${SESSION_PHRASES[state]}」（例: 「${openPhrase(new Date(Date.now() + 4 * 3600 * 1000), state)}」）。期限は、待っている相手の作業や自動チェックの期限に合わせる。`,
+  };
+}
+
 export function judgeNextAction(text, transcriptRaw = '', input = {}, options = {}) {
-  if (input.stop_hook_active) return { decision: 'pass', reason: 'stop-hook-active' };
+  const sessionId = input?.session_id || input?.sessionId || '';
+  if (input?.stop_hook_active) {
+    // stop_hook_active 中でも SESSION-OPEN-NO-DEADLINE だけは検査する
+    const noDeadline = checkNoDeadlineDuringStopHook(text, input);
+    if (noDeadline) return noDeadline;
+    return { decision: 'pass', reason: 'stop-hook-active' };
+  } else {
+    if (sessionId) {
+      const counter = readNoDeadlineCounter();
+      if (counter[sessionId] !== undefined) {
+        delete counter[sessionId];
+        writeNoDeadlineCounter(counter);
+      }
+    }
+  }
   if (enabled()) {
     const background = judgeBgTurnReport(transcriptRaw, input);
     if (background.decision === 'block') return background;
@@ -439,7 +498,6 @@ async function main() {
     const raw = await readStdinWithTimeout();
     if (!raw.trim()) return;
     const input = JSON.parse(raw);
-    if (input?.stop_hook_active) return;
     const context = readTranscriptContext(input?.transcript_path);
     const assistantText = input?.assistant_text || context.assistantText;
     const result = judgeNextAction(assistantText, context.raw, input);

@@ -4,8 +4,6 @@ import path from 'node:path';
 import { addItem, listItems, isKimSeat } from '../kim-inbox.mjs';
 import { completionActions } from './auto-progress-artifact.mjs';
 import { rowKey } from '../auto-progress-ledger.mjs';
-import { discordAllowed } from './kim-discord-allowlist.mjs';
-import { notifyOwner } from '../notify-owner.mjs';
 
 export const usesKimDoneInbox = (row, home) => isKimSeat(home) || String(row.owner || '').toLowerCase() === 'kim@orgiast.jp';
 export const hasDoneInboxReceipt = row => Boolean(row.doneInboxId && row.doneInboxVerifiedAt);
@@ -29,24 +27,6 @@ export async function deliverDoneInbox(home, rows, text, { now = Date.now(), io 
     }
     delivery = { delivered: 'session-inbox', channel: 'kim-inbox', ok: true, id: stored.id,
       receipt: { doneInboxId: stored.id, doneInboxVerifiedAt: new Date(now).toISOString(), doneNotifiedAt: new Date(now).toISOString(), doneNotifyPending: false } };
-
-    const checkAllowed = io.discordAllowed ?? discordAllowed;
-    if (checkAllowed(text, { home }).allowed) {
-      try {
-        const owner = rows[0]?.owner || 'kim@orgiast.jp';
-        const dmResult = await (io.notifyOwner ?? notifyOwner)(owner, text, { home, now, kind: 'automatic', session: rows[0], userId: '715210673642012733' });
-        if (dmResult?.delivered === 'dm') {
-          delivery = {
-            ...delivery,
-            delivered: 'dm',
-            channel: 'discord',
-            messageId: dmResult.messageId,
-            recipientId: dmResult.recipientId,
-            httpStatus: dmResult.httpStatus,
-          };
-        }
-      } catch { /* session-inbox fallback remains */ }
-    }
     return delivery;
   } catch (error) {
     delivery.reason = String(error?.code || error?.message || error).slice(0, 200);

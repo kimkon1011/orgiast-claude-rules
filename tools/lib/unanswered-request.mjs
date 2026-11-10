@@ -51,22 +51,47 @@ function readTail(file, maxBytes = 512 * 1024) {
   return stat.size > length ? text.slice(text.indexOf('\n') + 1) : text;
 }
 
-export function findUnansweredRequest(transcriptPath, { readFile = readTail, statSync = fs.statSync, mtimeMs, now = Date.now() } = {}) {
-  let raw;
-  try { raw = readFile(transcriptPath); } catch { return null; }
+function parseEntries(text) {
   const entries = [];
-  for (const line of String(raw).split(/\r?\n/)) {
+  for (const line of String(text).split(/\r?\n/)) {
     if (!line.trim()) continue;
     try {
       const entry = JSON.parse(line);
       if (!entry?.isSidechain) entries.push(entry);
     } catch { /* 壊れた行は無視する。 */ }
   }
+  return entries;
+}
 
-  const realEntries = entries.filter(isRealEntry);
+export function findUnansweredRequest(transcriptPath, { readFile = readTail, statSync = fs.statSync, mtimeMs, now = Date.now() } = {}) {
+  let raw;
+  try { raw = readFile(transcriptPath); } catch { return null; }
+
+  // readTail は末尾 512KB だけを読むため、巨大な transcript（例: 実データ
+  // 4832b083 の 2.1MB）では最後の user 依頼が窓の外になり userIndex<0 で検出漏れになる。
+  // 入手した raw の行数が実際のファイル行数より少なければ（=tail が partial なので）
+  // 全文へフォールバックする（ただしテストで注入された readFile はそのまま尊重）。
+  let text = raw;
+  let realEntries = [];
   let userIndex = -1;
-  for (let i = realEntries.length - 1; i >= 0; i--) {
-    if (isUserRequest(realEntries[i])) { userIndex = i; break; }
+  const rebase = () => {
+    const entries = parseEntries(text);
+    realEntries = entries.filter(isRealEntry);
+    for (let i = realEntries.length - 1; i >= 0; i--) {
+      if (isUserRequest(realEntries[i])) { userIndex = i; break; }
+    }
+  };
+  rebase();
+  if (userIndex < 0) {
+    try {
+      const fullStat = statSync(transcriptPath);
+      const rawLen = Buffer.byteLength(raw, 'utf8');
+      if (fullStat.size > rawLen + 1) {
+        const full = fs.readFileSync(transcriptPath, 'utf8');
+        text = full;
+        rebase();
+      }
+    } catch { /* フォールバック失敗は握りつぶす */ }
   }
   if (userIndex < 0) return null;
 

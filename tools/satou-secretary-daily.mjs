@@ -15,6 +15,7 @@ import { fetchHistory as fetchSendHistory, runLlm as checkSendContext } from "./
 import { latestOf, writeContextMarker } from "./lib/send-context.mjs";
 export const LEDGER_ID = "17h_x-1kdxI_92H_dXBydclLsxUmYKa-ut0P3begM_j0",
   MASTER_ID = "14RC6og1ma_I3LGHwCVwswKArgHwCOPxWlPB3g8adaYY";
+export const LEDGER_FOOTER = "佐藤担当案件台帳\nhttps://docs.google.com/spreadsheets/d/17h_x-1kdxI_92H_dXBydclLsxUmYKa-ut0P3begM_j0/edit?usp=sharing";
 export const TABS = [
   "自動_案件",
   "自動_今日の要対応",
@@ -519,6 +520,28 @@ export function prioritizeActions(actions, now) {
   return actions.filter(x => x[4] !== "対応済み" && !(x[0] === "予定" && /採用|面談|面接|中途/.test(`${x[2]} ${x[3]}`)))
     .sort((a,b) => rank(a)-rank(b) || actionDate(a[1])-actionDate(b[1])).slice(0,3);
 }
+const priorityCase = (action, cases) => {
+  const blob = norm(`${action[2] || ""} ${action[3] || ""}`);
+  return cases.find(c => [baseCode(c.code), c.client, c.name].filter(Boolean)
+    .some(value => norm(value).length >= 3 && blob.includes(norm(value))));
+};
+export function eligiblePriorityActions(actions, cases, now) {
+  return prioritizeActions(actions.filter(action => {
+    const item = priorityCase(action, cases);
+    if (!item) return true;
+    return !CLOSED.has(item.state) && String(item.reason || "") !== "百貨店ルート";
+  }), now);
+}
+export function calendarPriorityText(action) {
+  const at = new Date(actionDate(action[1]));
+  const time = Number.isFinite(+at)
+    ? new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit", hour12: false }).format(at)
+    : "";
+  const raw = txt(action[2]), category = raw.match(/^【([^】]+)】/)?.[1] || "予定";
+  const subject = raw.replace(/^【[^】]+】\s*/, "").replace(/（.*$/, "").trim();
+  const counterpart = subject.match(/^(.+?様)(?:\s|$)/)?.[1] || subject.split(/\s+/)[0] || "(無題)";
+  return `${time} ${counterpart} ${category}`.trim();
+}
 export async function buildDailyReport(
   {
     now = new Date(),
@@ -608,7 +631,7 @@ export async function buildDailyReport(
   if (palace && palace.state === "アプローチリスト")
     problems.push({
       text: "パレスはキャンセル済みだがマスターがアプローチリストのまま",
-      action: "金社長にパレスのキャンセル反映とマスター状態の修正可否を本日中に確認",
+      action: "パレスのキャンセル反映待ち（AI用アカウントの編集権限の付与待ち）",
       deadline: "本日",
       code: palace.code,
       url: palace.estimate || palace.plan,
@@ -663,11 +686,12 @@ export async function buildDailyReport(
               /^判断候補[:：]/.test(x) &&
               /値引|金額変更|キャンセル料|契約条件|外注先(?:の選定|の変更|を選)|方針変更|権限/.test(x),
           ))
-          judgment.push(clip(line.replace(/^判断候補[:：]\s*/, "")));
+          if (!/パレス.*キャンセル/.test(line))
+            judgment.push(clip(line.replace(/^判断候補[:：]\s*/, "")));
     } catch (e) {
       llmErrors.push(e.message);
     }
-  const sorted = prioritizeActions(actions, now),
+  const sorted = eligiblePriorityActions(actions, cases, now),
     md = new Intl.DateTimeFormat("ja-JP", {
       timeZone: "Asia/Tokyo",
       month: "numeric",
@@ -699,7 +723,7 @@ export async function buildDailyReport(
       ...(judgment.length ? judgment.map((x) => `・${x}`) : ["・なし"]),
       "■今日の優先",
       ...(sorted.length
-        ? sorted.map((x, i) => `${i + 1}. ${clip(`${x[0] === "予定" ? `${x[1]} ` : x[3] && x[3] !== x[2] ? `${x[3]}：` : ""}${x[2]}`, 76)}`)
+        ? sorted.map((x, i) => `${i + 1}. ${clip(x[0] === "予定" ? calendarPriorityText(x) : `${x[3] && x[3] !== x[2] ? `${x[3]}：` : ""}${x[2]}`, 76)}`)
         : ["・なし"]),
     ],
     capped = capReportLines(lines);
@@ -714,7 +738,7 @@ export async function buildDailyReport(
     ]);
   sorted.forEach((x) => details.push(["今日の優先", x[2], x[3], x[5]]));
   return {
-    text: capped.join("\n"),
+    text: `${capped.join("\n")}\n\n${LEDGER_FOOTER}`,
     lines: capped,
     details,
     counted,

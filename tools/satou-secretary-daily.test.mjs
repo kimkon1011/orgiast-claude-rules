@@ -16,7 +16,11 @@ import {
   isSatouCustomerMail,
   deliverReport,
   prioritizeActions,
+  eligiblePriorityActions,
+  calendarPriorityText,
   capReportLines,
+  reportDeliveryText,
+  LEDGER_FOOTER,
   shouldDeliver,
   currentMessageBody,
   caseForMessage,
@@ -251,6 +255,29 @@ test("優先順位は今日の予定、期限、古い未返信、未来予定�
   const row=(kind,date,name,state="未返信")=>[kind,date,name,"",state,""];
   const rows=[row("予定","2026/11/11 9:00:00","明日"),row("未返信メール","2026/11/9 9:00:00","新"),row("未返信メール","2026/11/2 9:00:00","古"),row("納品期限","2026-11-12","期限"),row("予定","2026/11/10 14:00:00","今日"),row("百貨店問い合わせ","2026/10/1 9:00:00","済","対応済み")];
   assert.deepEqual(prioritizeActions(rows,new Date("2026-11-10T06:30:00+09:00")).map(x=>x[2]),["今日","期限","古"]);
+});
+test("今日の優先は完了案件と百貨店ルートだけの他担当案件を除外し予定を短く表示", () => {
+  const actions=[
+    ["予定","2026/11/10 14:00:00","【打合せ】ビッグ東北様 2027全社員大会（丸山社長・加藤様）","","48時間以内",""],
+    ["納品期限","2026-11-10","ジャパンホームショー 65インチモニターレンタル","Cocolive株式会社","納品完了",""],
+    ["納品期限","2026-11-10","パレス催事","合同会社パレス","アプローチリスト",""],
+    ["未返信メール","2026/11/9 9:00:00","返信してください","顧客","未返信",""]
+  ];
+  const cases=[
+    {code:"261117COC",client:"Cocolive株式会社",name:"ジャパンホームショー 65インチモニターレンタル",state:"納品完了",reason:"営業"},
+    {code:"261102PAL",client:"合同会社パレス",name:"パレス催事",state:"アプローチリスト",reason:"百貨店ルート"}
+  ];
+  const result=eligiblePriorityActions(actions,cases,new Date("2026-11-10T06:30:00+09:00"));
+  assert.deepEqual(result.map(x=>x[2]),[actions[0][2],"返信してください"]);
+  assert.equal(calendarPriorityText(actions[0]),"14:00 ビッグ東北様 打合せ");
+});
+test("報告末尾は25行制限外の台帳リンクだけでDMにも余計な一文を加えない", async () => {
+  const report=await buildDailyReport({now:new Date("2026-11-10T06:30:00+09:00"),cases:[],messages:[],actions:[]},{askLlm:async()=>"なし"});
+  assert.ok(report.lines.length<=25);
+  assert.ok(report.text.endsWith(`\n\n${LEDGER_FOOTER}`));
+  assert.equal(report.text.match(/https?:\/\//g)?.length,1);
+  assert.equal(reportDeliveryText(report.text),`おはようございます。社長への業務報告の下書きです（このまま社長とのグループへ転送できます。直したい所は Claude に伝えてください）\n\n${report.text}`);
+  assert.doesNotMatch(reportDeliveryText(report.text),/10\/26|到達確認/);
 });
 test("25行に収めても全見出しと優先3件は残す", () => {
   const headings=["■昨日の動き","■問題点","■解決が必要なこと","■社長判断が必要なこと"];

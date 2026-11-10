@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { assertContextApproved, writeContextMarker } from './lib/send-context.mjs';
-import { fetchHistory, main, runLlm } from './send-context-check.mjs';
+import { classifyMessage, fetchHistory, labelHistory, loadInternalSenders, main, runLlm } from './send-context-check.mjs';
 
 const tmp = t => { const p=fs.mkdtempSync(path.join(os.tmpdir(),'send-context-')); t.after(()=>fs.rmSync(p,{recursive:true,force:true})); return p; };
 test('LINE履歴は実テーブルの列名を使って整形する', async t => {
@@ -14,7 +14,29 @@ test('LINE履歴は実テーブルの列名を使って整形する', async t =>
   let requested='';
   const result=await fetchHistory('line','C10930732da844f79c6032a40705a4d73',{home,fetchImpl:async url=>{ requested=String(url); return new Response(JSON.stringify([{id:1,external_message_id:'line-1',created_at:new Date().toISOString(),sender_display_name:'山之内さん',body:'確認しました',direction:'inbound'}]),{status:200}); }});
   assert.match(requested,/select=id,created_at,sender_display_name,body,direction,external_message_id/);
-  assert.deepEqual(result.messages.map(({id,side,sender,text})=>({id,side,sender,text})),[{id:'line-1',side:'inbound',sender:'山之内さん',text:'確認しました'}]);
+  assert.deepEqual(result.messages.map(({id,side,party,sender,text})=>({id,side,party,sender,text})),[{id:'line-1',side:'inbound',party:'external',sender:'山之内さん',text:'確認しました'}]);
+});
+test('LINEのinboundでも明示設定した社員表示名は自社として分類する', () => {
+  const config=loadInternalSenders();
+  const messages=[
+    classifyMessage({side:'inbound',sender:'きむこん☺',text:'LED仕込みを1.5万円で可能でしょうか？'},'line',config),
+    classifyMessage({side:'inbound',sender:'うっちー@モデル',text:'別件には回答します'},'line',config),
+  ];
+  assert.deepEqual(messages.map(x=>x.party),['internal','external']);
+  assert.match(labelHistory(messages)[0],/\[自社\].*LED仕込み/);
+  assert.match(labelHistory(messages)[1],/\[相手\].*別件/);
+});
+test('自社の質問と相手未回答の実データ形をLLMへ正しいラベルで渡す', () => {
+  let prompt='';
+  const verdict=runLlm([
+    {party:'internal',sender:'きむこん☺',text:'LED仕込みを1.5万円で可能でしょうか？'},
+    {party:'external',sender:'うっちー@モデル',text:'（この質問への回答はまだない）'},
+  ],'ご確認をお願いいたします。',{spawn:(_exe,args)=>{prompt=fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8');return {status:0,stdout:'{"verdict":"OK","reason":"自社質問を相手要望としていない","warnings":[]}',stderr:''};}});
+  assert.match(prompt,/\[自社\] きむこん☺: LED仕込み/);
+  assert.match(prompt,/\[相手\] うっちー@モデル/);
+  assert.match(prompt,/\[自社\]の質問を相手の要望と解釈しない/);
+  assert.equal(verdict.ok,true);
+  assert.match(verdict.reason,/自社質問を相手要望としていない/);
 });
 test('LINE履歴取得エラーはレスポンス本文を含む', async t => {
   const home=tmp(t); fs.mkdirSync(path.join(home,'.claude')); fs.writeFileSync(path.join(home,'.claude','line-send.env'),'LINE_CHANNEL_ACCESS_TOKEN=test\nSUPABASE_URL=https://example.supabase.co\nSUPABASE_SERVICE_ROLE_KEY=test\n');

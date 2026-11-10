@@ -400,7 +400,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         const draftHeaders = Object.fromEntries((draft?.message?.payload?.headers || []).map(h => [String(h.name).toLowerCase(), h.value]));
         const recipient = extractAddresses({ to: [draftHeaders.to], cc: [draftHeaders.cc] })[0];
         if (recipient) {
-          const search = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(`from:${recipient} OR to:${recipient}`)}&maxResults=1`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(25000) });
+          const search = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(`(from:${recipient} OR to:${recipient}) -in:drafts`)}&maxResults=1`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(25000) });
           if (search.ok) contextThreadId = (await search.json()).messages?.[0]?.threadId;
         }
         }
@@ -409,7 +409,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         const response = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(contextThreadId)}?format=minimal`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(25000) });
         if (!response.ok) throw new Error('Gmail 最新履歴取得失敗');
         const thread = await response.json();
-        return latestOf((thread.messages || []).map(m => ({ id: m.id, at: new Date(Number(m.internalDate)).toISOString() })));
+        return latestOf((thread.messages || []).filter(m => !(m.labelIds || []).includes('DRAFT')).map(m => ({ id: m.id, at: new Date(Number(m.internalDate)).toISOString() })));
         }});
       }
       const result = await sendDraft({ user, id: args.send, ledger: (deps.loadLedger ?? loadLedger)(), fetchImpl, getToken, draft,

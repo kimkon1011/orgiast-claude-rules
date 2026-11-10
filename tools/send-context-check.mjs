@@ -90,11 +90,11 @@ export async function fetchHistory(channel, target, { home = process.env.ORGIAST
     const user = process.env.ORGIAST_GMAIL_USER || 'seisaku-team@orgiast.jp';
     const token = await mintDwdToken({ user, scope:'https://www.googleapis.com/auth/gmail.readonly', fetchImpl });
     const headers = { Authorization:`Bearer ${token}` }; let threadId = target;
-    if (target.includes('@')) { const q = encodeURIComponent(`from:${target} OR to:${target}`); const lr = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=20`, { headers }); const list = await lr.json(); threadId = list.messages?.[0]?.threadId; }
+    if (target.includes('@')) { const q = encodeURIComponent(`(from:${target} OR to:${target}) -in:drafts`); const lr = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=20`, { headers }); const list = await lr.json(); threadId = list.messages?.[0]?.threadId; }
     if (!threadId) throw new Error('Gmail スレッドが見つかりません');
     const r = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`, { headers }); if (!r.ok) throw await responseError('Gmail 履歴取得失敗', r);
     const data = await r.json(); const decode = p => p?.body?.data ? Buffer.from(p.body.data,'base64url').toString('utf8') : (p?.parts||[]).map(decode).join('\n');
-    return { target: threadId, messages: trimHistory((data.messages||[]).map(x => { const h=Object.fromEntries((x.payload?.headers||[]).map(v=>[v.name.toLowerCase(),v.value])); return { id:x.id, at:new Date(Number(x.internalDate)).toISOString(), side:addressOf(h.from)===user.toLowerCase()?'self':'external', sender:h.from, text:decode(x.payload) }; })).map(x => classifyMessage(x, channel, internalSenders)) };
+    return { target: threadId, messages: trimHistory((data.messages||[]).filter(x => !(x.labelIds||[]).includes('DRAFT')).map(x => { const h=Object.fromEntries((x.payload?.headers||[]).map(v=>[v.name.toLowerCase(),v.value])); return { id:x.id, at:new Date(Number(x.internalDate)).toISOString(), side:addressOf(h.from)===user.toLowerCase()?'self':'external', sender:h.from, text:decode(x.payload) }; })).map(x => classifyMessage(x, channel, internalSenders)) };
   }
   throw new Error(`未対応 channel: ${channel}`);
 }

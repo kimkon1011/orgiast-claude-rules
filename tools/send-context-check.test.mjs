@@ -171,3 +171,72 @@ test('--intended-change 無しのマーカーはintendedChangesをundefinedの�
   const marker=JSON.parse(fs.readFileSync(path.join(home,'.claude','send-context-checks',markers[0]),'utf8'));
   assert.equal(marker.intendedChanges,undefined);
 });
+test('Gmail履歴取得はDRAFTメッセージを除外し検索時に-in:draftsを指定する', async t => {
+  const home = tmp(t);
+  const calls = [];
+  const result = await fetchHistory('gmail', 'client@example.com', {
+    home,
+    fetchImpl: async (url, init = {}) => {
+      const urlStr = String(url);
+      calls.push({ url: urlStr, init });
+      if (urlStr.includes('/oauth2/token')) {
+        return Response.json({ access_token: 'fake-token' });
+      }
+      if (urlStr.includes('/messages?q=')) {
+        assert.match(urlStr, /-in%3Adrafts/i);
+        return Response.json({ messages: [{ id: 'm-sent', threadId: 'thread-123' }] });
+      }
+      if (urlStr.includes('/threads/thread-123')) {
+        return Response.json({
+          id: 'thread-123',
+          messages: [
+            {
+              id: 'm-sent',
+              labelIds: ['SENT'],
+              internalDate: '1794132000000', // 2026-11-08T10:00:00Z
+              payload: {
+                headers: [
+                  { name: 'From', value: 'seisaku-team@orgiast.jp' },
+                  { name: 'To', value: 'client@example.com' }
+                ],
+                body: { data: Buffer.from('送信済みの案内本文', 'utf8').toString('base64url') }
+              }
+            },
+            {
+              id: 'm-recv',
+              labelIds: ['INBOX'],
+              internalDate: '1794218400000', // 2026-11-09T10:00:00Z
+              payload: {
+                headers: [
+                  { name: 'From', value: 'client@example.com' },
+                  { name: 'To', value: 'seisaku-team@orgiast.jp' }
+                ],
+                body: { data: Buffer.from('相手からの返信本文', 'utf8').toString('base64url') }
+              }
+            },
+            {
+              id: 'm-draft',
+              labelIds: ['DRAFT'],
+              internalDate: '1794304800000', // 2026-11-10T10:00:00Z
+              payload: {
+                headers: [
+                  { name: 'From', value: 'seisaku-team@orgiast.jp' },
+                  { name: 'To', value: 'client@example.com' }
+                ],
+                body: { data: Buffer.from('作成中の下書き本文', 'utf8').toString('base64url') }
+              }
+            }
+          ]
+        });
+      }
+      return new Response('not found', { status: 404 });
+    }
+  });
+
+  assert.equal(result.target, 'thread-123');
+  assert.equal(result.messages.length, 2);
+  assert.deepEqual(result.messages.map(m => m.id), ['m-sent', 'm-recv']);
+  assert.ok(!result.messages.some(m => m.text.includes('作成中の下書き本文')));
+  assert.equal(result.messages[0].text, '送信済みの案内本文');
+  assert.equal(result.messages[1].text, '相手からの返信本文');
+});

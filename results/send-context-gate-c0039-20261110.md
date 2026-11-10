@@ -28,3 +28,16 @@ PR URL: https://github.com/kimkon1011/orgiast-claude-rules/pull/1838
 - GitHub Actions: CI run `42723790759` の `test` 成功。test run `42723790474` の Windows `test`、`test-posix` とも成功。
 - PR #1838: squash merge commit `44034ad8de30f5bee27842907656e24a9abae9d2`。
 - mergedAt: `2026-11-10T00:02:34Z`（2026-11-10 09:02:34 JST）。
+
+## PR #1838 実地不具合の修正（2026-11-10）
+- LINE の `channel_messages` を `select=*`・1件で実地確認し、実列が `sender_display_name` であることを確認。存在しない `sender_name` を選択していたクエリを修正した。
+- LINE・Gmail・Discord の履歴取得失敗時に、HTTP ステータスだけでなくレスポンス本文も表示するようにした。
+- Gmail の実地検証で、GWSプロキシ用マーカーを通常の `fetch` へ渡して HTTP 401 になる問題を確認。既定の取得関数を `gwsFetch` に統一して修正した。
+- Gmail の長い引用履歴をWindowsのコマンドライン引数へ載せるとLLM判定プロセスを起動できない問題を確認。プロンプトを一時ファイルに置き、`llm-ask.mjs --prompt-file` で渡すようにした。
+- モックを実列 `sender_display_name` に合わせ、HTTP 400本文、GWS経路、Windows引数長回避を回帰テストに追加した。
+
+### Windows 実データ確認（送信なし）
+- LINE `C10930732da844f79c6032a40705a4d73`: 履歴8件を表示し、未回答事項を検出して `NG`。HTTP 400 は解消。
+- Gmail thread `19fcaf3ba4f2ccba`: 履歴4件を表示し、テスト本文を `OK` 判定。
+- Discord channel `1382752379488833620`: 履歴100件を表示し、テスト本文を `OK` 判定。
+- いずれも `send-context-check.mjs` の読み取り・判定だけを実行し、送信処理は実行していない。

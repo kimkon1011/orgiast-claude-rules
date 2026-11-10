@@ -642,7 +642,9 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   if (geminiKey && !geminiAvailable) console.error('[codex-do] gemini-cli の CLI(gemini) が見つからないため候補から外します');
   if (deepseekKey && !qwenAvailable) console.error('[codex-do] deepseek の CLI(qwen) が見つからないため候補から外します');
   if (openrouterKey && !qwenAvailable) console.error('[codex-do] openrouter-free の CLI(qwen) が見つからないため候補から外します');
-  const gemini = geminiKey && geminiAvailable && { kind: 'gemini', name: 'gemini-cli', model: process.env.CODEX_DO_GEMINI_MODEL || 'gemini-3.6-flash', apiKey: geminiKey };
+  const geminiBillingBlocked = isProviderBillingBlocked(homeDir, 'gemini');
+  if (geminiKey && geminiBillingBlocked) console.error('[codex-do] gemini 直 API は残高不足(402)のため gemini-cli を候補から外します');
+  const gemini = geminiKey && geminiAvailable && !geminiBillingBlocked && { kind: 'gemini', name: 'gemini-cli', model: process.env.CODEX_DO_GEMINI_MODEL || 'gemini-3.6-flash', apiKey: geminiKey };
   const deepseek = deepseekKey && qwenAvailable && { kind: 'qwen', name: 'deepseek', model: GATEWAY_MODELS.deepseek, baseUrl: OPENROUTER_BASE, apiKey: deepseekKey };
   const openrouter = openrouterKey && qwenAvailable && { kind: 'qwen', name: 'openrouter-free', model: process.env.CODEX_DO_FREE_MODEL || 'cohere/north-mini-code:free', baseUrl: 'https://openrouter.ai/api/v1', apiKey: openrouterKey };
   const byName = {
@@ -674,6 +676,31 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   return uniqueBackendsByName(ordered.filter(Boolean));
 }
 
+export function isProviderBillingBlocked(homeDir, provider, now = Date.now()) {
+  const dir = path.join(homeDir, '.claude');
+  try {
+    const health = JSON.parse(fs.readFileSync(path.join(dir, 'lane-health.json'), 'utf8').replace(/^\uFEFF/, ''));
+    if (health?.lanes?.[provider]?.reason === 'billing') return true;
+  } catch {}
+  try {
+    const cooldown = JSON.parse(fs.readFileSync(path.join(dir, 'provider-cooldown.json'), 'utf8').replace(/^\uFEFF/, ''));
+    const state = cooldown?.[provider];
+    if (Number(state?.until) > now && /billing|payment|402/i.test(String(state?.reason || ''))) return true;
+  } catch {}
+  return false;
+}
+
+function rememberProviderBillingFailure(homeDir, provider, now = Date.now()) {
+  const file = path.join(homeDir, '.claude', 'provider-cooldown.json');
+  let cooldown = {};
+  try { cooldown = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); } catch {}
+  cooldown[provider] = { until: now + 86400_000, at: now, reason: 'billing' };
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(cooldown, null, 2) + '\n', 'utf8');
+  fs.renameSync(tmp, file);
+}
+
 // cheap-code:glm が cooldown で cheap-code:deepseek へ差し替わると同名が連鎖に2回入り、timeout した backend を再投入して時間を捨てる。
 function uniqueBackendsByName(backends) {
   return backends.filter((backend, index) => backends.findIndex((other) => other.name === backend.name) === index);
@@ -698,12 +725,19 @@ function isHttpStatusCodeLine(line, code) {
 export function isBackendExhausted(output, stderr) {
   const merged = `${output || ''}\n${stderr || ''}`;
   const lower = merged.toLowerCase();
-  const patterns = ['rate limit', 'rate-limited', 'quota', 'insufficient', 'request too large', 'クールダウン中', 'cooldown'];
+  const patterns = ['rate limit', 'rate-limited', 'quota', 'insufficient', 'prepayment credits are depleted', 'payment required', 'request too large', 'クールダウン中', 'cooldown'];
   if (patterns.some((p) => lower.includes(p))) return true;
+  if (merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '402'))) return true;
   // claude-code CLI が OpenRouter のモデルIDを認識できず即死するパターン。
   // タイムアウト待ち（120秒）をせず即 exhausted で次のバックエンドへ進む。
   if (/unrecognized_model/i.test(merged)) return true;
   return merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '429') || isHttpStatusCodeLine(line, '413'));
+}
+
+export function isBackendBillingFailure(output, stderr) {
+  const merged = `${output || ''}\n${stderr || ''}`;
+  return /prepayment credits are depleted|payment required/i.test(merged)
+    || merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '402'));
 }
 
 export function isBackendCliMissing(output, stderr) {
@@ -1482,6 +1516,8 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
         }
         const spawnFailed = originalStatus === null;
         const cliMissing = isBackendCliMissing(result.output, `${result.stderr || ''}\n${result.error?.message || ''}`);
+        const billingFailure = isBackendBillingFailure(result.output, result.stderr);
+        if (backend.name === 'gemini-cli' && billingFailure) rememberProviderBillingFailure(home, 'gemini');
         const exhausted = isBackendExhausted(result.output, result.stderr)
           || (backend.kind === 'cheap-code' && result.status === 3);
         const decision = shouldAdvanceToNextBackend({ timedOut: result.timedOut === true, status: result.status, exhausted, cliMissing, aborted: result.aborted === 'policy_stall' });

@@ -3,9 +3,19 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, needsNativeCodexProbe, nativeWriteProbeArgs } from './lane-doctor.mjs';
+import { laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, needsNativeCodexProbe, nativeWriteProbeArgs, directGeminiCliState } from './lane-doctor.mjs';
 import { classifyTaskKind } from './lib/task-kind.mjs';
 const now = Date.parse('2026-10-08T06:00:00Z');
+
+test('gemini-cli は Gemini の OpenRouter 代替表示を継承しない', () => {
+  const state = directGeminiCliState({ alive: false, reason: 'billing', via: 'openrouter' }, true);
+  assert.deepEqual(state, { alive: false, reason: 'billing' });
+  const health = { ts: new Date(now).toISOString(), lanes: { gemini: { alive: false, reason: 'billing', via: 'openrouter' }, 'gemini-cli': state, openrouter: { alive: true, reason: 'probe_ok' } }, deadNeedsUser: [], repairs: [], errors: [] };
+  assert.match(summarize(health), /gemini ✅\(OpenRouter経由\)/);
+  assert.match(summarize(health), /gemini-cli ❌\(billing\)/);
+  assert.doesNotMatch(summarize(health), /gemini-cli ✅\(OpenRouter経由\)/);
+});
+
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-doctor-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

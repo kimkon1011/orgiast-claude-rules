@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { skipCoolingBackends } from './fallback-backend-health.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -710,6 +710,29 @@ test('フォールバック先の CLI が無い(コマンドが見つからな�
   assert.match(result.stderr, /CLI が見つからないため次のバックエンドへ/);
 });
 
+test('gemini-cli が HTTP 402 を返したら記録して OpenRouter の次候補へ進む', () => {
+  const home = workDir();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'codex-fallback-order.json'), JSON.stringify(['gemini-cli', 'cheap-code:deepseek']));
+  const result = run(['--force-native', '--cwd', home, '指示内容'], {
+    home,
+    env: {
+      ...geminiOnPathEnv(),
+      CODEX_DO_MOCK_RESULTS: JSON.stringify([
+        { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: '' },
+        { status: 1, output: '', stderr: 'HTTP 402: Your prepayment credits are depleted' },
+        { status: 0, output: 'OpenRouter backend completed.', stderr: '' }
+      ]),
+      GEMINI_API_KEY: 'gemini-test',
+      OPENROUTER_API_KEY: 'openrouter-test'
+    }
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /fallback backend=gemini-cli/);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
+  assert.equal(isProviderBillingBlocked(home, 'gemini'), true);
+});
+
 test('フォールバック連鎖の各試行が台帳1行の chain に残る', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-chain-a-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -1295,6 +1318,24 @@ test('codex-fallback: cheap-code:deepseek が provider-cooldown 中（http_402�
   assert.equal(backends.some((b) => b.name === 'cheap-code:deepseek'), false, 'deepseek should be excluded when openrouter is in cooldown');
   // gemini-cli はキーがあるので残る
   assert.equal(backends.some((b) => b.name === 'gemini-cli'), true, 'gemini-cli should survive');
+});
+
+test('codex-fallback: Gemini の直 API が billing と判定済みなら gemini-cli を候補から外す', () => {
+  const home = makeHomeWithEnv({
+    'gemini.env': 'GEMINI_API_KEY=sk-gemini-1\n',
+    'openrouter.env': 'OPENROUTER_API_KEY=sk-or-1\n'
+  });
+  const claude = path.join(home, '.claude');
+  fs.writeFileSync(path.join(claude, 'lane-health.json'), JSON.stringify({ lanes: { gemini: { alive: false, reason: 'billing', via: 'openrouter' }, openrouter: { alive: true } } }));
+  assert.equal(isProviderBillingBlocked(home, 'gemini'), true);
+  assert.deepEqual(resolveFallbackBackends(home, { executableAvailable: () => true }).map((b) => b.name), ['cheap-code:deepseek']);
+});
+
+test('Gemini 402/前払い残高切れは枯渇として次候補へ進める', () => {
+  const error = 'HTTP 402: Your prepayment credits are depleted';
+  assert.equal(isBackendBillingFailure('', error), true);
+  assert.equal(isBackendExhausted('', error), true);
+  assert.deepEqual(shouldAdvanceToNextBackend({ status: 1, exhausted: isBackendExhausted('', error) }), { advance: true, outcome: 'exhausted' });
 });
 
 test('codex-fallback: glm 差し替えで deepseek と重複しても連鎖に同名 backend は1回だけ入る（timeout 済みの再投入で時間を捨てない）', () => {

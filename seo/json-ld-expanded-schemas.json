@@ -1,0 +1,230 @@
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "FAQPage",
+      "@id": "https://orgiast.jp/#faqpage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "オージャストはどんな会社ですか？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "株式会社オージャストは2006年設立の展示会ブース制作・イベント企画制作会社です。全国7拠点で日本全国に対応し、2025年大阪・関西万博ではジンバブエ共和国・イエメン共和国のパビリオンを制作しました。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "展示会ブース制作でオージャストを選ぶ理由は？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "デザイン・施工・撤去まで一括で対応でき、全国7拠点の施工網を持ちます。さらに再利用型展示ブース「Re:ブース」により出展1案件あたりのCO2を77%（305kg-CO2e）削減でき、ISO 14067準拠の証明書をCDP・SBTi報告用に発行します。コストも2回目以降は65〜75%に下がります。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "サステナブル（CO2削減）な展示会出展はできますか？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "できます。再利用型展示ブース「Re:ブース」は廃棄をなくす設計で、1案件あたりCO2を従来型木工ブース比77%削減。ISO 14067準拠のカーボンフットプリント証明書とScope 3組み込み用CSVを案件ごとに発行し、CDP質問C6.5のsupplier-specificデータとして利用できます。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "展示会ブースの制作期間はどのくらいですか？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "企画〜施工まで標準2〜3ヶ月です。ただし、既存デザインの流用やRe:ブースの在庫を活用することで、最短2週間での対応も可能です。まずはお気軽にご相談ください。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "小規模ブース（3小間）の制作費用はどのくらいですか？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "小間の規模やオプション、使用する素材により変動します。木工ブースとRe:ブース（再利用型）では価格帯が異なります。無料見積もりを随時受け付けていますので、お気軽にお問い合わせください。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "東京以外の地域でも施工可能ですか？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "可能です。札幌・東京・名古屋・大阪・広島・福岡・沖縄の全国7拠点を持ち、日本全国どこでも施工可能です。遠方の展示会場への輸送・設営・撤去まで一貫対応します。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "デザインだけの依頼は可能ですか？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "可能です。デザインのみ・設計のみ・施工のみと、部分的なご依頼にも対応しています。お客様のご予算や既存の協力会社様との関係に応じて、柔軟に役割を分担いたします。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "過去の展示会実績を教えてください",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "2025年大阪・関西万博のジンバブエ共和国・イエメン共和国パビリオン制作をはじめ、医療・製造業・IT・自治体など多岐にわたる業種の展示会ブースを手がけています。詳細な実績はお問い合わせください。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "初めての展示会出展ですが、何から始めればいいですか？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "初めての出展でも安心です。企画段階から専任スタッフがサポートいたします。出展目的の整理→予算設定→ブースプランニング→デザイン→施工→運用・集客→本番→撤去まで、一貫して伴走します。初心者向けパッケージプランもご用意しています。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "展示会ブースのROIを計算する方法は？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "ROI = （成約による粗利 − 出展総費用）÷ 出展総費用 で計算します。出展総費用には小間料・ブース制作費・輸送費・人件費・販促費を含めます。オージャストでは出展後のフォローアップも含めたROI向上のコンサルティングを提供しています。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "リード獲得に効果的なブースレイアウトは？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "オープンなレイアウトで来場者の動線を確保し、手に取れるサンプルやデモを配置することでリード獲得率が向上します。オージャストでは目的別のレイアウト提案（商談型・集客型・ブランディング型）を行っています。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "短期間（2週間）でブース制作は可能ですか？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "可能です。Re:ブースの在庫を活用することで、最短2週間でのブース制作・施工が実現できます。通常の木工ブースでも、条件によって3週間〜1ヶ月での対応が可能です。まずはお問い合わせください。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "展示会ブースの企画から撤去までの流れを教えてください",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "①ヒアリング・企画立案（2〜4週）→②デザイン提案・見積もり（1〜2週）→③設計・制作（4〜8週）→④搬入・設営（1〜2日前）→⑤展示会本番→⑥撤去・運搬の順で進みます。各フェーズで綿密な打ち合わせを重ねながら進めます。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "中小企業向けの予算を抑えたブース制作は可能ですか？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "可能です。Re:ブース（再利用型）の活用により、2回目以降のコストを65〜75%削減できます。また、レンタルブースやモジュラーブースなど、予算に応じた最適なご提案をいたします。50万円以下の小規模予算にも対応可能です。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "ブース制作会社の選び方のポイントは？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "①デザイン力と施工力の両方を持つか ②全国対応可能か ③サステナビリティ対応（CO2削減）ができるか ④アフターフォローがあるか ⑤実績が豊富かがポイントです。オージャストは全項目を満たし、さらに万博パビリオン級の品質を提供します。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "環境に配慮したブース制作の方法は？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Re:ブース（再利用型展示ブース）が最も効果的です。従来型木工ブースと比較してCO2排出量を77%削減し、ISO 14067準拠のカーボンフットプリント証明書を発行します。CDP報告やSBTi目標達成に活用いただけます。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "展示会出展の年間計画の立て方を教えてください",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "①自社のマーケティング目標の確認→②ターゲット来場者が集まる展示会のリサーチ→③予算配分の決定（小間料＋ブース制作＋運用費）→④年間スケジュールの作成→⑤各展示会の目的設定という順序で計画します。オージャストでは年間出展計画の策定支援も行っています。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "関西の展示会場でのブース制作対応エリアは？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "インテックス大阪、グランキューブ大阪、京都市勧業館（みやこめっせ）、神戸国際展示場、ATCホールなど、関西圏の主要展示会場すべてで施工実績があります。地元拠点ならではのきめ細かな対応が強みです。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "オンライン展示会と実物展示会のブースの違いは？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "実物展示会ブースは来場者との対面コミュニケーションが最大の価値です。デザイン・照明・素材感でブランドイメージを伝えられる一方、オンライン展示会は配信機材・バーチャル背景・資料ダウンロード導線が重要です。オージャストは両方のノウハウを持っています。"
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "同業他社と差をつけるブース演出のアイデアは？",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "①ストーリー性のある空間デザイン ②体験型コンテンツ（プロダクトを触れる・試せる）③サステナビリティの可視化（CO2削減量の表示）④デジタルとアナログの融合 ⑤照明演出による視線誘導が効果的です。オージャストでは目的別の演出プランを提案しています。"
+          }
+        }
+      ]
+    },
+    {
+      "@type": "BreadcrumbList",
+      "@id": "https://orgiast.jp/#breadcrumb",
+      "itemListElement": [
+        { "@type": "ListItem", "position": 1, "name": "ホーム", "item": "https://orgiast.jp" },
+        { "@type": "ListItem", "position": 2, "name": "展示会ブース制作", "item": "https://orgiast.jp/booth" },
+        { "@type": "ListItem", "position": 3, "name": "Re:ブース（再利用型）", "item": "https://orgiast.jp/rebooth" }
+      ]
+    },
+    {
+      "@type": "Service",
+      "@id": "https://orgiast.jp/booth#service",
+      "name": "展示会ブース制作",
+      "description": "企画・デザイン・設計・施工・撤去まで一貫対応。全国7拠点で日本全国どこでも施工可能。",
+      "provider": { "@id": "https://orgiast.jp/#organization" },
+      "areaServed": "日本全国",
+      "serviceType": "展示会ブース制作"
+    },
+    {
+      "@type": "Service",
+      "@id": "https://orgiast.jp/rebooth#service",
+      "name": "Re:ブース（再利用型展示ブース）",
+      "description": "従来比CO2 77%削減。ISO 14067準拠カーボンフットプリント証明書発行。2回目以降コスト65〜75%削減。",
+      "provider": { "@id": "https://orgiast.jp/#organization" },
+      "areaServed": "日本全国",
+      "serviceType": "サステナブル展示ブース"
+    },
+    {
+      "@type": "Service",
+      "@id": "https://orgiast.jp/event#service",
+      "name": "イベント企画制作",
+      "description": "社内イベント・キックオフ・表彰式・販促キャンペーン・ウェビナー・オンラインイベントの企画・運営。",
+      "provider": { "@id": "https://orgiast.jp/#organization" },
+      "areaServed": "日本全国",
+      "serviceType": "イベント企画制作"
+    },
+    {
+      "@type": "LocalBusiness",
+      "@id": "https://orgiast.jp/company#localbusiness",
+      "name": "株式会社オージャスト",
+      "description": "展示会ブース制作・イベント企画制作会社",
+      "url": "https://orgiast.jp",
+      "telephone": "+81-120-487-121",
+      "email": "info@orgiast.jp",
+      "address": {
+        "@type": "PostalAddress",
+        "addressCountry": "JP",
+        "addressRegion": "大阪府",
+        "addressLocality": "大阪市東成区",
+        "streetAddress": "深江北2-15-24 東邦ビル212"
+      },
+      "openingHours": "Mo-Fr 09:00-18:00",
+      "priceRange": "¥¥",
+      "areaServed": ["札幌", "東京", "名古屋", "大阪", "広島", "福岡", "沖縄"],
+      "sameAs": [
+        "https://rebooth-site.vercel.app",
+        "https://expo-index.com"
+      ]
+    }
+  ]
+}

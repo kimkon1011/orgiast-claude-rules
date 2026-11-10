@@ -329,18 +329,38 @@ test('exclusions for archivedByUser and reopenLoop', async t => {
   let result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl: fetchImplArchived, spawn: () => ({ status: 0, stdout: '[]' }) });
   assert.equal(result.skipped.archivedByUser, 1);
 
-  // reopenLoop test: session reopened 3 times in reopen-lost-sessions.log in last 24h
+  // reopenLoop test: 60分以内に「再接続に成功した（verified）」reopen が3回 → ループとして止める
   const logFile = path.join(base, 'reopen-lost-sessions.log');
   const logEntries = [
-    { at: '2026-11-07T08:00:00.000Z', reopened: [{ id: 'one' }] },
-    { at: '2026-11-07T09:00:00.000Z', reopened: [{ id: 'one' }] },
-    { at: '2026-11-07T10:00:00.000Z', reopened: [{ id: 'one' }] },
+    { at: '2026-11-07T11:00:00.000Z', reopened: [{ id: 'one' }], verified: ['one'] },
+    { at: '2026-11-07T11:20:00.000Z', reopened: [{ id: 'one' }], verified: ['one'] },
+    { at: '2026-11-07T11:40:00.000Z', reopened: [{ id: 'one' }], verified: ['one'] },
   ];
   fs.writeFileSync(logFile, logEntries.map(e => JSON.stringify(e)).join('\n') + '\n');
 
   const fetchImplNormal = async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } });
   result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl: fetchImplNormal, spawn: () => ({ status: 0, stdout: '[]' }) });
   assert.equal(result.skipped.reopenLoop, 1);
+});
+
+test('reopenLoop: 再接続できなかった(unverified)reopen はループに数えない', async t => {
+  const base = fixture(t);
+  const now = () => Date.parse('2026-11-07T12:00:00.000Z');
+
+  // 60分以内に3回 reopen したが全て unverified（再接続失敗）。これはループではなく接続障害なので止めない。
+  const logFile = path.join(base, 'reopen-lost-sessions.log');
+  const logEntries = [
+    { at: '2026-11-07T11:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+    { at: '2026-11-07T11:20:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+    { at: '2026-11-07T11:40:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+  ];
+  fs.writeFileSync(logFile, logEntries.map(e => JSON.stringify(e)).join('\n') + '\n');
+
+  const fetchImplNormal = async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } });
+  const result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl: fetchImplNormal, spawn: () => ({ status: 0, stdout: '[]' }) });
+  assert.equal(result.skipped.reopenLoop, 0);
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].id, 'one');
 });
 
 test('post-reopen verification records verified and unverified', async t => {
@@ -651,11 +671,11 @@ test('state-based: archived/connected/72h超/closed/alive/reopenLoop は候補�
   // closed ledger
   fs.writeFileSync(path.join(base, 'closed-sessions.json'), JSON.stringify({ ids: ['cse_closed'] }));
 
-  // reopenLoop log — 3 entries for cse_loop
+  // reopenLoop log — 60分以内に再接続成功(verified)が3回 → ループとして候補から外す
   fs.writeFileSync(path.join(base, 'reopen-lost-sessions.log'), [
-    { at: '2026-11-07T08:00:00.000Z', reopened: [{ id: 'cse_loop' }] },
-    { at: '2026-11-07T09:00:00.000Z', reopened: [{ id: 'cse_loop' }] },
-    { at: '2026-11-07T10:00:00.000Z', reopened: [{ id: 'cse_loop' }] },
+    { at: '2026-11-07T11:00:00.000Z', reopened: [{ id: 'cse_loop' }], verified: ['cse_loop'] },
+    { at: '2026-11-07T11:20:00.000Z', reopened: [{ id: 'cse_loop' }], verified: ['cse_loop'] },
+    { at: '2026-11-07T11:40:00.000Z', reopened: [{ id: 'cse_loop' }], verified: ['cse_loop'] },
   ].map(e => JSON.stringify(e)).join('\n') + '\n');
 
   const nowTime = Date.parse('2026-11-07T12:00:00.000Z');

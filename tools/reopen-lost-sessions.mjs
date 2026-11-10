@@ -476,21 +476,26 @@ function closedIds(base) {
   if (!Array.isArray(ledger.ids)) throw Error('Invalid closed ledger');
   return new Set(ledger.ids);
 }
+// reopenLoop ガードは「真の無限リロープ」（再接続に成功→すぐ切断→再接続…）だけを止める。
+// 直近 60 分に「検証済み（実際に再接続した）」reopen だけを数える。
+// 再接続できなかった（unverified）セッションはループではなく別の障害なので、reopenLoop で止めると
+// 正当な再接続まで止めてしまう（2026-11-09 実測: 切断中セッション4本が 3 回の空振り reopen で 24h 遮断された）。
 function reopenLoopCounts(base, nowFn = Date.now) {
   const logFile = path.join(base, 'reopen-lost-sessions.log');
   const counts = {};
   try {
     const raw = fs.readFileSync(logFile, 'utf8');
     const nowTime = typeof nowFn === 'function' ? nowFn() : nowFn;
-    const cutoff = nowTime - 24 * 3600 * 1000;
+    const cutoff = nowTime - 60 * 60 * 1000;
     for (const line of raw.split('\n').filter(Boolean)) {
       try {
         const entry = JSON.parse(line);
         if (!entry.at || !Array.isArray(entry.reopened)) continue;
         if (Date.parse(entry.at) < cutoff) continue;
+        const verified = new Set(Array.isArray(entry.verified) ? entry.verified : []);
         for (const r of entry.reopened) {
           const id = r?.id || r;
-          if (id) counts[id] = (counts[id] || 0) + 1;
+          if (id && verified.has(id)) counts[id] = (counts[id] || 0) + 1;
         }
       } catch {}
     }

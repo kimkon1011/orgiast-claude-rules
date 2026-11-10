@@ -6,6 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { writeContextMarker } from './lib/send-context.mjs';
 
 const cliPath = fileURLToPath(new URL('./beeper-send.mjs', import.meta.url));
 
@@ -72,6 +73,8 @@ test('1. 正常送信: receipt 検証通過 → 送信 → 読み戻し成功', 
   const { receiptId } = setupQueue(home, queueID);
   const bodyFile = path.join(home, 'body.txt');
   fs.writeFileSync(bodyFile, 'はい、承知しました', 'utf8');
+  const contextAt = new Date().toISOString();
+  writeContextMarker({ channel:'beeper', target:'!chat1:localhost', text:'はい、承知しました', latest:{id:'999',at:contextAt}, reason:'OK', home });
 
   let sendCount = 0;
   let listCount = 0;
@@ -89,7 +92,7 @@ test('1. 正常送信: receipt 検証通過 → 送信 → 読み戻し成功', 
       // 読み戻し: 送信済みメッセージが見つかる
       res.end(JSON.stringify({
         items: [
-          { id: '999', chatID: '!chat1:localhost', accountID: 'line', senderID: '@kim:localhost', senderName: 'Kim', timestamp: new Date().toISOString(), type: 'TEXT', text: 'はい、承知しました', isSender: true },
+          { id: '999', chatID: '!chat1:localhost', accountID: 'line', senderID: '@kim:localhost', senderName: 'Kim', timestamp: contextAt, type: 'TEXT', text: 'はい、承知しました', isSender: true },
         ],
         hasMore: false, oldestCursor: null, newestCursor: null,
       }));
@@ -282,6 +285,8 @@ test('8. 読み戻し失敗: exit 3', async t => {
   const { receiptId } = setupQueue(home, queueID);
   const bodyFile = path.join(home, 'body.txt');
   fs.writeFileSync(bodyFile, '読み戻せない本文', 'utf8');
+  const contextAt = new Date(Date.now()-60000).toISOString();
+  writeContextMarker({ channel:'beeper', target:'!chat1:localhost', text:'読み戻せない本文', latest:{id:'old-msg',at:contextAt}, reason:'OK', home });
 
   const server = await startMockServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -291,7 +296,7 @@ test('8. 読み戻し失敗: exit 3', async t => {
       // 該当する送信メッセージが無い（文脈チェックにも抵触しないよう古い時刻にする）
       res.end(JSON.stringify({
         items: [
-          { id: 'old-msg', chatID: '!chat1:localhost', accountID: 'line', senderID: '@other:localhost', senderName: '相手', timestamp: new Date(Date.now() - 60000).toISOString(), type: 'TEXT', text: '以前のメッセージ', isSender: false },
+          { id: 'old-msg', chatID: '!chat1:localhost', accountID: 'line', senderID: '@other:localhost', senderName: '相手', timestamp: contextAt, type: 'TEXT', text: '以前のメッセージ', isSender: false },
         ],
         hasMore: false, oldestCursor: null, newestCursor: null,
       }));
@@ -349,6 +354,8 @@ test('10. 文脈変化: 送信直前に相手の新着あり → exit 4・sendMe
   const { receiptId } = setupQueue(home, queueID);
   const bodyFile = path.join(home, 'body.txt');
   fs.writeFileSync(bodyFile, 'はい、承知しました', 'utf8');
+  const contextAt = new Date(Date.now()-60000).toISOString();
+  writeContextMarker({ channel:'beeper', target:'!chat1:localhost', text:'はい、承知しました', latest:{id:'old-msg',at:contextAt}, reason:'OK', home });
 
   let sendCount = 0;
   const server = await startMockServer((req, res) => {
@@ -393,6 +400,8 @@ test('11. 文脈変化なし: 相手の古いメッセージのみ → 従来通
   const { receiptId } = setupQueue(home, queueID);
   const bodyFile = path.join(home, 'body.txt');
   fs.writeFileSync(bodyFile, 'はい、承知しました', 'utf8');
+  const contextAt = new Date(Date.now()-60000).toISOString();
+  writeContextMarker({ channel:'beeper', target:'!chat1:localhost', text:'はい、承知しました', latest:{id:'old-msg',at:contextAt}, reason:'OK', home });
 
   let sendCount = 0;
   let sent = false;
@@ -415,7 +424,7 @@ test('11. 文脈変化なし: 相手の古いメッセージのみ → 従来通
         // 文脈チェック: 相手の発言は基準時刻より前のみ
         res.end(JSON.stringify({
           items: [
-            { id: 'old-msg', chatID: '!chat1:localhost', accountID: 'line', senderID: '@other:localhost', senderName: '相手', timestamp: new Date(Date.now() - 60000).toISOString(), type: 'TEXT', text: '質問です', isSender: false },
+            { id: 'old-msg', chatID: '!chat1:localhost', accountID: 'line', senderID: '@other:localhost', senderName: '相手', timestamp: contextAt, type: 'TEXT', text: '質問です', isSender: false },
           ],
           hasMore: false, oldestCursor: null, newestCursor: null,
         }));

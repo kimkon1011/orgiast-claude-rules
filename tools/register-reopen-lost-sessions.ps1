@@ -13,7 +13,7 @@ function Get-ReopenDefinition($Task) {
         User = (Normalize-UserId $Task.Principal.UserId); Logon = [string]$Task.Principal.LogonType; Level = [string]$Task.Principal.RunLevel
         Enabled = $Task.Settings.Enabled; Instances = [string]$Task.Settings.MultipleInstances
         Limit = $Task.Settings.ExecutionTimeLimit; Battery = $Task.Settings.DisallowStartIfOnBatteries
-        StopBattery = $Task.Settings.StopIfGoingOnBatteries
+        StopBattery = $Task.Settings.StopIfGoingOnBatteries; Priority = [string]$Task.Settings.Priority
     } | ConvertTo-Json -Depth 5 -Compress
 }
 function Register-ReopenLostTask(
@@ -32,7 +32,7 @@ function Register-ReopenLostTask(
     $trigger1 = New-ScheduledTaskTrigger -AtLogOn -User $user
     $trigger1.Delay = 'PT3M'
     $principal1 = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
-    $settings1 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit ([timespan]::Zero)
+    $settings1 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit ([timespan]::Zero) -Priority 5
     $desired1 = New-ScheduledTask -Action $action1 -Trigger $trigger1 -Principal $principal1 -Settings $settings1
 
     $current1 = & $GetTask $name1
@@ -54,7 +54,7 @@ function Register-ReopenLostTask(
     $trigger2a.Repetition = (New-ScheduledTaskTrigger -Once -At '00:00' -RepetitionInterval (New-TimeSpan -Minutes 15)).Repetition
     $trigger2b = New-ScheduledTaskTrigger -Once -At '2026-01-01T00:00:00' -RepetitionInterval (New-TimeSpan -Minutes 15)
     $principal2 = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
-    $settings2 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+    $settings2 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -Priority 5
     $desired2 = New-ScheduledTask -Action $action2 -Trigger @($trigger2a, $trigger2b) -Principal $principal2 -Settings $settings2
 
     $current2 = & $GetTask $name2

@@ -115,7 +115,7 @@ test('middle-only changes and revoked approval block', () => {
 test('real draft readback is used, not a shell-supplied substitute body', async () => {
   const input = {tool_name:'Bash',tool_input:{command:'node tools/gmail-draft.mjs --send draft123 --body "approved"'},transcript:evidence('approved')};
   let target;
-  assert.equal((await judgeLive(input,{loadDraft:async t => { target=t; return 'approved'; }})).decision,'pass');
+  assert.equal((await judgeLive(input,{loadDraft:async t => { target=t; return 'approved'; }, requireContext:false})).decision,'pass');
   assert.equal(target.draftId,'draft123');
   assert.equal(target.user,'seisaku-team@orgiast.jp');
   assert.equal((await judgeLive(input,{loadDraft:async () => 'changed'})).decision,'block');
@@ -127,6 +127,23 @@ test('notifications do not exempt another send in the same shell', async () => {
 });
 test('draft creation and forward-draft creation stay allowed', () => {
   for (const command of ['node tools/gmail-draft.mjs --to a@b.com --body x','node tools/gmail-draft.mjs --forward msg --to a@b.com']) assert.equal(judge({tool_name:'Bash',tool_input:{command}}).decision,'pass');
+});
+
+test('send CLI names used only as data do not trigger the approval gate', () => {
+  const heredocReadOnly = `cat <<'EOF' > /tmp/readline.mjs
+import { loadSecrets } from '/repo/tools/line-group-send.mjs';
+// Supabase channel_messages GET only
+EOF
+node /tmp/readline.mjs`;
+  const grepReadOnly = 'ls ~/.claude/*.env; grep -n "line-send.env|SUPABASE_URL" /c/Users/user/.claude/nightly-repo/tools/line-group-send.mjs';
+  for (const command of [heredocReadOnly, grepReadOnly]) {
+    assert.equal(judge({ tool_name: 'Bash', tool_input: { command } }).decision, 'pass');
+  }
+});
+
+test('executed LINE send still requires approval', () => {
+  const input = { tool_name: 'Bash', tool_input: { command: 'node tools/line-group-send.mjs --group X --text-file f' } };
+  assert.equal(judge(input).decision, 'block');
 });
 
 test('headless LINE send blocks, matching marker passes, and dry-run passes', t => {

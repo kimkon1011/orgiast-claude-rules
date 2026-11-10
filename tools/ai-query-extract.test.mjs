@@ -13,6 +13,11 @@ import {
   QUESTION_PATTERNS,
   REQUEST_PATTERNS,
   DOMAIN_SPECIFIC_PATTERNS,
+  LLMO_PATTERNS,
+  importGSCQueries,
+  classifyQueryIntent,
+  scoreLLMOQuery,
+  analyzeLLMOQueries,
 } from './ai-query-extract.mjs';
 
 // ============================================================
@@ -343,4 +348,184 @@ test('normalizeQuery: 様々な依頼表現を正規化', () => {
         `正規化で短くなるか変化すること: ${t.input} -> ${result}`);
     }
   }
+});
+
+// ============================================================
+// LLMO Pattern Tests
+// ============================================================
+
+test('LLMO_PATTERNS: how-to パターンにマッチ', () => {
+  const matches = matchPatterns('展示会ブースの作り方', LLMO_PATTERNS);
+  assert.ok(matches.some(m => m.id === 'llmo_how_to'), 'how-to パターンがマッチすること');
+});
+
+test('LLMO_PATTERNS: what-is パターンにマッチ', () => {
+  const matches = matchPatterns('展示会ブースとは', LLMO_PATTERNS);
+  assert.ok(matches.some(m => m.id === 'llmo_what_is'), 'what-is パターンがマッチすること');
+});
+
+test('LLMO_PATTERNS: 比較パターンにマッチ', () => {
+  const matches = matchPatterns('A社とB社の比較', LLMO_PATTERNS);
+  assert.ok(matches.some(m => m.id === 'llmo_comparison'), '比較パターンがマッチすること');
+});
+
+test('LLMO_PATTERNS: おすすめパターンにマッチ', () => {
+  const matches = matchPatterns('展示会ブース制作会社のおすすめ', LLMO_PATTERNS);
+  assert.ok(matches.some(m => m.id === 'llmo_best'), 'おすすめパターンがマッチすること');
+});
+
+test('LLMO_PATTERNS: 費用パターンにマッチ', () => {
+  const matches = matchPatterns('ブース制作の費用相場', LLMO_PATTERNS);
+  assert.ok(matches.some(m => m.id === 'llmo_cost'), '費用パターンがマッチすること');
+});
+
+test('LLMO_PATTERNS: 手順パターンにマッチ', () => {
+  const matches = matchPatterns('展示会出展までの流れ', LLMO_PATTERNS);
+  assert.ok(matches.some(m => m.id === 'llmo_tutorial' || m.id === 'llmo_process'), '手順パターンがマッチすること');
+});
+
+// ============================================================
+// scoreLLMOQuery Tests
+// ============================================================
+
+test('scoreLLMOQuery: how-to クエリに高いスコア', () => {
+  const score = scoreLLMOQuery('展示会ブースの作り方を教えてください');
+  assert.ok(score >= 5, `how-to クエリのスコアが5以上: ${score}`);
+});
+
+test('scoreLLMOQuery: 疑問文クエリにスコア', () => {
+  const score = scoreLLMOQuery('ブースの見積もりはいくらですか？');
+  assert.ok(score > 0, '疑問文クエリスコアが0より大きいこと');
+});
+
+test('scoreLLMOQuery: 平文は低スコア', () => {
+  const score = scoreLLMOQuery('今日はいい天気です');
+  assert.equal(score, 0, '平文のスコアが0であること');
+});
+
+test('scoreLLMOQuery: 英語のみは0', () => {
+  const score = scoreLLMOQuery('How to build an exhibition booth');
+  assert.equal(score, 0, '英語のみのスコアが0であること');
+});
+
+test('scoreLLMOQuery: スコア範囲は0-10', () => {
+  const queries = [
+    '展示会ブースの作り方',
+    'ブースの見積もりはいくらですか？',
+    '見積もりを送ってください',
+    '展示会ブース制作会社のおすすめを教えてください',
+    '費用を教えてください',
+  ];
+  for (const q of queries) {
+    const score = scoreLLMOQuery(q);
+    assert.ok(score >= 0 && score <= 10, `スコアが0-10の範囲: ${q} => ${score}`);
+  }
+});
+
+// ============================================================
+// classifyQueryIntent Tests
+// ============================================================
+
+test('classifyQueryIntent: 疑問文をquestionと判定', () => {
+  assert.equal(classifyQueryIntent('ブースの見積もりはいくらですか？'), 'question');
+  assert.equal(classifyQueryIntent('いつまでにできますか？'), 'question');
+});
+
+test('classifyQueryIntent: 依頼文をrequestと判定', () => {
+  assert.equal(classifyQueryIntent('見積もりを送ってください'), 'request');
+});
+
+test('classifyQueryIntent: 購入意図をtransactionalと判定', () => {
+  assert.equal(classifyQueryIntent('ブース制作を申し込む'), 'transactional');
+  assert.equal(classifyQueryIntent('見積もりを購入したい'), 'transactional');
+});
+
+test('classifyQueryIntent: 会社名を含むクエリをnavigationalと判定', () => {
+  assert.equal(classifyQueryIntent('オージャスト 展示会'), 'navigational');
+});
+
+test('classifyQueryIntent: 名詞連打をinformationalと判定', () => {
+  assert.equal(classifyQueryIntent('展示会 ブース 制作 大阪'), 'informational');
+});
+
+// ============================================================
+// importGSCQueries Tests
+// ============================================================
+
+test('importGSCQueries: 日本語CSVを解析する', () => {
+  const csv = '検索クエリ,クリック数,インプレッション数,CTR,掲載順位\n' +
+    '展示会 ブース,50,1000,5.0,3.5\n' +
+    'ブースの見積もりはいくらですか,10,200,5.0,2.1\n' +
+    '展示会 出展 費用,30,800,3.75,4.2';
+  const result = importGSCQueries(csv);
+  assert.equal(result.length, 3, '3件のクエリが解析されること');
+  assert.ok(result[0].llmo_score > 0, 'LLMOスコアが計算されること');
+  assert.ok(result[0].intent, '意図が分類されること');
+});
+
+test('importGSCQueries: 英語CSVを解析する', () => {
+  const csv = 'Query,Clicks,Impressions,CTR,Position\n' +
+    'exhibition booth,50,1000,5.0,3.5\n' +
+    'booth design tips,30,800,3.75,4.2';
+  const result = importGSCQueries(csv);
+  assert.equal(result.length, 2, '2件のクエリが解析されること');
+});
+
+test('importGSCQueries: 空入力は空配列', () => {
+  assert.deepEqual(importGSCQueries(''), []);
+  assert.deepEqual(importGSCQueries(null), []);
+});
+
+test('importGSCQueries: 最小インプレッションでフィルタ', () => {
+  const csv = '検索クエリ,クリック数,インプレッション数,CTR,掲載順位\n' +
+    'クエリA,10,500,2.0,3.0\n' +
+    'クエリB,5,50,10.0,1.5';
+  const result = importGSCQueries(csv, { minImpressions: 100 });
+  assert.equal(result.length, 1, '100以上のインプレッションのみ');
+  assert.ok(result[0].query.includes('クエリA'));
+});
+
+// ============================================================
+// analyzeLLMOQueries Tests
+// ============================================================
+
+test('analyzeLLMOQueries: 空配列で空レポート', () => {
+  const report = analyzeLLMOQueries([]);
+  assert.equal(report.totalQueries, 0);
+  assert.deepEqual(report.topOpportunities, []);
+});
+
+test('analyzeLLMOQueries: クエリ集計レポートを生成する', () => {
+  const csv = '検索クエリ,クリック数,インプレッション数,CTR,掲載順位\n' +
+    '展示会ブースの作り方,100,5000,2.0,3.5\n' +
+    'ブースの見積もりはいくらですか,50,2000,2.5,2.1\n' +
+    '見積もりを送ってください,30,1000,3.0,1.5\n' +
+    '大阪 展示会 ブース 制作,200,10000,2.0,5.0\n' +
+    '展示会出展の流れ,80,3000,2.67,4.0';
+  const queries = importGSCQueries(csv);
+  const report = analyzeLLMOQueries(queries);
+  assert.equal(report.totalQueries, 5);
+  assert.ok(report.byIntent, '意図別集計があること');
+  assert.ok(report.byLLMOScore, 'スコア分布があること');
+  assert.ok(report.topOpportunities.length > 0, '機会クエリ一覧があること');
+  assert.ok(report.contentIdeas.length >= 0, 'コンテンツアイデア一覧があること');
+});
+
+// ============================================================
+// LLMO Domain Extended Pattern Tests
+// ============================================================
+
+test('DOMAIN_SPECIFIC_PATTERNS: デジタルサイネージにマッチ', () => {
+  const matches = matchDomainPatterns('デジタルサイネージを導入したい');
+  assert.ok(matches.some(m => m.domain === 'exhibition_digital'), 'デジタルドメインにマッチすること');
+});
+
+test('DOMAIN_SPECIFIC_PATTERNS: 海外展示会にマッチ', () => {
+  const matches = matchDomainPatterns('海外展示会に出展する方法');
+  assert.ok(matches.some(m => m.id === 'domain_overseas'), '海外出展パターンにマッチすること');
+});
+
+test('DOMAIN_SPECIFIC_PATTERNS: サステナブルにマッチ', () => {
+  const matches = matchDomainPatterns('エコなブース制作の方法');
+  assert.ok(matches.some(m => m.id === 'domain_ecofriendly'), 'エコパターンにマッチすること');
 });

@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { BeeperApiError, sendMessage, listMessages } from './beeper-api.mjs';
+import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
 
 // ── レート制限 ───────────────────────────────────────────────────────
 
@@ -149,6 +150,11 @@ async function beeperSend(options) {
     }
   }
 
+  await assertContextApproved({ channel: 'beeper', target: chatID, text, home, getLatest: async () => {
+    const latest = await listMessages(chatID, { limit: 1 });
+    return latestOf((latest.items || []).map(m => ({ id: m.id, at: m.timestamp })));
+  }});
+
   // 4. 送信
   const result = await sendMessage(chatID, text, replyTo ? { replyToMessageID: replyTo } : {});
 
@@ -195,6 +201,7 @@ async function beeperSend(options) {
 
   // 6. レート制限ログに記録
   recordSend(chatID, messageID, queueID, receiptID, home);
+  recordOutbound({ channel: 'beeper', target: chatID, text, messageId: messageID }, home);
 
   return {
     ok: true,
@@ -228,6 +235,12 @@ async function main(args = process.argv.slice(2)) {
   const replyTo = val('--reply-to', undefined);
   const queueID = val('--queue-id', '');
   const receiptID = val('--receipt', '');
+
+  if (has('--dry-run')) {
+    if (!chatID || !bodyFile) { console.error('--dry-run にも --chat と --body-file が必要です'); return 1; }
+    console.log(JSON.stringify({ dryRun: true, chatID, textLength: fs.readFileSync(bodyFile, 'utf8').trim().length }));
+    return 0;
+  }
 
   try {
     const result = await beeperSend({ chatID, bodyFile, replyTo, queueID, receiptID, home });

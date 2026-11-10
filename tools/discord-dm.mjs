@@ -6,6 +6,7 @@ import { isEntry } from './is-entry.mjs';
 import { clipDiscordContent, KIM_DISCORD_USER_ID, resolveDiscordBotToken } from './notify-kim.mjs';
 import { addItem, isKimSeat } from './kim-inbox.mjs';
 import { redactSecrets } from './webhook-health.mjs';
+import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
 
 const API = 'https://discord.com/api/v10';
 const USER_AGENT = 'orgiast-discord-dm/1.0';
@@ -76,10 +77,17 @@ export async function sendDiscordDm(target, body, options = {}) {
     if (!dm.ok) throw new Error(`DMチャンネル作成が HTTP ${dm.status}`);
     const channelId = (await dm.json()).id;
     if (!channelId) throw new Error('DMチャンネルIDを取得できません');
+    await (options.assertContextApproved ?? assertContextApproved)({ channel: 'discord', target: channelId, text: body, home, getLatest: async () => {
+      const history = await fetchImpl(`${API}/channels/${channelId}/messages?limit=1`, { headers });
+      if (!history.ok) throw new Error(`Discord 履歴取得が HTTP ${history.status}`);
+      return latestOf((await history.json()).map(m => ({ id: m.id, at: m.timestamp })));
+    }});
     const sent = await fetchImpl(`${API}/channels/${channelId}/messages`, {
       method: 'POST', headers, body: JSON.stringify({ content: message }),
     });
     if (!sent.ok) throw new Error(`DM送信が HTTP ${sent.status}`);
+    const sentMessage = await sent.json();
+    recordOutbound({ channel: 'discord', target: channelId, text: body, messageId: sentMessage.id }, home);
     return channelId;
   };
   const channelId = await deliver(recipient, content);

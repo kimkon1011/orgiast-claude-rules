@@ -410,7 +410,7 @@ export function resolveCodeCli(env = process.env, exists = fs.existsSync) {
   if (!cli) throw Error('code.cmd not found');
   return cli;
 }
-export function localIndex(base, onlyId, { sinceMs, largeFileThreshold = 64 * 1024 * 1024, largeFileHead = 8 * 1024 * 1024, largeFileTail = 8 * 1024 * 1024 } = {}) {
+export function localIndex(base, onlyId, { sinceMs, largeFileThreshold = 8 * 1024 * 1024, largeFileHead = 512 * 1024, largeFileTail = 4 * 1024 * 1024 } = {}) {
   const index = new Map();
   const projects = path.join(base, 'projects');
   let indexed = 0, skippedOld = 0;

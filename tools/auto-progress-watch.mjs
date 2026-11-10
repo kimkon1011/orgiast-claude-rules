@@ -337,11 +337,11 @@ export async function resumeSession(row, { timeoutMs = 20 * 60000, home = os.hom
   const { runChild, resolveClaudeExe } = await import('./auto-session.mjs');
   const resultFile = path.join(home, '.claude', `auto-progress-resume-${String(row.sessionId).slice(0, 8)}.json`);
   fs.rmSync(resultFile, { force: true }); // Never reuse a report from an earlier attempt.
-  const apiErrorResume = row.source === 'api-error-unanswered';
+  const apiErrorResume = row.source === 'api-error-unanswered' || row.source === 'silent-stop-unanswered';
   const promptLead = reason === 'scheduled-start'
     ? `予約していた作業の開始条件を満たしました。予約: 「${row.label || row.promise}」。`
     : apiErrorResume
-    ? `API エラーで返答できなかった user の依頼に、最初から通常どおり応えてください。依頼: ${row.requestText || row.promise.replace(/^API エラー（.*?）で返答できなかった依頼:\s*/, '')}`
+    ? `途中で止まっていた、またはAPI エラーで返答できなかった user の依頼に、最初から通常どおり応えてください。依頼: ${row.requestText || row.promise.replace(/^(?:API エラー（.*?）|途中で止まった依頼（.*?）)で返答できなかった依頼:\s*/, '')}`
     : `以前このセッションで宣言した「この後の自動進行」が止まっています。宣言: 「${row.promise}」。`;
   const prompt = `${promptLead}${row.kimAnswer ? `\nkim の返事: 「${row.kimAnswer}」。これを前提に続きを進めてください。` : ''}${reason === 'check-overdue' ? `\n期限超過の最終確認です。確認出力全文:\n${row.checkText || ''}\n確認エラー:\n${row.checkStderr || ''}` : ''}${row.nextClaude ? `\nやること: ${row.nextClaude}` : ''}\n元の会話は ${row.transcriptPath} にあります。${apiErrorResume ? '依頼を完了まで進めてください。' : '宣言の最終成果まで進めてください。'}止まる前に、取り消せる作業（調査・資料作成・下書き作成・比較表・社内向け準備）は全部先に済ませてください。needs_user で止まってよいのは、支払い・社外への送信・削除・本人の同意・本人にしかできない物理操作が残ったときだけです。evidence には先に済ませた作業と成果物を書いてください。推測で目的を広げず、他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。期限は${timeoutMs / 60000}分です。\n結果を ${resultFile} に JSON で保存: {"state":"progressed|done|needs_user|blocked","evidence":"先に済ませた作業と成果物パス・検証結果、残った操作と進めない理由","artifact":"成果物パス（任意）","nextKim":"本人だけができる具体的な判断・操作。返信待ちや自動調査なら空文字"}`;
   const rateLimited = apiErrorResume && /rate.?limit|usage.?credits?|429/i.test([row.error, row.apiError, row.apiErrorStatus].join(' '));
@@ -550,21 +550,26 @@ function recentTranscripts(home, now, io = {}) {
 
 async function registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io, persist) {
   for (const transcriptPath of recentTranscripts(home, now, io)) {
-    const found = (io.findUnansweredRequest ?? findUnansweredRequest)(transcriptPath);
+    const found = (io.findUnansweredRequest ?? findUnansweredRequest)(transcriptPath, { now });
     if (!found) continue;
     const duplicate = rows.some(row =>
       (row.sessionId === found.sessionId && OPEN_STATUSES.has(row.status)) ||
-      (row.source === 'api-error-unanswered' && row.ts === found.errorAt));
+      ((row.source === 'api-error-unanswered' || row.source === 'silent-stop-unanswered') && row.ts === found.errorAt));
     if (duplicate) continue;
     if (dryRun) { summary.discovered += 1; continue; } // dry-run は件数だけ数え、台帳も DM も触らない。
     const requestText = redactSecrets(found.requestText).slice(0, 200);
     const kind = redactSecrets(errorKind(found));
+    const isSilentStop = found.kind === 'silent-stop';
     const row = {
       ts: found.errorAt, pc: io.hostname ?? os.hostname(), user: io.user ?? (() => { try { return os.userInfo().username; } catch { return ''; } })(),
       owner: '', sessionId: found.sessionId, cwd: found.cwd, transcriptPath: found.transcriptPath,
-      promise: `API エラー（${kind}）で返答できなかった依頼: ${requestText}`, requestText,
+      promise: isSilentStop
+        ? `途中で止まった依頼（ツール実行中に終了）: ${requestText}`
+        : `API エラー（${kind}）で返答できなかった依頼: ${requestText}`,
+      requestText,
       error: found.error, apiError: found.apiError, apiErrorStatus: found.apiErrorStatus,
-      nextKim: 'なし', status: 'open', source: 'api-error-unanswered',
+      nextKim: 'なし', status: 'open',
+      source: isSilentStop ? 'silent-stop-unanswered' : 'api-error-unanswered',
     };
     row.owner = ownerOf(row);
     rows.push(row);
@@ -572,7 +577,9 @@ async function registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io,
     summary.discovered += 1;
     if (isUnattendedRow(row, home)) continue;
     try {
-      const message = `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: row.owner, home })}\nエラーで止まっていた依頼を見つけ、自動で再開します。\n依頼: ${requestText}`;
+      const message = isSilentStop
+        ? `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: row.owner, home })}\n途中で止まっていた依頼を見つけ、自動で再開します。\n依頼: ${requestText}`
+        : `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: row.owner, home })}\nエラーで止まっていた依頼を見つけ、自動で再開します。\n依頼: ${requestText}`;
       const delivery = await (io.notifyOwner ?? notifyOwner)(row.owner, message, { home, now, kind: 'automatic', session: row });
       if (!['dm', 'session-inbox', 'toast', 'inbox', 'deferred'].includes(delivery?.delivered)) throw new Error(delivery?.reason || 'DM not delivered');
     } catch (error) { summary.errors.push(`api-error-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
@@ -1118,7 +1125,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       patch(rowKey(row), { resumeFinishedAt: row.resumeFinishedAt });
     }
     const evidence = gatherEvidence(row, home, io);
-    let verdict = stalledChecks.has(row) ? { verdict: 'stalled', reason: row.checkText, source: 'check-stalled' } : answered ? { verdict: 'stalled', reason: 'kim の返事を受領' } : judge(row, evidence, now, io);
+    let verdict = stalledChecks.has(row) ? { verdict: 'stalled', reason: row.checkText, source: 'check-stalled' } : answered ? { verdict: 'stalled', reason: 'kim の返事を受領' } : (io.judge ?? judge)(row, evidence, now, io);
     if (verdict.verdict === 'done') {
       patch(rowKey(row), { status: 'done', verdict: 'done', doneAt: new Date(now).toISOString(), reason: verdict.reason });
       summary.done += 1;

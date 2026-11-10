@@ -78,3 +78,34 @@ test('watch persists check_error and notifies owner exactly once across runs', a
   assert.equal(row.checkNotifiedResult, 'error'); assert.equal(messages.length, 1);
   assert.match(messages[0], /確認処理エラー: 故障確認 node:internal/);
 });
+
+test('watch discovers silent-stop session and registers row and notifies owner', async t => {
+  const home = temp(t);
+  const now = Date.parse('2026-11-06T08:00:00Z');
+  const messages = [];
+  const transcriptPath = path.join(home, 'silent-stop-session.jsonl');
+  const user = { type: 'user', timestamp: '2026-11-06T05:00:00Z', cwd: home, message: { role: 'user', content: '入札対応をお願いします' } };
+  const toolUse = { type: 'assistant', timestamp: '2026-11-06T05:03:23Z', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'mcp__claude_ai_Google_Drive__share_file' }] } };
+  fs.writeFileSync(transcriptPath, [JSON.stringify(user), JSON.stringify(toolUse)].join('\n'));
+  const mtime = Date.parse('2026-11-06T05:03:23Z');
+  fs.utimesSync(transcriptPath, new Date(mtime), new Date(mtime));
+
+  // Use io.judge to force 'done' verdict so no resume is attempted
+  const io = {
+    sheetConfig: () => null, digest: async () => ({}),
+    transcriptFiles: [transcriptPath],
+    notifyOwner: async (_, message) => { messages.push(message); return { delivered: 'inbox' }; },
+    judge: () => ({ verdict: 'done', reason: 'completed via judge', source: 'test' }),
+    resume: () => assert.fail('must not resume'), askLlm: () => assert.fail('must not infer'),
+  };
+
+  await watch({ home, now, io });
+  const rows = readLedger(ledgerFile(home));
+  assert.ok(rows.length >= 1, `expected >=1 rows, got ${rows.length}: ${JSON.stringify(rows)}`);
+  const ssRows = rows.filter(r => r.source === 'silent-stop-unanswered');
+  assert.equal(ssRows.length, 1, `expected 1 silent-stop row, got ${ssRows.length}: ${JSON.stringify(rows)}`);
+  assert.equal(ssRows[0].status, 'done');
+  assert.match(ssRows[0].promise, /途中で止まった依頼（ツール実行中に終了）/);
+  assert.equal(messages.length, 2);
+  assert.match(messages[0], /途中で止まっていた依頼を見つけ/);
+});

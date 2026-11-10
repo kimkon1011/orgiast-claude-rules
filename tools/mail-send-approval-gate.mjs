@@ -6,16 +6,27 @@ import { readEvidence, approved, approvedAfter, human, textOf, shellSegments, op
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
 import { validApprovalMarker } from './lib/send-approval.mjs';
+import { readContextMarker, MAX_MARKER_AGE_MS } from './lib/send-context.mjs';
 export const HOOK_MATCHER = 'mcp__claude_ai_Gmail(?:_\\d+)?__(send_message|reply|forward)|Bash|PowerShell';
 export const BLOCK_REASON = '本文の全文をチャットに表示し、kim の『送ってよい』を得てから送信してください（組織指示11）。多数宛は mail-bulk-approve を使う';
 export const APPROVAL_MISSING_REASON = 'kim の最新の発言が送信承認として読めません（例: 送って／おくって／OK）。本文の全文を表示したうえで送信承認を得てください。';
 export const BODY_NOT_SHOWN_REASON = '下書き本文の全文が、kim の最新の承認の前の Claude の発言に見つかりません。本文を記号なし（コードブロック可）で全文表示してから承認を得てください。';
 export const HEADLESS_REASON = '無人の自動進行からの社外送信は拒否しました。本文ハッシュと一致する ~/.claude/send-approvals/<sha256>.json（approvedAt・kimQuote・bodyHash）が必要です。';
+export const CONTEXT_REASON = '送信前に宛先の履歴整合性チェックが必要です。node tools/send-context-check.mjs --channel <line|gmail|discord|beeper> --target <宛先> --text-file <送る本文> を実行してください。';
 const normalize = s => typeof s === 'string' ? s.replace(/\r\n/g, '\n')
   .split('\n').map(line => line.replace(/^(?:>[ \t]?)+/, '').trimEnd())
   .filter(line => !/^[ \t]*```[^`]*$/.test(line)).join('\n')
   .replace(/\n{3,}/g, '\n\n').trim() : '';
 const block = (reason = BLOCK_REASON) => ({ decision: 'block', reason });
+function executedScript(args, pattern) {
+  const base = value => String(value ?? '').split(/[\\/]/).at(-1).replace(/\.exe$/i, '');
+  if (pattern.test(base(args[0]))) return true;
+  if (!/^node(?:js)?$/i.test(base(args[0]))) return false;
+  // Only Node's entry script can send. A matching string in grep arguments,
+  // comments, heredoc contents, or an imported module is data, not execution.
+  const entry = args.slice(1).find(arg => arg === '--' || !arg.startsWith('-'));
+  return entry !== '--' && pattern.test(base(entry));
+}
 export function sendTargets(input) {
   if (/^mcp__claude_ai_Gmail(?:_\d+)?__(send_message|reply|forward)$/.test(input?.tool_name)) {
     const a = input.tool_input ?? {};
@@ -24,36 +35,39 @@ export function sendTargets(input) {
   if (!/^(Bash|PowerShell)$/.test(input?.tool_name)) return [];
   const targets = [];
   for (const args of shellSegments(input.tool_input?.command ?? '')) {
-    const script = args.find(a => /(?:^|[\\/])gmail-draft\.mjs$/.test(a));
-    if (script && option(args, '--send')) targets.push({ draftId: option(args, '--send'), user: option(args, '--user') ?? 'seisaku-team@orgiast.jp' });
-    else if (args.some(a => /(?:^|[\\/])line-group-send\.mjs$/.test(a))) {
+    if (executedScript(args, /^gmail-draft\.mjs$/i) && option(args, '--send')) targets.push({ draftId: option(args, '--send'), user: option(args, '--user') ?? 'seisaku-team@orgiast.jp' });
+    else if (executedScript(args, /^line-group-send\.mjs$/i)) {
       if (args.includes('--dry-run')) continue;
       const file = option(args, '--text-file');
       targets.push({ body: file ? fs.readFileSync(path.resolve(input.cwd ?? process.cwd(), file), 'utf8') : '', channel: 'line' });
     }
-    else if (args.some(a => /(?:^|[\\/])line-channel\.mjs$/.test(a)) && args.includes('--send')) {
+    else if (executedScript(args, /^line-channel\.mjs$/i) && args.includes('--send')) {
       if (args.includes('--dry-run')) continue;
       const file = option(args, '--body-file');
       targets.push({ body: file ? fs.readFileSync(path.resolve(input.cwd ?? process.cwd(), file), 'utf8') : '', channel: 'line' });
     }
-    else if (args.some(a => /(?:^|[\\/])(?:beeper-send|discord-dm)\.mjs$/.test(a))) {
+    else if (executedScript(args, /^(?:beeper-send|discord-dm)\.mjs$/i)) {
       if (args.includes('--dry-run')) continue;
       const file = option(args, '--body-file');
       targets.push({ body: file ? fs.readFileSync(path.resolve(input.cwd ?? process.cwd(), file), 'utf8') : option(args, '--body') ?? '', channel: 'message' });
     }
     // Repository inventory: gmail-draft --send is the sending CLI. Never exempt a
     // whole compound command just because a notification tool also appears in it.
-    else if (args.some(a => /(?:^|[\\/])gmail-send\.mjs$/.test(a))) {
+    else if (executedScript(args, /^gmail-send\.mjs$/i)) {
       const file = option(args, '--body-file');
       targets.push({ body: file ? fs.readFileSync(path.resolve(input.cwd ?? process.cwd(), file), 'utf8') : option(args, '--body') });
     }
   }
   return targets;
 }
-export function judge(input, { targets, env = process.env, home = env.ORGIAST_HOME } = {}) {
+export function judge(input, { targets, env = process.env, home = env.ORGIAST_HOME, requireContext = false } = {}) {
   try {
     targets ??= sendTargets(input);
     if (!targets.length) return { decision: 'pass' };
+    if (requireContext) for (const target of targets) {
+        const marker = readContextMarker(normalize(target.body), home);
+        if (!marker || Date.now() - Date.parse(marker.checkedAt) > MAX_MARKER_AGE_MS) return block(CONTEXT_REASON);
+      }
     const unattended = env.CLAUDE_HEADLESS === '1' || /^(?:auto-progress|auto-session)(?::|$)/.test(String(env.ORGIAST_HEADLESS_JOB || ''));
     const markerResults = targets.map(target => validApprovalMarker(normalize(target.body), { ...(home ? { home } : {}) }));
     if (markerResults.every(result => result.ok)) return { decision: 'pass' };
@@ -85,7 +99,7 @@ export function draftBody(payload) {
   walk(payload);
   return (plain.length ? plain : html).join('\n');
 }
-export async function judgeLive(input, { loadDraft } = {}) {
+export async function judgeLive(input, { loadDraft, requireContext = true } = {}) {
   try {
     const targets = sendTargets(input);
     for (const t of targets) if (t.draftId) {
@@ -99,7 +113,7 @@ export async function judgeLive(input, { loadDraft } = {}) {
       }
       t.body = await loadDraft(t);
     }
-    return judge(input, { targets });
+    return judge(input, { targets, requireContext });
   } catch { return block(); }
 }
 if (isEntry(import.meta.url)) {

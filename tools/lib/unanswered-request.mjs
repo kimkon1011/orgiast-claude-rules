@@ -20,6 +20,27 @@ export function isSyntheticApiError(entry) {
     (entry?.isApiErrorMessage === true || entry?.message?.model === '<synthetic>');
 }
 
+function isRealEntry(entry) {
+  if (!entry || typeof entry !== 'object' || entry.isSidechain) return false;
+  if (entry.type !== 'user' && entry.type !== 'assistant') return false;
+  return true;
+}
+
+function hasToolUse(entry) {
+  return entry?.type === 'assistant' && Array.isArray(entry.message?.content) &&
+    entry.message.content.some(part => part?.type === 'tool_use');
+}
+
+function hasToolResult(entry) {
+  return entry?.type === 'user' && Array.isArray(entry.message?.content) &&
+    entry.message.content.some(part => part?.type === 'tool_result');
+}
+
+function hasAssistantText(entry) {
+  if (entry?.type !== 'assistant' || isSyntheticApiError(entry)) return false;
+  return Boolean(textOf(entry.message?.content).trim());
+}
+
 function readTail(file, maxBytes = 512 * 1024) {
   const stat = fs.statSync(file);
   const length = Math.min(stat.size, maxBytes);
@@ -30,7 +51,7 @@ function readTail(file, maxBytes = 512 * 1024) {
   return stat.size > length ? text.slice(text.indexOf('\n') + 1) : text;
 }
 
-export function findUnansweredRequest(transcriptPath, { readFile = readTail } = {}) {
+export function findUnansweredRequest(transcriptPath, { readFile = readTail, statSync = fs.statSync, mtimeMs, now = Date.now() } = {}) {
   let raw;
   try { raw = readFile(transcriptPath); } catch { return null; }
   const entries = [];
@@ -41,28 +62,87 @@ export function findUnansweredRequest(transcriptPath, { readFile = readTail } = 
       if (!entry?.isSidechain) entries.push(entry);
     } catch { /* 壊れた行は無視する。 */ }
   }
+
+  const realEntries = entries.filter(isRealEntry);
   let userIndex = -1;
-  for (let i = entries.length - 1; i >= 0; i--) {
-    if (isUserRequest(entries[i])) { userIndex = i; break; }
+  for (let i = realEntries.length - 1; i >= 0; i--) {
+    if (isUserRequest(realEntries[i])) { userIndex = i; break; }
   }
   if (userIndex < 0) return null;
-  const after = entries.slice(userIndex + 1).filter(entry => entry?.type === 'assistant');
-  if (!after.length || after.some(entry => !isSyntheticApiError(entry))) return null;
-  const errorEntry = after.at(-1);
-  const userEntry = entries[userIndex];
+
+  const userEntry = realEntries[userIndex];
   const requestText = textOf(userEntry.message.content).replace(/\s+/g, ' ').trim().slice(0, 200);
-  const errorAt = errorEntry?.timestamp || userEntry?.timestamp || '';
-  if (!requestText || !Number.isFinite(Date.parse(errorAt))) return null;
-  return {
-    sessionId: path.basename(transcriptPath, '.jsonl'),
-    cwd: userEntry?.cwd || entries.findLast(entry => entry?.cwd)?.cwd || '',
-    transcriptPath,
-    requestText,
-    errorAt,
-    error: errorEntry?.error || '',
-    apiError: errorEntry?.apiError || '',
-    apiErrorStatus: errorEntry?.apiErrorStatus ?? '',
-  };
+  if (!requestText) return null;
+
+  const after = realEntries.slice(userIndex + 1).filter(entry => entry?.type === 'assistant');
+  if (after.length > 0 && after.every(entry => isSyntheticApiError(entry))) {
+    const errorEntry = after.at(-1);
+    const errorAt = errorEntry?.timestamp || userEntry?.timestamp || '';
+    if (!Number.isFinite(Date.parse(errorAt))) return null;
+    return {
+      sessionId: path.basename(transcriptPath, '.jsonl'),
+      cwd: userEntry?.cwd || entries.findLast(entry => entry?.cwd)?.cwd || '',
+      transcriptPath,
+      requestText,
+      errorAt,
+      error: errorEntry?.error || '',
+      apiError: errorEntry?.apiError || '',
+      apiErrorStatus: errorEntry?.apiErrorStatus ?? '',
+    };
+  }
+
+  let fileMtime = mtimeMs;
+  if (typeof fileMtime !== 'number') {
+    try { fileMtime = statSync(transcriptPath).mtimeMs; } catch { fileMtime = 0; }
+  }
+  const lastReal = realEntries.at(-1);
+  const lastTime = Date.parse(lastReal?.timestamp || userEntry?.timestamp || '');
+  if (!fileMtime && Number.isFinite(lastTime)) fileMtime = lastTime;
+
+  const elapsedMs = now - fileMtime;
+  const isOldEnough = elapsedMs >= 45 * 60 * 1000;
+  const isNotExpired = elapsedMs <= 7 * 86400 * 1000;
+
+  if (isOldEnough && isNotExpired) {
+    let silentStop = false;
+    let lastToolUseIndex = -1;
+    for (let i = realEntries.length - 1; i >= 0; i--) {
+      if (hasToolUse(realEntries[i])) { lastToolUseIndex = i; break; }
+    }
+    if (lastToolUseIndex >= 0) {
+      const afterToolUse = realEntries.slice(lastToolUseIndex + 1);
+      const toolResultFound = afterToolUse.some(hasToolResult);
+      const assistantTextFound = afterToolUse.some(hasAssistantText);
+      if (!toolResultFound && !assistantTextFound) {
+        silentStop = true;
+      }
+    }
+
+    if (!silentStop) {
+      const assistantTextAfterUser = after.some(hasAssistantText);
+      if (!assistantTextAfterUser) {
+        silentStop = true;
+      }
+    }
+
+    if (silentStop) {
+      const errorAt = lastReal?.timestamp || userEntry?.timestamp || '';
+      if (!Number.isFinite(Date.parse(errorAt))) return null;
+      return {
+        sessionId: path.basename(transcriptPath, '.jsonl'),
+        cwd: userEntry?.cwd || entries.findLast(entry => entry?.cwd)?.cwd || '',
+        transcriptPath,
+        requestText,
+        errorAt,
+        error: 'silent_stop',
+        apiError: '',
+        apiErrorStatus: '',
+        kind: 'silent-stop',
+      };
+    }
+  }
+
+  return null;
 }
 
 export function errorKind(found) {

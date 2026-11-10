@@ -14,13 +14,17 @@ import { resolveDiscordBotToken } from './notify-kim.mjs';
 const cutoff = () => Date.now() - 30 * 86400000;
 const trimHistory = rows => rows.filter(x => !x.at || Date.parse(x.at) >= cutoff()).slice(-Math.max(20, Math.min(rows.length, 100)));
 const sbHeaders = s => ({ apikey: s.SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${s.SUPABASE_SERVICE_ROLE_KEY}` });
+const responseError = async (label, response) => {
+  const body = await response.text().catch(() => '');
+  return new Error(`${label} HTTP ${response.status}${body ? `: ${body}` : ''}`);
+};
 
 export async function fetchHistory(channel, target, { home = process.env.ORGIAST_HOME || os.homedir(), fetchImpl = fetch } = {}) {
   if (channel === 'line') {
     const s = await loadSecrets({ home }); const id = await resolveGroup(s, target);
-    const url = `${s.SUPABASE_URL}/rest/v1/channel_messages?select=id,created_at,sender_name,body,direction,external_message_id&channel=eq.line&external_thread_id=eq.${encodeURIComponent(id)}&order=created_at.desc&limit=100`;
-    const r = await fetchImpl(url, { headers: sbHeaders(s) }); if (!r.ok) throw new Error(`LINE 履歴取得失敗 HTTP ${r.status}`);
-    const incoming = (await r.json()).map(x => ({ id: x.external_message_id || x.id, at: x.created_at, side: x.direction || 'external', sender: x.sender_name, text: x.body }));
+    const url = `${s.SUPABASE_URL}/rest/v1/channel_messages?select=id,created_at,sender_display_name,body,direction,external_message_id&channel=eq.line&external_thread_id=eq.${encodeURIComponent(id)}&order=created_at.desc&limit=100`;
+    const r = await fetchImpl(url, { headers: sbHeaders(s) }); if (!r.ok) throw await responseError('LINE 履歴取得失敗', r);
+    const incoming = (await r.json()).map(x => ({ id: x.external_message_id || x.id, at: x.created_at, side: x.direction || 'external', sender: x.sender_display_name, text: x.body }));
     const sent = readOutbound(id, home).map(x => ({ id: x.messageId, at: x.at, side: 'self', sender: 'オージャスト', text: x.text }));
     return { target: id, messages: trimHistory([...incoming, ...sent].sort((a,b) => Date.parse(a.at)-Date.parse(b.at))) };
   }

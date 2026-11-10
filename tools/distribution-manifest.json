@@ -42,6 +42,8 @@
     "pr-body-x0007-phase2.md": { "reason": "PR #1706 のボディファイル。配布先PCの実行時参照なし" },
     "run-file-20261108-003008.md": { "reason": "X-0007 PHASE1 B 引用ギャップ分析の参照メモ。配布先PCの実行時参照なし" },
 "outputs": { "reason": "PR作業の成果物出力。配布先PCの実行時参照なし" },
-    "tasks": { "reason": "Codex への実装指示ファイル。配布先PCの実行時参照なし" }
+    "tasks": { "reason": "Codex への実装指示ファイル。配布先PCの実行時参照なし" },
+    "runs": { "reason": "session-fold bench 等の計測の出力（runs/c041-timeseries）。配布先PCの実行時参照なし" },
+    "tests": { "reason": "テストフィクスチャ。tools/session-fold-bench.mjs 等の実行時参照のみで配布不要", "runtimeRefOk": true }
   }
 }

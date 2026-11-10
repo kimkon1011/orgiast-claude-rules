@@ -109,3 +109,65 @@ test('beeper --dry-run はマーカー無しでも許可', async t => {
   const cli=fileURLToPath(new URL('./beeper-send.mjs',import.meta.url));
   assert.equal(spawnSync(process.execPath,[cli,'--chat','c1','--body-file',file,'--dry-run'],{env:{...process.env,ORGIAST_HOME:home}}).status,0);
 });
+test('--intended-change ありで条件変更を正しく送る場合（変更明示・値整合）はOK', () => {
+  let prompt='';
+  const verdict=runLlm(
+    [{party:'internal',sender:'オージャスト',text:'設営 9:00〜13:00・5,200円で確定です',at:'2026-11-09T10:00:00Z'}],
+    '11/9に確定でお伝えした設営条件に変更が出そうで申し訳ありません。設営 9:00〜18:00（休憩1時間）、日報酬 10,400円への変更をご検討いただけますでしょうか。',
+    {intendedChanges:['設営時間 9:00-13:00 → 9:00-18:00（休憩1時間）','設営日報酬 5,200円 → 10,400円'],
+     spawn:(_exe,args)=>{prompt=fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8');return {status:0,stdout:'{"verdict":"OK","reason":"意図した変更を明示、値も履歴と整合","warnings":[]}',stderr:''};}}
+  );
+  assert.match(prompt,/意図した変更/);
+  assert.match(prompt,/設営時間/);
+  assert.match(prompt,/設営日報酬/);
+  assert.match(prompt,/その変更自体を矛盾・重複としてNGにしない/);
+  assert.equal(verdict.ok,true);
+});
+test('--intended-change ありでも変更前値が履歴と食い違う場合はNG', () => {
+  let prompt='';
+  const verdict=runLlm(
+    [{party:'internal',sender:'オージャスト',text:'設営 9:00〜13:00・5,200円で確定です',at:'2026-11-09T10:00:00Z'}],
+    '変更があります。設営 9:00〜18:00、日報酬 10,400円でお願いします。',
+    {intendedChanges:['設営時間 9:00-13:00 → 9:00-18:00','設営日報酬 5,200円 → 10,400円'],
+     spawn:(_exe,args)=>{prompt=fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8');return {status:0,stdout:'{"verdict":"NG","reason":"変更であることを明示していない。変更前の値5,200円の根拠が本文から確認できない","warnings":[]}',stderr:''};}}
+  );
+  assert.match(prompt,/意図した変更/);
+  assert.match(prompt,/変更であることを明示していない場合はNG/);
+  assert.equal(verdict.ok,false);
+});
+test('--intended-change なしでも変更を明示していれば従来通りOK可', () => {
+  let prompt='';
+  const verdict=runLlm(
+    [{party:'internal',sender:'オージャスト',text:'予備日は11月20日で',at:'2026-11-08T10:00:00Z'}],
+    'お世話になっております。先日確定した予備日11月20日ですが、別の日程でご調整いただくことは可能でしょうか。',
+    {spawn:(_exe,args)=>{prompt=fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8');return {status:0,stdout:'{"verdict":"OK","reason":"新たなお伺いであり矛盾ではない","warnings":[]}',stderr:''};}}
+  );
+  assert.doesNotMatch(prompt,/意図した変更/);
+  assert.equal(verdict.ok,true);
+});
+test('main --intended-change をparseしてマーカーに記録する', async t => {
+  const home=tmp(t), file=path.join(home,'body.txt'); fs.writeFileSync(file,'変更のご連絡');
+  const code=await main(['--channel','discord','--target','1423319951980232744','--text-file',file,'--intended-change','時間変更','--intended-change','金額変更'],{
+    home,
+    fetchHistory:async()=>({target:'dm-1',messages:[{id:'m1',at:'2026-11-10T00:00:00.000Z',side:'self',party:'internal',sender:'オージャスト',text:'確定'}]}),
+    runLlm:()=>({ok:true,reason:'条件変更確認',warnings:[]})
+  });
+  assert.equal(code,0);
+  const markers=fs.readdirSync(path.join(home,'.claude','send-context-checks'));
+  assert.equal(markers.length,1);
+  const marker=JSON.parse(fs.readFileSync(path.join(home,'.claude','send-context-checks',markers[0]),'utf8'));
+  assert.deepEqual(marker.intendedChanges,['時間変更','金額変更']);
+});
+test('--intended-change 無しのマーカーはintendedChangesをundefinedのまま', async t => {
+  const home=tmp(t), file=path.join(home,'body.txt'); fs.writeFileSync(file,'通常連絡');
+  const code=await main(['--channel','discord','--target','1423319951980232744','--text-file',file],{
+    home,
+    fetchHistory:async()=>({target:'dm-1',messages:[{id:'m1',at:'2026-11-10T00:00:00.000Z',side:'self',party:'internal',sender:'オージャスト',text:'確認'}]}),
+    runLlm:()=>({ok:true,reason:'問題なし',warnings:[]})
+  });
+  assert.equal(code,0);
+  const markers=fs.readdirSync(path.join(home,'.claude','send-context-checks'));
+  assert.equal(markers.length,1);
+  const marker=JSON.parse(fs.readFileSync(path.join(home,'.claude','send-context-checks',markers[0]),'utf8'));
+  assert.equal(marker.intendedChanges,undefined);
+});

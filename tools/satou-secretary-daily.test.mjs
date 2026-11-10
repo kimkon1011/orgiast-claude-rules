@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   headerMap,
   extractCases,
@@ -10,6 +13,8 @@ import {
   aggregateActiveCases,
   isInPreviousJstDay,
   buildDailyReport,
+  isSatouCustomerMail,
+  deliverReport,
 } from "./satou-secretary-daily.mjs";
 const now = new Date("2026-11-09T06:30:00+09:00"),
   h = [
@@ -68,6 +73,12 @@ test("30日より前の納品完了/失注を除外", () =>
     ).map((x) => x.code),
     ["NEW"],
   ));
+test("メール担当は佐藤本人送信かつ顧客独自ドメインだけ", () => {
+  assert.equal(isSatouCustomerMail({from:"佐藤 <satou@orgiast.jp>",to:"customer@example.co.jp"}),true);
+  assert.equal(isSatouCustomerMail({from:"customer@example.co.jp",to:"satou@orgiast.jp"}),false);
+  assert.equal(isSatouCustomerMail({from:"佐藤 <satou@orgiast.jp>",to:"person@gmail.com"}),false);
+  assert.equal(isSatouCustomerMail({from:"佐藤 <satou@orgiast.jp>",to:"kim@orgiast.jp"}),false);
+});
 test("営業・制作・百貨店ルートを状態不問で拾い理由を記録", () => {
   const x = extractCases(
     [
@@ -166,7 +177,7 @@ test("昨日判定はJST 00:00境界", () => {
   assert.equal(isInPreviousJstDay("2026-11-09T23:59:59+09:00", base), true);
   assert.equal(isInPreviousJstDay("2026-11-10T00:00:00+09:00", base), false);
 });
-test("LLM全滅時は件名と送信者へフォールバックし判断なし、25行以内", async () => {
+test("案件紐づきなしはLLMを呼ばず、判断なし・25行以内", async () => {
   const messages = Array.from({ length: 30 }, (_, i) => ({
       threadId: `t${i}`,
       internalDate: String(+new Date("2026-11-09T12:00:00+09:00") + i),
@@ -188,7 +199,7 @@ test("LLM全滅時は件名と送信者へフォールバックし判断なし�
         },
       },
     );
-  assert.match(report.text, /件名0（顧客0）/);
+  assert.match(report.text, /■昨日の動き\n・なし/);
   assert.match(report.text, /■社長判断が必要なこと\n・なし/);
   assert.ok(report.lines.length <= 25);
 });
@@ -203,6 +214,27 @@ test("社長判断が無いときは「なし」", async () => {
     { askLlm: async () => "なし" },
   );
   assert.match(report.text, /■社長判断が必要なこと\n・なし/);
+});
+test("昨日の動きは案件紐づきだけで社内転送とLEADを除外し、優先0件はなし", async () => {
+  const base={internalDate:String(+new Date("2026-11-09T12:00:00+09:00")),to:"satou@orgiast.jp",snippet:"相談です"};
+  const report=await buildDailyReport({now:new Date("2026-11-10T06:30:00+09:00"),cases:[{code:"C1",client:"鹿沼CATV",name:"鹿沼催事",state:"確定",deliveryText:"2026-12-19"}],messages:[
+    {...base,threadId:"1",subject:"鹿沼催事 打合せ",from:"小川 <ogawa@example.jp>"},
+    {...base,threadId:"2",subject:"Fwd: 鹿沼催事",from:"kim@orgiast.jp",to:"satou@orgiast.jp"},
+    {...base,threadId:"3",subject:"[LEAD:鹿沼催事]",from:"notice@example.jp"},
+    {...base,threadId:"4",subject:"無関係",from:"other@example.jp"},
+  ],actions:[]},{askLlm:async prompt=>prompt.includes("社長判断")||prompt.includes("問題候補")?"なし":"打合せ日程の相談が来た"});
+  assert.match(report.text,/鹿沼CATV.*打合せ日程の相談が来た/);
+  assert.doesNotMatch(report.text,/Fwd:|LEAD|無関係/);
+  assert.match(report.text,/■今日の優先\n・なし/);
+});
+test("日次報告DMは1日1回、フッターなし・kim写しなし", async t => {
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-deliver-")); t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+  let sends=0, options;
+  const deps={home,fetchSendHistory:async()=>({target:"dm-1",messages:[]}),checkSendContext:()=>({ok:true,reason:"整合"}),sendDiscordDm:async(_target,_text,o)=>{sends++;options=o;return{delivered:true,channelId:"dm-1",messageId:"m-1"};}};
+  const first=await deliverReport({text:"本文"},{now:new Date("2026-11-10T06:30:00+09:00"),deps});
+  const second=await deliverReport({text:"本文"},{now:new Date("2026-11-10T07:00:00+09:00"),deps});
+  assert.equal(first.messageId,"m-1"); assert.equal(second.reason,"already-delivered"); assert.equal(sends,1);
+  assert.equal(options.noCopyKim,true); assert.equal(options.noReplyFooter,true);
 });
 test("各自動タブを独立更新しシート1へ書かない", async () => {
   const writes = [],

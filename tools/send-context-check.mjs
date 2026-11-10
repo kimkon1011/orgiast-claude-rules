@@ -11,6 +11,7 @@ import { latestOf, readOutbound, writeContextMarker } from './lib/send-context.m
 import { mintDwdToken } from './gmail-draft.mjs';
 import { resolveDiscordBotToken } from './notify-kim.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
+import { getDiscordMembers, matchMember } from './discord-member-directory.mjs';
 
 const cutoff = () => Date.now() - 30 * 86400000;
 const trimHistory = rows => rows.filter(x => !x.at || Date.parse(x.at) >= cutoff()).slice(-Math.max(20, Math.min(rows.length, 100)));
@@ -35,9 +36,28 @@ export async function fetchHistory(channel, target, { home = process.env.ORGIAST
   }
   if (channel === 'discord') {
     const token = resolveDiscordBotToken(home); if (!token) throw new Error('Discord Bot トークンがありません');
-    const r = await fetchImpl(`https://discord.com/api/v10/channels/${encodeURIComponent(target)}/messages?limit=100`, { headers:{ Authorization:`Bot ${token}` } });
+    const headers={ Authorization:`Bot ${token}`, 'Content-Type':'application/json' };
+    let channelId=target;
+    let r;
+    if (/^\d{15,22}$/.test(target)) {
+      r = await fetchImpl(`https://discord.com/api/v10/channels/${encodeURIComponent(target)}/messages?limit=100`, { headers });
+      if (r.status === 404) {
+        const dm=await fetchImpl('https://discord.com/api/v10/users/@me/channels',{method:'POST',headers,body:JSON.stringify({recipient_id:target})});
+        if(!dm.ok) throw await responseError('Discord DM チャンネル作成失敗',dm);
+        channelId=(await dm.json()).id;
+        r=await fetchImpl(`https://discord.com/api/v10/channels/${encodeURIComponent(channelId)}/messages?limit=100`,{headers});
+      }
+    } else {
+      const members=await getDiscordMembers({query:target,home,fetchImpl});
+      const member=members&&matchMember(target,members);
+      if(!member) throw new Error(`Discord 宛先「${target}」を一意に特定できません`);
+      const dm=await fetchImpl('https://discord.com/api/v10/users/@me/channels',{method:'POST',headers,body:JSON.stringify({recipient_id:member.id})});
+      if(!dm.ok) throw await responseError('Discord DM チャンネル作成失敗',dm);
+      channelId=(await dm.json()).id;
+      r=await fetchImpl(`https://discord.com/api/v10/channels/${encodeURIComponent(channelId)}/messages?limit=100`,{headers});
+    }
     if (!r.ok) throw await responseError('Discord 履歴取得失敗', r);
-    return { target, messages: trimHistory((await r.json()).map(x => ({ id:x.id, at:x.timestamp, side:x.author?.bot?'self':'external', sender:x.author?.global_name||x.author?.username, text:x.content })).reverse()) };
+    return { target:channelId, messages: trimHistory((await r.json()).map(x => ({ id:x.id, at:x.timestamp, side:x.author?.bot?'self':'external', sender:x.author?.global_name||x.author?.username, text:x.content })).reverse()) };
   }
   if (channel === 'gmail') {
     const user = process.env.ORGIAST_GMAIL_USER || 'seisaku-team@orgiast.jp';
@@ -52,15 +72,20 @@ export async function fetchHistory(channel, target, { home = process.env.ORGIAST
   throw new Error(`未対応 channel: ${channel}`);
 }
 
-export function parseVerdict(raw) { const m=String(raw).match(/\{[\s\S]*\}/); if(!m) throw new Error('LLM判定がJSONではありません'); const j=JSON.parse(m[0]); return { ok:j.verdict==='OK', reason:String(j.reason||''), warnings:Array.isArray(j.warnings)?j.warnings:[] }; }
+export function parseVerdict(raw) { const m=String(raw).match(/\{[\s\S]*\}/); if(!m) throw new Error(`LLM判定がJSONではありません: ${String(raw).replace(/\s+/g,' ').slice(0,200)}`); const j=JSON.parse(m[0]); return { ok:j.verdict==='OK', reason:String(j.reason||''), warnings:Array.isArray(j.warnings)?j.warnings:[] }; }
 export function runLlm(history, text, { spawn = spawnSync } = {}) {
   const prompt = `次の宛先履歴と送信予定本文を検査し、JSONだけを返す。形式: {"verdict":"OK|NG","reason":"理由","warnings":["警告"]}。①回答済み質問の聞き直し ②相手の未回答質問・要望への未回答 ③日付・金額・数量・手配状況・呼び方の食い違い ④自社既送信との重複・矛盾、のどれかがあればNG。\n履歴:\n${JSON.stringify(history)}\n送信予定:\n${text}`;
   const tool = path.join(path.dirname(fileURLToPath(import.meta.url)), 'llm-ask.mjs');
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'send-context-prompt-')), promptFile=path.join(dir,'prompt.txt');
   try {
     fs.writeFileSync(promptFile,prompt,'utf8');
-    const r=spawn(process.execPath,[tool,'--provider','gemini','--category','classification','--max','800','--no-persist','--prompt-file',promptFile],{encoding:'utf8',windowsHide:true});
-    if(r.status!==0) throw new Error(`安価LLM判定失敗: ${r.error?.message||r.stderr||r.stdout||`終了コード ${r.status}`}`); return parseVerdict(r.stdout);
+    const failures=[];
+    for(const provider of ['gemini','deepseek','groq']) {
+      const r=spawn(process.execPath,[tool,'--provider',provider,'--prefer-provider','--no-fallback','--category','classification','--max','800','--no-persist','--prompt-file',promptFile],{encoding:'utf8',windowsHide:true});
+      if(r.status===0) return parseVerdict(r.stdout);
+      failures.push(`${provider}: ${r.error?.message||r.stderr||r.stdout||`終了コード ${r.status}`}`);
+    }
+    throw new Error(`安価LLM判定失敗: ${failures.join(' | ')}`);
   } finally { fs.rmSync(dir,{recursive:true,force:true}); }
 }
 

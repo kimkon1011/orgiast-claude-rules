@@ -52,6 +52,11 @@ test('kim 以外への代筆は返答先の一文を末尾に1回だけ付ける
   assert.equal(bodies[1].content, withFooter('本文'));
   assert.equal(bodies[3].content, withFooter('本文'));
 });
+test('--no-reply-footer は返答先の一文を付けない', async () => {
+  const bodies=[];
+  await sendDiscordDm('百瀬','日次報告',{token:'test-token',resolve,noCopyKim:true,noReplyFooter:true,fetchImpl:async (_url,init)=>{bodies.push(JSON.parse(init.body));return bodies.length===1?response({json:{id:'dm'}}):response({json:{id:'message'}});}});
+  assert.equal(bodies[1].content,'日次報告');
+});
 
 test('本文は書き換えず、そのまま送る（LLM平易化を通さない）', async () => {
   const bodies = [];

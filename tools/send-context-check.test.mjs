@@ -20,6 +20,19 @@ test('LINE履歴取得エラーはレスポンス本文を含む', async t => {
   const home=tmp(t); fs.mkdirSync(path.join(home,'.claude')); fs.writeFileSync(path.join(home,'.claude','line-send.env'),'LINE_CHANNEL_ACCESS_TOKEN=test\nSUPABASE_URL=https://example.supabase.co\nSUPABASE_SERVICE_ROLE_KEY=test\n');
   await assert.rejects(()=>fetchHistory('line','C10930732da844f79c6032a40705a4d73',{home,fetchImpl:async()=>new Response('{"message":"missing column"}',{status:400})}),/HTTP 400: .*missing column/);
 });
+test('DiscordユーザーIDは404時にDMチャンネルを作って履歴を読む', async t => {
+  const home=tmp(t); fs.mkdirSync(path.join(home,'.claude')); fs.writeFileSync(path.join(home,'.claude','orgiast-discord-bot-token.txt'),'token');
+  const calls=[];
+  const result=await fetchHistory('discord','1423319951980232744',{home,fetchImpl:async (url,init={})=>{
+    calls.push({url:String(url),init});
+    if(calls.length===1) return new Response('not found',{status:404});
+    if(calls.length===2) return Response.json({id:'dm-1'});
+    return Response.json([{id:'m1',timestamp:'2026-11-10T00:00:00.000Z',author:{bot:false,username:'satou'},content:'了解です'}]);
+  }});
+  assert.equal(result.target,'dm-1');
+  assert.equal(JSON.parse(calls[1].init.body).recipient_id,'1423319951980232744');
+  assert.equal(result.messages[0].text,'了解です');
+});
 test('LLM判定はWindowsの引数長制限を避けてprompt-fileを使う', () => {
   let prompt='';
   const result=runLlm([{text:'長文'.repeat(20000)}],'テスト本文',{spawn:(_exe,args)=>{ const i=args.indexOf('--prompt-file'); assert.ok(i>=0); prompt=fs.readFileSync(args[i+1],'utf8'); return {status:0,stdout:'{"verdict":"OK","reason":"整合","warnings":[]}',stderr:''}; }});

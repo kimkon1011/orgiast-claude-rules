@@ -51,7 +51,7 @@ export async function sendDiscordDm(target, body, options = {}) {
   const isKim = String(recipient.id) === KIM_DISCORD_USER_ID || ['金功勇', 'kim'].includes(recipientName.toLowerCase());
   const inbox = isKim;
   if (!options.noCopyKim && !isKim) copyToKim = isKimSeat(home) ? 'in-session' : 'session-inbox';
-  const finalBody = isKim ? String(body ?? '') : withReplyToKimFooter(body);
+  const finalBody = isKim || options.noReplyFooter ? String(body ?? '').trimEnd() : withReplyToKimFooter(body);
   const content = safeContent(finalBody);
   if (options.dryRun) return { dryRun: true, recipient, content, copyToKim, ...(inbox ? { delivered: 'session-inbox' } : {}) };
   if (inbox) {
@@ -88,9 +88,9 @@ export async function sendDiscordDm(target, body, options = {}) {
     if (!sent.ok) throw new Error(`DM送信が HTTP ${sent.status}`);
     const sentMessage = await sent.json();
     recordOutbound({ channel: 'discord', target: channelId, text: body, messageId: sentMessage.id }, home);
-    return channelId;
+    return { channelId, messageId: sentMessage.id };
   };
-  const channelId = await deliver(recipient, content);
+  const { channelId, messageId } = await deliver(recipient, content);
   if (copyToKim === 'session-inbox') {
     const displayName = recipient.displayName ?? recipient.label ?? recipient.username ?? target;
     try {
@@ -99,7 +99,7 @@ export async function sendDiscordDm(target, body, options = {}) {
     } catch (error) { copyToKim = { delivered: false, error: error.message }; }
   }
 
-  return { delivered: true, recipient, channelId, copyToKim };
+  return { delivered: true, recipient, channelId, messageId, copyToKim };
 }
 
 function parseArgs(args) {
@@ -109,18 +109,20 @@ function parseArgs(args) {
   let dryRun = false;
   let noCopyKim = false;
   let kimActionRequired = false;
+  let noReplyFooter = false;
   for (let i = 1; i < args.length; i += 1) {
     if (args[i] === '--body') body = args[++i];
     else if (args[i] === '--body-file') bodyFile = args[++i];
     else if (args[i] === '--dry-run') dryRun = true;
     else if (args[i] === '--no-copy-kim') noCopyKim = true;
     else if (args[i] === '--kim-action-required') kimActionRequired = true;
+    else if (args[i] === '--no-reply-footer') noReplyFooter = true;
     else throw new Error(`不明な引数です: ${args[i]}`);
   }
   if (!target || (body === undefined) === (bodyFile === undefined)) {
-    throw new Error('usage: discord-dm.mjs <名前 or メール> (--body <本文> | --body-file <path>) [--dry-run] [--no-copy-kim] [--kim-action-required]');
+    throw new Error('usage: discord-dm.mjs <名前 or メール> (--body <本文> | --body-file <path>) [--dry-run] [--no-copy-kim] [--no-reply-footer] [--kim-action-required]');
   }
-  return { target, body: bodyFile === undefined ? body : fs.readFileSync(bodyFile, 'utf8'), dryRun, noCopyKim, kimActionRequired };
+  return { target, body: bodyFile === undefined ? body : fs.readFileSync(bodyFile, 'utf8'), dryRun, noCopyKim, noReplyFooter, kimActionRequired };
 }
 
 export async function main(args = process.argv.slice(2), options = {}) {
@@ -128,7 +130,7 @@ export async function main(args = process.argv.slice(2), options = {}) {
   try { parsed = parseArgs(args); }
   catch (error) { console.error(`discord-dm: ${error.message}`); return 1; }
   try {
-    const result = await sendDiscordDm(parsed.target, parsed.body, { ...options, dryRun: parsed.dryRun, noCopyKim: parsed.noCopyKim, kimActionRequired: parsed.kimActionRequired });
+    const result = await sendDiscordDm(parsed.target, parsed.body, { ...options, dryRun: parsed.dryRun, noCopyKim: parsed.noCopyKim, noReplyFooter: parsed.noReplyFooter, kimActionRequired: parsed.kimActionRequired });
     console.log(JSON.stringify(result));
     return result.delivered === 'blocked' ? 3 : 0;
   } catch (error) {

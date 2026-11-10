@@ -7,8 +7,8 @@ export const MAX_MARKER_AGE_MS = 30 * 60 * 1000;
 export const textHash = text => createHash('sha256').update(String(text ?? '').replace(/\r\n/g, '\n').trim()).digest('hex');
 export const markerPath = (text, home = process.env.ORGIAST_HOME || os.homedir()) => path.join(home, '.claude', 'send-context-checks', `${textHash(text)}.json`);
 
-export function writeContextMarker({ channel, target, text, latest, reason, home, now = new Date() }) {
-  const marker = { version: 1, checkedAt: now.toISOString(), channel, target, bodyHash: textHash(text), latest: latest ?? null, reason };
+export function writeContextMarker({ channel, target, text, latest, reason, intendedChanges, home, now = new Date() }) {
+  const marker = { version: 1, checkedAt: now.toISOString(), channel, target, bodyHash: textHash(text), latest: latest ?? null, reason, intendedChanges: Array.isArray(intendedChanges) && intendedChanges.length ? intendedChanges : undefined };
   const file = markerPath(text, home);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o600 });

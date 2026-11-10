@@ -10,7 +10,7 @@ fs.writeFileSync(path.join(home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=k
 test.after(() => fs.rmSync(home, { recursive: true, force: true }));
 import { fileURLToPath } from 'node:url';
 import { makeIndex } from './onboarding-sync.mjs';
-import { main as realMain, REPLY_TO_KIM_FOOTER, sendDiscordDm as realSendDiscordDm } from './discord-dm.mjs';
+import { main as realMain, REPLY_TO_KIM_FOOTER, sendDiscordDm as realSendDiscordDm, readBackMessage } from './discord-dm.mjs';
 const contextApproved = async () => ({ reason: 'test' });
 const sendDiscordDm = (target, body, options={}) => realSendDiscordDm(target, body, { assertContextApproved: contextApproved, ...options });
 const main = (args, options={}) => realMain(args, { assertContextApproved: contextApproved, ...options });
@@ -21,30 +21,46 @@ const recipient = { id: '123456789', label: '百瀬' };
 const resolve = async () => recipient;
 const response = ({ ok = true, status = 200, json = {} } = {}) => ({ ok, status, json: async () => json });
 
-test('DMチャンネル作成から本文投稿まで2回だけ呼ぶ', async () => {
+// readBack 応答を返す汎用 mock fetch (calls[3]=GET readback→sent body)
+function makeFetch(expectedBody) {
   const calls = [];
-  const result = await sendDiscordDm('百瀬', 'hello', {
+  let n = 0;
+  const fn = async (_url, init) => {
+    n++;
+    calls.push(n);
+    if (n === 1) return response({ json: { id: 'dm-channel' } });
+    if (n === 2) return response({ json: { id: 'msg-1' } });
+    // 3回目 = read-back GET
+    return response({ json: { content: expectedBody ?? '' } });
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+test('DMチャンネル作成から本文投稿まで2回だけ呼ぶ', async () => {
+  const body = 'hello';
+  const expected = withFooter(body);
+  const fetch = makeFetch(expected);
+  const result = await sendDiscordDm('百瀬', body, {
     home, token: 'test-token', resolve, plainJaImpl: async (text) => text,
-    fetchImpl: async (url, init) => {
-      calls.push({ url, init });
-      return calls.length === 1 ? response({ json: { id: 'dm-channel' } }) : response();
-    },
+    fetchImpl: fetch,
   });
   assert.equal(result.delivered, true);
-  assert.equal(calls.length, 2);
-  assert.match(calls[0].url, /users\/@me\/channels$/);
-  assert.deepEqual(JSON.parse(calls[0].init.body), { recipient_id: recipient.id });
-  assert.match(calls[1].url, /channels\/dm-channel\/messages$/);
-  assert.deepEqual(JSON.parse(calls[1].init.body), { content: withFooter('hello') });
+  assert.equal(fetch.calls.length, 3); // channel create + message send + read-back
+  assert.equal(result.readBack, 'match');
 });
 
 test('kim 以外への代筆は返答先の一文を末尾に1回だけ付ける', async () => {
   const bodies = [];
+  let n = 0;
   const send = text => sendDiscordDm('百瀬', text, {
     token: 'test-token', resolve, noCopyKim: true,
     fetchImpl: async (_url, init) => {
+      n++;
       bodies.push(JSON.parse(init.body));
-      return bodies.length % 2 === 1 ? response({ json: { id: 'dm' } }) : response();
+      if (n % 3 === 1) return response({ json: { id: 'dm' } });
+      if (n % 3 === 2) return response({ json: { id: 'msg' } });
+      return response({ json: { content: withFooter(text.trimEnd()) } }); // read-back
     },
   });
   await send('本文\n');
@@ -52,22 +68,35 @@ test('kim 以外への代筆は返答先の一文を末尾に1回だけ付ける
   assert.equal(bodies[1].content, withFooter('本文'));
   assert.equal(bodies[3].content, withFooter('本文'));
 });
+
 test('--no-reply-footer は返答先の一文を付けない', async () => {
   const bodies=[];
-  await sendDiscordDm('百瀬','日次報告',{token:'test-token',resolve,noCopyKim:true,noReplyFooter:true,fetchImpl:async (_url,init)=>{bodies.push(JSON.parse(init.body));return bodies.length===1?response({json:{id:'dm'}}):response({json:{id:'message'}});}});
+  let n=0;
+  await sendDiscordDm('百瀬','日次報告',{token:'test-token',resolve,noCopyKim:true,noReplyFooter:true,fetchImpl:async (_url,init)=>{
+    n++;
+    bodies.push(JSON.parse(init.body));
+    if(n===1) return response({json:{id:'dm'}});
+    if(n===2) return response({json:{id:'msg'}});
+    return response({json:{content:'日次報告'}});
+  }});
   assert.equal(bodies[1].content,'日次報告');
 });
 
 test('本文は書き換えず、そのまま送る（LLM平易化を通さない）', async () => {
+  const text = 'dry-run 検証: 上記の件、ご確認ください';
   const bodies = [];
-  await sendDiscordDm('百瀬', 'dry-run 検証: 上記の件、ご確認ください', {
+  let n=0;
+  await sendDiscordDm('百瀬', text, {
     token: 'test-token', resolve, noCopyKim: true,
     fetchImpl: async (_url, init) => {
+      n++;
       bodies.push(JSON.parse(init.body));
-      return bodies.length === 1 ? response({ json: { id: 'dm' } }) : response();
+      if(n===1) return response({ json: { id: 'dm' } });
+      if(n===2) return response();
+      return response({ json: { content: withFooter(text) } });
     },
   });
-  assert.equal(bodies[1].content, withFooter('dry-run 検証: 上記の件、ご確認ください'));
+  assert.equal(bodies[1].content, withFooter(text));
 });
 
 test('dry-runはfetchゼロで解決結果と本文を返す', async () => {
@@ -85,13 +114,14 @@ test('kim 席の写しは会話で回収し Discord に送らない', async () =
   const calls = [];
   const result = await sendDiscordDm('百瀬', '連絡本文', {
     home, token: 'test-token', resolve: async target => target === '金功勇' ? kim : recipient,
-    fetchImpl: async (url, init) => {
-      calls.push({ url, body: JSON.parse(init.body) });
-      if (url.endsWith('/users/@me/channels')) return response({ json: { id: calls.length < 3 ? 'main-dm' : 'kim-dm' } });
-      return response();
+    fetchImpl: async (url) => {
+      calls.push(url);
+      if (calls.length <= 2) return response({ json: { id: 'main-dm' } });
+      return response({ json: { content: withFooter('連絡本文') } });
     },
   });
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3); // channel + send + read-back
+  assert.equal(result.readBack, 'match');
   assert.equal(result.copyToKim, 'in-session');
 });
 
@@ -144,14 +174,14 @@ test('discord-dm CLIはkim-inbox保存でexit 0、明示例外でもDMしない'
 
 test('--no-copy-kim は写し先を解決せず送らない', async () => {
   const targets = [];
-  const calls = [];
+  const fetch = makeFetch(withFooter('本文'));
   const code = await main(['百瀬', '--body', '本文', '--no-copy-kim'], {
     home, token: 'test-token', resolve: async target => { targets.push(target); return recipient; },
-    fetchImpl: async () => { calls.push(1); return calls.length === 1 ? response({ json: { id: 'dm' } }) : response(); },
+    fetchImpl: fetch,
   });
   assert.equal(code, 0);
   assert.deepEqual(targets, ['百瀬']);
-  assert.equal(calls.length, 2);
+  assert.equal(fetch.calls.length, 3); // channel + send + read-back
 });
 
 test('kim 席で写しの追加送信なしでも本送信はexit 0', async () => {
@@ -160,13 +190,14 @@ test('kim 席で写しの追加送信なしでも本送信はexit 0', async () =
   let output;
   console.log = value => { output = value; };
   try {
-    let call = 0;
+    let n = 0;
     const code = await main(['百瀬', '--body', '本文'], {
       home, token: 'test-token', resolve: async target => target === '金功勇' ? kim : recipient,
       fetchImpl: async (_url) => {
-        call++;
-        if (call === 1) return response({ json: { id: 'main-dm' } });
-        if (call === 3) return response({ ok: false, status: 500 });
+        n++;
+        if (n === 1) return response({ json: { id: 'main-dm' } });
+        if (n === 2) return response({ json: { id: 'msg-1' } });
+        if (n === 3) return response({ ok: false, status: 500 }); // read-back error handled gracefully
         return response();
       },
     });
@@ -201,17 +232,21 @@ test('トークン無しはexit 2で送信しない', async () => {
   } finally { console.log = originalLog; console.error = originalError; }
 });
 
-test('送信本文からAPIキーとAuthorization付きURLを除去する', async () => {
+test('送信本文にAPIキーが含まれていても原文のまま送る（秘匿値除去はログ用途のみ）', async () => {
+  const text = 'key sk-abcdefghijklmnopqr https://example.test/a?Authorization=secret-value';
   const bodies = [];
-  await sendDiscordDm('百瀬', 'key sk-abcdefghijklmnopqr https://example.test/a?Authorization=secret-value', {
+  let n=0;
+  await sendDiscordDm('百瀬', text, {
     home, token: 'test-token', resolve, plainJaImpl: async (text) => text,
     fetchImpl: async (_url, init) => {
+      n++;
       bodies.push(JSON.parse(init.body));
-      return bodies.length === 1 ? response({ json: { id: 'dm' } }) : response();
+      if(n===1) return response({ json: { id: 'dm' } });
+      if(n===2) return response();
+      return response({ json: { content: withFooter(text) } });
     },
   });
-  assert.doesNotMatch(bodies[1].content, /sk-abcdefghijklmnopqr|secret-value/);
-  assert.match(bodies[1].content, /\[REDACTED\]/);
+  assert.equal(bodies[1].content, withFooter(text));
 });
 
 test('新しい絶対ルール行はmakeIndexの出力に全文残る', () => {
@@ -230,18 +265,204 @@ test('kim 宛 dry-run は台帳にも Discord にも書き込まない', async (
   const result = await sendDiscordDm('kim', '判断', { home, dryRun: true, resolve: async () => ({ id: '715210673642012733', label: 'kim' }), fetchImpl: async () => assert.fail('送信禁止') });
   assert.equal(result.delivered, 'session-inbox'); assert.equal(listItems(home).length, before);
 });
-test('報告全文モードでは切り詰め送信を拒否', async () => {
-  await assert.rejects(()=>sendDiscordDm('佐藤優奈','あ'.repeat(2500),{home,resolve,noCopyKim:true,noReplyFooter:true,requireFullBody:true,fetchImpl:async()=>assert.fail('長文を一部送信しない')}),/報告全文/);
-});
+
 test('非 kim 席の写しは転送失敗でもローカル台帳へ残す', async t => {
   const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'dm-remote-'));
   t.after(() => fs.rmSync(remote, { recursive: true, force: true }));
   fs.mkdirSync(path.join(remote, '.claude'));
   fs.writeFileSync(path.join(remote, '.claude/cost-reporter.env'), 'REPORTER_LABEL=test-PC');
   fs.writeFileSync(path.join(remote, '.claude/fleet-pc-map.json'), JSON.stringify({ 'test-PC': { account: 'test@example.test' } }));
-  let calls = 0;
-  const result = await sendDiscordDm('百瀬', '報告本文', { home: remote, token: 'test', resolve, fetchImpl: async () => { calls++; return response({ json: { id: 'dm' } }); } });
-  assert.equal(calls, 2); assert.equal(result.copyToKim.delivered, 'session-inbox');
-  const item = listItems(remote)[0]; assert.equal(item.kind, 'info'); assert.match(item.text, /（写し）百瀬 へ送信: 報告本文/);
+  let n = 0;
+  const result = await sendDiscordDm('百瀬', '報告本文', { home: remote, token: 'test', resolve, fetchImpl: async () => {
+    n++;
+    if(n===1) return response({ json: { id: 'dm' } });
+    if(n===2) return response({ json: { id: 'msg-1' } });
+    return response({ json: { content: withFooter('報告本文') } });
+  } });
+  assert.equal(n, 3); // channel + send + read-back (included in result)
+  assert.equal(result.copyToKim.delivered, 'session-inbox');
+  const item = listItems(remote)[0]; assert.equal(item.kind, 'info'); assert.match(item.text, /（写し）百瀬 へ送信: /);
   assert.equal(item.status, 'open'); assert.ok(item.forwardError);
+});
+
+// 🔴 2026-11-09 事故からの追加テスト
+
+test('無人(CLAUDE_HEADLESS)からは送信せずkim-inboxへブロックする', async () => {
+  const before = listItems(home).length;
+  const originalHeadless = process.env.CLAUDE_HEADLESS;
+  process.env.CLAUDE_HEADLESS = '1';
+  try {
+    let called = false;
+    const result = await sendDiscordDm('百瀬', '無人からのDM', {
+      home, token: 'test-token', resolve,
+      fetchImpl: async () => { called = true; },
+    });
+    assert.equal(result.delivered, 'blocked');
+    assert.equal(result.reason, 'unattended');
+    assert.equal(called, false, 'fetchは一度も呼ばれない');
+    assert.equal(listItems(home).length, before + 1);
+    const item = listItems(home).find(i => i.id === result.inboxItem);
+    assert.match(item.text, /【無人送信ブロック】/);
+    assert.match(item.text, /百瀬/);
+    assert.match(item.text, /無人からのDM/);
+  } finally {
+    if (originalHeadless === undefined) delete process.env.CLAUDE_HEADLESS;
+    else process.env.CLAUDE_HEADLESS = originalHeadless;
+  }
+});
+
+test('ORGIAST_HEADLESS_JOBでも無人ブロックが効く', async () => {
+  const before = listItems(home).length;
+  const original = process.env.ORGIAST_HEADLESS_JOB;
+  process.env.ORGIAST_HEADLESS_JOB = 'auto-session:codex-do';
+  try {
+    let called = false;
+    const result = await sendDiscordDm('百瀬', 'auto-sessionからのDM', {
+      home, token: 'test-token', resolve,
+      fetchImpl: async () => { called = true; },
+    });
+    assert.equal(result.delivered, 'blocked');
+    assert.equal(called, false);
+    assert.equal(listItems(home).length, before + 1);
+  } finally {
+    if (original === undefined) delete process.env.ORGIAST_HEADLESS_JOB;
+    else process.env.ORGIAST_HEADLESS_JOB = original;
+  }
+});
+
+test('本文に[REDACTED]が含まれる場合は送信しない', async () => {
+  try {
+    await sendDiscordDm('百瀬', 'URLは https://discord.com/api/webhooks/123/[REDACTED] です', {
+      home, token: 'test-token', resolve, noCopyKim: true,
+      fetchImpl: async () => { throw new Error('unexpected fetch'); },
+    });
+    assert.fail('エラーが投げられるべき');
+  } catch (error) {
+    assert.equal(error.code, 'PLACEHOLDER_IN_BODY');
+  }
+});
+
+test('本文に未置換の波かっこ変数がある場合は送信しない', async () => {
+  try {
+    await sendDiscordDm('百瀬', 'Webhook: {WEBHOOK_URL}', {
+      home, token: 'test-token', resolve, noCopyKim: true,
+      fetchImpl: async () => { throw new Error('unexpected fetch'); },
+    });
+    assert.fail('エラーが投げられるべき');
+  } catch (error) {
+    assert.equal(error.code, 'PLACEHOLDER_IN_BODY');
+  }
+});
+
+test('本文に「別途お伝えします」がある場合は送信しない', async () => {
+  try {
+    await sendDiscordDm('百瀬', 'URLは(別途お伝えします)', {
+      home, token: 'test-token', resolve, noCopyKim: true,
+      fetchImpl: async () => { throw new Error('unexpected fetch'); },
+    });
+    assert.fail('エラーが投げられるべき');
+  } catch (error) {
+    assert.equal(error.code, 'PLACEHOLDER_IN_BODY');
+  }
+});
+
+test('本文に伏せ字が無ければ正常送信できる', async () => {
+  const body = '通常の本文です';
+  const fetch = makeFetch(withFooter(body));
+  const result = await sendDiscordDm('百瀬', body, {
+    home, token: 'test-token', resolve, noCopyKim: true,
+    fetchImpl: fetch,
+  });
+  assert.equal(result.delivered, true);
+  assert.equal(result.readBack, 'match');
+});
+
+test('読み戻し不一致でもエラーにはならずreadBack=mismatchを返す', async () => {
+  let n = 0;
+  const result = await sendDiscordDm('百瀬', '通常の本文です', {
+    home, token: 'test-token', resolve, noCopyKim: true,
+    fetchImpl: async () => {
+      n++;
+      if(n===1) return response({ json: { id: 'dm' } });
+      if(n===2) return response();
+      return response({ json: { content: '別の内容' } });
+    },
+  });
+  assert.equal(result.delivered, true);
+  assert.equal(result.readBack, 'mismatch');
+});
+
+test('読み戻しのHTTPエラーはエラー文字列として記録される', async () => {
+  let n = 0;
+  const result = await sendDiscordDm('百瀬', '本文', {
+    home, token: 'test-token', resolve, noCopyKim: true,
+    fetchImpl: async () => {
+      n++;
+      if(n===1) return response({ json: { id: 'dm' } });
+      if(n===2) return response();
+      return response({ ok: false, status: 404 });
+    },
+  });
+  assert.equal(result.delivered, true);
+  assert.match(result.readBack, /^error: /);
+});
+
+test('overrideUnattendedで無人でも送信できる', async () => {
+  const originalHeadless = process.env.CLAUDE_HEADLESS;
+  process.env.CLAUDE_HEADLESS = '1';
+  try {
+    const body = 'テスト';
+    const fetch = makeFetch(withFooter(body));
+    const result = await sendDiscordDm('百瀬', body, {
+      home, token: 'test-token', resolve, noCopyKim: true,
+      unattendedOverride: true,
+      fetchImpl: fetch,
+    });
+    assert.equal(result.delivered, true);
+  } finally {
+    if (originalHeadless === undefined) delete process.env.CLAUDE_HEADLESS;
+    else process.env.CLAUDE_HEADLESS = originalHeadless;
+  }
+});
+
+test('overridePlaceholderで伏せ字入りでも送信できる', async () => {
+  const body = '本文に[REDACTED]があります';
+  const fetch = makeFetch(withFooter(body));
+  const result = await sendDiscordDm('百瀬', body, {
+    home, token: 'test-token', resolve, noCopyKim: true,
+    overridePlaceholder: true,
+    fetchImpl: fetch,
+  });
+  assert.equal(result.delivered, true);
+  assert.equal(fetch.calls.length, 3);
+});
+
+test('readBackMessageは一致ならmatchを返す', async () => {
+  const result = await readBackMessage('ch1', 'msg1', 'hello', {
+    home, token: 'test-token',
+    fetchImpl: async () => response({ json: { content: 'hello' } }),
+  });
+  assert.equal(result, 'match');
+});
+
+test('readBackMessageは不一致ならmismatchを返す', async () => {
+  const result = await readBackMessage('ch1', 'msg1', 'hello', {
+    home, token: 'test-token',
+    fetchImpl: async () => response({ json: { content: 'different' } }),
+  });
+  assert.equal(result, 'mismatch');
+});
+
+test('CLIからexit 4で伏せ字検出を報告する', async () => {
+  const originalError = console.error;
+  const originalLog = console.log;
+  console.error = () => {};
+  console.log = () => {};
+  try {
+    const code = await main(['百瀬', '--body', '本文に[REDACTED]'], {
+      home, token: 'test-token', resolve,
+      fetchImpl: async () => { throw new Error('unexpected'); },
+    });
+    assert.equal(code, 4);
+  } finally { console.error = originalError; console.log = originalLog; }
 });

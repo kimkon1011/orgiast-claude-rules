@@ -51,3 +51,4 @@ n8n ──→ LangGraph ──→ LiteLLM ──→ Pydantic AI ──→ prompt
 5. ✅ 既存リソースとの統合方法が明記されている
 6. ✅ 期待効果が数値で示されている
 7. ✅ 各ツールの公式サイト・GitHubへのリンクがある
+

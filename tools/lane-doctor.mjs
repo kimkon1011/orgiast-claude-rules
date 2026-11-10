@@ -143,7 +143,7 @@ const paymentFresh = old.lanes?.[p]?.reason === 'dead:payment_required' && Numbe
   }
   applyRealLaneHealth(health, home, now);
   // API key の生存と CLI の有無は別条件。CLI が無い場合は実装候補にしない。
-  health.lanes['gemini-cli'] = { ...health.lanes.gemini, alive: health.lanes.gemini.alive && executable('gemini'), reason: executable('gemini') ? health.lanes.gemini.reason : 'cli_missing' };
+  health.lanes['gemini-cli'] = directGeminiCliState(health.lanes.gemini, executable('gemini'));
 orders(health, home);
   if (!health.lanes.deepseek.alive && health.lanes.deepseek.reason === 'dead:payment_required' && health.lanes.openrouter?.alive) health.lanes.deepseek.via = 'openrouter';
   if (save) { demoteBilling(health, home, now); persist(path.join(dir, 'lane-health.json'), health, health); }
@@ -306,7 +306,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
   if (cooldownChanged && !persist(path.join(dir, 'provider-cooldown.json'), cooldown, health)) health.repairs = health.repairs.filter(r => r.action !== 'cooldown_removed' || r.detail !== '実測成功');
   health.probedAt = new Date(now).toISOString();
   applyRealLaneHealth(health, home, now);
-  health.lanes['gemini-cli'] = { ...health.lanes.gemini, alive: health.lanes.gemini.alive && executable('gemini') };
+  health.lanes['gemini-cli'] = directGeminiCliState(health.lanes.gemini, executable('gemini'));
   orders(health, home);
   demoteBilling(health, home, now);
   await notifyLaneStops(health, { home, now, notify, budgetMs, started, platform, spawnImpl });
@@ -351,6 +351,13 @@ export function summarize(health) {
   }).join(' ') || 'なし';
   const summary = `生存: ${alive} ／ 停止: ${dead} ／ 修復: ${health.repairs.map(r => typeof r === 'string' ? r : `${r.provider} ${r.action}`).join(', ') || 'なし'}${health.errors.length ? ` ／ 保存エラー: ${health.errors.join(', ')}` : ''}`;
   return health.repairFirst?.required ? `${summary}\n🛑 安価AIレーン停止（${health.repairFirst.reasons.join(', ')}）: 絶対ルール — 最優先でこの場で修復する。修復（または人にしかできない操作の依頼送信）が済むまで通常タスクに着手しない。手順: ${health.repairFirst.steps.join(' ')}` : summary;
+}
+
+export function directGeminiCliState(gemini = {}, cliAvailable = true) {
+  const state = { ...gemini, alive: Boolean(gemini.alive && cliAvailable), reason: cliAvailable ? gemini.reason : 'cli_missing' };
+  // gemini の via=openrouter は llm-ask の代替経路。gemini-cli は GEMINI_API_KEY で直 API を呼ぶため継承しない。
+  delete state.via;
+  return state;
 }
 export async function main(args = process.argv.slice(2)) {
   const h = args.indexOf('--home'), home = h >= 0 ? args[h + 1] : laneHome();

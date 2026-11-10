@@ -47,6 +47,15 @@ test('LLM判定はWindowsの引数長制限を避けてprompt-fileを使う', ()
   const result=runLlm([{text:'長文'.repeat(20000)}],'テスト本文',{spawn:(_exe,args)=>{ const i=args.indexOf('--prompt-file'); assert.ok(i>=0); prompt=fs.readFileSync(args[i+1],'utf8'); return {status:0,stdout:'{"verdict":"OK","reason":"整合","warnings":[]}',stderr:''}; }});
   assert.match(prompt,/長文長文/); assert.equal(result.ok,true);
 });
+test('安価LLMが空出力ならGroqへ切り替えてJSON判定を完了する', () => {
+  const providers=[];
+  const result=runLlm([{party:'external',text:'確認しました'}],'返信',{spawn:(_exe,args)=>{
+    providers.push(args[args.indexOf('--provider')+1]);
+    return providers.length===1 ? {status:0,stdout:'(出力なし)',stderr:'gemini out=0'} : {status:0,stdout:'{"verdict":"OK","reason":"整合","warnings":[]}',stderr:''};
+  }});
+  assert.deepEqual(providers,['gemini','groq']);
+  assert.equal(result.ok,true);
+});
 test('回答済み質問を再送する判定はNGでマーカーを書かない', async t => {
   const home=tmp(t), file=path.join(home,'body.txt'); fs.writeFileSync(file,'予備日はいつですか？');
   const code=await main(['--channel','line','--target','C1','--text-file',file],{home,fetchHistory:async()=>({target:'C1',messages:[{id:'m1',at:new Date().toISOString(),side:'external',text:'予備日は11月20日です'}]}),runLlm:()=>({ok:false,reason:'回答済みの予備日を聞き直している',warnings:[]})});

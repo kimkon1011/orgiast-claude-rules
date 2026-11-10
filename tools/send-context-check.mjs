@@ -86,8 +86,17 @@ export function runLlm(history, text, { spawn = spawnSync } = {}) {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'send-context-prompt-')), promptFile=path.join(dir,'prompt.txt');
   try {
     fs.writeFileSync(promptFile,prompt,'utf8');
-    const r=spawn(process.execPath,[tool,'--provider','gemini','--category','classification','--max','800','--no-persist','--prompt-file',promptFile],{encoding:'utf8',windowsHide:true});
-    if(r.status!==0) throw new Error(`安価LLM判定失敗: ${r.error?.message||r.stderr||r.stdout||`終了コード ${r.status}`}`); return parseVerdict(r.stdout);
+    const attempts=[
+      ['--provider','gemini','--category','classification','--max','3000','--no-persist','--prompt-file',promptFile],
+      ['--provider','groq','--prefer-provider','--category','classification','--max','3000','--no-persist','--prompt-file',promptFile],
+    ];
+    let failure='';
+    for(const args of attempts) {
+      const r=spawn(process.execPath,[tool,...args],{encoding:'utf8',windowsHide:true});
+      if(r.status!==0) { failure=r.error?.message||r.stderr||r.stdout||`終了コード ${r.status}`; continue; }
+      try { return parseVerdict(r.stdout); } catch(error) { failure=`${error.message}${r.stderr ? `: ${r.stderr.trim()}` : ''}`; }
+    }
+    throw new Error(`安価LLM判定失敗: ${failure}`);
   } finally { fs.rmSync(dir,{recursive:true,force:true}); }
 }
 

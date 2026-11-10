@@ -402,8 +402,8 @@ const baseCode = (x) => txt(x).replace(/_\d+$/, "");
 export function aggregateActiveCases(cases = []) {
   const by = new Map();
   for (const x of cases) {
-    if (CLOSED.has(x.state)) continue;
-    const k = baseCode(x.code) || `${x.client}|${x.name}`;
+    if (CLOSED.has(x.state) || !txt(x.code)) continue;
+    const k = baseCode(x.code);
     if (!by.has(k)) by.set(k, { ...x });
     else {
       const previous = by.get(k), reason = [...new Set(`${previous.reason || ""}・${x.reason || ""}`.split("・").filter(Boolean))].join("・");
@@ -421,7 +421,11 @@ export function aggregateActiveCases(cases = []) {
     adjusting: values.filter((x) => x.state !== "確定").length,
     values,
     reasonCounts,
+    unnumbered: cases.filter(x => !CLOSED.has(x.state) && !txt(x.code)),
   };
+}
+export function currentMessageBody(message) {
+  return String(message.body || message.snippet || "").split(/^\s*(?:On .+wrote:|20\d{2}年\d{1,2}月\d{1,2}日.*[：:]|From:|差出人[:：]|-+Original Message-+|>)/mi)[0].trim();
 }
 const clip = (s, n = 44) => {
   s = txt(s).replace(/\s+/g, " ");
@@ -549,7 +553,9 @@ export async function buildDailyReport(
       subject: x.subject || "",
       sender: x.from || "",
       snippet: x.snippet || "",
-      body: x.body || x.snippet || "",
+      body: currentMessageBody(x),
+      latestSender: x.latestSender || x.from,
+      latestDirection: x.latestDirection || (emailDomain(x.from) === "orgiast.jp" ? "自社" : "先方"),
       direction: /@orgiast\.jp/i.test(sender(x.from || "").email)
         ? "自社送信"
         : "先方送信",
@@ -558,7 +564,7 @@ export async function buildDailyReport(
     try {
       summary = clip(
         await askReportLlm(
-          `次の案件メール群を日本語60字以内、事実のみ1行で要約。最終メッセージの送信者: ${g.messages.at(-1).latestSender || g.messages.at(-1).from}（${g.messages.at(-1).latestDirection || input.at(-1).direction}）。時系列順に読み、引用された過去メールを今回の発言と混同しない。確定・相談・依頼を厳密に区別し、推測で「確定」と書かない。誰が誰に頼んだかを逆転させない。JSONや前置き不要。\n${JSON.stringify(input)}`,
+          `次の案件メール群を日本語60字以内、事実のみ1行で要約。最終メッセージの送信者: ${g.messages.at(-1).latestSender || g.messages.at(-1).from}（${g.messages.at(-1).latestDirection || input.at(-1).direction}）。時系列順に読み、引用された過去メールを今回の発言と混同しない。確定・相談・依頼を厳密に区別し、推測で「確定」と書かない。誰が誰に頼んだかを逆転させない。送信者名を使い「先方が」のような曖昧な主語を避ける。スレッドごとの最新の動きに絞る。文を短く完結し、JSONや前置き不要。\n${JSON.stringify(input)}`,
           deps,
         ),
         72,
@@ -569,9 +575,8 @@ export async function buildDailyReport(
     }
     const label =
         customerLabel(g.caseItem),
-      date = g.caseItem?.deliveryText || "日程未定",
       url = g.messages[0]?.url || gmailUrl(g.messages[0]?.threadId);
-    movements.push(`・${label}（${date}）：${summary}`);
+    movements.push(`・${label}：${summary}`);
     details.push(["昨日の動き", summary, g.caseItem?.code || "", url]);
   }
   const problems = [];
@@ -610,7 +615,7 @@ export async function buildDailyReport(
   if (yesterday.length)
     try {
       const raw = await askReportLlm(
-        `基準日は${fmt(now)}。次のメールから問題候補を抽出。対象は(1)自社送信本文に明記された約束期日が基準日から3日以内 (2)キャンセル・辞退等と案件状態の明白な食い違い。期日が明記されていないもの、単なる出席者変更、推測は除外。未来の期日を「過ぎた」と書かない。確定・相談・依頼を区別し、最終送信者を確認。各行を「問題候補: 何が起きているか|YYYY-MM-DDの期限|案件コード|佐藤：誰に何をいつまでにするか」の4列とし、事実と対応文を重複させない。なければ「なし」。\n${JSON.stringify(yesterday.map((x) => ({ subject: x.subject, from: x.from, body: x.body || x.snippet, latestSender: x.latestSender, latestDirection: x.latestDirection, case: caseForMessage(x, cases) })))}`,
+        `基準日は${fmt(now)}。次のメールから問題候補を抽出。対象は(1)自社送信本文に明記された約束期日が基準日から3日以内 (2)キャンセル・辞退等と案件状態の明白な食い違い。期日が明記されていないもの、単なる出席者変更、先方へ依頼した回答期限、未着だった場合という仮定・推測は除外。未来の期日を「過ぎた」と書かない。確定・相談・依頼を区別し、最終送信者を確認。各行を「問題候補: 何が起きているか|YYYY-MM-DDの期限|案件コード|佐藤：誰に何をいつまでにするか」の4列とし、事実と対応文を重複させない。なければ「なし」。\n${JSON.stringify(yesterday.map((x) => ({ subject: x.subject, from: x.from, body: currentMessageBody(x), latestSender: x.latestSender, latestDirection: x.latestDirection, case: caseForMessage(x, cases) })))}`,
         deps,
       );
       if (txt(raw) !== "なし")
@@ -621,7 +626,7 @@ export async function buildDailyReport(
             ? new Date(`${deadline}T23:59:59+09:00`)
             : null;
           if (
-            fields.length === 4 && action && cases.some(c => baseCode(c.code) === baseCode(code)) &&
+            fields.length === 4 && action && !/場合|可能性|かもしれ/.test(text) && cases.some(c => baseCode(c.code) === baseCode(code)) &&
             /^問題候補[:：]/.test(text) &&
             !/^(?:問題候補[:：]\s*)?(?:なし|無し)$/i.test(txt(text)) &&
             (!deadlineDate ||

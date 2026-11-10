@@ -18,6 +18,7 @@ import {
   prioritizeActions,
   capReportLines,
   shouldDeliver,
+  currentMessageBody,
 } from "./satou-secretary-daily.mjs";
 const now = new Date("2026-11-09T06:30:00+09:00"),
   h = [
@@ -257,6 +258,13 @@ test("25行に収めても全見出しと優先3件は残す", () => {
   assert.equal(capped.length,25);
   for(const h of headings) assert.ok(capped.includes(h));
   assert.deepEqual(capped.slice(-4),lines.slice(-4));
+});
+test("過去引用を今回の約束にせず、案件コード未採番は別枠にする", () => {
+  assert.equal(currentMessageBody({body:"写真を送ります\n\nOn Thu, Nov 05 wrote:\n> 11/11までに回答を"}),"写真を送ります");
+  assert.equal(currentMessageBody({body:"13日希望です\n\nFrom: someone\n9日確定"}),"13日希望です");
+  const c=aggregateActiveCases([{code:"",client:"未採番",state:"確定",reason:"営業"},{code:"C1",state:"確定",reason:"営業"},{code:"C1_2",state:"確定",reason:"担当者列"}]);
+  assert.equal(c.total,1); assert.equal(c.unnumbered.length,1);
+  assert.deepEqual(c.reasonCounts,{営業:1,担当者列:1});
 });
 test("要約入力は時系列、最終送信者と本文を含み、内部転送を他の節にも混ぜない", async () => {
   const prompts=[];

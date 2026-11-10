@@ -45,6 +45,7 @@ import { currentTurnEntries, blocks } from './state-claim-evidence.mjs';
 import { judgeSideEffectLeft } from './side-effect-left-gate.mjs';
 import { judgeAnswerCanonical } from './answer-canonical-gate.mjs';
 import { judge as judgeDeferralWait } from './deferral-wait-gate.mjs';
+import { judge as judgeUrgentBlockerWait } from './urgent-blocker-wait-gate.mjs';
 import { judge as judgeThirdPartyNudge } from './third-party-nudge-gate.mjs';
 import { evaluateShallowAnswer } from './shallow-answer-gate.mjs';
 import { judgeTurnLanguage } from './response-language-gate.mjs';
@@ -109,6 +110,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['side-effect-left-gate', () => judgeSideEffectLeft(ctx.assistantText, blocks(currentTurnEntries(ctx.transcriptRaw), 'tool_use'))],
     ['answer-canonical-gate', () => judgeAnswerCanonical(ctx.assistantText)],
     ['deferral-wait-gate', () => judgeDeferralWait(ctx.assistantText)],
+    ['urgent-blocker-wait-gate', () => judgeUrgentBlockerWait(ctx.assistantText, { sessionId: ctx.sessionId, home: home() })],
     ['third-party-nudge-gate', () => judgeThirdPartyNudge(ctx.assistantText)],
     ['unregistered-promise-gate', () => evaluateUnregisteredPromise(ctx.assistantText, { sessionId: ctx.sessionId, transcriptRaw: ctx.transcriptRaw, home: home() })],
     ['progress-cron-gate', () => evaluateProgressCron(ctx.input, { home: home() })],

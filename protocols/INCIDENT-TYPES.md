@@ -35,4 +35,5 @@
 - 型: 秘密入りの成果物を「既定の置き場」に出し、置き場の継承共有で広く見える（既定フォルダ＝社内全体・外部Gmail継承） → 対策: 本文の秘密検出で共有フォルダへの出力を拒否し --private（owner のみを読み戻し）を必須化。ゲート: gdoc-publish.mjs containsSecret（exit 3/4）。2026-11-07 PR #1682
 - 型: 完了フラグの台帳が再開・新しい状態表明で失効しない → セッションが【閉じて可】のまま期限再開・朝確認から外れる（2026-11-09 4eb1d8a6）／対策: 最新フッター優先＋プロンプト受信・未完フッターで closed-sessions.json から自動除外（session-wait-title・closed-sessions-ledger）
 - 型: rescue/cherry-pick が全廃済みの経路を復活させる（2026-11-10 kim 宛 Discord DM 復活・PR #1688） → 横展開の検索: git log --all --oneline --grep="kim-discord-allowlist\|KIM_DISCORD_USER_ID" で該当箇所を特定し、kim 宛 Discord/webhook 送信経路を全て削除。ゲート: tools/kim-discord-dm-ban.test.mjs（静的走査 + discordAllowed 常時 false 確認）
+- 型: 人待ちの沈黙停止型（セッション内 cron の1行報告だけが続き、user は別セッションで気付かず社外クレーム、2026-11-09 就労証明書の LINE 画像認証待ち6日） → 横展開の検索: 人待ち（ログイン待ち・画像認証・返事待ち）を報告して止まる Stop 文面と、待つ経路の成立を検証しない箇所 → ゲート: urgent-blocker 登録（Stop gate が未登録の人待ち報告を block）+ 別セッション割り込み表示（UserPromptSubmit/SessionStart hook）+ 経路検証・代替経路・自動再試行の指示（tools/urgent-blocker-wait-gate.mjs）
 

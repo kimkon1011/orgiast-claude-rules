@@ -716,6 +716,8 @@ kim 宛の自動通知は「何が起きたか／次に自動でやること／k
 平易化で語を削除しない（原文保持）。
 kim の返事待ちは SessionStart と各セッションで「📌 kim の返事待ち」として冒頭に表示し、答えは tools/kim-awaiting.mjs --answer で元の作業へ届ける。
 
+**人にしかできない操作で止まったら `tools/urgent-blocker.mjs` に登録し、user が使っている別セッションへ割り込み表示させる。待つ前に、待っている経路が本当に成立するか（受け手に届くか）を検証し、代替経路と自動再試行を並行する（2026-11-09 nishi・全PC）。** 登録は `node tools/urgent-blocker.mjs --add --session <id> --title "<何が止まっているか>" --ask "<人にしてほしい1操作・所要時間>" [--link <URL>]`、解決は `--resolve <id>`。
+
 **1.15 完了報告で stop せず自律進行する**
 
 完了後も残TODO（commit・本番デプロイ・Layer2 e2e・memory等）を自動で進め、目的完了時は上記クローズ手順を実行する。取り消せない操作（社外送信・支払い・削除・権限変更・未承認の本番送信）だけ AskUserQuestion で待つ。取り消せる設計判断・リファクタは基本理念5に従い進めて最後に報告する。報告に残TODOを記す。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/autonomy-and-reporting.md`

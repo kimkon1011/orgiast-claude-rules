@@ -156,6 +156,12 @@
       {
         "matcher": "*",
         "type": "command",
+        "command": "node \"${repo}/tools/urgent-blocker.mjs\" --context",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
         "command": "node \"${repo}/tools/daytrip-ask-hook.mjs\"",
         "timeout": 5
       },
@@ -309,6 +315,12 @@
         "matcher": "*",
         "type": "command",
         "command": "node \"${repo}/tools/kim-awaiting-context.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/urgent-blocker.mjs\" --context",
         "timeout": 5
       },
       {

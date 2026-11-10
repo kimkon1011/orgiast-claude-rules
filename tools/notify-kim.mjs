@@ -228,13 +228,10 @@ export async function deliverKim(text, {
   const body = suffix && !allowHumanRequest && kind !== 'ask' ? String(translated).split('\n').filter(line => !HANDOFF.test(line)).join('\n') : translated;
   const isKimRecipient = userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID;
   let inboxResult = null;
+  // kim 宛 Discord DM 全廃（2026-10-27 / 2026-11-10 kim 再指示）。kim への通知は kim-inbox のみ。
   if (isKimRecipient) {
     inboxResult = await persistKim(home, { kind: ['ask', 'action'].includes(kind) ? 'ask' : 'info', text: String(body) + suffix, source, sessionId, signal });
-    const checkAllowed = discordAllowedOption ?? discordAllowed;
-    const allowed = checkAllowed(text, { home }).allowed || checkAllowed(body, { home }).allowed;
-    if (!allowed) {
-      return { ...inboxResult, channel: 'kim-inbox' };
-    }
+    return { ...inboxResult, channel: 'kim-inbox' };
   }
   const content = suffix ? String(body).slice(0, Math.max(0, MAX_CONTENT - suffix.length)) + suffix : clipDiscordContent(body);
   let dmReason = '';

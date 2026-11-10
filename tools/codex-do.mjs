@@ -1191,43 +1191,6 @@ function execute(command, commandArgs, options = {}) {
   });
 }
 
-// 冷却中 backend の生存確認。指示「OK とだけ返答。ファイルを変更しない」を 45 秒で実行する。
-async function probeBackendAlive(backend, { cwd, timeoutSecs = 45, promptText } = {}) {
-  const pingPrompt = promptText || 'OK とだけ返答。ファイルを変更しない';
-  const probeDir = path.join(os.tmpdir(), `codex-probe-${process.pid}-${Date.now()}`);
-  fs.mkdirSync(probeDir, { recursive: true });
-  const probeCwd = cwd || probeDir;
-  try {
-    if (backend.kind === 'gemini') {
-      return await execute('gemini', buildGeminiArgs({ model: backend.model }), {
-        cwd: probeCwd,
-        env: buildGeminiEnv(process.env, backend.apiKey),
-        shell: process.platform === 'win32',
-        timeoutSecs,
-        promptText: pingPrompt,
-      });
-    }
-    if (backend.kind === 'cheap-code') {
-      const promptFile = path.join(os.tmpdir(), `orgiast-probe-${process.pid}-${Date.now()}.md`);
-      try {
-        fs.writeFileSync(promptFile, pingPrompt, 'utf8');
-        const cheapCode = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cheap-code.mjs');
-        return await execute(process.execPath, [cheapCode, '--provider', backend.provider, '--prompt-file', promptFile, '--cwd', probeCwd], { cwd: probeCwd, timeoutSecs, promptText: pingPrompt });
-      } finally {
-        try { fs.rmSync(promptFile, { force: true }); } catch {}
-      }
-    }
-    return await execute('qwen', buildQwenArgs({ timeoutSecs, model: backend.model }), {
-      cwd: probeCwd,
-      env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }),
-      shell: process.platform === 'win32',
-      timeoutSecs,
-      promptText: pingPrompt,
-    });
-  } finally {
-    try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch {}
-  }
-}
 // cheap-code バックエンド: 指示は argv で渡さず一時ファイル経由(§1.17 argv経由の指示破壊防止)。
 // shell も通さない(node の引数配列をそのまま渡す)。
 async function executeCheapCode(backend, backendTimeout) {
@@ -1514,6 +1477,43 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
       console.error('GEMINI_API_KEY、OPENROUTER_API_KEY、ZAI_API_KEY が無いためフォールバックを実行できません');
       result.status = 1;
     } else {
+      // 冷却中 backend の生存確認。指示「OK とだけ返答。ファイルを変更しない」を 45 秒で実行する。
+      // probeDir(os.tmpdir()配下)が常に使われるため、ping 中の AI が本番リポジトリを読んだり触ったりしない。
+      async function probeBackendAlive(backend, { timeoutSecs = 45, promptText } = {}) {
+        const pingPrompt = promptText || 'OK とだけ返答。ファイルを変更しない';
+        const probeDir = path.join(os.tmpdir(), `codex-probe-${process.pid}-${Date.now()}`);
+        fs.mkdirSync(probeDir, { recursive: true });
+        try {
+          if (backend.kind === 'gemini') {
+            return await execute('gemini', buildGeminiArgs({ model: backend.model }), {
+              cwd: probeDir,
+              env: buildGeminiEnv(process.env, backend.apiKey),
+              shell: process.platform === 'win32',
+              timeoutSecs,
+              promptText: pingPrompt,
+            });
+          }
+          if (backend.kind === 'cheap-code') {
+            const promptFile = path.join(os.tmpdir(), `orgiast-probe-${process.pid}-${Date.now()}.md`);
+            try {
+              fs.writeFileSync(promptFile, pingPrompt, 'utf8');
+              const cheapCode = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cheap-code.mjs');
+              return await execute(process.execPath, [cheapCode, '--provider', backend.provider, '--prompt-file', promptFile, '--cwd', probeDir], { cwd: probeDir, timeoutSecs, promptText: pingPrompt });
+            } finally {
+              try { fs.rmSync(promptFile, { force: true }); } catch {}
+            }
+          }
+          return await execute('qwen', buildQwenArgs({ timeoutSecs, model: backend.model }), {
+            cwd: probeDir,
+            env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }),
+            shell: process.platform === 'win32',
+            timeoutSecs,
+            promptText: pingPrompt,
+          });
+        } finally {
+          try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch {}
+        }
+      }
       const chainStarted = Date.now();
       fallbackChain = [];
       for (const [backendIndex, backend] of backends.entries()) {
@@ -1525,7 +1525,7 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
         if (isCooling && !isLast) {
           console.log(`[codex-do] backend=${backend.name} の信号確認中...`);
           const probeAttemptStarted = Date.now();
-          const probeResult = await probeBackendAlive(backend, { cwd });
+          const probeResult = await probeBackendAlive(backend);
           if (probeResult.status !== 0) {
             const probeSecs = Number(((Date.now() - probeAttemptStarted) / 1000).toFixed(3));
             console.error(`[codex-do] backend=${backend.name} の信号確認に失敗したためスキップ`);

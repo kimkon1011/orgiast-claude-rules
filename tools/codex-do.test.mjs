@@ -1316,6 +1316,43 @@ test('冷却中 backend の probe 失敗 → probe_failed で次のバックエ�
   assert.ok(fallbackRow.chain.some(a => a.outcome === 'probe_failed'), 'probe_failed が存在');
 });
 
+test('probeBackendAlive は本番 cwd ではなく一時ディレクトリで起動される（cwd 引数廃止の構造的保証）', (t) => {
+  // 2026-11-11 修正: probeBackendAlive の cwd 引数を廃止した。probeDir(os.tmpdir()配下)が
+  // 常に使われるため、ping 中の AI が本番リポジトリを読んだり触ったりしない。
+  // 既存の冷却 probe 統合テストの仕組みを流用し、probe 成功 → 本番実行が流れることと、
+  // production cwd に probe の残骸が残らないことを検証する。
+  const mockResults = [
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: '' },
+    // probe: 成功 (production cwd ではなく一時ディレクトリで実行される)
+    { status: 0, output: 'OK', stderr: '' },
+    // 本番: 成功
+    { status: 0, output: 'Qwen Code CLI has successfully completed.', stderr: '' },
+  ];
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-probe-cwd-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const claude = path.join(home, '.claude');
+  fs.mkdirSync(claude, { recursive: true });
+  fs.writeFileSync(path.join(claude, 'openrouter.env'), 'OPENROUTER_API_KEY=sk-test\n', 'utf8');
+  // cheap-code を冷却状態 → probe が実行される条件を作る
+  const coolingFile = path.join(claude, 'fallback-backend-history.jsonl');
+  fs.writeFileSync(coolingFile, `${JSON.stringify({ t: Date.now(), backend: 'cheap-code:deepseek', outcome: 'timeout' })}\n`, 'utf8');
+  const result = run(['--force-native', '--cwd', home, '指示内容'], {
+    home,
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', OPENROUTER_API_KEY: 'sk-test' },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  // chain に probe_failed が無く、ok で終わっている
+  const ledger = fs.readFileSync(path.join(home, '.claude/executor-usage.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
+  const fallbackRow = ledger.find(r => r.provider === 'fallback');
+  assert.ok(fallbackRow, 'fallback 行が存在');
+  assert.ok(fallbackRow.chain, 'chain が存在');
+  assert.equal(fallbackRow.chain.filter(a => a.outcome === 'probe_failed').length, 0, 'probe_failed がないこと');
+  assert.equal(fallbackRow.chain.filter(a => a.outcome === 'ok').length, 1, 'ok が 1 件あること');
+  // production cwd (home) に probe の一時ディレクトリが作成されていないことを確認
+  const cwdProbeDirs = fs.readdirSync(home).filter(n => n.startsWith('codex-probe-'));
+  assert.equal(cwdProbeDirs.length, 0, 'production cwd に probe 用ディレクトリが作成されないこと');
+});
+
 test('loadEnvKey は process.env を最優先し、ファイルの export VAR="..." 形式も読める', () => {
   const dir = makeHomeWithEnv({ 'openrouter.env': 'export OPENROUTER_API_KEY="sk-or-file"\n' });
   const prev = process.env.OPENROUTER_API_KEY;

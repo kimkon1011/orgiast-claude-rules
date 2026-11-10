@@ -24,8 +24,7 @@
 | 実行元ツリー固着型 | 定期タスクが同期されない worktree/別クローン/固定ブランチを実行し続け、移行済みの経路(DeepSeek→OpenRouter)を旧コードが本家直結で叩き HTTP 402。実プローブは全レーン正常で監視に映らなかった。同期側も未コミット1ファイル(rescue 済み)で 4日間 skip(2026-10-29 kim-PC・PR #1302) | Orgiast* タスクの Action に nightly-repo 以外のパス(worktree・auto-session-repo・orgiast-main 等)を持つもの。register-*.ps1 で作業ツリーのパスを焼き込む箇所。DIRTY_WORKTREE_SKIP が続く同期ログ | repair-task-paths の worktree/別クローン検出と日次自動実行(ブランチ fix/stale-task-tree-detect)、register-messenger-watch.ps1 -UpdateActionOnly |
 | セッション中間状態依存型 | 完了判定がセッション限定の中間状態に依存 → セッション停止で完了を検知できず kim が進捗を聞く羽目に（2026-11-06） | 完了判定スクリプトの scratchpad・nightly-repo/.scratch・/tmp 参照 | auto-progress --add-check の preflight で scratchpad・.scratch・/tmp 参照を拒否（2026-11-06） |
 | 配布元URL破損型 | 配布元リポジトリの接続先 URL が壊れ、そのPCだけ main の修正が無言で届かなくなる。fetch は定期処理が古い origin/main へ reset し続けエラーは表に出ない（2026-11-05 PC004） | 各PC の fetch を origin 依存で黙って止める配布経路（bootstrap・fleet-fix-now・.git/config の remote.origin.url を焼く箇所） | access-doctor の origin 自動修復（履歴一致確認後に向け替え・保存ログ）＋ setup-manifest の git-origin check（repo:rules-origin・converge 配布） |
-
-追記ルール: 型名は構造を表す語にする。症状は1行、日付と出典を付ける。ゲート列が空の行は未完了として扱い、埋まるまで消さない。
+| 送信前チェックが下書きを送信済みと誤数え型 | send-context-check が「Gmail の該当スレッドの全受信メッセージ」を送信済み履歴として数える。下書きは `messageId` でしかクエリできないが、下書き本体の `messageId` が元メッセージの `messageId` と一致するため、スレッド検索でヒットした「この messageId は既出」が下書きを送信済みと誤検出する（2026-11-10 PR #1851） | checkConsistency が thread 内の送信メッセージ count の算出箇所（query `subject:...` の結果）。gmail-draft.mjs --send の consistency 検査でも同型が残っていないか | PR #1851（fetchMessageByHeader の結果から labelIds.includes(DRAFT) を除外）
 
 - 型: 夜間メンテが待機中セッションを「作業中でない」と誤判定して殺す（活動時刻ベースの busy 判定） → 対策: 生存＋未クローズで保護、落ちたら host_exit から自動再オープン。
 - 型: 秘密入りの成果物を「既定の置き場」に出し、置き場の継承共有で広く見える（既定フォルダ＝社内全体・外部Gmail継承） → 対策: 本文の秘密検出で共有フォルダへの出力を拒否し --private（owner のみを読み戻し）を必須化。ゲート: gdoc-publish.mjs containsSecret（exit 3/4）。2026-11-07 PR #1682

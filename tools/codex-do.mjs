@@ -728,9 +728,6 @@ export function isBackendExhausted(output, stderr) {
   const patterns = ['rate limit', 'rate-limited', 'quota', 'insufficient', 'prepayment credits are depleted', 'payment required', 'request too large', 'クールダウン中', 'cooldown'];
   if (patterns.some((p) => lower.includes(p))) return true;
   if (merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '402'))) return true;
-  // claude-code CLI が OpenRouter のモデルIDを認識できず即死するパターン。
-  // タイムアウト待ち（120秒）をせず即 exhausted で次のバックエンドへ進む。
-  if (/unrecognized_model/i.test(merged)) return true;
   return merged.split(/\r?\n/).some((line) => isHttpStatusCodeLine(line, '429') || isHttpStatusCodeLine(line, '413'));
 }
 
@@ -788,9 +785,10 @@ export function shouldAbortPolicyStall({
 export function shouldAdvanceToNextBackend({ timedOut, status, exhausted, cliMissing, aborted } = {}) {
   if (aborted) return { advance: true, outcome: 'blocked' };
   if (timedOut) return { advance: true, outcome: 'timeout' };
+  // status 0 は exhausted/cliMissing より優先（成功終了は絶対に捨てない）
+  if (status === 0) return { advance: false, outcome: 'ok' };
   if (cliMissing) return { advance: true, outcome: 'cli_missing' };
   if (exhausted) return { advance: true, outcome: 'exhausted' };
-  if (status === 0) return { advance: false, outcome: 'ok' };
   return { advance: false, outcome: 'failed' };
 }
 
@@ -1188,8 +1186,47 @@ function execute(command, commandArgs, options = {}) {
     child.on('close', (status) => settle({ status: timedOut ? 124 : status, outputChars, output, stderr, timedOut, aborted: abortedPolicyStall ? 'policy_stall' : null }));
     // 指示は stdin で渡し、必ず閉じる。閉じないと codex が
     // "Reading additional input from stdin..." のまま永久に待つ。
-    child.stdin.end(prompt);
+    const textToSend = options.promptText ?? prompt;
+    child.stdin.end(textToSend);
   });
+}
+
+// 冷却中 backend の生存確認。指示「OK とだけ返答。ファイルを変更しない」を 45 秒で実行する。
+async function probeBackendAlive(backend, { cwd, timeoutSecs = 45, promptText } = {}) {
+  const pingPrompt = promptText || 'OK とだけ返答。ファイルを変更しない';
+  const probeDir = path.join(os.tmpdir(), `codex-probe-${process.pid}-${Date.now()}`);
+  fs.mkdirSync(probeDir, { recursive: true });
+  const probeCwd = cwd || probeDir;
+  try {
+    if (backend.kind === 'gemini') {
+      return await execute('gemini', buildGeminiArgs({ model: backend.model }), {
+        cwd: probeCwd,
+        env: buildGeminiEnv(process.env, backend.apiKey),
+        shell: process.platform === 'win32',
+        timeoutSecs,
+        promptText: pingPrompt,
+      });
+    }
+    if (backend.kind === 'cheap-code') {
+      const promptFile = path.join(os.tmpdir(), `orgiast-probe-${process.pid}-${Date.now()}.md`);
+      try {
+        fs.writeFileSync(promptFile, pingPrompt, 'utf8');
+        const cheapCode = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cheap-code.mjs');
+        return await execute(process.execPath, [cheapCode, '--provider', backend.provider, '--prompt-file', promptFile, '--cwd', probeCwd], { cwd: probeCwd, timeoutSecs, promptText: pingPrompt });
+      } finally {
+        try { fs.rmSync(promptFile, { force: true }); } catch {}
+      }
+    }
+    return await execute('qwen', buildQwenArgs({ timeoutSecs, model: backend.model }), {
+      cwd: probeCwd,
+      env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }),
+      shell: process.platform === 'win32',
+      timeoutSecs,
+      promptText: pingPrompt,
+    });
+  } finally {
+    try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch {}
+  }
 }
 // cheap-code バックエンド: 指示は argv で渡さず一時ファイル経由(§1.17 argv経由の指示破壊防止)。
 // shell も通さない(node の引数配列をそのまま渡す)。
@@ -1480,11 +1517,41 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
       const chainStarted = Date.now();
       fallbackChain = [];
       for (const [backendIndex, backend] of backends.entries()) {
+        const isCooling = cooling.has(backend.name);
+        const isLast = backendIndex === backends.length - 1;
+        // 冷却中（かつ末尾以外）の backend は本番実行前に短い生存確認を行う。
+        // 確認に成功したら冷却扱いを外して通常予算で実行する。
+        let effectiveCooling = isCooling;
+        if (isCooling && !isLast) {
+          console.log(`[codex-do] backend=${backend.name} の信号確認中...`);
+          const probeAttemptStarted = Date.now();
+          const probeResult = await probeBackendAlive(backend, { cwd });
+          if (probeResult.status !== 0) {
+            const probeSecs = Number(((Date.now() - probeAttemptStarted) / 1000).toFixed(3));
+            console.error(`[codex-do] backend=${backend.name} の信号確認に失敗したためスキップ`);
+            fallbackChain.push({
+              backend: backend.name,
+              model: backend.model,
+              status: probeResult.status ?? null,
+              timedOut: probeResult.timedOut === true,
+              out: Math.ceil((probeResult.outputChars || 0) / 4),
+              outChars: probeResult.outputChars || 0,
+              secs: probeSecs,
+              budgetSecs: 45,
+              stderrTail: String(probeResult.stderr || '').replace(/\s+/g, ' ').trim().slice(-200),
+              outcome: 'probe_failed',
+            });
+            continue;
+          }
+          console.error(`[codex-do] backend=${backend.name} の信号確認成功 → 冷却解除、通常予算で実行`);
+          // プローブ成功は本番試行ではないので recordFallbackBackendOutcome に記録しない。
+          effectiveCooling = false;
+        }
         // 全冷却で戻されたチェーンも末尾には通常予算を残す（1件だけの場合も同じ）。
         const backendTimeout = effectiveBackendTimeoutSecs(backend.name, {
           chainBudget: chainBackendBudgetSecs(timeoutSeconds, (Date.now() - chainStarted) / 1000),
-          cooling: cooling.has(backend.name),
-          isLastBackend: backendIndex === backends.length - 1
+          cooling: effectiveCooling,
+          isLastBackend: isLast
         });
         if (backendTimeout <= 0) {
           console.error(`[codex-do] フォールバック全体の時間枠(${timeoutSeconds}秒)を使い切ったため、残りのバックエンドは実行しません`);

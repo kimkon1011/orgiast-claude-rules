@@ -1198,6 +1198,9 @@ test('shouldAdvanceToNextBackend は次のバックエンドへ進む結果を�
   assert.deepEqual(shouldAdvanceToNextBackend({ timedOut: true }), { advance: true, outcome: 'timeout' });
   assert.deepEqual(shouldAdvanceToNextBackend({ status: 0 }), { advance: false, outcome: 'ok' });
   assert.deepEqual(shouldAdvanceToNextBackend({ status: 1 }), { advance: false, outcome: 'failed' });
+  // status 0 は exhausted/cliMissing より優先（成功終了は絶対に捨てない）
+  assert.deepEqual(shouldAdvanceToNextBackend({ status: 0, exhausted: true }), { advance: false, outcome: 'ok' });
+  assert.deepEqual(shouldAdvanceToNextBackend({ status: 0, cliMissing: true }), { advance: false, outcome: 'ok' });
 });
 
 test('loadGeminiKey は process.env、.claude/gemini.env、~/.gemini/.env の順で読む', () => {
@@ -1243,10 +1246,74 @@ test('isBackendExhausted は 429/413 がファイル行番号(コロン隣接)�
   assert.equal(isBackendExhausted('src/CaseList.js:413:function foo()', ''), false);
 });
 
-test('isBackendExhausted は unrecognized_model で true を返す（cheap-code:deepseek の即死パターン）', () => {
-  assert.equal(isBackendExhausted('', '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}'), true);
-  assert.equal(isBackendExhausted('', 'unrecognized_model'), true);
-  assert.equal(isBackendExhausted('', 'Unrecognized_Model'), true);
+test('isBackendExhausted は unrecognized_model 警告では false を返す（警告は枯渇ではない）', () => {
+  assert.equal(isBackendExhausted('', '[claude-code:unrecognized_model] {"model":"deepseek/deepseek-v4-flash","query_source":"sdk"}'), false);
+  assert.equal(isBackendExhausted('', 'unrecognized_model'), false);
+  assert.equal(isBackendExhausted('', 'Unrecognized_Model'), false);
+});
+
+test('冷却中 backend の probe 成功 → 通常予算で実行され chain に probe_failed が入らない', (t) => {
+  const mockResults = [
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: '' },
+    // probe: 成功
+    { status: 0, output: 'OK', stderr: '' },
+    // 本番: 成功
+    { status: 0, output: 'Qwen Code CLI has successfully completed.', stderr: '' },
+  ];
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-probe-success-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const claude = path.join(home, '.claude');
+  fs.mkdirSync(claude, { recursive: true });
+  fs.writeFileSync(path.join(claude, 'openrouter.env'), 'OPENROUTER_API_KEY=sk-test\n', 'utf8');
+  // cheap-code を冷却状態にする（fallback-backend-history.jsonl に timeout 行を追加）
+  const coolingFile = path.join(claude, 'fallback-backend-history.jsonl');
+  fs.writeFileSync(coolingFile, `${JSON.stringify({ t: Date.now(), backend: 'cheap-code:deepseek', outcome: 'timeout' })}\n`, 'utf8');
+  const result = run(['--force-native', '--cwd', home, '指示内容'], {
+    home,
+    env: { CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: '', OPENROUTER_API_KEY: 'sk-test' },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
+  // chain に probe_failed がなく、ok で終わっている
+  const ledger = fs.readFileSync(path.join(home, '.claude/executor-usage.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
+  const fallbackRow = ledger.find(r => r.provider === 'fallback');
+  assert.ok(fallbackRow, 'fallback 行が存在');
+  assert.ok(fallbackRow.chain, 'chain が存在');
+  assert.equal(fallbackRow.chain.filter(a => a.outcome === 'probe_failed').length, 0, 'probe_failed がないこと');
+  assert.equal(fallbackRow.chain.filter(a => a.outcome === 'ok').length, 1, 'ok が 1 件あること');
+});
+
+test('冷却中 backend の probe 失敗 → probe_failed で次のバックエンドへ進む', (t) => {
+  const mockResults = [
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: '' },
+    // probe: 失敗（gemini が無い）
+    { status: 1, output: '', stderr: "'gemini' is not recognized", timedOut: false },
+    // 2つめのバックエンド: 成功
+    { status: 0, output: 'done', stderr: '' },
+  ];
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-probe-fail-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const claude = path.join(home, '.claude');
+  fs.mkdirSync(claude, { recursive: true });
+  fs.writeFileSync(path.join(claude, 'openrouter.env'), 'OPENROUTER_API_KEY=sk-test\n', 'utf8');
+  const coolingFile = path.join(claude, 'fallback-backend-history.jsonl');
+  // 両方の backend を冷却状態にする → skipCoolingBackends は keepAtLeastOne で全件残す
+  fs.writeFileSync(coolingFile, [
+    JSON.stringify({ t: Date.now(), backend: 'gemini-cli', outcome: 'timeout' }),
+    JSON.stringify({ t: Date.now(), backend: 'cheap-code:deepseek', outcome: 'timeout' }),
+  ].join('\n') + '\n', 'utf8');
+  fs.writeFileSync(path.join(claude, 'codex-fallback-order.json'), JSON.stringify(['gemini-cli', 'cheap-code:deepseek']));
+  const result = run(['--force-native', '--cwd', home, '指示内容'], {
+    home,
+    env: { ...geminiOnPathEnv(), CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults), GEMINI_API_KEY: 'sk-gemini', OPENROUTER_API_KEY: 'sk-test' },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  // 2つめのバックエンド(cheap-code:deepseek)が成功
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
+  const ledger = fs.readFileSync(path.join(home, '.claude/executor-usage.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
+  const fallbackRow = ledger.find(r => r.provider === 'fallback');
+  assert.ok(fallbackRow?.chain, 'chain が存在');
+  assert.ok(fallbackRow.chain.some(a => a.outcome === 'probe_failed'), 'probe_failed が存在');
 });
 
 test('loadEnvKey は process.env を最優先し、ファイルの export VAR="..." 形式も読める', () => {

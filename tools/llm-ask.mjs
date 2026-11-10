@@ -91,7 +91,7 @@ const GEMINI_MIN_MAX_TOKENS = 256;
 const usageFile = opt('--usage-file', '');
 if (args.includes('--usage-file') && (!usageFile || usageFile.startsWith('--'))) { console.error('--usage-file requires a path'); process.exit(2); }
 const ledger = usageFile || path.join(home, '.claude', 'executor-usage.jsonl');
-function appendAttempt(info, usage = {}) {
+function appendAttempt(info, usage = {}, errorText = '') {
   if (args.includes('--no-persist') && !usageFile) return;
   if (info.candidate.provider === 'gemini') {
     const measured = geminiUsage({ usage });
@@ -110,7 +110,9 @@ function appendAttempt(info, usage = {}) {
   }
   // 失敗理由も残す。reason が無いと delegation-health 側で「残高切れ」と「ただの rate limit」を
   // 区別できず、直せない全滅として毎日起票される（2026-10-22 実測: kimi の 2337 行が reason 欠落）。
-  const rec = { t: new Date().toISOString(), provider: info.candidate.provider, model: info.candidate.model, ...usageCostFields(usage), in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover, ...(info.status !== 'ok' && info.reason ? { reason: String(info.reason).slice(0, 400) } : {}) };
+  const reasonField = info.status !== 'ok' && info.reason ? { reason: String(info.reason).slice(0, 400) } : {};
+  const errorField = errorText ? { error: errorText } : {};
+  const rec = { t: new Date().toISOString(), provider: info.candidate.provider, model: info.candidate.model, ...usageCostFields(usage), in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover, ...reasonField, ...errorField };
   try { fs.mkdirSync(path.dirname(ledger), { recursive: true }); fs.appendFileSync(ledger, JSON.stringify(rec) + '\n'); } catch {}
 }
 
@@ -135,8 +137,14 @@ try {
     async onAttempt(info) {
       if (args.includes('--no-persist') && !usageFile) return;
       let usage = {};
-      if (info.status === 'ok') usage = (await info.response.clone().json().catch(() => ({}))).usage || {};
-      appendAttempt(info, usage);
+      let errorText = '';
+      if (info.status === 'ok') {
+        usage = (await info.response.clone().json().catch(() => ({}))).usage || {};
+      } else if (info.response) {
+        const body = await info.response.clone().text().catch(() => '');
+        errorText = body.replace(/Authorization:\s*Bearer\s+\S+/gi, '').replace(/[Aa]pi[_-]?[Kk]ey['"]?\s*[:=]\s*['"]?\S+/gi, '').slice(0, 300).trim();
+      }
+      appendAttempt(info, usage, errorText);
     },
     onFailover({ from, to, reason }) { console.error(`[failover] ${from.provider}:${from.model} ${reason} → ${to.provider}:${to.model}`); },
   });

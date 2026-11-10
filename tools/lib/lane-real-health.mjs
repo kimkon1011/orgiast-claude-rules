@@ -5,11 +5,14 @@ import { redactAll } from './redact.mjs';
 
 // HTTP 429 / usage limit / cooldown は全て quota 系。cooldown は billing 系と排他（同じ行に cooldown + 402 は起こらない）。
 const http402 = text => /(?<!\d)402(?!\d)/.test(String(text));
+const http403 = text => /(?<!\d)403(?!\d)/.test(String(text));
 const http429 = text => /(?<!\d)429(?!\d)/.test(String(text));
 export const quotaFailure = text => http429(text) || /cooldown|(?:usage|weekly|monthly)[_ /.-]*limit|limit[^\n]{0,60}exhausted|rate[_ .-]?limit|RESOURCE_EXHAUSTED|codex_cooldown/i.test(String(text));
 // billing は 402 / insufficient balance|quota|credits / payment_required のみ。
 // 429 や rate limit 由来の "Insufficient credits" を billing と誤判定しない（quotaFailure と順序で分離）。
-export const billingFailure = text => http402(text) || /insufficient[_ ](?:balance|quota|credits?)|(?:credits?|balance)[ _-]*(?:are[ _-]*)?(?:depleted|exhausted|insufficient)|(?:out of|no|not enough|low) credits?|credit[_ -](?:balance|limit)[^\n]{0,40}(?:low|exceed|insufficient|depleted|exhausted)|payment_required/i.test(String(text));
+export const billingFailure = text => http402(text)
+  || (/outstanding balance|billing account[^\n]{0,80}(?:disabled|closed|suspended|outstanding|not active)/i.test(String(text)) && http403(text))
+  || /insufficient[_ ](?:balance|quota|credits?)|(?:credits?|balance)[ _-]*(?:are[ _-]*)?(?:depleted|exhausted|insufficient)|(?:out of|no|not enough|low) credits?|credit[_ -](?:balance|limit)[^\n]{0,40}(?:low|exceed|insufficient|depleted|exhausted)|payment_required/i.test(String(text));
 // 文言に 429 を含む billing は偽の billing（実際は quota）。判定補助。
 export const billingWithQuotaHint = text => billingFailure(text) && (http429(text) || /rate[_ .-]?limit|cooldown/i.test(String(text)));
 // Provider timestamps without an offset are interpreted in the host timezone.
@@ -36,7 +39,7 @@ export function realLaneStats(home, now = Date.now()) {
     const event = { at };
     s.events.push(event);
     if (status === 'ok') { s.lastOkAt = Math.max(s.lastOkAt, at); continue; }
-    const detail = [row.status, row.httpStatus, row.http_status, row.reason, row.stderr, row.stderrTail, row.spawnError].filter(Boolean).join(' ');
+    const detail = [row.status, row.httpStatus, row.http_status, row.reason, row.error, row.stderr, row.stderrTail, row.spawnError].filter(Boolean).join(' ');
     // cooldown 状態の行は常に quota 扱い（実機: glm が 70 件の cooldown 行を持ち real_fail_rate と誤判定）。
     // 402 は RESOURCE_EXHAUSTED を伴うことがある。429 も同居する場合だけ quota を優先する。
     if (row.status !== 'cooldown' && billingFailure(detail) && !billingWithQuotaHint(detail)) {

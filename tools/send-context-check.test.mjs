@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { assertContextApproved, writeContextMarker } from './lib/send-context.mjs';
-import { fetchHistory, main } from './send-context-check.mjs';
+import { fetchHistory, main, runLlm } from './send-context-check.mjs';
 
 const tmp = t => { const p=fs.mkdtempSync(path.join(os.tmpdir(),'send-context-')); t.after(()=>fs.rmSync(p,{recursive:true,force:true})); return p; };
 test('LINE履歴は実テーブルの列名を使って整形する', async t => {
@@ -19,6 +19,11 @@ test('LINE履歴は実テーブルの列名を使って整形する', async t =>
 test('LINE履歴取得エラーはレスポンス本文を含む', async t => {
   const home=tmp(t); fs.mkdirSync(path.join(home,'.claude')); fs.writeFileSync(path.join(home,'.claude','line-send.env'),'LINE_CHANNEL_ACCESS_TOKEN=test\nSUPABASE_URL=https://example.supabase.co\nSUPABASE_SERVICE_ROLE_KEY=test\n');
   await assert.rejects(()=>fetchHistory('line','C10930732da844f79c6032a40705a4d73',{home,fetchImpl:async()=>new Response('{"message":"missing column"}',{status:400})}),/HTTP 400: .*missing column/);
+});
+test('LLM判定はWindowsの引数長制限を避けてprompt-fileを使う', () => {
+  let prompt='';
+  const result=runLlm([{text:'長文'.repeat(20000)}],'テスト本文',{spawn:(_exe,args)=>{ const i=args.indexOf('--prompt-file'); assert.ok(i>=0); prompt=fs.readFileSync(args[i+1],'utf8'); return {status:0,stdout:'{"verdict":"OK","reason":"整合","warnings":[]}',stderr:''}; }});
+  assert.match(prompt,/長文長文/); assert.equal(result.ok,true);
 });
 test('回答済み質問を再送する判定はNGでマーカーを書かない', async t => {
   const home=tmp(t), file=path.join(home,'body.txt'); fs.writeFileSync(file,'予備日はいつですか？');

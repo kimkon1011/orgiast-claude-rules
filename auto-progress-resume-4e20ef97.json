@@ -1,0 +1,6 @@
+{
+  "state": "needs_user",
+  "evidence": "元セッション(4e20ef97)の最終状態を確認:\n\n1. WSL(LxssManager)のサービス状態: Stopped（停止済み）— これにより wsl 全コマンドが無応答\n2. Codex も当然使えない（WSL上のLinuxが存在しない）\n3. 元セッションは lane-repair-first-gate にブロックされ、目的決定すらできていない\n4. 元セッションの宣言「2時間ごとにWSL/Codexを確認する」CronCreate はこのQwen Code環境に引き継がれていない\n5. wsl --shutdown も応答なし（サービスが既に Stopped、シャットダウン対象のVMがない）\n\n取り消せる作業の試行:\n- wsl --shutdown を直実行→timeout（サービス停止済みのため、このコマンド自体がハング）\n- wsl -l -v → timeout（同じ理由）\n- lane-doctor --probe → 元セッションで既に timeout 確認済み\n\nWSL復旧には管理者権限での LxssManager サービスの再起動が必要（Restart-Service LxssManager は管理者特権が必要）。これは Claude から実行不可。",
+  "artifact": "",
+  "nextKim": "WSL が完全に停止しています（LxssManager サービスが Stopped）。以下のいずれかを実行してください:\n\n1. PowerShell を管理者として開き、次のコマンドを実行:\n   Restart-Service LxssManager\n\n2. または、Windows の「サービス」アプリ（services.msc）を開き、「LxssManager」を探して「開始」をクリック\n\nWSL が起動したら、このセッションで次の作業に進める状態になります。復旧後は再度 /session-start などを実行してください。"
+}

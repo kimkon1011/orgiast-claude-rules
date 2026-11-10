@@ -230,6 +230,9 @@ test('kim 宛 dry-run は台帳にも Discord にも書き込まない', async (
   const result = await sendDiscordDm('kim', '判断', { home, dryRun: true, resolve: async () => ({ id: '715210673642012733', label: 'kim' }), fetchImpl: async () => assert.fail('送信禁止') });
   assert.equal(result.delivered, 'session-inbox'); assert.equal(listItems(home).length, before);
 });
+test('報告全文モードでは切り詰め送信を拒否', async () => {
+  await assert.rejects(()=>sendDiscordDm('佐藤優奈','あ'.repeat(2500),{home,resolve,noCopyKim:true,noReplyFooter:true,requireFullBody:true,fetchImpl:async()=>assert.fail('長文を一部送信しない')}),/報告全文/);
+});
 test('非 kim 席の写しは転送失敗でもローカル台帳へ残す', async t => {
   const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'dm-remote-'));
   t.after(() => fs.rmSync(remote, { recursive: true, force: true }));

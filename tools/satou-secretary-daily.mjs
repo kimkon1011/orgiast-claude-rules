@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { isEntry } from "./is-entry.mjs";
 import { getDriveToken } from "./lib/drive-auth.mjs";
 import { gwsFetch } from "./lib/gws-proxy.mjs";
-import { searchGmail, compactMessage } from "./gmail-search.mjs";
+import { searchGmail, compactMessage, extractBody, headerValue } from "./gmail-search.mjs";
 import { readEnvValue } from "./env-kv.mjs";
 import { sendDiscordDm } from "./discord-dm.mjs";
 import { fetchHistory as fetchSendHistory, runLlm as checkSendContext } from "./send-context-check.mjs";
@@ -42,13 +42,20 @@ const norm = (x) =>
   txt = (x) => String(x ?? "").trim(),
   fmt = (d) =>
     new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Tokyo" }).format(d);
-const FREE_MAIL_DOMAINS = new Set(["gmail.com","googlemail.com","yahoo.co.jp","yahoo.com","outlook.com","hotmail.com","icloud.com","me.com","live.jp"]);
+const FREE_MAIL_DOMAINS = new Set(["gmail.com","googlemail.com","yahoo.co.jp","yahoo.com","outlook.com","outlook.jp","hotmail.com","hotmail.co.jp","icloud.com","me.com","live.jp","aol.com","msn.com","proton.me","protonmail.com"]);
+const addresses = value => String(value || "").toLowerCase().match(/[\w.+-]+@[\w.-]+/g) || [];
+const customerAddress = address => {
+  const [local, domain] = address.split("@");
+  return domain && !/(^|\.)(orgiast\.jp|event-shop\.jp|imitsu\.jp|proni\.jp|github\.com|google\.com|slack\.com|discord\.com)$/.test(domain) &&
+    !FREE_MAIL_DOMAINS.has(domain) && !/^(?:no-?reply|notifications?|mailer-daemon|bounce)(?:[+._-]|$)/.test(local) &&
+    !/^(?:no-?reply|notifications?)\./.test(domain);
+};
 const emailAddress = value => sender(String(value || "")).email.toLowerCase();
 const emailDomain = value => emailAddress(value).split("@")[1] || "";
 export function isSatouCustomerMail(message = {}) {
   if (emailAddress(message.from) !== "satou@orgiast.jp") return false;
-  const recipients = `${message.to || ""},${message.cc || ""}`.split(/[,;]+/).map(emailDomain).filter(Boolean);
-  return recipients.some(d => d !== "orgiast.jp" && !FREE_MAIL_DOMAINS.has(d) && !/^(?:noreply|no-reply|notifications?)\./i.test(d));
+  if (/^\s*(?:Fwd?:)|\bLEAD\s*:/i.test(message.subject || "")) return false;
+  return addresses(`${message.to || ""},${message.cc || ""}`).some(customerAddress);
 }
 export function headerMap(h) {
   return new Map(h.map((x, i) => [norm(x), i]));
@@ -267,7 +274,7 @@ export function classifyDepartmentStoreThread(messages = []) {
 }
 async function mail(deps = {}) {
   const q =
-      'newer_than:2d ((to:satou@orgiast.jp OR cc:satou@orgiast.jp OR "佐藤 優奈" OR "佐藤優奈" OR from:imitsu.jp) OR ("社内イベント百貨店" OR to:info@event-shop.jp OR from:event-shop.jp)) -from:saiyo@orgiast.jp -to:saiyo@orgiast.jp',
+      'newer_than:2d ((from:satou@orgiast.jp OR to:satou@orgiast.jp OR cc:satou@orgiast.jp OR "佐藤 優奈" OR "佐藤優奈" OR from:imitsu.jp) OR ("社内イベント百貨店" OR to:info@event-shop.jp OR from:event-shop.jp)) -from:saiyo@orgiast.jp -to:saiyo@orgiast.jp',
     r = await (deps.searchGmail || searchGmail)({
       user: USER,
       query: q,
@@ -277,23 +284,26 @@ async function mail(deps = {}) {
       concurrency: 3,
     }),
     t = await token("https://www.googleapis.com/auth/gmail.readonly"),
-    messages = [
+    threads = [
       ...new Map(r.messages.map((x) => [x.threadId, x])).values(),
     ].map((x) => ({ ...x, url: gmailUrl(x.threadId) })),
+    messages = [],
     unanswered = [],
     departmentStoreJudgment = [],
     departmentStoreCustomers = [];
-  for (const x of messages) {
+  for (const x of threads) {
     const d = await api(
-        `https://gmail.googleapis.com/gmail/v1/users/me/threads/${x.threadId}?format=metadata&metadataHeaders=Date&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject`,
+        `https://gmail.googleapis.com/gmail/v1/users/me/threads/${x.threadId}?format=full`,
         { token: t, fetchImpl: deps.fetchImpl },
       ),
-      classification = classifyDepartmentStoreThread(d.messages || []),
+      threadMessages = (d.messages || []).map(m => ({ ...compactMessage(m), cc: headerValue(m.payload, "cc"), body: extractBody(m.payload, 8000), url: gmailUrl(x.threadId) })).sort((a,b) => +a.internalDate - +b.internalDate),
+      classification = classifyDepartmentStoreThread(threadMessages),
       c = classification.last || x,
       w = classification.lastSender.email
         ? classification.lastSender
         : sender(c.from),
       item = { ...c, sender: w, url: gmailUrl(c.threadId || x.threadId) };
+    messages.push(...threadMessages.map(m => ({ ...m, latestSender: c.from, latestDirection: emailDomain(c.from) === "orgiast.jp" ? "自社" : "先方" })));
     if (classification.isDepartmentStore && classification.judgment)
       departmentStoreJudgment.push(item);
     else if (classification.isDepartmentStore && classification.customer)
@@ -321,7 +331,7 @@ async function calendar(now, deps = {}) {
         u,
       ),
       q = new URLSearchParams({
-        timeMin: now.toISOString(),
+        timeMin: jstDayRange(now).end.toISOString(),
         timeMax: end.toISOString(),
         singleEvents: "true",
         orderBy: "startTime",
@@ -394,8 +404,11 @@ export function aggregateActiveCases(cases = []) {
   for (const x of cases) {
     if (CLOSED.has(x.state)) continue;
     const k = baseCode(x.code) || `${x.client}|${x.name}`;
-    if (!by.has(k)) by.set(k, x);
-    else if (x.state === "確定") by.set(k, x);
+    if (!by.has(k)) by.set(k, { ...x });
+    else {
+      const previous = by.get(k), reason = [...new Set(`${previous.reason || ""}・${x.reason || ""}`.split("・").filter(Boolean))].join("・");
+      by.set(k, { ...(x.state === "確定" ? x : previous), reason });
+    }
   }
   const values = [...by.values()];
   const reasonCounts = {};
@@ -423,7 +436,11 @@ export async function askReportLlm(prompt, deps = {}) {
       ["deepseek", "deepseek-chat"],
       ["groq", "openai/gpt-oss-120b"],
     ],
-    fail = [];
+    fail = [],
+    promptDir = fs.mkdtempSync(path.join(os.tmpdir(), "satou-report-prompt-")),
+    promptFile = path.join(promptDir, "prompt.txt");
+  fs.writeFileSync(promptFile, prompt, "utf8");
+  try {
   for (const [provider, model] of attempts)
     try {
       const { stdout } = await run(
@@ -440,9 +457,9 @@ export async function askReportLlm(prompt, deps = {}) {
           "summarize",
           "--max",
           "700",
-          prompt,
+          "--prompt-file", promptFile,
         ],
-        { timeout: 90000, maxBuffer: 1024 * 1024 },
+        { timeout: 90000, maxBuffer: 1024 * 1024, windowsHide: true },
       );
       const out = txt(stdout);
       if (out && out !== "(出力なし)") return out;
@@ -450,6 +467,7 @@ export async function askReportLlm(prompt, deps = {}) {
       fail.push(`${provider}: ${e.message}`);
     }
   throw Error(`LLM全滅: ${fail.join(" | ")}`);
+  } finally { fs.rmSync(promptDir, { recursive: true, force: true }); }
 }
 function caseForMessage(message, cases) {
   const blob = norm(
@@ -473,7 +491,28 @@ function fallbackMovement(messages) {
 }
 export function capReportLines(lines, max = 25) {
   if (lines.length <= max) return lines;
-  return [...lines.slice(0, max - 1), "・ほか（台帳の明細参照）"];
+  const result = [...lines];
+  // Keep every section and all three priorities. Shorten the largest earlier section.
+  while (result.length > max) {
+    const sections = result.flatMap((line, i) => line.startsWith("■") ? [i] : []);
+    const candidates = sections.slice(1, -1).map(i => ({ start: i + 1, end: sections.find(j => j > i) ?? result.length }))
+      .filter(s => s.end - s.start > 1).sort((a,b) => (b.end-b.start)-(a.end-a.start));
+    if (!candidates.length) break;
+    const s = candidates[0];
+    result.splice(s.end - 1, 1);
+    result[s.end - 2] = "・ほか（台帳の明細参照）";
+  }
+  return result;
+}
+export const customerLabel = c => clip(String(c?.client || c?.name || "").replace(/株式会社|合同会社|有限会社/g, "").replace("鹿沼ケーブルテレビ", "鹿沼CATV"), 24);
+const actionDate = value => {
+  const m = String(value).match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  return m ? new Date(`${m[1]}-${m[2].padStart(2,"0")}-${m[3].padStart(2,"0")}T${(m[4]||"00").padStart(2,"0")}:${m[5]||"00"}:${m[6]||"00"}+09:00`).getTime() : Infinity;
+};
+export function prioritizeActions(actions, now) {
+  const rank = x => x[0] === "予定" ? (Number.isFinite(actionDate(x[1])) && fmt(new Date(actionDate(x[1]))) === fmt(now) ? 0 : 3) : x[0] === "納品期限" ? 1 : 2;
+  return actions.filter(x => x[4] !== "対応済み" && !(x[0] === "予定" && /採用|面談|面接|中途/.test(`${x[2]} ${x[3]}`)))
+    .sort((a,b) => rank(a)-rank(b) || actionDate(a[1])-actionDate(b[1])).slice(0,3);
 }
 export async function buildDailyReport(
   {
@@ -486,7 +525,9 @@ export async function buildDailyReport(
   deps = {},
 ) {
   const counted = aggregateActiveCases(cases),
-    yesterday = messages.filter((x) => isInPreviousJstDay(x.internalDate, now)),
+    yesterday = messages.filter((x) => isInPreviousJstDay(x.internalDate, now) && caseForMessage(x, cases) &&
+      addresses(`${x.from || ""} ${x.to || ""} ${x.cc || ""}`).some(a => !a.endsWith("@orgiast.jp")) &&
+      !/^\s*Fwd?:|\bLEAD\s*:/i.test(x.subject || "")),
     groups = new Map();
   for (const m of yesterday) {
     const c = caseForMessage(m, cases),
@@ -502,10 +543,13 @@ export async function buildDailyReport(
     details = [],
     llmErrors = [];
   for (const g of groups.values()) {
+    g.messages.sort((a,b) => +a.internalDate - +b.internalDate);
     const input = g.messages.map((x) => ({
+      at: new Date(+x.internalDate).toISOString(),
       subject: x.subject || "",
       sender: x.from || "",
       snippet: x.snippet || "",
+      body: x.body || x.snippet || "",
       direction: /@orgiast\.jp/i.test(sender(x.from || "").email)
         ? "自社送信"
         : "先方送信",
@@ -514,18 +558,17 @@ export async function buildDailyReport(
     try {
       summary = clip(
         await askReportLlm(
-          `次の案件メール群を日本語40字前後、事実のみ1行で要約。最終メッセージの送信者が先方か自社かを確認し、確定・相談・依頼を厳密に区別すること。推測で「確定」と書かない。JSONや前置き不要。\n${JSON.stringify(input)}`,
+          `次の案件メール群を日本語60字以内、事実のみ1行で要約。最終メッセージの送信者: ${g.messages.at(-1).latestSender || g.messages.at(-1).from}（${g.messages.at(-1).latestDirection || input.at(-1).direction}）。時系列順に読み、引用された過去メールを今回の発言と混同しない。確定・相談・依頼を厳密に区別し、推測で「確定」と書かない。誰が誰に頼んだかを逆転させない。JSONや前置き不要。\n${JSON.stringify(input)}`,
           deps,
         ),
+        72,
       );
     } catch (e) {
       summary = fallbackMovement(g.messages);
       llmErrors.push(e.message);
     }
     const label =
-        g.caseItem?.client ||
-        g.caseItem?.name ||
-        clip(g.messages[0]?.subject, 18),
+        customerLabel(g.caseItem),
       date = g.caseItem?.deliveryText || "日程未定",
       url = g.messages[0]?.url || gmailUrl(g.messages[0]?.threadId);
     movements.push(`・${label}（${date}）：${summary}`);
@@ -534,11 +577,11 @@ export async function buildDailyReport(
   const problems = [];
   for (const x of actions) {
     if (x[0] === "未返信メール") {
-      const d = new Date(x[1]);
+      const d = actionDate(x[1]);
       if (now - d >= 864e5)
         problems.push({
-          text: `${x[3]}が24時間以上未返信`,
-          action: `${x[3]}へ本日中に返信`,
+          text: `${x[3]}への返信が24時間以上未対応`,
+          action: `佐藤：${x[3]}へ本日中に返信`,
           deadline: "本日",
           code: "",
           url: x[5],
@@ -550,7 +593,7 @@ export async function buildDailyReport(
     if (x.delivery && x.delivery >= now && x.delivery <= week && !x.plan)
       problems.push({
         text: `${x.client || x.name}の実施計画URLが未登録`,
-        action: `${x.client || x.name}の実施計画を${x.deliveryText}までに登録`,
+          action: `佐藤：${customerLabel(x)}の実施計画を${x.deliveryText}までに登録`,
         deadline: x.deliveryText,
         code: x.code,
         url: x.estimate,
@@ -567,18 +610,18 @@ export async function buildDailyReport(
   if (yesterday.length)
     try {
       const raw = await askReportLlm(
-        `基準日は${fmt(now)}。次のメールから問題候補を抽出。対象は(1)自社送信本文に明記された約束期日が基準日から3日以内 (2)キャンセル・辞退等と案件状態の明白な食い違い。期日が明記されていないもの、単なる出席者変更、推測は除外。未来の期日を「過ぎた」と書かない。各行を「問題候補: 事実|期限または要確認|案件コード」の形式。なければ「なし」。\n${JSON.stringify(yesterday.map((x) => ({ subject: x.subject, from: x.from, snippet: x.snippet })))}`,
+        `基準日は${fmt(now)}。次のメールから問題候補を抽出。対象は(1)自社送信本文に明記された約束期日が基準日から3日以内 (2)キャンセル・辞退等と案件状態の明白な食い違い。期日が明記されていないもの、単なる出席者変更、推測は除外。未来の期日を「過ぎた」と書かない。確定・相談・依頼を区別し、最終送信者を確認。各行を「問題候補: 何が起きているか|YYYY-MM-DDの期限|案件コード|佐藤：誰に何をいつまでにするか」の4列とし、事実と対応文を重複させない。なければ「なし」。\n${JSON.stringify(yesterday.map((x) => ({ subject: x.subject, from: x.from, body: x.body || x.snippet, latestSender: x.latestSender, latestDirection: x.latestDirection, case: caseForMessage(x, cases) })))}`,
         deps,
       );
       if (txt(raw) !== "なし")
         for (const line of raw.split(/\r?\n/).filter((x) => x.includes("|"))) {
           const fields = line.replace(/^[-・*\d.\s]+/, "").split("|");
-          const [text, deadline = "要確認", code = ""] = fields;
+          const [text, deadline = "要確認", code = "", action = ""] = fields.map(txt);
           const deadlineDate = /^20\d{2}-\d{2}-\d{2}$/.test(deadline)
             ? new Date(`${deadline}T23:59:59+09:00`)
             : null;
           if (
-            fields.length === 3 &&
+            fields.length === 4 && action && cases.some(c => baseCode(c.code) === baseCode(code)) &&
             /^問題候補[:：]/.test(text) &&
             !/^(?:問題候補[:：]\s*)?(?:なし|無し)$/i.test(txt(text)) &&
             (!deadlineDate ||
@@ -586,6 +629,7 @@ export async function buildDailyReport(
           )
             problems.push({
               text: clip(text.replace(/^問題候補[:：]\s*/, "")),
+              action: clip(action, 76),
               deadline: clip(deadline, 18),
               code: txt(code),
               url: yesterday[0]?.url || "",
@@ -617,13 +661,7 @@ export async function buildDailyReport(
     } catch (e) {
       llmErrors.push(e.message);
     }
-  const sorted = actions.filter(x => !(x[0] === "予定" && /採用|面談|面接|中途/.test(`${x[2]} ${x[3]}`)))
-      .sort(
-        (a, b) =>
-          (a[0] === "予定" ? -3 : 0) - (b[0] === "予定" ? -3 : 0) ||
-          String(a[1]).localeCompare(String(b[1])),
-      )
-      .slice(0, 3),
+  const sorted = prioritizeActions(actions, now),
     md = new Intl.DateTimeFormat("ja-JP", {
       timeZone: "Asia/Tokyo",
       month: "numeric",
@@ -649,13 +687,13 @@ export async function buildDailyReport(
         : ["・なし"]),
       "■解決が必要なこと",
       ...(uniqueProblems.length
-        ? uniqueProblems.map((x) => `・${clip(x.action || `${x.text}を${x.deadline}までに確認・対応`)}`)
+        ? uniqueProblems.map((x) => `・${clip(x.action, 76)}`)
         : ["・なし"]),
       "■社長判断が必要なこと",
       ...(judgment.length ? judgment.map((x) => `・${x}`) : ["・なし"]),
       "■今日の優先",
       ...(sorted.length
-        ? sorted.map((x, i) => `${i + 1}. ${clip(`${x[3] || x[2]}：${x[2]}`)}`)
+        ? sorted.map((x, i) => `${i + 1}. ${clip(`${x[0] === "予定" ? `${x[1]} ` : x[3] && x[3] !== x[2] ? `${x[3]}：` : ""}${x[2]}`, 76)}`)
         : ["・なし"]),
     ],
     capped = capReportLines(lines);
@@ -1034,26 +1072,30 @@ export async function run({
   };
   p.write = dryRun ? { mode: "dry-run" } : await write(p, deps);
   if (!dryRun) {
-    const dir = path.join(os.homedir(), ".claude", "satou-secretary");
+    const dir = path.join(deps.home || os.homedir(), ".claude", "satou-secretary");
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       path.join(dir, `report-${report.date}.md`),
       report.text + "\n",
     );
-    if (!noDeliver) p.delivery = await deliverReport(report, { now, deps });
+    if (shouldDeliver({ dryRun, noDeliver })) p.delivery = await deliverReport(report, { now, deps });
   }
   return p;
 }
 export const REPORT_DM_TARGET = "佐藤優奈";
+export const shouldDeliver = ({ dryRun = false, noDeliver = false } = {}) => !dryRun && !noDeliver;
 export const reportDeliveryText = text => `おはようございます。社長への業務報告の下書きです（このまま社長とのグループへ転送できます。直したい所は Claude に伝えてください）\n\n${text}`;
 export async function deliverReport(report, { now = new Date(), deps = {} } = {}) {
   const home = deps.home || os.homedir(), stamp = fmt(now), dir = path.join(home, ".claude", "satou-secretary"), mark = path.join(dir, `delivered-${stamp}`);
   if (fs.existsSync(mark)) return { delivered: false, reason: "already-delivered", marker: mark };
+  fs.mkdirSync(dir, { recursive: true });
+  const lock = path.join(dir, `delivery-${stamp}.lock`);
+  try { fs.writeFileSync(lock, JSON.stringify({ at: new Date().toISOString(), pid: process.pid }), { flag: "wx" }); }
+  catch (e) { if (e.code === "EEXIST") throw Error("本日の配信が実行中、または送信結果未確認です。重複送信を防ぐため停止します"); throw e; }
+  let sending = false;
+  try {
   const history = await (deps.fetchSendHistory || fetchSendHistory)("discord", REPORT_DM_TARGET, { home, fetchImpl: deps.discordFetchImpl });
-  const pendingDeliveryCheck = history.messages.some(x => String(x.id) === "1564195476624904293") &&
-    !history.messages.some(x => x.side === "self" && /10\/26.*(?:到達|届).*確認|金社長への到達確認/.test(x.text || ""));
-  const note = pendingDeliveryCheck ? "\n\n10/26にご依頼いただいた金社長への到達確認は、確認済みの返答を残せていませんでした。遅くなり申し訳ありません。" : "";
-  const text = reportDeliveryText(report.text).replace("\n\n", `${note}\n\n`);
+  const text = reportDeliveryText(report.text);
   let verdict, lastCheckError;
   for (let attempt = 0; attempt < 3; attempt++) try {
     verdict = await (deps.checkSendContext || checkSendContext)(history.messages, text);
@@ -1062,10 +1104,12 @@ export async function deliverReport(report, { now = new Date(), deps = {} } = {}
   if (!verdict) throw lastCheckError;
   if (!verdict.ok) throw Error(`Discord送信前履歴照合NG: ${verdict.reason}`);
   writeContextMarker({ channel: "discord", target: history.target, text, latest: latestOf(history.messages), reason: verdict.reason, home });
-  const sent = await (deps.sendDiscordDm || sendDiscordDm)(REPORT_DM_TARGET, text, { home, noCopyKim: true, noReplyFooter: true, fetchImpl: deps.discordFetchImpl });
-  fs.mkdirSync(dir, { recursive: true });
+  sending = true;
+  const sent = await (deps.sendDiscordDm || sendDiscordDm)(REPORT_DM_TARGET, text, { home, noCopyKim: true, noReplyFooter: true, requireFullBody: true, fetchImpl: deps.discordFetchImpl });
+  if (!sent.delivered || !sent.messageId) throw Error("Discord送信結果を確認できません");
   fs.writeFileSync(mark, `${JSON.stringify({ at: new Date().toISOString(), channelId: sent.channelId, messageId: sent.messageId || "" })}\n`, { flag: "wx" });
   return { ...sent, marker: mark, text };
+  } finally { if (!sending || fs.existsSync(mark)) fs.unlinkSync(lock); }
 }
 export const summary = (r) =>
   `satou-secretary ${r.executedAt} cases=${r.cases.length} mail=${r.mail.messages.length} unanswered=${r.mail.unanswered.length} departmentStoreJudgment=${r.mail.departmentStoreJudgment.length} departmentStoreCustomers=${r.mail.departmentStoreCustomers.length} calendar=${r.calendar.length} aimitsu=${r.mail.aimitsu.length} tldv=${r.tldv.items.length} actions=${r.actions.length} write=${r.write.mode || "sheet"} errors=${r.errors.length}${r.tldv.note ? ` note="${r.tldv.note}"` : ""}\n\n${r.report.text}`;

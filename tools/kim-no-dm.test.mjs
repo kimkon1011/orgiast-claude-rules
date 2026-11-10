@@ -64,6 +64,7 @@ test('raw DM channel transports are audited; new bypasses fail this inventory', 
   const audited = new Map([
     ['autopilot-tick.mjs', 'readControls'], // Opens channel only to read incoming commands.
     ['event-shop-reply-context.mjs', 'channels.push'], // Read-only context collection.
+    ['send-context-check.mjs', '/messages?limit=100'], // Opens DM only to read context; no message POST.
     ['kim-push-relay.mjs', 'messages?after='], // Reads old DMs; pushKim is a separate phone push.
     ['discord-dm.mjs', 'const inbox = isKim;'],
     ['feedback-nag.mjs', 'if (deferred) return deferred;'],

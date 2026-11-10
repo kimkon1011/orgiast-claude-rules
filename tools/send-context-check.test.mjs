@@ -60,6 +60,25 @@ test('LLM判定はWindowsの引数長制限を避けてprompt-fileを使う', ()
   const result=runLlm([{text:'長文'.repeat(20000)}],'テスト本文',{spawn:(_exe,args)=>{ const i=args.indexOf('--prompt-file'); assert.ok(i>=0); prompt=fs.readFileSync(args[i+1],'utf8'); return {status:0,stdout:'{"verdict":"OK","reason":"整合","warnings":[]}',stderr:''}; }});
   assert.match(prompt,/長文長文/); assert.equal(result.ok,true);
 });
+test('Discord名前解決はDMを開いて履歴だけを読み、メッセージはPOSTしない', async t => {
+  const home=tmp(t); fs.mkdirSync(path.join(home,'.claude')); fs.writeFileSync(path.join(home,'.claude','orgiast-discord-bot-token.txt'),'token');
+  const calls=[];
+  const result=await fetchHistory('discord','佐藤優奈',{home,fetchImpl:async(url,init={})=>{
+    url=String(url);
+    calls.push({url,init});
+    if(url.includes('/members/search')) return Response.json([{user:{id:'1423319951980232744',global_name:'佐藤優奈',username:'satou1319'}}]);
+    if(init.method==='POST') { assert.ok(url.endsWith('/users/@me/channels')); assert.equal(JSON.parse(init.body).recipient_id,'1423319951980232744'); return Response.json({id:'dm-satou'}); }
+    assert.ok(url.endsWith('/channels/dm-satou/messages?limit=100'));
+    return Response.json([]);
+  }});
+  assert.equal(result.target,'dm-satou');
+  assert.equal(calls.filter(x=>x.init.method==='POST').length,1);
+});
+test('既存DiscordチャンネルIDはDMを作らず読み、403は読み取り失敗として止める', async t => {
+  const home=tmp(t); fs.mkdirSync(path.join(home,'.claude')); fs.writeFileSync(path.join(home,'.claude','orgiast-discord-bot-token.txt'),'token');
+  await fetchHistory('discord','1561703420455292979',{home,fetchImpl:async(_url,init)=>{assert.notEqual(init.method,'POST');return Response.json([]);}});
+  await assert.rejects(()=>fetchHistory('discord','1561703420455292979',{home,fetchImpl:async(_url,init)=>{assert.notEqual(init.method,'POST');return new Response('forbidden',{status:403});}}),/HTTP 403/);
+});
 test('安価LLMが空出力ならGroqへ切り替えてJSON判定を完了する', () => {
   const providers=[];
   const result=runLlm([{party:'external',text:'確認しました'}],'返信',{spawn:(_exe,args)=>{

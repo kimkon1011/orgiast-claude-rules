@@ -1,0 +1,94 @@
+{
+  "date": "2026-11-10",
+  "sources": {
+    "shikaku.html": {
+      "accessible": true,
+      "items": 1,
+      "url": "https://www.p-portal.go.jp/pps-web-biz/geps-chotatujoho/resources/app/html/shikaku.html",
+      "note": "情報ページ（制度概要）を取得"
+    },
+    "yukoshikaku.html": {
+      "accessible": true,
+      "items": 1,
+      "url": "https://www.p-portal.go.jp/pps-web-biz/geps-chotatujoho/resources/app/html/yukoshikaku.html",
+      "note": "情報ページ（制度概要）を取得"
+    },
+    "shinsei_internet.html": {
+      "accessible": true,
+      "items": 1,
+      "url": "https://www.p-portal.go.jp/pps-web-biz/geps-chotatujoho/resources/app/html/shinsei_internet.html",
+      "note": "情報ページ（制度概要）を取得"
+    },
+    "shinsei_yusojisan.html": {
+      "accessible": true,
+      "items": 1,
+      "url": "https://www.p-portal.go.jp/pps-web-biz/geps-chotatujoho/resources/app/html/shinsei_yusojisan.html",
+      "note": "情報ページ（制度概要）を取得"
+    },
+    "有資格者名簿検索": {
+      "accessible": false,
+      "items": 0,
+      "url": "https://www.chotatujoho.geps.go.jp/csjs/ex016/StartShikakushaMenuAction.do",
+      "note": "応答あり（内容確認中）"
+    },
+    "調達ポータル 調達情報検索": {
+      "accessible": false,
+      "items": 0,
+      "url": "https://www.p-portal.go.jp/pps-web-biz/UAA01/OAA0100?OAA0115",
+      "note": "ログイン必須"
+    },
+    "落札実績オープンデータ": {
+      "accessible": true,
+      "items": "ダウンロードリンクあり（実際のダウンロードには認証が必要）",
+      "url": "https://www.p-portal.go.jp/pps-web-biz/UAB02/OAB0201",
+      "note": "一覧ページは閲覧可、ダウンロードは認証必須"
+    },
+    "官公需情報ポータル トップ": {
+      "accessible": false,
+      "items": 0,
+      "url": "https://www.kkj.go.jp/",
+      "note": "空ページ"
+    },
+    "官公需情報ポータル 検索": {
+      "accessible": true,
+      "items": 1,
+      "url": "https://www.kkj.go.jp/search/",
+      "note": "応答あり"
+    },
+    "大阪府入札情報 トップ": {
+      "accessible": false,
+      "items": 0,
+      "url": "https://www.pref.osaka.lg.jp/keiyaku/nyusatsu/",
+      "note": "HTTP 404"
+    },
+    "大阪府入札情報 公告": {
+      "accessible": false,
+      "items": 0,
+      "url": "https://www.pref.osaka.lg.jp/keiyaku/nyusatsu/koukoku.html",
+      "note": "HTTP 404"
+    },
+    "大阪市入札情報 トップ": {
+      "accessible": false,
+      "items": 0,
+      "url": "https://www.city.osaka.lg.jp/keiyaku/",
+      "note": "HTTP 404"
+    },
+    "大阪市入札情報 入札": {
+      "accessible": false,
+      "items": 0,
+      "url": "https://www.city.osaka.lg.jp/keiyaku/nyusatsu/",
+      "note": "HTTP 404"
+    },
+    "JETRO 調達情報": {
+      "accessible": false,
+      "items": 0,
+      "url": "https://www.jetro.go.jp/chotatsu/",
+      "note": "HTTP 403"
+    }
+  },
+  "summary": {
+    "total_sources": 14,
+    "accessible": 6,
+    "inaccessible": 8
+  }
+}

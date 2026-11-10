@@ -1,0 +1,14 @@
+{
+  "tasks": [
+    {
+      "id": "edd70d31",
+      "cron": "7 8 12 11 *",
+      "prompt": "260430EIG auto-progress: 11/12朝になりました。エイト様からの返信が無い場合の催促文をkimに提示します。\n\n現状:\n- 11/10 16:25にLINEグループ「エイト様✕オージャスト」へ8つの確認事項を送信 → 返信なし\n- 催促文は作成済み: C:\\Users\\user\\.claude\\cheap-code-worker\\projects\\C--Users-user--claude-nightly-repo\\260430EIG-reminder-draft-20261112.md\n- 11/13(木)が企業締切・課題文期限\n\nやること:\n1. エイト様からの返信の有無を再度確認（LINE / Gmail / Supabase channel_messages）\n2. kimからの判断（A1告知サイト書き換え・A2フライヤー選択）の有無を確認（kim-inbox・決めること一覧Doc）\n3. 返信がなければ、催促文をkimに提示し送信承認を仰ぐ\n4. 返信があれば、その内容に応じて次のアクションを実行",
+      "createdAt": 1794309481683,
+      "createdBySessionId": "38ee7e01-25fd-44ba-b168-55148cac44c3",
+      "createdByPid": 10560,
+      "createdByProcStart": "134387826731085397",
+      "createdInProject": "C:\\Users\\user\\.claude\\nightly-repo"
+    }
+  ]
+}

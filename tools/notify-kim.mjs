@@ -6,11 +6,9 @@ import { createHash } from 'node:crypto';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 import { toPlainJa } from './lib/plain-ja.mjs';
-import { classifyKimDm } from './lib/kim-dm-policy.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { addItem, spoolItem, isInboxNoise } from './kim-inbox.mjs';
 import { annotateAccounts } from './url-account-gate.mjs';
-import { discordAllowed } from './lib/kim-discord-allowlist.mjs';
 
 const API = 'https://discord.com/api/v10';
 const MAX_CONTENT = 2_000;
@@ -77,14 +75,6 @@ const normalizeFailure = text => String(text).replace(/\d{4}-\d{2}-\d{2}(?:[T ][
 // Use the existing next-session TODO consumer; no separate repair queue.
 export async function notifyKim(text, options = {}) {
   if (isInboxNoise({ ...options, text: String(text ?? '') })) return { delivered: 'suppressed', reason: 'fleet-ledger-or-gate-statistics' };
-  if (options.kimActionRequired !== true) {
-    const policy = classifyKimDm(text);
-    if (!policy.allowed) {
-      console.error(`kim への Discord DM を止めました（${policy.reason}）。PR のマージ・他PCへの依頼は fleet-mail --to kim-PC で送ってください`);
-      const delivery = await persistKim(options.home || process.env.ORGIAST_HOME || os.homedir(), { ...options, priority: 'high', kind: ['ask', 'action'].includes(options.kind) ? 'ask' : 'info', text: redactSecrets(String(text ?? '')), source: options.source || 'notify-kim-blocked' });
-      return { ...delivery, discordBlocked: true, category: policy.category, reason: delivery.reason || policy.reason };
-    }
-  }
   options = { ...options, kind: options.kimActionRequired === true || ['ask', 'action'].includes(options.kind) ? 'ask' : 'info' };
   const raw = redactSecrets(String(text ?? ''));
   const bodyText = stripOwnerAddress(raw);
@@ -228,7 +218,7 @@ export async function deliverKim(text, {
   const body = suffix && !allowHumanRequest && kind !== 'ask' ? String(translated).split('\n').filter(line => !HANDOFF.test(line)).join('\n') : translated;
   const isKimRecipient = userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID;
   let inboxResult = null;
-  // kim 宛 Discord DM 全廃（2026-10-27 / 2026-11-10 kim 再指示）。kim への通知は kim-inbox のみ。
+  // kim 宛通知は kim-inbox のみ（docs/kim-progress-channel.md §1）。Discord 分岐は削除済み。
   if (isKimRecipient) {
     inboxResult = await persistKim(home, { kind: ['ask', 'action'].includes(kind) ? 'ask' : 'info', text: String(body) + suffix, source, sessionId, signal });
     return { ...inboxResult, channel: 'kim-inbox' };

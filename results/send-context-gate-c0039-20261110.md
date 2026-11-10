@@ -47,7 +47,7 @@ PR URL: https://github.com/kimkon1011/orgiast-claude-rules/pull/1838
 - `send-context-check.mjs` に `--intended-change "<変更内容>"`（複数可）を追加。LLM プロンプトに「意図した変更（送り手が承知の上で行う条件変更）」ブロックを追加し、本文が変更であることを明示し変更前の値が履歴と一致すれば、その変更自体を矛盾・重複として NG にしないよう指示。
 - マーカー JSON に `intendedChanges` フィールドを追加し、送信ゲートが読み戻せるようにした。
 - 相手の了承を得ていない新たな提案・お伺いを出すこと自体は NG 理由にしない（相手が次の返信で答えられる確認・お伺い）旨を LLM 指示に追加。
-- ONBOARDING.md / CLAUDE.md.template に `--intended-change` の使用例を追記。
+- `--intended-change` の説明と使用例は ONBOARDING.md に追記。CLAUDE.md.template の1行ルールは文字数を増やさず元のままとした。
 - テスト追加（5件）: 条件変更を正しく送る→OK、変更前値が履歴と食い違う→NG、変更なしでも変更明示→OK、パース＆マーカー記録、無指定は undefined。
 
 ### Windows 実データ再実行（送信なし）

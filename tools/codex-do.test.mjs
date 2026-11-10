@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { skipCoolingBackends } from './fallback-backend-health.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -539,6 +539,34 @@ test('shouldFlagEmptyFallbackDiff returns false when treeChanged is true', () =>
     diffText: '',
     treeChanged: true,
   }), false);
+});
+
+test('detectOutsideScopeChanges: 範囲外のファイルを検出する', () => {
+  const before = '';
+  const after = 'M  tools/foo.js\n?? untracked/test.txt\n';
+  const instruction = 'tools/foo.js を修正';
+  assert.deepEqual(detectOutsideScopeChanges(before, after, instruction), ['untracked/test.txt']);
+});
+
+test('detectOutsideScopeChanges: 範囲外なし（全ファイルが指示に含まれる）', () => {
+  const before = '';
+  const after = 'M  tools/foo.js\n';
+  const instruction = 'tools/foo.js を修正';
+  assert.deepEqual(detectOutsideScopeChanges(before, after, instruction), []);
+});
+
+test('detectOutsideScopeChanges: 実行前から変更済みのファイルは除外する', () => {
+  const before = 'M  tools/bar.js\n';
+  const after = 'M  tools/bar.js\n?? new.txt\n';
+  const instruction = 'new.txt を作成';
+  assert.deepEqual(detectOutsideScopeChanges(before, after, instruction), []);
+});
+
+test('detectOutsideScopeChanges: ディレクトリ名で指示されたパス配下は範囲内扱い', () => {
+  const before = '';
+  const after = '?? tools/sub/deep/file.js\n';
+  const instruction = 'tools/ 以下を修正';
+  assert.deepEqual(detectOutsideScopeChanges(before, after, instruction), []);
 });
 
 // 2026-10-19 実測: fallback の「直近3件すべて失敗」のうち2件は kind:verify だった。

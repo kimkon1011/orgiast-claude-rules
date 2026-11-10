@@ -676,6 +676,40 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   return uniqueBackendsByName(ordered.filter(Boolean));
 }
 
+export function detectOutsideScopeChanges(beforePorcelain, afterPorcelain, instructionText) {
+  if (!beforePorcelain && !afterPorcelain) return [];
+  const parseFiles = (text) => {
+    const files = new Set();
+    for (const line of (text || '').split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      // Porcelain: XY<space> path (columns 0-1 = status, column 2 = space, column 3+ = path)
+      const path = trimmed.slice(2).trim().replace(/\\/g, '/');
+      if (path) files.add(path);
+    }
+    return files;
+  };
+  const before = parseFiles(beforePorcelain);
+  const after = parseFiles(afterPorcelain);
+  // Files newly changed by this run (in after but not in before)
+  const changed = [];
+  for (const file of after) {
+    if (!before.has(file)) changed.push(file);
+  }
+  // Filter out paths that are in-scope (path or parent directory appears in instruction text)
+  return changed.filter(file => !isPathInScope(file, instructionText));
+}
+
+function isPathInScope(filePath, instructionText) {
+  if (instructionText.includes(filePath)) return true;
+  const parts = filePath.split('/');
+  for (let i = 1; i < parts.length; i++) {
+    const dir = parts.slice(0, i).join('/') + '/';
+    if (instructionText.includes(dir)) return true;
+  }
+  return false;
+}
+
 export function isProviderBillingBlocked(homeDir, provider, now = Date.now()) {
   const dir = path.join(homeDir, '.claude');
   try {
@@ -1083,6 +1117,11 @@ if (useCodex) {
 // 下の「空diffなら書き込めていない」判定が一度も発火しないため（2026-09-03 実害）。
 const treeSnapshot = () => snapshotWorkingTree(cwd);
 const treeBefore = treeSnapshot();
+let porcelainBefore = '';
+try {
+  const porcelainResult = spawnSync('git', ['-C', cwd, 'status', '--porcelain'], { windowsHide: true, encoding: 'utf8' });
+  if (porcelainResult.status === 0) porcelainBefore = (porcelainResult.stdout || '');
+} catch {}
 // kind=verify/investigate/classify/summarize は読み取り専用の依頼なので、文面に「修正」等が
 // 入っていても編集を要求していない。文面だけで判定すると「〜を修正したか検証して」が wantedEdit に
 // なり、空diff→codex の不要な astra 昇格→gemini fallback まで走って failure として台帳に残る
@@ -1586,6 +1625,35 @@ const secs = (Date.now() - started) / 1000;
 const reportedFallbackBackend = fallbackBackend ?? lastBackend;
 const diff = spawnSync('git', ['-C', cwd, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' });
 if (diff.stdout) process.stdout.write(diff.stdout);
+// 範囲外変更の検出と判定表示
+let porcelainAfter = '';
+try {
+  const porcelainResult = spawnSync('git', ['-C', cwd, 'status', '--porcelain'], { windowsHide: true, encoding: 'utf8' });
+  if (porcelainResult.status === 0) porcelainAfter = (porcelainResult.stdout || '');
+} catch {}
+if (porcelainBefore || porcelainAfter) {
+  const outsideChanges = detectOutsideScopeChanges(porcelainBefore, porcelainAfter, prompt);
+  if (outsideChanges.length) {
+    process.stderr.write(`[codex-do] 範囲外の変更: ${outsideChanges.join(', ')}\n`);
+  } else {
+    process.stderr.write('[codex-do] 範囲外の変更: なし\n');
+  }
+}
+const lastLedgerStatus = (() => {
+  try {
+    const ledgerPath = path.join(home, '.claude', 'executor-usage.jsonl');
+    const content = fs.readFileSync(ledgerPath, 'utf8').trim();
+    const lines = content.split('\n').filter(Boolean);
+    if (lines.length > 0) {
+      const last = JSON.parse(lines[lines.length - 1]);
+      return last.status || 'unknown';
+    }
+  } catch {}
+  return 'unknown';
+})();
+const diffStatLines = (diff.stdout || '').trim().split('\n').filter(Boolean);
+const numChangedFiles = diffStatLines.length > 0 ? diffStatLines.filter(l => /\|/.test(l)).length : 0;
+process.stderr.write(`[codex-do] 判定: 台帳 status=${lastLedgerStatus} / 変更ファイル ${numChangedFiles} 件 / 終了コード ${result?.status ?? 'null'}（終了コードだけで成否を決めないこと）\n`);
 // 読み取り専用の質問(説明して/調べて)では空diffが正常なので、指示自体が実装系のときだけ判定する。
 // 「空か」ではなく「この実行で変わったか」を見る。
 const treeUnchanged = treeBefore.trim() === treeSnapshot().trim() && !hasExternalWork(result);

@@ -106,6 +106,10 @@ Gmail送信前に説明対象のGoogleファイルを接続済みMCPで読む。
 
 手作業の全工程・所要時間・理由・自動化できない根拠を書く。
 
+## session-close-target-gate
+
+close-session.mjs を実行するターンでは、次セッションの開き方を書く前に `node ~/.claude/nightly-repo/tools/next-session-launch.mjs --show-target` を実行し、表示された起動先（vscode=新しいタブで Enter／inline=このタブで /clear／headless=新しいタブで /session-start）の1つだけを書く。意図的に省くときは本文に [LAUNCH-TARGET-OK]。
+
 ## model-agent-guard
 
 Agent/Task の model を sonnet/haiku に明示。実装は node tools/codex-do.mjs --prompt-file <指示> --cwd <対象>。

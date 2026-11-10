@@ -17,6 +17,8 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { runGate as evaluateQuality } from './handoff-quality-gate.mjs';
 import { evaluateHandoffActionFromRaw } from './handoff-action-gate.mjs';
 import { judge as judgeFullSteps } from './manual-request-fullsteps-gate.mjs';
+import { judge as judgeScreenEvidence } from './manual-request-evidence-gate.mjs';
+import { judge as judgeLaunchTarget } from './session-close-target-gate.mjs';
 import { check as checkBranchCoverage, formatReason as branchCoverageReason } from './handoff-branch-coverage-gate.mjs';
 import { evaluateInvestigation, failureReason } from './handoff-investigation-gate.mjs';
 import { evaluateHandoffRegret } from './handoff-regret-gate.mjs';
@@ -59,7 +61,7 @@ import { isUnchangedPeriodicReport } from './lib/unchanged-periodic-report.mjs';
 
 
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
-export const FORM_GATES = ['handoff-quality-gate', 'manual-request-fullsteps-gate', 'handoff-info-guard', 'handoff-branch-coverage-gate', 'user-burden-gate', 'handoff-investigation-gate'];
+export const FORM_GATES = ['handoff-quality-gate', 'manual-request-fullsteps-gate', 'manual-request-evidence-gate', 'handoff-info-guard', 'handoff-branch-coverage-gate', 'user-burden-gate', 'handoff-investigation-gate'];
 // Exempt presentation/repetition only. Permission, evidence, outstanding work and
 // other operational checks must still run on automatic periodic turns.
 const PERIODIC_REPORT_GATES = new Set([...FORM_GATES,
@@ -73,6 +75,10 @@ function fullStepsReason(missing) {
   return `[FULL-STEPS] 人に手作業を頼んでいますが、次が足りません: ${missing.join('・')}（§1.5.1 絶対ルール）`;
 }
 
+function screenEvidenceReason(missing) {
+  return `[SCREEN-EVIDENCE] 人に手作業を頼んでいますが、画面を見た根拠（${missing.join('・')}）が不足しています。確認済み: または 未確認: の行を入れてください`;
+}
+
 export async function evaluateGates(ctx, auditOptions = {}) {
   const unchangedPeriodicReport = isUnchangedPeriodicReport({ lastUserPrompt: ctx.lastUserPrompt ?? ctx.humanText, assistantText: ctx.assistantText });
   // Meta cron turns can share currentTurnAssistantText with an older handoff.
@@ -84,6 +90,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['handoff-quality-gate', () => evaluateQuality({ ...ctx.input, assistant_text: ctx.assistantText, transcript_raw: ctx.transcriptRaw })],
     ['handoff-action-gate', () => evaluateHandoffActionFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw })],
     ['manual-request-fullsteps-gate', () => { if (desktopLauncherPattern.test(ctx.assistantText) && judgeUserBurden(ctx.assistantText, ctx.humanText).decision === 'pass') return { decision: 'pass' }; const result = judgeFullSteps(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: fullStepsReason(result.missing), code: 'FULL-STEPS' } : { decision: 'pass' }; }],
+    ['manual-request-evidence-gate', () => { const result = judgeScreenEvidence(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: screenEvidenceReason(result.missing), code: 'SCREEN-EVIDENCE' } : { decision: 'pass' }; }],
     ['handoff-branch-coverage-gate', () => { const result = checkBranchCoverage(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: branchCoverageReason(result.missing), code: 'BRANCH-COVERAGE' } : { decision: 'pass' }; }],
     ['handoff-investigation-gate', () => { const result = evaluateInvestigation(ctx.assistantText, { transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' ? { ...result, reason: failureReason(result.missing, result.reason), code: result.code || 'INVESTIGATION' } : result; }],
     ['shallow-answer-gate', () => evaluateShallowAnswer({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw })],
@@ -117,6 +124,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw, { ...ctx.input, session_id: ctx.sessionId }, { turnText: ctx.turnText })],
     ['user-burden-gate', () => judgeUserBurden(ctx.assistantText, ctx.humanText)],
     ['substitute-capability-gate', () => judgeSubstituteCapability(ctx.assistantText)],
+    ['session-close-target-gate', () => judgeLaunchTarget(ctx.assistantText, blocks(currentTurnEntries(ctx.transcriptRaw), 'tool_use'))],
     ['doc-link-drive-guard', () => { const hits = findLocalDocLinks(ctx.assistantText); if (hits.length) return { decision: 'block', reason: formatDocLink(hits), code: 'DOC-LINK' }; const bare = findBareLocalDocPaths(ctx.assistantText); return bare.length ? { decision: 'block', reason: formatBarePathMessage(bare), code: 'DOC-LINK' } : { decision: 'pass' }; }],
   ];
   const results = [];

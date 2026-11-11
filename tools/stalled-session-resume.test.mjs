@@ -919,6 +919,67 @@ test('Claude timeout never starts fallback and cannot claim progress without tra
   assert.equal(result.outcome, 'not-in-session');
 });
 
+test('overdue ignores old attempts without via marker (3 old failures are retried)', async t => {
+  const f = await fixture(t, 1); let time = f.io.now();
+  f.io.now = () => time;
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  // 古い方式の失敗3件（via 無し）→ 再開対象になる
+  const overdueKey = JSON.stringify(['session-0', '【09/23/12:00まで】']);
+  await fs.writeFile(f.file, JSON.stringify({ version: 1, nights: {}, sessions: {}, overdue: {
+    [overdueKey]: { attempts: [
+      { outcome: 'error', reason: 'old error 1', startedAt: new Date(time - 86400000).toISOString(), endedAt: new Date(time - 86400000).toISOString() },
+      { outcome: 'error', reason: 'old error 2', startedAt: new Date(time - 86400000).toISOString(), endedAt: new Date(time - 86400000).toISOString() },
+      { outcome: 'error', reason: 'old error 3', startedAt: new Date(time - 86400000).toISOString(), endedAt: new Date(time - 86400000).toISOString() },
+    ], noProgress: 3 }
+  } }));
+  assert.equal((await run(options(['--overdue'], {}), f.io)).rows[0].skip, '');
+  assert.equal(f.calls(), 1);
+});
+test('overdue ignores old successful attempts without via marker (old success is retried)', async t => {
+  const f = await fixture(t, 1); let time = f.io.now();
+  f.io.now = () => time;
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  // 古い方式の成功1件（via 無し、outcome=progressed）→ 再開対象になる
+  const overdueKey = JSON.stringify(['session-0', '【09/23/12:00まで】']);
+  await fs.writeFile(f.file, JSON.stringify({ version: 1, nights: {}, sessions: {}, overdue: {
+    [overdueKey]: { attempts: [
+      { outcome: 'progressed', reason: 'old success', startedAt: new Date(time - 86400000).toISOString(), endedAt: new Date(time - 86400000).toISOString() },
+    ], noProgress: 0 }
+  } }));
+  assert.equal((await run(options(['--overdue'], {}), f.io)).rows[0].skip, '');
+  assert.equal(f.calls(), 1);
+});
+test('overdue three via-marked failures produce same-deadline-3-error', async t => {
+  const f = await fixture(t, 1); let time = f.io.now();
+  f.io.now = () => time;
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  f.io.execute = async () => ({ outcome: 'error', reason: 'error' });
+  const config = options(['--overdue'], {});
+  await run(config, f.io); time += 31 * 60000;
+  await run(config, f.io); time += 31 * 60000;
+  await run(config, f.io); time += 31 * 60000;
+  assert.equal((await run(config, f.io)).rows[0].skip, '同一期限3回エラー');
+  // 3回の実行が行われたことを ledger で確認
+  const ledger = await f.ledger();
+  const overdueKey = Object.keys(ledger.overdue)[0];
+  assert.equal(ledger.overdue[overdueKey].attempts.filter(a => a.via).length, 3);
+});
+test('overdue via-marked success produces same-deadline-processed', async t => {
+  const f = await fixture(t, 1); let time = f.io.now();
+  f.io.now = () => time;
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  f.io.execute = async () => ({ outcome: 'progressed', reason: 'done' });
+  const config = options(['--overdue'], {});
+  await run(config, f.io);
+  assert.equal((await run(config, f.io)).rows[0].skip, '同一期限処理済み');
+  // 1回だけ実行されたことを ledger で確認
+  const ledger = await f.ledger();
+  const overdueKey = Object.keys(ledger.overdue)[0];
+  assert.equal(ledger.overdue[overdueKey].attempts.filter(a => a.via).length, 1);
+});
+
 test('two-hour overdue ask is retried after inbox failure and deduplicated after success', async t => {
   const f = await fixture(t, 1); f.records[0].displayTitle = '【09/23/12:00まで】Task';
   let calls = 0;

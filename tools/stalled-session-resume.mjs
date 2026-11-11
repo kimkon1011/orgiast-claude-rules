@@ -168,7 +168,7 @@ export function overdueSkipReason(record, entry, closed, mtimeMs, now, activeMs)
   if (common) return common;
   const wait = waitDeadline(record.displayTitle, now);
   if (!wait || wait.at > now) return '期限切れ待機ではない';
-  const attempts = (entry.attempts ?? []).filter(a => a.outcome !== 'not-in-session' && a.resumedInSession !== false);
+  const attempts = (entry.attempts ?? []).filter(a => a.via && a.outcome !== 'not-in-session' && a.resumedInSession !== false);
   if (attempts.some(a => OVERDUE_SUCCESS_OUTCOMES.has(a.outcome))) return '同一期限処理済み';
   if (attempts.length >= 3 && attempts.every(a => !OVERDUE_SUCCESS_OUTCOMES.has(a.outcome))) return '同一期限3回エラー';
   if (attempts.length) {
@@ -479,7 +479,7 @@ export async function run(config = options(), io = {}) {
         delete entry.skipReason;
         delete entry.deferredAt;
         // 起動前に消費を確定し、親が落ちても同じ晩に二重実行しない。
-        const attempt = { night, startedAt: new Date(now()).toISOString(), outcome: 'interrupted', executor: 'not-started' };
+        const attempt = { night, startedAt: new Date(now()).toISOString(), outcome: 'interrupted', executor: 'not-started', ...(overdue ? { via: 'claude-resume' } : {}) };
         entry.attempts.push(attempt);
         entry.noProgress++;
         await save(ledger);
@@ -547,7 +547,7 @@ export async function run(config = options(), io = {}) {
           }
           // overdue で同一期限3回失敗したら kim-inbox に info を1回だけ積む
           // 今回の attempt が成功扱い（progressed/no-progress）の場合は通知しない
-          if (overdue && entry.attempts.filter(a => a.outcome !== 'not-in-session').length >= 3 && !entry.notified3Error && !OVERDUE_SUCCESS_OUTCOMES.has(attempt.outcome)) {
+          if (overdue && entry.attempts.filter(a => a.via && a.outcome !== 'not-in-session').length >= 3 && !entry.notified3Error && !OVERDUE_SUCCESS_OUTCOMES.has(attempt.outcome)) {
             entry.notified3Error = true;
             const overdueMsg = `【期限切れ再開 3回失敗】${record.displayTitle} (${record.sessionId})\n期限: ${wait?.label || ''}\n最終 executorAttempts: ${JSON.stringify(attempt.executorAttempts ?? [])}\n最終 outcome: ${attempt.outcome}\n最終 reason: ${attempt.reason || ''}`;
             try { await (io.notify ?? notifyKim)(overdueMsg, { home }); }

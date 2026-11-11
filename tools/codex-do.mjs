@@ -1659,7 +1659,6 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
         // keepAtLeastOne が死んだ組み合わせを丸ごと復活させていた（2026-11-02 実測:
         // deepseek は 10:13:40 に 568秒で成功しているのに、その後の 12:23 も timeout 扱いで
         // 300秒+600秒を再試行）。成功を残せば冷却は実績どおり即座に解ける。
-        if (outcome === 'ok' || outcome === 'timeout' || outcome === 'cli_missing' || outcome === 'blocked') recordFallbackBackendOutcome(home, { backend: backend.name, outcome });
         if (outcome === 'blocked') {
           console.error(`[codex-do] backend=${backend.name} がポリシー拒否で停滞しているため ${fallbackChain.at(-1).secs} 秒で打ち切って次へ`);
         } else if (outcome === 'timeout') {
@@ -1669,12 +1668,34 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
         } else if (outcome === 'exhausted') {
           console.error(`[codex-do] backend=${backend.name} が上限/エラーで使えないため次へ`);
         }
-        if (decision.advance) continue;
+        if (decision.advance) {
+          if (outcome === 'ok' || outcome === 'timeout' || outcome === 'cli_missing' || outcome === 'blocked') recordFallbackBackendOutcome(home, { backend: backend.name, outcome });
+          continue;
+        }
+        // 実装系指示で終了コード 0 でも変更ファイルが 0 件の場合は「変更なし」として次のバックエンドへ進む
+        // （2026-11-11 実測: openrouter-free が「実装完了」と答えて変更0件）。
+        // 末尾のバックエンドではスキップせず、後続の shouldFlagEmptyFallbackDiff に任せる（既存テスト互換）。
+        const treeUnchangedNow = wantedEdit && !result.timedOut && treeBefore.trim() === treeSnapshot().trim() && !hasExternalWork(result);
+        if (!isLast && outcome === 'ok' && treeUnchangedNow) {
+          const lastEntry = fallbackChain.at(-1);
+          if (lastEntry) lastEntry.outcome = 'no_changes';
+          // recordFallbackBackendOutcome は no_changes では記録しない（ok と偽らないため）。
+          console.error(`[codex-do] backend=${backend.name} が終了コード 0 で終了しましたが変更ファイルが 0 件のため次のバックエンドへ移ります`);
+          continue;
+        }
+        if (outcome === 'ok' || outcome === 'timeout' || outcome === 'cli_missing' || outcome === 'blocked') recordFallbackBackendOutcome(home, { backend: backend.name, outcome });
         if (outcome === 'ok') {
           fallbackBackend = backend;
         }
         // 上限/エラー以外の失敗(実装エラー等)は次のバックエンドへ落とさず、この結果で止める。
         break;
+      }
+      // 全バックエンドが no_changes で終わった場合、末尾の result が exit 0 のまま残るので
+      // 非ゼロに矯正する（次の節で樹木不変＋wantedEdit の判定が走り result.status=1 になるが、
+      // shouldAdvanceToNextBackend が status=0 で advance=false を返すとループがここまで来ない
+      // ケースをカバーするため、確実に非ゼロにする）。
+      if (wantedEdit && !fallbackBackend && treeBefore.trim() === treeSnapshot().trim() && !hasExternalWork(result)) {
+        result.status = 1;
       }
     }
   }

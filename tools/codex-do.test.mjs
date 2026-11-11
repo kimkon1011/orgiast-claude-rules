@@ -1250,6 +1250,66 @@ test('shouldAdvanceToNextBackend は次のバックエンドへ進む結果を�
   assert.deepEqual(shouldAdvanceToNextBackend({ status: 0, cliMissing: true }), { advance: false, outcome: 'ok' });
 });
 
+// フォールバック連鎖での変更0件検出のテスト群（2026-11-11 実測: openrouter-free が exit 0 で
+// 変更0件を返す問題への対策）。
+test('implement + 全バックエンドが変更0件 → 非ゼロ終了し、次のバックエンドへ進むメッセージが出る', () => {
+  // 2つのフォールバック backend が両方とも exit 0 だが変更0件。
+  const mockResults = [
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: '' },
+    { status: 0, output: '実装完了しました', stderr: '' },
+    { status: 0, output: 'done', stderr: '' },
+  ];
+  const home = workDir();
+  const result = run(['--force-native', '--cwd', home, '--kind', 'implement', '実装して'], {
+    home,
+    env: {
+      CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
+      ...geminiOnPathEnv(),
+      GEMINI_API_KEY: 'test',
+      OPENROUTER_API_KEY: 'sk-test',
+    },
+  });
+  assert.notEqual(result.status, 0);
+  // 先頭バックエンド(cheap-code:deepseek)が変更0件 → 次のバックエンドへ進んだ証拠
+  assert.match(result.stderr, /変更ファイルが 0 件のため次のバックエンドへ移ります/);
+  // 末尾バックエンド(gemini-cli)も変更0件
+  assert.match(result.stderr, /1行も変更していません|変更ファイル 0 件/);
+});
+test('implement + 変更0件の1 backendのみでも非ゼロ終了（最後の1件は shouldFlagEmptyFallbackDiff で捕捉）', () => {
+  // フォールバック backend が1件だけ（cheap-code:deepseek）で exit 0 だが変更0件。
+  // isLast=true なのでループ内ではスキップせず、後続の shouldFlagEmptyFallbackDiff が捕捉する。
+  const mockResults = [
+    { status: 1, output: "You've hit your usage limit. Please try again later.", stderr: '' },
+    { status: 0, output: '実装完了しました', stderr: '' },
+  ];
+  const home = workDir();
+  const result = run(['--force-native', '--cwd', home, '--kind', 'implement', '実装して'], {
+    home,
+    env: {
+      CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
+      GEMINI_API_KEY: '',
+      OPENROUTER_API_KEY: 'sk-test',
+    },
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /1行も変更していません/);
+});
+test('review で変更0件でも終了コード 0（非 implement は空 diff を許容する）', () => {
+  const mockResults = [
+    { status: 0, output: '問題なし', stderr: '' },
+  ];
+  const home = workDir();
+  const result = run(['--force-native', '--cwd', home, '--review', 'レビューして'], {
+    home,
+    env: {
+      CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
+      GEMINI_API_KEY: '',
+      OPENROUTER_API_KEY: 'sk-test',
+    },
+  });
+  assert.equal(result.status, 0);
+});
+
 test('loadGeminiKey は process.env、.claude/gemini.env、~/.gemini/.env の順で読む', () => {
   withEnvKeysCleared(() => {
     const dir = makeHomeWithEnv({

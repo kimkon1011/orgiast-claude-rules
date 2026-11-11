@@ -124,12 +124,16 @@ test('Windows reaper only kills exact stale poll identities, rechecks races, and
       $found = $rows | Where-Object ProcessId -eq $Id
       $start = if ($Id -eq 133) { [DateTime]::UtcNow } else { $found.CreationDate }
       $p = [pscustomobject]@{ Id=$Id; Handle=1; StartTime=$start }
-      $p | Add-Member ScriptMethod Kill { if ($this.Id -notin @(101,102)) { throw 'unexpected kill' }; [IO.File]::AppendAllText(${quote(path.join(home, 'kills.txt'))}, [string]$this.Id + ',') }
+      $p | Add-Member ScriptMethod Kill { [IO.File]::AppendAllText(${quote(path.join(home, 'kills.txt'))}, [string]$this.Id + ','); if ($this.Id -notin @(101,102)) { throw 'unexpected kill' } }
       $p | Add-Member ScriptMethod WaitForExit { param($ms) return $true }
       $p | Add-Member ScriptMethod Dispose { }
       return $p
     }
-    & ${quote(fileURLToPath(new URL('./lib/fleet-poll-reaper.ps1', import.meta.url)))} -PollScript ${quote(script)} -NodeExe ${quote(node)} -CallerPid 42 -MaxAgeMs ${POLL_REAP_AFTER_MS} -LogFile ${quote(log)}
+    # The scheduled-task wrapper holds the primary log open for redirected output.
+    $logHandle = [IO.File]::Open(${quote(log)}, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+    try {
+      & ${quote(fileURLToPath(new URL('./lib/fleet-poll-reaper.ps1', import.meta.url)))} -PollScript ${quote(script)} -NodeExe ${quote(node)} -CallerPid 42 -MaxAgeMs ${POLL_REAP_AFTER_MS} -LogFile ${quote(log)}
+    } finally { $logHandle.Dispose() }
     foreach ($e in $Error) { [Console]::Error.WriteLine($e.Exception.Message) }
   `);
   const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', wrapper], { encoding: 'utf8', timeout: 15_000, windowsHide: true });

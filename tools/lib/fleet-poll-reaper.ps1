@@ -40,7 +40,13 @@ foreach ($candidate in @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe
         if (-not $process.WaitForExit(1000)) { continue }
         $stopped++
         $line = [DateTime]::UtcNow.ToString('o') + ' fleet-mail: stale-poll-reaped pid=' + $fresh.ProcessId + ' startedAt=' + $startedAt
-        [IO.File]::AppendAllText($LogFile, $line + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+        # run-hidden redirects output to this file while poll is running.
+        # AppendAllText denies an existing writer; allow shared append instead.
+        $stream = [IO.File]::Open($LogFile, [IO.FileMode]::Append, [IO.FileAccess]::Write, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+        try {
+            $bytes = [Text.UTF8Encoding]::new($false).GetBytes($line + [Environment]::NewLine)
+            $stream.Write($bytes, 0, $bytes.Length)
+        } finally { $stream.Dispose() }
     } catch {
         # No broad fallback kill. A race or inaccessible process is left alone.
         [Console]::Error.WriteLine('fleet-mail: stale poll candidate recovery failed=1')

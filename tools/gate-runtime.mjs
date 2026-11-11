@@ -39,6 +39,8 @@ if (name === 'mail-send-approval-gate' && entry?.rollout === 'deny' && entry.imm
     && entry.immediatePolicy === '2026-10-30 user-PC で社外宛返信の URL が google.com/url?q= に書き換わった実害') return 'deny';
   if (['app-llm-cost-gate', 'claude-fallback-report-gate'].includes(name) && entry?.rollout === 'deny'
     && entry.immediatePolicy === '2026-11-02 kim 指示: アプリからの Claude API 利用を全PC全アカウント全プロジェクトで禁止') return 'deny';
+  if (name === 'unrequested-automation-gate' && entry?.rollout === 'deny'
+    && entry.immediatePolicy === '2026-11-11 kim 指示: 依頼していない自動投稿・定期通知を全PC全アカウントで禁止') return 'deny';
   if (name === 'response-language-gate' && entry?.rollout === 'deny'
     && entry.immediatePolicy === '2026-10-26 cr 指示: Stop hook の書き直しで英語へ逸脱した実害') return 'deny';
   if (entry?.legacy === true && entry.rollout === 'deny') return 'deny';

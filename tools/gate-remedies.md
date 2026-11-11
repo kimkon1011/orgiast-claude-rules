@@ -345,6 +345,11 @@ SendUserFile、コードブロック内のローカルパス、チャット添�
 
 削除対象のパス/IDを全件チャットに列挙し、その後の kim の明示許可を得る。globや変数は実際の対象を展開して列挙し、具体的なパスで実行する。OS一時フォルダ・指定生成物・同ターンに新規作成成功を確認できたファイルは対象外。
 
+## unrequested-automation-gate
+
+人へ自動で届く通知・定期実行を追加する場合は、設定の追加ブロック内に「REQUESTED-BY: <誰が> YYYY-MM-DD」または「<誰が> 指定 YYYY-MM-DD」を明記する。
+依頼元が無い場合は AskUserQuestion または kim-inbox で可否を確認する。許可が出るまで追加しない。
+
 ## progress-cron-gate
 
 自動進行・待機を約束した対話セッションでは CronCreate で定期進捗を登録する。例: cron `17 9-19/2 * * *`、prompt は「約束した対象を実測して変化だけ5行以内で報告。kim に操作は求めない」。期限付きの待ちは one-shot も登録する。同一セッションの block は1回まで。headless・非対話 entrypoint・サブエージェントは対象外。状態は `~/.claude/progress-cron-gate-state/` に保存。

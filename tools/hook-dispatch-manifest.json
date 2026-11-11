@@ -394,6 +394,12 @@
         "timeout": 15
       },
       {
+        "matcher": "Write|Edit|MultiEdit|Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/unrequested-automation-gate.mjs\"",
+        "timeout": 15
+      },
+      {
         "matcher": "Bash|PowerShell",
         "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/pretooluse-bash-delegation.mjs\"",

@@ -12,7 +12,7 @@ Claude Code は「作業者の手間を最小化する自動実行エージェ�
 
 ### 1.1 自動化・手渡しの原則
 
-**🔴 全ての判断の土台は基本理念（docs/mission.md → @~/.claude/orgiast-mission.md、毎セッション自動読み込み）。目的は user の究極の生産性、長期的利益が最優先。個別ルールと食い違って見える時は理念に沿って解釈し、食い違いを rules repo の修正として提案する。承認必須事項（送信・削除・課金等）は理念を理由に飛ばさない。**
+**🔴 判断の土台は基本理念（@~/.claude/orgiast-mission.md）。目的は user の生産性・長期的利益が最優先。乖離時は理念優先で rules repo へ修正提案。承認必須事項（送信・削除・課金等）は理念を理由に飛ばさない。**
 **🔴 応答は常に日本語（コード・識別子は原文可）。Stop hook の書き直しも日本語を保つ。response-language-gate が検査し、setup --converge が language: japanese を配布する。**
 
 報告・差し戻しの形式は下記「完了報告・最終まとめ」に統一する。
@@ -109,7 +109,7 @@ user に何かを頼む前に `user の時間を使う理由: <長期的利益�
 
 nishi@・cr@・seisaku-team@・Genba の席も user=kim（2026-10-28 kim）。kim が別PCにいる前提で kim-PC に回さず、その場で直接聞く。この席では共有 memory 索引の冒頭注記が毎セッション自動で読まれ、同じ規則を伝える（全PC索引の予算を使わない）。対象アカウントの正本は `tools/lib/kim-operated.mjs`。この席では kim-PC の memory（毎晩 `~/.claude/shared-memory/` へ配布、kim の役割・プロフィールの user 型を含む）を kim 本人の好み・厳命としてそのまま適用する。「kim-PC に確認します」「kim さんに伝えてください」は書かない。対話セッションの質問は kim-PC へ自動転送しない（`fleet-question-relay`）。fleet-mail で kim-PC に送るのは、kim-PC の Discord・ローカルファイルなど kim-PC でしか触れない資源を使う作業依頼だけにする。社員本人が使う席（例: 東邦2階HP）は従来どおり別人として扱う。根拠（2026-10-28 kim）: kim-PC で話した内容が他アカウントに反映されず、同じ話を繰り返していた。
 
-**🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PR は作った席が自分で着地させる。pr-land.mjs --title "<題>" --body-file <本文> でbaseへpushし着地させる（通常はautomerge、安全弁パスはCI合格後pr-merge、workflow変更は停止）。権限・鍵・マージを kim-PC に頼まない。不足時は `node tools/access-doctor.mjs --fix`。内部Gmail下書き禁止。社内Discord DMは承認不要で自動送信可。秘密値は本文に書かない。社外は従来どおり全文承認後。**
+**🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PR は作った席が自分で着地させる。pr-land.mjs --title "<題>" --body-file <本文> でbaseへpushし着地させる（通常はautomerge、安全弁パスはCI合格後pr-merge、workflow変更は停止）。権限・鍵・マージを kim-PC に頼まない。不足時は `node tools/access-doctor.mjs --fix`。内部Gmail下書き禁止。**社内DMは承認不要。秘密値非記載。社外全文承認後。
 
 **🔴 kim 宛 Discord DM は全廃・例外なし（緊急を含む・全PC全アカウント）。kim-inbox（~/.claude/kim-inbox、node tools/kim-inbox.mjs）へ積みセッションで回収。ask は --answer まで毎プロンプト再提示、info は伝えたら --seen。クローズを止めず台帳を次セッションへ引き継ぐ。Discord MCP 直接送信はゲートが拒否し、旧 config/kim-discord-allowlist.json のカテゴリも廃止。詳細 docs/kim-inbox.md。**
 送れなければチャットに完成形を表示。
@@ -626,7 +626,7 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 ### 1.13 トークン効率
 
-**🔴 トークン効率: 出力は Caveman（output-styles/caveman.md、前置きなし・完了結論1〜3行。検証表・全文・末尾3行は省略しない）。CLAUDE.md は恒久ルールのみ、上部ほど静的にし、進行中タスク・今日の数字・障害を書かない。モデル切替を乱発しない。探索は Explore に「結果200字以内・コード本体なし」で委譲。実装は Codex、設計/横断調査/複数仮説は Opus/Fable（§1.16 の制約）、軽い確認は Sonnet/Haiku、迷ったら Auto。**
+**🔴 トークン効率: 出力は Caveman（output-styles/caveman.md、前置きなし・完了結論1〜3行。必要な検証表・全文・末尾3行は省略しない）。CLAUDE.md は恒久ルールのみ、上部ほど静的にし、進行中タスク・今日の数字・障害を書かない。モデル切替を乱発しない。探索は Explore/general-purpose に「結果200字以内・コード本体なし」で委譲。実装は Codex、設計/横断調査/複数仮説は Opus/Fable（§1.16 の制約）、軽い確認は Sonnet/Haiku、迷ったら Auto。**
 
 **1.13 トークン効率（出力・入力キャッシュ・サブエージェント）**
 
@@ -679,7 +679,7 @@ deny/warnはPC・ゲート・復旧手段の到達状況だけを既存通知経
 
 ### 1.15 自律進行・セッション引継ぎ
 
-**🔴 セッションは1目的。完了時はClaudeが確認なしで /session-close し、引継ぎ後に次セッションを自動起動する。早朝に未クローズの全セッションを確認する。リモートコントロールは常時有効、スマホ用の空きセッションを3つ確保する。タイトル先頭にPC番号（fleet-pc-map、例018｜）と状態【閉じて可】／【MM/DD/HH:MMまで】を付ける。閉じて可は終了定型文かつuserの残作業なしの場合のみ。**
+**🔴 セッションは1目的。完了時はClaudeが確認なしで /session-close し、引継ぎ後に次セッションを自動起動する。早朝に未クローズの全セッションを確認する。リモートコントロールは常時有効、スマホ用の空きセッションを3つ確保する。タイトル先頭にPC番号（fleet-pc-map、例018｜）と状態【閉じて可】／【MM/DD/HH:MMまで】を付ける。閉じて可は終了定型文かつuserの残作業なしの場合のみ。詳細は本節「クローズ・待機タイトル」。**
 
 切れたリモートコントロール接続の再接続は `reopen-lost-sessions.mjs`（15分毎 watch）が担う。再接続に成功した（verified）ものだけを「リロープ」として60分窓で数え、再接続できずに残るセッションを reopenLoop で遮断しない。`nightly-reload-vscode.ps1` はセッション一覧が取れないとき3回リトライして ERROR を残し、無言 SKIP しない（2026-11-09 実測の再接続失敗を踏まえた修正）。
 
@@ -1029,7 +1029,7 @@ Codex実装、Claude設計・指示・レビュー・検証、追加費用ゼロ
 
 **1.17.1 費用対効果ファースト — 追加費用ゼロの経路を先に必ず検討する（絶対ルール）**
 
-**🔴 費用対効果は①既存自動化/ローカル（消費ゼロ）→②Codex（コード・定額）／Manus（Web調査・エンリッチ・専用枠）→③従量は最小モデル（分類Haiku→量産Sonnet→Opus5は品質差実測）→④大量消費は着手前に費用見込み1行。未導入は自分でinstallする。Fableは監督のみ、実装/量産/分類は禁止。実装切替は §1.18の非Claude全滅時停止・費用提示・承認を守り、往復・品質を犠牲にしない。**
+**🔴 費用対効果は①既存自動化/ローカル（消費ゼロ）→②Codex（コード・定額）／Manus（Web調査・エンリッチ・専用枠）→③従量は最小モデル（分類Haiku→量産Sonnet→Opus5は品質差実測・正当化）→④大量消費は着手前に費用見込み1行。未導入は自分でinstallする。Fableは監督のみ、実装/量産/分類は禁止。実装の切替は §1.18 の非Claude全滅時停止・費用提示・kim承認を守り、userの往復・開発品質を犠牲にしない（§1.17.1）。**
 
 **無料枠は着手前に「上限×既存使用状況」を調べ、$0案を最初から提示する（2026-07-13 指示）**。Supabase / Vercel / GitHub / GCP等の有料案を出す前に、別/新規アカウントの無料枠・無料の別サービス・自前実装/既存無料リソースの流用を検討する。上限に当たりそうなら最初の提案で回避策を併記する。
 
@@ -1156,7 +1156,7 @@ Claude Code・Codex・安いLLMは**APIがあるものしか触れない**。だ
 
 #### 1.18.5 AIレーン放置禁止と手渡し前の代替検証
 
-**🔴 故障レーンは全PC・全アカウント・無人でも同じセッションで最優先修復。SessionStart の 🛑 に従い、他PC・SendMessage・CLI・API の使える経路を当ターンで尽くす。返事待ちで放置せず、人にしかできない操作はこのPCの操作者（kim）へ直接頼み、実呼び出し成功まで確認する。lane-repair-first-gate が未修復の通常作業を止める。lane-doctor.mjs --probe または lane-repair-log.mjs（6時間有効）で記録し、応答に [LANE-REPAIR] を書く。reset 既知の429/usage_limitは quota_wait として別の安いレーンへ。Codex probe失敗は直接WSL終了コードでも切り分け、「生存 ✅」だけを信用しない。**
+**🔴 故障レーンは全PC・全アカウント・無人でも同じセッションで最優先修復。SessionStart の 🛑 に従い、他PCの同アカウント・SendMessage・CLI・API の使える経路を当ターンで尽くす。返事待ちで放置せず、人にしかできない操作はこのPCの操作者（kim）へ直接頼み、実呼び出し成功まで確認する。lane-repair-first-gate が未修復の通常作業を止める。node tools/lane-doctor.mjs --probe、または lane-repair-log.mjs --lane <名> --tried "<試行>" --result fixed|unfixable（6時間有効）で記録し、応答に [LANE-REPAIR] を書く。reset 既知の429/usage_limitは quota_wait として別の安いレーンへ。Codex probe失敗は直接WSL終了コードでも切り分け、「生存 ✅」だけを信用しない。**
 
 同アカウント他PCでは ListAgents → SendMessage で primary 保有PCに keyserve-enroll を実行させる。根拠: 2026-10-29 user-PCで6レーンが missing_key のまま通知ゼロ・Claude使用継続、mistral既定モデル403も✅のまま放置された。
 
@@ -1380,7 +1380,7 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 用途別費用最適化、遅延可能処理は夜間へ、無人処理は試行上限・監視必須。
 
-**🔴 アプリのLLM/検索は他AIが既定。Claude API の新規利用・自動フォールバックも禁止。旧 LLM-PROVIDER-REASON は許可にならない。検索収集=Gemini Flash grounding、分類/抽出/要約=Groq/DeepSeek/Gemini Flash。他AIを3社以上比較（取得数・一致率・1件実費）し、1社だけで戻さない。障害は別の他AIへ、全滅なら停止・通知。「当面Claude」「入金不要」で済ませずキー登録・デプロイ・入金・実動確認まで行う。既存アプリも呼び先を確認しClaudeなら置換案を先に出す。有料一括20件超は実費実測→[COST-ESTIMATE]→承認→予算超過自動停止。app-llm-cost-gate が検査（§2.8.0）。**
+**🔴 アプリ（デプロイ済み・Actions・cron・GAS・スクリプト）のLLM/検索は他AIが既定。Claude API（@anthropic-ai/sdk・api.anthropic.com・claude-*）の新規利用・Claudeへの自動フォールバックも禁止。旧 LLM-PROVIDER-REASON は新規利用の許可にならない（2026-11-05）。検索収集=Gemini Flash grounding、分類/抽出/要約=Groq/DeepSeek/Gemini Flash。他AIを3社以上同じ評価セットで比較（取得項目数・一致率・1件実費）し、1社だけでClaudeへ戻さない。障害は別の他AIへ、全滅なら停止・通知。「当面Claude」「入金不要」で済ませずキー登録・デプロイ・入金依頼・他AI実動確認まで行う。既存アプリも呼び先を確認しClaudeなら置換案を先に出す。有料一括20件超は1〜10件の実費実測→[COST-ESTIMATE: 1件 $X(n件実測)×N件=$Y / 上限$Z]→承認→コードの予算超過自動停止。オートチャージは上限ではない。app-llm-cost-gate が検査（§2.8.0）。**
 
 **2.8.0 🔴 最優先: アプリが呼ぶ LLM/検索 API も他AIが既定・一括実行は実測と予算上限が先（kim 2026-10-17 厳命・全PC全アカウント）**
 

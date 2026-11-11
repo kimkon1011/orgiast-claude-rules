@@ -729,6 +729,21 @@ export const policyStallMinElapsedSecs = (env = {}) => positiveEnv(env.CODEX_DO_
 // タイムアウトで kill してから 'close' を待つ猶予。超えたら pipe を破棄して打ち切る。
 export const timeoutKillGraceMs = (env = {}) => positiveEnv(env.CODEX_DO_TIMEOUT_KILL_GRACE_MS, 5000);
 
+// Windows のスリープ/休止中は JS のタイマーも子プロセスも停止する一方、Date.now() は
+// 暦時間だけ進む。復帰直後に timeout が発火した実測では、700/1800 秒予算の native codex が
+// 80639/80871 秒として台帳へ記録された。timeout 済み試行の消費時間は「与えた予算 + kill 猶予」
+// を上限にする。wallSecs は診断用に別途残し、通常終了の所要時間は従来どおり実測値を使う。
+export function boundedExecutionSecs(elapsedSecs, { timedOut = false, timeoutSecs, killGraceMs = 5000 } = {}) {
+  const elapsed = Number(elapsedSecs);
+  if (!Number.isFinite(elapsed) || elapsed < 0) return 0;
+  const budget = Number(timeoutSecs);
+  const grace = Number(killGraceMs) / 1000;
+  if (timedOut && Number.isFinite(budget) && budget > 0 && Number.isFinite(grace) && grace >= 0) {
+    return Math.min(elapsed, budget + grace);
+  }
+  return elapsed;
+}
+
 export function remainingPrimaryBudgetSecs(budgetSecs, elapsedSecs) {
   return Math.max(1, budgetSecs - elapsedSecs);
 }
@@ -1095,7 +1110,18 @@ function execute(command, commandArgs, options = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(timer); clearTimeout(forceTimer); clearInterval(stallTimer);
-      resolve(value);
+      const wallSecs = (Date.now() - callStarted) / 1000;
+      resolve({
+        ...value,
+        elapsedSecs: boundedExecutionSecs(wallSecs, {
+          timedOut: value?.timedOut === true,
+          timeoutSecs: callTimeoutSeconds,
+          killGraceMs: timeoutKillGraceMs(process.env),
+        }),
+        ...(value?.timedOut === true && wallSecs > callTimeoutSeconds + timeoutKillGraceMs(process.env) / 1000
+          ? { wallSecs }
+          : {}),
+      });
     };
     const timer = setTimeout(() => {
       timedOut = true;
@@ -1338,7 +1364,9 @@ async function executeCodex() {
     const attemptStarted = Date.now();
     logCodex();
     result = await launchCodex(codexArgs, primaryStarted);
-    const elapsed = (Date.now() - attemptStarted) / 1000;
+    const elapsed = Number.isFinite(result?.elapsedSecs)
+      ? result.elapsedSecs
+      : (Date.now() - attemptStarted) / 1000;
     seconds += elapsed;
     attempts = attempt;
     // そもそも起動できていない(launched:false)なら再試行しても結果は変わらない。
@@ -1493,7 +1521,9 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
           // stderrTail は末尾200字のため拒否回数が欠ける。打ち切り判定と同じ実測値（全 stderr の拒否回数・出力文字数）を残す。
           policyDenials: countPolicyDenials(result.stderr),
           outChars: result.outputChars || 0,
-          secs: Number(((Date.now() - attemptStarted) / 1000).toFixed(3)),
+          secs: Number((Number.isFinite(result?.elapsedSecs)
+            ? result.elapsedSecs
+            : (Date.now() - attemptStarted) / 1000).toFixed(3)),
           // この試行に実際に与えた予算。delegation-health の timeout 判定が
           // 「900 秒固定」ではなく与えた予算で判定できるようにする（2026-10-22）。
           budgetSecs: backendTimeout,

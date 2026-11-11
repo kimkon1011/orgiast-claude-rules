@@ -59,7 +59,7 @@ test('0 stalled: no execution or notification', async t => {
   const f = await fixture(t, 0); await run(options([], {}), f.io); assert.equal(f.calls(), 0); assert.equal(f.notices(), 0);
 });
 test('nightly limit is enforced across repeated invocations', async t => {
-  const f = await fixture(t); await run(options(['--limit', '3'], {}), f.io); await run(options(['--limit', '3'], {}), f.io); assert.equal(f.calls(), 3); assert.equal(f.notices(), 2);
+  const f = await fixture(t); await run(options(['--limit', '3'], {}), f.io); await run(options(['--limit', '3'], {}), f.io); assert.equal(f.calls(), 3); assert.equal(f.notices(), 1);
 });
 test('three attempts without progress persist skip reason', async t => {
   const f = await fixture(t, 1);
@@ -107,7 +107,26 @@ test('no executor stops the night without error or consuming budget', async t =>
 });
 test('recently active sessions excluded using injected stat', async t => {
   const f = await fixture(t); f.io.stat = async () => ({ mtimeMs: f.io.now() - 60000 });
-  assert.ok((await run(options([], {}), f.io)).rows.every(r => r.skip === 'active')); assert.equal(f.calls(), 0);
+  assert.ok((await run(options([], {}), f.io)).rows.every(r => r.skip === 'active')); assert.equal(f.calls(), 0); assert.equal(f.notices(), 0);
+});
+test('all skipped records without meaningful state do not notify', async t => {
+  const f = await fixture(t, 3);
+  f.io.loadClosed = async () => ({ sessions: { 'session-1': {} } });
+  f.io.stat = async file => ({ mtimeMs: file === 'file-0' ? f.io.now() - 60000 : f.io.now() - 86400000 });
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  await fs.writeFile(f.file, JSON.stringify({ version: 1, nights: {}, sessions: {
+    'session-2': { attempts: [{ night: '2026-09-24' }], noProgress: 0 }
+  } }));
+  const r = await run(options([], {}), f.io);
+  assert.deepEqual(r.rows.map(row => row.skip), ['active', 'closed', '今晩処理済み']);
+  assert.equal(r.results.length, 0); assert.equal(f.notices(), 0);
+});
+test('zero results still notify when records are deferred by the deadline', async t => {
+  const f = await fixture(t, 2);
+  const r = await run(options(['--deadline', '02:00'], {}), f.io);
+  assert.equal(r.results.length, 0);
+  assert.ok(r.rows.every(row => row.skip === '締切超過(翌晩へ)'));
+  assert.equal(f.notices(), 1);
 });
 test('same night never resumes the same session twice', async t => {
   const f = await fixture(t, 1); await run(options([], {}), f.io); await run(options([], {}), f.io); assert.equal(f.calls(), 1);

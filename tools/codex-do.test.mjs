@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { skipCoolingBackends } from './fallback-backend-health.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, boundedExecutionSecs, parseCodexOutput } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -22,6 +22,14 @@ test('remainingPrimaryBudgetSecs は起動前経過を主経路予算から差�
   assert.equal(remainingPrimaryBudgetSecs(210, 16), 194);
   assert.equal(remainingPrimaryBudgetSecs(210, 209.5), 1);
   assert.equal(remainingPrimaryBudgetSecs(210, 240), 1);
+});
+
+test('スリープをまたいだ timeout の記録秒数は予算+kill猶予を超えない', () => {
+  // 2026-11-07 実測: native codex の主経路が Windows の休止をまたぎ、
+  // 700秒予算で80638.755秒、1800秒予算で80871.31秒と誤記録された。
+  assert.equal(boundedExecutionSecs(80638.755, { timedOut: true, timeoutSecs: 700, killGraceMs: 5000 }), 705);
+  assert.equal(boundedExecutionSecs(80871.31, { timedOut: true, timeoutSecs: 1800, killGraceMs: 5000 }), 1805);
+  assert.equal(boundedExecutionSecs(42.5, { timedOut: false, timeoutSecs: 700, killGraceMs: 5000 }), 42.5);
 });
 
 function run(args, options = {}) {

@@ -1,8 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-export const MAIL_POLL_BUDGET_MS = 90_000;
-export const MAIL_POLL_REQUEST_MS = 60_000;
+export const MAIL_POLL_BUDGET_MS = 180_000;
+export const MAIL_POLL_REQUEST_MS = 180_000;
 export const RECEIPT_SCAN_BUDGET_MS = 15_000;
 
 export function timeoutError() {

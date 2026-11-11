@@ -148,6 +148,44 @@ test('probeBrowserSessions: loggedIn=false + needsHumanSince calculates days and
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+test('probeBrowserSessions: remedy does not contain https://<service>.com format and uses fixed service mapping', async () => {
+  const home = createTestHome();
+  const now = Date.now();
+
+  const services = ['booking', 'beds24', 'airbnb', 'nomu-gmail', 'unknown-svc'];
+  for (const svc of services) {
+    fs.writeFileSync(path.join(home, '.claude', `${svc}-session-state.json`), JSON.stringify({
+      checkedAt: new Date(now).toISOString(),
+      loggedIn: false,
+    }));
+  }
+
+  const res = await probeBrowserSessions({ home, now });
+  assert.equal(res.length, services.length);
+
+  for (const item of res) {
+    assert.equal(/https:\/\/[^/]+\.com/.test(item.remedy), false, `remedy should not contain https://<service>.com: ${item.remedy}`);
+    assert.equal(item.remedy.includes('open-url-as.ps1'), false, `remedy should not contain open-url-as.ps1: ${item.remedy}`);
+  }
+
+  const booking = res.find(r => r.id === 'browser:booking');
+  assert.ok(booking.remedy.includes('Booking.comログイン窓'), `booking remedy should include 'Booking.comログイン窓', got: ${booking.remedy}`);
+
+  const beds24 = res.find(r => r.id === 'browser:beds24');
+  assert.equal(beds24.remedy, 'node tools/browser/beds24-keepalive.mjs --ping で状態確認し、reCAPTCHA が出ていれば CDP 9222 の窓で1回ログイン');
+
+  const airbnb = res.find(r => r.id === 'browser:airbnb');
+  assert.equal(airbnb.remedy, 'CDP 9223 の窓で1回ログイン');
+
+  const nomuGmail = res.find(r => r.id === 'browser:nomu-gmail');
+  assert.equal(nomuGmail.remedy, 'node tools/browser/nomu-gmail-keepalive.mjs --ensure で窓を起動し1回ログイン');
+
+  const unknownSvc = res.find(r => r.id === 'browser:unknown-svc');
+  assert.equal(unknownSvc.remedy, '~/.claude/unknown-svc-session-state.json の reason を確認し、該当の keepalive の窓で1回ログイン');
+
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('runLoginHealth notify: dedupeKey prevents creating duplicates in kim-inbox', async () => {
   const home = createTestHome();
   const now = Date.now();

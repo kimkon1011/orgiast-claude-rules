@@ -392,6 +392,13 @@ export async function probeBrowserSessions({
   const files = findSessionFiles(browserDir);
   const SIX_HOURS_MS = 6 * 3600_000;
 
+  const SERVICE_REMEDY_MAP = {
+    'booking': 'デスクトップの Booking.comログイン窓を開く（ダブルクリック）.cmd をダブルクリック（専用Chrome・CDP 9226 で1回ログイン）',
+    'beds24': 'node tools/browser/beds24-keepalive.mjs --ping で状態確認し、reCAPTCHA が出ていれば CDP 9222 の窓で1回ログイン',
+    'airbnb': 'CDP 9223 の窓で1回ログイン',
+    'nomu-gmail': 'node tools/browser/nomu-gmail-keepalive.mjs --ensure で窓を起動し1回ログイン',
+  };
+
   for (const file of files) {
     const serviceName = path.basename(file, '-session-state.json');
     const state = readJson(file, null);
@@ -408,9 +415,8 @@ export async function probeBrowserSessions({
       daysText = `${days}日`;
     }
 
-    const cmdName = `${serviceName.charAt(0).toUpperCase() + serviceName.slice(1)}ログイン窓を開く（ダブルクリック）.cmd`;
-    const hasCmd = desktopCmdExists(home, cmdName);
-    const remedy = hasCmd ? cmdName : `node tools/open-url-as.ps1 -Url https://${serviceName}.com`;
+    const relPath = path.relative(home, file).replace(/\\/g, '/');
+    const remedy = SERVICE_REMEDY_MAP[serviceName] ?? `~/${relPath} の reason を確認し、該当の keepalive の窓で1回ログイン`;
 
     if (!loggedIn || state.needsHuman) {
       results.push({

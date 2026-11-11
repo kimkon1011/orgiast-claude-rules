@@ -44,3 +44,5 @@
 - 型: ゲート間相互ブロック型（gmail-connector-url-gate が URL を理由に block → mail-send-approval-gate が body 無しの draftId 送信を CONTEXT_REASON で block → 両方満たす送信経路が消える。2026-11-12 014 実測） → 横展開の検索: tool_input.draftId 有無で分岐するゲート、複数ゲートが同一の tool_input を異なる基準で判定する箇所 → ゲート: gmail-connector-url-gate の draftId 送信 pass 判定（既存）
 - 型: 人の属性（kim 操作席）で資格情報が要るジョブの配置を決めた → 判定は資格情報の実在で行う（2026-11-12 deadline-seat DWD鍵） → 横展開の検索: isKimOperated だけで資格情報不要と判断している定期ジョブ登録 → ゲート: `--seat-check` に dwdKey 実在を追加、tasks.ps1は kim=false で既存タスクを無効化
 
+
+- 型: 無人ジョブが UAC 必須インストールを起動し確認画面を溜める（2026-11-09〜11 作業用014: ClaudeDailyDriveBackup が毎晩 winget install Google.GoogleDrive を非昇格のまま起動し、誰も押さない UAC が consent.exe として残り続けた） → 横展開の検索: tools 配下の定期ジョブ・hook・無人ジョブからの `winget install` / `-Verb RunAs` / msiexec 起動箇所（backup-claude-to-drive.ps1 / register-claude-backup-task.ps1 / setup-node-runtime-security.mjs を修正、bootstrap・install-orgiast・restore・fleet-fix-now は対話専用として一覧維持） → ゲート: tools/uac-unattended-install.test.mjs（非昇格の無人実行では起動しない。対話専用は明示一覧。タイムアウト時はプロセスツリー kill）

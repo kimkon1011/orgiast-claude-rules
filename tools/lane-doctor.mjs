@@ -16,7 +16,7 @@ import { applyRealLaneHealth, billingFailure, billingWithQuotaHint, quotaFailure
 import { readEnvValue } from './env-kv.mjs';
 import { isEnrollToken, validKeyservePcId } from './keyserve-auth.mjs';
 
-export const PROVIDERS = ['codex', 'gemini', 'deepseek', 'glm', 'groq', 'openrouter'];
+export const PROVIDERS = ['codex', 'gemini', 'deepseek', 'glm', 'groq', 'openrouter', 'kimi'];
 // 任意レーン: キーがあるPCだけ実測する（2026-10-29 mistral 既定モデル 403 が未監視で放置された）。
 export const OPTIONAL_PROVIDERS = ['mistral', 'grok'];
 const isLane = p => PROVIDERS.includes(p) || OPTIONAL_PROVIDERS.includes(p);
@@ -115,7 +115,7 @@ export function laneDoctorQuick({ home = laneHome(), now = Date.now(), save = tr
       else Object.assign(state, removed);
     }
   }
-  const keys = { gemini: loadGeminiKey(home), deepseek: loadDeepseekKey(home), glm: loadEnvKey(home, 'zai.env', 'ZAI_API_KEY'), groq: loadEnvKey(home, 'groq.env', 'GROQ_API_KEY'), openrouter: loadEnvKey(home, 'openrouter.env', 'OPENROUTER_API_KEY'), mistral: loadEnvKey(home, 'mistral.env', 'MISTRAL_API_KEY'), grok: loadEnvKey(home, 'xai.env', 'XAI_API_KEY') };
+  const keys = { gemini: loadGeminiKey(home), deepseek: loadDeepseekKey(home), glm: loadEnvKey(home, 'zai.env', 'ZAI_API_KEY'), groq: loadEnvKey(home, 'groq.env', 'GROQ_API_KEY'), openrouter: loadEnvKey(home, 'openrouter.env', 'OPENROUTER_API_KEY'), mistral: loadEnvKey(home, 'mistral.env', 'MISTRAL_API_KEY'), grok: loadEnvKey(home, 'xai.env', 'XAI_API_KEY'), kimi: loadEnvKey(home, 'kimi-api.env', 'MOONSHOT_API_KEY') };
   for (const p of [...PROVIDERS, ...OPTIONAL_PROVIDERS.filter(o => keys[o])]) {
     const configured = p === 'codex' ? codexAuthStatusAny(home, { platform, spawnImpl }).login : !!keys[p];
     const previous = { ...(old.lanes?.[p] || {}) }, evidence = probeHistory(previous);
@@ -263,7 +263,9 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       const dry = await probe(p, { home, timeoutMs: Math.min(15000, probeBudget), dryRun: true });
       dryOk = dry.code === 0;
       // 再利用は成功結果だけ。失敗を30分使い回すと直後に直ったレーンが停止のまま残る（2026-10-25 実測: 直接実行は PONG なのに probe_failed）。
-      if (dryOk && previous.lanes?.codex?.alive && freshProbe(previous.lanes.codex.probedAt, now)) return [p, { cached: previous.lanes.codex }];
+      const lastProbeOkAt = previous.lanes?.codex?.lastProbeOkAt ? time(previous.lanes.codex.lastProbeOkAt) : 0;
+      const isStale = !lastProbeOkAt || (now - lastProbeOkAt > 86400_000);
+      if (dryOk && previous.lanes?.codex?.alive && freshProbe(previous.lanes.codex.probedAt, now) && !isStale) return [p, { cached: previous.lanes.codex }];
     }
     // dry 失敗（コールド起動が15秒上限を超える等）で即 probe_failed にしない。残り予算の本番 probe で判定する
     // （2026-11-06/07 連日再発: 直接実行は PONG・24h実績0失敗のレーンが dry タイムアウトで停止扱いになった）。

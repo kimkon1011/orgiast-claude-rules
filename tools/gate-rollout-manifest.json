@@ -24,7 +24,7 @@
     "cmd-ascii-guard": { "rollout": "deny", "immediatePolicy": "2026-11-04 kim 指示: .cmd の文字化け（日本語行で全行失敗）を全PC全アカウント全プロジェクトで再発防止" },
     "api-billing-guard": { "rollout": "deny", "immediatePolicy": "2026-10-17 kim 厳命: 従量課金停止", "distributedAt": "2026-10-17T00:00:00Z" },
     "app-llm-cost-gate": { "immediatePolicy": "2026-11-02 kim 指示: アプリからの Claude API 利用を全PC全アカウント全プロジェクトで禁止", "mode": "block", "rollout": "deny", "distributedAt": "2026-10-17T00:00:00Z", "denyAfter": "2026-10-24T00:00:00Z" },
-    "unrequested-automation-gate": { "rollout": "deny", "immediatePolicy": "2026-11-11 kim 指示: 依頼していない自動投稿・定期通知を全PC全アカウントで禁止", "mode": "block" },
+    "unrequested-automation-gate": { "rollout": "deny", "immediatePolicy": "2026-11-11 kim 指示: 依頼していない自動投稿・定期通知を全PC全アカウントで禁止", "mode": "block", "distributedAt": "2026-11-11T00:00:00Z", "denyAfter": "2026-11-18T00:00:00Z" },
     "askuser-selfcheck-gate": {
       "rollout": "deny",
       "legacy": true

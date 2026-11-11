@@ -31,6 +31,7 @@ test('new rollout entries must declare the seven day window; legacy inventory is
 }
     if (name === 'mail-send-approval-gate') { assert.equal(row.rollout, 'deny'); assert.equal(row.immediatePolicy, '2026-11-05 kim 承認: 組織指示11 メール送信は本文確認＋明示承認後のみ'); continue; }
     if (name === 'delete-approval-gate') { assert.equal(row.rollout, 'deny'); assert.equal(row.immediatePolicy, '2026-11-05 kim 承認: 組織指示12 削除は user 許可後のみ'); continue; }
+    if (name === 'unrequested-automation-gate') { assert.equal(row.rollout, 'deny'); assert.equal(row.immediatePolicy, '2026-11-11 kim 指示: 依頼していない自動投稿・定期通知を全PC全アカウントで禁止'); continue; }
     if (name === 'seat-name-gate') {
       assert.equal(row.rollout, 'deny');
       assert.equal(row.immediatePolicy, '2026-11-04 kim 厳命: 席番号呼称と Drive 引き渡し (§1.5.0.2/§1.5.0.3)');

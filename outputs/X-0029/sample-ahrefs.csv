@@ -1,0 +1,16 @@
+URL,Issue,Severity,Affected Pages,Category,Details
+https://www.orgiast.jp/,Missing meta description,Error,1,Meta Tags,トップページにmeta descriptionがない
+https://www.orgiast.jp/topics,Missing H1 tag,Warning,1,Headings,ページにH1タグがない
+https://www.orgiast.jp/contactus,Broken link,Error,3,Links,問い合わせページにリンク切れ3件
+https://www.orgiast.jp/event/,Duplicate title tag,Warning,1,Duplicates,他ページと同じタイトル
+https://www.orgiast.jp/company,Slow page load,Warning,1,Performance,読み込み速度が遅い (4.2s)
+https://www.orgiast.jp/newsrelease,Missing alt text,Notice,12,Images,12件の画像にalt属性なし
+https://www.orgiast.jp/creative,Low text ratio,Warning,1,Content,テキスト比率が低い
+https://www.orgiast.jp/recruiting,Duplicate H1,Notice,1,Headings,他ページと同じH1
+https://www.orgiast.jp/services/flow,Missing canonical tag,Warning,1,Canonical,canonicalタグがない
+https://www.orgiast.jp/clients/,Thin content,Warning,1,Content,コンテンツ量が不足
+https://www.orgiast.jp/event/category/online,4xx error,Error,8,HTTP Status,8件の4xxエラー
+https://www.orgiast.jp/wp/wp-content/uploads/,Directory listing enabled,Error,1,Security,ディレクトリリスティング有効
+https://www.orgiast.jp/newsrelease/page/2,Duplicate content,Warning,2,Duplicates,重複コンテンツ
+https://www.orgiast.jp/creative/graphic,Missing Open Graph tags,Notice,1,Meta Tags,OGPタグ不足
+https://www.orgiast.jp/event/category/offline,Missing schema markup,Notice,1,Schema,構造化データ不足

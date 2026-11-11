@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createClient } from './fleet-mail.mjs';
-import { scanBroadcastReceipts, withTimeout } from './lib/fleet-poll-budget.mjs';
+import { MAIL_POLL_BUDGET_MS, MAIL_POLL_REQUEST_MS, scanBroadcastReceipts, withTimeout } from './lib/fleet-poll-budget.mjs';
 
 for (const hanging of ['fetch', 'body']) test(`poll bounds a non-cooperative ${hanging} reader`, async () => {
   let signal;
@@ -22,14 +22,21 @@ for (const hanging of ['fetch', 'body']) test(`poll bounds a non-cooperative ${h
 test('busy retries share the total deadline and cap the final request to remaining time', async () => {
   let clock = 0, count = 0;
   const events = [], sleeps = [];
+  // Per-request timeout > budget so caps come from budget/REQUEST, not the parameter
+  const requestTimeoutMs = MAIL_POLL_BUDGET_MS + MAIL_POLL_REQUEST_MS;
+  // First fetch leaves ~2000ms of budget after mandatory 1s sleep
+  const firstFetchMs = MAIL_POLL_REQUEST_MS - 3000;
+  // Second fetch nearly exhausts remaining budget
+  const secondFetchMs = Math.max(500, MAIL_POLL_BUDGET_MS - MAIL_POLL_REQUEST_MS + 1500);
   const client = createClient({ url: 'https://example.invalid', token: 'secret', now: () => clock,
     onAttempt: e => events.push(e), sleepImpl: async ms => { sleeps.push(ms); clock += ms; },
-    fetchImpl: async () => { count++; clock += count === 1 ? 59_000 : 29_500;
+    fetchImpl: async () => { count++; clock += count === 1 ? firstFetchMs : secondFetchMs;
       return { ok: false, status: 503, json: async () => ({ ok: false, error: 'busy' }) }; } });
-  await assert.rejects(client('mail-poll', {}), { name: 'TimeoutError' });
+  await assert.rejects(client('mail-poll', {}, requestTimeoutMs), { name: 'TimeoutError' });
   assert.equal(count, 2);
   assert.deepEqual(sleeps, [1000]);
-  assert.deepEqual(events.filter(e => e.event === 'start').map(e => e.timeoutMs), [60_000, 30_000]);
+  assert.deepEqual(events.filter(e => e.event === 'start').map(e => e.timeoutMs),
+    [Math.min(MAIL_POLL_BUDGET_MS, MAIL_POLL_REQUEST_MS), MAIL_POLL_BUDGET_MS - MAIL_POLL_REQUEST_MS + 2000]);
 });
 
 test('request diagnostics count responses and bytes without logging mail bodies', async () => {

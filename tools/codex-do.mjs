@@ -833,7 +833,7 @@ export function maybeAutoInstallQwen(homeDir, { env = process.env, spawnImpl = s
   const child = spawnImpl(
     isWin ? 'cmd' : 'npm',
     isWin ? ['/c', 'npm', 'i', '-g', '@qwen-code/qwen-code', '--no-fund', '--no-audit'] : ['i', '-g', '@qwen-code/qwen-code', '--no-fund', '--no-audit'],
-    { stdio: 'ignore', detached: true, windowsHide: true, shell: isWin }
+    { detached: true, windowsHide: true, stdio: 'ignore', shell: isWin }
   );
   child?.unref();
 

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, ingestFleetMail, isKimSeat, main, CONTEXT_LIMIT } from './kim-inbox.mjs';
+import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, ingestFleetMail, isKimSeat, main, CONTEXT_LIMIT, oneScreenSummary } from './kim-inbox.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { loadAllowlist, discordAllowed } from './lib/kim-discord-allowlist.mjs';
 function seat(t, label = 'kim-PC') {
@@ -32,9 +32,9 @@ test('ask は毎回提示し回答後に消える。info は確認できるが a
   const output = [];
   const hook = session_id => main(['--context'], { home, stdout: s => output.push(JSON.parse(s)), readStdin: async () => JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id }) });
   await hook('s1'); await hook('s1'); await hook('s2');
-  assert.match(output[0].hookSpecificOutput.additionalContext, /詳細/);
+  assert.match(output[0].hookSpecificOutput.additionalContext, /\n詳細/);
   assert.doesNotMatch(output[1].hookSpecificOutput.additionalContext, /詳細/);
-  assert.match(output[2].hookSpecificOutput.additionalContext, /詳細/);
+  assert.match(output[2].hookSpecificOutput.additionalContext, /\n詳細/);
   assert.equal(listItems(home).find(i => i.id === ask.id).shownCount, 3);
   assert.throws(() => markSeen(home, ask.id));
   answerItem(home, ask.id, '承認 sk-abcdefghijklmnopqr', 's2'); markSeen(home, info.id);
@@ -498,4 +498,64 @@ test('通常枠が空でも完了・進捗・承認待ちを表示する', async
   const context = selectContext(listItems(home));
   assert.match(context, /kim-inbox 完了・進捗・承認待ち/);
   assert.match(context, /完了だけの通知/);
+});
+test('oneScreenSummary: 30件のaskと30件のinfoで2000バイト以内・件数正・古い順5件', async t => {
+  const home = seat(t);
+  const now = Date.now();
+  fs.mkdirSync(path.join(home, '.claude/kim-inbox'), { recursive: true });
+  for (let n = 0; n < 30; n++) {
+    const id = `ki-${new Date(now - (30 - n) * 60000).toISOString().replace(/\D/g, '').slice(0, 14)}-${n.toString(16).padStart(4, '0')}`;
+    writeItem(home, { id, kind: 'ask', status: 'open', createdAt: new Date(now - (30 - n) * 60000).toISOString(), text: `依頼${n} あいうえおかきくけこさしすせそたちつてとなにぬねの`, shownSessions: [], shownCount: 0, source: 'test', from: 'test' });
+  }
+  for (let n = 0; n < 30; n++) {
+    const id = `ki-${new Date(now - (30 - n) * 60000 + 1000).toISOString().replace(/\D/g, '').slice(0, 14)}-${(n + 30).toString(16).padStart(4, '0')}`;
+    writeItem(home, { id, kind: 'info', status: 'open', createdAt: new Date(now - (30 - n) * 60000 + 1000).toISOString(), text: `進捗${n} かきくけこさしすせそたちつてとなにぬねのはひふへほ`, shownSessions: [], shownCount: 0, source: 'test', from: 'test' });
+  }
+  const items = listItems(home).filter(i => i.status === 'open');
+  assert.equal(items.filter(i => i.kind === 'ask').length, 30);
+  assert.equal(items.filter(i => i.kind === 'info').length, 30);
+  const summary = oneScreenSummary(items);
+  const bytes = Buffer.from(summary, 'utf8').length;
+  assert.ok(bytes <= 2000, `summary ${bytes} bytes > 2000`);
+  const lines = summary.split('\n');
+  assert.match(lines[0], /^📌 kim の返事待ち 30件/);
+  for (let n = 0; n < 5; n++) {
+    assert.match(lines[1 + n], /\(ki-/);
+  }
+  const askHeader = lines[0];
+  assert.ok(lines[6] === '📲 自動進行の結果' || lines[6] === 'ほか', '6行目は 📲 または ほか');
+  const ids = lines.slice(1, 6).map(l => { const m = l.match(/\(([^)]+)\)/); return m ? m[1] : ''; });
+  const itemMap = Object.fromEntries(items.map(i => [i.id, i]));
+  const sorted = ids.map(id => itemMap[id]).filter(Boolean);
+  for (let i = 1; i < sorted.length; i++) assert.ok(sorted[i - 1].createdAt <= sorted[i].createdAt, `${sorted[i - 1].id} が ${sorted[i].id} より新しい`);
+  assert.match(summary, /ほか \d+件: node tools\/kim-inbox\.mjs --list/);
+});
+test('oneScreenSummary: ask 0件ならヘッダー行だけ', async t => {
+  const home = seat(t);
+  const now = Date.now();
+  fs.mkdirSync(path.join(home, '.claude/kim-inbox'), { recursive: true });
+  for (let n = 0; n < 30; n++) {
+    const id = `ki-${new Date(now - (30 - n) * 60000 + 1000).toISOString().replace(/\D/g, '').slice(0, 14)}-${(n + 60).toString(16).padStart(4, '0')}`;
+    writeItem(home, { id, kind: 'info', status: 'open', createdAt: new Date(now - (30 - n) * 60000 + 1000).toISOString(), text: `進捗${n} てすと`, shownSessions: [], shownCount: 0, source: 'test', from: 'test' });
+  }
+  const items = listItems(home).filter(i => i.status === 'open');
+  assert.equal(items.filter(i => i.kind === 'ask').length, 0);
+  const summary = oneScreenSummary(items);
+  assert.equal(summary, '📌 kim の返事待ち 0件');
+});
+test('UserPromptSubmit では1画面ブロックが付かない／ask の秘密値が伏せ字になる', async t => {
+  const home = seat(t);
+  await addItem(home, { kind: 'ask', text: 'sk-abcdefghijklmnopqr の判断' });
+  // UserPromptSubmit: 1画面ブロックなし
+  const output = [];
+  await main(['--context'], { home, stdout: s => output.push(JSON.parse(s)), readStdin: async () => JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's1' }) });
+  assert.doesNotMatch(output[0].hookSpecificOutput.additionalContext, /📌 kim の返事待ち/);
+  // 秘密値は selectContext の redactSecrets で伏せる
+  assert.doesNotMatch(output[0].hookSpecificOutput.additionalContext, /abcdefghijklmnopqr/);
+  // SessionStart: 1画面ブロックあり
+  output.length = 0;
+  await main(['--context'], { home, stdout: s => output.push(JSON.parse(s)), readStdin: async () => JSON.stringify({ hook_event_name: 'SessionStart', session_id: 's2' }) });
+  assert.match(output[0].hookSpecificOutput.additionalContext, /📌 kim の返事待ち/);
+  // oneScreenSummary の戻り値も handler で redactSecrets を通す
+  assert.doesNotMatch(output[0].hookSpecificOutput.additionalContext, /abcdefghijklmnopqr/);
 });

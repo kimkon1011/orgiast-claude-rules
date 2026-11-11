@@ -111,7 +111,8 @@ export function judge(text) {
     reasons.push(`他の人・他PCの対応待ちで止まる報告です。最終まとめの『user がやること』に、任意の後押し文を入れてください: 急ぐ場合だけ、<相手>に口頭やチャットで『<その1文で分かる用件。何がどこに届いていて何を対応してほしいか>』と一言伝えてもらえると早く進みます。必須作業（なし等）とは分けて書く。検出箇所: ${snippet}`);
   }
 
-  if (latestWaitDeadline(text) === null) {
+  const hasCloseSession = /(?:^|\n)このセッション[:：][^\n]*閉じてよい/.test(text);
+  if (latestWaitDeadline(text) === null && !hasCloseSession) {
     reasons.push(`末尾に『このセッション: まだ閉じない（<何を待つか>・YYYY-MM-DD HH:MM まで待つ）』を書く。期限を書くと OrgiastWaitDeadlineResume が15分ごとに見て期限後に自動再開する。session 内の run_in_background の見張りや CronCreate はセッションが終わると消えるので、待ちの見張りに使わない。`);
   }
 

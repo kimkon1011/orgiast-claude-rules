@@ -56,6 +56,11 @@ test('block: 「本番反映を待っています」＋フッター無し', () =
   assert.match(result.reason, /まだ閉じない/);
 });
 
+test('pass: 「本番反映を待っています」＋末尾「このセッション: /session-close は不要なので、このセッションを閉じてよい」', () => {
+  const result = judge('本番反映を待っています。\n\nこのセッション: /session-close は不要なので、このセッションを閉じてよい');
+  assert.deepEqual(result, { decision: 'pass' });
+});
+
 // (d) 閉じてよい定型文だけ → pass
 test('pass: 閉じてよい定型文だけ', () => {
   const result = judge('このセッション: /session-close は終わっているので、このセッションを閉じてよい');

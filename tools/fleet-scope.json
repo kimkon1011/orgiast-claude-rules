@@ -522,6 +522,12 @@
       "reason": "purge-sessions.mjs --hook が5分間隔で起動し、導入後のサーバー側アーカイブを PC の退避帳簿へ同期する"
     },
     {
+      "path": "tools/session-wait-title.mjs",
+      "scope": "fleet",
+      "step": "settings:hook-dispatchers",
+      "reason": "全PCの Stop/SessionStart フック。応答フッターの期限・閉じて可をセッション名へ反映し、PC番号付きタイトルをサーバー側（Remote Control）へ同期（nishi 2026-10-27・kim 2026-11-02 指示・全PC全アカウント）"
+    },
+    {
       "path": "tools/sync-remote-titles.mjs",
       "scope": "fleet",
       "step": "settings:purge-sessions-SessionStart",

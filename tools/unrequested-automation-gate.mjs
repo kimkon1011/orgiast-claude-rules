@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 export const GATE_CONTRACT = {"name":"unrequested-automation-gate","remedies":[{"kind":"command","ref":"Write the requester and date into the same added block (REQUESTED-BY: <who> YYYY-MM-DD), or ask kim first. Emergency bypass: UNREQUESTED_AUTOMATION_GATE=off."}]};
-import fs from 'node:fs';
 import path from 'node:path';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -95,26 +94,15 @@ export function evaluate(input) {
     return undefined;
   }
 
-  let existing = '';
-  try {
-    existing = fs.readFileSync(file, 'utf8');
-  } catch (e) {
-    if (e.code !== 'ENOENT') throw e;
-  }
-
-  if (hasOriginMarker(existing)) {
-    return undefined;
-  }
-
   for (const e of edits) {
     const added = String(e?.new_string || '');
     const old = String(e?.old_string || '');
 
     const addedDelSignals = DELIVERY_SIGNALS.filter((sig) => sig.re.test(added) && !sig.re.test(old));
     const addedRecSignals = RECURRING_SIGNALS.filter((sig) => sig.re.test(added) && !sig.re.test(old));
-    const addedHasOrigin = hasOriginMarker(added);
+    const hasOrigin = hasOriginMarker(added) || hasOriginMarker(old);
 
-    if (addedDelSignals.length > 0 && addedRecSignals.length > 0 && !addedHasOrigin) {
+    if (addedDelSignals.length > 0 && addedRecSignals.length > 0 && !hasOrigin) {
       const delNameStr = addedDelSignals.map((s) => s.name).join(', ');
       const recNameStr = addedRecSignals.map((s) => s.name).join(', ');
       return makeDenyReason(delNameStr, recNameStr, tool_input.file_path);

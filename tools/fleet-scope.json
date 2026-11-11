@@ -1,6 +1,8 @@
 {
   "version": 1,
   "entries": [
+    {"path": "tools/lib/fleet-poll-reaper.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "Bounded recovery of stale scheduled poll processes before poll and watchdog work"},
+    {"path": "tools/lib/fleet-poll-reaper.ps1", "scope": "fleet", "step": "task:fleet-mail", "reason": "Windows process identity checks and exact-command stale poll recovery helper"},
     {"path": "tools/lib/fleet-poll-health.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "Successful poll timestamp validation shared by receipt hooks and task health checks"},
     {"path": "tools/offboarding-watch.mjs", "scope": "kim-only", "step": "task:offboarding-watch", "reason": "kim-PC限定の退職者監視・PC失効と定期登録"},
     {"path": "tools/register-offboarding-watch.mjs", "scope": "kim-only", "step": "task:offboarding-watch", "reason": "kim-PC限定の退職者監視・PC失効と定期登録"},

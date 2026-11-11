@@ -113,6 +113,7 @@ nishi@・cr@・seisaku-team@・Genba の席も user=kim（2026-10-28 kim）。ki
 
 **🔴 kim 宛 Discord DM は全廃・例外なし（緊急を含む・全PC全アカウント）。kim-inbox（~/.claude/kim-inbox、node tools/kim-inbox.mjs）へ積みセッションで回収。ask は --answer まで毎プロンプト再提示、info は伝えたら --seen。クローズを止めず台帳を次セッションへ引き継ぐ。Discord MCP 直接送信はゲートが拒否し、旧 config/kim-discord-allowlist.json のカテゴリも廃止。詳細 docs/kim-inbox.md。**
 送れなければチャットに完成形を表示。
+**🔴 社内 Discord DM（discord-dm.mjs）は承認不要で自動送信してよい。ただし秘密値は本文に書かない（自動伏せ字で本文が変わる時は停止）。社外（メール・LINE・Messenger）は従来どおり全文承認後。**
 **🔴 社内ツールが Drive に作成・コピーするファイルには kim@orgiast.jp の編集権限を必ず付け、読み戻して確認する。失敗を握りつぶさない。作成 hook と毎日05:50のスイープで補完する。巡回は直近7日・共有制作アカウントと fleet の自動作成識別済みファイルだけを対象にし、社員個人の私物には付与しない。**
 
 kim の代わりに社員・外注へ Discord で送るときは Bot 代筆（`tools/discord-dm.mjs`、kim へ写し自動）で送る。**Discord 内に限り、kim 宛の質問への代理回答は kim の承認なしで送ってよい**（kim 2026-11-06。訂正は後で kim が伝え、学習ループに記録する。kim の判断が要る金額・契約・支払い・人事・社外への約束・根拠不明の内容は推測で答えず「金に確認して回答します」と返し kim-inbox の ask へ回す。メール・LINE・Messenger は従来どおり承認後のみ）。冒頭に「【kimのClaudeによる代理回答】」と元メッセージの日時・先頭行、末尾に毎回「このメッセージへの返答は、Bot ではなく金に直接お願いします。」を入れる。kim のユーザートークンで本人として書く方式（セルフボット）は規約違反・アカウント停止の危険があるため使わない（kim 2026-10-30 厳命・全アカウント全PC）。

@@ -577,25 +577,6 @@ test('run() の phaseMs が各段階の経過時間を記録し、チェック�
   }
 });
 
-test('run() は listItems をキャッシュし、refreshDoneApprovals で listItems の再読み取りを避ける', async t => {
-  const home = progressHome('listitems-cache-');
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const now = Date.parse('2026-11-11T12:00:00Z');
-  let listItemsCallCount = 0;
-  const io = {
-    clock: () => now, transcriptFiles: [], sheetConfig: () => null,
-    listKimInboxItems: () => { listItemsCallCount++; return []; },
-    ...notificationMocks,
-    digest: async () => ({}), escalateKimDecisions: async () => ({}),
-  };
-  await run({ home, now, io });
-  // refreshDoneApprovals ではキャッシュ経由の listKimInboxItems を1回だけ呼び、
-  // さらに deliverDoneInbox 等でも同一キャッシュを使うように制御される。
-  // io.listKimInboxItems は run() 内部で cachedListKimInboxItems に置き換わるため、
-  // 直接 io の listKimInboxItems が複数回呼ばれることはない。
-  assert.equal(listItemsCallCount, 1, 'listItems は1回だけ呼ばれる');
-});
-
 test('summarizeEvidence: 文と節を選別し、括弧や手順列挙を残さない', () => {
   assert.equal(summarizeEvidence('準備済み（内部(JSON 実測)説明）。docId abc12345 を確認、宛先も確認済み。送信待ち。'), '準備済み。宛先も確認済み。');
   assert.equal(summarizeEvidence('準備済み。（１）内部の手順。'), '準備済み。');

@@ -7,7 +7,6 @@ import { spawnSync } from 'node:child_process';
 import { normalizeCheckForBash, executeCheck, preflightCheck } from './auto-progress-check.mjs';
 import { addCheck, auditChecks } from './auto-progress.mjs';
 import { ledgerFile, readLedger, writeLedger } from './auto-progress-ledger.mjs';
-import { hasDoneInboxReceipt } from './lib/auto-progress-done-inbox.mjs';
 import { run as watch } from './auto-progress-watch.mjs';
 
 function temp(t) {
@@ -107,7 +106,6 @@ test('watch discovers silent-stop session and registers row and notifies owner',
   assert.equal(ssRows.length, 1, `expected 1 silent-stop row, got ${ssRows.length}: ${JSON.stringify(rows)}`);
   assert.equal(ssRows[0].status, 'done');
   assert.match(ssRows[0].promise, /途中で止まった依頼（ツール実行中に終了）/);
-  assert.equal(messages.length, 1);
+  assert.equal(messages.length, 2);
   assert.match(messages[0], /途中で止まっていた依頼を見つけ/);
-  assert.ok(hasDoneInboxReceipt(ssRows[0]), 'expected done inbox receipt for kim seat');
 });

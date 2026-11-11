@@ -18,7 +18,7 @@ import { isQuietHours, kimAction } from './auto-progress-digest.mjs';
 import { completionActions } from './lib/auto-progress-artifact.mjs';
 import { reportCheckProgress } from './lib/auto-progress-heartbeat.mjs';
 import { checkPromise, checkProgressSummary, executeCheck, isTimeOnlyCheck, queueCheckFollowup, pendingAction } from './auto-progress-check.mjs';
-import { addItem, listItems } from './kim-inbox.mjs';
+import { addItem } from './kim-inbox.mjs';
 import { pushDailyProgress } from './lib/auto-progress-daily.mjs';
 import { appendInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
@@ -730,13 +730,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     const rows = readLedger(file);
     return persist(rows.map((r) => rowKey(r) === key ? { ...r, ...changes, status: WATCHED.has(r.status) ? (changes.status ?? r.status) : r.status } : r));
   };
-  // 1回の run() 内で kim-inbox の全件読み取り(listItems)をキャッシュし、複数回の 7.5秒読み取りを避ける。
-  let cachedKimInboxItems = null;
-  const cachedListKimInboxItems = () => {
-    if (cachedKimInboxItems === null) cachedKimInboxItems = (io.listKimInboxItems ?? listItems)(home);
-    return cachedKimInboxItems;
-  };
-  // 保守処理（一時ファイル掃除）は実行前に済ませるが、移行・fleet mail・未回答発見は
+    // 保守処理（一時ファイル掃除）は実行前に済ませるが、移行・fleet mail・未回答発見は
   // 優先度の高いチェック/再開ループの後に回す（重い保守で時間予算を使い切り、期限切れの
   // 約束が毎回再開されないのを防ぐ 2026-11-11）。
   if (!dryRun) {
@@ -798,6 +792,10 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       let delivery = null;
       try {
         delivery = await deliverDoneInbox(home, [{ ...row, artifact: artifact || row.artifact }], message, { now, io });
+        // 発見通知（registerUnanswered 内の notifyOwner）と同じ経路で完了も通知する。
+        try {
+          await (io.notifyOwner ?? notifyOwner)(ownerOf(row), message, { home, now, kind: 'automatic', session: row });
+        } catch { /* inbox が主経路、notifyOwner は同一巡回の発見通知と揃えるための副経路 */ }
         return patch(rowKey(row), delivery.receipt);
       } catch (error) {
         patch(rowKey(row), { doneNotifyPending: true, doneNotifyArtifact: artifact || row.artifact || '' });
@@ -1210,7 +1208,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   // チェック・再開ループの後に実行することで、重い保守が時間予算を使い切っても
   // 期限切れの約束の再開は行われた状態になる（2026-11-11）。
   if (!dryRun) {
-    try { await refreshDoneApprovals(home, rows, { now, io: { ...io, listKimInboxItems: cachedListKimInboxItems }, patch }); }
+    try { await refreshDoneApprovals(home, rows, { now, io, patch }); }
     catch (error) { summary.errors.push(`done-approvals: ${String(error.message).slice(0, 200)}`); }
   }
   try {

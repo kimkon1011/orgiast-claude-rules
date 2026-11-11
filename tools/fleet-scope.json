@@ -1310,6 +1310,13 @@
     {"path": "tools/tldv-process-improve.mjs", "scope": "kim-only", "reason": "tl;dv 会議→制作プロセス改善の夜間ループ。DWD鍵とLLM鍵を持つ作業用011（kim-PC）だけで実行"},
     {"path": "config/tldv-process-improve.json", "scope": "kim-only", "reason": "tl;dv 改善ループの設定。kim-PCでしか使わない"},
     {"path": "tools/register-tldv-process-improve-task.ps1", "scope": "kim-only", "reason": "kim-PC（作業用011）だけで OrgiastTldvProcessImprove タスクを登録する"},
-    {"path": "tools/tldv-process-improve.test.mjs", "scope": "kim-only", "reason": "tl;dv 改善ループのテスト。CIで実行するがfleet配布はkim-PCだけ"}
+    {"path": "tools/tldv-process-improve.test.mjs", "scope": "kim-only", "reason": "tl;dv 改善ループのテスト。CIで実行するがfleet配布はkim-PCだけ"},
+    {"path": "tools/lib/process-hygiene.mjs", "scope": "fleet", "step": "nightly-reload-vscode", "reason": "PIDファイルベースのセッション生存判定（claude.exe 起動不要）"},
+    {"path": "tools/lib/process-hygiene.test.mjs", "scope": "fleet", "step": "nightly-reload-vscode", "reason": "process-hygiene.mjs のテスト"},
+    {"path": "tools/nightly-reload-vscode.ps1", "scope": "fleet", "step": "nightly-reload-vscode", "reason": "VS Code 夜間再起動（v2: スナップショット保存→再起動→全セッション復元）"},
+    {"path": "tools/setup-nightly-reload.mjs", "scope": "fleet", "step": "nightly-reload-vscode", "reason": "夜間再起動タスクのセットアップ（converge 経由）"},
+    {"path": "tools/register-reopen-lost-sessions.test.ps1", "scope": "fleet", "step": "nightly-reload-vscode", "reason": "register-reopen-lost-sessions.ps1 のテスト"},
+    {"path": "tools/reload-snapshot.mjs", "scope": "fleet", "step": "nightly-reload-vscode", "reason": "夜間再起動のスナップショット保存・復元（reopen-lost-sessions から分離）"},
+    {"path": "tools/reload-snapshot.test.mjs", "scope": "fleet", "step": "nightly-reload-vscode", "reason": "reload-snapshot.mjs のテスト"}
   ]
 }

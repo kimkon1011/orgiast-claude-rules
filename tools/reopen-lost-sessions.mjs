@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { hostExitArchive } from './lib/host-exit-archive.mjs';
+import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const DEFAULT_MAX_REOPEN = 3;
@@ -274,9 +275,10 @@ export function hasHostExit(events, since, until) {
   return events.some(e => e.event_type === 'system' && e.payload?.reason === 'host_exit'
     && Date.parse(e.created_at) >= Date.parse(since) && Date.parse(e.created_at) <= Date.parse(until));
 }
-export function exclusion(local, closed, alive) {
+export function exclusion(local, closed, alive, hidden) {
   if (!local || !local.cwd) return 'noLocal';
   if (closed.has(local.id)) return 'closed';
+  if (hidden && (hidden.has(local.id) || (local.bridgeSessionId && hidden.has(local.bridgeSessionId)))) return 'archivedByUser';
   if (!local.hasConversation) return 'empty';
   if (alive.has(local.id)) return 'alive';
   return null;
@@ -466,7 +468,7 @@ export function localIndex(base, onlyId, { sinceMs, largeFileThreshold = 8 * 102
       const conversation = bytes > 200 * 1024 || hasConversation(lines.map(parse), bytes);
       indexed++;
       for (const bridge of bridges) {
-        index.set(bridge.bridgeSessionId, { id: file.slice(0, -6), cwd: cwds[0], cwds, hasConversation: conversation });
+        index.set(bridge.bridgeSessionId, { id: file.slice(0, -6), bridgeSessionId: bridge.bridgeSessionId, cwd: cwds[0], cwds, hasConversation: conversation });
       }
     }
   }
@@ -665,8 +667,13 @@ export function resolveClaudeCli({ env = process.env, exists = fs.existsSync, re
 export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_MAX_REOPEN, gapSec = 10,
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
   now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs, stateBased = false,
-  checkCpu = true, checkClaude = false, cpusImpl, vscodeStartedAt } = {}) {
+  checkCpu = true, checkClaude = false, cpusImpl, vscodeStartedAt, openDb } = {}) {
   const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closedInRunningVscode: 0, loadGuard: 0, reopenRepeat: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
+  const initialHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
+  const hiddenSessionIds = initialHidden.ids;
+  if (initialHidden.error) {
+    result.hiddenError = initialHidden.error;
+  }
   // Dry run is strictly read-only: no lock or log mutation on the user's PC.
   const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'));
   if (!release) return { ...result, error: 'locked' };
@@ -767,7 +774,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
             if (session.connection_status === 'connected') continue;
             const lastEvent = Date.parse(session.last_event_at);
             if (!Number.isFinite(lastEvent) || lastEvent < Date.parse(stateSince)) continue;
-            const reason = exclusion(local, closed, living);
+            const reason = exclusion(local, closed, living, hiddenSessionIds);
             if (reason) { result.skipped[reason]++; continue; }
             // 待機中の空き枠（タイトル「011｜待機中」など）は開き直さない
             const title = (session.title ?? '').trim();
@@ -802,7 +809,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
             const { session, events } = item.value;
             if (!hasHostExit(events, since, until)) continue;
             const local = locals.get(session.id);
-            const reason = exclusion(local, closed, living);
+            const reason = exclusion(local, closed, living, hiddenSessionIds);
             if (reason) { result.skipped[reason]++; continue; }
             // Skip user-archived sessions (closed via mobile etc.)
             if (session.status === 'archived' && !hostExitArchive(events)) { result.skipped.archivedByUser++; continue; }
@@ -840,7 +847,9 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
           writeProgress(base, 'open', `id=${candidate.id}`);
           // Recheck after fetching and between opens: close/purge may have happened meanwhile.
           const refreshed = [...localIndex(base, candidate.id).values()].find(l => l.id === candidate.id);
-          const reason = exclusion(refreshed, closedIds(base), alive());
+          const recheckHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
+          const currentHidden = recheckHidden.error ? hiddenSessionIds : recheckHidden.ids;
+          const reason = exclusion(refreshed, closedIds(base), alive(), currentHidden);
           if (reason) { result.skipped[reason]++; continue; }
           if (reopenCounts[candidate.id] >= 3) { result.skipped.reopenLoop++; continue; }
           if (repeatCounts[candidate.id] >= 3) { result.skipped.reopenRepeat++; continue; }
@@ -872,7 +881,9 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
               }
               if (!found) throw Error('VS Code window timeout');
               const current = [...localIndex(base, candidate.id).values()].find(l => l.id === candidate.id);
-              const lateReason = exclusion(current, closedIds(base), alive());
+              const lateHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
+              const currentLateHidden = lateHidden.error ? hiddenSessionIds : lateHidden.ids;
+              const lateReason = exclusion(current, closedIds(base), alive(), currentLateHidden);
               if (lateReason) { result.skipped[lateReason]++; continue; }
               // Focus again immediately before URI dispatch to reduce focus races.
               ps(`& ${quotePS(code)} ${quotePS(targetPath)}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & ${quotePS(code)} --open-url ${quotePS('vscode://anthropic.claude-code/open?session=' + encodeURIComponent(candidate.id))}; exit $LASTEXITCODE`, spawn);

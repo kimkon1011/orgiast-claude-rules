@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord } from './reopen-lost-sessions.mjs';
+import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
 const exit = { event_type: 'system', payload: { reason: 'host_exit' }, created_at: since };
@@ -1567,4 +1568,130 @@ test('watchReopen: max 未指定時は 5 件の候補があっても reopen は�
 
   assert.equal(result.candidates.length, 5);
   assert.equal(result.reopened.length, 3);
+});
+
+test('readVscodeHiddenSessionIds: 一時 sqlite DB を作り key=Anthropic.claude-code, value={"hiddenSessionIds":["a","b"]} を入れて Set{a,b} が返る／DB 無しで空 Set＋error', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vscdb-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  // DB 無し
+  const envMissing = { APPDATA: path.join(root, 'nonexistent') };
+  const resMissing = readVscodeHiddenSessionIds({ env: envMissing });
+  assert.equal(resMissing.ids.size, 0);
+  assert.ok(resMissing.error.includes('state.vscdb not found'));
+
+  // 有効な SQLite DB
+  const dbDir = path.join(root, 'appdata', 'Code', 'User', 'globalStorage');
+  fs.mkdirSync(dbDir, { recursive: true });
+  const dbPath = path.join(dbDir, 'state.vscdb');
+
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(dbPath);
+  db.exec('CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)');
+  db.prepare('INSERT INTO ItemTable (key, value) VALUES (?, ?)').run('Anthropic.claude-code', JSON.stringify({ hiddenSessionIds: ['cse_hidden1', 'cse_hidden2'] }));
+  db.close();
+
+  const envExist = { APPDATA: path.join(root, 'appdata') };
+  const resExist = readVscodeHiddenSessionIds({ env: envExist });
+  assert.equal(resExist.error, null);
+  assert.deepEqual([...resExist.ids].sort(), ['cse_hidden1', 'cse_hidden2']);
+});
+
+test('hidden に含まれる state 候補が開かれず archivedByUser が 1 になる', async t => {
+  const base = fixture(t);
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  const now = () => nowTime;
+
+  const openDbMock = () => [{ key: 'Anthropic.claude-code', value: JSON.stringify({ hiddenSessionIds: ['cse_one'] }) }];
+
+  const fetchImpl = async () => ({
+    ok: true,
+    json: async () => ({
+      data: [{ id: 'cse_one', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T11:55:00.000Z', updated_at: '2026-11-07T11:55:00.000Z' }]
+    })
+  });
+
+  const result = await reopenLost({
+    base, since, until, dryRun: true, stateBased: true, claudeCli: 'claude.exe', now, fetchImpl,
+    openDb: openDbMock,
+    fsImpl: { ...fs, existsSync: () => true },
+    spawn: () => ({ status: 0, stdout: '[]' })
+  });
+
+  assert.equal(result.skipped.archivedByUser, 1);
+  assert.equal(result.candidates.length, 0);
+});
+
+test('hidden に含まれる host_exit 候補も開かれない', async t => {
+  const base = fixture(t);
+  const now = () => Date.parse('2026-11-07T12:00:00.000Z');
+
+  const openDbMock = () => [{ key: 'Anthropic.claude-code', value: JSON.stringify({ hiddenSessionIds: ['cse_one'] }) }];
+
+  const fetchImpl = async url => ({
+    ok: true,
+    json: async () => url.includes('/events?')
+      ? { data: [exit] }
+      : { data: [{ id: 'cse_one', status: 'active' }] }
+  });
+
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl,
+    openDb: openDbMock,
+    fsImpl: { ...fs, existsSync: () => true },
+    spawn: () => ({ status: 0, stdout: '[]' })
+  });
+
+  assert.equal(result.skipped.archivedByUser, 1);
+  assert.equal(result.candidates.length, 0);
+});
+
+test('hidden に無い候補は従来どおり開かれる', async t => {
+  const base = fixture(t);
+  const now = () => Date.parse('2026-11-07T12:00:00.000Z');
+
+  const openDbMock = () => [{ key: 'Anthropic.claude-code', value: JSON.stringify({ hiddenSessionIds: ['other_id'] }) }];
+
+  const fetchImpl = async url => ({
+    ok: true,
+    json: async () => url.includes('/events?')
+      ? { data: [exit] }
+      : { data: [{ id: 'cse_one', status: 'active' }] }
+  });
+
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl,
+    openDb: openDbMock,
+    fsImpl: { ...fs, existsSync: () => true },
+    spawn: () => ({ status: 0, stdout: '[]' })
+  });
+
+  assert.equal(result.skipped.archivedByUser, 0);
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].id, 'one');
+});
+
+test('hidden 読み取り失敗時は従来どおり開かれ hiddenError が入る', async t => {
+  const base = fixture(t);
+  const now = () => Date.parse('2026-11-07T12:00:00.000Z');
+
+  const openDbMock = () => { throw new Error('DB read error'); };
+
+  const fetchImpl = async url => ({
+    ok: true,
+    json: async () => url.includes('/events?')
+      ? { data: [exit] }
+      : { data: [{ id: 'cse_one', status: 'active' }] }
+  });
+
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl,
+    openDb: openDbMock,
+    fsImpl: { ...fs, existsSync: () => true },
+    spawn: () => ({ status: 0, stdout: '[]' })
+  });
+
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].id, 'one');
+  assert.equal(result.hiddenError, 'DB read error');
 });

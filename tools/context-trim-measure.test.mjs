@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { parseSessionJsonl, selectLogs } from './context-trim-measure.mjs';
+import { parseSessionJsonl, selectLogs, parseArgs } from './context-trim-measure.mjs';
+import { trimEveryTurn, missingInfoRate } from './context-trim.mjs';
 
 // ---------------------------------------------------------------------------
 // parseSessionJsonl
@@ -309,4 +310,73 @@ test('selectLogs handles non-existent root', () => {
   const { files, criteria } = selectLogs('/nonexistent/path/xyz');
   assert.deepEqual(files, []);
   assert.ok(criteria.includes('not found'));
+});
+
+// ---------------------------------------------------------------------------
+// parseArgs (argument parsing)
+// ---------------------------------------------------------------------------
+
+test('parseArgs returns defaults when no flags given', () => {
+  const opts = parseArgs([]);
+  assert.equal(opts.keepRecent, 6);
+  assert.equal(opts.maxChars, 400);
+  assert.equal(opts.protectErrors, true);
+  assert.equal(opts.recent, 6);
+});
+
+test('parseArgs accepts --keep-recent', () => {
+  const opts = parseArgs(['--keep-recent', '10']);
+  assert.equal(opts.keepRecent, 10);
+});
+
+test('parseArgs accepts --max-chars', () => {
+  const opts = parseArgs(['--max-chars', '200']);
+  assert.equal(opts.maxChars, 200);
+});
+
+test('parseArgs accepts --no-protect-errors', () => {
+  const opts = parseArgs(['--no-protect-errors']);
+  assert.equal(opts.protectErrors, false);
+});
+
+test('parseArgs accepts --recent', () => {
+  const opts = parseArgs(['--recent', '3']);
+  assert.equal(opts.recent, 3);
+});
+
+test('parseArgs combines multiple flags', () => {
+  const opts = parseArgs([
+    '--keep-recent', '12',
+    '--max-chars', '500',
+    '--no-protect-errors',
+    '--recent', '4',
+    '--root', '/tmp/logs',
+  ]);
+  assert.equal(opts.keepRecent, 12);
+  assert.equal(opts.maxChars, 500);
+  assert.equal(opts.protectErrors, false);
+  assert.equal(opts.recent, 4);
+  assert.equal(opts.root, '/tmp/logs');
+});
+
+// ---------------------------------------------------------------------------
+// protectErrors / missingInfoRate integration
+// ---------------------------------------------------------------------------
+
+test('protectErrors=false allows hasError tool results to be trimmed, increasing missingInfoRate', () => {
+  // Build messages: 10 tool_results, all with hasError=true, none in recent window
+  const messages = [];
+  for (let i = 0; i < 10; i++) {
+    messages.push({ kind: 'tool_result', text: `long output line ${i} `.repeat(100), hasError: true });
+  }
+
+  // With protectErrors=true (default), error tool results are never trimmed
+  const protectedResult = trimEveryTurn(messages, { keepRecent: 0, maxChars: 50, protectErrors: true });
+  const protectedMissing = missingInfoRate(messages, protectedResult);
+  assert.equal(protectedMissing, 0, 'protectErrors=true should keep all error tool results intact');
+
+  // With protectErrors=false, error tool results can be trimmed
+  const unprotectedResult = trimEveryTurn(messages, { keepRecent: 0, maxChars: 50, protectErrors: false });
+  const unprotectedMissing = missingInfoRate(messages, unprotectedResult);
+  assert.ok(unprotectedMissing > 0, `protectErrors=false should produce missingInfoRate > 0, got ${unprotectedMissing}`);
 });

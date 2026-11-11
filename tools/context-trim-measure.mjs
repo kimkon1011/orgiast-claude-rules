@@ -181,9 +181,14 @@ function formatNumber(n) {
   return n.toLocaleString('en-US');
 }
 
-function parseArgs() {
-  const args = process.argv.slice(2);
-  const opts = {};
+export function parseArgs(argv) {
+  const args = argv ?? process.argv.slice(2);
+  const opts = {
+    keepRecent: 6,
+    maxChars: 400,
+    protectErrors: true,
+    recent: 6,
+  };
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--root':
@@ -200,6 +205,18 @@ function parseArgs() {
         break;
       case '--max-messages':
         opts.maxMessages = parseInt(args[++i], 10);
+        break;
+      case '--keep-recent':
+        opts.keepRecent = parseInt(args[++i], 10);
+        break;
+      case '--max-chars':
+        opts.maxChars = parseInt(args[++i], 10);
+        break;
+      case '--no-protect-errors':
+        opts.protectErrors = false;
+        break;
+      case '--recent':
+        opts.recent = parseInt(args[++i], 10);
         break;
     }
   }
@@ -235,7 +252,14 @@ async function main() {
     process.exit(1);
   }
 
-  const simOpts = { windowTokens, threshold: 0.8, keepRecent: 6, maxChars: 400 };
+  const simOpts = {
+    windowTokens,
+    threshold: 0.8,
+    keepRecent: opts.keepRecent ?? 6,
+    maxChars: opts.maxChars ?? 400,
+    protectErrors: opts.protectErrors !== false,
+  };
+  const missingRecent = opts.recent ?? 6;
 
   const results = [];
   let totalNone = 0;
@@ -267,8 +291,8 @@ async function main() {
       : '0.0';
 
     // missing info rate for bulk and everyTurn
-    const bulkMissing = missingInfoRate(limited, bulkResult.finalMessages);
-    const everyTurnMissing = missingInfoRate(limited, everyTurnResult.finalMessages);
+    const bulkMissing = missingInfoRate(limited, bulkResult.finalMessages, { recent: missingRecent });
+    const everyTurnMissing = missingInfoRate(limited, everyTurnResult.finalMessages, { recent: missingRecent });
 
     results.push({
       file: path.basename(file),
@@ -292,10 +316,29 @@ async function main() {
     ? ((1 - totalEveryTurn / totalNone) * 100).toFixed(1)
     : '0.0';
 
+  const missingInfoRateBulkAvg = results.length > 0
+    ? results.reduce((sum, r) => sum + r.missingInfoRateBulk, 0) / results.length
+    : 0;
+  const missingInfoRateEveryTurnAvg = results.length > 0
+    ? results.reduce((sum, r) => sum + r.missingInfoRateEveryTurn, 0) / results.length
+    : 0;
+  const missingInfoRateEveryTurnMax = results.length > 0
+    ? Math.max(...results.map(r => r.missingInfoRateEveryTurn))
+    : 0;
+
   if (outputJson) {
     const output = {
       criteria,
       maxMessages,
+      params: {
+        keepRecent: simOpts.keepRecent,
+        maxChars: simOpts.maxChars,
+        protectErrors: simOpts.protectErrors,
+        recent: missingRecent,
+        windowTokens,
+        threshold: 0.8,
+        maxMessages,
+      },
       logCount: files.length,
       logs: results,
       totals: {
@@ -304,6 +347,9 @@ async function main() {
         cumulativeEveryTurn: totalEveryTurn,
         bulkReductionPct: parseFloat(overallBulkReduction),
         everyTurnReductionPct: parseFloat(overallEveryTurnReduction),
+        missingInfoRateBulkAvg,
+        missingInfoRateEveryTurnAvg,
+        missingInfoRateEveryTurnMax,
       },
     };
     process.stdout.write(JSON.stringify(output, null, 2) + '\n');

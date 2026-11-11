@@ -786,6 +786,74 @@ test('state-based と host_exit の重複は1件にまとまる', async t => {
   assert.ok(['state', 'host_exit'].includes(result.candidates[0].source));
 });
 
+test('state-based: 待機中の空き枠は開き直さない', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-standby-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, {
+    cse_standby: 'C:\\work1',
+    cse_work: 'C:\\work2',
+  });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  const sessions = [
+    { id: 'cse_standby', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T10:00:00.000Z', title: '011｜待機中' },
+    { id: 'cse_work', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T10:00:00.000Z', title: '011｜毎日議事録から改善待機中' },
+  ];
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, stateBased: true,
+    fetchImpl: async url => ({ ok: true, json: async () => ({ data: sessions }) }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].id, 'cse_work');
+  assert.equal(result.skipped.standby, 1);
+});
+
+test('state-based: 起動中の VS Code で閉じたタブは開き直さない', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-vscode-running-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, { cse_one: 'C:\\work' });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  // vscodeStartedAt が last_event_at(11:00) より前(10:00) → VS Code 起動中に閉じられた
+  const vscodeStartedAt = Date.parse('2026-11-07T10:00:00.000Z');
+  const session = { id: 'cse_one', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T11:00:00.000Z', title: 'Work' };
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, stateBased: true,
+    vscodeStartedAt,
+    fetchImpl: async url => ({ ok: true, json: async () => ({ data: [session] }) }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.equal(result.candidates.length, 0);
+  assert.equal(result.skipped.closedInRunningVscode, 1);
+});
+
+test('state-based: VS Code 再起動後は開き直す', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-vscode-restarted-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, { cse_one: 'C:\\work' });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  // vscodeStartedAt が last_event_at(10:00) より後(11:00) → VS Code 再起動後なので開き直す
+  const vscodeStartedAt = Date.parse('2026-11-07T11:00:00.000Z');
+  const session = { id: 'cse_one', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T10:00:00.000Z', title: 'Work' };
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, stateBased: true,
+    vscodeStartedAt,
+    fetchImpl: async url => ({ ok: true, json: async () => ({ data: [session] }) }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].id, 'cse_one');
+  assert.equal(result.skipped.closedInRunningVscode, 0);
+});
+
 test('CPU 85%以上で開き直しを defer、watermark を進めない', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-cpu-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -843,8 +911,8 @@ test('claude agents 呼び出しが失敗したら registry 代替に移行（�
       return { error: err, status: null, stdout: '' };
     },
   });
-  // 再試行なし（1回のみ）
-  assert.equal(attempts, 1);
+  // 再試行なし（vscodeStartedAt 1回 + agents 1回）
+  assert.equal(attempts, 2);
   // registry 代替で aliveSource='registry'
   assert.equal(result.aliveSource, 'registry');
   assert.ok(result.agentsError, 'agentsError に失敗理由が残る');

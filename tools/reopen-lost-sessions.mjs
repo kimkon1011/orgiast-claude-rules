@@ -586,8 +586,8 @@ export function resolveClaudeCli({ env = process.env, exists = fs.existsSync, re
 export async function reopenLost({ since, until, dryRun = false, max = 30, gapSec = 10,
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
   now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs, stateBased = false,
-  checkCpu = true, cpusImpl } = {}) {
-  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0 }, aliveSource: null, agentsError: null, agentsDiag: null };
+  checkCpu = true, cpusImpl, vscodeStartedAt } = {}) {
+  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closedInRunningVscode: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
   // Dry run is strictly read-only: no lock or log mutation on the user's PC.
   const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'));
   if (!release) return { ...result, error: 'locked' };
@@ -667,6 +667,19 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
         if (stateBased) {
           const nowTime = now();
           const stateSince = new Date(nowTime - 72 * 3600 * 1000).toISOString();
+          // 手で閉じたタブと空き枠は開き直さない。再起動で切れたものだけ開く
+          let resolvedVscodeStartedAt = vscodeStartedAt;
+          if (resolvedVscodeStartedAt === undefined) {
+            try {
+              const psScript = "$p = Get-Process Code -ErrorAction SilentlyContinue | Sort-Object StartTime | Select-Object -First 1; if ($p) { $p.StartTime.ToUniversalTime().ToString('o') }";
+              const res = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psScript], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+              const ts = Date.parse(String(res.stdout ?? '').trim());
+              resolvedVscodeStartedAt = Number.isFinite(ts) ? ts : null;
+            } catch {
+              resolvedVscodeStartedAt = null;
+            }
+          }
+          result.vscodeStartedAt = Number.isFinite(resolvedVscodeStartedAt) ? new Date(resolvedVscodeStartedAt).toISOString() : null;
           for (const session of sessions) {
             const local = locals.get(session.id);
             if (!local || seenIds.has(local.id)) continue;
@@ -676,6 +689,11 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
             if (!Number.isFinite(lastEvent) || lastEvent < Date.parse(stateSince)) continue;
             const reason = exclusion(local, closed, living);
             if (reason) { result.skipped[reason]++; continue; }
+            // 待機中の空き枠（タイトル「011｜待機中」など）は開き直さない
+            const title = (session.title ?? '').trim();
+            if (/^(?:\d{3}｜)?待機中$/.test(title)) { result.skipped.standby++; continue; }
+            // 起動中の VS Code で閉じられたタブは開き直さない
+            if (Number.isFinite(resolvedVscodeStartedAt) && resolvedVscodeStartedAt < lastEvent) { result.skipped.closedInRunningVscode++; continue; }
             if (reopenCounts[local.id] >= 3) { result.skipped.reopenLoop++; continue; }
             seenIds.add(local.id);
             result.candidates.push({ id: local.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '', source: 'state' });

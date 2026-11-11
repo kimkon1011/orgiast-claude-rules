@@ -236,7 +236,8 @@ test('inbox --unseen selects unpresented pending mail and records seen with a re
   assert.deepEqual(JSON.parse(f.output[0]).map(m => m.id), [mail().id]);
   assert.equal(f.read(mail().id).status, 'seen'); assert.deepEqual(f.read(mail().id).pendingServer, ['seen']); assert.equal(f.errors.length, 0); assert.equal(f.spawns.length, 1);
   f.deps.request = async (kind, payload) => { f.calls.push({ kind, payload }); return kind === 'mail-poll' ? { messages: [] } : kind === 'mail-ack' && payload.ids ? { ok: true, results: payload.ids.map(id => ({ id, ok: true })) } : { ok: true, mail: {} }; };
-  await pollOnce(f.deps); assert.deepEqual(f.read(mail().id).pendingServer, []); assert.equal(f.calls[0].kind, 'mail-seen');
+  await pollOnce(f.deps); assert.deepEqual(f.read(mail().id).pendingServer, []);
+  assert.deepEqual(f.calls.slice(0, 2).map(call => call.kind), ['mail-poll', 'mail-seen']);
 });
 test('ack and ack --all-seen complete only selected mail and retry the server intent', async t => {
   const f = fixture(t); f.save(mail()); f.save(mail({ id: 'mail-presented', presentedAt: iso(-1) }));

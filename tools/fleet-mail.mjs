@@ -559,12 +559,6 @@ export async function syncPending({ home, request, now = Date.now, from, stderr 
   }
   if (!shouldContinue()) return;
   const mails = readInbox(home, { unreadOnly: false });
-  for (const mail of mails) for (const action of mail.pendingServer || []) {
-    if (!shouldContinue()) return;
-    if (!['seen', 'fail'].includes(action)) continue;
-    try { await syncMailState({ home, id: mail.id, action, request, now, from, stderr, seenBy: mail.seenBy || from, reason: mail.failReason }); }
-    catch { stderr('fleet-mail: 保存再試行待ち=1'); }
-  }
   if (!shouldContinue()) return;
   const ack = mails.filter(m => m.pendingServer?.includes('ack') && !m.abandonedServer?.includes('ack')).slice(0, ACK_BATCH_LIMIT);
   // Check file locks before making a transport call; a busy file remains pending.
@@ -584,6 +578,14 @@ export async function syncPending({ home, request, now = Date.now, from, stderr 
       } catch { stderr('fleet-mail: 保存再試行待ち=1'); }
     }
   }
+  // Drain batched acknowledgements before individual seen/fail retries can consume the budget.
+  for (const mail of mails) for (const action of mail.pendingServer || []) {
+    if (!shouldContinue()) return;
+    if (!['seen', 'fail'].includes(action)) continue;
+    try { await syncMailState({ home, id: mail.id, action, request, now, from, stderr, seenBy: mail.seenBy || from, reason: mail.failReason }); }
+    catch { stderr('fleet-mail: 保存再試行待ち=1'); }
+  }
+
 }
 
 export async function refreshSentStatus({ home, request, stderr = console.error }) {
@@ -980,7 +982,6 @@ export async function pollOnce(deps = {}) {
         }
       });
       await prePhase('expireInbox', () => expireInbox(home, now));
-      await prePhase('syncPending', () => syncPending({ home, request, now, from: label, stderr: err, shouldContinue: preBudgetAvailable }));
       await prePhase('quarantineResync', async () => {
         if (fs.existsSync(quarantineDir)) for (const name of fs.readdirSync(quarantineDir).filter(n => /^mail-[A-Za-z0-9-]+\.json$/.test(n))) {
           if (!preBudgetAvailable()) break;
@@ -1078,6 +1079,13 @@ export async function pollOnce(deps = {}) {
     if (legacy) err(`fleet-mail: 旧形式宛先受信=${legacy}`);
     writeJson(lastPollFile, { ...readJson(lastPollFile, {}), at: new Date(now()).toISOString(), busyStreak: 0, errorStreak: 0 });
     endPhase();
+    // Receipt is durable before historical sync. Drain before processing new mail so
+    // a new failed action is not retried twice (or abandoned early) in this poll.
+    if (now() - startedAt < POLL_SOFT_DEADLINE_MS) await timed('syncPending', async () => {
+      const syncStartedAt = now();
+      await syncPending({ home, request, now, from: label, stderr: err,
+        shouldContinue: () => now() - syncStartedAt < PRE_POLL_BUDGET_MS && now() - startedAt < POLL_SOFT_DEADLINE_MS });
+    });
     let promptHandled = false;
     let growiAppendHandled = false;
     const fleetMembers = deps.pcMap ?? readJson(new URL('../fleet-pc-map.json', import.meta.url), {});

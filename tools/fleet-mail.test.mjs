@@ -1159,7 +1159,7 @@ test('poll TimeoutError preserves last success and reaches the bounded failure t
 });
 
 
-test('slow pending seen backlog yields to receipt at the existing pre-poll deadline', async t => {
+test('fresh receipt is durable before a slow seen backlog and remaining retries stay pending', async t => {
   const f = fixture(t);
   const { PRE_POLL_BUDGET_MS } = await import('./fleet-mail.mjs');
   let time = Date.parse('2026-11-12T00:00:00Z');
@@ -1172,15 +1172,75 @@ test('slow pending seen backlog yields to receipt at the existing pre-poll deadl
     dailyLaneHealth: async () => {}, dailyRuleCompliance: async () => {}, notifyArrival: async () => false,
     request: async (kind, payload) => {
       calls.push(kind);
-      if (kind === 'mail-seen') { time += PRE_POLL_BUDGET_MS + 1; return { ok: true, mail: { ...pending(payload.id), seenAt: new Date(time).toISOString() } }; }
-      if (kind === 'mail-poll') return { ok: true, messages: [] };
+      if (kind === 'mail-seen') {
+        assert.ok(fs.existsSync(path.join(f.dir, 'fleet-inbox', 'mail-fresh-before-sync.json')));
+        assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir, '.fleet-mail-last-poll.json'), 'utf8')).at, new Date(time).toISOString());
+        time += PRE_POLL_BUDGET_MS + 1;
+        return { ok: true, mail: { ...pending(payload.id), seenAt: new Date(time).toISOString() } };
+      }
+      if (kind === 'mail-poll') return { ok: true, messages: [mail({ id: 'mail-fresh-before-sync' })] };
       return { ok: true, mail: null };
     }
   });
   assert.equal(calls.filter(k => k === 'mail-seen').length, 1);
-  assert.ok(calls.includes('mail-poll'));
+  assert.deepEqual(calls.slice(0, 2), ['mail-poll', 'mail-seen']);
   const deferred = readInbox(f.home, { unreadOnly: false }).find(m => m.id === 'mail-pending-b');
   assert.deepEqual(deferred.pendingServer, ['seen']);
   assert.equal(deferred.serverAttempts?.seen, undefined);
-  assert.ok(f.errors.includes('fleet-mail: 受信前処理を次回へ延期=1'));
+  assert.equal(deferred.attempts?.seen, undefined);
+});
+
+
+test('batched acknowledgements are not starved by a slow seen queue and respect the batch limit', async t => {
+  const f = fixture(t);
+  const { syncPending, ACK_BATCH_LIMIT, PRE_POLL_BUDGET_MS } = await import('./fleet-mail.mjs');
+  let elapsed = 0;
+  const ids = Array.from({ length: ACK_BATCH_LIMIT + 1 }, (_, n) => `mail-ack-${n}`);
+  for (const id of ids) updateInbox(id, () => mail({ id, status: 'done', pendingServer: ['ack'] }), { home: f.home });
+  for (const id of ['mail-seen-a', 'mail-seen-b']) updateInbox(id, () => mail({ id, status: 'seen', pendingServer: ['seen'] }), { home: f.home });
+  const calls = [];
+  await syncPending({ home: f.home, from: 'kim-PC', shouldContinue: () => elapsed < PRE_POLL_BUDGET_MS,
+    request: async (kind, payload) => {
+      calls.push(kind);
+      if (kind === 'mail-ack') {
+        assert.equal(payload.ids.length, ACK_BATCH_LIMIT);
+        return { ok: true, results: payload.ids.map(id => ({ id, ok: true, mail: { id, status: 'done' } })) };
+      }
+      elapsed += PRE_POLL_BUDGET_MS;
+      return { ok: true, mail: { id: payload.id } };
+    } });
+  assert.deepEqual(calls, ['mail-ack', 'mail-seen']);
+  const remaining = readInbox(f.home, { unreadOnly: false });
+  assert.equal(remaining.filter(m => m.pendingServer?.includes('ack')).length, 1);
+  assert.equal(remaining.filter(m => m.pendingServer?.includes('seen')).length, 1);
+});
+
+test('busy receipt leaves historical sync queued without transport or retry penalties', async t => {
+  const f = fixture(t);
+  updateInbox('mail-pending', () => mail({ id: 'mail-pending', status: 'seen', pendingServer: ['seen', 'ack'] }), { home: f.home });
+  const calls = [];
+  const result = await pollOnce({ ...f.deps, request: async kind => {
+    calls.push(kind);
+    throw Object.assign(new Error('busy'), { code: 'SERVER_BUSY' });
+  } });
+  assert.equal(result.skipped, 'busy');
+  assert.deepEqual(calls, ['mail-poll']);
+  const pending = readInbox(f.home, { unreadOnly: false })[0];
+  assert.deepEqual(pending.pendingServer, ['seen', 'ack']);
+  assert.equal(pending.attempts?.seen, undefined);
+  assert.equal(pending.attempts?.ack, undefined);
+});
+
+
+test('a newly failed mail action is queued for a later poll, not retried immediately after processing', async t => {
+  const f = fixture(t); let failures = 0;
+  await pollOnce({ ...f.deps, request: async (kind, payload) => {
+    if (kind === 'mail-poll') return { messages: [mail({ kind: 'prompt' })] };
+    if (kind === 'mail-fail') { failures++; throw new Error('offline'); }
+    return { ok: true, mail: payload };
+  } });
+  assert.equal(failures, 1);
+  const pending = readInbox(f.home, { unreadOnly: false })[0];
+  assert.deepEqual(pending.pendingServer, ['fail']);
+  assert.equal(pending.attempts.fail, 1);
 });

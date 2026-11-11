@@ -111,15 +111,33 @@ test('テスト5（除外パス）', (t) => {
   assert.equal(run('Write', { file_path: 'README.md', content: BALANCE_BLOCK }), undefined);
 });
 
-test('テスト6（既存ファイルに REQUESTED-BY あり）', (t) => {
+test('テスト6-a（新仕様・止まる）', (t) => {
   const { cwd, run } = fixture(t);
-  const targetFile = path.join(cwd, 'src/config.json');
+  const targetFile = path.join(cwd, 'src/data.json');
   fs.mkdirSync(path.dirname(targetFile), { recursive: true });
   fs.writeFileSync(targetFile, '// REQUESTED-BY: kim 2026-11-11\n{"existing": true}');
 
+  const decision = run('Write', {
+    file_path: 'src/data.json',
+    content: BALANCE_BLOCK,
+  });
+  assert.equal(decision, 'deny');
+});
+
+test('テスト6-b（通る）', (t) => {
+  const { run } = fixture(t);
+  const decision = run('Write', {
+    file_path: 'src/data.json',
+    content: `// REQUESTED-BY: kim 2026-11-11\n${BALANCE_BLOCK}`,
+  });
+  assert.equal(decision, undefined);
+});
+
+test('テスト6-c（通る）', (t) => {
+  const { run } = fixture(t);
   const decision = run('Edit', {
-    file_path: 'src/config.json',
-    old_string: '{"existing": true}',
+    file_path: 'src/data.json',
+    old_string: '// user 指定 2026-10-22\n{"existing": true}',
     new_string: BALANCE_BLOCK,
   });
   assert.equal(decision, undefined);
@@ -163,4 +181,18 @@ test('テスト9（Bash）', (t) => {
     run('Bash', { command: 'node tools/register-stuck-dialog-task.mjs' }),
     undefined
   );
+});
+
+test('テスト10（実データ・既存マーカー越しでも止まる）', (t) => {
+  const targetPath = 'C:\\Users\\test\\Desktop\\ClaudeCode\\keiri-hub\\src\\data\\cashRecurring.json';
+  if (fs.existsSync(targetPath)) {
+    const { run } = fixture(t);
+    const decision = run('Write', {
+      file_path: targetPath,
+      content: BALANCE_BLOCK,
+    });
+    assert.equal(decision, 'deny');
+  } else {
+    t.skip('cashRecurring.json not found');
+  }
 });

@@ -10,29 +10,44 @@ import { api, command, pages, repositoryTarget, repairOrigin, OWNER,
   originReachability, repairUnreachableOrigin, makeRepoRun } from './lib/seat-github.mjs';
 import { getSyncedRepoRoot } from './resolve-synced-repo.mjs';
 
+function getGcmPat(home, run) {
+  try {
+    const output = run('git', ['-c', 'core.askPass=', 'credential', 'fill'], {
+      input: 'protocol=https\nhost=github.com\n\n',
+      cwd: home,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GIT_ASKPASS: '', SSH_ASKPASS: '' }
+    });
+    const match = String(output || '').match(/^password=(.+)$/m);
+    return match ? match[1].trim() : null;
+  } catch { return null; }
+}
+
 export function diagnose({ fix = false, home = process.env.ORGIAST_HOME || os.homedir(), cwd = process.cwd(),
-  run = (file, args) => command(file, args, cwd), status, out = console.log } = {}) {
+  run = (file, args, options) => command(file, args, cwd, options), status, out = console.log } = {}) {
   const rows = [], add = (resource, ok, repair) => rows.push({ resource, ok, repair });
   const kim = isKimOperated(home);
+  let pat = process.env.GH_TOKEN || process.env.GITHUB_TOKEN || null;
+  if (!pat) pat = getGcmPat(home, run);
+  const effectiveRun = pat ? (file, args, options = {}) => file === 'gh' ? run(file, args, { ...options, env: { ...process.env, GH_TOKEN: pat, ...options?.env } }) : run(file, args, options) : run;
   let pending = [];
   try {
-    pending = pages(run, 'user/repository_invitations?per_page=100').filter(trustedInvitation);
-    if (fix && pending.length && kim) acceptInvites({ home, run, out });
-    if (fix && pending.length && kim) pending = pages(run, 'user/repository_invitations?per_page=100').filter(trustedInvitation);
+    pending = pages(effectiveRun, 'user/repository_invitations?per_page=100').filter(trustedInvitation);
+    if (fix && pending.length && kim) acceptInvites({ home, run: effectiveRun, out });
+    if (fix && pending.length && kim) pending = pages(effectiveRun, 'user/repository_invitations?per_page=100').filter(trustedInvitation);
     add('GitHub 招待', pending.length === 0, pending.length ? 'node tools/gh-accept-invites.mjs' : '保留なし');
     // user/repos は private の collaborator リポも含む。users/:owner/repos と併合し公開リポの権限欠落も診断。
-    const repos = new Map([...pages(run, `users/${OWNER}/repos?per_page=100`), ...pages(run, 'user/repos?per_page=100')]
+    const repos = new Map([...pages(effectiveRun, `users/${OWNER}/repos?per_page=100`), ...pages(effectiveRun, 'user/repos?per_page=100')]
       .filter(repo => repo.owner?.login?.toLowerCase() === OWNER).map(repo => [repo.full_name, repo]));
     for (const invitation of pending) repos.set(invitation.repository.full_name, invitation.repository);
     for (const name of [...repos.keys()].sort()) {
-      try { const repo = api(run, `repos/${name}`); add(name, repo.permissions?.push === true, repo.permissions?.push ? 'push 可' : 'node tools/gh-accept-invites.mjs; gh auth status'); }
+      try { const repo = api(effectiveRun, `repos/${name}`); add(name, repo.permissions?.push === true, repo.permissions?.push ? 'push 可' : 'node tools/gh-accept-invites.mjs; gh auth status'); }
       catch { add(name, false, `gh repo view ${name}; gh auth status`); }
     }
     add('リポジトリ一覧', repos.size > 0, 'gh api user/repos --paginate（未招待の非公開リポは列挙不可）');
   } catch { add('GitHub 接続', false, 'gh --version; gh auth status; gh auth login'); }
   try {
-    const target = repositoryTarget(run);
-    if (fix && kim) repairOrigin(target, run);
+    const target = repositoryTarget(effectiveRun);
+    if (fix && kim) repairOrigin(target, effectiveRun);
     const ready = target.push && (!target.fork || (fix && kim));
     add(`origin → ${target.base}`, ready, ready ? 'base へ push 可' : 'node tools/access-doctor.mjs --fix');
   } catch { add('origin / upstream', false, 'git remote -v; gh auth status; node tools/access-doctor.mjs --fix'); }

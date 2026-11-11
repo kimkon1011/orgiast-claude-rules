@@ -263,9 +263,9 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       const dry = await probe(p, { home, timeoutMs: Math.min(15000, probeBudget), dryRun: true });
       dryOk = dry.code === 0;
       // 再利用は成功結果だけ。失敗を30分使い回すと直後に直ったレーンが停止のまま残る（2026-10-25 実測: 直接実行は PONG なのに probe_failed）。
-      const lastProbeOkAt = previous.lanes?.codex?.lastProbeOkAt ? time(previous.lanes.codex.lastProbeOkAt) : 0;
+      const lastProbeOkAt = previous.lanes?.[p]?.lastProbeOkAt ? time(previous.lanes[p].lastProbeOkAt) : 0;
       const isStale = !lastProbeOkAt || (now - lastProbeOkAt > 86400_000);
-      if (dryOk && previous.lanes?.codex?.alive && freshProbe(previous.lanes.codex.probedAt, now) && !isStale) return [p, { cached: previous.lanes.codex }];
+      if (dryOk && previous.lanes?.[p]?.alive && freshProbe(previous.lanes[p].probedAt, now) && !isStale) return [p, { cached: previous.lanes[p] }];
     }
     // dry 失敗（コールド起動が15秒上限を超える等）で即 probe_failed にしない。残り予算の本番 probe で判定する
     // （2026-11-06/07 連日再発: 直接実行は PONG・24h実績0失敗のレーンが dry タイムアウトで停止扱いになった）。

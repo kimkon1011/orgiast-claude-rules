@@ -7,6 +7,7 @@ import { redactAll } from './redact.mjs';
 const http402 = text => /(?<!\d)402(?!\d)/.test(String(text));
 const http403 = text => /(?<!\d)403(?!\d)/.test(String(text));
 const http429 = text => /(?<!\d)429(?!\d)/.test(String(text));
+export const authFailurePattern = /HTTP[ _:]*401|(?<!\d)401(?!\d)|unauthorized|bearer or basic authentication|authentication|refresh_token|token_revoked|invalid_grant|invalid_api_key|not logged in/i;
 export const quotaFailure = text => http429(text) || /cooldown|(?:usage|weekly|monthly)[_ /.-]*limit|limit[^\n]{0,60}exhausted|rate[_ .-]?limit|RESOURCE_EXHAUSTED|codex_cooldown/i.test(String(text));
 // billing は 402 / insufficient balance|quota|credits / payment_required のみ。
 // 429 や rate limit 由来の "Insufficient credits" を billing と誤判定しない（quotaFailure と順序で分離）。
@@ -40,6 +41,17 @@ export function realLaneStats(home, now = Date.now()) {
     s.events.push(event);
     if (status === 'ok') { s.lastOkAt = Math.max(s.lastOkAt, at); continue; }
     const detail = [row.status, row.httpStatus, row.http_status, row.reason, row.error, row.stderr, row.stderrTail, row.spawnError].filter(Boolean).join(' ');
+    // 認証エラー (401 / bearer or basic authentication / refresh_token / token_revoked / invalid_api_key) は
+    // status が cooldown や 429 であっても最優先で記録し、quota/billing 扱いを阻止する。
+    if (authFailurePattern.test(detail)) {
+      s.failures++;
+      const http = detail.match(/(?:HTTP[ _:]*|(?:^|\s))([45]\d\d)\b/i)?.[1];
+      const reason = redactAll(http ? `HTTP ${http} ${detail.slice(0, 100)}` : String(row.reason || row.stderr || row.stderrTail || row.spawnError || row.status || detail).split(/\r?\n/)[0]).slice(0, 180);
+      event.reason = reason;
+      event.detail = detail;
+      s.reasons[reason] = (s.reasons[reason] || 0) + 1;
+      continue;
+    }
     // cooldown 状態の行は常に quota 扱い（実機: glm が 70 件の cooldown 行を持ち real_fail_rate と誤判定）。
     // 402 は RESOURCE_EXHAUSTED を伴うことがある。429 も同居する場合だけ quota を優先する。
     if (row.status !== 'cooldown' && billingFailure(detail) && !billingWithQuotaHint(detail)) {
@@ -58,6 +70,7 @@ export function realLaneStats(home, now = Date.now()) {
     const http = detail.match(/(?:HTTP[ _:]*|(?:^|\s))([45]\d\d)\b/i)?.[1];
     const reason = redactAll(http ? `HTTP ${http}` : String(row.reason || row.stderr || row.stderrTail || row.spawnError || row.status).split(/\r?\n/)[0]).slice(0, 180);
     event.reason = reason;
+    event.detail = detail;
     s.reasons[reason] = (s.reasons[reason] || 0) + 1;
   }
   for (const s of Object.values(providers)) s.failRate = s.calls ? s.failures / s.calls : 0;
@@ -85,7 +98,14 @@ export function applyRealLaneHealth(health, home, now = Date.now()) {
     const lastOkAt = Math.max(s?.lastOkAt || 0, probeOkAt);
     const calls = s?.events.filter(event => event.at > lastOkAt) || [];
     const failures = calls.filter(event => event.reason !== undefined);
-    if (calls.length >= 5 && failures.length / calls.length >= .5) {
+    const hasAuthError = failures.some(f => authFailurePattern.test(f.reason || f.detail || '')) ||
+      s?.events.some(e => e.at > lastOkAt && authFailurePattern.test(e.reason || e.detail || '')) ||
+      (state.error && authFailurePattern.test(state.error) && (!probeOkAt || now >= probeOkAt));
+    if (hasAuthError) {
+      state.alive = false;
+      state.reason = 'dead:oauth_consent';
+      delete state.until;
+    } else if (calls.length >= 5 && failures.length / calls.length >= .5) {
       state.alive = false;
       state.reason = 'real_fail_rate';
       delete state.until;

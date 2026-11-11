@@ -25,7 +25,7 @@ test('24h failures override successful probe, preserve ranking and routing', t =
   assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.claude/lane-health.json'))).lanes.deepseek.reason, 'real_fail_rate');
 });
 test('inclusive threshold excludes quota failures from numerator', t => {
-  const home = fixture(t, [{ status: '500' }, { status: '401' }, { status: '429', until: now - 1 }, { status: 'error', reason: 'usage_limit', until: now - 1 }, { status: '429', until: now - 1 }, { status: 'ok', t: now - 2000 }]);
+  const home = fixture(t, [{ status: '500' }, { status: '503' }, { status: '429', until: now - 1 }, { status: 'error', reason: 'usage_limit', until: now - 1 }, { status: '429', until: now - 1 }, { status: 'ok', t: now - 2000 }]);
   const s = realLaneStats(home, now).deepseek;
   assert.equal(s.calls, 6); assert.equal(s.failures, 2); assert.equal(s.failRate, 2 / 6);
   const h = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };

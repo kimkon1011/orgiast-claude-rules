@@ -157,6 +157,7 @@
     {"id": "task:knowledge-merge", "type": "scheduled-task", "severity": "optional", "scope": "kim-only", "spec": {"name": "OrgiastKnowledgeMerge"}, "description": "kim-PC: Drive inbox ナレッジの毎時統合", "repair": ["register-knowledge-merge-task.mjs"]},
     {"id": "settings:kim-editor-posttool", "type": "json-valid", "severity": "required", "spec": {"path": ".claude/settings.json", "hookEvent": "PostToolUse", "hookScript": "kim-editor-posttool.mjs", "hookArgs": "", "async": false, "timeout": 180}, "description": "作成・コピー直後に kim 編集権限を付与して読み戻す", "repair": ["register-hooks.mjs", "--hooks-only"]},
     {"id": "task:kim-editor-sweep", "type": "scheduled-task", "severity": "required", "spec": {"name": "OrgiastKimEditorSweep"}, "description": "全PC: 自動作成ファイルの kim 編集権限を毎日05:50確認", "repair": ["register-kim-editor-sweep.mjs"]},
+    {"id": "task:login-health", "type": "scheduled-task", "severity": "required", "spec": {"name": "OrgiastLoginHealth", "requireActionTarget": true}, "description": "全PC: ログイン切れ自動点検・修復・通知（2時間ごと）", "repair": ["register-login-health.mjs"]},
     {"id": "task:rule-consistency-audit", "type": "scheduled-task", "severity": "optional", "scope": "kim-only", "spec": {"name": "OrgiastRuleConsistencyAudit"}, "description": "kim-PC: 組織指示・基本理念と配布ルールの矛盾週次再監査(月曜05:40)", "repair": ["register-rule-consistency-audit.mjs"]}
   ]
 }

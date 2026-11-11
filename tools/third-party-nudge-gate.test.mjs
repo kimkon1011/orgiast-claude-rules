@@ -27,17 +27,43 @@ test('pass: kimko-PC の自動進行… あなたの判断待ち', () => {
   assert.deepEqual(result, { decision: 'pass' });
 });
 
-// pass: 第三者待ちがあっても後押し文がある
-test('pass: 第三者待ち＋後押し文あり（kim-PC）', () => {
+// (a) kim-PC 待ち＋nudge あり＋フッター無し → block
+test('block: kim-PC 待ち＋nudge あり＋フッター無し', () => {
   const result = judge(
     'kim-PC からの返信が来たら、本番を再検証します。\n\n' +
     '急ぐ場合だけ、kim さんに口頭やチャットで『aujust の本番が古いブランチで動いている。kim さんの PC に届いている fleet-mail の件を対応して』と一言伝えてもらえると、本番が早く直ります。'
   );
+  assert.equal(result.decision, 'block');
+  assert.equal(result.code, 'THIRD-PARTY-NUDGE');
+  assert.match(result.reason, /まだ閉じない/);
+});
+
+// (b) kim-PC 待ち＋nudge あり＋フッターあり → pass
+test('pass: kim-PC 待ち＋nudge あり＋フッターあり', () => {
+  const result = judge(
+    'kim-PC からの返信が来たら、本番を再検証します。\n\n' +
+    '急ぐ場合だけ、kim さんに口頭やチャットで『aujust の本番が古いブランチで動いている。kim さんの PC に届いている fleet-mail の件を対応して』と一言伝えてもらえると、本番が早く直ります。\n\n' +
+    'このセッション: まだ閉じない（本番反映待ち・2026-11-12 09:00 まで待つ）'
+  );
   assert.deepEqual(result, { decision: 'pass' });
 });
 
-// pass: AI レーンの待機は対象外
-test('pass: Codex の待機は対象外', () => {
+// (c) 「本番反映を待っています」＋フッター無し → block
+test('block: 「本番反映を待っています」＋フッター無し', () => {
+  const result = judge('本番反映を待っています。');
+  assert.equal(result.decision, 'block');
+  assert.equal(result.code, 'THIRD-PARTY-NUDGE');
+  assert.match(result.reason, /まだ閉じない/);
+});
+
+// (d) 閉じてよい定型文だけ → pass
+test('pass: 閉じてよい定型文だけ', () => {
+  const result = judge('このセッション: /session-close は終わっているので、このセッションを閉じてよい');
+  assert.deepEqual(result, { decision: 'pass' });
+});
+
+// (e) Codex の完了待ちだけ → このゲートでは pass
+test('pass: Codex の完了待ちだけ', () => {
   assert.deepEqual(judge('Codex の作業が終わったら確認します。'), { decision: 'pass' });
 });
 

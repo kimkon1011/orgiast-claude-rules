@@ -1283,6 +1283,10 @@
     {"path": "tools/knowledge-upstream.mjs", "scope": "fleet", "step": "task:knowledge-upstream", "reason": "全PCのローカルmemory/playbook/incidentをDrive inboxへ吸い上げ、共有マスターを同期する"},
     {"path": "tools/register-knowledge-upstream-task.ps1", "scope": "fleet", "step": "task:knowledge-upstream", "reason": "全PCの知識吸い上げタスク OrgiastKnowledgeUpstream を登録する"},
     {"path": "tools/register-knowledge-merge-task.ps1", "scope": "kim-only", "reason": "kim-PCだけがDrive inboxのナレッジをmasterに統合する（重複防止）"},
-    {"path": "tools/register-tldv-drive-task.ps1", "scope": "kim-only", "reason": "seisaku-team の tl;dv 会議を Drive へ毎時保存するのは tldv.env と DWD 鍵を持つ kim-PC だけ（複数PCだと二重作成の競合）"}
+    {"path": "tools/register-tldv-drive-task.ps1", "scope": "kim-only", "reason": "seisaku-team の tl;dv 会議を Drive へ毎時保存するのは tldv.env と DWD 鍵を持つ kim-PC だけ（複数PCだと二重作成の競合）"},
+    {"path": "tools/tldv-process-improve.mjs", "scope": "kim-only", "reason": "tl;dv 会議→制作プロセス改善の夜間ループ。DWD鍵とLLM鍵を持つ作業用011（kim-PC）だけで実行"},
+    {"path": "config/tldv-process-improve.json", "scope": "kim-only", "reason": "tl;dv 改善ループの設定。kim-PCでしか使わない"},
+    {"path": "tools/register-tldv-process-improve-task.ps1", "scope": "kim-only", "reason": "kim-PC（作業用011）だけで OrgiastTldvProcessImprove タスクを登録する"},
+    {"path": "tools/tldv-process-improve.test.mjs", "scope": "kim-only", "reason": "tl;dv 改善ループのテスト。CIで実行するがfleet配布はkim-PCだけ"}
   ]
 }

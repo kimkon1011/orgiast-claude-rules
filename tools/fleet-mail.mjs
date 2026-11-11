@@ -1000,7 +1000,7 @@ export async function pollOnce(deps = {}) {
       const isBusy = error.code === 'SERVER_BUSY' || /^(?:fleet-mail: )?busy$/.test(error.message);
       const isServerError = isBusy
         || /^fleet-mail HTTP (5\d\d|401|403|429)$/.test(error.message)
-        || error.name === 'AbortError' || error.code === 'ABORT_ERR';
+        || ['AbortError', 'TimeoutError'].includes(error.name) || error.code === 'ABORT_ERR';
       if (!isServerError) throw error;
       const previous = readJson(lastPollFile, {});
       const busyStreak = isBusy ? (previous.busyStreak || 0) + 1 : 0;

@@ -96,7 +96,8 @@ test('fresh last-poll suppresses poll, inflight poll does not masquerade as succ
   const f = fixture(t);
   fs.writeFileSync(path.join(f.dir, '.fleet-mail-poll.json'), '{}'); assert.equal(shouldReceivePoll(f.home), true);
   const marker = path.join(f.dir, '.fleet-mail-last-poll.json'); fs.writeFileSync(marker, '{}');
-  const now = fs.statSync(marker).mtimeMs;
+  const now = Date.now();
+  fs.writeFileSync(marker, JSON.stringify({ at: new Date(now).toISOString() }));
   assert.equal(shouldReceivePoll(f.home, { now: () => now + POLL_STALE_MS }), false);
   assert.equal(shouldReceivePoll(f.home, { now: () => now + POLL_STALE_MS + 1 }), true);
 });
@@ -142,12 +143,12 @@ test('C11 hook skips seen and presented writes when the inbox file is locked', a
   assert.equal(readInbox(f.home, { unreadOnly: false })[0].presentedSession, 'retry');
 });
 
-test('D4 poll freshness stat failure still presents and queues local inbox context', async t => {
+test('D4 poll freshness read failure still presents and queues local inbox context', async t => {
   const f = fixture(t, [mail('visible')]);
-  const stat = fs.statSync;
-  t.mock.method(fs, 'statSync', (file, ...args) => {
+  const read = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', (file, ...args) => {
     if (String(file).endsWith('.fleet-mail-last-poll.json')) throw Object.assign(new Error('private'), { code: 'EACCES' });
-    return stat(file, ...args);
+    return read(file, ...args);
   });
   await f.run();
   assert.match(f.outputs[0].hookSpecificOutput.additionalContext, /id=mail-visible/);

@@ -438,7 +438,7 @@ test('pollOnce with executePrompts:false receives notes and leaves prompts for t
 });
 test('register --ensure skips registration when task results and last poll are healthy', t => {
   const f = fixture(t);
-  fs.writeFileSync(path.join(f.dir, '.fleet-mail-last-poll.json'), '{}');
+  fs.writeFileSync(path.join(f.dir, '.fleet-mail-last-poll.json'), JSON.stringify({ at: new Date().toISOString() }));
   const calls = [];
   const spawnImpl = (program, args) => {
     calls.push({ program, args });
@@ -1137,4 +1137,23 @@ test('mail-get retries a timeout while reading the response body', async () => {
     fetchImpl: async () => ({ ok: true, json: async () => { if (++calls === 1) throw new DOMException('timeout', 'AbortError'); return { ok: true, mail: { id: 'mail-1', status: 'new' } }; } }) });
   assert.equal((await request('mail-get', { id: 'mail-1' })).mail.status, 'new');
   assert.equal(calls, 2); assert.deepEqual(delays, [1000]);
+});
+
+test('poll TimeoutError preserves last success and reaches the bounded failure threshold', async t => {
+  const f = fixture(t);
+  const file = path.join(f.dir, '.fleet-mail-last-poll.json');
+  const at = '2026-11-02T05:12:00.000Z';
+  fs.writeFileSync(file, JSON.stringify({ at }));
+  f.deps.request = async kind => {
+    if (kind === 'mail-poll') throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    return { ok: true };
+  };
+  for (let n = 1; n < 5; n++) {
+    assert.equal(await main(['--poll', '--no-exec'], f.deps), 0);
+    const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(state.errorStreak, n);
+    assert.equal(state.at, at);
+  }
+  await assert.rejects(main(['--poll', '--no-exec'], f.deps), { code: 'SERVER_ERROR' });
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).errorStreak, 5);
 });

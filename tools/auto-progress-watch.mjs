@@ -833,6 +833,10 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   };
   const rows = readLedger(file);
   endPhase('read-ledger');
+  // 未回答発見は候補選定の前に実行し、同じ巡回で拾った行を処理対象にする（2026-11-11 revert from maintenance-only）。
+  try { await registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io, persist); }
+  catch (error) { summary.errors.push(`register-unanswered: ${String(error?.message ?? error).slice(0, 200)}`); }
+  endPhase('register-unanswered');
   let candidates = latestOpenPromises(rows);
   // check 付き行は sessionId + label ごとに1件選ばれるため、別 label の自動チェックはすべて残る。
   const selected = new Set(candidates);
@@ -1209,8 +1213,6 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     try { await refreshDoneApprovals(home, rows, { now, io: { ...io, listKimInboxItems: cachedListKimInboxItems }, patch }); }
     catch (error) { summary.errors.push(`done-approvals: ${String(error.message).slice(0, 200)}`); }
   }
-  try { await registerUnanswered(home, now, rows, dryRun, summary, ownerOf, io, persist); }
-  catch (error) { summary.errors.push(`register-unanswered: ${String(error?.message ?? error).slice(0, 200)}`); }
   try {
     const restoration = await restoreMigrationClobbers({ home, now, dryRun, io });
     summary.migrationClobberRestore = { count: restoration.targets.length, labels: restoration.targets.map(row => row.label || row.promise), appended: restoration.appended };

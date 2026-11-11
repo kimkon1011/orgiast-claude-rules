@@ -499,3 +499,61 @@ test('通常枠が空でも完了・進捗・承認待ちを表示する', async
   assert.match(context, /kim-inbox 完了・進捗・承認待ち/);
   assert.match(context, /完了だけの通知/);
 });
+
+test('古いロック(mtime 超過)は .stale-* へ rename され取得に成功する', async t => {
+  const home = seat(t);
+  const dir = path.join(home, '.claude/kim-inbox');
+  fs.mkdirSync(dir);
+  await addItem(home, { text: 'compact 対象' });
+  const lock = path.join(dir, 'info-aggregation.lock');
+  fs.writeFileSync(lock, String(12345));
+  const oldTime = new Date(Date.now() - 600000);
+  fs.utimesSync(lock, oldTime, oldTime);
+  assert.equal(await main(['--compact'], { home, stdout: () => {} }), 0);
+  const entries = fs.readdirSync(dir).filter(f => /^info-aggregation\.lock\.stale-\d+$/.test(f));
+  assert.equal(entries.length, 1, 'stale lock が .stale-* に rename されている');
+  assert.equal(fs.existsSync(lock), false, '新しいロックは解放済み');
+});
+
+test('新しいロック(mtime 新鮮)は待つ＝取得失敗する', async t => {
+  const home = seat(t);
+  const dir = path.join(home, '.claude/kim-inbox');
+  fs.mkdirSync(dir);
+  await addItem(home, { text: 'compact 対象' });
+  const lock = path.join(dir, 'info-aggregation.lock');
+  fs.writeFileSync(lock, String(process.pid));
+  const output = [];
+  assert.equal(await main(['--compact'], { home, stderr: x => output.push(x), stdout: () => {} }), 1);
+  assert.match(output[0] ?? '', /使用中/);
+});
+
+test('EPERM が返りうる偽PIDでも mtime が古ければ回収される', async t => {
+  const home = seat(t);
+  const dir = path.join(home, '.claude/kim-inbox');
+  fs.mkdirSync(dir);
+  await addItem(home, { text: 'EPERM テスト' });
+  const lock = path.join(dir, 'info-aggregation.lock');
+  fs.writeFileSync(lock, String(4));
+  const oldTime = new Date(Date.now() - 600000);
+  fs.utimesSync(lock, oldTime, oldTime);
+  assert.equal(await main(['--compact'], { home, stdout: () => {} }), 0);
+  const entries = fs.readdirSync(dir).filter(f => /^info-aggregation\.lock\.stale-\d+$/.test(f));
+  assert.equal(entries.length, 1, 'EPERM 風 PID でも mtime 回収される');
+});
+
+test('ackInboxFile も古いロックを回収し成功する', async t => {
+  const home = seat(t);
+  const inboxDir = path.join(home, '.claude/fleet-inbox');
+  fs.mkdirSync(inboxDir);
+  const mail = { id: 'mail-ack-test', from: '作業用011', to: 'kim-PC', kind: 'note',
+    why: '[kim-inbox:info] 確認', body: '本文', status: 'delivered', createdAt: new Date().toISOString() };
+  fs.writeFileSync(path.join(inboxDir, 'mail-ack-test.json'), JSON.stringify(mail));
+  const lockFile = path.join(inboxDir, 'mail-ack-test.json.lock');
+  fs.writeFileSync(lockFile, '');
+  const oldTime = new Date(Date.now() - 600000);
+  fs.utimesSync(lockFile, oldTime, oldTime);
+  assert.equal((await ingestFleetMail(home)).length, 1);
+  const stales = fs.readdirSync(inboxDir).filter(f => /^mail-ack-test\.json\.lock\.stale-\d+$/.test(f));
+  assert.equal(stales.length, 1, 'ack ロックも .stale-* に rename される');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(inboxDir, 'mail-ack-test.json'))).status, 'done');
+});

@@ -4,6 +4,14 @@
   "evidence": "Authenticated POST /api/keys HTTP 200; names only; values never persisted. Response is for the requesting PC; all-PC receipt is unconfirmed.",
   "distributions": [
     {
+      "source": "ORGIAST_KEYS_JSON_EXTRA_SECURITY_HEALTH",
+      "file": "security-health-oauth.env",
+      "keys": [
+        "SECURITY_HEALTH_OAUTH_CLIENT_ID",
+        "SECURITY_HEALTH_OAUTH_CLIENT_SECRET"
+      ]
+    },
+    {
       "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",
       "file": "kimi-api.env",
       "keys": [
@@ -59,7 +67,9 @@
       "file": "anthropic.env",
       "keys": [
         "ANTHROPIC_API_KEY"
-      ]
+      ],
+      "distribute": false,
+      "note": "Team login へ切り替え。keyserve からは再配布しない。直接 API 呼び出し用の既存ファイルは残す。"
     },
     {
       "source": "ORGIAST_KEYS_JSON / ORGIAST_KEYS_JSON_EXTRA*",

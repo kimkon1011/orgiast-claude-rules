@@ -7,6 +7,7 @@ import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, loc
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
 const exit = { event_type: 'system', payload: { reason: 'host_exit' }, created_at: since };
+const allowScreen = () => ({ ok: true, idleSec: 9999, reason: 'test' });
 
 // git worktree を模した一時フォルダ（.git ファイルが gitdir: .../worktrees/... を指す）
 function makeWorktreeFixture(t) {
@@ -85,7 +86,7 @@ test('reopenLost: worktree cwd のセッションは最初の非 worktree cwd �
   ].map(JSON.stringify).join('\n'));
   const psCalls = [];
   const result = await reopenLost({
-    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, env: { APPDATA: path.join(root, 'no-appdata') },
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, canTouchScreenImpl: allowScreen, env: { APPDATA: path.join(root, 'no-appdata') },
     fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
     spawn: (cmd, args) => {
       if (args[0] !== 'agents') {
@@ -124,7 +125,7 @@ test('reopenLost: worktree 履歴だけ・メイン worktree も取れない場�
     { type: 'user', cwd: wtDir, message: { content: 'only worktree' } },
   ].map(JSON.stringify).join('\n'));
   const result = await reopenLost({
-    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false,
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, canTouchScreenImpl: allowScreen,
     fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
     spawn: (cmd, args) => {
       if (args[0] === 'git') return { status: 1 };
@@ -221,7 +222,7 @@ test('dry run uses real local mapping, paginates, never opens/writes', async t =
 
 test('opening continues after API deadline; focus precedes URI; lock released and log written', async t => {
   const base = fixture(t), calls = []; let clock = 0;
-  const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock, checkCpu: false, env: { APPDATA: path.join(base, 'no-appdata') },
+  const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock, checkCpu: false, canTouchScreenImpl: allowScreen, env: { APPDATA: path.join(base, 'no-appdata') },
     fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
     spawn: (cmd, args) => {
       // hasCodeWindow の呼び出しはウィンドウ無し(0)を返し、calls に記録しない
@@ -268,7 +269,7 @@ test('API failure is explicit and partial candidates survive API-only deadline',
 
 test('closed during fetch is excluded at dispatch time', async t => {
   const base = fixture(t);
-  const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'mock',
+  const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'mock', checkCpu: false, canTouchScreenImpl: allowScreen,
     spawn: (cmd, args) => { assert.equal(args[0], 'agents'); return { status: 0, stdout: '[]' }; },
     fetchImpl: async url => ({ ok: true, json: async () => {
       if (url.includes('/events?')) { fs.writeFileSync(path.join(base, 'closed-sessions.json'), JSON.stringify({ ids: ['one'] })); return { data: [exit] }; }
@@ -277,6 +278,34 @@ test('closed during fetch is excluded at dispatch time', async t => {
   });
   assert.equal(result.reopened.length, 0);
   assert.equal(result.skipped.closed, 1);
+});
+
+test('user active defers every candidate without reopening', async t => {
+  const base = fixture(t);
+  const result = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'mock', checkCpu: false,
+    canTouchScreenImpl: () => ({ ok: false, idleSec: 10, reason: 'test active' }),
+    spawn: (cmd, args) => ({ status: 0, stdout: args[0] === 'agents' ? '[]' : '' }),
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+  });
+  assert.equal(result.reopened.length, 0);
+  assert.equal(result.deferredUserActive, result.candidates.length);
+  assert.equal(result.deferredUserActive, 1);
+});
+
+test('agentsError prevents every candidate from reopening', async t => {
+  const base = fixture(t);
+  fs.mkdirSync(path.join(base, 'sessions'), { recursive: true });
+  const result = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'mock', checkCpu: false,
+    canTouchScreenImpl: allowScreen,
+    spawn: () => ({ status: 1, stderr: 'agents failed' }),
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+  });
+  assert.ok(result.agentsError);
+  assert.equal(result.reopened.length, 0);
+  assert.equal(result.skippedDeferredAgentsError, result.candidates.length);
+  assert.equal(result.skippedDeferredAgentsError, 1);
 });
 
 test('watchReopen since/until calculation and watermark behavior', async t => {
@@ -343,11 +372,11 @@ test('exclusions for archivedByUser and reopenLoop', async t => {
   assert.equal(result.skipped.reopenLoop, 1);
 });
 
-test('reopenLoop: 再接続できなかった(unverified)reopen はループに数えない', async t => {
+test('unverifiedLimit: 24時間以内に同じ id が3回 unverified なら候補外', async t => {
   const base = fixture(t);
   const now = () => Date.parse('2026-11-07T12:00:00.000Z');
 
-  // 60分以内に3回 reopen したが全て unverified（再接続失敗）。これはループではなく接続障害なので止めない。
+  // 24時間以内に3回 reopen したが全て unverified（再接続失敗）。再試行上限で候補から外す。
   const logFile = path.join(base, 'reopen-lost-sessions.log');
   const logEntries = [
     { at: '2026-11-07T11:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
@@ -359,8 +388,8 @@ test('reopenLoop: 再接続できなかった(unverified)reopen はループに�
   const fetchImplNormal = async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } });
   const result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl: fetchImplNormal, spawn: () => ({ status: 0, stdout: '[]' }) });
   assert.equal(result.skipped.reopenLoop, 0);
-  assert.equal(result.candidates.length, 1);
-  assert.equal(result.candidates[0].id, 'one');
+  assert.equal(result.skipped.unverifiedLimit, 1);
+  assert.equal(result.candidates.length, 0);
 });
 
 test('post-reopen verification records verified and unverified', async t => {
@@ -369,7 +398,7 @@ test('post-reopen verification records verified and unverified', async t => {
   let agentCheckCount = 0;
 
   const result = await reopenLost({
-    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, now: () => clock,
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, canTouchScreenImpl: allowScreen, now: () => clock,
     fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
     spawn: (cmd, args) => {
       if (args[0] === 'agents') {
@@ -504,7 +533,7 @@ test('reopenLost: ウィンドウ無し＋lastActiveWindow.workspaceIdentifier �
   const env = { APPDATA: appDataDir };
 
   const result = await reopenLost({
-    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, fetchImpl, env,
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, canTouchScreenImpl: allowScreen, fetchImpl, env,
     spawn: (cmd, args) => {
       if (args[0] !== 'agents') {
         const cmdStr = args[args.length - 1];
@@ -549,7 +578,7 @@ test('parseJsonTolerant handles block comments, escaping, BOM', t => {
 test('reopenLost falls back to code <cwd> with openedWith: folder when no workspace matches', async t => {
   const base = fixture(t), psCalls = [];
   const result = await reopenLost({
-    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false,
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, canTouchScreenImpl: allowScreen,
     env: { APPDATA: path.join(base, 'no-appdata') },
     fetchImpl: async url => ({
       ok: true,
@@ -1006,7 +1035,7 @@ test('reopenLost: 再オープン後の検証も aliveSource を正しく記録�
   fs.mkdirSync(sessionsDir, { recursive: true });
   // agents は空を返す → aliveSource agents、verified=[] unverified=['cse_one']
   const result = await reopenLost({
-    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false,
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, canTouchScreenImpl: allowScreen,
     fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
     spawn: (cmd, args) => {
       if (args[0] === 'agents') return { status: 0, stdout: '[]' };

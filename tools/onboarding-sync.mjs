@@ -39,6 +39,9 @@ const beginPrefix = '<!-- BEGIN: オージャスト共通ルール';
 const endMarker = '<!-- END: オージャスト共通ルール -->';
 const indexLead = '全文は ~/.claude/orgiast-onboarding.md。自動ロードされないため、判断に迷ったら Read ツールで該当節を読むこと';
 export const PRESERVE_LOCAL_KEYS = new Set(['REPORTER_LABEL', 'REPORTER_HOST']);
+// Team ログインへ切り替えるため、従量課金の Anthropic API キーは再配布しない。
+// 既存の ~/.claude/anthropic.env は直接 API 呼び出し用に残し、中身は触らない。
+export const SKIP_DISTRIBUTE_FILES = new Set(['anthropic.env']);
 export const KEYS_GUARD_MS = 20 * 60 * 60 * 1000;
 export const KEYS_ALERT_STALE_MS = 48 * 60 * 60 * 1000;
 
@@ -64,7 +67,7 @@ export function keySyncIsStale(previous, now = new Date(), staleMs = KEYS_ALERT_
 export function missingDeclaredKeys(files, exists) {
   if (!files || typeof files !== 'object' || Array.isArray(files)) return [];
   return Object.keys(files)
-    .filter((name) => /^[A-Za-z0-9._-]+$/.test(name) && !name.includes('..') && !exists(name))
+    .filter((name) => /^[A-Za-z0-9._-]+$/.test(name) && !name.includes('..') && !SKIP_DISTRIBUTE_FILES.has(name) && !exists(name))
     .sort();
 }
 
@@ -583,6 +586,7 @@ export async function provisionKeys(now, options = {}) {
     let enrollWriteFailed = false;
     for (const [name, contents] of Object.entries(payload.files)) {
       if (!/^[A-Za-z0-9._-]+$/.test(name) || name.includes('..') || typeof contents !== 'string') continue;
+      if (SKIP_DISTRIBUTE_FILES.has(name)) { log(`skipped distribute: ${name}`); continue; }
       try {
         const destination = path.join(home, '.claude', name);
         const cleanedContents = contents.replace(/^\uFEFF/, '');

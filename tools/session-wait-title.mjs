@@ -30,6 +30,7 @@ const MAX_BYTES = 256 * 1024 * 1024;
 const RECENT_DAYS = 30;
 const SWEEP_COOLDOWN_MS = 60 * 60 * 1000;
 const LOG_FILE = path.join(os.homedir(), '.claude', 'logs', 'session-wait-title.log');
+const REMOTE_BASE = 'https://api.anthropic.com/v1/code/sessions';
 
 function logError(msg, err) {
   try {
@@ -392,10 +393,84 @@ export function sweepAll({ base = path.join(os.homedir(), '.claude'), now = Date
   return result;
 }
 
+function remoteHeaders(base) {
+  try {
+    const token = JSON.parse(fs.readFileSync(path.join(base, '.credentials.json'), 'utf8')).claudeAiOauth?.accessToken;
+    const org = JSON.parse(fs.readFileSync(path.join(base, '..', '.claude.json'), 'utf8')).oauthAccount?.organizationUuid;
+    if (!token || !org) return null;
+    return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01', 'anthropic-beta': 'ccr-byoc-2025-07-29', 'x-organization-uuid': org };
+  } catch { return null; }
+}
+
+// transcript の custom-title 追記だけでは Remote Control（スマホ）のサーバー側タイトルは変わらない。
+// bridge-session と現在の番号付き custom-title を対応付け、Claude Code 本体と同じ PUT 経路で同期する。
+export function remoteTitleTargets({ base = path.join(os.homedir(), '.claude'), now = Date.now(), pc = resolvePcNumber() } = {}) {
+  const targets = [];
+  if (!pc) return targets;
+  const projects = path.join(base, 'projects');
+  let dirs = [];
+  try { dirs = fs.readdirSync(projects, { withFileTypes: true }).filter(d => d.isDirectory()); } catch { return targets; }
+  for (const dir of dirs) {
+    let names = [];
+    try { names = fs.readdirSync(path.join(projects, dir.name)); } catch { continue; }
+    for (const name of names) {
+      if (!name.endsWith('.jsonl')) continue;
+      const file = path.join(projects, dir.name, name);
+      try {
+        const stat = fs.statSync(file);
+        if (now - stat.mtimeMs > RECENT_DAYS * 86400_000 || stat.size > MAX_BYTES) continue;
+        const raw = fs.readFileSync(file, 'utf8');
+        const first = JSON.parse(raw.split(/\r?\n/, 1)[0]);
+        if (first.type !== 'bridge-session' || !first.bridgeSessionId) continue;
+        const title = currentTitles(raw).custom.trim();
+        if (!title.startsWith(`${pc}｜`)) continue;
+        targets.push({ id: first.bridgeSessionId, session: name.slice(0, -'.jsonl'.length).slice(0, 8), title });
+      } catch { /* malformed/unreadable transcript は fail-open */ }
+    }
+  }
+  return targets;
+}
+
+export async function syncRemoteTitles({ base = path.join(os.homedir(), '.claude'), now = Date.now(), pc = resolvePcNumber(), fetchImpl = fetch } = {}) {
+  const headers = remoteHeaders(base);
+  if (!headers) return { skipped: 'no-credentials', synced: [] };
+  const targets = remoteTitleTargets({ base, now, pc });
+  if (!targets.length) return { checked: 0, synced: [], failed: [] };
+  const remote = new Map();
+  let cursor = '';
+  try {
+    for (let page = 0; page < 30; page++) {
+      const query = new URLSearchParams({ limit: '100', ...(cursor && { cursor }) });
+      const response = await fetchImpl(`${REMOTE_BASE}?${query}`, { headers, signal: AbortSignal.timeout(15_000) });
+      if (!response.ok) return { checked: targets.length, synced: [], failed: [{ error: `list ${response.status}` }] };
+      const body = await response.json();
+      for (const row of body.data ?? []) remote.set(row.id, row.title);
+      if (!body.next_cursor) break;
+      cursor = body.next_cursor;
+    }
+  } catch (error) { return { checked: targets.length, synced: [], failed: [{ error: error.message }] }; }
+  const pending = targets.filter(target => remote.has(target.id) && remote.get(target.id) !== target.title);
+  const result = { checked: targets.length, synced: [], failed: [] };
+  for (let offset = 0; offset < pending.length; offset += 8) {
+    await Promise.all(pending.slice(offset, offset + 8).map(async target => {
+      try {
+        const response = await fetchImpl(`${REMOTE_BASE}/${encodeURIComponent(target.id)}`, {
+          method: 'PUT', headers, body: JSON.stringify({ title: target.title }), signal: AbortSignal.timeout(15_000),
+        });
+        if (response.ok) result.synced.push({ session: target.session, title: target.title });
+        else result.failed.push({ session: target.session, status: response.status });
+      } catch (error) { result.failed.push({ session: target.session, error: error.message }); }
+    }));
+  }
+  return result;
+}
+
 async function main() {
   try {
     if (process.argv.includes('--all')) {
-      const result = sweepAll({ force: process.argv.includes('--force') });
+      const base = process.env.ORGIAST_HOME ? path.join(process.env.ORGIAST_HOME, '.claude') : path.join(os.homedir(), '.claude');
+      const result = sweepAll({ base, force: process.argv.includes('--force') });
+      if (!result.skipped) result.remote = await syncRemoteTitles({ base });
       if (process.argv.includes('--verbose')) console.log(JSON.stringify(result, null, 2));
       return;
     }

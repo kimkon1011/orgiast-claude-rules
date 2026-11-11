@@ -230,8 +230,23 @@ test('kim 宛 dry-run は台帳にも Discord にも書き込まない', async (
   const result = await sendDiscordDm('kim', '判断', { home, dryRun: true, resolve: async () => ({ id: '715210673642012733', label: 'kim' }), fetchImpl: async () => assert.fail('送信禁止') });
   assert.equal(result.delivered, 'session-inbox'); assert.equal(listItems(home).length, before);
 });
-test('報告全文モードでは切り詰め送信を拒否', async () => {
-  await assert.rejects(()=>sendDiscordDm('佐藤優奈','あ'.repeat(2500),{home,resolve,noCopyKim:true,noReplyFooter:true,requireFullBody:true,fetchImpl:async()=>assert.fail('長文を一部送信しない')}),/報告全文/);
+test('秘密値を含む本文は送信せず停止する（webhook URL）', async () => {
+  await assert.rejects(() => sendDiscordDm('百瀬', '確認用 https://discord.com/api/webhooks/123456789012345678/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789', {
+    home, resolve, noCopyKim: true, noReplyFooter: true,
+    fetchImpl: async () => assert.fail('秘密値入り本文を送信しない'),
+  }), /秘密値は DM では送れません/);
+});
+test('秘密値なし本文は従来どおり送信できる', async () => {
+  const bodies = [];
+  const result = await sendDiscordDm('百瀬', '通常の連絡です', {
+    home, token: 'test-token', resolve, noCopyKim: true,
+    fetchImpl: async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return bodies.length === 1 ? response({ json: { id: 'dm' } }) : response();
+    },
+  });
+  assert.equal(result.delivered, true);
+  assert.equal(bodies[1].content, withFooter('通常の連絡です'));
 });
 test('非 kim 席の写しは転送失敗でもローカル台帳へ残す', async t => {
   const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'dm-remote-'));

@@ -18,9 +18,13 @@ export function withReplyToKimFooter(body) {
   return text.includes(REPLY_TO_KIM_FOOTER) ? text : `${text}\n\n${REPLY_TO_KIM_FOOTER}`;
 }
 
+function redactBody(value) {
+  return redactSecrets(value)
+    .replace(/([?&]Authorization=)[^&\s]+/gi, '$1[REDACTED]');
+}
+
 function safeContent(value) {
-  return clipDiscordContent(redactSecrets(value)
-    .replace(/([?&]Authorization=)[^&\s]+/gi, '$1[REDACTED]'));
+  return clipDiscordContent(redactBody(value));
 }
 
 async function defaultResolve(target, options) {
@@ -53,7 +57,7 @@ export async function sendDiscordDm(target, body, options = {}) {
   if (!options.noCopyKim && !isKim) copyToKim = isKimSeat(home) ? 'in-session' : 'session-inbox';
   const finalBody = isKim || options.noReplyFooter ? String(body ?? '').trimEnd() : withReplyToKimFooter(body);
   const content = safeContent(finalBody);
-  if (options.requireFullBody && content !== finalBody) throw new Error('報告全文がDiscord本文上限または秘匿値除去で変わるため送信を停止しました');
+  if (redactBody(finalBody) !== finalBody) throw new Error('秘密値は DM では送れません。本文から秘密値を外し、別の経路（Drive の限定共有ドキュメントなど）で渡してください');
   if (options.dryRun) return { dryRun: true, recipient, content, copyToKim, ...(inbox ? { delivered: 'session-inbox' } : {}) };
   if (inbox) {
     const item = await addItem(home, { kind: options.kimActionRequired || ['action', 'ask'].includes(options.kind) ? 'ask' : 'info', text: body, source: 'discord-dm' });

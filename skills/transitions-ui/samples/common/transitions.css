@@ -1,0 +1,415 @@
+/* ============================================================
+   transitions.dev 互換 モーショントークン & トランジションクラス
+   Orgiast 展示会出展受付サイト（apps/expo-apply/）用
+   ============================================================ */
+
+/* --- Motion Tokens (CSS Custom Properties) --- */
+:root {
+  /* Duration */
+  --t-duration-fast: 150ms;
+  --t-duration-normal: 250ms;
+  --t-duration-slow: 400ms;
+  --t-duration-xl: 600ms;
+
+  /* Easing */
+  --t-easing-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --t-easing-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --t-easing-in: cubic-bezier(0.4, 0, 0.68, 0.06);
+  --t-easing-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --t-easing-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Distance / Translation */
+  --t-distance-sm: 4px;
+  --t-distance-md: 8px;
+  --t-distance-lg: 16px;
+  --t-distance-xl: 32px;
+
+  /* Blur */
+  --t-blur-sm: 4px;
+  --t-blur-md: 8px;
+  --t-blur-lg: 16px;
+
+  /* Scale */
+  --t-scale-in: 0.95;
+  --t-scale-out: 1.05;
+  --t-scale-lg: 1.1;
+}
+
+/* --- Reduced Motion --- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* ============================================================
+   Individual Transition Classes
+   ============================================================ */
+
+/* --- Card resize --- */
+.t-card-resize {
+  transition: transform var(--t-duration-normal) var(--t-easing-out),
+              box-shadow var(--t-duration-normal) var(--t-easing-out);
+  transform: scale(1);
+}
+.t-card-resize:hover {
+  transform: scale(var(--t-scale-out));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+.t-card-resize:active {
+  transform: scale(0.98);
+}
+.t-card-resize.selected {
+  transform: scale(1.02);
+  border-color: var(--color-accent, #2563eb);
+  box-shadow: 0 0 0 2px var(--color-accent, #2563eb);
+}
+
+/* --- Modal open/close --- */
+.t-modal-overlay {
+  opacity: 0;
+  transition: opacity var(--t-duration-normal) var(--t-easing-out);
+}
+.t-modal-overlay.open {
+  opacity: 1;
+}
+.t-modal-content {
+  transform: scale(var(--t-scale-in));
+  opacity: 0;
+  transition: transform var(--t-duration-normal) var(--t-easing-spring),
+              opacity var(--t-duration-normal) var(--t-easing-out);
+}
+.t-modal-overlay.open .t-modal-content {
+  transform: scale(1);
+  opacity: 1;
+}
+
+/* --- Tabs sliding --- */
+.t-tabs {
+  position: relative;
+  display: flex;
+  gap: 0;
+}
+.t-tab-indicator {
+  position: absolute;
+  bottom: 0;
+  height: 2px;
+  background: var(--color-accent, #2563eb);
+  transition: left var(--t-duration-normal) var(--t-easing-in-out),
+              width var(--t-duration-normal) var(--t-easing-in-out);
+  border-radius: 1px;
+}
+.t-tab {
+  cursor: pointer;
+  padding: 0.5rem 1rem;
+  transition: color var(--t-duration-fast) var(--t-easing-out);
+}
+.t-tab.active {
+  color: var(--color-accent, #2563eb);
+  font-weight: 600;
+}
+
+/* --- Toast / Alert --- */
+.t-toast {
+  transform: translateY(var(--t-distance-lg));
+  opacity: 0;
+  filter: blur(var(--t-blur-sm));
+  transition: transform var(--t-duration-normal) var(--t-easing-spring),
+              opacity var(--t-duration-normal) var(--t-easing-out),
+              filter var(--t-duration-normal) var(--t-easing-out);
+}
+.t-toast.open {
+  transform: translateY(0);
+  opacity: 1;
+  filter: blur(0);
+}
+.t-toast.closing {
+  transform: translateY(var(--t-distance-sm));
+  opacity: 0;
+  filter: blur(var(--t-blur-sm));
+}
+
+/* --- Success check (stroke animation) --- */
+.t-success-check .check-circle {
+  stroke-dasharray: 120;
+  stroke-dashoffset: 120;
+  transition: stroke-dashoffset var(--t-duration-slow) var(--t-easing-out);
+}
+.t-success-check.visible .check-circle {
+  stroke-dashoffset: 0;
+}
+.t-success-check .check-path {
+  stroke-dasharray: 50;
+  stroke-dashoffset: 50;
+  transition: stroke-dashoffset var(--t-duration-normal) var(--t-easing-spring);
+  transition-delay: var(--t-duration-fast);
+}
+.t-success-check.visible .check-path {
+  stroke-dashoffset: 0;
+}
+
+/* --- 3D Tilt (Booth preview) --- */
+.t-3d-container {
+  perspective: 800px;
+  perspective-origin: 50% 50%;
+}
+.t-3d-tilt {
+  transform-style: preserve-3d;
+  transition: transform var(--t-duration-normal) var(--t-easing-out);
+  will-change: transform;
+}
+.t-3d-tilt.glare {
+  position: relative;
+  overflow: hidden;
+}
+.t-3d-tilt.glare::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.15) 0%,
+    transparent 50%
+  );
+  pointer-events: none;
+  transition: opacity var(--t-duration-normal) var(--t-easing-out);
+  opacity: 0;
+}
+.t-3d-tilt.glare:hover::after {
+  opacity: 1;
+}
+
+/* --- Toggle switch --- */
+.t-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  gap: 0.5rem;
+}
+.t-toggle-track {
+  width: 44px;
+  height: 24px;
+  border-radius: 12px;
+  background: #cbd5e1;
+  transition: background var(--t-duration-normal) var(--t-easing-out);
+  position: relative;
+}
+.t-toggle.on .t-toggle-track {
+  background: var(--color-accent, #2563eb);
+}
+.t-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  transition: transform var(--t-duration-normal) var(--t-easing-spring);
+}
+.t-toggle.on .t-toggle-thumb {
+  transform: translateX(20px);
+}
+
+/* --- Error state shake --- */
+.t-error-shake {
+  animation: t-shake var(--t-duration-normal) cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+@keyframes t-shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 50%, 90% { transform: translateX(-4px); }
+  30%, 70% { transform: translateX(4px); }
+}
+
+/* --- Number pop-in (stat counter) --- */
+.t-number-pop-in {
+  display: inline-block;
+  transition: transform var(--t-duration-slow) var(--t-easing-spring),
+              opacity var(--t-duration-normal) var(--t-easing-out);
+}
+.t-number-pop-in.entering {
+  transform: scale(0.5) translateY(8px);
+  opacity: 0;
+}
+.t-number-pop-in.visible {
+  transform: scale(1) translateY(0);
+  opacity: 1;
+}
+
+/* --- Panel reveal --- */
+.t-panel-reveal {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height var(--t-duration-slow) var(--t-easing-in-out),
+              opacity var(--t-duration-normal) var(--t-easing-out),
+              transform var(--t-duration-normal) var(--t-easing-out);
+  transform: translateY(-4px);
+}
+.t-panel-reveal.open {
+  max-height: 500px;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* --- Accordion --- */
+.t-accordion-header {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: color var(--t-duration-fast) var(--t-easing-out);
+}
+.t-accordion-chevron {
+  transition: transform var(--t-duration-normal) var(--t-easing-spring);
+}
+.t-accordion-header.open .t-accordion-chevron {
+  transform: rotate(180deg);
+}
+.t-accordion-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--t-duration-normal) var(--t-easing-in-out);
+}
+.t-accordion-body.open {
+  grid-template-rows: 1fr;
+}
+.t-accordion-body > div {
+  overflow: hidden;
+}
+
+/* --- Banner stacking (notifications) --- */
+.t-banner {
+  transition: transform var(--t-duration-normal) var(--t-easing-spring),
+              opacity var(--t-duration-normal) var(--t-easing-out);
+}
+.t-banner + .t-banner {
+  margin-top: -2px;
+}
+.t-banner.removing {
+  transform: translateX(100%);
+  opacity: 0;
+}
+
+/* --- Tooltip --- */
+.t-tooltip-trigger {
+  position: relative;
+}
+.t-tooltip {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%) scale(0.9);
+  transform-origin: bottom center;
+  opacity: 0;
+  pointer-events: none;
+  transition: transform var(--t-duration-fast) var(--t-easing-spring),
+              opacity var(--t-duration-fast) var(--t-easing-out);
+  white-space: nowrap;
+}
+.t-tooltip-trigger:hover .t-tooltip,
+.t-tooltip-trigger:focus-visible .t-tooltip {
+  transform: translateX(-50%) scale(1);
+  opacity: 1;
+  transition-delay: 150ms;
+}
+
+/* --- Shimmer text --- */
+.t-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.4) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: t-shimmer-sweep 2s ease-in-out infinite;
+}
+@keyframes t-shimmer-sweep {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* --- Dropdown menu morph --- */
+.t-dropdown-trigger {
+  position: relative;
+}
+.t-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  transform-origin: top right;
+  transform: scale(0.95);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform var(--t-duration-fast) var(--t-easing-spring),
+              opacity var(--t-duration-fast) var(--t-easing-out);
+}
+.t-dropdown-menu.open {
+  transform: scale(1);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* --- Checkbox check (stroke path) --- */
+.t-checkbox {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+.t-checkbox input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.t-checkbox-box {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #cbd5e1;
+  border-radius: 4px;
+  transition: border-color var(--t-duration-fast) var(--t-easing-out),
+              background var(--t-duration-fast) var(--t-easing-out);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.t-checkbox input:checked + .t-checkbox-box {
+  border-color: var(--color-accent, #2563eb);
+  background: var(--color-accent, #2563eb);
+}
+.t-checkbox-checkmark {
+  stroke-dasharray: 16;
+  stroke-dashoffset: 16;
+  transition: stroke-dashoffset var(--t-duration-fast) var(--t-easing-spring);
+}
+.t-checkbox input:checked + .t-checkbox-box .t-checkbox-checkmark {
+  stroke-dashoffset: 0;
+}
+
+/* --- Like button (heart fill) --- */
+.t-like-btn {
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0.25rem;
+  transition: transform var(--t-duration-fast) var(--t-easing-spring);
+}
+.t-like-btn:hover {
+  transform: scale(var(--t-scale-lg));
+}
+.t-like-btn.liked svg path {
+  fill: #ef4444;
+  transition: fill var(--t-duration-fast) var(--t-easing-out);
+}

@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { deliverKim, KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 import { notifyOwner } from './notify-owner.mjs';
-import { sendDiscordDm } from './discord-dm.mjs';
+import { sendDiscordDm as realSendDiscordDm } from './discord-dm.mjs';
+const sendDiscordDm = (target, body, options={}) => realSendDiscordDm(target, body, { assertContextApproved: async () => ({ reason:'test' }), ...options });
 import { listItems } from './kim-inbox.mjs';
 
 function home(t) {
@@ -15,11 +16,14 @@ function home(t) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
-test('all kim messages bypass Discord, including formerly allowlisted notices and overrides', async t => {
+test('kim 宛は常に inbox だけで Discord API を呼ばない', async t => {
   const dir = home(t);
   for (const [kind, text] of [['action', '判断してください'], ['automatic', '緊急の障害'], ['digest', '【進捗まとめ】'], ['done-requested', '✅ 完了']]) {
-    const result = await deliverKim(text, { home: dir, userId: KIM_DISCORD_USER_ID, kind, plainJa: false, token: 'unused', sessionId: 'kim-no-dm-session', discordAllowed: () => ({ allowed: true }), fetchImpl: () => assert.fail('kim DM forbidden') });
-    assert.equal(result.delivered, 'session-inbox');
+    const calls = [];
+    const result = await deliverKim(text, { home: dir, userId: KIM_DISCORD_USER_ID, kind, plainJa: false, token: 'unused', sessionId: 'kim-no-dm-session', discordAllowed: () => ({ allowed: true }), fetchImpl: async () => { calls.push('called'); return Response.json({}); } });
+    assert.equal(result.delivered, 'session-inbox', `テキスト「${text}」がDM配送されました`);
+    assert.equal(result.channel, 'kim-inbox');
+    assert.equal(calls.length, 0, `テキスト「${text}」でDiscordが呼ばれました`);
   }
   assert.equal(listItems(dir).length, 4);
   assert.ok(listItems(dir).every(item => item.sessionId === 'kim-no-dm-session'));
@@ -54,6 +58,7 @@ test('raw DM channel transports are audited; new bypasses fail this inventory', 
   const audited = new Map([
     ['autopilot-tick.mjs', 'readControls'], // Opens channel only to read incoming commands.
     ['event-shop-reply-context.mjs', 'channels.push'], // Read-only context collection.
+    ['send-context-check.mjs', '/messages?limit=100'], // Opens DM only to read context; no message POST.
     ['kim-push-relay.mjs', 'messages?after='], // Reads old DMs; pushKim is a separate phone push.
     ['discord-dm.mjs', 'const inbox = isKim;'],
     ['feedback-nag.mjs', 'if (deferred) return deferred;'],

@@ -348,6 +348,61 @@ export async function measureCpuAsync({ sampleMs = 1000, cpusImpl = os.cpus, wai
   } catch { return null; }
 }
 const quotePS = s => "'" + s.replaceAll("'", "''") + "'";
+// VS Code の可視メインウィンドウが1つ以上開いているかを PowerShell で確認する。
+// タイムアウト 15 秒。エラー・タイムアウト・数値でない出力時は安全側（ウィンドウあり＝URIのみ）として true を返す。
+export function hasCodeWindow(spawn = spawnSync) {
+  try {
+    const script = '@(Get-Process Code -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }).Count';
+    const res = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+    if (res.error || res.status !== 0) return true;
+    const count = parseInt(String(res.stdout ?? '').trim(), 10);
+    if (!Number.isFinite(count)) return true;
+    return count > 0;
+  } catch { return true; }
+}
+// 開くべきターゲットを決める。
+// - VS Code ウィンドウが1つでも開いている → { launch: 'uri-only', target: null }（code <path> を一切実行しない）
+// - ウィンドウが無い → storage.json の lastActiveWindow を参照。
+//   lastActiveWindow が folder ならフォルダ、workspaceIdentifier ならワークスペースを開く。
+//   ワークスペースよりフォルダを優先する（指示書: lastActiveWindow が folder なのに .code-workspace を選ぶ現在の挙動をやめる）。
+//   フォルダもワークスペースも決まらない場合は cwd を開く。
+export function resolveLaunchTarget({ cwd, env = process.env, fsImpl = fs, spawn = spawnSync } = {}) {
+  if (hasCodeWindow(spawn)) {
+    return { launch: 'uri-only', target: null, openedWith: null };
+  }
+  // ウィンドウ無し: storage.json の lastActiveWindow を確認
+  const appData = env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  const storagePath = path.join(appData, 'Code', 'User', 'globalStorage', 'storage.json');
+  if (fsImpl.existsSync(storagePath)) {
+    try {
+      const content = fsImpl.readFileSync(storagePath, 'utf8');
+      const data = parseJsonTolerant(content);
+      const lastActive = data?.windowsState?.lastActiveWindow;
+      if (lastActive) {
+        // folder 優先
+        if (lastActive.folder) {
+          const folderPath = uriToPath(lastActive.folder);
+          if (folderPath) {
+            return { launch: 'opened-window', target: folderPath, openedWith: 'folder' };
+          }
+        }
+        // workspaceIdentifier があればワークスペースファイル
+        const configURI = lastActive.workspaceIdentifier?.configURIPath;
+        if (configURI) {
+          const wsPath = uriToPath(configURI);
+          if (wsPath && wsPath.endsWith('.code-workspace')) {
+            return { launch: 'opened-window', target: wsPath, openedWith: 'workspace' };
+          }
+        }
+      }
+    } catch {}
+  }
+  // どちらも決まらない → cwd をフォルダとして開く
+  if (cwd) {
+    return { launch: 'opened-window', target: cwd, openedWith: 'folder' };
+  }
+  return { launch: 'uri-only', target: null, openedWith: null };
+}
 export function resolveCodeCli(env = process.env, exists = fs.existsSync) {
   const candidates = [env.VSCODE_CLI_PATH, path.join(env.LOCALAPPDATA || '', 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'),
     'C:\\Program Files\\Microsoft VS Code\\bin\\code.cmd', 'C:\\Program Files (x86)\\Microsoft VS Code\\bin\\code.cmd'];
@@ -355,14 +410,37 @@ export function resolveCodeCli(env = process.env, exists = fs.existsSync) {
   if (!cli) throw Error('code.cmd not found');
   return cli;
 }
-export function localIndex(base, onlyId) {
+export function localIndex(base, onlyId, { sinceMs, largeFileThreshold = 8 * 1024 * 1024, largeFileHead = 512 * 1024, largeFileTail = 4 * 1024 * 1024 } = {}) {
   const index = new Map();
   const projects = path.join(base, 'projects');
+  let indexed = 0, skippedOld = 0;
+  const startMs = Date.now();
   for (const dir of fs.readdirSync(projects, { withFileTypes: true })) {
     if (!dir.isDirectory() || dir.name === '_deleted-backup') continue;
     for (const file of fs.readdirSync(path.join(projects, dir.name))) {
       if (!file.endsWith('.jsonl') || (onlyId && file !== `${onlyId}.jsonl`)) continue;
-      const raw = fs.readFileSync(path.join(projects, dir.name, file), 'utf8');
+      const filePath = path.join(projects, dir.name, file);
+      // mtime フィルタ: sinceMs が指定され、onlyId が無い場合、古いファイルは飛ばす
+      if (!onlyId && sinceMs !== undefined) {
+        try {
+          const stat = fs.statSync(filePath);
+          if (stat.mtimeMs < sinceMs) { skippedOld++; continue; }
+        } catch { /* stat 不可なら読む */ }
+      }
+      let raw;
+      const stat = fs.statSync(filePath);
+      if (stat.size > largeFileThreshold) {
+        // 巨大ファイル: 先頭 largeFileHead + 末尾 largeFileTail だけ読む
+        const fd = fs.openSync(filePath, 'r');
+        const bufHead = Buffer.alloc(largeFileHead);
+        const bytesHead = fs.readSync(fd, bufHead, 0, largeFileHead, 0);
+        const bufTail = Buffer.alloc(Math.min(largeFileTail, stat.size));
+        const bytesTail = fs.readSync(fd, bufTail, 0, bufTail.length, Math.max(0, stat.size - bufTail.length));
+        fs.closeSync(fd);
+        raw = bufHead.toString('utf8', 0, bytesHead) + bufTail.toString('utf8', 0, bytesTail);
+      } else {
+        raw = fs.readFileSync(filePath, 'utf8');
+      }
       // Most archived transcripts have no bridge. Avoid parsing gigabytes of tool output.
       if (!raw.includes('"bridge-session"')) continue;
       const lines = raw.split('\n');
@@ -382,35 +460,42 @@ export function localIndex(base, onlyId) {
         seenCwds.add(norm);
         cwds.push(row.cwd);
       }
-      const bytes = Buffer.byteLength(raw);
+      const bytes = stat.size;
       const conversation = bytes > 200 * 1024 || hasConversation(lines.map(parse), bytes);
+      indexed++;
       for (const bridge of bridges) {
         index.set(bridge.bridgeSessionId, { id: file.slice(0, -6), cwd: cwds[0], cwds, hasConversation: conversation });
       }
     }
   }
-  return index;
+  const indexMs = Date.now() - startMs;
+  return Object.assign(index, { indexed, skippedOld, indexMs });
 }
 function closedIds(base) {
   const ledger = readJson(path.join(base, 'closed-sessions.json'), { ids: [] });
   if (!Array.isArray(ledger.ids)) throw Error('Invalid closed ledger');
   return new Set(ledger.ids);
 }
+// reopenLoop ガードは「真の無限リロープ」（再接続に成功→すぐ切断→再接続…）だけを止める。
+// 直近 60 分に「検証済み（実際に再接続した）」reopen だけを数える。
+// 再接続できなかった（unverified）セッションはループではなく別の障害なので、reopenLoop で止めると
+// 正当な再接続まで止めてしまう（2026-11-09 実測: 切断中セッション4本が 3 回の空振り reopen で 24h 遮断された）。
 function reopenLoopCounts(base, nowFn = Date.now) {
   const logFile = path.join(base, 'reopen-lost-sessions.log');
   const counts = {};
   try {
     const raw = fs.readFileSync(logFile, 'utf8');
     const nowTime = typeof nowFn === 'function' ? nowFn() : nowFn;
-    const cutoff = nowTime - 24 * 3600 * 1000;
+    const cutoff = nowTime - 60 * 60 * 1000;
     for (const line of raw.split('\n').filter(Boolean)) {
       try {
         const entry = JSON.parse(line);
         if (!entry.at || !Array.isArray(entry.reopened)) continue;
         if (Date.parse(entry.at) < cutoff) continue;
+        const verified = new Set(Array.isArray(entry.verified) ? entry.verified : []);
         for (const r of entry.reopened) {
           const id = r?.id || r;
-          if (id) counts[id] = (counts[id] || 0) + 1;
+          if (id && verified.has(id)) counts[id] = (counts[id] || 0) + 1;
         }
       } catch {}
     }
@@ -501,8 +586,8 @@ export function resolveClaudeCli({ env = process.env, exists = fs.existsSync, re
 export async function reopenLost({ since, until, dryRun = false, max = 30, gapSec = 10,
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
   now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs, stateBased = false,
-  checkCpu = true, cpusImpl } = {}) {
-  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0 }, aliveSource: null, agentsError: null, agentsDiag: null };
+  checkCpu = true, cpusImpl, vscodeStartedAt } = {}) {
+  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closedInRunningVscode: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
   // Dry run is strictly read-only: no lock or log mutation on the user's PC.
   const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'));
   if (!release) return { ...result, error: 'locked' };
@@ -553,8 +638,15 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
     };
     const living = alive();
     writeProgress(base, 'alive', `source=${result.aliveSource}, count=${living.size}`);
-    const locals = localIndex(base), closed = closedIds(base);
-    writeProgress(base, 'index', `local=${locals.size}, closed=${closed.size}`);
+    const indexSinceMs = stateBased
+      ? now() - 72 * 3600 * 1000
+      : Date.parse(since) - 24 * 3600 * 1000;
+    const locals = localIndex(base, undefined, { sinceMs: Number.isFinite(indexSinceMs) ? indexSinceMs : now() - 72 * 3600 * 1000 });
+    const closed = closedIds(base);
+    writeProgress(base, 'index', `local=${locals.size}, closed=${closed.size}, skippedOld=${locals.skippedOld}, indexMs=${locals.indexMs}`);
+    result.indexed = locals.indexed;
+    result.indexSkippedOld = locals.skippedOld;
+    result.indexMs = locals.indexMs;
     const reopenCounts = reopenLoopCounts(base, now);
     const deadline = now() + (stateBased ? 180000 : 60000);
     const get = async url => {
@@ -575,6 +667,19 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
         if (stateBased) {
           const nowTime = now();
           const stateSince = new Date(nowTime - 72 * 3600 * 1000).toISOString();
+          // 手で閉じたタブと空き枠は開き直さない。再起動で切れたものだけ開く
+          let resolvedVscodeStartedAt = vscodeStartedAt;
+          if (resolvedVscodeStartedAt === undefined) {
+            try {
+              const psScript = "$p = Get-Process Code -ErrorAction SilentlyContinue | Sort-Object StartTime | Select-Object -First 1; if ($p) { $p.StartTime.ToUniversalTime().ToString('o') }";
+              const res = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psScript], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+              const ts = Date.parse(String(res.stdout ?? '').trim());
+              resolvedVscodeStartedAt = Number.isFinite(ts) ? ts : null;
+            } catch {
+              resolvedVscodeStartedAt = null;
+            }
+          }
+          result.vscodeStartedAt = Number.isFinite(resolvedVscodeStartedAt) ? new Date(resolvedVscodeStartedAt).toISOString() : null;
           for (const session of sessions) {
             const local = locals.get(session.id);
             if (!local || seenIds.has(local.id)) continue;
@@ -584,6 +689,11 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
             if (!Number.isFinite(lastEvent) || lastEvent < Date.parse(stateSince)) continue;
             const reason = exclusion(local, closed, living);
             if (reason) { result.skipped[reason]++; continue; }
+            // 待機中の空き枠（タイトル「011｜待機中」など）は開き直さない
+            const title = (session.title ?? '').trim();
+            if (/^(?:\d{3}｜)?待機中$/.test(title)) { result.skipped.standby++; continue; }
+            // 起動中の VS Code で閉じられたタブは開き直さない
+            if (Number.isFinite(resolvedVscodeStartedAt) && resolvedVscodeStartedAt < lastEvent) { result.skipped.closedInRunningVscode++; continue; }
             if (reopenCounts[local.id] >= 3) { result.skipped.reopenLoop++; continue; }
             seenIds.add(local.id);
             result.candidates.push({ id: local.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '', source: 'state' });
@@ -637,6 +747,7 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
         result.deferredCpu = cpuLoad;
       } else {
         const code = codeCli || resolveCodeCli(env, fsImpl.existsSync);
+        let windowOpened = false; // 1回の実行で新規ウィンドウを作るのは最大1回まで
         for (const candidate of result.candidates.slice(0, max)) {
           writeProgress(base, 'open', `id=${candidate.id}`);
           // Recheck after fetching and between opens: close/purge may have happened meanwhile.
@@ -647,25 +758,39 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
             const folder = resolveReopenFolder(candidate.cwd, candidate.cwds, { fsImpl, spawn });
             // worktree のまま開く候補が無いときは開かずスキップ（新しい worktree ウィンドウは作らない）。
             if (!folder) { result.skipped.worktree++; continue; }
-            const wsInfo = findWorkspaceForCwd(folder, { env, fsImpl });
-            const targetPath = wsInfo ? wsInfo.workspaceFile : folder;
-            const titlePattern = wsInfo ? wsInfo.workspaceName : path.win32.basename(folder);
-            const openedWith = wsInfo ? 'workspace' : 'folder';
-
-            ps(`& ${quotePS(code)} ${quotePS(targetPath)}; exit $LASTEXITCODE`, spawn);
-            const ready = windowReady || (() => ps(`$w = @(Get-Process Code -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle.Contains(${quotePS(titlePattern)}) }); if ($w.Count) { 'ready' }`, spawn) === 'ready');
-            let found = false;
-            for (let elapsed = 0; elapsed <= 60; elapsed++) {
-              if (await ready(candidate.cwd, targetPath, titlePattern)) { found = true; break; }
-              if (elapsed < 60) await wait(1000);
+            // 開くべきターゲットを決定（ウィンドウ有無・storage.json の lastActiveWindow を考慮）
+            const launchInfo = resolveLaunchTarget({ cwd: folder, env, fsImpl, spawn });
+            let launch = launchInfo.launch;
+            let targetPath = launchInfo.target;
+            let openedWith = launchInfo.openedWith;
+            // 既にウィンドウを開いた後は、以降の候補は URI のみ
+            if (windowOpened && launch === 'opened-window') {
+              launch = 'uri-only';
+              targetPath = null;
+              openedWith = null;
             }
-            if (!found) throw Error('VS Code window timeout');
-            const current = [...localIndex(base, candidate.id).values()].find(l => l.id === candidate.id);
-            const lateReason = exclusion(current, closedIds(base), alive());
-            if (lateReason) { result.skipped[lateReason]++; continue; }
-            // Focus again immediately before URI dispatch to reduce focus races.
-            ps(`& ${quotePS(code)} ${quotePS(targetPath)}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & ${quotePS(code)} --open-url ${quotePS('vscode://anthropic.claude-code/open?session=' + encodeURIComponent(candidate.id))}; exit $LASTEXITCODE`, spawn);
-            result.reopened.push({ ...candidate, openedWith, folder, target: targetPath });
+            if (launch === 'opened-window') {
+              // ウィンドウを開く
+              windowOpened = true;
+              const titlePattern = openedWith === 'workspace' ? path.basename(targetPath, '.code-workspace') : path.win32.basename(targetPath);
+              ps(`& ${quotePS(code)} ${quotePS(targetPath)}; exit $LASTEXITCODE`, spawn);
+              const ready = windowReady || (() => ps(`$w = @(Get-Process Code -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle.Contains(${quotePS(titlePattern)}) }); if ($w.Count) { 'ready' }`, spawn) === 'ready');
+              let found = false;
+              for (let elapsed = 0; elapsed <= 60; elapsed++) {
+                if (await ready(candidate.cwd, targetPath, titlePattern)) { found = true; break; }
+                if (elapsed < 60) await wait(1000);
+              }
+              if (!found) throw Error('VS Code window timeout');
+              const current = [...localIndex(base, candidate.id).values()].find(l => l.id === candidate.id);
+              const lateReason = exclusion(current, closedIds(base), alive());
+              if (lateReason) { result.skipped[lateReason]++; continue; }
+              // Focus again immediately before URI dispatch to reduce focus races.
+              ps(`& ${quotePS(code)} ${quotePS(targetPath)}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & ${quotePS(code)} --open-url ${quotePS('vscode://anthropic.claude-code/open?session=' + encodeURIComponent(candidate.id))}; exit $LASTEXITCODE`, spawn);
+            } else {
+              // URI のみ: code --open-url だけを撃つ（既存ウィンドウで開く）
+              ps(`& ${quotePS(code)} --open-url ${quotePS('vscode://anthropic.claude-code/open?session=' + encodeURIComponent(candidate.id))}; exit $LASTEXITCODE`, spawn);
+            }
+            result.reopened.push({ ...candidate, openedWith, folder, target: targetPath, launch });
           } catch (error) { (result.failed ??= []).push({ ...candidate, error: error.message }); }
           await wait(gapSec * 1000);
         }
@@ -736,20 +861,31 @@ export async function watchReopen(opts = {}, maxParam) {
   }
   return result;
 }
+export function watchdogRecord(base, { exitImpl = process.exit } = {}) {
+  const logPath = path.join(base, 'reopen-lost-sessions.log');
+  try {
+    const progress = readJson(path.join(base, 'reopen-lost-sessions-progress.json'), {});
+    fs.appendFileSync(logPath, JSON.stringify({
+      at: new Date().toISOString(),
+      error: 'watchdog timeout',
+      stage: progress.stage,
+      detail: progress.detail,
+      pid: progress.pid,
+    }) + '\n');
+  } catch {}
+  writeProgress(base, 'watchdog', 'timeout');
+  try { fs.unlinkSync(path.join(base, 'reopen-lost-sessions.lock')); } catch {}
+  if (typeof exitImpl === 'function') {
+    exitImpl(2);
+  }
+}
 if (isEntry(import.meta.url)) {
   try {
     const opts = parseOptions(process.argv.slice(2));
     if (opts.watch) {
       const base = opts.base || path.join(os.homedir(), '.claude');
       let watchdogTimer = setTimeout(() => {
-        writeProgress(base, 'watchdog', 'timeout');
-        const logPath = path.join(base, 'reopen-lost-sessions.log');
-        try {
-          const progress = readJson(path.join(base, 'reopen-lost-sessions-progress.json'), {});
-          fs.appendFileSync(logPath, JSON.stringify({ at: new Date().toISOString(), error: 'watchdog timeout', stage: progress.stage, detail: progress.detail }) + '\n');
-        } catch {}
-        try { fs.unlinkSync(path.join(base, 'reopen-lost-sessions.lock')); } catch {}
-        process.exit(2);
+        watchdogRecord(base);
       }, 20 * 60 * 1000);
       const result = await watchReopen({
         base: opts.base,

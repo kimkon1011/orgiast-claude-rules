@@ -10,6 +10,7 @@ import { parseEnvText } from './env-kv.mjs';
 import { getClaudeAccountEmail } from './machine-identity.mjs';
 import { extractHookTreeRoots } from './hook-tree-selfheal.mjs';
 import { getSyncedRepoRoot } from './resolve-synced-repo.mjs';
+import { listScheduledTaskNames } from './lib/scheduled-task.mjs';
 
 export const DAY = 86400000;
 export function readJson(file, fallback = {}) {
@@ -40,6 +41,23 @@ export function keyDeficits(home, manifest) {
   }
   return missing;
 }
+// Extract required scheduled-task names from setup-manifest.json.
+// Returns an array of spec.name values for items with type:"scheduled-task" and severity:"required".
+export function requiredTaskNames(manifest) {
+  if (!Array.isArray(manifest?.items)) return [];
+  return manifest.items
+    .filter(item => item.type === 'scheduled-task' && item.severity === 'required' && item.spec?.name)
+    .map(item => item.spec.name);
+}
+
+// Compare required task names against actual registered task names.
+// Returns { missing: number, missingNames: string[] } or null on failure.
+export function missingTasks(required, actual) {
+  if (!Array.isArray(actual)) return null;
+  const missingNames = required.filter(name => !actual.includes(name));
+  return { missing: missingNames.length, missingNames };
+}
+
 // Report the tree used by installed hooks, never a ZIP distribution directory.
 export function resolveConvergenceRepo({ home, repo, env = process.env } = {}) {
   const settings = readJson(path.join(home, '.claude/settings.json'));
@@ -57,13 +75,13 @@ export function resolveConvergenceRepo({ home, repo, env = process.env } = {}) {
   return null;
 }
 export function collectConvergence({ home, repo, hostname = os.hostname(), username = os.userInfo().username,
-  platform = process.platform, now = new Date(), git, expectedHooks } = {}) {
+  platform = process.platform, now = new Date(), git, expectedHooks, getScheduledTaskNames = listScheduledTaskNames } = {}) {
   repo = resolveConvergenceRepo({ home, repo });
   git ||= args => execFileSync('git', ['-C', repo, ...args],
     { encoding: 'utf8', timeout: 15000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   const row = { convergenceId: identityId(hostname, username), hostname, username, platform,
     claudeAccount: '', syncRepo: repo, syncHead: '', mainHead: '', behindMain: null,
-    missingSince: '', hookMissing: null, keyMissing: null, convergenceReportedAt: now.toISOString() };
+    missingSince: '', hookMissing: null, keyMissing: null, taskMissing: null, convergenceReportedAt: now.toISOString() };
   row.claudeAccount = getClaudeAccountEmail(home) || row.claudeAccount;
   if (!repo) row.note = 'sync repo not a git checkout';
   if (repo) try {
@@ -89,6 +107,16 @@ export function collectConvergence({ home, repo, hostname = os.hostname(), usern
   } catch { /* failed expected-set generation remains unknown */ }
   const missing = repo ? keyDeficits(home, readJson(path.join(repo, 'tools/keyserve-distribution-manifest.json'))) : null;
   row.keyMissing = missing?.length ?? null;
+  if (platform === 'win32' && repo) try {
+    const manifest = readJson(path.join(repo, 'tools/setup-manifest.json'));
+    const required = requiredTaskNames(manifest);
+    const actualTasks = getScheduledTaskNames();
+    const taskResult = missingTasks(required, actualTasks);
+    if (taskResult) {
+      row.taskMissing = taskResult.missing;
+      row.taskMissingNames = taskResult.missingNames;
+    }
+  } catch { /* failed scheduled task query remains null */ }
   const has = (file, key) => { try { return Boolean(parseEnvText(fs.readFileSync(path.join(home, '.claude', file), 'utf8'))[key]); } catch { return false; } };
   row.keyserveAuth = has('keyserve.env', 'ORGIAST_KEYSERVE_SECRET') ? 'primary' : has('enroll.env', 'ORGIAST_ENROLL_TOKEN') ? 'enroll' : has('cost-reporter.env', 'DISCORD_COST_WEBHOOK') ? 'legacy' : 'unset';
   return row;
@@ -106,6 +134,10 @@ export function convergenceProblems(row, now = Date.now()) {
   if (count(row.behindMain) > 0 && now - parseReportedAt(row.missingSince) >= DAY) result.push('main反映が24時間以上遅延');
   if (count(row.hookMissing) > 0) result.push(`hook不足${row.hookMissing}`);
   if (count(row.keyMissing) > 0 || row.keyserveAuth === 'unset') result.push(`キー欠落${count(row.keyMissing) ?? '未確認'}`);
-  if (row.convergenceReportedAt && [row.behindMain, row.hookMissing, row.keyMissing].some(v => count(v) === null)) result.push('収束状態未確認');
+  if (count(row.taskMissing) > 0) result.push(`タスク不足${row.taskMissing}`);
+  const isWin = row.platform === 'win32';
+  const checkFields = [row.behindMain, row.hookMissing, row.keyMissing];
+  if (isWin) checkFields.push(row.taskMissing);
+  if (row.convergenceReportedAt && checkFields.some(v => count(v) === null)) result.push('収束状態未確認');
   return result;
 }

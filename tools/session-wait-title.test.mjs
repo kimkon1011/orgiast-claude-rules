@@ -51,6 +51,12 @@ test('閉じる儀式は各区切りの全文を照合して別作業を除外�
   assert.equal(desiredTitle(withAction('このタブを閉じる', WAIT), ai), '【11/02/20:11まで】トークン待ち');
 });
 
+test('「1 回」（半角スペース入り）も閉じる操作と認識する', () => {
+  assert.equal(isCloseRitualOnly('新しいタブで Enter を 1 回押す'), true);
+  assert.equal(isCloseRitualOnly('新しいタブで Enter を1回押す'), true);
+  assert.equal(desiredTitle(withAction('新しいタブで Enter を 1 回押し、このタブを閉じる', CLOSED), ai), '【閉じて可】トークン待ち');
+});
+
 test('firstPrompt はスキル展開本文と command タグを飛ばして本当の依頼を拾う', () => {
   const user = content => JSON.stringify({ type: 'user', message: { content } });
   for (const content of ['Base directory for this skill: C:\\x', '<command-name>/session-close</command-name>', '<other>展開本文</other>']) {
@@ -578,4 +584,63 @@ test('CLI: 再開時は対象IDだけ台帳から外し transcript と他の台�
   const logs = fs.readFileSync(path.join(base, 'logs', 'session-wait-title.log'), 'utf8').trim().split('\n');
   assert.equal(logs.length, 1);
   assert.match(logs[0], /reopened s:/);
+});
+
+test('フッター「11/17 9:00」から期限を抽出しタイトル先頭に【11/17/09:00まで】を付ける', () => {
+  const text = `本文\n\n次に kim がすること: なし\nこの後の自動進行: 6人からの返信を seisaku-team@ で確認し、11/17 9:00 までに返却の状況をまとめます。\nこのセッション: まだ閉じない（作業中）`;
+  const result = desiredTitle(text, ai, '', false, 's1', { ref: '2026-11-06T00:01:46Z' });
+  assert.equal(result.startsWith('【11/17/09:00まで】'), true, result);
+});
+
+test('フッター「11/10 まで」から時刻なし期限を抽出しタイトル先頭に【11/10/23:59まで】を付ける', () => {
+  const text = `本文\n\n次に kim がすること: なし\nこの後の自動進行: 11/10 まで自動確認が seisaku-team@ への返信を見張ります。\nこのセッション: まだ閉じない（作業中）`;
+  const result = desiredTitle(text, ai, '', false, 's1', { ref: '2026-11-05T06:51:00Z' });
+  assert.equal(result.startsWith('【11/10/23:59まで】'), true, result);
+});
+
+test('本文に「11/17 9:00」があり台帳に open check（deadlineAt=2026-11-07T07:25:00Z, ref=2026-11-06T00:01:46Z より後）があっても本文の【11/17/09:00まで】が優先される', () => {
+  const text = `本文\n\n次に kim がすること: なし\nこの後の自動進行: 6人からの返信を seisaku-team@ で確認し、11/17 9:00 までに返却の状況をまとめます。\nこのセッション: まだ閉じない（作業中）`;
+  const ledgerRows = [{ sessionId: 's1', label: 'chk', check: true, status: 'open', deadlineAt: '2026-11-07T07:25:00Z', ts: '2026-11-05T06:00:00Z' }];
+  const result = desiredTitle(text, ai, '', false, 's1', { ref: '2026-11-06T00:01:46Z', ledgerRows });
+  assert.equal(result.startsWith('【11/17/09:00まで】'), true, result);
+});
+
+test('本文に日付が無く、台帳に ref より後の open check があるならその check の期限を使う', () => {
+  const text = `本文\n\n次に kim がすること: なし\nこの後の自動進行: 手動で確認します\nこのセッション: まだ閉じない（作業中）`;
+  const d = new Date('2026-11-10T06:50:00Z');
+  const p = n => String(n).padStart(2, '0');
+  const expectedPrefix = `【${p(d.getMonth() + 1)}/${p(d.getDate())}/${p(d.getHours())}:${p(d.getMinutes())}まで】`;
+  const ledgerRows = [{ sessionId: 's1', label: 'chk', check: true, status: 'open', deadlineAt: '2026-11-10T06:50:00Z', ts: '2026-11-05T06:00:00Z' }];
+  const result = desiredTitle(text, ai, '', false, 's1', { ref: '2026-11-06T00:01:46Z', ledgerRows });
+  assert.equal(result.startsWith(expectedPrefix), true, result);
+});
+
+test('本文に日付が無く、台帳の open check が ref より前なら無視され、既存 prefix が保持される（無ければ prefix なし）', () => {
+  const text = `本文\n\n次に kim がすること: なし\nこの後の自動進行: 手動で確認します\nこのセッション: まだ閉じない（作業中）`;
+  const ledgerRows = [{ sessionId: 's1', label: 'chk', check: true, status: 'open', deadlineAt: '2026-11-05T07:25:00Z', ts: '2026-11-05T06:00:00Z' }];
+  // 既存 prefix あり
+  const rawWithCustom = `${ai}\n${custom('【11/12/12:00まで】トークン待ち')}`;
+  const resultWithCustom = desiredTitle(text, rawWithCustom, '', false, 's1', { ref: '2026-11-06T00:01:46Z', ledgerRows });
+  assert.equal(resultWithCustom, null);
+
+  // 既存 prefix なし (PC番号ありなら prefix なしのタイトル)
+  const resultWithPc = desiredTitle(text, ai, '008', false, 's1', { ref: '2026-11-06T00:01:46Z', ledgerRows });
+  assert.equal(resultWithPc, '008｜トークン待ち');
+});
+
+test('同じキーで後から status=done の行があるならその check は無視される', () => {
+  const text = `本文\n\n次に kim がすること: なし\nこの後の自動進行: 6人からの返信を seisaku-team@ で確認し、11/17 9:00 までに返却の状況をまとめます。\nこのセッション: まだ閉じない（作業中）`;
+  const ledgerRows = [
+    { sessionId: 's1', label: 'chk', check: true, status: 'open', deadlineAt: '2026-11-10T06:50:00Z', ts: '2026-11-05T06:00:00Z' },
+    { sessionId: 's1', label: 'chk', check: true, status: 'done', ts: '2026-11-06T06:00:00Z' },
+  ];
+  const result = desiredTitle(text, ai, '', false, 's1', { ref: '2026-11-06T00:01:46Z', ledgerRows });
+  assert.equal(result.startsWith('【11/17/09:00まで】'), true, result);
+});
+
+test('日付が無く既存 custom-title に【11/12/12:00まで】があるなら保持される', () => {
+  const text = `本文\n\n次に kim がすること: なし\nこの後の自動進行: 手動で確認します\nこのセッション: まだ閉じない（作業中）`;
+  const rawWithCustom = `${ai}\n${custom('【11/12/12:00まで】トークン待ち')}`;
+  const result = desiredTitle(text, rawWithCustom, '', false, 's1');
+  assert.equal(result, null);
 });

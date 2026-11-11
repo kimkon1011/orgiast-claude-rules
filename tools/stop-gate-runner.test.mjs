@@ -333,6 +333,105 @@ for (const [name, text, blocked, reason] of burdenCases) {
   });
 }
 
+test('manual-request-evidence-gate: 根拠なしの依頼 → block', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-evidence-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const text = 'ブラウザで設定を開いてください。';
+  const result = invoke(home, 'evidence-block', text);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.decision, 'block');
+  assert.match(output.reason, /SCREEN-EVIDENCE/);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(record.blockedBy.includes('manual-request-evidence-gate'));
+});
+
+test('manual-request-evidence-gate: 確認済み: がある → pass', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-evidence-pass-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const text = 'ブラウザで設定を変更してください。\n確認済み: screenshot.png を開いて目視（exit 0）';
+  const result = invoke(home, 'evidence-pass', text);
+  assert.equal(result.status, 0, result.stderr);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(!record.blockedBy.includes('manual-request-evidence-gate'));
+});
+
+test('manual-request-evidence-gate: 依頼でない普通の応答 → pass', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-evidence-normal-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = invoke(home, 'evidence-normal', '本セッションの作業は完了しました。テストは全件 PASS です。');
+  assert.equal(result.status, 0, result.stderr);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(!record.blockedBy.includes('manual-request-evidence-gate'));
+});
+
+test('session-close-target-gate: close-session.mjs 実行＋--show-target 無し → block', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-launch-block-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const text = '次に kim がすること: 新しいタブで Enter を1回押してください';
+  const transcript = path.join(home, 'transcript.jsonl');
+  fs.writeFileSync(transcript, [
+    { type: 'user', message: { role: 'user', content: '/session-close を実行して' } },
+    { type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'text', text },
+      { type: 'tool_use', name: 'Bash', input: { command: 'node ~/.claude/nightly-repo/tools/close-session.mjs --session abc' } },
+    ] } },
+  ].map(entry => JSON.stringify(entry)).join('\n'));
+  const result = invoke(home, 'launch-block', text, { transcript_path: transcript });
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.decision, 'block');
+  assert.match(output.reason, /LAUNCH-TARGET/);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(record.blockedBy.includes('session-close-target-gate'));
+});
+
+test('session-close-target-gate: --show-target 実行済み → pass', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-launch-pass-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const text = '次に kim がすること: このタブで /clear を1回してください';
+  const transcript = path.join(home, 'transcript.jsonl');
+  fs.writeFileSync(transcript, [
+    { type: 'user', message: { role: 'user', content: '/session-close を実行して' } },
+    { type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'text', text },
+      { type: 'tool_use', name: 'Bash', input: { command: 'node ~/.claude/nightly-repo/tools/close-session.mjs --session abc' } },
+      { type: 'tool_use', name: 'Bash', input: { command: 'node tools/next-session-launch.mjs --show-target' } },
+    ] } },
+  ].map(entry => JSON.stringify(entry)).join('\n'));
+  const result = invoke(home, 'launch-pass', text, { transcript_path: transcript });
+  assert.equal(result.status, 0, result.stderr);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(!record.blockedBy.includes('session-close-target-gate'));
+});
+
+test('session-close-target-gate: close-session 未実行 → pass', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-launch-skip-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = invoke(home, 'launch-skip', '次に kim がすること: なし');
+  assert.equal(result.status, 0, result.stderr);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(!record.blockedBy.includes('session-close-target-gate'));
+});
+
+test('session-close-target-gate: 逃がし弁 [LAUNCH-TARGET-OK] → pass', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-launch-escape-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const text = '[LAUNCH-TARGET-OK]\n次に kim がすること: 新しいタブで Enter を1回押してください';
+  const transcript = path.join(home, 'transcript.jsonl');
+  fs.writeFileSync(transcript, [
+    { type: 'user', message: { role: 'user', content: '/session-close を実行して' } },
+    { type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'text', text },
+      { type: 'tool_use', name: 'Bash', input: { command: 'node ~/.claude/nightly-repo/tools/close-session.mjs --session abc' } },
+    ] } },
+  ].map(entry => JSON.stringify(entry)).join('\n'));
+  const result = invoke(home, 'launch-escape', text, { transcript_path: transcript });
+  assert.equal(result.status, 0, result.stderr);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(!record.blockedBy.includes('session-close-target-gate'));
+});
+
 test('user-burden-gate: transcript の最後の assistant だけを監査する', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-burden-transcript-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

@@ -15,7 +15,7 @@ const DOC_MIME = 'application/vnd.google-apps.document';
 const AUTH_URL = 'file:///C:/Users/uers/Downloads/orgiast-claude-rules/tools/lib/drive-auth.mjs';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-class BackfillError extends Error {
+export class BackfillError extends Error {
   constructor(code) { super(code); this.code = code; }
 }
 // Never surface upstream bodies/errors: they may contain credentials or meeting text.
@@ -24,9 +24,10 @@ export function safeReason(error) {
 }
 
 export function parseArgs(argv) {
-  const options = { limit: Infinity, dryRun: false };
+  const options = { limit: Infinity, dryRun: false, all: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--dry-run') options.dryRun = true;
+    else if (argv[i] === '--all') options.all = true;
     else if (argv[i] === '--limit') {
       const value = argv[++i];
       if (!/^\d+$/.test(value || '') || !Number.isSafeInteger(Number(value)) || Number(value) < 1) {
@@ -158,6 +159,37 @@ export function createClient({ apiKey, getToken, fetchImpl = fetch, driveFetch =
       }
       return [...meetings.values()];
     },
+    /** --all mode: iterate pages newest-first, skip meetings not yet ended, stop when 50 consecutive existing are found. */
+    async listMeetingsAll({ findExisting, skipConsecutive = 50 } = {}) {
+      const targets = [];
+      let consecutiveExisting = 0;
+      const now = Date.now();
+      const minAge = 60 * 60 * 1000;
+      let pages = 1;
+      for (let page = 1; page <= pages; page++) {
+        const result = await tldv(`/meetings?page=${page}&limit=100`);
+        if (!Array.isArray(result.results) || !Number.isInteger(result.pages) || result.pages < 0 ||
+            (result.pages === 0 && result.results.length) || (result.page != null && result.page !== page)) {
+          throw new BackfillError('tldv-invalid-pagination');
+        }
+        pages = result.pages;
+        for (const meeting of result.results) {
+          if (typeof meeting.id !== 'string' || !meeting.id || !Number.isFinite(Date.parse(meeting.happenedAt))) {
+            throw new BackfillError('tldv-invalid-meeting');
+          }
+          // Skip meetings that haven't ended 60+ minutes ago
+          const endedAt = Date.parse(meeting.happenedAt) + (typeof meeting.duration === 'number' && Number.isFinite(meeting.duration) && meeting.duration >= 0 ? meeting.duration * 1000 : 0);
+          if (endedAt > now - minAge) continue;
+          if (findExisting) {
+            const existing = await findExisting(meeting.id);
+            if (existing) { consecutiveExisting++; if (consecutiveExisting >= skipConsecutive) return targets; continue; }
+          }
+          consecutiveExisting = 0;
+          targets.push(meeting);
+        }
+      }
+      return targets;
+    },
     transcript: id => tldv(`/meetings/${encodeURIComponent(id)}/transcript`),
     notes: id => tldv(`/meetings/${encodeURIComponent(id)}/notes`),
     findExisting,
@@ -175,12 +207,18 @@ export function createClient({ apiKey, getToken, fetchImpl = fetch, driveFetch =
   };
 }
 
-export async function runBackfill({ client, limit = Infinity, dryRun = false, out = console.log }) {
-  const all = await client.listMeetings();
-  const targets = all.filter(meeting => Date.parse(meeting.happenedAt) < Date.parse(CUTOFF))
-    .sort((a, b) => Date.parse(a.happenedAt) - Date.parse(b.happenedAt) || a.id.localeCompare(b.id)).slice(0, limit);
+export async function runBackfill({ client, limit = Infinity, dryRun = false, all = false, out = console.log }) {
+  let targets;
+  if (all) {
+    targets = await client.listMeetingsAll({ findExisting: client.findExisting });
+    targets = targets.slice(0, limit);
+  } else {
+    const allMeetings = await client.listMeetings();
+    targets = allMeetings.filter(meeting => Date.parse(meeting.happenedAt) < Date.parse(CUTOFF))
+      .sort((a, b) => Date.parse(a.happenedAt) - Date.parse(b.happenedAt) || a.id.localeCompare(b.id)).slice(0, limit);
+  }
   const summary = { created: 0, existing: 0, empty: 0, failed: 0, planned: 0, reasons: {}, files: [] };
-  out(`取得 ${all.length} / 対象 ${targets.length}${dryRun ? '（dry-run）' : ''}`);
+  out(`取得 / 対象 ${targets.length}${dryRun ? '（dry-run）' : ''}${all ? '（--all）' : ''}`);
   let cursor = 0, completed = 0;
   const reason = code => { summary.reasons[code] = (summary.reasons[code] || 0) + 1; };
   async function worker() {
@@ -231,6 +269,11 @@ export async function main(argv = process.argv.slice(2)) {
     } catch { throw new BackfillError('drive-auth-module-unavailable'); }
     const client = createClient({ apiKey, getToken: auth.getDriveToken, driveFetch: proxy.gwsFetch });
     const summary = await runBackfill({ client, ...options });
+    // --all: 403 だけの失敗は許容（権限不足の会議はスキップ）
+    if (options.all && summary.failed > 0) {
+      const all403 = Object.keys(summary.reasons).every(r => r.endsWith('http-403'));
+      return all403 ? 0 : 1;
+    }
     return summary.failed ? 1 : 0;
   } catch (error) { console.error(`tldv-drive-backfill: ${safeReason(error)}`); return 1; }
 }

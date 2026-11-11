@@ -19,6 +19,33 @@ const directory = home => path.join(home, '.claude/kim-inbox');
 const clean = value => redactSecrets(String(value ?? '')).slice(0, 4000);
 const validId = id => /^ki-\d{14}-[a-f0-9]{4}$/.test(id);
 export const CONTEXT_LIMIT = 1800;
+// 古いロック(EPERM/pid再利用)を mtime で回収。既定5分、環境変数で上書き可。
+const STALE_LOCK_MS = Number(process.env.KIM_INBOX_STALE_LOCK_MS) || 300_000;
+// ロックが古いとき削除ではなく .stale-<epoch> へ rename して証跡を残す。
+function renameStaleLock(lock) {
+  try {
+    const stale = `${lock}.stale-${Date.now()}`;
+    fs.renameSync(lock, stale);
+    console.error(`kim-inbox: 古いロックを rename しました ${lock} -> ${stale}`);
+    return true;
+  } catch { return false; }
+}
+// mtime と（必要な場合）PID 存活確認でロックを回収できるか判定する。
+function tryReclaimLock(lock) {
+  try {
+    const stat = fs.statSync(lock);
+    if (Date.now() - stat.mtimeMs > STALE_LOCK_MS) return renameStaleLock(lock);
+    // mtime が新しい — PID が消えていたら回収
+    try {
+      const pid = Number(fs.readFileSync(lock, 'utf8'));
+      if (pid > 0) try { process.kill(pid, 0); } catch (e) {
+        if (e.code === 'ESRCH') return renameStaleLock(lock);
+        // EPERM: PID が保護済み/再利用 — mtime が新しいので待つ
+      }
+    } catch { /* 読めない/不正なPID */ }
+  } catch (statErr) { if (statErr.code === 'ENOENT') return true; } // 直前に解放済み
+  return false;
+}
 // kim 本人が座る席（kim-PC、所有者が kim のPC、kim が操作する nishi@/cr@/seisaku-team@ 等の
 // アカウント = lib/kim-operated.mjs）では、kim-PC へ転送せずその場のセッションで回収する（2026-10-28 kim）。
 export function isKimSeat(home) {
@@ -42,10 +69,7 @@ function acquireInboxLock(home, key, waitMs = 10_000) {
     try { fd = fs.openSync(lock, 'wx', 0o600); fs.writeFileSync(fd, String(process.pid)); break; }
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      try {
-        const pid = Number(fs.readFileSync(lock, 'utf8'));
-        if (pid > 0) { try { process.kill(pid, 0); } catch (e) { if (e.code === 'ESRCH') fs.unlinkSync(lock); } }
-      } catch { /* 所有者が不明ならロックを奪わない。 */ }
+      if (tryReclaimLock(lock)) continue;
       const remaining = deadline - performance.now();
       if (remaining <= 0) break;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(delay, remaining));
@@ -291,6 +315,7 @@ function ackInboxFile(file) {
     try { fd = fs.openSync(lock, 'wx', 0o600); }
     catch (error) {
       if (error.code !== 'EEXIST' && !['EPERM', 'EBUSY'].includes(error.code)) throw error;
+      if (error.code === 'EEXIST' && tryReclaimLock(lock)) continue;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     }
   }
@@ -450,6 +475,33 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
   }
   return redactSecrets(displayPcNames(ownAskText + dailyText + requiredText + urgentText + text + footer, { home }));
 }
+export function oneScreenSummary(items) {
+  const openItems = items.filter(i => i.status === 'open');
+  const asks = openItems.filter(i => i.kind === 'ask').sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const infos = openItems.filter(i => i.kind === 'info').sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const lines = [];
+  const askCount = asks.length;
+  lines.push(`📌 kim の返事待ち ${askCount}件`);
+  if (askCount === 0) return lines.join('\n');
+  for (const ask of asks.slice(0, 5)) {
+    const text = ask.text.replace(/[\r\n]+/g, ' ').slice(0, 120);
+    lines.push(`${text} (${ask.id})`);
+  }
+  if (infos.length > 0) {
+    lines.push(`📲 自動進行の結果`);
+    for (const info of infos.slice(0, 5)) {
+      const text = info.text.replace(/[\r\n]+/g, ' ').slice(0, 120);
+      lines.push(text);
+    }
+  }
+  const totalOpen = openItems.length;
+  const shownTotal = Math.min(askCount, 5) + Math.min(infos.length, 5);
+  const remaining = totalOpen - shownTotal;
+  if (remaining > 0) lines.push(`ほか ${remaining}件: node tools/kim-inbox.mjs --list`);
+  let summary = lines.join('\n');
+  while (lines.length > 0 && Buffer.from(lines.join('\n'), 'utf8').length > 2000) lines.pop();
+  return lines.length === 0 ? `📌 kim の返事待ち ${askCount}件` : lines.join('\n');
+}
 export async function main(args = process.argv.slice(2), { home = process.env.ORGIAST_HOME || os.homedir(), stdout = console.log, stderr = console.error, readStdin = readStdinWithTimeout } = {}) {
   const value = flag => args[args.indexOf(flag) + 1];
   try {
@@ -464,7 +516,9 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       const items = listItems(home).filter(i => (i.status === 'open' || (i.dailyProgress && i.status === 'seen')) && (kim || i.forwardError));
       const counts = new Map(items.map(i => [i.id, i.shownCount]));
       const context = selectContext(items, { sessionId: String(input.session_id ?? ''), sheetUrl: deadlineSheetUrl(home), home, event });
-      if (context) stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }));
+      const openItems = items.filter(i => i.status === 'open');
+      const summary = event === 'SessionStart' ? redactSecrets(displayPcNames(oneScreenSummary(openItems), { home })) : '';
+      if (context) stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: summary ? summary + '\n' + context : context } }));
       for (const item of items.filter(i => i.shownCount !== counts.get(i.id))) update(home, item.id, current => {
         current.shownSessions = [...new Set([...current.shownSessions, ...item.shownSessions])]; current.shownCount++; current.lastShownAt = item.lastShownAt;
         if (item.dailyShown) current.dailyShown = { ...(current.dailyShown || {}), ...item.dailyShown };

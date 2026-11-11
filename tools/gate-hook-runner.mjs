@@ -56,6 +56,9 @@ export function wrapRegisteredGates(settings, repo) {
     const match = String(hook.command || '').match(/^node\s+"([^"]+\.mjs)"(.*)$/);
     if (!match) continue;
     const script = path.basename(match[1].replace(/\\/g, '/'));
+    // Billing, knowledge access and execution-tree edit policies must never be downgraded by rollout.
+    if (['stop-gate-runner.mjs', 'fleet-question-relay.mjs', 'api-billing-guard.mjs', 'knowledge-guard.mjs', 'exec-tree-edit-guard.mjs'].includes(script) || !fs.existsSync(path.join(repo, 'tools', script))) continue;
+
     // Billing and execution-tree edit policies are immediate, never downgraded by rollout.
     // case-handoff persists a queue; it is an observer, not a decision gate.
     if (['hook-dispatch.mjs', 'stop-gate-runner.mjs', 'fleet-question-relay.mjs', 'case-handoff.mjs', 'api-billing-guard.mjs', 'exec-tree-edit-guard.mjs'].includes(script) || !fs.existsSync(path.join(repo, 'tools', script))) continue;

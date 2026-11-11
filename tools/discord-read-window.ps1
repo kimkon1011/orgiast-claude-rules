@@ -10,6 +10,10 @@
   出力ファイル（UTF-8）。省略時は %TEMP%\discord-<chat>.md
 .PARAMETER MaxRounds
   上方向スクロールの最大回数（1回 = PageUp 相当×3）。既定 40。
+.PARAMETER Switch
+  クイックスイッチャー（Ctrl+K）の検索語。[string] で指定。省略時は '@' + $Chat を検索する。
+  サイドバーにリンクが見つからなかった場合のフォールバックとして使われる。
+  例: -Switch '倉庫リーダー'
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File tools\discord-read-window.ps1 -Chat 'W2様' -Out C:\tmp\w2.md
 #>
@@ -60,17 +64,75 @@ function Get-ByType($win, $type, $nameRegex) {
   return $null
 }
 
+# クイックスイッチャー安全装置（2026-11-11 事故対策）
+# メッセージ入力欄（名前が「メッセージ」を含む Edit）にフォーカスがあると
+# クリップボード貼り付け＋Enter が誤送信になるため、事前検出して中止する。
+function Assert-QuickSwitcherOpen($win) {
+  $edits = $win.FindAll($Scope::Descendants, (
+    New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)
+  ))
+  $hasQuickSwitcher = $false
+  $messageInputFocused = $false
+  foreach ($e in $edits) {
+    $n = $e.Current.Name
+    if ($n -match 'メッセージ|へメッセージ|Message') {
+      if ($e.Current.IsKeyboardFocused) { $messageInputFocused = $true }
+    } else {
+      # 空または検索系の Edit = クイックスイッチャーの検索ボックス
+      if ($e.Current.IsKeyboardFocused) { $hasQuickSwitcher = $true }
+    }
+  }
+  if ($messageInputFocused) {
+    throw 'QUICKSWITCHER_SAFETY: Ctrl+K が開かなかったか Discord フォーカスが外れました（メッセージ入力欄にフォーカスあり）'
+  }
+  if (-not $hasQuickSwitcher) {
+    throw 'QUICKSWITCHER_SAFETY: クイックスイッチャーの検索ボックスが見つかりません（Ctrl+K が効かなかった可能性）'
+  }
+}
+
+function Get-SidebarLink($win, $chatName) {
+  $escaped = [regex]::Escape($chatName)
+  # グループDMの実測名: "N件の未読、倉庫リーダー×倉庫社員(グループメッセージ), 4人のメンバー"
+  # 1) Chat 名そのまま（通常DM）
+  # 2) Chat 名 + (グループメッセージ)（グループDMで未読あり）
+  # 3) Chat 名を含む文言（未読なし等）
+  foreach ($pattern in @(
+    "^$escaped$",
+    "$escaped\(グループメッセージ\)",
+    "の未読.*$escaped",
+    "$escaped"
+  )) {
+    $link = Get-ByType $win ([System.Windows.Automation.ControlType]::Hyperlink) $pattern
+    if ($link) { return $link }
+  }
+  return $null
+}
+
 $win = Find-DiscordWindow
 if (-not $win) { Write-Output 'ERROR: Discord window not found (Discord デスクトップを起動しておく必要あり)'; exit 2 }
 if (-not (Warm-Up $win)) { Write-Output 'ERROR: accessibility tree did not populate'; exit 3 }
 
 if ($Chat) {
-  $link = if ($Switch) { $null } else { Get-ByType $win ([System.Windows.Automation.ControlType]::Hyperlink) ([regex]::Escape($Chat)) }
+  # 常にサイドバーリンクを先に試す（-Switch の有無にかかわらず）
+  $link = Get-SidebarLink $win $Chat
   if ($link) {
     $inv = $link.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
     $inv.Invoke()
-    Start-Sleep -Seconds 2
-  } else {
+    # Invoke 後に実際のチャット名が一致するまで最大5秒リトライ
+    $matched = $false
+    for ($retry = 0; $retry -lt 5; $retry++) {
+      Start-Sleep -Seconds 1
+      $list = Get-ByType $win ([System.Windows.Automation.ControlType]::List) 'のメッセージ$'
+      if ($list) {
+        $currentChat = $list.Current.Name -replace 'のメッセージ$', ''
+        if ($currentChat -eq $Chat -or $currentChat -match [regex]::Escape($Chat)) { $matched = $true; break }
+      }
+    }
+    if (-not $matched) {
+      Write-Output "WARN: Invoke 後もチャット名 '$Chat' に一致しません。クイックスイッチャーにフォールバックします。"
+    } else { Start-Sleep -Milliseconds 500 }
+  }
+  if (-not $link -or -not $matched) {
     # フォールバック: DM 一覧は仮想化リストで画面外だとリンクが無い → クイックスイッチャー Ctrl+K で検索して開く
     $hwnd = [IntPtr]$win.Current.NativeWindowHandle
     [void][Win32.Native]::ShowWindow($hwnd, 9)
@@ -78,16 +140,22 @@ if ($Chat) {
     Start-Sleep -Milliseconds 800
     if ([Win32.Native]::GetForegroundWindow() -ne $hwnd) { throw 'Discord focus unavailable' }
     [System.Windows.Forms.SendKeys]::SendWait('^k')
-    Start-Sleep -Milliseconds 800
+    Start-Sleep -Milliseconds 1000
+    # ★ 安全装置: クイックスイッチャーが実際に開いたことを確認してから貼り付けに進む
+    Assert-QuickSwitcherOpen $win
     # 日本語は SendKeys が不安定なのでクリップボード経由で貼る
+    $qsSearch = if ($Switch) { $Switch } else { '@' + $Chat }
     $clipOk = $false
     for ($t = 0; $t -lt 5 -and -not $clipOk; $t++) {
-      try { Set-Clipboard -Value $(if ($Switch) { $Switch } else { '@' + $Chat }); $clipOk = $true } catch { Start-Sleep -Milliseconds 400 }
+      try { Set-Clipboard -Value $qsSearch; $clipOk = $true } catch { Start-Sleep -Milliseconds 400 }
     }
     if (-not $clipOk) { Write-Output 'ERROR: clipboard set failed'; exit 7 }
     if ([Win32.Native]::GetForegroundWindow() -ne $hwnd) { throw 'Discord focus lost' }
+    # ★ 安全装置: 貼り付け直前にも再確認
+    Assert-QuickSwitcherOpen $win
     [System.Windows.Forms.SendKeys]::SendWait('^v')
     Start-Sleep -Milliseconds 1500
+    Assert-QuickSwitcherOpen $win
     [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
     Start-Sleep -Seconds 2
   }

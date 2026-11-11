@@ -179,7 +179,14 @@ async function refreshWaitingTab({ force = false } = {}) {
     lastRefreshAt,
     target: mobileTarget,
     force,
-    tabs: current.map((tab) => ({ label: String(tab.label), appearedAt: tabAppearedAt.get(tab), isActive: Boolean(tab.isActive), tab })),
+    tabs: current.map((tab) => ({
+  label: String(tab.label),
+  appearedAt: tabAppearedAt.get(tab),
+  isActive: Boolean(tab.isActive),
+  rcConnected: false, // Placeholder — RC 拡張 API が提供する予定
+  rcLastActivityAt: null, // Placeholder
+  tab,
+})),
   });
   if (!decision.refresh) return false;
   const target = decision.tab;
@@ -300,7 +307,14 @@ function activate(context) {
       if (!vscode.window.tabGroups.close) return;
       const current = syncTabTimes();
       const decision = decideWorktreeCleanup({
-        tabs: current.map((tab) => ({ label: String(tab.label), appearedAt: tabAppearedAt.get(tab), isActive: Boolean(tab.isActive), tab })),
+        tabs: current.map((tab) => ({
+  label: String(tab.label),
+  appearedAt: tabAppearedAt.get(tab),
+  isActive: Boolean(tab.isActive),
+  rcConnected: false, // Placeholder — RC 拡張 API が提供する予定
+  rcLastActivityAt: null, // Placeholder
+  tab,
+})),
         startup,
       });
       if (!decision) return;

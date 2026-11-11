@@ -98,7 +98,8 @@ function Get-ProtectedSessionIds {
     $cli = (Get-Command claude -ErrorAction SilentlyContinue | Select-Object -First 1).Source
     if (-not $cli) { $cli = Join-Path $env:USERPROFILE '.local\bin\claude.exe' }
     $json = (& $cli agents --json 2>$null) -join "`n"
-    if ($LASTEXITCODE -ne 0) { throw 'agents failed' }
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) { throw "agents failed (exit $exitCode)" }
     $ids = @(Get-ValidatedInteractiveIds $json)
     if ($ids.Count -eq 0) { return @() }
     $base = Join-Path $env:USERPROFILE '.claude'
@@ -122,8 +123,24 @@ function Get-ProtectedSessionIds {
 }
 
 function Test-RemoteControlProtection {
-    try { $protected = @(Get-ProtectedSessionIds) } catch {
-        Write-Log 'SKIP: セッション一覧を取得できない（Remote Control 保護）' | Out-Host
+    # セッション一覧の取得失敗は「無言で SKIP」せず、一定回数リトライしてから異常として記録する。
+    # 一過性の失敗（CLI 起動中・認証の引き直し等）はリトライで回復し、恒久失敗は ERROR として残す
+    # （2026-11-09 実測: 11/08〜11/09 の2日間「セッション一覧を取得できない」が無言で続いた）。
+    $maxAttempts = 3
+    $protected = @()
+    $lastError = $null
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        try {
+            $protected = @(Get-ProtectedSessionIds)
+            $lastError = $null
+            break
+        } catch {
+            $lastError = $_.Exception.Message
+            if ($attempt -lt $maxAttempts) { Start-Sleep -Seconds 5 }
+        }
+    }
+    if ($null -ne $lastError) {
+        Write-Log ("ERROR: セッション一覧を取得できない（{0} 回試行・理由: {1}）。Remote Control 保護のため再起動を中止" -f $maxAttempts, $lastError) | Out-Host
         return $true
     }
     if ($protected.Count -gt 0) {

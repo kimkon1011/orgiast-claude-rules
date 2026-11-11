@@ -67,6 +67,7 @@ async function cli(argv, overrides = {}) {
     mintToken: async () => { tokens++; throw new Error('unexpected mint'); },
     readState: () => { throw new Error('no cached state'); },
     inspectDraft: async () => ({ ok: true, findings: [], llm: { provider: null, error: null } }),
+    skipContextCheck: true,
     ...overrides,
   } });
   return { code, output, calls, tokens };
@@ -483,6 +484,52 @@ test('送信 API の失敗は再試行せず秘密を出さない', async () => 
   assert.equal(result.code, 1);
   assert.equal(calls, 2);
   assert.equal(result.output[0].includes('SECRET'), false);
+});
+
+test('--send の getLatest は DRAFT メッセージを最新履歴から除外し、threadId 無し時の検索クエリに -in:drafts を指定する', async () => {
+  let capturedLatest = null;
+  let searchedUrl = null;
+  const result = await cli(['--send', 'draft-123', '--json'], {
+    skipContextCheck: false,
+    getToken: async () => 't',
+    inspectDraft: async () => ({ ok: true, findings: [] }),
+    assertContextApproved: async (opts) => {
+      capturedLatest = await opts.getLatest();
+    },
+    fetchImpl: async (url) => {
+      if (url.includes('/drafts/draft-123')) {
+        return response({
+          message: {
+            payload: {
+              headers: [
+                { name: 'To', value: 'customer@example.com' },
+                { name: 'Subject', value: '確認' },
+              ],
+            },
+          },
+        });
+      }
+      if (url.includes('/messages?q=')) {
+        searchedUrl = url;
+        return response({ messages: [{ id: 'msg-1', threadId: 'thread-99' }] });
+      }
+      if (url.includes('/threads/thread-99')) {
+        return response({
+          messages: [
+            { id: 'msg-1', internalDate: '1700000000000', labelIds: ['INBOX'] },
+            { id: 'msg-draft', internalDate: '1800000000000', labelIds: ['DRAFT'] },
+          ],
+        });
+      }
+      if (url.includes('/drafts/send')) {
+        return response({ id: 'sent-1', threadId: 'thread-99' });
+      }
+      return response({});
+    },
+  });
+  assert.equal(result.code, 0);
+  assert.ok(searchedUrl.includes(encodeURIComponent('(from:customer@example.com OR to:customer@example.com) -in:drafts')));
+  assert.deepEqual(capturedLatest, { id: 'msg-1', at: new Date(1700000000000).toISOString() });
 });
 
 const replyMessage = (id, subject, references, labelIds = []) => ({ labelIds, payload: { headers: [

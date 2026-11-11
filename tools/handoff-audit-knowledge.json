@@ -316,5 +316,35 @@
     "route": "セッション終了時のタブ起動は close-session.mjs / auto-session 再入の仕組みで自動化する。kim にタブ操作・Enter を頼まない。タブを閉じる操作は OS 操作であり Claude が自動化できないが、閉じる必要が本当にあるかを再判定する（/clear で代替できる場合がある）。やむを得ず kim に依頼する場合も、閉じるタブの種類（ブラウザ/VSCode のどちらか・セッションID）と成功の見え方を明記する。codex-do.mjs ではこのOS操作を代替できない。",
     "confidence": "medium",
     "source": "2026-11-02 手動補完（元: codex-do.mjs 道具名のみ→手順文に書換）"
+  },
+  {
+    "pattern": "ループ契約の保存と起動をClaude側で行う",
+    "route": "ループ契約（ScheduleWakeup / CronCreate）の保存と起動は Claude 側のツールで直接行う。codex-do.mjs は契約の保存・起動に関与しない。正しい経路: (a) 動的ループ（ScheduleWakeup）で delaySeconds と prompt を指定して wakeup を予約する。(b) 定期ループは CronCreate で cron 式と prompt を指定する。(c) 永続化が必要なら durable:true を指定して .claude/scheduled_tasks.json に保存する。(d) ループ契約の保存先が .claude/loop-contracts/ 等の別経路なら、codex-do.mjs ではなく直接ファイル書き込みで行う。codex-do.mjs は実装委譲用であってループ契約の管理ツールではない。",
+    "confidence": "medium",
+    "source": "2026-11-11 handoff-audit-candidates tool-name-route レビュー（元: codex-do.mjs 道具名のみ→手順文に書換）"
+  },
+  {
+    "pattern": "他AIレーン修復を hook 拒否で断念する",
+    "route": "他AIレーンの修復は hook 拒否で断念せず、別経路を試す。①`node tools/lane-doctor.mjs --probe` で全レーンの生存確認を行う（読み取り専用）。②特定のレーンが 429/usage_limit なら quota_wait として記録し、別の安いレーンへ切り替える。③codex が起動しない場合は内蔵フォールバック（Gemini/DeepSeek/Groq）を試す。④`node tools/lane-repair-log.mjs --lane <名> --tried \"<試行>\" --result fixed|unfixable` で記録し、応答に [LANE-REPAIR] を書く。⑤すべての経路を試しても不可なら「未確認」と書き、応答に [LANE-REPAIR] unfixable と実際のエラーを添えて kim に修復を依頼する。codex-do.mjs は修復の補助ツール（実装委譲）であり、断念の理由や修復そのものの代替にならない。",
+    "confidence": "medium",
+    "source": "2026-11-11 handoff-audit-candidates tool-name-route レビュー（元: codex-do.mjs 道具名のみ→手順文に書換）"
+  },
+  {
+    "pattern": "社外・顧客宛チラシ案の選択と送信",
+    "route": "社外・顧客宛のチラシ案はチャットに完成形（複数案ある場合は比較表）を表示して kim の承認を得る（feedback-confirm-before-external-send）。承認後は Claude が送信まで実行する: メール送信は `node tools/gmail-draft.mjs --to <addr> --subject <件名> --body-file <本文.txt> --attach <PDF>` で seisaku-team@orgiast.jp の下書きを作り、`node tools/gmail-draft.mjs --send <draftId>` で送る（gmail.send は DWD 委任済み）。LINE 送信は `node tools/line-group-send.mjs --group <groupId> --message <本文> [--image <画像URL>]` を使う。送信後は HTTP status / messageId / sentMessages 件数を読み戻し、kim に送信操作を求めない。「チャット表示」だけで手渡しせず、送信まで Claude が行う。codex-do.mjs では送信判断を代替できない。",
+    "confidence": "high",
+    "source": "2026-11-11 handoff-audit-candidates tool-name-route レビュー（元: チャット表示 道具名のみ→手順文に書換）"
+  },
+  {
+    "pattern": "LINE グループへの送信（公式LINE経由）",
+    "route": "LINE グループへの送信は、`node tools/line-group-send.mjs --group <groupId> --message <本文> [--image <画像URL>]` で Claude が直接送信する（reference-line-send-route-kim-pc-only.md）。kim-PC への fleet-mail 中継はしない（kim 2026-11-02 全PC全アカウント指示）。社外グループ（顧客含む）への送信は、本文の全文をチャットに表示して kim の承認を得てから送る（feedback-confirm-before-external-send）。社内向けグループでも、グループの性質に応じて確認を得る。送信後は HTTP 200 / sentMessages 件数 / quota consumption の増分を読み戻して報告し、kim に送信操作を求めない。codex-do.mjs では LINE 送信を代替できない。",
+    "confidence": "medium",
+    "source": "2026-11-11 handoff-audit-candidates tool-name-route レビュー（元: チャットに本文 道具名のみ→手順文に書換）"
+  },
+  {
+    "pattern": "PR作成と着地の確認をCodexへ委譲",
+    "route": "PR作成と着地の確認は Claude が行う。codex-do.mjs は実装を委譲するだけであり、PR作成・着地確認の責任を委譲しない。正しい手順: (a) codex-do.mjs で実装が完了したら、Claude が `node tools/pr-land.mjs --title \"<題>\" --body-file <本文>` で base へ push し PR を作成する（または gh CLI で fork 跨ぎ PR を作成する）。(b) `automerge` ラベルを付ける（鍵関連は安全弁パスとして pr-merge.mjs のレビュー・SHA 検証を通す）。(c) CI の完了を `gh run list -R <owner>/<repo> --limit 5 --json workflowName,conclusion,headBranch` で確認し、緑ならマージされるまで待つ。CI が赤なら直す（3回直して赤のままなら理由を記録する）。(d) マージ後は `gh pr view <番号> -R <owner>/<repo> --json state,mergedAt` で着地を確認し、`node tools/commit-landed.mjs <sha>` で取込を確定する。codex-do.mjs の exit code だけで「完了」と判断せず、着地まで Claude が確認する。",
+    "confidence": "high",
+    "source": "2026-11-11 handoff-audit-candidates tool-name-route レビュー（元: codex-do.mjs 道具名のみ→手順文に書換）"
   }
 ]

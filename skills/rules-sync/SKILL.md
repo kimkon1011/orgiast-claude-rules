@@ -5,7 +5,7 @@ description: オージャスト共通ルール Drive ハブ（claude-common-rule
 
 # rules-sync — Drive ハブ同期
 
-Drive ハブ（正本）: `claude-common-rules` folder `1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw`（作業ファイル配下、owner kim@orgiast.jp）
+Drive ハブ（正本）: `claude-common-rules` folder `1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw`（kim マイドライブ直下、owner kim@orgiast.jp。2026-11-09 に作業ファイル配下から移動。ID は不変）
 サブフォルダ: rules=`1cNOSlo8pcrhXiRMRK_WD3O5IW-K9lYX4` / skills=`1oSlYjJdlIy5GRYa3-AasAeybARKh4v-E` / knowledge-inbox=`1AyZcrlK9JCNPUkhKCBOezet9a2QoSwK2`
 
 ## 前提となる Drive MCP 制約

@@ -139,12 +139,39 @@ Assert (@(Select-ProtectedSessionIds @('live','empty') @('live') $transcripts).C
     function Wait-InteractiveSessions { return 0 }
     function Invoke-VSCodeRestart { throw 'must not restart' }
     Assert ((Confirm-VSCodeResume 1 'code.cmd' @()) -eq 0) 'retry guard protects new session'
-    function Get-ProtectedSessionIds { throw 'agents failed' }
+    function Start-Sleep { param([int]$Seconds) }
+    $script:agentAttempts = 0
+    function Get-ProtectedSessionIds { $script:agentAttempts++; throw 'agents failed' }
     Assert (Test-RemoteControlProtection) 'unknown => skip'
+    Assert ($script:agentAttempts -eq 3) 'unknown retries 3 times before skip'
     function Get-ProtectedSessionIds { @() }
     Assert (-not (Test-RemoteControlProtection)) 'zero => proceed'
 }
 Write-Output 'PASS: Remote Control protection guards'
+& {
+    # 一覧取得が一過性で失敗してもリトライで回復し、恒久失敗は ERROR として記録する（無言 SKIP しない）
+    $script:rcLog = [Collections.Generic.List[string]]::new()
+    function Write-Log($message) { $script:rcLog.Add([string]$message) }
+    function Start-Sleep { param([int]$Seconds) }
+    $script:rcAttempts = 0
+    function Get-ProtectedSessionIds {
+        $script:rcAttempts++
+        if ($script:rcAttempts -le 2) { throw 'agents failed (exit 1)' }
+        @()
+    }
+    Assert (-not (Test-RemoteControlProtection)) 'retry recovers transient agents failure'
+    Assert ($script:rcAttempts -eq 3) 'recovers on the 3rd attempt'
+    Assert (@($script:rcLog | Where-Object { $_ -like 'RC-GUARD:*' }).Count -eq 1) 'recovery logs RC-GUARD'
+
+    $script:rcLog = [Collections.Generic.List[string]]::new()
+    $script:rcAttempts = 0
+    function Get-ProtectedSessionIds { $script:rcAttempts++; throw 'agents failed (exit 1)' }
+    Assert (Test-RemoteControlProtection) 'persistent failure still skips'
+    Assert ($script:rcAttempts -eq 3) 'persistent failure tries 3 times'
+    Assert (@($script:rcLog | Where-Object { $_ -like 'ERROR:*' }).Count -eq 1) 'persistent failure logs ERROR'
+    Assert (@($script:rcLog | Where-Object { $_ -like 'SKIP: セッション一覧*' }).Count -eq 0) 'no silent SKIP on failure'
+}
+Write-Output 'PASS: Remote Control protection retries and records failures'
 & {
     # Exercise the real inventory/filesystem integration using an isolated profile.
     $profileBefore = $env:USERPROFILE

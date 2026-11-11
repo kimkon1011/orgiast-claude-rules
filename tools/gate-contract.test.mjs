@@ -23,6 +23,12 @@ test('new rollout entries must declare the seven day window; legacy inventory is
     const row = manifest.gates[name];
     assert.ok(row, `${name}: missing rollout entry`);
     assert.ok(['warn','deny'].includes(row.rollout));
+    if (name === 'knowledge-guard') {
+      assert.equal(row.rollout, 'deny');
+      assert.equal(row.immediatePolicy, '2026-10-29 user 指示: 公開鍵有効化後は契約外アカウントの蓄積アクセスを拒否');
+      continue; // Direct synchronous account policy, activated by public key installation.
+
+}
     if (name === 'mail-send-approval-gate') { assert.equal(row.rollout, 'deny'); assert.equal(row.immediatePolicy, '2026-11-05 kim 承認: 組織指示11 メール送信は本文確認＋明示承認後のみ'); continue; }
     if (name === 'delete-approval-gate') { assert.equal(row.rollout, 'deny'); assert.equal(row.immediatePolicy, '2026-11-05 kim 承認: 組織指示12 削除は user 許可後のみ'); continue; }
     if (name === 'seat-name-gate') {

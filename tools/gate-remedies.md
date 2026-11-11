@@ -106,6 +106,10 @@ Gmail送信前に説明対象のGoogleファイルを接続済みMCPで読む。
 
 手作業の全工程・所要時間・理由・自動化できない根拠を書く。
 
+## session-close-target-gate
+
+close-session.mjs を実行するターンでは、次セッションの開き方を書く前に `node ~/.claude/nightly-repo/tools/next-session-launch.mjs --show-target` を実行し、表示された起動先（vscode=新しいタブで Enter／inline=このタブで /clear／headless=新しいタブで /session-start）の1つだけを書く。意図的に省くときは本文に [LAUNCH-TARGET-OK]。
+
 ## model-agent-guard
 
 Agent/Task の model を sonnet/haiku に明示。実装は node tools/codex-do.mjs --prompt-file <指示> --cwd <対象>。
@@ -254,6 +258,12 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 作業や委譲の完了を待つ旨と、その完了後に行う作業を残したままターンを閉じず、当ターン内に完了まで進める。待機が不要なら、そのまま次の作業へ進めて結果まで報告する。
 
 コードブロック・引用行は対象外。既存 Stop runner から呼ぶため Stop hook 設定の追加登録は不要。`ORGIAST_DEFERRAL_WAIT_GATE=0` で無効化できる。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
+
+## urgent-blocker-wait-gate
+
+人にしかできない操作で止まって「ログイン待ち」「画像認証」「返事待ち」等を報告しているのに urgent-blocker が未登録なら止める。`node tools/urgent-blocker.mjs --add --session <このセッションID> --title "<何が止まっているか>" --ask "<人にしてほしい1操作・所要時間>" [--link <URL>]` で登録し、待つ前に待っている経路が本当に成立するか（受け手に届くか）を検証し、代替経路（別の送り方・別アカウント・メール等）と自動再試行を並行して試した結果を書く。登録すると user が使っている別セッションの冒頭に割り込み表示される（60分に1回まで）。
+
+コードブロック・引用行・監査引用は対象外。既存 Stop runner から呼ぶため Stop hook 設定の追加登録は不要。`ORGIAST_URGENT_BLOCKER_WAIT_GATE=0` で無効化できる。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
 
 ## third-party-nudge-gate
 

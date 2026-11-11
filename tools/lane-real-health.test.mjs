@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { realLaneStats, applyRealLaneHealth } from './lib/lane-real-health.mjs';
+import { realLaneStats, applyRealLaneHealth, billingFailure, billingWithQuotaHint } from './lib/lane-real-health.mjs';
 import { laneDoctorQuick, laneDoctorProbe } from './lane-doctor.mjs';
 const now = Date.parse('2026-10-29T12:00:00Z');
 function fixture(t, rows) {
@@ -75,6 +75,34 @@ test('billing variants are excluded from failures and never block; real 500 thre
   assert.equal(laneDoctorQuick({ home, now }).lanes.deepseek.reason, 'real_fail_rate');
   assert.equal(evaluateRepairFirst({ tool_name: 'Edit' }, { home, now }).decision, 'block');
 });
+
+test('Google 403 outstanding balance is billing', t => {
+  const google403 = 'HTTP 403: The billing account has an outstanding balance. Please resolve the payment issue.';
+  assert.equal(billingFailure(google403), true);
+  // 403 + billing text combination is required: plain billing text without 403 is not billing
+  assert.equal(billingFailure('The billing account has an outstanding balance (no status)'), false);
+  assert.equal(billingFailure('billing account is suspended'), false);
+  // With 403 code and matching billing text
+  assert.equal(billingFailure('error 403: billing account is disabled'), true);
+  assert.equal(billingFailure('HTTP 403 billing account has been suspended'), true);
+  assert.equal(billingFailure('HTTP 403 billing account not active'), true);
+  // 403 with prepayment credits text that matches other pattern
+  assert.equal(billingFailure('HTTP 403 prepayment credits are depleted'), true);
+  // 429 coexistence → billingWithQuotaHint
+  assert.equal(billingWithQuotaHint('HTTP 403: The billing account has an outstanding balance. HTTP 429 rate limit'), true);
+  // 403 without billing text is not billing
+  assert.equal(billingFailure('HTTP 403 permission denied'), false);
+  assert.equal(billingFailure('status 403 Forbidden'), false);
+});
+
+test('Google 403 outstanding balance via ledger realLaneStats is billing', t => {
+  const home = fixture(t, [{ provider: 'gemini', status: 'http_403', stderr: 'The billing account has an outstanding balance' }]);
+  const stats = realLaneStats(home, now).gemini;
+  assert.equal(stats.billingCalls, 1, 'Google 403 残高エラーは billing として分類される');
+  assert.equal(stats.quotaCalls, 0);
+  assert.equal(stats.failures, 0);
+});
+
 test('billing quick diagnosis notification is once per lane per UTC day', async t => {
   const { notifyLaneStops } = await import('./lane-doctor.mjs');
   const home = fixture(t, [{ status: '402' }]);

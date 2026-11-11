@@ -779,3 +779,36 @@ test('複数手渡しでも見張り登録漏れ4コードを同時に返す', (
     assert.ok(result.reasonCodes.includes(code), code);
   }
 });
+
+test('stop_hook_active で期限なし「まだ閉じない」は連続2回まで block、3回目 pass、stop_hook_active=false でリセット', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'nag-counter-test-'));
+  const prevHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  try {
+    const textNoDeadline = `${body}\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: まだ閉じない（作業中）`;
+    const textWithDeadline = `${body}\n次に kim がすること: なし\nこの後の自動進行: なし（完了）\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ）`;
+
+    const inputStop = { session_id: 's_test_cnt', stop_hook_active: true };
+    const inputNormal = { session_id: 's_test_cnt' };
+
+    // 1回目 (stop_hook_active=true) -> block
+    assert.equal(judgeNextAction(textNoDeadline, '', inputStop).decision, 'block');
+    // 2回目 (stop_hook_active=true) -> block
+    assert.equal(judgeNextAction(textNoDeadline, '', inputStop).decision, 'block');
+    // 3回目 (stop_hook_active=true) -> pass
+    assert.equal(judgeNextAction(textNoDeadline, '', inputStop).decision, 'pass');
+
+    // 間に stop_hook_active=false の判定を挟む -> カウンターがリセットされる
+    judgeNextAction(textNoDeadline, '', inputNormal);
+
+    // 再び 1回目 (stop_hook_active=true) -> block
+    assert.equal(judgeNextAction(textNoDeadline, '', inputStop).decision, 'block');
+
+    // 期限ありは stop_hook_active=true でも pass
+    assert.equal(judgeNextAction(textWithDeadline, '', inputStop).decision, 'pass');
+  } finally {
+    if (prevHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = prevHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readHandoff, handoffLockEnabled } from './lib/handoff-store.mjs';
 import fs from 'node:fs';
 import { rotate, MAX_BYTES } from './next-session-rotate.mjs';
 import os from 'node:os';
@@ -755,7 +756,13 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
     const startedAt = new Date();
     const deadline = performance.now() + 2 * timeoutMs;
     const configuredChoice = autoSessionExecutor();
-    const choice = runOptions.model
+    // resumeSessionId が指定されたときは claude レーン（--resume 付き）で起動する。
+    // cheap-code / codex は --resume 引数を捨てるため、元のセッションに再開が届かない
+    // （2026-11-09 実害: セッション 834dfc9c の再開が「成果記録なし」で終わった）。
+    const resumeForced = Boolean(runOptions.resumeSessionId);
+    const choice = resumeForced
+      ? { ...configuredChoice, executor: 'claude' }
+      : runOptions.model
       ? { ...configuredChoice, executor: 'claude' }
       : runOptions.executor === 'cheap-code'
       ? { ...configuredChoice, executor: 'cheap-code' }
@@ -783,7 +790,7 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
         : buildClaudeHeadlessArgs({ repoCwd, historyCwd, resumeSessionId: runOptions.resumeSessionId, ...(runOptions.model ? { model: runOptions.model } : {}) }), { detached: process.platform !== 'win32', cwd: historyCwd,
         // cheap-code 側でも浄化するが、claude フォールバック(監督セッション)はここで
         // デスクトップ由来の CLAUDECODE / CLAUDE_CODE_* / MCP_* を外しておく。
-        env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: codex ? 'auto-session:codex-do' : cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude' }, stdio: [cheap || codex ? 'ignore' : 'pipe', 'pipe', 'pipe'], windowsHide: true }); }
+        env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: runOptions.headlessJob || (codex ? 'auto-session:codex-do' : cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude') }, stdio: [cheap || codex ? 'ignore' : 'pipe', 'pipe', 'pipe'], windowsHide: true }); }
       catch (error) {
         if (codex) {
           const reason = `codex-do launch failed: ${error?.message ?? error}`;
@@ -1169,7 +1176,11 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     catch (error) { console.error(`[rescue-todo-sweep] ${error?.message ?? error}`); }
   }
   // フォーム報告は next-session.md と独立した入力源なので、片方が無くてももう片方を止めない。
-  const parsed = fs.existsSync(nextFile) ? parseHandoff(fs.readFileSync(nextFile, 'utf8')) : { block: '', todos: [], todoBlocks: [], sections: {} };
+  const handoffText = await readHandoff(nextFile, { ...io.knowledgeDeps, home }).catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  const parsed = handoffText === null ? { block: '', todos: [], todoBlocks: [], sections: {} } : parseHandoff(handoffText);
   const feedbackIssues = await listIssues();
   let taskLedgerItems = [];
   try {
@@ -1281,7 +1292,9 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       if (!timing.run) break;
       // バッチ中に先行の子が完了させた TODO は起動しない（子セッション1本の無駄）。
       let currentHandoff = '';
-      try { currentHandoff = fs.readFileSync(nextFile, 'utf8'); } catch {}
+      try { currentHandoff = await readHandoff(nextFile, { ...io.knowledgeDeps, home }); } catch (error) {
+        if (error.code !== 'ENOENT' && handoffLockEnabled(io.knowledgeDeps)) throw error;
+      }
       if (isTodoAlreadyDone(currentHandoff, todo)) {
         completedChildren += 1;
         const now = new Date().toISOString();

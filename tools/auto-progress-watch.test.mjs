@@ -512,9 +512,9 @@ test('再開指示は取り消せる作業を先に済ませ、支払い等だ�
 
 
 test('summarizeEvidence: 作業ログを除き、2文・160字以内にする', () => {
-  assert.equal(summarizeEvidence('needs_user: [CLAIM-EVIDENCE: idx763 drive-read.mjs] jsonl idx763 drive-read.mjs（DWD） aria-required="true" 案内を準備しました。宛先も確認しました。送信は承認後です。'), 'jsonl （DWD） 案内を準備しました。宛先も確認しました。');
+  assert.equal(summarizeEvidence('needs_user: [CLAIM-EVIDENCE: idx763 drive-read.mjs] jsonl idx763 drive-read.mjs（DWD） aria-required="true" 案内を準備しました。宛先も確認しました。送信は承認後です。'), '宛先も確認しました。送信は承認後です。');
   assert.equal(summarizeEvidence('blocked: ' + '準備'.repeat(120)).length, 160);
-  assert.equal(summarizeEvidence(null), '');
+  assert.equal(summarizeEvidence(null), '取り消せる準備は済んでいます');
   assert.equal(summarizeEvidence('needs_user: report.jsonl config.json /tmp/check.mjs aria-label idx12 準備済み。'), '準備済み。');
 });
 
@@ -534,4 +534,85 @@ test('判断待ち通知: 長い作業ログより先に具体的な返事を示
   assert.equal(lines[3], '準備済み: 案内文を準備しました。宛先の確認も完了しました。');
   assert.equal(lines.at(-1), '成果物: https://example.com/draft');
   assert.doesNotMatch(sent[0], /idx763|drive-read\.mjs|CLAIM-EVIDENCE|aria-required/);
+});
+
+
+test('summarizeEvidence: 実際の判断待ち通知に内部語や識別子を残さない', () => {
+  const evidence = fs.readFileSync(new URL('./fixtures-needs-user-real-evidence.txt', import.meta.url), 'utf8');
+  const summary = summarizeEvidence(evidence);
+  assert.ok(summary.length > 0);
+  assert.ok(summary.length <= 160);
+  assert.doesNotMatch(summary, /[A-Za-z]{3,}/);
+  assert.doesNotMatch(summary, /[0-9a-f]{8}/i);
+  assert.equal(summary, '承認返事は未着。取り消せる準備を全て完了');
+});
+
+test('run() の phaseMs が各段階の経過時間を記録し、チェックループが保守処理より先に実行される', async t => {
+  const home = progressHome('phasems-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const now = Date.parse('2026-11-11T12:00:00Z');
+  writeLedger(ledgerFile(home), [{
+    ts: new Date(now - 2 * 3600000).toISOString(), pc: 'test-pc', user: 'test', owner: 'test',
+    sessionId: 'phase-ms-test', cwd: path.join(home, 'nonexistent'), promise: 'テスト', status: 'open',
+  }]);
+  const summary = await run({ home, now, io: {
+    clock: () => now, transcriptFiles: [], sheetConfig: () => null,
+    ...notificationMocks,
+    digest: async () => ({}), escalateKimDecisions: async () => ({}),
+  } });
+  assert.ok(summary.phaseMs, 'phaseMs が存在する');
+  const keys = Object.keys(summary.phaseMs);
+  assert.ok(keys.length >= 6, `phaseMs に ${keys.length} 段階以上ある: ${keys.join(', ')}`);
+  assert.ok(keys.includes('temp-cleanup'), 'temp-cleanup が含まれる');
+  assert.ok(keys.includes('read-ledger'), 'read-ledger が含まれる');
+  assert.ok(keys.includes('candidates'), 'candidates が含まれる');
+  assert.ok(keys.includes('check-loop'), 'check-loop が含まれる');
+  assert.ok(keys.includes('maintenance'), 'maintenance が含まれる');
+  // キーの配列順 = 実行順。チェックループが保守より前であることを確認。
+  const checkIdx = keys.indexOf('check-loop');
+  const maintIdx = keys.indexOf('maintenance');
+  assert.ok(checkIdx < maintIdx, `check-loop(index ${checkIdx}) が maintenance(index ${maintIdx}) より前`);
+  for (const [name, ms] of Object.entries(summary.phaseMs)) {
+    assert.ok(ms >= 0, `${name}: ${ms}ms`);
+  }
+});
+
+test('summarizeEvidence: 文と節を選別し、括弧や手順列挙を残さない', () => {
+  assert.equal(summarizeEvidence('準備済み（内部(JSON 実測)説明）。docId abc12345 を確認、宛先も確認済み。送信待ち。'), '準備済み。宛先も確認済み。');
+  assert.equal(summarizeEvidence('準備済み。（１）内部の手順。'), '準備済み。');
+  for (const evidence of ['JSON を確認。', '番号12345678を確認。', '宛先 a@b を確認。', '（説明）', '']) {
+    assert.equal(summarizeEvidence(evidence), '取り消せる準備は済んでいます');
+  }
+});
+
+test('resumeSession は結果 JSON が無いとき error を返す（blocked ではない）', async t => {
+  const home = progressHome('resume-no-json-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = await resumeSession({ sessionId: 'no-json-test', promise: 'テスト', transcriptPath: 'session.jsonl', cwd: home }, {
+    home, io: { executable: 'test-executor', runChild: async (_exe, text) => {
+      return { status: 'success', exitCode: 0, executorUsed: 'claude' };
+    } },
+  });
+  // 結果 JSON が無い（runChild が成功を返したがファイルが書かれなかった）→ error
+  assert.equal(result.outcome, 'error');
+  assert.match(result.reason, /成果記録なし/);
+  assert.match(result.reason, /再開が元セッションに届かなかった/);
+});
+
+test('resumeSession は結果 JSON があるとき従来どおり state を返す', async t => {
+  const home = progressHome('resume-has-json-');
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = await resumeSession({ sessionId: 'has-json-test', promise: 'テスト', transcriptPath: 'session.jsonl', cwd: home }, {
+    home, io: { executable: 'test-executor', runChild: async (_exe, text) => {
+      // resumeSession が結果ファイルを削除した後、runChild が書くのを模倣
+      // sessionId 'has-json-test' → slice(0,8) = 'has-json'
+      const resultFile = path.join(home, '.claude', 'auto-progress-resume-has-json.json');
+      fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+      fs.writeFileSync(resultFile, JSON.stringify({ state: 'done', evidence: '作業完了', artifact: 'result.txt' }));
+      return { status: 'success', exitCode: 0, executorUsed: 'claude' };
+    } },
+  });
+  assert.equal(result.outcome, 'done');
+  assert.equal(result.reason, '作業完了');
+  assert.equal(result.artifact, 'result.txt');
 });

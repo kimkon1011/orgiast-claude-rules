@@ -156,6 +156,12 @@
       {
         "matcher": "*",
         "type": "command",
+        "command": "node \"${repo}/tools/urgent-blocker.mjs\" --context",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
         "command": "node \"${repo}/tools/daytrip-ask-hook.mjs\"",
         "timeout": 5
       },
@@ -177,6 +183,12 @@
         "type": "command",
         "command": "node \"${repo}/tools/session-wait-title.mjs\" --prompt-submit",
         "timeout": 8
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/knowledge-guard.mjs\" --session-start",
+        "timeout": 6
       }
     ],
     "UserPromptSubmit": [
@@ -303,6 +315,12 @@
         "matcher": "*",
         "type": "command",
         "command": "node \"${repo}/tools/kim-awaiting-context.mjs\"",
+        "timeout": 5
+      },
+      {
+        "matcher": "*",
+        "type": "command",
+        "command": "node \"${repo}/tools/urgent-blocker.mjs\" --context",
         "timeout": 5
       },
       {
@@ -524,6 +542,12 @@
         "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/delete-approval-gate.mjs\"",
         "timeout": 15
+      },
+      {
+        "matcher": "Read|Grep|Glob|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit",
+        "type": "command",
+        "command": "node \"${repo}/tools/knowledge-guard.mjs\"",
+        "timeout": 6
       }
     ],
     "PostToolUse": [

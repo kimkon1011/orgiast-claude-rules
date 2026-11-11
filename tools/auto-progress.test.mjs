@@ -341,8 +341,10 @@ test('digest: DM未達を成功にせず、公開webhookへ送らない', async 
 test('resumeSession: 古い成果JSONは再利用しない', async () => {
   const home = tmp(); fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(home, '.claude', 'auto-progress-resume-session.json'), '{"progressed":true,"evidence":"old"}');
+  // 新仕様: runChild 成功後に新しい結果 JSON が無い → error（再開未達）。古い結果を再利用しないことの証明。
   const result = await resumeSession({ sessionId: 'session', cwd: home, promise: 'p' }, { home, io: { executable: 'mock', runChild: async () => ({ status: 'success' }) } });
-  assert.equal(result.outcome, 'blocked');
+  assert.equal(result.outcome, 'error');
+  assert.match(result.reason, /成果記録なし/);
 });
 
 test('buildRecord: hostname と OS username の既定値を記録', () => {
@@ -1012,8 +1014,8 @@ test('digest: 進行中も件数だけでなく名前で出す（最終判定が
   ];
   const text = formatDigest([], now, 'PC', { waitingRows: [], doneRows: [], stalledRows: [], inProgressRows });
   assert.deepEqual(text.split('\n').filter(line => line.startsWith('・進行中')), [
-    '・進行中: 新しい作業',
-    '・進行中: 古い作業',
+    '・進行中: 新しい作業 — 状態未確認',
+    '・進行中: 古い作業 — 状態未確認',
   ]);
   assert.doesNotMatch(text, /・進行中: \d+件/);
 });

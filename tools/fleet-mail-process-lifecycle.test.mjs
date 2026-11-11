@@ -27,6 +27,8 @@ for (const mode of ['completed', 'hung-fetch', 'failed-logging']) {
       import fs from 'node:fs';
       const original = globalThis.setTimeout;
       globalThis.setTimeout = (fn, ms, ...args) => original(fn, ms === 15 * 60_000 ? 300 : ms, ...args);
+      // Keep the test focused on fetch: disk scheduling must not consume its 300ms deadline.
+      fs.promises.readdir = async () => [];
       globalThis.fetch = () => new Promise(() => {});
       setInterval(() => {}, 1000);
       ${mode === 'failed-logging' ? `

@@ -940,7 +940,7 @@ test('pollOnce defers housekeeping over budget but still receives, and records p
   const kinds = [];
   const request = async kind => { kinds.push(kind); return kind === 'mail-poll' ? { messages: [mail({ id: 'mail-1793109976589-df939d96' })] } : { ok: true }; };
   const errors = [];
-  const result = await pollOnce({ home: f.home, identity: { hostname: 'host-kim' }, request, now, executePrompts: false,
+  const result = await pollOnce({ home: f.home, identity: { hostname: 'host-kim' }, request, now, executePrompts: false, saveReceivedBudgetMs: Infinity,
     dailyLaneHealth: () => assert.fail('期限超過後の付帯処理は次回へ回す'), stdout: () => {}, stderr: e => errors.push(e) });
   assert.ok(kinds.includes('mail-poll'));
   assert.deepEqual(result.received.map(m => m.id ?? m), ['mail-1793109976589-df939d96'].filter(() => result.received.length));
@@ -976,9 +976,11 @@ test('--poll hard deadline stops a poll stuck in an await, releases the lock and
   // The production deadline is unref'ed; a pending request Promise alone cannot keep this test alive.
   const keepAlive = setInterval(() => {}, 1000);
   t.after(() => clearInterval(keepAlive));
+  let finishRequest, running;
   const exited = new Promise((resolve, reject) => {
-    main(['--poll', '--no-exec'], { ...f.deps, stderr: e => errors.push(e), pollHardDeadlineMs: 50, exit: resolve,
-      request: kind => kind === 'mail-poll' ? new Promise(() => {}) : Promise.resolve({ ok: true }) }).catch(reject);
+    running = main(['--poll', '--no-exec'], { ...f.deps, stderr: e => errors.push(e), pollHardDeadlineMs: 500, exit: resolve,
+      receiptScanOptions: { io: { readdir: async () => [] } },
+      request: kind => kind === 'mail-poll' ? new Promise(resolve => { finishRequest = resolve; }) : Promise.resolve({ ok: true }) }).catch(reject);
   });
   assert.equal(await exited, POLL_HARD_DEADLINE_EXIT);
   assert.ok(errors.some(e => /poll 上限\d+分超過で打ち切り=1/.test(e)));
@@ -986,6 +988,8 @@ test('--poll hard deadline stops a poll stuck in an await, releases the lock and
   const line = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-poll-timing.jsonl'), 'utf8').trim().split('\n').at(-1));
   assert.equal(line.outcome, 'hard-deadline');
   assert.equal(line.stuckIn, 'mail-poll');
+  finishRequest({ messages: [] });
+  await running;
 });
 
 test('fixed selfcheck prompt passes without force; appended mutation remains blocked', async t => {

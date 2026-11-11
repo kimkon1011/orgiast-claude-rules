@@ -661,7 +661,8 @@ test('D6 arrival timeouts cap each call and total budget then retry unnotified m
   f.deps.notifyArrival = async (_mail, { signal }) => { signals.push(signal); return new Promise(resolve => late.push(resolve)); };
   const running = pollOnce(f.deps);
   const flush = () => new Promise(resolve => setImmediate(resolve));
-  await flush();
+  const readyDeadline = Date.now() + 5000;
+  while (!signals.length && Date.now() < readyDeadline) await flush();
   for (let i = 0; i < ARRIVAL_BUDGET_MS / ARRIVAL_TIMEOUT_MS; i++) {
     assert.equal(signals.length, i + 1);
     elapsed += ARRIVAL_TIMEOUT_MS; t.mock.timers.tick(ARRIVAL_TIMEOUT_MS); await flush();
@@ -688,7 +689,8 @@ test('D6 final arrival receives only the remaining total budget', async t => {
     return new Promise(() => {});
   };
   const running = pollOnce(f.deps);
-  await new Promise(resolve => setImmediate(resolve));
+  const readyDeadline = Date.now() + 5000;
+  while (calls.length < 2 && Date.now() < readyDeadline) await new Promise(resolve => setImmediate(resolve));
   assert.equal(calls.length, 2);
   const remaining = ARRIVAL_BUDGET_MS - elapsed;
   elapsed += remaining; t.mock.timers.tick(remaining);
@@ -1335,4 +1337,50 @@ test('802 result transport retries preserve a long stdout answer without another
   assert.equal(replies.length, 2);
   assert.equal(replies[0].payload.resultBody, answer); assert.equal(replies[1].payload.resultBody, answer);
   assert.equal(f.spawns.length, 0);
+});
+
+
+test('poll persists a complete response before partial inbox save and resumes without another request', async t => {
+  const f = fixture(t);
+  const messages = [mail(), mail({ id: 'mail-next' })];
+  f.deps.request = async kind => { assert.equal(kind, 'mail-poll'); return { messages }; };
+  const first = await pollOnce({ ...f.deps, saveReceivedBudgetMs: 0 });
+  assert.equal(first.partial, true);
+  const batch = JSON.parse(fs.readFileSync(path.join(f.dir, '.fleet-mail-poll.json'), 'utf8'));
+  assert.deepEqual(batch.response.messages, messages);
+  const timing = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-poll-timing.jsonl'), 'utf8').trim());
+  assert.equal(timing.outcome, 'partial');
+  assert.ok(JSON.parse(fs.readFileSync(path.join(f.dir, '.fleet-mail-last-poll.json'), 'utf8')).at);
+  f.deps.request = async kind => { assert.notEqual(kind, 'mail-poll'); return { ok: true, mail: {} }; };
+  await pollOnce(f.deps);
+  assert.equal(f.read('mail-original').body, messages[0].body);
+  assert.equal(f.read('mail-next').body, messages[1].body);
+  assert.equal(fs.existsSync(path.join(f.dir, '.fleet-mail-poll.json')), false);
+});
+
+test('poll timeout preserves requestId and never advances successful poll timestamp', async t => {
+  const f = fixture(t);
+  const last = path.join(f.dir, '.fleet-mail-last-poll.json');
+  fs.writeFileSync(last, JSON.stringify({ at: iso(-10000) }));
+  let requestId;
+  const result = await pollOnce({ ...f.deps, mailPollBudgetMs: 20, request: async (kind, payload) => {
+    assert.equal(kind, 'mail-poll'); requestId = payload.requestId; return new Promise(() => {});
+  } });
+  assert.equal(result.skipped, 'error');
+  assert.equal(JSON.parse(fs.readFileSync(last, 'utf8')).at, iso(-10000));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir, '.fleet-mail-poll.json'), 'utf8')).requestId, requestId);
+});
+
+test('slow receipt scan still receives mail and defers historical processing after durable save', async t => {
+  const f = fixture(t);
+  f.deps.request = async kind => { assert.equal(kind, 'mail-poll'); return { messages: [mail()] }; };
+  const result = await pollOnce({ ...f.deps, receiptScanOptions: { budgetMs: 20, io: {
+    readdir: async () => ['mail-slow.json'], readFile: () => new Promise(() => {}),
+  } } });
+  assert.deepEqual(result.received, ['mail-original']);
+  assert.equal(f.read('mail-original').body, 'body');
+  const timing = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-poll-timing.jsonl'), 'utf8').trim());
+  assert.equal(timing.outcome, 'ok');
+  assert.equal(timing.receiptScan.partial, true);
+  assert.ok(timing.phases.pollReceiptScan >= 0);
 });

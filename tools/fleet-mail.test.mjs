@@ -1157,3 +1157,30 @@ test('poll TimeoutError preserves last success and reaches the bounded failure t
   await assert.rejects(main(['--poll', '--no-exec'], f.deps), { code: 'SERVER_ERROR' });
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).errorStreak, 5);
 });
+
+
+test('slow pending seen backlog yields to receipt at the existing pre-poll deadline', async t => {
+  const f = fixture(t);
+  const { PRE_POLL_BUDGET_MS } = await import('./fleet-mail.mjs');
+  let time = Date.parse('2026-11-12T00:00:00Z');
+  const pending = id => ({ id, from: 'sender', to: 'kim-PC', kind: 'note', body: 'test', why: 'test', status: 'seen',
+    createdAt: new Date(time - 1000).toISOString(), expiresAt: new Date(time + 86400000).toISOString(), pendingServer: ['seen'] });
+  updateInbox('mail-pending-a', () => pending('mail-pending-a'), { home: f.home });
+  updateInbox('mail-pending-b', () => pending('mail-pending-b'), { home: f.home });
+  const calls = [];
+  await main(['--poll', '--no-exec'], { ...f.deps, now: () => time, dailySelfHeal: async () => {}, autoRunFixNow: async () => {},
+    dailyLaneHealth: async () => {}, dailyRuleCompliance: async () => {}, notifyArrival: async () => false,
+    request: async (kind, payload) => {
+      calls.push(kind);
+      if (kind === 'mail-seen') { time += PRE_POLL_BUDGET_MS + 1; return { ok: true, mail: { ...pending(payload.id), seenAt: new Date(time).toISOString() } }; }
+      if (kind === 'mail-poll') return { ok: true, messages: [] };
+      return { ok: true, mail: null };
+    }
+  });
+  assert.equal(calls.filter(k => k === 'mail-seen').length, 1);
+  assert.ok(calls.includes('mail-poll'));
+  const deferred = readInbox(f.home, { unreadOnly: false }).find(m => m.id === 'mail-pending-b');
+  assert.deepEqual(deferred.pendingServer, ['seen']);
+  assert.equal(deferred.serverAttempts?.seen, undefined);
+  assert.ok(f.errors.includes('fleet-mail: 受信前処理を次回へ延期=1'));
+});

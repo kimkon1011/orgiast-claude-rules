@@ -550,18 +550,22 @@ export async function syncMailState({ home, id, action, request, now = Date.now,
   } catch (error) { failSync(home, id, action, error, stderr); return false; }
   return finishSync(home, id, action, response, now, mail.status);
 }
-export async function syncPending({ home, request, now = Date.now, from, stderr = console.error }) {
+export async function syncPending({ home, request, now = Date.now, from, stderr = console.error, shouldContinue = () => true }) {
   const pendingDir = path.join(home, '.claude', 'fleet-inbox', '.pending');
   if (fs.existsSync(pendingDir)) for (const name of fs.readdirSync(pendingDir).filter(n => /^mail-[A-Za-z0-9-]+\.json$/.test(n))) {
+    if (!shouldContinue()) return;
     try { applyLocalCompletion(home, name.slice(0, -5)); }
     catch { stderr('fleet-mail: ローカル保存再試行待ち=1'); }
   }
+  if (!shouldContinue()) return;
   const mails = readInbox(home, { unreadOnly: false });
   for (const mail of mails) for (const action of mail.pendingServer || []) {
+    if (!shouldContinue()) return;
     if (!['seen', 'fail'].includes(action)) continue;
     try { await syncMailState({ home, id: mail.id, action, request, now, from, stderr, seenBy: mail.seenBy || from, reason: mail.failReason }); }
     catch { stderr('fleet-mail: 保存再試行待ち=1'); }
   }
+  if (!shouldContinue()) return;
   const ack = mails.filter(m => m.pendingServer?.includes('ack') && !m.abandonedServer?.includes('ack')).slice(0, ACK_BATCH_LIMIT);
   // Check file locks before making a transport call; a busy file remains pending.
   const ready = ack.filter(m => {
@@ -976,7 +980,7 @@ export async function pollOnce(deps = {}) {
         }
       });
       await prePhase('expireInbox', () => expireInbox(home, now));
-      await prePhase('syncPending', () => syncPending({ home, request, now, from: label, stderr: err }));
+      await prePhase('syncPending', () => syncPending({ home, request, now, from: label, stderr: err, shouldContinue: preBudgetAvailable }));
       await prePhase('quarantineResync', async () => {
         if (fs.existsSync(quarantineDir)) for (const name of fs.readdirSync(quarantineDir).filter(n => /^mail-[A-Za-z0-9-]+\.json$/.test(n))) {
           if (!preBudgetAvailable()) break;

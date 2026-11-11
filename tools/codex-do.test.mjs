@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { skipCoolingBackends } from './fallback-backend-health.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -41,6 +41,9 @@ function run(args, options = {}) {
       CODEX_DO_AUTH_MODE: 'apikey',
       CODEX_DO_WSL_PROBE: 'absent',
       CODEX_DO_NATIVE_PROBE: 'present',
+      // 既存テストは全て Codex 先行（sol/astra/既定モデル）を前提としているため、
+      // cheap-first を既定で無効にする。cheap-first のテストだけ options.env で上書きする。
+      CODEX_DO_CHEAP_FIRST: '0',
       ...options.env
     },
   });
@@ -1308,6 +1311,156 @@ test('review で変更0件でも終了コード 0（非 implement は空 diff �
     },
   });
   assert.equal(result.status, 0);
+});
+
+// ── cheap-first テスト ───────────────────────────────────────────────
+
+test('isCheapFirstEnabled: implement 既定で有効、review では無効、lane:codex 記載で無効、env=0 で無効', () => {
+  // implement 既定: 有効
+  assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction: '何か実装して' }), true);
+  // review: 無効
+  assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction: 'レビュー', review: true }), false);
+  // lane:codex あり: 無効
+  assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction: '<!-- lane: codex --> 実装して' }), false);
+  assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction: 'Lane: Codex 実装して' }), false);
+  // CODEX_DO_CHEAP_FIRST=0: 無効
+  assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction: '実装して', env: { CODEX_DO_CHEAP_FIRST: '0' } }), false);
+  // CODEX_DO_CHEAP_FIRST=1: 有効
+  assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction: '実装して', env: { CODEX_DO_CHEAP_FIRST: '1' } }), true);
+  // CODEX_DO_CHEAP_FIRST 未設定: 有効
+  assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction: '実装して', env: {} }), true);
+  // implement 以外: 無効
+  assert.equal(isCheapFirstEnabled({ kind: 'verify', instruction: '確認して' }), false);
+  assert.equal(isCheapFirstEnabled({ kind: 'investigate', instruction: '調べて' }), false);
+  assert.equal(isCheapFirstEnabled({ kind: 'classify', instruction: '分類して' }), false);
+});
+
+test('cheap-first: implement 既定 → fallback が先に呼ばれ Codex は呼ばれない', () => {
+  const mockResults = [
+    // cheap-first fallback 連鎖: cheap-code:deepseek が成功（0ファイル変更＝空diff検出が走る）
+    { status: 0, output: 'Qwen Code CLI has successfully edited files.', stderr: '' },
+  ];
+  const home = workDir();
+  const result = run(['--force-native', '--cwd', home, '実装して'], {
+    home,
+    env: {
+      CODEX_DO_CHEAP_FIRST: '1',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
+      GEMINI_API_KEY: '',
+      OPENROUTER_API_KEY: 'sk-test',
+    },
+  });
+  // モックでは実際にファイルを変更しないため空diff検出が走り非ゼロ終了。
+  // 重要なのは cheap-first が実行され、Codex が呼ばれなかったこと。
+  assert.match(result.stderr, /cheap-first/);
+  assert.match(result.stderr, /代替 AI が成功したため Codex は起動しません/);
+  // "executor=codex" は出ない
+  assert.doesNotMatch(result.stdout, /executor=codex/);
+  // executor=fallback か executor=cheap-first が出力されている
+  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
+});
+
+test('cheap-first: implement 既定 → fallback 全滅 → Codex が呼ばれる', () => {
+  // cheap-first で全滅したあと、Codex が実行されることだけ確認する（空diff検出等の成否は問わない）
+  const mockResults = [
+    // cheap-first: 1 backend が失敗
+    { status: 1, output: '', stderr: 'rate limit' },
+    // Codex（SOL）試行1回目
+    { status: 1, output: '', stderr: 'fast fail' },
+    // Codex（SOL）試行2回目
+    { status: 1, output: '', stderr: 'fast fail 2' },
+  ];
+  const home = workDir();
+  const result = run(['--force-native', '--cwd', home, '実装して'], {
+    home,
+    env: {
+      CODEX_DO_CHEAP_FIRST: '1',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
+      GEMINI_API_KEY: '',
+      OPENROUTER_API_KEY: 'sk-test',
+    },
+  });
+  // cheap-first 全滅のログ
+  assert.match(result.stderr, /cheap-first/);
+  assert.match(result.stderr, /全て失敗したため Codex を起動します/);
+  // Codex が実行された証拠
+  assert.match(result.stdout, /executor=codex/);
+});
+
+test('cheap-first: lane:codex 記載 → Codex が先に呼ばれる（cheap-first 無効）', () => {
+  // 指示に lane: codex が書いてあるので cheap-first は無効
+  // Codex SOL → Codex ASTRA → fallback 連鎖まで mock を用意する
+  const mockResults = [
+    // Codex（SOL）: fast fail、2回までループ
+    { status: 1, output: '', stderr: 'error 1' },
+    { status: 1, output: '', stderr: 'error 2' },
+    // ASTRA 昇格後の retry
+    { status: 1, output: '', stderr: 'error 3' },
+    { status: 1, output: '', stderr: 'error 4' },
+    // fallback cheap-code:deepseek
+    { status: 0, output: 'fallback done', stderr: '' },
+  ];
+  const home = workDir();
+  const result = run(['--force-native', '--cwd', home, '<!-- lane: codex --> 実装して'], {
+    home,
+    env: {
+      CODEX_DO_CHEAP_FIRST: '1',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
+      GEMINI_API_KEY: '',
+      OPENROUTER_API_KEY: 'sk-test',
+    },
+  });
+  // cheap-first のログが出ないこと
+  assert.doesNotMatch(result.stderr, /cheap-first/);
+  // Codex（SOL→ASTRA）→ fallback の順に実行されている
+  assert.match(result.stdout, /executor=codex/, `stdout: ${result.stdout}`);
+});
+
+test('cheap-first: review は従来どおり Codex 先（cheap-first 無効）', () => {
+  const mockResults = [
+    { status: 0, output: 'Review result', stderr: '' },
+  ];
+  const home = workDir();
+  const result = run(['--force-native', '--cwd', home, '--review', 'レビューして'], {
+    home,
+    env: {
+      CODEX_DO_CHEAP_FIRST: '1',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
+      GEMINI_API_KEY: '',
+      OPENROUTER_API_KEY: 'sk-test',
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /cheap-first/);
+  assert.match(result.stdout, /executor=codex/);
+});
+
+test('cheap-first: CODEX_DO_CHEAP_FIRST=0 → 従来どおり Codex 先', () => {
+  // env で無効化されているので Codex が先
+  const mockResults = [
+    // Codex（SOL）: fast fail、2回までループ
+    { status: 1, output: '', stderr: 'error 1' },
+    { status: 1, output: '', stderr: 'error 2' },
+    // ASTRA 昇格後の retry
+    { status: 1, output: '', stderr: 'error 3' },
+    { status: 1, output: '', stderr: 'error 4' },
+    // fallback cheap-code:deepseek
+    { status: 0, output: 'fallback done', stderr: '' },
+  ];
+  const home = workDir();
+  const result = run(['--force-native', '--cwd', home, '実装して'], {
+    home,
+    env: {
+      CODEX_DO_CHEAP_FIRST: '0',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
+      GEMINI_API_KEY: '',
+      OPENROUTER_API_KEY: 'sk-test',
+    },
+  });
+  // cheap-first のログが出ないこと（CODEX_DO_CHEAP_FIRST=0 で無効）
+  assert.doesNotMatch(result.stderr, /cheap-first/);
+  // Codex が実行された証拠
+  assert.match(result.stdout, /executor=codex/);
 });
 
 test('loadGeminiKey は process.env、.claude/gemini.env、~/.gemini/.env の順で読む', () => {

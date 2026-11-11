@@ -371,6 +371,18 @@ export function wantsEdit(kind, instruction, review = false) {
   return kind === 'implement' && !review && EDIT_HINT.test(String(instruction || ''));
 }
 
+// cheap-first: 「安いAIを先に使う」モードが有効か判定する。
+// kind='implement'、かつ指示本文に `lane: codex`（大文字小文字無視）が書かれていない、
+// かつ環境変数 CODEX_DO_CHEAP_FIRST が '0' でない（既定は有効）。
+// review や非 implement では常に false。
+export function isCheapFirstEnabled({ kind, instruction, review = false, env = process.env } = {}) {
+  if (kind !== 'implement') return false;
+  if (review) return false;
+  if (/lane:\s*codex/i.test(String(instruction || ''))) return false;
+  if (String(env.CODEX_DO_CHEAP_FIRST ?? '') === '0') return false;
+  return true;
+}
+
 export function shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut, diffText, treeChanged }) {
   if (treeChanged === true) {
     return false;
@@ -1133,6 +1145,10 @@ try {
 const wantedEdit = wantsEdit(taskKind, instruction, review);
 const started = Date.now();
 let mockIndex = 0;
+const cheapFirst = useCodex && isCheapFirstEnabled({ kind: taskKind, instruction, review, env: process.env });
+if (cheapFirst) {
+  console.error('[codex-do] cheap-first: 安いAIを先に実行します（Codex は失敗時のみ）');
+}
 
 
 function execute(command, commandArgs, options = {}) {
@@ -1302,6 +1318,49 @@ if (!useCodex) {
   process.exit(routed.provider ? 0 : (routed.result.status || 1));
 }
 
+async function tryCheapFirstFallback() {
+  if (!cheapFirst) return null;
+  const resolvedBackends = resolveFallbackBackends(home);
+  const cooling = coolingBackendNames(home);
+  const backends = deprioritizeUnreliableBackends(skipCoolingBackends(resolvedBackends, cooling), readFallbackBackendHistory(home));
+  if (backends.length === 0) return { succeeded: false, result: null, chainResult: [], lastBackend: null };
+  const chainResult = [];
+  let lastBackend = null, lastResult = null, cheapSucceeded = false;
+  const chainStarted = Date.now();
+  for (const [bi, backend] of backends.entries()) {
+    const isLast = bi === backends.length - 1;
+    const bt = effectiveBackendTimeoutSecs(backend.name, {
+      chainBudget: chainBackendBudgetSecs(timeoutSeconds, (Date.now() - chainStarted) / 1000),
+      cooling: cooling.has(backend.name), isLastBackend: isLast, kind: taskKind,
+    });
+    if (bt <= 0) break;
+    const as = Date.now();
+    lastBackend = backend;
+    console.log(`[codex-do] cheap-first: ${backend.name} model=${backend.model}`);
+    const res = backend.kind === 'gemini'
+      ? await execute('gemini', buildGeminiArgs({ model: backend.model }), { cwd, env: buildGeminiEnv(process.env, backend.apiKey), shell: process.platform === 'win32', timeoutSecs: bt, abortPolicyStall: true })
+      : backend.kind === 'cheap-code'
+        ? await executeCheapCode(backend, bt)
+        : await execute('qwen', buildQwenArgs({ timeoutSecs: bt, model: backend.model }), { cwd, env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }), shell: process.platform === 'win32', timeoutSecs: bt });
+    lastResult = res;
+    if (res.status === null) res.status = 1;
+    const cliMissing = isBackendCliMissing(res.output, `${res.stderr || ''}\n${res.error?.message || ''}`);
+    const billingFailure = isBackendBillingFailure(res.output, res.stderr);
+    if (backend.name === 'gemini-cli' && billingFailure) rememberProviderBillingFailure(home, 'gemini');
+    const exhausted = isBackendExhausted(res.output, res.stderr) || (backend.kind === 'cheap-code' && res.status === 3);
+    const dec = shouldAdvanceToNextBackend({ timedOut: res.timedOut === true, status: res.status, exhausted, cliMissing, aborted: res.aborted === 'policy_stall' });
+    const outcome = dec.outcome;
+    const treeUnchangedNow = wantedEdit && !res.timedOut && treeBefore.trim() === treeSnapshot().trim() && !hasExternalWork(res);
+    chainResult.push({ backend: backend.name, model: backend.model, status: res.status ?? null, timedOut: res.timedOut === true, out: Math.ceil((res.outputChars || 0) / 4), outChars: res.outputChars || 0, secs: Number(((Date.now() - as) / 1000).toFixed(3)), budgetSecs: bt, stderrTail: String(res.stderr || '').replace(/\s+/g, ' ').trim().slice(-200), outcome });
+    if (dec.advance) { if (['ok', 'timeout', 'cli_missing', 'blocked'].includes(outcome)) recordFallbackBackendOutcome(home, { backend: backend.name, outcome }); continue; }
+    if (!isLast && outcome === 'ok' && treeUnchangedNow) { if (chainResult.at(-1)) chainResult.at(-1).outcome = 'no_changes'; continue; }
+    if (outcome === 'ok') cheapSucceeded = true;
+    if (['ok', 'timeout', 'cli_missing', 'blocked'].includes(outcome)) recordFallbackBackendOutcome(home, { backend: backend.name, outcome });
+    break;
+  }
+  return { succeeded: cheapSucceeded, result: lastResult || { status: 1, outputChars: 0, output: '', stderr: '' }, chainResult, lastBackend };
+}
+
 async function launchCodex(codexArgs, primaryStarted = Date.now()) {
   let result;
 
@@ -1456,7 +1515,28 @@ let quotaCheck;
 let quotaResetUntil = 0;
 let escalationFailed = false;
 let astraRetreated = false;
-while (true) {
+let cheapFirstFallbackDone = false;
+if (cheapFirst) {
+  const cheapResult = await tryCheapFirstFallback();
+  cheapFirstFallbackDone = true;
+  if (cheapResult?.succeeded) {
+    const secs2 = (Date.now() - started) / 1000;
+    result = cheapResult.result;
+    executorName = 'fallback';
+    fallbackBackend = cheapResult.lastBackend;
+    lastBackend = cheapResult.lastBackend;
+    fallbackChain = cheapResult.chainResult;
+    recordUsage(result, `${cheapResult.lastBackend?.name ?? 'unknown'}/${cheapResult.lastBackend?.model ?? 'unknown'}`, secs2, 'fallback', 1, cheapResult.chainResult);
+    quotaCheck = { matched: false };
+    console.error('[codex-do] cheap-first: 代替 AI が成功したため Codex は起動しません');
+  } else {
+    fallbackChain = cheapResult?.chainResult || [];
+    fallbackBackend = cheapResult?.lastBackend || null;
+    lastBackend = cheapResult?.lastBackend || null;
+    console.error('[codex-do] cheap-first: 代替 AI が全て失敗したため Codex を起動します');
+  }
+}
+while (!(cheapFirstFallbackDone && executorName === 'fallback')) {
   result = await executeCodex();
   quotaCheck = detectQuotaLimit(result?.output, result?.stderr, result?.status, prompt);
   if (clearCooldownAfterRecheck({ home, recheck: cooldownRecheck, result, quotaMatched: quotaCheck.matched })) cooldownRecheck = false;
@@ -1508,6 +1588,8 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
     if (result.status === 0 || result.status === null) {
       result.status = 1;
     }
+  } else if (cheapFirstFallbackDone) {
+    console.error('[codex-do] cheap-first で代替 AI は既に実行済みです（Codex も失敗）。台帳は cheap-first の chain が残っています');
   } else {
     executorName = 'fallback';
     if (launchUnavailable && !cooldownSkipCodex) console.error('[codex-do] WSL の codex 経路が使えないため、代替バックエンドで実行します（WSL を整備するか、承知の上で native を使うなら --allow-native）');
@@ -1772,7 +1854,7 @@ if (shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut: result.tim
 if (quotaCheck.matched && executorName === 'fallback' && result?.status !== 0) {
   try { writeCodexCooldown(quotaResetUntil, undefined, 'usage_limit_no_fallback'); } catch {}
 }
-if (executorName === 'fallback') {
+if (executorName === 'fallback' && !cheapFirstFallbackDone) {
   recordUsage(result, `${reportedFallbackBackend?.name ?? 'unknown'}/${reportedFallbackBackend?.model ?? 'unknown'}`, secs, 'fallback', 1, fallbackChain);
 }
 

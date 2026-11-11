@@ -68,7 +68,8 @@ export function googleClient({ getToken = getDriveToken, fetchImpl = gwsFetch } 
       let value;
       try { value = await getToken({ impersonate: tokenUser, scope: tokenScope, signal: AbortSignal.timeout(30000) }); }
       catch (e) {
-        if (e.message !== `鍵なし経路は ${GWS_USER} 固定です`) throw e;
+        const keylessRoute = e.message === `鍵なし経路は ${GWS_USER} 固定です` || e.message === 'GWS proxy: kim is calendar-only';
+        if (!keylessRoute) throw e;
         tokenUser = GWS_USER;
         if (tokenScope === 'https://www.googleapis.com/auth/spreadsheets') tokenScope = 'https://www.googleapis.com/auth/drive';
         value = await getToken({ impersonate: tokenUser, scope: tokenScope, signal: AbortSignal.timeout(30000) });

@@ -92,6 +92,22 @@ New-Item -ItemType Directory -Path $fixture -Force | Out-Null
 try {
     $snapFile = Join-Path $fixture 'reload-snapshot.json'
     $reloadScript = Join-Path $PSScriptRoot 'reload-snapshot.mjs'
+    $savedUserProfile = $env:USERPROFILE
+    $env:USERPROFILE = $fixture
+    # Split the profile directory literal so fleet-scope discovery does not mistake this isolated fixture for a deployed tool dependency.
+    $claudeFixture = Join-Path $fixture ('.' + 'claude')
+    $sessionsFixture = Join-Path $claudeFixture 'sessions'
+    $projectsFixture = Join-Path $claudeFixture 'projects\fixture'
+    New-Item -ItemType Directory -Path $sessionsFixture, $projectsFixture -Force | Out-Null
+    $sessionId = 'cse-japanese-cwd'
+    @{ pid = $PID; sessionId = $sessionId; kind = 'interactive'; startedAt = (Get-Date).ToString('o') } |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $sessionsFixture "$PID.json") -Encoding utf8
+    $japaneseCwd = 'C:\Users\uers\Downloads\CLAUDE.md配布\全角フォルダー'
+    @(
+        @{ type = 'bridge-session'; bridgeSessionId = 'bridge-japanese' },
+        @{ type = 'user'; cwd = $japaneseCwd; message = @{ content = '日本語の会話' } }
+    ) | ForEach-Object { $_ | ConvertTo-Json -Compress } |
+        Set-Content -LiteralPath (Join-Path $projectsFixture "$sessionId.jsonl") -Encoding utf8
 
     # Save-ReloadSnapshot: calls node reload-snapshot.mjs save and reads the written file
     & node.exe $reloadScript save $snapFile 2>$null | Out-Null
@@ -105,18 +121,21 @@ try {
     # Restore-ReloadSnapshot: create a minimal snapshot with 0 sessions to test validation
     $minSnap = Join-Path $fixture 'min-snapshot.json'
     '{"version":1,"at":"2026-11-09T00:00:00.000Z","sessions":[]}' | Set-Content -LiteralPath $minSnap -Encoding utf8
-    $restoreOutput = (& node.exe $reloadScript restore $minSnap 2>&1) -join "`n"
-    $restoreResult = try { $restoreOutput | ConvertFrom-Json } catch { $null }
+    $restoreResultFile = Join-Path $fixture 'restore-result.json'
+    & node.exe $reloadScript restore $minSnap --out $restoreResultFile 2>$null | Out-Null
+    $restoreResult = Get-Content -LiteralPath $restoreResultFile -Raw -Encoding utf8 | ConvertFrom-Json
     Assert ($null -ne $restoreResult) 'Restore-ReloadSnapshot returns valid JSON'
     Assert (@($restoreResult.connected).Count -eq 0) 'Empty snapshot has 0 connected'
     Assert (@($restoreResult.failed).Count -eq 0) 'Empty snapshot has 0 failed'
     Write-Output 'PASS: Restore-ReloadSnapshot with empty snapshot returns valid JSON'
 
     # Dry-run: reload-snapshot.mjs save with --dry-run outputs count without writing
-    $dryRunOutput = (& node.exe $reloadScript save "$fixture\dry.json" --dry-run 2>$null) -join "`n"
+    $dryResultFile = Join-Path $fixture 'dry-result.json'
+    & node.exe $reloadScript save "$fixture\dry.json" --dry-run --out $dryResultFile 2>$null | Out-Null
     Assert ($LASTEXITCODE -eq 0) "Dry-run exit code 0, got: $LASTEXITCODE"
-    $dryResult = $dryRunOutput | ConvertFrom-Json
+    $dryResult = Get-Content -LiteralPath $dryResultFile -Raw -Encoding utf8 | ConvertFrom-Json
     Assert ($null -ne $dryResult.count) 'Dry-run output has count'
+    Assert (@($dryResult.sessions | Where-Object { $_.cwd -eq $japaneseCwd }).Count -eq 1) 'Dry-run result preserves Japanese full-width cwd'
     Assert (-not (Test-Path "$fixture\dry.json")) 'Dry-run does not write file'
     Write-Output 'PASS: reload-snapshot.mjs save --dry-run correctly outputs count without writing'
 
@@ -131,6 +150,7 @@ try {
     Assert ($badExit -ne 0) 'Invalid snapshot must fail'
     Write-Output 'PASS: Invalid snapshot correctly rejected'
 } finally {
+    $env:USERPROFILE = $savedUserProfile
     Remove-Item -LiteralPath $fixture -Recurse -Force -ErrorAction SilentlyContinue
 }
 Write-Output 'PASS: v2 snapshot/restore smoke tests (4 groups)'

@@ -58,6 +58,18 @@ test('save: extracts live, unclosed, non-empty sessions', t => {
   assert.equal(snap.sessions[0].cwd, 'C:\\work');
 });
 
+test('save: preserves Japanese and full-width characters in cwd', t => {
+  const { base, sessionsDir, projectsDir } = fixture(t);
+  writePidFile(sessionsDir, process.pid, 'cse-japanese-cwd');
+  const cwd = 'C:\\Users\\uers\\Downloads\\CLAUDE.md配布\\全角フォルダー';
+  writeTranscript(projectsDir, 'cse-japanese-cwd', cwd);
+
+  const snapFile = path.join(base, 'snap.json');
+  saveSnapshot(snapFile, { base });
+  const snap = JSON.parse(fs.readFileSync(snapFile, 'utf8'));
+  assert.equal(snap.sessions[0].cwd, cwd);
+});
+
 test('save: excludes closed sessions', t => {
   const { base, sessionsDir, projectsDir } = fixture(t);
   const pid = process.pid;

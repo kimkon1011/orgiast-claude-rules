@@ -175,15 +175,28 @@ async function main() {
   const cmd = args[0];
   const file = args[1];
   const dryRun = args.includes('--dry-run');
+  const outIndex = args.indexOf('--out');
+  const outFile = outIndex >= 0 ? args[outIndex + 1] : null;
+
+  if (outIndex >= 0 && !outFile) {
+    console.error('--out requires a file path');
+    process.exitCode = 1;
+    return;
+  }
+
+  const writeResult = result => {
+    if (outFile) fs.writeFileSync(outFile, JSON.stringify(result), 'utf8');
+  };
 
   if (cmd === 'save' && file) {
-    saveSnapshot(file, { dryRun });
+    writeResult(saveSnapshot(file, { dryRun }));
   } else if (cmd === 'restore' && file) {
     const result = await restoreSnapshot(file);
+    writeResult(result);
     if (result.failed.length > 0) process.exitCode = 2;
   } else {
-    console.error('Usage: reload-snapshot.mjs save <file> [--dry-run]');
-    console.error('       reload-snapshot.mjs restore <file>');
+    console.error('Usage: reload-snapshot.mjs save <file> [--dry-run] [--out <file>]');
+    console.error('       reload-snapshot.mjs restore <file> [--out <file>]');
     process.exitCode = 1;
   }
 }

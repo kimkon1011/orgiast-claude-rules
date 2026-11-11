@@ -189,16 +189,21 @@ function Invoke-VSCodeRestart($CodeCli, [string[]]$RestoreTargets) {
 }
 
 function Save-ReloadSnapshot($SnapshotPath) {
-    $output = (& node.exe (Join-Path $PSScriptRoot 'reload-snapshot.mjs') save $SnapshotPath) -join "`n"
-    if ($LASTEXITCODE -ne 0) { throw "Snapshot failed: $output" }
-    $snapshot = $output | ConvertFrom-Json
-    Write-Log ("SNAPSHOT: {0} sessions / {1}" -f $snapshot.count, $SnapshotPath) | Out-Host
+    $resultPath = [IO.Path]::GetTempFileName()
+    try {
+        $output = (& node.exe (Join-Path $PSScriptRoot 'reload-snapshot.mjs') save $SnapshotPath --out $resultPath) -join "`n"
+        if ($LASTEXITCODE -ne 0) { throw "Snapshot failed: $output" }
+        $result = Get-Content -LiteralPath $resultPath -Raw -Encoding utf8 | ConvertFrom-Json
+        Write-Log ("SNAPSHOT: {0} sessions / {1}" -f $result.count, $SnapshotPath) | Out-Host
+    } finally { Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue }
 }
 
 function Restore-ReloadSnapshot($SnapshotPath) {
-    $output = (& node.exe (Join-Path $PSScriptRoot 'reload-snapshot.mjs') restore $SnapshotPath) -join "`n"
+    $resultPath = [IO.Path]::GetTempFileName()
+    $output = (& node.exe (Join-Path $PSScriptRoot 'reload-snapshot.mjs') restore $SnapshotPath --out $resultPath) -join "`n"
     $exitCode = $LASTEXITCODE
-    try { $result = $output | ConvertFrom-Json } catch { $result = @{ error = $output } }
+    try { $result = Get-Content -LiteralPath $resultPath -Raw -Encoding utf8 | ConvertFrom-Json } catch { $result = @{ error = $output } }
+    Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
     $failures = @($result.failed | Where-Object { $_ })
     $connected = @($result.connected | Where-Object { $_ }).Count
     $detail = ($failures | ForEach-Object { "{0}: {1}" -f $_.id, $_.error }) -join '; '
@@ -208,6 +213,17 @@ function Restore-ReloadSnapshot($SnapshotPath) {
         & node.exe (Join-Path $PSScriptRoot 'notify-kim.mjs') --kind info $summary | Out-Host
         if ($LASTEXITCODE -ne 0) { Write-Log 'WARN: kim-inbox notification failed' | Out-Host }
     }
+}
+
+function Get-ReloadSnapshotCount {
+    $resultPath = [IO.Path]::GetTempFileName()
+    try {
+        & node.exe (Join-Path $PSScriptRoot 'reload-snapshot.mjs') save (Join-Path $env:TEMP 'nightly-reload-preview.json') --dry-run --out $resultPath 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) { return '?' }
+        $result = Get-Content -LiteralPath $resultPath -Raw -Encoding utf8 | ConvertFrom-Json
+        return $result.count
+    } catch { return '?' }
+    finally { Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue }
 }
 
 if ($FunctionsOnly) { return }
@@ -245,7 +261,7 @@ try {
     $busy = @(Get-BusySessionFiles (Join-Path $claude 'projects') (Get-Date).AddMinutes(-15) $interactiveIds $agentsUsable)
     if ($busy.Count -gt 0 -and -not $policy.Overdue) {
         $busyMessage = "作業中（直近15分に更新されたVSCodeセッション {0} 件: {1}）" -f $busy.Count, $busy[0].Name
-        if ($DryRun) { Write-Log ("DRYRUN: 実行時はSKIP（{0}）" -f $busyMessage) }
+        if ($DryRun) { Write-Log ("DRYRUN: 実行時はSKIP（{0} / スナップショット {1}件）" -f $busyMessage, (Get-ReloadSnapshotCount)) }
         else { Write-Log ("SKIP: {0}" -f $busyMessage) }
         exit 0
     }
@@ -282,10 +298,7 @@ try {
     $uriEligible = -not $policy.Due -and $diskVersion -and $diskVersion -ge $requiredVersion -and $activatedVersion -and $activatedVersion -ge $requiredVersion
     $pathLabel = if ($uriEligible) { 'URI（未確認時はRestart）' } else { 'Restart' }
     if ($DryRun) {
-        # Preview snapshot count without writing files
-        $previewOutput = (& node.exe (Join-Path $PSScriptRoot 'reload-snapshot.mjs') save "$env:TEMP\nightly-reload-preview.json" --dry-run 2>$null) -join "`n"
-        $preview = try { $previewOutput | ConvertFrom-Json } catch { $null }
-        $sessionCount = if ($preview) { $preview.count } else { '?' }
+        $sessionCount = Get-ReloadSnapshotCount
         Write-Log ("DRYRUN: ここで再起動する（{0} / {1} / 対象窓 {2} / スナップショット {3}件）" -f $pathLabel, $reason, $windowHandles.Count, $sessionCount)
         Write-Log 'DRYRUN: 復帰確認をスキップ'
         exit 0

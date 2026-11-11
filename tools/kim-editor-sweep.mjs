@@ -53,7 +53,12 @@ export async function sweep({
         }
         pageToken = page.nextPageToken;
       } while (pageToken);
-    } catch { result.errors.push(`${account}: Drive の巡回に失敗`); }
+    } catch (error) {
+      // Keyless seats (no service account key) route through GWS proxy which only supports
+      // seisaku-team@ for Drive scope. Skip other accounts silently instead of raising errors.
+      if (String(error.message ?? error).startsWith('GWS proxy')) continue;
+      result.errors.push(`${account}: Drive の巡回に失敗`);
+    }
   }
   await inbox(home, { kind: 'info', source: 'kim-editor-sweep', text: `kim 編集権限の日次確認: 確認 ${result.checked}件 / 付与 ${result.granted}件 / 失敗 ${result.errors.length}件${result.errors.length ? '\n' + result.errors.join('\n') : ''}` });
   if (result.errors.length) throw new Error(result.errors.join('; '));

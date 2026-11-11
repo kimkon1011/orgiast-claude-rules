@@ -212,6 +212,25 @@ test('backendSpecificTimeoutSecs は gemini-cli に既定200秒・cheap-code:dee
   assert.equal(backendSpecificTimeoutSecs('openrouter-free', {}), null);
 });
 
+// 2026-11-11 修正: 実装依頼(--kind implement)は 400 秒では終わらず代替 AI が必ず
+// 時間切れになるため、既定予算を 1200 秒に引き上げる。
+test('backendSpecificTimeoutSecs は kind=implement で既定予算を 1200 秒に引き上げる', () => {
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}, { kind: 'implement' }), 1200);
+  assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}, { kind: 'implement' }), 1200);
+});
+
+test('backendSpecificTimeoutSecs は kind が無い・implement 以外の場合は従来どおり 400/200', () => {
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}), 400);
+  assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}), 200);
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', {}, { kind: 'verify' }), 400);
+  assert.equal(backendSpecificTimeoutSecs('gemini-cli', {}, { kind: 'verify' }), 200);
+});
+
+test('backendSpecificTimeoutSecs は kind=implement でも env 指定を優先する', () => {
+  assert.equal(backendSpecificTimeoutSecs('cheap-code:deepseek', { CODEX_DO_DEEPSEEK_TIMEOUT_SECS: '450' }, { kind: 'implement' }), 450);
+  assert.equal(backendSpecificTimeoutSecs('gemini-cli', { CODEX_DO_GEMINI_TIMEOUT_SECS: '180' }, { kind: 'implement' }), 180);
+});
+
 // 2026-11-02 実測（delegation-health:fallback_chain_timeout 6件 / 捨てた秒数 合計3607秒）:
 // 全バックエンドが冷却中だと keepAtLeastOne で元の配列が丸ごと戻り、gemini-cli 300秒 +
 // cheap-code:deepseek 600秒 を同じだけ再試行して 900 秒を毎回捨てていた（10:00/10:03/10:05 の

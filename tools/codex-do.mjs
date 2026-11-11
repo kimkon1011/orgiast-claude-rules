@@ -436,15 +436,20 @@ export function fallbackBackendTimeoutSecs(timeoutSeconds, env = process.env) {
 // 2026-11-11 再調整: chain 実測（223件の chain 試行中成功46件/p95=524秒）より
 // cheap-code:deepseek を 500→400 秒に引き下げ。100秒/件の廃棄削減。
 // chain 上限を 700 秒から 600 秒に収める。
-export function backendSpecificTimeoutSecs(backendName, env = process.env) {
+// 実装依頼(--kind implement)は既定予算と 1200 の大きい方を返す。400 秒では実装が
+// 終わらず代替 AI が必ず時間切れになるため。env の CODEX_DO_*_TIMEOUT_SECS 指定は
+// 従来どおり最優先で、指定があれば kind に関係なくその値を返す。
+export function backendSpecificTimeoutSecs(backendName, env = process.env, { kind } = {}) {
   if (backendName === 'gemini-cli') {
     const raw = Number(env.CODEX_DO_GEMINI_TIMEOUT_SECS);
-    return Number.isFinite(raw) && raw > 0 ? raw : 200;
+    if (Number.isFinite(raw) && raw > 0) return raw;
+    return kind === 'implement' ? 1200 : 200;
   }
   // cheap-code:deepseek と qwen 直結の deepseek は同じ upstream（OpenRouter の deepseek model）なので同一扱い。
   if (backendName === 'cheap-code:deepseek' || backendName === 'deepseek') {
     const raw = Number(env.CODEX_DO_DEEPSEEK_TIMEOUT_SECS);
-    return Number.isFinite(raw) && raw > 0 ? raw : 400;
+    if (Number.isFinite(raw) && raw > 0) return raw;
+    return kind === 'implement' ? 1200 : 400;
   }
   return null;
 }
@@ -460,8 +465,8 @@ export const COOLING_PROBE_TIMEOUT_SECS = 120;
 
 // 1試行に実際に与える秒数。冷却中でなければ従来どおり
 // min(連鎖の残り予算, backend 固有の上限)。冷却中でも末尾の試行は通常予算を使う。
-export function effectiveBackendTimeoutSecs(backendName, { chainBudget, cooling = false, env = process.env, isLastBackend = false } = {}) {
-  const base = Math.min(Number(chainBudget), backendSpecificTimeoutSecs(backendName, env) ?? Infinity);
+export function effectiveBackendTimeoutSecs(backendName, { chainBudget, cooling = false, env = process.env, isLastBackend = false, kind } = {}) {
+  const base = Math.min(Number(chainBudget), backendSpecificTimeoutSecs(backendName, env, { kind }) ?? Infinity);
   if (!Number.isFinite(base)) return base;
   if (!cooling || isLastBackend) return base;
   return Math.max(60, Math.min(base, COOLING_PROBE_TIMEOUT_SECS));
@@ -1591,7 +1596,8 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
         const backendTimeout = effectiveBackendTimeoutSecs(backend.name, {
           chainBudget: chainBackendBudgetSecs(timeoutSeconds, (Date.now() - chainStarted) / 1000),
           cooling: effectiveCooling,
-          isLastBackend: isLast
+          isLastBackend: isLast,
+          kind: taskKind
         });
         if (backendTimeout <= 0) {
           console.error(`[codex-do] フォールバック全体の時間枠(${timeoutSeconds}秒)を使い切ったため、残りのバックエンドは実行しません`);

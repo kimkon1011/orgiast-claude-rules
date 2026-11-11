@@ -20,6 +20,7 @@ import { appendAfterFromEnv } from './growi-manual.mjs';
 import { fetchMailTargets } from './fleet-mail-targets.mjs';
 import { allowedReadonlyPrompt } from './lib/fleet-selfcheck-prompt.mjs';
 import { isKimOperated } from './lib/kim-operated.mjs';
+import { reapStalePolls } from './lib/fleet-poll-reaper.mjs';
 export { resolveFleetLabel, dailyRuleCompliance };
 export { RECLAIM_STALE_MS } from './lib/reclaim-lock.mjs';
 
@@ -1571,18 +1572,22 @@ async function runMain(argv, deps) {
   // 2026-10-27 kim-PC: 通信も CPU も無いまま await で固まった poll が80分ロックを握った。工程間の予算では止まらないため、
   // 定期実行の --poll だけはプロセスごと打ち切る（ロックは owns() 確認つきで外し、次の2分枠で受信できるようにする）。
   const exit = deps.exit ?? (code => process.exit(code));
+  const deadlineStartedAt = now();
   let releaseOnStop = null, snapshot = null;
   const hardStop = options['--dry-run'] ? null : setTimeout(() => {
-    err(`fleet-mail: poll 上限${Math.round(POLL_HARD_DEADLINE_MS / 60000)}分超過で打ち切り=1`);
     try {
-      const s = snapshot?.();
-      if (s) fs.appendFileSync(path.join(dir, 'fleet-mail-poll-timing.jsonl'), `${JSON.stringify({ at: new Date(now()).toISOString(), totalMs: now() - s.startedAt, phases: s.phases, stuckIn: s.stuckIn, outcome: 'hard-deadline' })}\n`, { mode: 0o600 });
-    } catch { /* 打ち切りを優先する */ }
-    try { releaseOnStop?.(); } catch { /* 次回の stale 回収に任せる */ }
-    exit(POLL_HARD_DEADLINE_EXIT);
+      try {
+        const s = snapshot?.() ?? { startedAt: deadlineStartedAt, phases: {}, stuckIn: 'startup' };
+        fs.mkdirSync(dir, { recursive: true });
+        fs.appendFileSync(path.join(dir, 'fleet-mail-poll-timing.jsonl'), `${JSON.stringify({ at: new Date(now()).toISOString(), pid: process.pid, totalMs: now() - s.startedAt, phases: s.phases, stuckIn: s.stuckIn, outcome: 'hard-deadline' })}\n`, { mode: 0o600 });
+      } catch { /* 打ち切りを優先する */ }
+      try { err(`fleet-mail: poll 上限${Math.round(POLL_HARD_DEADLINE_MS / 60000)}分超過で打ち切り=1`); } catch { /* stderr failure must not cancel exit */ }
+      try { releaseOnStop?.(); } catch { /* 次回の stale 回収に任せる */ }
+    } finally { exit(POLL_HARD_DEADLINE_EXIT); }
   }, deps.pollHardDeadlineMs ?? POLL_HARD_DEADLINE_MS);
   hardStop?.unref();
   try {
+    if (!options['--dry-run']) await (deps.reapStalePolls ?? reapStalePolls)({ home, stderr: err });
     const result = await pollOnce({ ...deps, executePrompts: options['--no-exec'] ? false : deps.executePrompts, dryRun: !!options['--dry-run'], json: !!options['--json'],
       onLock: (release, snap) => { releaseOnStop = release; snapshot = snap; } });
     return result?.exitCode ?? 0;
@@ -1591,4 +1596,7 @@ async function runMain(argv, deps) {
 if (isEntry(import.meta.url)) {
   try { process.exitCode = await main(); }
   catch (error) { console.error(`fleet-mail: ${redactSecrets(error.message)}`); process.exitCode = 1; }
+  // A completed/failed scheduled poll can still retain fetch sockets, timers or
+  // child-process handles. Its CLI lifecycle ends here, including lock-busy runs.
+  if (process.argv.includes('--poll') && !process.argv.includes('--dry-run')) process.exit(process.exitCode);
 }

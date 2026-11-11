@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { skipCoolingBackends } from './fallback-backend-health.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -1011,6 +1011,54 @@ test('buildGeminiEnv は Gemini キーと trust を設定し、OPENAI_* と base
   assert.equal(env.OPENAI_API_KEY, 'openai-key');
   assert.equal(env.OPENAI_BASE_URL, 'https://example.test');
   assert.deepEqual(base, snapshot);
+});
+
+test('buildGeminiArgs は policyFile 指定時 --policy を -p の前に入れる', () => {
+  const args = buildGeminiArgs({ policyFile: '/tmp/policy.toml' });
+  const policyIndex = args.indexOf('--policy');
+  assert.ok(policyIndex >= 0);
+  assert.equal(args[policyIndex + 1], '/tmp/policy.toml');
+  const pIndex = args.indexOf('-p');
+  assert.ok(pIndex > policyIndex + 1, '--policy は -p より前にある');
+  for (const arg of args) assert.ok(!/\s/.test(arg), `argv 要素に空白が含まれる: ${JSON.stringify(arg)}`);
+});
+
+test('buildGeminiArgs は policyFile 未指定なら従来の引数列と完全一致する', () => {
+  const noPolicy = buildGeminiArgs({});
+  const traditional = buildGeminiArgs();
+  assert.deepEqual(noPolicy, traditional);
+  assert.ok(!noPolicy.includes('--policy'));
+});
+
+test('buildGeminiArgs は policyFile が未指定・undefined でも従来と同じ7要素を返す', () => {
+  const args = buildGeminiArgs();
+  assert.equal(args.length, 7);
+  assert.deepEqual(args.slice(0, 5), ['-m', 'gemini-3.6-flash', '--approval-mode', 'yolo', '--skip-trust']);
+  assert.deepEqual(args.slice(-2), ['-p', 'Follow-the-instructions-provided-on-stdin.']);
+});
+
+test('prepareGeminiWorkerPolicy は git と node と echo の allow を含むファイルを書く', () => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-policy-'));
+  const file = prepareGeminiWorkerPolicy(tmpHome);
+  assert.ok(fs.existsSync(file));
+  const content = fs.readFileSync(file, 'utf8');
+  assert.match(content, /tool = "run_shell_command"/);
+  assert.match(content, /commandPrefix = "git"/);
+  assert.match(content, /commandPrefix = "node"/);
+  assert.match(content, /commandPrefix = "echo"/);
+  assert.match(content, /priority = 900/);
+  fs.rmSync(tmpHome, { recursive: true, force: true });
+});
+
+test('prepareGeminiWorkerPolicy は内容が同じなら書き直さない（mtime が変わらない）', () => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codexdo-policy-'));
+  const file = prepareGeminiWorkerPolicy(tmpHome);
+  const mtime1 = fs.statSync(file).mtimeMs;
+  const file2 = prepareGeminiWorkerPolicy(tmpHome);
+  assert.equal(file, file2);
+  const mtime2 = fs.statSync(file).mtimeMs;
+  assert.equal(mtime1, mtime2);
+  fs.rmSync(tmpHome, { recursive: true, force: true });
 });
 
 test('loadDeepseekKey は process.env を最優先する', () => {

@@ -22,6 +22,7 @@ import { scanDiffForClaudeApi } from './app-llm-cost-gate.mjs';
 // Windows の shell 経由起動では引数がクォートされないため、この値に空白を入れると
 // -p の値が割れて Gemini が使い方(ヘルプ)を出して終わる。空白を入れないこと。
 export const GEMINI_PROMPT_FLAG = 'Execute_the_implementation_instructions_provided_on_stdin.';
+const GEMINI_CWD_GUARD = '\n作業ディレクトリ(cwd)の中だけで作業する。新しいworktreeや作業ディレクトリをcwdの外に作らない。\n';
 
 const ASTRA = 'gpt-6-astra';
 const SOL = 'gpt-5.6-sol';
@@ -415,8 +416,11 @@ export function buildQwenArgs({ model = GATEWAY_MODELS.deepseek, timeoutSecs = 1
 // シェル実行ツールは非対話では承認できず使えない。2026-10-12 実測: auto_edit だと
 // 「I do not have access to a shell or terminal tool in this environment」と回答し、
 // echo 1つ実行できない（qwen の --exclude-tools と同じ実害。代替実行者はテスト・git を回す必要がある）。
-export function buildGeminiArgs({ model = 'gemini-3.6-flash', marker = 'Follow-the-instructions-provided-on-stdin.' } = {}) {
-  return ['-m', model, '--approval-mode', 'yolo', '--skip-trust', '-p', marker];
+export function buildGeminiArgs({ model = 'gemini-3.6-flash', marker = 'Follow-the-instructions-provided-on-stdin.', policyFile } = {}) {
+  const args = ['-m', model, '--approval-mode', 'yolo', '--skip-trust'];
+  if (policyFile) args.push('--policy', policyFile);
+  args.push('-p', marker);
+  return args;
 }
 
 export function buildGeminiEnv(baseEnv, apiKey) {
@@ -425,6 +429,44 @@ export function buildGeminiEnv(baseEnv, apiKey) {
     GEMINI_API_KEY: apiKey,
     GEMINI_CLI_TRUST_WORKSPACE: 'true'
   };
+}
+
+const GEMINI_WORKER_POLICY_TOML = `[[policies]]
+tool = "run_shell_command"
+commandPrefix = "git"
+priority = 900
+
+[[policies]]
+tool = "run_shell_command"
+commandPrefix = "node"
+priority = 900
+
+[[policies]]
+tool = "run_shell_command"
+commandPrefix = "npm"
+priority = 900
+
+[[policies]]
+tool = "run_shell_command"
+commandPrefix = "npx"
+priority = 900
+
+[[policies]]
+tool = "run_shell_command"
+commandPrefix = "echo"
+priority = 900
+`;
+
+export function prepareGeminiWorkerPolicy(home) {
+  const dir = path.join(home, '.claude');
+  const file = path.join(dir, 'gemini-worker-policy.toml');
+  try {
+    const existing = fs.readFileSync(file, 'utf8');
+    if (existing === GEMINI_WORKER_POLICY_TOML) return file;
+  } catch { /* 無い・読めないので書き直す */ }
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, GEMINI_WORKER_POLICY_TOML, 'utf8');
+  return file;
 }
 
 // フォールバックの1バックエンドに掛けていい上限秒数。
@@ -1338,7 +1380,7 @@ async function tryCheapFirstFallback() {
     lastBackend = backend;
     console.log(`[codex-do] cheap-first: ${backend.name} model=${backend.model}`);
     const res = backend.kind === 'gemini'
-      ? await execute('gemini', buildGeminiArgs({ model: backend.model }), { cwd, env: buildGeminiEnv(process.env, backend.apiKey), shell: process.platform === 'win32', timeoutSecs: bt, abortPolicyStall: true })
+      ? await execute('gemini', buildGeminiArgs({ model: backend.model, policyFile: prepareGeminiWorkerPolicy(home) }), { cwd, env: buildGeminiEnv(process.env, backend.apiKey), shell: process.platform === 'win32', timeoutSecs: bt, abortPolicyStall: true, promptText: `${GEMINI_CWD_GUARD}${prompt}` })
       : backend.kind === 'cheap-code'
         ? await executeCheapCode(backend, bt)
         : await execute('qwen', buildQwenArgs({ timeoutSecs: bt, model: backend.model }), { cwd, env: buildQwenEnv(process.env, backend.apiKey, { model: backend.model, baseUrl: backend.baseUrl }), shell: process.platform === 'win32', timeoutSecs: bt });
@@ -1689,12 +1731,13 @@ if (quotaCheck.matched || escalationFailed || launchUnavailable || authFailed) {
         lastBackend = backend;
         console.log(`[codex-do] fallback backend=${backend.name} model=${backend.model}`);
         result = backend.kind === 'gemini'
-          ? await execute('gemini', buildGeminiArgs({ model: backend.model }), {
+          ? await execute('gemini', buildGeminiArgs({ model: backend.model, policyFile: prepareGeminiWorkerPolicy(home) }), {
               cwd,
               env: buildGeminiEnv(process.env, backend.apiKey),
               shell: process.platform === 'win32',
               timeoutSecs: backendTimeout,
-              abortPolicyStall: true
+              abortPolicyStall: true,
+              promptText: `${GEMINI_CWD_GUARD}${prompt}`
             })
           : backend.kind === 'cheap-code'
             ? await executeCheapCode(backend, backendTimeout)

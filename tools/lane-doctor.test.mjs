@@ -18,7 +18,17 @@ test('gemini-cli は Gemini の OpenRouter 代替表示を継承しない', () =
 
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-doctor-'));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const envKeys = ['GEMINI_API_KEY', 'DEEPSEEK_API_KEY', 'ZAI_API_KEY', 'GROQ_API_KEY', 'OPENROUTER_API_KEY', 'MISTRAL_API_KEY', 'XAI_API_KEY', 'MOONSHOT_API_KEY'];
+  const savedEnv = {};
+  for (const k of envKeys) {
+    if (process.env[k] !== undefined) { savedEnv[k] = process.env[k]; delete process.env[k]; }
+  }
+  t.after(() => {
+    fs.rmSync(home, { recursive: true, force: true });
+    for (const k of envKeys) {
+      if (savedEnv[k] !== undefined) process.env[k] = savedEnv[k]; else delete process.env[k];
+    }
+  });
   fs.mkdirSync(path.join(home, '.claude')); fs.mkdirSync(path.join(home, '.codex'));
   const token = `x.${Buffer.from(JSON.stringify({ email: 'test@example.com' })).toString('base64url')}.x`;
   atomicJson(path.join(home, '.codex/auth.json'), { tokens: { id_token: token } });
@@ -473,4 +483,29 @@ test('--probe executes real probe when lastProbeOkAt is older than 24 hours', as
   assert.equal(probed, true);
   assert.equal(result.lanes.deepseek.alive, true);
   assert.equal(result.lanes.deepseek.lastProbeOkAt, new Date(now).toISOString());
+});
+
+test('codex with real24h reasons containing 401 bearer auth errors classifies as dead:oauth_consent without events array', t => {
+  const home = fixture(t);
+  write(home, 'lane-health.json', {
+    lanes: {
+      codex: {
+        alive: false,
+        reason: 'real_fail_rate',
+        probedAt: new Date(now - 10000).toISOString(),
+        lastProbeOkAt: new Date(now - 86400_000).toISOString(),
+        real24h: {
+          calls: 14,
+          failures: 14,
+          reasons: {
+            '401 Unauthorized: Missing bearer or basic authentication in header': 14
+          }
+        }
+      }
+    }
+  });
+
+  const r = laneDoctorQuick({ home, now, save: false });
+  assert.equal(r.lanes.codex.alive, false);
+  assert.equal(r.lanes.codex.reason, 'dead:oauth_consent');
 });

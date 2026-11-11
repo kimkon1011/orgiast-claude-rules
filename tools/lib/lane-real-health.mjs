@@ -80,7 +80,7 @@ export function realLaneStats(home, now = Date.now()) {
 export function applyRealLaneHealth(health, home, now = Date.now()) {
   const stats = realLaneStats(home, now);
   for (const [lane, state] of Object.entries(health.lanes)) {
-    const s = stats[lane];
+    const s = stats[lane] || state.real24h;
     if (s) state.real24h = s;
     const errorQuota = quotaFailure(state.error) && !(billingFailure(state.error) && !billingWithQuotaHint(state.error));
     const errorUntil = quotaReset(state.error);
@@ -96,10 +96,10 @@ export function applyRealLaneHealth(health, home, now = Date.now()) {
       errorQuota && errorUntil > now ? errorUntil : 0, cooldownQuota ? stateUntil : 0) || null;
     // Evaluate only calls after the latest proven recovery, independent of ledger order.
     const lastOkAt = Math.max(s?.lastOkAt || 0, probeOkAt);
-    const calls = s?.events.filter(event => event.at > lastOkAt) || [];
+    const calls = s?.events?.filter(event => event.at > lastOkAt) || [];
     const failures = calls.filter(event => event.reason !== undefined);
-    const hasAuthError = failures.some(f => authFailurePattern.test(f.reason || f.detail || '')) ||
-      s?.events.some(e => e.at > lastOkAt && authFailurePattern.test(e.reason || e.detail || '')) ||
+    const hasAuthError = (s?.events?.length ? s.events.some(e => e.at > probeOkAt && authFailurePattern.test(e.reason || e.detail || '')) :
+      s?.reasons ? Object.keys(s.reasons).some(r => authFailurePattern.test(r)) && (!probeOkAt || millis(state.probedAt) > probeOkAt || (s.lastOkAt || 0) < millis(state.probedAt)) : false) ||
       (state.error && authFailurePattern.test(state.error) && (!probeOkAt || now >= probeOkAt));
     if (hasAuthError) {
       state.alive = false;

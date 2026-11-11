@@ -14,10 +14,12 @@ export async function reapStalePolls({ home, stderr = console.error, platform = 
   const script = path.join(home, '.claude', 'nightly-repo', 'tools', 'fleet-mail.mjs');
   if (platform !== 'win32' || !fs.existsSync(script)) return 0;
   try {
+    const logFile = path.join(home, '.claude', 'logs', 'fleet-mail.log');
+    fs.mkdirSync(path.dirname(logFile), { recursive: true });
     const { stdout } = await execFileImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
       '-File', fileURLToPath(new URL('./fleet-poll-reaper.ps1', import.meta.url)),
       '-PollScript', script, '-NodeExe', process.execPath, '-CallerPid', String(process.pid),
-      '-MaxAgeMs', String(POLL_REAP_AFTER_MS), '-LogFile', path.join(home, '.claude', 'fleet-mail.log')],
+      '-MaxAgeMs', String(POLL_REAP_AFTER_MS), '-LogFile', logFile],
     { windowsHide: true, timeout: 15_000, encoding: 'utf8', maxBuffer: 16 * 1024 });
     return Number(stdout.trim()) || 0;
   } catch {

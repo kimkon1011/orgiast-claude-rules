@@ -77,6 +77,8 @@ test('reaper bounds its Windows helper and reports failures without raw command 
   assert.equal(args[args.indexOf('-PollScript') + 1], script);
   assert.equal(args[args.indexOf('-CallerPid') + 1], String(process.pid));
   assert.equal(args[args.indexOf('-MaxAgeMs') + 1], String(POLL_REAP_AFTER_MS));
+  assert.equal(args[args.indexOf('-LogFile') + 1], path.join(home, '.claude', 'logs', 'fleet-mail.log'));
+  assert.equal(fs.existsSync(path.join(home, '.claude', 'logs')), true);
   assert.equal(options.timeout, 15_000);
   assert.equal(await reapStalePolls({ ...deps, execFileImpl: async () => { throw Error('secret command'); } }), 0);
   assert.deepEqual(errors, ['fleet-mail: stale poll recovery failed=1']);

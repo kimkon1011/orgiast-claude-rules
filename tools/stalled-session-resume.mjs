@@ -158,8 +158,8 @@ export function titleSkipReason(displayTitle, now) {
   const wait = waitDeadline(displayTitle, now);
   return wait && now < wait.at ? '待機期限前' : '';
 }
-// overdue の「処理済み」判定は progressed / no-progress だけ。
-// error / timeout / interrupted / その他は再試行対象（30分バックオフ、同一期限で最大3回）。
+// overdue の「処理済み」判定は期限更新に繋がる結果だけ。
+// no-progress / error / timeout / interrupted / その他は再試行対象（30分バックオフ、同一期限で最大3回）。
 // interrupted は起動中ロックがない古いもの（30分超）だけ再試行対象にする。
 const OVERDUE_SUCCESS_OUTCOMES = new Set(['progressed', 'no-progress', 'done', 'waiting-human']);
 export function overdueSkipReason(record, entry, closed, mtimeMs, now, activeMs) {
@@ -169,7 +169,8 @@ export function overdueSkipReason(record, entry, closed, mtimeMs, now, activeMs)
   const wait = waitDeadline(record.displayTitle, now);
   if (!wait || wait.at > now) return '期限切れ待機ではない';
   const attempts = (entry.attempts ?? []).filter(a => a.via && a.outcome !== 'not-in-session' && a.resumedInSession !== false);
-  if (attempts.some(a => OVERDUE_SUCCESS_OUTCOMES.has(a.outcome))) return '同一期限処理済み';
+  if (attempts.some(a => a.outcome === 'progressed' || a.outcome === 'done' || a.outcome === 'waiting-human')) return '同一期限処理済み';
+  if ((entry.noProgress ?? 0) >= 3 && attempts.filter(a => a.outcome === 'no-progress').length >= 3) return '3回進捗なし';
   if (attempts.length >= 3 && attempts.every(a => !OVERDUE_SUCCESS_OUTCOMES.has(a.outcome))) return '同一期限3回エラー';
   if (attempts.length) {
     const last = attempts.at(-1);
@@ -412,16 +413,37 @@ export async function run(config = options(), io = {}) {
       await closeSaves;
     });
     const stat = io.stat ?? fs.stat;
-    const overdueTitle = record => {
+    const overdueOrder = record => {
       const wait = waitDeadline(record.displayTitle, now());
-      return !!wait && wait.at <= now();
+      const key = JSON.stringify([record.sessionId, wait?.key]);
+      const entry = ledger.overdue?.[key];
+      const attempts = (entry?.attempts ?? []).filter(a => a.via && a.outcome !== 'not-in-session' && a.resumedInSession !== false);
+      const last = attempts.at(-1);
+      return {
+        deferredAt: !!entry?.deferredAt,
+        expired: !!wait && wait.at <= now(),
+        attempts: attempts.length,
+        lastAt: Date.parse(last?.endedAt ?? last?.startedAt ?? '') || 0,
+        deadlineAt: wait?.at ?? Infinity
+      };
     };
+    const overdueTitle = record => overdueOrder(record).expired;
     const records = (await (io.detect ?? detect)())
       .filter(r => overdue ? !!waitDeadline(r.displayTitle, now()) : ['要対応', '要確認'].includes(r.status))
-      .sort((a, b) => (overdue ? Number(!!ledger.overdue[JSON.stringify([b.sessionId, waitDeadline(b.displayTitle, now())?.key])]?.deferredAt) - Number(!!ledger.overdue[JSON.stringify([a.sessionId, waitDeadline(a.displayTitle, now())?.key])]?.deferredAt) : 0)
-        || Number(overdueTitle(b)) - Number(overdueTitle(a))
-        || (ledger.sessions[a.sessionId]?.attempts?.at(-1)?.night ?? '').localeCompare(ledger.sessions[b.sessionId]?.attempts?.at(-1)?.night ?? '')
-        || b.score - a.score || a.ageDays - b.ageDays);
+      .sort((a, b) => {
+        if (overdue) {
+          const left = overdueOrder(a), right = overdueOrder(b);
+          return Number(right.deferredAt) - Number(left.deferredAt)
+            || Number(right.expired) - Number(left.expired)
+            || left.attempts - right.attempts
+            || left.lastAt - right.lastAt
+            || left.deadlineAt - right.deadlineAt
+            || b.score - a.score;
+        }
+        return Number(overdueTitle(b)) - Number(overdueTitle(a))
+          || (ledger.sessions[a.sessionId]?.attempts?.at(-1)?.night ?? '').localeCompare(ledger.sessions[b.sessionId]?.attempts?.at(-1)?.night ?? '')
+          || b.score - a.score || a.ageDays - b.ageDays;
+      });
     rows = []; results = [];
     const state = (overdue ? null : ledger.nights[night]) ?? { count: 0, errors: 0, aborted: false };
     if (!readonly && !overdue) { delete state.noExecutor; ledger.nights[night] = state; }
@@ -545,8 +567,13 @@ export async function run(config = options(), io = {}) {
             else if (result.outcome !== 'timeout') state.errors = 0;
             state.aborted ||= state.errors >= 3;
           }
-          // overdue で同一期限3回失敗したら kim-inbox に info を1回だけ積む
-          // 今回の attempt が成功扱い（progressed/no-progress）の場合は通知しない
+          if (overdue && (entry.noProgress ?? 0) >= 3 && entry.attempts.filter(a => a.outcome === 'no-progress').length >= 3 && !entry.notifiedNoProgress) {
+            entry.skipReason = '3回進捗なし';
+            entry.notifiedNoProgress = true;
+            try { await (io.notify ?? notifyKim)(`${record.displayTitle} は期限切れ再開を3回試しても進まないため自動再開を止めました`, { home }); }
+            catch { /* 通知失敗は再開に影響させない */ }
+          }
+          // overdue で同一期限3回エラーになったら kim-inbox に info を1回だけ積む。
           if (overdue && entry.attempts.filter(a => a.via && a.outcome !== 'not-in-session').length >= 3 && !entry.notified3Error && !OVERDUE_SUCCESS_OUTCOMES.has(attempt.outcome)) {
             entry.notified3Error = true;
             const overdueMsg = `【期限切れ再開 3回失敗】${record.displayTitle} (${record.sessionId})\n期限: ${wait?.label || ''}\n最終 executorAttempts: ${JSON.stringify(attempt.executorAttempts ?? [])}\n最終 outcome: ${attempt.outcome}\n最終 reason: ${attempt.reason || ''}`;

@@ -49,6 +49,22 @@ GSCの継続的な分析には、従来のSearch Console APIベースの `seo/ex
 - BigQuery定期クエリ: `https://cloud.google.com/bigquery/docs/scheduling-queries`
 - Google Property Check: `tools/google-property-check.mjs`（プロパティ一覧確認用）
 
+## X-0024: Ahrefs監査 × GSC 優先度判定
+
+Ahrefsの監査エラー一覧とGSCのページデータを突合し、**重大性×流入影響×影響範囲**から修正優先度を自動判定する。全件を人力レビューせず、P0/P1（対応優先度上位）だけに集中する。
+
+```bash
+# モックで動作確認
+node seo/ahrefs-gsc-priority.mjs --mock
+
+# 実データ（AhrefsエクスポートCSV × GSCページCSV）
+node seo/ahrefs-gsc-priority.mjs --ahrefs ahrefs-errors.csv --gsc gsc-pages.csv --output seo/reports/priority-YYYYMMDD.md
+```
+
+- 設計書: [`docs/ai-news-x0024-ahrefs-gsc-priority.md`](../docs/ai-news-x0024-ahrefs-gsc-priority.md)
+- サンプルデータ: `seo/data/ahrefs-sample-errors.csv` / `seo/data/gsc-sample-pages.csv`
+- テスト: `node --test seo/ahrefs-gsc-priority.test.mjs`
+
 ## 進行管理
 - 本件は `next-session.md` #7 として管理
 - ブロッカー解消後に再開

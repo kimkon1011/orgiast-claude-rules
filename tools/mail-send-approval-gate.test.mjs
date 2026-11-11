@@ -6,6 +6,18 @@ import os from 'node:os';
 import { judge, APPROVAL_MISSING_REASON, BODY_NOT_SHOWN_REASON } from './mail-send-approval-gate.mjs';
 import { bodyHash } from './lib/send-approval.mjs';
 
+// Tests run inside a headless environment; clear so normal judge calls treat as attended.
+const _origHeadless = process.env.CLAUDE_HEADLESS;
+const _origJob = process.env.ORGIAST_HEADLESS_JOB;
+delete process.env.CLAUDE_HEADLESS;
+delete process.env.ORGIAST_HEADLESS_JOB;
+test.after(() => {
+  if (_origHeadless === undefined) delete process.env.CLAUDE_HEADLESS;
+  else process.env.CLAUDE_HEADLESS = _origHeadless;
+  if (_origJob === undefined) delete process.env.ORGIAST_HEADLESS_JOB;
+  else process.env.ORGIAST_HEADLESS_JOB = _origJob;
+});
+
 function createFixture() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mail-gate-test-'));
   const transcriptPath = path.join(tmpDir, 'transcript.jsonl');

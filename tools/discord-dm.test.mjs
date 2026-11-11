@@ -7,7 +7,18 @@ import { listItems } from './kim-inbox.mjs';
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dm-inbox-'));
 fs.mkdirSync(path.join(home, '.claude'));
 fs.writeFileSync(path.join(home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
-test.after(() => fs.rmSync(home, { recursive: true, force: true }));
+// Tests run inside a headless environment; clear so normal sends work.
+const _origHeadless = process.env.CLAUDE_HEADLESS;
+const _origJob = process.env.ORGIAST_HEADLESS_JOB;
+delete process.env.CLAUDE_HEADLESS;
+delete process.env.ORGIAST_HEADLESS_JOB;
+test.after(() => {
+  if (_origHeadless === undefined) delete process.env.CLAUDE_HEADLESS;
+  else process.env.CLAUDE_HEADLESS = _origHeadless;
+  if (_origJob === undefined) delete process.env.ORGIAST_HEADLESS_JOB;
+  else process.env.ORGIAST_HEADLESS_JOB = _origJob;
+  fs.rmSync(home, { recursive: true, force: true });
+});
 import { fileURLToPath } from 'node:url';
 import { makeIndex } from './onboarding-sync.mjs';
 import { main as realMain, REPLY_TO_KIM_FOOTER, sendDiscordDm as realSendDiscordDm, readBackMessage } from './discord-dm.mjs';

@@ -38,3 +38,5 @@
 - 型: rescue/cherry-pick が全廃済みの経路を復活させる（2026-11-10 kim 宛 Discord DM 復活・PR #1688） → 横展開の検索: git log --all --oneline --grep="kim-discord-allowlist\|KIM_DISCORD_USER_ID" で該当箇所を特定し、kim 宛 Discord/webhook 送信経路を全て削除。ゲート: tools/kim-discord-dm-ban.test.mjs（静的走査 + discordAllowed 常時 false 確認）
 - 型: 人待ちの沈黙停止型（セッション内 cron の1行報告だけが続き、user は別セッションで気付かず社外クレーム、2026-11-09 就労証明書の LINE 画像認証待ち6日） → 横展開の検索: 人待ち（ログイン待ち・画像認証・返事待ち）を報告して止まる Stop 文面と、待つ経路の成立を検証しない箇所 → ゲート: urgent-blocker 登録（Stop gate が未登録の人待ち報告を block）+ 別セッション割り込み表示（UserPromptSubmit/SessionStart hook）+ 経路検証・代替経路・自動再試行の指示（tools/urgent-blocker-wait-gate.mjs）
 
+
+- 型: 無人ジョブが UAC 必須インストールを起動し確認画面を溜める（2026-11-09〜11 作業用014: ClaudeDailyDriveBackup が毎晩 winget install Google.GoogleDrive を非昇格のまま起動し、誰も押さない UAC が consent.exe として残り続けた） → 横展開の検索: tools 配下の定期ジョブ・hook・無人ジョブからの `winget install` / `-Verb RunAs` / msiexec 起動箇所（backup-claude-to-drive.ps1 / register-claude-backup-task.ps1 / setup-node-runtime-security.mjs を修正、bootstrap・install-orgiast・restore・fleet-fix-now は対話専用として一覧維持） → ゲート: tools/uac-unattended-install.test.mjs（非昇格の無人実行では起動しない。対話専用は明示一覧。タイムアウト時はプロセスツリー kill）

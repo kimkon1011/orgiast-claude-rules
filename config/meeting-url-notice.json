@@ -1,0 +1,36 @@
+{
+  "note": "会議URL案内ツールの設定。staffAddresses と templates を外出しして編集可能に。",
+  "userEmail": "kim@orgiast.jp",
+  "teamEmail": "seisaku-team@orgiast.jp",
+  "staffAddresses": [
+    "taka05250925@gmail.com",
+    "meropp.16@gmail.com",
+    "enchiboo88@gmail.com",
+    "kanaubailai@gmail.com",
+    "miho.furukawa0430@gmail.com",
+    "matsumoto.y.work@gmail.com",
+    "hamanareriaisomoaihigou@gmail.com",
+    "urichan0226@gmail.com",
+    "mom1229kana@gmail.com",
+    "k.ujiie7811@gmail.com",
+    "yam.chiemi@gmail.com",
+    "waki.toho@gmail.com",
+    "masuda.orgiast@gmail.com",
+    "kim.sec4@gmail.com"
+  ],
+  "autoSendApproved": false,
+  "templates": {
+    "firstNotice": {
+      "subject": "【会議URLのご案内】{date}（{dow}）{time}〜 オンラインお打ち合わせ（株式会社オージャスト）",
+      "body": "{addressName}\n\nお世話になっております。\n\n下記の通りオンラインお打ち合わせのご案内を申し上げます。\n\n■日時\n{date}（{dow}）{time}〜\n\n■方法：Google Meet（オンライン）\n■URL：\n{meetUrl}\n\nお忙しいところ恐れ入りますが、どうぞよろしくお願いいたします。\n\n--\n{signature}"
+    },
+    "reminder": {
+      "subject": "【リマインド】明日{date}（{dow}）{time}〜 オンラインお打ち合わせ（株式会社オージャスト）",
+      "body": "{addressName}\n\nお世話になっております。\n\n明日のオンラインお打ち合わせのご案内を再送いたします。\n\n■日時\n{date}（{dow}）{time}〜\n\n■方法：Google Meet（オンライン）\n■URL：\n{meetUrl}\n\nご都合が変わられた場合はお手数ですがご返信くださいませ。\n\n--\n{signature}"
+    }
+  },
+  "signatures": {
+    "rebooth": "株式会社オージャスト\n澤山",
+    "default": "株式会社オージャスト\n制作チーム"
+  }
+}

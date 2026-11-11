@@ -24,6 +24,7 @@ export function combinePermissions(guildId, member, roles) {
 const PREFIX = '【Claude自動返信】';
 const CORRECTED = '【Claude自動返信・kimが訂正済み→下のkimの返信を参照】';
 const DISCLAIMER = '\n\n※kim本人の返答ではなく自動返信です。訂正があれば kim が追って返信します。';
+const DISCLAIMER_PTN = /\n\n※kim本人の返答ではなく自動返信です。訂正があれば kim が追って返信します。\s*$/;
 const SEED = '<!-- 会社・kimについて人が自由に追記できます。 -->\nkim = 株式会社オージャスト 代表。関連会社: Reブース／NEXTForward／東邦鋼業。社内連絡は Discord、決着はメール。\n';
 const ADMIN_ERROR = 'admin token がありません。node tools/discord-admin-token-install.mjs を実行してください';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -65,9 +66,11 @@ function learningJson(raw) {
 }
 export function contentFor(answer, corrected = false) {
   const head = `${corrected ? CORRECTED : PREFIX}\n`;
+  // Model may already include the disclaimer in its answer (実測 2026-11).
+  const clean = String(answer).replace(DISCLAIMER_PTN, '');
   // Code points avoid cutting a surrogate pair; Discord's UTF-16 ceiling is respected.
   let body = '';
-  for (const ch of answer) { if (head.length + body.length + ch.length + DISCLAIMER.length > 2000) break; body += ch; }
+  for (const ch of clean) { if (head.length + body.length + ch.length + DISCLAIMER.length > 2000) break; body += ch; }
   return head + body + DISCLAIMER;
 }
 
@@ -127,20 +130,36 @@ export function createLlm({ home, fetchImpl, sleepImpl = sleep, env = process.en
 
 export function createDiscord({ token, fetchImpl = fetch, sleepImpl = sleep }) {
   return async (route, { method = 'GET', body } = {}) => {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const res = await fetchImpl(`https://discord.com/api/v10${route}`, {
-        method, headers: { Authorization: `Bot ${token}`, 'User-Agent': 'DiscordBot (orgiast-autoreply, 1.0)', 'Content-Type': 'application/json' },
-        ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30000),
-      });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let res;
+      try {
+        res = await fetchImpl(`https://discord.com/api/v10${route}`, {
+          method, headers: { Authorization: `Bot ${token}`, 'User-Agent': 'DiscordBot (orgiast-autoreply, 1.0)', 'Content-Type': 'application/json',
+            ...(attempt ? { Connection: 'close' } : {}) },
+          ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30000),
+        });
+      } catch (e) {
+        if (attempt < 2) { await sleepImpl(250 * (attempt + 1)); continue; }
+        const detail = /abort|timed? ?out/i.test(String(e.message || e)) ? 'timeout' : String(e.message || e);
+        throw new Error(`Discord ${method} ${route} ${detail}`);
+      }
       if (res.status === 429 && attempt === 0) {
         const retry = Number((await res.json()).retry_after);
         if (!Number.isFinite(retry) || retry < 0) throw new Error('Discord invalid retry_after');
         await sleepImpl(retry * 1000); continue;
       }
+      if (res.status >= 500 && attempt < 2) { await sleepImpl(250 * (attempt + 1)); continue; }
       if (!res.ok) throw new Error(`Discord ${method} ${route} HTTP ${res.status}`);
       return res.status === 204 ? null : res.json();
     }
   };
+}
+
+function botIdFromToken(token) {
+  try {
+    const id = Buffer.from(String(token).split('.')[0], 'base64url').toString('utf8');
+    return /^\d{10,25}$/.test(id) ? id : null;
+  } catch { return null; }
 }
 
 const REPLY_SYSTEM = `あなたはkim（代表）の代理で社内メンバーに一次回答する秘書です。丁寧だが簡潔、原則300字以内。
@@ -236,7 +255,13 @@ export async function runOnce(options = {}) {
       ...(env.DISCORD_AUTOREPLY_EXCLUDE || '').split(',').map(s => s.trim()),
     ].filter(Boolean));
     const runtime = options.runtime ?? {};
-    if (!runtime.selfId) runtime.selfId = (await api('/users/@me')).id;
+    if (!runtime.selfId) {
+      try { runtime.selfId = (await api('/users/@me')).id; }
+      catch (e) {
+        runtime.selfId = botIdFromToken(token);
+        result.errors.push(`identity: ${errorText(e)}`);
+      }
+    }
     if (!runtime.selfId) throw new Error('Bot user id missing');
     const notify = async text => {
       if (dryRun) return;
@@ -285,7 +310,9 @@ export async function runOnce(options = {}) {
       // author_type=user: bot posts mentioning kim used to fill the 25-result window and hide humans.
       const pages = [];
       for (let offset = 0; offset < 125; offset += 25) {
-        const page = await api(`/guilds/${guildId}/messages/search?mentions=${kimId}&author_type=user&limit=25${offset ? `&offset=${offset}` : ''}`);
+        let page;
+        try { page = await api(`/guilds/${guildId}/messages/search?mentions=${kimId}&author_type=user&limit=25${offset ? `&offset=${offset}` : ''}`); }
+        catch (e) { result.errors.push(`search offset=${offset}: ${errorText(e)}`); break; }
         if (!Array.isArray(page.messages)) throw new Error('Discord search response invalid');
         pages.push(...page.messages);
         const hits = page.messages.flat().filter(m => m.hit !== false);

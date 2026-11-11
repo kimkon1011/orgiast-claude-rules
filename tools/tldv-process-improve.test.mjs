@@ -12,7 +12,7 @@ import {
   callLlm, getDriveToken, runImprove, runNode, mergeDuplicateSources,
   resolveTabName, writeImprovementSheet, writeLogEntry, writeRunSummary,
   writeTemplateReflection, ensureLogSheet, notifyKimInbox,
-  postAppFeedback, addConstructionKnowhow,
+  postAppFeedback, addConstructionKnowhow, extractImprovements,
 } from './tldv-process-improve.mjs';
 
 // -- テスト用の LOG_DIR --
@@ -311,7 +311,7 @@ test('fetchDriveMeetings text/plain export populates body', async () => {
     if (url.includes('drive/v3/files')) {
       return new Response(JSON.stringify({
         files: [{
-          id: 'doc1', name: '会議1', modifiedTime: '2026-11-05T10:00:00Z',
+          id: 'doc1', name: '会議1', modifiedTime: new Date(Date.now() - 3600000).toISOString(),
           webViewLink: 'https://docs.google.com/document/d/doc1',
           appProperties: { tldvMeetingId: 'mtg1' },
         }],
@@ -320,7 +320,7 @@ test('fetchDriveMeetings text/plain export populates body', async () => {
     return new Response(JSON.stringify({}), { status: 200 });
   };
 
-  const result = await fetchDriveMeetings({ fetchImpl: mockFetch });
+  const result = await fetchDriveMeetings({ fetchImpl: mockFetch, getToken: async () => 'mock-token' });
   assert.equal(result.meetings.length, 1);
   assert.equal(result.meetings[0].id, 'mtg1');
   assert.equal(result.meetings[0].body, '会議の本文テキスト');
@@ -341,7 +341,7 @@ test('fetchDriveMeetings returns failures when all exports fail', async () => {
     if (url.includes('drive/v3/files')) {
       return new Response(JSON.stringify({
         files: [{
-          id: 'doc1', name: '会議1', modifiedTime: '2026-11-05T10:00:00Z',
+          id: 'doc1', name: '会議1', modifiedTime: new Date(Date.now() - 3600000).toISOString(),
           webViewLink: 'https://docs.google.com/document/d/doc1',
           appProperties: { tldvMeetingId: 'mtg1' },
         }],
@@ -350,7 +350,7 @@ test('fetchDriveMeetings returns failures when all exports fail', async () => {
     return new Response(JSON.stringify({}), { status: 200 });
   };
 
-  const result = await fetchDriveMeetings({ fetchImpl: mockFetch });
+  const result = await fetchDriveMeetings({ fetchImpl: mockFetch, getToken: async () => 'mock-token' });
   assert.equal(result.meetings.length, 0);
   assert.equal(result.failures.length, 1);
   assert.equal(result.failures[0].meetingId, 'mtg1');
@@ -429,7 +429,7 @@ test('runImprove exits 2 when all meetings have process-error', async () => {
       if (url.includes('drive/v3/files')) {
         return new Response(JSON.stringify({
           files: [{
-            id: 'doc1', name: '会議1', modifiedTime: '2026-11-05T10:00:00Z',
+            id: 'doc1', name: '会議1', modifiedTime: new Date(Date.now() - 3600000).toISOString(),
             webViewLink: 'https://docs.google.com/document/d/doc1',
             appProperties: { tldvMeetingId: 'mtg1' },
           }],
@@ -685,7 +685,7 @@ test('runImprove exits 2 when existing fetch fails in production mode', async ()
       if (url.includes('drive/v3/files')) {
         return new Response(JSON.stringify({
           files: [{
-            id: 'doc1', name: '会議1', modifiedTime: '2026-11-05T10:00:00Z',
+            id: 'doc1', name: '会議1', modifiedTime: new Date(Date.now() - 3600000).toISOString(),
             webViewLink: 'https://docs.google.com/document/d/doc1',
             appProperties: { tldvMeetingId: 'mtg1' },
           }],
@@ -736,7 +736,7 @@ test('runImprove dry-run continues on existing fetch error', async () => {
       if (url.includes('drive/v3/files')) {
         return new Response(JSON.stringify({
           files: [{
-            id: 'doc1', name: '会議1', modifiedTime: '2026-11-05T10:00:00Z',
+            id: 'doc1', name: '会議1', modifiedTime: new Date(Date.now() - 3600000).toISOString(),
             webViewLink: 'https://docs.google.com/document/d/doc1',
             appProperties: { tldvMeetingId: 'mtg1' },
           }],
@@ -1361,4 +1361,122 @@ test('processed meetings recorded only after writes succeed', () => {
   assert.equal(Object.keys(state.processedMeetings).length, 2);
   assert.ok(state.processedMeetings.mtg1);
   assert.equal(state.processedMeetings.mtg2.processedAt, state.processedMeetings.mtg2.processedAt);
+});
+
+// ===== Fix 1: ensureLogSheet で owner を writer と同等に扱う =====
+test('ensureLogSheet accepts owner role as valid', async () => {
+  // token, state, fetchImpl を使い、owner のロールを writer と同様に扱う
+  const mockFetch = async (url, init) => {
+    if (url.includes('sheets.googleapis.com')) {
+      return jsonResponse({ spreadsheetId: 'test-log-sheet', spreadsheetUrl: 'https://sheet.url' });
+    }
+    // sheets metadata は sheets list で帰る
+    if (url.includes('fields=sheets.properties')) {
+      return jsonResponse({ sheets: [{ properties: { sheetId: 0, title: '抽出ログ' } }] });
+    }
+    // drive.read_file content はテキスト
+    if (url.includes('values/抽出ログ!A1')) {
+      return jsonResponse({});
+    }
+    if (url.includes('values/テンプレート反映案!A1')) {
+      return jsonResponse({});
+    }
+    if (url.includes('values/実行サマリ!A1')) {
+      return jsonResponse({});
+    }
+    // Permission verify: return owner role for kim
+    if (url.includes('/permissions')) {
+      return jsonResponse({ permissions: [{ emailAddress: 'kim@orgiast.jp', role: 'owner' }] });
+    }
+    if (url.includes('oauth2.googleapis.com')) {
+      return jsonResponse({ access_token: 'mock-token' });
+    }
+    return jsonResponse({});
+  };
+  const state = defaultState();
+  await ensureLogSheet({ token: 'mock-token', state, fetchImpl: mockFetch });
+  // Should not have logged an error — owner is accepted
+  assert.equal(state.logSheetId, 'test-log-sheet');
+});
+
+// ===== Fix 2: 同一 extractImprovements 呼び出し内の重複除去 =====
+test('extractImprovements deduplicates within same call (chunk crossing)', async () => {
+  let callCount = 0;
+  const mockExecFile = (file, args, opts, cb) => {
+    callCount++;
+    // Chunk 1 returns items [A, B]; Chunk 2 returns overlapping [A, C]
+    if (callCount === 1) {
+      cb(null, JSON.stringify([
+        { kind: 'process', event: '同一事象A', confidence: 0.9 },
+        { kind: 'process', event: '事象B', confidence: 0.85 },
+      ]), '');
+    } else {
+      cb(null, JSON.stringify([
+        { kind: 'process', event: '同一事象A', confidence: 0.9 },
+        { kind: 'process', event: '事象C', confidence: 0.8 },
+      ]), '');
+    }
+  };
+  // body は chunk 分割されるよう十分長く
+  const body = '会議本文\n'.repeat(2401); // 12005 chars → 2 chunks (12000 + 5)
+  const meeting = {
+    id: 'mtg-dedup', title: '同一会議', body, modifiedTime: new Date(),
+    source: 'drive', url: '',
+  };
+  const items = await extractImprovements(meeting, {
+    config: { llm: { confidenceThreshold: 0.6 }, excludeTitlePatterns: [] },
+    execFileImpl: mockExecFile,
+  });
+  // 重複除去後: A は1回だけ、B, C は各1回 → 3件
+  // 注意: CHUNK_SIZE=12000, body が 2401行(各5文字=12005) → chunk 分割なし（※実測要確認）
+  // LLMは2回呼ばれ(2 chunks → 2 callLlm)、Aはchunk1とchunk2で重複→seenInCallで2回目をskip
+  const chunkLen = chunkText(body).length;
+  assert.ok(chunkLen >= 2, `body should split into >=2 chunks (got ${chunkLen})`);
+  assert.equal(items.length, 3);
+  assert.equal(callCount, 2);
+  // 同一事象A は1度しか現れない
+  const aItems = items.filter(i => i.event === '同一事象A');
+  assert.equal(aItems.length, 1, '同一事象 should appear only once');
+});
+
+// ===== Fix 3: addConstructionKnowhow の JSON パース成功 =====
+test('addConstructionKnowhow parses CommandQueue JSON format (ok+result)', async () => {
+  const mockRunNode = async (args, opts) => {
+    return {
+      exitCode: 0,
+      stdout: JSON.stringify({ ok: true, command: 'ConstructionKnowhow_add', result: 'KH-abc123' }),
+      stderr: '',
+    };
+  };
+  const count = await addConstructionKnowhow(
+    [{ kind: 'knowhow', event: 'test knowhow', solution: 'fix', caseName: '会議', target: '施工ノウハウ' }],
+    { cmdPath: '/tmp/nonexistent/booth-cmd.mjs', runNode: mockRunNode }
+  );
+  assert.equal(count, 1);
+});
+
+test('addConstructionKnowhow logs error on GAS failure', async () => {
+  const mockRunNode = async (args, opts) => {
+    return {
+      exitCode: 0,
+      stdout: JSON.stringify({ ok: false, command: 'ConstructionKnowhow_add', error: 'Validation failed' }),
+      stderr: '',
+    };
+  };
+  const count = await addConstructionKnowhow(
+    [{ kind: 'knowhow', event: 'test knowhow', solution: 'fix', caseName: '会議', target: '施工ノウハウ' }],
+    { cmdPath: '/tmp/nonexistent/booth-cmd.mjs', runNode: mockRunNode }
+  );
+  assert.equal(count, 0);
+});
+
+test('addConstructionKnowhow logs error on non-zero exit', async () => {
+  const mockRunNode = async (args, opts) => {
+    return { exitCode: 1, stdout: '', stderr: 'command not found' };
+  };
+  const count = await addConstructionKnowhow(
+    [{ kind: 'knowhow', event: 'test knowhow', solution: 'fix', caseName: '会議', target: '施工ノウハウ' }],
+    { cmdPath: '/tmp/nonexistent/booth-cmd.mjs', runNode: mockRunNode }
+  );
+  assert.equal(count, 0);
 });

@@ -202,17 +202,21 @@ async function driveFetch(url, init, token, opts = {}) {
 }
 
 // == ソース A: Drive フォルダから会議 Doc 取得 ==
-export async function fetchDriveMeetings({ since, limit, impersonate, fetchImpl = fetch } = {}) {
+export async function fetchDriveMeetings({ since, limit, impersonate, fetchImpl = fetch, getToken: getTokenImpl } = {}) {
   const meetings = [];
   const failures = [];
   const sinceMs = since ? since.getTime() : 0;
   let token;
-  try {
-    token = await getDriveToken({ impersonate: impersonate || IMPERSONATE_DRIVE, fetchImpl });
-  } catch (error) {
-    if (impersonate !== 'kim@orgiast.jp') {
-      token = await getDriveToken({ impersonate: 'kim@orgiast.jp', fetchImpl });
-    } else throw error;
+  if (getTokenImpl) {
+    token = await getTokenImpl();
+  } else {
+    try {
+      token = await getDriveToken({ impersonate: impersonate || IMPERSONATE_DRIVE, fetchImpl });
+    } catch (error) {
+      if (impersonate !== 'kim@orgiast.jp') {
+        token = await getDriveToken({ impersonate: 'kim@orgiast.jp', fetchImpl });
+      } else throw error;
+    }
   }
 
   // フォルダ内の Google Doc をリスト
@@ -530,6 +534,7 @@ export async function extractImprovements(meeting, { config, state, fetchImpl = 
   const chunks = chunkText(body, CHUNK_SIZE);
 
   const allItems = [];
+  const seenInCall = []; // 同一呼び出し内の重複除去用
   for (const chunk of chunks) {
     if (state && state.llmCallsToday >= MAX_LLM_CALLS) {
       appendLog({ event: 'llm-limit-reached', meetingId: meeting.id });
@@ -555,6 +560,12 @@ export async function extractImprovements(meeting, { config, state, fetchImpl = 
 
       for (const item of items) {
         if (typeof item.confidence === 'number' && item.confidence >= (conf.llm?.confidenceThreshold || 0.6)) {
+          // 同一 extractImprovements 呼び出し内の重複除去（チャンクまたぎ）
+          // 同じチャンク内では exact match（Jaccard は短い文字列で過剰検出するため）
+          const itemKey = (item.event || '') + '\0' + (item.solution || '');
+          const seenKey = (seenInCall.map(s => (s.event || '') + '\0' + (s.solution || '')));
+          if (seenKey.includes(itemKey)) continue;
+          seenInCall.push({ event: item.event, solution: item.solution });
           item.caseName = meeting.title;
           item.meetingId = meeting.id;
           item.meetingUrl = meeting.url;
@@ -760,7 +771,7 @@ export async function ensureLogSheet({ token, state, fetchImpl = fetch, summary 
   const result = await driveFetch(
     `${SHEETS_BASE}?fields=spreadsheetId,spreadsheetUrl`,
     { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
-    token
+    token, { fetchImpl }
   );
   if (!result.spreadsheetId) throw new ProcessImproveError('log-sheet-create-failed');
 
@@ -801,7 +812,7 @@ export async function ensureLogSheet({ token, state, fetchImpl = fetch, summary 
     );
     const perms = (permCheck?.permissions || []);
     const kimPerm = perms.find(p => p.emailAddress === 'kim@orgiast.jp');
-    if (!kimPerm || kimPerm.role !== 'writer') {
+    if (!kimPerm || !['writer', 'owner'].includes(kimPerm.role)) {
       if (summary) summary.failed++;
       appendLog({ event: 'log-sheet-permission-error', actual: kimPerm ? kimPerm.role : 'no-permission' });
     }
@@ -811,7 +822,7 @@ export async function ensureLogSheet({ token, state, fetchImpl = fetch, summary 
   }
 
   state.logSheetId = result.spreadsheetId;
-  writeState(STATE_PATH, state);
+  try { writeState(STATE_PATH, state); } catch { /* state 保存失敗はベストエフォート */ }
   return result.spreadsheetId;
 }
 
@@ -976,10 +987,25 @@ export async function postAppFeedback(items, { dryRun = false, fetchImpl = fetch
 // -- knowhow 登録（kind=knowhow かつ施工系） --
 // booth-cmd.mjs usage: node booth-cmd.mjs <command> '<json args array>' （引数は配列のJSON）
 // GAS ConstructionKnowhow_add(entry) → entry={category,type,phase,condition?,title,body,steps?,source?,status?}
-export async function addConstructionKnowhow(items, { dryRun = false, fetchImpl = fetch } = {}) {
+// CommandQueue の result 形式: { ok: true, command, result: <戻り値> } または { ok: false, command, error }
+export async function addConstructionKnowhow(items, { dryRun = false, fetchImpl = fetch, cmdPath: cmdPathOpt, runNode: runNodeImpl } = {}) {
   const config = loadConfig();
-  const cmdPath = path.join(HOME, '.claude', 'tools-local', 'booth-cmd.mjs');
-  if (!fs.existsSync(cmdPath)) return 0;
+  const cmdPath = cmdPathOpt || path.join(HOME, '.claude', 'tools-local', 'booth-cmd.mjs');
+  const runNodeFn = runNodeImpl || runNode;
+
+  // dry-run は booth-cmd が要らないので先にカウントして返す
+  if (dryRun) {
+    let count = 0;
+    for (const item of items) {
+      if (count >= (config.knowhow?.maxPerNight || 5)) break;
+      if (item.kind !== 'knowhow') continue;
+      count++;
+    }
+    return count;
+  }
+
+  // runNodeImpl が注入されている場合は実行経路を呼び出し側が制御するため、ファイル存在確認をスキップ
+  if (!runNodeImpl && !fs.existsSync(cmdPath)) return 0;
 
   let added = 0;
   for (const item of items) {
@@ -999,19 +1025,23 @@ export async function addConstructionKnowhow(items, { dryRun = false, fetchImpl 
     const argsFile = path.join(getLogDir(), `.knowhow-args-${randomUUID()}.json`);
     try {
       fs.writeFileSync(argsFile, JSON.stringify(entry), 'utf8');
-      if (dryRun) { added++; continue; }
-      try {
-        const result = await runNode([cmdPath, 'ConstructionKnowhow_add', `@${argsFile}`], { timeout: 30_000 });
-        if (result.exitCode === 0) {
-          // exitCode だけでなく出力の JSON で成否判定
-          try {
-            const output = JSON.parse(result.stdout);
-            if (output && output.id) added++;
-            else if (output && output.ok === false) { /* GAS error */ }
-            else added++;
-          } catch { added++; }
+      const result = await runNodeFn([cmdPath, 'ConstructionKnowhow_add', `@${argsFile}`], { timeout: 120_000 });
+      if (result.exitCode === 0) {
+        // CommandQueue result format: { ok: true, command, result: <戻り値> }
+        try {
+          const output = JSON.parse(result.stdout);
+          if (output && output.ok === true && output.result) added++;
+          else {
+            appendLog({ event: 'knowhow-add-error', exitCode: result.exitCode, ok: output?.ok, stdout: (result.stdout || '').slice(0, 200), stderr: (result.stderr || '').slice(0, 200) });
+          }
+        } catch {
+          appendLog({ event: 'knowhow-add-error', exitCode: result.exitCode, stdout: (result.stdout || '').slice(0, 200), stderr: (result.stderr || '').slice(0, 200) });
         }
-      } catch { continue; }
+      } else {
+        appendLog({ event: 'knowhow-add-error', exitCode: result.exitCode, stderr: (result.stderr || '').slice(0, 200) });
+      }
+    } catch (error) {
+      appendLog({ event: 'knowhow-add-error', exitCode: -1, error: safeReason(error) });
     } finally {
       try { fs.rmSync(argsFile, { force: true }); } catch {}
     }

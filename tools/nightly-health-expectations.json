@@ -35,6 +35,7 @@
   { "log": "top3-catchup.log", "maxAgeHours": 26, "label": "Top3追跡", "scan": "keywords" },
   { "log": "nightly-health.log", "maxAgeHours": 26, "label": "夜間ヘルス", "scan": "keywords", "task": "OrgiastMorningBatch" },
   { "log": "pricing-brief.log", "maxAgeHours": 26, "label": "価格ブリーフ", "scan": "keywords" },
+  { "log": "tldv-process-improve.log", "maxAgeHours": 26, "label": "tl;dv制作プロセス改善", "scan": "keywords", "task": "OrgiastTldvProcessImprove", "tool": "tools/tldv-process-improve.mjs" },
   { "log": "-NoProfile.log", "label": "一時ログ", "ignore": true },
   { "log": "delete-soulsync-task.log", "label": "削除作業ログ", "ignore": true },
   { "log": "disable-stale-task.log", "label": "無効化作業ログ", "ignore": true },

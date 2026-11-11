@@ -14,3 +14,10 @@ export function classifyKimDm(text) {
   }
   return { allowed: true, category: 'other', reason: 'マージ依頼ではありません' };
 }
+
+export const KIM_DISCORD_USER_ID = '715210673642012733';
+export function isKimRecipient({ id, name, owner, defaultKim = false } = {}) {
+  return defaultKim || String(id ?? '').trim() === KIM_DISCORD_USER_ID
+    || ['kim', 'kimkon.', '金功勇', 'kim@orgiast.jp'].includes(String(name ?? '').trim().toLowerCase())
+    || String(owner ?? '').trim().toLowerCase() === 'kim@orgiast.jp';
+}

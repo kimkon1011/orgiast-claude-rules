@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimRecipient } from './lib/kim-dm-policy.mjs';
 import { isKimHumanProgress, deliverHumanProgress } from './lib/auto-progress-human-inbox.mjs';
 import fs from 'node:fs';
 import { notificationKind, routeOwnerDm } from './lib/owner-dm-policy.mjs';
@@ -168,7 +169,7 @@ export async function notifyOwner(owner, text, options = {}) {
   }
   // A fleet seat can belong to another account while explicitly notifying kim.
   const recipientId = options.userId ?? resolveOwnerDiscordId(owner, options);
-  if (owner.toLowerCase() === 'kim@orgiast.jp' || recipientId === KIM_DISCORD_USER_ID) {
+  if (isKimRecipient({ owner, id: recipientId })) {
     return routeOwnerDm(owner, text, { ...options, userId: KIM_DISCORD_USER_ID });
   }
   const deferred = await routeOwnerDm(owner, text, options);

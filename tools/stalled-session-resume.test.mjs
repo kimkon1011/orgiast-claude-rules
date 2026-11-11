@@ -12,7 +12,7 @@ async function fixture(t, count = 5) {
   let time = new Date(2026, 8, 24, 3).getTime();
   let calls = 0, notices = 0;
   const records = Array.from({ length: count }, (_, i) => ({ sessionId: `session-${i}`, displayTitle: `Task ${i}`, file: `file-${i}`, cwd: home, status: '要対応', score: 100 - i, ageDays: 1 }));
-  const io = { home, now: () => time, detect: async () => records, stat: async () => ({ mtimeMs: time - 86400000 }),
+  const io = { home, addItem: async () => ({ id: 'test-ask' }), now: () => time, detect: async () => records, stat: async () => ({ mtimeMs: time - 86400000 }),
     execute: async () => { calls++; return { outcome: 'no-progress' }; }, notify: async () => { notices++; return { delivered: 'dm' }; } };
   const file = path.join(home, '.claude/stalled-session-resume.json');
   return { io, file, records, next: () => { time += 86400000; }, calls: () => calls, notices: () => notices, ledger: async () => JSON.parse(await fs.readFile(file, 'utf8')) };
@@ -527,7 +527,7 @@ test('executor metadata survives timeout/failure/success and overdue prompt carr
     let prompt;
     const executorAttempts = [{ executor: 'cheap-code:deepseek', status: 'timeout' }, { executor: 'cheap-code:glm', status }];
     const result = await execute({ sessionId: 'test', cwd: '/fixture' }, { timeoutMs: 1000, wait: { label: '09/23 12:00' } }, {
-      executable: 'fixture', runChild: async (_, text) => { prompt = text; return { status, executorUsed: 'cheap-code:glm', executorAttempts }; }, readReport: async () => null
+      executable: 'fixture', execFile: async () => { throw new Error('not installed'); }, runChild: async (_, text) => { prompt = text; return { status, executorUsed: 'cheap-code:glm', executorAttempts }; }, readReport: async () => null
     });
     assert.equal(result.executor, 'cheap-code:glm'); assert.deepEqual(result.executorAttempts, executorAttempts);
     assert.match(prompt, /待機期限 09\/23 12:00/); assert.match(prompt, /node tools\/kim-inbox.mjs/); assert.match(prompt, /期限を書き換えるだけで終えない/);
@@ -869,4 +869,65 @@ test('closed ledger と古いタイトルより最新待機フッターを優先
   assert.equal(skipReason(record, {}, '', closed, 0, new Date(2026, 10, 10, 19).getTime(), 1), '');
   assert.notEqual(skipReason(record, {}, '', closed, 0, new Date(2026, 10, 10, 17).getTime(), 1), 'closed');
   assert.equal(skipReason({ ...record, lastAssistantText: '' }, {}, '', closed, 0, Date.now(), 1), 'closed');
+});
+
+
+test('overdue invokes claude --resume and removes API credentials', async t => {
+  const f = await fixture(t, 1); let size = 10; const calls = [];
+  const result = await execute(f.records[0], { timeoutMs: 1000, wait: { label: '09/23 12:00' } }, {
+    executable: 'claude-fixture', stat: async () => ({ size }),
+    execFile: async (exe, args, opts) => {
+      calls.push(args); assert.equal(exe, 'claude-fixture');
+      assert.equal(Object.hasOwn(opts.env, 'ANTHROPIC_API_KEY'), false);
+      if (args[0] === '--help') return { stdout: '--resume --print' };
+      assert.deepEqual(args.slice(0, 3), ['--resume', 'session-0', '-p']); size++;
+      return { stdout: '' };
+    },
+    runChild: () => assert.fail('fallback forbidden'), readReport: async () => ({ state: 'progressed', evidence: 'verified' }),
+  });
+  assert.equal(calls.length, 2); assert.equal(result.outcome, 'progressed'); assert.equal(result.resumedInSession, true);
+});
+test('fallback success without transcript growth remains eligible next tick', async t => {
+  const f = await fixture(t, 1); f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  f.io.execute = (r, opts) => execute(r, opts, {
+    executable: 'missing', execFile: async () => { throw new Error('ENOENT'); }, stat: async () => ({ size: 10 }),
+    runChild: async () => ({ status: 'success' }), readReport: async () => ({ state: 'done', evidence: 'verified' }),
+  });
+  const config = options(['--overdue'], {});
+  for (let n = 0; n < 4; n++) {
+    const result = await run(config, f.io);
+    assert.equal(result.results[0].outcome, 'not-in-session');
+  }
+});
+test('overdue cap overflow runs before higher scoring new work on next tick', async t => {
+  const f = await fixture(t, 3);
+  for (const r of f.records) r.displayTitle = '【09/23/12:00まで】Task';
+  const config = options(['--overdue', '--limit', '1'], {});
+  await run(config, f.io);
+  f.records.unshift({ ...f.records[0], sessionId: 'new-high-score', score: 999 });
+  const result = await run(config, f.io);
+  assert.equal(result.results[0].sessionId, 'session-1');
+});
+test('Claude timeout never starts fallback and cannot claim progress without transcript', async t => {
+  const f = await fixture(t, 1);
+  const result = await execute(f.records[0], { timeoutMs: 1000, wait: { label: '09/23 12:00' } }, {
+    executable: 'fixture', stat: async () => ({ size: 10 }), execFile: async (_, args) => {
+      if (args[0] === '--help') return { stdout: '--resume --print' };
+      throw Object.assign(new Error('timeout'), { killed: true });
+    }, runChild: () => assert.fail('fallback after timeout'), readReport: async () => null,
+  });
+  assert.equal(result.outcome, 'not-in-session');
+});
+
+test('two-hour overdue ask is retried after inbox failure and deduplicated after success', async t => {
+  const f = await fixture(t, 1); f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  let calls = 0;
+  f.io.addItem = async (_, item) => {
+    assert.equal(item.kind, 'ask'); assert.equal(item.source, 'stalled-session-resume-overdue');
+    if (++calls === 1) throw new Error('temporary failure');
+    return { id: 'ask' };
+  };
+  const config = options(['--overdue', '--limit', '0'], {});
+  await run(config, f.io); await run(config, f.io); await run(config, f.io);
+  assert.equal(calls, 2);
 });

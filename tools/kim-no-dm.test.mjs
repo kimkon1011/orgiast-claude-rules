@@ -15,20 +15,11 @@ function home(t) {
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
-test('non-allowlisted texts use inbox; allowlisted texts use DM when Discord works', async t => {
+test('all kim messages bypass Discord, including formerly allowlisted notices and overrides', async t => {
   const dir = home(t);
-  // Non-allowlisted texts: should go to inbox without calling Discord
-  for (const [kind, text] of [['action', '判断してください'], ['automatic', '緊急の障害']]) {
-    const calls = [];
-    const result = await deliverKim(text, { home: dir, userId: KIM_DISCORD_USER_ID, kind, plainJa: false, token: 'unused', sessionId: 'kim-no-dm-session', fetchImpl: async () => { calls.push('called'); return Response.json({}); } });
-    assert.equal(result.delivered, 'session-inbox', `非許可テキスト「${text}」がDM配送されました`);
-    assert.equal(calls.length, 0, `非許可テキスト「${text}」でDiscordが呼ばれました`);
-  }
-  // Allowlisted texts: should try DM (and fall back to inbox on Discord failure)
-  for (const [kind, text] of [['digest', '【進捗まとめ】'], ['done-requested', '✅ 完了']]) {
-    const result = await deliverKim(text, { home: dir, userId: KIM_DISCORD_USER_ID, kind, plainJa: false, token: 'unused', sessionId: 'kim-no-dm-session', fetchImpl: () => { throw new Error('DM rate limited'); } });
-    // DM failed → falls back to inbox (persistKim returns 'spooled')
-    assert.ok(['session-inbox', 'spooled'].includes(result.delivered), `許可テキスト「${text}」のDM失敗→inboxに落ちません: ${result.delivered}`);
+  for (const [kind, text] of [['action', '判断してください'], ['automatic', '緊急の障害'], ['digest', '【進捗まとめ】'], ['done-requested', '✅ 完了']]) {
+    const result = await deliverKim(text, { home: dir, userId: KIM_DISCORD_USER_ID, kind, plainJa: false, token: 'unused', sessionId: 'kim-no-dm-session', discordAllowed: () => ({ allowed: true }), fetchImpl: () => assert.fail('kim DM forbidden') });
+    assert.equal(result.delivered, 'session-inbox');
   }
   assert.equal(listItems(dir).length, 4);
   assert.ok(listItems(dir).every(item => item.sessionId === 'kim-no-dm-session'));
@@ -67,7 +58,7 @@ test('raw DM channel transports are audited; new bypasses fail this inventory', 
     ['discord-dm.mjs', 'const inbox = isKim;'],
     ['feedback-nag.mjs', 'if (deferred) return deferred;'],
     ['notify-kim.mjs', 'return persistKim(home,'],
-    ['sga-autopilot.mjs', 'if (userId === KIM_DISCORD_USER_ID) await (deps.deliverKim || deliverKim)'],
+    ['sga-autopilot.mjs', 'if (isKimRecipient({ id: userId })) await (deps.deliverKim || deliverKim)'],
     ['feedback-kit/gas/templates/FeedbackRelay.js', 'kim-inbox'],
   ]);
   const walk = dir => fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => {

@@ -161,14 +161,14 @@ export function titleSkipReason(displayTitle, now) {
 // overdue の「処理済み」判定は progressed / no-progress だけ。
 // error / timeout / interrupted / その他は再試行対象（30分バックオフ、同一期限で最大3回）。
 // interrupted は起動中ロックがない古いもの（30分超）だけ再試行対象にする。
-const OVERDUE_SUCCESS_OUTCOMES = new Set(['progressed', 'no-progress']);
+const OVERDUE_SUCCESS_OUTCOMES = new Set(['progressed', 'no-progress', 'done', 'waiting-human']);
 export function overdueSkipReason(record, entry, closed, mtimeMs, now, activeMs) {
   if (entry.waitingHuman?.until > now) return '人の判断待ち';
   const common = skipReason(record, {}, '', closed, mtimeMs, now, activeMs);
   if (common) return common;
   const wait = waitDeadline(record.displayTitle, now);
   if (!wait || wait.at > now) return '期限切れ待機ではない';
-  const attempts = entry.attempts ?? [];
+  const attempts = (entry.attempts ?? []).filter(a => a.outcome !== 'not-in-session' && a.resumedInSession !== false);
   if (attempts.some(a => OVERDUE_SUCCESS_OUTCOMES.has(a.outcome))) return '同一期限処理済み';
   if (attempts.length >= 3 && attempts.every(a => !OVERDUE_SUCCESS_OUTCOMES.has(a.outcome))) return '同一期限3回エラー';
   if (attempts.length) {
@@ -192,9 +192,106 @@ export function skipReason(record, entry, night, closed, mtimeMs, now, activeMs)
   return '';
 }
 
-export async function execute(record, { timeoutMs, resultFile, previous = [], wait = null }, io = {}) {
+// overdue モードでは claude --resume <sessionId> -p "<prompt>" でセッション自身を再開する。
+// これにより transcript に追記され、kim がリモート表示で進捗を見られる。
+// 予備として cheap-code フォールバックも残すが、transcript が増えなければ progressed にしない。
+async function executeOverdue(record, { timeoutMs, resultFile, previous = [], wait }, io = {}) {
+  const prompt = `停滞セッション「${record.displayTitle}」(${record.sessionId})の承認済みの目的を1歩進めてください。
+このセッションの待機期限 ${wait.label} を過ぎました。待っていた事項（相手の返信・外部の状態・自動チェック）を直接照会し、(a) 進められるなら最後まで進めて検証する (b) 人の判断や操作が必要なら kim-inbox に ask を積み（node tools/kim-inbox.mjs）、応答の「このセッション」行に新しい期限を書く (c) 目的が完了していれば /session-close を実行する。期限を書き換えるだけで終えない。
+元の会話全文を ${record.file} から読み、依頼・制約・成果物を確認して続行してください。推測で目的を広げないでください。
+共有作業ツリーの他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。個別の通知は不要です。
+前回までの再開結果: ${JSON.stringify(previous)}。済んだ作業を繰り返さず、成果物の現状を検証してください。
+期限は${timeoutMs / 60000}分です。期限前に終了してください。
+実行結果を ${resultFile} にJSONで保存してください: {"state":"progressed"|"done"|"waiting-human"|"stuck","evidence":"変更した成果物と検証結果、または進めない理由","askId":"kim-inbox の ask ID（waiting-human の時は必須）"}。
+progressed=成果物を進めて検証した。
+done=目的が完了済み（後続セッションで完了した場合も含む）で、やることが残っていない。
+waiting-human=残りが人の判断・操作だけで、kim-inbox に ask を積んだ（既存の open ask でもよい）。
+stuck=それ以外で進められなかった。
+単なる進捗確認・計画・終了コード0は成果に含めません。\n当初依頼: ${record.firstPrompt}\n直近: ${record.lastAssistantText}`;
+  const stat = io.stat ?? fs.stat;
+  const size = async () => { try { return (await stat(record.file)).size; } catch { return null; } };
+  const before = await size();
+  const executable = io.executable ?? resolveClaudeExe();
+  const env = { ...process.env };
+  for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDECODE', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY']) delete env[key];
+  const invoke = io.execFile ?? execFileAsync;
+  let available = false;
+  try {
+    const { stdout } = await invoke(executable, ['--help'], { env, timeout: 10000, windowsHide: true });
+    available = /--resume/.test(stdout) && /--print/.test(stdout);
+  } catch { /* Only unavailable CLI permits the fallback. */ }
+  let result;
+  if (available) {
+    let child;
+    try {
+      await invoke(executable, ['--resume', record.sessionId, '-p', prompt], {
+        cwd: record.cwd, env, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true,
+      });
+      child = { status: 'success', executorUsed: 'claude' };
+    } catch (error) {
+      child = { status: error.killed || error.code === 'ETIMEDOUT' ? 'timeout' : 'error', executorUsed: 'claude' };
+    }
+    result = await executeFallback(record, { timeoutMs, resultFile, previous, wait }, { ...io, runChild: async () => child });
+  } else {
+    result = await executeFallback(record, { timeoutMs, resultFile, previous, wait }, io);
+  }
+  const after = await size();
+  const resumedInSession = before !== null && after !== null && after > before;
+  return resumedInSession ? { ...result, resumedInSession } : {
+    ...result, outcome: 'not-in-session', resumedInSession: false,
+    reason: `セッション transcript の増加なし: ${result.outcome}: ${result.reason}`,
+  };
+}
+
+// 従来の cheap-code / codex-do フォールバック（overdue の予備）
+async function executeFallback(record, { timeoutMs, resultFile, previous = [], wait = null }, io = {}) {
   const prompt = `停滞セッション「${record.displayTitle}」(${record.sessionId})の承認済みの目的を1歩進めてください。
 ${wait ? `このセッションの待機期限 ${wait.label} を過ぎました。待っていた事項（相手の返信・外部の状態・自動チェック）を直接照会し、(a) 進められるなら最後まで進めて検証する (b) 人の判断や操作が必要なら kim-inbox に ask を積み（node tools/kim-inbox.mjs）、応答の「このセッション」行に新しい期限を書く (c) 目的が完了していれば /session-close を実行する。期限を書き換えるだけで終えない。` : ''}
+元の会話全文を ${record.file} から読み、依頼・制約・成果物を確認して続行してください。推測で目的を広げないでください。
+共有作業ツリーの他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。個別の通知は不要です。
+前回までの再開結果: ${JSON.stringify(previous)}。済んだ作業を繰り返さず、成果物の現状を検証してください。
+期限は${timeoutMs / 60000}分です。期限前に終了してください。
+実行結果を ${resultFile} にJSONで保存してください: {"state":"progressed"|"done"|"waiting-human"|"stuck","evidence":"変更した成果物と検証結果、または進めない理由","askId":"kim-inbox の ask ID（waiting-human の時は必須）"}。
+progressed=成果物を進めて検証した。
+done=目的が完了済み（後続セッションで完了した場合も含む）で、やることが残っていない。
+waiting-human=残りが人の判断・操作だけで、kim-inbox に ask を積んだ（既存の open ask でもよい）。
+stuck=それ以外で進められなかった。
+単なる進捗確認・計画・終了コード0は成果に含めません。\n当初依頼: ${record.firstPrompt}\n直近: ${record.lastAssistantText}`;
+  const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, record.cwd, record.cwd, timeoutMs, { resumeSessionId: record.sessionId });
+  const execution = { executor: result.executorUsed || 'not-started', executorAttempts: result.executorAttempts ?? [] };
+  if (result.skippedNoExecutor) return { ...execution, outcome: 'no-executor', reason: `実行役なし: ${String(result.stderr ?? '').trim().slice(-300) || result.executorUsed || 'cheap-code'}` };
+  const timedOut = result.status === 'timeout';
+  if (result.status !== 'success' && !timedOut) return { ...execution, outcome: 'error', reason: result.status };
+  let report;
+  try {
+    const rawReport = await (io.readReport ?? readSanitizedJson)(resultFile, null);
+    report = rawReport;
+    if (typeof rawReport === 'string') {
+      const cleaned = rawReport.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+      report = cleaned.trim() ? JSON.parse(cleaned) : null;
+    }
+  } catch (error) { return { ...execution, outcome: 'error', reason: String(error.message) }; }
+  const evidenceOk = report?.evidence && (
+    (typeof report.evidence === 'string' && report.evidence.trim()) ||
+    (typeof report.evidence === 'object' && report.evidence !== null && Object.keys(report.evidence).length > 0)
+  );
+  if (!report || (typeof report === 'object' && Object.keys(report).length === 0)) return { outcome: timedOut ? 'timeout' : 'no-report', reason: timedOut ? result.status : '結果ファイルなし', ...execution };
+  const state = report.state ?? (report.progressed === true ? 'progressed' : report.progressed === false ? 'stuck' : 'stuck');
+  const reason = typeof report.evidence === 'string' ? report.evidence : JSON.stringify(report.evidence, null, 2) || '成果記録なし';
+  let outcome = state === 'progressed' && evidenceOk ? 'progressed'
+    : state === 'done' && evidenceOk ? 'done'
+      : state === 'waiting-human' && evidenceOk && typeof report.askId === 'string' && report.askId.trim() ? 'waiting-human'
+        : 'no-progress';
+  if (timedOut && !['progressed', 'done', 'waiting-human'].includes(outcome)) outcome = 'timeout';
+  return { outcome, reason: outcome === 'timeout' ? result.status : reason, ...(outcome === 'waiting-human' ? { askId: report.askId.trim() } : {}), ...execution };
+}
+
+export async function execute(record, { timeoutMs, resultFile, previous = [], wait = null }, io = {}) {
+  // overdue モードでは claude --resume でセッション自身を再開する
+  if (wait) {
+    return executeOverdue(record, { timeoutMs, resultFile, previous, wait }, io);
+  }
+  const prompt = `停滞セッション「${record.displayTitle}」(${record.sessionId})の承認済みの目的を1歩進めてください。
 元の会話全文を ${record.file} から読み、依頼・制約・成果物を確認して続行してください。推測で目的を広げないでください。
 共有作業ツリーの他セッションの変更を上書きせず、権限や確認待ちを迂回しないでください。個別の通知は不要です。
 前回までの再開結果: ${JSON.stringify(previous)}。済んだ作業を繰り返さず、成果物の現状を検証してください。
@@ -316,7 +413,8 @@ export async function run(config = options(), io = {}) {
     };
     const records = (await (io.detect ?? detect)())
       .filter(r => overdue ? !!waitDeadline(r.displayTitle, now()) : ['要対応', '要確認'].includes(r.status))
-      .sort((a, b) => Number(overdueTitle(b)) - Number(overdueTitle(a))
+      .sort((a, b) => (overdue ? Number(!!ledger.overdue[JSON.stringify([b.sessionId, waitDeadline(b.displayTitle, now())?.key])]?.deferredAt) - Number(!!ledger.overdue[JSON.stringify([a.sessionId, waitDeadline(a.displayTitle, now())?.key])]?.deferredAt) : 0)
+        || Number(overdueTitle(b)) - Number(overdueTitle(a))
         || (ledger.sessions[a.sessionId]?.attempts?.at(-1)?.night ?? '').localeCompare(ledger.sessions[b.sessionId]?.attempts?.at(-1)?.night ?? '')
         || b.score - a.score || a.ageDays - b.ageDays);
     rows = []; results = [];
@@ -360,9 +458,13 @@ export async function run(config = options(), io = {}) {
         if (!reason && state.noExecutor) reason = '実行役なし';
         if (!reason && !overdue && now() >= deadline.getTime()) reason = '締切超過(翌晩へ)';
         if (!reason && state.count >= config.limit) reason = overdue ? '今回の件数上限' : '今晩の件数上限';
-        rows.push({ sessionId: record.sessionId, title: record.displayTitle, attempts: entry.attempts.length, skip: reason });
+        rows.push({ sessionId: record.sessionId, title: record.displayTitle, attempts: entry.attempts.length, skip: reason, ...(overdue ? { plannedAction: `claude --resume ${record.sessionId} -p <待機期限プロンプト> で再開する予定` } : {}) });
         if (reason) {
           if (!readonly) { entry.skipReason = reason; entries[entryKey] = entry; }
+          // overdue で件数上限に溢れたものは、skipReason を削除して次回再試行対象にする
+          if (!readonly && overdue && reason === '今回の件数上限') {
+            entry.deferredAt ??= now();
+          }
           continue;
         }
         state.count++;
@@ -370,6 +472,7 @@ export async function run(config = options(), io = {}) {
         if (!overdue) ledger.nights[night] = state;
         entries[entryKey] = entry;
         delete entry.skipReason;
+        delete entry.deferredAt;
         // 起動前に消費を確定し、親が落ちても同じ晩に二重実行しない。
         const attempt = { night, startedAt: new Date(now()).toISOString(), outcome: 'interrupted', executor: 'not-started' };
         entry.attempts.push(attempt);
@@ -393,7 +496,7 @@ export async function run(config = options(), io = {}) {
               return;
             }
             result = await (io.execute ?? execute)(record, { timeoutMs: config.timeoutMs, resultFile, previous: entry.attempts.slice(-4, -1), wait: overdue ? wait : null });
-            if (!['progressed', 'done', 'waiting-human', 'no-progress', 'no-report', 'timeout', 'error', 'no-executor'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
+            if (!['progressed', 'done', 'waiting-human', 'no-progress', 'no-report', 'timeout', 'error', 'no-executor', 'not-in-session'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
           } catch (error) { const msg = String(error.message ?? ''); result = { outcome: /timeout|timed out|ETIMEDOUT|aborted due to timeout/i.test(msg) ? 'timeout' : 'error', reason: msg }; }
           if (overdue && result.outcome === 'no-executor') result = { ...result, outcome: 'error' };
           if (result.outcome === 'no-executor') {
@@ -405,6 +508,10 @@ export async function run(config = options(), io = {}) {
             state.noExecutor = redactSecrets(String(result.reason ?? '')).slice(0, 500);
             await save(ledger);
             return;
+          }
+          // overdue で予備 executor が成功しても transcript が増えなければ progressed にしない
+          if (overdue && result.resumedInSession === false && result.outcome !== 'not-in-session') {
+            result = { ...result, outcome: 'not-in-session', reason: `予備executor成功だがセッション自身の再開ではない: ${result.reason}` };
           }
           Object.assign(attempt, result, { executor: result.executor || 'not-started', reason: redactSecrets(String(result.reason ?? '')).slice(0, 2000), endedAt: new Date(now()).toISOString() });
           const ancestors = overdue ? [] : chainAncestors(ledger, entry.parentSessionId);
@@ -435,7 +542,7 @@ export async function run(config = options(), io = {}) {
           }
           // overdue で同一期限3回失敗したら kim-inbox に info を1回だけ積む
           // 今回の attempt が成功扱い（progressed/no-progress）の場合は通知しない
-          if (overdue && entry.attempts.length >= 3 && !entry.notified3Error && !OVERDUE_SUCCESS_OUTCOMES.has(attempt.outcome)) {
+          if (overdue && entry.attempts.filter(a => a.outcome !== 'not-in-session').length >= 3 && !entry.notified3Error && !OVERDUE_SUCCESS_OUTCOMES.has(attempt.outcome)) {
             entry.notified3Error = true;
             const overdueMsg = `【期限切れ再開 3回失敗】${record.displayTitle} (${record.sessionId})\n期限: ${wait?.label || ''}\n最終 executorAttempts: ${JSON.stringify(attempt.executorAttempts ?? [])}\n最終 outcome: ${attempt.outcome}\n最終 reason: ${attempt.reason || ''}`;
             try { await (io.notify ?? notifyKim)(overdueMsg, { home }); }
@@ -457,11 +564,37 @@ export async function run(config = options(), io = {}) {
       const closed = await loadClosed();
       const retired = Object.entries(overdue ? {} : ledger.sessions).filter(([id, entry]) => entry.noProgress >= 3 && !closed.sessions[id]);
       const count = outcome => results.filter(r => r.outcome === outcome).length;
-      const summary = `確認 ${results.length}件 / 進んだ ${count('progressed')} / 完了確認 ${count('done')} / 人待ち ${count('waiting-human')} / 進まず ${count('no-progress')} / 記録なし ${count('no-report')} / 時間切れ ${count('timeout')} / エラー ${count('error')} / 締切で翌晩へ ${rows.filter(r => r.skip === '締切超過(翌晩へ)').length} / 3回進捗なしで停止中 ${retired.length}`;
+      const summary = `確認 ${results.length}件 / 進んだ ${count('progressed')} / 完了確認 ${count('done')} / 人待ち ${count('waiting-human')} / 進まず ${count('no-progress')} / セッション未反映 ${count('not-in-session')} / 記録なし ${count('no-report')} / 時間切れ ${count('timeout')} / エラー ${count('error')} / 締切で翌晩へ ${rows.filter(r => r.skip === '締切超過(翌晩へ)').length} / 3回進捗なしで停止中 ${retired.length}`;
       const waiting = retired.length ? '\n自動では進められないので kim の判断待ち\n' + retired.slice(0, 20).map(([id, entry]) => `${entry.title ?? id} (${id})`).join('\n') : '';
       const message = redactSecrets(`${summary}\n${overdue ? '待機期限切れセッション再開' : '夜間セッション再開'} (${os.hostname()})\n${results.map(r => `${r.title} (${r.sessionId}): ${r.outcome}`).join('\n')}${state.aborted ? '\n連続3件エラーのため今晩は中止' : ''}${waiting}`);
-      const allClean = !state.aborted && !state.noExecutor && count('no-progress') === 0 && count('no-report') === 0 && count('timeout') === 0 && count('error') === 0 && retired.length === 0;
+      const allClean = !state.aborted && !state.noExecutor && count('not-in-session') === 0 && count('no-progress') === 0 && count('no-report') === 0 && count('timeout') === 0 && count('error') === 0 && retired.length === 0;
       state.notification = allClean ? { skipped: 'all-clean' } : await (io.notify ?? notifyKim)(message, { home });
+      await save(ledger);
+    }
+    // overdue モード: 期限切れから2時間以上経過し、誰も再開していないセッションがあれば kim-inbox に ask を積む
+    if (overdue && !readonly) {
+      const nowMs = now();
+      const twoHoursAgo = nowMs - 2 * 3600000;
+      for (const record of records) {
+        const wait = waitDeadline(record.displayTitle, nowMs);
+        if (!wait || wait.at > twoHoursAgo) continue;
+        const overdueKey = JSON.stringify([record.sessionId, wait?.key]);
+        const entry = ledger.overdue?.[overdueKey];
+        if (!entry) continue;
+        // 既に progressed / done / waiting-human ならスキップ
+        const lastAttempt = entry.attempts?.at(-1);
+        if (lastAttempt && OVERDUE_SUCCESS_OUTCOMES.has(lastAttempt.outcome)) continue;
+        // 既に kim-inbox に通知済みならスキップ
+        if (entry.notifiedStaleOverdue) continue;
+        if (['closed', '閉じて可', 'active', '人の判断待ち'].includes(entry.skipReason)) continue;
+        try { if ((await stat(record.file)).mtimeMs > wait.at) continue; } catch { continue; }
+        const staleMsg = `【期限切れ再開 放置】${record.displayTitle} (${record.sessionId})\n期限: ${wait.label}\n期限切れから2時間以上経過しましたが、誰も再開していません。手動で確認してください。\nsource: stalled-session-resume-overdue`;
+        try {
+          const { addItem } = await import('./kim-inbox.mjs');
+          await (io.addItem ?? addItem)(home, { kind: 'ask', text: staleMsg, source: 'stalled-session-resume-overdue', sessionId: record.sessionId });
+          entry.notifiedStaleOverdue = true;
+        } catch { /* kim-inbox が使えなければ通知は諦める */ }
+      }
       await save(ledger);
     }
     return { rows, results, aborted: state.aborted, ...(state.noExecutor ? { noExecutor: state.noExecutor } : {}) };

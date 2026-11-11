@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimRecipient } from './lib/kim-dm-policy.mjs';
 import { routeOwnerDm } from './lib/owner-dm-policy.mjs';
 import { resolveOwner, resolveOwnerDiscordId } from './notify-owner.mjs';
 import fs from 'node:fs';
@@ -45,7 +46,7 @@ export function formatNag(items, sheetUrl, now = new Date()) {
 
 export async function sendDiscordDm({ token, userId, content, fetchImpl = fetch, home = userHome(), kind = 'automatic' }) {
   const localOwner = resolveOwner({ home });
-  const owner = String(userId) === '715210673642012733' ? 'kim@orgiast.jp' : String(userId) === resolveOwnerDiscordId(localOwner, { home }) ? localOwner : '';
+  const owner = isKimRecipient({ id: userId }) ? 'kim@orgiast.jp' : String(userId) === resolveOwnerDiscordId(localOwner, { home }) ? localOwner : '';
   if (owner) {
     const deferred = await routeOwnerDm(owner, content, { home, kind, source: 'feedback巡回' });
     if (deferred) return deferred;

@@ -1219,13 +1219,22 @@ export function writeGatewayOverride({ claudeDir, provider, writeImpl = null }) 
 }
 
 // codex_saturated 対処: ~/.claude/codex-fallback-order.json に fallback 順を書く。
+// HANDOVER.md 変更: cheap-code:deepseek と gemini-cli を cheap-code:glm より先に配置する。
 // 2026-09-08 実測で cheap-code:glm 1544s/277tok・gemini-cli 2234s/0tok と低成果
 // (delegation-health fallback_low_yield)。救済レーンは速度と成功率を最優先し、
-// fail 4.2% / 平均36秒と最良の qwen(deepseek-chat) を先頭、glm(定額)を2番目、
+// fail 4.2% / 平均36秒と最良の qwen(deepseek-chat) を先頭、
+// HANDOVER.md 変更: gemini-cli を cheap-code:glm より先に配置し cheap-code:deepseek と並ぶ。
+// cheap-code:deepseek は速度と成功率に優れる(HANDOVER.md 要求)。
 // 平均509秒かつハング実績のある gemini-cli を最後にする。
 export function writeCodexFallbackOrder({ claudeDir, zaiAvailable, writeImpl = null }) {
   const file = path.join(claudeDir, 'codex-fallback-order.json');
-  const order = zaiAvailable ? ['qwen', 'cheap-code:glm', 'gemini-cli'] : ['qwen', 'cheap-code:deepseek', 'gemini-cli'];
+  // HANDOVER.md: cheap-code:deepseek と gemini-cli を cheap-code:glm より先に配置し、
+  // 低消費で高速・高成功率な cheap-code:deepseek を先頭、
+  // 最終手段として gemini-cli を2番目、
+  // その他は従来の cheap-code:glm のまま、最後にする。
+  const order = zaiAvailable
+    ? ['qwen', 'cheap-code:deepseek', 'gemini-cli', 'cheap-code:glm']
+    : ['qwen', 'cheap-code:deepseek', 'gemini-cli', 'cheap-code:glm'];
   const content = `${JSON.stringify(order, null, 2)}\n`;
   let previous = null;
   try { previous = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}

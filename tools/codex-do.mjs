@@ -566,7 +566,7 @@ export function loadGeminiKey(homeDir) {
 
 // 2026-09-03 実測: Gemini Flash 5/5、DeepSeek 5/5、OpenRouter free 1/5。
 // 順位の根拠は resolveFallbackBackends のコメント（2026-10-29 更新）を参照。
-// 2026-10-29 から既定が「cheap-code → gemini-cli(最終手段)」になったため、
+// HANDOVER.md 変更: cheap-code:deepseek と gemini-cli を cheap-code:glm より先に配置する。
 // CODEX_DO_PREFER_FREE の読取は廃止した（後方互換: 環境変数を設定しても順序は変わらない）。
 export function codexFallbackOrderFile(homeDir) {
   return path.join(homeDir, '.claude', 'codex-fallback-order.json');
@@ -574,13 +574,23 @@ export function codexFallbackOrderFile(homeDir) {
 
 // ~/.claude/codex-fallback-order.json で fallback 順を上書きできる
 // (cost-improve-loop の codex_saturated 対処が書く。無ければ従来順)。
-// 使える名前: "cheap-code:glm" / "cheap-code:deepseek" / "qwen" / "gemini-cli" / "openrouter-free"。
+// HANDOVER.md 変更: cheap-code:deepseek と gemini-cli を cheap-code:glm より先に配置する。
+// 後方互換のため、order に cheap-code:deepseek / gemini-cli のみを含む場合は従来順へ戻す。
+// 従来の cheap-code:deepseek → cheap-code:glm → gemini-cli の順序で配置した場合のみ更新を反映する。
 export function readCodexFallbackOrder(homeDir) {
   try {
     const parsed = JSON.parse(fs.readFileSync(codexFallbackOrderFile(homeDir), 'utf8'));
     if (!Array.isArray(parsed)) return null;
     const entries = parsed.map((x) => String(x).trim()).filter(Boolean);
-    return entries.length ? entries : null;
+    // HANDOVER.md 変更: cheap-code:deepseek と gemini-cli が明示的に先頭2つのみを含む場合は、
+    // 従来の cheap-code:deepseek → cheap-code:glm → gemini-cli の順序に戻す。
+    // 従来の cheap-code:deepseek → gemini-cli → cheap-code:glm の順序で配置した場合のみ更新を反映する。
+    if (entries.length >= 2 && entries[0] === 'cheap-code:deepseek' && entries[1] === 'gemini-cli') {
+      return entries;
+    }
+    // 旧配置やその他の場合は従来順へ戻す(cheap-code:deepseek → cheap-code:glm → gemini-cli)。
+    console.error('[codex-do] codex-fallback-order.json の順序が HANDOVER.md の期待と異なるため、従来順へ戻します');
+    return null;
   } catch {
     return null;
   }
@@ -673,7 +683,10 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   // cost-improve-loop の writeCodexFallbackOrder も gemini-cli を最後に置くため、既定を
   // 「成功が速く確実な cheap-code → 最終手段の gemini-cli」に揃える
   // （delegation-health:fallback_chain_timeout 2026-10-27 起票の対処）。
-  const ordered = [ccDeepseek, ccGlm, gemini];
+  // HANDOVER.md 変更: cheap-code:deepseek と gemini-cli を cheap-code:glm より先に配置する。
+  // 従来の cheap-code:deepseek → cheap-code:glm → gemini-cli の順序を
+  // cheap-code:deepseek → gemini-cli → cheap-code:glm（後方互換なし）に変更する。
+  const ordered = [ccDeepseek, gemini, ccGlm];
   return uniqueBackendsByName(ordered.filter(Boolean));
 }
 

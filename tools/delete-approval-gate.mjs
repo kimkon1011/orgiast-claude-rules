@@ -82,7 +82,7 @@ export function judge(input) {
     return approvedAfter(rows, text => targets.every(t => {
       // Boundaries prevent a.txt matching other-a.txt; basenames do not authorize other paths.
       const escaped = t.target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      return new RegExp(`(^|[\\s\x60"'（(：:])${escaped}(?=$|[\\s\x60"'）)、。])`).test(text);
+      return new RegExp(`(^|[\\s\x60"'（(：:「『【［\\[/、,])${escaped}(?=$|[\\s\x60"'）)、。（(」』】］\\]/？?！!,]|\\.(?![A-Za-z0-9]))`).test(text);
     }), 'delete') ? { decision: 'pass' } : block();
   } catch { return block(); }
 }

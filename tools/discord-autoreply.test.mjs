@@ -216,6 +216,26 @@ test('429はretry_after秒待ち1回のみ再試行', async () => {
   await assert.rejects(api('/users/@me'), /HTTP 429/);
   assert.equal(requests, 2); assert.deepEqual(waits, [10]);
 });
+test('接続失敗はclose接続で2回再試行しroute名を残す', async () => {
+  const calls = [], waits = [];
+  const api = createDiscord({ token: 'test', sleepImpl: async ms => waits.push(ms), fetchImpl: async (url, init) => {
+    calls.push({ url, headers: init.headers }); throw new DOMException('aborted', 'TimeoutError');
+  } });
+  await assert.rejects(api('/users/@me'), /Discord GET \/users\/@me timeout/);
+  assert.equal(calls.length, 3); assert.deepEqual(waits, [250, 500]);
+  assert.equal(calls[1].headers.Connection, 'close');
+});
+test('users me失敗時もtoken由来IDで検索まで継続', async t => {
+  const token = Buffer.from('123456789012345678').toString('base64url') + '.x.y';
+  const f = fixture(t, { messages: [], readTokenImpl: () => ({ admin: true, token }) });
+  const base = f.options.fetchImpl;
+  f.options.sleepImpl = async () => {};
+  f.options.fetchImpl = async (url, init) => new URL(url).pathname.endsWith('/users/@me')
+    ? Promise.reject(new DOMException('aborted', 'TimeoutError')) : base(url, init);
+  const result = await runOnce(f.options);
+  assert.equal(result.scanned, 0); assert.match(result.errors[0], /identity: Discord GET \/users\/@me timeout/);
+  assert.ok(f.calls.some(c => c.path.endsWith('/messages/search')));
+});
 test('fresh lockは処理せずstale lockは回収', async t => {
   const f = fixture(t); fs.writeFileSync(f.file('lock'), 'other');
   const live = await runOnce(f.options); assert.equal(live.locked, true); assert.equal(f.calls.length, 0);

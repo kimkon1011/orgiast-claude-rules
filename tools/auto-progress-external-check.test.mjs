@@ -84,6 +84,37 @@ test('check exits 1 with new messages (continuation), 1 without, 3 on error', as
   process.exitCode = 0;
 });
 
+test('scanTranscriptForSend detects line-group-send and gmail-draft in transcript', async () => {
+  const { scanTranscriptForSend } = await import('./auto-progress-ledger.mjs');
+  const home = tmpHome();
+  const transcript = path.join(home, 'transcript.jsonl');
+  const lines = [
+    '{"type":"user","message":{"role":"user","content":"こういうメッセージを送って"}}',
+    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"送ります"},{"type":"tool_use","name":"Bash","input":{"command":"node tools/line-group-send.mjs --group-id C560ba509d --text \\"確認です\\""}}]}}',
+  ];
+  fs.writeFileSync(transcript, lines.join('\n') + '\n');
+  const result = scanTranscriptForSend(transcript);
+  assert.ok(result, 'should find send command in transcript');
+  assert.equal(result.channel, 'line');
+  assert.equal(result.threadId, 'C560ba509d');
+
+  // gmail test
+  const gmailLines = [
+    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"node tools/gmail-draft.mjs --send --to client@example.com --subject test"}}]}}',
+  ];
+  const gmailTranscript = path.join(home, 'gmail-transcript.jsonl');
+  fs.writeFileSync(gmailTranscript, gmailLines.join('\n') + '\n');
+  const gmailResult = scanTranscriptForSend(gmailTranscript);
+  assert.ok(gmailResult, 'should find gmail send');
+  assert.equal(gmailResult.channel, 'gmail');
+  assert.equal(gmailResult.threadId, 'client@example.com');
+
+  // no send found
+  const emptyTranscript = path.join(home, 'empty.jsonl');
+  fs.writeFileSync(emptyTranscript, '{"type":"user","message":{"role":"user","content":"hello"}}\n');
+  assert.equal(scanTranscriptForSend(emptyTranscript), null);
+});
+
 test('checkPromise handles ##EXTERNAL_RESULT## marker: updates --since, returns unmet, does not mark done', async () => {
   const home = tmpHome();
   const file = ledgerFile(home);

@@ -5,7 +5,7 @@
 
 import { getDriveToken, driveApi, DRIVE_SCOPE } from './drive-auth.mjs';
 import { ensureKimEditor, KIM_EMAIL } from './kim-editor.mjs';
-import { buildDocHeaderRequests, buildDocCueRequests } from './meet-cue-core.mjs';
+import { buildDocHeaderRequests, buildDocCueRequests, formatJstDateTime, formatJstTime } from './meet-cue-core.mjs';
 
 const SEISAKU_TEAM = 'seisaku-team@orgiast.jp';
 
@@ -49,11 +49,10 @@ export async function setupCueDocument({
   // 1. Find or create "Meetカンペ" folder
   const folderId = await findOrCreateFolder({ token, api });
 
-  // 2. Format date and document name
+  // 2. Format date and document name in JST
   const now = new Date();
-  const dateStr = now.toISOString().replace('T', ' ').slice(0, 16);
-  const dateFileStr = now.toISOString().slice(0, 10) + ' ' + now.toTimeString().slice(0, 5);
-  const docName = `カンペ_${dateFileStr}_${title || '打合せ'}`;
+  const dateStr = formatJstDateTime(now);
+  const docName = `カンペ_${dateStr}_${title || '打合せ'}`;
 
   // 3. Create Google Doc
   const createRes = await (await api(token, 'https://www.googleapis.com/drive/v3/files?supportsAllDrives=true', {
@@ -117,7 +116,7 @@ export async function insertCueToDocument({
   const token = await getToken({ impersonate, scope: DRIVE_SCOPE });
 
   const d = new Date();
-  const timestampStr = d.toTimeString().split(' ')[0];
+  const timestampStr = formatJstTime(d);
 
   const cueReqs = buildDocCueRequests({
     timestampStr,

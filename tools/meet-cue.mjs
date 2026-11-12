@@ -26,6 +26,8 @@ import {
   parseJevResponse,
   parseSimulateTranscript,
   runDecisionRound,
+  formatJstSessionDate,
+  sanitizeCardData,
 } from './lib/meet-cue-core.mjs';
 
 import {
@@ -46,7 +48,7 @@ const meetCueBaseDir = (home = homeDir()) => path.join(home, '.claude', 'meet-cu
 
 export function generateSessionId() {
   const d = new Date();
-  const dateStr = d.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+  const dateStr = formatJstSessionDate(d);
   const randStr = randomBytes(2).toString('hex');
   return `${dateStr}-${randStr}`;
 }
@@ -69,6 +71,8 @@ export async function generateCardsFromBrief(brief = '', home = homeDir()) {
   if (!brief.trim()) return [...STANDARD_CARDS];
 
   const prompt = `打合せ事前情報から、面談中に役立つカンペカード（5〜10枚）をJSON配列で作成してください。
+数字・実績・社名は brief に書かれているものだけを使う。無ければ data は空文字。推測で数字を作らない。
+
 フォーマット:
 [
   {
@@ -76,7 +80,7 @@ export async function generateCardsFromBrief(brief = '', home = homeDir()) {
     "title": "カードタイトル",
     "trigger": "このカードを出す条件や発言キーワード",
     "say": "社員がそのまま言える1〜2文（60字以内）",
-    "data": "根拠となる数字や実績1つ",
+    "data": "briefに書かれた根拠となる数字や実績1つ（無ければ空文字）",
     "material_url": ""
   }
 ]
@@ -100,8 +104,11 @@ ${brief}`;
     if (jsonMatch) {
       const generated = JSON.parse(jsonMatch[0]);
       if (Array.isArray(generated) && generated.length > 0) {
+        // Sanitize generated cards data
+        const sanitizedGenerated = generated.map(c => sanitizeCardData(c, brief));
+
         // Combine generated cards with standard cards
-        const combined = [...generated, ...STANDARD_CARDS];
+        const combined = [...sanitizedGenerated, ...STANDARD_CARDS];
         // Deduplicate by ID
         const seen = new Set();
         return combined.filter(c => {
@@ -122,10 +129,12 @@ ${brief}`;
 
 export async function generateHelpCue({ brief = '', captionsText = '' } = {}) {
   const prompt = `お客様とのGoogle Meet打合せ中に助け舟が必要です。直近の字幕と打合せ概要を踏まえ、今社員が発言すべき適切なセリフと根拠をJSONオブジェクトで1点出力してください。
+数字・実績・社名は brief に書かれているものだけを使う。無ければ data は空文字。推測で数字を作らない。
+
 フォーマット:
 {
   "say": "社員がそのまま言える1〜2文（60字以内目安）",
-  "data": "根拠となる数字や実績1つ"
+  "data": "briefに書かれた根拠となる数字や実績1つ（無ければ空文字）"
 }
 
 打合せ概要:
@@ -148,11 +157,12 @@ ${captionsText}`;
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
       if (parsed.say) {
-        return {
+        const cue = {
           say: parsed.say,
           data: parsed.data || '',
           material_url: '',
         };
+        return sanitizeCardData(cue, brief);
       }
     }
   } catch {
@@ -163,7 +173,7 @@ ${captionsText}`;
 
   return {
     say: 'ご質問ありがとうございます。詳細につきましては、社内確認の上本日中に追ってご回答させていただきます。',
-    data: '本日中（24時間以内）の回答率 100%',
+    data: '',
     material_url: '',
   };
 }

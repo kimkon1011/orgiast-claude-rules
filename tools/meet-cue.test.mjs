@@ -15,6 +15,10 @@ import {
   buildDocCueRequests,
   parseSimulateTranscript,
   runDecisionRound,
+  sanitizeCardData,
+  formatJstDateTime,
+  formatJstTime,
+  formatJstSessionDate,
 } from './lib/meet-cue-core.mjs';
 
 import {
@@ -23,6 +27,62 @@ import {
   getLatestSessionId,
   main,
 } from './meet-cue.mjs';
+
+test('STANDARD_CARDS: データの捏造数字なし・Reブース再利用カード・言い切り60字以内', () => {
+  assert.equal(STANDARD_CARDS.length, 7, '定番カードは7枚');
+
+  const reuseCard = STANDARD_CARDS.find(c => c.id === 'reuse');
+  assert.ok(reuseCard, 'reuse カードが存在すること');
+  assert.equal(reuseCard.title, '再利用の提案');
+  assert.match(reuseCard.say, /Reブース/);
+
+  for (const card of STANDARD_CARDS) {
+    assert.equal(card.data, '', `カード ${card.id} の data は空文字であること`);
+    assert.ok(card.say.length <= 60, `カード ${card.id} の say は60字以内であること (${card.say.length}字)`);
+    assert.doesNotMatch(card.say, /\d+/, `カード ${card.id} の say に数字を含めないこと`);
+  }
+});
+
+test('sanitizeCardData: brief に存在しない数字を消去・brief にある数字は保持', () => {
+  // Case 1: Fake percentage in card data, empty brief -> data cleared
+  const fakeCard = { id: 'c1', say: 'テスト', data: '満足度98%' };
+  const sanitized1 = sanitizeCardData(fakeCard, '');
+  assert.equal(sanitized1.data, '', 'brief にない数字は消去されること');
+
+  // Case 2: Number present in brief -> data kept
+  const validCard = { id: 'c2', say: 'テスト', data: '予算500万円以内のプラン' };
+  const sanitized2 = sanitizeCardData(validCard, 'ご予算は500万円希望です。');
+  assert.equal(sanitized2.data, '予算500万円以内のプラン', 'brief に存在する数字は保持されること');
+
+  // Case 3: No numbers in card data -> data kept as is
+  const noNumCard = { id: 'c3', say: 'テスト', data: '比較表付きの資料' };
+  const sanitized3 = sanitizeCardData(noNumCard, '予算相談');
+  assert.equal(sanitized3.data, '比較表付きの資料', '数字がない data は保持されること');
+});
+
+test('buildDocCueRequests: data が空なら根拠行を出さないこと', () => {
+  const cueReqs = buildDocCueRequests({
+    timestampStr: '10:05:00',
+    say: 'ご予算に合わせて配分を変えたプランもお出しできます。',
+    data: '',
+    url: '',
+    isKim: false,
+    insertIndex: 1,
+  });
+
+  const text = cueReqs.requests[0].insertText.text;
+  assert.doesNotMatch(text, /根拠:/, 'data が空の場合に根拠行が出ないこと');
+  assert.doesNotMatch(text, /資料:/, 'url が空の場合に資料行が出ないこと');
+});
+
+test('JST 日時・セッション ID フォーマット検証', () => {
+  // Fixed UTC Date: 2026-11-12 02:25:30 UTC -> JST 2026-11-12 11:25:30
+  const utcDate = new Date('2026-11-12T02:25:30.000Z');
+
+  assert.equal(formatJstDateTime(utcDate), '2026-11-12 11:25');
+  assert.equal(formatJstTime(utcDate), '11:25:30');
+  assert.equal(formatJstSessionDate(utcDate), '20261112-112530');
+});
 
 test('CaptionAssembler: 字幕の重複除去、1.5秒確定、話者切替', t => {
   const assembler = new CaptionAssembler({ finalizeDelayMs: 1500 });

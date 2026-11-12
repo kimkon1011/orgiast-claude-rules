@@ -3,6 +3,64 @@
  * 純粋ロジック部（ブラウザ・ネットワークに触れない、テスト対象）
  */
 
+/**
+ * Formats a Date object or timestamp as JST string (UTC+9).
+ */
+export function formatJstDateTime(date = new Date()) {
+  const d = typeof date === 'number' ? new Date(date) : date;
+  const jst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+  const yyyy = jst.getUTCFullYear();
+  const mm = String(jst.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(jst.getUTCDate()).padStart(2, '0');
+  const hh = String(jst.getUTCHours()).padStart(2, '0');
+  const min = String(jst.getUTCMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+}
+
+export function formatJstTime(date = new Date()) {
+  const d = typeof date === 'number' ? new Date(date) : date;
+  const jst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+  const hh = String(jst.getUTCHours()).padStart(2, '0');
+  const min = String(jst.getUTCMinutes()).padStart(2, '0');
+  const ss = String(jst.getUTCSeconds()).padStart(2, '0');
+  return `${hh}:${min}:${ss}`;
+}
+
+export function formatJstSessionDate(date = new Date()) {
+  const d = typeof date === 'number' ? new Date(date) : date;
+  const jst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+  const yyyy = jst.getUTCFullYear();
+  const mm = String(jst.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(jst.getUTCDate()).padStart(2, '0');
+  const hh = String(jst.getUTCHours()).padStart(2, '0');
+  const min = String(jst.getUTCMinutes()).padStart(2, '0');
+  const ss = String(jst.getUTCSeconds()).padStart(2, '0');
+  return `${yyyy}${mm}${dd}-${hh}${min}${ss}`;
+}
+
+/**
+ * Sanitizes card data field to ensure numbers in data come from brief.
+ * If data contains numbers that do not appear anywhere in brief, clear data.
+ */
+export function sanitizeCardData(card, brief = '') {
+  if (!card) return card;
+  const copy = { ...card };
+  if (!copy.data || typeof copy.data !== 'string') {
+    copy.data = '';
+    return copy;
+  }
+
+  const numbers = copy.data.match(/\d+/g);
+  if (numbers && numbers.length > 0) {
+    const briefStr = typeof brief === 'string' ? brief : '';
+    const existsInBrief = numbers.some(num => briefStr.includes(num));
+    if (!existsInBrief) {
+      copy.data = '';
+    }
+  }
+  return copy;
+}
+
 export const MEET_SELECTORS = {
   joinButtons: [
     'button:has-text("今すぐ参加")',
@@ -47,48 +105,56 @@ export const STANDARD_CARDS = [
     id: 'card-budget',
     title: '予算の懸念',
     trigger: 'お客様が予算オーバー、費用が高い、予算感が合わないと仰った時',
-    say: 'ご予算について懸念がございましたら、機能のフェーズ分けや規模の個別調整も可能です。',
-    data: 'ご予算内での柔軟なプラン調整満足度 98%',
+    say: 'ご予算に合わせて、造作と什器の配分を変えたプランもお出しできます。上限の金額を伺えますか。',
+    data: '',
     material_url: '',
   },
   {
     id: 'card-schedule',
     title: '納期の懸念',
     trigger: 'お客様がスケジュールが厳しい、納期に間に合うか不安とおっしゃった時',
-    say: '短納期のご要望につきましても、重要機能からの段階的リリースで迅速に対応可能です。',
-    data: '最短2週間でのスピード立ち上げ実績多数',
+    say: '逆算すると、デザイン確定の期限がいつになるかを今日お伝えできます。',
+    data: '',
     material_url: '',
   },
   {
     id: 'card-competitor',
     title: '競合と比較',
     trigger: '他社サービスとの違いや、なぜオージャストなのか聞かれた時',
-    say: '他社様との最大の違いは、導入後も伴走し続ける手厚い運用サポート体制にございます。',
-    data: '導入後継続率 95% 超のサポート実績',
+    say: '比較の際は、施工・運営当日の体制まで含めた総額で見ていただくのがおすすめです。',
+    data: '',
     material_url: '',
   },
   {
     id: 'card-decision-maker',
     title: '決裁者が不在',
     trigger: '上司や役員への相談が必要、決裁を通す必要があるとおっしゃった時',
-    say: '社内ご検討用として、ご決裁者様向けの比較資料やサマリーシートをすぐにお作りします。',
-    data: '稟議用サマリー資料を即日発行対応',
+    say: '部長様がご判断しやすいように、比較表付きの資料をお作りしましょうか。',
+    data: '',
     material_url: '',
   },
   {
     id: 'card-fallback',
     title: '質問に答えられない時のつなぎ',
     trigger: '即答できない技術的質問や詳細な確認が必要な事項を問われた時',
-    say: '確実な情報をお伝えするため、社内専門スタッフに確認の上、本日中にメールにてお戻しいたします。',
-    data: '24時間以内の追加入力・ご回答率 100%',
+    say: '正確にお答えしたいので、確認して本日中にご連絡します。',
+    data: '',
     material_url: '',
   },
   {
     id: 'card-closing',
     title: '次のアクション確定（クロージング）',
     trigger: '打合せの終盤、または提案内容にひと通りご納得いただいた局面',
-    say: '本日のお話を踏まえ、次回のご面談日程、またはお見積もりのご送付日程を設定させていただけますか。',
-    data: '次回日程確定後のプロジェクト成功率3倍',
+    say: '次回、ラフデザインをお見せする日程を今決めてもよろしいですか。',
+    data: '',
+    material_url: '',
+  },
+  {
+    id: 'reuse',
+    title: '再利用の提案',
+    trigger: '次回以降も展示会に出展する予定がある、コストを抑えたいとおっしゃった時',
+    say: '次回以降も使い回せるReブースにすると、次回からの費用を抑えられます。',
+    data: '',
     material_url: '',
   },
 ];
@@ -158,8 +224,7 @@ export class CaptionAssembler {
     const lines = this.getRecentWindow(now, windowMs);
     if (lines.length === 0) return '(字幕データなし)';
     return lines.map(line => {
-      const d = new Date(line.timestamp);
-      const timeStr = d.toTimeString().split(' ')[0];
+      const timeStr = formatJstTime(line.timestamp);
       return `[${timeStr}] ${line.speaker}: ${line.text}`;
     }).join('\n');
   }
@@ -352,11 +417,13 @@ export function buildDocCueRequests({
   isKim = false,
   insertIndex = 1,
 }) {
+  const cleanData = (data || '').trim();
+  const cleanUrl = (url || '').trim();
   const headerPrefix = isKim ? '【kimより】' : '【言うこと】';
   const timePrefix = timestampStr ? `${timestampStr} ` : '';
   const firstLine = `${timePrefix}${headerPrefix}${say}\n`;
-  const secondLine = data ? `根拠: ${data}\n` : '';
-  const thirdLine = url ? `資料: ${url}\n` : '';
+  const secondLine = cleanData ? `根拠: ${cleanData}\n` : '';
+  const thirdLine = cleanUrl ? `資料: ${cleanUrl}\n` : '';
   const spacer = '\n';
 
   const fullText = `${firstLine}${secondLine}${thirdLine}${spacer}`;
@@ -398,8 +465,8 @@ export function buildDocCueRequests({
 
   currIndex += firstLineLen;
 
-  // 3. Format second line if data (12pt)
-  if (data) {
+  // 3. Format second line if cleanData (12pt)
+  if (cleanData) {
     const secondLineLen = secondLine.length;
     requests.push({
       updateTextStyle: {
@@ -411,15 +478,15 @@ export function buildDocCueRequests({
     currIndex += secondLineLen;
   }
 
-  // 4. Format third line if url (12pt + link)
-  if (url) {
+  // 4. Format third line if cleanUrl (12pt + link)
+  if (cleanUrl) {
     const thirdLineLen = thirdLine.length;
     requests.push({
       updateTextStyle: {
         range: { startIndex: currIndex, endIndex: currIndex + thirdLineLen },
         textStyle: {
           fontSize: { magnitude: 12, unit: 'PT' },
-          link: { url },
+          link: { url: cleanUrl },
         },
         fields: 'fontSize,link',
       },

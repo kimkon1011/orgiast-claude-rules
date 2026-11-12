@@ -767,7 +767,7 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
       : runOptions.executor === 'cheap-code'
       ? { ...configuredChoice, executor: 'cheap-code' }
       : configuredChoice;
-    let cheapProvider = choice.provider;
+    let cheapProvider = runOptions.provider || choice.provider;
     const executorAttempts = [];
     let alternateTried = false;
     let codexTried = false;

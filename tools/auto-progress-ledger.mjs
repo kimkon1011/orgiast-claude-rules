@@ -8,6 +8,7 @@ import { isEntry } from './is-entry.mjs';
 import { readAssistantText } from './lib/assistant-text.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { resolveOwner } from './lib/owner-identity.mjs';
+import { externalSpec, recentSessionSends, monitorCommand, MONITOR_DAYS } from './lib/external-monitor-state.mjs';
 
 const NONE = /^(?:なし|無し|ナシ|ありません|—|–|-|－|ー|―|n\/a|none)$/i;
 // 「**この後の自動進行**: text」「- この後の自動進行：text」など装飾付きにも一致させる。
@@ -137,7 +138,7 @@ export function applyPromise(rows, record) {
   let toAdd = record;
   if (!toAdd.check && !toAdd.startWhen && !toAdd.autoRegisteredCheck) {
     const existing = rows
-      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && (row.check || row.startWhen || row.autoRegisteredCheck === true))
+      .filter((row) => row.sessionId === record.sessionId && OPEN_STATUSES.has(row.status) && !externalSpec(row) && (row.check || row.startWhen || row.autoRegisteredCheck === true))
       .sort((a, b) => (Date.parse(b.ts) || 0) - (Date.parse(a.ts) || 0))[0];
     if (existing) {
       toAdd = {
@@ -220,16 +221,26 @@ export function record(input, { home, now, hostname, user, owner, readText = (p)
   const row = buildRecord(input, text, { now, hostname, user, owner: owner ?? resolveOwner({ home }) });
   if (!row) return null;
   const file = ledgerFile(home);
-  const rows = applyPromise(readLedger(file), row);
-  writeLedger(file, rows);
-  // Auto-register external channel check if promise mentions reply-waiting and recent send found
-  if (REPLY_WAITING_RE.test(row.promise) && home) {
-    try {
-      const sendInfo = scanTranscriptForSend(row.transcriptPath);
-      if (sendInfo) autoRegisterExternalCheck(row, sendInfo, { home, now });
-    } catch { /* fail-open: auto-registration must not break the stop hook */ }
+  const waiting = /(?:返信|返事|回答)待ち/.test(row.promise);
+  const sends = waiting ? recentSessionSends(row.transcriptPath, home, now ?? Date.now()) : [];
+  let rows = readLedger(file);
+  const ownsWait = waiting && (sends.length || rows.some(r => r.sessionId === row.sessionId && OPEN_STATUSES.has(r.status) && externalSpec(r)));
+  // Do not supersede unrelated checks or copy a monitor's cursor into a new declaration.
+  if (ownsWait) rows.push({ ...row, status: 'superseded' });
+  else rows = applyPromise(rows, row);
+  const recorded = rows.at(-1);
+  if (waiting) {
+    for (const spec of sends) {
+      const existing = rows.find(r => r.sessionId === row.sessionId && OPEN_STATUSES.has(r.status) &&
+        externalSpec(r)?.channel === spec.channel && externalSpec(r)?.threadId === spec.threadId && externalSpec(r)?.mailbox === spec.mailbox);
+      if (existing) continue; // Preserve cursor and original expiry across repeated Stop hooks.
+      rows.push({ ...row, status: 'open', promise: '外部チャネルの返信待ちを継続監視', label: `外部返信待ち:${spec.channel}:${spec.threadId}`, check: monitorCommand(spec),
+        checkCwd: row.cwd, checkRegisteredAt: row.ts, externalMonitor: true, nextKim: 'なし', nextClaude: '',
+        deadlineAt: new Date((now ?? Date.now()) + MONITOR_DAYS).toISOString() });
+    }
   }
-  return rows.at(-1);
+  writeLedger(file, rows);
+  return recorded;
 }
 
 async function main() {
@@ -242,71 +253,10 @@ async function main() {
 
 if (isEntry(import.meta.url)) { await main(); process.exitCode = 0; }
 
-// 返信待ちの promise を検出し、直近の送信先から外部チャネル check を自動登録する。
-const REPLY_WAITING_RE = /返信|回答|返事|リプライ|返答|お返事|ご返信|ご回答/i;
-const LINE_SEND_RE = /line-group-send\.mjs.*--group-id\s+(\S+)/;
-const LINE_THREAD_RE = /line-group-send\.mjs.*--group-id\s+(?:@?)([\w-]+)/;
-const GMAIL_THREAD_RE = /gmail-draft\.mjs.*--to\s+(\S+@\S+)/;
-
-export function scanTranscriptForSend(transcriptPath) {
-  if (!transcriptPath || !fs.existsSync(transcriptPath)) return null;
-  try {
-    const text = fs.readFileSync(transcriptPath, 'utf8');
-    // Search from the end: most recent send tool use
-    const lines = text.split(/\r?\n/).reverse();
-    for (const line of lines) {
-      try {
-        const entry = JSON.parse(line);
-        const content = entry?.message?.content;
-        if (!Array.isArray(content)) continue;
-        for (const block of content) {
-          if (block?.type !== 'tool_use') continue;
-          const input = block.input || {};
-          const command = input.command || input.script || '';
-          // line-group-send.mjs --group-id <id>
-          const lineMatch = String(command).match(LINE_THREAD_RE);
-          if (lineMatch) return { channel: 'line', threadId: lineMatch[1], line: lineMatch[0] };
-          // gmail-draft.mjs --to <email>
-          const gmailMatch = String(command).match(GMAIL_THREAD_RE);
-          if (gmailMatch) return { channel: 'gmail', threadId: gmailMatch[1], line: gmailMatch[0] };
-        }
-      } catch {}
-    }
-  } catch { /* transcript not readable */ }
-  return null;
-}
-
-export function autoRegisterExternalCheck(row, sendInfo, { home, now = Date.now() } = {}) {
-  if (!sendInfo || !row.sessionId || !row.cwd) return null;
-  const threadId = sendInfo.threadId;
-  const since = new Date(now - 180 * 3600000).toISOString(); // 7.5 days back
-  const checkCmd = `node tools/auto-progress-external-check.mjs --channel ${sendInfo.channel} --thread-id ${threadId} --since ${since}`;
-  const label = `${sendInfo.channel === 'line' ? 'LINE' : 'Gmail'}返信監視:${String(threadId).slice(0, 20)}`;
-  const deadline = new Date(now + 14 * 86400000).toISOString();
-  const registry = rows => {
-    const addRow = {
-      ts: new Date(now).toISOString(), pc: row.pc, user: row.user, owner: row.owner || '',
-      sessionId: row.sessionId, cwd: row.cwd, transcriptPath: row.transcriptPath || '',
-      promise: label, nextKim: 'なし', status: 'open',
-      check: checkCmd, checkRegisteredAt: new Date(now).toISOString(),
-      checkCwd: row.cwd, deadlineAt: deadline, label,
-      nextClaude: '新着をkim-inboxへ報告',
-      externalChannel: true,
-      externalChannelId: threadId,
-      externalChannelType: sendInfo.channel,
-      autoRegisteredCheck: true,
-    };
-    return applyPromise(rows, addRow);
-  };
-  try {
-    const file = ledgerFile(home);
-    const rows = registry(readLedger(file));
-    writeLedger(file, rows);
-    return rows.at(-1);
-  } catch { return null; }
-}
-
-export const rowKey = (row) => `${row.pc}|${row.user}|${row.sessionId}|${row.ts}`;
+export const rowKey = (row) => {
+  const spec = externalSpec(row);
+  return `${row.pc}|${row.user}|${row.sessionId}|${row.ts}${spec ? `|external:${spec.channel}:${spec.mailbox || ''}:${spec.threadId}` : ''}`;
+};
 
 export { isUnattendedRow } from './lib/unattended-session.mjs';
 

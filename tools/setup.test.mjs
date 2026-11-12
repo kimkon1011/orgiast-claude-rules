@@ -398,6 +398,10 @@ for (const [name, change, expected] of [
   ['unregistered fixture task is NG', { registered: false }, 'NG'],
   ['task absent from fixture is NG', { absent: true }, 'NG'],
   ['legacy spec only checks registration with fixture', { legacy: true, missing: true, age: 60 }, 'OK'],
+  ['hourly external watch must converge to thirty minutes', { cadence: true, intervals: [60] }, 'NG'],
+  ['thirty minute watch with bounded execution passes', { cadence: true, intervals: [30] }, 'OK'],
+  ['unknown repetition interval must be repaired', { cadence: true }, 'NG'],
+  ['execution longer than interval must be repaired', { cadence: true, intervals: [30], executionMinutes: 55 }, 'NG'],
 ]) {
   test(`scheduled-task: ${name}`, (t) => {
     const home = temp('setup-task-info-');
@@ -408,10 +412,11 @@ for (const [name, change, expected] of [
     const script = path.join(home, 'space dir', 'stall-sweeper.mjs');
     write(wrapper, 'wrapper');
     if (!change.missing) write(script, 'script');
-    const spec = { name: 'TestTask', ...(change.legacy ? {} : { requireActionTarget: true, maxRunAgeHours: 50 }) };
+    const spec = { name: 'TestTask', ...(change.legacy ? {} : { requireActionTarget: true, maxRunAgeHours: 50 }), ...(change.cadence ? { maxIntervalMinutes: 30 } : {}) };
     write(mf, JSON.stringify(manifest([item('task:test', 'scheduled-task', spec)])));
     write(fixture, JSON.stringify(change.absent ? {} : { TestTask: {
       registered: change.registered ?? true,
+      intervals: change.intervals, executionMinutes: change.executionMinutes ?? 29,
       actions: [`wscript.exe //nologo "${wrapper}" "C:\\Program Files\\nodejs\\node.exe" "${script}" "--apply"`],
       lastRunTime: change.lastRunTime ?? new Date(Date.now() - (change.age ?? 1) * 3600000).toISOString(),
     } }));

@@ -10,8 +10,6 @@ import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { reportCheckProgress } from './lib/auto-progress-heartbeat.mjs';
 import { deliverDoneInbox, hasDoneInboxReceipt, usesKimDoneInbox } from './lib/auto-progress-done-inbox.mjs';
-import { addItem } from './kim-inbox.mjs';
-import { appendInbox } from './auto-progress-inbox-hook.mjs';
 
 export const CHECK_ERROR_PATTERNS = [
   /Cannot find path/i,
@@ -202,43 +200,6 @@ export async function checkPromise(row, { home, now, patch, io = {}, suppressNot
     result = row.status === 'done' && row.checkResult === 'done'
       ? { code: 0, text: row.checkText } : await (io.executeCheck ?? executeCheck)(row, { home });
   } catch (error) { result = { code: null, text: `check エラー: ${error.message || error}` }; }
-  // External channel monitoring: handle ##EXTERNAL_RESULT## marker for continuation
-  if (result.stdout && result.stdout.includes('##EXTERNAL_RESULT##')) {
-    try {
-      const match = result.stdout.match(/##EXTERNAL_RESULT##(\{[\s\S]*?\})(?:\n|$)/);
-      if (match) {
-        const data = JSON.parse(match[1]);
-        if (data.latestAt && Array.isArray(data.messages) && data.messages.length > 0) {
-          // Update --since in the check command so next run uses the latest timestamp
-          const newCheck = row.check.replace(/--since\s+\S+/g, `--since ${data.latestAt}`);
-          if (patch(rowKey(row), { check: newCheck, checkRegisteredAt: new Date(now).toISOString() }) === false) return 'ledger_error';
-          // Report to kim-inbox as ask (🔴) for visibility
-          if (!suppressNotices) {
-            const threadId = data.threadId || (row.check.match(/--thread-id\s+(\S+)/)?.[1]) || '';
-            const msgText = data.messages.map(m =>
-              `📩 ${m.sender} (${m.at}): ${m.text}`
-            ).join('\n');
-            await addItem(home, {
-              kind: 'ask',
-              source: 'auto-progress-external-check',
-              text: `🔴 外部チャネル(${data.channel || 'line'}) ${data.count}件の新着\n${msgText}`,
-              dedupeKey: `external-msg:${threadId}:${data.latestAt}`,
-            });
-            // Append to session inbox for next resume to read
-            appendInbox(home, row.sessionId, {
-              at: new Date(now).toISOString(),
-              state: 'progressed',
-              evidence: `外部チャネル(${data.channel || 'line'}) 新着 ${data.count}件（最新: ${data.messages[data.messages.length - 1].sender}）`,
-              artifact: '',
-            });
-          }
-          // Advance row's lastCheckedAt so overdue/timeout tracking resets
-          Object.assign(row, { lastCheckedAt: new Date(now).toISOString() });
-          return 'unmet'; // Keep monitoring — do not mark as done
-        }
-      }
-    } catch (e) { /* malformed marker: fall through to normal checkPromise handling */ }
-  }
   const state = result.code === 0 ? 'done' : result.code === 1 ? 'unmet' : result.code === 3 ? 'stalled' : 'error';
   const overdue = now >= Date.parse(row.deadlineAt);
   const changes = { lastCheckOutput: checkOutput(result.stdout ?? result.text), checkResult: state, checkText: state === 'stalled' ? lastLine(result.stdout ?? result.text) : String(result.text || ''), checkStderr: String(result.stderr || ''), lastCheckedAt: new Date(now).toISOString(),

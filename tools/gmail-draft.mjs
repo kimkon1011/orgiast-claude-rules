@@ -419,7 +419,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       }
       const result = await sendDraft({ user, id: args.send, ledger: (deps.loadLedger ?? loadLedger)(), fetchImpl, getToken, draft,
       });
-      if (!deps.skipContextCheck) recordOutbound({ channel: 'gmail', target: result.threadId, text: draftText, messageId: result.sentMessageId }, deps.home);
+      if (!deps.skipContextCheck) recordOutbound({ channel: 'gmail', target: result.threadId, mailbox: user, text: draftText, messageId: result.sentMessageId }, deps.home);
       emit({ ok: true, ...(isForward ? { consistency } : {}), ...result }, `送信しました: ${result.sentMessageId} (${user})`);
       return 0;
     }

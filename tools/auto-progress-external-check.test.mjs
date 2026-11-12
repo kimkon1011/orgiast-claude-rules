@@ -4,7 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
 import { parseArgs, fetchLineMessages, check } from './auto-progress-external-check.mjs';
-import { checkPromise } from './auto-progress-check.mjs';
+import { run } from './auto-progress-watch.mjs';
+import { notificationMocks } from './test-helpers/auto-progress-home.mjs';
+import { externalSpec, readEvents } from './lib/external-monitor-state.mjs';
 import { readLedger, writeLedger, ledgerFile } from './auto-progress-ledger.mjs';
 let homes = [];
 after(() => homes.forEach(h => { try { fs.rmSync(h, { recursive: true, force: true }); } catch {} }));
@@ -43,7 +45,10 @@ test('fetchLineMessages filters external messages after since', async () => {
   assert.equal(messages[1].sender, '池永様');
 });
 
-test('check exits 1 with new messages (continuation), 1 without, 3 on error', async () => {
+test('check exits 1 with new messages (continuation), 1 without, 3 on error', async t => {
+  const exitCode = process.exitCode;
+  const log = console.log;
+  t.after(() => { process.exitCode = exitCode; console.log = log; });
   const secrets = { SUPABASE_URL: 'https://test.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'key' };
 
   // Test: no new messages → exit 1
@@ -84,80 +89,54 @@ test('check exits 1 with new messages (continuation), 1 without, 3 on error', as
   process.exitCode = 0;
 });
 
-test('scanTranscriptForSend detects line-group-send and gmail-draft in transcript', async () => {
-  const { scanTranscriptForSend } = await import('./auto-progress-ledger.mjs');
-  const home = tmpHome();
-  const transcript = path.join(home, 'transcript.jsonl');
-  const lines = [
-    '{"type":"user","message":{"role":"user","content":"こういうメッセージを送って"}}',
-    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"送ります"},{"type":"tool_use","name":"Bash","input":{"command":"node tools/line-group-send.mjs --group-id C560ba509d --text \\"確認です\\""}}]}}',
-  ];
-  fs.writeFileSync(transcript, lines.join('\n') + '\n');
-  const result = scanTranscriptForSend(transcript);
-  assert.ok(result, 'should find send command in transcript');
-  assert.equal(result.channel, 'line');
-  assert.equal(result.threadId, 'C560ba509d');
-
-  // gmail test
-  const gmailLines = [
-    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"node tools/gmail-draft.mjs --send --to client@example.com --subject test"}}]}}',
-  ];
-  const gmailTranscript = path.join(home, 'gmail-transcript.jsonl');
-  fs.writeFileSync(gmailTranscript, gmailLines.join('\n') + '\n');
-  const gmailResult = scanTranscriptForSend(gmailTranscript);
-  assert.ok(gmailResult, 'should find gmail send');
-  assert.equal(gmailResult.channel, 'gmail');
-  assert.equal(gmailResult.threadId, 'client@example.com');
-
-  // no send found
-  const emptyTranscript = path.join(home, 'empty.jsonl');
-  fs.writeFileSync(emptyTranscript, '{"type":"user","message":{"role":"user","content":"hello"}}\n');
-  assert.equal(scanTranscriptForSend(emptyTranscript), null);
-});
-
-test('checkPromise handles ##EXTERNAL_RESULT## marker: updates --since, returns unmet, does not mark done', async () => {
-  const home = tmpHome();
-  const file = ledgerFile(home);
-  const sessionId = 'test-external-session';
-  const checkCmd = 'node tools/auto-progress-external-check.mjs --channel line --thread-id g1 --since 2026-11-12T00:00:00Z';
+test('watch persists successive cursors only after inbox delivery and keeps monitoring across ticks', async () => {
+  const home = tmpHome(), file = ledgerFile(home);
+  const baseline = '2026-11-12T00:00:00Z';
   writeLedger(file, [{
-    ts: new Date(now - 3600000).toISOString(), pc: 'test', user: 'test', sessionId,
-    cwd: home, promise: '外部監視テスト', status: 'open',
-    check: checkCmd, checkRegisteredAt: new Date(now - 3600000).toISOString(),
-    deadlineAt: new Date(now + 86400000).toISOString(), label: '外部監視テスト',
-    nextClaude: '新着を報告',
+    ts: new Date(now).toISOString(), pc: 'test', user: 'test', sessionId: 'external-session',
+    cwd: home, status: 'open', label: 'LINE monitor',
+    check: `node tools/auto-progress-external-check.mjs --channel line --thread-id g1 --since ${baseline}`,
+    deadlineAt: new Date(now + 86400000).toISOString(),
   }]);
-
-  // Simulate check output with ##EXTERNAL_RESULT## marker
-  const result = {
-    code: 1,
-    stdout: '✅ 外部チャネル(line) に新着 2件\n##EXTERNAL_RESULT##' + JSON.stringify({
-      channel: 'line', threadId: 'g1', count: 2,
-      messages: [
-        { id: 'm1', at: '2026-11-12T04:00:00Z', sender: '森田様', text: '案2でお願いします' },
-        { id: 'm3', at: '2026-11-12T05:00:00Z', sender: '池永様', text: '回答です' },
-      ],
-      latestAt: '2026-11-12T05:00:00Z',
-    }),
-    text: '未達',
+  const m1 = { id: 'm1', at: '2026-11-12T04:00:00Z', sender: 'customer', text: 'first' };
+  const m2 = { id: 'm2', at: '2026-11-12T05:00:00Z', sender: 'customer', text: 'second' };
+  let messages = [m1], failDelivery = true, tick = now;
+  const delivered = [], cursors = [];
+  const io = { ...notificationMocks, clock: () => tick, transcriptFiles: [], sheetConfig: () => null,
+    digest: async () => ({}), escalateKimDecisions: async () => ({}),
+    executeCheck: () => assert.fail('watch must use the durable external monitor'),
+    fetchExternalMessages: async spec => { cursors.push(spec.since); return messages; },
+    addKimInboxItem: async (_, item) => {
+      if (item.source.endsWith('-error')) return { id: 'error' };
+      if (failDelivery) return { id: 'pending', forwardError: 'offline' };
+      assert.equal(item.kind, 'ask');
+      delivered.push(item.dedupeKey);
+      return { id: item.dedupeKey };
+    },
+    resume: async row => {
+      assert.match(row.nextClaude, /社外送信は行わない/);
+      return { state: 'progressed' };
+    },
   };
-  let patched = {};
-  const patch = (key, changes) => { patched = { ...patched, ...changes }; if (changes.check) writeLedger(file, readLedger(file).map(r => r.sessionId === sessionId ? { ...r, check: changes.check } : r)); return true; };
-
-  const state = await checkPromise({
-    check: checkCmd,
-    sessionId,
-    lastCheckedAt: new Date().toISOString(),
-    status: 'open',
-  }, { home, now, patch, io: { executeCheck: () => result }, suppressNotices: true });
-
-  assert.equal(state, 'unmet', 'should continue monitoring as unmet');
-  // Check that --since was updated to latestAt
-  const rows = readLedger(file);
-  const row = rows.find(r => r.sessionId === sessionId);
-  assert.ok(row, 'row should exist');
-  assert.ok(row.check.includes('--since 2026-11-12T05:00:00Z'), `check should have updated --since: ${row.check}`);
-  // Check that the row is NOT marked as done
-  assert.equal(row.status, 'open', 'row must remain open for continuous monitoring');
-  assert.notEqual(row.status, 'done', 'row must not be marked done');
+  const poll = async () => {
+    const result = await run({ home, now: tick, io });
+    assert.deepEqual(result.errors, []);
+    assert.equal(result.done, 0);
+    const row = readLedger(file)[0];
+    assert.equal(row.status, 'open');
+    assert.equal(row.lastCheckedAt, new Date(tick).toISOString());
+    tick += 30 * 60000;
+    return externalSpec(row).since;
+  };
+  assert.equal(await poll(), baseline);
+  failDelivery = false;
+  assert.equal(await poll(), m1.at);
+  messages = [m1, m2];
+  assert.equal(await poll(), m2.at);
+  messages = [m2];
+  assert.equal(await poll(), m2.at);
+  assert.deepEqual(cursors, [baseline, baseline, m1.at, m2.at]);
+  assert.equal(delivered.length, 2);
+  assert.equal(new Set(delivered).size, 2);
+  assert.equal(readEvents(home).length, 2);
 });

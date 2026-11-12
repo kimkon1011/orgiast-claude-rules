@@ -1,6 +1,10 @@
 {
   "version": 1,
   "entries": [
+    {"path":"tools/lib/external-monitor-state.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"外部返信待ちの宛先照合・重複排除・永続再開キュー"},
+    {"path":"tools/lib/send-context.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"Stop hookが同一セッションの送信成功記録を照合する依存"},
+    {"path":"tools/auto-progress-external-monitor.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"LINE/Gmail新着の継続監視と元セッション再開"},
+    {"path":"tools/auto-progress-external-check.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"外部チャネルの読み取り専用新着取得"},
     {"path": "tools/lib/fleet-poll-budget.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "Bounded mail transport and rotating asynchronous receipt scans"},
     {"path": "tools/lib/fleet-poll-reaper.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "Bounded recovery of stale scheduled poll processes before poll and watchdog work"},
     {"path": "tools/lib/fleet-poll-reaper.ps1", "scope": "fleet", "step": "task:fleet-mail", "reason": "Windows process identity checks and exact-command stale poll recovery helper"},

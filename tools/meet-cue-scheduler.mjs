@@ -7,12 +7,14 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { parseArgs } from 'node:util';
 
 import { isEntry } from './is-entry.mjs';
+import { askJev } from './jev.mjs';
 import { getDriveToken, DRIVE_SCOPE } from './lib/drive-auth.mjs';
 import { setupCueDocument } from './lib/meet-cue-doc.mjs';
 import { generateCardsFromBrief } from './meet-cue.mjs';
@@ -110,11 +112,11 @@ export function extractMeetInfo(event) {
   return { meetUrl, conferenceCode };
 }
 
-export function isTargetEvent(event, { staffAddresses = [], ownerEmail = '', now = new Date(), hours = 24 } = {}) {
-  if (!event || event.status === 'cancelled') return false;
+export function checkMechanicalConditions(event, { staffAddresses = [], ownerEmail = '', now = new Date(), hours = 24 } = {}) {
+  if (!event || event.status === 'cancelled') return { ok: false, reason: 'cancelled' };
 
   const meetInfo = extractMeetInfo(event);
-  if (!meetInfo) return false;
+  if (!meetInfo) return { ok: false, reason: 'no_meet' };
 
   // Time window: start within past 10 minutes to next N hours
   const startTime = new Date(event.start?.dateTime || event.start?.date || 0);
@@ -123,28 +125,173 @@ export function isTargetEvent(event, { staffAddresses = [], ownerEmail = '', now
   const minTime = nowMs - 10 * 60 * 1000;
   const maxTime = nowMs + hours * 60 * 60 * 1000;
 
-  if (startMs < minTime || startMs > maxTime) return false;
+  if (startMs < minTime || startMs > maxTime) return { ok: false, reason: 'outside_window' };
 
   // Title / description exclude flags
   const titleDesc = `${event.summary || ''} ${event.description || ''}`;
-  if (/カンペ不要|no[\-_]?kanpe/i.test(titleDesc)) return false;
+  if (/カンペ不要|no[\-_]?kanpe/i.test(titleDesc)) return { ok: false, reason: 'opt_out' };
 
   // Private / confidential
   const visibility = event.visibility || 'default';
-  if (visibility === 'private' || visibility === 'confidential') return false;
+  if (visibility === 'private' || visibility === 'confidential') return { ok: false, reason: 'private' };
 
   const attendees = event.attendees || [];
   const externalAttendees = attendees.filter(a => !a.resource && a.email && isExternalEmail(a.email, staffAddresses));
-  if (externalAttendees.length === 0) return false;
+  if (externalAttendees.length === 0) return { ok: false, reason: 'no_external' };
 
   // Orgiast attendee check
   let hasOrgiast = attendees.some(a => a.email && a.email.toLowerCase().endsWith('@orgiast.jp'));
   if (!hasOrgiast && event.organizer?.email?.toLowerCase().endsWith('@orgiast.jp')) hasOrgiast = true;
   if (!hasOrgiast && ownerEmail && ownerEmail.toLowerCase().endsWith('@orgiast.jp')) hasOrgiast = true;
 
-  if (!hasOrgiast) return false;
+  if (!hasOrgiast) return { ok: false, reason: 'no_orgiast' };
 
-  return true;
+  return { ok: true, reason: null };
+}
+
+export function isTargetEvent(event, options = {}) {
+  return checkMechanicalConditions(event, options).ok;
+}
+
+export function buildClassificationJevState(event, staffAddresses = []) {
+  const attendees = event.attendees || [];
+  const externalAttendees = attendees.filter(a => !a.resource && a.email && isExternalEmail(a.email, staffAddresses));
+
+  const externalDomains = Array.from(new Set(
+    externalAttendees.map(a => a.email.split('@')[1]?.toLowerCase()).filter(Boolean)
+  ));
+
+  const internalAttendees = attendees.filter(a => a.email && !isExternalEmail(a.email, staffAddresses));
+  const internalCount = internalAttendees.length;
+
+  const organizerEmail = event.organizer?.email || '';
+  const organizerIsInternal = !isExternalEmail(organizerEmail, staffAddresses);
+
+  const cleanDescription = (event.description || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 600);
+
+  return {
+    title: event.summary || '',
+    description: cleanDescription,
+    externalDomains,
+    internalCount,
+    organizerIsInternal,
+  };
+}
+
+export function buildClassificationJevQuestions() {
+  return {
+    kind: {
+      type: 'choice',
+      instructions: 'この予定が顧客・取引先との商談・打合せか分類してください。',
+      criteria: {
+        customer_meeting: 'お客様・見込み客・取引先・協業先・仕入先との商談や打合せ。営業・提案・ヒアリング・見積・進行確認を含む',
+        internal: '社内会議・社員同士・個人Gmailの社員',
+        community: '勉強会・セミナー・コミュニティ・瞑想会・交流会',
+        personal: '私用・面接の受け手でない個人予定など',
+        other: 'その他',
+      },
+    },
+  };
+}
+
+export function isOptInEvent(event) {
+  const title = event.summary || '';
+  const titleDesc = `${title} ${event.description || ''}`;
+  return /カンペ/i.test(title) && !/カンペ不要|no[\-_]?kanpe/i.test(titleDesc);
+}
+
+export function createEventContentHash(event) {
+  const meetInfo = extractMeetInfo(event);
+  const conferenceCode = meetInfo?.conferenceCode || '';
+  const startTime = event.start?.dateTime || event.start?.date || '';
+  const title = event.summary || '';
+  const description = event.description || '';
+  const str = `${conferenceCode}|${startTime}|${title}|${description}`;
+  return crypto.createHash('sha256').update(str).digest('hex').slice(0, 16);
+}
+
+export async function classifyEvent(event, { itemState = {}, staffAddresses = [], home = homeDir(), askJevImpl = askJev } = {}) {
+  // 1. Explicit opt-in check
+  if (isOptInEvent(event)) {
+    return {
+      classification: { kind: 'customer_meeting', confidence: 1.0, source: 'optin' },
+      isTarget: true,
+      reason: null,
+    };
+  }
+
+  // 2. Hash check for state cache
+  const contentHash = createEventContentHash(event);
+  if (itemState.classificationCache && itemState.classificationCache.hash === contentHash) {
+    const { kind, confidence } = itemState.classificationCache;
+    const isTarget = kind === 'customer_meeting' && confidence >= 0.7;
+    const reason = isTarget ? null : (kind === 'customer_meeting' ? 'jev:low_confidence' : `jev:${kind}`);
+    return {
+      classification: { kind, confidence, source: 'cache' },
+      isTarget,
+      reason,
+    };
+  }
+
+  // 3. Retry count check (max 3 retries)
+  const retries = itemState.classifyRetry || 0;
+  if (retries >= 3) {
+    return {
+      classification: null,
+      isTarget: false,
+      reason: 'jev:failed',
+    };
+  }
+
+  // 4. Call Jev
+  const jevState = buildClassificationJevState(event, staffAddresses);
+  const questions = buildClassificationJevQuestions();
+
+  try {
+    const result = await askJevImpl({
+      state: jevState,
+      questions,
+      label: 'meet-cue-scheduler-classify',
+      home,
+    });
+
+    if (result?.ok && result.answers?.kind?.choice) {
+      const choiceAns = result.answers.kind;
+      const kind = choiceAns.choice;
+      const confidence = typeof choiceAns.confidence === 'number' ? choiceAns.confidence : 1.0;
+
+      // Update state cache
+      itemState.classificationCache = {
+        hash: contentHash,
+        kind,
+        confidence,
+        at: new Date().toISOString(),
+      };
+      itemState.classifyRetry = 0;
+
+      const isTarget = kind === 'customer_meeting' && confidence >= 0.7;
+      const reason = isTarget ? null : (kind === 'customer_meeting' ? 'jev:low_confidence' : `jev:${kind}`);
+      return {
+        classification: { kind, confidence, source: 'jev' },
+        isTarget,
+        reason,
+      };
+    }
+  } catch {
+    /* ignore and record retry */
+  }
+
+  // Jev failed or returned invalid response
+  itemState.classifyRetry = retries + 1;
+  return {
+    classification: null,
+    isTarget: false,
+    reason: 'jev:failed',
+  };
 }
 
 export function deduplicateEvents(events) {
@@ -384,10 +531,11 @@ export async function runScheduler(options = {}) {
   const getToken = options.getToken || getDriveToken;
   const fetchImpl = options.fetchImpl || globalThis.fetch;
   const sheetReader = options.readSheet || readSheet;
+  const askJevImpl = options.askJevImpl || askJev;
 
   const config = readConfig(home);
   const staffAddresses = loadStaffAddresses(home);
-  const state = loadSchedulerState(home);
+  const state = options.state || loadSchedulerState(home);
 
   // Seat hostname check
   const currentHostname = os.hostname();
@@ -411,16 +559,21 @@ export async function runScheduler(options = {}) {
   console.log(`[meet-cue-scheduler] 巡回対象カレンダー (${targetCalendars.length}件):`, targetCalendars.join(', '));
 
   // Collect events across target calendars
-  const rawTargetEvents = [];
   const errors = [];
+  const seenEventKeys = new Set();
+  const uniqueCalendarEvents = [];
 
   for (const calId of targetCalendars) {
     try {
       const token = await getToken({ impersonate: calId, scope: CALENDAR_SCOPE });
       const events = await listCalendarEvents({ calendarId: calId, token, now, hours, fetchImpl });
       for (const ev of events) {
-        if (isTargetEvent(ev, { staffAddresses, ownerEmail: calId, now, hours })) {
-          rawTargetEvents.push({ event: ev, calendarId: calId });
+        const meetInfo = extractMeetInfo(ev);
+        const startStr = ev.start?.dateTime || ev.start?.date || '';
+        const key = meetInfo ? `${meetInfo.conferenceCode}_${startStr}` : `${ev.id}_${startStr}`;
+        if (!seenEventKeys.has(key)) {
+          seenEventKeys.add(key);
+          uniqueCalendarEvents.push({ event: ev, calendarId: calId });
         }
       }
     } catch (err) {
@@ -429,8 +582,55 @@ export async function runScheduler(options = {}) {
     }
   }
 
-  const targetEvents = deduplicateEvents(rawTargetEvents);
-  console.log(`[meet-cue-scheduler] 対象 Meet 予定: ${targetEvents.length}件`);
+  const targetEvents = [];
+  const skippedEvents = [];
+
+  for (const { event, calendarId } of uniqueCalendarEvents) {
+    const startIso = new Date(event.start?.dateTime || event.start?.date || 0).toISOString();
+
+    // 1. Mechanical check
+    const mech = checkMechanicalConditions(event, { staffAddresses, ownerEmail: calendarId, now, hours });
+    if (!mech.ok) {
+      if (mech.reason !== 'outside_window' && mech.reason !== 'cancelled') {
+        skippedEvents.push({
+          title: event.summary || '',
+          startTime: startIso,
+          reason: mech.reason,
+        });
+      }
+      continue;
+    }
+
+    const meetInfo = extractMeetInfo(event);
+    const eventKey = `${meetInfo.conferenceCode}_${startIso}`;
+    const itemState = state[eventKey] || {};
+
+    // 2. Jev / Opt-in / Cache classification
+    const classRes = await classifyEvent(event, {
+      itemState,
+      staffAddresses,
+      home,
+      askJevImpl,
+    });
+
+    state[eventKey] = itemState;
+
+    if (classRes.isTarget) {
+      targetEvents.push({
+        event,
+        calendarId,
+        classification: classRes.classification,
+      });
+    } else {
+      skippedEvents.push({
+        title: event.summary || '',
+        startTime: startIso,
+        reason: classRes.reason,
+      });
+    }
+  }
+
+  console.log(`[meet-cue-scheduler] 対象 Meet 予定: ${targetEvents.length}件 (スキップ: ${skippedEvents.length}件)`);
 
   // Load inquiry sheet data once if available
   let sheetValues = [];
@@ -442,7 +642,7 @@ export async function runScheduler(options = {}) {
 
   const plannedActions = [];
 
-  for (const { event, calendarId } of targetEvents) {
+  for (const { event, calendarId, classification } of targetEvents) {
     const meetInfo = extractMeetInfo(event);
     if (!meetInfo) continue;
 
@@ -606,6 +806,7 @@ export async function runScheduler(options = {}) {
       companionEventId: companionEventId || null,
       inJoinWindow,
       actionStatus,
+      classification,
     });
   }
 
@@ -620,6 +821,7 @@ export async function runScheduler(options = {}) {
       targetCalendarsCount: targetCalendars.length,
       targetEventsCount: targetEvents.length,
       actions: plannedActions,
+      skipped: skippedEvents,
       errors,
     };
     fs.appendFileSync(path.join(logDir, 'meet-cue-scheduler.jsonl'), JSON.stringify(logRecord) + '\n', 'utf8');
@@ -632,6 +834,7 @@ export async function runScheduler(options = {}) {
     targetCalendars,
     targetEventsCount: targetEvents.length,
     actions: plannedActions,
+    skipped: skippedEvents,
     errors,
   };
 }

@@ -7,6 +7,11 @@ import { fileURLToPath } from 'node:url';
 
 import {
   isTargetEvent,
+  checkMechanicalConditions,
+  buildClassificationJevState,
+  buildClassificationJevQuestions,
+  isOptInEvent,
+  classifyEvent,
   deduplicateEvents,
   isExternalEmail,
   extractMeetInfo,
@@ -257,6 +262,215 @@ test('runScheduler: seatHostname 不一致で何もせずスキップ', async ()
     assert.equal(res.skipped, 'seat_hostname_mismatch');
   } finally {
     fs.writeFileSync(configPath, originalConfig, 'utf8');
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+function createMockEvent(overrides = {}) {
+  return {
+    id: 'ev123',
+    status: 'confirmed',
+    summary: '〇〇社商談',
+    description: '商談の件',
+    hangoutLink: 'https://meet.google.com/abc-defg-hij',
+    start: { dateTime: '2026-11-12T10:30:00.000Z' },
+    end: { dateTime: '2026-11-12T11:30:00.000Z' },
+    attendees: [
+      { email: 'tanaka@orgiast.jp' },
+      { email: 'client@example.com' },
+    ],
+    ...overrides,
+  };
+}
+
+function createMockSchedulerOptions(events, askJevImpl, tmpHome) {
+  const eventList = Array.isArray(events) ? events : [events];
+  return {
+    home: tmpHome,
+    now: new Date('2026-11-12T10:00:00.000Z'),
+    dryRun: true,
+    getToken: async () => 'fake-token',
+    fetchImpl: async (url) => {
+      if (url.includes('/events?')) {
+        return {
+          ok: true,
+          json: async () => ({ items: eventList }),
+        };
+      }
+      return { ok: true, json: async () => ({}) };
+    },
+    readSheet: async () => [],
+    askJevImpl,
+  };
+}
+
+test('buildClassificationJevState & buildClassificationJevQuestions & isOptInEvent', () => {
+  const ev = createMockEvent({
+    summary: '〇〇社 AI導入商談',
+    description: '<p>詳細な商談内容</p>',
+    attendees: [
+      { email: 'tanaka@orgiast.jp' },
+      { email: 'client1@client.co.jp' },
+      { email: 'client2@client.co.jp' },
+    ],
+  });
+
+  const state = buildClassificationJevState(ev, []);
+  assert.equal(state.title, '〇〇社 AI導入商談');
+  assert.equal(state.description, '詳細な商談内容');
+  assert.deepEqual(state.externalDomains, ['client.co.jp']);
+  assert.equal(state.internalCount, 1);
+  assert.equal(state.organizerIsInternal, true);
+
+  const questions = buildClassificationJevQuestions();
+  assert.ok(questions.kind?.criteria?.customer_meeting);
+
+  assert.equal(isOptInEvent({ summary: 'カンペ要 打合せ' }), true);
+  assert.equal(isOptInEvent({ summary: 'カンペ不要 打合せ' }), false);
+});
+
+test('runScheduler Jev: community / internal は対象外', async () => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-jev-test-'));
+  try {
+    const communityEvent = createMockEvent({ summary: '🧘経営者のための瞑想会' });
+    const internalEvent = createMockEvent({ id: 'ev456', summary: '倉庫リーダーMTG', hangoutLink: 'https://meet.google.com/xyz-uvwx-rst' });
+
+    let jevCallCount = 0;
+    const askJevImpl = async ({ state }) => {
+      jevCallCount++;
+      if (state.title.includes('瞑想会')) {
+        return { ok: true, answers: { kind: { type: 'choice', choice: 'community', confidence: 0.95 } } };
+      }
+      return { ok: true, answers: { kind: { type: 'choice', choice: 'internal', confidence: 0.9 } } };
+    };
+
+    const res = await runScheduler(createMockSchedulerOptions([communityEvent, internalEvent], askJevImpl, tmpHome));
+    assert.equal(res.ok, true);
+    assert.equal(res.actions.length, 0, '商談ではないため対象アクション0件');
+    assert.equal(res.skipped.length, 2);
+    assert.equal(res.skipped[0].reason, 'jev:community');
+    assert.equal(res.skipped[1].reason, 'jev:internal');
+    assert.equal(jevCallCount, 2);
+  } finally {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test('runScheduler Jev: customer_meeting 確信度 0.9 は対象', async () => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-jev-test-'));
+  try {
+    const validEvent = createMockEvent({ summary: 'M:鹿沼ケーブルテレビ小川直久様' });
+
+    const askJevImpl = async () => ({
+      ok: true,
+      answers: { kind: { type: 'choice', choice: 'customer_meeting', confidence: 0.9 } },
+    });
+
+    const res = await runScheduler(createMockSchedulerOptions(validEvent, askJevImpl, tmpHome));
+    assert.equal(res.ok, true);
+    assert.equal(res.actions.length, 1);
+    assert.deepEqual(res.actions[0].classification, {
+      kind: 'customer_meeting',
+      confidence: 0.9,
+      source: 'jev',
+    });
+  } finally {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test('runScheduler Jev: customer_meeting 確信度 0.5 (0.7未満) は対象外', async () => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-jev-test-'));
+  try {
+    const validEvent = createMockEvent({ summary: '曖昧な予定' });
+
+    const askJevImpl = async () => ({
+      ok: true,
+      answers: { kind: { type: 'choice', choice: 'customer_meeting', confidence: 0.5 } },
+    });
+
+    const res = await runScheduler(createMockSchedulerOptions(validEvent, askJevImpl, tmpHome));
+    assert.equal(res.ok, true);
+    assert.equal(res.actions.length, 0);
+    assert.equal(res.skipped.length, 1);
+    assert.equal(res.skipped[0].reason, 'jev:low_confidence');
+  } finally {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test('runScheduler Jev: Jev 失敗・タイムアウトは対象外で retry 記録', async () => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-jev-test-'));
+  try {
+    const validEvent = createMockEvent({ summary: '澤山さん×オージャスト' });
+
+    const askJevImpl = async () => ({ ok: false, reason: 'timeout' });
+
+    const res = await runScheduler(createMockSchedulerOptions(validEvent, askJevImpl, tmpHome));
+    assert.equal(res.ok, true);
+    assert.equal(res.actions.length, 0);
+    assert.equal(res.skipped.length, 1);
+    assert.equal(res.skipped[0].reason, 'jev:failed');
+  } finally {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test('runScheduler Jev: キャッシュ利用で2回目は Jev を呼ばない', async () => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-jev-test-'));
+  try {
+    const validEvent = createMockEvent({ summary: '鈴木さんと打合せ' });
+    let jevCalls = 0;
+
+    const askJevImpl1 = async () => {
+      jevCalls++;
+      return { ok: true, answers: { kind: { type: 'choice', choice: 'customer_meeting', confidence: 0.95 } } };
+    };
+
+    const state = {};
+    const opts1 = createMockSchedulerOptions(validEvent, askJevImpl1, tmpHome);
+    opts1.state = state;
+    const res1 = await runScheduler(opts1);
+    assert.equal(res1.actions.length, 1);
+    assert.equal(res1.actions[0].classification.source, 'jev');
+    assert.equal(jevCalls, 1);
+
+    const askJevImpl2 = async () => {
+      throw new Error('Jev should not be called!');
+    };
+
+    const opts2 = createMockSchedulerOptions(validEvent, askJevImpl2, tmpHome);
+    opts2.state = state;
+    const res2 = await runScheduler(opts2);
+    assert.equal(res2.actions.length, 1);
+    assert.equal(res2.actions[0].classification.source, 'cache');
+    assert.equal(jevCalls, 1, '2回目の実行で Jev は呼ばれないこと');
+  } finally {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test('runScheduler Jev: 題名「カンペ」は optin で Jev を呼ばずに対象化', async () => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-jev-test-'));
+  try {
+    const optInEvent = createMockEvent({ summary: 'カンペ要 社外プロジェクト進捗' });
+
+    let jevCalled = false;
+    const askJevImpl = async () => {
+      jevCalled = true;
+      return { ok: true, answers: { kind: { type: 'choice', choice: 'internal', confidence: 0.9 } } };
+    };
+
+    const res = await runScheduler(createMockSchedulerOptions(optInEvent, askJevImpl, tmpHome));
+    assert.equal(res.ok, true);
+    assert.equal(res.actions.length, 1);
+    assert.deepEqual(res.actions[0].classification, {
+      kind: 'customer_meeting',
+      confidence: 1.0,
+      source: 'optin',
+    });
+    assert.equal(jevCalled, false, 'オプトイン時は Jev を呼ばないこと');
+  } finally {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
 });

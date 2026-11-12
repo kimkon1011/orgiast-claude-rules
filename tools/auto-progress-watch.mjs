@@ -1144,6 +1144,23 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     }
     summary.stalled += 1;
     patch(rowKey(row), { ...((row.resumeCount ?? 0) >= MAX_RESUMES || verdict.source === 'resume-failed' ? { status: 'stalled' } : {}), verdict: 'stalled', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason });
+    // 自動再開の連続失敗を kim-inbox に 🔴 で通知する。握りつぶさない（2026-11-12 実害: e50bea8a が7回連続 timeout で沈黙）。
+    if (!notificationsStopped && !dryRun && !unattended && (verdict.source === 'resume-exhausted' || (verdict.source === 'resume-failed' && failedResumeCount(row) >= 3))) {
+      try {
+        const owner = ownerOf(row);
+        const report = `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: owner, home })}\n🔴 自動再開が連続失敗しています\n約束: ${row.promise || row.label}\n失敗回数: ${failedResumeCount(row)}回（上限 ${MAX_RESUMES}回）\n最終結果: ${row.resumeOutcome}\n再開元: ${row.sessionId}\n次の手: kim が状況を確認し、手動でセッションを再開するか、check コマンドに切り替える`;
+        const dedupeKey = `auto-progress-resume-failed:${row.sessionId || rowKey(row)}`;
+        await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', priority: 'high', source: 'auto-progress-resume-failed', text: report, dedupeKey, replaceExisting: true });
+      } catch (error) { summary.errors.push(`resume-failed-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
+    }
+    // check-overdue の再開失敗も同じ通知対象（check-loop 内で処理されるものを補完）
+    if (!notificationsStopped && !dryRun && !unattended && verdict.source === 'resume-exhausted' && !row.check && !reservation(row)) {
+      try {
+        const owner = ownerOf(row);
+        const report = `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: owner, home })}\n🔴 自動再開が上限に達しました\n約束: ${row.promise || row.label}\n試行回数: ${row.resumeCount ?? 0}回（上限 ${MAX_RESUMES}回）\n最終結果: ${row.resumeOutcome}\n再開元: ${row.sessionId}\nこの自動進行はこれ以上再開しません。`;
+        await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', priority: 'high', source: 'auto-progress-resume-failed', text: report, dedupeKey: `auto-progress-resume-exhausted:${row.sessionId || rowKey(row)}`, replaceExisting: true });
+      } catch (error) { summary.errors.push(`resume-exhausted-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
+    }
     let current = { ...row, ...((row.resumeCount ?? 0) >= MAX_RESUMES || verdict.source === 'resume-failed' ? { status: 'stalled' } : {}), verdict: verdict.verdict, reason: verdict.reason };
     const resumeEligible = !unattended && !dryRun && summary.resumed < MAX_RESUMES_PER_RUN && (answered || (row.resumeCount ?? 0) < MAX_RESUMES) && now - (Date.parse(row.resumedAt || 0) || 0) >= RESUME_INTERVAL_MS
       && row.cwd && (io.cwdExists ?? fs.existsSync)(row.cwd);

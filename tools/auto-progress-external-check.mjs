@@ -58,16 +58,22 @@ export async function fetchLineMessages(secrets, threadId, since, { fetchImpl = 
   }));
 }
 
-export async function check({ channel, threadId, since, home = os.homedir(), fetchImpl = gwsFetch }) {
+export async function check({ channel, threadId, since, home = os.homedir(), secrets: givenSecrets, fetchImpl = gwsFetch }) {
   if (channel === 'line') {
-    const secrets = await loadSecrets({ home });
+    const secrets = givenSecrets || await loadSecrets({ home }).catch(() => ({}));
     if (!secrets.SUPABASE_URL || !secrets.SUPABASE_SERVICE_ROLE_KEY) {
       console.error('SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY が設定されていません');
       process.exitCode = 3;
       return;
     }
     const id = String(threadId).includes('@') ? await resolveGroup(secrets, threadId) : threadId;
-    const messages = await fetchLineMessages(secrets, id, since, { fetchImpl });
+    let messages;
+    try { messages = await fetchLineMessages(secrets, id, since, { fetchImpl }); }
+    catch (error) {
+      console.error(`LINE新着照会失敗: ${error.message}`);
+      process.exitCode = 3;
+      return;
+    }
     if (messages.length === 0) {
       console.log(`外部チャネル(line) に新着なし（${since} 以降）`);
       process.exitCode = 1;

@@ -44,7 +44,7 @@ export async function main() {
   fs.mkdirSync(homeDir, { recursive: true });
 
   // 全チャットを取得し LINE のみフィルタ
-  const chatsResult = await listChats({ limit: 500 });
+  const chatsResult = await listChats({ limit: 200 });
   const chats = (chatsResult.items || []).filter(c => c.accountID === LINE_ACCOUNT_ID);
   console.log(`LINE チャット数: ${chats.length}`);
 

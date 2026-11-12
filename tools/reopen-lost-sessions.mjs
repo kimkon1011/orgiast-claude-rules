@@ -504,8 +504,33 @@ function reopenLoopCounts(base, nowFn = Date.now) {
   }
   return counts;
 }
+// 長期ループガード: 直近 6 時間に verified/unverified を問わず reopened に3回以上載ったセッションを除外する。
+// 6時間で自然に解除されるため、正当な再接続を恒久的に遮断しない（2026-11-09 の空振り遮断問題を踏まえない）。
+function reopenRepeatCounts(base, nowFn = Date.now) {
+  const logFile = path.join(base, 'reopen-lost-sessions.log');
+  const counts = {};
+  try {
+    const raw = fs.readFileSync(logFile, 'utf8');
+    const nowTime = typeof nowFn === 'function' ? nowFn() : nowFn;
+    const cutoff = nowTime - 6 * 3600 * 1000;
+    for (const line of raw.split('\n').filter(Boolean)) {
+      try {
+        const entry = JSON.parse(line);
+        if (!entry.at || !Array.isArray(entry.reopened)) continue;
+        if (Date.parse(entry.at) < cutoff) continue;
+        for (const r of entry.reopened) {
+          const id = r?.id || r;
+          if (id) counts[id] = (counts[id] || 0) + 1;
+        }
+      } catch {}
+    }
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
+  return counts;
+}
 export function parseOptions(args, spawn = spawnSync) {
-  const options = { dryRun: false, max: 30, gapSec: 10, watch: false };
+  const options = { dryRun: false, max: 3, gapSec: 10, watch: false };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--dry-run') { options.dryRun = true; continue; }
@@ -582,12 +607,54 @@ export function resolveClaudeCli({ env = process.env, exists = fs.existsSync, re
 
   throw new Error('claude CLI not found');
 }
+// claude.exe プロセス数を tasklist で取得する。失敗時は fail-open（count=0, error に理由）。
+export function countClaudeProcesses({ spawn = spawnSync } = {}) {
+  try {
+    const res = spawn('tasklist', ['/FI', 'IMAGENAME eq claude.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+    if (res.error || res.status !== 0) {
+      return { count: 0, error: `tasklist failed: ${res.error?.message ?? res.status}` };
+    }
+    const lines = String(res.stdout ?? '').trim().split('\n').filter(Boolean);
+    return { count: lines.length, error: null };
+  } catch (e) {
+    return { count: 0, error: `tasklist error: ${e.message}` };
+  }
+}
+// 負荷ガード: claude.exe 数またはシステム CPU 使用率が閾値を超えていたらブロックする。
+// 閾値は環境変数 REOPEN_MAX_CLAUDE（既定10）・REOPEN_MAX_CPU（既定85）で上書き可。
+// tasklist 失敗時は fail-open（ブロックしない）。
+export async function checkLoadGuard({ spawn = spawnSync, cpusImpl, wait = sleep } = {}) {
+  const maxClaude = parseInt(process.env.REOPEN_MAX_CLAUDE || '10', 10);
+  const maxCpu = parseInt(process.env.REOPEN_MAX_CPU || '85', 10);
 
-export async function reopenLost({ since, until, dryRun = false, max = 30, gapSec = 10,
+  const { count: claudeCount, error: tasklistError } = countClaudeProcesses({ spawn });
+  if (tasklistError) {
+    return { ok: true, claudeCount: 0, cpuPct: null, reason: null, error: tasklistError };
+  }
+
+  if (claudeCount >= maxClaude) {
+    return { ok: false, claudeCount, cpuPct: null, reason: `claude.exe count ${claudeCount} >= ${maxClaude}`, error: null };
+  }
+
+  let cpuPct = null;
+  try {
+    cpuPct = await measureCpuAsync({ cpusImpl, wait });
+  } catch (e) {
+    return { ok: true, claudeCount, cpuPct: null, reason: null, error: `cpu measure error: ${e.message}` };
+  }
+
+  if (cpuPct !== null && cpuPct >= maxCpu) {
+    return { ok: false, claudeCount, cpuPct, reason: `CPU ${cpuPct}% >= ${maxCpu}%`, error: null };
+  }
+
+  return { ok: true, claudeCount, cpuPct, reason: null, error: null };
+}
+
+export async function reopenLost({ since, until, dryRun = false, max = 3, gapSec = 10,
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
   now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs, stateBased = false,
   checkCpu = true, cpusImpl, vscodeStartedAt } = {}) {
-  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closedInRunningVscode: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
+  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, reopenRepeat: 0, loadGuard: 0, worktree: 0, standby: 0, closedInRunningVscode: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
   // Dry run is strictly read-only: no lock or log mutation on the user's PC.
   const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'));
   if (!release) return { ...result, error: 'locked' };
@@ -648,6 +715,7 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
     result.indexSkippedOld = locals.skippedOld;
     result.indexMs = locals.indexMs;
     const reopenCounts = reopenLoopCounts(base, now);
+    const repeatCounts = reopenRepeatCounts(base, now);
     const deadline = now() + (stateBased ? 180000 : 60000);
     const get = async url => {
       if (now() >= deadline) throw Error('API time limit');

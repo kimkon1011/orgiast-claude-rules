@@ -421,8 +421,14 @@ test('X-Orgiast-Forward なしは従来どおり整合性チェックを呼ぶ',
 });
 test('送信は指定アカウントの下書きを取得後 compose で送信し JSON を返す', async () => {
   const requests = [];
+  const scopes = [];
   const result = await cli(['--send', 'draft-123', '--user', 'shared@orgiast.jp', '--json'], {
-    getToken: async options => { assert.deepEqual(options, { user: 'shared@orgiast.jp', scope: GMAIL_COMPOSE_SCOPE }); return 't'; },
+    skipContextCheck: true,
+    getToken: async options => {
+      scopes.push(options.scope);
+      assert.equal(options.user, 'shared@orgiast.jp');
+      return 't';
+    },
     fetchImpl: async (url, options) => {
       requests.push(url);
       if (requests.length === 1) { assert.match(url, /drafts\/draft-123\?format=full$/); return response(draftHeaders([])); }
@@ -434,6 +440,9 @@ test('送信は指定アカウントの下書きを取得後 compose で送信�
   });
   assert.equal(result.code, 0);
   assert.equal(requests.length, 2);
+  // readonly + compose（draft取得）+ compose（draftBody/整合性チェック）
+  assert.equal(scopes[0], 'https://www.googleapis.com/auth/gmail.readonly');
+  assert.ok(scopes.slice(1).every(s => s === 'https://www.googleapis.com/auth/gmail.compose'));
   assert.deepEqual(JSON.parse(result.output[0]), { action: 'send', user: 'shared@orgiast.jp', ok: true, sentMessageId: 'sent', threadId: 'thread', to: 'Customer <customer@example.com>', subject: '確認' });
 });
 test('送信前に To/Cc/Bcc の内部宛を拒否する（表示名・大小文字・台帳アドレス）', async () => {
@@ -637,6 +646,161 @@ test('スレッド返信も内部宛は認証前に停止する', async () => {
   const result = await cli(['--to', 'staff@orgiast.jp', '--body', '本文', '--thread-id', 'thread123']);
   assert.equal(result.code, 3);
   assert.equal(result.calls + result.tokens, 0);
+});
+
+test('--send は messages.list と threads.get に readonly スコープのトークンを使い、drafts 操作に compose スコープを使う', async () => {
+  const scopes = [];
+  const requests = [];
+  const result = await cli(['--send', 'draft-123', '--json'], {
+    skipContextCheck: false,
+    getToken: async ({ scope }) => {
+      scopes.push(scope);
+      return `token-${scope}`;
+    },
+    inspectDraft: async () => ({ ok: true, findings: [] }),
+    assertContextApproved: async (opts) => {
+      await opts.getLatest();
+    },
+    fetchImpl: async (url) => {
+      requests.push(url);
+      if (url.includes('/drafts/draft-123?format=full')) {
+        return response({
+          message: {
+            payload: {
+              headers: [
+                { name: 'To', value: 'customer@example.com' },
+                { name: 'Subject', value: '確認' },
+              ],
+            },
+          },
+        });
+      }
+      if (url.includes('/messages?q=')) {
+        return response({ messages: [{ id: 'msg-1', threadId: 'thread-99' }] });
+      }
+      if (url.includes('/threads/thread-99')) {
+        return response({
+          messages: [
+            { id: 'msg-1', internalDate: '1700000000000', labelIds: ['INBOX'] },
+          ],
+        });
+      }
+      if (url.includes('/drafts/send')) {
+        return response({ id: 'sent-1', threadId: 'thread-99' });
+      }
+      return response({});
+    },
+  });
+  assert.equal(result.code, 0);
+  // getToken は readonly → compose（draft取得）→ compose（draftBody）の順
+  assert.equal(scopes[0], 'https://www.googleapis.com/auth/gmail.readonly');
+  assert.ok(scopes.slice(1).every(s => s === 'https://www.googleapis.com/auth/gmail.compose'));
+  // messages.list と threads.get は readonly トークン
+  const readUrls = requests.filter(u => u.includes('/messages?q=') || u.includes('/threads/'));
+  assert.ok(readUrls.length >= 2);
+  // drafts 操作は compose トークン
+  const composeUrls = requests.filter(u => u.includes('/drafts/'));
+  assert.ok(composeUrls.length >= 2);
+});
+
+test('--send の getLatest が threads.get 403 で httpStatus を含むエラーを投げる', async () => {
+  const result = await cli(['--send', 'draft-123', '--json'], {
+    skipContextCheck: false,
+    getToken: async () => 't',
+    inspectDraft: async () => ({ ok: true, findings: [] }),
+    assertContextApproved: async (opts) => {
+      try {
+        await opts.getLatest();
+        assert.fail('should have thrown');
+      } catch (e) {
+        assert.equal(e.httpStatus, 403);
+        assert.match(e.message, /threads.get 403/u);
+        throw e;
+      }
+    },
+    fetchImpl: async (url) => {
+      if (url.includes('/drafts/draft-123')) {
+        return response({
+          message: {
+            payload: {
+              headers: [
+                { name: 'To', value: 'customer@example.com' },
+                { name: 'Subject', value: '確認' },
+              ],
+            },
+          },
+        });
+      }
+      if (url.includes('/messages?q=')) {
+        return response({ messages: [{ id: 'msg-1', threadId: 'thread-99' }] });
+      }
+      if (url.includes('/threads/thread-99')) {
+        return new Response(JSON.stringify({ error: 'insufficient permissions' }), { status: 403 });
+      }
+      return response({});
+    },
+  });
+  assert.equal(result.code, 1);
+  const report = JSON.parse(result.output[0]);
+  assert.equal(report.ok, false);
+  assert.equal(report.detail, 'threads.get 403');
+});
+
+test('--send は compose トークンで threads.get を呼ばず、readonly トークンで呼ぶ', async () => {
+  const composeTokenCalls = [];
+  const readonlyTokenCalls = [];
+  const result = await cli(['--send', 'draft-123', '--json'], {
+    skipContextCheck: false,
+    getToken: async ({ scope }) => {
+      if (scope === 'https://www.googleapis.com/auth/gmail.compose') return 'compose-token';
+      if (scope === 'https://www.googleapis.com/auth/gmail.readonly') return 'readonly-token';
+      return 'other-token';
+    },
+    inspectDraft: async () => ({ ok: true, findings: [] }),
+    assertContextApproved: async (opts) => {
+      await opts.getLatest();
+    },
+    fetchImpl: async (url, options) => {
+      const auth = options?.headers?.Authorization;
+      if (url.includes('/drafts/draft-123?format=full')) {
+        assert.equal(auth, 'Bearer compose-token');
+        composeTokenCalls.push(url);
+        return response({
+          message: {
+            payload: {
+              headers: [
+                { name: 'To', value: 'customer@example.com' },
+                { name: 'Subject', value: '確認' },
+              ],
+            },
+          },
+        });
+      }
+      if (url.includes('/messages?q=')) {
+        assert.equal(auth, 'Bearer readonly-token');
+        readonlyTokenCalls.push(url);
+        return response({ messages: [{ id: 'msg-1', threadId: 'thread-99' }] });
+      }
+      if (url.includes('/threads/thread-99')) {
+        assert.equal(auth, 'Bearer readonly-token');
+        readonlyTokenCalls.push(url);
+        return response({
+          messages: [
+            { id: 'msg-1', internalDate: '1700000000000', labelIds: ['INBOX'] },
+          ],
+        });
+      }
+      if (url.includes('/drafts/send')) {
+        assert.equal(auth, 'Bearer compose-token');
+        composeTokenCalls.push(url);
+        return response({ id: 'sent-1', threadId: 'thread-99' });
+      }
+      return response({});
+    },
+  });
+  assert.equal(result.code, 0);
+  assert.ok(composeTokenCalls.length >= 2);
+  assert.ok(readonlyTokenCalls.length >= 2);
 });
 
 test('返信先なし・Message-ID 欠落・ヘッダ注入・取得失敗なら下書きを作らない', async () => {

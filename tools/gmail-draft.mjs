@@ -28,6 +28,7 @@ import { bodyHash, checkConsistency, statePath, mimeText, render as renderConsis
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
 
 export const GMAIL_COMPOSE_SCOPE = 'https://www.googleapis.com/auth/gmail.compose';
+export const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 export const DEFAULT_USER = 'seisaku-team@orgiast.jp';
 // 既定パスはハードコードしない（旧既定値はディレクトリ名の打ち間違いで鍵を見失っていた。2026-10-23 実測）。
 const DEFAULT_KEY = process.env.GOOGLE_SA_KEY ?? defaultDriveKeyPath();
@@ -181,7 +182,9 @@ function safeFailure(error) {
     too_large: '転送メールが25MBを超えています。',
     error: '処理に失敗しました（認証・通信・API 応答を確認してください）。',
   };
-  return { errorKind, error: messages[errorKind] };
+  const result = { errorKind, error: messages[errorKind] };
+  if (error?.httpStatus !== undefined) result.detail = `threads.get ${error.httpStatus}`;
+  return result;
 }
 
 function readKey(keyPath) {
@@ -366,6 +369,7 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
       if (['delete', 'check', 'to', 'cc', 'subject', 'body', 'body-file', 'dry-run', 'thread-id', 'in-reply-to', 'attach'].some(k => Object.hasOwn(args, k))) throw configError();
       if (!/^[A-Za-z0-9_-]+$/u.test(args.send)) throw configError();
       const getToken = deps.getToken ?? (options => mintToken({ ...options, keyPath: DEFAULT_KEY }));
+      const readonlyToken = deps.readonlyToken ?? (await getToken({ user, scope: GMAIL_READONLY_SCOPE }));
       const token = await getToken({ user, scope: GMAIL_COMPOSE_SCOPE });
       const draftResponse = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/drafts/${args.send}?format=full`, {
         headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(25000),
@@ -401,14 +405,14 @@ export async function runCli({ argv = process.argv.slice(2), deps = {} } = {}) {
         const draftHeaders = Object.fromEntries((draft?.message?.payload?.headers || []).map(h => [String(h.name).toLowerCase(), h.value]));
         const recipient = extractAddresses({ to: [draftHeaders.to], cc: [draftHeaders.cc] })[0];
         if (recipient) {
-          const search = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(`(from:${recipient} OR to:${recipient}) -in:drafts`)}&maxResults=1`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(25000) });
+          const search = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(`(from:${recipient} OR to:${recipient}) -in:drafts`)}&maxResults=1`, { headers: { Authorization: `Bearer ${readonlyToken}` }, signal: AbortSignal.timeout(25000) });
           if (search.ok) contextThreadId = (await search.json()).messages?.[0]?.threadId;
         }
         }
         if (!contextThreadId) throw Object.assign(new Error('送信前の履歴整合性チェック対象スレッドを特定できません'), { errorKind: 'send_context_required' });
         await (deps.assertContextApproved ?? assertContextApproved)({ channel: 'gmail', target: contextThreadId, text: draftText, home: deps.home, getLatest: async () => {
-        const response = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(contextThreadId)}?format=minimal`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(25000) });
-        if (!response.ok) throw new Error('Gmail 最新履歴取得失敗');
+        const response = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(contextThreadId)}?format=minimal`, { headers: { Authorization: `Bearer ${readonlyToken}` }, signal: AbortSignal.timeout(25000) });
+        if (!response.ok) throw Object.assign(new Error(`Gmail 最新履歴取得失敗: threads.get ${response.status}`), { httpStatus: response.status });
         const thread = await response.json();
         return latestOf((thread.messages || []).filter(m => !(m.labelIds || []).includes('DRAFT')).map(m => ({ id: m.id, at: new Date(Number(m.internalDate)).toISOString() })));
         }});

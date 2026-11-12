@@ -496,7 +496,7 @@ export async function attemptAutoLogin({ home = homeDir(), fetchImpl = globalThi
     return { ok: false, reason: 'profile_not_found' };
   }
 
-  const scriptPath = path.join(path.dirname(import.meta.url.replace('file://', '')), 'meet-cue.mjs');
+  const scriptPath = fileURLToPath(new URL('./meet-cue.mjs', import.meta.url));
   try {
     await execImpl(process.execPath, [
       scriptPath,
@@ -765,7 +765,7 @@ export async function runScheduler(options = {}) {
         } else {
           // Launch meet-cue.mjs start in background detached
           try {
-            const scriptPath = path.join(path.dirname(import.meta.url.replace('file://', '')), 'meet-cue.mjs');
+            const scriptPath = fileURLToPath(new URL('./meet-cue.mjs', import.meta.url));
             const args = [
               scriptPath,
               'start',

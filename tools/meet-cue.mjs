@@ -11,6 +11,11 @@ import { randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { parseArgs } from 'node:util';
+import { fileURLToPath } from 'node:url';
+
+export function getLlmAskPath(baseUrl = import.meta.url) {
+  return fileURLToPath(new URL('./llm-ask.mjs', baseUrl));
+}
 
 import { isEntry } from './is-entry.mjs';
 import { askJev, main as jevMain } from './jev.mjs';
@@ -175,7 +180,7 @@ ${brief}`;
 
   try {
     const { stdout } = await execFileAsync(process.execPath, [
-      path.join(path.dirname(import.meta.url.replace('file://', '')), 'llm-ask.mjs'),
+      getLlmAskPath(),
       '--provider', 'gemini',
       '--prompt-file', promptFile,
     ], { timeout: 15000, windowsHide: true });
@@ -230,7 +235,7 @@ ${captionsText}`;
 
   try {
     const { stdout } = await execFileAsync(process.execPath, [
-      path.join(path.dirname(import.meta.url.replace('file://', '')), 'llm-ask.mjs'),
+      getLlmAskPath(),
       '--provider', 'groq',
       '--prompt-file', promptFile,
     ], { timeout: 8000, windowsHide: true });

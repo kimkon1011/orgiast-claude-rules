@@ -25,8 +25,25 @@ import {
   generateSessionId,
   saveLatestSessionId,
   getLatestSessionId,
+  getLlmAskPath,
   main,
 } from './meet-cue.mjs';
+
+test('getLlmAskPath: Windows 形式の file URL から llm-ask.mjs の正しい絶対パスを解決できること', () => {
+  const winFileUrl = 'file:///C:/x/tools/meet-cue.mjs';
+  const resolved = getLlmAskPath(winFileUrl);
+
+  if (process.platform === 'win32') {
+    assert.equal(resolved, 'C:\\x\\tools\\llm-ask.mjs');
+  } else {
+    assert.equal(resolved, '/C:/x/tools/llm-ask.mjs');
+  }
+
+  const defaultResolved = getLlmAskPath();
+  assert.ok(defaultResolved.endsWith('llm-ask.mjs'));
+  assert.doesNotMatch(defaultResolved, /^file:\/\//);
+  assert.doesNotMatch(defaultResolved, /\\C:\\C:\\|\/C:\/C:/);
+});
 
 test('STANDARD_CARDS: データの捏造数字なし・Reブース再利用カード・言い切り60字以内', () => {
   assert.equal(STANDARD_CARDS.length, 7, '定番カードは7枚');

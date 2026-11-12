@@ -36,7 +36,7 @@ export function mergeResults(event, results) {
       if (specific?.permissionDecision === 'deny' || out?.decision === 'block') reasons.push(specific?.permissionDecisionReason || out.reason || 'Hook blocked the operation');
       if (specific?.additionalContext) contexts.push(specific.additionalContext);
       if (typeof specific?.sessionTitle === 'string' && specific.sessionTitle.trim() && ['SessionStart', 'UserPromptSubmit'].includes(event)) sessionTitle = specific.sessionTitle;
-      if (!out && result.stdout?.trim() && ['SessionStart', 'UserPromptSubmit'].includes(event)) contexts.push(result.stdout.trim());
+      if (!out && result.stdout?.trim() && ['SessionStart', 'UserPromptSubmit', 'PostToolUse'].includes(event)) contexts.push(result.stdout.trim());
       if (out?.systemMessage) messages.push(out.systemMessage);
       if (specific?.permissionDecision === 'ask') permission = 'ask';
       else if (specific?.permissionDecision === 'allow' && !permission) permission = 'allow';

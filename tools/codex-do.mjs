@@ -702,6 +702,7 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   if (geminiKey && !geminiAvailable) console.error('[codex-do] gemini-cli の CLI(gemini) が見つからないため候補から外します');
   if (deepseekKey && !qwenAvailable) console.error('[codex-do] deepseek の CLI(qwen) が見つからないため候補から外します');
   if (openrouterKey && !qwenAvailable) console.error('[codex-do] openrouter-free の CLI(qwen) が見つからないため候補から外します');
+  if (!qwenAvailable && (deepseekKey || openrouterKey)) { maybeAutoInstallQwen(homeDir, { env: process.env }); }
   const geminiBillingBlocked = isProviderBillingBlocked(homeDir, 'gemini');
   if (geminiKey && geminiBillingBlocked) console.error('[codex-do] gemini 直 API は残高不足(402)のため gemini-cli を候補から外します');
   const gemini = geminiKey && geminiAvailable && !geminiBillingBlocked && { kind: 'gemini', name: 'gemini-cli', model: process.env.CODEX_DO_GEMINI_MODEL || 'gemini-3.6-flash', apiKey: geminiKey };
@@ -802,6 +803,41 @@ function uniqueBackendsByName(backends) {
 
 export function resolveQwenBackends(homeDir, options = {}) {
   return resolveFallbackBackends(homeDir, options);
+}
+
+// ~/.claude/qwen-autoinstall.json の lastAttemptAt が24時間以内かどうかを判定する。
+// CODEX_DO_NO_AUTOINSTALL=1 なら常に false（テスト・CI 用）。
+export function shouldAutoInstallQwen(homeDir, { env = process.env, now = Date.now() } = {}) {
+  if (env.CODEX_DO_NO_AUTOINSTALL === '1') return false;
+  try {
+    const state = JSON.parse(fs.readFileSync(path.join(homeDir, '.claude', 'qwen-autoinstall.json'), 'utf8'));
+    if (state.lastAttemptAt && (now - new Date(state.lastAttemptAt).getTime()) < 86400000) return false;
+  } catch {}
+  return true;
+}
+
+// qwen CLI が無いとき、裏で npm i -g を切り離した子プロセスで起動する。
+// codex-do 自身は待たずに今の処理を続ける。24時間以内の再試行は抑制する。
+// Windows では shell 経由で起動する。
+export function maybeAutoInstallQwen(homeDir, { env = process.env, spawnImpl = spawn, now = Date.now() } = {}) {
+  if (!shouldAutoInstallQwen(homeDir, { env, now })) return;
+
+  const file = path.join(homeDir, '.claude', 'qwen-autoinstall.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  const body = JSON.stringify({ lastAttemptAt: new Date(now).toISOString() }) + '\n';
+  fs.writeFileSync(tmp, body, 'utf8');
+  try { fs.renameSync(tmp, file); } catch { fs.writeFileSync(file, body, 'utf8'); try { fs.unlinkSync(tmp); } catch {} }
+
+  const isWin = process.platform === 'win32';
+  const child = spawnImpl(
+    isWin ? 'cmd' : 'npm',
+    isWin ? ['/c', 'npm', 'i', '-g', '@qwen-code/qwen-code', '--no-fund', '--no-audit'] : ['i', '-g', '@qwen-code/qwen-code', '--no-fund', '--no-audit'],
+    { detached: true, windowsHide: true, stdio: 'ignore', shell: isWin }
+  );
+  child?.unref();
+
+  console.log('[codex-do] qwen CLI を裏で導入しています（次回の実行から deepseek レーンが使えます）');
 }
 
 // 429/413 はコード上の行番号(例: "foo.ts:429:12")と衝突するため、コロンで数字に

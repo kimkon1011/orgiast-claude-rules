@@ -68,3 +68,8 @@ node seo/ahrefs-gsc-priority.mjs --ahrefs ahrefs-errors.csv --gsc gsc-pages.csv 
 ## 進行管理
 - 本件は `next-session.md` #7 として管理
 - ブロッカー解消後に再開
+
+## X-0020 顧客質問からのSEOコンテンツギャップ分析（2026-11-12 完了）
+- [x0020-content-gap-analysis.md](./x0020-content-gap-analysis.md) — 上位3記事の分析（答える内容/悪い説明/不足例）×自社サイトギャップ比較
+- [x0020-missing-content-proposal.md](./x0020-missing-content-proposal.md) — 不足説明の構築（費用完全ガイド/選び方ガイド/Re:ブースFAQの3コンテンツ案）
+- 成果物: 2ファイル。サイト実装には公開リポジトリが必要（このPCには無し）

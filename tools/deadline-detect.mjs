@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { seatCheck } from './lib/deadline-seat.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
 import { reportHeartbeat } from './lib/heartbeat.mjs';
@@ -129,6 +130,10 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     if (opts.fixture && !dryRun) throw new Error('--fixture は --dry-run と併用してください');
     const now = new Date(opts.now || deps.now || new Date()); if (!Number.isFinite(now.getTime())) throw new Error('--now が不正です');
     valid = true;
+    if (!opts.fixture && deps.skipSeatCheck !== true) {
+      const seat = seatCheck(home);
+      if (!seat.kim) { stdout(JSON.stringify({ skip: true, reason: 'deadline jobs run only on the seat with the kim DWD key', seat })); return 0; }
+    }
     const fixture = opts.fixture ? readJson(path.join(opts.fixture, 'ledger.json'), {}) : null;
     if (opts.fixture && (!fixture || !Array.isArray(fixture.rows))) throw new Error('fixture の台帳JSONがありません、または形式が不正です');
     const config = fixture ? { ...DEFAULT_CONFIG, ...fixture.config } : deps.config || loadConfig(home);
@@ -154,9 +159,9 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   } catch (e) { stderr(`deadline-detect: ${e.message}`); return 1; }
   finally {
     if (valid && !dryRun) {
-      await (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineDetect', startedAt, finishedAt: new Date().toISOString(), ok, summary: ok ? '期限検出完了' : '期限検出失敗', cycleMinutes: 1440 }, { homeDir: home, localOnly: true });
+      await (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineDetect', startedAt, finishedAt: new Date().toISOString(), ok, summary: ok ? '期限検出完了' : '鍵なし席のためスキップ', cycleMinutes: 1440 }, { homeDir: home, localOnly: true });
       const log = path.join(home, '.claude/logs/deadline-detect.log'); fs.mkdirSync(path.dirname(log), { recursive: true });
-      try { fs.appendFileSync(log, `${new Date().toISOString()} deadline-detect ${ok ? 'ok' : 'failed'}\n`); }
+      try { fs.appendFileSync(log, `${new Date().toISOString()} deadline-detect ${ok ? 'ok' : 'skipped'}\n`); }
       catch (error) { if (error.code !== 'EBUSY') throw error; }
     }
   }

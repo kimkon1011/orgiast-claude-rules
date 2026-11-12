@@ -94,7 +94,8 @@ test('detached は非Windows分岐・可視セッション・明示許可され�
       // case-handoff is a bounded, durable-queue flush launched at SessionEnd;
       // it must survive the parent's Windows job and never opens a console.
       // sessionstart-lane-health launches a one-shot lane probe that must outlive the SessionStart hook.
-      const oneShotPurge = ['tools/purge-sessions.mjs', 'tools/plan-usage-report.mjs', 'tools/case-handoff.mjs', 'tools/sessionstart-lane-health.mjs'].includes(name) &&
+      // codex-do qwen auto-install fires a detached npm install that must survive the parent's Windows job.
+      const oneShotPurge = ['tools/purge-sessions.mjs', 'tools/plan-usage-report.mjs', 'tools/case-handoff.mjs', 'tools/sessionstart-lane-health.mjs', 'tools/codex-do.mjs'].includes(name) &&
         /detached:\s*true, windowsHide:\s*true, stdio:\s*'ignore'/.test(context);
       if (!platformGuarded && !visibleSession && !oneShotPurge) violations.push(`${name}:${line}`);
     }

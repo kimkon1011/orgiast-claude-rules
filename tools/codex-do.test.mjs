@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { skipCoolingBackends } from './fallback-backend-health.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled } = await import('./codex-do.mjs');
+const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -44,6 +44,8 @@ function run(args, options = {}) {
       // 既存テストは全て Codex 先行（sol/astra/既定モデル）を前提としているため、
       // cheap-first を既定で無効にする。cheap-first のテストだけ options.env で上書きする。
       CODEX_DO_CHEAP_FIRST: '0',
+      // 裏での npm install はテストでは起動しない（shouldAutoInstallQwen のテストは直接関数を呼ぶ）
+      CODEX_DO_NO_AUTOINSTALL: '1',
       ...options.env
     },
   });
@@ -2842,4 +2844,67 @@ test('parseCodexOutput: 閉じ括弧欠落のmalformed JSONは parse_error', () 
   const r = parseCodexOutput('{"key": "value"');
   assert.equal(r.status, 'parse_error');
   assert.ok(r.raw.includes('key'));
+});
+
+// --- Qwen 自動導入 (auto-install) ---
+
+test('shouldAutoInstallQwen は CODEX_DO_NO_AUTOINSTALL=1 なら false', () => {
+  const home = workDir();
+  assert.equal(shouldAutoInstallQwen(home, { env: { CODEX_DO_NO_AUTOINSTALL: '1' } }), false);
+});
+
+test('shouldAutoInstallQwen は lastAttemptAt が24時間以内なら false', () => {
+  const home = workDir();
+  const file = path.join(home, '.claude', 'qwen-autoinstall.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ lastAttemptAt: new Date(Date.now() - 1000).toISOString() }) + '\n', 'utf8');
+  assert.equal(shouldAutoInstallQwen(home, { now: Date.now() }), false);
+});
+
+test('shouldAutoInstallQwen は lastAttemptAt が24時間より前なら true', () => {
+  const home = workDir();
+  const file = path.join(home, '.claude', 'qwen-autoinstall.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ lastAttemptAt: new Date(Date.now() - 86400000 - 1000).toISOString() }) + '\n', 'utf8');
+  assert.equal(shouldAutoInstallQwen(home, { now: Date.now() }), true);
+});
+
+test('shouldAutoInstallQwen は qwen-autoinstall.json が無いとき true (初回)', () => {
+  const home = workDir();
+  assert.equal(shouldAutoInstallQwen(home), true);
+});
+
+test('maybeAutoInstallQwen は CODEX_DO_NO_AUTOINSTALL=1 で spawn を呼ばない', () => {
+  const home = workDir();
+  let spawnCalled = false;
+  maybeAutoInstallQwen(home, {
+    env: { CODEX_DO_NO_AUTOINSTALL: '1' },
+    spawnImpl: (...args) => { spawnCalled = true; return { unref() {} }; },
+  });
+  assert.equal(spawnCalled, false);
+});
+
+test('maybeAutoInstallQwen は lastAttemptAt が24時間以内で spawn を呼ばない', () => {
+  const home = workDir();
+  const file = path.join(home, '.claude', 'qwen-autoinstall.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ lastAttemptAt: new Date().toISOString() }) + '\n', 'utf8');
+  let spawnCalled = false;
+  maybeAutoInstallQwen(home, {
+    spawnImpl: (...args) => { spawnCalled = true; return { unref() {} }; },
+    now: Date.now(),
+  });
+  assert.equal(spawnCalled, false);
+});
+
+test('maybeAutoInstallQwen は条件を満たせば spawn を呼び lastAttemptAt を書き込む', () => {
+  const home = workDir();
+  let spawnArgs = null;
+  maybeAutoInstallQwen(home, {
+    spawnImpl: (cmd, args, opts) => { spawnArgs = { cmd, args, ...opts }; return { unref() {} }; },
+    now: Date.now(),
+  });
+  assert.ok(spawnArgs !== null, 'spawn が呼ばれなかった');
+  const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'qwen-autoinstall.json'), 'utf8'));
+  assert.ok(state.lastAttemptAt, 'lastAttemptAt が書き込まれていない');
 });

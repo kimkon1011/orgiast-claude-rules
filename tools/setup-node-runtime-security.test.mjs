@@ -280,6 +280,7 @@ test('setup integration emits exactly one runtime result, skips verify and custo
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.mkdir(path.join(root, 'lib'));
   await fs.copyFile(new URL('./setup.mjs', import.meta.url), path.join(root, 'setup.mjs'));
+  await fs.copyFile(new URL('./lib/setup-converge-lock.mjs', import.meta.url), path.join(root, 'lib', 'setup-converge-lock.mjs'));
   for (const name of ['hook-dispatch-registry.mjs', 'gate-contracts.mjs']) {
     await fs.copyFile(new URL(`./${name}`, import.meta.url), path.join(root, name));
   }

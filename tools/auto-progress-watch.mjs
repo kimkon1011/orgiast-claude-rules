@@ -19,6 +19,9 @@ import { completionActions } from './lib/auto-progress-artifact.mjs';
 import { reportCheckProgress } from './lib/auto-progress-heartbeat.mjs';
 import { checkPromise, checkProgressSummary, executeCheck, isTimeOnlyCheck, queueCheckFollowup, pendingAction } from './auto-progress-check.mjs';
 import { addItem } from './kim-inbox.mjs';
+import { externalSpec } from './lib/external-monitor-state.mjs';
+import { pollExternal, drainExternalQueue } from './auto-progress-external-monitor.mjs';
+import { main as writeProgressPush } from './progress-push.mjs';
 import { pushDailyProgress } from './lib/auto-progress-daily.mjs';
 import { appendInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
@@ -706,8 +709,9 @@ async function autoRetryFleetMail(home, fromLabel, mail, id, now, io = {}) {
 // ---- 本体 ----------------------------------------------------------------
 export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), dryRun = false, io = {} } = {}) {
   const file = ledgerFile(home);
+  if (!dryRun) writeProgressPush({ home, now });
   const clock = io.clock ?? Date.now;
-  const stopAt = clock() + 45 * 60000;
+  const stopAt = clock() + 27 * 60000;
   const summary = { checked: 0, done: 0, overdueReported: 0, noop: 0, inProgress: 0, stalled: 0, resumed: 0, resumeDeferred: 0, reported: 0, expired: 0, graced: 0, superseded: 0, discovered: 0, errors: [], phaseMs: {} };
   let notificationsStopped = false;
   // 各段階の経過時間を記録する。phaseMs は summary に含まれる。
@@ -888,12 +892,17 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   // Checks run first, before the potentially lengthy legacy resume lane.
   const stalledChecks = new Set();
   const executable = [...candidates.filter(row => row.check && !reservation(row)), ...pendingChecks];
-  executable.sort((a, b) => (Date.parse(a.lastCheckedAt) || 0) - (Date.parse(b.lastCheckedAt) || 0));
+  executable.sort((a, b) => Number(Boolean(externalSpec(b))) - Number(Boolean(externalSpec(a))) || (Date.parse(a.lastCheckedAt) || 0) - (Date.parse(b.lastCheckedAt) || 0));
   for (const row of executable) {
     if (notificationsStopped || clock() + 60000 >= stopAt) break;
     if (dryRun) continue; // --dry-run must never execute arbitrary commands.
     summary.checked++;
     try {
+      if (externalSpec(row)) {
+        const state = await pollExternal(row, { home, now, patch, io });
+        if (state === 'expired') summary.expired++; else summary.inProgress++;
+        continue;
+      }
       const overdue = now >= Date.parse(row.deadlineAt);
       let state = await checkPromise(row, { home, now, patch, io, suppressNotices: overdue });
       if (overdue && ['unmet', 'error'].includes(state)) {
@@ -943,6 +952,12 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     } catch (error) { summary.errors.push(`check: ${String(error?.message ?? error).slice(0, 120)}`); }
   }
   endPhase('check-loop');
+  if (!dryRun && !notificationsStopped && clock() + 6 * 60000 < stopAt) {
+    try {
+      const result = await drainExternalQueue({ home, now, resume: io.resume ?? resumeSession, io });
+      summary.resumed += result.resumed;
+    } catch (error) { summary.errors.push(`external-resume: ${error.message}`); }
+  }
   for (const row of doneSweep.recent) {
     if (dryRun || notificationsStopped || clock() + 60000 >= stopAt) break;
     await notifyDone(row, row.reason || '', row.doneNotifyArtifact || '');
@@ -1144,6 +1159,23 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     }
     summary.stalled += 1;
     patch(rowKey(row), { ...((row.resumeCount ?? 0) >= MAX_RESUMES || verdict.source === 'resume-failed' ? { status: 'stalled' } : {}), verdict: 'stalled', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason });
+    // 自動再開の連続失敗を kim-inbox に 🔴 で通知する。握りつぶさない（2026-11-12 実害: e50bea8a が7回連続 timeout で沈黙）。
+    if (!notificationsStopped && !dryRun && !unattended && (verdict.source === 'resume-exhausted' || (verdict.source === 'resume-failed' && failedResumeCount(row) >= 3))) {
+      try {
+        const owner = ownerOf(row);
+        const report = `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: owner, home })}\n🔴 自動再開が連続失敗しています\n約束: ${row.promise || row.label}\n失敗回数: ${failedResumeCount(row)}回（上限 ${MAX_RESUMES}回）\n最終結果: ${row.resumeOutcome}\n再開元: ${row.sessionId}\n次の手: kim が状況を確認し、手動でセッションを再開するか、check コマンドに切り替える`;
+        const dedupeKey = `auto-progress-resume-failed:${row.sessionId || rowKey(row)}`;
+        await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', priority: 'high', source: 'auto-progress-resume-failed', text: report, dedupeKey, replaceExisting: true });
+      } catch (error) { summary.errors.push(`resume-failed-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
+    }
+    // check-overdue の再開失敗も同じ通知対象（check-loop 内で処理されるものを補完）
+    if (!notificationsStopped && !dryRun && !unattended && verdict.source === 'resume-exhausted' && !row.check && !reservation(row)) {
+      try {
+        const owner = ownerOf(row);
+        const report = `${originLine(row, { label: io.label ?? resolveFleetLabel(home), localOwner: owner, home })}\n🔴 自動再開が上限に達しました\n約束: ${row.promise || row.label}\n試行回数: ${row.resumeCount ?? 0}回（上限 ${MAX_RESUMES}回）\n最終結果: ${row.resumeOutcome}\n再開元: ${row.sessionId}\nこの自動進行はこれ以上再開しません。`;
+        await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', priority: 'high', source: 'auto-progress-resume-failed', text: report, dedupeKey: `auto-progress-resume-exhausted:${row.sessionId || rowKey(row)}`, replaceExisting: true });
+      } catch (error) { summary.errors.push(`resume-exhausted-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
+    }
     let current = { ...row, ...((row.resumeCount ?? 0) >= MAX_RESUMES || verdict.source === 'resume-failed' ? { status: 'stalled' } : {}), verdict: verdict.verdict, reason: verdict.reason };
     const resumeEligible = !unattended && !dryRun && summary.resumed < MAX_RESUMES_PER_RUN && (answered || (row.resumeCount ?? 0) < MAX_RESUMES) && now - (Date.parse(row.resumedAt || 0) || 0) >= RESUME_INTERVAL_MS
       && row.cwd && (io.cwdExists ?? fs.existsSync)(row.cwd);

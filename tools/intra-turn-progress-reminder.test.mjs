@@ -19,7 +19,7 @@ test('3回目で fire し、0へリセット後も再び3回目で fire', t => {
   assert.equal(main({ session_id: 's1' }, options).state.count, 2);
   const third = main({ session_id: 's1' }, options);
   assert.equal(third.emitted, REMINDER);
-  assert.deepEqual(JSON.parse(fs.readFileSync(counterFile(options.home, 's1'), 'utf8')), { count: 0, lastReminderAt: 1234 });
+  assert.deepEqual(JSON.parse(fs.readFileSync(counterFile(options.home, 's1'), 'utf8')), { count: 0, lastReminderAt: 1234, updatedAt: 1234 });
   assert.equal(main({ session_id: 's1' }, options).emitted, null);
   assert.equal(main({ session_id: 's1' }, options).emitted, null);
   assert.equal(main({ session_id: 's1' }, options).emitted, REMINDER);
@@ -52,7 +52,7 @@ test('CLI stdout は仕様通り1行、改行なし', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'intra-turn-progress-cli-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const script = fileURLToPath(new URL('./intra-turn-progress-reminder.mjs', import.meta.url));
-  const env = { ...process.env, HOME: home, USERPROFILE: home, INTRA_TURN_PROGRESS_THRESHOLD: '1' };
+  const env = { ...process.env, HOME: home, USERPROFILE: home, INTRA_TURN_PROGRESS_THRESHOLD: '1', CLAUDE_HEADLESS: '', ORGIAST_HEADLESS_JOB: '' };
   const result = spawnSync(process.execPath, [script], { input: '{"session_id":"stdout"}', encoding: 'utf8', env });
   assert.equal(result.status, 0);
   assert.equal(result.stdout, REMINDER);

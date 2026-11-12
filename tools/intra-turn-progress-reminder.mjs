@@ -24,9 +24,10 @@ export function tickCounter(file, threshold, now = Date.now()) {
     if (Number.isInteger(stored.count) && stored.count >= 0) state.count = stored.count;
     if (typeof stored.lastReminderAt === 'number') state.lastReminderAt = stored.lastReminderAt;
   } catch {}
+  state.updatedAt = now;
   state.count += 1;
   const fired = state.count >= threshold;
-  if (fired) state = { count: 0, lastReminderAt: now };
+  if (fired) state = { count: 0, lastReminderAt: now, updatedAt: now };
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.chmodSync(path.dirname(file), 0o700);
   fs.writeFileSync(file, JSON.stringify(state), { mode: 0o600 });

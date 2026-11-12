@@ -288,3 +288,25 @@ test('check のない Claude 作業を質問と併記し6時間で警告する',
   }
   assert.match(hook, /現セッション優先/);
 });
+
+test('autoRegisteredCheck rows with status!=waiting_user are excluded from kim-awaiting', t => {
+  const home = fixture(t);
+  writeLedger(ledgerFile(home), [{
+    sessionId: 'session-autoreg',
+    pc: 'PC-A', user: 'u', ts: new Date(NOW - 2 * DAY).toISOString(),
+    promise: '身元照会の確認',
+    status: 'open',
+    nextKim: '以下の少なくとも1つを教えてください: 1. 文面 2. URL',
+    autoRegisteredCheck: true
+  }]);
+  const items = collectAwaiting({ home, now: NOW });
+  assert.equal(items.filter(item => item.route?.sessionId === 'session-autoreg').length, 0);
+});
+
+
+test('auto registration marker does not hide an explicit waiting_user request', t => {
+  const home = fixture(t);
+  writeLedger(ledgerFile(home), [row({ autoRegisteredCheck: true, status: 'waiting_user', nextKim: '予算を承認してください' })]);
+  const items = collectAwaiting({ home, now: NOW });
+  assert.equal(items.filter(item => item.route?.sessionId === 'session-a').length, 1);
+});

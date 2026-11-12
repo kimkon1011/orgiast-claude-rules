@@ -2,6 +2,7 @@
 export const GATE_CONTRACT = {"name": "stop-gate-runner", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "stop-gate-runner"}]};
 // 2026-09-06: Stop 304回中198回が再Stop、handoff-quality 78件中71件が誤爆だった。
 // 9プロセスの逐次差し戻しを1回の評価・1つのblockへまとめ、userの再読を最大1回にする。
+import { evaluateKimInboxRelay, commitKimInboxDelivery } from './kim-inbox-relay.mjs';
 import { evaluatePastLogSearch, listPlaybookNames, classifyHandoff } from './past-log-search-gate.mjs';
 import { judgeDeliverableDriveLink, registerDeliverableCheck } from './deliverable-drive-link-gate.mjs';
 import { evaluateInvitePermissions } from './hooks/discord-invite-permission-gate.mjs';
@@ -146,6 +147,14 @@ function ledger(record) {
   appendStopLedger(record, home());
 }
 
+// A concrete completion check takes precedence over the generic session wakeup.
+export function hasFutureOpenCheck(sessionId, { home: progressHome = home(), now = Date.now() } = {}) {
+  return Boolean(sessionId) && readLedger(progressLedgerFile(progressHome)).some(row =>
+    row.sessionId === sessionId && row.status === 'open'
+    && typeof row.check === 'string' && row.check.trim()
+    && Date.parse(row.deadlineAt) > now);
+}
+
 // No invented shell predicate: auto-progress-watch evaluates evidence for open rows without check.
 export function ensureAutopilotCheck(input, assistantText, transcriptRaw, now = Date.now()) {
   const promise = extractPromise(assistantText);
@@ -174,6 +183,25 @@ function protectAutopilot(input, text, raw, record) {
 }
 
 export async function run(input, context, auditOptions = {}) {
+  const sessionId = input?.session_id || input?.sessionId || path.basename(input?.transcript_path || '', '.jsonl');
+  input = { ...input, session_id: sessionId };
+  const text = input.last_assistant_message ?? input.assistant_text ?? context.assistantText;
+  try {
+    const relay = evaluateKimInboxRelay(input, { home: home(), raw: context.raw, text, now: auditOptions.now ?? Date.now() });
+    if (relay.decision === 'block') {
+      const record = { sessionId, verdict: 'block', blockedBy: ['kim-inbox-relay'], reasonCodes: [relay.code] };
+      ledger(record);
+      return { ...relay, record };
+    }
+    const result = await runOtherGates(input, context, auditOptions);
+    if (result.decision !== 'block') commitKimInboxDelivery(home(), sessionId, relay.receipts, auditOptions.now ?? Date.now());
+    return result;
+  } catch (error) {
+    return { decision: 'block', reason: 'kim-inbox-relay: 受信箱の配達記録を確認できません。ローカル台帳を修復して再試行してください。' };
+  }
+}
+
+async function runOtherGates(input, context, auditOptions = {}) {
   const sessionId = input?.session_id || input?.sessionId || path.basename(input?.transcript_path || '', '.jsonl');
   input = { ...input, session_id: sessionId };
   const assistantText = input?.last_assistant_message ?? input?.assistant_text ?? context.assistantText;
@@ -238,28 +266,34 @@ export async function run(input, context, auditOptions = {}) {
   // operational outcome separately so nightly metrics can count it.
   let verdict = cap.retryCap ? 'retry-cap' : retryBlockedBy.length ? 'block' : 'pass';
   let autoRegisterError;
+  let preservedOpenCheck = false;
   if (cap.retryCap && reasonCodes.some(code => WAIT_CHECK_CODES.has(code))) {
     try {
-      const purpose = String(assistantText).match(/^\s*(?:\*\*)?\[本セッションの目的\](?:\*\*)?[ \t]*([^\r\n]+)(?:\r?\n|$)/)?.[1]?.trim();
-      const label = purpose || [...String(context.lastUserPrompt || context.humanText || '')].slice(0, 60).join('');
-      const deadline = openDeadline(footerValues(assistantText)?.session)?.toISOString() || '+24h';
-      const script = fileURLToPath(new URL('./session-progress-check.mjs', import.meta.url)).replaceAll('\\', '/');
-      // Double quotes work in both cmd.exe and the check executor's Bash shell.
-      // Reject shell metacharacters that still expand within double quotes.
-      if (/["$`%!\r\n]/.test(script) || !/^[a-zA-Z0-9_-]+$/.test(sessionId)) throw new Error('台帳チェックのパスまたは session ID が不正です');
-      await (auditOptions.addCheck || addCheck)({
-        session: sessionId, label: `自動登録: ${label || sessionId}`, deadline,
-        check: `node "${script}" --session "${sessionId}"`,
-        nextClaude: 'このセッションの未完了の約束（この後の自動進行の行）を進め、結果を kim に報告する',
-        home: home(), cwd: input.cwd || path.dirname(path.dirname(script)),
-      });
-      verdict = 'pass_after_autoregister';
+      if (hasFutureOpenCheck(sessionId, { now: auditOptions.now ?? Date.now() })) {
+        preservedOpenCheck = true;
+        verdict = 'pass';
+      } else {
+        const purpose = String(assistantText).match(/^\s*(?:\*\*)?\[本セッションの目的\](?:\*\*)?[ \t]*([^\r\n]+)(?:\r?\n|$)/)?.[1]?.trim();
+        const label = purpose || [...String(context.lastUserPrompt || context.humanText || '')].slice(0, 60).join('');
+        const deadline = openDeadline(footerValues(assistantText)?.session)?.toISOString() || '+24h';
+        const script = fileURLToPath(new URL('./session-progress-check.mjs', import.meta.url)).replaceAll('\\', '/');
+        // Double quotes work in both cmd.exe and the check executor's Bash shell.
+        // Reject shell metacharacters that still expand within double quotes.
+        if (/["$`%!\r\n]/.test(script) || !/^[a-zA-Z0-9_-]+$/.test(sessionId)) throw new Error('台帳チェックのパスまたは session ID が不正です');
+        await (auditOptions.addCheck || addCheck)({
+          session: sessionId, label: `自動登録: ${label || sessionId}`, deadline,
+          check: `node "${script}" --session "${sessionId}"`,
+          nextClaude: 'このセッションの未完了の約束（この後の自動進行の行）を進め、結果を kim に報告する',
+          home: home(), cwd: input.cwd || path.dirname(path.dirname(script)),
+        });
+        verdict = 'pass_after_autoregister';
+      }
     } catch (error) {
       verdict = 'block';
       autoRegisterError = `待機チェックの台帳への自動登録に失敗しました: ${error.message}`;
     }
   }
-  const capMessage = verdict === 'pass_after_autoregister' ? '待機チェックを台帳へ自動登録しました。' : cap.retryCap && verdict !== 'block' ? `${CAP_CONTEXT} 残存コード: ${reasonCodes.join(', ')}` : undefined;
+  const capMessage = preservedOpenCheck ? '既存の完了チェックを維持しました。' : verdict === 'pass_after_autoregister' ? '待機チェックを台帳へ自動登録しました。' : cap.retryCap && verdict !== 'block' ? `${CAP_CONTEXT} 残存コード: ${reasonCodes.join(', ')}` : undefined;
   const record = { ...base, verdict, blockedBy, reasonCodes, demoted, handoffKind, unchangedPeriodicReport: evaluated.unchangedPeriodicReport, retryCap: cap.retryCap, sameTextRetries: cap.sameTextRetries ?? 0, auditEvidence: audit.record.evidence };
   if (verdict !== 'block') {
     const failure = protectAutopilot(input, assistantText, context.raw, record);

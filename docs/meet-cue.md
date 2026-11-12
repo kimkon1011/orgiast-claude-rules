@@ -1,0 +1,120 @@
+# Meet カンペ (`meet-cue`) 取扱説明書
+
+Meet カンペ (`meet-cue`) は、オージャストの社員がお客様と Google Meet で打合せしている最中に、AI Bot がリアルタイムで会話内容（字幕）を分析し、**社員がその場で言うべきセリフ・根拠・資料リンク**を Google ドキュメント（「カンペ Doc」）へ自動で差し込むリアルタイム商談支援ツールです。
+
+---
+
+## 1. 使い方
+
+### (1) 社員の準備・利用手順
+1. 打合せ開始前に、kim または管理者が `meet-cue start` を実行すると、**カンペ Doc の URL** が共有されます。
+2. 社員はパソコンまたはスマホでカンペ Doc を開いておきます。
+3. Bot（`オージャスト カンペAI`）が Meet に参加申請しますので、**「許可」** を押してください。
+4. 打合せ中、状況に応じたセリフや数字が**Doc の一番上（見出し直下）**に自動挿入されます。
+   - **【言うこと】** 太字 20pt のセリフをそのまま口頭で伝えます（長文丸読み不要）。
+   - **根拠:** 提示すべき実績数値やデータです。
+   - **資料:** 関連資料の URL リンクです。
+5. kim からの直接指示は **`【kimより】`**（赤字）で届きます。
+
+### (2) kim（同席・指示者）の利用手順
+1. kim 用 Doc URL（`?authuser=kim@orgiast.jp`）を開くか、スマホの Claude Code セッションからコマンドで指示を出せます。
+2. コマンドでリアルタイム指示を出す場合:
+   ```bash
+   node tools/meet-cue.mjs say "次回面談の日程調整を強く押してください" --data "次回確定で成功率3倍"
+   ```
+3. またはカンペ Doc に直接文字を書き込んでも、閲覧中の社員の画面に 1〜2 秒で反映されます。
+
+---
+
+## 2. コマンド一覧
+
+### 打合せ開始 (Bot 起動 & Doc 作成)
+```bash
+node tools/meet-cue.mjs start \
+  --url "https://meet.google.com/abc-defg-hij" \
+  --staff "yamada@orgiast.jp" \
+  --title "〇〇株式会社様 導入打ち合わせ" \
+  --brief "予算感を気にされている。納期は来月希望。"
+```
+- `--cards-file <json>`: カスタムカンペカード JSON を指定
+- `--mode profile|guest`: ログイン済みプロファイル（既定）または一時ゲストモード
+- `--interval-sec 12`: 判定間隔（既定 12 秒）
+- `--debug-dom`: DOM 構造変更時の解析用に 30 秒ごとに HTML とスクショを保存
+
+### kim からのリアルタイム指示
+```bash
+node tools/meet-cue.mjs say [--session <id|latest>] "即答せず本日中メール回答と伝えて"
+```
+
+### ブラウザ無しの事前シミュレーション
+```bash
+node tools/meet-cue.mjs simulate --transcript-file transcript.txt --brief "事前情報" [--doc]
+```
+
+### 動作確認・環境診断
+```bash
+node tools/meet-cue.mjs doctor
+```
+
+### Bot 用プロファイルの Google ログイン (初回のみ)
+```bash
+node tools/meet-cue.mjs login
+```
+
+---
+
+## 3. 仕組み・アーキテクチャ
+
+1. **Bot 参加 & 字幕取得**: Playwright（Chrome）で Bot が Google Meet に参加し、字幕機能を有効化して MutationObserver でライブ字幕テキストを追跡します。同一話者の発話が 1.5 秒停止するか話者が切り替わった時点で「確定字幕」と判定します。
+2. **TypeSafe Jev 判定**: 直近 120 秒の字幕履歴、打合せ概要、前回のカンペ経過時間をもとに、TypeSafe Jev (`askJev`) が「現在の局面 (phase)」と「出すべきカンペカード (action)」を判定します（確信度 0.7 未満は静観）。
+3. **助け舟 (generate) の自動生成**: 既存カードに該当しない急な助け舟が必要な場合、`llm-ask` (Groq/Gemini/DeepSeek) を呼び出して 60 字以内のセリフと根拠を即座に生成します。
+4. **Google Docs リアルタイム挿入**: Google Docs API (`batchUpdate`) を使い、カンペ Doc の一番上（見出しの直下）へ挿入します。Google ドキュメントのリアルタイム同期機能により、社員の画面へ 1〜2 秒で提示されます。
+5. **根拠数字の厳格な運用**: 実績・データ等の数字は brief やカードファイルに明記されたものだけを出力します（推測やテンプレートによる数字の捏造を防止。根拠数字が無い場合は「根拠:」行自体を出力しません）。
+6. **重複・連投防止**: 全体で 40 秒のクールダウン、同一カードは 5 分間再掲禁止のロジックが組み込まれています。
+
+---
+
+## 4. 費用目安
+
+- **TypeSafe Jev**: 1 回の判定につき約 300 token（入力）+ 50 token（出力）。
+- **1 時間の打合せ (12 秒間隔)**: 約 300 回の Jev 呼び出し ≈ 約 90,000 token。非常に安価に運用可能です。
+- **カード/助け舟生成 (llm-ask)**: Groq / Gemini などの高速・最安 AI プロバイダを使用し、Claude API は一切使用しません。
+
+---
+
+## 5. プライバシーとセキュリティ
+
+1. **録音・録画の不在**: 音声や動画の録音・録画は一切行いません。文字起こし字幕テキストのみをメモリ上で処理します。
+2. **データの外部送信**: 字幕テキストは TypeSafe Jev および設定された AI プロバイダ（Groq/Gemini等）へのみ送信され、モデルの学習には使用されません。
+3. **透明性**: お客様および参加者には、Meet の参加者一覧に「オージャスト カンペAI」として透明に表示されます。
+
+---
+
+## 6. Google Meet DOM セレクタの修理手順
+
+Google Meet の内部 HTML 仕様が更新され、Bot が参加できない・字幕が取れなくなった場合の復旧手順です。
+
+1. **`--debug-dom` を付けて起動**:
+   ```bash
+   node tools/meet-cue.mjs start --url "..." --staff "..." --debug-dom
+   ```
+2. `~/.claude/meet-cue/<id>/dom/` に 30 秒ごとに `dom-<timestamp>.html` と `shot-<timestamp>.png` が保存されます。
+3. 保存された HTML を確認し、ボタンや字幕コンテナの新しいクラス名・属性を特定します。
+4. `tools/lib/meet-cue-core.mjs` の `MEET_SELECTORS` 定数に新しい CSS セレクタを追加してください。
+   ```js
+   export const MEET_SELECTORS = {
+     joinButtons: [
+       'button:has-text("今すぐ参加")',
+       '新しいセレクタ',
+       ...
+     ],
+     ...
+   };
+   ```
+
+---
+
+## 7. 停止方法
+
+- **自動終了**: 打合せ終了画面（通話退出）を検知したとき、または `--max-minutes`（既定 120 分）に達したとき自動で安全に終了します。
+- **手動終了**: 起動中のターミナルで `Ctrl + C` を押すと、Bot ブラウザが閉じられ、最終まとめ（`summary.json`）が保存され、`kim-inbox` へ完了通知が送信されます。

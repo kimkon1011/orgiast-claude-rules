@@ -1,96 +1,73 @@
-import assert from 'node:assert/strict';
 import test from 'node:test';
-import { judge, TARGET, HOOK_MATCHER } from './gmail-connector-url-gate.mjs';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { HOOK_MATCHER, judge, overrideActive } from './gmail-connector-url-gate.mjs';
 
-const DRAFT_ID = 'r123';
+const script = fileURLToPath(new URL('./gmail-connector-url-gate.mjs', import.meta.url));
+const gmail = (tool_input) => ({ tool_name: 'mcp__claude_ai_Gmail__create_draft', tool_input });
+function fixture(t) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gmail-url-gate-'));
+  fs.mkdirSync(path.join(home, '.claude'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  return home;
+}
+
+test('URL なしの本文は通す', () => assert.equal(judge(gmail({ subject: 'ご連絡', body: 'お世話になっております。' })).decision, 'pass'));
+test('https URL 入りの body を止める', () => assert.equal(judge(gmail({ body: '詳細 https://example.com/path' })).decision, 'block'));
+test('www. で始まるスキーム無しドメインを止める', () => assert.equal(judge(gmail({ body: '詳細 www.orgiast.jp' })).decision, 'block'));
+test('パス付きのスキーム無しドメインを止める', () => assert.equal(judge(gmail({ body: '詳細 orgiast.jp/contact' })).decision, 'block'));
+test('メールアドレスのドメイン部だけなら通す', () => assert.equal(judge(gmail({ body: 'Mail：seisaku-team@orgiast.jp' })).decision, 'pass'));
+test('短い https URL も従来どおり止める', () => assert.equal(judge(gmail({ body: 'https://x.jp' })).decision, 'block'));
+test('htmlBody の a href だけでも止める', () => assert.equal(judge(gmail({ htmlBody: '<a href="https://example.com">詳細</a>' })).decision, 'block'));
+test('google.com/url?q= を常に止め、理由を明示する', () => {
+  const result = judge(gmail({ subject: 'https://www.google.com/url?q=https://example.com&source=gmail' }));
+  assert.equal(result.decision, 'block');
+  assert.match(result.reason, /貼り戻し/);
+});
+test('mailto: だけなら通す', () => assert.equal(judge(gmail({ body: 'mailto:sales@example.com' })).decision, 'pass'));
+test('Gmail 以外のツールは対象外', () => assert.equal(judge({ tool_name: 'mcp__claude_ai_Discord__send_message', tool_input: { body: 'https://example.com' } }).decision, 'pass'));
+test('override が有効期限内なら通る', (t) => {
+  const home = fixture(t);
+  const file = path.join(home, '.claude', 'gmail-connector-url-gate-override');
+  fs.writeFileSync(file, new Date(Date.now() + 3600000).toISOString());
+  assert.equal(overrideActive(home), true);
+  assert.deepEqual(judge(gmail({ body: 'https://example.com' }), { home }).decision, 'pass');
+});
+test('全対象 action・アカウント suffix が matcher に一致する', () => {
+  const matcher = new RegExp(`^(?:${HOOK_MATCHER})$`);
+  for (const action of ['create_draft', 'update_draft', 'send_message', 'reply', 'forward']) {
+    for (const suffix of ['', '_2', '_12']) assert.equal(matcher.test(`mcp__claude_ai_Gmail${suffix}__${action}`), true);
+  }
+});
+test('CLI は block 時だけ PreToolUse deny を出す', (t) => {
+  const home = fixture(t);
+  const run = (input) => spawnSync(process.execPath, [script], { input: JSON.stringify(input), encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } });
+  const blocked = run(gmail({ body: 'http://example.com' }));
+  assert.equal(blocked.status, 0, blocked.stderr);
+  assert.equal(JSON.parse(blocked.stdout).hookSpecificOutput.permissionDecision, 'deny');
+  const passed = run(gmail({ body: 'URL なし' }));
+  assert.equal(passed.status, 0, passed.stderr);
+  assert.equal(passed.stdout, '');
+});
+
 const URL_BODY = 'Check this: https://meet.google.com/abc-defg-hij';
+const gmailAction = (action, tool_input) => ({ tool_name: `mcp__claude_ai_Gmail__${action}`, tool_input });
 
-test('HOOK_MATCHER matches send_message', () => {
-  const re = new RegExp(`^(?:${HOOK_MATCHER})$`);
-  assert.ok(re.test('mcp__claude_ai_Gmail__send_message'), 'send_message');
-  assert.ok(re.test('mcp__claude_ai_Gmail__create_draft'), 'create_draft');
-  assert.ok(re.test('mcp__claude_ai_Gmail__update_draft'), 'update_draft');
-  assert.ok(re.test('mcp__claude_ai_Gmail__reply'), 'reply');
-  assert.ok(re.test('mcp__claude_ai_Gmail__forward'), 'forward');
-  assert.ok(re.test('mcp__claude_ai_Gmail_1__send_message'), 'send_message with digit');
+test('send_message + draftId + URL 入り body は通す', () => {
+  assert.equal(judge(gmailAction('send_message', { draftId: 'r123', body: URL_BODY })).decision, 'pass');
 });
-
-test('send_message with draftId + URL body passes', () => {
-  const result = judge({
-    tool_name: 'mcp__claude_ai_Gmail__send_message',
-    tool_input: { draftId: DRAFT_ID, body: URL_BODY },
+test('send_message + 空 draftId + URL は止める', () => {
+  assert.equal(judge(gmailAction('send_message', { draftId: '', body: URL_BODY })).decision, 'block');
+});
+test('send_message + draftId なし + URL は止める', () => {
+  assert.equal(judge(gmailAction('send_message', { body: URL_BODY })).decision, 'block');
+});
+for (const action of ['create_draft', 'update_draft', 'reply', 'forward']) {
+  test(`${action} は URL 入りのまま止める`, () => {
+    assert.equal(judge(gmailAction(action, { draftId: 'r123', body: URL_BODY })).decision, 'block');
   });
-  assert.equal(result.decision, 'pass');
-});
-
-test('send_message without draftId + URL body blocks', () => {
-  const result = judge({
-    tool_name: 'mcp__claude_ai_Gmail__send_message',
-    tool_input: { body: URL_BODY },
-  });
-  assert.equal(result.decision, 'block');
-});
-
-test('create_draft with URL body blocks even if draftId-like in body', () => {
-  const result = judge({
-    tool_name: 'mcp__claude_ai_Gmail__create_draft',
-    tool_input: { body: URL_BODY },
-  });
-  assert.equal(result.decision, 'block');
-});
-
-test('update_draft with URL body blocks', () => {
-  const result = judge({
-    tool_name: 'mcp__claude_ai_Gmail__update_draft',
-    tool_input: { body: URL_BODY, draftId: DRAFT_ID },
-  });
-  assert.equal(result.decision, 'block');
-});
-
-test('reply with URL body blocks', () => {
-  const result = judge({
-    tool_name: 'mcp__claude_ai_Gmail__reply',
-    tool_input: { body: URL_BODY },
-  });
-  assert.equal(result.decision, 'block');
-});
-
-test('forward with URL body blocks', () => {
-  const result = judge({
-    tool_name: 'mcp__claude_ai_Gmail__forward',
-    tool_input: { body: URL_BODY },
-  });
-  assert.equal(result.decision, 'block');
-});
-
-test('send_message with draftId + no URL body still passes', () => {
-  const result = judge({
-    tool_name: 'mcp__claude_ai_Gmail__send_message',
-    tool_input: { draftId: DRAFT_ID, body: 'No URL here' },
-  });
-  assert.equal(result.decision, 'pass');
-});
-
-test('send_message with empty draftId + URL body blocks', () => {
-  const result = judge({
-    tool_name: 'mcp__claude_ai_Gmail__send_message',
-    tool_input: { draftId: '', body: URL_BODY },
-  });
-  assert.equal(result.decision, 'block');
-});
-
-test('send_message with URL in subject blocks (no draftId)', () => {
-  const result = judge({
-    tool_name: 'mcp__claude_ai_Gmail__send_message',
-    tool_input: { subject: 'https://example.com' },
-  });
-  assert.equal(result.decision, 'block');
-});
-
-test('non-Gmail tool passes through', () => {
-  const result = judge({
-    tool_name: 'mcp__something_else',
-    tool_input: { body: URL_BODY },
-  });
-  assert.equal(result.decision, 'pass');
-});
+}

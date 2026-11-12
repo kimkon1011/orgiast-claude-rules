@@ -443,7 +443,7 @@ export function backendSpecificTimeoutSecs(backendName, env = process.env) {
   // cheap-code:deepseek と qwen 直結の deepseek は同じ upstream（OpenRouter の deepseek model）なので同一扱い。
   if (backendName === 'cheap-code:deepseek' || backendName === 'deepseek') {
     const raw = Number(env.CODEX_DO_DEEPSEEK_TIMEOUT_SECS);
-    return Number.isFinite(raw) && raw > 0 ? raw : 500;
+    return Number.isFinite(raw) && raw > 0 ? raw : 200;
   }
   return null;
 }

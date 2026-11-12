@@ -8,6 +8,8 @@ import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { hostExitArchive } from './lib/host-exit-archive.mjs';
 import { isEntry } from './is-entry.mjs';
+
+const DEFAULT_MAX_REOPEN = 3;
 const BASE = 'https://api.anthropic.com/v1/code/sessions';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 function readJson(file, fallback) {
@@ -582,7 +584,7 @@ export async function getLoadGuardStatus({
 }
 
 export function parseOptions(args, spawn = spawnSync) {
-  const options = { dryRun: false, max: 3, gapSec: 10, watch: false };
+  const options = { dryRun: false, max: DEFAULT_MAX_REOPEN, gapSec: 10, watch: false };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--dry-run') { options.dryRun = true; continue; }
@@ -660,7 +662,7 @@ export function resolveClaudeCli({ env = process.env, exists = fs.existsSync, re
   throw new Error('claude CLI not found');
 }
 
-export async function reopenLost({ since, until, dryRun = false, max = 3, gapSec = 10,
+export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_MAX_REOPEN, gapSec = 10,
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
   now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs, stateBased = false,
   checkCpu = true, checkClaude = false, cpusImpl, vscodeStartedAt } = {}) {
@@ -909,12 +911,12 @@ export async function watchReopen(opts = {}, maxParam) {
   let base, max, dryRun, fetchImpl, spawn, wait, nowFn, claudeCli, codeCli, env, fsImpl, windowReady, cpusImpl;
   if (typeof opts === 'string' || opts === undefined) {
     base = opts ?? path.join(os.homedir(), '.claude');
-    max = maxParam ?? 10;
+    max = maxParam ?? DEFAULT_MAX_REOPEN;
     dryRun = false;
     nowFn = Date.now;
   } else {
     base = opts.base ?? path.join(os.homedir(), '.claude');
-    max = opts.max ?? 10;
+    max = opts.max ?? DEFAULT_MAX_REOPEN;
     dryRun = opts.dryRun ?? false;
     fetchImpl = opts.fetchImpl;
     spawn = opts.spawn;
@@ -977,7 +979,7 @@ if (isEntry(import.meta.url)) {
       }, 20 * 60 * 1000);
       const result = await watchReopen({
         base: opts.base,
-        max: opts.maxSet ? opts.max : 10,
+        max: opts.maxSet ? opts.max : DEFAULT_MAX_REOPEN,
         dryRun: opts.dryRun,
       });
       clearTimeout(watchdogTimer);

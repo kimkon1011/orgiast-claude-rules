@@ -1520,3 +1520,51 @@ test('reopenRepeat: 6時間以内に unverified 含め3回 reopen された id �
   assert.equal(result.skipped.reopenRepeat, 1);
   assert.equal(result.candidates.length, 0);
 });
+
+test('watchReopen: max 未指定時は 5 件の候補があっても reopen は最大 3 件のみ実行される', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'watch-max-default-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  const lastEventAt = '2026-11-07T11:50:00.000Z';
+
+  const sessions = [];
+  for (let i = 1; i <= 5; i++) {
+    const id = `cse_cand_${i}`;
+    const dir = path.join(root, `dir_${i}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(base, 'projects', 'proj', `${id}.jsonl`), [
+      { type: 'bridge-session', bridgeSessionId: id },
+      { type: 'user', cwd: dir, message: { content: 'hello' } },
+    ].map(JSON.stringify).join('\n'));
+    sessions.push({ id, status: 'active', connection_status: 'disconnected', last_event_at: lastEventAt, title: `Session ${i}` });
+  }
+
+  const fetchImpl = async url => {
+    return { ok: true, json: async () => ({ data: sessions }) };
+  };
+  const spawn = (cmd, args) => {
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+
+  const result = await watchReopen({
+    base,
+    claudeCli: 'claude.exe',
+    codeCli: 'C:\\code.cmd',
+    fetchImpl,
+    spawn,
+    checkCpu: false,
+    checkClaude: false,
+    now: () => nowTime,
+    windowReady: async () => true,
+    wait: async () => {},
+  });
+
+  assert.equal(result.candidates.length, 5);
+  assert.equal(result.reopened.length, 3);
+});

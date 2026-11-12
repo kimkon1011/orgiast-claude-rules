@@ -8,7 +8,7 @@ import { notifyOwner } from './notify-owner.mjs';
 import { listItems as allInboxItems, markSeen } from './kim-inbox.mjs';
 import { routeOwnerDm, deferredFile } from './lib/owner-dm-policy.mjs';
 import { compactDigest } from './lib/owner-dm-digest.mjs';
-import { isKimHumanProgress, deliverHumanProgress } from './lib/auto-progress-human-inbox.mjs';
+import { isKimHumanProgress, deliverHumanProgress, humanProgressText } from './lib/auto-progress-human-inbox.mjs';
 const listItems = home => allInboxItems(home).filter(item => !item.dailyProgress);
 const now = Date.parse('2026-11-06T00:00:00Z');
 const row = () => ({ sessionId: 'human-session', ts: '2026-11-05T00:00:00Z', owner: 'kim@orgiast.jp', transcriptPath: '/transcript.jsonl', label: '保存の確認', promise: '保存されたら確認', status: 'open', check: 'check-command', deadlineAt: '2026-11-08T00:00:00Z', nextKim: '', nextClaude: '権限を確認する' });
@@ -40,11 +40,11 @@ test('A/B human changes bypass quota and digest-only, preserve deferred bytes, d
   r.status = 'waiting_user'; await checkPromise(r, opts);
   text = '保存待ちです'; await checkPromise(r, opts);
   code = 2; await checkPromise(r, opts);
-  code = 1; await checkPromise(r, opts); // returning to a previous state is a new transition
+  code = 1; await checkPromise(r, opts); // 同じ状態へ戻るのは新通知にならない（要約文は fingerprint 外）
   await checkPromise(r, opts);
-  assert.equal(listItems(dir).length, 7);
+  assert.equal(listItems(dir).length, 6);
   code = 0; text = '保存を確認しました'; await checkPromise(r, opts); await checkPromise(r, opts);
-  assert.equal(listItems(dir).length, 8); assert.ok(r.doneInboxVerifiedAt);
+  assert.equal(listItems(dir).length, 7); assert.ok(r.doneInboxVerifiedAt);
   assert.equal(fs.readFileSync(deferredFile(dir), 'utf8'), before);
 });
 test('A strict provenance and policy exemption do not exempt unrelated automatic jobs', async t => {
@@ -115,4 +115,54 @@ test('C explicit kim human provenance stays in requested work when checked by an
   const text = compactDigest([{ ...row(), headless: true, checkText: '保存待ちです' }], [], now).text;
   assert.match(text, /あなたが頼んだこと\n完了 0件 \/ 進行中 1件/);
   assert.match(text, /保存待ちです ／ nextKim: なし/);
+});
+
+test('G kind becomes ask when nextKim is non-empty, info when empty', async t => {
+  const dir = home(t), r = row();
+  await deliverHumanProgress(dir, r);
+  assert.equal(allInboxItems(dir)[0].kind, 'info');
+  r.nextKim = '設定を保存してください';
+  await deliverHumanProgress(dir, r);
+  const items = allInboxItems(dir);
+  assert.equal(items[items.length - 1].kind, 'ask');
+});
+
+test('G nextKim from checkText JSON overrides row.nextKim', async t => {
+  const dir = home(t);
+  const r = { ...row(), nextKim: '旧いnextKim', checkText: '保存待ちです\n{"state":"waiting","nextKim":"JSONのnextKim"}' };
+  await deliverHumanProgress(dir, r);
+  const item = allInboxItems(dir)[0];
+  assert.equal(item.kind, 'ask');
+  assert.match(item.text, /JSONのnextKim/);
+  assert.doesNotMatch(item.text, /旧いnextKim/);
+});
+
+test('G old open items marked seen when new notification added for same source', async t => {
+  const dir = home(t), r = row();
+  // First notification
+  await deliverHumanProgress(dir, r);
+  assert.equal(allInboxItems(dir).length, 1);
+  assert.equal(allInboxItems(dir)[0].status, 'open');
+  // Mark first as seen manually, then add second with different state
+  markSeen(dir, allInboxItems(dir)[0].id);
+  r.checkResult = 'done';
+  await deliverHumanProgress(dir, r);
+  // Both visible, first is seen, second is open
+  const items = allInboxItems(dir);
+  assert.equal(items.length, 2);
+  // Now add third with different state - second should be marked seen
+  r.checkResult = 'error';
+  await deliverHumanProgress(dir, r);
+  const after = allInboxItems(dir);
+  assert.equal(after.length, 3);
+  // Old open items (the second one) should now be seen
+  const second = after.find(i => i.id === items[1].id);
+  assert.equal(second.status, 'seen');
+});
+
+test('G humanProgressText uses nextKim from checkText JSON', () => {
+  const r = { ...row(), nextKim: '旧い指示', checkText: '保存完了\n{"nextKim":"設定を保存してください"}' };
+  const text = humanProgressText(r);
+  assert.match(text, /設定を保存してください/);
+  assert.doesNotMatch(text, /旧い指示/);
 });

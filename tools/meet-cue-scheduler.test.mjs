@@ -66,12 +66,12 @@ test('isTargetEvent: 対象予定の厳格なフィルター判定', () => {
 
   assert.equal(isTargetEvent(validEvent, { staffAddresses, now }), true, '条件を満たす打合せは対象');
 
-  // Case 1: Internal only (no external attendees)
+  // Case 1: Internal only (no external attendees) - mechanical check passes (handed to Jev)
   const internalEvent = {
     ...validEvent,
     attendees: [{ email: 'tanaka@orgiast.jp' }, { email: 'kim@orgiast.jp' }],
   };
-  assert.equal(isTargetEvent(internalEvent, { staffAddresses, now }), false, '社内だけは対象外');
+  assert.equal(isTargetEvent(internalEvent, { staffAddresses, now }), true, '社外参加者無しの機械条件判定は true（Jev に任せる）');
 
   // Case 2: Contains "カンペ不要" or "no-kanpe"
   const noKanpe1 = { ...validEvent, summary: '社外打合せ（カンペ不要）' };
@@ -470,6 +470,63 @@ test('runScheduler Jev: 題名「カンペ」は optin で Jev を呼ばずに�
       source: 'optin',
     });
     assert.equal(jevCalled, false, 'オプトイン時は Jev を呼ばないこと');
+  } finally {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test('runScheduler Jev: 社外参加者なしでも題名「M:○○株式会社様」は customer_meeting 0.9 で対象になり、「倉庫リーダーMTG」は internal で対象外', async () => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-no-external-jev-test-'));
+  try {
+    const customerEventNoExternal = createMockEvent({
+      id: 'ev_cust_1',
+      summary: 'M:岩谷マテリアル株式会社様(Reブース)',
+      hangoutLink: 'https://meet.google.com/abc-defg-hij',
+      attendees: [{ email: 'tanaka@orgiast.jp' }, { email: 'kim@orgiast.jp' }],
+    });
+    const internalEventNoExternal = createMockEvent({
+      id: 'ev_int_2',
+      summary: '倉庫リーダーMTG',
+      hangoutLink: 'https://meet.google.com/xyz-uvwx-rst',
+      attendees: [{ email: 'tanaka@orgiast.jp' }, { email: 'kim@orgiast.jp' }],
+    });
+
+    const askJevImpl = async ({ state }) => {
+      assert.equal(state.hasExternalAttendees, false);
+      assert.deepEqual(state.externalAttendeeDomains, []);
+      if (state.title.includes('岩谷マテリアル')) {
+        return { ok: true, answers: { kind: { type: 'choice', choice: 'customer_meeting', confidence: 0.9 } } };
+      }
+      return { ok: true, answers: { kind: { type: 'choice', choice: 'internal', confidence: 0.9 } } };
+    };
+
+    const res = await runScheduler(createMockSchedulerOptions([customerEventNoExternal, internalEventNoExternal], askJevImpl, tmpHome));
+    assert.equal(res.ok, true);
+    assert.equal(res.actions.length, 1);
+    assert.equal(res.actions[0].title, 'M:岩谷マテリアル株式会社様(Reブース)');
+    assert.equal(res.actions[0].classification.kind, 'customer_meeting');
+
+    assert.equal(res.skipped.length, 1);
+    assert.equal(res.skipped[0].title, '倉庫リーダーMTG');
+    assert.equal(res.skipped[0].reason, 'jev:internal');
+  } finally {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test('runScheduler: Meetリンクが無い予定（no_meet）は題名に「様」があっても除外される', async () => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-no-meet-test-'));
+  try {
+    const noMeetCustomerEvent = createMockEvent({
+      summary: 'M:クラフトフィックス様(訪問)',
+      hangoutLink: '',
+    });
+
+    const res = await runScheduler(createMockSchedulerOptions(noMeetCustomerEvent, async () => {}, tmpHome));
+    assert.equal(res.ok, true);
+    assert.equal(res.actions.length, 0);
+    assert.equal(res.skipped.length, 1);
+    assert.equal(res.skipped[0].reason, 'no_meet');
   } finally {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }

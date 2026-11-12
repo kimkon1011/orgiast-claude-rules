@@ -136,8 +136,6 @@ export function checkMechanicalConditions(event, { staffAddresses = [], ownerEma
   if (visibility === 'private' || visibility === 'confidential') return { ok: false, reason: 'private' };
 
   const attendees = event.attendees || [];
-  const externalAttendees = attendees.filter(a => !a.resource && a.email && isExternalEmail(a.email, staffAddresses));
-  if (externalAttendees.length === 0) return { ok: false, reason: 'no_external' };
 
   // Orgiast attendee check
   let hasOrgiast = attendees.some(a => a.email && a.email.toLowerCase().endsWith('@orgiast.jp'));
@@ -157,7 +155,7 @@ export function buildClassificationJevState(event, staffAddresses = []) {
   const attendees = event.attendees || [];
   const externalAttendees = attendees.filter(a => !a.resource && a.email && isExternalEmail(a.email, staffAddresses));
 
-  const externalDomains = Array.from(new Set(
+  const externalAttendeeDomains = Array.from(new Set(
     externalAttendees.map(a => a.email.split('@')[1]?.toLowerCase()).filter(Boolean)
   ));
 
@@ -176,7 +174,9 @@ export function buildClassificationJevState(event, staffAddresses = []) {
   return {
     title: event.summary || '',
     description: cleanDescription,
-    externalDomains,
+    externalAttendeeDomains,
+    externalDomains: externalAttendeeDomains,
+    hasExternalAttendees: externalAttendees.length > 0,
     internalCount,
     organizerIsInternal,
   };
@@ -186,7 +186,7 @@ export function buildClassificationJevQuestions() {
   return {
     kind: {
       type: 'choice',
-      instructions: 'この予定が顧客・取引先との商談・打合せか分類してください。',
+      instructions: 'この予定が顧客・取引先との商談・打合せか分類してください。招待者に社外の人がいなくても、題名に会社名・「様」・訪問・ご説明・商談などがあれば customer_meeting の可能性が高い。社員の名前だけ・定例・作業日・社内MTG は internal。',
       criteria: {
         customer_meeting: 'お客様・見込み客・取引先・協業先・仕入先との商談や打合せ。営業・提案・ヒアリング・見積・進行確認を含む',
         internal: '社内会議・社員同士・個人Gmailの社員',

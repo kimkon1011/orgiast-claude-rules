@@ -398,6 +398,24 @@ test('global budget and exhausted workers pass critical gates and record unfinis
   }
 });
 
+test('an event-limited timeout exhausts the budget even before the wall-clock deadline', async t => {
+  const home = fixture(t);
+  const hook = script(home, 'early-budget-timeout', 'export async function hookMain() {}', { critical: true, timeout: 60 });
+  let calls = 0;
+  const out = await dispatch('PreToolUse', '{}', { home, budgetMs: 30000, overloaded: false, concurrency: 1,
+    manifest: { events: { PreToolUse: [hook, hook] } },
+    async execute(_hook, _raw, timeout) {
+      calls++;
+      assert.ok(timeout > 0 && timeout <= 30000);
+      return { status: 0, timedOut: true };
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(out.stdout, '');
+  assert.equal(out.metrics.timedOut, 1);
+  assert.deepEqual(out.metrics.hooks.map(h => h.criticalUnfinished), ['hook-timeout', 'dispatch-budget']);
+});
+
 test('settings dispatcher timeout bounds the whole event and reports unstarted critical gates', async t => {
   const home = fixture(t);
   fs.mkdirSync(path.join(home, '.claude'));

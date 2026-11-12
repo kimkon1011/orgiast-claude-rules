@@ -235,6 +235,7 @@ export async function dispatch(event, raw, options = {}) {
   const poolSize = Math.max(1, Math.min(8, Math.floor(Number(options.concurrency) || Math.max(4, Math.ceil(os.availableParallelism() / 4)))));
   const slots = [];
   const deadline = start + (options.budgetMs ?? dispatchBudgetMs(home, event, manifest));
+  let budgetExhausted = false;
   const unavailable = (hook, why) => hook.critical
     ? { status: 0, stdout: '', stderr: '', criticalUnfinished: why }
     : { status: 0, skipped: why };
@@ -246,7 +247,7 @@ export async function dispatch(event, raw, options = {}) {
       const item = pending.shift(), { hook } = item, began = Date.now();
       let result;
       if (overloaded && !hook.critical) result = { status: 0, skipped: 'load-shed' };
-      else if (began >= deadline) result = unavailable(hook, 'dispatch-budget');
+      else if (budgetExhausted || began >= deadline) result = unavailable(hook, 'dispatch-budget');
       else {
         // Queue time never consumes the hook's own budget. A separate event
         // deadline keeps us inside settings.json; unfinished gates pass with metrics.
@@ -255,6 +256,10 @@ export async function dispatch(event, raw, options = {}) {
           result = options.execute ? await options.execute(hook, raw, timeout)
             : external ? await externalHook(hook, raw, timeout, { ...options, onSpawn: (...args) => { childProcesses++; options.onSpawn?.(...args); } })
               : await slot.run(hook, raw, timeout);
+          // Timers can fire just before the wall-clock deadline. Once an event-
+          // limited timeout fires, keep its cause instead of reporting worker
+          // exhaustion (or starting another hook in that rounding gap).
+          if (result.timedOut && timeout === deadline - began) budgetExhausted = true;
           if (hook.critical && (result.timedOut || ![0, 2].includes(result.status))) {
             // A timed-out kim-inbox gate that already completed its context keeps
             // the delivery; only the unfinished reason is recorded.
@@ -282,7 +287,7 @@ export async function dispatch(event, raw, options = {}) {
     await Promise.all(consumers);
     // Retired workers are never replaced: even a set of hanging hooks cannot
     // cause unbounded isolate creation. Healthy workers drain the remaining queue.
-    for (const item of nodeQueue) save(item, unavailable(item.hook, Date.now() >= deadline ? 'dispatch-budget' : 'hook-error'), Date.now());
+    for (const item of nodeQueue) save(item, unavailable(item.hook, budgetExhausted || Date.now() >= deadline ? 'dispatch-budget' : 'hook-error'), Date.now());
     const record = { at: new Date(start).toISOString(), event, durationMs: Date.now() - start, overloaded, active: lease.active,
       childProcesses, workersCreated, poolSize, budgetMs: deadline - start,
       timedOut: results.filter(r => r.timedOut).length, skipped: results.filter(r => r.skipped).length,

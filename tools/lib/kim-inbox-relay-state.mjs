@@ -36,8 +36,8 @@ export function writeRelayState(home, sessionId, state) {
   if (!sessionId) return;
   const file = stateFile(home, sessionId), temp = `${file}.${randomBytes(8).toString('hex')}.tmp`;
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(temp, JSON.stringify(state) + '\n', { mode: 0o600 });
-  fs.renameSync(temp, file);
+  try { fs.writeFileSync(temp, JSON.stringify(state) + '\n', { mode: 0o600 }); fs.renameSync(temp, file); }
+  finally { fs.rmSync(temp, { force: true }); }
 }
 export function recordInjection(home, sessionId, items, { event, now = Date.now() } = {}) {
   if (!sessionId) return;

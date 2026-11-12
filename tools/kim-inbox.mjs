@@ -38,8 +38,10 @@ function tryReclaimLock(lock) {
     if (Date.now() - stat.mtimeMs > STALE_LOCK_MS) return renameStaleLock(lock);
     // mtime が新しい — PID が消えていたら回収
     try {
-      const pid = Number(fs.readFileSync(lock, 'utf8'));
-      if (pid > 0) try { process.kill(pid, 0); } catch (e) {
+      const content = fs.readFileSync(lock, 'utf8').trim();
+      const pid = Number(content);
+      if (!content || !Number.isFinite(pid) || pid <= 0) return renameStaleLock(lock);
+      try { process.kill(pid, 0); } catch (e) {
         if (e.code === 'ESRCH') return renameStaleLock(lock);
         // EPERM: PID が保護済み/再利用 — mtime が新しいので待つ
       }

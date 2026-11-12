@@ -15,3 +15,10 @@ test('直接 API・webhook は拒否し正規 CLI と dry-run は通すが旧許
   }
   assert.equal(judge(input('mcp__claude_ai_Discord__send_dm', { user_id: 'kim', content: '定時報告' }), { allowlist: [{ category: '定時', pattern: '^定時' }] }).decision, 'block');
 });
+
+test('自動返信カテゴリを付けても MCP 直接送信は許可されない', () => {
+  for (const category of ['autoreply-decision', 'autoreply-sent']) {
+    assert.equal(judge(input('mcp__claude_ai_Discord__send_dm', { user_id: 'kim', category, content: '【判断待ち】質問とリンク' })).decision, 'block');
+    assert.equal(judge(input('mcp__claude_ai_Discord__send_message', { channel_id: '1508437329247862794', category })).decision, 'block');
+  }
+});

@@ -34,3 +34,12 @@ test('recipient identity is shared across IDs, names and owner aliases', async (
   for (const recipient of [{ id: KIM_DISCORD_USER_ID }, { name: ' KIM ' }, { name: '金功勇' }, { owner: 'KIM@ORGIAST.JP' }, { defaultKim: true }]) assert.equal(isKimRecipient(recipient), true);
   for (const recipient of [{ id: 'staff' }, { owner: 'cr@orgiast.jp' }, {}]) assert.equal(isKimRecipient(recipient), false);
 });
+
+test('Bot DM 例外は明示された自動返信2カテゴリのみ', async () => {
+  const { isAutoreplyCategory } = await import('./kim-dm-policy.mjs');
+  for (const category of ['autoreply-decision', 'autoreply-sent']) {
+    assert.equal(isAutoreplyCategory(category), true);
+    assert.equal(classifyKimDm('引用: マージしてください', { category }).category, category);
+  }
+  for (const category of [undefined, '', 'warning-or-reminder', 'health', 'error', 'other', 'autoreply', 'autoreply-sent-extra', 'AUTOREPLY-SENT']) assert.equal(isAutoreplyCategory(category), false);
+});

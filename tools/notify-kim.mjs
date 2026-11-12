@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 import { toPlainJa } from './lib/plain-ja.mjs';
-import { classifyKimDm, isKimRecipient, KIM_DISCORD_USER_ID } from './lib/kim-dm-policy.mjs';
+import { classifyKimDm, isAutoreplyCategory, isKimRecipient, KIM_DISCORD_USER_ID } from './lib/kim-dm-policy.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { addItem, spoolItem, isInboxNoise } from './kim-inbox.mjs';
 import { annotateAccounts } from './url-account-gate.mjs';
@@ -30,6 +30,17 @@ export function resolveDiscordBotToken(home = process.env.ORGIAST_HOME || os.hom
 export function clipDiscordContent(text) {
   const content = String(text ?? '');
   return content.length <= MAX_CONTENT ? content : `${content.slice(0, MAX_CONTENT - OMITTED.length)}${OMITTED}`;
+}
+
+export function splitDiscordContent(text) {
+  const parts = [];
+  let part = '';
+  for (const char of String(text ?? '')) {
+    if (part.length + char.length > MAX_CONTENT) { parts.push(part); part = ''; }
+    part += char;
+  }
+  if (part) parts.push(part);
+  return parts;
 }
 
 async function postWebhook(url, content, fetchImpl, signal, silent) {
@@ -76,6 +87,8 @@ const normalizeFailure = text => String(text).replace(/\d{4}-\d{2}-\d{2}(?:[T ][
 
 // Use the existing next-session TODO consumer; no separate repair queue.
 export async function notifyKim(text, options = {}) {
+  // Preserve quoted questions and the exact sent reply; do not rewrite or file repair TODOs.
+  if (isAutoreplyCategory(options.category)) return deliverKim(redactSecrets(String(text ?? '')), { ...options, plainJa: false });
   if (isInboxNoise({ ...options, text: String(text ?? '') })) return { delivered: 'suppressed', reason: 'fleet-ledger-or-gate-statistics' };
   if (options.kimActionRequired !== true) {
     const policy = classifyKimDm(text);
@@ -214,9 +227,9 @@ export async function deliverKim(text, {
   plainJaImpl = toPlainJa,
   suffix = '',
   allowHumanRequest = false,
-  kind = 'info', source = '', sessionId = '', discordAllowed: discordAllowedOption,
+  kind = 'info', source = '', sessionId = '', category, discordAllowed: discordAllowedOption,
 } = {}) {
-  if (isInboxNoise({ kind, source, text: String(text ?? '') })) return { delivered: 'suppressed', reason: 'fleet-ledger-or-gate-statistics' };
+  if (!isAutoreplyCategory(category) && isInboxNoise({ kind, source, text: String(text ?? '') })) return { delivered: 'suppressed', reason: 'fleet-ledger-or-gate-statistics' };
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
     || readTrimmed(path.join(home, '.claude', 'orgiast-discord-user-id.txt'))
     || KIM_DISCORD_USER_ID);
@@ -224,15 +237,17 @@ export async function deliverKim(text, {
   // kim 宛の全通知を、システムを知らない人でも読める日本語にしてから送る。
   // 失敗しても送信は止めない(plainJaImpl は例外を投げない契約)。
   // 平易化の書き換えでアカウント表記が落ちることがあるため、書き換え後の本文で補う。
-  const translated = annotateAccounts(plainJa ? await plainJaImpl(String(text ?? '')) : text);
-  const body = suffix && !allowHumanRequest && kind !== 'ask' ? String(translated).split('\n').filter(line => !HANDOFF.test(line)).join('\n') : translated;
+  const autoreply = isAutoreplyCategory(category);
+  const translated = autoreply ? String(text ?? '') : annotateAccounts(plainJa ? await plainJaImpl(String(text ?? '')) : text);
+  const body = !autoreply && suffix && !allowHumanRequest && kind !== 'ask' ? String(translated).split('\n').filter(line => !HANDOFF.test(line)).join('\n') : translated;
   let inboxResult = null;
-  // kim 宛 Discord DM 全廃（2026-10-27 / 2026-11-10 kim 再指示）。kim への通知は kim-inbox のみ。
-  if (isKimRecipient({ id: resolvedUserId, defaultKim: userId == null || String(userId).trim() === '' })) {
+  // kim 宛 Bot DM は自動返信の判断待ち・代理返信報告だけ（2026-11-12 承認）。
+  const kimRecipient = isKimRecipient({ id: resolvedUserId, defaultKim: userId == null || String(userId).trim() === '' });
+  if (kimRecipient && !autoreply) {
     inboxResult = await persistKim(home, { kind: ['ask', 'action'].includes(kind) ? 'ask' : 'info', text: String(body) + suffix, source, sessionId, signal });
     return { ...inboxResult, channel: 'kim-inbox' };
   }
-  const content = suffix ? String(body).slice(0, Math.max(0, MAX_CONTENT - suffix.length)) + suffix : clipDiscordContent(body);
+  const content = autoreply ? String(body) + suffix : suffix ? String(body).slice(0, Math.max(0, MAX_CONTENT - suffix.length)) + suffix : clipDiscordContent(body);
   let dmReason = '';
 
   if (resolvedUserId && resolvedToken) {
@@ -248,13 +263,19 @@ export async function deliverKim(text, {
       if (!dm.ok) throw new Error(`DMチャンネル作成が HTTP ${dm.status}`);
       const channelId = (await dm.json()).id;
       if (!channelId) throw new Error('DMチャンネルIDを取得できません');
-      const sent = await fetchImpl(`${API}/channels/${channelId}/messages`, {
-        method: 'POST', headers, body: JSON.stringify({ content, ...(silent ? { flags: 4096 } : {}) }), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
-      });
-      if (!sent.ok) throw new Error(`DM送信が HTTP ${sent.status}`);
-      const messageId = (await sent.json()).id;
-      if (typeof messageId !== 'string' || !messageId.trim()) throw new Error('DMメッセージIDを取得できません');
-      return { delivered: 'dm', messageId, channelId, recipientId: resolvedUserId, httpStatus: sent.status, ...(inboxResult?.id ? { id: inboxResult.id } : {}), channel: 'discord' };
+      const messageIds = [];
+      let httpStatus;
+      for (const part of splitDiscordContent(content)) {
+        const sent = await fetchImpl(`${API}/channels/${channelId}/messages`, {
+          method: 'POST', headers, body: JSON.stringify({ content: part, allowed_mentions: { parse: [] }, ...(silent ? { flags: 4096 } : {}) }),
+          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000),
+        });
+        if (!sent.ok) throw new Error(`DM送信が HTTP ${sent.status}`);
+        const messageId = (await sent.json()).id;
+        if (typeof messageId !== 'string' || !messageId.trim()) throw new Error('DMメッセージIDを取得できません');
+        messageIds.push(messageId); httpStatus = sent.status;
+      }
+      return { delivered: 'dm', messageId: messageIds.at(-1), messageIds, channelId, recipientId: resolvedUserId, httpStatus, channel: 'discord' };
     } catch (error) {
       dmReason = redactSecrets(error?.message ?? error);
     }
@@ -262,6 +283,10 @@ export async function deliverKim(text, {
     dmReason = !resolvedToken ? 'Discord Bot トークンがありません' : 'kim の Discord ユーザーIDがありません';
   }
 
+  if (kimRecipient && autoreply) {
+    const fallback = await persistKim(home, { kind: category === 'autoreply-decision' ? 'ask' : 'info', text: content, source, sessionId, signal });
+    return { ...fallback, channel: 'kim-inbox', reason: dmReason };
+  }
   if (webhookFallback) {
     const webhook = (fleetFallback ? readEnvValue(path.join(home, '.claude', 'cost-reporter.env'), 'DISCORD_COST_WEBHOOK') : '')
       || readTrimmed(path.join(home, '.claude', 'orgiast-discord-webhook.txt'));

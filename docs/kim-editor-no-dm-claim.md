@@ -1,4 +1,4 @@
-# kim 編集権限・DM 全廃・文書公開修復
+# kim 編集権限・DM 制限・文書公開修復
 
 - 着手: 2026-11-06 / Codex
 - 作業場所: `.wt/kim-editor-no-dm` / `feat/kim-editor-no-dm-20261106`
@@ -17,4 +17,6 @@
 - 原因: 旧 Discord 例外・kim の DM キューを前提とした4テスト、旧ルール移行条件と生成テンプレートの2テストが現行方針と不一致。clean-install は必須の intra-turn-progress-reminder が登録正本から欠落。
 - 修正: 旧例外は送信ゼロと台帳読み戻しで検証し、他メンバーの通知制限を維持。移行条件とテンプレートを正本に同期。進捗 hook の登録を復元し、kim-editor-posttool も setup の必須検証に追加。
 - 検証: 関連162件成功・失敗0・skip0。新規プロファイルの全必須 hook 検証と、2つの PostToolUse hook 欠落時の検出・再登録の回帰テストを追加。
-- main 追従: 通知関数の競合を解消し、例外なしの kim-inbox 送信と main の sessionId 保存を両立。sessionId 読み戻しの回帰検証も追加。
+- main 追従: 通知関数の競合を解消し、当時の kim-inbox 送信と main の sessionId 保存を両立。sessionId 読み戻しの回帰検証も追加。
+
+2026-11-12 更新: 例外は Discord 自動返信の2種だけ: 判断できず kim に回す質問（元メッセージのリンク付き）と、代理で送った返信（本文とリンク付き。修正は kim が Discord で行う）。専用の通知カテゴリだけを許し、直接送信ゲートは維持する。

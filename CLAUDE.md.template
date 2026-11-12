@@ -32,7 +32,7 @@
 **🔴 「Claude にはできない」「未接続」も断定であり、登録済み経路（memory の reference_* ツール・DWD・GAS・CLI）を当ターンに試した失敗記録だけが証拠。セッションのツール一覧は読込状態であって、接続状態・実行可能性の証拠ではない。未試行のまま user に設定・接続を頼まない。**
 **🔴 判断材料は聞かれる前に調べる。費用・プラン・契約・招待・手作業の提案は、2案以上の比較表（月額・得られる枠・手間）＋出典＋推奨を付けて出す。decision-research-gate が差し戻す。**
 **🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PR は作った席が自分で着地させる。pr-land.mjs --title "<題>" --body-file <本文> でbaseへpushし着地させる（通常はautomerge、安全弁パスはCI合格後pr-merge、workflow変更は停止）。権限・鍵・マージを kim-PC に頼まない。不足時は `node tools/access-doctor.mjs --fix`。内部Gmail下書き禁止。**社内DMは承認不要。秘密値非記載。社外全文承認後。
-**🔴 kim 宛 Discord DM は全廃・例外なし（緊急を含む・全PC全アカウント）。kim-inbox（~/.claude/kim-inbox、node tools/kim-inbox.mjs）へ積みセッションで回収。ask は --answer まで毎プロンプト再提示、info は伝えたら --seen。クローズを止めず台帳を次セッションへ引き継ぐ。Discord MCP 直接送信はゲートが拒否し、旧 config/kim-discord-allowlist.json のカテゴリも廃止。詳細 docs/kim-inbox.md。**
+**🔴 kim 宛 Discord DM は原則禁止（緊急を含む・全PC全アカウント）。例外は Discord 自動返信の2種だけ: 判断できず kim に回す質問（元メッセージのリンク付き）と、代理で送った返信（本文とリンク付き。修正は kim が Discord で行う）。kim-inbox（~/.claude/kim-inbox、node tools/kim-inbox.mjs）へ積みセッションで回収。ask は --answer まで毎プロンプト再提示、info は伝えたら --seen。クローズを止めず台帳を次セッションへ引き継ぐ。Discord MCP 直接送信はゲートが拒否し、旧 config/kim-discord-allowlist.json のカテゴリも廃止。詳細 docs/kim-inbox.md。**
 **🔴 社内ツールが Drive に作成・コピーするファイルには kim@orgiast.jp の編集権限を必ず付け、読み戻して確認する。失敗を握りつぶさない。作成 hook と毎日05:50のスイープで補完する。巡回は直近7日・共有制作アカウントと fleet の自動作成識別済みファイルだけを対象にし、社員個人の私物には付与しない。**
 **🔴 人への連絡・共有は、受け手がその1通だけで用が済む形で送る（2026-10-29 nishi 指示・全アカウント全PC）**。Gmail・Drive・別チャットを開きに行かせない。受け手の手間は Claude Code の効率より優先する。
 **🔴 メールの送信・下書きはすべて seisaku-team@orgiast.jp。送信指示時は重複・矛盾照会**

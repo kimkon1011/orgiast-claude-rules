@@ -23,10 +23,10 @@ function fixture(t, { initial = true, messages = [message()], reply = [], after 
   const file = name => path.join(dir, name);
   const state = { baselineTs: NOW - 2000, handled: {}, replies: reply, hourly: [] };
   if (initial) fs.writeFileSync(file('state.json'), JSON.stringify(state));
-  const calls = [], notifications = [], llmCalls = [];
+  const calls = [], notifications = [], noticeOptions = [], llmCalls = [];
   const options = {
     home, now: () => NOW, env: {}, readTokenImpl: () => ({ admin: true, token: 'test-token' }),
-    notifyKimImpl: async text => { notifications.push(text); return { delivered: 'dm' }; },
+    notifyKimImpl: async (text, options) => { notifications.push(text); noticeOptions.push(options); return { delivered: 'dm' }; },
     llm: async input => { llmCalls.push(input); return JSON.stringify(llmResult); },
     fetchImpl: async (url, init) => {
       const u = new URL(url); calls.push({ path: u.pathname, query: u.searchParams, ...init, body: init.body && JSON.parse(init.body) });
@@ -44,7 +44,7 @@ function fixture(t, { initial = true, messages = [message()], reply = [], after 
       throw new Error(`Unexpected request: ${url}`);
     }, ...extra,
   };
-  return { options, home, dir, file, calls, notifications, llmCalls, state,
+  return { options, home, dir, file, calls, notifications, noticeOptions, llmCalls, state,
     readState: () => JSON.parse(fs.readFileSync(file('state.json'), 'utf8')),
     writeState: () => fs.writeFileSync(file('state.json'), JSON.stringify(state)),
     posts: () => calls.filter(x => x.method === 'POST'), patches: () => calls.filter(x => x.method === 'PATCH') };
@@ -97,7 +97,7 @@ test('質問にprefixとmessage_reference付きPOST、履歴とログを保存',
   const f = fixture(t); const result = await runOnce(f.options);
   assert.equal(result.replied, 1); assert.equal(result.errors.length, 0);
   const body = f.posts()[0].body;
-  assert.ok(body.content.startsWith('【Claude自動返信】\n'));
+  assert.ok(body.content.startsWith('【AI自動返信】\n'));
   assert.deepEqual(body.message_reference, { message_id: '100' });
   assert.deepEqual(body.allowed_mentions, { parse: [], replied_user: true });
   assert.equal(f.readState().replies[0].replyId, '200');
@@ -105,22 +105,24 @@ test('質問にprefixとmessage_reference付きPOST、履歴とログを保存',
   assert.equal(f.llmCalls[0].category, 'jp_reply');
   await runOnce(f.options); assert.equal(f.posts().length, 1);
 });
-test('判断待ちはnotifyKimに1回', async t => {
+test('判断待ちは代理返信報告と判断待ちを各1回通知', async t => {
   const f = fixture(t, { llmResult: { ...decision, needs_kim_decision: true } });
   await runOnce(f.options); await runOnce(f.options);
-  assert.equal(f.notifications.length, 1); assert.match(f.notifications[0], /判断待ち: #相談/);
-  assert.match(f.notifications[0], /https:\/\/discord.com\/channels\//);
+  assert.equal(f.notifications.length, 2); assert.match(f.notifications[1], /【判断待ち】#相談/);
+  assert.match(f.notifications[1], /https:\/\/discord.com\/channels\//);
+  assert.deepEqual(f.noticeOptions.map(x => x.category), ['autoreply-sent', 'autoreply-decision']);
 });
 test('生成中にkimが発言したら送信直前に止める', async t => {
   let count = 0;
   const f = fixture(t, { after: () => ++count === 1 ? [] : [kim()] });
   await runOnce(f.options); assert.equal(f.posts().length, 0); assert.equal(f.readState().handled['100'].reason, 'kim_replied');
 });
-test('parse失敗をhandledに記録し再試行・通知しない', async t => {
+test('parse失敗は送信せず判断待ちを一度通知して記録', async t => {
   const f = fixture(t); f.options.llm = async () => 'not json';
   await runOnce(f.options); await runOnce(f.options);
   assert.equal(f.readState().handled['100'].reason, 'llm_parse_error');
-  assert.equal(f.posts().length, 0); assert.equal(f.notifications.length, 0);
+  assert.equal(f.posts().length, 0); assert.equal(f.notifications.length, 1);
+  assert.equal(f.noticeOptions[0].category, 'autoreply-decision');
 });
 test('JSONの周囲に説明があっても抽出、不正なboolは拒否', async t => {
   assert.deepEqual(parseJson('説明```json\n{"a":1}\n```'), { a: 1 });
@@ -136,7 +138,7 @@ test('kim訂正で例・ルール・事実を追記し自己返信だけPATCH', 
   assert.match(fs.readFileSync(f.file('rules.md'), 'utf8'), /- 締切は木曜/);
   assert.match(fs.readFileSync(f.file('knowledge.md'), 'utf8'), /- 定例の締切は木曜/);
   assert.equal(f.patches()[0].path, '/api/v10/channels/channel/messages/200');
-  assert.match(f.patches()[0].body.content, /^【Claude自動返信・kimが訂正済み/);
+  assert.match(f.patches()[0].body.content, /^【AI自動返信】\n【kimが訂正済み/);
   assert.equal(f.llmCalls[0].category, 'classification');
   await runOnce(f.options); assert.equal(f.patches().length, 1);
 });
@@ -186,13 +188,14 @@ test('1時間30件超でPAUSEと通知1回、その後は何もしない', async
 test('31件目の送信成功直後にもPAUSEを保存', async t => {
   const f = fixture(t); f.state.hourly = Array(30).fill(NOW - 1000); f.writeState();
   const result = await runOnce(f.options);
-  assert.equal(result.replied, 1); assert.equal(result.paused, true); assert.equal(f.notifications.length, 1);
+  assert.equal(result.replied, 1); assert.equal(result.paused, true); assert.equal(f.notifications.length, 2);
+  assert.equal(f.noticeOptions[1].category, undefined);
 });
 test('dry-runはcontentを返すがPOST・通知・stateその他ファイルを書かない', async t => {
   const f = fixture(t, { llmResult: { ...decision, needs_kim_decision: true } });
   const before = fs.readFileSync(f.file('state.json'), 'utf8');
   const result = await runOnce({ ...f.options, dryRun: true });
-  assert.equal(result.wouldSend.length, 1); assert.match(result.wouldSend[0].content, /^【Claude自動返信】/);
+  assert.equal(result.wouldSend.length, 1); assert.match(result.wouldSend[0].content, /^【AI自動返信】/);
   assert.equal(f.posts().length, 0); assert.equal(f.notifications.length, 0);
   assert.equal(fs.readFileSync(f.file('state.json'), 'utf8'), before);
   assert.deepEqual(fs.readdirSync(f.dir), ['state.json']);
@@ -262,10 +265,10 @@ test('status / pause / resumeと引数チェック', async t => {
   await main(['resume'], options); assert.equal(fs.existsSync(f.file('PAUSE')), false);
   assert.equal(await main(['loop', '--interval', '0'], options), 1);
 });
-test('2000 UTF-16文字以内、免責文と補助文字を維持', () => {
+test('2000 UTF-16文字以内、AI識別と補助文字を維持', () => {
   for (const corrected of [false, true]) {
     const content = contentFor('😀'.repeat(3000), corrected);
-    assert.ok(content.length <= 2000); assert.ok(!content.includes('\uFFFD')); assert.match(content, /訂正があれば kim が追って返信します。$/);
+    assert.ok(content.length <= 2000); assert.ok(!content.includes('\uFFFD')); assert.match(content, /^【AI自動返信】/);
   }
 });
 test('rulesが200行を超えたらclassificationで統合', async t => {
@@ -626,4 +629,27 @@ test('Windows: BelowNormalの子プロセスはmain実行前の読み込み中�
     console.log(os.getPriority());`;
   const output = execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 30000, windowsHide: true });
   assert.equal(Number(output.trim()), os.constants.priority.PRIORITY_NORMAL);
+});
+
+test('代理返信を送信IDのリンクと送信本文全文で直後に通知する', async t => {
+  const f = fixture(t, { llmResult: { ...decision, answer: 'あ'.repeat(2200) } });
+  await runOnce(f.options);
+  assert.equal(f.notifications.length, 1); assert.equal(f.noticeOptions[0].category, 'autoreply-sent');
+  assert.ok(f.notifications[0].includes(f.posts()[0].body.content));
+  assert.match(f.notifications[0], /https:\/\/discord.com\/channels\/715211007307284530\/channel\/200$/);
+  assert.ok(f.notifications[0].length > 2000);
+});
+test('通知失敗でも本体の返信済みを保持して再送しない', async t => {
+  const f = fixture(t); f.options.notifyKimImpl = async () => { throw new Error('DM failed'); };
+  const result = await runOnce(f.options); assert.equal(result.ok, true); assert.ok(result.notificationErrors.length);
+  assert.equal(f.readState().handled['100'].reason, 'replied');
+  await runOnce(f.options); assert.equal(f.posts().length, 1);
+});
+test('AI prefix と旧免責文がモデル回答にあっても二重にしない', () => {
+  const result = contentFor('【AI自動返信】\n回答\n\n※kim本人の返答ではなく自動返信です。訂正があれば kim が追って返信します。');
+  assert.equal(result, '【AI自動返信】\n回答');
+});
+test('新 prefix の既存返信も重複検出する', async t => {
+  const f = fixture(t, { after: [message({ author: { id: 'self' }, content: '【AI自動返信】\n回答' })] });
+  await runOnce(f.options); assert.equal(f.posts().length, 0);
 });

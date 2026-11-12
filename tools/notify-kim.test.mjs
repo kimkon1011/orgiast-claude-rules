@@ -26,7 +26,7 @@ test('token と userId で DM チャンネルを開いて投稿する', async ()
   assert.match(calls[0].url, /users\/@me\/channels$/);
   assert.deepEqual(JSON.parse(calls[0].init.body), { recipient_id: 'user' });
   assert.match(calls[1].url, /channels\/dm-channel\/messages$/);
-  assert.deepEqual(JSON.parse(calls[1].init.body), { content: 'hello', flags: 4096 });
+  assert.deepEqual(JSON.parse(calls[1].init.body), { content: 'hello', allowed_mentions: { parse: [] }, flags: 4096 });
 });
 
 test('DM 失敗時は webhook へフォールバックする', async () => {
@@ -379,3 +379,44 @@ test('silentはDMとwebhookでflagsを切り替え、環境変数の既定も反
     console.error = originalError; fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+for (const category of ['autoreply-decision', 'autoreply-sent']) {
+  test(`承認済み ${category} だけ kim Bot DM、全文を分割し書き換えない`, async t => {
+    const dir = home(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const content = '【代理返信しました】\n' + '😀金額を確認してください。'.repeat(210) + '\nhttps://discord.com/channels/g/c/sent';
+    const parts = [];
+    const result = await realNotifyKim(content, { home: dir, category, token: 'token', userId: '715210673642012733',
+      plainJaImpl: async () => assert.fail('引用の平易化は禁止'), fetchImpl: async (url, init) => {
+        const body = JSON.parse(init.body);
+        if (url.endsWith('/messages')) { parts.push(body.content); assert.deepEqual(body.allowed_mentions, { parse: [] }); }
+        else assert.equal(body.recipient_id, '715210673642012733');
+        return response({ json: { id: url.endsWith('/messages') ? `sent${parts.length}` : 'dm' } });
+      } });
+    assert.equal(result.delivered, 'dm'); assert.ok(parts.length > 1);
+    assert.equal(parts.join(''), content); assert.ok(parts.every(p => p.length <= 2000 && !p.includes('\uFFFD')));
+    assert.equal(fs.existsSync(path.join(dir, '.claude/next-session.md')), false);
+  });
+  test(`${category} の DM 失敗は inbox、webhook へ送らない`, async t => {
+    const dir = home(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(dir, '.claude'));
+    fs.writeFileSync(path.join(dir, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+    fs.writeFileSync(path.join(dir, '.claude/orgiast-discord-webhook.txt'), 'https://example.test/must-not-send');
+    let calls = 0;
+    const result = await realNotifyKim('【判断待ち】質問\nhttps://discord.com/channels/g/c/m', { home: dir, category, token: 'token', userId: '715210673642012733', fetchImpl: async url => {
+      assert.match(url, /^https:\/\/discord.com\/api/); calls++; return response({ ok: false, status: 403 });
+    } });
+    assert.equal(calls, 1); assert.equal(result.delivered, 'session-inbox');
+    assert.equal(result.kind, category === 'autoreply-decision' ? 'ask' : 'info');
+  });
+}
+for (const category of [undefined, 'health', 'error', 'fleet-arrival', 'autoreply', 'autoreply-sent-extra']) {
+  test(`承認外カテゴリ ${category} は本文で自動返信を名乗っても DM しない`, async t => {
+    const dir = home(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    fs.mkdirSync(path.join(dir, '.claude')); fs.writeFileSync(path.join(dir, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+    const result = await realNotifyKim('【代理返信しました】報告 https://discord.com/channels/g/c/id', {
+      home: dir, category, token: 'token', userId: '715210673642012733', plainJa: false, kimActionRequired: true, discordAllowed: true,
+      fetchImpl: async () => assert.fail('承認外の DM'),
+    });
+    assert.equal(result.delivered, 'session-inbox');
+  });
+}

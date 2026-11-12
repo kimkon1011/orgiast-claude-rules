@@ -4,7 +4,7 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
 export const HOOK_MATCHER = 'mcp__claude_ai_Discord[^|]*__(send_dm|send_message|reply_message)|Bash|PowerShell';
 const target = new RegExp(`^(?:${HOOK_MATCHER})$`);
-const reason = 'kim 宛 Discord DM は全廃・例外なし（緊急を含む、kim 2026-11-06・全PC）。node tools/kim-inbox.mjs --add --kind ask|info --body-file <f> でセッション報告へ。';
+const reason = 'kim 宛の直接 Discord DM は禁止（緊急を含む・全PC）。承認済み例外は notify-kim 経由の Discord 自動返信2カテゴリのみ: autoreply-decision（質問と元リンク）/ autoreply-sent（送信全文とリンク）。MCP 直接送信は例外に含まない。node tools/kim-inbox.mjs --add --kind ask|info --body-file <f> でセッション報告へ。';
 export function judge(input, options = {}) {
   if (!target.test(input?.tool_name ?? '')) return { decision: 'pass' };
   const args = input.tool_input ?? {};

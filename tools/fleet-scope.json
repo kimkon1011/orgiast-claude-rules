@@ -1298,6 +1298,7 @@
     {"path": "tools/tldv-process-improve.mjs", "scope": "kim-only", "reason": "tl;dv 会議→制作プロセス改善の夜間ループ。DWD鍵とLLM鍵を持つ作業用011（kim-PC）だけで実行"},
     {"path": "config/tldv-process-improve.json", "scope": "kim-only", "reason": "tl;dv 改善ループの設定。kim-PCでしか使わない"},
     {"path": "tools/register-tldv-process-improve-task.ps1", "scope": "kim-only", "reason": "kim-PC（作業用011）だけで OrgiastTldvProcessImprove タスクを登録する"},
-    {"path": "tools/tldv-process-improve.test.mjs", "scope": "kim-only", "reason": "tl;dv 改善ループのテスト。CIで実行するがfleet配布はkim-PCだけ"}
+    {"path": "tools/tldv-process-improve.test.mjs", "scope": "kim-only", "reason": "tl;dv 改善ループのテスト。CIで実行するがfleet配布はkim-PCだけ"},
+    {"path": "tools/illustrator-mcp.mjs", "scope": "kim-only", "reason": "Adobe Illustrator 自動化の MCP サーバー。Illustrator がインストールされた PC だけで使用"}
   ]
 }

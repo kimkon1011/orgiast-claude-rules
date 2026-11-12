@@ -763,6 +763,7 @@ export async function reopenLost({ since, until, dryRun = false, max = 3, gapSec
             // 起動中の VS Code で閉じられたタブは開き直さない
             if (Number.isFinite(resolvedVscodeStartedAt) && resolvedVscodeStartedAt < lastEvent) { result.skipped.closedInRunningVscode++; continue; }
             if (reopenCounts[local.id] >= 3) { result.skipped.reopenLoop++; continue; }
+            if (repeatCounts[local.id] >= 3) { result.skipped.reopenRepeat++; continue; }
             seenIds.add(local.id);
             result.candidates.push({ id: local.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '', source: 'state' });
           }
@@ -795,6 +796,8 @@ export async function reopenLost({ since, until, dryRun = false, max = 3, gapSec
             if (session.status === 'archived' && !hostExitArchive(events)) { result.skipped.archivedByUser++; continue; }
             // Skip sessions reopened 3+ times in the last 24h (infinite reopen guard)
             if (reopenCounts[local?.id] >= 3) { result.skipped.reopenLoop++; continue; }
+            // Skip sessions reopened 3+ times in the last 6h (long loop guard)
+            if (repeatCounts[local?.id] >= 3) { result.skipped.reopenRepeat++; continue; }
             if (!local || seenIds.has(local.id)) continue;
             seenIds.add(local.id);
             result.candidates.push({ id: local.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '', source: 'host_exit' });
@@ -809,10 +812,11 @@ export async function reopenLost({ since, until, dryRun = false, max = 3, gapSec
     } catch (error) { result.apiError = error.message; }
     if (!dryRun && result.candidates.length) {
       writeProgress(base, 'fetch', `candidates=${result.candidates.length}`);
-      // CPU 保護: 85% 以上なら開き直しを全部見送る
-      const cpuLoad = checkCpu ? await measureCpuAsync({ cpusImpl }) : null;
-      if (cpuLoad !== null && cpuLoad >= 85) {
-        result.deferredCpu = cpuLoad;
+      // 負荷ガード: claude.exe 数または CPU が閾値を超えていたら開き直しを全部見送る
+      const guard = checkCpu ? await checkLoadGuard({ spawn, cpusImpl, wait }) : { ok: true, claudeCount: 0, cpuPct: null, reason: null, error: null };
+      if (!guard.ok) {
+        result.loadGuard = { claudeCount: guard.claudeCount, cpuPct: guard.cpuPct, reason: guard.reason };
+        result.skipped.loadGuard = result.candidates.length;
       } else {
         const code = codeCli || resolveCodeCli(env, fsImpl.existsSync);
         let windowOpened = false; // 1回の実行で新規ウィンドウを作るのは最大1回まで
@@ -924,7 +928,7 @@ export async function watchReopen(opts = {}, maxParam) {
     since, until, max, dryRun, base, fetchImpl, spawn, wait, now: nowFn, claudeCli, codeCli, env, fsImpl, windowReady, cpusImpl,
     stateBased: true
   });
-  if (!result.error && !result.apiError && !result.deferredCpu && !dryRun) {
+  if (!result.error && !result.apiError && !result.loadGuard && !dryRun) {
     fs.writeFileSync(stateFile, JSON.stringify({ watermark: until }) + '\n');
   }
   return result;

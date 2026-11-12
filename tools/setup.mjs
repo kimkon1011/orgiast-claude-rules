@@ -222,11 +222,64 @@ function emit(results) {
   }
 }
 
+// --converge の単一実行ロック。ロックファイル ~/.claude/state/setup-converge.lock で排他制御する。
+// 既存ロックの pid が生存中かつ15分以内なら「別プロセス実行中」として exit 0 でスキップ。
+// pid 死亡／15分超過なら古いロックを削除して取り直す。正常終了・例外どちらでもロックを削除。
+export function convergeLockPath(home) {
+  return path.join(home, '.claude', 'state', 'setup-converge.lock');
+}
+export function acquireConvergeLock(home, { exitImpl = process.exit, logImpl = console.log, now = Date.now } = {}) {
+  const lockFile = convergeLockPath(home);
+  const lockDir = path.dirname(lockFile);
+  try { fs.mkdirSync(lockDir, { recursive: true }); } catch {}
+  const tryLock = () => {
+    try { return fs.openSync(lockFile, 'wx'); } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      return null;
+    }
+  };
+  let fd = tryLock();
+  if (fd === null) {
+    // 既存ロックの生存確認
+    try {
+      const raw = fs.readFileSync(lockFile, 'utf8');
+      const data = JSON.parse(raw);
+      if (data && typeof data.pid === 'number' && typeof data.startedAt === 'string') {
+        try {
+          process.kill(data.pid, 0);
+          const elapsed = now() - Date.parse(data.startedAt);
+          if (elapsed < 15 * 60 * 1000) {
+            logImpl(`setup --converge は別プロセス(pid=${data.pid})で実行中のためスキップ`);
+            exitImpl(0);
+          }
+        } catch (e2) {
+          if (e2.code !== 'ESRCH') throw e2;
+          // pid 死亡: 古いロックとして削除
+        }
+      }
+    } catch {}
+    // 古いロックを削除して再試行
+    try { fs.unlinkSync(lockFile); } catch {}
+    fd = tryLock();
+    if (fd === null) {
+      logImpl('setup --converge は別プロセスで実行中のためスキップ');
+      exitImpl(0);
+    }
+  }
+  const lockData = JSON.stringify({ pid: process.pid, startedAt: new Date(now()).toISOString() });
+  fs.writeSync(fd, lockData);
+  fs.closeSync(fd);
+  const cleanup = () => { try { fs.unlinkSync(lockFile); } catch {} };
+  process.on('exit', cleanup);
+  return cleanup;
+}
+
 let manifest;
 try { manifest = loadManifest(); } catch (error) { invalid(String(error?.message || error).split(/\r?\n/)[0]); }
 if (manifest) {
   let settingsMigration;
   if (converge) {
+    acquireConvergeLock(home);
     const item = { id: 'classifier-settings', severity: 'required', description: 'hook登録・日次通知hook削除・allowルール同期' };
     try {
       // Let the registrar select the dedicated main anchor unless explicitly overridden.

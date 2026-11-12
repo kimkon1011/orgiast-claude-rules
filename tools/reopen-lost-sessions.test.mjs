@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord } from './reopen-lost-sessions.mjs';
+import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord, countClaudeProcesses, checkLoadGuard } from './reopen-lost-sessions.mjs';
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
 const exit = { event_type: 'system', payload: { reason: 'host_exit' }, created_at: since };
@@ -854,7 +854,7 @@ test('state-based: VS Code 再起動後は開き直す', async t => {
   assert.equal(result.skipped.closedInRunningVscode, 0);
 });
 
-test('CPU 85%以上で開き直しを defer、watermark を進めない', async t => {
+test('CPU 85%以上で開き直しを loadGuard、watermark を進めない', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-cpu-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const base = mkLocalIdx(t, root, { cse_one: 'C:\\work' });
@@ -869,7 +869,11 @@ test('CPU 85%以上で開き直しを defer、watermark を進めない', async 
     if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: evtAt }] }) };
     return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
   };
+  let spawnCallCount = 0;
   const spawn = (cmd, args) => {
+    spawnCallCount++;
+    // tasklist 呼び出し: claude.exe 0 件を返す（CPU チェックへ進む）
+    if (cmd === 'tasklist') return { status: 0, stdout: '' };
     if (args[0] === 'agents') return { status: 0, stdout: '[]' };
     return { status: 0, stdout: '' };
   };
@@ -883,9 +887,12 @@ test('CPU 85%以上で開き直しを defer、watermark を進めない', async 
 
   const result = await watchReopen({ base, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, cpusImpl, now: () => nowTime,
     windowReady: () => true, wait: async () => {} });
-  assert.equal(result.deferredCpu, 92);
+  assert.ok(result.loadGuard, 'loadGuard should be set');
+  assert.equal(result.loadGuard.cpuPct, 92);
+  assert.equal(result.loadGuard.claudeCount, 0);
+  assert.equal(result.skipped.loadGuard, 1);
   assert.equal(result.reopened.length, 0);
-  // watermark は deferredCpu により進まない
+  // watermark は loadGuard により進まない
   assert.equal(fs.existsSync(stateFile), false);
 });
 
@@ -1426,3 +1433,260 @@ test('localIndex: 既定の閾値が 8MB/512KB/4MB である', () => {
     fs.rmSync(base, { recursive: true, force: true });
   }
 });
+
+// ── 既定 max=3 ─────────────────────────────────────────
+
+test('parseOptions 既定 max は 3', () => {
+  const opts = parseOptions([], () => ({ status: 0, stdout: '2026-11-07T12:00:00Z' }));
+  assert.equal(opts.max, 3);
+});
+
+test('reopenLost 既定 max は 3', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-max3-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  // 4 candidates
+  for (let i = 0; i < 4; i++) {
+    fs.writeFileSync(path.join(base, 'projects', 'proj', `s${i}.jsonl`), [
+      { type: 'bridge-session', bridgeSessionId: `cse_s${i}` },
+      { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+    ].map(JSON.stringify).join('\n'));
+  }
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe',
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_s0' }, { id: 'cse_s1' }, { id: 'cse_s2' }, { id: 'cse_s3' }] } }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  // dryRun なので candidates は4件あるが、実際に開くときは max=3 で slice される
+  assert.equal(result.candidates.length, 4);
+});
+
+// ── countClaudeProcesses ────────────────────────────────
+
+test('countClaudeProcesses: 正常系', () => {
+  const result = countClaudeProcesses({ spawn: () => ({ status: 0, stdout: '"claude.exe","1234"\n"claude.exe","5678"\n' }) });
+  assert.equal(result.count, 2);
+  assert.equal(result.error, null);
+});
+
+test('countClaudeProcesses: 0 件', () => {
+  const result = countClaudeProcesses({ spawn: () => ({ status: 0, stdout: '' }) });
+  assert.equal(result.count, 0);
+  assert.equal(result.error, null);
+});
+
+test('countClaudeProcesses: エラー時は fail-open', () => {
+  const result = countClaudeProcesses({ spawn: () => ({ error: new Error('ETIMEDOUT'), status: null, stdout: '' }) });
+  assert.equal(result.count, 0);
+  assert.ok(result.error);
+});
+
+// ── checkLoadGuard ──────────────────────────────────────
+
+test('checkLoadGuard: claude.exe 数が閾値以上でブロック', async () => {
+  const result = await checkLoadGuard({
+    spawn: () => ({ status: 0, stdout: '\n'.repeat(10) }), // 10 lines = 10 processes
+    wait: async () => { throw new Error('should not reach CPU'); },
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.claudeCount, 10);
+  assert.ok(result.reason.includes('claude.exe count'));
+});
+
+test('checkLoadGuard: CPU が閾値以上でブロック', async () => {
+  let cpuCallCount = 0;
+  const cpusImpl = () => {
+    cpuCallCount++;
+    if (cpuCallCount === 1) return [{ times: { user: 0, nice: 0, system: 0, idle: 0, iowait: 0, irq: 0, softirq: 0 } }];
+    return [{ times: { user: 50, nice: 0, system: 30, idle: 7, iowait: 0, irq: 0, softirq: 0 } }];
+  };
+  const result = await checkLoadGuard({
+    spawn: () => ({ status: 0, stdout: '' }), // 0 claude.exe
+    cpusImpl,
+    wait: async () => {},
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.cpuPct, 92);
+  assert.equal(result.claudeCount, 0);
+  assert.ok(result.reason.includes('CPU'));
+});
+
+test('checkLoadGuard: tasklist 失敗時は fail-open', async () => {
+  const result = await checkLoadGuard({
+    spawn: () => ({ error: new Error('ETIMEDOUT'), status: null, stdout: '' }),
+    wait: async () => { throw new Error('should not reach CPU'); },
+  });
+  assert.equal(result.ok, true);
+  assert.ok(result.error);
+});
+
+test('checkLoadGuard: 負荷正常時は ok', async () => {
+  const result = await checkLoadGuard({
+    spawn: () => ({ status: 0, stdout: '' }), // 0 claude.exe
+    cpusImpl: () => [{ times: { user: 0, nice: 0, system: 0, idle: 100, iowait: 0, irq: 0, softirq: 0 } }],
+    wait: async () => {},
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.claudeCount, 0);
+  assert.equal(result.cpuPct, 0);
+  assert.equal(result.reason, null);
+  assert.equal(result.error, null);
+});
+
+// ── 負荷ガード（統合テスト） ────────────────────────────
+
+test('reopenLost: claude.exe 数が閾値以上で skipped.loadGuard', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-load-claude-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, { cse_one: 'C:\\work' });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const result = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd',
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: (cmd, args) => {
+      if (cmd === 'tasklist') return { status: 0, stdout: '\n'.repeat(10) }; // 10 claude.exe
+      if (args[0] === 'agents') return { status: 0, stdout: '[]' };
+      return { status: 0, stdout: '' };
+    },
+    windowReady: () => true,
+    wait: async () => {},
+  });
+  assert.equal(result.reopened.length, 0);
+  assert.equal(result.skipped.loadGuard, 1);
+  assert.ok(result.loadGuard);
+  assert.equal(result.loadGuard.claudeCount, 10);
+  assert.ok(result.loadGuard.reason.includes('claude.exe count'));
+});
+
+test('reopenLost: tasklist 失敗時は fail-open（負荷ガードを適用しない）', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-load-failopen-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, { cse_one: 'C:\\work' });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const result = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false,
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: (cmd, args) => {
+      if (cmd === 'tasklist') return { error: new Error('ETIMEDOUT'), status: null, stdout: '' };
+      if (args[0] === 'agents') return { status: 0, stdout: '[]' };
+      return { status: 0, stdout: '' };
+    },
+    windowReady: () => true,
+    wait: async () => {},
+  });
+  // fail-open: 負荷ガードを適用せず、通常通り開く
+  assert.equal(result.skipped.loadGuard, 0);
+  assert.equal(result.reopened.length, 1);
+});
+
+// ── 6h 長期ループガード ─────────────────────────────────
+
+test('reopenLost: 6時間以内に3回 reopen された id は reopenRepeat で除外', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-repeat-6h-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, { cse_one: 'C:\\work' });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  // 6時間以内に3回 reopen（verified/unverified 問わず）
+  const logFile = path.join(base, 'reopen-lost-sessions.log');
+  const logEntries = [
+    { at: '2026-11-07T07:00:00.000Z', reopened: [{ id: 'one' }], verified: [] },
+    { at: '2026-11-07T09:00:00.000Z', reopened: [{ id: 'one' }], verified: [] },
+    { at: '2026-11-07T11:00:00.000Z', reopened: [{ id: 'one' }], verified: [] },
+  ];
+  fs.writeFileSync(logFile, logEntries.map(e => JSON.stringify(e)).join('\n') + '\n');
+
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime,
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.equal(result.skipped.reopenRepeat, 1);
+  assert.equal(result.candidates.length, 0);
+});
+
+test('reopenRepeat: 6時間以内に2回だけなら除外されない', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-repeat-2x-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, { cse_one: 'C:\\work' });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  const logFile = path.join(base, 'reopen-lost-sessions.log');
+  const logEntries = [
+    { at: '2026-11-07T07:00:00.000Z', reopened: [{ id: 'one' }], verified: [] },
+    { at: '2026-11-07T09:00:00.000Z', reopened: [{ id: 'one' }], verified: [] },
+  ];
+  fs.writeFileSync(logFile, logEntries.map(e => JSON.stringify(e)).join('\n') + '\n');
+
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime,
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.equal(result.skipped.reopenRepeat, 0);
+  assert.equal(result.candidates.length, 1);
+});
+
+test('reopenRepeat: 6時間より古い reopen はカウントしない', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-repeat-old-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, { cse_one: 'C:\\work' });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  const logFile = path.join(base, 'reopen-lost-sessions.log');
+  // 3回 reopen だが全て 6時間より前
+  const logEntries = [
+    { at: '2026-11-07T05:00:00.000Z', reopened: [{ id: 'one' }], verified: [] },
+    { at: '2026-11-07T05:30:00.000Z', reopened: [{ id: 'one' }], verified: [] },
+    { at: '2026-11-07T05:59:00.000Z', reopened: [{ id: 'one' }], verified: [] },
+  ];
+  fs.writeFileSync(logFile, logEntries.map(e => JSON.stringify(e)).join('\n') + '\n');
+
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime,
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.equal(result.skipped.reopenRepeat, 0);
+  assert.equal(result.candidates.length, 1);
+});
+
+test('reopenRepeat: 既存の reopenLoop（60分 verified 3回）テストが通り続ける', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-loop-still-works-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = mkLocalIdx(t, root, { cse_one: 'C:\\work' });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  // 60分以内に verified 3回 → reopenLoop で止まる
+  const logFile = path.join(base, 'reopen-lost-sessions.log');
+  const logEntries = [
+    { at: '2026-11-07T11:00:00.000Z', reopened: [{ id: 'one' }], verified: ['one'] },
+    { at: '2026-11-07T11:20:00.000Z', reopened: [{ id: 'one' }], verified: ['one'] },
+    { at: '2026-11-07T11:40:00.000Z', reopened: [{ id: 'one' }], verified: ['one'] },
+  ];
+  fs.writeFileSync(logFile, logEntries.map(e => JSON.stringify(e)).join('\n') + '\n');
+
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime,
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.equal(result.skipped.reopenLoop, 1);
+  assert.equal(result.candidates.length, 0);
+});
+

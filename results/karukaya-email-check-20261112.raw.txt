@@ -1,0 +1,31 @@
+$ node tools/gmail-search.mjs --query "karukaya.jp after:2026/11/01" --user seisaku-team@orgiast.jp --max 10 --body
+{
+  "user": "seisaku-team@orgiast.jp",
+  "query": "karukaya.jp after:2026/11/01",
+  "estimate": 1,
+  "messages": [
+    {
+      "id": "1a1c02eb7abf1f82",
+      "internalDate": "1794225649000",
+      "threadId": "1a1c02eb7abf1f82",
+      "date": "Mon, 9 Nov 2026 07:00:49 -0500",
+      "from": "seisaku-team@orgiast.jp",
+      "to": "t_tokuda@karukaya.jp",
+      "subject": "【会議URLのご案内】11月16日（月）11:00〜 オンラインお打ち合わせ（株式会社オージャスト）",
+      "listUnsubscribe": "",
+      "snippet": "株式会社カルカヤ徳田様お世話になっております。 株式会社オージャストの澤山でございます。 先日はお電話にてお時間をいただき、誠にありがとうございました。 オンラインお打ち合わせの会議URLをお送りいたします。 ■日時：2026年11月16日（月）11:00〜12:00 ■方法：Google Meet（オンライン） ■URL：https://meet.google.com/fnx-krwy-uuj",
+      "labels": [
+        "DRAFT"
+      ],
+      "body": "株式会社カルカヤ\r\n徳田様\r\n\r\nお世話になっております。\r\n株式会社オージャストの澤山でございます。\r\n\r\n先日はお電話にてお時間をいただき、誠にありがとうございました。\r\nオンラインお打ち合わせの会議URLをお送りいたします。\r\n\r\n■日時：2026年11月16日（月）11:00〜12:00\r\n■方法：Google Meet（オンライン）\r\n■URL：https://meet.google.com/fnx-krwy-uuj\r\n\r\n当日は上記URLからご参加ください。\r\n日時に相違がございましたら、お手数ですがご返信にてお知らせください。\r\n\r\n当日はどうぞよろしくお願いいたします。\r\n\r\n株式会社オージャスト\r\n澤山 貴俊\r\nseisaku-team@orgiast.jp"
+    }
+  ],
+  "skipped": 0,
+  "nextPageToken": null
+}
+
+$ node tools/gmail-search.mjs --query "karukaya.jp after:2026/11/01" --user kim@orgiast.jp --max 10 --body
+GWS proxy: kim is calendar-only
+
+$ node tools/gmail-search.mjs --query "カルカヤ after:2026/11/01" --user kim@orgiast.jp --max 10
+GWS proxy: kim is calendar-only

@@ -6,6 +6,7 @@ import path from 'node:path';
 import test, { after } from 'node:test';
 import vm from 'node:vm';
 import { spawnSync } from 'node:child_process';
+import { addCheck } from './auto-progress.mjs';
 import { main as registerTasks } from './register-auto-progress-task.mjs';
 import { isNoopPromise, extractPromise, extractNextKim, applyPromise, buildRecord, record, readLedger, writeLedger, ledgerFile, rowKey, originLine } from './auto-progress-ledger.mjs';
 import { run as runWatch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, forgiveNoExecutorResumes, main as watchMain, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS, formatDoneMessage, readableReason, formatDoneBacklogMessages } from './auto-progress-watch.mjs';
@@ -1647,4 +1648,62 @@ test('addCheck CLI: $env: を含む check は preflight で拒否され exit 2 �
   assert.equal(result.status, 2);
   assert.match(result.stderr, /\$env:/);
   assert.equal(readLedger(ledgerFile(home)).length, 0);
+});
+
+test('addCheck: --next-kim の処理と古い nextKim のリセット、promise の上書き', () => {
+  const home = tmp();
+  // 1. 自動登録などで作られた古い nextKim と promise を準備
+  writeLedger(ledgerFile(home), [{
+    sessionId: 'session-4ee33e10',
+    status: 'open',
+    ts: new Date(Date.now() - 3600000).toISOString(),
+    promise: '古い約束',
+    nextKim: '古い質問: 詳しく教えてください',
+    autoRegisteredCheck: true
+  }]);
+
+  // 2. --next-kim も --ask-file も指定しない addCheck → 古い nextKim は 'なし' にリセットされ、promise は新しい label で上書きされる
+  const row1 = addCheck({ home, session: 'session-4ee33e10', check: 'exit 1', deadline: '+24h', label: '新しい見出し' });
+  assert.equal(row1.nextKim, 'なし');
+  assert.equal(row1.promise, '新しい見出し');
+
+  // 3. --next-kim "なし" の指定 → nextKim は 'なし' になる
+  const row2 = addCheck({ home, session: 'session-4ee33e10', check: 'exit 1', deadline: '+24h', label: '見出し2', nextKim: 'なし' });
+  assert.equal(row2.nextKim, 'なし');
+
+  // 4. --next-kim "質問本文" の指定 → 指定した nextKim が反映される
+  const row3 = addCheck({ home, session: 'session-4ee33e10', check: 'exit 1', deadline: '+24h', label: '見出し3', nextKim: '新しい質問' });
+  assert.equal(row3.nextKim, '新しい質問');
+});
+
+
+test('addCheck: ask-file preserves the question unless next-kim explicitly clears it', () => {
+  const home = tmp();
+  const askFile = path.join(home, 'ask.txt');
+  fs.writeFileSync(askFile, '詳しい質問');
+  seed(home, [{ sessionId: 'ask-precedence', ts: new Date(0).toISOString(), status: 'open', promise: '古い約束', nextKim: '対象を教えてください' }]);
+  const options = { home, session: 'ask-precedence', check: 'exit 1', deadline: '+2d', label: '新しい監視', askFile };
+  assert.equal(addCheck(options).nextKim, '対象を教えてください');
+  const cleared = addCheck({ ...options, nextKim: 'なし' });
+  assert.equal(cleared.nextKim, 'なし');
+  assert.equal(cleared.ask, '詳しい質問');
+  assert.equal(readLedger(ledgerFile(home)).at(-1).nextKim, 'なし');
+});
+
+test('addCheck CLI: next-kim clears stale question and persists the new label', () => {
+  const home = tmp();
+  seed(home, [{ sessionId: 'cli-next-kim', ts: new Date(0).toISOString(), status: 'open', promise: '古い約束', nextKim: '古い質問' }]);
+  const result = spawnSync(process.execPath, ['tools/auto-progress.mjs', '--add-check', '--session', 'cli-next-kim', '--check', 'exit 1', '--deadline', '+2d', '--label', '新しい監視', '--next-kim', 'なし'], { env: { ...process.env, ORGIAST_HOME: home }, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const saved = readLedger(ledgerFile(home)).at(-1);
+  assert.equal(saved.nextKim, 'なし');
+  assert.equal(saved.promise, '新しい監視');
+});
+
+
+test('auto registration marker excludes inferred questions from the human inbox', () => {
+  const row = { status: 'open', autoRegisteredCheck: true, nextKim: '何のHPか教えてください' };
+  assert.equal(isHumanActionRequired(row), false);
+  assert.equal(isHumanActionRequired({ ...row, status: 'waiting_user' }), true);
+  assert.equal(isHumanActionRequired({ ...row, autoRegisteredCheck: false }), true);
 });

@@ -9,7 +9,7 @@ import { resolveOwner } from './notify-owner.mjs';
 import { hasReferencedApproval } from './lib/send-approval.mjs';
 // 外部の成果を読まず、時計と定数だけで決まる典型的な判定を拒否する。
 export { isTimeOnlyCheck } from './auto-progress-check.mjs';
-export function addCheck({ session, check, startWhen, deadline, label, nextClaude, askFile, doneFile, timeout, cwd = process.cwd(), home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), probe, allowMet = false }) {
+export function addCheck({ session, check, startWhen, deadline, label, nextClaude, nextKim, askFile, doneFile, timeout, cwd = process.cwd(), home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), probe, allowMet = false }) {
   const convertedToStartWhen = startWhen === undefined && Boolean(check?.trim()) && Boolean(nextClaude?.trim());
   if (convertedToStartWhen) startWhen = check;
   if (!session?.trim() || !(startWhen?.trim() || check?.trim()) || !label?.trim()) throw new Error('--session, --check, --label は必須です');
@@ -39,10 +39,19 @@ export function addCheck({ session, check, startWhen, deadline, label, nextClaud
   if (/(?:送信|送る|送って|send)/iu.test(promisedWork) && !hasReferencedApproval(promisedWork, { home })) {
     throw new Error('auto-progress に社外送信は登録できません。下書き・kim-inbox の承認待ちまでにし、送信する場合は send-approval:<本文sha256> と有効な承認マーカーを付けてください');
   }
+  let resolvedNextKim = 'なし';
+  if (nextKim !== undefined) {
+    const trimmed = nextKim.trim();
+    resolvedNextKim = (trimmed === '' || trimmed === 'なし') ? 'なし' : trimmed;
+  } else if (askFile !== undefined) {
+    resolvedNextKim = old?.nextKim || 'なし';
+  } else {
+    resolvedNextKim = 'なし';
+  }
   // A new revision keeps prior results auditable and resets notification state.
   const row = { ts: new Date(now).toISOString(), pc: old?.pc || os.hostname(), user: old?.user || os.userInfo().username,
     owner: old?.owner || resolveOwner({ home }), sessionId: session, cwd: old?.cwd || cwd, transcriptPath: old?.transcriptPath || '',
-    promise: old?.promise || label, nextKim: old?.nextKim || 'なし', status: startWhen ? 'scheduled' : 'open', ...(!convertedToStartWhen && check ? { check: check.trim(), checkRegisteredAt: new Date(now).toISOString() } : {}), ...(startWhen ? { startWhen: startWhen.trim() } : {}), checkCwd: cwd,
+    promise: label.trim(), nextKim: resolvedNextKim, status: startWhen ? 'scheduled' : 'open', ...(!convertedToStartWhen && check ? { check: check.trim(), checkRegisteredAt: new Date(now).toISOString() } : {}), ...(startWhen ? { startWhen: startWhen.trim() } : {}), checkCwd: cwd,
     ...(convertedToStartWhen ? { convertedFromAddCheck: true, registrationNotice: 'start-when として登録しました' } : {}),
     deadlineAt: new Date(deadlineMs).toISOString(), label: label.trim(), nextClaude: nextClaude || '', ...(doneFile ? { doneFile } : {}), ...(ask !== undefined || old?.ask ? { ask: ask ?? old.ask } : {}), ...timeoutFields };
   writeLedger(file, applyPromise(rows, row)); return row;
@@ -60,8 +69,8 @@ export function auditChecks({ home = process.env.ORGIAST_HOME || os.homedir(), e
 }
 export function main(argv = process.argv.slice(2)) {
   if (argv.length === 1 && argv[0] === '--audit-checks') return auditChecks();
-  const { values } = parseArgs({ args: argv, options: { 'add-check': { type: 'boolean' }, 'ask-file': { type: 'string' }, 'done-file': { type: 'string' }, 'start-when': { type: 'string' }, 'allow-met': { type: 'boolean' }, 'force-check': { type: 'boolean' }, 'allow-session-state': { type: 'boolean' }, session: { type: 'string' }, check: { type: 'string' }, deadline: { type: 'string' }, label: { type: 'string' }, 'next-claude': { type: 'string' }, timeout: { type: 'string' } } });
-  if (!values['add-check'] && !values['start-when']) throw new Error('使用法: --start-when "<cmd>" --session <id> --label "<名前>" --deadline +24h --next-claude "<作業>" [--check "<完了判定>"] または --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" [--timeout <秒>] [--ask-file <path>] [--done-file <path>] [--allow-met] [--force-check] [--allow-session-state] または --audit-checks。check: exit 0=完了 / 1=未達 / 3=停滞（stdout 最終行が理由）/ その他=エラー');
+  const { values } = parseArgs({ args: argv, options: { 'add-check': { type: 'boolean' }, 'ask-file': { type: 'string' }, 'done-file': { type: 'string' }, 'start-when': { type: 'string' }, 'allow-met': { type: 'boolean' }, 'force-check': { type: 'boolean' }, 'allow-session-state': { type: 'boolean' }, session: { type: 'string' }, check: { type: 'string' }, deadline: { type: 'string' }, label: { type: 'string' }, 'next-claude': { type: 'string' }, 'next-kim': { type: 'string' }, timeout: { type: 'string' } } });
+  if (!values['add-check'] && !values['start-when']) throw new Error('使用法: --start-when "<cmd>" --session <id> --label "<名前>" --deadline +24h --next-claude "<作業>" [--check "<完了判定>"] または --add-check --session <id> --check "<cmd>" --deadline +24h --label "<名前>" [--timeout <秒>] [--next-kim "<文|なし>"] [--ask-file <path>] [--done-file <path>] [--allow-met] [--force-check] [--allow-session-state] または --audit-checks。check: exit 0=完了 / 1=未達 / 3=停滞（stdout 最終行が理由）/ その他=エラー');
   const home = process.env.ORGIAST_HOME || os.homedir();
   if (!values['start-when'] && !values['allow-session-state']
       && sessionStateReference({ check: values.check, checkCwd: process.cwd() }, { home })) {
@@ -78,6 +87,6 @@ export function main(argv = process.argv.slice(2)) {
       throw new Error(pf.text);
     }
   }
-  return addCheck({ ...values, home, askFile: values['ask-file'], doneFile: values['done-file'], startWhen: values['start-when'], nextClaude: values['next-claude'], allowMet: values['allow-met'], probe: row => executeCheck(row, { home }) });
+  return addCheck({ ...values, home, askFile: values['ask-file'], doneFile: values['done-file'], startWhen: values['start-when'], nextClaude: values['next-claude'], nextKim: values['next-kim'], allowMet: values['allow-met'], probe: row => executeCheck(row, { home }) });
 }
 if (isEntry(import.meta.url)) { try { console.log(JSON.stringify(main())); } catch (error) { console.error(error.message); process.exitCode = 2; } }

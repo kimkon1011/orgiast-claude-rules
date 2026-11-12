@@ -17,11 +17,11 @@ after(() => homes.forEach(home => fs.rmSync(home, { recursive: true, force: true
 const now = Date.parse('2026-10-23T00:00:00Z');
 const register = home => addCheck({ home, now, session: 'session', check: 'node check.mjs', label: '着信確認', deadline: '+24h' });
 const baseIo = { sheetConfig: () => null, digest: async () => ({}), resume: () => assert.fail('check must not resume'), askLlm: () => assert.fail('check must not infer') };
-test('CLI validates deadline, preserves promise and registers a new revision', () => {
+test('CLI validates deadline, replaces promise with label and registers a new revision', () => {
   const home = tmp();
   writeLedger(ledgerFile(home), [{ ts: new Date(now - 1).toISOString(), sessionId: 'session', status: 'open', promise: '元の約束', owner: 'owner' }]);
   const row = register(home);
-  assert.equal(row.promise, '元の約束'); assert.equal(row.owner, 'owner');
+  assert.equal(row.promise, '着信確認'); assert.equal(row.owner, 'owner');
   assert.equal(row.deadlineAt, '2026-10-24T00:00:00.000Z');
   assert.equal(readLedger(ledgerFile(home))[0].status, 'superseded');
   assert.throws(() => addCheck({ home, session: 's', check: 'x', label: 'x', deadline: 'bad' }), /deadline/);

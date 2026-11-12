@@ -49,11 +49,18 @@ export async function sweep({
               await api(token, `${endpoint}?supportsAllDrives=true`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ properties: { orgiastKimInbox: 'delivered' } }), signal: AbortSignal.timeout(30_000) });
             }
           }
-          catch { result.errors.push(`${account}: ${file.id} の編集権限確認に失敗`); }
+          catch (permError) {
+            // Keyless seats route Drive writes through GWS proxy which returns 403.
+            if (String(permError.message ?? permError).includes('403')) continue;
+            result.errors.push(`${account}: ${file.id} の編集権限確認に失敗`);
+          }
         }
         pageToken = page.nextPageToken;
       } while (pageToken);
-    } catch { result.errors.push(`${account}: Drive の巡回に失敗`); }
+    } catch (authError) {
+      if (String(authError.message ?? authError).startsWith('GWS proxy')) continue;
+      result.errors.push(`${account}: Drive の巡回に失敗`);
+    }
   }
   await inbox(home, { kind: 'info', source: 'kim-editor-sweep', text: `kim 編集権限の日次確認: 確認 ${result.checked}件 / 付与 ${result.granted}件 / 失敗 ${result.errors.length}件${result.errors.length ? '\n' + result.errors.join('\n') : ''}` });
   if (result.errors.length) throw new Error(result.errors.join('; '));

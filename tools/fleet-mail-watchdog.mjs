@@ -15,6 +15,7 @@ import { runLaneHealthWatch } from './fleet-lane-health-report.mjs';
 import { loadLedger, ledgerPath, saveJson } from './lib/fleet-chase-ledger.mjs';
 import { formatKimNotice } from './lib/kim-notice.mjs';
 import { drainSpool } from './kim-inbox.mjs';
+import { reapStalePolls } from './lib/fleet-poll-reaper.mjs';
 export { CHANNEL, postToChannel };
 export function formatAlert(entry) {
   const clean = value => redactSecrets(String(value || '')).replace(/\s+/g, ' ');
@@ -48,6 +49,9 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   if (argv.includes('--dry-run')) return runOnce(argv, deps);
   const home = deps.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  // Recover even when an older watchdog still owns its lock. Do this before
+  // any network work; a blocked poll event loop cannot enforce its own timer.
+  await (deps.reapStalePolls ?? reapStalePolls)({ home, stderr: deps.stderr ?? console.error });
   const release = acquireLock(path.join(home, '.claude/fleet-mail-watchdog.lock'));
   if (!release) { (deps.stderr ?? console.error)('fleet-mail-watchdog: already running=1'); return 0; }
   try { return await runOnce(argv, deps); } finally { release(); }

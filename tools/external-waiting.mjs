@@ -11,6 +11,7 @@ import { getDriveToken, defaultDriveKeyPath } from './lib/drive-auth.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
 import { headerValue, extractBody } from './gmail-search.mjs';
 import { isEntry } from './is-entry.mjs';
+import { gmailNotificationOwned } from './lib/external-monitor-state.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
 import { draftBody, nonHumanRecipient, mailboxDraftLabel, allPages, filterClearedDrafts, notifyClearedDrafts, deleteClearedDrafts } from './lib/drafts-auto-cleared.mjs';
 import { defaultHome, externalFile, stateDir, readJsonSafe, writeJsonAtomic, readSkips, isSkipped, addSkip } from './lib/external-waiting-state.mjs';
@@ -237,7 +238,8 @@ export async function scan({ home = defaultHome(), now = Date.now(), mailboxes =
   const pushed = Object.fromEntries(Object.entries(previous.pushed || {}).filter(([id, at]) => ids.has(id) && now - at < 7 * 24 * HOUR));
   let notified = null;
   if (push) {
-    const due = kept.filter(item => now - Date.parse(item.since) >= WAIT_LIMIT_MS && !(pushed[item.id] && now - pushed[item.id] < WAIT_LIMIT_MS));
+    const monitored = gmailNotificationOwned(home, now);
+    const due = kept.filter(item => !monitored(item) && now - Date.parse(item.since) >= WAIT_LIMIT_MS && !(pushed[item.id] && now - pushed[item.id] < WAIT_LIMIT_MS));
     if (due.length) {
       const send = notify || (async text => (await import('./notify-kim.mjs')).notifyKim(text, { kind: 'info', source: 'external-waiting', plainJa: false }));
       notified = await send(notifyText(due, now));

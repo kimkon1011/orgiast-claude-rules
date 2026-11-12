@@ -3,11 +3,22 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { readToken } from './discord-task-digest.mjs';
-import { PROVIDERS, parseEnvText } from './line-digest.mjs';
-import { callWithFallback, FALLBACK_CHAIN, preferredForCategory } from './llm-fallback.mjs';
-import { notifyKim } from './notify-kim.mjs';
+import { request as httpsRequest } from 'node:https';
 import { isEntry } from './is-entry.mjs';
+
+export function ensureTaskPriority({ platform = process.platform, setPriority = os.setPriority } = {}) {
+  if (platform === 'win32') setPriority(0, os.constants.priority.PRIORITY_NORMAL);
+}
+
+// Static imports link the entire dependency graph before any code executes.
+// Normalize inherited task priority BEFORE loading the larger Discord/LLM graph:
+// priority-7 tasks on this PC also stall during module loading, before main().
+ensureTaskPriority();
+const [{ readToken }, { PROVIDERS, parseEnvText },
+  { callWithFallback, FALLBACK_CHAIN, preferredForCategory }, { notifyKim }] = await Promise.all([
+  import('./discord-task-digest.mjs'), import('./line-digest.mjs'),
+  import('./llm-fallback.mjs'), import('./notify-kim.mjs'),
+]);
 
 const HOUR = 3600000;
 const REAUTHORIZE_URL = 'https://discord.com/oauth2/authorize?client_id=1511684767546871818&scope=bot&permissions=8';
@@ -128,29 +139,81 @@ export function createLlm({ home, fetchImpl, sleepImpl = sleep, env = process.en
   };
 }
 
-export function createDiscord({ token, fetchImpl = fetch, sleepImpl = sleep }) {
+/**
+ * Discord-only transport: a fresh IPv4 connection for every attempt, including
+ * every loop iteration. No shared undici pool or environment-selected proxy.
+ * agent:false creates a one-use Agent (https://nodejs.org/api/http.html).
+ * The signal covers DNS, TLS, headers AND the complete response body.
+ *
+ * Task reproduction (Windows, no messages/notifications): copy the principal,
+ * settings and run-hidden.vbs action of OrgiastDiscordAutoReply to a temporary
+ * task. Replace the script path with this checkout and arguments with
+ * `once --dry-run` (or `loop --seconds 60 --interval 20 --dry-run`). Start only
+ * that temporary task, read its LastTaskResult and the JSON output in
+ * %USERPROFILE%\.claude\logs\discord-autoreply.log, then remove it.
+ * Compare with `node tools/discord-autoreply.mjs once --dry-run` in a shell.
+ * Never start/re-register the production task for this diagnostic.
+ * Record Node version, DNS address families and presence (not values) of proxy
+ * variables; do not print tokens, message bodies or proxy credentials.
+ * 2026-11-12 controlled task probe: priority 7 (BelowNormal) timed out with
+ * BOTH fetch and one-use https; the same principal/action at priority 4 (Normal)
+ * returned HTTP 200 for all 8 identity/search reads (231-1093 ms). Both contexts
+ * had IPv4-only DNS and no proxy env variables. Scheduler priority is the observed
+ * discriminator, not evidence that IPv6 or an undici pool caused this incident.
+ * Set the diagnostic task Settings.Priority=4 to compare. Registration uses 4
+ * to avoid low-priority startup as well. ensureTaskPriority normalizes the Node
+ * child before loading larger dependencies, but cannot help before JS starts.
+ */
+export function discordRequest(url, init, { requestImpl = httpsRequest } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = requestImpl(url, { ...init, agent: false, family: 4 }, res => {
+      const chunks = [];
+      res.on('data', chunk => chunks.push(Buffer.from(chunk)));
+      res.on('error', reject);
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        resolve({ status: res.statusCode, ok: res.statusCode >= 200 && res.statusCode < 300,
+          json: async () => JSON.parse(text) });
+      });
+    });
+    req.on('error', reject);
+    req.end(init.body);
+  });
+}
+
+export function createDiscord({ token, fetchImpl = discordRequest, sleepImpl = sleep, timeoutMs = 8000 }) {
   return async (route, { method = 'GET', body } = {}) => {
+    // A timed-out POST may already have reached Discord. Never replay it.
+    const canRetry = method === 'GET';
+    let rateLimited = false;
     for (let attempt = 0; attempt < 3; attempt++) {
-      let res;
+      let res, data;
       try {
         res = await fetchImpl(`https://discord.com/api/v10${route}`, {
-          method, headers: { Authorization: `Bot ${token}`, 'User-Agent': 'DiscordBot (orgiast-autoreply, 1.0)', 'Content-Type': 'application/json',
-            ...(attempt ? { Connection: 'close' } : {}) },
-          ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30000),
+          method, headers: { Authorization: `Bot ${token}`, 'User-Agent': 'DiscordBot (orgiast-autoreply, 1.0)',
+            'Content-Type': 'application/json', Connection: 'close' },
+          ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(timeoutMs),
+        });
+        // Consume the body under the same deadline, also on retryable responses.
+        if (res.status !== 204) data = await res.json().catch(e => {
+          // Error responses need not be JSON; a body read timeout still matters.
+          if (e instanceof SyntaxError && !res.ok && res.status !== 429) return null;
+          throw e;
         });
       } catch (e) {
-        if (attempt < 2) { await sleepImpl(250 * (attempt + 1)); continue; }
+        if (canRetry && attempt < 2) { await sleepImpl(250 * (attempt + 1)); continue; }
         const detail = /abort|timed? ?out/i.test(String(e.message || e)) ? 'timeout' : String(e.message || e);
         throw new Error(`Discord ${method} ${route} ${detail}`);
       }
-      if (res.status === 429 && attempt === 0) {
-        const retry = Number((await res.json()).retry_after);
+      if (res.status === 429 && !rateLimited && attempt < 2) {
+        rateLimited = true;
+        const retry = Number(data?.retry_after);
         if (!Number.isFinite(retry) || retry < 0) throw new Error('Discord invalid retry_after');
         await sleepImpl(retry * 1000); continue;
       }
-      if (res.status >= 500 && attempt < 2) { await sleepImpl(250 * (attempt + 1)); continue; }
+      if (res.status >= 500 && canRetry && attempt < 2) { await sleepImpl(250 * (attempt + 1)); continue; }
       if (!res.ok) throw new Error(`Discord ${method} ${route} HTTP ${res.status}`);
-      return res.status === 204 ? null : res.json();
+      return res.status === 204 ? null : data;
     }
   };
 }
@@ -469,6 +532,7 @@ export async function main(argv = process.argv.slice(2), options = {}) {
   const dryRun = argv.includes('--dry-run');
   const print = options.print ?? (v => console.log(JSON.stringify(v)));
   try {
+    if (['once', 'loop', 'gap-check'].includes(command)) ensureTaskPriority({ setPriority: options.setPriorityImpl });
     if (command === 'status') {
       const state = loadState(path.join(dir, 'state.json'), Date.now());
       print({ ok: true, initialized: fs.existsSync(path.join(dir, 'state.json')), paused: fs.existsSync(path.join(dir, 'PAUSE')),

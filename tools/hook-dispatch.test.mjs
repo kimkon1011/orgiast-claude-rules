@@ -398,6 +398,24 @@ test('global budget and exhausted workers pass critical gates and record unfinis
   }
 });
 
+test('an event-limited timeout exhausts the budget even before the wall-clock deadline', async t => {
+  const home = fixture(t);
+  const hook = script(home, 'early-budget-timeout', 'export async function hookMain() {}', { critical: true, timeout: 60 });
+  let calls = 0;
+  const out = await dispatch('PreToolUse', '{}', { home, budgetMs: 30000, overloaded: false, concurrency: 1,
+    manifest: { events: { PreToolUse: [hook, hook] } },
+    async execute(_hook, _raw, timeout) {
+      calls++;
+      assert.ok(timeout > 0 && timeout <= 30000);
+      return { status: 0, timedOut: true };
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(out.stdout, '');
+  assert.equal(out.metrics.timedOut, 1);
+  assert.deepEqual(out.metrics.hooks.map(h => h.criticalUnfinished), ['hook-timeout', 'dispatch-budget']);
+});
+
 test('settings dispatcher timeout bounds the whole event and reports unstarted critical gates', async t => {
   const home = fixture(t);
   fs.mkdirSync(path.join(home, '.claude'));
@@ -469,4 +487,36 @@ test('critical unfinished threshold is five per rolling hour across events; dail
   const tomorrow = now + 86400000;
   await checkDispatchBudget(home, { now: tomorrow, records: [record('Stop', Array(5).fill('hook-error'), tomorrow - 1)], notify });
   assert.equal(count, 2);
+});
+
+test('intra-turn-progress-reminder fires through the dispatcher and its REMINDER reaches additionalContext on the 3rd PostToolUse', async t => {
+  const home = fixture(t);
+  const repo = path.resolve('.');
+  const script = path.join(repo, 'tools/intra-turn-progress-reminder.mjs');
+  const hook = {
+    name: 'intra-turn-progress-reminder.mjs', matcher: '*', type: 'command',
+    command: `node "${script}"`, timeout: 5,
+  };
+  const sessionId = 'test-dispatcher-progress';
+  const counterDir = path.join(home, '.claude', '.intra-turn-progress-counter');
+  const env = { ...process.env, HOME: home, USERPROFILE: home, INTRA_TURN_PROGRESS_THRESHOLD: '3', CLAUDE_HEADLESS: '', ORGIAST_HEADLESS_JOB: '' };
+  const options = { home, env, overloaded: false, manifest: { events: { PostToolUse: [hook] } } };
+  // 1回目: count 1, no reminder
+  const first = await dispatch('PostToolUse', JSON.stringify({ session_id: sessionId, tool_name: 'Read' }), options);
+  assert.equal(first.payload.hookSpecificOutput, undefined, '1回目は reminder なし');
+  // 2回目: count 2, no reminder
+  const second = await dispatch('PostToolUse', JSON.stringify({ session_id: sessionId, tool_name: 'Edit' }), options);
+  assert.equal(second.payload.hookSpecificOutput, undefined, '2回目も reminder なし');
+  // 3回目: count 3 → fire → additionalContext に REMINDER
+  const third = await dispatch('PostToolUse', JSON.stringify({ session_id: sessionId, tool_name: 'Write' }), options);
+  assert.ok(third.payload.hookSpecificOutput?.additionalContext, '3回目は additionalContext が必要');
+  assert.match(third.payload.hookSpecificOutput.additionalContext, /【進捗報告リマインダー】/, 'REMINDER が additionalContext に含まれる');
+  assert.equal(third.metrics.timedOut, 0, 'timeout なし');
+  // カウンタがリセットされたことを確認
+  const counter = JSON.parse(fs.readFileSync(path.join(counterDir, `${encodeURIComponent(sessionId)}.json`), 'utf8'));
+  assert.equal(counter.count, 0, 'カウンタは fire 後に 0 にリセット');
+  // 4回目: count 1, no reminder (リセット後)
+  const fourth = await dispatch('PostToolUse', JSON.stringify({ session_id: sessionId, tool_name: 'Read' }), options);
+  assert.equal(fourth.payload.hookSpecificOutput, undefined, '4回目（リセット後1回目）は reminder なし');
+  t.diagnostic(`dispatcher progress reminder: 3rd call delivered additionalContext (${third.payload.hookSpecificOutput?.additionalContext?.length ?? 0} chars)`);
 });

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { checkFleetMail } from './auto-progress-fleet-mail-check.mjs';
@@ -52,4 +53,8 @@ test('未開封時間を指定でき、開封後の期限切れも停滞にな�
 test('CLI の照会・引数エラーは exit2', () => {
   const result = spawnSync(process.execPath, [fileURLToPath(new URL('./auto-progress-fleet-mail-check.mjs', import.meta.url))], { encoding: 'utf8' });
   assert.equal(result.status, 2); assert.match(result.stderr, /--mail/);
+});
+test('spawnSync timeout は fleet-mail 最大所要以上(200秒)である', () => {
+  const source = fs.readFileSync(fileURLToPath(new URL('./auto-progress-fleet-mail-check.mjs', import.meta.url)), 'utf8');
+  assert.match(source, /timeout:\s*200000/);
 });

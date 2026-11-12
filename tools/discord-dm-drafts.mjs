@@ -64,14 +64,13 @@ export function candidates(messages, rows) {
 export async function scan({ ui, generate, file = ledger, dryRun = false }) {
   const state = await ui.state();
   if (state.idleMs < 300000) return 'SKIP: kim 操作中（無操作5分未満）';
-  if (!state.original) throw new Error('元の会話を特定できないため中止');
   if (dryRun) return `DRY-RUN: idle=${Math.floor(state.idleMs / 1000)}s / 未読会話=${state.unread.length}（切替・LLM・保存なし）`;
   let count = 0;
   for (const chat of state.unread) {
     if ((await ui.idle()) < 300000) break;
     let messages;
     try { messages = await ui.read(chat); }
-    finally { await ui.restore(state.original); }
+    finally { if (state.original) await ui.restore(state.original); }
     const rows = readRows(file);
     for (const m of candidates(messages, rows)) {
       const draft = (await generate(m, messages)).trim();

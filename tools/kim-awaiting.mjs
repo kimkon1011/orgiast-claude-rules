@@ -80,7 +80,7 @@ export function collectAwaiting({ home = process.env.ORGIAST_HOME || os.homedir(
   const external = collectExternal({ home, now });
   const result = [];
   for (const row of latestOpenPromises(readLedger(ledgerFile(home)))) {
-    if (row.kimAnswer || isUnattendedRow(row, home) || isNoopPromise(row.promise) || (row.status !== 'waiting_user' && kimAction(row) === 'なし')) continue;
+    if (row.kimAnswer || isUnattendedRow(row, home) || isNoopPromise(row.promise) || (row.status !== 'waiting_user' && (row.autoRegisteredCheck || kimAction(row) === 'なし'))) continue;
     const action = kimAction(row);
     if (SESSION_OP_RE.test(action)) continue;
     const ask = EVIDENCE_RE.test(action.trim()) ? '進めてよいか判断して返事をする' : readable(action, row, sessionId && row.sessionId === sessionId ? Infinity : 80);

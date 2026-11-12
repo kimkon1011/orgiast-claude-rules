@@ -5,6 +5,8 @@ import path from 'node:path';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
 
+export const INBOX_PURPOSE_EXCEPTION = 'kim-inbox の【受信箱】節とその返答記録は目的外ではない。別セッションへの移動や /session-close を求めず、現在の最終応答で1件1〜2行だけ伝える。受信箱の作業そのものに着手する承認とは区別する。';
+
 export async function hookMain(raw) {
 
 
@@ -27,7 +29,7 @@ function tokens(text) {
 }
 
 function output(event, additionalContext) {
-  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext } }));
+  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: additionalContext + '\n' + INBOX_PURPOSE_EXCEPTION } }));
 }
 
 try {

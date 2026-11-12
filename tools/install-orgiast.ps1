@@ -699,6 +699,9 @@ if (Have npm) {
   # Gemini(任意・MCPが--allow-npxで自動取得): 120秒でタイムアウト
   NpmInstallTO '@google/gemini-cli' 120
   if (Have gemini) { OK "Gemini CLI 導入完了" } else { OK "Gemini CLIのグローバル導入はスキップ(GeminiはMCP経由=npxで自動取得されるので問題ありません)" }
+  # Qwen CLI(deepseek レーンのコード生成に必要): 600秒でタイムアウト
+  NpmInstallTO '@qwen-code/qwen-code' 600
+  if (Have qwen) { OK "Qwen CLI 導入完了" } else { Warn "Qwen CLI が時間内に入りませんでした(deepseek レーンは手動導入まで利用不可)。後で `npm i -g @qwen-code/qwen-code` で導入可" }
   # このあとの codex login 用に npm グローバルbin を現セッションPATHへ
   if ((Test-Path $npmBin) -and ($env:Path -notlike "*$npmBin*")) { $env:Path += ";$npmBin" }
 } else { Warn "npm が見つからないためCLI導入をスキップ(PC再起動後にコマンドを再実行してください)" }

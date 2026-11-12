@@ -103,7 +103,15 @@ export async function probeDns(host, dnsServer, deps = {}) {
 async function probeHttp(url, timeoutMs) {
   const started = performance.now();
   try {
-    const response = await fetch(url, { method: 'GET', signal: AbortSignal.timeout(timeoutMs) });
+    // DNS と同じ Promise.race パターンで正確なタイムアウトを保証する。
+    // AbortSignal.timeout だけでは Windows 上で OS レベルの TCP タイムアウト (最大127秒)
+    // が優先され、設定値を大きく超過することがある (2026-10-04/11-10 実測: 5s 設定が 75s まで伸びた)。
+    let timer;
+    const response = await Promise.race([
+      fetch(url, { method: 'GET', signal: AbortSignal.timeout(timeoutMs) }),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`The operation was aborted due to timeout`)), timeoutMs); }),
+    ]);
+    clearTimeout(timer);
     // HTTP 応答が返れば、ステータスにかかわらず経路には到達している。
     await response.body?.cancel();
     return { ok: true, status: response.status, ms: Math.round(performance.now() - started), error: null };

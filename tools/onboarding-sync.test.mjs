@@ -111,6 +111,13 @@ test('missingDeclaredKeys is empty when every declared file exists', () => {
   assert.deepEqual(missingDeclaredKeys({ 'fleet-sheet.env': 'x' }, () => true), []);
 });
 
+test('missingDeclaredKeys ignores skip-distribute files such as anthropic.env', () => {
+  assert.deepEqual(
+    missingDeclaredKeys({ 'anthropic.env': 'x', 'fleet-sheet.env': 'y' }, (name) => name === 'fleet-sheet.env'),
+    [],
+  );
+});
+
 test('--keys-only keyserve failure is silent and never stops the session', () => {
   const f = setup(null);
   const result = spawnSync(process.execPath, [script, '--keys-only', '--force'], {

@@ -214,14 +214,19 @@ export function listStrippedClaudeChildEnvKeys(parentEnv = process.env) {
 
 // 監督セッションそのものを起動する箇所(auto-session / autopilot / fleet-agent など)用。
 // デスクトップや別セッション固有の漏れ(CLAUDECODE / CLAUDE_CODE_* / CLAUDE_AGENT_SDK_* /
-// CLAUDE_PID / CLAUDE_PREVIEW_* / MCP_*)だけを外し、そのプロセスが意図的に設定している
-// ANTHROPIC_* と CLAUDE_CONFIG_DIR(アカウント切替で意図的に設定される)は残す。
-// 全社 hook を効かせたい監督には config dir を変えない。
+// CLAUDE_PID / CLAUDE_PREVIEW_* / MCP_*)を外す。
+// CLAUDE_CONFIG_DIR(アカウント切替で意図的に設定される)は残す。全社 hook を効かせたい
+// 監督には config dir を変えない。
+// ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL は残さない。
+// 残すと Team ログインより従量課金 API が優先される（claude-ai-run.mjs と同じ方針）。
+const SUPERVISOR_BILLING_AUTH_ENV_PATTERN = /^anthropic_(auth_token|base_url|api_key)$/i;
+
 export function sanitizeClaudeSupervisorEnv(parentEnv = process.env) {
   const clean = {};
   for (const [key, value] of Object.entries(parentEnv || {})) {
+    if (SUPERVISOR_BILLING_AUTH_ENV_PATTERN.test(key)) continue;
     const upper = String(key || '').toUpperCase();
-    const intentional = upper.startsWith('ANTHROPIC_') || upper === 'CLAUDE_CONFIG_DIR';
+    const intentional = upper === 'CLAUDE_CONFIG_DIR';
     if (intentional || !shouldStripClaudeChildEnvKey(key)) clean[key] = value;
   }
   return clean;

@@ -90,7 +90,16 @@ export function invokeClaude({ executable, args, prompt, cwd, timeoutMs, env = p
     let stdout = '', stderr = '', timedOut = false, launchError = null, pending = '', lastStage = 'starting';
     const streaming = args.includes('stream-json');
     // 監督セッションなので全社 hook は効かせたまま、デスクトップ由来の env 漏れだけ外す。
-    const child = spawn(executable, args, { cwd, env: { ...sanitizeClaudeSupervisorEnv(env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: 'autopilot' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
+    // 公式 Anthropic の課金キーは sanitize で落とす。OAuth 切れのときの OpenRouter/DeepSeek
+    // フォールバックだけ、公式以外のプロキシ設定を書き戻す。
+    const childEnv = { ...sanitizeClaudeSupervisorEnv(env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: 'autopilot' };
+    const proxyBase = String(env?.ANTHROPIC_BASE_URL || '').trim();
+    const proxyToken = String(env?.ANTHROPIC_AUTH_TOKEN || '').trim();
+    if (proxyToken && proxyBase && !/^https?:\/\/(?:[a-z0-9-]+\.)*anthropic\.com(?::\d+)?(?:\/|$)/i.test(proxyBase)) {
+      childEnv.ANTHROPIC_BASE_URL = proxyBase;
+      childEnv.ANTHROPIC_AUTH_TOKEN = proxyToken;
+    }
+    const child = spawn(executable, args, { cwd, env: childEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: process.platform !== 'win32' });
     const killTree = () => {
       timedOut = true;
       if (!child.pid) return;

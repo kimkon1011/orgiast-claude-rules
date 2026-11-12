@@ -267,7 +267,7 @@ test('sanitizeClaudeChildEnv は漏洩キーを外し、許可したキーだけ
   assert.deepEqual(listStrippedClaudeChildEnvKeys({ CLAUDECODE: '1', PATH: 'x' }), ['CLAUDECODE']);
 });
 
-test('sanitizeClaudeSupervisorEnv は漏洩キーだけ外し ANTHROPIC_* と CLAUDE_CONFIG_DIR は残す', () => {
+test('sanitizeClaudeSupervisorEnv は漏洩キーと ANTHROPIC 課金認証キーを外し CLAUDE_CONFIG_DIR は残す', () => {
   const clean = sanitizeClaudeSupervisorEnv({
     PATH: 'C:\\bin',
     CLAUDECODE: '1',
@@ -276,11 +276,12 @@ test('sanitizeClaudeSupervisorEnv は漏洩キーだけ外し ANTHROPIC_* と CL
     CLAUDE_CONFIG_DIR: 'C:\\parent-config',
     ANTHROPIC_BASE_URL: 'https://parent.example',
     ANTHROPIC_AUTH_TOKEN: 'token',
+    ANTHROPIC_API_KEY: 'key',
+    SAFE: 'yes',
   });
   assert.deepEqual(clean, {
     PATH: 'C:\\bin',
     CLAUDE_CONFIG_DIR: 'C:\\parent-config',
-    ANTHROPIC_BASE_URL: 'https://parent.example',
-    ANTHROPIC_AUTH_TOKEN: 'token',
+    SAFE: 'yes',
   });
 });

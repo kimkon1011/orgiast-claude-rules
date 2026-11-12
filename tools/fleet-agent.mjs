@@ -200,6 +200,7 @@ export async function runPrompt({ claudeExe, body, cwd, timeoutSeconds = 1800, s
     if (readOnly) args.push('--tools', 'Read,Glob,Grep', '--allowedTools', 'Read,Glob,Grep', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--settings', '{"disableAllHooks":true}', '--model', 'sonnet');
     args.push('--', String(body ?? ''));
     const child = spawnImpl(claudeExe, args, {
+      // 子 claude の課金認証キーは sanitizeClaudeSupervisorEnv が外す（Team ログインを使う）。
       cwd, env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', CI: '1', ...(home ? { ORGIAST_HOME: home } : {}), FLEET_DRIVEN_BY_HUB: drivenByHub ? '1' : '0', FLEET_RESUME_MAIL_ID: resumeMailId || '' }, stdio: ['pipe', 'pipe', 'pipe'], shell: false, windowsHide: true,
     });
     child.stdin.end();

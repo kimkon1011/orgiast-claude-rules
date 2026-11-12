@@ -37,4 +37,5 @@
 - 型: 完了フラグの台帳が再開・新しい状態表明で失効しない → セッションが【閉じて可】のまま期限再開・朝確認から外れる（2026-11-09 4eb1d8a6）／対策: 最新フッター優先＋プロンプト受信・未完フッターで closed-sessions.json から自動除外（session-wait-title・closed-sessions-ledger）
 - 型: rescue/cherry-pick が全廃済みの経路を復活させる（2026-11-10 kim 宛 Discord DM 復活・PR #1688） → 横展開の検索: git log --all --oneline --grep="kim-discord-allowlist\|KIM_DISCORD_USER_ID" で該当箇所を特定し、kim 宛 Discord/webhook 送信経路を全て削除。ゲート: tools/kim-discord-dm-ban.test.mjs（静的走査 + discordAllowed 常時 false 確認）
 - 型: 人待ちの沈黙停止型（セッション内 cron の1行報告だけが続き、user は別セッションで気付かず社外クレーム、2026-11-09 就労証明書の LINE 画像認証待ち6日） → 横展開の検索: 人待ち（ログイン待ち・画像認証・返事待ち）を報告して止まる Stop 文面と、待つ経路の成立を検証しない箇所 → ゲート: urgent-blocker 登録（Stop gate が未登録の人待ち報告を block）+ 別セッション割り込み表示（UserPromptSubmit/SessionStart hook）+ 経路検証・代替経路・自動再試行の指示（tools/urgent-blocker-wait-gate.mjs）
+- 型: ゲート間相互ブロック型（gmail-connector-url-gate が URL を理由に block → mail-send-approval-gate が body 無しの draftId 送信を CONTEXT_REASON で block → 両方満たす送信経路が消える。2026-11-12 014 実測） → 横展開の検索: tool_input.draftId 有無で分岐するゲート、複数ゲートが同一の tool_input を異なる基準で判定する箇所 → ゲート: gmail-connector-url-gate の draftId 送信 pass 判定（既存）
 

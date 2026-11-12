@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // No LLM calls here; process execution, notification and file timestamps are injectable.
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import { latestWaitDeadline, waitPrefix } from './session-wait-title.mjs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,6 +14,50 @@ import { acquireLock } from './autopilot-tick.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { isEntry } from './is-entry.mjs';
+
+// ── レーン健全性 ──
+const LANE_HEALTH_CACHE_TTL = 5 * 60 * 1000;
+function readLaneHealth(home) {
+  try {
+    const raw = fsSync.readFileSync(path.join(home, '.claude', 'lane-health.json'), 'utf8');
+    return JSON.parse(raw);
+  } catch { return null; }
+}
+function executorToLane(executor, provider) {
+  if (executor === 'codex') return 'codex';
+  if (executor === 'cheap-code' && provider) return provider;
+  return null;
+}
+function firstAliveImplementLane(health) {
+  if (!health?.implementOrder?.length) return null;
+  for (const lane of health.implementOrder) {
+    if (health.lanes?.[lane]?.alive) return lane;
+  }
+  return null;
+}
+function laneToExecutor(lane) {
+  if (lane === 'codex') return { executor: 'codex' };
+  if (lane === 'deepseek') return { executor: 'cheap-code', provider: 'deepseek' };
+  if (lane === 'glm') return { executor: 'cheap-code', provider: 'glm' };
+  if (lane === 'gemini-cli') return { executor: 'cheap-code', provider: 'gemini-cli' };
+  return null;
+}
+function resolveAliveExecutor(configured, health, consecutiveTimeouts = {}) {
+  const currentLane = executorToLane(configured.executor, configured.provider);
+  if (!currentLane) return configured; // claude executor: no lane check needed
+  const alive = health?.lanes?.[currentLane]?.alive;
+  const key = `${configured.executor}:${configured.provider}`;
+  const consecutive = consecutiveTimeouts[key] ?? 0;
+  if (alive && consecutive < 2) return configured;
+  // Current lane is dead or has consecutive timeouts — find alternative
+  const first = firstAliveImplementLane(health);
+  if (!first) return null;
+  const mapped = laneToExecutor(first);
+  if (!mapped) return null;
+  const mappedKey = `${mapped.executor}:${mapped.provider ?? ''}`;
+  if (mappedKey === key) return null; // same lane, still dead
+  return mapped;
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -245,7 +290,7 @@ stuck=それ以外で進められなかった。
 }
 
 // 従来の cheap-code / codex-do フォールバック（overdue の予備）
-async function executeFallback(record, { timeoutMs, resultFile, previous = [], wait = null }, io = {}) {
+async function executeFallback(record, { timeoutMs, resultFile, previous = [], wait = null, executor, provider }, io = {}) {
   const prompt = `停滞セッション「${record.displayTitle}」(${record.sessionId})の承認済みの目的を1歩進めてください。
 ${wait ? `このセッションの待機期限 ${wait.label} を過ぎました。待っていた事項（相手の返信・外部の状態・自動チェック）を直接照会し、(a) 進められるなら最後まで進めて検証する (b) 人の判断や操作が必要なら kim-inbox に ask を積み（node tools/kim-inbox.mjs）、応答の「このセッション」行に新しい期限を書く (c) 目的が完了していれば /session-close を実行する。期限を書き換えるだけで終えない。` : ''}
 元の会話全文を ${record.file} から読み、依頼・制約・成果物を確認して続行してください。推測で目的を広げないでください。
@@ -287,7 +332,7 @@ stuck=それ以外で進められなかった。
   return { outcome, reason: outcome === 'timeout' ? result.status : reason, ...(outcome === 'waiting-human' ? { askId: report.askId.trim() } : {}), ...execution };
 }
 
-export async function execute(record, { timeoutMs, resultFile, previous = [], wait = null }, io = {}) {
+export async function execute(record, { timeoutMs, resultFile, previous = [], wait = null, executor, provider }, io = {}) {
   // overdue モードでは claude --resume でセッション自身を再開する
   if (wait) {
     return executeOverdue(record, { timeoutMs, resultFile, previous, wait }, io);
@@ -303,7 +348,7 @@ done=目的が完了済み（後続セッションで完了した場合も含む
 waiting-human=残りが人の判断・操作だけで、kim-inbox に ask を積んだ（既存の open ask でもよい）。
 stuck=それ以外で進められなかった。
 単なる進捗確認・計画・終了コード0は成果に含めません。\n当初依頼: ${record.firstPrompt}\n直近: ${record.lastAssistantText}`;
-  const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, record.cwd, record.cwd, timeoutMs, { resumeSessionId: record.sessionId });
+  const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, record.cwd, record.cwd, timeoutMs, { resumeSessionId: record.sessionId, ...(executor ? { executor } : {}), ...(provider ? { provider } : {}) });
   const execution = { executor: result.executorUsed || 'not-started', executorAttempts: result.executorAttempts ?? [] };
   // 実行役が1つも起動できない(cheap-code 全レーン停止・Claude フォールバック無効)のはセッションの失敗ではない。
   // 2026-10-26 実測: deepseek payment_required で2件が1秒で error 扱い→「連続2件エラーで中止」の誤通知と noProgress 消費。

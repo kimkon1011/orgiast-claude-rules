@@ -26,7 +26,10 @@ export function addCheck({ session, check, startWhen, deadline, label, nextClaud
   if (probe) {
     const { code, text } = probe({ check: startWhen || check, checkCwd: cwd, cwd, ...timeoutFields });
     if (code === 0 && !startWhen && !allowMet) throw new Error(`check が登録時点で既に達成(exit 0)と判定されました: ${text}。達成時だけ exit 0 になる形か確認してください（例: … | grep -q MERGED）。本当に達成済みなら登録は不要です`);
-    if (code !== 1 && code !== 0 && (code !== 3 || startWhen)) throw new Error(`check がこの PC で実行できません(exit ${code}): ${text}`);
+    // code === null かつタイムアウト文言 → trial_timeout（preflightCheck が認めたもの）で登録を続行。
+    // それ以外の code === null（構文エラー等）は従来通り拒否する。
+    if (code !== null && code !== 1 && code !== 0 && (code !== 3 || startWhen)) throw new Error(`check がこの PC で実行できません(exit ${code}): ${text}`);
+    if (code === null && !/上限を超えました/.test(text)) throw new Error(`check がこの PC で実行できません(exit ${code}): ${text}`);
   }
   const ask = askFile === undefined ? undefined : fs.readFileSync(askFile, 'utf8');
   const file = ledgerFile(home), rows = readLedger(file);

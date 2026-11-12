@@ -56,6 +56,29 @@ test('beacon receiver recovers count from existing GAS step payload', async t =>
  assert.equal(result.ok,true);assert.equal(result.beacons[0].stuckDialogs24h,22);
 });
 
+test('stalled sessions aggregate into one row; 72h-old ones expire; sweeper unfinished aggregates too',async t=>{
+ const home=fixture(t);put(home,'heartbeat/stuck-dialog-watch.json',{finishedAt:new Date(now).toISOString(),ok:true});
+ put(home,'stalled-session-resume.json',{sessions:{
+  fresh:{noProgress:1,attempts:[{startedAt:new Date(now-3600000).toISOString(),outcome:'no-progress'}]},
+  fresh2:{noProgress:2,attempts:[{startedAt:new Date(now-7200000).toISOString(),outcome:'timeout'}]},
+  aged:{noProgress:3,attempts:[{startedAt:new Date(now-96*3600000).toISOString(),outcome:'no-progress'}]},
+  noAttempt:{noProgress:1}, alldone:{noProgress:0}}});
+ const lines=[{id:'sw1',kind:'stalled_session',result:'失敗',t:new Date(now-600000).toISOString()},{id:'sw2',kind:'stalled_session',result:'失敗',t:new Date(now-600000).toISOString()},{id:'sw3',kind:'stalled_session',result:'完了',t:new Date(now-600000).toISOString()}];
+ fs.writeFileSync(path.join(home,'.claude','stall-sweeper-log.jsonl'),lines.map(l=>JSON.stringify(l)).join('\n')+'\n');
+ const result=await scan(opts(home));
+ const rows=result.rows.filter(r=>r.kind==='session_stalled');
+ assert.equal(rows.length,2);
+ const resume=rows.find(r=>r.symptom==='再開しても進まない会話');
+ assert.match(resume.evidence,/count=3/);assert.match(resume.evidence,/fresh,/);assert.doesNotMatch(resume.evidence,/aged/);
+ const unfinished=rows.find(r=>r.symptom==='停滞会話の処理が未完了');
+ assert.match(unfinished.evidence,/count=2/);assert.match(unfinished.evidence,/sw1/);assert.doesNotMatch(unfinished.evidence,/sw3/);
+});
+test('stalled sessions whose last attempts are all older than 72h are not reported',async t=>{
+ const home=fixture(t);put(home,'heartbeat/stuck-dialog-watch.json',{finishedAt:new Date(now).toISOString(),ok:true});
+ put(home,'stalled-session-resume.json',{sessions:{a:{noProgress:1,attempts:[{startedAt:new Date(now-96*3600000).toISOString(),outcome:'no-progress'}]},b:{noProgress:2,attempts:[{startedAt:new Date(now-80*3600000).toISOString(),outcome:'error'}]}}});
+ const result=await scan(opts(home));
+ assert.ok(!result.rows.some(r=>r.kind==='session_stalled'));
+});
 test('closed sessions and cleared provider cooldowns are not reported as still stalled',async t=>{
  const home=fixture(t);put(home,'heartbeat/stuck-dialog-watch.json',{finishedAt:new Date(now).toISOString(),ok:true});
  put(home,'stalled-session-resume.json',{sessions:{closed:{noProgress:3}}});put(home,'session-closed-ledger.json',{sessions:{closed:{at:now}}});

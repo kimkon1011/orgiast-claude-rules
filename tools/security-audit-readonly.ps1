@@ -24,9 +24,9 @@ function Iso($Value) { if ($null -ne $Value) { ([datetime]$Value).ToUniversalTim
 if (!$Label) { $Label = $env:COMPUTERNAME }
 if (!$Label -or $Label -match '[\\/:*?"<>|\s]' -or $Label -in @('.', '..')) { throw 'Invalid label' }
 if (!$OutDir) { $OutDir = Join-Path $env:USERPROFILE ('.claude\security-audit\' + (Get-Date -Format yyyyMMdd)) }
-$a = [ordered]@{ host=$Label; user=$env:USERNAME; at=(Iso (Get-Date)); osVersion=$null; lastBootUpTime=$null; systemDrive=$env:SystemDrive }
-$os = Read-Item 'osVersion/lastBootUpTime' { Get-CimInstance Win32_OperatingSystem -Property Version,LastBootUpTime }
-if ($os) { $a.osVersion=$os.Version; $a.lastBootUpTime=Iso $os.LastBootUpTime }
+$a = [ordered]@{ host=$Label; user=$env:USERNAME; at=(Iso (Get-Date)); osVersion=$null; windowsEdition=$null; lastBootUpTime=$null; systemDrive=$env:SystemDrive }
+$os = Read-Item 'osVersion/lastBootUpTime' { Get-CimInstance Win32_OperatingSystem -Property Version,LastBootUpTime,Caption }
+if ($os) { $a.osVersion=$os.Version; $a.windowsEdition=$os.Caption; $a.lastBootUpTime=Iso $os.LastBootUpTime }
 $processes = Read-Array 'processes' { Get-CimInstance Win32_Process -Property ProcessId,Name,CreationDate,ExecutablePath,CommandLine }
 $procMap = @{}
 $cmdMap = @{}
@@ -94,13 +94,98 @@ if ($d) { $a.defender.realtime=$d.RealTimeProtectionEnabled; $a.defender.sigDate
 $a.defender.exclusionsCount = Read-Item 'defender.exclusionsCount' { $p=Get-MpPreference; @(@($p.ExclusionPath)+@($p.ExclusionProcess)+@($p.ExclusionExtension)+@($p.ExclusionIpAddress) | Where-Object { $null -ne $_ }).Count }
 $a.bitlocker = Read-Array 'bitlocker' {
     # Get-BitLockerVolume の KeyProtector を取得せず、状態照会だけで回復キーの読み取りを避ける。
-    Get-CimInstance -Namespace 'root/CIMV2/Security/MicrosoftVolumeEncryption' -ClassName Win32_EncryptableVolume -Property DriveLetter | ForEach-Object {
-        $protection=Invoke-CimMethod -InputObject $_ -MethodName GetProtectionStatus
-        $conversion=Invoke-CimMethod -InputObject $_ -MethodName GetConversionStatus
-        if ($protection.ReturnValue -ne 0 -or $conversion.ReturnValue -ne 0) { throw 'BitLocker status unavailable' }
-        $states=@('FullyDecrypted','FullyEncrypted','EncryptionInProgress','DecryptionInProgress','EncryptionPaused','DecryptionPaused')
-        @{mount=$_.DriveLetter; protection=(@('Off','On','Unknown')[[int]$protection.ProtectionStatus]); status=$states[[int]$conversion.ConversionStatus]}
+    $cimResult = try {
+        $vols = Get-CimInstance -Namespace 'root/CIMV2/Security/MicrosoftVolumeEncryption' -ClassName Win32_EncryptableVolume -Property DriveLetter -ErrorAction Stop
+        if ($null -ne $vols -and @($vols).Count -gt 0) {
+            $states = @('FullyDecrypted','FullyEncrypted','EncryptionInProgress','DecryptionInProgress','EncryptionPaused','DecryptionPaused')
+            @($vols | ForEach-Object {
+                $protection = Invoke-CimMethod -InputObject $_ -MethodName GetProtectionStatus -ErrorAction Stop
+                $conversion = Invoke-CimMethod -InputObject $_ -MethodName GetConversionStatus -ErrorAction Stop
+                if ($protection.ReturnValue -ne 0 -or $conversion.ReturnValue -ne 0) { throw 'BitLocker status unavailable' }
+                @{
+                    mount = $_.DriveLetter
+                    protection = (@('Off','On','Unknown')[[int]$protection.ProtectionStatus])
+                    status = $states[[int]$conversion.ConversionStatus]
+                    shellValue = $null
+                    source = 'cim'
+                }
+            })
+        } else { $null }
+    } catch { $null }
+
+    if ($null -ne $cimResult -and $cimResult.Count -gt 0) { return $cimResult }
+
+    try {
+        $shellApp = New-Object -ComObject Shell.Application
+        $drives = @(try { Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" -Property DeviceID -ErrorAction Stop | Select-Object -ExpandProperty DeviceID } catch {})
+        if ($drives.Count -eq 0) { $drives = @($env:SystemDrive) }
+        if ($drives -notcontains $env:SystemDrive) { $drives = @($env:SystemDrive) + $drives }
+
+        $shellResult = foreach ($drive in $drives) {
+            $folder = $shellApp.NameSpace($drive)
+            $val = if ($folder) { $folder.Self.ExtendedProperty('System.Volume.BitLockerProtection') } else { $null }
+            $shellVal = if ($null -ne $val) { [int]$val } else { $null }
+            $prot = 'Unknown'
+            $stat = $null
+            switch ($shellVal) {
+                1 { $prot = 'On' }
+                2 { $prot = 'Off' }
+                3 { $prot = 'On'; $stat = 'EncryptionInProgress' }
+                4 { $prot = 'Off'; $stat = 'DecryptionInProgress' }
+                5 { $prot = 'Suspended' }
+                6 { $prot = 'On' }
+                default { $prot = 'Unknown' }
+            }
+            @{
+                mount = $drive
+                protection = $prot
+                status = $stat
+                shellValue = $shellVal
+                source = 'shell'
+            }
+        }
+        return $shellResult
+    } catch {
+        throw 'BitLocker status unavailable via CIM and Shell'
     }
+}
+$a.bitlockerEvent829 = Read-Item 'bitlockerEvent829' {
+    try {
+        $startTime = (Get-Date).AddDays(-90)
+        $events = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-BitLocker/BitLocker Management'; Id=829; StartTime=$startTime} -ErrorAction Stop
+        $count = @($events).Count
+        $last = if ($count -gt 0) { Iso ($events | Sort-Object TimeCreated -Descending | Select-Object -First 1).TimeCreated } else { $null }
+        @{count=$count; lastAt=$last}
+    } catch {
+        if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*') {
+            @{count=0; lastAt=$null}
+        } else { throw }
+    }
+}
+$a.recoveryKeyBackupFiles = Read-Array 'recoveryKeyBackupFiles' {
+    $targetDirs = New-Object 'System.Collections.Generic.List[string]'
+    $docPath = Join-Path $env:USERPROFILE 'Documents'
+    if (Test-Path -LiteralPath $docPath) { $targetDirs.Add($docPath) }
+    Get-ChildItem -LiteralPath $env:USERPROFILE -Directory -ErrorAction Stop | Where-Object { $_.Name -like 'OneDrive*' } | ForEach-Object {
+        foreach ($sub in @('Documents', 'ドキュメント')) {
+            $p = Join-Path $_.FullName $sub
+            if (Test-Path -LiteralPath $p) { $targetDirs.Add($p) }
+        }
+    }
+    $results = New-Object 'System.Collections.Generic.List[string]'
+    $baseLen = $env:USERPROFILE.TrimEnd('\').Length + 1
+    foreach ($dir in ($targetDirs | Select-Object -Unique)) {
+        # メタデータのみ。控えファイルを開かず、直下だけを列挙する。
+        Get-ChildItem -LiteralPath $dir -File -ErrorAction Stop | Where-Object {
+            ($_.Extension -eq '.txt' -or $_.Extension -eq '.pdf') -and
+            ($_.Name -like '*回復キー*' -or $_.Name -like '*BitLocker Recovery Key*')
+        } | ForEach-Object {
+            if ($_.FullName.Length -gt $baseLen) {
+                $results.Add($_.FullName.Substring($baseLen))
+            }
+        }
+    }
+    $results.ToArray()
 }
 $a.lastHotfixDate = Read-Item 'lastHotfixDate' { $h=Get-HotFix | Where-Object InstalledOn | Sort-Object InstalledOn -Descending | Select-Object -First 1; Iso $h.InstalledOn }
 $a.uacEnableLUA = Read-Item 'uacEnableLUA' { Reg-Value 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' 'EnableLUA' }

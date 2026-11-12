@@ -7,11 +7,12 @@ import { spawnSync } from 'node:child_process';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { isEntry } from './is-entry.mjs';
 
+// Windows 専用。macOS の FileVault は対象外
 export const ITEMS = ['SMBv1', 'RDP', 'WinRM', 'sshd', 'FW無効', 'Defender', 'BitLocker', 'Update', 'Tailscale Funnel', '平文鍵', '.env件数', '0.0.0.0待受', '無人ジョブ詰まり'];
-const short = value => String(value).replace(/[\r\n]/g, ' ').slice(0, 120);
+const short = (value, limit = 120) => String(value).replace(/[\r\n]/g, ' ').slice(0, limit);
 export function summarizeAudit(a) {
   const result = { host: a.host, red: [], yellow: [], green: [] };
-  const add = (item, red, yellow, known, detail) => result[red ? 'red' : yellow || !known ? 'yellow' : 'green'].push({ item, detail: short(known || red || yellow ? detail : '未取得・要確認') });
+  const add = (item, red, yellow, known, detail, limit = 120) => result[red ? 'red' : yellow || !known ? 'yellow' : 'green'].push({ item, detail: short(known || red || yellow ? detail : '未取得・要確認', limit) });
   const age = value => (Date.parse(a.at) - Date.parse(value)) / 86400000;
   add('SMBv1', a.smb1Enabled === true, false, typeof a.smb1Enabled === 'boolean', `SMB1=${a.smb1Enabled}`);
   add('RDP', a.rdpEnabled === true && a.rdpNla !== 1, a.rdpEnabled === true, typeof a.rdpEnabled === 'boolean', `enabled=${a.rdpEnabled}, NLA=${a.rdpNla}`);
@@ -21,7 +22,14 @@ export function summarizeAudit(a) {
   add('Defender', a.defender?.realtime === false, age(a.defender?.sigDate) > 3, typeof a.defender?.realtime === 'boolean' && Number.isFinite(age(a.defender?.sigDate)), `realtime=${a.defender?.realtime}, sig=${a.defender?.sigDate}`);
   // システムドライブは C: 固定とすると別ドライブの暗号化を誤判定する。
   const system = a.bitlocker?.find(b => b.mount?.toUpperCase() === (a.systemDrive || 'C:').toUpperCase());
-  add('BitLocker', system?.protection === 'Off', false, system?.protection != null, `system=${system?.mount}, protection=${system?.protection}`);
+  const prot = system?.protection;
+  const isRed = prot === 'Off' || prot === 'Suspended';
+  const isKnown = ['On', 'Off', 'Suspended'].includes(prot);
+  const suspText = prot === 'Suspended' ? '(一時停止)' : '';
+  const homeNote = prot === 'Off' && /Home/i.test(a.windowsEdition || '') ? ', Home: デバイスの暗号化の対象' : '';
+  const bitlockerDetail = `system=${system?.mount || a.systemDrive || 'C:'}, protection=${prot || 'Unknown'}${suspText}, source=${system?.source || 'unknown'}, edition=${a.windowsEdition || 'unknown'}, event829=${a.bitlockerEvent829?.count ?? 'unknown'}, keyBackups=${a.recoveryKeyBackupFiles?.length ?? 'unknown'}${homeNote}`;
+  // 追加の確認情報と Home の注記を通常項目の120文字制限で切らない。
+  add('BitLocker', isRed, !isKnown, isKnown, `${isKnown ? '' : '未取得・要確認; '}${bitlockerDetail}`, 512);
   add('Update', false, age(a.lastHotfixDate) > 45, Number.isFinite(age(a.lastHotfixDate)), a.lastHotfixDate);
   const funnelPorts = [...(a.tailscale?.funnelStatus || '').matchAll(/(?:127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0):(\d+)/g)].map(m => Number(m[1]));
   const funnel = /Funnel on/i.test(a.tailscale?.funnelStatus || '');

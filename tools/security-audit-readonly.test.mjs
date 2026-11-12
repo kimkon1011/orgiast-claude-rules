@@ -28,6 +28,60 @@ test('Funnelの別ポート・IPv6だけでは赤にしない',()=>{
  for(const p of [{port:3001,address:'0.0.0.0'},{port:3000,address:'::'}]) assert.equal(summarizeAudit({...good(), tailscale:{installed:true,funnelStatus:'Funnel on localhost:3000'},listenAllTcp:[p]}).red.length,0);
 });
 test('未取得は正常と偽らない',()=>{const s=summarizeAudit({});assert.equal(s.green.length,0);assert.equal(s.yellow.length,ITEMS.length);});
+test('Shell由来のBitLocker判定 (On, Off, Suspended)', () => {
+  const aOn = { ...good(), bitlocker: [{ mount: 'D:', protection: 'On', source: 'shell' }] };
+  const itemOn = summarizeAudit(aOn).green.find(r => r.item === 'BitLocker');
+  assert.ok(itemOn);
+  assert.match(itemOn.detail, /source=shell/);
+  assert.match(itemOn.detail, /protection=On/);
+
+  const aOff = { ...good(), bitlocker: [{ mount: 'D:', protection: 'Off', source: 'shell' }] };
+  const itemOff = summarizeAudit(aOff).red.find(r => r.item === 'BitLocker');
+  assert.ok(itemOff);
+  assert.match(itemOff.detail, /source=shell/);
+  assert.match(itemOff.detail, /protection=Off/);
+
+  const aSusp = { ...good(), bitlocker: [{ mount: 'D:', protection: 'Suspended', source: 'shell' }] };
+  const itemSusp = summarizeAudit(aSusp).red.find(r => r.item === 'BitLocker');
+  assert.ok(itemSusp);
+  assert.match(itemSusp.detail, /protection=Suspended\(一時停止\)/);
+});
+test('Home+Offで詳細文にデバイスの暗号化の対象が追加される', () => {
+  const a = { ...good(), windowsEdition: 'Microsoft Windows 11 Home', bitlocker: [{ mount: 'D:', protection: 'Off', source: 'shell' }] };
+  const item = summarizeAudit(a).red.find(r => r.item === 'BitLocker');
+  assert.ok(item);
+  assert.match(item.detail, /Home: デバイスの暗号化の対象/);
+});
+test('ID829イベント件数が詳細文に含まれる', () => {
+  const a = { ...good(), bitlockerEvent829: { count: 3, lastAt: '2026-11-01T00:00:00Z' }, bitlocker: [{ mount: 'D:', protection: 'On', source: 'shell' }] };
+  const item = summarizeAudit(a).green.find(r => r.item === 'BitLocker');
+  assert.ok(item);
+  assert.match(item.detail, /event829=3/);
+});
+test('回復キー控え件数が詳細文に含まれる', () => {
+  const a = { ...good(), recoveryKeyBackupFiles: ['Documents/回復キー.txt', 'OneDrive/Documents/BitLocker Recovery Key 123.pdf'], bitlocker: [{ mount: 'D:', protection: 'On', source: 'shell' }] };
+  const item = summarizeAudit(a).green.find(r => r.item === 'BitLocker');
+  assert.ok(item);
+  assert.match(item.detail, /keyBackups=2/);
+});
+test('BitLocker未確認でも追加の確認情報を残す', () => {
+  for (const bitlocker of [null, [], [{mount:'D:', protection:'Unknown', source:'shell'}]]) {
+    const row = summarizeAudit({...good(), bitlocker, windowsEdition:'Microsoft Windows 11 Pro', bitlockerEvent829:null, recoveryKeyBackupFiles:null}).yellow.find(r => r.item === 'BitLocker');
+    assert.ok(row);
+    assert.match(row.detail, /未取得・要確認/);
+    assert.match(row.detail, /edition=Microsoft Windows 11 Pro/);
+    assert.match(row.detail, /event829=unknown/);
+    assert.match(row.detail, /keyBackups=unknown/);
+  }
+});
+test('Homeの詳細は追加項目と注記を末尾まで保持する', () => {
+  const a = {...good(), windowsEdition:'Microsoft Windows 11 Home', bitlocker:[{mount:'D:', protection:'Off', source:'shell'}], bitlockerEvent829:{count:3}, recoveryKeyBackupFiles:['Documents/回復キー.txt']};
+  const row = summarizeAudit(a).red.find(r => r.item === 'BitLocker');
+  for (const text of ['edition=Microsoft Windows 11 Home', 'source=shell', 'event829=3', 'keyBackups=1', 'Home: デバイスの暗号化の対象']) assert.ok(row.detail.includes(text), text);
+  assert.ok(!row.detail.includes('回復キー.txt'));
+  const matrix = buildMatrix([a]);
+  assert.equal(matrix.rows.find(r => r.item === 'BitLocker').cells['kim-PC'].detail, row.detail);
+});
 test('しきい値ちょうどは緑',()=>{
  const a=good();a.defender.sigDate='2026-10-26T12:00:00Z';a.lastHotfixDate='2026-09-14T12:00:00Z';a.secrets.envFileCount=20;a.inboundAllowAnyPublic=Array(25).fill({});a.stuckJobs.oldestNodeHours=24;
  assert.equal(summarizeAudit(a).green.length,ITEMS.length);

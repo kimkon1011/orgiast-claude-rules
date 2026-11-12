@@ -22,7 +22,7 @@ export function buildMatrix(results, expectedLabels = []) {
     const s = summaries.get(label);
     for (const level of ['red','yellow','green']) {
       const found = s[level]?.find(e => e.item === item);
-      if (found) return [label, { level, detail: String(found.detail).slice(0, 120) }];
+      if (found) return [label, { level, detail: String(found.detail).slice(0, item === 'BitLocker' ? 512 : 120) }];
     }
     return [label, { level: 'yellow', detail: '未取得' }];
   })) }));

@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { EventEmitter } from 'node:events';
+import { listItems } from './kim-inbox.mjs';
 import { main, canonicalVerdict, parseCredentialBlob } from './knowledge-lock.mjs';
 import { sealText, parseSealed, isSealed, openWithDataKey } from './lib/knowledge-envelope.mjs';
 
@@ -210,13 +211,18 @@ test('ledger-sync は差分計画、apply は全投影を stdin に渡す', asyn
   assert.equal(await f.run(['ledger-sync']), 0); assert.match(f.stdout, /追加=\[\] 削除=\[\]/);
 });
 
-test('passkey-link は URL と dmSent のみ表示', async t => {
+test('passkey-link はチャンネル通知を維持し登録リンクを ask に保存', async t => {
   const f = fixture(t);
   f.deps.fetch = async (_, init) => {
     assert.deepEqual(JSON.parse(init.body), { action: 'register-link' });
     return response({ registerUrl: 'https://register.test', dmSent: true });
   };
-  assert.equal(await f.run(['passkey-link']), 0); assert.match(f.stdout, /registerUrl: https:\/\/register.test\ndmSent: true/);
+  assert.equal(await f.run(['passkey-link']), 0);
+  const [item] = listItems(f.root);
+  assert.equal(item.kind, 'ask'); assert.equal(item.priority, 'high');
+  assert.match(item.text, /https:\/\/register.test/);
+  assert.equal(await f.run(['passkey-link']), 0); assert.equal(listItems(f.root).length, 1);
+  assert.match(f.stdout, /registerUrl: https:\/\/register.test\nchannelSent: true\nkimInbox: ki-/);
 });
 
 const serverFile = process.env.ORGIAST_KEYSERVE_REPO
@@ -305,4 +311,14 @@ test('DM送信済みの承認依頼は request を表示、片方だけの grant
   assert.match(f.stderr, /kim のスマホに承認リンクを送りました/);
   assert.match(f.stderr, /--request signed-request/);
   assert.equal(await f.run(['open', file, '--grant', '12345678']), 2);
+});
+
+test('passkey-link accepts channelSent and does not claim success when inbox fails', async t => {
+  const f = fixture(t);
+  f.deps.fetch = async () => response({ registerUrl: 'https://register.test', channelSent: false });
+  assert.equal(await f.run(['passkey-link']), 0);
+  assert.match(f.stdout, /channelSent: false/);
+  f.stdout = ''; f.deps.addInbox = async () => { throw Error('unwritable'); };
+  assert.notEqual(await f.run(['passkey-link']), 0);
+  assert.equal(f.stdout, '');
 });

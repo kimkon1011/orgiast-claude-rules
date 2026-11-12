@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, ingestFleetMail, isKimSeat, main, CONTEXT_LIMIT, oneScreenSummary } from './kim-inbox.mjs';
+import { inboxSummary } from './lib/kim-inbox-relay-state.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { loadAllowlist, discordAllowed } from './lib/kim-discord-allowlist.mjs';
 function seat(t, label = 'kim-PC') {
@@ -32,9 +33,9 @@ test('ask は毎回提示し回答後に消える。info は確認できるが a
   const output = [];
   const hook = session_id => main(['--context'], { home, stdout: s => output.push(JSON.parse(s)), readStdin: async () => JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id }) });
   await hook('s1'); await hook('s1'); await hook('s2');
-  assert.match(output[0].hookSpecificOutput.additionalContext, /\n詳細/);
-  assert.doesNotMatch(output[1].hookSpecificOutput.additionalContext, /詳細/);
-  assert.match(output[2].hookSpecificOutput.additionalContext, /\n詳細/);
+  assert.match(output[0].hookSpecificOutput.additionalContext, /判断してください 詳細/);
+  assert.match(output[1].hookSpecificOutput.additionalContext, /判断してください 詳細/);
+  assert.match(output[2].hookSpecificOutput.additionalContext, /判断してください 詳細/);
   assert.equal(listItems(home).find(i => i.id === ask.id).shownCount, 3);
   assert.throws(() => markSeen(home, ask.id));
   answerItem(home, ask.id, '承認 sk-abcdefghijklmnopqr', 's2'); markSeen(home, info.id);
@@ -194,7 +195,7 @@ test('hook の session_id と一致する作業IDの info を ask より先に�
   assert.equal(context.match(/■ info (ki-[\d-]+[a-f0-9]+)/)[1], own.id);
   assert.ok(context.indexOf(own.id) < context.indexOf('■ ask'));
 });
-test('100番目の現在セッション ask を別枠の先頭に全文で表示する', async t => {
+test('100番目の現在セッション ask を別枠の先頭に1行要約で表示する', async t => {
   const home = seat(t);
   const base = await addItem(home, { kind: 'ask', text: '基準' });
   const old = Array.from({ length: 100 }, (_, n) => ({ ...base, id: `old-${n}`, text: `既表示 ${n}`, shownCount: 400,
@@ -203,7 +204,8 @@ test('100番目の現在セッション ask を別枠の先頭に全文で表示
   const ownAsk = { ...base, id: 'own-ask', text: `セッション abcdef12 ${detail}`, createdAt: '2026-11-06T00:00:00Z', shownCount: 0, shownSessions: [] };
   const context = selectContext([...old, ownAsk], { sessionId: 'abcdef12-3456', now: Date.parse('2026-11-06T09:00:00Z') });
   assert.ok(context.startsWith('■ ask own-ask'));
-  assert.match(context, /全文末尾/);
+  assert.doesNotMatch(context, /全文末尾/);
+  assert.match(context, /現在セッションの判断依頼/);
   assert.equal(ownAsk.shownCount, 1);
 });
 test('別セッションでは未表示 ask を400回表示済み ask より先にする', async t => {
@@ -243,7 +245,7 @@ test('3日超の未表示 ask を新しい未表示 ask より優先し、境界
   assert.match(context, /■ ask stale ⚠未表示3日/);
   assert.equal((context.match(/⚠未表示/g) || []).length, 1);
 });
-test('現在セッション ask は各形式で特定し、急ぎ・期限より先に600字を再提示する', async t => {
+test('現在セッション ask は各形式で特定し、急ぎ・期限より先に1行要約を再提示する', async t => {
   const base = await addItem(seat(t), { kind: 'ask', text: '判断' });
   const own = [
     { ...base, id: 'own-text', text: `作業ID: ABCDEF12\n${'詳'.repeat(700)}` },
@@ -256,10 +258,10 @@ test('現在セッション ask は各形式で特定し、急ぎ・期限より
   for (let n = 1; n <= 2; n++) {
     const context = selectContext([...own, urgent, deadline], { sessionId, now });
     assert.ok(context.startsWith('■ ask own-'));
-    assert.ok(context.length > CONTEXT_LIMIT);
+    assert.ok(context.length <= CONTEXT_LIMIT);
     for (const item of own) {
-      assert.ok(context.includes(item.text.slice(0, 600)));
-      assert.ok(!context.includes(item.text.slice(0, 601)));
+      assert.ok(context.includes(inboxSummary(item)));
+      assert.ok(!context.includes(item.text.slice(0, 600)));
       assert.ok(context.indexOf(item.id) < context.indexOf('■ 🔴急ぎ'));
       assert.ok(context.indexOf(item.id) < context.indexOf('期限本文'));
       assert.equal(context.split(`■ ask ${item.id}`).length - 1, 1);
@@ -438,15 +440,15 @@ test('--urgent を保存し、古い通常 ask 150件・期限・セッション
   for (let n = 0; n < 2; n++) {
     const context = selectContext(items, { sessionId: 'deadbeef-1234' });
     assert.ok(context.startsWith(`■ 🔴急ぎ ask ${urgent.id}`));
-    assert.ok(context.includes(body));
-    assert.ok(context.indexOf(body) < context.indexOf(deadline.text));
-    assert.ok(context.indexOf(body) < context.indexOf(info.text));
+    assert.ok(context.includes(inboxSummary(urgent)));
+    assert.ok(context.indexOf(inboxSummary(urgent)) < context.indexOf(deadline.text));
+    assert.ok(context.indexOf(inboxSummary(urgent)) < context.indexOf(info.text));
     assert.equal((context.match(/■ ask normal-/g) || []).length, 5);
   }
   assert.equal(urgent.shownCount, 2);
 });
 
-test('急ぎは上限超過でも600字を保ち、未表示優先・最大5件・open限定で通常枠と分離する', async t => {
+test('急ぎは短い要約を保ち、未表示優先・最大5件・open限定で通常枠と分離する', async t => {
   const home = seat(t);
   const base = await addItem(home, { kind: 'ask', text: '通常', urgent: false });
   assert.equal(base.urgent, undefined);
@@ -455,10 +457,10 @@ test('急ぎは上限超過でも600字を保ち、未表示優先・最大5件�
     shownCount: n === 6 ? 1 : 0, shownSessions: [] }));
   const closed = { ...base, id: 'closed-urgent', urgent: true, status: 'answered', text: '回答済み' };
   const context = selectContext([base, ...urgent, closed], { sessionId: 's', now: Date.parse('2026-11-11T00:00:00Z') });
-  assert.ok(context.length > CONTEXT_LIMIT);
+  assert.ok(context.length <= CONTEXT_LIMIT);
   assert.ok(context.startsWith('■ 🔴急ぎ ask urgent-5'));
   for (const item of urgent.slice(1, 6)) {
-    assert.ok(context.includes(item.text.slice(0, 600)));
+    assert.ok(context.includes(inboxSummary(item)));
     assert.equal(item.shownCount, 1);
     assert.deepEqual(item.shownSessions, ['s']);
   }
@@ -552,10 +554,10 @@ test('UserPromptSubmit では1画面ブロックが付かない／ask の秘密�
   assert.doesNotMatch(output[0].hookSpecificOutput.additionalContext, /📌 kim の返事待ち/);
   // 秘密値は selectContext の redactSecrets で伏せる
   assert.doesNotMatch(output[0].hookSpecificOutput.additionalContext, /abcdefghijklmnopqr/);
-  // SessionStart: 1画面ブロックあり
+  // SessionStart も追跡される注入だけ。未追跡の ask を重ねない。
   output.length = 0;
   await main(['--context'], { home, stdout: s => output.push(JSON.parse(s)), readStdin: async () => JSON.stringify({ hook_event_name: 'SessionStart', session_id: 's2' }) });
-  assert.match(output[0].hookSpecificOutput.additionalContext, /📌 kim の返事待ち/);
+  assert.doesNotMatch(output[0].hookSpecificOutput.additionalContext, /📌 kim の返事待ち/);
   // oneScreenSummary の戻り値も handler で redactSecrets を通す
   assert.doesNotMatch(output[0].hookSpecificOutput.additionalContext, /abcdefghijklmnopqr/);
 });

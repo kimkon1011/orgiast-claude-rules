@@ -403,3 +403,14 @@ test('codex dry failure with real 401 still classifies oauth_consent', async t =
   assert.equal(result.lanes.codex.alive, false);
   assert.equal(result.lanes.codex.reason, 'dead:oauth_consent');
 });
+
+test('truncated "basic authentication in header" classifies dead:oauth_consent', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  const result = await laneDoctorProbe({ home, now, platform: 'win32', providers: ['codex'],
+    spawnImpl: (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: 'fixture-token' } }) }),
+    listWsl: () => 'Ubuntu', probe: async (provider, options) => provider === 'codex' && options.dryRun ? { code: 1, text: '' } : { code: 1, text: 'arer or basic authentication in header, url: https://api.openai.com/v1/responses' },
+    notify: async () => ({ delivered: 'test' }) });
+  assert.equal(result.lanes.codex.alive, false);
+  assert.equal(result.lanes.codex.reason, 'dead:oauth_consent');
+});

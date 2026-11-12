@@ -289,7 +289,7 @@ export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), pro
       const limited = !payment && quotaFailure(text);
       // codex-do が利用枠クールダウンで保留(exit 75)した場合は WSL 問題ではなく枠切れ。クールダウン自体は既存のまま触らない。
       const deferred = /codex_cooldown/.test(text);
-      health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: payment ? 'billing' : (limited || deferred) ? 'cooldown' : /HTTP\s*401|unauthorized|login required|token.*expired/i.test(text) ? (p === 'codex' ? 'dead:oauth_consent' : 'auth_invalid') : /Read-only file system|EROFS/i.test(text) ? 'execution_unavailable:read_only' : 'probe_failed', probedAt: stamp, ...(result.authOk ? { authOk: true } : {}) };
+      health.lanes[p] = { ...probeHistory(previous.lanes?.[p]), alive: false, reason: payment ? 'billing' : (limited || deferred) ? 'cooldown' : /HTTP\s*401|unauthorized|login required|token.*expired|basic authentication in header|invalid_refresh_token|refresh token|log out and sign in again/i.test(text) ? (p === 'codex' ? 'dead:oauth_consent' : 'auth_invalid') : /Read-only file system|EROFS/i.test(text) ? 'execution_unavailable:read_only' : 'probe_failed', probedAt: stamp, ...(result.authOk ? { authOk: true } : {}) };
       // 失敗の中身を必ず残す（2026-10-15 作業用011: 理由が記録されず原因を追えなかった）
       health.lanes[p].error = String(text || '').replace(/(sk-|eyJ)[A-Za-z0-9._-]{8,}/g, '$1***').replace(/\s+/g, ' ').trim().slice(-400);
       // native の失敗でも、認証・上限・課金が原因なら physical_operation（再起動が要る）と誤判定しない

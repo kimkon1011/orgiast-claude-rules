@@ -19,8 +19,10 @@ export function addCheck({ session, check, startWhen, deadline, label, nextClaud
   const deadlineMs = relative ? now + Number(relative[1]) * { m: 60000, h: 3600000, d: 86400000 }[relative[2]] : Date.parse(deadline);
   if (!Number.isFinite(deadlineMs) || deadlineMs <= now) throw new Error('--deadline は未来の ISO 日時または +24h などを指定してください');
   const timeoutSec = timeout === undefined || timeout === '' ? null : Number(timeout);
-  if (timeoutSec !== null && !(timeoutSec > 0 && timeoutSec * 1000 <= MAX_CHECK_TIMEOUT_MS)) throw new Error(`--timeout は 1〜${MAX_CHECK_TIMEOUT_MS / 1000} の秒数で指定してください`);
-  const timeoutFields = timeoutSec === null ? {} : { checkTimeoutMs: Math.round(timeoutSec * 1000) };
+  if (timeoutSec !== null && !(timeoutSec > 0)) throw new Error('--timeout は正の秒数で指定してください');
+  const rawTimeoutMs = timeoutSec !== null ? Math.round(timeoutSec * 1000) : undefined;
+  const checkTimeoutMs = rawTimeoutMs !== undefined ? Math.min(rawTimeoutMs, MAX_CHECK_TIMEOUT_MS) : undefined;
+  const timeoutFields = checkTimeoutMs === undefined ? {} : { checkTimeoutMs };
   if (probe) {
     const { code, text } = probe({ check: startWhen || check, checkCwd: cwd, cwd, ...timeoutFields });
     if (code === 0 && !startWhen && !allowMet) throw new Error(`check が登録時点で既に達成(exit 0)と判定されました: ${text}。達成時だけ exit 0 になる形か確認してください（例: … | grep -q MERGED）。本当に達成済みなら登録は不要です`);
@@ -64,10 +66,14 @@ export function main(argv = process.argv.slice(2)) {
   }
   if (!values['start-when']) {
     const timeoutSec = values.timeout === undefined || values.timeout === '' ? null : Number(values.timeout);
-    const hasTimeout = timeoutSec !== null && timeoutSec > 0 && timeoutSec * 1000 <= MAX_CHECK_TIMEOUT_MS;
-    const checkTimeoutMs = hasTimeout ? Math.round(timeoutSec * 1000) : undefined;
+    const rawTimeoutMs = timeoutSec !== null && timeoutSec > 0 ? Math.round(timeoutSec * 1000) : undefined;
+    const checkTimeoutMs = rawTimeoutMs !== undefined ? Math.min(rawTimeoutMs, MAX_CHECK_TIMEOUT_MS) : undefined;
     const pf = preflightCheck({ check: values.check, checkCwd: process.cwd(), cwd: process.cwd(), ...(checkTimeoutMs ? { checkTimeoutMs } : {}) }, { home, forceCheck: values['force-check'], allowSessionState: values['allow-session-state'] });
-    if (!pf.ok) throw new Error(pf.text);
+    if (pf.preflight === 'trial_timeout') {
+      console.error(`check の初回検証は時間切れです（${pf.text}）。check 行は登録したうえで、次回の巡回で判定します。`);
+    } else if (!pf.ok) {
+      throw new Error(pf.text);
+    }
   }
   return addCheck({ ...values, home, askFile: values['ask-file'], doneFile: values['done-file'], startWhen: values['start-when'], nextClaude: values['next-claude'], allowMet: values['allow-met'], probe: row => executeCheck(row, { home }) });
 }

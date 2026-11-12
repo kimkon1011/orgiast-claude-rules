@@ -115,7 +115,16 @@ test('addCheck --timeout stores checkTimeoutMs, probes with it, and rejects out-
   assert.equal(row.checkTimeoutMs, 180000); assert.deepEqual(probed, [180000]);
   assert.equal(readLedger(ledgerFile(home)).at(-1).checkTimeoutMs, 180000);
   assert.equal('checkTimeoutMs' in addCheck({ home, now, session: 'plain', check: 'x', label: 'x', deadline: '+24h' }), false);
-  for (const timeout of ['0', '301', 'soon']) assert.throws(() => addCheck({ home, now, session: 'bad', check: 'x', label: 'x', deadline: '+24h', timeout }), /--timeout/);
+  for (const timeout of ['0', 'soon']) assert.throws(() => addCheck({ home, now, session: 'bad', check: 'x', label: 'x', deadline: '+24h', timeout }), /--timeout/);
+});
+
+test('addCheck --timeout は MAX_CHECK_TIMEOUT_MS を超える値を上限に丸める', () => {
+  const home = tmp(), probed = [];
+  const clamped = addCheck({ home, now, session: 'clamped', check: 'x', label: '超過 test', deadline: '+24h', timeout: '999',
+    probe: r => { probed.push(r.checkTimeoutMs); return { code: 1, text: '未達' }; } });
+  assert.equal(clamped.checkTimeoutMs, MAX_CHECK_TIMEOUT_MS);
+  assert.deepEqual(probed, [MAX_CHECK_TIMEOUT_MS]);
+  assert.equal(readLedger(ledgerFile(home)).at(-1).checkTimeoutMs, MAX_CHECK_TIMEOUT_MS);
 });
 test('WeChat counts current/previous month only, inclusive since, ignores empty/invalid/unrelated data without exposing text', () => {
   const home = tmp(), dir = path.join(home, '.claude', 'line-openchat'); fs.mkdirSync(dir, { recursive: true });
@@ -352,6 +361,23 @@ test('hasBashEnvExpansion / hasCheckError は期待どおり判定する', () =>
   assert.equal(hasCheckError('bash: command not found: foo'), true);
   assert.equal(hasCheckError('ok'), false);
   assert.equal(CHECK_ERROR_PATTERNS.length >= 5, true);
+});
+
+test('preflightCheck: タイムアウトは trial_timeout として通す', () => {
+  const home = tmp();
+  const pf = preflightCheck({ check: 'slow-command', checkTimeoutMs: 100 }, { home,
+    spawnImpl: () => ({ status: null, error: Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' }), stdout: '', stderr: '' }) });
+  assert.equal(pf.ok, true);
+  assert.equal(pf.preflight, 'trial_timeout');
+  assert.match(pf.text, /上限を超えました/);
+});
+
+test('preflightCheck: コマンド不在など構文エラーは trial ではなく exec_error で拒否', () => {
+  const home = tmp();
+  assert.equal(preflightCheck({ check: 'nonexistent-command-that-fails' }, { home }).preflight, 'exec_error');
+  const pf = preflightCheck({ check: 'exit 127' }, { home, spawnImpl: () => ({ status: 127, stdout: '', stderr: 'command not found' }) });
+  assert.equal(pf.ok, false);
+  assert.equal(pf.preflight, 'exec_error');
 });
 
 

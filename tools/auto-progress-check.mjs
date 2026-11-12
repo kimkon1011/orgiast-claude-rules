@@ -123,6 +123,10 @@ export function preflightCheck(row, { home, forceCheck = false, allowSessionStat
     return { ok: true, code: 0, text: result.text, stderr: result.stderr, preflight: 'already_met' };
   }
   if (result.code !== 1 && result.code !== 3) {
+    // タイムアウトは登録時に reject せず trial として通し、初回巡回で正しく判定する。
+    if (result.code === null && /上限を超えました/.test(result.text)) {
+      return { ok: true, code: null, text: result.text, stderr: result.stderr, preflight: 'trial_timeout' };
+    }
     const msg = `check が実行できませんでした: ${result.text}`;
     return { ok: false, code: null, text: msg, stderr: result.stderr, preflight: 'exec_error' };
   }

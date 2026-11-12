@@ -367,6 +367,55 @@ test('w018-PC は fleet-pc-map に discordId と notifyDiscordId を持つ', () 
   assertNotifyRecipients(map);
 });
 
+test('w018-PC の notifyChannels は mobile-push（cr 2026-11-06 指示）', () => {
+  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const map = JSON.parse(fs.readFileSync(path.join(repo, 'fleet-pc-map.json'), 'utf8'));
+  assert.deepEqual(map['w018-PC'].notifyChannels, ['mobile-push']);
+});
+
+test('mobile-push 席は Discord と保留判定を経由せずキューへ積む（kind=automatic も）', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-mobile-push-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const options = {
+    home, label: 'w018-PC', directory: [], kind: 'automatic',
+    pcMap: { 'w018-PC': { account: 'cr@orgiast.jp', notifyDiscordId: '1557228267566665729', notifyChannels: ['mobile-push'] } },
+    notify: async () => assert.fail('Discord DM を呼ばない'),
+    notifyKim: () => assert.fail('mobile-push 席は宛先警告を出さない'),
+    toast: () => assert.fail('キューに積めたら toast に重ねない'),
+  };
+  const result = await realNotifyOwner('cr@orgiast.jp', '【w018-PC の進捗】\n完了 token=example-secret', options);
+  assert.equal(result.delivered, 'mobile-push-queued');
+  assert.equal(result.ok, true);
+  assert.ok(result.id);
+  const queue = fs.readFileSync(path.join(home, '.claude', 'mobile-push-queue.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(queue.length, 1);
+  assert.equal(queue[0].owner, 'cr@orgiast.jp');
+  assert.equal(queue[0].sent, false);
+  assert.match(queue[0].title, /^【w018-PC の進捗】$/);
+  assert.match(queue[0].body, /完了/);
+  assert.match(queue[0].body, /\*\*\*REDACTED\*\*\*/);
+  assert.ok(queue[0].ts);
+  // 台帳に delivered:mobile-push-queued を残す
+  const ledger = fs.readFileSync(path.join(home, '.claude', 'logs', 'owner-notify-fallback.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(ledger.at(-1).delivered, 'mobile-push-queued');
+  assert.equal(ledger.at(-1).owner, 'cr@orgiast.jp');
+  // local owner の受け箱にも書かれ、次のプロンプトでチャットに出る
+  assert.match(fs.readFileSync(path.join(home, '.claude', 'owner-inbox.md'), 'utf8'), /【w018-PC の進捗】/);
+});
+
+test('mobile-push 設定は kim 宛てと他 owner の経路を変えない', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'owner-mobile-push-keep-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const pcMap = { 'w018-PC': { account: 'cr@orgiast.jp', notifyChannels: ['mobile-push'] } };
+  const kim = await notifyOwner('kim@orgiast.jp', 'kim 宛て報告', { home, label: 'w018-PC', pcMap, directory: [], notify: () => assert.fail('kim は DM しない') });
+  assert.equal(kim.channel, 'kim-inbox');
+  // このPCの持ち主でない owner は mobile-push 席になっても従来どおり（automatic は保留）
+  const other = await realNotifyOwner('nishi@orgiast.jp', '別 owner の進捗', { home, label: 'w018-PC', pcMap, directory: [], kind: 'automatic', notify: () => assert.fail('保留中は送らない'), toast: () => assert.fail('保留は toast しない') });
+  assert.equal(other.delivered, 'deferred');
+  assert.equal(fs.existsSync(path.join(home, '.claude', 'mobile-push-queue.jsonl')), false);
+  assert.ok(listItems(home).some(item => /kim 宛て報告/.test(item.text)));
+});
+
 const KNOWN_MISSING_NOTIFY = {
   'kimko-PC': '使用者の Discord 未特定・2026-11-03',
   'HP': '使用者の Discord 未特定・2026-11-03',

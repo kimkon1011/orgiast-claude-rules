@@ -86,6 +86,10 @@
     "account": "cr@orgiast.jp",
     "discordId": "1557228267566665729",
     "notifyDiscordId": "1557228267566665729",
+    "notifyChannels": [
+      "mobile-push"
+    ],
+    "_notifyChannels_reason": "2026-11-06 cr 指示: 進捗は Discord DM ではなくスマホの Claude アプリのプッシュで受け取る（cr は Discord を見ないため owner-notify-fallback.jsonl が毎回 delivered:dm でも本人に届いていなかった）。notify-owner は ~/.claude/mobile-push-queue.jsonl へ要求を積み、対話セッションの auto-progress-inbox-hook が PushNotification 送信＋mark-sent まで行う。inbox は local owner に常に書かれ、次のプロンプトでチャットに出る",
     "aliases": [
       "DESKTOP-N429M3V"
     ],

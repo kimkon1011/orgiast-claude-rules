@@ -1,0 +1,15 @@
+[Check Timestamp: 2026-11-13 04:24:05 JST]
+Vercel CLI 59.5.0 (Node.js 24.22.2)
+Retrieving project窶ｦ
+> Environment Variables found for genbateamtoho-ctrl/tetsuko-unified [1s]
+
+ name                       value                       type                environments        created    
+ ORDER_NOTIFICATION_FROM    eyJ2IjoidjIiLCJjIj窶ｦ         Non-sensitive       Production          17d ago    
+ ORDER_NOTIFICATION_TO      eyJ2IjoidjIiLCJjIj窶ｦ         Non-sensitive       Production          17d ago    
+ DATABASE_URL               Hidden                      Sensitive           Production          78d ago    
+
+Common next commands:
+- `vercel env add`
+- `vercel env rm`
+- `vercel env pull`
+

@@ -42,7 +42,7 @@ import {
   checkProfileLoggedIn,
 } from './lib/meet-cue-browser.mjs';
 
-const exec = promisify(execFile);
+const execFileAsync = promisify(execFile);
 const homeDir = () => process.env.ORGIAST_HOME || os.homedir();
 const meetCueBaseDir = (home = homeDir()) => path.join(home, '.claude', 'meet-cue');
 
@@ -92,11 +92,11 @@ ${brief}`;
   fs.writeFileSync(promptFile, prompt, 'utf8');
 
   try {
-    const { stdout } = await exec(process.execPath, [
+    const { stdout } = await execFileAsync(process.execPath, [
       path.join(path.dirname(import.meta.url.replace('file://', '')), 'llm-ask.mjs'),
       '--provider', 'gemini',
       '--prompt-file', promptFile,
-    ], { timeout: 15000 });
+    ], { timeout: 15000, windowsHide: true });
 
     fs.rmSync(promptFile, { force: true });
 
@@ -147,11 +147,11 @@ ${captionsText}`;
   fs.writeFileSync(promptFile, prompt, 'utf8');
 
   try {
-    const { stdout } = await exec(process.execPath, [
+    const { stdout } = await execFileAsync(process.execPath, [
       path.join(path.dirname(import.meta.url.replace('file://', '')), 'llm-ask.mjs'),
       '--provider', 'groq',
       '--prompt-file', promptFile,
-    ], { timeout: 8000 });
+    ], { timeout: 8000, windowsHide: true });
 
     const jsonMatch = stdout.match(/\{\s*"say"[\s\S]*\}/);
     if (jsonMatch) {

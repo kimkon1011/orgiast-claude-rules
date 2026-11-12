@@ -260,8 +260,25 @@ test('runScheduler: seatHostname 不一致で何もせずスキップ', async ()
     const res = await runScheduler({ home: tmpHome });
     assert.equal(res.ok, true);
     assert.equal(res.skipped, 'seat_hostname_mismatch');
+    assert.equal(res.skippedHost, true);
+    assert.deepEqual(res.actions, []);
+    assert.deepEqual(res.skippedEvents, []);
   } finally {
     fs.writeFileSync(configPath, originalConfig, 'utf8');
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test('runScheduler: options.hostname 注入による seatHostname 不一致のスキップ', async () => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'meet-cue-home-'));
+  try {
+    const res = await runScheduler({ home: tmpHome, hostname: 'ci-runner-host' });
+    assert.equal(res.ok, true);
+    assert.equal(res.skipped, 'seat_hostname_mismatch');
+    assert.equal(res.skippedHost, true);
+    assert.deepEqual(res.actions, []);
+    assert.deepEqual(res.skippedEvents, []);
+  } finally {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
 });
@@ -287,6 +304,8 @@ function createMockSchedulerOptions(events, askJevImpl, tmpHome) {
   const eventList = Array.isArray(events) ? events : [events];
   return {
     home: tmpHome,
+    hostname: 'DESKTOP-2D0R4LI',
+    deps: { hostname: 'DESKTOP-2D0R4LI' },
     now: new Date('2026-11-12T10:00:00.000Z'),
     dryRun: true,
     getToken: async () => 'fake-token',

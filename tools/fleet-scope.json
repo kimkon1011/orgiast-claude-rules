@@ -86,6 +86,7 @@
     {"path": "tools/register-daytrip-detect-task.mjs", "scope": "kim-only", "step": "task:daytrip-detect", "reason": "convergeからkim-PC用PowerShell登録をEnsureで呼ぶ"},
     {"path": "tools/register-meet-recorder-invite-task.ps1", "scope": "kim-only", "step": "task:meet-recorder-invite", "reason": "kimのMeet予定にseisaku-teamを自動招待。LINE受信ホストだけで登録"},
     {"path": "tools/register-meet-recorder-invite-task.mjs", "scope": "kim-only", "step": "task:meet-recorder-invite", "reason": "convergeからkim-PC用PowerShell登録をEnsureで呼ぶ"},
+    {"path": "tools/register-meet-cue-scheduler-task.ps1", "scope": "kim-only", "reason": "Meet カンペ Bot は kim-PC(seatHostname) だけで動かす。他PCで二重参加させない"},
     {"path": "tools/daytrip-ask-hook.mjs", "scope": "fleet", "step": "hook:daytrip-ask", "reason": "日帰り出張のセッション内確認。全PCへconvergeで配布しpendingがないPCでは無出力"},
     {"path": "tools/lib/share-secrets.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "memory-share と案件会話保存で共通の秘密情報除去"},
     {"path": "tools/case-handoff.mjs", "scope": "fleet", "step": "settings:case-handoff-sessionstart", "reason": "案件履歴の保存・再開。kim操作アカウントのみ実行"},

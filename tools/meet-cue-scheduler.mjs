@@ -533,20 +533,28 @@ export async function runScheduler(options = {}) {
   const sheetReader = options.readSheet || readSheet;
   const askJevImpl = options.askJevImpl || askJev;
 
-  const config = readConfig(home);
+  const config = options.config || readConfig(home);
   const staffAddresses = loadStaffAddresses(home);
   const state = options.state || loadSchedulerState(home);
 
   // Seat hostname check
-  const currentHostname = os.hostname();
+  const currentHostname = options.hostname || options.deps?.hostname || os.hostname();
   if (config.seatHostname && config.seatHostname.toLowerCase() !== currentHostname.toLowerCase()) {
     console.log(`[meet-cue-scheduler] seatHostname 不一致のため待機 (現在: ${currentHostname}, 対象: ${config.seatHostname})`);
-    return { ok: true, skipped: 'seat_hostname_mismatch', currentHostname, targetHostname: config.seatHostname };
+    return {
+      ok: true,
+      skippedHost: true,
+      skipped: 'seat_hostname_mismatch',
+      actions: [],
+      skippedEvents: [],
+      currentHostname,
+      targetHostname: config.seatHostname,
+    };
   }
 
   if (config.enabled === false) {
     console.log('[meet-cue-scheduler] config.enabled が false のため終了');
-    return { ok: true, skipped: 'disabled' };
+    return { ok: true, skipped: 'disabled', actions: [], skippedEvents: [] };
   }
 
   // Try auto login if needed

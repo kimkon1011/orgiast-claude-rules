@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // auto-progress の check として使う外部チャネル（LINE/Discord/Beeper/Gmail）の新着照会。
 // 使い方: node tools/auto-progress-external-check.mjs --channel line --thread-id <groupId> --since <ISO日時>
-//   exit 0 = 新着あり（done）、exit 1 = まだ（unmet）、exit 3 = 確認不能（stalled）
+//   exit 1 = 新着なし（unmet、継続監視）、exit 3 = 確認不能（stalled）
+//   新着あり: exit 1 に加え ##EXTERNAL_RESULT##JSON マーカー付きで新着を stdout に出力
+//   （checkPromise がマーカーを捕捉し --since 更新 + kim-inbox 報告 + 継続監視する）
 //   環境変数: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
 import fs from 'node:fs';
 import os from 'node:os';
@@ -81,7 +83,15 @@ export async function check({ channel, threadId, since, home = os.homedir(), sec
     }
     const latest = messages[messages.length - 1];
     console.log(`✅ 外部チャネル(line) に新着 ${messages.length}件（最新: ${latest.at} ${latest.sender}: ${latest.text.slice(0, 80)}）`);
-    process.exitCode = 0;
+    // ##EXTERNAL_RESULT## marker: checkPromise intercepts this to update --since + report to kim-inbox + continue monitoring
+    console.log('##EXTERNAL_RESULT##' + JSON.stringify({
+      channel, threadId: id,
+      count: messages.length,
+      messages: messages.map(m => ({ id: m.id, at: m.at, sender: m.sender, text: m.text })),
+      latestAt: latest.at,
+    }));
+    // exit 1 (unmet) keeps the row open; checkPromise detects the marker and does not treat it as 'done'
+    process.exitCode = 1;
     return;
   }
   if (channel === 'discord') {

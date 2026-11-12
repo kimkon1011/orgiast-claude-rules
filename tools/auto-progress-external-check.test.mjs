@@ -2,8 +2,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import test from 'node:test';
+import test, { after } from 'node:test';
 import { parseArgs, fetchLineMessages, check } from './auto-progress-external-check.mjs';
+import { checkPromise } from './auto-progress-check.mjs';
+import { readLedger, writeLedger, ledgerFile } from './auto-progress-ledger.mjs';
+let homes = [];
+after(() => homes.forEach(h => { try { fs.rmSync(h, { recursive: true, force: true }); } catch {} }));
+const tmpHome = () => { const h = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-check-')); homes.push(h); return h; };
+const now = Date.parse('2026-11-12T10:00:00Z');
 
 test('parseArgs requires all flags', () => {
   assert.throws(() => parseArgs([]), /--channel.*--thread-id.*--since/);
@@ -37,7 +43,7 @@ test('fetchLineMessages filters external messages after since', async () => {
   assert.equal(messages[1].sender, '池永様');
 });
 
-test('check exits 0 with new messages, 1 without, 3 on error', async () => {
+test('check exits 1 with new messages (continuation), 1 without, 3 on error', async () => {
   const secrets = { SUPABASE_URL: 'https://test.supabase.co', SUPABASE_SERVICE_ROLE_KEY: 'key' };
 
   // Test: no new messages → exit 1
@@ -45,11 +51,23 @@ test('check exits 0 with new messages, 1 without, 3 on error', async () => {
   await check({ channel: 'line', threadId: 'g1', since: '2026-11-12T00:00:00Z', secrets, fetchImpl: noopFetch });
   assert.equal(process.exitCode, 1);
 
-  // Test: new messages → exit 0
+  // Test: new messages → exit 1 (unmet, for continuation) + ##EXTERNAL_RESULT## marker
   process.exitCode = -1;
+  let stdout = '';
+  const originalLog = console.log;
+  console.log = (...args) => { stdout += args.join(' ') + '\n'; originalLog(...args); };
   const newFetch = () => ({ ok: true, json: async () => [{ id: 'm1', created_at: '2026-11-12T04:00:00Z', sender_display_name: '森田様', body: '案2で', direction: 'inbound' }], text: async () => '' });
   await check({ channel: 'line', threadId: 'g1', since: '2026-11-12T00:00:00Z', secrets, fetchImpl: newFetch });
-  assert.equal(process.exitCode, 0);
+  assert.equal(process.exitCode, 1);
+  assert.ok(stdout.includes('##EXTERNAL_RESULT##'));
+  const markerMatch = stdout.match(/##EXTERNAL_RESULT##(\{[\s\S]*?\})(?:\n|$)/);
+  assert.ok(markerMatch, 'should have EXTERNAL_RESULT marker');
+  const data = JSON.parse(markerMatch[1]);
+  assert.equal(data.count, 1);
+  assert.equal(data.messages[0].sender, '森田様');
+  assert.equal(data.latestAt, '2026-11-12T04:00:00Z');
+  assert.equal(data.channel, 'line');
+  console.log = originalLog;
 
   // Test: Supabase error → exit 3
   process.exitCode = -1;
@@ -64,4 +82,82 @@ test('check exits 0 with new messages, 1 without, 3 on error', async () => {
 
   // Clean up exit code so the test runner doesn't see a failure
   process.exitCode = 0;
+});
+
+test('scanTranscriptForSend detects line-group-send and gmail-draft in transcript', async () => {
+  const { scanTranscriptForSend } = await import('./auto-progress-ledger.mjs');
+  const home = tmpHome();
+  const transcript = path.join(home, 'transcript.jsonl');
+  const lines = [
+    '{"type":"user","message":{"role":"user","content":"こういうメッセージを送って"}}',
+    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"送ります"},{"type":"tool_use","name":"Bash","input":{"command":"node tools/line-group-send.mjs --group-id C560ba509d --text \\"確認です\\""}}]}}',
+  ];
+  fs.writeFileSync(transcript, lines.join('\n') + '\n');
+  const result = scanTranscriptForSend(transcript);
+  assert.ok(result, 'should find send command in transcript');
+  assert.equal(result.channel, 'line');
+  assert.equal(result.threadId, 'C560ba509d');
+
+  // gmail test
+  const gmailLines = [
+    '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"node tools/gmail-draft.mjs --send --to client@example.com --subject test"}}]}}',
+  ];
+  const gmailTranscript = path.join(home, 'gmail-transcript.jsonl');
+  fs.writeFileSync(gmailTranscript, gmailLines.join('\n') + '\n');
+  const gmailResult = scanTranscriptForSend(gmailTranscript);
+  assert.ok(gmailResult, 'should find gmail send');
+  assert.equal(gmailResult.channel, 'gmail');
+  assert.equal(gmailResult.threadId, 'client@example.com');
+
+  // no send found
+  const emptyTranscript = path.join(home, 'empty.jsonl');
+  fs.writeFileSync(emptyTranscript, '{"type":"user","message":{"role":"user","content":"hello"}}\n');
+  assert.equal(scanTranscriptForSend(emptyTranscript), null);
+});
+
+test('checkPromise handles ##EXTERNAL_RESULT## marker: updates --since, returns unmet, does not mark done', async () => {
+  const home = tmpHome();
+  const file = ledgerFile(home);
+  const sessionId = 'test-external-session';
+  const checkCmd = 'node tools/auto-progress-external-check.mjs --channel line --thread-id g1 --since 2026-11-12T00:00:00Z';
+  writeLedger(file, [{
+    ts: new Date(now - 3600000).toISOString(), pc: 'test', user: 'test', sessionId,
+    cwd: home, promise: '外部監視テスト', status: 'open',
+    check: checkCmd, checkRegisteredAt: new Date(now - 3600000).toISOString(),
+    deadlineAt: new Date(now + 86400000).toISOString(), label: '外部監視テスト',
+    nextClaude: '新着を報告',
+  }]);
+
+  // Simulate check output with ##EXTERNAL_RESULT## marker
+  const result = {
+    code: 1,
+    stdout: '✅ 外部チャネル(line) に新着 2件\n##EXTERNAL_RESULT##' + JSON.stringify({
+      channel: 'line', threadId: 'g1', count: 2,
+      messages: [
+        { id: 'm1', at: '2026-11-12T04:00:00Z', sender: '森田様', text: '案2でお願いします' },
+        { id: 'm3', at: '2026-11-12T05:00:00Z', sender: '池永様', text: '回答です' },
+      ],
+      latestAt: '2026-11-12T05:00:00Z',
+    }),
+    text: '未達',
+  };
+  let patched = {};
+  const patch = (key, changes) => { patched = { ...patched, ...changes }; if (changes.check) writeLedger(file, readLedger(file).map(r => r.sessionId === sessionId ? { ...r, check: changes.check } : r)); return true; };
+
+  const state = await checkPromise({
+    check: checkCmd,
+    sessionId,
+    lastCheckedAt: new Date().toISOString(),
+    status: 'open',
+  }, { home, now, patch, io: { executeCheck: () => result }, suppressNotices: true });
+
+  assert.equal(state, 'unmet', 'should continue monitoring as unmet');
+  // Check that --since was updated to latestAt
+  const rows = readLedger(file);
+  const row = rows.find(r => r.sessionId === sessionId);
+  assert.ok(row, 'row should exist');
+  assert.ok(row.check.includes('--since 2026-11-12T05:00:00Z'), `check should have updated --since: ${row.check}`);
+  // Check that the row is NOT marked as done
+  assert.equal(row.status, 'open', 'row must remain open for continuous monitoring');
+  assert.notEqual(row.status, 'done', 'row must not be marked done');
 });

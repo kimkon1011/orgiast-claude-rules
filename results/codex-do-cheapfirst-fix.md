@@ -15,4 +15,8 @@
 
 ## PR
 
-標準手順 pr-land.mjs で作成後、URLを追記。
+標準手順 `node tools/pr-land.mjs --title <題> --body-file <本文>` で作成。
+
+https://github.com/kimkon1011/orgiast-claude-rules/pull/1954
+
+automerge ラベル付与済み。force push、ファイル削除、workflow変更、他ブランチ・他PRの変更なし。

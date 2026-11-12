@@ -100,7 +100,7 @@ export function checkPatternWarnings(command) {
  *   preflight=static_error → $env: 展開を検出
  *   preflight=stderr_error → stderr にエラー印を検出
  */
-export function preflightCheck(row, { home, forceCheck = false, allowSessionState = false } = {}) {
+export function preflightCheck(row, { home, forceCheck = false, allowSessionState = false, spawnImpl, shellPath } = {}) {
   if (!allowSessionState && sessionStateReference(row, { home })) {
     const msg = '完了判定はセッションが書く中間ファイルではなく、外部の一次情報（公開ページ・API・gh・タスクスケジューラ等）を直接照会してください。セッションが落ちると中間ファイルが更新されず、完了を検知できません（2026-11-06 実害）。例外として登録する場合だけ --allow-session-state を指定してください。';
     return { ok: false, code: 2, text: msg, stderr: msg, preflight: 'session_state' };
@@ -118,7 +118,7 @@ export function preflightCheck(row, { home, forceCheck = false, allowSessionStat
     return { ok: false, code: 2, text: msg, stderr: msg, preflight: 'static_error' };
   }
   // 試し実行
-  const result = executeCheck(row, { home });
+  const result = executeCheck(row, { home, spawnImpl, shellPath });
   if (result.code === 0) {
     return { ok: true, code: 0, text: result.text, stderr: result.stderr, preflight: 'already_met' };
   }

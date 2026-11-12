@@ -25,6 +25,7 @@ import {
   buildJevQuestions,
   parseJevResponse,
   parseSimulateTranscript,
+  runDecisionRound,
 } from './lib/meet-cue-core.mjs';
 
 import {
@@ -202,26 +203,31 @@ export async function main(argv = process.argv.slice(2)) {
     const profileDir = path.join(os.homedir(), '.claude', 'browser-profiles', 'meet-bot-seisaku');
     console.log(`[meet-cue] プロファイル "${profileDir}" でログイン用ブラウザを起動します...`);
 
-    const { available, executablePath, chromium } = await checkPlaywrightAvailable();
-    if (!available || !executablePath) {
+    const { available, chromium } = await checkPlaywrightAvailable();
+    if (!available || !chromium) {
       console.error('Error: Chrome / Playwright が利用できません。');
       process.exit(1);
     }
 
     fs.mkdirSync(profileDir, { recursive: true });
-    const context = await chromium.launchPersistentContext(profileDir, {
-      executablePath,
-      headless: false,
-      args: ['--no-sandbox'],
+
+    const result = await runHumanLogin({
+      chromium,
+      profileDir,
+      url: 'https://accounts.google.com/ServiceLogin?continue=https://meet.google.com/',
+      requiredCookies: ['SID', 'HSID', 'SSID'],
+      cookieDomain: '.google.com',
+      deps: { log: (m) => console.log(m) },
     });
 
-    const page = context.pages()[0] || await context.newPage();
-    await page.goto('https://accounts.google.com/ServiceLogin', { waitUntil: 'domcontentloaded' });
-
-    console.log('[meet-cue] ブラウザで Google ログインを完了させ、手動でウィンドウを閉じてください...');
-    await runHumanLogin(context);
-    console.log('[meet-cue] ログイン処理を完了しました。');
-    return { ok: true };
+    if (result.code === 0) {
+      console.log('[meet-cue] ログイン処理を完了しました。');
+      return { ok: true, result };
+    } else {
+      console.error(`[meet-cue] ログイン処理失敗 (code: ${result.code})`);
+      if (isEntry(import.meta.url)) process.exit(result.code);
+      return { ok: false, result };
+    }
   }
 
   if (command === 'say') {
@@ -286,6 +292,7 @@ export async function main(argv = process.argv.slice(2)) {
         'cards-file': { type: 'string' },
         doc: { type: 'boolean' },
         staff: { type: 'string' },
+        'no-cooldown': { type: 'boolean' },
       },
     });
 
@@ -320,7 +327,9 @@ export async function main(argv = process.argv.slice(2)) {
     }
 
     const assembler = new CaptionAssembler();
-    const tracker = new CueTracker({ globalCooldownMs: 0, cardRepeatCooldownMs: 0 }); // simulate without cooldown for test
+    const tracker = values['no-cooldown']
+      ? new CueTracker({ globalCooldownMs: 0, cardRepeatCooldownMs: 0 })
+      : new CueTracker();
     let simulatedTime = Date.now();
 
     console.log(`[meet-cue simulate] ${parsedLines.length} 行の字幕シミュレーションを開始します...`);
@@ -337,40 +346,28 @@ export async function main(argv = process.argv.slice(2)) {
 
       assembler.tick(simulatedTime);
 
-      const captionsText = assembler.formatWindowText(simulatedTime, 120000);
-      const state = buildJevState({
-        captionsText,
+      await runDecisionRound({
+        assembler,
+        tracker,
         cards,
-        lastCue: tracker.lastCueDetails,
-        lastCueAgeSec: tracker.getLastCueAgeSec(simulatedTime),
         brief,
-      });
-
-      const questions = buildJevQuestions(cards);
-      const jevResult = await askJev({ state, questions, label: 'meet-cue-simulate', timeoutMs: 8000 });
-      const decision = parseJevResponse(jevResult, cards);
-
-      if (decision.action !== 'none') {
-        let cueToPresent = cards.find(c => c.id === decision.action);
-        if (decision.action === 'generate') {
-          cueToPresent = await generateHelpCue({ brief, captionsText });
-        }
-
-        if (cueToPresent) {
-          tracker.recordCuePresented(decision.action, cueToPresent, simulatedTime);
+        now: simulatedTime,
+        askJev: (opts) => askJev({ ...opts, label: 'meet-cue-simulate' }),
+        generateHelpCue,
+        insertCue: docInfo ? async (cueToPresent) => {
+          await insertCueToDocument({
+            docId: docInfo.docId,
+            cue: cueToPresent,
+            insertIndex: docInfo.headerInsertIndex,
+          });
+        } : null,
+        label: 'meet-cue-simulate',
+        log: (decision, cueToPresent) => {
           console.log(`\n>>> カンペ発動 [${decision.phase}] -> ${cueToPresent.title || '助け舟'}`);
           console.log(`    【言うこと】${cueToPresent.say}`);
           if (cueToPresent.data) console.log(`    根拠: ${cueToPresent.data}`);
-
-          if (docInfo) {
-            await insertCueToDocument({
-              docId: docInfo.docId,
-              cue: cueToPresent,
-              insertIndex: docInfo.headerInsertIndex,
-            });
-          }
-        }
-      }
+        },
+      });
     }
 
     console.log('\n[meet-cue simulate] シミュレーション完了。出されたカンペ数:', tracker.history.length);
@@ -542,41 +539,29 @@ export async function main(argv = process.argv.slice(2)) {
           newCharsSinceLastCheck = 0;
           jevCallCount++;
 
-          const captionsText = assembler.formatWindowText(now, 120000);
-          const state = buildJevState({
-            captionsText,
+          await runDecisionRound({
+            assembler,
+            tracker,
             cards,
-            lastCue: tracker.lastCueDetails,
-            lastCueAgeSec: tracker.getLastCueAgeSec(now),
             brief,
-          });
-
-          const questions = buildJevQuestions(cards);
-          const jevResult = await askJev({ state, questions, label: 'meet-cue-loop', timeoutMs: 8000 });
-          const decision = parseJevResponse(jevResult, cards);
-
-          if (decision.action !== 'none' && tracker.canPresentCue(decision.action, now)) {
-            let cueToPresent = cards.find(c => c.id === decision.action);
-            if (decision.action === 'generate') {
-              cueToPresent = await generateHelpCue({ brief, captionsText });
-            }
-
-            if (cueToPresent) {
-              tracker.recordCuePresented(decision.action, cueToPresent, now);
-              cuesStream.write(JSON.stringify({ timestamp: now, action: decision.action, cue: cueToPresent }) + '\n');
-
+            now,
+            askJev: (opts) => askJev({ ...opts, label: 'meet-cue-loop' }),
+            generateHelpCue,
+            insertCue: async (cueToPresent) => {
+              await insertCueToDocument({
+                docId: docInfo.docId,
+                cue: cueToPresent,
+                insertIndex: docInfo.headerInsertIndex,
+              });
+            },
+            label: 'meet-cue-loop',
+            onCue: async ({ timestamp, action, cue }) => {
+              cuesStream.write(JSON.stringify({ timestamp, action, cue }) + '\n');
+            },
+            log: (decision, cueToPresent) => {
               console.log(`\n[meet-cue] カンペ差し込み [${decision.phase}]: ${cueToPresent.title || '助け舟'} -> "${cueToPresent.say}"`);
-              try {
-                await insertCueToDocument({
-                  docId: docInfo.docId,
-                  cue: cueToPresent,
-                  insertIndex: docInfo.headerInsertIndex,
-                });
-              } catch (e) {
-                console.error('meet-cue: Doc 差し込みエラー:', e.message);
-              }
-            }
-          }
+            },
+          });
         }
       }
     };

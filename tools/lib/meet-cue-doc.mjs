@@ -3,15 +3,14 @@
  * Google Docs / Drive API 操作 (DWD)
  */
 
-import { getDriveToken, driveApi } from './drive-auth.mjs';
+import { getDriveToken, driveApi, DRIVE_SCOPE } from './drive-auth.mjs';
 import { ensureKimEditor, KIM_EMAIL } from './kim-editor.mjs';
 import { buildDocHeaderRequests, buildDocCueRequests } from './meet-cue-core.mjs';
 
 const SEISAKU_TEAM = 'seisaku-team@orgiast.jp';
-const DOCS_SCOPE = 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/documents';
 
 export async function getDocsToken({ impersonate = SEISAKU_TEAM, getToken = getDriveToken } = {}) {
-  return getToken({ impersonate, scope: DOCS_SCOPE });
+  return getToken({ impersonate, scope: DRIVE_SCOPE });
 }
 
 export async function findOrCreateFolder({ token, api = driveApi, folderName = 'Meetカンペ' } = {}) {
@@ -45,7 +44,7 @@ export async function setupCueDocument({
   api = driveApi,
   ensureEditor = ensureKimEditor,
 } = {}) {
-  const token = await getToken({ impersonate, scope: DOCS_SCOPE });
+  const token = await getToken({ impersonate, scope: DRIVE_SCOPE });
 
   // 1. Find or create "Meetカンペ" folder
   const folderId = await findOrCreateFolder({ token, api });
@@ -115,7 +114,7 @@ export async function insertCueToDocument({
   getToken = getDriveToken,
   api = driveApi,
 } = {}) {
-  const token = await getToken({ impersonate, scope: DOCS_SCOPE });
+  const token = await getToken({ impersonate, scope: DRIVE_SCOPE });
 
   const d = new Date();
   const timestampStr = d.toTimeString().split(' ')[0];

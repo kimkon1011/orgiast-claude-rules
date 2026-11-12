@@ -14,6 +14,7 @@ import {
   buildDocHeaderRequests,
   buildDocCueRequests,
   parseSimulateTranscript,
+  runDecisionRound,
 } from './lib/meet-cue-core.mjs';
 
 import {
@@ -214,4 +215,55 @@ test('CLI start の必須引数チェック（未指定時 exit 2）', async () 
   }
 
   assert.equal(exitCode, 2);
+});
+
+test('runDecisionRound: スタブで予算懸念 -> budget カードが Doc 差し込み関数に渡り、40秒以内の2回目は出ないこと', async () => {
+  const assembler = new CaptionAssembler();
+  assembler.pushMutation({ speaker: 'お客様', text: '予算が厳しくて費用が高すぎます', timestamp: 1000 });
+  assembler.tick(3000);
+
+  const tracker = new CueTracker({ globalCooldownMs: 40000 });
+  const cards = [...STANDARD_CARDS];
+
+  const mockAskJev = async () => ({
+    ok: true,
+    answers: {
+      phase: 'price',
+      action: { choice: 'card-budget', confidence: 0.95 },
+    },
+  });
+
+  const insertedCues = [];
+  const mockInsertCue = async (cue) => {
+    insertedCues.push(cue);
+  };
+
+  // 1st round at now = 10000
+  const res1 = await runDecisionRound({
+    assembler,
+    tracker,
+    cards,
+    brief: '予算相談',
+    now: 10000,
+    askJev: mockAskJev,
+    insertCue: mockInsertCue,
+  });
+
+  assert.equal(res1.presented, true);
+  assert.equal(insertedCues.length, 1);
+  assert.equal(insertedCues[0].id, 'card-budget');
+
+  // 2nd round at now = 20000 (10 seconds later, within 40s global cooldown)
+  const res2 = await runDecisionRound({
+    assembler,
+    tracker,
+    cards,
+    brief: '予算相談',
+    now: 20000,
+    askJev: mockAskJev,
+    insertCue: mockInsertCue,
+  });
+
+  assert.equal(res2.presented, false);
+  assert.equal(insertedCues.length, 1, '40秒以内の2回目は差し込まれない');
 });

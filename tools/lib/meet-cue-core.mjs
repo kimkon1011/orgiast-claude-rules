@@ -465,3 +465,68 @@ export function parseSimulateTranscript(rawText) {
 
   return result;
 }
+
+/**
+ * Executes a single decision round: assemble state -> askJev -> parse -> canPresent -> generate -> record -> Doc insert
+ */
+export async function runDecisionRound({
+  assembler,
+  tracker,
+  cards = [],
+  brief = '',
+  now = Date.now(),
+  askJev,
+  generateHelpCue,
+  insertCue,
+  log = null,
+  label = 'meet-cue-loop',
+  onCue = null,
+} = {}) {
+  const captionsText = assembler ? assembler.formatWindowText(now, 120000) : '';
+  const state = buildJevState({
+    captionsText,
+    cards,
+    lastCue: tracker ? tracker.lastCueDetails : null,
+    lastCueAgeSec: tracker ? tracker.getLastCueAgeSec(now) : null,
+    brief,
+  });
+
+  const questions = buildJevQuestions(cards);
+  const jevResult = await askJev({ state, questions, label, timeoutMs: 8000 });
+  const decision = parseJevResponse(jevResult, cards);
+
+  if (decision.action !== 'none' && (!tracker || tracker.canPresentCue(decision.action, now))) {
+    let cueToPresent = cards.find(c => c.id === decision.action);
+    if (decision.action === 'generate' && typeof generateHelpCue === 'function') {
+      cueToPresent = await generateHelpCue({ brief, captionsText });
+    }
+
+    if (cueToPresent) {
+      if (tracker) {
+        tracker.recordCuePresented(decision.action, cueToPresent, now);
+      }
+
+      if (typeof onCue === 'function') {
+        try {
+          await onCue({ timestamp: now, action: decision.action, cue: cueToPresent, decision });
+        } catch { /* ignore */ }
+      }
+
+      if (typeof log === 'function') {
+        log(decision, cueToPresent);
+      }
+
+      if (typeof insertCue === 'function') {
+        try {
+          await insertCue(cueToPresent);
+        } catch (e) {
+          if (typeof log === 'function') log('meet-cue: Doc 差し込みエラー:', e.message);
+        }
+      }
+
+      return { presented: true, decision, cue: cueToPresent };
+    }
+  }
+
+  return { presented: false, decision, cue: null };
+}

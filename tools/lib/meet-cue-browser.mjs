@@ -7,7 +7,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveBrowserExecutable } from './human-login.mjs';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+import { resolveBrowserExecutable, runHumanLogin } from './human-login.mjs';
 import { findChromium } from '../gpage-fetch.mjs';
 import { MEET_SELECTORS } from './meet-cue-core.mjs';
 
@@ -22,15 +24,56 @@ function getBrowsersBaseDir() {
   return path.join(os.homedir(), '.cache', 'ms-playwright');
 }
 
-export async function checkPlaywrightAvailable() {
+async function loadPlaywrightCore() {
   try {
-    const { chromium } = await import('playwright-core');
-    const baseDir = getBrowsersBaseDir();
-    const executablePath = resolveBrowserExecutable({ findChromium: () => findChromium(baseDir) });
-    return { available: true, executablePath, chromium };
-  } catch (e) {
-    return { available: false, error: e.message };
+    const mod = await import('playwright-core');
+    const chromium = mod.chromium || mod.default?.chromium;
+    if (chromium) return chromium;
+  } catch { /* try fallbacks */ }
+
+  const fallbackDirs = [
+    path.join(os.homedir(), '.claude', 'nightly-repo', 'node_modules', 'playwright-core'),
+    path.join(os.homedir(), '.claude', 'tools', 'node_modules', 'playwright-core'),
+  ];
+
+  for (const fb of fallbackDirs) {
+    if (!fs.existsSync(fb)) continue;
+    try {
+      const fileUrl = pathToFileURL(path.join(fb, 'index.js')).href;
+      const mod = await import(fileUrl);
+      const chromium = mod.chromium || mod.default?.chromium;
+      if (chromium) return chromium;
+    } catch { /* try require */ }
+
+    try {
+      const req = createRequire(import.meta.url);
+      const mod = req(fb);
+      const chromium = mod.chromium || mod.default?.chromium;
+      if (chromium) return chromium;
+    } catch { /* next */ }
   }
+
+  return null;
+}
+
+export async function checkPlaywrightAvailable() {
+  const baseDir = getBrowsersBaseDir();
+  const executablePath = resolveBrowserExecutable({ findChromium: () => findChromium(baseDir) });
+
+  let chromium = null;
+  let error = null;
+  try {
+    chromium = await loadPlaywrightCore();
+  } catch (e) {
+    error = e.message;
+  }
+
+  return {
+    available: Boolean(chromium),
+    executablePath: executablePath || null,
+    chromium,
+    ...(error ? { error } : {}),
+  };
 }
 
 export async function checkProfileLoggedIn(profileDir) {

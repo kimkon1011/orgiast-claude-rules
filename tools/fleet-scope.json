@@ -62,6 +62,8 @@
     {"path": "tools/rule-consistency-audit.mjs", "scope": "kim-only", "step": "task:rule-consistency-audit", "reason": "kim-PCのみ実行の週次再監査スクリプト"},
     {"path": "tools/register-comms-hub-sync.mjs", "scope": "kim-only", "step": "task:comms-hub-sync", "reason": "convergeからEnsure登録"},
 {"path": "tools/kim-discord-report-gate.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
+    {"path": "tools/lib/kim-inbox-relay-state.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の注入・配達・返答記録を全PCへ配布する実行時依存"},
+    {"path": "tools/kim-inbox-relay.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "Stop で kim への受信箱配達を検証する"},
     {"path": "tools/kim-inbox.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/lib/kim-discord-allowlist.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/lib/fleet-owner.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox / notify-owner が使う PC 所有者解決（notify-owner から切り出し）"},

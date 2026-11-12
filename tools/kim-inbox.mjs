@@ -13,6 +13,7 @@ import { redactSecrets } from './webhook-health.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
+import { inboxSummary, relayDue, recordInjection, recordPromptAnswers, interactiveInboxSession } from './lib/kim-inbox-relay-state.mjs';
 import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mjs';
 const exec = promisify(execFile);
 const directory = home => path.join(home, '.claude/kim-inbox');
@@ -90,7 +91,8 @@ function update(home, id, fn) {
     fn(item); save(home, item); return item;
   });
 }
-const isHighInfo = item => item.kind === 'info' && (item.priority === 'high' || /完了:|✅|未達|確認エラー|判断待ち|自動進行|まとめ/.test(item.text));
+export { update as updateInboxItem };
+export const isHighInfo = item => item.kind === 'info' && (item.priority === 'high' || /^auto-progress-(done|heartbeat)$/.test(item.source) || /完了|進捗|進んでいる|承認待ち|✅|未達|確認エラー|判断待ち|自動進行|まとめ/.test(item.text));
 const hasWorkId = item => /作業ID:\s*[a-f0-9]{8}(?![a-f0-9])/i.test(item.text);
 const newestFirst = (a, b) => (b.lastAt || b.createdAt).localeCompare(a.lastAt || a.createdAt) || b.id.localeCompare(a.id);
 function normalizationKey(text) {
@@ -378,6 +380,7 @@ function deadlineDays(item, now) {
   return /期限切れ/.test(item.text) ? -Infinity : Infinity;
 }
 export function selectContext(items, { sessionId = '', now = Date.now(), sheetUrl = '（未初期化）', home = process.env.ORGIAST_HOME || os.homedir(), event = 'UserPromptSubmit' } = {}) {
+  items = items.filter(item => relayDue(item, sessionId, now));
   const own = item => {
     if (sessionId.length < 8) return false;
     const current = sessionId.slice(0, 8).toLowerCase();
@@ -385,10 +388,14 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
     return [...item.text.matchAll(/(?:作業ID:|セッション)\s*([a-f0-9]{8})(?![a-f0-9])/gi)]
       .some(match => match[1].toLowerCase() === current);
   };
-  const required = items.filter(i => i.status === 'open' && !(i.kind === 'ask' && own(i)) && (i.source === 'auto-progress-done' || i.source === 'auto-progress-heartbeat' || i.priority === 'high') && (i.shownCount === 0 || i.kind === 'ask'));
+  const reserved = items.filter(i => i.status === 'open' && !(i.kind === 'ask' && own(i)) && (i.source === 'auto-progress-done' || i.source === 'auto-progress-heartbeat' || i.priority === 'high'))
+    .sort((a, b) => a.shownCount - b.shownCount || newestFirst(a, b));
+  // A real inbox can contain hundreds of old completion asks. Rotate bounded batches;
+  // otherwise the relay would demand a 150-line final response on the first turn.
+  const required = [...reserved.filter(i => i.kind === 'ask').slice(0, 5), ...reserved.filter(i => i.kind === 'info').slice(0, 3)];
   let requiredText = '';
   for (const item of required) {
-    requiredText += `■ ${item.kind} ${item.id} (${item.source})\n${item.kind === 'ask' || item.source === 'auto-progress-heartbeat' ? clean(item.text) : clean(item.text).split(/\r?\n/).slice(0, 2).join(' ').slice(0, 220)}\n`;
+    requiredText += `■ ${item.kind} ${item.id} (${item.source}) ${inboxSummary(item)}\n`;
     item.shownSessions = [...new Set([...item.shownSessions, sessionId])]; item.shownCount++; item.lastShownAt = new Date(now).toISOString();
   }
   // 完了・取消済みのセッションは、過去の毎朝通知から復活させない。
@@ -406,7 +413,7 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
 
   const deadlines = pending.filter(i => i.kind === 'deadline').sort((a, b) => Number(own(b)) - Number(own(a))
     || deadlineDays(a, now) - deadlineDays(b, now) || String(a.key).localeCompare(String(b.key)));
-  let text = `[kim-inbox 期限 ${deadlines.length} / 未回収 ask ${allAsks.length} / 未確認 info ${infos.length}] kim への報告は Discord ではなくこのセッションで行う（kim 2026-10-27）。ask は kim の返答を会話で受け取り記録するまで毎プロンプト再提示される。セッションを閉じても台帳に残り次セッションで再提示される。\n`;
+  let text = `[kim-inbox 期限 ${deadlines.length} / 未回収 ask ${allAsks.length} / 未確認 info ${infos.length}] kim への報告は Discord ではなくこのセッションで行う（kim 2026-10-27）。最後の【受信箱】節に ID と要点を1件1〜2行で伝える。注入は配達ではない。同セッションの回答待ちは配達後1日1回。セッションを閉じても台帳に残り次セッションで再提示される。\n`;
   const footer = '一覧: node tools/kim-inbox.mjs --list --open';
   if (deadlines.length) {
     text += `[期限 ${deadlines.length} 件 — 期限台帳 ${sheetUrl}] 返事は「D-003 完了」「D-003 延期 11/20」「D-003 不要」で可（Claude が node tools/deadline-watch.mjs --done/--defer/--drop で台帳と inbox を更新する）\n`;
@@ -422,11 +429,11 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
   const askPriority = (a, b) => Number(staleUnshown(b)) - Number(staleUnshown(a)) || unseenFirst(a, b);
   const ownAsks = allAsks.filter(own).sort(askPriority).slice(0, 5);
   const asks = allAsks.filter(i => !i.urgent && !own(i)).sort(askPriority);
-  // 今のセッションの判断待ちは通常枠と別枠にし、どの期限・通知よりも先頭へ全文で戻す。
+  // 今のセッションの判断待ちは別枠で先頭へ戻す。本文は常に1行要約。
   let ownAskText = '';
   for (const item of ownAsks) {
     const heading = clean(`■ ask ${item.id}${staleLabel(item)} (from=${item.from} source=${item.source})`).slice(0, 220);
-    ownAskText += `${heading}\n${clean(item.text).slice(0, 600)}\n→ kim に提示して返答をもらい: node tools/kim-inbox.mjs --answer ${item.id} --body-file <返答ファイル>\n`;
+    ownAskText += `${heading} ${inboxSummary(item)}\n`;
     item.shownSessions = [...new Set([...item.shownSessions, sessionId])];
     item.shownCount++; item.lastShownAt = new Date(now).toISOString();
   }
@@ -434,7 +441,7 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
   let urgentText = '';
   for (const item of allAsks.filter(i => i.urgent && !own(i)).sort(askPriority).slice(0, 5)) {
     const heading = clean(`■ 🔴急ぎ ask ${item.id}${staleLabel(item)} (from=${item.from} source=${item.source})`).slice(0, 220);
-    urgentText += `${heading}\n${clean(item.text).slice(0, 600)}\n→ kim に提示して返答をもらい: node tools/kim-inbox.mjs --answer ${item.id} --body-file <返答ファイル>\n`;
+    urgentText += `${heading} ${inboxSummary(item)}\n`;
     item.shownSessions = [...new Set([...item.shownSessions, sessionId])];
     item.shownCount++; item.lastShownAt = new Date(now).toISOString();
   }
@@ -455,21 +462,21 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
   const highInfos = infos.filter(i => !own(i) && isHighInfo(i)).sort(unseenFirst);
   const otherInfos = infos.filter(i => !own(i) && !isHighInfo(i)).sort(newestFirst);
   // 未表示の進捗は ask より先に短く出す。ask 5件が表示枠を使い切り、進捗が永久に出ない事故（2026-11-04 実測 121件）を防ぐ。
-  const unseenHigh = highInfos.filter(i => i.shownCount === 0).slice(0, 3);
+  const unseenHigh = highInfos.filter(i => relayDue(i, sessionId, now)).slice(0, 3);
   const laterHigh = highInfos.filter(i => !unseenHigh.includes(i)).slice(0, Math.max(0, 5 - unseenHigh.length));
-  const selected = deadlines.length ? [...asks.slice(0, 5), ...[...sessionInfos, ...unseenHigh, ...laterHigh, ...otherInfos].slice(0, 3)] : [...sessionInfos, ...unseenHigh, ...asks.slice(0, 5), ...laterHigh, ...otherInfos.slice(0, 2)];
+  const selected = [...sessionInfos, ...unseenHigh, ...asks.slice(0, 5), ...laterHigh, ...otherInfos.slice(0, 2)];
   for (const item of selected) {
     if (otherInfos.includes(item) && [...sessionInfos, ...highInfos].some(i => i.shownCount === 0)) break;
     const repeat = item.shownSessions.includes(sessionId);
     const compact = unseenHigh.includes(item) || laterHigh.includes(item);
-    const body = repeat ? item.text.split(/\r?\n/)[0].slice(0, 120)
+    const body = item.kind === 'ask' || isHighInfo(item) ? inboxSummary(item) : repeat ? item.text.split(/\r?\n/)[0].slice(0, 120)
       : compact ? item.text.replace(/^【[^\r\n]*\r?\n/, '').slice(0, 240) : item.text.slice(0, 600);
     const stale = item.kind === 'ask' ? staleLabel(item) : '';
     const heading = clean(`■ ${item.kind} ${item.id}${stale}${item.kind === 'info' && !own(item) && !isHighInfo(item) ? ` ×${item.repeatCount ?? 1}` : ''} (${Math.max(0, Math.floor((now - Date.parse(item.createdAt)) / 86400000))}日前 from=${item.from} source=${item.source})`).slice(0, 220);
     const command = item.kind === 'ask' ? `→ kim に提示して返答をもらい: node tools/kim-inbox.mjs --answer ${item.id} --body-file <返答ファイル>` : `→ kim に伝えたら: node tools/kim-inbox.mjs --seen ${item.id}`;
     const room = CONTEXT_LIMIT - text.length - footer.length - heading.length - command.length - 3;
     if (room < 1) break;
-    text += `${heading}\n${clean(body).slice(0, room)}\n${command}\n`;
+    text += item.kind === 'ask' ? `${heading} ${clean(body).slice(0, room)}\n` : `${heading}\n${clean(body).slice(0, room)}\n${command}\n`;
     item.shownSessions = [...new Set([...item.shownSessions, sessionId])];
     item.shownCount++; item.lastShownAt = new Date(now).toISOString();
   }
@@ -511,14 +518,16 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       const event = input.hook_event_name;
       if (!['SessionStart', 'UserPromptSubmit'].includes(event)) return 0;
       const kim = isKimSeat(home);
+      if (!interactiveInboxSession(input, { home })) return 0;
+      const sessionId = String(input.session_id ?? '');
+      if (kim && event === 'UserPromptSubmit') recordPromptAnswers(home, sessionId, String(input.prompt || ''), { listItems, answerItem });
       await drainSpool(home);
       if (kim) await ingestFleetMail(home);
       const items = listItems(home).filter(i => (i.status === 'open' || (i.dailyProgress && i.status === 'seen')) && (kim || i.forwardError));
       const counts = new Map(items.map(i => [i.id, i.shownCount]));
       const context = selectContext(items, { sessionId: String(input.session_id ?? ''), sheetUrl: deadlineSheetUrl(home), home, event });
-      const openItems = items.filter(i => i.status === 'open');
-      const summary = event === 'SessionStart' ? redactSecrets(displayPcNames(oneScreenSummary(openItems), { home })) : '';
-      if (context) stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: summary ? summary + '\n' + context : context } }));
+      if (kim) recordInjection(home, sessionId, items.filter(i => i.shownCount !== counts.get(i.id) && (i.kind === 'ask' || isHighInfo(i))), { event });
+      if (context) stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }));
       for (const item of items.filter(i => i.shownCount !== counts.get(i.id))) update(home, item.id, current => {
         current.shownSessions = [...new Set([...current.shownSessions, ...item.shownSessions])]; current.shownCount++; current.lastShownAt = item.lastShownAt;
         if (item.dailyShown) current.dailyShown = { ...(current.dailyShown || {}), ...item.dailyShown };

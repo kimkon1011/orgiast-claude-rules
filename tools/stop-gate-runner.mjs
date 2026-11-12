@@ -2,6 +2,7 @@
 export const GATE_CONTRACT = {"name": "stop-gate-runner", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "stop-gate-runner"}]};
 // 2026-09-06: Stop 304回中198回が再Stop、handoff-quality 78件中71件が誤爆だった。
 // 9プロセスの逐次差し戻しを1回の評価・1つのblockへまとめ、userの再読を最大1回にする。
+import { evaluateKimInboxRelay, commitKimInboxDelivery } from './kim-inbox-relay.mjs';
 import { evaluatePastLogSearch, listPlaybookNames, classifyHandoff } from './past-log-search-gate.mjs';
 import { judgeDeliverableDriveLink, registerDeliverableCheck } from './deliverable-drive-link-gate.mjs';
 import { evaluateInvitePermissions } from './hooks/discord-invite-permission-gate.mjs';
@@ -182,6 +183,25 @@ function protectAutopilot(input, text, raw, record) {
 }
 
 export async function run(input, context, auditOptions = {}) {
+  const sessionId = input?.session_id || input?.sessionId || path.basename(input?.transcript_path || '', '.jsonl');
+  input = { ...input, session_id: sessionId };
+  const text = input.last_assistant_message ?? input.assistant_text ?? context.assistantText;
+  try {
+    const relay = evaluateKimInboxRelay(input, { home: home(), raw: context.raw, text, now: auditOptions.now ?? Date.now() });
+    if (relay.decision === 'block') {
+      const record = { sessionId, verdict: 'block', blockedBy: ['kim-inbox-relay'], reasonCodes: [relay.code] };
+      ledger(record);
+      return { ...relay, record };
+    }
+    const result = await runOtherGates(input, context, auditOptions);
+    if (result.decision !== 'block') commitKimInboxDelivery(home(), sessionId, relay.receipts, auditOptions.now ?? Date.now());
+    return result;
+  } catch (error) {
+    return { decision: 'block', reason: 'kim-inbox-relay: 受信箱の配達記録を確認できません。ローカル台帳を修復して再試行してください。' };
+  }
+}
+
+async function runOtherGates(input, context, auditOptions = {}) {
   const sessionId = input?.session_id || input?.sessionId || path.basename(input?.transcript_path || '', '.jsonl');
   input = { ...input, session_id: sessionId };
   const assistantText = input?.last_assistant_message ?? input?.assistant_text ?? context.assistantText;

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { addItem } from './kim-inbox.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -310,8 +311,14 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     }
     if (command === 'passkey-link') {
       const result = await request('register-link');
-      if (typeof result.registerUrl !== 'string' || typeof result.dmSent !== 'boolean') fail('登録レスポンスが不正です');
-      out(`registerUrl: ${result.registerUrl}\ndmSent: ${result.dmSent}`);
+      if (typeof result.registerUrl !== 'string' || typeof (result.channelSent ?? result.dmSent) !== 'boolean') fail('登録レスポンスが不正です');
+      const link = new URL(result.registerUrl);
+      if (link.protocol !== 'https:') fail('登録リンクが不正です');
+      const item = await (deps.addInbox || addItem)(ctx.home, { kind: 'ask', priority: 'high', source: 'knowledge-lock-passkey-link',
+        text: `パスキー登録をお願いします（kim のスマホで生体認証）。\n登録リンク: ${result.registerUrl}`,
+        dedupeKey: `knowledge-passkey-link:${crypto.createHash('sha256').update(result.registerUrl).digest('hex')}` });
+      if (!item?.id || item.forwardError) fail('登録リンクの受信箱への保存・転送を確認できません');
+      out(`registerUrl: ${result.registerUrl}\nchannelSent: ${result.channelSent ?? result.dmSent}\nkimInbox: ${item.id}`);
       return 0;
     }
     if (command === 'keygen') {

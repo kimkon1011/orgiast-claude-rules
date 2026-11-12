@@ -124,12 +124,14 @@ export function analyze({ date, sources, ledger, revoked, now }) {
   const known = new Set(ledger.members.flatMap(aliases));
   const revokedSet = new Set(revoked.map(norm));
   for (const m of ledger.members) {
-    const ws = sources.workspace.data.find(u => norm(u.primaryEmail) === norm(m.email));
+    // Workspace only owns orgiast.jp; an external contracted seat is not a departed employee.
+    const workspaceSeat = norm(m.email).endsWith('@orgiast.jp');
+    const ws = workspaceSeat && sources.workspace.data.find(u => norm(u.primaryEmail) === norm(m.email));
     const reasons = [];
     if (m.status === 'retired') reasons.push('台帳退職済');
     if (m.retiredOn && m.retiredOn <= date) reasons.push('退職日到達');
     if (ws?.suspended || ws?.archived) reasons.push('Workspace停止/アーカイブ');
-    if (sources.workspace.status === 'ok' && m.status === 'active' && !ws) reasons.push('Workspaceに存在しない');
+    if (workspaceSeat && sources.workspace.status === 'ok' && m.status === 'active' && !ws) reasons.push('Workspaceに存在しない');
     if (!reasons.length) continue;
     retired.push({ email: m.email, name: m.name || m.email, reasons });
     const add = (type, detail) => findings.push({ email: m.email, name: m.name || m.email, type, detail });
@@ -145,7 +147,7 @@ export function analyze({ date, sources, ledger, revoked, now }) {
   for (const [source, rows] of [['claude', sources.claude.data], ['fleet', sources.fleet.data]]) {
     for (const row of rows) {
       const email = norm(row.email);
-      if (email && (!known.has(email) || !email.endsWith('@orgiast.jp'))) unknown.push({ source, email, pc: row.pc || null,
+      if (email && !known.has(email)) unknown.push({ source, email, pc: row.pc || null,
         reason: !known.has(email) ? '台帳外' : '組織外ドメイン' });
     }
   }

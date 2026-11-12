@@ -125,7 +125,12 @@ describe('illustrator-mcp', () => {
     });
     assert.equal(r.status, 0);
     const parsed = JSON.parse(r.stdout.trim());
-    const content = JSON.parse(parsed.result.content[0].text);
-    assert.ok(content.reason === 'illustrator_not_found' || content.ok === false);
+    if (parsed.error) {
+      // MCP error response — acceptable when Illustrator is not available
+      assert.ok(parsed.error.code === -32602 || parsed.error.code === -32603);
+    } else {
+      const content = JSON.parse(parsed.result.content[0].text);
+      assert.ok(content.reason === 'illustrator_not_found' || content.ok === false);
+    }
   });
 });

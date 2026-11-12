@@ -41,6 +41,8 @@
 "ai-visibility": { "reason": "X-0007 AI可視性テストの結果・分析。配布先PCの実行時参照なし" },
     "pr-body-x0007-phase2.md": { "reason": "PR #1706 のボディファイル。配布先PCの実行時参照なし" },
     "pr-body-x0020-grok-monitor.md": { "reason": "PR #1906 のボディファイル。配布先PCの実行時参照なし" },
+    "pr-body-x0031-scout-haiku.md": { "reason": "PR #1966 のボディファイル。配布先PCの実行時参照なし" },
+    "pr-body-x0038-codex-mcp-illustrator.md": { "reason": "PR #1954 のボディファイル。配布先PCの実行時参照なし" },
     "run-file-20261108-003008.md": { "reason": "X-0007 PHASE1 B 引用ギャップ分析の参照メモ。配布先PCの実行時参照なし" },
 "outputs": { "reason": "PR作業の成果物出力。配布先PCの実行時参照なし" },
     "tasks": { "reason": "Codex への実装指示ファイル。配布先PCの実行時参照なし" },

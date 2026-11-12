@@ -192,13 +192,14 @@ export function compactItems(home) {
     return result;
   });
 }
-function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '' }) {
+function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen }) {
   if (!['ask', 'info', 'deadline'].includes(kind)) throw new Error('kind は ask / info / deadline');
+  if (doneWhen && kind !== 'ask') throw new Error('--done-when-gmail は ask 専用です');
   fs.mkdirSync(directory(home), { recursive: true });
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: clean(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: clean(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     if (revision !== undefined) item.revision = revision;
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -296,6 +297,47 @@ export function closeKey(home, key) {
   return locked(home, 'info-aggregation', () => listItems(home, { status: 'open' })
     .filter(i => i.kind === 'deadline' && i.key === key)
     .map(i => update(home, i.id, current => { current.status = 'seen'; })));
+}
+// gmail-search.mjs を子プロセスとして実行する既定の検索実装。
+async function defaultGmailSearch(user, query) {
+  const { execFileSync } = await import('node:child_process');
+  const result = execFileSync(process.execPath, [
+    fileURLToPath(new URL('./gmail-search.mjs', import.meta.url)),
+    '--user', user,
+    '--query', query,
+    '--max', '5',
+    '--json',
+  ], { timeout: 20000, windowsHide: true, encoding: 'utf8' });
+  return JSON.parse(result);
+}
+// 完了条件に Gmail の受信を指定された ask を自動的にクローズする。
+// 注入可能な search(user, query) は { messages: [{ id, internalDate, subject }] } を返す。
+export async function autoCloseByGmail(home, { search = defaultGmailSearch, now = Date.now() } = {}) {
+  const items = listItems(home, { status: 'open' }).filter(i => i.kind === 'ask' && i.doneWhen?.gmail).slice(0, 5);
+  const result = [];
+  for (const item of items) {
+    // スロットル: 10分未満はスキップ
+    if (item.doneWhen.lastCheckedAt && now - Date.parse(item.doneWhen.lastCheckedAt) < 600_000) continue;
+    try {
+      const createdAt = new Date(Date.parse(item.createdAt));
+      const dateStr = `${createdAt.getFullYear()}/${String(createdAt.getMonth() + 1).padStart(2, '0')}/${String(createdAt.getDate()).padStart(2, '0')}`;
+      const res = await search(item.doneWhen.gmail.user, `${item.doneWhen.gmail.query} after:${dateStr}`);
+      const matching = (res?.messages || []).filter(m => Number(m.internalDate) >= Date.parse(item.createdAt));
+      if (matching.length > 0) {
+        const latest = matching.reduce((a, b) => Number(a.internalDate) > Number(b.internalDate) ? a : b);
+        const subject = (latest.subject || '').slice(0, 200);
+        const date = new Date(Number(latest.internalDate)).toISOString();
+        answerItem(home, item.id, `自動クローズ: ${item.doneWhen.gmail.user} に「${subject}」(${date}) 着、gmail:${latest.id}`, 'auto-gmail');
+        result.push({ id: item.id, closed: true });
+      } else {
+        // 未マッチでも確認時刻を記録
+        update(home, item.id, current => { current.doneWhen = { ...current.doneWhen, lastCheckedAt: new Date(now).toISOString() }; });
+      }
+    } catch (error) {
+      try { update(home, item.id, current => { current.doneWhen = { ...current.doneWhen, lastCheckedAt: new Date(now).toISOString(), lastError: clean(error.message) }; }); } catch {}
+    }
+  }
+  return result;
 }
 export function deadlineSheetUrl(home) {
   const config = readJsonFile(path.join(home, '.claude/deadline-watch/config.json'));
@@ -524,6 +566,7 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       if (kim && event === 'UserPromptSubmit') recordPromptAnswers(home, sessionId, String(input.prompt || ''), { listItems, answerItem });
       await drainSpool(home);
       if (kim) await ingestFleetMail(home);
+      await autoCloseByGmail(home);
       const items = listItems(home).filter(i => (i.status === 'open' || (i.dailyProgress && i.status === 'seen')) && (kim || i.forwardError));
       const counts = new Map(items.map(i => [i.id, i.shownCount]));
       const context = selectContext(items, { sessionId: String(input.session_id ?? ''), sheetUrl: deadlineSheetUrl(home), home, event });
@@ -534,7 +577,14 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
         if (item.dailyShown) current.dailyShown = { ...(current.dailyShown || {}), ...item.dailyShown };
       });
     } else if (args.includes('--add')) {
-      const item = await addItem(home, { urgent: args.includes('--urgent'), text: fs.readFileSync(value('--body-file'), 'utf8'), kind: args.includes('--kind') ? value('--kind') : 'info', key: args.includes('--key') ? value('--key') : undefined, due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '' });
+      let doneWhen;
+      if (args.includes('--done-when-gmail')) {
+        const raw = value('--done-when-gmail');
+        const pipe = raw.indexOf('|');
+        if (pipe === -1) throw new Error('--done-when-gmail は "user|query" 形式で指定してください');
+        doneWhen = { gmail: { user: raw.slice(0, pipe).trim(), query: raw.slice(pipe + 1).trim() } };
+      }
+      const item = await addItem(home, { urgent: args.includes('--urgent'), text: fs.readFileSync(value('--body-file'), 'utf8'), kind: args.includes('--kind') ? value('--kind') : 'info', key: args.includes('--key') ? value('--key') : undefined, due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '', ...(doneWhen ? { doneWhen } : {}) });
       stdout(JSON.stringify({ id: item.id, status: item.status, forwarded: item.status === 'forwarded' }));
     } else if (args.includes('--answer')) stdout(JSON.stringify(answerItem(home, value('--answer'), fs.readFileSync(value('--body-file'), 'utf8'), process.env.CLAUDE_SESSION_ID || '')));
     else if (args.includes('--seen-matching')) stdout(JSON.stringify(seenMatching(home, value('--seen-matching'), args.includes('--kind') ? value('--kind') : 'info')));
@@ -542,11 +592,13 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
     else if (args.includes('--close-key')) stdout(JSON.stringify(closeKey(home, value('--close-key'))));
     else if (args.includes('--drop')) stdout(JSON.stringify(dropItem(home, value('--drop'), args.includes('--reason') ? value('--reason') : '')));
     else if (args.includes('--compact')) stdout(JSON.stringify(compactItems(home)));
+    else if (args.includes('--auto-close')) stdout(JSON.stringify(await autoCloseByGmail(home)));
     else if (args.includes('--status') || args.includes('--list')) {
+      await autoCloseByGmail(home);
       const items = listItems(home, { status: args.includes('--open') || args.includes('--status') ? 'open' : undefined });
       if (args.includes('--status')) stdout(`kim-inbox: open ask ${items.filter(i => i.kind === 'ask').length} / open info ${items.filter(i => i.kind === 'info').length}\n最古: ${items.length ? `${items[0].id} ${items[0].text.split(/\r?\n/)[0].slice(0, 120)}` : 'なし'}`);
       else stdout(args.includes('--json') ? JSON.stringify(items) : displayPcNames(items.map(i => `${i.id} ${i.kind} ${i.status} ${i.text.split(/\r?\n/)[0]}`).join('\n'), { home }));
-    } else throw new Error('--add / --answer / --seen / --drop / --list / --status / --context / --compact を指定してください');
+    } else throw new Error('--add / --answer / --seen / --drop / --list / --status / --context / --compact / --auto-close を指定してください');
     return 0;
   } catch (error) { stderr(`kim-inbox: ${clean(error.message).replace(/[\r\n]+/g, ' ')}`); return args.includes('--context') ? 0 : 1; }
 }

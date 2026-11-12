@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, ingestFleetMail, isKimSeat, main, CONTEXT_LIMIT, oneScreenSummary } from './kim-inbox.mjs';
+import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, ingestFleetMail, isKimSeat, main, CONTEXT_LIMIT, oneScreenSummary, autoCloseByGmail } from './kim-inbox.mjs';
 import { inboxSummary } from './lib/kim-inbox-relay-state.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { loadAllowlist, discordAllowed } from './lib/kim-discord-allowlist.mjs';
@@ -560,4 +560,144 @@ test('UserPromptSubmit では1画面ブロックが付かない／ask の秘密�
   assert.doesNotMatch(output[0].hookSpecificOutput.additionalContext, /📌 kim の返事待ち/);
   // oneScreenSummary の戻り値も handler で redactSecrets を通す
   assert.doesNotMatch(output[0].hookSpecificOutput.additionalContext, /abcdefghijklmnopqr/);
+});
+
+test('add with --done-when-gmail stores doneWhen', async t => {
+  const home = seat(t);
+  const file = path.join(home, 'ask.txt');
+  fs.writeFileSync(file, '自動車保険更新');
+  await main(['--add', '--kind', 'ask', '--done-when-gmail', 'seisaku-team@orgiast.jp|【自動車保険】継続手続完了のお知らせ', '--body-file', file], { home, stdout: () => {} });
+  const items = listItems(home);
+  assert.equal(items.length, 1);
+  assert.deepEqual(items[0].doneWhen, {
+    gmail: {
+      user: 'seisaku-team@orgiast.jp',
+      query: '【自動車保険】継続手続完了のお知らせ'
+    }
+  });
+});
+
+test('autoCloseByGmail closes an open ask when search returns newer message', async t => {
+  const home = seat(t);
+  const createdAt = '2026-11-12T09:00:00.000Z';
+  const item = await addItem(home, {
+    kind: 'ask',
+    text: '自動車保険継続',
+    doneWhen: { gmail: { user: 'seisaku-team@orgiast.jp', query: '継続手続完了' } }
+  });
+  fs.writeFileSync(path.join(home, '.claude/kim-inbox', `${item.id}.json`), JSON.stringify({ ...item, createdAt }));
+
+  const search = async (user, query) => {
+    assert.equal(user, 'seisaku-team@orgiast.jp');
+    assert.match(query, /継続手続完了 after:2026\/11\/12/);
+    return {
+      messages: [{
+        id: 'msg-999',
+        internalDate: Date.parse('2026-11-12T09:40:00.000Z'),
+        subject: '【自動車保険】継続手続完了のお知らせ'
+      }]
+    };
+  };
+
+  const closed = await autoCloseByGmail(home, { search, now: Date.parse('2026-11-12T09:45:00.000Z') });
+  assert.deepEqual(closed, [{ id: item.id, closed: true }]);
+
+  const updated = listItems(home).find(i => i.id === item.id);
+  assert.equal(updated.status, 'answered');
+  assert.equal(updated.answerSession, 'auto-gmail');
+  assert.match(updated.answer, /自動クローズ: seisaku-team@orgiast\.jp に「【自動車保険】継続手続完了のお知らせ」/);
+  assert.match(updated.answer, /gmail:msg-999/);
+});
+
+test('message older than createdAt does not close', async t => {
+  const home = seat(t);
+  const createdAt = '2026-11-12T09:00:00.000Z';
+  const item = await addItem(home, {
+    kind: 'ask',
+    text: '自動車保険継続',
+    doneWhen: { gmail: { user: 'seisaku-team@orgiast.jp', query: '継続手続完了' } }
+  });
+  fs.writeFileSync(path.join(home, '.claude/kim-inbox', `${item.id}.json`), JSON.stringify({ ...item, createdAt }));
+
+  const search = async () => ({
+    messages: [{
+      id: 'old-msg',
+      internalDate: Date.parse('2026-11-12T08:59:59.000Z'),
+      subject: '旧メール'
+    }]
+  });
+
+  const closed = await autoCloseByGmail(home, { search, now: Date.parse('2026-11-12T09:45:00.000Z') });
+  assert.deepEqual(closed, []);
+  const updated = listItems(home).find(i => i.id === item.id);
+  assert.equal(updated.status, 'open');
+  assert.equal(updated.answer, null);
+});
+
+test('throttle: second call within 10 minutes does not call search', async t => {
+  const home = seat(t);
+  const item = await addItem(home, {
+    kind: 'ask',
+    text: '自動車保険継続',
+    doneWhen: { gmail: { user: 'seisaku-team@orgiast.jp', query: '継続手続完了' } }
+  });
+
+  let calls = 0;
+  const search = async () => { calls++; return { messages: [] }; };
+
+  const t1 = Date.parse('2026-11-12T10:00:00.000Z');
+  await autoCloseByGmail(home, { search, now: t1 });
+  assert.equal(calls, 1);
+
+  const t2 = Date.parse('2026-11-12T10:05:00.000Z');
+  await autoCloseByGmail(home, { search, now: t2 });
+  assert.equal(calls, 1);
+
+  const t3 = Date.parse('2026-11-12T10:11:00.000Z');
+  await autoCloseByGmail(home, { search, now: t3 });
+  assert.equal(calls, 2);
+});
+
+test('search throwing records lastError and does not throw', async t => {
+  const home = seat(t);
+  const item = await addItem(home, {
+    kind: 'ask',
+    text: '自動車保険継続',
+    doneWhen: { gmail: { user: 'seisaku-team@orgiast.jp', query: '継続手続完了' } }
+  });
+
+  const search = async () => { throw new Error('Gmail API ネットワークエラー'); };
+  const closed = await autoCloseByGmail(home, { search, now: Date.parse('2026-11-12T10:00:00.000Z') });
+  assert.deepEqual(closed, []);
+
+  const updated = listItems(home).find(i => i.id === item.id);
+  assert.equal(updated.status, 'open');
+  assert.equal(updated.doneWhen.lastError, 'Gmail API ネットワークエラー');
+  assert.ok(updated.doneWhen.lastCheckedAt);
+});
+
+test('items without doneWhen are untouched', async t => {
+  const home = seat(t);
+  const ask = await addItem(home, { kind: 'ask', text: '通常の質問' });
+  const info = await addItem(home, { kind: 'info', text: '通常の通知' });
+
+  const search = async () => { assert.fail('search should not be called'); };
+  const closed = await autoCloseByGmail(home, { search, now: Date.now() });
+  assert.deepEqual(closed, []);
+
+  const items = listItems(home);
+  assert.equal(items.find(i => i.id === ask.id).status, 'open');
+  assert.equal(items.find(i => i.id === info.id).status, 'open');
+});
+
+test('CLI --auto-close prints JSON of closed items', async t => {
+  const home = seat(t);
+  await addItem(home, {
+    kind: 'ask',
+    text: '自動車保険継続',
+    doneWhen: { gmail: { user: 'seisaku-team@orgiast.jp', query: '継続手続完了' } }
+  });
+  const output = [];
+  await main(['--auto-close'], { home, stdout: s => output.push(JSON.parse(s)) });
+  assert.ok(Array.isArray(output[0]));
 });

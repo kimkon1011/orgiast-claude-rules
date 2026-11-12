@@ -3,14 +3,15 @@
   "_note": "kim/監督Claude が指示を1件書き、各PCの fleet-agent が15分以内に拾って結果を Discord へ返す。kind は status / prompt / enable-auto-session の3つだけ。prompt と enable-auto-session はそのPCの人がオプトイン済みの場合のみ実行される。空配列にすると全PCで何も起きない。 PC間メッセージは fleet-mail.mjs（双方向）を使う。",
   "directives": [
     {
-      "id": "run-20261105-222808-3915",
-      "kind": "run",
-      "targets": "kimko-PC",
-      "why": "stale_report 自動復旧",
-      "task": "fleet-sheet-report",
-      "createdBy": "uers",
-      "createdAt": "2026-11-05T22:28:08.854Z",
-      "expiresAt": "2026-11-07T22:28:08.854Z"
+      "id": "prompt-20261110-235408-0847",
+      "kind": "prompt",
+      "targets": "kim-PC",
+      "why": "民泊オーナー雑談ルームを LINE PC経路の取り込み対象に追加（kim 2026-11-11 依頼）",
+      "body": "# kim-PC への作業指示: LINE オープンチャット「民泊オーナー雑談ルーム」を PC経路の取り込み対象に追加\n\n依頼元: 作業用004（nishi@orgiast.jp の Claude Code、nf-minpaku-automation）。kim 依頼「このオープンチャットの内容を毎日自動的に深夜に取り込んで、民泊の収益目標の達成のために参考になる情報は生かして」（2026-11-11）。\n要約・配達側は orgiast-claude-rules PR #1877（line-digest --profile minpaku / tools/minpaku-digest-deliver.mjs / nightly-batch 追加）で実装済み。残りはこのPCにしかない claude-mobile（リモート無しのローカルリポ）側の取り込み対象追加だけ。\n\n## やること\n1. claude-mobile の PC経路取り込み（タスク `ClaudeMobile-LineDesktopExport` が呼ぶスクリプト）の対象チャット一覧に `民泊オーナー雑談ルーム` を追加する。LINE の表示名は「民泊オーナー雑談ルーム(283)」で、(283) は人数なので前方一致で照合する。PC版 LINE でこのチャットが開けることを先に確認する。\n2. claude-mobile の `.env` の `LINE_INGEST_ALLOW_CHATS` にも `民泊オーナー雑談ルーム` を追加し（.env.bak を残す）、`ClaudeMobile-WebServer` タスクを再起動する。\n3. 取り込みタスクを1回手動実行し（初回は過去14日分）、`~/.claude/line-openchat/<YYYY-MM>.jsonl` に chat が `民泊オーナー雑談ルーム` で始まる行が何件入ったか数える。\n4. nightly-repo が PR #1877 を含む状態になっていれば、`node tools/line-digest.mjs --profile minpaku` → `node tools/minpaku-digest-deliver.mjs` を1回実行する（含まれていなければ 3 までで止め、その旨を書く。夜間バッチが以後自動で回す）。\n5. 結果（追加したファイルとコミット、取り込み件数、digest の抜粋、配達の mail ID）を `node tools/fleet-mail.mjs --send --to 作業用004 --kind note --why \"[報告・返信不要] 民泊オーナー雑談ルーム取り込み追加の結果\" --body-file <本文>` で返す。\n\n## 禁止\nLINE への書き込み・送信、他チャットの追加、ファイル削除、Discord DM。\n",
+      "createdBy": "kimko",
+      "createdAt": "2026-11-10T23:54:08.053Z",
+      "expiresAt": "2026-11-13T23:54:08.053Z",
+      "timeoutSeconds": 1800
     }
   ]
 }

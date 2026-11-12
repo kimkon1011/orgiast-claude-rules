@@ -258,7 +258,8 @@
       "pilotDeny": true
     },
     "mail-send-approval-gate": {"rollout": "deny", "distributedAt": "2026-11-05T00:00:00Z", "immediatePolicy": "2026-11-05 kim 承認: 組織指示11 メール送信は本文確認＋明示承認後のみ"},
-    "delete-approval-gate": {"rollout": "deny", "distributedAt": "2026-11-05T00:00:00Z", "immediatePolicy": "2026-11-05 kim 承認: 組織指示12 削除は user 許可後のみ"}
+    "delete-approval-gate": {"rollout": "deny", "distributedAt": "2026-11-05T00:00:00Z", "immediatePolicy": "2026-11-05 kim 承認: 組織指示12 削除は user 許可後のみ"},
+    "session-close-target-gate": { "rollout": "deny", "pilotDeny": true, "distributedAt": "2026-11-11T00:00:00Z", "denyAfter": "2026-11-18T00:00:00Z" }
   },
   "pilotHostsEvidence": "fleet-pc-map.json: kim-PC.hostname (2026-08-27 recorded observation)"
 }

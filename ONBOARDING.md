@@ -12,7 +12,7 @@ Claude Code は「作業者の手間を最小化する自動実行エージェ�
 
 ### 1.1 自動化・手渡しの原則
 
-**🔴 全ての判断の土台は基本理念（docs/mission.md → @~/.claude/orgiast-mission.md、毎セッション自動読み込み）。目的は user の究極の生産性、長期的利益が最優先。個別ルールと食い違って見える時は理念に沿って解釈し、食い違いを rules repo の修正として提案する。承認必須事項（送信・削除・課金等）は理念を理由に飛ばさない。**
+**🔴 判断の土台は基本理念（@~/.claude/orgiast-mission.md）。目的は user の生産性・長期的利益が最優先。乖離時は理念優先で rules repo へ修正提案。承認必須事項（送信・削除・課金等）は理念を理由に飛ばさない。**
 **🔴 応答は常に日本語（コード・識別子は原文可）。Stop hook の書き直しも日本語を保つ。response-language-gate が検査し、setup --converge が language: japanese を配布する。**
 
 報告・差し戻しの形式は下記「完了報告・最終まとめ」に統一する。
@@ -109,7 +109,7 @@ user に何かを頼む前に `user の時間を使う理由: <長期的利益�
 
 nishi@・cr@・seisaku-team@・Genba の席も user=kim（2026-10-28 kim）。kim が別PCにいる前提で kim-PC に回さず、その場で直接聞く。この席では共有 memory 索引の冒頭注記が毎セッション自動で読まれ、同じ規則を伝える（全PC索引の予算を使わない）。対象アカウントの正本は `tools/lib/kim-operated.mjs`。この席では kim-PC の memory（毎晩 `~/.claude/shared-memory/` へ配布、kim の役割・プロフィールの user 型を含む）を kim 本人の好み・厳命としてそのまま適用する。「kim-PC に確認します」「kim さんに伝えてください」は書かない。対話セッションの質問は kim-PC へ自動転送しない（`fleet-question-relay`）。fleet-mail で kim-PC に送るのは、kim-PC の Discord・ローカルファイルなど kim-PC でしか触れない資源を使う作業依頼だけにする。社員本人が使う席（例: 東邦2階HP）は従来どおり別人として扱う。根拠（2026-10-28 kim）: kim-PC で話した内容が他アカウントに反映されず、同じ話を繰り返していた。
 
-**🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PR は作った席が自分で着地させる。pr-land.mjs --title "<題>" --body-file <本文> でbaseへpushし着地させる（通常はautomerge、安全弁パスはCI合格後pr-merge、workflow変更は停止）。権限・鍵・マージを kim-PC に頼まない。不足時は `node tools/access-doctor.mjs --fix`。内部Gmail下書き禁止。**
+**🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PR は作った席が自分で着地させる。pr-land.mjs --title "<題>" --body-file <本文> でbaseへpushし着地させる（通常はautomerge、安全弁パスはCI合格後pr-merge、workflow変更は停止）。権限・鍵・マージを kim-PC に頼まない。不足時は `node tools/access-doctor.mjs --fix`。内部Gmail下書き禁止。**社内DMは承認不要。秘密値非記載。社外全文承認後。
 
 **🔴 kim 宛 Discord DM は全廃・例外なし（緊急を含む・全PC全アカウント）。kim-inbox（~/.claude/kim-inbox、node tools/kim-inbox.mjs）へ積みセッションで回収。ask は --answer まで毎プロンプト再提示、info は伝えたら --seen。クローズを止めず台帳を次セッションへ引き継ぐ。Discord MCP 直接送信はゲートが拒否し、旧 config/kim-discord-allowlist.json のカテゴリも廃止。詳細 docs/kim-inbox.md。**
 送れなければチャットに完成形を表示。
@@ -121,7 +121,7 @@ PR は作った席が `node tools/pr-land.mjs --title "<題>" --body-file <本�
 送信ゲート `tools/lib/kim-dm-policy.mjs` が `notify-kim` / `discord-dm` のマージ依頼を止める。kim の操作が本当に必要な例外だけ `--kim-action-required` を付ける。
 メール送信の前に recipient-domain-gate が宛先ドメインの実在（MX/A）を検査し、存在しないドメイン宛は止める（2026-10-23 名刺OCR誤読でバウンス2件）。
 
-内部判定: 社内・グループ会社（東邦鋼業 genbateam.toho@gmail.com、Reブース、NEXTForward）・スタッフ。orgiast.jp / toho-kogyo.com と `~/.claude/internal-recipients.json`（既定 `tools/internal-recipients.default.json`）を使い、`internal-recipient-gmail-guard` が宛先を照合する。
+内部判定: 社内・グループ会社（東邦鋼業 genbateam.toho@gmail.com、Reブース、NEXTForward）・スタッフ。orgiast.jp / toho-kogyo.com と `~/.claude/internal-recipients.json`（既定 `tools/internal-recipients.default.json`）を使い、`internal-recipient-gmail-guard` が宛先を照合する。社外宛メールの Cc/Bcc に社内を入れるのは可（To に社外アドレスが1件以上必要）。
 既存メールの社内宛転送は可（`node tools/gmail-draft.mjs --forward <messageId> --to <宛先>`→`--send <draftId>`）。社内宛の新規作成・返信は従来どおり Discord。
 
 社内メンバーへの送り方は次の順序を守る。(1) まず相手と金功勇が入っている既存グループDMへ kim 名義で投稿する。kim-PC 以外からは `node tools/discord-group-dm-request.mjs "<相手名>" --body-file <本文> [--chat "<グループDM名>"]` で kim-PC に依頼する。(2) グループDMが見つからない、kim-PC の Discord が未起動、または投稿を読み戻して確認できない時は、`node tools/discord-dm.mjs "<名前 or メール>" --body-file <本文>` で相手へ Bot DM を送り、金功勇へ同文の写しを自動送信する。(3) 当日中に読んでほしい、または2時間以内に返事が要るなど急ぎの場合や kim-PC に頼めない場合は、最初から Bot DM＋写しを使う。各ツールの `--dry-run` は送信せず内容と解決結果を確認する。宛先の名前→Discord ID 解決は Bot が行うので user に ID やチャンネルを聞かない。宛先が曖昧・不明なら送らずに終了する（推測で送らない）。Bot トークンが無いPCなど送れない場合だけ、チャットに「宛先／用件／本文」をコピペできる完成形で表示する。外部宛のGmail下書きは、本文と下書き件名もチャットに併記する。根拠（2026-10-24 cr）: Bot の個人DMだけでは金さんが見られず、受け手にも誰からの依頼か分かりにくい。
@@ -1086,6 +1086,7 @@ Astra クールダウン中は Sol を使う。明示の `--model astra`（ま�
 - **解除できるのは user のプロンプトだけ**: user が同じ指示に `[CLAUDE-IMPL-OK]`（または `[LANE-OK]`）と書いたとき、UserPromptSubmit の `claude-impl-approval` が **そのセッション・60分限り**の許可を発行する。`~/.claude/cost-enforce-override` ファイル・委譲率の観測・Codex クールダウン中の自動解除は **廃止**（Claude 自身が作れる抜け道は全部塞ぐ）。Codex が上限中でも `codex-do` は deepseek/glm/gemini へ内蔵フォールバックするので、そのまま委譲する。全滅なら実装を止めて費用見込みを kim に提示し、承認マーカーを待つ。
 - **実装サブエージェントも禁止**: `model-agent-guard` は Fable 指定に加え、実装依頼を Explore/Plan 以外のサブエージェントへ渡す Agent 呼び出しを deny する（例外は同じ `[CLAUDE-IMPL-OK]`）。
 - **1セッション=1目的は hook で機械的に担保する**: SessionStart の `session-purpose-gate` が「このセッションの目的を1行宣言せよ」と要求し、最初の依頼をそのセッションの目的として記録する。以後 UserPromptSubmit で**目的ドリフト**（別目的の依頼＝キーワードの重なりが薄い／「別件」「ところで」「次は」等）を検知したら、**着手前に**『ここで /session-close して新セッションで』と1行提案することを強制する（ブロックはしない。userが「続けて」と言えばそのまま継続）。16ターンを超えたセッションには区切り提案のナッジも出る。判定は純ローカル（API課金ゼロ・状態は `~/.claude/session-purpose/<session_id>.json`）。
+- **kim-inbox の【受信箱】節とその返答記録は目的外ではない**。kim 操作席の最終応答で ID と要点を1件1〜2行だけ伝える。別セッションへの移動を要求しない。Stop の `kim-inbox-relay` が注入と実際の配達を区別し、配達後の同セッション ask は JST 1日1回に抑える。受信箱の報告は、その作業自体への着手承認とは区別する。
 - 終了は §1.15 に統一し、/session-close で成果要約→commit/PR→memory永続化→残TODO→次セッション用テンプレまで準備する。旧 `/clear` 促しは自動クローズ（2026-11-04）が更新した。
 
 **非Claude実装レーンの全滅をSonnetへの自動切替理由にしない（2026-09-15 改定）**。①`codex-do` → `cheap-code` の順に、指示をファイルで渡して試す。②両方不可なら `tools/llm-ask.mjs --provider deepseek|kimi|groq`（providerは1つ選ぶ）でファイル単位に生成し、コードブロックをWriteで保存してverifyする。プロンプトには「出力はコードブロック1個のみ。説明不要。ファイルパス: <path>」を含め、保存後にtypecheck/testを実行する。素のAPI呼び出しは自律CLIとは別経路だが、拒否された操作自体の禁止・安全弁を迂回してはならない。

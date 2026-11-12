@@ -89,7 +89,8 @@ function createPool({ tabs, open, publish, own = () => true, now = Date.now }) {
 // --- 定期リフレッシュ判定（純粋関数） ---
 // 待機タブのうち最古の 1 本を閉じ、補充で新セッションとして作り直す（スマホ一覧の上に出すため）。
 const REFRESH_MIN_AGE_MS = 10 * 60000; // 出現から 10 分未満は対象外（レース回避）
-// tabs: [{ label, appearedAt, isActive }]。force=true（URI の refresh=1）は時間帯・間隔・無効設定を無視する。
+const RC_IN_USE_THRESHOLD_MS = 30 * 60000; // RC 最終操作から 30 分未満は使用中とみなす
+// tabs: [{ label, appearedAt, isActive, rcConnected, rcLastActivityAt }]。force=true（URI の refresh=1）は時間帯・間隔・無効設定を無視する。
 // 不足中（待機数 < target）は常に no。補充を優先する。
 function decideRefresh({ now, minutes, hoursOk, lastRefreshAt, target, tabs, force = false }) {
   const waiting = tabs.filter(isWaitingTab);
@@ -99,7 +100,14 @@ function decideRefresh({ now, minutes, hoursOk, lastRefreshAt, target, tabs, for
     if (!hoursOk) return { refresh: false, reason: 'outside-hours', waiting: waiting.length };
     if (lastRefreshAt && now - lastRefreshAt < minutes * 60000) return { refresh: false, reason: 'interval', waiting: waiting.length };
   }
-  const candidates = waiting.filter((tab) => !tab.isActive && now - tab.appearedAt >= REFRESH_MIN_AGE_MS);
+  const candidates = waiting.filter((tab) => {
+    if (tab.isActive) return false;
+    if (now - tab.appearedAt < REFRESH_MIN_AGE_MS) return false;
+    // RC で使用中のタブはリフレッシュ対象外
+    if (tab.rcConnected) return false;
+    if (tab.rcLastActivityAt && now - tab.rcLastActivityAt < RC_IN_USE_THRESHOLD_MS) return false;
+    return true;
+  });
   if (candidates.length === 0) return { refresh: false, reason: 'no-candidate', waiting: waiting.length };
   const tab = candidates.reduce((oldest, current) => (current.appearedAt < oldest.appearedAt ? current : oldest));
   return { refresh: true, reason: 'ok', tab, waiting: waiting.length, ageMinutes: Math.floor((now - tab.appearedAt) / 60000) };
@@ -118,6 +126,6 @@ function decideWorktreeCleanup({ tabs, now = Date.now(), startup = false }) {
 }
 module.exports = {
   targetCount, readConfig, readSnapshot, createOwnershipLease, isWaitingTab, createPool,
-  REFRESH_MIN_AGE_MS, decideRefresh, readRefreshConfig, readLastRefreshAt, inRefreshHours,
+  REFRESH_MIN_AGE_MS, RC_IN_USE_THRESHOLD_MS, decideRefresh, readRefreshConfig, readLastRefreshAt, inRefreshHours,
   isWorktreeFolder, decideWorktreeCleanup,
 };

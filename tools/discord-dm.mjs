@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimRecipient } from './lib/kim-dm-policy.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import { getDiscordMembers, matchMember } from './discord-member-directory.mjs';
@@ -48,7 +49,7 @@ export async function sendDiscordDm(target, body, options = {}) {
   // 「本番前のテスト確認」に書き換わり意味が変わる）。秘匿値の除去と長さ調整だけ行う。
   let copyToKim = 'skipped';
   const recipientName = recipient.displayName ?? recipient.label ?? recipient.username ?? '';
-  const isKim = String(recipient.id) === KIM_DISCORD_USER_ID || ['金功勇', 'kim'].includes(recipientName.toLowerCase());
+  const isKim = isKimRecipient({ id: recipient.id, name: recipientName });
   const inbox = isKim;
   if (!options.noCopyKim && !isKim) copyToKim = isKimSeat(home) ? 'in-session' : 'session-inbox';
   const finalBody = isKim || options.noReplyFooter ? String(body ?? '').trimEnd() : withReplyToKimFooter(body);

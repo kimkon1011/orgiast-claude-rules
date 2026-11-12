@@ -368,6 +368,7 @@ try {
         if (-not $node) { Stop-Nightly 'node確認' 'error:nodeが見つからない' 1 }
         Write-NightlyLog '対象開始' ("ok:" + [IO.Path]::GetFileName($targetPath) + " pid=" + $PID)
         $targetTimer = [Diagnostics.Stopwatch]::StartNew()
+        if ([IO.Path]::GetFileName($targetPath) -eq 'fleet-mail.mjs') { $env:ORGIAST_FLEET_POLL_SOURCE = 'scheduled-bootstrap' }
         & $node.Source $targetPath @forwardArgs
         $targetExitCode = $LASTEXITCODE
     } else {

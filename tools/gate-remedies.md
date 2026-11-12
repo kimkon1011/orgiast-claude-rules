@@ -93,6 +93,7 @@ claude.ai の Gmail コネクタは、本文や件名の `http://` / `https://` 
 - 上の経路が使えず急ぐ場合は、URL を `8sp.jp/food` のようにスキーム（https://）なしで書けば書き換えられず、受信側でリンクになる。
 - 2026-10-30 から全PCで初回から deny（観察期間なし）。user-PC で社外宛返信の URL が転送 URL に書き換わった実害による。
 - override は、転送 URL への書き換えが起きないことを生 MIME の読み戻しまで含めて確認でき、利用者がそのリスクを明示的に受け入れた場合だけ使う。`~/.claude/gmail-connector-url-gate-override` の1行目に短い有効期限の ISO 8601 時刻を書く。
+- gmail-draft.mjs で作った下書きを送る時は send_message に draftId と同じ本文の body を渡す（body は送信内容に使われない）。draftId が指定された send_message は URL チェックを通過する。
 
 ## live-artifact-read-gate
 
@@ -105,6 +106,10 @@ Gmail送信前に説明対象のGoogleファイルを接続済みMCPで読む。
 ## manual-request-fullsteps-gate
 
 手作業の全工程・所要時間・理由・自動化できない根拠を書く。
+
+## session-close-target-gate
+
+close-session.mjs を実行するターンでは、次セッションの開き方を書く前に `node ~/.claude/nightly-repo/tools/next-session-launch.mjs --show-target` を実行し、表示された起動先（vscode=新しいタブで Enter／inline=このタブで /clear／headless=新しいタブで /session-start）の1つだけを書く。意図的に省くときは本文に [LAUNCH-TARGET-OK]。
 
 ## model-agent-guard
 

@@ -23,6 +23,15 @@ export const PROFILES = {
     classificationSystem: 'カフェ併設レンタルスペース（212coffee）の運営改善の観点で各入力を分類する。category は 集客|価格|運営効率|設備|トラブル|法規税務|売上|other、score は 0=無関係/雑談、1=一般論、2=有用、3=自店で今すぐ試す価値がある具体策（数字・手順・サービス名を含む）。JSONオブジェクトのみを返す。形式は {"items":[{"i":0,"category":"集客","score":3}]}。入力の全要素に同じ i で1件ずつ返す。',
     summarySystem: '発言は他店オーナーの伝聞で裏取りされていない。JSONオブジェクトのみを返す。形式は {"digest":["1行目"],"proposals":[{"title":"...","action":"...","evidence":"...","category":"集客","confidence":"medium"}]}。digest は日本語3〜10行、1トピック1行、具体的な数字・サービス名・手順を残す。proposals は title、action、evidence（120字以内）、category（集客|価格|運営効率|設備|トラブル|法規税務|売上|other）、confidence（high|medium|low）を持つ。action は「212coffee で何を試すか」を1文で。発言者名は出さず「参加者」とする。注意書きだけの行は作らない。',
   },
+  minpaku: {
+    chats: ['民泊オーナー雑談ルーム'],
+    files: { digest: 'minpaku-digest.md', proposals: 'minpaku-proposals.jsonl', topics: 'minpaku-topics.jsonl', state: 'line-openchat/state-minpaku.json' },
+    marker: 'MINPAKU-DIGEST',
+    heading: '🏠 特区民泊・民泊運営の改善ネタ（LINE 民泊オーナー雑談ルーム / {date}）',
+    categories: ['価格・稼働率', 'OTA運用', '清掃・リネン・運営コスト', 'レビュー・ゲスト対応', '規制・特区民泊・税', '集客・直販・長期滞在', 'トラブル事例', 'other'],
+    classificationSystem: '特区民泊・民泊（メルシ・TRIANGLE等）の運営改善の観点で各入力を分類する。category は 価格・稼働率|OTA運用|清掃・リネン・運営コスト|レビュー・ゲスト対応|規制・特区民泊・税|集客・直販・長期滞在|トラブル事例|other、score は 0=無関係/雑談/宣伝、1=一般論、2=有用、3=自店舗で今すぐ試す価値がある具体策（数字・手順・サービス名を含む）。JSONオブジェクトのみを返す。形式は {"items":[{"i":0,"category":"価格・稼働率","score":3}]}。入力の全要素に同じ i で1件ずつ返す。',
+    summarySystem: '発言は伝聞・未検証。大阪の特区民泊（メルシ・TRIANGLE、Beds24経由で Airbnb/Booking.com/直販）の全室稼働95%・単価最適化・月次黒字化に使える具体策だけ抽出。各提案に『要検証』と検証方法（どのデータ・どの画面で確かめるか）を付ける。雑談・挨拶・宣伝は捨てる。特区民泊の最低2泊を下回る提案は法令違反として除外。JSONオブジェクトのみを返す。形式は {"digest":["1行目"],"proposals":[{"title":"...","action":"...","evidence":"...","category":"価格・稼働率","confidence":"medium"}]}。digest は日本語3〜10行、1トピック1行、具体的な数字・サービス名・手順を残す。proposals は title、action、evidence（120字以内）、category（価格・稼働率|OTA運用|清掃・リネン・運営コスト|レビュー・ゲスト対応|規制・特区民泊・税|集客・直販・長期滞在|トラブル事例|other）、confidence（high|medium|low）を持つ。action は民泊運営で何を試すか（検証方法を含む）を1文で。発言者名は出さず「参加者」とする。注意書きだけの行は作らない。',
+  },
 };
 const CATEGORIES = new Set(PROFILES.ai.categories);
 export const PROVIDERS = {
@@ -246,7 +255,7 @@ function parseArgs(args) {
 export async function runDigest(options = {}) {
   const home = options.home || os.homedir(), args = options.args || [], log = options.log || console.log;
   const cli = parseArgs(args);
-  if (!Object.hasOwn(PROFILES, cli.profile)) throw new Error('--profile は ai または cafe');
+  if (!Object.hasOwn(PROFILES, cli.profile)) throw new Error('--profile は ai、cafe、または minpaku');
   const profile = PROFILES[cli.profile];
   if (!PROVIDERS[cli.provider]) throw new Error('--provider は groq または deepseek を指定してください');
   const base = path.join(home, '.claude'), inputDir = path.join(base, 'line-openchat'), stateFile = path.join(base, profile.files.state), proposalFile = path.join(base, profile.files.proposals), digestFile = path.join(base, profile.files.digest), topicsFile = path.join(base, profile.files.topics);
@@ -257,7 +266,7 @@ export async function runDigest(options = {}) {
     records.filter((r) => r.status === 'pending').forEach((r) => log(`${r.id} ${r.title} — ${r.action}`)); return { processed: 0 };
   }
   if (cli.seed) {
-    const seed = { id: `seed-${Date.now()}`, chat: profile.chats?.[0] || '生成AI', sender: 'サンプル参加者', text: cli.profile === 'cafe' ? '平日料金を1時間1500円にした店舗で予約が増えたという情報です。' : 'Claudeの新モデルが公開されたという情報です。料金と性能は公式情報で要検証です。', ts: Date.now(), receivedAt: new Date().toISOString() };
+    const seed = { id: `seed-${Date.now()}`, chat: profile.chats?.[0] || '生成AI', sender: 'サンプル参加者', text: cli.profile === 'cafe' ? '平日料金を1時間1500円にした店舗で予約が増えたという情報です。' : cli.profile === 'minpaku' ? '清掃費を3000円から3500円に変更して利益率が改善したという情報です。' : 'Claudeの新モデルが公開されたという情報です。料金と性能は公式情報で要検証です。', ts: Date.now(), receivedAt: new Date().toISOString() };
     if (cli.dryRun) log(`[dry-run] サンプルを ${inputDir} に投入`); else { fs.mkdirSync(inputDir, { recursive: true }); const month = new Date().toISOString().slice(0, 7); fs.appendFileSync(path.join(inputDir, `${month}.jsonl`), `${JSON.stringify(seed)}\n`); }
   }
   if (!fs.existsSync(inputDir)) {
@@ -266,10 +275,11 @@ export async function runDigest(options = {}) {
     return { processed: 0, status };
   }
   const state = readJson(stateFile, { lastTs: 0, lastId: '', processedIds: [] });
+  const matchChat = (chats, chatName) => chatName && chats.some((prefix) => chatName.startsWith(prefix));
   const candidates = selectUnprocessed(readMessages(inputDir).filter((m) => profile.chats
-    ? profile.chats.includes(m.chat)
-    : !Object.values(PROFILES).some((other) => other.chats?.includes(m.chat))), state, cli.since).slice(0, cli.limit);
-  const messages = preprocessMessages(candidates, cli.profile === 'cafe' ? { minLength: 15, meaningful: (text) => /[0-9０-９]/u.test(text) } : undefined);
+    ? matchChat(profile.chats, m.chat)
+    : !Object.values(PROFILES).some((other) => other.chats && matchChat(other.chats, m.chat))), state, cli.since).slice(0, cli.limit);
+  const messages = preprocessMessages(candidates, cli.profile === 'cafe' ? { minLength: 15, meaningful: (text) => /[0-9０-９]/u.test(text) } : cli.profile === 'minpaku' ? { minLength: 15 } : undefined);
   if (!candidates.length) {
     const status = 'skip:新規メッセージなし';
     log('未処理メッセージはありません。');

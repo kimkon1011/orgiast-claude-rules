@@ -7,7 +7,10 @@ import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { hostExitArchive } from './lib/host-exit-archive.mjs';
+import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
 import { isEntry } from './is-entry.mjs';
+
+const DEFAULT_MAX_REOPEN = 3;
 const BASE = 'https://api.anthropic.com/v1/code/sessions';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 function readJson(file, fallback) {
@@ -272,9 +275,10 @@ export function hasHostExit(events, since, until) {
   return events.some(e => e.event_type === 'system' && e.payload?.reason === 'host_exit'
     && Date.parse(e.created_at) >= Date.parse(since) && Date.parse(e.created_at) <= Date.parse(until));
 }
-export function exclusion(local, closed, alive) {
+export function exclusion(local, closed, alive, hidden) {
   if (!local || !local.cwd) return 'noLocal';
   if (closed.has(local.id)) return 'closed';
+  if (hidden && (hidden.has(local.id) || (local.bridgeSessionId && hidden.has(local.bridgeSessionId)))) return 'archivedByUser';
   if (!local.hasConversation) return 'empty';
   if (alive.has(local.id)) return 'alive';
   return null;
@@ -464,7 +468,7 @@ export function localIndex(base, onlyId, { sinceMs, largeFileThreshold = 8 * 102
       const conversation = bytes > 200 * 1024 || hasConversation(lines.map(parse), bytes);
       indexed++;
       for (const bridge of bridges) {
-        index.set(bridge.bridgeSessionId, { id: file.slice(0, -6), cwd: cwds[0], cwds, hasConversation: conversation });
+        index.set(bridge.bridgeSessionId, { id: file.slice(0, -6), bridgeSessionId: bridge.bridgeSessionId, cwd: cwds[0], cwds, hasConversation: conversation });
       }
     }
   }
@@ -504,8 +508,85 @@ function reopenLoopCounts(base, nowFn = Date.now) {
   }
   return counts;
 }
+
+// 直近 6 時間に reopened に掲載された回数（verified / unverified を問わない）を数える。
+// 長期的に繰り返し空振り／切断を繰り返すセッションを自動遮断する（6h経過で自然解除）。
+function reopenRepeatCounts(base, nowFn = Date.now) {
+  const logFile = path.join(base, 'reopen-lost-sessions.log');
+  const counts = {};
+  try {
+    const raw = fs.readFileSync(logFile, 'utf8');
+    const nowTime = typeof nowFn === 'function' ? nowFn() : nowFn;
+    const cutoff = nowTime - 6 * 60 * 60 * 1000;
+    for (const line of raw.split('\n').filter(Boolean)) {
+      try {
+        const entry = JSON.parse(line);
+        if (!entry.at || !Array.isArray(entry.reopened)) continue;
+        if (Date.parse(entry.at) < cutoff) continue;
+        for (const r of entry.reopened) {
+          const id = r?.id || r;
+          if (id) counts[id] = (counts[id] || 0) + 1;
+        }
+      } catch {}
+    }
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
+  return counts;
+}
+
+export async function getLoadGuardStatus({
+  env = process.env,
+  spawn = spawnSync,
+  cpusImpl = os.cpus,
+  wait = sleep,
+  checkCpu = true,
+  checkClaude = true,
+} = {}) {
+  const maxClaude = Number.isFinite(Number(env?.REOPEN_MAX_CLAUDE)) ? Number(env.REOPEN_MAX_CLAUDE) : 10;
+  const maxCpu = Number.isFinite(Number(env?.REOPEN_MAX_CPU)) ? Number(env.REOPEN_MAX_CPU) : 85;
+
+  let claudeCount = null;
+  let loadError = null;
+
+  if (checkClaude) {
+    try {
+      const res = spawn('tasklist', ['/FI', 'IMAGENAME eq claude.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+      if (res.error || (res.status !== 0 && res.status !== null)) {
+        loadError = res.error?.message || `exit code ${res.status}`;
+      } else {
+        const lines = String(res.stdout || '')
+          .split('\n')
+          .filter(line => /^"claude\.exe"/i.test(line.trim()));
+        claudeCount = lines.length;
+      }
+    } catch (e) {
+      loadError = e.message;
+    }
+  }
+
+  const cpuPct = checkCpu ? await measureCpuAsync({ sampleMs: 1000, cpusImpl, wait }) : null;
+
+  const reasons = [];
+  if (claudeCount !== null && claudeCount >= maxClaude) reasons.push('claudeCount');
+  if (cpuPct !== null && cpuPct >= maxCpu) reasons.push('cpuPct');
+
+  const triggered = reasons.length > 0;
+  const reason = triggered ? reasons.join(',') : null;
+
+  const status = {
+    claudeCount,
+    cpuPct,
+    reason,
+    triggered,
+  };
+  if (loadError) status.error = loadError;
+
+  return status;
+}
+
 export function parseOptions(args, spawn = spawnSync) {
-  const options = { dryRun: false, max: 30, gapSec: 10, watch: false };
+  const options = { dryRun: false, max: DEFAULT_MAX_REOPEN, gapSec: 10, watch: false };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--dry-run') { options.dryRun = true; continue; }
@@ -583,11 +664,16 @@ export function resolveClaudeCli({ env = process.env, exists = fs.existsSync, re
   throw new Error('claude CLI not found');
 }
 
-export async function reopenLost({ since, until, dryRun = false, max = 30, gapSec = 10,
+export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_MAX_REOPEN, gapSec = 10,
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
   now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs, stateBased = false,
-  checkCpu = true, cpusImpl } = {}) {
-  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0 }, aliveSource: null, agentsError: null, agentsDiag: null };
+  checkCpu = true, checkClaude = false, cpusImpl, vscodeStartedAt, openDb } = {}) {
+  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closedInRunningVscode: 0, loadGuard: 0, reopenRepeat: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
+  const initialHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
+  const hiddenSessionIds = initialHidden.ids;
+  if (initialHidden.error) {
+    result.hiddenError = initialHidden.error;
+  }
   // Dry run is strictly read-only: no lock or log mutation on the user's PC.
   const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'));
   if (!release) return { ...result, error: 'locked' };
@@ -648,6 +734,7 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
     result.indexSkippedOld = locals.skippedOld;
     result.indexMs = locals.indexMs;
     const reopenCounts = reopenLoopCounts(base, now);
+    const repeatCounts = reopenRepeatCounts(base, now);
     const deadline = now() + (stateBased ? 180000 : 60000);
     const get = async url => {
       if (now() >= deadline) throw Error('API time limit');
@@ -667,6 +754,19 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
         if (stateBased) {
           const nowTime = now();
           const stateSince = new Date(nowTime - 72 * 3600 * 1000).toISOString();
+          // 手で閉じたタブと空き枠は開き直さない。再起動で切れたものだけ開く
+          let resolvedVscodeStartedAt = vscodeStartedAt;
+          if (resolvedVscodeStartedAt === undefined) {
+            try {
+              const psScript = "$p = Get-Process Code -ErrorAction SilentlyContinue | Sort-Object StartTime | Select-Object -First 1; if ($p) { $p.StartTime.ToUniversalTime().ToString('o') }";
+              const res = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psScript], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+              const ts = Date.parse(String(res.stdout ?? '').trim());
+              resolvedVscodeStartedAt = Number.isFinite(ts) ? ts : null;
+            } catch {
+              resolvedVscodeStartedAt = null;
+            }
+          }
+          result.vscodeStartedAt = Number.isFinite(resolvedVscodeStartedAt) ? new Date(resolvedVscodeStartedAt).toISOString() : null;
           for (const session of sessions) {
             const local = locals.get(session.id);
             if (!local || seenIds.has(local.id)) continue;
@@ -674,9 +774,15 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
             if (session.connection_status === 'connected') continue;
             const lastEvent = Date.parse(session.last_event_at);
             if (!Number.isFinite(lastEvent) || lastEvent < Date.parse(stateSince)) continue;
-            const reason = exclusion(local, closed, living);
+            const reason = exclusion(local, closed, living, hiddenSessionIds);
             if (reason) { result.skipped[reason]++; continue; }
+            // 待機中の空き枠（タイトル「011｜待機中」など）は開き直さない
+            const title = (session.title ?? '').trim();
+            if (/^(?:\d{3}｜)?待機中$/.test(title)) { result.skipped.standby++; continue; }
+            // 起動中の VS Code で閉じられたタブは開き直さない
+            if (Number.isFinite(resolvedVscodeStartedAt) && resolvedVscodeStartedAt < lastEvent) { result.skipped.closedInRunningVscode++; continue; }
             if (reopenCounts[local.id] >= 3) { result.skipped.reopenLoop++; continue; }
+            if (repeatCounts[local.id] >= 3) { result.skipped.reopenRepeat++; continue; }
             seenIds.add(local.id);
             result.candidates.push({ id: local.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '', source: 'state' });
           }
@@ -703,12 +809,13 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
             const { session, events } = item.value;
             if (!hasHostExit(events, since, until)) continue;
             const local = locals.get(session.id);
-            const reason = exclusion(local, closed, living);
+            const reason = exclusion(local, closed, living, hiddenSessionIds);
             if (reason) { result.skipped[reason]++; continue; }
             // Skip user-archived sessions (closed via mobile etc.)
             if (session.status === 'archived' && !hostExitArchive(events)) { result.skipped.archivedByUser++; continue; }
             // Skip sessions reopened 3+ times in the last 24h (infinite reopen guard)
             if (reopenCounts[local?.id] >= 3) { result.skipped.reopenLoop++; continue; }
+            if (repeatCounts[local?.id] >= 3) { result.skipped.reopenRepeat++; continue; }
             if (!local || seenIds.has(local.id)) continue;
             seenIds.add(local.id);
             result.candidates.push({ id: local.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '', source: 'host_exit' });
@@ -723,10 +830,16 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
     } catch (error) { result.apiError = error.message; }
     if (!dryRun && result.candidates.length) {
       writeProgress(base, 'fetch', `candidates=${result.candidates.length}`);
-      // CPU 保護: 85% 以上なら開き直しを全部見送る
-      const cpuLoad = checkCpu ? await measureCpuAsync({ cpusImpl }) : null;
-      if (cpuLoad !== null && cpuLoad >= 85) {
-        result.deferredCpu = cpuLoad;
+      const loadStatus = await getLoadGuardStatus({ env, spawn, cpusImpl, wait, checkCpu, checkClaude });
+      if (loadStatus.error) {
+        result.loadGuard = { claudeCount: loadStatus.claudeCount, cpuPct: loadStatus.cpuPct, reason: loadStatus.reason, error: loadStatus.error };
+      }
+      if (loadStatus.triggered) {
+        result.skipped.loadGuard = result.candidates.length;
+        result.loadGuard = { claudeCount: loadStatus.claudeCount, cpuPct: loadStatus.cpuPct, reason: loadStatus.reason, ...(loadStatus.error ? { error: loadStatus.error } : {}) };
+        if (loadStatus.cpuPct !== null && loadStatus.cpuPct >= (Number.isFinite(Number(env.REOPEN_MAX_CPU)) ? Number(env.REOPEN_MAX_CPU) : 85)) {
+          result.deferredCpu = loadStatus.cpuPct;
+        }
       } else {
         const code = codeCli || resolveCodeCli(env, fsImpl.existsSync);
         let windowOpened = false; // 1回の実行で新規ウィンドウを作るのは最大1回まで
@@ -734,8 +847,12 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
           writeProgress(base, 'open', `id=${candidate.id}`);
           // Recheck after fetching and between opens: close/purge may have happened meanwhile.
           const refreshed = [...localIndex(base, candidate.id).values()].find(l => l.id === candidate.id);
-          const reason = exclusion(refreshed, closedIds(base), alive());
+          const recheckHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
+          const currentHidden = recheckHidden.error ? hiddenSessionIds : recheckHidden.ids;
+          const reason = exclusion(refreshed, closedIds(base), alive(), currentHidden);
           if (reason) { result.skipped[reason]++; continue; }
+          if (reopenCounts[candidate.id] >= 3) { result.skipped.reopenLoop++; continue; }
+          if (repeatCounts[candidate.id] >= 3) { result.skipped.reopenRepeat++; continue; }
           try {
             const folder = resolveReopenFolder(candidate.cwd, candidate.cwds, { fsImpl, spawn });
             // worktree のまま開く候補が無いときは開かずスキップ（新しい worktree ウィンドウは作らない）。
@@ -764,7 +881,9 @@ export async function reopenLost({ since, until, dryRun = false, max = 30, gapSe
               }
               if (!found) throw Error('VS Code window timeout');
               const current = [...localIndex(base, candidate.id).values()].find(l => l.id === candidate.id);
-              const lateReason = exclusion(current, closedIds(base), alive());
+              const lateHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
+              const currentLateHidden = lateHidden.error ? hiddenSessionIds : lateHidden.ids;
+              const lateReason = exclusion(current, closedIds(base), alive(), currentLateHidden);
               if (lateReason) { result.skipped[lateReason]++; continue; }
               // Focus again immediately before URI dispatch to reduce focus races.
               ps(`& ${quotePS(code)} ${quotePS(targetPath)}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & ${quotePS(code)} --open-url ${quotePS('vscode://anthropic.claude-code/open?session=' + encodeURIComponent(candidate.id))}; exit $LASTEXITCODE`, spawn);
@@ -803,12 +922,12 @@ export async function watchReopen(opts = {}, maxParam) {
   let base, max, dryRun, fetchImpl, spawn, wait, nowFn, claudeCli, codeCli, env, fsImpl, windowReady, cpusImpl;
   if (typeof opts === 'string' || opts === undefined) {
     base = opts ?? path.join(os.homedir(), '.claude');
-    max = maxParam ?? 10;
+    max = maxParam ?? DEFAULT_MAX_REOPEN;
     dryRun = false;
     nowFn = Date.now;
   } else {
     base = opts.base ?? path.join(os.homedir(), '.claude');
-    max = opts.max ?? 10;
+    max = opts.max ?? DEFAULT_MAX_REOPEN;
     dryRun = opts.dryRun ?? false;
     fetchImpl = opts.fetchImpl;
     spawn = opts.spawn;
@@ -836,9 +955,9 @@ export async function watchReopen(opts = {}, maxParam) {
   const until = new Date(nowTime - 60000).toISOString();
   const result = await reopenLost({
     since, until, max, dryRun, base, fetchImpl, spawn, wait, now: nowFn, claudeCli, codeCli, env, fsImpl, windowReady, cpusImpl,
-    stateBased: true
+    stateBased: true, checkClaude: true
   });
-  if (!result.error && !result.apiError && !result.deferredCpu && !dryRun) {
+  if (!result.error && !result.apiError && !result.deferredCpu && !result.skipped?.loadGuard && !dryRun) {
     fs.writeFileSync(stateFile, JSON.stringify({ watermark: until }) + '\n');
   }
   return result;
@@ -871,14 +990,14 @@ if (isEntry(import.meta.url)) {
       }, 20 * 60 * 1000);
       const result = await watchReopen({
         base: opts.base,
-        max: opts.maxSet ? opts.max : 10,
+        max: opts.maxSet ? opts.max : DEFAULT_MAX_REOPEN,
         dryRun: opts.dryRun,
       });
       clearTimeout(watchdogTimer);
       console.log(JSON.stringify(result));
       if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
     } else {
-      const result = await reopenLost(opts);
+      const result = await reopenLost({ ...opts, checkClaude: true });
       console.log(JSON.stringify(result));
       if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
     }

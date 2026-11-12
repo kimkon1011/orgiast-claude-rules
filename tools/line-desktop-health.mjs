@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-export const DESKTOP_CHATS = ['生成AI', 'AI研究所', '仕事効率化', 'レンスペ民の集い'];
+export const DESKTOP_CHATS = ['生成AI', 'AI研究所', '仕事効率化', 'レンスペ民の集い', '民泊オーナー雑談ルーム'];
 export function readJsonLines(file) {
   if (!file) return [];
   let text = ''; try { text = fs.readFileSync(file, 'utf8'); } catch (e) { if (e.code !== 'ENOENT') throw e; }

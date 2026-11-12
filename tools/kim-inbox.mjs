@@ -13,12 +13,40 @@ import { redactSecrets } from './webhook-health.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
 import { displayPcNames } from './lib/pc-display.mjs';
+import { inboxSummary, relayDue, recordInjection, recordPromptAnswers, interactiveInboxSession } from './lib/kim-inbox-relay-state.mjs';
 import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mjs';
 const exec = promisify(execFile);
 const directory = home => path.join(home, '.claude/kim-inbox');
 const clean = value => redactSecrets(String(value ?? '')).slice(0, 4000);
 const validId = id => /^ki-\d{14}-[a-f0-9]{4}$/.test(id);
 export const CONTEXT_LIMIT = 1800;
+// 古いロック(EPERM/pid再利用)を mtime で回収。既定5分、環境変数で上書き可。
+const STALE_LOCK_MS = Number(process.env.KIM_INBOX_STALE_LOCK_MS) || 300_000;
+// ロックが古いとき削除ではなく .stale-<epoch> へ rename して証跡を残す。
+function renameStaleLock(lock) {
+  try {
+    const stale = `${lock}.stale-${Date.now()}`;
+    fs.renameSync(lock, stale);
+    console.error(`kim-inbox: 古いロックを rename しました ${lock} -> ${stale}`);
+    return true;
+  } catch { return false; }
+}
+// mtime と（必要な場合）PID 存活確認でロックを回収できるか判定する。
+function tryReclaimLock(lock) {
+  try {
+    const stat = fs.statSync(lock);
+    if (Date.now() - stat.mtimeMs > STALE_LOCK_MS) return renameStaleLock(lock);
+    // mtime が新しい — PID が消えていたら回収
+    try {
+      const pid = Number(fs.readFileSync(lock, 'utf8'));
+      if (pid > 0) try { process.kill(pid, 0); } catch (e) {
+        if (e.code === 'ESRCH') return renameStaleLock(lock);
+        // EPERM: PID が保護済み/再利用 — mtime が新しいので待つ
+      }
+    } catch { /* 読めない/不正なPID */ }
+  } catch (statErr) { if (statErr.code === 'ENOENT') return true; } // 直前に解放済み
+  return false;
+}
 // kim 本人が座る席（kim-PC、所有者が kim のPC、kim が操作する nishi@/cr@/seisaku-team@ 等の
 // アカウント = lib/kim-operated.mjs）では、kim-PC へ転送せずその場のセッションで回収する（2026-10-28 kim）。
 export function isKimSeat(home) {
@@ -42,10 +70,7 @@ function acquireInboxLock(home, key, waitMs = 10_000) {
     try { fd = fs.openSync(lock, 'wx', 0o600); fs.writeFileSync(fd, String(process.pid)); break; }
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
-      try {
-        const pid = Number(fs.readFileSync(lock, 'utf8'));
-        if (pid > 0) { try { process.kill(pid, 0); } catch (e) { if (e.code === 'ESRCH') fs.unlinkSync(lock); } }
-      } catch { /* 所有者が不明ならロックを奪わない。 */ }
+      if (tryReclaimLock(lock)) continue;
       const remaining = deadline - performance.now();
       if (remaining <= 0) break;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(delay, remaining));
@@ -66,7 +91,8 @@ function update(home, id, fn) {
     fn(item); save(home, item); return item;
   });
 }
-const isHighInfo = item => item.kind === 'info' && (item.priority === 'high' || /完了:|✅|未達|確認エラー|判断待ち|自動進行|まとめ/.test(item.text));
+export { update as updateInboxItem };
+export const isHighInfo = item => item.kind === 'info' && (item.priority === 'high' || /^auto-progress-(done|heartbeat)$/.test(item.source) || /完了|進捗|進んでいる|承認待ち|✅|未達|確認エラー|判断待ち|自動進行|まとめ/.test(item.text));
 const hasWorkId = item => /作業ID:\s*[a-f0-9]{8}(?![a-f0-9])/i.test(item.text);
 const newestFirst = (a, b) => (b.lastAt || b.createdAt).localeCompare(a.lastAt || a.createdAt) || b.id.localeCompare(a.id);
 function normalizationKey(text) {
@@ -166,13 +192,14 @@ export function compactItems(home) {
     return result;
   });
 }
-function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '' }) {
+function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen }) {
   if (!['ask', 'info', 'deadline'].includes(kind)) throw new Error('kind は ask / info / deadline');
+  if (doneWhen && kind !== 'ask') throw new Error('--done-when-gmail は ask 専用です');
   fs.mkdirSync(directory(home), { recursive: true });
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: clean(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: clean(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     if (revision !== undefined) item.revision = revision;
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -271,6 +298,47 @@ export function closeKey(home, key) {
     .filter(i => i.kind === 'deadline' && i.key === key)
     .map(i => update(home, i.id, current => { current.status = 'seen'; })));
 }
+// gmail-search.mjs を子プロセスとして実行する既定の検索実装。
+async function defaultGmailSearch(user, query) {
+  const { execFileSync } = await import('node:child_process');
+  const result = execFileSync(process.execPath, [
+    fileURLToPath(new URL('./gmail-search.mjs', import.meta.url)),
+    '--user', user,
+    '--query', query,
+    '--max', '5',
+    '--json',
+  ], { timeout: 20000, windowsHide: true, encoding: 'utf8' });
+  return JSON.parse(result);
+}
+// 完了条件に Gmail の受信を指定された ask を自動的にクローズする。
+// 注入可能な search(user, query) は { messages: [{ id, internalDate, subject }] } を返す。
+export async function autoCloseByGmail(home, { search = defaultGmailSearch, now = Date.now() } = {}) {
+  const items = listItems(home, { status: 'open' }).filter(i => i.kind === 'ask' && i.doneWhen?.gmail).slice(0, 5);
+  const result = [];
+  for (const item of items) {
+    // スロットル: 10分未満はスキップ
+    if (item.doneWhen.lastCheckedAt && now - Date.parse(item.doneWhen.lastCheckedAt) < 600_000) continue;
+    try {
+      const createdAt = new Date(Date.parse(item.createdAt));
+      const dateStr = `${createdAt.getFullYear()}/${String(createdAt.getMonth() + 1).padStart(2, '0')}/${String(createdAt.getDate()).padStart(2, '0')}`;
+      const res = await search(item.doneWhen.gmail.user, `${item.doneWhen.gmail.query} after:${dateStr}`);
+      const matching = (res?.messages || []).filter(m => Number(m.internalDate) >= Date.parse(item.createdAt));
+      if (matching.length > 0) {
+        const latest = matching.reduce((a, b) => Number(a.internalDate) > Number(b.internalDate) ? a : b);
+        const subject = (latest.subject || '').slice(0, 200);
+        const date = new Date(Number(latest.internalDate)).toISOString();
+        answerItem(home, item.id, `自動クローズ: ${item.doneWhen.gmail.user} に「${subject}」(${date}) 着、gmail:${latest.id}`, 'auto-gmail');
+        result.push({ id: item.id, closed: true });
+      } else {
+        // 未マッチでも確認時刻を記録
+        update(home, item.id, current => { current.doneWhen = { ...current.doneWhen, lastCheckedAt: new Date(now).toISOString() }; });
+      }
+    } catch (error) {
+      try { update(home, item.id, current => { current.doneWhen = { ...current.doneWhen, lastCheckedAt: new Date(now).toISOString(), lastError: clean(error.message) }; }); } catch {}
+    }
+  }
+  return result;
+}
 export function deadlineSheetUrl(home) {
   const config = readJsonFile(path.join(home, '.claude/deadline-watch/config.json'));
   return config?.sheetId ? `https://docs.google.com/spreadsheets/d/${config.sheetId}/edit` : '（未初期化）';
@@ -291,6 +359,7 @@ function ackInboxFile(file) {
     try { fd = fs.openSync(lock, 'wx', 0o600); }
     catch (error) {
       if (error.code !== 'EEXIST' && !['EPERM', 'EBUSY'].includes(error.code)) throw error;
+      if (error.code === 'EEXIST' && tryReclaimLock(lock)) continue;
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
     }
   }
@@ -353,6 +422,7 @@ function deadlineDays(item, now) {
   return /期限切れ/.test(item.text) ? -Infinity : Infinity;
 }
 export function selectContext(items, { sessionId = '', now = Date.now(), sheetUrl = '（未初期化）', home = process.env.ORGIAST_HOME || os.homedir(), event = 'UserPromptSubmit' } = {}) {
+  items = items.filter(item => relayDue(item, sessionId, now));
   const own = item => {
     if (sessionId.length < 8) return false;
     const current = sessionId.slice(0, 8).toLowerCase();
@@ -360,10 +430,15 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
     return [...item.text.matchAll(/(?:作業ID:|セッション)\s*([a-f0-9]{8})(?![a-f0-9])/gi)]
       .some(match => match[1].toLowerCase() === current);
   };
-  const required = items.filter(i => i.status === 'open' && !(i.kind === 'ask' && own(i)) && (i.source === 'auto-progress-done' || i.source === 'auto-progress-heartbeat' || i.priority === 'high') && (i.shownCount === 0 || i.kind === 'ask'));
+  const reserved = items.filter(i => i.status === 'open' && !(i.kind === 'ask' && own(i)) && (i.source === 'auto-progress-done' || i.source === 'auto-progress-heartbeat' || i.priority === 'high'))
+    .sort((a, b) => a.shownCount - b.shownCount || newestFirst(a, b));
+  // A real inbox can contain hundreds of old completion asks. Rotate bounded batches;
+  // otherwise the relay would demand a 150-line final response on the first turn.
+  const required = [...reserved.filter(i => i.kind === 'ask').slice(0, 5), ...reserved.filter(i => i.kind === 'info').slice(0, 3)];
+  required.sort((a, b) => Number(b.source === 'auto-progress-heartbeat') - Number(a.source === 'auto-progress-heartbeat'));
   let requiredText = '';
   for (const item of required) {
-    requiredText += `■ ${item.kind} ${item.id} (${item.source})\n${item.kind === 'ask' || item.source === 'auto-progress-heartbeat' ? clean(item.text) : clean(item.text).split(/\r?\n/).slice(0, 2).join(' ').slice(0, 220)}\n`;
+    requiredText += `■ ${item.kind} ${item.id} (${item.source}) ${inboxSummary(item)}\n`;
     item.shownSessions = [...new Set([...item.shownSessions, sessionId])]; item.shownCount++; item.lastShownAt = new Date(now).toISOString();
   }
   // 完了・取消済みのセッションは、過去の毎朝通知から復活させない。
@@ -381,7 +456,7 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
 
   const deadlines = pending.filter(i => i.kind === 'deadline').sort((a, b) => Number(own(b)) - Number(own(a))
     || deadlineDays(a, now) - deadlineDays(b, now) || String(a.key).localeCompare(String(b.key)));
-  let text = `[kim-inbox 期限 ${deadlines.length} / 未回収 ask ${allAsks.length} / 未確認 info ${infos.length}] kim への報告は Discord ではなくこのセッションで行う（kim 2026-10-27）。ask は kim の返答を会話で受け取り記録するまで毎プロンプト再提示される。セッションを閉じても台帳に残り次セッションで再提示される。\n`;
+  let text = `[kim-inbox 期限 ${deadlines.length} / 未回収 ask ${allAsks.length} / 未確認 info ${infos.length}] kim への報告は Discord ではなくこのセッションで行う（kim 2026-10-27）。最後の【受信箱】節に ID と要点を1件1〜2行で伝える。注入は配達ではない。同セッションの回答待ちは配達後1日1回。セッションを閉じても台帳に残り次セッションで再提示される。\n`;
   const footer = '一覧: node tools/kim-inbox.mjs --list --open';
   if (deadlines.length) {
     text += `[期限 ${deadlines.length} 件 — 期限台帳 ${sheetUrl}] 返事は「D-003 完了」「D-003 延期 11/20」「D-003 不要」で可（Claude が node tools/deadline-watch.mjs --done/--defer/--drop で台帳と inbox を更新する）\n`;
@@ -397,11 +472,11 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
   const askPriority = (a, b) => Number(staleUnshown(b)) - Number(staleUnshown(a)) || unseenFirst(a, b);
   const ownAsks = allAsks.filter(own).sort(askPriority).slice(0, 5);
   const asks = allAsks.filter(i => !i.urgent && !own(i)).sort(askPriority);
-  // 今のセッションの判断待ちは通常枠と別枠にし、どの期限・通知よりも先頭へ全文で戻す。
+  // 今のセッションの判断待ちは別枠で先頭へ戻す。本文は常に1行要約。
   let ownAskText = '';
   for (const item of ownAsks) {
     const heading = clean(`■ ask ${item.id}${staleLabel(item)} (from=${item.from} source=${item.source})`).slice(0, 220);
-    ownAskText += `${heading}\n${clean(item.text).slice(0, 600)}\n→ kim に提示して返答をもらい: node tools/kim-inbox.mjs --answer ${item.id} --body-file <返答ファイル>\n`;
+    ownAskText += `${heading} ${inboxSummary(item)}\n`;
     item.shownSessions = [...new Set([...item.shownSessions, sessionId])];
     item.shownCount++; item.lastShownAt = new Date(now).toISOString();
   }
@@ -409,7 +484,7 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
   let urgentText = '';
   for (const item of allAsks.filter(i => i.urgent && !own(i)).sort(askPriority).slice(0, 5)) {
     const heading = clean(`■ 🔴急ぎ ask ${item.id}${staleLabel(item)} (from=${item.from} source=${item.source})`).slice(0, 220);
-    urgentText += `${heading}\n${clean(item.text).slice(0, 600)}\n→ kim に提示して返答をもらい: node tools/kim-inbox.mjs --answer ${item.id} --body-file <返答ファイル>\n`;
+    urgentText += `${heading} ${inboxSummary(item)}\n`;
     item.shownSessions = [...new Set([...item.shownSessions, sessionId])];
     item.shownCount++; item.lastShownAt = new Date(now).toISOString();
   }
@@ -430,25 +505,52 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
   const highInfos = infos.filter(i => !own(i) && isHighInfo(i)).sort(unseenFirst);
   const otherInfos = infos.filter(i => !own(i) && !isHighInfo(i)).sort(newestFirst);
   // 未表示の進捗は ask より先に短く出す。ask 5件が表示枠を使い切り、進捗が永久に出ない事故（2026-11-04 実測 121件）を防ぐ。
-  const unseenHigh = highInfos.filter(i => i.shownCount === 0).slice(0, 3);
+  const unseenHigh = highInfos.filter(i => relayDue(i, sessionId, now)).slice(0, 3);
   const laterHigh = highInfos.filter(i => !unseenHigh.includes(i)).slice(0, Math.max(0, 5 - unseenHigh.length));
-  const selected = deadlines.length ? [...asks.slice(0, 5), ...[...sessionInfos, ...unseenHigh, ...laterHigh, ...otherInfos].slice(0, 3)] : [...sessionInfos, ...unseenHigh, ...asks.slice(0, 5), ...laterHigh, ...otherInfos.slice(0, 2)];
+  const selected = [...sessionInfos, ...unseenHigh, ...asks.slice(0, 5), ...laterHigh, ...otherInfos.slice(0, 2)];
   for (const item of selected) {
     if (otherInfos.includes(item) && [...sessionInfos, ...highInfos].some(i => i.shownCount === 0)) break;
     const repeat = item.shownSessions.includes(sessionId);
     const compact = unseenHigh.includes(item) || laterHigh.includes(item);
-    const body = repeat ? item.text.split(/\r?\n/)[0].slice(0, 120)
+    const body = item.kind === 'ask' || isHighInfo(item) ? inboxSummary(item) : repeat ? item.text.split(/\r?\n/)[0].slice(0, 120)
       : compact ? item.text.replace(/^【[^\r\n]*\r?\n/, '').slice(0, 240) : item.text.slice(0, 600);
     const stale = item.kind === 'ask' ? staleLabel(item) : '';
     const heading = clean(`■ ${item.kind} ${item.id}${stale}${item.kind === 'info' && !own(item) && !isHighInfo(item) ? ` ×${item.repeatCount ?? 1}` : ''} (${Math.max(0, Math.floor((now - Date.parse(item.createdAt)) / 86400000))}日前 from=${item.from} source=${item.source})`).slice(0, 220);
     const command = item.kind === 'ask' ? `→ kim に提示して返答をもらい: node tools/kim-inbox.mjs --answer ${item.id} --body-file <返答ファイル>` : `→ kim に伝えたら: node tools/kim-inbox.mjs --seen ${item.id}`;
     const room = CONTEXT_LIMIT - text.length - footer.length - heading.length - command.length - 3;
     if (room < 1) break;
-    text += `${heading}\n${clean(body).slice(0, room)}\n${command}\n`;
+    text += item.kind === 'ask' ? `${heading} ${clean(body).slice(0, room)}\n` : `${heading}\n${clean(body).slice(0, room)}\n${command}\n`;
     item.shownSessions = [...new Set([...item.shownSessions, sessionId])];
     item.shownCount++; item.lastShownAt = new Date(now).toISOString();
   }
-  return redactSecrets(displayPcNames(ownAskText + dailyText + requiredText + urgentText + text + footer, { home }));
+  return redactSecrets(displayPcNames(requiredText + ownAskText + dailyText + urgentText + text + footer, { home }));
+}
+export function oneScreenSummary(items) {
+  const openItems = items.filter(i => i.status === 'open');
+  const asks = openItems.filter(i => i.kind === 'ask').sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const infos = openItems.filter(i => i.kind === 'info').sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const lines = [];
+  const askCount = asks.length;
+  lines.push(`📌 kim の返事待ち ${askCount}件`);
+  if (askCount === 0) return lines.join('\n');
+  for (const ask of asks.slice(0, 5)) {
+    const text = ask.text.replace(/[\r\n]+/g, ' ').slice(0, 120);
+    lines.push(`${text} (${ask.id})`);
+  }
+  if (infos.length > 0) {
+    lines.push(`📲 自動進行の結果`);
+    for (const info of infos.slice(0, 5)) {
+      const text = info.text.replace(/[\r\n]+/g, ' ').slice(0, 120);
+      lines.push(text);
+    }
+  }
+  const totalOpen = openItems.length;
+  const shownTotal = Math.min(askCount, 5) + Math.min(infos.length, 5);
+  const remaining = totalOpen - shownTotal;
+  if (remaining > 0) lines.push(`ほか ${remaining}件: node tools/kim-inbox.mjs --list`);
+  let summary = lines.join('\n');
+  while (lines.length > 0 && Buffer.from(lines.join('\n'), 'utf8').length > 2000) lines.pop();
+  return lines.length === 0 ? `📌 kim の返事待ち ${askCount}件` : lines.join('\n');
 }
 export async function main(args = process.argv.slice(2), { home = process.env.ORGIAST_HOME || os.homedir(), stdout = console.log, stderr = console.error, readStdin = readStdinWithTimeout } = {}) {
   const value = flag => args[args.indexOf(flag) + 1];
@@ -459,18 +561,30 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
       const event = input.hook_event_name;
       if (!['SessionStart', 'UserPromptSubmit'].includes(event)) return 0;
       const kim = isKimSeat(home);
+      if (!interactiveInboxSession(input, { home })) return 0;
+      const sessionId = String(input.session_id ?? '');
+      if (kim && event === 'UserPromptSubmit') recordPromptAnswers(home, sessionId, String(input.prompt || ''), { listItems, answerItem });
       await drainSpool(home);
       if (kim) await ingestFleetMail(home);
+      await autoCloseByGmail(home);
       const items = listItems(home).filter(i => (i.status === 'open' || (i.dailyProgress && i.status === 'seen')) && (kim || i.forwardError));
       const counts = new Map(items.map(i => [i.id, i.shownCount]));
       const context = selectContext(items, { sessionId: String(input.session_id ?? ''), sheetUrl: deadlineSheetUrl(home), home, event });
+      if (kim) recordInjection(home, sessionId, items.filter(i => i.shownCount !== counts.get(i.id) && (i.kind === 'ask' || isHighInfo(i))), { event });
       if (context) stdout(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }));
       for (const item of items.filter(i => i.shownCount !== counts.get(i.id))) update(home, item.id, current => {
         current.shownSessions = [...new Set([...current.shownSessions, ...item.shownSessions])]; current.shownCount++; current.lastShownAt = item.lastShownAt;
         if (item.dailyShown) current.dailyShown = { ...(current.dailyShown || {}), ...item.dailyShown };
       });
     } else if (args.includes('--add')) {
-      const item = await addItem(home, { urgent: args.includes('--urgent'), text: fs.readFileSync(value('--body-file'), 'utf8'), kind: args.includes('--kind') ? value('--kind') : 'info', key: args.includes('--key') ? value('--key') : undefined, due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '' });
+      let doneWhen;
+      if (args.includes('--done-when-gmail')) {
+        const raw = value('--done-when-gmail');
+        const pipe = raw.indexOf('|');
+        if (pipe === -1) throw new Error('--done-when-gmail は "user|query" 形式で指定してください');
+        doneWhen = { gmail: { user: raw.slice(0, pipe).trim(), query: raw.slice(pipe + 1).trim() } };
+      }
+      const item = await addItem(home, { urgent: args.includes('--urgent'), text: fs.readFileSync(value('--body-file'), 'utf8'), kind: args.includes('--kind') ? value('--kind') : 'info', key: args.includes('--key') ? value('--key') : undefined, due: args.includes('--due') ? value('--due') : undefined, remainingDays: args.includes('--remaining-days') ? Number(value('--remaining-days')) : undefined, source: args.includes('--source') ? value('--source') : '', ...(doneWhen ? { doneWhen } : {}) });
       stdout(JSON.stringify({ id: item.id, status: item.status, forwarded: item.status === 'forwarded' }));
     } else if (args.includes('--answer')) stdout(JSON.stringify(answerItem(home, value('--answer'), fs.readFileSync(value('--body-file'), 'utf8'), process.env.CLAUDE_SESSION_ID || '')));
     else if (args.includes('--seen-matching')) stdout(JSON.stringify(seenMatching(home, value('--seen-matching'), args.includes('--kind') ? value('--kind') : 'info')));
@@ -478,11 +592,13 @@ export async function main(args = process.argv.slice(2), { home = process.env.OR
     else if (args.includes('--close-key')) stdout(JSON.stringify(closeKey(home, value('--close-key'))));
     else if (args.includes('--drop')) stdout(JSON.stringify(dropItem(home, value('--drop'), args.includes('--reason') ? value('--reason') : '')));
     else if (args.includes('--compact')) stdout(JSON.stringify(compactItems(home)));
+    else if (args.includes('--auto-close')) stdout(JSON.stringify(await autoCloseByGmail(home)));
     else if (args.includes('--status') || args.includes('--list')) {
+      await autoCloseByGmail(home);
       const items = listItems(home, { status: args.includes('--open') || args.includes('--status') ? 'open' : undefined });
       if (args.includes('--status')) stdout(`kim-inbox: open ask ${items.filter(i => i.kind === 'ask').length} / open info ${items.filter(i => i.kind === 'info').length}\n最古: ${items.length ? `${items[0].id} ${items[0].text.split(/\r?\n/)[0].slice(0, 120)}` : 'なし'}`);
       else stdout(args.includes('--json') ? JSON.stringify(items) : displayPcNames(items.map(i => `${i.id} ${i.kind} ${i.status} ${i.text.split(/\r?\n/)[0]}`).join('\n'), { home }));
-    } else throw new Error('--add / --answer / --seen / --drop / --list / --status / --context / --compact を指定してください');
+    } else throw new Error('--add / --answer / --seen / --drop / --list / --status / --context / --compact / --auto-close を指定してください');
     return 0;
   } catch (error) { stderr(`kim-inbox: ${clean(error.message).replace(/[\r\n]+/g, ' ')}`); return args.includes('--context') ? 0 : 1; }
 }

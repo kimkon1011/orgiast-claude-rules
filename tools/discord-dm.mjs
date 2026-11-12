@@ -8,6 +8,7 @@ import { clipDiscordContent, KIM_DISCORD_USER_ID, resolveDiscordBotToken } from 
 import { addItem, isKimSeat } from './kim-inbox.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
+import { detectPlaceholders } from './lib/placeholder-detect.mjs';
 
 const API = 'https://discord.com/api/v10';
 const USER_AGENT = 'orgiast-discord-dm/1.0';
@@ -19,9 +20,27 @@ export function withReplyToKimFooter(body) {
   return text.includes(REPLY_TO_KIM_FOOTER) ? text : `${text}\n\n${REPLY_TO_KIM_FOOTER}`;
 }
 
+// ログ・台帳向け: 秘匿値を隠す。送信本文には適用しない（送信は原文をそのまま送る）。
 function safeContent(value) {
   return clipDiscordContent(redactSecrets(value)
     .replace(/([?&]Authorization=)[^&\s]+/gi, '$1[REDACTED]'));
+}
+
+// 送信後に Discord からメッセージを読み戻し、送った本文と一致するか検証する。
+// 不一致なら readBack: "mismatch" を返して exit 非0相当のエラーを投げる。
+export async function readBackMessage(channelId, messageId, expectedBody, options = {}) {
+  const token = options.token ?? resolveDiscordBotToken(options.home ?? process.env.ORGIAST_HOME ?? os.homedir());
+  if (!token) throw new Error('readBack: Discord Bot トークンが見つかりません');
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  const headers = {
+    Authorization: `Bot ${token}`,
+    'User-Agent': USER_AGENT,
+  };
+  const response = await fetchImpl(`${API}/channels/${channelId}/messages/${messageId}`, { headers });
+  if (!response.ok) throw new Error(`readBack: メッセージ取得が HTTP ${response.status}`);
+  const message = await response.json();
+  const actualContent = String(message.content ?? '');
+  return actualContent === expectedBody ? 'match' : 'mismatch';
 }
 
 async function defaultResolve(target, options) {
@@ -44,18 +63,34 @@ export async function sendDiscordDm(target, body, options = {}) {
     throw error;
   }
 
+  // 🔴 無人(ヘッドレス・auto-session)からの人宛て送信は拒否する（2026-11-09 事故）。
+  // kim-inbox に ask として本文を積み、送信しない。
+  const unattended = process.env.CLAUDE_HEADLESS === '1' || /^(?:auto-progress|auto-session)(?::|$)/.test(String(process.env.ORGIAST_HEADLESS_JOB || ''));
+  if (unattended && !options.unattendedOverride) {
+    const item = await addItem(home, { kind: 'ask', text: `【無人送信ブロック】${target} への DM 本文:\n${body ?? ''}`, source: 'discord-dm-blocked' });
+    return { delivered: 'blocked', reason: 'unattended', inboxItem: item.id, recipient };
+  }
+
+  // 🔴 本文に伏せ字・プレースホルダが含まれていたら送信しない（2026-11-09 事故）。
+  const { hasPlaceholder, matches } = detectPlaceholders(body);
+  if (hasPlaceholder && !options.overridePlaceholder) {
+    const snippet = matches.join(', ');
+    throw Object.assign(new Error(`本文に伏せ字/プレースホルダが含まれています: ${snippet}`), { code: 'PLACEHOLDER_IN_BODY' });
+  }
+
   // kim 宛のシステム通知と違い、社内メンバーへの連絡は本文そのものが成果物。
   // notify-kim の toPlainJa（LLM 平易化）は通さない（実測: 「dry-run 検証」が
-  // 「本番前のテスト確認」に書き換わり意味が変わる）。秘匿値の除去と長さ調整だけ行う。
+  // 「本番前のテスト確認」に書き換わり意味が変わる）。
+  // 送信本文は原文のまま（safeContent はログ・台帳向けにのみ使う）。
   let copyToKim = 'skipped';
   const recipientName = recipient.displayName ?? recipient.label ?? recipient.username ?? '';
   const isKim = isKimRecipient({ id: recipient.id, name: recipientName });
   const inbox = isKim;
   if (!options.noCopyKim && !isKim) copyToKim = isKimSeat(home) ? 'in-session' : 'session-inbox';
   const finalBody = isKim || options.noReplyFooter ? String(body ?? '').trimEnd() : withReplyToKimFooter(body);
-  const content = safeContent(finalBody);
-  if (options.requireFullBody && content !== finalBody) throw new Error('報告全文がDiscord本文上限または秘匿値除去で変わるため送信を停止しました');
-  if (options.dryRun) return { dryRun: true, recipient, content, copyToKim, ...(inbox ? { delivered: 'session-inbox' } : {}) };
+  // ログ用にのみ秘匿値を隠す（送信本文は原文のまま）。
+  const displayContent = safeContent(finalBody);
+  if (options.dryRun) return { dryRun: true, recipient, content: displayContent, copyToKim, ...(inbox ? { delivered: 'session-inbox' } : {}) };
   if (inbox) {
     const item = await addItem(home, { kind: options.kimActionRequired || ['action', 'ask'].includes(options.kind) ? 'ask' : 'info', text: body, source: 'discord-dm' });
     return { delivered: 'session-inbox', id: item.id, copyToKim };
@@ -92,16 +127,26 @@ export async function sendDiscordDm(target, body, options = {}) {
     recordOutbound({ channel: 'discord', target: channelId, text: body, messageId: sentMessage.id }, home);
     return { channelId, messageId: sentMessage.id };
   };
-  const { channelId, messageId } = await deliver(recipient, content);
+  // 送信は原文のまま（safeContent 未適用の finalBody を送る）
+  const { channelId, messageId } = await deliver(recipient, finalBody);
+
+  // 🔴 送信後に Discord からメッセージを読み戻し、送った本文と一致するか検証する（2026-11-09 事故）。
+  let readBack = 'unchecked';
+  try {
+    readBack = await readBackMessage(channelId, messageId, finalBody, { home, token, fetchImpl });
+  } catch (error) {
+    readBack = `error: ${error.message}`;
+  }
+
   if (copyToKim === 'session-inbox') {
     const displayName = recipient.displayName ?? recipient.label ?? recipient.username ?? target;
     try {
-      const item = await addItem(home, { kind: 'info', text: `（写し）${displayName} へ送信: ${body ?? ''}`, source: 'discord-dm-copy' });
+      const item = await addItem(home, { kind: 'info', text: `（写し）${displayName} へ送信: ${displayContent}`, source: 'discord-dm-copy' });
       copyToKim = { delivered: 'session-inbox', id: item.id, status: item.status };
     } catch (error) { copyToKim = { delivered: false, error: error.message }; }
   }
 
-  return { delivered: true, recipient, channelId, messageId, copyToKim };
+  return { delivered: true, recipient, channelId, messageId, readBack, copyToKim };
 }
 
 function parseArgs(args) {
@@ -134,9 +179,9 @@ export async function main(args = process.argv.slice(2), options = {}) {
   try {
     const result = await sendDiscordDm(parsed.target, parsed.body, { ...options, dryRun: parsed.dryRun, noCopyKim: parsed.noCopyKim, noReplyFooter: parsed.noReplyFooter, kimActionRequired: parsed.kimActionRequired });
     console.log(JSON.stringify(result));
-    return result.delivered === 'blocked' ? 3 : 0;
+    return result.delivered === 'blocked' ? 3 : 0; // blocked は exit 3 で呼び出し元に知らせる
   } catch (error) {
-    const exitCode = error.code === 'RECIPIENT_UNRESOLVED' ? 3 : error.code === 'DISCORD_TOKEN_MISSING' ? 2 : 1;
+    const exitCode = error.code === 'RECIPIENT_UNRESOLVED' ? 3 : error.code === 'PLACEHOLDER_IN_BODY' ? 4 : error.code === 'DISCORD_TOKEN_MISSING' ? 2 : 1;
     console.error(`discord-dm: ${error.message}`);
     console.log(JSON.stringify({ ok: false, target: parsed.target, error: error.code ?? 'SEND_FAILED' }));
     return exitCode;

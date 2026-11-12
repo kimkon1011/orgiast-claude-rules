@@ -28,6 +28,7 @@
 | 過剰ブロック型 | ゲートが To/Cc を区別せず、正当な社外メールの社内 Cc を止めた（2026-11-09 C0055） | `internal_recipient` / `isInternal` / To・Cc・Bcc を一括判定する Gmail 書き込みガード | To に外部がある場合だけ社内 Cc/Bcc を許可し、外部To＋内部Cc/Bcc・内部To＋外部Cc・混在To・内部のみの回帰テスト |
 | 無音停止見落とし型 | ツール実行中にセッションが終了したケース（プロセスkill・PC再起動など）を自動進行の巡回が検知できず、kimが「進捗どう？」と聞く羽目になった（2026-11-06〜11-09 11回目）。APIエラー経由だけが検出対象だった | `findUnansweredRequest` の呼出元で silent-stop 非対応の箇所（auto-progress-watch.mjs 以外からの呼出） | transcript末尾の未完了tool_use/mtime45分以上を silent-stop として検出（PR #1802）。watchのregisterUnansweredで通知・再開 |
 | 送信前履歴未読型 | 送信前に相手との履歴を読まず、回答済みの質問を再送し、相手の未回答要望を放置した（2026-11-10 C0039） | Gmail・LINE・Discord・Beeper の送信CLIと直接API送信経路。自社送信が受信履歴に残らない経路 | `send-context-check.mjs` の本文ハッシュ＋30分＋最新メッセージID/時刻マーカーを各送信CLIが直前に再検証 |
+| 無人送信抑制漏れ型 | 無人の codex-do 経路が discord-dm.mjs を直接子プロセス起動し、Claude Code フック(gate)を経由せず人宛てDMを承認なし送信。本文の webhook URL が `redactSecrets` により `[REDACTED]` に置換されたまま送達（2026-11-09） | `discord-dm.mjs` の `sendDiscordDm` 呼び出し元。`codex-do.mjs` の spawn 経路。hooks に依存しない全送信 CLI。本文の `[REDACTED]` / `{*}` / `(別途)` が残っている出力経路 | discord-dm.mjs 内の unattended 検出（CLAUDE_HEADLESS/ORGIAST_HEADLESS_JOB）で送信ブロック→kim-inboxへask。送信前の `placeholder-detect.mjs` による伏せ字チェック。送信後の読み戻し（GET /channels/{id}/messages/{id}）と内容照合 |
 
 追記ルール: 型名は構造を表す語にする。症状は1行、日付と出典を付ける。ゲート列が空の行は未完了として扱い、埋まるまで消さない。
 

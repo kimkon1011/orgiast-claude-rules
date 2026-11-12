@@ -12,6 +12,7 @@ import { mintDwdToken } from './gmail-draft.mjs';
 import { resolveDiscordBotToken } from './notify-kim.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
 import { getDiscordMembers, matchMember } from './discord-member-directory.mjs';
+import { detectPlaceholders } from './lib/placeholder-detect.mjs';
 
 const cutoff = () => Date.now() - 30 * 86400000;
 const trimHistory = rows => rows.filter(x => !x.at || Date.parse(x.at) >= cutoff()).slice(-Math.max(20, Math.min(rows.length, 100)));
@@ -123,7 +124,10 @@ export async function main(argv=process.argv.slice(2), deps={}) {
   const val=n=>{const i=argv.indexOf(n);return i>=0?argv[i+1]:''}; const channel=val('--channel'), target=val('--target')||val('--group')||val('--thread')||val('--chat')||val('--channel-id'), file=val('--text-file');
   const intendedChanges = []; argv.forEach((v,i) => { if (v === '--intended-change' && argv[i+1]) intendedChanges.push(argv[i+1]); });
   if(!['line','gmail','discord','beeper'].includes(channel)||!target||!file) throw new Error('使い方: node tools/send-context-check.mjs --channel line|gmail|discord|beeper --target <宛先IDまたはメール> --text-file <送る本文> [--intended-change "<変更内容>"]');
-  const text=fs.readFileSync(file,'utf8').trim(); const result=await (deps.fetchHistory||fetchHistory)(channel,target,{home:deps.home});
+  const text=fs.readFileSync(file,'utf8').trim();
+  const {hasPlaceholder,matches}=detectPlaceholders(text);
+  if(hasPlaceholder) throw new Error(`本文に伏せ字/プレースホルダが含まれています: ${matches.join(', ')}`);
+  const result=await (deps.fetchHistory||fetchHistory)(channel,target,{home:deps.home});
   for(const line of labelHistory(result.messages)) console.log(line.slice(0, 700));
   const verdict=(deps.runLlm||runLlm)(result.messages,text,{intendedChanges: intendedChanges.length ? intendedChanges : undefined}); console.log(JSON.stringify(verdict,null,2));
   if(!verdict.ok) return 2; const written=writeContextMarker({channel,target:result.target,text,latest:latestOf(result.messages),reason:verdict.reason,intendedChanges: intendedChanges.length ? intendedChanges : undefined,home:deps.home}); console.log(`承認マーカー: ${written.file}`); return 0;

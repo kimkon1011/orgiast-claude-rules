@@ -8,6 +8,7 @@ import * as beeper from './beeper-api.mjs';
 import { isEntry } from './is-entry.mjs';
 import { classifyReply, contentFor, createLlm, ensureTaskPriority, decisionReport, sentReport } from './discord-autoreply.mjs';
 import { notifyKim, KIM_DISCORD_USER_ID } from './notify-kim.mjs';
+import { resolveDiscordLink } from './discord-beeper-link.mjs';
 
 export const DISCORD_ACCOUNT = 'discordgo.715210673642012733';
 const HOUR = 3600000;
@@ -38,14 +39,7 @@ export function isMessageRequest(chat) {
 }
 // Only explicit native IDs, never the numeric Beeper-local chat/message IDs.
 export function messageLink(chat, message) {
-  const native = [message?.discordUrl, message?.permalink, message?.url].find(v =>
-    typeof v === 'string' && /^https:\/\/discord\.com\/channels\/@me\/\d{15,22}\/\d{15,22}$/.test(v));
-  if (native) return native;
-  const channel = chat.discordChannelID || chat.discordChannelId;
-  const id = message?.discordMessageID || message?.discordMessageId;
-  if (/^\d{15,22}$/.test(channel) && /^\d{15,22}$/.test(id)) return `https://discord.com/channels/@me/${channel}/${id}`;
-  return [message?.deepLink, message?.deeplink, chat.deepLink, chat.deeplink, chat.url].find(v =>
-    typeof v === 'string' && /^(beeper:\/\/|https:\/\/(?:chat\.)?beeper\.com\/)/.test(v)) || `会話名: ${chat.title || chat.id}`;
+  return resolveDiscordLink(chat, message);
 }
 function addressedToKim(chat, pending, all, selfIDs) {
   if (chat.type === 'single') return true;

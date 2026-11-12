@@ -158,10 +158,10 @@ test('処理済みより古いメッセージを再処理しない', async t => 
   const f = fixture(t); f.save({ version: 1, chats: { chat1: { ...message({ id: 'newer', timestamp: new Date(NOW).toISOString() }), status: 'sent' } }, hourly: [], outbox: {} });
   await runOnce(f.options); assert.equal(f.sent.length, 0);
 });
-test('リンクは明示 native IDs → Beeper deeplink → 会話名、内部数値IDを使わない', () => {
+test('リンクは明示 native IDs → 会話名、内部数値IDを使わない', () => {
   assert.equal(messageLink(chat({ id: '828' }), message({ id: '7405' })), '会話名: 相談');
   assert.equal(messageLink(chat({ discordChannelID: '123456789012345678' }), message({ discordMessageID: '234567890123456789' })), 'https://discord.com/channels/@me/123456789012345678/234567890123456789');
-  assert.equal(messageLink(chat({ deepLink: 'beeper://room/abc' }), message()), 'beeper://room/abc');
+  assert.equal(messageLink(chat({ deepLink: 'beeper://room/abc' }), message()), '会話名: 相談');
 });
 
 test('送信後クラッシュからの復旧は読み戻して報告し再送しない', async t => {
@@ -228,3 +228,14 @@ test('履歴が不完全でも kim 宛でないグループ発言を判断待ち
   const result = await runOnce(f.options);
   assert.equal(result.decisions.length, 0); assert.equal(f.sent.length, 0); assert.equal(f.notices.length, 0);
 });
+
+for (const needsDecision of [false, true]) {
+  test(`kim通知にDiscord会話リンクを含める: ${needsDecision ? '判断待ち' : '代理返信'}`, async t => {
+    const f = fixture(t, { chats: [chat({ discordChannelID: '1547513352513790113' })],
+      decision: { ...reply, needs_kim_decision: needsDecision } });
+    await runOnce(f.options);
+    assert.equal(f.notices.length, 1);
+    assert.equal(f.notices[0].category, needsDecision ? 'autoreply-decision' : 'autoreply-sent');
+    assert.ok(f.notices[0].text.includes('https://discord.com/channels/@me/1547513352513790113'));
+  });
+}

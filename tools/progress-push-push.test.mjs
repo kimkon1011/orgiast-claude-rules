@@ -92,3 +92,39 @@ test('main writes report and returns ok; fail-open on bad home', t => {
   assert.equal(bad.ok, true);
   assert.equal(bad.activeCount, 0);
 });
+
+test('counter-only sessions and open inbox are collected; corrupt counter is ignored', t => {
+  const home = fixture(t), now = Date.now();
+  const dir = path.join(home, '.claude', '.intra-turn-progress-counter');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'counter-session.json'), JSON.stringify({ count: 1, updatedAt: now }));
+  fs.writeFileSync(path.join(dir, 'old-session.json'), JSON.stringify({ updatedAt: now - 3 * 3600000 }));
+  fs.writeFileSync(path.join(dir, 'broken.json'), '{');
+  const inbox = path.join(home, '.claude', 'kim-inbox');
+  fs.mkdirSync(inbox);
+  fs.writeFileSync(path.join(inbox, 'ki-20261112000000-abcd.json'), JSON.stringify({ id: 'ki-20261112000000-abcd', status: 'open', shownSessions: [], shownCount: 0, kind: 'ask', sessionId: 'inbox-session', text: '確認の返事待ち', createdAt: new Date(now).toISOString() }));
+  const sessions = collectActiveSessions({ home, now });
+  assert.deepEqual(sessions.map(r => r.sessionId).sort(), ['counter-session', 'inbox-session']);
+  assert.equal(main({ home, now }).activeCount, 2);
+  const first = fs.readFileSync(LATEST_FILE(home), 'utf8');
+  assert.equal(main({ home, now: now + 3599999 }).skipped, true);
+  assert.equal(fs.readFileSync(LATEST_FILE(home), 'utf8'), first);
+  assert.equal(main({ home, now: now + 3600000 }).skipped, undefined);
+});
+
+test('unwritable report path is fail-open', t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.claude'), 'blocked');
+  assert.equal(main({ home }).ok, false);
+});
+
+ test('heartbeat precedes high priority asks even when asks were created first', async t => {
+  const { selectContext } = await import('./kim-inbox.mjs');
+  const home = fixture(t), now = Date.now();
+  const base = { status: 'open', createdAt: new Date(now).toISOString(), shownCount: 0, shownSessions: [], from: 'test' };
+  const ask = { ...base, id: 'ask-first', kind: 'ask', priority: 'high', source: 'test', text: 'ASK-MARKER' };
+  const heartbeat = { ...base, id: 'heartbeat', kind: 'info', source: 'auto-progress-heartbeat', text: 'PROGRESS-MARKER' };
+  const text = selectContext([ask, heartbeat], { home, sessionId: 'test-session', now });
+  assert.ok(text.indexOf('PROGRESS-MARKER') >= 0);
+  assert.ok(text.indexOf('PROGRESS-MARKER') < text.indexOf('ASK-MARKER'));
+ });

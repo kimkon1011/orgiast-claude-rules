@@ -386,6 +386,7 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
       .some(match => match[1].toLowerCase() === current);
   };
   const required = items.filter(i => i.status === 'open' && !(i.kind === 'ask' && own(i)) && (i.source === 'auto-progress-done' || i.source === 'auto-progress-heartbeat' || i.priority === 'high') && (i.shownCount === 0 || i.kind === 'ask'));
+  required.sort((a, b) => Number(b.source === 'auto-progress-heartbeat') - Number(a.source === 'auto-progress-heartbeat'));
   let requiredText = '';
   for (const item of required) {
     requiredText += `■ ${item.kind} ${item.id} (${item.source})\n${item.kind === 'ask' || item.source === 'auto-progress-heartbeat' ? clean(item.text) : clean(item.text).split(/\r?\n/).slice(0, 2).join(' ').slice(0, 220)}\n`;

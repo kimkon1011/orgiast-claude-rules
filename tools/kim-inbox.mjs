@@ -473,7 +473,7 @@ export function selectContext(items, { sessionId = '', now = Date.now(), sheetUr
     item.shownSessions = [...new Set([...item.shownSessions, sessionId])];
     item.shownCount++; item.lastShownAt = new Date(now).toISOString();
   }
-  return redactSecrets(displayPcNames(ownAskText + dailyText + requiredText + urgentText + text + footer, { home }));
+  return redactSecrets(displayPcNames(requiredText + ownAskText + dailyText + urgentText + text + footer, { home }));
 }
 export function oneScreenSummary(items) {
   const openItems = items.filter(i => i.status === 'open');

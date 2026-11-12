@@ -52,7 +52,7 @@ test('CLI stdout は仕様通り1行、改行なし', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'intra-turn-progress-cli-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const script = fileURLToPath(new URL('./intra-turn-progress-reminder.mjs', import.meta.url));
-  const env = { ...process.env, HOME: home, USERPROFILE: home, INTRA_TURN_PROGRESS_THRESHOLD: '1' };
+  const env = { ...process.env, HOME: home, USERPROFILE: home, INTRA_TURN_PROGRESS_THRESHOLD: '1', CLAUDE_HEADLESS: '', ORGIAST_HEADLESS_JOB: '' };
   const result = spawnSync(process.execPath, [script], { input: '{"session_id":"stdout"}', encoding: 'utf8', env });
   assert.equal(result.status, 0);
   assert.equal(result.stdout, REMINDER);

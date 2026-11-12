@@ -5,6 +5,9 @@ import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isUnattendedSession } from './lib/unattended-session.mjs';
+import { fileURLToPath } from 'node:url';
+import { mobilePushInstruction } from './lib/mobile-push-queue.mjs';
+import { resolveOwner } from './lib/fleet-owner.mjs';
 
 export const REMINDER = '【進捗報告リマインダー】user 向けチャットに1行の進捗（「X/Y 完了」「次に Z 処理」等）を出してください。memory intra-turn-progress-updates のルール。この後も3ツール呼出ごとに再提示されます。';
 
@@ -42,7 +45,11 @@ export function main(input, { home = os.homedir(), env = process.env, now = Date
     const sessionId = input?.session_id || input?.sessionId;
     if (!sessionId || isUnattendedSession(input, { home, env })) return { emitted: null, state: skipped };
     const state = tickCounter(counterFile(home, sessionId), resolveThreshold(env), now);
-    return { emitted: state.fired ? REMINDER : null, state };
+    const pushContext = mobilePushInstruction(home, {
+      now, owner: resolveOwner({ home }),
+      cliPath: fileURLToPath(new URL('./mobile-push-queue.mjs', import.meta.url)),
+    });
+    return { emitted: state.fired ? REMINDER : null, state, pushContext };
   } catch {
     return { emitted: null, state: skipped };
   }
@@ -52,7 +59,12 @@ async function run() {
   try {
     const raw = await readStdinWithTimeout(1000);
     const result = main(raw.trim() ? JSON.parse(raw) : {});
-    if (result.emitted) process.stdout.write(result.emitted);
+    if (result.pushContext) {
+      process.stdout.write(JSON.stringify({ hookSpecificOutput: {
+        hookEventName: 'PostToolUse',
+        additionalContext: [result.emitted, result.pushContext].filter(Boolean).join('\n'),
+      } }));
+    } else if (result.emitted) process.stdout.write(result.emitted);
   } catch {}
 }
 

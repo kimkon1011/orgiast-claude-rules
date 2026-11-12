@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
+import { successfulPollIsFresh } from './lib/fleet-poll-health.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { readInbox, hasDecisionRequest, mailCategory, presentMail, acquireLock, TERMINAL_STATUSES } from './fleet-mail.mjs';
@@ -57,7 +58,8 @@ export function selectContext(messages, { label = resolveFleetLabel(process.env.
 }
 export function buildContext(messages, options) { return selectContext(messages, options).context; }
 export function shouldReceivePoll(home, { now = Date.now } = {}) {
-  for (const name of ['.fleet-mail-last-poll.json', POLL_ATTEMPT_MARKER]) {
+  if (successfulPollIsFresh(home, POLL_STALE_MS, now)) return false;
+  for (const name of [POLL_ATTEMPT_MARKER]) {
     try { if (now() - fs.statSync(path.join(home, '.claude', name)).mtimeMs <= POLL_STALE_MS) return false; }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
   }

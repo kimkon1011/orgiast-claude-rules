@@ -1,0 +1,2090 @@
+{
+  "costStates": [
+    {
+      "sessionId": "084f6640-71d3-4a67-ac85-545d4f85dcf3",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 18,
+          "outputTokens": 9569,
+          "thinkingTokens": 664,
+          "cacheReadInputTokens": 675646,
+          "cacheCreationInputTokens": 80729,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 80729,
+          "webSearchRequests": 0,
+          "costUSD": 0.48620660000000004
+        }
+      },
+      "totalCostUSD": 0.48620660000000004,
+      "totalAPIDuration": 80667,
+      "totalToolDuration": 8101
+    },
+    {
+      "sessionId": "09e60945-79c5-4be6-98fc-0f91933a79df",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 40,
+          "outputTokens": 13680,
+          "thinkingTokens": 623,
+          "cacheReadInputTokens": 1440410,
+          "cacheCreationInputTokens": 71674,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 71674,
+          "webSearchRequests": 0,
+          "costUSD": 0.567617
+        }
+      },
+      "totalCostUSD": 0.567617,
+      "totalAPIDuration": 134603,
+      "totalToolDuration": 15539
+    },
+    {
+      "sessionId": "0fc4d6fa-5080-4111-9237-66eebc95911e",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 34,
+          "outputTokens": 8309,
+          "thinkingTokens": 1218,
+          "cacheReadInputTokens": 1069867,
+          "cacheCreationInputTokens": 59884,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 59884,
+          "webSearchRequests": 0,
+          "costUSD": 0.4296807
+        }
+      },
+      "totalCostUSD": 0.4296807,
+      "totalAPIDuration": 70578,
+      "totalToolDuration": 386203
+    },
+    {
+      "sessionId": "1248581d-49ce-4973-8458-8c36d5ae50ec",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 58,
+          "outputTokens": 17439,
+          "thinkingTokens": 756,
+          "cacheReadInputTokens": 2138385,
+          "cacheCreationInputTokens": 61754,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 61754,
+          "webSearchRequests": 0,
+          "costUSD": 0.6353605
+        }
+      },
+      "totalCostUSD": 0.6353605,
+      "totalAPIDuration": 159282,
+      "totalToolDuration": 37498
+    },
+    {
+      "sessionId": "179ac2e9-85d2-46b3-9bfc-5ec4139cae5c",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 16,
+          "outputTokens": 3967,
+          "thinkingTokens": 441,
+          "cacheReadInputTokens": 461729,
+          "cacheCreationInputTokens": 49748,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 49748,
+          "webSearchRequests": 0,
+          "costUSD": 0.28486690000000003
+        }
+      },
+      "totalCostUSD": 0.28486690000000003,
+      "totalAPIDuration": 32639,
+      "totalToolDuration": 2718
+    },
+    {
+      "sessionId": "1922bdcb-5f16-4153-9c81-1b51523f3fc1",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 16,
+          "outputTokens": 10050,
+          "thinkingTokens": 1483,
+          "cacheReadInputTokens": 633940,
+          "cacheCreationInputTokens": 85527,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 85527,
+          "webSearchRequests": 0,
+          "costUSD": 0.5060340000000001
+        }
+      },
+      "totalCostUSD": 0.5060340000000001,
+      "totalAPIDuration": 83590,
+      "totalToolDuration": 6324
+    },
+    {
+      "sessionId": "199ce4df-2a0f-49d6-ac81-b34b9c9215ad",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 36,
+          "outputTokens": 8775,
+          "thinkingTokens": 1306,
+          "cacheReadInputTokens": 1349697,
+          "cacheCreationInputTokens": 70042,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 70042,
+          "webSearchRequests": 0,
+          "costUSD": 0.5029596999999998
+        }
+      },
+      "totalCostUSD": 0.5029596999999998,
+      "totalAPIDuration": 86574,
+      "totalToolDuration": 173971
+    },
+    {
+      "sessionId": "1b487974-eb68-47c0-a156-ff6a98ee982c",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 12,
+          "outputTokens": 3518,
+          "thinkingTokens": 277,
+          "cacheReadInputTokens": 367102,
+          "cacheCreationInputTokens": 7922,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 7922,
+          "webSearchRequests": 0,
+          "costUSD": 0.1036022
+        }
+      },
+      "totalCostUSD": 0.1036022,
+      "totalAPIDuration": 31221,
+      "totalToolDuration": 1116
+    },
+    {
+      "sessionId": "1d64af03-14f9-4bf5-8215-aa08eaa271d5",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 26,
+          "outputTokens": 9015,
+          "thinkingTokens": 350,
+          "cacheReadInputTokens": 951410,
+          "cacheCreationInputTokens": 50023,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 50023,
+          "webSearchRequests": 0,
+          "costUSD": 0.38543499999999997
+        }
+      },
+      "totalCostUSD": 0.38543499999999997,
+      "totalAPIDuration": 81152,
+      "totalToolDuration": 161936
+    },
+    {
+      "sessionId": "1df2a214-a96e-4803-9af3-03de56d3767d",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 18,
+          "outputTokens": 3978,
+          "thinkingTokens": 695,
+          "cacheReadInputTokens": 537528,
+          "cacheCreationInputTokens": 64933,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 64933,
+          "webSearchRequests": 0,
+          "costUSD": 0.3533008000000001
+        }
+      },
+      "totalCostUSD": 0.3533008000000001,
+      "totalAPIDuration": 35523,
+      "totalToolDuration": 7282
+    },
+    {
+      "sessionId": "1f31b055-3992-4e0b-a4f2-533ccdbe8062",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 12,
+          "outputTokens": 3100,
+          "thinkingTokens": 25,
+          "cacheReadInputTokens": 341033,
+          "cacheCreationInputTokens": 34379,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 34379,
+          "webSearchRequests": 0,
+          "costUSD": 0.20264329999999997
+        }
+      },
+      "totalCostUSD": 0.20264329999999997,
+      "totalAPIDuration": 27159,
+      "totalToolDuration": 1337
+    },
+    {
+      "sessionId": "1f9da6bc-43c2-4bf9-9ac1-4b5723759422",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 12,
+          "outputTokens": 3475,
+          "thinkingTokens": 233,
+          "cacheReadInputTokens": 349525,
+          "cacheCreationInputTokens": 51301,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 51301,
+          "webSearchRequests": 0,
+          "costUSD": 0.27493049999999997
+        }
+      },
+      "totalCostUSD": 0.27493049999999997,
+      "totalAPIDuration": 31118,
+      "totalToolDuration": 278
+    },
+    {
+      "sessionId": "2c135560-b559-43a5-be62-685f01fb3859",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 14,
+          "outputTokens": 5621,
+          "thinkingTokens": 873,
+          "cacheReadInputTokens": 400173,
+          "cacheCreationInputTokens": 55360,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 55360,
+          "webSearchRequests": 0,
+          "costUSD": 0.3176953
+        }
+      },
+      "totalCostUSD": 0.3176953,
+      "totalAPIDuration": 42103,
+      "totalToolDuration": 4824
+    },
+    {
+      "sessionId": "3767bc25-2310-48e2-abdb-d8d8419c7af2",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 18,
+          "outputTokens": 5175,
+          "thinkingTokens": 537,
+          "cacheReadInputTokens": 525575,
+          "cacheCreationInputTokens": 55566,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 55566,
+          "webSearchRequests": 0,
+          "costUSD": 0.32660749999999994
+        }
+      },
+      "totalCostUSD": 0.32660749999999994,
+      "totalAPIDuration": 45984,
+      "totalToolDuration": 12862
+    },
+    {
+      "sessionId": "3dcfddc4-797f-4068-b41e-9112251ffe73",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 24,
+          "outputTokens": 6252,
+          "thinkingTokens": 444,
+          "cacheReadInputTokens": 792892,
+          "cacheCreationInputTokens": 42430,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 42430,
+          "webSearchRequests": 0,
+          "costUSD": 0.3115772
+        }
+      },
+      "totalCostUSD": 0.3115772,
+      "totalAPIDuration": 60425,
+      "totalToolDuration": 443807
+    },
+    {
+      "sessionId": "403b23b6-8b2d-4c39-8580-3cbebd0b9c1c",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 34,
+          "outputTokens": 11752,
+          "thinkingTokens": 892,
+          "cacheReadInputTokens": 1153981,
+          "cacheCreationInputTokens": 54861,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 54861,
+          "webSearchRequests": 0,
+          "costUSD": 0.4524300999999999
+        }
+      },
+      "totalCostUSD": 0.4524300999999999,
+      "totalAPIDuration": 98126,
+      "totalToolDuration": 7024
+    },
+    {
+      "sessionId": "419430c4-b58d-49bf-9312-3539c18ab624",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 36,
+          "outputTokens": 8654,
+          "thinkingTokens": 993,
+          "cacheReadInputTokens": 1098969,
+          "cacheCreationInputTokens": 62044,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 62044,
+          "webSearchRequests": 0,
+          "costUSD": 0.44468490000000005
+        }
+      },
+      "totalCostUSD": 0.44468490000000005,
+      "totalAPIDuration": 88530,
+      "totalToolDuration": 518975
+    },
+    {
+      "sessionId": "4eab7769-74df-40ac-9c54-c5f02e234a7f",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 36,
+          "outputTokens": 9073,
+          "thinkingTokens": 1378,
+          "cacheReadInputTokens": 1293667,
+          "cacheCreationInputTokens": 49686,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 49686,
+          "webSearchRequests": 0,
+          "costUSD": 0.4189127
+        }
+      },
+      "totalCostUSD": 0.4189127,
+      "totalAPIDuration": 96361,
+      "totalToolDuration": 286388
+    },
+    {
+      "sessionId": "4ee2f0eb-0589-4887-87cd-bb643d5ce7d2",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 32,
+          "outputTokens": 6715,
+          "thinkingTokens": 431,
+          "cacheReadInputTokens": 1085392,
+          "cacheCreationInputTokens": 60700,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 60700,
+          "webSearchRequests": 0,
+          "costUSD": 0.41855319999999996
+        }
+      },
+      "totalCostUSD": 0.41855319999999996,
+      "totalAPIDuration": 80139,
+      "totalToolDuration": 74887
+    },
+    {
+      "sessionId": "4f4ca40a-e7ac-4c6c-b630-671040a72c47",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 16,
+          "outputTokens": 3291,
+          "thinkingTokens": 154,
+          "cacheReadInputTokens": 368995,
+          "cacheCreationInputTokens": 33592,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 33592,
+          "webSearchRequests": 0,
+          "costUSD": 0.20420950000000002
+        }
+      },
+      "totalCostUSD": 0.20420950000000002,
+      "totalAPIDuration": 26652,
+      "totalToolDuration": 320029
+    },
+    {
+      "sessionId": "51033272-3d9e-468f-93dd-7147a5635372",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 14,
+          "outputTokens": 4315,
+          "thinkingTokens": 250,
+          "cacheReadInputTokens": 432579,
+          "cacheCreationInputTokens": 39544,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 39544,
+          "webSearchRequests": 0,
+          "costUSD": 0.2446119
+        }
+      },
+      "totalCostUSD": 0.2446119,
+      "totalAPIDuration": 40315,
+      "totalToolDuration": 1063
+    },
+    {
+      "sessionId": "51ac43c4-ce10-4ad0-a9f7-4cefcd5bac70",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 24,
+          "outputTokens": 4659,
+          "thinkingTokens": 526,
+          "cacheReadInputTokens": 825625,
+          "cacheCreationInputTokens": 43605,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 43605,
+          "webSearchRequests": 0,
+          "costUSD": 0.3036205
+        }
+      },
+      "totalCostUSD": 0.3036205,
+      "totalAPIDuration": 61985,
+      "totalToolDuration": 41298
+    },
+    {
+      "sessionId": "527d8650-c204-48ad-874c-29b753c7cbaa",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 38,
+          "outputTokens": 13895,
+          "thinkingTokens": 969,
+          "cacheReadInputTokens": 1281255,
+          "cacheCreationInputTokens": 56103,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 56103,
+          "webSearchRequests": 0,
+          "costUSD": 0.4915635
+        }
+      },
+      "totalCostUSD": 0.4915635,
+      "totalAPIDuration": 129830,
+      "totalToolDuration": 9960
+    },
+    {
+      "sessionId": "5be47786-4767-4f48-99e4-d6eeef19d887",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 14,
+          "outputTokens": 2553,
+          "thinkingTokens": 111,
+          "cacheReadInputTokens": 439309,
+          "cacheCreationInputTokens": 8535,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 8535,
+          "webSearchRequests": 0,
+          "costUSD": 0.1036289
+        }
+      },
+      "totalCostUSD": 0.1036289,
+      "totalAPIDuration": 22809,
+      "totalToolDuration": 4831
+    },
+    {
+      "sessionId": "5f24147b-5671-4486-a872-31eb09809e2e",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 12,
+          "outputTokens": 2459,
+          "thinkingTokens": 324,
+          "cacheReadInputTokens": 371292,
+          "cacheCreationInputTokens": 6705,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 6705,
+          "webSearchRequests": 0,
+          "costUSD": 0.08856320000000001
+        }
+      },
+      "totalCostUSD": 0.08856320000000001,
+      "totalAPIDuration": 25505,
+      "totalToolDuration": 2603
+    },
+    {
+      "sessionId": "6a6b6f2f-4037-4dff-b7bd-8e55e7cf9d03",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 18,
+          "outputTokens": 7913,
+          "thinkingTokens": 436,
+          "cacheReadInputTokens": 575930,
+          "cacheCreationInputTokens": 64605,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 64605,
+          "webSearchRequests": 0,
+          "costUSD": 0.395179
+        }
+      },
+      "totalCostUSD": 0.395179,
+      "totalAPIDuration": 63429,
+      "totalToolDuration": 14172
+    },
+    {
+      "sessionId": "6da7645a-518c-4089-b78e-6bef08f9590b",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 26,
+          "outputTokens": 5445,
+          "thinkingTokens": 475,
+          "cacheReadInputTokens": 883159,
+          "cacheCreationInputTokens": 44864,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 44864,
+          "webSearchRequests": 0,
+          "costUSD": 0.3222739
+        }
+      },
+      "totalCostUSD": 0.3222739,
+      "totalAPIDuration": 76792,
+      "totalToolDuration": 7572
+    },
+    {
+      "sessionId": "744ed19b-bb62-4171-9f23-45d76587abe4",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 24,
+          "outputTokens": 5726,
+          "thinkingTokens": 343,
+          "cacheReadInputTokens": 834216,
+          "cacheCreationInputTokens": 46847,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 46847,
+          "webSearchRequests": 0,
+          "costUSD": 0.3281176
+        }
+      },
+      "totalCostUSD": 0.3281176,
+      "totalAPIDuration": 61107,
+      "totalToolDuration": 107217
+    },
+    {
+      "sessionId": "774ff7a2-4053-4a9e-aa24-09140ea2a5f7",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 24,
+          "outputTokens": 6903,
+          "thinkingTokens": 562,
+          "cacheReadInputTokens": 831794,
+          "cacheCreationInputTokens": 60588,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 60588,
+          "webSearchRequests": 0,
+          "costUSD": 0.39460939999999994
+        }
+      },
+      "totalCostUSD": 0.39460939999999994,
+      "totalAPIDuration": 70422,
+      "totalToolDuration": 235437
+    },
+    {
+      "sessionId": "79a66cba-82c1-419f-ad8e-3e2673fbf97e",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 16,
+          "outputTokens": 9191,
+          "thinkingTokens": 772,
+          "cacheReadInputTokens": 506306,
+          "cacheCreationInputTokens": 64975,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 64975,
+          "webSearchRequests": 0,
+          "costUSD": 0.4024725999999999
+        }
+      },
+      "totalCostUSD": 0.4024725999999999,
+      "totalAPIDuration": 74971,
+      "totalToolDuration": 41620
+    },
+    {
+      "sessionId": "79d26c87-ae4a-4fc7-9c86-a757e984456f",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 38,
+          "outputTokens": 10911,
+          "thinkingTokens": 597,
+          "cacheReadInputTokens": 1416148,
+          "cacheCreationInputTokens": 26975,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 26975,
+          "webSearchRequests": 0,
+          "costUSD": 0.3587008
+        }
+      },
+      "totalCostUSD": 0.3587008,
+      "totalAPIDuration": 116780,
+      "totalToolDuration": 10000
+    },
+    {
+      "sessionId": "7c12fcda-0a39-4802-9e90-80b47de2a520",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 10,
+          "outputTokens": 2393,
+          "thinkingTokens": 145,
+          "cacheReadInputTokens": 267802,
+          "cacheCreationInputTokens": 45437,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 45437,
+          "webSearchRequests": 0,
+          "costUSD": 0.23247820000000002
+        }
+      },
+      "totalCostUSD": 0.23247820000000002,
+      "totalAPIDuration": 19112,
+      "totalToolDuration": 4349
+    },
+    {
+      "sessionId": "7edb836a-7a45-43d4-9807-be647b94808e",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 10,
+          "outputTokens": 3280,
+          "thinkingTokens": 26,
+          "cacheReadInputTokens": 296443,
+          "cacheCreationInputTokens": 36185,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 36185,
+          "webSearchRequests": 0,
+          "costUSD": 0.20720429999999998
+        }
+      },
+      "totalCostUSD": 0.20720429999999998,
+      "totalAPIDuration": 27253,
+      "totalToolDuration": 3717
+    },
+    {
+      "sessionId": "8036d1d1-d92a-4aa3-b1de-8726b7f9bc81",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 12,
+          "outputTokens": 2209,
+          "thinkingTokens": 176,
+          "cacheReadInputTokens": 364632,
+          "cacheCreationInputTokens": 6082,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 6082,
+          "webSearchRequests": 0,
+          "costUSD": 0.0829052
+        }
+      },
+      "totalCostUSD": 0.0829052,
+      "totalAPIDuration": 19981,
+      "totalToolDuration": 1584
+    },
+    {
+      "sessionId": "817a2d97-c457-4378-affc-75f52a896a90",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 24,
+          "outputTokens": 6285,
+          "thinkingTokens": 473,
+          "cacheReadInputTokens": 790787,
+          "cacheCreationInputTokens": 43296,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 43296,
+          "webSearchRequests": 0,
+          "costUSD": 0.3151607
+        }
+      },
+      "totalCostUSD": 0.3151607,
+      "totalAPIDuration": 51523,
+      "totalToolDuration": 4398
+    },
+    {
+      "sessionId": "825eed9e-22e6-4198-a213-1eb663488e7a",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 34,
+          "outputTokens": 11306,
+          "thinkingTokens": 964,
+          "cacheReadInputTokens": 1250480,
+          "cacheCreationInputTokens": 54517,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 54517,
+          "webSearchRequests": 0,
+          "costUSD": 0.4562440000000001
+        }
+      },
+      "totalCostUSD": 0.4562440000000001,
+      "totalAPIDuration": 97232,
+      "totalToolDuration": 10990
+    },
+    {
+      "sessionId": "87673d80-9329-4f9f-87f7-b269fbff4b6b",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 24,
+          "outputTokens": 6377,
+          "thinkingTokens": 529,
+          "cacheReadInputTokens": 717793,
+          "cacheCreationInputTokens": 64273,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 64273,
+          "webSearchRequests": 0,
+          "costUSD": 0.3926893
+        }
+      },
+      "totalCostUSD": 0.3926893,
+      "totalAPIDuration": 57831,
+      "totalToolDuration": 11330
+    },
+    {
+      "sessionId": "88230f02-643d-4131-acf4-68ce65f7afda",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 20,
+          "outputTokens": 3540,
+          "thinkingTokens": 339,
+          "cacheReadInputTokens": 611373,
+          "cacheCreationInputTokens": 54324,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 54324,
+          "webSearchRequests": 0,
+          "costUSD": 0.3138733
+        }
+      },
+      "totalCostUSD": 0.3138733,
+      "totalAPIDuration": 44417,
+      "totalToolDuration": 21109
+    },
+    {
+      "sessionId": "8cdd1247-ba61-4a17-9ea2-fcfcee990324",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 10,
+          "outputTokens": 1547,
+          "thinkingTokens": 25,
+          "cacheReadInputTokens": 249616,
+          "cacheCreationInputTokens": 39541,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 39541,
+          "webSearchRequests": 0,
+          "costUSD": 0.19861559999999998
+        }
+      },
+      "totalCostUSD": 0.19861559999999998,
+      "totalAPIDuration": 18577,
+      "totalToolDuration": 4474
+    },
+    {
+      "sessionId": "8d4abdba-cc9e-4852-b0d6-8022c5577974",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 10,
+          "outputTokens": 2135,
+          "thinkingTokens": 240,
+          "cacheReadInputTokens": 301967,
+          "cacheCreationInputTokens": 5049,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 5049,
+          "webSearchRequests": 0,
+          "costUSD": 0.0717627
+        }
+      },
+      "totalCostUSD": 0.0717627,
+      "totalAPIDuration": 23021,
+      "totalToolDuration": 1524
+    },
+    {
+      "sessionId": "a073a17e-b246-47ea-a741-37d8da125df0",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 12,
+          "outputTokens": 2893,
+          "thinkingTokens": 303,
+          "cacheReadInputTokens": 373778,
+          "cacheCreationInputTokens": 37956,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 37956,
+          "webSearchRequests": 0,
+          "costUSD": 0.21815579999999996
+        }
+      },
+      "totalCostUSD": 0.21815579999999996,
+      "totalAPIDuration": 27417,
+      "totalToolDuration": 6028
+    },
+    {
+      "sessionId": "a49fdcce-2ec3-40ca-bc23-c7c5e39fbdbc",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 12,
+          "outputTokens": 3665,
+          "thinkingTokens": 137,
+          "cacheReadInputTokens": 345392,
+          "cacheCreationInputTokens": 36162,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 36162,
+          "webSearchRequests": 0,
+          "costUSD": 0.2158612
+        }
+      },
+      "totalCostUSD": 0.2158612,
+      "totalAPIDuration": 28923,
+      "totalToolDuration": 3590
+    },
+    {
+      "sessionId": "a55f89f0-9abf-47d3-8380-43a77d8e3a46",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 10,
+          "outputTokens": 2156,
+          "thinkingTokens": 174,
+          "cacheReadInputTokens": 276205,
+          "cacheCreationInputTokens": 32211,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 32211,
+          "webSearchRequests": 0,
+          "costUSD": 0.17804449999999997
+        }
+      },
+      "totalCostUSD": 0.17804449999999997,
+      "totalAPIDuration": 21695,
+      "totalToolDuration": 1087
+    },
+    {
+      "sessionId": "b0edd65f-50d2-4298-8968-471292106ffc",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 16,
+          "outputTokens": 9773,
+          "thinkingTokens": 1167,
+          "cacheReadInputTokens": 599272,
+          "cacheCreationInputTokens": 82268,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 82268,
+          "webSearchRequests": 0,
+          "costUSD": 0.48676120000000006
+        }
+      },
+      "totalCostUSD": 0.48676120000000006,
+      "totalAPIDuration": 75858,
+      "totalToolDuration": 10395
+    },
+    {
+      "sessionId": "b4b08a13-18b8-4e7a-b996-67048e486801",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 28,
+          "outputTokens": 6618,
+          "thinkingTokens": 140,
+          "cacheReadInputTokens": 919846,
+          "cacheCreationInputTokens": 57542,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 57542,
+          "webSearchRequests": 0,
+          "costUSD": 0.3883886
+        }
+      },
+      "totalCostUSD": 0.3883886,
+      "totalAPIDuration": 64400,
+      "totalToolDuration": 110973
+    },
+    {
+      "sessionId": "b824a543-538d-4915-9559-6a5528e31be4",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 30,
+          "outputTokens": 10603,
+          "thinkingTokens": 2595,
+          "cacheReadInputTokens": 1109463,
+          "cacheCreationInputTokens": 72444,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 72444,
+          "webSearchRequests": 0,
+          "costUSD": 0.5068123000000001
+        }
+      },
+      "totalCostUSD": 0.5068123000000001,
+      "totalAPIDuration": 107680,
+      "totalToolDuration": 1138920
+    },
+    {
+      "sessionId": "b997c183-b4a7-47f9-a1de-60712215139b",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 10,
+          "outputTokens": 1904,
+          "thinkingTokens": 70,
+          "cacheReadInputTokens": 279555,
+          "cacheCreationInputTokens": 32262,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 32262,
+          "webSearchRequests": 0,
+          "costUSD": 0.17606349999999998
+        }
+      },
+      "totalCostUSD": 0.17606349999999998,
+      "totalAPIDuration": 16392,
+      "totalToolDuration": 3764
+    },
+    {
+      "sessionId": "bb7ab4d2-df98-478b-ac2e-d8ff1885d1b3",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 24,
+          "outputTokens": 5911,
+          "thinkingTokens": 328,
+          "cacheReadInputTokens": 830938,
+          "cacheCreationInputTokens": 61451,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 61451,
+          "webSearchRequests": 0,
+          "costUSD": 0.38805580000000006
+        }
+      },
+      "totalCostUSD": 0.38805580000000006,
+      "totalAPIDuration": 51499,
+      "totalToolDuration": 185188
+    },
+    {
+      "sessionId": "bd3a6b09-ead6-4a1f-a070-532749aa46be",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 22,
+          "outputTokens": 5104,
+          "thinkingTokens": 412,
+          "cacheReadInputTokens": 703770,
+          "cacheCreationInputTokens": 39829,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 39829,
+          "webSearchRequests": 0,
+          "costUSD": 0.280777
+        }
+      },
+      "totalCostUSD": 0.280777,
+      "totalAPIDuration": 61098,
+      "totalToolDuration": 6572
+    },
+    {
+      "sessionId": "bd5ff615-cf5a-4928-907d-17f766dd6f7a",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 34,
+          "outputTokens": 10219,
+          "thinkingTokens": 601,
+          "cacheReadInputTokens": 1015926,
+          "cacheCreationInputTokens": 53332,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 53332,
+          "webSearchRequests": 0,
+          "costUSD": 0.4171786
+        }
+      },
+      "totalCostUSD": 0.4171786,
+      "totalAPIDuration": 88761,
+      "totalToolDuration": 7516
+    },
+    {
+      "sessionId": "c25ef2ad-024a-4b20-bfa2-6ffa12c25dbd",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 8,
+          "outputTokens": 1946,
+          "thinkingTokens": 132,
+          "cacheReadInputTokens": 248096,
+          "cacheCreationInputTokens": 8539,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 8539,
+          "webSearchRequests": 0,
+          "costUSD": 0.07844160000000001
+        }
+      },
+      "totalCostUSD": 0.07844160000000001,
+      "totalAPIDuration": 17715,
+      "totalToolDuration": 52
+    },
+    {
+      "sessionId": "c4568b8c-a24b-4db5-8d00-b149c43d167d",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 22,
+          "outputTokens": 4690,
+          "thinkingTokens": 356,
+          "cacheReadInputTokens": 669618,
+          "cacheCreationInputTokens": 46691,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 46691,
+          "webSearchRequests": 0,
+          "costUSD": 0.3006698
+        },
+        "claude-haiku-5-5": {
+          "inputTokens": 577,
+          "outputTokens": 4174,
+          "thinkingTokens": 1506,
+          "cacheReadInputTokens": 42256,
+          "cacheCreationInputTokens": 33388,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "webSearchRequests": 4,
+          "costUSD": 0.04674076
+        }
+      },
+      "totalCostUSD": 0.34741056000000003,
+      "totalAPIDuration": 69035,
+      "totalToolDuration": 34772
+    },
+    {
+      "sessionId": "ca909dc7-ee93-4c79-9a17-9b2e1495d882",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 14,
+          "outputTokens": 2687,
+          "thinkingTokens": 71,
+          "cacheReadInputTokens": 436929,
+          "cacheCreationInputTokens": 7357,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 7357,
+          "webSearchRequests": 0,
+          "costUSD": 0.10001890000000001
+        }
+      },
+      "totalCostUSD": 0.10001890000000001,
+      "totalAPIDuration": 24469,
+      "totalToolDuration": 4316
+    },
+    {
+      "sessionId": "cd15e3a5-8321-4d4f-bef4-52d1b642077b",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 46,
+          "outputTokens": 12322,
+          "thinkingTokens": 810,
+          "cacheReadInputTokens": 1581710,
+          "cacheCreationInputTokens": 77997,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 77997,
+          "webSearchRequests": 0,
+          "costUSD": 0.5934710000000001
+        },
+        "claude-haiku-5-5": {
+          "inputTokens": 578,
+          "outputTokens": 3949,
+          "thinkingTokens": 1174,
+          "cacheReadInputTokens": 21128,
+          "cacheCreationInputTokens": 54520,
+          "cacheCreationEphemeral5mInputTokens": 21128,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "webSearchRequests": 4,
+          "costUSD": 0.049058580000000004
+        }
+      },
+      "totalCostUSD": 0.6425295799999999,
+      "totalAPIDuration": 128112,
+      "totalToolDuration": 32933
+    },
+    {
+      "sessionId": "cf2f70ca-a11e-44f1-b2eb-aadcefa7809b",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 10,
+          "outputTokens": 1640,
+          "thinkingTokens": 81,
+          "cacheReadInputTokens": 279367,
+          "cacheCreationInputTokens": 31867,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 31867,
+          "webSearchRequests": 0,
+          "costUSD": 0.1718247
+        }
+      },
+      "totalCostUSD": 0.1718247,
+      "totalAPIDuration": 15270,
+      "totalToolDuration": 3366
+    },
+    {
+      "sessionId": "d29a69ef-6ee2-4061-a31d-9899f02c5ee1",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 14,
+          "outputTokens": 3311,
+          "thinkingTokens": 48,
+          "cacheReadInputTokens": 442613,
+          "cacheCreationInputTokens": 38092,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 38092,
+          "webSearchRequests": 0,
+          "costUSD": 0.2297673
+        }
+      },
+      "totalCostUSD": 0.2297673,
+      "totalAPIDuration": 28507,
+      "totalToolDuration": 5115
+    },
+    {
+      "sessionId": "d53926a2-df65-4c95-904c-a9eb26369ff0",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 40,
+          "outputTokens": 7444,
+          "thinkingTokens": 1434,
+          "cacheReadInputTokens": 1417391,
+          "cacheCreationInputTokens": 64717,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 64717,
+          "webSearchRequests": 0,
+          "costUSD": 0.4751271000000001
+        }
+      },
+      "totalCostUSD": 0.4751271000000001,
+      "totalAPIDuration": 86290,
+      "totalToolDuration": 476936
+    },
+    {
+      "sessionId": "d554a56f-8234-4fbf-a2c7-e101d99e382b",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 24,
+          "outputTokens": 4479,
+          "thinkingTokens": 117,
+          "cacheReadInputTokens": 742196,
+          "cacheCreationInputTokens": 50782,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 50782,
+          "webSearchRequests": 0,
+          "costUSD": 0.3221856
+        }
+      },
+      "totalCostUSD": 0.3221856,
+      "totalAPIDuration": 45853,
+      "totalToolDuration": 95112
+    },
+    {
+      "sessionId": "d7f53a1a-aa43-4d95-9e87-1294b91685d8",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 38,
+          "outputTokens": 10264,
+          "thinkingTokens": 1429,
+          "cacheReadInputTokens": 1235443,
+          "cacheCreationInputTokens": 69628,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 69628,
+          "webSearchRequests": 0,
+          "costUSD": 0.5047723
+        }
+      },
+      "totalCostUSD": 0.5047723,
+      "totalAPIDuration": 85341,
+      "totalToolDuration": 12763
+    },
+    {
+      "sessionId": "d9166d37-61ae-466a-ac0b-cde67ba87e9a",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 6,
+          "outputTokens": 1369,
+          "thinkingTokens": 0,
+          "cacheReadInputTokens": 155542,
+          "cacheCreationInputTokens": 32945,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 32945,
+          "webSearchRequests": 0,
+          "costUSD": 0.1610362
+        }
+      },
+      "totalCostUSD": 0.1610362,
+      "totalAPIDuration": 12749,
+      "totalToolDuration": 5898
+    },
+    {
+      "sessionId": "ded10565-2d1d-4ac7-8af8-2f8d21129e47",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 36,
+          "outputTokens": 8340,
+          "thinkingTokens": 920,
+          "cacheReadInputTokens": 1370996,
+          "cacheCreationInputTokens": 54824,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 54824,
+          "webSearchRequests": 0,
+          "costUSD": 0.4398676000000001
+        }
+      },
+      "totalCostUSD": 0.4398676000000001,
+      "totalAPIDuration": 90473,
+      "totalToolDuration": 212342
+    },
+    {
+      "sessionId": "e16342cf-5559-41b4-ac80-753b2931b23d",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 16,
+          "outputTokens": 2983,
+          "thinkingTokens": 301,
+          "cacheReadInputTokens": 474774,
+          "cacheCreationInputTokens": 48375,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 48375,
+          "webSearchRequests": 0,
+          "costUSD": 0.2708394
+        }
+      },
+      "totalCostUSD": 0.2708394,
+      "totalAPIDuration": 26885,
+      "totalToolDuration": 5134
+    },
+    {
+      "sessionId": "e1b19ac2-cc2d-4d33-9fa6-6f72f34d5aa4",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 32,
+          "outputTokens": 8910,
+          "thinkingTokens": 753,
+          "cacheReadInputTokens": 1072514,
+          "cacheCreationInputTokens": 50653,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 50653,
+          "webSearchRequests": 0,
+          "costUSD": 0.3990274000000001
+        }
+      },
+      "totalCostUSD": 0.3990274000000001,
+      "totalAPIDuration": 80194,
+      "totalToolDuration": 8178
+    },
+    {
+      "sessionId": "e82d01e9-6684-4040-91e1-054b196e968e",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 12,
+          "outputTokens": 2163,
+          "thinkingTokens": 127,
+          "cacheReadInputTokens": 356061,
+          "cacheCreationInputTokens": 35758,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 35758,
+          "webSearchRequests": 0,
+          "costUSD": 0.2002921
+        }
+      },
+      "totalCostUSD": 0.2002921,
+      "totalAPIDuration": 23023,
+      "totalToolDuration": 4933
+    },
+    {
+      "sessionId": "ebc1a093-7827-4391-9022-e459b8a64ac5",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 24,
+          "outputTokens": 6344,
+          "thinkingTokens": 533,
+          "cacheReadInputTokens": 761350,
+          "cacheCreationInputTokens": 55047,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 55047,
+          "webSearchRequests": 0,
+          "costUSD": 0.359811
+        }
+      },
+      "totalCostUSD": 0.359811,
+      "totalAPIDuration": 53255,
+      "totalToolDuration": 13919
+    },
+    {
+      "sessionId": "ec04f386-e5c1-4fcc-9958-f9996856e3d2",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 20,
+          "outputTokens": 12899,
+          "thinkingTokens": 1514,
+          "cacheReadInputTokens": 838452,
+          "cacheCreationInputTokens": 95829,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 95829,
+          "webSearchRequests": 0,
+          "costUSD": 0.5961912
+        }
+      },
+      "totalCostUSD": 0.5961912,
+      "totalAPIDuration": 104103,
+      "totalToolDuration": 20739
+    },
+    {
+      "sessionId": "eda891ad-76b2-4b1c-ae0c-e2f34f4b4640",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 12,
+          "outputTokens": 2910,
+          "thinkingTokens": 218,
+          "cacheReadInputTokens": 344056,
+          "cacheCreationInputTokens": 34551,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 34551,
+          "webSearchRequests": 0,
+          "costUSD": 0.2017336
+        }
+      },
+      "totalCostUSD": 0.2017336,
+      "totalAPIDuration": 24295,
+      "totalToolDuration": 3730
+    },
+    {
+      "sessionId": "eebbf60d-2ed7-49a5-a13d-9d3840d6b1be",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 16,
+          "outputTokens": 2265,
+          "thinkingTokens": 42,
+          "cacheReadInputTokens": 469605,
+          "cacheCreationInputTokens": 34311,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 34311,
+          "webSearchRequests": 0,
+          "costUSD": 0.2068865
+        }
+      },
+      "totalCostUSD": 0.2068865,
+      "totalAPIDuration": 25840,
+      "totalToolDuration": 2460
+    },
+    {
+      "sessionId": "fa26be37-0d0d-4492-870c-fabc67e15a87",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 32,
+          "outputTokens": 5950,
+          "thinkingTokens": 360,
+          "cacheReadInputTokens": 1056182,
+          "cacheCreationInputTokens": 56657,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 56657,
+          "webSearchRequests": 0,
+          "costUSD": 0.39181019999999994
+        }
+      },
+      "totalCostUSD": 0.39181019999999994,
+      "totalAPIDuration": 74019,
+      "totalToolDuration": 11553
+    },
+    {
+      "sessionId": "fc412954-5afc-4a6b-9223-d0404594514e",
+      "ts": "",
+      "modelUsage": {
+        "claude-sonnet-5-5": {
+          "inputTokens": 14,
+          "outputTokens": 4576,
+          "thinkingTokens": 443,
+          "cacheReadInputTokens": 463207,
+          "cacheCreationInputTokens": 44992,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 44992,
+          "webSearchRequests": 0,
+          "costUSD": 0.2720767
+        }
+      },
+      "totalCostUSD": 0.2720767,
+      "totalAPIDuration": 33207,
+      "totalToolDuration": 4262
+    },
+    {
+      "sessionId": "8af06bca-3686-4a0d-bfe5-799f3d9076b4",
+      "ts": "",
+      "modelUsage": {
+        "claude-haiku-5-5": {
+          "inputTokens": 2,
+          "outputTokens": 200,
+          "thinkingTokens": 196,
+          "cacheReadInputTokens": 18203,
+          "cacheCreationInputTokens": 28039,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 28039,
+          "webSearchRequests": 0,
+          "costUSD": 0.00589003
+        }
+      },
+      "totalCostUSD": 0.00589003,
+      "totalAPIDuration": 2224,
+      "totalToolDuration": 0
+    },
+    {
+      "sessionId": "968ec006-6eb8-45c0-9dd9-dc79527a6e15",
+      "ts": "",
+      "modelUsage": {
+        "claude-haiku-5-5": {
+          "inputTokens": 2,
+          "outputTokens": 257,
+          "thinkingTokens": 253,
+          "cacheReadInputTokens": 19557,
+          "cacheCreationInputTokens": 42521,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 42521,
+          "webSearchRequests": 0,
+          "costUSD": 0.008828470000000001
+        }
+      },
+      "totalCostUSD": 0.008828470000000001,
+      "totalAPIDuration": 2663,
+      "totalToolDuration": 0
+    },
+    {
+      "sessionId": "09977dce-113b-430b-a356-ae224676714c",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-4-8": {
+          "inputTokens": 26,
+          "outputTokens": 18577,
+          "thinkingTokens": 9246,
+          "cacheReadInputTokens": 1981354,
+          "cacheCreationInputTokens": 146541,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 146541,
+          "webSearchRequests": 0,
+          "costUSD": 2.9206420000000004
+        },
+        "claude-haiku-5-5": {
+          "inputTokens": 108280,
+          "outputTokens": 13828,
+          "thinkingTokens": 8332,
+          "cacheReadInputTokens": 220421,
+          "cacheCreationInputTokens": 80573,
+          "cacheCreationEphemeral5mInputTokens": 80573,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.030017835000000003
+        }
+      },
+      "totalCostUSD": 2.950659835,
+      "totalAPIDuration": 374956,
+      "totalToolDuration": 49953
+    },
+    {
+      "sessionId": "16930ded-ed55-4f8a-82af-73e4eb92d93b",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-5-5": {
+          "inputTokens": 3927,
+          "outputTokens": 101411,
+          "thinkingTokens": 15518,
+          "cacheReadInputTokens": 35711850,
+          "cacheCreationInputTokens": 2237258,
+          "cacheCreationEphemeral5mInputTokens": 430,
+          "cacheCreationEphemeral1hInputTokens": 2236828,
+          "webSearchRequests": 0,
+          "costUSD": 27.08307199999999
+        }
+      },
+      "totalCostUSD": 27.08307199999999,
+      "totalAPIDuration": 1228788,
+      "totalToolDuration": 602005
+    },
+    {
+      "sessionId": "18cdc51d-5da1-450a-b611-23a8b2674e9c",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-4-7": {
+          "inputTokens": 36,
+          "outputTokens": 15128,
+          "thinkingTokens": 4979,
+          "cacheReadInputTokens": 6314108,
+          "cacheCreationInputTokens": 434303,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 434303,
+          "webSearchRequests": 0,
+          "costUSD": 7.878464000000001
+        }
+      },
+      "totalCostUSD": 7.878464000000001,
+      "totalAPIDuration": 256099,
+      "totalToolDuration": 165989
+    },
+    {
+      "sessionId": "1f988a9e-0543-40d8-abd1-16011f162b1f",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-5-5": {
+          "inputTokens": 300,
+          "outputTokens": 109139,
+          "thinkingTokens": 18097,
+          "cacheReadInputTokens": 41544551,
+          "cacheCreationInputTokens": 1691282,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 1691282,
+          "webSearchRequests": 0,
+          "costUSD": 24.023146199999996
+        }
+      },
+      "totalCostUSD": 24.023146199999996,
+      "totalAPIDuration": 1133997,
+      "totalToolDuration": 1084732
+    },
+    {
+      "sessionId": "2276036b-fc58-408a-b2c0-fbebde55e09e",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-4-8": {
+          "inputTokens": 32,
+          "outputTokens": 40215,
+          "thinkingTokens": 26579,
+          "cacheReadInputTokens": 4401160,
+          "cacheCreationInputTokens": 677641,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 677641,
+          "webSearchRequests": 0,
+          "costUSD": 9.982525
+        }
+      },
+      "totalCostUSD": 9.982525,
+      "totalAPIDuration": 730382,
+      "totalToolDuration": 10955
+    },
+    {
+      "sessionId": "276d4490-9f1d-4d8a-b0b4-45ba6f6f5795",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-5-5": {
+          "inputTokens": 4,
+          "outputTokens": 969,
+          "thinkingTokens": 101,
+          "cacheReadInputTokens": 263303,
+          "cacheCreationInputTokens": 190848,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 190848,
+          "webSearchRequests": 0,
+          "costUSD": 1.5988406
+        }
+      },
+      "totalCostUSD": 1.5988406,
+      "totalAPIDuration": 11350,
+      "totalToolDuration": 2317
+    },
+    {
+      "sessionId": "2dee960d-abee-4989-ba47-0ebd13bfcfb8",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-5-5": {
+          "inputTokens": 2414,
+          "outputTokens": 82721,
+          "thinkingTokens": 11291,
+          "cacheReadInputTokens": 28035063,
+          "cacheCreationInputTokens": 374277,
+          "cacheCreationEphemeral5mInputTokens": 325,
+          "cacheCreationEphemeral1hInputTokens": 373952,
+          "webSearchRequests": 0,
+          "costUSD": 10.264329600000002
+        }
+      },
+      "totalCostUSD": 10.264329600000002,
+      "totalAPIDuration": 807831,
+      "totalToolDuration": 1215567
+    },
+    {
+      "sessionId": "34ad93f9-7914-4c20-9156-7af31f67e745",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-5-5": {
+          "inputTokens": 58,
+          "outputTokens": 16897,
+          "thinkingTokens": 3841,
+          "cacheReadInputTokens": 3619085,
+          "cacheCreationInputTokens": 133804,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 133804,
+          "webSearchRequests": 0,
+          "costUSD": 2.1324210000000003
+        }
+      },
+      "totalCostUSD": 2.1324210000000003,
+      "totalAPIDuration": 174695,
+      "totalToolDuration": 215144
+    },
+    {
+      "sessionId": "37a87c55-56dd-443e-8f66-0c14d06a116e",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-4-8": {
+          "inputTokens": 4495,
+          "outputTokens": 11553,
+          "thinkingTokens": 3565,
+          "cacheReadInputTokens": 687781,
+          "cacheCreationInputTokens": 194213,
+          "cacheCreationEphemeral5mInputTokens": 1114,
+          "cacheCreationEphemeral1hInputTokens": 193099,
+          "webSearchRequests": 0,
+          "costUSD": 2.593143
+        }
+      },
+      "totalCostUSD": 2.593143,
+      "totalAPIDuration": 181571,
+      "totalToolDuration": 0
+    },
+    {
+      "sessionId": "4e0a0aa2-fb11-46a1-a346-550e25f2c73a",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-5-5": {
+          "inputTokens": 3164,
+          "outputTokens": 22354,
+          "thinkingTokens": 4420,
+          "cacheReadInputTokens": 5369159,
+          "cacheCreationInputTokens": 542417,
+          "cacheCreationEphemeral5mInputTokens": 2097,
+          "cacheCreationEphemeral1hInputTokens": 540320,
+          "webSearchRequests": 0,
+          "costUSD": 5.8666128
+        }
+      },
+      "totalCostUSD": 5.8666128,
+      "totalAPIDuration": 250890,
+      "totalToolDuration": 325941
+    },
+    {
+      "sessionId": "5a578b60-309c-4c47-98aa-dea4d9b28fc4",
+      "ts": "",
+      "modelUsage": {
+        "claude-haiku-5-5": {
+          "inputTokens": 1080,
+          "outputTokens": 30,
+          "thinkingTokens": 0,
+          "cacheReadInputTokens": 1777,
+          "cacheCreationInputTokens": 0,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.00014077000000000002
+        },
+        "claude-opus-5-5": {
+          "inputTokens": 78,
+          "outputTokens": 16923,
+          "thinkingTokens": 2513,
+          "cacheReadInputTokens": 4548138,
+          "cacheCreationInputTokens": 125787,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 125787,
+          "webSearchRequests": 0,
+          "costUSD": 2.2546956
+        }
+      },
+      "totalCostUSD": 2.25483637,
+      "totalAPIDuration": 177667,
+      "totalToolDuration": 244359
+    },
+    {
+      "sessionId": "6e5fd284-c4cc-48a9-a0e4-fec0a0f0ea21",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-4-8": {
+          "inputTokens": 3099,
+          "outputTokens": 143949,
+          "thinkingTokens": 99528,
+          "cacheReadInputTokens": 24707175,
+          "cacheCreationInputTokens": 488329,
+          "cacheCreationEphemeral5mInputTokens": 4502,
+          "cacheCreationEphemeral1hInputTokens": 483827,
+          "webSearchRequests": 0,
+          "costUSD": 20.834214999999993
+        }
+      },
+      "totalCostUSD": 20.834214999999993,
+      "totalAPIDuration": 2286960,
+      "totalToolDuration": 738189
+    },
+    {
+      "sessionId": "76b59c96-23ee-42ec-a8ab-012eaa591b0b",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-5-5": {
+          "inputTokens": 2387,
+          "outputTokens": 35960,
+          "thinkingTokens": 5221,
+          "cacheReadInputTokens": 11038018,
+          "cacheCreationInputTokens": 192104,
+          "cacheCreationEphemeral5mInputTokens": 1092,
+          "cacheCreationEphemeral1hInputTokens": 191012,
+          "webSearchRequests": 0,
+          "costUSD": 4.4699076
+        }
+      },
+      "totalCostUSD": 4.4699076,
+      "totalAPIDuration": 366375,
+      "totalToolDuration": 1148443
+    },
+    {
+      "sessionId": "7a72130e-8030-43be-9cc2-e62ae70b215b",
+      "ts": "",
+      "modelUsage": {},
+      "totalCostUSD": 0,
+      "totalAPIDuration": 0,
+      "totalToolDuration": 0
+    },
+    {
+      "sessionId": "7db86a5a-13be-4194-bbf1-5608c54718e0",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-5-5": {
+          "inputTokens": 72,
+          "outputTokens": 16217,
+          "thinkingTokens": 2593,
+          "cacheReadInputTokens": 4260714,
+          "cacheCreationInputTokens": 222674,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 222674,
+          "webSearchRequests": 0,
+          "costUSD": 2.9581628000000006
+        }
+      },
+      "totalCostUSD": 2.9581628000000006,
+      "totalAPIDuration": 193896,
+      "totalToolDuration": 206587
+    },
+    {
+      "sessionId": "7e95c125-75d3-4452-a924-ddf59bcd5c33",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-5-5": {
+          "inputTokens": 15464,
+          "outputTokens": 26936,
+          "thinkingTokens": 3311,
+          "cacheReadInputTokens": 4499380,
+          "cacheCreationInputTokens": 336470,
+          "cacheCreationEphemeral5mInputTokens": 401,
+          "cacheCreationEphemeral1hInputTokens": 336069,
+          "webSearchRequests": 0,
+          "costUSD": 4.191009
+        }
+      },
+      "totalCostUSD": 4.191009,
+      "totalAPIDuration": 244352,
+      "totalToolDuration": 42135
+    },
+    {
+      "sessionId": "9140200e-7f78-48ad-9757-aeef7f5043ca",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-5-5": {
+          "inputTokens": 20,
+          "outputTokens": 5465,
+          "thinkingTokens": 861,
+          "cacheReadInputTokens": 1033660,
+          "cacheCreationInputTokens": 81991,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 81991,
+          "webSearchRequests": 0,
+          "costUSD": 0.97204
+        }
+      },
+      "totalCostUSD": 0.97204,
+      "totalAPIDuration": 55354,
+      "totalToolDuration": 14399
+    },
+    {
+      "sessionId": "9ba3095b-9100-46b7-8639-5565605a4f9a",
+      "ts": "",
+      "modelUsage": {},
+      "totalCostUSD": 0,
+      "totalAPIDuration": 0,
+      "totalToolDuration": 0
+    },
+    {
+      "sessionId": "9f1d9611-b572-4052-b4b5-affcfa57e82e",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-5-5": {
+          "inputTokens": 3106,
+          "outputTokens": 183898,
+          "thinkingTokens": 34536,
+          "cacheReadInputTokens": 87302756,
+          "cacheCreationInputTokens": 3109665,
+          "cacheCreationEphemeral5mInputTokens": 1252,
+          "cacheCreationEphemeral1hInputTokens": 3108413,
+          "webSearchRequests": 0,
+          "costUSD": 46.024499200000015
+        }
+      },
+      "totalCostUSD": 46.024499200000015,
+      "totalAPIDuration": 2084998,
+      "totalToolDuration": 1362187
+    },
+    {
+      "sessionId": "b13dc7c7-cc90-44b7-9119-c5c3e42b66d7",
+      "ts": "",
+      "modelUsage": {
+        "claude-haiku-5-5": {
+          "inputTokens": 1000,
+          "outputTokens": 25,
+          "thinkingTokens": 0,
+          "cacheReadInputTokens": 0,
+          "cacheCreationInputTokens": 1777,
+          "cacheCreationEphemeral5mInputTokens": 1777,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.000334625
+        },
+        "claude-opus-5-5": {
+          "inputTokens": 136,
+          "outputTokens": 34336,
+          "thinkingTokens": 7043,
+          "cacheReadInputTokens": 11831743,
+          "cacheCreationInputTokens": 721081,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 721081,
+          "webSearchRequests": 0,
+          "costUSD": 8.8222606
+        }
+      },
+      "totalCostUSD": 8.822595225,
+      "totalAPIDuration": 425580,
+      "totalToolDuration": 597423
+    },
+    {
+      "sessionId": "b65f3ab6-1748-4491-9d0d-0691cb1b12a7",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-4-8": {
+          "inputTokens": 48,
+          "outputTokens": 28914,
+          "thinkingTokens": 16028,
+          "cacheReadInputTokens": 5196482,
+          "cacheCreationInputTokens": 220287,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 220287,
+          "webSearchRequests": 0,
+          "costUSD": 5.524201
+        }
+      },
+      "totalCostUSD": 5.524201,
+      "totalAPIDuration": 450687,
+      "totalToolDuration": 25882
+    },
+    {
+      "sessionId": "c8d99e2b-e350-43c3-926b-952b7b543f36",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-4-8": {
+          "inputTokens": 5685,
+          "outputTokens": 144328,
+          "thinkingTokens": 89861,
+          "cacheReadInputTokens": 25876875,
+          "cacheCreationInputTokens": 1340208,
+          "cacheCreationEphemeral5mInputTokens": 7963,
+          "cacheCreationEphemeral1hInputTokens": 1332245,
+          "webSearchRequests": 0,
+          "costUSD": 29.947281249999996
+        }
+      },
+      "totalCostUSD": 29.947281249999996,
+      "totalAPIDuration": 2274826,
+      "totalToolDuration": 204674
+    },
+    {
+      "sessionId": "d0342c80-f5dd-4e78-9a36-91981b7cf02f",
+      "ts": "",
+      "modelUsage": {
+        "claude-haiku-5-5": {
+          "inputTokens": 1080,
+          "outputTokens": 22,
+          "thinkingTokens": 0,
+          "cacheReadInputTokens": 1777,
+          "cacheCreationInputTokens": 0,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.00013677
+        },
+        "claude-opus-5-5": {
+          "inputTokens": 86,
+          "outputTokens": 15877,
+          "thinkingTokens": 2165,
+          "cacheReadInputTokens": 5062376,
+          "cacheCreationInputTokens": 110330,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 110330,
+          "webSearchRequests": 0,
+          "costUSD": 2.2129992000000005
+        }
+      },
+      "totalCostUSD": 2.21313597,
+      "totalAPIDuration": 183811,
+      "totalToolDuration": 881369
+    },
+    {
+      "sessionId": "d1513f05-68d1-42f4-ba53-b8612a93642b",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-4-8": {
+          "inputTokens": 8793,
+          "outputTokens": 230399,
+          "thinkingTokens": 128370,
+          "cacheReadInputTokens": 18469368,
+          "cacheCreationInputTokens": 1441721,
+          "cacheCreationEphemeral5mInputTokens": 14263,
+          "cacheCreationEphemeral1hInputTokens": 1427458,
+          "webSearchRequests": 0,
+          "costUSD": 29.402347750000008
+        },
+        "claude-sonnet-5-5": {
+          "inputTokens": 10,
+          "outputTokens": 3057,
+          "thinkingTokens": 293,
+          "cacheReadInputTokens": 239838,
+          "cacheCreationInputTokens": 166716,
+          "cacheCreationEphemeral5mInputTokens": 166716,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.4713638
+        }
+      },
+      "totalCostUSD": 29.873711550000007,
+      "totalAPIDuration": 3810353,
+      "totalToolDuration": 57032
+    },
+    {
+      "sessionId": "d7ee3295-2532-4522-b8b5-225d64d6ba98",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-4-8": {
+          "inputTokens": 2177,
+          "outputTokens": 24909,
+          "thinkingTokens": 8963,
+          "cacheReadInputTokens": 3387914,
+          "cacheCreationInputTokens": 1247409,
+          "cacheCreationEphemeral5mInputTokens": 290,
+          "cacheCreationEphemeral1hInputTokens": 1247119,
+          "webSearchRequests": 0,
+          "costUSD": 14.8005695
+        }
+      },
+      "totalCostUSD": 14.8005695,
+      "totalAPIDuration": 420464,
+      "totalToolDuration": 21526
+    },
+    {
+      "sessionId": "def0b2d6-eef9-42f5-ab65-6a0870fe3bce",
+      "ts": "",
+      "modelUsage": {},
+      "totalCostUSD": 0,
+      "totalAPIDuration": 0,
+      "totalToolDuration": 0
+    },
+    {
+      "sessionId": "e56dcc4b-b49e-4f02-81c5-baef357c7845",
+      "ts": "",
+      "modelUsage": {
+        "claude-haiku-5-5": {
+          "inputTokens": 1080,
+          "outputTokens": 22,
+          "thinkingTokens": 0,
+          "cacheReadInputTokens": 1777,
+          "cacheCreationInputTokens": 0,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.00013677
+        },
+        "claude-opus-5-5": {
+          "inputTokens": 84,
+          "outputTokens": 20546,
+          "thinkingTokens": 4661,
+          "cacheReadInputTokens": 4843726,
+          "cacheCreationInputTokens": 91766,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 91766,
+          "webSearchRequests": 0,
+          "costUSD": 2.1141292
+        }
+      },
+      "totalCostUSD": 2.11426597,
+      "totalAPIDuration": 213405,
+      "totalToolDuration": 67906
+    },
+    {
+      "sessionId": "ed66ec62-ba1b-45da-807a-fc881e0d6c97",
+      "ts": "",
+      "modelUsage": {
+        "claude-opus-4-8": {
+          "inputTokens": 16,
+          "outputTokens": 23438,
+          "thinkingTokens": 18780,
+          "cacheReadInputTokens": 2139693,
+          "cacheCreationInputTokens": 279206,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 279206,
+          "webSearchRequests": 0,
+          "costUSD": 4.4479365
+        }
+      },
+      "totalCostUSD": 4.4479365,
+      "totalAPIDuration": 394412,
+      "totalToolDuration": 21210
+    },
+    {
+      "sessionId": "f7596a5e-1b1a-4367-94a8-0abd6ef470e0",
+      "ts": "",
+      "modelUsage": {
+        "claude-haiku-5-5": {
+          "inputTokens": 1080,
+          "outputTokens": 28,
+          "thinkingTokens": 0,
+          "cacheReadInputTokens": 1777,
+          "cacheCreationInputTokens": 0,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 0,
+          "webSearchRequests": 0,
+          "costUSD": 0.00013977
+        },
+        "claude-opus-5-5": {
+          "inputTokens": 94,
+          "outputTokens": 18445,
+          "thinkingTokens": 2917,
+          "cacheReadInputTokens": 5676757,
+          "cacheCreationInputTokens": 228899,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 228899,
+          "webSearchRequests": 0,
+          "costUSD": 3.3358194
+        }
+      },
+      "totalCostUSD": 3.3359591699999998,
+      "totalAPIDuration": 180649,
+      "totalToolDuration": 861251
+    }
+  ],
+  "archivedCount": 6,
+  "costLogCount": 50,
+  "generatedAt": "2026-11-11T16:12:08.736Z"
+}

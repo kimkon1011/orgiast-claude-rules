@@ -192,16 +192,30 @@ export async function proposeSavedEvaluations({ home = process.env.ORGIAST_HOME 
   return proposeEvaluated(pending, { home, ...options });
 }
 
+export function maskSecrets(s) {
+  if (!s) return s;
+  let result = String(s);
+  result = result.replace(/\b(?:sk-or-[A-Za-z0-9_-]{10,}|sk-ant-[A-Za-z0-9_-]{9,}|sk-[A-Za-z0-9_-]{13,}|gsk_[A-Za-z0-9_-]{12,}|AIza[A-Za-z0-9_-]{12,}|xai-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_-]{12,}|github_pat_[A-Za-z0-9_-]{5,}|ya29\.[A-Za-z0-9_-]{11,})\b/g, '[masked]');
+  result = result.replace(/\bbearer\s+\S+/gi, m => m.replace(/\S+$/, '[masked]'));
+  result = result.replace(/\b(api_key|apikey|key|token|authorization|x-api-key)\s*([:=])\s*([^\s&"'<>]+)/gi, (_, name, sep) => `${name}${sep}[masked]`);
+  result = result.replace(/\b([A-Za-z_]+_(?:KEY|TOKEN|SECRET))\s*=\s*([^\s&"'<>]+)/gi, (_, name) => `${name}=[masked]`);
+  result = result.replace(/\b[A-Za-z0-9_]*_(?:KEY|TOKEN|SECRET|PASSWORD)\b/gi, '[masked]');
+  result = result.replace(/[A-Za-z0-9+/=_-]{32,}/g, '[masked]');
+  return result;
+}
+
 export async function runScout({ home = process.env.ORGIAST_HOME || userHome(), dryRun = false, now = new Date(),
   routingFile = path.join(HERE, 'routing-table.json'), configFile = path.join(home, '.claude', 'eval', 'providers.local.json'),
   fetchImpl = globalThis.fetch, notify = notifyKim, log = console.log, submit = submitProposal, resultsFile } = {}) {
   const dir = path.join(home, '.claude'), stateFile = path.join(dir, 'model-scout-state.json');
   let notifyAttempted = false;
+  let stage = 'fetch';
   try {
     const previous = readJson(stateFile, null);
     const response = await fetchImpl(API, { signal: AbortSignal.timeout(30000) });
     if (!response.ok) throw new Error('catalog unavailable');
     const models = normalizeModels(await response.json());
+    stage = 'report';
     const changes = detectChanges(models, previous, now);
     const routing = readJson(routingFile, null);
     const { candidates: cheapCandidates, warnings } = selectCandidates(changes, models, routing);
@@ -237,22 +251,30 @@ export async function runScout({ home = process.env.ORGIAST_HOME || userHome(), 
       '', `情報源: ${API}`, '既存単価: OpenRouter はカタログ、それ以外は tools/llm-fallback.mjs の COST_PER_MILLION。', ''].join('\n');
     if (dryRun) log(`${report}\n## DM 予定（送信なし）\n${dm}`);
     else {
+      stage = 'save';
       writeAtomic(path.join(dir, 'model-scout-latest.md'), report);
+      stage = 'notify';
       notifyAttempted = true;
       // 提案済みだけの場合、submitProposal の1行DMに集約する。
       if (!proposed || waiting.length) {
         const sent = await notify(dm, { home, webhookFallback: false });
-        if (!['dm', 'session-inbox'].includes(sent?.delivered)) throw new Error('notification failed');
+        if (!['dm', 'session-inbox', 'spooled', 'webhook', 'suppressed'].includes(sent?.delivered)) {
+          throw new Error(`notification failed: ${sent?.delivered || 'none'}`);
+        }
       }
+      stage = 'save';
       // 通知失敗時は差分を消費せず、次回もう一度通知する。
       const snapshot = { ...previous?.models, ...Object.fromEntries(models.map((m) => [m.id, { pricing: m.pricing }])) };
       writeAtomic(stateFile, json({ updatedAt: now.toISOString(), models: snapshot, pendingCandidates: evaluatedCandidates }));
       log(dm);
     }
     return { ok: true, candidates, frontierCandidates, changes, report, dm, action, proposed };
-  } catch {
+  } catch (err) {
+    const errName = err?.name || 'Error';
+    const rawMsg = String(err?.message ?? err);
+    const maskedMsg = maskSecrets(rawMsg).slice(0, 200).replace(/[\r\n\t]+/g, ' ').trim();
     // 外部例外や資格情報をログに流さない。失敗も必ず観測可能にする。
-    const message = '本日の新AI候補 0 件\n偵察失敗（取得・設定・保存・通知のいずれか）。状態を進めず次回再試行します。';
+    const message = `本日の新AI候補 0 件\n偵察失敗（取得・設定・保存・通知のいずれか）。 stage=${stage} reason=${errName}: ${maskedMsg}`;
     log(message);
     if (!dryRun && !notifyAttempted) {
       try { await notify(message, { home, webhookFallback: false }); } catch {}

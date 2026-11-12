@@ -21,6 +21,9 @@ const PROVIDERS = {
   grok: { base: 'https://api.x.ai/v1/chat/completions', keyEnv: 'XAI_API_KEY', keyFile: 'xai.env', model: 'grok-3' },
   kimi: gatewayConfig('kimi'),
   mistral: gatewayConfig('mistral'),
+  // OpenRouter 経由の Claude モデル（直接の Claude API ではなく OpenRouter の proxy）。
+  // Haiku/Sonnet/Opus の実測ベンチマーク用。--model で `anthropic/claude-sonnet-5` 等を指定。
+  claude: { base: 'https://openrouter.ai/api/v1/chat/completions', keyEnv: 'OPENROUTER_API_KEY', keyFile: 'openrouter.env', model: 'anthropic/claude-haiku-5.5', extraHeaders: { 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast' } },
 };
 export const OPENROUTER_GEMINI_MODEL = `google/${PROVIDERS.gemini.model}`;
 

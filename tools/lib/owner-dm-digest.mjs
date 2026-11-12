@@ -90,6 +90,7 @@ export const kimAction = row => {
 
 export const isHumanActionRequired = (row) => {
   if (row.status === 'done') return false;
+  if (row.autoRegisteredCheck && row.status !== 'waiting_user') return false;
   // main: 依頼本文がない明示的な判断待ちも取りこぼさない。
   if (row.status === 'waiting_user' && !String(row.nextKim || '').trim()) return true;
   if (kimAction(row) !== 'なし') return true;

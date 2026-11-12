@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isKimRecipient } from './lib/kim-dm-policy.mjs';
 import { readFile, writeFile, mkdir, rename, open, unlink, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
@@ -310,7 +311,7 @@ export function createAutopilot(deps = {}) {
       // 返信前に記録し、送信応答を失っても同じ受信へ二度返信しません。
       state.lastMessageId = message.id; delete state.inFlight; await stateSave(state);
       if (text) {
-        if (userId === KIM_DISCORD_USER_ID) await (deps.deliverKim || deliverKim)(text, { home, plainJa: false, source: 'sga-autopilot' });
+        if (isKimRecipient({ id: userId })) await (deps.deliverKim || deliverKim)(text, { home, plainJa: false, source: 'sga-autopilot' });
         else await request(`/channels/${channel.id}/messages`, { content: text.slice(0, 2000), message_reference: { message_id: message.id }, allowed_mentions: { parse: [] } });
       }
       results.push({ id: message.id, text });

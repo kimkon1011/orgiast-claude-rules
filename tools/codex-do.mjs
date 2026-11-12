@@ -311,7 +311,7 @@ export function snapshotWorkingTree(cwd, spawnImpl = spawnSync) {
   try {
     const gitCheck = spawnImpl('git', ['-C', cwd, 'rev-parse', '--is-inside-work-tree'], { windowsHide: true, encoding: 'utf8' });
     if (gitCheck && gitCheck.status === 0) {
-      const diff = spawnImpl('git', ['-C', cwd, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
+      const diff = spawnImpl('git', ['-C', cwd, 'diff', 'HEAD', '--no-ext-diff', '--no-textconv'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
       const status = spawnImpl('git', ['-C', cwd, 'status', '--porcelain'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
       const head = spawnImpl('git', ['-C', cwd, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
       return `${head}\n${diff}\n${status}`;
@@ -382,6 +382,19 @@ export function isCheapFirstEnabled({ kind, instruction, review = false, env = p
   if (/lane:\s*codex/i.test(String(instruction || ''))) return false;
   if (String(env.CODEX_DO_CHEAP_FIRST ?? '') === '0') return false;
   return true;
+}
+
+// A zero exit code alone does not prove that an implementation was delivered.
+export function cheapFirstFailureReason({ kind, result, treeChanged }) {
+  const output = String(result.output || '');
+  const combined = output + '\n' + (result.stderr || '');
+  if (/unrecognized_model/i.test(combined)) return 'unrecognized_model';
+  if (!output.trim()) return 'empty_output';
+  // Replacement characters, invalid controls and common UTF-8-as-Latin-1 sequences.
+  if (/[\uFFFD\u0000-\u0008\u000B\u000C\u000E-\u001F]/u.test(output)
+    || /(?:Ã.|Â.|â[\u0080-\u00BF€]|ðŸ){2,}/u.test(output)) return 'garbled_output';
+  if (kind === 'implement' && !treeChanged) return 'no_changes';
+  return '';
 }
 
 export function shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut, diffText, treeChanged }) {
@@ -702,6 +715,7 @@ export function resolveFallbackBackends(homeDir, options = {}) {
   if (geminiKey && !geminiAvailable) console.error('[codex-do] gemini-cli の CLI(gemini) が見つからないため候補から外します');
   if (deepseekKey && !qwenAvailable) console.error('[codex-do] deepseek の CLI(qwen) が見つからないため候補から外します');
   if (openrouterKey && !qwenAvailable) console.error('[codex-do] openrouter-free の CLI(qwen) が見つからないため候補から外します');
+  if (!qwenAvailable && (deepseekKey || openrouterKey)) { maybeAutoInstallQwen(homeDir, { env: process.env }); }
   const geminiBillingBlocked = isProviderBillingBlocked(homeDir, 'gemini');
   if (geminiKey && geminiBillingBlocked) console.error('[codex-do] gemini 直 API は残高不足(402)のため gemini-cli を候補から外します');
   const gemini = geminiKey && geminiAvailable && !geminiBillingBlocked && { kind: 'gemini', name: 'gemini-cli', model: process.env.CODEX_DO_GEMINI_MODEL || 'gemini-3.6-flash', apiKey: geminiKey };
@@ -802,6 +816,41 @@ function uniqueBackendsByName(backends) {
 
 export function resolveQwenBackends(homeDir, options = {}) {
   return resolveFallbackBackends(homeDir, options);
+}
+
+// ~/.claude/qwen-autoinstall.json の lastAttemptAt が24時間以内かどうかを判定する。
+// CODEX_DO_NO_AUTOINSTALL=1 なら常に false（テスト・CI 用）。
+export function shouldAutoInstallQwen(homeDir, { env = process.env, now = Date.now() } = {}) {
+  if (env.CODEX_DO_NO_AUTOINSTALL === '1') return false;
+  try {
+    const state = JSON.parse(fs.readFileSync(path.join(homeDir, '.claude', 'qwen-autoinstall.json'), 'utf8'));
+    if (state.lastAttemptAt && (now - new Date(state.lastAttemptAt).getTime()) < 86400000) return false;
+  } catch {}
+  return true;
+}
+
+// qwen CLI が無いとき、裏で npm i -g を切り離した子プロセスで起動する。
+// codex-do 自身は待たずに今の処理を続ける。24時間以内の再試行は抑制する。
+// Windows では shell 経由で起動する。
+export function maybeAutoInstallQwen(homeDir, { env = process.env, spawnImpl = spawn, now = Date.now() } = {}) {
+  if (!shouldAutoInstallQwen(homeDir, { env, now })) return;
+
+  const file = path.join(homeDir, '.claude', 'qwen-autoinstall.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  const body = JSON.stringify({ lastAttemptAt: new Date(now).toISOString() }) + '\n';
+  fs.writeFileSync(tmp, body, 'utf8');
+  try { fs.renameSync(tmp, file); } catch { fs.writeFileSync(file, body, 'utf8'); try { fs.unlinkSync(tmp); } catch {} }
+
+  const isWin = process.platform === 'win32';
+  const child = spawnImpl(
+    isWin ? 'cmd' : 'npm',
+    isWin ? ['/c', 'npm', 'i', '-g', '@qwen-code/qwen-code', '--no-fund', '--no-audit'] : ['i', '-g', '@qwen-code/qwen-code', '--no-fund', '--no-audit'],
+    { detached: true, windowsHide: true, stdio: 'ignore', shell: isWin }
+  );
+  child?.unref();
+
+  console.log('[codex-do] qwen CLI を裏で導入しています（次回の実行から deepseek レーンが使えます）');
 }
 
 // 429/413 はコード上の行番号(例: "foo.ts:429:12")と衝突するため、コロンで数字に
@@ -1377,6 +1426,7 @@ async function tryCheapFirstFallback() {
     });
     if (bt <= 0) break;
     const as = Date.now();
+    const backendTreeBefore = treeSnapshot();
     lastBackend = backend;
     console.log(`[codex-do] cheap-first: ${backend.name} model=${backend.model}`);
     const res = backend.kind === 'gemini'
@@ -1391,11 +1441,17 @@ async function tryCheapFirstFallback() {
     if (backend.name === 'gemini-cli' && billingFailure) rememberProviderBillingFailure(home, 'gemini');
     const exhausted = isBackendExhausted(res.output, res.stderr) || (backend.kind === 'cheap-code' && res.status === 3);
     const dec = shouldAdvanceToNextBackend({ timedOut: res.timedOut === true, status: res.status, exhausted, cliMissing, aborted: res.aborted === 'policy_stall' });
-    const outcome = dec.outcome;
-    const treeUnchangedNow = wantedEdit && !res.timedOut && treeBefore.trim() === treeSnapshot().trim() && !hasExternalWork(res);
+    const invalid = dec.outcome === 'ok' ? cheapFirstFailureReason({
+      kind: taskKind, result: res, treeChanged: backendTreeBefore.trim() !== treeSnapshot().trim(),
+    }) : '';
+    const outcome = invalid || dec.outcome;
+    if (invalid) {
+      res.status = 1;
+      console.error('[codex-do] cheap-first: ' + backend.name + ' failed validation (' + invalid + ')');
+    }
     chainResult.push({ backend: backend.name, model: backend.model, status: res.status ?? null, timedOut: res.timedOut === true, out: Math.ceil((res.outputChars || 0) / 4), outChars: res.outputChars || 0, secs: Number(((Date.now() - as) / 1000).toFixed(3)), budgetSecs: bt, stderrTail: String(res.stderr || '').replace(/\s+/g, ' ').trim().slice(-200), outcome });
     if (dec.advance) { if (['ok', 'timeout', 'cli_missing', 'blocked'].includes(outcome)) recordFallbackBackendOutcome(home, { backend: backend.name, outcome }); continue; }
-    if (!isLast && outcome === 'ok' && treeUnchangedNow) { if (chainResult.at(-1)) chainResult.at(-1).outcome = 'no_changes'; continue; }
+    if (invalid) continue;
     if (outcome === 'ok') cheapSucceeded = true;
     if (['ok', 'timeout', 'cli_missing', 'blocked'].includes(outcome)) recordFallbackBackendOutcome(home, { backend: backend.name, outcome });
     break;

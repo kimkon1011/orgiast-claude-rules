@@ -222,6 +222,13 @@ export function record(input, { home, now, hostname, user, owner, readText = (p)
   const file = ledgerFile(home);
   const rows = applyPromise(readLedger(file), row);
   writeLedger(file, rows);
+  // Auto-register external channel check if promise mentions reply-waiting and recent send found
+  if (REPLY_WAITING_RE.test(row.promise) && home) {
+    try {
+      const sendInfo = scanTranscriptForSend(row.transcriptPath);
+      if (sendInfo) autoRegisterExternalCheck(row, sendInfo, { home, now });
+    } catch { /* fail-open: auto-registration must not break the stop hook */ }
+  }
   return rows.at(-1);
 }
 
@@ -234,6 +241,70 @@ async function main() {
 }
 
 if (isEntry(import.meta.url)) { await main(); process.exitCode = 0; }
+
+// 返信待ちの promise を検出し、直近の送信先から外部チャネル check を自動登録する。
+const REPLY_WAITING_RE = /返信|回答|返事|リプライ|返答|お返事|ご返信|ご回答/i;
+const LINE_SEND_RE = /line-group-send\.mjs.*--group-id\s+(\S+)/;
+const LINE_THREAD_RE = /line-group-send\.mjs.*--group-id\s+(?:@?)([\w-]+)/;
+const GMAIL_THREAD_RE = /gmail-draft\.mjs.*--to\s+(\S+@\S+)/;
+
+export function scanTranscriptForSend(transcriptPath) {
+  if (!transcriptPath || !fs.existsSync(transcriptPath)) return null;
+  try {
+    const text = fs.readFileSync(transcriptPath, 'utf8');
+    // Search from the end: most recent send tool use
+    const lines = text.split(/\r?\n/).reverse();
+    for (const line of lines) {
+      try {
+        const entry = JSON.parse(line);
+        const content = entry?.message?.content;
+        if (!Array.isArray(content)) continue;
+        for (const block of content) {
+          if (block?.type !== 'tool_use') continue;
+          const input = block.input || {};
+          const command = input.command || input.script || '';
+          // line-group-send.mjs --group-id <id>
+          const lineMatch = String(command).match(LINE_THREAD_RE);
+          if (lineMatch) return { channel: 'line', threadId: lineMatch[1], line: lineMatch[0] };
+          // gmail-draft.mjs --to <email>
+          const gmailMatch = String(command).match(GMAIL_THREAD_RE);
+          if (gmailMatch) return { channel: 'gmail', threadId: gmailMatch[1], line: gmailMatch[0] };
+        }
+      } catch {}
+    }
+  } catch { /* transcript not readable */ }
+  return null;
+}
+
+export function autoRegisterExternalCheck(row, sendInfo, { home, now = Date.now() } = {}) {
+  if (!sendInfo || !row.sessionId || !row.cwd) return null;
+  const threadId = sendInfo.threadId;
+  const since = new Date(now - 180 * 3600000).toISOString(); // 7.5 days back
+  const checkCmd = `node tools/auto-progress-external-check.mjs --channel ${sendInfo.channel} --thread-id ${threadId} --since ${since}`;
+  const label = `${sendInfo.channel === 'line' ? 'LINE' : 'Gmail'}返信監視:${String(threadId).slice(0, 20)}`;
+  const deadline = new Date(now + 14 * 86400000).toISOString();
+  const registry = rows => {
+    const addRow = {
+      ts: new Date(now).toISOString(), pc: row.pc, user: row.user, owner: row.owner || '',
+      sessionId: row.sessionId, cwd: row.cwd, transcriptPath: row.transcriptPath || '',
+      promise: label, nextKim: 'なし', status: 'open',
+      check: checkCmd, checkRegisteredAt: new Date(now).toISOString(),
+      checkCwd: row.cwd, deadlineAt: deadline, label,
+      nextClaude: '新着をkim-inboxへ報告',
+      externalChannel: true,
+      externalChannelId: threadId,
+      externalChannelType: sendInfo.channel,
+      autoRegisteredCheck: true,
+    };
+    return applyPromise(rows, addRow);
+  };
+  try {
+    const file = ledgerFile(home);
+    const rows = registry(readLedger(file));
+    writeLedger(file, rows);
+    return rows.at(-1);
+  } catch { return null; }
+}
 
 export const rowKey = (row) => `${row.pc}|${row.user}|${row.sessionId}|${row.ts}`;
 

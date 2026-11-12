@@ -23,7 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
 import { defaultDriveKeyPath } from './lib/drive-auth.mjs';
-import { loadLedger, isInternal, extractAddresses } from './internal-recipient-gmail-guard.mjs';
+import { loadLedger, isInternal, extractAddresses, shouldBlockInternal } from './internal-recipient-gmail-guard.mjs';
 import { bodyHash, checkConsistency, statePath, mimeText, render as renderConsistency } from './mail-consistency-check.mjs';
 import { assertContextApproved, latestOf, recordOutbound } from './lib/send-context.mjs';
 
@@ -156,9 +156,9 @@ export function renderChatDisplay({ to, cc, subject = '', body = '' }) {
 }
 
 export function guardRecipients(input, ledger) {
-  const recipients = [...new Set([...addresses(input.to, true), ...addresses(input.cc)].map(s => s.toLowerCase()))];
+  const recipients = [...new Set([...addresses(input.to, true), ...addresses(input.cc), ...addresses(input.bcc)].map(s => s.toLowerCase()))];
   const internal = recipients.filter(addr => isInternal(addr, ledger));
-  return recipients.length && internal.length === recipients.length
+  return shouldBlockInternal({ to: input.to, cc: input.cc, bcc: input.bcc }, ledger)
     ? { blocked: true, internal, chatDisplay: renderChatDisplay(input) }
     : { blocked: false, internal: [] };
 }
@@ -307,11 +307,12 @@ export async function sendDraft({ user = DEFAULT_USER, id, ledger = loadLedger()
   const headers = draft?.message?.payload?.headers;
   if (!Array.isArray(headers)) throw new Error('下書きの宛先を取得できません');
   const values = name => headers.filter(h => String(h.name).toLowerCase() === name).map(h => h.value);
-  const recipients = extractAddresses({ to: values('to'), cc: values('cc'), bcc: values('bcc') });
+  const recipientFields = { to: values('to'), cc: values('cc'), bcc: values('bcc') };
+  const recipients = extractAddresses(recipientFields);
   if (!recipients.length) throw new Error('下書きの宛先がありません');
   const internal = recipients.filter(addr => isInternal(addr, ledger));
   const isForward = values('x-orgiast-forward').some(value => /^[A-Za-z0-9_-]+$/u.test(value));
-  if (internal.length === recipients.length && !isForward) throw Object.assign(new Error('内部宛は Discord で連絡してください。'), { errorKind: 'internal_recipient', internal });
+  if (shouldBlockInternal(recipientFields, ledger) && !isForward) throw Object.assign(new Error('内部宛は Discord で連絡してください。'), { errorKind: 'internal_recipient', internal });
   const sent = await request('https://gmail.googleapis.com/gmail/v1/users/me/drafts/send', {
     method: 'POST', body: JSON.stringify({ id }),
   });

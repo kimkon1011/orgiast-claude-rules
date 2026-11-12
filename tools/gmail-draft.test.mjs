@@ -106,7 +106,7 @@ test('添付は multipart/mixed、RFC 2047 ファイル名、推定 MIME type �
   assert.match(decoded, /JVBERg==/u);
 });
 
-test('宛先が全員内部のときだけブロック', () => {
+test('To に外部宛があれば社内 Cc/Bcc を許可し、なければブロック', () => {
   for (const fields of [{ to: 'STAFF@ORGIAST.JP' }, { to: 'staff@toho-kogyo.com' }, { to: 'staff@gmail.com' }, { to: 'staff@orgiast.jp', cc: 'staff@gmail.com' }]) {
     const result = guardRecipients({ ...input, ...fields }, ledger);
     assert.equal(result.blocked, true);
@@ -116,7 +116,11 @@ test('宛先が全員内部のときだけブロック', () => {
   }
   assert.deepEqual(guardRecipients(input, ledger), { blocked: false, internal: [] });
   assert.equal(guardRecipients({ ...input, cc: 'staff@orgiast.jp' }, ledger).blocked, false);
+  assert.equal(guardRecipients({ ...input, bcc: 'staff@gmail.com' }, ledger).blocked, false);
   assert.equal(guardRecipients({ ...input, to: 'staff@orgiast.jp', cc: 'staff@gmail.com' }, ledger).blocked, true);
+  assert.equal(guardRecipients({ ...input, to: 'staff@orgiast.jp', cc: 'customer@example.com' }, ledger).blocked, true);
+  assert.equal(guardRecipients({ ...input, to: ['staff@orgiast.jp', 'customer@example.com'] }, ledger).blocked, false);
+  assert.equal(guardRecipients({ ...input, to: 'staff@gmail.com' }, ledger).blocked, true);
   assert.equal(guardRecipients({ ...input, to: 'customer@example.com', cc: undefined }, ledger).blocked, false);
   assert.equal(renderChatDisplay(input), `宛先：${input.to}\n用件：${input.subject}\n本文：\n${input.body}`);
 });
@@ -453,6 +457,29 @@ test('送信前の再検査は外部 To + 内部 Cc を許可する', async () =
   } });
   assert.equal(result.code, 0);
   assert.equal(calls, 2);
+});
+test('送信前の再検査は外部 To + 内部 Bcc と、外部・内部混在 To を許可する', async () => {
+  for (const headers of [
+    [{ name: 'Bcc', value: 'staff@gmail.com' }],
+    [{ name: 'To', value: 'customer@example.com, staff@orgiast.jp' }],
+  ]) {
+    let calls = 0;
+    const result = await cli(['--send', 'draft', '--json'], { getToken: async () => 't', fetchImpl: async () => {
+      calls++;
+      return calls === 1 ? response(draftHeaders(headers)) : response({ id: 'sent', threadId: 'thread' });
+    } });
+    assert.equal(result.code, 0);
+    assert.equal(calls, 2);
+  }
+});
+test('送信前の再検査は内部 To + 外部 Cc を拒否する', async () => {
+  let calls = 0;
+  const result = await cli(['--send', 'draft', '--json'], { getToken: async () => 't', fetchImpl: async () => {
+    calls++;
+    return response(draftHeaders([{ name: 'Cc', value: 'customer@example.com' }], 'staff@orgiast.jp'));
+  } });
+  assert.equal(result.code, 3);
+  assert.equal(calls, 1);
 });
 test('X-Orgiast-Forward 付き下書きだけ内部宛へ送信できる', async () => {
   let calls = 0;

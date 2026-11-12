@@ -1427,7 +1427,7 @@ test('localIndex: 既定の閾値が 8MB/512KB/4MB である', () => {
 });
 
 test('parseOptions: 既定 max は 3 である', () => {
-  const opts = parseOptions([]);
+  const opts = parseOptions([], () => ({ status: 0, stdout: '2026-11-05T20:00:00Z' }));
   assert.equal(opts.max, 3);
 });
 

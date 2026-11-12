@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { isEntry } from './is-entry.mjs';
+import { acquireSetupConvergeLock } from './lib/setup-converge-lock.mjs';
 import { distributePlaybooks } from './lib/playbook-distribution.mjs';
 import fs from 'node:fs';
 import { effectiveHooks, runtimeManifestPath, dispatcherProblems } from './hook-dispatch-registry.mjs';
@@ -223,116 +223,8 @@ function emit(results) {
   }
 }
 
-export function acquireSetupConvergeLock({ home, pid = process.pid, now = Date.now, isPidAlive } = {}) {
-  const stateDir = path.join(home, 'state');
-  fs.mkdirSync(stateDir, { recursive: true });
-  const lockFile = path.join(stateDir, 'setup-converge.lock');
 
-  const defaultIsAlive = p => {
-    try {
-      process.kill(p, 0);
-      return true;
-    } catch (e) {
-      return e.code !== 'ESRCH';
-    }
-  };
-  const aliveCheck = isPidAlive || defaultIsAlive;
-
-  const tryCreateLock = () => {
-    let fd;
-    try {
-      fd = fs.openSync(lockFile, 'wx');
-    } catch (e) {
-      if (e.code === 'EEXIST') return null;
-      throw e;
-    }
-    const data = JSON.stringify({ pid, startedAt: now() });
-    fs.writeSync(fd, data);
-    fs.closeSync(fd);
-    return true;
-  };
-
-  if (tryCreateLock()) {
-    let released = false;
-    const release = () => {
-      if (released) return;
-      released = true;
-      try {
-        const raw = fs.readFileSync(lockFile, 'utf8');
-        const data = JSON.parse(raw);
-        if (data.pid === pid) {
-          fs.unlinkSync(lockFile);
-        }
-      } catch {}
-    };
-    return { acquired: true, lockFile, release };
-  }
-
-  let existingData = null;
-  try {
-    const raw = fs.readFileSync(lockFile, 'utf8');
-    existingData = JSON.parse(raw);
-  } catch {}
-
-  const existingPid = existingData?.pid;
-  const startedAt = typeof existingData?.startedAt === 'number'
-    ? existingData.startedAt
-    : Date.parse(existingData?.startedAt);
-
-  const currentTime = now();
-  const alive = existingPid ? aliveCheck(existingPid) : false;
-  const within15Min = Number.isFinite(startedAt) && (currentTime - startedAt < 15 * 60 * 1000) && (currentTime >= startedAt);
-
-  if (alive && within15Min) {
-    return {
-      acquired: false,
-      existingPid,
-      lockFile,
-      reason: `setup --converge は別プロセス(pid=${existingPid})で実行中のためスキップ`,
-    };
-  }
-
-  try {
-    fs.unlinkSync(lockFile);
-  } catch (e) {
-    if (e.code !== 'ENOENT') throw e;
-  }
-
-  if (tryCreateLock()) {
-    let released = false;
-    const release = () => {
-      if (released) return;
-      released = true;
-      try {
-        const raw = fs.readFileSync(lockFile, 'utf8');
-        const data = JSON.parse(raw);
-        if (data.pid === pid) {
-          fs.unlinkSync(lockFile);
-        }
-      } catch {}
-    };
-    return { acquired: true, lockFile, release };
-  }
-
-  return {
-    acquired: false,
-    existingPid,
-    lockFile,
-    reason: `setup --converge は別プロセス(pid=${existingPid})で実行中のためスキップ`,
-  };
-}
-
-if (isEntry(import.meta.url)) {
-  if (converge) {
-    const lockResult = acquireSetupConvergeLock({ home });
-    if (!lockResult.acquired) {
-      console.log(lockResult.reason);
-      process.exit(0);
-    }
-    process.on('exit', () => {
-      lockResult.release();
-    });
-  }
+if (converge) { const lock = acquireSetupConvergeLock({ home }); if (!lock.acquired) { console.log(lock.reason); process.exit(0); } process.on('exit', () => lock.release()); }
 
   let manifest;
   try { manifest = loadManifest(); } catch (error) { invalid(String(error?.message || error).split(/\r?\n/)[0]); }
@@ -422,4 +314,3 @@ if (isEntry(import.meta.url)) {
     const requiredNg = results.some((r) => r.item.severity === 'required' && r.status === 'NG');
     process.exitCode = settingsMigration?.status === 'NG' ? 1 : converge && !strict ? 0 : requiredNg ? 1 : 0;
   }
-}

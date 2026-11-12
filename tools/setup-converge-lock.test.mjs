@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { acquireSetupConvergeLock } from './setup.mjs';
+import { acquireSetupConvergeLock } from './lib/setup-converge-lock.mjs';
 
 test('(a) 取得: ロックが存在しない場合、正常に取得・作成できる', async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'setup-lock-test-'));

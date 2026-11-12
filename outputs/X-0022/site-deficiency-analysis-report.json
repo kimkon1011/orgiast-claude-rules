@@ -1,0 +1,58 @@
+{
+  "target": "sample",
+  "timestamp": "2026-11-12T19:47:30.928Z",
+  "overallDeficiencyScore": 47,
+  "scores": {
+    "mobile": 30,
+    "speed": 80,
+    "seo": 50
+  },
+  "deficiencyCount": 6,
+  "deficiencies": [
+    {
+      "category": "mobile",
+      "severity": "high",
+      "issue": "Missing viewport meta tag for mobile responsiveness",
+      "recommendation": "Add <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
+    },
+    {
+      "category": "mobile",
+      "severity": "medium",
+      "issue": "Lack of responsive CSS layout (media queries, flexbox, or grid)",
+      "recommendation": "Implement CSS Flexbox/Grid and responsive breakpoints"
+    },
+    {
+      "category": "speed",
+      "severity": "medium",
+      "issue": "1 images lack lazy loading or WebP format",
+      "recommendation": "Convert images to WebP and add loading=\"lazy\" attributes"
+    },
+    {
+      "category": "speed",
+      "severity": "medium",
+      "issue": "1 blocking synchronous script tags detected",
+      "recommendation": "Add defer or async attributes to external script tags"
+    },
+    {
+      "category": "seo",
+      "severity": "high",
+      "issue": "Missing meta description tag",
+      "recommendation": "Add meta description (120-160 chars) summarizing page value proposition"
+    },
+    {
+      "category": "seo",
+      "severity": "medium",
+      "issue": "Missing JSON-LD structured data (Organization, FAQPage, or Service)",
+      "recommendation": "Embed schema.org JSON-LD structured data for Google & AI search discovery"
+    }
+  ],
+  "pipelinePlan": {
+    "builder": "Claude Code CLI + Cloudflare Pages",
+    "actions": [
+      "Generate responsive HTML/CSS scaffold",
+      "Optimize assets with WebP and lazy loading",
+      "Add JSON-LD structured data schemas",
+      "Host on Cloudflare Pages global CDN"
+    ]
+  }
+}

@@ -11,7 +11,7 @@
 
 `node --test tools/intra-turn-progress-reminder.test.mjs tools/progress-push-push.test.mjs tools/kim-inbox.test.mjs tools/auto-progress-watch.test.mjs`: 82 pass / 0 fail。evidence/progress-push-focused-final.txt。
 
-ディスパッチャ検証は evidence/progress-dispatch-final.txt。3回目に119文字のリマインダーが additionalContext に届くことを実測。最終集計は同ファイル参照。
+ディスパッチャ検証は evidence/progress-dispatch-final.txt。3回目に119文字のリマインダーが additionalContext に届くことを実測。最終集計: 30 tests / 29 pass / 0 fail / 1 skip（POSIX 専用 fixture）。
 
 `git diff --check`: exit 0。
 

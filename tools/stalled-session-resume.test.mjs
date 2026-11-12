@@ -295,6 +295,37 @@ test('progress clears failure budget, errors and no-progress consume it', async 
   await run(options([], {}), f.io);
   assert.equal((await f.ledger()).sessions['session-0'].noProgress, 0);
 });
+test('three consecutive progressed outcomes close session due to stalled-resume-progressed-loop', async t => {
+  const f = await fixture(t, 1); const closed = { sessions: {} }; let closeCalls = 0;
+  f.io.loadClosed = async () => closed;
+  f.io.closeSession = async (sessionId, value) => { closeCalls++; closed.sessions[sessionId] ??= value; };
+  f.io.execute = async () => ({ outcome: 'progressed', reason: 'checking status' });
+
+  // 1st time progressed
+  const r1 = await run(options([], {}), f.io);
+  assert.equal(r1.results[0].outcome, 'progressed');
+  assert.equal(closeCalls, 0);
+
+  f.next();
+  // 2nd time progressed
+  const r2 = await run(options([], {}), f.io);
+  assert.equal(r2.results[0].outcome, 'progressed');
+  assert.equal(closeCalls, 0);
+
+  f.next();
+  // 3rd time progressed -> converted to done and closed
+  const r3 = await run(options([], {}), f.io);
+  assert.equal(r3.results[0].outcome, 'done');
+  assert.equal(closeCalls, 1);
+  assert.deepEqual(closed.sessions['session-0'], {
+    closedAt: new Date(f.io.now()).toISOString(), reason: 'stalled-resume-progressed-loop', status: '完了', title: 'Task 0', cwd: f.io.home, file: 'file-0'
+  });
+
+  f.next();
+  // 4th time: skipped as closed
+  const r4 = await run(options([], {}), f.io);
+  assert.equal(r4.rows[0].skip, 'closed');
+});
 test('resumedParentId reads the parent id from the runner prompt only', () => {
   assert.equal(resumedParentId('停滞セッション「Task 0」(session-0)の承認済みの目的を1歩進めてください。'), 'session-0');
   assert.equal(resumedParentId('停滞セッション「A」の承認済みの目的を1歩進めてください。'), '');

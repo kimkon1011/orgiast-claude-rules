@@ -189,6 +189,7 @@ export function skipReason(record, entry, night, closed, mtimeMs, now, activeMs)
   if (titleSkip) return titleSkip;
   if (now - mtimeMs <= activeMs || record.sessionId === process.env.CLAUDE_SESSION_ID) return 'active';
   if ((entry.noProgress ?? 0) >= 3) return '3回進捗なし';
+  if ((entry.progressedStreak ?? 0) >= 3) return 'progressed 3回連続';
   if (entry.attempts?.some(a => a.night === night)) return '今晩処理済み';
   return '';
 }
@@ -253,11 +254,11 @@ ${wait ? `このセッションの待機期限 ${wait.label} を過ぎました�
 前回までの再開結果: ${JSON.stringify(previous)}。済んだ作業を繰り返さず、成果物の現状を検証してください。
 期限は${timeoutMs / 60000}分です。期限前に終了してください。
 実行結果を ${resultFile} にJSONで保存してください: {"state":"progressed"|"done"|"waiting-human"|"stuck","evidence":"変更した成果物と検証結果、または進めない理由","askId":"kim-inbox の ask ID（waiting-human の時は必須）"}。
-progressed=成果物を進めて検証した。
-done=目的が完了済み（後続セッションで完了した場合も含む）で、やることが残っていない。
+progressed=このセッションでコード変更・ファイル作成・外部送信・状態変更など、確認以外の実際の作業を行った。
+done=目的が完了済み（後続セッションで完了した場合も含む）で、やることが残っていない。確認・検証のみで変更1つもしなかった場合もこちら。
 waiting-human=残りが人の判断・操作だけで、kim-inbox に ask を積んだ（既存の open ask でもよい）。
 stuck=それ以外で進められなかった。
-単なる進捗確認・計画・終了コード0は成果に含めません。\n当初依頼: ${record.firstPrompt}\n直近: ${record.lastAssistantText}`;
+確認・検証だけで実際の変更を何もしていないなら progressed は選ばない。done を選ぶこと。\n当初依頼: ${record.firstPrompt}\n直近: ${record.lastAssistantText}`;
   const result = await (io.runChild ?? runChild)(io.executable ?? resolveClaudeExe(), prompt, record.cwd, record.cwd, timeoutMs, { resumeSessionId: record.sessionId });
   const execution = { executor: result.executorUsed || 'not-started', executorAttempts: result.executorAttempts ?? [] };
   if (result.skippedNoExecutor) return { ...execution, outcome: 'no-executor', reason: `実行役なし: ${String(result.stderr ?? '').trim().slice(-300) || result.executorUsed || 'cheap-code'}` };
@@ -544,15 +545,28 @@ export async function run(config = options(), io = {}) {
           const ancestors = overdue ? [] : chainAncestors(ledger, entry.parentSessionId);
           if (result.outcome === 'progressed') {
             entry.noProgress = 0;
+            // 連続 progressed ループ検出: progressed が成果物の変更なしで戻ると
+            // closeSession されず永遠に再開される（2026-11-07〜10 実測:
+            // 9e2a35b8 が3夜連続で同じ「完了済み」確認→progressed を返した）。
+            // 3回目の progressed は done として処理しセッションを閉じる。
+            entry.progressedStreak = (entry.progressedStreak ?? 0) + 1;
+            if (entry.progressedStreak >= 3) {
+              attempt.outcome = 'done';
+              result.outcome = 'done';
+              entry.progressedStreak = 0;
+              await closeSession(record.sessionId, { closedAt: new Date(now()).toISOString(), reason: 'stalled-resume-progressed-loop', status: '完了', title: record.displayTitle, cwd: record.cwd, file: record.file });
+            }
             for (const ancestor of ancestors) { ancestor.noProgress = 0; delete ancestor.skipReason; }
           } else if (result.outcome === 'done' || result.outcome === 'waiting-human') {
             entry.noProgress = Math.max(0, entry.noProgress - 1);
+            entry.progressedStreak = 0;
             if (result.outcome === 'done') {
               await closeSession(record.sessionId, { closedAt: new Date(now()).toISOString(), reason: 'stalled-resume-done', status: '完了', title: record.displayTitle, cwd: record.cwd, file: record.file });
             } else {
               entry.waitingHuman = { askId: result.askId, until: now() + 7 * 86400000 };
             }
           } else {
+            entry.progressedStreak = 0;
             // 子の不進捗は同じ目的を継ぐ祖先の予算にも加算する。これが無いと子の id が
             // 毎晩変わるだけで祖先の noProgress が増えず、連鎖が retire されない。
             for (const ancestor of ancestors) {

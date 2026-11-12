@@ -311,7 +311,7 @@ export function snapshotWorkingTree(cwd, spawnImpl = spawnSync) {
   try {
     const gitCheck = spawnImpl('git', ['-C', cwd, 'rev-parse', '--is-inside-work-tree'], { windowsHide: true, encoding: 'utf8' });
     if (gitCheck && gitCheck.status === 0) {
-      const diff = spawnImpl('git', ['-C', cwd, 'diff', '--stat'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
+      const diff = spawnImpl('git', ['-C', cwd, 'diff', 'HEAD', '--no-ext-diff', '--no-textconv'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
       const status = spawnImpl('git', ['-C', cwd, 'status', '--porcelain'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
       const head = spawnImpl('git', ['-C', cwd, 'rev-parse', 'HEAD'], { windowsHide: true, encoding: 'utf8' }).stdout || '';
       return `${head}\n${diff}\n${status}`;
@@ -382,6 +382,19 @@ export function isCheapFirstEnabled({ kind, instruction, review = false, env = p
   if (/lane:\s*codex/i.test(String(instruction || ''))) return false;
   if (String(env.CODEX_DO_CHEAP_FIRST ?? '') === '0') return false;
   return true;
+}
+
+// A zero exit code alone does not prove that an implementation was delivered.
+export function cheapFirstFailureReason({ kind, result, treeChanged }) {
+  const output = String(result.output || '');
+  const combined = output + '\n' + (result.stderr || '');
+  if (/unrecognized_model/i.test(combined)) return 'unrecognized_model';
+  if (!output.trim()) return 'empty_output';
+  // Replacement characters, invalid controls and common UTF-8-as-Latin-1 sequences.
+  if (/[\uFFFD\u0000-\u0008\u000B\u000C\u000E-\u001F]/u.test(output)
+    || /(?:Ã.|Â.|â[\u0080-\u00BF€]|ðŸ){2,}/u.test(output)) return 'garbled_output';
+  if (kind === 'implement' && !treeChanged) return 'no_changes';
+  return '';
 }
 
 export function shouldFlagEmptyFallbackDiff({ executorName, wantedEdit, timedOut, diffText, treeChanged }) {
@@ -1413,6 +1426,7 @@ async function tryCheapFirstFallback() {
     });
     if (bt <= 0) break;
     const as = Date.now();
+    const backendTreeBefore = treeSnapshot();
     lastBackend = backend;
     console.log(`[codex-do] cheap-first: ${backend.name} model=${backend.model}`);
     const res = backend.kind === 'gemini'
@@ -1427,11 +1441,17 @@ async function tryCheapFirstFallback() {
     if (backend.name === 'gemini-cli' && billingFailure) rememberProviderBillingFailure(home, 'gemini');
     const exhausted = isBackendExhausted(res.output, res.stderr) || (backend.kind === 'cheap-code' && res.status === 3);
     const dec = shouldAdvanceToNextBackend({ timedOut: res.timedOut === true, status: res.status, exhausted, cliMissing, aborted: res.aborted === 'policy_stall' });
-    const outcome = dec.outcome;
-    const treeUnchangedNow = wantedEdit && !res.timedOut && treeBefore.trim() === treeSnapshot().trim() && !hasExternalWork(res);
+    const invalid = dec.outcome === 'ok' ? cheapFirstFailureReason({
+      kind: taskKind, result: res, treeChanged: backendTreeBefore.trim() !== treeSnapshot().trim(),
+    }) : '';
+    const outcome = invalid || dec.outcome;
+    if (invalid) {
+      res.status = 1;
+      console.error('[codex-do] cheap-first: ' + backend.name + ' failed validation (' + invalid + ')');
+    }
     chainResult.push({ backend: backend.name, model: backend.model, status: res.status ?? null, timedOut: res.timedOut === true, out: Math.ceil((res.outputChars || 0) / 4), outChars: res.outputChars || 0, secs: Number(((Date.now() - as) / 1000).toFixed(3)), budgetSecs: bt, stderrTail: String(res.stderr || '').replace(/\s+/g, ' ').trim().slice(-200), outcome });
     if (dec.advance) { if (['ok', 'timeout', 'cli_missing', 'blocked'].includes(outcome)) recordFallbackBackendOutcome(home, { backend: backend.name, outcome }); continue; }
-    if (!isLast && outcome === 'ok' && treeUnchangedNow) { if (chainResult.at(-1)) chainResult.at(-1).outcome = 'no_changes'; continue; }
+    if (invalid) continue;
     if (outcome === 'ok') cheapSucceeded = true;
     if (['ok', 'timeout', 'cli_missing', 'blocked'].includes(outcome)) recordFallbackBackendOutcome(home, { backend: backend.name, outcome });
     break;

@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { skipCoolingBackends } from './fallback-backend-health.mjs';
 
 const tool = fileURLToPath(new URL('./codex-do.mjs', import.meta.url));
-const { needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen } = await import('./codex-do.mjs');
+const { cheapFirstFailureReason, needsWorktreeRepair, detectQuotaLimit, detectCodexAuthFailure, isCodexAuthFailure, killProcessTree, shouldFlagEmptyFallbackDiff, snapshotWorkingTree, buildQwenArgs, buildQwenEnv, buildGeminiArgs, buildGeminiEnv, prepareGeminiWorkerPolicy, fallbackBackendTimeoutSecs, chainBackendBudgetSecs, backendSpecificTimeoutSecs, effectiveBackendTimeoutSecs, COOLING_PROBE_TIMEOUT_SECS, countPolicyDenials, shouldAbortPolicyStall, loadDeepseekKey, loadGeminiKey, loadEnvKey, resolveFallbackBackends, resolveQwenBackends, findExecutable, isBackendCliMissing, shouldAdvanceToNextBackend, isBackendExhausted, isBackendBillingFailure, isProviderBillingBlocked, validateCwd, wslCodexLaunchPlan, WSL_PROBE_TIMEOUT_MS, wantsEdit, buildUsageRow, remainingPrimaryBudgetSecs, parseCodexOutput, detectOutsideScopeChanges, isCheapFirstEnabled, shouldAutoInstallQwen, maybeAutoInstallQwen } = await import('./codex-do.mjs');
 
 const runDirs = [];
 function workDir() {
@@ -1367,12 +1367,12 @@ test('review で変更0件でも終了コード 0（非 implement は空 diff �
 
 test('isCheapFirstEnabled: implement 既定で有効、review では無効、lane:codex 記載で無効、env=0 で無効', () => {
   // implement 既定: 有効
-  assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction: '何か実装して' }), true);
+  assert.equal(isCheapFirstEnabled({ env: {}, kind: 'implement', instruction: '何か実装して' }), true);
   // review: 無効
-  assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction: 'レビュー', review: true }), false);
+  assert.equal(isCheapFirstEnabled({ env: {}, kind: 'implement', instruction: 'レビュー', review: true }), false);
   // lane:codex あり: 無効
-  assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction: '<!-- lane: codex --> 実装して' }), false);
-  assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction: 'Lane: Codex 実装して' }), false);
+  assert.equal(isCheapFirstEnabled({ env: {}, kind: 'implement', instruction: '<!-- lane: codex --> 実装して' }), false);
+  assert.equal(isCheapFirstEnabled({ env: {}, kind: 'implement', instruction: 'Lane: Codex 実装して' }), false);
   // CODEX_DO_CHEAP_FIRST=0: 無効
   assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction: '実装して', env: { CODEX_DO_CHEAP_FIRST: '0' } }), false);
   // CODEX_DO_CHEAP_FIRST=1: 有効
@@ -1380,34 +1380,25 @@ test('isCheapFirstEnabled: implement 既定で有効、review では無効、lan
   // CODEX_DO_CHEAP_FIRST 未設定: 有効
   assert.equal(isCheapFirstEnabled({ kind: 'implement', instruction: '実装して', env: {} }), true);
   // implement 以外: 無効
-  assert.equal(isCheapFirstEnabled({ kind: 'verify', instruction: '確認して' }), false);
-  assert.equal(isCheapFirstEnabled({ kind: 'investigate', instruction: '調べて' }), false);
-  assert.equal(isCheapFirstEnabled({ kind: 'classify', instruction: '分類して' }), false);
+  assert.equal(isCheapFirstEnabled({ env: {}, kind: 'verify', instruction: '確認して' }), false);
+  assert.equal(isCheapFirstEnabled({ env: {}, kind: 'investigate', instruction: '調べて' }), false);
+  assert.equal(isCheapFirstEnabled({ env: {}, kind: 'classify', instruction: '分類して' }), false);
 });
 
-test('cheap-first: implement 既定 → fallback が先に呼ばれ Codex は呼ばれない', () => {
-  const mockResults = [
-    // cheap-first fallback 連鎖: cheap-code:deepseek が成功（0ファイル変更＝空diff検出が走る）
-    { status: 0, output: 'Qwen Code CLI has successfully edited files.', stderr: '' },
-  ];
+test('cheap-first: implement with zero changed files starts Codex', () => {
   const home = workDir();
-  const result = run(['--force-native', '--cwd', home, '実装して'], {
-    home,
-    env: {
-      CODEX_DO_CHEAP_FIRST: '1',
-      CODEX_DO_MOCK_RESULTS: JSON.stringify(mockResults),
-      GEMINI_API_KEY: '',
-      OPENROUTER_API_KEY: 'sk-test',
+  const result = run(['--force-native', '--cwd', home, '--kind', 'implement', 'implement feature'], {
+    home, env: {
+      CODEX_DO_CHEAP_FIRST: '1', GEMINI_API_KEY: '', OPENROUTER_API_KEY: 'sk-test',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify([
+        { status: 0, output: 'Edited six files, tested and committed.' },
+        { status: 0, output: 'Codex completed.' },
+      ]),
     },
   });
-  // モックでは実際にファイルを変更しないため空diff検出が走り非ゼロ終了。
-  // 重要なのは cheap-first が実行され、Codex が呼ばれなかったこと。
-  assert.match(result.stderr, /cheap-first/);
-  assert.match(result.stderr, /代替 AI が成功したため Codex は起動しません/);
-  // "executor=codex" は出ない
-  assert.doesNotMatch(result.stdout, /executor=codex/);
-  // executor=fallback か executor=cheap-first が出力されている
-  assert.match(result.stdout, /executor=fallback:cheap-code:deepseek/);
+  assert.match(result.stderr, /failed validation \(no_changes\)/);
+  assert.match(result.stdout, /executor=codex/);
+  assert.doesNotMatch(result.stderr, /代替 AI が成功したため/);
 });
 
 test('cheap-first: implement 既定 → fallback 全滅 → Codex が呼ばれる', () => {
@@ -2907,4 +2898,78 @@ test('maybeAutoInstallQwen は条件を満たせば spawn を呼び lastAttemptA
   assert.ok(spawnArgs !== null, 'spawn が呼ばれなかった');
   const state = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'qwen-autoinstall.json'), 'utf8'));
   assert.ok(state.lastAttemptAt, 'lastAttemptAt が書き込まれていない');
+});
+
+
+test('cheap-first validation: actual changes succeed; invalid output fails even with changes', () => {
+  const check = (output, extra = {}) => cheapFirstFailureReason({
+    kind: 'implement', treeChanged: true, result: { output, stderr: '' }, ...extra,
+  });
+  assert.equal(check('Implemented and tested.'), '');
+  assert.equal(check('変更しました。テスト成功。'), '');
+  assert.equal(check('done', { treeChanged: false }), 'no_changes');
+  assert.equal(check('調査結果', { kind: 'investigate', treeChanged: false }), '');
+  for (const output of ['', '  \n', '\uFFFD\uFFFD', 'Ã£Ã©Ã±', 'abc\0def']) {
+    assert.match(check(output), /empty_output|garbled_output/);
+  }
+  assert.equal(check('[claude-code:unrecognized_model] {}'), 'unrecognized_model');
+  assert.equal(check('done', { result: { output: 'done', stderr: '[claude-code:unrecognized_model]' } }), 'unrecognized_model');
+});
+
+for (const output of ['', '\uFFFD\uFFFD', '[claude-code:unrecognized_model] {}']) {
+  test('cheap-first: invalid output ' + JSON.stringify(output) + ' starts Codex', () => {
+    const home = workDir();
+    const result = run(['--force-native', '--cwd', home, '--kind', 'implement', 'implement feature'], {
+      home, env: {
+        CODEX_DO_CHEAP_FIRST: '1', GEMINI_API_KEY: '', OPENROUTER_API_KEY: 'sk-test',
+        CODEX_DO_MOCK_RESULTS: JSON.stringify([
+          { status: 0, output }, { status: 0, output: 'Codex completed.' },
+        ]),
+      },
+    });
+    assert.match(result.stderr, /failed validation/);
+    assert.match(result.stdout, /executor=codex/);
+    assert.doesNotMatch(result.stderr, /代替 AI が成功したため/);
+  });
+}
+
+test('cheap-first enabled: investigate succeeds with zero changed files', () => {
+  const home = workDir();
+  const result = run(['--force-native', '--cwd', home, '--kind', 'investigate', 'investigate behavior'], {
+    home, env: {
+      CODEX_DO_CHEAP_FIRST: '1',
+      CODEX_DO_MOCK_RESULTS: JSON.stringify([{ status: 0, output: 'Investigation complete.' }]),
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /executor=llm-ask:gemini/);
+  assert.doesNotMatch(result.stdout, /executor=codex/);
+});
+
+
+test('cheap-first validation observes actual unstaged, staged and committed edits', () => {
+  const cwd = workDir();
+  const git = (...args) => {
+    const result = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+  };
+  git('init');
+  git('config', 'user.name', 'Codex Test');
+  git('config', 'user.email', 'test@example.com');
+  const file = path.join(cwd, 'feature.txt');
+  fs.writeFileSync(file, 'before\n');
+  git('add', 'feature.txt');
+  git('commit', '-m', 'fixture');
+  const before = snapshotWorkingTree(cwd);
+  const validate = () => cheapFirstFailureReason({
+    kind: 'implement', result: { output: 'Implemented.' },
+    treeChanged: before !== snapshotWorkingTree(cwd),
+  });
+  assert.equal(validate(), 'no_changes');
+  fs.writeFileSync(file, 'after!\n');
+  assert.equal(validate(), '');
+  git('add', 'feature.txt');
+  assert.equal(validate(), '');
+  git('commit', '-m', 'implementation');
+  assert.equal(validate(), '');
 });

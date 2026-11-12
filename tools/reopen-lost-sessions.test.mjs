@@ -1614,7 +1614,8 @@ test('hidden に含まれる state 候補が開かれず archivedByUser が 1 �
   const result = await reopenLost({
     base, since, until, dryRun: true, stateBased: true, claudeCli: 'claude.exe', now, fetchImpl,
     openDb: openDbMock,
-    fsImpl: { ...fs, existsSync: () => true },
+    env: { APPDATA: path.join(base, 'nonexistent') },
+    fsImpl: { ...fs, existsSync: () => true, copyFileSync: () => {} },
     spawn: () => ({ status: 0, stdout: '[]' })
   });
 
@@ -1638,7 +1639,8 @@ test('hidden に含まれる host_exit 候補も開かれない', async t => {
   const result = await reopenLost({
     base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl,
     openDb: openDbMock,
-    fsImpl: { ...fs, existsSync: () => true },
+    env: { APPDATA: path.join(base, 'nonexistent') },
+    fsImpl: { ...fs, existsSync: () => true, copyFileSync: () => {} },
     spawn: () => ({ status: 0, stdout: '[]' })
   });
 
@@ -1662,7 +1664,8 @@ test('hidden に無い候補は従来どおり開かれる', async t => {
   const result = await reopenLost({
     base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl,
     openDb: openDbMock,
-    fsImpl: { ...fs, existsSync: () => true },
+    env: { APPDATA: path.join(base, 'nonexistent') },
+    fsImpl: { ...fs, existsSync: () => true, copyFileSync: () => {} },
     spawn: () => ({ status: 0, stdout: '[]' })
   });
 
@@ -1687,7 +1690,8 @@ test('hidden 読み取り失敗時は従来どおり開かれ hiddenError が入
   const result = await reopenLost({
     base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl,
     openDb: openDbMock,
-    fsImpl: { ...fs, existsSync: () => true },
+    env: { APPDATA: path.join(base, 'nonexistent') },
+    fsImpl: { ...fs, existsSync: () => true, copyFileSync: () => {} },
     spawn: () => ({ status: 0, stdout: '[]' })
   });
 

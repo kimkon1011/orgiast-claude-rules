@@ -34,6 +34,7 @@ import {
   setupCueDocument,
   insertCueToDocument,
   getDocsToken,
+  findHeaderInsertIndex,
 } from './lib/meet-cue-doc.mjs';
 
 import {
@@ -45,6 +46,87 @@ import {
 const execFileAsync = promisify(execFile);
 const homeDir = () => process.env.ORGIAST_HOME || os.homedir();
 const meetCueBaseDir = (home = homeDir()) => path.join(home, '.claude', 'meet-cue');
+
+export function copyProfileFromChrome(profileName, { home = homeDir(), localAppData = process.env.LOCALAPPDATA, isCookiesLocked } = {}) {
+  const userDataDir = path.join(localAppData || path.join(os.homedir(), 'AppData', 'Local'), 'Google', 'Chrome', 'User Data');
+  const srcProfileDir = path.join(userDataDir, profileName);
+  const destDir = path.join(home, '.claude', 'browser-profiles', 'meet-bot-seisaku');
+
+  if (!fs.existsSync(srcProfileDir)) {
+    return { ok: false, reason: 'profile_not_found', code: 1 };
+  }
+
+  // Check Cookies file lock
+  const cookiesFiles = [
+    path.join(srcProfileDir, 'Network', 'Cookies'),
+    path.join(srcProfileDir, 'Cookies'),
+  ];
+  let cookiesLocked = false;
+
+  if (typeof isCookiesLocked === 'boolean') {
+    cookiesLocked = isCookiesLocked;
+  } else {
+    for (const cFile of cookiesFiles) {
+      if (fs.existsSync(cFile)) {
+        try {
+          const fd = fs.openSync(cFile, 'r+');
+          fs.closeSync(fd);
+        } catch (err) {
+          if (err.code === 'EBUSY' || err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'EXDEV') {
+            cookiesLocked = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  if (cookiesLocked) {
+    console.error(`[meet-cue login] Chrome が起動中のため Cookies がロックされています (${profileName})`);
+    return { ok: false, reason: 'chrome_running', code: 75 };
+  }
+
+  try {
+    fs.mkdirSync(destDir, { recursive: true });
+
+    const copyRecursiveSync = (src, dest) => {
+      const stats = fs.statSync(src);
+      const name = path.basename(src);
+
+      if (/cache/i.test(name) || name === 'Code Cache' || name === 'GPUCache' || name === 'Service Worker' || name === 'CacheStorage') {
+        return;
+      }
+
+      if (stats.isDirectory()) {
+        fs.mkdirSync(dest, { recursive: true });
+        for (const child of fs.readdirSync(src)) {
+          copyRecursiveSync(path.join(src, child), path.join(dest, child));
+        }
+      } else {
+        fs.copyFileSync(src, dest);
+      }
+    };
+
+    copyRecursiveSync(srcProfileDir, path.join(destDir, profileName));
+
+    const loginInfo = {
+      ok: true,
+      account: 'seisaku-team@orgiast.jp',
+      profile: profileName,
+      profileDir: path.join(destDir, profileName),
+      at: new Date().toISOString(),
+    };
+    const loginFile = path.join(home, '.claude', 'meet-cue', 'bot-login.json');
+    fs.mkdirSync(path.dirname(loginFile), { recursive: true });
+    fs.writeFileSync(loginFile, JSON.stringify(loginInfo, null, 2), 'utf8');
+
+    console.log(`[meet-cue login] Chrome プロファイル "${profileName}" の複製に成功しました。`);
+    return { ok: true, code: 0, loginInfo };
+  } catch (err) {
+    console.error(`[meet-cue login] 複製エラー: ${err.message}`);
+    return { ok: false, reason: err.message, code: 1 };
+  }
+}
 
 export function generateSessionId() {
   const d = new Date();
@@ -210,6 +292,24 @@ export async function main(argv = process.argv.slice(2)) {
   }
 
   if (command === 'login') {
+    const { values } = parseArgs({
+      args: argv.slice(1),
+      allowPositionals: true,
+      options: {
+        'from-chrome-profile': { type: 'string' },
+      },
+    });
+
+    if (values['from-chrome-profile']) {
+      const profileName = values['from-chrome-profile'];
+      const res = copyProfileFromChrome(profileName);
+      if (!res.ok) {
+        if (isEntry(import.meta.url)) process.exit(res.code || 1);
+        return res;
+      }
+      return { ok: true, result: res };
+    }
+
     const profileDir = path.join(os.homedir(), '.claude', 'browser-profiles', 'meet-bot-seisaku');
     console.log(`[meet-cue] プロファイル "${profileDir}" でログイン用ブラウザを起動します...`);
 
@@ -395,6 +495,7 @@ export async function main(argv = process.argv.slice(2)) {
         brief: { type: 'string' },
         'brief-file': { type: 'string' },
         'cards-file': { type: 'string' },
+        'doc-id': { type: 'string' },
         mode: { type: 'string' },
         'max-minutes': { type: 'string' },
         'interval-sec': { type: 'string' },
@@ -420,12 +521,26 @@ export async function main(argv = process.argv.slice(2)) {
       brief = fs.readFileSync(values['brief-file'], 'utf8');
     }
 
-    // 1. Setup Cue Doc
-    console.log(`[meet-cue start] カンペ Doc を作成中...`);
-    const docInfo = await setupCueDocument({
-      title: values.title || '打合せ',
-      staff: values.staff,
-    });
+    // 1. Setup or reuse Cue Doc
+    let docInfo;
+    if (values['doc-id']) {
+      const docId = values['doc-id'];
+      const headerInsertIndex = await findHeaderInsertIndex({ docId });
+      docInfo = {
+        docId,
+        docName: values.title || '打合せ',
+        staffUrl: `https://docs.google.com/document/d/${docId}/edit?authuser=${encodeURIComponent(values.staff)}`,
+        kimUrl: `https://docs.google.com/document/d/${docId}/edit?authuser=kim@orgiast.jp`,
+        headerInsertIndex,
+      };
+      console.log(`[meet-cue start] 既存 Doc ID を使用: ${docId} (headerInsertIndex: ${headerInsertIndex})`);
+    } else {
+      console.log(`[meet-cue start] カンペ Doc を作成中...`);
+      docInfo = await setupCueDocument({
+        title: values.title || '打合せ',
+        staff: values.staff,
+      });
+    }
 
     console.log(`\n==================================================`);
     console.log(`カンペ Doc (社員用): ${docInfo.staffUrl}`);

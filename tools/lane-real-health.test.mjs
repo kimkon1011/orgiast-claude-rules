@@ -296,3 +296,35 @@ test('post-recovery fifty-percent boundary excludes older calls from denominator
     assert.equal(health.lanes.deepseek.reason, failures === 5 ? 'real_fail_rate' : 'probe_ok');
   }
 });
+
+test('five auth failures on codex lane produce dead:oauth_consent', t => {
+  const home = fixture(t, Array.from({ length: 5 }, () => ({ provider: 'codex', status: 'error', reason: 'Missing bearer or basic authentication in header' })));
+  const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.codex.reason, 'dead:oauth_consent');
+  assert.equal(health.lanes.codex.alive, false);
+  assert.match(health.lanes.codex.error, /Missing bearer/i);
+});
+
+test('five auth failures on non-codex lane produce auth_invalid', t => {
+  const home = fixture(t, Array.from({ length: 5 }, () => ({ status: 'error', reason: 'HTTP 401 unauthorized' })));
+  const health = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.deepseek.reason, 'auth_invalid');
+  assert.equal(health.lanes.deepseek.alive, false);
+  assert.match(health.lanes.deepseek.error, /HTTP 401/);
+});
+
+test('mixed auth and non-auth failures still produce real_fail_rate', t => {
+  const home = fixture(t, [
+    { provider: 'codex', status: 'error', reason: 'HTTP 401 unauthorized' },
+    { provider: 'codex', status: 'error', reason: 'HTTP 401 unauthorized' },
+    { provider: 'codex', status: 'error', reason: 'HTTP 401 unauthorized' },
+    { provider: 'codex', status: 'error', reason: 'HTTP 500 internal error' },
+    { provider: 'codex', status: 'error', reason: 'HTTP 500 internal error' },
+  ]);
+  const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.codex.reason, 'real_fail_rate');
+  assert.equal(health.lanes.codex.alive, false);
+});

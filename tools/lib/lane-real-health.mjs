@@ -86,10 +86,18 @@ export function applyRealLaneHealth(health, home, now = Date.now()) {
     const calls = s?.events.filter(event => event.at > lastOkAt) || [];
     const failures = calls.filter(event => event.reason !== undefined);
     if (calls.length >= 5 && failures.length / calls.length >= .5) {
-      state.alive = false;
-      state.reason = 'real_fail_rate';
-      delete state.until;
-      state.error = Object.entries(failures.reduce((reasons, event) => { reasons[event.reason] = (reasons[event.reason] || 0) + 1; return reasons; }, {})).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([r, n]) => `${r} (${n})`).join('; ');
+      const allAuth = failures.every(event => /basic authentication|HTTP\s*401|\b401\b|unauthorized|login required|token.*expired|Missing bearer/i.test(event.reason || ''));
+      if (allAuth) {
+        state.alive = false;
+        state.reason = lane === 'codex' ? 'dead:oauth_consent' : 'auth_invalid';
+        delete state.until;
+        state.error = failures.map(event => event.reason).filter(Boolean).join('; ');
+      } else {
+        state.alive = false;
+        state.reason = 'real_fail_rate';
+        delete state.until;
+        state.error = Object.entries(failures.reduce((reasons, event) => { reasons[event.reason] = (reasons[event.reason] || 0) + 1; return reasons; }, {})).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([r, n]) => `${r} (${n})`).join('; ');
+      }
     // A later real success supersedes wallet evidence; gateway probes do not.
     } else if ((s?.billingCalls > (s?.quotaCalls || 0) && s.lastBillingAt >= s.lastOkAt)
       || (!quota && !state.alive && billingFailure(`${state.reason} ${state.error || ''}`))) {

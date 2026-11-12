@@ -19,6 +19,8 @@ import { completionActions } from './lib/auto-progress-artifact.mjs';
 import { reportCheckProgress } from './lib/auto-progress-heartbeat.mjs';
 import { checkPromise, checkProgressSummary, executeCheck, isTimeOnlyCheck, queueCheckFollowup, pendingAction } from './auto-progress-check.mjs';
 import { addItem } from './kim-inbox.mjs';
+import { externalSpec } from './lib/external-monitor-state.mjs';
+import { pollExternal, drainExternalQueue } from './auto-progress-external-monitor.mjs';
 import { main as writeProgressPush } from './progress-push.mjs';
 import { pushDailyProgress } from './lib/auto-progress-daily.mjs';
 import { appendInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
@@ -709,7 +711,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   const file = ledgerFile(home);
   if (!dryRun) writeProgressPush({ home, now });
   const clock = io.clock ?? Date.now;
-  const stopAt = clock() + 45 * 60000;
+  const stopAt = clock() + 27 * 60000;
   const summary = { checked: 0, done: 0, overdueReported: 0, noop: 0, inProgress: 0, stalled: 0, resumed: 0, resumeDeferred: 0, reported: 0, expired: 0, graced: 0, superseded: 0, discovered: 0, errors: [], phaseMs: {} };
   let notificationsStopped = false;
   // 各段階の経過時間を記録する。phaseMs は summary に含まれる。
@@ -890,12 +892,17 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   // Checks run first, before the potentially lengthy legacy resume lane.
   const stalledChecks = new Set();
   const executable = [...candidates.filter(row => row.check && !reservation(row)), ...pendingChecks];
-  executable.sort((a, b) => (Date.parse(a.lastCheckedAt) || 0) - (Date.parse(b.lastCheckedAt) || 0));
+  executable.sort((a, b) => Number(Boolean(externalSpec(b))) - Number(Boolean(externalSpec(a))) || (Date.parse(a.lastCheckedAt) || 0) - (Date.parse(b.lastCheckedAt) || 0));
   for (const row of executable) {
     if (notificationsStopped || clock() + 60000 >= stopAt) break;
     if (dryRun) continue; // --dry-run must never execute arbitrary commands.
     summary.checked++;
     try {
+      if (externalSpec(row)) {
+        const state = await pollExternal(row, { home, now, patch, io });
+        if (state === 'expired') summary.expired++; else summary.inProgress++;
+        continue;
+      }
       const overdue = now >= Date.parse(row.deadlineAt);
       let state = await checkPromise(row, { home, now, patch, io, suppressNotices: overdue });
       if (overdue && ['unmet', 'error'].includes(state)) {
@@ -945,6 +952,12 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     } catch (error) { summary.errors.push(`check: ${String(error?.message ?? error).slice(0, 120)}`); }
   }
   endPhase('check-loop');
+  if (!dryRun && !notificationsStopped && clock() + 6 * 60000 < stopAt) {
+    try {
+      const result = await drainExternalQueue({ home, now, resume: io.resume ?? resumeSession, io });
+      summary.resumed += result.resumed;
+    } catch (error) { summary.errors.push(`external-resume: ${error.message}`); }
+  }
   for (const row of doneSweep.recent) {
     if (dryRun || notificationsStopped || clock() + 60000 >= stopAt) break;
     await notifyDone(row, row.reason || '', row.doneNotifyArtifact || '');

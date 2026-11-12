@@ -3,15 +3,12 @@
 // 使い方: node tools/auto-progress-external-check.mjs --channel line --thread-id <groupId> --since <ISO日時>
 //   exit 0 = 新着あり（done）、exit 1 = まだ（unmet）、exit 3 = 確認不能（stalled）
 //   環境変数: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
-import fs from 'node:fs';
 import os from 'node:os';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { isEntry } from './is-entry.mjs';
 import { loadSecrets, resolveGroup } from './line-group-send.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
-
-const toolsDir = path.dirname(fileURLToPath(import.meta.url));
+import { getDriveToken } from './lib/drive-auth.mjs';
+import { headerValue, extractBody } from './gmail-search.mjs';
 
 const sbHeaders = s => ({
   apikey: s.SUPABASE_SERVICE_ROLE_KEY,
@@ -26,6 +23,7 @@ export function parseArgs(argv) {
     else if (a === '--thread-id') o.threadId = argv[++i];
     else if (a === '--since') o.since = argv[++i];
     else if (a === '--home') o.home = argv[++i];
+    else if (a === '--mailbox') o.mailbox = argv[++i];
     else throw new Error(`不明なオプション: ${a}\n使い方: node tools/auto-progress-external-check.mjs --channel line|discord|beeper|gmail --thread-id <id> --since <ISO日時> [--home <path>]`);
   }
   if (!o.channel || !o.threadId || !o.since) throw new Error('--channel, --thread-id, --since は必須です');
@@ -35,30 +33,57 @@ export function parseArgs(argv) {
 }
 
 /** Supabase の channel_messages テーブルから新着を照会する。 */
-export async function fetchLineMessages(secrets, threadId, since, { fetchImpl = gwsFetch } = {}) {
+export async function fetchLineMessages(secrets, threadId, since, { fetchImpl = gwsFetch, inclusive = false } = {}) {
+  const all = [];
+  for (let offset = 0; ; offset += 500) {
   const url = `${secrets.SUPABASE_URL}/rest/v1/channel_messages`
-    + `?select=id,created_at,sender_display_name,body,direction`
+    + `?select=id,external_message_id,created_at,sender_display_name,body,direction`
     + `&channel=eq.line&external_thread_id=eq.${encodeURIComponent(threadId)}`
-    + `&created_at=gt.${encodeURIComponent(since)}`
-    + `&order=created_at.asc`;
-  const r = await fetchImpl(url, { headers: sbHeaders(secrets) });
+    + `&created_at=${inclusive ? 'gte' : 'gt'}.${encodeURIComponent(since)}`
+    + `&order=created_at.asc,id.asc&limit=500&offset=${offset}`;
+  const r = await fetchImpl(url, { headers: sbHeaders(secrets), signal: AbortSignal.timeout(20000) });
   if (!r.ok) {
     const body = await r.text().catch(() => '');
     throw new Error(`Supabase HTTP ${r.status}: ${body.slice(0, 200)}`);
   }
   const rows = await r.json();
   if (!Array.isArray(rows)) throw new Error('Supabase 応答が配列ではありません');
+  all.push(...rows);
+  if (rows.length < 500) break;
+  }
   // 自社（direction=outbound）を除く新着を抽出
-  const external = rows.filter(row => row.direction !== 'outbound' && row.direction !== 'self');
+  const external = all.filter(row => row.direction !== 'outbound' && row.direction !== 'self');
   return external.map(row => ({
     id: row.external_message_id || row.id,
     at: row.created_at,
     sender: row.sender_display_name,
-    text: String(row.body || '').slice(0, 200),
+    text: Array.from(String(row.body || '')).slice(0, 200).join(''),
   }));
 }
 
-export async function check({ channel, threadId, since, home = os.homedir(), secrets: givenSecrets, fetchImpl = gwsFetch }) {
+export async function fetchGmailMessages(threadId, since, { mailbox = 'seisaku-team@orgiast.jp', fetchImpl = gwsFetch, getToken = getDriveToken, inclusive = false } = {}) {
+  const token = await getToken({ scope: 'https://www.googleapis.com/auth/gmail.readonly', impersonate: mailbox, signal: AbortSignal.timeout(20000) });
+  const response = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`, {
+    headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20000),
+  });
+  if (!response.ok) throw new Error(`Gmail HTTP ${response.status}`);
+  const thread = await response.json();
+  if (!Array.isArray(thread.messages)) throw new Error('Gmail messages missing');
+  return thread.messages.filter(m => !(m.labelIds || []).some(l => ['SENT', 'DRAFT'].includes(l)) && (inclusive ? Number(m.internalDate) >= Date.parse(since) : Number(m.internalDate) > Date.parse(since)))
+    .map(m => ({ id: m.id, at: new Date(Number(m.internalDate)).toISOString(), sender: headerValue(m.payload, 'from'),
+      text: Array.from(extractBody(m.payload, 4000) || m.snippet || '').slice(0, 200).join('') }))
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+}
+
+export async function fetchMessages({ channel, threadId, since, home = process.env.ORGIAST_HOME || os.homedir(), ...options }) {
+  if (channel === 'gmail') return fetchGmailMessages(threadId, since, options);
+  if (channel !== 'line') throw new Error(`未対応チャネル: ${channel}`);
+  const secrets = options.secrets || await loadSecrets({ home });
+  if (!secrets.SUPABASE_URL || !secrets.SUPABASE_SERVICE_ROLE_KEY) throw new Error('Supabase credentials missing');
+  return fetchLineMessages(secrets, threadId, since, options);
+}
+
+export async function check({ channel, threadId, since, mailbox, home = os.homedir(), secrets: givenSecrets, fetchImpl = gwsFetch }) {
   if (channel === 'line') {
     const secrets = givenSecrets || await loadSecrets({ home }).catch(() => ({}));
     if (!secrets.SUPABASE_URL || !secrets.SUPABASE_SERVICE_ROLE_KEY) {
@@ -96,9 +121,9 @@ export async function check({ channel, threadId, since, home = os.homedir(), sec
     return;
   }
   if (channel === 'gmail') {
-    // Gmail は既存の external-waiting.mjs がカバー
-    console.error('Gmail の新着照会は external-waiting.mjs を利用してください');
-    process.exitCode = 3;
+    const messages = await fetchGmailMessages(threadId, since, { mailbox, fetchImpl });
+    console.log(JSON.stringify({ messages }));
+    process.exitCode = messages.length ? 0 : 1;
     return;
   }
 }

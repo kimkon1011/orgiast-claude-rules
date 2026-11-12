@@ -455,12 +455,12 @@ test('digest: 完了総数と最大10件の状況を表示し、残りは件数�
   assert.ok(messages.every(message => message.length <= 1800));
 });
 
-test('schedule: watchは毎時・実行上限55分とし既存PCも更新する', () => {
+test('schedule: watchは30分間隔・実行上限29分とし既存PCも更新する', () => {
   const script = fs.readFileSync(new URL('./register-auto-progress-task.ps1', import.meta.url), 'utf8');
   const triggers = script.match(/\$watchTriggers = (.*)/)[1];
   assert.deepEqual([...triggers.matchAll(/-At '([^']+)'/g)].map(m => m[1]), ['00:00']);
-  assert.match(triggers, /New-TimeSpan -Hours 1/);
-  assert.match(script, /-ExecutionTimeLimit \(New-TimeSpan -Minutes 55\)/);
+  assert.match(triggers, /New-TimeSpan -Minutes 30/);
+  assert.match(script, /-ExecutionTimeLimit \(New-TimeSpan -Minutes 29\)/);
   const poller = fs.readFileSync(new URL('./fleet-poller.ps1', import.meta.url), 'utf8');
   assert.match(poller, /if \(\$Dry\) \{ DrySkip 'register-auto-progress-task.ps1/);
   assert.match(poller, /-File \$autoProgressInstaller/);

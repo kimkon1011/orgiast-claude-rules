@@ -7,16 +7,18 @@ import { ledgerFile, readLedger, writeLedger, latestOpenPromises, applyPromise }
 import { executeCheck, preflightCheck, sessionStateReference, MAX_CHECK_TIMEOUT_MS, isTimeOnlyCheck } from './auto-progress-check.mjs';
 import { resolveOwner } from './notify-owner.mjs';
 import { hasReferencedApproval } from './lib/send-approval.mjs';
+import { externalSpec, MONITOR_DAYS } from './lib/external-monitor-state.mjs';
 // 外部の成果を読まず、時計と定数だけで決まる典型的な判定を拒否する。
 export { isTimeOnlyCheck } from './auto-progress-check.mjs';
 export function addCheck({ session, check, startWhen, deadline, label, nextClaude, nextKim, askFile, doneFile, timeout, cwd = process.cwd(), home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), probe, allowMet = false }) {
-  const convertedToStartWhen = startWhen === undefined && Boolean(check?.trim()) && Boolean(nextClaude?.trim());
+  const external = externalSpec({ check });
+  const convertedToStartWhen = !external && startWhen === undefined && Boolean(check?.trim()) && Boolean(nextClaude?.trim());
   if (convertedToStartWhen) startWhen = check;
   if (!session?.trim() || !(startWhen?.trim() || check?.trim()) || !label?.trim()) throw new Error('--session, --check, --label は必須です');
   if (startWhen !== undefined && (!startWhen.trim() || !nextClaude?.trim())) throw new Error('--start-when には --next-claude が必須です');
   if (check && isTimeOnlyCheck(check)) throw new Error('時刻だけの check は完了判定になりません。開始の予約は --start-when、完了判定は成果物（ファイル・PR・台帳など）を確かめるコマンドにしてください');
   const relative = /^\+(\d+)(m|h|d)$/.exec(deadline || '');
-  const deadlineMs = relative ? now + Number(relative[1]) * { m: 60000, h: 3600000, d: 86400000 }[relative[2]] : Date.parse(deadline);
+  const deadlineMs = relative ? now + Number(relative[1]) * { m: 60000, h: 3600000, d: 86400000 }[relative[2]] : !deadline && external ? now + MONITOR_DAYS : Date.parse(deadline);
   if (!Number.isFinite(deadlineMs) || deadlineMs <= now) throw new Error('--deadline は未来の ISO 日時または +24h などを指定してください');
   const timeoutSec = timeout === undefined || timeout === '' ? null : Number(timeout);
   if (timeoutSec !== null && !(timeoutSec > 0)) throw new Error('--timeout は正の秒数で指定してください');
@@ -25,7 +27,7 @@ export function addCheck({ session, check, startWhen, deadline, label, nextClaud
   const timeoutFields = checkTimeoutMs === undefined ? {} : { checkTimeoutMs };
   if (probe) {
     const { code, text } = probe({ check: startWhen || check, checkCwd: cwd, cwd, ...timeoutFields });
-    if (code === 0 && !startWhen && !allowMet) throw new Error(`check が登録時点で既に達成(exit 0)と判定されました: ${text}。達成時だけ exit 0 になる形か確認してください（例: … | grep -q MERGED）。本当に達成済みなら登録は不要です`);
+    if (code === 0 && !startWhen && !allowMet && !external) throw new Error(`check が登録時点で既に達成(exit 0)と判定されました: ${text}。達成時だけ exit 0 になる形か確認してください（例: … | grep -q MERGED）。本当に達成済みなら登録は不要です`);
     // code === null かつタイムアウト文言 → trial_timeout（preflightCheck が認めたもの）で登録を続行。
     // それ以外の code === null（構文エラー等）は従来通り拒否する。
     if (code !== null && code !== 1 && code !== 0 && (code !== 3 || startWhen)) throw new Error(`check がこの PC で実行できません(exit ${code}): ${text}`);
@@ -35,7 +37,7 @@ export function addCheck({ session, check, startWhen, deadline, label, nextClaud
   const file = ledgerFile(home), rows = readLedger(file);
   const old = latestOpenPromises(rows).find(row => row.sessionId === session)
     || rows.filter(row => row.sessionId === session).sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts))[0];
-  const promisedWork = [nextClaude, old?.promise, label].filter(Boolean).join('\n');
+  const promisedWork = [nextClaude, external ? '' : old?.promise, label].filter(Boolean).join('\n');
   if (/(?:送信|送る|送って|send)/iu.test(promisedWork) && !hasReferencedApproval(promisedWork, { home })) {
     throw new Error('auto-progress に社外送信は登録できません。下書き・kim-inbox の承認待ちまでにし、送信する場合は send-approval:<本文sha256> と有効な承認マーカーを付けてください');
   }

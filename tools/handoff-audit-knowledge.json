@@ -306,6 +306,12 @@
     "source": "handoff-audit-candidates.jsonl tool-name-route（route=Sheets API）: 7ef2fd3f94f75a307f8d76af10d9b681cb79018cf0d06ea21a515d13f033728a / 2026-11-07 route を手順文へ書き直して採用"
   },
   {
+    "pattern": "作業完了報告・状態確認",
+    "route": "完了報告や状態確認は、外部システムの直接照会で行う。報告前に当ターンで freee API / Supabase / アプリ管理 API 等を実叩きし、その実応答を根拠に「登録された」「反映された」と書く。Drive MCP はファイル操作ツールであって完了確認の正本ではない。具体的な照会先は対象システムごとに変わる: (1) freee への登録完了は `GET /api/v1/deals/{id}` で deals の存在・内容を read-back する。(2) アプリの状態確認は管理 API（keiri-hub の `/api/...` 等）を叩く。(3) GitHub PR のマージ状態は `gh pr view` の mergedAt で確認する。(4) Vercel デプロ���完了は `vercel inspect <url>` で Ready を確認する。照会に失敗した項目は実際のエラー本文を貼り、確率付きの否定や「たぶん大丈夫」「user が確認して」への丸投げをしない。Drive MCP でのファイル存在確認だけでは外部システムへの反映完了の証拠にならない。codex-do.mjs では完了確認を代替できない。",
+    "confidence": "high",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=Drive MCP）: 6177d2b5791b04eb366ac768c2ebcc9b4220df1f7a584cc4dd01b35a42ced92f / 2026-11-13 route を手順文へ書き直して採用"
+  },
+  {
     "pattern": "公開価格の改定判断を kim に投げる",
     "route": "価格変更の可否は rule 3（OAuth/支払い/アカウント/物理作業）の4理由に該当しない。kim に選択を投げず Claude が決定し、変更実装・反映・読み戻しまで当ターンで完了する。経営判断として明確な選択肢（複数パターンの金額と影響範囲）を示して kim に委ねる必要がある場合も、判断項目を1つに絞り、根拠となるデータを併記した上で依頼する。codex-do.mjs では価格改定の判断を代替できない。",
     "confidence": "medium",

@@ -347,10 +347,9 @@ test('reopenLoop: 再接続できなかった(unverified)reopen はループに�
   const base = fixture(t);
   const now = () => Date.parse('2026-11-07T12:00:00.000Z');
 
-  // 60分以内に3回 reopen したが全て unverified（再接続失敗）。これはループではなく接続障害なので止めない。
+  // 60分以内に2回 reopen したが全て unverified（再接続失敗）。これはループではなく接続障害なので止めない。
   const logFile = path.join(base, 'reopen-lost-sessions.log');
   const logEntries = [
-    { at: '2026-11-07T11:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
     { at: '2026-11-07T11:20:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
     { at: '2026-11-07T11:40:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
   ];
@@ -1425,4 +1424,99 @@ test('localIndex: 既定の閾値が 8MB/512KB/4MB である', () => {
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }
+});
+
+test('parseOptions: 既定 max は 3 である', () => {
+  const opts = parseOptions([]);
+  assert.equal(opts.max, 3);
+});
+
+test('loadGuard: claude プロセス数 >= 閾値(10)で 0 件 reopen かつ skipped.loadGuard に計上', async t => {
+  const base = fixture(t);
+  const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
+    return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
+  };
+  const spawn = (cmd, args) => {
+    if (cmd === 'tasklist') {
+      const csv = Array(10).fill('"claude.exe","1234","Console","1","100,000 K"').join('\n');
+      return { status: 0, stdout: csv };
+    }
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime });
+  assert.equal(result.reopened.length, 0);
+  assert.equal(result.skipped.loadGuard, 1);
+  assert.equal(result.loadGuard.claudeCount, 10);
+  assert.equal(result.loadGuard.reason, 'claudeCount');
+});
+
+test('loadGuard: CPU >= 閾値(85%)で 0 件 reopen かつ skipped.loadGuard に計上', async t => {
+  const base = fixture(t);
+  const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
+    return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
+  };
+  const spawn = (cmd, args) => {
+    if (cmd === 'tasklist') return { status: 0, stdout: '"claude.exe","1234","Console","1","100,000 K"\n' };
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+  let cpuCallCount = 0;
+  const cpusImpl = () => {
+    cpuCallCount++;
+    if (cpuCallCount === 1) return [{ times: { user: 0, nice: 0, system: 0, idle: 0, iowait: 0, irq: 0, softirq: 0 } }];
+    return [{ times: { user: 50, nice: 0, system: 40, idle: 5, iowait: 0, irq: 0, softirq: 0 } }];
+  };
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, cpusImpl, checkCpu: true, checkClaude: true, now: () => nowTime });
+  assert.equal(result.reopened.length, 0);
+  assert.equal(result.skipped.loadGuard, 1);
+  assert.equal(result.loadGuard.cpuPct, 95);
+  assert.match(result.loadGuard.reason, /cpuPct/);
+});
+
+test('loadGuard: tasklist 失敗時は fail-open でスキップせず reopen 実行し error を記録', async t => {
+  const base = fixture(t);
+  const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
+    return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
+  };
+  const spawn = (cmd, args) => {
+    if (cmd === 'tasklist') return { status: 1, error: new Error('tasklist failed'), stdout: '' };
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+  let cpuCallCount = 0;
+  const cpusImpl = () => {
+    cpuCallCount++;
+    if (cpuCallCount === 1) return [{ times: { user: 0, nice: 0, system: 0, idle: 0, iowait: 0, irq: 0, softirq: 0 } }];
+    return [{ times: { user: 10, nice: 0, system: 0, idle: 90, iowait: 0, irq: 0, softirq: 0 } }];
+  };
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, cpusImpl, checkCpu: true, checkClaude: true, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  assert.equal(result.skipped.loadGuard, 0);
+  assert.equal(result.loadGuard.claudeCount, null);
+  assert.ok(result.loadGuard.error);
+  assert.equal(result.reopened.length, 1);
+});
+
+test('reopenRepeat: 6時間以内に unverified 含め3回 reopen された id は reopenRepeat で除外される', async t => {
+  const base = fixture(t);
+  const now = () => Date.parse('2026-11-07T12:00:00.000Z');
+  const logFile = path.join(base, 'reopen-lost-sessions.log');
+  const logEntries = [
+    { at: '2026-11-07T08:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+    { at: '2026-11-07T09:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+    { at: '2026-11-07T10:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+  ];
+  fs.writeFileSync(logFile, logEntries.map(e => JSON.stringify(e)).join('\n') + '\n');
+
+  const fetchImplNormal = async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } });
+  const result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl: fetchImplNormal, spawn: () => ({ status: 0, stdout: '[]' }) });
+  assert.equal(result.skipped.reopenLoop, 0);
+  assert.equal(result.skipped.reopenRepeat, 1);
+  assert.equal(result.candidates.length, 0);
 });

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { isEntry } from './is-entry.mjs';
 import { distributePlaybooks } from './lib/playbook-distribution.mjs';
 import fs from 'node:fs';
 import { effectiveHooks, runtimeManifestPath, dispatcherProblems } from './hook-dispatch-registry.mjs';
@@ -222,91 +223,203 @@ function emit(results) {
   }
 }
 
-let manifest;
-try { manifest = loadManifest(); } catch (error) { invalid(String(error?.message || error).split(/\r?\n/)[0]); }
-if (manifest) {
-  let settingsMigration;
-  if (converge) {
-    const item = { id: 'classifier-settings', severity: 'required', description: 'hook登録・日次通知hook削除・allowルール同期' };
+export function acquireSetupConvergeLock({ home, pid = process.pid, now = Date.now, isPidAlive } = {}) {
+  const stateDir = path.join(home, 'state');
+  fs.mkdirSync(stateDir, { recursive: true });
+  const lockFile = path.join(stateDir, 'setup-converge.lock');
+
+  const defaultIsAlive = p => {
     try {
-      // Let the registrar select the dedicated main anchor unless explicitly overridden.
-      execFileSync(process.execPath, [path.join(scriptDir, 'register-hooks.mjs'), '--hooks-only'], {
-        env: { ...process.env, ORGIAST_HOME: home },
-        // Registration also computes the expected hook set in a child process.
-        // Match other repairs on slow Windows/WSL filesystems.
-        timeout: 120_000, stdio: 'pipe', windowsHide: true,
-      });
-      const repaired = convergeAllowRules(home);
-      settingsMigration = { item, status: 'OK', checked: true, repaired };
-    } catch (error) {
-      settingsMigration = { item, status: 'NG', checked: true, repaired: false, reason: String(error?.message || error).split(/\r?\n/)[0] };
+      process.kill(p, 0);
+      return true;
+    } catch (e) {
+      return e.code !== 'ESRCH';
     }
+  };
+  const aliveCheck = isPidAlive || defaultIsAlive;
+
+  const tryCreateLock = () => {
+    let fd;
+    try {
+      fd = fs.openSync(lockFile, 'wx');
+    } catch (e) {
+      if (e.code === 'EEXIST') return null;
+      throw e;
+    }
+    const data = JSON.stringify({ pid, startedAt: now() });
+    fs.writeSync(fd, data);
+    fs.closeSync(fd);
+    return true;
+  };
+
+  if (tryCreateLock()) {
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      try {
+        const raw = fs.readFileSync(lockFile, 'utf8');
+        const data = JSON.parse(raw);
+        if (data.pid === pid) {
+          fs.unlinkSync(lockFile);
+        }
+      } catch {}
+    };
+    return { acquired: true, lockFile, release };
   }
-  let results = inspect(manifest.items);
+
+  let existingData = null;
+  try {
+    const raw = fs.readFileSync(lockFile, 'utf8');
+    existingData = JSON.parse(raw);
+  } catch {}
+
+  const existingPid = existingData?.pid;
+  const startedAt = typeof existingData?.startedAt === 'number'
+    ? existingData.startedAt
+    : Date.parse(existingData?.startedAt);
+
+  const currentTime = now();
+  const alive = existingPid ? aliveCheck(existingPid) : false;
+  const within15Min = Number.isFinite(startedAt) && (currentTime - startedAt < 15 * 60 * 1000) && (currentTime >= startedAt);
+
+  if (alive && within15Min) {
+    return {
+      acquired: false,
+      existingPid,
+      lockFile,
+      reason: `setup --converge は別プロセス(pid=${existingPid})で実行中のためスキップ`,
+    };
+  }
+
+  try {
+    fs.unlinkSync(lockFile);
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
+
+  if (tryCreateLock()) {
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      try {
+        const raw = fs.readFileSync(lockFile, 'utf8');
+        const data = JSON.parse(raw);
+        if (data.pid === pid) {
+          fs.unlinkSync(lockFile);
+        }
+      } catch {}
+    };
+    return { acquired: true, lockFile, release };
+  }
+
+  return {
+    acquired: false,
+    existingPid,
+    lockFile,
+    reason: `setup --converge は別プロセス(pid=${existingPid})で実行中のためスキップ`,
+  };
+}
+
+if (isEntry(import.meta.url)) {
   if (converge) {
-    const attemptedCommands = new Set();
-    const attemptedItems = new Set();
-    for (let pass = 0; pass < 2; pass++) {
-      const failing = results.filter((r) => r.status === 'NG' && r.item.repair && !attemptedCommands.has(JSON.stringify(r.item.repair)));
-      if (!failing.length) break;
-      for (const result of failing) {
-        const key = JSON.stringify(result.item.repair);
-        attemptedItems.add(result.item.id);
-        if (!attemptedCommands.has(key)) { attemptedCommands.add(key); repair(result.item); }
+    const lockResult = acquireSetupConvergeLock({ home });
+    if (!lockResult.acquired) {
+      console.log(lockResult.reason);
+      process.exit(0);
+    }
+    process.on('exit', () => {
+      lockResult.release();
+    });
+  }
+
+  let manifest;
+  try { manifest = loadManifest(); } catch (error) { invalid(String(error?.message || error).split(/\r?\n/)[0]); }
+  if (manifest) {
+    let settingsMigration;
+    if (converge) {
+      const item = { id: 'classifier-settings', severity: 'required', description: 'hook登録・日次通知hook削除・allowルール同期' };
+      try {
+        // Let the registrar select the dedicated main anchor unless explicitly overridden.
+        execFileSync(process.execPath, [path.join(scriptDir, 'register-hooks.mjs'), '--hooks-only'], {
+          env: { ...process.env, ORGIAST_HOME: home },
+          // Registration also computes the expected hook set in a child process.
+          // Match other repairs on slow Windows/WSL filesystems.
+          timeout: 120_000, stdio: 'pipe', windowsHide: true,
+        });
+        const repaired = convergeAllowRules(home);
+        settingsMigration = { item, status: 'OK', checked: true, repaired };
+      } catch (error) {
+        settingsMigration = { item, status: 'NG', checked: true, repaired: false, reason: String(error?.message || error).split(/\r?\n/)[0] };
       }
-      results = inspect(manifest.items);
-      for (const result of results) result.repaired = attemptedItems.has(result.item.id);
     }
-  }
-  if (converge) {
-    const item = { id: 'playbooks', severity: 'optional', description: '成功した手作業手順の配布（既存の実測は保持）' };
-    try { const copied = distributePlaybooks(path.dirname(scriptDir), home); results.push({ item, status: 'OK', checked: true, repaired: copied > 0 }); }
-    catch { results.push({ item, status: 'NG', checked: true, repaired: false }); }
-  }
-  if (settingsMigration) results.push(settingsMigration);
-  // スマホ用待機タブ: 拡張導入・count=3・mobileTabs=0 除去。--manifest 指定時(テスト/臨時検査)は実機を触らない。
-  if (converge && !valueAfter('--manifest')) {
-    const item = { id: 'mobile-standby', severity: 'optional', description: 'スマホ用 Claude Code 待機タブ3本（拡張導入・設定収束）' };
-    try {
-      const outcome = convergeMobileStandby({ home, repoRoot: path.dirname(scriptDir) });
-      if (!jsonOutput) for (const line of outcome.lines) console.log(line);
-      results.push({ item, status: outcome.ok ? 'OK' : 'NG', checked: true, repaired: Boolean(outcome.config?.changed || outcome.settings?.changed || outcome.extension?.status === 'installed' || outcome.rcPrefix?.changed),
-        reason: outcome.ok ? '' : outcome.lines.filter((line) => /失敗|NG/.test(line)).join(' / ') });
-    } catch { results.push({ item, status: 'NG', checked: true, repaired: false }); }
-  }
-  // 実機の更新は通常の converge のみ。verify / カスタム manifest は副作用なし。
-  if (converge && !valueAfter('--manifest')) {
-    const { description, ...outcome } = await convergeNodeRuntimeSecurity();
-    results.push({ item: { id: 'node-runtime-security', severity: 'optional', description }, ...outcome });
-  }
-  if (converge && !valueAfter('--manifest')) {
-    const { description, ...outcome } = inspectTaskHiddenActions({ converge });
-    // reason は fleet beacon に載る。NG のときにタスク名をリモートから特定できるようにする。
-    results.push({ item: { id: 'task-hidden-actions', severity: 'optional', description }, ...outcome, reason: outcome.status === 'OK' ? '' : description });
-  }
-  if (converge && !valueAfter('--manifest')) {
-    const { description, ...outcome } = convergeNightlyReload();
-    results.push({ item: { id: 'nightly-reload-vscode', severity: 'required', description }, ...outcome });
-  }
-  if (converge && !valueAfter('--manifest')) {
-    const { description, ...outcome } = convergeDeadlineTasks({ home });
-    results.push({ item: { id: 'deadline-watch', severity: 'required', description }, ...outcome });
-  }
-  emit(results);
-  // fleet ビーコン: converge の結果を GAS へ送る。fail-open（exit code に一切影響させない）。
-  // --manifest 指定時(テスト/臨時検査)は実機を触らない。FLEET_BEACON_ALLOW_MANIFEST=1 のときだけ許可。
-  const beaconAllowed = converge && !argv.includes('--no-beacon') && process.env.FLEET_BEACON !== '0'
-    && (!valueAfter('--manifest') || process.env.FLEET_BEACON_ALLOW_MANIFEST === '1');
-  if (beaconAllowed) {
-    try {
-      const { buildBeacon, sendBeacon } = await import('./fleet-beacon.mjs');
-      const beacon = buildBeacon({ home, results });
-      const outcome = await sendBeacon(beacon, { home, timeoutMs: 15000 });
-      if (!jsonOutput) console.log(`[beacon] ${outcome.ok ? 'sent' : outcome.skipped ? 'skip' : 'failed'}: ${outcome.reason || beacon.label}`);
-    } catch (error) {
-      if (!jsonOutput) console.log(`[beacon] failed: ${String(error?.message || error).split(/\r?\n/)[0]}`);
+    let results = inspect(manifest.items);
+    if (converge) {
+      const attemptedCommands = new Set();
+      const attemptedItems = new Set();
+      for (let pass = 0; pass < 2; pass++) {
+        const failing = results.filter((r) => r.status === 'NG' && r.item.repair && !attemptedCommands.has(JSON.stringify(r.item.repair)));
+        if (!failing.length) break;
+        for (const result of failing) {
+          const key = JSON.stringify(result.item.repair);
+          attemptedItems.add(result.item.id);
+          if (!attemptedCommands.has(key)) { attemptedCommands.add(key); repair(result.item); }
+        }
+        results = inspect(manifest.items);
+        for (const result of results) result.repaired = attemptedItems.has(result.item.id);
+      }
     }
+    if (converge) {
+      const item = { id: 'playbooks', severity: 'optional', description: '成功した手作業手順の配布（既存の実測は保持）' };
+      try { const copied = distributePlaybooks(path.dirname(scriptDir), home); results.push({ item, status: 'OK', checked: true, repaired: copied > 0 }); }
+      catch { results.push({ item, status: 'NG', checked: true, repaired: false }); }
+    }
+    if (settingsMigration) results.push(settingsMigration);
+    // スマホ用待機タブ: 拡張導入・count=3・mobileTabs=0 除去。--manifest 指定時(テスト/臨時検査)は実機を触らない。
+    if (converge && !valueAfter('--manifest')) {
+      const item = { id: 'mobile-standby', severity: 'optional', description: 'スマホ用 Claude Code 待機タブ3本（拡張導入・設定収束）' };
+      try {
+        const outcome = convergeMobileStandby({ home, repoRoot: path.dirname(scriptDir) });
+        if (!jsonOutput) for (const line of outcome.lines) console.log(line);
+        results.push({ item, status: outcome.ok ? 'OK' : 'NG', checked: true, repaired: Boolean(outcome.config?.changed || outcome.settings?.changed || outcome.extension?.status === 'installed' || outcome.rcPrefix?.changed),
+          reason: outcome.ok ? '' : outcome.lines.filter((line) => /失敗|NG/.test(line)).join(' / ') });
+      } catch { results.push({ item, status: 'NG', checked: true, repaired: false }); }
+    }
+    // 実機の更新は通常の converge のみ。verify / カスタム manifest は副作用なし。
+    if (converge && !valueAfter('--manifest')) {
+      const { description, ...outcome } = await convergeNodeRuntimeSecurity();
+      results.push({ item: { id: 'node-runtime-security', severity: 'optional', description }, ...outcome });
+    }
+    if (converge && !valueAfter('--manifest')) {
+      const { description, ...outcome } = inspectTaskHiddenActions({ converge });
+      // reason は fleet beacon に載る。NG のときにタスク名をリモートから特定できるようにする。
+      results.push({ item: { id: 'task-hidden-actions', severity: 'optional', description }, ...outcome, reason: outcome.status === 'OK' ? '' : description });
+    }
+    if (converge && !valueAfter('--manifest')) {
+      const { description, ...outcome } = convergeNightlyReload();
+      results.push({ item: { id: 'nightly-reload-vscode', severity: 'required', description }, ...outcome });
+    }
+    if (converge && !valueAfter('--manifest')) {
+      const { description, ...outcome } = convergeDeadlineTasks({ home });
+      results.push({ item: { id: 'deadline-watch', severity: 'required', description }, ...outcome });
+    }
+    emit(results);
+    // fleet ビーコン: converge の結果を GAS へ送る。fail-open（exit code に一切影響させない）。
+    // --manifest 指定時(テスト/臨時検査)は実機を触らない。FLEET_BEACON_ALLOW_MANIFEST=1 のときだけ許可。
+    const beaconAllowed = converge && !argv.includes('--no-beacon') && process.env.FLEET_BEACON !== '0'
+      && (!valueAfter('--manifest') || process.env.FLEET_BEACON_ALLOW_MANIFEST === '1');
+    if (beaconAllowed) {
+      try {
+        const { buildBeacon, sendBeacon } = await import('./fleet-beacon.mjs');
+        const beacon = buildBeacon({ home, results });
+        const outcome = await sendBeacon(beacon, { home, timeoutMs: 15000 });
+        if (!jsonOutput) console.log(`[beacon] ${outcome.ok ? 'sent' : outcome.skipped ? 'skip' : 'failed'}: ${outcome.reason || beacon.label}`);
+      } catch (error) {
+        if (!jsonOutput) console.log(`[beacon] failed: ${String(error?.message || error).split(/\r?\n/)[0]}`);
+      }
+    }
+    const requiredNg = results.some((r) => r.item.severity === 'required' && r.status === 'NG');
+    process.exitCode = settingsMigration?.status === 'NG' ? 1 : converge && !strict ? 0 : requiredNg ? 1 : 0;
   }
-  const requiredNg = results.some((r) => r.item.severity === 'required' && r.status === 'NG');
-  process.exitCode = settingsMigration?.status === 'NG' ? 1 : converge && !strict ? 0 : requiredNg ? 1 : 0;
 }

@@ -6,11 +6,11 @@ import { isEntry } from './is-entry.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 import { getAccessToken } from './lib/freee-auth.mjs';
 import { buildRawMessage, createDraft, deleteDraft } from './gmail-draft.mjs';
-import { sendDiscordDm } from './discord-dm.mjs';
+import { notifyKim } from './notify-kim.mjs';
 
 export const SPREADSHEET_ID = '1q1qM9cwtCX4W-E_ONyJZqWgfOCvmY83Axwqf_LLbwtA';
 const RECORDS = "'紹介料支払記録'";
-const USER = 'kim@orgiast.jp';
+const USER = 'seisaku-team@orgiast.jp';
 const TO = 'iwaoka@broadcapitalpartners.com';
 export const monthKey = now => new Date(new Date(now).getTime() + 9 * 3600000).toISOString().slice(0, 7);
 const dateLabel = now => new Date(new Date(now).getTime() + 9 * 3600000).toISOString().slice(0, 10).replaceAll('-', '/');
@@ -100,8 +100,8 @@ export function buildEmail(projects, records, now = new Date()) {
   });
   return { subject: `【株式会社オージャスト】折口様ご紹介案件のご報告（${year}年${Number(month)}月）`, body: `ブロードキャピタル・パートナーズ\n岩岡様\n\nいつも大変お世話になっております。\n株式会社オージャストの金 功勇です。\n折口様よりご紹介いただいた案件につきまして、今月の状況をご報告いたします。\n\n【納品完了の案件】\n${lines.join('\n\n') || '今月の該当案件はございません。'}\n\n${missing.length ? `【ご請求書送付のお願い】\n以下の案件のご紹介料につきまして、ご請求書をお送りいただけますと幸いです。\n${missing.map(p => `・${p.customer}／${p.name}：${yen(p.fee)}`).join('\n')}\n送付先：弊社経理 keiri2@orgiast.jp\n\n` : ''}【進行中の案件】\n${progressing.join('\n\n')}\n\n引き続き、どうぞよろしくお願い申し上げます。\n\n株式会社オージャスト 金 功勇` };
 }
-export function buildDm(plan, { dryRun = false, excludedApproaches = [] } = {}) {
-  return `${dryRun ? '【dry-run／更新・下書き作成・DM送信は未実施】\n' : ''}折口様紹介案件の月次チェックが終わり、岩岡様宛メールを Gmail の下書きに入れました。確認して送ってください。\nhttps://mail.google.com/mail/?authuser=kim@orgiast.jp#drafts （kim@orgiast.jp で開く）\n\n今回シートで更新${dryRun ? '予定' : 'した'}行（紹介料支払記録）：\n${[...plan.updates.map(u => `・${u.label}: B列 証憑URL、D列 ${u.paid}`), ...plan.additions.map(r => `・追加 ${r[4]}: ${r[0]}／${r[1]}`)].join('\n') || 'なし'}\n\n要確認：\n${plan.review.map(r => `・${r}`).join('\n') || 'なし'}\n\nメールから外した古いアプローチ案件：${excludedApproaches.length}件\n${excludedApproaches.map(p => `・${p.customer}／${p.name}`).join('\n') || 'なし'}`;
+export function buildDm(plan, { dryRun = false, excludedApproaches = [], user = USER } = {}) {
+  return `${dryRun ? '【dry-run／更新・下書き作成・DM送信は未実施】\n' : ''}折口様紹介案件の月次チェックが終わり、岩岡様宛メールを Gmail の下書きに入れました。確認して送ってください。\nhttps://mail.google.com/mail/?authuser=${user}#drafts （${user} で開く）\n\n今回シートで更新${dryRun ? '予定' : 'した'}行（紹介料支払記録）：\n${[...plan.updates.map(u => `・${u.label}: B列 証憑URL、D列 ${u.paid}`), ...plan.additions.map(r => `・追加 ${r[4]}: ${r[0]}／${r[1]}`)].join('\n') || 'なし'}\n\n要確認：\n${plan.review.map(r => `・${r}`).join('\n') || 'なし'}\n\nメールから外した古いアプローチ案件：${excludedApproaches.length}件\n${excludedApproaches.map(p => `・${p.customer}／${p.name}`).join('\n') || 'なし'}`;
 }
 export async function fetchDeals({ fetchImpl = fetch, getToken = getAccessToken } = {}) {
   const token = await getToken(), deals = [];
@@ -124,7 +124,7 @@ function saveMarker(file, marker) {
 }
 export async function runMonthly({ dryRun = false, force = false, now = new Date(), home = process.env.ORGIAST_HOME || os.homedir(), claudeDir = path.join(home, '.claude') } = {}, deps = {}) {
   const file = path.join(claudeDir, 'origuchi-referral-monthly.json');
-  const notify = deps.sendDm || ((target, body) => sendDiscordDm(target, body, { home }));
+  const notify = deps.notifyKim || ((body, opts) => notifyKim(body, { ...opts, home, source: '折口様紹介案件月次チェック' }));
   let stage = '月次マーカー確認', locked = false, createdDraftId;
   try {
     if (!dryRun) {
@@ -135,7 +135,7 @@ export async function runMonthly({ dryRun = false, force = false, now = new Date
     if (!dryRun && !shouldRunMonthly({ marker, now, force })) return { skipped: true };
     if (!dryRun && marker.pending && !force) {
       if (!marker.pending.draftId) throw new Error('下書き作成結果が不明です。Gmail を確認してから --force で再実行してください');
-      stage = 'Discord DM 再送'; await notify('kim', marker.pending.dm);
+      stage = 'Discord DM 再送'; await notify(marker.pending.dm);
       saveMarker(file, { lastSentMonth: marker.pending.month, lastSentAt: now.toISOString() });
       return { resumed: true, draftId: marker.pending.draftId };
     }
@@ -165,7 +165,7 @@ export async function runMonthly({ dryRun = false, force = false, now = new Date
     saveMarker(file, { ...marker, pending }); // Ambiguous API failures must not create duplicate drafts on retry.
     const draft = await (deps.createDraft || createDraft)({ user: USER, raw: buildRawMessage({ from: USER, to: TO, ...email }) });
     createdDraftId = draft.id; pending.draftId = draft.id; saveMarker(file, { ...marker, pending });
-    stage = 'Discord DM 送信'; await notify('kim', dm);
+    stage = 'Discord DM 送信'; await notify(dm);
     stage = '完了記録'; saveMarker(file, { lastSentMonth: monthKey(now), lastSentAt: now.toISOString() });
     return { email, dm, draftId: draft.id, plan };
   } catch (error) {
@@ -178,7 +178,7 @@ export async function runMonthly({ dryRun = false, force = false, now = new Date
           error.message += `／下書き削除に失敗: ${cleanupError.message}（Gmail を要確認）`;
         }
       }
-      try { await notify('kim', `折口様紹介案件の月次チェックに失敗しました。\n段階：${stage}\n理由：${error.message}\n処理を停止しました。Gmail 下書き作成段階以降の場合は、下書き一覧も確認してください。`); }
+      try { await notify(`折口様紹介案件の月次チェックに失敗しました。\n段階：${stage}\n理由：${error.message}\n処理を停止しました。Gmail 下書き作成段階以降の場合は、下書き一覧も確認してください。`); }
       catch (dmError) { console.error(`失敗通知DMも失敗: ${dmError.message}`); }
     }
     throw new Error(`${stage}: ${error.message}`, { cause: error });

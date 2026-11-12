@@ -188,6 +188,9 @@ export function parseArgs(argv) {
     maxChars: 400,
     protectErrors: true,
     recent: 6,
+    progressiveMaxChars: 800,
+    progressiveThreshold: 0.2,
+    minChars: 200,
   };
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
@@ -217,6 +220,15 @@ export function parseArgs(argv) {
         break;
       case '--recent':
         opts.recent = parseInt(args[++i], 10);
+        break;
+      case '--progressive-max-chars':
+        opts.progressiveMaxChars = parseInt(args[++i], 10);
+        break;
+      case '--progressive-threshold':
+        opts.progressiveThreshold = parseFloat(args[++i]);
+        break;
+      case '--min-chars':
+        opts.minChars = parseInt(args[++i], 10);
         break;
     }
   }
@@ -259,11 +271,20 @@ async function main() {
     maxChars: opts.maxChars ?? 400,
     protectErrors: opts.protectErrors !== false,
   };
+  const progressiveOpts = {
+    windowTokens,
+    progressiveThreshold: opts.progressiveThreshold ?? 0.2,
+    keepRecent: opts.keepRecent ?? 6,
+    progressiveMaxChars: opts.progressiveMaxChars ?? 800,
+    minChars: opts.minChars ?? 200,
+    protectErrors: opts.protectErrors !== false,
+  };
   const missingRecent = opts.recent ?? 6;
 
   const results = [];
   let totalNone = 0;
   let totalBulk = 0;
+  let totalProgressive = 0;
   let totalEveryTurn = 0;
 
   for (const file of files) {
@@ -277,21 +298,27 @@ async function main() {
 
     const noneResult = simulate(limited, 'none', simOpts);
     const bulkResult = simulate(limited, 'bulk', simOpts);
+    const progressiveResult = simulate(limited, 'progressive', progressiveOpts);
     const everyTurnResult = simulate(limited, 'everyTurn', simOpts);
 
     totalNone += noneResult.cumulativeInputTokens;
     totalBulk += bulkResult.cumulativeInputTokens;
+    totalProgressive += progressiveResult.cumulativeInputTokens;
     totalEveryTurn += everyTurnResult.cumulativeInputTokens;
 
     const bulkReduction = noneResult.cumulativeInputTokens > 0
       ? ((1 - bulkResult.cumulativeInputTokens / noneResult.cumulativeInputTokens) * 100).toFixed(1)
       : '0.0';
+    const progressiveReduction = noneResult.cumulativeInputTokens > 0
+      ? ((1 - progressiveResult.cumulativeInputTokens / noneResult.cumulativeInputTokens) * 100).toFixed(1)
+      : '0.0';
     const everyTurnReduction = noneResult.cumulativeInputTokens > 0
       ? ((1 - everyTurnResult.cumulativeInputTokens / noneResult.cumulativeInputTokens) * 100).toFixed(1)
       : '0.0';
 
-    // missing info rate for bulk and everyTurn
+    // missing info rate for bulk, progressive, and everyTurn
     const bulkMissing = missingInfoRate(limited, bulkResult.finalMessages, { recent: missingRecent });
+    const progressiveMissing = missingInfoRate(limited, progressiveResult.finalMessages, { recent: missingRecent });
     const everyTurnMissing = missingInfoRate(limited, everyTurnResult.finalMessages, { recent: missingRecent });
 
     results.push({
@@ -301,16 +328,22 @@ async function main() {
       messagesUsed: limited.length,
       cumulativeNone: noneResult.cumulativeInputTokens,
       cumulativeBulk: bulkResult.cumulativeInputTokens,
+      cumulativeProgressive: progressiveResult.cumulativeInputTokens,
       cumulativeEveryTurn: everyTurnResult.cumulativeInputTokens,
       bulkReductionPct: parseFloat(bulkReduction),
+      progressiveReductionPct: parseFloat(progressiveReduction),
       everyTurnReductionPct: parseFloat(everyTurnReduction),
       missingInfoRateBulk: bulkMissing,
+      missingInfoRateProgressive: progressiveMissing,
       missingInfoRateEveryTurn: everyTurnMissing,
     });
   }
 
   const overallBulkReduction = totalNone > 0
     ? ((1 - totalBulk / totalNone) * 100).toFixed(1)
+    : '0.0';
+  const overallProgressiveReduction = totalNone > 0
+    ? ((1 - totalProgressive / totalNone) * 100).toFixed(1)
     : '0.0';
   const overallEveryTurnReduction = totalNone > 0
     ? ((1 - totalEveryTurn / totalNone) * 100).toFixed(1)
@@ -319,8 +352,14 @@ async function main() {
   const missingInfoRateBulkAvg = results.length > 0
     ? results.reduce((sum, r) => sum + r.missingInfoRateBulk, 0) / results.length
     : 0;
+  const missingInfoRateProgressiveAvg = results.length > 0
+    ? results.reduce((sum, r) => sum + r.missingInfoRateProgressive, 0) / results.length
+    : 0;
   const missingInfoRateEveryTurnAvg = results.length > 0
     ? results.reduce((sum, r) => sum + r.missingInfoRateEveryTurn, 0) / results.length
+    : 0;
+  const missingInfoRateProgressiveMax = results.length > 0
+    ? Math.max(...results.map(r => r.missingInfoRateProgressive))
     : 0;
   const missingInfoRateEveryTurnMax = results.length > 0
     ? Math.max(...results.map(r => r.missingInfoRateEveryTurn))
@@ -333,6 +372,9 @@ async function main() {
       params: {
         keepRecent: simOpts.keepRecent,
         maxChars: simOpts.maxChars,
+        progressiveMaxChars: progressiveOpts.progressiveMaxChars,
+        progressiveThreshold: progressiveOpts.progressiveThreshold,
+        minChars: progressiveOpts.minChars,
         protectErrors: simOpts.protectErrors,
         recent: missingRecent,
         windowTokens,
@@ -344,35 +386,39 @@ async function main() {
       totals: {
         cumulativeNone: totalNone,
         cumulativeBulk: totalBulk,
+        cumulativeProgressive: totalProgressive,
         cumulativeEveryTurn: totalEveryTurn,
         bulkReductionPct: parseFloat(overallBulkReduction),
+        progressiveReductionPct: parseFloat(overallProgressiveReduction),
         everyTurnReductionPct: parseFloat(overallEveryTurnReduction),
         missingInfoRateBulkAvg,
+        missingInfoRateProgressiveAvg,
         missingInfoRateEveryTurnAvg,
+        missingInfoRateProgressiveMax,
         missingInfoRateEveryTurnMax,
       },
     };
     process.stdout.write(JSON.stringify(output, null, 2) + '\n');
   } else {
-    const sep = '+'.padEnd(170, '-') + '+';
+    const sep = '+'.padEnd(200, '-') + '+';
     process.stdout.write(`Selection criteria: ${criteria}\n`);
     process.stdout.write(`Max messages per log: ${maxMessages}\n`);
     process.stdout.write(`Log files: ${files.length}\n`);
     process.stdout.write('\n');
     process.stdout.write(sep + '\n');
     process.stdout.write(
-      `| ${'File'.padEnd(50)} | ${'Msgs'.padEnd(6)} | ${'None'.padEnd(12)} | ${'Bulk'.padEnd(12)} | ${'EveryTurn'.padEnd(12)} | ${'Bulk%'.padEnd(7)} | ${'ET%'.padEnd(7)} | ${'BulkMiss'.padEnd(9)} | ${'ETMiss'.padEnd(9)} |\n`
+      `| ${'File'.padEnd(45)} | ${'Msgs'.padEnd(5)} | ${'None'.padEnd(10)} | ${'Bulk'.padEnd(10)} | ${'Prog'.padEnd(10)} | ${'EveryTurn'.padEnd(10)} | ${'Bulk%'.padEnd(6)} | ${'Prog%'.padEnd(6)} | ${'ET%'.padEnd(6)} | ${'BulkMiss'.padEnd(8)} | ${'ProgMiss'.padEnd(8)} | ${'ETMiss'.padEnd(8)} |\n`
     );
     process.stdout.write(sep + '\n');
     for (const r of results) {
-      const fileLabel = r.file.length > 48 ? r.file.slice(0, 45) + '...' : r.file;
+      const fileLabel = r.file.length > 43 ? r.file.slice(0, 40) + '...' : r.file;
       process.stdout.write(
-        `| ${fileLabel.padEnd(50)} | ${String(r.messagesUsed).padStart(6)} | ${formatNumber(r.cumulativeNone).padStart(12)} | ${formatNumber(r.cumulativeBulk).padStart(12)} | ${formatNumber(r.cumulativeEveryTurn).padStart(12)} | ${r.bulkReductionPct.toFixed(1).padStart(6)}% | ${r.everyTurnReductionPct.toFixed(1).padStart(6)}% | ${(r.missingInfoRateBulk * 100).toFixed(1).padStart(8)}% | ${(r.missingInfoRateEveryTurn * 100).toFixed(1).padStart(8)}% |\n`
+        `| ${fileLabel.padEnd(45)} | ${String(r.messagesUsed).padStart(5)} | ${formatNumber(r.cumulativeNone).padStart(10)} | ${formatNumber(r.cumulativeBulk).padStart(10)} | ${formatNumber(r.cumulativeProgressive).padStart(10)} | ${formatNumber(r.cumulativeEveryTurn).padStart(10)} | ${r.bulkReductionPct.toFixed(1).padStart(5)}% | ${r.progressiveReductionPct.toFixed(1).padStart(5)}% | ${r.everyTurnReductionPct.toFixed(1).padStart(5)}% | ${(r.missingInfoRateBulk * 100).toFixed(1).padStart(7)}% | ${(r.missingInfoRateProgressive * 100).toFixed(1).padStart(7)}% | ${(r.missingInfoRateEveryTurn * 100).toFixed(1).padStart(7)}% |\n`
       );
     }
     process.stdout.write(sep + '\n');
     process.stdout.write(
-      `| ${'TOTAL'.padEnd(50)} | ${' '.padEnd(6)} | ${formatNumber(totalNone).padStart(12)} | ${formatNumber(totalBulk).padStart(12)} | ${formatNumber(totalEveryTurn).padStart(12)} | ${overallBulkReduction.padStart(6)}% | ${overallEveryTurnReduction.padStart(6)}% | ${' '.padEnd(9)} | ${' '.padEnd(9)} |\n`
+      `| ${'TOTAL'.padEnd(45)} | ${' '.padEnd(5)} | ${formatNumber(totalNone).padStart(10)} | ${formatNumber(totalBulk).padStart(10)} | ${formatNumber(totalProgressive).padStart(10)} | ${formatNumber(totalEveryTurn).padStart(10)} | ${overallBulkReduction.padStart(5)}% | ${overallProgressiveReduction.padStart(5)}% | ${overallEveryTurnReduction.padStart(5)}% | ${' '.padEnd(8)} | ${' '.padEnd(8)} | ${' '.padEnd(8)} |\n`
     );
     process.stdout.write(sep + '\n');
   }

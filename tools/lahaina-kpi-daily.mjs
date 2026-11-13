@@ -37,6 +37,15 @@ export function parseOfficial(html) {
   const dates = [...html.matchAll(/(?:20\d{2})[.\/-](?:1[0-2]|0?[1-9])[.\/-](?:3[01]|[12]\d|0?[1-9])/g)].map(m => m[0].replace(/[.\/]/g,'-').split('-').map((v,i)=>i ? v.padStart(2,'0') : v).join('-'));
   return { reservationCount: new Set(reservationLinks).size, continuing: html.includes('営業継続'), oyster: html.includes('牡蠣'), latestNoticeDate: dates.sort().at(-1) || '', error: '' };
 }
+export function exposureFetchErrors(results = []) {
+  return results.flatMap(item => {
+    if (item.media === 'Google') return [];
+    const empty = typeof item.html !== 'string' || item.html.trim() === '';
+    if (!empty) return [];
+    const reason = item.fetchError || item.evidence || 'HTMLが空';
+    return [`${item.media}: 取得失敗: ${reason} (URL: ${item.url || '不明'}, HTTP: ${item.httpStatus ?? 'ERROR'})`];
+  });
+}
 export function buildRow(k) {
   return [k.date,k.exposureScore,k.jalan.status,k.jalan.minPrice,k.jalan.planCount,k.rakuten,k.official.reservationCount,k.official.continuing ? 'あり' : 'なし',k.airbnb,k.booking,k.instagram.followers,k.instagram.posts,k.ga4.sessions,k.ga4.users,k.ga4.sources.join(' / '),k.gsc.clicks,k.gsc.impressions,k.gsc.queries.join(' / '),k.errors.join(' | ')];
 }
@@ -140,11 +149,7 @@ export async function collect({now=new Date(),dryRun=false}={}) {
   const jalanDetails = parseJalanDetails(jalanMeta.html);
   const officialDetails = parseOfficial(officialMeta.html);
 
-  for (const item of exposure.results) {
-    if (item.html === null && item.media !== 'Google') {
-      errors.push(`${item.media}: ${item.fetchError || item.evidence || '応答が空'} (URL: ${item.url}, HTTP: ${item.httpStatus ?? 'ERROR'})`);
-    }
-  }
+  errors.push(...exposureFetchErrors(exposure.results));
 
   const [instagram,ga4,gsc]=await Promise.all([getInstagram(),getGa4(isoLocal(yesterday)),getGsc(isoLocal(twoDaysAgo))]);
   if(instagram.error) errors.push(instagram.error); if(ga4.error) errors.push(ga4.error); if(gsc.error) errors.push(gsc.error);

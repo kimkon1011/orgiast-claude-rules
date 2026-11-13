@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseJalanDetails, parseOfficial, buildRow, HEADERS, isoLocal } from './lahaina-kpi-daily.mjs';
+import { parseJalanDetails, parseOfficial, exposureFetchErrors, buildRow, HEADERS, isoLocal } from './lahaina-kpi-daily.mjs';
 import { taskCommand } from './lahaina-kpi-daily-register.mjs';
 
 test('じゃらんの最安値とプラン数を抽出', () =>
@@ -18,7 +18,21 @@ test('公式HPの予約導線・語句・最新日を抽出', () =>
 test('公式HP html=null / undefined / 空本文の例外回避とエラー記述', () => {
   assert.deepEqual(parseOfficial(''), { reservationCount: 0, continuing: false, oyster: false, latestNoticeDate: '', error: '公式HP HTML取得失敗 (HTMLが空/null)' });
   assert.deepEqual(parseOfficial(null), { reservationCount: 0, continuing: false, oyster: false, latestNoticeDate: '', error: '公式HP HTML取得失敗 (HTMLが空/null)' });
-  assert.deepEqual(parseOfficial(undefined), { reservationCount: 0, continuing: false, oyster: false, latestNoticeDate: '', error: '公式HP HTML取得失敗 (HTML重空/null)' } ? { reservationCount: 0, continuing: false, oyster: false, latestNoticeDate: '', error: '公式HP HTML取得失敗 (HTMLが空/null)' } : null);
+  assert.deepEqual(parseOfficial(undefined), { reservationCount: 0, continuing: false, oyster: false, latestNoticeDate: '', error: '公式HP HTML取得失敗 (HTMLが空/null)' });
+});
+
+test('null/undefined/空HTMLの媒体名・理由・URL・HTTP状態を取得エラー化', () => {
+  assert.deepEqual(exposureFetchErrors([
+    { media: 'じゃらん', html: null, fetchError: 'HTTP 503 Service Unavailable', url: 'https://example.test/jalan', httpStatus: 503 },
+    { media: '楽天トラベル', html: undefined, evidence: '応答が空', url: 'https://example.test/rakuten', httpStatus: 200 },
+    { media: '公式HP', html: '  ', url: 'https://example.test/', httpStatus: 200 },
+    { media: 'Airbnb', html: '<html>ok</html>', url: 'https://example.test/airbnb', httpStatus: 200 },
+    { media: 'Google', html: undefined, evidence: '機械取得不可', url: 'https://google.test/' },
+  ]), [
+    'じゃらん: 取得失敗: HTTP 503 Service Unavailable (URL: https://example.test/jalan, HTTP: 503)',
+    '楽天トラベル: 取得失敗: 応答が空 (URL: https://example.test/rakuten, HTTP: 200)',
+    '公式HP: 取得失敗: HTMLが空 (URL: https://example.test/, HTTP: 200)',
+  ]);
 });
 
 test('日付はローカル日付', () => assert.equal(isoLocal(new Date(2026, 9, 29, 1)), '2026-10-29'));

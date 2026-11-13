@@ -48,6 +48,7 @@ import {
   startMeetBot,
   checkPlaywrightAvailable,
   checkProfileLoggedIn,
+  isProfileSignedIn,
 } from './lib/meet-cue-browser.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -274,6 +275,7 @@ export async function main(argv = process.argv.slice(2)) {
     const playwrightInfo = await checkPlaywrightAvailable();
     const profileDir = path.join(os.homedir(), '.claude', 'browser-profiles', 'meet-bot-seisaku');
     const loggedIn = await checkProfileLoggedIn(profileDir);
+    const signedIn = await isProfileSignedIn(profileDir);
 
     let jevDoctor = { ok: false };
     try {
@@ -290,6 +292,7 @@ export async function main(argv = process.argv.slice(2)) {
       playwrightAvailable: playwrightInfo.available,
       chromeExecutable: playwrightInfo.executablePath || null,
       botProfileLoggedIn: loggedIn,
+      botProfileSignedIn: signedIn,
       jev: jevDoctor,
       dwdToken: dwdTokenOk,
     };
@@ -599,22 +602,64 @@ export async function main(argv = process.argv.slice(2)) {
       }
     } catch { /* use default */ }
 
-    const bot = await startMeetBot({
-      url: values.url,
-      mode: values.mode || 'profile',
-      maxMinutes: parseInt(values['max-minutes'] || '120', 10),
-      debugDom: Boolean(values['debug-dom']),
-      sessionDir,
-      botDisplayName,
-      onCaption: ({ speaker, text, timestamp }) => {
-        const newlyFinalized = assembler.pushMutation({ speaker, text, timestamp });
-        for (const line of newlyFinalized) {
-          transcriptStream.write(JSON.stringify(line) + '\n');
-          newCharsSinceLastCheck += line.text.length;
+    let bot;
+    try {
+      bot = await startMeetBot({
+        url: values.url,
+        mode: values.mode || 'profile',
+        maxMinutes: parseInt(values['max-minutes'] || '120', 10),
+        debugDom: Boolean(values['debug-dom']),
+        sessionDir,
+        botDisplayName,
+        onCaption: ({ speaker, text, timestamp }) => {
+          const newlyFinalized = assembler.pushMutation({ speaker, text, timestamp });
+          for (const line of newlyFinalized) {
+            transcriptStream.write(JSON.stringify(line) + '\n');
+            newCharsSinceLastCheck += line.text.length;
+          }
+        },
+        log: console.log,
+      });
+    } catch (err) {
+      const reason = err.reason || err.message || 'unknown';
+      console.error(`[meet-cue start] Meet 参加エラー (${reason}):`, err.message);
+
+      sessionState.joinError = reason;
+      fs.writeFileSync(path.join(sessionDir, 'session.json'), JSON.stringify(sessionState, null, 2), 'utf8');
+
+      // 1-day rate limit notification
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const notifFile = path.join(meetCueBaseDir(), 'join-error-notifications.json');
+      let notifState = {};
+      try {
+        if (fs.existsSync(notifFile)) {
+          notifState = JSON.parse(fs.readFileSync(notifFile, 'utf8'));
         }
-      },
-      log: console.log,
-    });
+      } catch { /* ignore */ }
+
+      if (notifState[reason] !== todayStr) {
+        notifState[reason] = todayStr;
+        try {
+          fs.mkdirSync(path.dirname(notifFile), { recursive: true });
+          fs.writeFileSync(notifFile, JSON.stringify(notifState, null, 2), 'utf8');
+        } catch { /* ignore */ }
+
+        try {
+          await addItem(homeDir(), {
+            kind: 'info',
+            text: `【Meetカンペ】${values.title || '打合せ'} に Bot が入れませんでした（${reason}）。Bot 用ブラウザの seisaku-team ログインが必要です`,
+            source: 'meet-cue',
+          });
+        } catch (e) {
+          console.error('meet-cue: kim-inbox 追加エラー:', e.message);
+        }
+      }
+
+      if (isEntry(import.meta.url)) {
+        process.exit(3);
+      }
+      return { ok: false, code: 3, joinError: reason };
+    }
 
     // Handle Ctrl+C
     let isTerminating = false;

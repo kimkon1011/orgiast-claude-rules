@@ -31,6 +31,12 @@ import {
   main,
 } from './meet-cue.mjs';
 
+import {
+  isProfileSignedIn,
+  startMeetBot,
+  checkPlaywrightAvailable,
+} from './lib/meet-cue-browser.mjs';
+
 test('getLlmAskPath: Windows 形式の file URL から llm-ask.mjs の正しい絶対パスを解決できること', () => {
   const winFileUrl = 'file:///C:/x/tools/meet-cue.mjs';
   const resolved = getLlmAskPath(winFileUrl);
@@ -374,4 +380,17 @@ test('再発防止ゲート: meet-cue-browser.mjs のソースに「カンペ」
   // We specifically check that the hardcoded 'オージャスト カンペAI' is gone.
   assert.doesNotMatch(source, /オージャスト\s*カンペAI/,
     'ソースに「オージャスト カンペAI」というハードコード文字列が残っていてはいけません');
+});
+
+test('isProfileSignedIn: Google ログイン状態の cookie ファイル存在確認', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'profile-signin-test-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  assert.equal(await isProfileSignedIn(tmpDir), false);
+
+  const defaultDir = path.join(tmpDir, 'Default');
+  fs.mkdirSync(defaultDir, { recursive: true });
+  fs.writeFileSync(path.join(defaultDir, 'Cookies'), 'dummy sqlite cookie content with SID inside', 'utf8');
+
+  assert.equal(await isProfileSignedIn(tmpDir), true);
 });

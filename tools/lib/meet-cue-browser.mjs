@@ -84,6 +84,86 @@ export async function checkProfileLoggedIn(profileDir) {
   return fs.existsSync(cookiePath) || fs.existsSync(networkCookiePath);
 }
 
+/**
+ * Checks if the browser profile is actually signed into Google by inspecting cookies.
+ * Does NOT open a browser — safe to call anytime.
+ * Looks for SID or __Secure-1PSID cookies with domain .google.com.
+ */
+export async function isProfileSignedIn(profileDir, options = {}) {
+  if (!profileDir || typeof profileDir !== 'string' || !fs.existsSync(profileDir)) {
+    return false;
+  }
+
+  if (options.context) {
+    try {
+      const cookies = await options.context.cookies();
+      const hasSid = cookies.some(c => (c.name === 'SID' || c.name === '__Secure-1PSID') && (c.domain || '').includes('google.com'));
+      if (hasSid) return true;
+    } catch { /* ignore */ }
+  }
+
+  const cookiesPaths = [
+    path.join(profileDir, 'Default', 'Cookies'),
+    path.join(profileDir, 'Default', 'Network', 'Cookies'),
+    path.join(profileDir, 'Cookies'),
+    path.join(profileDir, 'Network', 'Cookies'),
+  ];
+
+  try {
+    const entries = fs.readdirSync(profileDir, { withFileTypes: true });
+    for (const ent of entries) {
+      if (ent.isDirectory()) {
+        cookiesPaths.push(path.join(profileDir, ent.name, 'Cookies'));
+        cookiesPaths.push(path.join(profileDir, ent.name, 'Network', 'Cookies'));
+      }
+    }
+  } catch { /* ignore */ }
+
+  for (const cp of cookiesPaths) {
+    if (!fs.existsSync(cp)) continue;
+    try {
+      const buf = fs.readFileSync(cp);
+      const str = buf.toString('utf8');
+      if (str.includes('SID') || str.includes('__Secure-1PSID')) {
+        return true;
+      }
+    } catch {
+      try {
+        const buf = fs.readFileSync(cp);
+        if (buf.includes(Buffer.from('SID')) || buf.includes(Buffer.from('__Secure-1PSID'))) {
+          return true;
+        }
+      } catch { /* ignore */ }
+    }
+  }
+
+  return false;
+}
+
+async function checkUiReached(page) {
+  const selectors = [
+    ...MEET_SELECTORS.joinButtons,
+    ...MEET_SELECTORS.guestNameInput,
+    ...MEET_SELECTORS.captionToggleButtons,
+    'button[aria-label*="マイク"]',
+    'button[aria-label*="mic"]',
+    'button[aria-label*="カメラ"]',
+    'button[aria-label*="camera"]',
+    'button[aria-label*="通話"]',
+    '[data-unresolved-meeting-id]',
+  ];
+
+  for (const sel of selectors) {
+    try {
+      const loc = page.locator(sel).first();
+      if (await loc.isVisible({ timeout: 300 })) {
+        return true;
+      }
+    } catch { /* ignore */ }
+  }
+  return false;
+}
+
 export async function startMeetBot({
   url,
   mode = 'profile', // 'profile' | 'guest'
@@ -93,6 +173,7 @@ export async function startMeetBot({
   botDisplayName = 'オージャストAI',
   onCaption = () => {},
   log = console.error,
+  uiTimeoutMs = 90000,
 } = {}) {
   const { available, executablePath, chromium } = await checkPlaywrightAvailable();
   if (!available || !executablePath) {
@@ -130,6 +211,56 @@ export async function startMeetBot({
   log(`[meet-cue-browser] Meet URL へ移動中: ${url}`);
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForTimeout(3000);
+
+  // Check URL redirect or wait up to uiTimeoutMs (default 90s) for join/meeting UI
+  const uiDeadline = Date.now() + uiTimeoutMs;
+  let failReason = null;
+  let uiReached = false;
+
+  while (Date.now() < uiDeadline) {
+    const currentUrl = page.url();
+    if (currentUrl.includes('accounts.google.com')) {
+      failReason = 'signin_required';
+      break;
+    }
+    if (!currentUrl.includes('meet.google.com')) {
+      failReason = 'redirected_to_landing';
+      break;
+    }
+
+    if (await checkUiReached(page)) {
+      uiReached = true;
+      break;
+    }
+
+    await page.waitForTimeout(1000);
+  }
+
+  if (!uiReached && !failReason) {
+    failReason = 'join_ui_not_found';
+  }
+
+  if (failReason) {
+    log(`[meet-cue-browser] Meet 参加失敗を検知しました (理由: ${failReason}, URL: ${page.url()})`);
+    if (sessionDir) {
+      try {
+        fs.mkdirSync(sessionDir, { recursive: true });
+        await page.screenshot({ path: path.join(sessionDir, 'join-failed.png'), fullPage: false });
+        log(`[meet-cue-browser] 失敗スクリーンショット保存: ${path.join(sessionDir, 'join-failed.png')}`);
+      } catch (e) {
+        log(`[meet-cue-browser] スクリーンショット保存失敗: ${e.message}`);
+      }
+    }
+    try {
+      await context.close();
+    } catch { /* ignore */ }
+    if (mode === 'guest') {
+      try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+    const err = new Error(`Meet 参加失敗: ${failReason}`);
+    err.reason = failReason;
+    throw err;
+  }
 
   // Turn off mic & camera via keyboard shortcuts
   try {

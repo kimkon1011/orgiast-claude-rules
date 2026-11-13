@@ -1,7 +1,46 @@
 import { externalSpec, eventKey, readEvents, saveEvent, MONITOR_DAYS } from './lib/external-monitor-state.mjs';
 import { rowKey } from './auto-progress-ledger.mjs';
 import { fetchMessages } from './auto-progress-external-check.mjs';
-import { addItem } from './kim-inbox.mjs';
+import { addItem, listItems, updateInboxItem, inboxDedupeKey } from './kim-inbox.mjs';
+import { redactSecrets } from './webhook-health.mjs';
+
+function inboxOptions(event) {
+  return { kind: 'ask', priority: 'high', source: 'auto-progress-external', sessionId: event.row.sessionId,
+    text: `🔴 ${event.row.label || event.channel} に新着\n送信者: ${event.message.sender || '不明'}\n時刻: ${event.message.at}\n${event.message.text}\n作業ID: ${event.row.sessionId}\n新着を確認し、対応方針を判断してください。`,
+    dedupeKey: `external-message:${event.key}` };
+}
+
+// Older inbox versions redacted every event hash to the same key. A cursor may
+// already have advanced and the resume may be done, so repair durable receipts
+// independently of polling. Keep genuine prior notices (and their answers).
+export async function repairExternalInboxReceipts({ home, now = Date.now(), io = {} }) {
+  const items = new Map(listItems(home).map(item => [item.id, item]));
+  const result = { rekeyed: 0, requeued: 0 };
+  const retained = new Set();
+  for (const event of readEvents(home).sort((a, b) => Date.parse(a.queuedAt) - Date.parse(b.queuedAt))) {
+    const old = items.get(event.inboxId), options = inboxOptions(event);
+    const key = inboxDedupeKey(options.dedupeKey);
+    if (!old || old.source !== options.source) continue;
+    if (old.dedupeKey === key) { retained.add(old.id); continue; }
+    if (!retained.has(old.id) && old.text === redactSecrets(options.text).slice(0, 4000)) {
+      updateInboxItem(home, old.id, item => { item.dedupeKey = key; });
+      retained.add(old.id);
+      result.rekeyed++;
+      continue;
+    }
+    const item = await (io.addKimInboxItem || addItem)(home, options);
+    if (!item?.id || item.forwardError) throw new Error(item?.forwardError || 'External inbox repair failed');
+    event.inboxRepair = { at: new Date(now).toISOString(), previousInboxId: event.inboxId,
+      previousState: event.state, previousResumeOutcome: event.resumeOutcome };
+    event.inboxId = item.id;
+    event.state = 'pending';
+    delete event.attemptedAt;
+    delete event.resumeOutcome;
+    saveEvent(home, event);
+    result.requeued++;
+  }
+  return result;
+}
 
 export async function pollExternal(row, { home, now, patch, io = {} }) {
   const spec = externalSpec(row);
@@ -27,8 +66,7 @@ export async function pollExternal(row, { home, now, patch, io = {} }) {
         events.set(key, event);
       }
       if (!event.inboxId) {
-        const text = `🔴 ${row.label || spec.channel} に新着\n送信者: ${event.message.sender || '不明'}\n時刻: ${event.message.at}\n${event.message.text}\n作業ID: ${row.sessionId}\n新着を確認し、対応方針を判断してください。`;
-        const item = await (io.addKimInboxItem || addItem)(home, { kind: 'ask', priority: 'high', source: 'auto-progress-external', text, dedupeKey: `external-message:${key}` });
+        const item = await (io.addKimInboxItem || addItem)(home, inboxOptions(event));
         if (!item?.id || item.forwardError) throw new Error(item?.forwardError || 'External inbox delivery failed');
         event.inboxId = item.id;
         saveEvent(home, event);
@@ -50,6 +88,7 @@ export async function pollExternal(row, { home, now, patch, io = {} }) {
 
 // Durable queue, grouped by original session. Retain failures for the next tick.
 export async function drainExternalQueue({ home, now, resume, io = {} }) {
+  await repairExternalInboxReceipts({ home, now, io });
   const pending = readEvents(home).filter(e => e.inboxId && e.state !== 'done' &&
     (!e.attemptedAt || now - Date.parse(e.attemptedAt) >= 30 * 60000))
     .sort((a, b) => (Date.parse(a.attemptedAt) || 0) - (Date.parse(b.attemptedAt) || 0) || Date.parse(a.queuedAt) - Date.parse(b.queuedAt));

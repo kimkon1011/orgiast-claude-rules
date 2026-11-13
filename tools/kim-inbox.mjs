@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +18,12 @@ import { readLedger, ledgerFile, OPEN_STATUSES } from './auto-progress-ledger.mj
 const exec = promisify(execFile);
 const directory = home => path.join(home, '.claude/kim-inbox');
 const clean = value => redactSecrets(String(value ?? '')).slice(0, 4000);
+// Redaction/truncation is lossy and must not collapse distinct producer identities.
+// Hash only affected keys; short chunks keep the opaque digest stable through spooling.
+export function inboxDedupeKey(value) {
+  const raw = String(value ?? '');
+  return clean(raw) === raw ? raw : `dedupe-sha256:${createHash('sha256').update(raw).digest('hex').match(/.{16}/g).join('-')}`;
+}
 const validId = id => /^ki-\d{14}-[a-f0-9]{4}$/.test(id);
 export const CONTEXT_LIMIT = 1800;
 // 古いロック(EPERM/pid再利用)を mtime で回収。既定5分、環境変数で上書き可。
@@ -116,7 +122,7 @@ function create(home, options) {
     // Durable producers retry after a crash between inbox delivery and ledger update.
     // Keep distinct jobs separate even when their text normalizes to the same prefix.
     if (options.dedupeKey) {
-      const existing = listItems(home).find(item => item.dedupeKey === clean(options.dedupeKey));
+      const existing = listItems(home).find(item => item.dedupeKey === inboxDedupeKey(options.dedupeKey));
       if (existing && options.refresh && existing.source === 'morning-session-sweep' && options.source === existing.source && options.kind === 'info') return update(home, existing.id, current => {
         current.text = text; current.lastAt = new Date().toISOString(); current.status = 'open';
         current.shownCount = 0; current.shownSessions = []; current.lastShownAt = null;
@@ -199,7 +205,7 @@ function createNew(home, { kind = 'info', text, source = '', from = resolveFleet
   const createdAt = new Date().toISOString();
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
-    const item = { id, createdAt, ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: clean(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    const item = { id, createdAt, ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: inboxDedupeKey(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
     if (revision !== undefined) item.revision = revision;
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -223,7 +229,7 @@ export function spoolItem(home, options) {
   const record = { ...(options.priority === 'high' ? { priority: 'high' } : {}), kind: options.kind || 'info', text: clean(options.text), source: clean(options.source),
     from: clean(options.from ?? resolveFleetLabel(home, { hostname: os.hostname() })),
     ...(options.sessionId ? { sessionId: clean(options.sessionId) } : {}),
-    dedupeKey: options.dedupeKey ? clean(options.dedupeKey) : `spool:${id}` };
+    dedupeKey: options.dedupeKey ? inboxDedupeKey(options.dedupeKey) : `spool:${id}` };
   try {
     fs.writeFileSync(temp, JSON.stringify(record) + '\n', { flag: 'wx', mode: 0o600 });
     fs.renameSync(temp, file);

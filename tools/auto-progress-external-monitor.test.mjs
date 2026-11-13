@@ -3,14 +3,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pollExternal, drainExternalQueue } from './auto-progress-external-monitor.mjs';
-import { externalSpec, readEvents, MONITOR_DAYS, notifiedGmailIds, recentSessionSends, gmailNotificationOwned } from './lib/external-monitor-state.mjs';
+import { pollExternal, drainExternalQueue, repairExternalInboxReceipts } from './auto-progress-external-monitor.mjs';
+import { externalSpec, readEvents, saveEvent, MONITOR_DAYS, notifiedGmailIds, recentSessionSends, gmailNotificationOwned } from './lib/external-monitor-state.mjs';
 import { record, readLedger, ledgerFile, writeLedger, rowKey } from './auto-progress-ledger.mjs';
 import { recordOutbound } from './lib/send-context.mjs';
 import { addCheck } from './auto-progress.mjs';
 import { fetchGmailMessages, fetchLineMessages } from './auto-progress-external-check.mjs';
 import { run } from './auto-progress-watch.mjs';
 import { notificationMocks } from './test-helpers/auto-progress-home.mjs';
+import { addItem, listItems, answerItem, updateInboxItem } from './kim-inbox.mjs';
 
 const now = Date.parse('2026-11-12T06:00:00Z');
 const baseRow = () => ({ ts: new Date(now).toISOString(), sessionId: 'origin-session', pc: 'pc', user: 'user', status: 'open', cwd: process.cwd(),
@@ -21,6 +22,74 @@ function fixture(t) {
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   return home;
 }
+
+test('real inbox keeps different message hashes distinct even after the first is answered', async t => {
+  const home = fixture(t), row = baseRow();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+  const opts = { home, now, patch: (_, c) => Object.assign(row, c), io: {
+    fetchExternalMessages: async () => [message('first')],
+    addKimInboxItem: addItem,
+  } };
+  await pollExternal(row, opts);
+  answerItem(home, listItems(home)[0].id, '確認済み');
+  opts.io.fetchExternalMessages = async () => [message('second')];
+  await pollExternal(row, opts);
+  await pollExternal(row, opts);
+  const events = readEvents(home), items = listItems(home);
+  assert.equal(items.length, 2);
+  assert.equal(new Set(events.map(e => e.inboxId)).size, 2);
+  assert.equal(items.filter(i => i.status === 'open' && i.text.startsWith('🔴')).length, 1);
+});
+
+test('repair requeues lost receipts beyond the cursor once, preserving genuine answered notices', async t => {
+  const home = fixture(t), row = baseRow();
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+  const opts = { home, now, patch: (_, c) => Object.assign(row, c), io: {
+    fetchExternalMessages: async () => [message('first')],
+  } };
+  await pollExternal(row, opts);
+  const first = listItems(home)[0];
+  answerItem(home, first.id, '確認済み');
+  updateInboxItem(home, first.id, item => { item.dedupeKey = 'external-message:[REDACTED]'; });
+  // Reproduce the old addItem collision, including identical visible text.
+  opts.io.fetchExternalMessages = async () => [message('second')];
+  opts.io.addKimInboxItem = async () => first;
+  opts.now++;
+  await pollExternal(row, opts);
+  for (const event of readEvents(home)) {
+    event.state = 'done'; event.attemptedAt = new Date(now).toISOString();
+    event.resumeOutcome = { state: 'needs_user' }; saveEvent(home, event);
+  }
+  const cursor = row.check;
+  // Failed delivery must leave the old receipt recoverable.
+  await assert.rejects(repairExternalInboxReceipts({ home, now, io: {
+    addKimInboxItem: async () => ({ id: 'failed', forwardError: 'offline' }),
+  } }), /offline/);
+  assert.ok(readEvents(home).every(e => e.inboxId === first.id));
+  const result = await repairExternalInboxReceipts({ home, now });
+  assert.equal(result.requeued, 1);
+  assert.equal(row.check, cursor);
+  assert.equal(listItems(home).length, 2);
+  assert.equal(listItems(home).find(i => i.id === first.id).status, 'answered');
+  const repaired = readEvents(home).find(e => e.message.id === 'second');
+  assert.equal(repaired.state, 'pending');
+  assert.equal(repaired.attemptedAt, undefined);
+  assert.equal(repaired.row.sessionId, row.sessionId);
+  assert.equal(repaired.inboxRepair.previousState, 'done');
+  assert.deepEqual(await repairExternalInboxReceipts({ home, now }), { rekeyed: 0, requeued: 0 });
+  let resumes = 0;
+  const resume = async queued => {
+    resumes++; assert.equal(queued.sessionId, row.sessionId);
+    assert.match(queued.nextClaude, /second/); assert.doesNotMatch(queued.nextClaude, /first/);
+    return { state: 'needs_user' };
+  };
+  await drainExternalQueue({ home, now, resume });
+  await drainExternalQueue({ home, now: now + 3600000, resume });
+  assert.equal(resumes, 1);
+  assert.equal(listItems(home).length, 2);
+});
 test('repeated arrivals keep check open; equal timestamp messages dedupe by ID and queue original session', async t => {
   const home = fixture(t), row = baseRow(), notices = new Map();
   let messages = [message('m1')];

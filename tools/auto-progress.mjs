@@ -13,7 +13,7 @@ export { isTimeOnlyCheck } from './auto-progress-check.mjs';
 export function addCheck({ session, check, startWhen, deadline, label, nextClaude, nextKim, askFile, doneFile, timeout, cwd = process.cwd(), home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), probe, allowMet = false, autoRegisteredCheck = false, transcriptPath = '' }) {
   const external = externalSpec({ check });
   const sessionCheck = isSessionProgressCheck({ check });
-  const convertedToStartWhen = false;
+  const convertedToStartWhen = sessionCheck && startWhen === undefined && Boolean(check?.trim()) && Boolean(nextClaude?.trim());
   if (convertedToStartWhen) startWhen = check;
   if (!session?.trim() || !(startWhen?.trim() || check?.trim()) || !label?.trim()) throw new Error('--session, --check, --label は必須です');
   if (startWhen !== undefined && (!startWhen.trim() || !nextClaude?.trim())) throw new Error('--start-when には --next-claude が必須です');

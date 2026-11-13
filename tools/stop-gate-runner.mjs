@@ -56,7 +56,7 @@ import { evaluateUnregisteredPromise } from './unregistered-promise-gate.mjs';
 import { appendStopLedger, registerStopViolation, CAP_CONTEXT } from './lib/stop-recheck.mjs';
 import { STOP_RETRY_INSTRUCTION, withStopRetryInstruction } from './lib/stop-retry-message.mjs';
 import { evaluateClaudeFallbackReport } from './claude-fallback-report-gate.mjs';
-import { buildRecord, extractPromise, ledgerFile as progressLedgerFile, readLedger, writeLedger, applyPromise, latestOpenPromises, rollingSessionFields } from './auto-progress-ledger.mjs';
+import { buildRecord, extractPromise, ledgerFile as progressLedgerFile, readLedger, writeLedger, applyPromise, latestOpenPromises, rollingSessionFields, SESSION_CHECK_TIMEOUT_MS } from './auto-progress-ledger.mjs';
 import { appendInbox } from './lib/auto-progress-inbox.mjs';
 import { isUnchangedPeriodicReport } from './lib/unchanged-periodic-report.mjs';
 
@@ -282,7 +282,7 @@ async function runOtherGates(input, context, auditOptions = {}) {
       } else {
         const purpose = String(assistantText).match(/^\s*(?:\*\*)?\[本セッションの目的\](?:\*\*)?[ \t]*([^\r\n]+)(?:\r?\n|$)/)?.[1]?.trim();
         const label = purpose || [...String(context.lastUserPrompt || context.humanText || '')].slice(0, 60).join('');
-        const deadline = openDeadline(footerValues(assistantText)?.session)?.toISOString() || '+24h';
+        const deadline = openDeadline(footerValues(assistantText)?.session)?.toISOString() || new Date(Date.now() + 24 * 3600000).toISOString();
         const script = fileURLToPath(new URL('./session-progress-check.mjs', import.meta.url)).replaceAll('\\', '/');
         // Double quotes work in both cmd.exe and the check executor's Bash shell.
         // Reject shell metacharacters that still expand within double quotes.
@@ -291,6 +291,8 @@ async function runOtherGates(input, context, auditOptions = {}) {
           session: sessionId, label: `自動登録: ${label || sessionId}`, deadline,
           check: `node "${script}" --session "${sessionId}"`,
           nextClaude: 'このセッションの未完了の約束（この後の自動進行の行）を進め、結果を kim に報告する',
+          timeout: Math.round(SESSION_CHECK_TIMEOUT_MS / 1000),
+          autoRegisteredCheck: true,
           home: home(), cwd: input.cwd || path.dirname(path.dirname(script)),
         });
         verdict = 'pass_after_autoregister';

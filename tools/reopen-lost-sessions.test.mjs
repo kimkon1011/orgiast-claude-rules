@@ -93,7 +93,8 @@ test('reopenLost: worktree cwd のセッションは最初の非 worktree cwd �
         // hasCodeWindow の呼び出し（Get-Process Code + .Count）は psCalls に記録せず、ウィンドウ無し(0)を返す
         const cmdStr = args[args.length - 1];
         if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
-          return { status: 0, stdout: '0' };
+          return { status: 0, stdout: '0' }
+        if (cmdStr.includes('Get-Process claude') && cmdStr.includes('CommandLine')) { return { status: 0, stdout: '' }; };
         }
         psCalls.push(cmdStr);
       }
@@ -228,7 +229,8 @@ test('opening continues after API deadline; focus precedes URI; lock released an
       // hasCodeWindow の呼び出しはウィンドウ無し(0)を返し、calls に記録しない
       const cmdStr = args[args.length - 1];
       if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
-        return { status: 0, stdout: '0' };
+        return { status: 0, stdout: '0' }
+        if (cmdStr.includes('Get-Process claude') && cmdStr.includes('CommandLine')) { return { status: 0, stdout: '' }; };
       }
       calls.push(args);
       return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
@@ -510,7 +512,8 @@ test('reopenLost: ウィンドウ無し＋lastActiveWindow.workspaceIdentifier �
         const cmdStr = args[args.length - 1];
         // hasCodeWindow の呼び出しはウィンドウ無し(0)を返す
         if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
-          return { status: 0, stdout: '0' };
+          return { status: 0, stdout: '0' }
+        if (cmdStr.includes('Get-Process claude') && cmdStr.includes('CommandLine')) { return { status: 0, stdout: '' }; };
         }
         psCalls.push(cmdStr);
       }
@@ -559,7 +562,8 @@ test('reopenLost falls back to code <cwd> with openedWith: folder when no worksp
       if (args[0] !== 'agents') {
         const cmdStr = args[args.length - 1];
         if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
-          return { status: 0, stdout: '0' };
+          return { status: 0, stdout: '0' }
+        if (cmdStr.includes('Get-Process claude') && cmdStr.includes('CommandLine')) { return { status: 0, stdout: '' }; };
         }
         psCalls.push(cmdStr);
       }

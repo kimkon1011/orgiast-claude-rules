@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createPool, createOwnershipLease, readConfig, readSnapshot, isWorktreeFolder, decideWorktreeCleanup, REFRESH_MIN_AGE_MS } = require('./mobile-pool');
+const { createPool, createOwnershipLease, readConfig, readSnapshot, isWorktreeFolder, decideRefresh, decideWorktreeCleanup, REFRESH_MIN_AGE_MS } = require('./mobile-pool');
 
 // git worktree を模した一時フォルダ（.git ファイルが gitdir: .../worktrees/... を指す）
 function makeWorktree(t) {
@@ -40,11 +40,11 @@ test('isWorktreeFolder: \\.claude\\worktrees\\ パス・.git ファイル・祖�
 test('decideWorktreeCleanup: 起動時は未使用待機タブを古さ不問で 1 本閉じる', () => {
   const now = 1000000;
   const tabs = [
-    { label: 'Claude Code', appearedAt: now - 60000, isActive: false, id: 'unused' },
-    { label: 'Claude Code', appearedAt: now - 500000, isActive: false, id: 'other' },
+    { tab: {}, label: 'Claude Code', appearedAt: now - 60000, isActive: false, id: 'unused' },
+    { tab: {}, label: 'Claude Code', appearedAt: now - 500000, isActive: false, id: 'other' },
     { label: '作業中', appearedAt: now - 999999, isActive: false, id: 'used' },
   ];
-  const decision = decideWorktreeCleanup({ tabs, now, startup: true });
+  const decision = decideWorktreeCleanup({ tabs, now, openedTabs: new Set(tabs.map(t => t.tab)), startup: true });
   // 最古の待機タブを選ぶ（作業中タブは対象外）
   assert.equal(decision.id, 'other');
 });
@@ -52,14 +52,14 @@ test('decideWorktreeCleanup: 起動時は未使用待機タブを古さ不問で
 test('decideWorktreeCleanup: 定期は 10 分未満・アクティブ・会話中タブは閉じない', () => {
   const now = 1000000;
   const tabs = [
-    { label: 'Claude Code', appearedAt: now - 5 * 60000, isActive: false, id: 'young' },
-    { label: 'Claude Code', appearedAt: now - 300 * 60000, isActive: true, id: 'active' },
+    { tab: {}, label: 'Claude Code', appearedAt: now - 5 * 60000, isActive: false, id: 'young' },
+    { tab: {}, label: 'Claude Code', appearedAt: now - 300 * 60000, isActive: true, id: 'active' },
     { label: '実際の仕事', appearedAt: now - 999 * 60000, isActive: false, id: 'conversation' },
   ];
-  assert.equal(decideWorktreeCleanup({ tabs, now, startup: false }), null);
+  assert.equal(decideWorktreeCleanup({ tabs, now, openedTabs: new Set(tabs.map(t => t.tab)), startup: false }), null);
   // 10 分以上・非アクティブな待機タブがあれば選ぶ
-  tabs.push({ label: 'Claude Code', appearedAt: now - 11 * 60000, isActive: false, id: 'old' });
-  assert.equal(decideWorktreeCleanup({ tabs, now, startup: false }).id, 'old');
+  tabs.push({ tab: {}, label: 'Claude Code', appearedAt: now - 11 * 60000, isActive: false, id: 'old' });
+  assert.equal(decideWorktreeCleanup({ tabs, now, openedTabs: new Set(tabs.map(t => t.tab)), startup: false }).id, 'old');
   assert.equal(REFRESH_MIN_AGE_MS, 10 * 60000);
 });
 
@@ -174,4 +174,71 @@ test('config order: env > JSON > fallback (VS Code setting) > 3', (t) => {
   fs.writeFileSync(path.join(home, '.claude', 'mobile-sessions.json'), '{"count":2}');
   assert.equal(readConfig(home, {}, 4), 2);
   assert.equal(readConfig(home, { CLAUDE_MOBILE_STANDBY: '3' }, 4), 3);
+});
+
+// --- 自タブ（openedTabs）フィルタのテスト ---
+const MIN = 60000;
+const REFRESH_NOW = 1_000_000_000_000;
+function refreshTab(ageMin, extra = {}) {
+  return { label: 'Claude Code', appearedAt: REFRESH_NOW - ageMin * MIN, isActive: false, tab: extra.tab || {}, ...extra };
+}
+
+test('decideRefresh は openedTabs のタブだけ候補にする', () => {
+  const selfTab = {};
+  const otherTab = {};
+  const base = { now: REFRESH_NOW, minutes: 60, hoursOk: true, lastRefreshAt: null, target: 1 };
+  // 自分で開いたタブだけ候補になる
+  const result1 = decideRefresh({
+    ...base,
+    tabs: [refreshTab(100, { tab: selfTab }), refreshTab(200, { tab: otherTab })],
+    openedTabs: new Set([selfTab]),
+  });
+  assert.equal(result1.refresh, true);
+  assert.equal(result1.tab.tab, selfTab);
+  // 自分のタブが無ければ no-candidate
+  const result2 = decideRefresh({
+    ...base,
+    tabs: [refreshTab(100, { tab: otherTab })],
+    openedTabs: new Set([selfTab]),
+  });
+  assert.equal(result2.refresh, false);
+  assert.equal(result2.reason, 'no-candidate');
+});
+
+test('decideWorktreeCleanup は openedTabs のタブだけ候補にする', () => {
+  const selfTab = { id: 'self' };
+  const otherTab = { id: 'other' };
+  const tabs = [
+    { label: 'Claude Code', appearedAt: REFRESH_NOW - 300 * MIN, isActive: false, tab: selfTab },
+    { label: 'Claude Code', appearedAt: REFRESH_NOW - 200 * MIN, isActive: false, tab: otherTab },
+  ];
+  // 自分のタブだけが候補
+  const result1 = decideWorktreeCleanup({
+    tabs, now: REFRESH_NOW, startup: true,
+    openedTabs: new Set([selfTab]),
+  });
+  assert(result1 !== null);
+  assert.equal(result1.tab, selfTab);
+  // 自分のタブが無ければ null
+  const result2 = decideWorktreeCleanup({
+    tabs, now: REFRESH_NOW, startup: true,
+    openedTabs: new Set([]),
+  });
+  assert.equal(result2, null);
+});
+
+test('decideRefresh は openedTabs 無指定なら閉鎖しない', () => {
+  const result = decideRefresh({
+    now: REFRESH_NOW, minutes: 60, hoursOk: true, lastRefreshAt: null, target: 1,
+    tabs: [refreshTab(100)],
+  });
+  assert.equal(result.refresh, false);
+});
+
+test('decideWorktreeCleanup は openedTabs 無指定なら閉鎖しない', () => {
+  const result = decideWorktreeCleanup({
+    tabs: [{ label: 'Claude Code', appearedAt: REFRESH_NOW - 300 * MIN, isActive: false, tab: {} }],
+    now: REFRESH_NOW, startup: true,
+  });
+  assert.equal(result, null);
 });

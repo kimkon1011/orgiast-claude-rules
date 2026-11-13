@@ -378,7 +378,7 @@ test('planClose: keepEmpty preserves N empty tabs across groups', () => {
     [fakeTab('Claude Code'), fakeTab('Claude Code')],
     [fakeTab('Claude Code'), fakeTab('Claude Code')],
   ];
-  const result = planClose({ mementoTabs: mt, liveTabsByGroup: live, hiddenIds: [], closedIds: [], keepEmpty: 3 });
+  const result = planClose({ mementoTabs: mt, liveTabsByGroup: live, hiddenIds: [], closedIds: [], keepEmpty: 3, openedTabs: new Set(live.flat()) });
   assert.equal(result.toClose.length, 1);
   assert.equal(result.emptyExtra, 1);
 });
@@ -450,6 +450,7 @@ test('planClose: mixed scenario — hidden + closed + empty-extra + active/skip'
   const result = planClose({
     mementoTabs: mt2, liveTabsByGroup: live,
     hiddenIds: ['hid-1'], closedIds: ['clo-1'],
+    openedTabs: new Set(live.flat()),
     keepEmpty: 1, // 2 empty → keep 1, close 1
   });
   // Expected: hid-1 (hidden), clo-1 (closed), one empty-extra
@@ -459,4 +460,19 @@ test('planClose: mixed scenario — hidden + closed + empty-extra + active/skip'
   assert.equal(result.closed, 1);
   assert.equal(result.emptyExtra, 1);
   assert.equal(result.skipped, 0); // group 0 matched, group 1 count matched too
+});
+
+test('planClose: unowned Claude Code tabs are never trimmed; at most one owned tab per pass', () => {
+  const live = [[fakeTab('Claude Code'), fakeTab('Claude Code'), fakeTab('Claude Code'), fakeTab('Claude Code')]];
+  const mementoTabs = live[0].map((tab, index) => ({ group: 0, index, title: tab.label, sessionId: null, isClaude: true }));
+  const options = { mementoTabs, liveTabsByGroup: live, keepEmpty: 0 };
+  assert.deepEqual(planClose(options).toClose, []);
+  assert.deepEqual(planClose({ ...options, openedTabs: new Set() }).toClose, []);
+  const openedTabs = new Set(live[0].slice(1));
+  const result = planClose({ ...options, openedTabs });
+  assert.deepEqual(result.toClose, [live[0][1]]);
+  assert.equal(result.emptyExtra, 1);
+  live[0][1].label = '作業中';
+  mementoTabs[1].title = '作業中';
+  assert.deepEqual(planClose({ ...options, openedTabs }).toClose, [live[0][2]]);
 });

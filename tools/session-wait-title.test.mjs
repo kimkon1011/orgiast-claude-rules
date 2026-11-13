@@ -51,6 +51,12 @@ test('閉じる儀式は各区切りの全文を照合して別作業を除外�
   assert.equal(desiredTitle(withAction('このタブを閉じる', WAIT), ai), '【11/02/20:11まで】トークン待ち');
 });
 
+test('「1 回」（半角スペース入り）も閉じる操作と認識する', () => {
+  assert.equal(isCloseRitualOnly('新しいタブで Enter を 1 回押す'), true);
+  assert.equal(isCloseRitualOnly('新しいタブで Enter を1回押す'), true);
+  assert.equal(desiredTitle(withAction('新しいタブで Enter を 1 回押し、このタブを閉じる', CLOSED), ai), '【閉じて可】トークン待ち');
+});
+
 test('firstPrompt はスキル展開本文と command タグを飛ばして本当の依頼を拾う', () => {
   const user = content => JSON.stringify({ type: 'user', message: { content } });
   for (const content of ['Base directory for this skill: C:\\x', '<command-name>/session-close</command-name>', '<other>展開本文</other>']) {
@@ -179,6 +185,11 @@ test('PC番号: フッターなしでも付与し、同じタイトルは追記�
   assert.equal(desiredTitle('本文', custom('018｜トークン待ち'), '018'), null);
   assert.equal(desiredTitle('本文', custom('【11/02/20:11まで】名前'), '018'), '018｜【11/02/20:11まで】名前');
   assert.equal(desiredTitle('本文', custom('018｜【11/02/20:11まで】名前'), '018'), null);
+});
+test('KimPCラベルを期限タイトルに付与し、既存ラベルは二重化しない', () => {
+  assert.equal(desiredTitle(footer('まだ閉じない（作業中・2026-11-09 13:00 まで待つ）'), ai, 'KimPC'), 'KimPC｜【11/09/13:00まで】トークン待ち');
+  assert.equal(desiredTitle('本文', custom('KimPC｜トークン待ち'), 'KimPC'), null);
+  assert.equal(desiredTitle('本文', ai, ''), null);
 });
 test('PC番号: 期限付与・変更・解除でも番号が先頭', () => {
   assert.equal(desiredTitle(footer(WAIT), ai, '018'), '018｜【11/02/20:11まで】トークン待ち');

@@ -13,7 +13,7 @@
 - 基本理念・判断基準（毎セッション読み込み・迷ったらここに戻る）: @~/.claude/orgiast-mission.md
 全文は ~/.claude/orgiast-onboarding.md。自動ロードされないため、判断に迷ったら Read ツールで該当節を読むこと
 ### 1.1 自動化・手渡しの原則
-**🔴 全ての判断の土台は基本理念（docs/mission.md → @~/.claude/orgiast-mission.md、毎セッション自動読み込み）。目的は user の究極の生産性、長期的利益が最優先。個別ルールと食い違って見える時は理念に沿って解釈し、食い違いを rules repo の修正として提案する。承認必須事項（送信・削除・課金等）は理念を理由に飛ばさない。**
+**🔴 判断の土台は基本理念（@~/.claude/orgiast-mission.md）。目的は user の生産性・長期的利益が最優先。乖離時は理念優先で rules repo へ修正提案。承認必須事項（送信・削除・課金等）は理念を理由に飛ばさない。**
 **🔴 応答は常に日本語（コード・識別子は原文可）。Stop hook の書き直しも日本語を保つ。response-language-gate が検査し、setup --converge が language: japanese を配布する。**
 **🔴 user の操作はゼロが原則。手間は全員の手作業・再送・再入力・確認を含む最上位コスト。①Claude が実行 → ②MCP・CLI・定期ジョブ・fleet 等の別経路 → ③実行不能を実測したものだけ make-desktop-launcher.mjs でダブルクリック1個にする。PowerShell 貼り付けを頼まない。試した経路・結果・操作回数を「手間監査:」に書き、準備は全て先に済ませる。人の理解・同意は省かない（§1.1.0／§1.1.1）。**
 ### 削減していいのは Claude のコストだけ。user の往復は削減の対価にしない
@@ -31,7 +31,7 @@
 **🔴 Claude 側ログの不在は外部システムの不在の証拠ではない。外部の状態は直接照会だけで判定し、未照会は「未確認」と書く。確率付き否定やuserへの検証丸投げは禁止。**
 **🔴 「Claude にはできない」「未接続」も断定であり、登録済み経路（memory の reference_* ツール・DWD・GAS・CLI）を当ターンに試した失敗記録だけが証拠。セッションのツール一覧は読込状態であって、接続状態・実行可能性の証拠ではない。未試行のまま user に設定・接続を頼まない。**
 **🔴 判断材料は聞かれる前に調べる。費用・プラン・契約・招待・手作業の提案は、2案以上の比較表（月額・得られる枠・手間）＋出典＋推奨を付けて出す。decision-research-gate が差し戻す。**
-**🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PR は作った席が自分で着地させる。pr-land.mjs --title "<題>" --body-file <本文> でbaseへpushし着地させる（通常はautomerge、安全弁パスはCI合格後pr-merge、workflow変更は停止）。権限・鍵・マージを kim-PC に頼まない。不足時は `node tools/access-doctor.mjs --fix`。内部Gmail下書き禁止。**
+**🔴 社内連絡はDiscordで金功勇同席（既存グループDM→kim-PC、無ければBotDM＋写し）。kim宛報告=kim-inbox。PR は作った席が自分で着地させる。pr-land.mjs --title "<題>" --body-file <本文> でbaseへpushし着地させる（通常はautomerge、安全弁パスはCI合格後pr-merge、workflow変更は停止）。権限・鍵・マージを kim-PC に頼まない。不足時は `node tools/access-doctor.mjs --fix`。内部Gmail下書き禁止。**社内DMは承認不要。秘密値非記載。社外全文承認後。
 **🔴 kim 宛 Discord DM は全廃・例外なし（緊急を含む・全PC全アカウント）。kim-inbox（~/.claude/kim-inbox、node tools/kim-inbox.mjs）へ積みセッションで回収。ask は --answer まで毎プロンプト再提示、info は伝えたら --seen。クローズを止めず台帳を次セッションへ引き継ぐ。Discord MCP 直接送信はゲートが拒否し、旧 config/kim-discord-allowlist.json のカテゴリも廃止。詳細 docs/kim-inbox.md。**
 **🔴 社内ツールが Drive に作成・コピーするファイルには kim@orgiast.jp の編集権限を必ず付け、読み戻して確認する。失敗を握りつぶさない。作成 hook と毎日05:50のスイープで補完する。巡回は直近7日・共有制作アカウントと fleet の自動作成識別済みファイルだけを対象にし、社員個人の私物には付与しない。**
 **🔴 人への連絡・共有は、受け手がその1通だけで用が済む形で送る（2026-10-29 nishi 指示・全アカウント全PC）**。Gmail・Drive・別チャットを開きに行かせない。受け手の手間は Claude Code の効率より優先する。

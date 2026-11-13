@@ -209,18 +209,36 @@ function Repair-StagingNames {
   $renamedFile = Join-Path $stagingHomeDir 'renamed-files.txt'
   if (Test-Path -LiteralPath $renamedFile) { Remove-Item -LiteralPath $renamedFile -Force }
 
+  # Windows 予約デバイス名（大文字小文字を問わず、拡張子の有無・末尾ドットも含む）
+  $deviceNames = [System.Collections.Generic.HashSet[string]]@(
+    'con', 'prn', 'aux', 'nul',
+    'com1','com2','com3','com4','com5','com6','com7','com8','com9',
+    'lpt1','lpt2','lpt3','lpt4','lpt5','lpt6','lpt7','lpt8','lpt9'
+  )
+  $devicePattern = '^(?:' + ($deviceNames -join '|') + ')(?:\..*)?$'
+
   # 子を先に処理すれば、親ディレクトリの改名で未処理の子のパスが変わらない。
   $unsafeItems = @(Get-ChildItem -LiteralPath $stagingDir -Recurse -Force | Where-Object {
-    $_.Name -match '[\. \u3000]+$'
+    $_.Name -match '[\. \u3000]+$' -or $_.Name -match $devicePattern
   } | Sort-Object { $_.FullName.Length } -Descending)
   $renamed = New-Object System.Collections.Generic.List[string]
 
   foreach ($item in $unsafeItems) {
     $oldName = $item.Name
+    $isDeviceName = $oldName -match $devicePattern
     # 末尾ドット名では FileSystemInfo.Parent 自体が Win32 正規化で null になりうる。
     $parentPath = $item.FullName.Substring(0, $item.FullName.Length - $oldName.Length).TrimEnd('\')
-    $trailingLength = ([regex]::Match($oldName, '[\. \u3000]+$')).Length
-    $safeName = $oldName.Substring(0, $oldName.Length - $trailingLength) + ('_' * $trailingLength)
+    if ($isDeviceName) {
+      $dotIndex = $oldName.IndexOf('.')
+      if ($dotIndex -ge 0) {
+        $safeName = '_' + $oldName.Substring($dotIndex)
+      } else {
+        $safeName = '_' + $oldName
+      }
+    } else {
+      $trailingLength = ([regex]::Match($oldName, '[\. \u3000]+$')).Length
+      $safeName = $oldName.Substring(0, $oldName.Length - $trailingLength) + ('_' * $trailingLength)
+    }
     $destination = Join-Path $parentPath $safeName
     $suffix = 1
     while (Test-ExtendedPath $destination) {

@@ -26,7 +26,7 @@ test('時間帯: 06-24 は終了排他、22-06 は日跨ぎ、不正値は null'
 
 test('設定の決定順: env -> json -> VS Code 設定 -> 既定', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'refresh-cfg-'));
-  assert.deepEqual(readRefreshConfig(home, {}, {}), { minutes: 0, hours: '06-24' });
+  assert.deepEqual(readRefreshConfig(home, {}, {}), { minutes: 60, hours: '06-24' });
   assert.deepEqual(readRefreshConfig(home, {}, { minutes: 30, hours: '08-20' }), { minutes: 30, hours: '08-20' });
   fs.mkdirSync(path.join(home, '.claude'));
   fs.writeFileSync(path.join(home, '.claude', 'mobile-sessions.json'), JSON.stringify({ refreshMinutes: 15, refreshHours: '09-18' }));
@@ -80,6 +80,22 @@ test('isActive のタブは対象外（最古でも次点を選ぶ）', () => {
   const tabs = [tab(300, { id: 'active', isActive: true }), tab(120, { id: 'second' })];
   assert.equal(decideRefresh({ ...base, tabs }).tab.id, 'second');
   assert.equal(decideRefresh({ ...base, tabs: [tab(300, { isActive: true })] }).reason, 'no-candidate');
+});
+
+test('RC接続中/in-use タブはリフレッシュ対象外', () => {
+  const tabs = [tab(100, { id: 'rc-connected', rcConnected: true }), tab(200, { id: 'old-inactive' })];
+  assert.equal(decideRefresh({ ...base, tabs }).tab.id, 'old-inactive');
+
+  const tabs2 = [tab(300, { id: 'rc-active', rcLastActivityAt: NOW - 5 * MIN }), tab(400, { id: 'older' })];
+  assert.equal(decideRefresh({ ...base, tabs: tabs2 }).tab.id, 'older');
+
+  // RC 接続中のみ → no-candidate
+  assert.equal(decideRefresh({ ...base, tabs: [tab(100, { rcConnected: true })] }).reason, 'no-candidate');
+});
+
+test('RC閾値(30分)を超えたタブはリフレッシュ対象', () => {
+  const tabs = [tab(100, { rcLastActivityAt: NOW - 35 * MIN })];
+  assert.equal(decideRefresh({ ...base, tabs }).refresh, true);
 });
 
 test('/mobile?refresh=1 は refresh フラグ付き、無指定は従来どおり', () => {

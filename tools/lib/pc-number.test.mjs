@@ -6,7 +6,7 @@ import path from 'node:path';
 import { resolvePcNumber } from './pc-number.mjs';
 
 const mapPath = new URL('../../fleet-pc-map.json', import.meta.url);
-for (const [hostname, expected] of Object.entries({ 'DESKTOP-N429M3V': '018', 'DESKTOP-04U31RG': '019', 'DESKTOP-PPD5V8I': '004', '作業用011': '011', 'DESKTOP-2D0R4LI': '' })) {
+for (const [hostname, expected] of Object.entries({ 'DESKTOP-N429M3V': '018', 'DESKTOP-04U31RG': '019', 'DESKTOP-PPD5V8I': '004', '作業用011': '011', 'DESKTOP-2D0R4LI': 'KimPC' })) {
   test(`実マップ: ${hostname} → ${expected || '番号なし'}`, () => {
     assert.equal(resolvePcNumber({ env: {}, hostname, mapPath }), expected);
     assert.equal(resolvePcNumber({ env: {}, hostname: hostname.toLowerCase(), mapPath }), expected);
@@ -26,9 +26,10 @@ test('aliases・名前の優先順・未検証項目を無視・hostname fallbac
     '作業用003': { aliases: ['ALIAS'], remoteName: '作業用001', sheetName: '作業用002' },
     sheet: { hostname: 'sheet', remoteName: 'invalid', sheetName: '作業用002' },
     '作業用004': { hostname: 'key' },
+    label: { hostname: 'label-host', titleLabel: 'KimPC' },
   }));
   const resolve = hostname => resolvePcNumber({ env: {}, hostname, mapPath: file });
-  for (const [host, expected] of Object.entries({ alias: '001', sheet: '002', key: '004', hidden: '', unknown: '', '作業用005': '005' })) assert.equal(resolve(host), expected);
+  for (const [host, expected] of Object.entries({ alias: '001', sheet: '002', key: '004', 'label-host': 'KimPC', hidden: '', unknown: '', '作業用005': '005' })) assert.equal(resolve(host), expected);
   fs.writeFileSync(file, '{broken');
   assert.equal(resolve('作業用006'), '006');
   fs.unlinkSync(file);

@@ -46,7 +46,7 @@ export function sendTargets(input) {
       const file = option(args, '--body-file');
       targets.push({ body: file ? fs.readFileSync(path.resolve(input.cwd ?? process.cwd(), file), 'utf8') : '', channel: 'line' });
     }
-    else if (executedScript(args, /^(?:beeper-send|discord-dm)\.mjs$/i)) {
+    else if (executedScript(args, /^beeper-send\.mjs$/i)) {
       if (args.includes('--dry-run')) continue;
       const file = option(args, '--body-file');
       targets.push({ body: file ? fs.readFileSync(path.resolve(input.cwd ?? process.cwd(), file), 'utf8') : option(args, '--body') ?? '', channel: 'message' });

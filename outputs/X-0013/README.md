@@ -1,67 +1,54 @@
-# X-0013: 既存ランキングページのAI補完SEO
+# X-0013 出力ディレクトリ解説
 
-## 概要
-Google Search Console の実データを使い、既存ページの表示回数があるが記事にないクエリと10-30位のクエリを特定し、AIエージェントがページの一部分だけを補完するSEO施策。展示会ブース制作関連ページで「展示会ブース」クエリを補完する。
+AIニュース提案 X-0013「再現可能AIワークフローの7リポジトリ」の設計文書と実装計画。
 
-## 成果物
+## ディレクトリ構造
 
-| 成果物 | 説明 |
+```
+outputs/X-0013/
+├── README.md                               # 本解説
+├── pr-body.md                              # PR 本文
+└── orgiast-implementation-plan.md          # オージャスト実装計画（週次マイルストーン）
+```
+
+## 文書体系
+
+| 文書 | 説明 |
 |---|---|
-| `tools/seo-content-complement.mjs` | SEOコンテンツ補完ツール（キーワードギャップ→補完提案→実行計画） |
-| `tools/seo-content-complement.test.mjs` | テスト（6 tests PASS） |
-| `skills/booth-kw-research/` | キーワードリサーチスキル（既存） |
-| `outputs/X-0013/` | 出力成果物 |
+| `docs/ai-news-x0013-reproducible-ai-workflows.md` | 7ツールの概要・連携アーキテクチャ・3ユースケース・実装計画（本セッション） |
+| `outputs/X-0013/README.md` | 出力ディレクトリ解説 |
+| `outputs/X-0013/pr-body.md` | PR 本文 |
+| `outputs/X-0013/orgiast-implementation-plan.md` | 4週間の週次マイルストーン実装計画 |
 
-## ワークフロー
+## 7ツールの関係
 
 ```
-booth-kw-research（キーワードリサーチ）
-    ↓ keywords-priority.csv, content-gaps.md
-seo-content-complement.mjs（補完提案生成）
-    ↓ --gsc-csv <GSCエクスポート>
-seo-complement-plan.json + seo-complement-plan.md
-    ↓
-WordPress編集（手動）→ GSC再インデックス申請
+トリガー層      オーケストレーション    LLM層        出力層        評価層         可観測性層
+n8n ──→ LangGraph ──→ LiteLLM ──→ Pydantic AI ──→ promptfoo ──→ Phoenix
+                          ↑
+                       FastMCP
+                      （ツール定義）
 ```
 
-## 補完タイプ
+## 関連タスク
 
-| タイプ | 説明 | 適用条件 |
-|---|---|---|
-| `intro_rewrite` | 冒頭2段落の書き換え（核心質問に答える） | Transactional/Commercial意図、または冒頭が短い |
-| `new_h2` | 新しいH2見出しセクションの追加 | H2が3未満、またはInformational意図 |
-| `faq_section` | FAQセクションの追加 | FAQ未存在、またはInformational意図 |
-| `inline_paragraph` | 表示回数があるクエリに対する1文追加 | GSC表示回数あり |
-| `new_page` | 新規ページ作成 | 既存ページ未カバー |
-| `internal_link` | 内部リンク強化 | 同一カテゴリページ間 |
+| タスク | 関係 |
+|---|---|
+| X-0007 | SEOコンテンツ戦略（Phase2: FAQ設計・比較ページ・内部リンク戦略） |
+| X-0009 | SEOワークフローAIエージェント化（KVキャッシュ・プレフィックス共有） |
+| X-0011 | SEOとAEOの11手法（Reddit監視・バックリンク） |
+| X-0014 | Grok Bot + Claude Code コーディング手順（補完的） |
+| X-0015 | コンテキストキャッシュ効率化（KVキャッシュ関連） |
 
-## 使い方
+## 検証基準（証拠ゲート）
 
-```bash
-# 1. キーワードリサーチを実行
-node skills/booth-kw-research/run.mjs
+本提案の検証は以下の基準で行う：
 
-# 2. SEO補完提案を生成（GSCデータあり）
-node tools/seo-content-complement.mjs --gsc-csv gsc-export.csv
+1. ✅ 各ツールの最新バージョンと選定理由が明記されている
+2. ✅ ツール間の連携アーキテクチャが図示されている
+3. ✅ オージャスト固有のユースケースが3つ以上定義されている
+4. ✅ 週次マイルストーンを含む実装計画がある
+5. ✅ 既存リソースとの統合方法が明記されている
+6. ✅ 期待効果が数値で示されている
+7. ✅ 各ツールの公式サイト・GitHubへのリンクがある
 
-# 3. GSCデータなしでもキーワード分析のみ実行
-node tools/seo-content-complement.mjs
-
-# 4. キーワードCSVを指定
-node tools/seo-content-complement.mjs --keywords-csv ./my-keywords.csv
-```
-
-## テスト
-
-```bash
-# 全テスト
-node --test tools/seo-content-complement.test.mjs tools/seo-content-complement.test.mjs
-
-# 既存booth-kw-researchテストも含めて
-node --test skills/booth-kw-research/test/*.test.mjs tools/seo-content-complement.test.mjs
-```
-
-## 前提条件
-- booth-kw-research が事前に実行されている（`skills/booth-kw-research/output/keywords-priority.csv` が存在すること）
-- GSC CSV は Google Search Console からエクスポートしたCSV（query, impressions, clicks, position, page カラム）
-- WordPress編集・GSC再インデックス申請は手動で行う

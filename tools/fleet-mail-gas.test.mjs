@@ -123,3 +123,16 @@ test('C1 legacy receipt followed by a changed reply preserves both messages and 
   assert.equal(toSender.messages.length, 2);
   assert.equal(JSON.stringify(toSender.messages.map(m => m.body).sort()), JSON.stringify([first.body, second.body].sort()));
 });
+
+test('mail-get reads only IDs and the matching row, including missing IDs', () => {
+  const h = harness();
+  h.c.sendFleetMail(send()); h.c.sendFleetMail(send({ id: 'mail-second', body: 'large historical body' }));
+  const ranges = []; const original = h.sheet.getRange;
+  h.sheet.getRange = (row, col, count, width) => { ranges.push({ row, col, count, width }); return original(row, col, count, width); };
+  assert.equal(h.c.getFleetMail({ id: 'mail-second' }).mail.body, 'large historical body');
+  assert.ok(ranges.some(r => r.row === 2 && r.count === 2 && r.width === 1));
+  assert.ok(ranges.some(r => r.row === 3 && r.count === 1 && r.width > 1));
+  assert.ok(!ranges.some(r => r.count > 1 && r.width > 1));
+  assert.equal(h.c.getFleetMail({ id: 'mail-missing' }).mail, null);
+  assert.equal(h.locked, false);
+});

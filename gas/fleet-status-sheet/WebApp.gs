@@ -95,6 +95,8 @@ function doPost(e) {
     'auto-progress-list': listAutoProgress,
     'mail-send': sendFleetMail,
     'mail-poll': pollFleetMail,
+    'mail-health': describeFleetMailHealth,
+    'mail-setup': setupFleetMailTriggers,
     'mail-reply': replyFleetMail,
     'mail-get': getFleetMail,
     'mail-trace': traceFleetMail,

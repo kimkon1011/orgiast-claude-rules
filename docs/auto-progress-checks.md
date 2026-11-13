@@ -24,3 +24,18 @@ node tools/auto-progress.mjs --add-check --session <sessionId> --check "node too
 ```
 
 `fleet-mail --send --kind prompt` 成功時にも登録例を表示する。自動登録はしない。同一セッション・同一ラベルの再登録は以前の open 行を置き換える。別ラベルの check は main の仕様どおり併存する。
+
+## LINE / Gmail の継続監視
+
+`auto-progress-external-check.mjs` を使う check は、新着があっても完了にしない。30分ごとの watch が新着を message ID で重複排除し、kim-inbox の `ask`（🔴、送信者・投稿時刻・本文先頭200字）と元セッションの再開キューへ保存した後、同じ行の `--since` を最新投稿時刻へ進める。通知失敗時はカーソルを維持して再試行する。期限の指定がなければ登録から14日間監視する。
+
+```sh
+node tools/auto-progress.mjs --add-check --session <sessionId> --check "node tools/auto-progress-external-check.mjs --channel line --thread-id <groupId> --since <ISO日時>" --label "LINE返信待ち"
+node tools/auto-progress.mjs --add-check --session <sessionId> --check "node tools/auto-progress-external-check.mjs --channel gmail --thread-id <threadId> --mailbox seisaku-team@orgiast.jp --since <ISO日時>" --deadline +7d --label "Gmail返信待ち"
+```
+
+Stop hook は「この後の自動進行」に返信待ち・返事待ち・回答待ちがあるとき、同じ会話ターンの `line-group-send.mjs` / `gmail-draft.mjs --send` の成功結果を送信記録と照合して宛先を自動登録する。下書き・dry-run・失敗・他セッションの送信は対象外。同じ宛先の既存監視の期限とカーソルは保持する。
+
+イベントと再開待ちは `~/.claude/external-monitor-events/` に保存される。再開は既存のセッション再開経路を使い、履歴確認と下書きまでに限定する。社外送信や過去の送信約束は実行しない。Gmail の `external-waiting.mjs` は監視中スレッドと通知済み message ID を参照し、同じ新着を重複通知しない。
+
+Windows の `OrgiastAutoProgressWatch` は30分間隔・実行上限29分。`setup.mjs --converge` は既存PCの間隔と実行上限も検査し、登録スクリプト経由で修復する。

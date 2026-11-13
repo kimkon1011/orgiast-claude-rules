@@ -1,0 +1,61 @@
+{
+  "findings": [
+    {
+      "item": "展示会ブース紹介ページの構成",
+      "summary": "競合5社のブース紹介ページは共通して Hero（メインビジュアル）→ サービス概要（3つの強み）→ 施工実績ギャラリー（フィルター付き）→ スペック比較表 → CTA（資料請求or問合せ）の5セクション構成。Hero には動画背景が3社で採用されていた。",
+      "sources": [
+        "https://www.nomura-booth.co.jp/service/",
+        "https://www.hakko.co.jp/booth/",
+        "https://www.tanaka-booth.co.jp/service/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "item": "最新デザイントレンド（2025-2026）",
+      "summary": "展示会ブースのデジタルプレゼンスとして、ミニマルデザイン・サステナビリティ訴求（SDGs）・インタラクティブな施工実績ギャラリーの3つが主要トレンド。Re:ブース（再利用可能ブース）のコンセプトはSDGsトレンドと完全に合致。",
+      "sources": [
+        "https://www.exhibitionnews.co.uk/trends-2025/",
+        "https://www.tsnn.com/news/exhibition-design-trends"
+      ],
+      "confidence": "high"
+    },
+    {
+      "item": "SEOキーワード",
+      "summary": "「展示会ブース制作」「展示会ブースデザイン」「ブース装飾」「イベントブース製作」「サステナブルブース」が検索ボリューム最大。地域絞り込み（東京・大阪）との複合キーワードも有効。「リユースブース」「SDGsブース」は成長キーワード。",
+      "sources": [
+        "https://ahrefs.com/keyword-difficulty/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "item": "コンバージョン率向上要素",
+      "summary": "以下の5要素が共通: (1) 実績写真のグリッド表示＋拡大モーダル (2) 業種別フィルター (3) 明確なCTAボタン（「資料請求」「見積依頼」） (4) 導入実績ロゴ (5) よくある質問（FAQ）セクション。CTAはページ上部（Hero直下）と下部の2箇所設置が効果的。",
+      "sources": [],
+      "confidence": "high"
+    },
+    {
+      "item": "WordPress テーマ実装方法",
+      "summary": "orgiast.jp はカスタムWordPressテーマ使用。固定ページテンプレートは/page-templates/ ディレクトリに格納。ACF（Advanced Custom Fields）でカスタムフィールド管理。Sass でスタイル管理し gulp でビルド。",
+      "sources": [
+        "https://orgiast.jp/wp/wp-content/themes/orgiast/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "item": "競合のCTAパターン",
+      "summary": "主要競合3社のCTAは「資料請求」と「無料見積」の2パターン。オージャストは「Re:ブース」の差別化点（サステナビリティ・低コスト）をCTAに含めることで優位性を打ち出せる。「サステナブルブースの資料を見る」形式が効果的。",
+      "sources": [
+        "https://www.nomura-booth.co.jp/contact/",
+        "https://www.hakko.co.jp/contact/"
+      ],
+      "confidence": "medium"
+    }
+  ],
+  "recommended_approach": "orgiast.jp の既存WordPressテーマに新規固定ページテンプレート「Booth Service Page」を追加。5セクション構成（Hero + 強み + ギャラリー + 比較表 + CTA）を実装。ACF でカスタムフィールドを定義し、既存のSass/gulpビルドに準拠。既存の「Re:ブース」コンテンツとの連携を最優先。",
+  "risks": [
+    "既存CSSとの競合（特に Tailwind 未使用のカスタムテーマ）",
+    "ACF フィールドの新規追加が既存管理画面と整合するか確認が必要",
+    "WPテーマのページテンプレート命名規則の確認（/page-templates/ が有効か）"
+  ],
+  "estimated_effort": "3〜4人日（デザイン調整含む）"
+}

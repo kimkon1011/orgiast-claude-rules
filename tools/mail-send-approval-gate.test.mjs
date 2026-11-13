@@ -171,8 +171,9 @@ test('other outbound send CLIs are covered in headless sessions', t => {
   for (const command of [
     'node tools/line-channel.mjs --to C1 --body-file body.txt --send',
     'node tools/beeper-send.mjs --chat c1 --body-file body.txt --queue-id q --receipt r',
-    'node tools/discord-dm.mjs vendor --body-file body.txt',
   ]) assert.equal(judge({ tool_name: 'Bash', cwd, tool_input: { command } }, options).decision, 'block');
+  // discord-dm is internal and exempt from the approval gate even in headless mode
+  assert.equal(judge({ tool_name: 'Bash', cwd, tool_input: { command: 'node tools/discord-dm.mjs vendor --body-file body.txt' } }, options).decision, 'pass');
 });
 
 import { draftBody } from './mail-send-approval-gate.mjs';
@@ -216,4 +217,13 @@ test('quoted draft and reaffirmation question pass together', () => {
 test('body displayed before an intervening human turn does not authorize sending', () => {
   const transcript = [...evidence(multilineBody), { type: 'user', content: '送って' }];
   assert.deepEqual(judge({ tool_name: 'mcp__claude_ai_Gmail__send_message', tool_input: { body: multilineBody }, transcript }), { decision: 'block', reason: BODY_NOT_SHOWN_REASON });
+});
+
+test('discord-dm passes without approval in attended and unattended sessions', () => {
+  // discord-dm is never added to sendTargets, so gate always passes
+  for (const command of [
+    'node tools/discord-dm.mjs 田中太郎 --body "こんにちは"',
+    'node tools/discord-dm.mjs vendor --body-file msg.txt',
+    'node tools/discord-dm.mjs vendor --body-file msg.txt --dry-run',
+  ]) assert.equal(judge({ tool_name: 'Bash', tool_input: { command } }).decision, 'pass');
 });

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { handoffLockEnabled } from './lib/handoff-store.mjs';
+import { verifyAccount } from './knowledge-lock.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -289,6 +291,19 @@ export async function installSharedMemories(options = {}) {
   const dir = options.sharedDir || env.ORGIAST_SHARED_MEMORY_DIR || path.join(home, '.claude', 'shared-memory');
   const emit = options.emit || console.log;
   const result = { generatedAt: '', installed: 0, updated: 0, removed: 0, unchanged: 0, skipped: 0, dir };
+  const knowledgeDeps = { ...options.knowledgeDeps, home, env };
+  if (handoffLockEnabled(knowledgeDeps)) {
+    let reason;
+    try {
+      const verdict = await verifyAccount(knowledgeDeps);
+      if (verdict.reason === 'profile_unavailable' || verdict.contracted !== true) reason = '契約外または判定不能';
+    } catch { reason = 'アカウント判定不能'; }
+    if (reason) {
+      (options.stderr || (text => process.stderr.write(text)))(`shared-memory 取り込みをスキップ: ${reason}\n`);
+      return { ...result, reason };
+    }
+  }
+
 
   // Try Drive master first if not offline/fromDir
   if (!options.fromDir && !options.preferHttpOnly) {

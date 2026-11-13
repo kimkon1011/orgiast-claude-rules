@@ -90,18 +90,21 @@ export async function fetchHistory(channel, target, { home = process.env.ORGIAST
     const user = process.env.ORGIAST_GMAIL_USER || 'seisaku-team@orgiast.jp';
     const token = await mintDwdToken({ user, scope:'https://www.googleapis.com/auth/gmail.readonly', fetchImpl });
     const headers = { Authorization:`Bearer ${token}` }; let threadId = target;
-    if (target.includes('@')) { const q = encodeURIComponent(`from:${target} OR to:${target}`); const lr = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=20`, { headers }); const list = await lr.json(); threadId = list.messages?.[0]?.threadId; }
+    if (target.includes('@')) { const q = encodeURIComponent(`(from:${target} OR to:${target}) -in:drafts`); const lr = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=20`, { headers }); const list = await lr.json(); threadId = list.messages?.[0]?.threadId; }
     if (!threadId) throw new Error('Gmail スレッドが見つかりません');
     const r = await fetchImpl(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`, { headers }); if (!r.ok) throw await responseError('Gmail 履歴取得失敗', r);
     const data = await r.json(); const decode = p => p?.body?.data ? Buffer.from(p.body.data,'base64url').toString('utf8') : (p?.parts||[]).map(decode).join('\n');
-    return { target: threadId, messages: trimHistory((data.messages||[]).map(x => { const h=Object.fromEntries((x.payload?.headers||[]).map(v=>[v.name.toLowerCase(),v.value])); return { id:x.id, at:new Date(Number(x.internalDate)).toISOString(), side:addressOf(h.from)===user.toLowerCase()?'self':'external', sender:h.from, text:decode(x.payload) }; })).map(x => classifyMessage(x, channel, internalSenders)) };
+    return { target: threadId, messages: trimHistory((data.messages||[]).filter(x => !(x.labelIds||[]).includes('DRAFT')).map(x => { const h=Object.fromEntries((x.payload?.headers||[]).map(v=>[v.name.toLowerCase(),v.value])); return { id:x.id, at:new Date(Number(x.internalDate)).toISOString(), side:addressOf(h.from)===user.toLowerCase()?'self':'external', sender:h.from, text:decode(x.payload) }; })).map(x => classifyMessage(x, channel, internalSenders)) };
   }
   throw new Error(`未対応 channel: ${channel}`);
 }
 
 export function parseVerdict(raw) { const m=String(raw).match(/\{[\s\S]*\}/); if(!m) throw new Error(`LLM判定がJSONではありません: ${String(raw).replace(/\s+/g,' ').slice(0,200)}`); const j=JSON.parse(m[0]); return { ok:j.verdict==='OK', reason:String(j.reason||''), warnings:Array.isArray(j.warnings)?j.warnings:[] }; }
-export function runLlm(history, text, { spawn = spawnSync } = {}) {
-  const prompt = `次の宛先履歴と送信予定本文を検査し、JSONだけを返す。形式: {"verdict":"OK|NG","reason":"理由","warnings":["警告"]}。発言者ラベルは厳守する。[相手]の未回答の質問・要望だけを「相手の未回答」と扱い、[自社]の質問を相手の要望と解釈しない。①回答済み質問の聞き直し ②[相手]の未回答質問・要望への未回答 ③[自社]が既に聞いた質問を重ねて聞いていないか ④日付・金額・数量・手配状況・呼び方の食い違い ⑤自社既送信との重複・矛盾、のどれかがあればNG。\n履歴:\n${labelHistory(history).join('\n')}\n送信予定:\n${text}`;
+export function runLlm(history, text, { intendedChanges, spawn = spawnSync } = {}) {
+  const changeBlock = Array.isArray(intendedChanges) && intendedChanges.length
+    ? `\n意図した変更（送り手が承知の上で行う条件変更）:\n${intendedChanges.map(c => `- ${c}`).join('\n')}\n以下は送り手が意図して行う条件変更である。本文が変更であることを相手に明示し、変更前の値を正しく書いていれば、その変更自体を矛盾・重複としてNGにしない。変更前の値が履歴と食い違う・変更であることを明示していない場合はNG。`
+    : '';
+  const prompt = `次の宛先履歴と送信予定本文を検査し、JSONだけを返す。形式: {"verdict":"OK|NG","reason":"理由","warnings":["警告"]}。発言者ラベルは厳守する。[相手]の未回答の質問・要望だけを「相手の未回答」と扱い、[自社]の質問を相手の要望と解釈しない。また、相手の了承を得ていない新たな提案・お伺いを出すこと自体はNG理由にしない（相手が次の返信で答えられる確認・お伺い）。${changeBlock}①回答済み質問の聞き直し ②[相手]の未回答質問・要望への未回答 ③[自社]が既に聞いた質問を重ねて聞いていないか ④日付・金額・数量・手配状況・呼び方の食い違い ⑤自社既送信との重複・矛盾、のどれかがあればNG。\n履歴:\n${labelHistory(history).join('\n')}\n送信予定:\n${text}`;
   const tool = path.join(path.dirname(fileURLToPath(import.meta.url)), 'llm-ask.mjs');
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'send-context-prompt-')), promptFile=path.join(dir,'prompt.txt');
   try {
@@ -118,10 +121,11 @@ export function runLlm(history, text, { spawn = spawnSync } = {}) {
 
 export async function main(argv=process.argv.slice(2), deps={}) {
   const val=n=>{const i=argv.indexOf(n);return i>=0?argv[i+1]:''}; const channel=val('--channel'), target=val('--target')||val('--group')||val('--thread')||val('--chat')||val('--channel-id'), file=val('--text-file');
-  if(!['line','gmail','discord','beeper'].includes(channel)||!target||!file) throw new Error('使い方: node tools/send-context-check.mjs --channel line|gmail|discord|beeper --target <宛先IDまたはメール> --text-file <送る本文>');
+  const intendedChanges = []; argv.forEach((v,i) => { if (v === '--intended-change' && argv[i+1]) intendedChanges.push(argv[i+1]); });
+  if(!['line','gmail','discord','beeper'].includes(channel)||!target||!file) throw new Error('使い方: node tools/send-context-check.mjs --channel line|gmail|discord|beeper --target <宛先IDまたはメール> --text-file <送る本文> [--intended-change "<変更内容>"]');
   const text=fs.readFileSync(file,'utf8').trim(); const result=await (deps.fetchHistory||fetchHistory)(channel,target,{home:deps.home});
   for(const line of labelHistory(result.messages)) console.log(line.slice(0, 700));
-  const verdict=(deps.runLlm||runLlm)(result.messages,text); console.log(JSON.stringify(verdict,null,2));
-  if(!verdict.ok) return 2; const written=writeContextMarker({channel,target:result.target,text,latest:latestOf(result.messages),reason:verdict.reason,home:deps.home}); console.log(`承認マーカー: ${written.file}`); return 0;
+  const verdict=(deps.runLlm||runLlm)(result.messages,text,{intendedChanges: intendedChanges.length ? intendedChanges : undefined}); console.log(JSON.stringify(verdict,null,2));
+  if(!verdict.ok) return 2; const written=writeContextMarker({channel,target:result.target,text,latest:latestOf(result.messages),reason:verdict.reason,intendedChanges: intendedChanges.length ? intendedChanges : undefined,home:deps.home}); console.log(`承認マーカー: ${written.file}`); return 0;
 }
 if(isEntry(import.meta.url)) main().then(c=>{process.exitCode=c}).catch(e=>{console.error(e.message);process.exitCode=1});

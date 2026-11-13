@@ -2,6 +2,14 @@
 
 > 2026-11-09 実測調査
 
+> **⚠️ 2026-11-10 訂正（463URL 全件の機械監査で判明）**: 下記の G1「canonical 全欠」・G2「構造化データ全欠」は誤り。
+> 実測: canonical あり 374/463（欠落 89＝clients 48・eventphoto 12・recruiting 12・slide 4・一覧ページ）、
+> 構造化データは 374 ページに全ページ共通の Organization/WebSite/FAQPage が wp_head へ直書きされている（ページ固有の Article/BreadcrumbList は無い・FAQPage 全ページ共通は Google ガイドライン違反の恐れ・@id が orgiast.jp で canonical の www.orgiast.jp と不一致）。
+> 本当の最大ギャップ: robots.txt と GSC に登録の sitemap.xml は AIOSEO 2.11 の静的生成で 14件（タクソノミー・nav_menu）だけ／GSC indexed=0。正しい 463件は sitemap.xml.gz（インデックス）側にしかない。GSC には壊れた登録 sitemaps.org・xmlsitemap.xml（errors=1）も残る。noindex なのに sitemap 掲載 5件、description 欠落は個別記事 4件（他は一覧ページ）。Bing は未登録（msvalidate 無し・BingSiteAuth 404）。
+> 権限: WP の ai-pdca-bot は編集者相当（plugins 500・theme-editor 403・AIOSEO 欄なし）、DWD SA は GSC readonly のみ。GSC フル権限は shirakawa@・yasue@。
+> 全件データ: Google スプレッドシート 1IKJHQG4Mop9IzL-VT5nh7ixaX4B9Vbew0FkSwiQruJ4
+
+
 ## Bing Index Coverage（実測）
 
 | セクション | 総ページ数（sitemap） | Bing 表示件数（site: 検索） | カバレッジ |

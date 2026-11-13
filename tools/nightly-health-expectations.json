@@ -21,6 +21,7 @@
   { "log": "plaud-to-tldv.log", "maxAgeHours": 3, "label": "Plaudからtl;dv転送", "scan": "stale-only" },
   { "log": "evening-digest.log", "maxAgeHours": 26, "label": "夕方ダイジェスト", "scan": "keywords" },
   { "log": "x-ai-tips-collect.log", "maxAgeHours": 26, "label": "X AI活用tips収集", "scan": "keywords" },
+  { "log": "tldv-process-improve.log", "maxAgeHours": 26, "label": "tl;dv制作プロセス改善", "scan": "stale-only", "task": "OrgiastTldvProcessImprove", "tool": "tools/tldv-process-improve.mjs", "maxRunHours": 1.5 },
   { "log": "ai-news-triage.log", "maxAgeHours": 26, "label": "AIニュース選別", "scan": "keywords" },
   { "log": "feedback-nag.log", "maxAgeHours": 26, "label": "フィードバック催促", "scan": "stale-only" },
   { "log": "feedback-to-issues.log", "maxAgeHours": 3, "label": "フィードバック課題化", "scan": "keywords" },

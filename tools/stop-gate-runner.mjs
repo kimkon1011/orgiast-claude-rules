@@ -2,6 +2,7 @@
 export const GATE_CONTRACT = {"name": "stop-gate-runner", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "stop-gate-runner"}]};
 // 2026-09-06: Stop 304回中198回が再Stop、handoff-quality 78件中71件が誤爆だった。
 // 9プロセスの逐次差し戻しを1回の評価・1つのblockへまとめ、userの再読を最大1回にする。
+import { evaluateKimInboxRelay, commitKimInboxDelivery } from './kim-inbox-relay.mjs';
 import { evaluatePastLogSearch, listPlaybookNames, classifyHandoff } from './past-log-search-gate.mjs';
 import { judgeDeliverableDriveLink, registerDeliverableCheck } from './deliverable-drive-link-gate.mjs';
 import { evaluateInvitePermissions } from './hooks/discord-invite-permission-gate.mjs';
@@ -17,6 +18,8 @@ import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { runGate as evaluateQuality } from './handoff-quality-gate.mjs';
 import { evaluateHandoffActionFromRaw } from './handoff-action-gate.mjs';
 import { judge as judgeFullSteps } from './manual-request-fullsteps-gate.mjs';
+import { judge as judgeScreenEvidence } from './manual-request-evidence-gate.mjs';
+import { judge as judgeLaunchTarget } from './session-close-target-gate.mjs';
 import { check as checkBranchCoverage, formatReason as branchCoverageReason } from './handoff-branch-coverage-gate.mjs';
 import { evaluateInvestigation, failureReason } from './handoff-investigation-gate.mjs';
 import { evaluateHandoffRegret } from './handoff-regret-gate.mjs';
@@ -45,6 +48,7 @@ import { currentTurnEntries, blocks } from './state-claim-evidence.mjs';
 import { judgeSideEffectLeft } from './side-effect-left-gate.mjs';
 import { judgeAnswerCanonical } from './answer-canonical-gate.mjs';
 import { judge as judgeDeferralWait } from './deferral-wait-gate.mjs';
+import { judge as judgeUrgentBlockerWait } from './urgent-blocker-wait-gate.mjs';
 import { judge as judgeThirdPartyNudge } from './third-party-nudge-gate.mjs';
 import { evaluateShallowAnswer } from './shallow-answer-gate.mjs';
 import { judgeTurnLanguage } from './response-language-gate.mjs';
@@ -58,7 +62,7 @@ import { isUnchangedPeriodicReport } from './lib/unchanged-periodic-report.mjs';
 
 
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
-export const FORM_GATES = ['handoff-quality-gate', 'manual-request-fullsteps-gate', 'handoff-info-guard', 'handoff-branch-coverage-gate', 'user-burden-gate', 'handoff-investigation-gate'];
+export const FORM_GATES = ['handoff-quality-gate', 'manual-request-fullsteps-gate', 'manual-request-evidence-gate', 'handoff-info-guard', 'handoff-branch-coverage-gate', 'user-burden-gate', 'handoff-investigation-gate'];
 // Exempt presentation/repetition only. Permission, evidence, outstanding work and
 // other operational checks must still run on automatic periodic turns.
 const PERIODIC_REPORT_GATES = new Set([...FORM_GATES,
@@ -72,6 +76,10 @@ function fullStepsReason(missing) {
   return `[FULL-STEPS] 人に手作業を頼んでいますが、次が足りません: ${missing.join('・')}（§1.5.1 絶対ルール）`;
 }
 
+function screenEvidenceReason(missing) {
+  return `[SCREEN-EVIDENCE] 人に手作業を頼んでいますが、画面を見た根拠（${missing.join('・')}）が不足しています。確認済み: または 未確認: の行を入れてください`;
+}
+
 export async function evaluateGates(ctx, auditOptions = {}) {
   const unchangedPeriodicReport = isUnchangedPeriodicReport({ lastUserPrompt: ctx.lastUserPrompt ?? ctx.humanText, assistantText: ctx.assistantText });
   // Meta cron turns can share currentTurnAssistantText with an older handoff.
@@ -83,6 +91,7 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['handoff-quality-gate', () => evaluateQuality({ ...ctx.input, assistant_text: ctx.assistantText, transcript_raw: ctx.transcriptRaw })],
     ['handoff-action-gate', () => evaluateHandoffActionFromRaw({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw })],
     ['manual-request-fullsteps-gate', () => { if (desktopLauncherPattern.test(ctx.assistantText) && judgeUserBurden(ctx.assistantText, ctx.humanText).decision === 'pass') return { decision: 'pass' }; const result = judgeFullSteps(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: fullStepsReason(result.missing), code: 'FULL-STEPS' } : { decision: 'pass' }; }],
+    ['manual-request-evidence-gate', () => { const result = judgeScreenEvidence(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: screenEvidenceReason(result.missing), code: 'SCREEN-EVIDENCE' } : { decision: 'pass' }; }],
     ['handoff-branch-coverage-gate', () => { const result = checkBranchCoverage(ctx.assistantText); return result.triggered && result.missing.length ? { decision: 'block', reason: branchCoverageReason(result.missing), code: 'BRANCH-COVERAGE' } : { decision: 'pass' }; }],
     ['handoff-investigation-gate', () => { const result = evaluateInvestigation(ctx.assistantText, { transcriptRaw: ctx.transcriptRaw }); return result.decision === 'block' ? { ...result, reason: failureReason(result.missing, result.reason), code: result.code || 'INVESTIGATION' } : result; }],
     ['shallow-answer-gate', () => evaluateShallowAnswer({ text: ctx.assistantText, transcriptRaw: ctx.transcriptRaw })],
@@ -109,12 +118,14 @@ export async function evaluateGates(ctx, auditOptions = {}) {
     ['side-effect-left-gate', () => judgeSideEffectLeft(ctx.assistantText, blocks(currentTurnEntries(ctx.transcriptRaw), 'tool_use'))],
     ['answer-canonical-gate', () => judgeAnswerCanonical(ctx.assistantText)],
     ['deferral-wait-gate', () => judgeDeferralWait(ctx.assistantText)],
+    ['urgent-blocker-wait-gate', () => judgeUrgentBlockerWait(ctx.assistantText, { sessionId: ctx.sessionId, home: home() })],
     ['third-party-nudge-gate', () => judgeThirdPartyNudge(ctx.assistantText)],
     ['unregistered-promise-gate', () => evaluateUnregisteredPromise(ctx.assistantText, { sessionId: ctx.sessionId, transcriptRaw: ctx.transcriptRaw, home: home() })],
     ['progress-cron-gate', () => evaluateProgressCron(ctx.input, { home: home() })],
     ['next-action-gate', () => judgeNextAction(ctx.assistantText, ctx.transcriptRaw, { ...ctx.input, session_id: ctx.sessionId }, { turnText: ctx.turnText })],
     ['user-burden-gate', () => judgeUserBurden(ctx.assistantText, ctx.humanText)],
     ['substitute-capability-gate', () => judgeSubstituteCapability(ctx.assistantText)],
+    ['session-close-target-gate', () => judgeLaunchTarget(ctx.assistantText, blocks(currentTurnEntries(ctx.transcriptRaw), 'tool_use'))],
     ['doc-link-drive-guard', () => { const hits = findLocalDocLinks(ctx.assistantText); if (hits.length) return { decision: 'block', reason: formatDocLink(hits), code: 'DOC-LINK' }; const bare = findBareLocalDocPaths(ctx.assistantText); return bare.length ? { decision: 'block', reason: formatBarePathMessage(bare), code: 'DOC-LINK' } : { decision: 'pass' }; }],
   ];
   const results = [];
@@ -134,6 +145,14 @@ export async function evaluateGates(ctx, auditOptions = {}) {
 
 function ledger(record) {
   appendStopLedger(record, home());
+}
+
+// A concrete completion check takes precedence over the generic session wakeup.
+export function hasFutureOpenCheck(sessionId, { home: progressHome = home(), now = Date.now() } = {}) {
+  return Boolean(sessionId) && readLedger(progressLedgerFile(progressHome)).some(row =>
+    row.sessionId === sessionId && row.status === 'open'
+    && typeof row.check === 'string' && row.check.trim()
+    && Date.parse(row.deadlineAt) > now);
 }
 
 // No invented shell predicate: auto-progress-watch evaluates evidence for open rows without check.
@@ -164,6 +183,25 @@ function protectAutopilot(input, text, raw, record) {
 }
 
 export async function run(input, context, auditOptions = {}) {
+  const sessionId = input?.session_id || input?.sessionId || path.basename(input?.transcript_path || '', '.jsonl');
+  input = { ...input, session_id: sessionId };
+  const text = input.last_assistant_message ?? input.assistant_text ?? context.assistantText;
+  try {
+    const relay = evaluateKimInboxRelay(input, { home: home(), raw: context.raw, text, now: auditOptions.now ?? Date.now() });
+    if (relay.decision === 'block') {
+      const record = { sessionId, verdict: 'block', blockedBy: ['kim-inbox-relay'], reasonCodes: [relay.code] };
+      ledger(record);
+      return { ...relay, record };
+    }
+    const result = await runOtherGates(input, context, auditOptions);
+    if (result.decision !== 'block') commitKimInboxDelivery(home(), sessionId, relay.receipts, auditOptions.now ?? Date.now());
+    return result;
+  } catch (error) {
+    return { decision: 'block', reason: 'kim-inbox-relay: 受信箱の配達記録を確認できません。ローカル台帳を修復して再試行してください。' };
+  }
+}
+
+async function runOtherGates(input, context, auditOptions = {}) {
   const sessionId = input?.session_id || input?.sessionId || path.basename(input?.transcript_path || '', '.jsonl');
   input = { ...input, session_id: sessionId };
   const assistantText = input?.last_assistant_message ?? input?.assistant_text ?? context.assistantText;
@@ -228,28 +266,34 @@ export async function run(input, context, auditOptions = {}) {
   // operational outcome separately so nightly metrics can count it.
   let verdict = cap.retryCap ? 'retry-cap' : retryBlockedBy.length ? 'block' : 'pass';
   let autoRegisterError;
+  let preservedOpenCheck = false;
   if (cap.retryCap && reasonCodes.some(code => WAIT_CHECK_CODES.has(code))) {
     try {
-      const purpose = String(assistantText).match(/^\s*(?:\*\*)?\[本セッションの目的\](?:\*\*)?[ \t]*([^\r\n]+)(?:\r?\n|$)/)?.[1]?.trim();
-      const label = purpose || [...String(context.lastUserPrompt || context.humanText || '')].slice(0, 60).join('');
-      const deadline = openDeadline(footerValues(assistantText)?.session)?.toISOString() || '+24h';
-      const script = fileURLToPath(new URL('./session-progress-check.mjs', import.meta.url)).replaceAll('\\', '/');
-      // Double quotes work in both cmd.exe and the check executor's Bash shell.
-      // Reject shell metacharacters that still expand within double quotes.
-      if (/["$`%!\r\n]/.test(script) || !/^[a-zA-Z0-9_-]+$/.test(sessionId)) throw new Error('台帳チェックのパスまたは session ID が不正です');
-      await (auditOptions.addCheck || addCheck)({
-        session: sessionId, label: `自動登録: ${label || sessionId}`, deadline,
-        check: `node "${script}" --session "${sessionId}"`,
-        nextClaude: 'このセッションの未完了の約束（この後の自動進行の行）を進め、結果を kim に報告する',
-        home: home(), cwd: input.cwd || path.dirname(path.dirname(script)),
-      });
-      verdict = 'pass_after_autoregister';
+      if (hasFutureOpenCheck(sessionId, { now: auditOptions.now ?? Date.now() })) {
+        preservedOpenCheck = true;
+        verdict = 'pass';
+      } else {
+        const purpose = String(assistantText).match(/^\s*(?:\*\*)?\[本セッションの目的\](?:\*\*)?[ \t]*([^\r\n]+)(?:\r?\n|$)/)?.[1]?.trim();
+        const label = purpose || [...String(context.lastUserPrompt || context.humanText || '')].slice(0, 60).join('');
+        const deadline = openDeadline(footerValues(assistantText)?.session)?.toISOString() || '+24h';
+        const script = fileURLToPath(new URL('./session-progress-check.mjs', import.meta.url)).replaceAll('\\', '/');
+        // Double quotes work in both cmd.exe and the check executor's Bash shell.
+        // Reject shell metacharacters that still expand within double quotes.
+        if (/["$`%!\r\n]/.test(script) || !/^[a-zA-Z0-9_-]+$/.test(sessionId)) throw new Error('台帳チェックのパスまたは session ID が不正です');
+        await (auditOptions.addCheck || addCheck)({
+          session: sessionId, label: `自動登録: ${label || sessionId}`, deadline,
+          check: `node "${script}" --session "${sessionId}"`,
+          nextClaude: 'このセッションの未完了の約束（この後の自動進行の行）を進め、結果を kim に報告する',
+          home: home(), cwd: input.cwd || path.dirname(path.dirname(script)),
+        });
+        verdict = 'pass_after_autoregister';
+      }
     } catch (error) {
       verdict = 'block';
       autoRegisterError = `待機チェックの台帳への自動登録に失敗しました: ${error.message}`;
     }
   }
-  const capMessage = verdict === 'pass_after_autoregister' ? '待機チェックを台帳へ自動登録しました。' : cap.retryCap && verdict !== 'block' ? `${CAP_CONTEXT} 残存コード: ${reasonCodes.join(', ')}` : undefined;
+  const capMessage = preservedOpenCheck ? '既存の完了チェックを維持しました。' : verdict === 'pass_after_autoregister' ? '待機チェックを台帳へ自動登録しました。' : cap.retryCap && verdict !== 'block' ? `${CAP_CONTEXT} 残存コード: ${reasonCodes.join(', ')}` : undefined;
   const record = { ...base, verdict, blockedBy, reasonCodes, demoted, handoffKind, unchangedPeriodicReport: evaluated.unchangedPeriodicReport, retryCap: cap.retryCap, sameTextRetries: cap.sameTextRetries ?? 0, auditEvidence: audit.record.evidence };
   if (verdict !== 'block') {
     const failure = protectAutopilot(input, assistantText, context.raw, record);

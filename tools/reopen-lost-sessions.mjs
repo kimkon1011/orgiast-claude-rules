@@ -936,6 +936,9 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
           if (reason) { result.skipped[reason]++; continue; }
           if (reopenCounts[candidate.id] >= 3) { result.skipped.reopenLoop++; continue; }
           if (repeatCounts[candidate.id] >= 3) { result.skipped.reopenRepeat++; continue; }
+          if (streakCounts[candidate.id]) { result.skipped.unverifiedStreak++; continue; }
+          // 既に実行中の claude.exe が同じセッションID を持っていたらスキップ
+          if (processRunningForSession(candidate.id, candidate.rcId, { base, spawn, fsImpl })) { result.skipped.processRunning++; continue; }
           try {
             const folder = resolveReopenFolder(candidate.cwd, candidate.cwds, { fsImpl, spawn });
             // worktree のまま開く候補が無いときは開かずスキップ（新しい worktree ウィンドウは作らない）。
@@ -987,8 +990,24 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
             result.verified = [];
             result.unverified = [];
             for (const r of result.reopened) {
-              if (agents.has(r.id)) result.verified.push(r.id);
-              else result.unverified.push(r.id);
+              if (agents.has(r.id)) {
+                result.verified.push(r.id);
+              } else if (r.rcId) {
+                // RC API で session の connection_status を確認（スマホ復帰等で agents に表示されないセッションを正しく verified と判定）
+                try {
+                  const sessionBody = await get(`${BASE}/${encodeURIComponent(r.rcId)}`);
+                  if (sessionBody?.connection_status === 'connected') {
+                    result.verified.push(r.id);
+                  } else {
+                    result.unverified.push(r.id);
+                  }
+                } catch {
+                  // API 取得失敗 → 従来どおり unverified
+                  result.unverified.push(r.id);
+                }
+              } else {
+                result.unverified.push(r.id);
+              }
             }
           } catch (e) { result.verifyError = e.message; }
         }

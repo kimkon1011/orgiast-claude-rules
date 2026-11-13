@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { getLoadGuardStatus, hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord } from './reopen-lost-sessions.mjs';
+import { getLoadGuardStatus, hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord, unverifiedStreakCounts, processRunningForSession } from './reopen-lost-sessions.mjs';
 import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
@@ -1754,4 +1754,174 @@ test('loadGuard counts missing metadata and excludes desktop executable paths', 
   ];
   const result = await getLoadGuardStatus({ checkCpu: false, spawn: () => ({ status: 0, stdout: JSON.stringify(rows) }) });
   assert.equal(result.claudeCount, 1);
+});
+
+// ── unverifiedStreakCounts ──────────────────────────────
+
+test('unverifiedStreakCounts: 連続2回の unverified を検出する', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'streak-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const logFile = path.join(root, 'reopen-lost-sessions.log');
+  const nowTime = Date.parse('2026-11-13T12:00:00.000Z');
+  fs.writeFileSync(logFile, [
+    { at: '2026-11-13T07:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+    { at: '2026-11-13T08:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n');
+  const streaks = unverifiedStreakCounts(root, () => nowTime);
+  assert.ok(streaks['one'], '連続2回 unverified の ID が検出される');
+  assert.equal(streaks['one'].consecutive, 2);
+});
+
+test('unverifiedStreakCounts: verified が入ると連続カウントが 0 にリセットされる', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'streak-reset-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const logFile = path.join(root, 'reopen-lost-sessions.log');
+  const nowTime = Date.parse('2026-11-13T12:00:00.000Z');
+  fs.writeFileSync(logFile, [
+    { at: '2026-11-13T07:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+    { at: '2026-11-13T08:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+    { at: '2026-11-13T09:00:00.000Z', reopened: [{ id: 'one' }], verified: ['one'], unverified: [] },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n');
+  const streaks = unverifiedStreakCounts(root, () => nowTime);
+  assert.ok(!streaks['one'], 'verified 後に連続カウントが 0 に戻る');
+});
+
+test('unverifiedStreakCounts: 6時間経過で streak が解除される', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'streak-expire-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const logFile = path.join(root, 'reopen-lost-sessions.log');
+  const nowTime = Date.parse('2026-11-13T14:00:00.000Z');
+  fs.writeFileSync(logFile, [
+    { at: '2026-11-13T05:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+    { at: '2026-11-13T06:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n');
+  const streaks = unverifiedStreakCounts(root, () => nowTime);
+  assert.ok(!streaks['one'], '6h 経過で streak が解除される');
+});
+
+test('unverifiedStreakCounts: verifyError 等で入らなかった reopened は数えない', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'streak-noerror-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const logFile = path.join(root, 'reopen-lost-sessions.log');
+  const nowTime = Date.parse('2026-11-13T12:00:00.000Z');
+  fs.writeFileSync(logFile, [
+    { at: '2026-11-13T07:00:00.000Z', reopened: [{ id: 'one' }], verified: ['other'], unverified: [] },
+    { at: '2026-11-13T08:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: [] },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n');
+  const streaks = unverifiedStreakCounts(root, () => nowTime);
+  assert.ok(!streaks['one'], 'どちらにも入らなかった reopened は連続に数えない');
+});
+
+test('unverifiedStreakCounts: 連続1回だけなら対象外', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'streak-once-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const logFile = path.join(root, 'reopen-lost-sessions.log');
+  const nowTime = Date.parse('2026-11-13T12:00:00.000Z');
+  fs.writeFileSync(logFile, [
+    { at: '2026-11-13T07:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n');
+  const streaks = unverifiedStreakCounts(root, () => nowTime);
+  assert.ok(!streaks['one'], '連続1回だけなら対象外');
+});
+
+test('unverifiedStreakCounts: verified 実績でリセット(スマホ復帰を邪魔しない)', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'streak-smartphone-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const logFile = path.join(root, 'reopen-lost-sessions.log');
+  const nowTime = Date.parse('2026-11-13T12:00:00.000Z');
+  fs.writeFileSync(logFile, [
+    { at: '2026-11-13T07:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+    { at: '2026-11-13T08:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+    { at: '2026-11-13T09:00:00.000Z', reopened: [{ id: 'one' }], verified: ['one'], unverified: [] },
+    { at: '2026-11-13T10:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n');
+  const streaks = unverifiedStreakCounts(root, () => nowTime);
+  assert.ok(!streaks['one'], 'verified でリセットされ streak 対象にならない');
+});
+
+// ── processRunningForSession ───────────────────────────
+
+test('processRunningForSession: sessions/*.json に生存 pid があれば true', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'procrun-session-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  const sessionsDir = path.join(base, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionsDir, 'alive.json'), JSON.stringify({ pid: process.pid, sessionId: 'sid_001', kind: 'interactive' }));
+  const result = processRunningForSession('sid_001', null, { base });
+  assert.equal(result, true);
+});
+
+test('processRunningForSession: 死んだ pid は false', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'procrun-dead-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  const sessionsDir = path.join(base, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionsDir, 'dead.json'), JSON.stringify({ pid: 999999999, sessionId: 'sid_dead', kind: 'interactive' }));
+  const result = processRunningForSession('sid_dead', null, { base });
+  assert.equal(result, false);
+});
+
+test('processRunningForSession: マッチ無し = false', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'procrun-none-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'sessions'), { recursive: true });
+  const result = processRunningForSession('sid_other', null, { base });
+  assert.equal(result, false);
+});
+
+test('processRunningForSession: sessions ディレクトリ欠落でもエラーにならない', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'procrun-nodir-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  const result = processRunningForSession('sid_x', null, { base });
+  assert.equal(result, false);
+});
+
+test('processRunningForSession: bridgeSessionId でもマッチする', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'procrun-bridge-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  const sessionsDir = path.join(base, 'sessions');
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  fs.writeFileSync(path.join(sessionsDir, 'bridge.json'), JSON.stringify({ pid: process.pid, sessionId: 'bridge_001', kind: 'interactive' }));
+  const result = processRunningForSession('local_001', 'bridge_001', { base });
+  assert.equal(result, true);
+});
+
+test('processRunningForSession: spawn エラーでも fail-open で false', () => {
+  const spawn = () => { throw new Error('spawn failed'); };
+  const result = processRunningForSession('sid_x', null, { base: os.tmpdir(), spawn });
+  assert.equal(result, false);
+});
+
+// ── unverifiedStreak が candidate のスキップに使われる ─
+
+test('state-based: unverifiedStreak で候補がスキップされる', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'streak-state-skip-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  const projects = path.join(base, 'projects', 'proj');
+  fs.mkdirSync(projects, { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  fs.writeFileSync(path.join(projects, 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+  ].map(JSON.stringify).join('\n'));
+  const logFile = path.join(base, 'reopen-lost-sessions.log');
+  fs.writeFileSync(logFile, [
+    { at: '2026-11-13T07:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+    { at: '2026-11-13T08:00:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n');
+  const nowTime = Date.parse('2026-11-13T12:00:00.000Z');
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now: () => nowTime, stateBased: true,
+    fetchImpl: async url => ({ ok: true, json: async () => ({ data: [{ id: 'cse_one', status:'active', connection_status:'disconnected', last_event_at:'2026-11-13T10:00:00.000Z', title:'Work' }] }) }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.equal(result.candidates.length, 0);
+  assert.equal(result.skipped.unverifiedStreak, 1);
 });

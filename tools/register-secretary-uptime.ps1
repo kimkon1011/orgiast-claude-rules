@@ -7,6 +7,15 @@ $hidden = Join-Path $env:USERPROFILE '.claude\tools\run-hidden.vbs'
 foreach ($required in @($watchdog,$hidden,(Join-Path $ToolsDir 'secretary-restart.ps1'),(Join-Path $ToolsDir 'kim-inbox.mjs'))) {
   if (!(Test-Path -LiteralPath $required)) { throw "Missing dependency: $required" }
 }
+# A healthy dev process is not proof that next start can recover after a crash.
+# Validate restart prerequisites before disabling any existing supervisor.
+$gatewayBuild=Join-Path $env:USERPROFILE 'Downloads\claude-mobile\.next-production\BUILD_ID'
+if (!(Test-Path -LiteralPath $gatewayBuild)) { throw 'Gateway production build is missing; build it before registering the watchdog' }
+$secretaryProduction=Join-Path $env:USERPROFILE 'Downloads\secretary-pc\.next-production\BUILD_ID'
+$secretaryBuild=Join-Path $env:USERPROFILE 'Downloads\secretary-pc\.next\BUILD_ID'
+if (!(Test-Path -LiteralPath $secretaryProduction) -and !(Test-Path -LiteralPath $secretaryBuild)) {
+  throw 'Secretary production build is missing; apply-secretary-progress.ps1 builds it before registration'
+}
 $taskName = 'OrgiastFunnelProbe'
 $node = Join-Path $env:ProgramFiles 'nodejs\node.exe'
 $action = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\wscript.exe') -Argument ('//nologo "{0}" "{1}" "{2}"' -f $hidden,$node,$watchdog) -WorkingDirectory $ToolsDir

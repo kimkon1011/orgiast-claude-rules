@@ -25,13 +25,13 @@
 
 今回のCodex実行はscratchpadと/tmpだけに書き込み可能。Downloadsと.claudeへのファイル反映・タスク導入は、この環境から実行していない。予定起動の成功も未確認。コードのテスト成功を本番反映成功と扱わない。
 
-書き込み範囲に `C:\Users\uers` が含まれ、S4U登録が可能なWindows実行で、マージ済みリポジトリから実行する。見張りを先に着地させる場合は次の登録だけで、UIのbuildを待たず予定起動・3経路のHTTP成功まで検証できる。
+書き込み範囲に `C:\Users\uers` が含まれ、S4U登録が可能なWindows実行で、マージ済みリポジトリから実行する。既存のproduction buildが揃っていれば、次の登録だけで予定起動・3経路のHTTP成功まで検証できる。buildがなければ旧タスクを変更する前に停止する。
 
 ```powershell
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\Users\uers\.claude\nightly-repo\tools\register-secretary-uptime.ps1
 ```
 
-その後に一覧表示を適用する。
+一覧表示を適用する場合、または秘書のbuildがない場合は次を実行する。18:33 JSTの追加確認では、外部・3939・3940はいずれもHTTP200だが、秘書の `.next` と `.next-production` に `BUILD_ID` がなく、再起動事前検査は失敗した。下の適用処理でproduction buildを作成してから登録する必要がある。
 
 ```powershell
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\Users\uers\.claude\nightly-repo\tools\apply-secretary-progress.ps1
@@ -48,6 +48,6 @@ node --test tools/secretary-uptime.test.mjs tools/secretary-progress-deploy.test
 powershell.exe -NoProfile -NonInteractive -File tools/secretary-uptime-registration.test.ps1
 ```
 
-登録スクリプトの5ケースはタスク操作・状態ファイルをすべてmockに置き換えて実行する。成功、予定起動なし、結果1、状態ファイルが古い、外部HTTP異常を検証し、実タスクには触れない。
+登録スクリプトの6ケースはタスク操作・状態ファイルをすべてmockに置き換えて実行する。成功、予定起動なし、結果1、状態ファイルが古い、外部HTTP異常、build欠落を検証し、実タスクには触れない。
 
 秘書側は `node --test tests/watches.test.mjs tests/trip.test.mjs`、`npm run build`、Playwright `tests/e2e/watches.spec.ts`。Playwrightのfixtureテストは画面ロジック検証用であり、本番の対象ラベル表示の証拠ではない。

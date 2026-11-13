@@ -2,7 +2,11 @@
 $ErrorActionPreference='Stop'
 $env:ORGIAST_NIGHTLY_REPO=Split-Path -Parent $PSScriptRoot
 $registration=Join-Path $PSScriptRoot 'register-secretary-uptime.ps1'
-function Test-Path { return $true }
+function Test-Path {
+  param($LiteralPath)
+  if ($global:scenario -eq 'missing-build' -and $LiteralPath -match 'secretary-pc.*BUILD_ID$') { return $false }
+  return $true
+}
 function New-ScheduledTaskAction { return @{} }
 function New-ScheduledTaskTrigger { return @{} }
 function New-ScheduledTaskPrincipal { return @{} }
@@ -25,7 +29,7 @@ function Get-Content {
   $checked=if ($global:scenario -eq 'stale-state') {$global:start.AddDays(-1)} else {$global:start.AddMinutes(1)}
   return @{checkedAt=$checked.ToUniversalTime().ToString('o');after=@{external=@{ok=$global:scenario -ne 'external-down'};gateway=@{ok=$true};secretary=@{ok=$true}}} | ConvertTo-Json -Depth 4
 }
-foreach ($case in @('healthy','never-ran','result-one','stale-state','external-down')) {
+foreach ($case in @('healthy','never-ran','result-one','stale-state','external-down','missing-build')) {
   $global:scenario=$case
   $global:start=[datetime]'2026-11-13T18:00:00'
   $global:now=$global:start
@@ -42,8 +46,10 @@ foreach ($case in @('healthy','never-ran','result-one','stale-state','external-d
       'result-one' {'First scheduled watchdog run was not confirmed successful'}
       'stale-state' {'Watchdog state was not refreshed by scheduled execution'}
       'external-down' {'Scheduled watchdog did not confirm healthy HTTP: external'}
+      'missing-build' {'Secretary production build is missing; apply-secretary-progress.ps1 builds it before registration'}
     }
     if ($failure -ne $expected) { throw "Unexpected result for ${case}: $failure" }
+    if ($case -eq 'missing-build' -and $global:registered) { throw 'Registered a watchdog without a restartable build' }
   }
   Write-Output "PASS registration $case"
 }

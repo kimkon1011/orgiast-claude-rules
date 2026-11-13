@@ -20,6 +20,13 @@ for (const value of [
 test('unrelated or malformed URLs are not file IDs', () => {
   for (const value of [null, '', 'a b', 'https://example.org/open?id=abc', 'https://drive.google.com/open?id=a/b']) assert.equal(extractFileId(value), null);
 });
+test('Google Forms public response URLs (/forms/d/e/) return null', () => {
+  assert.equal(extractFileId('https://docs.google.com/forms/d/e/1FAIpQLScJdyNl1ryrNXvshdF1yVaOjDueiWmObdcPVydj1m-DhPjWTw/viewform?usp=pp_url&entry.1172257432=abc'), null);
+  assert.equal(extractFileId('/forms/d/e/abc123'), null);
+});
+test('Google Forms edit URLs (/forms/d/<id>/edit) still extract correctly', () => {
+  assert.equal(extractFileId('https://docs.google.com/forms/d/1x29rPbBs6ha4FU2w3_JKFdL7p88tkIY31l1_DP1j3qY/edit'), '1x29rPbBs6ha4FU2w3_JKFdL7p88tkIY31l1_DP1j3qY');
+});
 test('default roles use exact case-insensitive domain', () => {
   assert.equal(defaultRole('A@ORGIAST.JP'), 'writer');
   assert.equal(defaultRole('a@external.jp'), 'commenter');

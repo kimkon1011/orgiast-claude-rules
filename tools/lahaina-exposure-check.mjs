@@ -90,22 +90,35 @@ export function judgeAirbnb(html) {
 
 // ---- 取得 -------------------------------------------------------------------
 
-export async function fetchPage(url, timeoutSec = 20) {
+export async function fetchPageResult(url, timeoutSec = 20, fetchImpl = globalThis.fetch) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutSec * 1000);
+  let httpStatus = null;
   try {
-    const res = await fetch(url, {
+    const res = await fetchImpl(url, {
       headers: { 'User-Agent': UA, 'Accept-Language': 'ja,en;q=0.8' },
       redirect: 'follow',
       signal: ac.signal,
     });
+    httpStatus = res.status;
+    if (!res.ok) {
+      await res.body?.cancel();
+      return { html: null, httpStatus, error: `取得失敗: HTTP ${httpStatus}` };
+    }
     const buf = Buffer.from(await res.arrayBuffer());
-    return decode(buf, res.headers.get('content-type') || '');
+    const html = decode(buf, res.headers.get('content-type') || '');
+    return { html, httpStatus, error: html.trim() ? '' : '取得失敗: HTMLが空' };
   } catch (e) {
-    return null;
+    const reason = ac.signal.aborted ? `タイムアウト (${timeoutSec}秒)` : `${e.message}${e.cause?.code ? ` (${e.cause.code})` : ''}`;
+    return { html: null, httpStatus, error: `取得失敗: ${reason}` };
   } finally {
     clearTimeout(t);
   }
+}
+
+// Existing callers still receive HTML or null; diagnostics are opt-in.
+export async function fetchPage(url, timeoutSec = 20) {
+  return (await fetchPageResult(url, timeoutSec)).html;
 }
 
 /** じゃらん等は Shift_JIS。UTF-8 で読めなければ Shift_JIS として復号する。 */
@@ -132,7 +145,7 @@ function iso(d) {
 
 // ---- 本計測 -----------------------------------------------------------------
 
-export async function measure({ dateStr, timeoutSec = 20 } = {}) {
+export async function measure({ dateStr, timeoutSec = 20, includeHtml = false, fetchImpl = globalThis.fetch } = {}) {
   const checkin = dateStr ? new Date(`${dateStr}T00:00:00`) : new Date(Date.now() + 5 * 86400000);
   const jYmd = ymd(checkin);
   const jEnc = encodeURIComponent(jYmd);
@@ -166,15 +179,16 @@ export async function measure({ dateStr, timeoutSec = 20 } = {}) {
   ];
 
   for (const p of probes) {
-    const html = await fetchPage(p.url, timeoutSec);
+    const page = await fetchPageResult(p.url, timeoutSec, fetchImpl);
     let r;
     try {
-      r = p.judge(html);
+      r = page.error ? { status: STATUS.UNMEASURABLE, evidence: page.error } : p.judge(page.html);
     } catch (e) {
       r = { status: STATUS.UNMEASURABLE, evidence: `判定エラー: ${e.message}` };
     }
     if (typeof r === 'string') r = { status: r, evidence: '' };
-    results.push({ media: p.media, status: r.status, evidence: r.evidence, url: p.url });
+    results.push({ media: p.media, status: r.status, evidence: r.evidence, url: p.url,
+      httpStatus: page.httpStatus, error: page.error, ...(includeHtml ? { html: page.html } : {}) });
   }
 
   // Google は bot 遮断で機械取得できないため、勝手に 0 扱いせず「未計測」として明示する。

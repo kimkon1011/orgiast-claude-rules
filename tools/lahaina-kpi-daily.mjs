@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
-import { measure, fetchPage, STATUS } from './lahaina-exposure-check.mjs';
+import { measure, fetchPageResult } from './lahaina-exposure-check.mjs';
 import { defaultDriveKeyPath, getDriveToken } from './lib/drive-auth.mjs';
 import { callGraph, readEnvFile, DEFAULT_ENV_PATH, resolveUserId } from './instagram/ig-api.mjs';
 
@@ -14,25 +14,39 @@ const SUBJECTS = ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'];
 const GA_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly';
 const GSC_SCOPE = 'https://www.googleapis.com/auth/webmasters.readonly';
 const SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36';
+const EMPTY_HTML_ERROR = '取得失敗: HTMLが空 (null / undefined / 空本文)';
+const hasHtml = html => typeof html === 'string' && html.trim().length > 0;
 
 export function isoLocal(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
 }
 export function parseJalanDetails(html = '') {
+  if (!hasHtml(html)) return { minPrice: '', planCount: '', error: EMPTY_HTML_ERROR };
   const prices = [...html.matchAll(/([0-9]{1,3}(?:,[0-9]{3})+)円/g)].map(m => Number(m[1].replaceAll(',',''))).filter(Number.isFinite);
   const markerCounts = ['planCassette','planName'].map(marker => (html.match(new RegExp(marker,'gi'))||[]).length);
   const fallback = (html.match(/宿泊プラン/gi)||[]).length;
   return { minPrice: prices.length ? Math.min(...prices) : '', planCount: Math.max(...markerCounts, fallback ? 1 : 0) };
 }
 export function parseOfficial(html = '') {
+  if (!hasHtml(html)) return { reservationCount: '', continuing: null, oyster: null, latestNoticeDate: '', error: EMPTY_HTML_ERROR };
   const hrefs = [...html.matchAll(/href\s*=\s*["']([^"']+)["']/gi)].map(m => m[1]);
   const reservationLinks = hrefs.filter(h => /jalan|rakuten|booking\.com|airbnb|beds24|yad353005|予約|reserve/i.test(h));
   const dates = [...html.matchAll(/(?:20\d{2})[.\/-](?:1[0-2]|0?[1-9])[.\/-](?:3[01]|[12]\d|0?[1-9])/g)].map(m => m[0].replace(/[.\/]/g,'-').split('-').map((v,i)=>i ? v.padStart(2,'0') : v).join('-'));
   return { reservationCount: new Set(reservationLinks).size, continuing: html.includes('営業継続'), oyster: html.includes('牡蠣'), latestNoticeDate: dates.sort().at(-1) || '' };
 }
 export function buildRow(k) {
-  return [k.date,k.exposureScore,k.jalan.status,k.jalan.minPrice,k.jalan.planCount,k.rakuten,k.official.reservationCount,k.official.continuing ? 'あり' : 'なし',k.airbnb,k.booking,k.instagram.followers,k.instagram.posts,k.ga4.sessions,k.ga4.users,k.ga4.sources.join(' / '),k.gsc.clicks,k.gsc.impressions,k.gsc.queries.join(' / '),k.errors.join(' | ')];
+  return [k.date,k.exposureScore,k.jalan.status,k.jalan.minPrice,k.jalan.planCount,k.rakuten,k.official.reservationCount,k.official.continuing == null ? '' : k.official.continuing ? 'あり' : 'なし',k.airbnb,k.booking,k.instagram.followers,k.instagram.posts,k.ga4.sessions,k.ga4.users,k.ga4.sources.join(' / '),k.gsc.clicks,k.gsc.impressions,k.gsc.queries.join(' / '),k.errors.join(' | ')];
+}
+
+export function parseInstagram(html = '') {
+  if (!hasHtml(html)) return { followers: '', posts: '', error: EMPTY_HTML_ERROR };
+  const followers = html.match(/([\d,.]+)\s*(?:Followers|フォロワー)/i)?.[1] || html.match(/"edge_followed_by":\{"count":(\d+)/)?.[1] || '';
+  const posts = html.match(/([\d,.]+)\s*(?:Posts|投稿)/i)?.[1] || html.match(/"edge_owner_to_timeline_media":\{"count":(\d+)/)?.[1] || '';
+  return { followers, posts, error: followers || posts ? '' : '公開ページから数値抽出不可' };
+}
+
+function pageError(media, page, reason) {
+  return `${media}: ${reason} (URL: ${page.url}, HTTP: ${page.httpStatus ?? '応答なし'})`;
 }
 
 async function jsonApi(url, token, options = {}) {
@@ -53,12 +67,11 @@ async function getInstagram() {
     } catch (e) { /* public fallback below */ }
   }
   try {
-    const res = await fetch('https://www.instagram.com/lahaina_ushimado/', {headers:{'User-Agent':UA,'Accept-Language':'ja,en;q=0.8'}});
-    const html = await res.text();
-    const followers = html.match(/([\d,.]+)\s*(?:Followers|フォロワー)/i)?.[1] || html.match(/"edge_followed_by":\{"count":(\d+)/)?.[1] || '';
-    const posts = html.match(/([\d,.]+)\s*(?:Posts|投稿)/i)?.[1] || html.match(/"edge_owner_to_timeline_media":\{"count":(\d+)/)?.[1] || '';
-    const error = followers || posts ? '' : `公開ページから数値抽出不可 (HTTP ${res.status})`;
-    return {followers,posts,source:'public',error};
+    const url = 'https://www.instagram.com/lahaina_ushimado/';
+    const page = await fetchPageResult(url);
+    const parsed = parseInstagram(page.error ? null : page.html);
+    const reason = page.error || parsed.error;
+    return {...parsed,source:'public',url,httpStatus:page.httpStatus,error:reason ? pageError('Instagram',{...page,url},reason) : ''};
   } catch (e) { return {followers:'',posts:'',source:'public',error:`Instagram取得失敗: ${e.message}`}; }
 }
 
@@ -120,20 +133,31 @@ async function writeSheet(row, dryRun) {
   return {mode:'sheet',target,verified,authScope,row:got};
 }
 
-export async function collect({now=new Date(),dryRun=false}={}) {
+export async function collect({now=new Date(),dryRun=false,outputDir=path.join(os.homedir(),'.claude','lahaina-kpi'),dependencies={}}={}) {
+  const deps = {measure,getInstagram,getGa4,getGsc,writeSheet,...dependencies};
   const date=isoLocal(now), check=new Date(now); check.setDate(check.getDate()+14);
   const yesterday=new Date(now); yesterday.setDate(yesterday.getDate()-1);
   const twoDaysAgo=new Date(now); twoDaysAgo.setDate(twoDaysAgo.getDate()-2);
   const errors=[];
-  const exposure=await measure({dateStr:isoLocal(check)});
+  const exposure=await deps.measure({dateStr:isoLocal(check),includeHtml:true});
   const jalanItem=exposure.results.find(r=>r.media==='じゃらん'), rakuten=exposure.results.find(r=>r.media==='楽天トラベル'), airbnb=exposure.results.find(r=>r.media==='Airbnb'), booking=exposure.results.find(r=>r.media==='Booking.com');
-  const jalanHtml=await fetchPage(jalanItem.url), officialHtml=await fetchPage('https://lahaina.jp/');
-  const [instagram,ga4,gsc]=await Promise.all([getInstagram(),getGa4(isoLocal(yesterday)),getGsc(isoLocal(twoDaysAgo))]);
+  const officialItem=exposure.results.find(r=>r.media==='公式HP');
+  const jalan=parseJalanDetails(jalanItem.error ? null : jalanItem.html), official=parseOfficial(officialItem.error ? null : officialItem.html);
+  for (const item of exposure.results) {
+    const reason=item.error || (item===jalanItem ? jalan.error : item===officialItem ? official.error : '');
+    if(reason) errors.push(pageError(item.media,item,reason));
+  }
+  const [instagram,ga4,gsc]=await Promise.all([
+    Promise.resolve().then(()=>deps.getInstagram()).catch(e=>({followers:'',posts:'',error:`Instagram取得失敗: ${e.message}`})),
+    Promise.resolve().then(()=>deps.getGa4(isoLocal(yesterday))).catch(e=>({sessions:'',users:'',sources:[],error:`GA4取得失敗: ${e.message}`})),
+    Promise.resolve().then(()=>deps.getGsc(isoLocal(twoDaysAgo))).catch(e=>({clicks:'',impressions:'',queries:[],error:`GSC取得失敗: ${e.message}`})),
+  ]);
   if(instagram.error) errors.push(instagram.error); if(ga4.error) errors.push(ga4.error); if(gsc.error) errors.push(gsc.error);
-  const k={date,exposureScore:`${exposure.buyable}/${exposure.total}`,jalan:{status:jalanItem.status,...parseJalanDetails(jalanHtml)},rakuten:rakuten.status,official:parseOfficial(officialHtml),airbnb:airbnb.status,booking:booking.status,instagram,ga4,gsc,errors,checkin:exposure.checkin};
-  const row=buildRow(k); const dir=path.join(os.homedir(),'.claude','lahaina-kpi'); fs.mkdirSync(dir,{recursive:true});
+  const k={date,exposureScore:`${exposure.buyable}/${exposure.total}`,jalan:{status:jalanItem.status,...jalan},rakuten:rakuten.status,official,airbnb:airbnb.status,booking:booking.status,instagram,ga4,gsc,errors,checkin:exposure.checkin,
+    fetches:exposure.results.map(({html,...item})=>({...item,...(html===undefined ? {} : {htmlWasNull:html===null})}))};
+  const row=buildRow(k); const dir=outputDir; fs.mkdirSync(dir,{recursive:true});
   const file=path.join(dir,`${date}.json`); fs.writeFileSync(file,JSON.stringify({...k,row,savedAt:new Date().toISOString()},null,2));
-  let write; try { write=await writeSheet(row,dryRun); } catch(e) { errors.push(e.message); fs.writeFileSync(file,JSON.stringify({...k,errors,row:buildRow(k),savedAt:new Date().toISOString()},null,2)); write={mode:'local-fallback',verified:false,error:e.message}; }
+  let write; try { write=await deps.writeSheet(row,dryRun); } catch(e) { errors.push(e.message); fs.writeFileSync(file,JSON.stringify({...k,errors,row:buildRow(k),savedAt:new Date().toISOString()},null,2)); write={mode:'local-fallback',verified:false,error:e.message}; }
   return {...k,row:buildRow(k),localFile:file,write};
 }
 

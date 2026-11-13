@@ -7,7 +7,45 @@ import {
   judgeOfficial,
   judgeBooking,
   judgeAirbnb,
+  fetchPageResult,
+  measure,
 } from './lahaina-exposure-check.mjs';
+
+test('取得診断: HTTP 503の本文をHTMLとして判定しない',async()=>{
+  const result=await fetchPageResult('https://example.test/',20,async()=>new Response('12,500円',{status:503}));
+  assert.deepEqual(result,{html:null,httpStatus:503,error:'取得失敗: HTTP 503'});
+});
+test('取得診断: 通信例外の原因とHTTP応答なしを保持',async()=>{
+  const result=await fetchPageResult('https://example.test/',20,async()=>{throw new TypeError('fetch failed',{cause:{code:'ENOTFOUND'}});});
+  assert.equal(result.html,null);
+  assert.equal(result.httpStatus,null);
+  assert.match(result.error,/取得失敗.*ENOTFOUND/);
+});
+test('取得診断: タイムアウトを保持',async()=>{
+  const result=await fetchPageResult('https://example.test/',0.01,async(url,{signal})=>new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true})));
+  assert.equal(result.html,null);
+  assert.match(result.error,/タイムアウト/);
+});
+test('取得診断: 本文読み取り失敗時も受信済みHTTP状態を保持',async()=>{
+  const result=await fetchPageResult('https://example.test/',20,async()=>({ok:true,status:200,arrayBuffer:async()=>{throw Error('body interrupted');}}));
+  assert.equal(result.html,null);
+  assert.equal(result.httpStatus,200);
+  assert.match(result.error,/body interrupted/);
+});
+test('取得診断: 正常なShift_JIS本文の復号を維持',async()=>{
+  const result=await fetchPageResult('https://example.test/',20,async()=>new Response(Uint8Array.from([0x89,0x7e])));
+  assert.equal(result.html,'円');
+  assert.equal(result.error,'');
+});
+test('1媒体のHTTP失敗でも残りの計測を続行し、HTMLは既定で返さない',async()=>{
+  const result=await measure({dateStr:'2026-11-27',fetchImpl:async url=>new Response('<a href="/reserve">予約</a>12,500円',{status:url.includes('jalan.net')?503:200})});
+  assert.equal(result.results.length,6);
+  assert.equal(result.buyable,2);
+  assert.equal(result.results[0].status,STATUS.UNMEASURABLE);
+  assert.equal(result.results[0].httpStatus,503);
+  assert.match(result.results[0].error,/取得失敗/);
+  assert.ok(result.results.every(r=>!('html' in r)));
+});
 
 test('じゃらん: 料金表記があれば在庫が買える', () => {
   const r = judgeJalan('<html>素泊まりプラン 13,750円 残1部屋</html>');

@@ -212,7 +212,7 @@ export async function runOnce(options = {}) {
           rules: read(path.join(home, '.claude', 'discord-autoreply', 'rules.md')),
         };
         let decision = await classifyReply(llm, classifyInput);
-        // 禁止表現（kimに確認/転送/確認待ち等）が含まれていたら1回だけ再生成
+        // 禁止表現（代表への確認を約束する文/転送/確認待ち等）が含まれていたら1回だけ再生成
         if (decision.answer?.trim() && FORBIDDEN_REPLY_PTN.test(decision.answer)) {
           const origNeedsKim = decision.needs_kim_decision;
           const retry = await retryForbiddenAnswer(llm, decision, classifyInput);

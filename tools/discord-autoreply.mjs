@@ -187,7 +187,7 @@ export async function classifyReply(llm, input) {
 export async function retryForbiddenAnswer(llm, decision, input) {
   const retryRaw = await llm({
     category: 'jp_reply',
-    system: REPLY_SYSTEM + '\n\n直前の回答に禁止表現（kimに確認/転送/確認待ち/少々お待ち/個人DM）が含まれていました。その場で具体的に判断して回答してください。判断を先送りする文は書かないでください。',
+    system: REPLY_SYSTEM + '\n\n直前の回答に禁止表現（代表への確認を約束する文/転送/確認待ち/少々お待ち/個人DM）が含まれていました。その場で具体的に判断して回答してください。判断を先送りする文は書かないでください。',
     input: { ...input, forbiddenRetry: true, previousAnswer: decision.answer }
   });
   let retry;
@@ -387,7 +387,7 @@ const REPLY_SYSTEM = `あなたはkim（代表）の代理で社内メンバー�
 needs_reply: 質問・依頼・確認求め=true、報告・連絡のみ=false。
 needs_kim_decision: 承認・支払可否・金額・人事・契約・顧客対応方針などkimにしか決められないこと=true。
 needs_kim_decision=trueでもneeds_reply=trueとし、暫定回答（answer）を必ず書く。あなたはその場で決めて答えること。質問には会話・knowledge・rulesから最も妥当な具体的な答え（数量・可否・進め方・どの部屋か等）を暫定で書く。迷う時は安全側・小さく取り消せる案を具体的に示す（例: 「まず1個購入で進めてください」「〜は保留で、先に〜を進めてください」）。判断を先送りするだけの文は書かない。
-禁止表現: 「kimに確認します／確認いたします」「転送しました」「確認待ち」「確認でき次第ご連絡」「少々お待ちください」「個人DMへ」の類は一切使わない。
+禁止表現: 「代表に確認します／確認いたします」「転送しました」「確認待ち」「確認でき次第ご連絡」「少々お待ちください」「個人DMへ」の類は一切使わない。
 暫定回答には分かる事実（締切・必要書類・過去の慣例）を添え、推測で決定事項を書かない。知らないことは未確認と明記し、相手が今できる具体的な次の一手を書く。数字・固有名詞をでっち上げない。
 	会話・knowledge に無い金額・単価・見積額を書かない。金額が必要なら「金額は kim が後で確定します」とだけ書く。
 knowledge、rules、corrections（質問→自動返信→kimの正解。confirmedは正解例）を参考にする。
@@ -584,7 +584,7 @@ export async function runOnce(options = {}) {
           try { decision = replyJson(raw); }
           catch { handled(m, 'llm_parse_error'); result.errors.push(`llm_parse_error: ${m.id}`); continue; }
           if (!decision.needs_reply && !decision.needs_kim_decision) { handled(m, 'fyi'); skip('fyi'); continue; }
-          // 禁止表現（kimに確認/転送/確認待ち等）が含まれていたら1回だけ再生成
+          // 禁止表現（代表への確認を約束する文/転送/確認待ち等）が含まれていたら1回だけ再生成
           if (decision.answer?.trim() && FORBIDDEN_REPLY_PTN.test(decision.answer)) {
             const origNeedsKim = decision.needs_kim_decision;
             const retry = await retryForbiddenAnswer(llm, decision, llmInput);

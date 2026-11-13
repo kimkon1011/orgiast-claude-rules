@@ -328,3 +328,27 @@ test('mixed auth and non-auth failures still produce real_fail_rate', t => {
   assert.equal(health.lanes.codex.reason, 'real_fail_rate');
   assert.equal(health.lanes.codex.alive, false);
 });
+
+
+test('dominant codex auth failures require the latest failure to be auth', t => {
+  for (const [authCount, latestNonAuth, expected] of [
+    [9, false, 'dead:oauth_consent'],
+    [8, true, 'real_fail_rate'],
+    [8, false, 'dead:oauth_consent'],
+  ]) {
+    for (const reason of [
+      'ager: Failed to refresh token: Please log out and sign in again. ERROR: workspace routing discovery unauthorized (401)',
+      'Failed to refresh token', 'Please sign in again', 'Please log out and sign in',
+    ]) {
+      const home = fixture(t, [
+        { provider: 'codex', status: 'error', reason: 'WSL ディストリが見つかりませんでした', t: latestNonAuth ? now : now - 2000 },
+        ...Array.from({ length: authCount }, () => ({ provider: 'codex', status: 'error', reason })),
+        ...Array.from({ length: 9 - authCount }, () => ({ provider: 'codex', status: 'error', reason: 'HTTP 500 internal error', t: now - 2000 })),
+      ]);
+      const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+      applyRealLaneHealth(health, home, now);
+      assert.equal(health.lanes.codex.reason, expected, `${authCount}, latestNonAuth=${latestNonAuth}: ${reason}`);
+      assert.equal(health.lanes.codex.alive, false);
+    }
+  }
+});

@@ -86,8 +86,10 @@ export function applyRealLaneHealth(health, home, now = Date.now()) {
     const calls = s?.events.filter(event => event.at > lastOkAt) || [];
     const failures = calls.filter(event => event.reason !== undefined);
     if (calls.length >= 5 && failures.length / calls.length >= .5) {
-      const allAuth = failures.every(event => /basic authentication|HTTP\s*401|\b401\b|unauthorized|login required|token.*expired|Missing bearer/i.test(event.reason || ''));
-      if (allAuth) {
+      const isAuth = event => /basic authentication|HTTP\s*401|\b401\b|unauthorized|login required|token.*expired|Missing bearer|refresh token|sign in again|log out and sign in/i.test(event.reason || '');
+      const latestFailure = failures.reduce((latest, event) => event.at > latest.at ? event : latest);
+      const authDominant = failures.filter(isAuth).length / failures.length >= .8 && isAuth(latestFailure);
+      if (authDominant) {
         state.alive = false;
         state.reason = lane === 'codex' ? 'dead:oauth_consent' : 'auth_invalid';
         delete state.until;

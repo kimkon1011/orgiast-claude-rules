@@ -56,7 +56,7 @@ import { evaluateUnregisteredPromise } from './unregistered-promise-gate.mjs';
 import { appendStopLedger, registerStopViolation, CAP_CONTEXT } from './lib/stop-recheck.mjs';
 import { STOP_RETRY_INSTRUCTION, withStopRetryInstruction } from './lib/stop-retry-message.mjs';
 import { evaluateClaudeFallbackReport } from './claude-fallback-report-gate.mjs';
-import { buildRecord, extractPromise, ledgerFile as progressLedgerFile, readLedger, writeLedger, applyPromise } from './auto-progress-ledger.mjs';
+import { buildRecord, extractPromise, ledgerFile as progressLedgerFile, readLedger, writeLedger, applyPromise, latestOpenPromises, rollingSessionFields } from './auto-progress-ledger.mjs';
 import { appendInbox } from './lib/auto-progress-inbox.mjs';
 import { isUnchangedPeriodicReport } from './lib/unchanged-periodic-report.mjs';
 
@@ -158,7 +158,14 @@ export function hasFutureOpenCheck(sessionId, { home: progressHome = home(), now
 // No invented shell predicate: auto-progress-watch evaluates evidence for open rows without check.
 export function ensureAutopilotCheck(input, assistantText, transcriptRaw, now = Date.now()) {
   const promise = extractPromise(assistantText);
-  if (!promise || hasOpenSessionCheck(input, home())) return false;
+  if (!promise) return false;
+  if (hasOpenSessionCheck(input, home())) {
+    const file = progressLedgerFile(home()), rows = readLedger(file);
+    const active = new Set(latestOpenPromises(rows).filter(row => row.sessionId === input.session_id));
+    const refreshed = rows.map(row => active.has(row) ? { ...row, ...rollingSessionFields(row, now) } : row);
+    if (refreshed.some((row, i) => row.deadlineAt !== rows[i].deadlineAt || row.checkTimeoutMs !== rows[i].checkTimeoutMs)) writeLedger(file, refreshed);
+    return false;
+  }
   const wakeup = hasSessionWakeup(transcriptRaw, input);
   if (wakeup.cron || wakeup.scheduled) return false;
   const row = buildRecord(input, assistantText, { now });

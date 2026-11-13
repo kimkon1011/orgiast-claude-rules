@@ -142,6 +142,13 @@ function create(home, options) {
           current.progressVersion = (current.progressVersion || 0) + 1;
         }
       });
+      if (existing && options.progressAt && options.kind === 'info') return update(home, existing.id, current => {
+        if ((Date.parse(current.progressAt) || 0) >= Date.parse(options.progressAt)) return;
+        current.text = text; current.progressAt = options.progressAt; current.lastAt = options.progressAt;
+        current.repeatCount = (current.repeatCount ?? 1) + 1;
+        current.status = 'open'; current.shownSessions = []; current.shownCount = 0; current.lastShownAt = null;
+        current.forwardMailId = null; current.forwardError = null;
+      });
       return existing || createNew(home, options);
     }
     if ((options.kind ?? 'info') === 'info') {
@@ -192,7 +199,7 @@ export function compactItems(home) {
     return result;
   });
 }
-function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen }) {
+function createNew(home, { kind = 'info', text, source = '', from = resolveFleetLabel(home, { hostname: os.hostname() }), forwardMailId = null, dedupeKey, key, due, remainingDays, urgent = false, sessionId = '', priority, revision, dailyProgress = false, progressDay = '', doneWhen, progressAt }) {
   if (!['ask', 'info', 'deadline'].includes(kind)) throw new Error('kind は ask / info / deadline');
   if (doneWhen && kind !== 'ask') throw new Error('--done-when-gmail は ask 専用です');
   fs.mkdirSync(directory(home), { recursive: true });
@@ -200,6 +207,7 @@ function createNew(home, { kind = 'info', text, source = '', from = resolveFleet
   for (;;) {
     const id = `ki-${createdAt.replace(/\D/g, '').slice(0, 14)}-${randomBytes(2).toString('hex')}`;
     const item = { id, createdAt, ...(priority === 'high' ? { priority } : {}), ...(dailyProgress ? { dailyProgress: true, progressDay, progressVersion: 1, dailyShown: {} } : {}), ...(urgent ? { urgent: true } : {}), ...(sessionId ? { sessionId: clean(sessionId) } : {}), ...(kind === 'deadline' ? { key, due: due || '', remainingDays: remainingDays ?? null } : {}), ...(dedupeKey ? { dedupeKey: clean(dedupeKey) } : {}), ...(kind === 'info' ? { repeatCount: 1, lastAt: createdAt } : {}), ...(doneWhen ? { doneWhen } : {}), kind, source: clean(source), from: clean(from), text: clean(text), status: 'open', shownSessions: [], shownCount: 0, lastShownAt: null, answeredAt: null, answer: null, answerSession: null, forwardMailId, forwardError: null };
+    if (progressAt) { item.progressAt = progressAt; item.lastAt = progressAt; }
     if (revision !== undefined) item.revision = revision;
     try { fs.writeFileSync(path.join(directory(home), `${id}.json`), JSON.stringify(item, null, 2) + '\n', { flag: 'wx', mode: 0o600 }); return item; }
     catch (error) { if (error.code !== 'EEXIST') throw error; }

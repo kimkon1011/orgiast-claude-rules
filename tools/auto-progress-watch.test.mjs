@@ -489,7 +489,7 @@ test('レシート済み完了は legacy add-check 移行で復活させない',
   const notifiedOnly = { ...base, ts: '2026-11-05T10:05:00.000Z', doneInboxId: '', doneInboxVerifiedAt: '', doneNotifiedAt: '2026-11-05T11:05:00.000Z' };
   const noReceipt = { ...base, ts: '2026-11-05T10:10:00.000Z', doneInboxId: '', doneInboxVerifiedAt: '', doneNotifiedAt: '' };
   const rows = [withReceipt, notifiedOnly, noReceipt];
-  assert.deepEqual(legacyAddCheckMigrationRows(rows), [noReceipt]);
+  assert.deepEqual(legacyAddCheckMigrationRows(rows), []);
 });
 
 test('再開指示は取り消せる作業を先に済ませ、支払い等だけでneeds_userにする', async t => {

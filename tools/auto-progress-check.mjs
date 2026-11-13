@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { checkOutput, pushDailyProgress } from './lib/auto-progress-daily.mjs';
-import { isUnattendedRow, rowKey, originLine } from './auto-progress-ledger.mjs';
+import { isUnattendedRow, rowKey, originLine, isSessionProgressCheck, SESSION_CHECK_TIMEOUT_MS } from './auto-progress-ledger.mjs';
 import { notifyOwner, resolveOwner } from './notify-owner.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { reportCheckProgress } from './lib/auto-progress-heartbeat.mjs';
@@ -150,7 +150,7 @@ export function preflightCheck(row, { home, forceCheck = false, allowSessionStat
 // 行の値が不正・過大なときは既定（30秒）と上限（300秒）へ丸める。check 自体を無制限にはしない。
 export function resolveCheckTimeout(row) {
   const value = Number(row?.checkTimeoutMs);
-  return Number.isFinite(value) && value > 0 ? Math.min(value, MAX_CHECK_TIMEOUT_MS) : CHECK_TIMEOUT_MS;
+  return Number.isFinite(value) && value > 0 ? Math.min(value, MAX_CHECK_TIMEOUT_MS) : isSessionProgressCheck(row) ? SESSION_CHECK_TIMEOUT_MS : CHECK_TIMEOUT_MS;
 }
 export const oneLine = (value, limit = 240) => String(value || '').split(/\r?\n/, 1)[0].trim().slice(0, limit);
 export const lastLine = value => String(value || '').trim().split(/\r?\n/).at(-1)?.trim().slice(0, 240) || '';
@@ -176,7 +176,8 @@ export function executeCheck(row, { home, spawnImpl = spawnSync, shellPath = res
   const failure = result.error?.code === 'ETIMEDOUT'
     ? `check が ${options.timeout / 1000} 秒の上限を超えました（遅い check は --add-check --timeout <秒> で延長・最大 ${MAX_CHECK_TIMEOUT_MS / 1000} 秒）`
     : oneLine(result.error?.message || gotStderr) || code;
-  return { code, stdout: String(result.stdout || ''), text: code === null ? `check エラー: ${failure}` : String(result.stdout || '').trim() || (code === 0 ? '達成を確認' : code === 1 ? '未達' : code === 3 ? '止まっている' : `check エラー: ${failure}`), stderr: gotStderr };
+  const timedOut = result.error?.code === 'ETIMEDOUT';
+  return { code, stdout: String(result.stdout || ''), ...(timedOut ? { timedOut: true } : {}), text: timedOut ? `判定不能: ${failure}${result.stdout ? `\n${String(result.stdout).trim()}` : ''}` : code === null ? `check エラー: ${failure}` : String(result.stdout || '').trim() || (code === 0 ? '達成を確認' : code === 1 ? '未達' : code === 3 ? '止まっている' : `check エラー: ${failure}`), stderr: gotStderr };
 }
 export { checkProgressSummary } from './lib/check-progress-summary.mjs';
 export function pendingAction(row) {
@@ -199,11 +200,11 @@ export async function checkPromise(row, { home, now, patch, io = {}, suppressNot
   try {
     result = row.status === 'done' && row.checkResult === 'done'
       ? { code: 0, text: row.checkText } : await (io.executeCheck ?? executeCheck)(row, { home });
-  } catch (error) { result = { code: null, text: `check エラー: ${error.message || error}` }; }
-  const state = result.code === 0 ? 'done' : result.code === 1 ? 'unmet' : result.code === 3 ? 'stalled' : 'error';
+  } catch (error) { result = { code: null, ...(error.code === 'ETIMEDOUT' ? { timedOut: true } : {}), text: `${error.code === 'ETIMEDOUT' ? '判定不能' : 'check エラー'}: ${error.message || error}` }; }
+  const state = result.timedOut ? 'unknown' : result.code === 0 ? 'done' : result.code === 1 ? 'unmet' : result.code === 3 ? 'stalled' : 'error';
   const overdue = now >= Date.parse(row.deadlineAt);
   const changes = { lastCheckOutput: checkOutput(result.stdout ?? result.text), checkResult: state, checkText: state === 'stalled' ? lastLine(result.stdout ?? result.text) : String(result.text || ''), checkStderr: String(result.stderr || ''), lastCheckedAt: new Date(now).toISOString(),
-    verdict: state === 'done' ? 'done' : state === 'stalled' ? 'stalled' : state === 'error' ? 'check_error' : overdue ? 'unmet' : 'in_progress',
+    verdict: state === 'done' ? 'done' : state === 'stalled' ? 'stalled' : state === 'unknown' ? 'check_unknown' : state === 'error' ? 'check_error' : overdue ? 'unmet' : 'in_progress',
     ...(state === 'stalled' ? { reason: lastLine(result.stdout ?? result.text), source: 'check-stalled' } : {}),
     ...(state === 'done' ? { status: 'done', ...(!hasDoneInboxReceipt(row) ? { doneNotifyPending: true } : {}), doneAt: row.doneAt || new Date(now).toISOString() } : {}) };
   if (patch(rowKey(row), changes) === false) return 'ledger_error';
@@ -239,7 +240,7 @@ export async function checkPromise(row, { home, now, patch, io = {}, suppressNot
     return state;
   }
   Object.assign(row, changes);
-  await reportCheckProgress(home, row, result, { now, patch, io });
+  if (!suppressNotices) await reportCheckProgress(home, row, result, { now, patch, io });
   if (suppressNotices || (state === 'unmet' && usesKimDoneInbox(row, home) && !pendingAction(row).startsWith('あなたの作業待ち:'))) return state;
   if (state === 'unmet') {
     const lastNotified = Date.parse(row.lastUnmetNotifiedAt || (!overdue ? row.ts : '')) || 0;

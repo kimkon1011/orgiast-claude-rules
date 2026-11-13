@@ -170,6 +170,17 @@ test('unchanged TODO ages survive unrelated file updates; edits restart age', as
   assert.deepEqual(result.items.map(i => i.title), ['- keep this']);
   assert.equal(result.items[0].ageDays, 9);
 });
+test('generated notification repair TODOs do not recursively become stale work', async t => {
+  const f = setup(t);
+  f.write('next-session.md', [
+    '## 残TODO',
+    '- ordinary pending work',
+    '- [ ] 通知の原因調査・修復: 停滞作業 <!-- notify-kim:20dfba8df864be163afc -->',
+    '',
+  ].join('\n'));
+  const result = await f.run({ dry: true });
+  assert.deepEqual(result.items.filter(i => i.category === 'todo-stale').map(i => i.title), ['- ordinary pending work']);
+});
 test('notification failure is recorded in the report instead of claiming delivery', async t => {
   const f = setup(t, { prs: [pr({ state: 'CLOSED' })] });
   f.deps.notify = async () => ({ delivered: 'none', reason: 'missing token' });

@@ -553,7 +553,7 @@ export async function getLoadGuardStatus({
   if (checkClaude) {
     try {
       claudeCount = countWindowsClaudeProcesses((command, args, options) => {
-        const result = spawn(command, args, options);
+        const result = spawn(command, args, { windowsHide: true, ...options });
         if (result.error || result.status !== 0) throw result.error || new Error(`exit code ${result.status}`);
         return result.stdout;
       });

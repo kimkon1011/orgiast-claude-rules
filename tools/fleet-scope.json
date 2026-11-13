@@ -970,6 +970,12 @@
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
     },
     {
+      "path": "tools/lib/windows-process.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "claude-exe.mjs などの Windows プロセス計測・Claude CLI 判定の実行時 import 依存"
+    },
+    {
       "path": "tools/codex-auth-status.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",

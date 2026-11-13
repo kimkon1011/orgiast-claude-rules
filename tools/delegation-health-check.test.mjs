@@ -191,6 +191,22 @@ test('emptyOutputReason は Failed to refresh token のトークン期限切れ�
   assert.equal(emptyOutputReason({ status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 27, stderrTail: truncated }), 'auth_failed');
 });
 
+test('emptyOutputReason は workspace routing discovery failed/timed out を infra_transient に分類する', () => {
+  // 実測 2026-11-12: 16件が stderrTail "R: Reconnecting... workspace routing discovery failed" で
+  // すべて no_output に落ち codex_empty_output を毎晩起票。infra_transient として分離する。
+  assert.equal(emptyOutputReason({
+    status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 33.8,
+    stderrTail: 'R: Reconnecting... 3/5 ERROR: Reconnecting... 4/5 ERROR: Reconnecting... 5/5 ERROR: workspace routing discovery failed ERROR: workspace routing discovery failed',
+  }), 'infra_transient');
+  // timed out のバリアント（実測 2026-10-20: 5件）
+  assert.equal(emptyOutputReason({
+    status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 236,
+    stderrTail: 'onnecting... 3/5 ERROR: Reconnecting... 4/5 ERROR: Reconnecting... 5/5 ERROR: workspace routing discovery timed out ERROR: workspace routing discovery timed out',
+  }), 'infra_transient');
+  // 対照群: infra_transient 以外の stderrTail は従来どおり no_output。
+  assert.equal(emptyOutputReason({ status: 'error', exitCode: 1, launched: true, timedOut: false, secs: 39, stderrTail: 't something else went wrong' }), 'no_output');
+});
+
 test('Failed to refresh token の出力ゼロで codex_empty_output を出さない', () => {
   const dir = home();
   const truncated = 'ager: Failed to refresh token: Your access token could not be refreshed. Please log out and sign in again. ERROR: worksp';

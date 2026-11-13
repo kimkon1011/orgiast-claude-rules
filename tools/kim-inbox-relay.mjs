@@ -2,7 +2,7 @@ import os from 'node:os';
 import { isKimSeat, listItems, updateInboxItem } from './kim-inbox.mjs';
 import { inboxSummary, revisionOf, relayDue, jstDay, readRelayState, writeRelayState, interactiveInboxSession } from './lib/kim-inbox-relay-state.mjs';
 
-const normalize = text => String(text).replace(/\s+/g, ' ').trim();
+const normalize = text => String(text).replace(/[D800-Dbff](?![Dc00-Dfff])|(?<![D800-Dbff])[Dc00-Dfff]/g, '').replace(/s+/g, ' ').trim();
 export function evaluateKimInboxRelay(input = {}, { home = process.env.ORGIAST_HOME || os.homedir(), raw = '', text = '', now = Date.now(), env = process.env } = {}) {
   const sessionId = input.session_id || input.sessionId;
   const pass = { decision: 'pass', receipts: [] };

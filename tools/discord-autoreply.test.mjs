@@ -56,10 +56,10 @@ function prior(overrides = {}) {
 }
 function kim(overrides = {}) { return message({ id: '300', author: { id: KIM }, content: '締切は木曜です。', message_reference: { message_id: '200' }, ...overrides }); }
 
-test('baselineより古い投稿、24h超、bot、kim、自分、除外chを除外', async t => {
+test('baselineより古い投稿、7日超、bot、kim、自分、除外chを除外', async t => {
   const f = fixture(t, { messages: [
     message({ id: '1', timestamp: new Date(NOW - 3000).toISOString() }),
-    message({ id: '2', timestamp: new Date(NOW - 25 * 3600000).toISOString() }),
+    message({ id: '2', timestamp: new Date(NOW - 8 * 86400000 - 1).toISOString() }),
     message({ id: '3', author: { id: 'bot', bot: true } }), message({ id: '4', author: { id: KIM } }),
     message({ id: '5', author: { id: 'self' } }), message({ id: '6', channel_id: 'excluded' }),
     message({ id: '7', channel_id: 'notify' }), message({ id: '8', channel_id: 'autopilot' }),
@@ -223,10 +223,23 @@ test('判断が必要ならneeds_reply=falseでも暫定回答、dry-runではas
   assert.deepEqual(items.map(i => i.kind), ['ask', 'info']);
 });
 
-test('baselineより新しくても25時間前の投稿は送信もaskもなし', async t => {
-  const f = fixture(t, { messages: [message({ timestamp: new Date(NOW - 25 * 3600000).toISOString() })],
+test('baselineより新しくても7日より前の投稿は送信もaskもなし', async t => {
+  const f = fixture(t, { messages: [message({ timestamp: new Date(NOW - 8 * 86400000 - 1).toISOString() })],
     addItemImpl: async () => assert.fail('must not record inbox item') });
   f.state.baselineTs = NOW - 48 * 3600000; f.writeState();
+  const result = await runOnce(f.options);
+  assert.equal(result.skipped.old, 1); assert.equal(f.posts().length, 0); assert.equal(f.llmCalls.length, 0);
+});
+test('3日前のメンション → 回答対象', async t => {
+  const f = fixture(t, { messages: [message({ timestamp: new Date(NOW - 3 * 86400000).toISOString() })] });
+  f.state.baselineTs = NOW - 10 * 86400000; f.writeState();
+  const result = await runOnce(f.options);
+  assert.equal(result.replied, 1); assert.equal(f.posts().length, 1);
+});
+test('8日前のメンション → old', async t => {
+  const f = fixture(t, { messages: [message({ timestamp: new Date(NOW - 8 * 86400000 - 1).toISOString() })],
+    addItemImpl: async () => assert.fail('must not record inbox item') });
+  f.state.baselineTs = NOW - 10 * 86400000; f.writeState();
   const result = await runOnce(f.options);
   assert.equal(result.skipped.old, 1); assert.equal(f.posts().length, 0); assert.equal(f.llmCalls.length, 0);
 });

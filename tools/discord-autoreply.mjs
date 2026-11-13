@@ -23,6 +23,7 @@ const [{ readToken }, { PROVIDERS, parseEnvText },
 import { addItem as addKimInboxItem } from './kim-inbox.mjs';
 
 const HOUR = 3600000;
+export const MAX_REPLY_AGE = 7 * 24 * HOUR;
 const REAUTHORIZE_URL = 'https://discord.com/oauth2/authorize?client_id=1511684767546871818&scope=bot&permissions=8';
 const due = (ts, now, interval) => !Number.isFinite(ts) || now - ts >= interval;
 
@@ -553,7 +554,7 @@ export async function runOnce(options = {}) {
         const skip = reason => { result.skipped[reason]++; };
         if (m.author?.bot || !m.author?.id || [kimId, runtime.selfId].includes(m.author.id)) { skip('bot'); continue; }
         const ts = millis(m.timestamp);
-        if (!Number.isFinite(ts) || ts < millis(state.baselineTs) || ts < now - 24 * HOUR || ts > now) { skip('old'); continue; }
+        if (!Number.isFinite(ts) || ts < millis(state.baselineTs) || ts < now - MAX_REPLY_AGE || ts > now) { skip('old'); continue; }
         if (excluded.has(m.channel_id)) { skip('excluded'); continue; }
         try {
           const checkReplies = async () => {

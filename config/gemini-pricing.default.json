@@ -8,6 +8,7 @@
     "gemini-3.8-flash": { "inputUsdPerMillion": 0.75, "outputUsdPerMillion": 3.75, "cachedInputUsdPerMillion": 0.075, "batchMultiplier": 0.5, "searchUsdPerCall": null },
     "gemini-4-argon": { "inputUsdPerMillion": 2.0, "outputUsdPerMillion": 10.0, "cachedInputUsdPerMillion": 0.1, "batchMultiplier": 0.5, "searchUsdPerCall": null, "promoEnd": "2026-11-30" },
     "gemini-4-carbon": { "inputUsdPerMillion": 1.0, "outputUsdPerMillion": 5.0, "cachedInputUsdPerMillion": 0.05, "batchMultiplier": 0.5, "searchUsdPerCall": null, "promoEnd": "2026-11-30" },
-    "gemini-4-hydrogen": { "inputUsdPerMillion": 1.5, "outputUsdPerMillion": 7.5, "cachedInputUsdPerMillion": 0.15, "batchMultiplier": 0.5, "searchUsdPerCall": null }
+    "gemini-4-hydrogen": { "inputUsdPerMillion": 1.5, "outputUsdPerMillion": 7.5, "cachedInputUsdPerMillion": 0.15, "batchMultiplier": 0.5, "searchUsdPerCall": null },
+    "gemini-decision-1": { "inputUsdPerMillion": 0.1, "outputUsdPerMillion": 0, "cachedInputUsdPerMillion": null, "batchMultiplier": null, "searchUsdPerCall": null, "_note": "Decisions API (v1beta). Output always 0. No cache/batch/flex. Launched 2026-11-11." }
   }
 }

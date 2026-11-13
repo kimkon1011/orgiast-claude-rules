@@ -611,6 +611,12 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/register-discord-beeper-autoreply.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "Beeper 経由 Discord 自動返信のタスク登録。Beeper は kim-PC のみ設定"
+    },
+    {
       "path": "tools/register-discord-task-digest.ps1",
       "scope": "kim-only",
       "step": null,

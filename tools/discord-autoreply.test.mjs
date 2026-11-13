@@ -97,7 +97,7 @@ test('質問にprefixとmessage_reference付きPOST、履歴とログを保存',
   const f = fixture(t); const result = await runOnce(f.options);
   assert.equal(result.replied, 1); assert.equal(result.errors.length, 0);
   const body = f.posts()[0].body;
-  assert.ok(body.content.startsWith('【Claude自動返信】\n'));
+  assert.ok(body.content.startsWith('【kimのClaudeによる代理回答】\n'));
   assert.deepEqual(body.message_reference, { message_id: '100' });
   assert.deepEqual(body.allowed_mentions, { parse: [], replied_user: true });
   assert.equal(f.readState().replies[0].replyId, '200');
@@ -105,11 +105,15 @@ test('質問にprefixとmessage_reference付きPOST、履歴とログを保存',
   assert.equal(f.llmCalls[0].category, 'jp_reply');
   await runOnce(f.options); assert.equal(f.posts().length, 1);
 });
-test('判断待ちはnotifyKimに1回', async t => {
-  const f = fixture(t, { llmResult: { ...decision, needs_kim_decision: true } });
-  await runOnce(f.options); await runOnce(f.options);
-  assert.equal(f.notifications.length, 1); assert.match(f.notifications[0], /判断待ち: #相談/);
-  assert.match(f.notifications[0], /https:\/\/discord.com\/channels\//);
+test('判断待ちはkim-inboxに保存', async t => {
+  const inboxItems = [];
+  const f = fixture(t, { llmResult: { ...decision, needs_kim_decision: true }, addItemImpl: async (home, item) => { inboxItems.push(item); return { id: 'ki-1' }; } });
+  await runOnce(f.options);
+  assert.equal(f.posts().length, 1);
+  assert.ok(f.posts()[0].body.content.includes('金の確認待ちに登録しました'));
+  assert.equal(inboxItems.length, 2);
+  assert.equal(inboxItems[0].kind, 'ask');
+  assert.match(inboxItems[0].text, /\[Discord 判断待ち \(guild\)\]/);
 });
 test('生成中にkimが発言したら送信直前に止める', async t => {
   let count = 0;
@@ -136,7 +140,7 @@ test('kim訂正で例・ルール・事実を追記し自己返信だけPATCH', 
   assert.match(fs.readFileSync(f.file('rules.md'), 'utf8'), /- 締切は木曜/);
   assert.match(fs.readFileSync(f.file('knowledge.md'), 'utf8'), /- 定例の締切は木曜/);
   assert.equal(f.patches()[0].path, '/api/v10/channels/channel/messages/200');
-  assert.match(f.patches()[0].body.content, /^【Claude自動返信・kimが訂正済み/);
+  assert.match(f.patches()[0].body.content, /^【kimのClaudeによる代理回答・kimが訂正済み/);
   assert.equal(f.llmCalls[0].category, 'classification');
   await runOnce(f.options); assert.equal(f.patches().length, 1);
 });
@@ -192,7 +196,7 @@ test('dry-runはcontentを返すがPOST・通知・stateその他ファイルを
   const f = fixture(t, { llmResult: { ...decision, needs_kim_decision: true } });
   const before = fs.readFileSync(f.file('state.json'), 'utf8');
   const result = await runOnce({ ...f.options, dryRun: true });
-  assert.equal(result.wouldSend.length, 1); assert.match(result.wouldSend[0].content, /^【Claude自動返信】/);
+  assert.equal(result.wouldSend.length, 1); assert.match(result.wouldSend[0].content, /^【kimのClaudeによる代理回答】/);
   assert.equal(f.posts().length, 0); assert.equal(f.notifications.length, 0);
   assert.equal(fs.readFileSync(f.file('state.json'), 'utf8'), before);
   assert.deepEqual(fs.readdirSync(f.dir), ['state.json']);

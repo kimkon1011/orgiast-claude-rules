@@ -1,4 +1,4 @@
-﻿param([switch]$IdleOnly)
+param([switch]$IdleOnly)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -TypeDefinition @'
@@ -12,6 +12,9 @@ public static class DmIdle {
 '@
 $idle = [DmIdle]::Milliseconds()
 if ($IdleOnly -or $idle -lt 300000) { @{idleMs=$idle} | ConvertTo-Json -Compress; exit }
+$discordProc = Get-Process Discord -ErrorAction SilentlyContinue
+if (-not $discordProc) { @{idleMs=$idle; original=''; unread=@()} | ConvertTo-Json -Compress; exit }
+
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $AE = [System.Windows.Automation.AutomationElement]
 $Scope = [System.Windows.Automation.TreeScope]

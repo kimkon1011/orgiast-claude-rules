@@ -7,7 +7,7 @@ import { addCheck, isTimeOnlyCheck, main } from './auto-progress.mjs';
 import { run as runWatch, resumeSession, MAX_RESUMES_PER_RUN, MAX_RESUMES, migrateTimeOnlyChecks, migrateLegacyAddChecks, TIME_ONLY_REASON, LEGACY_ADD_CHECK_REASON } from './auto-progress-watch.mjs';
 import { ledgerFile, readLedger, writeLedger, applyPromise } from './auto-progress-ledger.mjs';
 import { formatDigest, run as digest } from './auto-progress-digest.mjs';
-import { listItems } from './kim-inbox.mjs';
+import { addItem, listItems } from './kim-inbox.mjs';
 const run = options => runWatch({ ...options, io: { ...notificationMocks, ...options.io } });
 
 const now = Date.parse('2026-11-02T03:00:00Z');
@@ -17,7 +17,7 @@ function setup(t, extra = {}) {
   const options = { home, now, cwd: home, session: 'scheduled', label: '予約作業', deadline: '+24h', startWhen: 'exit 0', nextClaude: '成果物を作って検証する', ...extra };
   return { home, options };
 }
-const ioBase = { clock: () => now, sheetConfig: () => null, transcriptFiles: [], digest: async () => ({}),
+const ioBase = { addKimInboxItem: (home, options) => addItem(home, { ...options, execImpl: async () => { throw Error('test: no forwarding'); } }), clock: () => now, sheetConfig: () => null, transcriptFiles: [], digest: async () => ({}),
   askLlm: () => assert.fail('予約中は停滞判定しない') };
 test('時計だけの判定は拒否し、成果物の判定は許可する', t => {
   const { options } = setup(t);
@@ -143,13 +143,14 @@ test('deferredは回数を消費せず次回再試行、doneで完了通知は�
     notifyOwner: async (_owner, text) => { notices.push(text); return { delivered: 'dm' }; } };
   await run({ home, now, io });
   let row = readLedger(ledgerFile(home))[0];
-  assert.equal(row.status, 'scheduled'); assert.equal(row.resumeCount, 0); assert.ok(row.resumeDeferredAt); assert.equal(notices.length, 1);
-  assert.match(notices[0], /自動再開を見送りました。理由: deferred。次回の枠回復後に自動で再試行します。/);
-  assert.match(notices[0], new RegExp(options.label)); assert.match(notices[0], new RegExp(options.nextClaude));
+  assert.equal(row.status, 'scheduled'); assert.equal(row.resumeCount, 0); assert.ok(row.resumeDeferredAt); assert.equal(notices.length, 0);
+  const ask = listItems(home).find(item => item.source === 'auto-progress-ready-deferred');
+  assert.equal(ask.kind, 'ask'); assert.equal(ask.priority, 'high');
+  assert.match(ask.text, /条件は達成/); assert.doesNotMatch(ask.text, /未達/);
   outcome = 'done'; await run({ home, now, io }); await run({ home, now, io });
   row = readLedger(ledgerFile(home))[0];
-  assert.equal(row.status, 'done'); assert.equal(calls, 2); assert.equal(notices.length, 2);
-  assert.equal(notices.filter(text => /自動再開を見送りました/.test(text)).length, 1);
+  assert.equal(row.status, 'done'); assert.equal(calls, 2); assert.equal(notices.length, 1);
+  assert.equal(listItems(home).filter(item => item.source === 'auto-progress-ready-deferred').length, 1);
   assert.equal(notices.filter(text => /完了/.test(text)).length, 1);
 });
 test('完了check併用は成果確認がexit 0のときだけdone', async t => {
@@ -171,7 +172,8 @@ test('needs_user / blocked / error と起動例外を記録する', async t => {
       if (state === 'throw') throw Error('起動失敗'); return { outcome: state, nextKim: 'なし' };
     } } });
     const row = readLedger(ledgerFile(home))[0];
-    assert.equal(row.status, state === 'needs_user' ? 'waiting_user' : 'open'); assert.ok(row.startedAt);
+    assert.equal(row.status, state === 'needs_user' ? 'waiting_user' : 'scheduled');
+    assert.equal(Boolean(row.startedAt), state === 'needs_user');
   }
 });
 test('dry-run・無人処理・時間予算では開始条件を実行しない', async t => {
@@ -195,52 +197,47 @@ test('静穏時間（JST 01:00）でも開始条件を確かめ、満たせば�
   assert.equal(started, 1);
   assert.equal(readLedger(ledgerFile(home)).at(-1).status, 'open');
 });
-test('期限超過は開始せず起票・通知し、再巡回で重複通知しない', async t => {
-  const { options, home } = setup(t); addCheck(options);
-  // nextKim に値を入れて再開しないことを確認
-  const pre = readLedger(ledgerFile(home));
-  pre[0].nextKim = 'kim が承認する';
-  writeLedger(ledgerFile(home), pre);
-  let notices = 0;
-  const io = { ...ioBase, executeCheck: () => assert.fail('期限超過'), resume: () => assert.fail('期限超過'),
-    notifyOwner: async () => { notices++; return { delivered: 'dm' }; } };
-  for (let i = 0; i < 2; i++) await run({ home, now: now + 10 * 86400000, io });
-  assert.equal(readLedger(ledgerFile(home))[0].status, 'start_overdue'); assert.equal(notices, 1);
-  assert.match(fs.readFileSync(path.join(home, '.claude', 'next-session.md'), 'utf8'), /成果物を作って検証する/);
+test('期限超過の scheduled・starting・start_overdue は high ask を1件だけ残し expired にする', async t => {
+  for (const status of ['scheduled', 'starting', 'start_overdue']) {
+    const { options, home } = setup(t); const original = addCheck(options);
+    writeLedger(ledgerFile(home), [{ ...original, status, startedAt: status === 'starting' ? options.now : '', checkText: '古川さんの返信本文' }]);
+    const io = { ...ioBase, executeCheck: () => assert.fail('期限超過'), resume: () => assert.fail('期限超過') };
+    for (let i = 0; i < 2; i++) await run({ home, now: now + 10 * 86400000, io });
+    assert.equal(readLedger(ledgerFile(home))[0].status, 'expired');
+    const asks = listItems(home).filter(item => item.source === 'auto-progress-start-expired');
+    assert.equal(asks.length, 1); assert.equal(asks[0].kind, 'ask'); assert.equal(asks[0].priority, 'high');
+    assert.match(asks[0].text, /期限切れ/); assert.match(asks[0].text, /古川さんの返信本文/);
+  }
 });
-test('期限超過・nextKim なしの予約行は再開を試み start_overdue にならない', async t => {
-  const { options, home } = setup(t); addCheck(options);
-  let resumeCalls = 0; const notices = [];
-  const io = { ...ioBase, executeCheck: () => assert.fail('期限超過でcheck不要'),
-    resume: async (row, opts) => { resumeCalls++; assert.equal(opts.reason, 'start-overdue'); return { outcome: 'progressed', state: 'progressed', reason: '着手した' }; },
-    notifyOwner: async (_owner, text, _opts) => { notices.push(text); return { delivered: 'dm' }; } };
-  await run({ home, now: now + 10 * 86400000, io });
-  assert.equal(resumeCalls, 1);
-  assert.notEqual(readLedger(ledgerFile(home))[0].status, 'start_overdue');
-  assert.ok(notices.some(text => /期限を過ぎた自動進行を再開しました/.test(text)));
+test('ready の再開失敗は本文付き ask を残し、再確認せず毎回再試行して2回で needs_user', async t => {
+  const { options, home } = setup(t, { session: '9873da23-test' }); addCheck(options);
+  let checks = 0, resumes = 0;
+  const io = { ...ioBase, executeCheck: () => { checks++; return { code: 0, text: '古川さんの返信本文' + 'あ'.repeat(700) }; },
+    resume: async () => { resumes++; return { outcome: 'deferred', reason: 'codex-do exit 1' }; } };
+  await run({ home, now, io });
+  const ask = listItems(home).find(item => item.source === 'auto-progress-ready-deferred');
+  assert.equal(ask.kind, 'ask'); assert.equal(ask.priority, 'high');
+  assert.match(ask.text, /条件は達成（自動再開に失敗）/); assert.match(ask.text, /セッション 9873da23/);
+  assert.match(ask.text, /古川さんの返信本文/); assert.doesNotMatch(ask.text, /未達/);
+  assert.equal(ask.text.split('確認結果: ')[1].split('\n')[0].length, 600);
+  assert.equal(readLedger(ledgerFile(home))[0].status, 'scheduled');
+  await run({ home, now: now + 1000, io });
+  assert.equal(readLedger(ledgerFile(home))[0].status, 'needs_user');
+  await run({ home, now: now + 2000, io });
+  assert.equal(checks, 1); assert.equal(resumes, 2);
+  assert.equal(listItems(home).filter(item => item.source === 'auto-progress-ready-deferred').length, 1);
 });
-test('期限超過・nextKim に値がある予約行は再開せず start_overdue になる', async t => {
-  const { options, home } = setup(t); addCheck(options);
-  const pre = readLedger(ledgerFile(home));
-  pre[0].nextKim = 'kim が承認する';
-  writeLedger(ledgerFile(home), pre);
-  const io = { ...ioBase, executeCheck: () => assert.fail('期限超過'),
-    resume: () => assert.fail('nextKim ありでは再開しない'),
-    notifyOwner: async () => { return { delivered: 'dm' }; } };
-  await run({ home, now: now + 10 * 86400000, io });
-  assert.equal(readLedger(ledgerFile(home))[0].status, 'start_overdue');
-});
-test('期限超過・nextKim なしでも resumeCount 上限超過の予約行は start_overdue になる', async t => {
-  const { options, home } = setup(t); addCheck(options);
-  const pre = readLedger(ledgerFile(home));
-  pre[0].nextKim = 'なし';
-  pre[0].resumeCount = MAX_RESUMES;
-  writeLedger(ledgerFile(home), pre);
-  const io = { ...ioBase, executeCheck: () => assert.fail('期限超過'),
-    resume: () => assert.fail('resumeCount 上限で再開しない'),
-    notifyOwner: async () => { return { delivered: 'dm' }; } };
-  await run({ home, now: now + 10 * 86400000, io });
-  assert.equal(readLedger(ledgerFile(home))[0].status, 'start_overdue');
+test('Codex の失敗時は既存 CLI の同一セッション再開を試す', async t => {
+  const { options, home } = setup(t); const row = addCheck(options); const calls = [];
+  const result = await resumeSession(row, { home, reason: 'scheduled-start', io: { executable: 'mock',
+    runChild: async (_exe, _prompt, _cwd, _history, _timeout, opts) => {
+      calls.push(opts);
+      if (calls.length === 1) return { status: 'failure', executorUsed: 'codex-do', deferred: true };
+      fs.writeFileSync(path.join(home, '.claude', `auto-progress-resume-${row.sessionId.slice(0, 8)}.json`), JSON.stringify({ state: 'done', evidence: '完了' }));
+      return { status: 'success', executorUsed: 'claude' };
+    } } });
+  assert.equal(result.state, 'done'); assert.equal(calls.length, 2);
+  assert.equal(calls[1].executor, 'claude'); assert.equal(calls[1].resumeSessionId, row.sessionId);
 });
 test('巡回あたりの起動上限を予約にも適用する', async t => {
   const { options, home } = setup(t);
@@ -268,4 +265,20 @@ test('定期digestに開始予約と期限超過が出る', async t => {
     assert.ok(messages.some(message => /進行中 1件[\s\S]*予約作業/.test(message)));
     assert.equal(messages.length, 1);
   }
+});
+
+test('静穏時間の再開失敗も ask を保存し、通知保存失敗は次回復旧する', async t => {
+  const { options, home } = setup(t); addCheck(options);
+  const night = Date.parse('2026-11-02T16:00:00Z');
+  let fail = true;
+  const io = { ...ioBase, clock: () => night,
+    executeCheck: () => ({ code: 0, text: '夜間に届いた回答' }),
+    resume: async () => ({ outcome: 'error', reason: '起動失敗' }),
+    addKimInboxItem: (home, options) => { if (fail) throw Error('disk unavailable'); return ioBase.addKimInboxItem(home, options); } };
+  const failed = await run({ home, now: night, io });
+  assert.ok(failed.errors.some(error => /disk unavailable/.test(error)));
+  assert.equal(readLedger(ledgerFile(home))[0].status, 'scheduled');
+  fail = false;
+  await run({ home, now: night, io });
+  assert.equal(listItems(home).filter(item => item.kind === 'ask' && /夜間に届いた回答/.test(item.text)).length, 1);
 });

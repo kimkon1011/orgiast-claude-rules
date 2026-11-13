@@ -27,3 +27,10 @@ for (const [name, text] of [
 ]) {
   test(`${name}を許可する`, () => assert.equal(classifyKimDm(text).allowed, true));
 }
+
+
+test('recipient identity is shared across IDs, names and owner aliases', async () => {
+  const { isKimRecipient, KIM_DISCORD_USER_ID } = await import('./kim-dm-policy.mjs');
+  for (const recipient of [{ id: KIM_DISCORD_USER_ID }, { name: ' KIM ' }, { name: '金功勇' }, { owner: 'KIM@ORGIAST.JP' }, { defaultKim: true }]) assert.equal(isKimRecipient(recipient), true);
+  for (const recipient of [{ id: 'staff' }, { owner: 'cr@orgiast.jp' }, {}]) assert.equal(isKimRecipient(recipient), false);
+});

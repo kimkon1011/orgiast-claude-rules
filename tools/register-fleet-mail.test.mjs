@@ -9,7 +9,8 @@ function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-register-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const dir = path.join(home, '.claude'); fs.mkdirSync(dir); fs.writeFileSync(path.join(dir, 'fleet-sheet.env'), 'FLEET_SHEET_URL=test');
   const marker = path.join(dir, '.fleet-mail-last-poll.json'); fs.writeFileSync(marker, '{}');
-  const now = fs.statSync(marker).mtimeMs, calls = [], output = [];
+  const now = Date.now(), calls = [], output = [];
+  fs.writeFileSync(marker, JSON.stringify({ at: new Date(now).toISOString() }));
   const deps = { home, now: () => now, platform: 'win32', ensure: true, quiet: true, stdout: text => output.push(text), spawnImpl: (cmd, args, opts) => { calls.push({ cmd, args, opts }); return { status: 0, stdout: args.includes('-Command') ? 'ok' : '' }; } };
   return { home, dir, marker, now, calls, output, deps };
 }

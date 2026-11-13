@@ -72,6 +72,7 @@ function _fleetMailCellText_(value) {
   return String(value);
 }
 function _fleetMailWrite_(sheet, row, values) {
+  if (_fleetMailTiming_) _fleetMailTiming_.writes++;
   const range = sheet.getRange(row, 1, 1, FLEET_MAIL_HEADERS_.length);
   // Literal rich text prevents messages beginning with '=' becoming formulas.
   const expected = values.map(_fleetMailCellText_);
@@ -79,10 +80,19 @@ function _fleetMailWrite_(sheet, row, values) {
   SpreadsheetApp.flush();
   if (JSON.stringify(range.getValues()[0].map(_fleetMailCellText_)) !== JSON.stringify(expected)) throw new Error('fleet-mail read-back mismatch');
 }
-function _fleetMailLocked_(action, lookupId) {
+var _fleetMailTiming_ = null;
+function _fleetMailTimingSave_() {
+  if (!_fleetMailTiming_) return;
+  try { PropertiesService.getScriptProperties().setProperty('FLEET_MAIL_TIMING', JSON.stringify(_fleetMailTiming_));
+    PropertiesService.getScriptProperties().setProperty('FLEET_MAIL_TIMING_' + _fleetMailTiming_.operation, JSON.stringify(_fleetMailTiming_)); } catch (error) {}
+}
+function _fleetMailLocked_(action, lookupId, operation) {
   const lock = LockService.getScriptLock();
   const alreadyLocked = typeof lock.hasLock === 'function' && lock.hasLock();
   if (!alreadyLocked && !lock.tryLock(20000)) return { ok: false, status: 503, error: 'busy' };
+  const started = Date.now();
+  _fleetMailTiming_ = { operation: operation || 'mail', startedAt: new Date(started).toISOString(), phase: 'read', writes: 0, alertWrites: 0 };
+  _fleetMailTimingSave_();
   try {
     const sheet = _fleetMailSheet_();
     let rows = [];
@@ -94,8 +104,17 @@ function _fleetMailLocked_(action, lookupId) {
     } else if (count > 0) {
       rows = sheet.getRange(2, 1, count, FLEET_MAIL_HEADERS_.length).getValues().map(fleetMailObject);
     }
+    _fleetMailTiming_.rows = rows.length;
+    _fleetMailTiming_.readMs = Date.now() - started;
+    _fleetMailTiming_.phase = 'action';
+    _fleetMailTimingSave_();
     return action(sheet, rows, Date.now());
-  } finally { if (!alreadyLocked) lock.releaseLock(); }
+  } finally {
+    _fleetMailTiming_.phase = 'finished';
+    _fleetMailTiming_.durationMs = Date.now() - started;
+    _fleetMailTimingSave_();
+    if (!alreadyLocked) lock.releaseLock();
+  }
 }
 function sendFleetMail(payload) {
   return _fleetMailLocked_(function(sheet, rows, now) {
@@ -179,7 +198,7 @@ function pollFleetMail(payload) {
     // 実 poll の成功時だけ最終 poll を記録する（dryRun では記録しない）。記録失敗は poll 成功を妨げない。
     if (!payload.dryRun) { try { fleetRecordPoll_(properties, payload.to, now); } catch (error) {} }
     return { ok: true, messages: messages };
-  });
+  }, null, 'poll');
 }
 function _fleetMailDigest_(text) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, text).map(function(b) { return ('0' + ((b + 256) % 256).toString(16)).slice(-2); }).join('').slice(0, 16);
@@ -318,6 +337,10 @@ function _fleetMailAlertsSheet_() {
   return sheet;
 }
 function _fleetMailAlertWrite_(sheet, row, values) {
+  if (_fleetMailTiming_) {
+    _fleetMailTiming_.alertWrites++;
+    if (_fleetMailTiming_.alertWrites % 25 === 0) _fleetMailTimingSave_();
+  }
   const range = sheet.getRange(row, 1, 1, FLEET_MAIL_ALERT_HEADERS_.length);
   const strings = values.map(function(v) { return String(v == null ? '' : v); });
   range.setRichTextValues([strings.map(function(v) { return SpreadsheetApp.newRichTextValue().setText(v).build(); })]);
@@ -357,6 +380,7 @@ function fleetMailSweep() {
     });
     const alertsSheet = _fleetMailAlertsSheet_();
     const alerts = _fleetMailAlertsRead_(alertsSheet);
+    const persistedAlerts = alerts.length;
     rows.forEach(function(mail) {
       try {
         const kind = _fleetMailAlertKind_(mail, now);
@@ -365,16 +389,23 @@ function fleetMailSweep() {
         let index = alerts.findIndex(function(alert) { return alert.id === mail.id; });
         if (index < 0) { index = alerts.length; alerts.push({ id: mail.id, firstAt: new Date(now).toISOString(), lastNotifiedAt: '', notifiedCount: 0 }); }
         const alert = alerts[index];
+        const before = FLEET_MAIL_ALERT_HEADERS_.map(function(key) { return String(alert[key] == null ? '' : alert[key]); });
         alert.kind = kind; alert.to = _fleetMailAlertText_(mail.to); alert.from = _fleetMailAlertText_(mail.from); alert.why = _fleetMailAlertText_(mail.why);
         // Count is per six-hour notification cycle; the last successful time is retained.
         if (_fleetMailAlertDue_(alert, now)) alert.notifiedCount = 0;
-        _fleetMailAlertSave_(alertsSheet, index, alert); alerted++;
+        const after = FLEET_MAIL_ALERT_HEADERS_.map(function(key) { return String(alert[key] == null ? '' : alert[key]); });
+        // An unchanged alert is already persisted and verified. Rewriting thousands
+        // of rows every ten minutes holds the script-wide lock for minutes.
+        if (JSON.stringify(before) !== JSON.stringify(after) || index >= persistedAlerts) {
+          _fleetMailAlertSave_(alertsSheet, index, alert);
+        }
+        alerted++;
         // kim 宛 Discord 報告は停止（2026-10-27）。通知待ちは維持し、
         // watchdog が kim-inbox / kim の許可リストに従って配達後に確認する。
       } catch (error) { console.warn('fleet-mail: alert failed=1'); }
     });
     return { ok: true, expired: expired, active: active, alerted: alerted, notified: notified };
-  });
+  }, null, 'sweep');
 }
 function getFleetMailAlerts(payload) {
   return _fleetMailLocked_(function(sheet, rows, now) {
@@ -419,4 +450,17 @@ function traceFleetMail(payload) {
       return result;
     }) };
   });
+}
+
+// Authenticated, metadata-only and lock-free so lock contention remains observable.
+function describeFleetMailHealth() {
+  const props = PropertiesService.getScriptProperties();
+  let timing = null;
+  try { timing = JSON.parse(props.getProperty('FLEET_MAIL_TIMING') || 'null'); } catch (error) {}
+  let sweep = null;
+  try { sweep = JSON.parse(props.getProperty('FLEET_MAIL_TIMING_sweep') || 'null'); } catch (error) {}
+  return { ok: true, at: new Date().toISOString(), timing: timing, sweep: sweep,
+    triggers: ScriptApp.getProjectTriggers().map(function(t) {
+      return { handler: t.getHandlerFunction(), eventType: String(t.getEventType()) };
+    }) };
 }

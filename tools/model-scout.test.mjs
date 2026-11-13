@@ -294,3 +294,29 @@ test('native DeepSeek route is compared using the matching OpenRouter catalog pr
   const routing = { categories: { summarize: { provider: 'deepseek', model: 'deepseek-flash' } } };
   assert.equal(selectCandidates([candidate], [current], routing).candidates.length, 0, 'higher gateway cost must not look cheaper than native legacy pricing');
 });
+
+test('例外時に reason と stage がログに出力され秘密値がマスクされる', async (t) => {
+  const f = fixture(t);
+  const result = await runScout({
+    ...f.options,
+    fetchImpl: async () => { throw new Error('catalog fetch failed with SECRET_KEY=abcdef123456'); }
+  });
+  assert.equal(result.ok, false);
+  const logged = f.output.join('\n');
+  assert.match(logged, /偵察失敗/);
+  assert.match(logged, /stage=fetch/);
+  assert.match(logged, /reason=Error: catalog fetch failed with/);
+  assert.doesNotMatch(logged, /SECRET_KEY=abcdef123456/);
+});
+
+test('現行の配送種別 (session-inbox, spooled, webhook, suppressed, dm) で state が正常に保存される', async (t) => {
+  for (const delivered of ['session-inbox', 'spooled', 'webhook', 'suppressed', 'dm']) {
+    const f = fixture(t);
+    const result = await runScout({
+      ...f.options,
+      notify: async () => ({ delivered })
+    });
+    assert.equal(result.ok, true, `delivered=${delivered} should succeed`);
+    assert.equal(fs.existsSync(path.join(f.dir, 'model-scout-state.json')), true, `state should be saved for delivered=${delivered}`);
+  }
+});

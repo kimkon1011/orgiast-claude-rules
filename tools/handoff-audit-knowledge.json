@@ -306,6 +306,12 @@
     "source": "handoff-audit-candidates.jsonl tool-name-route（route=Sheets API）: 7ef2fd3f94f75a307f8d76af10d9b681cb79018cf0d06ea21a515d13f033728a / 2026-11-07 route を手順文へ書き直して採用"
   },
   {
+    "pattern": "作業完了報告・状態確認",
+    "route": "完了報告や状態確認は、外部システムの直接照会で行う。報告前に当ターンで freee API / Supabase / アプリ管理 API 等を実叩きし、その実応答を根拠に「登録された」「反映された」と書く。Drive MCP はファイル操作ツールであって完了確認の正本ではない。具体的な照会先は対象システムごとに変わる: (1) freee への登録完了は `GET /api/v1/deals/{id}` で deals の存在・内容を read-back する。(2) アプリの状態確認は管理 API（keiri-hub の `/api/...` 等）を叩く。(3) GitHub PR のマージ状態は `gh pr view` の mergedAt で確認する。(4) Vercel デプロ���完了は `vercel inspect <url>` で Ready を確認する。照会に失敗した項目は実際のエラー本文を貼り、確率付きの否定や「たぶん大丈夫」「user が確認して」への丸投げをしない。Drive MCP でのファイル存在確認だけでは外部システムへの反映完了の証拠にならない。codex-do.mjs では完了確認を代替できない。",
+    "confidence": "high",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=Drive MCP）: 6177d2b5791b04eb366ac768c2ebcc9b4220df1f7a584cc4dd01b35a42ced92f / 2026-11-13 route を手順文へ書き直して採用"
+  },
+  {
     "pattern": "公開価格の改定判断を kim に投げる",
     "route": "価格変更の可否は rule 3（OAuth/支払い/アカウント/物理作業）の4理由に該当しない。kim に選択を投げず Claude が決定し、変更実装・反映・読み戻しまで当ターンで完了する。経営判断として明確な選択肢（複数パターンの金額と影響範囲）を示して kim に委ねる必要がある場合も、判断項目を1つに絞り、根拠となるデータを併記した上で依頼する。codex-do.mjs では価格改定の判断を代替できない。",
     "confidence": "medium",
@@ -346,5 +352,11 @@
     "route": "PR作成と着地の確認は Claude が行う。codex-do.mjs は実装を委譲するだけであり、PR作成・着地確認の責任を委譲しない。正しい手順: (a) codex-do.mjs で実装が完了したら、Claude が `node tools/pr-land.mjs --title \"<題>\" --body-file <本文>` で base へ push し PR を作成する（または gh CLI で fork 跨ぎ PR を作成する）。(b) `automerge` ラベルを付ける（鍵関連は安全弁パスとして pr-merge.mjs のレビュー・SHA 検証を通す）。(c) CI の完了を `gh run list -R <owner>/<repo> --limit 5 --json workflowName,conclusion,headBranch` で確認し、緑ならマージされるまで待つ。CI が赤なら直す（3回直して赤のままなら理由を記録する）。(d) マージ後は `gh pr view <番号> -R <owner>/<repo> --json state,mergedAt` で着地を確認し、`node tools/commit-landed.mjs <sha>` で取込を確定する。codex-do.mjs の exit code だけで「完了」と判断せず、着地まで Claude が確認する。",
     "confidence": "high",
     "source": "2026-11-11 handoff-audit-candidates tool-name-route レビュー（元: codex-do.mjs 道具名のみ→手順文に書換）"
+  },
+  {
+    "pattern": "作業完了報告・状態確認",
+    "route": "完了報告と状態確認は「Drive MCP」のような汎用ツール名で抽象化せず、確認対象ごとに特定の API/ツールを呼び出して実データを根拠に書く。Drive 上のファイル状態（存在・更新日時・中身）は DWD(kim impersonate / drive スコープ)で Drive API v3 の files.get（alt=media または export）と files.list を直接叩く（Drive MCP は使わない）。スプレッドシートの内容は SA 直 JWT（`aujust-sales-automation/.gcp/sheets-sa.json`、scope=`https://www.googleapis.com/auth/spreadsheets.readonly`）で `GET /v4/spreadsheets/{id}?fields=properties.title,sheets.properties` と `GET /v4/spreadsheets/{id}/values/{tab}!A1:BZ400` を叩く（詳細は knowledge entry「Google スプレッドシートの書き込み結果検証」の検証4点）。GitHub の状態は `gh pr view <番号> -R <owner>/<repo> --json state,mergedAt`、`gh run list -R <owner>/<repo> --limit 5 --json status,conclusion,headSha`、`gh api repos/<owner>/<repo>/<path>` で直接照会する。Vercel の反映確認は `VERCEL_TOKEN=... vercel inspect <本番URL>` で Ready と id/created を確認する。コミットの取込は squash マージで is-ancestor が偽になるため `node tools/commit-landed.mjs <sha>` を使う。報告は「確認要素 × 照会ツール × 実応答データ」の検証表で出し、照会に失敗した項目は実際の error 本文を添えて「未確認」と書く。確率付き否定や「user が確認して」への丸投げをしない。実例: 2026-09-20 に Drive API で旧版ファイルの trash 候補を列挙し kim への手渡しにした（knowledge entry「Drive 上の旧版ファイルをゴミ箱へ」）。",
+    "confidence": "high",
+    "source": "2026-11-13 handoff-audit-candidates tool-name-route レビュー（元: pattern「作業完了報告・状態確認」route が「Drive MCP」道具名のみだったため手順文に書換）"
   }
 ]

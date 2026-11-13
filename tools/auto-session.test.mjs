@@ -1365,3 +1365,67 @@ test('runChild は冷却中・失敗時の codex-do と保留・最終フォー�
     fs.rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
 });
+
+test('runChild に resumeSessionId を渡すと executor 設定にかかわらず claude レーンで起動する', { skip: process.platform === 'win32' ? 'shebang スタブは Windows で起動不可' : false }, async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-resume-'));
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  const configDir = path.join(home, '.claude');
+  const toolsDir = path.join(home, 'tools');
+  fs.mkdirSync(configDir);
+  fs.mkdirSync(toolsDir);
+  const traceFile = path.join(home, 'trace.jsonl');
+  const trace = `fs.appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ lane: process.env.ORGIAST_HEADLESS_JOB, args: process.argv.slice(2) }) + '\\n');`;
+  const script = (code) => `import fs from 'node:fs'; const stdin = fs.readFileSync(0, 'utf8'); ${trace} process.exitCode = ${code};`;
+  try {
+    // cheap-code が既定でも resumeSessionId が指定されれば claude レーンを使う
+    fs.writeFileSync(path.join(configDir, 'auto-session.env'), 'ORGIAST_AUTO_SESSION_EXECUTOR=cheap-code\nORGIAST_AUTO_SESSION_PROVIDER=deepseek\n');
+    fs.writeFileSync(path.join(toolsDir, 'cheap-code.mjs'), script(0));
+    const claudeFile = path.join(home, 'claude-stub');
+    fs.writeFileSync(claudeFile, `#!${process.execPath}\n(async () => { const fs = require('node:fs'); let stdin = ''; for await (const chunk of process.stdin) stdin += chunk; ${trace} })();\n`, { mode: 0o755 });
+    const result = await runChild(claudeFile, 'resume test', home, home, 5000, { executorRoot: home, resumeSessionId: 'test-session-123' });
+    // claude レーンが使われ、cheap-code は起動しない
+    assert.equal(result.executorUsed, 'claude');
+    assert.equal(result.status, 'success');
+    const rows = fs.readFileSync(traceFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].lane, 'auto-session:fallback-claude');
+    // --resume 引数が渡っている
+    assert.ok(rows[0].args.includes('--resume'));
+    assert.ok(rows[0].args.includes('test-session-123'));
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});
+
+test('runChild に resumeSessionId を渡すと claude が失敗しても cheap-code にフォールバックしない', { skip: process.platform === 'win32' ? 'shebang スタブは Windows で起動不可' : false }, async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-resume-fail-'));
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  const configDir = path.join(home, '.claude');
+  const toolsDir = path.join(home, 'tools');
+  fs.mkdirSync(configDir);
+  fs.mkdirSync(toolsDir);
+  const traceFile = path.join(home, 'trace.jsonl');
+  const trace = `fs.appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ lane: process.env.ORGIAST_HEADLESS_JOB }) + '\\n');`;
+  const script = (code) => `import fs from 'node:fs'; ${trace} process.exitCode = ${code};`;
+  try {
+    fs.writeFileSync(path.join(configDir, 'auto-session.env'), 'ORGIAST_AUTO_SESSION_EXECUTOR=cheap-code\nORGIAST_AUTO_SESSION_PROVIDER=deepseek\nORGIAST_AUTO_SESSION_CLAUDE_FALLBACK=on\n');
+    fs.writeFileSync(path.join(toolsDir, 'cheap-code.mjs'), script(0));
+    const claudeFile = path.join(home, 'claude-stub');
+    fs.writeFileSync(claudeFile, `#!${process.execPath}\n(async () => { const fs = require('node:fs'); ${trace} process.exitCode = 1; })();\n`, { mode: 0o755 });
+    const result = await runChild(claudeFile, 'resume test', home, home, 5000, { executorRoot: home, resumeSessionId: 'test-session-456' });
+    // claude が失敗しても cheap-code にはフォールバックせず、failure で返る
+    assert.equal(result.executorUsed, 'claude');
+    assert.equal(result.status, 'failure');
+    assert.equal(result.fallbackToClaude, false);
+    const rows = fs.readFileSync(traceFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(rows.length, 1); // cheap-code は起動していない
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});

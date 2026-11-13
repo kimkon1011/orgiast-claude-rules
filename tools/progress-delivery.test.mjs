@@ -29,7 +29,8 @@ test('DONE sibling supplies all eight approvals, replacing stale nextKim=none; s
  assert.doesNotMatch(item.text,/kim がすること: なし/);
  assert.equal(patches.at(-1).doneNotifyPending,false);assert.ok(patches.at(-1).doneInboxId);
  await deliverDoneInbox(h,[row],'完了');assert.equal(listItems(h).length,1);
- const ctx=selectContext([item],{sessionId:'unrelated'});assert.match(ctx,/承認項目8/);
+ const ctx=selectContext([item],{sessionId:'unrelated'});assert.match(ctx,/kim の承認待ち 8 件/);
+ assert.ok(ctx.includes(item.id));assert.doesNotMatch(ctx,/承認項目8/); // full choices stay in the durable item, injection is a one-line summary
 });
 test('6-hour progress refresh keeps one record, reports errors and last log lines, and reopens seen info',async t=>{
  const h=home(t);const log=path.join(h,'job.log');fs.writeFileSync(log,'first\r\nround 2\r\nstill running\r\n');

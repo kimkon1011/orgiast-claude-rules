@@ -1,9 +1,11 @@
+import { createServer, request as httpRequest } from 'node:http';
+import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { runOnce, main, createDiscord, createLlm, contentFor, parseJson, combinePermissions } from './discord-autoreply.mjs';
+import { runOnce, main, createDiscord, discordRequest, ensureTaskPriority, createLlm, contentFor, parseJson, combinePermissions } from './discord-autoreply.mjs';
 
 const NOW = Date.parse('2026-10-09T03:00:00Z');
 const KIM = '715210673642012733';
@@ -95,7 +97,7 @@ test('質問にprefixとmessage_reference付きPOST、履歴とログを保存',
   const f = fixture(t); const result = await runOnce(f.options);
   assert.equal(result.replied, 1); assert.equal(result.errors.length, 0);
   const body = f.posts()[0].body;
-  assert.ok(body.content.startsWith('【Claude自動返信】\n'));
+  assert.ok(body.content.startsWith('【kimのClaudeによる代理回答】\n'));
   assert.deepEqual(body.message_reference, { message_id: '100' });
   assert.deepEqual(body.allowed_mentions, { parse: [], replied_user: true });
   assert.equal(f.readState().replies[0].replyId, '200');
@@ -103,11 +105,15 @@ test('質問にprefixとmessage_reference付きPOST、履歴とログを保存',
   assert.equal(f.llmCalls[0].category, 'jp_reply');
   await runOnce(f.options); assert.equal(f.posts().length, 1);
 });
-test('判断待ちはnotifyKimに1回', async t => {
-  const f = fixture(t, { llmResult: { ...decision, needs_kim_decision: true } });
-  await runOnce(f.options); await runOnce(f.options);
-  assert.equal(f.notifications.length, 1); assert.match(f.notifications[0], /判断待ち: #相談/);
-  assert.match(f.notifications[0], /https:\/\/discord.com\/channels\//);
+test('判断待ちはkim-inboxに保存', async t => {
+  const inboxItems = [];
+  const f = fixture(t, { llmResult: { ...decision, needs_kim_decision: true }, addItemImpl: async (home, item) => { inboxItems.push(item); return { id: 'ki-1' }; } });
+  await runOnce(f.options);
+  assert.equal(f.posts().length, 1);
+  assert.ok(f.posts()[0].body.content.includes('金の確認待ちに登録しました'));
+  assert.equal(inboxItems.length, 2);
+  assert.equal(inboxItems[0].kind, 'ask');
+  assert.match(inboxItems[0].text, /\[Discord 判断待ち \(guild\)\]/);
 });
 test('生成中にkimが発言したら送信直前に止める', async t => {
   let count = 0;
@@ -134,7 +140,7 @@ test('kim訂正で例・ルール・事実を追記し自己返信だけPATCH', 
   assert.match(fs.readFileSync(f.file('rules.md'), 'utf8'), /- 締切は木曜/);
   assert.match(fs.readFileSync(f.file('knowledge.md'), 'utf8'), /- 定例の締切は木曜/);
   assert.equal(f.patches()[0].path, '/api/v10/channels/channel/messages/200');
-  assert.match(f.patches()[0].body.content, /^【Claude自動返信・kimが訂正済み/);
+  assert.match(f.patches()[0].body.content, /^【kimのClaudeによる代理回答・kimが訂正済み/);
   assert.equal(f.llmCalls[0].category, 'classification');
   await runOnce(f.options); assert.equal(f.patches().length, 1);
 });
@@ -190,7 +196,7 @@ test('dry-runはcontentを返すがPOST・通知・stateその他ファイルを
   const f = fixture(t, { llmResult: { ...decision, needs_kim_decision: true } });
   const before = fs.readFileSync(f.file('state.json'), 'utf8');
   const result = await runOnce({ ...f.options, dryRun: true });
-  assert.equal(result.wouldSend.length, 1); assert.match(result.wouldSend[0].content, /^【Claude自動返信】/);
+  assert.equal(result.wouldSend.length, 1); assert.match(result.wouldSend[0].content, /^【kimのClaudeによる代理回答】/);
   assert.equal(f.posts().length, 0); assert.equal(f.notifications.length, 0);
   assert.equal(fs.readFileSync(f.file('state.json'), 'utf8'), before);
   assert.deepEqual(fs.readdirSync(f.dir), ['state.json']);
@@ -215,6 +221,26 @@ test('429はretry_after秒待ち1回のみ再試行', async () => {
   } });
   await assert.rejects(api('/users/@me'), /HTTP 429/);
   assert.equal(requests, 2); assert.deepEqual(waits, [10]);
+});
+test('接続失敗はclose接続で2回再試行しroute名を残す', async () => {
+  const calls = [], waits = [];
+  const api = createDiscord({ token: 'test', sleepImpl: async ms => waits.push(ms), fetchImpl: async (url, init) => {
+    calls.push({ url, headers: init.headers }); throw new DOMException('aborted', 'TimeoutError');
+  } });
+  await assert.rejects(api('/users/@me'), /Discord GET \/users\/@me timeout/);
+  assert.equal(calls.length, 3); assert.deepEqual(waits, [250, 500]);
+  assert.equal(calls[1].headers.Connection, 'close');
+});
+test('users me失敗時もtoken由来IDで検索まで継続', async t => {
+  const token = Buffer.from('123456789012345678').toString('base64url') + '.x.y';
+  const f = fixture(t, { messages: [], readTokenImpl: () => ({ admin: true, token }) });
+  const base = f.options.fetchImpl;
+  f.options.sleepImpl = async () => {};
+  f.options.fetchImpl = async (url, init) => new URL(url).pathname.endsWith('/users/@me')
+    ? Promise.reject(new DOMException('aborted', 'TimeoutError')) : base(url, init);
+  const result = await runOnce(f.options);
+  assert.equal(result.scanned, 0); assert.match(result.errors[0], /identity: Discord GET \/users\/@me timeout/);
+  assert.ok(f.calls.some(c => c.path.endsWith('/messages/search')));
 });
 test('fresh lockは処理せずstale lockは回収', async t => {
   const f = fixture(t); fs.writeFileSync(f.file('lock'), 'other');
@@ -519,4 +545,89 @@ test('gap-check: 対象メッセージ数とキュー登録数を返す', async 
   assert.equal(out.length, 1);
   assert.equal(out[0].targets, 2);
   assert.equal(out[0].enqueued, 2);
+});
+
+
+test('新規IPv4接続を毎回使い本文読み込みの停止にも期限を適用', async t => {
+  const ports = new Set();
+  const server = createServer((req, res) => {
+    ports.add(req.socket.remotePort);
+    if (req.url === '/hang') { res.writeHead(200); res.write('{'); return; }
+    res.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const url = `http://localhost:${server.address().port}`;
+  const requestImpl = (url, options, callback) => {
+    assert.equal(options.family, 4); assert.equal(options.agent, false);
+    return httpRequest(url, options, callback);
+  };
+  for (let i = 0; i < 2; i++) {
+    const res = await discordRequest(url, { signal: AbortSignal.timeout(2000) }, { requestImpl });
+    assert.deepEqual(await res.json(), { ok: true });
+  }
+  assert.equal(ports.size, 2, 'connections must not be reused across iterations');
+  await assert.rejects(discordRequest(url + '/hang', { signal: AbortSignal.timeout(100) }, { requestImpl }), /abort/i);
+});
+
+test('一時的な読取失敗は短い待ちで復旧し各試行の期限を更新', async () => {
+  const signals = [], waits = [];
+  const api = createDiscord({ token: 'test', sleepImpl: async ms => waits.push(ms), fetchImpl: async (_url, init) => {
+    signals.push(init.signal);
+    if (signals.length === 1) throw new Error('ECONNRESET');
+    return new Response('{"id":"ok"}');
+  } });
+  assert.deepEqual(await api('/users/@me'), { id: 'ok' });
+  assert.deepEqual(waits, [250]); assert.notEqual(signals[0], signals[1]);
+});
+
+test('POSTの応答不明・5xxは二重送信を防ぐため再送しない', async () => {
+  for (const failure of ['network', 'server']) {
+    let calls = 0;
+    const api = createDiscord({ token: 'test', sleepImpl: async () => assert.fail('must not retry'), fetchImpl: async () => {
+      calls++;
+      if (failure === 'network') throw new DOMException('aborted', 'TimeoutError');
+      return new Response('', { status: 502 });
+    } });
+    await assert.rejects(api('/channels/x/messages', { method: 'POST', body: { content: 'test' } }), /timeout|HTTP 502/);
+    assert.equal(calls, 1);
+  }
+});
+
+test('GETの5xxは再試行し429は一度だけretry_afterを尊重', async () => {
+  const waits = [];
+  const responses = [new Response('', { status: 503 }), new Response('{"retry_after":0.01}', { status: 429 }), new Response('{"ok":true}')];
+  const api = createDiscord({ token: 'test', sleepImpl: async ms => waits.push(ms), fetchImpl: async () => responses.shift() });
+  assert.deepEqual(await api('/users/@me'), { ok: true });
+  assert.deepEqual(waits, [250, 10]);
+});
+
+
+test('Windowsのタスク優先度を通常に戻しUnixでは優先度を変更しない', () => {
+  const calls = [];
+  const setPriority = (...args) => calls.push(args);
+  ensureTaskPriority({ platform: 'win32', setPriority });
+  ensureTaskPriority({ platform: 'linux', setPriority });
+  assert.deepEqual(calls, [[0, os.constants.priority.PRIORITY_NORMAL]]);
+  assert.throws(() => ensureTaskPriority({ platform: 'win32', setPriority: () => { throw new Error('priority failed'); } }), /priority failed/);
+});
+
+test('Windows: CLIは通信の前に優先度を戻す', { skip: process.platform !== 'win32' }, async t => {
+  const f = fixture(t, { messages: [] }), events = [];
+  const fetchImpl = f.options.fetchImpl;
+  const exit = await main(['once', '--dry-run'], { ...f.options, print: () => {},
+    setPriorityImpl: (...args) => { events.push('priority'); assert.deepEqual(args, [0, os.constants.priority.PRIORITY_NORMAL]); },
+    fetchImpl: (...args) => { events.push('request'); return fetchImpl(...args); },
+  });
+  assert.equal(exit, 0); assert.equal(events[0], 'priority'); assert.ok(events.includes('request'));
+});
+
+test('Windows: BelowNormalの子プロセスはmain実行前の読み込み中にNormalへ戻る', { skip: process.platform !== 'win32' }, () => {
+  const url = new URL('./discord-autoreply.mjs', import.meta.url).href;
+  const script = `import os from 'node:os';
+    os.setPriority(0, os.constants.priority.PRIORITY_BELOW_NORMAL);
+    await import(${JSON.stringify(url)});
+    console.log(os.getPriority());`;
+  const output = execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', timeout: 30000, windowsHide: true });
+  assert.equal(Number(output.trim()), os.constants.priority.PRIORITY_NORMAL);
 });

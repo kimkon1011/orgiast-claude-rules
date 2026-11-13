@@ -28,3 +28,10 @@ checkpoint は会話別の処理日時。初回は取得した直近20件から�
 `uncertain`／`sending` は再送不可。Discord上の実態と台帳を手動確認すること。
 同時書き込みは `.jsonl.lock` で防ぐ。異常終了後のロックは実行プロセスがないことを確認して削除する。
 タスク登録は15分間隔、Interactive/Limited、run-hidden 使用。登録直後の即時実行は行わない。
+
+
+2026-11-12: scan は無操作5分を確認した後、Discord が未起動なら
+`%LOCALAPPDATA%\Discord\Update.exe --processStart Discord.exe` で起動し、
+ウィンドウを最大30秒待ちます。起動済みなら重複起動しません。
+フレンド画面など元の会話が無い場合はスキャン後の復帰を省略します。
+起動処理はキー入力・貼り付け・投稿を行いません。

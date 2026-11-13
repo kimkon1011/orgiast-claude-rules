@@ -8,7 +8,7 @@ const repo = fileURLToPath(new URL('../', import.meta.url));
 export function checkFleetMail({ mail, unseenHours = 24, now = Date.now(), spawnImpl = spawnSync } = {}) {
   if (!mail || !Number.isFinite(Number(unseenHours)) || Number(unseenHours) <= 0) throw new Error('--mail と正の --unseen-hours が必要です');
   const result = spawnImpl(process.execPath, [fileURLToPath(new URL('./fleet-mail.mjs', import.meta.url)), '--sent-status', mail],
-    { cwd: repo, encoding: 'utf8', timeout: 25000, windowsHide: true, maxBuffer: 64 * 1024 });
+    { cwd: repo, encoding: 'utf8', timeout: 200000, windowsHide: true, maxBuffer: 64 * 1024 });
   if (result.error || result.signal || result.status !== 0) throw new Error(`送信状況を取得できません: ${result.error?.message || result.stderr || result.status}`);
   const fields = Object.fromEntries(String(result.stdout || '').split(/\r?\n/).flatMap(line => {
     const m = /^([\w]+):\s*(.*)$/.exec(line);

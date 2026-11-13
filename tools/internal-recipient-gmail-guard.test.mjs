@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { extractAddresses, extractMentions, GMAIL_WRITE_ACTIONS, githubHandles, HOOK_MATCHER, isGhWriteCommand, isInternal, judge, judgeBash, loadLedger, SHELL_TOOLS, TARGET } from './internal-recipient-gmail-guard.mjs';
+import { extractAddresses, extractMentions, GMAIL_WRITE_ACTIONS, githubHandles, HOOK_MATCHER, isGhWriteCommand, isInternal, judge, judgeBash, loadLedger, shouldBlockInternal, SHELL_TOOLS, TARGET } from './internal-recipient-gmail-guard.mjs';
 
 const ledger = JSON.parse(fs.readFileSync(new URL('./internal-recipients.default.json', import.meta.url), 'utf8'));
 const hook = (tool_input, action = 'create_draft', account = '') => ({ tool_name: `mcp__claude_ai_Gmail${account}__${action}`, tool_input });
@@ -32,11 +32,14 @@ test('表示名付きの社内ドメインへの送信を拒否', () => {
 test('外部顧客への下書きは通す', () => {
   assert.deepEqual(judge(hook({ to: 'customer@example.co.jp' }), ledger), { decision: 'pass', addresses: ['customer@example.co.jp'], internal: [] });
 });
-test('全員内部のときだけ拒否し、外部宛が1件でもあれば許可', () => {
+test('To に外部宛があれば社内 Cc/Bcc を許可し、なければ拒否', () => {
   assert.equal(judge(hook({ to: 'customer@example.co.jp', cc: ['keiri.orgiast@gmail.com'] }), ledger).decision, 'pass');
+  assert.equal(judge(hook({ to: 'customer@example.co.jp', bcc: ['atsuoast3@gmail.com'] }), ledger).decision, 'pass');
   assert.equal(judge(hook({ to: 'nishi@orgiast.jp' }), ledger).decision, 'block');
-  assert.equal(judge(hook({ to: 'nishi@orgiast.jp', cc: ['keiri.orgiast@gmail.com'] }), ledger).decision, 'block');
-  assert.equal(judge(hook({ to: 'customer@example.co.jp' }), ledger).decision, 'pass');
+  assert.equal(judge(hook({ to: 'nishi@orgiast.jp', cc: ['customer@example.co.jp'] }), ledger).decision, 'block');
+  assert.equal(judge(hook({ to: ['nishi@orgiast.jp', 'customer@example.co.jp'] }), ledger).decision, 'pass');
+  assert.equal(judge(hook({ to: 'kimkongyong@gmail.com' }), ledger).decision, 'block');
+  assert.equal(shouldBlockInternal({ to: 'customer@example.co.jp', cc: 'kimkongyong@gmail.com' }, ledger), false);
 });
 test('reply で to/cc 未指定の場合は現行どおり pass', () => {
   assert.equal(judge(hook({ message_id: 'message-1' }, 'reply'), ledger).decision, 'pass');

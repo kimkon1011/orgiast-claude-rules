@@ -427,3 +427,46 @@ test('J read-back normalizes all cell types without trimming strings or hiding m
   sheet.getRange = () => ({ setRichTextValues() {}, getValues: () => [stored.map(value => value === ' padded ' ? value.trim() : value)] });
   assert.throws(() => h._fleetMailWrite_(sheet, 1, row), /read-back mismatch/);
 });
+
+
+test('unchanged SLA backlog does not rewrite 2000 alerts under the shared lock', () => {
+  const h = harness();
+  send(h);
+  const template = [...h.rows[1]];
+  for (let i = 1; i < 2000; i++) { const row = [...template]; row[0] = 'mail-backlog-' + i; h.rows.push(row); }
+  h.advance(h.sla.undelivered + 1);
+  let writes = 0;
+  h.faults.onAlertWrite = () => { writes++; };
+  assert.equal(h.fleetMailSweep().alerted, 2000);
+  assert.equal(writes, 2001); // Header plus the first persistence of each alert.
+  const before = JSON.stringify(h.alertRows);
+  writes = 0;
+  assert.equal(h.fleetMailSweep().alerted, 2000);
+  assert.equal(writes, 0);
+  assert.equal(JSON.stringify(h.alertRows), before);
+  assert.equal(JSON.parse(h.properties.FLEET_MAIL_TIMING_sweep).alertWrites, 0);
+  assert.equal(h.lock.held, false);
+});
+
+test('changed alert and renotification reset still persist and read back', () => {
+  const h = harness(); send(h); h.advance(h.sla.undelivered + 1); h.fleetMailSweep();
+  h.alertRows[1][h.alertHeaders.indexOf('lastNotifiedAt')] = new Date(now - h.renotifyMs).toISOString();
+  h.alertRows[1][h.alertHeaders.indexOf('notifiedCount')] = '1';
+  h.rows[1][h.headers.indexOf('why')] = 'updated reason';
+  let writes = 0; h.faults.onAlertWrite = () => { writes++; };
+  h.fleetMailSweep();
+  assert.equal(writes, 1);
+  assert.equal(h.alertRows[1][h.alertHeaders.indexOf('why')], 'updated reason');
+  assert.equal(h.alertRows[1][h.alertHeaders.indexOf('notifiedCount')], '0');
+});
+
+test('mail health is lock-free, contains only timing and trigger metadata', () => {
+  const h = harness(); send(h);
+  const before = JSON.stringify(h.rows), releases = h.lock.releases;
+  h.properties.FLEET_TOKEN = 'private-token';
+  const result = h.describeFleetMailHealth();
+  assert.equal(result.ok, true); assert.equal(h.lock.releases, releases);
+  assert.equal(JSON.stringify(h.rows), before);
+  assert.doesNotMatch(JSON.stringify(result), /private-token|body|sender/);
+  assert.equal(result.timing.phase, 'finished');
+});

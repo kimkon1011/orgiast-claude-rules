@@ -45,6 +45,9 @@ powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\Users
 
 ```text
 node --test tools/secretary-uptime.test.mjs tools/secretary-progress-deploy.test.mjs
+powershell.exe -NoProfile -NonInteractive -File tools/register-secretary-uptime.test.ps1
 ```
+
+登録スクリプトの5ケースはタスク操作・状態ファイルをすべてmockに置き換えて実行する。成功、予定起動なし、結果1、状態ファイルが古い、外部HTTP異常を検証し、実タスクには触れない。
 
 秘書側は `node --test tests/watches.test.mjs tests/trip.test.mjs`、`npm run build`、Playwright `tests/e2e/watches.spec.ts`。Playwrightのfixtureテストは画面ロジック検証用であり、本番の対象ラベル表示の証拠ではない。

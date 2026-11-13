@@ -100,6 +100,29 @@ export const MEET_SELECTORS = {
   ],
 };
 
+/**
+ * Bot 表示名の既定値。顧客に見える Meet 参加者名。
+ * 内部用語（カンペ・cue・指示・台本）を含まないこと。
+ */
+export const BOT_DISPLAY_NAME_DEFAULT = 'オージャストAI';
+
+/**
+ * 設定から Bot 表示名を解決する。
+ * config.botDisplayName が非空文字列ならそれを使うが、
+ * 内部用語（カンペ・cue・指示・台本）を含む場合は既定値に戻す。
+ */
+export function resolveBotDisplayName(config) {
+  const name = config?.botDisplayName;
+  if (name && typeof name === 'string' && name.trim()) {
+    const internalTerms = ['カンペ', 'cue', '指示', '台本'];
+    if (internalTerms.some(term => name.includes(term))) {
+      return BOT_DISPLAY_NAME_DEFAULT;
+    }
+    return name.trim();
+  }
+  return BOT_DISPLAY_NAME_DEFAULT;
+}
+
 export const STANDARD_CARDS = [
   {
     id: 'card-budget',

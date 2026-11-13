@@ -17,6 +17,7 @@ import { isEntry } from './is-entry.mjs';
 import { askJev } from './jev.mjs';
 import { getDriveToken, DRIVE_SCOPE } from './lib/drive-auth.mjs';
 import { setupCueDocument } from './lib/meet-cue-doc.mjs';
+import { resolveBotDisplayName } from './lib/meet-cue-core.mjs';
 import { generateCardsFromBrief } from './meet-cue.mjs';
 import { matchMeetingInquiries, INQUIRY_SHEET, INQUIRY_TAB, readSheet } from './lib/inquiry-sheet.mjs';
 import { addItem } from './kim-inbox.mjs';
@@ -44,6 +45,7 @@ export function readConfig(home = homeDir()) {
           ? parsed.calendars
           : ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'],
         maxConcurrent: parsed.maxConcurrent || 3,
+        botDisplayName: resolveBotDisplayName(parsed),
       };
     }
   } catch (e) {
@@ -54,6 +56,7 @@ export function readConfig(home = homeDir()) {
     seatHostname: 'DESKTOP-2D0R4LI',
     calendars: ['kim@orgiast.jp', 'seisaku-team@orgiast.jp'],
     maxConcurrent: 3,
+    botDisplayName: resolveBotDisplayName({}),
   };
 }
 

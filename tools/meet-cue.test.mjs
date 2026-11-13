@@ -8,6 +8,7 @@ import {
   CaptionAssembler,
   CueTracker,
   STANDARD_CARDS,
+  BOT_DISPLAY_NAME_DEFAULT,
   buildJevState,
   buildJevQuestions,
   parseJevResponse,
@@ -19,6 +20,7 @@ import {
   formatJstDateTime,
   formatJstTime,
   formatJstSessionDate,
+  resolveBotDisplayName,
 } from './lib/meet-cue-core.mjs';
 
 import {
@@ -343,4 +345,33 @@ test('runDecisionRound: スタブで予算懸念 -> budget カードが Doc 差�
 
   assert.equal(res2.presented, false);
   assert.equal(insertedCues.length, 1, '40秒以内の2回目は差し込まれない');
+});
+
+test('resolveBotDisplayName: 既定値・安全弁・正常値の解決', () => {
+  // Default (no config)
+  assert.equal(resolveBotDisplayName({}), BOT_DISPLAY_NAME_DEFAULT);
+  assert.equal(resolveBotDisplayName({ botDisplayName: '' }), BOT_DISPLAY_NAME_DEFAULT);
+  assert.equal(resolveBotDisplayName({ botDisplayName: '   ' }), BOT_DISPLAY_NAME_DEFAULT);
+
+  // Safety valve: internal terms fall back to default
+  assert.equal(resolveBotDisplayName({ botDisplayName: 'オージャスト カンペAI' }), BOT_DISPLAY_NAME_DEFAULT);
+  assert.equal(resolveBotDisplayName({ botDisplayName: 'cue bot' }), BOT_DISPLAY_NAME_DEFAULT);
+  assert.equal(resolveBotDisplayName({ botDisplayName: '指示出し君' }), BOT_DISPLAY_NAME_DEFAULT);
+  assert.equal(resolveBotDisplayName({ botDisplayName: '台本くん' }), BOT_DISPLAY_NAME_DEFAULT);
+
+  // Normal name passes through
+  assert.equal(resolveBotDisplayName({ botDisplayName: 'オージャスト議事録' }), 'オージャスト議事録');
+  assert.equal(resolveBotDisplayName({ botDisplayName: 'オージャストAI' }), 'オージャストAI');
+  assert.equal(resolveBotDisplayName({ botDisplayName: 'Meeting Bot' }), 'Meeting Bot');
+});
+
+test('再発防止ゲート: meet-cue-browser.mjs のソースに「カンペ」が含まれないこと', () => {
+  const browserPath = new URL('./lib/meet-cue-browser.mjs', import.meta.url);
+  const source = fs.readFileSync(browserPath, 'utf8');
+  // The word "カンペ" may appear in comments or log messages about the old name,
+  // but must NOT appear in any string literal that would be displayed as a guest name.
+  // Check that no string literal contains "カンペ" as a display name value.
+  // We specifically check that the hardcoded 'オージャスト カンペAI' is gone.
+  assert.doesNotMatch(source, /オージャスト\s*カンペAI/,
+    'ソースに「オージャスト カンペAI」というハードコード文字列が残っていてはいけません');
 });

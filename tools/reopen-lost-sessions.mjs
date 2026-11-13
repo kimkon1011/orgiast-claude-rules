@@ -512,7 +512,7 @@ function reopenLoopCounts(base, nowFn = Date.now) {
 
 // 直近 6 時間に reopened に掲載された回数（verified / unverified を問わない）を数える。
 // 長期的に繰り返し空振り／切断を繰り返すセッションを自動遮断する（6h経過で自然解除）。
-function reopenRepeatCounts(base, nowFn = Date.now) {
+export function reopenRepeatCounts(base, nowFn = Date.now) {
   const logFile = path.join(base, 'reopen-lost-sessions.log');
   const counts = {};
   try {
@@ -534,6 +534,87 @@ function reopenRepeatCounts(base, nowFn = Date.now) {
     if (e.code !== 'ENOENT') throw e;
   }
   return counts;
+}
+
+// Read all history in timestamp order: expiry permits one retry, but does not
+// erase the streak. A failed retry therefore starts another six-hour cooldown.
+export function unverifiedStreakCounts(base, nowFn = Date.now) {
+  let raw;
+  try { raw = fs.readFileSync(path.join(base, 'reopen-lost-sessions.log'), 'utf8'); }
+  catch (e) { if (e.code === 'ENOENT') return {}; throw e; }
+  const nowTime = typeof nowFn === 'function' ? nowFn() : nowFn;
+  const entries = raw.split('\n').flatMap(line => {
+    try {
+      const entry = JSON.parse(line), at = Date.parse(entry.at);
+      return Number.isFinite(at) && at <= nowTime ? [{ ...entry, at }] : [];
+    } catch { return []; }
+  }).sort((a, b) => a.at - b.at);
+  const streaks = new Map();
+  for (const entry of entries) {
+    const verified = new Set(Array.isArray(entry.verified) ? entry.verified : []);
+    const unverified = new Set(Array.isArray(entry.unverified) ? entry.unverified : []);
+    for (const id of verified) streaks.delete(id);
+    const reopened = new Set((Array.isArray(entry.reopened) ? entry.reopened : []).map(r => r?.id || r));
+    for (const id of reopened) {
+      if (typeof id !== 'string' || verified.has(id) || !unverified.has(id)) continue;
+      streaks.set(id, { count: (streaks.get(id)?.count || 0) + 1, at: entry.at });
+    }
+  }
+  return Object.fromEntries([...streaks].filter(([, s]) => nowTime - s.at < 6 * 3600000).map(([id, s]) => [id, s.count]));
+}
+
+export function isSessionProcessRunning(candidate, { sessionsDir, spawn = spawnSync, fsImpl = fs } = {}) {
+  let rows;
+  try {
+    // 2026-11-13 inventory: VS Code uses --resume=<UUID>; also match --resume <UUID>
+    // and bridge IDs anywhere in CommandLine. ID-less extension processes need the registry.
+    const script = "@(Get-CimInstance Win32_Process | Select-Object ProcessId,Name,CommandLine) | ConvertTo-Json -Compress";
+    const res = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8', windowsHide: true, timeout: 15000, maxBuffer: 8 * 1024 * 1024,
+    });
+    if (res.error || res.status !== 0) return false;
+    const parsed = JSON.parse(String(res.stdout).replace(/^\uFEFF/, ''));
+    rows = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+  } catch { return false; } // Inventory unavailable: preserve recovery (fail-open).
+  const ids = [candidate.id, candidate.bridgeSessionId].filter(id => typeof id === 'string' && id);
+  if (rows.some(row => String(row?.Name).toLowerCase() === 'claude.exe'
+    && ids.some(id => String(row.CommandLine || '').toLowerCase().includes(id.toLowerCase())))) return true;
+  const livePids = new Set(rows.map(row => Number(row?.ProcessId)).filter(pid => Number.isInteger(pid) && pid > 0));
+  if (!sessionsDir) return false;
+  try {
+    for (const name of fsImpl.readdirSync(sessionsDir)) {
+      if (!name.endsWith('.json')) continue;
+      try {
+        const data = JSON.parse(fsImpl.readFileSync(path.join(sessionsDir, name), 'utf8').replace(/^\uFEFF/, ''));
+        if (ids.includes(data.sessionId) && livePids.has(Number(data.pid))) return true;
+      } catch { /* Ignore individual stale or malformed registry files. */ }
+    }
+  } catch { /* Missing registry does not prevent command-line matching. */ }
+  return false;
+}
+
+// Verification gets a fresh deadline: candidate discovery's deadline may have
+// expired during the 90-second connection wait. Read the existing RC list API only.
+export async function connectedRcSessionIds({ fetchImpl = fetch, headers, now = Date.now } = {}) {
+  const connected = new Set(), seen = new Set();
+  const deadline = now() + 30000;
+  let cursor = '';
+  do {
+    if (now() >= deadline) throw Error('RC verification time limit');
+    const response = await fetchImpl(`${BASE}?${new URLSearchParams({ limit: '100', ...(cursor && { cursor }) })}`, {
+      headers, signal: AbortSignal.timeout(Math.max(1, deadline - now())),
+    });
+    if (!response.ok) throw Error(`RC API HTTP ${response.status}`);
+    const body = await response.json();
+    if (!Array.isArray(body.data)) throw Error('Invalid sessions response');
+    for (const session of body.data) {
+      if (session.connection_status === 'connected' && typeof session.id === 'string') connected.add(session.id);
+    }
+    cursor = body.next_cursor || '';
+    if (cursor && seen.has(cursor)) throw Error('Repeated RC verification cursor');
+    seen.add(cursor);
+  } while (cursor);
+  return connected;
 }
 
 export async function getLoadGuardStatus({
@@ -665,7 +746,8 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
   now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs, stateBased = false,
   checkCpu = true, checkClaude = false, cpusImpl, vscodeStartedAt, openDb } = {}) {
-  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closedInRunningVscode: 0, loadGuard: 0, reopenRepeat: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
+  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closedInRunningVscode: 0, loadGuard: 0, reopenRepeat: 0, unverifiedStreak: 0, processRunning: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
+  const progress = (stage, detail) => { if (!dryRun) writeProgress(base, stage, detail); };
   const initialHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
   const hiddenSessionIds = initialHidden.ids;
   if (initialHidden.error) {
@@ -674,12 +756,12 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
   // Dry run is strictly read-only: no lock or log mutation on the user's PC.
   const release = dryRun ? () => {} : acquireLock(path.join(base, 'reopen-lost-sessions.lock'));
   if (!release) return { ...result, error: 'locked' };
-  writeProgress(base, 'lock', 'acquired');
+  progress('lock', 'acquired');
   try {
     const token = readJson(path.join(base, '.credentials.json')).claudeAiOauth?.accessToken;
     const org = readJson(path.join(base, '..', '.claude.json')).oauthAccount?.organizationUuid;
     if (!token || !org) throw Error('Missing RC credentials');
-    writeProgress(base, 'auth', 'credentials loaded');
+    progress('auth', 'credentials loaded');
     const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01',
       'anthropic-beta': 'ccr-byoc-2025-07-29', 'x-organization-uuid': org };
     const cli = claudeCli || resolveClaudeCli({ env, exists: fsImpl.existsSync, readdir: fsImpl.readdirSync, spawn });
@@ -720,18 +802,19 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
       }
     };
     const living = alive();
-    writeProgress(base, 'alive', `source=${result.aliveSource}, count=${living.size}`);
+    progress('alive', `source=${result.aliveSource}, count=${living.size}`);
     const indexSinceMs = stateBased
       ? now() - 72 * 3600 * 1000
       : Date.parse(since) - 24 * 3600 * 1000;
     const locals = localIndex(base, undefined, { sinceMs: Number.isFinite(indexSinceMs) ? indexSinceMs : now() - 72 * 3600 * 1000 });
     const closed = closedIds(base);
-    writeProgress(base, 'index', `local=${locals.size}, closed=${closed.size}, skippedOld=${locals.skippedOld}, indexMs=${locals.indexMs}`);
+    progress('index', `local=${locals.size}, closed=${closed.size}, skippedOld=${locals.skippedOld}, indexMs=${locals.indexMs}`);
     result.indexed = locals.indexed;
     result.indexSkippedOld = locals.skippedOld;
     result.indexMs = locals.indexMs;
     const reopenCounts = reopenLoopCounts(base, now);
     const repeatCounts = reopenRepeatCounts(base, now);
+    const unverifiedCounts = unverifiedStreakCounts(base, now);
     const deadline = now() + (stateBased ? 180000 : 60000);
     const get = async url => {
       if (now() >= deadline) throw Error('API time limit');
@@ -780,8 +863,9 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
             if (Number.isFinite(resolvedVscodeStartedAt) && resolvedVscodeStartedAt < lastEvent) { result.skipped.closedInRunningVscode++; continue; }
             if (reopenCounts[local.id] >= 3) { result.skipped.reopenLoop++; continue; }
             if (repeatCounts[local.id] >= 3) { result.skipped.reopenRepeat++; continue; }
+            if (unverifiedCounts[local.id] >= 2) { result.skipped.unverifiedStreak++; continue; }
             seenIds.add(local.id);
-            result.candidates.push({ id: local.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '', source: 'state' });
+            result.candidates.push({ id: local.id, bridgeSessionId: local.bridgeSessionId, rcId: session.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '', source: 'state' });
           }
           // 降順の場合: 全セッションの last_event_at/updated_at が 72h より古ければそれ以上ページングしない
           const cutoff = Date.parse(stateSince);
@@ -813,9 +897,10 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
             // Skip sessions reopened 3+ times in the last 24h (infinite reopen guard)
             if (reopenCounts[local?.id] >= 3) { result.skipped.reopenLoop++; continue; }
             if (repeatCounts[local?.id] >= 3) { result.skipped.reopenRepeat++; continue; }
+            if (unverifiedCounts[local?.id] >= 2) { result.skipped.unverifiedStreak++; continue; }
             if (!local || seenIds.has(local.id)) continue;
             seenIds.add(local.id);
-            result.candidates.push({ id: local.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '', source: 'host_exit' });
+            result.candidates.push({ id: local.id, bridgeSessionId: local.bridgeSessionId, rcId: session.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '', source: 'host_exit' });
           }
           const failed = batch.find(item => item.status === 'rejected');
           if (failed) throw failed.reason;
@@ -826,7 +911,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
       } while (cursor);
     } catch (error) { result.apiError = error.message; }
     if (!dryRun && result.candidates.length) {
-      writeProgress(base, 'fetch', `candidates=${result.candidates.length}`);
+      progress('fetch', `candidates=${result.candidates.length}`);
       const loadStatus = await getLoadGuardStatus({ env, spawn, cpusImpl, wait, checkCpu, checkClaude });
       if (loadStatus.error) {
         result.loadGuard = { claudeCount: loadStatus.claudeCount, cpuPct: loadStatus.cpuPct, reason: loadStatus.reason, error: loadStatus.error };
@@ -841,7 +926,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
         const code = codeCli || resolveCodeCli(env, fsImpl.existsSync);
         let windowOpened = false; // 1回の実行で新規ウィンドウを作るのは最大1回まで
         for (const candidate of result.candidates.slice(0, max)) {
-          writeProgress(base, 'open', `id=${candidate.id}`);
+          progress('open', `id=${candidate.id}`);
           // Recheck after fetching and between opens: close/purge may have happened meanwhile.
           const refreshed = [...localIndex(base, candidate.id).values()].find(l => l.id === candidate.id);
           const recheckHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
@@ -850,6 +935,14 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
           if (reason) { result.skipped[reason]++; continue; }
           if (reopenCounts[candidate.id] >= 3) { result.skipped.reopenLoop++; continue; }
           if (repeatCounts[candidate.id] >= 3) { result.skipped.reopenRepeat++; continue; }
+          const blockedBeforeOpen = local => {
+            if (unverifiedStreakCounts(base, now)[candidate.id] >= 2) { result.skipped.unverifiedStreak++; return true; }
+            if (isSessionProcessRunning({ ...candidate, bridgeSessionId: local?.bridgeSessionId || candidate.bridgeSessionId }, {
+              sessionsDir: path.join(base, 'sessions'), spawn, fsImpl,
+            })) { result.skipped.processRunning++; return true; }
+            return false;
+          };
+          if (blockedBeforeOpen(refreshed)) continue;
           try {
             const folder = resolveReopenFolder(candidate.cwd, candidate.cwds, { fsImpl, spawn });
             // worktree のまま開く候補が無いときは開かずスキップ（新しい worktree ウィンドウは作らない）。
@@ -882,10 +975,12 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
               const currentLateHidden = lateHidden.error ? hiddenSessionIds : lateHidden.ids;
               const lateReason = exclusion(current, closedIds(base), alive(), currentLateHidden);
               if (lateReason) { result.skipped[lateReason]++; continue; }
+              if (blockedBeforeOpen(current)) continue;
               // Focus again immediately before URI dispatch to reduce focus races.
               ps(`& ${quotePS(code)} ${quotePS(targetPath)}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & ${quotePS(code)} --open-url ${quotePS('vscode://anthropic.claude-code/open?session=' + encodeURIComponent(candidate.id))}; exit $LASTEXITCODE`, spawn);
             } else {
               // URI のみ: code --open-url だけを撃つ（既存ウィンドウで開く）
+              if (blockedBeforeOpen(refreshed)) continue;
               ps(`& ${quotePS(code)} --open-url ${quotePS('vscode://anthropic.claude-code/open?session=' + encodeURIComponent(candidate.id))}; exit $LASTEXITCODE`, spawn);
             }
             result.reopened.push({ ...candidate, openedWith, folder, target: targetPath, launch });
@@ -894,24 +989,27 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
         }
         // Post-reopen verification: wait 90s then check which sessions are actually connected
         if (result.reopened.length) {
-          writeProgress(base, 'verify', `waiting 90s for ${result.reopened.length} reopened`);
+          progress('verify', `waiting 90s for ${result.reopened.length} reopened`);
           await wait(90000);
-          try {
-            const agents = alive();
+          let agents, connected;
+          try { agents = alive(); } catch (e) { result.verifyError = e.message; }
+          try { connected = await connectedRcSessionIds({ fetchImpl, headers, now }); }
+          catch (e) { result.verifyApiError = e.message; }
+          if (agents || connected) {
             result.verified = [];
             result.unverified = [];
             for (const r of result.reopened) {
-              if (agents.has(r.id)) result.verified.push(r.id);
-              else result.unverified.push(r.id);
+              if (agents?.has(r.id) || connected?.has(r.rcId)) result.verified.push(r.id);
+              else if (agents) result.unverified.push(r.id);
             }
-          } catch (e) { result.verifyError = e.message; }
+          }
         }
       }
     }
   } catch (error) { result.error = error.message; }
   finally {
     try { if (!dryRun) fs.appendFileSync(path.join(base, 'reopen-lost-sessions.log'), JSON.stringify(result) + '\n'); }
-    finally { writeProgress(base, 'done', 'log written'); release(); }
+    finally { progress('done', 'log written'); release(); }
   }
   return result;
 }
@@ -982,7 +1080,7 @@ if (isEntry(import.meta.url)) {
     const opts = parseOptions(process.argv.slice(2));
     if (opts.watch) {
       const base = opts.base || path.join(os.homedir(), '.claude');
-      let watchdogTimer = setTimeout(() => {
+      const watchdogTimer = opts.dryRun ? null : setTimeout(() => {
         watchdogRecord(base);
       }, 20 * 60 * 1000);
       const result = await watchReopen({

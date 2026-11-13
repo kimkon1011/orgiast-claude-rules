@@ -1,4 +1,4 @@
-param([switch]$IdleOnly)
+﻿param([switch]$IdleOnly)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -TypeDefinition @'

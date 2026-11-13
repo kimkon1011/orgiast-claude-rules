@@ -1,5 +1,6 @@
 # Exercises the real registration script with all task/file mutations mocked.
 $ErrorActionPreference='Stop'
+$env:ORGIAST_NIGHTLY_REPO=Split-Path -Parent $PSScriptRoot
 $registration=Join-Path $PSScriptRoot 'register-secretary-uptime.ps1'
 function Test-Path { return $true }
 function New-ScheduledTaskAction { return @{} }

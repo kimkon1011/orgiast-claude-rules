@@ -1,6 +1,8 @@
 {
   "version": 1,
   "entries": [
+    {"path":"tools/register-secretary-uptime.ps1","scope":"kim-only","reason":"kim-PCの秘書ゲートウェイ3939と秘書3940を監視するタスク登録。他PCには登録しない"},
+    {"path":"tools/secretary-uptime-registration.test.ps1","scope":"kim-only","reason":"秘書監視の登録結果をmockで検証するテスト。実タスクは作成しない"},
     {"path":"tools/lib/external-monitor-state.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"外部返信待ちの宛先照合・重複排除・永続再開キュー"},
     {"path":"tools/lib/send-context.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"Stop hookが同一セッションの送信成功記録を照合する依存"},
     {"path":"tools/auto-progress-external-monitor.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"LINE/Gmail新着の継続監視と元セッション再開"},

@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { isEntry } from './is-entry.mjs';
 
 const exec = promisify(execFile);
 const DAY = 86400000;
@@ -117,4 +118,4 @@ export async function main() {
     process.exitCode = ok ? 0 : 1;
   } finally { await handle.close(); await fs.unlink(lock); }
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(error => { console.error(error.message); process.exitCode = 1; });
+if (isEntry(import.meta.url)) main().catch(error => { console.error(error.message); process.exitCode = 1; });

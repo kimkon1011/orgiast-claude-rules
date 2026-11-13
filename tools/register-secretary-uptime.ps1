@@ -1,5 +1,7 @@
 param([string]$ToolsDir=$PSScriptRoot)
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'resolve-synced-repo.ps1')
+$ToolsDir = Resolve-RegisterToolsDir -Fallback $ToolsDir -RequiredLeaves @('secretary-uptime.mjs','secretary-restart.ps1','kim-inbox.mjs','is-entry.mjs')
 $watchdog = Join-Path $ToolsDir 'secretary-uptime.mjs'
 $hidden = Join-Path $env:USERPROFILE '.claude\tools\run-hidden.vbs'
 foreach ($required in @($watchdog,$hidden,(Join-Path $ToolsDir 'secretary-restart.ps1'),(Join-Path $ToolsDir 'kim-inbox.mjs'))) {

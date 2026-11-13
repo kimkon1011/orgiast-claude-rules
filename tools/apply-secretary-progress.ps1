@@ -3,7 +3,7 @@ $AppDir=Join-Path $env:USERPROFILE 'Downloads\secretary-pc'
 # Run only from a session allowed to write AppDir and the user's .claude directory.
 # No elevation or sandbox bypass is attempted by this installer.
 if ($env:COMPUTERNAME -ne 'DESKTOP-2D0R4LI') { throw 'This deployment is scoped to kim-PC / DESKTOP-2D0R4LI' }
-$payload=Join-Path $PSScriptRoot '..\deploy\secretary-progress'
+$payload=Join-Path $PSScriptRoot 'secretary-progress'
 $manifest=Get-Content (Join-Path $payload 'manifest.json') -Raw | ConvertFrom-Json
 foreach ($entry in $manifest.files) {
   $destination=Join-Path $AppDir $entry.path

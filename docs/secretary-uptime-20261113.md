@@ -19,7 +19,7 @@
 
 `register-secretary-uptime.ps1` は既存OrgiastFunnelProbeを5分周期＋起動時に置き換え、WebServer/LINE監視の競合する再起動を無効にする。アイドル条件なし、電池停止なし、隠し起動、同時実行禁止。S4Uでログアウト後も実行する。S4U登録に必要なWindows権限がない場合は失敗を明示し、変更した旧タスクの有効状態を戻す。ネットワークが壊れていても復旧が走るよう、実行直前のgit同期は行わない。
 
-秘書コードはローカルGit管理のみでremoteがないため、`deploy/secretary-progress`に適用する7ファイルとSHA256マニフェストを含める。実データのJSONL台帳とJSON inboxを読み、label・deadlineAt・lastCheckedAt・verdict・lastCheckOutputを表示する。完了/置換済みを進行中に復活させない。対象の「東邦2階HP 使用量把握」は11/13 13:30 JSTにdoneであり、「最近完了した見張り」に出す。未回答askは1112件、進行中は166件を実読取済み。検索とスクロール領域で表示する。APIは既存の認証を必須にし、読み込み失敗・401を空欄にしない。
+秘書コードはローカルGit管理のみでremoteがないため、`tools/secretary-progress`に適用する7ファイルとSHA256マニフェストを含める。実データのJSONL台帳とJSON inboxを読み、label・deadlineAt・lastCheckedAt・verdict・lastCheckOutputを表示する。完了/置換済みを進行中に復活させない。対象の「東邦2階HP 使用量把握」は11/13 13:30 JSTにdoneであり、「最近完了した見張り」に出す。未回答askは1112件、進行中は166件を実読取済み。検索とスクロール領域で表示する。APIは既存の認証を必須にし、読み込み失敗・401を空欄にしない。
 
 ## 適用と証跡
 
@@ -45,7 +45,7 @@ powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\Users
 
 ```text
 node --test tools/secretary-uptime.test.mjs tools/secretary-progress-deploy.test.mjs
-powershell.exe -NoProfile -NonInteractive -File tools/register-secretary-uptime.test.ps1
+powershell.exe -NoProfile -NonInteractive -File tools/secretary-uptime-registration.test.ps1
 ```
 
 登録スクリプトの5ケースはタスク操作・状態ファイルをすべてmockに置き換えて実行する。成功、予定起動なし、結果1、状態ファイルが古い、外部HTTP異常を検証し、実タスクには触れない。

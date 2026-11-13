@@ -1,11 +1,11 @@
-import { createServer, request as httpRequest } from 'node:http';
+import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { runOnce, main, createDiscord, discordRequest, ensureTaskPriority, createLlm, contentFor, parseJson, combinePermissions } from './discord-autoreply.mjs';
+import { runOnce, main, createDiscord, discordRequest, ensureTaskPriority, createLlm, contentFor, parseJson, combinePermissions, inventedAmounts } from './discord-autoreply.mjs';
 
 const NOW = Date.parse('2026-10-09T03:00:00Z');
 const KIM = '715210673642012733';
@@ -27,6 +27,7 @@ function fixture(t, { initial = true, messages = [message()], reply = [], after 
   const options = {
     home, now: () => NOW, env: {}, readTokenImpl: () => ({ admin: true, token: 'test-token' }),
     notifyKimImpl: async text => { notifications.push(text); return { delivered: 'dm' }; },
+    addItemImpl: async () => ({ id: 'mock-inbox-item' }),
     llm: async input => { llmCalls.push(input); return JSON.stringify(llmResult); },
     fetchImpl: async (url, init) => {
       const u = new URL(url); calls.push({ path: u.pathname, query: u.searchParams, ...init, body: init.body && JSON.parse(init.body) });
@@ -105,15 +106,129 @@ test('質問にprefixとmessage_reference付きPOST、履歴とログを保存',
   assert.equal(f.llmCalls[0].category, 'jp_reply');
   await runOnce(f.options); assert.equal(f.posts().length, 1);
 });
-test('判断待ちはkim-inboxに保存', async t => {
+test('判断待ちは暫定回答を送信しkim-inboxにも保存', async t => {
   const inboxItems = [];
   const f = fixture(t, { llmResult: { ...decision, needs_kim_decision: true }, addItemImpl: async (home, item) => { inboxItems.push(item); return { id: 'ki-1' }; } });
   await runOnce(f.options);
   assert.equal(f.posts().length, 1);
-  assert.ok(f.posts()[0].body.content.includes('金の確認待ちに登録しました'));
+  assert.ok(f.posts()[0].body.content.includes('kim 本人が確認後、訂正する場合があります'));
   assert.equal(inboxItems.length, 2);
   assert.equal(inboxItems[0].kind, 'ask');
   assert.match(inboxItems[0].text, /\[Discord 判断待ち \(guild\)\]/);
+});
+
+for (const answer of ['', '   ', undefined]) {
+  test(`判断が必要でanswer=${JSON.stringify(answer)}なら送信せずaskのみ`, async t => {
+    const items = [];
+    const f = fixture(t, { llmResult: { ...decision, needs_kim_decision: true, answer },
+      addItemImpl: async (_home, item) => { items.push(item); return { id: 'ask' }; } });
+    const result = await runOnce(f.options);
+    assert.equal(result.ok, true); assert.equal(f.posts().length, 0);
+    assert.deepEqual(items.map(i => i.kind), ['ask']);
+    assert.equal(f.readState().handled['100'].reason, 'decision');
+  });
+}
+
+test('禁止表現（kimに確認）→ 再生成1回 → 具体回答で送信', async t => {
+  let calls = 0;
+  const f = fixture(t);
+  f.options.llm = async () => {
+    calls++;
+    const answer = calls === 1 ? 'kimに確認いたします' : 'まず1個購入で進めてください';
+    return JSON.stringify({ ...decision, needs_kim_decision: true, answer });
+  };
+  const result = await runOnce(f.options);
+  assert.equal(calls, 2); assert.equal(result.replied, 1);
+  const content = f.posts()[0].body.content;
+  assert.match(content, /まず1個購入/); assert.doesNotMatch(content, /確認いたします/);
+  assert.match(content, /kim 本人が確認後、訂正する場合があります/);
+});
+test('禁止表現が2回続いたら送信せず判断待ち（askのみ）', async t => {
+  const items = [];
+  let calls = 0;
+  const f = fixture(t, { addItemImpl: async (_home, item) => { items.push(item); return { id: 'ask' }; } });
+  f.options.llm = async () => {
+    calls++;
+    return JSON.stringify({ ...decision, needs_kim_decision: true, answer: calls === 1 ? '確認待ちです' : '少々お待ちください' });
+  };
+  const result = await runOnce(f.options);
+  assert.equal(calls, 2); assert.equal(result.ok, true); assert.equal(f.posts().length, 0);
+  assert.equal(f.readState().handled['100'].reason, 'decision');
+  assert.deepEqual(items.map(i => i.kind), ['ask']);
+  assert.match(items[0].text, /\[Discord 判断待ち \(guild\)\]/);
+});
+test('禁止表現でもneeds_kim_decision=falseなら再生成後そのまま送信', async t => {
+  let calls = 0;
+  const f = fixture(t);
+  f.options.llm = async () => {
+    calls++;
+    const answer = calls === 1 ? '転送しました' : 'マニュアルの一覧から確認できます。';
+    return JSON.stringify({ ...decision, answer });
+  };
+  const result = await runOnce(f.options);
+  assert.equal(calls, 2); assert.equal(result.replied, 1);
+  assert.doesNotMatch(f.posts()[0].body.content, /kim 本人が確認後/);
+});
+test('禁止表現がなければ再生成しない', async t => {
+  let calls = 0;
+  const f = fixture(t);
+  f.options.llm = async () => { calls++; return JSON.stringify(decision); };
+  const result = await runOnce(f.options);
+  assert.equal(calls, 1); assert.equal(result.replied, 1);
+});
+
+test('禁止表現が2回続きneeds_kim_decision=falseでも送信せずaskのみ', async t => {
+  const items = [];
+  let calls = 0;
+  const f = fixture(t, { addItemImpl: async (_home, item) => { items.push(item); return { id: 'ask' }; } });
+  f.options.llm = async () => {
+    calls++;
+    return JSON.stringify({ ...decision, needs_kim_decision: false, answer: calls === 1 ? '確認待ちです' : '少々お待ちください' });
+  };
+  const result = await runOnce(f.options);
+  assert.equal(calls, 2); assert.equal(result.ok, true);
+  assert.equal(f.posts().length, 0);
+  assert.equal(f.readState().handled['100'].reason, 'decision');
+  assert.deepEqual(items.map(i => i.kind), ['ask']);
+});
+
+test('センシティブ質問で禁止表現→再生成成功→送信本文に注記＋ask', async t => {
+  const items = [];
+  let calls = 0;
+  const f = fixture(t, { llmResult: { ...decision, needs_kim_decision: false, answer: 'kimに確認いたします' },
+    addItemImpl: async (_home, item) => { items.push(item); return { id: 'ki-1' }; } });
+  f.options.llm = async () => {
+    calls++;
+    if (calls === 1) return JSON.stringify({ ...decision, needs_kim_decision: false, answer: 'kimに確認いたします' });
+    return JSON.stringify({ ...decision, needs_kim_decision: true, answer: 'まず1個購入で進めてください' });
+  };
+  const result = await runOnce(f.options);
+  assert.equal(calls, 2); assert.equal(result.replied, 1);
+  const content = f.posts()[0].body.content;
+  assert.match(content, /まず1個購入/);
+  assert.match(content, /kim 本人が確認後、訂正する場合があります/);
+  assert.equal(items.length, 2);
+  assert.equal(items[0].kind, 'ask');
+});
+
+test('判断が必要ならneeds_reply=falseでも暫定回答、dry-runではaskなし', async t => {
+  const items = [];
+  const f = fixture(t, { llmResult: { ...decision, needs_reply: false, needs_kim_decision: true },
+    addItemImpl: async (_home, item) => { items.push(item); return { id: 'item' }; } });
+  const preview = await runOnce({ ...f.options, dryRun: true });
+  assert.equal(preview.wouldSend.length, 1); assert.equal(items.length, 0);
+  const result = await runOnce(f.options);
+  assert.equal(result.replied, 1);
+  assert.equal(f.posts()[0].body.content, contentFor('資料を確認します。\n\n（kim 本人が確認後、訂正する場合があります）'));
+  assert.deepEqual(items.map(i => i.kind), ['ask', 'info']);
+});
+
+test('baselineより新しくても25時間前の投稿は送信もaskもなし', async t => {
+  const f = fixture(t, { messages: [message({ timestamp: new Date(NOW - 25 * 3600000).toISOString() })],
+    addItemImpl: async () => assert.fail('must not record inbox item') });
+  f.state.baselineTs = NOW - 48 * 3600000; f.writeState();
+  const result = await runOnce(f.options);
+  assert.equal(result.skipped.old, 1); assert.equal(f.posts().length, 0); assert.equal(f.llmCalls.length, 0);
 });
 test('生成中にkimが発言したら送信直前に止める', async t => {
   let count = 0;
@@ -547,27 +662,64 @@ test('gap-check: 対象メッセージ数とキュー登録数を返す', async 
   assert.equal(out[0].enqueued, 2);
 });
 
+test('inventedAmounts: 会話に無い金額を検出', () => {
+  assert.deepEqual(inventedAmounts('30,000円で対応可能です', '質問文'), [30000]);
+});
+test('inventedAmounts: 質問文にある金額は検出しない', () => {
+  assert.deepEqual(inventedAmounts('330,000円で対応可能です', '330,000円'), []);
+});
+test('inventedAmounts: 3万円と30,000円は同一扱い', () => {
+  assert.deepEqual(inventedAmounts('3万円で対応可能です', '30,000円'), []);
+});
+test('inventedAmounts: 金額なしは空配列', () => {
+  assert.deepEqual(inventedAmounts('対応可能です', ''), []);
+});
+test('会話に無い金額を含む回答は送信せず判断待ち', async t => {
+  const items = [];
+  const f = fixture(t, { llmResult: { ...decision, answer: '30,000円で対応可能です' },
+    addItemImpl: async (_home, item) => { items.push(item); return { id: 'ask' }; } });
+  const result = await runOnce(f.options);
+  assert.equal(result.ok, true);
+  assert.equal(f.posts().length, 0);
+  assert.equal(f.readState().handled['100'].reason, 'decision');
+  assert.deepEqual(items.map(i => i.kind), ['ask']);
+});
+test('質問文にある金額を回答で引用しても送信される', async t => {
+  const f = fixture(t, { messages: [message({ content: '<@715210673642012733> 330,000円の見積もりをお願いします' })],
+    llmResult: { ...decision, answer: '330,000円で承りました。' } });
+  f.state.baselineTs = NOW - 10000; f.writeState();
+  const result = await runOnce(f.options);
+  assert.equal(result.ok, true);
+  assert.equal(result.replied, 1);
+  assert.equal(f.posts().length, 1);
+  assert.match(f.posts()[0].body.content, /330,000円/);
+});
+
 
 test('新規IPv4接続を毎回使い本文読み込みの停止にも期限を適用', async t => {
-  const ports = new Set();
-  const server = createServer((req, res) => {
-    ports.add(req.socket.remotePort);
-    if (req.url === '/hang') { res.writeHead(200); res.write('{'); return; }
-    res.end(JSON.stringify({ ok: true }));
-  });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => { server.closeAllConnections(); server.close(); });
-  const url = `http://localhost:${server.address().port}`;
+  const requests = [];
+  const url = 'https://discord.test';
   const requestImpl = (url, options, callback) => {
     assert.equal(options.family, 4); assert.equal(options.agent, false);
-    return httpRequest(url, options, callback);
+    const req = new EventEmitter(); requests.push(req);
+    req.end = () => {
+      const res = new EventEmitter(); res.statusCode = 200;
+      callback(res);
+      res.emit('data', Buffer.from('{"ok":true}'));
+      if (!url.endsWith('/hang')) res.emit('end');
+      else options.signal.addEventListener('abort', () => req.emit('error', new Error('aborted')), { once: true });
+    };
+    return req;
   };
   for (let i = 0; i < 2; i++) {
     const res = await discordRequest(url, { signal: AbortSignal.timeout(2000) }, { requestImpl });
     assert.deepEqual(await res.json(), { ok: true });
   }
-  assert.equal(ports.size, 2, 'connections must not be reused across iterations');
-  await assert.rejects(discordRequest(url + '/hang', { signal: AbortSignal.timeout(100) }, { requestImpl }), /abort/i);
+  assert.equal(new Set(requests).size, 2, 'requests must not be reused across iterations');
+  const controller = new AbortController();
+  const hanging = discordRequest(url + '/hang', { signal: controller.signal }, { requestImpl });
+  controller.abort();
+  await assert.rejects(hanging, /abort/i);
 });
 
 test('一時的な読取失敗は短い待ちで復旧し各試行の期限を更新', async () => {

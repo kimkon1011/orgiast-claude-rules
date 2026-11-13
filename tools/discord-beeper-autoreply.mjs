@@ -8,7 +8,8 @@ import * as beeper from './beeper-api.mjs';
 import { isEntry } from './is-entry.mjs';
 import {
   classifyReply, contentFor, createLlm, ensureTaskPriority, decisionReport, sentReport,
-  isWithinAllowedTimeWindow, recordSentReply, flushUnreportedSentLogs, recordDecisionPending, readSentLog
+  isWithinAllowedTimeWindow, recordSentReply, flushUnreportedSentLogs, recordDecisionPending, readSentLog,
+  retryForbiddenAnswer, FORBIDDEN_REPLY_PTN, inventedAmounts
 } from './discord-autoreply.mjs';
 import { addItem as addKimInboxItem } from './kim-inbox.mjs';
 import { resolveDiscordLink } from './discord-beeper-link.mjs';
@@ -37,7 +38,7 @@ export function isDiscordChat(chat, accounts) {
     && accounts.some(a => a.accountID === DISCORD_ACCOUNT && a.network?.toLowerCase() === 'discord');
 }
 export function isMessageRequest(chat) {
-  return Boolean(chat.isMessageRequest || chat.isRequest || chat.messageRequest || chat.capabilities?.messageRequest
+  return Boolean(chat.isMessageRequest === true || chat.isRequest === true || chat.messageRequest === true
     || chat.participants?.items?.some(p => p.isPending));
 }
 // Only explicit native IDs, never the numeric Beeper-local chat/message IDs.
@@ -128,7 +129,7 @@ export async function runOnce(options = {}) {
         const row = { chatID: chat.localChatID || chat.id, chat: chat.title, messageId: latest?.id || null, reason, link, classification: '判断待ち' };
         result.decisions.push(row);
         state.chats[chat.id] = { ...(latest ? mark(latest) : prior), status, reason };
-        if (!latest && prior?.status === status && prior?.reason === reason) return;
+        if (dryRun || (!latest && prior?.status === status && prior?.reason === reason)) return;
         await recordDecisionPending(home, {
           where: 'dm',
           senderName: latest?.senderName || chat.title || 'User',
@@ -144,6 +145,7 @@ export async function runOnce(options = {}) {
         if (prior?.status !== 'sending' && isMessageRequest(chat) && chat.preview?.isSender === false
           && chat.preview.id && Number.isFinite(timestamp(chat.preview))) {
           latest = chat.preview; question = plainText(latest.text); link = messageLink(chat, latest);
+          if (now - timestamp(latest) > 24 * HOUR || timestamp(latest) > now) { result.skipped++; continue; }
           if (prior?.id === latest.id || (prior?.timestamp && compare(latest, prior) <= 0)) { result.skipped++; continue; }
           await decide('メッセージリクエスト・未承認'); continue;
         }
@@ -173,30 +175,95 @@ export async function runOnce(options = {}) {
         }
         if (prior?.status === 'uncertain' && (!lastSelf || compare(lastSelf, prior) <= 0)) { result.skipped++; continue; }
         if (!latest || latest.isSender) { result.skipped++; continue; }
+        if (now - timestamp(latest) > 24 * HOUR || timestamp(latest) > now) {
+          state.chats[chat.id] = { ...mark(latest), status: 'skipped' };
+          save(); result.skipped++; continue;
+        }
         link = messageLink(chat, latest);
         const pending = all.filter(m => !m.isSender && (!lastSelf || compare(m, lastSelf) > 0)
           && (!prior?.timestamp || compare(m, prior) > 0));
-        question = pending.map(m => `${m.senderName || ''}: ${plainText(m.text)}`).join('\n');
+        question = pending.map(m => {
+          let text = `${m.senderName || ''}: ${plainText(m.text)}`;
+          if (m.attachments?.length) {
+            const names = m.attachments.map(a => a.fileName || a.name || a.mimeType || 'ファイル').join(', ');
+            text += `\n（画像/ファイル添付あり: ${names}）`;
+          }
+          return text;
+        }).join('\n');
         if (prior?.id === latest.id || (prior?.timestamp && compare(latest, prior) <= 0)) { result.skipped++; continue; }
         if (isMessageRequest(chat)) { await decide('メッセージリクエスト・未承認'); continue; }
+        if (!pending.some(m => plainText(m.text))) {
+          state.chats[chat.id] = { ...mark(latest), status: 'fyi' };
+          save(); result.skipped++; continue;
+        }
         if (!addressedToKim(chat, pending, all, selfIDs)) { result.skipped++; continue; }
-        if (!history.complete || (chat.type === 'single' && !lastSelf)) { await decide('初対面または会話履歴を確認できません'); continue; }
+        if (history.complete && chat.type === 'single' && !lastSelf) { await decide('初対面または会話履歴を確認できません'); continue; }
         if (chat.isReadOnly || chat.participants?.items?.some(p => p.isSelf && p.cannotMessage)) { await decide('送信不可の会話'); continue; }
-        if (!pending.some(m => plainText(m.text)) || pending.some(m => m.attachments?.length)) { await decide('添付資料・本文の確認が必要'); continue; }
 
         if (!isWithinAllowedTimeWindow(now)) { result.skipped++; continue; }
 
         state.hourlyByChat[chat.id] = (state.hourlyByChat[chat.id] || []).filter(t => t > now - HOUR);
         if (state.hourlyByChat[chat.id].length >= 3) { result.skipped++; continue; }
 
-        const decision = await classifyReply(llm, {
+        const classifyInput = {
           channelName: chat.title, context: all.slice(-25).map(m => ({ author: m.senderName, content: plainText(m.text), isSelf: m.isSender })),
           message: { content: question },
           knowledge: read(path.join(home, '.claude', 'discord-autoreply', 'knowledge.md')),
           rules: read(path.join(home, '.claude', 'discord-autoreply', 'rules.md')),
-        });
-        if (decision.needs_kim_decision) { await decide('kim の判断が必要'); continue; }
+        };
+        let decision = await classifyReply(llm, classifyInput);
+        // 禁止表現（kimに確認/転送/確認待ち等）が含まれていたら1回だけ再生成
+        if (decision.answer?.trim() && FORBIDDEN_REPLY_PTN.test(decision.answer)) {
+          const origNeedsKim = decision.needs_kim_decision;
+          const retry = await retryForbiddenAnswer(llm, decision, classifyInput);
+          if (retry) {
+            decision = retry;
+            decision.needs_kim_decision = origNeedsKim || decision.needs_kim_decision;
+            decision.needs_reply = true;
+          } else {
+            decision.answer = ''; // 2回目も禁止→判断待ちのみへ
+          }
+        }
+        // 禁止表現再生成失敗で空本文なら送らず kim-inbox ask へ回す
+        if (!decision.answer?.trim()) {
+          decision.needs_kim_decision = true;
+        }
+        // 会話に無い金額を含む回答は送信しない
+        if (decision.answer?.trim()) {
+          const sourceText = [
+            classifyInput.message?.content || '',
+            ...(classifyInput.context || []).map(x => x.content || ''),
+            classifyInput.knowledge || '',
+            classifyInput.rules || '',
+          ].join('\n');
+          const invented = inventedAmounts(decision.answer, sourceText);
+          if (invented.length > 0) {
+            await decide('会話に無い金額を含むため kim の判断が必要');
+            continue;
+          }
+        }
+        if (decision.needs_kim_decision) {
+          const kimAnswer = decision.answer?.trim();
+          if (kimAnswer) {
+            decision.answer = kimAnswer + '\n\n（kim 本人が確認後、訂正する場合があります）';
+            const row = { chatID: chat.localChatID || chat.id, chat: chat.title, messageId: latest?.id || null, reason: 'kim の判断が必要（暫定回答あり）', link, classification: '判断待ち' };
+            result.decisions.push(row);
+            if (!dryRun) await recordDecisionPending(home, {
+              where: 'dm', senderName: latest?.senderName || chat.title || 'User',
+              channelName: chat.title || chat.id, channelId: chat.id,
+              messageId: latest?.id, question, link,
+            }, { addItemImpl });
+          } else {
+            await decide('kim の判断が必要'); continue;
+          }
+        }
         if (!decision.needs_reply) { state.chats[chat.id] = { ...mark(latest), status: 'fyi' }; save(); result.skipped++; continue; }
+
+        // 空本文ガード（念のため）
+        if (!decision.answer?.trim()) {
+          await decide('kim の判断が必要');
+          continue;
+        }
 
         const content = contentFor(decision.answer);
         state.hourly = state.hourly.filter(t => t > now - HOUR);

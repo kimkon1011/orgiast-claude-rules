@@ -531,7 +531,7 @@ test("register は06:30本番と07:30再実行の2タスクを同じ非表示ラ
   assert.match(out.command,/run-hidden\.vbs/);
   const bat=fs.readFileSync(path.join(home,".claude","tools","satou-secretary-daily-wrapper.bat"),"utf8");
   assert.match(bat,/satou-secretary-daily\.mjs/);
-  assert.match(bat,/satou-secretary\\run\.log/);
+  assert.ok(bat.includes(path.join(home,".claude","satou-secretary","run.log")));
 });
 test("同時実行と応答消失時は再送せず、ゲートNG時は送信済みにしない", async t => {
   const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-lock-")); t.after(()=>fs.rmSync(home,{recursive:true,force:true}));

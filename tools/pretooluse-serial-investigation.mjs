@@ -5,14 +5,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { isReadOnlyToolUse } from './usage-stats.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+import { isEntry } from './is-entry.mjs';
+
+export async function hookMain(raw) {
 
 try {
-  const raw = await readStdinWithTimeout();
+
   const input = JSON.parse(raw), name = String(input.tool_name || ''), sessionId = String(input.session_id || 'default');
   const home = process.env.ORGIAST_HOME || os.homedir(), file = path.join(home, '.claude', '.serial-investigation.json'), now = Date.now(); let state = {};
   try { state = JSON.parse(fs.readFileSync(file, 'utf8')); if (!state || Array.isArray(state) || typeof state !== 'object') state = {}; } catch {}
   for (const [key, value] of Object.entries(state)) if (!value || now - Number(value.ts || 0) >= 864e5) delete state[key];
-  if (isPastLogSearchToolUse(name, input.tool_input)) process.exit(0);
+  if (isPastLogSearchToolUse(name, input.tool_input)) return;
   let userFacing = false;
   try { userFacing = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'session-lane', `${sessionId}.json`), 'utf8')).userFacing === true; } catch {}
   const count = isReadOnlyToolUse(name, input.tool_input) ? Number(state[sessionId]?.count || 0) + 1 : 0, warn = !userFacing && count >= 4;
@@ -23,3 +26,6 @@ try {
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: context } }));
   }
 } catch {}
+
+}
+if (isEntry(import.meta.url)) await hookMain(await readStdinWithTimeout());

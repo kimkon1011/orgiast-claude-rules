@@ -45,10 +45,10 @@ const addCost = (a, b) => a === null || b === null ? null : a + (Number(b) || 0)
 const PROVIDERS = {
   groq: { base: 'https://api.groq.com/openai/v1/chat/completions', keyEnv: 'GROQ_API_KEY', keyFile: 'groq.env', model: 'openai/gpt-oss-120b' },
   openrouter: { base: 'https://openrouter.ai/api/v1/chat/completions', keyEnv: 'OPENROUTER_API_KEY', keyFile: 'openrouter.env', model: 'meta-llama/llama-3.3-70b-instruct', headers: { 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast-eval' } },
-  gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', keyEnv: 'GEMINI_API_KEY', keyFile: 'gemini.env', model: 'gemini-3.7-flash' },
+  gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', keyEnv: 'GEMINI_API_KEY', keyFile: 'gemini.env', model: 'gemini-3.6-flash' },
   deepseek: gatewayConfig('deepseek'),
   kimi: gatewayConfig('kimi'),
-  mistral: { base: 'https://api.mistral.ai/v1/chat/completions', keyEnv: 'MISTRAL_API_KEY', keyFile: 'mistral.env', model: 'mistral-large-latest' },
+  mistral: { base: 'https://api.mistral.ai/v1/chat/completions', keyEnv: 'MISTRAL_API_KEY', keyFile: 'mistral.env', model: 'mistral-medium-latest' },
   ollama: { base: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434/v1/chat/completions', model: '', local: true },
   anthropic: { base: 'https://api.anthropic.com/v1/messages', keyEnv: 'ANTHROPIC_API_KEY', keyFile: 'anthropic.env', model: 'claude-haiku-4-5-20251001', anthropic: true }
 };

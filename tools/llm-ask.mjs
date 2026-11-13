@@ -4,6 +4,7 @@ import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import { readEnvValue } from './env-kv.mjs';
 import { allowedForCategory, callWithFallback, FALLBACK_CHAIN, preferredForCategory } from './llm-fallback.mjs';
 import { geminiUsage, recordGeminiUsage } from './gemini-usage-ledger.mjs';
+import { isEntry } from './is-entry.mjs';
 
 const PROVIDERS = {
   // 実測で精度が高く、llama-3.3-70b より安価な共通既定モデル。
@@ -15,18 +16,23 @@ const PROVIDERS = {
   cerebras: { base: 'https://api.cerebras.ai/v1/chat/completions', keyEnv: 'CEREBRAS_API_KEY', keyFile: 'cerebras.env', model: 'zai-glm-4.7' },
   // Genspark Pro の前払いクレジット枠。OpenAI 互換の LLM proxy で claude-opus-5 等36モデルが1キーで叩ける。
   genspark: { base: 'https://www.genspark.ai/api/llm_proxy/v1/chat/completions', keyEnv: 'GSK_PROXY_KEY', keyFile: 'genspark-proxy.env', model: 'gpt-5.6-luna' },
-  gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', keyEnv: 'GEMINI_API_KEY', keyFile: 'gemini.env', model: 'gemini-3.7-flash' },
+  gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', keyEnv: 'GEMINI_API_KEY', keyFile: 'gemini.env', model: 'gemini-3.6-flash' },
   deepseek: gatewayConfig('deepseek'),
   grok: { base: 'https://api.x.ai/v1/chat/completions', keyEnv: 'XAI_API_KEY', keyFile: 'xai.env', model: 'grok-3' },
   kimi: gatewayConfig('kimi'),
   mistral: gatewayConfig('mistral'),
+  // OpenRouter 経由の Claude モデル（直接の Claude API ではなく OpenRouter の proxy）。
+  // Haiku/Sonnet/Opus の実測ベンチマーク用。--model で `anthropic/claude-sonnet-5` 等を指定。
+  claude: { base: 'https://openrouter.ai/api/v1/chat/completions', keyEnv: 'OPENROUTER_API_KEY', keyFile: 'openrouter.env', model: 'anthropic/claude-haiku-5.5', extraHeaders: { 'HTTP-Referer': 'https://orgiast.jp', 'X-Title': 'orgiast' } },
 };
+export const OPENROUTER_GEMINI_MODEL = `google/${PROVIDERS.gemini.model}`;
 
+if (isEntry(import.meta.url)) {
 const args = process.argv.slice(2);
 function opt(name, def) { const i = args.indexOf(name); return (i >= 0 && args[i + 1]) ? args[i + 1] : def; }
 const provider = (opt('--provider', '') || '').toLowerCase();
 const selected = PROVIDERS[provider];
-if (!selected) { console.error('使い方: node llm-ask.mjs --provider <openrouter|groq|glm|cerebras|genspark|gemini|deepseek|grok|kimi|mistral> "指示" [--model X] [--system S] [--max N] [--category <classification|extraction|summarize|jp_reply|code|transcript>] [--prompt-file PATH] [--no-fallback] [--prefer-provider] [--per-provider-timeout-ms N]'); process.exit(2); }
+if (!selected) { console.error('使い方: node llm-ask.mjs --provider <openrouter|groq|glm|cerebras|genspark|gemini|deepseek|grok|kimi|mistral> "指示" [--model X] [--system S] [--max N] [--category <classification|extraction|summarize|jp_reply|code|transcript>] [--prompt-file PATH] [--usage-file PATH] [--no-fallback] [--prefer-provider] [--per-provider-timeout-ms N]'); process.exit(2); }
 const model = opt('--model', selected.model);
 // claude-fable-5 系は別課金枠のため組織ルールで全用途禁止。
 if (/fable/i.test(model)) { console.error('fable を含むモデルは組織ルールにより使用できません'); process.exit(2); }
@@ -37,7 +43,7 @@ const timeoutArg = opt('--per-provider-timeout-ms', '');
 const perProviderTimeoutMs = args.includes('--per-provider-timeout-ms') ? Number(timeoutArg) : undefined;
 if (perProviderTimeoutMs !== undefined && (!Number.isSafeInteger(perProviderTimeoutMs) || perProviderTimeoutMs <= 0 || perProviderTimeoutMs > 2147483647)) { console.error('--per-provider-timeout-ms requires a positive timer-safe integer'); process.exit(2); }
 const skip = new Set();
-['--provider', '--model', '--system', '--max', '--category', '--prompt-file', '--per-provider-timeout-ms'].forEach((flag) => { const i = args.indexOf(flag); if (i >= 0) { skip.add(i); skip.add(i + 1); } });
+['--provider', '--model', '--system', '--max', '--category', '--prompt-file', '--per-provider-timeout-ms', '--usage-file'].forEach((flag) => { const i = args.indexOf(flag); if (i >= 0) { skip.add(i); skip.add(i + 1); } });
 const promptFile = opt('--prompt-file', '');
 if (args.includes('--prompt-file') && (!promptFile || promptFile.startsWith('--'))) { console.error('--prompt-file requires a path'); process.exit(2); }
 const prompt = promptFile ? fs.readFileSync(promptFile, 'utf8') : args.filter((arg, i) => !arg.startsWith('--') && !skip.has(i)).join(' ').trim();
@@ -73,13 +79,23 @@ const selectedKey = loadKey(provider);
 if (args.includes('--print-key-status')) { console.log(selectedKey ? `${selected.keyEnv}: 設定済み` : `${selected.keyEnv}: 未設定`); process.exit(selectedKey ? 0 : 2); }
 if (!prompt) { console.error('指示テキストがありません'); process.exit(2); }
 
+const routeMissingGemini = candidate => candidate.provider === 'gemini' && !loadKey('gemini') && loadKey('openrouter')
+  ? { provider: 'openrouter', model: OPENROUTER_GEMINI_MODEL }
+  : candidate;
+const routedGeminiStart = start.provider === 'gemini' && routeMissingGemini(start).provider === 'openrouter';
+const effectiveStart = routeMissingGemini(start);
+const effectiveChain = FALLBACK_CHAIN.map(routeMissingGemini);
+if (routedGeminiStart) console.error(`[routing] gemini 鍵なし → openrouter/${OPENROUTER_GEMINI_MODEL}`);
+
 const messages = [];
 if (system) messages.push({ role: 'system', content: system });
 messages.push({ role: 'user', content: prompt });
 const GEMINI_MIN_MAX_TOKENS = 256;
-const ledger = path.join(home, '.claude', 'executor-usage.jsonl');
-function appendAttempt(info, usage = {}) {
-  if (args.includes('--no-persist')) return;
+const usageFile = opt('--usage-file', '');
+if (args.includes('--usage-file') && (!usageFile || usageFile.startsWith('--'))) { console.error('--usage-file requires a path'); process.exit(2); }
+const ledger = usageFile || path.join(home, '.claude', 'executor-usage.jsonl');
+function appendAttempt(info, usage = {}, errorText = '') {
+  if (args.includes('--no-persist') && !usageFile) return;
   if (info.candidate.provider === 'gemini') {
     const measured = geminiUsage({ usage });
     try {
@@ -97,17 +113,19 @@ function appendAttempt(info, usage = {}) {
   }
   // 失敗理由も残す。reason が無いと delegation-health 側で「残高切れ」と「ただの rate limit」を
   // 区別できず、直せない全滅として毎日起票される（2026-10-22 実測: kimi の 2337 行が reason 欠落）。
-  const rec = { t: new Date().toISOString(), provider: info.candidate.provider, model: info.candidate.model, ...usageCostFields(usage), in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover, ...(info.status !== 'ok' && info.reason ? { reason: String(info.reason).slice(0, 400) } : {}) };
+  const reasonField = info.status !== 'ok' && info.reason ? { reason: String(info.reason).slice(0, 400) } : {};
+  const errorField = errorText ? { error: errorText } : {};
+  const rec = { t: new Date().toISOString(), provider: info.candidate.provider, model: info.candidate.model, ...usageCostFields(usage), in: usage.prompt_tokens || 0, out: usage.completion_tokens || 0, secs: Number(info.secs.toFixed(3)), status: info.status, attempt: info.attempt, failover: info.failover, ...reasonField, ...errorField };
   try { fs.mkdirSync(path.dirname(ledger), { recursive: true }); fs.appendFileSync(ledger, JSON.stringify(rec) + '\n'); } catch {}
 }
 
 try {
   const result = await callWithFallback({
     persistState: !args.includes('--no-persist'),
-    start,
+    start: effectiveStart,
     category,
     perProviderTimeoutMs,
-    chain: args.includes('--no-fallback') ? [] : FALLBACK_CHAIN,
+    chain: args.includes('--no-fallback') ? [] : effectiveChain,
     allowGatewayFallback: !args.includes('--no-fallback'),
     payloadFor(candidate) {
       const P = PROVIDERS[candidate.provider]; const key = loadKey(candidate.provider);
@@ -120,10 +138,16 @@ try {
       return { url: P.base, init: { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(P.extraHeaders || {}) }, body: JSON.stringify(payload) } };
     },
     async onAttempt(info) {
-      if (args.includes('--no-persist')) return;
+      if (args.includes('--no-persist') && !usageFile) return;
       let usage = {};
-      if (info.status === 'ok') usage = (await info.response.clone().json().catch(() => ({}))).usage || {};
-      appendAttempt(info, usage);
+      let errorText = '';
+      if (info.status === 'ok') {
+        usage = (await info.response.clone().json().catch(() => ({}))).usage || {};
+      } else if (info.response) {
+        const body = await info.response.clone().text().catch(() => '');
+        errorText = body.replace(/Authorization:\s*Bearer\s+\S+/gi, '').replace(/[Aa]pi[_-]?[Kk]ey['"]?\s*[:=]\s*['"]?\S+/gi, '').slice(0, 300).trim();
+      }
+      appendAttempt(info, usage, errorText);
     },
     onFailover({ from, to, reason }) { console.error(`[failover] ${from.provider}:${from.model} ${reason} → ${to.provider}:${to.model}`); },
   });
@@ -135,4 +159,5 @@ try {
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;
+}
 }

@@ -245,3 +245,14 @@ test('routing-table.json は追跡されず gitignore される', () => {
   assert.equal(git('ls-files', '--', 'tools/routing-table.json'), '', 'routing-table.json must not be tracked');
   assert.equal(git('check-ignore', '--', 'tools/routing-table.json'), 'tools/routing-table.json', 'routing-table.json must be gitignored');
 });
+
+test('brandcard 印刷の qrcode キャッシュは追跡されず gitignore される', t => {
+  const { repo, git } = fixture(t);
+  fs.writeFileSync(path.join(repo, '.gitignore'), fs.readFileSync(new URL('../.gitignore', import.meta.url), 'utf8'));
+  fs.mkdirSync(path.join(repo, 'tools', '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'tools', '.cache', 'qrcode.min.js'), 'var QRCode;');
+  fs.writeFileSync(path.join(repo, 'still-dirty'), 'x');
+  const status = git(repo, ['status', '--porcelain', '--untracked-files=all']);
+  assert.equal(status.includes('.cache'), false, 'tools/.cache/ は worktree を dirty にしない（救済ブランチの毎時 churn を止める）');
+  assert.ok(status.includes('still-dirty'), '他の untracked は従来どおり dirty（テストが空振りしていない）');
+});

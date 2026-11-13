@@ -1,0 +1,17 @@
+✔ LLM CLI reads a long UTF-8 prompt file verbatim without interpreting its contents as arguments (643.447668ms)
+✔ CLI pins Gemini despite extraction routing and falls back when it hangs (441.057084ms)
+✔ CLI rejects invalid per-provider timeout values before making requests (598.717048ms)
+✔ transcript は明示 DeepSeek と prefer-provider より優先して次候補へ回す (345.371744ms)
+✔ DeepSeek Flash は推論なしで送信し、Proの推論設定には触れない (1261.797724ms)
+✔ Gemini は --max が小さくても思考トークン分の下限を確保し、他プロバイダの --max は変えない (530.52622ms)
+✔ missing Gemini key routes explicit Gemini request through OpenRouter Gemini (196.272682ms)
+✔ fallback chain replaces keyless Gemini candidate with OpenRouter Gemini (164.096568ms)
+✔ print-key-status reports native Gemini key status without OpenRouter substitution (104.053543ms)
+ℹ tests 9
+ℹ suites 0
+ℹ pass 9
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4561.235295

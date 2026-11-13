@@ -1,3 +1,4 @@
+import { readHookSettings, copyDispatchRegistration } from './fixtures/read-hook-settings.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -5,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { extractAddresses, extractMentions, GMAIL_WRITE_ACTIONS, githubHandles, HOOK_MATCHER, isGhWriteCommand, isInternal, judge, judgeBash, loadLedger, SHELL_TOOLS, TARGET } from './internal-recipient-gmail-guard.mjs';
+import { extractAddresses, extractMentions, GMAIL_WRITE_ACTIONS, githubHandles, HOOK_MATCHER, isGhWriteCommand, isInternal, judge, judgeBash, loadLedger, shouldBlockInternal, SHELL_TOOLS, TARGET } from './internal-recipient-gmail-guard.mjs';
 
 const ledger = JSON.parse(fs.readFileSync(new URL('./internal-recipients.default.json', import.meta.url), 'utf8'));
 const hook = (tool_input, action = 'create_draft', account = '') => ({ tool_name: `mcp__claude_ai_Gmail${account}__${action}`, tool_input });
@@ -31,8 +32,17 @@ test('表示名付きの社内ドメインへの送信を拒否', () => {
 test('外部顧客への下書きは通す', () => {
   assert.deepEqual(judge(hook({ to: 'customer@example.co.jp' }), ledger), { decision: 'pass', addresses: ['customer@example.co.jp'], internal: [] });
 });
-test('to が外部でも cc に内部宛があれば拒否', () => {
-  assert.equal(judge(hook({ to: 'customer@example.co.jp', cc: ['keiri.orgiast@gmail.com'] }), ledger).decision, 'block');
+test('To に外部宛があれば社内 Cc/Bcc を許可し、なければ拒否', () => {
+  assert.equal(judge(hook({ to: 'customer@example.co.jp', cc: ['keiri.orgiast@gmail.com'] }), ledger).decision, 'pass');
+  assert.equal(judge(hook({ to: 'customer@example.co.jp', bcc: ['atsuoast3@gmail.com'] }), ledger).decision, 'pass');
+  assert.equal(judge(hook({ to: 'nishi@orgiast.jp' }), ledger).decision, 'block');
+  assert.equal(judge(hook({ to: 'nishi@orgiast.jp', cc: ['customer@example.co.jp'] }), ledger).decision, 'block');
+  assert.equal(judge(hook({ to: ['nishi@orgiast.jp', 'customer@example.co.jp'] }), ledger).decision, 'pass');
+  assert.equal(judge(hook({ to: 'kimkongyong@gmail.com' }), ledger).decision, 'block');
+  assert.equal(shouldBlockInternal({ to: 'customer@example.co.jp', cc: 'kimkongyong@gmail.com' }, ledger), false);
+});
+test('reply で to/cc 未指定の場合は現行どおり pass', () => {
+  assert.equal(judge(hook({ message_id: 'message-1' }, 'reply'), ledger).decision, 'pass');
 });
 test('Drive など対象外は即 pass', () => {
   assert.deepEqual(judge({ tool_name: 'mcp__claude_ai_Google_Drive__create_file', tool_input: { to: 'nishi@orgiast.jp' } }, null), { decision: 'pass', addresses: [], internal: [] });
@@ -110,19 +120,20 @@ test('既存配布処理は指定 matcher・timeout で登録し、再実行で�
   const repo = path.join(home, 'repo');
   fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
   fs.copyFileSync(script, path.join(repo, 'tools', path.basename(script)));
+  copyDispatchRegistration(repo);
   const settingsFile = path.join(home, '.claude', 'settings.json');
   const existing = { matcher: 'Example', hooks: [{ type: 'command', command: 'node existing.mjs' }] };
   fs.writeFileSync(settingsFile, JSON.stringify({ custom: true, hooks: { PreToolUse: [existing] } }));
   for (let i = 0; i < 2; i++) {
     const result = spawnSync(process.execPath, [fileURLToPath(new URL('./register-hooks.mjs', import.meta.url)), '--hooks-only'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo }, timeout: 5000 });
     assert.equal(result.status, 0, result.stderr);
-    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    const settings = readHookSettings(settingsFile);
     assert.equal(settings.custom, true);
     assert.deepEqual(settings.hooks.PreToolUse[0], existing);
     const groups = settings.hooks.PreToolUse.filter((group) => group.hooks.some((h) => h.command.includes('internal-recipient-gmail-guard')));
     assert.equal(groups.length, 1);
     assert.equal(groups[0].matcher, HOOK_MATCHER);
-    assert.deepEqual(groups[0].hooks, [{ type: 'command', command: `node "${path.join(repo, 'tools', path.basename(script))}"`, timeout: 5 }]);
+    assert.deepEqual(groups[0].hooks, [{ type: 'command', command: `node "${path.join(repo, 'tools', 'gate-hook-runner.mjs')}" "${path.join(repo, 'tools', path.basename(script))}"`, timeout: 15 }]);
   }
 });
 test('既存の古い matcher を重複なしで昇格し、再実行しても変わらない', (t) => {
@@ -130,6 +141,7 @@ test('既存の古い matcher を重複なしで昇格し、再実行しても�
   const repo = path.join(home, 'repo');
   fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
   fs.copyFileSync(script, path.join(repo, 'tools', path.basename(script)));
+  copyDispatchRegistration(repo);
   const settingsFile = path.join(home, '.claude', 'settings.json');
   const oldMatcher = 'mcp__claude_ai_Gmail__create_draft|mcp__claude_ai_Gmail__send_message|mcp__claude_ai_Gmail__update_draft|mcp__claude_ai_Gmail__reply|mcp__claude_ai_Gmail__forward|mcp__claude_ai_Gmail_2__create_draft|mcp__claude_ai_Gmail_2__send_message';
   const command = `node "${path.join(repo, 'tools', path.basename(script))}"`;
@@ -139,14 +151,14 @@ test('既存の古い matcher を重複なしで昇格し、再実行しても�
   const execute = () => spawnSync(process.execPath, [register, '--hooks-only'], { encoding: 'utf8', env, timeout: 5000 });
   const first = execute();
   assert.equal(first.status, 0, first.stderr);
-  const promoted = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  const promoted = readHookSettings(settingsFile);
   const groups = promoted.hooks.PreToolUse.filter((group) => group.hooks.some((item) => item.command.includes('internal-recipient-gmail-guard')));
   assert.equal(groups.length, 1);
   assert.equal(groups[0].matcher, HOOK_MATCHER);
   const serialized = JSON.stringify(promoted);
   const second = execute();
   assert.equal(second.status, 0, second.stderr);
-  assert.equal(JSON.stringify(JSON.parse(fs.readFileSync(settingsFile, 'utf8'))), serialized);
+  assert.equal(JSON.stringify(readHookSettings(settingsFile)), serialized);
   // このrepoにはguard1本しか無い=他hookは全てskip。無言skip廃止により
   // 「変更なし」単独の正常表示にはならず、[注意]とskip行が出る(2026-09-14 実害の再発防止)。
   assert.match(second.stdout, /ただし \d+ 本は repo に無く未登録/);
@@ -173,6 +185,10 @@ test('curl POST drafts の外部アドレスは実プロセスでも無出力で
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, '');
   assert.equal(result.stderr, '');
+});
+test('curl POST drafts の外部宛 + 内部 Cc は通す', () => {
+  const command = `curl -X POST https://gmail.googleapis.com/gmail/v1/users/me/drafts -d 'To: customer@example.com Cc: keiri.orgiast@gmail.com'`;
+  assert.equal(judgeBash(shellHook(command), ledger).decision, 'pass');
 });
 test('GET drafts の読み取りは通す', () => {
   assert.equal(judgeBash(shellHook('curl https://gmail.googleapis.com/gmail/v1/users/me/drafts/abc123'), ledger).decision, 'pass');

@@ -21,7 +21,7 @@ export function repairRows(home) {
 }
 export function pendingRepairs(health, home, now = Date.now()) {
   const rows = repairRows(home);
-  return Object.entries(health?.lanes || {}).filter(([lane, state]) => lane !== 'gemini-cli' && repairable(state)
+  return Object.entries(health?.lanes || {}).filter(([lane, state]) => repairable(state)
     && !rows.some(r => r.lane === lane && r.faultId === faultId(lane, state) && r.tried?.trim()
       && ['fixed', 'unfixable'].includes(r.result) && Date.parse(r.ts) <= now && Date.parse(r.ts) > now - REPAIR_TTL))
     .map(([lane, state]) => ({ lane, ...state }));

@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { compareVersions, targetVersion, verifySha256, buildFallbackCmd, convergeNodeRuntimeSecurity } from './setup-node-runtime-security.mjs';
+import { powerShellTestRuntime } from './fixtures/powershell-test-runtime.mjs';
+import { compareVersions, targetVersion, verifySha256, buildFallbackCmd, convergeNodeRuntimeSecurity, isInteractiveConsole } from './setup-node-runtime-security.mjs';
 
 const releases = ['v22.23.4', 'v24.9.0', 'v26.12.1', 'v24.22.1', 'v24.22.0', 'v24.23.0-rc.1'].map((version) => ({ version }));
 const bytes = Buffer.from('mock official MSI');
@@ -15,6 +16,10 @@ const psScript = (args) => Buffer.from(args.at(-1), 'base64').toString('utf16le'
 async function fixture(t, options = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'node-security-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
+  // auto RunAs（UAC）を検証する既存テストは対話コンソール扱いにする。
+  // 無人の hook/converge 相当（RunAs を起動してはならない）は interactive:false で指定する。
+  if (options.interactive !== false) process.env.ORGIAST_NODE_UPDATER_UAC_INTERACTIVE = '1';
+  t.after(() => { if (options.interactive !== false) delete process.env.ORGIAST_NODE_UPDATER_UAC_INTERACTIVE; });
   let current = options.current || 'v24.20.0', ubuntu = options.ubuntu;
   let now = 0, launches = 0;
   const calls = [], downloads = [], sleeps = [];
@@ -166,6 +171,25 @@ test('UAC process launch failure leaves the recovery launcher', async (t) => {
   await fs.access(f.launcher);
 });
 
+test('non-elevated unattended (hook/scheduled) never launches RunAs; leaves launcher + notice', async (t) => {
+  const f = await fixture(t, { elevated: false, interactive: false });
+  const result = await convergeNodeRuntimeSecurity(f.io);
+  assert.equal(result.status, 'NOTICE');
+  assert.equal(f.launches, 0);
+  assert.match(result.description, /非昇格の無人実行/);
+  assert.match(result.description, /ダブルクリック/);
+  assert.doesNotMatch(result.description, /UAC 起動失敗/);
+  await fs.access(f.launcher);
+});
+
+test('isInteractiveConsole is false without a TTY unless the env override is set', () => {
+  delete process.env.ORGIAST_NODE_UPDATER_UAC_INTERACTIVE;
+  assert.equal(isInteractiveConsole(), Boolean(process.stdout.isTTY));
+  process.env.ORGIAST_NODE_UPDATER_UAC_INTERACTIVE = '1';
+  assert.equal(isInteractiveConsole(), true);
+  delete process.env.ORGIAST_NODE_UPDATER_UAC_INTERACTIVE;
+});
+
 for (const options of [{ networkFail: true }, { failUrl: 'SHASUMS256.txt' }, { failUrl: '.msi' }, { badSha: true }, { index: '{}' }]) {
   test(`network/index/hash failure never invokes installer: ${JSON.stringify(options)}`, async (t) => {
     const f = await fixture(t, options);
@@ -238,9 +262,7 @@ test('fallback handles Japanese, spaces, apostrophes and cmd metacharacters as d
 test('Windows PowerShell 5.1 parses the launcher and executes its payload with mocked MSI/files/node', async (t) => {
   const powershell = process.platform === 'win32' ? 'powershell.exe'
     : '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe';
-  if (process.platform !== 'win32') {
-    try { await fs.access(powershell); } catch { t.skip('Windows PowerShell is unavailable'); return; }
-  }
+  if (!powerShellTestRuntime(powershell)) { t.skip('PowerShell script execution unavailable on this host'); return; }
   const cmd = buildFallbackCmd({ msi: "C:\\Temp\\O'Brien 日本語\\node.msi", log: 'C:\\Temp\\msi.log',
     resultLog: 'C:\\Users\\original\\.claude\\logs\\node-update.log', digest: hash, target: 'v24.22.1', node: 'ReadMockNode' });
   const bootstrap = cmd.split(/^# POWERSHELL\r?$/m)[1];
@@ -281,12 +303,18 @@ test('setup integration emits exactly one runtime result, skips verify and custo
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   await fs.mkdir(path.join(root, 'lib'));
   await fs.copyFile(new URL('./setup.mjs', import.meta.url), path.join(root, 'setup.mjs'));
+  await fs.copyFile(new URL('./lib/setup-converge-lock.mjs', import.meta.url), path.join(root, 'lib', 'setup-converge-lock.mjs'));
+  for (const name of ['hook-dispatch-registry.mjs', 'gate-contracts.mjs']) {
+    await fs.copyFile(new URL(`./${name}`, import.meta.url), path.join(root, name));
+  }
   await fs.copyFile(new URL('./setup-task-hidden-actions.mjs', import.meta.url), path.join(root, 'setup-task-hidden-actions.mjs'));
   const files = {
     'setup-manifest.json': '{"version":1,"items":[]}',
     'lib/playbook-distribution.mjs': 'export const distributePlaybooks = () => 0;',
     'lib/fleet-label.mjs': 'export const resolveFleetLabel = () => "test";',
     'register-fleet-mail.mjs': 'export const fleetHubNeedsConfiguration = () => false;',
+	    'setup-nightly-reload.mjs': 'export const convergeNightlyReload = () => ({status: "OK", checked: true, repaired: false, description: "VS Code night restart"});',
+    'setup-deadline-watch.mjs': 'export const convergeDeadlineTasks = () => ({status: "NOTICE", checked: true, repaired: false, description: "Deadline tasks"});',
     'allow-rules.mjs': 'export const convergeAllowRules = () => false;',
     'mobile-standby.mjs': 'export const convergeMobileStandby = () => ({ok: true, lines: []});',
     'register-hooks.mjs': '',
@@ -296,6 +324,7 @@ test('setup integration emits exactly one runtime result, skips verify and custo
   const run = (args) => execFileSync(process.execPath, [path.join(root, 'setup.mjs'), '--home', root, '--no-beacon', ...args], { encoding: 'utf8' });
   const output = run(['--converge']);
   assert.equal(output.split('\n').filter(line => line.includes('task-hidden-actions')).length, 1);
+  assert.equal(output.split('\n').filter(line => line.includes('deadline-watch')).length, 1);
   assert.equal(output.split('\n').filter((line) => line.includes('node-runtime-security')).length, 1);
   assert.match(output, /^\[OK \] node-runtime-security - Windows v24\.22\.1 \/ WSL v22\.23\.4$/m);
   assert.equal(JSON.parse(run(['--converge', '--json'])).items.find((item) => item.id === 'node-runtime-security').status, 'OK');

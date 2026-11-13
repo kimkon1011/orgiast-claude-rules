@@ -39,7 +39,7 @@ export function buildReport({ home, now = Date.now, selfLabel, pcMap, readInboxI
 }
 
 // ウォッチドッグから呼ぶ。新しい dead（pc|lane|reason）だけ DM。解消した key は state から消して、再発時に再通知する。
-export async function runLaneHealthWatch({ home, now = Date.now, notify = notifyKim, dryRun = false, selfLabel, pcMap, readInboxImpl, stderr = console.error } = {}) {
+export async function runLaneHealthWatch({ home, now = Date.now, notify = notifyKim, dryRun = false, selfLabel, pcMap, readInboxImpl, stderr = console.error, maxNotifications = 10 } = {}) {
   const label = selfLabel ?? (() => { try { return resolveFleetLabel(home); } catch { return LANE_HEALTH_KIM_PC; } })();
   const map = pcMap ?? readJson(path.join(repoRoot, 'fleet-pc-map.json'), {});
   const { rows, table } = buildReport({ home, now, selfLabel: label, pcMap: map, readInboxImpl });
@@ -47,10 +47,12 @@ export async function runLaneHealthWatch({ home, now = Date.now, notify = notify
   const state = readJson(stateFile, {});
   const next = {};
   const notified = [];
+  let attempts = 0;
   for (const row of rows) {
     if (state[row.key]) { next[row.key] = state[row.key]; continue; }
     // 一時的な probe 失敗は DM しない（表には残る）。
-    if (dryRun || row.silent) continue;
+    if (dryRun || row.silent || attempts >= maxNotifications) continue;
+    attempts++;
     try {
       const result = await notify(laneHealthDm(row), { home, webhookFallback: false });
       if (result?.delivered && result.delivered !== 'none') { next[row.key] = new Date(now()).toISOString(); notified.push(row.key); }

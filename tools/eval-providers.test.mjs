@@ -10,12 +10,14 @@ const config = JSON.parse(fs.readFileSync(new URL('eval-providers.json', import.
 test('eval-providers.json は provider/model を持つ配列', () => {
   assert.ok(Array.isArray(config), '配列であること');
   assert.ok(config.length > 0, '空ではないこと');
-  for (const entry of config) {
+  const providers = config.filter((x) => 'provider' in x);
+  assert.ok(providers.length > 0, 'provider を持つエントリが1つもない');
+  for (const entry of providers) {
     assert.equal(typeof entry.provider, 'string', `provider が文字列でない: ${JSON.stringify(entry)}`);
     assert.equal(typeof entry.model, 'string', `model が文字列でない: ${JSON.stringify(entry)}`);
     if ('skip' in entry) assert.equal(typeof entry.skip, 'boolean', 'skip は真偽値');
   }
-  const names = config.map((x) => `${x.provider}/${x.model}`);
+  const names = providers.map((x) => `${x.provider}/${x.model}`);
   assert.equal(new Set(names).size, names.length, `provider/model が重複している: ${names.join(',')}`);
 });
 

@@ -1,0 +1,9 @@
+{
+  "note": "社員が個人 Gmail から返信するアドレス。ここに載る送信者は社内として扱い、返信待ちに載せない。根拠: 仕様書の社員例と、seisaku-team@/kim@ の直近90日の送信済みメール（To/Cc）への出現。他の gmail.com は顧客・応募者の可能性があり、確認できるまで追加しない。",
+  "addresses": [
+    "matsumoto.y.work@gmail.com",
+    "orgiast.remote@gmail.com",
+    "meropp.16@gmail.com",
+    "taka05250925@gmail.com"
+  ]
+}

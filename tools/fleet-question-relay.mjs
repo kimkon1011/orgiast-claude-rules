@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { createReclaimDirectory, removeReclaimDirectory } from './lib/reclaim-lock.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -41,12 +42,12 @@ export function updateQuestion(home, id, update) {
     catch (error) {
       if (error.code !== 'EEXIST') throw error;
       const reclaim = `${lock}.reclaim`;
-      try { fs.mkdirSync(reclaim); } catch (error) { if (error.code === 'EEXIST') return null; throw error; }
+      try { createReclaimDirectory(reclaim); } catch (error) { if (error.code === 'EEXIST') return null; throw error; }
       try {
         if (Date.now() - fs.statSync(lock).mtimeMs < QUESTION_LOCK_MS) return null;
         fs.unlinkSync(lock);
       } catch (error) { if (error.code !== 'ENOENT') throw error; }
-      finally { fs.rmdirSync(reclaim); }
+      finally { removeReclaimDirectory(reclaim); }
     }
   }
   if (fd === undefined) return null;

@@ -1,0 +1,4 @@
+[
+  {"source":"Gmail","sourceRef":"gmail:kim@orgiast.jp:fixture-invoice","date":"2026-11-03T01:00:00Z","text":"学会の請求書です。振込期日は2026年11月30日です。","url":"https://example.invalid/invoice","mailbox":"kim@orgiast.jp","threadId":"fixture-thread"},
+  {"source":"Gmail","sourceRef":"gmail:kim@orgiast.jp:fixture-subsidy","date":"2026-11-03T01:00:00Z","text":"事業化状況報告書を提出してください。回答期限は追ってお知らせします。","url":"https://example.invalid/subsidy"}
+]

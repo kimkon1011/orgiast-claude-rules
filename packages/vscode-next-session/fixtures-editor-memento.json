@@ -1,0 +1,71 @@
+{
+ "editorpart.state": {
+  "serializedGrid": {
+   "root": {
+    "type": "branch",
+    "data": [
+     {
+      "type": "leaf",
+      "data": {
+       "id": 1,
+       "locked": true,
+       "editors": [
+        {
+         "id": "workbench.editors.webviewInput",
+         "value": "{\"origin\":\"223b9d52-50a8-4c6e-931a-b406de8857eb\",\"viewType\":\"mainThreadWebview-claudeVSCodePanel\",\"providedId\":\"claudeVSCodePanel\",\"title\":\"会話タイトル1\",\"options\":{\"enableFindWidget\":true,\"retainContextWhenHidden\":true,\"allowScripts\":true,\"forwardUntrustedKeypressEvents\":true,\"localResourceRoots\":[{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/webview\",\"scheme\":\"file\"},{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/resources\",\"scheme\":\"file\"}]},\"extensionLocation\":{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64\",\"scheme\":\"file\"},\"extensionId\":\"Anthropic.claude-code\",\"state\":\"{\\\"isFullEditor\\\":true,\\\"sessionID\\\":\\\"790fcfc6-f15b-42a1-8f3a-a41ba3f8900b\\\"}\",\"iconPath\":{\"light\":{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/resources/claude-logo.svg\",\"scheme\":\"file\"},\"dark\":{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/resources/claude-logo.svg\",\"scheme\":\"file\"}},\"group\":1}"
+        },
+        {
+         "id": "workbench.editors.webviewInput",
+         "value": "{\"origin\":\"223b9d52-50a8-4c6e-931a-b406de8857eb\",\"viewType\":\"mainThreadWebview-claudeVSCodePanel\",\"providedId\":\"claudeVSCodePanel\",\"title\":\"会話タイトル2\",\"options\":{\"enableFindWidget\":true,\"retainContextWhenHidden\":true,\"allowScripts\":true,\"forwardUntrustedKeypressEvents\":true,\"localResourceRoots\":[{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/webview\",\"scheme\":\"file\"},{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/resources\",\"scheme\":\"file\"}]},\"extensionLocation\":{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64\",\"scheme\":\"file\"},\"extensionId\":\"Anthropic.claude-code\",\"state\":\"{\\\"isFullEditor\\\":true,\\\"sessionID\\\":\\\"53629936-5e34-4492-a598-67d4865c323b\\\"}\",\"iconPath\":{\"light\":{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/resources/claude-logo-done.svg\",\"scheme\":\"file\"},\"dark\":{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/resources/claude-logo-done.svg\",\"scheme\":\"file\"}},\"group\":1}"
+        },
+        {
+         "id": "workbench.editors.webviewInput",
+         "value": "{\"origin\":\"223b9d52-50a8-4c6e-931a-b406de8857eb\",\"viewType\":\"mainThreadWebview-claudeVSCodePanel\",\"providedId\":\"claudeVSCodePanel\",\"title\":\"Claude Code\",\"options\":{\"enableFindWidget\":true,\"retainContextWhenHidden\":true,\"allowScripts\":true,\"forwardUntrustedKeypressEvents\":true,\"localResourceRoots\":[{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/webview\",\"scheme\":\"file\"},{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/resources\",\"scheme\":\"file\"}]},\"extensionLocation\":{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64\",\"scheme\":\"file\"},\"extensionId\":\"Anthropic.claude-code\",\"state\":\"{\\\"isFullEditor\\\":true,\\\"sessionID\\\":\\\"1c4d4177-122c-4fd0-8987-1b40a7d88309\\\"}\",\"iconPath\":{\"light\":{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/resources/claude-logo-done.svg\",\"scheme\":\"file\"},\"dark\":{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/resources/claude-logo-done.svg\",\"scheme\":\"file\"}},\"group\":1}"
+        },
+        {
+         "id": "workbench.editors.webviewInput",
+         "value": "{\"origin\":\"223b9d52-50a8-4c6e-931a-b406de8857eb\",\"viewType\":\"mainThreadWebview-claudeVSCodePanel\",\"providedId\":\"claudeVSCodePanel\",\"title\":\"Claude Code\",\"options\":{\"enableFindWidget\":true,\"retainContextWhenHidden\":true,\"allowScripts\":true,\"forwardUntrustedKeypressEvents\":true,\"localResourceRoots\":[{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/webview\",\"scheme\":\"file\"},{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/resources\",\"scheme\":\"file\"}]},\"extensionLocation\":{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64\",\"scheme\":\"file\"},\"extensionId\":\"Anthropic.claude-code\",\"state\":\"{\\\"isFullEditor\\\":true,\\\"sessionID\\\":\\\"d47d3b0b-5348-4cd0-a437-7f1cf6a5eed3\\\"}\",\"iconPath\":{\"light\":{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/resources/claude-logo-done.svg\",\"scheme\":\"file\"},\"dark\":{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/resources/claude-logo-done.svg\",\"scheme\":\"file\"}},\"group\":1}"
+        },
+        {
+         "id": "workbench.editors.webviewInput",
+         "value": "{\"origin\":\"223b9d52-50a8-4c6e-931a-b406de8857eb\",\"viewType\":\"mainThreadWebview-claudeVSCodePanel\",\"providedId\":\"claudeVSCodePanel\",\"title\":\"Claude Code\",\"options\":{\"enableFindWidget\":true,\"retainContextWhenHidden\":true,\"allowScripts\":true,\"forwardUntrustedKeypressEvents\":true,\"localResourceRoots\":[{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/webview\",\"scheme\":\"file\"},{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/resources\",\"scheme\":\"file\"}]},\"extensionLocation\":{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64\",\"scheme\":\"file\"},\"extensionId\":\"Anthropic.claude-code\",\"state\":\"{\\\"isFullEditor\\\":true,\\\"sessionID\\\":\\\"8863287a-1d2d-4a22-b8b6-bc21422b64e8\\\",\\\"sessionWithNoTranscript\\\":\\\"8863287a-1d2d-4a22-b8b6-bc21422b64e8\\\"}\",\"iconPath\":{\"light\":{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/resources/claude-logo.svg\",\"scheme\":\"file\"},\"dark\":{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/resources/claude-logo.svg\",\"scheme\":\"file\"}},\"group\":1}"
+        },
+        {
+         "id": "workbench.editors.webviewInput",
+         "value": "{\"origin\":\"223b9d52-50a8-4c6e-931a-b406de8857eb\",\"viewType\":\"mainThreadWebview-claudeVSCodePanel\",\"providedId\":\"claudeVSCodePanel\",\"title\":\"Claude Code\",\"options\":{\"enableFindWidget\":true,\"retainContextWhenHidden\":true,\"allowScripts\":true,\"forwardUntrustedKeypressEvents\":true,\"localResourceRoots\":[{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/webview\",\"scheme\":\"file\"},{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/resources\",\"scheme\":\"file\"}]},\"extensionLocation\":{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64\",\"scheme\":\"file\"},\"extensionId\":\"Anthropic.claude-code\",\"state\":\"{\\\"isFullEditor\\\":true,\\\"sessionID\\\":\\\"5662c51b-31ae-4582-99b7-2ac844e26874\\\",\\\"sessionWithNoTranscript\\\":\\\"5662c51b-31ae-4582-99b7-2ac844e26874\\\"}\",\"iconPath\":{\"light\":{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/resources/claude-logo.svg\",\"scheme\":\"file\"},\"dark\":{\"$mid\":1,\"path\":\"/c:/Users/uers/.vscode/extensions/anthropic.claude-code-2.1.318-win32-x64/resources/claude-logo.svg\",\"scheme\":\"file\"}},\"group\":1}"
+        }
+       ],
+       "mru": [
+        0,
+        2,
+        1,
+        4,
+        3,
+        5
+       ]
+      },
+      "size": 633
+     },
+     {
+      "type": "leaf",
+      "data": {
+       "id": 2,
+       "editors": [],
+       "mru": []
+      },
+      "size": 633
+     }
+    ],
+    "size": 963
+   },
+   "orientation": 1,
+   "width": 1266,
+   "height": 963
+  },
+  "activeGroup": 1,
+  "mostRecentActiveGroups": [
+   1,
+   2
+  ]
+ }
+}

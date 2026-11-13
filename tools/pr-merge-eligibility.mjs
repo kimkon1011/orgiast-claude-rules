@@ -63,13 +63,14 @@ export function evaluatePr(pr, { repo, collaborators } = {}) {
     action = 'draft を解除しない限り自動マージ対象外';
   } else if (isFork) {
     verdict = 'ineligible_fork';
-    action = `head が fork（${headOwner}）のため自動マージ対象外`;
+    action = `head が fork（${headOwner}）。node tools/access-doctor.mjs --fix 後、node tools/pr-land.mjs --fill で base のブランチへ push`;
   } else if (labeled && Array.isArray(collaborators) && !collaborators.includes(pr.author?.login)) {
     verdict = 'ineligible_author';
     action = '作者が collaborator でないため自動マージ対象外';
   } else if (guarded !== null) {
-    verdict = 'manual_merge_required';
-    action = `安全弁（${guarded}）に該当。人（kim）の手動マージ1回が必要＝可否を聞く必要はない`;
+    verdict = files.some(file => (typeof file === 'string' ? file : file?.path)?.startsWith('.github/workflows/')) ? 'workflow_stop' : 'self_merge_required';
+    action = verdict === 'workflow_stop' ? 'workflow 変更は専用権限・レビュー経路で扱うため停止'
+      : `安全弁（${guarded}）に該当。CI 合格後、作成した席で node tools/pr-merge.mjs ${pr.number} を実行（gh pr merge --squash のレビュー・SHA検証付き）`;
   } else if (!labeled) {
     verdict = 'missing_label';
     action = `gh pr edit ${pr.number} --repo ${repo} --add-label automerge`;

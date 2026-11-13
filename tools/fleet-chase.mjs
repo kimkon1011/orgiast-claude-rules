@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createClient, acquireLock, describeTargetFreshness, resolveFleetLabel } from './fleet-mail.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { redactSecrets } from './fleet-agent.mjs';
-import { notifyKim } from './notify-kim.mjs';
+import { addItem } from './kim-inbox.mjs';
 import { sendDiscordDm } from './discord-dm.mjs';
 import { isEntry } from './is-entry.mjs';
 import { DAY, active, oldest, millis, readJson, loadLedger, ledgerPath, saveJson, ingest, checkLedger, control, safe } from './lib/fleet-chase-ledger.mjs';
@@ -107,8 +107,8 @@ export async function runChase(options = {}, deps = {}) {
       return freshnessCache.get(to);
     });
     const ctx = { ...deps, home, repo, now, dryRun, persist, request, freshness, pcMap, stderr, fetchBeacons,
-      // notifyKim's default plain-Japanese rewrite uses an LLM; this loop must not.
-      notify: deps.notify ?? (text => notifyKim(text, { home, webhookFallback: false, plainJa: false })),
+      // Human decisions are delivered to the current session without LLM rewriting.
+      notify: deps.notify ?? (async text => { const item = await addItem(home, { kind: 'info', source: 'fleet-chase-decisions', text }); return { delivered: 'session-inbox', id: item.id }; }),
       sendDm: deps.sendDm ?? ((person, text) => sendDiscordDm(person, text, { home })) };
     const rollout = should('ingest') || should('check') || options['--compliance'] ? await collectRollout(ctx) : null;
     if (should('ingest')) {

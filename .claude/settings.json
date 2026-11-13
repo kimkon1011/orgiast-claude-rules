@@ -12,5 +12,10 @@
         ]
       }
     ]
+  },
+  "idleCompaction": false,
+  "memory": {
+    "enabled": true,
+    "path": ".claude/memory"
   }
 }

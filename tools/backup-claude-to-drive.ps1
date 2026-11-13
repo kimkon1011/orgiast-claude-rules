@@ -97,18 +97,66 @@ function Test-GoogleDriveInstalled {
   return $false
 }
 
+function Get-IsElevated {
+  $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+  return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
 function Install-GoogleDriveIfMissing {
   if (Test-GoogleDriveInstalled) { return }
+  # スケジュールタスク ClaudeDailyDriveBackup（RunLevel Limited）などの無人実行では非昇格で、
+  # winget のマシン全体インストールは UAC 昇格プロンプトを出して consent.exe を溜める
+  # （2026-11-09〜11 作業用014 実害）。非昇格ならインストーラを絶対に起動しない。
+  if (-not (Get-IsElevated)) { Write-Event 'WARN google-drive-install=skipped reason=needs-elevation'; return }
+  # 管理者権限でも試行は 7 日に 1 回まで（状態ファイルに記録）。
+  $state = Read-BackupState
+  $lastAttempt = $null
+  if ($state.lastDriveInstallAttemptUtc) {
+    try { $lastAttempt = [DateTime]::Parse([string]$state.lastDriveInstallAttemptUtc).ToUniversalTime() } catch {}
+  }
+  if ($lastAttempt -and ((Get-Date).ToUniversalTime() - $lastAttempt).TotalDays -lt 7) {
+    Write-Event 'WARN google-drive-install=skipped reason=throttled-7d'
+    return
+  }
+  $state['lastDriveInstallAttemptUtc'] = (Get-Date).ToUniversalTime().ToString('o')
+  Write-BackupState $state
   $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
   if (-not $winget) { $winget = Get-Command winget -ErrorAction SilentlyContinue }
   if (-not $winget) { Write-Event 'WARN google-drive-install=skipped reason=winget-not-found'; return }
   Write-Event 'WARN google-drive-install=attempting package=Google.GoogleDrive timeoutSeconds=300'
   try {
     $installProcess = Start-Process -FilePath $winget.Source -ArgumentList @('install','--id','Google.GoogleDrive','-e','--accept-package-agreements','--accept-source-agreements','--silent') -PassThru -NoNewWindow
-    if (-not $installProcess.WaitForExit(300000)) { try { $installProcess.Kill() } catch {}; Write-Event 'WARN google-drive-install=failed reason=timeout'; return }
+    if (-not $installProcess.WaitForExit(300000)) { Stop-ProcessTree $installProcess.Id; Write-Event 'WARN google-drive-install=failed reason=timeout'; return }
     if ($installProcess.ExitCode -ne 0) { Write-Event ('WARN google-drive-install=failed exit={0}' -f $installProcess.ExitCode); return }
     Write-Event 'google-drive-install=complete'
   } catch { Write-Event ('WARN google-drive-install=failed reason={0}' -f $_.Exception.Message) }
+}
+
+function Stop-ProcessTree([int]$ProcessId) {
+  # タイムアウト時は子プロセスごと確実に終了させる（winget が子へ処理を引き継ぐため Kill だけでは不足）。
+  try { & taskkill.exe /PID $ProcessId /T /F 2>$null | Out-Null } catch {}
+  try { Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+}
+
+function Push-KimInboxInfo([string]$Body) {
+  # kim への「Drive 未導入」通知は kim-inbox の info 積みで行う（Discord DM は全社廃止）。
+  # 非 kim 席では --add が fleet-mail 経由で kim-PC へ転送する。転送は 60 秒上限・fail-open のため
+  # バックアップ本体の成否には影響させない。
+  $kimInbox = Join-Path $PSScriptRoot 'kim-inbox.mjs'
+  if (-not (Test-Path -LiteralPath $kimInbox)) { Write-Event 'WARN kim-inbox-notice=skipped reason=script-not-found'; return $false }
+  $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object { $_.Extension -eq '.exe' } | Select-Object -First 1
+  if (-not $node) { $node = Get-Command node -ErrorAction SilentlyContinue }
+  if (-not $node) { Write-Event 'WARN kim-inbox-notice=skipped reason=node-not-found'; return $false }
+  $bodyFile = Join-Path $env:TEMP ('drive-missing-notice-{0}.txt' -f $hostname)
+  try {
+    [IO.File]::WriteAllText($bodyFile, $Body, (New-Object Text.UTF8Encoding($false)))
+    $p = Start-Process -FilePath $node.Source -ArgumentList @($kimInbox, '--add', '--kind', 'info', '--body-file', $bodyFile, '--source', 'backup-claude-to-drive') -PassThru -NoNewWindow
+    if (-not $p.WaitForExit(60000)) { Stop-ProcessTree $p.Id; Write-Event 'WARN kim-inbox-notice=failed reason=timeout'; return $false }
+    if ($p.ExitCode -ne 0) { Write-Event ('WARN kim-inbox-notice=failed exit={0}' -f $p.ExitCode); return $false }
+    Write-Event 'kim-inbox-notice=stacked'
+    return $true
+  } catch { Write-Event ('WARN kim-inbox-notice=failed reason={0}' -f $_.Exception.Message); return $false }
+  finally { if (Test-Path -LiteralPath $bodyFile) { Remove-Item -LiteralPath $bodyFile -Force -ErrorAction SilentlyContinue } }
 }
 
 function Stop-DriveNotAvailable {
@@ -120,12 +168,14 @@ function Stop-DriveNotAvailable {
     try { $notifyDue = (($nowUtc - [DateTime]::Parse([string]$state.lastDriveMissingNotifyUtc).ToUniversalTime()).TotalDays -ge 7) } catch {}
   }
   $notified = $false
+  $inboxNotified = $false
   if ($notifyDue) {
     $message = '📦 このPC（{0}）の Claude 環境バックアップは、Google Drive デスクトップが入っていないか、ログインされていないため動いていません。準備は1回だけ: ① https://www.google.com/drive/download/ から「パソコン版ドライブ」を入れる ② 会社の Google アカウントでログインする。翌日から自動でバックアップされます。' -f $hostname
     $notified = [bool](Send-Discord $message)
-    if ($notified) { $state['lastDriveMissingNotifyUtc'] = $nowUtc.ToString('o'); Write-BackupState $state }
+    $inboxNotified = [bool](Push-KimInboxInfo ('【要対応】{0} の Claude 環境バックアップが止まっています。Google Drive デスクトップが未導入（または未ログイン）のためです。導入はそのPCで https://www.google.com/drive/download/ から「パソコン版ドライブ」を入れ、会社の Google アカウントでログインするだけです（翌日から自動バックアップ再開）。' -f $hostname))
+    if ($notified -or $inboxNotified) { $state['lastDriveMissingNotifyUtc'] = $nowUtc.ToString('o'); Write-BackupState $state }
   }
-  Write-Event ('WARN drive-not-available notified={0}' -f $notified.ToString().ToLowerInvariant())
+  Write-Event ('WARN drive-not-available notified={0} inbox={1}' -f $notified.ToString().ToLowerInvariant(), $inboxNotified.ToString().ToLowerInvariant())
   exit 1
 }
 
@@ -209,18 +259,36 @@ function Repair-StagingNames {
   $renamedFile = Join-Path $stagingHomeDir 'renamed-files.txt'
   if (Test-Path -LiteralPath $renamedFile) { Remove-Item -LiteralPath $renamedFile -Force }
 
+  # Windows 予約デバイス名（大文字小文字を問わず、拡張子の有無・末尾ドットも含む）
+  $deviceNames = [System.Collections.Generic.HashSet[string]]@(
+    'con', 'prn', 'aux', 'nul',
+    'com1','com2','com3','com4','com5','com6','com7','com8','com9',
+    'lpt1','lpt2','lpt3','lpt4','lpt5','lpt6','lpt7','lpt8','lpt9'
+  )
+  $devicePattern = '^(?:' + ($deviceNames -join '|') + ')(?:\..*)?$'
+
   # 子を先に処理すれば、親ディレクトリの改名で未処理の子のパスが変わらない。
   $unsafeItems = @(Get-ChildItem -LiteralPath $stagingDir -Recurse -Force | Where-Object {
-    $_.Name -match '[\. \u3000]+$'
+    $_.Name -match '[\. \u3000]+$' -or $_.Name -match $devicePattern
   } | Sort-Object { $_.FullName.Length } -Descending)
   $renamed = New-Object System.Collections.Generic.List[string]
 
   foreach ($item in $unsafeItems) {
     $oldName = $item.Name
+    $isDeviceName = $oldName -match $devicePattern
     # 末尾ドット名では FileSystemInfo.Parent 自体が Win32 正規化で null になりうる。
     $parentPath = $item.FullName.Substring(0, $item.FullName.Length - $oldName.Length).TrimEnd('\')
-    $trailingLength = ([regex]::Match($oldName, '[\. \u3000]+$')).Length
-    $safeName = $oldName.Substring(0, $oldName.Length - $trailingLength) + ('_' * $trailingLength)
+    if ($isDeviceName) {
+      $dotIndex = $oldName.IndexOf('.')
+      if ($dotIndex -ge 0) {
+        $safeName = '_' + $oldName.Substring($dotIndex)
+      } else {
+        $safeName = '_' + $oldName
+      }
+    } else {
+      $trailingLength = ([regex]::Match($oldName, '[\. \u3000]+$')).Length
+      $safeName = $oldName.Substring(0, $oldName.Length - $trailingLength) + ('_' * $trailingLength)
+    }
     $destination = Join-Path $parentPath $safeName
     $suffix = 1
     while (Test-ExtendedPath $destination) {
@@ -262,7 +330,7 @@ try {
   Write-Event ('plan structure={0}<=~/.claude; {1}<=home files/directories/tasks/repo/npm/manifest; {2}<=~/.codex' -f $stagingClaudeDir, $stagingHomeDir, $stagingCodexDir)
 
   if ($DryRun) {
-    Write-Event 'plan robocopy=.claude:/MIR .codex:/MIR excludedDirs=cache,shell-snapshots,statsig,__pycache__,ide,node_modules,.git,sessions,tmp,logs excludedFiles=*.tmp,*.lock,*.tmp[0-9]*,*.heartbeat,.fleet-mail-poll.json codexExcludedFiles=logs_*.sqlite*'
+    Write-Event 'plan robocopy=.claude:/MIR .codex:/MIR excludedDirs=cache,shell-snapshots,statsig,__pycache__,ide,node_modules,.git,Network,Sessions,Sessions_Encrypted,GPUPersistentCache,GPUCache,Code Cache,DawnGraphiteCache,DawnWebGPUCache,ShaderCache,GrShaderCache codexExtraExcludedDirs=sessions,tmp,logs excludedFiles=*.tmp,*.lock,*.tmp[0-9]*,*.heartbeat,.fleet-mail-poll.json codexExcludedFiles=logs_*.sqlite*'
     Write-Event 'plan home-files=.claude.json(retry=2,warn-only),.claude.json.backup(optional); excludes=.claude.json.tmp.*,.bak*'
     Write-Event 'plan extras=.gitconfig,.clasprc.json,.ssh,.gemini,AppData/gh,orgiast-claude-rules,scheduled-tasks,npm-global-packages.json,backup-manifest.json'
     Write-Event 'plan restore-set=RESTORE-claude-backup.md,restore-claude-from-drive.ps1,復元する.bat'
@@ -281,7 +349,10 @@ try {
   foreach ($legacyItem in @(Get-ChildItem -LiteralPath $stagingDir -Force)) {
     if ($legacyItem.Name -notin @('.claude', 'home')) { Remove-Item -LiteralPath $legacyItem.FullName -Recurse -Force }
   }
-  $excludeDirs = @('cache', 'shell-snapshots', 'statsig', '__pycache__', 'ide', 'node_modules', '.git')
+  # Chrome 系プロファイルがブラウザ起動中に排他ロックする揮発ディレクトリ。Cookies は復元時に再ログインが必要。
+  $excludeDirs = @('cache', 'shell-snapshots', 'statsig', '__pycache__', 'ide', 'node_modules', '.git',
+    'Network', 'Sessions', 'Sessions_Encrypted', 'GPUPersistentCache', 'GPUCache', 'Code Cache',
+    'DawnGraphiteCache', 'DawnWebGPUCache', 'ShaderCache', 'GrShaderCache')
   # fleet-mail removes its transient request file after each poll; copying it races with that removal.
   $excludeFiles = @('*.tmp', '*.lock', '*.tmp[0-9]*', '*.heartbeat', '.fleet-mail-poll.json')
   $roboArgs = @($claudeDir, $stagingClaudeDir, '/MIR', '/R:2', '/W:2', '/XJ', '/NP', '/NFL', '/NDL', '/NJH', '/NJS', '/XD') + $excludeDirs + @('/XF') + $excludeFiles

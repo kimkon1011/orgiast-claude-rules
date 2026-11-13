@@ -1,3 +1,4 @@
+import { readHookSettings, copyDispatchRegistration } from './fixtures/read-hook-settings.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -184,18 +185,19 @@ test('既存配布処理は指定 matcher・timeout で登録し、再実行で�
   const repo = path.join(home, 'repo');
   fs.mkdirSync(path.join(repo, 'tools'), { recursive: true });
   fs.copyFileSync(script, path.join(repo, 'tools', path.basename(script)));
+  copyDispatchRegistration(repo);
   const settingsFile = path.join(home, '.claude', 'settings.json');
   const existing = { matcher: 'Example', hooks: [{ type: 'command', command: 'node existing.mjs' }] };
   fs.writeFileSync(settingsFile, JSON.stringify({ custom: true, hooks: { PreToolUse: [existing] } }));
   for (let i = 0; i < 2; i++) {
     const result = spawnSync(process.execPath, [fileURLToPath(new URL('./register-hooks.mjs', import.meta.url)), '--hooks-only'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo }, timeout: 60000 });
     assert.equal(result.status, 0, result.stderr);
-    const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    const settings = readHookSettings(settingsFile);
     assert.equal(settings.custom, true);
     assert.deepEqual(settings.hooks.PreToolUse[0], existing);
     const groups = settings.hooks.PreToolUse.filter((group) => group.hooks.some((h) => h.command.includes('live-artifact-read-gate')));
     assert.equal(groups.length, 1);
     assert.equal(groups[0].matcher, HOOK_MATCHER);
-    assert.deepEqual(groups[0].hooks, [{ type: 'command', command: `node "${path.join(repo, 'tools', path.basename(script))}"`, timeout: 30 }]);
+    assert.deepEqual(groups[0].hooks, [{ type: 'command', command: `node "${path.join(repo, 'tools', 'gate-hook-runner.mjs')}" "${path.join(repo, 'tools', path.basename(script))}"`, timeout: 35 }]);
   }
 });

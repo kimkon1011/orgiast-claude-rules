@@ -1,3 +1,4 @@
+import { readHookSettings } from './fixtures/read-hook-settings.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -45,7 +46,7 @@ test('converge wires synchronous gate through runner; repeated registration is i
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const checks = JSON.parse(result.stdout);
   for (const id of selected.map(x => x.id)) assert.equal(checks.items.find(x => x.id === id)?.status, 'OK', id);
-  const registered = JSON.parse(fs.readFileSync(path.join(home, '.claude/settings.json')));
+  const registered = readHookSettings(path.join(home, '.claude/settings.json'));
   const gate = registered.hooks.PreToolUse.filter(group => group.hooks.some(h => h.command.includes('lane-repair-first-gate.mjs')));
   assert.equal(gate.length, 1);
   assert.match(gate[0].matcher, /NotebookEdit/);
@@ -53,7 +54,7 @@ test('converge wires synchronous gate through runner; repeated registration is i
   assert.notEqual(gate[0].hooks[0].async, true);
   const again = spawnSync(process.execPath, [path.join(repo, 'tools/register-hooks.mjs'), '--hooks-only'], { env, encoding: 'utf8', timeout: 30000 });
   assert.equal(again.status, 0, again.stderr);
-  const repeated = JSON.parse(fs.readFileSync(path.join(home, '.claude/settings.json')));
+  const repeated = readHookSettings(path.join(home, '.claude/settings.json'));
   assert.equal(repeated.hooks.PreToolUse.filter(g => g.hooks.some(h => h.command.includes('lane-repair-first-gate.mjs'))).length, 1);
 });
 test('SessionStart states repair-first and quota alternatives', t => {

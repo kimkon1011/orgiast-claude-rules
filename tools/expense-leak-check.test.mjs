@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { RULES, LIMITS, HEADER, TAB, parseArgs, ruleVerdict, merchantToken, amountVariants, gmailQuery, parseYahoo, weeklySkip, collectTxns, searchEvidence, runCheck, sheetRows, dmText, atomicJson } from './expense-leak-check.mjs';
+import { RULES, LIMITS, HEADER, TAB, parseArgs, ruleVerdict, merchantToken, amountVariants, gmailQuery, parseYahoo, weeklySkip, collectTxns, searchEvidence, runCheck, sheetRows, dmText, atomicJson, web23Query, checkWeb23Delivery, WEB23_ADDRESS, WEB23_LOOKBACK_DAYS } from './expense-leak-check.mjs';
 import { createSheetsClient } from './lib/sheets-dwd.mjs';
 
 const opts = (args = []) => parseArgs(args, { EXPENSE_LEAK_TODAY: '2026-10-09', EXPENSE_LEAK_HOME: '/tmp/expense-test' });
@@ -241,4 +241,25 @@ test('new Sheet tab and header are created atomically without shifting frozen ro
   assert.equal(writes[0].requests.length, 2);
   assert.equal(writes[0].requests[0].addSheet.properties.gridProperties.frozenRowCount, 1);
   assert.equal(writes[0].requests[1].updateCells.start.sheetId, writes[0].requests[0].addSheet.properties.sheetId);
+});
+
+test('web23 query targets the group copy in seisaku-team@ for one week', () => {
+  assert.equal(web23Query(), `to:${WEB23_ADDRESS} newer_than:${WEB23_LOOKBACK_DAYS}d`);
+  assert.throws(() => web23Query(0));
+  assert.throws(() => web23Query('seven'));
+});
+test('web23 zero-count warning is fail-open, never pins an outage as zero', async () => {
+  const call = (stdout) => ({ search: async (script, args) => { assert.ok(script.endsWith('gmail-search.mjs')); assert.ok(args.includes('seisaku-team@orgiast.jp')); assert.ok(args.includes(`to:${WEB23_ADDRESS} newer_than:7d`)); return { code: 0, stdout }; }, timeout: () => 1000, timeLeft: () => true });
+  assert.deepEqual(await checkWeb23Delivery(call('{"messages":[]}')), { status: 'zero', count: 0 });
+  assert.deepEqual(await checkWeb23Delivery(call('{"messages":[{"id":"1"}]}')), { status: 'ok', count: 1 });
+  assert.equal((await checkWeb23Delivery(call('{"messages":[],"skipped":2}'))).status, 'unverified');
+  assert.equal((await checkWeb23Delivery(call('not json'))).status, 'unverified');
+  assert.equal((await checkWeb23Delivery({ ...call('{"messages":[]}'), search: async () => ({ code: 1, stdout: '' }) })).status, 'unverified');
+  assert.deepEqual(await checkWeb23Delivery({ ...call('{"messages":[]}'), timeLeft: () => false }), { status: 'unverified', reason: '時間上限' });
+});
+test('DM reports web23 zero and unverified separately', () => {
+  const base = { today: '2026-10-19', candidateTotal: 0, results: [], issues: [], yahooUnavailable: false };
+  assert.ok(dmText({ ...base, web23: { status: 'zero', count: 0 } }).includes('0件'));
+  assert.ok(dmText({ ...base, web23: { status: 'unverified', reason: 'Gmail exit 1' } }).includes('0件とは判定していません'));
+  assert.ok(!dmText(base).includes('web23@orgiast.jp'));
 });

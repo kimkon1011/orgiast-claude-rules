@@ -280,8 +280,15 @@ test('明示 provider が cooldown 中なら claude を起動せず exit 3 で�
 });
 
 
-test('OpenRouter pins coding model slots and leaves GLM model selection alone', () => {
+test('OpenRouter pins coding model slots and GLM sets ANTHROPIC_MODEL but leaves subagent slots alone', () => {
   const env = buildChildEnv({ ...resolveProvider('deepseek'), defaultModel: 'deepseek/deepseek-v4-pro' }, 'test', {});
   for (const key of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL']) assert.equal(env[key], 'deepseek/deepseek-v4-pro');
-  assert.equal(buildChildEnv(resolveProvider('glm'), 'test', {}).ANTHROPIC_DEFAULT_HAIKU_MODEL, undefined);
+  const glmEnv = buildChildEnv(resolveProvider('glm'), 'test', {});
+  // ANTHROPIC_MODEL は SDK が --model を検証して unrecognized_model で失敗しないよう必要 (2026-11-14)
+  assert.equal(glmEnv.ANTHROPIC_MODEL, 'glm-5.3');
+  // サブエージェントのモデルスロットは GLM では設定しない（契約 RULES）
+  assert.equal(glmEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL, undefined);
+  assert.equal(glmEnv.ANTHROPIC_DEFAULT_OPUS_MODEL, undefined);
+  assert.equal(glmEnv.ANTHROPIC_DEFAULT_SONNET_MODEL, undefined);
+  assert.equal(glmEnv.CLAUDE_CODE_SUBAGENT_MODEL, undefined);
 });

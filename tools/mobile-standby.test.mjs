@@ -291,10 +291,10 @@ test('同梱 VSIX の最新版と package.json の版が一致する', () => {
 });
 
 for (const [name, before, after] of [
-  ['未設定→挿入', '{\n  "editor.x": 1\n}\n', '{\n  "orgiast.nextSession.mobileRefreshMinutes": 0,\n  "editor.x": 1\n}\n'],
-  ['60→0', '{\n  "orgiast.nextSession.mobileRefreshMinutes": 60\n}\n', '{\n  "orgiast.nextSession.mobileRefreshMinutes": 0\n}\n'],
-  ['JSONC・CRLF・コメント保持', '// { header\r\n{\r\n  /* "orgiast.nextSession.mobileRefreshMinutes": 99 */\r\n  "orgiast.nextSession.mobileRefreshMinutes": 60, // keep\r\n  "url": "https://example.test",\r\n}\r\n', '// { header\r\n{\r\n  /* "orgiast.nextSession.mobileRefreshMinutes": 99 */\r\n  "orgiast.nextSession.mobileRefreshMinutes": 0, // keep\r\n  "url": "https://example.test",\r\n}\r\n'],
-  ['コメント内だけの設定は未設定', '{\n // "orgiast.nextSession.mobileRefreshMinutes": 60\n}\n', '{\n  "orgiast.nextSession.mobileRefreshMinutes": 0,\n // "orgiast.nextSession.mobileRefreshMinutes": 60\n}\n'],
+  ['未設定→挿入', '{\n  "editor.x": 1\n}\n', '{\n  "orgiast.nextSession.mobileRefreshMinutes": 60,\n  "editor.x": 1\n}\n'],
+  ['0→60', '{\n  "orgiast.nextSession.mobileRefreshMinutes": 0\n}\n', '{\n  "orgiast.nextSession.mobileRefreshMinutes": 60\n}\n'],
+  ['JSONC・CRLF・コメント保持（0→60）', '// { header\r\n{\r\n  /* "orgiast.nextSession.mobileRefreshMinutes": 99 */\r\n  "orgiast.nextSession.mobileRefreshMinutes": 0, // keep\r\n  "url": "https://example.test",\r\n}\r\n', '// { header\r\n{\r\n  /* "orgiast.nextSession.mobileRefreshMinutes": 99 */\r\n  "orgiast.nextSession.mobileRefreshMinutes": 60, // keep\r\n  "url": "https://example.test",\r\n}\r\n'],
+  ['コメント内だけの設定は未設定', '{\n // "orgiast.nextSession.mobileRefreshMinutes": 60\n}\n', '{\n  "orgiast.nextSession.mobileRefreshMinutes": 60,\n // "orgiast.nextSession.mobileRefreshMinutes": 60\n}\n'],
 ]) {
   test(`VSCode refresh: ${name}、変更前バックアップと冪等性`, (t) => {
     const dir = temp('ms-norefresh-');
@@ -313,13 +313,12 @@ for (const [name, before, after] of [
   });
 }
 
-test('VSCode refresh: 既に0・ファイル無し・危険な形式は書かない', (t) => {
+test('VSCode refresh: 既に60・ファイル無し・危険な形式は書かない', (t) => {
   const dir = temp('ms-norefresh-skip-');
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'settings.json');
   assert.match(ensureMobileRefreshDisabled(file).note, /なし/);
   for (const raw of [
-    '{"orgiast.nextSession.mobileRefreshMinutes":0}',
     '{"orgiast.nextSession.mobileRefreshMinutes":60}',
     '{broken',
     '[]',

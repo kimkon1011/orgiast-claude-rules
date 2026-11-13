@@ -14,7 +14,7 @@ export const FALLBACK_CHAIN = Object.freeze([
   { provider: 'genspark', model: 'gpt-5.6-luna' },
   { provider: 'openrouter', model: 'openai/gpt-oss-120b' },
   { provider: 'deepseek', model: 'deepseek-flash' },
-  { provider: 'gemini', model: 'gemini-3.7-flash' },
+  { provider: 'gemini', model: 'gemini-3.6-flash' },
   { provider: 'grok', model: 'grok-3' },
   { provider: 'kimi', model: 'kimi-k3' },
 ]);

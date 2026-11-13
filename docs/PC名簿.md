@@ -8,11 +8,10 @@
 
 | 作業用番号 | 担当者 | アカウント | hostname | Claude Code 導入状況 | fleet-mail 宛先の書き方 |
 |---|---|---|---|---|---|
-| 作業用008 | 未確認 | seisaku-team@orgiast.jp | DESKTOP-BDOAK99 | 導入済み（2026-10-30 16:46–16:47 fleet-mail 自己申告） | `--to 作業用008`（→ DESKTOP-BDOAK99） |
+| 作業用999 | 未確認 | seisaku-team@orgiast.jp | DESKTOP-BDOAK99 | 導入済み（2026-09-03 実機確認。2026-11-04 利用者申告で作業用999と確定） | `--to 作業用999`（→ DESKTOP-BDOAK99。旧誤登録の `--to 作業用008` も aliases で同じPCへ届く） |
 | 作業用019 | nishi | nishi@orgiast.jp | DESKTOP-04U31RG（Precision T3610） | 導入済み（2026-10-08 に fleet-mail で返信あり） | `--to 作業用019`（→ nishi-PC） |
 | 作業用004民泊用 | nishi | nishi@orgiast.jp | DESKTOP-PPD5V8I | 導入済み（ラベル kimko-PC で報告。台帳上は 2026-09-17 に停止、最終やり取り 2026-09-30） | `--to 作業用004民泊用`（→ kimko-PC） |
 | 作業用011 | cr | cr@orgiast.jp | 作業用011（HP EliteDesk 800 G3 SFF） | ラベル cr-PC（enroll 2026-10-09 発行・fleet 鍵の配布待ち） | `--to 作業用011`（→ cr-PC） |
-| 作業用999 | 未確認 | 未確認 | 未確認（未報告） | 導入完了を 2026-09-03 に実機確認。以後の報告なし | `--to 作業用999`（ラベルが不明なのでキー名で送る。実機のラベルと一致する保証なし） |
 
 注意: ラベル「kimko-PC」は作業用011 ではなく作業用004民泊用 のPC。台帳の行「作業用011(=DESKTOP-PPD5V8I)」は誤り。シート側は kim が 2026-10-09 に修正済みかを要確認。
 
@@ -33,7 +32,7 @@
 | （番号未確認）cafe015-PC | 未確認 | seisaku-team@orgiast.jp（fleet-status 2026-11-02、自己申告） | 未確認 | 登録候補 | 作業用番号の証拠なし。008には紐付けない |
 | （番号未確認）user-PC | 未確認 | seisaku-team@orgiast.jp（fleet-status 2026-11-02、自己申告） | 未確認 | 登録候補 | 作業用番号の証拠なし。008には紐付けない |
 
-作業用008の証拠: `mail-reply-fa9b672e49db7164`・`mail-reply-828ab32aca705b84`（2026-10-30 16:46）、`mail-reply-23b5030901dbd50f`（同16:47）。日時はkim-PCの提示記録による。
+作業用999（DESKTOP-BDOAK99）の訂正: 2026-11-02 PR #1401 は作業用008で登録したが、根拠は kim-PC が008前提で送った引継ぎメールへの自己申告返信（`mail-reply-fa9b672e49db7164`・`mail-reply-828ab32aca705b84`・`mail-reply-23b5030901dbd50f`、2026-10-30）で、作業用番号はローカルで検証できない。2026-11-04 に利用者が「このパソコンは999」と申告し訂正。実在の作業用008が別にあるかは kim 確認待ち。
 
 ## 確定のしかた
 

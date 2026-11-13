@@ -29,7 +29,9 @@ test('same session once, another session again, changed number set again', t => 
   assert.equal(first.hookSpecificOutput.hookEventName, 'SessionStart');
   assert.match(first.hookSpecificOutput.additionalContext, /🚗 日帰り出張の確認（カレンダーから自動検出）/);
   assert.match(first.hookSpecificOutput.additionalContext, /node ".*daytrip-detect\.mjs" --answer/);
-  assert.match(first.hookSpecificOutput.additionalContext, /1\. 2026-11-02｜商談｜京都駅\n距離: © OpenStreetMap contributors（概算）$/);
+  assert.match(first.hookSpecificOutput.additionalContext, /1\. 2026-11-02｜商談｜京都駅\n距離: © OpenStreetMap contributors（概算）/);
+  assert.match(first.hookSpecificOutput.additionalContext, /pending\.json を Read し/);
+  assert.match(first.hookSpecificOutput.additionalContext, /回答済みとして記録されています/);
   assert.equal(consumePending({ ...input, hook_event_name: 'UserPromptSubmit' }, opts), null);
   assert.ok(consumePending({ ...input, session_id: 'session-b' }, opts));
   opts.write([{ number: 1, line: 'one' }, { number: 2, line: 'two' }]);

@@ -1,4 +1,6 @@
 export async function readStdinWithTimeout(ms = 4000) {
+  const supplied = globalThis[Symbol.for('orgiast.hook.raw')];
+  if (typeof supplied === 'string') return supplied;
   let raw = '';
   process.stdin.setEncoding('utf8');
   const timer = setTimeout(() => process.stdin.destroy(), ms);

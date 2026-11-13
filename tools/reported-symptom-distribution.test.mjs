@@ -6,6 +6,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { updateRepositoryFiles } from './onboarding-sync.mjs';
+import { readHookSettings } from './fixtures/read-hook-settings.mjs';
+import { dispatcherProblems } from './hook-dispatch-registry.mjs';
 const source = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 test('onboarding distribution → setup --converge → registered runner → symptom block (read-back)', async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'symptom-distribution-'));
@@ -22,7 +24,9 @@ test('onboarding distribution → setup --converge → registered runner → sym
   const setup = spawnSync(process.execPath, [path.join(repo, 'tools/setup.mjs'), '--converge', '--strict', '--home', home, '--manifest', manifest, '--json'], { encoding: 'utf8', env: { ...process.env, ORGIAST_REPO: repo } });
   assert.equal(setup.status, 0, setup.stdout + setup.stderr);
   assert.ok(JSON.parse(setup.stdout).items.every(item => item.status === 'OK'));
-  const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude/settings.json'), 'utf8'));
+  const settingsFile = path.join(home, '.claude/settings.json');
+  assert.deepEqual(dispatcherProblems(JSON.parse(fs.readFileSync(settingsFile, 'utf8')), repo), []);
+  const settings = readHookSettings(settingsFile);
   assert.ok(settings.hooks.Stop.some(entry => entry.hooks.some(hook => hook.command.includes(path.join(repo, 'tools/stop-gate-runner.mjs')))));
   const { evaluateGates } = await import(pathToFileURL(path.join(repo, 'tools/stop-gate-runner.mjs')));
   const transcriptRaw = JSON.stringify({ type: 'user', message: { role: 'user', content: 'Anthropic API が error で失敗しています' } });

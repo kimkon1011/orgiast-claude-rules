@@ -4,6 +4,7 @@
 // impersonate してこちらから読む。書き込み系は一切持たせない。
 import { getDriveToken } from './lib/drive-auth.mjs';
 import { gwsFetch } from './lib/gws-proxy.mjs';
+import { routeMailbox } from './lib/mail-groups.mjs';
 import { isEntry } from './is-entry.mjs';
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
@@ -62,7 +63,15 @@ async function gmail(token, path, fetchImpl, signal) {
 }
 
 export async function searchGmail({ user, query, max = 10, withBody = false, bodyLimit = 4000, pageToken, fetchImpl = gwsFetch, getToken = getDriveToken, signal, concurrency = 1, shouldFetchBody, pendingIds, resumeNext, onMessage, skipId = () => false, allowPartial = false }) {
-  const token = await getToken({ scope: SCOPE, impersonate: user, signal: AbortSignal.timeout(20_000) });
+  const routed = routeMailbox(user, query);
+  user = routed.user; query = routed.query;
+  if (routed.notice) console.error(routed.notice);
+  let token;
+  try { token = await getToken({ scope: SCOPE, impersonate: user, signal: signal || AbortSignal.timeout(20_000) }); }
+  catch (error) {
+    if (/unauthorized_client/.test(error.message)) throw new Error(`${error.message}。そのアドレスはグループの可能性がある。seisaku-team@orgiast.jp で to:${user} 検索すること`);
+    throw error;
+  }
   const list = pendingIds ? { messages: pendingIds.map(id => ({ id })), nextPageToken: resumeNext } : await gmail(token, `/messages?q=${encodeURIComponent(query)}&maxResults=${Math.min(100, max)}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`, fetchImpl, signal);
   const results = [], stubs = (list.messages || []).slice(0, max);
   const pending = new Set((list.messages || []).map(s => s.id));
@@ -92,9 +101,10 @@ export async function searchGmail({ user, query, max = 10, withBody = false, bod
   }
   await Promise.all(Array.from({ length: Math.max(1, Math.min(5, concurrency)) }, worker));
   if (failure && !allowPartial) throw failure;
+  if (signal?.aborted && !allowPartial) throw signal.reason || new Error('Gmail search interrupted');
 
   if (skipped > 0) console.error(`gmail-search: ${skipped}件のメッセージが取得前に削除または移動されたためスキップしました`);
-  return { estimate: Number(list.resultSizeEstimate) || results.length, messages: results, skipped, nextPageToken: list.nextPageToken || null, ...(allowPartial ? { pendingIds: [...pending], partial: pending.size > 0, error: failure?.message || (signal?.aborted ? "Gmail source budget exhausted" : undefined) } : {}) };
+  return { user, query, ...(routed.notice ? { notice: routed.notice } : {}), estimate: Number(list.resultSizeEstimate) || results.length, messages: results, skipped, nextPageToken: list.nextPageToken || null, ...(allowPartial ? { pendingIds: [...pending], partial: pending.size > 0, error: failure?.message || (signal?.aborted ? "Gmail source budget exhausted" : undefined) } : {}) };
 }
 
 async function main() {

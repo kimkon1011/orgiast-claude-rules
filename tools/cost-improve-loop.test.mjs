@@ -825,8 +825,8 @@ for (const mode of ['local', 'directive']) {
     });
     assert.equal(result.actions[0].mode, 'human');
     assert.deepEqual(result.nextStaleRetry, {});
-    assert.match(result.actions[0].todoMessage, /Claude Code を起動できているか/);
-    assert.match(result.actions[0].todoMessage, /fleet-sheet-report.*夜間/);
+    assert.match(result.actions[0].todoMessage, /自動で夜間レポートの再送/);
+    assert.match(result.actions[0].todoMessage, /Claude が自動で/);
     assert.doesNotMatch(result.actions[0].todoMessage, /0 回/);
     assert.equal(errors.length, 1);
     assert.ok(!errors[0].includes('secret-token'));
@@ -870,23 +870,22 @@ test('名簿16行は除外し計測不能3行だけを①と④に表示する',
     assert.match(section1, /※ 未報告のPC 16台は表から除外/);
     for (const row of missing) {
       assert.ok(section1.includes(`- **${row.pcName}**: 報告実績なし（最終報告 ${row.reportedAt || '不明'}）— そのPCで Claude Code を1回起動すれば復帰`));
-      assert.ok(section4.includes(`- **${row.pcName}**: 自動では復旧不可 — そのPCで Claude Code を1回起動してください`));
+      assert.ok(section4.includes(`- **${row.pcName}**: 自動では復旧不可 — 次回の夜間点検で再試行します`));
     }
     assert.equal((section4.match(/^- /gm) || []).length, 3);
   } finally { delete process.env.ORGIAST_HOME; cleanTempDir(tempDir); }
 });
 
 // ---- 保留(deferred): Codex の上限・無人割当は失敗ではない ----
-test('runAutoCodexIsolated: PR 作成には --label automerge を付ける', async () => {
+test('runAutoCodexIsolated: 非kim席には automerge を付けない', async () => {
   const { runAutoCodexIsolated } = await import('./cost-improve-loop.mjs');
   const calls = [];
   const acts = [{ kind: 'x', pc: 'p', specContent: '修正する' }];
-  runAutoCodexIsolated({ acts, specFile: 'spec.md', repoPath: os.tmpdir(), spawnSync: autoCodexSpawnMocks(calls) });
+  runAutoCodexIsolated({ home: os.tmpdir(), acts, specFile: 'spec.md', repoPath: os.tmpdir(), spawnSync: autoCodexSpawnMocks(calls) });
   const creates = calls.filter(({ program, args }) => program === 'gh' && args[0] === 'pr' && args[1] === 'create');
   assert.equal(creates.length, 1);
   const args = creates[0].args;
-  assert.ok(args.includes('--label'));
-  assert.equal(args[args.indexOf('--label') + 1], 'automerge');
+  assert.ok(!args.includes('--label'));
   assert.equal(acts[0].pr, 'https://github.com/orgiast/orgiast-claude-rules/pull/123');
 });
 
@@ -900,7 +899,7 @@ test('runAutoCodexIsolated: codex-do が保留(75)を返したら failed にせ�
     return { status: 0, stdout: '', stderr: '' };
   };
   const acts = [{ kind: 'x', pc: 'p', specContent: '- 根拠: テスト\n機能を実装する' }];
-  runAutoCodexIsolated({ acts, specFile: 'spec.md', repoPath: os.tmpdir(), spawnSync: spawn });
+  runAutoCodexIsolated({ home: os.tmpdir(), acts, specFile: 'spec.md', repoPath: os.tmpdir(), spawnSync: spawn });
   assert.equal(acts[0].result, 'deferred');
   assert.equal(acts[0].retryAt, retryAt);
   assert.match(acts[0].note, /unattended_budget/);
@@ -914,7 +913,7 @@ test('runAutoCodexIsolated: 通常の失敗(終了コード1)は従来どおり 
   const { runAutoCodexIsolated } = await import('./cost-improve-loop.mjs');
   const spawn = (program, args) => args.some((a) => String(a).endsWith('codex-do.mjs')) ? { status: 1, stdout: '', stderr: 'boom' } : { status: 0, stdout: '', stderr: '' };
   const acts = [{ kind: 'x', pc: 'p', specContent: '修正する' }];
-  runAutoCodexIsolated({ acts, specFile: 'spec.md', repoPath: os.tmpdir(), spawnSync: spawn });
+  runAutoCodexIsolated({ home: os.tmpdir(), acts, specFile: 'spec.md', repoPath: os.tmpdir(), spawnSync: spawn });
   assert.equal(acts[0].result, 'failed');
 });
 

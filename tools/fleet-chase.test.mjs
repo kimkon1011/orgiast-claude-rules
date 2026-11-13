@@ -151,11 +151,11 @@ test('L2 after seen+24h, L3 after seen+48h keeps 72h reminders', async t => {
 });
 test('digest only after 09 JST, once per day only after DM, summary capped at 8', async t => {
   const f = fixture(t);
-  for (let n = 0; n < 55; n++) f.add(mail(`mail-digest-${n}`));
+  for (let n = 0; n < 55; n++) f.add({ ...mail(`mail-digest-${n}`), from: 'nishi-PC', to: 'kim-PC', why: '[判断依頼] 確認' }, 'inbound');
   await digest(f.ledger, { ...f.ctx, now: Date.parse('2026-10-17T23:59:00Z') }); assert.equal(f.notifications.length, 0);
   await digest(f.ledger, { ...f.ctx, notify: async () => ({ delivered: 'webhook' }) }); assert.equal(f.ledger.digestDay, undefined);
   await digest(f.ledger, f.ctx); await digest(f.ledger, f.ctx); assert.equal(f.notifications.length, 1);
-  assert.match(f.notifications[0], /ほか 47 件/); assert.equal((f.notifications[0].match(/\(outbound-mail-digest-/g) || []).length, 8);
+  assert.match(f.notifications[0], /ほか 47 件/); assert.equal((f.notifications[0].match(/\(inbound-mail-digest-/g) || []).length, 8);
   await digest(f.ledger, { ...f.ctx, now: NOW + DAY }); assert.equal(f.notifications.length, 2);
 });
 test('cancel/defer/revive validate explicit reason and dates; deferred work stays visible without sending', async t => {
@@ -355,4 +355,10 @@ test('send caps are per target and include ambiguous failed attempts; owner DMs 
     request: async (_kind, payload) => { calls.push(payload.to); throw Error('response lost'); } });
   for (const to of ['nishi-PC', 'cr-PC']) assert.equal(calls.filter(t => t === to).length, SEND_CAP_PER_TARGET);
   assert.equal(f.dms.length, SEND_CAP_PER_TARGET + 2);
+});
+
+test('機械の未達や他席宛の判断依頼だけではkimへ通知しない', async t => {
+  const f = fixture(t); f.add(mail('mail-machine')); f.add(mail('mail-other-decision', { why: '[判断依頼] 西さんの判断' }));
+  assert.equal((await digest(f.ledger, f.ctx)).reason, 'no-kim-decision');
+  assert.equal(f.notifications.length, 0);
 });

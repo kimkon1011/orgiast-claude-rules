@@ -100,12 +100,15 @@ test('preview leaves watch migration and delivery state untouched', async t => {
   assert.match(result.text, /案件進捗/); assert.equal(fs.existsSync(path.join(h, '.claude/state/case-watch.json')), false);
 });
 test('failed later message part retains the previous delivery point for retry', async t => {
+  // 2026-11-04 仕様変更: 大量案件も1通。失敗時に配達点を進めず、同じ枠で再送できる意図を維持する。
   const h = home(t); caseWatch(h, { add: [id, ...Array.from({ length: 20 }, (_, i) => `C${String(i).padStart(4, '0')}`)], now });
   let state = {}, calls = 0;
-  const io = { label: 'kim-PC', localOwner: 'kim@orgiast.jp', readLedger: () => [], readState: () => structuredClone(state), writeState: (_, value) => { state = value; }, fetchCaseResume: async () => data(), notifyOwner: async () => ++calls === 2 ? { reason: 'second part failed' } : { delivered: 'dm' } };
+  const io = { label: 'kim-PC', localOwner: 'kim@orgiast.jp', readLedger: () => [], readState: () => structuredClone(state), writeState: (_, value) => { state = value; }, fetchCaseResume: async () => data(), notifyOwner: async (_, text) => { assert.ok(text.length <= 1800); return ++calls === 1 ? { reason: 'offline' } : { delivered: 'dm' }; } };
   const out = await run({ home: h, now, io });
-  assert.ok(calls >= 2); assert.equal(out.sent, false); assert.equal(state.caseProgress, undefined);
+  assert.equal(calls, 1); assert.equal(out.sent, false); assert.equal(state.caseProgress, undefined);
   assert.equal((await run({ home: h, now, io })).sent, true); assert.ok(state.caseProgress[id]);
+  assert.equal(calls, 2);
+  assert.equal((await run({ home: h, now, io })).skipped, 'already-sent');
 });
 
 const eigCitation = '[20261030-session-user-PC-12345678-1234-1234-1234-123456789abc.md 2026-11-02T12:05:46.218Z]';

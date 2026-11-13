@@ -56,7 +56,7 @@ test('本人手渡しには同一 session の open 台帳行だけを認める',
   const file = withLedger(t);
   const input = { session_id: 'user-wait' };
   for (const status of ['open', 'done', 'superseded', 'waiting_user', 'stalled', 'resumed']) {
-    fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status, check: 'node check.mjs' }) + '\n');
+    fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status, check: 'node check.mjs', ask: 'Discord で転送してください。' }) + '\n');
     const result = judgeNextAction(report(handoff), '', input);
     if (status === 'open') assert.equal(result.decision, 'pass');
     else assert.equal(result.code, code, status);
@@ -73,4 +73,30 @@ test('本人手渡しマーカーがあってもチャット返信だけなら p
 test('手渡しマーカーは footer より前だけを検査する', t => {
   withLedger(t);
   assert.equal(judgeNextAction(report('作業を完了しました。', 'なし（お願いする操作はありません）')).decision, 'pass');
+});
+
+test('本人待ちの open 行は ask 全文が必須', t => {
+  const file = withLedger(t);
+  const input = { session_id: 'ask-required' };
+  for (const ask of [undefined, '', '   ', 'Discord を開き対象を転送してください。']) {
+    fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status: 'open', check: 'node check.mjs', ask }) + '\n');
+    const result = judgeNextAction(report(handoff), '', input);
+    if (ask?.trim()) assert.equal(result.decision, 'pass');
+    else {
+      assert.equal(result.code, 'NEXT-ACTION-USER-WAIT-NEEDS-ASK');
+      assert.match(result.reason, /--ask-file <頼みごとの全文ファイル>/);
+    }
+    assert.equal(judgeNextAction(report(handoff + '\n[NO-AUTOCHECK-OK: 操作結果を取得できない]'), '', input).decision, 'pass');
+  }
+});
+
+test('本文マーカーがなくても次の操作が本人待ちなら ask が必要', t => {
+  const file = withLedger(t);
+  const input = { session_id: 'footer-wait' };
+  const text = report('恒久策: 一回限り: 本人の署名が必要です。').replace('次に kim がすること: なし', '次に kim がすること: 契約書に署名する');
+  fs.writeFileSync(file, [
+    { sessionId: input.session_id, status: 'open', check: 'node check.mjs' },
+    { sessionId: 'other', status: 'open', check: 'node check.mjs', ask: '他の操作全文' },
+  ].map(row => JSON.stringify(row)).join('\n'));
+  assert.equal(judgeNextAction(text, '', input).code, 'NEXT-ACTION-USER-WAIT-NEEDS-ASK');
 });

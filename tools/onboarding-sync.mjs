@@ -16,6 +16,8 @@ import { installSharedMemories } from './memory-share.mjs';
 import { installKnowledge } from './knowledge-pack.mjs';
 import { resolveConvergenceRepo } from './fleet-convergence.mjs';
 import { gitBlobSha } from './version-drift.mjs';
+import { isKimOperated } from './lib/kim-operated.mjs';
+import { dedupePreferences } from './claude-md-dedupe.mjs';
 
 const args = process.argv.slice(2);
 const force = args.includes('--force');
@@ -640,6 +642,8 @@ function save(hash, now) {
   if (dryRun) return;
   try { fs.mkdirSync(path.dirname(statePath), { recursive: true }); fs.writeFileSync(statePath, `${JSON.stringify({ lastCheck: now.toISOString(), hash }, null, 2)}\n`, 'utf8'); } catch {}
 }
+// Only optional navigation (headings/previews) consumes this budget. Mandatory
+// rules are distributed in full and have a separate size guard in the tests.
 export const INDEX_BUDGET_BYTES = 8000;
 export const INDEX_PROTECTED = [
   /副作用・影響は報告で終わらせず、その場で直す/,
@@ -647,6 +651,19 @@ export const INDEX_PROTECTED = [
   /planIncluded.*監督.*全用途禁止/,
   /setup --converge.*allow/,
 ];
+
+export function isMandatoryIndexLine(line) {
+  return /^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(line)
+    || INDEX_PROTECTED.some(pattern => pattern.test(line));
+}
+
+export function measureIndexBytes(index) {
+  const totalBytes = Buffer.byteLength(index);
+  const optionalBytes = Buffer.byteLength(index.split('\n').filter(line => !isMandatoryIndexLine(line)).join('\n'));
+  // Charge separators removed with mandatory lines to the mandatory allocation,
+  // so the two allocations sum exactly to the distributed UTF-8 size.
+  return { optionalBytes, mandatoryBytes: totalBytes - optionalBytes, totalBytes };
+}
 
 export function makeIndex(body) {
   let fence = null;
@@ -679,9 +696,13 @@ export function makeIndex(body) {
       for (let j = i + 1; /^###\s/.test(line) && j < lines.length && !/^#{1,3}(?:\s|$)/.test(lines[j]); j++) {
         const candidate = lines[j].trim();
         if (!candidate) continue;
+        // Absolute rules are emitted in full by the outer loop. A first-sentence
+        // preview would duplicate (and sometimes truncate) the same obligation.
+        if (/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(candidate)) break;
         const end = candidate.indexOf('。');
         // 結論文の日付付き由来も見出しと同じく全文へ委ねる(予算の常時の余裕を作る)。
-        const conclusion = (end >= 0 ? candidate.slice(0, end + 1) : candidate).replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, '');
+        const conclusion = isMandatoryIndexLine(candidate) ? candidate
+          : (end >= 0 ? candidate.slice(0, end + 1) : candidate).replace(/（(?:kim\s+)?\d{4}-\d{2}-\d{2}[^）]*）/g, '');
         // 結論として拾った絶対ルール・太字小見出しも短縮対象にしない。
         if (!/^\*{0,2}\s*(?:🔴|🛑|⚙️|🔁)/u.test(candidate)
           && !/^\*\*\d+(?:\.\d+)+\s+.+\*\*$/.test(candidate)
@@ -702,7 +723,7 @@ export function makeIndex(body) {
     }
   }
   const original = kept.join('\n');
-  if (Buffer.byteLength(original) <= INDEX_BUDGET_BYTES || !conclusions.size) return original;
+  if (measureIndexBytes(original).optionalBytes <= INDEX_BUDGET_BYTES || !conclusions.size) return original;
   // 文書内の位置ではなく結論の長さ順に、必要な件数だけ短縮する。
   for (const [i, chars] of [...conclusions].sort((a, b) => b[1].length - a[1].length)) {
     const comma = chars.indexOf('、');
@@ -710,7 +731,7 @@ export function makeIndex(body) {
     if (Buffer.byteLength(shortened) >= Buffer.byteLength(kept[i])) continue;
     kept[i] = shortened;
     const result = kept.join('\n');
-    if (Buffer.byteLength(result) <= INDEX_BUDGET_BYTES) return result;
+    if (measureIndexBytes(result).optionalBytes <= INDEX_BUDGET_BYTES) return result;
   }
   // 読点までの短縮だけでは、新しい規約が数件入ると予算を超える。
   // 見出し・絶対ルールを維持したまま通常の結論だけをさらに短縮する。
@@ -719,12 +740,38 @@ export function makeIndex(body) {
     if (Buffer.byteLength(shortened) >= Buffer.byteLength(kept[i])) continue;
     kept[i] = shortened;
     const result = kept.join('\n');
-    if (Buffer.byteLength(result) <= INDEX_BUDGET_BYTES) return result;
+    if (measureIndexBytes(result).optionalBytes <= INDEX_BUDGET_BYTES) return result;
   }
+  // Preserve the existing all-or-nothing fallback for optional navigation that
+  // cannot fit (e.g. an oversized heading). Mandatory size never affects it.
   return original;
 }
+export async function syncMission({ repoDir = repoPath, targetHome = home, isDryRun = dryRun } = {}) {
+  const missionSource = path.join(repoDir, 'docs', 'mission.md');
+  const missionTarget = path.join(targetHome, '.claude', 'orgiast-mission.md');
+  let content = null;
+  if (fs.existsSync(missionSource)) {
+    try { content = fs.readFileSync(missionSource, 'utf8'); } catch {}
+  }
+  if (!content) {
+    try {
+      const response = await fetch('https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/docs/mission.md', { cache: 'no-store', signal: AbortSignal.timeout(15000) });
+      if (response.ok) content = await response.text();
+    } catch {}
+  }
+  if (!content) return false;
+  const current = fs.existsSync(missionTarget) ? fs.readFileSync(missionTarget, 'utf8') : null;
+  if (current === content) return false;
+  if (!isDryRun) {
+    fs.mkdirSync(path.dirname(missionTarget), { recursive: true });
+    fs.writeFileSync(missionTarget, content, 'utf8');
+  }
+  return true;
+}
+
 export function build(current, body, label) {
-  const block = `${beginPrefix} (自動同期 ${label}) -->\n${body}\n- 全社共有の知見（kim-PC の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る\n- 制作・営業・見積・案件の着手前: ~/.claude/knowledge/production-sales/00_INDEX.md を読み、必要な節だけ Grep。全文を丸読みしない。\n${endMarker}`;
+  current = dedupePreferences(current, body);
+  const block = `${beginPrefix} (自動同期 ${label}) -->\n- 基本理念・判断基準（毎セッション読み込み・迷ったらここに戻る）: @~/.claude/orgiast-mission.md\n${body}\n- 全社共有の知見（kim-PC の memory を毎日自動配布・読み取り専用）: @~/.claude/shared-memory/MEMORY.md ／ 詳細は同ディレクトリの index/*.md と各ファイルを Read で辿る\n- 制作・営業・見積・案件の着手前: ~/.claude/knowledge/production-sales/00_INDEX.md を読み、必要な節だけ Grep。全文を丸読みしない。\n${endMarker}`;
   if (current === null) return { updated: block, action: '新規作成' };
   // 行全体が開始マーカー形式そのものである場合だけ対象にする(部分一致は自己言及文書に誤爆する)。
   // ラベル部分の形式は縛らない: 日付形式を固定すると、別形式で導入されたPCで置換に失敗し
@@ -765,10 +812,26 @@ export async function syncKnowledge({ targetHome = home, forced = force, preview
   }
 }
 
+export function runSeatInvitations({ targetHome = home, targetRepo = repoPath, preview = dryRun,
+  onlyKeys = keysOnly, exec = execFileSync, emit = console.log } = {}) {
+  if (preview || onlyKeys || !isKimOperated(targetHome)) return false;
+  const seatRepo = resolveConvergenceRepo({ home: targetHome, repo: targetRepo });
+  const inviteTool = path.join(seatRepo || targetRepo, 'tools/gh-accept-invites.mjs');
+  if (!fs.existsSync(inviteTool)) return false;
+  emit(exec(process.execPath, [inviteTool, '--daily'], {
+    windowsHide: true, timeout: 60000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, ORGIAST_HOME: targetHome },
+  }).trim());
+  return true;
+}
+
 async function main() { try {
   const now = new Date();
   if (args.includes('--knowledge-only')) { await syncKnowledge({ now }); return; }
   const plan = executionPlan(args);
+  // 既存の全PC SessionStart 経路。同期の間引き・失敗より前に日次招待承諾を実行する。
+  try { runSeatInvitations(); }
+  catch { log('招待: 日次確認を完了できません。node tools/gh-accept-invites.mjs で再試行'); }
   if (keysOnly) {
     await provisionKeys(now, { quiet: true });
     return;
@@ -784,6 +847,7 @@ async function main() { try {
       else { fs.mkdirSync(path.dirname(rulesPath), { recursive: true }); fs.renameSync(oldRulesPath, rulesPath); }
     } catch {}
   }
+  try { await syncMission(); } catch (e) { log(`mission sync failed: ${oneLine(e)}`); }
   if (plan.syncRepository) await syncRepository(now);
   if (plan.provisionKeys) await provisionKeys(now);
   await syncKnowledge({ now });

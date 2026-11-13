@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { findNegativeClaim } from './negative-claim-gate.mjs';
+import { findNegativeClaim, evaluateNegativeClaimFromRaw } from './negative-claim-gate.mjs';
 
 const gate = fileURLToPath(new URL('./negative-claim-gate.mjs', import.meta.url));
 const regressionFixtures = JSON.parse(fs.readFileSync(new URL('./negative-claim-gate.fixtures.json', import.meta.url), 'utf8'));
@@ -124,4 +124,28 @@ test('末尾がtool_useだけでも手前の本文で判定する', () => {
   const result = spawnSync(process.execPath, [gate], { input: JSON.stringify({ session_id: 'tool-tail', transcript_path: file }), encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).decision, 'block');
+});
+test('missingCapability パターンの陽性（block）判定', () => {
+  const positiveCases = [
+    'Booking.com の管理画面には人数別料金を変える方法はありません。',
+    '外部から送る手段がありません。',
+  ];
+  for (const text of positiveCases) {
+    const res = evaluateNegativeClaimFromRaw({ text, transcriptRaw: '' });
+    assert.equal(res.decision, 'block', `Expected block for: ${text}`);
+  }
+});
+test('missingCapability パターンの陰性（pass）判定', () => {
+  const negativeCases = [
+    '問題はありません。',
+    '差分はありません。',
+    '未返信なし。',
+    '変更はありません。',
+    'エラーはありませんでした。',
+    '方法はまだ確認できていません。',
+  ];
+  for (const text of negativeCases) {
+    const res = evaluateNegativeClaimFromRaw({ text, transcriptRaw: '' });
+    assert.equal(res.decision, 'pass', `Expected pass for: ${text}`);
+  }
 });

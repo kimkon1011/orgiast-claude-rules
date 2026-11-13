@@ -7,6 +7,7 @@ import { Worker } from 'node:worker_threads';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
+import { writeJson, windowsLockBusy, WRITE_JSON_RENAME_RETRIES } from './fleet-mail.mjs';
 import { main, pollOnce, readInbox, syncMailState, resolveMailTarget, mailId, parseArgs, waitForReply, createClient, TERMINAL_STATUSES, hasDecisionRequest, updateInbox, presentMail, ACK_BATCH_LIMIT, SERVER_MAX_ATTEMPTS, CAPABILITY_BACKOFF_MS, INTERRUPTED_PROMPT_MS, INTERRUPTED_PROMPT_BODY, INBOX_LOCK_RETRIES, INBOX_LOCK_DELAY_MS, INBOX_LOCK_STALE_MS, COMMAND_LOCK_RETRIES, COMMAND_LOCK_DELAY_MS, LOCK_BUSY_EXIT, notifyPendingArrivals } from './fleet-mail.mjs';
 // --answer は headless 実行中（CLAUDE_HEADLESS=1 / ORGIAST_HEADLESS_JOB）に判断代行を拒否して 2 を返す。
 // このテストを headless セッション（夜間 auto-session / CI 外の手動実行）から回すと answer 系だけが
@@ -35,6 +36,49 @@ function fixture(t) {
   return { home, dir, inbox, body, deps, calls, output, errors, spawns, save, read };
 }
 const sendArgs = (f, to = sender, extra = []) => ['--send', '--to', to, '--kind', 'note', '--body-file', f.body, '--why', 'test', ...extra];
+
+test('writeJson writes JSON and removes its temporary file', t => {
+  const f = fixture(t), dir = path.join(f.home, 'json'), file = path.join(dir, 'state.json');
+  writeJson(file, { count: 1 });
+  writeJson(file, { count: 2 });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { count: 2 });
+  assert.deepEqual(fs.readdirSync(dir), ['state.json']);
+});
+
+for (const code of ['EPERM', 'EBUSY']) {
+  test(`writeJson retries transient ${code} on Windows`, { skip: process.platform !== 'win32' }, t => {
+    const f = fixture(t), file = path.join(f.home, 'state.json');
+    const original = fs.renameSync;
+    let calls = 0;
+    try {
+      fs.renameSync = (...args) => {
+        if (++calls === 1) throw Object.assign(new Error('sharing conflict'), { code });
+        return original(...args);
+      };
+      writeJson(file, { ok: true });
+      assert.equal(calls, 2);
+      assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { ok: true });
+      assert.equal(fs.readdirSync(f.home).some(name => name.endsWith('.tmp')), false);
+    } finally { fs.renameSync = original; }
+  });
+}
+
+for (const code of ['EPERM', 'EBUSY', 'EACCES']) {
+  test(`writeJson propagates persistent ${code} and cleans up after bounded attempts`, t => {
+    const f = fixture(t), file = path.join(f.home, 'state.json');
+    writeJson(file, { original: true });
+    const original = fs.renameSync, error = Object.assign(new Error('rename failed'), { code });
+    let calls = 0;
+    try {
+      fs.renameSync = () => { calls++; throw error; };
+      assert.throws(() => writeJson(file, { replaced: true }), thrown => thrown === error);
+      assert.equal(windowsLockBusy(error), process.platform === 'win32' && code !== 'EACCES');
+      assert.equal(calls, process.platform === 'win32' && code !== 'EACCES' ? WRITE_JSON_RENAME_RETRIES + 1 : 1);
+      assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { original: true });
+      assert.equal(fs.readdirSync(f.home).some(name => name.endsWith('.tmp')), false);
+    } finally { fs.renameSync = original; }
+  });
+}
 
 test('partial kim is exit 4 with roster candidates on the real dry-run send path and no writes', async t => {
   const f = fixture(t), before = fs.readdirSync(f.dir);
@@ -192,7 +236,8 @@ test('inbox --unseen selects unpresented pending mail and records seen with a re
   assert.deepEqual(JSON.parse(f.output[0]).map(m => m.id), [mail().id]);
   assert.equal(f.read(mail().id).status, 'seen'); assert.deepEqual(f.read(mail().id).pendingServer, ['seen']); assert.equal(f.errors.length, 0); assert.equal(f.spawns.length, 1);
   f.deps.request = async (kind, payload) => { f.calls.push({ kind, payload }); return kind === 'mail-poll' ? { messages: [] } : kind === 'mail-ack' && payload.ids ? { ok: true, results: payload.ids.map(id => ({ id, ok: true })) } : { ok: true, mail: {} }; };
-  await pollOnce(f.deps); assert.deepEqual(f.read(mail().id).pendingServer, []); assert.equal(f.calls[0].kind, 'mail-seen');
+  await pollOnce(f.deps); assert.deepEqual(f.read(mail().id).pendingServer, []);
+  assert.deepEqual(f.calls.slice(0, 2).map(call => call.kind), ['mail-poll', 'mail-seen']);
 });
 test('ack and ack --all-seen complete only selected mail and retry the server intent', async t => {
   const f = fixture(t); f.save(mail()); f.save(mail({ id: 'mail-presented', presentedAt: iso(-1) }));
@@ -616,7 +661,8 @@ test('D6 arrival timeouts cap each call and total budget then retry unnotified m
   f.deps.notifyArrival = async (_mail, { signal }) => { signals.push(signal); return new Promise(resolve => late.push(resolve)); };
   const running = pollOnce(f.deps);
   const flush = () => new Promise(resolve => setImmediate(resolve));
-  await flush();
+  const readyDeadline = Date.now() + 5000;
+  while (!signals.length && Date.now() < readyDeadline) await flush();
   for (let i = 0; i < ARRIVAL_BUDGET_MS / ARRIVAL_TIMEOUT_MS; i++) {
     assert.equal(signals.length, i + 1);
     elapsed += ARRIVAL_TIMEOUT_MS; t.mock.timers.tick(ARRIVAL_TIMEOUT_MS); await flush();
@@ -643,7 +689,8 @@ test('D6 final arrival receives only the remaining total budget', async t => {
     return new Promise(() => {});
   };
   const running = pollOnce(f.deps);
-  await new Promise(resolve => setImmediate(resolve));
+  const readyDeadline = Date.now() + 5000;
+  while (calls.length < 2 && Date.now() < readyDeadline) await new Promise(resolve => setImmediate(resolve));
   assert.equal(calls.length, 2);
   const remaining = ARRIVAL_BUDGET_MS - elapsed;
   elapsed += remaining; t.mock.timers.tick(remaining);
@@ -1290,4 +1337,50 @@ test('802 result transport retries preserve a long stdout answer without another
   assert.equal(replies.length, 2);
   assert.equal(replies[0].payload.resultBody, answer); assert.equal(replies[1].payload.resultBody, answer);
   assert.equal(f.spawns.length, 0);
+});
+
+
+test('poll persists a complete response before partial inbox save and resumes without another request', async t => {
+  const f = fixture(t);
+  const messages = [mail(), mail({ id: 'mail-next' })];
+  f.deps.request = async kind => { assert.equal(kind, 'mail-poll'); return { messages }; };
+  const first = await pollOnce({ ...f.deps, saveReceivedBudgetMs: 0 });
+  assert.equal(first.partial, true);
+  const batch = JSON.parse(fs.readFileSync(path.join(f.dir, '.fleet-mail-poll.json'), 'utf8'));
+  assert.deepEqual(batch.response.messages, messages);
+  const timing = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-poll-timing.jsonl'), 'utf8').trim());
+  assert.equal(timing.outcome, 'partial');
+  assert.ok(JSON.parse(fs.readFileSync(path.join(f.dir, '.fleet-mail-last-poll.json'), 'utf8')).at);
+  f.deps.request = async kind => { assert.notEqual(kind, 'mail-poll'); return { ok: true, mail: {} }; };
+  await pollOnce(f.deps);
+  assert.equal(f.read('mail-original').body, messages[0].body);
+  assert.equal(f.read('mail-next').body, messages[1].body);
+  assert.equal(fs.existsSync(path.join(f.dir, '.fleet-mail-poll.json')), false);
+});
+
+test('poll timeout preserves requestId and never advances successful poll timestamp', async t => {
+  const f = fixture(t);
+  const last = path.join(f.dir, '.fleet-mail-last-poll.json');
+  fs.writeFileSync(last, JSON.stringify({ at: iso(-10000) }));
+  let requestId;
+  const result = await pollOnce({ ...f.deps, mailPollBudgetMs: 20, request: async (kind, payload) => {
+    assert.equal(kind, 'mail-poll'); requestId = payload.requestId; return new Promise(() => {});
+  } });
+  assert.equal(result.skipped, 'error');
+  assert.equal(JSON.parse(fs.readFileSync(last, 'utf8')).at, iso(-10000));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.dir, '.fleet-mail-poll.json'), 'utf8')).requestId, requestId);
+});
+
+test('slow receipt scan still receives mail and defers historical processing after durable save', async t => {
+  const f = fixture(t);
+  f.deps.request = async kind => { assert.equal(kind, 'mail-poll'); return { messages: [mail()] }; };
+  const result = await pollOnce({ ...f.deps, receiptScanOptions: { budgetMs: 20, io: {
+    readdir: async () => ['mail-slow.json'], readFile: () => new Promise(() => {}),
+  } } });
+  assert.deepEqual(result.received, ['mail-original']);
+  assert.equal(f.read('mail-original').body, 'body');
+  const timing = JSON.parse(fs.readFileSync(path.join(f.dir, 'fleet-mail-poll-timing.jsonl'), 'utf8').trim());
+  assert.equal(timing.outcome, 'ok');
+  assert.equal(timing.receiptScan.partial, true);
+  assert.ok(timing.phases.pollReceiptScan >= 0);
 });

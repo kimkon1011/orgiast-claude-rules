@@ -1,0 +1,41 @@
+[
+  {
+    "batchId": "prep-cdfd11b707765ed6e206918f3ef3b43c",
+    "source": "state.json localAnswer",
+    "originalError": "before/valuesの寸法・値が不正",
+    "available": true,
+    "failed": true,
+    "attempts": 2,
+    "lastAttemptAt": "2026-11-03T17:05:27.532Z",
+    "sha256": "89d2d2ffea2070b4ae8bd8ea39c9a6187c7845429e3a576c7020b3708ada59be"
+  },
+  {
+    "batchId": "prep-e6d719d0ed33c2728959e6d61f8d9ba5",
+    "source": "state.json localAnswer",
+    "originalError": "案件のsubmissionが未作成・未特定",
+    "available": true,
+    "failed": true,
+    "attempts": 2,
+    "lastAttemptAt": "2026-11-03T17:05:27.532Z",
+    "sha256": "422d45570a517b148a9577ab2f52717692786f5d4e04f0454c37de7a92659874"
+  },
+  {
+    "batchId": "prep-6a7a8716528e6e5ca05f9845a4b820ef",
+    "source": "state.json localAnswer",
+    "originalError": "before/valuesの寸法・値が不正",
+    "available": true,
+    "failed": true,
+    "attempts": 2,
+    "lastAttemptAt": "2026-11-03T17:05:27.532Z",
+    "sha256": "57b0e3ee3215ed1e968765131831c99abe83511aa6261845fa9445c80bb040cc"
+  },
+  {
+    "batchId": "prep-8a63bd65d61bc463764d525f3ef8746a",
+    "source": "state.json localAnswer",
+    "originalError": "Bad control character in string literal in JSON at position 1030 (line 28 column 50)",
+    "available": false,
+    "failed": true,
+    "attempts": 2,
+    "lastAttemptAt": "2026-11-03T17:05:27.532Z"
+  }
+]

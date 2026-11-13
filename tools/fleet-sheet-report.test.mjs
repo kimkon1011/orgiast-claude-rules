@@ -114,10 +114,11 @@ test('GAS upsertは空の計測値で既存セルを上書きせず、実測0は
 });
 
 const response = (body, status = 200) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
-test('HTTP 200 + ok:false は3回再送して失敗ログを残す', async () => {
+test('HTTP 200 + ok:false は5回再送して busy_exhausted を残す', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fleet-post-')), logFile = path.join(dir, 'report.log'); let calls = 0;
-  const result = await post('secret-url', 'status', { token: 'secret' }, { fetchFn: async () => { calls++; return response({ ok: false, error: 'busy' }); }, sleepFn: async () => {}, random: () => 0, logFile });
-  assert.equal(result.ok, false); assert.equal(calls, 3); assert.match(fs.readFileSync(logFile, 'utf8'), /kind=status attempts=3 result=failed error=busy/);
+  const result = await post('secret-url', 'status', { token: 'secret' }, { fetchFn: async () => { calls++; return response({ ok: false, error: 'busy' }); }, sleepFn: async () => {}, random: () => 0.5, logFile, budgetPath: null });
+  assert.equal(result.ok, false); assert.equal(result.busyExhausted, true); assert.equal(calls, 5);
+  assert.match(fs.readFileSync(logFile, 'utf8'), /kind=status attempts=5 result=busy_exhausted/);
 });
-test('busy 後の成功は2回目で完了する', async () => { let calls = 0; const result = await post('u', 'status', {}, { fetchFn: async () => response(++calls === 1 ? { ok: false, error: 'busy' } : { ok: true }), sleepFn: async () => {}, logFile: path.join(os.tmpdir(), `fleet-${Date.now()}.log`) }); assert.equal(result.ok, true); assert.equal(calls, 2); });
-test('timeout は再送する', async () => { let calls = 0; const result = await post('u', 'status', {}, { fetchFn: async () => { calls++; if (calls === 1) throw Object.assign(new Error('timeout'), { name: 'TimeoutError' }); return response({ ok: true }); }, sleepFn: async () => {}, logFile: path.join(os.tmpdir(), `fleet-${Date.now()}-t.log`) }); assert.equal(result.ok, true); assert.equal(calls, 2); });
+test('busy 後の成功は2回目で完了する', async () => { let calls = 0; const result = await post('u', 'status', {}, { fetchFn: async () => response(++calls === 1 ? { ok: false, error: 'busy' } : { ok: true }), sleepFn: async () => {}, logFile: path.join(os.tmpdir(), `fleet-${Date.now()}.log`), budgetPath: null }); assert.equal(result.ok, true); assert.equal(calls, 2); });
+test('timeout は再送する', async () => { let calls = 0; const result = await post('u', 'status', {}, { fetchFn: async () => { calls++; if (calls === 1) throw Object.assign(new Error('timeout'), { name: 'TimeoutError' }); return response({ ok: true }); }, sleepFn: async () => {}, logFile: path.join(os.tmpdir(), `fleet-${Date.now()}-t.log`), budgetPath: null }); assert.equal(result.ok, true); assert.equal(calls, 2); });

@@ -55,9 +55,15 @@ export function setDecisionAttachments(id, attachments, { home = decisionHome() 
   return record;
 }
 
+// Legacy producers used open for the same unbatched state as pending.
+// Keep all other states distinct so completed/invalid records are not imported.
+export function normalizeDecisionStatus(status) {
+  return status === 'open' ? 'pending' : status;
+}
+
 export function listDecisions({ home = decisionHome(), status } = {}) {
   const records = readRecords(home);
-  return status == null ? records : records.filter((record) => record.status === status);
+  return status == null ? records : records.filter((record) => normalizeDecisionStatus(record?.status) === normalizeDecisionStatus(status));
 }
 
 export function markDecisions(ids, { home = decisionHome(), status, batchDate } = {}) {

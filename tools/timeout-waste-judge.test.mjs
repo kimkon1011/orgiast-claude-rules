@@ -73,18 +73,24 @@ const PRE_FIX_ROW = {
   chain: [{ backend: 'gemini-cli', model: 'gemini-3.7-flash', outcome: 'timeout', secs: 1044.395, budgetSecs: 600 }],
 };
 
-test('既定の基準は孫プロセス対策の配備日で、配備前の超過行は回帰として数えない', () => {
-  assert.equal(TIMEOUT_KILL_FIX_MERGED_AT, '2026-10-28T19:08:39Z');
+test('既定の基準は孫プロセス対策の配備日以降で、配備前の超過行は回帰として数えない', () => {
+  // 2026-11-04: sync taskkill の待ちで締切+16秒まで伸びた行(2026-11-01T16:18:49Z)を除外するため
+  // 基準を kill 順序修正の配備へ進めた。値そのものは配備のたびに動くので、下限だけを固定する。
+  assert.ok(Date.parse(TIMEOUT_KILL_FIX_MERGED_AT) >= Date.parse('2026-10-28T19:08:39Z'));
+  assert.ok(Date.parse(TIMEOUT_KILL_FIX_MERGED_AT) > Date.parse('2026-11-01T16:18:49.555Z'));
   const report = judgeTimeoutRows([PRE_FIX_ROW]);
   assert.equal(report.verdict, 'unverified-no-recurrence');
   assert.equal(report.totalTimeoutRows, 1);
   assert.equal(report.overCapRows, 0);
 });
 
+// 基準日は配備のたびに動くので、配備後の行は基準からの相対時刻で作る。
+const AFTER_BASELINE = (offsetSecs = 3600) => new Date(Date.parse(TIMEOUT_KILL_FIX_MERGED_AT) + offsetSecs * 1000).toISOString();
+
 test('既定の基準でも、配備後に予算を超えた試行は waste-exceeds-cap のまま', () => {
   const report = judgeTimeoutRows([
     PRE_FIX_ROW,
-    { ...PRE_FIX_ROW, t: '2026-10-29T10:00:00Z' },
+    { ...PRE_FIX_ROW, t: AFTER_BASELINE() },
   ]);
   assert.equal(report.verdict, 'waste-exceeds-cap');
   assert.equal(report.overCapRows, 1);
@@ -93,11 +99,32 @@ test('既定の基準でも、配備後に予算を超えた試行は waste-exce
 test('既定の基準でも、配備後の予算内 timeout は waste-within-cap', () => {
   const report = judgeTimeoutRows([
     PRE_FIX_ROW,
-    { t: '2026-10-29T09:04:37.108Z', provider: 'fallback', status: 'timeout', secs: 601.958,
+    { t: AFTER_BASELINE(1800), provider: 'fallback', status: 'timeout', secs: 601.958,
       chain: [{ backend: 'deepseek', outcome: 'timeout', secs: 601.958, budgetSecs: 600 }] },
   ]);
   assert.equal(report.verdict, 'waste-within-cap');
   assert.equal(report.postDeployTimeoutRows, 1);
+});
+
+// 2026-11-04 実測: timeout_waste_exceeds_cap の唯一の証拠は「予算210秒の主経路が 226.786 秒」。
+// 内訳は sync taskkill の待ち 10 秒 + 締切後の猶予 5 秒 + 起動分で、kill を非同期化し猶予タイマーを
+// kill より先に張れば締切+猶予(215秒級)に収まる。判定側も猶予を許容に入れ、締切+猶予+許容の
+// 範囲内は捨てた秒数とみなさない。
+test('締切後の kill 猶予（既定5秒）は予算超過として数えない', () => {
+  const within = judgeTimeoutRows([
+    { t: AFTER_BASELINE(), provider: 'codex', model: 'codex-cli/gpt-5.6-sol', timedOut: true, status: 'timeout', secs: 215.2, timeoutSecs: 210 },
+  ]);
+  assert.equal(within.verdict, 'waste-within-cap');
+  assert.equal(within.overCapRows, 0);
+  assert.equal(within.killGraceSecs, 5);
+
+  // 修正前の実測値（締切+16.8秒）は猶予 5 秒 + 許容 5 秒を超えるので回帰として残る。
+  const over = judgeTimeoutRows([
+    { t: AFTER_BASELINE(), provider: 'codex', model: 'codex-cli/gpt-5.6-sol', timedOut: true, status: 'timeout', secs: 226.786, timeoutSecs: 210 },
+  ]);
+  assert.equal(over.verdict, 'waste-exceeds-cap');
+  assert.equal(over.overCapAttempts[0].killGraceSecs, 5);
+  assert.equal(over.overCapAttempts[0].path, 'primary');
 });
 
 test('2026-10-20 の実例（主経路 codex / 1800.28 秒 / chain 無し）は上限超過ではない', () => {

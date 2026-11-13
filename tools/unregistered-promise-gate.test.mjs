@@ -1,5 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { addCheck } from './auto-progress.mjs';
+import { applyPromise, ledgerFile, writeLedger } from './auto-progress-ledger.mjs';
 import { evaluateUnregisteredPromise, findUnregisteredPromise } from './unregistered-promise-gate.mjs';
 
 test('df3b4616 の未登録の約束を block する', () => {
@@ -32,9 +37,9 @@ test('コードブロック・引用ブロック・かぎ括弧内は除外す�
   ]) assert.equal(evaluateUnregisteredPromise(text).decision, 'pass', text);
 });
 
-test('自動進行に登録済みなら通す', () => {
+test('宣言だけでは check 登録にならない', () => {
   const text = '台帳へ記録します。\nこの後の自動進行: 施工ノウハウ台帳へ記録し、完了を通知';
-  assert.equal(evaluateUnregisteredPromise(text).decision, 'pass');
+  assert.equal(evaluateUnregisteredPromise(text).decision, 'block');
 });
 
 for (const promise of [
@@ -88,7 +93,7 @@ test('台帳と同じ装飾付き登録を認識する', () => {
     'この後の自動進行：台帳へ記録',
     '- **この後の自動進行**: 台帳へ記録',
     '`この後の自動進行`: 台帳へ記録',
-  ]) assert.equal(evaluateUnregisteredPromise(`台帳へ記録します。\n${footer}`).decision, 'pass');
+  ]) assert.equal(evaluateUnregisteredPromise(`台帳へ記録します。\n${footer}`).code, 'AUTOPROGRESS-NEEDS-CURRENT-CHECK');
 });
 
 test('台帳が登録しない空欄やなし表記では差し戻す', () => {
@@ -102,7 +107,7 @@ test('複数の自動進行宣言は台帳と同じく末尾を採用する', ()
   const registered = 'この後の自動進行: 台帳へ記録';
   const none = 'この後の自動進行: なし';
   assert.equal(evaluateUnregisteredPromise(`${prefix}${registered}\n${none}`).decision, 'block');
-  assert.equal(evaluateUnregisteredPromise(`${prefix}${none}\n${registered}`).decision, 'pass');
+  assert.equal(evaluateUnregisteredPromise(`${prefix}${none}\n${registered}`).code, 'AUTOPROGRESS-NEEDS-CURRENT-CHECK');
 });
 
 test('コード・引用中の宣言は自動進行の登録にならない', () => {
@@ -114,3 +119,43 @@ test('コード・引用中の宣言は自動進行の登録にならない', ()
   ]) assert.equal(evaluateUnregisteredPromise(`台帳へ記録します。\n${example}`).decision, 'block');
 });
 
+
+const now = Date.parse('2026-11-05T12:00:00Z');
+const pending = 'この後の自動進行: 監視の PR のマージと定期実行の配布を進め、返信を待って組み込む';
+function checkContext(t) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pending-check-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const transcriptRaw = JSON.stringify({ type: 'user', timestamp: new Date(now - 1000).toISOString(), message: { role: 'user', content: '進めて' } });
+  return { home, sessionId: 'current', transcriptRaw, now };
+}
+test('当該ターンの addCheck と Stop による継承は通る', t => {
+  const ctx = checkContext(t);
+  const row = addCheck({ session: ctx.sessionId, check: 'test -f result.txt', deadline: '+2d', label: '配布', home: ctx.home, now });
+  assert.equal(evaluateUnregisteredPromise(pending, ctx).decision, 'pass');
+  writeLedger(ledgerFile(ctx.home), applyPromise([row], { sessionId: ctx.sessionId, status: 'open', ts: new Date(now).toISOString(), promise: '配布' }));
+  assert.equal(evaluateUnregisteredPromise(pending, ctx).decision, 'pass');
+});
+test('別セッション・過去ターン・完了済み・空 check・自己申告は block', t => {
+  const ctx = checkContext(t);
+  const row = { sessionId: ctx.sessionId, status: 'open', ts: new Date(now).toISOString(), checkRegisteredAt: new Date(now).toISOString(), check: 'test -f result.txt' };
+  for (const extra of [{ sessionId: 'other' }, { checkRegisteredAt: new Date(now - 2000).toISOString() }, { status: 'done' }, { check: ' ' }, { checkRegisteredAt: undefined }, { checkRegisteredAt: new Date(now + 1000).toISOString() }]) {
+    writeLedger(ledgerFile(ctx.home), [{ ...row, ...extra }]);
+    assert.equal(evaluateUnregisteredPromise(pending, ctx).code, 'AUTOPROGRESS-NEEDS-CURRENT-CHECK');
+  }
+  const result = evaluateUnregisteredPromise(pending + '\n登録コマンド: node tools/auto-progress.mjs --add-check', ctx);
+  assert.match(result.reason, /--deadline \+2d/);
+  assert.match(result.reason, /成果物があるときだけ exit 0/);
+});
+test('時刻不明のターン・古い登録を Stop で引き継いでも block', t => {
+  const ctx = checkContext(t);
+  const row = addCheck({ session: ctx.sessionId, check: 'test -f result.txt', deadline: '+2d', label: '配布', home: ctx.home, now: now - 2000 });
+  writeLedger(ledgerFile(ctx.home), applyPromise([row], { sessionId: ctx.sessionId, status: 'open', ts: new Date(now).toISOString() }));
+  assert.equal(evaluateUnregisteredPromise(pending, ctx).decision, 'block');
+  assert.equal(evaluateUnregisteredPromise(pending, { ...ctx, transcriptRaw: '' }).decision, 'block');
+});
+test('例外理由が必要で、引用やコードの例外は無効', () => {
+  assert.equal(evaluateUnregisteredPromise(pending + '\n[AUTOPROGRESS-CHECK-OK: 外部監視で管理済み]').decision, 'pass');
+  for (const token of ['[AUTOPROGRESS-CHECK-OK: ]', '> [AUTOPROGRESS-CHECK-OK: 例]', '```\n[AUTOPROGRESS-CHECK-OK: 例]\n```'])
+    assert.equal(evaluateUnregisteredPromise(pending + '\n' + token).decision, 'block');
+  for (const value of ['なし', '', '返信を待つ']) assert.equal(evaluateUnregisteredPromise('この後の自動進行: ' + value).decision, 'pass');
+});

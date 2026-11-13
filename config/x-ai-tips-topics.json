@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "maxCalls": 8,
+  "timeoutMs": 300000,
+  "maxCostUsd": 2,
+  "reservePerCallUsd": 0.25,
+  "maxOutputTokens": 3000,
+  "minLikes": 10,
+  "estimatedRates": { "inputPerMillion": 3, "outputPerMillion": 15, "post": 0.005, "profile": 0.01 },
+  "topics": [
+    { "purpose": "cost", "query": "AI Claude Codex Gemini Grok キャッシュ 委譲 コスト削減 手順 実測" },
+    { "purpose": "cost", "query": "LLM prompt caching model routing cost optimization reproducible benchmark" },
+    { "purpose": "site", "query": "AI 開発 自動化 SEO LLMO UI 改善 実例 手順" },
+    { "purpose": "site", "query": "AI coding website SEO LLM optimization UI automation reproducible workflow" },
+    { "purpose": "business", "query": "展示会 ブース イベント 営業 見積 制作 AI 業務効率 実例" },
+    { "purpose": "business", "query": "AI exhibition booth event production sales estimating workflow case study" }
+  ]
+}

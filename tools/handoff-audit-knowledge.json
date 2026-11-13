@@ -276,6 +276,90 @@
     "source": "handoff-audit-nightly:25e3c6106928cc635de26df38db0d4d0f0aa698d5c0f021df5688e7148aa0bae / 2026-11-04 tool-name-route レビューで route（`チャット表示`）を手順文へ書き直して採用"
   },
   {
+    "pattern": "経営数値（口座・送料・納期）の復元",
+    "route": "経営数値の復元では口座・送料・納期の欠落項目を特定する。不足値ごとに次の順で既存情報を確認する。(1) Drive DWD（kim impersonate / drive スコープ）で Drive API v3 files.list を使い、振込先・口座・送料・納期・返品の文書を検索する。検索結果の本文は通常ファイルなら files.get（alt=media）、Google Docs/Sheets なら Docs/Sheets API または files.export で読む。権限エラーは実応答を記録し、DWD 委任済み・読取可能とは断定しない。(2) Vercel の対象プロジェクトで vercel env ls production により変数の有無を確認する。ls は値の取得ではないため、必要な値は vercel env pull <一時ファイル> --environment=production で確認し、本番との対応を確認できた .env.local とアプリ DB/Supabase 設定テーブルも調べる。(3) node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query '振込先 OR 口座 OR 送料 OR 納期 OR 返品' --body で既存通知を検索する。(1)〜(3)をすべて試しても不足する値だけ「未確認」と書き、不足値の名前・探した経路・各結果（未発見または実際のエラー）を1回の手渡しにまとめる。出典と更新日を確認し、値が食い違えば推測で確定しない。API キー/接続文字列/ID が要る場合と同様、経路を試す前に user に聞き直さない。",
+    "confidence": "medium",
+    "source": "2026-11-04 handoff-audit-candidates tool-name-route レビュー（元 pattern: 経営数値（口座・送料・納期）の復元 / route が .env.local だけだったため手順文に置換） / 2026-11-05 PR #1457 レビュー: Drive → Vercel env/DB → Gmail → 未確認の順を明示し、権限・真因の未実測の断定を除去"
+  },
+  {
+    "pattern": "事業条件（振込先・送料・納期・返品条件）をkimに聞き直す",
+    "route": "事業条件の聞き直しを防ぐため、振込先・送料・納期・返品条件を対象とする。不足値ごとに次の順で既存情報を確認する。(1) Drive DWD（kim impersonate / drive スコープ）で Drive API v3 files.list を使い、振込先・口座・送料・納期・返品の文書を検索する。検索結果の本文は通常ファイルなら files.get（alt=media）、Google Docs/Sheets なら Docs/Sheets API または files.export で読む。権限エラーは実応答を記録し、DWD 委任済み・読取可能とは断定しない。(2) Vercel の対象プロジェクトで vercel env ls production により変数の有無を確認する。ls は値の取得ではないため、必要な値は vercel env pull <一時ファイル> --environment=production で確認し、本番との対応を確認できた .env.local とアプリ DB/Supabase 設定テーブルも調べる。(3) node tools/gmail-search.mjs --user seisaku-team@orgiast.jp --query '振込先 OR 口座 OR 送料 OR 納期 OR 返品' --body で既存通知を検索する。(1)〜(3)をすべて試しても不足する値だけ「未確認」と書き、不足値の名前・探した経路・各結果（未発見または実際のエラー）を1回の手渡しにまとめる。出典と更新日を確認し、値が食い違えば推測で確定しない。API キー/接続文字列/ID が要る場合と同様、経路を試す前に user に聞き直さない。",
+    "confidence": "high",
+    "source": "2026-11-04 handoff-audit-candidates tool-name-route レビュー（元 pattern: 事業条件（振込先・送料・納期・返品条件）をkinに聞き直す / route が Drive MCP だけだったため手順文に置換）/ knowledge entry「API キー/接続文字列/ID が要る」の原則を事業条件に拡張 / 2026-11-05 PR #1457 レビュー: Drive → Vercel env/DB → Gmail → 未確認の順を明示し、権限・真因の未実測の断定を除去"
+  },
+  {
+    "pattern": "見積確認の依頼",
+    "route": "見積の金額確認・送信可否は Claude 側で判断する。見積の金額・数量・諸条件は、既存データ（案件シート・見積履歴・社内規程の粗利ルール）と突合して Claude 自身で検証し、kim に「合っているか」をチャットで確認させない。値引きの可否や価格設定は社内規程（30%ルール等）と原価データに基づいて Claude が判断する——粗利がルール内ならそのまま進める。見積PDFの生成は Drive DWD（kim impersonate / drive スコープ）でテンプレートを検索し、files.export?mimeType=application/pdf で出力する（Drive MCP は不要）。送信まで行う場合は、宛先・件名・本文・添付PDFを完成形で1回提示し、送信可否の承認だけを取る（feedback-confirm-before-external-send）。承認後は Claude が送信まで実行する: メールは `node tools/gmail-draft.mjs --to <addr> --subject <件名> --body-file <本文.txt> --attach <PDF>` で seisaku-team@orgiast.jp の下書きを作り、`node tools/gmail-draft.mjs --send <draftId>` で送る。送信後は返り値（messageId/threadId・HTTP status）を読み戻して報告し、kim に送信操作を求めない。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:f8e76d7286ebc8e3bf7902fcd7bb744aff78af1007c0521b512ff5b4a84bfbfd / 2026-11-06 tool-name-route レビューで route（）を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "ループ報告で外部状態を直接API照会せずに断定",
+    "route": "ループ・自動進行の報告で、外部システム（GitHub の PR/CI/マージ状態、Drive のファイル、Vercel の本番、Gmail 等）の状態を、自分側のログや記憶だけで「完了した／無い／マージ済み」と断定しない。報告前に当ターンで直接照会して読み戻す。GitHub は `gh pr view <番号> -R <owner/repo> --json state,mergedAt,mergeCommit,statusCheckRollup`、`gh pr checks <番号> -R <owner/repo>`、`gh run list -R <owner/repo> --limit 10 --json status,conclusion,headSha,name`、任意の API は `gh api repos/<owner>/<repo>/<path>`。Drive は DWD（kim impersonate / drive スコープ）で files.get / files.list の実応答を読む。Vercel は `vercel inspect <url>` で Ready を確認する。コミットの取込判定は squash マージで is-ancestor が偽になるため `node tools/commit-landed.mjs <sha>` を使う。照会に失敗した項目は実際のエラー本文を貼り「未確認」と書き、確率付きの否定や「user が確認して」への丸投げをしない。報告は「要素 × 照会コマンド × 実データ」の表にし、状態が変わるまで待つだけの項目も最後に再照会した結果を載せる。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:8ccfb76e6a69329b0f49d1810e9006178f22fbd0ff1bd4a6b6b1b2747be19211 / 2026-11-06 tool-name-route レビューで route（`gh api`）を手順文へ書き直して採用 / 組織指示「外部状態は直接照会だけで判定し、未照会は未確認と書く」と commit-landed.mjs の運用に整合"
+  },
+  {
+    "pattern": "外部状態の断定は直接API照会で根拠を示す",
+    "route": "完了報告の検証表の「確かめ方」欄や本文で外部状態を断定するときは、その当ターンで直接照会した実応答を根拠に書く。①Google スプレッドシートのタブ・設定の読み戻しは、DWD（kim impersonate / drive スコープ）か SA 直 JWT（`aujust-sales-automation/.gcp/sheets-sa.json`、scope=`https://www.googleapis.com/auth/spreadsheets.readonly`）で Sheets API を直接叩いて行い、`GET /v4/spreadsheets/{id}?fields=properties.title,sheets.properties`（タブ名/gid/行列数）と `GET /v4/spreadsheets/{id}/values/{tab}!A1:BZ400`（全行）の実応答を確認してから「読み戻した」と書く（詳細は knowledge entry「Google スプレッドシートの書き込み結果検証」の検証4点）。SA 鍵の無い PC（DESKTOP-PPD5V8I 等）では exit 2 で終わるため、対象シートを呼べた実測が無いまま「読み戻し」と書かない。②keyserve の登録有無（「このPCが未登録」等）は断定せず、`node tools/keyserve-status.mjs --json`（読み取り専用・認証経路/HTTP status/配布ファイル一覧を出力）で直接照会し、照会できない場合や status 非2xx は実際の error 本文を添えて「未確認」と書く。照会していない不在・未登録を確率付きで否定しない。実例: 2026-11-05 session 2415dbb8 は「Sheets API でタブ・設定を読み戻し」（対象シート呼び出しの実測なし）と「フォームのリンク先URLは keyserve から取得できず（このPCが未登録）」（keyserve 未照会）を断定し rule 4 で検出された。",
+    "confidence": "high",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=Sheets API）: 7ef2fd3f94f75a307f8d76af10d9b681cb79018cf0d06ea21a515d13f033728a / 2026-11-07 route を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "作業完了報告・状態確認",
+    "route": "完了報告や状態確認は、外部システムの直接照会で行う。報告前に当ターンで freee API / Supabase / アプリ管理 API 等を実叩きし、その実応答を根拠に「登録された」「反映された」と書く。Drive MCP はファイル操作ツールであって完了確認の正本ではない。具体的な照会先は対象システムごとに変わる: (1) freee への登録完了は `GET /api/v1/deals/{id}` で deals の存在・内容を read-back する。(2) アプリの状態確認は管理 API（keiri-hub の `/api/...` 等）を叩く。(3) GitHub PR のマージ状態は `gh pr view` の mergedAt で確認する。(4) Vercel デプロ���完了は `vercel inspect <url>` で Ready を確認する。照会に失敗した項目は実際のエラー本文を貼り、確率付きの否定や「たぶん大丈夫」「user が確認して」への丸投げをしない。Drive MCP でのファイル存在確認だけでは外部システムへの反映完了の証拠にならない。codex-do.mjs では完了確認を代替できない。",
+    "confidence": "high",
+    "source": "handoff-audit-candidates.jsonl tool-name-route（route=Drive MCP）: 6177d2b5791b04eb366ac768c2ebcc9b4220df1f7a584cc4dd01b35a42ced92f / 2026-11-13 route を手順文へ書き直して採用"
+  },
+  {
+    "pattern": "公開価格の改定判断を kim に投げる",
+    "route": "価格変更の可否は rule 3（OAuth/支払い/アカウント/物理作業）の4理由に該当しない。kim に選択を投げず Claude が決定し、変更実装・反映・読み戻しまで当ターンで完了する。経営判断として明確な選択肢（複数パターンの金額と影響範囲）を示して kim に委ねる必要がある場合も、判断項目を1つに絞り、根拠となるデータを併記した上で依頼する。codex-do.mjs では価格改定の判断を代替できない。",
+    "confidence": "medium",
+    "source": "2026-11-02 手動補完（元: codex-do.mjs 道具名のみ→手順文に書換）"
+  },
+  {
+    "pattern": "セッション終了時のタブ起動・タブ閉じを kim に頼む",
+    "route": "セッション終了時のタブ起動は close-session.mjs / auto-session 再入の仕組みで自動化する。kim にタブ操作・Enter を頼まない。タブを閉じる操作は OS 操作であり Claude が自動化できないが、閉じる必要が本当にあるかを再判定する（/clear で代替できる場合がある）。やむを得ず kim に依頼する場合も、閉じるタブの種類（ブラウザ/VSCode のどちらか・セッションID）と成功の見え方を明記する。codex-do.mjs ではこのOS操作を代替できない。",
+    "confidence": "medium",
+    "source": "2026-11-02 手動補完（元: codex-do.mjs 道具名のみ→手順文に書換）"
+  },
+  {
+    "pattern": "ループ契約の保存と起動をClaude側で行う",
+    "route": "ループ契約（ScheduleWakeup / CronCreate）の保存と起動は Claude 側のツールで直接行う。codex-do.mjs は契約の保存・起動に関与しない。正しい経路: (a) 動的ループ（ScheduleWakeup）で delaySeconds と prompt を指定して wakeup を予約する。(b) 定期ループは CronCreate で cron 式と prompt を指定する。(c) 永続化が必要なら durable:true を指定して .claude/scheduled_tasks.json に保存する。(d) ループ契約の保存先が .claude/loop-contracts/ 等の別経路なら、codex-do.mjs ではなく直接ファイル書き込みで行う。codex-do.mjs は実装委譲用であってループ契約の管理ツールではない。",
+    "confidence": "medium",
+    "source": "2026-11-11 handoff-audit-candidates tool-name-route レビュー（元: codex-do.mjs 道具名のみ→手順文に書換）"
+  },
+  {
+    "pattern": "他AIレーン修復を hook 拒否で断念する",
+    "route": "他AIレーンの修復は hook 拒否で断念せず、別経路を試す。①`node tools/lane-doctor.mjs --probe` で全レーンの生存確認を行う（読み取り専用）。②特定のレーンが 429/usage_limit なら quota_wait として記録し、別の安いレーンへ切り替える。③codex が起動しない場合は内蔵フォールバック（Gemini/DeepSeek/Groq）を試す。④`node tools/lane-repair-log.mjs --lane <名> --tried \"<試行>\" --result fixed|unfixable` で記録し、応答に [LANE-REPAIR] を書く。⑤すべての経路を試しても不可なら「未確認」と書き、応答に [LANE-REPAIR] unfixable と実際のエラーを添えて kim に修復を依頼する。codex-do.mjs は修復の補助ツール（実装委譲）であり、断念の理由や修復そのものの代替にならない。",
+    "confidence": "medium",
+    "source": "2026-11-11 handoff-audit-candidates tool-name-route レビュー（元: codex-do.mjs 道具名のみ→手順文に書換）"
+  },
+  {
+    "pattern": "社外・顧客宛チラシ案の選択と送信",
+    "route": "社外・顧客宛のチラシ案はチャットに完成形（複数案ある場合は比較表）を表示して kim の承認を得る（feedback-confirm-before-external-send）。承認後は Claude が送信まで実行する: メール送信は `node tools/gmail-draft.mjs --to <addr> --subject <件名> --body-file <本文.txt> --attach <PDF>` で seisaku-team@orgiast.jp の下書きを作り、`node tools/gmail-draft.mjs --send <draftId>` で送る（gmail.send は DWD 委任済み）。LINE 送信は `node tools/line-group-send.mjs --group <groupId> --message <本文> [--image <画像URL>]` を使う。送信後は HTTP status / messageId / sentMessages 件数を読み戻し、kim に送信操作を求めない。「チャット表示」だけで手渡しせず、送信まで Claude が行う。codex-do.mjs では送信判断を代替できない。",
+    "confidence": "high",
+    "source": "2026-11-11 handoff-audit-candidates tool-name-route レビュー（元: チャット表示 道具名のみ→手順文に書換）"
+  },
+  {
+    "pattern": "LINE グループへの送信（公式LINE経由）",
+    "route": "LINE グループへの送信は、`node tools/line-group-send.mjs --group <groupId> --message <本文> [--image <画像URL>]` で Claude が直接送信する（reference-line-send-route-kim-pc-only.md）。kim-PC への fleet-mail 中継はしない（kim 2026-11-02 全PC全アカウント指示）。社外グループ（顧客含む）への送信は、本文の全文をチャットに表示して kim の承認を得てから送る（feedback-confirm-before-external-send）。社内向けグループでも、グループの性質に応じて確認を得る。送信後は HTTP 200 / sentMessages 件数 / quota consumption の増分を読み戻して報告し、kim に送信操作を求めない。codex-do.mjs では LINE 送信を代替できない。",
+    "confidence": "medium",
+    "source": "2026-11-11 handoff-audit-candidates tool-name-route レビュー（元: チャットに本文 道具名のみ→手順文に書換）"
+  },
+  {
+    "pattern": "PR作成と着地の確認をCodexへ委譲",
+    "route": "PR作成と着地の確認は Claude が行う。codex-do.mjs は実装を委譲するだけであり、PR作成・着地確認の責任を委譲しない。正しい手順: (a) codex-do.mjs で実装が完了したら、Claude が `node tools/pr-land.mjs --title \"<題>\" --body-file <本文>` で base へ push し PR を作成する（または gh CLI で fork 跨ぎ PR を作成する）。(b) `automerge` ラベルを付ける（鍵関連は安全弁パスとして pr-merge.mjs のレビュー・SHA 検証を通す）。(c) CI の完了を `gh run list -R <owner>/<repo> --limit 5 --json workflowName,conclusion,headBranch` で確認し、緑ならマージされるまで待つ。CI が赤なら直す（3回直して赤のままなら理由を記録する）。(d) マージ後は `gh pr view <番号> -R <owner>/<repo> --json state,mergedAt` で着地を確認し、`node tools/commit-landed.mjs <sha>` で取込を確定する。codex-do.mjs の exit code だけで「完了」と判断せず、着地まで Claude が確認する。",
+    "confidence": "high",
+    "source": "2026-11-11 handoff-audit-candidates tool-name-route レビュー（元: codex-do.mjs 道具名のみ→手順文に書換）"
+  },
+  {
+    "pattern": "作業完了報告・状態確認",
+    "route": "完了報告と状態確認は「Drive MCP」のような汎用ツール名で抽象化せず、確認対象ごとに特定の API/ツールを呼び出して実データを根拠に書く。Drive 上のファイル状態（存在・更新日時・中身）は DWD(kim impersonate / drive スコープ)で Drive API v3 の files.get（alt=media または export）と files.list を直接叩く（Drive MCP は使わない）。スプレッドシートの内容は SA 直 JWT（`aujust-sales-automation/.gcp/sheets-sa.json`、scope=`https://www.googleapis.com/auth/spreadsheets.readonly`）で `GET /v4/spreadsheets/{id}?fields=properties.title,sheets.properties` と `GET /v4/spreadsheets/{id}/values/{tab}!A1:BZ400` を叩く（詳細は knowledge entry「Google スプレッドシートの書き込み結果検証」の検証4点）。GitHub の状態は `gh pr view <番号> -R <owner>/<repo> --json state,mergedAt`、`gh run list -R <owner>/<repo> --limit 5 --json status,conclusion,headSha`、`gh api repos/<owner>/<repo>/<path>` で直接照会する。Vercel の反映確認は `VERCEL_TOKEN=... vercel inspect <本番URL>` で Ready と id/created を確認する。コミットの取込は squash マージで is-ancestor が偽になるため `node tools/commit-landed.mjs <sha>` を使う。報告は「確認要素 × 照会ツール × 実応答データ」の検証表で出し、照会に失敗した項目は実際の error 本文を添えて「未確認」と書く。確率付き否定や「user が確認して」への丸投げをしない。実例: 2026-09-20 に Drive API で旧版ファイルの trash 候補を列挙し kim への手渡しにした（knowledge entry「Drive 上の旧版ファイルをゴミ箱へ」）。",
+    "confidence": "high",
+    "source": "2026-11-13 handoff-audit-candidates tool-name-route レビュー（元: pattern「作業完了報告・状態確認」route が「Drive MCP」道具名のみだったため手順文に書換）"
+  },
+  {
     "pattern": "社外顧客への返信送信の同意確認",
     "route": "社外送信に事前承認が必要な案件では、宛先・件名・本文・送信経路を完成形で1回だけ提示して可否を確認する。承認後の送信操作は user に返さず、対象サービスの既存の認証済み経路（例: アイミツは GitHub Actions の PRONI ワークフロー、Gmail は承認済みの送信経路）で Claude が実行し、送信済み本文またはサービス上の履歴を読み戻して報告する。承認前送信を禁止された案件では、承認が得られるまで送信・フォーム入力を行わない。",
     "confidence": "high",

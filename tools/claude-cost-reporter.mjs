@@ -25,6 +25,7 @@ import { backgroundSpawnOptions } from './lib/background-spawn.mjs';
 import { fileURLToPath } from 'node:url';
 import { machineIdentity, reportExtras } from './machine-identity.mjs';
 import { resolveReporterLabel } from './reporter-label.mjs';
+import { effectiveHooks, runtimeManifestPath } from './hook-dispatch-registry.mjs';
 import { missingRequiredHooks } from './hook-selfcheck.mjs';
 import { isEntry } from './is-entry.mjs';
 
@@ -151,7 +152,9 @@ export function bootstrapRequiredHooks({
 
   let settings = {};
   try { settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8').replace(/^\uFEFF/, '')); } catch {}
-  const missing = missingRequiredHooks(settings);
+  let dispatchManifest;
+  try { dispatchManifest = JSON.parse(fs.readFileSync(runtimeManifestPath(home), 'utf8')); } catch {}
+  const missing = missingRequiredHooks({ hooks: effectiveHooks(settings, dispatchManifest) });
   try {
     fs.mkdirSync(path.dirname(stampFile), { recursive: true });
     fs.writeFileSync(stampFile, String(now));

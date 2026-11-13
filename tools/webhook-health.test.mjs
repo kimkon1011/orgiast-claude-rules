@@ -46,7 +46,7 @@ test('ログ用マスクはtokenを一切残さない', () => {
 
 const sheetResponse = (body, status = 200) => ({ ok: status === 200, status, text: async () => JSON.stringify(body) });
 
-test('HTTP 200 busy はバックオフ後に同じ台帳payloadを再送する（最大3試行）', async () => {
+test('HTTP 200 busy は指数バックオフ後に同じ台帳payloadを再送する（最大5試行）', async () => {
   const requests = [], waits = [];
   const payload = { token: 'test-token', kind: 'webhooks', label: 'pc', checkedAt: '2026-10-25', webhooks: [{ webhookId: '123', state: 'alive', files: ['a.env'] }] };
   const success = { ok: true, updated: 1, appended: 0 };
@@ -56,9 +56,11 @@ test('HTTP 200 busy はバックオフ後に同じ台帳payloadを再送する�
       return sheetResponse(requests.length < 3 ? { ok: false, status: 503, error: 'busy' } : success);
     },
     sleepImpl: async (ms) => waits.push(ms),
+    random: () => 0.5,
+    budgetPath: null,
   });
   assert.deepEqual(result, success);
-  assert.deepEqual(waits, [1000, 2000]);
+  assert.deepEqual(waits, [5000, 10000]);
   assert.equal(requests.length, 3);
   for (const request of requests) {
     assert.equal(request.url, 'https://example.invalid/sheet');
@@ -68,15 +70,20 @@ test('HTTP 200 busy はバックオフ後に同じ台帳payloadを再送する�
   }
 });
 
-test('busy が続いても3試行で終了し最後の失敗理由を保持する', async () => {
+test('busy が続くと5試行で打ち切り busy_exhausted を返す（throw しない）', async () => {
   let calls = 0;
   const waits = [];
-  await assert.rejects(postWebhookSheet('unused', {}, {
+  const result = await postWebhookSheet('unused', {}, {
     fetchImpl: async () => { calls++; return sheetResponse({ ok: false, error: 'busy' }); },
     sleepImpl: async (ms) => waits.push(ms),
-  }), /fleet sheet rejected request: busy/);
-  assert.equal(calls, 3);
-  assert.deepEqual(waits, [1000, 2000]);
+    random: () => 0.5,
+    budgetPath: null,
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.busyExhausted, true);
+  assert.equal(result.attempts, 5);
+  assert.equal(calls, 5);
+  assert.deepEqual(waits, [5000, 10000, 20000, 40000]);
 });
 
 test('HTTP 503 の明示的な busy 応答も再試行する', async () => {
@@ -84,6 +91,7 @@ test('HTTP 503 の明示的な busy 応答も再試行する', async () => {
   const result = await postWebhookSheet('unused', {}, {
     fetchImpl: async () => ++calls === 1 ? sheetResponse({ ok: false, error: 'busy' }, 503) : sheetResponse({ ok: true }),
     sleepImpl: async () => {},
+    budgetPath: null,
   });
   assert.equal(result.ok, true);
   assert.equal(calls, 2);

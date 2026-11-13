@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getScheduledTaskInfo, registerHourlyTask } from './scheduled-task.mjs';
+import { getScheduledTaskInfo, registerHourlyTask, listScheduledTaskNames } from './scheduled-task.mjs';
 
 test('getScheduledTaskInfo maps a missing task to null', async () => {
   let script = '';
@@ -24,11 +24,11 @@ test('registerHourlyTask uses run-hidden and an idempotent hourly task definitio
   assert.match(invocation.args.at(-1), /-Force/);
 });
 
-import fs from 'node:fs';
+import { powerShellTestRuntime } from '../fixtures/powershell-test-runtime.mjs';
 import { spawnSync } from 'node:child_process';
 import { listScheduledTasks } from './scheduled-task.mjs';
 const ps = process.platform === 'win32' ? 'powershell.exe' : '/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe';
-test('task enumeration handles unset run dates and daily cycles using mocked PowerShell task APIs', { skip: process.platform !== 'win32' && !fs.existsSync(ps) }, () => {
+test('task enumeration handles unset run dates and daily cycles using mocked PowerShell task APIs', { skip: !powerShellTestRuntime(ps) && 'PowerShell script execution unavailable on this host' }, () => {
   const mock = `function Get-ScheduledTask { [pscustomobject]@{TaskName='OrgiastNever';TaskPath='\\';State='Ready';Triggers=@([pscustomobject]@{DaysInterval=1})} }
 function Get-ScheduledTaskInfo { param([Parameter(ValueFromPipeline=$true)]$task) process { [pscustomobject]@{LastTaskResult=267011;LastRunTime=$null;NextRunTime=$null} } }
 `;
@@ -43,4 +43,24 @@ test('registerHourlyTask exposes and applies custom execution time without chang
   let command;
   registerHourlyTask('OrgiastQuotaSweep', 'C:\\repo\\tools\\quota-sweep.mjs', { executionTimeLimitMinutes: 150, spawnImpl: (_exe, args) => { command = args.at(-1); return { status: 0, stdout: '' }; } });
   assert.match(command, /ExecutionTimeLimit \(New-TimeSpan -Minutes 150\)/);
+});
+
+test('listScheduledTaskNames returns null on PowerShell failure', () => {
+  const result = listScheduledTaskNames({ spawnImpl: () => ({ status: 1, stdout: '', stderr: 'access denied' }) });
+  assert.equal(result, null);
+});
+
+test('listScheduledTaskNames returns [] on successful empty result', () => {
+  const result = listScheduledTaskNames({ spawnImpl: () => ({ status: 0, stdout: '[]\n', stderr: '' }) });
+  assert.deepEqual(result, []);
+});
+
+test('listScheduledTaskNames returns [name] for a single task', () => {
+  const result = listScheduledTaskNames({ spawnImpl: () => ({ status: 0, stdout: '"OrgiastLineHistorySync"\n', stderr: '' }) });
+  assert.deepEqual(result, ['OrgiastLineHistorySync']);
+});
+
+test('listScheduledTaskNames returns array for multiple tasks', () => {
+  const result = listScheduledTaskNames({ spawnImpl: () => ({ status: 0, stdout: '["OrgiastLineHistorySync","ClaudeRuleComplianceAudit"]\n', stderr: '' }) });
+  assert.deepEqual(result, ['OrgiastLineHistorySync', 'ClaudeRuleComplianceAudit']);
 });

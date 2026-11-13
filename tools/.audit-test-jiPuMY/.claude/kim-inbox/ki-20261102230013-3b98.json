@@ -1,0 +1,17 @@
+{
+  "id": "ki-20261102230013-3b98",
+  "createdAt": "2026-11-02T23:00:13.792Z",
+  "kind": "info",
+  "source": "gate-report",
+  "from": "DESKTOP-04U31RG",
+  "text": "gate pc=DESKTOP-04U31RG name=handoff-audit-gate verdict=deny remedy=tools/gate-remedies.md:available,tools/automation-routes.json:available",
+  "status": "open",
+  "shownSessions": [],
+  "shownCount": 0,
+  "lastShownAt": null,
+  "answeredAt": null,
+  "answer": null,
+  "answerSession": null,
+  "forwardMailId": null,
+  "forwardError": "The operation was aborted"
+}

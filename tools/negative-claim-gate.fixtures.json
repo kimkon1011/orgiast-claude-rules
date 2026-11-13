@@ -22,5 +22,69 @@
   {
     "text": "- ❌「VSCode CLI が無い**機体**だけ」＝製品の不在ではない",
     "shouldDetect": false
+  },
+  {
+    "text": "Booking.com の管理画面には人数別料金を変える方法はありません。",
+    "shouldDetect": true
+  },
+  {
+    "text": "外部から変更する方法は無い。",
+    "shouldDetect": true
+  },
+  {
+    "text": "設定する方法はない。",
+    "shouldDetect": true
+  },
+  {
+    "text": "操作する手段がありません。",
+    "shouldDetect": true
+  },
+  {
+    "text": "操作する手段が無い。",
+    "shouldDetect": true
+  },
+  {
+    "text": "一括変更機能はありません。",
+    "shouldDetect": true
+  },
+  {
+    "text": "一括変更機能は無い。",
+    "shouldDetect": true
+  },
+  {
+    "text": "設定できる場所はありません。",
+    "shouldDetect": true
+  },
+  {
+    "text": "変更できる場所は無い。",
+    "shouldDetect": true
+  },
+  {
+    "text": "問題はありません",
+    "shouldDetect": false
+  },
+  {
+    "text": "差分はありません",
+    "shouldDetect": false
+  },
+  {
+    "text": "未返信なし",
+    "shouldDetect": false
+  },
+  {
+    "text": "変更はありません",
+    "shouldDetect": false
+  },
+  {
+    "text": "エラーはありませんでした",
+    "shouldDetect": false
+  },
+  {
+    "text": "未確認です",
+    "shouldDetect": false
+  },
+  {
+    "text": "設定方法はないかもしれない。",
+    "shouldDetect": false
   }
 ]

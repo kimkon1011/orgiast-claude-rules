@@ -35,7 +35,8 @@ test('run.log records whether the digest was actually delivered, even on a pause
   const log = fs.readFileSync(path.join(opts.dir, 'run.log'), 'utf8');
   assert.match(log, /"digest":"2026-09-21-12"/);
   // kim 宛は Discord ではなく kim-inbox 台帳へ配達される（2026-10-27）。
-  assert.match(log, /"delivered":"session-inbox"/);
+  // 2026-11-04 仕様変更: 無人の定期報告はまとめ待ち。実際の配達状態をログへ残す。
+  assert.match(log, /"delivered":"deferred"/);
 });
 
 test('models follow planIncluded; prompt comes from skill and headless uses one foreground iteration', async (t) => {

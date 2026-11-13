@@ -16,7 +16,7 @@
 これにより、正本リポジトリに直接ブランチをプッシュしてPRを作成する以下の**「新しい推奨経路」**が利用可能となりました。この経路では、後述の条件を満たすことで完全自動マージが動作します。
 
 ### 新しいPR送信・自動マージ有効化の手順（コマンド列）
-以下のコマンドをそのままコピーして実行可能です。
+kim 操作席では、まず `node tools/access-doctor.mjs --fix` で招待承諾・origin 修復を行います。PR は `node tools/pr-land.mjs --title "<題>" --body-file <本文>` が base push と変更パスに応じた着地を行います。以下は安全弁パスを含まない通常変更の手動コマンド例です。
 
 ```bash
 # 1. 新しいフィーチャーブランチを作成してチェックアウト
@@ -49,22 +49,22 @@ PRに `automerge` ラベルを付与した後に自動マージ（squash auto-me
 3. **PRの作成者（author）がcollaboratorであること**
 4. **PRに `automerge` ラベルが付与されていること**（※このラベルはリポジトリに事前に作成されています）
 5. **変更ファイルが特定のセキュリティ境界や構成ファイルに該当しないこと**
-   - 変更ファイルに以下のパス・パターンが含まれている場合、自動マージはバイパスされ、`🔒 kim の手動マージが必要(理由: <path>)` とコメントされて人間のマージが必須となります。
+   - 変更ファイルに以下のパス・パターンが含まれている場合、自動マージはバイパスされ、`🔒 kim の手動マージが必要(理由: <path>)` とコメントされます。2026-11-04 以降は「作成席が CI 合格後に pr-merge で自分でマージする」と読み替えます（workflow 変更だけは停止）。
      - `.github/workflows/*` （ワークフロー定義）
      - `*keyserve*` （資格情報管理など）
      - `*secrets*` （シークレット関連）
      - `*.env*` （環境変数関連）
 
-## kim の手動マージが必要となる変更とその理由
+## 安全弁パスは作成席で着地させる
 ワークフロー定義（`.github/workflows/*`）や資格情報（`*keyserve*` / `*secrets*` / `*.env*`）に関わる変更は、システム全体のセキュリティや全PC（fleet）への配布の安全性を担保するため、安全弁（ガードレール）として、GitHub Actionsによる自動マージ対象から除外されます。
-これらの安全に直結する変更は、人間（`kim`）が内容を精査したうえで手動マージを行うことになります。
+workflow 変更は専用権限・レビュー経路で扱うため停止します。それ以外は作成席が `node tools/pr-merge.mjs <PR番号>` で全チェック・レビュー・HEAD SHA を検証して squash マージします。権限・鍵・マージを kim-PC に依頼しません。
 
-## 手動でマージするときは REST を使う
+## GraphQL 拒否時も pr-merge で検証を維持する
 
-`gh pr merge` は GraphQL の `mergePullRequest` を呼ぶため、write 権限があっても拒否されることがある（2026-09-24 実測）。その場合でも REST なら通る。
+`gh pr merge` は GraphQL の `mergePullRequest` を呼ぶため、write 権限があっても拒否されることがある（2026-09-24 実測）。既存の pr-merge はこの権限エラーの場合だけ、検証した同じ SHA を指定して REST に切り替え、MERGED を読み戻す。
 
 ```bash
-gh api -X PUT repos/kimkon1011/orgiast-claude-rules/pulls/<PR番号>/merge -f merge_method=squash
+node tools/pr-merge.mjs <PR番号>
 ```
 
 GraphQL のエラーだけを見て「マージできない」と報告しないこと。まず `gh api repos/kimkon1011/orgiast-claude-rules --jq .permissions` で現在の権限を実測する。

@@ -3,6 +3,19 @@ import test from 'node:test';
 import { enabled, judge } from './deferral-wait-gate.mjs';
 
 // 陽性は 2026-10-18〜19 の実測（stop-gate-runner-ledger.jsonl）をそのまま使う。
+// 2026-11-13 再発（handoff-audit:aa6f123644833d7c / e50bea8a）: 「このセッション: まだ閉じません（kim の返信を待っています）」
+// 本番反映語も後続作業語も無い「閉じない」＋「返事待ち」の組み合わせを直接 block する。
+const SESSION_CLOSE_WAIT = [
+  'このセッション: まだ閉じません（kim の返信を待っています）',
+  'このセッション: まだ閉じない（返信を待っています）',
+  '本セッションはまだ閉じず、返事を待っています',
+  'このセッションは閉じません。返信が来るのを待っています',
+];
+// 引用内の「閉じない」＋「返事待ち」は pass（監査記録の引用）
+const SESSION_CLOSE_WAIT_QUOTE = [
+  '[handoff-audit:aa6f123644833d7c] 恒久修正の先送り文を検出（2026-11-10T18:08:31.607Z / e50bea8a / W）「このセッション: まだ閉じません（kim の返信を待っています）」',
+];
+
 const positives = [
   '実装の完了を待っています（終わり次第、差分とテストを自分で確認し、本番反映・配備・実データでの再確認まで進めます）。',
   'memory への追記が終わりました。Codex の実装完了を待っています（終わると通知が来ます）。',
@@ -48,6 +61,8 @@ const positives = [
   // 提案の採否を user の返信に委ねて停止した 2 行で、REPLY_WAIT に一致せず pass だった。
   '「承認」か「却下 <理由>」で返信する（おすすめは却下）',
   '「承認」または「却下 <理由>」を送ってください／返事が来るまでは何もしません',
+  // 2026-11-13 再発パターン: 「閉じない」＋「返事待ち」
+  ...SESSION_CLOSE_WAIT,
 ];
 
 for (const [index, text] of positives.entries()) {
@@ -55,7 +70,7 @@ for (const [index, text] of positives.entries()) {
     const result = judge(text);
     assert.equal(result.decision, 'block');
     assert.equal(result.code, 'DEFERRAL-WAIT');
-    assert.match(result.reason, /当ターン内に完了まで進め|推奨案を採用して当ターン内で実行/);
+    assert.match(result.reason, /当ターン内に完了まで進め|推奨案を採用して当ターン内で実行|閉じない.*返事待ち/);
     assert.doesNotMatch(result.reason, /次に kim がすること/);
   });
 }
@@ -86,6 +101,7 @@ const negatives = [
   // 監査記録が原文を「…」で引用した行は、先送りの実行ではなく引用なので除外する。
   '[handoff-audit:42a15ac380371976] の audit TODO を読んだだけ（「「承認」か「却下 <理由>」で返信する（おすすめは却下）」「「承認」または「却下 <理由>」を送ってください／返事が来るまでは何もしません」で引用した行）',
   '承認済みなので実行しました。',
+  ...SESSION_CLOSE_WAIT_QUOTE,
 ];
 
 for (const [index, text] of negatives.entries()) {
@@ -122,3 +138,31 @@ test('環境変数で無効化できる', t => {
 test('裸の待機文（c1e05b23 の原文）は後続作業が無いので pass する', () => {
   assert.deepEqual(judge('Codex の完了を待っています。'), { decision: 'pass' });
 });
+
+// handoff-audit:d1237245b7711cd0（2026-10-24T04:12Z / session 175e831d）の原文。
+// PR のレビューとマージを「通常のPR運用に任せる」として閉じた文面は、Stop gate を pass していた。
+const mergeDeferrals = [
+  '次に kim がすること: なし（PR #1060 のレビューとマージは通常のPR運用に任せます。kim への DM は送っていません）\nこのセッション: /session-close は不要なので、このセッションを閉じてよい',
+  'PR を作成しました。マージは通常運用に任せます。',
+  'PR #12 の merge は通常のマージ運用へ委ねます。',
+];
+
+for (const [index, text] of mergeDeferrals.entries()) {
+  test(`マージを通常運用に任せる文面を block する ${index + 1}`, () => {
+    const result = judge(text);
+    assert.equal(result.decision, 'block');
+    assert.equal(result.code, 'DEFERRAL-WAIT');
+    assert.match(result.reason, /gh pr view/);
+  });
+}
+
+const mergeNonDeferrals = [
+  'PR #1060 は gh pr merge で squash マージ済みです（mergedAt を gh pr view で確認）。',
+  'マージは通常運用に任せず、当ターンで実行しました。',
+  '[handoff-audit:d1237245b7711cd0] 再発検証「PR #1060 のレビューとマージは通常のPR運用に任せます」を引用した行',
+  '通常運用の手順は README にあります。',
+];
+
+for (const [index, text] of mergeNonDeferrals.entries()) {
+  test(`マージ済み報告・否定・引用は pass する ${index + 1}`, () => assert.deepEqual(judge(text), { decision: 'pass' }));
+}

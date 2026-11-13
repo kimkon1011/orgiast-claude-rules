@@ -1,9 +1,11 @@
 #!/usr/bin/env node
+import { readHandoff, handoffLockEnabled } from './lib/handoff-store.mjs';
 import fs from 'node:fs';
 import { rotate, MAX_BYTES } from './next-session-rotate.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { Worker } from 'node:worker_threads';
 import { isEntry } from './is-entry.mjs';
 import { DEFAULT_REPO_MAP, parseRepoMap } from './feedback-to-issues.mjs';
 import { ledgerRows, runTaskLedger } from './task-ledger.mjs';
@@ -223,6 +225,14 @@ export function todoExclusionReason(todo, today = new Date()) {
     }
     const gated = Date.parse(`${date}T${match[4]}:${match[5]}+09:00`);
     if (Number.isFinite(gated) && gated > today.getTime()) return `${date} ${match[4]}:${match[5]} JST以降`;
+  }
+  // 外部（kim・取引先・他PC）の操作待ちは、待っている間だけ寝かせる。TODO に
+  // 「（再確認: YYYY-MM-DD）」と書くと、その日が来るまで自動セッションに選ばれず、
+  // 日付を過ぎれば通常のTODOに戻る（2026-11-02〜04実測: 毎晩同じ確認でセッションを1本消費）。
+  // next-session-rotate はこの除外規則を使わないので、行自体はキューに残り続ける＝埋没しない。
+  for (const match of text.matchAll(/再確認\s*[:：]\s*(\d{4})-(\d{2})-(\d{2})/g)) {
+    const date = `${match[1]}-${match[2]}-${match[3]}`;
+    if (Number(`${match[1]}${match[2]}${match[3]}`) > todayNumber) return `${date}まで再確認待ち`;
   }
   if (/(契約が必要|契約待ち|原価待ち|入金|支払|kim相談|kim に相談|kim と話す|人間の作業|人間しか|人間専用|human-only|要東邦鋼業側で確認|個別写真|撮影|電話|郵送|捺印|OAuth初回同意|アカウント作成|kim待ち|kim の判断|kimの判断|kim の同意|kimの同意|判断を仰|同意を得てから|同意が必要|OS管理操作|管理者権限が必要)/.test(text)) return '人間の作業が前提';
   return '';
@@ -535,7 +545,7 @@ export function buildPrompt(todo, sections, repoCwd, summaryFile, timeoutMin = 6
 - 他セッションと作業ツリーを共有している。\`git add -A\` / \`git commit -a\` / \`git stash\` / \`git checkout -- .\` は禁止。自分が作成・変更したファイルだけをパス指定で \`git add\` する。着手前とコミット直前に \`git status --porcelain\` を撮り、差分が自分の変更だけであることを確認する。
 - ブランチは必ず main から切る。ブランチ名は \`auto/${day}-<短いスラグ>\`。
 - \`node --test tools/*.test.mjs\` が緑になるまで直す。
-- PR を作ったら \`automerge\` ラベルを付ける（\`gh pr edit <PR番号> --add-label automerge\`）。このラベルが付いた PR は CI が緑になった時点で GitHub が自動で squash マージするので、緑を待ってポーリングしなくてよい。CI が赤なら直し、3回直して赤のままならマージせず PR を残して理由を書いて終了する。ラベルを付けられない場合に限り \`gh pr merge --squash\` で自分でマージする。まず \`command -v gh\`（Windows は \`where gh\`）で \`gh\` の有無を確認し、無ければ \`gh ...\` を前提にした文面を書かない。\`git credential fill\` は必ずタイムアウト付き（例: \`timeout 15 ...\`）で実行する。GCM がハングして exit 124 になった場合は資格情報なしの証拠として扱い、試したコマンドと終了コードをサマリに残す。どちらの経路も通らない場合、\`gh\` が無い PC で \`gh auth login\` を kim に頼まず、検証したコマンドと終了コードを記録して、Codex が生きている受信先（例: w018-PC）へ fleet-mail の \`--exec codex\` 便で移送する。「次に kim がすること」には、実装・修正・恒久化・次セッション対応などの先送りを書かず、人が一度だけ実行できる具体的手順だけを書く。
+- PR は作った席が \`node tools/pr-land.mjs --title "<題>" --body-file <本文>\` で base のブランチへ push し着地させる。kim 操作席の通常変更は \`automerge\` ラベル、鍵関連などの安全弁パスは CI 合格を待って \`pr-merge.mjs\` のレビュー・SHA 検証を通して自分で squash マージする。\`.github/workflows/*\` を含む PR は専用権限・レビュー経路で扱うため停止する。CI が赤なら直し、3回直して赤のままなら理由を記録する。権限・鍵・マージを kim-PC に頼まない。不足時は \`node tools/access-doctor.mjs --fix\` で自己診断・修復する。
 - マージ後、変更が実際に効いているかを実物で検証する。検証できていないものを「完了」と書かない。
 - 進捗は節目ごと（ブランチ作成 / PR 作成 / CI green / マージ / 検証結果 / 残ったこと）に ${summaryFile} へ追記する。このファイルだけは強制終了されても残るので、「やったことは必ずここに書く」。追記は \`>>\` 相当とし、全文を上書きしない。
 - 外部の定期実行（GitHub Actions の schedule など）の結果を待つ場合、5分を超えるポーリングをしてはいけない。待ちが必要なら ${summaryFile} に「検証は次回の自動セッションで行う」と追記し、~/.claude/next-session.md の残TODO先頭に検証だけの1行を追加して終了する。
@@ -744,21 +754,32 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
   const executorRoot = runOptions.executorRoot ?? prepareExecutorRoot({ repoRoot: REPO_ROOT });
   return new Promise((resolve) => {
     const startedAt = new Date();
+    const deadline = performance.now() + 2 * timeoutMs;
     const configuredChoice = autoSessionExecutor();
-    const choice = runOptions.model
+    // resumeSessionId が指定されたときは claude レーン（--resume 付き）で起動する。
+    // cheap-code / codex は --resume 引数を捨てるため、元のセッションに再開が届かない
+    // （2026-11-09 実害: セッション 834dfc9c の再開が「成果記録なし」で終わった）。
+    const resumeForced = Boolean(runOptions.resumeSessionId);
+    const choice = resumeForced
+      ? { ...configuredChoice, executor: 'claude' }
+      : runOptions.model
       ? { ...configuredChoice, executor: 'claude' }
       : runOptions.executor === 'cheap-code'
       ? { ...configuredChoice, executor: 'cheap-code' }
       : configuredChoice;
     let cheapProvider = choice.provider;
+    const executorAttempts = [];
     let alternateTried = false;
     let codexTried = false;
+    let laneCount = 0;
     let activeLane = choice.executor === 'cheap-code' ? 'cheap-code' : 'claude';
     const codexLane = codexDoLaneEnabled();
     const promptFile = path.join(os.tmpdir(), `orgiast-auto-session-${process.pid}-${Date.now()}.txt`);
     if (choice.executor === 'cheap-code') fs.writeFileSync(promptFile, `[headless:auto-session]\n${prompt}`, 'utf8');
     const launch = (fallback = false, codex = false) => {
+      if (performance.now() >= deadline) { finish(null, '', '', false, fallback, true); return; }
       const cheap = choice.executor === 'cheap-code' && !fallback && !codex;
+      const alternate = cheap && !alternateTried ? alternateCheapProvider(cheapProvider) : null;
       activeLane = codex ? 'codex-do' : cheap ? 'cheap-code' : 'claude';
       if (codex) codexTried = true;
       let child;
@@ -769,7 +790,7 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
         : buildClaudeHeadlessArgs({ repoCwd, historyCwd, resumeSessionId: runOptions.resumeSessionId, ...(runOptions.model ? { model: runOptions.model } : {}) }), { detached: process.platform !== 'win32', cwd: historyCwd,
         // cheap-code 側でも浄化するが、claude フォールバック(監督セッション)はここで
         // デスクトップ由来の CLAUDECODE / CLAUDE_CODE_* / MCP_* を外しておく。
-        env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: codex ? 'auto-session:codex-do' : cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude' }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }); }
+        env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: runOptions.headlessJob || (codex ? 'auto-session:codex-do' : cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude') }, stdio: [cheap || codex ? 'ignore' : 'pipe', 'pipe', 'pipe'], windowsHide: true }); }
       catch (error) {
         if (codex) {
           const reason = `codex-do launch failed: ${error?.message ?? error}`;
@@ -785,18 +806,64 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
     child.stdout.setEncoding('utf8').on('data', (chunk) => { stdout += chunk; });
     child.stderr.setEncoding('utf8').on('data', (chunk) => { stderr += chunk; });
     child.on('error', (error) => { launchFailed = true; stderr += error.message; });
-    child.stdin.on('error', () => {});
-    if (cheap || codex) child.stdin.end(); else child.stdin.end(`[headless:auto-session]\n${prompt}`, 'utf8');
+    child.stdin?.on('error', () => {});
+    if (!cheap && !codex) child.stdin.end(`[headless:auto-session]\n${prompt}`, 'utf8');
+    const remainingMs = Math.max(1, deadline - performance.now());
+    const maxLaneMs = laneCount === 0 ? timeoutMs : Math.floor(timeoutMs / 2);
+    laneCount++;
+    const laneTimeoutMs = Math.max(1, Math.min(maxLaneMs, remainingMs));
+    let settled = false;
     const timer = setTimeout(() => {
+      // The process may have exited while Windows is still closing its pipes.
+      // Keep its real exit status instead of turning a completed failure into timeout.
+      if (child.exitCode !== null) {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        child.unref();
+        complete(child.exitCode);
+        return;
+      }
       timedOut = true;
-      if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
-      else { try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} } }
-    }, Math.max(1, timeoutMs - (Date.now() - startedAt.getTime())));
-    child.on('close', (code) => {
+      // taskkill can take seconds on Windows. Do not block the deadline or wait for
+      // inherited pipes to close before advancing. Its /T cleanup continues independently.
+      if (child.pid) {
+        if (process.platform === 'win32') {
+          // Even async process creation can block during Windows process creation. Run that
+          // OS call off the event loop so cleanup cannot consume the next lane's slice.
+          const killer = new Worker(`
+            const { parentPort, workerData } = require('node:worker_threads');
+            const { spawn } = require('node:child_process');
+            const child = spawn('taskkill', ['/PID', String(workerData), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+            child.on('spawn', () => parentPort.postMessage('started'));
+            child.on('error', () => parentPort.postMessage('failed'));
+            child.on('exit', code => { if (code !== 0) parentPort.postMessage('failed'); });
+          `, { eval: true, workerData: child.pid });
+          const killRoot = () => { try { child.kill('SIGKILL'); } catch {} };
+          killer.on('error', killRoot);
+          killer.on('message', message => {
+            if (message === 'failed') killRoot();
+            // Keep the worker alive until taskkill has actually started.
+            if (message === 'started') killer.unref();
+          });
+        } else { try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} } }
+      }
+      child.stdin?.destroy();
+      child.stdout.destroy();
+      child.stderr.destroy();
+      child.unref();
+      complete(null);
+    }, laneTimeoutMs);
+    const complete = (code) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      executorAttempts.push({ executor: activeLane === 'cheap-code' ? `cheap-code:${cheapProvider}` : activeLane, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure' });
+      if (cheap && timedOut && performance.now() < deadline) {
+        if (alternate) { alternateTried = true; cheapProvider = alternate; launch(false); return; }
+        if (codexLane && !codexTried) { launch(false, true); return; }
+      }
       if ((cheap || codex) && !timedOut && code !== 0 && !(codex && code === 75)) {
         const reason = `${codex ? 'codex-do' : `cheap-code/${cheapProvider}`} exit ${code}`;
-        const alternate = !cheap || alternateTried ? null : alternateCheapProvider(cheapProvider);
         if (alternate) { alternateTried = true; cheapProvider = alternate; launch(false); return; }
         if (cheap && codexLane && !codexTried) { launch(false, true); return; }
         if (claudeFallbackEnabled()) { recordFallbackToClaude({ reason }); launch(true); return; }
@@ -805,9 +872,10 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
         return;
       }
       finish(timedOut ? null : code, stdout, stderr, launchFailed, fallback, timedOut);
-    });
     };
-    const finish = (code, stdout, stderr, launchFailed, fallback, timedOut = false, skippedNoExecutor = false) => { try { fs.rmSync(promptFile, { force: true }); } catch {} resolve({ startedAt: startedAt.toISOString(), endedAt: new Date().toISOString(), exitCode: code, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure', launchFailed, fallbackToClaude: Boolean(fallback), skippedNoExecutor, executorUsed: activeLane === 'cheap-code' ? `cheap-code:${cheapProvider}` : activeLane, ...(activeLane === 'codex-do' && code === 75 && !timedOut ? { deferred: true } : {}), stdout, stderr }); };
+    child.on('close', complete);
+    };
+    const finish = (code, stdout, stderr, launchFailed, fallback, timedOut = false, skippedNoExecutor = false) => { try { fs.rmSync(promptFile, { force: true }); } catch {} resolve({ startedAt: startedAt.toISOString(), endedAt: new Date().toISOString(), exitCode: code, status: timedOut ? 'timeout' : code === 0 ? 'success' : 'failure', launchFailed, fallbackToClaude: Boolean(fallback), skippedNoExecutor, executorAttempts, executorUsed: activeLane === 'cheap-code' ? `cheap-code:${cheapProvider}` : activeLane, ...(activeLane === 'codex-do' && code === 75 && !timedOut ? { deferred: true } : {}), stdout, stderr }); };
     // 既存の呼び出し契約: executable 自体が不正なら cheap-code の選択状態にかかわらず起動失敗として返す。
     if (String(executable).includes('\0')) { finish(null, '', 'The argument contains null bytes', true, false); return; }
     // 2026-10-27 実測: deepseek 402 + glm 上限で2日連続 success 0。
@@ -1108,7 +1176,11 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     catch (error) { console.error(`[rescue-todo-sweep] ${error?.message ?? error}`); }
   }
   // フォーム報告は next-session.md と独立した入力源なので、片方が無くてももう片方を止めない。
-  const parsed = fs.existsSync(nextFile) ? parseHandoff(fs.readFileSync(nextFile, 'utf8')) : { block: '', todos: [], todoBlocks: [], sections: {} };
+  const handoffText = await readHandoff(nextFile, { ...io.knowledgeDeps, home }).catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  const parsed = handoffText === null ? { block: '', todos: [], todoBlocks: [], sections: {} } : parseHandoff(handoffText);
   const feedbackIssues = await listIssues();
   let taskLedgerItems = [];
   try {
@@ -1220,7 +1292,9 @@ export async function main(argv = process.argv.slice(2), io = {}) {
       if (!timing.run) break;
       // バッチ中に先行の子が完了させた TODO は起動しない（子セッション1本の無駄）。
       let currentHandoff = '';
-      try { currentHandoff = fs.readFileSync(nextFile, 'utf8'); } catch {}
+      try { currentHandoff = await readHandoff(nextFile, { ...io.knowledgeDeps, home }); } catch (error) {
+        if (error.code !== 'ENOENT' && handoffLockEnabled(io.knowledgeDeps)) throw error;
+      }
       if (isTodoAlreadyDone(currentHandoff, todo)) {
         completedChildren += 1;
         const now = new Date().toISOString();

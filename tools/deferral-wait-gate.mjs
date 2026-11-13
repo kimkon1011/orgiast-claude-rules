@@ -50,8 +50,20 @@ const REPLY_WAIT_DONE_WINDOW = 40;
 // 「「承認」か「却下 <理由>」で返信する」「返事が来るまでは何もしません」は、user の返信を
 // 待つ形なのに REPLY_WAIT に一致せず Stop gate を 2 ターンとも pass していた。
 // 提案の採否を user に投げ返して止まる文面を直接拾う（本番反映語との近接は要求しない）。
+// 2026-11-13 再発（handoff-audit:aa6f123644833d7c / e50bea8a）: 「このセッション: まだ閉じません（kim の返信を待っています）」。
+// 本番反映語も後続作業語も無い「閉じない」＋「返事待ち」の組み合わせを直接拾う。
+const SESSION_CLOSE_WAIT_REPLY = /(?:このセッション|本セッション)[^」"'\n]{0,60}?(?:閉じない|閉じません|閉じず)[^」"'\n]{0,60}?(?:返信|返事)[^」"'\n]{0,30}?(?:待って|待ち|待っています)/g;
+const SESSION_CLOSE_WAIT_REPLY_REASON = '「閉じない」＋「返事待ち」でセッションを開いたままにせず、返事を待つ必要がないなら当ターン内で完了まで進めて結果まで報告、待つ必要があるなら待機期限を付けて「まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）」と書き、確認せず自分で /session-close を実行してください。';
+
 const DECISION_DEFERRAL = /「?承認」?(?:か|または|もしくは)「?却下|(?:返事|返信)が来るまで(?:は)?(?:何も|着手|実行)|採否を?(?:user|ユーザー|kim|あなた)?の?(?:返信|返事)/g;
 const DECISION_DEFERRAL_REASON = '提案の採否を user の返信に委ねて止まらず、推奨案を採用して当ターン内で実行し結果まで報告してください。採否が本当に user 固有の判断（支払い・アカウント作成・不可逆操作）なら、その理由を明記してください。';
+
+// 2026-10-24T04:12Z 実測（handoff-audit:d1237245b7711cd0 / session 175e831d）:
+// 「PR #1060 のレビューとマージは通常のPR運用に任せます」は、PR の状態確認もマージも
+// 当ターンで行わず「次に kim がすること: なし」と書いて閉じたが、本ゲートは pass した
+// （夜間再審査で初めて block）。マージを通常運用へ委ねる文面を直接拾う。
+const MERGE_DEFERRAL = /(?:マージ|merge)[^\n。]{0,40}?通常(?:の)?(?:PR|プルリク|マージ)?運用(?:に|へ)(?:任せ|委ね|回し)(?!ず|ない)/gi;
+const MERGE_DEFERRAL_REASON = 'PR のマージを「通常運用に任せる」として止まらず、当ターン内に gh pr view で状態を確認し、条件を満たすなら tools/pr-merge.mjs（または gh pr merge）で完了まで進めてください。条件を満たさない場合は、その具体的な理由（未通過のチェック・必要なラベル等）を実測値つきで書いてください。';
 
 export function enabled() {
   return process.env.ORGIAST_DEFERRAL_WAIT_GATE !== '0';
@@ -94,6 +106,12 @@ export function judge(text) {
       };
     }
   }
+  // 「閉じない」＋「返事待ち」の組み合わせは直接 block（本番反映語・後続作業語の近接を要求しない）
+  for (const match of [...prose.matchAll(SESSION_CLOSE_WAIT_REPLY)]) {
+    if (!inAuditQuote(prose, match.index)) {
+      return { decision: 'block', code: 'DEFERRAL-WAIT', reason: SESSION_CLOSE_WAIT_REPLY_REASON };
+    }
+  }
   const waits = [];
   const literal = detect(prose).find(result => result.pattern === 'W');
   if (literal) waits.push(literal.match);
@@ -104,6 +122,11 @@ export function judge(text) {
   for (const match of [...prose.matchAll(DECISION_DEFERRAL)]) {
     if (!inAuditQuote(prose, match.index)) {
       return { decision: 'block', code: 'DEFERRAL-WAIT', reason: DECISION_DEFERRAL_REASON };
+    }
+  }
+  for (const match of [...prose.matchAll(MERGE_DEFERRAL)]) {
+    if (!inAuditQuote(prose, match.index)) {
+      return { decision: 'block', code: 'DEFERRAL-WAIT', reason: MERGE_DEFERRAL_REASON };
     }
   }
   for (const match of [...prose.matchAll(AGENT_WAIT_THEN)]) {

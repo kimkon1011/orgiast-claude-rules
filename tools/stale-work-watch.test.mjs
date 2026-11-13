@@ -132,11 +132,15 @@ test('real merge helper is repository-bound and emits no branch deletion', async
   f.deps.merge = mergePr;
   f.deps.exec = (file, args, opts) => {
     assert.equal(opts.windowsHide, true);
+    if (args.includes('--slurp')) {
+      assert.equal(args.at(-1), `repos/kimkon1011/orgiast-claude-rules/pulls/${pr().number}/files?per_page=100`);
+      return JSON.stringify([[{ filename: 'tools/example.mjs' }]]);
+    }
     if (args.includes('list') || args[0] === 'api' || file === 'git') return originalExec(file, args, opts);
-    assert.deepEqual(args.slice(0, 2), ['-R', 'kimkon1011/orgiast-claude-rules']);
+    assert.equal(args[args.indexOf('--repo') + 1], 'kimkon1011/orgiast-claude-rules');
     if (args.includes('checks')) return JSON.stringify([{ name: 'test', bucket: 'pass' }]);
     if (args.includes('merge')) { mutations.push(args); return ''; }
-    if (args.at(-1) === 'state,mergedAt') return JSON.stringify({ state: 'MERGED', mergedAt: old });
+    if (args.includes('state,mergedAt')) return JSON.stringify({ state: 'MERGED', mergedAt: old });
     return JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', headRefOid: 'a'.repeat(40), statusCheckRollup: base.statusCheckRollup });
   };
   await f.run();

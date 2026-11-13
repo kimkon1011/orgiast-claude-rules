@@ -1,6 +1,7 @@
 export const GATE_CONTRACT = {"name": "unregistered-promise-gate", "remedies": [{"kind": "repo-file", "ref": "tools/gate-remedies.md", "section": "unregistered-promise-gate"}]};
 
-import { extractPromise } from './auto-progress-ledger.mjs';
+import { extractPromise, hasClaudeWork, readLedger, ledgerFile } from './auto-progress-ledger.mjs';
+import { currentTurnEntries } from './state-claim-evidence.mjs';
 
 // Deliberately require an affirmative sentence ending: questions, negations and
 // reported speech are not promises. Do not reject a future clause just because
@@ -55,7 +56,28 @@ export function findUnregisteredPromise(text) {
   return null;
 }
 
-export function evaluateUnregisteredPromise(text) {
+export function evaluatePendingAutoProgress(text, { sessionId, transcriptRaw = '', home, now = Date.now() } = {}) {
+  const prose = stripExcluded(text);
+  if (!hasClaudeWork(extractPromise(prose))) return { decision: 'pass' };
+  if ([...prose.replace(/(`+)[^\r\n]*?\1/gu, mask).matchAll(/\[AUTOPROGRESS-CHECK-OK:[ \t]*([^\]\r\n]*)\]/gu)].some(([, reason]) => reason.trim())) return { decision: 'pass' };
+  const entries = currentTurnEntries(transcriptRaw);
+  const start = entries.find(entry => entry.type === 'user' && entry.message?.role === 'user'
+    && !(Array.isArray(entry.message.content) && entry.message.content.some(block => block?.type === 'tool_result')));
+  const since = Date.parse(start?.timestamp);
+  let registered = false;
+  try {
+    registered = !!sessionId && Number.isFinite(since) && readLedger(ledgerFile(home)).some(row =>
+      row.sessionId === sessionId && row.status === 'open' && typeof row.check === 'string' && row.check.trim()
+      && Date.parse(row.checkRegisteredAt) >= since && Date.parse(row.checkRegisteredAt) <= now);
+  } catch { /* 台帳を読めない場合も登録を求める。 */ }
+  if (registered) return { decision: 'pass' };
+  return { decision: 'block', code: 'AUTOPROGRESS-NEEDS-CURRENT-CHECK',
+    reason: 'Claude 側の自動進行が残っています。このターン中に同じセッションの check 付き open 行を登録してください: node tools/auto-progress.mjs --add-check --session <id> --check "<達成判定>" --deadline +2d --label "<作業名>" --next-claude "<次の作業>"。memory の5回目の注意: check を時刻判定にしない。成果物があるときだけ exit 0。例外は [AUTOPROGRESS-CHECK-OK: <理由>]。' };
+}
+
+export function evaluateUnregisteredPromise(text, context = {}) {
+  const pending = evaluatePendingAutoProgress(text, context);
+  if (pending.decision === 'block') return pending;
   const promise = findUnregisteredPromise(text);
   if (!promise) return { decision: 'pass' };
   return {

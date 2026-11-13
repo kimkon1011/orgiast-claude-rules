@@ -1,15 +1,19 @@
 #!/usr/bin/env node
+import { isKimRecipient } from './lib/kim-dm-policy.mjs';
+import { isKimHumanProgress, deliverHumanProgress } from './lib/auto-progress-human-inbox.mjs';
 import fs from 'node:fs';
+import { notificationKind, routeOwnerDm } from './lib/owner-dm-policy.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { appendOwnerInbox } from './lib/auto-progress-inbox.mjs';
+import { appendMobilePush } from './lib/mobile-push-queue.mjs';
 import { notifyKim, KIM_DISCORD_USER_ID } from './notify-kim.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { isEntry } from './is-entry.mjs';
 // 所有者解決は lib/fleet-owner.mjs（kim-inbox と共用。ここに置くと notify-kim -> kim-inbox -> notify-owner の import が循環する）。
-import { ownerPcMap, resolveOwner } from './lib/fleet-owner.mjs';
+import { ownerPcMap, resolveOwner, canonicalOwnerPcMap, isSharedOwner } from './lib/fleet-owner.mjs';
 export { resolveOwner };
 
 const readJson = (file, fallback = {}) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } };
@@ -21,6 +25,8 @@ function localPcEntry(map, label) {
 }
 
 function explicitNotifyDiscordId(owner, { home = os.homedir(), label = resolveFleetLabel(home), pcMap } = {}) {
+  // 共用席は正本の宛先だけを信頼し、未登録席も kim が受け取る。
+  if (isSharedOwner(owner)) return String(localPcEntry(canonicalOwnerPcMap(), label)?.notifyDiscordId || '').trim() || KIM_DISCORD_USER_ID;
   const configured = localPcEntry(pcMap ?? ownerPcMap(home), label);
   const localOwner = String(configured?.account || configured?.owner || '').trim().toLowerCase();
   return localOwner && localOwner === String(owner || '').trim().toLowerCase()
@@ -37,6 +43,7 @@ function recipientMatchesOwner(owner, id, options = {}) {
   const { home = os.homedir(), directory, pcMap } = options;
   const wanted = String(owner || '').trim().toLowerCase();
   if (!wanted || !String(id || '').trim()) return false;
+  if (isSharedOwner(owner)) return String(id) === explicitNotifyDiscordId(owner, options);
   if (String(id) === explicitNotifyDiscordId(owner, options)) return true;
   if (String(id) === KIM_DISCORD_USER_ID && wanted !== 'kim@orgiast.jp') return false;
   const memberMismatch = directoryRows(home, directory).some(row => String(row.id) === String(id)
@@ -68,29 +75,44 @@ export function resolveOwnerDiscordId(owner, { home = os.homedir(), directory, .
 }
 
 // EncodedCommand uses UTF-16LE in Windows PowerShell, including Japanese text.
-export function sendOwnerToast(text, { spawn = spawnSync, onToastResult } = {}) {
+// 2026-11-04: ToastNotificationManager が画面に出ないため NotifyIcon.ShowBalloonTip に変更。
+// pwsh.exe 優先、無ければ powershell.exe。
+export function sendOwnerToast(text, { spawn = spawnSync, onToastResult, exe } = {}) {
   const payload = Buffer.from(Array.from(String(text)).slice(0, 300).join(''), 'utf8').toString('base64');
+  const shellExe = exe || resolvePowerShellExe();
   const script = `$ErrorActionPreference='Stop'
 try {
+  Add-Type -AssemblyName System.Windows.Forms
   $body=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${payload}'))
-  [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime] > $null
-  [Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime] > $null
-  $xml=New-Object Windows.Data.Xml.Dom.XmlDocument
-  $xml.LoadXml('<toast><visual><binding template="ToastGeneric"><text>Claude 進捗</text><text>'+[Security.SecurityElement]::Escape($body)+'</text></binding></visual></toast>')
-  $toast=[Windows.UI.Notifications.ToastNotification]::new($xml)
-  [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe').Show($toast)
+  $icon=New-Object System.Windows.Forms.NotifyIcon
+  $icon.Icon=[System.Drawing.SystemIcons]::Information
+  $icon.BalloonTipIcon='Info'
+  $icon.BalloonTipTitle='Claude 進捗'
+  $icon.BalloonTipText=$body
+  $icon.Visible=$true
+  $icon.ShowBalloonTip(5000)
+  Start-Sleep -Seconds 6
+  $icon.Dispose()
   exit 0
 } catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }`;
   let result;
   try {
-    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, timeout: 15000, encoding: 'utf8' });
+    const child = spawn(shellExe, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, timeout: 20000, encoding: 'utf8' });
     result = { ok: !child.error && child.status === 0, exitCode: child.status ?? null, ...(child.error ? { error: child.error.code || child.error.message } : child.status !== 0 ? { error: redactSecrets(String(child.stderr || '')).trim().slice(0, 500) } : {}) };
   } catch (error) { result = { ok: false, exitCode: null, error: error.code || error.message }; }
   onToastResult?.(result);
   return result.ok;
 }
 
-export const RECIPIENT_NOTICE = 'Discord の宛先が未設定です。Claude のチャットに『Discordユーザー名: xxx』と送れば設定されます';
+function resolvePowerShellExe() {
+  try {
+    const result = spawnSync('where.exe', ['pwsh'], { windowsHide: true, timeout: 5000, encoding: 'utf8' });
+    if (result.status === 0 && String(result.stdout || '').trim()) return 'pwsh.exe';
+  } catch { /* fall through */ }
+  return 'powershell.exe';
+}
+
+export const RECIPIENT_NOTICE = 'Discord の宛先が未設定です。次回 Claude を開くと自動で登録を試みます。登録されない場合はチャットに『Discordユーザー名: xxx』と送ってください';
 
 async function prependInbox(home, text, at) {
   const file = path.join(home, '.claude', 'owner-inbox.md');
@@ -118,10 +140,92 @@ async function prependInbox(home, text, at) {
   }
 }
 
+// 日単位の排他と送信前記録で、watch/digest の同時実行でも警告は1回まで。
+export async function alertUnresolvedRecipient(owner, options = {}) {
+  const home = options.home ?? process.env.ORGIAST_HOME ?? os.homedir();
+  const now = new Date(options.now ?? Date.now());
+  const day = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+  const file = path.join(home, '.claude', 'logs', 'owner-recipient-kim-alert.json');
+  const lock = `${file}.${day}.lock`;
+  let fd;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    if (readJson(file).day === day) return;
+    fd = fs.openSync(lock, 'wx', 0o600);
+    if (readJson(file).day === day) return;
+    fs.writeFileSync(file, JSON.stringify({ day, at: now.toISOString() }), { mode: 0o600 });
+    const label = options.label ?? resolveFleetLabel(home);
+    const text = redactSecrets(`⚠️ 進捗通知の Discord 宛先が未設定です。PC: ${label} / owner: ${owner || '(未設定)'}。notifyDiscordId の設定が必要です。通知は owner-inbox に保存され、チャットで表示されます。`);
+    await (options.notifyKim ?? notifyKim)(text, { home, userId: KIM_DISCORD_USER_ID, kimActionRequired: true, plainJa: false, webhookFallback: false, source: 'owner-recipient' });
+  } catch { /* warning failure must not prevent local delivery */ }
+  finally { if (fd !== undefined) { fs.closeSync(fd); try { fs.unlinkSync(lock); } catch {} } }
+}
+
+function appendNotifyLedger(home, at, owner, safeText, result) {
+  try {
+    const file = path.join(home, '.claude', 'logs', 'owner-notify-fallback.jsonl');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, JSON.stringify({ at, owner: redactSecrets(owner), ...result, text: safeText }) + '\n', { mode: 0o600 });
+  } catch { /* return the receipt even when the ledger is unwritable */ }
+}
+
+// mobile-push 席への配達: ローカル受け箱への保存は従来どおりで、Discord の代わりに
+// ~/.claude/mobile-push-queue.jsonl へ push 要求を積む。対話セッションの
+// auto-progress-inbox-hook が未送信行を検知して PushNotification で送信し、mark-sent で落とす。
+async function deliverMobilePush(owner, text, options) {
+  const { home } = options;
+  const at = new Date(options.now ?? Date.now()).toISOString();
+  const safeText = redactSecrets(String(text));
+  const attempts = [];
+  let inboxOk = false;
+  try { await prependInbox(home, safeText, at); inboxOk = true; } catch { /* continue queueing */ }
+  try { appendOwnerInbox(home, { source: 'notify-owner', text: safeText }); } catch { /* continue queueing */ }
+  attempts.push({ channel: 'inbox', ok: inboxOk });
+  try {
+    const item = appendMobilePush(home, { owner, title: safeText.split(/\r?\n/).find(line => line.trim()) || '', body: safeText }, { now: options.now });
+    attempts.push({ channel: 'mobile-push', ok: true, id: item.id });
+    const result = { delivered: 'mobile-push-queued', channel: 'mobile-push', ok: true, id: item.id, ts: item.ts, attempts };
+    appendNotifyLedger(home, at, owner, safeText, result);
+    return result;
+  } catch (error) {
+    attempts.push({ channel: 'mobile-push', ok: false, reason: redactSecrets(String(error?.message || error)).slice(0, 500) });
+    const result = { delivered: inboxOk ? 'inbox' : 'none', channel: inboxOk ? 'inbox' : 'none', ok: inboxOk, reason: 'mobile-push queue append failed', attempts };
+    appendNotifyLedger(home, at, owner, safeText, result);
+    return result;
+  }
+}
+
 export async function notifyOwner(owner, text, options = {}) {
   const home = options.home ?? process.env.ORGIAST_HOME ?? os.homedir();
   options = { ...options, home };
   owner = String(owner || resolveOwner(options)).trim();
+  if (isKimHumanProgress({ ...options.session, owner }) && options.kind !== 'digest') {
+    return deliverHumanProgress(home, { ...options.session, owner }, { now: options.now, io: options });
+  }
+  // A fleet seat can belong to another account while explicitly notifying kim.
+  const recipientId = options.userId ?? resolveOwnerDiscordId(owner, options);
+  if (isKimRecipient({ owner, id: recipientId })) {
+    return routeOwnerDm(owner, text, { ...options, userId: KIM_DISCORD_USER_ID });
+  }
+  // mobile-push 席（cr@orgiast.jp / w018-PC, 2026-11-06 指示）は Discord DM の代わりに
+  // スマホ Claude アプリ通知の要求をキューへ積む。PushNotification は対話セッションからしか
+  // 送れないため、routeOwnerDm の保留・即時判定（Discord DM の流量制限）も経由しない。
+  const mobilePushSeat = owner && owner.toLowerCase() === resolveOwner(options).toLowerCase()
+    ? localPcEntry(options.pcMap ?? ownerPcMap(home), options.label ?? resolveFleetLabel(home)) : null;
+  if (Array.isArray(mobilePushSeat?.notifyChannels) && mobilePushSeat.notifyChannels.includes('mobile-push')) {
+    return deliverMobilePush(owner, text, options);
+  }
+  const deferred = await routeOwnerDm(owner, text, options);
+  if (deferred) {
+    // DM の保留とセッション受け箱への配達は独立（#1485）。
+    if (owner && owner.toLowerCase() === resolveOwner(options).toLowerCase()) {
+      const safeText = redactSecrets(String(text));
+      try { await prependInbox(home, safeText, new Date(options.now ?? Date.now()).toISOString()); } catch { /* continue chat inbox */ }
+      try { appendOwnerInbox(home, { source: 'notify-owner', text: safeText }); } catch { /* DM remains queued */ }
+    }
+    return deferred;
+  }
+  options = { ...options, ...(notificationKind(text, options) === 'action' ? { kimActionRequired: true, kind: 'ask', plainJa: false } : {}) };
   // kim 宛は Discord ID の有無に関わらず notify-kim に渡し、kim-inbox 台帳（セッション回収）へ入れる（2026-10-27）。
   const userId = options.userId ?? (owner.toLowerCase() === 'kim@orgiast.jp' ? KIM_DISCORD_USER_ID : resolveOwnerDiscordId(owner, options));
   const valid = recipientMatchesOwner(owner, userId, options);
@@ -131,15 +235,21 @@ export async function notifyOwner(owner, text, options = {}) {
   const attempts = [];
   const finish = result => {
     result = { ...result, attempts };
-    try {
-      const file = path.join(home, '.claude', 'logs', 'owner-notify-fallback.jsonl');
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.appendFileSync(file, JSON.stringify({ at, owner: redactSecrets(owner), ...result, text: safeText }) + '\n', { mode: 0o600 });
-    } catch { /* return the receipt even when the ledger is unwritable */ }
+    appendNotifyLedger(home, at, owner, safeText, result);
     return result;
   };
-  let reason = 'owner Discord recipient unresolved or mismatched';
-  if (valid) {
+  const local = owner && owner.toLowerCase() === resolveOwner(options).toLowerCase();
+  const kim = owner.toLowerCase() === 'kim@orgiast.jp';
+  const configured = localPcEntry(options.pcMap ?? ownerPcMap(home), options.label ?? resolveFleetLabel(home));
+  const channels = local && !kim && Array.isArray(configured?.notifyChannels) ? configured.notifyChannels : null;
+  const discordEnabled = !channels || channels.includes('discord');
+  let localInboxOk = false;
+  if (local && !kim) {
+    try { await prependInbox(home, safeText, at); localInboxOk = true; } catch { /* continue other delivery paths */ }
+    try { appendOwnerInbox(home, { source: 'notify-owner', text: safeText }); } catch { /* continue other delivery paths */ }
+  }
+  let reason = discordEnabled ? 'owner Discord recipient unresolved or mismatched' : 'Discord disabled by notifyChannels';
+  if (valid && discordEnabled) {
     try {
       const result = await (options.notify ?? notifyKim)(text, { ...options, userId, webhookFallback: false });
       if (result?.delivered === 'session-inbox') {
@@ -153,18 +263,20 @@ export async function notifyOwner(owner, text, options = {}) {
       reason = result?.reason || 'Discord DM delivery failed or message id missing';
     } catch { reason = 'Discord DM delivery failed'; }
   }
-  attempts.push({ channel: 'discord', ok: false, skipped: !valid, reason });
+  const degradation = !valid && discordEnabled ? { degraded: 'no-recipient' } : {};
+  attempts.push({ channel: 'discord', ok: false, skipped: !valid || !discordEnabled, reason, ...degradation });
+  if (!valid && discordEnabled) await alertUnresolvedRecipient(owner, options);
   // Local fallbacks must never deliver another PC owner's private progress here.
   if (!owner || owner.toLowerCase() !== resolveOwner(options).toLowerCase()) {
     return finish({ delivered: 'none', channel: 'none', ok: false, reason });
   }
-  const fallbackText = !valid
+  const fallbackText = !valid && discordEnabled
     ? safeText + `\n\n⚠ Discord 宛先未設定: fleet-pc-map.json の「${options.label ?? resolveFleetLabel(home)}」に notifyDiscordId を追加`
     : safeText;
-  let inboxOk = false;
-  try { await prependInbox(home, fallbackText, at); inboxOk = true; } catch { /* recorded below */ }
-  attempts.push({ channel: 'inbox', ok: inboxOk });
-  try { appendOwnerInbox(home, { source: 'notify-owner', text: safeText }); } catch { /* legacy chat inbox */ }
+  let inboxOk = localInboxOk;
+  try { if (!inboxOk) { await prependInbox(home, fallbackText, at); inboxOk = true; } } catch { /* recorded below */ }
+  attempts.push({ channel: 'inbox', ok: inboxOk, ...degradation });
+  try { if (!local || kim) appendOwnerInbox(home, { source: 'notify-owner', text: safeText }); } catch { /* legacy chat inbox */ }
   const toast = async (body, purpose) => {
     let receipt;
     let ok = false;
@@ -172,8 +284,8 @@ export async function notifyOwner(owner, text, options = {}) {
     attempts.push({ channel: 'toast', purpose, ...(receipt || {}), ok });
     return ok;
   };
-  const sent = await toast(fallbackText, 'progress');
-  if (!valid) {
+  const sent = (!channels || channels.includes('toast')) && await toast(fallbackText, 'progress');
+  if (!valid && discordEnabled) {
     const file = path.join(home, '.claude', 'logs', 'owner-recipient-notice.json');
     const day = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
     // Exclusive creation prevents hourly watch and morning digest racing each other.
@@ -191,7 +303,7 @@ export async function notifyOwner(owner, text, options = {}) {
   }
   const channel = sent ? 'toast' : inboxOk ? 'inbox' : 'none';
   const progressToast = attempts.find(a => a.purpose === 'progress');
-  return finish({ delivered: channel, channel, ok: channel !== 'none', reason, toastExitCode: progressToast?.exitCode ?? null });
+  return finish({ delivered: channel, channel, ok: channel !== 'none', ...degradation, reason, toastExitCode: progressToast?.exitCode ?? null });
 }
 
 export async function main(args = process.argv.slice(2), options = {}) {

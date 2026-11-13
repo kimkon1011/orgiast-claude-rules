@@ -1,7 +1,19 @@
+// Recurring session crons outlive their turn, so they count for 7 days unless deleted.
+const CRON_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+// The result text names the job; fall back to the tool_use id when the wording changes.
+function cronJobId(content, fallback) {
+  const text = typeof content === 'string' ? content : JSON.stringify(content ?? '');
+  return text.match(/Scheduled\s+recurring\s+job\s*[:#]?\s*<?([\w-]+)>?/i)?.[1] || fallback;
+}
+
 // Replay only real conversation rows; API request blobs and sidechains are not calls.
 export function sessionWakeupEvidence(raw, now = Date.now()) {
   const calls = new Map();
   const tasks = new Map();
+  // job id -> { at: expiry, toolId }; pendingCrons holds CronCreate calls awaiting their result.
+  const crons = new Map();
+  const pendingCrons = new Map();
   let wakeup;
   for (const line of String(raw || '').split(/\r?\n/)) {
     let entry;
@@ -22,6 +34,18 @@ export function sessionWakeupEvidence(raw, now = Date.now()) {
       if (tool.name === 'Monitor' || (tool.name === 'Bash' && tool.input?.run_in_background === true)) {
         if (tool.id) tasks.set(tool.id, tool.id);
       }
+      // One-shot crons are not periodic checks, so only recurring ones count.
+      if (tool.name === 'CronCreate' && tool.input?.recurring !== false) {
+        const created = Date.parse(entry.timestamp || '');
+        if (tool.id && Number.isFinite(created)) pendingCrons.set(tool.id, created + CRON_TTL_MS);
+      }
+      if (tool.name === 'CronDelete') {
+        const deleted = tool.input?.id ?? tool.input?.job_id ?? tool.input?.jobId ?? tool.input?.name;
+        if (deleted) {
+          for (const [id, cron] of crons) if (id === deleted || cron.toolId === deleted) crons.delete(id);
+          pendingCrons.delete(deleted);
+        }
+      }
       if (tool.id) calls.set(tool.id, tool);
     }
     if (entry.type !== 'user') continue;
@@ -31,8 +55,14 @@ export function sessionWakeupEvidence(raw, now = Date.now()) {
       if (!tool) continue;
       if (result.is_error) {
         tasks.delete(tool.id);
+        pendingCrons.delete(tool.id);
         if (wakeup?.id === tool.id) wakeup.at = NaN;
         continue;
+      }
+      if (pendingCrons.has(tool.id)) {
+        const at = pendingCrons.get(tool.id);
+        pendingCrons.delete(tool.id);
+        crons.set(cronJobId(result.content, tool.id), { at, toolId: tool.id });
       }
       const data = entry.toolUseResult;
       if (wakeup?.id === tool.id && tool.input?.stop !== true && Number.isFinite(data?.scheduledFor)) wakeup.at = data.scheduledFor;
@@ -50,5 +80,6 @@ export function sessionWakeupEvidence(raw, now = Date.now()) {
       if (id && /^(completed|stopped|failed)$/.test(status)) tasks.delete(id);
     }
   }
-  return { scheduled: Number.isFinite(wakeup?.at) && wakeup.at > now, background: tasks.size > 0 };
+  const cron = [...crons.values()].some(entry => Number.isFinite(entry.at) && entry.at > now);
+  return { scheduled: Number.isFinite(wakeup?.at) && wakeup.at > now, background: tasks.size > 0, cron };
 }

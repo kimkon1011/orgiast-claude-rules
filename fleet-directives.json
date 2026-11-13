@@ -3,45 +3,75 @@
   "_note": "kim/監督Claude が指示を1件書き、各PCの fleet-agent が15分以内に拾って結果を Discord へ返す。kind は status / prompt / enable-auto-session の3つだけ。prompt と enable-auto-session はそのPCの人がオプトイン済みの場合のみ実行される。空配列にすると全PCで何も起きない。 PC間メッセージは fleet-mail.mjs（双方向）を使う。",
   "directives": [
     {
-      "id": "run-20261102-100656-0987",
-      "kind": "run",
-      "targets": "DESKTOP-BDOAK99",
-      "why": "作業用008 引継ぎ自己点検の配布受信と台帳更新",
-      "task": "fleet-sheet-report",
-      "createdBy": "kim",
-      "createdAt": "2026-11-02T10:06:56.593Z",
-      "expiresAt": "2026-11-02T12:06:56.593Z"
-    },
-    {
-      "id": "prompt-20261102-shared-memory-probe",
+      "id": "prompt-20261110-235408-0847",
       "kind": "prompt",
-      "targets": "all",
-      "why": "PR #1230（kim 本人の席に kim-PC の memory を全部届け user=kim と扱う）が各席に届いたかの直接照会。status の memory 行は旧方式を数えていて使えないため",
-      "createdBy": "uers",
-      "createdAt": "2026-11-02T12:10:00.000Z",
-      "expiresAt": "2026-11-03T12:10:00.000Z",
-      "timeoutSeconds": 300,
-      "body": "読み取り専用の点検。ファイルの編集・作成・送信・コマンドのインストールは一切しない。次の6項目だけを、1項目1行・ラベル付きで出力して終わる。\n1. account: ~/.claude.json の oauthAccount.emailAddress\n2. state: ~/.claude/shared-memory/.state.json の generatedAt / files のキー数 / kimOperated（ファイルが無ければ「なし」）\n3. note: ~/.claude/shared-memory/MEMORY.md の先頭1200文字に「kim 本人が操作」があれば kim、「このPCの user は別人」があれば other、どちらも無ければ none、ファイルが無ければ「なし」\n4. user_files: ~/.claude/shared-memory/ 直下の user_ で始まる .md の件数\n5. claude_md: ~/.claude/CLAUDE.md に @~/.claude/shared-memory/MEMORY.md が含まれるか yes/no\n6. sync_log: ~/.claude/ 配下の onboarding-sync のログ（onboarding-sync.log 等）から『memory-share install』を含む最新1行（無ければ「なし」）"
+      "targets": "kim-PC",
+      "why": "民泊オーナー雑談ルームを LINE PC経路の取り込み対象に追加（kim 2026-11-11 依頼）",
+      "body": "# kim-PC への作業指示: LINE オープンチャット「民泊オーナー雑談ルーム」を PC経路の取り込み対象に追加\n\n依頼元: 作業用004（nishi@orgiast.jp の Claude Code、nf-minpaku-automation）。kim 依頼「このオープンチャットの内容を毎日自動的に深夜に取り込んで、民泊の収益目標の達成のために参考になる情報は生かして」（2026-11-11）。\n要約・配達側は orgiast-claude-rules PR #1877（line-digest --profile minpaku / tools/minpaku-digest-deliver.mjs / nightly-batch 追加）で実装済み。残りはこのPCにしかない claude-mobile（リモート無しのローカルリポ）側の取り込み対象追加だけ。\n\n## やること\n1. claude-mobile の PC経路取り込み（タスク `ClaudeMobile-LineDesktopExport` が呼ぶスクリプト）の対象チャット一覧に `民泊オーナー雑談ルーム` を追加する。LINE の表示名は「民泊オーナー雑談ルーム(283)」で、(283) は人数なので前方一致で照合する。PC版 LINE でこのチャットが開けることを先に確認する。\n2. claude-mobile の `.env` の `LINE_INGEST_ALLOW_CHATS` にも `民泊オーナー雑談ルーム` を追加し（.env.bak を残す）、`ClaudeMobile-WebServer` タスクを再起動する。\n3. 取り込みタスクを1回手動実行し（初回は過去14日分）、`~/.claude/line-openchat/<YYYY-MM>.jsonl` に chat が `民泊オーナー雑談ルーム` で始まる行が何件入ったか数える。\n4. nightly-repo が PR #1877 を含む状態になっていれば、`node tools/line-digest.mjs --profile minpaku` → `node tools/minpaku-digest-deliver.mjs` を1回実行する（含まれていなければ 3 までで止め、その旨を書く。夜間バッチが以後自動で回す）。\n5. 結果（追加したファイルとコミット、取り込み件数、digest の抜粋、配達の mail ID）を `node tools/fleet-mail.mjs --send --to 作業用004 --kind note --why \"[報告・返信不要] 民泊オーナー雑談ルーム取り込み追加の結果\" --body-file <本文>` で返す。\n\n## 禁止\nLINE への書き込み・送信、他チャットの追加、ファイル削除、Discord DM。\n",
+      "createdBy": "kimko",
+      "createdAt": "2026-11-10T23:54:08.053Z",
+      "expiresAt": "2026-11-13T23:54:08.053Z",
+      "timeoutSeconds": 1800
     },
     {
-      "id": "run-20261102-124910-9307",
+      "id": "run-20261112-222440-1760",
+      "kind": "run",
+      "targets": "作業用011",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-11-12T22:24:40.268Z",
+      "expiresAt": "2026-11-14T22:24:40.268Z"
+    },
+    {
+      "id": "run-20261112-222501-2220",
+      "kind": "run",
+      "targets": "kimko-PC",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-11-12T22:25:01.078Z",
+      "expiresAt": "2026-11-14T22:25:01.078Z"
+    },
+    {
+      "id": "run-20261112-222508-1262",
       "kind": "run",
       "targets": "DESKTOP-BDOAK99",
-      "why": "作業用008チャネル配布の受信とビーコン更新",
+      "why": "stale_report 自動復旧",
       "task": "fleet-sheet-report",
-      "createdBy": "kim",
-      "createdAt": "2026-11-02T12:49:10.753Z",
-      "expiresAt": "2026-11-03T12:49:10.753Z"
+      "createdBy": "uers",
+      "createdAt": "2026-11-12T22:25:08.114Z",
+      "expiresAt": "2026-11-14T22:25:08.114Z"
     },
     {
-      "id": "run-20261102-124915-1817",
+      "id": "run-20261112-222515-5999",
+      "kind": "run",
+      "targets": "w018-PC",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-11-12T22:25:15.343Z",
+      "expiresAt": "2026-11-14T22:25:15.343Z"
+    },
+    {
+      "id": "run-20261112-222521-1422",
       "kind": "run",
       "targets": "cafe015-PC",
-      "why": "共通LINE履歴チャネル配布の受信と台帳更新",
+      "why": "stale_report 自動復旧",
       "task": "fleet-sheet-report",
-      "createdBy": "kim",
-      "createdAt": "2026-11-02T12:49:15.432Z",
-      "expiresAt": "2026-11-03T12:49:15.432Z"
+      "createdBy": "uers",
+      "createdAt": "2026-11-12T22:25:21.163Z",
+      "expiresAt": "2026-11-14T22:25:21.163Z"
+    },
+    {
+      "id": "run-20261112-222526-6645",
+      "kind": "run",
+      "targets": "user-PC",
+      "why": "stale_report 自動復旧",
+      "task": "fleet-sheet-report",
+      "createdBy": "uers",
+      "createdAt": "2026-11-12T22:25:26.491Z",
+      "expiresAt": "2026-11-14T22:25:26.491Z"
     }
   ]
 }

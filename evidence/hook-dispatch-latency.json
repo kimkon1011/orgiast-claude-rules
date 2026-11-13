@@ -1,0 +1,1565 @@
+{
+  "recordedAt": "2026-11-05T05:40:59.712358+00:00",
+  "scope": "Post-PR #1568 hook dispatcher latency and registration anchor follow-up",
+  "environment": {
+    "platform": "linux/x64",
+    "node": "v24.19.0",
+    "filesystem": "WSL worktree on /mnt/c (Windows filesystem)",
+    "logicalCPUs": 16
+  },
+  "method": {
+    "samplesPerVersion": 20,
+    "concurrentBenchmarksOrTests": false,
+    "metric": "wall clock, fresh CLI process including startup and shutdown",
+    "percentile": "nearest-rank",
+    "workload": "21 repository Bash hooks + Node equivalent of kim-PC retained pipe-stage-permissions PowerShell hook; pre-registered manifest",
+    "limitation": "Native Windows / PowerShell startup has not been measured. The host runtime has a retained pipe-stage-permissions.ps1 alongside 21 repository Bash hooks; the portable workload runs the existing Node equivalent for that extra hook.",
+    "command": "node tools/hook-dispatch-benchmark.mjs --check",
+    "processCounting": "NODE_OPTIONS preload records main-process starts and Worker constructors; counts do not infer workers from hook totals."
+  },
+  "before": {
+    "event": "PreToolUse",
+    "tool": "Bash",
+    "fleet": "kim-PC",
+    "platform": "linux/x64",
+    "node": "v24.19.0",
+    "workload": "21 repository Bash hooks + Node equivalent of kim-PC retained pipe-stage-permissions PowerShell hook; pre-registered manifest",
+    "samples": 20,
+    "percentileMethod": "nearest-rank; fresh dispatcher per sample; includes CLI startup and teardown",
+    "p50Ms": 4016,
+    "p95Ms": 4578,
+    "meetsLatencyBudget": false,
+    "complete": true,
+    "measurements": [
+      {
+        "wallMs": 4076,
+        "dispatchMs": 3743,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 4363,
+        "dispatchMs": 4021,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 3793,
+        "dispatchMs": 3444,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 4070,
+        "dispatchMs": 3685,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 4016,
+        "dispatchMs": 3709,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 4052,
+        "dispatchMs": 3720,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 3836,
+        "dispatchMs": 3575,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 3967,
+        "dispatchMs": 3651,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 3511,
+        "dispatchMs": 3192,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 3469,
+        "dispatchMs": 3202,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 3915,
+        "dispatchMs": 3546,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 3754,
+        "dispatchMs": 3433,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 4090,
+        "dispatchMs": 3669,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 4063,
+        "dispatchMs": 3716,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 3905,
+        "dispatchMs": 3571,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 4255,
+        "dispatchMs": 3943,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 4578,
+        "dispatchMs": 4252,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 3903,
+        "dispatchMs": 3597,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 4760,
+        "dispatchMs": 4455,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 4262,
+        "dispatchMs": 3965,
+        "hooks": 22,
+        "workersCreated": 22,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      }
+    ]
+  },
+  "after": {
+    "event": "PreToolUse",
+    "tool": "Bash",
+    "fleet": "kim-PC",
+    "platform": "linux/x64",
+    "node": "v24.19.0",
+    "workload": "21 repository Bash hooks + Node equivalent of kim-PC retained pipe-stage-permissions PowerShell hook; pre-registered manifest",
+    "samples": 20,
+    "percentileMethod": "nearest-rank; fresh dispatcher per sample; includes CLI startup and teardown",
+    "p50Ms": 1209,
+    "p95Ms": 1368,
+    "meetsLatencyBudget": true,
+    "complete": true,
+    "measurements": [
+      {
+        "wallMs": 1180,
+        "dispatchMs": 923,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1193,
+        "dispatchMs": 919,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1209,
+        "dispatchMs": 904,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1368,
+        "dispatchMs": 990,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1339,
+        "dispatchMs": 1088,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1266,
+        "dispatchMs": 984,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1253,
+        "dispatchMs": 975,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1251,
+        "dispatchMs": 938,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1380,
+        "dispatchMs": 1012,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1181,
+        "dispatchMs": 914,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1129,
+        "dispatchMs": 853,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1223,
+        "dispatchMs": 949,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1165,
+        "dispatchMs": 878,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1196,
+        "dispatchMs": 895,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1300,
+        "dispatchMs": 1033,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1290,
+        "dispatchMs": 882,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1157,
+        "dispatchMs": 880,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1203,
+        "dispatchMs": 907,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1156,
+        "dispatchMs": 875,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      },
+      {
+        "wallMs": 1224,
+        "dispatchMs": 943,
+        "hooks": 22,
+        "workersCreated": 4,
+        "nodeProcesses": 1,
+        "childProcesses": 0,
+        "timedOut": 0,
+        "skipped": 0,
+        "errors": 0
+      }
+    ]
+  },
+  "changes": [
+    "Reuse 4-8 Worker isolates per dispatch, CPU dependent; timed-out isolates retire without replacement.",
+    "Prioritize critical gates and start each hook budget when execution begins; enforce a separate deadline within settings.json timeout.",
+    "Return an explicit denial when a critical hook cannot complete; queue exhaustion is never timeout-as-pass.",
+    "Isolate stdout/stderr/stdin/argv/exitCode/env, preserve legacy async and beforeExit output, cancel native timers including timers/promises before reuse.",
+    "selectAnchor ignores untracked files while rejecting tracked unstaged/staged modifications."
+  ],
+  "validation": [
+    {
+      "command": "node --test tools/hook-dispatch.test.mjs tools/register-hooks.test.mjs tools/setup.test.mjs tools/gate-runtime.test.mjs",
+      "exitCode": 0,
+      "tests": 100,
+      "pass": 99,
+      "fail": 0,
+      "skipped": 1,
+      "logSha256": "264d74f2635cff9685f8b750481068e6e1edcfb26802cdd37de1eb2d3d2504f1"
+    },
+    {
+      "command": "node --test tools/hook-dispatch.test.mjs",
+      "exitCode": 0,
+      "tests": 23,
+      "pass": 23,
+      "fail": 0,
+      "skipped": 0,
+      "logSha256": "0fb7407abc1ef65ce9d54f7c6180da0e95e0ee12d51d2e52b6efdfec46ee59b2"
+    },
+    {
+      "command": "node tools/selftest-guards.mjs",
+      "exitCode": 0,
+      "result": "ALL PASS",
+      "logSha256": "23d364f8f72917d0618b6f9e5cc8ceb9f8f543242ac2971fb6e44d71cd1f27dd"
+    }
+  ],
+  "regressionCoverage": [
+    "22 hooks with critical queue time exceeding individual timeout; all run without timing out; two actual Workers for pool size two",
+    "Legacy asynchronous and beforeExit output; no leaked unref timer or timers/promises exitCode/env",
+    "Global settings deadline and exhausted worker pool deny unexecuted critical gates",
+    "Main and detached anchors accept untracked evidence and reject tracked changes"
+  ],
+  "beforeSourceSha256": {
+    "tools/hook-dispatch.mjs": "b554f95d618011ffa396cadee976b16c112abb4be1186df20e15feb7ea063c7d",
+    "tools/hook-dispatch-worker.mjs": "a303605d63faec88ed57dbfa5073d0d6135e7405e958cc99c683850eb3b62507"
+  },
+  "changedFiles": [
+    {
+      "path": "tools/hook-dispatch.mjs",
+      "sha256": "b25ae7ed1f54df603238e8df625057541ef3139d8519cb791c1522a061c1b230"
+    },
+    {
+      "path": "tools/hook-dispatch-worker.mjs",
+      "sha256": "287607c0b46a0dbf412231270ff611fdf8f4bc45918460de6d51adb5c0341b2c"
+    },
+    {
+      "path": "tools/hook-dispatch-registry.mjs",
+      "sha256": "003927ca8c8eac046db486da2481cedf7041771c5555c928b5ab067ef66a51d4"
+    },
+    {
+      "path": "tools/hook-dispatch-benchmark.mjs",
+      "sha256": "ae3a19d82e0244071e9709a987accd5870f5f69831816f8bc423216af33bfe06"
+    },
+    {
+      "path": "tools/hook-dispatch.test.mjs",
+      "sha256": "ac690d1e4d78144aac70e539488a48aaadaccf1a808ce6bd76610c1c83b34072"
+    },
+    {
+      "path": "tools/register-hooks.mjs",
+      "sha256": "a5a1f1b19e246a3a7bca879bd166209ad613685c0d33b2e1bdc1357cf431c450"
+    },
+    {
+      "path": "tools/register-hooks.test.mjs",
+      "sha256": "b8f3699de83ea82d984e6797b535d6cc1b44e8ffe1dd5e720147908d08b9518b"
+    },
+    {
+      "path": "docs/hook-fanout-dispatcher-claim.md",
+      "sha256": "ea74eb089683627531beff1d136ef90481863d0338715ba9df6e77bb0314d67d"
+    }
+  ],
+  "evidenceFile": "evidence/hook-dispatch-latency.json",
+  "notExecuted": [
+    "setup --converge",
+    "git commit",
+    "git branch changes",
+    "production registration"
+  ],
+  "reviewFollowup": {
+    "status": "complete",
+    "scope": "Restore critical unfinished pass behavior; preserve scheduling and timing optimizations. Earlier fail-closed statements in this historical evidence are superseded by this review follow-up.",
+    "changes": [
+      "Critical timeout, error/exception, and dispatch budget exhaustion pass and record criticalUnfinished.",
+      "Critical hooks left without a worker pass and record dispatch-budget after the deadline, otherwise hook-error.",
+      "Five critical unfinished hook records across events in a rolling hour trigger kim-inbox through existing daily deduplication.",
+      "Explicit gate denials remain denials; benchmark completeness checks criticalUnfinished."
+    ],
+    "recordedAt": "2026-11-05T05:57:08.336002+00:00",
+    "benchmark": {
+      "event": "PreToolUse",
+      "tool": "Bash",
+      "fleet": "kim-PC",
+      "platform": "linux/x64",
+      "node": "v24.19.0",
+      "workload": "21 repository Bash hooks + Node equivalent of kim-PC retained pipe-stage-permissions PowerShell hook; pre-registered manifest",
+      "samples": 20,
+      "percentileMethod": "nearest-rank; fresh dispatcher per sample; includes CLI startup and teardown",
+      "p50Ms": 1204,
+      "p95Ms": 1352,
+      "meetsLatencyBudget": true,
+      "complete": true,
+      "measurements": [
+        {
+          "wallMs": 1313,
+          "dispatchMs": 979,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1162,
+          "dispatchMs": 888,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1022,
+          "dispatchMs": 760,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1289,
+          "dispatchMs": 969,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1488,
+          "dispatchMs": 1077,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1352,
+          "dispatchMs": 1070,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1130,
+          "dispatchMs": 827,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1229,
+          "dispatchMs": 892,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1289,
+          "dispatchMs": 1007,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1111,
+          "dispatchMs": 839,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1055,
+          "dispatchMs": 759,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1219,
+          "dispatchMs": 958,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1334,
+          "dispatchMs": 1037,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1154,
+          "dispatchMs": 863,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1086,
+          "dispatchMs": 829,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1086,
+          "dispatchMs": 820,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1204,
+          "dispatchMs": 927,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1250,
+          "dispatchMs": 938,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1036,
+          "dispatchMs": 788,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1261,
+          "dispatchMs": 1011,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        }
+      ]
+    },
+    "initialBenchmark": {
+      "event": "PreToolUse",
+      "tool": "Bash",
+      "fleet": "kim-PC",
+      "platform": "linux/x64",
+      "node": "v24.19.0",
+      "workload": "21 repository Bash hooks + Node equivalent of kim-PC retained pipe-stage-permissions PowerShell hook; pre-registered manifest",
+      "samples": 20,
+      "percentileMethod": "nearest-rank; fresh dispatcher per sample; includes CLI startup and teardown",
+      "p50Ms": 1786,
+      "p95Ms": 2121,
+      "meetsLatencyBudget": false,
+      "complete": true,
+      "measurements": [
+        {
+          "wallMs": 1637,
+          "dispatchMs": 1308,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1770,
+          "dispatchMs": 1292,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1469,
+          "dispatchMs": 1129,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1702,
+          "dispatchMs": 1404,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1652,
+          "dispatchMs": 1200,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 2056,
+          "dispatchMs": 1610,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1786,
+          "dispatchMs": 1427,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1811,
+          "dispatchMs": 1367,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1978,
+          "dispatchMs": 1423,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1748,
+          "dispatchMs": 1393,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1826,
+          "dispatchMs": 1298,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 2121,
+          "dispatchMs": 1603,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1697,
+          "dispatchMs": 1118,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1728,
+          "dispatchMs": 1301,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 2090,
+          "dispatchMs": 1774,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1749,
+          "dispatchMs": 1370,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1913,
+          "dispatchMs": 1366,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 2515,
+          "dispatchMs": 2149,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1843,
+          "dispatchMs": 1344,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        },
+        {
+          "wallMs": 1956,
+          "dispatchMs": 1463,
+          "hooks": 22,
+          "workersCreated": 4,
+          "nodeProcesses": 1,
+          "childProcesses": 0,
+          "timedOut": 0,
+          "skipped": 0,
+          "errors": 0
+        }
+      ]
+    },
+    "controlledComparison": {
+      "before": {
+        "event": "PreToolUse",
+        "tool": "Bash",
+        "fleet": "kim-PC",
+        "platform": "linux/x64",
+        "node": "v24.19.0",
+        "workload": "21 repository Bash hooks + Node equivalent of kim-PC retained pipe-stage-permissions PowerShell hook; pre-registered manifest",
+        "samples": 20,
+        "percentileMethod": "nearest-rank; fresh dispatcher per sample; includes CLI startup and teardown",
+        "p50Ms": 1125,
+        "p95Ms": 1307,
+        "meetsLatencyBudget": true,
+        "complete": true,
+        "measurements": [
+          {
+            "wallMs": 1125,
+            "dispatchMs": 888,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1230,
+            "dispatchMs": 956,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1307,
+            "dispatchMs": 1052,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1123,
+            "dispatchMs": 845,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1271,
+            "dispatchMs": 964,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1224,
+            "dispatchMs": 963,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1293,
+            "dispatchMs": 980,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1108,
+            "dispatchMs": 790,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1403,
+            "dispatchMs": 1051,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1066,
+            "dispatchMs": 812,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1245,
+            "dispatchMs": 974,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1166,
+            "dispatchMs": 808,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1041,
+            "dispatchMs": 785,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1110,
+            "dispatchMs": 855,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1105,
+            "dispatchMs": 852,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1151,
+            "dispatchMs": 833,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1124,
+            "dispatchMs": 872,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1075,
+            "dispatchMs": 840,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1078,
+            "dispatchMs": 833,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1133,
+            "dispatchMs": 889,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          }
+        ]
+      },
+      "after": {
+        "event": "PreToolUse",
+        "tool": "Bash",
+        "fleet": "kim-PC",
+        "platform": "linux/x64",
+        "node": "v24.19.0",
+        "workload": "21 repository Bash hooks + Node equivalent of kim-PC retained pipe-stage-permissions PowerShell hook; pre-registered manifest",
+        "samples": 20,
+        "percentileMethod": "nearest-rank; fresh dispatcher per sample; includes CLI startup and teardown",
+        "p50Ms": 1272,
+        "p95Ms": 1418,
+        "meetsLatencyBudget": true,
+        "complete": true,
+        "measurements": [
+          {
+            "wallMs": 1147,
+            "dispatchMs": 904,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1201,
+            "dispatchMs": 903,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1418,
+            "dispatchMs": 1080,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1167,
+            "dispatchMs": 859,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1121,
+            "dispatchMs": 859,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1042,
+            "dispatchMs": 777,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1235,
+            "dispatchMs": 925,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1363,
+            "dispatchMs": 1107,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1382,
+            "dispatchMs": 1000,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1510,
+            "dispatchMs": 1204,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1280,
+            "dispatchMs": 1010,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1358,
+            "dispatchMs": 1033,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1205,
+            "dispatchMs": 940,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1281,
+            "dispatchMs": 1020,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1228,
+            "dispatchMs": 952,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1344,
+            "dispatchMs": 998,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1272,
+            "dispatchMs": 996,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1227,
+            "dispatchMs": 952,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1292,
+            "dispatchMs": 973,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          },
+          {
+            "wallMs": 1281,
+            "dispatchMs": 957,
+            "hooks": 22,
+            "workersCreated": 4,
+            "nodeProcesses": 1,
+            "childProcesses": 0,
+            "timedOut": 0,
+            "skipped": 0,
+            "errors": 0
+          }
+        ]
+      },
+      "method": "Original repository 22-hook manifest; temporary dispatcher path identical for both versions, sequential 20-sample runs. Baseline dispatcher SHA256 matches previous evidence b25ae7ed1f54df603238e8df625057541ef3139d8519cb791c1522a061c1b230. Preliminary 21-hook temporary-repository runs excluded as a workload mismatch."
+    },
+    "validation": [
+      {
+        "command": "node --test tools/hook-dispatch.test.mjs tools/register-hooks.test.mjs tools/setup.test.mjs tools/gate-runtime.test.mjs",
+        "exitCode": 0,
+        "pass": 101,
+        "fail": 0,
+        "skipped": 1,
+        "logSha256": "a80be94e7e86ac2a9ffa9c5663dc43c6f252da30e1f9659280310eb9d4d8a8ca"
+      },
+      {
+        "command": "node --test tools/hook-budget-check.test.mjs",
+        "exitCode": 0,
+        "pass": 18,
+        "fail": 0,
+        "logSha256": "bd2c93d76c9a894c049e43b63949524de5e240faa4c44caa378dc9a6dc213436"
+      },
+      {
+        "command": "node tools/selftest-guards.mjs",
+        "exitCode": 0,
+        "result": "ALL PASS",
+        "logSha256": "23d364f8f72917d0618b6f9e5cc8ceb9f8f543242ac2971fb6e44d71cd1f27dd"
+      }
+    ],
+    "modifiedThisReview": [
+      "tools/hook-dispatch.mjs",
+      "tools/hook-budget-check.mjs",
+      "tools/hook-dispatch.test.mjs",
+      "tools/hook-dispatch-benchmark.mjs",
+      "docs/hook-fanout-dispatcher-claim.md",
+      "evidence/hook-dispatch-latency.json"
+    ]
+  }
+}

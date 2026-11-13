@@ -1,0 +1,32 @@
+{
+  "regex": {
+    "turnKey": "session:regex",
+    "blocks": 1,
+    "totalBlocks": 1,
+    "responses": {
+      "31372188215f7517": {
+        "blockNumber": 1,
+        "signatures": [
+          "external-state-claim-gate"
+        ]
+      }
+    },
+    "lastHash": "31372188215f7517",
+    "lastTs": "2026-11-02T23:00:12.776Z"
+  },
+  "audit": {
+    "turnKey": "session:audit",
+    "blocks": 3,
+    "totalBlocks": 3,
+    "responses": {
+      "42c48398a18661da": {
+        "blockNumber": 3,
+        "signatures": [
+          "handoff-audit-gate"
+        ]
+      }
+    },
+    "lastHash": "42c48398a18661da",
+    "lastTs": "2026-11-02T23:00:20.862Z"
+  }
+}

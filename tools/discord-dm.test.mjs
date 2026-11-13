@@ -10,7 +10,10 @@ fs.writeFileSync(path.join(home, '.claude/cost-reporter.env'), 'REPORTER_LABEL=k
 test.after(() => fs.rmSync(home, { recursive: true, force: true }));
 import { fileURLToPath } from 'node:url';
 import { makeIndex } from './onboarding-sync.mjs';
-import { main, REPLY_TO_KIM_FOOTER, sendDiscordDm } from './discord-dm.mjs';
+import { main as realMain, REPLY_TO_KIM_FOOTER, sendDiscordDm as realSendDiscordDm } from './discord-dm.mjs';
+const contextApproved = async () => ({ reason: 'test' });
+const sendDiscordDm = (target, body, options={}) => realSendDiscordDm(target, body, { assertContextApproved: contextApproved, ...options });
+const main = (args, options={}) => realMain(args, { assertContextApproved: contextApproved, ...options });
 
 const withFooter = text => `${text}\n\n${REPLY_TO_KIM_FOOTER}`;
 
@@ -35,6 +38,16 @@ test('DMチャンネル作成から本文投稿まで2回だけ呼ぶ', async ()
   assert.deepEqual(JSON.parse(calls[1].init.body), { content: withFooter('hello') });
 });
 
+test('送信開始は履歴ゲート通過後だけ通知し、4xxは未配信確定として返す', async () => {
+  let posting=false;
+  const options={home,token:'test-token',resolve,noCopyKim:true,onMessageAttempt:()=>{posting=true;},
+    fetchImpl:async url=>url.endsWith('/messages')?response({ok:false,status:429}):response({json:{id:'dm'}})};
+  await assert.rejects(sendDiscordDm('佐藤優奈','本文',{...options,assertContextApproved:async()=>{throw Error('新着あり');}}),/新着あり/);
+  assert.equal(posting,false);
+  await assert.rejects(sendDiscordDm('佐藤優奈','本文',options),e=>e.deliveryUncertain===false&&/429/.test(e.message));
+  assert.equal(posting,true);
+});
+
 test('kim 以外への代筆は返答先の一文を末尾に1回だけ付ける', async () => {
   const bodies = [];
   const send = text => sendDiscordDm('百瀬', text, {
@@ -48,6 +61,11 @@ test('kim 以外への代筆は返答先の一文を末尾に1回だけ付ける
   await send(`本文\n\n${REPLY_TO_KIM_FOOTER}`);
   assert.equal(bodies[1].content, withFooter('本文'));
   assert.equal(bodies[3].content, withFooter('本文'));
+});
+test('--no-reply-footer は返答先の一文を付けない', async () => {
+  const bodies=[];
+  await sendDiscordDm('百瀬','日次報告',{token:'test-token',resolve,noCopyKim:true,noReplyFooter:true,fetchImpl:async (_url,init)=>{bodies.push(JSON.parse(init.body));return bodies.length===1?response({json:{id:'dm'}}):response({json:{id:'message'}});}});
+  assert.equal(bodies[1].content,'日次報告');
 });
 
 test('本文は書き換えず、そのまま送る（LLM平易化を通さない）', async () => {
@@ -100,7 +118,7 @@ test('相手が金功勇本人なら写しを送らない', async () => {
   assert.equal(result.copyToKim, 'skipped');
 });
 
-test('金功勇本人へのPRマージ依頼は送信せずblockedを返す', async () => {
+test('金功勇本人へのPRマージ依頼もkim-inboxへ保存する', async () => {
   const kim = { id: 'kim-id', label: '金功勇' };
   let fetches = 0;
   const originalError = console.error;
@@ -110,13 +128,12 @@ test('金功勇本人へのPRマージ依頼は送信せずblockedを返す', as
       home, token: 'test-token', resolve: async () => kim,
       fetchImpl: async () => { fetches += 1; throw new Error('unexpected fetch'); },
     });
-    assert.equal(result.delivered, 'blocked');
-    assert.equal(result.category, 'merge-request');
+    assert.equal(result.delivered, 'session-inbox');
     assert.equal(fetches, 0);
   } finally { console.error = originalError; }
 });
 
-test('discord-dm CLIはblockedでexit 3、明示例外なら送信する', async () => {
+test('discord-dm CLIはkim-inbox保存でexit 0、明示例外でもDMしない', async () => {
   const kim = { id: 'kim-id', label: '金功勇' };
   const originalLog = console.log;
   const originalError = console.error;
@@ -125,13 +142,13 @@ test('discord-dm CLIはblockedでexit 3、明示例外なら送信する', async
     const options = { home, token: 'test-token', resolve: async () => kim };
     assert.equal(await main(['金功勇', '--body', 'PR #943 をマージしてください'], {
       ...options, fetchImpl: async () => { throw new Error('unexpected fetch'); },
-    }), 3);
+    }), 0);
     const calls = [];
     assert.equal(await main(['金功勇', '--body', 'PR #943 をマージしてください', '--kim-action-required'], {
       ...options, allowlist: [{ category: 'test', pattern: '.' }],
       fetchImpl: async () => { calls.push(1); return calls.length === 1 ? response({ json: { id: 'dm' } }) : response(); },
     }), 0);
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 0);
   } finally { console.log = originalLog; console.error = originalError; }
 });
 
@@ -194,17 +211,12 @@ test('トークン無しはexit 2で送信しない', async () => {
   } finally { console.log = originalLog; console.error = originalError; }
 });
 
-test('送信本文からAPIキーとAuthorization付きURLを除去する', async () => {
-  const bodies = [];
-  await sendDiscordDm('百瀬', 'key sk-abcdefghijklmnopqr https://example.test/a?Authorization=secret-value', {
-    home, token: 'test-token', resolve, plainJaImpl: async (text) => text,
-    fetchImpl: async (_url, init) => {
-      bodies.push(JSON.parse(init.body));
-      return bodies.length === 1 ? response({ json: { id: 'dm' } }) : response();
-    },
-  });
-  assert.doesNotMatch(bodies[1].content, /sk-abcdefghijklmnopqr|secret-value/);
-  assert.match(bodies[1].content, /\[REDACTED\]/);
+test('秘密値を含む本文は送信を停止する', async () => {
+  const msg = 'key sk-abcdefghijklmnopqr https://example.test/a?Authorization=secret-value';
+  await assert.rejects(
+    () => sendDiscordDm('百瀬', msg, { home, token: 'test-token', resolve, fetchImpl: async () => assert.fail('送信しない') }),
+    /秘密値は DM では送れません/,
+  );
 });
 
 test('新しい絶対ルール行はmakeIndexの出力に全文残る', () => {
@@ -215,13 +227,29 @@ test('新しい絶対ルール行はmakeIndexの出力に全文残る', () => {
   const rule = body.split(/\r?\n/).find((line) => line.startsWith(prefix));
   assert.ok(rule);
   assert.ok(index.includes(rule));
-  assert.match(rule, /kim宛報告=kim-inbox.*PRマージ\/他PC依頼=fleet-mail/);
+  assert.match(rule, /kim宛報告=kim-inbox.*PR は作った席が自分で着地させる.*access-doctor\.mjs --fix/);
 });
 
 test('kim 宛 dry-run は台帳にも Discord にも書き込まない', async () => {
   const before = listItems(home).length;
   const result = await sendDiscordDm('kim', '判断', { home, dryRun: true, resolve: async () => ({ id: '715210673642012733', label: 'kim' }), fetchImpl: async () => assert.fail('送信禁止') });
   assert.equal(result.delivered, 'session-inbox'); assert.equal(listItems(home).length, before);
+});
+test('報告全文モードでは切り詰め送信を拒否', async () => {
+  await assert.rejects(()=>sendDiscordDm('佐藤優奈','あ'.repeat(2500),{home,resolve,noCopyKim:true,noReplyFooter:true,requireFullBody:true,fetchImpl:async()=>assert.fail('長文を一部送信しない')}),/報告全文/);
+});
+test('Webhook URLを含む本文は送信停止', async () => {
+  await assert.rejects(
+    () => sendDiscordDm('百瀬', '設定は https://discord.com/api/webhooks/123456789012345678/AbCdEfGhIjKlMnO41pQrStUvWxYz0123456789_AB です', { home, token: 'test-token', resolve, fetchImpl: async () => assert.fail('送信しない') }),
+    /秘密値は DM では送れません/,
+  );
+});
+test('秘密値を含まない通常本文は送信できる', async () => {
+  const result = await sendDiscordDm('百瀬', '定例報告: 本日の作業は完了しました', {
+    home, token: 'test-token', resolve, noCopyKim: true,
+    fetchImpl: async (_url, init) => init && { ok: true, status: 200, json: async () => init.method === 'POST' && init.body && JSON.parse(init.body).recipient_id ? { id: 'dm' } : { id: 'msg' } },
+  });
+  assert.equal(result.delivered, true);
 });
 test('非 kim 席の写しは転送失敗でもローカル台帳へ残す', async t => {
   const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'dm-remote-'));

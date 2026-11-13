@@ -65,6 +65,15 @@ test('両単価が同額以下かつ片方が安く、文脈が同等以上のte
   assert.deepEqual(result.candidates.map((m) => m.id), ['cheap']);
   assert.equal(result.warnings.length, 1);
 });
+test('selectCandidates は :batch サフィックスを安価候補から除外する（:free は同期 chat/completions 可なので含める）', () => {
+  const base = model('base', 30), cheap = model('cheap', 1, 0.0000005, 0.000001);
+  const batch = { ...cheap, id: 'vendor/cheap:batch' }, free = { ...cheap, id: 'vendor/cheap:free' };
+  const routing = { categories: { code: { provider: 'openrouter', model: 'base' } } };
+  const result = selectCandidates([cheap, batch, free], [base], routing);
+  // :free は除外せず、:batch のみ除外
+  assert.deepEqual(result.candidates.map((m) => m.id), ['cheap', 'vendor/cheap:free']);
+  assert.equal(result.candidates.find(m => m.id === 'vendor/cheap:batch'), undefined);
+});
 test('候補ゼロでも notifyKim 経由で DM を1通送る（fetchモック）', async (t) => {
   const f = fixture(t), posts = [];
   const result = await runScout({ ...f.options, fetchImpl: async () => ({ ok: true, json: async () => catalog([f.baseline]) }),
@@ -209,13 +218,14 @@ test('既知のoverlay候補はeval完了後に提案し、skip上書きとdry-r
 test('フロンティアは価格に依存せず新規textモデルを新しい順に上限まで選ぶ', () => {
   assert.deepEqual(FRONTIER_VENDORS, ['anthropic','openai','google','meta','meta-llama','x-ai','deepseek','moonshotai','qwen','mistralai','z-ai','xiaomi','minimax','stepfun','bytedance-seed','tencent','inclusionai','meituan']);
   const wonder = { ...model('meta/muse-wonder', 1, 4e-6, 20e-6), reason: '新規モデル' };
-  const excluded = ['meta/muse-wonder:batch', 'meta/muse-wonder:free', '~meta/muse-wonder', 'other/new']
+  const excluded = ['meta/muse-wonder:batch', '~meta/muse-wonder', 'other/new']
     .map(id => ({ ...wonder, id }));
   excluded.push({ ...wonder, pricing: { prompt: -1000000, completion: 1 } },
     { ...wonder, pricing: { prompt: 1, completion: Infinity } },
     { ...wonder, modality: 'text->image' }, { ...wonder, modality: 'image->text' }, { ...wonder, reason: '値下げ（20%以上）' });
-  const selected = selectFrontierCandidates([wonder, ...excluded]);
-  assert.deepEqual(selected.map(x => x.id), [wonder.id]);
+  const selected = selectFrontierCandidates([wonder, { ...wonder, id: 'meta/muse-wonder:free' }, ...excluded]);
+  // :free は同期呼出可なので除外せず、:batch のみ除外
+  assert.deepEqual(selected.map(x => x.id), [wonder.id, 'meta/muse-wonder:free']);
   assert.equal(selected[0].tier, 'frontier');
   assert.deepEqual(selected[0].costPerMillion, [4, 20]);
   const many = Array.from({ length: 8 }, (_, i) => ({ ...wonder, id: `meta/new-${i}`, created: wonder.created + i }));
@@ -283,4 +293,30 @@ test('native DeepSeek route is compared using the matching OpenRouter catalog pr
   const candidate = model('meta/new', 2000, 0.2e-6, 0.3e-6);
   const routing = { categories: { summarize: { provider: 'deepseek', model: 'deepseek-flash' } } };
   assert.equal(selectCandidates([candidate], [current], routing).candidates.length, 0, 'higher gateway cost must not look cheaper than native legacy pricing');
+});
+
+test('例外時に reason と stage がログに出力され秘密値がマスクされる', async (t) => {
+  const f = fixture(t);
+  const result = await runScout({
+    ...f.options,
+    fetchImpl: async () => { throw new Error('catalog fetch failed with SECRET_KEY=abcdef123456'); }
+  });
+  assert.equal(result.ok, false);
+  const logged = f.output.join('\n');
+  assert.match(logged, /偵察失敗/);
+  assert.match(logged, /stage=fetch/);
+  assert.match(logged, /reason=Error: catalog fetch failed with/);
+  assert.doesNotMatch(logged, /SECRET_KEY=abcdef123456/);
+});
+
+test('現行の配送種別 (session-inbox, spooled, webhook, suppressed, dm) で state が正常に保存される', async (t) => {
+  for (const delivered of ['session-inbox', 'spooled', 'webhook', 'suppressed', 'dm']) {
+    const f = fixture(t);
+    const result = await runScout({
+      ...f.options,
+      notify: async () => ({ delivered })
+    });
+    assert.equal(result.ok, true, `delivered=${delivered} should succeed`);
+    assert.equal(fs.existsSync(path.join(f.dir, 'model-scout-state.json')), true, `state should be saved for delivered=${delivered}`);
+  }
 });

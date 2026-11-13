@@ -13,7 +13,8 @@ $definitions = @(
     # (register-booth-feedback-task.ps1) に作り替わっており、日次 03:06 に張り替えると
     # 不具合報告の即時取り込みが 1 日 1 回に退行する (2026-09-05 実測で確認)。
     [pscustomobject]@{ Name = 'Orgiast Growi 自動クリーンアップ'; Kind = 'Daily'; At = '03:12' },
-    [pscustomobject]@{ Name = 'OrgiastPlaudToTldv'; Kind = 'Hourly'; At = '00:08' }
+    [pscustomobject]@{ Name = 'OrgiastPlaudToTldv'; Kind = 'Hourly'; At = '00:08' },
+    [pscustomobject]@{ Name = 'OrgiastTldvDriveSync'; Kind = 'Hourly'; At = '00:20' }
 )
 
 function New-NightlyTrigger([pscustomobject]$Definition) {

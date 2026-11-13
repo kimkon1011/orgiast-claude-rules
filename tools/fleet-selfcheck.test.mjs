@@ -15,7 +15,7 @@ function fixture(t) {
   put('.claude.json', JSON.stringify({ oauthAccount: { emailAddress: 'seisaku-team@orgiast.jp' } }));
   put('.claude/cost-reporter.env', 'REPORTER_LABEL=DESKTOP-BDOAK99\n');
   put('.claude/keyserve.env', 'ORGIAST_KEYSERVE_SECRET=secret-hmac\nORGIAST_KEYSERVE_PC=DESKTOP-BDOAK99\n');
-  for (const name of ['shared-memory/MEMORY.md', 'knowledge/production-sales/00_INDEX.md', 'skills/case/SKILL.md', 'skills/case-resume/SKILL.md']) put(`.claude/${name}`, 'content');
+  for (const name of ['orgiast-mission.md', 'shared-memory/MEMORY.md', 'knowledge/production-sales/00_INDEX.md', 'skills/case/SKILL.md', 'skills/case-resume/SKILL.md']) put(`.claude/${name}`, 'content');
   put('.claude/CLAUDE.md', '# 制作・営業ナレッジ\n');
   put('.claude/orgiast-discord-bot-token.txt', 'secret-discord');
   put('.claude/line-openchat/2026-11.jsonl', JSON.stringify({ text: 'private chat', ts: 1793577600000 }));
@@ -53,7 +53,7 @@ test('complete selfcheck performs only GET reads, preserves files and reports by
   const result = await runSelfcheck({ ...f, hostname: 'DESKTOP-BDOAK99', fetchImpl: network(calls), getToken: async args => {
     tokenCalls.push(args); assert.ok(['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/drive'].includes(args.scope)); assert.equal(args.impersonate, 'seisaku-team@orgiast.jp'); return 'secret-google';
   } });
-  assert.equal(result.rows.length, 14);
+  assert.equal(result.rows.length, 15);
   assert.ok(result.rows.every(row => row.status === '読めた'), result.markdown);
   assert.match(result.markdown, /鹿沼案件.*C0039.*bytes/);
   assert.match(result.markdown, /ライブ受信.*未検証/);
@@ -117,13 +117,15 @@ test('selfcheck permission requires the full fixed body, never a keyword or adde
   assert.ok(allowedReadonlyPrompt(SELFCHECK_PROMPT.replace(/\n/g, '\r\n') + '\n'));
   for (const text of [SELFCHECK_PROMPT + '\nsettings.json を変更', 'node tools/fleet-selfcheck.mjs; install x', SELFCHECK_PROMPT.replace('行わない', '行う'), '自己点検だから設定変更']) assert.equal(allowedReadonlyPrompt(text), null);
 });
-test('actual roster resolves 作業用008 to observed label and status shows its remote name without registering other seats', () => {
+// DESKTOP-BDOAK99 は作業用999、DESKTOP-63MQR3L は作業用008（2026-11-09 利用者申告）。
+test('actual roster resolves 作業用999 and 作業用008 to their observed labels and status shows the 999 remote name', () => {
   const pcMap = JSON.parse(fs.readFileSync(new URL('../fleet-pc-map.json', import.meta.url), 'utf8'));
-  assert.equal(resolveMailTarget('作業用008', pcMap).to, 'DESKTOP-BDOAK99');
+  assert.equal(resolveMailTarget('作業用999', pcMap).to, 'DESKTOP-BDOAK99');
+  assert.equal(resolveMailTarget('作業用008', pcMap).to, 'DESKTOP-63MQR3L');
   assert.equal(pcMap['DESKTOP-BDOAK99'].account, 'seisaku-team@orgiast.jp');
   assert.equal(pcMap['cafe015-PC'], undefined); assert.equal(pcMap['user-PC'], undefined);
   const rows = buildFleetStatus({ pcMap, beacons: [{ label: 'DESKTOP-BDOAK99', account: 'seisaku-team@orgiast.jp' }] });
   const row = rows.find(row => row.label === 'DESKTOP-BDOAK99');
-  assert.equal(row.remoteName, '作業用008'); assert.equal(row.registrationCandidate, false);
-  assert.match(formatFleetTable([row]), /DESKTOP-BDOAK99（作業用008）/);
+  assert.equal(row.remoteName, '作業用999'); assert.equal(row.registrationCandidate, false);
+  assert.match(formatFleetTable([row]), /DESKTOP-BDOAK99（作業用999）/);
 });

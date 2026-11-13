@@ -10,8 +10,12 @@ import { isEntry } from './is-entry.mjs';
 
 export async function recordRepair({ lane, tried, result, home = laneHome(), now = Date.now(), notify = notifyKim } = {}) {
   const health = readJson(path.join(home, '.claude/lane-health.json'));
-  if (!health.lanes?.[lane] || lane === 'gemini-cli') throw new Error('--lane must name a lane in lane-health.json');
+  if (!health.lanes?.[lane]) throw new Error('--lane must name a lane emitted by lane-repair-first-gate');
   if (!tried?.trim() || !['fixed', 'unfixable'].includes(result)) throw new Error('--tried and --result fixed|unfixable are required');
+  const state = health.lanes[lane];
+  if (result === 'unfixable' && !['billing', 'dead:oauth_consent', 'dead:physical_operation', 'quota_wait'].includes(state.reason)) {
+    throw new Error('原因が未分類のため unfixable にできません。エラー本文で原因を分類し（分類ロジックの誤りならそれを直す）、別キー・別ログイン(OAuth無料枠)・OpenRouter 等の代替経路を試してから再記録してください。');
+  }
   const dir = path.join(home, '.claude');
   fs.mkdirSync(dir, { recursive: true });
   const lock = path.join(dir, 'lane-repair-log.lock');
@@ -24,8 +28,15 @@ export async function recordRepair({ lane, tried, result, home = laneHome(), now
     fd = fs.openSync(lock, 'wx', 0o600);
   }
   try {
-    const rows = repairRows(home), id = faultId(lane, health.lanes[lane]);
-    const row = { ts: new Date(now).toISOString(), lane, faultId: id, tried: redactAll(tried.trim()).slice(0, 1500), result };
+    const rows = repairRows(home), id = faultId(lane, state);
+    const routing = readJson(path.join(home, '.claude/routing-overrides.json'));
+    const substituted = health.substituted?.find(item => item.provider === lane) || (state.via ? { provider: lane, via: state.via } : null);
+    const demote = routing.demote?.[lane] ?? null;
+    const notification = health.notifications?.find(item => item.provider === lane);
+    const kimNotified = Boolean(notification && !['none', 'unknown', 'suppressed'].includes(notification.delivered));
+    const row = { ts: new Date(now).toISOString(), lane, faultId: id, tried: redactAll(tried.trim()).slice(0, 1500), result,
+      ...(result === 'unfixable' ? { alternative: { substituted, demote }, kimNotified } : {}) };
+    if (result === 'unfixable' && !substituted && !demote) console.warn(`警告: ${lane} の代替経路（substituted / routing.demote）がありません。`);
     fs.appendFileSync(path.join(dir, 'lane-repair-log.jsonl'), JSON.stringify(row) + '\n', { mode: 0o600 });
     const consecutive = [];
     for (const r of [...rows, row].filter(r => r.lane === lane).reverse()) {

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import { effectiveHooks, runtimeManifestPath, dispatcherProblems } from './hook-dispatch-registry.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -126,9 +127,14 @@ if (isMain) try {
   const settingsFile = path.join(home, '.claude', 'settings.json');
   let settings = {};
   try { settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8').replace(/^\uFEFF/, '')); } catch {}
-  const missing = missingRequiredHooks(settings);
+  let dispatchManifest;
+  try { dispatchManifest = JSON.parse(fs.readFileSync(runtimeManifestPath(home), 'utf8')); } catch {}
+  const missing = missingRequiredHooks({ hooks: effectiveHooks(settings, dispatchManifest) });
+  missing.push(...dispatcherProblems(settings, repo).map(event => [event, 'hook-dispatch.mjs']));
   if (missing.length) {
-    spawnSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { windowsHide: true, encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home } });
+    spawnSync(process.execPath, [path.join(repo, 'tools', 'register-hooks.mjs'), '--hooks-only'], { windowsHide: true, encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, ORGIAST_REPO: repo } });
+    const repairedSettings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    if (dispatcherProblems(repairedSettings, repo).length) throw new Error('dispatcher repair read-back failed');
     console.log(`🚨 コスト規律hookが ${missing.length} 本欠落していたため自動登録しました: ${missing.map(([event, script]) => `${event}/${script}`).join(', ')}（次回セッションから有効）`);
   }
   const skills = missingSkills({ home, repo });
@@ -143,4 +149,4 @@ if (isMain) try {
   }
   repairScheduledTasks({ home, repo });
 } catch {}
-if (isMain) process.exit(0);
+if (isMain) process.exitCode = 0;

@@ -1,3 +1,4 @@
+import { publishSeatPr } from './pr-land.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,8 +10,8 @@ export const spawnCommand = (command, args, options = {}) => spawnSync(command, 
   shell: false, windowsHide: true, encoding: 'utf8', timeout: 120_000,
   maxBuffer: 32 * 1024 * 1024, ...options,
 });
-export function checked(spawn, command, args, cwd) {
-  const r = spawn(command, args, { cwd, windowsHide: true });
+export function checked(spawn, command, args, cwd, options = {}) {
+  const r = spawn(command, args, { cwd, windowsHide: true, ...options });
   if (r.error || r.status !== 0) throw new Error(`${command} ${args[0]}: ${r.error?.message || r.stderr || r.status}`);
   return String(r.stdout || '').trim();
 }
@@ -64,7 +65,7 @@ export function assertNoSecretRegression(files) {
   }
 }
 
-export function syncGasMaster({ project, snapshot, dryRun = false }, {
+export function syncGasMaster({ project, snapshot, dryRun = false, home = process.env.ORGIAST_HOME || os.homedir() }, {
   spawn = spawnCommand, stdout = s => process.stdout.write(s), stderr = s => process.stderr.write(s),
 } = {}) {
   if (dryRun) {
@@ -120,6 +121,9 @@ export function syncGasMaster({ project, snapshot, dryRun = false }, {
     }
     const body = path.join(temp, 'pr.md');
     fs.writeFileSync(body, '本番 GAS への push と read-back は成功しました。master が先行しているため、本番スナップショットを PR で統合します。\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n');
+    const published = publishSeatPr({ cwd, home, branch, base: 'master', title: 'fix(gas): 本番 GAS の変更を master に同期', bodyFile: body,
+      run: (file, args, options) => checked(spawn, file, args, cwd, options) });
+    if (published) { stdout(`${published.url}\n`); return { status: 'pr', url: published.url, branch }; }
     const url = checked(spawn, 'gh', ['pr', 'create', '--repo', BOOTH_REPO, '--base', 'master', '--head', branch, '--title', 'fix(gas): 本番 GAS の変更を master に同期', '--body-file', body], cwd);
     stderr('master が先行。PR で統合\n');
     stdout(`${url}\n`);

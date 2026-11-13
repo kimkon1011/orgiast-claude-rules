@@ -173,12 +173,15 @@ test('引数なしは usage を stderr に出して exit 2', (t) => {
 test('シンボリックリンク経由で起動されても main が走る（無言 exit 0 の回帰）', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'growi-link-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  const link = path.join(dir, 'growi-manual.mjs');
-  try {
+  let link;
+  if (process.platform === 'win32') {
+    // Directory junctions require no symlink privilege and exercise the same realpath entry check.
+    const linkedTools = path.join(dir, 'linked-tools');
+    fs.symlinkSync(path.dirname(tool), linkedTools, 'junction');
+    link = path.join(linkedTools, path.basename(tool));
+  } else {
+    link = path.join(dir, 'growi-manual.mjs');
     fs.symlinkSync(tool, link, 'file');
-  } catch {
-    t.skip('この環境ではシンボリックリンクを作れない');
-    return;
   }
   // 実際にリンク経由で起動しても usage が出る（無言 exit 0 にならない）
   const result = spawnSync(process.execPath, [link], { encoding: 'utf8' });
@@ -378,6 +381,8 @@ test('publishIndex は指定された cacheDir の索引を発行する', async 
     defaultDriveKeyPath: () => tool,
     getDriveToken: async () => 'token',
     driveApi: async (_token, url, options = {}) => {
+    if (String(url).includes('/permissions')) return Response.json({ permissions: [{ type: 'user', emailAddress: 'kim@orgiast.jp', role: 'writer' }] });
+    if (options.method === 'PATCH' && String(options.body).includes('orgiastAutomation')) return Response.json({ id: 'marked' });
       if (!options.method) return new Response(JSON.stringify({ files: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
       uploads.push(Buffer.from(options.body).toString('utf8'));
       return new Response(JSON.stringify({ id: `uploaded-${uploads.length}` }), { status: 200, headers: { 'content-type': 'application/json' } });

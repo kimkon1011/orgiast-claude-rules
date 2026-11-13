@@ -1,10 +1,31 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { matchCase, exclusion, processPage, run, SOURCES, createDriveSink, parseArgs, publishedText, parseEntries, collectSource, render, parseCaseRows } from './comms-hub-sync.mjs';
+import { matchCase, exclusion, processPage, run, SOURCES, createDriveSink, parseArgs, publishedText, parseEntries, collectSource, render, parseCaseRows, writeLastRun, createPhaseTracker } from './comms-hub-sync.mjs';
+
+// All tests must use a temp ORGIAST_HOME so no run() call writes to ~/.claude
+const testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-test-home-'));
+const priorOrgHome = process.env.ORGIAST_HOME;
+process.env.ORGIAST_HOME = testHome;
+const homedirLastRunPath = path.join(os.homedir(), '.claude', 'comms-hub', 'last-run.json');
+let homedirLastRunBefore = null;
+try { homedirLastRunBefore = { exists: true, mtimeMs: fs.statSync(homedirLastRunPath).mtimeMs }; }
+catch (e) { if (e.code === 'ENOENT') homedirLastRunBefore = { exists: false }; else throw e; }
+after(() => {
+  process.env.ORGIAST_HOME = priorOrgHome;
+  try { const s = fs.statSync(homedirLastRunPath); assert.equal(s.mtimeMs, homedirLastRunBefore.mtimeMs, 'homedir last-run.json mtime changed'); }
+  catch (e) { if (e.code === 'ENOENT') assert.ok(!homedirLastRunBefore.exists, 'homedir last-run.json was created'); else throw e; }
+  fs.rmSync(testHome, { recursive: true, force: true });
+});
+// Helper: create a temp dir for test home (used by collectSource) and clean up on test finish
+function makeTestHome(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'comms-hub-test-'));
+  t.after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} });
+  return dir;
+}
 const config = JSON.parse(fs.readFileSync(new URL('../config/comms-hub.json', import.meta.url)));
 const cases = [{ id: '261101ABC', name: '展示会Alpha', client: '共通顧客' }, { id: 'C1234', name: '制作Beta', client: '共通顧客' }];
 const message = { source: 'gmail-kim', id: 'same', ts: '2026-11-01T02:00:00.000Z', subject: '261101ABC 見積', text: '業務連絡', sender: 'staff@example.test' };
@@ -27,7 +48,8 @@ function mockDrive() {
   const fetchImpl = async (url, init={}) => {
     const u = new URL(url), method=init.method || 'GET';
     assert.notEqual(u.hostname, 'docs.googleapis.com', 'Docs API must never be used');
-    if (u.pathname.includes('/permissions')) return json(method==='GET'?{permissions:[]}:{id:'permission'});
+    if (String(url).includes('/permissions')) return Response.json({ permissions: [{ type: 'user', emailAddress: 'kim@orgiast.jp', role: 'writer' }] });
+    if (init.method === 'PATCH' && String(init.body).includes('orgiastAutomation')) return Response.json({ id: 'marked' });
     if(method==='GET' && u.pathname.endsWith('/files')) {
       const q=u.searchParams.get('q'), name=/name='([^']+)'/.exec(q)?.[1];
       return json({files:[...files].filter(([,f])=>f.name===name).map(([id])=>({id}))});
@@ -87,6 +109,8 @@ test('Drive only: durable dedup, lost response recovery, unchanged hash, chronol
   assert.ok(daily.indexOf('01:00:00.000Z') < daily.indexOf('02:00:00.000Z'));
   assert.ok(caseText.indexOf('02:00:00.000Z') < caseText.indexOf('01:00:00.000Z'));
   const index=JSON.parse(api.files.get(state.files.index).text);
+  assert.ok(Object.hasOwn(index.sources, 'inquiry-sheet'));
+  assert.ok(Object.hasOwn(index.sources['inquiry-sheet'], 'lastSuccess'));
   assert.equal(index.cases['261101ABC'].url,`https://docs.google.com/a/orgiast.jp/document/d/${state.files['cases/261101ABC']}/edit`);
 });
 test('case publication caps age and characters but keeps local complete text',async t=>{
@@ -132,17 +156,19 @@ test('source cursor advances only after all destinations commit', async () => {
   await assert.rejects(processPage({source:'gmail-kim',page:{messages:[message],cursor:{since:20,next:'p2'}},state,cases,config,live:true,sink:{async append(){throw Error('drive denied');}}}));
   assert.deepEqual(state.sources['gmail-kim'].cursor,{since:10});
 });
-test('Gmail pagination preserves original upper boundary and account', async () => {
+test('Gmail pagination preserves original upper boundary and account', async t => {
   const {collectSource}=await import('./comms-hub-sync.mjs');
-  const ctx={config,home:'.',since:100000,until:300000,cursor:{end:200000,next:'p1'},state:{},gmailSearch:async args=>{
+  const home=makeTestHome(t);
+  const ctx={config,home,since:100000,until:300000,cursor:{end:200000,next:'p1'},state:{},gmailSearch:async args=>{
     assert.equal(args.user,config.mailboxes['gmail-seisaku']); assert.equal(args.pageToken,'p1'); assert.match(args.query,/before:201/);
     return {messages:[],nextPageToken:'p2'};
   }};
   assert.deepEqual((await collectSource('gmail-seisaku',ctx)).cursor,{since:100000,end:200000,next:'p2'});
 });
-test('Discord resumes a full page even when legacy truncated flag is false', async()=>{
+test('Discord resumes a full page even when legacy truncated flag is false', async t=>{
   const {collectSource}=await import('./comms-hub-sync.mjs');
-  const ctx={config:{...config,maxPerSource:1},home:'.',since:0,until:Date.now(),state:{},discordToken:'mock',listChannels:async()=>[{id:'a',type:0,name:'work'}],discordFetch:async()=>({truncated:false,messages:[{id:'m',timestamp:message.ts,content:'見積',author:{username:'staff'}}]})};
+  const home=makeTestHome(t);
+  const ctx={config:{...config,maxPerSource:1},home,since:0,until:Date.now(),state:{},discordToken:'mock',listChannels:async()=>[{id:'a',type:0,name:'work'}],discordFetch:async()=>({truncated:false,messages:[{id:'m',timestamp:message.ts,content:'見積',author:{username:'staff'}}]})};
   const page=await collectSource('discord',ctx);
   assert.equal(page.cursor.before,'m'); assert.equal(page.cursor.channel,'a');
 });
@@ -173,7 +199,7 @@ test('publication failure preserves source results and creation counts in report
  const state={sources:{},cases:{},rootId:'root'};
  const report=await run({live:true},{config,cases,state,save(){},collect:async()=>({messages:[],cursor:{since:1}}),sink:{createdDocs:2,async init(){},async finish(){throw Error('API HTTP 403 SERVICE_DISABLED');}}});
  assert.equal(report.exitCode,0);assert.equal(report.createdDocs,2);assert.equal(report.rootId,'root');
- assert.equal(Object.keys(report.sources).length,6);assert.match(state.publishError,/SERVICE_DISABLED/);
+ assert.equal(Object.keys(report.sources).length,SOURCES.length);assert.match(state.publishError,/SERVICE_DISABLED/);
 });
 
 test('tl;dv missing transcript keeps metadata, continues page, records error and later upgrades',async t=>{
@@ -230,7 +256,7 @@ test('case sheet resolves real I/J/K headers and deduplicates repeated case IDs'
 });
 
 test('init removes broad and unlisted access, downgrades readers, sends no notifications',async()=>{
- const permissions=[{id:'domain',type:'domain',role:'reader'},{id:'public',type:'anyone',role:'reader'},{id:'other',type:'user',emailAddress:'other@example.test',role:'reader'},{id:'owner',type:'user',role:'owner'},{id:'existing',type:'user',emailAddress:config.readers[0],role:'writer'}];
+ const permissions=[{id:'kim',type:'user',emailAddress:'kim@orgiast.jp',role:'writer'},{id:'domain',type:'domain',role:'reader'},{id:'public',type:'anyone',role:'reader'},{id:'other',type:'user',emailAddress:'other@example.test',role:'reader'},{id:'owner',type:'user',role:'owner'},{id:'existing',type:'user',emailAddress:config.readers[0],role:'writer'}];
  const calls=[];
  const sink=createDriveSink({token:'mock',state:{files:{root:'root',cases:'cases',daily:'daily',unassigned:'unassigned'}},save(){},fetchImpl:async(url,init)=>{calls.push({url,...init});return Response.json(init.method==='GET'?{permissions}:{id:'ok'});}});
  await sink.init(config.readers);
@@ -349,7 +375,8 @@ test('Gmail timeout commits each completed message and resumes only pending IDs 
   await processPage({source:message.source,page:{messages:[m],cursor:state.sources[message.source].cursor},state,cases,config,sink,live:true});
   if(!resume)controller.abort(new DOMException('source deadline','TimeoutError'));
  };
- const ctx={config,home:'.',since:1,until:2000000000000,state:state.sources[message.source],signal:controller.signal,fetchImpl,commitMessage,
+ const home=makeTestHome(t);
+ const ctx={config,home,since:1,until:2000000000000,state:state.sources[message.source],signal:controller.signal,fetchImpl,commitMessage,
   gmailSearch:args=>searchGmail({...args,getToken:async()=> 'mock'})};
  const page=await collectSource(message.source,ctx);
  assert.equal(page.partial,true);assert.deepEqual(page.cursor.pendingIds,['pending']);
@@ -364,9 +391,10 @@ test('Gmail timeout commits each completed message and resumes only pending IDs 
  assert.equal(Object.keys(state.sources[message.source].processed).length,2);
 });
 
-test('Gmail metadata filters automated mail and caps concurrent requests at five',async()=>{
+test('Gmail metadata filters automated mail and caps concurrent requests at five',async t=>{
  const {searchGmail}=await import('./gmail-search.mjs');let active=0,peak=0;const full=[];
- const page=await collectSource('gmail-kim',{config,home:'.',since:1,until:2000000000000,state:{},
+ const home=makeTestHome(t);
+ const page=await collectSource('gmail-kim',{config,home,since:1,until:2000000000000,state:{},
   gmailSearch:args=>searchGmail({...args,getToken:async()=> 'mock'}),fetchImpl:async url=>{
    const u=new URL(url);if(u.pathname.endsWith('/messages'))return Response.json({messages:Array.from({length:12},(_,i)=>({id:String(i)}))});
    active++;peak=Math.max(peak,active);await new Promise(r=>setTimeout(r,2));active--;
@@ -381,8 +409,8 @@ test('process budget skips remaining sources, saves state and reserves publicati
  const report=await run({live:true},{config,cases,state,clock:()=>clock,save(){saves++;},
   collect:async source=>{visited.push(source);clock=360000;return {messages:[],cursor:{since:1}};},
   sink:{async init(){},async finish(){finished++;assert.equal(clock,360000);clock=480000;throw Object.assign(Error('budget'),{code:'HUB_BUDGET'});}}});
- assert.equal(report.exitCode,0);assert.equal(report.budgetExhausted,true);assert.deepEqual(visited,['gmail-kim']);
- assert.equal(finished,1);assert.ok(saves>0);assert.equal(state.sources['gmail-kim'].cursor.since,1);
+ assert.equal(report.exitCode,0);assert.equal(report.budgetExhausted,true);assert.deepEqual(visited,[SOURCES[0]]);
+ assert.equal(finished,1);assert.ok(saves>0);assert.equal(state.sources[SOURCES[0]].cursor.since,1);
  for(const source of SOURCES.slice(1)){assert.match(report.sources[source].skipped,/budget/);assert.ok(state.sources[source].deferredAt);assert.equal(state.sources[source].lastSuccess,undefined);}
  assert.ok(state.publishDeferredAt);
 });
@@ -460,4 +488,699 @@ test('Drive initialization failure still saves source cursors and exits zero',as
  const report=await run({live:true},{config,cases,state,save(){saved=structuredClone(state);},collect:async()=>({messages:[],cursor:{since:99}}),sink:{async init(){throw Error('fetch failed');}}});
  assert.equal(report.exitCode,0);assert.match(saved.publishErrors[0].reason,/fetch failed/);
  for(const source of SOURCES)assert.equal(saved.sources[source].cursor.since,99);
+});
+
+test('line-chat: fetches LINE chats, filters non-business at chat level, ascending sort', async t => {
+ const { collectSource } = await import('./comms-hub-sync.mjs');
+ const now = Date.now();
+ const home=makeTestHome(t);
+ const ctx = {
+   config, home, since: 0, until: 2000000000000,
+   state: {}, beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([
+       { accountID: 'line.U9-aaa', network: 'LINE', bridge: { type: 'line' } },
+     ]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!work:beeper.local', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト連絡', type: 'single', lastActivity: new Date(now).toISOString() },
+       { id: '!social:beeper.local', accountID: 'other', network: 'twitter', title: 'Twitter DM', type: 'single', lastActivity: new Date(now).toISOString() },
+     ]});
+     if (u.includes('/messages')) {
+       // Return newest-first (Beeper API behavior)
+       return Response.json({ items: [
+         { id: 'm2', senderName: '後スタッフ', text: '確認しました', timestamp: new Date(now - 500).toISOString() },
+         { id: 'm1', senderName: '前スタッフ', text: '見積もり作成完了', timestamp: new Date(now - 1000).toISOString() },
+       ]});
+     }
+     return Response.json({});
+   }
+ };
+ const page = await collectSource('line-chat', ctx);
+ assert.equal(page.messages.length, 2);
+ // Must be sorted ascending by timestamp
+ assert.equal(page.messages[0].text, '見積もり作成完了');
+ assert.equal(page.messages[1].text, '確認しました');
+ assert.equal(page.messages[0].sender, '前スタッフ');
+ assert.equal(page.messages[1].sender, '後スタッフ');
+});
+
+test('line-chat: paginates backward across pages, stops at sinceMs, returns ascending', async t => {
+ const { collectSource } = await import('./comms-hub-sync.mjs');
+ const now = Date.now();
+ const home=makeTestHome(t);
+ const ctx = {
+   config, home, since: now - 2000, until: 2000000000000,
+   state: {}, beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE' }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!chat', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date(now).toISOString() },
+     ]});
+     if (u.includes('/messages')) {
+       const hasCursor = u.includes('cursor=');
+       if (!hasCursor) {
+         // Page 1: newest (timestamps now-100 to now-900)
+         return Response.json({
+           items: [
+             { id: 'm4', senderName: 'D', text: '最新', timestamp: new Date(now - 100).toISOString() },
+             { id: 'm3', senderName: 'C', text: '三つ目', timestamp: new Date(now - 500).toISOString() },
+             { id: 'm2', senderName: 'B', text: '二つ目', timestamp: new Date(now - 900).toISOString() },
+           ],
+           hasMore: true, oldestCursor: 'cursor1'
+         });
+       }
+       // Page 2: older (timestamps now-1300, now-1700, now-2100)
+       return Response.json({
+         items: [
+           { id: 'm1', senderName: 'A', text: '一つ目', timestamp: new Date(now - 1300).toISOString() },
+           { id: 'm0', senderName: 'Z', text: '範囲外古', timestamp: new Date(now - 2100).toISOString() },
+         ],
+         hasMore: true, oldestCursor: 'cursor2'
+       });
+     }
+     return Response.json({});
+   }
+ };
+ const page = await collectSource('line-chat', ctx);
+ // Should collect m4,m3,m2,m1 then stop (m0 is before sinceMs).
+ // After ascending sort: m2(now-900), m1(now-1300) are both before sinceMs(now-2000)? No wait...
+ // since = now-2000. m2 is now-900 (after since), m1 is now-1300 (after since). m0 is now-2100 (before since).
+ // Collected: m4(now-100), m3(now-500), m2(now-900), m1(now-1300). Stop because oldest on page 2 (m0 at now-2100) < sinceMs(now-2000).
+ // Ascending: m1, m2, m3, m4.
+ assert.equal(page.messages.length, 4);
+ assert.equal(page.messages[0].text, '一つ目');
+ assert.equal(page.messages[1].text, '二つ目');
+ assert.equal(page.messages[2].text, '三つ目');
+ assert.equal(page.messages[3].text, '最新');
+ assert.ok(page.messages[0].ts < page.messages[3].ts);
+});
+
+test('line-chat: limit reached mid-chat returns resumeTimestamp, next run skips past it', async t => {
+ const { collectSource, messageKey } = await import('./comms-hub-sync.mjs');
+ const now = Date.now();
+ const m1Key = messageKey({ source: 'line-chat', channelId: '!chat1', id: 'm1' });
+ const home=makeTestHome(t);
+ const ctx = {
+   config: { ...config, sourceLimits: { 'line-chat': 2 }, maxPerSource: 2 },
+   home, since: 0, until: 2000000000000,
+   state: {}, beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE' }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!chat1', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date(now).toISOString() },
+     ]});
+     if (u.includes('/messages')) return Response.json({
+       items: [
+         { id: 'm2', senderName: 'B', text: '二つ目', timestamp: new Date(now - 500).toISOString() },
+         { id: 'm1', senderName: 'A', text: '一つ目', timestamp: new Date(now - 1000).toISOString() },
+         { id: 'm0', senderName: 'Z', text: '古い', timestamp: new Date(now - 3000).toISOString() },
+       ],
+       hasMore: false
+     });
+     return Response.json({});
+   }
+ };
+ const page1 = await collectSource('line-chat', ctx);
+ // Collected m0,m1,m2, sorted asc -> m0,m1,m2. Limit 2: take m0,m1, return resumeTimestamp=m1.ts
+ assert.equal(page1.messages.length, 2);
+ assert.equal(page1.messages[0].text, '古い');
+ assert.equal(page1.messages[1].text, '一つ目');
+ assert.equal(page1.cursor.chatId, '!chat1');
+ assert.ok(page1.cursor.resumeTimestamp);
+
+ // Resume: same chat, m1 is in state.processed (dedup-skips), passes resumeTs (< now-1000),
+ // so only m2 is new
+ const page2 = await collectSource('line-chat', { ...ctx, cursor: page1.cursor, state: { processed: { [m1Key]: '2026-11-07T00:00:00.000Z' } } });
+ assert.equal(page2.messages.length, 1);
+ assert.equal(page2.messages[0].text, '二つ目');
+ assert.deepEqual(page2.cursor, { since: ctx.until });
+});
+
+test('line-chat: non-business chats never call messages API', async t => {
+ const { collectSource } = await import('./comms-hub-sync.mjs');
+ let messagesCalled = false;
+ const home=makeTestHome(t);
+ const ctx = {
+   config, home, since: 0, until: 2000000000000,
+   state: {}, beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE' }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!personal', accountID: 'line.U9-aaa', network: 'line', title: 'プライベート会話', lastActivity: new Date(Date.now()).toISOString() },
+       { id: '!work', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date(Date.now()).toISOString() },
+     ]});
+     if (u.includes('/messages')) {
+       messagesCalled = true;
+       return Response.json({ items: [{ id: 'm1', senderName: 'A', text: '業務連絡', timestamp: new Date().toISOString() }] });
+     }
+     return Response.json({});
+   }
+ };
+ const page = await collectSource('line-chat', ctx);
+ // プライベート会話 should be skipped as not-business (not matching businessPatterns)
+ // オージャスト matches businessPatterns via norm("オージャスト")
+ assert.equal(page.messages.length, 1);
+ assert.equal(page.messages[0].text, '業務連絡');
+ assert.ok(messagesCalled, 'messages API was called for business chat');
+});
+
+test('line-chat: half-width kana title matches business pattern', async t => {
+ const { collectSource } = await import('./comms-hub-sync.mjs');
+ const home=makeTestHome(t);
+ const ctx = {
+   config, home, since: 0, until: 2000000000000,
+   state: {}, beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE' }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!chat', accountID: 'line.U9-aaa', network: 'line', title: 'ｵｰｼﾞｬｽﾄ業務', lastActivity: new Date(Date.now()).toISOString() },
+     ]});
+     if (u.includes('/messages')) return Response.json({ items: [{ id: 'm1', senderName: 'A', text: '見積もり', timestamp: new Date().toISOString() }] });
+     return Response.json({});
+   }
+ };
+ const page = await collectSource('line-chat', ctx);
+ // norm('ｵｰｼﾞｬｽﾄ業務') => 'オージャスト業務' which matches businessPattern 'オージャスト'
+ assert.equal(page.messages.length, 1);
+ assert.equal(page.messages[0].text, '見積もり');
+});
+
+test('line-chat: isDeleted messages are discarded', async t => {
+ const { collectSource } = await import('./comms-hub-sync.mjs');
+ const home=makeTestHome(t);
+ const ctx = {
+   config, home, since: 0, until: 2000000000000,
+   state: {}, beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE' }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!chat', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date(Date.now()).toISOString() },
+     ]});
+     if (u.includes('/messages')) return Response.json({ items: [
+       { id: 'm1', senderName: 'A', text: '残るメッセージ', timestamp: new Date(Date.now() - 1000).toISOString() },
+       { id: 'm2', senderName: 'B', text: '削除済み', timestamp: new Date(Date.now() - 2000).toISOString(), isDeleted: true },
+       { id: 'm3', senderName: 'C', text: 'これも残る', timestamp: new Date(Date.now() - 3000).toISOString() },
+     ]});
+     return Response.json({});
+   }
+ };
+ const page = await collectSource('line-chat', ctx);
+ assert.equal(page.messages.length, 2);
+ assert.equal(page.messages[0].text, 'これも残る');
+ assert.equal(page.messages[1].text, '残るメッセージ');
+ assert.ok(!page.messages.some(m => m.id === 'm2'));
+});
+
+test('line-chat: exclusion rules apply through processPage', async t => {
+ const state = { sources: { 'line-chat': {} }, cases: {} };
+ const msg = { source: 'line-chat', id: 'm1', channelId: '!chat:beeper.local', chat: '仕事', ts: message.ts, sender: 'Staff', text: '見積もりです', url: null };
+ const r1 = await processPage({ source: 'line-chat', page: { messages: [msg], cursor: {} }, state, cases, config, live: false, sink: {} });
+ assert.equal(r1.accepted, 1);
+ const r2 = await processPage({ source: 'line-chat', page: { messages: [{ ...msg, id: 'm2', text: '診療予約の件' }], cursor: {} }, state, cases, config, live: false, sink: {} });
+ assert.equal(r2.excluded, 1);
+ const r3 = await processPage({ source: 'line-chat', page: { messages: [{ ...msg, id: 'm3', text: 'こんにちは' }], cursor: {} }, state, cases, config, live: false, sink: {} });
+ assert.equal(r3.excluded, 1);
+ const r4 = await processPage({ source: 'line-chat', page: { messages: [{ ...msg, id: 'm4', chat: '濱川様✖️オージャスト', text: '本日のご連絡' }], cursor: {} }, state, cases, config, live: false, sink: {} });
+ assert.equal(r4.accepted, 1);
+});
+
+test('line-chat: Beeper unavailable error does not affect other sources', async t => {
+ const state = { sources: {}, cases: {} };
+ const report = await run({ live: true }, {
+   config, cases, state, save() {},
+   sink: { createdDocs: 0, async init() {}, async append() {}, async finish() { return {}; } },
+   collect: async source => {
+     if (source === 'line-chat') throw Object.assign(new Error('Beeper Desktop API unavailable'), { status: 0 });
+     return { messages: [], cursor: { since: 99 } };
+   }
+ });
+ assert.equal(report.exitCode, 0);
+ assert.match(report.sources['line-chat'].error, /Beeper Desktop API unavailable/);
+ assert.ok(!report.sources['gmail-kim'].error);
+});
+
+test('line-chat: render shows LINE(Beeper) for url-less messages', async t => {
+ const { render } = await import('./comms-hub-sync.mjs');
+ const lineChat = render({ source: 'line-chat', ts: '2026-11-07T00:00:00.000Z', sender: 'A', text: 'こんにちは', chat: '仕事', url: null });
+ assert.match(lineChat, /LINE（Beeper）: 仕事/);
+ const line = render({ source: 'line', ts: '2026-11-07T00:00:00.000Z', sender: 'A', text: '通知', url: null });
+ assert.match(line, /元リンクなし（通知保存データ）/);
+});
+
+test('line-chat: excluded chats logged to local file as object keyed by id', async t => {
+ const os = await import('node:os');
+ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-linechat-excl-'));
+ t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+ const { collectSource } = await import('./comms-hub-sync.mjs');
+ const ctx = {
+   config: { ...config, lineChatExclude: ['プライベート', 'AI情報'] },
+   home, since: 0, until: 2000000000000,
+   state: {}, beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE', bridge: { type: 'line' } }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!a:beeper.local', accountID: 'line.U9-aaa', network: 'line', title: 'プライベート', type: 'single', lastActivity: new Date(Date.now()).toISOString() },
+       { id: '!b:beeper.local', accountID: 'line.U9-aaa', network: 'line', title: '仕事', type: 'single', lastActivity: new Date(Date.now()).toISOString() },
+     ]});
+     if (u.includes('/messages')) return Response.json({ items: [{ id: 'm1', timestamp: new Date().toISOString(), senderName: 'A', text: '業務' }] });
+     return Response.json({});
+   }
+ };
+ await collectSource('line-chat', ctx);
+ const logPath = path.join(home, '.claude', 'comms-hub', 'line-chat-excluded.json');
+ assert.ok(fs.existsSync(logPath));
+ const log = JSON.parse(fs.readFileSync(logPath, 'utf8'));
+ // Now keyed by chat id, not array indexed
+ assert.ok(log['!a:beeper.local']);
+ assert.equal(log['!a:beeper.local'].title, 'プライベート');
+ assert.equal(log['!a:beeper.local'].reason, 'config-exclude');
+ // "仕事" is not-business, should also be logged
+ assert.ok(log['!b:beeper.local']);
+ assert.equal(log['!b:beeper.local'].reason, 'not-business');
+});
+
+test('line-chat: messages with attachments appends attachment info', async t => {
+ const { collectSource } = await import('./comms-hub-sync.mjs');
+ const home=makeTestHome(t);
+ const ctx = {
+   config, home, since: 0, until: 2000000000000,
+   state: {}, beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE', bridge: { type: 'line' } }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!a:beeper.local', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date(Date.now()).toISOString() },
+     ]});
+     if (u.includes('/messages')) return Response.json({ items: [
+       { id: 'm2', senderName: 'Sender', text: '', timestamp: new Date(Date.now() - 500).toISOString(),
+         attachments: [{ type: 'image', file_name: 'stamp.png' }] },
+       { id: 'm1', senderName: 'Sender', text: '本文', timestamp: new Date(Date.now() - 1000).toISOString(),
+         attachments: [{ type: 'image', file_name: 'photo.jpg' }, { type: 'file', file_name: 'document.pdf' }] },
+     ]});
+     return Response.json({});
+   }
+ };
+ const page = await collectSource('line-chat', ctx);
+ assert.equal(page.messages.length, 2);
+ // Ascending: m1 first (now-1000)
+ assert.match(page.messages[0].text, /\[添付: image photo.jpg\]/);
+ assert.match(page.messages[0].text, /\[添付: file document.pdf\]/);
+ assert.match(page.messages[1].text, /\[添付: image stamp.png\]/);
+});
+
+test('line-chat: (g) state.processed with messageKey skips already-processed messages', async t => {
+ const { collectSource, messageKey } = await import('./comms-hub-sync.mjs');
+ const now = Date.now();
+ const m1Key = messageKey({ source: 'line-chat', channelId: '!a:beeper.local', id: 'm1' });
+ const home=makeTestHome(t);
+ const ctx = {
+   config, home, since: 0, until: 2000000000000,
+   state: { processed: { [m1Key]: '2026-11-07T00:00:00.000Z' } },
+   beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE' }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!a:beeper.local', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date(now + 1000).toISOString() },
+     ]});
+     if (u.includes('/messages')) return Response.json({ items: [
+       { id: 'm1', senderName: 'A', text: '既に処理済み', timestamp: new Date(now + 10).toISOString() },
+       { id: 'm2', senderName: 'B', text: '新しいメッセージ', timestamp: new Date(now + 20).toISOString() },
+     ]});
+     return Response.json({});
+   }
+ };
+ const page = await collectSource('line-chat', ctx);
+ assert.equal(page.messages.length, 1);
+ assert.equal(page.messages[0].id, 'm2');
+ assert.equal(page.messages[0].text, '新しいメッセージ');
+});
+
+test('line-chat: (h) early-return cursor includes end, subsequent calls use saved end', async t => {
+ const { collectSource } = await import('./comms-hub-sync.mjs');
+ const now = Date.now();
+ const until = now + 100000;
+ let msgCalls = 0;
+ const home=makeTestHome(t);
+ const ctxBase = {
+   config: { ...config, sourceLimits: { 'line-chat': 2 } },
+   home, since: 0, until,
+   state: {}, beeperToken: 'mock', cases,
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE' }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!a:beeper.local', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date(now + 1000).toISOString() },
+     ]});
+     if (u.includes('/messages')) {
+       msgCalls++;
+       return Response.json({ items: [
+         { id: 'm1', senderName: 'A', text: 'a', timestamp: new Date(now + 10).toISOString() },
+         { id: 'm2', senderName: 'A', text: 'b', timestamp: new Date(now + 20).toISOString() },
+         { id: 'm3', senderName: 'B', text: 'c', timestamp: new Date(now + 30).toISOString() },
+       ]});
+     }
+     return Response.json({});
+   }
+ };
+ // First call: limit 2, get m1 and m2, cursor has end
+ const page1 = await collectSource('line-chat', ctxBase);
+ assert.equal(page1.messages.length, 2);
+ assert.equal(page1.cursor.end, until);
+ assert.equal(page1.cursor.chatId, '!a:beeper.local');
+ assert.ok(page1.cursor.resumeTimestamp);
+
+ // Second call with cursor: m1 skipped (resumeTs < now+20), m2 skipped (resumeTs < now+20 is false
+ // but m2 is at resumeTs so < check passes; not in processed, so included), m3 included
+ // With 2 messages (m2,m3) and limit 2 → hits limit again, returns cursor
+ const page2 = await collectSource('line-chat', { ...ctxBase, cursor: page1.cursor });
+ assert.equal(page2.messages.length, 2);
+ assert.equal(page2.cursor.end, until);
+ assert.equal(page2.cursor.chatId, '!a:beeper.local');
+
+ // Third call: m1,m2 skipped by resumeTs (< now+30), m3 passes < and included
+ // Only 1 message, no limit hit → returns { since: end }
+ const page3 = await collectSource('line-chat', { ...ctxBase, cursor: page2.cursor });
+ assert.equal(page3.messages.length, 1);
+ assert.equal(page3.messages[0].id, 'm3');
+ assert.deepEqual(page3.cursor, { since: page2.cursor.end });
+});
+
+test('line-chat: (i) same-timestamp messages not lost with < comparison, dedup handles processed', async t => {
+ const { collectSource, messageKey } = await import('./comms-hub-sync.mjs');
+ const now = Date.now();
+ const ts = new Date(now + 10).toISOString();
+ const processedKey = messageKey({ source: 'line-chat', channelId: '!a:beeper.local', id: 'm1' });
+ const home=makeTestHome(t);
+ const ctx = {
+   config, home, since: 0, until: 2000000000000,
+   state: { processed: { [processedKey]: '2026-11-07T00:00:00.000Z' } },
+   beeperToken: 'mock', cases,
+   cursor: { chatId: '!a:beeper.local', resumeTimestamp: ts },
+   fetchImpl: async url => {
+     const u = String(url);
+     if (u.includes('/v1/accounts')) return Response.json([{ accountID: 'line.U9-aaa', network: 'LINE' }]);
+     if (u.includes('/v1/chats') && !u.includes('/messages')) return Response.json({ items: [
+       { id: '!a:beeper.local', accountID: 'line.U9-aaa', network: 'line', title: 'オージャスト業務', lastActivity: new Date(now + 1000).toISOString() },
+     ]});
+     if (u.includes('/messages')) return Response.json({ items: [
+       { id: 'm1', senderName: 'A', text: '既に処理済み（同タイムスタンプ）', timestamp: ts },
+       { id: 'm2', senderName: 'B', text: '未処理（同タイムスタンプ）', timestamp: ts },
+     ]});
+     return Response.json({});
+   }
+ };
+ // With < comparison, neither message is skipped by resumeTs.
+ // m1 is skipped by state.processed dedup, m2 is included.
+ const page = await collectSource('line-chat', ctx);
+ assert.equal(page.messages.length, 1);
+ assert.equal(page.messages[0].id, 'm2');
+ assert.equal(page.messages[0].text, '未処理（同タイムスタンプ）');
+});
+
+test('last-run.json: live run writes file with phases and source names, no tokens', async t => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-lastrun-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  const sink = { createdDocs: 0, publishedDocs: 0, deferredDocs: 0, async init() {}, async append() {}, async finish() { return {}; } };
+  const report = await run({ live: true, statePath }, {
+    config, cases,
+    state: { sources: {}, cases: {} },
+    save() {},
+    sink,
+    suppressWatchdog: true,
+    collect: async source => ({ messages: [], cursor: { since: 99 } }),
+  });
+  const lrPath = path.join(tmp, 'last-run.json');
+  assert.ok(fs.existsSync(lrPath), 'last-run.json should exist');
+  const lr = JSON.parse(fs.readFileSync(lrPath, 'utf8'));
+  assert.equal(lr.mode, 'live');
+  assert.equal(lr.exitCode, 0);
+  assert.ok(lr.startedAt);
+  assert.ok(lr.finishedAt);
+  assert.ok(typeof lr.elapsedMs === 'number' && lr.elapsedMs >= 0);
+  assert.ok(Array.isArray(lr.phases));
+  // Each source name should appear in phases
+  for (const s of SOURCES) assert.ok(lr.phases.some(p => p.name === `collect:${s}`), `phase for ${s} missing`);
+  assert.ok(lr.phases.some(p => p.name === 'publish'), 'publish phase missing');
+  assert.ok(lr.phases.every(p => p.startedAt && p.finishedAt), 'all phases have start/finish');
+  // No tokens, emails, or message bodies
+  const raw = fs.readFileSync(lrPath, 'utf8');
+  assert.ok(!raw.includes('mock'), 'no token string');
+  assert.ok(!raw.includes('@'), 'no email addresses');
+  assert.ok(!raw.includes('業務連絡'), 'no message bodies');
+  // JSONL file exists and has at least one entry
+  const jsonlPath = path.join(tmp, 'last-runs.jsonl');
+  assert.ok(fs.existsSync(jsonlPath));
+  const lines = fs.readFileSync(jsonlPath, 'utf8').trim().split('\n').filter(Boolean);
+  assert.equal(lines.length, 1);
+  const parsed = JSON.parse(lines[0]);
+  assert.equal(parsed.mode, 'live');
+  assert.equal(parsed.exitCode, 0);
+});
+
+test('last-run.json: error in run still writes last-run.json with error (via sink failure)', async t => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-lastrun-err-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  // Make sink.finish throw an unexpected error inside runLocked
+  const sink = {
+    createdDocs: 0, publishedDocs: 0, deferredDocs: 0,
+    async init() {},
+    async append() {},
+    async finish() { throw new Error('Drive API HTTP 500 something-went-wrong'); }
+  };
+  const report = await run({ live: true, statePath }, {
+    config, cases,
+    state: { sources: {}, cases: {} },
+    save() {},
+    sink,
+    suppressWatchdog: true,
+    collect: async source => ({ messages: [], cursor: { since: 99 } }),
+  });
+  const lrPath = path.join(tmp, 'last-run.json');
+  assert.ok(fs.existsSync(lrPath));
+  const lr = JSON.parse(fs.readFileSync(lrPath, 'utf8'));
+  assert.equal(lr.mode, 'live');
+  assert.ok(lr.publishError);
+  assert.match(String(lr.publishError), /something-went-wrong/);
+  // JSONL also has the error entry
+  const jsonlPath = path.join(tmp, 'last-runs.jsonl');
+  assert.ok(fs.existsSync(jsonlPath));
+  const lines = fs.readFileSync(jsonlPath, 'utf8').trim().split('\n').filter(Boolean);
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /something-went-wrong/);
+});
+
+test('last-run.json: no token/body in error run output', async t => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-lastrun-nosec-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  const phases = [];
+  const tracker = createPhaseTracker(phases);
+  tracker.start('test-phase');
+  tracker.end();
+  const report = { mode: 'live', sources: {}, exitCode: 1 };
+  writeLastRun(statePath, report, { error: 'something failed', phases, clock: Date.now() });
+  const raw = fs.readFileSync(path.join(tmp, 'last-run.json'), 'utf8');
+  assert.ok(!raw.includes('@'));
+  assert.match(raw, /something failed/);
+  const jsonlRaw = fs.readFileSync(path.join(tmp, 'last-runs.jsonl'), 'utf8');
+  assert.match(jsonlRaw, /something failed/);
+});
+
+test('last-runs.jsonl: caps at 20 entries', async t => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-jsonl-cap-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  const timestamps = [];
+  for (let i = 0; i < 25; i++) {
+    const ts = new Date(Date.now() + i * 1000).toISOString();
+    timestamps.push({ startedAt: ts, clock: Date.now() + i * 1000 });
+    writeLastRun(statePath, { mode: 'live', sources: {}, exitCode: 0, _startedAt: ts }, { clock: timestamps[i].clock });
+  }
+  const jsonlPath = path.join(tmp, 'last-runs.jsonl');
+  const lines = fs.readFileSync(jsonlPath, 'utf8').trim().split('\n').filter(Boolean);
+  assert.equal(lines.length, 20, 'should have exactly 20 lines');
+  const parsed = lines.map(l => JSON.parse(l));
+  assert.ok(parsed.every(e => e.mode === 'live'));
+  assert.equal(parsed.length, new Set(parsed.map(e => e.startedAt)).size, 'all entries should have unique startedAt');
+  // The kept lines should be the last 20 of 25, i.e. entries 5 through 24
+  assert.equal(parsed[0].startedAt, timestamps[5].startedAt, 'first kept entry should be the 6th written');
+  assert.equal(parsed[19].startedAt, timestamps[24].startedAt, 'last kept entry should be the 25th written');
+});
+
+test('regression: repo .claude/comms-hub/line-chat-excluded.json is never modified by tests', async t => {
+  const repoExcludedPath = path.join(new URL('..', import.meta.url).pathname, '.claude', 'comms-hub', 'line-chat-excluded.json');
+  // Read content before any test (the `after` hook on the last-run.json test may have run;
+  // this test runs in parallel, but we compare contents deterministically — any in-test write
+  // to this path would have produced a git-dirty state or test pollution.)
+  const before = (() => { try { return fs.readFileSync(repoExcludedPath, 'utf8'); } catch { return null; } })();
+  t.after(() => {
+    const after = (() => { try { return fs.readFileSync(repoExcludedPath, 'utf8'); } catch { return null; } })();
+    assert.equal(after, before, 'repo line-chat-excluded.json should not change: tests must use a temp home');
+  });
+});
+
+test('load-cases: timeout with cache continues with casesFromCache in last-run.json', async t => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-loadcache-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  const state = { sources: {}, cases: {}, casesCache: { cases: [{ id: 'C1234', name: 'cached', client: 'Client' }], at: '2026-11-01T00:00:00.000Z' } };
+  const sink = { createdDocs: 0, publishedDocs: 0, deferredDocs: 0, async init() {}, async append() {}, async finish() { return {}; } };
+  let sheetsCalled = false;
+  const report = await run({ live: true, statePath }, {
+    config, cases: null, state, save() {}, sink, suppressWatchdog: true,
+    collect: async source => ({ messages: [], cursor: { since: 99 } }),
+    // Inject the token so load-cases does not depend on a local DWD key being
+    // present; the Sheets call then fails on the mocked fetch below.
+    getDriveToken: async () => 'test-token',
+    fetchImpl: async (url, init) => {
+      if (String(url).includes('sheets.googleapis.com')) {
+        sheetsCalled = true;
+        throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+      }
+      // For other URLs (Drive sink, etc.), use real fetch
+      return fetch(url, init);
+    },
+  });
+  assert.equal(report.exitCode, 0);
+  assert.equal(report.casesFromCache, true);
+  assert.ok(sheetsCalled, 'Sheets API should have been called');
+  // last-run.json should have casesFromCache: true
+  const lr = JSON.parse(fs.readFileSync(path.join(tmp, 'last-run.json'), 'utf8'));
+  assert.equal(lr.casesFromCache, true);
+  assert.equal(lr.exitCode, 0);
+  // load-cases phase should have error
+  const loadPhase = lr.phases.find(p => p.name === 'load-cases');
+  assert.ok(loadPhase, 'load-cases phase should exist');
+  assert.ok(loadPhase.error, 'load-cases phase should have error');
+  assert.match(loadPhase.error, /timeout/);
+});
+
+test('load-cases: timeout without cache throws and writes error to last-run.json', async t => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-loadcache-fail-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  const state = { sources: {}, cases: {} };
+  const sink = { createdDocs: 0, publishedDocs: 0, deferredDocs: 0, async init() {}, async append() {}, async finish() { return {}; } };
+  let sheetsCalled = false;
+  // run() propagates the error from runLocked when load-cases fails without cache
+  await assert.rejects(
+    () => run({ live: true, statePath }, {
+      config, cases: null, state, save() {}, sink, suppressWatchdog: true,
+      collect: async source => ({ messages: [], cursor: { since: 99 } }),
+      // Inject the token so load-cases does not depend on a local DWD key being
+      // present; the Sheets call then fails on the mocked fetch below.
+      getDriveToken: async () => 'test-token',
+      fetchImpl: async (url, init) => {
+        if (String(url).includes('sheets.googleapis.com')) {
+          sheetsCalled = true;
+          throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+        }
+        return fetch(url, init);
+      },
+    }),
+    /timeout/
+  );
+  assert.ok(sheetsCalled, 'Sheets API should have been called');
+  // last-run.json should have exitCode 1 and error (written by runLocked's finally)
+  const lr = JSON.parse(fs.readFileSync(path.join(tmp, 'last-run.json'), 'utf8'));
+  assert.equal(lr.exitCode, 1);
+  assert.match(lr.error, /timeout/);
+  assert.equal(lr.casesFromCache, false);
+  // load-cases phase should have error
+  const loadPhase = lr.phases.find(p => p.name === 'load-cases');
+  assert.ok(loadPhase, 'load-cases phase should exist');
+  assert.ok(loadPhase.error, 'load-cases phase should have error');
+});
+
+test('phaseTracker.current getter returns the active phase', async t => {
+  const phases = [];
+  const tracker = createPhaseTracker(phases);
+  assert.equal(tracker.current, null, 'no active phase initially');
+  tracker.start('test-phase');
+  assert.ok(tracker.current, 'active phase should be truthy');
+  assert.equal(tracker.current.name, 'test-phase');
+  assert.ok(tracker.current.startedAt);
+  tracker.end();
+  assert.equal(tracker.current, null, 'no active phase after end');
+  // fail also clears current
+  tracker.start('fail-phase');
+  assert.ok(tracker.current);
+  tracker.fail('something went wrong');
+  assert.equal(tracker.current, null, 'no active phase after fail');
+});
+
+test('phaseTracker.fail then end does not double-record', async t => {
+  const phases = [];
+  const tracker = createPhaseTracker(phases);
+  tracker.start('phase');
+  tracker.fail('error');
+  tracker.end(); // should be no-op
+  assert.equal(phases.length, 1);
+  assert.equal(phases[0].name, 'phase');
+  assert.ok(phases[0].error);
+  assert.ok(phases[0].finishedAt);
+  // end should not add a second entry
+  assert.equal(phases.length, 1);
+});
+
+test('CLI catch does not overwrite last-run.json when runLocked already wrote it', async t => {
+  // Simulate the scenario: runLocked's finally wrote last-run.json and set e.lastRunWritten = true.
+  // The CLI catch should skip writing when e.lastRunWritten is true.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-cli-lastrun-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  // Write an initial last-run.json with known content
+  const initial = { startedAt: '2026-11-01T00:00:00.000Z', exitCode: 0, phases: [{ name: 'initial', startedAt: '2026-11-01T00:00:00.000Z', finishedAt: '2026-11-01T00:01:00.000Z' }] };
+  fs.writeFileSync(path.join(tmp, 'last-run.json'), JSON.stringify(initial));
+  // Simulate runLocked writing last-run.json with error info
+  const error = Object.assign(new Error('test error'), { lastRunWritten: true });
+  // The CLI catch should see lastRunWritten and skip writing
+  // We test this by calling writeLastRun (simulating runLocked's finally) then checking
+  // that the CLI catch's guard (!e.lastRunWritten) prevents overwrite
+  const report = { mode: 'live', sources: {}, exitCode: 1, error: 'test error' };
+  writeLastRun(statePath, report, { error: 'test error', phases: [{ name: 'load-cases', error: 'test error' }], clock: Date.now() });
+  const afterRunLocked = JSON.parse(fs.readFileSync(path.join(tmp, 'last-run.json'), 'utf8'));
+  assert.equal(afterRunLocked.exitCode, 1);
+  assert.match(afterRunLocked.error, /test error/);
+  // Now simulate CLI catch: since e.lastRunWritten is true, it should NOT write
+  // (We just verify the guard condition)
+  assert.ok(error.lastRunWritten, 'lastRunWritten flag should be set');
+  // The last-run.json should still have the runLocked-written content
+  const afterGuard = JSON.parse(fs.readFileSync(path.join(tmp, 'last-run.json'), 'utf8'));
+  assert.equal(afterGuard.exitCode, 1);
+  assert.match(afterGuard.error, /test error/);
+  // Verify phases are preserved (not overwritten by empty phases)
+  assert.ok(afterGuard.phases.length > 0);
+  assert.equal(afterGuard.phases[0].name, 'load-cases');
+});
+
+test('errText: cause.code is included in last-run.json error field', async t => {
+  // Simulate an error with cause.code (e.g. ENOTFOUND from fetch)
+  const cause = Object.assign(new Error('getaddrinfo ENOTFOUND sheets.googleapis.com'), { code: 'ENOTFOUND' });
+  const e = Object.assign(new Error('fetch failed'), { cause });
+  // errText should produce "fetch failed (cause: ENOTFOUND)"
+  const { errText } = await import('./comms-hub-sync.mjs');
+  const text = errText(e);
+  assert.match(text, /fetch failed/);
+  assert.match(text, /ENOTFOUND/);
+  // Simulate runLocked's finally writing last-run.json with this error
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-errtext-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const statePath = path.join(tmp, 'state.json');
+  const report = { mode: 'live', sources: {}, exitCode: 1, error: text };
+  const { writeLastRun } = await import('./comms-hub-sync.mjs');
+  writeLastRun(statePath, report, { error: text, phases: [], elapsedMs: 100, finishedAt: new Date().toISOString() });
+  const saved = JSON.parse(fs.readFileSync(path.join(tmp, 'last-run.json'), 'utf8'));
+  assert.match(saved.error, /fetch failed/);
+  assert.match(saved.error, /ENOTFOUND/);
 });

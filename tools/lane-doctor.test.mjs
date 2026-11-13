@@ -3,9 +3,19 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, nativeWriteProbeArgs } from './lane-doctor.mjs';
+import { laneDoctorQuick, laneDoctorProbe, atomicJson, notificationText, freshProbe, summarize, needsNativeCodexProbe, nativeWriteProbeArgs, directGeminiCliState } from './lane-doctor.mjs';
 import { classifyTaskKind } from './lib/task-kind.mjs';
 const now = Date.parse('2026-10-08T06:00:00Z');
+
+test('gemini-cli は Gemini の OpenRouter 代替表示を継承しない', () => {
+  const state = directGeminiCliState({ alive: false, reason: 'billing', via: 'openrouter' }, true);
+  assert.deepEqual(state, { alive: false, reason: 'billing' });
+  const health = { ts: new Date(now).toISOString(), lanes: { gemini: { alive: false, reason: 'billing', via: 'openrouter' }, 'gemini-cli': state, openrouter: { alive: true, reason: 'probe_ok' } }, deadNeedsUser: [], repairs: [], errors: [] };
+  assert.match(summarize(health), /gemini ✅\(OpenRouter経由\)/);
+  assert.match(summarize(health), /gemini-cli ❌\(billing\)/);
+  assert.doesNotMatch(summarize(health), /gemini-cli ✅\(OpenRouter経由\)/);
+});
+
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-doctor-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -200,10 +210,22 @@ test('unprobed configuration remains distinct and equal-time limits are supersed
 });
 
 test('Gemini billing notification includes official steps, account, outcome and fallback', t => {
-  const text = notificationText({provider:'gemini',reason:'dead:payment_required'},fixture(t));
-  for (const expected of ['https://aistudio.google.com/billing','kim@orgiast.jp','個人 Gmail','シークレットウィンドウ','右上アバター','Available credits','Setup auto-reload','Manage auto-reload','支払い方法・補充額・最低残高しきい値','monthly auto-charge limit','保存','0 より大きく','03:00','次セッション開始','gemini ✅','キー所有アカウントが別','Gemini まだ 402']) assert.ok(text.includes(expected), expected);
+  const text = notificationText({provider:'gemini',reason:'billing',error:'HTTP 402 Your prepayment credits are depleted'},fixture(t));
+  for (const expected of ['https://aistudio.google.com/billing','seisaku-team@orgiast.jp','TrackPlanner','個人 Gmail','シークレットウィンドウ','右上アバター','前払いクレジットが 0','Setup auto-reload（上限付き）','Available credits','Manage auto-reload','支払い方法・補充額・最低残高しきい値','monthly auto-charge limit','保存','0 より大きく','03:00','次セッション開始','gemini ✅','キー所有アカウントが別','Gemini まだ 402']) assert.ok(text.includes(expected), expected);
   assert.match(text,/\n根拠: https:\/\/ai.google.dev\/gemini-api\/docs\/billing$/);
 });
+test('needsNativeCodexProbe is win32-only and follows the WSL distro listing', () => {
+  // 非 win32 は常に false（WSL 経路があるので --allow-native は不要）。
+  assert.equal(needsNativeCodexProbe({ platform: 'linux', env: {}, spawn: () => { throw new Error('must not spawn'); } }), false);
+  // 注入値は実機を見ずに分岐を固定できる（テストを非決定的にしない）。
+  assert.equal(needsNativeCodexProbe({ platform: 'win32', env: { LANE_DOCTOR_WSL_PROBE: 'absent' } }), true);
+  assert.equal(needsNativeCodexProbe({ platform: 'win32', env: { LANE_DOCTOR_WSL_PROBE: 'present' } }), false);
+  // wsl -l -q の status!=0（WSL 無効）または distro 0 件は native 経路。
+  assert.equal(needsNativeCodexProbe({ platform: 'win32', env: {}, spawn: () => ({ status: 1, stdout: '' }) }), true);
+  assert.equal(needsNativeCodexProbe({ platform: 'win32', env: {}, spawn: () => ({ status: 0, stdout: '\u0000\r\n' }) }), true);
+  assert.equal(needsNativeCodexProbe({ platform: 'win32', env: {}, spawn: () => ({ status: 0, stdout: 'Ubuntu\r\n' }) }), false);
+});
+
 
 test('最新 probe 失敗は過去の成功で復活しない', t => {
   const h=fixture(t), stamp=new Date(now-4*86400000).toISOString();
@@ -216,9 +238,39 @@ test('WSL 不在の書き込み修復成功と quick 表示',async t=>{
   assert.equal(calls,1);assert.equal(r.lanes.codex.reason,'native_ok');assert.equal(r.lanes.codex.alive,true);assert.ok(r.repairs.some(r=>typeof r==='string'&&r.includes('ネイティブ')));assert.match(summarize(laneDoctorQuick({home:h,now:now+1000})),/修復:.*ネイティブ/);
 });
 test('ネイティブ修復失敗は操作を1件通知し24h抑止',async t=>{
-  const h=fixture(t);let calls=0;const opts={home:h,now,platform:'win32',listWsl:()=>'',nativeWriteProbe:async()=>({code:1}),probe:async()=>({code:0,text:'PONG'}),notify:async text=>{calls++;assert.match(text,/原因:.*試した修復:.*残る操作:/);return {delivered:'dm'};}};
+  const h=fixture(t);let calls=0;const opts={home:h,now,platform:'win32',listWsl:()=>'',nativeWriteProbe:async()=>({code:1,text:'writing is blocked by read-only sandbox'}),probe:async()=>({code:0,text:'PONG'}),notify:async text=>{calls++;assert.match(text,/原因:.*試した修復:.*残る操作:/);return {delivered:'dm'};}};
   const r=await laneDoctorProbe(opts);assert.equal(r.deadNeedsUser.filter(x=>x.provider==='codex').length,1);assert.match(r.deadNeedsUser.find(x=>x.provider==='codex').fix,/wsl.exe --install --no-distribution/);
   await laneDoctorProbe({platform: 'linux',...opts,now:now+60000});assert.equal(calls,1);
+});
+test('ネイティブ書き込み probe の一過性失敗は再試行で吸収し通知しない(2026-11-07 誤通知)',async t=>{
+  const h=fixture(t);let calls=0;const opts={home:h,now,platform:'win32',listWsl:()=>'',nativeWriteProbe:async()=>{calls++;return calls===1?{code:1,text:'起動失敗'}:{code:0};},probe:async()=>({code:0,text:'PONG'}),notify:async()=>({delivered:'dm'})};
+  const r=await laneDoctorProbe(opts);assert.equal(calls,2);assert.equal(r.lanes.codex.alive,true);assert.equal(r.lanes.codex.reason,'native_ok');assert.equal(r.deadNeedsUser.filter(x=>x.provider==='codex').length,0);
+});
+test('ネイティブ書き込み probe のタイムアウトは再試行せず物理操作を通知しない',async t=>{
+  const h=fixture(t);let calls=0;const sent=[];
+  const r=await laneDoctorProbe({home:h,now,platform:'win32',providers:['codex'],listWsl:()=>'',nativeWriteProbe:async()=>{calls++;return {code:1,timedOut:true,text:'タイムアウト(180s)'};},probe:async()=>({code:0,text:'PONG'}),notify:async text=>{sent.push(text);return {delivered:'dm'};}});
+  assert.equal(calls,1);assert.equal(r.lanes.codex.reason,'probe_failed:timeout');assert.equal(r.lanes.codex.userFix,undefined);assert.ok(sent.every(text=>!text.includes('wsl')));
+});
+test('ネイティブ書き込み probe は全失敗本文を残す',async t=>{
+  const h=fixture(t);let calls=0;
+  const r=await laneDoctorProbe({home:h,now,platform:'win32',providers:['codex'],listWsl:()=>'',nativeWriteProbe:async()=>({code:1,text:++calls===1?'A':'B'}),probe:async()=>({code:0,text:'PONG'}),notify:async()=>({delivered:'dm'})});
+  assert.equal(calls,2);assert.match(r.lanes.codex.error,/1回目: A/);assert.match(r.lanes.codex.error,/2回目: B/);
+});
+test('ネイティブ書き込み probe の各試行は共有予算でなく専用 timeout を使う',async t=>{
+  const h=fixture(t),timeouts=[];
+  await laneDoctorProbe({home:h,now,platform:'win32',providers:['codex'],budgetMs:10,nativeTimeoutMs:12345,listWsl:()=>'',nativeWriteProbe:async({timeoutMs})=>{timeouts.push(timeoutMs);return {code:1,text:'A'};},probe:async()=>({code:0,text:'PONG'}),notify:async()=>({delivered:'dm'})});
+  assert.deepEqual(timeouts,[12345,12345]);
+});
+test('read-only sandbox の native 失敗だけは physical_operation に分類する',async t=>{
+  const h=fixture(t);
+  const r=await laneDoctorProbe({home:h,now,platform:'win32',providers:['codex'],listWsl:()=>'',nativeWriteProbe:async()=>({code:1,text:'writing is blocked by read-only sandbox'}),probe:async()=>({code:0,text:'PONG'}),notify:async()=>({delivered:'dm'})});
+  assert.equal(r.lanes.codex.reason,'dead:physical_operation');
+});
+test('danger-full-access のログを含む一般失敗は physical_operation に分類しない',async t=>{
+  const h=fixture(t);
+  const r=await laneDoctorProbe({home:h,now,platform:'win32',providers:['codex'],listWsl:()=>'',nativeWriteProbe:async()=>({code:1,text:'sandbox: danger-full-access\nsome other error'}),probe:async()=>({code:0,text:'PONG'}),notify:async()=>({delivered:'dm'})});
+  assert.equal(r.lanes.codex.reason,'probe_failed');
+  assert.equal(r.lanes.codex.tried,undefined);
 });
 test('glm cooldown and explicitly tagged legacy history cannot block healthy Codex', t => {
   const h = fixture(t), until = now + 3600000;
@@ -248,4 +300,106 @@ test('all live lanes do not require repair or add a stop line', t => {
   const r = laneDoctorQuick({ home: h, now, save: false });
   assert.equal(r.repairFirst.required, false);
   assert.doesNotMatch(summarize(r), /🛑/);
+});
+
+test('missing Gemini key uses live OpenRouter without requiring repair', t => {
+  const h = fixture(t);
+  fs.unlinkSync(path.join(h, '.claude/gemini.env'));
+  const r = laneDoctorQuick({ home: h, now, save: false });
+  assert.deepEqual(r.substituted, [{ provider: 'gemini', via: 'openrouter' }]);
+  assert.equal(r.lanes.gemini.via, 'openrouter');
+  assert.ok(r.askOrder.includes('gemini'));
+  assert.equal(r.repairFirst.required, false);
+  assert.doesNotMatch(summarize(r), /🛑/);
+  assert.match(summarize(r), /gemini ✅\(OpenRouter経由\)/);
+});
+
+test('missing Gemini key remains a repair stop when OpenRouter is dead', t => {
+  const h = fixture(t);
+  fs.unlinkSync(path.join(h, '.claude/gemini.env'));
+  fs.unlinkSync(path.join(h, '.claude/openrouter.env'));
+  const r = laneDoctorQuick({ home: h, now, save: false });
+  assert.ok(!r.substituted.some(({ provider }) => provider === 'gemini'));
+  assert.ok(r.repairFirst.reasons.some(reason => reason.split(':')[1]?.split(',').includes('gemini')));
+  assert.equal(r.repairFirst.required, true);
+  assert.match(summarize(r), /🛑/);
+});
+
+test('WSL-only auth configures Codex, probes it, and supplies notification account', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  const token = `x.${Buffer.from(JSON.stringify({ email: 'wsl@example.com' })).toString('base64url')}.x`;
+  const spawnImpl = (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: token } }) });
+  const options = { home, now, platform: 'win32', spawnImpl };
+  assert.equal(laneDoctorQuick({ ...options, save: false }).lanes.codex.reason, 'configured:unprobed');
+  const calls = [], sent = [];
+  const result = await laneDoctorProbe({ ...options, listWsl: () => 'Ubuntu', probe: async (provider, opts) => {
+    if (provider === 'codex') calls.push(opts.dryRun === true);
+    return provider === 'codex' && !opts.dryRun ? { code: 1, text: 'HTTP 401' } : { code: 0, text: 'PONG' };
+  }, notify: async text => { sent.push(text); return { delivered: 'test' }; } });
+  assert.deepEqual(calls, [true, false]);
+  assert.equal(result.lanes.codex.reason, 'dead:oauth_consent');
+  assert.ok(sent.some(text => text.includes('**wsl@example.com**')));
+});
+
+test('provider selection probes only Codex using WSL-only auth', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  const calls = [];
+  const result = await laneDoctorProbe({ home, now, platform: 'win32', providers: ['codex'],
+    spawnImpl: (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: 'fixture-token' } }) }),
+    listWsl: () => 'Ubuntu', probe: async (provider, options) => {
+      calls.push([provider, options.dryRun === true]);
+      return { code: 0, text: 'PONG' };
+    }, notify: async () => ({ delivered: 'test' }) });
+  assert.deepEqual(calls, [['codex', true], ['codex', false]]);
+  assert.equal(result.lanes.codex.reason, 'auth_ok:probe_ok');
+  assert.equal(result.lanes.deepseek.reason, 'configured:unprobed');
+});
+
+test('missing Windows and WSL auth skips Codex probe with oauth_consent', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  const result = await laneDoctorProbe({ home, now, platform: 'win32', spawnImpl: () => ({ status: 1 }),
+    probe: async provider => { assert.notEqual(provider, 'codex'); return { code: 0, text: 'PONG' }; },
+    notify: async () => ({ delivered: 'test' }), listWsl: () => 'Ubuntu' });
+  assert.equal(result.lanes.codex.reason, 'dead:oauth_consent');
+});
+
+test('WSL Codex recovery stays healthy despite eleven pre-login failures', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  fs.writeFileSync(path.join(home, '.claude/executor-usage.jsonl'), Array.from({ length: 11 }, () => JSON.stringify({ provider: 'codex', t: now - 1000, status: 'error', reason: 'HTTP 401' })).join('\n'));
+  const options = { home, now, platform: 'win32', spawnImpl: (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: 'fixture-token' } }) }) };
+  const result = await laneDoctorProbe({ ...options, listWsl: () => 'Ubuntu', probe: async () => ({ code: 0, text: 'PONG' }), notify: async () => ({ delivered: 'test' }) });
+  assert.equal(result.lanes.codex.alive, true);
+  assert.equal(result.lanes.codex.reason, 'auth_ok:probe_ok');
+  assert.equal(laneDoctorQuick({ ...options, now: now + 1000, save: false }).lanes.codex.alive, true);
+});
+
+test('codex dry-probe timeout falls through to full probe instead of probe_failed', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  const calls = [];
+  const result = await laneDoctorProbe({ home, now, platform: 'win32', providers: ['codex'],
+    spawnImpl: (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: 'fixture-token' } }) }),
+    listWsl: () => 'Ubuntu', probe: async (provider, options) => {
+      if (provider === 'codex') calls.push(options.dryRun === true);
+      // dry は15秒上限のタイムアウト(code 1)。本番 probe は残り予算で PONG を返す（2026-11-06 実測と同じ形）。
+      return provider === 'codex' && options.dryRun ? { code: 1, text: '' } : { code: 0, text: 'PONG' };
+    }, notify: async () => ({ delivered: 'test' }) });
+  assert.deepEqual(calls, [true, false]);
+  assert.equal(result.lanes.codex.alive, true);
+  assert.equal(result.lanes.codex.reason, 'auth_ok:probe_ok');
+});
+
+test('codex dry failure with real 401 still classifies oauth_consent', async t => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.codex/auth.json'), '{}');
+  const result = await laneDoctorProbe({ home, now, platform: 'win32', providers: ['codex'],
+    spawnImpl: (_, args) => ({ status: 0, stdout: args[0] === '-l' ? 'Ubuntu' : JSON.stringify({ tokens: { id_token: 'fixture-token' } }) }),
+    listWsl: () => 'Ubuntu', probe: async (provider, options) => provider === 'codex' && options.dryRun ? { code: 1, text: '' } : { code: 1, text: 'HTTP 401 unauthorized' },
+    notify: async () => ({ delivered: 'test' }) });
+  assert.equal(result.lanes.codex.alive, false);
+  assert.equal(result.lanes.codex.reason, 'dead:oauth_consent');
 });

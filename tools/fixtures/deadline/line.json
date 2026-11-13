@@ -1,0 +1,4 @@
+[
+  {"source":"LINE","sourceRef":"line:fixture:reply","date":"2026-11-03T02:00:00Z","text":"金様、協業について明日までに回答をお願いします。","url":"https://example.invalid/line"},
+  {"source":"LINE","sourceRef":"line:fixture:week","date":"2026-11-03T02:00:00Z","text":"田中様、1週間以内に資料を提出してください。","url":"https://example.invalid/line"}
+]

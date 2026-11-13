@@ -17,9 +17,18 @@ export function discoverGates(dir = toolsDir) {
   for (const m of runner.matchAll(/from ['"]\.\/([^'"]+(?:gate|guard))\.mjs['"]/g)) names.add(m[1]);
   const registration = fs.readFileSync(path.join(dir, 'register-hooks.mjs'), 'utf8');
   for (const m of registration.matchAll(/add\(settings\.hooks\.(?:PreToolUse|Stop), '([^']+)\.mjs'/g)) names.add(m[1]);
+  // Registration now lives in the dispatch manifest. Keep gates which emit a
+  // denial through a helper or exitCode=2 in the contract/readonly test corpus.
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'hook-dispatch-manifest.json'), 'utf8'));
+    for (const event of ['PreToolUse', 'Stop']) for (const hook of manifest.events?.[event] || []) {
+      const file = [...String(hook.command).matchAll(/"([^"\r\n]+\.mjs)"/g)].at(-1)?.[1];
+      if (file) names.add(path.posix.basename(file.replace(/\\/g, '/'), '.mjs'));
+    }
+  } catch { /* older or partially synchronized trees still use the registrar */ }
   // Detect a new deny hook even if its author forgot both registries.
   for (const entry of fs.readdirSync(dir)) {
-    if (!entry.endsWith('.mjs') || /\.test\.mjs$/.test(entry) || /gate-(?:contracts|runtime|hook-runner)/.test(entry)) continue;
+    if (!entry.endsWith('.mjs') || /\.test\.mjs$/.test(entry) || /gate-(?:contracts|runtime|hook-runner)|hook-dispatch/.test(entry)) continue;
     const source = fs.readFileSync(path.join(dir, entry), 'utf8');
     if (/permissionDecision\s*:\s*['"]deny|decision\s*:\s*['"]block/.test(source)
       && /hook|gate|guard|detector/i.test(source)) names.add(entry.slice(0, -4));

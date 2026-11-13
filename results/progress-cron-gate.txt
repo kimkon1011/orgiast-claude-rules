@@ -1,0 +1,59 @@
+progress-cron-gate 実装結果 (2026-11-04)
+
+作業場所: /tmp/fix-progress-cron-gate
+ブランチ: fix/progress-cron-gate
+基点: local main 80c70e79
+元の nightly-repo の .git は読み取り専用で worktree add が失敗したため、
+/tmp/progress-cron-repo にローカル clone を作り、その main から worktree を作成。
+元の nightly-repo の追跡ファイルは編集していない。push / PR は実施していない。
+
+変更ファイル:
+- tools/progress-cron-gate.mjs: 全 transcript の CronCreate tool_use、最後の assistant のフッター、非対話・subagent 除外、セッションごとの初回 block、CLI exit 2。
+- tools/progress-cron-gate.test.mjs: 要求された5条件、履歴全体・偽の呼び出し・subagent・entrypoint・CLI・runner・登録の統合テスト。
+- tools/stop-gate-runner.mjs: 集約 Stop 評価への追加。
+- tools/register-hooks.mjs: 単独登録から集約 runner への移行。
+- tools/register-hooks.test.mjs: 移行対象に新ゲートを追加。
+- tools/gate-runtime.mjs: 全PCで初回から deny にする明示ポリシー。
+- tools/gate-rollout-manifest.json: deny ポリシー登録。
+- tools/gate-contract.test.mjs: 明示ポリシーの検証。
+- tools/gate-remedies.md: CronCreate の修復手順と状態保存先。
+- results/progress-cron-gate.txt: 本結果。
+
+登録経路:
+各PCでリポジトリ同期 → tools/setup.mjs --converge → register-hooks.mjs --hooks-only
+→ settings.json の Stop: stop-gate-runner.mjs → evaluateProgressCron。
+個別 progress-cron-gate.mjs の既存登録は runner 1本へ移行する。
+GATE_CONTRACT と gate-rollout-manifest + gate-runtime の即時 deny により、
+新規・非pilot PCでも warn への降格を避ける。
+状態は既存 Stop 状態と同じ ~/.claude 配下の progress-cron-gate-state/<session hash>.json。
+排他的作成で同時 Stop も含め同一セッションの block を1回に制限する。
+全PCへの実配布は監督の push / merge と各PC同期後。
+
+テスト (cwd=/tmp/fix-progress-cron-gate、Linux Node v24.21.0):
+1. node --test --test-isolation=none --test-skip-pattern='register-hooks converges' tools/progress-cron-gate.test.mjs tools/gate-contract.test.mjs
+   exit 0、出力末尾:
+   tests 81 / suites 0 / pass 81 / fail 0 / cancelled 0 / skipped 0 / todo 0
+   duration_ms 2510.892438
+   登録の統合テスト1件は名前フィルターで除外。Node の集計には含まれない。
+   CLI の exit 2→0→0 はファイル標準入出力を使った別プロセスで検証済み。
+2. node --test --test-isolation=none tools/progress-cron-gate.test.mjs tools/gate-contract.test.mjs
+   登録の統合テストが失敗:
+   [注意] 設定登録に失敗: spawnSync /usr/bin/node EPERM
+   register-hooks が --expected-json 子プロセスを起動する箇所で sandbox 制限。
+3. node tools/register-hooks.test.mjs
+   tests 26 / pass 0 / fail 26
+   出力末尾: code: EPERM, syscall: spawnSync /usr/bin/node,
+   spawnargs: [ '/tmp/fix-progress-cron-gate/tools/register-hooks.mjs', '--hooks-only' ]
+4. node --test --test-reporter=tap tools/progress-cron-gate.test.mjs tools/register-hooks.test.mjs tools/gate-contract.test.mjs tools/stop-gate-runner.test.mjs
+   初期実行は tests 4 / pass 1 / fail 3。子プロセスの pipe 通信が EPERM。
+   修正後のゲート・契約検証は項目1、登録の制限は項目2・3に分離。
+5. node.exe -p 'process.platform'
+   exit 1:
+   WSL ERROR: UtilBindVsockAnyPort:317: socket failed 1
+   Windows Node 起動自体が失敗したため、指定された Windows の node --test と
+   関連 register-hooks テストの成功確認は未完。
+6. git diff --check
+   exit 0、出力なし。
+
+残る検証: Windows 環境で node --test tools/progress-cron-gate.test.mjs
+および node --test tools/register-hooks.test.mjs を実行する。

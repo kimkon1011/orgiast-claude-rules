@@ -4,6 +4,73 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Japan Exhibition Application | Trade Show Intake Portal</title>
+  <meta name="description" content="Bilingual browser-based intake and consultation tool for overseas companies planning to exhibit at trade shows in Japan.">
+  <meta name="application-name" content="Japan Trade Show Intake">
+  <meta name="author" content="Orgiast">
+  <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large">
+  <link rel="canonical" href="./">
+  <link rel="alternate" type="text/markdown" href="index.md" title="AI-readable application overview">
+  <link rel="help" href="faq.html" title="Frequently asked questions">
+  <link rel="author" href="research.html" title="Research and source notes">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Japan Exhibition Application | Trade Show Intake Portal">
+  <meta property="og:description" content="Plan a trade show exhibit in Japan with a bilingual intake form for booth, staffing, logistics, and promotional requirements.">
+  <meta property="og:url" content="./">
+  <meta property="og:locale" content="en_US">
+  <meta property="og:locale:alternate" content="ja_JP">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Japan Trade Show Intake">
+  <meta name="twitter:description" content="Bilingual intake tool for overseas exhibitors planning trade show participation in Japan.">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebApplication",
+        "@id": "./#application",
+        "name": "Japan Trade Show Intake",
+        "alternateName": "Japan Exhibition Application",
+        "description": "A bilingual browser-based intake and consultation tool for overseas companies planning to exhibit at trade shows in Japan.",
+        "url": "./",
+        "applicationCategory": "BusinessApplication",
+        "operatingSystem": "Any operating system with a modern web browser",
+        "browserRequirements": "Requires JavaScript, ES modules, and localStorage",
+        "inLanguage": ["en", "ja"],
+        "isAccessibleForFree": true,
+        "featureList": [
+          "English and Japanese interface",
+          "Exhibition requirement intake",
+          "Local application status management",
+          "CSV and Markdown export"
+        ],
+        "privacyPolicy": "index.md#privacy-and-data-handling"
+      },
+      {
+        "@type": "FAQPage",
+        "@id": "faq.html#faq",
+        "url": "faq.html",
+        "inLanguage": "en",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "Does submitting the form send my application to an organizer?",
+            "acceptedAnswer": {"@type": "Answer", "text": "No. This version stores entries only in the current browser's localStorage and does not send data to an external server."}
+          },
+          {
+            "@type": "Question",
+            "name": "Which languages are supported?",
+            "acceptedAnswer": {"@type": "Answer", "text": "The user interface supports English and Japanese."}
+          },
+          {
+            "@type": "Question",
+            "name": "Can application data be exported?",
+            "acceptedAnswer": {"@type": "Answer", "text": "Yes. Entries can be copied or downloaded as CSV, or copied as Markdown."}
+          }
+        ]
+      }
+    ]
+  }
+  </script>
   <style>
     :root {
       --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -414,6 +481,18 @@
     .hidden {
       display: none !important;
     }
+
+    .resource-links {
+      text-align: center;
+      color: var(--color-text-muted);
+      font-size: 0.875rem;
+      margin-top: 0.5rem;
+    }
+
+    .resource-links a {
+      color: var(--color-primary);
+      margin: 0 0.4rem;
+    }
   </style>
 </head>
 <body>
@@ -622,6 +701,12 @@
         <button type="button" class="btn btn-secondary btn-sm" id="btnCopyMd">Copy Markdown</button>
       </div>
     </div>
+
+    <nav class="resource-links" aria-label="About this service">
+      <a href="faq.html">FAQ</a>
+      <a href="research.html">Research &amp; source notes</a>
+      <a href="index.md" type="text/markdown">Markdown overview</a>
+    </nav>
 
   </main>
 

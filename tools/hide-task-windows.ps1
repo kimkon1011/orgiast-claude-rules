@@ -64,6 +64,12 @@ foreach ($task in $tasks) {
   if ($complex -and -not $needs) { $skipped++; Write-Host "skip(引用符入り引数・手動確認): $name"; continue }
   if (-not $needs) { continue }
   if ($Dry) { $changed++; Write-Host "dry: 隠し起動へ変更予定: $name"; continue }
+  # RunLevel=Highest のタスクは昇格していない夜間バッチからは変更できず Set-ScheduledTask が
+  # "Access is denied" で落ちる。毎晩「失敗」として赤くなるだけで直しようがないので除外に数える
+  # (2026-11-03 実測: \Orgiast Growi 週次クロールアップ が該当。直すには管理者で1回実行が要る)。
+  if ("$($task.Principal.RunLevel)" -eq 'Highest') {
+    $skipped++; Write-Host "skip(要管理者・RunLevel=Highest): $name"; continue
+  }
   try {
     Set-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -Action @($newActions) | Out-Null
     $changed++; Write-Host "隠し起動へ変更: $name"

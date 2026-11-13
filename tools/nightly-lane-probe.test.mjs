@@ -2,13 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { powerShellTestRuntime } from './fixtures/powershell-test-runtime.mjs';
 
 const source = fs.readFileSync(new URL('./nightly-batch.ps1', import.meta.url), 'utf8');
 const start = source.indexOf('    $laneDoctor = $null');
 const end = source.indexOf('    $delegationHealth = $null', start);
 const block = source.slice(start, end);
 const shell = process.platform === 'win32' ? 'powershell.exe' : process.env.WSL_DISTRO_NAME ? 'powershell.exe' : 'pwsh';
-const available = spawnSync(shell, ['-NoProfile', '-NonInteractive', '-Command', 'exit 0']).status === 0;
+const available = powerShellTestRuntime(shell);
 
 test('daily nightly batch probes before delegation health and empty queue exit', () => {
   assert.ok(start > 0 && end > start);
@@ -18,7 +19,7 @@ test('daily nightly batch probes before delegation health and empty queue exit',
 });
 
 for (const scenario of ['success', 'failure', 'throw', 'missing']) {
-  test(`nightly probe ${scenario} preserves subsequent work and reports outcome`, { skip: !available }, () => {
+  test(`nightly probe ${scenario} preserves subsequent work and reports outcome`, { skip: !available && 'PowerShell script execution unavailable on this host' }, () => {
     // Run only the production probe block with fake filesystem and node commands.
     // Never execute the full nightly job or touch the real home/settings.
     const script = `

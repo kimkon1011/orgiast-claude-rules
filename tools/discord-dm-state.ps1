@@ -12,19 +12,25 @@ public static class DmIdle {
 '@
 $idle = [DmIdle]::Milliseconds()
 if ($IdleOnly -or $idle -lt 300000) { @{idleMs=$idle} | ConvertTo-Json -Compress; exit }
+$discordProc = Get-Process Discord -ErrorAction SilentlyContinue
+if (-not $discordProc) { @{idleMs=$idle; original=''; unread=@()} | ConvertTo-Json -Compress; exit }
+
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $AE = [System.Windows.Automation.AutomationElement]
 $Scope = [System.Windows.Automation.TreeScope]
-$win = $null
-foreach ($w in $AE::RootElement.FindAll($Scope::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
- if ($w.Current.Name -match 'Discord') { $win = $w; break }
+. (Join-Path $PSScriptRoot 'lib\discord-dm-window.ps1')
+$win = Wait-DiscordWindow -FindWindow {
+ foreach ($w in $AE::RootElement.FindAll($Scope::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
+  if ($w.Current.Name -match 'Discord') { return $w }
+ }
+ return $null
 }
-if (-not $win) { throw 'Discord window not found' }
+# Friends/home has no message list: original stays empty and scan skips restore.
 $original = ''
 $unread = @()
 foreach ($e in $win.FindAll($Scope::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
  if ($e.Current.ControlType -eq [System.Windows.Automation.ControlType]::List -and $e.Current.Name -match 'のメッセージ$') { $original = $e.Current.Name -replace 'のメッセージ$', '' }
- if ($e.Current.ControlType -eq [System.Windows.Automation.ControlType]::Hyperlink -and $e.Current.Name -match '未読のメッセージ') {
+ if ($e.Current.ControlType -eq [System.Windows.Automation.ControlType]::Hyperlink -and $e.Current.Name -match '(件の未読|未読のメッセージ)') {
   # DM links expose their /channels/@me/ route as AutomationId in Chromium.
   # If absent, require an explicit DM label: never inspect unread server channels.
   $name = $e.Current.Name
@@ -35,7 +41,7 @@ foreach ($e in $win.FindAll($Scope::Descendants, [System.Windows.Automation.Cond
    $parent = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($parent)
   }
   if ($inDmList -or $e.Current.AutomationId -match '/channels/@me/' -or $name -match 'ダイレクトメッセージ|グループメッセージ|グループDM') {
-   $chat = ($name -replace '、?\s*未読のメッセージ.*$', '' -replace '[\s、,(（]*(ダイレクトメッセージ|グループメッセージ|グループDM).*$', '').Trim(' ', ',')
+   $chat = ($name -replace '^\s*\d*\s*件の未読、\s*', '' -replace '、?\s*\d*\s*件?の?未読のメッセージ.*$', '' -replace '[\s、,(（]*(ダイレクトメッセージ|グループメッセージ|グループDM).*$', '').Trim(' ', ',')
    if ($chat) { $unread += $chat }
   }
  }

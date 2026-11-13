@@ -1,0 +1,13 @@
+{
+  "config": {"sheetId":"fixture-ledger","calendar":{"enabled":false}},
+  "rows": [
+    {"id":"D-001","title":"資料提出","kind":"訴訟・法務","due":"2026-11-06","status":"未着手","assignee":"kim","action":"資料を確認して提出","source":"Drive","sourceId":"drive:legal","quote":"https://example.invalid/legal","detectedAt":"2026-11-01"},
+    {"id":"D-002","title":"協業回答","kind":"回答・返信","due":"2026-11-07","status":"対応中","assignee":"kim","action":"回答案の確認","source":"Gmail","sourceId":"gmail:kim@orgiast.jp:reply","detectedAt":"2026-11-01"},
+    {"id":"D-003","title":"請求振込","kind":"支払","due":"2026-11-11","status":"未着手","assignee":"経理","action":"振込","source":"Gmail","sourceId":"gmail:kim@orgiast.jp:invoice"},
+    {"id":"D-004","title":"消防質問書","kind":"行政・消防","due":"2026-11-03","status":"未着手","assignee":"担当者","action":"回答を確認","quote":"https://example.invalid/fire"},
+    {"id":"D-005","title":"完了済み申請","kind":"補助金・申請","due":"2026-11-01","status":"完了","assignee":"kim"},
+    {"id":"D-006","title":"延期した報告書","kind":"提出","due":"2026-11-01","status":"延期","notes":"延期先: 2026-11-18","assignee":"kim","action":"報告書作成"}
+  ],
+  "vehicles": [{"id":"V01","title":"V220d 車検","kind":"車検","due":"2026-10-27","status":"未着手","assignee":"kim","action":"入庫手配","quote":"https://example.invalid/vehicle","readOnly":true}],
+  "candidates": [{"id":"D-007","title":"期限未確認の申請","kind":"補助金・申請","status":"候補","sourceId":"gmail:kim@orgiast.jp:unknown"}]
+}

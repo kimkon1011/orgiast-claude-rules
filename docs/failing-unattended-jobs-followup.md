@@ -7,5 +7,6 @@
 3. [unattended:mobile] ClaudeMobile-WebServer の旧終了値は0xC000013A、3939番サーバーは別起動でHTTP 200 — Windowsタスク履歴と現在の起動元を追える実行環境で管理経路を一本化し確認する。稼働中サーバーの重複起動・強制終了はしない。
 4. [unattended:auto-session] OrgiastAutoSession の終了1は15件中「アサイン未完了の制作P通知」1件が35分timeout — ブース制作アプリの共有未コミット差分を分離できた後、既存実装の配布と検証だけを再開する。実送信は別途明示指示があるまで行わない。
 5. [unattended:backup] ClaudeDailyDriveBackup は一時ファイル .fleet-mail-poll.json がコピー中に消えてrobocopy exit=11 — 除外修正を適用し、削除を伴う既存 /MIR・世代整理の扱いを解決できる環境で本番再検証する。
+    - 2026-11-04: ブラウザプロファイルの揮発ディレクトリ（Network/Sessions/GPU キャッシュ）がロックされ exit=11 が継続していたため除外を追加（PR #1476）。
 6. [unattended:hygiene] OrgiastProcessHygiene はwrapperと本体が同じログを開きEBUSY — 修正PRの別ログ出力を実タスク参照先へ反映できる環境で再実行しLastTaskResultを確認する（Windows隔離再現は1→0）。
 7. [unattended:growi] 09-22 Growi列挙失敗の末尾エラーが先頭8行への切詰めで欠落し歴史的原因は未確定 — 末尾ログ・限定再試行の修正適用後の同期結果を待つ。現時点は既存認証で6,880件列挙成功、Drive由来キャッシュ15/15本文あり。

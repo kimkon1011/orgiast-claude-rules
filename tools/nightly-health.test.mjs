@@ -890,3 +890,9 @@ test('stale task repair results use the existing nightly notification', async ()
     assert.match(sent, /detected 1 repaired 1/);
   } finally { removeDir(home); }
 });
+
+test('期限ジョブはログが新しくてもLastRunTimeが36時間超なら検出する', () => {
+  const now = new Date('2026-11-05T12:00:00Z');
+  const result = evaluateScheduledTaskHealth({ label:'期限追跡', maxRunHours:1, maxLastRunHours:36 }, { state:'Ready', lastTaskResult:0, lastRunTime:'2026-11-03T12:00:00Z' }, { now, logMtimeMs:now.getTime() });
+  assert.ok(result.some(x => x.type === 'task_stale'));
+});

@@ -8,18 +8,21 @@ import path from 'node:path';
 import { loadFablePolicy, fableAllowedForSubagent } from './fable-policy.mjs';
 import { inspectTranscript } from './fable-session-guard.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
+import { isEntry } from './is-entry.mjs';
 
-const raw = await readStdinWithTimeout();
+export async function hookMain(raw) {
+
+
 try {
-  if (!raw) process.exit(0);
+  if (!raw) return;
   const input = JSON.parse(raw);
-  if (!/^(Agent|Task)$/.test(String(input.tool_name || ''))) process.exit(0);
+  if (!/^(Agent|Task)$/.test(String(input.tool_name || ''))) return;
   const toolInput = input.tool_input || {};
   if (IMPLEMENT.test(String(toolInput.prompt || '')) &&
       !/^(Explore|Plan|claude-code-guide|biz-reader|statusline-setup)$/i.test(String(toolInput.subagent_type || '')) &&
       !implApproved(process.env.ORGIAST_HOME || os.homedir(), input.session_id)) {
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: '実装サブエージェントは禁止(§1.17)。node tools/codex-do.mjs --prompt-file <指示> --cwd <対象> へ。例外は user の [CLAUDE-IMPL-OK]' } }));
-    process.exit(0);
+    return;
   }
   // model 省略は親を継承するため、Fable メインでは意図せず単価2倍の実働になる。
   if (!toolInput.model) {
@@ -28,7 +31,7 @@ try {
     if (/fable/i.test(currentModel)) {
       const reason = '省略すると Fable(単価2倍)を継承する。model を明示: 量産/編集/確認は "sonnet"、分類は "haiku"、設計判断のみ "opus"。実装は Codex へ';
       console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } }));
-      process.exit(0);
+      return;
     }
   }
   const subagentType = String(toolInput.subagent_type || '');
@@ -42,7 +45,7 @@ try {
     if (fableAllowedForSubagent(policy)) {
       const context = `Fable5を許可: policyによりサブエージェントでの使用が許可されています`;
       console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: context } }));
-      process.exit(0);
+      return;
     }
     const home = process.env.ORGIAST_HOME || os.homedir();
     try {
@@ -52,7 +55,7 @@ try {
       if (unexpired && sameSession) {
         const context = `§1.16例外を適用: user明示指定によりFable5を許可(別課金枠・期限 ${allow.until})`;
         console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: context } }));
-        process.exit(0);
+        return;
       }
     } catch {}
     let reason;
@@ -62,20 +65,23 @@ try {
       reason = 'このアカウントでは Fable が定額内と未確認(tools/fable-policy.json)。組織ポリシー §1.16 で Fable5(claude-fable-5)は全用途禁止(別課金枠)。model を省略(監督継承)か "sonnet"(生成/量産)/"haiku"(分類)に変えて再実行。実装なら Codex(`node tools/codex-do.mjs`)へ。';
     }
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } }));
-    process.exit(0);
+    return;
   }
   // 専門agent(biz-reader/statusline-setup/claude-code-guide)は専用の指示・ガイドを信頼する。
   // プロンプトが「実装」っぽくても下流の実装委譲ブロックに落とさず無干渉にする。
   // (Fable 指定だけは上で deny 済み。model 無指定のまま無干渉で通す。)
-  if (/^(biz-reader|statusline-setup|claude-code-guide)$/i.test(subagentType)) process.exit(0);
+  if (/^(biz-reader|statusline-setup|claude-code-guide)$/i.test(subagentType)) return;
   if (exploratory && expensiveOrImplicit) {
     const home = process.env.ORGIAST_HOME || os.homedir();
     let mode = 'warn';
     try { mode = String(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'cost-enforce.json'), 'utf8')).mode || 'warn'); } catch {}
     const advice = '探索/調査は `gemini -p "<質問>" --include-directories <dir>`(OAuth無料枠) または `node tools/codex-do.mjs --review --prompt-file <file>`(定額)。Claudeサブエージェントは最後の手段。使うなら model:"haiku"。';
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...(mode === 'block' ? { permissionDecision: 'deny', permissionDecisionReason: advice } : { additionalContext: advice }) } }));
-    process.exit(0);
+    return;
   }
 
 } catch {}
-process.exit(0);
+return;
+
+}
+if (isEntry(import.meta.url)) await hookMain(await readStdinWithTimeout());

@@ -65,7 +65,7 @@ function _FeedbackRelay_config() {
  */
 function _FeedbackRelay_attachmentFolder(name) {
   var folders = DriveApp.getRootFolder().getFoldersByName(name);
-  return folders.hasNext() ? folders.next() : DriveApp.getRootFolder().createFolder(name);
+  return folders.hasNext() ? folders.next() : ensureKimEditor_(DriveApp.getRootFolder().createFolder(name));
 }
 
 /** 2 枚目以降の画像を Drive に保存し、本文末尾に「他 N 枚は報告シート参照」+ URL を追記する。 */
@@ -82,10 +82,11 @@ function _FeedbackRelay_appendExtraImagesNote(body, blobs) {
       try {
         var name = 'extra_' + stamp + '_' + (i + 1) + '_' + (extras[i].getName() || 'screenshot.png');
         var file = folder.createFile(extras[i].copyBlob().setName(name));
+        ensureKimEditor_(file);
         urls.push(file.getUrl());
-      } catch (e) { /* 個別保存失敗は送信本体を止めない */ }
+      } catch (e) { if (/^kim-editor:/.test(String(e.message))) throw e; /* 個別保存失敗は送信本体を止めない */ }
     }
-  } catch (e) { /* フォルダ確保に失敗しても本文送信は続行する */ }
+  } catch (e) { if (/^kim-editor:/.test(String(e.message))) throw e; /* フォルダ確保に失敗しても本文送信は続行する */ }
   var note = '\n他 ' + extras.length + ' 枚は報告シート参照' + (urls.length ? ':\n' + urls.join('\n') : '');
   return (text + note).slice(0, _FEEDBACK_RELAY_MAX_BODY);
 }
@@ -190,6 +191,13 @@ function _FeedbackRelay_postWebhook(hook, content, blobs) {
  * 失敗は例外にせず false を返す（通知は best-effort、記録を止めない）。
  */
 function _FeedbackRelay_postDm(token, userId, content, blobs) {
+  // kim-inbox is collected by the 05:50 fleet sweep; kim never receives a Discord DM.
+  if (String(userId) === '715210673642012733') {
+    var queued = ensureKimEditor_(DriveApp.getRootFolder().createFile('kim-inbox_' + Utilities.getUuid() + '.json', JSON.stringify({ kind: 'info', text: String(content), source: 'feedback-gas' }), MimeType.PLAIN_TEXT));
+    var receipt = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + queued.getId() + '?supportsAllDrives=true', { method: 'patch', contentType: 'application/json', headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, payload: JSON.stringify({ properties: { orgiastKimInbox: 'pending' } }), muteHttpExceptions: true });
+    if (receipt.getResponseCode() < 200 || receipt.getResponseCode() >= 300) throw new Error('kim-inbox: queue marker failed');
+    return true;
+  }
   try {
     var channelResponse = UrlFetchApp.fetch('https://discord.com/api/v10/users/@me/channels', {
       method: 'post', headers: { Authorization: 'Bot ' + token }, contentType: 'application/json',
@@ -238,12 +246,12 @@ function Admin_setFeedbackDiscord(botToken, dmUserId) {
   return { ok: true, set: { botToken: Boolean(botToken), dmUserId: String(dmUserId || '') } };
 }
 
-/** 疎通確認: DM を1回実送信する。導入完了はこれで着信を見てから（設定だけで完了と呼ばない）。 */
+/** 疎通確認: kim は受け箱キュー、他メンバーは DM の配達結果を返す。 */
 function FeedbackRelay_testDm() {
   var config = _FeedbackRelay_config();
   if (!(config.botToken && config.dmUserId)) return { ok: false, sent: false, via: 'none', error: 'DM: 未設定' };
   var sent = _FeedbackRelay_postDm(config.botToken, config.dmUserId, '疎通テストです（無視してください）', []);
-  return { ok: sent, sent: sent, via: sent ? 'dm' : 'none', error: sent ? undefined : 'DM: 送信失敗' };
+  return { ok: sent, sent: sent, via: sent ? (String(config.dmUserId) === '715210673642012733' ? 'kim-inbox' : 'dm') : 'none', error: sent ? undefined : 'DM: 送信失敗' };
 }
 
 /** 未対応の毎日プッシュを重複なく1本だけ設置する（GAS のトリガー上限は 20 本）。 */
@@ -281,7 +289,7 @@ function FeedbackRelay_submit(payload) {
         (config.ownerDiscordId ? _FeedbackRelay_postDm(config.botToken, config.ownerDiscordId, content, blobs) : false);
       // 開発者(owner)への DM は並行して送るが、kim への配達成否だけで成功とする（owner 失敗で webhook へ二重送信しない）。
       if (kimSent) {
-        return { ok: true, relayed: false, via: 'dm' };
+        return { ok: true, relayed: false, via: String(config.dmUserId) === '715210673642012733' ? 'kim-inbox' : 'dm' };
       }
       errors.push('DM: 送信失敗');
     } else errors.push('DM: 未設定');
@@ -294,7 +302,7 @@ function FeedbackRelay_submit(payload) {
     } else errors.push('webhook: 未設定');
 
     return { ok: true, relayed: false, via: 'none', error: errors.join(' / ') };
-  } catch (e) {
+  } catch (e) { if (/^kim-editor:/.test(String(e.message))) throw e;
     return { ok: true, relayed: false, via: 'none', error: String(e && e.message ? e.message : e) };
   }
 }
@@ -433,12 +441,12 @@ function FeedbackRelay_nagPending(opts) {
     var content = lines.join('\n');
     if (opts.dryRun === true) return { ok: true, count: items.length, items: items, content: content };
     if (config.botToken && config.dmUserId && _FeedbackRelay_postDm(config.botToken, config.dmUserId, content, [])) {
-      return { ok: true, count: items.length, sent: true, via: 'dm' };
+      return { ok: true, count: items.length, sent: true, via: String(config.dmUserId) === '715210673642012733' ? 'kim-inbox' : 'dm' };
     }
     if (config.webhook && _FeedbackRelay_postWebhook(config.webhook, content, [])) return { ok: true, count: items.length, sent: true, via: 'webhook' };
     var configured = Boolean((config.botToken && config.dmUserId) || config.webhook);
     return { ok: true, count: items.length, sent: false, via: 'none', reason: configured ? '通知送信失敗' : '通知先未設定' };
-  } catch (e) {
+  } catch (e) { if (/^kim-editor:/.test(String(e.message))) throw e;
     return { ok: false, count: 0, sent: false, via: 'none', reason: String(e && e.message ? e.message : e) };
   }
 }
@@ -589,7 +597,7 @@ function FeedbackRelay_submitFromForm(payload) {
   var ss;
   try {
     ss = _FeedbackRelay_resolveLogSpreadsheet(config, payload);
-  } catch (e) {
+  } catch (e) { if (/^kim-editor:/.test(String(e.message))) throw e;
     return { ok: false, error: String(e && e.message ? e.message : e) };
   }
   var sheetName = _FeedbackRelay_resolveLogSheetName(config, payload);
@@ -604,8 +612,9 @@ function FeedbackRelay_submitFromForm(payload) {
         var saved = folder.createFile(
           candidates[i].blob.copyBlob().setName('fb_' + stamp + '_' + (i + 1) + '_' + candidates[i].name)
         );
+        ensureKimEditor_(saved);
         imageUrls.push(saved.getUrl());
-      } catch (e) { /* 個別保存失敗は記録を止めない */ }
+      } catch (e) { if (/^kim-editor:/.test(String(e.message))) throw e; /* 個別保存失敗は記録を止めない */ }
     }
   }
   var source = (appName || 'アプリ') + ' / フォーム';
@@ -642,7 +651,7 @@ function FeedbackRelay_submitFromForm(payload) {
       sourceUrl: sourceUrl,
       imageBlobs: selected.map(function (item) { return item.blob; })
     });
-  } catch (e) { /* 通知は best-effort */ }
+  } catch (e) { if (/^kim-editor:/.test(String(e.message))) throw e; /* 通知は best-effort */ }
 
   return { ok: true, logged: true, images: candidates.length, notified: notify.via !== 'none' };
 }
@@ -667,4 +676,29 @@ function FeedbackRelay_historyUrl() {
 function FeedbackRelay_serveHistory() {
   return HtmlService.createHtmlOutput('<h1>送信した内容・対応状況</h1><p>記録先の一覧を開けません。担当者に記録先の設定と閲覧権限を確認してください。</p>')
     .setTitle('送信した内容・対応状況');
+}
+
+// GAS adapter for the same kim editor contract (silent Drive API grant + read-back).
+function ensureKimEditor_(file) {
+  var base = 'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(file.getId());
+  function request(url, method, body) {
+    var response = UrlFetchApp.fetch(url, { method: method || 'get', headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, contentType: 'application/json', muteHttpExceptions: true, payload: body ? JSON.stringify(body) : undefined });
+    if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) throw new Error('kim-editor: Drive HTTP ' + response.getResponseCode());
+    return JSON.parse(response.getContentText() || '{}');
+  }
+  request(base + '?supportsAllDrives=true', 'patch', { properties: { orgiastAutomation: 'true' } });
+  function hasEditor() {
+    var next, found = false;
+    do {
+      var page = request(base + '/permissions?supportsAllDrives=true&fields=nextPageToken,permissions(emailAddress,role,type,deleted)' + (next ? '&pageToken=' + encodeURIComponent(next) : ''));
+      found = found || (page.permissions || []).some(function (p) { return !p.deleted && p.type === 'user' && String(p.emailAddress).toLowerCase() === 'kim@orgiast.jp' && ['owner','writer','organizer','fileOrganizer'].indexOf(p.role) !== -1; });
+      next = page.nextPageToken;
+    } while (next);
+    return found;
+  }
+  if (!hasEditor()) {
+    request(base + '/permissions?supportsAllDrives=true&sendNotificationEmail=false', 'post', { type: 'user', role: 'writer', emailAddress: 'kim@orgiast.jp' });
+    if (!hasEditor()) throw new Error('kim-editor: writer read-back failed');
+  }
+  return file;
 }

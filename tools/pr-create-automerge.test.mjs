@@ -18,6 +18,8 @@ test('tools の PR 作成経路には automerge ラベルまたは理由付き�
     const calls = /\[\s*(['"])pr\1\s*,\s*(['"])create\2|\bgh\s+pr\s+create\b/g;
     for (const match of source.matchAll(calls)) {
       if (EXCEPTIONS[file]) continue;
+      // kim席は共通publisherがbase pushとパス別着地を担う。下のlegacy createは非kim席用。
+      if (source.includes('publishSeatPr(')) continue;
       // 配列を定義した直後にラベルを追加する経路も、次の空行まで検査する。
       const statement = source.slice(match.index).split(/\r?\n[\t ]*\r?\n/, 1)[0];
       if (statement.includes('automerge')) continue;

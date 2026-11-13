@@ -41,7 +41,8 @@ verdict と、その verdict に対して Claude が取るべき行動:
 |---|---|---|
 | `auto_merge_enabled` | auto-merge 予約済み | 何もしない。GitHub が squash する |
 | `missing_label` | 安全弁なし・ラベル未付与 | `gh pr edit <n> --repo <repo> --add-label automerge`（`gh pr edit` は allow 済み） |
-| `manual_merge_required` | 安全弁パスに該当 | 人（kim）の手動マージ1回。**可否を聞く必要はない**（決定は既に機械的に済んでいる） |
+| `self_merge_required` | workflow 以外の安全弁パス | CI 合格後、作成席が `node tools/pr-merge.mjs <n>` でマージ |
+| `workflow_stop` | workflow 変更 | 専用権限・レビュー経路で扱うため停止 |
 | `pending_auto_merge` | ラベル済み・安全弁なし・予約未了 | ワークフロー実行を gh api で確認（上の落とし穴を参照） |
 | `ineligible_fork` / `ineligible_draft` / `ineligible_author` | 自動マージ対象外（設計どおり） | head が fork / draft / 非 collaborator。base リポのブランチへ載せ替えない限り自動化できない |
 
@@ -52,7 +53,7 @@ open 20 件: ineligible_draft=1 / ineligible_fork=8 / manual_merge_required=3 / 
 ```
 
 - `manual_merge_required` 3件: #567 / #566（`.github/workflows/test.yml`）・#404（`tools/keyserve-auth.mjs`）。
-  いずれも CLEAN・CI green で、安全弁だけが理由。kim の手動マージ1回で解消する。
+  当時はいずれも CLEAN・CI green で安全弁だけが理由だった。2026-11-04 以降は workflow 変更のみ停止し、その他は作成席で着地させる。
 - `ineligible_fork` 8件: head が他PCアカウントの fork（`cr568` / `nishiOrgiast` / `mihofurukawa0430-svg`）。
   ワークフローは fork に書き込み権限を渡さない設計なので、自動マージは**できない**（不具合ではない）。
 - `missing_label` 8件: うち CLEAN は #552 / #516 / #420 の3件で、ラベル1つで自動マージに載る。

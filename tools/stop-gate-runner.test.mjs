@@ -206,7 +206,7 @@ test('stdin経由の2行・3行・バックグラウンド矛盾を他gateと分
     const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').at(-1));
     assert.equal(record.verdict, code ? 'block' : 'pass');
     assert.deepEqual(record.blockedBy, code ? ['next-action-gate'] : []);
-    assert.deepEqual(record.reasonCodes, code ? [code] : []);
+    assert.deepEqual(record.reasonCodes, code ? [code, ...(code === 'SESSION-BACKGROUND-CONTRADICTION' ? ['AUTOPILOT-NO-SESSION-WAKEUP'] : [])] : []);
   }
 });
 
@@ -332,6 +332,105 @@ for (const [name, text, blocked, reason] of burdenCases) {
     if (blocked) assert.match(JSON.parse(result.stdout).reason, /- user-burden-gate[\s\S]*USER-BURDEN/);
   });
 }
+
+test('manual-request-evidence-gate: 根拠なしの依頼 → block', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-evidence-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const text = 'ブラウザで設定を開いてください。';
+  const result = invoke(home, 'evidence-block', text);
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.decision, 'block');
+  assert.match(output.reason, /SCREEN-EVIDENCE/);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(record.blockedBy.includes('manual-request-evidence-gate'));
+});
+
+test('manual-request-evidence-gate: 確認済み: がある → pass', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-evidence-pass-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const text = 'ブラウザで設定を変更してください。\n確認済み: screenshot.png を開いて目視（exit 0）';
+  const result = invoke(home, 'evidence-pass', text);
+  assert.equal(result.status, 0, result.stderr);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(!record.blockedBy.includes('manual-request-evidence-gate'));
+});
+
+test('manual-request-evidence-gate: 依頼でない普通の応答 → pass', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-evidence-normal-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = invoke(home, 'evidence-normal', '本セッションの作業は完了しました。テストは全件 PASS です。');
+  assert.equal(result.status, 0, result.stderr);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(!record.blockedBy.includes('manual-request-evidence-gate'));
+});
+
+test('session-close-target-gate: close-session.mjs 実行＋--show-target 無し → block', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-launch-block-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const text = '次に kim がすること: 新しいタブで Enter を1回押してください';
+  const transcript = path.join(home, 'transcript.jsonl');
+  fs.writeFileSync(transcript, [
+    { type: 'user', message: { role: 'user', content: '/session-close を実行して' } },
+    { type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'text', text },
+      { type: 'tool_use', name: 'Bash', input: { command: 'node ~/.claude/nightly-repo/tools/close-session.mjs --session abc' } },
+    ] } },
+  ].map(entry => JSON.stringify(entry)).join('\n'));
+  const result = invoke(home, 'launch-block', text, { transcript_path: transcript });
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.decision, 'block');
+  assert.match(output.reason, /LAUNCH-TARGET/);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(record.blockedBy.includes('session-close-target-gate'));
+});
+
+test('session-close-target-gate: --show-target 実行済み → pass', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-launch-pass-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const text = '次に kim がすること: このタブで /clear を1回してください';
+  const transcript = path.join(home, 'transcript.jsonl');
+  fs.writeFileSync(transcript, [
+    { type: 'user', message: { role: 'user', content: '/session-close を実行して' } },
+    { type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'text', text },
+      { type: 'tool_use', name: 'Bash', input: { command: 'node ~/.claude/nightly-repo/tools/close-session.mjs --session abc' } },
+      { type: 'tool_use', name: 'Bash', input: { command: 'node tools/next-session-launch.mjs --show-target' } },
+    ] } },
+  ].map(entry => JSON.stringify(entry)).join('\n'));
+  const result = invoke(home, 'launch-pass', text, { transcript_path: transcript });
+  assert.equal(result.status, 0, result.stderr);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(!record.blockedBy.includes('session-close-target-gate'));
+});
+
+test('session-close-target-gate: close-session 未実行 → pass', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-launch-skip-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = invoke(home, 'launch-skip', '次に kim がすること: なし');
+  assert.equal(result.status, 0, result.stderr);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(!record.blockedBy.includes('session-close-target-gate'));
+});
+
+test('session-close-target-gate: 逃がし弁 [LAUNCH-TARGET-OK] → pass', t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-launch-escape-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const text = '[LAUNCH-TARGET-OK]\n次に kim がすること: 新しいタブで Enter を1回押してください';
+  const transcript = path.join(home, 'transcript.jsonl');
+  fs.writeFileSync(transcript, [
+    { type: 'user', message: { role: 'user', content: '/session-close を実行して' } },
+    { type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'text', text },
+      { type: 'tool_use', name: 'Bash', input: { command: 'node ~/.claude/nightly-repo/tools/close-session.mjs --session abc' } },
+    ] } },
+  ].map(entry => JSON.stringify(entry)).join('\n'));
+  const result = invoke(home, 'launch-escape', text, { transcript_path: transcript });
+  assert.equal(result.status, 0, result.stderr);
+  const record = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8'));
+  assert.ok(!record.blockedBy.includes('session-close-target-gate'));
+});
 
 test('user-burden-gate: transcript の最後の assistant だけを監査する', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-burden-transcript-'));
@@ -594,5 +693,107 @@ test('差し戻し理由の先頭で前文を繰り返さないよう指示す�
     const result = invoke(home, 'retry-instruction', `${'本文です。'.repeat(50)}`);
     const output = JSON.parse(result.stdout);
     assert.match(output.reason, /^前のメッセージの経緯・ログ・説明は繰り返さない。指摘分を直したうえで、この書き直しが kim の読む最後のメッセージになる前提で書く: 末尾3行の直前に【最終まとめ】を置き、①報告（結論・結果・検証）②kim の確認事項（文面・選択肢・URL は全文）③kim がやること をすべて載せ、前のメッセージを参照させない（「上記」「前述」禁止）。/);
+    // 書き直しで同じ質問を出し直して kim に「2回聞かれた」と思わせない（2026-11-03 ベンツ車検の実害）
+    assert.match(output.reason, /このターン中に届いた kim の新着メッセージを確かめ、もう答えが来た質問は②から外して/);
+    assert.match(output.reason, /（前のメッセージと同じ質問です。もう答えていれば不要です）/);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('自動進行の check は runner から現在ターンとセッションを照合する', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-current-check-'));
+  const previous = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  t.after(() => {
+    if (previous === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previous;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  const now = Date.now();
+  const raw = JSON.stringify({ type: 'user', timestamp: new Date(now - 1000).toISOString(), message: { role: 'user', content: '配布を進めて' } });
+  const input = { session_id: 'current-check', last_assistant_message: 'この後の自動進行: 返信を待って配布へ組み込む' };
+  const options = { mode: 'off', policyOptions: { home, hostname: 'kim-PC', notify: async () => ({ delivered: 'test' }) } };
+  const blocked = await run(input, { raw, humanText: '', assistantText: '' }, options);
+  assert.ok(blocked.record.reasonCodes.includes('AUTOPROGRESS-NEEDS-CURRENT-CHECK'));
+  const { addCheck } = await import('./auto-progress.mjs');
+  addCheck({ session: input.session_id, check: 'test -f result.txt', label: '配布', deadline: '+2d', home, now });
+  const passed = await run(input, { raw, humanText: '', assistantText: '' }, options);
+  assert.ok(!passed.record.blockedBy.includes('unregistered-promise-gate'));
+});
+
+// The safety net must run independently of the ordinary rewrite budget.
+for (const mode of ['cap', 'pass', 'open', 'cron', 'scheduled', 'none', 'failure']) test(`autopilot fallback: ${mode}`, async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'autopilot-fallback-'));
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  const { readLedger, ledgerFile } = await import('./auto-progress-ledger.mjs');
+  const { consumeInbox } = await import('./auto-progress-inbox-hook.mjs');
+  const { registerStopViolation, stateFile } = await import('./lib/stop-recheck.mjs');
+  const input = { session_id: 'fallback', cwd: home };
+  const autopilot = mode === 'none' ? 'なし' : '返信が届きしだい報告し、深夜2時に残作業を実施する。' + '進行'.repeat(30);
+  const text = `${mode === 'pass' ? '[AUTOPROGRESS-CHECK-OK: 機械判定できない返信待ち]' : '記録します。'}\n次に kim がすること: ${mode === 'cap' ? '支払い、署名' : 'なし'}\nこの後の自動進行: ${autopilot}\nこのセッション: /session-close は不要なので、このセッションを閉じてよい`;
+  if (mode !== 'pass') for (let i = 0; i < 2; i++) registerStopViolation({ input, assistantText: `prior-${i}`, blockedBy: ['unregistered-promise-gate'], home });
+  const file = ledgerFile(home);
+  if (mode === 'open') fs.writeFileSync(file, JSON.stringify({ ts: new Date().toISOString(), sessionId: 'fallback', status: 'open', check: 'node -e "process.exit(1)"' }) + '\n');
+  if (mode === 'failure') fs.mkdirSync(file);
+  const name = mode === 'scheduled' ? 'ScheduleWakeup' : 'CronCreate';
+  const raw = ['cron', 'scheduled'].includes(mode) ? [
+    { type: 'assistant', timestamp: new Date().toISOString(), message: { content: [{ type: 'tool_use', name, id: 'timer', input: { recurring: true, delaySeconds: 3600 } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'timer', content: 'Scheduled recurring job: timer' }] } },
+  ].map(JSON.stringify).join('\n') : '';
+  const context = { raw, humanText: '', assistantText: text };
+  const options = { mode: 'off', policyOptions: { home, hostname: 'kim-PC', notify: async () => ({ delivered: 'test' }) } };
+  const result = await run(input, context, options);
+  if (mode === 'failure') {
+    assert.equal(result.decision, 'block');
+    assert.ok(result.record.reasonCodes.includes('AUTOPILOT-REGISTRATION-FAILED'));
+    return;
+  }
+  assert.notEqual(result.decision, 'block', result.reason);
+  const created = ['cap', 'pass'].includes(mode);
+  // At the retry cap, explicit progress checks supersede the generic watch fallback.
+  if (mode === 'cap') {
+    assert.equal(result.record.verdict, 'pass_after_autoregister');
+    assert.equal(result.record.autoRegisteredCheck, false);
+    const rows = readLedger(file);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].status, 'scheduled');
+    assert.match(rows[0].startWhen, /session-progress-check\.mjs" --session "fallback"$/);
+    assert.equal(readLedger(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl')).at(-1).verdict, 'pass_after_autoregister');
+    const { record: recordPromise } = await import('./auto-progress-ledger.mjs');
+    recordPromise({ ...input, last_assistant_message: text }, { home });
+    assert.equal(readLedger(file).at(-1).check, rows[0].check);
+    return;
+  }
+  assert.equal(result.record.autoRegisteredCheck, created);
+  const rows = readLedger(file);
+  assert.equal(rows.length, created || mode === 'open' ? 1 : 0);
+  if (!created) return;
+  const [row] = rows;
+  assert.equal(row.status, 'open');
+  assert.equal(row.check, undefined);
+  assert.equal(row.startWhen, undefined);
+  assert.equal(row.nextClaude, autopilot);
+  assert.equal(row.label, [...autopilot].slice(0, 60).join(''));
+  assert.equal(Date.parse(row.deadlineAt) - Date.parse(row.ts), 2 * 86400000);
+  const records = readLedger(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'));
+  assert.equal(records.at(-1).verdict, mode === 'cap' ? 'pass_after_cap' : 'pass');
+  assert.equal(records.at(-1).autoRegisteredCheck, true);
+  if (mode === 'pass') assert.equal(fs.existsSync(stateFile(home)), false);
+  const notice = consumeInbox({ ...input, hook_event_name: 'UserPromptSubmit' }, { home, env: {} });
+  assert.match(notice.hookSpecificOutput.additionalContext, /自動登録した/);
+  assert.equal(consumeInbox(input, { home, env: {} }), null);
+  // The separate ledger Stop hook must retain the fallback's monitoring metadata.
+  const { record: recordPromise } = await import('./auto-progress-ledger.mjs');
+  recordPromise({ ...input, last_assistant_message: text }, { home });
+  const refreshed = readLedger(file).at(-1);
+  assert.equal(refreshed.autoRegisteredCheck, true);
+  assert.equal(refreshed.deadlineAt, row.deadlineAt);
+  const before = readLedger(file).length;
+  await run(input, context, options);
+  assert.equal(readLedger(file).length, before);
 });

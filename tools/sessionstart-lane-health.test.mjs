@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { sessionLaneHealth, launchLaneAutoProbes } from './sessionstart-lane-health.mjs';
-test('SessionStart returns lane summary and saves offline health',t=>{const home=fs.mkdtempSync(path.join(os.tmpdir(),'session-lane-'));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));const r=sessionLaneHealth({home, auditLaunch: () => false});assert.equal(r.hookSpecificOutput.hookEventName,'SessionStart');assert.match(r.hookSpecificOutput.additionalContext,/生存:.*停止:.*修復:/);assert.ok(fs.existsSync(path.join(home,'.claude/lane-health.json')));});
+test('SessionStart returns lane summary and saves offline health',t=>{const home=fs.mkdtempSync(path.join(os.tmpdir(),'session-lane-'));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));const r=sessionLaneHealth({home, auditLaunch: () => false, pcMap: { desk: { hostname: 'DELL', remoteName: '作業用014' } }, hostname: 'DELL'});assert.equal(r.hookSpecificOutput.hookEventName,'SessionStart');assert.ok(r.hookSpecificOutput.additionalContext.startsWith('この席は 作業用014（hostname: DELL）。人向けの文では 作業用014 と呼ぶ（§1.5.0.2）。\n'));assert.match(r.hookSpecificOutput.additionalContext,/生存:.*停止:.*修復:/);assert.ok(fs.existsSync(path.join(home,'.claude/lane-health.json')));});
 
 test('--hook preserves synchronous SessionStart context output', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'session-lane-hook-'));

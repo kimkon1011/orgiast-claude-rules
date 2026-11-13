@@ -21,8 +21,13 @@ export function parseArgs(args) {
 
 export function mergePr(options, { exec = execFileSync } = {}) {
   const { pr, repo, method } = parseArgs([String(options.pr), '--repo', options.repo || process.cwd(), '--method', options.method || 'squash']);
-  const gh = args => String(exec('gh', args, { cwd: repo, encoding: 'utf8', timeout: 60_000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })).trim();
+  const gh = args => String(exec('gh', options.githubRepo && args[0] === 'pr' ? [...args, '--repo', options.githubRepo] : args, { cwd: repo, encoding: 'utf8', timeout: 60_000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })).trim();
   const view = JSON.parse(gh(['pr', 'view', pr, '--json', 'state,mergeable,reviewDecision,statusCheckRollup,headRefOid,headRefName']));
+  const repository = options.githubRepo || JSON.parse(gh(['repo', 'view', '--json', 'nameWithOwner'])).nameWithOwner;
+  // --json files は上限があるため REST の全ページで workflow 変更を確認する。
+  const files = JSON.parse(gh(['api', '--paginate', '--slurp', `repos/${repository}/pulls/${pr}/files?per_page=100`]));
+  if (!Array.isArray(files) || files.some(page => !Array.isArray(page))) throw new Error('PR 変更パスを確認できません');
+  if (files.flat().some(file => [file.filename, file.previous_filename].some(name => name?.startsWith('.github/workflows/')))) throw new Error('.github/workflows/ を含む PR は専用経路で扱うため停止');
   if (view.state !== 'OPEN') throw new Error(`PR #${pr}: state=${view.state}（OPEN が必要）`);
   if (view.mergeable !== 'MERGEABLE') throw new Error(`PR #${pr}: mergeable=${view.mergeable}`);
   if (view.reviewDecision === 'CHANGES_REQUESTED') throw new Error(`PR #${pr}: CHANGES_REQUESTED`);
@@ -41,7 +46,7 @@ export function mergePr(options, { exec = execFileSync } = {}) {
   } catch (error) {
     const message = `${error.stderr || ''}\n${error.message || ''}`;
     if (!/MergePullRequest/i.test(message) || !/permission/i.test(message)) throw error;
-    const { nameWithOwner } = JSON.parse(gh(['repo', 'view', '--json', 'nameWithOwner']));
+    const nameWithOwner = repository;
     const result = JSON.parse(gh(['api', '-X', 'PUT', `repos/${nameWithOwner}/pulls/${pr}/merge`, '-f', `merge_method=${method}`, '-f', `sha=${view.headRefOid}`]));
     if (result.merged !== true) throw new Error(`PR #${pr}: REST マージ失敗 (${result.message || 'merged != true'})`);
     if (!options.keepBranch && view.headRefName) {

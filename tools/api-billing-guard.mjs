@@ -28,7 +28,7 @@ export function detectBillingMode({ home = os.homedir(), env = process.env, clau
   return result('unknown', '課金情報なし');
 }
 function billingMessage(reason) {
-  return `🔒 このPCの Claude Code は従量課金(Console/APIキー: ${reason})で動いています。§2.8.5 により全ツールを停止します。\`claude /login\` で Claude アカウント(Team シート)を選び直してください。kim が同じ指示で [API-BILLING-OK] と書いたときだけ60分許可。`;
+  return `🔒 このPCの Claude Code は従量課金(Console/APIキー: ${reason})で動いています。§2.8.5 により全ツールを停止します。Claude アカウント(Team シート)でのログインが必要です。Claude が次回の点検でログイン状態を確認して再開します。kim が同じ指示で [API-BILLING-OK] と書いたときだけ60分許可。`;
 }
 export async function notifyBilling(home, body, { notify = notifyKim, spawnImpl = spawn } = {}) {
   const delivered = await notify(body, { home, plainJa: false, webhookFallback: false, signal: AbortSignal.timeout(1000) });

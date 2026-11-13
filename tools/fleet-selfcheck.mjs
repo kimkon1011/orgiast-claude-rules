@@ -64,7 +64,7 @@ export async function runSelfcheck({ home = process.env.ORGIAST_HOME || os.homed
   });
   await check('身元 / hostname', () => hostname);
   await check('身元 / REPORTER_LABEL', () => readEnv('cost-reporter.env').REPORTER_LABEL || `未設定（fleet は hostname=${hostname} を使用）`);
-  for (const name of ['shared-memory/MEMORY.md', 'knowledge/production-sales/00_INDEX.md', 'skills/case/SKILL.md', 'skills/case-resume/SKILL.md']) {
+  for (const name of ['orgiast-mission.md', 'shared-memory/MEMORY.md', 'knowledge/production-sales/00_INDEX.md', 'skills/case/SKILL.md', 'skills/case-resume/SKILL.md']) {
     await check(`配布物 / ${name}`, () => bytes(path.join(base, name)));
   }
   await check('配布物 / CLAUDE.md 制作・営業ナレッジ', () => {

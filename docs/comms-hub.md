@@ -18,9 +18,10 @@ Google Drive コネクタで `案件情報ハブ` を検索 → `index.json` →
 状態は `~/.claude/comms-hub/state.json`。テスト時の変更は明示的な `--state-path <path>` のみ。store はstateと同じ親フォルダ配下が既定で、`--store-dir <path>` で変更可。旧 `COMMS_HUB_STATE` / `COMMS_HUB_STORE` 環境変数は参照しない。ホームは `ORGIAST_HOME`、鍵は `GOOGLE_SA_KEY`、Drive/Sheets実行ユーザーは `GOOGLE_IMPERSONATE`。
 個人の環境値と認証情報は env または既存の env/keyserve 配布先から読む。鍵・状態・取得本文をGitに入れない。
 
-6ソースは gmail-kim / gmail-seisaku / discord / line / plaud / tldv。
+7ソースは gmail-kim / gmail-seisaku / discord / line / line-chat / plaud / tldv。
 Gmail は既存 searchGmail と DWD getDriveToken の impersonate、Discord は既存 Bot と取得部品を使う。
 LINE は schedule-inbox の日時付き通知のみ。line-openchat はAI情報などの非業務チャットも含むため取り込まない。
+line-chat は Beeper Desktop API（http://localhost:23373）経由で LINE トーク本文を取得する。access_token は `%APPDATA%\BeeperTexts\account.db` の `account` テーブル、または環境変数 `BEEPER_ACCESS_TOKEN`。チャット単位で業務判定（allowedChats / businessPatterns / 案件名一致）。対象外チャットは本文を取得しない。対象外チャット名はローカルの line-chat-excluded.json のみに記録（chat id キーのオブジェクト、reason は not-business または config-exclude）。メッセージ上限は config.sourceLimits['line-chat']（既定 100）。Beeper 停止時は source エラーになり他ソースは継続する。
 Plaud は既存セッションと認証部品で録音・文字起こしを読む。UT更新は既存 plaud-to-tldv タスクに任せ、この同期は録音の転送・DM通知をしない。
 tl;dv は TLDV_API_KEY または既存 tldv.env を使用。文字起こしの欠落・HTTPエラー・空データ・未対応形式を録音単位で捕捉し、分類・除外ルールを通った録音はタイトル・日時・URLのみを保存する。理由と録音情報は `sources.<source>.transcriptFailures` に残す。次の録音とページは継続し、後続同期では最終試行が古い失敗録音から最大 maxPerSource/2 件（切り捨て、最小1件）を追加再取得する。取得できた本文は同じ識別子のブロックを置換する。失敗が残っている間は lastSuccess を進めず、lastAttempt と error を更新する。
 
@@ -46,6 +47,7 @@ threadCases は `gmail-kim:<threadId>` / `gmail-seisaku:<threadId>` をキーに
 
 `register-comms-hub-sync.ps1` は `-Ensure` / `-DryRun` / `-Remove` を持つ。
 ローカルDWD鍵のあるPCだけ `OrgiastCommsHubSync` を毎時 :15、`--live`、非表示・多重起動禁止で登録。
+優先度は標準（4）。既定の 7 だと CPU 高負荷時に起動・通信が遅れタイムアウトする（2026-11-09 実測）。
 同期mainを実行元にし、未配布の開発ツリーへのフォールバックはしない。
 setup --converge の manifest と登録ラッパー、install-orgiast、fleet-poller の自己修復に接続している。
 本変更はpush/merge前なので配布先への登録はまだ行わない。

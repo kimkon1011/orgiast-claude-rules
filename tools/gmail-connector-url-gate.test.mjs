@@ -18,6 +18,10 @@ function fixture(t) {
 
 test('URL なしの本文は通す', () => assert.equal(judge(gmail({ subject: 'ご連絡', body: 'お世話になっております。' })).decision, 'pass'));
 test('https URL 入りの body を止める', () => assert.equal(judge(gmail({ body: '詳細 https://example.com/path' })).decision, 'block'));
+test('www. で始まるスキーム無しドメインを止める', () => assert.equal(judge(gmail({ body: '詳細 www.orgiast.jp' })).decision, 'block'));
+test('パス付きのスキーム無しドメインを止める', () => assert.equal(judge(gmail({ body: '詳細 orgiast.jp/contact' })).decision, 'block'));
+test('メールアドレスのドメイン部だけなら通す', () => assert.equal(judge(gmail({ body: 'Mail：seisaku-team@orgiast.jp' })).decision, 'pass'));
+test('短い https URL も従来どおり止める', () => assert.equal(judge(gmail({ body: 'https://x.jp' })).decision, 'block'));
 test('htmlBody の a href だけでも止める', () => assert.equal(judge(gmail({ htmlBody: '<a href="https://example.com">詳細</a>' })).decision, 'block'));
 test('google.com/url?q= を常に止め、理由を明示する', () => {
   const result = judge(gmail({ subject: 'https://www.google.com/url?q=https://example.com&source=gmail' }));
@@ -49,3 +53,21 @@ test('CLI は block 時だけ PreToolUse deny を出す', (t) => {
   assert.equal(passed.status, 0, passed.stderr);
   assert.equal(passed.stdout, '');
 });
+
+const URL_BODY = 'Check this: https://meet.google.com/abc-defg-hij';
+const gmailAction = (action, tool_input) => ({ tool_name: `mcp__claude_ai_Gmail__${action}`, tool_input });
+
+test('send_message + draftId + URL 入り body は通す', () => {
+  assert.equal(judge(gmailAction('send_message', { draftId: 'r123', body: URL_BODY })).decision, 'pass');
+});
+test('send_message + 空 draftId + URL は止める', () => {
+  assert.equal(judge(gmailAction('send_message', { draftId: '', body: URL_BODY })).decision, 'block');
+});
+test('send_message + draftId なし + URL は止める', () => {
+  assert.equal(judge(gmailAction('send_message', { body: URL_BODY })).decision, 'block');
+});
+for (const action of ['create_draft', 'update_draft', 'reply', 'forward']) {
+  test(`${action} は URL 入りのまま止める`, () => {
+    assert.equal(judge(gmailAction(action, { draftId: 'r123', body: URL_BODY })).decision, 'block');
+  });
+}

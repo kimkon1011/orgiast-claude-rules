@@ -3,13 +3,21 @@ import path from 'node:path';
 import { normalizeExecutorStatus } from '../executor-status.mjs';
 import { redactAll } from './redact.mjs';
 
+const AUTH_DOMINANT_RATIO = 0.9;
+const AUTH_MIN_FAILURES = 5;
+
 // HTTP 429 / usage limit / cooldown は全て quota 系。cooldown は billing 系と排他（同じ行に cooldown + 402 は起こらない）。
-export const quotaFailure = text => /HTTP[ _:]*429\b|\b429\b|cooldown|(?:usage|weekly|monthly)[_ /.-]*limit|limit[^\n]{0,60}exhausted|rate[_ .-]?limit|RESOURCE_EXHAUSTED|codex_cooldown/i.test(String(text));
+const http402 = text => /(?<!\d)402(?!\d)/.test(String(text));
+const http403 = text => /(?<!\d)403(?!\d)/.test(String(text));
+const http429 = text => /(?<!\d)429(?!\d)/.test(String(text));
+export const quotaFailure = text => http429(text) || /cooldown|(?:usage|weekly|monthly)[_ /.-]*limit|limit[^\n]{0,60}exhausted|rate[_ .-]?limit|RESOURCE_EXHAUSTED|codex_cooldown/i.test(String(text));
 // billing は 402 / insufficient balance|quota|credits / payment_required のみ。
 // 429 や rate limit 由来の "Insufficient credits" を billing と誤判定しない（quotaFailure と順序で分離）。
-export const billingFailure = text => /\b402\b|insufficient[_ ](?:balance|quota|credits?)|(?:credits?|balance)[ _-]*(?:are[ _-]*)?(?:depleted|exhausted|insufficient)|(?:out of|no|not enough|low) credits?|credit[_ -](?:balance|limit)[^\n]{0,40}(?:low|exceed|insufficient|depleted|exhausted)|payment_required/i.test(String(text));
+export const billingFailure = text => http402(text)
+  || (/outstanding balance|billing account[^\n]{0,80}(?:disabled|closed|suspended|outstanding|not active)/i.test(String(text)) && http403(text))
+  || /insufficient[_ ](?:balance|quota|credits?)|(?:credits?|balance)[ _-]*(?:are[ _-]*)?(?:depleted|exhausted|insufficient)|(?:out of|no|not enough|low) credits?|credit[_ -](?:balance|limit)[^\n]{0,40}(?:low|exceed|insufficient|depleted|exhausted)|payment_required/i.test(String(text));
 // 文言に 429 を含む billing は偽の billing（実際は quota）。判定補助。
-export const billingWithQuotaHint = text => billingFailure(text) && /HTTP[ _:]*429|\b429\b|rate[_ .-]?limit|cooldown/i.test(String(text));
+export const billingWithQuotaHint = text => billingFailure(text) && (http429(text) || /rate[_ .-]?limit|cooldown/i.test(String(text)));
 // Provider timestamps without an offset are interpreted in the host timezone.
 export function quotaReset(text) {
   return Date.parse(String(text).match(/(?:reset(?:s|ting)?(?: at)?|retry at)\s*[:=]?\s*(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:?\d\d)?)/i)?.[1]);
@@ -29,11 +37,19 @@ export function realLaneStats(home, now = Date.now()) {
     if (!Number.isFinite(at) || at < now - 86400_000 || at > now) continue;
     const status = normalizeExecutorStatus(row);
     if (status === 'unrouted' || !row.provider) continue;
-    const s = providers[row.provider] ||= { calls: 0, failures: 0, quotaCalls: 0, billingCalls: 0, lastBillingAt: 0, failRate: 0, reasons: {}, until: null, lastOkAt: 0, lastQuotaAt: 0 };
+    const s = providers[row.provider] ||= { calls: 0, failures: 0, quotaCalls: 0, billingCalls: 0, lastBillingAt: 0, failRate: 0, reasons: {}, until: null, lastOkAt: 0, lastQuotaAt: 0, events: [] };
     s.calls++;
+    const event = { at };
+    s.events.push(event);
     if (status === 'ok') { s.lastOkAt = Math.max(s.lastOkAt, at); continue; }
-    const detail = [row.status, row.httpStatus, row.http_status, row.reason, row.stderr, row.stderrTail, row.spawnError].filter(Boolean).join(' ');
+    const detail = [row.status, row.httpStatus, row.http_status, row.reason, row.error, row.stderr, row.stderrTail, row.spawnError].filter(Boolean).join(' ');
     // cooldown 状態の行は常に quota 扱い（実機: glm が 70 件の cooldown 行を持ち real_fail_rate と誤判定）。
+    // 402 は RESOURCE_EXHAUSTED を伴うことがある。429 も同居する場合だけ quota を優先する。
+    if (row.status !== 'cooldown' && billingFailure(detail) && !billingWithQuotaHint(detail)) {
+      s.billingCalls++;
+      s.lastBillingAt = Math.max(s.lastBillingAt, at);
+      continue;
+    }
     if (row.status === 'cooldown' || quotaFailure(detail)) {
       s.quotaCalls++;
       s.lastQuotaAt = Math.max(s.lastQuotaAt, at);
@@ -41,14 +57,10 @@ export function realLaneStats(home, now = Date.now()) {
       if (Number.isFinite(until) && (!s.until || until > s.until)) s.until = until;
       continue;
     }
-    if (billingFailure(detail)) {
-      s.billingCalls++;
-      s.lastBillingAt = Math.max(s.lastBillingAt, at);
-      continue;
-    }
     s.failures++;
     const http = detail.match(/(?:HTTP[ _:]*|(?:^|\s))([45]\d\d)\b/i)?.[1];
     const reason = redactAll(http ? `HTTP ${http}` : String(row.reason || row.stderr || row.stderrTail || row.spawnError || row.status).split(/\r?\n/)[0]).slice(0, 180);
+    event.reason = reason;
     s.reasons[reason] = (s.reasons[reason] || 0) + 1;
   }
   for (const s of Object.values(providers)) s.failRate = s.calls ? s.failures / s.calls : 0;
@@ -60,7 +72,7 @@ export function applyRealLaneHealth(health, home, now = Date.now()) {
   for (const [lane, state] of Object.entries(health.lanes)) {
     const s = stats[lane];
     if (s) state.real24h = s;
-    const errorQuota = quotaFailure(state.error);
+    const errorQuota = quotaFailure(state.error) && !(billingFailure(state.error) && !billingWithQuotaHint(state.error));
     const errorUntil = quotaReset(state.error);
     // A direct probe success after the last 429 proves the quota window is over.
     const probeOkAt = millis(state.lastProbeOkAt) || 0;
@@ -72,11 +84,30 @@ export function applyRealLaneHealth(health, home, now = Date.now()) {
     const quota = ledgerQuota || (errorQuota && (!Number.isFinite(errorUntil) || errorUntil > now)) || cooldownQuota;
     const until = Math.max(ledgerQuota ? s.until || 0 : 0,
       errorQuota && errorUntil > now ? errorUntil : 0, cooldownQuota ? stateUntil : 0) || null;
-    if (s?.calls >= 5 && s.failRate >= .5) {
-      state.alive = false;
-      state.reason = 'real_fail_rate';
-      delete state.until;
-      state.error = Object.entries(s.reasons).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([r, n]) => `${r} (${n})`).join('; ');
+    // Evaluate only calls after the latest proven recovery, independent of ledger order.
+    const lastOkAt = Math.max(s?.lastOkAt || 0, probeOkAt);
+    const calls = s?.events.filter(event => event.at > lastOkAt) || [];
+    const failures = calls.filter(event => event.reason !== undefined);
+    if (calls.length >= 5 && failures.length / calls.length >= .5) {
+      const isAuth = event => /basic authentication|HTTP\s*401|\b401\b|unauthorized|login required|token.*expired|Missing bearer|Failed to refresh token|access token could not be refreshed|log out and sign in again|sign in again/i.test(event.reason || '');
+      const authFailures = failures.filter(isAuth);
+      const authDominant = authFailures.length >= AUTH_MIN_FAILURES && authFailures.length / failures.length >= AUTH_DOMINANT_RATIO;
+      if (authDominant) {
+        state.alive = false;
+        state.reason = lane === 'codex' ? 'dead:oauth_consent' : 'auth_invalid';
+        delete state.until;
+        state.error = failures.map(event => event.reason).filter(Boolean).join('; ');
+        const otherFailures = failures.filter(event => !isAuth(event));
+        if (otherFailures.length) {
+          const topOther = Object.entries(otherFailures.reduce((reasons, event) => { reasons[event.reason] = (reasons[event.reason] || 0) + 1; return reasons; }, {})).sort((a, b) => b[1] - a[1])[0][0];
+          state.error += `; 認証系 ${authFailures.length}件 / その他 ${otherFailures.length}件: ${topOther}`;
+        }
+      } else {
+        state.alive = false;
+        state.reason = 'real_fail_rate';
+        delete state.until;
+        state.error = Object.entries(failures.reduce((reasons, event) => { reasons[event.reason] = (reasons[event.reason] || 0) + 1; return reasons; }, {})).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([r, n]) => `${r} (${n})`).join('; ');
+      }
     // A later real success supersedes wallet evidence; gateway probes do not.
     } else if ((s?.billingCalls > (s?.quotaCalls || 0) && s.lastBillingAt >= s.lastOkAt)
       || (!quota && !state.alive && billingFailure(`${state.reason} ${state.error || ''}`))) {

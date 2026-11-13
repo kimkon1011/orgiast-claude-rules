@@ -43,6 +43,12 @@ export function mergeKnowledge(knowledge, learned, candidates, observation, tool
   const pending = [...candidates];
   const promoted = [];
   for (const item of learned) {
+    // 監査キュー自身の話(Self-reference)は学習しない。レビューセッションの最終文
+    // 「tool-name-route の候補1件は棄却しました」を夜間監査が pattern に変換した行
+    // （2026-11-03 実測: pattern="tool-name-route の棄却" / route="gh secret"）は
+    // 実先送り文ではなく、route も道具名のままで手順文に書き直せない。保留すると
+    // 見直しTODOが再発するので、候補にも積まずに捨てる（[[feedback_handoff_audit_self_reference_false_positive]]）。
+    if (key(item.pattern).startsWith('tool-name-route の')) continue;
     if (isToolNameRoute(item.route, toolRoutes)) {
       if (!pending.some(c => key(c.pattern) === key(item.pattern) && key(c.route) === key(item.route) && c.observation === observation)) pending.push({ ...item, observation, reason: 'tool-name-route' });
       continue;
@@ -135,6 +141,37 @@ export async function runNightly(options = {}) {
     const now = options.now || new Date();
     const until = new Date(now); until.setHours(0, 0, 0, 0);
     const since = new Date(until); since.setDate(since.getDate() - 1);
+    // Catch-up: 前回の window からギャップがあればバックフィルする。
+    // PC が数日オフラインだと複数回の定期起動が欠落し、欠けた日の窓が永久に書かれない。
+    // deferral-ledger の最新 window.until から today の since までの間の1日ごとに走査する。
+    try {
+      const ledgerFile = deferralLedgerFile(home);
+      const ledger = readJsonl(ledgerFile);
+      const lastWindow = ledger.filter(r => r.kind === 'window').reduce((last, w) => (!last || Date.parse(w.ts) > Date.parse(last.ts)) ? w : last, null);
+      if (lastWindow) {
+        const lastUntil = new Date(lastWindow.until);
+        const DAY_MS = 24 * 60 * 60 * 1000;
+        // 遅延が15分以内なら丸め誤差とみなしてスキップ
+        if (lastUntil.getTime() < since.getTime() - 15 * 60 * 1000) {
+          for (let d = new Date(lastUntil); d.getTime() + DAY_MS <= since.getTime(); d.setDate(d.getDate() + 1)) {
+            const from = d.toISOString();
+            const next = new Date(d);
+            next.setDate(next.getDate() + 1);
+            const to = next.toISOString();
+            const report = scan({ home, since: from, until: to });
+            const rows = report.sources.flatMap(source => (source.rows || []).map(row => ({ ...row, source: source.name })));
+            const byPattern = {};
+            let total = 0;
+            for (const source of report.sources) { total += source.total || 0; for (const [p, c] of Object.entries(source.byPattern || {})) byPattern[p] = (byPattern[p] || 0) + c; }
+            const seen = new Set(ledger.filter(r => r.kind === 'hit').map(r => r.observation));
+            const fresh = rows.filter(row => !seen.has(deferralObservation(row)));
+            const ts = new Date().toISOString();
+            appendJsonl(ledgerFile, { ts, kind: 'window', since: from, until: to, total, hits: rows.length, byPattern, detector: 'local', detectorDiffers: false, catchup: true });
+            for (const row of fresh) appendJsonl(ledgerFile, { ts, kind: 'hit', observation: deferralObservation(row), ...row, catchup: true });
+          }
+        }
+      }
+    } catch (e) { console.error(`handoff-audit-nightly catchup: ${e.message}`); }
     const knowledgeFile = options.knowledgeFile || fileURLToPath(new URL('./handoff-audit-knowledge.json', import.meta.url));
     let knowledge = JSON.parse(fs.readFileSync(knowledgeFile, 'utf8'));
     const resources = { ...(options.resources || loadResources(home)), knowledge };

@@ -138,6 +138,17 @@
         "repo": "EXHIBITION_OVERLAP_REPO",
         "appDir": "EXHIBITION_OVERLAP_APP_DIR"
       }
+    },
+    {
+      "appName": "TETSUKO管理画面",
+      "kind": "next",
+      "intake": "relay",
+      "refs": {
+        "url": "FEEDBACK_RELAY_URL",
+        "secret": "FEEDBACK_RELAY_SECRET",
+        "repo": "FEEDBACK_5AD8993018C0_REPO",
+        "appDir": "FEEDBACK_5AD8993018C0_APP_DIR"
+      }
     }
   ]
 }

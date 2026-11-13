@@ -352,9 +352,10 @@ test('reopenLoop: 再接続できなかった(unverified)reopen はループに�
 
   // 60分以内に2回 reopen したが全て unverified（再接続失敗）。これはループではなく接続障害なので止めない。
   const logFile = path.join(base, 'reopen-lost-sessions.log');
+  // Use different IDs so unverifiedStreak (連続2回以上) をトリガーしない
   const logEntries = [
     { at: '2026-11-07T11:20:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
-    { at: '2026-11-07T11:40:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
+    { at: '2026-11-07T11:40:00.000Z', reopened: [{ id: 'two' }], verified: [], unverified: ['two'] },
   ];
   fs.writeFileSync(logFile, logEntries.map(e => JSON.stringify(e)).join('\n') + '\n');
 

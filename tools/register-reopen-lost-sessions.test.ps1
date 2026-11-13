@@ -37,11 +37,11 @@ Assert (-not $r2.changed -and $script:writes -eq 2) 'idempotent registration'
 $script:stored['OrgiastReopenLostSessions'].Principal.UserId = 'DOMAIN\uers'
 $script:stored['OrgiastReopenLostSessions'].Triggers[0].UserId = 'DESKTOP-2D0R4LI\uers'
 $script:stored['OrgiastReopenLostSessionsWatch'].Principal.UserId = ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
-$script:stored['OrgiastReopenLostSessionsWatch'].Triggers[0].UserId = 'uers'
 $rNorm = Register-ReopenLostTask -GetTask $get -RegisterTask $register
 Assert (-not $rNorm.changed -and $script:writes -eq 2) 'UserId normalization handles DOMAIN\user, bare user, and SID as identical'
 
-$script:stored['OrgiastReopenLostSessionsWatch'].Triggers[0].Delay = 'PT1M'
+# Watch task は time trigger なので UserId を持たない。Drift は Repetition.Interval で検出
+$script:stored['OrgiastReopenLostSessionsWatch'].Triggers[0].Repetition.Interval = 'PT20M'
 $r3 = Register-ReopenLostTask -GetTask $get -RegisterTask $register
 Assert ($r3.changed -and $script:writes -eq 3) 'repair drift on watch task'
 

@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 
 export const SESSIONS_DIR = path.join(os.homedir(), '.claude', 'sessions');
 // Maximum tolerated difference (ms) between JSON startedAt and process start
@@ -20,15 +21,15 @@ function readJson(file, fallback) {
 }
 
 // Windows: get process start time via WMI to detect PID reuse.
-function psCreateDate(pid, spawn) {
+function psCreateDate(pid, spawnImpl = spawnSync) {
   try {
-    const result = spawn(
+    const result = spawnImpl(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-Command',
         `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CreationDate.ToUniversalTime().ToString('o')`],
       { encoding: 'utf8', windowsHide: true, timeout: 5000 }
     );
-    if (result.status === 0 && result.stdout.trim()) {
+    if (result && result.status === 0 && result.stdout && result.stdout.trim()) {
       return new Date(result.stdout.trim());
     }
     return null;
@@ -54,7 +55,8 @@ export function pidIsSessionProcess(pid, startedAt, { spawn = psCreateDate, now 
   if (!pidAlive(pid)) return false;
   if (!startedAt) return true; // No timestamp to check — trust kill(0)
   const recorded = new Date(startedAt).getTime();
-  const created = spawn(pid);
+  const getCreateDate = spawn;
+  const created = getCreateDate(pid);
   if (!created) return true; // Cannot verify — trust kill(0)
   const diff = Math.abs(created.getTime() - recorded);
   return diff < START_TIME_TOLERANCE_MS;

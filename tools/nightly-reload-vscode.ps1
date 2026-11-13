@@ -188,10 +188,17 @@ function Invoke-VSCodeRestart($CodeCli, [string[]]$RestoreTargets) {
     return $true
 }
 
+function Resolve-NodeCli {
+    $cmd = Get-Command node -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd -and $cmd.Source) { return $cmd.Source }
+    return 'node.exe'
+}
+
 function Save-ReloadSnapshot($SnapshotPath) {
     $resultPath = [IO.Path]::GetTempFileName()
     try {
-        $output = (& node.exe (Join-Path $PSScriptRoot 'reload-snapshot.mjs') save $SnapshotPath --out $resultPath) -join "`n"
+        $nodeCli = Resolve-NodeCli
+        $output = (& $nodeCli (Join-Path $PSScriptRoot 'reload-snapshot.mjs') save $SnapshotPath --out $resultPath) -join "`n"
         if ($LASTEXITCODE -ne 0) { throw "Snapshot failed: $output" }
         $result = Get-Content -LiteralPath $resultPath -Raw -Encoding utf8 | ConvertFrom-Json
         Write-Log ("SNAPSHOT: {0} sessions / {1}" -f $result.count, $SnapshotPath) | Out-Host
@@ -200,7 +207,8 @@ function Save-ReloadSnapshot($SnapshotPath) {
 
 function Restore-ReloadSnapshot($SnapshotPath) {
     $resultPath = [IO.Path]::GetTempFileName()
-    $output = (& node.exe (Join-Path $PSScriptRoot 'reload-snapshot.mjs') restore $SnapshotPath --out $resultPath) -join "`n"
+    $nodeCli = Resolve-NodeCli
+    $output = (& $nodeCli (Join-Path $PSScriptRoot 'reload-snapshot.mjs') restore $SnapshotPath --out $resultPath) -join "`n"
     $exitCode = $LASTEXITCODE
     try { $result = Get-Content -LiteralPath $resultPath -Raw -Encoding utf8 | ConvertFrom-Json } catch { $result = @{ error = $output } }
     Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
@@ -210,7 +218,7 @@ function Restore-ReloadSnapshot($SnapshotPath) {
     $summary = "RC-RESTORE: connected=$connected failed=$($failures.Count) $detail $($result.error)"
     Write-Log $summary | Out-Host
     if ($exitCode -ne 0 -or $failures.Count -gt 0 -or $result.error) {
-        & node.exe (Join-Path $PSScriptRoot 'notify-kim.mjs') --kind info $summary | Out-Host
+        & $nodeCli (Join-Path $PSScriptRoot 'notify-kim.mjs') --kind info $summary | Out-Host
         if ($LASTEXITCODE -ne 0) { Write-Log 'WARN: kim-inbox notification failed' | Out-Host }
     }
 }
@@ -218,7 +226,8 @@ function Restore-ReloadSnapshot($SnapshotPath) {
 function Get-ReloadSnapshotCount {
     $resultPath = [IO.Path]::GetTempFileName()
     try {
-        & node.exe (Join-Path $PSScriptRoot 'reload-snapshot.mjs') save (Join-Path $env:TEMP 'nightly-reload-preview.json') --dry-run --out $resultPath 2>$null | Out-Null
+        $nodeCli = Resolve-NodeCli
+        & $nodeCli (Join-Path $PSScriptRoot 'reload-snapshot.mjs') save (Join-Path $env:TEMP 'nightly-reload-preview.json') --dry-run --out $resultPath 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0) { return '?' }
         $result = Get-Content -LiteralPath $resultPath -Raw -Encoding utf8 | ConvertFrom-Json
         return $result.count

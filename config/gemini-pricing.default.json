@@ -5,6 +5,9 @@
     "gemini-3.5-flash": { "inputUsdPerMillion": 1.5, "outputUsdPerMillion": 9, "cachedInputUsdPerMillion": 0.15, "batchMultiplier": 0.5, "searchUsdPerCall": null },
     "gemini-3.6-flash": { "inputUsdPerMillion": 0.75, "outputUsdPerMillion": 3.75, "cachedInputUsdPerMillion": 0.075, "batchMultiplier": 0.5, "searchUsdPerCall": null },
     "gemini-3.7-flash": { "inputUsdPerMillion": 0.75, "outputUsdPerMillion": 3.75, "cachedInputUsdPerMillion": 0.075, "batchMultiplier": 0.5, "searchUsdPerCall": null },
-    "gemini-3.8-flash": { "inputUsdPerMillion": 0.75, "outputUsdPerMillion": 3.75, "cachedInputUsdPerMillion": 0.075, "batchMultiplier": 0.5, "searchUsdPerCall": null }
+    "gemini-3.8-flash": { "inputUsdPerMillion": 0.75, "outputUsdPerMillion": 3.75, "cachedInputUsdPerMillion": 0.075, "batchMultiplier": 0.5, "searchUsdPerCall": null },
+    "gemini-4-argon": { "inputUsdPerMillion": 2.0, "outputUsdPerMillion": 10.0, "cachedInputUsdPerMillion": 0.1, "batchMultiplier": 0.5, "searchUsdPerCall": null, "promoEnd": "2026-11-30" },
+    "gemini-4-carbon": { "inputUsdPerMillion": 1.0, "outputUsdPerMillion": 5.0, "cachedInputUsdPerMillion": 0.05, "batchMultiplier": 0.5, "searchUsdPerCall": null, "promoEnd": "2026-11-30" },
+    "gemini-4-hydrogen": { "inputUsdPerMillion": 1.5, "outputUsdPerMillion": 7.5, "cachedInputUsdPerMillion": 0.15, "batchMultiplier": 0.5, "searchUsdPerCall": null }
   }
 }

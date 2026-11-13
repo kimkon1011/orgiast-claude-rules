@@ -536,6 +536,89 @@ function reopenRepeatCounts(base, nowFn = Date.now) {
   return counts;
 }
 
+// 連続 unverified ガード: ID ごとに「reopened に載り verified に入らなかった」連続回数を数える。
+// verified に入ったら 0 に戻す。連続 2 回以上かつ最後の unverified から 6 時間以内なら再試行しない。
+// verifyError 等でどちらにも入らなかった回（entry に reopened はあるが verified/unverified の配列に無い）は数えない。
+// 6 時間経過で 1 回だけ再試行でき、また unverified なら再び 6 時間止まる。
+export function unverifiedStreakCounts(base, nowFn = Date.now) {
+  const logFile = path.join(base, 'reopen-lost-sessions.log');
+  const streaks = {};
+  try {
+    const raw = fs.readFileSync(logFile, 'utf8');
+    const nowTime = typeof nowFn === 'function' ? nowFn() : nowFn;
+    const cutoff = nowTime - 6 * 60 * 60 * 1000;
+    const state = {};
+    for (const line of raw.split('\n').filter(Boolean)) {
+      try {
+        const entry = JSON.parse(line);
+        if (!entry.at || !Array.isArray(entry.reopened)) continue;
+        if (Date.parse(entry.at) < cutoff) continue;
+        const verified = new Set(Array.isArray(entry.verified) ? entry.verified : []);
+        const unverified = Array.isArray(entry.unverified) ? entry.unverified : [];
+        for (const r of entry.reopened) {
+          const id = r?.id || r;
+          if (!id) continue;
+          if (!state[id]) state[id] = { consecutive: 0, lastUnverified: 0 };
+          if (verified.has(id)) {
+            state[id].consecutive = 0;
+          } else if (unverified.includes(id)) {
+            state[id].consecutive++;
+            state[id].lastUnverified = Date.parse(entry.at);
+          }
+          // neither verified nor unverified (verifyError etc.): not counted
+        }
+      } catch {}
+    }
+    for (const [id, s] of Object.entries(state)) {
+      if (s.consecutive >= 2 && (nowTime - s.lastUnverified) < 6 * 60 * 60 * 1000) {
+        streaks[id] = { consecutive: s.consecutive, lastUnverified: new Date(s.lastUnverified).toISOString() };
+      }
+    }
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
+  return streaks;
+}
+
+// 候補のセッションが既に生存プロセスで実行中かを確認する。
+// 優先: sessions/*.json の同じ sessionId で生存 pid → ブロック
+// 次点: 実行中の claude.exe の CommandLine に sessionId/bridgeSessionId が含まれる → ブロック
+// プロセス一覧の取得に失敗したときはブロックしない（fail-open）。
+export function processRunningForSession(sessionId, bridgeSessionId, { base, spawn = spawnSync, fsImpl = fs } = {}) {
+  // Check 1: sessions/*.json に同じ sessionId で生存 pid
+  if (sessionId || bridgeSessionId) {
+    const sessionsDir = path.join(base || path.join(os.homedir(), '.claude'), 'sessions');
+    try {
+      for (const entry of fsImpl.readdirSync(sessionsDir)) {
+        if (!entry.endsWith('.json')) continue;
+        try {
+          const data = JSON.parse(fsImpl.readFileSync(path.join(sessionsDir, entry), 'utf8'));
+          if (data.pid && (data.sessionId === sessionId || (bridgeSessionId && data.sessionId === bridgeSessionId))) {
+            try { process.kill(data.pid, 0); return true; } catch { /* dead pid */ }
+          }
+        } catch { /* broken json */ }
+      }
+    } catch { /* sessions dir not found */ }
+  }
+  // Check 2: 実行中の claude.exe CommandLine に sessionId/bridgeSessionId が含まれる
+  if (!sessionId && !bridgeSessionId) return false;
+  try {
+    const searchTerm = sessionId || bridgeSessionId;
+    // PowerShell の Get-Process で CommandLine を取得（Windows の権限により null が返ることがある）
+    const script = `Get-Process claude -ErrorAction SilentlyContinue | Select-Object -ExpandProperty CommandLine`;
+    const res = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+    if (res.status === 0) {
+      const lines = String(res.stdout ?? '').split('\n');
+      for (const line of lines) {
+        if (line.includes(searchTerm)) return true;
+      }
+    }
+  } catch {
+    // fail-open: process listing failure does not block reopen
+  }
+  return false;
+}
+
 export async function getLoadGuardStatus({
   env = process.env,
   spawn = spawnSync,

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isEntry } from './is-entry.mjs';
-import { measure, fetchPage, STATUS } from './lahaina-exposure-check.mjs';
+import { measure, fetchPage, fetchPageWithMeta, STATUS } from './lahaina-exposure-check.mjs';
 import { defaultDriveKeyPath, getDriveToken } from './lib/drive-auth.mjs';
 import { callGraph, readEnvFile, DEFAULT_ENV_PATH, resolveUserId } from './instagram/ig-api.mjs';
 
@@ -19,17 +19,23 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/
 export function isoLocal(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
 }
-export function parseJalanDetails(html = '') {
+export function parseJalanDetails(html) {
+  if (!html || typeof html !== 'string' || html.trim() === '') {
+    return { minPrice: '', planCount: 0, error: 'じゃらんHTML取得失敗 (HTMLが空/null)' };
+  }
   const prices = [...html.matchAll(/([0-9]{1,3}(?:,[0-9]{3})+)円/g)].map(m => Number(m[1].replaceAll(',',''))).filter(Number.isFinite);
   const markerCounts = ['planCassette','planName'].map(marker => (html.match(new RegExp(marker,'gi'))||[]).length);
   const fallback = (html.match(/宿泊プラン/gi)||[]).length;
-  return { minPrice: prices.length ? Math.min(...prices) : '', planCount: Math.max(...markerCounts, fallback ? 1 : 0) };
+  return { minPrice: prices.length ? Math.min(...prices) : '', planCount: Math.max(...markerCounts, fallback ? 1 : 0), error: '' };
 }
-export function parseOfficial(html = '') {
+export function parseOfficial(html) {
+  if (!html || typeof html !== 'string' || html.trim() === '') {
+    return { reservationCount: 0, continuing: false, oyster: false, latestNoticeDate: '', error: '公式HP HTML取得失敗 (HTMLが空/null)' };
+  }
   const hrefs = [...html.matchAll(/href\s*=\s*["']([^"']+)["']/gi)].map(m => m[1]);
   const reservationLinks = hrefs.filter(h => /jalan|rakuten|booking\.com|airbnb|beds24|yad353005|予約|reserve/i.test(h));
   const dates = [...html.matchAll(/(?:20\d{2})[.\/-](?:1[0-2]|0?[1-9])[.\/-](?:3[01]|[12]\d|0?[1-9])/g)].map(m => m[0].replace(/[.\/]/g,'-').split('-').map((v,i)=>i ? v.padStart(2,'0') : v).join('-'));
-  return { reservationCount: new Set(reservationLinks).size, continuing: html.includes('営業継続'), oyster: html.includes('牡蠣'), latestNoticeDate: dates.sort().at(-1) || '' };
+  return { reservationCount: new Set(reservationLinks).size, continuing: html.includes('営業継続'), oyster: html.includes('牡蠣'), latestNoticeDate: dates.sort().at(-1) || '', error: '' };
 }
 export function buildRow(k) {
   return [k.date,k.exposureScore,k.jalan.status,k.jalan.minPrice,k.jalan.planCount,k.rakuten,k.official.reservationCount,k.official.continuing ? 'あり' : 'なし',k.airbnb,k.booking,k.instagram.followers,k.instagram.posts,k.ga4.sessions,k.ga4.users,k.ga4.sources.join(' / '),k.gsc.clicks,k.gsc.impressions,k.gsc.queries.join(' / '),k.errors.join(' | ')];
@@ -126,11 +132,23 @@ export async function collect({now=new Date(),dryRun=false}={}) {
   const twoDaysAgo=new Date(now); twoDaysAgo.setDate(twoDaysAgo.getDate()-2);
   const errors=[];
   const exposure=await measure({dateStr:isoLocal(check)});
-  const jalanItem=exposure.results.find(r=>r.media==='じゃらん'), rakuten=exposure.results.find(r=>r.media==='楽天トラベル'), airbnb=exposure.results.find(r=>r.media==='Airbnb'), booking=exposure.results.find(r=>r.media==='Booking.com');
-  const jalanHtml=await fetchPage(jalanItem.url), officialHtml=await fetchPage('https://lahaina.jp/');
+  const jalanItem=exposure.results.find(r=>r.media==='じゃらん'), rakuten=exposure.results.find(r=>r.media==='楽天トラベル'), airbnb=exposure.results.find(r=>r.media==='Airbnb'), booking=exposure.results.find(r=>r.media==='Booking.com'), officialItem=exposure.results.find(r=>r.media==='公式HP');
+
+  const jalanMeta = (jalanItem && jalanItem.html !== undefined) ? { html: jalanItem.html, status: jalanItem.httpStatus, url: jalanItem.url, error: jalanItem.fetchError } : await fetchPageWithMeta(jalanItem?.url || 'https://www.jalan.net/yad353005/plan/');
+  const officialMeta = (officialItem && officialItem.html !== undefined) ? { html: officialItem.html, status: officialItem.httpStatus, url: officialItem.url || 'https://lahaina.jp/', error: officialItem.fetchError } : await fetchPageWithMeta('https://lahaina.jp/');
+
+  const jalanDetails = parseJalanDetails(jalanMeta.html);
+  const officialDetails = parseOfficial(officialMeta.html);
+
+  for (const item of exposure.results) {
+    if (item.html === null && item.media !== 'Google') {
+      errors.push(`${item.media}: ${item.fetchError || item.evidence || '応答が空'} (URL: ${item.url}, HTTP: ${item.httpStatus ?? 'ERROR'})`);
+    }
+  }
+
   const [instagram,ga4,gsc]=await Promise.all([getInstagram(),getGa4(isoLocal(yesterday)),getGsc(isoLocal(twoDaysAgo))]);
   if(instagram.error) errors.push(instagram.error); if(ga4.error) errors.push(ga4.error); if(gsc.error) errors.push(gsc.error);
-  const k={date,exposureScore:`${exposure.buyable}/${exposure.total}`,jalan:{status:jalanItem.status,...parseJalanDetails(jalanHtml)},rakuten:rakuten.status,official:parseOfficial(officialHtml),airbnb:airbnb.status,booking:booking.status,instagram,ga4,gsc,errors,checkin:exposure.checkin};
+  const k={date,exposureScore:`${exposure.buyable}/${exposure.total}`,jalan:{status:jalanItem?.status || 'unmeasurable',...jalanDetails},rakuten:rakuten?.status || 'unmeasurable',official:officialDetails,airbnb:airbnb?.status || 'unmeasurable',booking:booking?.status || 'unmeasurable',instagram,ga4,gsc,errors,checkin:exposure.checkin};
   const row=buildRow(k); const dir=path.join(os.homedir(),'.claude','lahaina-kpi'); fs.mkdirSync(dir,{recursive:true});
   const file=path.join(dir,`${date}.json`); fs.writeFileSync(file,JSON.stringify({...k,row,savedAt:new Date().toISOString()},null,2));
   let write; try { write=await writeSheet(row,dryRun); } catch(e) { errors.push(e.message); fs.writeFileSync(file,JSON.stringify({...k,errors,row:buildRow(k),savedAt:new Date().toISOString()},null,2)); write={mode:'local-fallback',verified:false,error:e.message}; }

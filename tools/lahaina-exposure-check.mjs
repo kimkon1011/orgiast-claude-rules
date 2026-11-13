@@ -90,7 +90,7 @@ export function judgeAirbnb(html) {
 
 // ---- 取得 -------------------------------------------------------------------
 
-export async function fetchPage(url, timeoutSec = 20) {
+export async function fetchPageWithMeta(url, timeoutSec = 20) {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutSec * 1000);
   try {
@@ -99,13 +99,24 @@ export async function fetchPage(url, timeoutSec = 20) {
       redirect: 'follow',
       signal: ac.signal,
     });
+    const status = res.status;
+    const statusText = res.statusText || '';
+    if (!res.ok) {
+      return { html: null, status, statusText, url, error: `HTTP ${status}${statusText ? ' ' + statusText : ''}` };
+    }
     const buf = Buffer.from(await res.arrayBuffer());
-    return decode(buf, res.headers.get('content-type') || '');
+    const html = decode(buf, res.headers.get('content-type') || '');
+    return { html, status, statusText, url, error: null };
   } catch (e) {
-    return null;
+    return { html: null, status: 0, statusText: e.message || 'Fetch failed', url, error: `Fetch error: ${e.message}` };
   } finally {
     clearTimeout(t);
   }
+}
+
+export async function fetchPage(url, timeoutSec = 20) {
+  const meta = await fetchPageWithMeta(url, timeoutSec);
+  return meta.html;
 }
 
 /** じゃらん等は Shift_JIS。UTF-8 で読めなければ Shift_JIS として復号する。 */
@@ -166,15 +177,18 @@ export async function measure({ dateStr, timeoutSec = 20 } = {}) {
   ];
 
   for (const p of probes) {
-    const html = await fetchPage(p.url, timeoutSec);
+    const meta = await fetchPageWithMeta(p.url, timeoutSec);
     let r;
     try {
-      r = p.judge(html);
+      r = p.judge(meta.html);
     } catch (e) {
       r = { status: STATUS.UNMEASURABLE, evidence: `判定エラー: ${e.message}` };
     }
     if (typeof r === 'string') r = { status: r, evidence: '' };
-    results.push({ media: p.media, status: r.status, evidence: r.evidence, url: p.url });
+    if (meta.html === null && meta.error) {
+      r = { status: STATUS.UNMEASURABLE, evidence: `取得失敗 (${meta.error})` };
+    }
+    results.push({ media: p.media, status: r.status, evidence: r.evidence, url: p.url, httpStatus: meta.status, fetchError: meta.error, html: meta.html });
   }
 
   // Google は bot 遮断で機械取得できないため、勝手に 0 扱いせず「未計測」として明示する。

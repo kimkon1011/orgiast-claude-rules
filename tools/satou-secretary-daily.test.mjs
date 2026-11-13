@@ -28,7 +28,10 @@ import {
   replaceUnknownPersonNames,
   completeReportSentence,
   finalizeReportLine,
+  run,
+  deliveryFailureNoticeText,
 } from "./satou-secretary-daily.mjs";
+import { register, TASK_NAME, TASK_RETRY_NAME } from "./satou-secretary-daily-register.mjs";
 const now = new Date("2026-11-09T06:30:00+09:00"),
   h = [
     "案件名",
@@ -280,7 +283,8 @@ test("報告末尾は25行制限外の台帳リンクだけでDMにも余計な�
   assert.ok(report.lines.length<=25);
   assert.ok(report.text.endsWith(`\n\n${LEDGER_FOOTER}`));
   assert.equal(report.text.match(/https?:\/\//g)?.length,1);
-  assert.equal(reportDeliveryText(report.text),`おはようございます。社長への業務報告の下書きです（このまま社長とのグループへ転送できます。直したい所は Claude に伝えてください）\n\n${report.text}`);
+  assert.equal(reportDeliveryText(report.text),`おはようございます。毎日の業務状況報告です。\n\n${report.text}`);
+  assert.doesNotMatch(reportDeliveryText(report.text).replace(/https?:\/\/\S+/g,''),/ください|\?|？/);
   assert.doesNotMatch(reportDeliveryText(report.text),/10\/26|到達確認/);
 });
 test("25行に収めても全見出しと優先3件は残す", () => {
@@ -345,6 +349,142 @@ test("dry-runとno-deliverは配信しない", () => {
   assert.equal(shouldDeliver({dryRun:true}),false);
   assert.equal(shouldDeliver({noDeliver:true}),false);
   assert.equal(shouldDeliver({}),true);
+});
+test("送信前履歴照合は日次DMを定期報告（佐藤さん本人・毎日の状況報告）として渡す", async t => {
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-periodic-")); t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+  let gateOptions;
+  const deps={home,fetchSendHistory:async()=>({target:"dm-1",messages:[]}),
+    checkSendContext:async(_history,_text,opts)=>{gateOptions=opts;return{ok:true,reason:"整合"};},
+    sendDiscordDm:async()=>({delivered:true,channelId:"dm-1",messageId:"m-1"})};
+  await deliverReport({text:"本文"},{now:new Date("2026-11-10T06:30:00+09:00"),deps});
+  assert.equal(gateOptions.periodicReport.recipient,"佐藤優奈");
+  assert.equal(gateOptions.periodicReport.kind,"毎日の状況報告");
+});
+test("送信済みの印があれば再実行（07:30枠）は何もしない", async t => {
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-skip-")); t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+  const dir=path.join(home,".claude","satou-secretary"); fs.mkdirSync(dir,{recursive:true});
+  fs.writeFileSync(path.join(dir,"delivered-2026-11-10"),"{}\n");
+  let sources=0;
+  const p=await run({now:new Date("2026-11-10T07:30:00+09:00"),deps:{home,searchGmail:async()=>{sources++;return{messages:[]};}}});
+  assert.equal(p.skipped,"already-delivered");
+  assert.equal(p.write.mode,"skipped");
+  assert.equal(sources,0);
+});
+test("1ソース最後まで失敗しても取れた分で報告を作り、末尾に1行だけ断りを書く", async t => {
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-partial-")); t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+  const previousKey=process.env.GOOGLE_SA_KEY;
+  process.env.GOOGLE_SA_KEY=path.join(home,"nonexistent-sa.json"); // カレンダートークンをrelayに固定し、実認証を呼ばない
+  t.after(()=>{ if(previousKey===undefined) delete process.env.GOOGLE_SA_KEY; else process.env.GOOGLE_SA_KEY=previousKey; });
+  const sheetsHeader=["案件名","納品日","営業","予算項目","クライアント名","ｺｰﾄﾞ","制作","売上","実施計画URL","見積書URL","営業スタッフ","案件ルート"];
+  const p=await run({now:new Date("2026-11-10T06:30:00+09:00"),dryRun:true,deps:{
+    home,
+    searchGmail:async()=>{throw Error("channel gws: HTTP 500");},
+    getSheetsToken:async()=>"t",
+    askLlm:async()=>"なし",
+    fetchImpl:async url=>{
+      url=String(url);
+      if(url.includes("calendar.googleapis.com"))return Response.json({items:[]});
+      if(url.includes("pasta.tldv.io"))return Response.json({results:[]});
+      if(url.includes("fields=sheets.properties"))return Response.json({sheets:[{properties:{title:"案件一覧"}}]});
+      return Response.json({values:[sheetsHeader,["案件","2026/12/01","別","確定","B社","B","","100","","","佐藤優奈",""]]});
+    },
+  }});
+  assert.equal(p.status["Gmail"],"error");
+  assert.equal(p.status["Gmail60日"],"error");
+  assert.equal(p.status["案件一覧"],"ok");
+  assert.match(p.report.text,/■昨日の動き/);
+  assert.equal(p.report.text.split("（メール取得失敗のため一部未反映）").length-1,1);
+  assert.match(p.report.text,/（メール取得失敗のため一部未反映）$/);
+});
+test("DM送信失敗時は台帳へ理由1行と佐藤さんへの案内DM1通（1日1回）を残す", async t => {
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-notify-")); t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+  const previousKey=process.env.GOOGLE_SA_KEY;
+  process.env.GOOGLE_SA_KEY=path.join(home,"nonexistent-sa.json"); // 実認証・実Gmailを呼ばない
+  t.after(()=>{ if(previousKey===undefined) delete process.env.GOOGLE_SA_KEY; else process.env.GOOGLE_SA_KEY=previousKey; });
+  const sheets=[{properties:{title:"シート1",sheetId:1,gridProperties:{columnCount:26}}},
+    ...TABS.map((title,i)=>({properties:{title,sheetId:i+10,gridProperties:{columnCount:26}}}))];
+  const appends=[],dmTexts=[];
+  const deps={
+    home,
+    searchGmail:async()=>({messages:[]}),
+    getSheetsToken:async()=>"t",
+    askLlm:async()=>"なし",
+    fetchImpl:async(url,o={})=>{
+      url=String(url);
+      if(o.method==="POST"&&url.includes(":append")){appends.push(JSON.parse(o.body));return Response.json({updates:{updatedRange:"自動_実行ログ!A3:J3"}});}
+      if(o.method==="POST")return Response.json({});
+      if(url.includes("fields=sheets.properties"))return Response.json({sheets});
+      if(decodeURIComponent(url).includes("'シート1'!A:L"))return Response.json({values:[["keep"],["safe"]]});
+      return Response.json({values:[["header"],["row"]]});
+    },
+    fetchSendHistory:async()=>({target:"dm-1",messages:[]}),
+    checkSendContext:()=>({ok:false,reason:"重複"}),
+    sendDiscordDm:async(_target,text)=>{dmTexts.push(text);return{delivered:true,channelId:"dm-1",messageId:"m-notice"};},
+  };
+  const now=new Date("2026-11-13T06:30:00+09:00");
+  await assert.rejects(()=>run({now,deps}),/履歴照合NG/);
+  assert.equal(appends.length,1);
+  assert.match(appends[0].values[0][9],/^DM送信失敗: Discord送信前履歴照合NG/);
+  assert.deepEqual(dmTexts,[deliveryFailureNoticeText()]);
+  assert.match(dmTexts[0],/台帳の『自動_社長報告』タブに本文があります/);
+  assert.ok(fs.existsSync(path.join(home,".claude","satou-secretary","notice-2026-11-13")));
+  // 同日の再失敗では案内DMを重ねず、失敗理由だけ追記する
+  await assert.rejects(()=>run({now,deps}),/履歴照合NG/);
+  assert.equal(dmTexts.length,1);
+  assert.equal(appends.length,2);
+});
+test("台帳書き込み失敗でも報告ファイルを残し配信は試みる。配信も失敗したら案内文を切替える", async t => {
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-writefail-")); t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+  const previousKey=process.env.GOOGLE_SA_KEY;
+  process.env.GOOGLE_SA_KEY=path.join(home,"nonexistent-sa.json"); // 実認証・実Gmailを呼ばない
+  t.after(()=>{ if(previousKey===undefined) delete process.env.GOOGLE_SA_KEY; else process.env.GOOGLE_SA_KEY=previousKey; });
+  const dmTexts=[];
+  const makeDeps=gate=>({
+    home,
+    searchGmail:async()=>({messages:[]}),
+    getSheetsToken:async()=>"t",
+    askLlm:async()=>"なし",
+    fetchImpl:async(_url,o={})=>{
+      // 台帳メタ取得（write の先頭）から落として、write() 自体を失敗させる
+      if(o.method==="POST"||String(_url).includes("fields=sheets.properties"))return new Response('{"error":"sheet down"}',{status:500});
+      return Response.json({values:[["header"],["row"]]});
+    },
+    fetchSendHistory:async()=>({target:"dm-1",messages:[]}),
+    checkSendContext:gate,
+    sendDiscordDm:async(_target,text)=>{dmTexts.push(text);return{delivered:true,channelId:"dm-1",messageId:"m-2"};},
+  });
+  const now=new Date("2026-11-13T06:30:00+09:00");
+  // 台帳が落ちていても配信が成功すれば完了扱い（sendDiscordDm には報告本文だけが1通）
+  const ok=await run({now,deps:makeDeps(()=>({ok:true,reason:"整合"}))});
+  assert.equal(ok.write.mode,"failed");
+  assert.equal(ok.delivery.messageId,"m-2");
+  assert.equal(dmTexts.length,1);
+  assert.match(dmTexts[0],/^おはようございます。/);
+  assert.ok(fs.existsSync(path.join(home,".claude","satou-secretary","report-2026-11-12.md")));
+  assert.ok(fs.existsSync(path.join(home,".claude","satou-secretary","delivered-2026-11-13")));
+  // 配信も失敗したら、台帳に本文が無い状況向けの案内文に切り替える
+  const home2=fs.mkdtempSync(path.join(os.tmpdir(),"satou-writefail2-")); t.after(()=>fs.rmSync(home2,{recursive:true,force:true}));
+  const deps2=makeDeps(()=>({ok:false,reason:"重複"})); deps2.home=home2;
+  await assert.rejects(()=>run({now,deps:deps2}),/履歴照合NG/);
+  assert.equal(dmTexts.length,2);
+  assert.match(dmTexts[1],/自動作成・送信に失敗/);
+  assert.match(dmTexts[1],/07:30 にもう1回自動で実行/);
+});
+test("register は06:30本番と07:30再実行の2タスクを同じ非表示ランチャーで登録する", t => {
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-register-")); t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+  const calls=[];
+  const out=register({home,spawn:(exe,args)=>{calls.push(args);return{status:0,stdout:"ok",stderr:""};}});
+  const creates=calls.filter(a=>a.includes("/create"));
+  assert.equal(creates.length,2);
+  assert.deepEqual([...new Set(creates.map(a=>a[a.indexOf("/tr")+1]))].sort(),[out.command].sort());
+  assert.deepEqual(creates.map(a=>({name:a[a.indexOf("/tn")+1],time:a[a.indexOf("/st")+1]})),[
+    {name:TASK_NAME,time:"06:30"},
+    {name:TASK_RETRY_NAME,time:"07:30"},
+  ]);
+  assert.match(out.command,/run-hidden\.vbs/);
+  const bat=fs.readFileSync(path.join(home,".claude","tools","satou-secretary-daily-wrapper.bat"),"utf8");
+  assert.match(bat,/satou-secretary-daily\.mjs/);
+  assert.match(bat,/satou-secretary\\run\.log/);
 });
 test("同時実行と応答消失時は再送せず、ゲートNG時は送信済みにしない", async t => {
   const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-lock-")); t.after(()=>fs.rmSync(home,{recursive:true,force:true}));

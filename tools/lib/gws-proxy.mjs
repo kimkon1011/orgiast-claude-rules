@@ -13,19 +13,50 @@ export function proxyCredential({ keyPath, impersonate, scope }) {
   if (impersonate === 'kim@orgiast.jp' && scope !== 'https://www.googleapis.com/auth/calendar.readonly') throw Error('GWS proxy: kim is calendar-only');
   return impersonate === 'kim@orgiast.jp' ? GWS_KIM_MARKER : GWS_MARKER;
 }
-export async function channelRequest(route, { query, body, home = process.env.ORGIAST_HOME || os.homedir(), env = process.env, fetchImpl = globalThis.fetch, signal } = {}) {
+// 一時的障害（プロキシ5xx・ネットワークエラー・タイムアウト）は 1分→3分→10分 の
+// 間隔で計4回まで再試行する（2026-11-13 06:30 の HTTP 500 で朝の報告が消えた対策）。
+export const RETRY_DELAYS = [60000, 180000, 600000];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const channelError = (route, message, retryable, cause) =>
+  Object.assign(new Error(`channel ${route}: ${message}`), { channelRetryable: retryable, cause });
+
+export async function channelRequest(route, { query, body, home = process.env.ORGIAST_HOME || os.homedir(), env = process.env, fetchImpl = globalThis.fetch, signal, sleepImpl = sleep } = {}) {
   const secret = keyserveSecret(home, env);
   if (!secret) throw Error('GWS/LINE: keyserve enrollment credential missing');
   const base = env.ORGIAST_CHANNEL_BASE_URL || 'https://orgiast-memoryserve.vercel.app';
   const url = new URL(`/api/${route}`, base);
   if (url.protocol !== 'https:') throw Error('channel API requires HTTPS');
   for (const [key, value] of Object.entries(query || {})) url.searchParams.set(key, value);
-  const response = await fetchImpl(url.href, { method: body === undefined ? 'GET' : 'POST', redirect: 'error',
-    signal: signal || AbortSignal.timeout(30000),
-    headers: { ...keyserveAuthHeaders(secret, Date.now(), requireKeyservePcId(home, env)), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  if (!response.ok) throw Error(`channel ${route}: HTTP ${response.status}`);
-  return response.json();
+  const requestOnce = async () => {
+    const headers = { ...keyserveAuthHeaders(secret, Date.now(), requireKeyservePcId(home, env)), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) };
+    let response;
+    try {
+      response = await fetchImpl(url.href, { method: body === undefined ? 'GET' : 'POST', redirect: 'error',
+        signal: signal || AbortSignal.timeout(30000), headers,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    } catch (e) {
+      // fetch 自体の失敗（DNS・接続断・30秒タイムアウト）は一時障害として再試行する。
+      // 呼び出し元からのキャンセルだけ即失敗。
+      if (signal?.aborted) throw e;
+      return { retry: channelError(route, String(e?.message || e), true, e) };
+    }
+    if (!response.ok) {
+      // 4xx はこちら側の誤りなので再試行しない。5xx だけ待つ。
+      const error = channelError(route, `HTTP ${response.status}`, response.status >= 500);
+      if (!error.channelRetryable) throw error;
+      return { retry: error };
+    }
+    try { return { value: await response.json() }; }
+    catch (e) { return { retry: channelError(route, `応答JSON不正 (${e?.message || e})`, true, e) }; }
+  };
+  let lastError;
+  for (let attempt = 0; ; attempt++) {
+    const result = await requestOnce();
+    if (result.value !== undefined) return result.value;
+    lastError = result.retry;
+    if (attempt >= RETRY_DELAYS.length) throw lastError;
+    await sleepImpl(RETRY_DELAYS[attempt]);
+  }
 }
 export function googleRoute(raw, marker = GWS_MARKER) {
   const url = new URL(raw);

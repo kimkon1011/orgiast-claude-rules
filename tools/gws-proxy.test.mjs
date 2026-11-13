@@ -24,6 +24,24 @@ test('enrolled API request has no Google token and rejects redirects',async()=>{
   assert.equal(opts.method,'GET');assert.equal(opts.redirect,'error');assert.equal(opts.headers['x-orgiast-pc'],'WORK008');assert.equal(opts.headers.Authorization,undefined);assert.ok(!JSON.stringify(opts).includes('enroll-secret'));return Response.json({ok:true});
  }});assert.equal(result.ok,true);
 });
+const retryDeps=delays=>({home:'nonexistent',env:{ORGIAST_KEYSERVE_SECRET:'enroll-secret',ORGIAST_KEYSERVE_PC:'WORK008'},sleepImpl:async ms=>{delays.push(ms);}});
+test('channel gws の5xxは1分→3分→10分の計4回であきらめる（2026-11-13 06:30の再現）',async()=>{
+ const delays=[];let calls=0;
+ await assert.rejects(channelRequest('gws',{...retryDeps(delays),query:{service:'sheets',path:'/x'},fetchImpl:async()=>{calls++;return new Response('down',{status:calls===2?503:500});}}),/HTTP 500/);
+ assert.equal(calls,4);assert.deepEqual(delays,[60000,180000,600000]);
+});
+test('channel gws の5xx・ネットワークエラーは再試行で復帰する',async()=>{
+ const delays=[];let calls=0;
+ const result=await channelRequest('gws',{...retryDeps(delays),query:{},fetchImpl:async()=>{calls++;if(calls===1)return new Response('bad gateway',{status:502});if(calls===2)throw new Error('fetch failed');return Response.json({ok:true});}});
+ assert.equal(result.ok,true);assert.equal(calls,3);assert.deepEqual(delays,[60000,180000]);
+});
+test('channel gws の4xxと鍵欠落は再試行しない',async()=>{
+ const delays=[];let calls=0;
+ await assert.rejects(channelRequest('gws',{...retryDeps(delays),query:{},fetchImpl:async()=>{calls++;return new Response('nope',{status:404});}}),/HTTP 404/);
+ assert.equal(calls,1);assert.deepEqual(delays,[]);
+ await assert.rejects(channelRequest('gws',{home:'nonexistent',env:{},query:{},fetchImpl:async()=>{calls++;return Response.json({});}}),/keyserve enrollment credential missing/);
+ assert.equal(calls,1);assert.deepEqual(delays,[]);
+});
 test('LINE sync reads both existing formats, deduplicates by ID and appends RAW values only',async t=>{
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'line-sync-'));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
  for(const dir of ['line-openchat','line-oa'])fs.mkdirSync(path.join(home,'.claude',dir),{recursive:true});

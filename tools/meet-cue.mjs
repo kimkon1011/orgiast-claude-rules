@@ -26,6 +26,7 @@ import {
   CaptionAssembler,
   CueTracker,
   STANDARD_CARDS,
+  BOT_DISPLAY_NAME_DEFAULT,
   buildJevState,
   buildJevQuestions,
   parseJevResponse,
@@ -33,6 +34,7 @@ import {
   runDecisionRound,
   formatJstSessionDate,
   sanitizeCardData,
+  resolveBotDisplayName,
 } from './lib/meet-cue-core.mjs';
 
 import {
@@ -587,12 +589,23 @@ export async function main(argv = process.argv.slice(2)) {
     let newCharsSinceLastCheck = 0;
 
     // 3. Start Meet Bot
+    // Read config for botDisplayName
+    let botDisplayName = BOT_DISPLAY_NAME_DEFAULT;
+    try {
+      const configPath = fileURLToPath(new URL('../config/meet-cue.json', import.meta.url));
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        botDisplayName = resolveBotDisplayName(config);
+      }
+    } catch { /* use default */ }
+
     const bot = await startMeetBot({
       url: values.url,
       mode: values.mode || 'profile',
       maxMinutes: parseInt(values['max-minutes'] || '120', 10),
       debugDom: Boolean(values['debug-dom']),
       sessionDir,
+      botDisplayName,
       onCaption: ({ speaker, text, timestamp }) => {
         const newlyFinalized = assembler.pushMutation({ speaker, text, timestamp });
         for (const line of newlyFinalized) {

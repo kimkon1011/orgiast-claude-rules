@@ -90,6 +90,7 @@ export async function startMeetBot({
   maxMinutes = 120,
   debugDom = false,
   sessionDir = '',
+  botDisplayName = 'オージャストAI',
   onCaption = () => {},
   log = console.error,
 } = {}) {
@@ -149,8 +150,8 @@ export async function startMeetBot({
       try {
         const input = page.locator(sel).first();
         if (await input.isVisible({ timeout: 1000 })) {
-          await input.fill('オージャスト カンペAI');
-          log('[meet-cue-browser] ゲスト名を「オージャスト カンペAI」に設定');
+          await input.fill(botDisplayName);
+          log(`[meet-cue-browser] ゲスト名を「${botDisplayName}」に設定`);
           break;
         }
       } catch { /* try next */ }

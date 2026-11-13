@@ -25,7 +25,13 @@
 
 今回のCodex実行はscratchpadと/tmpだけに書き込み可能。Downloadsと.claudeへのファイル反映・タスク導入は、この環境から実行していない。予定起動の成功も未確認。コードのテスト成功を本番反映成功と扱わない。
 
-書き込み範囲に `C:\Users\uers` が含まれ、S4U登録が可能なWindows実行で、マージ済みリポジトリから次を実行する。
+書き込み範囲に `C:\Users\uers` が含まれ、S4U登録が可能なWindows実行で、マージ済みリポジトリから実行する。見張りを先に着地させる場合は次の登録だけで、UIのbuildを待たず予定起動・3経路のHTTP成功まで検証できる。
+
+```powershell
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\Users\uers\.claude\nightly-repo\tools\register-secretary-uptime.ps1
+```
+
+その後に一覧表示を適用する。
 
 ```powershell
 powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File C:\Users\uers\.claude\nightly-repo\tools\apply-secretary-progress.ps1

@@ -15,6 +15,7 @@ $settings.RunOnlyIfIdle = $false
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Limited
 # Disable competing restarters first; never leave two supervisors active.
 $disabled = @()
+$registeredAt=Get-Date
 try {
   foreach ($name in @('ClaudeMobile-WebServer','ClaudeMobile-WebServer-Fixed','ClaudeMobile-LineShareHealth')) {
     $old = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
@@ -30,4 +31,19 @@ try {
 }
 $registered = Get-ScheduledTask -TaskName $taskName
 if ($registered.Settings.RunOnlyIfIdle -or $registered.Triggers[0].Repetition.Interval -ne 'PT5M') { throw 'Read-back of watchdog settings failed' }
-Get-ScheduledTaskInfo -TaskName $taskName | Select-Object TaskName,LastRunTime,LastTaskResult,NextRunTime
+# Registration alone is not success: observe a real scheduled invocation.
+# This also makes watchdog-only deployment independent of the secretary UI build.
+$limit=$registeredAt.AddMinutes(6)
+do {
+  Start-Sleep -Seconds 10
+  $info=Get-ScheduledTaskInfo -TaskName $taskName
+  $task=Get-ScheduledTask -TaskName $taskName
+  if ($info.LastRunTime -gt $registeredAt -and $task.State -ne 'Running') { break }
+} while ((Get-Date) -lt $limit)
+if ($info.LastRunTime -le $registeredAt -or $info.LastTaskResult -ne 0 -or $task.State -eq 'Running') { throw 'First scheduled watchdog run was not confirmed successful' }
+$state=Get-Content (Join-Path $env:USERPROFILE '.claude\secretary-uptime\state.json') -Raw | ConvertFrom-Json
+if ([DateTimeOffset]::Parse($state.checkedAt).UtcDateTime -le $registeredAt.ToUniversalTime()) { throw 'Watchdog state was not refreshed by scheduled execution' }
+foreach ($name in @('external','gateway','secretary')) {
+  if ($state.after.$name.ok -ne $true) { throw "Scheduled watchdog did not confirm healthy HTTP: $name" }
+}
+[pscustomobject]@{ TaskName=$taskName; Interval='PT5M'; LastRunTime=$info.LastRunTime.ToString('o'); LastTaskResult=$info.LastTaskResult; CheckedAt=$state.checkedAt } | ConvertTo-Json

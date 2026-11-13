@@ -47,18 +47,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Secretary restart failed' }
 if ($LASTEXITCODE -ne 0) { throw 'Gateway restart failed' }
 & (Join-Path $PSScriptRoot 'register-secretary-uptime.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Watchdog registration failed' }
-# Observe a real scheduled invocation, never fabricate success via Start-ScheduledTask.
-$registeredAt=Get-Date
-$limit=$registeredAt.AddMinutes(6)
-do {
-  Start-Sleep -Seconds 10
-  $info=Get-ScheduledTaskInfo -TaskName 'OrgiastFunnelProbe'
-  $task=Get-ScheduledTask -TaskName 'OrgiastFunnelProbe'
-  if ($info.LastRunTime -gt $registeredAt -and $task.State -ne 'Running') { break }
-} while ((Get-Date) -lt $limit)
-if ($info.LastRunTime -le $registeredAt -or $info.LastTaskResult -ne 0 -or $task.State -eq 'Running') { throw 'First scheduled watchdog run was not confirmed successful' }
-$state=Get-Content (Join-Path $env:USERPROFILE '.claude\secretary-uptime\state.json') -Raw | ConvertFrom-Json
-if ([DateTimeOffset]::Parse($state.checkedAt).UtcDateTime -le $registeredAt.ToUniversalTime()) { throw 'Watchdog state was not refreshed by scheduled execution' }
+# register-secretary-uptime already verifies the first real scheduled run.
+$info=Get-ScheduledTaskInfo -TaskName 'OrgiastFunnelProbe'
 & $node (Join-Path $PSScriptRoot 'verify-secretary-live.mjs') $manifest.requiredLabel
 if ($LASTEXITCODE -ne 0) { throw 'External URL / authenticated progress display verification failed' }
 [pscustomobject]@{ TaskName='OrgiastFunnelProbe'; Interval='PT5M'; LastRunTime=$info.LastRunTime.ToString('o'); LastTaskResult=$info.LastTaskResult; Backup=$backup } | ConvertTo-Json

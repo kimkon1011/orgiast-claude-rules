@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import * as beeper from './beeper-api.mjs';
 import { isEntry } from './is-entry.mjs';
 import {
-  MAX_REPLY_AGE, classifyReply, contentFor, createLlm, ensureTaskPriority, decisionReport, sentReport,
+  DEFAULT_MAX_REPLY_AGE, classifyReply, contentFor, createLlm, ensureTaskPriority, decisionReport, sentReport,
   isWithinAllowedTimeWindow, recordSentReply, flushUnreportedSentLogs, recordDecisionPending, readSentLog,
   retryForbiddenAnswer, FORBIDDEN_REPLY_PTN, inventedAmounts
 } from './discord-autoreply.mjs';
@@ -90,6 +90,7 @@ function acquire(dir) {
 export async function runOnce(options = {}) {
   const home = options.home || os.homedir(), dryRun = Boolean(options.dryRun), api = options.api || beeper;
   const now = options.now ? (typeof options.now === 'function' ? options.now() : options.now) : Date.now();
+  const maxAgeMs = options.maxAgeMs ?? DEFAULT_MAX_REPLY_AGE;
   const dir = path.join(home, '.claude', 'discord-beeper-autoreply');
   const stateFile = path.join(dir, 'state.json');
   const result = { ok: true, dryRun, scanned: 0, replied: 0, decisions: [], wouldSend: [], skipped: 0, errors: [] };
@@ -145,7 +146,7 @@ export async function runOnce(options = {}) {
         if (prior?.status !== 'sending' && isMessageRequest(chat) && chat.preview?.isSender === false
           && chat.preview.id && Number.isFinite(timestamp(chat.preview))) {
           latest = chat.preview; question = plainText(latest.text); link = messageLink(chat, latest);
-          if (now - timestamp(latest) > MAX_REPLY_AGE || timestamp(latest) > now) { result.skipped++; continue; }
+          if (now - timestamp(latest) > maxAgeMs || timestamp(latest) > now) { result.skipped++; continue; }
           if (prior?.status !== 'skipped' && (prior?.id === latest.id || (prior?.timestamp && compare(latest, prior) <= 0))) { result.skipped++; continue; }
           await decide('メッセージリクエスト・未承認'); continue;
         }
@@ -175,7 +176,7 @@ export async function runOnce(options = {}) {
         }
         if (prior?.status === 'uncertain' && (!lastSelf || compare(lastSelf, prior) <= 0)) { result.skipped++; continue; }
         if (!latest || latest.isSender) { result.skipped++; continue; }
-        if (now - timestamp(latest) > MAX_REPLY_AGE || timestamp(latest) > now) {
+        if (now - timestamp(latest) > maxAgeMs || timestamp(latest) > now) {
           result.skipped++; continue;
         }
         link = messageLink(chat, latest);
@@ -353,9 +354,16 @@ export async function main(args = process.argv.slice(2), options = {}) {
   }
 
   if (!['once', 'loop'].includes(command)) throw new Error('Use once|loop|sent [--dry-run]');
+  const maxAgeHoursIndex = args.indexOf('--max-age-hours');
+  let maxAgeMs;
+  if (maxAgeHoursIndex >= 0) {
+    const n = Number(args[maxAgeHoursIndex + 1]);
+    if (!Number.isInteger(n) || n < 1 || n > 168) throw new Error('--max-age-hours must be an integer between 1 and 168');
+    maxAgeMs = n * HOUR;
+  }
   const deadline = Date.now() + 290000;
   do {
-    const result = await runOnce({ ...options, home, dryRun: args.includes('--dry-run') });
+    const result = await runOnce({ ...options, home, dryRun: args.includes('--dry-run'), maxAgeMs });
     print(result);
     if (!result.ok) return 1;
     if (command === 'once' || result.paused || result.limited || Date.now() + 20000 >= deadline) return 0;

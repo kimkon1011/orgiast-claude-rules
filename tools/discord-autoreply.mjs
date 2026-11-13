@@ -23,7 +23,7 @@ const [{ readToken }, { PROVIDERS, parseEnvText },
 import { addItem as addKimInboxItem } from './kim-inbox.mjs';
 
 const HOUR = 3600000;
-export const MAX_REPLY_AGE = 7 * 24 * HOUR;
+export const DEFAULT_MAX_REPLY_AGE = 24 * HOUR;
 const REAUTHORIZE_URL = 'https://discord.com/oauth2/authorize?client_id=1511684767546871818&scope=bot&permissions=8';
 const due = (ts, now, interval) => !Number.isFinite(ts) || now - ts >= interval;
 
@@ -440,6 +440,7 @@ async function afterMessages(api, channelId, after) {
 export async function runOnce(options = {}) {
   const home = options.home ?? os.homedir(), now = options.now?.() ?? Date.now();
   const env = options.env ?? process.env, dryRun = !!options.dryRun;
+  const maxAgeMs = options.maxAgeMs ?? DEFAULT_MAX_REPLY_AGE;
   const dir = path.join(home, '.claude', 'discord-autoreply'), file = name => path.join(dir, name);
   const result = { ok: true, scanned: 0, replied: 0, skipped: { kim_replied: 0, fyi: 0, excluded: 0, old: 0, bot: 0 }, learned: { corrected: 0, confirmed: 0, expired: 0 }, errors: [], ...(dryRun ? { wouldSend: [] } : {}) };
   let release, state, token = '';
@@ -554,7 +555,7 @@ export async function runOnce(options = {}) {
         const skip = reason => { result.skipped[reason]++; };
         if (m.author?.bot || !m.author?.id || [kimId, runtime.selfId].includes(m.author.id)) { skip('bot'); continue; }
         const ts = millis(m.timestamp);
-        if (!Number.isFinite(ts) || ts < millis(state.baselineTs) || ts < now - MAX_REPLY_AGE || ts > now) { skip('old'); continue; }
+        if (!Number.isFinite(ts) || ts < millis(state.baselineTs) || ts < now - maxAgeMs || ts > now) { skip('old'); continue; }
         if (excluded.has(m.channel_id)) { skip('excluded'); continue; }
         try {
           const checkReplies = async () => {
@@ -835,10 +836,17 @@ export async function main(argv = process.argv.slice(2), options = {}) {
       return value;
     };
     const seconds = number('--seconds', 290), interval = number('--interval', 20);
+    const maxAgeHoursIndex = argv.indexOf('--max-age-hours');
+    let maxAgeMs;
+    if (maxAgeHoursIndex >= 0) {
+      const n = Number(argv[maxAgeHoursIndex + 1]);
+      if (!Number.isInteger(n) || n < 1 || n > 168) throw new Error('--max-age-hours must be an integer between 1 and 168');
+      maxAgeMs = n * HOUR;
+    }
     const deadline = Date.now() + seconds * 1000, runtime = {};
     do {
       const started = Date.now();
-      const result = await runOnce({ ...options, home, dryRun, runtime }); print(result);
+      const result = await runOnce({ ...options, home, dryRun, runtime, maxAgeMs }); print(result);
       if (!result.ok) return 1;
       if (command === 'once' || result.paused) break;
       const delay = Math.max(0, interval * 1000 - (Date.now() - started));

@@ -17,46 +17,40 @@ export function proxyCredential({ keyPath, impersonate, scope }) {
 // 間隔で計4回まで再試行する（2026-11-13 06:30 の HTTP 500 で朝の報告が消えた対策）。
 export const RETRY_DELAYS = [60000, 180000, 600000];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const channelError = (route, message, retryable, cause) =>
-  Object.assign(new Error(`channel ${route}: ${message}`), { channelRetryable: retryable, cause });
+export function isTransientSourceError(error) {
+  if (error?.status >= 500 && error.status < 600) return true;
+  if (['TimeoutError', 'AbortError'].includes(error?.name)) return true;
+  if (/^(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|UND_ERR_.*)$/.test(error?.code || '')) return true;
+  if (/(?:HTTP|API) 5\d\d\b|fetch failed|network|socket hang up/i.test(error?.message || '')) return true;
+  return error?.cause ? isTransientSourceError(error.cause) : false;
+}
 
-export async function channelRequest(route, { query, body, home = process.env.ORGIAST_HOME || os.homedir(), env = process.env, fetchImpl = globalThis.fetch, signal, sleepImpl = sleep } = {}) {
+// Retry a read-only source, not individual shared requests (which also send mail/LINE).
+// Calling the source again creates fresh per-request timeout signals.
+export async function retrySource(read, { sleepImpl = sleep, onRetry = () => {} } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    try { return await read(); }
+    catch (error) {
+      if (!isTransientSourceError(error) || attempt >= RETRY_DELAYS.length) throw error;
+      onRetry(error, attempt + 2, RETRY_DELAYS[attempt]);
+      await sleepImpl(RETRY_DELAYS[attempt]);
+    }
+  }
+}
+
+export async function channelRequest(route, { query, body, home = process.env.ORGIAST_HOME || os.homedir(), env = process.env, fetchImpl = globalThis.fetch, signal } = {}) {
   const secret = keyserveSecret(home, env);
   if (!secret) throw Error('GWS/LINE: keyserve enrollment credential missing');
   const base = env.ORGIAST_CHANNEL_BASE_URL || 'https://orgiast-memoryserve.vercel.app';
   const url = new URL(`/api/${route}`, base);
   if (url.protocol !== 'https:') throw Error('channel API requires HTTPS');
   for (const [key, value] of Object.entries(query || {})) url.searchParams.set(key, value);
-  const requestOnce = async () => {
-    const headers = { ...keyserveAuthHeaders(secret, Date.now(), requireKeyservePcId(home, env)), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) };
-    let response;
-    try {
-      response = await fetchImpl(url.href, { method: body === undefined ? 'GET' : 'POST', redirect: 'error',
-        signal: signal || AbortSignal.timeout(30000), headers,
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-    } catch (e) {
-      // fetch 自体の失敗（DNS・接続断・30秒タイムアウト）は一時障害として再試行する。
-      // 呼び出し元からのキャンセルだけ即失敗。
-      if (signal?.aborted) throw e;
-      return { retry: channelError(route, String(e?.message || e), true, e) };
-    }
-    if (!response.ok) {
-      // 4xx はこちら側の誤りなので再試行しない。5xx だけ待つ。
-      const error = channelError(route, `HTTP ${response.status}`, response.status >= 500);
-      if (!error.channelRetryable) throw error;
-      return { retry: error };
-    }
-    try { return { value: await response.json() }; }
-    catch (e) { return { retry: channelError(route, `応答JSON不正 (${e?.message || e})`, true, e) }; }
-  };
-  let lastError;
-  for (let attempt = 0; ; attempt++) {
-    const result = await requestOnce();
-    if (result.value !== undefined) return result.value;
-    lastError = result.retry;
-    if (attempt >= RETRY_DELAYS.length) throw lastError;
-    await sleepImpl(RETRY_DELAYS[attempt]);
-  }
+  const response = await fetchImpl(url.href, { method: body === undefined ? 'GET' : 'POST', redirect: 'error',
+    signal: signal || AbortSignal.timeout(30000),
+    headers: { ...keyserveAuthHeaders(secret, Date.now(), requireKeyservePcId(home, env)), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  if (!response.ok) throw Object.assign(Error(`channel ${route}: HTTP ${response.status}`), { status: response.status });
+  return response.json();
 }
 export function googleRoute(raw, marker = GWS_MARKER) {
   const url = new URL(raw);

@@ -30,6 +30,7 @@ import {
   finalizeReportLine,
   run,
   deliveryFailureNoticeText,
+  notifyDeliveryFailure,
 } from "./satou-secretary-daily.mjs";
 import { register, TASK_NAME, TASK_RETRY_NAME } from "./satou-secretary-daily-register.mjs";
 const now = new Date("2026-11-09T06:30:00+09:00"),
@@ -370,6 +371,52 @@ test("送信済みの印があれば再実行（07:30枠）は何もしない", 
   assert.equal(p.write.mode,"skipped");
   assert.equal(sources,0);
 });
+
+test("ソース単位で最大4回試し、成功ソースとメール原本を本番配信ゲートまで保持する", async t => {
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-sources-")); t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+  const delays=[], counts={evidence:0,mail:0,calendar:0,tldv:0}; let gate;
+  const message={threadId:"original",from:"小川 <ogawa@example.jp>",to:"satou@orgiast.jp",subject:"原本",body:"x".repeat(800)+"小川様、11月14日、金額は12万円。",internalDate:String(+new Date("2026-11-12T12:00:00+09:00"))};
+  const sheets=[{properties:{title:"シート1",sheetId:1,gridProperties:{columnCount:26}}},...TABS.map((title,i)=>({properties:{title,sheetId:i+10,gridProperties:{columnCount:26}}}))];
+  const result=await run({now:new Date("2026-11-13T06:30:00+09:00"),deps:{
+    home,sleepImpl:async ms=>delays.push(ms),getSheetsToken:async()=>"test",askLlm:async()=>"なし",
+    searchGmail:async()=>{counts.evidence++;return{messages:[]};},
+    readMail:async()=>{if(++counts.mail<3)throw Error("channel gws: HTTP 500");return{messages:[message],unanswered:[],departmentStoreJudgment:[],departmentStoreCustomers:[],aimitsu:[]};},
+    readCalendar:async()=>{counts.calendar++;throw new TypeError("fetch failed");},
+    readTldv:async()=>{counts.tldv++;return{items:[],note:""};},
+    fetchImpl:async(url,o={})=>o.method==="POST"?Response.json({}):String(url).includes("fields=sheets.properties")?Response.json({sheets}):Response.json({values:decodeURIComponent(url).includes("案件一覧")?[h]:[["keep"]]}),
+    fetchSendHistory:async()=>({target:"dm",messages:[]}),checkSendContext:async(_history,_text,opts)=>{gate=opts;return{ok:true,reason:"整合"};},
+    sendDiscordDm:async()=>({delivered:true,messageId:"m",channelId:"dm"}),
+  }});
+  assert.deepEqual(counts,{evidence:1,mail:3,calendar:4,tldv:1});
+  assert.deepEqual(delays,[60000,180000,60000,180000,600000]);
+  assert.match(gate.periodicReport.sourceEvidence,/小川様、11月14日、金額は12万円/);
+  assert.equal(result.delivery.delivered,true);
+  assert.match(result.report.text,/（メール取得失敗のため一部未反映）$/);
+});
+
+test("定期報告でも質問・日付・金額・人名の不一致NGは配信を止める", async t => {
+  for(const reason of ["佐藤さんへの質問","日付が原本と不一致","金額が原本と不一致","人名が原本と不一致"]){
+    const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-gate-ng-")); t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+    await assert.rejects(deliverReport({text:reason},{now:new Date("2026-11-13T06:30:00+09:00"),sourceMessages:[{body:"原本"}],deps:{home,
+      fetchSendHistory:async()=>({target:"dm",messages:[]}),checkSendContext:(_history,_text,opts)=>{assert.match(opts.periodicReport.sourceEvidence,/原本/);return{ok:false,reason};},
+      sendDiscordDm:async()=>assert.fail("NGでは送らない"),
+    }}),/履歴照合NG/);
+    assert.equal(fs.existsSync(path.join(home,".claude/satou-secretary/delivered-2026-11-13")),false);
+  }
+});
+
+test("案内DMの応答消失も台帳に記録し、同日の再実行で重ねて送らない", async t=>{
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-notice-fail-")); t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+  const logs=[];let sends=0;
+  const options={now:new Date("2026-11-13T06:30:00+09:00"),deps:{home,getSheetsToken:async()=>"test",
+    fetchImpl:async(_url,o)=>{logs.push(JSON.parse(o.body).values[0][9]);return Response.json({updates:{}});},
+    fetchSendHistory:async()=>({target:"dm",messages:[]}),sendDiscordDm:async()=>{sends++;throw Error("fetch failed");},
+  }};
+  await notifyDeliveryFailure("本報告NG\n理由",options);
+  await notifyDeliveryFailure("本報告NG",options);
+  assert.equal(sends,1);assert.equal(logs.length,3);
+  assert.equal(logs[0],"DM送信失敗: 本報告NG 理由");assert.match(logs[1],/^案内DMも失敗:/);
+});
 test("1ソース最後まで失敗しても取れた分で報告を作り、末尾に1行だけ断りを書く", async t => {
   const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-partial-")); t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
   const previousKey=process.env.GOOGLE_SA_KEY;
@@ -378,6 +425,7 @@ test("1ソース最後まで失敗しても取れた分で報告を作り、末�
   const sheetsHeader=["案件名","納品日","営業","予算項目","クライアント名","ｺｰﾄﾞ","制作","売上","実施計画URL","見積書URL","営業スタッフ","案件ルート"];
   const p=await run({now:new Date("2026-11-10T06:30:00+09:00"),dryRun:true,deps:{
     home,
+    sleepImpl: async () => {},
     searchGmail:async()=>{throw Error("channel gws: HTTP 500");},
     getSheetsToken:async()=>"t",
     askLlm:async()=>"なし",
@@ -467,8 +515,7 @@ test("台帳書き込み失敗でも報告ファイルを残し配信は試み�
   const deps2=makeDeps(()=>({ok:false,reason:"重複"})); deps2.home=home2;
   await assert.rejects(()=>run({now,deps:deps2}),/履歴照合NG/);
   assert.equal(dmTexts.length,2);
-  assert.match(dmTexts[1],/自動作成・送信に失敗/);
-  assert.match(dmTexts[1],/07:30 にもう1回自動で実行/);
+  assert.match(dmTexts[1],/台帳への本文の保存にも失敗/);
 });
 test("register は06:30本番と07:30再実行の2タスクを同じ非表示ランチャーで登録する", t => {
   const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-register-")); t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
@@ -572,4 +619,19 @@ test("各自動タブを独立更新しシート1へ書かない", async () => {
   assert.ok(
     writes.some((x) => JSON.stringify(x).includes("自動_今日の要対応 更新")),
   );
+  const logWrite=writes.flatMap(x=>x.requests).find(x=>x.updateCells?.range.sheetId===12);
+  assert.equal(logWrite.updateCells.rows[1].values[0].userEnteredValue.stringValue,"row");
+  assert.equal(logWrite.updateCells.rows[2].values[0].userEnteredValue.stringValue,"now");
+});
+
+test("Discordが未送信を確定した失敗では07:30の再試行を許可する",async t=>{
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),"satou-retry-dm-"));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));
+  let attempts=0;
+  const deps={home,fetchSendHistory:async()=>({target:"dm",messages:[]}),checkSendContext:()=>({ok:true,reason:"整合"}),sendDiscordDm:async()=>{
+    if(++attempts===1)throw Object.assign(Error("DM送信が HTTP 429"),{deliveryUncertain:false});
+    return{delivered:true,messageId:"retry-ok",channelId:"dm"};
+  }};
+  await assert.rejects(deliverReport({text:"本文"},{now:new Date("2026-11-13T06:30:00+09:00"),deps}),/429/);
+  const sent=await deliverReport({text:"本文"},{now:new Date("2026-11-13T07:30:00+09:00"),deps});
+  assert.equal(sent.messageId,"retry-ok");assert.equal(attempts,2);
 });

@@ -38,6 +38,16 @@ test('DMチャンネル作成から本文投稿まで2回だけ呼ぶ', async ()
   assert.deepEqual(JSON.parse(calls[1].init.body), { content: withFooter('hello') });
 });
 
+test('送信開始は履歴ゲート通過後だけ通知し、4xxは未配信確定として返す', async () => {
+  let posting=false;
+  const options={home,token:'test-token',resolve,noCopyKim:true,onMessageAttempt:()=>{posting=true;},
+    fetchImpl:async url=>url.endsWith('/messages')?response({ok:false,status:429}):response({json:{id:'dm'}})};
+  await assert.rejects(sendDiscordDm('佐藤優奈','本文',{...options,assertContextApproved:async()=>{throw Error('新着あり');}}),/新着あり/);
+  assert.equal(posting,false);
+  await assert.rejects(sendDiscordDm('佐藤優奈','本文',options),e=>e.deliveryUncertain===false&&/429/.test(e.message));
+  assert.equal(posting,true);
+});
+
 test('kim 以外への代筆は返答先の一文を末尾に1回だけ付ける', async () => {
   const bodies = [];
   const send = text => sendDiscordDm('百瀬', text, {

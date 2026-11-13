@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { isEntry } from "./is-entry.mjs";
 import { getDriveToken } from "./lib/drive-auth.mjs";
-import { gwsFetch } from "./lib/gws-proxy.mjs";
+import { gwsFetch, retrySource } from "./lib/gws-proxy.mjs";
 import { searchGmail, compactMessage, extractBody, headerValue } from "./gmail-search.mjs";
 import { readEnvValue } from "./env-kv.mjs";
 import { sendDiscordDm } from "./discord-dm.mjs";
@@ -893,7 +893,11 @@ export async function write(p, deps = {}) {
   const log = p.tables["自動_実行ログ"];
   log[1][9] = [log[1][9], ...failures].filter(Boolean).join(" | ");
   try {
-    await writeTab("自動_実行ログ", log);
+    // Keep earlier failures visible after the 07:30 recovery run.
+    const previous = await readSheet(LEDGER_ID, "'自動_実行ログ'!A:J", {
+      getSheetsToken: async () => t, fetchImpl: deps.fetchImpl,
+    });
+    await writeTab("自動_実行ログ", [log[0], ...previous.slice(1), ...log.slice(1)]);
   } catch (e) {
     failures.push(`自動_実行ログ 更新: ${e.message}`);
   }
@@ -960,7 +964,9 @@ export async function run({
     status = {},
     source = async (n, f, z) => {
       try {
-        const v = await f();
+        const v = await retrySource(f, { sleepImpl: deps.sleepImpl,
+          onRetry: (e, attempt, delay) => console.error(`satou-secretary: ${n} retry ${attempt}/4 in ${delay / 1000}s: ${e.message}`),
+        });
         status[n] = "ok";
         return v;
       } catch (e) {
@@ -994,15 +1000,15 @@ export async function run({
         ),
       [],
     ),
-    gmail = await source("Gmail", () => mail(deps), {
+    gmail = await source("Gmail", () => (deps.readMail || mail)(deps), {
       messages: [],
       unanswered: [],
       departmentStoreJudgment: [],
       departmentStoreCustomers: [],
       aimitsu: [],
     }),
-    cal = await source("Calendar", () => calendar(now, deps), []),
-    tv = await source("tl;dv", () => tldv(cases, now, deps), {
+    cal = await source("Calendar", () => (deps.readCalendar || calendar)(now, deps), []),
+    tv = await source("tl;dv", () => (deps.readTldv || tldv)(cases, now, deps), {
       items: [],
       note: "",
     });
@@ -1172,6 +1178,7 @@ export async function run({
     let draftInLedger = true;
     try {
       p.write = await write(p, deps);
+      draftInLedger = !p.write.failures.some(x => x.startsWith("自動_社長報告"));
     } catch (e) {
       // 台帳書き込み失敗でも報告本文は完成しているため、配信は続ける。
       draftInLedger = false;
@@ -1180,7 +1187,7 @@ export async function run({
     }
     if (shouldDeliver({ dryRun, noDeliver }))
       try {
-        p.delivery = await deliverReport(report, { now, deps, sourceMessages: mail.messages });
+        p.delivery = await deliverReport(report, { now, deps, sourceMessages: gmail.messages });
       } catch (e) {
         // DM が最終的に送れなかった場合: 台帳へ理由1行 + 佐藤さんへ短い案内DM（1日1通）。
         p.deliveryFailure = e.message;
@@ -1207,7 +1214,7 @@ export async function appendRunLogRow(row, deps = {}) {
 export const deliveryFailureNoticeText = (draftInLedger = true) =>
   draftInLedger
     ? `今朝の業務報告の下書きは自動で送れませんでした。台帳の『自動_社長報告』タブに本文があります：${LEDGER_URL}`
-    : `今朝の業務報告は自動作成・送信に失敗しました。07:30 にもう1回自動で実行します。続きは台帳で確認してください：${LEDGER_URL}`;
+    : `今朝の業務報告を自動で送れませんでした。台帳への本文の保存にも失敗しています：${LEDGER_URL}`;
 export async function notifyDeliveryFailure(reason, { now = new Date(), deps = {}, draftInLedger = true } = {}) {
   const home = deps.home || os.homedir(), oneLine = String(reason ?? "").replace(/\s+/g, " ").slice(0, 300);
   try {
@@ -1216,7 +1223,10 @@ export async function notifyDeliveryFailure(reason, { now = new Date(), deps = {
     console.error(`satou-secretary: 実行ログへDM送信失敗理由を書けませんでした: ${e.message}`);
   }
   const notice = noticeMarkerOf(now, home);
-  if (fs.existsSync(notice)) return { notified: false, reason: "notice-already-sent" };
+  // Reserve the day's single attempt before posting, including ambiguous network failures.
+  fs.mkdirSync(path.dirname(notice), { recursive: true });
+  try { fs.writeFileSync(notice, JSON.stringify({ at: new Date().toISOString(), status: "attempting" }) + "\n", { flag: "wx" }); }
+  catch (e) { if (e.code === "EEXIST") return { notified: false, reason: "notice-already-attempted" }; throw e; }
   try {
     const history = await (deps.fetchSendHistory || fetchSendHistory)("discord", REPORT_DM_TARGET, { home, fetchImpl: deps.discordFetchImpl }),
       text = deliveryFailureNoticeText(draftInLedger);
@@ -1224,9 +1234,10 @@ export async function notifyDeliveryFailure(reason, { now = new Date(), deps = {
     const sent = await (deps.sendDiscordDm || sendDiscordDm)(REPORT_DM_TARGET, text, { home, noCopyKim: true, noReplyFooter: true, requireFullBody: true, fetchImpl: deps.discordFetchImpl });
     if (!sent.delivered || !sent.messageId) throw Error("Discord送信結果を確認できません");
     fs.mkdirSync(path.dirname(notice), { recursive: true });
-    fs.writeFileSync(notice, `${JSON.stringify({ at: new Date().toISOString(), channelId: sent.channelId, messageId: sent.messageId, reason: oneLine })}\n`, { flag: "wx" });
+    fs.writeFileSync(notice, `${JSON.stringify({ at: new Date().toISOString(), status: "sent", channelId: sent.channelId, messageId: sent.messageId, reason: oneLine })}\n`);
     return { notified: true, ...sent };
   } catch (e) {
+    fs.writeFileSync(notice, JSON.stringify({ at: new Date().toISOString(), status: "failed-or-unconfirmed", error: e.message }) + "\n");
     console.error(`satou-secretary: 送信失敗の案内DMも送れませんでした: ${e.message}`);
     try {
       await appendRunLogRow([jstStamp(now), "", "", "", "", "", "", "", "", `案内DMも失敗: ${String(e.message).replace(/\s+/g, " ").slice(0, 200)}`], deps);
@@ -1243,13 +1254,13 @@ const jstStamp = (now) =>
   `${fmt(now)} ${new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit" }).format(now)} JST`;
 export const reportDeliveryText = text => `おはようございます。毎日の業務状況報告です。\n\n${text}`;
 export function mailSourceEvidence(messages = []) {
-  return messages.slice(-100).map(m => {
+  return messages.map(m => {
     const at = m.at || m.date || m.internalDate || '';
     const sender = m.from || m.sender || '';
     const subject = m.subject || '';
-    const body = String(m.text || m.body || m.snippet || '').replace(/\s+/g, ' ').slice(0, 700);
+    const body = String(m.text || m.body || m.snippet || '').replace(/\s+/g, ' ');
     return `[${at}] ${sender} ${subject}: ${body}`.trim();
-  }).filter(Boolean).join('\n').slice(-60000);
+  }).filter(Boolean).join('\n');
 }
 export async function deliverReport(report, { now = new Date(), deps = {}, sourceMessages = [] } = {}) {
   const home = deps.home || os.homedir(), stamp = fmt(now), dir = stateDirOf(home), mark = deliveredMarkerOf(now, home);
@@ -1273,11 +1284,14 @@ export async function deliverReport(report, { now = new Date(), deps = {}, sourc
   if (!verdict) throw lastCheckError;
   if (!verdict.ok) throw Error(`Discord送信前履歴照合NG: ${verdict.reason}`);
   writeContextMarker({ channel: "discord", target: history.target, text, latest: latestOf(history.messages), reason: verdict.reason, home });
-  sending = true;
-  const sent = await (deps.sendDiscordDm || sendDiscordDm)(REPORT_DM_TARGET, text, { home, noCopyKim: true, noReplyFooter: true, requireFullBody: true, fetchImpl: deps.discordFetchImpl });
+  sending = Boolean(deps.sendDiscordDm); // injected senders may not expose the POST boundary
+  const sent = await (deps.sendDiscordDm || sendDiscordDm)(REPORT_DM_TARGET, text, { home, noCopyKim: true, noReplyFooter: true, requireFullBody: true, fetchImpl: deps.discordFetchImpl, onMessageAttempt: () => { sending = true; } });
   if (!sent.delivered || !sent.messageId) throw Error("Discord送信結果を確認できません");
   fs.writeFileSync(mark, `${JSON.stringify({ at: new Date().toISOString(), channelId: sent.channelId, messageId: sent.messageId || "" })}\n`, { flag: "wx" });
   return { ...sent, marker: mark, text };
+  } catch (error) {
+    if (error.deliveryUncertain === false) sending = false;
+    throw error;
   } finally { if (!sending || fs.existsSync(mark)) fs.unlinkSync(lock); }
 }
 export const summary = (r) =>

@@ -19,9 +19,9 @@ export function register({spawn=spawnSync,node=process.execPath,home=os.homedir(
   const out={command:c.task,wrapper:c.wrapper};
   for(const[name,time]of Object.entries(TASK_TIMES)){
     const x=spawn('schtasks.exe',['/create','/f','/tn',name,'/sc','daily','/st',time,'/tr',c.task],{encoding:'utf8',windowsHide:true});
-    if(x.status)throw Error(`${name} 登録失敗: ${x.stderr||x.stdout}`);
+    if(x.status!==0)throw Error(`${name} 登録失敗: ${x.error?.message||x.stderr||x.stdout}`);
     const q=spawn('schtasks.exe',['/query','/tn',name,'/fo','list','/v'],{encoding:'utf8',windowsHide:true});
-    if(q.status)throw Error(`${name} 登録確認失敗: ${q.stderr||q.stdout}`);
+    if(q.status!==0)throw Error(`${name} 登録確認失敗: ${q.error?.message||q.stderr||q.stdout}`);
     out[name]={time,create:x.stdout.trim(),query:q.stdout.trim()};
   }
   return out;}

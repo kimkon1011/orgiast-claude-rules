@@ -1,0 +1,157 @@
+{
+  "since": "2026-11-10T18:10:35Z",
+  "sources": [
+    {
+      "name": "stop-gate-runner-ledger.jsonl",
+      "file": "C:\\Users\\kimko\\.claude\\stop-gate-runner-ledger.jsonl",
+      "total": 4480,
+      "hits": 12,
+      "byPattern": {
+        "P1": 0,
+        "P2": 0,
+        "P3": 0,
+        "P4": 0,
+        "W": 12
+      },
+      "byDay": {
+        "2026-11-11": 3,
+        "2026-11-12": 3,
+        "2026-11-13": 6
+      },
+      "rows": [
+        {
+          "pattern": "W",
+          "ts": "2026-11-11T02:31:27.653Z",
+          "verdict": "block",
+          "sessionId": "19801520-e673-4fcd-b616-c96eef001fca",
+          "match": "全件の空ページ確認が終わるのを待っています。完了したら最終報告を出します。"
+        },
+        {
+          "pattern": "W",
+          "ts": "2026-11-11T07:08:26.516Z",
+          "verdict": "block",
+          "sessionId": "001d993d-fa33-480a-b3e4-5982b0bf1617",
+          "match": "見積メールは、まだ送っていません。このメールは社外への送信なので、kim さんが「送って」と書くのを待っています。それ以外の準備はすべて済んでいます。 - **期限延長メール**: 11/10 23:24 に送信済みで、送信済みフォルダでも確認しました。 - **レストラン2件**: 11/9 にフォームで見積を依頼し、11/1"
+        },
+        {
+          "pattern": "W",
+          "ts": "2026-11-11T13:33:21.785Z",
+          "verdict": "pass_after_cap",
+          "sessionId": "6177ef2d-df23-42f3-bc90-841f3c2cdbdc",
+          "match": "件合格、試運転 OK、コミット済み | | PR #1895 | 作成済み。自動チェックの完了待ちで、まだ本体に入"
+        },
+        {
+          "pattern": "W",
+          "ts": "2026-11-12T08:40:21.270Z",
+          "verdict": "pass_after_cap",
+          "sessionId": "fba55ee1-b723-49c8-a341-b5091c9a6175",
+          "match": "`npm ci` の完了を待っています。終わったら `next build` で失敗した行を特定し、修正を Codex に渡し直します。 【最終まとめ】 ① 報告 | 依頼の項目 | 状態 | 根拠 | |---|---|---| | 修正（Code"
+        },
+        {
+          "pattern": "W",
+          "ts": "2026-11-12T09:27:48.595Z",
+          "verdict": "block",
+          "sessionId": "fba55ee1-b723-49c8-a341-b5091c9a6175",
+          "match": "`workflow` スコープはあるので、新しいワークフローも push できます。Codex と `npm install` の完了を待っています。 【最終まとめ】 ① 報告 | 項目 | 状態 | 根拠 | |---|---|---| | 失敗原因の行 | 特定済み | `next build` の中で動く ESLint が #21 の未使用変数 14件をエラ"
+        },
+        {
+          "pattern": "W",
+          "ts": "2026-11-12T23:28:35.931Z",
+          "verdict": "block",
+          "sessionId": "f96c1b43-74e1-455a-beae-d10514885811",
+          "match": "15社／医学会に出展実績のある非医療企業15社）。結果待ちの間に、メール下書き用の定額AI（GLM）が使えることを確認しました。調査の結果が返ってくるのを待っています。"
+        },
+        {
+          "pattern": "W",
+          "ts": "2026-11-13T04:16:57.185Z",
+          "verdict": "pass_after_cap",
+          "sessionId": "1c99f12c-4048-4616-8210-e76327659b98",
+          "match": "。最小実装を前景で実行します。 実行はまだ続いています。完了の通知を待ちます。 実行の完了待ちです。結果が出たら、ブランチ・テスト・PR を読み戻して検証します。"
+        },
+        {
+          "pattern": "W",
+          "ts": "2026-11-13T04:16:59.003Z",
+          "verdict": "pass_after_cap",
+          "sessionId": "1c99f12c-4048-4616-8210-e76327659b98",
+          "match": "実行の完了待ちです。結果が出たら、ブランチ・テスト・PR を読み戻して検証します。"
+        },
+        {
+          "pattern": "W",
+          "ts": "2026-11-13T06:15:21.623Z",
+          "verdict": "block",
+          "sessionId": "4f160d1a-0312-419e-a36c-7c0d2e35cd8a",
+          "match": "スマホ通知はこのセッションの Remote Control が無効なので届かず、キューはそのまま残した。Codex の完了を待っている。"
+        },
+        {
+          "pattern": "W",
+          "ts": "2026-11-13T06:15:38.273Z",
+          "verdict": "pass_after_cap",
+          "sessionId": "4f160d1a-0312-419e-a36c-7c0d2e35cd8a",
+          "match": "Codex の作業はまだ実行中です。完了の通知が来たら、このセッションで自動的に続きを確認します。 【最終まとめ】 ① 報告（途中経過。まだ完了していません） | 要素 | 状態 | 根拠 | |---|---|---| | すでに入っていた対策 "
+        },
+        {
+          "pattern": "W",
+          "ts": "2026-11-13T07:12:34.167Z",
+          "verdict": "block",
+          "sessionId": "4f160d1a-0312-419e-a36c-7c0d2e35cd8a",
+          "match": "de から直接実行すると権限ゲートで止まったため、登録と本番の試運転（dry-run）を Codex に渡しました。今その結果を待っています。 【最終まとめ】 ① 報告（途中です） | 要素 | 状態 | 根拠 | |---|---|---| | すでに入っていた対"
+        },
+        {
+          "pattern": "W",
+          "ts": "2026-11-13T07:12:50.218Z",
+          "verdict": "pass_after_cap",
+          "sessionId": "4f160d1a-0312-419e-a36c-7c0d2e35cd8a",
+          "match": "Codex が今、タスクを登録し直しているところです。 【最終まとめ】 ① 報告（途中です） | 要素 | 状態 | 根拠 | |---|---|---| | トリガーを1本にする修正（スクリプト） | 済み | `register-reopen-lost-sessi"
+        }
+      ]
+    },
+    {
+      "name": "handoff-audit-ledger.jsonl",
+      "file": "C:\\Users\\kimko\\.claude\\handoff-audit-ledger.jsonl",
+      "total": 5139,
+      "hits": 0,
+      "byPattern": {
+        "P1": 0,
+        "P2": 0,
+        "P3": 0,
+        "P4": 0,
+        "W": 0
+      },
+      "byDay": {},
+      "rows": []
+    },
+    {
+      "name": "handoff-audit-nightly-ledger.jsonl",
+      "file": "C:\\Users\\kimko\\.claude\\handoff-audit-nightly-ledger.jsonl",
+      "total": 559,
+      "hits": 2,
+      "byPattern": {
+        "P1": 0,
+        "P2": 0,
+        "P3": 0,
+        "P4": 0,
+        "W": 2
+      },
+      "byDay": {
+        "2026-11-10": 1,
+        "2026-11-13": 1
+      },
+      "rows": [
+        {
+          "pattern": "W",
+          "ts": "2026-11-10T18:10:45.002Z",
+          "verdict": "block",
+          "sessionId": "c811002e-9be3-44ba-87ec-1ae57d66dc79",
+          "match": "cr さんに金額を決めていただくのを待っています。"
+        },
+        {
+          "pattern": "W",
+          "ts": "2026-11-13T18:05:31.898Z",
+          "verdict": "block",
+          "sessionId": "4f160d1a-0312-419e-a36c-7c0d2e35cd8a",
+          "match": "Codex の作業はまだ実行中です。完了の通知が来たら、このセッションで自動的に続きを確認します。"
+        }
+      ]
+    }
+  ]
+}

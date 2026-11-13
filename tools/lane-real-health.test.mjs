@@ -328,3 +328,39 @@ test('mixed auth and non-auth failures still produce real_fail_rate', t => {
   assert.equal(health.lanes.codex.reason, 'real_fail_rate');
   assert.equal(health.lanes.codex.alive, false);
 });
+
+test('dominant codex refresh token failures with an older WSL failure produce dead:oauth_consent', t => {
+  const home = fixture(t, [
+    ...Array.from({ length: 9 }, () => ({ provider: 'codex', status: 'error', reason: 'ager: Failed to refresh token: Please log out and sign in again. ERROR: workspace routing discovery unauthorized (401)' })),
+    { provider: 'codex', status: 'error', reason: 'WSL ディストリが見つかりませんでした', t: now - 2000 },
+  ]);
+  const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.codex.reason, 'dead:oauth_consent');
+  assert.equal(health.lanes.codex.alive, false);
+});
+
+test('eighty percent auth failures with the latest non-auth failure produce real_fail_rate', t => {
+  const home = fixture(t, [
+    { provider: 'codex', status: 'error', reason: 'WSL ディストリが見つかりませんでした', t: now },
+    ...Array.from({ length: 8 }, () => ({ provider: 'codex', status: 'error', reason: 'Failed to refresh token: Please log out and sign in again.' })),
+    { provider: 'codex', status: 'error', reason: 'HTTP 500 internal error', t: now - 2000 },
+  ]);
+  const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.codex.reason, 'real_fail_rate');
+  assert.equal(health.lanes.codex.alive, false);
+});
+
+test('eighty percent auth failures with the latest auth failure include new login phrases', t => {
+  for (const reason of ['Failed to refresh token', 'Please sign in again', 'Please log out and sign in']) {
+    const home = fixture(t, [
+      ...Array.from({ length: 8 }, () => ({ provider: 'codex', status: 'error', reason })),
+      ...Array.from({ length: 2 }, () => ({ provider: 'codex', status: 'error', reason: 'HTTP 500 internal error', t: now - 2000 })),
+    ]);
+    const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.codex.reason, 'dead:oauth_consent', reason);
+    assert.equal(health.lanes.codex.alive, false);
+  }
+});

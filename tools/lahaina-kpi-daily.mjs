@@ -19,13 +19,15 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/
 export function isoLocal(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
 }
-export function parseJalanDetails(html = '') {
+export function parseJalanDetails(html) {
+  html = String(html ?? '');
   const prices = [...html.matchAll(/([0-9]{1,3}(?:,[0-9]{3})+)円/g)].map(m => Number(m[1].replaceAll(',',''))).filter(Number.isFinite);
   const markerCounts = ['planCassette','planName'].map(marker => (html.match(new RegExp(marker,'gi'))||[]).length);
   const fallback = (html.match(/宿泊プラン/gi)||[]).length;
   return { minPrice: prices.length ? Math.min(...prices) : '', planCount: Math.max(...markerCounts, fallback ? 1 : 0) };
 }
-export function parseOfficial(html = '') {
+export function parseOfficial(html) {
+  html = String(html ?? '');
   const hrefs = [...html.matchAll(/href\s*=\s*["']([^"']+)["']/gi)].map(m => m[1]);
   const reservationLinks = hrefs.filter(h => /jalan|rakuten|booking\.com|airbnb|beds24|yad353005|予約|reserve/i.test(h));
   const dates = [...html.matchAll(/(?:20\d{2})[.\/-](?:1[0-2]|0?[1-9])[.\/-](?:3[01]|[12]\d|0?[1-9])/g)].map(m => m[0].replace(/[.\/]/g,'-').split('-').map((v,i)=>i ? v.padStart(2,'0') : v).join('-'));
@@ -127,10 +129,12 @@ export async function collect({now=new Date(),dryRun=false}={}) {
   const errors=[];
   const exposure=await measure({dateStr:isoLocal(check)});
   const jalanItem=exposure.results.find(r=>r.media==='じゃらん'), rakuten=exposure.results.find(r=>r.media==='楽天トラベル'), airbnb=exposure.results.find(r=>r.media==='Airbnb'), booking=exposure.results.find(r=>r.media==='Booking.com');
-  const jalanHtml=await fetchPage(jalanItem.url), officialHtml=await fetchPage('https://lahaina.jp/');
+  let jalanData={minPrice:'',planCount:0}, officialData={reservationCount:0,continuing:false,oyster:false,latestNoticeDate:''};
+  try { const h=await fetchPage(jalanItem?.url); if(h!==null&&h!==undefined) jalanData=parseJalanDetails(h); else { errors.push('じゃらン-HTML空'); jalanData={minPrice:'',planCount:0}; } } catch(e) { errors.push(`じゃらん解析失敗: ${e.message}`); }
+  try { const h=await fetchPage('https://lahaina.jp/'); if(h!==null&&h!==undefined) officialData=parseOfficial(h); else { errors.push('公式HP-HTML空'); officialData={reservationCount:0,continuing:false,oyster:false,latestNoticeDate:''}; } } catch(e) { errors.push(`公式HP解析失敗: ${e.message}`); }
   const [instagram,ga4,gsc]=await Promise.all([getInstagram(),getGa4(isoLocal(yesterday)),getGsc(isoLocal(twoDaysAgo))]);
   if(instagram.error) errors.push(instagram.error); if(ga4.error) errors.push(ga4.error); if(gsc.error) errors.push(gsc.error);
-  const k={date,exposureScore:`${exposure.buyable}/${exposure.total}`,jalan:{status:jalanItem.status,...parseJalanDetails(jalanHtml)},rakuten:rakuten.status,official:parseOfficial(officialHtml),airbnb:airbnb.status,booking:booking.status,instagram,ga4,gsc,errors,checkin:exposure.checkin};
+  const k={date,exposureScore:`${exposure.buyable}/${exposure.total}`,jalan:{status:jalanItem?.status??'',...jalanData},rakuten:rakuten?.status??'',official:officialData,airbnb:airbnb?.status??'',booking:booking?.status??'',instagram,ga4,gsc,errors,checkin:exposure.checkin};
   const row=buildRow(k); const dir=path.join(os.homedir(),'.claude','lahaina-kpi'); fs.mkdirSync(dir,{recursive:true});
   const file=path.join(dir,`${date}.json`); fs.writeFileSync(file,JSON.stringify({...k,row,savedAt:new Date().toISOString()},null,2));
   let write; try { write=await writeSheet(row,dryRun); } catch(e) { errors.push(e.message); fs.writeFileSync(file,JSON.stringify({...k,errors,row:buildRow(k),savedAt:new Date().toISOString()},null,2)); write={mode:'local-fallback',verified:false,error:e.message}; }

@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { hostExitArchive } from './lib/host-exit-archive.mjs';
 import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
 import { isEntry } from './is-entry.mjs';
+import { countWindowsClaudeProcesses } from './lib/windows-process.mjs';
 
 const DEFAULT_MAX_REOPEN = 3;
 const BASE = 'https://api.anthropic.com/v1/code/sessions';
@@ -551,15 +552,11 @@ export async function getLoadGuardStatus({
 
   if (checkClaude) {
     try {
-      const res = spawn('tasklist', ['/FI', 'IMAGENAME eq claude.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
-      if (res.error || (res.status !== 0 && res.status !== null)) {
-        loadError = res.error?.message || `exit code ${res.status}`;
-      } else {
-        const lines = String(res.stdout || '')
-          .split('\n')
-          .filter(line => /^"claude\.exe"/i.test(line.trim()));
-        claudeCount = lines.length;
-      }
+      claudeCount = countWindowsClaudeProcesses((command, args, options) => {
+        const result = spawn(command, args, options);
+        if (result.error || result.status !== 0) throw result.error || new Error(`exit code ${result.status}`);
+        return result.stdout;
+      });
     } catch (e) {
       loadError = e.message;
     }

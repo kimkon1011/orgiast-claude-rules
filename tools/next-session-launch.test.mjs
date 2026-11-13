@@ -399,7 +399,7 @@ test('inline dry-run は spawn も予約も state 更新もしない', async () 
   assert.equal(calls.spawn.length, 0);
   assert.equal(calls.writes.length, 0);
   assert.equal(armed, 0);
-  assert.deepEqual(JSON.parse(calls.logs[0]), { route: 'inline', cwd: 'C:\\work', sessionId: 'probe' });
+  assert.deepEqual(JSON.parse(calls.logs.find(line => line.startsWith('{'))), { route: 'inline', cwd: 'C:\\work', sessionId: 'probe' });
 });
 
 test('起動成功時に detached spawn し state を tmp から原子的に更新する', async () => {
@@ -527,7 +527,8 @@ test('dry-run は plan だけを出して spawn しない', async () => {
   assert.equal(await launchNextSession(['--target', 'terminal', '--dry-run'], io), 0);
   assert.equal(calls.spawn.length, 0);
   assert.equal(calls.writes.length, 0);
-  const output = JSON.parse(calls.logs[0]);
+  assert.match(calls.logs.join('\n'), /claude\.exe が .* 個/);
+  const output = JSON.parse(calls.logs.find(line => line.startsWith('{')));
   assert.equal(output.cwd, 'C:\\work');
   assert.equal(output.account, '');
   assert.equal(output.configDir, path.join('/fake/home', '.claude'));
@@ -656,7 +657,8 @@ test('VSCode dry-run は route と手順だけを出して spawn しない', asy
   const { io, calls } = fakeIo({ env: { VSCODE_CLI_PATH: codeCli }, exists: (file) => file === codeCli || file === 'C:\\work' });
   assert.equal(await launchNextSession(['--target', 'vscode', '--dry-run'], io), 0);
   assert.equal(calls.spawn.length, 0);
-  const output = JSON.parse(calls.logs[0]);
+  assert.match(calls.logs.join('\n'), /claude\.exe が .* 個/);
+  const output = JSON.parse(calls.logs.find(line => line.startsWith('{')));
   assert.equal(output.route, 'vscode');
   assert.equal(output.account, '');
   assert.equal(output.configDir, path.join('/fake/home', '.claude'));
@@ -1184,4 +1186,50 @@ test('tasklist CSV の Claude 行を数え、実行失敗なら null を返す',
   assert.equal(countClaudeProcesses(fakeExec), 3);
   assert.equal(countClaudeProcesses(() => { throw new Error('tasklist failed'); }), null);
   if (process.platform !== 'win32') assert.equal(countClaudeProcesses(), null);
+});
+
+test('countClaudeProcesses は PowerShell の出力から Claude デスクトップアプリ (11本) を除外して CLI (8本) だけを数える', () => {
+  const desktopProcs = [
+    'C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=crashpad-handler',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=gpu-process',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=network.mojom.NetworkService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=renderer --user-data-dir="C:\\Users\\uers\\AppData\\Roaming\\Claude"',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=renderer --app-user-model-id=Claude_pzs8sxrjxfjjc!Claude',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=node.mojom.NodeService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=node.mojom.NodeService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=node.mojom.NodeService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=audio.mojom.AudioService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=video_capture.mojom.VideoCaptureService',
+  ];
+  const cliProcs = [
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --output-format stream-json',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --output-format stream-json --verbose',
+    'C:\\Users\\uers\\AppData\\Roaming\\Claude\\claude-code\\2.1.321\\d020ce1b5d30\\claude.exe --resume 1234',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume aaed1ee2',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume fe31e35e',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume c6a31e7c',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume 5b1c3cb7',
+    'C:\\Users\\uers\\.local\\bin\\claude.exe agents --json',
+  ];
+  const psOutput = JSON.stringify([...desktopProcs, ...cliProcs].map(CommandLine => ({ Name: 'claude.exe', CommandLine })));
+
+  const fakeExec = (command, args) => {
+    if (command === 'powershell.exe') return psOutput;
+    throw new Error('unexpected command');
+  };
+
+  assert.equal(countClaudeProcesses(fakeExec), 8);
+});
+
+
+test('countClaudeProcesses counts inaccessible CLI metadata and filters executable-only desktop paths', () => {
+  const rows = [
+    { Name: 'claude.exe', ExecutablePath: 'C:/Program Files/WindowsApps/Claude_5/app/claude.exe', CommandLine: null },
+    { Name: 'claude.exe', ExecutablePath: 'C:/Users/x/AppData/Local/AnthropicClaude/app/claude.exe', CommandLine: null },
+    { Name: 'claude.exe', ExecutablePath: null, CommandLine: null },
+    { Name: 'claude.exe', ExecutablePath: 'C:/Users/x/AppData/Roaming/Claude/claude-code/1/hash/claude.exe', CommandLine: null },
+  ];
+  assert.equal(countClaudeProcesses(() => JSON.stringify(rows)), 2);
+  assert.equal(countClaudeProcesses(command => { assert.equal(command, 'powershell.exe'); return '[]'; }), 0);
 });

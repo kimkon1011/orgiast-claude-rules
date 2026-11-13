@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord } from './reopen-lost-sessions.mjs';
+import { getLoadGuardStatus, hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord } from './reopen-lost-sessions.mjs';
 import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
@@ -1504,6 +1504,52 @@ test('loadGuard: tasklist 失敗時は fail-open でスキップせず reopen �
   assert.equal(result.reopened.length, 1);
 });
 
+test('loadGuard: PowerShell 出力から Claude デスクトップアプリ (11本) を除外し CLI (8本) だけを数え、上限(10)未満のためブロックしない', async t => {
+  const base = fixture(t);
+  const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
+    return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
+  };
+  const desktopProcs = [
+    'C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=crashpad-handler',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=gpu-process',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=network.mojom.NetworkService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=renderer --user-data-dir="C:\\Users\\uers\\AppData\\Roaming\\Claude"',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=renderer --app-user-model-id=Claude_pzs8sxrjxfjjc!Claude',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=node.mojom.NodeService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=node.mojom.NodeService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=node.mojom.NodeService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=audio.mojom.AudioService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=video_capture.mojom.VideoCaptureService',
+  ];
+  const cliProcs = [
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --output-format stream-json',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --output-format stream-json --verbose',
+    'C:\\Users\\uers\\AppData\\Roaming\\Claude\\claude-code\\2.1.321\\d020ce1b5d30\\claude.exe --resume 1234',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume aaed1ee2',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume fe31e35e',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume c6a31e7c',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume 5b1c3cb7',
+    'C:\\Users\\uers\\.local\\bin\\claude.exe agents --json',
+  ];
+  const psOutput = JSON.stringify([...desktopProcs, ...cliProcs].map(CommandLine => ({ Name: 'claude.exe', CommandLine })));
+
+  const spawn = (cmd, args) => {
+    if (cmd === 'powershell.exe') return { status: 0, stdout: psOutput };
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  assert.equal(result.skipped.loadGuard, 0);
+  assert.equal(result.reopened.length, 1);
+  const guard = await getLoadGuardStatus({ spawn, checkCpu: false });
+  assert.equal(guard.claudeCount, 8);
+  assert.equal(guard.triggered, false);
+  assert.equal(guard.reason, null);
+});
+
 test('reopenRepeat: 6時間以内に unverified 含め3回 reopen された id は reopenRepeat で除外される', async t => {
   const base = fixture(t);
   const now = () => Date.parse('2026-11-07T12:00:00.000Z');
@@ -1698,4 +1744,14 @@ test('hidden 読み取り失敗時は従来どおり開かれ hiddenError が入
   assert.equal(result.candidates.length, 1);
   assert.equal(result.candidates[0].id, 'one');
   assert.equal(result.hiddenError, 'DB read error');
+});
+
+
+test('loadGuard counts missing metadata and excludes desktop executable paths', async () => {
+  const rows = [
+    { Name: 'claude.exe', ExecutablePath: 'C:/Program Files/WindowsApps/Claude_5/app/claude.exe' },
+    { Name: 'claude.exe', CommandLine: null, ExecutablePath: null },
+  ];
+  const result = await getLoadGuardStatus({ checkCpu: false, spawn: () => ({ status: 0, stdout: JSON.stringify(rows) }) });
+  assert.equal(result.claudeCount, 1);
 });

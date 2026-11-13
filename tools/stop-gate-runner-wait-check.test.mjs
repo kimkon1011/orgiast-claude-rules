@@ -38,7 +38,10 @@ for (const kind of ['success', 'failure', 'missing-footer', 'ordinary']) test(`�
     assert.equal(calls[0].session, 'wait-test');
     assert.match(calls[0].check, /session-progress-check\.mjs" --session "wait-test"$/);
     assert.equal(calls[0].label, `自動登録: ${kind === 'missing-footer' ? humanText.slice(0, 60) : '進捗確認を修正する'}`);
-    assert.equal(calls[0].deadline, kind === 'missing-footer' ? '+24h' : new Date(2099, 11, 31, 23, 59).toISOString());
+    assert.ok(Date.parse(calls[0].deadline) >= Date.now() + 6 * 3600000 - 1000);
+    assert.equal(calls[0].timeout, 120);
+    assert.equal(calls[0].autoRegisteredCheck, true);
+    if (kind !== 'missing-footer') assert.equal(calls[0].deadline, new Date(2099, 11, 31, 23, 59).toISOString());
     assert.equal(records.at(-1).verdict, kind === 'failure' ? 'block' : 'pass_after_autoregister');
     if (kind === 'failure') {
       assert.equal(result.decision, 'block');

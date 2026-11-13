@@ -17,6 +17,7 @@ export function progressHome(prefix = 'auto-progress-') {
 
 // Even a mocked DM can trigger a real Windows toast when the row has a local owner.
 export const notificationMocks = {
+  addProgressInboxItem: async () => ({ id: 'test-progress', status: 'open' }),
   notifyOwner: async () => ({ delivered: 'none', reason: 'test default' }),
   sendOwnerToast: () => true,
 };

@@ -585,9 +585,14 @@ test('人待ちは自動進行なしでも同一sessionのopen台帳行を要求
   withOpenCheck((input, file) => {
     assert.equal(judgeNextAction(text, cronRow, input).decision, 'pass');
     assert.equal(judgeNextAction(text, cronRow, { session_id: 'other' }).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');
-    for (const status of ['done', 'superseded', 'waiting_user', 'stalled', 'resumed']) {
+    for (const status of ['done', 'superseded', 'waiting_user']) {
       fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status, check: 'node check.mjs', ask: '本人が行う操作の全文です。' }));
       assert.equal(judgeNextAction(text, '', input).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', status);
+    }
+    for (const status of ['overdue', 'stalled', 'resumed']) {
+      fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status, check: 'node check.mjs', ask: '本人が行う操作の全文です。' }));
+      assert.equal(judgeNextAction(text, cronRow, input).decision, 'pass', status);
+      assert.equal(judgeNextAction(text, '', input).code, 'SESSION-OPEN-NEEDS-IN-SESSION-CHECK', status);
     }
     fs.rmSync(file);
     assert.equal(judgeNextAction(text, '', input).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');

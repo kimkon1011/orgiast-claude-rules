@@ -54,6 +54,9 @@ export async function sendDiscordDm(target, body, options = {}) {
   if (!options.noCopyKim && !isKim) copyToKim = isKimSeat(home) ? 'in-session' : 'session-inbox';
   const finalBody = isKim || options.noReplyFooter ? String(body ?? '').trimEnd() : withReplyToKimFooter(body);
   const content = safeContent(finalBody);
+  // 秘匿除去で本文が変わる場合は送らず停止（切り詰めだけの変化は対象外）
+  const redactedOnly = redactSecrets(finalBody).replace(/([?&]Authorization=)[^&\s]+/gi, '$1[REDACTED]');
+  if (redactedOnly !== finalBody) throw new Error('秘密値は DM では送れません。本文から秘密値を外し、別の経路（Drive の限定共有ドキュメントなど）で渡してください');
   if (options.requireFullBody && content !== finalBody) throw new Error('報告全文がDiscord本文上限または秘匿値除去で変わるため送信を停止しました');
   if (options.dryRun) return { dryRun: true, recipient, content, copyToKim, ...(inbox ? { delivered: 'session-inbox' } : {}) };
   if (inbox) {

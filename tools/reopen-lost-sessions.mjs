@@ -748,7 +748,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
   now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs, stateBased = false,
   checkCpu = true, checkClaude = false, cpusImpl, vscodeStartedAt, openDb } = {}) {
-  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closedInRunningVscode: 0, loadGuard: 0, reopenRepeat: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
+  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closedInRunningVscode: 0, loadGuard: 0, reopenRepeat: 0, unverifiedStreak: 0, processRunning: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
   const initialHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
   const hiddenSessionIds = initialHidden.ids;
   if (initialHidden.error) {
@@ -815,6 +815,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
     result.indexMs = locals.indexMs;
     const reopenCounts = reopenLoopCounts(base, now);
     const repeatCounts = reopenRepeatCounts(base, now);
+    const streakCounts = unverifiedStreakCounts(base, now);
     const deadline = now() + (stateBased ? 180000 : 60000);
     const get = async url => {
       if (now() >= deadline) throw Error('API time limit');
@@ -863,8 +864,9 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
             if (Number.isFinite(resolvedVscodeStartedAt) && resolvedVscodeStartedAt < lastEvent) { result.skipped.closedInRunningVscode++; continue; }
             if (reopenCounts[local.id] >= 3) { result.skipped.reopenLoop++; continue; }
             if (repeatCounts[local.id] >= 3) { result.skipped.reopenRepeat++; continue; }
+            if (streakCounts[local.id]) { result.skipped.unverifiedStreak++; continue; }
             seenIds.add(local.id);
-            result.candidates.push({ id: local.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '', source: 'state' });
+            result.candidates.push({ id: local.id, rcId: session.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '', source: 'state' });
           }
           // 降順の場合: 全セッションの last_event_at/updated_at が 72h より古ければそれ以上ページングしない
           const cutoff = Date.parse(stateSince);
@@ -896,9 +898,10 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
             // Skip sessions reopened 3+ times in the last 24h (infinite reopen guard)
             if (reopenCounts[local?.id] >= 3) { result.skipped.reopenLoop++; continue; }
             if (repeatCounts[local?.id] >= 3) { result.skipped.reopenRepeat++; continue; }
+            if (streakCounts[local?.id]) { result.skipped.unverifiedStreak++; continue; }
             if (!local || seenIds.has(local.id)) continue;
             seenIds.add(local.id);
-            result.candidates.push({ id: local.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '', source: 'host_exit' });
+            result.candidates.push({ id: local.id, rcId: session.id, cwd: local.cwd, cwds: local.cwds ?? [], title: session.title ?? '', source: 'host_exit' });
           }
           const failed = batch.find(item => item.status === 'rejected');
           if (failed) throw failed.reason;

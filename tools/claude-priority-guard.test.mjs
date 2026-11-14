@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { guardClaudePriority } from './claude-priority-guard.mjs';
 
@@ -55,9 +56,9 @@ test('powershell is called with correct args', () => {
   assert.ok(calls[0].opts.timeout <= 15000);
 });
 
-test('malformed PowerShell output returns parse error', () => {
+test('malformed PowerShell output returns failure counters', () => {
   const exec = (cmd, args, opts) => SPAWN_RESULT_PREFIX('{broken');
-  assert.throws(() => guardClaudePriority({ platform: 'win32', exec }));
+  assert.deepEqual(guardClaudePriority({ platform: 'win32', exec }), { lowered: 0, alreadyLow: 0, excluded: 0, failed: 1 });
 });
 
 test('exit 0 regardless of outcome via real direct run of the module', async (t) => {
@@ -72,4 +73,40 @@ test('exit 0 regardless of outcome via real direct run of the module', async (t)
   assert.ok(typeof parsed.alreadyLow === 'number' || parsed.skipped === 'non-win32');
   assert.ok(typeof parsed.excluded === 'number' || parsed.skipped === 'non-win32');
   assert.ok(typeof parsed.failed === 'number' || parsed.skipped === 'non-win32');
+});
+
+test('spawn exceptions and nonzero exits return failure counters', () => {
+  for (const exec of [() => { throw Error('spawn failed'); }, () => ({ status: 1, stdout: '' }), () => ({ error: Error('timeout'), stdout: '' })]) {
+    assert.deepEqual(guardClaudePriority({ platform: 'win32', exec }), { lowered: 0, alreadyLow: 0, excluded: 0, failed: 1 });
+  }
+});
+
+test('PowerShell process classification and per-process failures', { skip: process.platform !== 'win32' }, () => {
+  // Run the actual guard body against fake process objects; no real priorities change.
+  const exec = (command, args, options) => {
+    const body = args.at(-1);
+    const mocks = `
+function Get-CimInstance { @(
+  @{ProcessId=1; ExecutablePath='C:\\cli\\claude.exe'},
+  @{ProcessId=2; ExecutablePath='C:\\WindowsApps\\Claude\\claude.exe'},
+  @{ProcessId=3; ExecutablePath='C:\\cli\\claude.exe'},
+  @{ProcessId=4; ExecutablePath='C:\\cli\\claude.exe'},
+  @{ProcessId=5; ExecutablePath='C:\\cli\\claude.exe'},
+  @{ProcessId=6; ExecutablePath='C:\\cli\\claude.exe'},
+  @{ProcessId=7; ExecutablePath='C:\\cli\\claude.exe'}
+) }
+function Get-Process { param($Id)
+  if ($Id -eq 5) { throw 'process disappeared' }
+  $priority = switch ($Id) { 3 {'BelowNormal'} 4 {'Idle'} 6 {'High'} default {'Normal'} }
+  $proc = [pscustomobject]@{PriorityClass=$priority}
+  if ($Id -in @(3,4,6)) {
+    $proc = New-Object PSObject
+    $proc | Add-Member ScriptProperty PriorityClass ([scriptblock]::Create("'$priority'")) { throw 'must not change' }
+  }
+  return $proc
+}
+`;
+    return spawnSync(command, [...args.slice(0, -1), mocks + body], options);
+  };
+  assert.deepEqual(guardClaudePriority({ platform: 'win32', exec }), { lowered: 2, alreadyLow: 2, excluded: 1, failed: 1 });
 });

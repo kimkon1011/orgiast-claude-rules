@@ -34,7 +34,7 @@ function Register-PriorityGuardTask(
     $trigger1b.Delay = 'PT1M'
     $principal1 = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
     $settings1 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -Priority 5
-    $desired1 = New-ScheduledTask -Action $action1 -Triggers @($trigger1a, $trigger1b) -Principal $principal1 -Settings $settings1
+    $desired1 = New-ScheduledTask -Action $action1 -Trigger @($trigger1a, $trigger1b) -Principal $principal1 -Settings $settings1
 
     $current1 = & $GetTask $name1
     $changed = $false

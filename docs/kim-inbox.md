@@ -13,10 +13,14 @@ kim 宛の報告を Discord からセッション内の会話へ移す（2026-10
 - 直接の kim 宛 DM・claude-code チャンネル投稿は PreToolUse ゲートで拒否。正規の通知ツールは台帳へ振り分ける。他メンバー宛 DM は従来どおり。
 - セッションのクローズは止めない。未回収 ask の件数を成果報告と引き継ぎの「未決」に書き、次セッションで回収する。
 
+### 外部完了メールによる自動クローズ (--done-when-gmail)
+完了時にメールが届く手作業（保険継続・支払い・予約・配送・手続き等）の `ask` を登録する際は、必ず `--done-when-gmail "<user>|<gmail query>"` を指定する。該当メールが到着すると `autoCloseByGmail` が自動で項目を回答済みにし、再提示を防止する。
+
 ```sh
-node tools/kim-inbox.mjs --add --kind ask --source fleet-chase --body-file <本文ファイル>
+node tools/kim-inbox.mjs --add --kind ask --done-when-gmail "seisaku-team@orgiast.jp|【自動車保険】継続手続完了のお知らせ" --body-file <本文ファイル>
 node tools/kim-inbox.mjs --list --open --json
 node tools/kim-inbox.mjs --status
+node tools/kim-inbox.mjs --auto-close
 node tools/kim-inbox.mjs --answer <id> --body-file <返答ファイル>
 node tools/kim-inbox.mjs --seen <id>
 node tools/kim-inbox.mjs --drop <id> --reason "不要になった理由"

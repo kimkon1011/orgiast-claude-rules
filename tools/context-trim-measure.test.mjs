@@ -359,6 +359,34 @@ test('parseArgs combines multiple flags', () => {
   assert.equal(opts.root, '/tmp/logs');
 });
 
+test('parseArgs accepts --progressive-max-chars', () => {
+  const opts = parseArgs(['--progressive-max-chars', '1000']);
+  assert.equal(opts.progressiveMaxChars, 1000);
+});
+
+test('parseArgs accepts --progressive-threshold as float', () => {
+  const opts = parseArgs(['--progressive-threshold', '0.15']);
+  assert.equal(opts.progressiveThreshold, 0.15);
+});
+
+test('parseArgs accepts --min-chars', () => {
+  const opts = parseArgs(['--min-chars', '50']);
+  assert.equal(opts.minChars, 50);
+});
+
+test('parseArgs all progressive flags together', () => {
+  const opts = parseArgs([
+    '--progressive-max-chars', '600',
+    '--progressive-threshold', '0.3',
+    '--min-chars', '100',
+    '--keep-recent', '10',
+  ]);
+  assert.equal(opts.progressiveMaxChars, 600);
+  assert.equal(opts.progressiveThreshold, 0.3);
+  assert.equal(opts.minChars, 100);
+  assert.equal(opts.keepRecent, 10);
+});
+
 // ---------------------------------------------------------------------------
 // protectErrors / missingInfoRate integration
 // ---------------------------------------------------------------------------

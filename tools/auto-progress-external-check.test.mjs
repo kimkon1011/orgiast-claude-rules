@@ -140,3 +140,5 @@ test('watch persists successive cursors only after inbox delivery and keeps moni
   assert.equal(new Set(delivered).size, 2);
   assert.equal(readEvents(home).length, 2);
 });
+
+process.env.ORGIAST_AUTO_RESUME = '1';

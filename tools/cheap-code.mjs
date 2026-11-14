@@ -79,7 +79,13 @@ export function buildChildEnv(config, key, parentEnv = process.env, { configDir 
     env.ANTHROPIC_API_KEY = '';
     for (const name of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL']) env[name] = config.defaultModel;
   }
-  else delete env.ANTHROPIC_API_KEY;
+  else {
+    delete env.ANTHROPIC_API_KEY;
+    // GLM のモデル名(glm-5.3 等)も ANTHROPIC_MODEL 経由で子に伝えないと SDK が --model フラグを
+    // 検証して unrecognized_model で失敗する。DeepSeek は OpenRouter 経由で同じ env 設定で
+    // 動作済み(2026-11-14 実測・修正)。
+    env.ANTHROPIC_MODEL = config.defaultModel;
+  }
   if (config.maxContextTokens) env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(config.maxContextTokens);
   // 契約 RULES「他バックエンドの挙動を変えない」に従い、delegation-health が観測した
   // backend=cheap-code:deepseek に限定する(glm は既定のまま。必要になったら別途実測して広げる)。

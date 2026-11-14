@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { versionTuple, compareVersionTuples, pickHighestVersion, isUnspawnable, candidateClaudeExecutables, resolveClaudeExecutable, defaultResolveArgs, findClaudeInVersionedDir, sanitizeClaudeChildEnv, sanitizeClaudeSupervisorEnv, listStrippedClaudeChildEnvKeys } from './claude-exe.mjs';
+import { versionTuple, compareVersionTuples, pickHighestVersion, isUnspawnable, candidateClaudeExecutables, resolveClaudeExecutable, defaultResolveArgs, findClaudeInVersionedDir, sanitizeClaudeChildEnv, sanitizeClaudeSupervisorEnv, listStrippedClaudeChildEnvKeys, isClaudeCodeCliProcess } from './claude-exe.mjs';
 import path from 'node:path';
 
 test('versionTuple basic', () => {
@@ -283,4 +283,57 @@ test('sanitizeClaudeSupervisorEnv は漏洩キーだけ外し ANTHROPIC_* と CL
     ANTHROPIC_BASE_URL: 'https://parent.example',
     ANTHROPIC_AUTH_TOKEN: 'token',
   });
+});
+
+test('isClaudeCodeCliProcess は Claude デスクトップアプリを除外する', () => {
+  const desktopMain = 'C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe';
+  const desktopRenderer = '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=renderer --user-data-dir=C:\\Users\\uers\\AppData\\Roaming\\Claude';
+  const desktopGpu = '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=gpu-process';
+  const desktopCrash = '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=crashpad-handler';
+  const desktopOld = 'C:\\Users\\uers\\AppData\\Local\\AnthropicClaude\\app-1.0.0\\claude.exe';
+  const genericType = 'C:\\Custom\\claude.exe --type=utility';
+
+  assert.equal(isClaudeCodeCliProcess(desktopMain), false);
+  assert.equal(isClaudeCodeCliProcess(desktopRenderer), false);
+  assert.equal(isClaudeCodeCliProcess(desktopGpu), false);
+  assert.equal(isClaudeCodeCliProcess(desktopCrash), false);
+  assert.equal(isClaudeCodeCliProcess(desktopOld), false);
+  assert.equal(isClaudeCodeCliProcess(genericType), false);
+
+  const vscodeCli = 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --output-format stream-json';
+  const appDataCli = 'C:\\Users\\uers\\AppData\\Roaming\\Claude\\claude-code\\2.1.321\\d020ce1b5d30\\claude.exe --resume 1234';
+  const localBinCli = 'C:\\Users\\uers\\.local\\bin\\claude.exe agents --json';
+
+  assert.equal(isClaudeCodeCliProcess(vscodeCli), true);
+  assert.equal(isClaudeCodeCliProcess(appDataCli), true);
+  assert.equal(isClaudeCodeCliProcess(localBinCli), true);
+
+  const desktopProcs = [
+    desktopMain,
+    desktopCrash,
+    desktopGpu,
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=network.mojom.NetworkService',
+    desktopRenderer,
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=renderer --app-user-model-id=Claude_pzs8sxrjxfjjc!Claude',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=node.mojom.NodeService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=node.mojom.NodeService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=node.mojom.NodeService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=audio.mojom.AudioService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=video_capture.mojom.VideoCaptureService',
+  ];
+  const cliProcs = [
+    vscodeCli,
+    'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --output-format stream-json --verbose',
+    appDataCli,
+    'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume aaed1ee2',
+    'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume fe31e35e',
+    'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume c6a31e7c',
+    'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume 5b1c3cb7',
+    localBinCli,
+  ];
+
+  const all = [...desktopProcs, ...cliProcs];
+  assert.equal(all.length, 19);
+  const counted = all.filter(isClaudeCodeCliProcess);
+  assert.equal(counted.length, 8);
 });

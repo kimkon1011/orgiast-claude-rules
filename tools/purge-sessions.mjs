@@ -39,7 +39,8 @@ function acquire(file) {
       fs.closeSync(fd);
       return () => fs.unlinkSync(file);
     } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
+      // Windows では同時 wx 競合時に EEXIST ではなく EPERM が投げられる（CI 実測 2026-11-13）。
+      if (e.code !== 'EEXIST' && e.code !== 'EPERM') throw e;
       let stat;
       try { stat = fs.statSync(file); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
       const { pid } = json(file);

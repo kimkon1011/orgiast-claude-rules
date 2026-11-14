@@ -310,3 +310,5 @@ test('auto registration marker does not hide an explicit waiting_user request', 
   const items = collectAwaiting({ home, now: NOW });
   assert.equal(items.filter(item => item.route?.sessionId === 'session-a').length, 1);
 });
+
+process.env.ORGIAST_AUTO_RESUME = '1';

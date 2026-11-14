@@ -5,6 +5,7 @@ const path = require('node:path');
 const {
   readConfig, createOwnershipLease, createPool, isWaitingTab, decideRefresh,
   readRefreshConfig, readLastRefreshAt, inRefreshHours, isWorktreeFolder, decideWorktreeCleanup,
+  decideTrimExcess,
 } = require('./mobile-pool');
 const { resolveClaudeShellPath } = require('./shell-path');
 const { decideAction, orderMobileOpenMethods } = require('./route');
@@ -54,7 +55,10 @@ function waitForNewClaudeTab(previousCount, timeoutMs = openWaitMs) {
   return new Promise((resolve) => {
     const started = Date.now();
     const timer = setInterval(() => {
-      if (claudeTabs().length > previousCount) {
+      if (claudeTabs().length < previousCount) {
+        clearInterval(timer);
+        resolve(false);
+      } else if (claudeTabs().length > previousCount) {
         clearInterval(timer);
         resolve(true);
       } else if (Date.now() - started >= timeoutMs) {
@@ -83,8 +87,11 @@ const mobileLease = createOwnershipLease();
 let mobileTarget = 1;
 let mobileEnabled = false;
 let worktreeWindow = false; // workspaceFolders が全て git worktree のウィンドウ（待機タブを担わない）
-let lastGoodMethod;
 let lastLoggedState = '';
+/** @type {Set<import('vscode').Tab>} この exthost が開いたタブ。閉じてよいタブの識別に使う。 */
+const openedTabs = new Set();
+/** 安全装置: どの方式でもタブ総数が減ったら二度と開かない */
+let mobileAborted = false;
 const EXTERNAL_OPEN_URI = 'vscode://Anthropic.claude-code/open';
 function log(message) { getOutputChannel().appendLine(`${new Date().toISOString()} ${message}`); }
 let lastRefreshAt = null;
@@ -135,6 +142,7 @@ async function closeArchivedTabs(context) {
     hiddenIds: hiddenSessionIds,
     closedIds: closedSessionIds,
     keepEmpty,
+    openedTabs,
   });
 
   if (plan.toClose.length > 0) {
@@ -160,11 +168,98 @@ const tabAppearedAt = new Map();
 function syncTabTimes(now = Date.now()) {
   const current = claudeTabs();
   for (const tab of current) if (!tabAppearedAt.has(tab)) tabAppearedAt.set(tab, now);
+  for (const tab of openedTabs) if (!current.includes(tab) || !isWaitingTab(tab)) openedTabs.delete(tab);
   for (const tab of [...tabAppearedAt.keys()]) if (!current.includes(tab)) tabAppearedAt.delete(tab);
   return current;
 }
+function hasUserMessageInProjects(home, sessionId) {
+  if (!sessionId) return undefined;
+  const projectsDir = path.join(home, '.claude', 'projects');
+  try {
+    const dirs = fs.readdirSync(projectsDir, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith('_'));
+    for (const d of dirs) {
+      const file = path.join(projectsDir, d.name, `${sessionId}.jsonl`);
+      if (fs.existsSync(file)) {
+        const text = fs.readFileSync(file, 'utf8');
+        return text.includes('"type":"user"');
+      }
+    }
+  } catch { /* ignored */ }
+  return undefined;
+}
+
+let trimRunning = false;
+async function trimWaitingExcess(context) {
+  if (worktreeWindow || mobileAborted || trimRunning) return false;
+  if (!mobileEnabled || !await mobileLease.acquire()) return false;
+  const now = Date.now();
+  const current = syncTabTimes(now);
+  const waiting = current.filter(isWaitingTab);
+  if (waiting.length <= mobileTarget) return false;
+
+  trimRunning = true;
+  try {
+    const apData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    const globalStorageDir = path.join(apData, 'Code', 'User', 'globalStorage');
+    let workspaceStorageDir = null;
+    if (context?.storageUri) {
+      workspaceStorageDir = path.dirname(context.storageUri.fsPath);
+    }
+    const state = workspaceStorageDir ? await runReadTabState(workspaceStorageDir, globalStorageDir, mobileHome) : null;
+    const mementoTabs = state?.tabs || [];
+
+    const tabMap = new Map();
+    const liveGroups = vscode.window.tabGroups.all;
+    for (let g = 0; g < liveGroups.length; g++) {
+      const gTabs = liveGroups[g].tabs || [];
+      for (let i = 0; i < gTabs.length; i++) {
+        const liveTab = gTabs[i];
+        const m = mementoTabs.find(t => t.group === g && t.index === i);
+        tabMap.set(liveTab, m?.sessionId ?? null);
+      }
+    }
+
+    const candidateItems = current.map((tab) => {
+      const sessionId = tabMap.get(tab);
+      const hasUserMessage = sessionId ? hasUserMessageInProjects(mobileHome, sessionId) : undefined;
+      return {
+        label: String(tab.label),
+        appearedAt: tabAppearedAt.get(tab),
+        isActive: Boolean(tab.isActive),
+        hasUserMessage,
+        tab,
+      };
+    });
+
+    const toClose = decideTrimExcess({ tabs: candidateItems, target: mobileTarget, now });
+    if (!toClose.length) return false;
+
+    let closedAny = false;
+    for (const item of toClose) {
+      if (mobileAborted || item.tab.isActive) continue;
+      const ageMinutes = Math.floor((now - (item.appearedAt ?? now)) / 60000);
+      log(`mobile trim closed=${item.label} age=${ageMinutes} waitingBefore=${waiting.length}`);
+      const closed = await vscode.window.tabGroups.close(item.tab);
+      if (closed) closedAny = true;
+    }
+    return closedAny;
+  } catch (error) {
+    log(`mobile trim failed: ${error.message}`);
+    return false;
+  } finally {
+    trimRunning = false;
+  }
+}
+
 // リフレッシュ判定（ownership lease を持つウィンドウだけ）。force=true は URI の refresh=1。
-async function refreshWaitingTab({ force = false } = {}) {
+let refreshRunning = false;
+async function refreshWaitingTab(options = {}) {
+  if (mobileAborted || refreshRunning) return false;
+  refreshRunning = true;
+  try { return await performRefresh(options); }
+  finally { refreshRunning = false; }
+}
+async function performRefresh({ force = false } = {}) {
   if (worktreeWindow) return false; // worktree ウィンドウはリーズを取らない
   if (!mobileEnabled || !await mobileLease.acquire()) return false;
   const now = Date.now();
@@ -180,17 +275,18 @@ async function refreshWaitingTab({ force = false } = {}) {
     target: mobileTarget,
     force,
     tabs: current.map((tab) => ({
-  label: String(tab.label),
-  appearedAt: tabAppearedAt.get(tab),
-  isActive: Boolean(tab.isActive),
-  rcConnected: false, // Placeholder — RC 拡張 API が提供する予定
-  rcLastActivityAt: null, // Placeholder
-  tab,
-})),
+      label: String(tab.label),
+      appearedAt: tabAppearedAt.get(tab),
+      isActive: Boolean(tab.isActive),
+      rcConnected: false, // Placeholder — RC 拡張 API が提供する予定
+      rcLastActivityAt: null, // Placeholder
+      tab,
+    })),
+    openedTabs,
   });
   if (!decision.refresh) return false;
   const target = decision.tab;
-  if (target.tab.isActive) return false; // 閉じる直前に再確認（kim が触っている可能性）
+  if (mobileAborted || !openedTabs.has(target.tab) || !isWaitingTab(target.tab) || target.tab.isActive) return false; // 閉じる直前に再確認（kim が触っている可能性）
   log(`mobile refresh closed=${target.label} age=${decision.ageMinutes} waitingBefore=${decision.waiting}`);
   lastRefreshAt = now;
   const closed = await vscode.window.tabGroups.close(target.tab);
@@ -203,14 +299,14 @@ function vscodeMobileTabs() {
   return Number.isInteger(value) && value >= 1 ? value : 3;
 }
 const OPEN_METHODS = {
-  newConversation: () => vscode.commands.executeCommand('claude-vscode.newConversation'),
-  editorOpen: () => vscode.commands.executeCommand('claude-vscode.editor.open'),
   externalUri: () => vscode.env.openExternal(vscode.Uri.parse(EXTERNAL_OPEN_URI)),
 };
 // 1 回の試行: 手段を順に試し、Claude タブ総数が増えた時点で成功（各手段 openWaitMs 待つ）。
 async function openMobileTab() {
-  // タブが 0 本のとき newConversation は使用済み会話を開き直し得るので editor.open を先にする。
-  const order = orderMobileOpenMethods(claudeTabs().length === 0 && !lastGoodMethod ? 'editorOpen' : lastGoodMethod);
+  if (mobileAborted) return false;
+  // externalUri だけを使う（editorOpen / newConversation は危険: 2026-11-13 実害）。
+  // 常に 1 手段だけなのでループは実質 1 回だが、安全装置（タブ減少検出）を共有するため構造を維持。
+  const order = orderMobileOpenMethods();
   for (const method of order) {
     const beforeTabs = new Set(claudeTabs());
     const before = beforeTabs.size;
@@ -218,14 +314,27 @@ async function openMobileTab() {
     try { await OPEN_METHODS[method](); } catch (e) { error = e instanceof Error ? e.message : String(e); }
     const created = error ? false : await waitForNewClaudeTab(before);
     const after = claudeTabs();
+    if (after.length < before) {
+      // タブが減った → この拡張の生存中は補充停止
+      mobileAborted = true;
+      log(`mobile open ABORT: Claude タブが減少 before=${before} after=${after.length}`);
+      return false;
+    }
     const newLabels = after.filter((tab) => !beforeTabs.has(tab)).map((tab) => String(tab.label));
     log(`mobile open method=${method} before=${before} after=${after.length} ok=${created} newLabels=${JSON.stringify(newLabels)}${error ? ` error=${error}` : ''}`);
-    if (created) { lastGoodMethod = method; return true; }
+    if (created) {
+      // 新しく出現したタブを追跡（この exthost の閉鎖対象として記録）
+      for (const tab of after) {
+        if (!beforeTabs.has(tab) && isWaitingTab(tab)) openedTabs.add(tab);
+      }
+      return true;
+    }
   }
   return false;
 }
 const pool = createPool({
   tabs: claudeTabs,
+  stopped: () => mobileAborted,
   own: () => mobileLease.acquire(),
   publish(waiting, target) {
     fs.mkdirSync(path.join(mobileHome, '.claude'), { recursive: true });
@@ -237,6 +346,7 @@ const pool = createPool({
   open: openMobileTab,
 });
 async function ensureMobileTabs({ count = readConfig(mobileHome, process.env, vscodeMobileTabs()) } = {}) {
+  if (mobileAborted) return;
   if (worktreeWindow) return; // worktree ウィンドウは補充しない（通常ウィンドウの 5 秒タイマーが担う）
   mobileTarget = count;
   mobileEnabled = true;
@@ -308,14 +418,15 @@ function activate(context) {
       const current = syncTabTimes();
       const decision = decideWorktreeCleanup({
         tabs: current.map((tab) => ({
-  label: String(tab.label),
-  appearedAt: tabAppearedAt.get(tab),
-  isActive: Boolean(tab.isActive),
-  rcConnected: false, // Placeholder — RC 拡張 API が提供する予定
-  rcLastActivityAt: null, // Placeholder
-  tab,
-})),
+          label: String(tab.label),
+          appearedAt: tabAppearedAt.get(tab),
+          isActive: Boolean(tab.isActive),
+          rcConnected: false, // Placeholder — RC 拡張 API が提供する予定
+          rcLastActivityAt: null, // Placeholder
+          tab,
+        })),
         startup,
+        openedTabs,
       });
       if (!decision) return;
       log(`mobile worktree cleanup closed=${decision.tab.label} startup=${startup}`);
@@ -324,19 +435,26 @@ function activate(context) {
     cleanup(true);
     const cleanupTimer = setInterval(() => cleanup(false), 60000);
     cleanupTimer?.unref?.();
-    context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(event => { archiveWatcher.change(event); syncTabTimes(); cleanup(false); }));
+    context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(event => { archiveWatcher.change(event); syncTabTimes(); }));
     context.subscriptions.push({ dispose() { clearInterval(cleanupTimer); } });
     return;
   }
   const refill = () => {
-    if (mobileEnabled) pool.ensure(mobileTarget).catch((error) => log(`mobile refill failed: ${error.message}`));
+    if (mobileEnabled) {
+      pool.ensure(mobileTarget).catch((error) => log(`mobile refill failed: ${error.message}`));
+      trimWaitingExcess(context).catch((error) => log(`mobile trim failed: ${error.message}`));
+    }
   };
   context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(event => { archiveWatcher.change(event); syncTabTimes(); refill(); }));
   const timer = setInterval(refill, 5000);
   // 起動時に既存タブの出現時刻を初期化し、以後 opened は onDidChangeTabs 経由の sync で記録する。
   syncTabTimes();
+  trimWaitingExcess(context).catch((error) => log(`mobile trim startup failed: ${error.message}`));
   const refreshTimer = setInterval(
-    () => refreshWaitingTab().catch((error) => log(`mobile refresh failed: ${error.message}`)), 60000);
+    () => {
+      refreshWaitingTab().catch((error) => log(`mobile refresh failed: ${error.message}`));
+      trimWaitingExcess(context).catch((error) => log(`mobile trim failed: ${error.message}`));
+    }, 60000);
   refreshTimer?.unref?.();
   context.subscriptions.push({ dispose() { clearInterval(timer); clearInterval(refreshTimer); mobileLease.release(); } });
   const configuredTabs = vscode.workspace.getConfiguration('orgiast.nextSession').get('mobileTabs');
@@ -349,10 +467,6 @@ function activate(context) {
     } else {
       claudeExtension.activate()
         .then(async () => {
-          if (!await waitForCommand('claude-vscode.newConversation')) {
-            getOutputChannel().appendLine(`${new Date().toISOString()} mobile tabs: claude-vscode.newConversation が 60 秒以内に登録されなかったため補充しません`);
-            return;
-          }
           await ensureMobileTabs({ count: mobileTabs, name, attempts: 12 });
         })
         .catch((error) => getOutputChannel().appendLine(`${new Date().toISOString()} mobile tabs activation failed: ${error instanceof Error ? error.message : String(error)}`));

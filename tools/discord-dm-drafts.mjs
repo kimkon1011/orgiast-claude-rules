@@ -101,7 +101,15 @@ export async function send(id, ui, file = ledger) {
   } catch (e) { append({ ...row, status: 'uncertain', error: e.message }, file); throw e; }
 }
 function powershell(script, args = []) {
-  return execFileSync('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', path.join(dir, script), ...args], { encoding: 'utf8', timeout: 90000, windowsHide: true });
+  try {
+    return execFileSync('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-File', path.join(dir, script), ...args], { encoding: 'utf8', timeout: 90000, windowsHide: true });
+  } catch (e) {
+    const target = `${script} ${args.join(' ')}`.trim();
+    const isTimeout = /ETIMEDOUT/i.test(e.message) || e.code === 'ETIMEDOUT';
+    const err = new Error(`powershell (${target}) ${isTimeout ? 'ETIMEDOUT (90s exceeded)' : e.message}`);
+    err.code = e.code;
+    throw err;
+  }
 }
 export function nativeUI() {
   const read = chat => {
@@ -126,6 +134,11 @@ export function nativeUI() {
 async function main() {
   const [command, id, input] = process.argv.slice(2);
   if (!isKim()) { console.log('SKIP: kim-PC 専用'); return; }
+  const beeperState = path.join(home, '.claude', 'discord-beeper-autoreply', 'state.json');
+  if (command === 'scan' && (fs.existsSync(beeperState) || process.env.BEEPER_AUTOREPLY_ACTIVE)) {
+    console.log('SKIP: Beeper 自動返信が有効なため、個人DMの UI 下書きスキャンをスキップします');
+    return;
+  }
   if (command === 'list') { console.table(readRows().filter(r => r.status === 'pending').map(({ id, chat, from, ts, draft }) => ({ id, chat, from, ts, draft }))); return; }
   if (!['scan', 'send', 'edit'].includes(command)) throw new Error('Usage: scan [--dry-run] | list | send <id> | edit <id> <file>');
   const dryRun = process.argv.includes('--dry-run');

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { countWindowsClaudeProcesses } from './lib/windows-process.mjs';
 import { readHandoff, handoffLockEnabled } from './lib/handoff-store.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -510,8 +511,7 @@ export const DEFAULT_MAX_CLAUDE_PROCESSES = 12;
 export function countClaudeProcesses(exec = execFileSync) {
   if (process.platform !== 'win32' && exec === execFileSync) return null;
   try {
-    const out = exec('tasklist', ['/FI', 'IMAGENAME eq claude.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
-    return String(out).split(/\r?\n/).filter(line => /^"claude\.exe"/i.test(line)).length;
+    return countWindowsClaudeProcesses(exec);
   } catch { return null; }
 }
 
@@ -682,7 +682,9 @@ export async function launchNextSession(argv = [], io = {}) {
     }
     const launchEnv = { ...childEnv({ env, configDir, source: configDirSource }), ORGIAST_HEADLESS_JOB: 'next-session-launch' };
     const pendingTab = hasUnsentVscodeTab({ state, now, promptConsumed });
-    const decision = shouldLaunch({ state, now, env, force: flags.force, pendingTab: route === 'inline' || route === 'headless' ? false : pendingTab, claudeProcesses: countClaude() });
+    const claudeProcesses = countClaude();
+    if (flags.dryRun) log(`[next-session] claude.exe が ${claudeProcesses ?? '不明'} 個（Claude Code CLI、上限 ${Number(env.ORGIAST_NEXT_SESSION_MAX_CLAUDE) || DEFAULT_MAX_CLAUDE_PROCESSES}）`);
+    const decision = shouldLaunch({ state, now, env, force: flags.force, pendingTab: route === 'inline' || route === 'headless' ? false : pendingTab, claudeProcesses });
     if (!decision.ok) {
       log(`[next-session] スキップ: ${decision.reason}`);
       return 0;

@@ -58,9 +58,13 @@ function createOwnershipLease(port = 39741) {
   };
 }
 
+const AUTO_TITLE_RE = /^(?:remote-control-|\d{3}[-｜|])+[a-z]+-[a-z]+$/i;
 // No custom title: Claude changes its natural title after the first prompt. Custom
 // names suppress that signal and renameSessionTab now opens an interactive dialog.
-function isWaitingTab(tab) { return String(tab.label) === 'Claude Code'; }
+function isWaitingTab(tab) {
+  const label = typeof tab === 'string' ? tab : String(tab?.label ?? '');
+  return label === 'Claude Code' || AUTO_TITLE_RE.test(label);
+}
 function createPool({ tabs, open, publish, own = () => true, stopped = () => false, now = Date.now }) {
   let running;
   let retry = newRetryState();
@@ -132,8 +136,33 @@ function decideWorktreeCleanup({ tabs, now = Date.now(), startup = false, opened
   if (!candidates.length) return null;
   return candidates.reduce((oldest, current) => ((current.appearedAt ?? 0) < (oldest.appearedAt ?? 0) ? current : oldest));
 }
+// --- 余剰待機タブの自動削減判定（純粋関数） ---
+// 待機タブ（isWaitingTab）が target を超えたとき、超過分を古い順に閉じる。
+// 閉じる条件:
+// - isWaitingTab(tab) が真、isActive が偽
+// - 出現から 10 分以上経過
+// - transcript に user メッセージが無い（hasUserMessage === false）
+// - 1 回の実行で閉じるのは最大 maxClose（既定 10）本。target 本は必ず残す。openedTabs の記録は不問。
+function decideTrimExcess({ tabs, target, now = Date.now(), maxClose = 10, minAgeMs = REFRESH_MIN_AGE_MS }) {
+  if (!Array.isArray(tabs)) return [];
+  const waiting = tabs.filter(isWaitingTab);
+  if (waiting.length <= target) return [];
+  const maxTrimCount = Math.min(waiting.length - target, maxClose);
+  if (maxTrimCount <= 0) return [];
+
+  const candidates = waiting.filter((tab) => {
+    if (tab.isActive) return false;
+    if (now - (tab.appearedAt ?? 0) < minAgeMs) return false;
+    if (tab.hasUserMessage !== false) return false;
+    return true;
+  });
+
+  candidates.sort((a, b) => (a.appearedAt ?? 0) - (b.appearedAt ?? 0));
+  return candidates.slice(0, maxTrimCount);
+}
+
 module.exports = {
-  targetCount, readConfig, readSnapshot, createOwnershipLease, isWaitingTab, createPool,
+  AUTO_TITLE_RE, targetCount, readConfig, readSnapshot, createOwnershipLease, isWaitingTab, createPool,
   REFRESH_MIN_AGE_MS, RC_IN_USE_THRESHOLD_MS, decideRefresh, readRefreshConfig, readLastRefreshAt, inRefreshHours,
-  isWorktreeFolder, decideWorktreeCleanup,
+  isWorktreeFolder, decideWorktreeCleanup, decideTrimExcess,
 };

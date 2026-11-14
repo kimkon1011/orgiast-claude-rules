@@ -285,6 +285,52 @@ export function exclusion(local, closed, alive, hidden) {
   if (alive.has(local.id)) return 'alive';
   return null;
 }
+
+export function isWaitingSession(sessionId, { base, fsImpl = fs, wait = sleep, now = Date.now } = {}) {
+  if (!sessionId) return false;
+  
+  // First, check if the session has a transcript with title "待機中"
+  const projectsDir = path.join(base, 'projects');
+  if (!fsImpl.existsSync(projectsDir)) return false;
+  
+  const entries = [];
+  try {
+    const subDirs = fsImpl.readdirSync(projectsDir, { withFileTypes: true });
+    for (const dir of subDirs) {
+      if (!dir.isDirectory()) continue;
+      const filePath = path.join(dir.path, `${sessionId}.jsonl`);
+      try {
+        const content = fsImpl.readFileSync(filePath, 'utf8'); // Read entire content
+        entries.push(...content.trim().split('\n').filter(Boolean).map(JSON.parse));
+      } catch (e) {
+        // File not found or error reading file
+        continue;
+      }
+    }
+  } catch (e) {
+    // Cannot read projects directory
+    return false;
+  }
+  
+  for (const entry of entries) {
+    if (entry.type === 'user' && entry.message?.content) {
+      const content = entry.message.content;
+      // Check for traditional waiting session
+      if (/^待機中$/.test(content.trim())) {
+        return true;
+      }
+      // Check for PC-numbered auto titles (e.g., 011-resilient-steele)
+      if (/^\d{3}-[a-zA-Z\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]+$/.test(content.trim())) {
+        return true;
+      }
+      // Check for remote-control prefixed auto titles (e.g., remote-control-xxx-yyy)
+      if (/^remote-control-[a-zA-Z\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]+$/.test(content.trim())) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 export function parseAgents(output) {
   const agents = JSON.parse(output);
   if (!Array.isArray(agents) || agents.some(a => !a?.kind || (a.kind === 'interactive' && !a.sessionId))) throw Error('Invalid agents inventory');
@@ -625,6 +671,9 @@ export async function getLoadGuardStatus({
   wait = sleep,
   checkCpu = true,
   checkClaude = true,
+  sessionsDir,
+  isWaitingSession,
+  now = Date.now,
 } = {}) {
   const maxClaude = Number.isFinite(Number(env?.REOPEN_MAX_CLAUDE)) ? Number(env.REOPEN_MAX_CLAUDE) : 10;
   const maxCpu = Number.isFinite(Number(env?.REOPEN_MAX_CPU)) ? Number(env.REOPEN_MAX_CPU) : 85;
@@ -638,7 +687,7 @@ export async function getLoadGuardStatus({
         const result = spawn(command, args, { windowsHide: true, ...options });
         if (result.error || result.status !== 0) throw result.error || new Error(`exit code ${result.status}`);
         return result.stdout;
-      });
+      }, { sessionsDir, isWaitingSession, now });
     } catch (e) {
       loadError = e.message;
     }
@@ -936,7 +985,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
     } catch (error) { result.apiError = error.message; }
     if (!dryRun && result.candidates.length) {
       progress('fetch', `candidates=${result.candidates.length}`);
-      const loadStatus = await getLoadGuardStatus({ env, spawn, cpusImpl, wait, checkCpu, checkClaude });
+      const loadStatus = await getLoadGuardStatus({ env, spawn, cpusImpl, wait, checkCpu, checkClaude, sessionsDir: path.join(base, 'sessions'), isWaitingSession, now });
       if (loadStatus.error) {
         result.loadGuard = { claudeCount: loadStatus.claudeCount, cpuPct: loadStatus.cpuPct, reason: loadStatus.reason, error: loadStatus.error };
       }
@@ -958,10 +1007,8 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
           // claudeCount high → still reopen 1 candidate so RC doesn't stay cut off
           const allowCount = Math.min(1, reopenCandidates.length);
           const skipCount = reopenCandidates.length - allowCount;
-          if (skipCount > 0) {
-            result.skipped.loadGuard = skipCount;
-            result.loadGuard.allowFirst = true;
-          }
+          if (skipCount > 0) result.skipped.loadGuard = skipCount;
+          result.loadGuard.allowFirst = true;
           reopenCandidates = reopenCandidates.slice(0, allowCount);
         }
       }
@@ -1108,7 +1155,7 @@ export async function watchReopen(opts = {}, maxParam) {
   const until = new Date(nowTime - 60000).toISOString();
   const result = await reopenLost({
     since, until, max, dryRun, base, fetchImpl, spawn, wait, now: nowFn, claudeCli, codeCli, env, fsImpl, windowReady, cpusImpl,
-    stateBased: true, checkClaude: true
+    stateBased: true, checkClaude: true, sessionsDir: path.join(base, 'sessions'), isWaitingSession, now: nowFn
   });
   if (!result.error && !result.apiError && !result.deferredCpu && !result.skipped?.loadGuard && !dryRun) {
     fs.writeFileSync(stateFile, JSON.stringify({ watermark: until }) + '\n');

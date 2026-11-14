@@ -52,6 +52,76 @@ test('全項目失敗時は1バイトも書き換えない', async (t) => {
   assert.deepEqual(fs.readFileSync(file(home)), before);
 });
 
+// 2026-10-08 朝バッチ実績: gemini 前払いクレジット枯渇(HTTP 402)で provider 固定のまま
+// 5日連続 0/8 になり、毎朝「価格ブリーフ ログに失敗を検知」として上がり続けた。
+// 全滅時は別プロバイダで1回作り直すことで単一プロバイダの残高切れを吸収する。
+test('primary プロバイダが全滅したら fallback で再収集する', async (t) => {
+  const home = tempHome(); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const providers = [];
+  const result = await runPricingBrief({
+    home, now: new Date('2026-10-08T00:00:00Z'),
+    questions: questions.slice(0, 2),
+    searchImpl: async (query, { provider }) => {
+      providers.push(provider);
+      if (provider === 'gemini') throw new Error('Gemini API HTTP 402: prepayment depleted');
+      return { answer: 'groq の値。', urls: ['https://openai.com/a'] };
+    },
+  });
+  assert.equal(result.provider, 'groq');
+  assert.equal(result.fallbackFrom, 'gemini');
+  assert.equal(result.updated, 2);
+  assert.equal(result.failed, 0);
+  assert.deepEqual(providers.slice(0, 2), ['gemini', 'gemini']);
+  assert.ok(providers.slice(2).every((name) => name === 'groq'));
+  assert.match(fs.readFileSync(file(home), 'utf8'), /groq の値。/);
+});
+
+test('一部だけ落ちた場合は fallback せず従来どおり前回値を保持する', async (t) => {
+  const home = tempHome(); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const providers = [];
+  const result = await runPricingBrief({
+    home, questions: questions.slice(0, 2),
+    searchImpl: async (query, { provider }) => {
+      providers.push(provider);
+      if (query.startsWith('非公式')) throw new Error('down');
+      return { answer: '値。', urls: [] };
+    },
+  });
+  assert.equal(result.provider, 'gemini');
+  assert.equal(result.fallbackFrom, null);
+  assert.deepEqual(providers, ['gemini', 'gemini']);
+  assert.equal(result.updated, 1);
+});
+
+test('fallback も全滅したら全失敗扱いで、失敗明細は二重に出さない', async (t) => {
+  const home = tempHome(); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const stderr = sink();
+  const code = await runCli(['--dry-run'], {
+    home, questions: questions.slice(0, 1), searchImpl: async () => { throw new Error('HTTP 402'); },
+    stdout: sink().stream, stderr: stderr.stream,
+  });
+  assert.equal(code, 0);
+  const text = stderr.read();
+  assert.equal((text.match(/official: HTTP 402/g) ?? []).length, 1);
+  assert.match(text, /全項目の検索に失敗したため、既存ファイルを更新しませんでした/);
+});
+
+test('fallback 復旧時の stderr は夜間ヘルスの検知ワードを含まない', async (t) => {
+  const home = tempHome(); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const stderr = sink();
+  await runCli(['--dry-run'], {
+    home, questions: questions.slice(0, 1),
+    searchImpl: async (query, { provider }) => {
+      if (provider === 'gemini') throw new Error('Gemini API HTTP 402');
+      return { answer: '値。', urls: [] };
+    },
+    stdout: sink().stream, stderr: stderr.stream,
+  });
+  const text = stderr.read();
+  assert.match(text, /geminiで全項目取得できず、groqで再収集しました/);
+  assert.doesNotMatch(text, /error|Exception|NG\s*[:：]|失敗(?!0)/i);
+});
+
 test('検索失敗のIDと理由を stderr に出す', async (t) => {
   const home = tempHome(); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const stderr = sink();

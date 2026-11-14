@@ -124,42 +124,57 @@ export async function runPricingBrief(options = {}) {
   const searchImpl = options.searchImpl ?? webSearch;
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const questions = options.questions ?? JSON.parse(fs.readFileSync(QUESTIONS_FILE, 'utf8'));
-  const provider = options.provider ?? 'gemini';
+  const primaryProvider = options.provider ?? 'gemini';
+  const fallbackProviders = (options.fallbackProviders ?? ['groq']).filter((name) => name && name !== primaryProvider);
   const limit = options.limit ?? 8;
   const only = options.only instanceof Set ? options.only : new Set(options.only ?? []);
   const outputFile = options.outputFile ?? path.join(home, '.claude', 'pricing-brief.md');
   const previousContent = fs.existsSync(outputFile) ? fs.readFileSync(outputFile, 'utf8') : '';
   const previous = parsePreviousRows(previousContent);
   const selected = questions.filter((question) => only.size === 0 || only.has(question.id)).slice(0, limit);
-  const outcomes = new Map();
-  let updated = 0;
-  let failed = 0;
-  const failures = [];
 
-  for (const question of selected) {
-    try {
-      const result = await searchImpl(`${question.query}\n料金・利用上限の現状を日本語1〜2文で要約し、一次情報のURLを返してください。`, { provider, homeDir: home });
-      const chosenSource = chooseSource(result?.urls);
-      const { source, unresolved } = await resolveSource(chosenSource, fetchImpl);
-      const understanding = summarize(result?.answer);
-      outcomes.set(question.id, {
-        label: question.label,
-        understanding: unresolved ? `${understanding}${UNRESOLVED_SUFFIX}` : understanding,
-        source: source || '出典なし',
-        date: now.toISOString().slice(0, 10),
-        confidence: unresolved ? '低' : source ? (isOfficialUrl(source) ? '高' : '中') : '低',
-      });
-      updated += 1;
-    } catch (error) {
-      failed += 1;
-      failures.push({ id: question.id, message: error?.message || String(error) });
-      const old = previous.get(question.label);
-      if (old) outcomes.set(question.id, staleRow(old));
+  const collect = async (provider) => {
+    const outcomes = new Map();
+    let updated = 0;
+    const failures = [];
+    for (const question of selected) {
+      try {
+        const result = await searchImpl(`${question.query}\n料金・利用上限の現状を日本語1〜2文で要約し、一次情報のURLを返してください。`, { provider, homeDir: home });
+        const chosenSource = chooseSource(result?.urls);
+        const { source, unresolved } = await resolveSource(chosenSource, fetchImpl);
+        const understanding = summarize(result?.answer);
+        outcomes.set(question.id, {
+          label: question.label,
+          understanding: unresolved ? `${understanding}${UNRESOLVED_SUFFIX}` : understanding,
+          source: source || '出典なし',
+          date: now.toISOString().slice(0, 10),
+          confidence: unresolved ? '低' : source ? (isOfficialUrl(source) ? '高' : '中') : '低',
+        });
+        updated += 1;
+      } catch (error) {
+        const old = previous.get(question.label);
+        if (old) outcomes.set(question.id, staleRow(old));
+        failures.push({ id: question.id, message: error?.message || String(error) });
+      }
     }
+    return { outcomes, updated, failures };
+  };
+
+  // 1プロバイダの残高切れ・障害で夜間収集が全滅しても、別プロバイダで1回作り直す
+  // (2026-10 実績: gemini 前払いクレジット枯渇の HTTP 402 で5日連続 0/8 になり朝バッチが毎日検知した)。
+  let provider = primaryProvider;
+  let attempt = await collect(provider);
+  const abandoned = [];
+  for (const fallback of fallbackProviders) {
+    if (selected.length === 0 || attempt.updated > 0) break;
+    abandoned.push(provider);
+    provider = fallback;
+    attempt = await collect(provider);
   }
+  const { outcomes, updated, failures } = attempt;
 
   const allFailed = selected.length > 0 && updated === 0;
-  if (allFailed) return { code: 0, updated, failed, failures, provider, allFailed, body: previousContent, wrote: false, outputFile };
+  if (allFailed) return { code: 0, updated, failed: failures.length, failures, provider, allFailed, abandoned, body: previousContent, wrote: false, outputFile };
 
   const rows = [];
   for (const question of questions) {
@@ -174,7 +189,7 @@ export async function runPricingBrief(options = {}) {
     fs.mkdirSync(path.dirname(outputFile), { recursive: true });
     fs.writeFileSync(outputFile, nextContent);
   }
-  return { code: 0, updated, failed, failures, provider, allFailed: false, body, content: nextContent, wrote: !options.dryRun, outputFile, rows };
+  return { code: 0, updated, failed: failures.length, failures, provider, allFailed: false, abandoned, fallbackFrom: abandoned.length ? abandoned[0] : null, body, content: nextContent, wrote: !options.dryRun, outputFile, rows };
 }
 
 export function parseArgs(argv) {
@@ -206,6 +221,7 @@ export async function runCli(argv, dependencies = {}) {
   try {
     const result = await runPricingBrief({ ...options, ...dependencies });
     for (const failure of result.failures) stderr.write(`${failure.id}: ${failure.message}\n`);
+    if (result.abandoned?.length && !result.allFailed) stderr.write(`${result.abandoned.join('→')}で全項目取得できず、${result.provider}で再収集しました\n`);
     if (result.allFailed) stderr.write('全項目の検索に失敗したため、既存ファイルを更新しませんでした。\n');
     if (options.json) stdout.write(`${JSON.stringify({ updated: result.updated, failed: result.failed, provider: result.provider, rows: result.rows ?? [] })}\n`);
     else if (options.dryRun) stdout.write(`${result.body}${result.body.endsWith('\n') ? '' : '\n'}`);

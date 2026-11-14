@@ -1,0 +1,17 @@
+=== keyserve 再登録 (DESKTOP-8NKVJ12) 実行検証ログ ===
+日付: 2026-11-14
+対象タスク: keyserve 再登録 (kim-PC で `node tools/keyserve-enroll.mjs --pc DESKTOP-8NKVJ12 --ttl-hours 2 --json` を実行し、出力をこのPCへ)
+
+【コマンド実行結果】
+実行コマンド: node tools/keyserve-enroll.mjs --pc DESKTOP-8NKVJ12 --ttl-hours 2 --json
+実行ディレクトリ: C:\Users\asmo0\.claude\nightly-repo
+終了コード (Exit code): 1
+出力:
+このPCは primary を持っていないので発行できません。primary を持つ別PCで実行してください。
+
+【検証結果と未完了理由】
+1. このPC (DESKTOP-8NKVJ12) は primary 秘密鍵 (ORGIAST_KEYSERVE_SECRET) を保持していないため、自PC上で keyserve-enroll.mjs を実行して登録トークンを発行することは不可能です。
+2. 対象タスクに記載されている通り、発行コマンド `node tools/keyserve-enroll.mjs --pc DESKTOP-8NKVJ12 --ttl-hours 2 --json` は kim-PC（別実機）上で実行し、その出力を受け取る必要があります。
+3. このPCでは fleet-mail が未設定であるため、kim-PC へ自動で発行依頼を送信することはできません。
+4. また、`capsule-umbrella-gas` における keyserve 認証の迂回・解消については 2026-10-22 に clasprc の Drive metadata を経由する代替手段で本番反映済みであり、keyserve 発行ランチャー自体は退避済みです（MEMORY.md 参照）。
+5. 従って、本タスクの自動完了は不可能であり、完成には kim-PC 上での人間（kim）による手動操作が必要です。

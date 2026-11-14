@@ -1,0 +1,66 @@
+{
+  "plan": {
+    "planId": "test-001",
+    "target": {
+      "files": [
+        "test.ts"
+      ],
+      "diffSummary": "test"
+    },
+    "tasks": [
+      {
+        "id": "T1",
+        "title": "Test",
+        "file": "test.ts",
+        "line": 1,
+        "description": "desc",
+        "expectedChange": "change",
+        "testRequired": false
+      }
+    ],
+    "verification": [
+      "check1"
+    ],
+    "cost": {
+      "estimatedTokens": 100,
+      "preferredLane": "codex"
+    }
+  },
+  "results": [
+    {
+      "id": "T1",
+      "title": "Test",
+      "file": "test.ts",
+      "line": 1,
+      "description": "desc",
+      "expectedChange": "change",
+      "testRequired": false,
+      "status": "done"
+    }
+  ],
+  "verification": {
+    "completionRate": 100,
+    "taskResults": [
+      {
+        "id": "T1",
+        "title": "Test",
+        "file": "test.ts",
+        "line": 1,
+        "description": "desc",
+        "expectedChange": "change",
+        "testRequired": false,
+        "status": "done"
+      }
+    ],
+    "verificationResults": [
+      {
+        "item": "check1",
+        "passed": true,
+        "detail": "OK"
+      }
+    ],
+    "finalDiff": "",
+    "summary": "✅ 完了"
+  },
+  "completedAt": "2026-11-13T16:19:26.862Z"
+}

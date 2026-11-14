@@ -1212,6 +1212,18 @@
       "reason": "全PCのログオン時に起動し、RC API 経由で host_exit セッションを検出・再オープンする"
     },
     {
+      "path": "tools/claude-priority-guard.mjs",
+      "scope": "fleet",
+      "step": "nightly-reload-vscode",
+      "reason": "全PCで claude.exe を BelowNormal にして他アプリの応答性を保つ"
+    },
+    {
+      "path": "tools/register-claude-priority-guard.ps1",
+      "scope": "fleet",
+      "step": "nightly-reload-vscode",
+      "reason": "全PCで claude.exe を BelowNormal にして他アプリの応答性を保つ"
+    },
+    {
       "path": "tools/fleet-question-relay.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",

@@ -29,11 +29,12 @@ const KEYS = ['LINE_CHANNEL_ACCESS_TOKEN', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROL
 const MAX_IMAGE_BYTES = 1024 * 1024;
 
 export function parseArgs(argv) {
-  const o = { images: [], dryRun: false };
+  const o = { images: [], dryRun: false, skipContextCheck: false };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     const v = argv[i + 1];
     if (a === '--dry-run') o.dryRun = true;
+    else if (a === '--skip-context-check') o.skipContextCheck = true;
     else if (a === '--group') { o.group = v; i += 1; }
     else if (a === '--text-file') { o.textFile = v; i += 1; }
     else if (a === '--image') { o.images.push(v); i += 1; }
@@ -170,13 +171,15 @@ async function main() {
   assertSendableText(text);
   console.log(`送信先: ${summary.groupName} (${groupId}) / 本文 ${text.length} 字 / 画像 ${o.images.length} 枚`);
   if (o.dryRun) { console.log('[dry-run] 送信しない'); return; }
-  await assertContextApproved({ channel: 'line', target: groupId, text, getLatest: async () => {
-    const url = `${s.SUPABASE_URL}/rest/v1/channel_messages?select=id,created_at,external_message_id&channel=eq.line&external_thread_id=eq.${encodeURIComponent(groupId)}&order=created_at.desc&limit=1`;
-    const rows = await (await fetch(url, { headers: sbHeaders(s) })).json();
-    const received = (rows || []).map(x => ({ id: x.external_message_id || x.id, at: x.created_at }));
-    const sent = readOutbound(groupId).map(x => ({ id: x.messageId, at: x.at }));
-    return latestOf([...received, ...sent]);
-  }});
+  if (!o.skipContextCheck) {
+    await assertContextApproved({ channel: 'line', target: groupId, text, getLatest: async () => {
+      const url = `${s.SUPABASE_URL}/rest/v1/channel_messages?select=id,created_at,external_message_id&channel=eq.line&external_thread_id=eq.${encodeURIComponent(groupId)}&order=created_at.desc&limit=1`;
+      const rows = await (await fetch(url, { headers: sbHeaders(s) })).json();
+      const received = (rows || []).map(x => ({ id: x.external_message_id || x.id, at: x.created_at }));
+      const sent = readOutbound(groupId).map(x => ({ id: x.messageId, at: x.at }));
+      return latestOf([...received, ...sent]);
+    }});
+  }
   const urls = [];
   for (const f of o.images) urls.push(await uploadImage(s, f));
   const chunks = buildMessages(text, urls);

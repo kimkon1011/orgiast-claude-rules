@@ -10,6 +10,7 @@ import { hostExitArchive } from './lib/host-exit-archive.mjs';
 import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
 import { isEntry } from './is-entry.mjs';
 import { countWindowsClaudeProcesses } from './lib/windows-process.mjs';
+import { addItem } from './kim-inbox.mjs';
 
 const DEFAULT_MAX_REOPEN = 3;
 const BASE = 'https://api.anthropic.com/v1/code/sessions';
@@ -758,9 +759,32 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
   if (!release) return { ...result, error: 'locked' };
   progress('lock', 'acquired');
   try {
-    const token = readJson(path.join(base, '.credentials.json')).claudeAiOauth?.accessToken;
-    const org = readJson(path.join(base, '..', '.claude.json')).oauthAccount?.organizationUuid;
-    if (!token || !org) throw Error('Missing RC credentials');
+    const credFile = path.join(base, '.credentials.json');
+    const claudeJsonFile = path.join(base, '..', '.claude.json');
+    let token, org;
+    try {
+      const creds = readJson(credFile);
+      token = creds.claudeAiOauth?.accessToken;
+      if (!token) {
+        const topKeys = Object.keys(creds);
+        const oauthKeys = creds.claudeAiOauth ? Object.keys(creds.claudeAiOauth) : [];
+        throw Error(`Missing accessToken in ${credFile}: topKeys=${topKeys.join(',')} oauthKeys=${oauthKeys.join(',')}`);
+      }
+    } catch (e) {
+      if (e.code === 'ENOENT') throw Error(`RC credentials file not found: ${credFile}`);
+      throw e;
+    }
+    try {
+      const claudeJson = readJson(claudeJsonFile);
+      org = claudeJson.oauthAccount?.organizationUuid;
+      if (!org) {
+        const topKeys = Object.keys(claudeJson);
+        throw Error(`Missing oauthAccount.organizationUuid in ${claudeJsonFile}: keys=${topKeys.join(',')}`);
+      }
+    } catch (e) {
+      if (e.code === 'ENOENT') throw Error(`RC config file not found: ${claudeJsonFile}`);
+      throw e;
+    }
     progress('auth', 'credentials loaded');
     const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01',
       'anthropic-beta': 'ccr-byoc-2025-07-29', 'x-organization-uuid': org };
@@ -916,16 +940,36 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
       if (loadStatus.error) {
         result.loadGuard = { claudeCount: loadStatus.claudeCount, cpuPct: loadStatus.cpuPct, reason: loadStatus.reason, error: loadStatus.error };
       }
+      const cpuThreshold = Number.isFinite(Number(env.REOPEN_MAX_CPU)) ? Number(env.REOPEN_MAX_CPU) : 85;
+      const claudeThreshold = Number.isFinite(Number(env.REOPEN_MAX_CLAUDE)) ? Number(env.REOPEN_MAX_CLAUDE) : 10;
+      const isCpuHigh = loadStatus.cpuPct !== null && loadStatus.cpuPct >= cpuThreshold;
+      const isClaudeHigh = loadStatus.claudeCount !== null && loadStatus.claudeCount >= claudeThreshold;
+
+      // Determine which candidates to reopen under load
+      let reopenCandidates = result.candidates.slice(0, max);
       if (loadStatus.triggered) {
-        result.skipped.loadGuard = result.candidates.length;
         result.loadGuard = { claudeCount: loadStatus.claudeCount, cpuPct: loadStatus.cpuPct, reason: loadStatus.reason, ...(loadStatus.error ? { error: loadStatus.error } : {}) };
-        if (loadStatus.cpuPct !== null && loadStatus.cpuPct >= (Number.isFinite(Number(env.REOPEN_MAX_CPU)) ? Number(env.REOPEN_MAX_CPU) : 85)) {
+        if (isCpuHigh) {
+          // CPU high → defer everything. RC reconnection adds CPU load.
+          result.skipped.loadGuard = reopenCandidates.length;
           result.deferredCpu = loadStatus.cpuPct;
+          reopenCandidates = [];
+        } else if (isClaudeHigh) {
+          // claudeCount high → still reopen 1 candidate so RC doesn't stay cut off
+          const allowCount = Math.min(1, reopenCandidates.length);
+          const skipCount = reopenCandidates.length - allowCount;
+          if (skipCount > 0) {
+            result.skipped.loadGuard = skipCount;
+            result.loadGuard.allowFirst = true;
+          }
+          reopenCandidates = reopenCandidates.slice(0, allowCount);
         }
-      } else {
+      }
+
+      if (reopenCandidates.length) {
         const code = codeCli || resolveCodeCli(env, fsImpl.existsSync);
         let windowOpened = false; // 1回の実行で新規ウィンドウを作るのは最大1回まで
-        for (const candidate of result.candidates.slice(0, max)) {
+        for (const candidate of reopenCandidates) {
           progress('open', `id=${candidate.id}`);
           // Recheck after fetching and between opens: close/purge may have happened meanwhile.
           const refreshed = [...localIndex(base, candidate.id).values()].find(l => l.id === candidate.id);
@@ -1011,6 +1055,20 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
     try { if (!dryRun) fs.appendFileSync(path.join(base, 'reopen-lost-sessions.log'), JSON.stringify(result) + '\n'); }
     finally { progress('done', 'log written'); release(); }
   }
+  // Persistent failure notification: when loadGuard blocks everything or credentials fail,
+  // notify once per 6h window via kim-inbox (deduped by error type + date).
+  if (!dryRun && result.candidates.length > 0 && result.skipped.loadGuard === result.candidates.length) {
+    const dedupeKey = `rc-reconnect-loadguard-block-${new Date().toISOString().slice(0, 10)}`;
+    const detail = result.deferredCpu
+      ? `CPU ${result.deferredCpu}% >= threshold. ${result.candidates.length} RC sessions not reconnected.`
+      : `claudeCount ${result.loadGuard?.claudeCount}. ${result.candidates.length} RC sessions, loadGuard blocked all.`;
+    try { await addItem(base, { kind: 'info', text: `🔌 RC再接続保留: ${detail}`, dedupeKey }); } catch {}
+  }
+  if (!dryRun && result.error) {
+    const dedupeKey = `rc-reconnect-credential-error-${new Date().toISOString().slice(0, 10)}`;
+    const snippet = result.error.slice(0, 200);
+    try { await addItem(base, { kind: 'info', text: `🔌 RC認証エラー: ${snippet}`, dedupeKey }); } catch {}
+  }
   return result;
 }
 export async function watchReopen(opts = {}, maxParam) {
@@ -1091,10 +1149,13 @@ if (isEntry(import.meta.url)) {
       clearTimeout(watchdogTimer);
       console.log(JSON.stringify(result));
       if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
+      // loadGuard blocked all candidates → not a clean run
+      if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) process.exitCode = 1;
     } else {
       const result = await reopenLost({ ...opts, checkClaude: true });
       console.log(JSON.stringify(result));
       if (result.error || result.apiError || result.failed?.length || result.unverified?.length) process.exitCode = 1;
+      if ((result.candidates?.length || 0) > 0 && (result.reopened?.length || 0) === 0 && result.skipped?.loadGuard > 0) process.exitCode = 1;
     }
   } catch (error) { console.log(JSON.stringify({ error: error.message })); process.exitCode = 1; }
 }

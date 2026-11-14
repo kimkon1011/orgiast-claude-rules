@@ -60,17 +60,37 @@ export function isClaudeCodeCliProcess(processInfo) {
 }
 
 // JSON keeps processes with inaccessible CommandLine/ExecutablePath in the snapshot.
+// Includes ProcessId and ParentProcessId for orphan/zombie detection.
 export const CLAUDE_PROCESS_SCRIPT = `[Console]::OutputEncoding=[Text.Encoding]::UTF8
 $ErrorActionPreference='Stop'
-$rows=@(Get-CimInstance Win32_Process -Filter "Name='claude.exe'" | Select-Object Name,ExecutablePath,CommandLine)
+$rows=@(Get-CimInstance Win32_Process -Filter "Name='claude.exe'" | Select-Object Name,ExecutablePath,CommandLine,ProcessId,ParentProcessId)
 ConvertTo-Json -InputObject $rows -Compress`;
+
+/**
+ * Filters out orphaned claude.exe processes (parent PID not in the alive set).
+ * An orphaned CLI process has no parent session \u2014 it's a zombie that inflates
+ * the count and should not block RC reconnection.
+ */
+function excludeOrphans(rows) {
+  const alivePids = new Set(rows.map(r => Number(r.ProcessId)).filter(pid => Number.isInteger(pid) && pid > 0));
+  return rows.filter(row => {
+    const ppid = Number(row.ParentProcessId);
+    // Parent PID 0 or missing \u2192 system-initiated, treat as alive
+    if (!Number.isInteger(ppid) || ppid <= 0) return true;
+    // Parent is in the alive set \u2192 not orphaned
+    if (alivePids.has(ppid)) return true;
+    return false;
+  });
+}
 
 export function countWindowsClaudeProcesses(exec) {
   try {
     const raw = exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', CLAUDE_PROCESS_SCRIPT], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
     const rows = JSON.parse(String(raw).replace(/^\uFEFF/, ''));
     if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== 'object' || !row.Name)) throw new Error('Invalid process snapshot');
-    return rows.filter(isClaudeCodeCliProcess).length;
+    const cliProcs = rows.filter(isClaudeCodeCliProcess);
+    const nonOrphan = excludeOrphans(cliProcs);
+    return nonOrphan.length;
   } catch {
     // If CIM is unavailable, preserve the conservative name-only count.
     const raw = exec('tasklist', ['/FI', 'IMAGENAME eq claude.exe', '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true, timeout: 10_000 });

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { apply as applyReal, currentTitles, desiredTitle, isCloseRitualOnly, promptSubmit, sessionStart, sweepAll as sweepAllReal, waitPrefix } from './session-wait-title.mjs';
+import { apply as applyReal, currentTitles, desiredTitle, isCloseRitualOnly, promptSubmit, remoteTitleTargets, sessionStart, sweepAll as sweepAllReal, syncRemoteTitles, waitPrefix } from './session-wait-title.mjs';
 
 const apply = input => applyReal(input, { resolvePcNumber: () => '' });
 const sweepAll = options => sweepAllReal({ ...options, resolvePcNumber: () => '' });
@@ -648,4 +648,28 @@ test('日付が無く既存 custom-title に【11/12/12:00まで】があるな�
   const rawWithCustom = `${ai}\n${custom('【11/12/12:00まで】トークン待ち')}`;
   const result = desiredTitle(text, rawWithCustom, '', false, 's1');
   assert.equal(result, null);
+});
+
+test('sweep 後の番号付き bridge-session を Remote Control の title API へ同期する', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'swt-remote-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const base = path.join(home, '.claude');
+  const project = path.join(base, 'projects', 'p');
+  fs.mkdirSync(project, { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'token' } }));
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'org' } }));
+  const bridge = JSON.stringify({ type: 'bridge-session', bridgeSessionId: 'cse_remote', sessionId: 'local' });
+  fs.writeFileSync(path.join(project, 'local.jsonl'), `${bridge}\n${custom('008｜新興機械')}\n`);
+  fs.writeFileSync(path.join(project, 'other.jsonl'), `${JSON.stringify({ type: 'bridge-session', bridgeSessionId: 'cse_other' })}\n${custom('014｜別PC')}\n`);
+  assert.deepEqual(remoteTitleTargets({ base, pc: '008' }), [{ id: 'cse_remote', session: 'local', title: '008｜新興機械' }]);
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (!options.method) return { ok: true, json: async () => ({ data: [{ id: 'cse_remote', title: '新興機械' }] }) };
+    return { ok: true, status: 200 };
+  };
+  const result = await syncRemoteTitles({ base, pc: '008', fetchImpl });
+  assert.deepEqual(result.synced, [{ session: 'local', title: '008｜新興機械' }]);
+  assert.equal(calls[1].options.method, 'PUT');
+  assert.deepEqual(JSON.parse(calls[1].options.body), { title: '008｜新興機械' });
 });

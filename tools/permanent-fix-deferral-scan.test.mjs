@@ -160,6 +160,12 @@ test('裸の待機文は夜間監査のWとして残す（Stopゲートは後続
   const quote = 'Codex の修正完了を待っています。';
   assert.deepEqual(detect(quote).map(found => found.pattern), ['W']);
 });
+test('待機＋後続作業の実測文をWとして検出する（106a259c / 4d7e4383）', () => {
+  // handoff-audit:106a259c042d0a32（2026-10-21T05:36:10.905Z）の原文。
+  // 夜間監査は W として候補化し、deferral-wait-gate は後続作業の近接で block する。
+  const quote = 'アプリ作りのセッションは、画面操作の確認を Codex にやり直させ、その完了を待っています。まだ完了していません。\n\n次に kim がすること: なし\nこの後の自動進行: 確認が終わったら、そのセッションの結果を確かめて報告する';
+  assert.deepEqual(detect(quote).map(found => found.pattern), ['W']);
+});
 test('実測の名詞化した待機・完了通知待ちをWとして検出する', () => {
   for (const quote of [
     '事故の記録を memory に残しました。修復の書き込みが終わるのを待っています（終わると知らせが届きます）。',

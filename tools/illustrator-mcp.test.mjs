@@ -114,10 +114,11 @@ describe('illustrator-mcp', () => {
   });
 
   it('execute_script returns not_found when Illustrator missing', () => {
+    const thisFile = fileURLToPath(import.meta.url);
     const r = spawnSync(process.execPath, [MCP_PATH], {
       input: JSON.stringify({
         jsonrpc: '2.0', id: 1, method: 'tools/call',
-        params: { name: 'execute_script', arguments: { script_path: import.meta.url.replace('file:///', '').replace(/^\/([A-Za-z]:)/, '$1') } },
+        params: { name: 'execute_script', arguments: { script_path: thisFile } },
       }) + '\n',
       encoding: 'utf8',
       timeout: 5000,
@@ -125,6 +126,7 @@ describe('illustrator-mcp', () => {
     });
     assert.equal(r.status, 0);
     const parsed = JSON.parse(r.stdout.trim());
+    assert.ok(parsed.result, 'Expected result in MCP response: ' + r.stdout);
     const content = JSON.parse(parsed.result.content[0].text);
     assert.ok(content.reason === 'illustrator_not_found' || content.ok === false);
   });

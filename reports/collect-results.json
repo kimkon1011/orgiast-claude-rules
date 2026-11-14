@@ -3,32 +3,51 @@
   "elapsed_seconds": 339.15,
   "summary": {
     "kkj_raw": 978,
-    "kkj_filtered": 0,
-    "rejected": 978,
+    "candidates_output": 416,
+    "candidate_types": {
+      "展示会": 15,
+      "ブース": 22,
+      "設営": 37,
+      "式典": 50,
+      "映像制作": 24,
+      "動画制作": 32,
+      "オンライン配信": 15,
+      "イベント運営": 29,
+      "会議運営": "many (90+)",
+      "運営業務": "many",
+      "プロポーザル イベント": 7
+    },
+    "proposals": 142,
     "keywords_used": 15
   },
-  "sources": {
-    "kkj.go.jp API": {
-      "accessible": true,
-      "items": 0,
-      "url": "https://www.kkj.go.jp/api/",
-      "note": "公開API・認証不要"
-    },
-    "kkj.go.jp API（再）": {
-      "accessible": true,
-      "items": 978,
-      "url": "https://www.kkj.go.jp/api/",
-      "note": "15個のキーワードで検索"
-    }
-  },
+  "collect_tool_ver": "v2.1",
   "files": {
     "candidates": "C:\\Users\\kimko\\orgiast-bid\\data\\candidates-2026-11-11.csv"
   },
+  "qualification_status": {
+    "全省庁統一資格": {
+      "status": "期限切れ (2025/3/31)",
+      "action": "kimが調達ポータルから再申請（随時受付中）",
+      "impact": "再申請完了まで調達ポータル認証不可・落札実績取得不可・調達情報詳細不可",
+      "priority": "🔴 最優先"
+    },
+    "大阪府": {
+      "status": "未確認",
+      "action": "kimが台帳確認（URL404で自動確認不能）"
+    },
+    "大阪市": {
+      "status": "未確認",
+      "action": "kimが台帳確認（URL404で自動確認不能）"
+    }
+  },
   "next_steps": [
-    "全省庁統一資格を再申請（2025/3/31期限切れ）→ 調達ポータル認証取得",
+    "🔴 全省庁統一資格を再申請（2025/3/31期限切れ）→ 調達ポータル認証取得",
+    "   申請窓口: https://www.p-portal.go.jp/pps-web-biz/geps-chotatujoho/resources/app/html/shinsei_internet.html",
+    "   処理期間: 約2週間〜1ヶ月",
     "認証後: collect.mjs を更新して調達ポータルの詳細情報を取得可能に",
     "大阪府・大阪市の入札参加資格の更新確認",
     "候補案件の個別仕様書をダウンロード（kkj に記載のURLから）",
     "落札実績オープンデータのダウンロード（認証後）"
-  ]
+  ],
+  "task_scheduler": "OrgiastBidDailyCollect - 毎朝06:00実行 - ✅ 設定済み (kimkoユーザー)"
 }

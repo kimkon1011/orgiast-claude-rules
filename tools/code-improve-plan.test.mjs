@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { describe, it, mock } from 'node:test';
+import { describe, it } from 'node:test';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   parseArgs,
   generateReviewPrompt,
@@ -102,7 +103,7 @@ describe('getDryRunPlan', () => {
 });
 
 describe('printReport', () => {
-  it('エラーなくレポートを出力する', () => {
+  it('エラーなくレポートを出力する', (t) => {
     const plan = {
       planId: 'test-001',
       target: { files: ['test.ts'], diffSummary: 'test' },
@@ -118,14 +119,19 @@ describe('printReport', () => {
       finalDiff: '',
       summary: '✅ 完了',
     };
-    const args = { cwd: REPO_ROOT };
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'code-improve-report-'));
+    t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+    const args = { cwd };
 
     // 標準出力をキャプチャ
     const logs = [];
-    const origLog = console.log;
-    console.log = (...args) => logs.push(args.join(' '));
+    t.mock.method(console, 'log', (...args) => logs.push(args.join(' ')));
     printReport(plan, results, verification, args);
-    console.log = origLog;
+    const report = JSON.parse(fs.readFileSync(path.join(cwd, '.steering', 'improve-report-test-001.json'), 'utf8'));
+    assert.deepEqual(report.plan, plan);
+    assert.deepEqual(report.results, results);
+    assert.deepEqual(report.verification, verification);
+    assert.ok(Number.isFinite(Date.parse(report.completedAt)));
 
     assert.ok(logs.some(l => l.includes('test-001')));
     assert.ok(logs.some(l => l.includes('✅')));

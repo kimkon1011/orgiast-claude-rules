@@ -1707,3 +1707,5 @@ test('auto registration marker excludes inferred questions from the human inbox'
   assert.equal(isHumanActionRequired({ ...row, status: 'waiting_user' }), true);
   assert.equal(isHumanActionRequired({ ...row, autoRegisteredCheck: false }), true);
 });
+
+process.env.ORGIAST_AUTO_RESUME = '1';

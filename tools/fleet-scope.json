@@ -77,6 +77,7 @@
     {"path": "config/kim-discord-allowlist.json", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/lib/fleet-selfcheck-prompt.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "固定の読み取り専用自己点検と受信runnerの実行時依存。通常のconverge配布に含める"},
     {"path": "tools/fleet-task-runner.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "固定の読み取り専用自己点検と受信runnerの実行時依存。通常のconverge配布に含める"},
+    {"path": "tools/lib/auto-resume-policy.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "fleet-task-runner 等が参照する自動再開ポリシー。通常のconverge配布に含める"},
     {"path": "tools/fleet-selfcheck.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "固定の読み取り専用自己点検と受信runnerの実行時依存。通常のconverge配布に含める"},
     {"path":"tools/lib/progress-file-lock.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"日次進捗と停止PR巡回の並行実行・異常終了からの回復"},
     {"path": "tools/stuck-pr-sweeper.mjs", "scope": "kim-only", "step": "task:stuck-pr-sweeper", "reason": "kim-PCだけが停止PRの修復を実行し二重修正を防ぐ"},

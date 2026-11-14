@@ -269,3 +269,5 @@ test('定期digestに開始予約と期限超過が出る', async t => {
     assert.equal(messages.length, 1);
   }
 });
+
+process.env.ORGIAST_AUTO_RESUME = '1';

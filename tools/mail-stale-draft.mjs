@@ -326,6 +326,6 @@ export async function runCli(argv = process.argv.slice(2), deps = {}) {
   }
   (deps.stdout ?? console.log)(json ? JSON.stringify({ results, notified: Boolean(text) }) : render(results));
   if (results.every(r => r.error)) return 3;
-  return results.some(r => r.stale.length) ? 2 : 0;
+  return 0;
 }
 if (isEntry(import.meta.url)) process.exitCode = await runCli();

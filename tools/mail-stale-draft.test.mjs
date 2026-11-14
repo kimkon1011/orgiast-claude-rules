@@ -179,7 +179,7 @@ test('runCli は認証情報があって全ユーザーの API が失敗すれ�
   assert.equal(code, 3);
 });
 
-test('runCli(["--apply","--notify"], deps) は newlyLabeled の下書きだけ通知し、古い下書きがあれば終了コード 2、新規0件なら notify を呼ばない', async () => {
+test('runCli(["--apply","--notify"], deps) は newlyLabeled の下書きだけ通知し、正常終了時は終了コード 0、新規0件なら notify を呼ばない', async () => {
   let notifiedText = null;
   const notifyMock = text => { notifiedText = text; };
 
@@ -205,7 +205,7 @@ test('runCli(["--apply","--notify"], deps) は newlyLabeled の下書きだけ�
   };
 
   const codeA = await runCli(['--apply', '--notify'], depsWithNew);
-  assert.equal(codeA, 2);
+  assert.equal(codeA, 0);
   assert.ok(notifiedText !== null);
   assert.match(notifiedText, /古い下書き件名/);
   assert.match(notifiedText, /10\/24 に後続メール送信済み/);
@@ -233,7 +233,7 @@ test('runCli(["--apply","--notify"], deps) は newlyLabeled の下書きだけ�
   };
 
   const codeB = await runCli(['--apply', '--notify'], depsAlreadyLabeled);
-  assert.equal(codeB, 2);
+  assert.equal(codeB, 0);
   assert.equal(notifiedText, null);
 
   notifiedText = null;

@@ -1,0 +1,142 @@
+{
+  "version": "1.0.0",
+  "updated": "2026-11-12",
+  "description": "AI Overviews 検索意図分類表 — X-0026",
+  "intentMatrix": [
+    {
+      "intent": "know",
+      "label": "知る",
+      "description": "情報・知識を求めている",
+      "queryPatterns": [
+        "展示会ブース 費用",
+        "ブース制作 流れ",
+        "展示会 出展 メリット",
+        "Re:ブース とは",
+        "展示会 規模 種類"
+      ],
+      "triggerKeywords": ["とは", "って何", "意味", "基礎", "基本"],
+      "recommendedFormat": "ガイド記事・FAQ・用語解説",
+      "titleType": "type_a_question_answer",
+      "titleTypeSecondary": "type_c_comprehensive_guide",
+      "metaType": "trailer_question",
+      "requiredSchema": ["FAQPage", "Article"],
+      "orgiastPriorityPages": ["/booth", "/company"]
+    },
+    {
+      "intent": "compare",
+      "label": "比較する",
+      "description": "複数の選択肢を比較検討している",
+      "queryPatterns": [
+        "オージャスト vs",
+        "Re:ブース 従来 比較",
+        "展示会ブース 会社 比較",
+        "木工 アルミ ブース 違い",
+        "東京 大阪 展示会 制作"
+      ],
+      "triggerKeywords": ["比較", "違い", "vs", "対", "どっち"],
+      "recommendedFormat": "比較表・一覧記事",
+      "titleType": "type_d_comparison",
+      "titleTypeSecondary": "type_b_numbered_howto",
+      "metaType": "trailer_data",
+      "requiredSchema": ["Product", "ItemList"],
+      "orgiastPriorityPages": ["/rebooth"]
+    },
+    {
+      "intent": "decide",
+      "label": "決める",
+      "description": "選定・決定のための判断材料を探している",
+      "queryPatterns": [
+        "展示会ブース 会社 選び方",
+        "大阪 展示会 ブース おすすめ",
+        "ブース制作 業者 ランキング",
+        "展示会 企画 会社"
+      ],
+      "triggerKeywords": ["選び方", "おすすめ", "ランキング", "口コミ", "評判"],
+      "recommendedFormat": "ランキング・選び方ガイド",
+      "titleType": "type_b_numbered_howto",
+      "titleTypeSecondary": "type_d_comparison",
+      "metaType": "trailer_list",
+      "requiredSchema": ["ItemList", "Review"],
+      "orgiastPriorityPages": ["/booth", "/company"]
+    },
+    {
+      "intent": "do",
+      "label": "始める",
+      "description": "実際に行動を起こすための手順を知りたい",
+      "queryPatterns": [
+        "初めての展示会 準備",
+        "ブース 発注 手順",
+        "展示会 出展 スケジュール",
+        "展示会 申し込み 方法"
+      ],
+      "triggerKeywords": ["方法", "やり方", "手順", "始め方", "準備"],
+      "recommendedFormat": "ステップバイステップ・チェックリスト",
+      "titleType": "type_b_numbered_howto",
+      "titleTypeSecondary": "type_c_comprehensive_guide",
+      "metaType": "trailer_standard",
+      "requiredSchema": ["HowTo", "Article"],
+      "orgiastPriorityPages": ["/event"]
+    },
+    {
+      "intent": "solve",
+      "label": "解決する",
+      "description": "特定の課題・問題の解決策を探している",
+      "queryPatterns": [
+        "予算少ない 展示会 ブース",
+        "短期間 ブース 制作",
+        "エコ 展示 ブース",
+        "小規模 ブース 効果"
+      ],
+      "triggerKeywords": ["方法", "対策", "解決", "節約", "効率"],
+      "recommendedFormat": "ソリューション記事・ケーススタディ",
+      "titleType": "type_f_benefit_first",
+      "titleTypeSecondary": "type_a_question_answer",
+      "metaType": "trailer_data",
+      "requiredSchema": ["Product", "FAQPage"],
+      "orgiastPriorityPages": ["/rebooth"]
+    },
+    {
+      "intent": "case",
+      "label": "事例を知る",
+      "description": "実際の導入事例・成功事例を参考にしたい",
+      "queryPatterns": [
+        "展示会 成功事例",
+        "ブース デザイン 事例",
+        "展示会 集客 事例",
+        "中小企業 展示会 実績"
+      ],
+      "triggerKeywords": ["事例", "実績", "成功", "導入例"],
+      "recommendedFormat": "事例紹介・ポートフォリオ",
+      "titleType": "type_e_case_study",
+      "titleTypeSecondary": "type_c_comprehensive_guide",
+      "metaType": "trailer_data",
+      "requiredSchema": ["Article", "Review"],
+      "orgiastPriorityPages": ["/works"]
+    }
+  ],
+  "aiOverviewHighTriggerPatterns": [
+    { "pattern": "定義クエリ", "keywords": ["とは", "って何", "って"], "priority": "high" },
+    { "pattern": "理由クエリ", "keywords": ["なぜ", "理由", "原因"], "priority": "high" },
+    { "pattern": "手順クエリ", "keywords": ["方法", "やり方", "手順"], "priority": "high" },
+    { "pattern": "比較クエリ", "keywords": ["比較", "違い", "vs"], "priority": "high" },
+    { "pattern": "価格クエリ", "keywords": ["いくら", "費用", "料金", "価格"], "priority": "high" },
+    { "pattern": "推薦クエリ", "keywords": ["おすすめ", "ランキング"], "priority": "medium" },
+    { "pattern": "鮮度クエリ", "keywords": ["最新", "2027", "今年"], "priority": "medium" }
+  ],
+  "queryToIntent": {
+    "展示会ブース 費用": "know",
+    "展示会ブース 費用 いくら": "know",
+    "Re:ブース とは": "know",
+    "展示会 出展 流れ": "do",
+    "初めて 展示会 準備": "do",
+    "オージャスト 評判": "decide",
+    "展示会 ブース 会社 選び方": "decide",
+    "Re:ブース 通常 比較": "compare",
+    "展示会 ブース 事例": "case",
+    "短期間 ブース 制作": "solve",
+    "予算 少ない 展示会": "solve",
+    "エコ 展示 ブース": "solve",
+    "大阪 展示会 ブース 制作": "decide",
+    "中小企業 展示会 成功": "case"
+  }
+}

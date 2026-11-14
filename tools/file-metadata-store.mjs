@@ -532,7 +532,8 @@ Examples:
           kind: { type: 'string' },
           ext: { type: 'string' },
           limit: { type: 'string', default: '50' },
-          offset: { type: 'string', default: '0' }
+          offset: { type: 'string', default: '0' },
+          json: { type: 'boolean', default: false }
         },
         allowPositionals: true
       });
@@ -550,6 +551,8 @@ Examples:
       });
       if (results.length === 0) {
         console.log('No results found.');
+      } else if (values.json) {
+        console.log(JSON.stringify(results, null, 2));
       } else {
         console.table(results);
       }

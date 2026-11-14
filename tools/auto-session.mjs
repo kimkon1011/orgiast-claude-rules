@@ -764,9 +764,7 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
     // cheap-code / codex は --resume 引数を捨てるため、元のセッションに再開が届かない
     // （2026-11-09 実害: セッション 834dfc9c の再開が「成果記録なし」で終わった）。
     const resumeForced = Boolean(runOptions.resumeSessionId);
-    const choice = resumeForced
-      ? { ...configuredChoice, executor: 'claude' }
-      : runOptions.model
+    const choice = (resumeForced || runOptions.model || runOptions.executor === 'claude')
       ? { ...configuredChoice, executor: 'claude' }
       : runOptions.executor === 'cheap-code'
       ? { ...configuredChoice, executor: 'cheap-code' }

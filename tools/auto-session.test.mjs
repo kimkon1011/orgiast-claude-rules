@@ -1303,6 +1303,7 @@ test('runChild は冷却中・失敗時の codex-do と保留・最終フォー�
       { name: 'codex-do 失敗後は skipped', code: 1, lanes: ['cheap-code:deepseek', 'codex-do'], status: 'failure', skipped: true },
       { name: 'codex-do 失敗後は Claude', cooling: true, code: 1, claude: true, lanes: ['codex-do', 'fallback-claude'], status: 'success' },
       { name: '無効化時は従来どおり skipped', cooling: true, disabled: true, code: 0, lanes: ['cheap-code:deepseek'], status: 'failure', skipped: true },
+      { name: 'executor 指定は既存 CLI で同一セッションを再開', executor: 'claude', cooling: true, lanes: ['fallback-claude'], status: 'success' },
       { name: 'model 指定は Claude 固定', cooling: true, model: true, code: 0, lanes: ['fallback-claude'], status: 'success' },
       { name: 'codex-do timeout は切替しない', cooling: true, timeout: true, claude: true, code: 0, lanes: ['codex-do'], status: 'timeout' },
       { name: 'codex-do ファイル欠落は skipped', cooling: true, missing: true, lanes: [], status: 'failure', skipped: true },
@@ -1326,7 +1327,11 @@ test('runChild は冷却中・失敗時の codex-do と保留・最終フォー�
 	      const budgetMs = scenario.timeout && !scenario.bothCheapTimeout ? 1500 : 5000;
 	      const toleranceMs = process.platform === "win32" && scenario.bothCheapTimeout ? 3500 : 1500;
       const began = performance.now();
-      const result = await runChild(claudeFile, 'lane test', home, home, budgetMs, { executorRoot: home, ...(scenario.model ? { model: 'sonnet' } : {}) });
+      const result = await runChild(claudeFile, 'lane test', home, home, budgetMs, { executorRoot: home, ...(scenario.model ? { model: 'sonnet' } : {}), ...(scenario.executor ? { executor: scenario.executor, resumeSessionId: 'ready-session' } : {}) });
+      if (scenario.executor) {
+        const trace = JSON.parse(fs.readFileSync(traceFile, 'utf8').trim());
+        assert.equal(trace.args[trace.args.indexOf('--resume') + 1], 'ready-session');
+      }
       const elapsedMs = performance.now() - began;
       if (scenario.bothCheapTimeout) {
         const expectedMs = scenario.timeout ? 2 * budgetMs : Math.floor(1.5 * budgetMs);

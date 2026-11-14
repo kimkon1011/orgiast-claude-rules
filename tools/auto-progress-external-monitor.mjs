@@ -3,6 +3,7 @@ import { rowKey } from './auto-progress-ledger.mjs';
 import { fetchMessages } from './auto-progress-external-check.mjs';
 import { addItem, listItems, updateInboxItem, inboxDedupeKey } from './kim-inbox.mjs';
 import { redactSecrets } from './webhook-health.mjs';
+import { autoResumeAllowed } from './lib/auto-resume-policy.mjs';
 
 function inboxOptions(event) {
   return { kind: 'ask', priority: 'high', source: 'auto-progress-external', sessionId: event.row.sessionId,
@@ -89,10 +90,22 @@ export async function pollExternal(row, { home, now, patch, io = {} }) {
 // Durable queue, grouped by original session. Retain failures for the next tick.
 export async function drainExternalQueue({ home, now, resume, io = {} }) {
   await repairExternalInboxReceipts({ home, now, io });
-  const pending = readEvents(home).filter(e => e.inboxId && e.state !== 'done' &&
+  const events = readEvents(home);
+  const pending = events.filter(e => e.inboxId && !['done', 'disabled'].includes(e.state) &&
     (!e.attemptedAt || now - Date.parse(e.attemptedAt) >= 30 * 60000))
     .sort((a, b) => (Date.parse(a.attemptedAt) || 0) - (Date.parse(b.attemptedAt) || 0) || Date.parse(a.queuedAt) - Date.parse(b.queuedAt));
   if (!pending.length) return { resumed: 0 };
+  if (!autoResumeAllowed()) {
+    for (const sessionId of new Set(pending.map(e => e.row.sessionId))) {
+      if (!events.some(e => e.row.sessionId === sessionId && e.state === 'disabled')) {
+        await (io.addKimInboxItem || addItem)(home, { kind: 'info', source: 'auto-progress-auto-resume-disabled', sessionId,
+          dedupeKey: `external-auto-resume-disabled:${sessionId}`,
+          text: `自動再開は行いません。続けるときはこのセッションを開いて指示してください: claude --resume ${sessionId}` });
+      }
+      for (const event of pending.filter(e => e.row.sessionId === sessionId)) { event.state = 'disabled'; saveEvent(home, event); }
+    }
+    return { resumed: 0 };
+  }
   const batch = pending.filter(e => e.row.sessionId === pending[0].row.sessionId).slice(0, 50);
   for (const event of batch) { event.attemptedAt = new Date(now).toISOString(); saveEvent(home, event); }
   const row = { ...batch[0].row, promise: '外部チャネルの新着を確認する',

@@ -787,7 +787,7 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
       activeLane = codex ? 'codex-do' : cheap ? 'cheap-code' : 'claude';
       if (codex) codexTried = true;
       let child;
-      try { child = spawn(cheap || codex ? process.execPath : executable, codex
+      try { child = (runOptions.spawnImpl ?? spawn)(cheap || codex ? process.execPath : executable, codex
         ? buildCodexDoArgs({ repoRoot: executorRoot, promptFile, cwd: historyCwd })
         : cheap
         ? buildCheapCodeArgs({ repoRoot: executorRoot, provider: cheapProvider, promptFile, cwd: historyCwd })

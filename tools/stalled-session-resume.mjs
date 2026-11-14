@@ -482,11 +482,16 @@ export async function run(config = options(), io = {}) {
           if (!readonly) { entry.skipReason = '会話ファイル欠損'; entries[entryKey] = entry; }
           continue;
         }
-        let reason = overdue ? overdueSkipReason(record, entry, closed, mtimeMs, now(), config.activeMs) : skipReason(record, entry, night, closed, mtimeMs, now(), config.activeMs);
-        if (!reason && state.aborted) reason = '連続3件エラーで今晩中止';
-        if (!reason && state.noExecutor) reason = '実行役なし';
-        if (!reason && !overdue && now() >= deadline.getTime()) reason = '締切超過(翌晩へ)';
-        if (!reason && state.count >= config.limit) reason = overdue ? '今回の件数上限' : '今晩の件数上限';
+        const resumeAllowed = autoResumeAllowed();
+        // 過去の再開回数・失敗上限は、廃止通知の配達を妨げない。
+        const eligibilityEntry = resumeAllowed ? entry : {};
+        let reason = overdue ? overdueSkipReason(record, eligibilityEntry, closed, mtimeMs, now(), config.activeMs) : skipReason(record, eligibilityEntry, night, closed, mtimeMs, now(), config.activeMs);
+        if (resumeAllowed) {
+          if (!reason && state.aborted) reason = '連続3件エラーで今晩中止';
+          if (!reason && state.noExecutor) reason = '実行役なし';
+          if (!reason && !overdue && now() >= deadline.getTime()) reason = '締切超過(翌晩へ)';
+          if (!reason && state.count >= config.limit) reason = overdue ? '今回の件数上限' : '今晩の件数上限';
+        }
         rows.push({ sessionId: record.sessionId, title: record.displayTitle, attempts: entry.attempts.length, skip: reason, ...(overdue ? { plannedAction: `claude --resume ${record.sessionId} -p <待機期限プロンプト> で再開する予定` } : {}) });
         if (reason) {
           if (!readonly) { entry.skipReason = reason; entries[entryKey] = entry; }
@@ -496,8 +501,10 @@ export async function run(config = options(), io = {}) {
           }
           continue;
         }
-        if (!autoResumeAllowed()) {
+        if (!resumeAllowed) {
           rows.at(-1).skip = '自動再開は廃止';
+          if (overdue) rows.at(-1).plannedAction = '自動再開は廃止。期限切れは kim-inbox 通知のみ';
+          if (readonly) continue;
           entry.skipReason = '自動再開は廃止';
           entries[entryKey] = entry;
           ledger.autoResumeDisabledNotified ??= {};
@@ -609,7 +616,7 @@ export async function run(config = options(), io = {}) {
     if (fatal) throw fatal;
 
     if (!readonly && records.length) await save(ledger);
-    if (!readonly && records.length && (!overdue || results.length)) {
+    if (autoResumeAllowed() && !readonly && records.length && (!overdue || results.length)) {
       const closed = await loadClosed();
       const retired = Object.entries(overdue ? {} : ledger.sessions).filter(([id, entry]) => entry.noProgress >= 3 && !closed.sessions[id]);
       const count = outcome => results.filter(r => r.outcome === outcome).length;
@@ -621,7 +628,7 @@ export async function run(config = options(), io = {}) {
       await save(ledger);
     }
     // overdue モード: 期限切れから2時間以上経過し、誰も再開していないセッションがあれば kim-inbox に ask を積む
-    if (overdue && !readonly) {
+    if (autoResumeAllowed() && overdue && !readonly) {
       const nowMs = now();
       const twoHoursAgo = nowMs - 2 * 3600000;
       for (const record of records) {

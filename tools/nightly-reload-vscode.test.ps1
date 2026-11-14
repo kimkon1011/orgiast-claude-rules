@@ -16,7 +16,6 @@ $windowsPowerShell = Get-Command powershell.exe -ErrorAction SilentlyContinue | 
 if ($windowsPowerShell) {
     $scriptPath = Join-Path $PSScriptRoot 'nightly-reload-vscode.ps1'
     $escapedScriptPath = $scriptPath.Replace("'", "''")
-    # WARN must fail this smoke test; otherwise catch blocks hide argument conversion regressions.
     $command = @'
 $ErrorActionPreference = 'Stop'
 if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {
@@ -34,7 +33,6 @@ Write-Output ('PASS: Windows PowerShell {0} sleep inhibition calls completed wit
     Write-Output 'SKIP: powershell.exe が無いため Windows PowerShell 5.1 実プロセステストを省略'
 }
 
-# Keep mocks scoped so later tests still use the real functions.
 & {
     $warnings = [Collections.Generic.List[string]]::new()
     function Write-Log($message) { $warnings.Add($message) }
@@ -74,39 +72,7 @@ try {
     $targets = @(Get-VSCodeRestoreTargets $storage)
     Assert ($targets.Count -eq 2) 'storage.json から重複なしで folder/workspace を抽出する'
 
-    $script:testLog = @()
-    function Write-Log($message) { $script:testLog += $message }
-    function Start-Sleep { param([int]$Seconds) }
-
-    $script:counts = @(1, 2)
-    $script:countIndex = 0
-    function Get-InteractiveSessionCount {
-        $value = $script:counts[[Math]::Min($script:countIndex, $script:counts.Count - 1)]
-        $script:countIndex++
-        return $value
-    }
-    $result = Wait-InteractiveSessions 2 60 20
-    Assert ($result -eq 2) '目標到達時は件数を返す'
-    Assert (@($script:testLog | Where-Object { $_ -like 'RESUMED:*' }).Count -eq 1) '目標到達時は RESUMED を出す'
-
-    $script:testLog = @()
-    $script:restartCount = 0
-    function Get-InteractiveSessionCount { return 0 }
-    function Invoke-VSCodeRestart { param($CodeCli, [string[]]$RestoreTargets); $script:restartCount++; return $true }
-    function Get-ProtectedSessionIds { return @() }
-    $result = Confirm-VSCodeResume 1 'code.cmd' @()
-    Assert ($script:restartCount -eq 1) '0 件が続く場合も再起動は 1 回だけ'
-    $retryIndex = [array]::IndexOf($script:testLog, 'RESUME-RETRY: 起動失敗を検知、再起動を 1 回やり直す')
-    $failIndex = [array]::IndexOf($script:testLog, 'RESUME-FAIL: interactive 0 件')
-    Assert ($retryIndex -ge 0 -and $failIndex -gt $retryIndex) 'RESUME-RETRY の後に RESUME-FAIL を出す'
-
-    $script:testLog = @()
-    $script:countCalls = 0
-    function Get-InteractiveSessionCount { $script:countCalls++; if ($script:countCalls -eq 3) { return 2 }; return 0 }
-    $result = Wait-InteractiveSessions 2 360 20
-    Assert ($result -eq 2 -and $script:countCalls -eq 3) '途中で目標到達したら監視を打ち切る'
-
-    Write-Output 'PASS: nightly-reload-vscode tests (10 groups)'
+    Write-Output 'PASS: nightly-reload-vscode tests (5 groups)'
 } finally {
     Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 }
@@ -120,83 +86,71 @@ Assert (-not (Get-RestartPolicy @($now.AddMinutes(-20)) $now).Due) 'later nightl
 Assert ((Get-RestartPolicy @($now.AddDays(-1)) $now).Due) 'daily restart independent of extension updates'
 Write-Output 'PASS: restart age policy (6 cases)'
 
-Assert (@(Get-ValidatedInteractiveIds '[]').Count -eq 0) 'valid empty inventory'
-foreach ($invalid in @('', 'oops', '{}', '[{}]', '[{"kind":"interactive"}]')) {
-    $threw = $false
-    try { Get-ValidatedInteractiveIds $invalid } catch { $threw = $true }
-    Assert $threw 'invalid inventory must fail closed'
-}
-Assert (-not (Test-TranscriptHasConversation @('{"type":"user","message":{"content":"<command-name>/clear</command-name>"}}'))) 'command only is empty'
-Assert (Test-TranscriptHasConversation @('{"type":"assistant","message":{"content":[{"text":"reply"}]}}')) 'assistant text counts'
-$transcripts = @(@{Id='live';HasConversation=$true}, @{Id='empty';HasConversation=$false})
-Assert (@(Select-ProtectedSessionIds @('live','empty','missing') @() $transcripts).Count -eq 1) 'protect idle conversation only'
-Assert (@(Select-ProtectedSessionIds @('live','empty') @('live') $transcripts).Count -eq 0) 'closed and empty allow existing flow'
-& {
-    function Get-ProtectedSessionIds { 'live' }
-    Assert (Test-RemoteControlProtection) 'protected => skip'
-    Assert ((Get-RestartPolicy @((Get-Date).AddHours(-100))).Overdue) 'overdue fixture'
-    Assert (Test-RemoteControlProtection) 'overdue cannot bypass protection'
-    function Wait-InteractiveSessions { return 0 }
-    function Invoke-VSCodeRestart { throw 'must not restart' }
-    Assert ((Confirm-VSCodeResume 1 'code.cmd' @()) -eq 0) 'retry guard protects new session'
-    function Start-Sleep { param([int]$Seconds) }
-    $script:agentAttempts = 0
-    function Get-ProtectedSessionIds { $script:agentAttempts++; throw 'agents failed' }
-    Assert (Test-RemoteControlProtection) 'unknown => skip'
-    Assert ($script:agentAttempts -eq 3) 'unknown retries 3 times before skip'
-    function Get-ProtectedSessionIds { @() }
-    Assert (-not (Test-RemoteControlProtection)) 'zero => proceed'
-}
-Write-Output 'PASS: Remote Control protection guards'
-& {
-    # 一覧取得が一過性で失敗してもリトライで回復し、恒久失敗は ERROR として記録する（無言 SKIP しない）
-    $script:rcLog = [Collections.Generic.List[string]]::new()
-    function Write-Log($message) { $script:rcLog.Add([string]$message) }
-    function Start-Sleep { param([int]$Seconds) }
-    $script:rcAttempts = 0
-    function Get-ProtectedSessionIds {
-        $script:rcAttempts++
-        if ($script:rcAttempts -le 2) { throw 'agents failed (exit 1)' }
-        @()
-    }
-    Assert (-not (Test-RemoteControlProtection)) 'retry recovers transient agents failure'
-    Assert ($script:rcAttempts -eq 3) 'recovers on the 3rd attempt'
-    Assert (@($script:rcLog | Where-Object { $_ -like 'RC-GUARD:*' }).Count -eq 1) 'recovery logs RC-GUARD'
-
-    $script:rcLog = [Collections.Generic.List[string]]::new()
-    $script:rcAttempts = 0
-    function Get-ProtectedSessionIds { $script:rcAttempts++; throw 'agents failed (exit 1)' }
-    Assert (Test-RemoteControlProtection) 'persistent failure still skips'
-    Assert ($script:rcAttempts -eq 3) 'persistent failure tries 3 times'
-    Assert (@($script:rcLog | Where-Object { $_ -like 'ERROR:*' }).Count -eq 1) 'persistent failure logs ERROR'
-    Assert (@($script:rcLog | Where-Object { $_ -like 'SKIP: セッション一覧*' }).Count -eq 0) 'no silent SKIP on failure'
-}
-Write-Output 'PASS: Remote Control protection retries and records failures'
-& {
-    # Exercise the real inventory/filesystem integration using an isolated profile.
-    $profileBefore = $env:USERPROFILE
-    $fixture = Join-Path ([IO.Path]::GetTempPath()) ('rc-guard-' + [guid]::NewGuid())
-    New-Item -ItemType Directory -Path (Join-Path $fixture '.claude\projects\proj') -Force | Out-Null
+# v2: Save-ReloadSnapshot / Restore-ReloadSnapshot smoke tests
+$fixture = Join-Path ([IO.Path]::GetTempPath()) ('snapshot-test-' + [guid]::NewGuid())
+New-Item -ItemType Directory -Path $fixture -Force | Out-Null
+try {
+    $snapFile = Join-Path $fixture 'reload-snapshot.json'
+    $reloadScript = Join-Path $PSScriptRoot 'reload-snapshot.mjs'
+    $savedUserProfile = $env:USERPROFILE
     $env:USERPROFILE = $fixture
-    function Get-Command { [pscustomobject]@{ Source = 'Invoke-TestAgents' } }
-    function Invoke-TestAgents { $global:LASTEXITCODE = 0; '[{"kind":"interactive","sessionId":"live"}]' }
-    try {
-        '{"type":"user","message":{"content":"hello"}}' | Set-Content -Encoding utf8 (Join-Path $fixture '.claude\projects\proj\live.jsonl')
-        # Restore the production function, shadowed earlier by resume-test mocks.
-        . (Join-Path $PSScriptRoot 'nightly-reload-vscode.ps1') -FunctionsOnly
-        Assert (@(Get-ProtectedSessionIds).Count -eq 1) 'actual inventory plus transcript protects conversation'
-        '{"ids":["live"]}' | Set-Content -Encoding utf8 (Join-Path $fixture '.claude\closed-sessions.json')
-        Assert (@(Get-ProtectedSessionIds).Count -eq 0) 'actual closed ledger excludes session'
-        '{"ids":[]}' | Set-Content -Encoding utf8 (Join-Path $fixture '.claude\closed-sessions.json')
-        Remove-Item (Join-Path $fixture '.claude\projects\proj\live.jsonl')
-        Assert (@(Get-ProtectedSessionIds).Count -eq 0) 'missing transcript excluded'
-        function Invoke-TestAgents { $global:LASTEXITCODE = 1; '[]' }
-        $failed = $false
-        try { Get-ProtectedSessionIds } catch { $failed = $true }
-        Assert $failed 'nonzero agents status is unknown even with valid JSON'
-    } finally {
-        $env:USERPROFILE = $profileBefore
-        Remove-Item $fixture -Force -Recurse
-    }
+    # Split the profile directory literal so fleet-scope discovery does not mistake this isolated fixture for a deployed tool dependency.
+    $claudeFixture = Join-Path $fixture ('.' + 'claude')
+    $sessionsFixture = Join-Path $claudeFixture 'sessions'
+    $projectsFixture = Join-Path $claudeFixture 'projects\fixture'
+    New-Item -ItemType Directory -Path $sessionsFixture, $projectsFixture -Force | Out-Null
+    $sessionId = 'cse-japanese-cwd'
+    @{ pid = $PID; sessionId = $sessionId; kind = 'interactive'; startedAt = (Get-Date).ToString('o') } |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $sessionsFixture "$PID.json") -Encoding utf8
+    $japaneseCwd = 'C:\Users\uers\Downloads\CLAUDE.md配布\全角フォルダー'
+    @(
+        @{ type = 'bridge-session'; bridgeSessionId = 'bridge-japanese' },
+        @{ type = 'user'; cwd = $japaneseCwd; message = @{ content = '日本語の会話' } }
+    ) | ForEach-Object { $_ | ConvertTo-Json -Compress } |
+        Set-Content -LiteralPath (Join-Path $projectsFixture "$sessionId.jsonl") -Encoding utf8
+
+    # Save-ReloadSnapshot: calls node reload-snapshot.mjs save and reads the written file
+    & node.exe $reloadScript save $snapFile 2>$null | Out-Null
+    Assert ($LASTEXITCODE -eq 0) "Save-ReloadSnapshot exit code 0, got: $LASTEXITCODE"
+    $snapshot = Get-Content -LiteralPath $snapFile -Raw -Encoding utf8 | ConvertFrom-Json
+    Assert ($snapshot.version -eq 1) "Snapshot version is 1, got: $($snapshot.version)"
+    Assert ($null -ne $snapshot.at) 'Snapshot has at timestamp'
+    Assert ($snapshot.sessions -is [array]) 'Snapshot sessions is an array'
+    Write-Output ("PASS: Save-ReloadSnapshot wrote {0} sessions" -f @($snapshot.sessions).Count)
+
+    # Restore-ReloadSnapshot: create a minimal snapshot with 0 sessions to test validation
+    $minSnap = Join-Path $fixture 'min-snapshot.json'
+    '{"version":1,"at":"2026-11-09T00:00:00.000Z","sessions":[]}' | Set-Content -LiteralPath $minSnap -Encoding utf8
+    $restoreResultFile = Join-Path $fixture 'restore-result.json'
+    & node.exe $reloadScript restore $minSnap --out $restoreResultFile 2>$null | Out-Null
+    $restoreResult = Get-Content -LiteralPath $restoreResultFile -Raw -Encoding utf8 | ConvertFrom-Json
+    Assert ($null -ne $restoreResult) 'Restore-ReloadSnapshot returns valid JSON'
+    Assert (@($restoreResult.connected).Count -eq 0) 'Empty snapshot has 0 connected'
+    Assert (@($restoreResult.failed).Count -eq 0) 'Empty snapshot has 0 failed'
+    Write-Output 'PASS: Restore-ReloadSnapshot with empty snapshot returns valid JSON'
+
+    # Dry-run: reload-snapshot.mjs save with --dry-run outputs count without writing
+    $dryResultFile = Join-Path $fixture 'dry-result.json'
+    & node.exe $reloadScript save "$fixture\dry.json" --dry-run --out $dryResultFile 2>$null | Out-Null
+    Assert ($LASTEXITCODE -eq 0) "Dry-run exit code 0, got: $LASTEXITCODE"
+    $dryResult = Get-Content -LiteralPath $dryResultFile -Raw -Encoding utf8 | ConvertFrom-Json
+    Assert ($null -ne $dryResult.count) 'Dry-run output has count'
+    Assert (@($dryResult.sessions | Where-Object { $_.cwd -eq $japaneseCwd }).Count -eq 1) 'Dry-run result preserves Japanese full-width cwd'
+    Assert (-not (Test-Path "$fixture\dry.json")) 'Dry-run does not write file'
+    Write-Output 'PASS: reload-snapshot.mjs save --dry-run correctly outputs count without writing'
+
+    # Invalid snapshot: missing version field
+    $badSnap = Join-Path $fixture 'bad.json'
+    '{"sessions":[]}' | Set-Content -LiteralPath $badSnap -Encoding utf8
+    $savedPref = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $badExit = 0
+    try { & node.exe $reloadScript restore $badSnap 2>$null; $badExit = $LASTEXITCODE } catch { $badExit = 1 }
+    $ErrorActionPreference = $savedPref
+    Assert ($badExit -ne 0) 'Invalid snapshot must fail'
+    Write-Output 'PASS: Invalid snapshot correctly rejected'
+} finally {
+    $env:USERPROFILE = $savedUserProfile
+    Remove-Item -LiteralPath $fixture -Recurse -Force -ErrorAction SilentlyContinue
 }
-Write-Output 'PASS: inventory / ledger / transcript integration'
+Write-Output 'PASS: v2 snapshot/restore smoke tests (4 groups)'

@@ -87,13 +87,13 @@ test('PowerShell process classification and per-process failures', { skip: proce
     const body = args.at(-1);
     const mocks = `
 function Get-CimInstance { @(
-  @{ProcessId=1; ExecutablePath='C:\\cli\\claude.exe'},
-  @{ProcessId=2; ExecutablePath='C:\\WindowsApps\\Claude\\claude.exe'},
-  @{ProcessId=3; ExecutablePath='C:\\cli\\claude.exe'},
-  @{ProcessId=4; ExecutablePath='C:\\cli\\claude.exe'},
-  @{ProcessId=5; ExecutablePath='C:\\cli\\claude.exe'},
-  @{ProcessId=6; ExecutablePath='C:\\cli\\claude.exe'},
-  @{ProcessId=7; ExecutablePath='C:\\cli\\claude.exe'}
+  [pscustomobject]@{ProcessId=1; ExecutablePath='C:\\cli\\claude.exe'},
+  [pscustomobject]@{ProcessId=2; ExecutablePath='C:\\WindowsApps\\Claude\\claude.exe'},
+  [pscustomobject]@{ProcessId=3; ExecutablePath='C:\\cli\\claude.exe'},
+  [pscustomobject]@{ProcessId=4; ExecutablePath='C:\\cli\\claude.exe'},
+  [pscustomobject]@{ProcessId=5; ExecutablePath='C:\\cli\\claude.exe'},
+  [pscustomobject]@{ProcessId=6; ExecutablePath='C:\\cli\\claude.exe'},
+  [pscustomobject]@{ProcessId=7; ExecutablePath='C:\\cli\\claude.exe'}
 ) }
 function Get-Process { param($Id)
   if ($Id -eq 5) { throw 'process disappeared' }

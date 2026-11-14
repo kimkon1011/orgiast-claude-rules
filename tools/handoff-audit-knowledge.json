@@ -358,5 +358,41 @@
     "route": "完了報告と状態確認は「Drive MCP」のような汎用ツール名で抽象化せず、確認対象ごとに特定の API/ツールを呼び出して実データを根拠に書く。Drive 上のファイル状態（存在・更新日時・中身）は DWD(kim impersonate / drive スコープ)で Drive API v3 の files.get（alt=media または export）と files.list を直接叩く（Drive MCP は使わない）。スプレッドシートの内容は SA 直 JWT（`aujust-sales-automation/.gcp/sheets-sa.json`、scope=`https://www.googleapis.com/auth/spreadsheets.readonly`）で `GET /v4/spreadsheets/{id}?fields=properties.title,sheets.properties` と `GET /v4/spreadsheets/{id}/values/{tab}!A1:BZ400` を叩く（詳細は knowledge entry「Google スプレッドシートの書き込み結果検証」の検証4点）。GitHub の状態は `gh pr view <番号> -R <owner>/<repo> --json state,mergedAt`、`gh run list -R <owner>/<repo> --limit 5 --json status,conclusion,headSha`、`gh api repos/<owner>/<repo>/<path>` で直接照会する。Vercel の反映確認は `VERCEL_TOKEN=... vercel inspect <本番URL>` で Ready と id/created を確認する。コミットの取込は squash マージで is-ancestor が偽になるため `node tools/commit-landed.mjs <sha>` を使う。報告は「確認要素 × 照会ツール × 実応答データ」の検証表で出し、照会に失敗した項目は実際の error 本文を添えて「未確認」と書く。確率付き否定や「user が確認して」への丸投げをしない。実例: 2026-09-20 に Drive API で旧版ファイルの trash 候補を列挙し kim への手渡しにした（knowledge entry「Drive 上の旧版ファイルをゴミ箱へ」）。",
     "confidence": "high",
     "source": "2026-11-13 handoff-audit-candidates tool-name-route レビュー（元: pattern「作業完了報告・状態確認」route が「Drive MCP」道具名のみだったため手順文に書換）"
+  },
+  {
+    "pattern": "社外顧客への返信送信の同意確認",
+    "route": "社外送信に事前承認が必要な案件では、宛先・件名・本文・送信経路を完成形で1回だけ提示して可否を確認する。承認後の送信操作は user に返さず、対象サービスの既存の認証済み経路（例: アイミツは GitHub Actions の PRONI ワークフロー、Gmail は承認済みの送信経路）で Claude が実行し、送信済み本文またはサービス上の履歴を読み戻して報告する。承認前送信を禁止された案件では、承認が得られるまで送信・フォーム入力を行わない。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:7e6d5c9f7d77360d734a0465e0ea58e845af1e7ee43687666556925d37fa643d / 2026-11-03 tool-name-route レビューで `チャット表示` を承認・実行・read-back の手順文へ置換"
+  },
+  {
+    "pattern": "Drive 保存の手渡し（鍵不在を理由に別PC依頼）",
+    "route": "Drive 保存を別PCや user に渡す前に、当ターンで利用可能な Drive コネクタの create_file を試す。コネクタが無い・失敗した場合は、既定パス、GOOGLE_SA_KEY、GOOGLE_APPLICATION_CREDENTIALS、keyserve 配布先から SA 鍵を探索し、DWD で保存先所有者を impersonate して Drive API files.create を実行する。成功時は files.get で id・name・parents を読み戻す。全経路を実試行しても成立しない場合だけ各試行の errorKind とともに『未確認』と記録し、鍵不在を未試行で断定しない。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:8fba91a867c226685a8adb65bcf418e6f15f231e5d3510e44724a1b784993618 / 2026-11-03 tool-name-route レビューで `Drive MCP` をコネクタ→DWD→read-back の手順文へ置換"
+  },
+  {
+    "pattern": "修正対象ファイルが別 PC にあるための手渡し",
+    "route": "対象ファイルが別PCにしか無い場合は user の手作業にせず、そのPCの実行エージェントへ、絶対パス・変更内容・禁止事項・検証コマンドを含む単発タスクとして渡す。完了通知だけを証拠にせず、変更後ファイルのハッシュまたは検証出力を返させて照合する。対象PCへ到達できない場合は、現PCで代替ファイルを推測作成せず、到達経路と対象ファイルの所在を『未確認』として記録する。",
+    "confidence": "medium",
+    "source": "handoff-audit-nightly:ba761818268404cf467fcc5e7bbea448c15ba1f477463f32dd0b9fdfde674682 / 2026-11-03 tool-name-route レビューで `codex-do.mjs` を対象PCへの単発指示と成果物 read-back の手順文へ置換"
+  },
+  {
+    "pattern": "新セッション開始の Enter 送信を user に依頼",
+    "route": "VS Code の入力欄で Enter を押す作業を user に渡さない。継続が必要なら auto-session の再入またはスケジューラへ同じ目的・対象ファイル・完了条件を登録し、次回起動を自動化する。登録後はキューまたは実行台帳を読み戻して受付を確認する。自動起動経路が実試行で使えない場合は、当ターンで実行できる処理を完了させ、未完了部分と試行エラーを記録する。",
+    "confidence": "medium",
+    "source": "handoff-audit-nightly:fbfaba7737ee041c0d415f2d56ea3459f4265f7362f38146bbb5c2199349396c / 2026-11-03 tool-name-route レビューで `codex-do.mjs` を自動再入・台帳 read-back の手順文へ置換"
+  },
+  {
+    "pattern": "管理画面上の更新（◯入れ）",
+    "route": "管理画面の更新（チェック入れ・ステータス変更等）が実質的に Google スプレッドシートのセル更新である場合は、kim に画面操作を依頼せず Claude が Sheets API で直接書き込む。手順: ①対象のスプレッドシート ID とタブ名を、DWD（kim impersonate / drive スコープ）の sheets metadata または案件管理台帳の既存照会から特定する。②書き込むセル範囲（例: `案件管理!F2:F100` の特定行）と値を行単位で確定する（列の意味はヘッダー行を実読みで確認する）。③書き込みは `tools/lib/sheets-dwd.mjs` の createSheetsClient（DWD で kim@orgiast.jp を impersonate・scope=`https://www.googleapis.com/auth/spreadsheets`、失敗時は drive スコープ + seisaku-team@orgiast.jp へフォールバック）で `PUT /v4/spreadsheets/{id}/values/{range}?valueInputOption=RAW` を叩く（追記は `values/{range}:append`。実装例: tools/deadline-ledger.mjs・tools/furukawa-fee-post.mjs）。読み取り専用 SA 鍵（aujust-sales-automation/.gcp/sheets-sa.json は scope=spreadsheets.readonly）では書けないため書き込みに使わない。④書き込み直後に同じセル範囲を `GET /v4/spreadsheets/{id}/values/{range}` で読み戻し、期待値との一致を確認してから完了報告に書く（詳細は knowledge entry「Google スプレッドシートの書き込み結果検証」の検証4点）。⑤管理画面がスプレッドシートではなく本番アプリの UI の場合は、そのアプリの管理 API の有無を先に確認し、API があればそれを叩く。API が無ければ操作対象・項目・新しい値を推測で書かず『未確認』と記録し、手渡す場合は実測の error を手渡し理由として添える。実例: 2026-11-12 session 16930ded の rule 4 差し戻し「管理画面のN列に◯を入れる」（observation 60fd1b66…）。",
+    "confidence": "medium",
+    "source": "handoff-audit-nightly:60fd1b66a1375b7bb5f9abe986d2633332cee5141b166e6431060377a7030acd / 2026-11-14 tool-name-route レビューで route（`Sheets API` 道具名のみ）を手順文に書き直して採用。初回案が参照した tools/sheets-write.mjs は存在しないため、実在する tools/lib/sheets-dwd.mjs の経路に修正した"
+  },
+  {
+    "pattern": "Drive フォルダへの権限付与を手渡しで依頼する",
+    "route": "Drive のファイル/フォルダへの共有権限付与（編集者・閲覧者追加）を kim の画面操作（フォルダ名右の ▼ →「共有」→ メール追加）に渡さない。Claude が `node tools/drive-share.mjs --id <URL|ID> --to <メール[,メール]> [--role reader|commenter|writer] [--as <impersonate先メール>] [--dry]` を実行する（`--dry` で対象 fileId と宛先の事前確認ができる）。実体（tools/lib/drive-share.mjs）は DWD impersonate の token で既存権限を permissions.list（ページング）から読み出し、付与済みなら status=exists、不足なら POST permissions.create（sendNotificationEmail=false・supportsAllDrives=true）で付与し、~/.claude/share-ledger.jsonl へ記録して各宛先の「共有済み: <メール> (<role>) <ファイル名>」行を返す（一部失敗は「共有失敗: …」行 + exit 1）。@orgiast.jp 宛は既定 writer・社外は既定 commenter、orgiast.jp 個人アドレス宛には syain@orgiast.jp グループを自動追加し、tools/lib/kim-editor.mjs の ensureKimEditor（書き込み後に permissions.list で検証）で kim@orgiast.jp の編集者付与も同時に走る。完了報告はツール出力と share-ledger の行で読み戻し、kim には結果のみ通知する。「1分で共有を追加してください」等の操作依頼を書かない。権限付与は OAuth 同意・支払い・アカウント作成・物理操作のいずれでもないため手渡し理由にならない。実例: 2026-11-13 session 4e0a0aa2 が「kim-PC が依頼を処理すれば共有が付きます…1分で共有を追加してください」と書き rule 1/2/3/6 の4違反で block された（observation 06742d76…）。",
+    "confidence": "high",
+    "source": "handoff-audit-nightly:06742d76c808c0f83cb3acf1b5a74687afb439297fadc710f31079b0ec6d61a5 / 2026-11-14 tool-name-route レビューで route（`Drive API` 道具名のみ）を実在ツール tools/drive-share.mjs の手順文に書き直して採用。監査 fix 案が挙げた tools/drive-permission-add.mjs は存在しないため実在工具に置換した"
   }
 ]

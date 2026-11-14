@@ -171,13 +171,15 @@ async function main() {
   assertSendableText(text);
   console.log(`送信先: ${summary.groupName} (${groupId}) / 本文 ${text.length} 字 / 画像 ${o.images.length} 枚`);
   if (o.dryRun) { console.log('[dry-run] 送信しない'); return; }
-  await assertContextApproved({ channel: 'line', target: groupId, text, getLatest: async () => {
-    const url = `${s.SUPABASE_URL}/rest/v1/channel_messages?select=id,created_at,external_message_id&channel=eq.line&external_thread_id=eq.${encodeURIComponent(groupId)}&order=created_at.desc&limit=1`;
-    const rows = await (await fetch(url, { headers: sbHeaders(s) })).json();
-    const received = (rows || []).map(x => ({ id: x.external_message_id || x.id, at: x.created_at }));
-    const sent = readOutbound(groupId).map(x => ({ id: x.messageId, at: x.at }));
-    return latestOf([...received, ...sent]);
-  }});
+  if (!o.skipContextCheck) {
+    await assertContextApproved({ channel: 'line', target: groupId, text, getLatest: async () => {
+      const url = `${s.SUPABASE_URL}/rest/v1/channel_messages?select=id,created_at,external_message_id&channel=eq.line&external_thread_id=eq.${encodeURIComponent(groupId)}&order=created_at.desc&limit=1`;
+      const rows = await (await fetch(url, { headers: sbHeaders(s) })).json();
+      const received = (rows || []).map(x => ({ id: x.external_message_id || x.id, at: x.created_at }));
+      const sent = readOutbound(groupId).map(x => ({ id: x.messageId, at: x.at }));
+      return latestOf([...received, ...sent]);
+    }});
+  }
   const urls = [];
   for (const f of o.images) urls.push(await uploadImage(s, f));
   const chunks = buildMessages(text, urls);

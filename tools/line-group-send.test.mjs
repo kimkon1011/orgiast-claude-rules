@@ -12,9 +12,10 @@ test('assertSendableText: 文字化けとプレースホルダ残りは送らな
 });
 
 test('parseArgs: グループと本文・画像を受け取る', () => {
-  const o = parseArgs(['--group', '株式会社ラハイナ', '--text-file', 'a.txt', '--image', '1.jpg', '--image', '2.jpg', '--dry-run']);
+  const o = parseArgs(['--group', '株式会社ラハイナ', '--text-file', 'a.txt', '--image', '1.jpg', '--image', '2.jpg', '--skip-context-check', '--dry-run']);
   assert.equal(o.group, '株式会社ラハイナ');
   assert.deepEqual(o.images, ['1.jpg', '2.jpg']);
+  assert.equal(o.skipContextCheck, true);
   assert.equal(o.dryRun, true);
 });
 

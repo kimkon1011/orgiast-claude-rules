@@ -134,13 +134,12 @@ test('probe起動失敗は当日済みにせず次回再試行する', async t =
   assert.equal(fs.existsSync(path.join(r.dir, '.fleet-lane-health-day')), false);
   assert.deepEqual(await r.call(), { healthy: true });
 });
-test('同日でもstaleがあればprobeを再実行する', async t => {
+test('同日はstaleがあってもprobeを再実行しない（空セッション量産防止）', async t => {
   const r = run(t, { codex: alive });
   await r.call();
   fs.writeFileSync(path.join(r.dir, 'lane-health.json'), JSON.stringify({ lanes: { codex: { alive: false, reason: 'probe_failed:stale' } } }));
-  assert.deepEqual(await r.call(), { healthy: true });
-  assert.equal(r.spawns.length, 2);
-  assert.equal(r.spawns[1].opts.env.ORGIAST_HOME, path.dirname(r.dir));
+  assert.deepEqual(await r.call(), { skipped: 'today' });
+  assert.equal(r.spawns.length, 1); // probe is not re-run
 });
 
 test('watchdog notification batch is bounded and resumes unnotified rows next run', async t => {

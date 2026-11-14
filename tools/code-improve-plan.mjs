@@ -24,6 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { isEntry } from './is-entry.mjs';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 
@@ -59,7 +60,7 @@ function parseArgs(argv) {
 function getGitDiff(cwd, targetFile) {
   const args = ['-C', cwd, 'diff'];
   if (targetFile) args.push('HEAD', '--', targetFile);
-  const result = spawnSync('git', args, { encoding: 'utf8', cwd });
+  const result = spawnSync('git', args, { encoding: 'utf8', cwd, windowsHide: true });
   if (result.error) {
     console.error('git diff 失敗:', result.error.message);
     process.exit(1);
@@ -73,7 +74,7 @@ function getGitDiff(cwd, targetFile) {
 }
 
 function getDiffStat(cwd) {
-  const result = spawnSync('git', ['-C', cwd, 'diff', '--stat'], { encoding: 'utf8', cwd });
+  const result = spawnSync('git', ['-C', cwd, 'diff', '--stat'], { encoding: 'utf8', cwd, windowsHide: true });
   return result.stdout.trim();
 }
 
@@ -154,7 +155,7 @@ function callStrongAi(prompt, { dryRun = false } = {}) {
     '--timeout', '300',
     '--origin', 'unattended',
     '--kind', 'investigate',
-  ], { encoding: 'utf8', cwd: REPO_ROOT, timeout: 310000 });
+  ], { encoding: 'utf8', cwd: REPO_ROOT, timeout: 310000, windowsHide: true });
 
   // プロンプトファイルをクリーンアップ
   try { fs.unlinkSync(promptFile); } catch {}
@@ -233,7 +234,7 @@ ${task.testRequired ? '\nテストも追加または更新してください。'
       '--timeout', '300',
       '--origin', 'unattended',
       '--kind', 'implement',
-    ], { encoding: 'utf8', cwd, timeout: 310000 });
+    ], { encoding: 'utf8', cwd, timeout: 310000, windowsHide: true });
 
     try { fs.unlinkSync(promptFile); } catch {}
 
@@ -277,7 +278,7 @@ function verifyPlan(plan, taskResults, { cwd = REPO_ROOT, dryRun = false } = {})
       // テスト実行
       if (v.toLowerCase().includes('テスト') || v.toLowerCase().includes('test')) {
         const testResult = spawnSync(process.execPath, ['--test', 'tools/*.test.mjs'], {
-          encoding: 'utf8', cwd, timeout: 120000,
+          encoding: 'utf8', cwd, timeout: 120000, windowsHide: true,
         });
         const passed = testResult.status === 0;
         verificationResults.push({ item: v, passed, detail: passed ? 'テスト通過' : `テスト失敗: ${testResult.stdout.slice(0, 200)}` });
@@ -409,9 +410,4 @@ export {
 
 // ─── エントリポイント ──────────────────────────────────
 
-const isMain = process.argv[1] && (
-  process.argv[1] === fileURLToPath(import.meta.url) ||
-  process.argv[1].endsWith('code-improve-plan.mjs')
-);
-
-if (isMain) main();
+if (isEntry(import.meta.url)) main();

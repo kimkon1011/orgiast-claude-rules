@@ -23,17 +23,18 @@ export function strToUUID(s) {
   return `${hex.slice(0,8)}-${hex.slice(8,12)}-5${hex.slice(13,16)}-8${hex.slice(17,20)}-${hex.slice(20,32)}`;
 }
 
-const USAGE = '使い方: node tools/line-group-send.mjs --group <groupId|グループ名> --text-file <本文.txt> [--image <画像> ...] [--retry-key <uuid>] [--dry-run]';
+const USAGE = '使い方: node tools/line-group-send.mjs --group <groupId|グループ名> --text-file <本文.txt> [--image <画像> ...] [--retry-key <uuid>] [--skip-context-check] [--dry-run]';
 const SALES_PROJECT = 'aujust-sales-automation';
 const KEYS = ['LINE_CHANNEL_ACCESS_TOKEN', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'];
 const MAX_IMAGE_BYTES = 1024 * 1024;
 
 export function parseArgs(argv) {
-  const o = { images: [], dryRun: false };
+  const o = { images: [], dryRun: false, skipContextCheck: false };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     const v = argv[i + 1];
     if (a === '--dry-run') o.dryRun = true;
+    else if (a === '--skip-context-check') o.skipContextCheck = true;
     else if (a === '--group') { o.group = v; i += 1; }
     else if (a === '--text-file') { o.textFile = v; i += 1; }
     else if (a === '--image') { o.images.push(v); i += 1; }

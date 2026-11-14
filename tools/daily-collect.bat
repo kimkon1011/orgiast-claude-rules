@@ -1,9 +1,11 @@
 @echo off
-REM 官公庁入札 日次収集バッチ
-REM タスクスケジューラから毎朝 06:00 に実行
-REM 使い方: C:\Users\kimko\orgiast-bid\tools\daily-collect.bat
+REM Public procurement daily collection batch
+REM Scheduled at 06:00 every morning via Task Scheduler
+REM Usage: C:\Users\kimko\orgiast-bid\tools\daily-collect.bat
 
 cd /d C:\Users\kimko\orgiast-bid
-echo [%date% %time%] === 官公庁入札 日次収集開始 === >> data\daily-collect.log
+echo [%date% %time%] === Daily collection start === >> data\daily-collect.log
 node tools\collect.mjs >> data\daily-collect.log 2>&1
-echo [%date% %time%] === 完了 === >> data\daily-collect.log
+set RET=%errorlevel%
+echo [%date% %time%] === Done === >> data\daily-collect.log
+exit /b %RET%

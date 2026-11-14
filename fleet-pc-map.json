@@ -127,12 +127,15 @@
     "_identityConflict": "本PCの Claude は自席ラベルを『作業用999』と申告した。作業用999 は DESKTOP-BDOAK99 行にも利用者申告がある。kim 回答と L&B 担当の一致を優先して 014 とし、999 は aliases に入れない（DESKTOP-BDOAK99 宛の経路を奪わないため）。実機の Chrome リモートデスクトップ名で確定したら更新する。",
     "_keyserve": "2026-11-04 kim-PC（primary）で keyserve-enroll --pc DELL --ttl-hours 48 を発行（指紋 09a392e44d）。受信側で実行し keyserve-status が primary / HTTP 200 になるまで fleet-sheet.env は未配布。"
   },
-  "DESKTOP-63MQR3L": {
-    "hostname": "DESKTOP-63MQR3L",
-    "remoteName": "作業用008",
+  "015CAFE": {
+    "hostname": "015CAFE",
+    "remoteName": "カフェ用015",
     "account": "seisaku-team@orgiast.jp",
     "person": "金功勇",
-    "aliases": ["DESKTOP-63MQR3L"],
-    "_evidence": "2026-11-09 kim 申告『seisaku-team@ の Claude Code は 014 と 008 の2台』。本PCで実測: hostname=DESKTOP-63MQR3L / OS user=kimko / 機種 Thirdwave Corporation ZG / Chrome Remote Desktop host_id=35bd47e1-723f-1f93-3155-8d73a5cb646c。014 は DELL 行（hostname=DELL）で登録済みのため本PCを 008 とした。DESKTOP-BDOAK99 行の aliases にある『作業用008』は誤登録の残置（同行 _evidence 参照）で、resolvePcNumber は hostname 照合なので衝突しない。セッション名の先頭PC番号（tools/lib/pc-number.mjs）に使う。"
+    "aliases": [
+      "015CAFE",
+      "DESKTOP-63MQR3L"
+    ],
+    "_evidence": "2026-11-14 操作者が『このPCは015』と明言。hostname は DESKTOP-63MQR3L→015CAFE に変更済み（同一機体 Thirdwave ZG）。PR #1782 の 008 は推定による誤登録"
   }
 }

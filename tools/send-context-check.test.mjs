@@ -38,6 +38,44 @@ test('自社の質問と相手未回答の実データ形をLLMへ正しいラ�
   assert.equal(verdict.ok,true);
   assert.match(verdict.reason,/自社質問を相手要望としていない/);
 });
+test('定期報告モードは同じ未対応項目の再掲をNGにせず、質問と食い違いだけNGにする（2026-11-13の再現）', () => {
+  let prompt='';
+  const repeated='PRONIアイミツ事務局への返信が24時間以上未対応';
+  runLlm([
+    {party:'internal',sender:'佐藤優奈',at:'2026-11-10T21:31:30.420Z',text:`【業務報告】■問題点\n・${repeated}`},
+    {party:'internal',sender:'佐藤優奈',at:'2026-11-11T21:31:49.700Z',text:`【業務報告】■問題点\n・${repeated}`},
+  ],`【業務報告】■問題点\n・${repeated}`,{spawn:(_exe,args)=>{prompt ||= fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8');return {status:0,stdout:'{"verdict":"OK","reason":"定期報告では未対応項目の再掲は許容","warnings":[]}',stderr:''};},periodicReport:{recipient:'佐藤優奈',kind:'毎日の状況報告',sourceEvidence:'[2026-11-11] PRONI: 未返信'}});
+  assert.match(prompt,/佐藤優奈さん（宛先本人）あての毎日の状況報告/);
+  assert.match(prompt,/「同じ未対応の項目を、前日以前の報告でも書いている」ことはNGにしない/);
+  assert.match(prompt,/①報告の中で宛先本人に質問している/);
+  assert.match(prompt,/②日付・金額・人名が下記のメール原本証拠と実際に食い違っている/);
+  assert.match(prompt,/メール原本証拠:\n\[2026-11-11\] PRONI: 未返信/);
+  assert.match(prompt,/Discord履歴に根拠となるメールが載っていないこと.*NGにしてはならない/);
+  assert.match(prompt,/メール原本証拠はDiscord履歴より優先/);
+  assert.match(prompt,/warningsだけに記載してOKにしてはならない/);
+  assert.doesNotMatch(prompt,/③\[自社\]が既に聞いた質問を重ねて聞いていないか/);
+});
+test('定期報告モードなし（社外・他人宛て）は従来の5項目NG判定のまま', () => {
+  let prompt='';
+  runLlm([{party:'external',text:'確認しました'}],'返信本文',{spawn:(_exe,args)=>{prompt=fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8');return {status:0,stdout:'{"verdict":"OK","reason":"整合","warnings":[]}',stderr:''};}});
+  assert.match(prompt,/①回答済み質問の聞き直し/);
+  assert.match(prompt,/③\[自社\]が既に聞いた質問を重ねて聞いていないか/);
+  assert.match(prompt,/⑤自社既送信との重複・矛盾/);
+  assert.doesNotMatch(prompt,/定期報告では次で判定する/);
+});
+
+test('定期報告の再掲許容とは独立に原本の事実を照合し、不一致を止める',()=>{
+  for(const kind of ['日付','金額','人名']){
+    const prompts=[];
+    const verdict=runLlm([],'報告本文',{periodicReport:{recipient:'佐藤優奈',sourceEvidence:'メール原本'},spawn:(_exe,args)=>{
+      prompts.push(fs.readFileSync(args[args.indexOf('--prompt-file')+1],'utf8'));
+      return{status:0,stdout:JSON.stringify({verdict:prompts.length===1?'OK':'NG',reason:`${kind}の不一致`,warnings:[]})};
+    }});
+    assert.equal(verdict.ok,false);assert.equal(prompts.length,2);
+    assert.match(prompts[1],/発信者・担当者・連絡者の人名が別人に置き換わっていたら必ずNG/);
+    assert.doesNotMatch(prompts[1],/前日以前の報告/);
+  }
+});
 test('LINE履歴取得エラーはレスポンス本文を含む', async t => {
   const home=tmp(t); fs.mkdirSync(path.join(home,'.claude')); fs.writeFileSync(path.join(home,'.claude','line-send.env'),'LINE_CHANNEL_ACCESS_TOKEN=test\nSUPABASE_URL=https://example.supabase.co\nSUPABASE_SERVICE_ROLE_KEY=test\n');
   await assert.rejects(()=>fetchHistory('line','C10930732da844f79c6032a40705a4d73',{home,fetchImpl:async()=>new Response('{"message":"missing column"}',{status:400})}),/HTTP 400: .*missing column/);
@@ -176,6 +214,7 @@ test('Gmail履歴取得はDRAFTメッセージを除外し検索時に-in:drafts
   const calls = [];
   const result = await fetchHistory('gmail', 'client@example.com', {
     home,
+    getGmailToken: async () => 'fake-token',
     fetchImpl: async (url, init = {}) => {
       const urlStr = String(url);
       calls.push({ url: urlStr, init });

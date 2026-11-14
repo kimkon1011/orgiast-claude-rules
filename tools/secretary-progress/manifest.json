@@ -1,0 +1,41 @@
+{
+  "baseCommit": "a3549a4",
+  "files": [
+    {
+      "path": "app/api/watches/route.ts",
+      "before": "f36aa63b0bc553ce116ac87429455533c01b1387c979381acb6081a23ec5a76f",
+      "after": "93556d3865c52291f01509e9452d21a04990d351e0b16635c15fab8ae0d9c58e"
+    },
+    {
+      "path": "components/Dashboard.tsx",
+      "before": "96878cbad962c28e4d230091e1e69a7042afcc6ecefa0507e4d7dccba0b78ddc",
+      "after": "e1e34da849f20a1fca7fc06e0fd3ab288a9f62fb8a0b9bec8bb9ea20bd78c8e9"
+    },
+    {
+      "path": "components/WatchesWidget.tsx",
+      "before": "b193c72fa1d21d9169ade06d234e4ee893a5056fd58011641d6fa4d3fb386e5a",
+      "after": "e1483b6ead06a5cc83dd3467dce715b085cd7d3d487e2883be4391a3df4ee253"
+    },
+    {
+      "path": "lib/watches.mjs",
+      "before": null,
+      "after": "3ca89b2698cd600414f8cbfd78d0cb2c52e473a6cad42b674611ef8946b7c538"
+    },
+    {
+      "path": "tests/watches.test.mjs",
+      "before": null,
+      "after": "29cf710f318a96de9289f4c3873f516fb0b183ae211b92f52a47f453546c4239"
+    },
+    {
+      "path": "tests/e2e/watches.spec.ts",
+      "before": null,
+      "after": "9733ff4ea5c45af0565be03e44f942db67ebaa16e28beee9061d77e035d869dd"
+    },
+    {
+      "path": "start-prod.vbs",
+      "before": "bdd68db834c8ceb9b4ab3c944afdab21ea967f00821a72202735b47f0bcf4723",
+      "after": "beee52a5c228f316c2592a166b26ec8b5f9c45ea7ef4a4d60bcab0789e304925"
+    }
+  ],
+  "requiredLabel": "東邦2階HP 使用量把握"
+}

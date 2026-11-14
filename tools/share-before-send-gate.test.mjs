@@ -14,6 +14,13 @@ function fixture(t) {
   return { dir, ledgerPath };
 }
 const message = (body = url) => ({ tool_name: 'mcp__claude_ai_Discord__send_dm', tool_input: { recipient_id: 'other', content: body } });
+test('Google Forms public response URL passes without share evidence', t => {
+  const opts = fixture(t);
+  const formsUrl = 'https://docs.google.com/forms/d/e/1FAIpQLScJdyNl1ryrNXvshdF1yVaOjDueiWmObdcPVydj1m-DhPjWTw/viewform?usp=pp_url&entry.1172257432=abc';
+  assert.equal(judge(message(formsUrl), opts).decision, 'pass');
+  // 通常のフォーム編集URLは引き続きブロック対象
+  assert.equal(judge(message('https://docs.google.com/forms/d/1x29rPbBs6ha4FU2w3_JKFdL7p88tkIY31l1_DP1j3qY/edit'), opts).decision, 'block');
+});
 test('no link passes; Google link without evidence blocks', t => {
   const opts = fixture(t);
   assert.equal(judge(message('hello'), opts).decision, 'pass');

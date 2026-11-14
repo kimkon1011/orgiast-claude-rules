@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+export { isClaudeCodeCliProcess } from './lib/windows-process.mjs';
+
 export function versionTuple(text) {
   const match = text.match(/\d+(\.\d+)*/);
   return match ? match[0].split('.').map(Number) : null;

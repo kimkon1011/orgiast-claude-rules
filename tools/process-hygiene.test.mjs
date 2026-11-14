@@ -3,7 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { classify, classifyDetailed, classifyOrphanClaudeWaitLoops, classifyOrphanConsoleWindows, classifyVscodeIdle, parseOptions, parseProcessLines, readHygieneConfig, shouldKillVscodeIdle, vscodeCpuPolicy, sampleVscodeCpu, main } from './process-hygiene.mjs';
+import { isVscodeClaude, classify, classifyDetailed, classifyOrphanClaudeWaitLoops, classifyOrphanConsoleWindows, classifyVscodeIdle, parseOptions, parseProcessLines, readHygieneConfig, shouldKillVscodeIdle, vscodeCpuPolicy, sampleVscodeCpu, main } from './process-hygiene.mjs';
 
 const now = Date.parse('2026-09-11T06:00:00Z');
 const VSC_CMD = 'C:\\Users\\kim\\.vscode\\extensions\\anthropic.claude-code-2.1.285-win32-x64\\resources\\native-binary\\claude.exe --output-format stream-json';
@@ -330,4 +330,14 @@ test('classifyVscodeIdle: vscodeIdleKill: false の時は候補を 0 件にす�
 
   const enabled = idleRun(procs, sessions);
   assert.equal(enabled.length, 1);
+});
+
+
+test('isVscodeClaude excludes 11 desktop processes and retains 8 VS Code CLI processes', () => {
+  const rows = [
+    ...Array.from({ length: 11 }, () => ({ Name: 'claude.exe', CommandLine: APP_CMD })),
+    ...Array.from({ length: 8 }, () => ({ Name: 'claude.exe', CommandLine: VSC_CMD })),
+  ];
+  assert.equal(rows.filter(isVscodeClaude).length, 8);
+  assert.equal(isVscodeClaude({ Name: 'claude.exe', CommandLine: VSC_CMD + ' --type=renderer' }), false);
 });

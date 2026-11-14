@@ -7,6 +7,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { isEntry } from './is-entry.mjs';
+import { autoResumeAllowed } from './lib/auto-resume-policy.mjs';
 import { DEFAULT_REPO_MAP, parseRepoMap } from './feedback-to-issues.mjs';
 import { ledgerRows, runTaskLedger } from './task-ledger.mjs';
 import { alternateCheapProvider, autoSessionExecutor, buildClaudeHeadlessArgs, buildCheapCodeArgs, buildCodexDoArgs, cheapProvidersAllCooling, codexDoLaneEnabled, claudeFallbackEnabled, prepareExecutorRoot, recordFallbackToClaude, recordSkippedNoExecutor } from './auto-session-executor.mjs';
@@ -749,6 +750,9 @@ function extensionExecutables() {
 }
 
 export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutMs, runOptions = {}) {
+  if (runOptions.resumeSessionId && !autoResumeAllowed({ source: runOptions.resumeSource })) {
+    return { status: 'skipped', skippedAutoResume: true, deferred: false, executorUsed: 'none', exitCode: null, stdout: '', stderr: 'auto-resume disabled by config/auto-resume.json' };
+  }
   // 実行役のコードは origin/main の専用 worktree から読む。pinned tree はセッションが作業ブランチを
   // 切るため、夜間に main へ入った修正が同じ夜の後続セッションへ届かない(2026-10-25 実測)。
   const executorRoot = runOptions.executorRoot ?? prepareExecutorRoot({ repoRoot: REPO_ROOT });
@@ -783,11 +787,11 @@ export async function runChild(executable, prompt, repoCwd, historyCwd, timeoutM
       activeLane = codex ? 'codex-do' : cheap ? 'cheap-code' : 'claude';
       if (codex) codexTried = true;
       let child;
-      try { child = spawn(cheap || codex ? process.execPath : executable, codex
+      try { child = (runOptions.spawnImpl ?? spawn)(cheap || codex ? process.execPath : executable, codex
         ? buildCodexDoArgs({ repoRoot: executorRoot, promptFile, cwd: historyCwd })
         : cheap
         ? buildCheapCodeArgs({ repoRoot: executorRoot, provider: cheapProvider, promptFile, cwd: historyCwd })
-        : buildClaudeHeadlessArgs({ repoCwd, historyCwd, resumeSessionId: runOptions.resumeSessionId, ...(runOptions.model ? { model: runOptions.model } : {}) }), { detached: process.platform !== 'win32', cwd: historyCwd,
+        : buildClaudeHeadlessArgs({ repoCwd, historyCwd, resumeSessionId: runOptions.resumeSessionId, resumeSource: runOptions.resumeSource, ...(runOptions.model ? { model: runOptions.model } : {}) }), { detached: process.platform !== 'win32', cwd: historyCwd,
         // cheap-code 側でも浄化するが、claude フォールバック(監督セッション)はここで
         // デスクトップ由来の CLAUDECODE / CLAUDE_CODE_* / MCP_* を外しておく。
         env: { ...sanitizeClaudeSupervisorEnv(process.env), CLAUDE_HEADLESS: '1', ORGIAST_HEADLESS_JOB: runOptions.headlessJob || (codex ? 'auto-session:codex-do' : cheap ? `auto-session:cheap-code:${cheapProvider}` : 'auto-session:fallback-claude') }, stdio: [cheap || codex ? 'ignore' : 'pipe', 'pipe', 'pipe'], windowsHide: true }); }

@@ -18,7 +18,7 @@ code --install-extension orgiast-next-session-0.3.9.vsix --force
 
 待機数の決定順は、環境変数 `CLAUDE_MOBILE_STANDBY` → `~/.claude/mobile-sessions.json` の `{"count": 3}` → VS Code 設定 `orgiast.nextSession.mobileTabs` → 3 です（1〜10本）。`mobileTabs=0` は起動時の補充を無効化する既存の設定として残します。
 
-タブの作成は、`claude-vscode.newConversation` → `claude-vscode.editor.open` → `vscode://Anthropic.claude-code/open`（`vscode.env.openExternal`）の順に試し、各手段で5秒以内にタブ総数が増えた時点で成功とします。成功した手段は次回最初に試します（タブ0本の初回のみ `editor.open` を先頭にします）。失敗しても `pendingTabCount` で止まらず、失敗から30秒で再試行し、連続5回失敗で10分休止、1時間あたり最大20回までです。Output「Orgiast Next Session」には、値が変わったときと作成を試したときだけ、ISO時刻・手段名・前後のタブ総数・新しく増えたタブのラベルを出力します（状態ファイルは従来どおり5秒ごとに更新）。
+タブの作成は `externalUri`（`vscode.env.openExternal`）だけを使います。実行後に Claude タブが減少したら、その拡張ホストが終了するまで補充を停止します。失敗しても `pendingTabCount` で止まらず、失敗から30秒で再試行し、連続5回失敗で10分休止、1時間あたり最大20回までです。Output「Orgiast Next Session」には、値が変わったときと作成を試したときだけ、ISO時刻・手段名・前後のタブ総数・新しく増えたタブのラベルを出力します（状態ファイルは従来どおり5秒ごとに更新）。
 
 `node tools/mobile-sessions.mjs --count 1` でも URI 経由で補充できます。`--name` は呼出元との互換性のため受け付けますが、タブの改名はしません。公式拡張2.1.278では改名コマンドが入力ダイアログを開き、固定タイトルは使用開始の検出も妨げるためです。待機判定は公式拡張の空セッション名 `Claude Code` に基づきます。待機タブに手動で固定名を付けないでください。旧版が改名済みのタブの未使用判定はできません。
 
@@ -31,7 +31,7 @@ URI、起動時、タブ変更、5秒ごとの補充は同じ処理で直列化�
 スマホの Claude Code（Remote Control）一覧は新しい順に並ぶため、何時間も前に作った待機タブは下に沈んで見つかりません。待機セッションに発言させると消費してしまうので、代わりに**古い待機タブ（ラベル `Claude Code`）を 1 本閉じ、補充で新しい待機タブを作り直します**（新セッションとして登録され直し、一覧の上に出ます）。
 
 - 条件（ownership を持つウィンドウだけ、1 分ごとに判定）: 有効、時間帯内、前回から間隔以上、待機タブが目標数以上（不足中は補充を優先して何もしません）。
-- 対象は待機タブのうち最古の 1 本です。古さは拡張が記録したタブ出現時刻（起動時に既存タブは起動時刻）で判定し、出現から 10 分未満のタブと、いま開いている（アクティブな）タブは対象外です。
+- 対象は、この拡張ホストが開いて所有記録に残っており、ラベルが `Claude Code` のままの待機タブのうち最古の 1 本です。古さは拡張が記録したタブ出現時刻（起動時に既存タブは起動時刻）で判定し、出現から 10 分未満のタブと、いま開いている（アクティブな）タブは対象外です。
 - 実行時は Output に `mobile refresh closed=<ラベル> age=<分> waitingBefore=<本数>` を出し、状態ファイルへ `lastRefreshAt` を保存します。`node tools/mobile-sessions.mjs --dry-run` が「最終リフレッシュ」を表示します。
 - 即時実行: `node tools/mobile-sessions.mjs --refresh`（`--count` と併用可、URI は `/mobile?refresh=1`）。時間帯・間隔の条件は無視しますが、10 分未満除外と不足中の除外は維持します。
 
@@ -47,6 +47,10 @@ URI、起動時、タブ変更、5秒ごとの補充は同じ処理で直列化�
 この変更はタブの補充を担当します。別の `claude-mobile` サーバーやスケジュールタスクを停止・変更しません。実機の補充・定期リフレッシュには同梱0.3.9 VSIXの導入が必要です。
 
 URI は外部プロセスやブラウザからも開けるため、`claude` パラメータは実在する絶対パスかつファイル名が `claude` / `claude.exe` の場合だけ実行します。
+
+## 0.4.2
+所有記録未指定時の閉鎖を禁止し、余剰間引きを1回1本に制限。タブ減少時の停止と所有タブ限定を回帰テストで検証。
+補充に `externalUri`（`vscode://Anthropic.claude-code/open`）だけを使う。`editorOpen`／`newConversation` は**作業中のセッションタブを閉じる危険があるため補充経路から完全に除外**（2026-11-13 実害: 待機タブ補充が 19→0 タブにし全セッション切断）。加えて、どの方式でもタブ総数が減ったらその exthost の生存中は補充を停止する安全装置を追加。リフレッシュ・間引きはこの拡張が開いたタブだけを閉じ、自分で開いていない `Claude Code` ラベルのタブは絶対に閉じない。間引きは 1 回 1 本まで。
 
 ## 0.3.10
 VS Code 再起動時に「アーカイブ済み・クローズ済み」の Claude Code タブが大量復元される問題を修正します。起動 15 秒後・5 分ごとに VS Code 状態 DB を読み取り、アーカイブ（`hiddenSessionIds`）またはクローズ（`closed-sessions.json`）のセッション ID を持つ Claude タブを自動で閉じます。アクティブ・ピン留め・未保存タブは絶対に閉じません。設定 `orgiast.nextSession.closeArchivedTabs`（既定 true）で無効化できます。VS Code 内蔵 Node に sqlite が無い前提で外部 `node` プロセス経由で DB を読みます。

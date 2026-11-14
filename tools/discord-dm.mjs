@@ -54,6 +54,9 @@ export async function sendDiscordDm(target, body, options = {}) {
   if (!options.noCopyKim && !isKim) copyToKim = isKimSeat(home) ? 'in-session' : 'session-inbox';
   const finalBody = isKim || options.noReplyFooter ? String(body ?? '').trimEnd() : withReplyToKimFooter(body);
   const content = safeContent(finalBody);
+  // 秘匿除去で本文が変わる場合は送らず停止（切り詰めだけの変化は対象外）
+  const redactedOnly = redactSecrets(finalBody).replace(/([?&]Authorization=)[^&\s]+/gi, '$1[REDACTED]');
+  if (redactedOnly !== finalBody) throw new Error('秘密値は DM では送れません。本文から秘密値を外し、別の経路（Drive の限定共有ドキュメントなど）で渡してください');
   if (options.requireFullBody && content !== finalBody) throw new Error('報告全文がDiscord本文上限または秘匿値除去で変わるため送信を停止しました');
   if (options.dryRun) return { dryRun: true, recipient, content, copyToKim, ...(inbox ? { delivered: 'session-inbox' } : {}) };
   if (inbox) {
@@ -84,10 +87,11 @@ export async function sendDiscordDm(target, body, options = {}) {
       if (!history.ok) throw new Error(`Discord 履歴取得が HTTP ${history.status}`);
       return latestOf((await history.json()).map(m => ({ id: m.id, at: m.timestamp })));
     }});
+    options.onMessageAttempt?.();
     const sent = await fetchImpl(`${API}/channels/${channelId}/messages`, {
       method: 'POST', headers, body: JSON.stringify({ content: message }),
     });
-    if (!sent.ok) throw new Error(`DM送信が HTTP ${sent.status}`);
+    if (!sent.ok) throw Object.assign(new Error(`DM送信が HTTP ${sent.status}`), { deliveryUncertain: sent.status >= 500 });
     const sentMessage = await sent.json();
     recordOutbound({ channel: 'discord', target: channelId, text: body, messageId: sentMessage.id }, home);
     return { channelId, messageId: sentMessage.id };

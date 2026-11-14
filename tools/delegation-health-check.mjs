@@ -158,7 +158,7 @@ function reasonTop(rows) {
 // 2026-09-11 実測: 404秒/487秒で打ち切られた実行は rollout ログ上は tsc 実行など実作業の途中だった。
 // codex は WSL の名前解決失敗などで、セッションを作る前に exit 1 / 出力ゼロで死ぬことがある。
 // これは codex 本体の故障ではなく一過性のインフラ障害で、codex-do 側の再試行で回復する。
-const INFRA_TRANSIENT = /failed to lookup address information|failed to connect to websocket|stream error|connection reset|i\/o timeout|dns|failed to record rollout items|thread [0-9a-f-]{8,} not found/i;
+const INFRA_TRANSIENT = /failed to lookup address information|failed to connect to websocket|stream error|connection reset|i\/o timeout|dns|failed to record rollout items|thread [0-9a-f-]{8,} not found|workspace routing discovery (?:failed|timed out)/i;
 
 // WSL のディストリが1つも無い PC では codex レーンを環境修復する必要がある。
 // 「そもそも走っていない」の中でも、コードで直せる起動失敗(codex_launch_failed)と分けて扱う

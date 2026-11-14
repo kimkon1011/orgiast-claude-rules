@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createPool, createOwnershipLease, readConfig, readSnapshot, isWorktreeFolder, decideWorktreeCleanup, REFRESH_MIN_AGE_MS } = require('./mobile-pool');
+const { createPool, createOwnershipLease, readConfig, readSnapshot, isWorktreeFolder, decideRefresh, decideWorktreeCleanup, REFRESH_MIN_AGE_MS, AUTO_TITLE_RE, isWaitingTab, decideTrimExcess } = require('./mobile-pool');
 
 // git worktree を模した一時フォルダ（.git ファイルが gitdir: .../worktrees/... を指す）
 function makeWorktree(t) {
@@ -40,11 +40,11 @@ test('isWorktreeFolder: \\.claude\\worktrees\\ パス・.git ファイル・祖�
 test('decideWorktreeCleanup: 起動時は未使用待機タブを古さ不問で 1 本閉じる', () => {
   const now = 1000000;
   const tabs = [
-    { label: 'Claude Code', appearedAt: now - 60000, isActive: false, id: 'unused' },
-    { label: 'Claude Code', appearedAt: now - 500000, isActive: false, id: 'other' },
+    { tab: {}, label: 'Claude Code', appearedAt: now - 60000, isActive: false, id: 'unused' },
+    { tab: {}, label: 'Claude Code', appearedAt: now - 500000, isActive: false, id: 'other' },
     { label: '作業中', appearedAt: now - 999999, isActive: false, id: 'used' },
   ];
-  const decision = decideWorktreeCleanup({ tabs, now, startup: true });
+  const decision = decideWorktreeCleanup({ tabs, now, openedTabs: new Set(tabs.map(t => t.tab)), startup: true });
   // 最古の待機タブを選ぶ（作業中タブは対象外）
   assert.equal(decision.id, 'other');
 });
@@ -52,14 +52,14 @@ test('decideWorktreeCleanup: 起動時は未使用待機タブを古さ不問で
 test('decideWorktreeCleanup: 定期は 10 分未満・アクティブ・会話中タブは閉じない', () => {
   const now = 1000000;
   const tabs = [
-    { label: 'Claude Code', appearedAt: now - 5 * 60000, isActive: false, id: 'young' },
-    { label: 'Claude Code', appearedAt: now - 300 * 60000, isActive: true, id: 'active' },
+    { tab: {}, label: 'Claude Code', appearedAt: now - 5 * 60000, isActive: false, id: 'young' },
+    { tab: {}, label: 'Claude Code', appearedAt: now - 300 * 60000, isActive: true, id: 'active' },
     { label: '実際の仕事', appearedAt: now - 999 * 60000, isActive: false, id: 'conversation' },
   ];
-  assert.equal(decideWorktreeCleanup({ tabs, now, startup: false }), null);
+  assert.equal(decideWorktreeCleanup({ tabs, now, openedTabs: new Set(tabs.map(t => t.tab)), startup: false }), null);
   // 10 分以上・非アクティブな待機タブがあれば選ぶ
-  tabs.push({ label: 'Claude Code', appearedAt: now - 11 * 60000, isActive: false, id: 'old' });
-  assert.equal(decideWorktreeCleanup({ tabs, now, startup: false }).id, 'old');
+  tabs.push({ tab: {}, label: 'Claude Code', appearedAt: now - 11 * 60000, isActive: false, id: 'old' });
+  assert.equal(decideWorktreeCleanup({ tabs, now, openedTabs: new Set(tabs.map(t => t.tab)), startup: false }).id, 'old');
   assert.equal(REFRESH_MIN_AGE_MS, 10 * 60000);
 });
 
@@ -174,4 +174,133 @@ test('config order: env > JSON > fallback (VS Code setting) > 3', (t) => {
   fs.writeFileSync(path.join(home, '.claude', 'mobile-sessions.json'), '{"count":2}');
   assert.equal(readConfig(home, {}, 4), 2);
   assert.equal(readConfig(home, { CLAUDE_MOBILE_STANDBY: '3' }, 4), 3);
+});
+
+// --- 自タブ（openedTabs）フィルタのテスト ---
+const MIN = 60000;
+const REFRESH_NOW = 1_000_000_000_000;
+function refreshTab(ageMin, extra = {}) {
+  return { label: 'Claude Code', appearedAt: REFRESH_NOW - ageMin * MIN, isActive: false, tab: extra.tab || {}, ...extra };
+}
+
+test('decideRefresh は openedTabs のタブだけ候補にする', () => {
+  const selfTab = {};
+  const otherTab = {};
+  const base = { now: REFRESH_NOW, minutes: 60, hoursOk: true, lastRefreshAt: null, target: 1 };
+  // 自分で開いたタブだけ候補になる
+  const result1 = decideRefresh({
+    ...base,
+    tabs: [refreshTab(100, { tab: selfTab }), refreshTab(200, { tab: otherTab })],
+    openedTabs: new Set([selfTab]),
+  });
+  assert.equal(result1.refresh, true);
+  assert.equal(result1.tab.tab, selfTab);
+  // 自分のタブが無ければ no-candidate
+  const result2 = decideRefresh({
+    ...base,
+    tabs: [refreshTab(100, { tab: otherTab })],
+    openedTabs: new Set([selfTab]),
+  });
+  assert.equal(result2.refresh, false);
+  assert.equal(result2.reason, 'no-candidate');
+});
+
+test('decideWorktreeCleanup は openedTabs のタブだけ候補にする', () => {
+  const selfTab = { id: 'self' };
+  const otherTab = { id: 'other' };
+  const tabs = [
+    { label: 'Claude Code', appearedAt: REFRESH_NOW - 300 * MIN, isActive: false, tab: selfTab },
+    { label: 'Claude Code', appearedAt: REFRESH_NOW - 200 * MIN, isActive: false, tab: otherTab },
+  ];
+  // 自分のタブだけが候補
+  const result1 = decideWorktreeCleanup({
+    tabs, now: REFRESH_NOW, startup: true,
+    openedTabs: new Set([selfTab]),
+  });
+  assert(result1 !== null);
+  assert.equal(result1.tab, selfTab);
+  // 自分のタブが無ければ null
+  const result2 = decideWorktreeCleanup({
+    tabs, now: REFRESH_NOW, startup: true,
+    openedTabs: new Set([]),
+  });
+  assert.equal(result2, null);
+});
+
+test('decideRefresh は openedTabs 無指定なら閉鎖しない', () => {
+  const result = decideRefresh({
+    now: REFRESH_NOW, minutes: 60, hoursOk: true, lastRefreshAt: null, target: 1,
+    tabs: [refreshTab(100)],
+  });
+  assert.equal(result.refresh, false);
+});
+
+test('decideWorktreeCleanup は openedTabs 無指定なら閉鎖しない', () => {
+  const result = decideWorktreeCleanup({
+    tabs: [{ label: 'Claude Code', appearedAt: REFRESH_NOW - 300 * MIN, isActive: false, tab: {} }],
+    now: REFRESH_NOW, startup: true,
+  });
+  assert.equal(result, null);
+});
+
+test('AUTO_TITLE_RE source is byte-identical in tools/sync-remote-titles.mjs and mobile-pool.js', async () => {
+  const toolsModule = await import('../../tools/sync-remote-titles.mjs');
+  assert.equal(toolsModule.AUTO_TITLE_RE.source, AUTO_TITLE_RE.source);
+});
+
+test('isWaitingTab recognizes Claude Code and auto title patterns', () => {
+  assert.equal(isWaitingTab('Claude Code'), true);
+  assert.equal(isWaitingTab({ label: 'Claude Code' }), true);
+  assert.equal(isWaitingTab('018-resilient-steele'), true);
+  assert.equal(isWaitingTab('018|resilient-steele'), true);
+  assert.equal(isWaitingTab('018｜resilient-steele'), true);
+  assert.equal(isWaitingTab('remote-control-mossy-island'), true);
+  assert.equal(isWaitingTab('2026年10月の重大脆弱性への対応'), false);
+  assert.equal(isWaitingTab({ label: '018のバグ修正について' }), false);
+});
+
+test('decideTrimExcess: 待機タブ数が target 超過の時、10分以上経った会話なし・非アクティブな待機タブを古い順に閉じる', () => {
+  const now = 1000000000;
+  const target = 3;
+
+  // 1. 53 本あっても 1 回の実行で閉じるのは最大 10 本、古い順、target は残す
+  const excessTabs = Array.from({ length: 53 }, (_, i) => ({
+    id: i,
+    label: i % 2 === 0 ? '018-resilient-steele' : 'Claude Code',
+    appearedAt: now - (5000000 + i * 1000), // id 52 ほど新しい
+    isActive: false,
+    hasUserMessage: false,
+  }));
+
+  const toClose = decideTrimExcess({ tabs: excessTabs, target, now });
+  assert.equal(toClose.length, 10);
+  // 古い順なので appearedAt が一番小さなもの（52 が一番古い: now - (5000000 + 52000)）
+  assert.equal(toClose[0].id, 52);
+  assert.equal(toClose[9].id, 43);
+
+  // 2. 5 本から 2 本削って target 3 本残す
+  const smallPool = [
+    { id: 't1', label: '018-a-b', appearedAt: now - 20 * 60000, isActive: false, hasUserMessage: false },
+    { id: 't2', label: 'Claude Code', appearedAt: now - 18 * 60000, isActive: false, hasUserMessage: false },
+    { id: 't3', label: '018-c-d', appearedAt: now - 15 * 60000, isActive: false, hasUserMessage: false },
+    { id: 't4', label: 'Claude Code', appearedAt: now - 12 * 60000, isActive: false, hasUserMessage: false },
+    { id: 't5', label: '018-e-f', appearedAt: now - 11 * 60000, isActive: false, hasUserMessage: false },
+  ];
+  const trimSmall = decideTrimExcess({ tabs: smallPool, target: 3, now });
+  assert.equal(trimSmall.length, 2);
+  assert.deepEqual(trimSmall.map(t => t.id), ['t1', 't2']);
+
+  // 3. 除外条件: アクティブ、10分未満、会話あり(hasUserMessage=true/undefined) は閉じない
+  const mixedTabs = [
+    { id: 'active', label: '018-a-b', appearedAt: now - 30 * 60000, isActive: true, hasUserMessage: false },
+    { id: 'young', label: 'Claude Code', appearedAt: now - 5 * 60000, isActive: false, hasUserMessage: false },
+    { id: 'hasMsg', label: '018-c-d', appearedAt: now - 30 * 60000, isActive: false, hasUserMessage: true },
+    { id: 'unknown', label: '018-e-f', appearedAt: now - 30 * 60000, isActive: false, hasUserMessage: undefined },
+    { id: 'ok1', label: 'Claude Code', appearedAt: now - 25 * 60000, isActive: false, hasUserMessage: false },
+    { id: 'ok2', label: '018-x-y', appearedAt: now - 20 * 60000, isActive: false, hasUserMessage: false },
+  ];
+  const trimMixed = decideTrimExcess({ tabs: mixedTabs, target: 3, now });
+  // 待機 6 本 > target 3 -> 超過 3 本だが条件を満たすのは ok1, ok2 の 2 本だけ
+  assert.equal(trimMixed.length, 2);
+  assert.deepEqual(trimMixed.map(t => t.id), ['ok1', 'ok2']);
 });

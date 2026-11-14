@@ -1,0 +1,25 @@
+{"id":"b001","category":"title","prompt":"展示会「テクノロジー未来展2027」に出展するブースのタイトルを3案考えてください。ブースではAI活用による製造業の品質管理デモを予定しています。ターゲットは製造業の品質管理部門長です。","expectedRoute":"simple"}
+{"id":"b002","category":"title","prompt":"建材展示会「住まいの未来フェア」のブースタイトルを3案。出展内容は環境配慮型の外壁材と断熱材の実物展示と相談コーナー。","expectedRoute":"simple"}
+{"id":"b003","category":"title","prompt":"食品業界向け展示会「FOOD TECH JAPAN」のブースタイトル。内容はAI画像認識による食品品質検査デモ。ターゲットは食品工場の品質管理部門。","expectedRoute":"simple"}
+{"id":"b004","category":"title","prompt":"医療機器展示会「MEDIX 2027」のブースタイトル案。展示内容は手術支援ロボットの遠隔操作デモとパネル展示。ターゲットは病院の医療機器担当者。","expectedRoute":"simple"}
+{"id":"b005","category":"title","prompt":"スタートアップ向け展示会「STARTUP EXPO 2027」のブースタイトル。出展はAIチャットボットサービス。ターゲットは経営企画部門。","expectedRoute":"simple"}
+{"id":"b006","category":"catchphrase","prompt":"高精度AI品質検査デモを行うブースのキャッチコピーを30字以内で3案。","expectedRoute":"simple"}
+{"id":"b007","category":"catchphrase","prompt":"環境配慮型外壁材を展示するブースのキャッチコピーを20字以内で3案。","expectedRoute":"simple"}
+{"id":"b008","category":"catchphrase","prompt":"手術支援ロボットの遠隔操作デモを行うブースのキャッチコピーを25字以内で3案。","expectedRoute":"simple"}
+{"id":"b009","category":"catchphrase","prompt":"AIチャットボットサービスを展示するブースのキャッチコピーを15字以内で3案。","expectedRoute":"simple"}
+{"id":"b010","category":"summary","prompt":"テクノロジー未来展2027に出展するブースの企画概要を200字以内で要約してください。AI画像認識による製造業品質管理の実演デモを中心に、来場者に具体的な導入イメージを持ってもらうことが目的です。展示スペースは6m×6mの小間です。","expectedRoute":"medium"}
+{"id":"b011","category":"summary","prompt":"「住まいの未来フェア」のブース企画を150字で要約。環境配慮型外壁材の実物サンプル展示、断熱性能の体感コーナー、リフォーム相談カウンターの3本柱。","expectedRoute":"medium"}
+{"id":"b012","category":"summary","prompt":"FOOD TECH JAPAN のブース企画要約。AI画像認識による異物検査・品質グレーディングの実演を中心に、実際の食品ラインでの導入事例をパネル展示。ターゲットは食品工場の品質管理責任者。","expectedRoute":"medium"}
+{"id":"b013","category":"summary","prompt":"MEDIX 2027 のブース企画要約。手術支援ロボットの遠隔操作デモ（来場者体験可）、導入実績パネル、医師によるミニレクチャー（1日3回）を組み合わせた構成。","expectedRoute":"medium"}
+{"id":"b014","category":"summary","prompt":"STARTUP EXPO 2027 のブース企画を180字で要約。AIチャットボットのライブデモと導入事例紹介、無料トライアル登録ブース。予算は中規模スタートアップ想定。","expectedRoute":"medium"}
+{"id":"b015","category":"spec","prompt":"10m×10mの展示会ブース設計仕様書を作成してください。壁面は3面、来場者導線は左奥から右手前への一方通行。必要な設備：大型モニター（86型）1台、商談テーブル2セット、展示什器3台、パネル4枚。ブランドカラーは青系。予算250万円。","expectedRoute":"complex"}
+{"id":"b016","category":"spec","prompt":"6m×3mの小間ブース設計仕様書。壁面は背面1面のみ、前面オープン。設備：タブレット台3台、スツール3脚、パネル2枚、デモ用カウンター1台。ブランドカラーは白とグリーン。予算80万円。","expectedRoute":"complex"}
+{"id":"b017","category":"spec","prompt":"18m×12mの大型ブース設計仕様書。2層構造（2階は商談スペースとラウンジ）。必要な設備：大型LEDビジョン（横6m）1面、個別商談ブース4室、カフェカウンター、収納スペース。ブランドカラーは黒と金。予算1200万円。","expectedRoute":"complex"}
+{"id":"b018","category":"spec","prompt":"8m×8mの体験型ブース設計仕様書。中央に体験スペースを配置し、外周に展示・商談エリアを設ける回遊型。設備：VR体験コーナー（3m×3m）、タッチパネル2台、商談テーブル2セット。ブランドカラーは赤系。予算400万円。","expectedRoute":"complex"}
+{"id":"b019","category":"spec","prompt":"自動車展示会の12m×15mブース設計仕様書。実車展示台（ターンテーブル付き）1基、来場者導線は時計回り。設備：大型LED×2面、インタラクティブパネル4台、商談ブース3室。ブランドカラーはシルバーとブルー。予算2000万円。","expectedRoute":"complex"}
+{"id":"b020","category":"spec","prompt":"IT展示会の9m×9mブース設計仕様書。ミニマルデザインで機材は最小限。設備：大型モニター65型1台、ロングカウンター（4m）、ハイスツール6脚、プロジェクター1台。ブランドカラーは白とライトグレー。予算150万円。","expectedRoute":"complex"}
+{"id":"b021","category":"description","prompt":"ブース内の「AI品質検査デモコーナー」の説明文を100字程度で書いてください。実際の製造ラインで使われているAIカメラ検査のライブデモを行い、不良品検出の精度と速度を来場者に体感してもらうコーナーです。","expectedRoute":"medium"}
+{"id":"b022","category":"description","prompt":"「環境配慮建材展示コーナー」の説明文。外壁材と断熱材のサンプルに触れながら、断熱性能の違いを体感できる比較展示。","expectedRoute":"medium"}
+{"id":"b023","category":"description","prompt":"「VR手術体験コーナー」の説明文を80字程度で。手術支援ロボットの操作をVRシミュレーターで体験できる。所要時間約5分。事前予約制。","expectedRoute":"medium"}
+{"id":"b024","category":"description","prompt":"「導入事例パネル展示エリア」の説明文。6社の導入事例をパネルとタブレットで紹介。業種別・規模別にフィルターできる検索機能付き。","expectedRoute":"medium"}
+{"id":"b025","category":"description","prompt":"「商談スペース」の説明文を60字程度。完全個室の商談ブース4室。1室あたり4人掛けテーブルとモニター完備。予約優先・空きは随時対応。","expectedRoute":"medium"}

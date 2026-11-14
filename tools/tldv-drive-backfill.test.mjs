@@ -311,3 +311,32 @@ test('--all mode exit code: non-403 failure returns 1', async () => {
   const all403 = Object.keys(result.reasons).every(r => r.endsWith('http-403'));
   assert.equal(all403, false);
 });
+
+test('non---all mode: 403-only failures return 0, other failures return 1', async () => {
+  // 403-only → exit 0
+  let client = {
+    listMeetings: async () => [{ id: 'a', happenedAt: '2026-11-04T15:30:00Z', name: 'a', invitees: [] }],
+    findExisting: async () => undefined,
+    transcript: async () => { throw new BackfillError('tldv-http-403'); },
+    notes: async () => notes,
+    createDocument: async () => ({}),
+  };
+  let result = await runBackfill({ client, out: quiet, stateFile: null });
+  assert.equal(result.failed, 1);
+  assert.ok(Object.keys(result.reasons).every(r => r.endsWith('http-403')));
+  const all403 = Object.keys(result.reasons).every(r => r.endsWith('http-403'));
+  assert.equal(all403, true);
+
+  // mixed failure → exit 1
+  client = {
+    listMeetings: async () => [{ id: 'a', happenedAt: '2026-11-04T15:30:00Z', name: 'a', invitees: [] }, { id: 'b', happenedAt: '2026-11-04T15:30:00Z', name: 'b', invitees: [] }],
+    findExisting: async () => undefined,
+    transcript: async (id) => { if (id === 'a') throw new BackfillError('tldv-http-403'); throw new BackfillError('tldv-http-500'); },
+    notes: async () => notes,
+    createDocument: async () => ({}),
+  };
+  result = await runBackfill({ client, out: quiet, stateFile: null });
+  assert.equal(result.failed, 2);
+  const mixed403 = Object.keys(result.reasons).every(r => r.endsWith('http-403'));
+  assert.equal(mixed403, false);
+});

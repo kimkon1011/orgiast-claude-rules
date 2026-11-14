@@ -1,6 +1,12 @@
 {
   "version": 1,
   "entries": [
+    {"path":"tools/register-secretary-uptime.ps1","scope":"kim-only","reason":"kim-PCの秘書ゲートウェイ3939と秘書3940を監視するタスク登録。他PCには登録しない"},
+    {"path":"tools/secretary-uptime-registration.test.ps1","scope":"kim-only","reason":"秘書監視の登録結果をmockで検証するテスト。実タスクは作成しない"},
+    {"path":"tools/lib/external-monitor-state.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"外部返信待ちの宛先照合・重複排除・永続再開キュー"},
+    {"path":"tools/lib/send-context.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"Stop hookが同一セッションの送信成功記録を照合する依存"},
+    {"path":"tools/auto-progress-external-monitor.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"LINE/Gmail新着の継続監視と元セッション再開"},
+    {"path":"tools/auto-progress-external-check.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"外部チャネルの読み取り専用新着取得"},
     {"path": "tools/lib/fleet-poll-budget.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "Bounded mail transport and rotating asynchronous receipt scans"},
     {"path": "tools/lib/fleet-poll-reaper.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "Bounded recovery of stale scheduled poll processes before poll and watchdog work"},
     {"path": "tools/lib/fleet-poll-reaper.ps1", "scope": "fleet", "step": "task:fleet-mail", "reason": "Windows process identity checks and exact-command stale poll recovery helper"},
@@ -71,6 +77,7 @@
     {"path": "config/kim-discord-allowlist.json", "scope": "fleet", "step": "task:fleet-mail", "reason": "kim-inbox の通知・回収・許可リストを全PCへ配布する実行時依存"},
     {"path": "tools/lib/fleet-selfcheck-prompt.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "固定の読み取り専用自己点検と受信runnerの実行時依存。通常のconverge配布に含める"},
     {"path": "tools/fleet-task-runner.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "固定の読み取り専用自己点検と受信runnerの実行時依存。通常のconverge配布に含める"},
+    {"path": "tools/lib/auto-resume-policy.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "fleet-task-runner 等が参照する自動再開ポリシー。通常のconverge配布に含める"},
     {"path": "tools/fleet-selfcheck.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "固定の読み取り専用自己点検と受信runnerの実行時依存。通常のconverge配布に含める"},
     {"path":"tools/lib/progress-file-lock.mjs","scope":"fleet","step":"task:auto-progress-watch","reason":"日次進捗と停止PR巡回の並行実行・異常終了からの回復"},
     {"path": "tools/stuck-pr-sweeper.mjs", "scope": "kim-only", "step": "task:stuck-pr-sweeper", "reason": "kim-PCだけが停止PRの修復を実行し二重修正を防ぐ"},
@@ -82,6 +89,7 @@
     {"path": "tools/register-daytrip-detect-task.mjs", "scope": "kim-only", "step": "task:daytrip-detect", "reason": "convergeからkim-PC用PowerShell登録をEnsureで呼ぶ"},
     {"path": "tools/register-meet-recorder-invite-task.ps1", "scope": "kim-only", "step": "task:meet-recorder-invite", "reason": "kimのMeet予定にseisaku-teamを自動招待。LINE受信ホストだけで登録"},
     {"path": "tools/register-meet-recorder-invite-task.mjs", "scope": "kim-only", "step": "task:meet-recorder-invite", "reason": "convergeからkim-PC用PowerShell登録をEnsureで呼ぶ"},
+    {"path": "tools/register-meet-cue-scheduler-task.ps1", "scope": "kim-only", "reason": "Meet カンペ Bot は kim-PC(seatHostname) だけで動かす。他PCで二重参加させない"},
     {"path": "tools/daytrip-ask-hook.mjs", "scope": "fleet", "step": "hook:daytrip-ask", "reason": "日帰り出張のセッション内確認。全PCへconvergeで配布しpendingがないPCでは無出力"},
     {"path": "tools/lib/share-secrets.mjs", "scope": "fleet", "step": "task:fleet-mail", "reason": "memory-share と案件会話保存で共通の秘密情報除去"},
     {"path": "tools/case-handoff.mjs", "scope": "fleet", "step": "settings:case-handoff-sessionstart", "reason": "案件履歴の保存・再開。kim操作アカウントのみ実行"},
@@ -133,6 +141,12 @@
     },
     {
       "path": "packages/feedback-widget",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
+      "path": "packages/ai-reliability",
       "scope": "kim-only",
       "step": null,
       "reason": "要確認"
@@ -606,6 +620,12 @@
       "reason": "要確認"
     },
     {
+      "path": "tools/register-discord-beeper-autoreply.ps1",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "Beeper 経由 Discord 自動返信のタスク登録。Beeper は kim-PC のみ設定"
+    },
+    {
       "path": "tools/register-discord-task-digest.ps1",
       "scope": "kim-only",
       "step": null,
@@ -965,6 +985,12 @@
       "reason": "fleet-mail 通知・提示 hook の実行時 import 依存（再帰検査対象）"
     },
     {
+      "path": "tools/lib/windows-process.mjs",
+      "scope": "fleet",
+      "step": "task:fleet-mail",
+      "reason": "claude-exe.mjs などの Windows プロセス計測・Claude CLI 判定の実行時 import 依存"
+    },
+    {
       "path": "tools/codex-auth-status.mjs",
       "scope": "fleet",
       "step": "task:fleet-mail",
@@ -1185,6 +1211,18 @@
       "scope": "fleet",
       "step": "nightly-reload-vscode",
       "reason": "全PCのログオン時に起動し、RC API 経由で host_exit セッションを検出・再オープンする"
+    },
+    {
+      "path": "tools/claude-priority-guard.mjs",
+      "scope": "fleet",
+      "step": "nightly-reload-vscode",
+      "reason": "全PCで claude.exe を BelowNormal にして他アプリの応答性を保つ"
+    },
+    {
+      "path": "tools/register-claude-priority-guard.ps1",
+      "scope": "fleet",
+      "step": "nightly-reload-vscode",
+      "reason": "全PCで claude.exe を BelowNormal にして他アプリの応答性を保つ"
     },
     {
       "path": "tools/fleet-question-relay.mjs",

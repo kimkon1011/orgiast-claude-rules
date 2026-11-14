@@ -2,6 +2,7 @@
 // Historical tl;dv -> Google Docs. Only tl;dv and Drive; no LLM or deletion.
 import os from 'node:os';
 import path from 'node:path';
+import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -9,6 +10,7 @@ import { isEntry } from './is-entry.mjs';
 export const CUTOFF = '2026-11-05T07:20:00Z';
 export const FOLDER_ID = '1-X9Q3tD2BaGONEbYDn6LShgLpeO2rMJX';
 export const IMPERSONATE = 'seisaku-team@orgiast.jp';
+export const STATE_FILE = path.join(os.homedir(), '.claude', 'logs', 'tldv-drive-sync-state.json');
 const TLDV_BASE = 'https://pasta.tldv.io';
 const DRIVE_BASE = 'https://www.googleapis.com/drive/v3/files';
 const DOC_MIME = 'application/vnd.google-apps.document';
@@ -58,8 +60,14 @@ export async function requestJson(url, init = {}, {
     }
     if (response.ok) {
       if (response.status === 204) return null;
-      try { return await response.json(); }
-      catch { throw new BackfillError(`${label}-invalid-json`); }
+      const text = await response.text();
+      try { return JSON.parse(text); }
+      catch (parseError) {
+        // 60KB 超の文字起こしで response.json() が chunked transfer により失敗することがある。
+        // text() で生テキストを読んでからパースし、不可なら長さと先頭を添えて報告する。
+        const preview = text.slice(0, 200).replace(/[\x00-\x1f\x7f-\x9f]/g, '?');
+        throw new BackfillError(`${label}-invalid-json:${text.length}:${preview.slice(0, 80)}`);
+      }
     }
     const status = response.status;
     const retryAfter = response.headers?.get('retry-after');
@@ -207,7 +215,20 @@ export function createClient({ apiKey, getToken, fetchImpl = fetch, driveFetch =
   };
 }
 
-export async function runBackfill({ client, limit = Infinity, dryRun = false, all = false, out = console.log }) {
+/** 状態台帳を読み込む。無ければ空オブジェクト。 */
+export function readState() {
+  try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); }
+  catch { return {}; }
+}
+/** 状態台帳を atomically に書き込む */
+function writeState(state) {
+  fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+  const tmp = STATE_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(state));
+  fs.renameSync(tmp, STATE_FILE);
+}
+
+export async function runBackfill({ client, limit = Infinity, dryRun = false, all = false, out = console.log, stateFile = STATE_FILE } = {}) {
   let targets;
   if (all) {
     targets = await client.listMeetingsAll({ findExisting: client.findExisting });
@@ -218,6 +239,8 @@ export async function runBackfill({ client, limit = Infinity, dryRun = false, al
       .sort((a, b) => Date.parse(a.happenedAt) - Date.parse(b.happenedAt) || a.id.localeCompare(b.id)).slice(0, limit);
   }
   const summary = { created: 0, existing: 0, empty: 0, failed: 0, planned: 0, reasons: {}, files: [] };
+  const state = stateFile ? readState(stateFile) : {};
+  const now = new Date().toISOString();
   out(`取得 / 対象 ${targets.length}${dryRun ? '（dry-run）' : ''}${all ? '（--all）' : ''}`);
   let cursor = 0, completed = 0;
   const reason = code => { summary.reasons[code] = (summary.reasons[code] || 0) + 1; };
@@ -226,10 +249,18 @@ export async function runBackfill({ client, limit = Infinity, dryRun = false, al
       const meeting = targets[cursor++];
       let stage = 'existing';
       try {
-        if (await client.findExisting(meeting.id)) { summary.existing++; continue; }
+        if (await client.findExisting(meeting.id)) {
+          summary.existing++;
+          state[meeting.id] = { status: 'existing', at: now };
+          continue;
+        }
         stage = 'transcript';
         const transcript = transcriptText(await client.transcript(meeting.id));
-        if (!transcript) { summary.empty++; reason('transcript-empty'); continue; }
+        if (!transcript) {
+          summary.empty++; reason('transcript-empty');
+          state[meeting.id] = { status: 'empty', at: now };
+          continue;
+        }
         stage = 'notes';
         const notes = notesText(await client.notes(meeting.id));
         stage = 'create';
@@ -239,8 +270,13 @@ export async function runBackfill({ client, limit = Infinity, dryRun = false, al
           const file = await client.createDocument(meeting, content);
           summary.created++;
           summary.files.push({ meetingId: meeting.id, ...file });
+          state[meeting.id] = { status: 'created', at: now };
         }
-      } catch (error) { summary.failed++; reason(`${stage}:${safeReason(error)}`); }
+      } catch (error) {
+        summary.failed++; reason(`${stage}:${safeReason(error)}`);
+        const is403 = safeReason(error).endsWith('-http-403');
+        state[meeting.id] = { status: is403 ? 'forbidden' : 'failed', at: now };
+      }
       finally {
         completed++;
         if (completed % 10 === 0) out(`進捗 ${completed}/${targets.length} 作成 ${summary.created} / 既存 ${summary.existing} / 空 ${summary.empty} / 失敗 ${summary.failed}`);
@@ -249,6 +285,7 @@ export async function runBackfill({ client, limit = Infinity, dryRun = false, al
   }
   // Each worker issues only one HTTP request at a time, including retry lookups.
   await Promise.all([worker(), worker()]);
+  if (!dryRun && stateFile) writeState(state);
   if (dryRun) out(`dry-run 作成予定 ${summary.planned}`);
   for (const [code, count] of Object.entries(summary.reasons).sort()) out(`スキップ理由 ${code}: ${count}`);
   out(`作成 ${summary.created} / 既存スキップ ${summary.existing} / 空スキップ ${summary.empty} / 失敗 ${summary.failed}`);
@@ -269,12 +306,12 @@ export async function main(argv = process.argv.slice(2)) {
     } catch { throw new BackfillError('drive-auth-module-unavailable'); }
     const client = createClient({ apiKey, getToken: auth.getDriveToken, driveFetch: proxy.gwsFetch });
     const summary = await runBackfill({ client, ...options });
-    // --all: 403 だけの失敗は許容（権限不足の会議はスキップ）
-    if (options.all && summary.failed > 0) {
+    // 403 だけの失敗は許容（権限不足の会議はスキップ）、それ以外の失敗があれば 1
+    if (summary.failed > 0) {
       const all403 = Object.keys(summary.reasons).every(r => r.endsWith('http-403'));
       return all403 ? 0 : 1;
     }
-    return summary.failed ? 1 : 0;
+    return 0;
   } catch (error) { console.error(`tldv-drive-backfill: ${safeReason(error)}`); return 1; }
 }
 

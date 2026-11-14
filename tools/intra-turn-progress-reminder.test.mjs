@@ -6,6 +6,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { REMINDER, counterFile, main } from './intra-turn-progress-reminder.mjs';
+import { appendMobilePush } from './lib/mobile-push-queue.mjs';
+import { resolveOwner } from './lib/fleet-owner.mjs';
 
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'intra-turn-progress-'));
@@ -57,4 +59,17 @@ test('CLI stdout は仕様通り1行、改行なし', t => {
   assert.equal(result.status, 0);
   assert.equal(result.stdout, REMINDER);
   assert.doesNotMatch(result.stdout, /[\r\n]/);
+});
+
+test('CLI は閾値前でも未送信通知を PostToolUse additionalContext に出す', t => {
+  const { home } = fixture(t);
+  const row = appendMobilePush(home, { owner: resolveOwner({ home }), title: '定期進捗', body: '実装の確認中' });
+  const script = fileURLToPath(new URL('./intra-turn-progress-reminder.mjs', import.meta.url));
+  const env = { ...process.env, HOME: home, USERPROFILE: home, INTRA_TURN_PROGRESS_THRESHOLD: '3', INTRA_TURN_PROGRESS_DISABLED: '', CLAUDE_HEADLESS: '', ORGIAST_HEADLESS_JOB: '' };
+  const result = spawnSync(process.execPath, [script], { input: '{"session_id":"push-cli"}', encoding: 'utf8', env });
+  assert.equal(result.status, 0, result.stderr);
+  const output = JSON.parse(result.stdout).hookSpecificOutput;
+  assert.equal(output.hookEventName, 'PostToolUse');
+  assert.match(output.additionalContext, /PushNotification/);
+  assert.ok(output.additionalContext.includes(`--mark-sent ${row.id}`));
 });

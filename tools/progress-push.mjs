@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // user 入力なしの定期進捗プッシュ。アクティブな有人セッションの進捗1行を収集し、
 // ~/.claude/progress-push/latest.json に書き出す。
+// 内容が変わった場合のみ既存 mobile-push-queue に200字以内で投入する。
 // また、PushNotification 可能なセッション向けに additionalContext を stdout へ出力する。
 // fail-open: どんな失敗でも exit 0。
 import fs from 'node:fs';
@@ -13,6 +14,7 @@ import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { resolveOwner } from './lib/fleet-owner.mjs';
 import { readLedger, ledgerFile, latestOpenPromises, isUnattendedRow } from './auto-progress-ledger.mjs';
 import { readRows, inboxFile } from './lib/auto-progress-inbox.mjs';
+import { appendMobilePush, readMobilePushQueue } from './lib/mobile-push-queue.mjs';
 
 export const PROGRESS_PUSH_DIR = home => path.join(home, '.claude', 'progress-push');
 export const LATEST_FILE = home => path.join(PROGRESS_PUSH_DIR(home), 'latest.json');
@@ -120,6 +122,23 @@ export function pushContext(report) {
   return lines.join('\n');
 }
 
+export function mobileProgressBody(report) {
+  if (!report.items.length) return '';
+  // 経過時間・収集順の変化だけでは通知しない。
+  const lines = report.items.map(item => `${item.statusLabel} ${item.summary || item.label || item.promise}`
+    .replace(/\s+/g, ' ').trim()).sort();
+  return Array.from(`【進捗】${lines.join('／')}`).slice(0, 200).join('');
+}
+
+export function queueProgress(home, report, now) {
+  const body = mobileProgressBody(report);
+  if (!body) return null;
+  const title = '定期進捗';
+  const previous = readMobilePushQueue(home).filter(row => row.owner === report.owner && row.title === title).at(-1);
+  if (previous?.body === body) return null;
+  return appendMobilePush(home, { owner: report.owner, title, body }, { now });
+}
+
 export function main({ home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(), push = false } = {}) {
   try {
     const label = resolveFleetLabel(home);
@@ -130,6 +149,7 @@ export function main({ home = process.env.ORGIAST_HOME || os.homedir(), now = Da
       if (elapsed >= 0 && elapsed < 3600000) return { ok: true, skipped: true, path: LATEST_FILE(home), activeCount: previous.activeCount, label };
     } catch {}
     const report = summarize(sessions, { home, now, label });
+    queueProgress(home, report, now);
     writeReport(home, report);
     if (push && report.items.length) {
       const context = pushContext(report);

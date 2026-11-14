@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+process.env.ORGIAST_AUTO_RESUME = '1';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -58,8 +59,51 @@ test('saveJson cleans up and preserves the original error when rename fails', as
 test('0 stalled: no execution or notification', async t => {
   const f = await fixture(t, 0); await run(options([], {}), f.io); assert.equal(f.calls(), 0); assert.equal(f.notices(), 0);
 });
+test('自動再開無効時は起動せず同じセッションを1回だけ通知する', async t => {
+  const f = await fixture(t, 1);
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  await fs.writeFile(f.file, JSON.stringify({ version: 1, nights: {}, sessions: { 'session-0': { attempts: [], noProgress: 3 } } }));
+  let inbox = 0;
+  f.io.addItem = async () => { inbox++; return { id: 'disabled-notice' }; };
+  const before = process.env.ORGIAST_AUTO_RESUME;
+  delete process.env.ORGIAST_AUTO_RESUME;
+  try {
+    await run(options(['--limit', '0'], {}), f.io);
+    await run(options([], {}), f.io);
+    assert.equal(f.calls(), 0);
+    assert.equal(inbox, 1);
+    assert.ok((await f.ledger()).autoResumeDisabledNotified['session-0']);
+  } finally { process.env.ORGIAST_AUTO_RESUME = before; }
+});
 test('nightly limit is enforced across repeated invocations', async t => {
   const f = await fixture(t); await run(options(['--limit', '3'], {}), f.io); await run(options(['--limit', '3'], {}), f.io); assert.equal(f.calls(), 3); assert.equal(f.notices(), 1);
+});
+
+test('無効時の overdue は期限変更・夜間巡回でも通知1回、dry-run/list は書かない', async t => {
+  const f = await fixture(t, 1);
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  let notices = 0;
+  f.io.addItem = async (_home, item) => { notices++; assert.match(item.text, /自動再開は行いません.*claude --resume session-0/); return { id: 'notice' }; };
+  const before = process.env.ORGIAST_AUTO_RESUME;
+  delete process.env.ORGIAST_AUTO_RESUME;
+  try {
+    for (const mode of ['--dry-run', '--list']) {
+      await run(options(['--overdue', mode], {}), f.io);
+      assert.equal(notices, 0);
+      await assert.rejects(fs.readFile(f.file), { code: 'ENOENT' });
+    }
+    await run(options(['--overdue'], {}), f.io);
+    f.records[0].displayTitle = '【09/23/13:00まで】Task';
+    await run(options(['--overdue'], {}), f.io);
+    await run(options([], {}), f.io);
+    assert.equal(notices, 1);
+    assert.equal(f.calls(), 0);
+    assert.equal(f.notices(), 0);
+    for (const wait of [null, { label: '期限切れ' }]) {
+      const result = await execute(f.records[0], { wait }, { execFile: () => assert.fail('no CLI'), runChild: () => assert.fail('no child') });
+      assert.equal(result.outcome, 'disabled');
+    }
+  } finally { process.env.ORGIAST_AUTO_RESUME = before; }
 });
 test('three attempts without progress persist skip reason', async t => {
   const f = await fixture(t, 1);
@@ -648,17 +692,18 @@ test('overdue timeout stops at 3 failures and notifies once', async t => {
   const failureNotices2 = notices.filter(n => n.includes('3回失敗'));
   assert.equal(failureNotices2.length, 1); // 重複通知なし
 });
-test('overdue progressed and no-progress are not retried', async t => {
+test('overdue progressed is not retried while no-progress is retried', async t => {
   const f = await fixture(t, 2);
   f.records.forEach(r => { r.displayTitle = '【09/23/12:00まで】' + r.displayTitle; });
+  let time = f.io.now(); f.io.now = () => time;
   let callCount = 0;
   f.io.execute = async () => { callCount++; return { outcome: callCount === 1 ? 'progressed' : 'no-progress', reason: 'done' }; };
   const config = options(['--overdue'], {});
   await run(config, f.io);
   assert.equal(callCount, 2);
-  // progressed と no-progress は再試行しない
-  assert.equal((await run(config, f.io)).results.length, 0);
-  assert.equal(callCount, 2);
+  time += 31 * 60000;
+  assert.equal((await run(config, f.io)).results.length, 1);
+  assert.equal(callCount, 3);
 });
 test('old ledger timeout outcome is retried (treated as error)', async t => {
   const f = await fixture(t, 1);
@@ -694,11 +739,11 @@ test('overdue 3rd attempt progressed does not notify and does not block retry', 
   time += 31 * 60000;
   assert.equal((await run(config, f.io)).results.length, 0);
 });
-test('overdue 3rd attempt no-progress does not notify and does not block retry', async t => {
+test('overdue 3 no-progress attempts retire and notify exactly once', async t => {
   const f = await fixture(t, 1); let time = f.io.now(); let notices = []; let callCount = 0;
   f.io.now = () => time;
   f.records[0].displayTitle = '【09/23/12:00まで】Task';
-  f.io.execute = async () => { callCount++; return { outcome: callCount === 3 ? 'no-progress' : 'timeout', reason: 'done' }; };
+  f.io.execute = async () => { callCount++; return { outcome: 'no-progress', reason: 'done' }; };
   f.io.notify = async msg => { notices.push(msg); return { delivered: 'dm' }; };
   const config = options(['--overdue'], {});
   await run(config, f.io); time += 31 * 60000;
@@ -706,11 +751,38 @@ test('overdue 3rd attempt no-progress does not notify and does not block retry',
   const r3 = await run(config, f.io);
   assert.equal(r3.results[0].outcome, 'no-progress');
   assert.equal(callCount, 3);
-  const failureNotices = notices.filter(n => n.includes('3回失敗'));
-  assert.equal(failureNotices.length, 0);
-  // no-progress も成功扱いなので再試行しない
+  const stopped = notices.filter(n => n.includes('期限切れ再開を3回試しても進まないため自動再開を止めました'));
+  assert.equal(stopped.length, 1);
   time += 31 * 60000;
-  assert.equal((await run(config, f.io)).results.length, 0);
+  const r4 = await run(config, f.io);
+  assert.equal(r4.results.length, 0);
+  assert.equal(r4.rows[0].skip, '3回進捗なし');
+  assert.equal(notices.filter(n => n.includes('期限切れ再開を3回試しても進まないため自動再開を止めました')).length, 1);
+});
+
+test('overdue limit 2 rotates fairly through five candidates in three runs', async t => {
+  const f = await fixture(t, 5); let time = f.io.now();
+  f.io.now = () => time;
+  f.records.forEach((record, index) => { record.displayTitle = `【09/${19 + index}/12:00まで】${record.displayTitle}`; });
+  const attempted = [];
+  f.io.execute = async record => { attempted.push(record.sessionId); return { outcome: 'progressed', reason: 'done' }; };
+  const config = options(['--overdue'], {});
+  for (let i = 0; i < 3; i++) { await run(config, f.io); time += 31 * 60000; }
+  assert.equal(attempted.length, 5);
+  assert.deepEqual(new Set(attempted), new Set(f.records.map(record => record.sessionId)));
+});
+
+test('nightly ordering remains last-attempt night, score, then age', async t => {
+  const f = await fixture(t, 3); const order = [];
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  await fs.writeFile(f.file, JSON.stringify({ version: 1, nights: {}, sessions: {
+    'session-0': { attempts: [{ night: '2026-09-23' }] },
+    'session-1': { attempts: [{ night: '2026-09-22' }] },
+    'session-2': { attempts: [{ night: '2026-09-23' }] }
+  } }));
+  f.io.execute = async record => { order.push(record.sessionId); return { outcome: 'progressed' }; };
+  await run(options(['--limit', '3'], {}), f.io);
+  assert.deepEqual(order, ['session-1', 'session-0', 'session-2']);
 });
 
 // --- pid 再利用対策と実行ログのテスト ---

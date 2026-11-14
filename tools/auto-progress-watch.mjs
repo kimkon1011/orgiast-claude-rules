@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 自動進行の台帳(auto-progress-ledger.mjs が記録)を定期巡回し、約束が進んでいるかを判定する。
-// done → 閉じる / in_progress → 様子見 / stalled → 自動再開(1回/件/日)＋共有 Sheet へ行追加。
+// done → 閉じる / in_progress → 様子見 / stalled → kim-inbox 通知＋共有 Sheet へ行追加。
 // 判定は安いLLM(llm-ask --category classification)。全滅したら「証拠なし=stalled」の決定論判定。
 import fs from 'node:fs';
 import os from 'node:os';
@@ -19,6 +19,9 @@ import { completionActions } from './lib/auto-progress-artifact.mjs';
 import { reportCheckProgress } from './lib/auto-progress-heartbeat.mjs';
 import { checkPromise, checkProgressSummary, executeCheck, isTimeOnlyCheck, queueCheckFollowup, pendingAction } from './auto-progress-check.mjs';
 import { addItem } from './kim-inbox.mjs';
+import { autoResumeAllowed } from './lib/auto-resume-policy.mjs';
+import { externalSpec } from './lib/external-monitor-state.mjs';
+import { pollExternal, drainExternalQueue } from './auto-progress-external-monitor.mjs';
 import { main as writeProgressPush } from './progress-push.mjs';
 import { pushDailyProgress } from './lib/auto-progress-daily.mjs';
 import { appendInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
@@ -335,6 +338,7 @@ function judgeEvidence(row, evidence, now, io) {
 // ---- 再開 ----------------------------------------------------------------
 // stalled-session-resume.mjs と同じ方式: claude を --resume で呼び、成果 JSON を書かせる。
 export async function resumeSession(row, { timeoutMs = 20 * 60000, home = os.homedir(), io = {}, reason } = {}) {
+  if (!autoResumeAllowed()) return { outcome: 'disabled', reason: '自動再開は廃止（config/auto-resume.json）' };
   const { runChild, resolveClaudeExe } = await import('./auto-session.mjs');
   const resultFile = path.join(home, '.claude', `auto-progress-resume-${String(row.sessionId).slice(0, 8)}.json`);
   fs.rmSync(resultFile, { force: true }); // Never reuse a report from an earlier attempt.
@@ -717,7 +721,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   const file = ledgerFile(home);
   if (!dryRun) writeProgressPush({ home, now });
   const clock = io.clock ?? Date.now;
-  const stopAt = clock() + 45 * 60000;
+  const stopAt = clock() + 27 * 60000;
   const summary = { checked: 0, done: 0, overdueReported: 0, noop: 0, inProgress: 0, stalled: 0, resumed: 0, resumeDeferred: 0, reported: 0, expired: 0, graced: 0, superseded: 0, discovered: 0, errors: [], phaseMs: {} };
   let notificationsStopped = false;
   // 各段階の経過時間を記録する。phaseMs は summary に含まれる。
@@ -901,6 +905,25 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   for (const row of expired) patch(rowKey(row), { status: 'expired' });
   summary.expired += expired.size;
   candidates = candidates.filter(row => !expired.has(row));
+  const disableResume = async row => {
+    if (autoResumeAllowed()) return false;
+    if (dryRun || notificationsStopped) return true;
+    const at = new Date(now).toISOString();
+    if (!patch(rowKey(row), { status: 'stalled', verdict: 'stalled', resumeOutcome: 'disabled',
+      reason: '自動再開は廃止（config/auto-resume.json）', lastCheckedAt: at })) return true;
+    if (!row.autoResumeDisabledNotifiedAt) {
+      try {
+        await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-auto-resume-disabled', sessionId: row.sessionId,
+          dedupeKey: `auto-progress-auto-resume-disabled:${rowKey(row)}`,
+          text: `自動再開は行いません。続けるときはこのセッションを開いて指示してください: claude --resume ${row.sessionId}` });
+        patch(rowKey(row), { autoResumeDisabledNotifiedAt: at });
+      } catch (error) { summary.errors.push(`auto-resume-disabled-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
+    }
+    return true;
+  };
+  // 終端行は再開・再判定せず、未配達の通知だけを再試行する。
+  for (const row of candidates.filter(row => row.resumeOutcome === 'disabled')) await disableResume(row);
+  candidates = candidates.filter(row => row.resumeOutcome !== 'disabled');
   if (dryRun) summary.notifications = {
     unattendedExcluded: rows.filter(row => isUnattendedRow(row, home)).length,
     responseProbes: rows.filter(row => /^(?:OK|了解)\s*とだけ/.test(row.requestText || '')).map(row => ({
@@ -926,15 +949,21 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
   // Checks run first, before the potentially lengthy legacy resume lane.
   const stalledChecks = new Set();
   const executable = [...candidates.filter(row => row.check && !reservation(row)), ...pendingChecks];
-  executable.sort((a, b) => (Date.parse(a.lastCheckedAt) || 0) - (Date.parse(b.lastCheckedAt) || 0));
+  executable.sort((a, b) => Number(Boolean(externalSpec(b))) - Number(Boolean(externalSpec(a))) || (Date.parse(a.lastCheckedAt) || 0) - (Date.parse(b.lastCheckedAt) || 0));
   for (const row of executable) {
     if (notificationsStopped || clock() + 60000 >= stopAt) break;
     if (dryRun) continue; // --dry-run must never execute arbitrary commands.
     summary.checked++;
     try {
+      if (externalSpec(row)) {
+        const state = await pollExternal(row, { home, now, patch, io });
+        if (state === 'expired') summary.expired++; else summary.inProgress++;
+        continue;
+      }
       const overdue = now >= Date.parse(row.deadlineAt);
       let state = await checkPromise(row, { home, now, patch, io, suppressNotices: overdue });
       if (overdue && ['unmet', 'error'].includes(state)) {
+        if (await disableResume(row)) continue;
         const at = new Date(now).toISOString();
         let outcome = { reason: '再開上限・実行時間・作業場所の条件により再開できません' };
         const eligible = !executorUnavailable && summary.resumed < MAX_RESUMES_PER_RUN &&
@@ -981,6 +1010,12 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     } catch (error) { summary.errors.push(`check: ${String(error?.message ?? error).slice(0, 120)}`); }
   }
   endPhase('check-loop');
+  if (!dryRun && !notificationsStopped && clock() + 6 * 60000 < stopAt) {
+    try {
+      const result = await drainExternalQueue({ home, now, resume: io.resume ?? resumeSession, io });
+      summary.resumed += result.resumed;
+    } catch (error) { summary.errors.push(`external-resume: ${error.message}`); }
+  }
   for (const row of doneSweep.recent) {
     if (dryRun || notificationsStopped || clock() + 60000 >= stopAt) break;
     await notifyDone(row, row.reason || '', row.doneNotifyArtifact || '');
@@ -1034,6 +1069,47 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     if (row.startedAt || row.status === 'starting') continue; // 起動済みの予約は二重起動しない。
     const key = rowKey(row), at = new Date(now).toISOString();
     try {
+if (now >= Date.parse(row.deadlineAt)) {
+        if (await disableResume(row)) continue;
+        // 期限超過かつ nextKim が空/なし の予約行は再開を試みる
+        const nextKimClean = String(row.nextKim ?? '').replace(/^[\s　]+|[\s　]+$/g, '');
+        const resumeEligible = (nextKimClean === '' || nextKimClean === 'なし') &&
+          !executorUnavailable && summary.resumed < MAX_RESUMES_PER_RUN &&
+          (row.resumeCount ?? 0) < MAX_RESUMES &&
+          now - (Date.parse(row.resumedAt || '') || 0) >= RESUME_INTERVAL_MS &&
+          clock() + 22 * 60000 < stopAt && row.cwd &&
+          (io.cwdExists ?? fs.existsSync)(row.cwd) && !isUnattendedRow(row, home);
+        if (resumeEligible) {
+          const attempt = { status: 'resumed', resumedAt: at, resumeCount: (row.resumeCount ?? 0) + 1, resumeOutcome: 'attempting' };
+          if (patch(key, attempt)) {
+            let outcome;
+            try { outcome = await (io.resume ?? resumeSession)(row, { home, reason: 'start-overdue' }); }
+            catch (error) { outcome = { outcome: 'error', reason: String(error.message || error) }; }
+            if (outcome.deferred || outcome.outcome === 'deferred') {
+              executorUnavailable = true;
+              summary.resumeDeferred++;
+              patch(key, { resumedAt: row.resumedAt || '', resumeCount: row.resumeCount ?? 0, resumeDeferredAt: at, resumeOutcome: `deferred: ${outcome.reason}` });
+            } else {
+              summary.resumed++;
+              const state = outcome.state || outcome.outcome;
+              if (patch(key, { resumeOutcome: `${state}: ${outcome.reason}`, resumeFinishedAt: new Date(clock()).toISOString(), nextKim: outcome.nextKim ?? row.nextKim })) {
+                try {
+                  await (io.notifyOwner ?? notifyOwner)(ownerOf(row), `期限を過ぎた自動進行を再開しました: ${row.label || row.promise}\n結果: ${outcome.reason}`, { home, now, kind: 'automatic', session: row });
+                } catch (error) { summary.errors.push(`start-overdue-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
+                continue;
+              }
+            }
+          }
+        }
+        const result = { text: `開始予約の期限を過ぎても未起動です: ${row.label || row.promise}` };
+        if (!patch(key, { status: 'start_overdue', reason: result.text })) continue;
+        (io.queueCheckFollowup ?? queueCheckFollowup)(home, row, result);
+        if (!row.startOverdueNotifiedAt && !isQuietHours(now) && !isUnattendedRow(row, home)) {
+          const delivery = await (io.notifyOwner ?? notifyOwner)(ownerOf(row), `${result.text}\nClaude の次の手: ${row.nextClaude}（next-session.md に起票）`, { home, now, kind: 'automatic', session: row });
+          if (['dm', 'toast', 'inbox'].includes(delivery?.delivered)) patch(key, { startOverdueNotifiedAt: at });
+        }
+        continue;
+      }
       // 静穏時間は通知だけを止める。夜間着手の予約が主用途なので、開始は止めない。
       if (row.status !== 'scheduled' || isUnattendedRow(row, home)) continue;
       const result = row.checkResult === 'ready' ? { code: 0, text: row.checkText }
@@ -1046,7 +1122,9 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
         if (result.code !== 1) summary.errors.push(`start-when: ${result.text}`);
         continue;
       }
-      if (earlierResumes + reservationAttempts >= MAX_RESUMES_PER_RUN || (row.resumeCount ?? 0) >= MAX_RESUMES ||
+if (await disableResume(row)) continue;
+      if (summary.resumed >= MAX_RESUMES_PER_RUN || (row.resumeCount ?? 0) >= MAX_RESUMES ||
+          now - (Date.parse(row.resumedAt || 0) || 0) < RESUME_INTERVAL_MS ||
           !row.cwd || !(io.cwdExists ?? fs.existsSync)(row.cwd)) continue;
       const attempt = { status: 'starting', startedAt: at, resumedAt: at, resumeCount: (row.resumeCount ?? 0) + 1 };
       if (!patch(key, attempt)) continue;
@@ -1097,6 +1175,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
     if (!Number.isFinite(recorded)) continue;
     const unattended = isUnattendedRow(row, home);
     if (row.status === 'waiting_user') {
+      if (await disableResume(row)) continue;
       if (kimAction(row) !== 'なし' && !unattended && !dryRun && !notificationsStopped && now - (Date.parse(row.ownerNotifiedAt || 0) || 0) >= 24 * 3600 * 1000) {
         try {
           const delivery = await askKim(row, row.reason);
@@ -1142,6 +1221,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       summary.inProgress += 1; continue;
     }
     summary.stalled += 1;
+    if (await disableResume(row)) continue;
     patch(rowKey(row), { ...((row.resumeCount ?? 0) >= MAX_RESUMES || verdict.source === 'resume-failed' ? { status: 'stalled' } : {}), verdict: 'stalled', lastCheckedAt: new Date(now).toISOString(), reason: verdict.reason });
     // 自動再開の連続失敗を kim-inbox に 🔴 で通知する。握りつぶさない（2026-11-12 実害: e50bea8a が7回連続 timeout で沈黙）。
     if (!notificationsStopped && !dryRun && !unattended && (verdict.source === 'resume-exhausted' || (verdict.source === 'resume-failed' && failedResumeCount(row) >= 3))) {
@@ -1161,7 +1241,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       } catch (error) { summary.errors.push(`resume-exhausted-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
     }
     let current = { ...row, ...((row.resumeCount ?? 0) >= MAX_RESUMES || verdict.source === 'resume-failed' ? { status: 'stalled' } : {}), verdict: verdict.verdict, reason: verdict.reason };
-    const resumeEligible = !unattended && !dryRun && summary.resumed < MAX_RESUMES_PER_RUN && (answered || (row.resumeCount ?? 0) < MAX_RESUMES) && now - (Date.parse(row.resumedAt || 0) || 0) >= RESUME_INTERVAL_MS
+    const resumeEligible = !unattended && !dryRun && !row.autoResumeDisabledNotifiedAt && summary.resumed < MAX_RESUMES_PER_RUN && (answered || (row.resumeCount ?? 0) < MAX_RESUMES) && now - (Date.parse(row.resumedAt || 0) || 0) >= RESUME_INTERVAL_MS
       && row.cwd && (io.cwdExists ?? fs.existsSync)(row.cwd);
     const canResume = resumeEligible && !executorUnavailable;
     if (resumeEligible && executorUnavailable) {
@@ -1174,7 +1254,16 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       patch(rowKey(row), { status: current.status, resumedAt: current.resumedAt, resumeCount: current.resumeCount, resumeOutcome: current.resumeOutcome });
       let outcome;
       try { outcome = await (io.resume ?? resumeSession)(row, { home }); } catch (error) { outcome = { outcome: 'error', reason: String(error?.message ?? error).slice(0, 200) }; }
-      if (outcome.deferred) {
+      if (outcome.outcome === 'disabled') {
+        current = { ...row, status: 'stalled', verdict: 'stalled', reason: outcome.reason };
+        patch(rowKey(row), { status: 'stalled', verdict: 'stalled', reason: outcome.reason, resumedAt: row.resumedAt ?? '', resumeCount: row.resumeCount ?? 0, resumeOutcome: 'disabled', lastCheckedAt: new Date(now).toISOString() });
+        if (!row.autoResumeDisabledNotifiedAt) {
+          try {
+            await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-auto-resume-disabled', sessionId: row.sessionId, dedupeKey: `auto-progress-auto-resume-disabled:${row.sessionId || rowKey(row)}`, text: `自動再開は行いません。続けるときはこのセッションを開いて指示してください: claude --resume ${row.sessionId}` });
+            patch(rowKey(row), { autoResumeDisabledNotifiedAt: new Date(now).toISOString() });
+          } catch (error) { summary.errors.push(`auto-resume-disabled-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
+        }
+      } else if (outcome.deferred) {
         patch(rowKey(row), { status: row.status, resumedAt: row.resumedAt ?? '', resumeCount: row.resumeCount ?? 0,
           resumeOutcome: failedResume(row) ? row.resumeOutcome : 'deferred: ' + outcome.reason, resumeDeferredAt: new Date(now).toISOString(),
           lastCheckedAt: new Date(now).toISOString(), reason: row.check ? row.checkText : outcome.reason });

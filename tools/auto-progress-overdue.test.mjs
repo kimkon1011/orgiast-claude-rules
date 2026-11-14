@@ -120,3 +120,5 @@ test('overdue check exceptions and old unattended checks reach a final conclusio
   assert.equal(f.messages.length, 1);
   assert.match(f.messages[0], /check unavailable/);
 });
+
+process.env.ORGIAST_AUTO_RESUME = '1';

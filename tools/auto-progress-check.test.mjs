@@ -468,3 +468,5 @@ test('CLI: --force-check だけでは scratchpad 参照を登録できない', (
     else process.env.ORGIAST_HOME = previousHome;
   }
 });
+
+process.env.ORGIAST_AUTO_RESUME = '1';

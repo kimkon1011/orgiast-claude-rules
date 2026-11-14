@@ -4,6 +4,7 @@
   "_codexAccountNote": "Codex(ChatGPT)は担当者ごとに分担（kim 2026-10-12 最終決定）: kim@=kim-PC(Pro)、nishi@=nishi-PC・kimko-PC、cr@=cr-PC・w018-PC（各自で有料プラン契約）、未指定の作業用999・カフェ用015 は _codexAccountDefault=seisaku-team@。Auto top-up はオフ。account は Claude の担当席で別物。",
   "kim-PC": {
     "hostname": "DESKTOP-2D0R4LI",
+    "titleLabel": "KimPC",
     "person": "金功勇",
     "aliases": [
       "DESKTOP-2D0R4LI",

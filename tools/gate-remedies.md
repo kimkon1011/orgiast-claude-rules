@@ -245,6 +245,10 @@ URLを単独行に置くかMarkdownリンクにし、直後に括弧・句読点
 
 既存 Stop runner から呼ぶため Stop hook 設定 の追加登録は不要。`ORGIAST_SIDE_EFFECT_LEFT_GATE=0` で無効化できる。既存 rollout に従い pilot PC は即時 block、他PCは配布日と初回受領から7日間の観察後に block。
 
+## unattended-elevation-gate
+
+無人セッション（CLAUDE_HEADLESS=1、ORGIAST_HEADLESS_JOB 設定、SDK CLI）での UAC 必須インストール（winget install/upgrade、msiexec /i、Start-Process -Verb RunAs、choco install、Setup/Installer .exe）をブロックする。必要なインストールは対話セッションで実行するか、`node tools/kim-inbox.mjs --ask "UAC 必須インストール: <インストール対象と理由>" --answer "インストール手順"` で依頼を積む。
+
 ## answer-canonical-gate
 
 人の質問への回答をその場限りの文面で終えず、答えを正本（社内マニュアル・FAQ・応募者向け案内ページ・テンプレート・memory・コード）に追記し、次から相手や担当者が自分で引ける形にする。追記後は `正本化: <追記先の名前とリンク>` を1行書く。

@@ -125,3 +125,8 @@ export async function sendMessage(chatID, text, { replyToMessageID, attachment }
   if (attachment) body.attachment = attachment;
   return await beeperFetch(`/v1/chats/${encodeURIComponent(chatID)}/messages`, { method: 'POST', body, ...options });
 }
+
+// Read metadata again immediately before an automatic reply (does not mark read).
+export async function getChat(chatID, options = {}) {
+  return beeperFetch(`/v1/chats/${encodeURIComponent(chatID)}`, { method: 'GET', ...options });
+}

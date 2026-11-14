@@ -5,6 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { collectActiveSessions, summarize, writeReport, pushContext, main, LATEST_FILE } from './progress-push.mjs';
 import { writeLedger, ledgerFile } from './auto-progress-ledger.mjs';
+import { pendingMobilePush } from './lib/mobile-push-queue.mjs';
+import { main as reminder } from './intra-turn-progress-reminder.mjs';
+import { consumeInbox } from './auto-progress-inbox-hook.mjs';
+import { main as queueCli } from './mobile-push-queue.mjs';
 
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'progress-push-push-test-'));
@@ -17,6 +21,41 @@ function seedLedger(home, rows) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   writeLedger(file, rows);
 }
+
+test('毎時の進捗を1行200字以内で積み、変化なし・送信済みは再投入しない', t => {
+  const home = fixture(t), now = Date.now();
+  const row = { ts: new Date(now).toISOString(), sessionId: 'mobile-test', promise: '実装中\n' + 'あ'.repeat(240), status: 'open', cwd: home };
+  seedLedger(home, [row]);
+  assert.equal(main({ home, now }).ok, true);
+  const first = pendingMobilePush(home)[0];
+  assert.ok(first);
+  assert.ok(Array.from(first.body).length <= 200);
+  assert.doesNotMatch(first.body, /[\r\n]/);
+  main({ home, now: now + 3600000 });
+  assert.equal(pendingMobilePush(home).length, 1, '経過時間だけでは積まない');
+  const input = { session_id: 'mobile-test' };
+  const context = reminder(input, { home, env: {}, now }).pushContext;
+  assert.match(context, /PushNotification/);
+  assert.ok(context.includes(first.body));
+  assert.ok(context.includes(`--mark-sent ${first.id}`));
+  assert.ok(consumeInbox(input, { home, env: {}, now }).hookSpecificOutput.additionalContext.includes(first.id));
+  assert.equal(reminder(input, { home, env: { CLAUDE_HEADLESS: '1' }, now }).pushContext, undefined);
+  assert.equal(queueCli(['--mark-sent', first.id], { home, out: () => {} }), 0);
+  assert.equal(reminder(input, { home, env: {}, now }).pushContext, '');
+  assert.ok(!consumeInbox(input, { home, env: {}, now })?.hookSpecificOutput.additionalContext.includes(first.id));
+  main({ home, now: now + 7200000 });
+  assert.equal(pendingMobilePush(home).length, 0);
+  seedLedger(home, [{ ...row, promise: 'レビュー中' }]);
+  main({ home, now: now + 10800000 });
+  assert.equal(pendingMobilePush(home).length, 1);
+  assert.match(pendingMobilePush(home)[0].body, /レビュー中/);
+});
+
+test('進行中の作業がなければ通知キューを作らない', t => {
+  const home = fixture(t);
+  main({ home });
+  assert.deepEqual(pendingMobilePush(home), []);
+});
 
 test('collectActiveSessions returns open rows within 48h, excluding unattended', t => {
   const home = fixture(t);

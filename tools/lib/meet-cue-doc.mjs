@@ -138,3 +138,30 @@ export async function insertCueToDocument({
     timestampStr,
   };
 }
+
+export async function findHeaderInsertIndex({
+  docId,
+  impersonate = SEISAKU_TEAM,
+  getToken = getDriveToken,
+  api = driveApi,
+} = {}) {
+  try {
+    const token = await getToken({ impersonate, scope: DRIVE_SCOPE });
+    const res = await api(token, `https://docs.googleapis.com/v1/documents/${encodeURIComponent(docId)}`);
+    const doc = await res.json();
+    const content = doc.body?.content || [];
+
+    for (const elem of content) {
+      if (elem.paragraph?.elements) {
+        const text = elem.paragraph.elements.map(e => e.textRun?.content || '').join('');
+        if (text.includes('----------------------------------------') || text.includes('---')) {
+          return elem.endIndex || 1;
+        }
+      }
+    }
+  } catch (e) {
+    console.error(`meet-cue-doc: findHeaderInsertIndex warning (${docId}):`, e.message);
+  }
+  return 1;
+}
+

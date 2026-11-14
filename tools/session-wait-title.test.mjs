@@ -186,6 +186,11 @@ test('PC番号: フッターなしでも付与し、同じタイトルは追記�
   assert.equal(desiredTitle('本文', custom('【11/02/20:11まで】名前'), '018'), '018｜【11/02/20:11まで】名前');
   assert.equal(desiredTitle('本文', custom('018｜【11/02/20:11まで】名前'), '018'), null);
 });
+test('KimPCラベルを期限タイトルに付与し、既存ラベルは二重化しない', () => {
+  assert.equal(desiredTitle(footer('まだ閉じない（作業中・2026-11-09 13:00 まで待つ）'), ai, 'KimPC'), 'KimPC｜【11/09/13:00まで】トークン待ち');
+  assert.equal(desiredTitle('本文', custom('KimPC｜トークン待ち'), 'KimPC'), null);
+  assert.equal(desiredTitle('本文', ai, ''), null);
+});
 test('PC番号: 期限付与・変更・解除でも番号が先頭', () => {
   assert.equal(desiredTitle(footer(WAIT), ai, '018'), '018｜【11/02/20:11まで】トークン待ち');
   assert.equal(desiredTitle(footer(WAIT), custom('018｜【11/01/09:00まで】名前'), '018'), '018｜【11/02/20:11まで】名前');

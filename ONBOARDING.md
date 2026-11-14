@@ -679,6 +679,8 @@ deny/warnはPC・ゲート・復旧手段の到達状況だけを既存通知経
 
 ### 1.15 自律進行・セッション引継ぎ
 
+**自動再開は廃止（kim 2026-11-14）。** 止まった・待ち状態のセッションを Claude で自動的に --resume しない。期限切れ・停滞は kim-inbox 通知のみ。再有効化は config/auto-resume.json の enabled を kim 承認で変更する。
+
 **🔴 セッションは1目的。完了時はClaudeが確認なしで /session-close し、引継ぎ後に次セッションを自動起動する。早朝に未クローズの全セッションを確認する。リモートコントロールは常時有効、スマホ用の空きセッションを3つ確保する。タイトル先頭にPC番号（fleet-pc-map、例018｜）と状態【閉じて可】／【MM/DD/HH:MMまで】を付ける。閉じて可は終了定型文かつuserの残作業なしの場合のみ。詳細は本節「クローズ・待機タイトル」。**
 
 切れたリモートコントロール接続の再接続は `reopen-lost-sessions.mjs`（15分毎 watch）が担う。再接続に成功した（verified）ものだけを「リロープ」として60分窓で数え、再接続できずに残るセッションを reopenLoop で遮断しない。`nightly-reload-vscode.ps1` はセッション一覧が取れないとき3回リトライして ERROR を残し、無言 SKIP しない（2026-11-09 実測の再接続失敗を踏まえた修正）。
@@ -704,7 +706,7 @@ nishi 指摘:「**『閉じてよい』というのは Close 処理をこれか�
 - Stop hook の `next-action-gate` が要求する「このセッション:」行は次の定型3文のどれか（2026-10-01 kim 指示。`/session-close` の状態とタブを閉じてよいかを1文に両方書く）。
   - `/session-close は終わっているので、このセッションを閉じてよい`: Claude が /session-close 済み。タブを✕してよい
   - `/session-close は不要なので、このセッションを閉じてよい`: 引き継ぎ不要。タブを✕してよい
-  - `まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）`: 作業継続中。何日の何時まで待つかを必ず入れる（例: `まだ閉じない（作業中・2026-11-02 23:59 まで待つ）`）。期限は待っている相手の作業や自動チェックの期限に合わせ、過ぎたら新しい期限に書き換えるか、確認せず自分で /session-close を実行する（2026-10-27 nishi 指示。next-action-gate が SESSION-OPEN-NO-DEADLINE / SESSION-OPEN-DEADLINE-PAST で検査）。 期限を過ぎると `OrgiastWaitDeadlineResume`（15分ごと）がそのセッションを自動で再開し、照会→進行／kim-inbox へ判断依頼＋新期限／完了なら /session-close まで進める。
+  - `まだ閉じない（作業中・YYYY-MM-DD HH:MM まで待つ）`: 作業継続中。何日の何時まで待つかを必ず入れる（例: `まだ閉じない（作業中・2026-11-02 23:59 まで待つ）`）。期限は待っている相手の作業や自動チェックの期限に合わせ、過ぎたら新しい期限に書き換えるか、確認せず自分で /session-close を実行する（2026-10-27 nishi 指示。next-action-gate が SESSION-OPEN-NO-DEADLINE / SESSION-OPEN-DEADLINE-PAST で検査）。 自動再開は廃止。`OrgiastWaitDeadlineResume`（15分ごと）は期限切れを kim-inbox に1回だけ通知する。
   - 🔴 **最終の応答では /session-close を Claude が自分で実行する（2026-08-30・2026-11-04 kim 厳命・全PC全アカウント全プロジェクト）**: 目的が完了したら「/session-close しますか？」と聞かず、「/session-close をして」と頼まず、そのターンで Skill `session-close` を実行して `/session-close は終わっているので…` で終える。旧定型文 `/session-close をして（まだ閉じない・…）` は kim に close を委ねるので廃止し、`next-action-gate` が `SESSION-CLOSE-HANDOFF` で差し戻す。実行して失敗した時だけ、コマンドと終了コードを本文に書いて `[SESSION-CLOSE-PENDING-OK: <理由>]` を付ける。
   - 待つ期限は Stop hook `tools/session-wait-title.mjs` がセッション一覧のタイトルの頭に `【11/02/20:11まで】` の形（年なし）で自動で付け、閉じてよい定型文になったら外す。既存の全セッションにも SessionStart の `--all`（1時間に1回）で当てる（2026-10-27 nishi 指示・全PC全アカウント）
   - 閉じてよい定型文2つ（`/session-close は終わっているので…` / `/session-close は不要なので…`）で、かつ「次に kim がすること: なし」のときは、同じ hook がタイトルの頭に `【閉じて可】` を付ける。kim のやることが残っていれば閉じてよい定型文でも付けず、付いていれば外す。再開して「まだ閉じない」に戻れば期限に付け替える（2026-11-02 kim 指示・全PC全アカウント全プロジェクト）
@@ -727,7 +729,7 @@ kim の返事待ちは SessionStart と各セッションで「📌 kim の返�
 進捗通知の宛先は `fleet-pc-map.json` またはローカルの `~/.claude/fleet-pc-map.json` の同名 PC 行の `notifyDiscordId`。未設定だとチャットに案内が出て、kim に1日1回警告が飛ぶ。
 kim 宛の定期ダイジェスト（朝/夜/urgent）・完了通知・配送異常の警告はすべて kim-inbox へ保存する。Discord DM は全廃・例外なし（緊急を含む、kim 2026-11-06）。古いローカル許可リストも適用しない。
 
-**「この後の自動進行: <内容>」の宣言は台帳に記録され、止まれば自動で拾われる（2026-10-14 追加）**。Stop hook `tools/auto-progress-ledger.mjs` が宣言（「なし」以外）を `~/.claude/auto-progress-ledger.jsonl` に記録する（同一セッションは最新で置換）。各PCの定期タスク `OrgiastAutoProgressWatch` が毎時台帳を巡回し、宣言から1時間以降のものを判定する。stalled は前回から2時間以上空けて累計8回まで最終成果へ向けて自動再開し、共有 Sheet（タブ「自動進行」）へ行を足す。全PCが1日2回（朝枠＝定時報告・夕枠＝変化分のみ）自PC分を kim-inbox に積む。朝枠は変化0件でも進行中・判断待ち・完了を全件名前付きで送る。夕枠・枠外は変化分のみ。check の引き継ぎ: 新しい約束行に check が無く、直前の open 行に期限が未来の check があれば引き継ぐ（check が superseded で消える再発防止）。だから宣言は「実際に自動で進む内容」だけ書く。API エラー（利用上限など）で返答できずに終わった依頼も、毎時の巡回が transcript から見つけて台帳へ起票し、持ち主へ DM したうえで別モデルで自動再開する。Sheet 側の追加手順は `docs/auto-progress-gas-patch.gs.txt`。
+**「この後の自動進行: <内容>」の宣言は台帳に記録され、止まれば自動で拾われる（2026-10-14 追加）**。Stop hook `tools/auto-progress-ledger.mjs` が宣言（「なし」以外）を `~/.claude/auto-progress-ledger.jsonl` に記録する（同一セッションは最新で置換）。各PCの定期タスク `OrgiastAutoProgressWatch` が毎時台帳を巡回し、宣言から1時間以降のものを判定する。stalled は自動再開せず、手動再開の案内を kim-inbox に1回だけ通知する。全PCが1日2回（朝枠＝定時報告・夕枠＝変化分のみ）自PC分を kim-inbox に積む。朝枠は変化0件でも進行中・判断待ち・完了を全件名前付きで送る。夕枠・枠外は変化分のみ。check の引き継ぎ: 新しい約束行に check が無く、直前の open 行に期限が未来の check があれば引き継ぐ（check が superseded で消える再発防止）。だから宣言は「実際に自動で進む内容」だけ書く。API エラー（利用上限など）で返答できずに終わった依頼も、毎時の巡回が transcript から見つけて台帳へ起票し、kim-inbox に手動再開の案内を通知する。Sheet 側の追加手順は `docs/auto-progress-gas-patch.gs.txt`。
 
 自動進行の結果はセッションの持ち主に DM とセッション内表示で必ず届く。user に「進捗どう？」と聞かせたら違反（2026-10-19 cr 指摘）。
 

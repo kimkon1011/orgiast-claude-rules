@@ -267,6 +267,7 @@ test('定期digestに開始予約と期限超過が出る', async t => {
   }
 });
 
+process.env.ORGIAST_AUTO_RESUME = '1';
 test('静穏時間の再開失敗も ask を保存し、通知保存失敗は次回復旧する', async t => {
   const { options, home } = setup(t); addCheck(options);
   const night = Date.parse('2026-11-02T16:00:00Z');

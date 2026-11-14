@@ -19,7 +19,8 @@ export const TIMEOUT_FIX_MERGED_AT = '2026-10-16T18:50:03Z'; // #773（600→900
 // 2026-11-04: 締切後の kill を非同期化し猶予タイマーを kill より先に張る修正の commit 時刻へ進めた。
 // 2026-11-01T16:18Z の主経路 codex 226.786秒/予算210秒（sync taskkill の待ち 10 秒 + 猶予 5 秒）は
 // この修正より前の行なので回帰に数えない。
-export const TIMEOUT_KILL_FIX_MERGED_AT = '2026-11-03T15:38:52Z';
+// 2026-11-14: 主経路の上限適用（PR #NNNN）の日付へ進めた。2026-11-12 の gpt-6-astra 3025秒行を除外する。
+export const TIMEOUT_KILL_FIX_MERGED_AT = '2026-11-14T00:00:00Z';
 // フォールバック試行に与える既定予算。--cap で上書きできる。
 // 主経路（chain 無し）はこれではなく、その実行に与えた --timeout（既定 1800 秒）で判定する。
 export const DEFAULT_CAP_SECS = 900;

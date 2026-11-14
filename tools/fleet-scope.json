@@ -145,6 +145,12 @@
       "reason": "要確認"
     },
     {
+      "path": "packages/ai-reliability",
+      "scope": "kim-only",
+      "step": null,
+      "reason": "要確認"
+    },
+    {
       "path": "packages/vscode-next-session",
       "scope": "fleet",
       "step": "mobile-standby",

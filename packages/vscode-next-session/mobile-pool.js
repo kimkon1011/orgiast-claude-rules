@@ -58,20 +58,25 @@ function createOwnershipLease(port = 39741) {
   };
 }
 
+const AUTO_TITLE_RE = /^(?:remote-control-|\d{3}[-｜|])+[a-z]+-[a-z]+$/i;
 // No custom title: Claude changes its natural title after the first prompt. Custom
 // names suppress that signal and renameSessionTab now opens an interactive dialog.
-function isWaitingTab(tab) { return String(tab.label) === 'Claude Code'; }
-function createPool({ tabs, open, publish, own = () => true, now = Date.now }) {
+function isWaitingTab(tab) {
+  const label = typeof tab === 'string' ? tab : String(tab?.label ?? '');
+  return label === 'Claude Code' || AUTO_TITLE_RE.test(label);
+}
+function createPool({ tabs, open, publish, own = () => true, stopped = () => false, now = Date.now }) {
   let running;
   let retry = newRetryState();
   return {
     ensure(count) {
+      if (stopped()) return Promise.resolve();
       if (running) return running;
       running = (async () => {
-        if (!await own()) return;
+        if (!await own() || stopped()) return;
         let waiting = tabs().filter(isWaitingTab).length;
         publish(waiting, count);
-        while (waiting < count) {
+        while (!stopped() && waiting < count) {
           if (!canAttemptMobileOpen(retry, now())) break;
           const opened = await open();
           retry = recordMobileOpenAttempt(retry, now(), opened);
@@ -90,9 +95,10 @@ function createPool({ tabs, open, publish, own = () => true, now = Date.now }) {
 // 待機タブのうち最古の 1 本を閉じ、補充で新セッションとして作り直す（スマホ一覧の上に出すため）。
 const REFRESH_MIN_AGE_MS = 10 * 60000; // 出現から 10 分未満は対象外（レース回避）
 const RC_IN_USE_THRESHOLD_MS = 30 * 60000; // RC 最終操作から 30 分未満は使用中とみなす
-// tabs: [{ label, appearedAt, isActive, rcConnected, rcLastActivityAt }]。force=true（URI の refresh=1）は時間帯・間隔・無効設定を無視する。
+// tabs: [{ label, appearedAt, isActive, rcConnected, rcLastActivityAt, tab }]。force=true（URI の refresh=1）は時間帯・間隔・無効設定を無視する。
 // 不足中（待機数 < target）は常に no。補充を優先する。
-function decideRefresh({ now, minutes, hoursOk, lastRefreshAt, target, tabs, force = false }) {
+// openedTabs: この exthost が openMobileTab() で開いたタブの Set。自分で開いていないタブは閉じない。
+function decideRefresh({ now, minutes, hoursOk, lastRefreshAt, target, tabs, force = false, openedTabs }) {
   const waiting = tabs.filter(isWaitingTab);
   if (waiting.length < target) return { refresh: false, reason: 'shortage', waiting: waiting.length };
   if (!force) {
@@ -101,6 +107,8 @@ function decideRefresh({ now, minutes, hoursOk, lastRefreshAt, target, tabs, for
     if (lastRefreshAt && now - lastRefreshAt < minutes * 60000) return { refresh: false, reason: 'interval', waiting: waiting.length };
   }
   const candidates = waiting.filter((tab) => {
+    // 所有記録がない場合も閉じない（安全側）。
+    if (!tab.tab || !openedTabs?.has(tab.tab)) return false;
     if (tab.isActive) return false;
     if (now - tab.appearedAt < REFRESH_MIN_AGE_MS) return false;
     // RC で使用中のタブはリフレッシュ対象外
@@ -118,14 +126,43 @@ function decideRefresh({ now, minutes, hoursOk, lastRefreshAt, target, tabs, for
 // かつ非アクティブなものだけ。会話が始まったタブ（ラベルが変わった・アクティブ）は絶対に閉じない。
 // startup=true（ウィンドウ起動直後）は古さ不問で 1 本。それ以外は decideRefresh と同じ 10 分以上。
 // tabs: [{ label, appearedAt, isActive, tab }]。閉じるタブが無ければ null。
-function decideWorktreeCleanup({ tabs, now = Date.now(), startup = false }) {
+function decideWorktreeCleanup({ tabs, now = Date.now(), startup = false, openedTabs }) {
   const waiting = tabs.filter(isWaitingTab);
-  const candidates = waiting.filter((tab) => !tab.isActive && (startup || now - (tab.appearedAt ?? 0) >= REFRESH_MIN_AGE_MS));
+  const candidates = waiting.filter((tab) => {
+    // 所有記録がない場合も閉じない（安全側）。
+    if (!tab.tab || !openedTabs?.has(tab.tab)) return false;
+    return !tab.isActive && (startup || now - (tab.appearedAt ?? 0) >= REFRESH_MIN_AGE_MS);
+  });
   if (!candidates.length) return null;
   return candidates.reduce((oldest, current) => ((current.appearedAt ?? 0) < (oldest.appearedAt ?? 0) ? current : oldest));
 }
+// --- 余剰待機タブの自動削減判定（純粋関数） ---
+// 待機タブ（isWaitingTab）が target を超えたとき、超過分を古い順に閉じる。
+// 閉じる条件:
+// - isWaitingTab(tab) が真、isActive が偽
+// - 出現から 10 分以上経過
+// - transcript に user メッセージが無い（hasUserMessage === false）
+// - 1 回の実行で閉じるのは最大 maxClose（既定 10）本。target 本は必ず残す。openedTabs の記録は不問。
+function decideTrimExcess({ tabs, target, now = Date.now(), maxClose = 10, minAgeMs = REFRESH_MIN_AGE_MS }) {
+  if (!Array.isArray(tabs)) return [];
+  const waiting = tabs.filter(isWaitingTab);
+  if (waiting.length <= target) return [];
+  const maxTrimCount = Math.min(waiting.length - target, maxClose);
+  if (maxTrimCount <= 0) return [];
+
+  const candidates = waiting.filter((tab) => {
+    if (tab.isActive) return false;
+    if (now - (tab.appearedAt ?? 0) < minAgeMs) return false;
+    if (tab.hasUserMessage !== false) return false;
+    return true;
+  });
+
+  candidates.sort((a, b) => (a.appearedAt ?? 0) - (b.appearedAt ?? 0));
+  return candidates.slice(0, maxTrimCount);
+}
+
 module.exports = {
-  targetCount, readConfig, readSnapshot, createOwnershipLease, isWaitingTab, createPool,
+  AUTO_TITLE_RE, targetCount, readConfig, readSnapshot, createOwnershipLease, isWaitingTab, createPool,
   REFRESH_MIN_AGE_MS, RC_IN_USE_THRESHOLD_MS, decideRefresh, readRefreshConfig, readLastRefreshAt, inRefreshHours,
-  isWorktreeFolder, decideWorktreeCleanup,
+  isWorktreeFolder, decideWorktreeCleanup, decideTrimExcess,
 };

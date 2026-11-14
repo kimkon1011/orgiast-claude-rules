@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { powerShellTestRuntime } from './fixtures/powershell-test-runtime.mjs';
-import { compareVersions, targetVersion, verifySha256, buildFallbackCmd, convergeNodeRuntimeSecurity } from './setup-node-runtime-security.mjs';
+import { compareVersions, targetVersion, verifySha256, buildFallbackCmd, convergeNodeRuntimeSecurity, isInteractiveConsole } from './setup-node-runtime-security.mjs';
 
 const releases = ['v22.23.4', 'v24.9.0', 'v26.12.1', 'v24.22.1', 'v24.22.0', 'v24.23.0-rc.1'].map((version) => ({ version }));
 const bytes = Buffer.from('mock official MSI');
@@ -16,6 +16,10 @@ const psScript = (args) => Buffer.from(args.at(-1), 'base64').toString('utf16le'
 async function fixture(t, options = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'node-security-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
+  // auto RunAs（UAC）を検証する既存テストは対話コンソール扱いにする。
+  // 無人の hook/converge 相当（RunAs を起動してはならない）は interactive:false で指定する。
+  if (options.interactive !== false) process.env.ORGIAST_NODE_UPDATER_UAC_INTERACTIVE = '1';
+  t.after(() => { if (options.interactive !== false) delete process.env.ORGIAST_NODE_UPDATER_UAC_INTERACTIVE; });
   let current = options.current || 'v24.20.0', ubuntu = options.ubuntu;
   let now = 0, launches = 0;
   const calls = [], downloads = [], sleeps = [];
@@ -165,6 +169,25 @@ test('UAC process launch failure leaves the recovery launcher', async (t) => {
   const f = await fixture(t, { elevated: false, launchError: true });
   assert.match((await convergeNodeRuntimeSecurity(f.io)).description, /UAC 起動失敗/);
   await fs.access(f.launcher);
+});
+
+test('non-elevated unattended (hook/scheduled) never launches RunAs; leaves launcher + notice', async (t) => {
+  const f = await fixture(t, { elevated: false, interactive: false });
+  const result = await convergeNodeRuntimeSecurity(f.io);
+  assert.equal(result.status, 'NOTICE');
+  assert.equal(f.launches, 0);
+  assert.match(result.description, /非昇格の無人実行/);
+  assert.match(result.description, /ダブルクリック/);
+  assert.doesNotMatch(result.description, /UAC 起動失敗/);
+  await fs.access(f.launcher);
+});
+
+test('isInteractiveConsole is false without a TTY unless the env override is set', () => {
+  delete process.env.ORGIAST_NODE_UPDATER_UAC_INTERACTIVE;
+  assert.equal(isInteractiveConsole(), Boolean(process.stdout.isTTY));
+  process.env.ORGIAST_NODE_UPDATER_UAC_INTERACTIVE = '1';
+  assert.equal(isInteractiveConsole(), true);
+  delete process.env.ORGIAST_NODE_UPDATER_UAC_INTERACTIVE;
 });
 
 for (const options of [{ networkFail: true }, { failUrl: 'SHASUMS256.txt' }, { failUrl: '.msi' }, { badSha: true }, { index: '{}' }]) {

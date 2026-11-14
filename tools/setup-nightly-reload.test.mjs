@@ -12,7 +12,7 @@ test('registration reports change, no-op, and errors without starting the task',
   for (const changed of [true, false]) {
     const result = convergeNightlyReload({ platform: 'win32', restore: () => false, run(command, args, options) {
       assert.equal(command, 'powershell.exe');
-      assert.equal(/register-(nightly-reload-vscode|reopen-lost-sessions)\.ps1$/.test(args.at(-1)), true);
+      assert.equal(/register-(nightly-reload-vscode|reopen-lost-sessions|claude-priority-guard)\.ps1$/.test(args.at(-1)), true);
       assert.equal(options.windowsHide, true);
       return JSON.stringify({ changed });
     } });
@@ -40,11 +40,11 @@ test('restoreWindows preserves JSONC and is idempotent', t => {
   assert.throws(() => ensureRestoreWindows(file));
   assert.equal(fs.readFileSync(file, 'utf8'), '{broken');
 });
-test('converge registers both nightly protection and logon recovery', () => {
+test('converge registers nightly protection, logon recovery, and priority guard', () => {
   const calls = [];
   const result = convergeNightlyReload({ platform: 'win32', restore: () => false,
-    run(command, args) { calls.push(path.basename(args.at(-1))); return JSON.stringify({ changed: calls.length === 2 }); } });
-  assert.deepEqual(calls, ['register-nightly-reload-vscode.ps1', 'register-reopen-lost-sessions.ps1']);
+    run(command, args) { calls.push(path.basename(args.at(-1))); return JSON.stringify({ changed: calls.length === 3 }); } });
+  assert.deepEqual(calls, ['register-nightly-reload-vscode.ps1', 'register-reopen-lost-sessions.ps1', 'register-claude-priority-guard.ps1']);
   assert.equal(result.repaired, true);
   assert.equal(result.status, 'OK');
 });

@@ -45,17 +45,12 @@ function Register-ReopenLostTask(
 
     $name2 = 'OrgiastReopenLostSessionsWatch'
     $action2 = New-ScheduledTaskAction -Execute (Join-Path $env:WINDIR 'System32\wscript.exe') -Argument ('//nologo "{0}" "{1}" "{2}" "--watch"' -f $hidden, $node, $file)
-    # Two triggers: (1) AtLogOn so it fires after every logon; (2) Once with
-    # a fixed start so it fires immediately after registration and then every
-    # 15 minutes indefinitely.  The fixed date '2026-01-01T00:00:00' ensures
-    # the definition is stable across converge calls.
-    $trigger2a = New-ScheduledTaskTrigger -AtLogOn -User $user
-    $trigger2a.Delay = 'PT5M'
-    $trigger2a.Repetition = (New-ScheduledTaskTrigger -Once -At '00:00' -RepetitionInterval (New-TimeSpan -Minutes 15)).Repetition
+    # 2026-11-13: Two offset triggers ran about every 7.5 minutes and accumulated claude.exe processes.
+    # Keep one fixed, indefinite 15-minute trigger; logon recovery remains in task1 (PT3M).
     $trigger2b = New-ScheduledTaskTrigger -Once -At '2026-01-01T00:00:00' -RepetitionInterval (New-TimeSpan -Minutes 15)
     $principal2 = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
     $settings2 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -Priority 5
-    $desired2 = New-ScheduledTask -Action $action2 -Trigger @($trigger2a, $trigger2b) -Principal $principal2 -Settings $settings2
+    $desired2 = New-ScheduledTask -Action $action2 -Trigger $trigger2b -Principal $principal2 -Settings $settings2
 
     $current2 = & $GetTask $name2
     $changed2 = $false

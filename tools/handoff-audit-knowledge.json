@@ -352,5 +352,11 @@
     "route": "PR作成と着地の確認は Claude が行う。codex-do.mjs は実装を委譲するだけであり、PR作成・着地確認の責任を委譲しない。正しい手順: (a) codex-do.mjs で実装が完了したら、Claude が `node tools/pr-land.mjs --title \"<題>\" --body-file <本文>` で base へ push し PR を作成する（または gh CLI で fork 跨ぎ PR を作成する）。(b) `automerge` ラベルを付ける（鍵関連は安全弁パスとして pr-merge.mjs のレビュー・SHA 検証を通す）。(c) CI の完了を `gh run list -R <owner>/<repo> --limit 5 --json workflowName,conclusion,headBranch` で確認し、緑ならマージされるまで待つ。CI が赤なら直す（3回直して赤のままなら理由を記録する）。(d) マージ後は `gh pr view <番号> -R <owner>/<repo> --json state,mergedAt` で着地を確認し、`node tools/commit-landed.mjs <sha>` で取込を確定する。codex-do.mjs の exit code だけで「完了」と判断せず、着地まで Claude が確認する。",
     "confidence": "high",
     "source": "2026-11-11 handoff-audit-candidates tool-name-route レビュー（元: codex-do.mjs 道具名のみ→手順文に書換）"
+  },
+  {
+    "pattern": "作業完了報告・状態確認",
+    "route": "完了報告と状態確認は「Drive MCP」のような汎用ツール名で抽象化せず、確認対象ごとに特定の API/ツールを呼び出して実データを根拠に書く。Drive 上のファイル状態（存在・更新日時・中身）は DWD(kim impersonate / drive スコープ)で Drive API v3 の files.get（alt=media または export）と files.list を直接叩く（Drive MCP は使わない）。スプレッドシートの内容は SA 直 JWT（`aujust-sales-automation/.gcp/sheets-sa.json`、scope=`https://www.googleapis.com/auth/spreadsheets.readonly`）で `GET /v4/spreadsheets/{id}?fields=properties.title,sheets.properties` と `GET /v4/spreadsheets/{id}/values/{tab}!A1:BZ400` を叩く（詳細は knowledge entry「Google スプレッドシートの書き込み結果検証」の検証4点）。GitHub の状態は `gh pr view <番号> -R <owner>/<repo> --json state,mergedAt`、`gh run list -R <owner>/<repo> --limit 5 --json status,conclusion,headSha`、`gh api repos/<owner>/<repo>/<path>` で直接照会する。Vercel の反映確認は `VERCEL_TOKEN=... vercel inspect <本番URL>` で Ready と id/created を確認する。コミットの取込は squash マージで is-ancestor が偽になるため `node tools/commit-landed.mjs <sha>` を使う。報告は「確認要素 × 照会ツール × 実応答データ」の検証表で出し、照会に失敗した項目は実際の error 本文を添えて「未確認」と書く。確率付き否定や「user が確認して」への丸投げをしない。実例: 2026-09-20 に Drive API で旧版ファイルの trash 候補を列挙し kim への手渡しにした（knowledge entry「Drive 上の旧版ファイルをゴミ箱へ」）。",
+    "confidence": "high",
+    "source": "2026-11-13 handoff-audit-candidates tool-name-route レビュー（元: pattern「作業完了報告・状態確認」route が「Drive MCP」道具名のみだったため手順文に書換）"
   }
 ]

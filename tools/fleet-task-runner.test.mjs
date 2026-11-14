@@ -166,6 +166,25 @@ test('802 codex separates stderr and redacts before tail truncation', async t =>
 });
 
 import { runPrompt } from './fleet-agent.mjs';
+test('fleet-exec は無効時も --resume 付きで起動し、他の source は起動しない', async t => {
+  const before = process.env.ORGIAST_AUTO_RESUME;
+  delete process.env.ORGIAST_AUTO_RESUME;
+  t.after(() => { before === undefined ? delete process.env.ORGIAST_AUTO_RESUME : process.env.ORGIAST_AUTO_RESUME = before; });
+  const calls = [];
+  const spawnImpl = (program, args) => {
+    calls.push(args);
+    const child = new EventEmitter();
+    child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    queueMicrotask(() => { child.stdout.write('done'); child.emit('close', 0); });
+    return child;
+  };
+  const options = { claudeExe: 'mock', body: 'continue', resumeSessionId: 'session', spawnImpl };
+  assert.equal((await runPrompt({ ...options, resumeSource: 'automatic' })).exitCode, null);
+  assert.equal(calls.length, 0);
+  assert.equal((await runPrompt({ ...options, resumeSource: 'fleet-exec' })).exitCode, 0);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].slice(0, 3), ['-p', '--resume', 'session']);
+});
 import { classifyExecutionResult } from './fleet-mail.mjs';
 for (const length of [8000, 8001, 120000]) {
   test(`answer truncation preserves beginning and end in both runners (${length})`, async t => {

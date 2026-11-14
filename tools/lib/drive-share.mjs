@@ -11,6 +11,8 @@ export function extractFileId(value) {
     const url = new URL(text);
     if (!['docs.google.com', 'drive.google.com'].includes(url.hostname)) return null;
     const pathname = url.pathname.replace(/^\/a\/[^/]+/, '');
+    // 公開回答URL (/forms/d/e/<id>) は共有不要。編集URL (/forms/d/<id>/edit) は従来どおり抽出
+    if (/\/forms\/d\/e\//.test(pathname)) return null;
     const id = pathname.match(/^\/(?:document|spreadsheets|presentation|forms|file)\/d\/([\w-]+)(?:\/|$)/)?.[1]
       ?? pathname.match(/^\/drive\/(?:u\/\d+\/)?folders\/([\w-]+)(?:\/|$)/)?.[1]
       ?? url.searchParams.get('id');

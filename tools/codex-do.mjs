@@ -1462,9 +1462,12 @@ async function tryCheapFirstFallback() {
 async function launchCodex(codexArgs, primaryStarted = Date.now()) {
   let result;
 
-  const remainingTimeoutSecs = () => remainingPrimaryBudgetSecs(
-    timeoutSeconds,
-    (Date.now() - primaryStarted) / 1000,
+  // 主経路の codex も fallbackBackendTimeoutSecs の上限(既定900秒)で制限する。
+  // これが無いと --timeout 3000 等の長い全体予算がそのまま codex に渡り、
+  // 1回の codex 呼出で 3000 秒を捨てることになる(2026-11-12 実測: gpt-6-astra 3025秒/予算3000秒)。
+  const remainingTimeoutSecs = () => Math.min(
+    remainingPrimaryBudgetSecs(timeoutSeconds, (Date.now() - primaryStarted) / 1000),
+    fallbackBackendTimeoutSecs(timeoutSeconds),
   );
 
   if (process.platform === 'win32' && !forceNative) {

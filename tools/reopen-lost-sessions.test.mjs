@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord } from './reopen-lost-sessions.mjs';
+import { getLoadGuardStatus, hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord } from './reopen-lost-sessions.mjs';
+import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
+import { unverifiedStreakCounts, isSessionProcessRunning, connectedRcSessionIds } from './reopen-lost-sessions.mjs';
 
 const since = '2026-11-05T19:40:00Z', until = '2026-11-05T20:15:00Z';
 const exit = { event_type: 'system', payload: { reason: 'host_exit' }, created_at: since };
@@ -94,7 +96,7 @@ test('reopenLost: worktree cwd のセッションは最初の非 worktree cwd �
         if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
           return { status: 0, stdout: '0' };
         }
-        psCalls.push(cmdStr);
+        if (!cmdStr.includes('Get-CimInstance Win32_Process')) psCalls.push(cmdStr);
       }
       return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
     },
@@ -229,7 +231,7 @@ test('opening continues after API deadline; focus precedes URI; lock released an
       if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
         return { status: 0, stdout: '0' };
       }
-      calls.push(args);
+      if (!cmdStr.includes('Get-CimInstance Win32_Process')) calls.push(args);
       return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
     },
     windowReady: () => { clock = 120000; return true; }, wait: async () => {},
@@ -343,11 +345,11 @@ test('exclusions for archivedByUser and reopenLoop', async t => {
   assert.equal(result.skipped.reopenLoop, 1);
 });
 
-test('reopenLoop: 再接続できなかった(unverified)reopen はループに数えない', async t => {
+test('reopenLoop: unverified はループに数えず unverifiedStreak で止める', async t => {
   const base = fixture(t);
   const now = () => Date.parse('2026-11-07T12:00:00.000Z');
 
-  // 60分以内に2回 reopen したが全て unverified（再接続失敗）。これはループではなく接続障害なので止めない。
+  // 2回の失敗は verified 専用ループとは別の6時間ガードで止める。
   const logFile = path.join(base, 'reopen-lost-sessions.log');
   const logEntries = [
     { at: '2026-11-07T11:20:00.000Z', reopened: [{ id: 'one' }], verified: [], unverified: ['one'] },
@@ -358,8 +360,8 @@ test('reopenLoop: 再接続できなかった(unverified)reopen はループに�
   const fetchImplNormal = async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } });
   const result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl: fetchImplNormal, spawn: () => ({ status: 0, stdout: '[]' }) });
   assert.equal(result.skipped.reopenLoop, 0);
-  assert.equal(result.candidates.length, 1);
-  assert.equal(result.candidates[0].id, 'one');
+  assert.equal(result.skipped.unverifiedStreak, 1);
+  assert.equal(result.candidates.length, 0);
 });
 
 test('post-reopen verification records verified and unverified', async t => {
@@ -511,7 +513,7 @@ test('reopenLost: ウィンドウ無し＋lastActiveWindow.workspaceIdentifier �
         if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
           return { status: 0, stdout: '0' };
         }
-        psCalls.push(cmdStr);
+        if (!cmdStr.includes('Get-CimInstance Win32_Process')) psCalls.push(cmdStr);
       }
       return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
     },
@@ -560,7 +562,7 @@ test('reopenLost falls back to code <cwd> with openedWith: folder when no worksp
         if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
           return { status: 0, stdout: '0' };
         }
-        psCalls.push(cmdStr);
+        if (!cmdStr.includes('Get-CimInstance Win32_Process')) psCalls.push(cmdStr);
       }
       return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
     },
@@ -1160,7 +1162,7 @@ test('acquireLock dual update: futimesSync and utimesSync run without error', t 
 
 // ── reopenLost writes progress at key stages ────────────
 
-test('reopenLost writes progress during dry run', async t => {
+test('reopenLost dry run never writes progress, lock or log', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'rp-progress-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const base = path.join(root, '.claude');
@@ -1178,12 +1180,9 @@ test('reopenLost writes progress during dry run', async t => {
     spawn: () => ({ status: 0, stdout: '[]' }),
   });
 
-  // Progress file should exist with at least 'done' stage
-  const progressPath = path.join(base, 'reopen-lost-sessions-progress.json');
-  assert.ok(fs.existsSync(progressPath), 'progress file should exist');
-  const data = JSON.parse(fs.readFileSync(progressPath, 'utf8'));
-  assert.equal(data.stage, 'done');
-  assert.equal(data.detail, 'log written');
+  for (const name of ['reopen-lost-sessions-progress.json', 'reopen-lost-sessions.lock', 'reopen-lost-sessions.log']) {
+    assert.equal(fs.existsSync(path.join(base, name)), false, name);
+  }
 });
 
 test('measureCpuAsync: 50% usage from stubbed cpus', async () => {
@@ -1431,7 +1430,7 @@ test('parseOptions: 既定 max は 3 である', () => {
   assert.equal(opts.max, 3);
 });
 
-test('loadGuard: claude プロセス数 >= 閾値(10)で 0 件 reopen かつ skipped.loadGuard に計上', async t => {
+test('loadGuard: claude プロセス数 >= 閾値(10)でも 1 件は reopen する（RC切断放置防止）', async t => {
   const base = fixture(t);
   const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
   const fetchImpl = async url => {
@@ -1446,11 +1445,13 @@ test('loadGuard: claude プロセス数 >= 閾値(10)で 0 件 reopen かつ ski
     if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
     return { status: 0, stdout: '' };
   };
-  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime });
-  assert.equal(result.reopened.length, 0);
-  assert.equal(result.skipped.loadGuard, 1);
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  // claudeCount 高でも 1 件は reopen（CPU 負荷ではないため）
+  assert.equal(result.reopened.length, 1);
+  assert.equal(result.skipped.loadGuard, 0);
   assert.equal(result.loadGuard.claudeCount, 10);
   assert.equal(result.loadGuard.reason, 'claudeCount');
+  assert.equal(result.loadGuard.allowFirst, true);
 });
 
 test('loadGuard: CPU >= 閾値(85%)で 0 件 reopen かつ skipped.loadGuard に計上', async t => {
@@ -1501,6 +1502,183 @@ test('loadGuard: tasklist 失敗時は fail-open でスキップせず reopen �
   assert.equal(result.loadGuard.claudeCount, null);
   assert.ok(result.loadGuard.error);
   assert.equal(result.reopened.length, 1);
+});
+
+test('loadGuard: claudeCount 高でも 3 件中 1 件のみ reopen、残り 2 件は skipped.loadGuard に計上', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-loadguard-3cand-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
+
+  // 3 candidates
+  for (let i = 1; i <= 3; i++) {
+    const id = `cse_cand_${i}`;
+    const dir = path.join(root, `dir_${i}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(base, 'projects', 'proj', `${id}.jsonl`), [
+      { type: 'bridge-session', bridgeSessionId: id },
+      { type: 'user', cwd: dir, message: { content: 'hello' } },
+    ].map(JSON.stringify).join('\n'));
+  }
+
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
+    return { ok: true, json: async () => ({ data: [
+      { id: 'cse_cand_1' }, { id: 'cse_cand_2' }, { id: 'cse_cand_3' },
+    ] }) };
+  };
+  const spawn = (cmd, args) => {
+    if (cmd === 'tasklist') {
+      const csv = Array(10).fill('"claude.exe","1234","Console","1","100,000 K"').join('\n');
+      return { status: 0, stdout: csv };
+    }
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  // claudeCount 高でも 1 件は reopen、残り 2 件は skipped
+  assert.equal(result.reopened.length, 1, '1 candidate should be reopened');
+  assert.equal(result.skipped.loadGuard, 2, '2 candidates should be skipped by loadGuard');
+  assert.equal(result.loadGuard.allowFirst, true);
+  assert.equal(result.loadGuard.claudeCount, 10);
+});
+
+test('countWindowsClaudeProcesses: orphan claude processes (parent PID not alive) are excluded', async t => {
+  // Create 3 CLI processes and 1 orphan
+  const cliRows = [
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume abc', ProcessId: 100, ParentProcessId: 1 },
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume def', ProcessId: 101, ParentProcessId: 1 },
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume ghi', ProcessId: 102, ParentProcessId: 100 },
+    // Orphan: PPID=999 (not in the alive PID set)
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume orphan', ProcessId: 200, ParentProcessId: 999 },
+  ];
+  const psScript = JSON.stringify(cliRows);
+  const exec = (cmd, args) => {
+    assert.equal(cmd, 'powershell.exe');
+    return psScript;
+  };
+  const { countWindowsClaudeProcesses } = await import('./lib/windows-process.mjs');
+  const count = countWindowsClaudeProcesses(exec);
+  assert.equal(count, 3, 'orphan process should be excluded');
+});
+
+test('loadGuard: credential diagnostics show missing file/field details', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-cred-diag-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+
+  // Case A: Missing .credentials.json
+  let result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe',
+    fetchImpl: async () => assert.fail(), spawn: () => { throw Error('should not spawn'); } });
+  assert.ok(result.error, 'should have error');
+  assert.match(result.error, /credentials file not found/, `missing cred file: ${result.error}`);
+
+  // Case B: Missing .claude.json
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe',
+    fetchImpl: async () => assert.fail(), spawn: () => { throw Error('should not spawn'); } });
+  assert.ok(result.error, 'should have error');
+  assert.match(result.error, /config file not found/, `missing config file: ${result.error}`);
+
+  // Case C: Missing token field in .credentials.json
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({}));
+  result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe',
+    fetchImpl: async () => assert.fail(), spawn: () => { throw Error('should not spawn'); } });
+  assert.ok(result.error, 'should have error');
+  assert.match(result.error, /Missing accessToken/, `missing token: ${result.error}`);
+
+  // Case D: Missing org UUID in .claude.json
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({}));
+  result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe',
+    fetchImpl: async () => assert.fail(), spawn: () => { throw Error('should not spawn'); } });
+  assert.ok(result.error, 'should have error');
+  assert.match(result.error, /Missing oauthAccount\.organizationUuid/, `missing org: ${result.error}`);
+});
+
+test('loadGuard: CPU 高 (>=85%) は claudeCount が低くても全件 defer する（CPU 優先）', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-cpu-defer-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+  ].map(JSON.stringify).join('\n'));
+
+  const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
+    return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
+  };
+  const spawn = (cmd, args) => {
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+  let cpuCallCount = 0;
+  const cpusImpl = () => {
+    cpuCallCount++;
+    if (cpuCallCount === 1) return [{ times: { user: 0, nice: 0, system: 0, idle: 0, iowait: 0, irq: 0, softirq: 0 } }];
+    return [{ times: { user: 50, nice: 0, system: 40, idle: 5, iowait: 0, irq: 0, softirq: 0 } }];
+  };
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, cpusImpl, checkCpu: true, checkClaude: false, now: () => nowTime });
+  assert.equal(result.reopened.length, 0, 'CPU high should defer everything');
+  assert.equal(result.skipped.loadGuard, 1, '1 candidate skipped by CPU loadGuard');
+  assert.equal(result.deferredCpu, 95);
+  assert.match(result.loadGuard.reason, /cpuPct/);
+  assert.equal(result.loadGuard.allowFirst, undefined, 'allowFirst should not be set for CPU defer');
+});
+
+test('loadGuard: PowerShell 出力から Claude デスクトップアプリ (11本) を除外し CLI (8本) だけを数え、上限(10)未満のためブロックしない', async t => {
+  const base = fixture(t);
+  const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
+    return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
+  };
+  const desktopProcs = [
+    'C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=crashpad-handler',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=gpu-process',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=network.mojom.NetworkService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=renderer --user-data-dir="C:\\Users\\uers\\AppData\\Roaming\\Claude"',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=renderer --app-user-model-id=Claude_pzs8sxrjxfjjc!Claude',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=node.mojom.NodeService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=node.mojom.NodeService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=node.mojom.NodeService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=audio.mojom.AudioService',
+    '"C:\\Program Files\\WindowsApps\\Claude_5.1231.2.0_x64__pzs8sxrjxfjjc\\app\\claude.exe" --type=utility --utility-sub-type=video_capture.mojom.VideoCaptureService',
+  ];
+  const cliProcs = [
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --output-format stream-json',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --output-format stream-json --verbose',
+    'C:\\Users\\uers\\AppData\\Roaming\\Claude\\claude-code\\2.1.321\\d020ce1b5d30\\claude.exe --resume 1234',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume aaed1ee2',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume fe31e35e',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume c6a31e7c',
+    'c:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319-win32-x64\\resources\\native-binary\\claude.exe --resume 5b1c3cb7',
+    'C:\\Users\\uers\\.local\\bin\\claude.exe agents --json',
+  ];
+  const psOutput = JSON.stringify([...desktopProcs, ...cliProcs].map(CommandLine => ({ Name: 'claude.exe', CommandLine })));
+
+  const spawn = (cmd, args) => {
+    if (cmd === 'powershell.exe') return { status: 0, stdout: psOutput };
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  assert.equal(result.skipped.loadGuard, 0);
+  assert.equal(result.reopened.length, 1);
+  const guard = await getLoadGuardStatus({ spawn, checkCpu: false });
+  assert.equal(guard.claudeCount, 8);
+  assert.equal(guard.triggered, false);
+  assert.equal(guard.reason, null);
 });
 
 test('reopenRepeat: 6時間以内に unverified 含め3回 reopen された id は reopenRepeat で除外される', async t => {
@@ -1567,4 +1745,400 @@ test('watchReopen: max 未指定時は 5 件の候補があっても reopen は�
 
   assert.equal(result.candidates.length, 5);
   assert.equal(result.reopened.length, 3);
+});
+
+test('readVscodeHiddenSessionIds: 一時 sqlite DB を作り key=Anthropic.claude-code, value={"hiddenSessionIds":["a","b"]} を入れて Set{a,b} が返る／DB 無しで空 Set＋error', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vscdb-test-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  // DB 無し
+  const envMissing = { APPDATA: path.join(root, 'nonexistent') };
+  const resMissing = readVscodeHiddenSessionIds({ env: envMissing });
+  assert.equal(resMissing.ids.size, 0);
+  assert.ok(resMissing.error.includes('state.vscdb not found'));
+
+  // 有効な SQLite DB
+  const dbDir = path.join(root, 'appdata', 'Code', 'User', 'globalStorage');
+  fs.mkdirSync(dbDir, { recursive: true });
+  const dbPath = path.join(dbDir, 'state.vscdb');
+
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(dbPath);
+  db.exec('CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)');
+  db.prepare('INSERT INTO ItemTable (key, value) VALUES (?, ?)').run('Anthropic.claude-code', JSON.stringify({ hiddenSessionIds: ['cse_hidden1', 'cse_hidden2'] }));
+  db.close();
+
+  const envExist = { APPDATA: path.join(root, 'appdata') };
+  const resExist = readVscodeHiddenSessionIds({ env: envExist });
+  assert.equal(resExist.error, null);
+  assert.deepEqual([...resExist.ids].sort(), ['cse_hidden1', 'cse_hidden2']);
+});
+
+test('hidden に含まれる state 候補が開かれず archivedByUser が 1 になる', async t => {
+  const base = fixture(t);
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  const now = () => nowTime;
+
+  const openDbMock = () => [{ key: 'Anthropic.claude-code', value: JSON.stringify({ hiddenSessionIds: ['cse_one'] }) }];
+
+  const fetchImpl = async () => ({
+    ok: true,
+    json: async () => ({
+      data: [{ id: 'cse_one', status: 'active', connection_status: 'disconnected', last_event_at: '2026-11-07T11:55:00.000Z', updated_at: '2026-11-07T11:55:00.000Z' }]
+    })
+  });
+
+  const result = await reopenLost({
+    base, since, until, dryRun: true, stateBased: true, claudeCli: 'claude.exe', now, fetchImpl,
+    openDb: openDbMock,
+    env: { APPDATA: path.join(base, 'nonexistent') },
+    fsImpl: { ...fs, existsSync: () => true, copyFileSync: () => {} },
+    spawn: () => ({ status: 0, stdout: '[]' })
+  });
+
+  assert.equal(result.skipped.archivedByUser, 1);
+  assert.equal(result.candidates.length, 0);
+});
+
+test('hidden に含まれる host_exit 候補も開かれない', async t => {
+  const base = fixture(t);
+  const now = () => Date.parse('2026-11-07T12:00:00.000Z');
+
+  const openDbMock = () => [{ key: 'Anthropic.claude-code', value: JSON.stringify({ hiddenSessionIds: ['cse_one'] }) }];
+
+  const fetchImpl = async url => ({
+    ok: true,
+    json: async () => url.includes('/events?')
+      ? { data: [exit] }
+      : { data: [{ id: 'cse_one', status: 'active' }] }
+  });
+
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl,
+    openDb: openDbMock,
+    env: { APPDATA: path.join(base, 'nonexistent') },
+    fsImpl: { ...fs, existsSync: () => true, copyFileSync: () => {} },
+    spawn: () => ({ status: 0, stdout: '[]' })
+  });
+
+  assert.equal(result.skipped.archivedByUser, 1);
+  assert.equal(result.candidates.length, 0);
+});
+
+test('hidden に無い候補は従来どおり開かれる', async t => {
+  const base = fixture(t);
+  const now = () => Date.parse('2026-11-07T12:00:00.000Z');
+
+  const openDbMock = () => [{ key: 'Anthropic.claude-code', value: JSON.stringify({ hiddenSessionIds: ['other_id'] }) }];
+
+  const fetchImpl = async url => ({
+    ok: true,
+    json: async () => url.includes('/events?')
+      ? { data: [exit] }
+      : { data: [{ id: 'cse_one', status: 'active' }] }
+  });
+
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl,
+    openDb: openDbMock,
+    env: { APPDATA: path.join(base, 'nonexistent') },
+    fsImpl: { ...fs, existsSync: () => true, copyFileSync: () => {} },
+    spawn: () => ({ status: 0, stdout: '[]' })
+  });
+
+  assert.equal(result.skipped.archivedByUser, 0);
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].id, 'one');
+});
+
+test('hidden 読み取り失敗時は従来どおり開かれ hiddenError が入る', async t => {
+  const base = fixture(t);
+  const now = () => Date.parse('2026-11-07T12:00:00.000Z');
+
+  const openDbMock = () => { throw new Error('DB read error'); };
+
+  const fetchImpl = async url => ({
+    ok: true,
+    json: async () => url.includes('/events?')
+      ? { data: [exit] }
+      : { data: [{ id: 'cse_one', status: 'active' }] }
+  });
+
+  const result = await reopenLost({
+    base, since, until, dryRun: true, claudeCli: 'claude.exe', now, fetchImpl,
+    openDb: openDbMock,
+    env: { APPDATA: path.join(base, 'nonexistent') },
+    fsImpl: { ...fs, existsSync: () => true, copyFileSync: () => {} },
+    spawn: () => ({ status: 0, stdout: '[]' })
+  });
+
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].id, 'one');
+  assert.equal(result.hiddenError, 'DB read error');
+});
+
+
+test('loadGuard counts missing metadata and excludes desktop executable paths', async () => {
+  const rows = [
+    { Name: 'claude.exe', ExecutablePath: 'C:/Program Files/WindowsApps/Claude_5/app/claude.exe' },
+    { Name: 'claude.exe', CommandLine: null, ExecutablePath: null },
+  ];
+  const result = await getLoadGuardStatus({ checkCpu: false, spawn: () => ({ status: 0, stdout: JSON.stringify(rows) }) });
+  assert.equal(result.claudeCount, 1);
+});
+
+const guardNow = Date.parse('2026-11-07T12:00:00Z');
+const failedReopen = (hoursAgo, id = 'one') => ({
+  at: new Date(guardNow - hoursAgo * 3600000).toISOString(), reopened: [{ id }], unverified: [id],
+});
+function writeHistory(base, rows) {
+  fs.writeFileSync(path.join(base, 'reopen-lost-sessions.log'), rows.map(JSON.stringify).join('\n') + '\n');
+}
+function guardOptions(base, extra = {}) {
+  return {
+    base, since, until, now: () => guardNow, checkCpu: false, checkClaude: false,
+    claudeCli: 'mock-claude', codeCli: 'mock-code', env: { APPDATA: path.join(base, 'no-appdata') },
+    vscodeStartedAt: null, wait: async () => {}, windowReady: async () => true,
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : {
+      data: [{ id: 'cse_one', title: 'Phone work', status: 'active', connection_status: 'disconnected', last_event_at: new Date(guardNow - 60000).toISOString() }],
+    } }),
+    spawn: (cmd, args) => ({ status: 0, stdout: args[0] === 'agents' || args.at(-1).includes('Get-CimInstance Win32_Process') ? '[]' : '1' }),
+    ...extra,
+  };
+}
+
+test('unverifiedStreak: chronological history, verified reset, per-ID counting and unknown verification ignored', t => {
+  const base = fixture(t);
+  writeHistory(base, [
+    failedReopen(1), failedReopen(9),
+    { at: new Date(guardNow - 2 * 3600000).toISOString(), reopened: ['one'], verifyError: 'timeout' },
+    failedReopen(1, 'other'),
+    { at: new Date(guardNow - 3 * 3600000).toISOString(), unverified: ['one'] },
+    failedReopen(-1), { at: 'invalid', reopened: ['one'], unverified: ['one'] },
+  ]);
+  fs.appendFileSync(path.join(base, 'reopen-lost-sessions.log'), 'broken line\n');
+  assert.deepEqual(unverifiedStreakCounts(base, guardNow), { one: 2, other: 1 });
+  fs.appendFileSync(path.join(base, 'reopen-lost-sessions.log'), JSON.stringify({ at: new Date(guardNow - 1800000).toISOString(), verified: ['one'] }) + '\n');
+  assert.deepEqual(unverifiedStreakCounts(base, () => guardNow), { other: 1 });
+});
+
+test('unverifiedStreak: exact six-hour boundary permits retry; another failure renews cooldown', t => {
+  const base = fixture(t);
+  const history = [failedReopen(20), failedReopen(6)];
+  writeHistory(base, history);
+  assert.equal(unverifiedStreakCounts(base, guardNow - 1).one, 2);
+  assert.equal(unverifiedStreakCounts(base, guardNow).one, undefined);
+  writeHistory(base, [...history, failedReopen(0)]);
+  assert.equal(unverifiedStreakCounts(base, guardNow).one, 3);
+  assert.equal(unverifiedStreakCounts(base, guardNow + 6 * 3600000).one, undefined);
+});
+
+for (const stateBased of [false, true]) {
+  for (const scenario of ['no history', 'one failure', 'two failures', 'verified reset']) {
+    test(`mobile recovery ${stateBased ? 'state' : 'host_exit'}: ${scenario}`, async t => {
+      const base = fixture(t);
+      if (scenario === 'one failure') writeHistory(base, [failedReopen(1)]);
+      if (scenario === 'two failures') writeHistory(base, [failedReopen(8), failedReopen(1)]);
+      if (scenario === 'verified reset') writeHistory(base, [failedReopen(8), failedReopen(7), {
+        at: new Date(guardNow - 60000).toISOString(), reopened: ['one'], verified: ['one'],
+      }]);
+      const opts = guardOptions(base, { stateBased, dryRun: true });
+      if (stateBased) opts.fetchImpl = async () => ({ ok: true, json: async () => ({ data: [{
+        id: 'cse_one', status: 'active', connection_status: 'disconnected', last_event_at: new Date(guardNow - 60000).toISOString(), title: 'Phone work',
+      }] }) });
+      const result = await reopenLost(opts);
+      assert.equal(result.error, undefined);
+      assert.equal(result.skipped.unverifiedStreak, scenario === 'two failures' ? 1 : 0);
+      assert.equal(result.candidates.length, scenario === 'two failures' ? 0 : 1);
+      if (result.candidates.length) {
+        assert.equal(result.candidates[0].rcId, 'cse_one');
+        assert.equal(result.candidates[0].bridgeSessionId, 'cse_one');
+      }
+    });
+  }
+}
+
+test('unverifiedStreak: refresh history after fetch before dispatch', async t => {
+  const base = fixture(t), opts = guardOptions(base);
+  const fetchImpl = opts.fetchImpl;
+  opts.fetchImpl = async url => {
+    writeHistory(base, [failedReopen(8), failedReopen(1)]);
+    return fetchImpl(url);
+  };
+  const result = await reopenLost(opts);
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.reopened.length, 0);
+  assert.equal(result.skipped.unverifiedStreak, 1);
+});
+
+test('unverifiedStreak: cooldown permits one reopen then blocks the next run', async t => {
+  const base = fixture(t);
+  writeHistory(base, [failedReopen(20), failedReopen(6)]);
+  const first = await reopenLost(guardOptions(base));
+  assert.equal(first.reopened.length, 1);
+  assert.deepEqual(first.unverified, ['one']);
+  const second = await reopenLost(guardOptions(base));
+  assert.equal(second.reopened.length, 0);
+  assert.equal(second.skipped.unverifiedStreak, 1);
+});
+
+for (const command of ['claude.exe --resume=local-uuid', 'claude.exe --resume "local-uuid"', 'claude.exe --resume bridge_id']) {
+  test(`processRunning command line: ${command}`, () => {
+    assert.equal(isSessionProcessRunning({ id: 'local-uuid', bridgeSessionId: 'bridge_id' }, {
+      spawn: (cmd, args) => {
+        assert.equal(cmd, 'powershell.exe');
+        assert.deepEqual(args.slice(0, 3), ['-NoProfile', '-NonInteractive', '-Command']);
+        return { status: 0, stdout: JSON.stringify({ ProcessId: 123, Name: 'claude.exe', CommandLine: command }) };
+      },
+    }), true);
+  });
+}
+
+test('processRunning: any registry kind needs matching sessionId and live PID; malformed files ignored', t => {
+  const base = fixture(t), sessionsDir = path.join(base, 'sessions');
+  fs.mkdirSync(sessionsDir);
+  fs.writeFileSync(path.join(sessionsDir, 'bad.json'), 'broken');
+  const file = path.join(sessionsDir, 'session.json');
+  const spawn = () => ({ status: 0, stdout: JSON.stringify([{ ProcessId: 123, Name: 'claude.exe', CommandLine: 'claude.exe --output-format stream-json' }]) });
+  for (const kind of ['interactive', 'vscode', 'remote-control', 'unknown']) {
+    fs.writeFileSync(file, JSON.stringify({ sessionId: 'one', pid: 123, kind }));
+    assert.equal(isSessionProcessRunning({ id: 'one' }, { sessionsDir, spawn }), true, kind);
+  }
+  for (const data of [{ sessionId: 'one', pid: 456 }, { sessionId: 'another', pid: 123 }, { sessionId: 'one' }]) {
+    fs.writeFileSync(file, JSON.stringify(data));
+    assert.equal(isSessionProcessRunning({ id: 'one' }, { sessionsDir, spawn }), false);
+  }
+  fs.writeFileSync(file, JSON.stringify({ sessionId: 'bridge_id', pid: 123 }));
+  assert.equal(isSessionProcessRunning({ id: 'one', bridgeSessionId: 'bridge_id' }, { sessionsDir, spawn }), true);
+});
+
+test('processRunning: unrelated executable or session does not block; query errors fail open', () => {
+  const candidate = { id: 'one' };
+  for (const result of [
+    { status: 1 }, { status: 0, stdout: 'malformed' }, { error: Error('timeout') },
+    { status: 0, stdout: JSON.stringify([{ Name: 'Code.exe', CommandLine: '--resume=one' }, { Name: 'claude.exe', CommandLine: '--resume=other' }]) },
+  ]) assert.equal(isSessionProcessRunning(candidate, { spawn: () => result }), false);
+  assert.equal(isSessionProcessRunning(candidate, { spawn: () => { throw Error('unavailable'); } }), false);
+});
+
+for (const kind of ['command', 'registry', 'query failure']) {
+  test(`processRunning dispatch: ${kind}`, async t => {
+    const base = fixture(t), opts = guardOptions(base);
+    const original = opts.spawn;
+    if (kind === 'registry') {
+      fs.mkdirSync(path.join(base, 'sessions'));
+      fs.writeFileSync(path.join(base, 'sessions', 'session.json'), JSON.stringify({ sessionId: 'one', pid: 123, kind: 'vscode' }));
+    }
+    opts.spawn = (cmd, args) => args.at(-1).includes('Get-CimInstance Win32_Process')
+      ? kind === 'query failure' ? { status: 1 } : { status: 0, stdout: JSON.stringify([{ ProcessId: 123, Name: 'claude.exe', CommandLine: kind === 'command' ? 'claude.exe --resume=one' : 'claude.exe' }]) }
+      : original(cmd, args);
+    const result = await reopenLost(opts);
+    assert.equal(result.skipped.processRunning, kind === 'query failure' ? 0 : 1);
+    assert.equal(result.reopened.length, kind === 'query failure' ? 1 : 0);
+  });
+}
+
+for (const change of ['process', 'history']) {
+  test(`dispatch rechecks ${change} after waiting for VS Code window`, async t => {
+    const base = fixture(t), opts = guardOptions(base);
+    let ready = false, uriCalls = 0;
+    opts.spawn = (cmd, args) => {
+      const script = args.at(-1);
+      if (script.includes('--open-url')) uriCalls++;
+      if (script.includes('Get-CimInstance Win32_Process')) return { status: 0, stdout: JSON.stringify(ready && change === 'process' ? [{ Name: 'claude.exe', CommandLine: '--resume=one' }] : []) };
+      return { status: 0, stdout: args[0] === 'agents' ? '[]' : '0' };
+    };
+    opts.windowReady = async () => {
+      ready = true;
+      if (change === 'history') writeHistory(base, [failedReopen(8), failedReopen(1)]);
+      return true;
+    };
+    const result = await reopenLost(opts);
+    assert.equal(result.reopened.length, 0);
+    assert.equal(uriCalls, 0);
+    assert.equal(result.skipped[change === 'process' ? 'processRunning' : 'unverifiedStreak'], 1);
+  });
+}
+
+for (const scenario of ['RC connected', 'RC disconnected', 'other RC connected', 'RC failure agents alive', 'RC failure agents absent', 'agents failure RC connected', 'both fail']) {
+  test(`90-second verification: ${scenario}`, async t => {
+    const base = fixture(t), opts = guardOptions(base);
+    let verifying = false;
+    opts.wait = async ms => { if (ms === 90000) verifying = true; };
+    const originalSpawn = opts.spawn, originalFetch = opts.fetchImpl;
+    opts.spawn = (cmd, args) => {
+      if (verifying && args[0] === 'agents') {
+        if (scenario === 'agents failure RC connected' || scenario === 'both fail') return { status: 1 };
+        if (scenario === 'RC failure agents alive') return { status: 0, stdout: JSON.stringify([{ kind: 'interactive', sessionId: 'one' }]) };
+      }
+      return originalSpawn(cmd, args);
+    };
+    opts.fetchImpl = async url => {
+      if (!verifying) return originalFetch(url);
+      if (scenario.startsWith('RC failure') || scenario === 'both fail') throw Error('RC unavailable');
+      return { ok: true, json: async () => ({ data: [{ id: scenario === 'other RC connected' ? 'different_rc' : 'cse_one', connection_status: scenario === 'RC disconnected' ? 'disconnected' : 'connected' }] }) };
+    };
+    const result = await reopenLost(opts);
+    assert.equal(result.reopened.length, 1);
+    assert.equal(result.reopened[0].rcId, 'cse_one');
+    if (scenario === 'both fail') {
+      assert.ok(result.verifyError);
+      assert.ok(result.verifyApiError);
+      assert.equal(result.unverified, undefined);
+    } else {
+      const verified = ['RC connected', 'RC failure agents alive', 'agents failure RC connected'].includes(scenario);
+      assert.deepEqual(result.verified, verified ? ['one'] : []);
+      assert.deepEqual(result.unverified, verified ? [] : ['one']);
+    }
+  });
+}
+
+test('RC verification paginates with a fresh deadline and rejects repeated cursors or invalid responses', async () => {
+  const urls = [];
+  const connected = await connectedRcSessionIds({ now: () => guardNow, fetchImpl: async (url, options) => {
+    urls.push(url);
+    assert.ok(options.signal);
+    return { ok: true, json: async () => urls.length === 1
+      ? { data: [{ id: 'other', connection_status: 'disconnected' }], next_cursor: 'page2' }
+      : { data: [{ id: 'cse_one', connection_status: 'connected' }] } };
+  } });
+  assert.deepEqual([...connected], ['cse_one']);
+  assert.match(urls[1], /cursor=page2/);
+  for (const response of [{ ok: false, status: 503 }, { ok: true, json: async () => ({ data: null }) }, { ok: true, json: async () => ({ data: [], next_cursor: 'loop' }) }]) {
+    await assert.rejects(connectedRcSessionIds({ fetchImpl: async () => response }));
+  }
+});
+
+test('URI-only dispatch rechecks a process appearing during window detection', async t => {
+  const base = fixture(t), opts = guardOptions(base);
+  let windowChecked = false, uriCalls = 0;
+  opts.spawn = (cmd, args) => {
+    const script = args.at(-1);
+    if (script.includes('--open-url')) uriCalls++;
+    if (script.includes('Get-Process Code')) windowChecked = true;
+    if (script.includes('Get-CimInstance Win32_Process')) return { status: 0, stdout: JSON.stringify(windowChecked ? [{ Name: 'claude.exe', CommandLine: '--resume=one' }] : []) };
+    return { status: 0, stdout: args[0] === 'agents' ? '[]' : '1' };
+  };
+  const result = await reopenLost(opts);
+  assert.equal(uriCalls, 0);
+  assert.equal(result.reopened.length, 0);
+  assert.equal(result.skipped.processRunning, 1);
+});
+
+test('watch dry run preserves existing progress, log, state and lock contents', async t => {
+  const base = fixture(t), originals = new Map();
+  for (const [name, data] of Object.entries({
+    'reopen-lost-sessions-progress.json': '{"stage":"existing"}',
+    'reopen-lost-sessions.log': '', 'reopen-lost-sessions-state.json': '{}', 'reopen-lost-sessions.lock': 'existing',
+  })) {
+    fs.writeFileSync(path.join(base, name), data);
+    originals.set(name, { data, mtime: fs.statSync(path.join(base, name)).mtimeMs });
+  }
+  const result = await watchReopen({ ...guardOptions(base), dryRun: true });
+  assert.equal(result.error, undefined);
+  assert.equal(result.reopened.length, 0);
+  for (const [name, before] of originals) {
+    assert.equal(fs.readFileSync(path.join(base, name), 'utf8'), before.data, name);
+    assert.equal(fs.statSync(path.join(base, name)).mtimeMs, before.mtime, name);
+  }
 });

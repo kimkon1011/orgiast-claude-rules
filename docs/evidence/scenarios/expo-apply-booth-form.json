@@ -1,0 +1,208 @@
+{
+  "schema": "x0048-v1",
+  "id": "scenario-expo-apply-booth-form",
+  "name": "展示会出展申込フォーム 検証シナリオ",
+  "target": "apps/expo-apply/index.html",
+  "createdAt": "2026-11-14T00:00:00Z",
+  "tags": ["expo-apply", "booth-ui", "form-submission", "regression"],
+  "journey": {
+    "id": "journey-expo-apply-submit",
+    "name": "展示会出展申込 フォームジャーニー",
+    "entryPoint": "apps/expo-apply/index.html",
+    "routes": [
+      "正常系: 全項目入力→確認画面→localStorage保存",
+      "異常系: 必須項目未入力でバリデーションエラー",
+      "異常系: メールアドレス形式誤り",
+      "異常系: 日付順序逆転（開始日 > 終了日）",
+      "言語切替: 日本語⇔英語 表示切替",
+      "異常系: boothSize=other で説明未入力"
+    ],
+    "permissions": {
+      "anonymous": true,
+      "authenticated": false,
+      "admin": false
+    },
+    "testData": {
+      "validInput": {
+        "companyName": "株式会社オージャスト",
+        "companyNameJa": "株式会社オージャスト",
+        "country": "日本",
+        "website": "https://orgiast.jp",
+        "contactPerson": "金 功勇",
+        "email": "kim@orgiast.jp",
+        "phone": "03-1234-5678",
+        "exhibitionName": "展示会テスト",
+        "boothSize": "9m2",
+        "startDate": "2026-12-01",
+        "endDate": "2026-12-03",
+        "servicesNeeded": ["booth_design", "construction"]
+      },
+      "invalidInputs": [
+        { "label": "メールアドレス形式誤り", "email": "not-an-email" },
+        { "label": "必須項目欠落", "companyName": "" },
+        { "label": "日付順序逆転", "startDate": "2026-12-03", "endDate": "2026-12-01" },
+        { "label": "boothSize=other で説明未入力", "boothSize": "other", "boothSizeOther": "" }
+      ]
+    },
+    "stableControls": {
+      "formSelector": "#app-form",
+      "submitButton": "button[type='submit']",
+      "confirmationElement": "#confRef",
+      "languageToggle": "#langToggle",
+      "errorContainer": ".field-error",
+      "boothSizeOtherInput": "#boothSizeOther"
+    },
+    "failureStates": [
+      "必須フィールド直下にエラーメッセージ表示",
+      "メール形式エラーメッセージ表示",
+      "日付順序エラーメッセージ表示",
+      "フォーム再表示（送信不可）",
+      "確認画面が表示されない"
+    ]
+  },
+  "steps": [
+    {
+      "id": "step-navigate",
+      "description": "申込フォームページを開く",
+      "type": "navigate",
+      "payload": { "url": "apps/expo-apply/index.html" },
+      "tags": ["smoke"]
+    },
+    {
+      "id": "step-fill-valid",
+      "description": "正常データを全項目入力する",
+      "type": "fill",
+      "payload": {
+        "selector": "#app-form",
+        "values": {
+          "companyName": "株式会社オージャスト",
+          "email": "kim@orgiast.jp",
+          "exhibitionName": "テスト展示会",
+          "country": "日本",
+          "contactPerson": "金 功勇",
+          "boothSize": "9m2"
+        }
+      },
+      "tags": ["smoke"]
+    },
+    {
+      "id": "step-submit-valid",
+      "description": "送信ボタンをクリック",
+      "type": "click",
+      "payload": { "selector": "button[type='submit']" },
+      "tags": ["smoke"]
+    },
+    {
+      "id": "step-assert-confirmation",
+      "description": "確認画面(#confRef)が表示されることを確認",
+      "type": "assert",
+      "payload": {
+        "selector": "#confRef",
+        "expected": { "visible": true }
+      },
+      "tags": ["smoke"]
+    },
+    {
+      "id": "step-assert-localstorage",
+      "description": "localStorageに申込データが保存されていることを確認",
+      "type": "assert",
+      "payload": {
+        "expected": { "localStorageKey": "expo-applications" }
+      },
+      "tags": ["persistence"]
+    },
+    {
+      "id": "step-toggle-lang",
+      "description": "英語表示に切り替える",
+      "type": "click",
+      "payload": { "selector": "#langToggle" },
+      "tags": ["i18n"]
+    },
+    {
+      "id": "step-assert-lang-en",
+      "description": "英語ラベルが表示されることを確認",
+      "type": "assert",
+      "payload": {
+        "selector": "#app-form",
+        "expected": { "containsText": "Company Name" }
+      },
+      "tags": ["i18n"]
+    },
+    {
+      "id": "step-toggle-lang-ja",
+      "description": "日本語表示に戻す",
+      "type": "click",
+      "payload": { "selector": "#langToggle" },
+      "tags": ["i18n"]
+    },
+    {
+      "id": "step-invalid-email",
+      "description": "無効なメールアドレスを入力してエラー確認",
+      "type": "fill",
+      "payload": {
+        "selector": "#email",
+        "value": "not-an-email"
+      },
+      "tags": ["validation"]
+    },
+    {
+      "id": "step-assert-email-error",
+      "description": "メール形式エラーメッセージが表示される",
+      "type": "assert",
+      "payload": {
+        "selector": ".field-error",
+        "expected": { "visible": true, "containsText": "有効なメール" }
+      },
+      "tags": ["validation"]
+    }
+  ],
+  "failureCases": [
+    {
+      "id": "fail-missing-required",
+      "description": "必須項目未入力で送信しようとした場合",
+      "conditions": [
+        "companyName が空",
+        "email が空",
+        "contactPerson が空",
+        "country が空",
+        "exhibitionName が空"
+      ],
+      "expectedRecovery": "該当フィールド直下にエラーメッセージが表示され、送信がブロックされる"
+    },
+    {
+      "id": "fail-invalid-email",
+      "description": "メールアドレス形式が不正",
+      "conditions": ["email に @ がない", "email に . がない"],
+      "expectedRecovery": "email フィールド直下にメール形式エラーメッセージ"
+    },
+    {
+      "id": "fail-date-order",
+      "description": "開始日が終了日より後",
+      "conditions": ["startDate > endDate"],
+      "expectedRecovery": "endDate フィールド直下に日付順序エラーメッセージ"
+    },
+    {
+      "id": "fail-booth-size-other-empty",
+      "description": "ブースサイズが other で説明未入力",
+      "conditions": ["boothSize === 'other'", "boothSizeOther === ''"],
+      "expectedRecovery": "boothSizeOther フィールド直下にエラーメッセージ"
+    }
+  ],
+  "claimEvidence": {
+    "behavior": {
+      "claim": "正常入力→送信→確認画面→localStorage保存の一連フローが正しく動作する",
+      "matchCriteria": "step-navigate〜step-assert-localstorage の全ステップが PASS",
+      "evidenceType": "journey-replay + screenshot"
+    },
+    "performance": {
+      "claim": "ページ読み込みと初回レンダリングが2秒以内",
+      "matchCriteria": "navigate から最初の paint まで < 2000ms",
+      "evidenceType": "comparable-build-timing"
+    },
+    "codeQuality": {
+      "claim": "既存のユニットテストに違反しない",
+      "matchCriteria": "node --test apps/expo-apply/test/expo-apply.test.mjs が全緑",
+      "evidenceType": "types + lint + regression-tests"
+    }
+  }
+}

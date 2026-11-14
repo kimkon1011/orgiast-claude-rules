@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+process.env.ORGIAST_AUTO_RESUME = '1';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -58,8 +59,51 @@ test('saveJson cleans up and preserves the original error when rename fails', as
 test('0 stalled: no execution or notification', async t => {
   const f = await fixture(t, 0); await run(options([], {}), f.io); assert.equal(f.calls(), 0); assert.equal(f.notices(), 0);
 });
+test('自動再開無効時は起動せず同じセッションを1回だけ通知する', async t => {
+  const f = await fixture(t, 1);
+  await fs.mkdir(path.dirname(f.file), { recursive: true });
+  await fs.writeFile(f.file, JSON.stringify({ version: 1, nights: {}, sessions: { 'session-0': { attempts: [], noProgress: 3 } } }));
+  let inbox = 0;
+  f.io.addItem = async () => { inbox++; return { id: 'disabled-notice' }; };
+  const before = process.env.ORGIAST_AUTO_RESUME;
+  delete process.env.ORGIAST_AUTO_RESUME;
+  try {
+    await run(options(['--limit', '0'], {}), f.io);
+    await run(options([], {}), f.io);
+    assert.equal(f.calls(), 0);
+    assert.equal(inbox, 1);
+    assert.ok((await f.ledger()).autoResumeDisabledNotified['session-0']);
+  } finally { process.env.ORGIAST_AUTO_RESUME = before; }
+});
 test('nightly limit is enforced across repeated invocations', async t => {
   const f = await fixture(t); await run(options(['--limit', '3'], {}), f.io); await run(options(['--limit', '3'], {}), f.io); assert.equal(f.calls(), 3); assert.equal(f.notices(), 1);
+});
+
+test('無効時の overdue は期限変更・夜間巡回でも通知1回、dry-run/list は書かない', async t => {
+  const f = await fixture(t, 1);
+  f.records[0].displayTitle = '【09/23/12:00まで】Task';
+  let notices = 0;
+  f.io.addItem = async (_home, item) => { notices++; assert.match(item.text, /自動再開は行いません.*claude --resume session-0/); return { id: 'notice' }; };
+  const before = process.env.ORGIAST_AUTO_RESUME;
+  delete process.env.ORGIAST_AUTO_RESUME;
+  try {
+    for (const mode of ['--dry-run', '--list']) {
+      await run(options(['--overdue', mode], {}), f.io);
+      assert.equal(notices, 0);
+      await assert.rejects(fs.readFile(f.file), { code: 'ENOENT' });
+    }
+    await run(options(['--overdue'], {}), f.io);
+    f.records[0].displayTitle = '【09/23/13:00まで】Task';
+    await run(options(['--overdue'], {}), f.io);
+    await run(options([], {}), f.io);
+    assert.equal(notices, 1);
+    assert.equal(f.calls(), 0);
+    assert.equal(f.notices(), 0);
+    for (const wait of [null, { label: '期限切れ' }]) {
+      const result = await execute(f.records[0], { wait }, { execFile: () => assert.fail('no CLI'), runChild: () => assert.fail('no child') });
+      assert.equal(result.outcome, 'disabled');
+    }
+  } finally { process.env.ORGIAST_AUTO_RESUME = before; }
 });
 test('three attempts without progress persist skip reason', async t => {
   const f = await fixture(t, 1);

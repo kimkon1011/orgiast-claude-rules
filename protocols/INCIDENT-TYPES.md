@@ -33,6 +33,8 @@
 
 追記ルール: 型名は構造を表す語にする。症状は1行、日付と出典を付ける。ゲート列が空の行は未完了として扱い、埋まるまで消さない。
 
+- 型: 秘匿置換による通知識別子衝突型（2026-11-13 エイト様 LINE 新着640415182069432706、watch summary 06:00:00Z・外部イベント台帳）→ dedupeKey のハッシュが一律 [REDACTED] となり回答済み別通知へ誤集約。対策: 置換・切詰め対象キーは安定した分割ダイジェストで保持し、誤った既存受領記録を本文照合で修復して未通知分だけ再キュー。ゲート: tools/auto-progress-external-monitor.test.mjs（実 inbox・復旧再実行）/ tools/kim-inbox.test.mjs（秘匿キー・spool 重複防止）。
+
 - 型: ループ誤判定型（再接続の空振りを無限ループと誤判定し、正当な再接続まで遮断）: reopenLoop ガードが「24時間・試行回数」で数え、切断中のままのセッションを3回の空振りで24h遮断した（2026-11-09 実測・4本） → 対策: 成功（verified）した再接続だけを60分窓で数え、unverified は数えない。一覧取得失敗は nightly-reload-vscode が3回リトライして ERROR を残す（無言 SKIP しない）。ゲート: reopen-lost-sessions.test.mjs / nightly-reload-vscode.test.ps1
 - 型: 夜間メンテが待機中セッションを「作業中でない」と誤判定して殺す（活動時刻ベースの busy 判定） → 対策: 生存＋未クローズで保護、落ちたら host_exit から自動再オープン。
 - 型: 秘密入りの成果物を「既定の置き場」に出し、置き場の継承共有で広く見える（既定フォルダ＝社内全体・外部Gmail継承） → 対策: 本文の秘密検出で共有フォルダへの出力を拒否し --private（owner のみを読み戻し）を必須化。ゲート: gdoc-publish.mjs containsSecret（exit 3/4）。2026-11-07 PR #1682
@@ -42,3 +44,5 @@
 - 型: ゲート間相互ブロック型（gmail-connector-url-gate が URL を理由に block → mail-send-approval-gate が body 無しの draftId 送信を CONTEXT_REASON で block → 両方満たす送信経路が消える。2026-11-12 014 実測） → 横展開の検索: tool_input.draftId 有無で分岐するゲート、複数ゲートが同一の tool_input を異なる基準で判定する箇所 → ゲート: gmail-connector-url-gate の draftId 送信 pass 判定（既存）
 - 型: 人の属性（kim 操作席）で資格情報が要るジョブの配置を決めた → 判定は資格情報の実在で行う（2026-11-12 deadline-seat DWD鍵） → 横展開の検索: isKimOperated だけで資格情報不要と判断している定期ジョブ登録 → ゲート: `--seat-check` に dwdKey 実在を追加、tasks.ps1は kim=false で既存タスクを無効化
 
+
+- 型: 無人ジョブが UAC 必須インストールを起動し確認画面を溜める（2026-11-09〜11 作業用014: ClaudeDailyDriveBackup が毎晩 winget install Google.GoogleDrive を非昇格のまま起動し、誰も押さない UAC が consent.exe として残り続けた。2026-11-12 には cheap-code-worker の headless LLM セッションが同様に winget install を起動） → 横展開の検索: tools 配下の定期ジョブ・hook・無人ジョブ（LLM セッション経由を含む）からの `winget install` / `-Verb RunAs` / msiexec 起動箇所（backup-claude-to-drive.ps1 / register-claude-backup-task.ps1 / setup-node-runtime-security.mjs を修正、bootstrap・install-orgiast・restore・fleet-fix-now は対話専用として一覧維持。PreToolUse gate: unattended-elevation-gate が headless LLM セッションからの直接起動を遮断） → ゲート: tools/uac-unattended-install.test.mjs（非昇格の無人実行では起動しない。対話専用は明示一覧。タイムアウト時はプロセスツリー kill）+ tools/unattended-elevation-gate.mjs（PreToolUse hook が LLM セッションの Bash/PowerShell から UAC 必須コマンドを遮断）

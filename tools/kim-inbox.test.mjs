@@ -7,6 +7,8 @@ import { addItem, listItems, answerItem, markSeen, dropItem, selectContext, inge
 import { inboxSummary } from './lib/kim-inbox-relay-state.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { loadAllowlist, discordAllowed } from './lib/kim-discord-allowlist.mjs';
+import { inboxDedupeKey, spoolItem, drainSpool } from './kim-inbox.mjs';
+import { redactSecrets } from './webhook-health.mjs';
 function seat(t, label = 'kim-PC') {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ki-test-'));
   fs.mkdirSync(path.join(home, '.claude'));
@@ -25,6 +27,24 @@ test('durable producer keys survive aggregation, seen state and retries', async 
   assert.equal(retry.id, a.id); assert.equal(retry.status, 'seen');
   const unkeyed = await addItem(home, { text: '同じ作業 3' });
   assert.notEqual(unkeyed.id, b.id); assert.equal(listItems(home).length, 3);
+});
+
+test('redacted and truncated keys retain unique identities through direct delivery and spool retries', async t => {
+  const home = seat(t);
+  const keys = ['a'.repeat(64), 'b'.repeat(64), 'sk-abcdefghijklmnopqr', 'sk-abcdefghijklmnopqs',
+    'x:'.repeat(2100) + '1', 'x:'.repeat(2100) + '2'];
+  for (const [index, key] of keys.entries()) {
+    const dedupeKey = inboxDedupeKey(key);
+    assert.equal(redactSecrets(dedupeKey), dedupeKey);
+    assert.equal(inboxDedupeKey(dedupeKey), dedupeKey);
+    assert.ok(!dedupeKey.includes(key));
+    const item = await addItem(home, { text: `notice ${index}`, dedupeKey: key });
+    markSeen(home, item.id);
+    spoolItem(home, { text: `notice ${index}`, dedupeKey: key });
+  }
+  await drainSpool(home);
+  assert.equal(listItems(home).length, keys.length);
+  assert.ok(listItems(home).every(item => item.status === 'seen'));
 });
 test('ask は毎回提示し回答後に消える。info は確認できるが ask は確認だけで消せない', async t => {
   const home = seat(t); const ask = await addItem(home, { kind: 'ask', text: '判断してください\n詳細', source: '試験' });

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
-import { WINDOWS_PROCESS_SCRIPT } from './lib/windows-process.mjs';
+import { WINDOWS_PROCESS_SCRIPT, isClaudeCodeCliProcess } from './lib/windows-process.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -136,7 +136,7 @@ export function isVscodeClaude(processInfo) {
   const name = String(processInfo.Name ?? processInfo.name ?? '').toLowerCase();
   const command = String(processInfo.CommandLine ?? processInfo.commandLine ?? '').replaceAll('/', '\\').toLowerCase();
   if (name !== 'claude.exe') return false;
-  if (command.includes('\\windowsapps\\claude_')) return false;
+  if (!isClaudeCodeCliProcess(processInfo)) return false;
   return command.includes('\\.vscode\\extensions\\anthropic.claude-code-') && command.includes('\\native-binary\\claude.exe');
 }
 

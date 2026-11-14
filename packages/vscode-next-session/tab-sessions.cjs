@@ -165,7 +165,7 @@ function selectTabsToClose({ tabs, hiddenIds, closedIds, activeKeys, keepEmpty =
  * @param {number}  [options.keepEmpty=3]      Max empty Claude tabs to keep
  * @returns {{ toClose: object[], hidden: number, closed: number, emptyExtra: number, skipped: number, reason?: string }}
  */
-function planClose({ mementoTabs, liveTabsByGroup, hiddenIds, closedIds, keepEmpty = 3 }) {
+function planClose({ mementoTabs, liveTabsByGroup, hiddenIds, closedIds, keepEmpty = 3, openedTabs }) {
   const result = { toClose: [], hidden: 0, closed: 0, emptyExtra: 0, skipped: 0 };
   if (!Array.isArray(mementoTabs) || mementoTabs.length === 0) return result;
   if (!Array.isArray(liveTabsByGroup) || liveTabsByGroup.length === 0) return result;
@@ -217,6 +217,9 @@ function planClose({ mementoTabs, liveTabsByGroup, hiddenIds, closedIds, keepEmp
     // Verify this is still a Claude tab
     if (!tab.input || !String(tab.input.viewType).includes('claudeVSCode')) continue;
 
+    if (dec.reason === 'empty-extra') {
+      if (!openedTabs?.has(tab) || tab.label !== 'Claude Code' || result.emptyExtra >= 1) continue;
+    }
     result.toClose.push(tab);
     if (dec.reason === 'hidden') result.hidden++;
     else if (dec.reason === 'closed') result.closed++;

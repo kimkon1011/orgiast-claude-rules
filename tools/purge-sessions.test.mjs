@@ -79,6 +79,47 @@ test('live lock skips; dead PID is reclaimed; destination collision preserves bo
   assert.equal(fs.readFileSync(path.join(f.base, 'projects-archive/project/collision.jsonl'), 'utf8'), 'existing archive');
   assert.equal(fs.existsSync(path.join(f.base, 'purge-sessions.lock')), false);
 });
+for (const state of ['live', 'initializing', 'released']) {
+  test(`Windows EPERM lock contention preserves exclusion when ${state}`, t => {
+    const f = fixture(t);
+    const raw = f.session('contended', []);
+    const lock = path.join(f.base, 'purge-sessions.lock');
+    const owner = state === 'initializing' ? '' : JSON.stringify({ pid: process.pid });
+    if (state !== 'released') f.put('purge-sessions.lock', owner);
+    // Inject the Windows exclusive-open error on every platform. In the released
+    // case the owner has unlinked the lock before the contender can stat it.
+    const preload = f.put('lock-contention.mjs', `
+      import fs from 'node:fs';
+      const open = fs.openSync;
+      let injected = false;
+      fs.openSync = function(file, flags, ...args) {
+        if (!injected && file === ${JSON.stringify(lock)} && flags === 'wx') {
+          injected = true;
+          throw Object.assign(new Error('simulated Windows lock contention'), { code: 'EPERM' });
+        }
+        return open.call(this, file, flags, ...args);
+      };
+    `);
+    const child = spawnSync(process.execPath, ['--import', pathToFileURL(preload).href, script], {
+      env: f.env, encoding: 'utf8', timeout: 10_000,
+    });
+    assert.equal(child.status, 0, child.stderr);
+    const result = JSON.parse(child.stdout);
+    if (state === 'released') {
+      assert.equal(result.sessions.length, 1);
+      assert.equal(fs.readFileSync(path.join(f.base, 'projects-archive/project/contended.jsonl'), 'utf8'), raw);
+      assert.equal(fs.readFileSync(path.join(f.base, 'archived-sessions.jsonl'), 'utf8').trim().split('\n').length, 1);
+      assert.equal(fs.existsSync(lock), false);
+    } else {
+      assert.equal(result.skipped, 'locked');
+      assert.equal(result.sessions.length, 0);
+      assert.equal(fs.readFileSync(lock, 'utf8'), owner);
+      assert.equal(fs.readFileSync(path.join(f.base, 'projects/project/contended.jsonl'), 'utf8'), raw);
+      assert.equal(fs.existsSync(path.join(f.base, 'archived-sessions.jsonl')), false);
+    }
+  });
+}
+
 test('subtracting closed IDs rereads the ledger and preserves concurrent additions', t => {
   const f = fixture(t);
   f.put('closed-sessions.json', JSON.stringify({ ids: ['old', 'new'], metadata: 'keep' }));

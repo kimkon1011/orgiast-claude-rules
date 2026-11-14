@@ -3,6 +3,19 @@ import test from 'node:test';
 import { enabled, judge } from './deferral-wait-gate.mjs';
 
 // 陽性は 2026-10-18〜19 の実測（stop-gate-runner-ledger.jsonl）をそのまま使う。
+// 2026-11-13 再発（handoff-audit:aa6f123644833d7c / e50bea8a）: 「このセッション: まだ閉じません（kim の返信を待っています）」
+// 本番反映語も後続作業語も無い「閉じない」＋「返事待ち」の組み合わせを直接 block する。
+const SESSION_CLOSE_WAIT = [
+  'このセッション: まだ閉じません（kim の返信を待っています）',
+  'このセッション: まだ閉じない（返信を待っています）',
+  '本セッションはまだ閉じず、返事を待っています',
+  'このセッションは閉じません。返信が来るのを待っています',
+];
+// 引用内の「閉じない」＋「返事待ち」は pass（監査記録の引用）
+const SESSION_CLOSE_WAIT_QUOTE = [
+  '[handoff-audit:aa6f123644833d7c] 恒久修正の先送り文を検出（2026-11-10T18:08:31.607Z / e50bea8a / W）「このセッション: まだ閉じません（kim の返信を待っています）」',
+];
+
 const positives = [
   '実装の完了を待っています（終わり次第、差分とテストを自分で確認し、本番反映・配備・実データでの再確認まで進めます）。',
   'memory への追記が終わりました。Codex の実装完了を待っています（終わると通知が来ます）。',
@@ -48,6 +61,8 @@ const positives = [
   // 提案の採否を user の返信に委ねて停止した 2 行で、REPLY_WAIT に一致せず pass だった。
   '「承認」か「却下 <理由>」で返信する（おすすめは却下）',
   '「承認」または「却下 <理由>」を送ってください／返事が来るまでは何もしません',
+  // 2026-11-13 再発パターン: 「閉じない」＋「返事待ち」
+  ...SESSION_CLOSE_WAIT,
 ];
 
 for (const [index, text] of positives.entries()) {
@@ -55,7 +70,7 @@ for (const [index, text] of positives.entries()) {
     const result = judge(text);
     assert.equal(result.decision, 'block');
     assert.equal(result.code, 'DEFERRAL-WAIT');
-    assert.match(result.reason, /当ターン内に完了まで進め|推奨案を採用して当ターン内で実行/);
+    assert.match(result.reason, /当ターン内に完了まで進め|推奨案を採用して当ターン内で実行|閉じない.*返事待ち/);
     assert.doesNotMatch(result.reason, /次に kim がすること/);
   });
 }
@@ -86,6 +101,7 @@ const negatives = [
   // 監査記録が原文を「…」で引用した行は、先送りの実行ではなく引用なので除外する。
   '[handoff-audit:42a15ac380371976] の audit TODO を読んだだけ（「「承認」か「却下 <理由>」で返信する（おすすめは却下）」「「承認」または「却下 <理由>」を送ってください／返事が来るまでは何もしません」で引用した行）',
   '承認済みなので実行しました。',
+  ...SESSION_CLOSE_WAIT_QUOTE,
 ];
 
 for (const [index, text] of negatives.entries()) {

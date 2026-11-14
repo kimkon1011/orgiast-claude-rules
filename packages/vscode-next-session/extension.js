@@ -5,6 +5,7 @@ const path = require('node:path');
 const {
   readConfig, createOwnershipLease, createPool, isWaitingTab, decideRefresh,
   readRefreshConfig, readLastRefreshAt, inRefreshHours, isWorktreeFolder, decideWorktreeCleanup,
+  decideTrimExcess,
 } = require('./mobile-pool');
 const { resolveClaudeShellPath } = require('./shell-path');
 const { decideAction, orderMobileOpenMethods } = require('./route');
@@ -171,6 +172,85 @@ function syncTabTimes(now = Date.now()) {
   for (const tab of [...tabAppearedAt.keys()]) if (!current.includes(tab)) tabAppearedAt.delete(tab);
   return current;
 }
+function hasUserMessageInProjects(home, sessionId) {
+  if (!sessionId) return undefined;
+  const projectsDir = path.join(home, '.claude', 'projects');
+  try {
+    const dirs = fs.readdirSync(projectsDir, { withFileTypes: true }).filter((d) => d.isDirectory() && !d.name.startsWith('_'));
+    for (const d of dirs) {
+      const file = path.join(projectsDir, d.name, `${sessionId}.jsonl`);
+      if (fs.existsSync(file)) {
+        const text = fs.readFileSync(file, 'utf8');
+        return text.includes('"type":"user"');
+      }
+    }
+  } catch { /* ignored */ }
+  return undefined;
+}
+
+let trimRunning = false;
+async function trimWaitingExcess(context) {
+  if (worktreeWindow || mobileAborted || trimRunning) return false;
+  if (!mobileEnabled || !await mobileLease.acquire()) return false;
+  const now = Date.now();
+  const current = syncTabTimes(now);
+  const waiting = current.filter(isWaitingTab);
+  if (waiting.length <= mobileTarget) return false;
+
+  trimRunning = true;
+  try {
+    const apData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    const globalStorageDir = path.join(apData, 'Code', 'User', 'globalStorage');
+    let workspaceStorageDir = null;
+    if (context?.storageUri) {
+      workspaceStorageDir = path.dirname(context.storageUri.fsPath);
+    }
+    const state = workspaceStorageDir ? await runReadTabState(workspaceStorageDir, globalStorageDir, mobileHome) : null;
+    const mementoTabs = state?.tabs || [];
+
+    const tabMap = new Map();
+    const liveGroups = vscode.window.tabGroups.all;
+    for (let g = 0; g < liveGroups.length; g++) {
+      const gTabs = liveGroups[g].tabs || [];
+      for (let i = 0; i < gTabs.length; i++) {
+        const liveTab = gTabs[i];
+        const m = mementoTabs.find(t => t.group === g && t.index === i);
+        tabMap.set(liveTab, m?.sessionId ?? null);
+      }
+    }
+
+    const candidateItems = current.map((tab) => {
+      const sessionId = tabMap.get(tab);
+      const hasUserMessage = sessionId ? hasUserMessageInProjects(mobileHome, sessionId) : undefined;
+      return {
+        label: String(tab.label),
+        appearedAt: tabAppearedAt.get(tab),
+        isActive: Boolean(tab.isActive),
+        hasUserMessage,
+        tab,
+      };
+    });
+
+    const toClose = decideTrimExcess({ tabs: candidateItems, target: mobileTarget, now });
+    if (!toClose.length) return false;
+
+    let closedAny = false;
+    for (const item of toClose) {
+      if (mobileAborted || item.tab.isActive) continue;
+      const ageMinutes = Math.floor((now - (item.appearedAt ?? now)) / 60000);
+      log(`mobile trim closed=${item.label} age=${ageMinutes} waitingBefore=${waiting.length}`);
+      const closed = await vscode.window.tabGroups.close(item.tab);
+      if (closed) closedAny = true;
+    }
+    return closedAny;
+  } catch (error) {
+    log(`mobile trim failed: ${error.message}`);
+    return false;
+  } finally {
+    trimRunning = false;
+  }
+}
+
 // リフレッシュ判定（ownership lease を持つウィンドウだけ）。force=true は URI の refresh=1。
 let refreshRunning = false;
 async function refreshWaitingTab(options = {}) {
@@ -360,14 +440,21 @@ function activate(context) {
     return;
   }
   const refill = () => {
-    if (mobileEnabled) pool.ensure(mobileTarget).catch((error) => log(`mobile refill failed: ${error.message}`));
+    if (mobileEnabled) {
+      pool.ensure(mobileTarget).catch((error) => log(`mobile refill failed: ${error.message}`));
+      trimWaitingExcess(context).catch((error) => log(`mobile trim failed: ${error.message}`));
+    }
   };
   context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(event => { archiveWatcher.change(event); syncTabTimes(); refill(); }));
   const timer = setInterval(refill, 5000);
   // 起動時に既存タブの出現時刻を初期化し、以後 opened は onDidChangeTabs 経由の sync で記録する。
   syncTabTimes();
+  trimWaitingExcess(context).catch((error) => log(`mobile trim startup failed: ${error.message}`));
   const refreshTimer = setInterval(
-    () => refreshWaitingTab().catch((error) => log(`mobile refresh failed: ${error.message}`)), 60000);
+    () => {
+      refreshWaitingTab().catch((error) => log(`mobile refresh failed: ${error.message}`));
+      trimWaitingExcess(context).catch((error) => log(`mobile trim failed: ${error.message}`));
+    }, 60000);
   refreshTimer?.unref?.();
   context.subscriptions.push({ dispose() { clearInterval(timer); clearInterval(refreshTimer); mobileLease.release(); } });
   const configuredTabs = vscode.workspace.getConfiguration('orgiast.nextSession').get('mobileTabs');

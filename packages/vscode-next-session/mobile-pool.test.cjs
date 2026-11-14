@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createPool, createOwnershipLease, readConfig, readSnapshot, isWorktreeFolder, decideRefresh, decideWorktreeCleanup, REFRESH_MIN_AGE_MS } = require('./mobile-pool');
+const { createPool, createOwnershipLease, readConfig, readSnapshot, isWorktreeFolder, decideRefresh, decideWorktreeCleanup, REFRESH_MIN_AGE_MS, AUTO_TITLE_RE, isWaitingTab, decideTrimExcess } = require('./mobile-pool');
 
 // git worktree を模した一時フォルダ（.git ファイルが gitdir: .../worktrees/... を指す）
 function makeWorktree(t) {
@@ -241,4 +241,66 @@ test('decideWorktreeCleanup は openedTabs 無指定なら閉鎖しない', () =
     now: REFRESH_NOW, startup: true,
   });
   assert.equal(result, null);
+});
+
+test('AUTO_TITLE_RE source is byte-identical in tools/sync-remote-titles.mjs and mobile-pool.js', async () => {
+  const toolsModule = await import('../../tools/sync-remote-titles.mjs');
+  assert.equal(toolsModule.AUTO_TITLE_RE.source, AUTO_TITLE_RE.source);
+});
+
+test('isWaitingTab recognizes Claude Code and auto title patterns', () => {
+  assert.equal(isWaitingTab('Claude Code'), true);
+  assert.equal(isWaitingTab({ label: 'Claude Code' }), true);
+  assert.equal(isWaitingTab('018-resilient-steele'), true);
+  assert.equal(isWaitingTab('018|resilient-steele'), true);
+  assert.equal(isWaitingTab('018｜resilient-steele'), true);
+  assert.equal(isWaitingTab('remote-control-mossy-island'), true);
+  assert.equal(isWaitingTab('2026年10月の重大脆弱性への対応'), false);
+  assert.equal(isWaitingTab({ label: '018のバグ修正について' }), false);
+});
+
+test('decideTrimExcess: 待機タブ数が target 超過の時、10分以上経った会話なし・非アクティブな待機タブを古い順に閉じる', () => {
+  const now = 1000000000;
+  const target = 3;
+
+  // 1. 53 本あっても 1 回の実行で閉じるのは最大 10 本、古い順、target は残す
+  const excessTabs = Array.from({ length: 53 }, (_, i) => ({
+    id: i,
+    label: i % 2 === 0 ? '018-resilient-steele' : 'Claude Code',
+    appearedAt: now - (5000000 + i * 1000), // id 52 ほど新しい
+    isActive: false,
+    hasUserMessage: false,
+  }));
+
+  const toClose = decideTrimExcess({ tabs: excessTabs, target, now });
+  assert.equal(toClose.length, 10);
+  // 古い順なので appearedAt が一番小さなもの（52 が一番古い: now - (5000000 + 52000)）
+  assert.equal(toClose[0].id, 52);
+  assert.equal(toClose[9].id, 43);
+
+  // 2. 5 本から 2 本削って target 3 本残す
+  const smallPool = [
+    { id: 't1', label: '018-a-b', appearedAt: now - 20 * 60000, isActive: false, hasUserMessage: false },
+    { id: 't2', label: 'Claude Code', appearedAt: now - 18 * 60000, isActive: false, hasUserMessage: false },
+    { id: 't3', label: '018-c-d', appearedAt: now - 15 * 60000, isActive: false, hasUserMessage: false },
+    { id: 't4', label: 'Claude Code', appearedAt: now - 12 * 60000, isActive: false, hasUserMessage: false },
+    { id: 't5', label: '018-e-f', appearedAt: now - 11 * 60000, isActive: false, hasUserMessage: false },
+  ];
+  const trimSmall = decideTrimExcess({ tabs: smallPool, target: 3, now });
+  assert.equal(trimSmall.length, 2);
+  assert.deepEqual(trimSmall.map(t => t.id), ['t1', 't2']);
+
+  // 3. 除外条件: アクティブ、10分未満、会話あり(hasUserMessage=true/undefined) は閉じない
+  const mixedTabs = [
+    { id: 'active', label: '018-a-b', appearedAt: now - 30 * 60000, isActive: true, hasUserMessage: false },
+    { id: 'young', label: 'Claude Code', appearedAt: now - 5 * 60000, isActive: false, hasUserMessage: false },
+    { id: 'hasMsg', label: '018-c-d', appearedAt: now - 30 * 60000, isActive: false, hasUserMessage: true },
+    { id: 'unknown', label: '018-e-f', appearedAt: now - 30 * 60000, isActive: false, hasUserMessage: undefined },
+    { id: 'ok1', label: 'Claude Code', appearedAt: now - 25 * 60000, isActive: false, hasUserMessage: false },
+    { id: 'ok2', label: '018-x-y', appearedAt: now - 20 * 60000, isActive: false, hasUserMessage: false },
+  ];
+  const trimMixed = decideTrimExcess({ tabs: mixedTabs, target: 3, now });
+  // 待機 6 本 > target 3 -> 超過 3 本だが条件を満たすのは ok1, ok2 の 2 本だけ
+  assert.equal(trimMixed.length, 2);
+  assert.deepEqual(trimMixed.map(t => t.id), ['ok1', 'ok2']);
 });

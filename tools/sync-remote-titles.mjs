@@ -31,6 +31,8 @@ function readHead(file) {
   } finally { fs.closeSync(fd); }
 }
 
+export const AUTO_TITLE_RE = /^(?:remote-control-|\d{3}[-｜|])+[a-z]+-[a-z]+$/i;
+
 // 先頭行が bridge-session で、まだ名前の行（custom-title / ai-title）が無い transcript だけが対象。
 export function untitledBridge(text) {
   const first = text.slice(0, text.indexOf('\n') >>> 0);
@@ -66,8 +68,8 @@ export async function syncRemoteTitles({ base = path.join(os.homedir(), '.claude
         if (!r.ok) { result.failed++; continue; }
         const body = await r.json();
         const title = String((body.response_shape ?? body).title ?? '').split('\n')[0].trim();
-        // 名前が付く前の仮名（remote-control-mossy-island 等）は最初の発言より分かりにくいので写さない。
-        if (!title || /^remote-control-[a-z]+-[a-z]+$/.test(title)) continue;
+        // 名前が付く前の仮名（remote-control-mossy-island, 018-resilient-steele 等）は最初の発言より分かりにくいので写さない。
+        if (!title || AUTO_TITLE_RE.test(title)) continue;
         result.sessions.push({ sessionId: target.sessionId, title });
         if (dryRun) continue;
         const fresh = fs.statSync(file);

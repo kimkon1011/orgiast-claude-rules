@@ -19,6 +19,7 @@ import { completionActions } from './lib/auto-progress-artifact.mjs';
 import { reportCheckProgress } from './lib/auto-progress-heartbeat.mjs';
 import { checkPromise, checkProgressSummary, executeCheck, isTimeOnlyCheck, queueCheckFollowup, pendingAction } from './auto-progress-check.mjs';
 import { addItem } from './kim-inbox.mjs';
+import { autoResumeAllowed } from './lib/auto-resume-policy.mjs';
 import { externalSpec } from './lib/external-monitor-state.mjs';
 import { pollExternal, drainExternalQueue } from './auto-progress-external-monitor.mjs';
 import { main as writeProgressPush } from './progress-push.mjs';
@@ -337,6 +338,7 @@ function judgeEvidence(row, evidence, now, io) {
 // ---- 再開 ----------------------------------------------------------------
 // stalled-session-resume.mjs と同じ方式: claude を --resume で呼び、成果 JSON を書かせる。
 export async function resumeSession(row, { timeoutMs = 20 * 60000, home = os.homedir(), io = {}, reason } = {}) {
+  if (!autoResumeAllowed()) return { outcome: 'disabled', reason: '自動再開は廃止（config/auto-resume.json）' };
   const { runChild, resolveClaudeExe } = await import('./auto-session.mjs');
   const resultFile = path.join(home, '.claude', `auto-progress-resume-${String(row.sessionId).slice(0, 8)}.json`);
   fs.rmSync(resultFile, { force: true }); // Never reuse a report from an earlier attempt.
@@ -1177,7 +1179,7 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       } catch (error) { summary.errors.push(`resume-exhausted-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
     }
     let current = { ...row, ...((row.resumeCount ?? 0) >= MAX_RESUMES || verdict.source === 'resume-failed' ? { status: 'stalled' } : {}), verdict: verdict.verdict, reason: verdict.reason };
-    const resumeEligible = !unattended && !dryRun && summary.resumed < MAX_RESUMES_PER_RUN && (answered || (row.resumeCount ?? 0) < MAX_RESUMES) && now - (Date.parse(row.resumedAt || 0) || 0) >= RESUME_INTERVAL_MS
+    const resumeEligible = !unattended && !dryRun && !row.autoResumeDisabledNotifiedAt && summary.resumed < MAX_RESUMES_PER_RUN && (answered || (row.resumeCount ?? 0) < MAX_RESUMES) && now - (Date.parse(row.resumedAt || 0) || 0) >= RESUME_INTERVAL_MS
       && row.cwd && (io.cwdExists ?? fs.existsSync)(row.cwd);
     const canResume = resumeEligible && !executorUnavailable;
     if (resumeEligible && executorUnavailable) {
@@ -1190,7 +1192,16 @@ export async function run({ home = process.env.ORGIAST_HOME || os.homedir(), now
       patch(rowKey(row), { status: current.status, resumedAt: current.resumedAt, resumeCount: current.resumeCount, resumeOutcome: current.resumeOutcome });
       let outcome;
       try { outcome = await (io.resume ?? resumeSession)(row, { home }); } catch (error) { outcome = { outcome: 'error', reason: String(error?.message ?? error).slice(0, 200) }; }
-      if (outcome.deferred) {
+      if (outcome.outcome === 'disabled') {
+        current = { ...row, status: 'stalled', verdict: 'stalled', reason: outcome.reason };
+        patch(rowKey(row), { status: 'stalled', verdict: 'stalled', reason: outcome.reason, resumedAt: row.resumedAt ?? '', resumeCount: row.resumeCount ?? 0, resumeOutcome: 'disabled', lastCheckedAt: new Date(now).toISOString() });
+        if (!row.autoResumeDisabledNotifiedAt) {
+          try {
+            await (io.addKimInboxItem ?? addItem)(home, { kind: 'info', source: 'auto-progress-auto-resume-disabled', sessionId: row.sessionId, dedupeKey: `auto-progress-auto-resume-disabled:${row.sessionId || rowKey(row)}`, text: `自動再開は行いません。続けるときはこのセッションを開いて指示してください: claude --resume ${row.sessionId}` });
+            patch(rowKey(row), { autoResumeDisabledNotifiedAt: new Date(now).toISOString() });
+          } catch (error) { summary.errors.push(`auto-resume-disabled-notify: ${String(error?.message ?? error).slice(0, 120)}`); }
+        }
+      } else if (outcome.deferred) {
         patch(rowKey(row), { status: row.status, resumedAt: row.resumedAt ?? '', resumeCount: row.resumeCount ?? 0,
           resumeOutcome: failedResume(row) ? row.resumeOutcome : 'deferred: ' + outcome.reason, resumeDeferredAt: new Date(now).toISOString(),
           lastCheckedAt: new Date(now).toISOString(), reason: row.check ? row.checkText : outcome.reason });

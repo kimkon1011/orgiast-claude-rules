@@ -13,6 +13,7 @@ import { acquireLock } from './autopilot-tick.mjs';
 import { notifyKim } from './notify-kim.mjs';
 import { redactSecrets } from './redact-secrets.mjs';
 import { isEntry } from './is-entry.mjs';
+import { autoResumeAllowed } from './lib/auto-resume-policy.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -288,6 +289,7 @@ stuck=それ以外で進められなかった。
 }
 
 export async function execute(record, { timeoutMs, resultFile, previous = [], wait = null }, io = {}) {
+  if (!autoResumeAllowed()) return { outcome: 'disabled', reason: '自動再開は廃止（config/auto-resume.json）', executor: 'none' };
   // overdue モードでは claude --resume でセッション自身を再開する
   if (wait) {
     return executeOverdue(record, { timeoutMs, resultFile, previous, wait }, io);
@@ -494,6 +496,21 @@ export async function run(config = options(), io = {}) {
           }
           continue;
         }
+        if (!autoResumeAllowed()) {
+          rows.at(-1).skip = '自動再開は廃止';
+          entry.skipReason = '自動再開は廃止';
+          entries[entryKey] = entry;
+          ledger.autoResumeDisabledNotified ??= {};
+          if (!ledger.autoResumeDisabledNotified[record.sessionId]) {
+            try {
+              const { addItem } = await import('./kim-inbox.mjs');
+              await (io.addItem ?? addItem)(home, { kind: 'info', source: 'stalled-session-auto-resume-disabled', sessionId: record.sessionId, dedupeKey: `stalled-session-auto-resume-disabled:${record.sessionId}`, text: `自動再開は行いません。続けるときはこのセッションを開いて指示してください: claude --resume ${record.sessionId}` });
+              ledger.autoResumeDisabledNotified[record.sessionId] = new Date(now()).toISOString();
+            } catch { /* 通知失敗時は次回再試行する */ }
+          }
+          await save(ledger);
+          continue;
+        }
         state.count++;
         if (readonly) continue;
         if (!overdue) ledger.nights[night] = state;
@@ -523,7 +540,7 @@ export async function run(config = options(), io = {}) {
               return;
             }
             result = await (io.execute ?? execute)(record, { timeoutMs: config.timeoutMs, resultFile, previous: entry.attempts.slice(-4, -1), wait: overdue ? wait : null });
-            if (!['progressed', 'done', 'waiting-human', 'no-progress', 'no-report', 'timeout', 'error', 'no-executor', 'not-in-session'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
+            if (!['progressed', 'done', 'waiting-human', 'no-progress', 'no-report', 'timeout', 'error', 'no-executor', 'not-in-session', 'disabled'].includes(result?.outcome)) throw new Error('Invalid execution outcome');
           } catch (error) { const msg = String(error.message ?? ''); result = { outcome: /timeout|timed out|ETIMEDOUT|aborted due to timeout/i.test(msg) ? 'timeout' : 'error', reason: msg }; }
           if (overdue && result.outcome === 'no-executor') result = { ...result, outcome: 'error' };
           if (result.outcome === 'no-executor') {

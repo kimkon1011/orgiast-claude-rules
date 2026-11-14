@@ -139,7 +139,7 @@ export async function runClaudeTask({ id, home, spawnImpl = spawn, now = Date.no
           await syncMailState({ home, id, action: 'seen', seenBy: 'headless', from: label, request, now, stderr });
           const remaining = RESUME_LIMIT_MS - (now() - executionStart);
           result = remaining <= 0 ? { exitCode: null, timedOut: true } : await runPrompt({
-            claudeExe: executable, body: exec.body, cwd: exec.cwd, resumeSessionId: sessionId, resumeMailId: id,
+            claudeExe: executable, body: exec.body, cwd: exec.cwd, resumeSessionId: sessionId, resumeSource: 'fleet-exec', resumeMailId: id,
             drivenByHub: true, home, spawnImpl, timeoutSeconds: remaining / 1000, setTimer: promptSetTimer, clearTimer: promptClearTimer });
           if (isMissingClaudeError(result)) result = { ...result, stdoutTail: '', outputTail: missingClaudeMessage(executable, candidates) };
         }

@@ -1,5 +1,6 @@
 import { progressHome, notificationMocks } from './test-helpers/auto-progress-home.mjs';
 import test from 'node:test';
+process.env.ORGIAST_AUTO_RESUME = '1';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';

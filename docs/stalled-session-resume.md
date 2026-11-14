@@ -1,8 +1,10 @@
 # 停滞セッションの夜間再開
 
+自動再開は廃止（kim 2026-11-14）。期限切れ・停滞は kim-inbox 通知のみ行う。
+
 `tools/stalled-session-resume.mjs` は `session-triage.mjs` の `listFiles` / `inspect` の結果を使う。両関数を export にしただけで、検出規則は変更していない。
 
-`auto-session.runChild` の既存経路を使う。Claude は共有の引数組立に追加した `resumeSessionId` で元セッションを再開する。cheap-code は元 transcript の全体と前回の成果記録を読み、元の cwd で続行する。モデル・プロバイダ選択、安価なプロバイダ間の再試行、明示的に許可された Claude fallback は既存設定を継承する。子の終了コード0だけでは進捗扱いにせず、成果の evidence を持つ結果ファイルを必要とする（実行者の自己申告であり、独立した成果物監査ではない）。
+`auto-session.runChild` の再開経路は `config/auto-resume.json` の共通ポリシーで遮断する。定期タスクは検出と kim-inbox 通知のために残すが、Claude の子プロセスは起動しない。
 
 ## 上限と状態
 

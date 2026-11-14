@@ -662,6 +662,8 @@ Workspace管理者がいれば、既存SAのclient_idをDWD Admin Consoleに登�
 
 effortLevelの既定は **medium**（kim 2026-09-17 改定）、lowは禁止。`settings-quality-guard` がlowへの変更をblockし、SessionStartでmediumへ復元する。highへの引き上げは設計・横断調査の時だけ、セッション単位で行う。thinking予算・監督モデル・実装先（Codex）を節約目的で下げないルールは維持し、節約は委譲・レスポンス数削減・無人ジョブの非Claude化・キャッシュ維持で行う。
 
+**🔴 大事な判断の前は必ず /advisor に相談してから決めて。**
+
 ### 1.14 permission mode と安全装置
 
 permission mode の既定は `bypassPermissions`（kim 2026-09-17 決定）。安全は deny リスト（allow-rules.json）と社内 hook の2層で担保する。

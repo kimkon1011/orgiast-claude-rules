@@ -41,6 +41,7 @@
 "ai-visibility": { "reason": "X-0007 AI可視性テストの結果・分析。配布先PCの実行時参照なし" },
     "pr-body-x0019.md": { "reason": "PR#1919 の説明文ファイル。配布先PCの実行時参照なし" },
     "pr-body-x0007-phase2.md": { "reason": "PR #1706 のボディファイル。配布先PCの実行時参照なし" },
+"pr-body-x0036.md": { "reason": "PR #1982 のボディファイル。配布先PCの実行時参照なし" },
     "pr-body-x0019-ai-seo-agent.md": { "reason": "PR #1910 のボディファイル。配布先PCの実行時参照なし" },
     "pr-body-x0020-grok-monitor.md": { "reason": "PR #1906 のボディファイル。配布先PCの実行時参照なし" },
     "pr-body-x0025.md": { "reason": "PR #1964 のボディファイル。配布先PCの実行時参照なし" },

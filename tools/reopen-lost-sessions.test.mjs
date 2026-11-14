@@ -1430,7 +1430,7 @@ test('parseOptions: 既定 max は 3 である', () => {
   assert.equal(opts.max, 3);
 });
 
-test('loadGuard: claude プロセス数 >= 閾値(10)で 0 件 reopen かつ skipped.loadGuard に計上', async t => {
+test('loadGuard: claude プロセス数 >= 閾値(10)でも 1 件は reopen する（RC切断放置防止）', async t => {
   const base = fixture(t);
   const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
   const fetchImpl = async url => {
@@ -1445,11 +1445,13 @@ test('loadGuard: claude プロセス数 >= 閾値(10)で 0 件 reopen かつ ski
     if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
     return { status: 0, stdout: '' };
   };
-  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime });
-  assert.equal(result.reopened.length, 0);
-  assert.equal(result.skipped.loadGuard, 1);
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  // claudeCount 高でも 1 件は reopen（CPU 負荷ではないため）
+  assert.equal(result.reopened.length, 1);
+  assert.equal(result.skipped.loadGuard, 0);
   assert.equal(result.loadGuard.claudeCount, 10);
   assert.equal(result.loadGuard.reason, 'claudeCount');
+  assert.equal(result.loadGuard.allowFirst, true);
 });
 
 test('loadGuard: CPU >= 閾値(85%)で 0 件 reopen かつ skipped.loadGuard に計上', async t => {
@@ -1500,6 +1502,137 @@ test('loadGuard: tasklist 失敗時は fail-open でスキップせず reopen �
   assert.equal(result.loadGuard.claudeCount, null);
   assert.ok(result.loadGuard.error);
   assert.equal(result.reopened.length, 1);
+});
+
+test('loadGuard: claudeCount 高でも 3 件中 1 件のみ reopen、残り 2 件は skipped.loadGuard に計上', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-loadguard-3cand-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
+
+  // 3 candidates
+  for (let i = 1; i <= 3; i++) {
+    const id = `cse_cand_${i}`;
+    const dir = path.join(root, `dir_${i}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(base, 'projects', 'proj', `${id}.jsonl`), [
+      { type: 'bridge-session', bridgeSessionId: id },
+      { type: 'user', cwd: dir, message: { content: 'hello' } },
+    ].map(JSON.stringify).join('\n'));
+  }
+
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
+    return { ok: true, json: async () => ({ data: [
+      { id: 'cse_cand_1' }, { id: 'cse_cand_2' }, { id: 'cse_cand_3' },
+    ] }) };
+  };
+  const spawn = (cmd, args) => {
+    if (cmd === 'tasklist') {
+      const csv = Array(10).fill('"claude.exe","1234","Console","1","100,000 K"').join('\n');
+      return { status: 0, stdout: csv };
+    }
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, checkCpu: false, checkClaude: true, now: () => nowTime, windowReady: async () => true, wait: async () => {} });
+  // claudeCount 高でも 1 件は reopen、残り 2 件は skipped
+  assert.equal(result.reopened.length, 1, '1 candidate should be reopened');
+  assert.equal(result.skipped.loadGuard, 2, '2 candidates should be skipped by loadGuard');
+  assert.equal(result.loadGuard.allowFirst, true);
+  assert.equal(result.loadGuard.claudeCount, 10);
+});
+
+test('countWindowsClaudeProcesses: orphan claude processes (parent PID not alive) are excluded', async t => {
+  // Create 3 CLI processes and 1 orphan
+  const cliRows = [
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume abc', ProcessId: 100, ParentProcessId: 1 },
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume def', ProcessId: 101, ParentProcessId: 1 },
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume ghi', ProcessId: 102, ParentProcessId: 100 },
+    // Orphan: PPID=999 (not in the alive PID set)
+    { Name: 'claude.exe', ExecutablePath: 'C:\\Users\\uers\\.vscode\\extensions\\anthropic.claude-code-2.1.319\\claude.exe', CommandLine: 'claude.exe --resume orphan', ProcessId: 200, ParentProcessId: 999 },
+  ];
+  const psScript = JSON.stringify(cliRows);
+  const exec = (cmd, args) => {
+    assert.equal(cmd, 'powershell.exe');
+    return psScript;
+  };
+  const { countWindowsClaudeProcesses } = await import('./lib/windows-process.mjs');
+  const count = countWindowsClaudeProcesses(exec);
+  assert.equal(count, 3, 'orphan process should be excluded');
+});
+
+test('loadGuard: credential diagnostics show missing file/field details', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-cred-diag-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+
+  // Case A: Missing .credentials.json
+  let result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe',
+    fetchImpl: async () => assert.fail(), spawn: () => { throw Error('should not spawn'); } });
+  assert.ok(result.error, 'should have error');
+  assert.match(result.error, /credentials file not found/, `missing cred file: ${result.error}`);
+
+  // Case B: Missing .claude.json
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe',
+    fetchImpl: async () => assert.fail(), spawn: () => { throw Error('should not spawn'); } });
+  assert.ok(result.error, 'should have error');
+  assert.match(result.error, /config file not found/, `missing config file: ${result.error}`);
+
+  // Case C: Missing token field in .credentials.json
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({}));
+  result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe',
+    fetchImpl: async () => assert.fail(), spawn: () => { throw Error('should not spawn'); } });
+  assert.ok(result.error, 'should have error');
+  assert.match(result.error, /Missing accessToken/, `missing token: ${result.error}`);
+
+  // Case D: Missing org UUID in .claude.json
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({}));
+  result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe',
+    fetchImpl: async () => assert.fail(), spawn: () => { throw Error('should not spawn'); } });
+  assert.ok(result.error, 'should have error');
+  assert.match(result.error, /Missing oauthAccount\.organizationUuid/, `missing org: ${result.error}`);
+});
+
+test('loadGuard: CPU 高 (>=85%) は claudeCount が低くても全件 defer する（CPU 優先）', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reopen-cpu-defer-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = path.join(root, '.claude');
+  fs.mkdirSync(path.join(base, 'projects', 'proj'), { recursive: true });
+  fs.writeFileSync(path.join(base, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'mock' } }));
+  fs.writeFileSync(path.join(root, '.claude.json'), JSON.stringify({ oauthAccount: { organizationUuid: 'mock' } }));
+  fs.writeFileSync(path.join(base, 'projects', 'proj', 'one.jsonl'), [
+    { type: 'bridge-session', bridgeSessionId: 'cse_one' },
+    { type: 'user', cwd: 'C:\\work', message: { content: 'hello' } },
+  ].map(JSON.stringify).join('\n'));
+
+  const nowTime = Date.parse('2026-11-05T20:20:00.000Z');
+  const fetchImpl = async url => {
+    if (url.includes('/events?')) return { ok: true, json: async () => ({ data: [{ event_type: 'system', payload: { reason: 'host_exit' }, created_at: since }] }) };
+    return { ok: true, json: async () => ({ data: [{ id: 'cse_one' }] }) };
+  };
+  const spawn = (cmd, args) => {
+    if (args?.[0] === 'agents') return { status: 0, stdout: '[]' };
+    return { status: 0, stdout: '' };
+  };
+  let cpuCallCount = 0;
+  const cpusImpl = () => {
+    cpuCallCount++;
+    if (cpuCallCount === 1) return [{ times: { user: 0, nice: 0, system: 0, idle: 0, iowait: 0, irq: 0, softirq: 0 } }];
+    return [{ times: { user: 50, nice: 0, system: 40, idle: 5, iowait: 0, irq: 0, softirq: 0 } }];
+  };
+  const result = await reopenLost({ base, since, until, dryRun: false, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', fetchImpl, spawn, cpusImpl, checkCpu: true, checkClaude: false, now: () => nowTime });
+  assert.equal(result.reopened.length, 0, 'CPU high should defer everything');
+  assert.equal(result.skipped.loadGuard, 1, '1 candidate skipped by CPU loadGuard');
+  assert.equal(result.deferredCpu, 95);
+  assert.match(result.loadGuard.reason, /cpuPct/);
+  assert.equal(result.loadGuard.allowFirst, undefined, 'allowFirst should not be set for CPU defer');
 });
 
 test('loadGuard: PowerShell 出力から Claude デスクトップアプリ (11本) を除外し CLI (8本) だけを数え、上限(10)未満のためブロックしない', async t => {

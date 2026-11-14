@@ -83,6 +83,11 @@ jobs:
             if ! gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$number/comments?per_page=100" --jq '.[].body' | grep -Fqx "$message"; then
               gh pr comment "$number" --repo "$GITHUB_REPOSITORY" --body "$message"
             fi
+            # 以前のトリガーで有効化された auto-merge を確実に解除する。
+            # automerge ラベルを外すだけでは gh pr merge --auto で登録済みの auto-merge は残るため、
+            # 明示的に --disable-auto を実行する（2026-11-08 PR #1667 / #1715 実害）。
+            gh pr edit "$number" --repo "$GITHUB_REPOSITORY" --remove-label automerge 2>/dev/null || true
+            gh pr merge "$number" --repo "$GITHUB_REPOSITORY" --disable-auto 2>/dev/null || true
             echo "eligible=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi

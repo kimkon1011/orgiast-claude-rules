@@ -216,9 +216,7 @@ export async function dailyLaneHealth({ dir, label, request, now = Date.now, pla
   const marker = path.join(dir, '.fleet-lane-health-day');
   const day = new Date(now()).toISOString().slice(0, 10);
   let last = ''; try { last = fs.readFileSync(marker, 'utf8').trim(); } catch {}
-  const cached = readJson(path.join(dir, 'lane-health.json'), {});
-  const stale = Object.values(cached?.lanes || {}).some(lane => /:stale$/.test(lane.reason || ''));
-  if (last === day && !stale) return { skipped: 'today' };
+  if (last === day) return { skipped: 'today' };
   const doctor = path.join(repo, 'tools', 'lane-doctor.mjs');
   if (!fs.existsSync(doctor)) return { skipped: 'no-script' };
   const r = spawnSyncImpl(process.execPath, [doctor, '--probe', '--json'], { encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: path.dirname(dir) }, windowsHide: true, timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -234,8 +232,10 @@ export async function dailyLaneHealth({ dir, label, request, now = Date.now, pla
   if (state.sig === stamp && now() - Date.parse(state.at) < 24 * 3600_000) return { skipped: 'dedupe' };
   let autoFix = 'none';
   const fixScript = path.join(repo, 'tools', 'fleet-fix-now.ps1');
-  if (dead.some(d => repairAdvice(d.lane, d.reason).fixNow) && platform === 'win32' && fs.existsSync(fixScript)) {
-    try { launch('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', fixScript, '-NoLogin']); autoFix = 'launched'; }
+  const fixMarker = path.join(dir, '.fleet-lane-health-fix-day');
+  let fixLast = ''; try { fixLast = fs.readFileSync(fixMarker, 'utf8').trim(); } catch {}
+  if (dead.some(d => repairAdvice(d.lane, d.reason).fixNow) && platform === 'win32' && fs.existsSync(fixScript) && fixLast !== day) {
+    try { launch('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', fixScript, '-NoLogin']); autoFix = 'launched'; fs.writeFileSync(fixMarker, day); }
     catch { autoFix = 'failed'; }
   }
   const at = new Date(now()).toISOString();

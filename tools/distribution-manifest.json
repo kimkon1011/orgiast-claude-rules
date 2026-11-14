@@ -44,6 +44,7 @@
     "pr-body-x0019-ai-seo-agent.md": { "reason": "PR #1910 のボディファイル。配布先PCの実行時参照なし" },
     "pr-body-x0020-grok-monitor.md": { "reason": "PR #1906 のボディファイル。配布先PCの実行時参照なし" },
     "pr-body-x0025.md": { "reason": "PR #1964 のボディファイル。配布先PCの実行時参照なし" },
+    ".pr-body-x0022.md": { "reason": "PR #2027 のボディファイル。配布先PCの実行時参照なし" },
     "pr-body-x0027-codex-mcp-illustrator.md": { "reason": "PR #1965 のボディファイル。配布先PCの実行時参照なし" },
     ".pr-body-uac.md": { "reason": "PR #1888 のボディファイル（UAC 遮断）。配布先PCの実行時参照なし" },
     "run-file-20261108-003008.md": { "reason": "X-0007 PHASE1 B 引用ギャップ分析の参照メモ。配布先PCの実行時参照なし" },

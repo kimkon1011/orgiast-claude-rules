@@ -1,4 +1,8 @@
-# X-0022: Harness選択でAIエージェントコストを半減 — Claude Code vs OpenClaw 実証比較
+# [ARCHIVE] X-0022(original): Harness選択でAIエージェントコストを半減 — Claude Code vs OpenClaw 実証比較
+
+> **2026-11-14 更新**: X-0022のスコープが「5時間制限前コンテキスト整理でキャッシュ維持」に更新されました。
+> 新しい設計書: [ai-news-x0022-five-hour-context-organize.md](./ai-news-x0022-five-hour-context-organize.md)
+> 本ファイルは旧スコープのアーカイブとして残します。
 
 **AIニュース提案 X-0022**: Claude Code 76.3%成功率 約$0.22/成功タスク、OpenClaw 76.3% 約$0.44（約2倍）、追加コストの81%がPrompt Cache Writes。簡単タスクで記憶/Skills削除により約19%コスト減、複雑タスクでは成功率60.4%から0%に低下。株式会社オージャストのブース企画生成エージェントでSystem Promptとツール出力を固定キャッシュし、g-harness-evalsのRunnerに接続してMemory追加・Context圧縮・Tool RoutingのAblation実験を実施する。
 

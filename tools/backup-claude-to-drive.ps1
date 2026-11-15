@@ -186,9 +186,9 @@ function Find-GoogleDrive {
     if ($description -eq 'Google Drive') { return $drive.Root }
   }
   foreach ($drive in $candidates) {
-    if ((Test-Path -LiteralPath (Join-Path $drive.Root 'マイドライブ')) -or (Test-Path -LiteralPath (Join-Path $drive.Root 'My Drive'))) { return $drive.Root }
+    if ((Test-Path -LiteralPath (Join-Path $drive.Root 'マイドライブ') -ErrorAction SilentlyContinue) -or (Test-Path -LiteralPath (Join-Path $drive.Root 'My Drive') -ErrorAction SilentlyContinue)) { return $drive.Root }
   }
-  if (Test-Path -LiteralPath 'H:\') { return 'H:\' }
+  if (Test-Path -LiteralPath 'H:\' -ErrorAction SilentlyContinue) { return 'H:\' }
   return $null
 }
 

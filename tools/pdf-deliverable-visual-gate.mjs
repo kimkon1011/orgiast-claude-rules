@@ -19,9 +19,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
-import { latestAssistantText } from './lib/assistant-text.mjs';
 
-export const GATE_CONTRACT = { name: 'pdf-deliverable-visual-gate', remedies: [{ kind: 'repo-file', ref: 'tools/gate-remedies.md', section: 'pdf-deliverable-visual-gate' }] };
+export const GATE_CONTRACT = {"name":"pdf-deliverable-visual-gate","remedies":[{"kind":"repo-file","ref":"tools/gate-remedies.md","section":"pdf-deliverable-visual-gate"}]};
 
 const HOME = process.env.ORGIAST_HOME || os.homedir();
 const EVIDENCE_DIR = path.join(HOME, '.claude', 'pdf-render', 'evidence');
@@ -32,9 +31,6 @@ const TARGET_NAME = /提案|企画|見積|資料|スライド|proposal|deck|brie
 // 対象の操作パターン
 const SEND_USER_FILE = 'SendUserFile';
 const DRIVE_CREATE_FILE = /^mcp__claude_ai_Google_Drive(?:_\d+)?__create_file$/;
-const DRIVE_UPLOAD = 'drive-upload.mjs';
-const GMAIL_DRAFT = 'gmail-draft.mjs';
-const SEISAKU_MAIL = 'seisaku-mail.mjs';
 
 /**
  * PDF ファイルの sha256 を計算
@@ -48,20 +44,20 @@ function sha256hex(filePath) {
  * ファイルの更新時刻を取得
  */
 function fileMtime(filePath) {
-  try { return fs.statSync(filePath).mtime; } catch { return 0; }
+  try { return fs.statSync(filePath).mtimeMs; } catch { return NaN; }
 }
 
 /**
  * PDF ファイルかどうか、対象かどうかを判定
  * @returns {{ isTarget: boolean, pdfPath?: string, sha256?: string }}
  */
-function classifyPdf(filePath) {
+function classifyPdf(filePath, cwd = process.cwd(), title = '') {
   if (!filePath || typeof filePath !== 'string') return { isTarget: false };
   const lower = filePath.toLowerCase();
   if (!lower.endsWith('.pdf')) return { isTarget: false };
-  const basename = path.basename(lower);
+  const basename = path.basename(title || lower);
   if (!TARGET_NAME.test(basename)) return { isTarget: false };
-  const absPath = path.resolve(filePath);
+  const absPath = path.resolve(cwd, filePath);
   if (!fs.existsSync(absPath)) return { isTarget: false };
   const sha256 = sha256hex(absPath);
   return { isTarget: true, pdfPath: absPath, sha256 };
@@ -70,13 +66,13 @@ function classifyPdf(filePath) {
 /**
  * SendUserFile から PDF ファイルを抽出
  */
-function extractPdfFromSendUserFile(toolInput) {
+function extractPdfFromSendUserFile(toolInput, cwd) {
   const files = toolInput?.files || [];
   const result = [];
   for (const entry of Array.isArray(files) ? files : []) {
     const file = typeof entry === 'string' ? entry : entry?.path || entry?.file_path || entry?.file;
     if (!file) continue;
-    const classified = classifyPdf(String(file));
+    const classified = classifyPdf(String(file), cwd);
     if (classified.isTarget) result.push(classified);
   }
   return result;
@@ -91,11 +87,13 @@ function extractPdfFromDriveCreate(toolInput) {
   const mimeType = toolInput?.contentMimeType || '';
   if (mimeType !== 'application/pdf' && !title.toLowerCase().endsWith('.pdf')) return [];
   // sha256:<hex>:<絶対パス> 形式の参照
-  const shaRef = content.match(/^sha256:([a-f0-9]{64}):([A-Za-z]:[\\/].+|\/.+)$/);
+  const shaRef = typeof content === 'string' && content.match(/^sha256:([a-f0-9]{64}):(.+)$/i);
   if (shaRef) {
     const [, hex, filePath] = shaRef;
-    const classified = classifyPdf(filePath);
-    if (classified.isTarget && classified.sha256 === hex.toLowerCase()) return [classified];
+    if (!path.isAbsolute(filePath)) return [];
+    // The connector reference is authoritative, including when its local file is absent.
+    if (!TARGET_NAME.test(path.basename(title)) && !TARGET_NAME.test(path.basename(filePath))) return [];
+    return [{ isTarget: true, pdfPath: filePath, sha256: hex.toLowerCase(), reference: true }];
   }
   return [];
 }
@@ -103,17 +101,18 @@ function extractPdfFromDriveCreate(toolInput) {
 /**
  * Bash コマンドから drive-upload / gmail-draft / seisaku-mail の --file / --attach 引数を抽出
  */
-function extractPdfFromBash(command) {
+function extractPdfFromBash(command, cwd) {
   if (!command || typeof command !== 'string') return [];
   const result = [];
   // drive-upload.mjs --file <path>
   if (command.includes('drive-upload.mjs') || command.includes('gmail-draft.mjs') || command.includes('seisaku-mail.mjs')) {
-    const fileFlag = /(?:--file|--attach)\s+"([^"]+)"|(?:--file|--attach)\s+'([^']+)'|(?:--file|--attach)\s+([^\s"'`|&;]+)/g;
+    const fileFlag = /(?:^|\s)--(?:file|attach)(?:\s+|=)(?:"([^"\r\n]+)"|'([^'\r\n]+)'|([^\s"'`|&;]+))/g;
     let match;
     while ((match = fileFlag.exec(command)) !== null) {
       const filePath = match[1] || match[2] || match[3];
       if (!filePath) continue;
-      const classified = classifyPdf(filePath);
+      if (/[$`]/.test(filePath)) continue; // Do not guess shell expansion.
+      const classified = classifyPdf(filePath, cwd);
       if (classified.isTarget) result.push(classified);
     }
   }
@@ -123,12 +122,15 @@ function extractPdfFromBash(command) {
 /**
  * transcript の全 Read ツール呼び出しをスキャンし、file_path のリストを返す
  */
-function scanReadCalls(transcriptRaw) {
+function scanReadCalls(transcriptRaw, renderedAt, sessionId) {
   const readFiles = new Set();
   if (!transcriptRaw) return readFiles;
   for (const line of transcriptRaw.split(/\r?\n/)) {
     let entry;
     try { entry = JSON.parse(line); } catch { continue; }
+    if (entry?.isSidechain || (sessionId && entry?.sessionId && entry.sessionId !== sessionId)) continue;
+    const at = Date.parse(entry?.timestamp);
+    if (!Number.isFinite(at) || at <= renderedAt) continue;
     if (entry?.type !== 'assistant' && entry?.message?.role !== 'assistant') continue;
     const content = entry?.message?.content;
     if (!Array.isArray(content)) continue;
@@ -144,7 +146,8 @@ function scanReadCalls(transcriptRaw) {
 }
 
 function canonicalPath(p) {
-  return path.resolve(p).replaceAll('\\', '/');
+  const resolved = path.resolve(p).replaceAll('\\', '/');
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 /**
@@ -162,16 +165,22 @@ function checkEvidence(classified, evidenceDir = EVIDENCE_DIR) {
   }
   // renderedAt が PDF の更新時刻より後であること
   const mtime = fileMtime(classified.pdfPath);
-  if (mtime > 0 && ev.renderedAt < mtime) {
+  if (Number.isFinite(mtime) && classified.reference && sha256hex(classified.pdfPath) !== classified.sha256) {
+    return { passed: false, reason: 'Drive参照のsha256が実ファイルと一致しません' };
+  }
+  if (!Number.isFinite(mtime) || !Number.isFinite(ev?.renderedAt) || ev.renderedAt <= mtime) {
     return { passed: false, reason: '証跡が古い（PDF 更新時刻より後の描画記録がありません）' };
   }
   // 機械チェックが fatal でないこと
-  if (ev.sha256 !== classified.sha256 || canonicalPath(ev.pdf || '') !== canonicalPath(classified.pdfPath) || ev.pages !== ev.pngs?.length) {
+  if (ev.sha256 !== classified.sha256 || typeof ev.pdf !== 'string' || canonicalPath(ev.pdf) !== canonicalPath(classified.pdfPath)
+    || !Number.isInteger(ev.pages) || ev.pages < 1 || !Array.isArray(ev.pngs) || ev.pages !== ev.pngs.length
+    || ev.pngs.some(p => typeof p !== 'string' || !path.isAbsolute(p) || !fs.existsSync(p))
+    || new Set(ev.pngs.map(canonicalPath)).size !== ev.pages) {
     return { passed: false, reason: '証跡のsha256・PDFパス・ページ数が一致しません' };
   }
-  if (ev.fatal || ev.check?.fatal) {
-    const warnings = ev.warnings || ev.check?.warnings || [];
-    return { passed: false, reason: `機械チェックで社内向け語を検出: ${warnings.map(w => w.detail).join('; ')}` };
+  if (ev.fatal !== false || !Array.isArray(ev.warnings) || ev.warnings.some(w => w?.type === 'internal-word')) {
+    const warnings = Array.isArray(ev.warnings) ? ev.warnings : [];
+    return { passed: false, reason: `機械チェック未合格（社内向け語または結果不明）: ${warnings.map(w => w?.detail || '').join('; ')}` };
   }
   return { passed: true, evidence: ev };
 }
@@ -179,9 +188,9 @@ function checkEvidence(classified, evidenceDir = EVIDENCE_DIR) {
 /**
  * transcript に全 PNG の Read 記録があるか確認
  */
-function checkReadVisual(transcriptRaw, evidence) {
+function checkReadVisual(transcriptRaw, evidence, sessionId) {
   if (!evidence?.pngs?.length) return { passed: false, reason: '証跡にPNGがありません' };
-  const readFiles = scanReadCalls(transcriptRaw);
+  const readFiles = scanReadCalls(transcriptRaw, evidence.renderedAt, sessionId);
   const canonicalPngs = evidence.pngs.map(p => canonicalPath(p));
   const missing = canonicalPngs.filter(p => !readFiles.has(p));
   if (missing.length > 0) {
@@ -194,9 +203,24 @@ function checkReadVisual(transcriptRaw, evidence) {
  * 逃がし弁: 直近の assistant テキストに [PDF-VISUAL-OK: 理由] があるか
  */
 function checkEscapeHatch(assistantText) {
-  const match = String(assistantText || '').match(/\[PDF-VISUAL-OK:\s*([^\]]{20,})\]/);
-  if (match) return true;
-  return false;
+  return [...String(assistantText || '').matchAll(/\[PDF-VISUAL-OK:([^\]]*)\]/g)]
+    .some(match => [...match[1].trim()].length >= 20);
+}
+
+// Do not inherit an old override across another assistant message or human turn.
+function lastAssistantMessage(raw) {
+  for (const line of raw.trim().split(/\r?\n/).reverse()) {
+    let entry; try { entry = JSON.parse(line); } catch { continue; }
+    if (entry?.isSidechain) continue;
+    const content = entry?.message?.content;
+    if (entry?.type === 'assistant' || entry?.message?.role === 'assistant') {
+      return typeof content === 'string' ? content : Array.isArray(content)
+        ? content.filter(b => b.type === 'text').map(b => b.text).join('\n') : '';
+    }
+    if ((entry?.type === 'user' || entry?.message?.role === 'user')
+      && !(Array.isArray(content) && content.some(b => b.type === 'tool_result'))) return '';
+  }
+  return '';
 }
 
 /**
@@ -209,23 +233,25 @@ export function judge(input, { evidenceDir = EVIDENCE_DIR } = {}) {
     const toolInput = input?.tool_input || {};
     const command = String(toolInput?.command || '');
     const transcriptPath = input?.transcript_path || '';
-    const assistantText = latestAssistantText(transcriptPath);
+    const cwd = typeof input?.cwd === 'string' ? input.cwd : process.cwd();
 
     // 対象操作か判定
     let pdfs = [];
     if (toolName === SEND_USER_FILE) {
-      pdfs = extractPdfFromSendUserFile(toolInput);
+      pdfs = extractPdfFromSendUserFile(toolInput, cwd);
     } else if (DRIVE_CREATE_FILE.test(toolName)) {
       pdfs = extractPdfFromDriveCreate(toolInput);
     } else if (/^(?:Bash|PowerShell)$/i.test(toolName)) {
-      pdfs = extractPdfFromBash(command);
+      pdfs = extractPdfFromBash(command, cwd);
     }
 
     // 該当PDFがなければ何もしない（fail-open = pass）
     if (pdfs.length === 0) return { decision: 'pass' };
 
     // 逃がし弁
-    if (checkEscapeHatch(assistantText)) return { decision: 'pass' };
+    let raw;
+    try { raw = fs.readFileSync(transcriptPath, 'utf8'); } catch { raw = ''; }
+    if (checkEscapeHatch(lastAssistantMessage(raw))) return { decision: 'pass' };
 
     // 証跡チェック
     for (const classified of pdfs) {
@@ -235,11 +261,9 @@ export function judge(input, { evidenceDir = EVIDENCE_DIR } = {}) {
         return { decision: 'block', reason };
       }
 
-      let raw;
-      try { raw = fs.readFileSync(transcriptPath, 'utf8'); } catch { raw = ''; }
-      const visualResult = checkReadVisual(raw, evResult.evidence);
+      const visualResult = checkReadVisual(raw, evResult.evidence, input?.session_id);
       if (!visualResult.passed) {
-        const reason = `[PDF-VISUAL-GATE] ${classified.sha256.slice(0, 12)}: ${visualResult.reason}\n\n全ページ画像を Read で1枚ずつ見てから渡してください。\n① node tools/pdf-page-check.mjs --pdf "${classified.pdfPath}"\n② 出力された全ページ画像を Read（file_path にPNGの絶対パス）\n③ 問題を直したらPDFを作り直して①②をやり直す\n④ 再度渡す`;
+        const reason = `[PDF-VISUAL-GATE] ${classified.sha256.slice(0, 12)}: ${visualResult.reason}\n\n全ページ画像を Read で1枚ずつ見てから渡してください。\n① node tools/pdf-page-check.mjs --install（未導入なら）\n② node tools/pdf-page-check.mjs --pdf "${classified.pdfPath}"\n③ 出力された全ページ画像を Read（file_path にPNGの絶対パス）\n④ 問題を直したらPDFを作り直して②③をやり直す\n⑤ 再度渡す`;
         return { decision: 'block', reason };
       }
     }
@@ -256,7 +280,7 @@ async function main() {
   const raw = await readStdinWithTimeout();
   if (!raw) { process.exit(0); return; }
   let input;
-  try { input = JSON.parse(raw); } catch { process.exit(0); return; }
+  try { input = JSON.parse(raw); } catch (error) { console.error(`pdf-deliverable-visual-gate fail-open: ${error.message}`); return; }
   const result = judge(input);
   // PreToolUse gate は block/warn の時だけ決定打を出力、pass は無出力が通す
   if (result.decision === 'block') {
@@ -265,4 +289,6 @@ async function main() {
   }
 }
 
-if (isEntry(import.meta.url)) await main();
+if (isEntry(import.meta.url)) {
+  try { await main(); } catch (error) { console.error(`pdf-deliverable-visual-gate fail-open: ${error.message}`); }
+}

@@ -8,7 +8,6 @@ export const revisionOf = item => createHash('sha256').update(JSON.stringify([it
 export const jstDay = now => new Date(now + 9 * 3600000).toISOString().slice(0, 10);
 export function inboxSummary(item) {
   const lines = String(item.text).split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-  // Registration URLs are actions, not optional detail; never truncate their signed token.
   if (item.source === 'knowledge-lock-passkey-link' && lines.some(line => /^登録リンク: https:\/\//.test(line))) return lines.join(' ');
   const heading = lines.filter(line => !/^(作業ID:|成果物:|自動起票:|原因:|対処:|\d+[.．、)）])/.test(line)).join(' ').slice(0, 140);
   const action = lines.slice(1).find(s => /承認待ち|kim.*(?:判断|承認|操作)|登録リンク/.test(s));
@@ -20,9 +19,12 @@ export function relayDue(item, sessionId, now = Date.now()) {
   if (item.kind === 'ask') return delivery.sessions?.[sessionId]?.day !== jstDay(now);
   return item.kind !== 'info';
 }
-const withoutEmoji = text => text.replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, '').trim();
+const withoutEmoji = text => text.replace(/[\p{Extended_Pictographic}️‍]/gu, '').trim();
 const metadataLine = /^(?:【[^】]*】\s*(?:プロジェクト|セッションの目的)|プロジェクト|作業ID|セッションの目的)[:：]/;
-// Deterministic extraction: only happened is shortened; actions and URLs stay intact.
+const actionLabel = /^(?:あなたの返事待ち|答えてほしいこと|判断してほしいこと|あなたの作業待ち|kim がすること|kim がやること[^:：]*)[:：]/;
+const anyActionLabel = /^(?:あなたの返事待ち|答えてほしいこと|判断してほしいこと|あなたの作業待ち|kim がすること|kim がやること[^:：]*|承認待ち|約束)[:：]/;
+const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 export function inboxBrief(item, options = {}) {
   const text = String(item.text || '');
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
@@ -33,29 +35,106 @@ export function inboxBrief(item, options = {}) {
   const meaning = lines.map(withoutEmoji).find(line => line && !metadataLine.test(line) && !/^https?:\/\//.test(line)) || '';
   let topic = purpose || (header ? meaning : lines[0]) || '件名なし';
   if (displayPc && !topic.startsWith(displayPc)) topic = `${displayPc}: ${topic}`;
-  const happened = Array.from(meaning).slice(0, 120).join('');
+  const happenedRaw = Array.from(meaning).slice(0, 120).join('');
+  // Fix 4: use normalized version only for dedup comparison, topic display remains unchanged
+  const topicBody = topic.replace(new RegExp(`^${escapeRegex(displayPc ? displayPc + ': ' : '')}`), '');
+  const normTopic = topicBody.replace(/^【[^】]+】\s*/, '').trim();
+  const normHappened = (happenedRaw || '').replace(/^【[^】]+】\s*/, '').trim();
+  const happened = (!header && purpose === undefined && normTopic === normHappened)
+    ? (() => {
+        const meaningIndex = lines.map(withoutEmoji).findIndex(l => l === meaning);
+        const nextLine = lines.slice(meaningIndex + 1).map(withoutEmoji).find(l => l && !metadataLine.test(l) && !/^https?:\/\//.test(l) && !actionLabel.test(l));
+        return nextLine ? Array.from(nextLine).slice(0, 120).join('') : '';
+      })()
+    : happenedRaw;
   const unspecified = `返事内容の指定なし（原文確認: node tools/kim-inbox.mjs --show ${item.id}）`;
   const actions = lines.map(withoutEmoji);
-  const action = actions.find(line => /^(?:あなたの返事待ち|答えてほしいこと|判断してほしいこと|あなたの作業待ち|kim がすること)[:：]/.test(line))
-    || actions.find(line => /^(?:kim の)?承認待ち/.test(line))
-    || actions.find(line => /^約束[:：]/.test(line));
+  const actionLineInfo = (() => {
+    for (let i = 0; i < actions.length; i++) {
+      if (actionLabel.test(actions[i])) return { line: actions[i], index: i };
+    }
+    for (let i = 0; i < actions.length; i++) {
+      if (/^(?:kim の)?承認待ち/.test(actions[i])) return { line: actions[i], index: i };
+    }
+    for (let i = 0; i < actions.length; i++) {
+      if (/^約束[:：]/.test(actions[i])) return { line: actions[i], index: i };
+    }
+    return null;
+  })();
   const resumeFailed = item.source === 'auto-progress-resume-failed';
-  const decide = resumeFailed ? '自動再開が止まっている。続けるか中止するか'
-    : item.kind === 'info' ? '判断不要（報告のみ）'
-    : action ? action.replace(/^(?:あなたの返事待ち|答えてほしいこと|判断してほしいこと|あなたの作業待ち|kim がすること|承認待ち|約束)[:：]\s*/, '') || unspecified
-    : unspecified;
+  const infoDecideKeywords = /承認待ち|確認してください|状況を確認|返信してください|kim がやること|kim がすること|あなたの返事待ち|答えてほしいこと|判断してほしいこと/;
+  const negativeInfoPattern = /kim がすること:\s*なし|承認待ちの列挙なし/;
+  let decide;
+  if (resumeFailed) {
+    decide = '自動再開が止まっている。続けるか中止するか';
+  } else if (item.kind === 'info') {
+    const infoActionLine = actions.find(line => infoDecideKeywords.test(line) && !negativeInfoPattern.test(line));
+    if (infoActionLine) {
+      decide = infoActionLine.replace(anyActionLabel, '').trim() || unspecified;
+    } else {
+      decide = '判断不要（報告のみ）';
+    }
+  } else if (actionLineInfo) {
+    const stripped = actionLineInfo.line.replace(anyActionLabel, '').trim();
+    let baseDecide;
+    // Fix 2: capture follow-up lines only when the label line has no content (heading-only)
+    if (!stripped) {
+      const followUps = [];
+      for (let i = actionLineInfo.index + 1; i < actions.length && followUps.length < 3; i++) {
+        const l = actions[i];
+        if (actionLabel.test(l) || /^(?:kim の)?承認待ち/.test(l) || /^約束[:：]/.test(l)) break;
+        if (metadataLine.test(l)) continue;
+        if (/^https?:\/\//.test(l)) continue;
+        followUps.push(l);
+      }
+      if (followUps.length > 0) {
+        const combined = followUps.join('\n');
+        baseDecide = combined.length > 300
+          ? ((cut => cut > 0 ? combined.slice(0, cut) : combined.slice(0, 300))(combined.lastIndexOf('\n', 300))) + '…'
+          : combined;
+      } else {
+        baseDecide = unspecified;
+      }
+    } else {
+      baseDecide = stripped;
+    }
+    decide = baseDecide;
+  } else {
+    decide = unspecified;
+  }
   const reply = item.kind === 'deadline' ? `${item.key || 'D-003'} 完了／延期 11/20／不要`
     : resumeFailed ? 'N 続けて／N 中止'
     : item.kind === 'info' ? '返事不要' : 'N 可／N 不要／N <指示>';
-  // Keep authuser and signed registration tokens, including long passkey URLs.
-  const links = [...text.matchAll(/https?:\/\/[^\s<>「」『』【】（）]+/g)].map(match => match[0]);
+  const rawLinks = [...text.matchAll(/https?:\/\/[^\s<>「」『』【】（）]+/g)].map(m => m[0]);
+  const sanitized = rawLinks.map(url => url.replace(/[*)\]）。、.,]$/, ''));
+  const seenRefs = new Map(); // ref → index in links[]
+  const links = [];
+  for (const url of sanitized) {
+    const docMatch = url.match(/\/d\/([^/?#\s]+)/);
+    const ref = docMatch ? docMatch[1] : url;
+    if (seenRefs.has(ref)) {
+      if (docMatch && url.includes('authuser=')) {
+        const existingUrl = links[seenRefs.get(ref)];
+        if (!existingUrl.includes('authuser=')) {
+          links[seenRefs.get(ref)] = url;
+        }
+      }
+    } else {
+      seenRefs.set(ref, links.length);
+      links.push(url);
+    }
+  }
   return { topic, happened, decide, reply, links };
 }
 export function formatInboxBrief(item, n = 'N', options = {}) {
   const brief = inboxBrief(item, options);
   const reply = brief.reply.replace(/\bN(?= )/g, String(n));
-  let result = `${n}. ${brief.topic}（${item.id}）\n   起きたこと: ${brief.happened}\n   判断してほしいこと: ${brief.decide}\n   返事の例: ${reply}`;
+  let result = `${n}. ${brief.topic}（${item.id}）`;
+  if (brief.happened) result += `\n   起きたこと: ${brief.happened}`;
+  result += `\n   判断してほしいこと: ${brief.decide}`;
+  result += `\n   返事の例: ${reply}`;
   for (const link of brief.links) {
+    if (brief.decide.includes(link)) continue;
     result += `\n   開く: ${link}`;
   }
   return result;
@@ -64,7 +143,6 @@ export function formatInboxBrief(item, n = 'N', options = {}) {
 export function interactiveInboxSession(input, { home, env = process.env, raw = '' } = {}) {
   if (input.agent_id || input.isSidechain || /(?:^|[\\/])subagents[\\/]/.test(input.transcript_path || '')) return false;
   if (isUnattendedSession({ ...input, entrypoint: input.entrypoint || input.entryPoint || env.CLAUDE_CODE_ENTRYPOINT }, { home, env })) return false;
-  // Transcript metadata covers plain `claude -p` without the scheduler env flags.
   const entries = raw.split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
   const entrypoint = entries.filter(e => e.isSidechain !== true && (e.entrypoint || e.entryPoint)).at(-1);
   return !['sdk-cli', 'sdk-ide'].includes(entrypoint?.entrypoint || entrypoint?.entryPoint);
@@ -87,8 +165,6 @@ export function recordInjection(home, sessionId, items, { event, now = Date.now(
   writeRelayState(home, sessionId, { ...state, sessionId, event, injectedAt: new Date(now).toISOString(),
     pending: items.map((item, n) => ({ id: item.id, revision: revisionOf(item), summary: formatInboxBrief(item, n + 1, { home }).split('\n')[0] })) });
 }
-// Only complete answer-only lines can act as replies. Never scrape quoted tool output,
-// general prose or an answer from a different session. Ambiguous multi-choice asks stay open.
 export function recordPromptAnswers(home, sessionId, prompt, { listItems, answerItem }) {
   if (!sessionId) return [];
   const state = readRelayState(home, sessionId), delivered = state.lastDelivered || [];

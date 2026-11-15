@@ -61,8 +61,8 @@ test('long action and registration URLs remain complete; reply uses the displaye
     text: `鍵の登録\n判断してほしいこと: 登録してください: ${url}\n登録リンク: ${url}\nhttps://example.com/help` });
   const brief = inboxBrief(item);
   assert.equal(brief.decide, `登録してください: ${url}`);
-  assert.deepEqual(brief.links, [url, url, 'https://example.com/help']);
-  assert.ok(formatInboxBrief(item, 7).includes(`開く: ${url}`));
+  assert.deepEqual(brief.links, [url, 'https://example.com/help']);
+  assert.ok(formatInboxBrief(item, 7).includes(`開く: https://example.com/help`));
   assert.match(formatInboxBrief(item, 7), /返事の例: 7 可／7 不要／7 <指示>/);
 });
 
@@ -118,4 +118,56 @@ test('formatInboxBrief produces expected multi-line format', t => {
   assert.ok(lines.some(l => l.includes('返事の例')), `should contain 返事の例 line`);
   assert.ok(lines.some(l => l.includes('開く')), `should contain 開く line for link`);
   assert.ok(lines.some(l => l.includes('example.com')), `should contain the URL`);
+});
+
+// Fix 1: info でも判断キーワードを含む行があれば decide に採用
+test('info with decision keywords uses decide instead of 判断不要', t => {
+  const item = makeItem({
+    kind: 'info',
+    text: '【[要望] アリババ、お支払いのみ】 対応が遅れています。あなたの承認待ちで 8 日止まっています。PR を確認してください。 https://github.com/kimkon1011/purchasing-management-app/pull/17'
+  });
+  const brief = inboxBrief(item);
+  assert.doesNotMatch(brief.decide, /判断不要/);
+  assert.match(brief.decide, /PR を確認/);
+  assert.match(brief.decide, /承認待ち/);
+  // Negative: 否定パターンは判断不要のまま
+  const negative = inboxBrief(makeItem({ kind: 'info', text: '連絡\nkim がすること: なし' }));
+  assert.match(negative.decide, /判断不要/);
+});
+
+// Fix 2: 見出し行の次の非空行〜最大3行を連結
+test('action heading with no content captures follow-up lines into decide', t => {
+  const brief = inboxBrief(makeItem({
+    kind: 'ask',
+    text: 'kim がやること（作業用014 で1回だけ）:\n1. ファイルを開く\n2. 確認する\n3. 報告する'
+  }));
+  assert.match(brief.decide, /ファイルを開く/);
+  assert.match(brief.decide, /確認する/);
+  assert.match(brief.decide, /報告する/);
+  assert.doesNotMatch(brief.decide, /返事内容の指定なし/);
+});
+
+// Fix 3: links の重複除去・末尾記号除去・decide内URLの重複防止
+test('links are deduplicated, trailing punctuation stripped, decide URLs not duplicated in 開く', t => {
+  const url = 'https://docs.google.com/document/d/BBB/edit';
+  const authUrl = 'https://docs.google.com/document/d/BBB/edit?authuser=kim@orgiast.jp';
+  const text = `判断してほしいこと: ${authUrl} を確認\n詳細: ${url}）、${url}））\nhttps://example.com/other。`;
+  const item = makeItem({ kind: 'ask', text });
+  const brief = inboxBrief(item);
+  assert.ok(brief.links.includes(authUrl), `authUrl should be in links: ${brief.links}`);
+  assert.ok(brief.links.includes('https://example.com/other'), `help link should be in links: ${brief.links}`);
+  assert.equal(brief.links.length, 2, `should have exactly 2 links after dedup: ${brief.links.length}`);
+  const formatted = formatInboxBrief(item, 5);
+  const openLines = formatted.split('\n').filter(l => l.includes('開く:'));
+  assert.equal(openLines.length, 1, `URL in decide should not appear in 開く:; open lines: ${JSON.stringify(openLines)}`);
+  assert.ok(openLines[0].includes('example.com/other'), `remaining open link should be help URL`);
+});
+
+test('topic and happened from same line use next meaningful line for happened', t => {
+  const brief = inboxBrief(makeItem({
+    kind: 'ask',
+    text: '【緊急】サーバー障害対応\n確認してください\nhttps://example.com/status'
+  }));
+  assert.equal(brief.topic, '【緊急】サーバー障害対応');
+  assert.equal(brief.happened, '確認してください');
 });

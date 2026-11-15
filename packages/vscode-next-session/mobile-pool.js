@@ -141,7 +141,7 @@ function decideWorktreeCleanup({ tabs, now = Date.now(), startup = false, opened
 // 閉じる条件:
 // - isWaitingTab(tab) が真、isActive が偽
 // - 出現から 10 分以上経過
-// - transcript に user メッセージが無い（hasUserMessage === false）
+// - user メッセージなし（false）または不明（undefined）。false を優先し、各区分内は古い順。
 // - 1 回の実行で閉じるのは最大 maxClose（既定 10）本。target 本は必ず残す。openedTabs の記録は不問。
 function decideTrimExcess({ tabs, target, now = Date.now(), maxClose = 10, minAgeMs = REFRESH_MIN_AGE_MS }) {
   if (!Array.isArray(tabs)) return [];
@@ -153,11 +153,13 @@ function decideTrimExcess({ tabs, target, now = Date.now(), maxClose = 10, minAg
   const candidates = waiting.filter((tab) => {
     if (tab.isActive) return false;
     if (now - (tab.appearedAt ?? 0) < minAgeMs) return false;
-    if (tab.hasUserMessage !== false) return false;
+    if (tab.hasUserMessage !== false && tab.hasUserMessage !== undefined) return false;
     return true;
   });
 
-  candidates.sort((a, b) => (a.appearedAt ?? 0) - (b.appearedAt ?? 0));
+  candidates.sort((a, b) =>
+    Number(a.hasUserMessage !== false) - Number(b.hasUserMessage !== false) ||
+    (a.appearedAt ?? 0) - (b.appearedAt ?? 0));
   return candidates.slice(0, maxTrimCount);
 }
 

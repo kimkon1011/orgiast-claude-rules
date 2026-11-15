@@ -228,3 +228,37 @@ test('refresh closes only an owned unchanged tab, one even with concurrent reque
   assert(tabs.includes(existing));
   assert(tabs.includes(owned[0]));
 });
+
+function loadTranscriptCheck() {
+  const context = {
+    module: { exports: {} }, process, console,
+    require(name) { return name === 'vscode' ? {} : require(name); },
+  };
+  vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, 'extension.js'), 'utf8'), context);
+  return vm.runInContext('hasUserMessageInProjects', context);
+}
+
+test('transcript: sessionId あり・全 project に jsonl 無しなら false', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-transcript-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const projects = path.join(home, '.claude', 'projects');
+  for (const name of ['project-a', 'project-b']) fs.mkdirSync(path.join(projects, name), { recursive: true });
+  const check = loadTranscriptCheck();
+  assert.equal(check(home, 'empty-session'), false);
+  assert.equal(check(home, null), undefined);
+  const file = path.join(projects, 'project-b', 'used-session.jsonl');
+  fs.writeFileSync(file, '{"type":"assistant"}\n');
+  assert.equal(check(home, 'used-session'), false);
+  fs.appendFileSync(file, '{"type":"user","message":"hello"}\n');
+  assert.equal(check(home, 'used-session'), true);
+});
+
+test('transcript: directory/file read errors remain undefined', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-transcript-error-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const check = loadTranscriptCheck();
+  assert.equal(check(home, 'session'), undefined);
+  fs.mkdirSync(path.join(home, '.claude', 'projects', 'project', 'session.jsonl'), { recursive: true });
+  assert.equal(check(home, 'session'), undefined);
+});

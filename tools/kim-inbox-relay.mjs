@@ -2,7 +2,6 @@ import os from 'node:os';
 import { isKimSeat, listItems, updateInboxItem } from './kim-inbox.mjs';
 import { inboxSummary, revisionOf, relayDue, jstDay, readRelayState, writeRelayState, interactiveInboxSession } from './lib/kim-inbox-relay-state.mjs';
 
-const normalize = text => String(text).replace(/\s+/g, ' ').trim();
 export function evaluateKimInboxRelay(input = {}, { home = process.env.ORGIAST_HOME || os.homedir(), raw = '', text = '', now = Date.now(), env = process.env } = {}) {
   const sessionId = input.session_id || input.sessionId;
   const pass = { decision: 'pass', receipts: [] };
@@ -16,14 +15,16 @@ export function evaluateKimInboxRelay(input = {}, { home = process.env.ORGIAST_H
   if (!pending.length) return pass;
   // Only the final response's inbox section counts, never thinking, tools or an older turn.
   const visible = String(text).replace(/```[^]*?(?:```|$)|~~~[^]*?(?:~~~|$)/g, '').split(/\r?\n/).filter(line => !/^\s*>/.test(line)).join('\n');
-  const heading = /^(?:#{1,6}\s*)?(?:\*\*)?【受信箱】(?:\*\*)?[ \t]*$/m.exec(visible);
-  const section = heading ? visible.slice(heading.index + heading[0].length).split(/\n(?:#{1,6}\s|【|次に kim がすること:|この後の自動進行:|このセッション:)/)[0] : '';
+  const heading = /^.*【受信箱】.*$/m.exec(visible);
+  const section = heading ? visible.slice(heading.index).split(/\n\s*(?:#{1,6}\s|(?:\*\*)?【|次に kim がすること:|この後の自動進行:|このセッション:)/)[0] : '';
   const lines = section.split(/\r?\n/);
   const receipts = [], missing = [];
   for (const item of pending) {
     const index = lines.findIndex(line => line.includes(item.id));
     const summary = inboxSummary(item);
-    if (index < 0 || !normalize(lines.slice(index, index + 2).join(' ')).includes(normalize(summary))) { missing.push(item); continue; }
+    // Delivery requires each ID in the visible section; paraphrases need not
+    // match inboxSummary verbatim (the prompt asks for a 1–2 line summary).
+    if (index < 0) { missing.push(item); continue; }
     const number = lines[index].trim().match(/^(?:[-*]\s*)?(\d+)[.．)）]\s*/)?.[1];
     receipts.push({ id: item.id, revision: revisionOf(item), summary, number: number ? Number(number) : null });
   }

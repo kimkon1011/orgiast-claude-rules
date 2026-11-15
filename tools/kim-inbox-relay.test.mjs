@@ -19,18 +19,30 @@ function fixture(t) {
   // Fixtures are retained under /tmp; production inboxes are never modified.
   return f;
 }
-test('context injection is not delivery; final ID and summary are required, not thinking/history or ID alone', async t => {
+test('context injection is not delivery; each ID in the visible inbox section suffices', async t => {
   const f = fixture(t), item = await addItem(f.home, { kind: 'ask', text: '鍵付き化が完了。nacci0713 の扱いと PR #7 は承認待ち' });
   const output = [];
   await main(['--context'], { home: f.home, stdout: s => output.push(s), readStdin: async () => JSON.stringify({ ...f.input, hook_event_name: 'UserPromptSubmit' }) });
   assert.equal(listItems(f.home)[0].shownCount, 1);
   assert.equal(listItems(f.home)[0].deliveredToKim, undefined);
   assert.equal(f.judge('別作業は完了しました', { raw: f.section([item]) }).decision, 'block');
-  assert.equal(f.judge(`【受信箱】\n${item.id}`).decision, 'block');
+  assert.equal(f.judge(`【受信箱】\n${item.id}`).decision, 'pass');
   assert.equal(f.judge(`${item.id} ${inboxSummary(item)}`).decision, 'block');
   assert.equal(f.judge('```\n' + f.section([item]) + '\n```').decision, 'block');
   assert.equal(f.judge(f.section([item]).split('\n').map(l => '> ' + l).join('\n')).decision, 'block');
   assert.equal(f.judge(f.section([item])).decision, 'pass');
+});
+test('decorated inbox headings, trailing labels and paraphrases pass; missing IDs and later sections do not', async t => {
+  const f = fixture(t);
+  const a = await addItem(f.home, { kind: 'ask', text: '原文の長い依頼です' });
+  const b = await addItem(f.home, { kind: 'ask', text: '別の長い依頼です' });
+  f.inject([a, b]);
+  for (const heading of ['【受信箱】確認事項', '### 【受信箱】', '**【受信箱】** 要点', '  ### **【受信箱】**（2件）']) {
+    assert.equal(f.judge(`${heading}\n1. ${a.id}\n2. ${b.id}`).decision, 'pass');
+    assert.equal(f.judge(`${heading}\n${a.id} 言い換え\n${b.id} 短く要約`).decision, 'pass');
+    assert.equal(f.judge(`${heading}\n${a.id}\n### 別件\n${b.id}`).decision, 'block');
+    assert.equal(f.judge(`${heading}\n${a.id}`).decision, 'block');
+  }
 });
 test('receipts suppress same-session asks until next JST day, high info until refreshed, other sessions still see asks', async t => {
   const f = fixture(t);

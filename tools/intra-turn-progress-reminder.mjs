@@ -8,8 +8,9 @@ import { isUnattendedSession } from './lib/unattended-session.mjs';
 import { fileURLToPath } from 'node:url';
 import { mobilePushInstruction } from './lib/mobile-push-queue.mjs';
 import { resolveOwner } from './lib/fleet-owner.mjs';
+import { dedupeContext } from './lib/context-dedupe.mjs';
 
-export const REMINDER = '【進捗報告リマインダー】user 向けチャットに1行の進捗（「X/Y 完了」「次に Z 処理」等）を出してください。memory intra-turn-progress-updates のルール。この後も3ツール呼出ごとに再提示されます。';
+export const REMINDER = '【進捗報告リマインダー】user 向けチャットに1行の進捗（「X/Y 完了」「次に Z 処理」等）を出してください。memory intra-turn-progress-updates のルール。この後も作業の進捗に応じて報告してください。';
 
 export function resolveThreshold(env = process.env) {
   const value = Number(env.INTRA_TURN_PROGRESS_THRESHOLD ?? 3);
@@ -46,10 +47,10 @@ export function main(input, { home = os.homedir(), env = process.env, now = Date
     if (!sessionId || isUnattendedSession(input, { home, env })) return { emitted: null, state: skipped };
     const state = tickCounter(counterFile(home, sessionId), resolveThreshold(env), now);
     const pushContext = mobilePushInstruction(home, {
-      now, owner: resolveOwner({ home }),
+      now, sessionId, owner: resolveOwner({ home }),
       cliPath: fileURLToPath(new URL('./mobile-push-queue.mjs', import.meta.url)),
     });
-    return { emitted: state.fired ? REMINDER : null, state, pushContext };
+    return { emitted: state.fired ? dedupeContext(REMINDER, { home, sessionId, source: 'progress-reminder' }) || null : null, state, pushContext };
   } catch {
     return { emitted: null, state: skipped };
   }

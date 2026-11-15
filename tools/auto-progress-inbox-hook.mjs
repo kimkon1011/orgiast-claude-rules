@@ -81,7 +81,7 @@ export function consumeInbox(input, { home = process.env.ORGIAST_HOME || os.home
   const warning = recipientWarning({ ...ownerOptions, home, label }, new Date(now));
   // mobile-push 席の未送信 push 要求は、この対話セッションに PushNotification 送信を指示する。
   const pushContext = mobilePushInstruction(home, {
-    now,
+    now, sessionId,
     owner: resolveOwner({ ...ownerOptions, home, label }),
     cliPath: path.join(path.dirname(fileURLToPath(import.meta.url)), 'mobile-push-queue.mjs'),
   });

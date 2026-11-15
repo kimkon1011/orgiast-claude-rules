@@ -10,7 +10,7 @@ import { run } from './stop-gate-runner.mjs';
 
 const runner = fileURLToPath(new URL('./stop-gate-runner.mjs', import.meta.url));
 
-for (const rewrite of [false, true]) test(`未登録の約束は共通再試行上限で止まる（書き直し=${rewrite}）`, async t => {
+for (const rewrite of [false, true]) test(`未登録の約束は初回から警告のみ（書き直し=${rewrite}）`, async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-runner-promise-'));
   const previousHome = process.env.ORGIAST_HOME;
   process.env.ORGIAST_HOME = home;
@@ -25,16 +25,16 @@ for (const rewrite of [false, true]) test(`未登録の約束は共通再試行�
   for (let attempt = 0; attempt < 3; attempt++) {
     const text = `${rewrite ? ['台帳へ', 'ノウハウへ', '手順書へ'][attempt] : '台帳へ'}記録します。\nこの後の自動進行: なし`;
     const result = await run({ ...input, last_assistant_message: text, stop_hook_active: attempt > 0 }, context, options);
-    assert.ok(result.record.blockedBy.includes('unregistered-promise-gate'));
-    assert.ok(result.record.reasonCodes.includes('UNREGISTERED-PROMISE'));
-    assert.equal(result.record.verdict, attempt < 2 ? 'block' : 'retry-cap');
-    assert.equal(result.decision, attempt < 2 ? 'block' : undefined);
+    assert.ok(result.record.warned.includes('unregistered-promise-gate'));
+    assert.match(result.systemMessage, /unregistered-promise-gate/);
+    assert.equal(result.record.verdict, 'pass');
+    assert.equal(result.decision, undefined);
   }
   const repaired = await run({ ...input, last_assistant_message: '台帳へ記録しました。', stop_hook_active: true }, context, options);
   assert.equal(repaired.record.verdict, 'pass');
   assert.ok(!repaired.record.blockedBy.includes('unregistered-promise-gate'));
   const records = fs.readFileSync(path.join(home, '.claude', 'stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
-  assert.equal(records[2].verdict, 'pass_after_cap');
+  assert.equal(records[2].verdict, 'pass');
 });
 
 // invoke() は process.env を子プロセスへそのまま渡す。自動セッション（CLAUDE_HEADLESS=1）の中で

@@ -4,7 +4,7 @@ import { latestWaitDeadline } from './session-wait-title.mjs';
 
 // 他人・他PC・他アカウントの対応待ちで止まる報告に、任意の後押し文と待機期限フッターを漏らさず入れる。
 // 2026-11-02 nishi 指示「毎回入れるようにして・全PC全アカウント」。
-// 2026-11-11 拡張: 待機期限フッターがないと OrgiastWaitDeadlineResume での自動再開が効かないため要求。
+// 2026-11-11 拡張: 待機期限フッターがないと期限切れの kim-inbox 通知と auto-progress への引き継ぎを漏らすため要求。
 // deferral-wait-gate（完了待ち自体を禁止）とは違い、第三者待ちは許容するが、
 // 最終まとめに後押し文または待機期限フッターが無ければ block する。
 
@@ -113,7 +113,7 @@ export function judge(text) {
 
   const hasCloseSession = /(?:^|\n)このセッション[:：][^\n]*閉じてよい/.test(text);
   if (latestWaitDeadline(text) === null && !hasCloseSession) {
-    reasons.push(`末尾に『このセッション: まだ閉じない（<何を待つか>・YYYY-MM-DD HH:MM まで待つ）』を書く。期限を書くと OrgiastWaitDeadlineResume が15分ごとに見て期限後に自動再開する。session 内の run_in_background の見張りや CronCreate はセッションが終わると消えるので、待ちの見張りに使わない。`);
+    reasons.push(`末尾に『このセッション: まだ閉じない（<何を待つか>・YYYY-MM-DD HH:MM まで待つ）』を書く（期限切れは kim-inbox に通知される）。待ちの進捗確認は node tools/auto-progress.mjs --start-when "<到着を判定するコマンド>" --next-claude "<届いたらやること>"（または --add-check --check "<完了判定>"）で登録する。session 内の run_in_background の見張りや CronCreate はセッション終了で消えるので使わない。`);
   }
 
   if (reasons.length > 0) {

@@ -54,7 +54,7 @@ test('②で確認してもらう成果物にも同じ単位のDrive URLが必�
 **③ kim がやること**
 - 上の2つの確認事項に返信する。`;
   assert.equal(judge({ text }).decision, 'block');
-  assert.equal(judge({ text: text.replace('見せてよいですか？', '見せてよいですか？ https://drive.google.com/file/d/example/view') }).decision, 'pass');
+  assert.equal(judge({ text: text.replace('見せてよいですか？', '見せてよいですか？ https://drive.google.com/file/d/example/view?authuser=kim@orgiast.jp kim@orgiast.jp で開いてください') }).decision, 'pass');
 });
 
 test('対象外の報告と成果物を参照しない返信は通す', () => {

@@ -13,7 +13,7 @@ const deliverable = /PDF|書面|ファイル|資料|チラシ|フライヤー|�
 const reviewAction = /見て|見せ|確認|チェック|レビュー|開いて|目を通|直し|修正|OK|よいですか|いいですか|返信|承認|送って|印刷|提出|添付|してください|お願いします|していただ|してくださいませんか/i;
 const explicitNoUrl = /URLなし\s*[（(]\s*理由\s*[:：]\s*[^）)]+[）)]/i;
 // 承認コンテキストで成果物にURLが必要なことを検出するパターン
-const approvalWord = /承認|よいですか|いいですか|送ってよい|どれ|選ん[でだ]|確認してください|確認をお願い|OK[^)]*(?:です|でしょ|だ|で)/i;
+const approvalWord = /承認|よいですか|いいですか|送ってよい|どれ|選ん[でだ]|確認してください|確認をお願い|判断|OK[^)]*(?:です|でしょ|だ|で)/i;
 const deliverableApprovalItem = /[梅竹松]|案[1-9]|[A-D]案|パース|提案書|見積(?:もり)?[をはがの]?|スライド|メール本文|草案|案文|PDF[^/]|画像[をはがの]?|Doc[^s]|デザイン|プラン|図面|レイアウト|イメージ|チラシ|フライヤー|企画書|企画案/i;
 const reason = '成果物を Drive にアップし、最終メッセージの③の依頼と同じ箇所に URL（authuser=開く人のメール付き）を書いてください。② と ③ で見てもらう成果物は、その行に Drive の URL を書く（例: - チラシ初稿 PDF https://drive.google.com/file/d/…/view）。例: node tools/drive-upload.mjs --file <path> --folder <folderId> --authuser <開く人のメール>。鍵が無い PC は rclone copyto <file> <remote>:<name> --drive-root-folder-id <folderId>（drive リモート）、または Drive MCP。全部失敗したら [DRIVE-UPLOAD-FAILED: <エラー本文>] を書いてください。';
 const approvalReason = '成果物ごとの実物URL（Drive）を承認項目の同じ行（または直後2行以内）に書いてください。見つからなければ Drive へアップし直す。URLには authuser=<開く人のメール> を付け、近傍に「<メール> で開いてください」と書いてください。例外は「URLなし（理由: …）」と明記します。';

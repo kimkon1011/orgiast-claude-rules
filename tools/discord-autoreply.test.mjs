@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { runOnce, main, createDiscord, discordRequest, ensureTaskPriority, createLlm, contentFor, parseJson, combinePermissions, inventedAmounts } from './discord-autoreply.mjs';
+import { runOnce, main, createDiscord, discordRequest, ensureTaskPriority, createLlm, contentFor, parseJson, combinePermissions, inventedAmounts, isReportOnly } from './discord-autoreply.mjs';
 
 const NOW = Date.parse('2026-10-09T03:00:00Z');
 const KIM = '715210673642012733';
@@ -741,6 +741,68 @@ test('質問文にある金額を回答で引用しても送信される', async
   assert.equal(result.replied, 1);
   assert.equal(f.posts().length, 1);
   assert.match(f.posts()[0].body.content, /330,000円/);
+});
+
+
+test('isReportOnly: 完了報告「終わりました」→ true', () => {
+  assert.equal(isReportOnly('上記のタスクは本番前まですべて終わりました。'), true);
+});
+
+test('isReportOnly: 「全て問題ありません」→ true', () => {
+  assert.equal(isReportOnly('①～⑤全て問題ありません。'), true);
+});
+
+test('isReportOnly: 「よろしいでしょうか」→ false', () => {
+  assert.equal(isReportOnly('以下4点については、どのように記載すればよろしいでしょうか？'), false);
+});
+
+test('isReportOnly: 「確認お願いします」→ false', () => {
+  assert.equal(isReportOnly('座面カバーですかね？確認お願いします。'), false);
+});
+
+test('isReportOnly: 「報告します」→ true', () => {
+  assert.equal(isReportOnly('連絡事項を報告します'), true);
+});
+
+test('isReportOnly: 「報告を行います」→ true', () => {
+  assert.equal(isReportOnly('取引先に報告を行います'), true);
+});
+
+test('isReportOnly: 「入力いたしました」→ true', () => {
+  assert.equal(isReportOnly('システムに入力いたしました'), true);
+});
+
+test('isReportOnly: 「完了しました」→ true', () => {
+  assert.equal(isReportOnly('全て完了しました'), true);
+});
+
+test('isReportOnly: null/空 → false', () => {
+  assert.equal(isReportOnly(null), false);
+  assert.equal(isReportOnly(''), false);
+});
+
+test('isReportOnly: 疑問符あり → false', () => {
+  assert.equal(isReportOnly('確認できたでしょうか？'), false);
+});
+
+test('isReportOnly: 「ください」あり → false', () => {
+  assert.equal(isReportOnly('確認してください'), false);
+});
+
+test('isReportOnly: 「お願いします」あり → false', () => {
+  assert.equal(isReportOnly('対応をお願いします'), false);
+});
+
+test('isReportOnly: 「いかが」あり → false', () => {
+  assert.equal(isReportOnly('ご検討いかがでしょうか'), false);
+});
+
+test('isReportOnly: 「どう」あり → false', () => {
+  assert.equal(isReportOnly('どうしましょう'), false);
+});
+
+test('isReportOnly: 「可否」あり → false', () => {
+  assert.equal(isReportOnly('対応可否を教えてください'), false);
 });
 
 

@@ -126,11 +126,23 @@ export async function flushUnreportedSentLogs(home, { addItemImpl = addKimInboxI
   }
 }
 
+export function isReportOnly(question) {
+  if (!question) return false;
+  // 報告だけ: 疑問符（？/?）が無く、依頼・質問の語を含まず、完了・問題なし系の語を含む
+  const hasQuestionMark = /[?？]/.test(question);
+  const hasRequestOrQuestion = /ください|お願いします|いかが|どう|確認お願い|よろしいでしょうか|可否/.test(question);
+  const hasCompletionOrStatus = /終わりました|完了しました|問題ありません|報告します|報告を行います|入力いたしました/.test(question);
+  if (hasQuestionMark || hasRequestOrQuestion) return false;
+  if (hasCompletionOrStatus) return true;
+  return false; // 判定に迷う場合は ask のまま（安全側）
+}
+
 export async function recordDecisionPending(home, entry, { addItemImpl = addKimInboxItem } = {}) {
+  const kind = entry.question && isReportOnly(entry.question) ? 'info' : 'ask';
   const text = `[Discord 判断待ち (${entry.where || 'guild'})]\n相手: ${entry.senderName}\n場所: ${entry.channelName}\n元メッセージ: ${entry.question}\nリンク: ${entry.link}`;
   const inboxResult = await addItemImpl(home, {
-    kind: 'ask',
-    urgent: true,
+    kind,
+    urgent: kind === 'ask',
     source: entry.where === 'dm' ? 'discord-beeper-autoreply' : 'discord-autoreply',
     text,
     dedupeKey: `decision:${entry.where || 'guild'}:${entry.channelId}:${entry.messageId || entry.ts}`

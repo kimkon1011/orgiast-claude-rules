@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,8 +10,7 @@ import path from 'node:path';
 const TOOL_PATH = path.resolve(import.meta.dirname, 'p0011-recruit.mjs');
 
 function runTool(args) {
-  const cp = require('node:child_process');
-  const result = cp.spawnSync('node', [TOOL_PATH, ...args], {
+  const result = spawnSync('node', [TOOL_PATH, ...args], {
     encoding: 'utf-8',
     timeout: 5000,
   });

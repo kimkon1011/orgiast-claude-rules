@@ -1,0 +1,25 @@
+{
+  "$schema": "booth-kw-research adjustment parameters (X-0013/Step8)",
+  "description": "キーワードリサーチの各Phaseで使用する調整パラメータ。X-0009 docs/ai-news-x0009-seo-workflow-agent-9steps.md Step8 から抽出。",
+  "crawl": {
+    "max_depth": 3,
+    "description": "トップページからのリンク辿り階層数。初回テスト後、必要に応じて増減。"
+  },
+  "keyword_merge": {
+    "similarity_threshold": 0.8,
+    "description": "同一キーワードと判定する類似度の閾値。重複多ければ引き上げ（0.85〜0.90）。"
+  },
+  "llm_classification": {
+    "temperature": 0.1,
+    "description": "LLM分類の確率的ばらつき抑制。分類タスクは低めに設定。"
+  },
+  "priority_score": {
+    "weights": {
+      "search_volume": 0.4,
+      "business_value": 0.35,
+      "difficulty_inverse": 0.25
+    },
+    "formula": "Score = Volume × BusinessValue ÷ max(Difficulty, 1)",
+    "description": "各キーワードの優先度スコア計算重み。ビジネス優先度で調整。"
+  }
+}

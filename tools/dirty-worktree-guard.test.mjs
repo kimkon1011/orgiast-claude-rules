@@ -23,7 +23,7 @@ function fixture(t) {
   fs.writeFileSync(path.join(repo, 'tools', 'auto-session.mjs'), '');
   fs.writeFileSync(path.join(repo, 'tracked'), 'original');
   git(repo, ['add', 'tracked', 'tools/auto-session.mjs']);
-  git(repo, ['commit', '-m', 'initial']);
+  git(repo, ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'initial']);
   git(repo, ['remote', 'add', 'origin', remote]);
   git(repo, ['push', '-u', 'origin', 'main']);
   return { root, repo, remote, git };

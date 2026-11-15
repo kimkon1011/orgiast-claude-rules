@@ -1,0 +1,25 @@
+[
+  {
+    "name": "Velvet Meteor Studio",
+    "employees": 88,
+    "contacts": [
+      { "name": "水野 架空", "title": "Head of BD" },
+      { "name": "星野 架空", "title": "Product Manager" },
+      { "name": "森野 架空", "title": "CO-FOUNDER" }
+    ]
+  },
+  {
+    "name": "Copper Finch Systems",
+    "employees": 251,
+    "contacts": [
+      { "name": "空野 架空", "title": "CRO" }
+    ]
+  },
+  {
+    "name": "Quiet Lantern Robotics",
+    "employees": "120",
+    "contacts": [
+      { "name": "波野 架空", "title": "Sales Director" }
+    ]
+  }
+]

@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 export const GATE_CONTRACT = {"name":"kim-discord-report-gate","remedies":[{"kind":"repo-file","ref":"tools/kim-inbox.mjs"}]};
-import { discordAllowed } from './lib/kim-discord-allowlist.mjs';
 import { readStdinWithTimeout } from './lib/hook-stdin.mjs';
 import { isEntry } from './is-entry.mjs';
 export const HOOK_MATCHER = 'mcp__claude_ai_Discord[^|]*__(send_dm|send_message|reply_message)|Bash|PowerShell';
 const target = new RegExp(`^(?:${HOOK_MATCHER})$`);
-const reason = 'kim への Discord 報告は停止（kim 2026-10-27・全PC）。node tools/kim-inbox.mjs --add --kind ask|info --body-file <f> でセッション報告へ。例外は config/kim-discord-allowlist.json に kim が登録したカテゴリのみ。';
+const reason = 'kim 宛 Discord DM は全廃・例外なし（緊急を含む、kim 2026-11-06・全PC）。node tools/kim-inbox.mjs --add --kind ask|info --body-file <f> でセッション報告へ。';
 export function judge(input, options = {}) {
   if (!target.test(input?.tool_name ?? '')) return { decision: 'pass' };
   const args = input.tool_input ?? {};
@@ -18,7 +17,7 @@ export function judge(input, options = {}) {
   } else if (input.tool_name.endsWith('__send_dm')) {
     blocked = ['715210673642012733', '金功勇', 'kim'].includes(String(args.user_id ?? args.recipient_id ?? args.user ?? args.recipient ?? '').toLowerCase());
   } else blocked = String(args.channel_id ?? '') === '1508437329247862794';
-  return blocked && !discordAllowed(text, options).allowed ? { decision: 'block', reason } : { decision: 'pass' };
+  return blocked ? { decision: 'block', reason } : { decision: 'pass' };
 }
 export async function main() {
   try {

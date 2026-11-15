@@ -8,6 +8,8 @@ import { spawnSync } from 'node:child_process';
 import { isEntry } from './is-entry.mjs';
 import { ledgerFile, readLedger, writeLedger, latestOpenPromises, rowKey, isUnattendedRow, isNoopPromise, kimAction, hasClaudeWork, MAX_RESUMES } from './auto-progress-ledger.mjs';
 import { appendInbox } from './auto-progress-inbox-hook.mjs';
+import { displayPcNames } from './lib/pc-display.mjs';
+import { mailboxDraftLabel } from './lib/drafts-auto-cleared.mjs';
 import { active, CATEGORY, DAY } from './lib/fleet-chase-policy.mjs';
 import { externalFile, readSkips, isSkipped, addSkip, saveAnswer } from './lib/external-waiting-state.mjs';
 
@@ -63,7 +65,7 @@ export function collectExternal({ home, now }) {
   const items = (state.items || []).filter(item => !isSkipped(skips, item)).sort((a, b) => Date.parse(a.since) - Date.parse(b.since));
   for (const item of items) {
     const ms = Math.max(0, now - Date.parse(item.since));
-    const title = item.kind === 'draft' ? `下書きのまま未送信: ${item.who}「${item.subject}」` : `${item.who}${item.assignee ? `（担当: ${item.assignee}）` : ''}「${item.subject}」`;
+    const title = item.kind === 'draft' ? `下書きのまま未送信: ${item.who}${mailboxDraftLabel(item.mailbox)}「${item.subject}」` : `${item.who}${item.assignee ? `（担当: ${item.assignee}）` : ''}「${item.subject}」`;
     out.push({ id: item.id, source: 'external', external: true, title, ask: item.ask || '返信内容を決める', waitingSince: item.since, ageDays: Math.floor(ms / DAY), ageHours: Math.floor(ms / 3600_000), route: { threadId: item.threadId, mailbox: item.mailbox } });
   }
   return out;
@@ -79,7 +81,7 @@ export function collectAwaiting({ home = process.env.ORGIAST_HOME || os.homedir(
   const result = [];
   for (const row of latestOpenPromises(readLedger(ledgerFile(home)))) {
     const exhausted = row.status === 'stalled' && (row.resumeCount ?? 0) >= MAX_RESUMES;
-    if ((!exhausted && row.kimAnswer) || isUnattendedRow(row, home) || isNoopPromise(row.promise) || (!exhausted && row.status !== 'waiting_user' && kimAction(row) === 'なし')) continue;
+    if ((!exhausted && row.kimAnswer) || isUnattendedRow(row, home) || isNoopPromise(row.promise) || (!exhausted && row.status !== 'waiting_user' && (row.autoRegisteredCheck || kimAction(row) === 'なし'))) continue;
     const action = exhausted ? `止まっている: 自動再開上限（${MAX_RESUMES}回）。再開するか不要かを返答する` : kimAction(row);
     if (SESSION_OP_RE.test(action)) continue;
     const ask = EVIDENCE_RE.test(action.trim()) ? '進めてよいか判断して返事をする' : readable(action, row, sessionId && row.sessionId === sessionId ? Infinity : 80);
@@ -122,7 +124,7 @@ export function collectAwaiting({ home = process.env.ORGIAST_HOME || os.homedir(
     titles.add(item.title);
     return true;
   }).map(item => ({ ...item, ageDays: Math.max(0, Math.floor((now - Date.parse(item.waitingSince)) / DAY)) }));
-  return [...external, ...internal];
+  return [...external, ...internal].map(item => ({ ...item, title: displayPcNames(item.title, { home }), ask: displayPcNames(item.ask, { home }), ...(item.progress ? { progress: displayPcNames(item.progress, { home }) } : {}) }));
 }
 export function clearShown(home, id) {
   const state = readJson(shownFile(home), {});

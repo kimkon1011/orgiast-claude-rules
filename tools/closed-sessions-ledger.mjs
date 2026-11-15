@@ -12,6 +12,15 @@ function readIds(path) {
   }
 }
 
+function readLedger(path) {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 /** closed-sessions.json へ ID を追記し、書けたことを読み戻して確かめる。
  *
  * この台帳は read-modify-write なので、並行セッションが同時に閉じると後勝ちで
@@ -24,12 +33,13 @@ function readIds(path) {
  */
 export function recordClosed(id, path, { attempts = 5, onError } = {}) {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const ids = readIds(path);
+    const ledger = readLedger(path);
+    const ids = Array.isArray(ledger.ids) ? ledger.ids : [];
     if (ids.includes(id)) return true;
     ids.push(id);
     const tmpPath = `${path}.tmp-${process.pid}-${attempt}`;
     try {
-      writeFileSync(tmpPath, `${JSON.stringify({ ids: ids.slice(-MAX_IDS) }, null, 2)}\n`, "utf8");
+      writeFileSync(tmpPath, `${JSON.stringify({ ...ledger, ids: ids.slice(-MAX_IDS) }, null, 2)}\n`, "utf8");
       renameSync(tmpPath, path);
     } catch (e) {
       if (attempt === attempts) {
@@ -39,6 +49,32 @@ export function recordClosed(id, path, { attempts = 5, onError } = {}) {
       continue;
     }
     if (readIds(path).includes(id)) return true;
+  }
+  return false;
+}
+
+/** closed-sessions.json から ID を外し、外せたことを読み戻して確かめる。
+ *
+ * 戻り値: 最終的に ID が台帳に無ければ true。
+ */
+export function recordReopened(id, path, { attempts = 5, onError } = {}) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const ledger = readLedger(path);
+    const ids = Array.isArray(ledger.ids) ? ledger.ids : [];
+    if (!ids.includes(id)) return true;
+    const newIds = ids.filter(item => item !== id);
+    const tmpPath = `${path}.tmp-${process.pid}-${attempt}`;
+    try {
+      writeFileSync(tmpPath, `${JSON.stringify({ ...ledger, ids: newIds }, null, 2)}\n`, "utf8");
+      renameSync(tmpPath, path);
+    } catch (e) {
+      if (attempt === attempts) {
+        onError?.(e);
+        return false;
+      }
+      continue;
+    }
+    if (!readIds(path).includes(id)) return true;
   }
   return false;
 }

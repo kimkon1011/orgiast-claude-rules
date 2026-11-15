@@ -1,6 +1,7 @@
 {
   "enabled": true,
   "maxCalls": 8,
+  "timeoutMs": 300000,
   "maxCostUsd": 2,
   "reservePerCallUsd": 0.25,
   "maxOutputTokens": 3000,

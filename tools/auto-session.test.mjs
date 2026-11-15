@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 
 const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-test-'));
 process.env.ORGIAST_HOME = isolatedHome;
@@ -1289,9 +1291,12 @@ test('runChild は冷却中・失敗時の codex-do と保留・最終フォー�
   fs.mkdirSync(toolsDir);
   const traceFile = path.join(home, 'trace.jsonl');
   const trace = `fs.appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ lane: process.env.ORGIAST_HEADLESS_JOB, args: process.argv.slice(2), stdin, prompt: process.argv.includes('--prompt-file') ? fs.readFileSync(process.argv[process.argv.indexOf('--prompt-file') + 1], 'utf8') : '' }) + '\\n');`;
-  const script = (code) => `import fs from 'node:fs'; let stdin = ''; for await (const chunk of process.stdin) stdin += chunk; ${trace} ${code}`;
+  const script = (code) => `import fs from 'node:fs'; const stdin = fs.readFileSync(0, 'utf8'); ${trace} ${code}`;
   try {
     const scenarios = [
+      { name: 'cheap timeout retries alternate within total budget', cheapTimeout: true, alternate: true, lanes: ['cheap-code:deepseek', 'cheap-code:glm'], status: 'success' },
+      { name: 'both cheap timeouts reserve budget for codex-do', bothCheapTimeout: true, alternate: true, code: 0, lanes: ['cheap-code:deepseek', 'cheap-code:glm', 'codex-do'], status: 'success' },
+      { name: 'all executors timeout within total budget', bothCheapTimeout: true, alternate: true, timeout: true, lanes: ['cheap-code:deepseek', 'cheap-code:glm', 'codex-do'], status: 'timeout' },
       { name: '両方冷却中は cheap-code を起動しない', cooling: true, code: 0, lanes: ['codex-do'], status: 'success' },
       { name: 'cheap-code と alternate 失敗後は1回だけ codex-do', alternate: true, code: 0, lanes: ['cheap-code:deepseek', 'cheap-code:glm', 'codex-do'], status: 'success' },
       { name: '75 は Claude 有効でも保留する', cooling: true, code: 75, claude: true, lanes: ['codex-do'], status: 'failure', deferred: true },
@@ -1311,17 +1316,39 @@ test('runChild は冷却中・失敗時の codex-do と保留・最終フォー�
       // DeepSeek の推論先は OpenRouter なので、冷却状態も OpenRouter に記録される。
       fs.writeFileSync(path.join(configDir, 'provider-cooldown.json'), JSON.stringify(scenario.cooling ? { openrouter: { until: Date.now() + 60000 }, glm: { until: Date.now() + 60000 } } : {}));
       fs.writeFileSync(path.join(configDir, 'zai.env'), scenario.alternate ? 'ZAI_API_KEY=test' : '');
-      fs.writeFileSync(path.join(toolsDir, 'cheap-code.mjs'), script('process.exitCode = 1;'));
+      fs.writeFileSync(path.join(toolsDir, 'cheap-code.mjs'), script(scenario.bothCheapTimeout ? 'setInterval(() => {}, 1000);' : scenario.cheapTimeout ? "if (process.env.ORGIAST_HEADLESS_JOB.endsWith(':deepseek')) setInterval(() => {}, 1000);" : 'process.exitCode = 1;'));
       const codexFile = path.join(toolsDir, 'codex-do.mjs');
       fs.writeFileSync(codexFile, script(scenario.timeout ? 'setInterval(() => {}, 1000);' : `process.exitCode = ${scenario.code ?? 1};`));
       if (scenario.missing) fs.rmSync(codexFile);
       // Claude のスタブは stdin を消費して成功させる。
       const claudeFile = path.join(home, 'claude-stub');
       fs.writeFileSync(claudeFile, `#!${process.execPath}\n(async () => { const fs = require('node:fs'); let stdin = ''; for await (const chunk of process.stdin) stdin += chunk; ${trace} })();\n`, { mode: 0o755 });
-      const result = await runChild(claudeFile, 'lane test', home, home, scenario.timeout ? 1500 : 5000, { executorRoot: home, ...(scenario.model ? { model: 'sonnet' } : {}) });
+	      const budgetMs = scenario.timeout && !scenario.bothCheapTimeout ? 1500 : 5000;
+	      const toleranceMs = process.platform === "win32" && scenario.bothCheapTimeout ? 3500 : 1500;
+      const began = performance.now();
+      const result = await runChild(claudeFile, 'lane test', home, home, budgetMs, { executorRoot: home, ...(scenario.model ? { model: 'sonnet' } : {}) });
+      const elapsedMs = performance.now() - began;
+      if (scenario.bothCheapTimeout) {
+        const expectedMs = scenario.timeout ? 2 * budgetMs : Math.floor(1.5 * budgetMs);
+        assert.ok(elapsedMs >= expectedMs - toleranceMs, `elapsed ${elapsedMs}ms below expected ${expectedMs}ms`);
+        assert.ok(elapsedMs < expectedMs + toleranceMs, `elapsed ${elapsedMs}ms exceeded budget cap ${expectedMs + toleranceMs}ms`);
+      } else if (scenario.cheapTimeout) {
+        const maxExpectedMs = Math.floor(1.5 * budgetMs);
+        assert.ok(elapsedMs >= budgetMs - toleranceMs, `elapsed ${elapsedMs}ms below expected ${budgetMs}ms`);
+        assert.ok(elapsedMs < maxExpectedMs + toleranceMs, `deadline exceeded: ${elapsedMs}ms for ${maxExpectedMs + 1500}ms budget cap`);
+      } else if (scenario.timeout) {
+        assert.ok(elapsedMs >= budgetMs - 1500, `elapsed ${elapsedMs}ms below expected ${budgetMs}ms`);
+        assert.ok(elapsedMs < budgetMs + toleranceMs, `deadline exceeded: ${elapsedMs}ms for ${budgetMs}ms budget`);
+      }
+      if (scenario.bothCheapTimeout) assert.deepEqual(result.executorAttempts, [
+        { executor: 'cheap-code:deepseek', status: 'timeout' },
+        { executor: 'cheap-code:glm', status: 'timeout' },
+        { executor: 'codex-do', status: scenario.status },
+      ]);
       const rows = fs.readFileSync(traceFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
       assert.deepEqual(rows.map((row) => row.lane.replace('auto-session:', '')), scenario.lanes);
       assert.equal(result.status, scenario.status);
+      if (scenario.cheapTimeout) assert.deepEqual(result.executorAttempts, [{ executor: 'cheap-code:deepseek', status: 'timeout' }, { executor: 'cheap-code:glm', status: 'success' }]);
       assert.equal(result.deferred === true, scenario.deferred === true);
       assert.equal(result.skippedNoExecutor, scenario.skipped === true);
       assert.equal(result.executorUsed, scenario.lanes.at(-1) === 'fallback-claude' ? 'claude' : scenario.lanes.at(-1) ?? 'codex-do');
@@ -1336,6 +1363,111 @@ test('runChild は冷却中・失敗時の codex-do と保留・最終フォー�
   } finally {
     if (previousHome === undefined) delete process.env.ORGIAST_HOME;
     else process.env.ORGIAST_HOME = previousHome;
-    fs.rmSync(home, { recursive: true, force: true });
+    // Windows taskkill /T releases cwd handles asynchronously after the deadline.
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});
+
+test('runChild に resumeSessionId を渡すと executor 設定にかかわらず claude レーンで起動する', { skip: process.platform === 'win32' ? 'shebang スタブは Windows で起動不可' : false }, async (t) => {
+  const resumeOverride = process.env.ORGIAST_AUTO_RESUME;
+  process.env.ORGIAST_AUTO_RESUME = '1';
+  t.after(() => { resumeOverride === undefined ? delete process.env.ORGIAST_AUTO_RESUME : process.env.ORGIAST_AUTO_RESUME = resumeOverride; });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-resume-'));
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  const configDir = path.join(home, '.claude');
+  const toolsDir = path.join(home, 'tools');
+  fs.mkdirSync(configDir);
+  fs.mkdirSync(toolsDir);
+  const traceFile = path.join(home, 'trace.jsonl');
+  const trace = `fs.appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ lane: process.env.ORGIAST_HEADLESS_JOB, args: process.argv.slice(2) }) + '\\n');`;
+  const script = (code) => `import fs from 'node:fs'; const stdin = fs.readFileSync(0, 'utf8'); ${trace} process.exitCode = ${code};`;
+  try {
+    // cheap-code が既定でも resumeSessionId が指定されれば claude レーンを使う
+    fs.writeFileSync(path.join(configDir, 'auto-session.env'), 'ORGIAST_AUTO_SESSION_EXECUTOR=cheap-code\nORGIAST_AUTO_SESSION_PROVIDER=deepseek\n');
+    fs.writeFileSync(path.join(toolsDir, 'cheap-code.mjs'), script(0));
+    const claudeFile = path.join(home, 'claude-stub');
+    fs.writeFileSync(claudeFile, `#!${process.execPath}\n(async () => { const fs = require('node:fs'); let stdin = ''; for await (const chunk of process.stdin) stdin += chunk; ${trace} })();\n`, { mode: 0o755 });
+    const result = await runChild(claudeFile, 'resume test', home, home, 5000, { executorRoot: home, resumeSessionId: 'test-session-123' });
+    // claude レーンが使われ、cheap-code は起動しない
+    assert.equal(result.executorUsed, 'claude');
+    assert.equal(result.status, 'success');
+    const rows = fs.readFileSync(traceFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].lane, 'auto-session:fallback-claude');
+    // --resume 引数が渡っている
+    assert.ok(rows[0].args.includes('--resume'));
+    assert.ok(rows[0].args.includes('test-session-123'));
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});
+
+test('runChild に resumeSessionId を渡すと claude が失敗しても cheap-code にフォールバックしない', { skip: process.platform === 'win32' ? 'shebang スタブは Windows で起動不可' : false }, async (t) => {
+  const resumeOverride = process.env.ORGIAST_AUTO_RESUME;
+  process.env.ORGIAST_AUTO_RESUME = '1';
+  t.after(() => { resumeOverride === undefined ? delete process.env.ORGIAST_AUTO_RESUME : process.env.ORGIAST_AUTO_RESUME = resumeOverride; });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'auto-session-resume-fail-'));
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  const configDir = path.join(home, '.claude');
+  const toolsDir = path.join(home, 'tools');
+  fs.mkdirSync(configDir);
+  fs.mkdirSync(toolsDir);
+  const traceFile = path.join(home, 'trace.jsonl');
+  const trace = `fs.appendFileSync(${JSON.stringify(traceFile)}, JSON.stringify({ lane: process.env.ORGIAST_HEADLESS_JOB }) + '\\n');`;
+  const script = (code) => `import fs from 'node:fs'; ${trace} process.exitCode = ${code};`;
+  try {
+    fs.writeFileSync(path.join(configDir, 'auto-session.env'), 'ORGIAST_AUTO_SESSION_EXECUTOR=cheap-code\nORGIAST_AUTO_SESSION_PROVIDER=deepseek\nORGIAST_AUTO_SESSION_CLAUDE_FALLBACK=on\n');
+    fs.writeFileSync(path.join(toolsDir, 'cheap-code.mjs'), script(0));
+    const claudeFile = path.join(home, 'claude-stub');
+    fs.writeFileSync(claudeFile, `#!${process.execPath}\n(async () => { const fs = require('node:fs'); ${trace} process.exitCode = 1; })();\n`, { mode: 0o755 });
+    const result = await runChild(claudeFile, 'resume test', home, home, 5000, { executorRoot: home, resumeSessionId: 'test-session-456' });
+    // claude が失敗しても cheap-code にはフォールバックせず、failure で返る
+    assert.equal(result.executorUsed, 'claude');
+    assert.equal(result.status, 'failure');
+    assert.equal(result.fallbackToClaude, false);
+    const rows = fs.readFileSync(traceFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+    assert.equal(rows.length, 1); // cheap-code は起動していない
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  }
+});
+
+test('runChild は無効時に resumeSessionId 付きの子プロセスを起動しない', async t => {
+  const before = process.env.ORGIAST_AUTO_RESUME;
+  delete process.env.ORGIAST_AUTO_RESUME;
+  try {
+    const spawnImpl = t.mock.fn(() => assert.fail('spawn must not be called'));
+    const result = await runChild('絶対に起動しない', 'prompt', process.cwd(), process.cwd(), 100, { resumeSessionId: 'disabled-session', spawnImpl });
+    assert.equal(spawnImpl.mock.callCount(), 0);
+    assert.deepEqual(result, { status: 'skipped', skippedAutoResume: true, deferred: false, executorUsed: 'none', exitCode: null, stdout: '', stderr: 'auto-resume disabled by config/auto-resume.json' });
+  } finally {
+    if (before === undefined) delete process.env.ORGIAST_AUTO_RESUME;
+    else process.env.ORGIAST_AUTO_RESUME = before;
+  }
+});
+
+test('無効時も通常起動と明示的な fleet-exec 再開は spawn する', async t => {
+  const before = process.env.ORGIAST_AUTO_RESUME;
+  delete process.env.ORGIAST_AUTO_RESUME;
+  t.after(() => { before === undefined ? delete process.env.ORGIAST_AUTO_RESUME : process.env.ORGIAST_AUTO_RESUME = before; });
+  for (const resume of [{}, { resumeSessionId: 'explicit-session', resumeSource: 'fleet-exec' }]) {
+    const spawnImpl = t.mock.fn(() => {
+      const child = new EventEmitter();
+      child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+      queueMicrotask(() => { child.stdout.write('completed'); child.emit('close', 0); });
+      return child;
+    });
+    const result = await runChild('mock', 'prompt', isolatedHome, isolatedHome, 1000,
+      { executorRoot: process.cwd(), spawnImpl, ...resume });
+    assert.equal(result.status, 'success', result.stderr);
+    assert.equal(spawnImpl.mock.callCount(), 1);
+    const args = spawnImpl.mock.calls[0].arguments[1];
+    assert.equal(args.includes('--resume'), Boolean(resume.resumeSessionId));
   }
 });

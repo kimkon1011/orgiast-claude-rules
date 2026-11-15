@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Orgiast | 展示会ブース制作・社内イベントプロデュース</title>
+  <meta name="description" content="展示会ブース制作（Re:ブース）・社内イベント企画・デジタルツールをワンストップで提供。SDGs対応の再利用可能ブースでCO2 77%削減・コスト40%削減。">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="./">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Orgiast | 展示会ブース制作・社内イベントプロデュース">
+  <meta property="og:description" content="Re:ブース（再利用可能展示ブース）・社内イベント・デジタルツールで企業の展示出展と社内コミュニケーションをトータル支援。">
+  <meta property="og:locale" content="ja_JP">
+  <meta name="twitter:card" content="summary_large_image">
+  <style>
+    :root {
+      --color-white: #ffffff;
+      --color-bg: #f5f7fa;
+      --color-surface: #ffffff;
+      --color-primary: #0a3d62;
+      --color-primary-light: #1e6f9f;
+      --color-accent: #2ecc71;
+      --color-accent-dark: #27ae60;
+      --color-text: #2c3e50;
+      --color-text-light: #7f8c8d;
+      --color-border: #e1e8ed;
+      --color-card-shadow: rgba(0,0,0,0.06);
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans JP", sans-serif;
+      --max-width: 1200px;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body { font-family: var(--font-sans); color: var(--color-text); background: var(--color-bg); line-height: 1.7; }
+
+    /* Header */
+    header {
+      background: var(--color-white);
+      border-bottom: 1px solid var(--color-border);
+      position: sticky; top: 0; z-index: 100;
+    }
+    .header-inner {
+      max-width: var(--max-width); margin: 0 auto;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 24px; height: 64px;
+    }
+    .logo { font-size: 1.4rem; font-weight: 700; color: var(--color-primary); text-decoration: none; }
+    .logo span { color: var(--color-accent); }
+    nav a {
+      color: var(--color-text); text-decoration: none; font-size: 0.9rem;
+      margin-left: 28px; font-weight: 500; transition: color 0.2s;
+    }
+    nav a:hover { color: var(--color-accent); }
+    .nav-cta {
+      display: inline-block; background: var(--color-accent); color: var(--color-white) !important;
+      padding: 8px 20px; border-radius: 6px; font-weight: 600;
+    }
+    .nav-cta:hover { background: var(--color-accent-dark); }
+
+    /* Hero */
+    .hero {
+      background: linear-gradient(135deg, var(--color-primary) 0%, #0d4f7a 100%);
+      color: var(--color-white); padding: 80px 24px 100px; text-align: center;
+      position: relative; overflow: hidden;
+    }
+    .hero::after {
+      content: ''; position: absolute; bottom: -2px; left: 0; right: 0;
+      height: 80px; background: var(--color-bg); clip-path: ellipse(70% 100% at 50% 100%);
+    }
+    .hero-inner { max-width: 800px; margin: 0 auto; position: relative; z-index: 1; }
+    .hero h1 { font-size: 2.8rem; font-weight: 800; line-height: 1.3; margin-bottom: 20px; }
+    .hero h1 span { color: var(--color-accent); }
+    .hero p { font-size: 1.15rem; opacity: 0.9; margin-bottom: 36px; max-width: 640px; margin-left: auto; margin-right: auto; }
+    .hero-badges { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 28px; }
+    .hero-badge {
+      background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2);
+      padding: 6px 16px; border-radius: 20px; font-size: 0.8rem; font-weight: 600;
+    }
+    .hero-cta {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--color-accent); color: var(--color-white);
+      padding: 14px 36px; border-radius: 8px; font-size: 1rem; font-weight: 700;
+      text-decoration: none; transition: background 0.2s;
+    }
+    .hero-cta:hover { background: var(--color-accent-dark); }
+    .hero-cta.secondary {
+      background: transparent; border: 2px solid rgba(255,255,255,0.5); margin-left: 12px;
+    }
+    .hero-cta.secondary:hover { border-color: var(--color-white); }
+
+    /* Sections */
+    section { padding: 72px 24px; }
+    .section-inner { max-width: var(--max-width); margin: 0 auto; }
+    .section-label {
+      display: inline-block; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.1em;
+      color: var(--color-accent); text-transform: uppercase; margin-bottom: 8px;
+    }
+    .section-title {
+      font-size: 2rem; font-weight: 700; color: var(--color-primary); margin-bottom: 12px;
+    }
+    .section-desc { font-size: 1rem; color: var(--color-text-light); margin-bottom: 44px; max-width: 600px; }
+
+    /* Framework (3-pillar) */
+    .framework-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; }
+    .framework-card {
+      background: var(--color-surface); border-radius: 12px; padding: 36px 28px;
+      box-shadow: 0 2px 12px var(--color-card-shadow); border-top: 4px solid transparent;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .framework-card:hover { transform: translateY(-4px); box-shadow: 0 8px 24px rgba(0,0,0,0.08); }
+    .framework-card:nth-child(1) { border-top-color: var(--color-accent); }
+    .framework-card:nth-child(2) { border-top-color: var(--color-primary-light); }
+    .framework-card:nth-child(3) { border-top-color: #e67e22; }
+    .framework-card .icon { font-size: 2.2rem; margin-bottom: 16px; display: block; }
+    .framework-card h3 { font-size: 1.15rem; margin-bottom: 10px; color: var(--color-primary); }
+    .framework-card p { font-size: 0.9rem; color: var(--color-text-light); line-height: 1.6; }
+    .framework-card ul { list-style: none; margin-top: 14px; }
+    .framework-card li {
+      font-size: 0.85rem; color: var(--color-text); padding: 4px 0; padding-left: 18px;
+      position: relative;
+    }
+    .framework-card li::before { content: '✓'; position: absolute; left: 0; color: var(--color-accent); font-weight: 700; }
+
+    /* Re:ブース spotlight */
+    .spotlight {
+      background: var(--color-white);
+    }
+    .spotlight-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center; }
+    .spotlight-visual {
+      background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
+      border-radius: 16px; padding: 48px 36px; text-align: center;
+    }
+    .spotlight-visual .big-number { font-size: 3.2rem; font-weight: 800; color: var(--color-accent-dark); }
+    .spotlight-visual .big-number small { font-size: 1rem; font-weight: 400; color: var(--color-text-light); }
+    .spotlight-visual .label { font-size: 0.9rem; color: var(--color-text); margin-top: 4px; }
+    .spotlight-visual .comparison-row {
+      display: flex; justify-content: center; gap: 32px; margin-top: 28px;
+    }
+    .comparison-item { text-align: center; }
+    .comparison-item .value { font-size: 2rem; font-weight: 700; }
+    .comparison-item .value.down { color: var(--color-accent-dark); }
+    .comparison-item .sub { font-size: 0.8rem; color: var(--color-text-light); margin-top: 2px; }
+    .spotlight-text h3 { font-size: 1.6rem; color: var(--color-primary); margin-bottom: 14px; }
+    .spotlight-text p { font-size: 0.95rem; color: var(--color-text-light); margin-bottom: 16px; }
+    .spotlight-badge {
+      display: inline-block; background: #e8f5e9; color: var(--color-accent-dark);
+      padding: 4px 12px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; margin-right: 6px;
+    }
+    .spotlight-cta {
+      display: inline-block; margin-top: 8px;
+      color: var(--color-accent-dark); font-weight: 600; text-decoration: none;
+      border-bottom: 2px solid var(--color-accent); padding-bottom: 2px;
+    }
+
+    /* Services */
+    .services-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+    .service-card {
+      background: var(--color-surface); border-radius: 10px; padding: 28px 24px;
+      box-shadow: 0 2px 8px var(--color-card-shadow);
+    }
+    .service-card h4 { font-size: 1rem; color: var(--color-primary); margin-bottom: 6px; }
+    .service-card p { font-size: 0.85rem; color: var(--color-text-light); }
+
+    /* Achievements */
+    .achievements-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; }
+    .achievement-card {
+      background: var(--color-surface); border-radius: 12px; padding: 32px 20px; text-align: center;
+      box-shadow: 0 2px 8px var(--color-card-shadow);
+    }
+    .achievement-card .num { font-size: 2.4rem; font-weight: 800; color: var(--color-primary); }
+    .achievement-card .num span { color: var(--color-accent); }
+    .achievement-card .desc { font-size: 0.85rem; color: var(--color-text-light); margin-top: 4px; }
+
+    /* Digital tools */
+    .digital-tools { background: var(--color-white); }
+    .tools-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+    .tool-card {
+      border: 1px solid var(--color-border); border-radius: 10px; padding: 24px;
+      transition: border-color 0.2s;
+    }
+    .tool-card:hover { border-color: var(--color-accent); }
+    .tool-card h4 { font-size: 0.95rem; margin-bottom: 6px; }
+    .tool-card p { font-size: 0.83rem; color: var(--color-text-light); }
+
+    /* Certifications */
+    .cert-bar {
+      background: var(--color-bg); padding: 40px 24px; text-align: center;
+      border-top: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border);
+    }
+    .cert-bar-inner { max-width: var(--max-width); margin: 0 auto; }
+    .cert-badges { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; margin-top: 12px; }
+    .cert-badge {
+      background: var(--color-white); border: 1px solid var(--color-border);
+      padding: 8px 18px; border-radius: 6px; font-size: 0.8rem; font-weight: 500;
+    }
+
+    /* Clients */
+    .client-logos { display: flex; gap: 32px; justify-content: center; flex-wrap: wrap; align-items: center; opacity: 0.6; }
+    .client-logo { height: 32px; filter: grayscale(1); }
+
+    /* Contact */
+    .contact {
+      background: var(--color-primary); color: var(--color-white); text-align: center;
+    }
+    .contact h2 { color: var(--color-white); }
+    .contact p { opacity: 0.85; margin-bottom: 28px; }
+    .contact-methods { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+    .contact-btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--color-accent); color: var(--color-white);
+      padding: 14px 32px; border-radius: 8px; font-size: 1rem; font-weight: 600;
+      text-decoration: none; transition: background 0.2s;
+    }
+    .contact-btn:hover { background: var(--color-accent-dark); }
+    .contact-btn.outline {
+      background: transparent; border: 2px solid rgba(255,255,255,0.4);
+    }
+
+    /* Footer */
+    footer {
+      background: var(--color-primary); color: rgba(255,255,255,0.6);
+      padding: 40px 24px 24px; font-size: 0.8rem;
+    }
+    .footer-inner { max-width: var(--max-width); margin: 0 auto; display: grid; grid-template-columns: repeat(4, 1fr); gap: 32px; }
+    footer h5 { color: var(--color-white); font-size: 0.85rem; margin-bottom: 10px; }
+    footer a { color: rgba(255,255,255,0.5); text-decoration: none; display: block; margin-bottom: 4px; }
+    footer a:hover { color: var(--color-white); }
+    .footer-copy { text-align: center; margin-top: 32px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.1); }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .hero h1 { font-size: 1.8rem; }
+      .framework-grid, .spotlight-grid, .services-grid, .achievements-grid, .tools-grid { grid-template-columns: 1fr; }
+      .footer-inner { grid-template-columns: 1fr 1fr; }
+      nav a { margin-left: 16px; font-size: 0.8rem; }
+      .hero-cta.secondary { margin-left: 0; margin-top: 12px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <div class="header-inner">
+    <a href="./" class="logo">Orgiast<span>.</span></a>
+    <nav>
+      <a href="#framework">サービス</a>
+      <a href="#rebooth">Re:ブース</a>
+      <a href="#tools">デジタルツール</a>
+      <a href="#achievements">実績</a>
+      <a href="#contact" class="nav-cta">相談する</a>
+    </nav>
+  </div>
+</header>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="hero-inner">
+    <div class="hero-badges">
+      <span class="hero-badge">🏆 SDGsビジネスホープ賞受賞</span>
+      <span class="hero-badge">🌱 CO₂ 77%削減</span>
+      <span class="hero-badge">🤖 AI・デジタルツール完備</span>
+    </div>
+    <h1>展示会ブースと<span>社内イベント</span>を<br>ワンストップでプロデュース</h1>
+    <p>株式会社オージャストは、Re:ブース（再利用可能展示ブース）・社内イベント企画・デジタルツールの3軸で、企業の展示出展と社内コミュニケーションをトータルに支援します。</p>
+    <a href="#contact" class="hero-cta">無料相談を予約する →</a>
+    <a href="#framework" class="hero-cta secondary">サービスを知る</a>
+  </div>
+</section>
+
+<!-- 3-Pillar Framework -->
+<section id="framework">
+  <div class="section-inner">
+    <div class="section-label">Our Approach</div>
+    <h2 class="section-title">3つのフィールドで最適解を提供</h2>
+    <p class="section-desc">展示会ブース、社内イベント、デジタルの全領域を横断し、お客様の課題に合わせた最適なソリューションを実現します。</p>
+    <div class="framework-grid">
+      <div class="framework-card">
+        <span class="icon">🏗️</span>
+        <h3>展示会ブース（REAL）</h3>
+        <p>Re:ブースを中心としたサステナブルな展示会ブースの設計・施工。全国の主要会場に対応。</p>
+        <ul>
+          <li>再利用可能ブースでコスト削減</li>
+          <li>木工ブース比CO₂ 77%削減</li>
+          <li>初回100万円〜・2回目以降50万円〜</li>
+          <li>東京・大阪・名古屋・福岡対応</li>
+        </ul>
+      </div>
+      <div class="framework-card">
+        <span class="icon">🎪</span>
+        <h3>社内イベント（EVENT）</h3>
+        <p>社員総会・株主総会・周年行事・キックオフなど、社内イベントの企画から運営まで一気通貫。</p>
+        <ul>
+          <li>企画立案・台本制作・当日運営</li>
+          <li>上場記念イベント・IPOの鐘レンタル</li>
+          <li>会場探し・ケータリング・ノベルティ</li>
+          <li>オンライン・ハイブリッド対応</li>
+        </ul>
+      </div>
+      <div class="framework-card">
+        <span class="icon">💻</span>
+        <h3>デジタルツール（DIGITAL）</h3>
+        <p>展示会出展受付アプリ、AI活用ツールなど、デジタルで業務効率と集客力を向上。</p>
+        <ul>
+          <li>日英対応の出展受付アプリ（localStorage完結）</li>
+          <li>事前来場登録・リード管理システム</li>
+          <li>アフターイベントアンケート自動化</li>
+          <li>外部API不要・個人情報保護対応</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Re:ブース Spotlight -->
+<section class="spotlight" id="rebooth">
+  <div class="section-inner">
+    <div class="spotlight-grid">
+      <div class="spotlight-visual">
+        <div style="margin-bottom: 24px;">
+          <div class="big-number">77<span style="font-size:1.4rem;">%</span></div>
+          <div class="label">従来木工ブース比 CO₂削減</div>
+        </div>
+        <div class="comparison-row">
+          <div class="comparison-item">
+            <div class="value down">40<span style="font-size:1rem;">%</span></div>
+            <div class="sub">コスト削減</div>
+          </div>
+          <div class="comparison-item">
+            <div class="value" style="color:var(--color-primary);">∞</div>
+            <div class="sub">繰り返し使用可能</div>
+          </div>
+          <div class="comparison-item">
+            <div class="value" style="font-size:1.4rem;">¥500K〜</div>
+            <div class="sub">2回目以降の費用</div>
+          </div>
+        </div>
+      </div>
+      <div class="spotlight-text">
+        <span class="section-label">Flagship Product</span>
+        <h3>Re:ブース — サステナブル展示ブースの新基準</h3>
+        <p>使い捨ての木工ブースから、繰り返し使えるRe:ブースへ。大阪市新事業分野開拓事業者認定、第11回SDGsビジネスホープ賞受賞。脱炭素経営EXPOにも出展し、環境配慮型の展示ソリューションとして高い評価を得ています。</p>
+        <p>
+          <span class="spotlight-badge">🏅 大阪市ベンチャー調達制度認定</span>
+          <span class="spotlight-badge">🌿 SDGsビジネスホープ賞</span>
+          <span class="spotlight-badge">🔄 リユーザブル設計</span>
+        </p>
+        <a href="https://rebooth.co.jp/" class="spotlight-cta" target="_blank">Re:ブース専用サイトを見る →</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Services Detail -->
+<section id="services">
+  <div class="section-inner">
+    <div class="section-label">Our Services</div>
+    <h2 class="section-title">ワンストップで提供する全サービス</h2>
+    <p class="section-desc">企画から施工、運営、デジタルまで一気通貫。お客様の目的に合わせて最適な組み合わせをご提案します。</p>
+    <div class="services-grid">
+      <div class="service-card"><h4>📋 企画・コンサルティング</h4><p>市場調査・企画書作成・効果測定まで。展示会出展の全体戦略を立案します。</p></div>
+      <div class="service-card"><h4>🎨 デザイン・空間設計</h4><p>ブースデザイン・グラフィックデザイン・什器設計。ブランドに合わせた空間を創造。</p></div>
+      <div class="service-card"><h4>🔧 施工・設営・撤去</h4><p>全国主要会場（東京ビッグサイト・インテックス大阪・Aichi Sky Expo・マリンメッセ福岡ほか）で実績多数。</p></div>
+      <div class="service-card"><h4>📱 デジタルプロモーション</h4><p>出展受付アプリ・事前来場登録・SNS告知・アフターフォローまでデジタルでカバー。</p></div>
+      <div class="service-card"><h4>🎤 イベント運営</h4><p>受付管理・ステージ演出・キャスティング・運営マニュアル作成。当日のクオリティを保証。</p></div>
+      <div class="service-card"><h4>🔔 IPO・上場関連</h4><p>上場記念イベント・上場の鐘レンタル（IPO銘柄の3割以上に採用）。ニッチな領域で確固たる実績。</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- Achievements -->
+<section id="achievements" style="background:var(--color-white);">
+  <div class="section-inner">
+    <div class="section-label">Track Record</div>
+    <h2 class="section-title">実績と認定</h2>
+    <p class="section-desc">全国の主要展示会・イベントで多数の実績。お客様の声とデータが品質の裏付けです。</p>
+    <div class="achievements-grid">
+      <div class="achievement-card">
+        <div class="num"><span>300</span>+</div>
+        <div class="desc">展示会ブース施工実績</div>
+      </div>
+      <div class="achievement-card">
+        <div class="num"><span>3</span>拠点</div>
+        <div class="desc">東京・大阪・福岡</div>
+      </div>
+      <div class="achievement-card">
+        <div class="num">2006</div>
+        <div class="desc">設立以来の継続実績</div>
+      </div>
+      <div class="achievement-card">
+        <div class="num"><span>10</span>+</div>
+        <div class="desc">業界受賞・認定数</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Digital Tools -->
+<section class="digital-tools" id="tools">
+  <div class="section-inner">
+    <div class="section-label">Digital Tools</div>
+    <h2 class="section-title">展示会をデジタルで加速する</h2>
+    <p class="section-desc">自社開発のデジタルツールで、出展準備からアフターフォローまでを効率化。外部APIに依存せず、プライバシーにも配慮しています。</p>
+    <div class="tools-grid">
+      <div class="tool-card">
+        <h4>📥 出展受付アプリ</h4>
+        <p>海外企業も含めた出展申込をブラウザで完結。日英対応・CSV出力・管理画面付き。</p>
+      </div>
+      <div class="tool-card">
+        <h4>🤖 AI活用ツール</h4>
+        <p>AIによるブース診断・レイアウト提案・マニュアル自動作成。過去データを学習した最適化。</p>
+      </div>
+      <div class="tool-card">
+        <h4>📊 効果測定ダッシュボード</h4>
+        <p>展示会後のリード獲得数・コストパフォーマンスを可視化。次回出展の改善につなげます。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Certifications -->
+<div class="cert-bar">
+  <div class="cert-bar-inner">
+    <div style="font-size:0.75rem;font-weight:600;color:var(--color-text-light);letter-spacing:0.1em;margin-bottom:8px;">CERTIFICATIONS</div>
+    <div class="cert-badges">
+      <span class="cert-badge">🏅 SDGsビジネスホープ賞（第11回）</span>
+      <span class="cert-badge">🏅 大阪市ベンチャー調達制度認定</span>
+      <span class="cert-badge">🌱 脱炭素経営EXPO出展</span>
+      <span class="cert-badge">♻️ Re:ブース特許出願中</span>
+    </div>
+  </div>
+</div>
+
+<!-- Contact -->
+<section class="contact" id="contact">
+  <div class="section-inner">
+    <div class="section-label" style="color:var(--color-accent);">Contact</div>
+    <h2 class="section-title" style="color:var(--color-white);">まずはお気軽にご相談ください</h2>
+    <p style="max-width:500px;margin:0 auto 32px;">展示会ブースのこと、社内イベントのこと、デジタルツールのこと。どんな小さな疑問でも、専門スタッフが丁寧にお答えします。</p>
+    <div class="contact-methods">
+      <a href="tel:0120487121" class="contact-btn">📞 0120-487-121</a>
+      <a href="https://www.orgiast.jp/contact" class="contact-btn outline" target="_blank">✉️ お問い合わせフォーム</a>
+      <a href="https://lin.ee/" class="contact-btn outline" target="_blank">💬 LINEで相談</a>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer>
+  <div class="footer-inner">
+    <div>
+      <h5>Orgiast</h5>
+      <a href="https://www.orgiast.jp/" target="_blank">コーポレートサイト</a>
+      <a href="https://rebooth.co.jp/" target="_blank">Re:ブース専用サイト</a>
+      <a href="https://www.orgiast.jp/company" target="_blank">会社概要</a>
+    </div>
+    <div>
+      <h5>サービス</h5>
+      <a href="https://www.orgiast.jp/service/event" target="_blank">イベントプロデュース</a>
+      <a href="https://www.orgiast.jp/service/creative" target="_blank">クリエイティブ制作</a>
+      <a href="https://rebooth.co.jp/" target="_blank">Re:ブース</a>
+    </div>
+    <div>
+      <h5>拠点</h5>
+      <span style="display:block;margin-bottom:4px;">東京本社：墨田区横網2-10-3</span>
+      <span style="display:block;margin-bottom:4px;">大阪・福岡（連携拠点）</span>
+    </div>
+    <div>
+      <h5>SNS</h5>
+      <a href="https://www.instagram.com/orgiast/" target="_blank">Instagram</a>
+      <a href="https://www.tiktok.com/@orgiast" target="_blank">TikTok</a>
+      <a href="https://www.facebook.com/orgiast" target="_blank">Facebook</a>
+    </div>
+  </div>
+  <div class="footer-copy">© 2006 Orgiast Co., Ltd.</div>
+</footer>
+
+</body>
+</html>

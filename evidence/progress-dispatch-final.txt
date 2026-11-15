@@ -1,0 +1,40 @@
+✔ manifest-based registration retains exit-code and helper-based gates in the contract inventory (489.3456ms)
+✔ matchers are anchored and select the event-specific input (0.2551ms)
+✔ deny beats allow/ask, combines reasons and contexts; Stop combines block/systemMessage (0.9456ms)
+✔ SessionStart emits sessionTitle without additionalContext (0.1554ms)
+✔ UserPromptSubmit combines additionalContext and the last valid successful sessionTitle (0.2294ms)
+✔ Stop and PreToolUse do not emit sessionTitle (0.1168ms)
+✔ a synchronous infinite loop is terminated without losing another hook result; same OS pid (3015.303ms)
+✔ load shedding skips informational hooks, keeps billing/contract gates and logs skipped hooks (147.4403ms)
+✔ cheap load detection counts leases, expires stale leases and handles low memory (8.0043ms)
+✔ registration converges twice byte-identically, preserves custom/async hooks, detects fanout regression (1003.8698ms)
+✔ Bash PreToolUse executes real repository hooks with zero node child processes (584.3006ms)
+ℹ Bash PreToolUse: legacy node launches=46, dispatcher node launches=1, child processes=0, hooks=24, durationMs=479
+✔ all event rolling-hour budgets and midnight rotation; alert once per day even concurrently (7.9566ms)
+﹣ external PowerShell commands are capped at four children; direct fd output stays inside the merge (0.8752ms) # POSIX executable fixture; Windows runner covered by platform tests
+✔ dispatcher applies gate rollout in-process and the registrar never wraps the dispatcher (232.4579ms)
+✔ native synchronous child waits obey the hook deadline too (3020.3726ms)
+✔ invalid stdin is silent and never executes a hook (3.6707ms)
+✔ re-expansion preserves mixed-group custom hooks and expands duplicate dispatchers only once (0.5434ms)
+✔ selfcheck actually repairs a missing dispatcher and resurrected individual hooks (2193.0619ms)
+✔ gate policy retries in-process with a fresh stdin stream and retains the successful result (200.8927ms)
+✔ spawnSync reports deadline expiry before completion, but preserves a shorter local timeout (2194.4439ms)
+✔ execSync reports deadline expiry before completion, but preserves a shorter local timeout (2143.3965ms)
+✔ execFileSync reports deadline expiry before completion, but preserves a shorter local timeout (2122.6612ms)
+✔ 22 hooks reuse a bounded pool; critical gates retain a full budget after queueing (7097.4044ms)
+✔ reused worker isolates argv, stdin, output, exitCode and env; drains legacy async work (366.8445ms)
+✔ a timed-out kim-inbox gate with a completed context still reaches mergeResults (1016.0827ms)
+✔ global budget and exhausted workers pass critical gates and record unfinished reasons (8065.121ms)
+✔ settings dispatcher timeout bounds the whole event and reports unstarted critical gates (2816.6328ms)
+✔ critical errors and exceptions pass, persist metrics, and preserve explicit denials (190.5245ms)
+✔ critical unfinished threshold is five per rolling hour across events; daily alert deduplicates (3.9219ms)
+✔ intra-turn-progress-reminder fires through the dispatcher and its REMINDER reaches additionalContext on the 3rd PostToolUse (369.1449ms)
+ℹ dispatcher progress reminder: 3rd call delivered additionalContext (119 chars)
+ℹ tests 30
+ℹ suites 0
+ℹ pass 29
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 37398.8638

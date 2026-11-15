@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { ensureKimEditor } from './lib/kim-editor.mjs';
 // 任意のローカルファイルを Drive フォルダへ DWD でアップロードする。
 // 使い方: node tools/drive-upload.mjs --file <path> --folder <folderId> [--name <name>] [--as <email>] [--authuser <開く人のメール>]
 // Office/CSV は既定で Google Workspace 形式へ変換する。社外から元形式を指定された場合だけ --keep-format を使う。
@@ -103,6 +104,7 @@ export async function upload({ file, folder, name, as, authuser = as, keyPath, s
     body,
   });
   const json = await res.json();
+  await ensureKimEditor(json.id, { actingUser: as, token, created: true });
   if (share) await shareAndRecord({ fileId: json.id, emails: share, role: shareRole, auth: token, name: json.name });
   return { id: json.id, name: json.name, converted: plan.converted, url: uploadedFileUrl(json.id, plan.metadata.mimeType, authuser), accountInstruction: `${authuser} で開いてください` };
 }

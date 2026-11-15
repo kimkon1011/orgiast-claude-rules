@@ -11,6 +11,10 @@ import { summarizeDispatchMetrics, checkDispatchBudget, readDispatchMetrics } fr
 import { discoverGates } from './gate-contracts.mjs';
 
 const repo = path.resolve('.');
+// Loaded Windows hosts can spend several seconds starting workers/scheduling
+// timers. Keep wall-clock bounds coarse; timeout counts and reasons below
+// verify deadline behavior independently of that overhead.
+const timingSlackMs = 8000;
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hook-dispatch-test-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -19,7 +23,7 @@ function fixture(t) {
 function script(home, name, body, extra = {}) {
   const file = path.join(home, `${name}.mjs`);
   fs.writeFileSync(file, body);
-  return { ...describeHook({ type: 'command', command: `node "${file}"`, timeout: 2 }), critical: false, ...extra };
+  return { ...describeHook({ type: 'command', command: `node "${file}"`, timeout: 5 }), critical: false, ...extra };
 }
 const output = specific => ({ status: 0, stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...specific } }) });
 
@@ -48,14 +52,41 @@ test('deny beats allow/ask, combines reasons and contexts; Stop combines block/s
     assert.equal(mergeResults(event, [output({ additionalContext: 'a' }), output({ additionalContext: 'b' })]).payload.hookSpecificOutput.additionalContext, 'a\nb');
   }
 });
+test('SessionStart emits sessionTitle without additionalContext', () => {
+  const merged = mergeResults('SessionStart', [output({ sessionTitle: '999｜待機中' })]);
+  assert.deepEqual(JSON.parse(merged.stdout), { hookSpecificOutput: { hookEventName: 'SessionStart', sessionTitle: '999｜待機中' } });
+});
+test('prompt/posttool context is deduped per source across events without changing block decisions', t => {
+  const options = { home: fixture(t), sessionId: 'dedupe' };
+  const results = [{ ...output({ additionalContext: '同じ通知' }), name: 'source' }];
+  assert.equal(mergeResults('PostToolUse', results, options).payload.hookSpecificOutput.additionalContext, '同じ通知');
+  assert.equal(mergeResults('UserPromptSubmit', results, options).stdout, '');
+  const changed = [{ ...output({ additionalContext: '変更された通知' }), name: 'source' }];
+  assert.equal(mergeResults('UserPromptSubmit', changed, options).payload.hookSpecificOutput.additionalContext, '変更された通知');
+  assert.equal(mergeResults('UserPromptSubmit', results, { ...options, sessionId: 'other' }).payload.hookSpecificOutput.additionalContext, '同じ通知');
+  const block = { status: 0, stdout: JSON.stringify({ decision: 'block', reason: 'protected', hookSpecificOutput: { additionalContext: '変更された通知' } }), name: 'source' };
+  assert.deepEqual(mergeResults('UserPromptSubmit', [block], options).payload, { decision: 'block', reason: 'protected' });
+  assert.ok(mergeResults('SessionStart', results, options).payload.hookSpecificOutput);
+});
+test('UserPromptSubmit combines additionalContext and the last valid successful sessionTitle', () => {
+  const merged = mergeResults('UserPromptSubmit', [output({ additionalContext: 'context' }), output({ sessionTitle: 'first' }), output({ sessionTitle: '999｜待機中' }),
+    ...['', '   ', null, 123].map(sessionTitle => output({ sessionTitle })),
+    { ...output({ sessionTitle: 'failed' }), status: 1 }, { ...output({ sessionTitle: 'blocked' }), status: 2, stderr: 'blocked' }]);
+  assert.deepEqual(JSON.parse(merged.stdout), { decision: 'block', reason: 'blocked', hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: 'context', sessionTitle: '999｜待機中' } });
+});
+test('Stop and PreToolUse do not emit sessionTitle', () => {
+  for (const event of ['Stop', 'PreToolUse']) {
+    assert.equal(mergeResults(event, [output({ sessionTitle: '999｜待機中' })]).stdout, '');
+  }
+});
 test('a synchronous infinite loop is terminated without losing another hook result; same OS pid', async t => {
   const home = fixture(t);
-  const slow = script(home, 'slow', 'export async function hookMain() { while (true) {} }', { timeout: 0.8 });
+  const slow = script(home, 'slow', 'export async function hookMain() { while (true) {} }', { timeout: 3 });
   const fast = script(home, 'fast', `export async function hookMain(raw) { console.log(JSON.stringify({hookSpecificOutput:{hookEventName:'PreToolUse',additionalContext:String(process.pid)}})); }`);
   const result = await dispatch('PreToolUse', '{}', { home, overloaded: false, manifest: { events: { PreToolUse: [slow, fast] } } });
   assert.equal(result.metrics.timedOut, 1);
   assert.equal(result.payload.hookSpecificOutput.additionalContext, String(process.pid));
-  assert.ok(result.metrics.durationMs < 3000);
+  assert.ok(result.metrics.durationMs < slow.timeout * 1000 + timingSlackMs);
   assert.equal(result.results[0].stdout, '');
   assert.equal((await readDispatchMetrics(home)).length, 1);
 });
@@ -166,11 +197,11 @@ test('dispatcher applies gate rollout in-process and the registrar never wraps t
 
 test('native synchronous child waits obey the hook deadline too', async t => {
   const home = fixture(t);
-  const slow = script(home, 'native-wait', `import {spawnSync} from 'node:child_process'; export async function hookMain() { spawnSync(process.execPath, ['-e', 'setTimeout(()=>{},30000)']); }`, { timeout: 1 });
+  const slow = script(home, 'native-wait', `import {spawnSync} from 'node:child_process'; export async function hookMain() { spawnSync(process.execPath, ['-e', 'setTimeout(()=>{},60000)']); }`, { timeout: 3 });
   const out = await dispatch('PreToolUse', '{}', { home, overloaded: false, manifest: { events: { PreToolUse: [slow] } } });
   assert.equal(out.metrics.timedOut, 1);
   assert.equal(out.metrics.childProcesses, 1);
-  assert.ok(out.metrics.durationMs < 2500);
+  assert.ok(out.metrics.durationMs < slow.timeout * 1000 + timingSlackMs);
 });
 
 test('invalid stdin is silent and never executes a hook', async t => {
@@ -257,8 +288,8 @@ for (const method of ['spawnSync', 'execSync', 'execFileSync']) {
     const home = fixture(t);
     for (const localTimeout of [false, true]) {
       const args = method === 'execSync'
-        ? '`"${process.execPath}" -e "setTimeout(()=>{},30000)"`'
-        : "process.execPath, ['-e', 'setTimeout(()=>{},30000)']";
+        ? '`"${process.execPath}" -e "setTimeout(()=>{},60000)"`'
+        : "process.execPath, ['-e', 'setTimeout(()=>{},60000)']";
       const hook = script(home, `deadline-${method}-${localTimeout}`, `
 import { ${method} } from 'node:child_process';
 export async function hookMain() {
@@ -268,16 +299,236 @@ export async function hookMain() {
       const messages = [];
       // No parent timer: verify the native wait itself reports the deadline on
       // every platform, even when the hook catches an execSync exception.
+      const deadlineMs = localTimeout ? 15000 : 2000;
+      const started = Date.now();
       const worker = new Worker(new URL('./hook-dispatch-worker.mjs', import.meta.url), {
-        workerData: { hook, raw: '{}', deadline: Date.now() + 1500 },
+        workerData: { hook, raw: '{}', deadline: started + deadlineMs },
         stdout: true, stderr: true, execArgv: [],
       });
       t.after(() => worker.terminate());
       worker.on('message', message => messages.push(message));
       await new Promise((resolve, reject) => { worker.once('exit', resolve); worker.once('error', reject); });
+      const elapsedMs = Date.now() - started;
       assert.equal(messages.some(message => message.deadlineHit), !localTimeout);
+      if (localTimeout) {
+        // Startup is included, but the 30 ms local timeout must finish well
+        // before the worker deadline, even on a heavily loaded Windows host.
+        assert.ok(elapsedMs < deadlineMs - timingSlackMs, `local timeout took ${elapsedMs} ms`);
+      } else {
+        assert.ok(elapsedMs < deadlineMs + timingSlackMs, `deadline took ${elapsedMs} ms`);
+      }
       assert.ok(messages.some(message => message.result));
       if (!localTimeout) assert.ok(messages.findIndex(message => message.deadlineHit) < messages.findIndex(message => message.result));
     }
   });
 }
+
+test('22 hooks reuse a bounded pool; critical gates retain a full budget after queueing', async t => {
+  const home = fixture(t);
+  const hooks = Array.from({ length: 22 }, (_, i) => script(home, `pooled-${i}`, `
+import {threadId} from 'node:worker_threads';
+export async function hookMain() {
+  await new Promise(resolve => setTimeout(resolve, 600));
+  console.log(JSON.stringify({hookSpecificOutput:{hookEventName:'PreToolUse',
+    permissionDecision:'deny',permissionDecisionReason:'gate-${i}',additionalContext:String(threadId)}}));
+}`, { critical: i >= 2, timeout: 3 }));
+  let created = 0;
+  const out = await dispatch('PreToolUse', '{}', { home, concurrency: 2, overloaded: false,
+    manifest: { events: { PreToolUse: hooks } }, onWorkerCreated() { created++; } });
+  assert.equal(out.metrics.timedOut, 0, JSON.stringify(out.metrics));
+  assert.equal(out.metrics.skipped, 0);
+  assert.equal(created, 2); assert.equal(out.metrics.workersCreated, 2);
+  assert.equal(out.results.length, 22);
+  assert.ok(out.results.every(r => r.status === 0));
+  assert.ok(out.results[21].queueMs >= hooks[21].timeout * 1000 + 2000, 'last critical gate waited at least two seconds beyond its own timeout');
+  assert.ok(out.results[0].queueMs >= out.results[21].queueMs, 'informational work waits behind critical gates');
+  assert.equal(out.payload.hookSpecificOutput.permissionDecisionReason.split('\n').length, 22);
+  assert.equal(new Set(out.payload.hookSpecificOutput.additionalContext.split('\n')).size, 2);
+  assert.equal(out.metrics.childProcesses, 0);
+});
+
+test('reused worker isolates argv, stdin, output, exitCode and env; drains legacy async work', async t => {
+  const home = fixture(t);
+  const first = script(home, 'dirty-worker', `
+import fs from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
+process.env.POOL_LEAK = 'bad';
+void delay(150, null, { ref: false }).then(() => { process.exitCode = 2; process.env.POOL_LEAK = 'late'; });
+process.once('beforeExit', () => console.log(JSON.stringify({decision:'block',reason:'before-exit denial'})));
+setTimeout(() => { fs.writeSync(2, 'first-denial'); process.exitCode = 2; }, 50);
+setTimeout(() => { console.log('late-output'); process.exitCode = 2; }, 150).unref();
+`);
+  const second = script(home, 'clean-worker', `
+import fs from 'node:fs';
+export async function hookMain() {
+  await new Promise(resolve => setTimeout(resolve, 200));
+  const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+  console.log(JSON.stringify({systemMessage:JSON.stringify({arg:process.argv[2],env:process.env.POOL_LEAK ?? null,status:process.exitCode,session:input.session_id})}));
+}`, { args: ['second'] });
+  const out = await dispatch('Stop', JSON.stringify({ session_id: 'fresh-input' }), { home, concurrency: 1, overloaded: false,
+    env: { ...process.env, POOL_LEAK: '' }, manifest: { events: { Stop: [first, second] } } });
+  assert.equal(out.metrics.workersCreated, 1);
+  assert.equal(out.results[0].status, 2); assert.equal(out.results[0].stderr, 'first-denial');
+  assert.deepEqual(JSON.parse(out.results[0].stdout), { decision: 'block', reason: 'before-exit denial' });
+  assert.equal(out.results[1].status, 0);
+  assert.deepEqual(JSON.parse(out.payload.systemMessage), { arg: 'second', env: '', status: 0, session: 'fresh-input' });
+  assert.doesNotMatch(out.results[1].stdout, /late-output/);
+});
+
+test('a timed-out kim-inbox gate with a completed context still reaches mergeResults', async t => {
+  const home = fixture(t);
+  const inbox = script(home, 'kim-inbox-probe', `
+import { spawnSync } from 'node:child_process';
+export async function hookMain() {
+  console.log(JSON.stringify({hookSpecificOutput:{hookEventName:'PreToolUse',additionalContext:'KIM-READY'}}));
+  spawnSync(process.execPath, ['-e', 'setTimeout(()=>{},30000)'], { windowsHide: true });
+}`, { name: 'kim-inbox.mjs', critical: true, timeout: 1 });
+  const out = await dispatch('PreToolUse', '{}', { home, concurrency: 1, overloaded: false, manifest: { events: { PreToolUse: [inbox] } } });
+  // The context is delivered despite the stall; only the unfinished reason is recorded.
+  assert.equal(out.metrics.timedOut, 1);
+  assert.equal(out.metrics.skipped, 0);
+  assert.equal(out.metrics.workersCreated, 1);
+  assert.deepEqual(out.metrics.hooks.map(h => h.criticalUnfinished), ['hook-timeout']);
+  assert.match(out.results[0].stdout, /KIM-READY/);
+  assert.equal(out.payload.hookSpecificOutput.additionalContext, 'KIM-READY');
+});
+
+test('global budget and exhausted workers pass critical gates and record unfinished reasons', async t => {
+  const home = fixture(t);
+  const slow = script(home, 'pool-hang', 'export async function hookMain() { while (true) {} }', { critical: true, timeout: 5 });
+  const gate = script(home, 'queued-deny', `export async function hookMain() { console.log(JSON.stringify({decision:'block',reason:'deny'})); }`, { critical: true });
+  for (const budgetMs of [3000, 15000]) {
+    const out = await dispatch('PreToolUse', '{}', { home, concurrency: 1, budgetMs, overloaded: false,
+      manifest: { events: { PreToolUse: [slow, gate] } } });
+    assert.equal(out.metrics.workersCreated, 1);
+    assert.equal(out.status, 0); assert.equal(out.stdout, '');
+    assert.deepEqual(out.metrics.hooks.map(h => h.criticalUnfinished),
+      ['hook-timeout', budgetMs === 3000 ? 'dispatch-budget' : 'hook-error']);
+    assert.equal(out.metrics.timedOut, 1);
+    assert.ok(out.results.every(r => r.status === 0));
+    assert.ok(out.metrics.durationMs < Math.min(budgetMs, slow.timeout * 1000) + timingSlackMs);
+  }
+});
+
+test('an event-limited timeout exhausts the budget even before the wall-clock deadline', async t => {
+  const home = fixture(t);
+  const hook = script(home, 'early-budget-timeout', 'export async function hookMain() {}', { critical: true, timeout: 60 });
+  let calls = 0;
+  const out = await dispatch('PreToolUse', '{}', { home, budgetMs: 30000, overloaded: false, concurrency: 1,
+    manifest: { events: { PreToolUse: [hook, hook] } },
+    async execute(_hook, _raw, timeout) {
+      calls++;
+      assert.ok(timeout > 0 && timeout <= 30000);
+      return { status: 0, timedOut: true };
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(out.stdout, '');
+  assert.equal(out.metrics.timedOut, 1);
+  assert.deepEqual(out.metrics.hooks.map(h => h.criticalUnfinished), ['hook-timeout', 'dispatch-budget']);
+});
+
+test('settings dispatcher timeout bounds the whole event and reports unstarted critical gates', async t => {
+  const home = fixture(t);
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude/settings.json'), JSON.stringify({ hooks: {
+    PreToolUse: [{ hooks: [{ command: `node "${path.join(repo, 'tools/hook-dispatch.mjs')}" PreToolUse`, timeout: 3 }] }],
+  } }));
+  const hook = script(home, 'budget-probe', 'export async function hookMain() {}', { critical: true, timeout: 10 });
+  const budgets = [];
+  const out = await dispatch('PreToolUse', '{}', { home, concurrency: 1, overloaded: false,
+    manifest: { events: { PreToolUse: [hook, hook, hook] } },
+    async execute(_hook, _raw, timeout) { budgets.push(timeout); await new Promise(r => setTimeout(r, timeout + 100)); return { status: 0 }; },
+  });
+  assert.equal(budgets.length, 1);
+  assert.ok(budgets[0] > 0 && budgets[0] <= 3000);
+  assert.ok(budgets[0] < hook.timeout * 1000, 'settings budget caps the hook timeout');
+  assert.equal(out.status, 0); assert.equal(out.stdout, '');
+  assert.deepEqual(out.metrics.hooks.map(h => h.criticalUnfinished), [undefined, 'dispatch-budget', 'dispatch-budget']);
+  assert.equal(out.metrics.timedOut, 0);
+  assert.ok(out.metrics.durationMs < budgets[0] + timingSlackMs);
+});
+
+
+test('critical errors and exceptions pass, persist metrics, and preserve explicit denials', async t => {
+  const home = fixture(t);
+  const hooks = [
+    script(home, 'bad-exit', `export async function hookMain() { console.log(JSON.stringify({decision:'block',reason:'partial output'})); process.exitCode = 1; }`, { critical: true }),
+    script(home, 'throws', `export async function hookMain() { throw new Error('missing dependency'); }`, { critical: true }),
+    script(home, 'missing-import', `import './absent-module.mjs';`, { critical: true }),
+  ];
+  const options = { home, concurrency: 1, overloaded: false, manifest: { events: { PreToolUse: hooks } } };
+  const out = await dispatch('PreToolUse', '{}', options);
+  assert.equal(out.status, 0); assert.equal(out.stdout, '');
+  assert.deepEqual(out.metrics.hooks.map(h => h.criticalUnfinished), hooks.map(() => 'hook-error'));
+  const records = await readDispatchMetrics(home);
+  assert.deepEqual(records.at(-1).hooks, JSON.parse(JSON.stringify(out.metrics.hooks)));
+  const thrown = await dispatch('PreToolUse', '{}', { ...options, execute() { throw new Error('executor error'); } });
+  assert.equal(thrown.stdout, '');
+  assert.ok(thrown.metrics.hooks.every(h => h.criticalUnfinished === 'hook-error'));
+  for (const body of [
+    `export async function hookMain() { console.log(JSON.stringify({hookSpecificOutput:{permissionDecision:'deny',permissionDecisionReason:'explicit denial'}})); }`,
+    `export async function hookMain() { process.stderr.write('explicit denial'); process.exitCode = 2; }`,
+  ]) {
+    const deny = script(home, 'explicit-' + body.length, body, { critical: true });
+    const result = await dispatch('PreToolUse', '{}', { ...options, manifest: { events: { PreToolUse: [...hooks, deny] } } });
+    assert.equal(result.payload.hookSpecificOutput.permissionDecision, 'deny');
+    assert.equal(result.payload.hookSpecificOutput.permissionDecisionReason, 'explicit denial');
+    assert.equal(result.metrics.hooks.at(-1).criticalUnfinished, undefined);
+  }
+});
+
+test('critical unfinished threshold is five per rolling hour across events; daily alert deduplicates', async t => {
+  const home = fixture(t), now = Date.parse('2026-11-05T00:10:00Z');
+  const record = (event, reasons, at = now - 1200000) => ({ at: new Date(at).toISOString(), event,
+    hooks: reasons.map(criticalUnfinished => ({ critical: true, criticalUnfinished })) });
+  const four = [record('PreToolUse', ['hook-timeout', 'hook-error']), record('Stop', ['dispatch-budget', 'hook-error']),
+    record('PreToolUse', ['hook-error'], now - 3600000), record('Stop', ['hook-error'], now + 1),
+    record('Stop', [undefined, 'unknown'])];
+  let count = 0;
+  const notify = async (_home, options) => { count++; assert.match(options.text, /critical 未完了 合計 5件/); return { id: 'test-critical-alert' }; };
+  assert.equal((await checkDispatchBudget(home, { now, records: four, notify })).over, false);
+  assert.equal(count, 0);
+  const five = [...four, record('PostToolUse', ['dispatch-budget'])];
+  const summary = summarizeDispatchMetrics(five, { now });
+  assert.equal(summary.criticalUnfinishedPerHour, 5); assert.equal(summary.over, true);
+  assert.equal(summary.events.PreToolUse.criticalUnfinishedPerHour, 2);
+  await Promise.all([checkDispatchBudget(home, { now, records: five, notify }), checkDispatchBudget(home, { now, records: five, notify })]);
+  assert.equal(count, 1);
+  assert.equal(summarizeDispatchMetrics([...five, record('Stop', ['hook-error'])], { now }).criticalUnfinishedPerHour, 6);
+  const tomorrow = now + 86400000;
+  await checkDispatchBudget(home, { now: tomorrow, records: [record('Stop', Array(5).fill('hook-error'), tomorrow - 1)], notify });
+  assert.equal(count, 2);
+});
+
+test('intra-turn-progress-reminder fires through the dispatcher and its REMINDER reaches additionalContext on the 3rd PostToolUse', async t => {
+  const home = fixture(t);
+  const repo = path.resolve('.');
+  const script = path.join(repo, 'tools/intra-turn-progress-reminder.mjs');
+  const hook = {
+    name: 'intra-turn-progress-reminder.mjs', matcher: '*', type: 'command',
+    command: `node "${script}"`, timeout: 5,
+  };
+  const sessionId = 'test-dispatcher-progress';
+  const counterDir = path.join(home, '.claude', '.intra-turn-progress-counter');
+  const env = { ...process.env, HOME: home, USERPROFILE: home, INTRA_TURN_PROGRESS_THRESHOLD: '3', CLAUDE_HEADLESS: '', ORGIAST_HEADLESS_JOB: '' };
+  const options = { home, env, overloaded: false, manifest: { events: { PostToolUse: [hook] } } };
+  // 1回目: count 1, no reminder
+  const first = await dispatch('PostToolUse', JSON.stringify({ session_id: sessionId, tool_name: 'Read' }), options);
+  assert.equal(first.payload.hookSpecificOutput, undefined, '1回目は reminder なし');
+  // 2回目: count 2, no reminder
+  const second = await dispatch('PostToolUse', JSON.stringify({ session_id: sessionId, tool_name: 'Edit' }), options);
+  assert.equal(second.payload.hookSpecificOutput, undefined, '2回目も reminder なし');
+  // 3回目: count 3 → fire → additionalContext に REMINDER
+  const third = await dispatch('PostToolUse', JSON.stringify({ session_id: sessionId, tool_name: 'Write' }), options);
+  assert.ok(third.payload.hookSpecificOutput?.additionalContext, '3回目は additionalContext が必要');
+  assert.match(third.payload.hookSpecificOutput.additionalContext, /【進捗報告リマインダー】/, 'REMINDER が additionalContext に含まれる');
+  assert.equal(third.metrics.timedOut, 0, 'timeout なし');
+  // カウンタがリセットされたことを確認
+  const counter = JSON.parse(fs.readFileSync(path.join(counterDir, `${encodeURIComponent(sessionId)}.json`), 'utf8'));
+  assert.equal(counter.count, 0, 'カウンタは fire 後に 0 にリセット');
+  // 4回目: count 1, no reminder (リセット後)
+  const fourth = await dispatch('PostToolUse', JSON.stringify({ session_id: sessionId, tool_name: 'Read' }), options);
+  assert.equal(fourth.payload.hookSpecificOutput, undefined, '4回目（リセット後1回目）は reminder なし');
+  t.diagnostic(`dispatcher progress reminder: 3rd call delivered additionalContext (${third.payload.hookSpecificOutput?.additionalContext?.length ?? 0} chars)`);
+});

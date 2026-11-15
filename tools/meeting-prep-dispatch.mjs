@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { ensureKimEditor } from './lib/kim-editor.mjs';
 import { INQUIRY_SHEET, INQUIRY_TAB, matchMeetingInquiries } from './lib/inquiry-sheet.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -498,6 +499,7 @@ async function applyDocument(g, job, d) {
   let file = one(await files(g, `'${quote(folder)}' in parents and name='${quote(name)}'`, false), name);
   if (!file) {
     file = await g.request('drive', `${DRIVE}/files?supportsAllDrives=true&fields=id`, 'POST', { name, mimeType: 'application/vnd.google-apps.document', parents: [folder], appProperties: { meetingPrep: job.case.id } });
+    await ensureKimEditor(file.id, { token: 'request-adapter', created: true, api: async (_token, url, options = {}) => { const value = await g.request('drive', url, options.method || 'GET', options.body ? JSON.parse(options.body) : undefined); return { json: async () => value }; } });
   }
   const doc = await g.request('documents', `${DOCS}/${file.id}`), current = docText(doc);
   if (current !== d.text) {

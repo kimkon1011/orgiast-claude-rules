@@ -44,6 +44,18 @@ function pathForPowerShell(home, suffix) {
   return `${String(home ?? '').replace(/[\\/]+$/, '')}\\${suffix}`;
 }
 
+// One PowerShell invocation to get just the task names matching Orgiast/Claude patterns.
+// Used by collectConvergence to check required tasks are registered without per-task PS overhead.
+export function listScheduledTaskNames({ spawnImpl = spawnSync } = {}) {
+  let result;
+  try {
+    result = run(`@(Get-ScheduledTask | Where-Object { $_.TaskName -like 'Orgiast*' -or $_.TaskName -like 'Claude*' } | ForEach-Object { $_.TaskName })|ConvertTo-Json -Compress`, spawnImpl);
+  } catch { return null; }
+  // run() returns null on empty stdout (should not happen with ConvertTo-Json), null on failure, parsed JSON otherwise.
+  if (result === null) return [];
+  return Array.isArray(result) ? result : [result];
+}
+
 export function listScheduledTasks({ spawnImpl = spawnSync } = {}) {
   const result = run(`@(Get-ScheduledTask | Where-Object { $_.TaskName -like 'Orgiast*' -or $_.TaskName -like 'Claude*' } | ForEach-Object {
     $t=$_;$i=$t|Get-ScheduledTaskInfo

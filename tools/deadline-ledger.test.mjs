@@ -29,7 +29,7 @@ test('--initはkim所有で作成、通知メールなし共有、途中再実�
   const request = async (url, options) => {
     requests.push([url, options]);
     if (url.endsWith('/spreadsheets')) { creates++; return { spreadsheetId: 'test-book' }; }
-    return { permissions: [] };
+    return { permissions: [{ type: 'user', emailAddress: 'kim@orgiast.jp', role: 'owner' }] };
   };
   saveJson(dataPath(home, 'seeds.json'), [{ title: '支払', kind: '支払', due: '2026-11-30', sourceId: 'mail-one' }, { title: '質問書', sourceId: 'mail-two' }]);
   assert.equal((await initialize({ home, sheets, request })).added, 2);
@@ -42,6 +42,28 @@ test('--initはkim所有で作成、通知メールなし共有、途中再実�
 test('Google client explicitly impersonates kim and preserves HTTP error status', async () => {
   const client = googleClient({ getToken: async opts => { assert.equal(opts.impersonate, 'kim@orgiast.jp'); return 'token'; }, fetchImpl: async () => ({ ok: false, status: 403 }) });
   await assert.rejects(client('https://example.invalid'), e => e.status === 403);
+});
+
+test('Google client retries with seisaku-team only for the keyless-route error', async () => {
+  const tokenRequests = [];
+  const client = googleClient({
+    getToken: async ({ impersonate, scope }) => {
+      tokenRequests.push({ impersonate, scope });
+      if (impersonate === 'kim@orgiast.jp') throw Error('鍵なし経路は seisaku-team@orgiast.jp 固定です');
+      return 'proxy-token';
+    },
+    fetchImpl: async (_, options) => {
+      assert.equal(options.headers.Authorization, 'Bearer proxy-token');
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    },
+  });
+  const scope = 'https://www.googleapis.com/auth/spreadsheets';
+  assert.deepEqual(await client('https://example.invalid', { scope }), { ok: true });
+  assert.deepEqual(await client('https://example.invalid', { scope }), { ok: true });
+  assert.deepEqual(tokenRequests, [
+    { impersonate: 'kim@orgiast.jp', scope },
+    { impersonate: 'seisaku-team@orgiast.jp', scope: 'https://www.googleapis.com/auth/drive' },
+  ]);
 });
 
 test('既存seedsのevidence/noteとgmail:メール箱形式を保持して正規化する', () => {

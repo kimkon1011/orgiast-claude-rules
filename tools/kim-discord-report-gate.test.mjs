@@ -8,10 +8,10 @@ test('kim 宛 DM と claude-code 投稿を拒否し他メンバーは許可す�
   assert.equal(judge(input('mcp__claude_ai_Discord__send_dm', { user_id: '123' }), { allowlist: [] }).decision, 'pass');
   assert.match('PowerShell', new RegExp(HOOK_MATCHER));
 });
-test('直接 API・webhook は拒否し正規 CLI と dry-run と許可カテゴリは通す', () => {
+test('直接 API・webhook は拒否し正規 CLI と dry-run は通すが旧許可カテゴリも拒否する', () => {
   for (const tool of ['Bash', 'PowerShell']) {
     for (const command of ['curl https://discord.com/api/v10/channels/1508437329247862794/messages', 'curl $(cat orgiast-discord-webhook.txt)', 'Invoke-RestMethod https://discordapp.com/api -Body 715210673642012733']) assert.equal(judge(input(tool, { command }), { allowlist: [] }).decision, 'block');
     for (const command of ['node tools/notify-kim.mjs "報告"', 'node tools/discord-dm.mjs kim --body-file x', 'curl https://discord.com/api 715210673642012733 --dry-run']) assert.equal(judge(input(tool, { command }), { allowlist: [] }).decision, 'pass');
   }
-  assert.equal(judge(input('mcp__claude_ai_Discord__send_dm', { user_id: 'kim', content: '定時報告' }), { allowlist: [{ category: '定時', pattern: '^定時' }] }).decision, 'pass');
+  assert.equal(judge(input('mcp__claude_ai_Discord__send_dm', { user_id: 'kim', content: '定時報告' }), { allowlist: [{ category: '定時', pattern: '^定時' }] }).decision, 'block');
 });

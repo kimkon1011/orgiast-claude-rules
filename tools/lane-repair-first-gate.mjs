@@ -48,7 +48,7 @@ export function repairCommand(command) {
         || child.join(' ') === 'npm install -g @openai/codex';
     }
     if (/^--install (?:-d|--distribution) Ubuntu --no-launch$/.test(args.join(' '))) return true;
-    return args.length > 0 && args.every(a => ['-l', '--list', '-q', '--quiet', '--status', '--version', '--verbose', '-v'].includes(a));
+    return args.length > 0 && args.every(a => ['-l', '--list', '-q', '--quiet', '--status', '--version', '--verbose', '-v', '--shutdown'].includes(a));
   }
   if (/^(?:keyserve|env-kv)$/.test(cmd)) return /^(?:status|list|get|help)$/.test(args[0]);
   return false;

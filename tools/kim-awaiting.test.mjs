@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { collectAwaiting, respond, apId, shownFile } from './kim-awaiting.mjs';
-import { context, REPEAT_MS, SESSION_TTL, DISPLAY_LIMIT } from './kim-awaiting-context.mjs';
+import { context, REPEAT_MS, SESSION_TTL, DISPLAY_LIMIT, TOP } from './kim-awaiting-context.mjs';
 import { ledgerFile, readLedger, writeLedger, rowKey, MAX_RESUMES } from './auto-progress-ledger.mjs';
 import { inboxFile } from './auto-progress-inbox-hook.mjs';
 import { mailCategory } from './fleet-mail.mjs';
@@ -107,7 +107,7 @@ test('hook caps display while tracking all ids', t => {
   const home = fixture(t);
   writeLedger(ledgerFile(home), Array.from({ length: DISPLAY_LIMIT + 2 }, (_, i) => row({ sessionId: `s${i}`, promise: `件${i}` })));
   const out = context({ session_id: 's', cwd: '/project' }, { home, env: {}, now: NOW });
-  assert.match(out.hookSpecificOutput.additionalContext, /ほか 2 件/);
+  assert.match(out.hookSpecificOutput.additionalContext, /ほか 4 件/);
   assert.equal(readJson(shownFile(home)).s.ids.length, DISPLAY_LIMIT + 2);
 });
 test('hook shows the current session first in full plus five older items', t => {
@@ -122,11 +122,13 @@ test('hook shows the current session first in full plus five older items', t => 
   const out = context({ session_id: 'current', cwd: '/project' }, { home, env: {}, now: NOW });
   const text = out.hookSpecificOutput.additionalContext;
   const lines = text.split('\n').filter(line => line.startsWith('・'));
-  assert.equal(lines.length, DISPLAY_LIMIT + 1);
-  assert.equal(lines[0], `・現在の判断 ／ 答えてほしいこと: ${ask} ／ 2日待ち`);
-  for (let i = 0; i < DISPLAY_LIMIT; i++) assert.ok(lines[i + 1].startsWith(`・古い判断${i} ／`));
-  assert.match(text, /ほか 5 件/);
-  assert.equal(text.split('\n').filter(line => line.startsWith('id=')).length, DISPLAY_LIMIT + 1);
+  assert.equal(lines.length, TOP + 1);
+  assert.ok(lines[0].startsWith('・'));
+  assert.ok(lines[0].includes('答えてほしいこと:'));
+  assert.ok(lines[0].includes('公開前に確認していただきたい内容です'));
+  for (let i = 0; i < TOP; i++) assert.ok(lines[i + 1].startsWith(`・古い判断${i} ／`));
+  assert.match(text, /ほか 7 件/);
+  assert.equal(text.split('\n').filter(line => line.startsWith('id=')).length, TOP + 1);
   assert.ok(text.includes(`id=${apId(current)} | 現在の判断`));
   assert.equal(readJson(shownFile(home)).current.ids.length, 11);
 });
@@ -221,7 +223,7 @@ test('external は他のすべての項目より前に並び、external: true �
 test('下書きは「下書きのまま未送信」と表示する', t => {
   const home = fixture(t);
   writeExternal(home, { items: [extItem({ kind: 'draft', who: 'cust@example.com', ask: '送信するか決める' })] });
-  assert.equal(collectAwaiting({ home, now: NOW })[0].title, '下書きのまま未送信: cust@example.com「日程のご相談」');
+  assert.equal(collectAwaiting({ home, now: NOW })[0].title, '下書きのまま未送信: cust@example.com（seisaku-team@ の下書き）「日程のご相談」');
 });
 test('状態ファイルが古い・取得失敗があると警告項目が先頭に入る', t => {
   const home = fixture(t);
@@ -239,9 +241,9 @@ test('hook は external を15件まで別枠で表示し、集合が変わると
   writeLedger(ledgerFile(home), Array.from({ length: DISPLAY_LIMIT + 1 }, (_, i) => row({ sessionId: `s${i}`, promise: `社内${i}` })));
   writeExternal(home, { items: Array.from({ length: 17 }, (_, i) => extItem({ id: `ex:${String(i).padStart(12, '0')}`, subject: `件${i}` })) });
   const text = context(input, options).hookSpecificOutput.additionalContext;
-  assert.match(text, /🔴 社外の人を待たせています 17 件（古い順）/); assert.match(text, /ほか 2 件/);
+  assert.match(text, /🔴 社外の人を待たせています 17 件（古い順）/); assert.match(text, /ほか 14 件/);
   assert.ok(text.indexOf('🔴') < text.indexOf('📌')); assert.match(text, /get_thread で読み、返信下書きまで作って/);
-  assert.equal(text.split('\n').filter(line => line.startsWith('・') && line.includes('件')).length >= 15, true);
+  assert.equal(text.split('\n').filter(line => line.startsWith('・') && line.includes('件')).length, TOP);
   assert.equal(context(input, options), null);
   writeExternal(home, { items: [extItem({ id: 'ex:cccccccccccc' })] });
   assert.ok(context(input, { ...options, now: NOW + 60_000 }));
@@ -288,3 +290,27 @@ test('check のない Claude 作業を質問と併記し6時間で警告する',
   }
   assert.match(hook, /現セッション優先/);
 });
+
+test('autoRegisteredCheck rows with status!=waiting_user are excluded from kim-awaiting', t => {
+  const home = fixture(t);
+  writeLedger(ledgerFile(home), [{
+    sessionId: 'session-autoreg',
+    pc: 'PC-A', user: 'u', ts: new Date(NOW - 2 * DAY).toISOString(),
+    promise: '身元照会の確認',
+    status: 'open',
+    nextKim: '以下の少なくとも1つを教えてください: 1. 文面 2. URL',
+    autoRegisteredCheck: true
+  }]);
+  const items = collectAwaiting({ home, now: NOW });
+  assert.equal(items.filter(item => item.route?.sessionId === 'session-autoreg').length, 0);
+});
+
+
+test('auto registration marker does not hide an explicit waiting_user request', t => {
+  const home = fixture(t);
+  writeLedger(ledgerFile(home), [row({ autoRegisteredCheck: true, status: 'waiting_user', nextKim: '予算を承認してください' })]);
+  const items = collectAwaiting({ home, now: NOW });
+  assert.equal(items.filter(item => item.route?.sessionId === 'session-a').length, 1);
+});
+
+process.env.ORGIAST_AUTO_RESUME = '1';

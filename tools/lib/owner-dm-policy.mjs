@@ -1,3 +1,5 @@
+import { isKimRecipient } from './kim-dm-policy.mjs';
+import { isKimHumanProgress } from './human-progress-row.mjs';
 import fs from 'node:fs';
 import { isUnattendedRow } from './unattended-session.mjs';
 import path from 'node:path';
@@ -18,6 +20,16 @@ export function notificationKind(text, options = {}) {
 }
 // Lock covers reservation and append, so simultaneous processes cannot claim a ninth slot.
 export async function routeOwnerDm(owner, text, options) {
+  if (isKimRecipient({ owner, id: options.userId })) {
+    const { deliverKim } = await import('../notify-kim.mjs');
+    const kind = options.kind === 'ask' || options.kimActionRequired === true || notificationKind(text, options) === 'action' ? 'ask' : 'info';
+    const result = await (options.deliverKim ?? deliverKim)(text, { ...options, userId: '715210673642012733', kind, plainJa: false });
+    const channel = result?.channel || (result?.delivered === 'dm' ? 'discord' : 'kim-inbox');
+    const ok = ['dm', 'session-inbox', 'spooled'].includes(result?.delivered);
+    return { ...result, channel, ok };
+  }
+  // Human progress is delivered by notifyOwner directly to kim-inbox.
+  if (isKimHumanProgress({ ...options.session, owner }) && options.kind !== 'digest') return null;
   const { home } = options;
   const now = new Date(options.now ?? Date.now());
   const kind = notificationKind(text, options);

@@ -1,0 +1,37 @@
+{
+  "attempt": "X-0018-06",
+  "time": "2026-11-09T04:55:33.185007+09:00",
+  "revision": "9d0dd65a4a19110c8d34a4e3b483561243548f5c",
+  "hypothesis": "依存取得時の権限切替を省けばChromiumを起動できる",
+  "commands": [
+    {
+      "command": "apt-get -o APT::Sandbox::User=root download libnspr4 libnss3 libasound2t64",
+      "cwd": "/tmp/x0018-libs",
+      "exit": 0
+    },
+    {
+      "command": "dpkg-deb -x <各deb> /tmp/x0018-libs/root",
+      "exit": 0
+    },
+    {
+      "command": "LD_LIBRARY_PATH=/tmp/x0018-libs/root/usr/lib/x86_64-linux-gnu ldd <Chromium>",
+      "missing": []
+    }
+  ],
+  "packages": [
+    {
+      "file": "libnss3_2%3a3.120-1ubuntu2.2_amd64.deb",
+      "sha256": "7c5843f5e49c10c267893ae7f13af6032ed1b96e7c1ae586a5f44435f804dd85"
+    },
+    {
+      "file": "libasound2t64_1.2.15.3-1ubuntu1.1_amd64.deb",
+      "sha256": "96e20cf5c9095ef54ba46fccffea5c01cf2de17a1012c5683a67e43504a6d726"
+    },
+    {
+      "file": "libnspr4_2%3a4.38.2-1ubuntu1_amd64.deb",
+      "sha256": "2f28284b35765aaccad1785ab017425e1ca378c395256331f9c662d04335d43f"
+    }
+  ],
+  "scope": "システム導入なし。Playwrightによる公開GETのみ。vibe-testing未使用。全POST遮断。",
+  "remaining": "正式ソース/隔離送信先、init、メニュー、フォーム全要件、C5、独立レビュー"
+}

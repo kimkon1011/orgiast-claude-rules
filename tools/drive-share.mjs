@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { ensureKimEditor } from './lib/kim-editor.mjs';
 // node tools/drive-share.mjs --id <URL|ID> --to <mail[,mail]> [--role reader|commenter|writer] [--as <mail>] [--dry]
 import { getDriveToken, driveApi } from './lib/drive-auth.mjs';
 import { extractFileId, shareRecipients, shareAndRecord } from './lib/drive-share.mjs';
@@ -22,6 +23,7 @@ export async function main(argv = process.argv.slice(2)) {
     }
     const token = await getDriveToken({ impersonate: args.as });
     const meta = await (await driveApi(token, `https://www.googleapis.com/drive/v3/files/${fileId}?fields=name&supportsAllDrives=true`)).json();
+    await ensureKimEditor(fileId, { actingUser: args.as, token });
     await shareAndRecord({ fileId, emails: args.to, role: args.role, auth: token, name: meta.name });
     return 0;
   } catch (error) { console.error(error.message); return 1; }

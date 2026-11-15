@@ -98,8 +98,8 @@ for (const value of [undefined, null]) {
 }
 
 for (const [label, model, allow, expected] of [
-  ['fable', 'FaBlE-5', '', 'opus'], ['1m', 'opus[1m]', '', 'opus'],
-  ['unset', undefined, '', 'opus'], ['opus', 'opus', '', 'opus'],
+  ['fable', 'FaBlE-5', '', 'sonnet'], ['1m', 'opus[1m]', '', 'sonnet'],
+  ['unset', undefined, '', 'sonnet'], ['opus', 'opus', '', 'sonnet'], ['sonnet', 'sonnet', '', 'sonnet'],
   ['allow', 'fable', '1', 'fable'], ['allow unset', undefined, '1', undefined],
 ]) {
   test(`sessionstart model: ${label}`, (t) => {
@@ -116,7 +116,7 @@ for (const [label, model, allow, expected] of [
     assert.equal(settings.model, expected);
     assert.equal(settings.effortLevel, 'high');
     assert.equal(settings.other, true);
-    assert.equal(result.stdout, model === expected ? '' : `[settings-guard] model: ${model ?? '未設定'} → opus\n`);
+    assert.equal(result.stdout, model === expected ? '' : `[settings-guard] model: ${model ?? '未設定'} → sonnet\n`);
     const again = spawnSync(process.execPath, [fileURLToPath(new URL('./settings-quality-guard.mjs', import.meta.url)), '--mode', 'sessionstart'], {
       encoding: 'utf8', env: { ...process.env, ORGIAST_HOME: home, CLAUDE_MODEL_GUARD_ALLOW: allow },
     });

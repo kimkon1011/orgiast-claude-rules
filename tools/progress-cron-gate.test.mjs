@@ -12,6 +12,7 @@ const footer = (auto = 'CI の結果を確認して報告', session = 'まだ閉
 const assistant = content => ({ type: 'assistant', message: { role: 'assistant', content } });
 const message = text => assistant([{ type: 'text', text }]);
 const cron = assistant([{ type: 'tool_use', name: 'CronCreate', id: 'c1', input: { cron: '17 9-19/2 * * *' } }]);
+const resume = (id = 'resume-1') => ({ type: 'attachment', attachment: { type: 'hook_success', hookEvent: 'SessionStart', hookName: 'SessionStart:resume', toolUseID: id } });
 function fixture(t, entries = [message(footer())]) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'progress-cron-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -43,6 +44,58 @@ test('promise without CronCreate blocks once across processes, with actionable r
 test('CronCreate anywhere in full transcript passes, including before the runner tail', t => {
   const f = fixture(t, [cron, ...Array.from({ length: 4100 }, () => ({ type: 'user', message: { content: 'ok' } })), message(footer())]);
   assert.equal(f.judge().reason, 'cron-created');
+});
+test('CronCreate before resume is stale; only a new CronCreate satisfies the promise', t => {
+  const entries = [cron, message(footer()), resume(), message(footer())];
+  const f = fixture(t, entries);
+  assert.equal(f.judge().decision, 'block');
+  assert.equal(f.judge().reason, 'already-blocked');
+  fs.appendFileSync(f.input.transcript_path, '\n' + [cron, message(footer())].map(JSON.stringify).join('\n'));
+  assert.equal(f.judge().reason, 'cron-created');
+});
+test('each resume gets one block even when this session already blocked', t => {
+  const f = fixture(t);
+  assert.equal(f.judge().decision, 'block');
+  for (const id of ['resume-1', 'resume-2']) {
+    fs.appendFileSync(f.input.transcript_path, '\n' + [resume(id), message(footer())].map(JSON.stringify).join('\n'));
+    assert.equal(f.judge().decision, 'block');
+    assert.equal(f.judge().reason, 'already-blocked');
+  }
+});
+test('multiple hook results for one startup keep CronCreate and block identity stable', t => {
+  const f = fixture(t, [resume(), message(footer())]);
+  assert.equal(f.judge().decision, 'block');
+  const duplicate = { ...resume(), uuid: 'different-result', timestamp: '2026-11-06T00:25:22.140Z' };
+  duplicate.attachment.type = 'hook_cancelled';
+  fs.appendFileSync(f.input.transcript_path, '\n' + [duplicate, message(footer())].map(JSON.stringify).join('\n'));
+  assert.equal(f.judge().reason, 'already-blocked');
+  assert.equal(fixture(t, [resume(), cron, duplicate, message(footer())]).judge().reason, 'cron-created');
+});
+test('ordinary metadata, compact hooks and idle gaps do not invalidate a live cron', t => {
+  const compact = resume();
+  compact.attachment.hookName = 'SessionStart:compact';
+  const f = fixture(t, [
+    { ...cron, timestamp: '2026-11-04T12:31:38Z', cwd: 'c:\\repo', version: '2.1.318' },
+    { type: 'system', subtype: 'stop_hook_summary', cwd: 'C:\\repo' },
+    { type: 'user', isMeta: true, message: { content: 'Stop hook feedback' } },
+    { type: 'session-owner', sessionId: 'session-1' }, compact,
+    { ...resume('sidechain'), isSidechain: true },
+    { ...message(footer()), timestamp: '2026-11-06T00:25:22Z' },
+  ]);
+  assert.equal(f.judge().reason, 'cron-created');
+});
+test('startup attachments invalidate old cron; absent hook IDs use row identity', t => {
+  const startup = resume();
+  startup.attachment.hookName = 'SessionStart:startup';
+  delete startup.attachment.toolUseID;
+  startup.uuid = 'startup-uuid';
+  const f = fixture(t, [cron, startup, message(footer())]);
+  assert.equal(f.judge().decision, 'block');
+  assert.equal(f.judge().reason, 'already-blocked');
+});
+test('historical headless entrypoints and promises do not leak across resume', t => {
+  assert.equal(fixture(t, [{ type: 'attachment', entrypoint: 'sdk-cli' }, cron, resume(), message(footer())]).judge().decision, 'block');
+  assert.equal(fixture(t, [message(footer()), resume()]).judge().reason, 'no-promise');
 });
 test('none and closable passes; prior promises do not count', t => {
   const f = fixture(t, [message(footer()), message(footer('なし', '閉じてよい'))]);

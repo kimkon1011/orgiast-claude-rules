@@ -68,6 +68,6 @@ test('前回送信から2日後は送らない', async () => {
 
 test('前回送信から4日後は送る', async () => {
   const { output, messages } = await run({ ageDays: 8, sentAgeDays: 4, dryRun: false });
-  assert.match(output, /Discord DMを送信しました/);
+  assert.match(output, /kim-inboxに保存しました/);
   assert.equal(messages.length, 1);
 });

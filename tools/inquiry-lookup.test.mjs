@@ -87,7 +87,7 @@ test('keyless PC uses actual drive-auth/gws-proxy for Gmail and named worksheet 
   const result=await lookup(['ファブリカ'],{now,home:'/nonexistent',getToken,fetchImpl});
   assert.equal(result.sources['inquiry-sheet'].status,'確認済み'); assert.equal(result.hits.find(h=>h.source==='inquiry-sheet').row,3119);
   assert.equal(result.sources['gmail:seisaku-team@orgiast.jp'].status,'確認済み');
-  assert.equal(result.sources['gmail:kim@orgiast.jp'].status,'未確認');assert.equal(result.sources['calendar:kim@orgiast.jp'].status,'未確認');
+  assert.equal(result.sources['gmail:kim@orgiast.jp'].status,'未確認');assert.equal(result.sources['calendar:kim@orgiast.jp'].status,'確認済み');
   assert.ok(requests.some(q=>q.service==='gmail'));assert.ok(requests.some(q=>q.path.includes('/export?')));
   const rows=await readSheet(INQUIRY_SHEET,INQUIRY_TAB,{getToken,fetchImpl});assert.match(rows[3118][0],/^2026-10-30T00:42:/);
 });

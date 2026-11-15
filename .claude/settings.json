@@ -12,5 +12,12 @@
         ]
       }
     ]
+  },
+  "maxEffortLevel": "medium",
+  "advisorModel": "claude-fable-5-1",
+  "idleCompaction": false,
+  "memory": {
+    "enabled": true,
+    "path": ".claude/memory"
   }
 }

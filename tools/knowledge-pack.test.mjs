@@ -29,6 +29,8 @@ function fakeDrive() {
   const response = value => new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });
   const apiFn = async (_token, input, opts = {}) => {
     const url = new URL(input); const method = opts.method || 'GET';
+    if (String(input).includes('/permissions')) return Response.json({ permissions: [{ type: 'user', emailAddress: 'kim@orgiast.jp', role: 'writer' }] });
+    if (opts.method === 'PATCH' && String(opts.body).includes('orgiastAutomation')) return Response.json({ id: 'marked' });
     if (method === 'GET' && url.pathname === '/drive/v3/files') {
       const q = url.searchParams.get('q');
       const name = /name='([^']+)'/.exec(q)?.[1];

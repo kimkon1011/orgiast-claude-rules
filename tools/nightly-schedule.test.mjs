@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 const files = {
   apply: resolve('tools/apply-nightly-schedule.ps1'),
   plaud: resolve('tools/register-plaud-task.ps1'),
+  tldvDrive: resolve('tools/register-tldv-drive-task.ps1'),
   installer: resolve('tools/install-orgiast.ps1'),
 };
 
@@ -19,8 +20,10 @@ test('all changed schedule PowerShell files have a UTF-8 BOM', () => {
 // 日次 03:06 へ張り替えると不具合報告の即時取り込みが 1 日 1 回に退行する（2026-09-05 実測）。
 test('registration triggers are dispersed and use two-minute random delay', () => {
   const plaud = readFileSync(files.plaud, 'utf8');
+  const tldvDrive = readFileSync(files.tldvDrive, 'utf8');
   const installer = readFileSync(files.installer, 'utf8');
   assert.match(plaud, /Date\.AddMinutes\(8\)[\s\S]*-RepetitionInterval \(New-TimeSpan -Hours 1\) -RandomDelay \(New-TimeSpan -Minutes 2\)/);
+  assert.match(tldvDrive, /Date\.AddMinutes\(20\)[\s\S]*-RepetitionInterval \(New-TimeSpan -Hours 1\) -RandomDelay \(New-TimeSpan -Minutes 2\)/);
   assert.match(installer, /-Daily -At 3:00am -RandomDelay \(New-TimeSpan -Minutes 2\)/);
 });
 
@@ -39,6 +42,7 @@ test('apply script retains actions, supports DryRun, skips missing tasks, and re
     ['OrgiastNightlyBatch', '03:00'],
     ['Orgiast Growi 自動クリーンアップ', '03:12'],
     ['OrgiastPlaudToTldv', '00:08'],
+    ['OrgiastTldvDriveSync', '00:20'],
   ]) {
     assert.match(source, new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + "'[^\\n]+At = '" + time));
   }

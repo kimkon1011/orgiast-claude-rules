@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "templates": {
+    "実施計画書テンプレートver2": "1gtViI90jp32cnd93x-_x0USBVq6Ym72ZQyeUha6vIgI",
+    "実施計画書テンプレート（追加パーツ）": "1_zbmz8LReBsLRynQ7oIxdyXEwzw7mMnnbULsQcAFfio",
+    "提出フォーマットver2": "1eVsrADlRFwxyoHzlgwqXUqDx3jwwrgNaHP-k5hi_h2U",
+    "学会タスク進捗管理表": "1reLACNGD1K7U58heIBVH-YWC9CWErGHSfOy4unfgOYs",
+    "Reブースタスク進捗管理表": "1t6eMvbPIu17m7hbv6foJcvd-fXrJkZqrePb8P6njxGI",
+    "見積テンプレート": "1K1fntQFEhIu9XBKAD0Zwedn8HZv_D6yLM0iTccFY9Tg",
+    "コンテンツシート倉庫": "1Wgk9YFJnrsZ7LA3BxKiSBrv-cpUbD10DImMJJSNrZZY",
+    "Taskシートテンプレート倉庫": "1y3hxCw6sAjOUynK5eLmtlp5gAZG_qDuDbK6PG8toQLY",
+    "保有機材リスト(Slides)": "1GPaySeZy7wyMIIHLQ3cY2yyJv44PwKClgcMSIJGm2go",
+    "備品管理表": "1QCW86DIri6nryqheFKw8Cr6e9Ce0YRV6FvFFW0zqBnc",
+    "社内マニュアル(Growi)": "growi"
+  },
+  "drive": {
+    "tldvFolderId": "1-X9Q3tD2BaGONEbYDn6LShgLpeO2rMJX"
+  },
+  "sheets": {
+    "improvementSheetId": "1L92mjlgzppx5hYrU3g5es3qFVN4aSTSxkddVNJ0Bw_c",
+    "improvementTabGid": 354072335,
+    "headerRow": 2,
+    "improvementHeaders": ["タイムスタンプ", "担当", "責任者（プロデューサー）", "カテゴリ", "改善されるコスト（金額）", "エピソード・発生内容", "発生原因", "発生原因対策"]
+  },
+  "llm": {
+    "providerChain": ["gemini", "deepseek", "groq", "openrouter"],
+    "maxChunkChars": 12000,
+    "maxCallsPerNight": 60,
+    "confidenceThreshold": 0.6
+  },
+  "feedbackApi": {
+    "url": "{{BOOTH_FEEDBACK_URL}}",
+    "action": "submitFeedbackDialog",
+    "maxPerNight": 5
+  },
+  "excludeTitlePatterns": ["面談", "面接", "採用", "1on1", "評価面談"],
+  "knowhow": {
+    "maxPerNight": 5
+  },
+  "statePath": "~/.claude/state/tldv-process-improve.json",
+  "logPath": "~/.claude/logs/tldv-process-improve.log"
+}

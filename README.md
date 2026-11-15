@@ -2,7 +2,7 @@
 
 オージャスト全社共通の Claude Code ルール・スキル配布リポジトリ。
 
-> **正本は Google Drive ハブ** `claude-common-rules`（folder `1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw`、orgiast.jp ドメイン共有済み）。この repo はミラー（履歴管理・plugin 配布用）。
+> **正本は Google Drive ハブ** `claude-common-rules`（folder `1RLYbK6CKyPWRJsG6LY0WB9OzlbFYSFvw`、kim マイドライブ直下、orgiast.jp ドメイン共有のみ・個人アカウント共有なし）。この repo はミラー（履歴管理・plugin 配布用）。
 > - ルールの取り込み・更新: 各自の Claude Code で `/rules-sync`
 > - ノウハウの投稿（全アカウント共通化したい学び）: `/share-knowledge` → `knowledge-inbox/` へ
 > - 統合と version 管理: kim 環境の `/rules-sync`（merge）のみ。同期 CLI: `scripts/drive-hub-sync.mjs`

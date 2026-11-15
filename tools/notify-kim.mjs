@@ -6,18 +6,18 @@ import { createHash } from 'node:crypto';
 import { readEnvValue } from './env-kv.mjs';
 import { isEntry } from './is-entry.mjs';
 import { toPlainJa } from './lib/plain-ja.mjs';
-import { classifyKimDm } from './lib/kim-dm-policy.mjs';
+import { classifyKimDm, isKimRecipient, KIM_DISCORD_USER_ID } from './lib/kim-dm-policy.mjs';
 import { redactSecrets } from './webhook-health.mjs';
 import { addItem, spoolItem, isInboxNoise } from './kim-inbox.mjs';
-import { discordAllowed } from './lib/kim-discord-allowlist.mjs';
 import { annotateAccounts } from './url-account-gate.mjs';
+
 
 const API = 'https://discord.com/api/v10';
 const MAX_CONTENT = 2_000;
 const OMITTED = '…(以下省略)';
 const USER_AGENT = 'orgiast-notify-kim/1.0';
 // kim の Discord ユーザーID（秘密ではない）。設定ファイルの無い PC でも DM が届くよう既定値にする。
-export const KIM_DISCORD_USER_ID = '715210673642012733';
+export { KIM_DISCORD_USER_ID };
 
 function readTrimmed(file) { try { return fs.readFileSync(file, 'utf8').trim(); } catch { return ''; } }
 
@@ -63,7 +63,7 @@ export function stripOwnerAddress(text) {
 const JUDGMENT_REQUEST = /^自動進行が判断待ちです[:：]/m;
 // auto-progress が API エラーで止まった依頼を自動再開したときの案内。修復対象ではない。
 const AUTO_RESUME_NOTICE = /^エラーで止まっていた依頼を見つけ、自動で再開します。?$/m;
-const RESUME_REPORT = /^夜間セッション再開 \([^\n)]*\)$/m;
+const RESUME_REPORT = /^(?:夜間セッション再開|待機期限切れセッション再開) \([^\n)]*\)$/m;
 const RESUME_ROW = /\([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\): (?:progressed|no-progress|error)$/mi;
 const RESUME_ERROR = /\([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\): error$/mi;
 // 目的文に引用された過去の失敗ではなく、今回の結果と中止の有無で判定する。
@@ -81,10 +81,11 @@ export async function notifyKim(text, options = {}) {
     const policy = classifyKimDm(text);
     if (!policy.allowed) {
       console.error(`kim への Discord DM を止めました（${policy.reason}）。PR のマージ・他PCへの依頼は fleet-mail --to kim-PC で送ってください`);
-      return { delivered: 'blocked', category: policy.category, reason: policy.reason };
+      const delivery = await persistKim(options.home || process.env.ORGIAST_HOME || os.homedir(), { ...options, priority: 'high', kind: ['ask', 'action'].includes(options.kind) ? 'ask' : 'info', text: redactSecrets(String(text ?? '')), source: options.source || 'notify-kim-blocked' });
+      return { ...delivery, discordBlocked: true, category: policy.category, reason: delivery.reason || policy.reason };
     }
   }
-  options = { ...options, kind: options.kimActionRequired === true || options.kind === 'ask' ? 'ask' : 'info' };
+  options = { ...options, kind: options.kimActionRequired === true || ['ask', 'action'].includes(options.kind) ? 'ask' : 'info' };
   const raw = redactSecrets(String(text ?? ''));
   const bodyText = stripOwnerAddress(raw);
   if (STATUS_REPORT.test(bodyText) || ALREADY_FILED.test(bodyText) || isSuccessfulResumeReport(bodyText) || AUTO_RESUME_NOTICE.test(bodyText)) return deliverKim(raw, options);
@@ -213,7 +214,7 @@ export async function deliverKim(text, {
   plainJaImpl = toPlainJa,
   suffix = '',
   allowHumanRequest = false,
-  kind = 'info', source = '', allowlist, repoRoot,
+  kind = 'info', source = '', sessionId = '', discordAllowed: discordAllowedOption,
 } = {}) {
   if (isInboxNoise({ kind, source, text: String(text ?? '') })) return { delivered: 'suppressed', reason: 'fleet-ledger-or-gate-statistics' };
   const resolvedUserId = userId !== undefined ? userId : (process.env.ORGIAST_DISCORD_USER_ID?.trim()
@@ -225,12 +226,11 @@ export async function deliverKim(text, {
   // 平易化の書き換えでアカウント表記が落ちることがあるため、書き換え後の本文で補う。
   const translated = annotateAccounts(plainJa ? await plainJaImpl(String(text ?? '')) : text);
   const body = suffix && !allowHumanRequest && kind !== 'ask' ? String(translated).split('\n').filter(line => !HANDOFF.test(line)).join('\n') : translated;
-  // 許可判定は平易化前の原文でも行う。平易化（LLM 書き換え）で「【… の自動進行】」等の見出しが変わり、
-  // 許可リストに合わなくなって定期ダイジェストが kim-inbox に落ちた（2026-11-04 実測）。
-  const allowedForKim = discordAllowed(String(text ?? '') + suffix, { home, allowlist, repoRoot }).allowed
-    || discordAllowed(String(body) + suffix, { home, allowlist, repoRoot }).allowed;
-  if ((userId == null || String(userId).trim() === '' || String(resolvedUserId) === KIM_DISCORD_USER_ID) && !allowedForKim) {
-    return persistKim(home, { kind, text: String(body) + suffix, source, signal });
+  let inboxResult = null;
+  // kim 宛 Discord DM 全廃（2026-10-27 / 2026-11-10 kim 再指示）。kim への通知は kim-inbox のみ。
+  if (isKimRecipient({ id: resolvedUserId, defaultKim: userId == null || String(userId).trim() === '' })) {
+    inboxResult = await persistKim(home, { kind: ['ask', 'action'].includes(kind) ? 'ask' : 'info', text: String(body) + suffix, source, sessionId, signal });
+    return { ...inboxResult, channel: 'kim-inbox' };
   }
   const content = suffix ? String(body).slice(0, Math.max(0, MAX_CONTENT - suffix.length)) + suffix : clipDiscordContent(body);
   let dmReason = '';
@@ -254,7 +254,7 @@ export async function deliverKim(text, {
       if (!sent.ok) throw new Error(`DM送信が HTTP ${sent.status}`);
       const messageId = (await sent.json()).id;
       if (typeof messageId !== 'string' || !messageId.trim()) throw new Error('DMメッセージIDを取得できません');
-      return { delivered: 'dm', messageId, channelId, recipientId: resolvedUserId, httpStatus: sent.status };
+      return { delivered: 'dm', messageId, channelId, recipientId: resolvedUserId, httpStatus: sent.status, ...(inboxResult?.id ? { id: inboxResult.id } : {}), channel: 'discord' };
     } catch (error) {
       dmReason = redactSecrets(error?.message ?? error);
     }
@@ -281,7 +281,7 @@ export async function deliverKim(text, {
   // Discord/webhook が使えない kim 宛通知は kim-inbox に保存する（2026-11-04）
   // これにより Discord Bot トークンが無い PC でも通知が失われない。
   if (resolvedUserId === KIM_DISCORD_USER_ID || String(userId) === KIM_DISCORD_USER_ID) {
-    return persistKim(home, { kind, text: String(body) + suffix, source, signal });
+    return persistKim(home, { kind, text: String(body) + suffix, source, sessionId, signal });
   }
   console.error(`notify-kim: 通知先を解決できず送信しません (${dmReason})`);
   return { delivered: 'none', reason: dmReason };

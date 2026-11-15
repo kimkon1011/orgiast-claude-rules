@@ -1,0 +1,13 @@
+# Japan Trade Show Intake
+
+> A bilingual, browser-based intake and consultation tool for overseas companies planning to exhibit at trade shows in Japan.
+
+Use the following pages to understand or cite this application:
+
+- [Application overview](index.md): Canonical plain-language description, inputs, workflow, data handling, and limitations.
+- [Frequently asked questions](faq.html): Answers about submission behavior, storage, languages, exports, and intended use.
+- [Research and source notes](research.html): Claim boundaries, implementation evidence, and verification guidance.
+- [Interactive application](./): English/Japanese intake form and local application manager.
+- [Repository documentation](README.md): Local setup and developer verification.
+
+Important: This version does not transmit applications to an organizer or external API. A submission is stored only in the current browser's localStorage until the user exports or deletes it.

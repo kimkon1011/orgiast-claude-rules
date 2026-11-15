@@ -11,8 +11,15 @@ import { resolveFleetLabel } from './fleet-label.mjs';
 const repo = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
 const readJson = (file, fallback = {}) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } };
 
+export const SHARED_OWNER_ACCOUNTS = Object.freeze(['seisaku-team@orgiast.jp']);
+export const isSharedOwner = owner => SHARED_OWNER_ACCOUNTS.includes(String(owner || '').trim().toLowerCase());
+
+export function canonicalOwnerPcMap() {
+  return readJson(path.join(repo, 'fleet-pc-map.json'));
+}
+
 export function ownerPcMap(home) {
-  const map = readJson(path.join(repo, 'fleet-pc-map.json'));
+  const map = canonicalOwnerPcMap();
   for (const [label, row] of Object.entries(readJson(path.join(home, '.claude', 'fleet-pc-map.json')))) {
     map[label] = row && typeof row === 'object' ? { ...map[label], ...row } : row;
   }

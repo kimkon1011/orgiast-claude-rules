@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { ensureKimEditor } from './lib/kim-editor.mjs';
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { isEntry } from './is-entry.mjs';
@@ -30,9 +31,10 @@ export function createDriveQueue({ token, api = driveApi, folderId = COMMAND_FOL
     async submit(id, payload) {
       const name = `cmd_${id}.json`;
       const { boundary, body } = makeMultipartBody({ name, parents: [folderId], mimeType: 'text/plain' }, JSON.stringify(payload));
-      await api(token, 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
+      const response = await api(token, 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
         method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body,
       });
+      await ensureKimEditor((await response.json()).id, { token, api, created: true });
     },
     async takeResult(id) {
       const files = await findByName(`result_${id}.txt`);

@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Booth Preview | Orgiast Interactive Demo</title>
+  <link rel="stylesheet" href="../common/transitions.css">
+  <style>
+    :root {
+      --color-bg: #0f172a;
+      --color-surface: #1e293b;
+      --color-surface-alt: #334155;
+      --color-primary: #3b82f6;
+      --color-accent: #60a5fa;
+      --color-text: #f1f5f9;
+      --color-text-muted: #94a3b8;
+      --color-border: #475569;
+      --color-success: #22c55e;
+      --radius: 12px;
+      --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.3);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+      background: var(--color-bg);
+      color: var(--color-text);
+      min-height: 100vh;
+    }
+
+    .hero {
+      background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+      padding: 3rem 1.5rem;
+      text-align: center;
+    }
+
+    .hero h1 {
+      font-size: 2.25rem;
+      font-weight: 800;
+      margin-bottom: 0.5rem;
+    }
+
+    .hero p {
+      font-size: 1.125rem;
+      opacity: 0.85;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem;
+    }
+
+    /* Booth Preview Card (3D Tilt) */
+    .booth-preview {
+      background: var(--color-surface);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-card);
+      padding: 2rem;
+      margin-bottom: 2rem;
+      position: relative;
+    }
+
+    .booth-preview h2 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .booth-canvas {
+      width: 100%;
+      height: 280px;
+      background: linear-gradient(135deg, var(--color-surface-alt) 0%, var(--color-border) 100%);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+      margin-bottom: 1rem;
+      border: 2px dashed var(--color-border);
+    }
+
+    .booth-canvas .booth-label {
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: var(--color-text-muted);
+      text-align: center;
+    }
+
+    .booth-canvas .booth-dimensions {
+      font-size: 0.875rem;
+      color: var(--color-text-muted);
+      margin-top: 0.25rem;
+    }
+
+    /* Booth Size Selector */
+    .size-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .size-card {
+      background: var(--color-surface-alt);
+      border: 2px solid var(--color-border);
+      border-radius: 8px;
+      padding: 1rem 0.75rem;
+      text-align: center;
+      cursor: pointer;
+      color: var(--color-text);
+      font-weight: 600;
+      font-size: 0.875rem;
+      transition: transform var(--t-duration-normal) var(--t-easing-out),
+                  border-color var(--t-duration-fast) var(--t-easing-out),
+                  background var(--t-duration-fast) var(--t-easing-out);
+    }
+
+    .size-card:hover {
+      transform: scale(1.05);
+      border-color: var(--color-primary);
+    }
+
+    .size-card.selected {
+      transform: scale(1.02);
+      border-color: var(--color-primary);
+      background: rgba(59, 130, 246, 0.15);
+    }
+
+    .size-card .size-dim {
+      font-size: 0.75rem;
+      color: var(--color-text-muted);
+      margin-top: 0.25rem;
+    }
+
+    /* Interior Options */
+    .options-section {
+      background: var(--color-surface);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .options-section h3 {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .options-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 0.75rem;
+    }
+
+    .option-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--color-surface-alt);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.875rem;
+      transition: background var(--t-duration-fast) var(--t-easing-out);
+    }
+
+    .option-item:hover {
+      background: var(--color-border);
+    }
+
+    .option-item.active {
+      background: rgba(59, 130, 246, 0.2);
+      color: var(--color-accent);
+    }
+
+    /* Stats Row */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .stat-item {
+      background: var(--color-surface);
+      border-radius: 8px;
+      padding: 1rem;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 1.75rem;
+      font-weight: 800;
+      color: var(--color-primary);
+    }
+
+    .stat-label {
+      font-size: 0.75rem;
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-top: 0.25rem;
+    }
+
+    /* Toggle Switch (Language) */
+    .lang-switch {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      justify-content: flex-end;
+      margin-bottom: 1rem;
+    }
+
+    .lang-switch .lang-label {
+      font-size: 0.875rem;
+      font-weight: 600;
+    }
+
+    /* Alert Simulation */
+    .alert-demo {
+      margin-bottom: 1rem;
+    }
+
+    .alert-demo button {
+      background: var(--color-primary);
+      color: white;
+      border: none;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      margin-right: 0.5rem;
+    }
+
+    .toast-container {
+      position: fixed;
+      top: 1rem;
+      right: 1rem;
+      z-index: 1000;
+    }
+
+    .demo-toast {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      box-shadow: var(--shadow-card);
+      margin-bottom: 0.5rem;
+      font-size: 0.875rem;
+    }
+
+    .toggle-control {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+
+    .toggle-control .t-toggle {
+      cursor: pointer;
+    }
+
+    /* Notification badge */
+    .badge-demo {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: var(--color-surface-alt);
+      padding: 0.5rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.875rem;
+    }
+
+    .badge {
+      background: var(--color-primary);
+      color: white;
+      font-size: 0.675rem;
+      font-weight: 700;
+      padding: 0.15rem 0.45rem;
+      border-radius: 9999px;
+    }
+
+    /* Responsive */
+    @media (max-width: 640px) {
+      .hero h1 { font-size: 1.5rem; }
+      .size-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+  </style>
+</head>
+<body>
+  <section class="hero">
+    <h1 id="heroTitle" class="t-texts-reveal">Interactive Booth Preview</h1>
+    <p id="heroSubtitle">Experience your exhibition booth in 3D before you build it</p>
+  </section>
+
+  <div class="container">
+    <!-- Language Toggle -->
+    <div class="lang-switch">
+      <span class="lang-label" id="langEn">EN</span>
+      <button class="t-toggle" id="langToggle" role="switch" aria-checked="true" aria-label="Toggle language">
+        <span class="t-toggle-track">
+          <span class="t-toggle-thumb"></span>
+        </span>
+      </button>
+      <span class="lang-label" id="langJa">JA</span>
+    </div>
+
+    <!-- 3D Booth Preview -->
+    <div class="t-3d-container">
+      <div class="booth-preview t-3d-tilt glare" id="booth3d">
+        <h2>
+          <span id="previewTitle">Booth Preview</span>
+          <span class="badge t-notification-badge" id="sizeBadge">6m²</span>
+        </h2>
+        <div class="booth-canvas" id="boothCanvas">
+          <div>
+            <div class="booth-label">6m²</div>
+            <div class="booth-dimensions" id="boothDims">3m × 2m</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-row">
+      <div class="stat-item">
+        <div class="stat-value t-number-pop-in visible" id="statExhibits">128</div>
+        <div class="stat-label" id="lblExhibits">Exhibits</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value t-number-pop-in visible" id="statVisitors">12.4K</div>
+        <div class="stat-label" id="lblVisitors">Visitors</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-value t-number-pop-in visible" id="statCountries">34</div>
+        <div class="stat-label" id="lblCountries">Countries</div>
+      </div>
+    </div>
+
+    <!-- Booth Size Selector -->
+    <div class="options-section">
+      <h3 id="sizeTitle">Select Booth Size</h3>
+      <div class="size-grid" id="sizeGrid">
+        <button class="size-card selected" data-size="6m²" data-dim="3m × 2m">6m² <div class="size-dim">3m × 2m</div></button>
+        <button class="size-card" data-size="9m²" data-dim="3m × 3m">9m² <div class="size-dim">3m × 3m</div></button>
+        <button class="size-card" data-size="12m²" data-dim="4m × 3m">12m² <div class="size-dim">4m × 3m</div></button>
+        <button class="size-card" data-size="18m²" data-dim="6m × 3m">18m² <div class="size-dim">6m × 3m</div></button>
+        <button class="size-card" data-size="24m²" data-dim="6m × 4m">24m² <div class="size-dim">6m × 4m</div></button>
+        <button class="size-card" data-size="36m²" data-dim="6m × 6m">36m² <div class="size-dim">6m × 6m</div></button>
+      </div>
+    </div>
+
+    <!-- Interior Options (Panel Reveal) -->
+    <div class="options-section">
+      <h3>
+        <span id="interiorTitle">Interior Options</span>
+        <button class="t-accordion-header" id="toggleInterior" aria-expanded="true" style="background:none;border:none;color:var(--color-accent);cursor:pointer;font-size:0.875rem;">
+          <span id="toggleLabel">Hide</span>
+        </button>
+      </h3>
+      <div class="t-panel-reveal open" id="interiorPanel">
+        <div class="options-grid">
+          <label class="option-item active" data-option="lighting">
+            <input type="checkbox" checked hidden>
+            <span>💡</span>
+            <span id="optLighting">LED Lighting</span>
+          </label>
+          <label class="option-item active" data-option="furniture">
+            <input type="checkbox" checked hidden>
+            <span>🪑</span>
+            <span id="optFurniture">Furniture</span>
+          </label>
+          <label class="option-item" data-option="av">
+            <input type="checkbox" hidden>
+            <span>🖥️</span>
+            <span id="optAV">AV Equipment</span>
+          </label>
+          <label class="option-item" data-option="catering">
+            <input type="checkbox" hidden>
+            <span>🍽️</span>
+            <span id="optCatering">Catering</span>
+          </label>
+          <label class="option-item" data-option="signage">
+            <input type="checkbox" hidden>
+            <span>📋</span>
+            <span id="optSignage">Signage</span>
+          </label>
+          <label class="option-item" data-option="staff">
+            <input type="checkbox" hidden>
+            <span>👤</span>
+            <span id="optStaff">Staff Area</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alert Demo -->
+    <div class="alert-demo">
+      <button id="showToastBtn">Show Notification</button>
+      <div class="badge-demo">
+        <span id="alertStatus">Status: Ready</span>
+        <span class="badge t-notification-badge">3</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer" aria-live="polite"></div>
+
+  <script>
+    // --- 3D Tilt Effect ---
+    const booth3d = document.getElementById('booth3d');
+    booth3d.addEventListener('mousemove', (e) => {
+      const rect = booth3d.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width;
+      const y = (e.clientY - rect.top) / rect.height;
+      const rotateY = (x - 0.5) * 10;
+      const rotateX = (0.5 - y) * 6;
+      booth3d.style.transform = `rotateY(${rotateY}deg) rotateX(${rotateX}deg)`;
+    });
+    booth3d.addEventListener('mouseleave', () => {
+      booth3d.style.transform = 'rotateY(0deg) rotateX(0deg)';
+    });
+
+    // --- Booth Size Selection ---
+    const sizeCards = document.querySelectorAll('.size-card');
+    const sizeBadge = document.getElementById('sizeBadge');
+    const boothLabel = document.querySelector('.booth-label');
+    const boothDims = document.getElementById('boothDims');
+
+    sizeCards.forEach(card => {
+      card.addEventListener('click', () => {
+        sizeCards.forEach(c => c.classList.remove('selected'));
+        card.classList.add('selected');
+        const size = card.dataset.size;
+        const dim = card.dataset.dim;
+        sizeBadge.textContent = size;
+        boothLabel.textContent = size;
+        boothDims.textContent = dim;
+      });
+    });
+
+    // --- Panel Reveal Toggle ---
+    const toggleInterior = document.getElementById('toggleInterior');
+    const interiorPanel = document.getElementById('interiorPanel');
+    const toggleLabel = document.getElementById('toggleLabel');
+
+    toggleInterior.addEventListener('click', () => {
+      const isOpen = interiorPanel.classList.toggle('open');
+      toggleInterior.setAttribute('aria-expanded', isOpen);
+      toggleLabel.textContent = isOpen ? 'Hide' : 'Show';
+    });
+
+    // --- Interior Option Toggle ---
+    document.querySelectorAll('.option-item').forEach(item => {
+      item.addEventListener('click', () => {
+        item.classList.toggle('active');
+        const cb = item.querySelector('input[type="checkbox"]');
+        if (cb) cb.checked = item.classList.contains('active');
+      });
+    });
+
+    // --- Language Toggle ---
+    const langToggle = document.getElementById('langToggle');
+    const i18nMap = {
+      en: {
+        heroTitle: 'Interactive Booth Preview',
+        heroSubtitle: 'Experience your exhibition booth in 3D before you build it',
+        previewTitle: 'Booth Preview',
+        sizeTitle: 'Select Booth Size',
+        interiorTitle: 'Interior Options',
+        toggleLabel: 'Hide',
+        optLighting: 'LED Lighting',
+        optFurniture: 'Furniture',
+        optAV: 'AV Equipment',
+        optCatering: 'Catering',
+        optSignage: 'Signage',
+        optStaff: 'Staff Area',
+        lblExhibits: 'Exhibits',
+        lblVisitors: 'Visitors',
+        lblCountries: 'Countries',
+        alertStatus: 'Status: Ready',
+      },
+      ja: {
+        heroTitle: 'インタラクティブ ブースプレビュー',
+        heroSubtitle: '構築前に展示ブースを3Dで体験',
+        previewTitle: 'ブースプレビュー',
+        sizeTitle: 'ブースサイズを選択',
+        interiorTitle: '内装オプション',
+        toggleLabel: '非表示',
+        optLighting: 'LED照明',
+        optFurniture: '家具',
+        optAV: 'AV機器',
+        optCatering: 'ケータリング',
+        optSignage: ' signage',
+        optStaff: 'スタッフエリア',
+        lblExhibits: '出展数',
+        lblVisitors: '来場者',
+        lblCountries: '参加国',
+        alertStatus: 'ステータス: 準備完了',
+      }
+    };
+
+    let currentLang = 'en';
+    langToggle.addEventListener('click', () => {
+      const isOn = langToggle.classList.toggle('on');
+      langToggle.setAttribute('aria-checked', isOn);
+      currentLang = isOn ? 'ja' : 'en';
+      const dict = i18nMap[currentLang];
+      for (const [id, text] of Object.entries(dict)) {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
+      }
+    });
+
+    // --- Toast Notification ---
+    const showToastBtn = document.getElementById('showToastBtn');
+    const toastContainer = document.getElementById('toastContainer');
+    let toastCount = 3;
+
+    showToastBtn.addEventListener('click', () => {
+      const toast = document.createElement('div');
+      toast.className = 'demo-toast t-toast open';
+      toast.textContent = `Booth update #${++toastCount}`;
+      toastContainer.appendChild(toast);
+      document.querySelector('.badge').textContent = toastCount;
+
+      setTimeout(() => {
+        toast.classList.remove('open');
+        toast.classList.add('closing');
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    });
+
+    // --- Number Pop-in Animation ---
+    const statValues = document.querySelectorAll('.stat-value');
+    statValues.forEach((el, i) => {
+      setTimeout(() => {
+        el.classList.remove('visible');
+        el.classList.add('entering');
+        requestAnimationFrame(() => {
+          el.classList.remove('entering');
+          el.classList.add('visible');
+        });
+      }, 300 + i * 200);
+    });
+  </script>
+</body>
+</html>

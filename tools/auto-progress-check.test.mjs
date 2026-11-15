@@ -4,7 +4,7 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import test, { after } from 'node:test';
-import { addCheck } from './auto-progress.mjs';
+import { addCheck, main } from './auto-progress.mjs';
 import { executeCheck, preflightCheck, hasBashEnvExpansion, hasCheckError, CHECK_ERROR_PATTERNS, resolveCheckShell, CHECK_TIMEOUT_MS, MAX_CHECK_TIMEOUT_MS, pendingAction } from './auto-progress-check.mjs';
 import { readLedger, writeLedger, ledgerFile } from './auto-progress-ledger.mjs';
 import { run as watch } from './auto-progress-watch.mjs';
@@ -17,15 +17,20 @@ after(() => homes.forEach(home => fs.rmSync(home, { recursive: true, force: true
 const now = Date.parse('2026-10-23T00:00:00Z');
 const register = home => addCheck({ home, now, session: 'session', check: 'node check.mjs', label: '着信確認', deadline: '+24h' });
 const baseIo = { sheetConfig: () => null, digest: async () => ({}), resume: () => assert.fail('check must not resume'), askLlm: () => assert.fail('check must not infer') };
-test('CLI validates deadline, preserves promise and registers a new revision', () => {
+test('CLI validates deadline, replaces promise with label and registers a new revision', () => {
   const home = tmp();
   writeLedger(ledgerFile(home), [{ ts: new Date(now - 1).toISOString(), sessionId: 'session', status: 'open', promise: '元の約束', owner: 'owner' }]);
   const row = register(home);
-  assert.equal(row.promise, '元の約束'); assert.equal(row.owner, 'owner');
+  assert.equal(row.promise, '着信確認'); assert.equal(row.owner, 'owner');
   assert.equal(row.deadlineAt, '2026-10-24T00:00:00.000Z');
   assert.equal(readLedger(ledgerFile(home))[0].status, 'superseded');
   assert.throws(() => addCheck({ home, session: 's', check: 'x', label: 'x', deadline: 'bad' }), /deadline/);
   assert.equal(readLedger(ledgerFile(home)).length, 2);
+});
+
+test('auto-progress refuses a send promise without a matching approval marker', t => {
+  const home = tmp();
+  assert.throws(() => addCheck({ session: 'send-without-approval', check: 'exit 1', deadline: '+1d', label: '準備完了', nextClaude: 'LINEへ送信する', home, probe: () => ({ code: 1 }) }), /社外送信は登録できません/);
 });
 test('watch: overdue keeps checking without a new registration and completes on evidence', async () => {
   const home = tmp(); register(home); let code = 1, checks = 0;
@@ -46,19 +51,21 @@ test('watch: overdue keeps checking without a new registration and completes on 
   assert.equal(row.status, 'done'); assert.equal(row.checkText, '確認結果\n本文は捨てる');
   assert.equal(listItems(home).filter(item => /check 達成/.test(item.text)).length, 1);
 });
-test('watch: 未達の Claude 作業は3時間ごとに1件の info に集約する', async () => {
-  const home = tmp(); register(home);
+test('watch: 未達は毎朝inboxに保存し、同じ内容の定期DMは送らない', async () => {
+  const home = tmp(); register(home); const messages = [];
   const io = { ...baseIo, executeCheck: () => ({ code: 1, text: '未達: まだ届いていません' }),
-    notifyOwner: () => assert.fail('進捗は kim-inbox へ集約する') };
-  for (const hour of [0, 1, 2]) await watch({ home, now: now + hour * 3600000, io });
-  assert.equal(listItems(home).length, 0);
-  for (const hour of [3, 6, 9]) await watch({ home, now: now + hour * 3600000, io });
-  const items = listItems(home);
-  assert.equal(items.length, 1); assert.equal(items[0].repeatCount, 3);
-  assert.match(items[0].text, /未達: まだ届いていません/);
+    notifyOwner: async (_, text) => { messages.push(text); return { delivered: 'dm' }; } };
+  for (const hours of [0, 1, 6, 7, 12]) await watch({ home, now: now + hours * 3600000, io });
+  assert.equal(messages.length, 0);
+  const daily = listItems(home).filter(item => item.dailyProgress);
+  assert.equal(daily.length, 1); assert.match(daily[0].text, /未達: まだ届いていません/);
+  assert.equal(readLedger(ledgerFile(home))[0].lastCheckOutput, '未達: まだ届いていません');
+  await watch({ home, now: now + 24 * 3600000, io });
+  assert.equal(messages.length, 0);
+  assert.equal(readLedger(ledgerFile(home))[0].status, 'overdue');
+  assert.equal(listItems(home).filter(item => item.source === 'auto-progress-heartbeat').length, 1);
 });
-
-test('watch: failed completion delivery retries without running check again; dry run has no side effects', async () => {
+  test('watch: failed completion delivery retries without running check again; dry run has no side effects', async () => {
   const home = tmp(); register(home); let checks = 0, sends = 0;
   const io = { ...baseIo, executeCheck: () => { checks++; return { code: 0, text: '完了' }; },
     notifyOwner: () => assert.fail('completion must not use Discord'),
@@ -69,18 +76,16 @@ test('watch: failed completion delivery retries without running check again; dry
   await watch({ home, now, io }); await watch({ home, now, io }); await watch({ home, now, io });
   assert.equal(checks, 1); assert.equal(sends, 2);
 });
-test('check errors remain open and are included in periodic info without duplicates', async () => {
-  const home = tmp(); register(home);
-  const io = { ...baseIo, executeCheck: () => ({ code: 2, text: '実行エラー' }), notifyOwner: () => assert.fail('periodic inbox only') };
-  await watch({ home, now, io });
-  await watch({ home, now: now + 3 * 3600000, io });
-  await watch({ home, now: now + 3 * 3600000, io });
-  assert.equal(listItems(home).length, 1); assert.match(listItems(home)[0].text, /実行エラー/);
+test('check errors do not mark done; repeated errors notify once', async () => {
+  const home = tmp(); register(home); const messages = [];
+  const io = { ...baseIo, executeCheck: () => ({ code: 2, text: '実行エラー' }), notifyOwner: async (_, text) => { messages.push(text); return { delivered: 'dm' }; } };
+  await watch({ home, now, io }); await watch({ home, now, io });
+  assert.equal(messages.length, 1); assert.match(messages[0], /確認処理エラー: 着信確認 実行エラー/);
   assert.equal(readLedger(ledgerFile(home))[0].status, 'open');
 });
 test('executeCheck honors exit contract, full output and bounded execution', () => {
   const command = `"${process.execPath}" -e "console.log('first');console.log('second');process.exit(1)"`;
-  assert.deepEqual(executeCheck({ check: command }, { home: tmp() }), { code: 1, text: 'first\nsecond', stderr: '' });
+  assert.deepEqual(executeCheck({ check: command }, { home: tmp() }), { code: 1, stdout: 'first\nsecond\n', text: 'first\nsecond', stderr: '' });
   const result = executeCheck({ check: 'anything' }, { home: tmp(), shellPath: null, spawnImpl: (_, options) => {
     assert.equal(options.timeout, CHECK_TIMEOUT_MS); assert.equal(options.windowsHide, true);
     return { status: null, error: new Error('timeout'), stdout: '' };
@@ -109,7 +114,16 @@ test('addCheck --timeout stores checkTimeoutMs, probes with it, and rejects out-
   assert.equal(row.checkTimeoutMs, 180000); assert.deepEqual(probed, [180000]);
   assert.equal(readLedger(ledgerFile(home)).at(-1).checkTimeoutMs, 180000);
   assert.equal('checkTimeoutMs' in addCheck({ home, now, session: 'plain', check: 'x', label: 'x', deadline: '+24h' }), false);
-  for (const timeout of ['0', '301', 'soon']) assert.throws(() => addCheck({ home, now, session: 'bad', check: 'x', label: 'x', deadline: '+24h', timeout }), /--timeout/);
+  for (const timeout of ['0', 'soon']) assert.throws(() => addCheck({ home, now, session: 'bad', check: 'x', label: 'x', deadline: '+24h', timeout }), /--timeout/);
+});
+
+test('addCheck --timeout は MAX_CHECK_TIMEOUT_MS を超える値を上限に丸める', () => {
+  const home = tmp(), probed = [];
+  const clamped = addCheck({ home, now, session: 'clamped', check: 'x', label: '超過 test', deadline: '+24h', timeout: '999',
+    probe: r => { probed.push(r.checkTimeoutMs); return { code: 1, text: '未達' }; } });
+  assert.equal(clamped.checkTimeoutMs, MAX_CHECK_TIMEOUT_MS);
+  assert.deepEqual(probed, [MAX_CHECK_TIMEOUT_MS]);
+  assert.equal(readLedger(ledgerFile(home)).at(-1).checkTimeoutMs, MAX_CHECK_TIMEOUT_MS);
 });
 test('WeChat counts current/previous month only, inclusive since, ignores empty/invalid/unrelated data without exposing text', () => {
   const home = tmp(), dir = path.join(home, '.claude', 'line-openchat'); fs.mkdirSync(dir, { recursive: true });
@@ -152,8 +166,8 @@ test('digest: hundreds of rows across three categories are all delivered in 1800
   assert.equal(messages.length, 1);
   assert.match(messages[0], /完了 67件/);
   assert.match(messages[0], /あなたの返事待ち/);
-  assert.ok(messages[0].split('\n').length <= 10);
-  assert.ok(messages[0].length <= 1800);
+  assert.match(messages[0], /ほか 190件/);
+  assert.equal((messages[0].match(/nextKim:/g) || []).length, 10);
   assert.equal((await digest({ home, now: now + 3600000, slot: '朝', io })).sent, false);
 });
 
@@ -178,7 +192,7 @@ test('executeCheck invokes explicit Bash without shell and preserves execution o
     assert.equal(opts.timeout, CHECK_TIMEOUT_MS); assert.equal(opts.maxBuffer, 64 * 1024);
     assert.equal(opts.windowsHide, true); assert.equal(opts.encoding, 'utf8'); assert.equal(opts.env.ORGIAST_HOME, home);
     return { status: 1, stdout: '' };
-  } }), { code: 1, text: '未達', stderr: '' });
+  } }), { code: 1, stdout: '', text: '未達', stderr: '' });
 });
 test('executeCheck with null shell retains the shell:true invocation', () => {
   executeCheck({ check: 'check command' }, { shellPath: null, spawnImpl: (...args) => {
@@ -340,3 +354,111 @@ test('hasBashEnvExpansion / hasCheckError は期待どおり判定する', () =>
   assert.equal(hasCheckError('ok'), false);
   assert.equal(CHECK_ERROR_PATTERNS.length >= 5, true);
 });
+
+test('preflightCheck: タイムアウトは trial_timeout として通す', () => {
+  const home = tmp();
+  const pf = preflightCheck({ check: 'slow-command', checkTimeoutMs: 100 }, { home,
+    spawnImpl: () => ({ status: null, error: Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' }), stdout: '', stderr: '' }) });
+  assert.equal(pf.ok, true);
+  assert.equal(pf.preflight, 'trial_timeout');
+  assert.match(pf.text, /上限を超えました/);
+});
+
+test('preflightCheck: コマンド不在など構文エラーは trial ではなく exec_error で拒否', () => {
+  const home = tmp();
+  assert.equal(preflightCheck({ check: 'nonexistent-command-that-fails' }, { home }).preflight, 'exec_error');
+  const pf = preflightCheck({ check: 'exit 127' }, { home, spawnImpl: () => ({ status: 127, stdout: '', stderr: 'command not found' }) });
+  assert.equal(pf.ok, false);
+  assert.equal(pf.preflight, 'exec_error');
+});
+
+
+test('preflightCheck: scratchpad・.scratch・tmp を読むスクリプトは実行前に拒否する', () => {
+  const home = tmp();
+  const references = [
+    'C:/Users/test/AppData/Local/Temp/claude/session/scratchpad/state.json',
+    String.raw`C:\Users\test\APPDATA\LOCAL\TEMP\CLAUDE\session\state.json`,
+    String.raw`C:\\Users\\test\\NIGHTLY-REPO\\.SCRATCH\\state.json`,
+    '/TMP/session/state.json',
+  ];
+  for (const extension of ['mjs', 'js', 'ps1', 'py']) {
+    const file = `check state.${extension}`;
+    for (const reference of references) {
+      fs.writeFileSync(path.join(home, file), `readFile(${JSON.stringify(reference)})`);
+      for (const quote of ['"', "'"]) {
+        const result = preflightCheck({ check: `node ${quote}${file}${quote}`, checkCwd: home }, { home, forceCheck: true });
+        assert.equal(result.ok, false, `${extension}: ${reference}`);
+        assert.equal(result.preflight, 'session_state');
+        assert.match(result.text, /外部の一次情報/);
+        assert.match(result.text, /2026-11-06 実害/);
+      }
+    }
+  }
+});
+
+test('preflightCheck: 公開 URL を fetch するだけのスクリプトは通る', () => {
+  const home = tmp(), file = path.join(home, 'public-check.mjs');
+  fs.writeFileSync(file, "const response = await fetch('https://example.com/jobs'); process.exit(response.ok ? 0 : 1);\n");
+  // Stub only the HTTP transport so the test does not depend on network availability.
+  const stub = 'data:text/javascript,globalThis.fetch=async()=>({ok:false})';
+  const result = preflightCheck({ check: `"${process.execPath}" --import "${stub}" "${file}"` }, { home });
+  assert.equal(result.ok, true, result.text);
+  assert.equal(result.preflight, 'unmet');
+});
+
+test('CLI: --allow-session-state だけが中間状態の検査を解除する', () => {
+  const home = tmp(), file = path.join(home, 'session-check.mjs');
+  fs.writeFileSync(file, "import fs from 'node:fs'; try { fs.readFileSync('/tmp/auto-progress-missing-state.json'); } catch {} process.exit(1);\n");
+  const args = ['--add-check', '--session', 'session-state', '--check', `"${process.execPath}" "${file}"`, '--deadline', '+24h', '--label', '中間状態確認'];
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  try {
+    for (const flags of [[], ['--force-check']]) {
+      assert.throws(() => main([...args, ...flags]), /セッションが落ちると/);
+      assert.equal(readLedger(ledgerFile(home)).length, 0);
+    }
+    assert.equal(main([...args, '--allow-session-state']).sessionId, 'session-state');
+    assert.equal(readLedger(ledgerFile(home)).length, 1);
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+  }
+});
+
+
+test('CLI: --force-check は $env: を含む未達の check の静的検査を飛ばして登録する', () => {
+  const home = tmp();
+  const check = `"${process.execPath}" -e "process.exit(1)" "$env:USERPROFILE"`;
+  const args = ['--add-check', '--session', 'force-unmet', '--check', check, '--deadline', '+24h', '--label', '未達の確認'];
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  try {
+    assert.equal(hasBashEnvExpansion(check), true);
+    assert.throws(() => main(args), /\$env:/);
+    assert.equal(readLedger(ledgerFile(home)).length, 0);
+    const row = main([...args, '--force-check']);
+    assert.equal(row.status, 'open');
+    assert.equal(readLedger(ledgerFile(home)).length, 1);
+    assert.equal(readLedger(ledgerFile(home))[0].check, check);
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+  }
+});
+
+test('CLI: --force-check だけでは scratchpad 参照を登録できない', () => {
+  const home = tmp(), file = path.join(home, 'scratchpad-check.mjs');
+  fs.writeFileSync(file, "import fs from 'node:fs'; fs.writeFileSync(new URL('./executed', import.meta.url), 'called'); fs.readFileSync('C:/Users/test/AppData/Local/Temp/claude/session/scratchpad/state.json'); process.exit(1);\n");
+  const previousHome = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  try {
+    assert.throws(() => main(['--add-check', '--force-check', '--session', 'force-scratchpad', '--check', `"${process.execPath}" "${file}"`, '--deadline', '+24h', '--label', '中間状態確認']), /セッションが落ちると/);
+    assert.equal(readLedger(ledgerFile(home)).length, 0);
+    assert.equal(fs.existsSync(path.join(home, 'executed')), false);
+  } finally {
+    if (previousHome === undefined) delete process.env.ORGIAST_HOME;
+    else process.env.ORGIAST_HOME = previousHome;
+  }
+});
+
+process.env.ORGIAST_AUTO_RESUME = '1';

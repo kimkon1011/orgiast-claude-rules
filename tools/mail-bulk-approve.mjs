@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { ensureKimEditor } from './lib/kim-editor.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -64,10 +65,10 @@ export async function createBulkApproval(items, { projectDir, authFile = path.jo
   const sheet = await json(token, 'https://sheets.googleapis.com/v4/spreadsheets', 'POST', { properties: { title: payload.title }, sheets: [{ properties: { sheetId: 0, title: '送信承認', gridProperties: { frozenRowCount: 1, rowCount: Math.max(100, payload.rows.length), columnCount: 8 } }, data: [{ rowData: payload.rows.map(r => ({ values: r.map(cell) })) }] }] });
   const id = sheet.spreadsheetId;
   if (!id) throw new Error('シートIDを取得できません');
+  await ensureKimEditor(id, { actingUser: ACCOUNT, token, api, created: true });
   fs.mkdirSync(projectDir, { recursive: true });
   fs.writeFileSync(path.join(projectDir, 'approval-sheet.json'), JSON.stringify({ spreadsheetId: id, title: payload.title }, null, 2) + '\n');
   await json(token, `https://sheets.googleapis.com/v4/spreadsheets/${id}:batchUpdate`, 'POST', { requests: [{ setDataValidation: { range: { sheetId: 0, startRowIndex: 1, endRowIndex: payload.rows.length, startColumnIndex: 5, endColumnIndex: 6 }, rule: { condition: { type: 'BOOLEAN' }, strict: true, showCustomUi: true } } }] });
-  await json(token, `https://www.googleapis.com/drive/v3/files/${id}/permissions?sendNotificationEmail=false`, 'POST', { type: 'user', role: 'writer', emailAddress: 'kim@orgiast.jp' });
   const readback = await json(token, `https://sheets.googleapis.com/v4/spreadsheets/${id}/values/${encodeURIComponent('送信承認!A1:H' + payload.rows.length)}?valueRenderOption=UNFORMATTED_VALUE`);
   if (JSON.stringify(readback.values?.map(r => Array.from({length: 8}, (_, i) => r[i] ?? ''))) !== JSON.stringify(payload.rows)) throw new Error('シート本文の読み戻し不一致');
   const project = await json(oauth, 'https://script.googleapis.com/v1/projects', 'POST', { title: payload.title, parentId: id });

@@ -40,9 +40,13 @@ test('Claude Code タブが無いときは Open、既にあれば New Conversati
 });
 
 const { orderMobileOpenMethods, newRetryState, canAttemptMobileOpen, recordMobileOpenAttempt } = require('./route');
-test('open methods are ordered with the last good one first', () => {
-  assert.deepEqual(orderMobileOpenMethods(undefined), ['newConversation', 'editorOpen', 'externalUri']);
-  assert.deepEqual(orderMobileOpenMethods('externalUri'), ['externalUri', 'newConversation', 'editorOpen']);
+test('orderMobileOpenMethods: どの入力でも externalUri だけを返す（補充は常に安全な手段）', () => {
+  for (const input of [undefined, null, '', 'unknown', 0, false, {}, [], Symbol('method')]) {
+    assert.deepEqual(orderMobileOpenMethods(input), ['externalUri']);
+  }
+  assert.deepEqual(orderMobileOpenMethods('externalUri'), ['externalUri']);
+  assert.deepEqual(orderMobileOpenMethods('editorOpen'), ['externalUri']);
+  assert.deepEqual(orderMobileOpenMethods('newConversation'), ['externalUri']);
 });
 test('retry policy: cooldown, pause, success resets', () => {
   let state = newRetryState();

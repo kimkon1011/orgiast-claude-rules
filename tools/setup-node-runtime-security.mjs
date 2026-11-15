@@ -52,6 +52,12 @@ function readVersion(output) {
 }
 const brief = (error) => String(error?.message || error).split(/\r?\n/)[0];
 
+// 実コンソール（人が実行する対話セッション）のときだけ true。hook・スケジュール・自動セッションなど
+// stdout がパイプ/リダイレクトされる無人実行では false。特殊環境・テストは環境変数で強制できる。
+export function isInteractiveConsole() {
+  return Boolean(process.stdout.isTTY) || process.env.ORGIAST_NODE_UPDATER_UAC_INTERACTIVE === '1';
+}
+
 export function windowsInstallCommand(msi, log) {
   // Start-Process joins array elements without quoting them; use one quoted argument string.
   return `/i "${msi}" /qn /norestart /l*v "${log}"`;
@@ -176,6 +182,13 @@ async function windowsRuntime(io, releases) {
   const resultLog = path.join(io.home, '.claude', 'logs', 'node-update.log');
   await io.fs.mkdir(desktop, { recursive: true });
   await io.fs.writeFile(launcher, buildFallbackCmd({ msi, digest, target, log, resultLog }), 'utf8');
+  // 非昇格のまま auto 起動すると UAC 昇格プロンプトが出る。setup --converge は SessionStart hook からも
+  // 走るため、人がコンソールにいない無人実行（hook・スケジュール・自動セッション）では絶対に起動しない
+  // （型: 無人ジョブが UAC 必須インストールを起動し確認画面を溜める）。人は launcher のダブルクリックで更新。
+  if (!isInteractiveConsole()) {
+    await recordAttempt();
+    return { notice: true, text: `Windows ${current}: 非昇格の無人実行のため自動更新をスキップ（UAC を出さない）。${launcher} をダブルクリック→UAC「はい」で更新。結果: ${resultLog}`, repaired: false };
+  }
   const deadline = io.now() + 60_000;
   let actual = current;
   try {

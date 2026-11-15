@@ -86,6 +86,11 @@ export function detectFailedJob(rows, now = Date.now()) {
   return [...latest].flatMap(([id, r]) => {
     if (!Number.isFinite(new Date(r.t).getTime()) || r.running || r.status == null || Number(r.status) === 0 || ['ok', 'success', 'fallback', 'cooldown', 'deferred'].includes(String(r.status).toLowerCase()) || [267009, 267011].includes(Number(r.status))) return [];
     if (!Number.isFinite(Number(r.status)) && !/^(?:error|failed|failure|unusable|no-cheap-executor|http_[45]\d\d)$/.test(String(r.status))) return [];
+    // ジョブ付帯の無いプロバイダ単位のLLM呼び出し行(executor-usageのgroq等)で直近が http_429 の場合は
+    // RPD・TPM 等のレート上限到達による一時的な流量制限であり、ジョブ失敗ではない(2026-11-07 確定、
+    // `groq:不明` アーティファクト)。フォールバックチェーンが負荷を吸収するため再実行対象にしない。
+    // 実ジョブ(taskName/job/cwd 付帯)の http_429 は従来どおり失敗として拾う。
+    if (r.taskName == null && r.job == null && r.cwd == null && /^http_429$/.test(String(r.status))) return [];
     return [item('failed_job', id, `実行失敗: ${id}`, r.location || r.cwd || id, age(r.t, now), 'Codexで原因を調査して安全に再実行',
       `直近の終了コード ${r.status}`, { cwd: localPath(r.cwd), taskName: r.taskName, eventTime: r.t })];
   });

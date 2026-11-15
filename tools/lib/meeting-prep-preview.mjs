@@ -30,6 +30,18 @@ export function createApplyPreview(source) {
         documents.set(id, { revisionId: 'preview', body: { content: [] } });
         mutations.push({ url, method, body: clone(body) }); return { id };
       }
+      const driveFile = /^\/drive\/v3\/files\/([^/]+)(\/permissions)?$/.exec(u.pathname);
+      if (u.hostname === 'www.googleapis.com' && driveFile && documents.has(driveFile[1])) {
+        const doc = documents.get(driveFile[1]);
+        if (!driveFile[2] && method === 'PATCH' && body?.properties?.orgiastAutomation === 'true') {
+          mutations.push({ url, method, body: clone(body) }); return { id: driveFile[1] };
+        }
+        if (driveFile[2] && method === 'GET') return { permissions: clone(doc.permissions || []) };
+        if (driveFile[2] && method === 'POST' && body?.emailAddress === 'kim@orgiast.jp' && body.role === 'writer') {
+          doc.permissions = [clone(body)]; mutations.push({ url, method, body: clone(body) }); return { id: 'preview-permission' };
+        }
+        throw new Error('apply-dry: unsupported document permission mutation');
+      }
       if (u.hostname === 'docs.googleapis.com') {
         const id = u.pathname.split('/')[3].replace(/:batchUpdate$/, '');
         if (!documents.has(id)) documents.set(id, clone(await source.request('documents', `https://docs.googleapis.com/v1/documents/${id}`)));

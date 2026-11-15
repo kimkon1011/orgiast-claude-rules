@@ -1,0 +1,15 @@
+{
+  "orgiast_domains": [
+    "https://orgiast.jp",
+    "https://rebooth.co.jp",
+    "https://orgiast-product.jp",
+    "https://event-shop.jp"
+  ],
+  "competitors": [],
+  "settings": {
+    "crawl_delay_s": 1.0,
+    "max_pages_per_site": 200,
+    "request_timeout_ms": 15000,
+    "user_agent": "OrgiastSEOAgent/1.0 (+https://orgiast.jp)"
+  }
+}

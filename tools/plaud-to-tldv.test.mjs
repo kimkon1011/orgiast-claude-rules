@@ -167,12 +167,12 @@ test('同じ通知は24時間に1回だけ送る(15分ごとに走るため)', (
 });
 
 test('通知本文は手順とコマンドを本文に含む(リンクを辿らせない)', () => {
-  const warn = renewalMessage('warning', 5);
+  const warn = renewalMessage('warning', 5, 'OTP timeout');
   assert.match(warn, /残り 5 日/);
   assert.match(warn, /https:\/\/web\.plaud\.ai/);
   assert.match(warn, /allow pasting/);
   assert.match(warn, /refresh-user-token/);
-  assert.match(renewalMessage('expired'), /停止しました/);
+  assert.match(renewalMessage('expired', 0, 'OTP timeout'), /停止しました/);
 });
 
 test('置き手紙は ~/.claude 配下に出す(セッション開始時に読ませるため)', () => {

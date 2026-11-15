@@ -133,7 +133,7 @@ test('deprioritizeUnreliableBackends: windowMs より古い行は数えない', 
   assert.deepEqual(result.map((b) => b.name), ['gemini-cli', 'openrouter-free']);
 });
 
-test('deprioritizeUnreliableBackends: 全 backend が低成功率なら元の相対順のまま', () => {
+test('deprioritizeUnreliableBackends: 全 backend が低成功率でも成功率順に並ぶ（a=0/11, b=3/11）', () => {
   const now = 1_000_000_000;
   const history = [
     { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
@@ -147,9 +147,9 @@ test('deprioritizeUnreliableBackends: 全 backend が低成功率なら元の相
     { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
     { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
     { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
-    { t: now - 3600 * 1000, backend: 'b', outcome: 'timeout' },
-    { t: now - 3600 * 1000, backend: 'b', outcome: 'timeout' },
-    { t: now - 3600 * 1000, backend: 'b', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'b', outcome: 'ok' },
+    { t: now - 3600 * 1000, backend: 'b', outcome: 'ok' },
+    { t: now - 3600 * 1000, backend: 'b', outcome: 'ok' },
     { t: now - 3600 * 1000, backend: 'b', outcome: 'timeout' },
     { t: now - 3600 * 1000, backend: 'b', outcome: 'timeout' },
     { t: now - 3600 * 1000, backend: 'b', outcome: 'timeout' },
@@ -161,7 +161,44 @@ test('deprioritizeUnreliableBackends: 全 backend が低成功率なら元の相
   ];
   const backends = [{ name: 'a' }, { name: 'b' }];
   const result = deprioritizeUnreliableBackends(backends, history, { now, windowMs: 7 * 24 * 3600 * 1000, minRuns: 10, minSuccessRate: 0.4 });
-  assert.deepEqual(result.map((b) => b.name), ['a', 'b']);
+  // b は 3/11=27%、a は 0/11=0%。b の方が成功率が高いので先に来る
+  assert.deepEqual(result.map((b) => b.name), ['b', 'a']);
+});
+
+test('deprioritizeUnreliableBackends: 全件低信頼でも runs<minRuns は成功率不明として低信頼群の前に置く', () => {
+  const now = 1_000_000_000;
+  const history = [
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'a', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'c', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'c', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'c', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'c', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'c', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'c', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'c', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'c', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'c', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'c', outcome: 'timeout' },
+    { t: now - 3600 * 1000, backend: 'c', outcome: 'timeout' },
+  ];
+  // b は runs=5 < minRuns=10 → 成功率不明
+  for (let i = 0; i < 5; i++) {
+    history.push({ t: now - 3600 * 1000, backend: 'b', outcome: 'timeout' });
+  }
+  const backends = [{ name: 'a' }, { name: 'b' }, { name: 'c' }];
+  const result = deprioritizeUnreliableBackends(backends, history, { now, windowMs: 7 * 24 * 3600 * 1000, minRuns: 10, minSuccessRate: 0.4 });
+  // b は成功率不明なので先頭、a(0/11) と c(0/11) は同率→安定ソートで元の順序
+  assert.deepEqual(result.map((b) => b.name), ['b', 'a', 'c']);
 });
 
 test('deprioritizeUnreliableBackends: 入力配列を破壊しない', () => {

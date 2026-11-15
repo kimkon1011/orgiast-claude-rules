@@ -1,0 +1,9 @@
+priority,keyword,intent,category,volume,difficulty,business_value,score,recommended_action
+1,展示会ブース制作,Commercial,展示会ブース制作,80,45,600000,1066667,新規記事作成
+2,イベント企画,Commercial,イベントプロデュース,60,35,600000,1028571,新規記事作成
+3,ブースデザイン,Commercial,展示会ブース制作,55,40,600000,825000,既存ページ改善
+4,SDGs展示ブース,Commercial,SDGs展示ブース,40,30,630000,840000,既存ページ改善
+5,リユースブース,Commercial,Reブース,25,20,600000,750000,既存ページ改善
+6,クリエイティブ制作,Commercial,クリエイティブ制作,30,50,250000,150000,監視
+7,周年記念イベント,Commercial,周年記念イベント,20,25,800000,640000,既存ページ改善
+8,株主総会運営,Commercial,株主総会,15,60,375000,93750,監視

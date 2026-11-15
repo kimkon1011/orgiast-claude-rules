@@ -1,0 +1,44 @@
+[
+  {
+    "domain": "https://orgiast.jp",
+    "pages": [
+      {
+        "url": "https://orgiast.jp/",
+        "title": "オージャスト | 展示会ブース制作・イベント企画",
+        "h1": "展示会ブース制作ならオージャスト",
+        "description": "展示会ブース制作・イベント企画のオージャスト"
+      },
+      {
+        "url": "https://orgiast.jp/service",
+        "title": "サービス一覧 | オージャスト",
+        "h1": "サービス一覧",
+        "description": "展示会ブース制作、Reブース、イベントプロデュース"
+      },
+      {
+        "url": "https://orgiast.jp/service/booth",
+        "title": "展示会ブース制作 | オージャスト",
+        "h1": "展示会ブース制作",
+        "description": "企画・デザイン・施工・運営までトータルサポート"
+      }
+    ]
+  },
+  {
+    "domain": "https://rebooth.co.jp",
+    "pages": [
+      {
+        "url": "https://rebooth.co.jp/",
+        "title": "Reブース | リユース展示会ブース",
+        "h1": "Reブース - サステナブルな展示会ブース",
+        "description": "SDGsに対応したリユース展示会ブースのレンタル・販売"
+      }
+    ]
+  },
+  {
+    "domain": "https://orgiast-product.jp",
+    "pages": []
+  },
+  {
+    "domain": "https://event-shop.jp",
+    "pages": []
+  }
+]

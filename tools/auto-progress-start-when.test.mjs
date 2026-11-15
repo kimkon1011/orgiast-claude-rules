@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { addCheck, isTimeOnlyCheck, main } from './auto-progress.mjs';
-import { run as runWatch, resumeSession, MAX_RESUMES_PER_RUN, migrateTimeOnlyChecks, migrateLegacyAddChecks, TIME_ONLY_REASON, LEGACY_ADD_CHECK_REASON } from './auto-progress-watch.mjs';
+import { run as runWatch, resumeSession, MAX_RESUMES_PER_RUN, MAX_RESUMES, migrateTimeOnlyChecks, migrateLegacyAddChecks, TIME_ONLY_REASON, LEGACY_ADD_CHECK_REASON } from './auto-progress-watch.mjs';
 import { ledgerFile, readLedger, writeLedger, applyPromise } from './auto-progress-ledger.mjs';
 import { formatDigest, run as digest } from './auto-progress-digest.mjs';
 import { listItems } from './kim-inbox.mjs';
@@ -122,7 +122,7 @@ test('予約登録とprobe、必須引数、Stop更新で予約を保持する',
     assert.equal(main(['--start-when', 'exit 0', '--session', 'cli', '--label', 'CLI予約', '--deadline', '+24h', '--next-claude', '作業する']).status, 'scheduled');
   } finally { if (previous === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = previous; }
 });
-test('開始条件未達はlastCheckedAtだけ更新し、条件達成だけでは完了しない', async t => {
+test('開始条件未達は確認時刻と判定を更新し、条件達成だけでは完了しない', async t => {
   for (const code of [1, 0]) {
     const { options, home } = setup(t); const original = addCheck(options); let resumes = 0;
     await run({ home, now, io: { ...ioBase, executeCheck: () => ({ code }),
@@ -133,7 +133,7 @@ test('開始条件未達はlastCheckedAtだけ更新し、条件達成だけで�
     const row = readLedger(ledgerFile(home))[0];
     assert.equal(resumes, code === 0 ? 1 : 0);
     assert.equal(row.status, code === 0 ? 'open' : 'scheduled');
-    if (code === 1) assert.deepEqual(row, { ...original, lastCheckedAt: new Date(now).toISOString() });
+    if (code === 1) assert.deepEqual(row, { ...original, lastCheckedAt: new Date(now).toISOString(), checkResult: 'unmet' });
   }
 });
 test('deferredは回数を消費せず次回再試行、doneで完了通知は一度だけ', async t => {
@@ -196,12 +196,51 @@ test('静穏時間（JST 01:00）でも開始条件を確かめ、満たせば�
   assert.equal(readLedger(ledgerFile(home)).at(-1).status, 'open');
 });
 test('期限超過は開始せず起票・通知し、再巡回で重複通知しない', async t => {
-  const { options, home } = setup(t); addCheck(options); let notices = 0;
+  const { options, home } = setup(t); addCheck(options);
+  // nextKim に値を入れて再開しないことを確認
+  const pre = readLedger(ledgerFile(home));
+  pre[0].nextKim = 'kim が承認する';
+  writeLedger(ledgerFile(home), pre);
+  let notices = 0;
   const io = { ...ioBase, executeCheck: () => assert.fail('期限超過'), resume: () => assert.fail('期限超過'),
     notifyOwner: async () => { notices++; return { delivered: 'dm' }; } };
   for (let i = 0; i < 2; i++) await run({ home, now: now + 10 * 86400000, io });
   assert.equal(readLedger(ledgerFile(home))[0].status, 'start_overdue'); assert.equal(notices, 1);
   assert.match(fs.readFileSync(path.join(home, '.claude', 'next-session.md'), 'utf8'), /成果物を作って検証する/);
+});
+test('期限超過・nextKim なしの予約行は再開を試み start_overdue にならない', async t => {
+  const { options, home } = setup(t); addCheck(options);
+  let resumeCalls = 0; const notices = [];
+  const io = { ...ioBase, executeCheck: () => assert.fail('期限超過でcheck不要'),
+    resume: async (row, opts) => { resumeCalls++; assert.equal(opts.reason, 'start-overdue'); return { outcome: 'progressed', state: 'progressed', reason: '着手した' }; },
+    notifyOwner: async (_owner, text, _opts) => { notices.push(text); return { delivered: 'dm' }; } };
+  await run({ home, now: now + 10 * 86400000, io });
+  assert.equal(resumeCalls, 1);
+  assert.notEqual(readLedger(ledgerFile(home))[0].status, 'start_overdue');
+  assert.ok(notices.some(text => /期限を過ぎた自動進行を再開しました/.test(text)));
+});
+test('期限超過・nextKim に値がある予約行は再開せず start_overdue になる', async t => {
+  const { options, home } = setup(t); addCheck(options);
+  const pre = readLedger(ledgerFile(home));
+  pre[0].nextKim = 'kim が承認する';
+  writeLedger(ledgerFile(home), pre);
+  const io = { ...ioBase, executeCheck: () => assert.fail('期限超過'),
+    resume: () => assert.fail('nextKim ありでは再開しない'),
+    notifyOwner: async () => { return { delivered: 'dm' }; } };
+  await run({ home, now: now + 10 * 86400000, io });
+  assert.equal(readLedger(ledgerFile(home))[0].status, 'start_overdue');
+});
+test('期限超過・nextKim なしでも resumeCount 上限超過の予約行は start_overdue になる', async t => {
+  const { options, home } = setup(t); addCheck(options);
+  const pre = readLedger(ledgerFile(home));
+  pre[0].nextKim = 'なし';
+  pre[0].resumeCount = MAX_RESUMES;
+  writeLedger(ledgerFile(home), pre);
+  const io = { ...ioBase, executeCheck: () => assert.fail('期限超過'),
+    resume: () => assert.fail('resumeCount 上限で再開しない'),
+    notifyOwner: async () => { return { delivered: 'dm' }; } };
+  await run({ home, now: now + 10 * 86400000, io });
+  assert.equal(readLedger(ledgerFile(home))[0].status, 'start_overdue');
 });
 test('巡回あたりの起動上限を予約にも適用する', async t => {
   const { options, home } = setup(t);
@@ -226,7 +265,9 @@ test('定期digestに開始予約と期限超過が出る', async t => {
     const messages = [];
     await digest({ home, now: now + i * 86400000, slot: '朝', io: { localOwner: 'owner', notifyOwner: async (_, message) => { messages.push(message); return { delivered: 'dm' }; } } });
     // 2026-11-04 仕様変更: 予約も依頼された進行中の作業として朝夕1通に集約する。
-    assert.ok(messages.some(message => /進行中 1件.*予約作業/.test(message)));
+    assert.ok(messages.some(message => /進行中 1件[\s\S]*予約作業/.test(message)));
     assert.equal(messages.length, 1);
   }
 });
+
+process.env.ORGIAST_AUTO_RESUME = '1';

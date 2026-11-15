@@ -8,6 +8,7 @@ import { resolveFleetLabel } from './lib/fleet-label.mjs';
 import { parseEnvText } from './env-kv.mjs';
 import { HUB_LABEL } from './fleet-question-relay.mjs';
 import { isEntry } from './is-entry.mjs';
+import { successfulPollIsFresh } from './lib/fleet-poll-health.mjs';
 
 export const STALE_POLL_MS = 10 * 60 * 1000;
 export const HEALTHY_TASK_RESULTS = Object.freeze([0, 267009, 267011]);
@@ -63,8 +64,7 @@ export function configureFleetHub({ home, label = resolveFleetLabel(home) }) {
   return true;
 }
 export function pollIsFresh(home, now = Date.now) {
-  try { return now() - fs.statSync(path.join(home, '.claude', '.fleet-mail-last-poll.json')).mtimeMs <= STALE_POLL_MS; }
-  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  return successfulPollIsFresh(home, STALE_POLL_MS, now);
 }
 export function main({ home = process.env.ORGIAST_HOME || os.homedir(), platform = process.platform, spawnImpl = spawnSync, ensure = false, converge = false, quiet = false, now = Date.now, stdout = console.log } = {}) {
   const envPath = path.join(home, '.claude', 'fleet-sheet.env');

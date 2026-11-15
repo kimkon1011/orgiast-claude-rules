@@ -119,13 +119,44 @@ test('lock respects live/unknown owner and reclaims dead PID', t => {
 // chmod して再試行し、Windows ネイティブ git なら絶対パスのまま続行することを固定する。
 function worktreeFixture(t) {
   const home = temp(t), tree = path.join(home, '.claude', 'quota-sweep-repo');
-  const sharedPointer = path.join(home, '.claude', 'nightly-repo', '.git', 'worktrees', 'quota-sweep-repo');
+  const shared = path.join(home, '.claude', 'nightly-repo'), sharedPointer = path.join(shared, '.git', 'worktrees', 'quota-sweep-repo');
+  fs.mkdirSync(path.join(shared, '.git'), { recursive: true });
+  fs.writeFileSync(path.join(shared, '.git', 'HEAD'), 'ref: refs/heads/main\n');
   fs.mkdirSync(tree, { recursive: true });
   fs.writeFileSync(path.join(tree, '.git'), `gitdir: ${sharedPointer}\n`);
   const eperm = () => Object.assign(new Error('EPERM: operation not permitted, open'), { code: 'EPERM' });
   const run = (_exe, args) => args[0] === 'rev-parse' ? 'base' : '';
   return { home, tree, sharedPointer, eperm, run };
 }
+test('prepareTree は NUL 破損した shared HEAD を main ref の確認後に復元してから fetch する', t => {
+  const { home } = worktreeFixture(t), shared = path.join(home, '.claude', 'nightly-repo');
+  fs.mkdirSync(path.join(shared, '.git', 'refs', 'heads'), { recursive: true });
+  fs.writeFileSync(path.join(shared, '.git', 'HEAD'), Buffer.alloc(41));
+  fs.writeFileSync(path.join(shared, '.git', 'refs', 'heads', 'main'), `${'a'.repeat(40)}\n`);
+  const calls = [], logs = [];
+  prepareTree({ home, provider: 'codex', previous: null, log: text => logs.push(text), run: (_exe, args) => {
+    calls.push(args);
+    if (args[0] === 'rev-parse') return 'base';
+    return '';
+  } });
+  assert.equal(fs.readFileSync(path.join(shared, '.git', 'HEAD'), 'utf8'), 'ref: refs/heads/main\n');
+  assert.equal(calls[0][0], 'fetch');
+  assert.match(logs[0], /repaired invalid shared repository HEAD/);
+});
+test('prepareTree は local main が無ければ packed origin/main へ detached HEAD を復元する', t => {
+  const { home } = worktreeFixture(t), shared = path.join(home, '.claude', 'nightly-repo');
+  fs.mkdirSync(path.join(shared, '.git'), { recursive: true });
+  const head = path.join(shared, '.git', 'HEAD'); fs.writeFileSync(head, Buffer.alloc(41));
+  fs.writeFileSync(path.join(shared, '.git', 'packed-refs'), `${'b'.repeat(40)} refs/remotes/origin/main\n`);
+  prepareTree({ home, provider: 'codex', previous: null, run: (_exe, args) => args[0] === 'rev-parse' ? 'base' : '' });
+  assert.equal(fs.readFileSync(head, 'utf8'), `${'b'.repeat(40)}\n`);
+});
+test('prepareTree は main ref の裏付けがない壊れた shared HEAD を書き換えない', t => {
+  const { home } = worktreeFixture(t), shared = path.join(home, '.claude', 'nightly-repo');
+  const head = path.join(shared, '.git', 'HEAD'); fs.writeFileSync(head, Buffer.alloc(41));
+  assert.throws(() => prepareTree({ home, provider: 'codex', previous: null, run: () => assert.fail('fetch must not run') }), /no verified main ref/);
+  assert.deepEqual(fs.readFileSync(head), Buffer.alloc(41));
+});
 test('prepareTree は dirty を commit・push してから新ブランチへ進む', t => {
   const { home } = worktreeFixture(t); const calls = []; let statuses = 0;
   const run = (_exe, args) => {
@@ -825,7 +856,8 @@ test('createPullRequestViaApi は既存 PR を検出して再利用する', asyn
 test('relative pointer is not rewritten', t => {
   const home = temp(t), tree = path.join(home, '.claude/quota-sweep-repo'); fs.mkdirSync(tree, { recursive: true });
   prepareTree({ home, provider: 'claude', run: (_exe, args) => args[0] === 'status' ? '' : 'base', io: {
-    readFile: () => 'gitdir: ../nightly-repo/.git/worktrees/sweep\n', writeFile: () => assert.fail('rewrote relative pointer')
+    readFile: file => path.basename(file) === 'HEAD' ? 'ref: refs/heads/main\n' : 'gitdir: ../nightly-repo/.git/worktrees/sweep\n',
+    writeFile: () => assert.fail('rewrote relative pointer')
   } });
 });
 const rateLimited = (retryAfter) => ({ ok: false, status: 429, headers: { get: k => (k === 'retry-after' ? retryAfter : null) } });

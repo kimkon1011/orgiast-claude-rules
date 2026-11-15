@@ -1,10 +1,11 @@
 #!/usr/bin/env node
+import { ensureKimEditor } from './lib/kim-editor.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { getDriveToken } from './lib/drive-auth.mjs';
-import { gwsFetch } from './lib/gws-proxy.mjs';
+import { GWS_USER, gwsFetch } from './lib/gws-proxy.mjs';
 import { createSheetsClient, quoteTab } from './lib/sheets-dwd.mjs';
 import { parseSheetDate, jstDate, daysUntil, columnLetter } from './vehicle-inspection-watch.mjs';
 import { isEntry } from './is-entry.mjs';
@@ -56,17 +57,31 @@ export async function withLedgerLock(home, fn) {
 }
 export function googleClient({ getToken = getDriveToken, fetchImpl = gwsFetch } = {}) {
   const tokens = new Map();
-  return async function request(url, { user = 'kim@orgiast.jp', scope = 'https://www.googleapis.com/auth/drive', method = 'GET', body, text = false } = {}) {
-    const key = `${user}|${scope}`;
+  const tokenRoutes = new Map();
+  return async function request(url, { user = 'kim@orgiast.jp', scope = 'https://www.googleapis.com/auth/drive', method = 'GET', body, rawBody, contentType, text = false, buffer = false } = {}) {
+    const requestedKey = `${user}|${scope}`;
+    const key = tokenRoutes.get(requestedKey) || requestedKey;
     let token = tokens.get(key);
     if (!token || token.expires < Date.now()) {
-      token = { value: await getToken({ impersonate: user, scope, signal: AbortSignal.timeout(30000) }), expires: Date.now() + 45 * 60000 };
-      tokens.set(key, token);
+      let tokenUser = user;
+      let tokenScope = scope;
+      let value;
+      try { value = await getToken({ impersonate: tokenUser, scope: tokenScope, signal: AbortSignal.timeout(30000) }); }
+      catch (e) {
+        if (e.message !== `鍵なし経路は ${GWS_USER} 固定です`) throw e;
+        tokenUser = GWS_USER;
+        if (tokenScope === 'https://www.googleapis.com/auth/spreadsheets') tokenScope = 'https://www.googleapis.com/auth/drive';
+        value = await getToken({ impersonate: tokenUser, scope: tokenScope, signal: AbortSignal.timeout(30000) });
+      }
+      token = { value, expires: Date.now() + 45 * 60000 };
+      const tokenKey = `${tokenUser}|${tokenScope}`;
+      tokens.set(tokenKey, token);
+      tokenRoutes.set(requestedKey, tokenKey);
     }
-    const response = await fetchImpl(url, { method, headers: { Authorization: `Bearer ${token.value}`, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(30000) });
+    const response = await fetchImpl(url, { method, headers: { Authorization: `Bearer ${token.value}`, 'Content-Type': rawBody ? contentType : 'application/json' }, body: rawBody || (body ? JSON.stringify(body) : undefined), signal: AbortSignal.timeout(30000) });
     if (!response.ok) { const e = new Error(`Google ${method} HTTP ${response.status}`); e.status = response.status; throw e; }
     if (response.status === 204) return null;
-    return text ? response.text() : response.json();
+    return buffer ? Buffer.from(await response.arrayBuffer()) : text ? response.text() : response.json();
   };
 }
 export function parseRows(values, tab = '期限台帳') {
@@ -125,8 +140,10 @@ export async function initialize({ home = defaultHome(), sheets = createSheetsCl
     } });
     if (!created.spreadsheetId) throw new Error('期限台帳の作成応答にIDがありません');
     config.sheetId = created.spreadsheetId;
+
     // Persist immediately: partial sharing/header failure must reuse the same book.
     saveJson(dataPath(home, 'config.json'), config);
+    await ensureKimEditor(config.sheetId, { token: 'request-adapter', created: true, api: async (_token, url, options = {}) => { const value = await request(url, { method: options.method || 'GET', ...(options.body ? { body: JSON.parse(options.body) } : {}) }); return { json: async () => value }; } });
   }
   for (const tab of ['期限台帳','候補','使い方']) {
     const meta = await sheets.metadata(config.sheetId);

@@ -29,6 +29,8 @@ export function parseArgs(args) {
   return result;
 }
 export function validateConfig(config) {
+  config = { ...config, timeoutMs: config.timeoutMs === undefined ? 300000 : config.timeoutMs };
+  if (!Number.isSafeInteger(config.timeoutMs) || config.timeoutMs < 1 || config.timeoutMs > 2147483647) throw new Error('設定不正: timeoutMs');
   for (const key of ['maxCalls', 'maxOutputTokens']) if (!Number.isSafeInteger(config[key]) || config[key] < 1) throw new Error(`設定不正: ${key}`);
   for (const key of ['maxCostUsd', 'reservePerCallUsd', 'minLikes']) if (!Number.isFinite(config[key]) || config[key] <= 0) throw new Error(`設定不正: ${key}`);
   for (const key of ['inputPerMillion', 'outputPerMillion', 'post', 'profile']) if (!Number.isFinite(config.estimatedRates?.[key]) || config.estimatedRates[key] < 0) throw new Error(`設定不正: estimatedRates.${key}`);
@@ -130,6 +132,9 @@ export async function runCollect(options = {}) {
   try {
     if (!dryRun) { fs.mkdirSync(dir, { recursive: true }); const fd = fs.openSync(lock, 'wx'); fs.closeSync(fd); locked = true; }
     const state = validateState(JSON.parse(read(stateFile, '{}')));
+    const topicCount = config.topics.length;
+    if (!Number.isSafeInteger(state.nextTopicIndex) || state.nextTopicIndex < 0 || state.nextTopicIndex >= topicCount) state.nextTopicIndex = 0;
+    const startTopicIndex = state.nextTopicIndex;
     const date = japanDate(now);
     if (state.night?.date !== date) state.night = { date, calls: 0, costUsd: 0 };
     // 送信直前に予約する。配送後クラッシュでも同じ週に二重送信しない。
@@ -149,16 +154,27 @@ export async function runCollect(options = {}) {
     const limit = options.limit ?? config.maxCalls;
     if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('--limit は正の整数');
     const simulated = [];
-    for (const topic of config.topics.slice(0, limit)) {
+    let failedTopics = 0;
+    save(state);
+    for (let offset = 0; offset < Math.min(topicCount, limit); offset++) {
+      const topicIndex = (startTopicIndex + offset) % topicCount;
+      const topic = config.topics[topicIndex];
       if (state.night.calls >= config.maxCalls) throw new Error('夜間API回数上限');
       if (state.night.costUsd + config.reservePerCallUsd > config.maxCostUsd + 1e-9) throw new Error('夜間費用上限');
       // タイムアウト・プロセス停止・usage欠落でも予算を消費したものとして扱う。
+      // 未実行の次テーマを予約と同時に保存。全件回れた夜も翌夜の先頭を1つずらす。
+      state.nextTopicIndex = (offset === topicCount - 1 ? startTopicIndex + 1 : topicIndex + 1) % topicCount;
       state.night.calls++; state.night.costUsd += config.reservePerCallUsd; calls++; cost += config.reservePerCallUsd; save(state);
-      let usage, actual, failure;
+      let usage, actual, failure, signal, serverError = false, awaitingResponse = true;
       try {
-        const response = await fetchFn('https://api.x.ai/v1/responses', { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(buildRequest(topic, now, config)), signal: AbortSignal.timeout(120000) });
-        if (!response.ok) throw new Error(`API HTTP ${response.status}`);
-        const json = await response.json(); usage = json.usage;
+        signal = AbortSignal.timeout(config.timeoutMs);
+        const response = await fetchFn('https://api.x.ai/v1/responses', { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(buildRequest(topic, now, config)), signal });
+        if (!response.ok) {
+          awaitingResponse = false;
+          serverError = response.status >= 500 && response.status < 600;
+          throw new Error(`API HTTP ${response.status}`);
+        }
+        const json = await response.json(); awaitingResponse = false; usage = json.usage;
         actual = estimateCost(usage, config.estimatedRates);
         state.night.costUsd += actual - config.reservePerCallUsd; cost += actual - config.reservePerCallUsd; save(state);
         if (state.night.costUsd > config.maxCostUsd) throw new Error('夜間費用上限超過');
@@ -174,11 +190,17 @@ export async function runCollect(options = {}) {
           fs.appendFileSync(proposalFile, (existing && !existing.endsWith('\n') ? '\n' : '') + result.added.map(JSON.stringify).join('\n') + '\n');
         }
         added += result.added.length; save(state);
-      } catch (error) { failure = error.message; throw error; }
+      } catch (error) {
+        failure = error.message;
+        const timedOut = awaitingResponse && (signal?.aborted || ['TimeoutError', 'AbortError'].includes(error.name));
+        if (!serverError && !timedOut) throw error;
+        failedTopics++;
+      }
       finally {
         if (!dryRun) fs.appendFileSync(path.join(dir, 'runs.jsonl'), JSON.stringify({ at: now.toISOString(), night: date, topic, model: 'grok-4.6', usage, costUsd: actual ?? config.reservePerCallUsd, estimated: usage?.cost_in_usd_ticks == null, reserved: actual == null, status: failure ? `error:${failure}` : 'ok', nightCalls: state.night.calls, nightCostUsd: state.night.costUsd }) + '\n');
       }
     }
+    if (failedTopics) throw new Error(`テーマ失敗${failedTopics}件（残りのテーマは処理継続）`);
     return { status: `ok:取得${acquired}件 追加${added}件 重複${duplicates}件 費用$${cost.toFixed(2)}`, calls, cost, added, duplicates };
   } catch (error) {
     // APIの応答本文・認証値はログに出さない。

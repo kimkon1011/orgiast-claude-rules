@@ -1,0 +1,660 @@
+{
+  "generated_at": "2026-11-08T22:08:30.454Z",
+  "source": {
+    "keywords_csv": "C:\\Users\\kimko\\.claude\\auto-session-repo\\outputs\\X-0013\\keywords-priority.csv",
+    "gsc_csv": null,
+    "pages_json": null
+  },
+  "summary": {
+    "total_keywords": 23,
+    "top_20_complements": 20,
+    "gsc_queries_with_impressions": 0,
+    "gsc_queries_ranked_10_30": 0,
+    "internal_link_candidates": 10
+  },
+  "complements": [
+    {
+      "keyword": "展示会ブース制作",
+      "intent": "Commercial",
+      "priority": "1",
+      "score": "280000",
+      "recommended_action": "新規記事作成",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "ブースリユース",
+      "intent": "Commercial",
+      "priority": "2",
+      "score": "120000",
+      "recommended_action": "新規記事作成",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "ブースイベントプロデュース",
+      "intent": "Commercial",
+      "priority": "3",
+      "score": "80000",
+      "recommended_action": "新規記事作成",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "制作イベント",
+      "intent": "Commercial",
+      "priority": "4",
+      "score": "64000",
+      "recommended_action": "新規記事作成",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "企画展示会",
+      "intent": "Commercial",
+      "priority": "5",
+      "score": "60000",
+      "recommended_action": "新規記事作成",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "リユース展示会ブース",
+      "intent": "Commercial",
+      "priority": "6",
+      "score": "60000",
+      "recommended_action": "新規記事作成",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "ブースサステナブル",
+      "intent": "Commercial",
+      "priority": "7",
+      "score": "40000",
+      "recommended_action": "新規記事作成",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "一覧展示会",
+      "intent": "Commercial",
+      "priority": "8",
+      "score": "20000",
+      "recommended_action": "既存ページ改善",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "サステナブル展示会",
+      "intent": "Commercial",
+      "priority": "9",
+      "score": "20000",
+      "recommended_action": "既存ページ改善",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "ブース対応",
+      "intent": "Commercial",
+      "priority": "10",
+      "score": "20000",
+      "recommended_action": "既存ページ改善",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "ブースレンタル",
+      "intent": "Commercial",
+      "priority": "11",
+      "score": "20000",
+      "recommended_action": "既存ページ改善",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "オージャストサービス",
+      "intent": "Commercial",
+      "priority": "12",
+      "score": "0",
+      "recommended_action": "既存ページ改善",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "サービス一覧",
+      "intent": "Commercial",
+      "priority": "13",
+      "score": "0",
+      "recommended_action": "既存ページ改善",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "制作オージャスト",
+      "intent": "Commercial",
+      "priority": "14",
+      "score": "0",
+      "recommended_action": "既存ページ改善",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "企画デザイン",
+      "intent": "Commercial",
+      "priority": "15",
+      "score": "0",
+      "recommended_action": "既存ページ改善",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "施工運営",
+      "intent": "Commercial",
+      "priority": "16",
+      "score": "0",
+      "recommended_action": "既存ページ改善",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "運営",
+      "intent": "Commercial",
+      "priority": "17",
+      "score": "0",
+      "recommended_action": "既存ページ改善",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "運営トータルサポート",
+      "intent": "Commercial",
+      "priority": "18",
+      "score": "0",
+      "recommended_action": "既存ページ改善",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "制作企画",
+      "intent": "Commercial",
+      "priority": "19",
+      "score": "0",
+      "recommended_action": "既存ページ改善",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    },
+    {
+      "keyword": "デザイン施工",
+      "intent": "Commercial",
+      "priority": "20",
+      "score": "0",
+      "recommended_action": "既存ページ改善",
+      "complement_types": [
+        "new_page"
+      ],
+      "structure_hints": [
+        {
+          "type": "intro_rewrite",
+          "reason": "冒頭段落が短い（0文字）",
+          "priority": "high"
+        },
+        {
+          "type": "new_h2",
+          "reason": "H2見出しが少ない（0個）",
+          "priority": "medium"
+        },
+        {
+          "type": "faq_section",
+          "reason": "FAQセクションがない",
+          "priority": "medium"
+        }
+      ],
+      "gsc_data": null,
+      "target_page": null
+    }
+  ],
+  "gsc_gaps": [],
+  "internal_links": [
+    {
+      "sourceKeyword": "展示会ブース制作",
+      "targetKeyword": "ブースリユース",
+      "category": "展示会ブース制作",
+      "reason": "展示会ブース制作 → ブースリユース（展示会ブース制作カテゴリ）"
+    },
+    {
+      "sourceKeyword": "展示会ブース制作",
+      "targetKeyword": "ブースイベントプロデュース",
+      "category": "展示会ブース制作",
+      "reason": "展示会ブース制作 → ブースイベントプロデュース（展示会ブース制作カテゴリ）"
+    },
+    {
+      "sourceKeyword": "展示会ブース制作",
+      "targetKeyword": "企画展示会",
+      "category": "展示会ブース制作",
+      "reason": "展示会ブース制作 → 企画展示会（展示会ブース制作カテゴリ）"
+    },
+    {
+      "sourceKeyword": "展示会ブース制作",
+      "targetKeyword": "リユース展示会ブース",
+      "category": "展示会ブース制作",
+      "reason": "展示会ブース制作 → リユース展示会ブース（展示会ブース制作カテゴリ）"
+    },
+    {
+      "sourceKeyword": "展示会ブース制作",
+      "targetKeyword": "ブースサステナブル",
+      "category": "展示会ブース制作",
+      "reason": "展示会ブース制作 → ブースサステナブル（展示会ブース制作カテゴリ）"
+    },
+    {
+      "sourceKeyword": "展示会ブース制作",
+      "targetKeyword": "一覧展示会",
+      "category": "展示会ブース制作",
+      "reason": "展示会ブース制作 → 一覧展示会（展示会ブース制作カテゴリ）"
+    },
+    {
+      "sourceKeyword": "展示会ブース制作",
+      "targetKeyword": "サステナブル展示会",
+      "category": "展示会ブース制作",
+      "reason": "展示会ブース制作 → サステナブル展示会（展示会ブース制作カテゴリ）"
+    },
+    {
+      "sourceKeyword": "展示会ブース制作",
+      "targetKeyword": "ブース対応",
+      "category": "展示会ブース制作",
+      "reason": "展示会ブース制作 → ブース対応（展示会ブース制作カテゴリ）"
+    },
+    {
+      "sourceKeyword": "展示会ブース制作",
+      "targetKeyword": "ブースレンタル",
+      "category": "展示会ブース制作",
+      "reason": "展示会ブース制作 → ブースレンタル（展示会ブース制作カテゴリ）"
+    },
+    {
+      "sourceKeyword": "ブースリユース",
+      "targetKeyword": "展示会ブース制作",
+      "category": "展示会ブース制作",
+      "reason": "ブースリユース → 展示会ブース制作（展示会ブース制作カテゴリ）"
+    }
+  ]
+}

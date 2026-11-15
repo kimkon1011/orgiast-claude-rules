@@ -99,7 +99,9 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const err = deps.stderr ?? console.error;
   const json = argv.includes('--json');
   const pcMap = deps.pcMap ?? readJson(path.join(ownRepo, 'fleet-pc-map.json'), {});
-  const result = await fetchBeacons({ home, fetchImpl: deps.fetch });
+  const envTimeout = Number(process.env.FLEET_BEACON_FETCH_TIMEOUT_MS);
+  const timeoutMs = Number.isInteger(envTimeout) && envTimeout > 0 ? envTimeout : 60000;
+  const result = await fetchBeacons({ home, fetchImpl: deps.fetch, timeoutMs, retries: 2 });
   if (!result.ok) err(`fleet-status: ビーコン取得に失敗（${result.reason || '不明'}）。ビーコン情報なしで表示します`);
   const rows = buildFleetStatus({ pcMap, beacons: result.beacons, serverPolls: result.serverPolls, now: deps.now ?? Date.now() });
   out(json ? JSON.stringify(rows) : formatFleetTable(rows, deps.now ?? Date.now()));

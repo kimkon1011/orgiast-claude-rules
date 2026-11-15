@@ -155,7 +155,7 @@ user には `/session-close` と `/clear` の違いも、タブを閉じる操�
 
 - 退避前の最後の送信の末尾は「このセッション: /session-close は終わっているので、このセッションを閉じてよい」で終える。「閉じてよい」単独や「このセッション: 閉じてよい」は禁止（2026-10-01 kim 指示: /session-close をこれからするのか、済んで消してよいのか分からない）。
 
-- 最終応答の「この後の自動進行: <内容>」は台帳（`~/.claude/auto-progress-ledger.jsonl`）に記録され、1日2回の巡回で止まっていれば自動再開＋朝の DM になる（ONBOARDING §1.15）。実際に自動で進まないことは書かず「なし」にする。
+- 最終応答の「この後の自動進行: <内容>」は台帳（`~/.claude/auto-progress-ledger.jsonl`）に記録され、1日2回の巡回で止まっていれば自動再開＋kim-inbox に記録する（ONBOARDING §1.15）。実際に自動で進まないことは書かず「なし」にする。
 - **理由を1行添える**: タブが開いている限りプロセスが会話ログを書き戻し、退避したはずのセッションが一覧に復活する（633KB 復活を実測）。だから 1→2→3 の順で、3 の後にこのタブへ話しかけない。
 - **`--no-launch`・headless・起動スキップ時は2行目を差し替える**（新タブは開かないので「開きました」と書かない）:
   「新しいタブを開いて `/session-start` と入力してください」。起動結果は `[next-session] …` の行を読んで判定する。
@@ -214,3 +214,6 @@ user には `/session-close` と `/clear` の違いも、タブを閉じる操�
 - セッションファイル・Drive のファイルは絶対に削除しない（過去版が必要 / kim 厳命）。
 - memory 書き込み前に必ず既存を検索し、重複を防ぐ。
 - コスト実績を見たい時は `node ~/orgiast-claude-rules/tools/cost-work-loop.mjs`。
+
+公開鍵配布後は next-session.md.lock が併置される。
+平文が無い場合は `node tools/knowledge-lock.mjs open ~/.claude/next-session.md.lock` で読む（契約アカウントは自動、契約外は kim 承認）。

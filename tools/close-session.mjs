@@ -1,4 +1,5 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { writeHandoff, handoffLockEnabled } from './lib/handoff-store.mjs';
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { launchPurge } from "./purge-sessions.mjs";
@@ -6,6 +7,7 @@ import { recordClosed } from "./closed-sessions-ledger.mjs";
 import { launchNextSession } from "./next-session-launch.mjs";
 
 import { rotate } from "./next-session-rotate.mjs";
+import { runKnowledgeUpstream } from "./knowledge-upstream.mjs";
 
 const claudeDir = join(homedir(), ".claude");
 const currentPath = join(claudeDir, "current-session.json");
@@ -50,6 +52,10 @@ if (!sessionId) {
 }
 
 rotate(join(claudeDir, "next-session.md"));
+const handoffFile = join(claudeDir, "next-session.md");
+if (handoffLockEnabled() && existsSync(handoffFile)) {
+  writeHandoff(handoffFile, readFileSync(handoffFile, 'utf8'));
+}
 
 const recorded = recordClosed(sessionId, closedPath, {
   onError: (e) => console.error(`closed-sessions.json に書けませんでした: ${e.message}`),
@@ -58,6 +64,8 @@ if (!recorded) {
   console.error(`未完了: ${sessionId} を closed-sessions.json に記録できませんでした（一覧から消えません）`);
   process.exit(1);
 }
+
+try { await runKnowledgeUpstream({ emit: () => {} }); } catch {}
 
 launchPurge();
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { ensureKimEditor } from './lib/kim-editor.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -384,6 +385,7 @@ async function writeManualDocs(parts, auth) {
         method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body,
       });
       const created = await response.json();
+      await ensureKimEditor(created.id, { token, api: driveApi, created: true });
       metadata.set(part, { fileId: created.id, title: created.name ?? name });
     }
   }
@@ -465,7 +467,9 @@ async function uploadHubFile(token, localFile, title, mimeType, driveApi) {
   const response = await driveApi(token, 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
     method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body,
   });
-  return { id: (await response.json()).id, bytes: content.length };
+  const created = await response.json();
+  await ensureKimEditor(created.id, { token, api: driveApi, created: true });
+  return { id: created.id, bytes: content.length };
 }
 
 export async function publishIndex(cacheDir = CACHE_DIR, authOverride) {

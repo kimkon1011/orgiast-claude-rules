@@ -1,11 +1,13 @@
 ---
 name: share-knowledge
-description: セッション中に確立した Claude Code 開発ノウハウ・ルール・失敗パターンを、全アカウント共通ハブ（Drive claude-common-rules/knowledge-inbox）へ投稿する。「このノウハウ共有して」「全社ルールにして」「他のアカウントにも適用して」「共通化して」「seisaku-team でも使えるように」と言われた時、または全アカウントに適用すべき feedback を memory に保存した時に必ずこのスキルを使う。
+description: セッション中に確立した Codex 開発ノウハウ・ルール・失敗パターンを、全アカウント共通ハブ（Drive claude-common-rules/knowledge-inbox）へ投稿する。「このノウハウ共有して」「全社ルールにして」「他のアカウントにも適用して」「共通化して」「seisaku-team でも使えるように」と言われた時、または全アカウントに適用すべき feedback を memory に保存した時にこのスキルを使う。（※全PCで毎時およびセッション終了時に `knowledge-upstream` が自動同期するため、手動投稿は即時共有が必要な緊急時のみ行います）
 ---
 
 # share-knowledge — ノウハウの上り投稿
 
 投稿先: `knowledge-inbox` folder `1AyZcrlK9JCNPUkhKCBOezet9a2QoSwK2`（Drive ハブ claude-common-rules 配下）
+
+※ **補足**: 各PCの auto-memory (feedback/project/reference), playbooks, incident, 学びの台帳は毎時および SessionEnd に `tools/knowledge-upstream.mjs` が自動で Drive inbox へ送信・kim-PC が自動統合するため、通常は手動投稿は不要です。即時共有が必要な緊急時のみ本スキルで手動投稿してください。
 
 ## 手順
 1. 投稿内容を下記フォーマットに整形（1投稿 = 1ノウハウ。複数あればファイルを分ける）。取り込み可否は`protocols/INTAKE-TWO-AXES.md`の2軸表で判定し、B軸が空なら差し戻す
@@ -13,7 +15,7 @@ description: セッション中に確立した Claude Code 開発ノウハウ・
    - parentId: `1AyZcrlK9JCNPUkhKCBOezet9a2QoSwK2`
    - title: `YYYYMMDD-<アカウント短縮名>-<slug>.md`（例: `20260706-kim-vercel-cron-unreliable.md`。アカウント = このマシンの Drive コネクタ owner）
    - contentMimeType: `text/plain` + `disableConversionToGoogleType: true`
-3. 完了報告に fileId とタイトルを添える。統合は kim 環境の `/rules-sync`（merge）が拾って正本に反映する
+3. 完了報告に fileId とタイトルを添える。統合は kim 環境の `knowledge-merge.mjs` が拾って正本に反映する
 
 ## 投稿フォーマット
 ```markdown

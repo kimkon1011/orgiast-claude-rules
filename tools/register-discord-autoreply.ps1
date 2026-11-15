@@ -14,6 +14,9 @@ $repeat = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New
 # No AtLogOn trigger: registering one needs elevation on this PC (0x80070005), and the indefinite
 # 5-minute repetition with StartWhenAvailable already resumes after a reboot.
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -MultipleInstances IgnoreNew
+# Priority 7/BelowNormal starved Discord HTTP and abort timers on kim-PC.
+# Priority 4 is NORMAL_PRIORITY_CLASS; keep background polling responsive.
+$settings.Priority = 4
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
 Register-ScheduledTask -TaskName 'OrgiastDiscordAutoReply' -Action $action -Trigger $repeat -Settings $settings -Principal $principal -Description 'Reply to mentions of kim and learn from corrections (every 5 minutes, polling every 20 seconds)' -Force | Out-Null
 Start-ScheduledTask -TaskName 'OrgiastDiscordAutoReply'

@@ -720,6 +720,52 @@ try {
         }
     } else { $summary['cafe-digest-deliver'] = 'skip:ファイルなし'; Write-NightlyLog 'cafe-digest-deliver' 'skip:ファイルなし' }
 
+    $minpakuDigest = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\line-digest.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $minpakuDigest = $candidate; break }
+    }
+    if ($minpakuDigest) {
+        try {
+            $minpakuDigestOutput = @(& $node.Source $minpakuDigest '--profile' 'minpaku' 2>&1)
+            $minpakuDigestExitCode = $LASTEXITCODE
+            if ($minpakuDigestExitCode -ne 0) {
+                $minpakuDigestResult = 'error:終了コード' + $minpakuDigestExitCode + ': ' + (Format-NightlyDetail $minpakuDigestOutput)
+            } else {
+                $minpakuDigestResult = @($minpakuDigestOutput | Where-Object { $_ -match '^(skip:入力ディレクトリなし|skip:新規メッセージなし|ok:\d+件処理)$' } | Select-Object -Last 1)
+                if ($minpakuDigestResult.Count -eq 0) { $minpakuDigestResult = 'error:状態不明' } else { $minpakuDigestResult = [string]$minpakuDigestResult[0] }
+            }
+            $summary['line-digest-minpaku'] = $minpakuDigestResult
+            Write-NightlyLog 'line-digest-minpaku' $minpakuDigestResult
+        } catch {
+            $summary['line-digest-minpaku'] = ("error:" + $_.Exception.Message); Write-NightlyLog 'line-digest-minpaku' $summary['line-digest-minpaku']
+            Write-Warning ("nightly-batch: line-digest-minpaku: " + $_.Exception.Message)
+        }
+    } else { $summary['line-digest-minpaku'] = 'skip:ファイルなし'; Write-NightlyLog 'line-digest-minpaku' 'skip:ファイルなし' }
+
+    $minpakuDeliver = $null
+    foreach ($repo in $repos) {
+        $candidate = Join-Path $repo 'tools\minpaku-digest-deliver.mjs'
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $minpakuDeliver = $candidate; break }
+    }
+    if ($minpakuDeliver) {
+        try {
+            $minpakuDeliverOutput = @(& $node.Source $minpakuDeliver 2>&1)
+            $minpakuDeliverExitCode = $LASTEXITCODE
+            if ($minpakuDeliverExitCode -ne 0) {
+                $minpakuDeliverResult = 'error:終了コード' + $minpakuDeliverExitCode + ': ' + (Format-NightlyDetail $minpakuDeliverOutput)
+            } else {
+                $minpakuDeliverResult = @($minpakuDeliverOutput | Where-Object { $_ -match '^(ok:送信 .+|skip:.+|error:.+)$' } | Select-Object -Last 1)
+                if ($minpakuDeliverResult.Count -eq 0) { $minpakuDeliverResult = 'error:状態不明' } else { $minpakuDeliverResult = [string]$minpakuDeliverResult[0] }
+            }
+            $summary['minpaku-digest-deliver'] = $minpakuDeliverResult
+            Write-NightlyLog 'minpaku-digest-deliver' $minpakuDeliverResult
+        } catch {
+            $summary['minpaku-digest-deliver'] = ("error:" + $_.Exception.Message); Write-NightlyLog 'minpaku-digest-deliver' $summary['minpaku-digest-deliver']
+            Write-Warning ("nightly-batch: minpaku-digest-deliver: " + $_.Exception.Message)
+        }
+    } else { $summary['minpaku-digest-deliver'] = 'skip:ファイルなし'; Write-NightlyLog 'minpaku-digest-deliver' 'skip:ファイルなし' }
+
     $xTips = $null
     foreach ($repo in $repos) {
         $candidate = Join-Path $repo 'tools\x-ai-tips-collect.mjs'

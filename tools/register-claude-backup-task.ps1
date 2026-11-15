@@ -7,6 +7,16 @@
 $ErrorActionPreference = 'Stop'
 $taskName = 'ClaudeDailyDriveBackup'
 
+function Get-IsElevated {
+  $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+  return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Stop-ProcessTree([int]$ProcessId) {
+  try { & taskkill.exe /PID $ProcessId /T /F 2>$null | Out-Null } catch {}
+  try { Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+}
+
 if ($Unregister) {
   $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
   if ($existing) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false; Write-Host "OK: task $taskName unregistered" }
@@ -24,16 +34,21 @@ $pwsh = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
 if (-not $pwsh) { $pwsh = (Get-Command pwsh -ErrorAction SilentlyContinue).Source }
 if (-not $pwsh) {
   if ($DryRun) {
-    Write-Host 'NOTE: pwsh が無いため、通常実行では winget による Microsoft.PowerShell の導入を試みる予定です（DryRun ではスキップ）'
+    Write-Host 'NOTE: pwsh が無いため、通常実行では winget による Microsoft.PowerShell の導入を試みる予定です（DryRun ではスキップ。非昇格の無人実行では試みません）'
   } else {
     $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
     if (-not $winget) { $winget = Get-Command winget -ErrorAction SilentlyContinue }
-    if ($winget) {
+    if ($winget -and -not (Get-IsElevated)) {
+      # fleet-poller（スケジュールタスク）等の無人実行は非昇格のことが多い。Microsoft.PowerShell の
+      # winget はマシン全体インストールで UAC 昇格プロンプトを要求するため、非昇格なら起動しない
+      # （型: 無人ジョブが UAC 必須インストールを起動し確認画面を溜める）。後段で 5.1 にフォールバック。
+      Write-Warning 'pwsh 導入をスキップ（非昇格の無人実行では winget/MSI の UAC を出さない。Windows PowerShell 5.1 でタスク登録します）'
+    } elseif ($winget) {
       Write-Host 'NOTE: pwsh が無いため winget で Microsoft.PowerShell の導入を試みます（最大300秒）'
       try {
         $installProcess = Start-Process -FilePath $winget.Source -ArgumentList @('install', '--id', 'Microsoft.PowerShell', '-e', '--accept-package-agreements', '--accept-source-agreements') -PassThru -NoNewWindow
         if (-not $installProcess.WaitForExit(300000)) {
-          try { $installProcess.Kill() } catch {}
+          Stop-ProcessTree $installProcess.Id
           Write-Warning 'pwsh の winget 導入が300秒でタイムアウトしました'
         } elseif ($installProcess.ExitCode -ne 0) {
           Write-Warning ('pwsh の winget 導入に失敗しました (exit={0})' -f $installProcess.ExitCode)

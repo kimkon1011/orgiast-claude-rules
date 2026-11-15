@@ -112,7 +112,7 @@ function promptFor(job) {
 }
 export function runCodex(job, dir, stateDir) {
   const promptFile=path.join(stateDir,'feedback-zero-prompt.md');fs.writeFileSync(promptFile,promptFor(job));
-  try {return spawnSync(process.execPath,[path.join(here,'codex-do.mjs'),'--prompt-file',promptFile,'--cwd',dir,'--origin','unattended','--kind','implement','--no-fallback','--timeout','1800'],{encoding:'utf8',timeout:1850000,windowsHide:true,maxBuffer:4*1024*1024});}
+  try {return spawnSync(process.execPath,[path.join(here,'codex-do.mjs'),'--prompt-file',promptFile,'--cwd',dir,'--origin','unattended','--kind','implement','--timeout','1800'],{encoding:'utf8',timeout:1850000,windowsHide:true,maxBuffer:4*1024*1024});}
   finally {fs.rmSync(promptFile,{force:true});}
 }
 export async function sweep({registryFile=path.join(here,'feedback-zero-registry.json'),home=process.env.ORGIAST_HOME || os.homedir(),config=loadConfig(home),dryRun=false,fetchImpl=fetch,gh=runGh,ensureIssue=ensureFeedbackIssue,gate=decideCodexGate,execute=runCodex,notify=notifyKim,done=doneNotify,now=Date.now(),maxJobs=8}={}) {

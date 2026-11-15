@@ -105,3 +105,24 @@ test('不存在のfixtureで本番の読取へfallbackしない', async t => {
   assert.equal(await main(['--dry-run','--fixture',path.join(home,'missing.json')],{home,config,stderr:e=>errors.push(e),sheets:{get:()=>assert.fail('live read')}}),1);
   assert.match(errors[0],/fixture/); assert.deepEqual(fs.readdirSync(home),[]);
 });
+
+test('鍵なし席はseat checkでスキップされる', async t => {
+  const home=homeFor(t), output=[], heartbeats=[];
+  fs.writeFileSync(path.join(home,'.claude.json'), JSON.stringify({oauthAccount:{emailAddress:'seisaku-team@orgiast.jp'}}));
+  const code = await main(['--now','2026-11-04'], { home, stdout: x => output.push(x), skipSeatCheck: false, sheets: { get: () => assert.fail('no network') }, request: () => assert.fail('no network'), heartbeat: async (info) => heartbeats.push(info), notify: () => assert.fail('no notify') });
+  assert.equal(code, 0);
+  const result = JSON.parse(output[0]);
+  assert.equal(result.skip, true);
+  assert.match(result.reason, /DWD key/);
+  assert.equal(heartbeats.length, 1);
+  assert.match(heartbeats[0].summary, /スキップ/);
+});
+
+test('鍵持ちのkim席はfixtureモードで通常動作（fixtureはseat checkをスキップ）', async t => {
+  const home=homeFor(t), output=[];
+  const code = await main(['--dry-run','--now','2026-11-04','--fixture','tools/fixtures/deadline/ledger.json'], { home, stdout: x => output.push(x), skipSeatCheck: false, request: async () => assert.fail('network'), heartbeat: async () => assert.fail('heartbeat'), notify: async () => assert.fail('notify') });
+  assert.equal(code, 0);
+  const result = JSON.parse(output[0]);
+  assert.equal(result.skip, undefined);
+  assert.deepEqual(result.decisions.filter(x => x.notify).map(x => x.id), ['D-001','D-002','D-004','D-006','V01']);
+});

@@ -22,7 +22,7 @@ test('48h boundary, older timestamp, statuses and owner filtering', async t => {
 test('successful delivery persists dedup and allows retry at 24h', async t => {
   const r = row(60), opts = setup(t, [r]);
   let calls = 0;
-  opts.io.notifyKim = async (text, options) => { calls++; assert.equal(options.kind, 'ask'); assert.equal(options.kimActionRequired, true); return { delivered: 'dm' }; };
+  opts.io.notifyKim = async (text, options) => { calls++; assert.equal(options.kind, 'ask'); assert.equal(options.kimActionRequired, true); assert.equal(options.sessionId, r.sessionId); return { delivered: 'dm' }; };
   assert.equal((await escalateKimDecisions(opts)).sent, 1);
   const state = JSON.parse(fs.readFileSync(path.join(opts.home, '.claude/auto-progress-escalated.json')));
   assert.equal(state[escalationRowKey(r)], new Date(now).toISOString());
@@ -51,6 +51,17 @@ test('dry-run never sends or modifies existing state', async t => {
   assert.equal((await escalateKimDecisions({ ...opts, dryRun: true })).targets.length, 1);
   assert.equal(fs.readFileSync(file, 'utf8'), '{}\n');
   assert.equal(fs.existsSync(file + '.lock'), false);
+});
+test('nextKim が空または なし の行は owner が kim でも escalate 対象外', async t => {
+  const opts = setup(t, [
+    { ...row(60), owner: 'kim-PC', nextKim: '' },
+    { ...row(61), owner: 'kim-PC', nextKim: 'なし' },
+    { ...row(62), owner: 'kim-PC', nextKim: '　なし　' },
+    { ...row(63), owner: 'kim-PC', nextKim: 'kim の承認が必要' },
+  ]);
+  const result = await escalateKimDecisions({ ...opts, dryRun: true });
+  assert.equal(result.targets.length, 1);
+  assert.ok(result.targets[0].text.includes('kim の承認が必要'));
 });
 test('message preserves decision text and caps context lengths', () => {
   const text = escalationText(row(60, { nextKim: 'あ'.repeat(2001), promise: '約'.repeat(81) }), now);

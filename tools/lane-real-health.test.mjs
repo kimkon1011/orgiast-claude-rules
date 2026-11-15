@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { realLaneStats, applyRealLaneHealth } from './lib/lane-real-health.mjs';
+import { realLaneStats, applyRealLaneHealth, billingFailure, billingWithQuotaHint } from './lib/lane-real-health.mjs';
 import { laneDoctorQuick, laneDoctorProbe } from './lane-doctor.mjs';
 const now = Date.parse('2026-10-29T12:00:00Z');
 function fixture(t, rows) {
@@ -75,6 +75,34 @@ test('billing variants are excluded from failures and never block; real 500 thre
   assert.equal(laneDoctorQuick({ home, now }).lanes.deepseek.reason, 'real_fail_rate');
   assert.equal(evaluateRepairFirst({ tool_name: 'Edit' }, { home, now }).decision, 'block');
 });
+
+test('Google 403 outstanding balance is billing', t => {
+  const google403 = 'HTTP 403: The billing account has an outstanding balance. Please resolve the payment issue.';
+  assert.equal(billingFailure(google403), true);
+  // 403 + billing text combination is required: plain billing text without 403 is not billing
+  assert.equal(billingFailure('The billing account has an outstanding balance (no status)'), false);
+  assert.equal(billingFailure('billing account is suspended'), false);
+  // With 403 code and matching billing text
+  assert.equal(billingFailure('error 403: billing account is disabled'), true);
+  assert.equal(billingFailure('HTTP 403 billing account has been suspended'), true);
+  assert.equal(billingFailure('HTTP 403 billing account not active'), true);
+  // 403 with prepayment credits text that matches other pattern
+  assert.equal(billingFailure('HTTP 403 prepayment credits are depleted'), true);
+  // 429 coexistence → billingWithQuotaHint
+  assert.equal(billingWithQuotaHint('HTTP 403: The billing account has an outstanding balance. HTTP 429 rate limit'), true);
+  // 403 without billing text is not billing
+  assert.equal(billingFailure('HTTP 403 permission denied'), false);
+  assert.equal(billingFailure('status 403 Forbidden'), false);
+});
+
+test('Google 403 outstanding balance via ledger realLaneStats is billing', t => {
+  const home = fixture(t, [{ provider: 'gemini', status: 'http_403', stderr: 'The billing account has an outstanding balance' }]);
+  const stats = realLaneStats(home, now).gemini;
+  assert.equal(stats.billingCalls, 1, 'Google 403 残高エラーは billing として分類される');
+  assert.equal(stats.quotaCalls, 0);
+  assert.equal(stats.failures, 0);
+});
+
 test('billing quick diagnosis notification is once per lane per UTC day', async t => {
   const { notifyLaneStops } = await import('./lane-doctor.mjs');
   const home = fixture(t, [{ status: '402' }]);
@@ -266,5 +294,96 @@ test('post-recovery fifty-percent boundary excludes older calls from denominator
     const health = { lanes: { deepseek: { alive: true, reason: 'probe_ok', lastProbeOkAt: now - 1000 } } };
     applyRealLaneHealth(health, home, now);
     assert.equal(health.lanes.deepseek.reason, failures === 5 ? 'real_fail_rate' : 'probe_ok');
+  }
+});
+
+test('five auth failures on codex lane produce dead:oauth_consent', t => {
+  const home = fixture(t, Array.from({ length: 5 }, () => ({ provider: 'codex', status: 'error', reason: 'Missing bearer or basic authentication in header' })));
+  const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.codex.reason, 'dead:oauth_consent');
+  assert.equal(health.lanes.codex.alive, false);
+  assert.match(health.lanes.codex.error, /Missing bearer/i);
+});
+
+test('five auth failures on non-codex lane produce auth_invalid', t => {
+  const home = fixture(t, Array.from({ length: 5 }, () => ({ status: 'error', reason: 'HTTP 401 unauthorized' })));
+  const health = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.deepseek.reason, 'auth_invalid');
+  assert.equal(health.lanes.deepseek.alive, false);
+  assert.match(health.lanes.deepseek.error, /HTTP 401/);
+});
+
+test('mixed auth and non-auth failures still produce real_fail_rate', t => {
+  const home = fixture(t, [
+    { provider: 'codex', status: 'error', reason: 'HTTP 401 unauthorized' },
+    { provider: 'codex', status: 'error', reason: 'HTTP 401 unauthorized' },
+    { provider: 'codex', status: 'error', reason: 'HTTP 401 unauthorized' },
+    { provider: 'codex', status: 'error', reason: 'HTTP 500 internal error' },
+    { provider: 'codex', status: 'error', reason: 'HTTP 500 internal error' },
+  ]);
+  const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.codex.reason, 'real_fail_rate');
+  assert.equal(health.lanes.codex.alive, false);
+});
+
+test('89 codex refresh-token failures and one WSL failure produce dead:oauth_consent', t => {
+  const error = 'Failed to refresh token: Your access token could not be refreshed. Please log out and sign in again. ERROR: workspace routing discovery unauthorized (401)';
+  const other = 'WSL ディストリが見つかりませんでした';
+  const home = fixture(t, [
+    ...Array.from({ length: 89 }, () => ({ provider: 'codex', status: 'error', stderr: error })),
+    { provider: 'codex', status: 'error', stderr: other },
+  ]);
+  const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.codex.reason, 'dead:oauth_consent');
+  assert.equal(health.lanes.codex.alive, false);
+  assert.ok(health.lanes.codex.error.includes(`認証系 89件 / その他 1件: ${other}`));
+});
+
+test('18 auth failures and one server failure on deepseek produce auth_invalid', t => {
+  const home = fixture(t, [
+    ...Array.from({ length: 18 }, () => ({ status: 'error', reason: 'HTTP 401 unauthorized' })),
+    { status: 'error', reason: 'HTTP 500 internal error' },
+  ]);
+  const health = { lanes: { deepseek: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.deepseek.reason, 'auth_invalid');
+  assert.equal(health.lanes.deepseek.alive, false);
+  assert.match(health.lanes.deepseek.error, /認証系 18件 \/ その他 1件: HTTP 500/);
+});
+
+test('auth dominance includes 90 percent but excludes 80 percent', t => {
+  for (const authCount of [8, 9]) {
+    const home = fixture(t, [
+      ...Array.from({ length: authCount }, () => ({ provider: 'codex', status: 'error', reason: 'HTTP 401 unauthorized' })),
+      ...Array.from({ length: 10 - authCount }, () => ({ provider: 'codex', status: 'error', reason: 'HTTP 500 internal error' })),
+    ]);
+    const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.codex.reason, authCount === 9 ? 'dead:oauth_consent' : 'real_fail_rate');
+    assert.equal(health.lanes.codex.alive, false);
+  }
+});
+
+test('auth dominance requires five auth failures even with 100 percent of failures', t => {
+  const home = fixture(t, [
+    ...Array.from({ length: 4 }, () => ({ provider: 'codex', status: 'error', reason: 'HTTP 401 unauthorized' })),
+    { provider: 'codex', status: '429', until: now - 1 },
+  ]);
+  const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+  applyRealLaneHealth(health, home, now);
+  assert.equal(health.lanes.codex.reason, 'real_fail_rate');
+});
+
+test('codex refresh-token phrases classify as auth without a 401 or unauthorized hint', t => {
+  for (const reason of ['Failed to refresh token', 'access token could not be refreshed', 'log out and sign in again', 'sign in again']) {
+    const home = fixture(t, Array.from({ length: 5 }, () => ({ provider: 'codex', status: 'error', reason })));
+    const health = { lanes: { codex: { alive: true, reason: 'probe_ok' } } };
+    applyRealLaneHealth(health, home, now);
+    assert.equal(health.lanes.codex.reason, 'dead:oauth_consent', reason);
+    assert.equal(health.lanes.codex.alive, false);
   }
 });

@@ -22,7 +22,7 @@ function selectAnchor() {
     try {
       const git = (...args) => execFileSync('git', ['-C', candidate, ...args], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
       const branch = git('branch', '--show-current');
-      if ((branch && branch !== 'main') || git('status', '--porcelain')) continue;
+      if ((branch && branch !== 'main') || git('status', '--porcelain', '--untracked-files=no')) continue;
       const head = git('rev-parse', 'HEAD');
       const main = git('rev-parse', 'refs/remotes/origin/main');
       if (head !== main) {
@@ -57,6 +57,10 @@ function load(file) {
   if (!fs.existsSync(file)) return {};
   const raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
   return raw.trim() ? JSON.parse(raw) : {};
+}
+function defaultModel(homeDir) {
+  try { const raw = JSON.parse(fs.readFileSync(path.join(homeDir, '.claude', 'model-default.json'), 'utf8')); if (raw && typeof raw.model === 'string' && raw.model.trim()) return raw.model.trim(); } catch {}
+  return 'sonnet';
 }
 function backup(file) { if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak.${stamp}-installer`); }
 function write(file, value) {
@@ -136,7 +140,10 @@ function add(groups, scriptName, group) {
   const fileBase = path.posix.basename(base.replace(/\\/g, '/'));
   const escaped = fileBase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const scriptPattern = new RegExp(`(?:^|[\\\\/\\s"'])${escaped}\\.(?:mjs|ps1)(?=["'\\s]|$)`);
-  if (commands(groups).some((cmd) => scriptPattern.test(cmd))) return false;
+  // タイトルの一括更新と同期命名は同じスクリプトを別引数で登録する。
+  const sameMode = cmd => fileBase !== 'session-wait-title'
+    || cmd.includes('--all') === group.hooks[0].command.includes('--all');
+  if (commands(groups).some((cmd) => scriptPattern.test(cmd) && sameMode(cmd))) return false;
   groups.push(group); return true;
 }
 function setTimeoutFor(groups, scriptName, timeout) {
@@ -197,17 +204,24 @@ try {
     ['pretooluse-delegation-warn.mjs', 5], ['model-agent-guard.mjs', 5],
     ['pretooluse-serial-investigation.mjs', 5], ['current-session.mjs', 5],
     ['cost-loop.mjs', 5], ['rule-compliance-report.mjs', 10],
-    ['next-actions-notice.mjs', 10], ['plaud-renewal-notice.mjs', 5],
+    ['next-actions-notice.mjs', 10], ['plaud-renewal-notice.mjs', 300],
     ['clear-ack.mjs', 5], ['verify-before-done-detector.ps1', 10],
   ];
   for (const groups of Object.values(settings.hooks)) {
     if (!Array.isArray(groups)) continue;
     for (const [name, timeout] of permanentTimeouts) added += setTimeoutFor(groups, name, timeout);
   }
-  // 全PC・全アカウントの全セッションで Remote Control を自動開始する(kim 2026-10-09)。CLI と VS Code 拡張の両方がこのキーを読む。
+  // 全PC・全アカウントの全「新規インタラクティブ」セッションで Remote Control を自動開始する(kim 2026-10-09)。CLI と VS Code 拡張の両方がこのキーを読む。
+  // 注意: このキーは Claude Code 仕様上、新規の対話セッション起動時にのみ効く。ヘッドレス(claude -p)と既に起動済みのセッションは対象外(2026-11-06 実測: seisaku-team@ 作業用014 は稼働 14/14 が -p で RC 非対象)。
   if (settings.remoteControlAtStartup !== true) { settings.remoteControlAtStartup = true; added += 1; }
   // 全PC・全アカウントの応答・セッション名を日本語に固定する。途中で英語に切り替わった事故の再発防止(cr 2026-10-18)。
   if (settings.language !== 'japanese') { settings.language = 'japanese'; added += 1; }
+  // 全PC・全アカウントの既定モデルを Sonnet に収束する(kim 2026-11-15「自動で動く作業も、開いたセッションも既定は Sonnet」)。
+  // 未設定(=Claude Code 既定の Opus)・opus・opus[1m]・fable を sonnet に倒す。haiku 等の下位指定はそのまま。
+  // 判断が要る場面はそのセッション内で /model や advisor で上げる。次の SessionStart で既定は sonnet に戻る。
+  // PC 単位の例外は、そのPCだけの ~/.claude/model-default.json {"model":"..."} で明示する。
+  { const target = defaultModel(home); const current = String(settings.model ?? '').trim();
+    if (current !== target && (!current || /opus|fable/i.test(current))) { settings.model = target; added += 1; } }
   // 旧PCは hook が `powershell -NoProfile -File ...ps1` で登録され、実行ポリシーで無音死している。
   policyRepaired = repairPowerShellExecutionPolicy(settings.hooks);
   added += policyRepaired;
@@ -232,7 +246,9 @@ try {
     for (const [event, groups] of Object.entries(originalHooks)) {
       if (!Array.isArray(groups)) continue;
       retained[event] = groups.flatMap(group => {
-        const hooks = (group.hooks || []).filter(hook => !managed(hook.command));
+        // The old home copy blindly replayed F12 markdown; replace it with the repository hook.
+        const hooks = (group.hooks || []).filter(hook => !managed(hook.command) &&
+          !(event === 'SessionStart' && /(?:^|[\\/])plaud-renewal-notice\.mjs["']?(?:\s|$)/.test(hook.command || '')));
         return hooks.length ? [{ ...group, hooks }] : [];
       });
     }

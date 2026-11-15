@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>株式会社オージャスト | 展示会ブース制作</title>
+  <meta name="description" content="展示会ブースの設計・制作・施工・運営サポート。株式会社オージャストが貴社の展示会出展をトータルサポート。" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ═══ Header ═══ -->
+  <header class="header" id="header">
+    <div class="header__inner container">
+      <a href="/" class="header__logo">
+        <span class="header__logo-mark">O</span>
+        <span class="header__logo-text">株式会社オージャスト</span>
+      </a>
+      <button class="header__hamburger" aria-label="メニューを開く" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+      <nav class="header__nav" aria-label="メインナビゲーション">
+        <ul class="header__nav-list">
+          <li><a href="#about" class="header__nav-link">About</a></li>
+          <li><a href="#works" class="header__nav-link">Works</a></li>
+          <li><a href="#services" class="header__nav-link">Services</a></li>
+          <li><a href="#contact" class="header__nav-link header__nav-cta">Contact</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <!-- ═══ Hero ═══ -->
+    <section class="hero" id="hero">
+      <div class="hero__bg" aria-hidden="true"></div>
+      <div class="hero__overlay" aria-hidden="true"></div>
+      <div class="hero__content container">
+        <h1 class="hero__title">展示会ブースの<br />プロフェッショナル</h1>
+        <p class="hero__subtitle">設計・制作・施工・運営サポートまで一貫対応。<br />貴社の展示会出展を成功に導きます。</p>
+        <a href="#contact" class="hero__cta btn btn--primary">お問い合わせ</a>
+      </div>
+    </section>
+
+    <!-- ═══ About ═══ -->
+    <section class="about section" id="about">
+      <div class="container">
+        <h2 class="section__title">About</h2>
+        <p class="section__desc">株式会社オージャストは、展示会ブースの設計から施工、運営までをワンストップで提供しています。20年以上の実績と、国内外の展示会での豊富な経験を活かし、貴社のブランドを最大限に引き出すブースを実現します。</p>
+        <div class="about__stats">
+          <div class="about__stat">
+            <span class="about__stat-number" data-target="500">0</span>
+            <span class="about__stat-label">施工実績</span>
+          </div>
+          <div class="about__stat">
+            <span class="about__stat-number" data-target="20">0</span>
+            <span class="about__stat-label">年の経験</span>
+          </div>
+          <div class="about__stat">
+            <span class="about__stat-number" data-target="50">0</span>
+            <span class="about__stat-label">対応展会場</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ Services ═══ -->
+    <section class="services section" id="services">
+      <div class="container">
+        <h2 class="section__title">Services</h2>
+        <div class="services__grid">
+          <article class="service-card">
+            <div class="service-card__icon" aria-hidden="true">✏️</div>
+            <h3 class="service-card__title">企画・設計</h3>
+            <p class="service-card__desc">貴社のブランドと出展目的に合わせたブースコンセプトの立案から詳細設計まで。</p>
+          </article>
+          <article class="service-card">
+            <div class="service-card__icon" aria-hidden="true">🏗️</div>
+            <h3 class="service-card__title">制作・施工</h3>
+            <p class="service-card__desc">高品質なブース制作と、当日の確実な施工・設営を約束します。</p>
+          </article>
+          <article class="service-card">
+            <div class="service-card__icon" aria-hidden="true">🎯</div>
+            <h3 class="service-card__title">運営サポート</h3>
+            <p class="service-card__desc">展示会当日の運営スタッフ手配からアフターフォローまでトータルサポート。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ Works Gallery ═══ -->
+    <section class="works section" id="works">
+      <div class="container">
+        <h2 class="section__title">Works</h2>
+        <div class="works__filters" role="tablist" aria-label="カテゴリフィルター">
+          <button class="works__filter active" role="tab" aria-selected="true" data-filter="all">すべて</button>
+          <button class="works__filter" role="tab" aria-selected="false" data-filter="exhibition">展示会</button>
+          <button class="works__filter" role="tab" aria-selected="false" data-filter="event">イベント</button>
+          <button class="works__filter" role="tab" aria-selected="false" data-filter="other">その他</button>
+        </div>
+        <div class="works__grid" id="worksGrid">
+          <!-- Cards rendered by JS -->
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ CTA ═══ -->
+    <section class="cta section" id="contact">
+      <div class="cta__bg" aria-hidden="true"></div>
+      <div class="cta__content container">
+        <h2 class="cta__title">まずはお気軽にご相談ください</h2>
+        <p class="cta__desc">展示会出展に関するご質問・お見積もりは無料です。<br />経験豊富なスタッフが貴社の出展をサポートします。</p>
+        <a href="#" class="cta__btn btn btn--primary btn--lg">お問い合わせフォームへ</a>
+      </div>
+    </section>
+  </main>
+
+  <!-- ═══ Footer ═══ -->
+  <footer class="footer">
+    <div class="footer__inner container">
+      <div class="footer__info">
+        <p class="footer__company">株式会社オージャスト</p>
+        <p class="footer__address">〒100-0001 東京都千代田区千代田1-1-1</p>
+        <p class="footer__tel">TEL: 03-1234-5678</p>
+      </div>
+      <div class="footer__links">
+        <a href="#">プライバシーポリシー</a>
+        <a href="#">会社概要</a>
+        <a href="#">よくあるご質問</a>
+      </div>
+      <div class="footer__social" aria-label="SNSリンク">
+        <a href="#" aria-label="Twitter">𝕏</a>
+        <a href="#" aria-label="Facebook">fb</a>
+        <a href="#" aria-label="Instagram">ig</a>
+      </div>
+    </div>
+    <p class="footer__copy">&copy; 2026 株式会社オージャスト</p>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

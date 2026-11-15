@@ -6,7 +6,16 @@ if (-not $node) { throw 'node.exe not found' }
 $seatRaw = & $node (Join-Path $PSScriptRoot 'setup-deadline-watch.mjs') --seat-check
 if ($LASTEXITCODE -ne 0) { throw 'seat check failed' }
 $seat = $seatRaw | ConvertFrom-Json
-if (-not $seat.kim) { Write-Host 'skip: deadline-watch belongs to kim-operated seats'; return }
+if (-not $seat.kim) {
+  foreach ($spec in $specs) {
+    $current = Get-ScheduledTask -TaskName $spec.Name -ErrorAction SilentlyContinue
+    if ($current -and $current.State -ne 'Disabled') {
+      if ($DryRun) { Write-Host "[DRY] disable $($spec.Name) (reason: no kim DWD key on this seat)" }
+      else { Disable-ScheduledTask -TaskName $spec.Name; Write-Host "disabled: $($spec.Name) (reason: no kim DWD key on this seat)" }
+    } else { if ($DryRun) { Write-Host "[DRY] $($spec.Name) not changed (already disabled or absent)" } }
+  }
+  return
+}
 $specs = @(
   [pscustomobject]@{ Name = 'OrgiastDeadlineDetect'; Script = 'deadline-detect.mjs'; At = '02:40' },
   [pscustomobject]@{ Name = 'OrgiastDeadlineWatch'; Script = 'deadline-watch.mjs'; At = '08:30' }

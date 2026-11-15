@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 import { execFileSync } from 'node:child_process';
-import { DAY, collectConvergence, convergenceProblems, convergenceAddress, missingHooks } from './fleet-convergence.mjs';
+import { DAY, collectConvergence, convergenceProblems, convergenceAddress, missingHooks, requiredTaskNames } from './fleet-convergence.mjs';
 import { reconcileConvergence, convergenceTargets } from './fleet-convergence-watch.mjs';
 import { receiveConvergence, syncInvocation } from './fleet-convergence-sync.mjs';
 import { bootstrapUser } from './session-bootstrap.mjs';
@@ -165,4 +165,55 @@ test('without any checkout hook counts stay unknown even with expected hooks', t
   assert.equal(row.hookMissing, null);
   assert.equal(row.hookMissingNames, undefined);
   assert.equal(row.behindMain, null);
+});
+
+test('taskMissing and taskMissingNames tracking on win32 vs non-win32', t => {
+  const h = home(t);
+  const expectedHooks = { hooks: {} };
+  const manifest = JSON.parse(fs.readFileSync(path.join(repo, 'tools/setup-manifest.json'), 'utf8'));
+  const allRequired = requiredTaskNames(manifest);
+  assert.ok(allRequired.length >= 10, 'expected at least 10 required scheduled tasks');
+
+  // 1. win32: all required present -> taskMissing 0, taskMissingNames []
+  const rowAll = collectConvergence({
+    home: h, repo, platform: 'win32', expectedHooks,
+    getScheduledTaskNames: () => allRequired
+  });
+  assert.equal(rowAll.taskMissing, 0);
+  assert.deepEqual(rowAll.taskMissingNames, []);
+
+  // 2. win32: 1 required missing -> taskMissing 1, taskMissingNames [first required name]
+  const firstRequired = allRequired[0];
+  const withoutFirst = allRequired.slice(1);
+  const rowMissing = collectConvergence({
+    home: h, repo, platform: 'win32', expectedHooks,
+    getScheduledTaskNames: () => withoutFirst
+  });
+  assert.equal(rowMissing.taskMissing, 1);
+  assert.deepEqual(rowMissing.taskMissingNames, [firstRequired]);
+  assert.ok(convergenceProblems(rowMissing).includes('タスク不足1'));
+
+  // 3. win32: query failure (throws error) -> taskMissing null, taskMissingNames undefined
+  const rowFailed = collectConvergence({
+    home: h, repo, platform: 'win32', expectedHooks,
+    getScheduledTaskNames: () => { throw new Error('ps error'); }
+  });
+  assert.equal(rowFailed.taskMissing, null);
+  assert.equal(rowFailed.taskMissingNames, undefined);
+
+  // 4. win32: getScheduledTaskNames returns null (listScheduledTaskNames failure) -> taskMissing null, taskMissingNames undefined
+  const rowNull = collectConvergence({
+    home: h, repo, platform: 'win32', expectedHooks,
+    getScheduledTaskNames: () => null
+  });
+  assert.equal(rowNull.taskMissing, null);
+  assert.equal(rowNull.taskMissingNames, undefined);
+
+  // 5. non-win32 (e.g. linux) -> taskMissing null, taskMissingNames undefined
+  const rowLinux = collectConvergence({
+    home: h, repo, platform: 'linux', expectedHooks,
+    getScheduledTaskNames: () => ['TaskA', 'TaskB']
+  });
+  assert.equal(rowLinux.taskMissing, null);
+  assert.equal(rowLinux.taskMissingNames, undefined);
 });

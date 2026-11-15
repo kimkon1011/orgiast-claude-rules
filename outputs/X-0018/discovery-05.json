@@ -1,0 +1,46 @@
+{
+  "attempt": "X-0018-05",
+  "time": "2026-11-09T04:52:54.248923+09:00",
+  "revision": "9d0dd65a4a19110c8d34a4e3b483561243548f5c",
+  "node": "v22.23.4",
+  "playwright_core": "1.64.1",
+  "target": "https://rebooth.co.jp/works-top/",
+  "checks": [
+    {
+      "command": "chromium.launch({headless:true})",
+      "result": "既定実行ファイルなし"
+    },
+    {
+      "command": "PLAYWRIGHT_BROWSERS_PATH=/tmp/x0018-browsers node node_modules/playwright-core/cli.js install chromium --only-shell",
+      "exit": 0,
+      "result": "Chromium headless shell 156.0.8078.4 revision1248 とFFmpegを/tmpへ配置"
+    },
+    {
+      "command": "PLAYWRIGHT_BROWSERS_PATH=/tmp/x0018-browsers node outputs/X-0018/browser-05.mjs",
+      "exit": 0,
+      "result": "JSON status=failed。起動前にlibnspr4.so不足でChromium exit127。初版スクリプトは失敗をJSONに記録してexit0だったため、今後は失敗時exit1に修正。再実行なし。"
+    },
+    {
+      "command": "ldd /tmp/x0018-browsers/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell",
+      "exit": 0,
+      "missing": [
+        "libnspr4.so",
+        "libnss3.so",
+        "libnssutil3.so",
+        "libasound.so.2"
+      ]
+    },
+    {
+      "command": "/mnt/c/Windows/System32/cmd.exe /c ver",
+      "exit": 1,
+      "result": "WSL UtilBindVsockAnyPort socket failed 1。既存Windows Chrome/Playwright1248ファイルは存在するが実行経路不可。"
+    },
+    {
+      "command": "cd /tmp/x0018-libs && apt-get download libnspr4 libnss3 libasound2t64",
+      "exit": 100,
+      "result": "setgroups/setegid/seteuid Operation not permitted、http subprocess exit112。システム変更なし。"
+    }
+  ],
+  "decision": "技術制約を具体化。公開サイトへ到達せず、DOM/クリック/画面は観測不能。代替ツールの成功やvibe-testing導入成功を主張しない。",
+  "next": "許可範囲の/tmpへの依存展開経路を評価しブラウザ起動へ戻る。同時に正式ソース・隔離送信先locatorが必要。"
+}

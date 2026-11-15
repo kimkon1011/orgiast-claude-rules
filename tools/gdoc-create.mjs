@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { ensureKimEditor } from './lib/kim-editor.mjs';
 /**
  * gdoc-create.mjs — Markdown から新規 Google Doc を作成する。
  *
@@ -150,6 +151,7 @@ async function main() {
     )).json();
   }
 
+  await ensureKimEditor(doc.id, { actingUser: subject, token, api, created: !reused });
   if (args.share) await shareAndRecord({ fileId: doc.id, emails: args.share, role: args['share-role'], auth: token, name: doc.name });
 
   // 作成レスポンスだけで成功とせず、再利用時も実際の本文を取り直して確認する。

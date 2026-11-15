@@ -45,7 +45,10 @@ export function publishSeatPr({ cwd = process.cwd(), home = process.env.ORGIAST_
   if (route === 'workflow-stop') throw new Error('.github/workflows/ を含むため停止。workflow 権限とレビューの専用経路で扱ってください');
   // origin が fork でも、確認した base に明示的に push。remote 設定には副作用を出さない。
   run('git', ['push', target.url, `${head}:refs/heads/${branch}`]);
-  const existing = JSON.parse(run('gh', ['pr', 'list', '--repo', target.base, '--head', `${target.base.split('/')[0]}:${branch}`, '--base', base, '--state', 'open', '--json', 'number,url']));
+  let existing = JSON.parse(run('gh', ['pr', 'list', '--repo', target.base, '--head', `${target.base.split('/')[0]}:${branch}`, '--base', base, '--state', 'open', '--json', 'number,url']));
+  // gh/GitHub does not match owner:branch for a same-repository PR on every CLI/API version.
+  // Fall back to the plain branch before trying to create a duplicate PR.
+  if (!existing.length) existing = JSON.parse(run('gh', ['pr', 'list', '--repo', target.base, '--head', branch, '--base', base, '--state', 'open', '--json', 'number,url']));
   let pr = existing[0];
   if (!pr) {
     const args = ['pr', 'create', '--repo', target.base, '--base', base, '--head', branch]; // automerge は安全パスでのみ後付け

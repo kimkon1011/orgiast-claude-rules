@@ -1,0 +1,114 @@
+/* ============================================================
+   transitions.dev 互換トランジション — expo-apply 用
+   apps/expo-apply/index.html に組み込んで使用
+   ============================================================ */
+
+@import url('../skills/transitions-ui/samples/common/transitions.css');
+
+/* --- expo-apply 固有の適用 --- */
+
+/* 言語切替トグル（既存 .lang-btn に .t-toggle を追加想定） */
+.lang-switcher {
+  position: relative;
+}
+.lang-switcher .t-toggle-indicator {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: white;
+  border-radius: 1px;
+  transition: left var(--t-duration-normal) var(--t-easing-in-out),
+              width var(--t-duration-normal) var(--t-easing-in-out);
+}
+
+/* アラートバナー（既存 .alert に .t-toast を追加想定） */
+#alertBanner.alert {
+  transform: translateY(-8px);
+  opacity: 0;
+  filter: blur(var(--t-blur-sm));
+  transition: transform var(--t-duration-normal) var(--t-easing-spring),
+              opacity var(--t-duration-normal) var(--t-easing-out),
+              filter var(--t-duration-normal) var(--t-easing-out);
+}
+#alertBanner.alert:not(.hidden) {
+  transform: translateY(0);
+  opacity: 1;
+  filter: blur(0);
+}
+
+/* 確認モーダル（既存 .modal-overlay / .modal-content に適用想定） */
+.modal-overlay {
+  opacity: 0;
+  transition: opacity var(--t-duration-normal) var(--t-easing-out);
+}
+.modal-overlay:not(.hidden) {
+  opacity: 1;
+}
+.modal-content {
+  transform: scale(0.95);
+  opacity: 0;
+  transition: transform var(--t-duration-normal) var(--t-easing-spring),
+              opacity var(--t-duration-normal) var(--t-easing-out);
+}
+.modal-overlay:not(.hidden) .modal-content {
+  transform: scale(1);
+  opacity: 1;
+}
+
+/* ステータスバッジのトランジション */
+.status-badge {
+  transition: background var(--t-duration-fast) var(--t-easing-out),
+              color var(--t-duration-fast) var(--t-easing-out);
+}
+
+/* 統計カードの数値（.stat-val に .t-number-pop-in を追加想定） */
+.stat-val {
+  transition: transform var(--t-duration-slow) var(--t-easing-spring),
+              opacity var(--t-duration-normal) var(--t-easing-out);
+}
+
+/* ヒーローセクション（既存 .hero の h1/p） */
+.hero h1,
+.hero p {
+  transition: opacity var(--t-duration-normal) var(--t-easing-out),
+              transform var(--t-duration-normal) var(--t-easing-out);
+}
+
+/* フォーム送信成功の確認カード */
+#confirmationCard {
+  transition: opacity var(--t-duration-slow) var(--t-easing-out),
+              transform var(--t-duration-slow) var(--t-easing-spring);
+}
+#confirmationCard:not(.hidden) {
+  opacity: 1;
+  transform: translateY(0);
+}
+#confirmationCard.hidden {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
+/* テーブル行のホバー */
+#appTableBody tr {
+  transition: background var(--t-duration-fast) var(--t-easing-out);
+}
+
+/* カード全体 */
+.card {
+  transition: box-shadow var(--t-duration-normal) var(--t-easing-out);
+}
+
+/* CTA ボタン */
+.btn-primary {
+  transition: background var(--t-duration-fast) var(--t-easing-out),
+              transform var(--t-duration-fast) var(--t-easing-spring);
+}
+.btn-primary:hover {
+  transform: scale(1.02);
+}
+.btn-primary:active {
+  transform: scale(0.98);
+}
+
+/* reduced-motion は transitions.css から継承 */

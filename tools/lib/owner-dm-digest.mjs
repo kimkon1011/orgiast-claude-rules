@@ -1,6 +1,9 @@
+import { isKimHumanProgress } from './human-progress-row.mjs';
+import { checkProgressSummary } from './check-progress-summary.mjs';
 import { decisionOwnerOf } from '../auto-progress-decision-owner.mjs';
 import { notificationKind } from './owner-dm-policy.mjs';
 const day = 86400000;
+const isStopped = row => ['stalled', 'waiting_user'].includes(row.status) || row.verdict === 'stalled';
 // まとめの1行を作る。2026-11-04 nishi: 届いたまとめが「【kimko-PC（）・… の Claude Code】（このDMに返信してください）」
 // 「新しいセッションが で引き継ぎ」「10 に成約率」と穴だらけで、結局「進捗どう？」と聞くしかなかった。
 // - 出どころの見出し行（【…の Claude Code】プロジェクト: … ／ 作業ID: …）は改行を潰す前に行ごと外す。
@@ -51,7 +54,7 @@ export function compactDigest(rows, deferred, now, { home, owner = '' } = {}) {
       continue;
     }
     // 「何に答えるのか」が分かるよう、判断内容は改行して独立の行に出す（1通1800字の分割は行単位）。
-    lines.push(`・${text}（このDMに返信してください）`);
+    lines.push(`・${text}（${owner.toLowerCase() === 'kim@orgiast.jp' ? 'このセッションで回答してください' : 'このDMに返信してください'}）`);
     if (detail) lines.push(`  → 判断してほしいこと: ${detail}`);
   }
   const extra = [];
@@ -59,14 +62,18 @@ export function compactDigest(rows, deferred, now, { home, owner = '' } = {}) {
   if (!unique.length) lines.push('なし');
   else if (recent.length > included.length) extra.push(`ほか返事待ち ${recent.length - included.length}件（次のまとめでお知らせします）`);
   if (extra.length) lines.push(extra.join(' ／ '));
-  const humanRows = rows.filter(r => notificationKind('', { kind: 'done-requested', session: r, home }) === 'done-requested');
+  const humanRows = rows.filter(r => isKimHumanProgress(r) || notificationKind('', { kind: 'done-requested', session: r, home }) === 'done-requested');
   const human = [...humanRows, ...deferred.filter(r => r.kind === 'done-requested' && !humanRows.some(h => h.sessionId && h.sessionId === r.session?.sessionId)).map(r => ({ ...r.session, status: 'done', label: r.session?.label || r.session?.requestText || r.text }))];
-  const names = list => list.map(r => plain(r.label || r.requestText || r.promise)).filter(Boolean).slice(0, 2).join('・').slice(0, 120);
   const done = human.filter(r => r.status === 'done');
   const ongoing = human.filter(r => r.status !== 'done');
-  lines.push('あなたが頼んだこと', `完了 ${done.length}件: ${names(done) || 'なし'}`, `進行中 ${ongoing.length}件: ${names(ongoing) || 'なし'}${ongoing.some(r => ['stalled', 'waiting_user'].includes(r.status)) ? `（止まっている ${ongoing.filter(r => ['stalled', 'waiting_user'].includes(r.status)).length}件）` : ''}`);
+  lines.push('あなたが頼んだこと', `完了 ${done.length}件 / 進行中 ${ongoing.length}件（止まっている ${ongoing.filter(r => isStopped(r)).length}件）`);
+  for (const row of [...ongoing, ...done].slice(0, 10)) {
+    const summary = checkProgressSummary(row.checkText).split(/\r?\n/)[0];
+    lines.push(`・${plain(row.label || row.requestText || row.promise).slice(0, 60)} ／ ${summary} ／ nextKim: ${plain(row.nextKim) || 'なし'}`);
+  }
+  if (human.length > 10) lines.push(`ほか ${human.length - 10}件`);
   const automatic = rows.filter(r => !humanRows.includes(r));
-  lines.push('自動作業', `完了 ${automatic.filter(r => r.status === 'done').length + deferred.filter(r => r.kind === 'automatic' && r.status === 'done').length}件・止まっている ${automatic.filter(r => ['stalled', 'waiting_user'].includes(r.status)).length + deferred.filter(r => r.kind === 'automatic' && r.status === 'stalled').length}件`);
+  lines.push('自動作業', `完了 ${automatic.filter(r => r.status === 'done').length + deferred.filter(r => r.kind === 'automatic' && r.status === 'done').length}件・止まっている ${automatic.filter(r => isStopped(r)).length + deferred.filter(r => r.kind === 'automatic' && r.status === 'stalled').length}件`);
   const shown = new Set([...included, ...old].map(a => a.text));
   return { text: lines.join('\n'), includedIds: actions.filter(a => shown.has(a.text)).map(a => a.id).filter(Boolean) };
 }
@@ -83,6 +90,7 @@ export const kimAction = row => {
 
 export const isHumanActionRequired = (row) => {
   if (row.status === 'done') return false;
+  if (row.autoRegisteredCheck && row.status !== 'waiting_user') return false;
   // main: 依頼本文がない明示的な判断待ちも取りこぼさない。
   if (row.status === 'waiting_user' && !String(row.nextKim || '').trim()) return true;
   if (kimAction(row) !== 'なし') return true;

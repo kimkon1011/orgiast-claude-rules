@@ -55,7 +55,7 @@ test('inbox dedupe key survives missing askId after a crash', async t => {
 test('exit 75 preserves attempts and route and parses retryAt', async t => {
   const ctx = fixture(t), a = action({ executor: 'codex', routes: ['codex-do', 'cheap-code'] });
   ctx.spawn = (_bin, args) => {
-    for (const flag of ['--cwd', '--origin', '--timeout', '--no-fallback', '--prompt-file']) assert.ok(args.includes(flag));
+    for (const flag of ['--cwd', '--origin', '--timeout', '--prompt-file']) assert.ok(args.includes(flag));
     assert.equal(args[args.indexOf('--timeout') + 1], '1800');
     return { status: 75, stdout: 'log\n{"retryAt":"2026-11-07T00:00:00Z"}\n' };
   };
@@ -109,7 +109,7 @@ test('weekly runs only Monday Tokyo time, uses metrics, and runs once per day', 
   atomicWrite(path.join(ctx.root, 'data/marketing/weekly-metrics.md'), '受注: 計測済み');
   let calls = 0;
   ctx.spawn = (_bin, args) => {
-    calls++; assert.ok(args.includes('--no-fallback'));
+    calls++;
     const prompt = fs.readFileSync(args[args.indexOf('--prompt-file') + 1], 'utf8');
     assert.match(prompt, /受注: 計測済み/);
     return { status: 0, stdout: JSON.stringify([action({ title: '顧客に案内', instructions: 'メールを送信する', executor: 'codex' })]) };

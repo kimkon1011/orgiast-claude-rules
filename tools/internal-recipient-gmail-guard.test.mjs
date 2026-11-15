@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { extractAddresses, extractMentions, GMAIL_WRITE_ACTIONS, githubHandles, HOOK_MATCHER, isGhWriteCommand, isInternal, judge, judgeBash, loadLedger, SHELL_TOOLS, TARGET } from './internal-recipient-gmail-guard.mjs';
+import { extractAddresses, extractMentions, GMAIL_WRITE_ACTIONS, githubHandles, HOOK_MATCHER, isGhWriteCommand, isInternal, judge, judgeBash, loadLedger, shouldBlockInternal, SHELL_TOOLS, TARGET } from './internal-recipient-gmail-guard.mjs';
 
 const ledger = JSON.parse(fs.readFileSync(new URL('./internal-recipients.default.json', import.meta.url), 'utf8'));
 const hook = (tool_input, action = 'create_draft', account = '') => ({ tool_name: `mcp__claude_ai_Gmail${account}__${action}`, tool_input });
@@ -32,8 +32,17 @@ test('表示名付きの社内ドメインへの送信を拒否', () => {
 test('外部顧客への下書きは通す', () => {
   assert.deepEqual(judge(hook({ to: 'customer@example.co.jp' }), ledger), { decision: 'pass', addresses: ['customer@example.co.jp'], internal: [] });
 });
-test('to が外部でも cc に内部宛があれば拒否', () => {
-  assert.equal(judge(hook({ to: 'customer@example.co.jp', cc: ['keiri.orgiast@gmail.com'] }), ledger).decision, 'block');
+test('To に外部宛があれば社内 Cc/Bcc を許可し、なければ拒否', () => {
+  assert.equal(judge(hook({ to: 'customer@example.co.jp', cc: ['keiri.orgiast@gmail.com'] }), ledger).decision, 'pass');
+  assert.equal(judge(hook({ to: 'customer@example.co.jp', bcc: ['atsuoast3@gmail.com'] }), ledger).decision, 'pass');
+  assert.equal(judge(hook({ to: 'nishi@orgiast.jp' }), ledger).decision, 'block');
+  assert.equal(judge(hook({ to: 'nishi@orgiast.jp', cc: ['customer@example.co.jp'] }), ledger).decision, 'block');
+  assert.equal(judge(hook({ to: ['nishi@orgiast.jp', 'customer@example.co.jp'] }), ledger).decision, 'pass');
+  assert.equal(judge(hook({ to: 'kimkongyong@gmail.com' }), ledger).decision, 'block');
+  assert.equal(shouldBlockInternal({ to: 'customer@example.co.jp', cc: 'kimkongyong@gmail.com' }, ledger), false);
+});
+test('reply で to/cc 未指定の場合は現行どおり pass', () => {
+  assert.equal(judge(hook({ message_id: 'message-1' }, 'reply'), ledger).decision, 'pass');
 });
 test('Drive など対象外は即 pass', () => {
   assert.deepEqual(judge({ tool_name: 'mcp__claude_ai_Google_Drive__create_file', tool_input: { to: 'nishi@orgiast.jp' } }, null), { decision: 'pass', addresses: [], internal: [] });
@@ -176,6 +185,10 @@ test('curl POST drafts の外部アドレスは実プロセスでも無出力で
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, '');
   assert.equal(result.stderr, '');
+});
+test('curl POST drafts の外部宛 + 内部 Cc は通す', () => {
+  const command = `curl -X POST https://gmail.googleapis.com/gmail/v1/users/me/drafts -d 'To: customer@example.com Cc: keiri.orgiast@gmail.com'`;
+  assert.equal(judgeBash(shellHook(command), ledger).decision, 'pass');
 });
 test('GET drafts の読み取りは通す', () => {
   assert.equal(judgeBash(shellHook('curl https://gmail.googleapis.com/gmail/v1/users/me/drafts/abc123'), ledger).decision, 'pass');

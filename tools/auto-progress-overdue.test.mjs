@@ -12,6 +12,7 @@ import { listItems, compactItems, markSeen, selectContext } from './kim-inbox.mj
 import { collectAwaiting, respond, apId } from './kim-awaiting.mjs';
 const now = Date.parse('2026-11-05T00:00:00Z');
 const H = 3600000;
+const periodic = home => listItems(home).filter(item => item.source === 'auto-progress-periodic');
 const output = 'PC-A: gate配布=完了\nPC-B: gate配布=なし\nPC-C: gate配布=完了';
 function fixture(t, overrides = {}) {
   const home = progressHome('overdue-fixture-');
@@ -41,14 +42,14 @@ test('overdue without executor remains open, retries next cycle, and reports per
   assert.equal(f.read().status, 'overdue');
   assert.equal(f.read().resumeCount, 0);
   assert.equal(latestOpenPromises(readLedger(ledgerFile(f.home))).length, 1);
-  const info = listItems(f.home)[0];
+  const info = periodic(f.home)[0];
   assert.match(info.text, /期限超過・追跡中/);
   assert.ok(info.text.includes(output));
   assert.match(info.text, /Claude の次の手: PC-B/);
   await run({ home: f.home, now: now + 25 * H, io: f.io });
   assert.equal(f.resumes.length, 2);
-  assert.equal(listItems(f.home).length, 1);
-  assert.equal(listItems(f.home)[0].repeatCount, 2);
+  assert.equal(periodic(f.home).length, 1);
+  assert.equal(periodic(f.home)[0].repeatCount, 2);
 });
 for (const mode of ['budget', 'interval', 'cwd', 'per-run-limit']) test(`temporary ${mode} resumes on a later cycle`, async t => {
   const f = fixture(t, mode === 'interval' ? { resumedAt: new Date(now - H).toISOString() } : {});
@@ -101,27 +102,27 @@ for (const initialCount of [MAX_RESUMES - 1, MAX_RESUMES]) test(`resume limit ${
 test('unchanged progress every three hours is one reusable info, idempotent and compact compatible', async t => {
   const f = fixture(t, { ts: new Date(now).toISOString(), deadlineAt: new Date(now + 24 * H).toISOString() });
   for (const offset of [0, PROGRESS_INTERVAL_MS - 1]) await run({ home: f.home, now: now + offset, io: f.io });
-  assert.equal(listItems(f.home).length, 0);
+  assert.equal(periodic(f.home).length, 0);
   await run({ home: f.home, now: now + PROGRESS_INTERVAL_MS, io: f.io });
-  let item = listItems(f.home)[0]; assert.equal(item.repeatCount, 1);
+  let item = periodic(f.home)[0]; assert.equal(item.repeatCount, 1);
   const asks = Array.from({ length: 5 }, (_, i) => ({ kind: 'ask', status: 'open', id: `ask-${i}`, text: `質問${i}`, createdAt: f.row.ts, shownSessions: [], shownCount: 0 }));
   const context = selectContext([...asks, item], { sessionId: 'another-session', now });
-  assert.ok(context.indexOf('自動進行の進捗') < context.indexOf('質問0'));
+  assert.ok(context.includes(f.row.label));
   markSeen(f.home, item.id);
   await run({ home: f.home, now: now + PROGRESS_INTERVAL_MS * 2, io: f.io });
-  item = listItems(f.home)[0];
+  item = periodic(f.home)[0];
   assert.equal(item.status, 'open'); assert.equal(item.repeatCount, 2); assert.equal(item.shownCount, 0);
   assert.deepEqual(item.shownSessions, []);
   await run({ home: f.home, now: now + PROGRESS_INTERVAL_MS * 2, io: f.io });
   // Simulate a crash after inbox publication but before advancing the ledger clock.
   writeLedger(ledgerFile(f.home), [{ ...f.read(), lastProgressNotifiedAt: new Date(now + PROGRESS_INTERVAL_MS).toISOString() }]);
   await run({ home: f.home, now: now + PROGRESS_INTERVAL_MS * 2, io: f.io });
-  assert.equal(listItems(f.home)[0].repeatCount, 2);
-  compactItems(f.home); assert.equal(listItems(f.home).length, 1);
+  assert.equal(periodic(f.home)[0].repeatCount, 2);
+  compactItems(f.home); assert.equal(periodic(f.home).length, 1);
   const other = { ...f.read(), sessionId: 'other-job', label: f.row.label };
   writeLedger(ledgerFile(f.home), [f.read(), { ...other, lastProgressNotifiedAt: new Date(now).toISOString() }]);
   await run({ home: f.home, now: now + PROGRESS_INTERVAL_MS * 2, io: f.io });
-  compactItems(f.home); assert.equal(listItems(f.home).length, 2);
+  compactItems(f.home); assert.equal(periodic(f.home).length, 2);
 });
 test('periodic delivery failure retains the due clock and retries', async t => {
   const f = fixture(t);
@@ -216,11 +217,13 @@ test('long check output retains work ID and priority even when deadlines are pre
   const f = fixture(t);
   f.io.executeCheck = () => ({ code: 1, text: output.repeat(500) });
   await run({ home: f.home, now, io: f.io });
-  const info = listItems(f.home)[0]; assert.match(info.text, /作業ID: 5fd545ff/);
+  const info = periodic(f.home)[0]; assert.match(info.text, /作業ID: 5fd545ff/);
   const base = { status: 'open', createdAt: f.row.ts, shownSessions: [], shownCount: 0 };
   const items = [{ ...base, kind: 'deadline', key: 'D-001', due: '2026-11-06', text: '期限の確認' },
     ...Array.from({ length: 5 }, (_, i) => ({ ...base, kind: 'ask', id: `ask-${i}`, text: `質問${i}` })), info];
   const context = selectContext(items, { sessionId: '5fd545ff-another', now });
-  assert.ok(context.includes('自動進行の進捗'));
-  if (context.includes('質問0')) assert.ok(context.indexOf('自動進行の進捗') < context.indexOf('質問0'));
+  assert.ok(context.includes(f.row.label));
+  assert.ok(context.length <= 1800);
 });
+
+process.env.ORGIAST_AUTO_RESUME = '1';

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {gwsFetch,proxyCredential,GWS_MARKER,channelRequest} from './lib/gws-proxy.mjs';
+import {gwsFetch,proxyCredential,GWS_MARKER,channelRequest,retrySource} from './lib/gws-proxy.mjs';
 import {collectLineRows,syncLineHistory} from './line-history-sync.mjs';
 import {syncKnowledge} from './onboarding-sync.mjs';
 test('missing key routes only fixed account and approved scopes without token relay',()=>{
@@ -23,6 +23,44 @@ test('enrolled API request has no Google token and rejects redirects',async()=>{
  const result=await channelRequest('gws',{home:'nonexistent',env:{ORGIAST_KEYSERVE_SECRET:'enroll-secret',ORGIAST_KEYSERVE_PC:'WORK008'},query:{service:'drive',path:'/drive/v3/files'},fetchImpl:async(url,opts)=>{
   assert.equal(opts.method,'GET');assert.equal(opts.redirect,'error');assert.equal(opts.headers['x-orgiast-pc'],'WORK008');assert.equal(opts.headers.Authorization,undefined);assert.ok(!JSON.stringify(opts).includes('enroll-secret'));return Response.json({ok:true});
  }});assert.equal(result.ok,true);
+});
+const retryDeps=delays=>({home:'nonexistent',env:{ORGIAST_KEYSERVE_SECRET:'enroll-secret',ORGIAST_KEYSERVE_PC:'WORK008'},sleepImpl:async ms=>{delays.push(ms);}});
+test('channel gws の5xxは1分→3分→10分の計4回であきらめる（2026-11-13 06:30の再現）',async()=>{
+ const delays=[];let calls=0;
+ await assert.rejects(retrySource(()=>channelRequest('gws',{...retryDeps(delays),query:{service:'sheets',path:'/x'},fetchImpl:async()=>{calls++;return new Response('down',{status:calls===2?503:500});}}),retryDeps(delays)),/HTTP 500/);
+ assert.equal(calls,4);assert.deepEqual(delays,[60000,180000,600000]);
+});
+test('channel gws の5xx・ネットワークエラーは再試行で復帰する',async()=>{
+ const delays=[];let calls=0;
+ const result=await retrySource(()=>channelRequest('gws',{...retryDeps(delays),query:{},fetchImpl:async()=>{calls++;if(calls===1)return new Response('bad gateway',{status:502});if(calls===2)throw new Error('fetch failed');return Response.json({ok:true});}}),retryDeps(delays));
+ assert.equal(result.ok,true);assert.equal(calls,3);assert.deepEqual(delays,[60000,180000]);
+});
+test('channel gws の4xxと鍵欠落は再試行しない',async()=>{
+ const delays=[];let calls=0;
+ await assert.rejects(retrySource(()=>channelRequest('gws',{...retryDeps(delays),query:{},fetchImpl:async()=>{calls++;return new Response('nope',{status:404});}}),retryDeps(delays)),/HTTP 404/);
+ assert.equal(calls,1);assert.deepEqual(delays,[]);
+ await assert.rejects(channelRequest('gws',{home:'nonexistent',env:{},query:{},fetchImpl:async()=>{calls++;return Response.json({});}}),/keyserve enrollment credential missing/);
+ assert.equal(calls,1);assert.deepEqual(delays,[]);
+});
+
+test('source retry creates fresh timeout signals and handles upstream Google 5xx',async()=>{
+ const delays=[],signals=[];let calls=0;
+ const result=await retrySource(async()=>{
+   const signal=AbortSignal.timeout(30000);signals.push(signal);
+   const response=await gwsFetch('https://sheets.googleapis.com/v4/spreadsheets/s/values/A1',{headers:{Authorization:`Bearer ${GWS_MARKER}`},signal},{request:async()=>({status:++calls<3?503:200,body:Buffer.from('{}').toString('base64')})});
+   if(!response.ok)throw Object.assign(Error('Google failure'),{status:response.status});
+   return response.json();
+ },retryDeps(delays));
+ assert.deepEqual(result,{});assert.equal(new Set(signals).size,3);assert.deepEqual(delays,[60000,180000]);
+ let timeoutCalls=0;
+ await retrySource(async()=>{if(++timeoutCalls===1)throw new DOMException('expired','TimeoutError');},retryDeps([]));
+ assert.equal(timeoutCalls,2);
+});
+
+test('shared channel writes are never automatically retried',async()=>{
+ let calls=0;
+ await assert.rejects(channelRequest('line',{...retryDeps([]),body:{text:'hello'},fetchImpl:async()=>{calls++;throw Error('fetch failed');}}),/fetch failed/);
+ assert.equal(calls,1);
 });
 test('LINE sync reads both existing formats, deduplicates by ID and appends RAW values only',async t=>{
  const home=fs.mkdtempSync(path.join(os.tmpdir(),'line-sync-'));t.after(()=>fs.rmSync(home,{recursive:true,force:true}));

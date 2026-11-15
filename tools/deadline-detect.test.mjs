@@ -72,7 +72,7 @@ test('Gmailは件名/snippet選別し、日80通の残数とページカーソ�
 test('Drive OCRはコピーだけ削除、export失敗でも後始末、dry-runはコピーなし', async () => {
   const calls = [];
   const file = { id: 'original', mimeType: 'application/pdf' };
-  const request = async (url, o) => { calls.push([url,o]); if (o.method === 'POST') return { id: 'temporary' }; if (o.method === 'DELETE') return null; throw Error('export failed'); };
+  const request = async (url, o) => { calls.push([url,o]); if (url.includes('/permissions')) return { permissions: [{ type: 'user', emailAddress: 'kim@orgiast.jp', role: 'owner' }] }; if (o.method === 'PATCH') return {};  if (o.method === 'POST') return { id: 'temporary' }; if (o.method === 'DELETE') return null; throw Error('export failed'); };
   await assert.rejects(readDriveText(file, { user: 'kim@orgiast.jp', request }), /export failed/);
   assert.match(calls.at(-1)[0], /temporary$/); assert.equal(calls.at(-1)[1].method, 'DELETE');
   assert.equal(await readDriveText(file, { dryRun: true, request: () => assert.fail('mutation') }), '');
@@ -90,8 +90,57 @@ test('Driveの50件上限とLINE/Discordの新規行を読み込む', async t =>
   assert.equal((await collectDiscord({ home, now })).documents.length, 1);
 });
 
+test('旧LINE受信ログの日本語見出しも期限検出へ正規化する', async () => {
+  const now = new Date('2026-11-07T00:00:00Z');
+  const calls = [];
+  const sheets = { get: async (_id, range) => {
+    calls.push(range);
+    if (range.startsWith('Messages!')) throw new Error('Sheets GET HTTP 400');
+    return [
+      ['受信日時(JST)','グループ名','スレッドID','表示名','方向','本文','添付の保存パス','メッセージID'],
+      ['2026-11-06T12:00:00+09:00','','thread','担当者','受信','11月10日までに回答','','legacy-1'],
+    ];
+  } };
+  const result = await collectLine({ sheetId: 'legacy', state: { watermark: '2026-11-05T00:00:00Z' }, now, sheets });
+  assert.deepEqual(calls, ['Messages!A:H', "'受信ログ'!A:H"]);
+  assert.equal(result.documents[0].sourceRef, 'line:legacy:legacy-1');
+  assert.equal(result.documents[0].text, '担当者: 11月10日までに回答');
+})
+
+test('Driveの旧ページトークンが無効なら固定条件の先頭から再開する', async () => {
+  const urls = [];
+  const result = await collectDrive({ user: 'kim@orgiast.jp',
+    state: { day: '2026-11-03', used: 50, until: '2026-11-03T02:00:00Z', pageToken: 'expired' }, now,
+    request: async url => { urls.push(url); if (urls.length === 1) throw new Error('Google GET HTTP 400'); return { files: [], nextPageToken: 'next' }; } });
+  assert.match(urls[0], /pageToken=expired/);
+  assert.doesNotMatch(urls[1], /pageToken=/);
+  assert.equal(result.next.pageToken, 'next');
+  assert.match(result.next.query, /modifiedTime/);
+})
+
 test('不存在のfixtureで本番ソースへfallbackしない', async t => {
   const home=homeFor(t), errors=[];
   assert.equal(await main(['--dry-run','--fixture',home],{home,config:{...DEFAULT_CONFIG,sheetId:'live'},stderr:e=>errors.push(e),search:()=>assert.fail('live read')}),1);
   assert.match(errors[0],/fixture/); assert.deepEqual(fs.readdirSync(home),[]);
+});
+
+test('鍵なし席はseat checkでスキップされる', async t => {
+  const home=homeFor(t), output=[], heartbeats=[];
+  fs.writeFileSync(path.join(home,'.claude.json'), JSON.stringify({oauthAccount:{emailAddress:'seisaku-team@orgiast.jp'}}));
+  const code = await main(['--now','2026-11-04'], { home, stdout: x => output.push(x), skipSeatCheck: false, search: () => assert.fail('no network'), heartbeat: async (info) => heartbeats.push(info), notify: () => assert.fail('no notify') });
+  assert.equal(code, 0);
+  const result = JSON.parse(output[0]);
+  assert.equal(result.skip, true);
+  assert.match(result.reason, /DWD key/);
+  assert.equal(heartbeats.length, 1);
+  assert.match(heartbeats[0].summary, /スキップ/);
+});
+
+test('鍵持ちのkim席はfixtureモードで通常動作（fixtureはseat checkをスキップ）', async t => {
+  const home=homeFor(t), output=[];
+  const code = await main(['--dry-run','--fixture','tools/fixtures/deadline/'], { home, stdout: x => output.push(x), skipSeatCheck: false, request: () => assert.fail('network'), heartbeat: () => assert.fail('heartbeat'), notify: () => assert.fail('notify') });
+  assert.equal(code, 0);
+  const result = JSON.parse(output[0]);
+  assert.equal(result.skip, undefined);
+  assert.equal(result.added, 5);
 });

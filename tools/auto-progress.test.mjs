@@ -4,8 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
+import { automationModel } from './lib/automation-model.mjs';
 import vm from 'node:vm';
 import { spawnSync } from 'node:child_process';
+import { addCheck } from './auto-progress.mjs';
 import { main as registerTasks } from './register-auto-progress-task.mjs';
 import { isNoopPromise, extractPromise, extractNextKim, applyPromise, buildRecord, record, readLedger, writeLedger, ledgerFile, rowKey, originLine } from './auto-progress-ledger.mjs';
 import { run as runWatch, parseVerdict, deterministicVerdict, judge, GRACE_MS, RESUME_INTERVAL_MS, MAX_RESUMES, postSheet, resumeSession, forgiveNoExecutorResumes, main as watchMain, recentFiles, EXPIRE_UNATTENDED_MS, FALLBACK_STALL_MS, formatDoneMessage, readableReason, formatDoneBacklogMessages } from './auto-progress-watch.mjs';
@@ -187,7 +189,7 @@ test('resumeSession: APIエラー未返答だけ別モデルを指定する', as
   } } });
   await invoke({ sessionId: 'api-error-session', cwd: home, transcriptPath: '/t', source: 'api-error-unanswered', requestText: '依頼', promise: '依頼', error: 'rate_limit', apiErrorStatus: 429 });
   await invoke({ sessionId: 'normal-session', cwd: home, transcriptPath: '/t', promise: '通常の宣言' });
-  assert.equal(calls[0][5].model, process.env.AUTO_PROGRESS_RESUME_MODEL || 'opus');
+  assert.equal(calls[0][5].model, automationModel(process.env.AUTO_PROGRESS_RESUME_MODEL));
   assert.equal('model' in calls[1][5], false);
   assert.match(calls[0][1], /最初から通常どおり応えてください/);
 });
@@ -341,8 +343,10 @@ test('digest: DM未達を成功にせず、公開webhookへ送らない', async 
 test('resumeSession: 古い成果JSONは再利用しない', async () => {
   const home = tmp(); fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(home, '.claude', 'auto-progress-resume-session.json'), '{"progressed":true,"evidence":"old"}');
+  // 新仕様: runChild 成功後に新しい結果 JSON が無い → error（再開未達）。古い結果を再利用しないことの証明。
   const result = await resumeSession({ sessionId: 'session', cwd: home, promise: 'p' }, { home, io: { executable: 'mock', runChild: async () => ({ status: 'success' }) } });
-  assert.equal(result.outcome, 'blocked');
+  assert.equal(result.outcome, 'error');
+  assert.match(result.reason, /成果記録なし/);
 });
 
 test('buildRecord: hostname と OS username の既定値を記録', () => {
@@ -432,7 +436,7 @@ test('watch: nextKimが空/なしを優先して古い順に最大4件を再開'
   assert.deepEqual(resumed, ['direct-old', 'direct-mid', 'direct-new', 'waiting-old']);
 });
 
-test('digest: 大量の完了も全件を名前で出し、次回へ回さない', async () => {
+test('digest: 完了総数と最大10件の状況を表示し、残りは件数で出す', async () => {
   // 2026-11-04 仕様変更: 朝夕1通・3区分の要約に合わせ、保留・重複防止・匿名化の検査意図を維持する。
   const now = Date.now(), home = tmp();
   const rows = Array.from({ length: MAX_ITEMS + 2 }, (_, i) => ({ sessionId: `s${i}`, status: 'done', promise: `作業${i}`, ts: new Date(now - WINDOW_MS).toISOString(), doneAt: new Date(now - H).toISOString() }));
@@ -441,22 +445,23 @@ test('digest: 大量の完了も全件を名前で出し、次回へ回さない
   const first = await digest({ home, slot: '朝', now, io });
   assert.equal(first.count, MAX_ITEMS + 2);
   assert.match(messages[0], /完了 12/);
-  // 2026-11-04 仕様変更: 完了総数を残し、名前は2件までで1通にまとめる。
+  // 2026-11-06: 最大10件に要約とnextKimを付け、超過分は件数を示す。
   assert.equal(messages.length, 1);
-  assert.match(messages[0], /作業0・作業1/);
+  assert.match(messages[0], /作業0[\s\S]*作業1/);
   assert.doesNotMatch(messages[0], /作業11/);
-  assert.ok(messages[0].split('\n').length <= 10);
+  assert.equal((messages[0].match(/nextKim:/g) || []).length, 10);
+  assert.match(messages[0], /ほか 2件/);
   assert.equal((await digest({ home, slot: '朝', now: now + WINDOW_MS, io })).count, 0);
   assert.deepEqual(await digest({ home, slot: '朝', now: now + WINDOW_MS * 2, io }), { sent: false, count: 0 });
   assert.ok(messages.every(message => message.length <= 1800));
 });
 
-test('schedule: watchは毎時・実行上限55分とし既存PCも更新する', () => {
+test('schedule: watchは30分間隔・実行上限29分とし既存PCも更新する', () => {
   const script = fs.readFileSync(new URL('./register-auto-progress-task.ps1', import.meta.url), 'utf8');
   const triggers = script.match(/\$watchTriggers = (.*)/)[1];
   assert.deepEqual([...triggers.matchAll(/-At '([^']+)'/g)].map(m => m[1]), ['00:00']);
-  assert.match(triggers, /New-TimeSpan -Hours 1/);
-  assert.match(script, /-ExecutionTimeLimit \(New-TimeSpan -Minutes 55\)/);
+  assert.match(triggers, /New-TimeSpan -Minutes 30/);
+  assert.match(script, /-ExecutionTimeLimit \(New-TimeSpan -Minutes 29\)/);
   const poller = fs.readFileSync(new URL('./fleet-poller.ps1', import.meta.url), 'utf8');
   assert.match(poller, /if \(\$Dry\) \{ DrySkip 'register-auto-progress-task.ps1/);
   assert.match(poller, /-File \$autoProgressInstaller/);
@@ -595,7 +600,7 @@ test('digest: 長文でも件の途中で切らず、成功した宛先を失敗
   assert.deepEqual(calls, ['a', 'b', 'b']);
 });
 
-test('digest: 長文でも全件を名前で出し、1800字を超えたら分割して届ける', async () => {
+test('digest: 最大10件の長文の次の操作を保持し、同じ枠は再送しない', async () => {
   // 2026-11-04 仕様変更: 朝夕1通・3区分の要約に合わせ、保留・重複防止・匿名化の検査意図を維持する。
   const home = tmp(), now = Date.parse('2026-10-15T09:00:00+09:00'), messages = [];
   const rows = Array.from({ length: MAX_ITEMS, needsDm, verdictOf }, (_, i) => ({ sessionId: `long-${i}`, status: 'stalled', ts: new Date(now - H).toISOString(), promise: '確認'.repeat(100), reason: '理由'.repeat(100), nextKim: '選択'.repeat(100) }));
@@ -606,10 +611,11 @@ test('digest: 長文でも全件を名前で出し、1800字を超えたら分�
   assert.equal(second.sent, false);
   const body = messages.join('\n');
   assert.equal(messages.length, 1);
-  assert.ok(body.split('\n').length <= 10);
+  assert.equal((body.match(/nextKim:/g) || []).length, 10);
+  assert.doesNotMatch(body, /ほか \d+件/);
   assert.match(body, /あなたの返事待ち/);
   assert.match(body, /選択/);
-  assert.ok(body.length <= 1800);
+  assert.ok(body.includes('選択'.repeat(100)), 'nextKimを保持する');
 });
 
 test('digest: 予定の日付と固有名詞を壊さず、対応不要もなしにまとめる', () => {
@@ -848,7 +854,7 @@ test('digest: 朝枠の定時報告（朝枠・変化0件・進行中1件→sent
   // 朝枠・変化0件・進行中1件 → dryRun の text に項目名が入る
   const dry = await digest({ home, now: morning, slot: '朝', dryRun: true, io: morningIo });
   assert.equal(dry.sent, false);
-  assert.match(dry.text, /進行中 1件.*進行中の案件確認/);
+  assert.match(dry.text, /進行中 1件[\s\S]*進行中の案件確認/);
   assert.match(dry.text, /進行中/);
 
   // 朝枠・変化0件・進行中1件 → sent: true
@@ -1010,8 +1016,8 @@ test('digest: 進行中も件数だけでなく名前で出す（最終判定が
   ];
   const text = formatDigest([], now, 'PC', { waitingRows: [], doneRows: [], stalledRows: [], inProgressRows });
   assert.deepEqual(text.split('\n').filter(line => line.startsWith('・進行中')), [
-    '・進行中: 新しい作業',
-    '・進行中: 古い作業',
+    '・進行中: 新しい作業 — 状態未確認',
+    '・進行中: 古い作業 — 状態未確認',
   ]);
   assert.doesNotMatch(text, /・進行中: \d+件/);
 });
@@ -1089,7 +1095,7 @@ test('watch: 判断待ち通知に出どころ行が付き、owner 空なら自P
   assert.equal(sent.length, 1);
   assert.equal(sent[0].owner, 'cr@orgiast.jp');
   assert.match(sent[0].text, /^【作業用001（PC）・cr@orgiast\.jp の Claude Code】プロジェクト: 案件A/);
-  assert.match(sent[0].text, /自動進行が判断待ちです: 62社へ送信\nOK 待ち/);
+  assert.match(sent[0].text, /自動進行が判断待ちです: 62社へ送信\nあなたの返事待ち: 62社への送信を承認\n準備済み: OK 待ち/);
 });
 
 test('watch: 自動進行完了時に結果の中身つきDMを1通送り、2回目は送らない（doneNotifiedAtで重複防止）', async () => {
@@ -1132,7 +1138,8 @@ test('watch: 自動進行完了時に結果の中身つきDMを1通送り、2回
   assert.match(msg, /✅ 完了:/);
   assert.match(msg, /— テスト実行に成功し、全件パスしました。 詳細はログを確認。/);
   assert.match(msg, /成果物: reports\/summary\.md/);
-  assert.match(msg, /kim がすること: なし/);
+  assert.match(msg, /成果物の確認未了/);
+  assert.match(msg, /承認待ち: 未確認/);
 
   // 台帳に doneNotifiedAt が記録されていること
   const rowsAfterFirst = readLedger(ledgerFile(home));
@@ -1643,3 +1650,63 @@ test('addCheck CLI: $env: を含む check は preflight で拒否され exit 2 �
   assert.match(result.stderr, /\$env:/);
   assert.equal(readLedger(ledgerFile(home)).length, 0);
 });
+
+test('addCheck: --next-kim の処理と古い nextKim のリセット、promise の上書き', () => {
+  const home = tmp();
+  // 1. 自動登録などで作られた古い nextKim と promise を準備
+  writeLedger(ledgerFile(home), [{
+    sessionId: 'session-4ee33e10',
+    status: 'open',
+    ts: new Date(Date.now() - 3600000).toISOString(),
+    promise: '古い約束',
+    nextKim: '古い質問: 詳しく教えてください',
+    autoRegisteredCheck: true
+  }]);
+
+  // 2. --next-kim も --ask-file も指定しない addCheck → 古い nextKim は 'なし' にリセットされ、promise は新しい label で上書きされる
+  const row1 = addCheck({ home, session: 'session-4ee33e10', check: 'exit 1', deadline: '+24h', label: '新しい見出し' });
+  assert.equal(row1.nextKim, 'なし');
+  assert.equal(row1.promise, '新しい見出し');
+
+  // 3. --next-kim "なし" の指定 → nextKim は 'なし' になる
+  const row2 = addCheck({ home, session: 'session-4ee33e10', check: 'exit 1', deadline: '+24h', label: '見出し2', nextKim: 'なし' });
+  assert.equal(row2.nextKim, 'なし');
+
+  // 4. --next-kim "質問本文" の指定 → 指定した nextKim が反映される
+  const row3 = addCheck({ home, session: 'session-4ee33e10', check: 'exit 1', deadline: '+24h', label: '見出し3', nextKim: '新しい質問' });
+  assert.equal(row3.nextKim, '新しい質問');
+});
+
+
+test('addCheck: ask-file preserves the question unless next-kim explicitly clears it', () => {
+  const home = tmp();
+  const askFile = path.join(home, 'ask.txt');
+  fs.writeFileSync(askFile, '詳しい質問');
+  seed(home, [{ sessionId: 'ask-precedence', ts: new Date(0).toISOString(), status: 'open', promise: '古い約束', nextKim: '対象を教えてください' }]);
+  const options = { home, session: 'ask-precedence', check: 'exit 1', deadline: '+2d', label: '新しい監視', askFile };
+  assert.equal(addCheck(options).nextKim, '対象を教えてください');
+  const cleared = addCheck({ ...options, nextKim: 'なし' });
+  assert.equal(cleared.nextKim, 'なし');
+  assert.equal(cleared.ask, '詳しい質問');
+  assert.equal(readLedger(ledgerFile(home)).at(-1).nextKim, 'なし');
+});
+
+test('addCheck CLI: next-kim clears stale question and persists the new label', () => {
+  const home = tmp();
+  seed(home, [{ sessionId: 'cli-next-kim', ts: new Date(0).toISOString(), status: 'open', promise: '古い約束', nextKim: '古い質問' }]);
+  const result = spawnSync(process.execPath, ['tools/auto-progress.mjs', '--add-check', '--session', 'cli-next-kim', '--check', 'exit 1', '--deadline', '+2d', '--label', '新しい監視', '--next-kim', 'なし'], { env: { ...process.env, ORGIAST_HOME: home }, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const saved = readLedger(ledgerFile(home)).at(-1);
+  assert.equal(saved.nextKim, 'なし');
+  assert.equal(saved.promise, '新しい監視');
+});
+
+
+test('auto registration marker excludes inferred questions from the human inbox', () => {
+  const row = { status: 'open', autoRegisteredCheck: true, nextKim: '何のHPか教えてください' };
+  assert.equal(isHumanActionRequired(row), false);
+  assert.equal(isHumanActionRequired({ ...row, status: 'waiting_user' }), true);
+  assert.equal(isHumanActionRequired({ ...row, autoRegisteredCheck: false }), true);
+});
+
+process.env.ORGIAST_AUTO_RESUME = '1';

@@ -91,6 +91,38 @@ test('design-deck pipeline は必須ファイルと7ページ型を同梱する'
   }
 });
 
+test('modern-web-guidance は版固定・テレメトリ停止・ローカル実行を固定する', () => {
+  const source = readSkill('modern-web-guidance');
+  const lines = source.split(/\r?\n/);
+
+  // 1. @latest を含む npx 行があっても禁止/使わないを述べる行だけ
+  const badLatestLines = lines.filter((l) => l.includes('npx') && l.includes('@latest') && !l.includes('禁止') && !l.includes('使わない'));
+  assert.equal(badLatestLines.length, 0, `@latest + npx の許容されない行: ${badLatestLines.join(', ')}`);
+
+  // 2. modern-web.mjs の search/retrieve/legacy-scan 行はすべて DISABLE_TELEMETRY=1 で始まる
+  for (const sub of ['search', 'retrieve', 'legacy-scan']) {
+    const subLines = lines.filter((l) => l.includes('modern-web.mjs"') && l.includes(sub));
+    assert.ok(subLines.length >= 1, `${sub} を含む modern-web.mjs 行がありません`);
+    for (const l of subLines) {
+      assert.ok(l.trimStart().startsWith('DISABLE_TELEMETRY=1'), `${sub} 行が DISABLE_TELEMETRY=1 で始まりません: ${l.trim()}`);
+    }
+  }
+
+  // 3. 版固定の npx フォールバックが含まれる
+  assert.ok(source.includes('npx -y modern-web-guidance@1.0.0'), '版固定の npx フォールバックがありません');
+
+  // 4. 必須ファイルが存在する
+  const requiredFiles = [
+    'modern-web.mjs', 'search.mjs', 'LICENSE',
+    'gen/guides.json', 'gen/guide-chunks.json.gz', 'gen/guide-chunks.i8', 'gen/guide-chunks.scale.f32',
+    'gen/query-words.json', 'gen/query-words.i8', 'gen/query-words.scale.f32',
+  ];
+  const skillDir = path.join(skillsDir, 'modern-web-guidance');
+  for (const file of requiredFiles) {
+    assert.ok(fs.existsSync(path.join(skillDir, file)), `${file} が modern-web-guidance/ に存在しません`);
+  }
+});
+
 if (isEntry(import.meta.url)) {
   process.exitCode = 0;
 }

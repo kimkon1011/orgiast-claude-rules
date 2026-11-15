@@ -83,7 +83,8 @@ test('NOTIFY_PLAIN_JA=0 相当（plainJa:false）では本文をそのまま送�
 
 function sender(dir, extra = {}) {
   const messages = [];
-  return { messages, options: { allowlist: [{ category: 'test', pattern: '.' }], home: dir, token: 'token', plainJa: false, ...extra, fetchImpl: async (url, init) => {
+  // Transport/failure tests exercise employee delivery; kim's inbox-only routing is covered by kim-no-dm.test.mjs.
+  return { messages, options: { userId: 'test-employee', allowlist: [{ category: 'test', pattern: '.' }], home: dir, token: 'token', plainJa: false, ...extra, fetchImpl: async (url, init) => {
     if (url.endsWith('/messages')) messages.push(JSON.parse(init.body).content);
     return response({ json: { id: 'dm' } });
   } } };
@@ -134,8 +135,11 @@ test('起票失敗では未修復通知を送らない', async () => {
   assert.equal((await notifyKim('失敗', s.options)).delivered, 'none');
   assert.equal(s.messages.length, 0);
 });
-test('送信失敗後は再送可能、同時呼び出しでも1通知・1起票', async () => {
-  const s = sender(home());
+test('kim-inbox保存後は同時呼び出しでも1通知・1起票', async () => {
+  const dir = home();
+  fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+  const s = sender(dir, { userId: '715210673642012733' });
   // DM/webhook が使えない kim 宛通知は kim-inbox に保存される（2026-11-04 rescue）
   const inboxResult = await notifyKim('失敗', { ...s.options, token: '', webhookFallback: false });
   assert.equal(inboxResult.delivered, 'session-inbox');
@@ -218,6 +222,14 @@ test('夜間セッション再開は目的文に失敗を含んでも全行 prog
   assert.equal(s.messages[0], report);
 });
 
+test('待機期限切れセッション再開（overdue）は夜間セッション再開と同様に起票しない', async () => {
+  const dir = home(), s = sender(dir);
+  const report = '確認 2件 / 進んだ 1 / 進まず 1 / 時間切れ 0 / エラー 0 / 締切で翌晩へ 0 / 3回進捗なしで停止中 0\n待機期限切れセッション再開 (DELL)\nX-0008 quota-sweep (d9166d37-61ae-466a-ac0b-cde67ba87e9a): no-progress\nquota-sweep (148282f8-321b-490a-82ad-3b68eb906f4a): progressed';
+  assert.equal((await notifyKim(report, s.options)).delivered, 'dm');
+  assert.equal(fs.existsSync(path.join(dir, '.claude/next-session.md')), false);
+  assert.equal(s.messages[0], report);
+});
+
 test('夜間セッション再開に1行でも error があれば目的文の失敗語によらず起票する', async () => {
   for (const title of ['quota-sweep:claude が直近 4 件すべて失敗している', '通常の作業']) {
     const dir = home(), s = sender(dir);
@@ -283,28 +295,30 @@ test('起票しても次の1目的を作らない（目的の乗っ取り回帰�
   assert.doesNotMatch(planRotation(filed).text, /1\. 通知の原因調査と修復/);
 });
 
-test('PRマージ依頼は送信せずblockedを返す', async () => {
+test('PRマージ依頼はDiscordに送信せず同じ本文をinboxへ保存する', async () => {
   let fetches = 0;
   const originalError = console.error;
   let errorLine = '';
   console.error = value => { errorLine = value; };
   try {
-    const result = await realNotifyKim('PR #943 をマージしてください', {
+    const dir = home(); fs.mkdirSync(path.join(dir, '.claude')); fs.writeFileSync(path.join(dir, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+    const result = await realNotifyKim('PR #943 をマージしてください', { home: dir,
       fetchImpl: async () => { fetches += 1; throw new Error('unexpected fetch'); },
     });
-    assert.deepEqual(result, {
-      delivered: 'blocked', category: 'merge-request', reason: 'PR のマージ依頼は fleet-mail で扱います',
-    });
+    assert.equal(result.delivered, 'session-inbox'); assert.equal(result.discordBlocked, true);
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, '.claude/kim-inbox', result.id + '.json'), 'utf8'));
+    assert.equal(saved.text, 'PR #943 をマージしてください');
     assert.equal(fetches, 0);
     assert.match(errorLine, /fleet-mail --to kim-PC/);
   } finally { console.error = originalError; }
 });
 
-test('notify-kim CLIはblockedでexit 3、明示例外なら送信する', async () => {
+test('notify-kim CLIはinbox保存成功でexit 0、明示例外なら送信する', async () => {
   const originalError = console.error;
   console.error = () => {};
   try {
-    assert.equal(await main(['PR #943 をマージしてください']), 3);
+    const dir = home(); fs.mkdirSync(path.join(dir, '.claude')); fs.writeFileSync(path.join(dir, '.claude/cost-reporter.env'), 'REPORTER_LABEL=kim-PC');
+    assert.equal(await main(['PR #943 をマージしてください'], { home: dir }), 0);
     const calls = [];
     assert.equal(await main(['PR #943 をマージしてください', '--kim-action-required'], {
       // 送信枠の台帳も一時homeへ隔離し、実ユーザーの状態に触れない。

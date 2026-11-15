@@ -15,6 +15,7 @@ import { resolveClaudeExecutableFromDisk } from './claude-exe.mjs';
 import { updateQuestion, clearResume, RESUME_LIMIT_MS, validSessionId } from './fleet-question-relay.mjs';
 import { allowedReadonlyPrompt } from './lib/fleet-selfcheck-prompt.mjs';
 import { runSelfcheck } from './fleet-selfcheck.mjs';
+import { autoResumeAllowed } from './lib/auto-resume-policy.mjs';
 
 const ownRepo = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const execMarker = /^<!--\s*fleet-exec:\s*codex\s*-->\s*$/;
@@ -111,6 +112,7 @@ export async function runClaudeTask({ id, home, spawnImpl = spawn, now = Date.no
     const exec = { ...marked, exec: mail.exec || marked.exec, cwd: mail.execCwd || marked.cwd, resumeSessionId: mail.resumeSessionId || marked.resumeSessionId };
     if (exec.exec !== 'claude') return { skipped: 'not-claude' };
     sessionId = exec.resumeSessionId;
+    if (sessionId && !autoResumeAllowed({ source: 'fleet-exec' })) return { skipped: 'auto-resume-disabled' };
     const scheduledAt = Date.parse(mail.executionStartedAt);
     const executionStart = Number.isFinite(scheduledAt) ? scheduledAt : now();
     let result = readJson(resultFile);
@@ -139,7 +141,7 @@ export async function runClaudeTask({ id, home, spawnImpl = spawn, now = Date.no
           await syncMailState({ home, id, action: 'seen', seenBy: 'headless', from: label, request, now, stderr });
           const remaining = RESUME_LIMIT_MS - (now() - executionStart);
           result = remaining <= 0 ? { exitCode: null, timedOut: true } : await runPrompt({
-            claudeExe: executable, body: exec.body, cwd: exec.cwd, resumeSessionId: sessionId, resumeMailId: id,
+            claudeExe: executable, body: exec.body, cwd: exec.cwd, resumeSessionId: sessionId, resumeSource: 'fleet-exec', resumeMailId: id,
             drivenByHub: true, home, spawnImpl, timeoutSeconds: remaining / 1000, setTimer: promptSetTimer, clearTimer: promptClearTimer });
           if (isMissingClaudeError(result)) result = { ...result, stdoutTail: '', outputTail: missingClaudeMessage(executable, candidates) };
         }

@@ -1,0 +1,22 @@
+{
+  "services": [
+    { "category": "展示会ブース制作", "estimated_unit_price": 2000000, "close_rate": 0.3, "weight": 1.0 },
+    { "category": "Reブース", "estimated_unit_price": 1500000, "close_rate": 0.4, "weight": 0.9 },
+    { "category": "イベントプロデュース", "estimated_unit_price": 3000000, "close_rate": 0.2, "weight": 0.8 },
+    { "category": "クリエイティブ制作", "estimated_unit_price": 1000000, "close_rate": 0.25, "weight": 0.6 },
+    { "category": "株主総会", "estimated_unit_price": 2500000, "close_rate": 0.15, "weight": 0.5 },
+    { "category": "SDGs展示ブース", "estimated_unit_price": 1800000, "close_rate": 0.35, "weight": 0.7 },
+    { "category": "周年記念イベント", "estimated_unit_price": 4000000, "close_rate": 0.2, "weight": 0.4 }
+  ],
+  "keyword_category_map": {
+    "展示会": "展示会ブース制作",
+    "ブース": "展示会ブース制作",
+    "Reブース": "Reブース",
+    "SDGs": "SDGs展示ブース",
+    "イベント": "イベントプロデュース",
+    "株主総会": "株主総会",
+    "周年": "周年記念イベント",
+    "クリエイティブ": "クリエイティブ制作",
+    "映像": "クリエイティブ制作"
+  }
+}

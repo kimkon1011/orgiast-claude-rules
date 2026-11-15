@@ -4,6 +4,7 @@
   "_codexAccountNote": "Codex(ChatGPT)は担当者ごとに分担（kim 2026-10-12 最終決定）: kim@=kim-PC(Pro)、nishi@=nishi-PC・kimko-PC、cr@=cr-PC・w018-PC（各自で有料プラン契約）、未指定の作業用999・カフェ用015 は _codexAccountDefault=seisaku-team@。Auto top-up はオフ。account は Claude の担当席で別物。",
   "kim-PC": {
     "hostname": "DESKTOP-2D0R4LI",
+    "titleLabel": "KimPC",
     "person": "金功勇",
     "aliases": [
       "DESKTOP-2D0R4LI",
@@ -86,6 +87,10 @@
     "account": "cr@orgiast.jp",
     "discordId": "1557228267566665729",
     "notifyDiscordId": "1557228267566665729",
+    "notifyChannels": [
+      "mobile-push"
+    ],
+    "_notifyChannels_reason": "2026-11-06 cr 指示: 進捗は Discord DM ではなくスマホの Claude アプリのプッシュで受け取る（cr は Discord を見ないため owner-notify-fallback.jsonl が毎回 delivered:dm でも本人に届いていなかった）。notify-owner は ~/.claude/mobile-push-queue.jsonl へ要求を積み、対話セッションの auto-progress-inbox-hook が PushNotification 送信＋mark-sent まで行う。inbox は local owner に常に書かれ、次のプロンプトでチャットに出る",
     "aliases": [
       "DESKTOP-N429M3V"
     ],
@@ -121,5 +126,16 @@
     "_evidence": "2026-11-04 本PCの Claude（seisaku-team@、sessionId 756c1d8b-c9d7-456f-8807-becae5cc2210）が #claude-code（message_id 1567434426311385209）と kim 経由の依頼で hostname=DELL / OS user=USER を実測申告し、L&B 案件の担当席と名乗った。同日 kim 回答「白川専用014 が seisaku-team@orgiast.jp。DELL 席は白川専用014 のことでは」。L&B 案件は 10/30 に白川専用014 へ割当済みで担当が一致するため 作業用014 として登録（memory: 作業用014 は未登録・hostname 不明だった）。",
     "_identityConflict": "本PCの Claude は自席ラベルを『作業用999』と申告した。作業用999 は DESKTOP-BDOAK99 行にも利用者申告がある。kim 回答と L&B 担当の一致を優先して 014 とし、999 は aliases に入れない（DESKTOP-BDOAK99 宛の経路を奪わないため）。実機の Chrome リモートデスクトップ名で確定したら更新する。",
     "_keyserve": "2026-11-04 kim-PC（primary）で keyserve-enroll --pc DELL --ttl-hours 48 を発行（指紋 09a392e44d）。受信側で実行し keyserve-status が primary / HTTP 200 になるまで fleet-sheet.env は未配布。"
+  },
+  "015CAFE": {
+    "hostname": "015CAFE",
+    "remoteName": "カフェ用015",
+    "account": "seisaku-team@orgiast.jp",
+    "person": "金功勇",
+    "aliases": [
+      "015CAFE",
+      "DESKTOP-63MQR3L"
+    ],
+    "_evidence": "2026-11-14 操作者が『このPCは015』と明言。hostname は DESKTOP-63MQR3L→015CAFE に変更済み（同一機体 Thirdwave ZG）。PR #1782 の 008 は推定による誤登録"
   }
 }

@@ -25,16 +25,22 @@ $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatt
 $settings.RunOnlyIfIdle = $false
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Limited
 # Disable competing restarters first; never leave two supervisors active.
+# If a task cannot be disabled (e.g. Access Denied due to security descriptor),
+# it co-exists harmlessly with OrgiastFunnelProbe — the old task starts the
+# gateway at boot, the new one runs health checks every 5 minutes. Log and continue.
 $disabled = @()
+$skipped = @()
+foreach ($name in @('ClaudeMobile-WebServer','ClaudeMobile-WebServer-Fixed','ClaudeMobile-LineShareHealth')) {
+  $old = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+  if ($old -and $old.State -ne 'Disabled') {
+    $ErrorActionPreference = 'Continue'
+    try { Disable-ScheduledTask -TaskName $name -ErrorAction Stop | Out-Null; $disabled += $name }
+    catch { $skipped += "${name}($($_.Exception.Message))" }
+    $ErrorActionPreference = 'Stop'
+  }
+}
 $registeredAt=Get-Date
 try {
-  foreach ($name in @('ClaudeMobile-WebServer','ClaudeMobile-WebServer-Fixed','ClaudeMobile-LineShareHealth')) {
-    $old = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
-    if ($old -and $old.State -ne 'Disabled') {
-      Disable-ScheduledTask -TaskName $name -ErrorAction Stop | Out-Null
-      $disabled += $name
-    }
-  }
   Register-ScheduledTask -TaskName $taskName -Action $action -Trigger @($periodic,$boot) -Settings $settings -Principal $principal -Description 'Secretary HTTP watchdog: external/3939/3940, Tailscale/Funnel repair, kim-inbox escalation; every 5 minutes' -Force | Out-Null
 } catch {
   foreach ($name in $disabled) { Enable-ScheduledTask -TaskName $name -ErrorAction Continue | Out-Null }
@@ -57,4 +63,4 @@ if ([DateTimeOffset]::Parse($state.checkedAt).UtcDateTime -le $registeredAt.ToUn
 foreach ($name in @('external','gateway','secretary')) {
   if ($state.after.$name.ok -ne $true) { throw "Scheduled watchdog did not confirm healthy HTTP: $name" }
 }
-[pscustomobject]@{ TaskName=$taskName; Interval='PT5M'; LastRunTime=$info.LastRunTime.ToString('o'); LastTaskResult=$info.LastTaskResult; CheckedAt=$state.checkedAt } | ConvertTo-Json
+[pscustomobject]@{ TaskName=$taskName; Interval='PT5M'; LastRunTime=$info.LastRunTime.ToString('o'); LastTaskResult=$info.LastTaskResult; CheckedAt=$state.checkedAt; DisabledTasks=$disabled -join ','; SkippedTasks=$skipped -join ';' } | ConvertTo-Json

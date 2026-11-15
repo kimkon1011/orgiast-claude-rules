@@ -18,8 +18,8 @@
     },
     {
       "path": "lib/watches.mjs",
-      "before": null,
-      "after": "3ca89b2698cd600414f8cbfd78d0cb2c52e473a6cad42b674611ef8946b7c538"
+      "before": "3ca89b2698cd600414f8cbfd78d0cb2c52e473a6cad42b674611ef8946b7c538",
+      "after": "404c68740109a0e1eef2ed15fd4d13b12bebeebb6836744d3d92e99ecbe45f30"
     },
     {
       "path": "tests/watches.test.mjs",

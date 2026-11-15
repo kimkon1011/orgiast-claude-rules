@@ -6,6 +6,18 @@ const OPEN = new Set(['open', 'stalled', 'resumed', 'waiting_user', 'scheduled',
 const stamp = row => Date.parse(row.lastCheckedAt || row.resolvedAt || row.ts) || 0;
 const text = value => typeof value === 'string' ? value : '';
 
+// ki-<14桁日時>-<4桁hex>.json → ファイル作成日時を抽出
+const KI_RE = /^ki-(\d{14})-[a-f0-9]{4}\.json$/;
+
+/** ファイル名の日時から作成日をパース（ファイルI/O不要） */
+function parseFileDate(name) {
+  const m = name.match(KI_RE);
+  if (!m) return null;
+  const ds = m[1];
+  return new Date(+ds.slice(0, 4), +ds.slice(4, 6) - 1, +ds.slice(6, 8),
+    +ds.slice(8, 10) || 0, +ds.slice(10, 12) || 0, +ds.slice(12, 14) || 0);
+}
+
 export function summarizeLedger(rows, now = Date.now()) {
   const latest = new Map();
   for (const row of rows) {
@@ -36,7 +48,14 @@ export function summarizeAsks(items) {
     .map(({ id, text: body, createdAt, from }) => ({ id, text: text(body), createdAt, from }));
 }
 
-export async function readWatches(home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now()) {
+/**
+ * kim-inbox のファイルを日付順（最新優先）で読み込み、指定日数以内のファイルだけ処理する。
+ * @param {string} home - ホームディレクトリ
+ * @param {number} now - 基準日時（エポックミリ秒）
+ * @param {number} maxAgeDays - この日数より古いファイルはスキップ
+ */
+export async function readWatches(home = process.env.ORGIAST_HOME || os.homedir(), now = Date.now(),
+  maxAgeDays = 7) {
   const root = path.join(home, '.claude');
   const warnings = [];
   const rows = [];
@@ -49,7 +68,13 @@ export async function readWatches(home = process.env.ORGIAST_HOME || os.homedir(
   const items = [];
   try {
     const inbox = path.join(root, 'kim-inbox');
-    const names = (await fs.readdir(inbox)).filter(name => /^ki-\d{14}-[a-f0-9]{4}\.json$/.test(name));
+    const names = (await fs.readdir(inbox))
+      .filter(name => {
+        const d = parseFileDate(name);
+        // 日付がパースできない／古すぎるファイルはスキップ
+        return d && (now - d.getTime()) < maxAgeDays * 86400000;
+      })
+      .sort((a, b) => b.localeCompare(a)); // 新しい順
     for (let i = 0; i < names.length; i += 16) {
       await Promise.all(names.slice(i, i + 16).map(async name => {
         try { items.push(JSON.parse(await fs.readFile(path.join(inbox, name), 'utf8'))); }

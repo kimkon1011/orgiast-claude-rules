@@ -13,7 +13,7 @@ import { isEntry } from './is-entry.mjs';
 const SUPERVISOR = /opus|fable/i;
 const HANDOFF_EMPTY = /^(?:なし|ありません|特に(?:なし|ありません)|不要)/;
 // 人にしかできない操作（社外送信・支払い・削除・権限/課金・サインイン等）の待ちは正当な待ちとして INFO に留める。
-const HUMAN_ONLY = /トークン|再発行|再認証|OAuth|認可|送信|送って|支払|決済|購入|削除|権限|課金|契約|ログイン|サインイン|再ログイン|2FA|OTP|パスワード|同意|ダブルクリック|押して|押す|スマホ|電話/;
+const HUMAN_ONLY = /トークン|再発行|再認証|OAuth|認可|送信|送って|おくって|送ってよい|承認|却下|落札|再起動|BitLocker|支払|決済|購入|削除|権限|課金|契約|ログイン|サインイン|再ログイン|2FA|OTP|パスワード|同意|ダブルクリック|押して|押す|スマホ|電話/;
 // 取り消せる作業を kim に選ばせて止まる言い回し。
 const ASKS_REVERSIBLE = /どの対策を進める|どれを進め|どれを選|進めてよい(?:か|です)|進めますか|一言(?:返|くだ|ください)|と一言|「対策を進めて」|「進めて」と|(?:すべて|全部)元に戻せます/;
 
@@ -81,7 +81,7 @@ export function waitingVerdict(text) {
   const kimLine = m ? m[1].trim() : '';
   const handoff = kimLine && !HANDOFF_EMPTY.test(kimLine);
   const asks = ASKS_REVERSIBLE.test(body);
-  if (!handoff && !asks) return null;
+  if (!handoff && !(asks && !kimLine)) return null; // 「次に kim がすること: なし」の行がある返答は、その行だけで判定する
   const subject = kimLine || (body.match(ASKS_REVERSIBLE) || [''])[0];
   if (handoff && HUMAN_ONLY.test(kimLine) && !ASKS_REVERSIBLE.test(kimLine)) return { kind: 'WAIT_HUMAN', kimLine: subject };
   return { kind: 'WAITING', kimLine: subject };
@@ -122,7 +122,7 @@ export function audit({ home = process.env.ORGIAST_HOME || os.homedir(), hours =
       if (info.title.includes('【閉じて可】')) continue;
       const activeInWindow = info.lastActivity && Date.parse(info.lastActivity) >= since;
       if (activeInWindow && info.lastModel && SUPERVISOR.test(info.lastModel) && !SUPERVISOR.test(target)) findings.push({ level: 'NG', kind: 'OPUS', ...base });
-      if (info.endsWithAssistantText && info.lastAssistantAt) {
+      if (info.endsWithAssistantText && info.lastAssistantAt && Date.parse(info.lastAssistantAt) >= since) {
         const idle = Math.round((now - Date.parse(info.lastAssistantAt)) / 60000);
         const verdict = idle >= idleMin ? waitingVerdict(info.lastAssistantText) : null;
         if (verdict) findings.push({ level: verdict.kind === 'WAITING' ? 'NG' : 'INFO', kind: verdict.kind, ...base, idleMin: idle, kimLine: verdict.kimLine.slice(0, 80) });

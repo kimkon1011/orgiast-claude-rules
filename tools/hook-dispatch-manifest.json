@@ -105,6 +105,12 @@
         "timeout": 5
       },
       {
+        "matcher": "Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/codex-auth-guard.mjs\"",
+        "timeout": 15
+      },
+      {
         "matcher": "*",
         "type": "command",
         "command": "node \"${repo}/tools/fable-session-guard.mjs\"",

@@ -28,10 +28,9 @@ if (-not (Test-Path (Join-Path $Repo '.git'))) {
 }
 if (Have node) {
   $nodeExe = if (($orgiastNodeExe = (Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Where-Object Extension -eq '.exe' | Select-Object -First 1).Source)) { $orgiastNodeExe } else { "$env:ProgramFiles\nodejs\node.exe" }
-  # cmd.exe /c で CMD レベルの 2>&1 を使い、Node.js の stderr を stdout に統合する。
-  # PowerShell の *>&1 | Tee-Object パイプライン + $ErrorActionPreference Stop では
-  # NativeCommandError がスクリプトを終了させ、完了マーカーがログに書かれない問題がある。
-  # CMD レベルの 2>&1 なら PowerShell が stderr をエラーと認識しないため安全。
-  & cmd.exe /c "`"$nodeExe`" `"$(Join-Path $Repo 'tools\setup.mjs')`" --converge 2>&1"
+  # Merge stderr in CMD before PowerShell can turn it into NativeCommandError.
+  # /d disables AutoRun; /s /c requires outer quotes around the whole command.
+  & cmd.exe /d /s /c "`"`"$nodeExe`" `"$(Join-Path $Repo 'tools\setup.mjs')`" --converge 2>&1`""
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } else { throw 'node.js is required' }
 Write-Output '[ORGIAST-BOOTSTRAP-COMPLETE]'

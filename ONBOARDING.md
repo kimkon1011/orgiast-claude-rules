@@ -1161,8 +1161,7 @@ Claude Code・Codex・安いLLMは**APIがあるものしか触れない**。だ
 
 #### 1.18.5 AIレーン放置禁止と手渡し前の代替検証
 
-**🔴 故障レーンは全PC・全アカウント・無人でも同じセッションで最優先修復。SessionStart の 🛑 に従い、他PCの同アカウント・SendMessage・CLI・API の使える経路を当ターンで尽くす。返事待ちで放置せず、人にしかできない操作はこのPCの操作者（kim）へ直接頼み、実呼び出し成功まで確認する。lane-repair-first-gate が未修復の通常作業を止める。node tools/lane-doctor.mjs --probe、または lane-repair-log.mjs --lane <名> --tried "<試行>" --result fixed|unfixable（6時間有効）で記録し、応答に [LANE-REPAIR] を書く。reset 既知の429/usage_limitは quota_wait として別の安いレーンへ。Codex probe失敗は直接WSL終了コードでも切り分け、「生存 ✅」だけを信用しない。**
-**🔴 外部AIが落ちても Claude が作業を肩代わりしない。codex-do が失敗したら同じ指示を別の安いレーン（lane-health.json の implementOrder／askOrder の次）へ渡し直す。全レーン停止なら作業を止め、`~/.claude/lane-watch/status.md` の停止理由と kim の操作を報告して終える。lane-watch（5分ごと）が実測・切替・Claude比率を監視する。**
+**🔴 故障レーンは全PC・無人でも同じセッションで最優先修復し、Claude は作業を肩代わりしない。codex-do 失敗時は lane-health.json の次の安いレーンへ渡し直し、全レーン停止なら止めて `~/.claude/lane-watch/status.md` の理由と kim の操作を報告する。人にしかできない操作は kim へ直接頼み実呼び出し成功まで確認。lane-repair-first-gate が未修復の通常作業を止める。node tools/lane-doctor.mjs --probe か lane-repair-log.mjs --lane <名> --tried "<試行>" --result fixed|unfixable（6時間有効）で記録し [LANE-REPAIR] を書く。reset 既知の429/usage_limitは quota_wait として別の安いレーンへ。Codex probe失敗はWSL終了コードでも切り分け、「生存 ✅」だけを信用しない。**
 
 同アカウント他PCでは ListAgents → SendMessage で primary 保有PCに keyserve-enroll を実行させる。根拠: 2026-10-29 user-PCで6レーンが missing_key のまま通知ゼロ・Claude使用継続、mistral既定モデル403も✅のまま放置された。
 

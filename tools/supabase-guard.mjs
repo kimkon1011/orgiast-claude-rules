@@ -7,9 +7,8 @@
 //   - 総スキャン件数ガードレール (300万件超で停止)
 //
 // 使い方:
-//   import { createSupabaseGuard } from './supabase-guard.mjs';
-//   const client = createSupabaseGuard({ url: secrets.SUPABASE_URL, key: secrets.SUPABASE_SERVICE_ROLE_KEY });
-//   const { rows, cached, scanCount } = await client.fetch('channel_messages', {
+//   const guard = createSupabaseGuard({ url: secrets.SUPABASE_URL, key: secrets.SUPABASE_SERVICE_ROLE_KEY });
+//   const { rows, cached, scanCount } = await guard.fetch('channel_messages', {
 //     select: 'id,body', channel: 'eq.line', limit: 500,
 //   });
 

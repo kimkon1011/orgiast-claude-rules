@@ -163,6 +163,8 @@ PR は作った席が `node tools/pr-land.mjs --title "<題>" --body-file <本�
 
 **🔴 承認待ちの文面・選択肢は毎回「【kim 確認用の全文】」で全文再掲し、遡らせない。NEXT-ACTION-BACKREF／NEXT-ACTION-APPROVAL-INLINE が検査する。状態が変わらない定期報告は「変化なし」1行のみ、確認事項・本文・手順・別件一覧を毎回再掲しない（2026-11-03）。**
 
+**🔴 承認依頼は、承認対象の成果物の実物URL（Drive・authuser付き・kim編集権限付与済み）を同じ行に載せる。user に探させない。user に指摘される前に自己点検する（approval-deliverable-url-gate / deliverable-drive-link-gate が検査）。**
+
 「次に kim がすること」はその行と全文ブロックだけで判断・操作が終わる形にする。要約・参照・リンク置換は不可。next-action-gate が NEXT-ACTION-BACKREF / NEXT-ACTION-APPROVAL-INLINE / NEXT-ACTION-APPROVAL-NOT-LAST で block。2026-11-04の配置指定は上記フッター規約に統合。根拠: 10-27 Cocolive様返信の承認で「前の応答末尾を見て」を4回書きnishiを遡らせた。
 
 **🔴 Claude が決められる判断（過去の決定あり・支払い/同意不要・取り消せる）は聞かずに決めて進め、結果を報告する。**

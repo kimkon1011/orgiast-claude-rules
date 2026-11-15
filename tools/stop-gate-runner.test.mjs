@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { run } from './stop-gate-runner.mjs';
+import { run, advisoryOnlyReason, RETRY_INSTRUCTION, LIGHT_GATES } from './stop-gate-runner.mjs';
 
 const runner = fileURLToPath(new URL('./stop-gate-runner.mjs', import.meta.url));
 
@@ -713,11 +713,31 @@ test('自動進行の check は runner から現在ターンとセッション�
   const input = { session_id: 'current-check', last_assistant_message: 'この後の自動進行: 返信を待って配布へ組み込む' };
   const options = { mode: 'off', policyOptions: { home, hostname: 'kim-PC', notify: async () => ({ delivered: 'test' }) } };
   const blocked = await run(input, { raw, humanText: '', assistantText: '' }, options);
-  assert.ok(blocked.record.reasonCodes.includes('AUTOPROGRESS-NEEDS-CURRENT-CHECK'));
+  assert.notEqual(blocked.decision, 'block');
+  assert.ok(blocked.record.warned.includes('unregistered-promise-gate'));
+  assert.equal(blocked.record.autoRegisteredCheck, true);
   const { addCheck } = await import('./auto-progress.mjs');
   addCheck({ session: input.session_id, check: 'test -f result.txt', label: '配布', deadline: '+2d', home, now });
   const passed = await run(input, { raw, humanText: '', assistantText: '' }, options);
   assert.ok(!passed.record.blockedBy.includes('unregistered-promise-gate'));
+});
+
+test('retry preface and piggyback hint alone are advisory; actual violations remain blocking reasons', () => {
+  assert.equal(advisoryOnlyReason(RETRY_INSTRUCTION), true);
+  assert.equal(advisoryOnlyReason(`${RETRY_INSTRUCTION}\n\n### ピギーバック・ヒント\n末尾の書式`), true);
+  assert.equal(advisoryOnlyReason(`${RETRY_INSTRUCTION}\n\n### next-action-gate\n未完了`), false);
+  for (const name of ['url-account-gate', 'message-locator-gate', 'third-party-nudge-gate', 'unregistered-promise-gate']) assert.ok(LIGHT_GATES.includes(name));
+  for (const name of ['mail-send-approval-gate', 'delete-approval-gate', 'api-billing-guard', 'app-llm-cost-gate', 'lane-repair-first-gate']) assert.ok(!LIGHT_GATES.includes(name));
+});
+
+test('message-locator warns on first attempt without requiring a rewrite', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'locator-warning-'));
+  const old = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = home;
+  t.after(() => { if (old === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = old; });
+  const result = await run({ session_id: 'locator', assistant_text: '結果は Discord に送りました。' }, { raw: '', humanText: '', assistantText: '' }, { mode: 'off' });
+  assert.notEqual(result.decision, 'block');
+  assert.match(result.systemMessage, /message-locator-gate/);
 });
 
 // The safety net must run independently of the ordinary rewrite budget.

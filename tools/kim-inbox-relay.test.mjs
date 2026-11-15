@@ -129,6 +129,26 @@ test('manual --seen during a turn cannot bypass final-message verification', asy
   assert.equal(listItems(f.home)[0].deliveredToKim.count, 1);
 });
 
+test('two inbox blocks exhaust the shared turn budget, but permission blocks survive', async t => {
+  const f = fixture(t), item = await addItem(f.home, { kind: 'ask', text: '確認事項' });
+  f.inject([item]);
+  const old = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = f.home;
+  t.after(() => { if (old === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = old; });
+  const ctx = { raw: '', humanText: '', assistantText: '' };
+  const options = { mode: 'off', policyOptions: { home: f.home, hostname: 'kim-PC', notify: async () => ({ delivered: 'test' }) } };
+  for (let n = 0; n < 2; n++) assert.equal((await run({ ...f.input, assistant_text: '完了' }, ctx, options)).decision, 'block');
+  const changed = await run({ ...f.input, assistant_text: `${f.section([item])}\nGitHub の画面で Merge をクリックしてください。` }, ctx, options);
+  assert.notEqual(changed.decision, 'block');
+  assert.match(changed.systemMessage, /同一ターン上限/);
+  assert.equal(listItems(f.home)[0].deliveredToKim, undefined);
+  for (let n = 0; n < 4; n++) {
+    const safety = await run({ ...f.input, assistant_text: 'https://discord.com/oauth2/authorize?client_id=1511684767546871818&permissions=0' }, ctx, options);
+    assert.equal(safety.decision, 'block');
+    assert.match(safety.reason, /権限/);
+  }
+});
+
 test('passkey ask relays the complete signed URL rather than a truncated token', async t => {
   const f = fixture(t), url = 'https://keyserve.test/api/knowledge?register=' + 'a'.repeat(500);
   const item = await addItem(f.home, { kind: 'ask', priority: 'high', source: 'knowledge-lock-passkey-link', text: `パスキー登録をお願いします。\n登録リンク: ${url}` });

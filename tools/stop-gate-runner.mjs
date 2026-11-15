@@ -191,6 +191,11 @@ function protectAutopilot(input, text, raw, record) {
   return null;
 }
 
+export function advisoryOnlyReason(reason) {
+  return typeof reason === 'string' && !reason.replace(STOP_RETRY_INSTRUCTION, '')
+    .replace(/### ピギーバック・ヒント[\s\S]*$/, '').trim();
+}
+
 export async function run(input, context, auditOptions = {}) {
   // Permission failures must be checked even when the inbox has consumed the
   // rewrite budget. Never demote these or a failed watch registration.
@@ -198,11 +203,12 @@ export async function run(input, context, auditOptions = {}) {
   if (invite.decision === 'block') return invite;
   const result = await runWithRelay(input, context, auditOptions);
   if (result.decision !== 'block' || result.record?.reasonCodes?.includes('AUTOPILOT-REGISTRATION-FAILED')) return result;
+  if (advisoryOnlyReason(result.reason)) return { record: result.record, systemMessage: result.reason };
   // One budget across inbox, deliverable and ordinary gates, even if successive
   // rewrites trigger different gates. Reuse the existing real-user turn identity.
   const capped = splitRepeatedGateBlocks({ input, gates: ['stop-gate-runner:all'], home: home(), now: auditOptions.now ?? Date.now(), max: 2 }).repeated.length;
   if (!capped) return result;
-  const record = { ...result.record, verdict: 'pass_after_cap' };
+  const record = { sessionId: input?.session_id || input?.sessionId, blockedBy: [], reasonCodes: [], ...result.record, verdict: 'pass_after_cap' };
   const failure = protectAutopilot(input, input?.last_assistant_message ?? input?.assistant_text ?? context.assistantText, context.raw, record);
   if (failure) return failure;
   ledger(record);
@@ -307,7 +313,9 @@ async function runOtherGates(input, context, auditOptions = {}) {
   let verdict = cap.retryCap ? 'retry-cap' : retryBlockedBy.length ? 'block' : 'pass';
   let autoRegisterError;
   let preservedOpenCheck = false;
-  if (cap.retryCap && reasonCodes.some(code => WAIT_CHECK_CODES.has(code))) {
+  // Once only a warning remains, repair the watch immediately rather than
+  // waiting for a rewrite cap that warning-only gates can no longer reach.
+  if ((cap.retryCap || !retryBlockedBy.length) && reasonCodes.some(code => WAIT_CHECK_CODES.has(code))) {
     try {
       if (hasFutureOpenCheck(sessionId, { now: auditOptions.now ?? Date.now() })) {
         preservedOpenCheck = true;
@@ -330,6 +338,7 @@ async function runOtherGates(input, context, auditOptions = {}) {
       }
     } catch (error) {
       verdict = 'block';
+      reasonCodes.push('AUTOPILOT-REGISTRATION-FAILED');
       autoRegisterError = `待機チェックの台帳への自動登録に失敗しました: ${error.message}`;
     }
   }

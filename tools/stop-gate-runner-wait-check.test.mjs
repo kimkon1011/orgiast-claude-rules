@@ -8,7 +8,7 @@ import { addCheck } from './auto-progress.mjs';
 
 delete process.env.CLAUDE_HEADLESS;
 const open = '**[本セッションの目的]** 進捗確認を修正する\n次に kim がすること: なし\nこの後の自動進行: 残っている作業を進め結果を報告します\nこのセッション: まだ閉じない（作業中・2099-12-31 23:59 まで待つ）';
-for (const kind of ['success', 'failure', 'missing-footer', 'ordinary']) test(`上限到達: ${kind}`, async t => {
+for (const kind of ['success', 'failure', 'missing-footer', 'ordinary']) test(`警告のみなら即登録、他違反は上限到達時に登録: ${kind}`, async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-wait-check-'));
   const prior = process.env.ORGIAST_HOME;
   process.env.ORGIAST_HOME = home;
@@ -24,9 +24,10 @@ for (const kind of ['success', 'failure', 'missing-footer', 'ordinary']) test(`�
   const context = { assistantText: text, humanText, lastUserPrompt: humanText, raw: kind === 'missing-footer'
     ? JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { run_in_background: true } }] } }) : '' };
   let result;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  const attempts = ['success', 'failure'].includes(kind) ? 1 : 3;
+  for (let attempt = 0; attempt < attempts; attempt++) {
     result = await run({ session_id: 'wait-test', assistant_text: text }, context, options);
-    if (attempt < 2 && kind !== 'ordinary') assert.equal(result.decision, 'block');
+    if (attempt < 2 && kind === 'missing-footer') assert.equal(result.decision, 'block');
   }
   const records = fs.readFileSync(path.join(home, '.claude/stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   if (kind === 'ordinary') {
@@ -44,8 +45,11 @@ for (const kind of ['success', 'failure', 'missing-footer', 'ordinary']) test(`�
     if (kind === 'failure') {
       assert.equal(result.decision, 'block');
       assert.match(result.reason, /disk full/);
-      const again = await run({ session_id: 'wait-test', assistant_text: text }, context, options);
-      assert.equal(again.decision, 'block');
+      for (let retry = 0; retry < 4; retry++) {
+        const again = await run({ session_id: 'wait-test', assistant_text: text }, context, options);
+        assert.equal(again.decision, 'block');
+        assert.match(again.reason, /disk full/);
+      }
     } else {
       assert.equal(result.decision, undefined);
       const ledger = fs.readFileSync(path.join(home, '.claude/auto-progress-ledger.jsonl'), 'utf8');
@@ -80,11 +84,8 @@ for (const kind of ['future', 'none', 'expired', 'deadline-now', 'invalid-deadli
       addCheck: args => { calls.push(args); return addCheck(args); } };
     const humanText = '依頼'.repeat(40);
     const context = { assistantText: open, humanText, lastUserPrompt: humanText, raw: '' };
-    let result;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      result = await run({ session_id: 'explicit-test', assistant_text: open }, context, options);
-    }
-    assert.equal(result.record.retryCap, true, '登録分岐まで到達する');
+    const result = await run({ session_id: 'explicit-test', assistant_text: open }, context, options);
+    assert.equal(result.record.retryCap, false, '書き直しを要求せず登録分岐まで到達する');
     assert.ok(result.record.reasonCodes.includes('SESSION-OPEN-NEEDS-IN-SESSION-CHECK'));
     assert.equal(result.decision, undefined);
     const after = fs.readFileSync(file, 'utf8');

@@ -78,8 +78,10 @@ async function main() {
     fs.writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
   } catch { return; }
 
-  const tokLimit = positiveNumber(process.env.ORGIAST_SESSION_TOK_LIMIT, 300_000_000);
-  const turnLimit = positiveNumber(process.env.ORGIAST_SESSION_TURN_LIMIT, 400);
+  // Honor explicitly configured legacy limits without silently overriding the
+  // new configurable response/context limits with an old default of 400 turns.
+  const tokLimit = positiveNumber(process.env.ORGIAST_SESSION_TOK_LIMIT, Infinity);
+  const turnLimit = positiveNumber(process.env.ORGIAST_SESSION_TURN_LIMIT, Infinity);
   const maxResponses = positiveNumber(process.env.ORGIAST_SESSION_MAX_RESPONSES, 300);
   const maxContext = positiveNumber(process.env.ORGIAST_SESSION_MAX_CONTEXT, 150_000);
   const candidates = [];

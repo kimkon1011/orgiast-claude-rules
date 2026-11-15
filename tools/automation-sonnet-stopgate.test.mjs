@@ -36,3 +36,17 @@ test('同じゲートは同じターンで1回だけ block し、2回目は repe
   fs.appendFileSync(transcript, JSON.stringify({ type: 'user', promptId: 'p2', message: { role: 'user', content: 'b' } }) + '\n');
   assert.deepEqual(splitRepeatedGateBlocks({ input, gates: ['g1'], home }), { allowed: ['g1'], repeated: [] });
 });
+
+test('lanes-disabled.json は quick・probe の両経路で掛け直され、質問順にも代替経由でも残らない', async () => {
+  const { applyDisabledLanes } = await import('./lane-doctor.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-disabled-'));
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'lanes-disabled.json'), JSON.stringify({ gemini: { reason: 'test' } }));
+  const health = { lanes: { gemini: { alive: false, reason: 'billing' }, 'gemini-cli': { alive: true, reason: 'ok' }, deepseek: { alive: true, reason: 'probe_ok' } } };
+  applyDisabledLanes(health, home);
+  assert.equal(health.lanes.gemini.reason, 'disabled');
+  assert.equal(health.lanes['gemini-cli'].reason, 'disabled');
+  assert.equal(health.lanes.deepseek.alive, true);
+  const source = fs.readFileSync(new URL('./lane-doctor.mjs', import.meta.url), 'utf8');
+  assert.equal(source.match(/applyDisabledLanes\(health, home\);\n\s*orders\(health, home\);/g)?.length, 2, 'quick と probe の両方で orders の直前に掛ける');
+});

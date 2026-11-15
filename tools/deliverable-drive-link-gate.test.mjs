@@ -96,7 +96,7 @@ test('③後でも次にkimがする成果物確認はURL必須', () => {
   assert.equal(judge({ text }).decision, 'block');
 });
 
-test('runner: reply-only・既存cap後でも3回blockし、4回目は専用cap', async t => {
+test('runner: reply-only・既存cap後でも同じターン2回までblockし、3回目は専用cap', async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'deliverable-test-'));
   const previous = process.env.ORGIAST_HOME;
   process.env.ORGIAST_HOME = home;
@@ -105,7 +105,7 @@ test('runner: reply-only・既存cap後でも3回blockし、4回目は専用cap'
   assert.equal(classifyHandoff(text), 'reply-only');
   const input = { session_id: 'deliverable', assistant_text: text };
   for (let i = 0; i < 6; i++) registerStopViolation({ input, assistantText: text, blockedBy: ['other'], home });
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 2; i++) {
     const result = await run(input, { raw: '', assistantText: text });
     assert.equal(result.decision, 'block');
     assert.deepEqual(result.record.blockedBy, ['deliverable-drive-link-gate']);

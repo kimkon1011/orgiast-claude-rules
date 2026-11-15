@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // No LLM calls here; process execution, notification and file timestamps are injectable.
+import { automationModel } from './lib/automation-model.mjs';
 import fs from 'node:fs/promises';
 import { latestWaitDeadline, waitPrefix } from './session-wait-title.mjs';
 import os from 'node:os';
@@ -226,7 +227,7 @@ stuck=それ以外で進められなかった。
   if (available) {
     let child;
     try {
-      await invoke(executable, ['--resume', record.sessionId, '-p', prompt], {
+      await invoke(executable, ['--resume', record.sessionId, '-p', '--model', automationModel(), prompt], {
         cwd: record.cwd, env, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true,
       });
       child = { status: 'success', executorUsed: 'claude' };

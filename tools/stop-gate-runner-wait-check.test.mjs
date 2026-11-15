@@ -26,13 +26,14 @@ for (const kind of ['success', 'failure', 'missing-footer', 'ordinary']) test(`�
   let result;
   for (let attempt = 0; attempt < 3; attempt++) {
     result = await run({ session_id: 'wait-test', assistant_text: text }, context, options);
-    if (attempt < 2) assert.equal(result.decision, 'block');
+    if (attempt < 2 && kind !== 'ordinary') assert.equal(result.decision, 'block');
   }
   const records = fs.readFileSync(path.join(home, '.claude/stop-gate-runner-ledger.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   if (kind === 'ordinary') {
+    // 2026-11-15: url-account-gate は軽い指摘として警告のみ（block しない）。
     assert.equal(calls.length, 0);
-    assert.equal(records.at(-1).verdict, 'pass_after_cap');
-    assert.ok(result.record.reasonCodes.includes('URL-ACCOUNT'));
+    assert.equal(result.decision, undefined);
+    assert.match(result.systemMessage, /url-account-gate/);
   } else {
     assert.equal(calls.length, 1);
     assert.equal(calls[0].session, 'wait-test');

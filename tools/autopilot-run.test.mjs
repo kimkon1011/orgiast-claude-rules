@@ -40,7 +40,7 @@ test('run.log records whether the digest was actually delivered, even on a pause
 });
 
 test('models follow planIncluded; prompt comes from skill and headless uses one foreground iteration', async (t) => {
-  for (const [policy, model] of [[{ planIncluded: true }, 'claude-fable-5-1'], [{ planIncluded: false }, 'claude-opus-5'], [{}, 'claude-opus-5']]) {
+  for (const [policy, model] of [[{ planIncluded: true }, 'sonnet'], [{ planIncluded: false }, 'sonnet'], [{}, 'sonnet']]) {
     const opts = fixture(t);
     await runAutopilot('start', { objective: 'test' }, opts);
     const result = await runOnce({ ...opts, policy, executable: 'fake-claude', invokeImpl: async (invocation) => {
@@ -59,11 +59,12 @@ test('models follow planIncluded; prompt comes from skill and headless uses one 
   }
 });
 
-test('objective.md "model" pins the supervisor model per PC; fable pin is ignored when plan excludes it', async (t) => {
+test('objective.md "model" pins the supervisor model per PC; opus/fable pins fall back to sonnet for automation (2026-11-15 kim)', async (t) => {
   for (const [pin, policy, model] of [
-    ['claude-opus-5-5', { planIncluded: true }, 'claude-opus-5-5'],
-    ['claude-fable-5-1', { planIncluded: false }, 'claude-opus-5'],
-    ['gpt-5; rm -rf /', { planIncluded: true }, 'claude-fable-5-1'],
+    ['claude-opus-5-5', { planIncluded: true }, 'sonnet'],
+    ['claude-fable-5-1', { planIncluded: false }, 'sonnet'],
+    ['claude-haiku-4-5', { planIncluded: true }, 'claude-haiku-4-5'],
+    ['gpt-5; rm -rf /', { planIncluded: true }, 'sonnet'],
   ]) {
     const opts = fixture(t);
     await runAutopilot('start', { objective: 'test' }, opts);
@@ -84,12 +85,12 @@ test('a new /autopilot start keeps the per-PC model pin', async (t) => {
   const opts = fixture(t);
   await runAutopilot('start', { objective: 'first' }, opts);
   const file = path.join(opts.dir, 'objective.md');
-  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/("objective":\s*"first")/, '$1, "model": "claude-opus-5-5"'));
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/("objective":\s*"first")/, '$1, "model": "claude-haiku-4-5"'));
   await runAutopilot('stop', {}, opts);
   await runAutopilot('start', { objective: 'second' }, opts);
   const text = fs.readFileSync(file, 'utf8');
   assert.match(text, /"objective": "second"/);
-  assert.equal(supervisorModel(file, { planIncluded: true }), 'claude-opus-5-5');
+  assert.equal(supervisorModel(file, { planIncluded: true }), 'claude-haiku-4-5');
 });
 
 test('repeated missing posts are counted and trip the noop watchdog', async (t) => {

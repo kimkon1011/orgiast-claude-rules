@@ -208,12 +208,18 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
         .map(([provider]) => String(provider).toLowerCase());
     } catch {}
   }
+  // lanes-disabled.json（PC ごとの恒久無効化）に載った provider は start でも候補から外す。
+  let disabled = new Set();
+  if (cooldownFile != null || !process.env.NODE_TEST_CONTEXT) {
+    try { disabled = new Set(Object.keys(JSON.parse(fs.readFileSync(cooldownFile ? path.join(path.dirname(cooldownFile), 'lanes-disabled.json') : path.join(home, '.claude', 'lanes-disabled.json'), 'utf8').replace(/^\uFEFF/, '')) || {}).map(p => p.toLowerCase())); } catch {}
+  }
   const candidates = [];
   const seen = new Set();
   // Gateway selection is routing, not failover; --no-fallback still uses OpenRouter.
   const expanded = [start, ...chain];
   for (const candidate of expanded.filter(Boolean)) {
     if (!allowedForCategory(candidate, category)) continue;
+    if (disabled.has(String(candidate.provider).toLowerCase())) { console.error(`[routing] ${candidate.provider} は lanes-disabled.json で無効化されているため使いません`); continue; }
     const identity = `${candidate.provider}:${candidate.model}`;
     if (seen.has(identity)) continue;
     seen.add(identity);

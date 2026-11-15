@@ -53,7 +53,7 @@ import { judge as judgeThirdPartyNudge } from './third-party-nudge-gate.mjs';
 import { evaluateShallowAnswer } from './shallow-answer-gate.mjs';
 import { judgeTurnLanguage } from './response-language-gate.mjs';
 import { evaluateUnregisteredPromise } from './unregistered-promise-gate.mjs';
-import { appendStopLedger, registerStopViolation, CAP_CONTEXT } from './lib/stop-recheck.mjs';
+import { appendStopLedger, registerStopViolation, CAP_CONTEXT, splitRepeatedGateBlocks } from './lib/stop-recheck.mjs';
 import { STOP_RETRY_INSTRUCTION, withStopRetryInstruction } from './lib/stop-retry-message.mjs';
 import { evaluateClaudeFallbackReport } from './claude-fallback-report-gate.mjs';
 import { buildRecord, extractPromise, ledgerFile as progressLedgerFile, readLedger, writeLedger, applyPromise } from './auto-progress-ledger.mjs';
@@ -62,6 +62,10 @@ import { isUnchangedPeriodicReport } from './lib/unchanged-periodic-report.mjs';
 
 
 const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || process.cwd().match(/^(\/mnt\/[a-z]\/Users\/[^/]+)/i)?.[1] || os.homedir();
+// 2026-11-15 kim 指示「軽い指摘は差し戻さず警告に留める」: 書式・後押し文・長さ等の軽いゲートは block せず警告だけ返す。
+// 共通の再試行上限（1ターン2回）を迂回していた専用ゲート（kim-inbox-relay・成果物リンク）にも同じターン内の上限を掛ける。
+export const SPECIAL_GATE_MAX_BLOCKS_PER_TURN = 2;
+export const LIGHT_GATES = ['report-length-gate', 'url-account-gate', 'third-party-nudge-gate', 'seat-name-gate', 'shallow-answer-gate'];
 export const FORM_GATES = ['handoff-quality-gate', 'manual-request-fullsteps-gate', 'manual-request-evidence-gate', 'handoff-info-guard', 'handoff-branch-coverage-gate', 'user-burden-gate', 'handoff-investigation-gate'];
 // Exempt presentation/repetition only. Permission, evidence, outstanding work and
 // other operational checks must still run on automatic periodic turns.
@@ -188,13 +192,19 @@ export async function run(input, context, auditOptions = {}) {
   const text = input.last_assistant_message ?? input.assistant_text ?? context.assistantText;
   try {
     const relay = evaluateKimInboxRelay(input, { home: home(), raw: context.raw, text, now: auditOptions.now ?? Date.now() });
+    let relayRepeated = false;
     if (relay.decision === 'block') {
-      const record = { sessionId, verdict: 'block', blockedBy: ['kim-inbox-relay'], reasonCodes: [relay.code] };
-      ledger(record);
-      return { ...relay, record };
+      relayRepeated = splitRepeatedGateBlocks({ input, gates: ['kim-inbox-relay'], home: home(), now: auditOptions.now ?? Date.now(), max: SPECIAL_GATE_MAX_BLOCKS_PER_TURN }).repeated.length > 0;
+      if (!relayRepeated) {
+        const record = { sessionId, verdict: 'block', blockedBy: ['kim-inbox-relay'], reasonCodes: [relay.code] };
+        ledger(record);
+        return { ...relay, record };
+      }
+      ledger({ sessionId, verdict: 'warn_repeat', blockedBy: [], warned: ['kim-inbox-relay'], reasonCodes: [relay.code] });
     }
     const result = await runOtherGates(input, context, auditOptions);
-    if (result.decision !== 'block') commitKimInboxDelivery(home(), sessionId, relay.receipts, auditOptions.now ?? Date.now());
+    if (result.decision !== 'block' && !relayRepeated) commitKimInboxDelivery(home(), sessionId, relay.receipts, auditOptions.now ?? Date.now());
+    if (relayRepeated && result.decision !== 'block') return { ...result, systemMessage: [`kim-inbox-relay（同じターンで上限超えのため警告のみ）: ${relay.reason || relay.code}`, result.systemMessage].filter(Boolean).join('\n') };
     return result;
   } catch (error) {
     return { decision: 'block', reason: 'kim-inbox-relay: 受信箱の配達記録を確認できません。ローカル台帳を修復して再試行してください。' };
@@ -211,6 +221,7 @@ async function runOtherGates(input, context, auditOptions = {}) {
   const base = { sessionId, blockedBy: [], reasonCodes: [], excerpt: String(assistantText || '').slice(0, 200) };
   const deliverable = judgeDeliverableDriveLink({ text: assistantText || '', toolUses: blocks(currentTurnEntries(context.raw), 'tool_use') });
   const streak = registerDeliverableCheck({ home: home(), sessionId, blocked: deliverable.decision === 'block' });
+  if (deliverable.decision === 'block' && !streak.capped && splitRepeatedGateBlocks({ input, gates: ['deliverable-drive-link-gate'], home: home(), now: auditOptions.now ?? Date.now(), max: SPECIAL_GATE_MAX_BLOCKS_PER_TURN }).repeated.length) streak.capped = true;
   if (deliverable.decision === 'block') {
     const record = { ...base, verdict: streak.capped ? 'pass_cap' : 'block', blockedBy: ['deliverable-drive-link-gate'], reasonCodes: [deliverable.code], sameTextRetries: streak.count };
     if (streak.capped) {
@@ -247,13 +258,19 @@ async function runOtherGates(input, context, auditOptions = {}) {
   }
   const handoffKind = classifyHandoff(assistantText);
   const demoted = handoffKind === 'manual-steps' ? [] : effective.filter(({ name }) => FORM_GATES.includes(name)).map(({ name }) => name);
-  evaluated.results = effective.filter(({ name }) => !demoted.includes(name));
+  let remaining = effective.filter(({ name }) => !demoted.includes(name));
+  const light = remaining.filter(({ name }) => LIGHT_GATES.includes(name));
+  for (const value of light) warnings.push(`${value.name}（軽い指摘・警告のみ）: ${value.reason}`);
+  remaining = remaining.filter(({ name }) => !LIGHT_GATES.includes(name));
+  evaluated.results = remaining;
+  const warnedGates = light.map(({ name }) => name);
   // 先行 gate が発火して第2段を飛ばしたのに、policy/demote で全て無効化された場合は、監査を素通りさせず第2段を改めて評価する。
   if (audit.record.skipped === 'regex-blocked' && !evaluated.results.length) {
     const second = await evaluateAudit({ text: assistantText, transcriptRaw: context.raw, sessionId, regexBlocked: false }, { home: home(), ...auditOptions });
     if (second.decision === 'block') evaluated.results.push({ name: 'handoff-audit-gate', ...second });
   }
   const systemMessage = warnings.length ? warnings.join('\n') : undefined;
+  if (warnedGates.length) base.warned = warnedGates;
   const blockedBy = evaluated.results.map(({ name }) => name);
   const codesFor = ({ reasonCodes, code, name }) => reasonCodes || [code || name];
   const reasonCodes = [...new Set(evaluated.results.flatMap(codesFor)), ...evaluated.errors];

@@ -94,7 +94,13 @@ test('runner relay precedes retry/close bypasses, and another gate rejecting a d
   const old = process.env.ORGIAST_HOME; process.env.ORGIAST_HOME = f.home;
   t.after(() => { if (old === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = old; });
   const ctx = { raw: '', humanText: '確認して', assistantText: '' };
-  for (let n=0;n<5;n++) assert.equal((await run({ ...f.input, stop_hook_active: true, last_assistant_message: '完了' }, ctx)).record.blockedBy[0], 'kim-inbox-relay');
+  for (let n=0;n<2;n++) assert.equal((await run({ ...f.input, stop_hook_active: true, last_assistant_message: '完了' }, ctx)).record.blockedBy[0], 'kim-inbox-relay');
+  // 2026-11-15: 同じターン3回目以降は警告のみ。配達記録は付けず、次のターンで再度届ける。
+  const capped = await run({ ...f.input, stop_hook_active: true, last_assistant_message: '完了' }, ctx);
+  assert.notEqual(capped.decision, 'block');
+  assert.match(capped.systemMessage, /kim-inbox-relay/);
+  assert.equal(listItems(f.home)[0].deliveredToKim, undefined);
+  fs.rmSync(path.join(f.home, '.claude', 'stop-gate-repeat-state.json'), { force: true });
   const result = await run({ ...f.input, last_assistant_message: f.section([a]) + '\nhttps://discord.com/oauth2/authorize?client_id=1511684767546871818&permissions=0' }, ctx);
   assert.equal(result.decision, 'block');
   assert.equal(listItems(f.home)[0].deliveredToKim, undefined);

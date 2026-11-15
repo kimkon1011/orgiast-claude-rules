@@ -90,3 +90,28 @@ export function summarizeStopRechecks(rows, { since = 0 } = {}) {
     passAfterCap: recent.filter(row => row.verdict === 'pass_after_cap').length,
   };
 }
+
+// 2026-11-15 kim 指示「同じ理由での再差し戻しに上限」: 7日で 669 回の差し戻しのうち
+// deliverable-drive-link-gate 135回・kim-inbox-relay 92回などが同じゲートの連続再差し戻しだった。
+// 同じゲートは同じターン（同じ user 発話）で MAX_SAME_GATE_BLOCKS_PER_TURN 回まで block し、それ以降は警告に落とす。
+export const MAX_SAME_GATE_BLOCKS_PER_TURN = 1;
+export function gateRepeatFile(home = defaultHome()) { return path.join(home, '.claude', 'stop-gate-repeat-state.json'); }
+export function splitRepeatedGateBlocks({ input = {}, gates = [], home = defaultHome(), now = Date.now(), max = MAX_SAME_GATE_BLOCKS_PER_TURN } = {}) {
+  const names = [...new Set(gates.filter(Boolean))];
+  if (!names.length) return { allowed: [], repeated: [] };
+  const id = stopIdentity(input, '');
+  if (id.sessionId === 'unknown') return { allowed: names, repeated: [] };
+  const file = gateRepeatFile(home);
+  let state = {}; try { state = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+  for (const [key, value] of Object.entries(state)) { const t = Date.parse(value?.lastTs); if (!Number.isFinite(t) || t < now - 7 * 864e5) delete state[key]; }
+  const entry = state[id.sessionId]?.turnKey === id.turnKey ? state[id.sessionId] : { turnKey: id.turnKey, counts: {} };
+  const allowed = [], repeated = [];
+  for (const name of names) {
+    if ((entry.counts[name] || 0) >= max) repeated.push(name);
+    else { allowed.push(name); entry.counts[name] = (entry.counts[name] || 0) + 1; }
+  }
+  entry.lastTs = new Date(now).toISOString();
+  state[id.sessionId] = entry;
+  try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(state, null, 2) + '\n'); } catch {}
+  return { allowed, repeated };
+}

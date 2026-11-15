@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
+import { automationModel } from './lib/automation-model.mjs';
 import vm from 'node:vm';
 import { spawnSync } from 'node:child_process';
 import { addCheck } from './auto-progress.mjs';
@@ -188,7 +189,7 @@ test('resumeSession: APIエラー未返答だけ別モデルを指定する', as
   } } });
   await invoke({ sessionId: 'api-error-session', cwd: home, transcriptPath: '/t', source: 'api-error-unanswered', requestText: '依頼', promise: '依頼', error: 'rate_limit', apiErrorStatus: 429 });
   await invoke({ sessionId: 'normal-session', cwd: home, transcriptPath: '/t', promise: '通常の宣言' });
-  assert.equal(calls[0][5].model, process.env.AUTO_PROGRESS_RESUME_MODEL || 'opus');
+  assert.equal(calls[0][5].model, automationModel(process.env.AUTO_PROGRESS_RESUME_MODEL));
   assert.equal('model' in calls[1][5], false);
   assert.match(calls[0][1], /最初から通常どおり応えてください/);
 });

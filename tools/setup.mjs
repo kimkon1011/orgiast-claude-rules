@@ -281,8 +281,15 @@ if (converge) { const lock = acquireSetupConvergeLock({ home }); if (!lock.acqui
     }
     // 実機の更新は通常の converge のみ。verify / カスタム manifest は副作用なし。
     if (converge && !valueAfter('--manifest')) {
-      const { description, ...outcome } = await convergeNodeRuntimeSecurity();
-      results.push({ item: { id: 'node-runtime-security', severity: 'optional', description }, ...outcome });
+      const item = { id: 'node-runtime-security', severity: 'optional', description: 'Node.js ランタイムセキュリティ更新（Windows MSI + WSL Ubuntu）' };
+      try {
+        const { description, ...outcome } = await convergeNodeRuntimeSecurity();
+        results.push({ item: { ...item, description: description || item.description }, ...outcome });
+      } catch (error) {
+        const msg = String(error?.message || error).split(/\r?\n/)[0];
+        if (!jsonOutput) console.error(`[node-runtime-security] 失敗: ${msg}`);
+        results.push({ item, status: 'NOTICE', checked: true, repaired: false });
+      }
     }
     if (converge && !valueAfter('--manifest')) {
       const { description, ...outcome } = inspectTaskHiddenActions({ converge });

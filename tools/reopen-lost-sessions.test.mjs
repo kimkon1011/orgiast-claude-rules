@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { getLoadGuardStatus, hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord } from './reopen-lost-sessions.mjs';
+import { getLoadGuardStatus, hasConversation, hasHostExit, exclusion, parseAgents, parseOptions, localIndex, acquireLock, resolveClaudeCli, reopenLost, watchReopen, findWorkspaceForCwd, parseJsonTolerant, uriToPath, resolveReopenFolder, agentsFromRegistry, writeProgress, measureCpuAsync, hasCodeWindow, resolveLaunchTarget, watchdogRecord, measureUserIdleSec } from './reopen-lost-sessions.mjs';
 import { readVscodeHiddenSessionIds } from './lib/vscode-hidden-sessions.mjs';
 import { unverifiedStreakCounts, isSessionProcessRunning, connectedRcSessionIds } from './reopen-lost-sessions.mjs';
 
@@ -87,7 +87,7 @@ test('reopenLost: worktree cwd のセッションは最初の非 worktree cwd �
   ].map(JSON.stringify).join('\n'));
   const psCalls = [];
   const result = await reopenLost({
-    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, env: { APPDATA: path.join(root, 'no-appdata') },
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, checkIdle: false, env: { APPDATA: path.join(root, 'no-appdata') },
     fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
     spawn: (cmd, args) => {
       if (args[0] !== 'agents') {
@@ -209,7 +209,7 @@ test('localIndex uses first cwd when transcript has multiple cwd lines', t => {
 test('dry run uses real local mapping, paginates, never opens/writes', async t => {
   const base = fixture(t), calls = [];
   const fetchImpl = async url => { calls.push(url); return { ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : url.includes('cursor=next') ? { data: [] } : { data: [{ id: 'cse_one', title: 'Work' }], next_cursor: 'next' } }; };
-  const result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', fetchImpl, spawn: (cmd, args) => {
+  const result = await reopenLost({ base, since, until, dryRun: true, claudeCli: 'claude.exe', checkIdle: false, fetchImpl, spawn: (cmd, args) => {
     assert.deepEqual(args, ['agents', '--json']); return { status: 0, stdout: '[]' };
   } });
   assert.equal(result.candidates.length, 1);
@@ -223,7 +223,7 @@ test('dry run uses real local mapping, paginates, never opens/writes', async t =
 
 test('opening continues after API deadline; focus precedes URI; lock released and log written', async t => {
   const base = fixture(t), calls = []; let clock = 0;
-  const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock, checkCpu: false, env: { APPDATA: path.join(base, 'no-appdata') },
+  const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock, checkCpu: false, checkIdle: false, env: { APPDATA: path.join(base, 'no-appdata') },
     fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
     spawn: (cmd, args) => {
       // hasCodeWindow の呼び出しはウィンドウ無し(0)を返し、calls に記録しない
@@ -270,7 +270,7 @@ test('API failure is explicit and partial candidates survive API-only deadline',
 
 test('closed during fetch is excluded at dispatch time', async t => {
   const base = fixture(t);
-  const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'mock',
+  const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'mock', checkIdle: false,
     spawn: (cmd, args) => { assert.equal(args[0], 'agents'); return { status: 0, stdout: '[]' }; },
     fetchImpl: async url => ({ ok: true, json: async () => {
       if (url.includes('/events?')) { fs.writeFileSync(path.join(base, 'closed-sessions.json'), JSON.stringify({ ids: ['one'] })); return { data: [exit] }; }
@@ -504,8 +504,7 @@ test('reopenLost: ウィンドウ無し＋lastActiveWindow.workspaceIdentifier �
 
   const env = { APPDATA: appDataDir };
 
-  const result = await reopenLost({
-    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, fetchImpl, env,
+  const result = await reopenLost({ base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, checkIdle: false, fetchImpl, env,
     spawn: (cmd, args) => {
       if (args[0] !== 'agents') {
         const cmdStr = args[args.length - 1];
@@ -550,7 +549,7 @@ test('parseJsonTolerant handles block comments, escaping, BOM', t => {
 test('reopenLost falls back to code <cwd> with openedWith: folder when no workspace matches', async t => {
   const base = fixture(t), psCalls = [];
   const result = await reopenLost({
-    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false,
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, checkIdle: false,
     env: { APPDATA: path.join(base, 'no-appdata') },
     fetchImpl: async url => ({
       ok: true,
@@ -1896,7 +1895,7 @@ function writeHistory(base, rows) {
 }
 function guardOptions(base, extra = {}) {
   return {
-    base, since, until, now: () => guardNow, checkCpu: false, checkClaude: false,
+    base, since, until, now: () => guardNow, checkCpu: false, checkClaude: false, checkIdle: false,
     claudeCli: 'mock-claude', codeCli: 'mock-code', env: { APPDATA: path.join(base, 'no-appdata') },
     vscodeStartedAt: null, wait: async () => {}, windowReady: async () => true,
     fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : {
@@ -2141,4 +2140,96 @@ test('watch dry run preserves existing progress, log, state and lock contents', 
     assert.equal(fs.readFileSync(path.join(base, name), 'utf8'), before.data, name);
     assert.equal(fs.statSync(path.join(base, name)).mtimeMs, before.mtime, name);
   }
+});
+
+test('reopenLost with idleImpl 30: deferredActive is 30 and no --open-url spawn calls', async t => {
+  const base = fixture(t), calls = []; let clock = 0;
+  const result = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock, checkCpu: false, checkIdle: true, idleImpl: () => 30, env: { APPDATA: path.join(base, 'no-appdata') },
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: (cmd, args) => {
+      const cmdStr = args[args.length - 1];
+      if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
+        return { status: 0, stdout: '0' };
+      }
+      calls.push(args);
+      return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
+    },
+    windowReady: () => true, wait: async () => {},
+  });
+  assert.equal(result.deferredActive, 30);
+  const openUrlCalls = calls.filter(a => a.some(arg => typeof arg === 'string' && arg.includes('--open-url')));
+  assert.equal(openUrlCalls.length, 0);
+});
+
+test('reopenLost with idleImpl 900: opens session and deferredActive is undefined', async t => {
+  const base = fixture(t), calls = []; let clock = 0;
+  const result = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock, checkCpu: false, checkIdle: true, idleImpl: () => 900, env: { APPDATA: path.join(base, 'no-appdata') },
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: (cmd, args) => {
+      const cmdStr = args[args.length - 1];
+      if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
+        return { status: 0, stdout: '0' };
+      }
+      calls.push(args);
+      return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
+    },
+    windowReady: () => true, wait: async () => {},
+  });
+  assert.equal(result.deferredActive, undefined);
+  assert.equal(result.reopened.length, 1);
+  const openUrlCalls = calls.filter(a => a.some(arg => typeof arg === 'string' && arg.includes('--open-url')));
+  assert.ok(openUrlCalls.length >= 1);
+});
+
+test('reopenLost with idleImpl null: opens session normally', async t => {
+  const base = fixture(t), calls = []; let clock = 0;
+  const result = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock, checkCpu: false, checkIdle: true, idleImpl: () => null, env: { APPDATA: path.join(base, 'no-appdata') },
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one' }] } }),
+    spawn: (cmd, args) => {
+      const cmdStr = args[args.length - 1];
+      if (cmdStr.includes('Get-Process Code') && cmdStr.includes('.Count')) {
+        return { status: 0, stdout: '0' };
+      }
+      calls.push(args);
+      return { status: 0, stdout: args[0] === 'agents' ? '[]' : '' };
+    },
+    windowReady: () => true, wait: async () => {},
+  });
+  assert.equal(result.deferredActive, undefined);
+  assert.equal(result.reopened.length, 1);
+  const openUrlCalls = calls.filter(a => a.some(arg => typeof arg === 'string' && arg.includes('--open-url')));
+  assert.ok(openUrlCalls.length >= 1);
+});
+
+test('title containing 【閉じて可】 skips candidate and sets skipped.closable (host_exit & watchReopen)', async t => {
+  const base = fixture(t); let clock = 0;
+  const resultHostExit = await reopenLost({
+    base, since, until, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', now: () => clock, checkCpu: false, checkIdle: false, env: { APPDATA: path.join(base, 'no-appdata') },
+    fetchImpl: async url => ({ ok: true, json: async () => url.includes('/events?') ? { data: [exit] } : { data: [{ id: 'cse_one', title: '004｜【閉じて可】テスト' }] } }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+    windowReady: () => true, wait: async () => {},
+  });
+  assert.equal(resultHostExit.candidates.length, 0);
+  assert.equal(resultHostExit.skipped.closable, 1);
+
+  const nowTime = Date.parse('2026-11-07T12:00:00.000Z');
+  const resultWatch = await watchReopen({
+    base, claudeCli: 'claude.exe', codeCli: 'C:\\code.cmd', checkCpu: false, checkIdle: false, now: () => nowTime,
+    fetchImpl: async url => ({
+      ok: true,
+      json: async () => ({ data: [{ id: 'cse_one', status: 'active', connection_status: 'disconnected', last_event_at: new Date(nowTime - 60000).toISOString(), title: '004｜【閉じて可】テスト' }] }),
+    }),
+    spawn: () => ({ status: 0, stdout: '[]' }),
+  });
+  assert.equal(resultWatch.candidates.length, 0);
+  assert.equal(resultWatch.skipped.closable, 1);
+});
+
+test('measureUserIdleSec: Win32 実機で数値を返す（Add-Type 完全性の回帰防止）', { skip: process.platform !== 'win32' }, () => {
+  const sec = measureUserIdleSec();
+  assert.ok(Number.isInteger(sec), `measureUserIdleSec() returned non-integer: ${sec}`);
+  assert.ok(sec >= 0, `measureUserIdleSec() returned negative: ${sec}`);
 });

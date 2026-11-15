@@ -68,7 +68,11 @@ export function isClosable(footer) {
 
 export function latestWaitDeadline(text) {
   const footer = footerValues(text);
-  return footer ? openDeadline(footer.session) : null;
+  if (footer) return openDeadline(footer.session);
+  const normalized = String(text || '').replace(/：/g, ':');
+  const m = normalized.match(/(?:^|\n)このセッション:[ \t]*([^\r\n]+)/);
+  if (m) return openDeadline(m[1].trim());
+  return null;
 }
 
 function reopenRecordedSession(id) {

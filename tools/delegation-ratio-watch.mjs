@@ -41,20 +41,42 @@ function isOpusModel(rmodel) {
   return OPUS_NAMES.has(String(rmodel || '').toLowerCase());
 }
 
+// usage フィールドを flat/ネスト両対応で取り出す
+function usageField(row, key, keyAlt) {
+  const msg = row.message;
+  if (msg && msg.usage && typeof msg.usage === 'object') {
+    const v = msg.usage[key];
+    if (v !== undefined && v !== null) return Number(v);
+  }
+  return Number(row[key] || row[keyAlt] || 0);
+}
+
+// モデル名を flat/ネスト両対応で取り出す
+function extractModel(row) {
+  if (row.message && row.message.model) return String(row.message.model);
+  if (row.model) return String(row.model);
+  return '';
+}
+
 // Claude 重み付き消費トークン = (input + 1.25*cache_write + 0.1*cache_read + 5*output) × 重み
 export function weightedTokens(row) {
-  const w = weightFor(row.model);
+  const model = extractModel(row);
+  const w = weightFor(model);
   if (!w) return 0;
-  const inp = Number(row.input_tokens || row.inputTokens || row.input || 0);
-  const out = Number(row.output_tokens || row.outputTokens || row.output || 0);
-  const cw = Number(row.cache_creation_input_tokens || row.cacheCreationInputTokens || 0);
-  const cr = Number(row.cache_read_input_tokens || row.cacheReadInputTokens || 0);
+  const inp = usageField(row, 'input_tokens', 'inputTokens');
+  const out = usageField(row, 'output_tokens', 'outputTokens');
+  const cw = usageField(row, 'cache_creation_input_tokens', 'cacheCreationInputTokens');
+  const cr = usageField(row, 'cache_read_input_tokens', 'cacheReadInputTokens');
   return w * (inp + 1.25 * cw + 0.1 * cr + 5 * out);
 }
 
 // 会話本文を読まず、usage と model 名だけを抽出する。
+// ネスト形式（row.message.model / row.message.usage.input_tokens）と
+// flat 形式（row.model / row.input_tokens）の両方に対応。
+// message.id + requestId で重複排除。
 function extractUsageFromProjectJsonl(file, since) {
   const rows = [];
+  const seen = new Set();
   try {
     const text = fs.readFileSync(file, 'utf8');
     for (const line of text.split(/\r?\n/)) {
@@ -62,27 +84,43 @@ function extractUsageFromProjectJsonl(file, since) {
       let row;
       try { row = JSON.parse(line); } catch { continue; }
       if (!row || typeof row !== 'object') continue;
+      const model = extractModel(row);
+      if (!model) continue;
       const t = Number(row.timestamp) || Date.parse(row.timestamp || row.t || row.ts || row.created_at || 0);
       if (!Number.isFinite(t) || t < since) continue;
-      if (row.model) rows.push(row);
+      // message.id + requestId で重複排除
+      const msgId = (row.message && row.message.id) ? String(row.message.id) : '';
+      const reqId = row.requestId ? String(row.requestId) : '';
+      const dedupKey = `${msgId}|${reqId}`;
+      if (dedupKey !== '|' && seen.has(dedupKey)) continue;
+      if (dedupKey !== '|') seen.add(dedupKey);
+      rows.push(row);
     }
   } catch (e) { if (e.code !== 'ENOENT') throw e; }
   return rows;
 }
 
-function projectJsonlDirs(home) {
+// projects 配下を再帰的に走査し、.jsonl ファイルを収集。
+// mtime が since より古いファイルは飛ばす。
+function projectJsonlFiles(home, since) {
   const base = path.join(home, '.claude', 'projects');
   const results = [];
-  try {
-    for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      try {
-        for (const f of fs.readdirSync(path.join(base, entry.name), { withFileTypes: true })) {
-          if (f.isFile() && f.name.endsWith('.jsonl')) results.push(path.join(base, entry.name, f.name));
-        }
-      } catch {}
+  function walk(dir) {
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+        try {
+          const stat = fs.statSync(full);
+          if (stat.mtimeMs >= since) results.push(full);
+        } catch {}
+      }
     }
-  } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  }
+  try { walk(base); } catch {}
   return results;
 }
 
@@ -121,13 +159,14 @@ export function compute({ home = os.homedir(), now = Date.now(), executorUsageFi
   let totalWeighted = 0;
   let opusWeighted = 0;
   let totalRows = 0;
-  const files = projectFiles || projectJsonlDirs(home);
+  const files = projectFiles || projectJsonlFiles(home, since);
   for (const file of files) {
     try {
       for (const row of extractUsageFromProjectJsonl(file, since)) {
         const w = weightedTokens(row);
         totalWeighted += w;
-        if (isOpusModel(row.model)) opusWeighted += w;
+        const model = extractModel(row);
+        if (isOpusModel(model)) opusWeighted += w;
         totalRows++;
       }
     } catch (e) { if (e.code !== 'ENOENT') console.error(`[delegation-ratio-watch] ${file}: ${e.message}`); }
@@ -180,29 +219,44 @@ export function saveResult(result, home = os.homedir()) {
   return file;
 }
 
+// kim-inbox に送る本文を組み立てる
+export function buildInboxText(result) {
+  return [
+    '【委譲率異常】直近24時間の委譲率が閾値超過',
+    `起きたこと:`,
+    ...result.reasons.map(r => `- ${r}`),
+    `Claude Opus 比率: ${result.claude.opusRatio}% / 安いAI実作業: ${result.cheapAi.workCount} 件`,
+    `代替されなかった deferred: ${result.deferred.noFallback} 件 / quota_wait 中の呼出し: ${result.quotaWaitCalls} 件`,
+    `判断してほしいこと: 不要（Claude が自動で修正を起票済み）`,
+    `返事の例: 返事不要`,
+  ].join('\n');
+}
+
 // kim-inbox に info を積む
-export function notifyInbox(result, home = os.homedir()) {
+export function notifyInbox(result, home = os.homedir(), execImpl = execFileSync) {
   if (!result.alert) return null;
-  // 自身の tools/ からの相対パス
   const selfDir = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
   const cli = path.join(selfDir, 'kim-inbox.mjs');
   if (!fs.existsSync(cli)) {
     console.error('[delegation-ratio-watch] kim-inbox CLI not found.');
     return null;
   }
-  const text = [
-    '【安いAIレーン委譲率異常】',
-    ...result.reasons.map(r => `- ${r}`),
-    `Claude Opus 比率: ${result.claude.opusRatio}% / 安いAI実作業: ${result.cheapAi.workCount} 件`,
-    `代替されなかった deferred: ${result.deferred.noFallback} 件`,
-    `quota_wait 中の呼出し: ${result.quotaWaitCalls} 件`,
-  ].join('\n');
+  const text = buildInboxText(result);
+  const dateKey = `delegation-ratio-${new Date().toISOString().slice(0, 10)}`;
+  const bodyFile = path.join(home, '.claude', 'delegation-ratio-watch', `inbox-body-${dateKey}.txt`);
+  try { fs.mkdirSync(path.dirname(bodyFile), { recursive: true }); } catch {}
+  fs.writeFileSync(bodyFile, text, 'utf8');
   try {
-    execFileSync(process.execPath, [cli, 'info', '--text', text, '--priority', 'high', '--source', 'delegation-ratio-watch', '--dedupe-key', `delegation-ratio-${new Date().toISOString().slice(0, 10)}`], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+    const args = [cli, '--add', '--body-file', bodyFile, '--kind', 'info', '--source', 'delegation-ratio-watch', '--key', dateKey];
+    // 異常の深刻度が高い（deferred ≥ 10 かつ quota_wait ≥ 50）なら urgent
+    if (result.deferred.noFallback >= 10 && result.quotaWaitCalls >= 50) args.push('--urgent');
+    execImpl(process.execPath, args, { encoding: 'utf8', windowsHide: true, timeout: 30000 });
     return text;
   } catch (e) {
     console.error(`[delegation-ratio-watch] inbox delivery failed: ${e.message}`);
     return null;
+  } finally {
+    try { fs.unlinkSync(bodyFile); } catch {}
   }
 }
 
@@ -230,14 +284,22 @@ export function writeFixTicket(result, home = os.homedir()) {
 if (isEntry(import.meta.url)) {
   const home = process.env.ORGIAST_HOME || os.homedir();
   const now = Date.now();
+  const dryRun = process.argv.includes('--dry-run');
   const result = compute({ home, now });
   saveResult(result, home);
   if (result.alert) {
-    notifyInbox(result, home);
-    writeFixTicket(result, home);
+    if (dryRun) {
+      console.log('【kim-inbox に積む本文（--dry-run）】');
+      console.log(buildInboxText(result));
+      console.log(`\nClaude totalRows=${result.claude.totalRows} totalWeighted=${result.claude.totalWeighted} opusRatio=${result.claude.opusRatio}%`);
+    } else {
+      const ok = notifyInbox(result, home);
+      if (!ok) process.exitCode = 1;
+      writeFixTicket(result, home);
+    }
     for (const r of result.reasons) console.error(`[delegation-ratio-watch] 🔴 ${r}`);
   } else {
-    console.error(`[delegation-ratio-watch] ✅ 正常（Claude Opus ${result.claude.opusRatio}% / 安いAI ${result.cheapAi.workCount} 件）`);
+    console.error(`[delegation-ratio-watch] ✅ 正常（Claude Opus ${result.claude.opusRatio}% / 安いAI ${result.cheapAi.workCount} 件 / totalRows=${result.claude.totalRows}）`);
   }
   console.log(JSON.stringify(result));
 }

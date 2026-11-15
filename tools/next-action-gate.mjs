@@ -104,7 +104,7 @@ export const SESSION_PHRASES = {
 };
 const DEADLINE = '(\\d{4})-(\\d{2})-(\\d{2}) (\\d{2}):(\\d{2})';
 const WAIT_PATTERNS = {
-  open: new RegExp(`^まだ閉じない（作業中・${DEADLINE} まで待つ）$`),
+  open: new RegExp(`^まだ閉じない（[^・\\r\\n]*・${DEADLINE} まで待つ）$`),
   pending: new RegExp(`^/session-close をして（まだ閉じない・${DEADLINE} まで待つ）$`),
 };
 const WAIT_STATES = new Set(Object.keys(WAIT_PATTERNS));

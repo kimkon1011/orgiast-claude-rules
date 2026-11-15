@@ -54,6 +54,7 @@ import { evaluateShallowAnswer } from './shallow-answer-gate.mjs';
 import { judgeTurnLanguage } from './response-language-gate.mjs';
 import { evaluateUnregisteredPromise } from './unregistered-promise-gate.mjs';
 import { appendStopLedger, registerStopViolation, CAP_CONTEXT, splitRepeatedGateBlocks } from './lib/stop-recheck.mjs';
+import { stripInboxSection } from './lib/inbox-section-filter.mjs';
 import { STOP_RETRY_INSTRUCTION, withStopRetryInstruction } from './lib/stop-retry-message.mjs';
 import { evaluateClaudeFallbackReport } from './claude-fallback-report-gate.mjs';
 import { buildRecord, extractPromise, ledgerFile as progressLedgerFile, readLedger, writeLedger, applyPromise } from './auto-progress-ledger.mjs';
@@ -244,11 +245,13 @@ async function runOtherGates(input, context, auditOptions = {}) {
   const sessionId = input?.session_id || input?.sessionId || path.basename(input?.transcript_path || '', '.jsonl');
   input = { ...input, session_id: sessionId };
   const assistantText = input?.last_assistant_message ?? input?.assistant_text ?? context.assistantText;
+  // 受信箱節は kim-inbox-relay が処理済み。他ゲートの走査対象から除外（kim 2026-11-15）
+  const gateText = stripInboxSection(assistantText);
   // Deterministic permission guard: enforce before retry/close bypasses and rollout demotion.
-  const invite = evaluateInvitePermissions(assistantText);
+  const invite = evaluateInvitePermissions(gateText);
   if (invite.decision === 'block') return invite;
   const base = { sessionId, blockedBy: [], reasonCodes: [], excerpt: String(assistantText || '').slice(0, 200) };
-  const deliverable = judgeDeliverableDriveLink({ text: assistantText || '', toolUses: blocks(currentTurnEntries(context.raw), 'tool_use') });
+  const deliverable = judgeDeliverableDriveLink({ text: gateText || '', toolUses: blocks(currentTurnEntries(context.raw), 'tool_use') });
   const streak = registerDeliverableCheck({ home: home(), sessionId, blocked: deliverable.decision === 'block' });
   if (deliverable.decision === 'block' && !streak.capped && splitRepeatedGateBlocks({ input, gates: ['deliverable-drive-link-gate'], home: home(), now: auditOptions.now ?? Date.now(), max: SPECIAL_GATE_MAX_BLOCKS_PER_TURN }).repeated.length) streak.capped = true;
   if (deliverable.decision === 'block') {
@@ -276,7 +279,7 @@ async function runOtherGates(input, context, auditOptions = {}) {
   }
   const transcriptTurnText = currentTurnAssistantText(context.raw);
   const turnText = transcriptTurnText.includes(assistantText) ? transcriptTurnText : [transcriptTurnText, assistantText].filter(Boolean).join('\n\n');
-  const evaluated = await evaluateGates({ input, assistantText, turnText, humanText: context.humanText, lastUserPrompt: context.lastUserPrompt, transcriptRaw: context.raw, sessionId }, auditOptions);
+  const evaluated = await evaluateGates({ input, assistantText: gateText, turnText: stripInboxSection(turnText), humanText: context.humanText, lastUserPrompt: context.lastUserPrompt, transcriptRaw: context.raw, sessionId }, auditOptions);
   const audit = evaluated.audit;
   const warnings = [];
   const effective = [];

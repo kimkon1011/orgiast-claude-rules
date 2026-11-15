@@ -1198,6 +1198,17 @@ test('isTodoAlreadyDone は行末に注記と ✅ を後付けされた完了 TO
   assert.equal(isTodoAlreadyDone(md, '[ ] 未着手の別作業'), false);
 });
 
+test('isTodoAlreadyDone は notify-kim マーカー一致で本文の微差を吸収する(2026-11-16)', () => {
+  // 実物: 「検証」vs「再検証」の1文字差で90%閾値を超えず、完了済みTODOにセッションを消費
+  const md = `## 残TODO\n1. ~~通知の原因調査・修復: 検証する。人の操作が不可欠~~ → ✅ 2026-11-16 完了 <!-- notify-kim:1a17781ce18b7b648866 -->\n2. [ ] 別の作業\n`;
+  // notify-kim マーカーが一致すれば本文が微妙に違っても完了
+  assert.equal(isTodoAlreadyDone(md, '[ ] 通知の原因調査・修復: 再検証する。人の操作が不可欠 <!-- notify-kim:1a17781ce18b7b648866 -->'), true);
+  // マーカーが異なれば別の通知として扱う
+  assert.equal(isTodoAlreadyDone(md, '[ ] 通知の原因調査・修復: 検証する。人の操作が不可欠 <!-- notify-kim:0000000000000000 -->'), false);
+  // マーカーが無ければ従来の本文一致判定に委ねる
+  assert.equal(isTodoAlreadyDone(md, '[ ] 別の作業'), false);
+});
+
 test('writeTodoDone は書く直前の再読込内容へ完了印を付け、並行追加行を維持する', () => {
   const batchSnapshot = sample;
   const latest = batchSnapshot.replace('1. 歴史上のTODO\n', '1. 歴史上のTODO\n2) 他セッションが追加\r\n');

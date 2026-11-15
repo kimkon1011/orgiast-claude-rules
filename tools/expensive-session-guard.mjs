@@ -82,15 +82,16 @@ async function main() {
   // new configurable response/context limits with an old default of 400 turns.
   const tokLimit = positiveNumber(process.env.ORGIAST_SESSION_TOK_LIMIT, Infinity);
   const turnLimit = positiveNumber(process.env.ORGIAST_SESSION_TURN_LIMIT, Infinity);
-  const maxResponses = positiveNumber(process.env.ORGIAST_SESSION_MAX_RESPONSES, 300);
-  const maxContext = positiveNumber(process.env.ORGIAST_SESSION_MAX_CONTEXT, 150_000);
+  // 2026-11-15 kim: 120呼出超 or 160k tok超で /session-close を1行促す（blockしない・1セッション1回）
+  const maxResponses = positiveNumber(process.env.ORGIAST_SESSION_MAX_RESPONSES, 120);
+  const maxContext = positiveNumber(process.env.ORGIAST_SESSION_MAX_CONTEXT, 160_000);
   const candidates = [];
   const PROVISO = '\nただし user への聞き直し・やり直しを1回でも増やす形での削減は禁止。調査のツール呼び出し10回は、user への聞き直し1回より安い。削減は委譲・キャッシュ・出力長で行い、調査の深さと判断の質では行わない。';
   if (MODEL_LIMIT.has(lastModel)) candidates.push(['model', `このセッションは ${lastModel} で動作中。単価が opus-5 の3倍。応答の冒頭で user に \`/model opus\` への切替を1行で促し、切替まで重い作業に着手しないこと。${PROVISO}`]);
   // Reuse /session-close -> next-session.md; do not close/launch or interrupt
   // the current response here. Legacy cumulative limits remain supported.
   if (!state.handoffNotified && (turns > maxResponses || lastContext > maxContext || cacheRead >= tokLimit || turns >= turnLimit)) {
-    candidates.push(['handoffNotified', '長期セッション上限に達しました。この応答を終えたら /session-close で引き継ぎ、次セッションで続けてください']);
+    candidates.push(['handoffNotified', '/session-close して新セッションで続けること。（assistant呼出数・文脈上限）']);
   }
   if (!candidates.length) return;
 

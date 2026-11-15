@@ -4,29 +4,30 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>212coffee 業務チェック</title>
+  <link rel="stylesheet" href="../assets/design-tokens.css">
   <style>
-    :root { color-scheme: light; font-family: system-ui, sans-serif; color: #261b15; background: #f6f1ea; }
+    :root { color-scheme: light; font-family: var(--sys-font-family); color: #261b15; background: #f6f1ea; }
     * { box-sizing: border-box; }
     body { margin: 0; }
-    main { width: min(100%, 640px); margin: 0 auto; padding: 20px 16px 40px; }
-    h1 { margin: 0 0 16px; font-size: 1.45rem; }
-    .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+    main { width: min(100%, 640px); margin: 0 auto; padding: var(--sys-space-lg) var(--sys-space-md) 40px; }
+    h1 { margin: 0 0 var(--sys-space-md); font-size: 1.45rem; }
+    .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sys-space-xs); margin-bottom: var(--sys-space-md); }
     button, input[type="file"] { font: inherit; }
-    .tab, .submit { min-height: 48px; border: 0; border-radius: 10px; padding: 10px; font-weight: 700; }
+    .tab, .submit { min-height: 48px; border: 0; border-radius: var(--sys-radius-lg); padding: var(--sys-space-xs); font-weight: var(--sys-font-weight-bold); }
     .tab { background: #e4d8ca; color: #3f3028; }
-    .tab.active { background: #5d3825; color: white; }
-    .item { margin-bottom: 12px; padding: 14px; border: 1px solid #dbcdbf; border-radius: 12px; background: white; }
-    .check-row { display: flex; min-height: 44px; align-items: center; gap: 12px; cursor: pointer; }
+    .tab.active { background: #5d3825; color: var(--sys-text-invert); }
+    .item { margin-bottom: var(--sys-space-sm); padding: var(--sys-space-sm); border: 1px solid #dbcdbf; border-radius: var(--sys-radius-xl); background: var(--sys-bg-surface); }
+    .check-row { display: flex; min-height: 44px; align-items: center; gap: var(--sys-space-sm); cursor: pointer; }
     .check-row input { width: 24px; height: 24px; flex: 0 0 auto; }
-    .badge { white-space: nowrap; padding: 3px 7px; border-radius: 999px; background: #fff0c7; font-size: .82rem; }
-    .photo-input { display: block; width: 100%; min-height: 44px; margin-top: 10px; }
-    .preview { display: none; width: 120px; height: 90px; margin-top: 8px; border-radius: 8px; object-fit: cover; }
-    .error { min-height: 1.4em; margin: 6px 0 0; color: #b42318; font-size: .9rem; }
-    .submit { width: 100%; margin-top: 8px; background: #29703b; color: white; }
-    .submit:disabled { background: #aaa49e; cursor: not-allowed; }
-    .notice, .result { margin: 12px 0 0; line-height: 1.6; }
-    .notice { color: #665c55; font-size: .9rem; }
-    .result { padding: 12px; border-radius: 8px; background: #e3f4e7; }
+    .badge { white-space: nowrap; padding: var(--sys-space-2xs) var(--sys-space-xs); border-radius: var(--sys-radius-pill); background: var(--sys-bg-warn); font-size: var(--sys-font-size-xs); }
+    .photo-input { display: block; width: 100%; min-height: 44px; margin-top: var(--sys-space-xs); }
+    .preview { display: none; width: 120px; height: 90px; margin-top: var(--sys-space-xs); border-radius: var(--sys-radius-md); object-fit: cover; }
+    .error { min-height: 1.4em; margin: var(--sys-space-2xs) 0 0; color: var(--sys-warning); font-size: var(--sys-font-size-sm); }
+    .submit { width: 100%; margin-top: var(--sys-space-xs); background: var(--sys-success); color: var(--sys-text-invert); }
+    .submit:disabled { background: var(--sys-text-disabled); cursor: not-allowed; }
+    .notice, .result { margin: var(--sys-space-sm) 0 0; line-height: var(--sys-line-height); }
+    .notice { color: var(--sys-warning-text); font-size: var(--sys-font-size-sm); }
+    .result { padding: var(--sys-space-sm); border-radius: var(--sys-radius-md); background: var(--sys-bg-success); }
   </style>
 </head>
 <body>

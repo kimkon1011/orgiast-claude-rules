@@ -1,0 +1,181 @@
+/* ============================================================
+   Orgiast Design System — Design Tokens (--sys-*)
+   適用: 全社内アプリのスタイル一貫性保証
+   命名規則: --sys-{category}-{property}[-{modifier}]
+   バージョン: 1.0.0 / 2026-11-16
+   ============================================================
+   利用方法:
+   <link rel="stylesheet" href="../assets/design-tokens.css">
+   :root { --sys-primary: #...; } /* 上書きは各アプリで */
+   ============================================================ */
+
+:root {
+  /* ========================================
+     1. カラートークン (Color Tokens)
+        Do: 変数参照で一貫性を保つ
+        Don't: 各アプリで異なる色値を直書き
+        Do: --sys-text は本文、--sys-text-muted は補助情報
+        Don't: 補足テキストに本文と同じ濃さの色を使う
+     ======================================== */
+
+  /* — 背景 (Background) — */
+  --sys-bg: #f1f5f3;                /* ページ背景 */
+  --sys-bg-surface: #ffffff;         /* カード・セクション表面 */
+  --sys-bg-raised: #fafcfb;          /* 一段浮いたカード */
+  --sys-bg-warn: #fff0ce;            /* 警告背景 */
+  --sys-bg-danger: #fff0f1;          /* エラー背景 */
+  --sys-bg-success: #e3f4e7;         /* 成功背景 */
+  --sys-bg-accent: #f7f8fb;          /* アクセント背景（表ヘッダ等） */
+  --sys-bg-striped: #edf6f0;         /* ストライプ行 */
+
+  /* — 文字色 (Text) — */
+  --sys-text: #20312e;               /* 本文 */
+  --sys-text-muted: #5c667a;         /* 補足・ヒント */
+  --sys-text-invert: #ffffff;        /* 反転（濃色背景上） */
+  --sys-text-warn: #633d00;          /* 警告 */
+  --sys-text-danger: #a92d39;        /* エラー */
+  --sys-text-success: #29703b;       /* 成功 */
+  --sys-text-disabled: #aaa49e;      /* 無効時 */
+
+  /* — 強調色 (Primary / Accent) — */
+  --sys-primary: #176749;            /* メインアクション */
+  --sys-primary-hover: #104a35;      /* メインアクション（ホバー） */
+  --sys-primary-bg: #edf6f0;         /* メインアクション背景 */
+  --sys-accent: #315ac7;             /* サブアクション */
+  --sys-accent-hover: #264da3;       /* サブアクション（ホバー） */
+  --sys-accent-bg: #f7f8fb;          /* サブアクション背景 */
+
+  /* — 危険色 (Danger) — */
+  --sys-danger: #942727;             /* 削除・取消 */
+  --sys-danger-border: #d2a5a5;      /* 危険枠線 */
+  --sys-danger-bg: #fff5f5;          /* 危険背景 */
+
+  /* — 警告色 (Warning) — */
+  --sys-warning: #b42318;            /* 注意喚起 */
+  --sys-warning-bg: #fff0c7;         /* 注意背景 */
+  --sys-warning-text: #665c55;       /* 注意の説明文 */
+
+  /* — 境界線 (Border) — */
+  --sys-border: #ccd9d3;             /* カード・セクション境界 */
+  --sys-border-strong: #798d85;      /* 入力欄境界 */
+  --sys-border-light: #dce1ea;       /* 軽い境界 */
+  --sys-border-accent: #b8c1d1;      /* アクセント境界 */
+  --sys-border-danger: #a92d39;      /* エラー境界 */
+
+  /* — フォーカス (Focus) — */
+  --sys-focus: #c07a13;              /* フォーカスリング */
+  --sys-focus-offset: 3px;           /* フォーカスリングのオフセット */
+
+  /* ========================================
+     2. 半径トークン (Radius Tokens)
+        等距内縮: 要素の大きさが増すほど半径はわずかに減少
+        小さな要素（ボタン・入力欄）→ 大きめの半径
+        大きな要素（セクション・カード）→ 小さめの半径
+        Do: 一貫した変数参照で角丸のバラつきを防止
+        Don't: カードは12px・ボタンは6pxのようにアプリごとに変える
+        Do: 小要素から大要素へ radius-sm → radius-xl を使用
+        Don't: radius-sm に3pxのような変数外の値を入れる
+        連続角丸: inset（内側の要素は外側より小さい半径）
+          section(12px) > article(8px) > button/input(6px)
+     ======================================== */
+
+  --sys-radius-sm: 6px;              /* ボタン・入力欄・小要素 */
+  --sys-radius-md: 8px;              /* 写真・プレビュー枠 */
+  --sys-radius-lg: 10px;             /* タブ・大きいボタン */
+  --sys-radius-xl: 12px;             /* セクション・カード容器 */
+  --sys-radius-pill: 999px;          /* バッジ・タグ（完全な丸） */
+
+  /* ========================================
+     3. 間隔トークン (Spacing Tokens)
+        4の倍数体系: 論理入れ子に基づく間隔割り当て
+        最上位セクション → space-xl (24px) 上下
+        カード・ラベル間 → space-md (16px)
+        同一グループ内 → space-sm (12px)
+        隣接小要素 → space-xs (8px)
+        緊密 → space-2xs (4px)
+        Do: 入れ子の深さに応じて間隔を減らす
+        Don't: 上下左右で異なる間隔を直書き
+        Do: 同じ階層には同じspace変数を使う
+        Don't: margin と gap に別の値を書く
+     ======================================== */
+
+  --sys-space-2xs: 4px;              /* 緊密（アイコン隣接等） */
+  --sys-space-xs: 8px;               /* 隣接要素間 */
+  --sys-space-sm: 12px;              /* ラベル-入力間・小グループ内 */
+  --sys-space-md: 16px;              /* カード内要素・グリッドギャップ */
+  --sys-space-lg: 20px;              /* セクション内の段落間 */
+  --sys-space-xl: 24px;              /* 最上位セクション間・mainパディング */
+  --sys-space-2xl: 32px;             /* 大きな区切り */
+
+  /* ========================================
+     4. タイポグラフィ (Typography Tokens)
+        Do: サイズ段階は rem → space 体系と揃える
+        Don't: 無関係なフォントサイズを混在
+     ======================================== */
+
+  --sys-font-family: system-ui, sans-serif;
+  --sys-font-mono: ui-monospace, monospace;
+  --sys-font-size: 16px;             /* 基本文字サイズ */
+  --sys-font-size-sm: .9rem;         /* 補足・ヒント */
+  --sys-font-size-xs: .82rem;        /* ラベル・バッジ */
+  --sys-font-size-h1: clamp(1.5rem, 4vw, 2.1rem); /* ページタイトル */
+  --sys-font-size-h2: 1.2rem;        /* セクションタイトル */
+  --sys-font-size-h3: 1rem;          /* サブタイトル */
+  --sys-line-height: 1.65;           /* 行間 */
+  --sys-line-height-heading: 1.4;    /* 見出し行間 */
+  --sys-font-weight-bold: 700;       /* 太字 */
+  --sys-font-weight-semibold: 600;   /* 準太字 */
+
+  /* ========================================
+     5. 影トークン (Shadow Tokens)
+        使用は最小限: 必要に応じてカードに軽い影
+     ======================================== */
+
+  --sys-shadow-sm: 0 2px 8px #15213b0d;
+
+  /* ========================================
+     6. コンポーネントセマンティクス
+        Do と Don't の例は各コンポーネントの利用意図を明確にする
+        詳細は COMPONENTS.md を参照
+     ======================================== */
+}
+
+/* ============================================================
+   コンポーネント選択ガイド (Component Selection Guide)
+   業界成熟ライブラリ (Material Design / PrimeNG / shadcn) を参考
+   ============================================================
+
+   【カード (Card)】
+   Do: 意味的まとまり（1件のデータ・1つの操作）を article で囲む
+   Don't: 装飾だけの div に border-radius を付け card と偽装しない
+
+   【フォーム (Form)】
+   Do: label 要素で明示的に関連付け、必須はラベルに明示
+   Don't: placeholder だけでラベルを省略する
+
+   【ボタン (Button)】
+   Do: button 要素を使い、type="submit/button" を明示
+   Don't: div や a を JavaScript で擬似ボタンにする
+
+   【タブ (Tab)】
+   Do: role="tablist" + role="tab" + role="tabpanel" で意味を定義
+   Don't: リンクまたは div で外観だけを模倣する
+
+   【状態表示 (Status)】
+   Do: role="status" + aria-live で動的変更を伝達
+   Don't: 色変化だけに頼って意味を伝える
+
+   【空状態 (Empty State)】
+   Do: 何もないことを伝え、次の操作を示唆する
+   Don't: 何も表示しない・壊れたように見せる
+   ============================================================ */
+
+/* ============================================================
+   4. 間隔割り当てルール (Spacing Allocation Rules)
+   論理入れ子に基づく:
+     レベル0 (main)   → padding: var(--sys-space-xl)
+     レベル1 (section) → margin: var(--sys-space-lg) 0
+     レベル2 (article) → padding: var(--sys-space-lg)
+     レベル3 (ラベル列) → gap: var(--sys-space-md)
+     レベル4 (隣接UI)  → gap: var(--sys-space-xs)
+   ============================================================ */

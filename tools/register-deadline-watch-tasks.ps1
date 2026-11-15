@@ -6,6 +6,10 @@ if (-not $node) { throw 'node.exe not found' }
 $seatRaw = & $node (Join-Path $PSScriptRoot 'setup-deadline-watch.mjs') --seat-check
 if ($LASTEXITCODE -ne 0) { throw 'seat check failed' }
 $seat = $seatRaw | ConvertFrom-Json
+$specs = @(
+  [pscustomobject]@{ Name = 'OrgiastDeadlineDetect'; Script = 'deadline-detect.mjs'; At = '02:40' },
+  [pscustomobject]@{ Name = 'OrgiastDeadlineWatch'; Script = 'deadline-watch.mjs'; At = '08:30' }
+)
 if (-not $seat.kim) {
   foreach ($spec in $specs) {
     $current = Get-ScheduledTask -TaskName $spec.Name -ErrorAction SilentlyContinue
@@ -16,10 +20,6 @@ if (-not $seat.kim) {
   }
   return
 }
-$specs = @(
-  [pscustomobject]@{ Name = 'OrgiastDeadlineDetect'; Script = 'deadline-detect.mjs'; At = '02:40' },
-  [pscustomobject]@{ Name = 'OrgiastDeadlineWatch'; Script = 'deadline-watch.mjs'; At = '08:30' }
-)
 if ($Unregister) {
   foreach ($spec in $specs) {
     if (-not $DryRun -and (Get-ScheduledTask -TaskName $spec.Name -ErrorAction SilentlyContinue)) { Unregister-ScheduledTask -TaskName $spec.Name -Confirm:$false }

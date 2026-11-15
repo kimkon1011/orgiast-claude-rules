@@ -189,13 +189,14 @@ export function reportsCloseSteps(text) {
   return numbered('1') && numbered('2') && numbered('3');
 }
 
-export function hasOpenSessionCheck(input, home) {
+export function hasOpenSessionCheck(input, home, { humanWait = false } = {}) {
   if (!input.session_id) return false;
   try {
     return latestOpenPromises(readLedger(ledgerFile(home)))
       .some(row => row.sessionId === input.session_id && (
-        (['open', 'overdue', 'resumed', 'stalled'].includes(row.status) && ((typeof row.check === 'string' && row.check.trim()) || row.autoRegisteredCheck === true)) ||
-        (row.status === 'scheduled' && typeof row.startWhen === 'string' && row.startWhen.trim())
+        // Retained retries keep automatic monitoring alive, but do not authorize a human handoff.
+        ((humanWait ? row.status === 'open' : ['open', 'overdue', 'resumed', 'stalled'].includes(row.status)) && ((typeof row.check === 'string' && row.check.trim()) || row.autoRegisteredCheck === true)) ||
+        (!humanWait && row.status === 'scheduled' && typeof row.startWhen === 'string' && row.startWhen.trim())
       ));
   } catch { return false; }
 }
@@ -270,7 +271,7 @@ function waitingCheckIssues(source, transcriptRaw, input, turnSource) {
   // チャットで答えるだけの返信待ち（reply-only）は会話に戻ってくるので台帳は要らない。それ以外の人待ちは載せる。
   const userHandoff = /\[手渡し判定\]|お願いする操作|^手間監査:/m.test(body);
   if ((userHandoff || !NO_ACTION_PATTERN.test(footer.nextAction)) && classifyHandoff(source) !== 'reply-only'
-    && !hasOpenSessionCheck(input) && !noAutocheck) {
+    && !hasOpenSessionCheck(input, undefined, { humanWait: true }) && !noAutocheck) {
     issues.push({ decision: 'block', code: 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', reason: (userHandoff ? 'user 本人への手渡し（[手渡し判定]／お願いする操作）も人待ちです。' : '') + '人待ちの自動進行は台帳の定期チェックに載せる: node tools/auto-progress.mjs --add-check --session <id> --check "<exit0=達成/1=未達のコマンド>" --deadline +7d --label "<名前>" --next-claude "<次の手>"。自動進行が「なし」でも同じセッションの open 行が必要です。自動確認できない場合だけ [NO-AUTOCHECK-OK: <理由>] を記載してください。' });
   }
   if ((userHandoff || !NO_ACTION_PATTERN.test(footer.nextAction)) && classifyHandoff(source) !== 'reply-only'

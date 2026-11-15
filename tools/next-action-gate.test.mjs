@@ -3,7 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { judgeNextAction, reportsCloseSteps, SESSION_PHRASES as PHRASES, openDeadline, openPhrase } from './next-action-gate.mjs';
+import { judgeNextAction, reportsCloseSteps, SESSION_PHRASES as PHRASES, openDeadline, openPhrase, hasOpenSessionCheck } from './next-action-gate.mjs';
 
 // open は期限入りのテンプレートなので、テストでは遠い未来の期限を入れた実例で検証する。
 const SESSION_PHRASES = { ...PHRASES, open: 'まだ閉じない（作業中・2099-12-31 23:59 まで待つ）', pending: '/session-close をして（まだ閉じない・2099-12-31 23:59 まで待つ）' };
@@ -591,8 +591,9 @@ test('人待ちは自動進行なしでも同一sessionのopen台帳行を要求
     }
     for (const status of ['overdue', 'stalled', 'resumed']) {
       fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status, check: 'node check.mjs', ask: '本人が行う操作の全文です。' }));
-      assert.equal(judgeNextAction(text, cronRow, input).decision, 'pass', status);
-      assert.equal(judgeNextAction(text, '', input).code, 'SESSION-OPEN-NEEDS-IN-SESSION-CHECK', status);
+      assert.equal(hasOpenSessionCheck(input), true, status);
+      assert.equal(judgeNextAction(text, cronRow, input).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', status);
+      assert.equal(judgeNextAction(text, '', input).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK', status);
     }
     fs.rmSync(file);
     assert.equal(judgeNextAction(text, '', input).code, 'NEXT-ACTION-HUMAN-WAIT-NEEDS-CHECK');

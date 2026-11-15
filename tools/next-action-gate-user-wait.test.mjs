@@ -55,12 +55,14 @@ test('お願いする操作と行頭の手間監査も本人手渡しとして�
 test('本人手渡しには同一 session の open 台帳行だけを認める', t => {
   const file = withLedger(t);
   const input = { session_id: 'user-wait' };
-  for (const status of ['open', 'done', 'superseded', 'waiting_user', 'stalled', 'resumed']) {
+  for (const status of ['open', 'done', 'superseded', 'waiting_user', 'stalled', 'resumed', 'overdue', 'scheduled']) {
     fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status, check: 'node check.mjs', ask: 'Discord で転送してください。' }) + '\n');
     const result = judgeNextAction(report(handoff), '', input);
     if (status === 'open') assert.equal(result.decision, 'pass');
     else assert.equal(result.code, code, status);
   }
+  fs.writeFileSync(file, JSON.stringify({ sessionId: input.session_id, status: 'scheduled', startWhen: 'node ready.mjs', ask: 'Discord で転送してください。' }) + '\n');
+  assert.equal(judgeNextAction(report(handoff), '', input).code, code);
   fs.writeFileSync(file, JSON.stringify({ sessionId: 'other', status: 'open', check: 'node check.mjs' }) + '\n');
   assert.equal(judgeNextAction(report(handoff), '', input).code, code);
 });

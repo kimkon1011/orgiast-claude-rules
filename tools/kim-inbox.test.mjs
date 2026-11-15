@@ -523,14 +523,14 @@ test('急ぎは短い要約を保ち、未表示優先・最大5件・open限定
   const context = selectContext([base, ...urgent, closed], { sessionId: 's', now: Date.parse('2026-11-11T00:00:00Z') });
   assert.ok(context.length <= CONTEXT_LIMIT);
   const displayed = urgent.slice(1, 6).filter(item => context.includes(item.id));
-  assert.ok(displayed.length > 0 && displayed.length < 5, 'whole briefs are shown until the context budget is full');
+  assert.ok(displayed.length > 0 && displayed.length <= 5, 'briefs are shown until the context budget or item limit is full');
   for (const item of displayed) {
     assert.equal(item.shownCount, 1);
     assert.deepEqual(item.shownSessions, ['s']);
   }
   assert.match(context, /ほか \d+ 件/);
   assert.doesNotMatch(context, /urgent-0|urgent-6|closed-urgent/);
-  for (const item of displayed) assert.ok(context.includes(item.text), 'topic keeps the entire first line');
+  for (const item of displayed) assert.ok(context.includes(item.text.slice(0, 80)), 'topic keeps the first 80 characters');
   assert.equal(urgent[0].shownCount, 0);
   assert.equal(urgent[6].shownCount, 1);
 });

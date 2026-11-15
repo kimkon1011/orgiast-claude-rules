@@ -24,6 +24,15 @@ const metadataLine = /^(?:【[^】]*】\s*(?:プロジェクト|セッション�
 const actionLabel = /^(?:あなたの返事待ち|答えてほしいこと|判断してほしいこと|あなたの作業待ち|kim がすること|kim がやること[^:：]*)[:：]/;
 const anyActionLabel = /^(?:あなたの返事待ち|答えてほしいこと|判断してほしいこと|あなたの作業待ち|kim がすること|kim がやること[^:：]*|承認待ち|約束)[:：]/;
 const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const stripSubjectBrackets = text => text.replace(/^【([^】]+)】\s*/, '$1 ').trim();
+const cap = (text, length) => Array.from(text).slice(0, length).join('');
+const capWithoutSplittingUrl = (text, length) => {
+  if (Array.from(text).length <= length) return text;
+  const boundary = Array.from(text).slice(0, length).join('').length;
+  const crossingUrl = [...text.matchAll(/https?:\/\/\S+/g)]
+    .find(({ index, 0: url }) => index < boundary && index + url.length > boundary);
+  return crossingUrl ? text.slice(0, crossingUrl.index + crossingUrl[0].length) : text.slice(0, boundary) + '…';
+};
 
 export function inboxBrief(item, options = {}) {
   const text = String(item.text || '');
@@ -33,14 +42,17 @@ export function inboxBrief(item, options = {}) {
   const pc = String(item.from || '').split('・')[0].trim();
   const displayPc = displayPcNames((pc && !pc.includes('@') ? pc : header?.match(/^【([^・】]+)/)?.[1]) || '', options);
   const meaning = lines.map(withoutEmoji).find(line => line && !metadataLine.test(line) && !/^https?:\/\//.test(line)) || '';
-  let topic = purpose || (header ? meaning : lines[0]) || '件名なし';
+  let topic = stripSubjectBrackets(purpose || (header ? meaning : lines[0]) || '件名なし');
+  topic = cap(topic, 80);
   if (displayPc && !topic.startsWith(displayPc)) topic = `${displayPc}: ${topic}`;
   const happenedRaw = Array.from(meaning).slice(0, 120).join('');
-  // Fix 4: use normalized version only for dedup comparison, topic display remains unchanged
+  // Compare the displayed subject and first meaningful line without subject brackets.
   const topicBody = topic.replace(new RegExp(`^${escapeRegex(displayPc ? displayPc + ': ' : '')}`), '');
-  const normTopic = topicBody.replace(/^【[^】]+】\s*/, '').trim();
-  const normHappened = (happenedRaw || '').replace(/^【[^】]+】\s*/, '').trim();
-  const happened = (!header && purpose === undefined && normTopic === normHappened)
+  const normTopic = stripSubjectBrackets(topicBody);
+  const normHappened = stripSubjectBrackets(happenedRaw || '');
+  const duplicatedMeaning = normTopic && normHappened
+    && (normTopic.includes(normHappened) || normHappened.includes(normTopic));
+  const happened = (!header && purpose === undefined && duplicatedMeaning)
     ? (() => {
         const meaningIndex = lines.map(withoutEmoji).findIndex(l => l === meaning);
         const nextLine = lines.slice(meaningIndex + 1).map(withoutEmoji).find(l => l && !metadataLine.test(l) && !/^https?:\/\//.test(l) && !actionLabel.test(l));
@@ -84,14 +96,10 @@ export function inboxBrief(item, options = {}) {
         const l = actions[i];
         if (actionLabel.test(l) || /^(?:kim の)?承認待ち/.test(l) || /^約束[:：]/.test(l)) break;
         if (metadataLine.test(l)) continue;
-        if (/^https?:\/\//.test(l)) continue;
         followUps.push(l);
       }
       if (followUps.length > 0) {
-        const combined = followUps.join('\n');
-        baseDecide = combined.length > 300
-          ? ((cut => cut > 0 ? combined.slice(0, cut) : combined.slice(0, 300))(combined.lastIndexOf('\n', 300))) + '…'
-          : combined;
+        baseDecide = capWithoutSplittingUrl(followUps.join('\n'), 300);
       } else {
         baseDecide = unspecified;
       }
@@ -106,7 +114,7 @@ export function inboxBrief(item, options = {}) {
     : resumeFailed ? 'N 続けて／N 中止'
     : item.kind === 'info' ? '返事不要' : 'N 可／N 不要／N <指示>';
   const rawLinks = [...text.matchAll(/https?:\/\/[^\s<>「」『』【】（）]+/g)].map(m => m[0]);
-  const sanitized = rawLinks.map(url => url.replace(/[*)\]）。、.,]$/, ''));
+  const sanitized = rawLinks.map(url => url.replace(/[*)\]）。、.,]+$/, ''));
   const seenRefs = new Map(); // ref → index in links[]
   const links = [];
   for (const url of sanitized) {

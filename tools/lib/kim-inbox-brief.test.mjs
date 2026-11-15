@@ -79,8 +79,9 @@ test('no inferred approval from passive waiting; explicit labels and deadlines a
 test('only happened is capped; headerless bracket headings and purpose slash are meaningful', () => {
   const first = '【連絡】' + 'あ'.repeat(150);
   const brief = inboxBrief(makeItem({ from: 'DELL', text: first }));
-  assert.equal(brief.topic, `作業用014: ${first}`);
-  assert.equal(Array.from(brief.happened).length, 120);
+  assert.equal(brief.topic, `作業用014: 連絡 ${'あ'.repeat(77)}`);
+  assert.equal(Array.from(brief.topic.replace('作業用014: ', '')).length, 80);
+  assert.equal(brief.happened, '');
   assert.equal(inboxBrief(makeItem({ text: '【DELL・user@example.com の Claude Code】プロジェクト: 配布 ／ セッションの目的: A／Bを比較… ／ 作業ID: 12345678\n確認が完了' })).topic, '作業用014: A／Bを比較…');
   assert.equal(inboxBrief(makeItem({ text: '【DELL・user@example.com の Claude Code】プロジェクト: 配布 ／ 作業ID: 12345678\n確認が完了' })).topic, '作業用014: 確認が完了');
 });
@@ -145,13 +146,18 @@ test('action heading with no content captures follow-up lines into decide', t =>
   assert.match(brief.decide, /確認する/);
   assert.match(brief.decide, /報告する/);
   assert.doesNotMatch(brief.decide, /返事内容の指定なし/);
+  const withUrl = inboxBrief(makeItem({
+    kind: 'ask',
+    text: 'kim がやること（作業用014 で1回だけ）:\n1. 次を開く\nhttps://example.com/path?token=abc\n3. 承認する'
+  }));
+  assert.match(withUrl.decide, /https:\/\/example\.com\/path\?token=abc/);
 });
 
 // Fix 3: links の重複除去・末尾記号除去・decide内URLの重複防止
 test('links are deduplicated, trailing punctuation stripped, decide URLs not duplicated in 開く', t => {
   const url = 'https://docs.google.com/document/d/BBB/edit';
   const authUrl = 'https://docs.google.com/document/d/BBB/edit?authuser=kim@orgiast.jp';
-  const text = `判断してほしいこと: ${authUrl} を確認\n詳細: ${url}）、${url}））\nhttps://example.com/other。`;
+  const text = `判断してほしいこと: ${authUrl} を確認\n詳細: ${url}）、${url}））\nhttps://example.com/other。）、*`;
   const item = makeItem({ kind: 'ask', text });
   const brief = inboxBrief(item);
   assert.ok(brief.links.includes(authUrl), `authUrl should be in links: ${brief.links}`);
@@ -168,6 +174,13 @@ test('topic and happened from same line use next meaningful line for happened', 
     kind: 'ask',
     text: '【緊急】サーバー障害対応\n確認してください\nhttps://example.com/status'
   }));
-  assert.equal(brief.topic, '【緊急】サーバー障害対応');
+  assert.equal(brief.topic, '緊急 サーバー障害対応');
   assert.equal(brief.happened, '確認してください');
+
+  const longTopic = '障害対応の進捗を確認' + '中'.repeat(90);
+  const contained = inboxBrief(makeItem({
+    kind: 'ask',
+    text: `${longTopic}\n復旧作業を開始`
+  }));
+  assert.equal(contained.happened, '復旧作業を開始');
 });

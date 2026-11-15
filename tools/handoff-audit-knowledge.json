@@ -358,5 +358,11 @@
     "route": "完了報告と状態確認は「Drive MCP」のような汎用ツール名で抽象化せず、確認対象ごとに特定の API/ツールを呼び出して実データを根拠に書く。Drive 上のファイル状態（存在・更新日時・中身）は DWD(kim impersonate / drive スコープ)で Drive API v3 の files.get（alt=media または export）と files.list を直接叩く（Drive MCP は使わない）。スプレッドシートの内容は SA 直 JWT（`aujust-sales-automation/.gcp/sheets-sa.json`、scope=`https://www.googleapis.com/auth/spreadsheets.readonly`）で `GET /v4/spreadsheets/{id}?fields=properties.title,sheets.properties` と `GET /v4/spreadsheets/{id}/values/{tab}!A1:BZ400` を叩く（詳細は knowledge entry「Google スプレッドシートの書き込み結果検証」の検証4点）。GitHub の状態は `gh pr view <番号> -R <owner>/<repo> --json state,mergedAt`、`gh run list -R <owner>/<repo> --limit 5 --json status,conclusion,headSha`、`gh api repos/<owner>/<repo>/<path>` で直接照会する。Vercel の反映確認は `VERCEL_TOKEN=... vercel inspect <本番URL>` で Ready と id/created を確認する。コミットの取込は squash マージで is-ancestor が偽になるため `node tools/commit-landed.mjs <sha>` を使う。報告は「確認要素 × 照会ツール × 実応答データ」の検証表で出し、照会に失敗した項目は実際の error 本文を添えて「未確認」と書く。確率付き否定や「user が確認して」への丸投げをしない。実例: 2026-09-20 に Drive API で旧版ファイルの trash 候補を列挙し kim への手渡しにした（knowledge entry「Drive 上の旧版ファイルをゴミ箱へ」）。",
     "confidence": "high",
     "source": "2026-11-13 handoff-audit-candidates tool-name-route レビュー（元: pattern「作業完了報告・状態確認」route が「Drive MCP」道具名のみだったため手順文に書換）"
+  },
+  {
+    "pattern": "Discord DM の送信結果・返信確認",
+    "route": "Discord DM の相手からの返信有無は、kim に確認を依頼せず Claude が Discord API を直接照会して判定する。手順: (1) Bot トークン（~/.claude/orgiast-discord-bot-token.txt または環境変数 DISCORD_BOT_TOKEN）で認証する。(2) POST /users/@me/channels に body {\"recipient_id\":\"<送信先の Discord ユーザーID>\"} を送り DM チャンネル ID を取得する（API はチャンネルが無ければ作成するが読み取り専用）。GET /channels/{channelId}/messages?limit=100 で全メッセージ履歴をページング取得する。(4) 取得メッセージのうち author が bot（ClaudeInboxBridge）以外のものを相手からの返信としてカウントする。(5) tools/discord-digest.mjs の fetchMessages 関数がこの一連の処理をラップしている。結果が 0 件または Bot トークンが無い PC では「未確認」と書き、断定しない。再発走査は tools/handoff-audit-discord-dm-premise-scan.mjs（陽性 P6/P7 がこの型）。",
+    "confidence": "high",
+    "source": "2026-11-16 handoff-audit-candidates tool-name-route レビュー（元 route: Discord MCP 道具名のみ→手順文に書換）。根拠: memory reference-discord-dm-reply-check-via-api.md（2026-10-31 C5 実測）"
   }
 ]

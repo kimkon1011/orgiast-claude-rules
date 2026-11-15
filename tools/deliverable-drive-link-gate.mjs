@@ -11,28 +11,54 @@ const urls = text => text.match(/https:\/\/(?:drive|docs)\.google\.com\/[^\s<>"`
 const canonicalFile = file => file.replaceAll('\\', '/').replace(/^\/mnt\/c\//i, 'c:/').replace(/^\/c\//i, 'c:/').toLowerCase();
 const deliverable = /PDF|書面|ファイル|資料|チラシ|フライヤー|画像|写真|初稿|第\d+稿|原稿|Doc|ドキュメント|スプレッドシート|シート|Excel|xlsx|見積|企画書|提案書|計画書|報告書|台本|デザイン|スライド|デッキ|リスト|一覧表|動画|告知|LP|ページ|印刷|FAX|送付|提出|添付/i;
 const reviewAction = /見て|見せ|確認|チェック|レビュー|開いて|目を通|直し|修正|OK|よいですか|いいですか|返信|承認|送って|印刷|提出|添付|してください|お願いします|していただ|してくださいませんか/i;
-const explicitNoUrl = /URLなし\s*[（(]\s*理由\s*[:：]\s*[^）)]+[）)]/i;
+const explicitNoUrl = /URLなし\s*[（(]\s*理由\s*[:：]\s*[^\s）)][^）)]*[）)]/i;
 // 承認コンテキストで成果物にURLが必要なことを検出するパターン
-const approvalWord = /承認|よいですか|いいですか|送ってよい|どれ|選ん[でだ]|確認してください|確認をお願い|判断|OK[^)]*(?:です|でしょ|だ|で)/i;
-const deliverableApprovalItem = /[梅竹松]|案[1-9]|[A-D]案|パース|提案書|見積(?:もり)?[をはがの]?|スライド|メール本文|草案|案文|PDF[^/]|画像[をはがの]?|Doc[^s]|デザイン|プラン|図面|レイアウト|イメージ|チラシ|フライヤー|企画書|企画案/i;
+const approvalWord = /承認|よいですか|いいですか|送ってよい|どれ|選ん[でだ]|確認してください|確認をお願い|判断|\bOK\b/i;
+const planName = /[梅竹松]|案\s*(?:[0-9０-９]+|[A-ZＡ-Ｚ])|[A-ZＡ-Ｚ]\s*案/gi;
+const deliverableApprovalItem = /[梅竹松]|案\s*(?:[0-9０-９]+|[A-ZＡ-Ｚ])|[A-ZＡ-Ｚ]\s*案|パース|提案書|見積|スライド|メール本文|草案|案文|\bPDF\b|画像|\bDocs?\b|ドキュメント|デザイン|プラン|図面|レイアウト|イメージ|チラシ|フライヤー|企画書|企画案/i;
 const reason = '成果物を Drive にアップし、最終メッセージの③の依頼と同じ箇所に URL（authuser=開く人のメール付き）を書いてください。② と ③ で見てもらう成果物は、その行に Drive の URL を書く（例: - チラシ初稿 PDF https://drive.google.com/file/d/…/view）。例: node tools/drive-upload.mjs --file <path> --folder <folderId> --authuser <開く人のメール>。鍵が無い PC は rclone copyto <file> <remote>:<name> --drive-root-folder-id <folderId>（drive リモート）、または Drive MCP。全部失敗したら [DRIVE-UPLOAD-FAILED: <エラー本文>] を書いてください。';
 const approvalReason = '成果物ごとの実物URL（Drive）を承認項目の同じ行（または直後2行以内）に書いてください。見つからなければ Drive へアップし直す。URLには authuser=<開く人のメール> を付け、近傍に「<メール> で開いてください」と書いてください。例外は「URLなし（理由: …）」と明記します。';
 
-function validApprovalUrls(text) {
-  return urls(text).filter(raw => {
+function validApprovalUrls(text, guidance) {
+  const accountGuidance = guidance.replace(/https?:\/\/[^\s<>"`\]）)]+/g, '');
+  return urls(text).flatMap(raw => {
     try {
-      const account = new URL(raw).searchParams.get('authuser');
-      if (!account || !/^[^\s@]+@[^\s@]+$/.test(account)) return false;
+      const url = new URL(raw);
+      if (!['drive.google.com', 'docs.google.com'].includes(url.hostname) || url.username || url.password) return [];
+      const account = url.searchParams.get('authuser');
+      if (!account || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(account)) return [];
       const escaped = account.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      return new RegExp(`${escaped}\\s*で開いてください`, 'i').test(text);
-    } catch { return false; }
+      if (!new RegExp(`(?<![\\w.+@-])${escaped}\\s*で開いてください`, 'i').test(accountGuidance)) return [];
+      // 同一ファイルのURLを繰り返して複数成果物の代わりにはできない。
+      return [url.pathname.match(/\/d\/([^/]+)/)?.[1] || url.searchParams.get('id') || `${url.origin}${url.pathname}`];
+    } catch { return []; }
   });
 }
 
 function requiredApprovalUrlCount(line) {
-  const specific = [...line.matchAll(/(?:梅|竹|松)|(?:[A-DＡ-Ｄ]\s*案)|(?:案\s*[1-9１-９])/gi)]
-    .map(match => match[0].replace(/\s/g, '').toUpperCase());
-  return Math.max(1, new Set(specific).size);
+  // 複合名（提案書PDF・メール本文の草案Doc）は1成果物として扱う。
+  return line.split(/[、,／/・＆&＋+]|および|及び|ならびに|と/).reduce((count, item) => {
+    if (!deliverableApprovalItem.test(item)) return count;
+    const plans = [...item.matchAll(planName)].map(match => match[0].normalize('NFKC').replace(/\s/g, '').toUpperCase());
+    return count + Math.max(1, new Set(plans).size);
+  }, 0);
+}
+
+function approvalText(text) {
+  const blank = value => value.replace(/[^\r\n]/g, ' ');
+  // 引用の行数を保持し、遠いURLが「直後2行」に繰り上がらないようにする。
+  let fence = null;
+  text = text.split(/\r?\n/).map(line => {
+    if (fence) {
+      if (new RegExp(`^ {0,3}${fence.char}{${fence.length},}\\s*$`).test(line)) fence = null;
+      return blank(line);
+    }
+    const start = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (start) { fence = { char: start[1][0], length: start[1].length }; return blank(line); }
+    return /^\s*>/.test(line) ? blank(line) : line;
+  }).join('\n');
+  return text.replace(/“[^”]*”|"[^"]*"|「[^」]*」|『[^』]*』|`[^`]*`/g,
+    quoted => stripQuoted(quoted) === quoted ? quoted : blank(quoted));
 }
 
 function summaryUnits(text) {
@@ -70,19 +96,28 @@ function summaryUnits(text) {
 
 /**
  * 承認コンテキストのチェック:
- * 承認・確認・選択を求める語と成果物語が同じ行にある場合、
- * その行または直後2行以内に Drive/Docs URL があることを確認する。
+ * 最終メッセージに承認語があれば成果物の各行を確認する。
+ * 次の項目のURL・例外理由を流用せず、直後2行までの継続行だけを使う。
  */
 function judgeApprovalContext(text) {
   if (!approvalWord.test(text) || !deliverableApprovalItem.test(text)) return 'pass';
   const lines = text.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    const line = lines[i].replace(/https?:\/\/[^\s<>"`\]）)]+/g, '');
     if (!deliverableApprovalItem.test(line)) continue;
-    // 成果物の行 + 直後2行に、成果物数以上の有効な URL があるか。
-    const context = lines.slice(i, Math.min(i + 3, lines.length)).join('\n');
+    let end = i + 1;
+    while (end < Math.min(i + 3, lines.length)) {
+      const next = lines[end].replace(/https?:\/\/[^\s<>"`\]）)]+/g, '');
+      if (deliverableApprovalItem.test(next) || /^\s*(?:[-*+]\s|\d+[.)]\s|[#【①②③])/.test(next)) break;
+      end++;
+    }
+    const context = lines.slice(i, end).join('\n');
     if (explicitNoUrl.test(context)) continue;
-    if (validApprovalUrls(context).length < requiredApprovalUrlCount(line)) {
+    const identities = new Set();
+    for (let row = i; row < end; row++) {
+      for (const id of validApprovalUrls(lines[row], lines.slice(Math.max(0, row - 1), row + 2).join('\n'))) identities.add(id);
+    }
+    if (identities.size < requiredApprovalUrlCount(line)) {
       return 'block';
     }
   }
@@ -101,10 +136,9 @@ export function judgeDeliverableDriveLink({ text = '', toolUses = [] } = {}) {
   }
   for (const match of text.matchAll(localFiles)) files.add(canonicalFile(match[0]));
   const result = { decision: 'pass', code: 'DELIVERABLE-DRIVE-LINK', files: [...files] };
-  if ([...text.matchAll(/\[DRIVE-UPLOAD-FAILED:([^\]]*)\]/g)].some(m => [...m[1].trim()].length >= 20)) return result;
-  const scannable = stripQuoted(text);
-  // 承認コンテキストのチェック（引用外の全テキストを対象）
+  const scannable = approvalText(text);
   if (judgeApprovalContext(scannable) === 'block') return { ...result, decision: 'block', reason: approvalReason };
+  if ([...text.matchAll(/\[DRIVE-UPLOAD-FAILED:([^\]]*)\]/g)].some(m => [...m[1].trim()].length >= 20)) return result;
   const attachment = /端末[にへ]送りました|添付しました|添付のPDF|SendUserFile|チャットに送りました/i.test(scannable);
   const summary = scannable.indexOf('【最終まとめ】');
   const sections = summary < 0 ? [] : [...scannable.slice(summary).matchAll(/③[^\n]*(?:\n(?![ \t#*]*[①②③])[^\n]*)*/g)].map(m => m[0]);

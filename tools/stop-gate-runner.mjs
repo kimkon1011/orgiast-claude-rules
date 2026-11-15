@@ -65,7 +65,12 @@ const home = () => process.env.ORGIAST_HOME || process.env.USERPROFILE || proces
 // 2026-11-15 kim 指示「軽い指摘は差し戻さず警告に留める」: 書式・後押し文・長さ等の軽いゲートは block せず警告だけ返す。
 // 共通の再試行上限（1ターン2回）を迂回していた専用ゲート（kim-inbox-relay・成果物リンク）にも同じターン内の上限を掛ける。
 export const SPECIAL_GATE_MAX_BLOCKS_PER_TURN = 2;
-export const LIGHT_GATES = ['report-length-gate', 'url-account-gate', 'third-party-nudge-gate', 'seat-name-gate', 'shallow-answer-gate'];
+// Warning-only: report-length, url-account, message-locator, third-party-nudge,
+// seat-name, shallow-answer, unregistered-promise; piggyback hints and the retry
+// preface are never independent blocking reasons. Keep permission guards and
+// separately registered mail-send-approval/delete-approval/api-billing/
+// app-llm-cost/lane-repair-first gates blocking, outside this rewrite budget.
+export const LIGHT_GATES = ['report-length-gate', 'url-account-gate', 'message-locator-gate', 'third-party-nudge-gate', 'seat-name-gate', 'shallow-answer-gate', 'unregistered-promise-gate'];
 export const FORM_GATES = ['handoff-quality-gate', 'manual-request-fullsteps-gate', 'manual-request-evidence-gate', 'handoff-info-guard', 'handoff-branch-coverage-gate', 'user-burden-gate', 'handoff-investigation-gate'];
 // Exempt presentation/repetition only. Permission, evidence, outstanding work and
 // other operational checks must still run on automatic periodic turns.
@@ -187,6 +192,24 @@ function protectAutopilot(input, text, raw, record) {
 }
 
 export async function run(input, context, auditOptions = {}) {
+  // Permission failures must be checked even when the inbox has consumed the
+  // rewrite budget. Never demote these or a failed watch registration.
+  const invite = evaluateInvitePermissions(input?.last_assistant_message ?? input?.assistant_text ?? context.assistantText);
+  if (invite.decision === 'block') return invite;
+  const result = await runWithRelay(input, context, auditOptions);
+  if (result.decision !== 'block' || result.record?.reasonCodes?.includes('AUTOPILOT-REGISTRATION-FAILED')) return result;
+  // One budget across inbox, deliverable and ordinary gates, even if successive
+  // rewrites trigger different gates. Reuse the existing real-user turn identity.
+  const capped = splitRepeatedGateBlocks({ input, gates: ['stop-gate-runner:all'], home: home(), now: auditOptions.now ?? Date.now(), max: 2 }).repeated.length;
+  if (!capped) return result;
+  const record = { ...result.record, verdict: 'pass_after_cap' };
+  const failure = protectAutopilot(input, input?.last_assistant_message ?? input?.assistant_text ?? context.assistantText, context.raw, record);
+  if (failure) return failure;
+  ledger(record);
+  return { record, systemMessage: [CAP_CONTEXT, result.reason, result.systemMessage].filter(Boolean).join('\n') };
+}
+
+async function runWithRelay(input, context, auditOptions = {}) {
   const sessionId = input?.session_id || input?.sessionId || path.basename(input?.transcript_path || '', '.jsonl');
   input = { ...input, session_id: sessionId };
   const text = input.last_assistant_message ?? input.assistant_text ?? context.assistantText;

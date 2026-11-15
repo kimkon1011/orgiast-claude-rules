@@ -2,6 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
 import { appendOwnerInbox, appendInbox, consumeInbox, inboxFile } from './auto-progress-inbox-hook.mjs';
+import { appendMobilePush } from './lib/mobile-push-queue.mjs';
+import { main as progressReminder } from './intra-turn-progress-reminder.mjs';
+import { resolveOwner } from './lib/fleet-owner.mjs';
+
+test('mobile push block is shared across PostToolUse and UserPromptSubmit sources', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cross-hook-push-'));
+  const owner = resolveOwner({ home });
+  const input = { session_id: 'cross-hook' }, options = { home, env: {} };
+  appendMobilePush(home, { owner, title: '進捗', body: '確認中' });
+  assert.match(progressReminder(input, options).pushContext, /スマホ通知/);
+  assert.doesNotMatch(consumeInbox(input, options)?.hookSpecificOutput.additionalContext || '', /スマホ通知/);
+  appendMobilePush(home, { owner, title: '進捗2', body: '完了' });
+  assert.match(consumeInbox(input, options).hookSpecificOutput.additionalContext, /未送信 2 件/);
+  assert.equal(progressReminder(input, options).pushContext, '');
+});
 
 test('inbox を hook に注入して既読化する', t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'progress-inbox-')); t.after(() => fs.rmSync(home, { recursive: true, force: true }));

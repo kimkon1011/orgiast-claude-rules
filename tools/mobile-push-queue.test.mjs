@@ -11,6 +11,18 @@ import { consumeInbox } from './auto-progress-inbox-hook.mjs';
 const cliPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mobile-push-queue.mjs');
 const hour = 3600 * 1000;
 
+test('same-session push instructions are silent until queue content changes', t => {
+  const home = tempHome(t);
+  const options = { owner: 'test', cliPath, sessionId: 'push-dedupe' };
+  appendMobilePush(home, { owner: 'test', title: '進捗1', body: '確認中' });
+  assert.match(mobilePushInstruction(home, options), /未送信 1 件/);
+  assert.equal(mobilePushInstruction(home, options), '');
+  appendMobilePush(home, { owner: 'test', title: '進捗2', body: '完了' });
+  assert.match(mobilePushInstruction(home, options), /未送信 2 件/);
+  assert.equal(mobilePushInstruction(home, options), '');
+  assert.match(mobilePushInstruction(home, { ...options, sessionId: 'other' }), /未送信 2 件/);
+});
+
 function tempHome(t, prefix = 'mobile-push-') {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

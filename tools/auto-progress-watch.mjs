@@ -61,8 +61,19 @@ function latestMigrationSessionRows(rows) {
 }
 
 export function legacyAddCheckMigrationRows(rows) {
-  return rows.filter(row => WATCHED.has(row.status) && row.startWhen &&
+  const latest = latestMigrationSessionRows(rows);
+  return rows.filter(row => latest.has(row) && WATCHED.has(row.status) && row.startWhen &&
     (row.convertedFromAddCheck === true || row.migratedFromLegacyAddCheck) && !row.restoredAddCheckAt);
+}
+
+// Keep the legacy record constructor available for historical migration repair.
+export function legacyAddCheckReservation(row, now = Date.now()) {
+  const reset = { ...row };
+  for (const key of ['check', 'checkRegisteredAt', 'checkResult', 'checkText', 'doneAt', 'doneNotifiedAt', 'doneInboxId',
+    'doneInboxVerifiedAt', 'checkNotifiedResult', 'lastCheckedAt', 'startedAt', 'startOverdueNotifiedAt']) delete reset[key];
+  return { ...reset, ts: new Date(now).toISOString(), status: 'scheduled', startWhen: row.check,
+    deadlineAt: new Date(now + 24 * 3600000).toISOString(), reason: LEGACY_ADD_CHECK_REASON,
+    migratedLegacyAddCheckAt: new Date(now).toISOString(), migratedFromLegacyAddCheck: rowKey(row) };
 }
 
 export async function migrateLegacyAddChecks({ home, now = Date.now(), dryRun = false, io = {} }) {

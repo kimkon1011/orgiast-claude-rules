@@ -358,6 +358,12 @@
     ],
     "PreToolUse": [
       {
+        "matcher": "SendUserFile|mcp__claude_ai_Google_Drive(?:_\\d+)?__create_file|Bash|PowerShell",
+        "type": "command",
+        "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/pdf-deliverable-visual-gate.mjs\"",
+        "timeout": 15
+      },
+      {
         "matcher": "Bash|PowerShell|Edit|Write|MultiEdit",
         "type": "command",
         "command": "node \"${repo}/tools/gate-hook-runner.mjs\" \"${repo}/tools/session-claim-collision.mjs\"",

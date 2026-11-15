@@ -108,6 +108,8 @@ node deck-hybrid/preview.mjs
 
 1項目でも3点以下なら原因を直し、build→preview→全ページ目視をやり直す。画像デコード、文字切れ、フッター衝突、本文実測行数、写真面積、写真の暗化も `out/preview-checks.json` で確認する。
 
+Chrome 等で直接PDF化した場合も同じ。`node tools/pdf-page-check.mjs --install` で mupdf を導入した後、`node tools/pdf-page-check.mjs --pdf <file>` で全ページをPNGにして Read する。出力した資料が社内向けの記載を含まないことも確認する。
+
 ## 7. PDF と Drive
 
 `build.mjs` は既存 `html-to-pdf.mjs` を呼び PDF 化する。完成 PDF を既存の Drive アップロード経路で保存する。Drive に同名の既存 file ID がある場合は新規作成せず PATCH して URL を不変にする。渡す URL には `authuser=<開く人のメール>` を付け、本文に「<メール> で開いてください」を書く。

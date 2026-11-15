@@ -1352,6 +1352,15 @@ Secrets設定・Actions手動Run・リポジトリ設定変更はGitHub Web UI�
 
 リスト・台帳・見積明細・議事録・企画書・スライドなど、人が見て編集する業務ファイルは、最初から Google スプレッドシート／ドキュメント／スライドで作り、案件の Drive フォルダに置く。`.xlsx`／`.docx`／`.pptx`／`.csv` をローカルで作って渡すことや、Drive へ元形式のまま上げることは禁止。スクリプトからは `tools/drive-upload.mjs`（既定で Google 形式へ変換）または Sheets／Docs API・MCP を使う。社外の相手が Excel／Word／PDF を指定した場合だけ、Google 版を正本として書き出しを添える。既存の Office 形式は Google 形式に作り直し、旧ファイル名の先頭に `【旧・スプレッドシート版へ移行済み】` を付ける。Codex 等への委譲指示にも「出力は Google スプレッドシート／ドキュメント（Drive フォルダ ID ○○）」と明記する。（2026-11-05 kim 指摘・全PC全アカウント全プロジェクト。260430EIG で打診先リストを xlsx で納品した事故）
 
+**2.6.3 PDF・スライド・文書の納品前検証（kim 2026-11-15・全PC全アカウント）**
+
+**🔴 お客様・kim に渡す資料（PDF／スライド／文書）は、渡す前に全ページを画像にして Claude が1枚ずつ目視する。ページ数・画像数・ファイルサイズ・テキスト抽出だけの確認は検証ではない。**
+
+- 1か所でも修正したら、別ページの崩れを前提に全ページの画像化と目視をやり直す。「区切りだけ直した」など1項目だけを見て渡さない。
+- ツールが無い席は `node tools/pdf-page-check.mjs --install` で先に導入する。「ツールが無いので目視していない」と書いて渡すことは禁止（§1.18.4 のとおり体制不備を先に直す）。画像化は `node tools/pdf-page-check.mjs --pdf <file>`。
+- **見る項目**: ①見出しが前ページ下に取り残されていないか、注記や表が節から分離していないか ②ページの半分以上が空白のページが無いか ③社内向け記載（社内レビュー・付録・ブリーフ・生成ツール名・取得元メモ・ドラフト帯）が残っていないか ④事実（画像の生成元・寸法・金額・社名）の表記が全ページで一致し、実際に使っていないツール名を書いていないか ⑤文字化け・語の途中の改行・1文字だけの行が無いか ⑥画像の欠け・空白が無いか。
+- PreToolUse の `pdf-deliverable-visual-gate` が、対象資料PDFのsha256証跡と現在のセッションでの全ページ Read を確認する。描画証跡は `~/.claude/pdf-render/evidence/<sha256>.json` に保存する。
+
 **2.7 Growi マニュアル取り込みは Google Drive 一次ソース**
 
 社内Wiki（Growi）はWebFetch禁止（認証必須で確実に失敗）。一次ソース = Drive `社内マニュアル_NotebookLM連携`（13分割Docs）をDrive MCPで読み、鮮度チェック必須（3ヶ月超で古ければuserに確認）。詳細: `https://raw.githubusercontent.com/kimkon1011/orgiast-claude-rules/main/rules-extracted/growi-fetch-detail.md`

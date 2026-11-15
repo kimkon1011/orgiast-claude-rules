@@ -325,6 +325,10 @@ PR のマージを人に頼む文（本文の「次に kim がすること」・
 全PC・全アカウントで修復可能なレーン故障を最初に直す。`node tools/lane-doctor.mjs --probe` で診断する。Codex の probe_failed は直接 `wsl -d Ubuntu -u root -- codex exec --skip-git-repo-check "ping"` の終了コードでも切り分け、probe 経路だけの故障をレーン停止と断定しない。
 修復を試し、成功を実測したら `node tools/lane-repair-log.mjs --lane <名> --tried "<試した手段と実測>" --result fixed`。`unfixable` は lane-health の reason が `billing` / `dead:oauth_consent` / `dead:physical_operation` / `quota_wait` の場合だけ受理する。原因未分類や修復可能な失敗では、分類修正と別キー・OAuth無料枠・OpenRouter 等を試す。同一故障で3回連続修復不可なら notify-kim に1回通知する。429/usage_limit で reset が判明している quota_wait は修復対象外で、SessionStart に出る代替の安いレーンへ回す。gate 自体の例外は gate-errors.jsonl に記録して fail-open。
 
+## pdf-deliverable-visual-gate
+
+対象PDFを `node tools/pdf-page-check.mjs --pdf <file>` で再描画し、出力された全ページPNGを現在のセッションで1枚ずつ Read する。修正した場合は描画と全ページReadを最初からやり直す。
+
 ## deliverable-drive-link-gate
 
 成果物は Drive にアップロードし、最終メッセージに異なるファイル数以上の Drive / Docs URL を載せる。③でファイルの利用を依頼する場合は③にも必要数の URL を載せ、authuser に開く人のメールを付ける。

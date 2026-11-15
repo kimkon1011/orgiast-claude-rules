@@ -119,7 +119,7 @@ export async function runDetect({ home, config, ledger, state, sources, now, dry
 }
 export async function main(argv = process.argv.slice(2), deps = {}) {
   const home = deps.home || defaultHome(), stdout = deps.stdout || console.log, stderr = deps.stderr || console.error;
-  const startedAt = new Date().toISOString(); const dryRun = argv.includes('--dry-run'); let ok = false, valid = false;
+  const startedAt = new Date().toISOString(); const dryRun = argv.includes('--dry-run'); let ok = false, valid = false, seatSkipped = false;
   try {
     const opts = {};
     for (let i = 0; i < argv.length; i++) {
@@ -132,7 +132,7 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
     valid = true;
     if (!opts.fixture && deps.skipSeatCheck !== true) {
       const seat = seatCheck(home);
-      if (!seat.kim) { stdout(JSON.stringify({ skip: true, reason: 'deadline jobs run only on the seat with the kim DWD key', seat })); return 0; }
+      if (!seat.kim) { seatSkipped = true; stdout(JSON.stringify({ skip: true, reason: 'deadline jobs run only on the seat with the kim DWD key', seat })); return 0; }
     }
     const fixture = opts.fixture ? readJson(path.join(opts.fixture, 'ledger.json'), {}) : null;
     if (opts.fixture && (!fixture || !Array.isArray(fixture.rows))) throw new Error('fixture の台帳JSONがありません、または形式が不正です');
@@ -159,7 +159,8 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   } catch (e) { stderr(`deadline-detect: ${e.message}`); return 1; }
   finally {
     if (valid && !dryRun) {
-      await (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineDetect', startedAt, finishedAt: new Date().toISOString(), ok, summary: ok ? '期限検出完了' : '鍵なし席のためスキップ', cycleMinutes: 1440 }, { homeDir: home, localOnly: true });
+      const summary = ok ? '期限検出完了' : seatSkipped ? '鍵なし席のためスキップ' : '検出エラーあり';
+      await (deps.heartbeat || reportHeartbeat)({ job: 'OrgiastDeadlineDetect', startedAt, finishedAt: new Date().toISOString(), ok, summary, cycleMinutes: 1440 }, { homeDir: home, localOnly: true });
       const log = path.join(home, '.claude/logs/deadline-detect.log'); fs.mkdirSync(path.dirname(log), { recursive: true });
       try { fs.appendFileSync(log, `${new Date().toISOString()} deadline-detect ${ok ? 'ok' : 'skipped'}\n`); }
       catch (error) { if (error.code !== 'EBUSY') throw error; }

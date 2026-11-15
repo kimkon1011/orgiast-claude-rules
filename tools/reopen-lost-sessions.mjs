@@ -399,6 +399,35 @@ export async function measureCpuAsync({ sampleMs = 1000, cpusImpl = os.cpus, wai
     return totalDiff > 0 ? Math.round(100 * (1 - idleDiff / totalDiff)) : null;
   } catch { return null; }
 }
+export function measureUserIdleSec({ spawn = spawnSync } = {}) {
+  try {
+    const script = `
+Add-Type -TypeDefinition @'
+  using System;
+  using System.Runtime.InteropServices;
+  public class LastInput {
+    [DllImport("user32.dll")]
+    static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+    [StructLayout(LayoutKind.Sequential)]
+    struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+    public static uint GetIdleMillis() {
+      LASTINPUTINFO lii = new LASTINPUTINFO();
+      lii.cbSize = (uint)Marshal.SizeOf(lii);
+      if (!GetLastInputInfo(ref lii)) return 0;
+      return (uint)Environment.TickCount - lii.dwTime;
+    }
+  }
+'@
+[LastInput]::GetIdleMillis()
+`;
+    const res = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+    if (res.error || res.status !== 0) return null;
+    const ms = parseInt(String(res.stdout ?? '').trim(), 10);
+    if (!Number.isFinite(ms)) return null;
+    return Math.round(ms / 1000);
+  } catch { return null; }
+}
+const REOPEN_MIN_IDLE_SEC = Number(process.env.ORGIAST_REOPEN_MIN_IDLE_SEC) || 600;
 const quotePS = s => "'" + s.replaceAll("'", "''") + "'";
 // VS Code の可視メインウィンドウが1つ以上開いているかを PowerShell で確認する。
 // タイムアウト 15 秒。エラー・タイムアウト・数値でない出力時は安全側（ウィンドウあり＝URIのみ）として true を返す。
@@ -795,8 +824,8 @@ export function resolveClaudeCli({ env = process.env, exists = fs.existsSync, re
 export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_MAX_REOPEN, gapSec = 10,
   base = path.join(os.homedir(), '.claude'), fetchImpl = fetch, spawn = spawnSync, wait = sleep,
   now = Date.now, windowReady, claudeCli, codeCli, env = process.env, fsImpl = fs, stateBased = false,
-  checkCpu = true, checkClaude = false, cpusImpl, vscodeStartedAt, openDb } = {}) {
-  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closedInRunningVscode: 0, loadGuard: 0, reopenRepeat: 0, unverifiedStreak: 0, processRunning: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
+  checkCpu = true, checkClaude = false, cpusImpl, vscodeStartedAt, openDb, checkIdle = true, idleImpl } = {}) {
+  const result = { at: new Date(now()).toISOString(), since, until, candidates: [], reopened: [], skipped: { closed: 0, empty: 0, alive: 0, noLocal: 0, archivedByUser: 0, reopenLoop: 0, worktree: 0, standby: 0, closable: 0, closedInRunningVscode: 0, loadGuard: 0, reopenRepeat: 0, unverifiedStreak: 0, processRunning: 0 }, aliveSource: null, agentsError: null, agentsDiag: null, vscodeStartedAt: null };
   const progress = (stage, detail) => { if (!dryRun) writeProgress(base, stage, detail); };
   const initialHidden = readVscodeHiddenSessionIds({ env, fsImpl, openDb });
   const hiddenSessionIds = initialHidden.ids;
@@ -932,6 +961,8 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
             // 待機中の空き枠（タイトル「011｜待機中」など）は開き直さない
             const title = (session.title ?? '').trim();
             if (/^(?:\d{3}｜)?待機中$/.test(title)) { result.skipped.standby++; continue; }
+            // 【閉じて可】のセッションは開き直さない
+            if (title.includes('【閉じて可】')) { result.skipped.closable++; continue; }
             // 起動中の VS Code で閉じられたタブは開き直さない
             if (Number.isFinite(resolvedVscodeStartedAt) && resolvedVscodeStartedAt < lastEvent) { result.skipped.closedInRunningVscode++; continue; }
             if (reopenCounts[local.id] >= 3) { result.skipped.reopenLoop++; continue; }
@@ -962,6 +993,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
             if (item.status !== 'fulfilled') continue;
             const { session, events } = item.value;
             if (!hasHostExit(events, since, until)) continue;
+            if ((session.title ?? '').includes('【閉じて可】')) { result.skipped.closable++; continue; }
             const local = locals.get(session.id);
             const reason = exclusion(local, closed, living, hiddenSessionIds);
             if (reason) { result.skipped[reason]++; continue; }
@@ -985,6 +1017,11 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
     } catch (error) { result.apiError = error.message; }
     if (!dryRun && result.candidates.length) {
       progress('fetch', `candidates=${result.candidates.length}`);
+      // アイドル保護: 最終入力から REOPEN_MIN_IDLE_SEC 秒未満なら開き直しを全部見送る
+      const idleSec = checkIdle ? (idleImpl || measureUserIdleSec)({ spawn }) : null;
+      if (idleSec !== null && idleSec < REOPEN_MIN_IDLE_SEC) {
+        result.deferredActive = idleSec;
+      } else {
       const loadStatus = await getLoadGuardStatus({ env, spawn, cpusImpl, wait, checkCpu, checkClaude, sessionsDir: path.join(base, 'sessions'), isWaitingSession, now });
       if (loadStatus.error) {
         result.loadGuard = { claudeCount: loadStatus.claudeCount, cpuPct: loadStatus.cpuPct, reason: loadStatus.reason, error: loadStatus.error };
@@ -1096,6 +1133,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
           }
         }
       }
+      }
     }
   } catch (error) { result.error = error.message; }
   finally {
@@ -1119,7 +1157,7 @@ export async function reopenLost({ since, until, dryRun = false, max = DEFAULT_M
   return result;
 }
 export async function watchReopen(opts = {}, maxParam) {
-  let base, max, dryRun, fetchImpl, spawn, wait, nowFn, claudeCli, codeCli, env, fsImpl, windowReady, cpusImpl;
+  let base, max, dryRun, fetchImpl, spawn, wait, nowFn, claudeCli, codeCli, env, fsImpl, windowReady, cpusImpl, checkIdle, idleImpl;
   if (typeof opts === 'string' || opts === undefined) {
     base = opts ?? path.join(os.homedir(), '.claude');
     max = maxParam ?? DEFAULT_MAX_REOPEN;
@@ -1139,6 +1177,8 @@ export async function watchReopen(opts = {}, maxParam) {
     fsImpl = opts.fsImpl;
     windowReady = opts.windowReady;
     cpusImpl = opts.cpusImpl;
+    checkIdle = opts.checkIdle;
+    idleImpl = opts.idleImpl;
   }
   const stateFile = path.join(base, 'reopen-lost-sessions-state.json');
   const state = readJson(stateFile, {});
@@ -1155,9 +1195,10 @@ export async function watchReopen(opts = {}, maxParam) {
   const until = new Date(nowTime - 60000).toISOString();
   const result = await reopenLost({
     since, until, max, dryRun, base, fetchImpl, spawn, wait, now: nowFn, claudeCli, codeCli, env, fsImpl, windowReady, cpusImpl,
+    checkIdle, idleImpl,
     stateBased: true, checkClaude: true, sessionsDir: path.join(base, 'sessions'), isWaitingSession, now: nowFn
   });
-  if (!result.error && !result.apiError && !result.deferredCpu && !result.skipped?.loadGuard && !dryRun) {
+  if (!result.error && !result.apiError && !result.deferredCpu && !result.deferredActive && !result.skipped?.loadGuard && !dryRun) {
     fs.writeFileSync(stateFile, JSON.stringify({ watermark: until }) + '\n');
   }
   return result;

@@ -1,4 +1,4 @@
-// A routing marker, never a Google credential. Google tokens stay on memoryserve.
+﻿// A routing marker, never a Google credential. Google tokens stay on memoryserve.
 import fs from 'node:fs';
 import os from 'node:os';
 import { keyserveSecret, requireKeyservePcId, keyserveAuthHeaders } from '../keyserve-auth.mjs';
@@ -9,13 +9,12 @@ export const GWS_KIM_MARKER = 'orgiast-server-side-gws-kim';
 export function proxyCredential({ keyPath, impersonate, scope }) {
   if (keyPath && fs.existsSync(keyPath)) return null;
   if (![GWS_USER,'kim@orgiast.jp'].includes(impersonate)) throw Error('GWS proxy: unsupported subject');
-  if (!String(scope).split(/\s+/).every(s => /^https:\/\/www\.googleapis\.com\/auth\/(drive|spreadsheets|calendar\.readonly|gmail\.(readonly|compose|send))$/.test(s))) throw Error('GWS proxy: unsupported scope');
+  if (!String(scope).split(/\s+/).every(s => /^https:\/\/www\.googleapis\.com\/auth\/(drive|spreadsheets|calendar\.readonly|gmail\.(readonly|compose|send|modify))$/.test(s))) throw Error('GWS proxy: unsupported scope');
   if (impersonate === 'kim@orgiast.jp' && scope !== 'https://www.googleapis.com/auth/calendar.readonly') throw Error('GWS proxy: kim is calendar-only');
   return impersonate === 'kim@orgiast.jp' ? GWS_KIM_MARKER : GWS_MARKER;
 }
-// 一時的障害（プロキシ5xx・ネットワークエラー・タイムアウト）は 1分→3分→10分 の
-// 間隔で計4回まで再試行する（2026-11-13 06:30 の HTTP 500 で朝の報告が消えた対策）。
-export const RETRY_DELAYS = [60000, 180000, 600000];
+// 荳譎ら噪髫懷ｮｳ・医・繝ｭ繧ｭ繧ｷ5xx繝ｻ繝阪ャ繝医Ρ繝ｼ繧ｯ繧ｨ繝ｩ繝ｼ繝ｻ繧ｿ繧､繝繧｢繧ｦ繝茨ｼ峨・ 1蛻・・3蛻・・10蛻・縺ｮ
+// 髢馴囈縺ｧ險・蝗槭∪縺ｧ蜀崎ｩｦ陦後☆繧具ｼ・026-11-13 06:30 縺ｮ HTTP 500 縺ｧ譛昴・蝣ｱ蜻翫′豸医∴縺溷ｯｾ遲厄ｼ峨・export const RETRY_DELAYS = [60000, 180000, 600000];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export function isTransientSourceError(error) {
   if (error?.status >= 500 && error.status < 600) return true;

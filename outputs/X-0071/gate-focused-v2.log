@@ -1,0 +1,173 @@
+TAP version 13
+# {"delivered":true,"recipient":{"id":"123456789","label":"百瀬"},"channelId":"dm","copyToKim":"skipped"}
+# Subtest: DMチャンネル作成から本文投稿まで2回だけ呼ぶ
+ok 1 - DMチャンネル作成から本文投稿まで2回だけ呼ぶ
+  ---
+  duration_ms: 84.943499
+  type: 'test'
+  ...
+# Subtest: 送信開始は履歴ゲート通過後だけ通知し、4xxは未配信確定として返す
+ok 2 - 送信開始は履歴ゲート通過後だけ通知し、4xxは未配信確定として返す
+  ---
+  duration_ms: 10.393199
+  type: 'test'
+  ...
+# Subtest: kim 以外への代筆は返答先の一文を末尾に1回だけ付ける
+not ok 3 - kim 以外への代筆は返答先の一文を末尾に1回だけ付ける
+  ---
+  duration_ms: 2.4745
+  type: 'test'
+  location: '/mnt/c/Users/user/.claude/quota-sweep-repo/tools/discord-dm.test.mjs:51:1'
+  failureType: 'testCodeFailure'
+  error: "ENOENT: no such file or directory, mkdir '/root/.claude/logs'"
+  code: 'ENOENT'
+  stack: |-
+    Object.mkdirSync (node:fs:1370:26)
+    recordOutbound (file:///mnt/c/Users/user/.claude/quota-sweep-repo/tools/lib/send-context.mjs:43:42)
+    deliver (file:///mnt/c/Users/user/.claude/quota-sweep-repo/tools/discord-dm.mjs:96:5)
+    async sendDiscordDm (file:///mnt/c/Users/user/.claude/quota-sweep-repo/tools/discord-dm.mjs:99:36)
+    async TestContext.<anonymous> (file:///mnt/c/Users/user/.claude/quota-sweep-repo/tools/discord-dm.test.mjs:60:3)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: --no-reply-footer は返答先の一文を付けない
+not ok 4 - --no-reply-footer は返答先の一文を付けない
+  ---
+  duration_ms: 1.4873
+  type: 'test'
+  location: '/mnt/c/Users/user/.claude/quota-sweep-repo/tools/discord-dm.test.mjs:65:1'
+  failureType: 'testCodeFailure'
+  error: "ENOENT: no such file or directory, mkdir '/root/.claude/logs'"
+  code: 'ENOENT'
+  stack: |-
+    Object.mkdirSync (node:fs:1370:26)
+    recordOutbound (file:///mnt/c/Users/user/.claude/quota-sweep-repo/tools/lib/send-context.mjs:43:42)
+    deliver (file:///mnt/c/Users/user/.claude/quota-sweep-repo/tools/discord-dm.mjs:96:5)
+    async sendDiscordDm (file:///mnt/c/Users/user/.claude/quota-sweep-repo/tools/discord-dm.mjs:99:36)
+    async TestContext.<anonymous> (file:///mnt/c/Users/user/.claude/quota-sweep-repo/tools/discord-dm.test.mjs:67:3)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: 本文は書き換えず、そのまま送る（LLM平易化を通さない）
+not ok 5 - 本文は書き換えず、そのまま送る（LLM平易化を通さない）
+  ---
+  duration_ms: 2.0767
+  type: 'test'
+  location: '/mnt/c/Users/user/.claude/quota-sweep-repo/tools/discord-dm.test.mjs:71:1'
+  failureType: 'testCodeFailure'
+  error: "ENOENT: no such file or directory, mkdir '/root/.claude/logs'"
+  code: 'ENOENT'
+  stack: |-
+    Object.mkdirSync (node:fs:1370:26)
+    recordOutbound (file:///mnt/c/Users/user/.claude/quota-sweep-repo/tools/lib/send-context.mjs:43:42)
+    deliver (file:///mnt/c/Users/user/.claude/quota-sweep-repo/tools/discord-dm.mjs:96:5)
+    async sendDiscordDm (file:///mnt/c/Users/user/.claude/quota-sweep-repo/tools/discord-dm.mjs:99:36)
+    async TestContext.<anonymous> (file:///mnt/c/Users/user/.claude/quota-sweep-repo/tools/discord-dm.test.mjs:73:3)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: dry-runはfetchゼロで解決結果と本文を返す
+ok 6 - dry-runはfetchゼロで解決結果と本文を返す
+  ---
+  duration_ms: 1.5315
+  type: 'test'
+  ...
+# Subtest: kim 席の写しは会話で回収し Discord に送らない
+ok 7 - kim 席の写しは会話で回収し Discord に送らない
+  ---
+  duration_ms: 8.3596
+  type: 'test'
+  ...
+# Subtest: 相手が金功勇本人なら写しを送らない
+ok 8 - 相手が金功勇本人なら写しを送らない
+  ---
+  duration_ms: 22.7131
+  type: 'test'
+  ...
+# Subtest: 金功勇本人へのPRマージ依頼もkim-inboxへ保存する
+ok 9 - 金功勇本人へのPRマージ依頼もkim-inboxへ保存する
+  ---
+  duration_ms: 11.9868
+  type: 'test'
+  ...
+# Subtest: discord-dm CLIはkim-inbox保存でexit 0、明示例外でもDMしない
+ok 10 - discord-dm CLIはkim-inbox保存でexit 0、明示例外でもDMしない
+  ---
+  duration_ms: 148.631998
+  type: 'test'
+  ...
+# Subtest: --no-copy-kim は写し先を解決せず送らない
+ok 11 - --no-copy-kim は写し先を解決せず送らない
+  ---
+  duration_ms: 15.965899
+  type: 'test'
+  ...
+# Subtest: kim 席で写しの追加送信なしでも本送信はexit 0
+ok 12 - kim 席で写しの追加送信なしでも本送信はexit 0
+  ---
+  duration_ms: 2.8719
+  type: 'test'
+  ...
+# Subtest: 宛先不明・曖昧はexit 3で送信しない
+ok 13 - 宛先不明・曖昧はexit 3で送信しない
+  ---
+  duration_ms: 1.4978
+  type: 'test'
+  ...
+# Subtest: トークン無しはexit 2で送信しない
+ok 14 - トークン無しはexit 2で送信しない
+  ---
+  duration_ms: 239.823497
+  type: 'test'
+  ...
+# Subtest: 秘密値を含む本文は送信を停止する
+ok 15 - 秘密値を含む本文は送信を停止する
+  ---
+  duration_ms: 1.8731
+  type: 'test'
+  ...
+# Subtest: 新しい絶対ルール行はmakeIndexの出力に全文残る
+ok 16 - 新しい絶対ルール行はmakeIndexの出力に全文残る
+  ---
+  duration_ms: 62.623499
+  type: 'test'
+  ...
+# Subtest: kim 宛 dry-run は台帳にも Discord にも書き込まない
+ok 17 - kim 宛 dry-run は台帳にも Discord にも書き込まない
+  ---
+  duration_ms: 2.7446
+  type: 'test'
+  ...
+# Subtest: 報告全文モードでは切り詰め送信を拒否
+ok 18 - 報告全文モードでは切り詰め送信を拒否
+  ---
+  duration_ms: 2.2018
+  type: 'test'
+  ...
+# Subtest: Webhook URLを含む本文は送信停止
+ok 19 - Webhook URLを含む本文は送信停止
+  ---
+  duration_ms: 5.9841
+  type: 'test'
+  ...
+# Subtest: 秘密値を含まない通常本文は送信できる
+ok 20 - 秘密値を含まない通常本文は送信できる
+  ---
+  duration_ms: 3.1372
+  type: 'test'
+  ...
+# Subtest: 非 kim 席の写しは転送失敗でもローカル台帳へ残す
+ok 21 - 非 kim 席の写しは転送失敗でもローカル台帳へ残す
+  ---
+  duration_ms: 1821.061975
+  type: 'test'
+  ...
+1..21
+# tests 21
+# suites 0
+# pass 18
+# fail 3
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3823.078847

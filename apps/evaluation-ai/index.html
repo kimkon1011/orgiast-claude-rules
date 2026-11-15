@@ -4,50 +4,51 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>評価制度 AI 自動化</title>
+  <link rel="stylesheet" href="../assets/design-tokens.css">
   <style>
-    :root { color-scheme: light; font-family: system-ui, sans-serif; color: #172033; background: #f3f6fa; }
+    :root { color-scheme: light; font-family: var(--sys-font-family); color: var(--sys-text); background: var(--sys-bg); }
     * { box-sizing: border-box; }
     body { margin: 0; }
-    main { width: min(1100px, 100%); margin: auto; padding: 24px 16px 48px; }
-    h1 { margin: 0 0 4px; font-size: clamp(1.5rem, 4vw, 2.1rem); }
+    main { width: min(1100px, 100%); margin: auto; padding: var(--sys-space-xl) var(--sys-space-md) 48px; }
+    h1 { margin: 0 0 var(--sys-space-2xs); font-size: clamp(1.5rem, 4vw, 2.1rem); }
     h2 { font-size: 1.2rem; margin-top: 0; }
     h3 { font-size: 1rem; }
-    .sub { margin: 0 0 20px; color: #5c667a; }
-    .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+    .sub { margin: 0 0 var(--sys-space-lg); color: var(--sys-text-muted); }
+    .tabs { display: flex; gap: var(--sys-space-xs); margin-bottom: var(--sys-space-md); }
     button, input, textarea { font: inherit; }
     button { cursor: pointer; }
-    .tab { flex: 1; min-height: 46px; border: 1px solid #b8c1d1; border-radius: 9px; background: white; font-weight: 700; }
-    .tab.active { border-color: #315ac7; background: #315ac7; color: white; }
+    .tab { flex: 1; min-height: 46px; border: 1px solid var(--sys-border-accent); border-radius: var(--sys-radius-lg); background: var(--sys-bg-surface); font-weight: var(--sys-font-weight-bold); }
+    .tab.active { border-color: var(--sys-accent); background: var(--sys-accent); color: var(--sys-text-invert); }
     .panel { display: none; }
     .panel.active { display: block; }
-    .card { margin-bottom: 16px; padding: 18px; border: 1px solid #dce1ea; border-radius: 12px; background: white; box-shadow: 0 2px 8px #15213b0d; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
-    .form-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
-    input[type="text"], input[type="number"], textarea { min-height: 42px; padding: 8px 10px; border: 1px solid #aeb8c8; border-radius: 7px; }
+    .card { margin-bottom: var(--sys-space-md); padding: var(--sys-space-lg); border: 1px solid var(--sys-border-light); border-radius: var(--sys-radius-xl); background: var(--sys-bg-surface); box-shadow: var(--sys-shadow-sm); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--sys-space-md); }
+    .form-row { display: flex; flex-wrap: wrap; gap: var(--sys-space-xs); margin-bottom: var(--sys-space-xs); }
+    input[type="text"], input[type="number"], textarea { min-height: 42px; padding: var(--sys-space-xs); border: 1px solid var(--sys-border-accent); border-radius: var(--sys-radius-sm); }
     input[type="text"] { flex: 1; min-width: 130px; }
     input[type="number"] { width: 80px; }
     textarea { width: 100%; min-height: 110px; resize: vertical; }
-    .primary, .secondary, .danger { min-height: 42px; padding: 8px 14px; border-radius: 7px; font-weight: 700; }
-    .primary { border: 0; background: #315ac7; color: white; }
-    .secondary { border: 1px solid #96a3b8; background: white; }
-    .danger { border: 1px solid #d2a5a5; background: #fff5f5; color: #942727; }
-    .edit-row { display: flex; gap: 7px; align-items: center; margin: 8px 0; }
+    .primary, .secondary, .danger { min-height: 42px; padding: var(--sys-space-xs) var(--sys-space-sm); border-radius: var(--sys-radius-sm); font-weight: var(--sys-font-weight-bold); }
+    .primary { border: 0; background: var(--sys-accent); color: var(--sys-text-invert); }
+    .secondary { border: 1px solid #96a3b8; background: var(--sys-bg-surface); }
+    .danger { border: 1px solid var(--sys-danger-border); background: var(--sys-danger-bg); color: var(--sys-danger); }
+    .edit-row { display: flex; gap: var(--sys-space-xs); align-items: center; margin: var(--sys-space-xs) 0; }
     .edit-row input:first-child { flex: 1; }
-    .hint, .status { color: #5c667a; font-size: .9rem; line-height: 1.5; }
+    .hint, .status { color: var(--sys-text-muted); font-size: var(--sys-font-size-sm); line-height: 1.5; }
     .status { min-height: 1.5em; }
     .score-card { overflow-x: auto; }
-    .score-line { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(150px, 2fr); align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #edf0f4; }
-    .radios { display: flex; gap: 9px; justify-content: flex-end; }
+    .score-line { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(150px, 2fr); align-items: center; gap: var(--sys-space-xs); padding: var(--sys-space-xs) 0; border-bottom: 1px solid #edf0f4; }
+    .radios { display: flex; gap: var(--sys-space-xs); justify-content: flex-end; }
     .radios label { display: inline-flex; align-items: center; gap: 2px; min-height: 36px; }
     table { width: 100%; border-collapse: collapse; }
-    th, td { padding: 10px; border-bottom: 1px solid #dce1ea; text-align: left; }
-    th { background: #f7f8fb; }
+    th, td { padding: var(--sys-space-xs); border-bottom: 1px solid var(--sys-border-light); text-align: left; }
+    th { background: var(--sys-bg-accent); }
     .table-wrap { overflow-x: auto; }
-    .bar-row { display: grid; grid-template-columns: minmax(100px, 180px) 1fr 45px; gap: 10px; align-items: center; margin: 10px 0; }
-    .bar-track { height: 22px; border-radius: 5px; background: #e7ebf2; overflow: hidden; }
+    .bar-row { display: grid; grid-template-columns: minmax(100px, 180px) 1fr 45px; gap: var(--sys-space-xs); align-items: center; margin: var(--sys-space-xs) 0; }
+    .bar-track { height: var(--sys-space-lg); border-radius: var(--sys-radius-sm); background: #e7ebf2; overflow: hidden; }
     .bar { height: 100%; background: #4d79dc; }
-    .empty { padding: 18px 0; color: #687286; }
-    @media (max-width: 560px) { .score-line { grid-template-columns: 1fr; } .radios { justify-content: flex-start; } th, td { padding: 8px 5px; } }
+    .empty { padding: var(--sys-space-lg) 0; color: #687286; }
+    @media (max-width: 560px) { .score-line { grid-template-columns: 1fr; } .radios { justify-content: flex-start; } th, td { padding: var(--sys-space-xs) var(--sys-space-2xs); } }
   </style>
 </head>
 <body>
@@ -80,7 +81,7 @@
       <div class="grid">
         <article class="card">
           <h2>自然言語入力</h2>
-          <p class="hint">ルールベース解析（AI連携は未設定）<br>例：田中: 積極性3, チームワーク 4</p>
+          <p class="hint">解析方法: ルールベース<br>例：田中: 積極性3, チームワーク 4</p>
           <textarea id="nl-text" placeholder="1行に1人分を入力"></textarea>
           <button id="nl-apply" class="primary" type="button">解析して反映</button>
           <p id="nl-status" class="status" aria-live="polite"></p>

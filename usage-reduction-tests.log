@@ -95,3 +95,109 @@
 ✔ 24時間超の未送信は1件にまとめ、個別本文を展開しない (149.0992ms)
 ✔ 表示上限を超える未送信も1件にまとめて指示が膨らまない (82.9545ms)
 ✔ 本文の改行は1行に整形して指示に出す (35.017ms)
+✔ 未登録の約束は初回から警告のみ（書き直し=false） (1564.0779ms)
+✔ 未登録の約束は初回から警告のみ（書き直し=true） (1143.1811ms)
+✔ 複数gateの理由を1つのblockへ合流する (3605.1529ms)
+✔ 同一ターンは既存上限の3回目からpass_after_capを台帳に残す (7562.1835ms)
+✔ 本文A・Bは同一ターンのblockとして累積 (6705.3019ms)
+✔ 本文変更を含め3回目は上限通過 (9741.7267ms)
+✔ block不要ならstateを作成・変更せず、sessionIdなしでも変更しない (8313.5683ms)
+✔ 書き込み時に7日超・不正日時を削除し、旧形式の累計はリセットする (2074.7855ms)
+✔ stop_hook_activeでも書き直しを再評価する (1577.4645ms)
+✔ 次の行があればピギーバック・ヒントを重ねない (976.3776ms)
+✔ 他gateがpassでもnext-action-gate単独でblockする (725.3128ms)
+✔ 外部状態の否定断定を EXTERNAL-STATE で block する (1289.2062ms)
+✔ assistant_text と transcript_path の併用でも直接照会証拠を読む (1425.0904ms)
+✔ stdin経由の2行・3行・バックグラウンド矛盾を他gateと分離して検証 (5641.9515ms)
+✔ runnerと単体hookの両方が会話のsession-close証拠を評価する (11041.1809ms)
+✔ handoff-branch-coverage-gate: 初回決め打ちで既存分岐が無い手渡しを BRANCH-COVERAGE で block する (1262.9373ms)
+✔ handoff-branch-coverage-gate: 本流に既存分岐があれば他gateの結果に関わらず自分は block しない (398.9398ms)
+✔ handoff-branch-coverage-gate: 手作業依頼ではない完了報告では起動しない (337.6469ms)
+✔ gh-handoff-gate: gh が未認証であることを理由に PR 作成などを人に頼むと block する (358.6398ms)
+✔ user-burden-gate: pwsh 単独は block (847.4726ms)
+✔ user-burden-gate: Desktop cmd と二経路の監査 (1393.7432ms)
+✔ user-burden-gate: Desktop cmd だけは監査不足 (1855.5784ms)
+✔ user-burden-gate: Claude 自身の実行説明 (876.7876ms)
+✔ user-burden-gate: 遡り参照の実例 (1001.4036ms)
+✔ user-burden-gate: コマンドと監査だけでは不可 (1063.232ms)
+✔ user-burden-gate: 完成品なし (975.4263ms)
+✔ user-burden-gate: 監査なし (789.8951ms)
+✔ user-burden-gate: 依頼なし (1667.6156ms)
+✔ user-burden-gate: 理由付き例外 (1336.999ms)
+✔ user-burden-gate: 本文だけの依頼 (658.7585ms)
+✔ user-burden-gate: なしでも本文に依頼 (591.2952ms)
+✔ user-burden-gate: 監査に根拠なし (1268.6816ms)
+✔ user-burden-gate: 監査に操作回数なし (841.1344ms)
+✔ user-burden-gate: 根拠は同じ監査行に必要 (1515.8844ms)
+✔ user-burden-gate: 理由なしの例外は無効 (1496.0347ms)
+✔ user-burden-gate: URL同梱 (1080.9946ms)
+✔ user-burden-gate: Desktopファイルパスは完成品でない (807.6341ms)
+✔ user-burden-gate: コード中の依頼では発火しない (1184.2698ms)
+✔ user-burden-gate: コード中の監査は無効 (686.9767ms)
+✔ user-burden-gate: 通常報告の参照は対象外 (562.5886ms)
+✔ user-burden-gate: 前に送ったの参照 (1914.349ms)
+✔ user-burden-gate: 先ほどのの参照 (1183.4289ms)
+✔ user-burden-gate: さっきのの参照 (1088.6154ms)
+✔ user-burden-gate: 上のの参照 (980.6101ms)
+✔ user-burden-gate: 前述のの参照 (1115.1005ms)
+✔ user-burden-gate: 以前のの参照 (874.9303ms)
+✔ user-burden-gate: 前回のの参照 (969.1967ms)
+✔ manual-request-evidence-gate: 根拠なしの依頼 → block (1267.5659ms)
+✔ manual-request-evidence-gate: 確認済み: がある → pass (1189.9593ms)
+✔ manual-request-evidence-gate: 依頼でない普通の応答 → pass (738.872ms)
+✔ session-close-target-gate: close-session.mjs 実行＋--show-target 無し → block (1298.4786ms)
+✔ session-close-target-gate: --show-target 実行済み → pass (1432.4852ms)
+✔ session-close-target-gate: close-session 未実行 → pass (1388.6351ms)
+✔ session-close-target-gate: 逃がし弁 [LAUNCH-TARGET-OK] → pass (877.0758ms)
+✔ user-burden-gate: transcript の最後の assistant だけを監査する (2547.1089ms)
+✔ desktop handoff does not require the old three-step paste instructions (748.7281ms)
+✔ user command request from transcript is passed to burden gate (773.7677ms)
+✔ §7.1の閉じ際3行は手渡し系gateをすべて通す (1132.4625ms)
+✔ §7.1の3語に言及しただけの番号無し長文は従来どおりblockする (1038.4592ms)
+✔ handoff-action-gate が stop-gate-runner 配線で動くことを確認 (1072.5331ms)
+✔ 完了報告の引用に反応した形式gateは台帳だけに降格する (2048.1259ms)
+✔ Sheets書き込み後に第三者へ再送を頼むとhandoff-action-gateでblockする (914.0341ms)
+✔ 返信1回の依頼ではFULL-STEPSとUSER-BURDENを出さない (1049.6005ms)
+✔ 恒久策必須は返信のみでも形式gateと一緒に降格しない (3534.1736ms)
+✔ MacroDroidの検索不足を先に示し形式は1セクションにまとめる (4165.4182ms)
+✔ 副作用の告知だけならStopで差し戻し、直後に対処を書けば通る (4869.173ms)
+✔ 完了待ちと将来作業をStopで差し戻し、完了報告なら通す (3719.2757ms)
+✔ 作業中は起床予約・登録への言及・subagentでも実台帳を要求する (8270.7168ms)
+✔ 先行ゲートが全て降格された場合は第2段の監査で手渡しを止める (241.2032ms)
+✔ 単発回答をStopで差し戻し、正本化を記録すれば通す (2102.1927ms)
+✔ 差し戻し理由の先頭で前文を繰り返さないよう指示する (544.7013ms)
+✖ 自動進行の check は runner から現在ターンとセッションを照合する (462.0353ms)
+✔ autopilot fallback: cap (786.2049ms)
+✔ autopilot fallback: pass (3283.6038ms)
+✔ autopilot fallback: open (839.0785ms)
+✔ autopilot fallback: cron (743.1022ms)
+✔ autopilot fallback: scheduled (899.1819ms)
+✔ autopilot fallback: none (1011.1518ms)
+✔ autopilot fallback: failure (1434.0163ms)
+ℹ tests 174
+ℹ suites 0
+ℹ pass 172
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 155980.7553
+
+✖ failing tests:
+
+test at tools\stop-gate-runner.test.mjs:702:1
+✖ 自動進行の check は runner から現在ターンとセッションを照合する (462.0353ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(blocked.record.reasonCodes.includes('AUTOPROGRESS-NEEDS-CURRENT-CHECK'))
+  
+      at TestContext.<anonymous> (file:///C:/Users/user/.claude/nightly-repo/tools/stop-gate-runner.test.mjs:716:10)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }

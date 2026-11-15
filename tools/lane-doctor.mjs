@@ -254,7 +254,10 @@ export function shouldSkipLiveProbe(state = {}, now = Date.now()) {
   if (Number.isFinite(until) && until > now) return true;
   if (Number.isFinite(until) && until <= now) return false;
   const last = Math.max(Date.parse(state.probedAt) || 0, Number(state.real24h?.lastQuotaAt) || 0, Number(state.real24h?.lastBillingAt) || 0);
-  return Number.isFinite(last) && last > 0 && now - last < 60 * 60 * 1000;
+  // quota_wait は月次・週次リセットの可能性があり、1時間おきのprobeでは上限枠を無駄に消費する。
+  // until が分からないときは6時間に1回まで（§1.18.4: 安いAIレーンの疎通probe節約）。
+  const cooldownMs = reason === 'quota_wait' ? 6 * 60 * 60 * 1000 : 60 * 60 * 1000;
+  return Number.isFinite(last) && last > 0 && now - last < cooldownMs;
 }
 export async function laneDoctorProbe({ home = laneHome(), now = Date.now(), probe = runProbe, notify = notifyKim, budgetMs = 90_000, platform = process.platform, listWsl = listWslDistros, nativeWriteProbe = runNativeWriteProbe, nativeTimeoutMs = NATIVE_WRITE_PROBE_TIMEOUT_MS, spawnImpl = spawnSync, providers = PROVIDERS, probeRetries = 1 } = {}) {
   const started = Date.now(), dir = path.join(home, '.claude');

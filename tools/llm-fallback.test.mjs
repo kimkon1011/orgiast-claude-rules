@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { callWithFallback, FALLBACK_CHAIN } from './llm-fallback.mjs';
+import { callWithFallback, FALLBACK_CHAIN, parseQuotaResetTime } from './llm-fallback.mjs';
 import { nextUtcMidnight } from './lib/provider-daily-cooldown.mjs';
 
 const start = { provider: 'groq', model: 'model-a' };
@@ -574,4 +574,24 @@ test('transcript で DeepSeek しかない場合も禁止を解除しない', as
   await assert.rejects(callWithFallback({ category: 'transcript', start: { provider: 'deepseek', model: 'deepseek-flash' }, chain: [],
     ...temporaryFiles(t), payloadFor: () => assert.fail('DeepSeekを呼ばない'),
   }));
+});
+
+test('parseQuotaResetTime: 本文から reset 時刻を解析', () => {
+  const now = Date.now();
+  // "Your limit will reset at 2026-11-19 19:53:29"
+  const result = parseQuotaResetTime('Your limit will reset at 2026-11-19 19:53:29', now);
+  assert.ok(result > now, '未来の時刻を返す');
+  assert.equal(new Date(result).toISOString(), '2026-11-19T10:53:29.000Z'); // JST=+9 → UTC
+
+  // "Your Monthly Limit will reset at 2026-11-19 21:24:00"
+  const monthly = parseQuotaResetTime('Your Monthly Limit will reset at 2026-11-19 21:24:00', now);
+  assert.ok(monthly > now);
+
+  // 過去の時刻は null
+  const past = parseQuotaResetTime('Your limit will reset at 2020-01-01 00:00:00', now);
+  assert.equal(past, null);
+
+  // reset 時刻を含まない本文は null
+  const none = parseQuotaResetTime('Rate limit exceeded', now);
+  assert.equal(none, null);
 });

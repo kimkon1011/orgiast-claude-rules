@@ -149,6 +149,39 @@ function reasonForLog(reason, maxLength = 140) {
   return singleLine.length <= maxLength ? singleLine : `${singleLine.slice(0, maxLength - 1)}…`;
 }
 
+// 429 本文から "Your limit will reset at 2026-11-19 19:53:29" 形式の reset 時刻を解析する。
+// 成功時は epoch ms、失敗時は null。
+export function parseQuotaResetTime(text, now = Date.now()) {
+  const raw = String(text || '');
+  // パターン: "limit (will|shall) reset at YYYY-MM-DD HH:MM:SS" / "resets at YYYY-MM-DD HH:MM:SS"
+  const m = raw.match(/(?:limit|quota|usage)\s+(?:will|shall)\s+(?:reset|be\s+reset)\s+(?:at|on)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?)/i)
+    || raw.match(/(?:resets?|reset)\s+(?:at|on)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?)/i);
+  if (m) {
+    const parsed = Date.parse(m[1].replace(' ', 'T') + (m[1].length <= 16 ? ':00' : ''));
+    if (Number.isFinite(parsed) && parsed > now) return parsed;
+  }
+  return null;
+}
+
+// lane-health.json に quota_wait を書き込む（上限中レーンを他からも避けさせる）。
+function saveQuotaWaitToLaneHealth(provider, until, detail) {
+  try {
+    const hp = path.join(home, '.claude', 'lane-health.json');
+    const health = JSON.parse(fs.readFileSync(hp, 'utf8').replace(/^﻿/, ''));
+    if (!health?.lanes) return;
+    const p = String(provider).toLowerCase();
+    if (health.lanes[p]) {
+      health.lanes[p] = { ...health.lanes[p], alive: false, reason: 'quota_wait', until, error: (detail || '').slice(0, 500), probedAt: new Date().toISOString() };
+    } else {
+      health.lanes[p] = { alive: false, reason: 'quota_wait', until, error: (detail || '').slice(0, 500), probedAt: new Date().toISOString() };
+    }
+    fs.mkdirSync(path.dirname(hp), { recursive: true });
+    const tmp = `${hp}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+    try { fs.writeFileSync(tmp, JSON.stringify(health, null, 2) + '\n', { mode: 0o600 }); fs.renameSync(tmp, hp); }
+    finally { try { fs.unlinkSync(tmp); } catch {} }
+  } catch {}
+}
+
 // Bound both headers and body consumption; abort the real HTTP request and also
 // settle when a custom transport ignores AbortSignal. Retried requests share the
 // candidate's deadline rather than receiving a fresh budget each time.
@@ -250,16 +283,41 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
     if (until < Number(state.until)) { state.until = until; cooldownDirty = true; }
   }
   saveCooldowns();
-  const available = useCooldown ? candidates.filter(({ provider }) => !(Number(cooldowns?.[provider]?.until) > timestamp)) : candidates;
+  // lane-health.json の quota_wait 状態もチェックし、reset 時刻まで呼ばない
+  let laneHealth = null;
+  let quotaWaitProviders = [];
+  if (useCooldown) {
+    try {
+      laneHealth = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'lane-health.json'), 'utf8').replace(/^\uFEFF/, ''));
+      quotaWaitProviders = Object.entries(laneHealth?.lanes || {})
+        .filter(([, state]) => state?.reason === 'quota_wait' && Number(state?.until) > timestamp)
+        .map(([provider]) => String(provider).toLowerCase());
+    } catch {}
+  }
+  const available = useCooldown
+    ? candidates.filter(({ provider }) => {
+        const p = String(provider).toLowerCase();
+        if (Number(cooldowns?.[p]?.until) > timestamp) return false;
+        if (quotaWaitProviders.includes(p)) return false;
+        return true;
+      })
+    : candidates;
   const selectedCandidates = available.length ? available : candidates;
   const skipped = [];
-  if (useCooldown && available.length) {
+  if (useCooldown && (available.length || quotaWaitProviders.length)) {
     for (const candidate of candidates) {
-      const state = cooldowns?.[candidate.provider];
-      if (Number(state?.until) <= timestamp || !state) continue;
-      const minutes = Math.max(1, Math.ceil((state.until - timestamp) / 60000));
-      skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'cooldown', minutesLeft: minutes });
-      console.error(`[cooldown] ${candidate.provider} はスキップ (${state.reason || 'unknown'}, 残り${minutes}分)`);
+      const p = String(candidate.provider).toLowerCase();
+      const cd = cooldowns?.[p];
+      if (Number(cd?.until) > timestamp) {
+        const minutes = Math.max(1, Math.ceil((cd.until - timestamp) / 60000));
+        skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'cooldown', minutesLeft: minutes });
+        console.error(`[cooldown] ${candidate.provider} はスキップ (${cd.reason || 'unknown'}, 残り${minutes}分)`);
+      } else if (quotaWaitProviders.includes(p)) {
+        const qw = laneHealth?.lanes?.[p];
+        const minutes = qw?.until ? Math.max(1, Math.ceil((Number(qw.until) - timestamp) / 60000)) : '?';
+        skipped.push({ provider: candidate.provider, model: candidate.model, reason: 'quota_wait', minutesLeft: minutes });
+        console.error(`[quota_wait] ${candidate.provider} は枠上限中のためスキップ (残り${minutes}分)`);
+      }
     }
   }
 
@@ -267,6 +325,9 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
     if (!useCooldown) return;
     const at = now();
     const retryMs = retryAfterMs(response, at) ?? 0;
+    // 429 本文から reset 時刻を解析し、lane-health.json にも quota_wait として保存する。
+    // 例: "Your limit will reset at 2026-11-19 19:53:29"
+    const parsedReset = parseQuotaResetTime(detail, at);
     if (status === 429 && !permanentBilling && isDailyQuotaResponse(status, detail)) {
       cooldowns[provider] = { until: nextUtcMidnight(new Date(at)), reason: 'daily_limit', at };
       cooldownDirty = true;
@@ -279,6 +340,12 @@ export async function callWithFallback({ start, chain = FALLBACK_CHAIN, category
     else if ([401, 403].includes(status)) duration = 6 * 60 * 60 * 1000;
     if (!duration) return;
     cooldowns[provider] = { until: at + duration, reason: `http_${status}`, at, ...(permanentBilling ? { permanentBilling: true } : {}) };
+    // 429 で reset 時刻が本文から取れたら lane-health.json に quota_wait を書く
+    if (status === 429 && parsedReset) {
+      cooldowns[provider].until = Math.max(cooldowns[provider].until, parsedReset);
+      saveQuotaWaitToLaneHealth(provider, parsedReset, detail);
+      console.error(`[quota_wait] ${provider} の上限リセット時刻: ${new Date(parsedReset).toISOString()}（本文から解析）`);
+    }
     cooldownDirty = true;
     saveCooldowns();
   }

@@ -174,7 +174,7 @@ test('fallbackBackendTimeoutSecs は全体枠・既定値・環境変数・下�
   assert.equal(fallbackBackendTimeoutSecs(300, {}), 300);
   assert.equal(fallbackBackendTimeoutSecs(1800, { CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: '900' }), 900);
   assert.equal(fallbackBackendTimeoutSecs(1800, { CODEX_DO_FALLBACK_BACKEND_TIMEOUT_SECS: 'garbage' }), 900);
-  assert.equal(fallbackBackendTimeoutSecs(10, {}), 60);
+  assert.equal(fallbackBackendTimeoutSecs(10, {}), 10);
 });
 
 test('chainBackendBudgetSecs は連鎖の残り予算を超えない（全体枠を使い切ったら0で打ち切る）', () => {
@@ -2774,6 +2774,30 @@ if (!fs.existsSync(marker)) {
   assert.ok(timeouts.length >= 1, `timeout 発火が見えない: ${result.stderr}`);
   // 1 回目が約 4 秒使うので、2 回目の timer は 8 秒ではなく残り約 4 秒でなければならない。
   assert.ok(timeouts[0] <= 5, `再試行の timer が残り予算でなく ${timeouts[0]} 秒だった`);
+});
+
+test('codex-cli 主経路の子プロセス木を timeout で止め、実予算を台帳へ記録する', () => {
+  const ledgerHome = workDir();
+  const env = fakeNativeCodexEnv(`
+import { spawn } from 'node:child_process';
+spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' });
+setInterval(() => {}, 1000);
+`);
+  const startedAt = Date.now();
+  const result = run(['--force-native', '--cwd', workDir(), '--model', 'astra', '--no-fallback', '--timeout', '2', '指示内容'], {
+    home: ledgerHome,
+    env: { ...env, CODEX_DO_TIMEOUT_KILL_GRACE_MS: '500' },
+  });
+  const elapsedSecs = (Date.now() - startedAt) / 1000;
+  assert.notEqual(result.status, 0);
+  assert.ok(elapsedSecs < 8, `codex-cli の子プロセス木が残り ${elapsedSecs} 秒かかった`);
+  const rows = fs.readFileSync(path.join(ledgerHome, '.claude', 'executor-usage.jsonl'), 'utf8')
+    .trim().split(/\r?\n/).map(JSON.parse);
+  const timeout = rows.find((row) => row.provider === 'codex' && row.status === 'timeout');
+  assert.ok(timeout, `主経路 timeout 行がない: ${JSON.stringify(rows)}`);
+  assert.equal(timeout.model, 'codex-cli/gpt-6-astra');
+  assert.equal(timeout.timeoutSecs, 2);
+  assert.ok(timeout.secs <= 5, `主経路が予算2秒を超えて ${timeout.secs} 秒かかった`);
 });
 
 // ── parseCodexOutput ──────────────────────────────────────────────

@@ -57,7 +57,9 @@ export function groupInboxItems(items) {
     const key = workId ? `${workId}::${decide}` : item.id;
     if (groups.has(key)) {
       const group = groups.get(key);
-      if (item.createdAt > group.representative.createdAt) {
+      const representative = group.representative;
+      if (item.createdAt > representative.createdAt
+        || (item.createdAt === representative.createdAt && item.id > representative.id)) {
         group.duplicates.push(group.representative.id);
         group.representative = item;
       } else {

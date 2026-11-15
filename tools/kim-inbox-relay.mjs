@@ -17,8 +17,8 @@ export function evaluateKimInboxRelay(input = {}, { home = process.env.ORGIAST_H
   const groups = groupInboxItems(pending);
   // Only the final response's inbox section counts, never thinking, tools or an older turn.
   const visible = String(text).replace(/```[^]*?(?:```|$)|~~~[^]*?(?:~~~|$)/g, '').split(/\r?\n/).filter(line => !/^\s*>/.test(line)).join('\n');
-  const heading = /^(?:#{1,6}\s*)?(?:\*\*)?【受信箱】(?:\*\*)?[ \t]*$/m.exec(visible);
-  const section = heading ? visible.slice(heading.index + heading[0].length).split(/\n(?:#{1,6}\s|【|次に kim がすること:|この後の自動進行:|このセッション:)/)[0] : '';
+  const heading = /^.*【受信箱】.*$/m.exec(visible);
+  const section = heading ? visible.slice(heading.index).split(/\n\s*(?:#{1,6}\s|(?:\*\*)?【|次に kim がすること:|この後の自動進行:|このセッション:)/)[0] : '';
   const lines = section.split(/\r?\n/);
   const receipts = [], missing = [];
   for (const group of groups) {

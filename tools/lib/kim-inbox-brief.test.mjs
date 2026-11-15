@@ -321,6 +321,18 @@ test('groupInboxItems: same workId + same decide → one group, newest is repres
   assert.equal(groups[0].duplicates[0], a.id);
 });
 
+test('groupInboxItems: equal createdAt uses the larger id as representative', t => {
+  const createdAt = '2026-11-12T12:00:00.000Z';
+  const a = groupableItem('ki-20261112120000-aaaa', 'c8d99e2b', '送ってよいですか', createdAt);
+  const b = groupableItem('ki-20261112120000-bbbb', 'c8d99e2b', '送ってよいですか', createdAt);
+  const [forward] = groupInboxItems([a, b]);
+  const [reverse] = groupInboxItems([b, a]);
+  assert.equal(forward.representative.id, b.id);
+  assert.equal(reverse.representative.id, b.id, 'input order must not change the representative');
+  assert.deepEqual(forward.duplicates, [a.id]);
+  assert.deepEqual(reverse.duplicates, [a.id]);
+});
+
 test('groupInboxItems: different workId → separate groups', t => {
   const a = groupableItem('ki-20261112000000-aaaa', 'c8d99e2b', '送ってよいですか', '2026-11-12T10:00:00.000Z');
   const b = groupableItem('ki-20261112120000-bbbb', '7f14e87b', '送ってよいですか', '2026-11-12T12:00:00.000Z');

@@ -229,10 +229,10 @@ export function hasSessionWakeup(raw, input = {}) {
     }
   }
   if (!autoProgress && input.session_id) {
-    try {
-      autoProgress = latestOpenPromises(readLedger(ledgerFile()))
-        .some(row => row.sessionId === input.session_id && row.status === 'open' && ((typeof row.check === 'string' && row.check.trim()) || row.autoRegisteredCheck === true));
-    } catch { /* A missing or unreadable ledger is not wakeup evidence. */ }
+    // The runner can register a scheduled startWhen check on the first Stop.
+    // Count it just like other persistent checks so the next Stop does not
+    // register the same watch again. Missing/unreadable ledgers remain false.
+    autoProgress = hasOpenSessionCheck(input);
   }
   const persistent = sessionWakeupEvidence(raw, input.now ?? Date.now());
   return { autoProgress, background: background || persistent.background, scheduled: persistent.scheduled, cron: persistent.cron === true };

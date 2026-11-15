@@ -15,7 +15,7 @@ function fixture(t) {
   return { home, env: {}, now: 1234 };
 }
 
-test('3回目で fire し、0へリセット後も再び3回目で fire', t => {
+test('3回目で fire し、カウンタが再発火しても同じ本文は再注入しない', t => {
   const options = fixture(t);
   assert.equal(main({ session_id: 's1' }, options).state.count, 1);
   assert.equal(main({ session_id: 's1' }, options).state.count, 2);
@@ -24,7 +24,9 @@ test('3回目で fire し、0へリセット後も再び3回目で fire', t => {
   assert.deepEqual(JSON.parse(fs.readFileSync(counterFile(options.home, 's1'), 'utf8')), { count: 0, lastReminderAt: 1234, updatedAt: 1234 });
   assert.equal(main({ session_id: 's1' }, options).emitted, null);
   assert.equal(main({ session_id: 's1' }, options).emitted, null);
-  assert.equal(main({ session_id: 's1' }, options).emitted, REMINDER);
+  assert.equal(main({ session_id: 's1' }, options).emitted, null);
+  for (let n = 0; n < 2; n++) main({ session_id: 's-other' }, options);
+  assert.equal(main({ session_id: 's-other' }, options).emitted, REMINDER);
 });
 
 test('環境変数で閾値を5に変更', t => {

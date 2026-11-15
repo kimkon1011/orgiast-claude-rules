@@ -31,11 +31,13 @@ async function main() {
   let turns = nonNegativeNumber(saved.turns, 0);
   let cacheRead = nonNegativeNumber(saved.cacheRead, 0);
   let lastModel = typeof saved.lastModel === 'string' ? saved.lastModel : '';
-  if (size < offset) {
+  let lastContext = nonNegativeNumber(saved.lastContext, 0);
+  if (size < offset || (offset > 0 && saved.lastContext === undefined)) {
     offset = 0;
     turns = 0;
     cacheRead = 0;
     lastModel = '';
+    lastContext = 0;
   }
 
   let stream;
@@ -59,6 +61,9 @@ async function main() {
         if (record?.type !== 'assistant' && record?.message?.role !== 'assistant') continue;
         turns += 1;
         const message = record.message || record;
+        const usage = message.usage ?? record.usage ?? {};
+        lastContext = ['input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens']
+          .reduce((sum, key) => sum + nonNegativeNumber(usage[key], 0), 0);
         if (typeof message.model === 'string') lastModel = message.model;
         const value = Number(message.usage?.cache_read_input_tokens ?? record.usage?.cache_read_input_tokens ?? 0);
         if (Number.isFinite(value) && value > 0) cacheRead += value;
@@ -66,19 +71,27 @@ async function main() {
     }
   } catch { stream.destroy(); return; }
   offset += completeBytes;
-  state.aggregate = { offset, turns, cacheRead, lastModel };
+  state.aggregate = { offset, turns, cacheRead, lastModel, lastContext };
 
   try {
     fs.mkdirSync(path.dirname(stateFile), { recursive: true });
     fs.writeFileSync(stateFile, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
   } catch { return; }
 
-  const tokLimit = positiveNumber(process.env.ORGIAST_SESSION_TOK_LIMIT, 300_000_000);
-  const turnLimit = positiveNumber(process.env.ORGIAST_SESSION_TURN_LIMIT, 400);
+  // Honor explicitly configured legacy limits without silently overriding the
+  // new configurable response/context limits with an old default of 400 turns.
+  const tokLimit = positiveNumber(process.env.ORGIAST_SESSION_TOK_LIMIT, Infinity);
+  const turnLimit = positiveNumber(process.env.ORGIAST_SESSION_TURN_LIMIT, Infinity);
+  const maxResponses = positiveNumber(process.env.ORGIAST_SESSION_MAX_RESPONSES, 300);
+  const maxContext = positiveNumber(process.env.ORGIAST_SESSION_MAX_CONTEXT, 150_000);
   const candidates = [];
   const PROVISO = '\nただし user への聞き直し・やり直しを1回でも増やす形での削減は禁止。調査のツール呼び出し10回は、user への聞き直し1回より安い。削減は委譲・キャッシュ・出力長で行い、調査の深さと判断の質では行わない。';
   if (MODEL_LIMIT.has(lastModel)) candidates.push(['model', `このセッションは ${lastModel} で動作中。単価が opus-5 の3倍。応答の冒頭で user に \`/model opus\` への切替を1行で促し、切替まで重い作業に着手しないこと。${PROVISO}`]);
-  if (cacheRead >= tokLimit || turns >= turnLimit) candidates.push(['size', `このセッションは肥大化しています（累積キャッシュ読取 ${cacheRead} tok / assistant ${turns}ターン）。1ターンごとに全履歴を読み直すため費用はターン数の二乗近くで増えます。着手前に \`/session-close\` → 新セッションを1行提案すること。${PROVISO}`]);
+  // Reuse /session-close -> next-session.md; do not close/launch or interrupt
+  // the current response here. Legacy cumulative limits remain supported.
+  if (!state.handoffNotified && (turns > maxResponses || lastContext > maxContext || cacheRead >= tokLimit || turns >= turnLimit)) {
+    candidates.push(['handoffNotified', '長期セッション上限に達しました。この応答を終えたら /session-close で引き継ぎ、次セッションで続けてください']);
+  }
   if (!candidates.length) return;
 
   const now = Date.now();

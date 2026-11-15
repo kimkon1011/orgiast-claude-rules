@@ -11,6 +11,23 @@ import { consumeInbox } from './auto-progress-inbox-hook.mjs';
 const cliPath = path.join(path.dirname(fileURLToPath(import.meta.url)), 'mobile-push-queue.mjs');
 const hour = 3600 * 1000;
 
+test('formatting pending instructions is repeatable and leaves queue and emission state untouched', t => {
+  const home = tempHome(t);
+  const options = { owner: 'test', cliPath, sessionId: 'push-dedupe' };
+  appendMobilePush(home, { owner: 'test', title: '進捗1', body: '確認中' });
+  const before = fs.readFileSync(mobilePushQueueFile(home), 'utf8');
+  const first = mobilePushInstruction(home, options);
+  assert.match(first, /未送信 1 件/);
+  assert.equal(mobilePushInstruction(home, options), first);
+  assert.equal(fs.readFileSync(mobilePushQueueFile(home), 'utf8'), before);
+  assert.equal(fs.existsSync(path.join(home, '.claude', 'state', 'context-dedupe')), false);
+  appendMobilePush(home, { owner: 'test', title: '進捗2', body: '完了' });
+  const next = mobilePushInstruction(home, options);
+  assert.match(next, /未送信 2 件/);
+  assert.equal(mobilePushInstruction(home, options), next);
+  assert.match(mobilePushInstruction(home, { ...options, sessionId: 'other' }), /未送信 2 件/);
+});
+
 function tempHome(t, prefix = 'mobile-push-') {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

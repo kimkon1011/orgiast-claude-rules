@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { addItem, listItems, main, answerItem, markSeen, updateInboxItem, selectContext } from './kim-inbox.mjs';
 import { evaluateKimInboxRelay, commitKimInboxDelivery } from './kim-inbox-relay.mjs';
-import { inboxSummary, formatInboxBrief, recordInjection, recordPromptAnswers, relayDue, interactiveInboxSession } from './lib/kim-inbox-relay-state.mjs';
+import { inboxSummary, formatInboxBrief, recordInjection, recordPromptAnswers, relayDue, interactiveInboxSession, groupInboxItems } from './lib/kim-inbox-relay-state.mjs';
 import { run } from './stop-gate-runner.mjs';
 const now = Date.parse('2026-11-12T10:00:00Z');
 function fixture(t) {
@@ -46,6 +46,19 @@ test('each item needs its own explanation; indented and bulleted numbering delim
   const result = f.judge(`【受信箱】\n1. 公開の件（${a.id}）\n   判断: 資料を公開するか\n2. 日程の件（${b.id}）\n   返事: 可または不要`);
   assert.equal(result.decision, 'pass');
   assert.equal(result.receipts[0].summary, formatInboxBrief(a, 1, { home: f.home }).split('\n')[0]);
+});
+
+test('decorated inbox headings, trailing labels and paraphrases pass; missing IDs and later sections do not', async t => {
+  const f = fixture(t);
+  const a = await addItem(f.home, { kind: 'ask', text: '原文の長い依頼です' });
+  const b = await addItem(f.home, { kind: 'ask', text: '別の長い依頼です' });
+  f.inject([a, b]);
+  for (const heading of ['【受信箱】確認事項', '### 【受信箱】', '**【受信箱】** 要点', '  ### **【受信箱】**（2件）']) {
+    assert.equal(f.judge(`${heading}\n1. ${a.id}\n判断: 公開するか\n2. ${b.id}\n返事: 日程を変えるか`).decision, 'pass');
+    assert.equal(f.judge(`${heading}\n1. ${a.id} 言い換え\n判断: 公開可否\n2. ${b.id} 短く要約\n返事: 変更可否`).decision, 'pass');
+    assert.equal(f.judge(`${heading}\n1. ${a.id}\n判断: 公開可否\n### 別件\n2. ${b.id}\n返事: 変更可否`).decision, 'block');
+    assert.equal(f.judge(`${heading}\n${a.id}`).decision, 'block');
+  }
 });
 test('receipts suppress same-session asks until next JST day, high info until refreshed, other sessions still see asks', async t => {
   const f = fixture(t);
@@ -133,6 +146,26 @@ test('manual --seen during a turn cannot bypass final-message verification', asy
   assert.equal(listItems(f.home)[0].deliveredToKim.count, 1);
 });
 
+test('two inbox blocks exhaust the shared turn budget, but permission blocks survive', async t => {
+  const f = fixture(t), item = await addItem(f.home, { kind: 'ask', text: '確認事項' });
+  f.inject([item]);
+  const old = process.env.ORGIAST_HOME;
+  process.env.ORGIAST_HOME = f.home;
+  t.after(() => { if (old === undefined) delete process.env.ORGIAST_HOME; else process.env.ORGIAST_HOME = old; });
+  const ctx = { raw: '', humanText: '', assistantText: '' };
+  const options = { mode: 'off', policyOptions: { home: f.home, hostname: 'kim-PC', notify: async () => ({ delivered: 'test' }) } };
+  for (let n = 0; n < 2; n++) assert.equal((await run({ ...f.input, assistant_text: '完了' }, ctx, options)).decision, 'block');
+  const changed = await run({ ...f.input, assistant_text: `${f.section([item])}\nGitHub の画面で Merge をクリックしてください。` }, ctx, options);
+  assert.notEqual(changed.decision, 'block');
+  assert.match(changed.systemMessage, /同一ターン上限/);
+  assert.equal(listItems(f.home)[0].deliveredToKim, undefined);
+  for (let n = 0; n < 4; n++) {
+    const safety = await run({ ...f.input, assistant_text: 'https://discord.com/oauth2/authorize?client_id=1511684767546871818&permissions=0' }, ctx, options);
+    assert.equal(safety.decision, 'block');
+    assert.match(safety.reason, /権限/);
+  }
+});
+
 test('passkey ask relays the complete signed URL rather than a truncated token', async t => {
   const f = fixture(t), url = 'https://keyserve.test/api/knowledge?register=' + 'a'.repeat(500);
   const item = await addItem(f.home, { kind: 'ask', priority: 'high', source: 'knowledge-lock-passkey-link', text: `パスキー登録をお願いします。\n登録リンク: ${url}` });
@@ -165,8 +198,9 @@ test('duplicate same workId+decide: only representative needs written; both are 
   assert.equal(blocked.decision, 'block');
   assert.match(blocked.reason, /同じ件/);
 
-  // Both receipted when representative (newest = b) is shown
-  const section = '【受信箱】\n' + formatInboxBrief(b, 1);
+  // Both are receipted when the deterministically selected representative is shown.
+  const representative = groupInboxItems([a, b])[0].representative;
+  const section = '【受信箱】\n' + formatInboxBrief(representative, 1);
   const result = f.judge(section);
   assert.equal(result.decision, 'pass', `${result.code}: ${result.reason?.slice(0, 100)}`);
   assert.equal(result.receipts.length, 2);
